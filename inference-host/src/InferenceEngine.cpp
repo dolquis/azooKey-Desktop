@@ -100,4 +100,20 @@ void InferenceEngine::CommitObservation(const std::string& reading, const std::s
                      core::ConversionContext{});
 }
 
+
+void InferenceEngine::CommitCorrection(const std::string& reading,
+                                       const std::string& rejected_surface,
+                                       const std::string& selected_surface,
+                                       uint64_t now_epoch_sec) {
+  if (store_) {
+    store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha, now_epoch_sec);
+    store_->Save();
+  }
+
+  core::ConversionContext context;
+  context.rejected_surfaces.push_back(rejected_surface);
+  converter_->Commit(core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary, "correction-commit"},
+                     context);
+}
+
 }  // namespace azookey::host

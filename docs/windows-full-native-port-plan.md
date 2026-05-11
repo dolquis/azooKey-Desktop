@@ -101,6 +101,6 @@ Task 1 is considered complete when:
 
 ## Follow-up tasks unlocked by this step
 
-- Task 2: learning/personalization pipeline wiring.
+- Task 2: learning/personalization pipeline wiring. *(in progress: IPC message contracts for predict/correct/commit-correction/user-dictionary update have been added in `ipc/`.)*
 - Task 3: user dictionary management and hot reload.
 - Task 6: CUDA backend integration with stable fallback.

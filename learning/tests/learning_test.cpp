@@ -22,8 +22,8 @@ int main() {
   azookey::learning::Reranker reranker(&loaded);
 
   std::vector<azookey::core::Candidate> cands = {
-      {"日本", "にほん", 1.0, "base"},
-      {"二本", "にほん", 0.4, "base"},
+      {"日本", "にほん", 1.0, azookey::core::CandidateSource::SystemDictionary, "base"},
+      {"二本", "にほん", 0.4, azookey::core::CandidateSource::SystemDictionary, "base"},
   };
 
   auto reranked = reranker.Apply("にほん", std::move(cands), 1001);

@@ -1,0 +1,3 @@
+add_executable(host_engine_tests engine_test.cpp)
+target_link_libraries(host_engine_tests PRIVATE azookey_host)
+add_test(NAME host_engine_tests COMMAND host_engine_tests)

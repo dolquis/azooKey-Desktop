@@ -23,3 +23,21 @@ gh pr create \
   --head <branch-name> \
   --draft
 ```
+
+## README 編集ルール
+
+`README.md` はフォーク元 (ensan-hcl/azooKey) のオリジナル版に近い、
+簡潔な紹介ドキュメントとして保つ。以下を厳守すること：
+
+- 詳細な実装プラン・進捗状況・マイルストーン履歴を README に書かない。
+  - 実装プラン → `plans/development-plan.md`
+  - マイルストーン定義・現状 → `plans/windows-port-roadmap.md`
+  - 機能ごとの仕様・ロジック → `docs/*-spec.md`
+- README に新セクションを足す前に、その内容が `plans/` か `docs/` に
+  収まらないかを必ず先に検討する。
+- 「## 状態」「## 進捗」「## TODO」のような時系列で陳腐化するセクションを
+  README に追加しない。該当情報は `plans/windows-port-roadmap.md` の
+  各マイルストーン「現状」欄に書く。
+- ロードマップへのリンクは README に置いてよいが、ロードマップの中身を
+  README にコピーしない（リンクのみ、要約は 1〜2 行まで）。
+- 例外的に README を肥大化させる必要があるときは、ユーザーに事前確認する。

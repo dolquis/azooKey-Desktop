@@ -10,17 +10,108 @@
     },
     "liveConversion": {
       "type": "boolean",
-      "default": false
+      "default": false,
+      "description": "Phase 1 (M14): true で Composing 中に候補ウィンドウを抑制し Preedit にライブ最良候補を表示"
     },
     "llmMagicConversion": {
       "type": "boolean",
       "default": false,
-      "description": "MVPでは無効固定。将来拡張ポイント。"
+      "description": "MVPでは無効固定。Phase 1 (M16) で aiBackend 経由で有効化"
     },
     "logLevel": {
       "type": "string",
       "enum": ["error", "warn", "info", "debug"],
       "default": "info"
+    },
+    "inputStyle": {
+      "type": "string",
+      "enum": ["default", "custom"],
+      "default": "default",
+      "description": "Phase 1 (M17): default=内蔵ローマ字テーブル / custom=customRomajiTablePath を読み込む"
+    },
+    "customRomajiTablePath": {
+      "type": "string",
+      "default": "%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv",
+      "description": "Phase 1 (M17): カスタムローマ字 TSV ファイルのパス。ホットリロード対応"
+    },
+    "predictionEnabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Phase 1 (M15): 予測候補ウィンドウを表示。OFF で PredictionWindow を生成しない"
+    },
+    "aiBackend": {
+      "type": "string",
+      "enum": ["none", "openai", "local-zenzai"],
+      "default": "none",
+      "description": "Phase 1 (M16): AI 変換バックエンド。Phase 2 (M24) で local-zenzai を有効化"
+    },
+    "openAiApiKey": {
+      "type": "string",
+      "default": "",
+      "description": "Phase 1 (M16): aiBackend=openai のとき使用。Phase 3 (M34) で DPAPI 暗号化 ('dpapi:' prefix)"
+    },
+    "openAiApiEndpoint": {
+      "type": "string",
+      "default": "https://api.openai.com/v1",
+      "description": "Phase 1 (M16): OpenAI 互換エンドポイント"
+    },
+    "openAiModel": {
+      "type": "string",
+      "default": "gpt-4o-mini",
+      "description": "Phase 1 (M16): OpenAI 互換 model 名"
+    },
+    "includeContextInAITransform": {
+      "type": "boolean",
+      "default": true,
+      "description": "Phase 1 (M16): AI 変換時に前後文脈（直近 paragraph）を含める"
+    },
+    "contextReselection": {
+      "type": "boolean",
+      "default": false,
+      "description": "rich X-3-2: 同音異義語の文脈再選択を有効化（実験機能）"
+    },
+    "postCommitLint": {
+      "type": "boolean",
+      "default": false,
+      "description": "rich X-3-3: 確定後の誤変換検出と波線表示を有効化（実験機能）"
+    },
+    "retroactiveRecompute": {
+      "type": "boolean",
+      "default": false,
+      "description": "rich X-1-3: 後戻り再評価を有効化（800ms idle で全体再評価）"
+    },
+    "sentenceCompletion": {
+      "type": "boolean",
+      "default": false,
+      "description": "rich X-2-1: 文単位の予測（Sentence モード）を有効化"
+    },
+    "backendPreference": {
+      "type": "string",
+      "enum": ["auto", "cpu", "cuda", "directml", "npu"],
+      "default": "auto",
+      "description": "Phase 2-B (M24): 推論バックエンド優先順位。auto は NPU>DirectML>CUDA>CPU（バッテリ時は NPU>CPU>DirectML>CUDA）"
+    },
+    "powerProfile": {
+      "type": "string",
+      "enum": ["auto", "performance", "battery_saver"],
+      "default": "auto",
+      "description": "Phase 2-B (M25): 電源プロファイル。auto は AC/バッテリ自動判定"
+    },
+    "promptPrefixByApp": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": { "type": "string" },
+      "description": "rich X-2-6: 前面アプリ実行ファイル名 → prompt prefix のマップ（例: 'Code.exe', 'OUTLOOK.EXE'）"
+    },
+    "autoUpdate": {
+      "type": "object",
+      "description": "Phase 3 (M32): 自動更新設定",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "channel": { "type": "string", "enum": ["stable", "beta"], "default": "stable" },
+        "checkIntervalHours": { "type": "integer", "default": 24, "minimum": 1 }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

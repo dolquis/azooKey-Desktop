@@ -45,3 +45,101 @@
 - 永続フォーマットは現状 TSV（`azookey_learning.tsv`）。
 - 破損時はリセット可能（`LearningStore::Reset` or ファイル削除）。
 - 時間減衰: `exp(-0.15 * days)` で `LearningStore::Score` 内で適用。
+
+## 新規モジュール（Phase 1/2 で追加予定）
+
+下記モジュールは v1.0 以降の Phase で追加予定。正典仕様は各 spec を参照。
+
+### Phase 1（レガシー parity、`docs/legacy-parity-spec.md`）
+
+- `core/include/azookey/core/UserAction.h` — VK → 抽象アクション enum
+- `core/include/azookey/core/InputState.h` — 入力状態機械
+- `core/src/UserActionMap.cpp` — VK → UserAction 変換テーブル
+- `core/src/CustomRomajiLoader.cpp` — TSV パース + ホットリロード
+- `core/src/UnicodeInputBuffer.cpp` — Ctrl+Shift+U hex バッファ
+- `tsf-tip/src/PredictionWindow.cpp` — 予測候補 HWND
+- `tsf-tip/src/PromptDialog.cpp` — Magic Conversion プロンプト
+- `tsf-tip/src/DebugWindow.cpp` — F10 デバッグウィンドウ
+- `tsf-tip/src/CaretRectResolver.cpp` — `GetTextExt` / `GetGUIThreadInfo` 3 段
+  フォールバック
+- `inference-host/src/AiBackend.cpp` — OpenAI 互換 API クライアント
+
+### Phase 1〜2 横断（`docs/rich-features-spec.md`）
+
+- `tsf-tip/src/ContextTracker.cpp` — 段落 / 直前文 / アプリ別履歴
+- `tsf-tip/src/ForegroundAppDetector.cpp` — 前面アプリ実行ファイル名取得
+- `tsf-tip/src/TypingTempoTracker.h` — タイピング速度推定
+- `core/src/QwertyAdjacency.cpp` — FuzzyMatch 用 QWERTY 隣接表
+- `bench/rich_features_bench.cpp` — リッチ化機能のレイテンシ計測
+
+### Phase 2-A（TSF 深部、`docs/tsf-deep-integration-spec.md`）
+
+- `tsf-tip/src/ReconversionFunction.cpp` — `ITfFnReconversion`
+- `tsf-tip/src/CandidateListUIElement.cpp` — UI-less Mode 用
+- `tsf-tip/src/PredictionListUIElement.cpp` — Suggestion UI 用
+- `tsf-tip/src/ConfigureFunction.cpp` — `ITfFnConfigure`
+- `tsf-tip/src/InstalledPath.cpp` — 設定アプリ EXE 解決
+
+### Phase 2-B（Copilot+ PC / NPU、`docs/copilot-pc-backend-spec.md`）
+
+- `inference-host/src/BackendSelector.cpp` — DXCore 列挙 + 優先順
+- `inference-host/src/MmapModelLoader.cpp` — `CreateFileMapping` + `MapViewOfFile`
+- `inference-host/src/PowerStatusWatcher.cpp` — AC/バッテリ検知
+- `inference-host/src/DirectMlBackend.cpp` — DirectML EP 経路
+- `inference-host/src/QnnBackend.cpp` — Snapdragon X NPU 経路（M27 と合流）
+
+### Phase 2-C（UI モダン化、`docs/native-ui-spec.md`）
+
+- `tsf-tip/src/ThemeColors.h` — Light/Dark 色テーブル
+- `tsf-tip/src/RenderingEngine.cpp` — DComp + D2D + DirectWrite 共通
+
+### Phase 3（サイドロード配信、`docs/sideload-packaging-spec.md`）
+
+- `settings-app/` — C++/WinRT WinUI 3 設定アプリ
+- `core/src/EtwLogger.cpp` — ETW Provider ラッパ
+- `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認
+- `inference-host/src/CrashHandler.cpp` — `SetUnhandledExceptionFilter`
+- `learning/src/DpapiCrypto.cpp` — DPAPI ラッパ
+- `pkg/msix/AppxManifest.xml` — MSIX マニフェスト
+- `pkg/wix/Product.wxs` — WiX インストーラ
+
+### 長期
+
+- `learning/EmbeddingIndex.h` — 文脈ベクトルベース再ランキング（仮）
+
+## 新規 IPC メッセージ
+
+既存 9 種（Handshake / Ping / Health / LoadModel / QueryCandidates / Cancel /
+CommitObservation / AddUserWord / RemoveUserWord）に加え、以下を Phase 1〜2 で
+順次追加する。
+
+| メッセージ | 方向 | 導入 Phase | 参照 |
+|---|---|---|---|
+| `QueryLiveConversion` / `Response` | TIP → Host | Phase 1 (M14) | legacy-parity §2 |
+| `QueryPredictions` / `Response` | TIP → Host | Phase 1 (M15) | legacy-parity §3 + rich X-2 |
+| `TransformSelectedText` / `Response` | TIP → Host | Phase 1 (M16) | legacy-parity §4 |
+| `RequestPostCommitLint` / `Response` | TIP → Host | Phase 1 末 (M16 拡張) | rich X-3-3 |
+| `LintFinding` | データ型 | Phase 1 末 | rich X-3-3 |
+| `PredictStreamChunk`（push） | Host → TIP | Phase 2 (M24) | rich X-2-5 |
+| `ReverseConvert` / `Response` | TIP → Host | Phase 2-A (M20) | tsf-deep §1 |
+| `UpdateSettings` / `Response` | Settings → Host | Phase 3 (M30) | sideload §3 |
+| `QueryFullRecompute` / `Response` | TIP → Host | Phase 1 末 | rich X-1-3 |
+| `UpdateUserWord` / `Response` | Settings → Host | Phase 3 (M30) | 既存 enum 配線 |
+| `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 1〜2 | 既存 enum 配線 |
+
+Envelope に `push: bool` フラグを追加し、`server → client` 一方向通知に
+対応する（`docs/rich-features-spec.md` X-4-2）。
+
+## TIP プロセス HWND 構成
+
+TIP DLL がアプリプロセスにロードされた状態で、最大以下の HWND を保持する：
+
+| HWND | 用途 | 親 | 生存期間 |
+|---|---|---|---|
+| `CandidateWindow` | 変換候補（M5 で実装済） | デスクトップ | composition 中のみ表示 |
+| `PredictionWindow` | 予測候補（M15 で追加） | デスクトップ | composition 中常時表示（設定 ON 時） |
+| `PromptDialog` | Magic Conversion / Replace Suggestion（M16） | フォアグラウンド | モーダル表示中のみ |
+| `DebugWindow` | F10 デバッグ（M18-3） | デスクトップ | トグル表示 |
+
+設定アプリ（M30）は **別プロセス**（`azookey_settings.exe`）で、IPC 経由で
+Host 設定を変更する。TIP プロセスからは `ITfFnConfigure::Show` で起動するのみ。

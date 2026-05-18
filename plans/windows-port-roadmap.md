@@ -337,3 +337,340 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **Phase D**（4〜6 週）: M11 設定 UI + MSIX + M12 署名/Release 自動化。
 
 詳細・直近タスク・検証手順は `plans/development-plan.md` を参照。
+
+## Phase 1: レガシー parity 復元（M13〜M19）
+
+> Phase D 完了後に着手。**正典仕様**は `docs/legacy-parity-spec.md`。
+> リッチ化の横断テーマは `docs/rich-features-spec.md`。
+
+### M13: 入力パイプライン（UserAction / InputState / ClientAction）
+
+- **目的**: 旧 macOS 版の入力状態機械を C++ に移植し、TIP の `OnKeyDown` から
+  「UserAction → InputState 遷移 → ClientAction → TSF 操作」の一貫した
+  パイプラインを構築する。
+- **前提**: M0〜M12（Phase A〜D）完了。
+- **変更対象**: `core/include/azookey/core/UserAction.h`（新規）、
+  `core/include/azookey/core/InputState.h`（新規）、
+  `core/src/InputState.cpp`（新規）、`tsf-tip/src/TextService.cpp`、
+  `core/src/UserActionMap.cpp`（新規）。
+- **実装範囲**: 仕様書 §1（UserAction enum、InputState 遷移表、ClientAction→TSF
+  対応表、VK → UserAction マッピング）の全項目。
+- **受け入れ条件**:
+  - `core/tests/input_state_test.cpp` が全状態 × 全 UserAction の遷移を網羅
+  - `tsf-tip/tests/keymap_test.cpp` で VK 全エントリのマッピングを検証
+  - 既存の M3〜M10 挙動が回帰しない（候補往復・確定・staleness）
+- **参照仕様**: `docs/legacy-parity-spec.md` §1
+
+### M14: ライブ変換
+
+- **目的**: `settings.liveConversion=true` のとき、Composing 中は候補ウィンドウ
+  ではなく Preedit に最良候補を常時表示する。
+- **前提**: M13 完了。
+- **変更対象**: `ipc/src/Payloads.cpp`（`QueryLiveConversion` 追加）、
+  `inference-host/src/InferenceEngine.cpp`、`tsf-tip/src/TextService.cpp`。
+- **実装範囲**: 仕様書 §2（IPC、シーケンス、キャンセル経路、staleness）。
+- **横断**: 仕様完了後に X-1-1（信頼度 4 段階 DisplayAttribute）を追加実装する。
+- **受け入れ条件**:
+  - 軽量推論で 30ms 以下の応答（`bench/rich_features_bench.cpp`）
+  - Esc で composition がクリア、Backspace で 1 文字戻る
+  - 高速タイピングで preedit が逆転しない
+- **参照仕様**: `docs/legacy-parity-spec.md` §2、`docs/rich-features-spec.md` X-1
+
+### M15: 予測候補ウィンドウ
+
+- **目的**: 入力中常時、キャレット右側に予測候補（Word モード）を別 HWND で表示。
+- **前提**: M13 完了。
+- **変更対象**: `tsf-tip/src/PredictionWindow.cpp`（新規）、`ipc/src/Payloads.cpp`
+  （`QueryPredictions` Payload 本実装）、`inference-host/src/Dispatcher.cpp`。
+- **実装範囲**: 仕様書 §3（配置アルゴリズム、キャッシュ、操作、設定）。
+- **横断**: 仕様完了後に X-2-2/X-2-3（paragraph_context、ラベル付き候補）。
+- **受け入れ条件**:
+  - キャレット右側 / 画面外なら左反転、上下反転で配置
+  - Tab で第一候補受理、Esc で閉鎖
+  - 1 秒キャッシュで連続呼び出し抑制
+- **参照仕様**: `docs/legacy-parity-spec.md` §3、`docs/rich-features-spec.md` X-2
+
+### M16: Magic Conversion / Replace Suggestion
+
+- **目的**: 英数キーダブルタップで AI 自由テキスト変換、かなキーダブルタップで
+  AI 言い換え。
+- **前提**: M13 完了。
+- **変更対象**: `tsf-tip/src/TextService.cpp`（ダブルタップ検出）、
+  `tsf-tip/src/PromptDialog.cpp`（新規）、`ipc/src/Payloads.cpp`
+  （`TransformSelectedText` 追加）、`inference-host/src/AiBackend.cpp`（新規）。
+- **実装範囲**: 仕様書 §4（トリガ、選択取得、プロンプト UI、IPC、OpenAI 呼び出し、
+  結果反映）。
+- **横断**: 仕様完了後に X-3-3（Post-Commit Lint）を本マイルストーン末尾に
+  追加実装する（同じ AiBackend 経路を流用）。
+- **受け入れ条件**:
+  - 英数 / かな双方のダブルタップで `TransformSelectedText` が呼ばれる
+  - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答が表示される
+  - 結果が selection range に置換される
+- **参照仕様**: `docs/legacy-parity-spec.md` §4、`docs/rich-features-spec.md` X-3-3
+
+### M17: カスタムローマ字テーブル
+
+- **目的**: TSV のカスタムテーブルでローマ字→かな変換を差し替え可能にする。
+- **前提**: M13 完了。
+- **変更対象**: `core/src/RomajiKanaConverter.cpp`、
+  `core/src/CustomRomajiLoader.cpp`（新規）、`tsf-tip/src/TextService.cpp`
+  （`ReadDirectoryChangesW` 監視）。
+- **実装範囲**: 仕様書 §5（TSV フォーマット、配置、ホットリロード、内蔵
+  テーブルとの関係）。
+- **横断**: 仕様完了後に X-3-1（FuzzyMatch）を `RomajiKanaConverter` に追加。
+- **受け入れ条件**:
+  - `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` から読み込んで変換に反映
+  - TSV を保存すると次の入力からテーブルが入れ替わる
+  - 不正行は warning ログでスキップ
+- **参照仕様**: `docs/legacy-parity-spec.md` §5、`docs/rich-features-spec.md` X-3-1
+
+### M18: Unicode 入力 / 学習忘却 / デバッグウィンドウ
+
+- **目的**: 3 つの周辺機能をまとめて実装。
+- **前提**: M13 完了。
+- **変更対象**: `core/src/UnicodeInputBuffer.cpp`（新規）、`learning/src/LearningStore.cpp`
+  （Forget API 追加）、`tsf-tip/src/DebugWindow.cpp`（新規）。
+- **実装範囲**:
+  - M18-1: 仕様書 §6（Ctrl+Shift+U、hex バッファ、サロゲートペア生成）
+  - M18-2: 仕様書 §7（Forget、ForgetMostRecent、TSV 永続化）
+  - M18-3: 仕様書 §8（F10 起動、IPC ログ・状態遷移ログ、セキュリティ配慮）
+- **受け入れ条件**:
+  - Ctrl+Shift+U → `30A1` Enter で「ァ」が入る、範囲外は beep
+  - Ctrl+Shift+Backspace で直近 commit の weight が 0 化
+  - F10 でデバッグウィンドウが開き、直近 50 件の IPC ログが見える
+- **参照仕様**: `docs/legacy-parity-spec.md` §6〜§8
+
+### M19: マルチディスプレイ / カーソル追従
+
+- **目的**: 候補・予測ウィンドウが現在のキャレット位置のモニタ作業領域内に
+  正しく配置される。
+- **前提**: M14, M15 完了。
+- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/PredictionWindow.cpp`、
+  `tsf-tip/src/CaretRectResolver.cpp`（新規）。
+- **実装範囲**: 仕様書 §9（キャレット矩形取得の 3 段フォールバック、
+  モニタ判定、Phase 1 範囲の DPI 対応）。
+- **受け入れ条件**:
+  - 2 枚モニタ環境で、ウィンドウ移動後の入力でも対象モニタの作業領域内に
+    候補が出る
+  - Chromium / Electron アプリで `GetGUIThreadInfo` フォールバックが動く
+- **参照仕様**: `docs/legacy-parity-spec.md` §9
+
+## Phase 2: Windows 特化（M20〜M27）
+
+> Phase 1 完了後に着手。Phase 2-A（TSF 深耕）、2-B（Copilot+ PC / NPU）、
+> 2-C（ネイティブ UI）の 3 サブフェーズを並列に進められる。
+
+### M20: ITfReconversion / ITfFnReconversion
+
+- **目的**: 確定済みテキストの再変換に対応（MS-IME 互換）。
+- **前提**: Phase 1 完了。
+- **変更対象**: `tsf-tip/src/ReconversionFunction.cpp`（新規）、
+  `tsf-tip/src/DllMain.cpp`（Category 登録）、`ipc/src/Payloads.cpp`
+  （`ReverseConvert` 追加）。
+- **実装範囲**: `docs/tsf-deep-integration-spec.md` §1。
+- **受け入れ条件**:
+  - メモ帳で「明日」選択 → 変換キーで「あした」候補が出る
+  - 候補選択で範囲が置換される
+- **参照仕様**: `docs/tsf-deep-integration-spec.md` §1
+
+### M21: UI-less Mode / IME On-Off 状態管理
+
+- **目的**: Windows 11 標準 Suggestion UI に乗る + IME On/Off の MS-IME 互換挙動。
+- **前提**: Phase 1 完了。
+- **変更対象**: `tsf-tip/src/CandidateListUIElement.cpp`（新規）、
+  `tsf-tip/src/TextService.cpp`（`ActivateEx` でフラグ判定、
+  `ITfKeyboardOpenCloseCompartment` 購読）。
+- **実装範囲**: `docs/tsf-deep-integration-spec.md` §2、§4。
+- **受け入れ条件**:
+  - Office 2021/365 で自前候補ウィンドウが出ず OS 標準 UI に乗る
+  - Win+Space / アプリ切替時に composition が確定される
+- **参照仕様**: `docs/tsf-deep-integration-spec.md` §2, §4
+
+### M22: 半角全角 / 無変換 / 変換 / Caps
+
+- **目的**: MS-IME 互換のキー挙動。
+- **前提**: M21 完了。
+- **変更対象**: `tsf-tip/src/TextService.cpp::OnKeyDown` のテーブル拡張、
+  `core/src/CharacterFormCycle.cpp`（新規、無変換キーの巡回ロジック）。
+- **実装範囲**: `docs/tsf-deep-integration-spec.md` §3。
+- **受け入れ条件**:
+  - 「あした」選択 → 無変換キーで巡回（カナ → 半角カナ → 全角英数 → ASCII →
+    元）
+  - 変換キーで composition 中は候補表示、なしなら再変換
+- **参照仕様**: `docs/tsf-deep-integration-spec.md` §3
+
+### M23: 複合 DisplayAttribute / ITfMouseSink
+
+- **目的**: 文節ごとに「注目」「変換済み」「未変換」の色分け + マウスクリックで
+  注目文節を移動。
+- **前提**: M20 完了。
+- **変更対象**: `tsf-tip/src/DllMain.cpp`（3 新規 GUID）、
+  `tsf-tip/src/DisplayAttributeProvider.cpp`、`tsf-tip/src/TextService.cpp`
+  （文節ごとに `SetValue`、`ITfMouseSink` 接続）。
+- **実装範囲**: `docs/tsf-deep-integration-spec.md` §5、§7。
+- **受け入れ条件**:
+  - 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
+  - preedit クリックで該当文節が注目に切替
+- **参照仕様**: `docs/tsf-deep-integration-spec.md` §5, §7
+
+### M24: DirectML / NPU バックエンド
+
+- **目的**: Copilot+ PC（NPU）/ DirectML / CUDA / CPU の自動選択と切替。
+- **前提**: M8 完了（llama.cpp バインディング選定）。
+- **変更対象**: `inference-host/src/BackendSelector.cpp`（新規）、
+  `inference-host/src/InferenceEngine.cpp`（バックエンド分岐）、
+  `inference-host/src/DirectMlBackend.cpp` / `QnnBackend.cpp`（新規、
+  M8 スパイク結果次第）。
+- **実装範囲**: `docs/copilot-pc-backend-spec.md` §1〜§4。
+- **横断**: X-1-2 (TypingTempoTracker)・X-2-4 (PredictWithLLM)・
+  X-3-4 (DetectAnomalies) はこの段階で Heavy レーンに乗せる。
+- **受け入れ条件**:
+  - Snapdragon X / Intel Core Ultra / NVIDIA GPU の各環境で適切な
+    BackendKind が選ばれる
+  - `--backend cuda` 指定で失敗時 CPU に自動フォールバック
+- **参照仕様**: `docs/copilot-pc-backend-spec.md` §1〜§4、
+  `docs/rich-features-spec.md` X-1-2, X-2-4, X-3-4
+
+### M25: mmap ロード / 省電力モード
+
+- **目的**: モデルを mmap でロードしてメモリ圧迫を抑制、バッテリ駆動時に挙動を
+  抑制。
+- **前提**: M24 完了。
+- **変更対象**: `inference-host/src/MmapModelLoader.cpp`（新規）、
+  `inference-host/src/PowerStatusWatcher.cpp`（新規）、
+  `inference-host/src/main.cpp`（`WM_POWERBROADCAST` ハンドラ）。
+- **実装範囲**: `docs/copilot-pc-backend-spec.md` §5、§6。
+- **受け入れ条件**:
+  - 7B gguf をロードしても WorkingSet が肥大化しない
+  - バッテリ駆動時に Heavy レーンが Fast にデグレ
+- **参照仕様**: `docs/copilot-pc-backend-spec.md` §5, §6
+
+### M26: PerMonitorV2 DPI / Dark / Mica / DirectWrite
+
+- **目的**: 候補・予測・デバッグウィンドウを Windows 11 標準ルックに統一。
+- **前提**: M19 完了。
+- **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/PredictionWindow.cpp`、
+  `tsf-tip/src/ThemeColors.h`（新規）、`tsf-tip/src/RenderingEngine.cpp`（新規、
+  DComp + D2D + DirectWrite ラッパ）。
+- **実装範囲**: `docs/copilot-pc-backend-spec.md` §7、`docs/native-ui-spec.md`
+  §1〜§4。
+- **受け入れ条件**:
+  - 96/144/192 DPI で正しくスケール
+  - Dark/Light テーマがシステムに追従
+  - Windows 11 22H2 以降で Mica 背景
+- **参照仕様**: `docs/copilot-pc-backend-spec.md` §7、`docs/native-ui-spec.md`
+
+### M27: ARM64 ビルド
+
+- **目的**: Snapdragon X Elite / 他 ARM64 Windows をネイティブサポート。
+- **前提**: M24 完了。
+- **変更対象**: `.github/workflows/windows.yml`（matrix x64/arm64）、
+  各 `CMakeLists.txt`（NEON フラグ）。
+- **実装範囲**: `docs/copilot-pc-backend-spec.md` §8。
+- **受け入れ条件**:
+  - ARM64 ビルドが CI で緑
+  - Snapdragon X 実機で動作確認
+- **参照仕様**: `docs/copilot-pc-backend-spec.md` §8
+
+## Phase 3: サイドロード配信（M28〜M34）
+
+> Phase 2 完了後に着手。Microsoft Store 配信は対象外（サイドロード専念）。
+> **正典仕様**は `docs/sideload-packaging-spec.md`。
+
+### M28: MSIX サイドロード
+
+- **目的**: MSIX パッケージで配布、ユーザースコープ登録 / アンインストール。
+- **前提**: Phase 2 完了。
+- **変更対象**: `pkg/msix/AppxManifest.xml`（新規）、`pkg/msix/Package.wapproj`
+  （新規）、`pkg/msix/Assets/*.png`（新規）。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §1。
+- **受け入れ条件**:
+  - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
+  - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
+- **参照仕様**: `docs/sideload-packaging-spec.md` §1
+
+### M29: EV/OV コード署名 CI
+
+- **目的**: GitHub Actions で署名済み MSIX を自動生成。
+- **前提**: M28 完了 + EV/OV 証明書手当て済み。
+- **変更対象**: `.github/workflows/release.yml`（新規）、GitHub Secrets 設定。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §2。
+- **受け入れ条件**:
+  - タグ push で署名済み MSIX が Draft Release に添付される
+  - `signtool /verify` が成功
+- **参照仕様**: `docs/sideload-packaging-spec.md` §2
+
+### M30: WinUI 3 設定アプリ
+
+- **目的**: TIP / Host とは別プロセスの GUI 設定アプリ。
+- **前提**: Phase 1 完了（設定キーが確定）。
+- **変更対象**: `settings-app/`（新規ディレクトリ、C++/WinRT + WinUI 3）、
+  `ipc/src/Payloads.cpp`（`UpdateSettings` 追加）、
+  `inference-host/src/SettingsManager.cpp`（新規）。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §3。
+- **横断**: X-3-6（バッチ訂正ビュー）、X-2-6（promptPrefixByApp UI）、
+  X-2-7（Persona 表示）を本マイルストーンで設定アプリ内に集約。
+- **受け入れ条件**:
+  - 設定アプリで値を変更 → Host が即時反映 or 再起動指示
+  - Windows 設定からの「詳細設定」起動で開く（`ITfFnConfigure`）
+- **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
+  X-2-6, X-2-7, X-3-6
+
+### M31: WiX インストーラ
+
+- **目的**: MSIX 不可環境（LTSC 等）向けの代替インストーラ。
+- **前提**: M28 完了。
+- **変更対象**: `pkg/wix/Product.wxs`（新規）、`pkg/inno/setup.iss`（オプション）。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §4。
+- **受け入れ条件**:
+  - Win10 LTSC でインストール → IME 選択 → 入力 → 確定 → アンインストール
+- **参照仕様**: `docs/sideload-packaging-spec.md` §4
+
+### M32: WinGet マニフェスト + 自動更新
+
+- **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新。
+- **前提**: M29 完了。
+- **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
+  外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、設定アプリ UI。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §5、§6。
+- **受け入れ条件**:
+  - winget-pkgs に PR が merge され `winget install` で導入可能
+  - 起動時 + 24h 周期で新版検出、ユーザー承認で MSIX 適用
+- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6
+
+### M33: ETW / WER
+
+- **目的**: 本番環境の観測性とクラッシュ収集。
+- **前提**: M28 完了。
+- **変更対象**: `core/src/EtwLogger.cpp`（新規）、`inference-host/src/CrashHandler.cpp`
+  （新規、`SetUnhandledExceptionFilter`）。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §7、§8。
+- **受け入れ条件**:
+  - `wpr -start` でトレース取得、`wpa` で Event ID が見える
+  - Host クラッシュで `%LOCALAPPDATA%\azooKey\crashes\*.dmp` が残る
+- **参照仕様**: `docs/sideload-packaging-spec.md` §7, §8
+
+### M34: DPAPI 学習データ暗号化
+
+- **目的**: `learning.tsv` / `user-dict.json` / OpenAI API キーをユーザースコープ
+  で暗号化。
+- **前提**: Phase 1 完了。
+- **変更対象**: `learning/src/DpapiCrypto.cpp`（新規）、`learning/src/LearningStore.cpp`
+  （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §9。
+- **受け入れ条件**:
+  - `learning.tsv.enc` が暗号化済みで、他ユーザでは復号失敗
+  - 初回起動時に既存平文 TSV から暗号化形式へ移行
+- **参照仕様**: `docs/sideload-packaging-spec.md` §9
+
+## 横断テーマと Phase の対応
+
+各リッチ化テーマ（`docs/rich-features-spec.md`）の実装タイミングは
+以下のマイルストーンに紐付ける：
+
+| テーマ | 短期（Phase 1 末） | 中期（Phase 2 統合） | 長期（Phase 3 後） |
+|---|---|---|---|
+| X-1 ライブ変換 | M14 末（信頼度 4 段階） | M24（重い推論） | — |
+| X-2 AI 予測 | M15 末（paragraph_context） | M24（PredictWithLLM + Stream） | M30（promptPrefix UI） |
+| X-3 誤変換訂正 | M16 末（Post-Commit Lint）/ M17 末（FuzzyMatch） | M24 後（DetectAnomalies） | M30（バッチ訂正ビュー） |
+| X-4 基盤 | M13〜M19 で個別 | M24 後にスケジューラ統合 | — |

@@ -127,3 +127,140 @@ M12 (CI 強化 + 署名配布)** の 3 つに集中している。
 - `plans/segment_edit.md` の文節エディット機能（現状 macOS 向けの上流計画、Windows MVP 後）
 - `legacy/Core/Sources/Core/InputUtils/InputState.swift:271,336` の FIXME（macOS 側）
 - Linux 版（コミュニティフォーク `fcitx5-hazkey` で対応）
+
+## v1.0 以降の中長期フェーズ
+
+v1.0 リリース後の中長期計画。各 Phase の詳細マイルストーン定義は
+`plans/windows-port-roadmap.md` の Phase 1〜3 を、機能仕様は
+`docs/legacy-parity-spec.md` / `docs/rich-features-spec.md` /
+`docs/tsf-deep-integration-spec.md` / `docs/copilot-pc-backend-spec.md` /
+`docs/native-ui-spec.md` / `docs/sideload-packaging-spec.md` を参照。
+
+### Phase E: レガシー parity 復元（≒ Phase 1、8〜12 週）
+
+- **目的**: 旧 macOS 版（`legacy/`）で実装されていたが Windows MVP では未移植の
+  機能を復元し、azooKey として期待される入力体験の最低ラインに到達する。
+- **着手前タスク**:
+  - `legacy/Core/Sources/Core/InputUtils/InputState.swift` を読み直し、
+    `docs/legacy-parity-spec.md` §1 の遷移表と差分がないかレビュー
+  - OpenAI 互換エンドポイント（`gpt-4o-mini`）の API キー手当て
+  - Magic Conversion / Replace Suggestion 用の Phase 1 簡易ダイアログ UI
+    モック確認
+- **主要マイルストーン**: M13（入力パイプライン）/ M14（ライブ変換）/
+  M15（予測候補）/ M16（Magic Conv & Replace Suggestion）/ M17（カスタム
+  ローマ字）/ M18（Unicode 入力 / 学習忘却 / デバッグウィンドウ）/
+  M19（マルチディスプレイ）
+- **検証**:
+  - メモ帳で `liveConversion=true` 設定 → 入力中に preedit が更新される
+  - 英数キーダブルタップ → プロンプトダイアログ → OpenAI 経由で結果反映
+  - `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` を更新するとホットリロード
+  - Ctrl+Shift+U → `30A1` Enter で「ァ」が入力
+  - F10 でデバッグウィンドウが開き IPC ログが見える
+  - 2 枚モニタ環境でキャレット追従
+- **直近で触るファイル**:
+  - 新規: `core/include/azookey/core/UserAction.h`, `InputState.h`、
+    `core/src/InputState.cpp`, `CustomRomajiLoader.cpp`,
+    `UnicodeInputBuffer.cpp`
+  - 新規: `tsf-tip/src/PredictionWindow.cpp`, `PromptDialog.cpp`,
+    `DebugWindow.cpp`, `CaretRectResolver.cpp`
+  - 新規: `inference-host/src/AiBackend.cpp`
+  - 更新: `tsf-tip/src/TextService.cpp`, `core/src/RomajiKanaConverter.cpp`,
+    `learning/src/LearningStore.cpp`, `ipc/src/Payloads.cpp`
+- **再利用すべき既存実装**:
+  - `core/src/RomajiKanaConverter.cpp`（既存）にカスタムテーブルとパスを乗せる
+  - `learning/src/LearningStore.cpp` の `Observe` 実装は維持し、Forget API を追加
+  - `tsf-tip/src/CandidateWindow.cpp` のレイアウトロジックを `PredictionWindow`
+    の配置計算で参考にする
+  - `RequestScheduler` の staleness check / Cancel をライブ変換でも流用
+- **リスク**:
+  - OpenAI API キー漏えい → 設定アプリ（Phase G）まで DPAPI 暗号化が無い
+    ため、Phase E 期間中の API キーは平文保存（README で注意喚起）
+  - 旧 macOS 仕様との差異が発覚した場合は `docs/legacy-parity-spec.md` を
+    先に更新してから実装
+
+### Phase F: Windows ネイティブ深耕（≒ Phase 2、12〜20 週、M8 と合流）
+
+- **目的**: MS-IME 互換の TSF 統合、Copilot+ PC / NPU 最適化、UI のモダン化を
+  並行で進め、「Windows で最も洗練された IME 体験」を目指す。
+- **着手前タスク**:
+  - M8 Zenzai 統合と並行のため、`docs/zenzai-gpu-route.md` に DirectML / NPU
+    ルートのスパイク結果を追記
+  - DXCore SDK ヘッダ手当て（Windows 11 SDK 22621 以降）
+  - DirectComposition / DirectWrite サンプルコードの動作確認
+  - 評価環境: Snapdragon X 実機 1 台 / Intel Core Ultra 1 台を Phase F 着手時に
+    手配
+- **主要マイルストーン**: M20（Reconversion）/ M21（UI-less Mode）/
+  M22（半角全角等）/ M23（複合 DisplayAttribute）/ M24（DirectML / NPU）/
+  M25（mmap / 省電力）/ M26（DPI / Dark / Mica）/ M27（ARM64）
+- **検証**:
+  - Office 2021 / Edge / Notion 等で UI-less Mode が動作
+  - メモ帳「明日」選択 → 変換キーで「あした」候補
+  - Snapdragon X 実機で NPU バックエンドが選ばれる
+  - 96/144/192 DPI で正しくスケール、Dark/Light が追従、Mica 背景
+  - ARM64 CI ビルドが緑
+- **直近で触るファイル**:
+  - 新規: `tsf-tip/src/ReconversionFunction.cpp`,
+    `CandidateListUIElement.cpp`, `ConfigureFunction.cpp`,
+    `ThemeColors.h`, `RenderingEngine.cpp`
+  - 新規: `inference-host/src/BackendSelector.cpp`, `MmapModelLoader.cpp`,
+    `PowerStatusWatcher.cpp`, `DirectMlBackend.cpp`,
+    `QnnBackend.cpp`（NPU、スパイク結果次第）
+  - 更新: `tsf-tip/src/CandidateWindow.cpp`, `PredictionWindow.cpp`,
+    `DllMain.cpp`（Category 登録、新規 GUID）
+  - 更新: `.github/workflows/windows.yml`（matrix x64/arm64）
+- **再利用すべき既存実装**:
+  - M8 で導入される llama.cpp バインディングを DirectML / NPU 経路の
+    フォールバックとして残す
+  - `tsf-tip/src/CandidateWindow.cpp` の HWND ライフサイクル管理は
+    DComp + D2D ベースに置換しても流用
+- **リスク**:
+  - DXCore / NPU SDK のバージョン互換が頻繁に変わる → SDK は CMake で
+    特定バージョンに pin
+  - DirectML EP のレイテンシが要件未達なら llama.cpp 純 CPU + ARM NEON で
+    Snapdragon 環境を救済（M27 連携）
+  - Mica が古い OS で利用不可 → アクリル / 単色フォールバックを必ず実装
+
+### Phase G: サイドロード配信（≒ Phase 3、8〜14 週）
+
+- **目的**: Microsoft Store 配信に頼らず、署名済み MSIX / WiX を
+  GitHub Releases + WinGet で配布し、自動更新と観測性を確立する。
+- **着手前タスク**:
+  - EV/OV コード署名証明書の調達（リリース日に直結するため Phase F 中盤から
+    並行手当て）
+  - GitHub Secrets に PFX を base64 で格納（`WINDOWS_PFX_BASE64`,
+    `WINDOWS_PFX_PASSWORD`, `WINDOWS_CERT_THUMBPRINT`）
+  - winget-pkgs リポジトリへの contribution ガイド確認
+  - WinUI 3 / C++/WinRT の評価スパイク（既存 settings-app/ がない前提で
+    プロジェクトテンプレートから着手）
+- **主要マイルストーン**: M28（MSIX）/ M29（コード署名 CI）/ M30（設定アプリ）/
+  M31（WiX / Inno）/ M32（WinGet + 自動更新）/ M33（ETW / WER）/
+  M34（DPAPI 暗号化）
+- **検証**:
+  - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` → 動作 →
+    `Remove-AppxPackage` でクリーン
+  - `signtool /verify` で署名チェック pass
+  - `winget install dolquis.azooKey` で導入可能
+  - 起動時 + 24h 周期で更新通知が出る
+  - `wpr -start` でトレース取得 → `wpa` で Event ID 表示
+  - `learning.tsv.enc` を他ユーザ環境で開けないことを確認
+- **直近で触るファイル**:
+  - 新規: `pkg/msix/AppxManifest.xml`, `Package.wapproj`, `Assets/`
+  - 新規: `pkg/wix/Product.wxs`, `pkg/inno/setup.iss`
+  - 新規: `settings-app/`（C++/WinRT WinUI 3 プロジェクト）
+  - 新規: `core/src/EtwLogger.cpp`, `learning/src/DpapiCrypto.cpp`,
+    `inference-host/src/UpdateChecker.cpp`, `CrashHandler.cpp`
+  - 新規: `.github/workflows/release.yml`
+  - 新規: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への PR）
+- **再利用すべき既存実装**:
+  - `scripts/register.ps1` / `unregister.ps1` のロジックを WiX カスタム
+    アクションへ落とし込む
+  - `tsf-tip/src/DllMain.cpp::DllRegisterServer/DllUnregisterServer`（既存）を
+    MSIX manifest の `comServer` 宣言と整合させる
+  - 既存 `LearningStore::Save/Load` のシリアライズフォーマットを保ったまま
+    DPAPI 暗号化を内側でラップ
+- **リスク**:
+  - 証明書調達遅延 → リリース日に直結（Phase F 中盤から並行）
+  - winget-pkgs マージレビューに時間がかかる → リリースから 1〜2 週は MSIX
+    直接 DL の運用を許容
+  - DPAPI 暗号化への移行で旧形式 TSV を読み損ねるとデータ消失 → 移行 1 回限り
+    で `learning.tsv.bak` を必ず残す

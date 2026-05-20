@@ -275,3 +275,40 @@ v1.0 リリース後の中長期計画。各 Phase の詳細マイルストー�
     直接 DL の運用を許容
   - DPAPI 暗号化への移行で旧形式 TSV を読み損ねるとデータ消失 → 移行 1 回限り
     で `learning.tsv.bak` を必ず残す
+
+### Phase H: 個人タイプミス学習・自動修正（M35、3〜4 週）
+
+- **目的**: ユーザー個人が繰り返す打ち間違い（タイプミス）を学習し、同じ
+  タイプミスをしたときに正しい入力へ補正・提示する。汎用 LM 補正
+  （`DebugTypoCorrection`）とは独立した差別化機能。
+- **前提**: M6（Commit / Observation）完了済みのため、Phase C 以降の任意の
+  タイミングで独立着手可能。Zenzai（M8）には依存しない。
+- **着手前タスク**:
+  - `docs/typo-correction-learning-spec.md` の検出ロジック（編集距離しきい値・
+    最小長・確定直後打ち直しウィンドウ）を実装直前に再確認
+  - 設定ローダーが未実装のため、当面は host CLI `--typo-mode` / 環境変数
+    `AZOOKEY_TYPO_MODE` で実効値を受ける方針を確認
+- **実装範囲**: `docs/typo-correction-learning-spec.md` §1〜§9（M35）。
+  - 新規 `learning::TypoCorrectionStore`（かな読みペアの頻度カウント永続化）
+  - IPC `ObserveTypo` メッセージ追加、`QueryCandidatesResponse.corrected_reading`
+  - `InferenceEngine` の suggest / auto_replace 適用、TIP の検出 2 トリガ
+- **直近で触るファイル**:
+  - 新規: `learning/include/azookey/learning/TypoCorrectionStore.h`,
+    `learning/src/TypoCorrectionStore.cpp`,
+    `learning/tests/typo_correction_store_test.cpp`
+  - 更新: `ipc/`（`Messages` / `Payloads`）、`inference-host/`
+    （`InferenceEngine` / `Dispatcher` / `main.cpp`）、
+    `tsf-tip/src/TextService.cpp`、`settings/mvp-settings.schema.json`
+- **再利用すべき既存実装**:
+  - `learning/src/LearningStore.cpp` の TSV I/O パターンを `TypoCorrectionStore`
+    へ流用
+  - `tsf-tip/src/TextService.cpp::PostCommitObservation` の fire-and-forget
+    送信パターンを `PostObserveTypo` へ流用
+  - `inference-host/src/main.cpp` の `LearningStore` / `UserDictionary` 生成・
+    配線パターンを `TypoCorrectionStore` に踏襲
+- **リスク**:
+  - 誤学習（訂正でない backspace を学習）→ 頻度しきい値（既定 3）と編集距離
+    フィルタで適用前にゲート
+  - auto_replace の preedit 反映が TSF スレッド制約で即時化できない → MVP は
+    次キー入力時反映で割り切り、候補ウィンドウ側で先行提示
+- **検証**: `docs/typo-correction-learning-spec.md` §11 の手順に従う。

@@ -663,6 +663,33 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 初回起動時に既存平文 TSV から暗号化形式へ移行
 - **参照仕様**: `docs/sideload-packaging-spec.md` §9
 
+## 追加機能マイルストーン
+
+> Phase 1〜3 の番号体系とは独立に、差別化機能として追加するもの。
+
+### M35: 個人タイプミス学習・自動修正
+
+- **目的**: ユーザー個人が繰り返す打ち間違い（タイプミス）を学習し、同じ
+  タイプミスをしたときに正しい入力へ補正・提示する。汎用 LM 補正
+  （`DebugTypoCorrection`）とは独立した、個人の打鍵の癖を学習する機能。
+- **前提**: M6（Commit / Observation）完了。M7（学習）と独立に着手可能。
+- **変更対象**: `learning/src/TypoCorrectionStore.cpp`（新規）、`ipc/src/Payloads.cpp`
+  ・`ipc/src/Messages.cpp`（`ObserveTypo` 追加）、`inference-host/src/InferenceEngine.cpp`
+  ・`Dispatcher.cpp`・`main.cpp`、`tsf-tip/src/TextService.cpp`、
+  `settings/mvp-settings.schema.json`。
+- **実装範囲**: `docs/typo-correction-learning-spec.md` §1〜§8。
+  - 検出 2 トリガ（未確定中の backspace 訂正 / 確定直後の打ち直し）
+  - `wrong_reading → correct_reading` のかな読みペアを頻度カウントで永続化
+  - 動作モード 3 値（`off` / `suggest` / `auto_replace`）
+- **受け入れ条件**:
+  - 同一タイプミスを `typo_min_count`（既定 3）回観測すると、以降の変換で
+    `suggest` は `typo-correction` マーク付き候補を注入、`auto_replace` は
+    補正後読みで変換する
+  - しきい値未満では蓄積のみで適用されない
+  - `off` で学習・適用が一切行われない
+  - `typo_corrections.tsv` の Save→Load で学習内容が保持される
+- **参照仕様**: `docs/typo-correction-learning-spec.md`
+
 ## 横断テーマと Phase の対応
 
 各リッチ化テーマ（`docs/rich-features-spec.md`）の実装タイミングは
@@ -674,3 +701,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 | X-2 AI 予測 | M15 末（paragraph_context） | M24（PredictWithLLM + Stream） | M30（promptPrefix UI） |
 | X-3 誤変換訂正 | M16 末（Post-Commit Lint）/ M17 末（FuzzyMatch） | M24 後（DetectAnomalies） | M30（バッチ訂正ビュー） |
 | X-4 基盤 | M13〜M19 で個別 | M24 後にスケジューラ統合 | — |
+
+個人タイプミス学習（M35）は X-3「誤変換訂正」と関連するが、**かな読みレベルの
+打鍵ミス**を対象とする独立機能であり、`docs/typo-correction-learning-spec.md` を
+正典とする。

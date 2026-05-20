@@ -709,9 +709,11 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 承認フロー IPC（`ListNewWordCandidates` / `ResolveNewWord`）
   - 登録モード 2 値（`confirm` / `auto`）
 - **受け入れ条件**:
-  - 辞書に無い surface を `miningMinCount`（既定 3）回確定すると confirmed に
-    昇格し、以降の変換で `auto-word` マーク付き候補が注入される
-  - しきい値未満は pending、変換に使われない
+  - `auto` モード: 辞書に無い surface を `miningMinCount`（既定 3）回確定すると
+    confirmed に自動昇格し、以降の変換で `auto-word` マーク付き候補が注入される
+  - `confirm` モード（既定）: 検出語は count を加算しつつ pending のまま保持され、
+    `ResolveNewWord` での承認後にはじめて `auto-word` 候補として注入される。
+    承認前（pending）は変換に使われない
   - 記号のみ・英数のみ・1 文字は新語として記録されない
   - reject した語は再観測しても再提示されない
   - `auto_words.tsv` の Save→Load で内容が保持される

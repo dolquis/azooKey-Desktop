@@ -48,11 +48,16 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 ## ビルド & テスト
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ./build/bench/Debug/azookey_bench.exe
 ```
+
+単体テストは GoogleTest を使う。`-DAZOOKEY_FETCH_GOOGLETEST=ON` は GoogleTest が
+ローカルに見つからないときに `FetchContent` でダウンロードする。システムに
+GoogleTest を導入済みなら省略可。フラグなし・未導入の場合はテストのみスキップ
+してビルドは継続する（オフライン環境向け）。
 
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
 

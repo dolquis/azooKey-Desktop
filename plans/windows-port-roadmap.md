@@ -288,8 +288,11 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 ### テストフレームワーク
 
 テストフレームワークは **GoogleTest**、実行ランナーは **CTest** を併用する。
-GoogleTest は CMake の `FetchContent` で導入し、システムインストール済みの
-GoogleTest があればそれを `find_package` で優先利用する（`FIND_PACKAGE_ARGS`）。
+GoogleTest はまず `find_package` でシステムインストール版を探し、見つからず
+かつ `-DAZOOKEY_FETCH_GOOGLETEST=ON` が指定されたときのみ `FetchContent` で
+ダウンロードする（ネットワーク取得は明示オプトイン）。いずれでも入手できない
+場合は警告を出してテストのみスキップし、ビルド自体は継続する（オフライン環境で
+`cmake -S . -B build` が失敗しないようにするため）。
 各テストは `gtest_discover_tests` により **ケース単位**（`SuiteName.TestName`）で
 CTest に登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに
 個別の CTest エントリへ展開される。実行は `ctest --test-dir build` で一括。

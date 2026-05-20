@@ -1,5 +1,8 @@
 # azooKey-Desktop Windows移植: 資産棚卸し（初回調査）
 
+> 本書は M0 以前の初回調査。参照先の macOS ソース（`Core/`, `azooKeyMac/` 等）は
+> 現在 `legacy/` 配下に保全されている。
+
 ## 流用しやすい「コア資産」
 
 - `Core/Sources/Core/InputUtils/SegmentsManager.swift`

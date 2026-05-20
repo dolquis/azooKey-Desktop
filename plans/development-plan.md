@@ -124,7 +124,7 @@ M12 (CI 強化 + 署名配布)** の 3 つに集中している。
 ## このプランの範囲外
 
 - macOS 版 v1.0（Issue #181 で別管理、`legacy/` 配下に保全）
-- `plans/segment_edit.md` の文節エディット機能（現状 macOS 向けの上流計画、Windows MVP 後）
+- `docs/segment-edit-upstream.md` の文節エディット機能（現状 macOS 向けの上流計画、Windows MVP 後）
 - `legacy/Core/Sources/Core/InputUtils/InputState.swift:271,336` の FIXME（macOS 側）
 - Linux 版（コミュニティフォーク `fcitx5-hazkey` で対応）
 

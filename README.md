@@ -33,7 +33,7 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 - `learning/` — 学習・再ランキング
 - `bench/` — レイテンシ計測 CLI
 - `scripts/` — TIP 登録/解除 PowerShell スクリプト
-- `docs/` — 設計メモ・デバッグ手順
+- `docs/` — 設計メモ・機能仕様・デバッグ手順
 - `settings/` — MVP 設定スキーマ
 - `plans/` — ロードマップ・設計プラン
 - `legacy/` — 旧 macOS 実装（参照用、未保守）

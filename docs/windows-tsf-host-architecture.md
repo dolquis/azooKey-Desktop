@@ -46,6 +46,31 @@
 - 破損時はリセット可能（`LearningStore::Reset` or ファイル削除）。
 - 時間減衰: `exp(-0.15 * days)` で `LearningStore::Score` 内で適用。
 
+## 実装ルール
+
+### スレッドモデル
+
+- COM apartment: TSF text service DLL は `InProcServer32` でロードされるため、
+  ホストアプリ文脈に従う。
+- TSF インターフェースは UI スレッド境界で扱う。推論・重い変換をワーカースレッドへ
+  逃がす際は、TSF オブジェクトへ直接触れず、結果はメッセージ／キューで UI スレッドへ
+  戻して反映する（実装: `IpcWorkerThread`）。
+- `AddRef`/`Release`/`QueryInterface` を厳格実装する。COM ポインタは
+  `wil::com_ptr` または `Microsoft::WRL::ComPtr` を用いる。
+
+### 例外・障害耐性
+
+- COM 境界をまたぐ関数は**例外を外へ出さない**。失敗時は `HRESULT` で返却し、
+  ログに詳細を書き込む。
+- 最低ログ要件: 起動／終了、例外、キーイベント要約、変換失敗理由。
+  出力先は `%LOCALAPPDATA%\azooKey\logs\`（現状は TIP=`OutputDebugStringA` /
+  Host=stderr、Phase D で JSON Lines ファイルログへ移行予定）。
+
+### 互換性優先の実装ルール
+
+- Notepad / Chrome / VSCode / Office の挙動差を前提に、未処理キーは極力食わない。
+- composition 状態の不整合時は安全側（キャンセル）で復帰する。
+
 ## 新規モジュール（Phase 1/2 で追加予定）
 
 下記モジュールは v1.0 以降の Phase で追加予定。正典仕様は各 spec を参照。

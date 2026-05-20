@@ -653,10 +653,12 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 ### M34: DPAPI 学習データ暗号化
 
 - **目的**: `learning.tsv` / `user-dict.json` / OpenAI API キーをユーザースコープ
-  で暗号化。
+  で暗号化。M35 / M36 で追加される学習データ（`typo_corrections.tsv` /
+  `auto_words.tsv`）も同等の機微情報として対象に含める。
 - **前提**: Phase 1 完了。
 - **変更対象**: `learning/src/DpapiCrypto.cpp`（新規）、`learning/src/LearningStore.cpp`
-  （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。
+  （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。M35 / M36 着手
+  済みの場合は `TypoCorrectionStore` / `AutoWordStore` の Load/Save も同様にラップ。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §9。
 - **受け入れ条件**:
   - `learning.tsv.enc` が暗号化済みで、他ユーザでは復号失敗
@@ -690,6 +692,51 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `typo_corrections.tsv` の Save→Load で学習内容が保持される
 - **参照仕様**: `docs/typo-correction-learning-spec.md`
 
+### M36-A: 新語自動取得（ユーザー入力マイニング）
+
+- **目的**: ユーザー自身の確定履歴から辞書に無い未知語（OOV）を検出し、新語専用
+  ストアに蓄積。承認済み（confirmed）の語を変換候補へ注入する。手動登録の
+  `UserDictionary` とは独立した自動取得機能。
+- **前提**: M6（Commit / Observation）完了のみ。M7・M32 と独立に着手可能。
+  HTTP に依存しない（オフライン完結）。
+- **変更対象**: `learning/src/AutoWordStore.cpp`（新規）、`ipc/src/Messages.cpp`
+  ・`ipc/src/Payloads.cpp`（`ListNewWordCandidates` / `ResolveNewWord` 追加）、
+  `inference-host/src/InferenceEngine.cpp`・`Dispatcher.cpp`・`main.cpp`、
+  `settings/mvp-settings.schema.json`。
+- **実装範囲**: `docs/auto-word-registration-spec.md` §3〜§4・§6〜§9。
+  - `CommitObservation` を hook した OOV 検出（新 IPC 不要）
+  - 新ストア `AutoWordStore`（pending / confirmed / rejected の状態管理）
+  - 承認フロー IPC（`ListNewWordCandidates` / `ResolveNewWord`）
+  - 登録モード 2 値（`confirm` / `auto`）
+- **受け入れ条件**:
+  - 辞書に無い surface を `miningMinCount`（既定 3）回確定すると confirmed に
+    昇格し、以降の変換で `auto-word` マーク付き候補が注入される
+  - しきい値未満は pending、変換に使われない
+  - 記号のみ・英数のみ・1 文字は新語として記録されない
+  - reject した語は再観測しても再提示されない
+  - `auto_words.tsv` の Save→Load で内容が保持される
+- **参照仕様**: `docs/auto-word-registration-spec.md`
+
+### M36-B: 新語自動取得（リモートトレンド語）
+
+- **目的**: プロジェクトがホストする整形済みトレンド語リスト（静的アセット）を
+  定期ダウンロード・検証し、新語ストアにマージする。
+- **前提**: M36-A 完了 + M32 の WinHTTP 基盤（共通ヘルパ `HttpDownloader` の
+  切り出し）。
+- **変更対象**: `inference-host/src/TrendingWordFetcher.cpp`・
+  `inference-host/src/HttpDownloader.cpp`（新規）、`inference-host/src/main.cpp`、
+  `inference-host/CMakeLists.txt`（`winhttp.lib` リンク）。
+- **実装範囲**: `docs/auto-word-registration-spec.md` §5。
+  - WinHTTP による定期 DL → SHA256 検証 → `AutoWordStore::IngestTrending`
+  - 取得元はプロジェクトホストの静的アセット（GitHub Releases 等）。
+    Google Trends の直接スクレイピングはしない。上流のデータ生成パイプラインは
+    クライアント実装の範囲外
+- **受け入れ条件**:
+  - 起動時 + 周期で正規アセットを取得し、SHA256 検証通過時のみ取り込む
+  - ハッシュ不一致のアセットは破棄しストアを変更しない
+  - `trendingEnabled=false` で一切ネットワークアクセスしない
+- **参照仕様**: `docs/auto-word-registration-spec.md`
+
 ## 横断テーマと Phase の対応
 
 各リッチ化テーマ（`docs/rich-features-spec.md`）の実装タイミングは
@@ -705,3 +752,6 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 個人タイプミス学習（M35）は X-3「誤変換訂正」と関連するが、**かな読みレベルの
 打鍵ミス**を対象とする独立機能であり、`docs/typo-correction-learning-spec.md` を
 正典とする。
+
+新語自動取得（M36-A / M36-B）は手動登録の `UserDictionary` とは独立した辞書自動
+拡充機能であり、`docs/auto-word-registration-spec.md` を正典とする。

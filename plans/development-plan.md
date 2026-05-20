@@ -312,3 +312,48 @@ v1.0 リリース後の中長期計画。各 Phase の詳細マイルストー�
   - auto_replace の preedit 反映が TSF スレッド制約で即時化できない → MVP は
     次キー入力時反映で割り切り、候補ウィンドウ側で先行提示
 - **検証**: `docs/typo-correction-learning-spec.md` §11 の手順に従う。
+
+### Phase I: 新語自動取得・辞書追加（M36-A / M36-B、3〜5 週）
+
+- **目的**: Google 日本語入力のように、ユーザーがよく使う未知語や世間のトレンド
+  語を自動的に収集し変換候補へ反映する。手動登録の `UserDictionary` とは独立した
+  辞書自動拡充機能。
+- **前提**: M36-A（マイニング）は M6（Commit / Observation）完了済みのため独立
+  着手可能。M36-B（トレンド取得）は M32 の WinHTTP 基盤に依存。
+- **着手前タスク**:
+  - `docs/auto-word-registration-spec.md` の OOV 検出ロジック（`SimpleConverter::
+    Convert` が常にヒューリスティック候補を返す点に注意）を実装直前に再確認
+  - M36-B 着手時は M32 の `UpdateChecker` と共通の `HttpDownloader` ヘルパ切り
+    出し方針を M32 担当と調整
+  - 設定ローダー未実装のため host CLI 引数 / 環境変数で実効値を受ける方針を確認
+- **実装範囲**: `docs/auto-word-registration-spec.md` §3〜§9（M36）。
+  - 新規 `learning::AutoWordStore`（新語の pending/confirmed/rejected 状態管理）
+  - `CommitObservation` を hook した OOV マイニング検出（新 IPC 不要）
+  - 承認フロー IPC（`ListNewWordCandidates` / `ResolveNewWord`）
+  - M36-B: `TrendingWordFetcher` による静的アセットの定期 DL・SHA256 検証
+- **直近で触るファイル**:
+  - 新規: `learning/include/azookey/learning/AutoWordStore.h`,
+    `learning/src/AutoWordStore.cpp`,
+    `learning/tests/auto_word_store_test.cpp`
+  - 新規（M36-B）: `inference-host/src/TrendingWordFetcher.cpp`,
+    `inference-host/src/HttpDownloader.cpp`
+  - 更新: `ipc/`（`Messages` / `Payloads`）、`inference-host/`
+    （`InferenceEngine` / `Dispatcher` / `main.cpp`）、
+    `settings/mvp-settings.schema.json`
+- **再利用すべき既存実装**:
+  - `learning/src/UserDictionary.cpp` / `LearningStore.cpp` の永続化 I/O パターン
+    を `AutoWordStore` へ流用
+  - `Dispatcher::HandleCommitObservation` の配線（既存 `CommitObservation` を
+    マイニング検出の hook に再利用、新 IPC 不要）
+  - `inference-host/src/main.cpp` の `LearningStore` / `UserDictionary` 生成・
+    配線パターンを `AutoWordStore` に踏襲
+  - M32 `UpdateChecker` の WinHTTP DL + SHA256 検証パターン（`HttpDownloader`
+    として共通化）
+- **リスク**:
+  - 誤検出（記号・コード片・誤確定を新語登録）→ 誤検出フィルタと頻度しきい値、
+    既定の承認制（confirm）モードでゲート
+  - 承認 UI が M30 WinUI3 設定アプリに依存 → M30 完成前は auto モード限定運用
+    または host のデバッグ CLI で暫定対応
+  - トレンド取得のプライバシー懸念 → ダウンロードのみ・ユーザー語の外部送信
+    なしを仕様で明示。`auto_words.tsv` は M34 DPAPI 暗号化対象に含める
+- **検証**: `docs/auto-word-registration-spec.md` §13 の手順に従う。

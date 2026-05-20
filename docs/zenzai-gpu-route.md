@@ -22,9 +22,9 @@
 - CUDA初期化失敗・GPUなしの場合は同一Host APIでCPU実行。
 - TIPはバックエンド差を意識せず、IPCレスポンスのみで処理。
 
-## Phase C M8 着手前スパイク結果（2026-05-20）
+## Phase 3 M8 着手前スパイク結果（2026-05-20）
 
-Phase C の最初の実装単位は **llama.cpp C API + CPU backend** とし、CUDA は
+Phase 3 の最初の実装単位は **llama.cpp C API + CPU backend** とし、CUDA は
 CMake オプションで optional に追加する。理由は以下。
 
 1. GGUF を直接ロードでき、既存 Zenzai 資産を変換せずに検証できる。
@@ -33,8 +33,8 @@ CMake オプションで optional に追加する。理由は以下。
    n_gpu_layers)` の境界より内側に閉じ込められる。
 
 M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
-`directml` は IPC payload の予約値として残すが、Phase C では unsupported として
-扱い、Phase 2-B M24 の DirectML / NPU スパイクで再度有効化する。
+`directml` は IPC payload の予約値として残すが、Phase 3 では unsupported として
+扱い、Phase 6-B M24 の DirectML / NPU スパイクで再度有効化する。
 
 計測ゲート:
 
@@ -45,9 +45,9 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
 
 ## 将来拡張
 
-### DirectML EP ルート（Phase 2-B M24 採用予定）
+### DirectML EP ルート（Phase 6-B M24 採用予定）
 
-ONNX 化を経ない経路として、以下のいずれかを Phase 2-B M24 で採用する。
+ONNX 化を経ない経路として、以下のいずれかを Phase 6-B M24 で採用する。
 M8 スパイクで配布サイズ / 初回起動時間 / レイテンシ / 量子化対応を比較して決定する。
 
 候補:
@@ -71,7 +71,7 @@ Copilot+ PC（Snapdragon X Elite / Intel Meteor Lake+ / AMD XDNA）の NPU を
   配布サイズが大きい（〜100MB）が int4/int8 量子化が成熟。
 - **AMD MIGraphX** — Ryzen AI 300 系の XDNA NPU。
 
-Phase 2-B M24 で `BackendKind::NPU` として統合し、`BackendSelector` の優先順位
+Phase 6-B M24 で `BackendKind::NPU` として統合し、`BackendSelector` の優先順位
 は **NPU > DirectML > CUDA > CPU**（バッテリ駆動時は **NPU > CPU > DirectML
 > CUDA**）とする。
 
@@ -84,7 +84,7 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。
 ### 既存「ルート A」の位置付け
 
 **ルート A（GGUF/ggml + ggml-cuda）は NVIDIA GPU 環境専用**。AC 接続デスクトップ
-で最速だが、ノート PC のバッテリ消費が激しい。Phase 2-B M24 完了後は
+で最速だが、ノート PC のバッテリ消費が激しい。Phase 6-B M24 完了後は
 `BackendSelector` の優先順位下位（CPU の手前）にフォールバックとして残す。
 
 ## 参照

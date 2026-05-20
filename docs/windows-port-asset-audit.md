@@ -1,7 +1,9 @@
 # azooKey-Desktop Windows移植: 資産棚卸し（初回調査）
 
-> 本書は M0 以前の初回調査。参照先の macOS ソース（`Core/`, `azooKeyMac/` 等）は
-> 現在 `legacy/` 配下に保全されている。
+> 本書は M0 以前の初回調査であり、現行設計の正典ではない。最新の設計・計画は
+> `plans/windows-port-roadmap.md` および `docs/*-spec.md` を参照すること。
+> 本書が参照する macOS ソース（`Core/`, `azooKeyMac/` 等）は現在 `legacy/`
+> 配下に保全されている。
 
 ## 流用しやすい「コア資産」
 

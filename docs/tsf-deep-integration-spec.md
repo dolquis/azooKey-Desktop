@@ -1,7 +1,7 @@
-# TSF Deep Integration 仕様（Phase 2-A）
+# TSF Deep Integration 仕様（Phase 6-A）
 
 本書は Microsoft IME（MS-IME）と同等の TSF 統合を実現するための仕様を定める。
-`plans/windows-port-roadmap.md` の Phase 2 の M20〜M23 が本書を参照する。
+`plans/windows-port-roadmap.md` の Phase 6 の M20〜M23 が本書を参照する。
 
 ## 1. ITfReconversion / ITfFnReconversion (M20)
 
@@ -282,8 +282,8 @@ for (const auto& seg : segments) {
 
 ### 5.4 文節境界
 
-Phase 1 では「変換候補 1 件 = 1 文節」として扱う。
-Phase 2 で Zenzai が複数文節を返すようになったら、`Candidate.segments[]` を活用。
+Phase 5 では「変換候補 1 件 = 1 文節」として扱う。
+Phase 6 で Zenzai が複数文節を返すようになったら、`Candidate.segments[]` を活用。
 
 ### 5.5 受け入れ条件
 
@@ -398,7 +398,7 @@ public:
 };
 ```
 
-Phase 2-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前ウィンドウ
+Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前ウィンドウ
 ではなく OS 側 Suggestion UI に渡す。
 
 ### 8.2 受け入れ条件
@@ -421,5 +421,5 @@ Phase 2-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 - TSF SDK: `Microsoft.Windows.SDK.Cpp` の `msctf.h`
 - MS-IME 互換仕様（公式ドキュメント）: <https://learn.microsoft.com/windows/win32/tsf/>
 - 旧 macOS 実装の対応箇所：`legacy/azooKeyMac/InputController/azooKeyMacInputController.swift`
-- Phase 2-B: `docs/copilot-pc-backend-spec.md`
-- Phase 2-C: `docs/native-ui-spec.md`
+- Phase 6-B: `docs/copilot-pc-backend-spec.md`
+- Phase 6-C: `docs/native-ui-spec.md`

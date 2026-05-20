@@ -1,7 +1,7 @@
-# サイドロード配信 仕様（Phase 3）
+# サイドロード配信 仕様（Phase 7）
 
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。
-`plans/windows-port-roadmap.md` の Phase 3 の M28〜M34 が本書を参照する。
+`plans/windows-port-roadmap.md` の Phase 7 の M28〜M34 が本書を参照する。
 
 **Microsoft Store 配信は対象外** とし、サイドロード（自己署名 + EV/OV 証明書
 配布）に専念する。
@@ -452,7 +452,7 @@ User-Agent: azooKey/1.0.0 (Windows)
 ### 6.4 WinSparkle 互換
 
 WinSparkle 互換の `appcast.xml` フィードも `gh-pages` ブランチで提供
-（外部ツールからの参照用）。Phase 3 では実装スコープ外、将来課題。
+（外部ツールからの参照用）。Phase 7 では実装スコープ外、将来課題。
 
 ### 6.5 設定
 
@@ -552,7 +552,7 @@ TIP DLL は in-proc なのでアプリ側を巻き込まないよう **設定し
 
 ### 8.2 クラッシュレポート送信
 
-Phase 3 では `%LOCALAPPDATA%\azooKey\crashes\` に保存のみ。
+Phase 7 では `%LOCALAPPDATA%\azooKey\crashes\` に保存のみ。
 送信先 UI は将来課題（GitHub Issue 自動起票はプライバシ懸念で見送り）。
 
 設定アプリ「詳細 → クラッシュレポート」から手動でアーカイブして添付。

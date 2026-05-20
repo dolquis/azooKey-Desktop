@@ -64,18 +64,18 @@
   ログに詳細を書き込む。
 - 最低ログ要件: 起動／終了、例外、キーイベント要約、変換失敗理由。
   出力先は `%LOCALAPPDATA%\azooKey\logs\`（現状は TIP=`OutputDebugStringA` /
-  Host=stderr、Phase D で JSON Lines ファイルログへ移行予定）。
+  Host=stderr、Phase 4 で JSON Lines ファイルログへ移行予定）。
 
 ### 互換性優先の実装ルール
 
 - Notepad / Chrome / VSCode / Office の挙動差を前提に、未処理キーは極力食わない。
 - composition 状態の不整合時は安全側（キャンセル）で復帰する。
 
-## 新規モジュール（Phase 1/2 で追加予定）
+## 新規モジュール（Phase 5/6 で追加予定）
 
 下記モジュールは v1.0 以降の Phase で追加予定。正典仕様は各 spec を参照。
 
-### Phase 1（レガシー parity、`docs/legacy-parity-spec.md`）
+### Phase 5（レガシー parity、`docs/legacy-parity-spec.md`）
 
 - `core/include/azookey/core/UserAction.h` — VK → 抽象アクション enum
 - `core/include/azookey/core/InputState.h` — 入力状態機械
@@ -89,7 +89,7 @@
   フォールバック
 - `inference-host/src/AiBackend.cpp` — OpenAI 互換 API クライアント
 
-### Phase 1〜2 横断（`docs/rich-features-spec.md`）
+### Phase 5〜6 横断（`docs/rich-features-spec.md`）
 
 - `tsf-tip/src/ContextTracker.cpp` — 段落 / 直前文 / アプリ別履歴
 - `tsf-tip/src/ForegroundAppDetector.cpp` — 前面アプリ実行ファイル名取得
@@ -97,7 +97,7 @@
 - `core/src/QwertyAdjacency.cpp` — FuzzyMatch 用 QWERTY 隣接表
 - `bench/rich_features_bench.cpp` — リッチ化機能のレイテンシ計測
 
-### Phase 2-A（TSF 深部、`docs/tsf-deep-integration-spec.md`）
+### Phase 6-A（TSF 深部、`docs/tsf-deep-integration-spec.md`）
 
 - `tsf-tip/src/ReconversionFunction.cpp` — `ITfFnReconversion`
 - `tsf-tip/src/CandidateListUIElement.cpp` — UI-less Mode 用
@@ -105,7 +105,7 @@
 - `tsf-tip/src/ConfigureFunction.cpp` — `ITfFnConfigure`
 - `tsf-tip/src/InstalledPath.cpp` — 設定アプリ EXE 解決
 
-### Phase 2-B（Copilot+ PC / NPU、`docs/copilot-pc-backend-spec.md`）
+### Phase 6-B（Copilot+ PC / NPU、`docs/copilot-pc-backend-spec.md`）
 
 - `inference-host/src/BackendSelector.cpp` — DXCore 列挙 + 優先順
 - `inference-host/src/MmapModelLoader.cpp` — `CreateFileMapping` + `MapViewOfFile`
@@ -113,12 +113,12 @@
 - `inference-host/src/DirectMlBackend.cpp` — DirectML EP 経路
 - `inference-host/src/QnnBackend.cpp` — Snapdragon X NPU 経路（M27 と合流）
 
-### Phase 2-C（UI モダン化、`docs/native-ui-spec.md`）
+### Phase 6-C（UI モダン化、`docs/native-ui-spec.md`）
 
 - `tsf-tip/src/ThemeColors.h` — Light/Dark 色テーブル
 - `tsf-tip/src/RenderingEngine.cpp` — DComp + D2D + DirectWrite 共通
 
-### Phase 3（サイドロード配信、`docs/sideload-packaging-spec.md`）
+### Phase 7（サイドロード配信、`docs/sideload-packaging-spec.md`）
 
 - `settings-app/` — C++/WinRT WinUI 3 設定アプリ
 - `core/src/EtwLogger.cpp` — ETW Provider ラッパ
@@ -135,22 +135,22 @@
 ## 新規 IPC メッセージ
 
 既存 9 種（Handshake / Ping / Health / LoadModel / QueryCandidates / Cancel /
-CommitObservation / AddUserWord / RemoveUserWord）に加え、以下を Phase 1〜2 で
+CommitObservation / AddUserWord / RemoveUserWord）に加え、以下を Phase 5〜6 で
 順次追加する。
 
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|
-| `QueryLiveConversion` / `Response` | TIP → Host | Phase 1 (M14) | legacy-parity §2 |
-| `QueryPredictions` / `Response` | TIP → Host | Phase 1 (M15) | legacy-parity §3 + rich X-2 |
-| `TransformSelectedText` / `Response` | TIP → Host | Phase 1 (M16) | legacy-parity §4 |
-| `RequestPostCommitLint` / `Response` | TIP → Host | Phase 1 末 (M16 拡張) | rich X-3-3 |
-| `LintFinding` | データ型 | Phase 1 末 | rich X-3-3 |
-| `PredictStreamChunk`（push） | Host → TIP | Phase 2 (M24) | rich X-2-5 |
-| `ReverseConvert` / `Response` | TIP → Host | Phase 2-A (M20) | tsf-deep §1 |
-| `UpdateSettings` / `Response` | Settings → Host | Phase 3 (M30) | sideload §3 |
-| `QueryFullRecompute` / `Response` | TIP → Host | Phase 1 末 | rich X-1-3 |
-| `UpdateUserWord` / `Response` | Settings → Host | Phase 3 (M30) | 既存 enum 配線 |
-| `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 1〜2 | 既存 enum 配線 |
+| `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14) | legacy-parity §2 |
+| `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15) | legacy-parity §3 + rich X-2 |
+| `TransformSelectedText` / `Response` | TIP → Host | Phase 5 (M16) | legacy-parity §4 |
+| `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |
+| `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
+| `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
+| `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20) | tsf-deep §1 |
+| `UpdateSettings` / `Response` | Settings → Host | Phase 7 (M30) | sideload §3 |
+| `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
+| `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
+| `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
 
 Envelope に `push: bool` フラグを追加し、`server → client` 一方向通知に
 対応する（`docs/rich-features-spec.md` X-4-2）。

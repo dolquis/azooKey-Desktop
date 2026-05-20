@@ -1,7 +1,9 @@
-# azooKey-Desktop Windows ポート: マイルストーン・ロードマップ
+# azooKey-Desktop Windows ポート: 開発計画・マイルストーンロードマップ
 
-本書は Windows 版 azooKey-Desktop の段階的開発計画。前提となる方針・構成は
-以下を参照:
+本書は Windows 版 azooKey-Desktop の**唯一の開発計画ドキュメント**。
+v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルストーン定義
+（Phase 5〜7・追加機能）・受け入れ条件・依存関係・テスト体系を一本化して
+管理する。前提となる方針・構成は以下を参照:
 
 - `docs/windows-port-asset-audit.md`: 既存 macOS 資産の流用可否棚卸し
 - `docs/windows-tsf-host-architecture.md`: TSF TIP + Inference Host 分離設計
@@ -16,17 +18,17 @@
 - **コア方針**: TIP (in-proc COM DLL) はキー処理と UI のみ担当し、推論・学習は
   Named Pipe 経由で `inference-host` (per-user 常駐 EXE) に委譲する。
 
-## 現在のソース構成（M0 時点）
+## 現在のソース構成（2026-05 時点）
 
 | ディレクトリ        | 役割                                                     | 現状                                        |
 |---------------------|----------------------------------------------------------|---------------------------------------------|
-| `core/`             | OS 非依存の変換コア（C++）                               | スケルトン + tests あり                     |
-| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | `Messages.cpp` あり、tests あり             |
-| `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore.cpp` / `Reranker.cpp` あり   |
-| `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine.cpp` / `RequestScheduler.cpp` / `main.cpp` あり |
-| `tsf-tip/`          | TIP 本体 (COM DLL)                                       | `DllMain.cpp` / `TextService.cpp` / `TextServiceFactory.cpp` あり |
-| `bench/`            | パフォーマンス計測                                       | 別途                                        |
-| `Core/` (Swift)     | macOS 側の仕様参照源                                     | 移植対象ではなく仕様参照のみ                |
+| `core/`             | OS 非依存の変換コア（C++）                               | `RomajiKanaConverter` / `SimpleConverter` / `IConverter` 実装済み・tests あり |
+| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | 全 14 `MessageType` 定義・9 Payload 実装済み・Named Pipe 実装済み・tests あり |
+| `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore` / `Reranker` / `UserDictionary` 実装済み・tests あり |
+| `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp` 実装済み・モデルロードは M8 でスタブ実装中 |
+| `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel まで実装済み（M1〜M10） |
+| `bench/`            | パフォーマンス計測                                       | `azookey_bench` 実装済み                    |
+| `legacy/Core/` (Swift) | macOS 版の仕様参照源                                  | 移植対象ではなく仕様参照のみ（`legacy/` に保全・未保守） |
 
 ## マイルストーン
 
@@ -277,7 +279,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   詳細なテストカバレッジとギャップは `## テスト体系` 章を参照。
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。現状は TIP=`OutputDebugStringA`（DebugView）/ Host=stderr。
-  Phase D で JSON Lines ファイルログに切替予定。
+  Phase 4 で JSON Lines ファイルログに切替予定。
 - **ドキュメント**: 各マイルストーン完了時に `docs/windows-tsf-host-architecture.md`
   を実装に合わせて更新する。
 
@@ -299,26 +301,28 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 | `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/Cancel/Commit/AddUserWord/RemoveUserWord/Health の全 8 ハンドラ |
 | `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)` |
 
-### 既知のテストギャップ（Phase C/D 着手前に解消したい）
+### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
-短期（Phase C 着手前）:
+短期（Phase 3 着手前）:
 1. **`Reranker` 直接テスト** — 現状 `learning_test.cpp` で間接的に検証するのみ。`store_ == nullptr` パス、空 candidates、複数候補の安定ソート順、時間減衰 (`exp(-0.15 * days)`) の境界を直接 assertion 化。
 2. **`RequestScheduler` 直接テスト** — `dispatcher_test.cpp` の `TestQueryCancelBeforeReply`/`TestCancelMessageNoReply` で間接的に検証するのみ。`NextRequestId` 連番、`Cancel` → `IsCanceled` セット意味、`MarkLatest`/`IsLatest` の単一最新ガードを直接テスト。
 3. **`SimpleConverter` 長 reading 性能** — 8 文字以上の reading で prefix fallback 経路の品質を assertion 化。
 
-中期（Phase C / Zenzai 統合と並行）:
+中期（Phase 3 / Zenzai 統合と並行）:
 4. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
 5. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
 6. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
 7. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 呼び出し後に HKCU `Software\\Classes\\CLSID\\{...}\\Profiles\\0x00000411\\{...}` が存在し、`DllUnregisterServer` 後に消えることをテスト。COM 初期化が必要なので Windows-only。
 
-長期（Phase D / 配布前に必須）:
+長期（Phase 4 / 配布前に必須）:
 8. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
 9. **bench smoke** — `bench/azookey_bench.exe` が CTest から呼べて exit=0 と p50 < 50ms（CPU SimpleConverter）を満たすことを CI で。
 10. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 11. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
-## 不確実性
+## リスクと不確実性
+
+未決の設計判断:
 
 - llama.cpp バインディング選択（M8）はビルド時間と配布サイズに影響大。
   M4 → M8 の間で技術調査が必要。
@@ -326,21 +330,162 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   プロトタイプ後に決める。
 - 設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。
 
-## v1.0 までの実行順（再優先順位）
+v1.0 リリースに向けたリスクと対応:
 
-実装実態に基づき、ロードマップの依存図とは別に v1.0 リリースまでの
-進め方を `plans/development-plan.md` にまとめた。要約のみ以下に示す。
+| リスク | 影響 | 対応 |
+|---|---|---|
+| llama.cpp バインディング選定 (M8) | 配布サイズ・初回起動時間に直結 | Phase 3 着手スパイクで確定 (`docs/zenzai-gpu-route.md` 更新)、`bench/` で計測 |
+| CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
+| MSIX 配布 (M11) のユーザースコープ登録 | アンインストール後にレジストリが残る | 既に `DllRegisterServer` で HKCU 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
+| 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | Phase 3 中に WinUI 3 / WPF / Tauri を 1〜2 日比較スパイク |
+| 署名証明書の調達 (M12) | リリース日に直結 | Phase 4 着手前に EV/OV 証明書の手当てを並行 |
 
-- **Phase A**（M1〜M4）✅ 完了 — 実機で打鍵から候補往復までを成立。
-- **Phase B**（M5/M6/M10）✅ 完了 — 候補選択・確定・早打ち耐性を完成。
-- **Phase C**（3〜5 週）🚧 着手対象: M8 Zenzai 実装 + M9 UI 接続。
-- **Phase D**（4〜6 週）: M11 設定 UI + MSIX + M12 署名/Release 自動化。
+## スコープ外
 
-詳細・直近タスク・検証手順は `plans/development-plan.md` を参照。
+本ロードマップ（Windows 版）の対象外:
 
-## Phase 1: レガシー parity 復元（M13〜M19）
+- macOS 版 v1.0（Issue #181 で別管理、`legacy/` 配下に保全）
+- `legacy/segment-edit-upstream.md` の文節エディット機能（macOS 向けの上流
+  計画、Windows MVP 後）
+- `legacy/Core/Sources/Core/InputUtils/InputState.swift` の FIXME（macOS 側）
+- Linux 版（コミュニティフォーク `fcitx5-hazkey` で対応）
 
-> Phase D 完了後に着手。**正典仕様**は `docs/legacy-parity-spec.md`。
+## v1.0 までの実行計画（Phase 1〜4）
+
+ロードマップの依存図とは別に、v1.0（MSIX 配布可能な最小 IME）リリースまでの
+実行順を 4 フェーズで管理する。各マイルストーンのステータスは上記
+「マイルストーン」章の各 M「現状」欄を正典とする。macOS 版（Issue #181）は
+本計画の対象外（「スコープ外」参照）。
+
+### Phase 1: TIP 基盤完成（M1〜M4）✅ 完了（main マージ済み: `603cd1d`）
+
+実機 IME としてローマ字を打鍵し、Host から候補を取得して候補ウィンドウに
+表示するまで動作。
+
+### Phase 2: 候補選択と確定動線（M5/M6/M10）✅ 完了（main マージ済み: `603cd1d`）
+
+候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）まで動作。
+
+### Phase 3: 実 Zenzai と辞書 UI のつなぎ込み（M8/M9、3〜5 週）🚧 着手対象
+
+1. **M8 Zenzai 統合** — `inference-host/src/InferenceEngine.cpp::LoadModel`
+   の本実装。llama.cpp の C-API バインディングを採用、CMake オプションで
+   `AZOOKEY_BACKEND=cpu|cuda` を切替。配布サイズと初回起動時間を `bench/` で
+   計測。モデル未配置時は `SimpleConverter` フォールバックを維持。
+   `docs/zenzai-gpu-route.md` を実装と整合させる。
+2. **M9 ユーザー辞書ランタイム反映** — `AddUserWord`/`RemoveUserWord`
+   （Host 側完成済み）を TIP もしくは設定 UI から呼べる経路を作る。
+   本フェーズではコマンドラインまたはデバッグ UI で十分。
+
+**Phase 3 着手前タスク**:
+- ✅ llama.cpp バインディング選定スパイク（2026-05-20）: M8 の初期実装は
+  llama.cpp C API + CPU backend から開始し、CUDA は optional backend として
+  追加する。DirectML / NPU は M24 まで予約値扱い。判断理由と計測ゲートは
+  `docs/zenzai-gpu-route.md` を参照。
+- ✅ `LoadModel` 境界固定（2026-05-20）: `LoadModelRequest(path, backend,
+  n_gpu_layers)` を `InferenceEngine::LoadModel` に渡し、`model_loaded` /
+  `last_error` を `Handshake` / `Health` で観測できる状態にする。
+- ✅ M9 最小操作面の決定（2026-05-20）: 本格設定 UI を待たず、`inference-host`
+  の IPC 経由で `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug
+  probe を先に作る。設定アプリ統合は M11 に送る。
+
+**Phase 3 で触るファイル**:
+- `inference-host/src/InferenceEngine.cpp` — `LoadModel` の本実装、Zenzai converter 配線
+- `inference-host/include/azookey/host/InferenceEngine.h` — モデル状態の保持・解放 API
+- `core/include/azookey/core/IConverter.h` — Zenzai 実装が嵌まることを確認
+- `bench/` — Zenzai ロード時間・推論レイテンシを計測
+- `CMakeLists.txt` — `AZOOKEY_BACKEND=cpu|cuda` オプション
+- `docs/zenzai-gpu-route.md` — 実装結果と整合
+- `inference-host/tests/` — Zenzai converter のモック実装でテスト追加
+
+**Phase 3 で再利用すべき既存実装**:
+- `core/include/azookey/core/IConverter.h` — Zenzai は `IConverter` 実装として
+  `SimpleConverter` と差し替え可能
+- `inference-host/src/InferenceEngine.cpp` の reranker・user_dict 経由
+  パイプライン — Zenzai 出力にもそのまま適用可能
+- `ipc/src/Payloads.cpp` の `LoadModelRequest/Response` — 既に `--backend
+  cuda|cpu` をリクエストで指定する設計
+
+**Phase 3 検証**:
+1. ビルド: `cmake -S . -B build -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BACKEND=cpu && cmake --build build`
+2. ユニットテスト: `ctest --test-dir build --output-on-failure` で全テスト緑
+3. Windows 実機（Win11 VM 推奨）: `scripts/register.ps1` で TIP DLL 登録 →
+   `azookey_inference_host.exe --pipe --backend cpu` 起動 → gguf を
+   `%LOCALAPPDATA%\azooKey\models\` に配置し `LoadModel` 成功 → gguf 削除時は
+   `SimpleConverter` フォールバック → メモ帳で `nihongo` 入力で Zenzai 候補
+4. GPU 経路: `--backend cuda` 起動で失敗時は CPU フォールバック
+5. ベンチ: `./build/bench/azookey_bench.exe` の p50/p95 が許容内
+6. `unregister.ps1` でクリーン解除確認
+
+### Phase 4: 配布可能化 — v1.0 リリースゲート（M11/M12、4〜6 週）
+
+3. **M11 設定 UI とインストーラ** — フレームワークは WinUI 3 を第一候補とし、
+   Phase 3 中に 1〜2 日のスパイクで WPF/Tauri と比較してから着手。設定アプリは
+   TIP/Host と別プロセス、IPC 経由で Host 設定（Zenzai ON/OFF、ユーザー辞書）を
+   変更。配布は MSIX（ユーザースコープ自動登録、アンインストールでの登録解除）。
+   **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
+   避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。
+4. **M12 CI 完成と署名配布** — 現状 `.github/workflows/windows.yml` で
+   build/test まで実施中。残: コード署名ステップ、タグ push 時の MSIX 自動
+   Release 公開、submodule 配信ポリシー確定。
+
+**Phase 4 検証**: クリーン Win11 VM での MSIX インストール → IME 選択 → 入力
+→ 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に署名済み
+MSIX が自動公開。
+
+## Phase 5〜7 の依存関係と実行順
+
+Phase 5/6/7 は主題別のグルーピングであり、M 番号順がそのまま実行順を
+意味するわけではない。各マイルストーンの「前提」欄に基づくと、以下の
+独立トラックを並行で進められる。
+
+```
+【TIP parity トラック】
+Phase 4 完了 ─→ M13 ─┬─→ M14 ─┐
+                     ├─→ M15 ─┴─→ M19 ─→ M26
+                     ├─→ M16
+                     ├─→ M17
+                     └─→ M18
+Phase 5 完了 ─→ M20 ─→ M23
+Phase 5 完了 ─→ M21 ─→ M22
+
+【推論バックエンド トラック】（M8 のみに依存。Phase 5 と並行可）
+M8 完了 ─→ M24 ─┬─→ M25
+                └─→ M27
+
+【設定・配信トラック】
+Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
+Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
+Phase 6 完了 ─→ M28 ─┬─→ M29 ─→ M32
+                     ├─→ M31
+                     └─→ M33
+M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
+M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
+```
+
+### 推奨実行順（依存関係に基づく最適化）
+
+M 番号は通し連番だが、依存上は以下の前倒し・並行化が可能。spec から参照される
+ため M 番号・Phase グルーピングは変更しない。
+
+- **推論バックエンド トラック（M24 / M25 / M27）を Phase 5 と並行** —
+  M24 の前提は「M8 完了」のみで、Phase 5（レガシー parity）に依存しない。
+  TIP 側 parity 作業と独立した「推論バックエンド トラック」として、M8 完了後
+  すぐ Phase 5 と並行で着手できる。Phase 6 への配置は主題分類であり、Phase 5
+  完了を待つ必要はない。
+- **M30（WinUI 3 設定アプリ）を Phase 6 と並行** — M30 の前提は「Phase 5 完了
+  （設定キー確定）」のみで、M28/M29 に依存しない。Phase 7 ではなく Phase 6 と
+  並行で着手でき、M36-A の承認 UI 前倒しにも効く。
+- **M34（DPAPI 暗号化）を Phase 5 直後へ前倒し（セキュリティ優先）** —
+  M34 の前提は「Phase 5 完了」のみ。Phase 5 の M16（Magic Conversion）が
+  OpenAI API キーの平文保存を持ち込むため、M34 を Phase 7 末尾に置くと平文
+  保存期間が長期化する。Phase 5 直後に前倒しして暗号化ギャップを早期に塞ぐ。
+- **M35 / M36-A は Phase 4 完了後に並行可能な独立トラック** — 詳細は
+  「追加機能マイルストーン」章。
+
+## Phase 5: レガシー parity 復元（M13〜M19）
+
+> Phase 4 完了後に着手。**正典仕様**は `docs/legacy-parity-spec.md`。
 > リッチ化の横断テーマは `docs/rich-features-spec.md`。
 
 ### M13: 入力パイプライン（UserAction / InputState / ClientAction）
@@ -348,7 +493,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **目的**: 旧 macOS 版の入力状態機械を C++ に移植し、TIP の `OnKeyDown` から
   「UserAction → InputState 遷移 → ClientAction → TSF 操作」の一貫した
   パイプラインを構築する。
-- **前提**: M0〜M12（Phase A〜D）完了。
+- **前提**: M0〜M12（Phase 1〜4）完了。
 - **変更対象**: `core/include/azookey/core/UserAction.h`（新規）、
   `core/include/azookey/core/InputState.h`（新規）、
   `core/src/InputState.cpp`（新規）、`tsf-tip/src/TextService.cpp`、
@@ -448,22 +593,24 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **変更対象**: `tsf-tip/src/CandidateWindow.cpp`、`tsf-tip/src/PredictionWindow.cpp`、
   `tsf-tip/src/CaretRectResolver.cpp`（新規）。
 - **実装範囲**: 仕様書 §9（キャレット矩形取得の 3 段フォールバック、
-  モニタ判定、Phase 1 範囲の DPI 対応）。
+  モニタ判定、Phase 5 範囲の DPI 対応）。
 - **受け入れ条件**:
   - 2 枚モニタ環境で、ウィンドウ移動後の入力でも対象モニタの作業領域内に
     候補が出る
   - Chromium / Electron アプリで `GetGUIThreadInfo` フォールバックが動く
 - **参照仕様**: `docs/legacy-parity-spec.md` §9
 
-## Phase 2: Windows 特化（M20〜M27）
+## Phase 6: Windows 特化（M20〜M27）
 
-> Phase 1 完了後に着手。Phase 2-A（TSF 深耕）、2-B（Copilot+ PC / NPU）、
-> 2-C（ネイティブ UI）の 3 サブフェーズを並列に進められる。
+> Phase 5 完了後に着手。Phase 6-A（TSF 深耕）、6-B（Copilot+ PC / NPU）、
+> 6-C（ネイティブ UI）の 3 サブフェーズを並列に進められる。
+> なお推論バックエンド トラック（M24/M25/M27）は M8 のみに依存するため、
+> Phase 5 と並行で先行着手できる（「Phase 5〜7 の依存関係と実行順」参照）。
 
 ### M20: ITfReconversion / ITfFnReconversion
 
 - **目的**: 確定済みテキストの再変換に対応（MS-IME 互換）。
-- **前提**: Phase 1 完了。
+- **前提**: Phase 5 完了。
 - **変更対象**: `tsf-tip/src/ReconversionFunction.cpp`（新規）、
   `tsf-tip/src/DllMain.cpp`（Category 登録）、`ipc/src/Payloads.cpp`
   （`ReverseConvert` 追加）。
@@ -476,7 +623,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 ### M21: UI-less Mode / IME On-Off 状態管理
 
 - **目的**: Windows 11 標準 Suggestion UI に乗る + IME On/Off の MS-IME 互換挙動。
-- **前提**: Phase 1 完了。
+- **前提**: Phase 5 完了。
 - **変更対象**: `tsf-tip/src/CandidateListUIElement.cpp`（新規）、
   `tsf-tip/src/TextService.cpp`（`ActivateEx` でフラグ判定、
   `ITfKeyboardOpenCloseCompartment` 購読）。
@@ -517,6 +664,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: Copilot+ PC（NPU）/ DirectML / CUDA / CPU の自動選択と切替。
 - **前提**: M8 完了（llama.cpp バインディング選定）。
+- **推奨実装時期**: M8 完了後、Phase 5 と並行する「推論バックエンド トラック」
+  として着手可能（M25/M27 がこの先に連なる）。Phase 6 への配置は主題分類で
+  あり、Phase 5 完了を待つ必要はない。
 - **変更対象**: `inference-host/src/BackendSelector.cpp`（新規）、
   `inference-host/src/InferenceEngine.cpp`（バックエンド分岐）、
   `inference-host/src/DirectMlBackend.cpp` / `QnnBackend.cpp`（新規、
@@ -572,15 +722,17 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - Snapdragon X 実機で動作確認
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §8
 
-## Phase 3: サイドロード配信（M28〜M34）
+## Phase 7: サイドロード配信（M28〜M34）
 
-> Phase 2 完了後に着手。Microsoft Store 配信は対象外（サイドロード専念）。
+> Phase 6 完了後に着手。Microsoft Store 配信は対象外（サイドロード専念）。
 > **正典仕様**は `docs/sideload-packaging-spec.md`。
+> なお M30（設定アプリ）・M34（DPAPI 暗号化）は Phase 5 完了のみが前提で、
+> Phase 6 と並行・Phase 5 直後への前倒しが可能（依存関係の節を参照）。
 
 ### M28: MSIX サイドロード
 
 - **目的**: MSIX パッケージで配布、ユーザースコープ登録 / アンインストール。
-- **前提**: Phase 2 完了。
+- **前提**: Phase 6 完了。
 - **変更対象**: `pkg/msix/AppxManifest.xml`（新規）、`pkg/msix/Package.wapproj`
   （新規）、`pkg/msix/Assets/*.png`（新規）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §1。
@@ -603,7 +755,11 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 ### M30: WinUI 3 設定アプリ
 
 - **目的**: TIP / Host とは別プロセスの GUI 設定アプリ。
-- **前提**: Phase 1 完了（設定キーが確定）。
+- **前提**: Phase 5 完了（設定キーが確定）。
+- **推奨実装時期**: Phase 5 完了後、Phase 6 と並行で着手可能（M28/M29 に
+  依存しない）。M36-A の承認 UI（`confirm` モード）が M30 に依存するため、
+  早期着手が望ましい。M11 の最小設定 UI と UI フレームワーク（WinUI 3）を
+  揃えること。
 - **変更対象**: `settings-app/`（新規ディレクトリ、C++/WinRT + WinUI 3）、
   `ipc/src/Payloads.cpp`（`UpdateSettings` 追加）、
   `inference-host/src/SettingsManager.cpp`（新規）。
@@ -655,7 +811,11 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **目的**: `learning.tsv` / `user-dict.json` / OpenAI API キーをユーザースコープ
   で暗号化。M35 / M36 で追加される学習データ（`typo_corrections.tsv` /
   `auto_words.tsv`）も同等の機微情報として対象に含める。
-- **前提**: Phase 1 完了。
+- **前提**: Phase 5 完了。
+- **推奨実装時期**: Phase 5 直後へ前倒し推奨（セキュリティ優先）。Phase 5 の
+  M16（Magic Conversion）が OpenAI API キーの平文保存を持ち込むため、M34 を
+  Phase 7 末尾に置くと平文保存期間が長期化する。Phase 5 直後に前倒しして
+  暗号化ギャップを早期に塞ぐ。M16 着手時点では README で平文保存を注意喚起する。
 - **変更対象**: `learning/src/DpapiCrypto.cpp`（新規）、`learning/src/LearningStore.cpp`
   （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。M35 / M36 着手
   済みの場合は `TypoCorrectionStore` / `AutoWordStore` の Load/Save も同様にラップ。
@@ -667,7 +827,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 ## 追加機能マイルストーン
 
-> Phase 1〜3 の番号体系とは独立に、差別化機能として追加するもの。
+> Phase 5〜7 の番号体系とは独立に、差別化機能として追加するもの。
 
 ### M35: 個人タイプミス学習・自動修正
 
@@ -675,6 +835,10 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   タイプミスをしたときに正しい入力へ補正・提示する。汎用 LM 補正
   （`DebugTypoCorrection`）とは独立した、個人の打鍵の癖を学習する機能。
 - **前提**: M6（Commit / Observation）完了。M7（学習）と独立に着手可能。
+- **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックと
+  して前倒し可能。Zenzai・TSF 深耕・パッケージングのいずれにも依存しない
+  小規模機能（3〜4 週）で、差別化価値を早期に提供できる。設定 UI（M30）完成
+  までは host CLI / 環境変数で実効値を受ける。
 - **変更対象**: `learning/src/TypoCorrectionStore.cpp`（新規）、`ipc/src/Payloads.cpp`
   ・`ipc/src/Messages.cpp`（`ObserveTypo` 追加）、`inference-host/src/InferenceEngine.cpp`
   ・`Dispatcher.cpp`・`main.cpp`、`tsf-tip/src/TextService.cpp`、
@@ -699,6 +863,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   `UserDictionary` とは独立した自動取得機能。
 - **前提**: M6（Commit / Observation）完了のみ。M7・M32 と独立に着手可能。
   HTTP に依存しない（オフライン完結）。
+- **推奨実装時期**: 既定の `confirm` モードの承認フローが M30（WinUI 3 設定
+  アプリ）に依存するため、Phase 7 内で M30 の直後に配置する。M30 より前に
+  着手する場合は `auto` モード / デバッグ CLI 限定運用になる。
 - **変更対象**: `learning/src/AutoWordStore.cpp`（新規）、`ipc/src/Messages.cpp`
   ・`ipc/src/Payloads.cpp`（`ListNewWordCandidates` / `ResolveNewWord` 追加）、
   `inference-host/src/InferenceEngine.cpp`・`Dispatcher.cpp`・`main.cpp`、
@@ -725,6 +892,8 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   定期ダウンロード・検証し、新語ストアにマージする。
 - **前提**: M36-A 完了 + M32 の WinHTTP 基盤（共通ヘルパ `HttpDownloader` の
   切り出し）。
+- **推奨実装時期**: M32 の WinHTTP 基盤にハード依存するため、M32 以降に配置
+  （現状どおり）。
 - **変更対象**: `inference-host/src/TrendingWordFetcher.cpp`・
   `inference-host/src/HttpDownloader.cpp`（新規）、`inference-host/src/main.cpp`、
   `inference-host/CMakeLists.txt`（`winhttp.lib` リンク）。
@@ -744,7 +913,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 各リッチ化テーマ（`docs/rich-features-spec.md`）の実装タイミングは
 以下のマイルストーンに紐付ける：
 
-| テーマ | 短期（Phase 1 末） | 中期（Phase 2 統合） | 長期（Phase 3 後） |
+| テーマ | 短期（Phase 5 末） | 中期（Phase 6 統合） | 長期（Phase 7 後） |
 |---|---|---|---|
 | X-1 ライブ変換 | M14 末（信頼度 4 段階） | M24（重い推論） | — |
 | X-2 AI 予測 | M15 末（paragraph_context） | M24（PredictWithLLM + Stream） | M30（promptPrefix UI） |

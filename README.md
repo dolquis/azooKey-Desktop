@@ -65,8 +65,8 @@ Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的に�
 
 ## ロードマップ
 
-開発の進捗・マイルストーン定義は [`plans/windows-port-roadmap.md`](./plans/windows-port-roadmap.md)、
-v1.0 までの実行計画は [`plans/development-plan.md`](./plans/development-plan.md) を参照してください。
+開発計画・マイルストーン定義・v1.0 までの実行計画は
+[`plans/windows-port-roadmap.md`](./plans/windows-port-roadmap.md) を参照してください。
 機能ごとの仕様は [`docs/legacy-parity-spec.md`](./docs/legacy-parity-spec.md) 以下の
 `docs/*-spec.md` にまとまっています。
 

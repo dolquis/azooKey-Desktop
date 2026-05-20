@@ -69,6 +69,27 @@ static void TestPrefixFallback() {
   Expect(!cands.empty(), "prefix fallback must return at least one candidate");
 }
 
+static void TestLongReadingPrefixFallback() {
+  const char* path = "simple_converter_long_reading_fixture.tsv";
+  {
+    std::ofstream f(path);
+    f << "あずきいきーぼーど\tazooKey Keyboard\t1.0\tuser\n";
+    f << "あずきいきーぼーど\tあずきいキーボード\t0.8\tuser\n";
+  }
+
+  azookey::core::SimpleConverter converter;
+  Expect(converter.LoadFromTsv(path), "long reading fixture must load");
+
+  const auto cands = converter.Convert("あずきいきーぼー", azookey::core::ConversionContext{});
+  Expect(!cands.empty(), "long reading prefix fallback must return candidates");
+  Expect(cands.front().surface == "azooKey Keyboard",
+         "long reading prefix fallback should preserve highest-score candidate");
+  Expect(cands.front().reading == "あずきいきーぼーど",
+         "long reading prefix fallback should keep full dictionary reading");
+
+  std::remove(path);
+}
+
 
 
 static void TestDebugInfoFormatting() {
@@ -129,6 +150,7 @@ int main() {
     TestBuiltinDictionary();
     TestTsvLoad();
     TestPrefixFallback();
+    TestLongReadingPrefixFallback();
     TestContextAware();
     TestDebugInfoFormatting();
     return 0;

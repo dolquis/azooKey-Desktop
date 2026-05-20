@@ -192,6 +192,54 @@ static void TestAddRemoveUserWord() {
   Expect(f.user_dict.Lookup("あずきい").empty(), "user dict empty after remove");
 }
 
+static void TestLoadModelAppliesRequestOptions() {
+  Fixture f;
+  ipc::LoadModelRequest req;
+  req.path = "azookey_dispatcher_missing_zenzai.gguf";
+  req.backend = "cuda";
+  req.n_gpu_layers = 24;
+
+  auto env = f.MakeReq(65, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto resp = f.dispatcher.Dispatch(env);
+  Expect(resp.has_value(), "load model response present");
+  auto parsed = ipc::ParseLoadModelResponse(resp->payload_json);
+  Expect(parsed.has_value(), "load model response parses");
+  Expect(!parsed->ok, "missing model should fail");
+  Expect(parsed->error.has_value(), "missing model should report an error");
+  Expect(f.engine.backend() == azookey::host::BackendKind::Cuda,
+         "dispatcher should apply requested backend");
+  Expect(f.engine.config().model_path == req.path,
+         "dispatcher should apply requested model path");
+  Expect(f.engine.config().n_gpu_layers.has_value() &&
+             f.engine.config().n_gpu_layers.value() == 24,
+         "dispatcher should apply requested n_gpu_layers");
+
+  auto health_env = f.MakeReq(66, ipc::MessageType::Health, "{}");
+  auto health_resp = f.dispatcher.Dispatch(health_env);
+  auto health = ipc::ParseHealth(health_resp->payload_json);
+  Expect(health.has_value(), "health response parses after load failure");
+  Expect(health->backend == "cuda", "health should reflect requested backend");
+  Expect(!health->model_loaded, "health should report no loaded model");
+  Expect(health->last_error.has_value(), "health should expose last load error");
+}
+
+static void TestLoadModelRejectsUnsupportedBackend() {
+  Fixture f;
+  ipc::LoadModelRequest req;
+  req.path = "zenzai.gguf";
+  req.backend = "directml";
+
+  auto env = f.MakeReq(67, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto resp = f.dispatcher.Dispatch(env);
+  Expect(resp.has_value(), "unsupported backend response present");
+  auto parsed = ipc::ParseLoadModelResponse(resp->payload_json);
+  Expect(parsed.has_value(), "unsupported backend response parses");
+  Expect(!parsed->ok, "unsupported backend should fail");
+  Expect(parsed->error.has_value(), "unsupported backend should explain error");
+  Expect(f.engine.backend() == azookey::host::BackendKind::Cpu,
+         "unsupported backend should not change engine backend");
+}
+
 static void TestHealth() {
   Fixture f;
   auto env = f.MakeReq(70, ipc::MessageType::Health, "{}");
@@ -213,6 +261,8 @@ int main() {
     TestCancelMessageNoReply();
     TestCommitObservation();
     TestAddRemoveUserWord();
+    TestLoadModelAppliesRequestOptions();
+    TestLoadModelRejectsUnsupportedBackend();
     TestHealth();
     return 0;
   } catch (const std::exception& e) {

@@ -22,6 +22,27 @@
 - CUDA初期化失敗・GPUなしの場合は同一Host APIでCPU実行。
 - TIPはバックエンド差を意識せず、IPCレスポンスのみで処理。
 
+## Phase C M8 着手前スパイク結果（2026-05-20）
+
+Phase C の最初の実装単位は **llama.cpp C API + CPU backend** とし、CUDA は
+CMake オプションで optional に追加する。理由は以下。
+
+1. GGUF を直接ロードでき、既存 Zenzai 資産を変換せずに検証できる。
+2. `core/IConverter` 差し替えで `SimpleConverter` フォールバックを維持しやすい。
+3. CUDA / DirectML / NPU の選定を `InferenceEngine::LoadModel(path, backend,
+   n_gpu_layers)` の境界より内側に閉じ込められる。
+
+M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
+`directml` は IPC payload の予約値として残すが、Phase C では unsupported として
+扱い、Phase 2-B M24 の DirectML / NPU スパイクで再度有効化する。
+
+計測ゲート:
+
+- CPU fallback: `bench/azookey_bench.exe` が exit=0、p95 < 50ms。
+  2026-05-20 Debug build baseline: p50=0.0179ms, p95=0.0249ms, p99=0.052ms。
+- Zenzai CPU: GGUF 配置時の `LoadModel` 成功、初回ロード時間、p50/p95。
+- Zenzai CUDA: CUDA 初期化失敗時に CPU または `SimpleConverter` へフォールバック。
+
 ## 将来拡張
 
 ### DirectML EP ルート（Phase 2-B M24 採用予定）

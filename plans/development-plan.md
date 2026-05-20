@@ -57,7 +57,18 @@ M12 (CI 強化 + 署名配布)** の 3 つに集中している。
    今フェーズではコマンドラインまたはデバッグ UI で十分。
 
 **Phase C 着手前タスク**:
-- llama.cpp バインディング選定スパイク（2〜3 日、配布サイズ・初回起動時間を `bench/` で計測）
+- ✅ llama.cpp バインディング選定スパイク（2026-05-20）:
+  M8 の初期実装は llama.cpp C API + CPU backend から開始し、CUDA は optional
+  backend として追加する。DirectML / NPU は Phase 2-B M24 まで予約値扱い。
+  判断理由と計測ゲートは `docs/zenzai-gpu-route.md` を参照。
+- ✅ `LoadModel` 境界固定（2026-05-20）:
+  `LoadModelRequest(path, backend, n_gpu_layers)` を
+  `InferenceEngine::LoadModel` に渡し、`model_loaded` / `last_error` を
+  `Handshake` / `Health` で観測できる状態にする。
+- ✅ M9 最小操作面の決定（2026-05-20）:
+  Phase C では本格設定 UI を待たず、`inference-host` の IPC 経由で
+  `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug probe を先に作る。
+  設定アプリ統合は M11 に送る。
 - `core/IConverter` 抽象は既に存在 — Zenzai converter は `IConverter` 実装として差し替え
 
 検証: gguf 配置で `LoadModel` 成功、未配置で起動継続（`SimpleConverter` フォールバック）、CPU/GPU 切替が `--backend` で効く、ユーザー辞書追加が次の `QueryCandidates` で即反映。

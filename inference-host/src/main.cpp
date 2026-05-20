@@ -44,6 +44,8 @@ int main(int argc, char** argv) {
       } else if (value == "cpu") {
         config.backend = azookey::host::BackendKind::Cpu;
       }
+    } else if (arg == "--model" && i + 1 < argc) {
+      config.model_path = argv[++i];
     } else if (arg == "--learning" && i + 1 < argc) {
       learning_path = argv[++i];
     } else if (arg == "--user-dict" && i + 1 < argc) {
@@ -76,7 +78,11 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
-  engine.LoadModel();
+  if (!engine.LoadModel()) {
+    std::cerr << "warn: model load failed: "
+              << engine.last_error().value_or("unknown error")
+              << " (falling back to SimpleConverter)" << std::endl;
+  }
 
   azookey::host::RequestScheduler scheduler;
   azookey::host::DispatcherConfig dconf;
@@ -87,6 +93,7 @@ int main(int argc, char** argv) {
   std::cerr << "azookey inference-host started. backend="
             << (engine.backend() == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
             << " learning=" << learning_path << " user_dict=" << user_dict_path
+            << " model_loaded=" << (engine.model_loaded() ? "true" : "false")
             << std::endl;
 
   if (pipe_mode) {

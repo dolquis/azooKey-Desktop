@@ -116,12 +116,52 @@ static void TestLegacyOverloadStillWorks() {
   std::remove(lpath);
 }
 
+static void TestLoadModelFallbackWithoutPath() {
+  const char* lpath = "azookey_host_engine_load_empty.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  Expect(engine->LoadModel(), "empty model path should keep fallback converter active");
+  Expect(!engine->model_loaded(), "empty model path does not mark a Zenzai model loaded");
+  Expect(!engine->last_error().has_value(), "empty model path should not set load error");
+
+  std::remove(lpath);
+}
+
+static void TestLoadModelRecordsOptionsAndMissingPath() {
+  const char* lpath = "azookey_host_engine_load_missing.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = "azookey_missing_zenzai_model.gguf";
+  options.backend = azookey::host::BackendKind::Cuda;
+  options.n_gpu_layers = 35;
+
+  Expect(!engine->LoadModel(options), "missing model path should fail");
+  Expect(engine->backend() == azookey::host::BackendKind::Cuda,
+         "LoadModel should record requested backend");
+  Expect(engine->config().model_path == options.path,
+         "LoadModel should record requested path");
+  Expect(engine->config().n_gpu_layers.has_value() &&
+             engine->config().n_gpu_layers.value() == 35,
+         "LoadModel should record requested n_gpu_layers");
+  Expect(!engine->model_loaded(), "missing model must not mark loaded");
+  Expect(engine->last_error().has_value(), "missing model should report an error");
+
+  std::remove(lpath);
+}
+
 int main() {
   try {
     TestQueryWithLearningBoost();
     TestUserDictionaryInjection();
     TestCancelEarlyReturn();
     TestLegacyOverloadStillWorks();
+    TestLoadModelFallbackWithoutPath();
+    TestLoadModelRecordsOptionsAndMissingPath();
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "FAIL: %s\n", e.what());

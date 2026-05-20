@@ -1,5 +1,7 @@
 #include "azookey/host/InferenceEngine.h"
 
+#include <filesystem>
+
 namespace azookey::host {
 
 namespace {
@@ -24,9 +26,29 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
 }
 
 bool InferenceEngine::LoadModel() {
-  // MVP: model loading is delegated to the converter backend. Zenzai
-  // integration (M8) replaces converter_ with a llama.cpp-backed converter.
-  return true;
+  return LoadModel(ModelLoadOptions{config_.model_path, config_.backend, config_.n_gpu_layers});
+}
+
+bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
+  config_.model_path = options.path;
+  config_.backend = options.backend;
+  config_.n_gpu_layers = options.n_gpu_layers;
+  model_loaded_ = false;
+  last_error_.reset();
+
+  if (config_.model_path.empty()) {
+    // No model path means the MVP converter remains active as the fallback.
+    return true;
+  }
+
+  if (!std::filesystem::exists(config_.model_path)) {
+    last_error_ = "model file not found";
+    return false;
+  }
+
+  // M8 will replace this placeholder with a llama.cpp-backed IConverter.
+  last_error_ = "Zenzai model loading is not implemented yet";
+  return false;
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string& kana,

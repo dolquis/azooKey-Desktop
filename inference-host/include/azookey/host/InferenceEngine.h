@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,10 +22,17 @@ enum class BackendKind {
 struct EngineConfig {
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
+  std::optional<int32_t> n_gpu_layers;
   bool enable_live_conversion{true};
   double learning_alpha{0.8};
   // Default score for user-dictionary entries that lack an explicit value.
   double user_word_default_score{1.5};
+};
+
+struct ModelLoadOptions {
+  std::string path;
+  BackendKind backend{BackendKind::Cpu};
+  std::optional<int32_t> n_gpu_layers;
 };
 
 class InferenceEngine {
@@ -35,6 +44,7 @@ class InferenceEngine {
   void SetUserDictionary(learning::UserDictionary* dict);
 
   bool LoadModel();
+  bool LoadModel(const ModelLoadOptions& options);
 
   // QueryCandidates with optional cancel polling. Returns an empty vector
   // immediately when *cancel is observed true. cancel may be nullptr.
@@ -61,6 +71,8 @@ class InferenceEngine {
 
   BackendKind backend() const { return config_.backend; }
   const EngineConfig& config() const { return config_; }
+  bool model_loaded() const { return model_loaded_; }
+  const std::optional<std::string>& last_error() const { return last_error_; }
 
  private:
   std::unique_ptr<core::IConverter> converter_;
@@ -68,6 +80,8 @@ class InferenceEngine {
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
   EngineConfig config_;
+  bool model_loaded_{false};
+  std::optional<std::string> last_error_;
 };
 
 }  // namespace azookey::host

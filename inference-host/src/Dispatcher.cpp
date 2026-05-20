@@ -40,6 +40,20 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   return f;
 }
 
+const char* BackendName(BackendKind backend) {
+  switch (backend) {
+    case BackendKind::Cuda: return "cuda";
+    case BackendKind::Cpu: return "cpu";
+  }
+  return "cpu";
+}
+
+std::optional<BackendKind> ParseBackend(const std::string& backend) {
+  if (backend.empty() || backend == "cpu") return BackendKind::Cpu;
+  if (backend == "cuda") return BackendKind::Cuda;
+  return std::nullopt;
+}
+
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
@@ -70,7 +84,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   } else {
     res.accepted = false;
   }
-  res.model_loaded = false;  // until ZenzaiConverter lands (M8) it is mock.
+  res.model_loaded = engine_->model_loaded();
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
 }
 
@@ -85,8 +99,9 @@ std::optional<ipc::Envelope> Dispatcher::HandlePing(const ipc::Envelope& req) {
 std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) {
   ipc::HealthPayload p;
   p.status = "ok";
-  p.backend = engine_->backend() == BackendKind::Cuda ? "cuda" : "cpu";
-  p.model_loaded = false;
+  p.backend = BackendName(engine_->backend());
+  p.model_loaded = engine_->model_loaded();
+  p.last_error = engine_->last_error();
   return MakeResponse(req, ipc::BuildHealth(p));
 }
 
@@ -97,8 +112,20 @@ std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& re
     res.ok = false;
     res.error = "invalid LoadModel payload";
   } else {
-    res.ok = engine_->LoadModel();  // M8 で実装拡張
-    if (!res.ok) res.error = "model load failed";
+    auto backend = ParseBackend(parsed->backend);
+    if (!backend) {
+      res.ok = false;
+      res.error = "unsupported backend: " + parsed->backend;
+    } else {
+      ModelLoadOptions options;
+      options.path = parsed->path;
+      options.backend = *backend;
+      options.n_gpu_layers = parsed->n_gpu_layers;
+      res.ok = engine_->LoadModel(options);
+      if (!res.ok) {
+        res.error = engine_->last_error().value_or("model load failed");
+      }
+    }
   }
   return MakeResponse(req, ipc::BuildLoadModelResponse(res));
 }

@@ -36,6 +36,11 @@ struct ModelLoadOptions {
   std::optional<int32_t> n_gpu_layers;
 };
 
+struct ModelLoadResult {
+  bool ok{false};
+  std::optional<std::string> error;
+};
+
 class InferenceEngine {
  public:
   InferenceEngine(std::unique_ptr<core::IConverter> converter,
@@ -46,6 +51,8 @@ class InferenceEngine {
 
   bool LoadModel();
   bool LoadModel(const ModelLoadOptions& options);
+  ModelLoadResult LoadModelWithResult();
+  ModelLoadResult LoadModelWithResult(const ModelLoadOptions& options);
 
   // QueryCandidates with optional cancel polling. Returns an empty vector
   // immediately when *cancel is observed true. cancel may be nullptr.

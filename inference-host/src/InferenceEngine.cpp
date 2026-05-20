@@ -27,12 +27,21 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
 }
 
 bool InferenceEngine::LoadModel() {
-  const auto current = config();
-  return LoadModel(ModelLoadOptions{current.model_path, current.backend, current.n_gpu_layers});
+  return LoadModelWithResult().ok;
 }
 
 bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
+  return LoadModelWithResult(options).ok;
+}
+
+ModelLoadResult InferenceEngine::LoadModelWithResult() {
+  const auto current = config();
+  return LoadModelWithResult(ModelLoadOptions{current.model_path, current.backend, current.n_gpu_layers});
+}
+
+ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  ModelLoadResult result;
   config_.model_path = options.path;
   config_.backend = options.backend;
   config_.n_gpu_layers = options.n_gpu_layers;
@@ -41,23 +50,27 @@ bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
 
   if (config_.model_path.empty()) {
     // No model path means the MVP converter remains active as the fallback.
-    return true;
+    result.ok = true;
+    return result;
   }
 
   std::error_code ec;
   const bool exists = std::filesystem::exists(config_.model_path, ec);
   if (ec) {
-    last_error_ = "model file probe failed: " + ec.message();
-    return false;
+    result.error = "model file probe failed: " + ec.message();
+    last_error_ = result.error;
+    return result;
   }
   if (!exists) {
-    last_error_ = "model file not found";
-    return false;
+    result.error = "model file not found";
+    last_error_ = result.error;
+    return result;
   }
 
   // M8 will replace this placeholder with a llama.cpp-backed IConverter.
-  last_error_ = "Zenzai model loading is not implemented yet";
-  return false;
+  result.error = "Zenzai model loading is not implemented yet";
+  last_error_ = result.error;
+  return result;
 }
 
 BackendKind InferenceEngine::backend() const {

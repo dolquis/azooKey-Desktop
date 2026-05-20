@@ -141,7 +141,11 @@ static void TestLoadModelRecordsOptionsAndMissingPath() {
   options.backend = azookey::host::BackendKind::Cuda;
   options.n_gpu_layers = 35;
 
-  Expect(!engine->LoadModel(options), "missing model path should fail");
+  const auto result = engine->LoadModelWithResult(options);
+  Expect(!result.ok, "missing model path should fail");
+  Expect(result.error.has_value(), "missing model should report an error");
+  Expect(result.error == engine->last_error(),
+         "LoadModel result should carry the same request-local error recorded in state");
   Expect(engine->backend() == azookey::host::BackendKind::Cuda,
          "LoadModel should record requested backend");
   Expect(engine->config().model_path == options.path,
@@ -150,7 +154,6 @@ static void TestLoadModelRecordsOptionsAndMissingPath() {
              engine->config().n_gpu_layers.value() == 35,
          "LoadModel should record requested n_gpu_layers");
   Expect(!engine->model_loaded(), "missing model must not mark loaded");
-  Expect(engine->last_error().has_value(), "missing model should report an error");
 
   std::remove(lpath);
 }

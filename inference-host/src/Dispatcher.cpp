@@ -121,10 +121,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& re
       options.path = parsed->path;
       options.backend = *backend;
       options.n_gpu_layers = parsed->n_gpu_layers;
-      res.ok = engine_->LoadModel(options);
-      if (!res.ok) {
-        res.error = engine_->last_error().value_or("model load failed");
-      }
+      const auto load_result = engine_->LoadModelWithResult(options);
+      res.ok = load_result.ok;
+      res.error = load_result.error;
+      if (!res.ok && !res.error) res.error = "model load failed";
     }
   }
   return MakeResponse(req, ipc::BuildLoadModelResponse(res));

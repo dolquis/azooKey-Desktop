@@ -1,6 +1,7 @@
 #include "azookey/host/InferenceEngine.h"
 
 #include <filesystem>
+#include <system_error>
 
 namespace azookey::host {
 
@@ -26,10 +27,12 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
 }
 
 bool InferenceEngine::LoadModel() {
-  return LoadModel(ModelLoadOptions{config_.model_path, config_.backend, config_.n_gpu_layers});
+  const auto current = config();
+  return LoadModel(ModelLoadOptions{current.model_path, current.backend, current.n_gpu_layers});
 }
 
 bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
   config_.model_path = options.path;
   config_.backend = options.backend;
   config_.n_gpu_layers = options.n_gpu_layers;
@@ -41,7 +44,13 @@ bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
     return true;
   }
 
-  if (!std::filesystem::exists(config_.model_path)) {
+  std::error_code ec;
+  const bool exists = std::filesystem::exists(config_.model_path, ec);
+  if (ec) {
+    last_error_ = "model file probe failed: " + ec.message();
+    return false;
+  }
+  if (!exists) {
     last_error_ = "model file not found";
     return false;
   }
@@ -49,6 +58,26 @@ bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
   // M8 will replace this placeholder with a llama.cpp-backed IConverter.
   last_error_ = "Zenzai model loading is not implemented yet";
   return false;
+}
+
+BackendKind InferenceEngine::backend() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return config_.backend;
+}
+
+EngineConfig InferenceEngine::config() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return config_;
+}
+
+bool InferenceEngine::model_loaded() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return model_loaded_;
+}
+
+std::optional<std::string> InferenceEngine::last_error() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return last_error_;
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string& kana,

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -69,16 +70,17 @@ class InferenceEngine {
                         const std::string& selected_surface,
                         uint64_t now_epoch_sec);
 
-  BackendKind backend() const { return config_.backend; }
-  const EngineConfig& config() const { return config_; }
-  bool model_loaded() const { return model_loaded_; }
-  const std::optional<std::string>& last_error() const { return last_error_; }
+  BackendKind backend() const;
+  EngineConfig config() const;
+  bool model_loaded() const;
+  std::optional<std::string> last_error() const;
 
  private:
   std::unique_ptr<core::IConverter> converter_;
   learning::LearningStore* store_;
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
+  mutable std::mutex state_mutex_;
   EngineConfig config_;
   bool model_loaded_{false};
   std::optional<std::string> last_error_;

@@ -5,6 +5,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
@@ -154,6 +155,39 @@ static void TestLoadModelRecordsOptionsAndMissingPath() {
   std::remove(lpath);
 }
 
+static void TestLoadModelStateAccessorsThreadedSmoke() {
+  const char* lpath = "azookey_host_engine_load_threaded.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  std::thread writer([&engine]() {
+    for (int i = 0; i < 100; ++i) {
+      azookey::host::ModelLoadOptions options;
+      options.path = "azookey_missing_zenzai_model_threaded.gguf";
+      options.backend = (i % 2 == 0) ? azookey::host::BackendKind::Cpu
+                                     : azookey::host::BackendKind::Cuda;
+      options.n_gpu_layers = i;
+      engine->LoadModel(options);
+    }
+  });
+
+  std::thread reader([&engine]() {
+    for (int i = 0; i < 100; ++i) {
+      (void)engine->backend();
+      (void)engine->config();
+      (void)engine->model_loaded();
+      (void)engine->last_error();
+    }
+  });
+
+  writer.join();
+  reader.join();
+  Expect(!engine->model_loaded(), "threaded missing model must not mark loaded");
+
+  std::remove(lpath);
+}
+
 int main() {
   try {
     TestQueryWithLearningBoost();
@@ -162,6 +196,7 @@ int main() {
     TestLegacyOverloadStillWorks();
     TestLoadModelFallbackWithoutPath();
     TestLoadModelRecordsOptionsAndMissingPath();
+    TestLoadModelStateAccessorsThreadedSmoke();
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "FAIL: %s\n", e.what());

@@ -3,9 +3,9 @@
 本書は、ライブ変換 / AI 予測 / 誤変換訂正の 3 機能を「単なる移植」ではなく
 azooKey-Desktop の **差別化軸** に仕立てるためのリッチ化仕様を定める。
 
-- Phase 1 末尾 = 短期実装
-- Phase 2 統合 = 中期実装
-- Phase 3 完走後 = 長期実装
+- Phase 5 末尾 = 短期実装
+- Phase 6 統合 = 中期実装
+- Phase 7 完走後 = 長期実装
 
 各テーマは `plans/windows-port-roadmap.md` の対応するマイルストーンから参照する。
 
@@ -211,7 +211,7 @@ struct Candidate {
 
 IPC：`PredictionItem` / `CandidateItem` Payload に `tag: uint8` フィールド追加。
 
-### X-2-4. PredictWithLLM（Phase 2）
+### X-2-4. PredictWithLLM（Phase 6）
 
 `InferenceEngine::PredictWithLLM(paragraph, mode, app_id, persona)` を追加。
 
@@ -372,12 +372,12 @@ LintFinding:
 
 - `ITfReadOnlyProperty`（既存 `GUID_PROP_ATTRIBUTE`）で **波線下線** 属性
   - 新規 GUID `kLintAttrGuid`（赤い波線、`TF_LS_SQUIGGLE`）
-- 右クリック（ITfMouseSink、Phase 2-A）で候補一覧をポップアップ
+- 右クリック（ITfMouseSink、Phase 6-A）で候補一覧をポップアップ
 - 採用したら `LearningStore::ObserveCorrection` を記録
 
-### X-3-4. 意味的訂正（Phase 2）
+### X-3-4. 意味的訂正（Phase 6）
 
-LLM で「不自然な確定箇所」を検出する API。Phase 1 の Post-Commit Lint と
+LLM で「不自然な確定箇所」を検出する API。Phase 5 の Post-Commit Lint と
 似ているが、より長文（〜段落単位）を対象に、文法 / 敬語不一致 / 主述不一致
 までを検出する。
 
@@ -412,13 +412,13 @@ InferenceEngine::DetectAnomalies(std::string_view paragraph, const Persona& p);
 Ctrl+Shift+Space で「文書内誤変換候補一覧」を別ウィンドウに表示。
 
 - 起動: グローバルホットキー（TIP プロセスから `RegisterHotKey`）
-- 表示: 設定アプリ内の「校正」タブ（Phase 3-M30）
+- 表示: 設定アプリ内の「校正」タブ（Phase 7-M30）
 - 動作:
   - フォアグラウンドアプリから可能な限り文書全体を取得（`ITfContext` 全 range）
   - Host に `DetectAnomalies` を投げる
   - 一覧表示、項目クリックでアプリ側のキャレットを該当箇所に移動 + 候補提示
 
-Phase 3 まで実装しない（Phase 1 ではホットキー登録のみ）。
+Phase 7 まで実装しない（Phase 5 ではホットキー登録のみ）。
 
 ### X-3-7. 個人タイプミス学習（関連機能・別仕様）
 
@@ -537,7 +537,7 @@ private:
 | memory_rss_after_zenzai_load_mb | MB | Host プロセス RSS |
 | battery_delta_per_hour_pct | %/h | 30 分計測ベース |
 
-`ETW`（Phase 3-M33）と連携して、本番環境でも同じメトリクスを継続観測。
+`ETW`（Phase 7-M33）と連携して、本番環境でも同じメトリクスを継続観測。
 
 ## マイルストーン対応表
 
@@ -553,6 +553,6 @@ private:
 - ライブ変換 旧実装：`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`
 - 予測候補 旧実装：`legacy/Core/Sources/Core/InputUtils/PredictionEngine.swift`
 - 誤変換訂正 旧実装：`legacy/Core/Sources/Core/InputUtils/CorrectionEngine.swift`
-- Phase 1 仕様：`docs/legacy-parity-spec.md`
-- Phase 2-A 仕様：`docs/tsf-deep-integration-spec.md`
-- Phase 2-B 仕様：`docs/copilot-pc-backend-spec.md`
+- Phase 5 仕様：`docs/legacy-parity-spec.md`
+- Phase 6-A 仕様：`docs/tsf-deep-integration-spec.md`
+- Phase 6-B 仕様：`docs/copilot-pc-backend-spec.md`

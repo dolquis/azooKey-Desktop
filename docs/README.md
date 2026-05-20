@@ -7,28 +7,26 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 | 正典範囲 |
 |---|---|---|
-| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | マイルストーン・ロードマップ | **M0〜M34 の定義・受け入れ条件・依存関係・Phase 1/2/3・テスト体系の正典** |
-| [`plans/development-plan.md`](../plans/development-plan.md) | v1.0 までの実行計画 | Phase A〜D の実行順・直近タスク・検証手順。マイルストーンの状態は roadmap を正典とする |
+| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M36 の定義・受け入れ条件・依存関係・Phase 1〜7・v1.0 実行計画・テスト体系の正典** |
 
 ## アーキテクチャ・設計
 
 | ドキュメント | 役割 |
 |---|---|
 | [`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md) | TSF TIP + Inference Host 分離設計、IPC メッセージ、実装ルール（スレッドモデル・例外耐性・互換性）の正典 |
-| [`windows-port-asset-audit.md`](windows-port-asset-audit.md) | M0 以前の macOS 資産の流用可否棚卸し（初回調査・参考） |
+| [`windows-port-asset-audit.md`](windows-port-asset-audit.md) | M0 以前の初回調査。現行設計の正典ではない参考資料。参照先 macOS ソースは `legacy/` に保全 |
 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md) | Zenzai 推論形式の特定と GPU 化ルート決定 |
-| [`segment-edit-upstream.md`](segment-edit-upstream.md) | 文節エディットの上流計画（macOS 向け、Windows MVP 対象外・参考） |
 
 ## 機能仕様（`*-spec.md`）
 
 | ドキュメント | 対応フェーズ／マイルストーン |
 |---|---|
-| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 1（M13〜M19）レガシー parity 復元 |
+| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）レガシー parity 復元 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化） |
-| [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 2-A（M20〜M23）TSF 深部統合 |
-| [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 2-B（M24〜M27）Copilot+ PC / NPU バックエンド |
-| [`native-ui-spec.md`](native-ui-spec.md) | Phase 2-C（M26）ネイティブ UI |
-| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 3（M28〜M34）サイドロード配信 |
+| [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合 |
+| [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド |
+| [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI |
+| [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 7（M28〜M34）サイドロード配信 |
 
 ## 運用
 
@@ -36,14 +34,18 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`debugging.md`](debugging.md) | ビルド・ベンチ・手動確認・ログ収集・CI・典型トラブル |
 
-## Phase 命名の対応
+## Phase 一覧
 
-`plans/` の 2 つの計画ドキュメントは異なる Phase 命名を用いる。両者は別スコープを
-指すため、以下の対応で読み分ける。
+`plans/windows-port-roadmap.md` の Phase は通し連番（Phase 1〜7）+ 追加機能で
+構成される。
 
-| development-plan.md | windows-port-roadmap.md | スコープ |
+| Phase | スコープ | M 範囲 |
 |---|---|---|
-| Phase A〜D | M0〜M12 | v1.0（MSIX 配布可能な最小 IME）までの段階 |
-| Phase E ≒ Phase 1 | M13〜M19 | v1.0 以降: レガシー parity 復元 |
-| Phase F ≒ Phase 2 | M20〜M27 | v1.0 以降: Windows ネイティブ深耕 |
-| Phase G ≒ Phase 3 | M28〜M34 | v1.0 以降: サイドロード配信 |
+| Phase 1 | TIP 基盤完成 | M1〜M4 |
+| Phase 2 | 候補選択と確定動線 | M5/M6/M10 |
+| Phase 3 | 実 Zenzai と辞書 UI | M8/M9 |
+| Phase 4 | 配布可能化 v1.0 | M11/M12 |
+| Phase 5 | レガシー parity 復元 | M13〜M19 |
+| Phase 6 | Windows ネイティブ深耕 | M20〜M27 |
+| Phase 7 | サイドロード配信 | M28〜M34 |
+| 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B |

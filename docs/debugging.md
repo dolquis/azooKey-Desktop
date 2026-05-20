@@ -53,7 +53,7 @@ Linux/macOS では `tsf-tip/` 配下は自動スキップ。`core/` `ipc/` `lear
 - Host 側: stderr。`--pipe` 起動時は `named pipe listening: <name>` 表示後に
   Dispatcher 経路を待ち受け。
 
-予定 (Phase D / M11):
+予定 (Phase 4 / M11):
 
 - TIP/Host とも `%LOCALAPPDATA%\azooKey\logs\tip.log` / `host.log` に
   JSON Lines 形式で出力。

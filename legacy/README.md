@@ -13,6 +13,7 @@
 - `install.sh`, `pkgbuild.sh` — 開発/配布用ビルドスクリプト
 - `exportOptions.plist`, `distribution.xml`, `pkg.plist` — 配布パッケージ設定
 - `.swiftlint.yml` — SwiftLint 設定
+- [`segment-edit-upstream.md`](./segment-edit-upstream.md) — 文節エディットの上流計画（macOS 向け、Windows MVP 対象外の参考資料）
 
 HuggingFace の LFS submodule (`azooKeyMac/Resources/base_n5_lm`, `azooKeyMac/Resources/zenz-v3.2-small-gguf`) もこの配下に残されています。
 

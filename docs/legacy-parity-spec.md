@@ -1,7 +1,7 @@
-# Legacy Parity 仕様（Phase 1）
+# Legacy Parity 仕様（Phase 5）
 
 本書は macOS 版 (`legacy/azooKeyMac/`) で実装済みだった機能を Windows 版へ
-復元する際の **正典仕様** である。`plans/windows-port-roadmap.md` の Phase 1
+復元する際の **正典仕様** である。`plans/windows-port-roadmap.md` の Phase 5
 （M13〜M19）が本書を参照する。
 
 実装着手前にこの仕様を読み、レガシー実装と差異がある場合は本書を更新してから
@@ -179,7 +179,7 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
 既存 `QueryCandidates` と分けるのは：
 - 返却するのは「最良 1 件」だけで軽量
 - バッチ周期が異なる（タイピング中は短く）
-- Phase 1 末尾でリッチ化（信頼度返却）が入る
+- Phase 5 末尾でリッチ化（信頼度返却）が入る
 
 ### 2.3 シーケンス
 
@@ -198,8 +198,8 @@ QueryLiveConversionResponse(req_id=N, surface, confidence)
    ↓
 EditSession: Preedit 全体を surface で差し替え
    ↓
-DisplayAttribute: kInputAttributeGuid (Phase 1 は単一属性)
-                  → Phase 1 末尾で 4 段階に拡張 (rich-features-spec X-1)
+DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
+                  → Phase 5 末尾で 4 段階に拡張 (rich-features-spec X-1)
 ```
 
 ### 2.4 キャンセル経路
@@ -246,7 +246,7 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 `InferenceEngine::QueryPredictions` の応答を TIP 側で 1 秒キャッシュ
 （既存レガシーの挙動）。同じ context で連続呼び出しを抑制。
 
-キャッシュキー: `(kana, leftSideContext_hash)`。Phase 1 では単純な hash map。
+キャッシュキー: `(kana, leftSideContext_hash)`。Phase 5 では単純な hash map。
 
 ### 3.4 操作
 
@@ -264,7 +264,7 @@ QueryPredictionsRequest:  request_id, kana, leftSideContext, mode
 QueryPredictionsResponse: request_id, predictions[]
 ```
 
-`mode` は X-2 で拡張（`word | phrase | sentence`）。Phase 1 では `word` のみ。
+`mode` は X-2 で拡張（`word | phrase | sentence`）。Phase 5 では `word` のみ。
 
 ### 3.6 設定
 
@@ -301,8 +301,8 @@ sel.range->GetText(read_cookie, 0, buf, ARRAYSIZE(buf), &cch);
 
 ### 4.3 プロンプト UI
 
-Phase 1 は簡易 Win32 ダイアログ（`DialogBox` + EDIT control）。
-WinUI 3 への移行は Phase 3-M30。
+Phase 5 は簡易 Win32 ダイアログ（`DialogBox` + EDIT control）。
+WinUI 3 への移行は Phase 7-M30。
 
 レイアウト：
 ```
@@ -341,7 +341,7 @@ TransformSelectedTextResponse:
 - エンドポイント：`{openAiApiEndpoint}/chat/completions`
 - モデル：`gpt-4o-mini`（設定で変更可）
 - MVP: `stream=false`
-- Phase 2 拡張: `stream=true`（ストリーミング → TIP へ push IPC）
+- Phase 6 拡張: `stream=true`（ストリーミング → TIP へ push IPC）
 
 Foundation Models は **macOS 専用なので Windows 版では実装しない**。
 将来のローカル LLM は M24 (Zenzai 流用) で対応。
@@ -394,7 +394,7 @@ sha	しゃ
 
 レガシー macOS 版が「差し替え」方式なのでそれを踏襲。マージ方式は混乱しやすい。
 ユーザーが既定 + α を望む場合は内蔵テーブルを書き出して編集するスクリプトを
-別途用意する（Phase 3 設定アプリで実装）。
+別途用意する（Phase 7 設定アプリで実装）。
 
 ## 6. Unicode 入力モード (M18-1)
 
@@ -423,7 +423,7 @@ DisplayAttribute は通常の入力下線。
 ### 7.1 トリガ
 
 - Ctrl+Shift+Backspace: 直前の commit を忘却
-- 設定アプリ（Phase 3）から指定エントリを削除
+- 設定アプリ（Phase 7）から指定エントリを削除
 
 ### 7.2 API
 
@@ -473,7 +473,7 @@ public:
 ### 8.2 実装
 
 - TIP プロセス内で circular buffer に保持
-- `WM_PAINT` で GDI 描画（Phase 2-C で DirectWrite に置換）
+- `WM_PAINT` で GDI 描画（Phase 6-C で DirectWrite に置換）
 - ログ取得は `OutputDebugString` と二重出力（既存の DebugView 経路も維持）
 
 ### 8.3 セキュリティ
@@ -504,11 +504,11 @@ GetMonitorInfo(mon, &mi);
 
 候補/予測ウィンドウは `mi.rcWork` 内に収まるよう配置。
 
-### 9.3 DPI 対応（Phase 2-B M26 と分担）
+### 9.3 DPI 対応（Phase 6-B M26 と分担）
 
-Phase 1 では `WS_POPUP` 生成時に `SetProcessDpiAwarenessContext(
+Phase 5 では `WS_POPUP` 生成時に `SetProcessDpiAwarenessContext(
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` のみ。
-`WM_DPICHANGED` ハンドリング・フォントスケーリングは Phase 2-B で。
+`WM_DPICHANGED` ハンドリング・フォントスケーリングは Phase 6-B で。
 
 ## 10. テスト戦略
 

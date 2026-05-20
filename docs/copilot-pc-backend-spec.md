@@ -1,8 +1,8 @@
-# Copilot+ PC / NPU バックエンド 仕様（Phase 2-B）
+# Copilot+ PC / NPU バックエンド 仕様（Phase 6-B）
 
 本書は `docs/zenzai-gpu-route.md` の発展形として、DirectML / NPU / ARM64
 バックエンドの選定と実装方針を定める。`plans/windows-port-roadmap.md` の
-Phase 2 の M24〜M27 が本書を参照する。
+Phase 6 の M24〜M27 が本書を参照する。
 
 ## 1. BackendKind enum 拡張
 
@@ -138,7 +138,7 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 ### 4.3 結論プレースホルダ
 
 M8 のスパイク結果でルートを 1〜2 本に絞る。本書ではここを **「TBD（M8 完了時に
-本書を更新）」** とする。Phase 2 着手時点では「DirectML EP + ggml-cuda CUDA」を
+本書を更新）」** とする。Phase 6 着手時点では「DirectML EP + ggml-cuda CUDA」を
 仮の構成として実装スケジュールに組む。
 
 ## 5. mmap モデルロード
@@ -337,7 +337,7 @@ QNN SDK を使う場合：
 - `qnn_htp/lib/aarch64-windows-msvc/` をリンク
 - バイナリ配布時は QNN ランタイム DLL を MSIX に同梱
 
-`inference-host/src/QnnBackend.cpp`（新規、Phase 2-B 中盤）：
+`inference-host/src/QnnBackend.cpp`（新規、Phase 6-B 中盤）：
 
 ```cpp
 class QnnBackend : public IBackend {

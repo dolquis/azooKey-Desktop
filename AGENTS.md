@@ -46,8 +46,8 @@ gh pr create \
 簡潔な紹介ドキュメントとして保つ。以下を厳守すること：
 
 - 詳細な実装プラン・進捗状況・マイルストーン履歴を README に書かない。
-  - 実装プラン → `plans/development-plan.md`
-  - マイルストーン定義・現状 → `plans/windows-port-roadmap.md`
+  - 実装プラン・マイルストーン定義・現状 → `plans/windows-port-roadmap.md`
+    （開発計画は本ファイル 1 本に一本化）
   - 機能ごとの仕様・ロジック → `docs/*-spec.md`
 - README に新セクションを足す前に、その内容が `plans/` か `docs/` に
   収まらないかを必ず先に検討する。

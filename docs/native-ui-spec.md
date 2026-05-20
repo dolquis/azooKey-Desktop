@@ -1,7 +1,7 @@
-# Native UI 仕様（Phase 2-C）
+# Native UI 仕様（Phase 6-C）
 
 本書は候補/予測ウィンドウ等のネイティブ UI をモダン化する仕様を定める。
-`plans/windows-port-roadmap.md` の Phase 2 の M26 が本書を参照する。
+`plans/windows-port-roadmap.md` の Phase 6 の M26 が本書を参照する。
 
 ## 1. Dark/Light テーマ自動追従
 
@@ -214,12 +214,12 @@ dc4->DrawText(text.c_str(), text.size(),
 
 ### 4.3 デバッグウィンドウ（M18-3）
 
-Phase 2-C で同じ仕組みに統一。Phase 1 では GDI で実装してよい。
+Phase 6-C で同じ仕組みに統一。Phase 5 では GDI で実装してよい。
 
 ### 4.4 Magic Conversion プロンプト（M16）
 
-Phase 1 では Win32 標準ダイアログ（IDD_*）で実装。
-Phase 3-M30 で設定アプリと統合して WinUI 3 に移行。
+Phase 5 では Win32 標準ダイアログ（IDD_*）で実装。
+Phase 7-M30 で設定アプリと統合して WinUI 3 に移行。
 
 ## 5. アクセシビリティ
 
@@ -242,7 +242,7 @@ bool high_contrast = (hc.dwFlags & HCF_HIGHCONTRASTON) != 0;
 取らない）。ただし候補内容を読み上げソフトに通知するため、
 `UiaRaiseAutomationEvent` で `UIA_AsyncContentLoadedEventId` を発火。
 
-Phase 2-C 末尾で追加実装。
+Phase 6-C 末尾で追加実装。
 
 ## 6. アニメーション
 
@@ -280,7 +280,7 @@ device->Commit();
 | 描画 smoke | `tsf-tip/tests/render_smoke_test.cpp` | Windows 限定。DComp + D2D + DirectWrite で 1 フレーム描画 |
 
 CI では `windows-latest` ランナーで実行。アーティファクトとしてスクリーンショットを
-`bench/` で出力（Phase 2-C 完了時の見栄え確認用）。
+`bench/` で出力（Phase 6-C 完了時の見栄え確認用）。
 
 ## 8. 参照
 

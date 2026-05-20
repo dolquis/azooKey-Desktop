@@ -20,6 +20,7 @@ if(AZOOKEY_BUILD_TESTS)
     AZOOKEY_TSF_TIP_DLL_PATH="$<TARGET_FILE:azookey_tsf_tip>"
   )
   target_compile_definitions(tsf_tip_com_smoke_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(tsf_tip_com_smoke_tests PRIVATE GTest::gtest_main)
   add_dependencies(tsf_tip_com_smoke_tests azookey_tsf_tip)
-  add_test(NAME tsf_tip_com_smoke_tests COMMAND tsf_tip_com_smoke_tests)
+  gtest_discover_tests(tsf_tip_com_smoke_tests)
 endif()

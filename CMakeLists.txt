@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.24)
 project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -14,6 +14,20 @@ option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 
 if(AZOOKEY_BUILD_TESTS)
   enable_testing()
+
+  # GoogleTest: FIND_PACKAGE_ARGS makes a system-installed GTest the preferred
+  # source, and FetchContent downloads the pinned tag only when none is found.
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        v1.17.0
+    FIND_PACKAGE_ARGS NAMES GTest
+  )
+  FetchContent_MakeAvailable(googletest)
+  include(GoogleTest)
 endif()
 
 add_subdirectory(core)

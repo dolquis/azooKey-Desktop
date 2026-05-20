@@ -285,6 +285,15 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 ## テスト体系（2026-05 現在）
 
+### テストフレームワーク
+
+テストフレームワークは **GoogleTest**、実行ランナーは **CTest** を併用する。
+GoogleTest は CMake の `FetchContent` で導入し、システムインストール済みの
+GoogleTest があればそれを `find_package` で優先利用する（`FIND_PACKAGE_ARGS`）。
+各テストは `gtest_discover_tests` により **ケース単位**（`SuiteName.TestName`）で
+CTest に登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに
+個別の CTest エントリへ展開される。実行は `ctest --test-dir build` で一括。
+
 ### 現存テスト一覧
 
 | ターゲット | テスト | 主要シナリオ |

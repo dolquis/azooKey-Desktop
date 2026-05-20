@@ -1,11 +1,11 @@
 add_executable(host_engine_tests engine_test.cpp)
-target_link_libraries(host_engine_tests PRIVATE azookey_host)
-add_test(NAME host_engine_tests COMMAND host_engine_tests)
+target_link_libraries(host_engine_tests PRIVATE azookey_host GTest::gtest_main)
+gtest_discover_tests(host_engine_tests)
 
 add_executable(host_dispatcher_tests dispatcher_test.cpp)
-target_link_libraries(host_dispatcher_tests PRIVATE azookey_host)
-add_test(NAME host_dispatcher_tests COMMAND host_dispatcher_tests)
+target_link_libraries(host_dispatcher_tests PRIVATE azookey_host GTest::gtest_main)
+gtest_discover_tests(host_dispatcher_tests)
 
 add_executable(host_scheduler_tests scheduler_test.cpp)
-target_link_libraries(host_scheduler_tests PRIVATE azookey_host)
-add_test(NAME host_scheduler_tests COMMAND host_scheduler_tests)
+target_link_libraries(host_scheduler_tests PRIVATE azookey_host GTest::gtest_main)
+gtest_discover_tests(host_scheduler_tests)

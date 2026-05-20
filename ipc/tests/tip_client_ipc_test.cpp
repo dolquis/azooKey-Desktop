@@ -1,11 +1,11 @@
 // Tests the TIP-client IPC flow that mirrors StartDebugIpcProbe in TextService.cpp.
 // Verifies: connect → Handshake → Ping roundtrip, and QueryCandidates roundtrip.
 
-#include <cstdio>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
@@ -13,17 +13,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#endif
 
-static void Expect(bool cond, const char* msg) {
-  if (!cond) throw std::runtime_error(msg);
-}
-
-int main() {
-#ifndef _WIN32
-  return 0;
-#else
-  try {
+TEST(TipClientIpcTest, ActivationFlowAndQueryRoundTrip) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-tip-client-test-" + std::to_string(GetCurrentProcessId());
 
@@ -76,11 +67,11 @@ int main() {
 
         return std::nullopt;
       });
-  Expect(started, "mock server failed to start");
+  ASSERT_TRUE(started);
 
   // --- TIP activation flow (mirrors StartDebugIpcProbe) ---
   azookey::ipc::NamedPipeClient client;
-  Expect(client.Connect(pipe_name, 2000), "TIP client failed to connect");
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
 
   // Handshake
   azookey::ipc::HandshakeRequest handshake;
@@ -95,14 +86,14 @@ int main() {
   henv.type = azookey::ipc::MessageType::Handshake;
   henv.payload_json = azookey::ipc::BuildHandshakeRequest(handshake);
 
-  Expect(client.Send(henv), "failed to send handshake");
+  ASSERT_TRUE(client.Send(henv));
   auto hres = client.Receive();
-  Expect(hres.has_value(), "missing handshake response");
-  Expect(hres->request_id == 1, "handshake request_id mismatch");
+  ASSERT_TRUE(hres.has_value());
+  EXPECT_EQ(hres->request_id, 1u);
   auto hpayload = azookey::ipc::ParseHandshakeResponse(hres->payload_json);
-  Expect(hpayload.has_value(), "handshake response parse failed");
-  Expect(hpayload->accepted, "handshake rejected");
-  Expect(hpayload->host_version == "mock-host-0.1.0", "host_version mismatch");
+  ASSERT_TRUE(hpayload.has_value());
+  EXPECT_TRUE(hpayload->accepted);
+  EXPECT_EQ(hpayload->host_version, "mock-host-0.1.0");
 
   // Ping
   azookey::ipc::PingPayload ping;
@@ -116,13 +107,13 @@ int main() {
   penv.type = azookey::ipc::MessageType::Ping;
   penv.payload_json = azookey::ipc::BuildPing(ping);
 
-  Expect(client.Send(penv), "failed to send ping");
+  ASSERT_TRUE(client.Send(penv));
   auto pres = client.Receive();
-  Expect(pres.has_value(), "missing ping response");
-  Expect(pres->request_id == 2, "ping request_id mismatch");
+  ASSERT_TRUE(pres.has_value());
+  EXPECT_EQ(pres->request_id, 2u);
   auto ppayload = azookey::ipc::ParsePing(pres->payload_json);
-  Expect(ppayload.has_value(), "ping response parse failed");
-  Expect(ppayload->nonce == ping.nonce, "ping nonce mismatch");
+  ASSERT_TRUE(ppayload.has_value());
+  EXPECT_EQ(ppayload->nonce, ping.nonce);
 
   // --- QueryCandidates roundtrip (M4 path) ---
   azookey::ipc::QueryCandidatesRequest qreq;
@@ -138,21 +129,23 @@ int main() {
   qenv.type = azookey::ipc::MessageType::QueryCandidates;
   qenv.payload_json = azookey::ipc::BuildQueryCandidatesRequest(qreq);
 
-  Expect(client.Send(qenv), "failed to send QueryCandidates");
+  ASSERT_TRUE(client.Send(qenv));
   auto qres = client.Receive();
-  Expect(qres.has_value(), "missing QueryCandidates response");
-  Expect(qres->request_id == 3, "QueryCandidates request_id mismatch");
+  ASSERT_TRUE(qres.has_value());
+  EXPECT_EQ(qres->request_id, 3u);
   auto qpayload = azookey::ipc::ParseQueryCandidatesResponse(qres->payload_json);
-  Expect(qpayload.has_value(), "QueryCandidates response parse failed");
-  Expect(!qpayload->candidates.empty(), "expected at least one candidate");
-  Expect(qpayload->candidates[0].reading == "にほんご", "candidate reading mismatch");
+  ASSERT_TRUE(qpayload.has_value());
+  ASSERT_FALSE(qpayload->candidates.empty());
+  EXPECT_EQ(qpayload->candidates[0].reading, "にほんご");
 
   client.Disconnect();
   server.Stop();
-  return 0;
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "FAIL: %s\n", e.what());
-    return 1;
-  }
-#endif
 }
+
+#else
+
+TEST(TipClientIpcTest, ActivationFlowAndQueryRoundTrip) {
+  GTEST_SKIP() << "TIP-client IPC flow is Windows-only";
+}
+
+#endif

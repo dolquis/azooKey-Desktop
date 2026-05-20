@@ -3,6 +3,6 @@ add_executable(core_tests
   simple_converter_test.cpp
 )
 
-target_link_libraries(core_tests PRIVATE azookey_core)
+target_link_libraries(core_tests PRIVATE azookey_core GTest::gtest_main)
 
-add_test(NAME core_tests COMMAND core_tests)
+gtest_discover_tests(core_tests)

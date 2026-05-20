@@ -1,15 +1,12 @@
 #include <cstdio>
 #include <filesystem>
-#include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 
 #include "azookey/learning/UserDictionary.h"
 
-static void Expect(bool cond, const char* msg) {
-  if (!cond) throw std::runtime_error(msg);
-}
-
-static void TestAddLookupRemove() {
+TEST(UserDictionaryTest, AddLookupRemove) {
   const std::string p1 =
       (std::filesystem::temp_directory_path() / "azookey_user_dict_t_ignored.json").string();
   azookey::learning::UserDictionary dict(p1);
@@ -23,35 +20,36 @@ static void TestAddLookupRemove() {
   w2.word = "azooKey社";
   w2.ruby = "あずきい";
 
-  Expect(dict.Add(w1), "first add must return true");
-  Expect(dict.Add(w2), "second add must return true");
-  Expect(dict.Size() == 2, "size after two adds");
+  EXPECT_TRUE(dict.Add(w1));
+  EXPECT_TRUE(dict.Add(w2));
+  EXPECT_EQ(dict.Size(), 2u);
 
   const auto hits = dict.Lookup("あずきい");
-  Expect(hits.size() == 2, "lookup returns 2");
+  EXPECT_EQ(hits.size(), 2u);
 
   // Adding same (word, ruby) replaces in place rather than duplicating.
   azookey::learning::UserWord w1b = w1;
   w1b.value = -10.0;
-  Expect(!dict.Add(w1b), "replace returns false");
-  Expect(dict.Size() == 2, "replace does not change size");
+  EXPECT_FALSE(dict.Add(w1b));
+  EXPECT_EQ(dict.Size(), 2u);
   auto hits2 = dict.Lookup("あずきい");
   bool found = false;
   for (const auto& h : hits2) {
     if (h.word == "azooKey") {
-      Expect(h.value.has_value() && *h.value == -10.0, "value was replaced");
+      ASSERT_TRUE(h.value.has_value());
+      EXPECT_EQ(*h.value, -10.0);
       found = true;
     }
   }
-  Expect(found, "replaced entry visible");
+  EXPECT_TRUE(found);
 
-  Expect(dict.Remove("azooKey", "あずきい"), "remove existing returns true");
-  Expect(dict.Size() == 1, "size after one remove");
-  Expect(!dict.Remove("azooKey", "あずきい"), "remove again returns false");
-  Expect(dict.Lookup("あずきい").size() == 1, "lookup after remove");
+  EXPECT_TRUE(dict.Remove("azooKey", "あずきい"));
+  EXPECT_EQ(dict.Size(), 1u);
+  EXPECT_FALSE(dict.Remove("azooKey", "あずきい"));
+  EXPECT_EQ(dict.Lookup("あずきい").size(), 1u);
 }
 
-static void TestSaveLoadRoundTrip() {
+TEST(UserDictionaryTest, SaveLoadRoundTrip) {
   const char* path = "azookey_user_dict_roundtrip.json";
   std::remove(path);
 
@@ -69,57 +67,46 @@ static void TestSaveLoadRoundTrip() {
     w2.word = "プログラム";
     w2.ruby = "ぷろぐらむ";
     dict.Add(w2);
-    Expect(dict.Save(), "save must succeed");
+    EXPECT_TRUE(dict.Save());
   }
 
   azookey::learning::UserDictionary loaded(path);
-  Expect(loaded.Load(), "load must succeed");
-  Expect(loaded.Size() == 2, "loaded size matches");
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Size(), 2u);
 
   auto hits = loaded.Lookup("にほんご");
-  Expect(hits.size() == 1, "loaded by ruby");
-  Expect(hits[0].word == "日本語", "loaded word");
-  Expect(hits[0].cid.has_value() && *hits[0].cid == 1, "loaded cid");
-  Expect(hits[0].value.has_value() && *hits[0].value == 0.5, "loaded value");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].word, "日本語");
+  ASSERT_TRUE(hits[0].cid.has_value());
+  EXPECT_EQ(*hits[0].cid, 1);
+  ASSERT_TRUE(hits[0].value.has_value());
+  EXPECT_EQ(*hits[0].value, 0.5);
 
   auto hits2 = loaded.Lookup("ぷろぐらむ");
-  Expect(hits2.size() == 1, "loaded second entry");
-  Expect(!hits2[0].cid.has_value(), "optional cid stays absent");
-  Expect(!hits2[0].value.has_value(), "optional value stays absent");
+  ASSERT_EQ(hits2.size(), 1u);
+  EXPECT_FALSE(hits2[0].cid.has_value());
+  EXPECT_FALSE(hits2[0].value.has_value());
 
   std::remove(path);
 }
 
-static void TestLoadMissingFileIsOk() {
+TEST(UserDictionaryTest, LoadMissingFileIsOk) {
   const std::string p2 =
       (std::filesystem::temp_directory_path() / "azookey_user_dict_definitely_missing.json").string();
   azookey::learning::UserDictionary dict(p2);
-  Expect(dict.Load(), "missing file load returns true with empty dict");
-  Expect(dict.Size() == 0, "empty after missing-file load");
+  EXPECT_TRUE(dict.Load());
+  EXPECT_EQ(dict.Size(), 0u);
 }
 
-static void TestLoadMalformedRejects() {
+TEST(UserDictionaryTest, LoadMalformedRejects) {
   const char* path = "azookey_user_dict_malformed.json";
   {
     FILE* f = std::fopen(path, "w");
-    if (!f) return;
+    ASSERT_NE(f, nullptr);
     std::fputs("not json at all", f);
     std::fclose(f);
   }
   azookey::learning::UserDictionary dict(path);
-  Expect(!dict.Load(), "malformed file must return false");
+  EXPECT_FALSE(dict.Load());
   std::remove(path);
-}
-
-int main() {
-  try {
-    TestAddLookupRemove();
-    TestSaveLoadRoundTrip();
-    TestLoadMissingFileIsOk();
-    TestLoadMalformedRejects();
-    return 0;
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "FAIL: %s\n", e.what());
-    return 1;
-  }
 }

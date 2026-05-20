@@ -1,20 +1,16 @@
 #include <atomic>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <thread>
+
+#include <gtest/gtest.h>
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
-
-static void Expect(bool cond, const char* msg) {
-  if (!cond) throw std::runtime_error(msg);
-}
 
 namespace {
 
@@ -30,7 +26,7 @@ std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
 
 }  // namespace
 
-static void TestQueryWithLearningBoost() {
+TEST(InferenceEngineTest, QueryWithLearningBoost) {
   const char* path = "azookey_host_engine_learning.tsv";
   std::remove(path);
   azookey::learning::LearningStore store(path);
@@ -39,8 +35,8 @@ static void TestQueryWithLearningBoost() {
 
   // First conversion - 日本 is the static top.
   auto first = engine->QueryCandidates("にほん", "", kNowBase);
-  Expect(!first.empty(), "first query non-empty");
-  Expect(first.front().surface == "日本", "before learning 日本 is top");
+  ASSERT_FALSE(first.empty());
+  EXPECT_EQ(first.front().surface, "日本");
 
   // Commit 二本 three times to outweigh the static gap.
   engine->CommitObservation("にほん", "二本", kNowBase + 1);
@@ -48,14 +44,13 @@ static void TestQueryWithLearningBoost() {
   engine->CommitObservation("にほん", "二本", kNowBase + 3);
 
   auto fourth = engine->QueryCandidates("にほん", "", kNowBase + 4);
-  Expect(!fourth.empty(), "fourth query non-empty");
-  Expect(fourth.front().surface == "二本",
-         "after 3 commits 二本 must move to top");
+  ASSERT_FALSE(fourth.empty());
+  EXPECT_EQ(fourth.front().surface, "二本");
 
   std::remove(path);
 }
 
-static void TestUserDictionaryInjection() {
+TEST(InferenceEngineTest, UserDictionaryInjection) {
   const char* lpath = "azookey_host_engine_user_dict_learn.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -71,23 +66,21 @@ static void TestUserDictionaryInjection() {
   engine->SetUserDictionary(&dict);
 
   auto cands = engine->QueryCandidates("あずきい", "", kNowBase);
-  Expect(!cands.empty(), "user-dict query non-empty");
-  Expect(cands.front().surface == "azooKey",
-         "user-dictionary entry must appear at top");
-  Expect(cands.front().debug_info.find("user-dict") != std::string::npos,
-         "user-dictionary entry tagged");
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().surface, "azooKey");
+  EXPECT_NE(cands.front().debug_info.find("user-dict"), std::string::npos);
 
   // Removing the user word makes it disappear from results.
-  Expect(dict.Remove("azooKey", "あずきい"), "remove user word");
+  ASSERT_TRUE(dict.Remove("azooKey", "あずきい"));
   auto cands2 = engine->QueryCandidates("あずきい", "", kNowBase);
   for (const auto& c : cands2) {
-    Expect(c.surface != "azooKey", "removed entry must not appear");
+    EXPECT_NE(c.surface, "azooKey");
   }
 
   std::remove(lpath);
 }
 
-static void TestCancelEarlyReturn() {
+TEST(InferenceEngineTest, CancelEarlyReturn) {
   const char* lpath = "azookey_host_engine_cancel.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -95,16 +88,16 @@ static void TestCancelEarlyReturn() {
 
   std::atomic<bool> cancel{true};
   auto cands = engine->QueryCandidates("にほん", "", kNowBase, &cancel);
-  Expect(cands.empty(), "canceled query must return empty");
+  EXPECT_TRUE(cands.empty());
 
   cancel.store(false);
   auto cands2 = engine->QueryCandidates("にほん", "", kNowBase, &cancel);
-  Expect(!cands2.empty(), "non-canceled query returns candidates");
+  EXPECT_FALSE(cands2.empty());
 
   std::remove(lpath);
 }
 
-static void TestLegacyOverloadStillWorks() {
+TEST(InferenceEngineTest, LegacyOverloadStillWorks) {
   const char* lpath = "azookey_host_engine_legacy.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -113,24 +106,24 @@ static void TestLegacyOverloadStillWorks() {
   // Three-argument overload exists for backwards compatibility with main.cpp
   // and the existing bench harness.
   auto cands = engine->QueryCandidates("わたし", "", kNowBase);
-  Expect(!cands.empty(), "legacy overload returns candidates");
+  EXPECT_FALSE(cands.empty());
   std::remove(lpath);
 }
 
-static void TestLoadModelFallbackWithoutPath() {
+TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {
   const char* lpath = "azookey_host_engine_load_empty.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
-  Expect(engine->LoadModel(), "empty model path should keep fallback converter active");
-  Expect(!engine->model_loaded(), "empty model path does not mark a Zenzai model loaded");
-  Expect(!engine->last_error().has_value(), "empty model path should not set load error");
+  EXPECT_TRUE(engine->LoadModel());
+  EXPECT_FALSE(engine->model_loaded());
+  EXPECT_FALSE(engine->last_error().has_value());
 
   std::remove(lpath);
 }
 
-static void TestLoadModelRecordsOptionsAndMissingPath() {
+TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   const char* lpath = "azookey_host_engine_load_missing.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -142,23 +135,19 @@ static void TestLoadModelRecordsOptionsAndMissingPath() {
   options.n_gpu_layers = 35;
 
   const auto result = engine->LoadModelWithResult(options);
-  Expect(!result.ok, "missing model path should fail");
-  Expect(result.error.has_value(), "missing model should report an error");
-  Expect(result.error == engine->last_error(),
-         "LoadModel result should carry the same request-local error recorded in state");
-  Expect(engine->backend() == azookey::host::BackendKind::Cuda,
-         "LoadModel should record requested backend");
-  Expect(engine->config().model_path == options.path,
-         "LoadModel should record requested path");
-  Expect(engine->config().n_gpu_layers.has_value() &&
-             engine->config().n_gpu_layers.value() == 35,
-         "LoadModel should record requested n_gpu_layers");
-  Expect(!engine->model_loaded(), "missing model must not mark loaded");
+  EXPECT_FALSE(result.ok);
+  EXPECT_TRUE(result.error.has_value());
+  EXPECT_EQ(result.error, engine->last_error());
+  EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cuda);
+  EXPECT_EQ(engine->config().model_path, options.path);
+  ASSERT_TRUE(engine->config().n_gpu_layers.has_value());
+  EXPECT_EQ(engine->config().n_gpu_layers.value(), 35);
+  EXPECT_FALSE(engine->model_loaded());
 
   std::remove(lpath);
 }
 
-static void TestLoadModelStateAccessorsThreadedSmoke() {
+TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   const char* lpath = "azookey_host_engine_load_threaded.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -186,23 +175,7 @@ static void TestLoadModelStateAccessorsThreadedSmoke() {
 
   writer.join();
   reader.join();
-  Expect(!engine->model_loaded(), "threaded missing model must not mark loaded");
+  EXPECT_FALSE(engine->model_loaded());
 
   std::remove(lpath);
-}
-
-int main() {
-  try {
-    TestQueryWithLearningBoost();
-    TestUserDictionaryInjection();
-    TestCancelEarlyReturn();
-    TestLegacyOverloadStillWorks();
-    TestLoadModelFallbackWithoutPath();
-    TestLoadModelRecordsOptionsAndMissingPath();
-    TestLoadModelStateAccessorsThreadedSmoke();
-    return 0;
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "FAIL: %s\n", e.what());
-    return 1;
-  }
 }

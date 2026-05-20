@@ -1,7 +1,7 @@
-#include <cstdio>
-#include <stdexcept>
 #include <optional>
 #include <string>
+
+#include <gtest/gtest.h>
 
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
@@ -9,17 +9,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#endif
 
-static void Expect(bool cond, const char* msg) {
-  if (!cond) throw std::runtime_error(msg);
-}
-
-int main() {
-#ifndef _WIN32
-  return 0;
-#else
-  try {
+TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-ipc-test-" + std::to_string(GetCurrentProcessId());
 
@@ -54,10 +45,10 @@ int main() {
 
         return std::nullopt;
       });
-  Expect(started, "server failed to start");
+  ASSERT_TRUE(started);
 
   azookey::ipc::NamedPipeClient client;
-  Expect(client.Connect(pipe_name, 2000), "client failed to connect");
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
 
   azookey::ipc::HandshakeRequest handshake;
   handshake.tip_version = "test-tip";
@@ -71,14 +62,14 @@ int main() {
   henv.type = azookey::ipc::MessageType::Handshake;
   henv.payload_json = azookey::ipc::BuildHandshakeRequest(handshake);
 
-  Expect(client.Send(henv), "failed to send handshake");
+  ASSERT_TRUE(client.Send(henv));
   auto hres = client.Receive();
-  Expect(hres.has_value(), "missing handshake response");
-  Expect(hres->request_id == 1, "handshake request id mismatch");
+  ASSERT_TRUE(hres.has_value());
+  EXPECT_EQ(hres->request_id, 1u);
   auto hpayload = azookey::ipc::ParseHandshakeResponse(hres->payload_json);
-  Expect(hpayload.has_value(), "handshake response parse failed");
-  Expect(hpayload->accepted, "handshake not accepted");
-  Expect(hpayload->host_version == "test-host", "host version mismatch");
+  ASSERT_TRUE(hpayload.has_value());
+  EXPECT_TRUE(hpayload->accepted);
+  EXPECT_EQ(hpayload->host_version, "test-host");
 
   azookey::ipc::PingPayload ping;
   ping.nonce = 424242;
@@ -91,20 +82,22 @@ int main() {
   penv.type = azookey::ipc::MessageType::Ping;
   penv.payload_json = azookey::ipc::BuildPing(ping);
 
-  Expect(client.Send(penv), "failed to send ping");
+  ASSERT_TRUE(client.Send(penv));
   auto pres = client.Receive();
-  Expect(pres.has_value(), "missing ping response");
-  Expect(pres->request_id == 2, "ping request id mismatch");
+  ASSERT_TRUE(pres.has_value());
+  EXPECT_EQ(pres->request_id, 2u);
   auto ppayload = azookey::ipc::ParsePing(pres->payload_json);
-  Expect(ppayload.has_value(), "ping response parse failed");
-  Expect(ppayload->nonce == 424242, "ping nonce mismatch");
+  ASSERT_TRUE(ppayload.has_value());
+  EXPECT_EQ(ppayload->nonce, 424242u);
 
   client.Disconnect();
   server.Stop();
-  return 0;
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "FAIL: %s\n", e.what());
-    return 1;
-  }
-#endif
 }
+
+#else
+
+TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
+  GTEST_SKIP() << "NamedPipeTransport is Windows-only";
+}
+
+#endif

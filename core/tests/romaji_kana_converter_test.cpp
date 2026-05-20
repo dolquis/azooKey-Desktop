@@ -1,66 +1,51 @@
-#include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 
 #include "azookey/core/RomajiKanaConverter.h"
 
-void ExpectEq(const std::string& actual, const std::string& expected, const char* message) {
-  if (actual != expected) {
-    throw std::runtime_error(std::string(message) + " expected='" + expected + "' actual='" + actual + "'");
+namespace {
+
+std::string FeedAll(azookey::core::RomajiKanaConverter& converter,
+                    const std::string& input) {
+  std::string out;
+  for (char c : input) {
+    out += converter.Feed(c);
   }
+  out += converter.Flush();
+  return out;
 }
 
-int main();
+}  // namespace
 
-int RunRomajiTests() {
+TEST(RomajiKanaConverterTest, FeedAndFlush) {
   azookey::core::RomajiKanaConverter converter;
-
-  std::string out;
-  for (char c : std::string("konnichiha")) {
-    out += converter.Feed(c);
-  }
-  out += converter.Flush();
-  ExpectEq(out, "こんにちは", "konnichiha");
+  EXPECT_EQ(FeedAll(converter, "konnichiha"), "こんにちは");
 
   converter.Reset();
-  out.clear();
-  for (char c : std::string("nani")) {
-    out += converter.Feed(c);
-  }
-  out += converter.Flush();
-  ExpectEq(out, "なに", "nani");
+  EXPECT_EQ(FeedAll(converter, "nani"), "なに");
 
   converter.Reset();
-  out.clear();
-  for (char c : std::string("gakkou")) {
-    out += converter.Feed(c);
-  }
-  out += converter.Flush();
-  ExpectEq(out, "がっこう", "gakkou");
+  EXPECT_EQ(FeedAll(converter, "gakkou"), "がっこう");
 
   converter.Reset();
-  out.clear();
-  for (char c : std::string("konn")) {
-    out += converter.Feed(c);
-  }
-  out += converter.Flush();
-  ExpectEq(out, "こん", "konn flush");
+  EXPECT_EQ(FeedAll(converter, "konn"), "こん");
+}
 
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("k"), "k", "preview k");
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("ka"), "か", "preview ka");
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("kan"), "かn", "preview kan");
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("na"), "な", "preview na");
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("konn"), "こん", "preview konn");
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("konnichiha"), "こんにちは",
-           "preview konnichiha");
-  ExpectEq(azookey::core::RomajiKanaConverter::Preview("gakkou"), "がっこう",
-           "preview gakkou");
+TEST(RomajiKanaConverterTest, Preview) {
+  using azookey::core::RomajiKanaConverter;
+  EXPECT_EQ(RomajiKanaConverter::Preview("k"), "k");
+  EXPECT_EQ(RomajiKanaConverter::Preview("ka"), "か");
+  EXPECT_EQ(RomajiKanaConverter::Preview("kan"), "かn");
+  EXPECT_EQ(RomajiKanaConverter::Preview("na"), "な");
+  EXPECT_EQ(RomajiKanaConverter::Preview("konn"), "こん");
+  EXPECT_EQ(RomajiKanaConverter::Preview("konnichiha"), "こんにちは");
+  EXPECT_EQ(RomajiKanaConverter::Preview("gakkou"), "がっこう");
+}
 
-  ExpectEq(azookey::core::RomajiKanaConverter::ConvertForCommit("kan"), "かん",
-           "commit kan");
-  ExpectEq(azookey::core::RomajiKanaConverter::ConvertForCommit("na"), "な",
-           "commit na");
-  ExpectEq(azookey::core::RomajiKanaConverter::ConvertForCommit("konn"), "こん",
-           "commit konn");
-
-  return 0;
+TEST(RomajiKanaConverterTest, ConvertForCommit) {
+  using azookey::core::RomajiKanaConverter;
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kan"), "かん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("na"), "な");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("konn"), "こん");
 }

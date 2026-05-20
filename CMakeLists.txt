@@ -11,9 +11,37 @@ endif()
 
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
+option(AZOOKEY_FETCH_GOOGLETEST
+       "Download GoogleTest via FetchContent when it is not found locally" OFF)
 
 if(AZOOKEY_BUILD_TESTS)
   enable_testing()
+
+  # Prefer a system-installed GoogleTest. The network download is opt-in
+  # (AZOOKEY_FETCH_GOOGLETEST) so that the default `cmake -S . -B build`
+  # still succeeds in no-egress environments; tests are simply skipped with
+  # a warning when GoogleTest is unavailable.
+  find_package(GTest QUIET)
+  if(NOT GTest_FOUND AND AZOOKEY_FETCH_GOOGLETEST)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    include(FetchContent)
+    FetchContent_Declare(
+      googletest
+      GIT_REPOSITORY https://github.com/google/googletest.git
+      GIT_TAG        v1.17.0
+    )
+    FetchContent_MakeAvailable(googletest)
+  endif()
+
+  if(TARGET GTest::gtest_main)
+    include(GoogleTest)
+  else()
+    message(WARNING
+      "GoogleTest not found; unit tests are disabled. Install GoogleTest or "
+      "re-run CMake with -DAZOOKEY_FETCH_GOOGLETEST=ON to download it.")
+    set(AZOOKEY_BUILD_TESTS OFF)
+  endif()
 endif()
 
 add_subdirectory(core)

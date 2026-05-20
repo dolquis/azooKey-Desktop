@@ -1,161 +1,145 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
-#include <stdexcept>
 #include <string>
+#include <vector>
+
+#include <gtest/gtest.h>
 
 #include "azookey/core/SimpleConverter.h"
 
-int RunRomajiTests();
+namespace {
 
-void Expect(bool cond, const char* message) {
-  if (!cond) {
-    throw std::runtime_error(message);
+// Fixture that writes TSV fixtures and removes them in TearDown so a failing
+// assertion never leaves a stale file behind.
+class SimpleConverterTsvTest : public ::testing::Test {
+ protected:
+  void WriteFixture(const std::string& path, const std::string& contents) {
+    std::ofstream f(path);
+    f << contents;
+    f.close();
+    temp_files_.push_back(path);
   }
-}
 
-static void TestBuiltinDictionary() {
+  void TearDown() override {
+    for (const auto& path : temp_files_) {
+      std::remove(path.c_str());
+    }
+  }
+
+ private:
+  std::vector<std::string> temp_files_;
+};
+
+}  // namespace
+
+TEST(SimpleConverterTest, BuiltinDictionary) {
   azookey::core::SimpleConverter converter;
   const auto candidates = converter.Convert("にほん", azookey::core::ConversionContext{});
-  Expect(candidates.size() >= 3, "expected 3+ candidates");
-  Expect(candidates.front().surface == "日本", "expected 日本 as top candidate");
+  EXPECT_GE(candidates.size(), 3u);
+  EXPECT_EQ(candidates.front().surface, "日本");
 
   converter.Learn("二本", "にほん");
   const auto relearned = converter.Convert("にほん", azookey::core::ConversionContext{});
-  Expect(relearned.size() >= 3, "expected candidates after learning");
+  EXPECT_GE(relearned.size(), 3u);
 }
 
-static void TestTsvLoad() {
-  const char* path = "simple_converter_tsv_fixture.tsv";
-  {
-    std::ofstream f(path);
-    f << "# comment line\n";
-    f << "\n";
-    f << "あずきい\tazooKey\t1.0\tuser\n";
-    f << "あずきい\tあずきい\t0.4\tidentity\n";
-    f << "malformed line without tabs\n";
-    f << "てすと\tテスト\tnotanumber\tuser\n";  // dropped (bad score)
-  }
+TEST_F(SimpleConverterTsvTest, TsvLoad) {
+  const std::string path = "simple_converter_tsv_fixture.tsv";
+  WriteFixture(path,
+               "# comment line\n"
+               "\n"
+               "あずきい\tazooKey\t1.0\tuser\n"
+               "あずきい\tあずきい\t0.4\tidentity\n"
+               "malformed line without tabs\n"
+               "てすと\tテスト\tnotanumber\tuser\n");  // last row dropped (bad score)
 
   azookey::core::SimpleConverter converter;
-  Expect(converter.LoadFromTsv(path), "LoadFromTsv must report some rows loaded");
+  ASSERT_TRUE(converter.LoadFromTsv(path));
 
   const auto candidates = converter.Convert("あずきい", azookey::core::ConversionContext{});
-  Expect(candidates.size() == 2, "expected exactly 2 tsv rows for あずきい");
-  Expect(candidates.front().surface == "azooKey", "tsv first row surface");
-  Expect(candidates.front().score == 1.0, "tsv first row score");
+  ASSERT_EQ(candidates.size(), 2u);
+  EXPECT_EQ(candidates.front().surface, "azooKey");
+  EXPECT_EQ(candidates.front().score, 1.0);
 
   // Built-in entry is preserved alongside TSV entries.
   const auto nihon = converter.Convert("にほん", azookey::core::ConversionContext{});
-  Expect(!nihon.empty(), "built-in entry must remain after LoadFromTsv");
+  EXPECT_FALSE(nihon.empty());
 
   // Missing file returns false but does not throw.
-  Expect(!converter.LoadFromTsv("/nonexistent/azookey_no_such_file.tsv"),
-         "missing tsv must return false");
-
-  std::remove(path);
+  EXPECT_FALSE(converter.LoadFromTsv("/nonexistent/azookey_no_such_file.tsv"));
 }
 
-static void TestPrefixFallback() {
+TEST(SimpleConverterTest, PrefixFallback) {
   azookey::core::SimpleConverter converter;
-  // "にほんご" is not in the built-in dictionary; "にほん" is.
   const auto candidates = converter.Convert("にほん", azookey::core::ConversionContext{});
-  Expect(!candidates.empty(), "にほん should hit built-in");
+  EXPECT_FALSE(candidates.empty());
 
-  // Prefix of an existing reading: convert with shorter kana hits prefix path
-  // through unrelated keys when no exact match exists. Use a reading that is
-  // a clean prefix only of the built-in "とうきょう".
   const auto cands = converter.Convert("とうきょ", azookey::core::ConversionContext{});
-  Expect(!cands.empty(), "prefix fallback must return at least one candidate");
+  EXPECT_FALSE(cands.empty());
 }
 
-static void TestLongReadingPrefixFallback() {
-  const char* path = "simple_converter_long_reading_fixture.tsv";
-  {
-    std::ofstream f(path);
-    f << "あずきいきーぼーど\tazooKey Keyboard\t1.0\tuser\n";
-    f << "あずきいきーぼーど\tあずきいキーボード\t0.8\tuser\n";
-  }
+TEST_F(SimpleConverterTsvTest, LongReadingPrefixFallback) {
+  const std::string path = "simple_converter_long_reading_fixture.tsv";
+  WriteFixture(path,
+               "あずきいきーぼーど\tazooKey Keyboard\t1.0\tuser\n"
+               "あずきいきーぼーど\tあずきいキーボード\t0.8\tuser\n");
 
   azookey::core::SimpleConverter converter;
-  Expect(converter.LoadFromTsv(path), "long reading fixture must load");
+  ASSERT_TRUE(converter.LoadFromTsv(path));
 
   const auto cands = converter.Convert("あずきいきーぼー", azookey::core::ConversionContext{});
-  Expect(!cands.empty(), "long reading prefix fallback must return candidates");
-  Expect(cands.front().surface == "azooKey Keyboard",
-         "long reading prefix fallback should preserve highest-score candidate");
-  Expect(cands.front().reading == "あずきいきーぼーど",
-         "long reading prefix fallback should keep full dictionary reading");
-
-  std::remove(path);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().surface, "azooKey Keyboard");
+  EXPECT_EQ(cands.front().reading, "あずきいきーぼーど");
 }
 
-
-
-static void TestDebugInfoFormatting() {
+TEST(SimpleConverterTest, DebugInfoFormatting) {
   azookey::core::SimpleConverter converter;
 
   azookey::core::ConversionContext rejection_context;
   rejection_context.rejected_surfaces = {"未知"};
   const auto unknown = converter.Convert("未知", rejection_context);
-  Expect(!unknown.empty(), "unknown conversion should generate heuristics");
+  ASSERT_FALSE(unknown.empty());
   auto rejected_it = std::find_if(unknown.begin(), unknown.end(), [](const azookey::core::Candidate& c) {
     return c.surface == "未知";
   });
-  Expect(rejected_it != unknown.end(), "unknown conversion should contain identity candidate");
-  Expect(rejected_it->debug_info == "identity;ctx-rejected",
-         "debug info tags should be semicolon-separated without leading delimiter");
+  ASSERT_NE(rejected_it, unknown.end());
+  EXPECT_EQ(rejected_it->debug_info, "identity;ctx-rejected");
 
   const auto predicted = converter.PredictNext("未知", azookey::core::ConversionContext{});
-  Expect(!predicted.empty(), "predict next should return candidates");
+  ASSERT_FALSE(predicted.empty());
   auto predicted_it = std::find_if(predicted.begin(), predicted.end(), [](const azookey::core::Candidate& c) {
     return c.surface == "未知";
   });
-  Expect(predicted_it != predicted.end(), "predict next should keep identity candidate");
-  Expect(predicted_it->debug_info == "identity;predict",
-         "predict tag should append with semicolon separator");
+  ASSERT_NE(predicted_it, predicted.end());
+  EXPECT_EQ(predicted_it->debug_info, "identity;predict");
 }
 
-static void TestContextAware() {
+TEST(SimpleConverterTest, ContextAware) {
   azookey::core::SimpleConverter converter;
 
   azookey::core::CorrectionHint hint;
   hint.rejected_surface = "日本";
   const auto corrected = converter.Correct("にほん", hint, azookey::core::ConversionContext{});
-  Expect(!corrected.empty(), "expected correction candidates");
-  Expect(corrected.front().surface != "日本", "rejected candidate should not remain top");
+  ASSERT_FALSE(corrected.empty());
+  EXPECT_NE(corrected.front().surface, "日本");
 
   azookey::core::ConversionContext rejection_context;
   rejection_context.rejected_surfaces = {"日本"};
   const auto context_filtered = converter.Convert("にほん", rejection_context);
-  Expect(!context_filtered.empty(), "expected candidates after context rejection");
-  Expect(context_filtered.front().surface != "日本", "context-rejected candidate should not remain top");
+  ASSERT_FALSE(context_filtered.empty());
+  EXPECT_NE(context_filtered.front().surface, "日本");
 
   azookey::core::ConversionContext bigram_context;
   bigram_context.preceding_text = "にっぽん";
   const auto bigram_ranked = converter.Convert("にほん", bigram_context);
-  Expect(!bigram_ranked.empty(), "expected candidates after context bigram boost");
-  Expect(bigram_ranked.front().surface == "日本", "bigram context should boost 日本");
+  ASSERT_FALSE(bigram_ranked.empty());
+  EXPECT_EQ(bigram_ranked.front().surface, "日本");
 
   converter.Commit({"NIPPON", "にほん", 1.0, azookey::core::CandidateSource::UserDictionary, "manual"},
                    azookey::core::ConversionContext{});
   const auto committed = converter.Convert("にほん", azookey::core::ConversionContext{});
-  Expect(!committed.empty(), "expected candidates after commit");
-  Expect(committed.front().surface == "NIPPON", "commit should feed learning path");
-}
-
-int main() {
-  try {
-    RunRomajiTests();
-    TestBuiltinDictionary();
-    TestTsvLoad();
-    TestPrefixFallback();
-    TestLongReadingPrefixFallback();
-    TestContextAware();
-    TestDebugInfoFormatting();
-    return 0;
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "FAIL: %s\n", e.what());
-    return 1;
-  }
+  ASSERT_FALSE(committed.empty());
+  EXPECT_EQ(committed.front().surface, "NIPPON");
 }

@@ -242,6 +242,62 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, LoadModelFailureRestoresFallbackConverter) {
+  const char* lpath = "azookey_host_engine_reload_failure.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_reload_success_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions good;
+  good.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(good).ok);
+  ASSERT_TRUE(engine->model_loaded());
+
+  azookey::host::ModelLoadOptions bad;
+  bad.path = TempPath("azookey_missing_after_success.gguf");
+  const auto failed = engine->LoadModelWithResult(bad);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(engine->model_loaded());
+
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().debug_info.find("zenzai-gguf-loaded"),
+            std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
+  const char* lpath = "azookey_host_engine_reload_success.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_reload_chain_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  const auto& debug = cands.front().debug_info;
+  const auto first = debug.find("zenzai-gguf-loaded");
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_EQ(debug.find("zenzai-gguf-loaded", first + 1), std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   const char* lpath = "azookey_host_engine_load_threaded.tsv";
   std::remove(lpath);

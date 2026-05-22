@@ -25,8 +25,7 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 
 class ZenzaiModelConverter final : public core::IConverter {
  public:
-  ZenzaiModelConverter(ZenzaiModelInfo info,
-                       std::unique_ptr<core::IConverter> fallback);
+  ZenzaiModelConverter(ZenzaiModelInfo info, core::IConverter* fallback);
 
   const ZenzaiModelInfo& info() const { return info_; }
 
@@ -47,7 +46,7 @@ class ZenzaiModelConverter final : public core::IConverter {
   void TagFallback(std::vector<core::Candidate>& candidates) const;
 
   ZenzaiModelInfo info_;
-  std::unique_ptr<core::IConverter> fallback_;
+  core::IConverter* fallback_;
 };
 
 }  // namespace azookey::host

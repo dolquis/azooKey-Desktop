@@ -83,7 +83,9 @@ class InferenceEngine {
   std::optional<std::string> last_error() const;
 
  private:
-  std::unique_ptr<core::IConverter> converter_;
+  std::unique_ptr<core::IConverter> fallback_converter_;
+  std::unique_ptr<core::IConverter> model_converter_;
+  core::IConverter* active_converter_{nullptr};
   learning::LearningStore* store_;
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};

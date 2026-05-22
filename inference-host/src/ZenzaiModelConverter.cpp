@@ -6,8 +6,6 @@
 #include <system_error>
 #include <utility>
 
-#include "azookey/core/SimpleConverter.h"
-
 namespace azookey::host {
 
 namespace {
@@ -94,16 +92,13 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
 }
 
 ZenzaiModelConverter::ZenzaiModelConverter(
-    ZenzaiModelInfo info, std::unique_ptr<core::IConverter> fallback)
+    ZenzaiModelInfo info, core::IConverter* fallback)
     : info_(std::move(info)),
-      fallback_(std::move(fallback)) {
-  if (!fallback_) {
-    fallback_ = std::make_unique<core::SimpleConverter>();
-  }
-}
+      fallback_(fallback) {}
 
 std::vector<core::Candidate> ZenzaiModelConverter::Convert(
     const std::string& kana, const core::ConversionContext& context) {
+  if (!fallback_) return {};
   auto candidates = fallback_->Convert(kana, context);
   TagFallback(candidates);
   return candidates;
@@ -111,6 +106,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
 std::vector<core::Candidate> ZenzaiModelConverter::PredictNext(
     const std::string& kana, const core::ConversionContext& context) {
+  if (!fallback_) return {};
   auto candidates = fallback_->PredictNext(kana, context);
   TagFallback(candidates);
   return candidates;
@@ -120,6 +116,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Correct(
     const std::string& kana,
     const core::CorrectionHint& hint,
     const core::ConversionContext& context) {
+  if (!fallback_) return {};
   auto candidates = fallback_->Correct(kana, hint, context);
   TagFallback(candidates);
   return candidates;
@@ -128,11 +125,13 @@ std::vector<core::Candidate> ZenzaiModelConverter::Correct(
 void ZenzaiModelConverter::Commit(
     const core::Candidate& selected_candidate,
     const core::ConversionContext& context) {
+  if (!fallback_) return;
   fallback_->Commit(selected_candidate, context);
 }
 
 void ZenzaiModelConverter::Learn(const std::string& committed_surface,
                                  const std::string& committed_reading) {
+  if (!fallback_) return;
   fallback_->Learn(committed_surface, committed_reading);
 }
 

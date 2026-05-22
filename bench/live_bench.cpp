@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <vector>
 
@@ -7,7 +9,12 @@
 #include "azookey/host/InferenceEngine.h"
 
 int main() {
-  azookey::learning::LearningStore store("/tmp/azookey_bench_learning.tsv");
+  constexpr double kMaxP95Ms = 50.0;
+  const auto learning_path =
+      std::filesystem::temp_directory_path() / "azookey_bench_learning.tsv";
+  std::remove(learning_path.string().c_str());
+
+  azookey::learning::LearningStore store(learning_path.string());
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {});
   engine.LoadModel();
 
@@ -28,6 +35,17 @@ int main() {
     return lat_ms[idx];
   };
 
-  std::cout << "p50_ms=" << pct(50) << " p95_ms=" << pct(95) << " p99_ms=" << pct(99) << std::endl;
+  const double p50 = pct(50);
+  const double p95 = pct(95);
+  const double p99 = pct(99);
+  std::cout << "p50_ms=" << p50 << " p95_ms=" << p95
+            << " p99_ms=" << p99 << " max_p95_ms=" << kMaxP95Ms
+            << std::endl;
+
+  std::remove(learning_path.string().c_str());
+  if (p95 >= kMaxP95Ms) {
+    std::cerr << "p95 exceeded threshold" << std::endl;
+    return 1;
+  }
   return 0;
 }

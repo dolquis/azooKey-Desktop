@@ -1,7 +1,6 @@
 #include "azookey/host/InferenceEngine.h"
 
-#include <filesystem>
-#include <system_error>
+#include "azookey/host/ZenzaiModelConverter.h"
 
 namespace azookey::host {
 
@@ -54,22 +53,22 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     return result;
   }
 
-  std::error_code ec;
-  const bool exists = std::filesystem::exists(config_.model_path, ec);
-  if (ec) {
-    result.error = "model file probe failed: " + ec.message();
-    last_error_ = result.error;
-    return result;
-  }
-  if (!exists) {
-    result.error = "model file not found";
+  auto probe = ProbeZenzaiGgufModel(config_.model_path);
+  if (!probe.ok) {
+    result.error = probe.error;
     last_error_ = result.error;
     return result;
   }
 
-  // M8 will replace this placeholder with a llama.cpp-backed IConverter.
-  result.error = "Zenzai model loading is not implemented yet";
-  last_error_ = result.error;
+  if (config_.backend == BackendKind::Cuda) {
+    config_.backend = BackendKind::Cpu;
+    last_error_ = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
+  }
+  converter_ = std::make_unique<ZenzaiModelConverter>(std::move(probe.info),
+                                                      std::move(converter_));
+  model_loaded_ = true;
+  result.ok = true;
+  result.error = last_error_;
   return result;
 }
 

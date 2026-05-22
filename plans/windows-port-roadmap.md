@@ -193,8 +193,14 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - llama.cpp バインディング選定は未着手（`docs/zenzai-gpu-route.md` で ggml-cuda 採用方針あり）。
 - **残作業**:
   - llama.cpp C-API バインディング選定（PoC で配布サイズ・初回起動時間を `bench/` で計測）。
-  - `LoadModel` 本実装、CMake オプション `AZOOKEY_BACKEND=cpu|cuda` の追加。
+  - `LoadModel` 本実装、CMake オプション `AZOOKEY_BACKEND=cpu|cuda` の追加
+    （`AZOOKEY_BACKEND` は M37 の `CMakePresets.json` の `cacheVariables`
+    としても設定できるようにする）。
   - モデル未配置時の `SimpleConverter` フォールバック維持。
+- **設計メモ**: バックエンド別実装（CPU/CUDA 等）は `core/IConverter` 実装
+  として `SimpleConverter` と差し替える方式で吸収する。第三者レビューが
+  提案した別系統の `IModelRuntime` 抽象は `IConverter` と二重抽象になるため
+  新設しない（`docs/dev-infrastructure-spec.md` §11.3）。
 - **受け入れ条件**:
   - `zenz-v3.1-small-gguf` 配置時に `LoadModel` 成功
   - 未配置時も Host が落ちず、固定テーブル候補が動く
@@ -253,6 +259,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **受け入れ条件**:
   - クリーンな Win11 VM でインストール → IME 選択 → 入力 → 確定が動く
   - アンインストールでレジストリ・ファイルが残らない
+- **設計メモ**: 設定 UI が読み書きするユーザーデータの保存先は M39 で確定
+  する `%LOCALAPPDATA%\azooKey\` レイアウトに合わせる。先行して M37〜M39
+  を完了しておくとパッケージング側の手戻りが減る。
 
 ### M12: 配布署名と CI ⚠️ build/test のみ完了
 
@@ -268,6 +277,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - signtool ステップ（EV/OV 証明書）。
   - MSIX/MSI 生成ステップ（M11 で `pkg/` 構成決定後）。
   - タグ push トリガで MSIX を Release に自動公開。
+- **設計メモ**: 現行 `windows.yml` の Debug/Release マトリクス化・preset
+  利用・Linux 補助ジョブ・bench smoke は M38（CI 品質ゲート拡張）で先に
+  整える。M12 はその拡張済み CI を前提に署名・Release 公開ステップを足す。
 - **受け入れ条件**:
   - main への merge で CI が緑 ✅（テストが個別 exe 実行で全件 pass）
   - タグ push で署名済み MSIX/MSI が Release に上がる
@@ -279,7 +291,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   詳細なテストカバレッジとギャップは `## テスト体系` 章を参照。
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。現状は TIP=`OutputDebugStringA`（DebugView）/ Host=stderr。
-  Phase 4 で JSON Lines ファイルログに切替予定。
+  JSON Lines ファイルログへの切替は M41（構造化ログと可観測性）で行う。
+  ログスキーマ・相関 ID・エラーコード体系は `docs/dev-infrastructure-spec.md`
+  §7 を正典とする。
 - **ドキュメント**: 各マイルストーン完了時に `docs/windows-tsf-host-architecture.md`
   を実装に合わせて更新する。
 
@@ -332,6 +346,12 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 10. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 11. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
+開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
+12. **JSON malformed/fuzz テスト** — `ipc/src/Json.cpp` にランダムバイト列・深すぎるネスト・巨大数・不正 Unicode escape・末尾ゴミ・最大長超過を投げてもクラッシュせず失敗を返すことを assertion 化（M40）。
+13. **`NamedPipeServer` 再接続耐性** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオ（M40 の複数接続・切断テスト、M42 の状態機械テスト）。
+14. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
+15. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
+
 ## リスクと不確実性
 
 未決の設計判断:
@@ -351,6 +371,10 @@ v1.0 リリースに向けたリスクと対応:
 | MSIX 配布 (M11) のユーザースコープ登録 | アンインストール後にレジストリが残る | 既に `DllRegisterServer` で HKCU 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
 | 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | Phase 3 中に WinUI 3 / WPF / Tauri を 1〜2 日比較スパイク |
 | 署名証明書の調達 (M12) | リリース日に直結 | Phase 4 着手前に EV/OV 証明書の手当てを並行 |
+| Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
+| IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
+| 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。即時の `nlohmann-json` 全置換はせず段階対応（同 §6, §11.2） |
+| 品質 KPI 未設定 | 改善効果を定量評価できない | レイテンシ・復旧時間・CI 成功率・永続化破損率の目標値を設定（同 §10） |
 
 ## スコープ外
 
@@ -473,6 +497,12 @@ Phase 6 完了 ─→ M28 ─┬─→ M29 ─→ M32
                      └─→ M33
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
+
+【開発基盤・品質強化トラック】（Phase 5〜7 に依存しない独立トラック）
+M37 ─┬─→ M38
+     └─→ M43
+M39 ─→ M41 ─→ M42
+M40（独立）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -494,6 +524,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   保存期間が長期化する。Phase 5 直後に前倒しして暗号化ギャップを早期に塞ぐ。
 - **M35 / M36-A は Phase 4 完了後に並行可能な独立トラック** — 詳細は
   「追加機能マイルストーン」章。
+- **開発基盤・品質強化トラック（M37〜M43）は Phase 5〜7 に依存しない独立
+  トラック** — 第三者レビューの改善指摘をマイルストーン化したもの。M37
+  （ビルド再現性）・M38（CI 拡張）・M39（永続化）は Phase 3 着手前の実施を
+  推奨し、M40（IPC/JSON 堅牢化）・M41（ログ）・M42（Host 再接続）・M43
+  （WIL）は Phase 3/4 と並行可能。詳細は「開発基盤・品質強化トラック」章と
+  `docs/dev-infrastructure-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
 
@@ -751,6 +787,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
+- **設計メモ**: 既存 `scripts/register.ps1` / `unregister.ps1` は MSIX
+  登録方式と混同されないよう「開発用」と明確化する（README 明記、または
+  `register-dev.ps1` への命名分離）。MSIX 登録経路と開発用 `regsvr32`
+  経路を取り違えると登録・解除事故につながるため、本マイルストーンで整理
+  する。
 - **参照仕様**: `docs/sideload-packaging-spec.md` §1
 
 ### M29: EV/OV コード署名 CI
@@ -919,6 +960,155 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - ハッシュ不一致のアセットは破棄しストアを変更しない
   - `trendingEnabled=false` で一切ネットワークアクセスしない
 - **参照仕様**: `docs/auto-word-registration-spec.md`
+
+## 開発基盤・品質強化トラック（M37〜M43）
+
+> Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。
+> **正典仕様**は `docs/dev-infrastructure-spec.md`。
+> 第三者レビュー 2 通の指摘を評価・取捨選択した結果をマイルストーン化した
+> もので、Phase 3（Zenzai 統合）/ Phase 4（配布）着手前の基盤固めにあたる。
+> M 番号は通し連番（既存最終 M36-B の続き）。spec から参照されるため
+> M 番号・Phase グルーピングは変更しない。
+
+### M37: ビルド再現性
+
+- **目的**: 手元・CI・AI エージェントでビルド入口を統一し、コンパイル
+  オプションを一元管理する。
+- **前提**: なし（独立トラック。Phase 3 着手前の実施を推奨）。
+- **変更対象**: `CMakePresets.json`（新規）、ルート `CMakeLists.txt`、
+  各 `*/CMakeLists.txt`、`.clang-format`（新規）、`.gitignore`。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §2。
+  - `CMakePresets.json`（`windows-debug` / `windows-release`）
+  - `azookey_project_options` / `azookey_project_warnings` の INTERFACE
+    target 化と各 target への適用（`/W4` は段階導入）
+  - `.clang-format`（Google ベース）追加。全体整形は独立 PR に分離
+  - `.gitignore` に Windows/CMake エントリ追加
+- **受け入れ条件**:
+  - `cmake --preset windows-debug` / `windows-release` の
+    configure→build→test が成功する
+  - 既存全 target が共通オプション/警告 target をリンクしてビルドできる
+  - `.clang-format` がルートに存在し新規コードに差分が出ない
+  - ビルド生成物が `git status` に現れない
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §2, §3
+
+### M38: CI 品質ゲート拡張
+
+- **目的**: Debug/Release 両構成・preset 利用・移植性チェックを CI に加え、
+  品質ゲートを強化する。
+- **前提**: M37 完了（preset / clang-format）。
+- **変更対象**: `.github/workflows/windows.yml`、Linux 補助ワークフロー。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §4。
+  - Debug/Release マトリクス、runner を `windows-2022` に明示
+  - CI の configure/build/test を preset 経由に統一
+  - `clang-format --dry-run --Werror`（全体整形 PR 後に有効化）
+  - Linux 補助ジョブ（非 Windows 依存部分のみビルド・テスト）
+  - bench smoke の CTest 実行、artifact 整理
+- **受け入れ条件**:
+  - Debug / Release 両構成が CI で緑
+  - Linux 補助ジョブが非 Windows 部分のテストを実行する
+  - bench smoke が CTest 経由で exit=0
+  - PR コメントが config ごとの結果に対応する
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §4
+
+### M39: ユーザーデータ永続化の堅牢化
+
+- **目的**: 学習・辞書ファイルの保存先を実行ディレクトリ依存から脱却させ、
+  原子的書き込みで破損を防ぐ。
+- **前提**: なし（独立トラック。Phase 3 着手前の実施を推奨）。
+- **変更対象**: `inference-host/src/main.cpp`、
+  `inference-host/src/`（パス解決ロジック新規）、
+  `learning/src/LearningStore.cpp`・`UserDictionary.cpp`（原子的書き込み）。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §5。
+  - 既定保存先を `%LOCALAPPDATA%\azooKey\{config,data,logs,models}\` に
+  - `SHGetKnownFolderPath` でのパス取得、サブディレクトリ自動作成
+  - `--learning` / `--user-dict` 明示指定を優先するパス解決規約
+  - 一時ファイル → rename による原子的書き込み
+  - 保存先決定ロジックの unit test
+- **受け入れ条件**:
+  - 明示指定なしで `%LOCALAPPDATA%\azooKey\data\` 配下が使われる
+  - `--learning` / `--user-dict` 指定時は指定パスが優先される
+  - 必要なディレクトリが自動作成される
+  - 書き込み中クラッシュで既存ファイルが壊れない
+  - 保存先決定ロジックの unit test が緑、既存テストが回帰しない
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §5
+
+### M40: IPC/JSON 堅牢化
+
+- **目的**: 自前 JSON パーサと Named Pipe 入力の境界堅牢性を上げ、IPC
+  境界での事故を減らす。
+- **前提**: なし（独立トラック。Phase 3/4 と並行可能）。
+- **変更対象**: `ipc/src/Json.cpp`、`ipc/src/Payloads.cpp`、
+  `ipc/src/NamedPipeTransport.cpp`、`ipc/tests/`。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
+  - JSON: ネスト深度上限・最大入力長・サロゲートペア結合・不正 UTF-8/
+    制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否
+  - malformed/fuzz テスト追加（ランダムバイト列でクラッシュしない 等）
+  - Named Pipe: Release で SID 取得失敗時 fail-closed、接続インスタンス
+    上限、最大フレームサイズ見直し、Handshake トークン、client cleanup
+- **受け入れ条件**:
+  - 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
+  - malformed JSON・ランダムバイト列でクラッシュしない
+  - Release ビルドで SID 取得失敗時に Host 起動が失敗する
+  - 複数接続・切断テストが追加され緑
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §6
+
+### M41: 構造化ログと可観測性
+
+- **目的**: 遅延要因の切り分けとエラー分類を可能にする構造化ログ基盤を
+  整える。
+- **前提**: M39 完了（ログ出力先 `%LOCALAPPDATA%\azooKey\logs\`）。
+- **変更対象**: `core/` または各モジュールの軽量 JSON Lines ロガー
+  （新規）、`tsf-tip/src/TextService.cpp`、`inference-host/src/`、
+  `ipc/src/`。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §7。
+  - JSON Lines ログ（`ts`/`level`/`component`/`request_id`/`phase`/
+    `latency_ms`/`result`/`error_code`）
+  - 相関 ID（`RequestScheduler` の連番を流用）とフェーズ別レイテンシ
+  - エラーコード体系 enum（transport / protocol / business）
+  - タイムアウト規約（ソフト/ハード）
+  - 入力本文・候補語のログ出力は Debug 限定（プライバシー配慮）
+- **受け入れ条件**:
+  - TIP / Host が JSON Lines ログを所定ディレクトリに出力する
+  - 各行に `request_id` / `phase` / `latency_ms` / `result` が含まれる
+  - エラーコードが 3 カテゴリ enum で固定される
+  - Release ビルドで入力本文・候補語がログに出力されない
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §7
+
+### M42: Host 可用性・再接続
+
+- **目的**: Host 停止・無応答時も入力が止まらないよう、TIP 側の再接続と
+  劣化モードを実装する。
+- **前提**: M41 完了（状態遷移ログ）。
+- **変更対象**: `tsf-tip/src/TextService.cpp`（`IpcWorkerThread`）、
+  `ipc/`（`Health` 利用）。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §8。
+  - 接続状態機械（Disconnected/Connecting/Handshaking/Ready/Degraded）
+  - exponential backoff + jitter による再接続
+  - ヘルス監視（`Health` メッセージ流用）
+  - 無応答時の劣化モード（`SimpleConverter` 相当のローカルフォールバック）
+- **受け入れ条件**:
+  - Host 停止 → 再起動で TIP が自動再接続する
+  - Host 無応答時に TIP が劣化モードへ移行し入力が止まらない
+  - 状態遷移がログに記録され、Host 復帰後に `Ready` へ復帰する
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §8
+
+### M43: WIL 段階導入
+
+- **目的**: HANDLE / COM / レジストリ / `HRESULT` の管理を WIL の RAII で
+  安全化する。
+- **前提**: M37 完了（依存導入手段）。M40 / M39 と並行で対象ファイルを
+  WIL 化すると効率的。
+- **変更対象**: 依存取り込み（submodule または `FetchContent`）、
+  `tsf-tip/src/`、`ipc/src/NamedPipeTransport.cpp`。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §9。
+  - WIL を header-only 依存として取り込み（vcpkg は使わない）
+  - 新規コードは WIL の RAII 型を使用
+  - `tsf-tip` の COM / HANDLE / レジストリ処理を段階的に RAII 化
+- **受け入れ条件**:
+  - WIL の取り込みがオフラインビルドを壊さない
+  - 新規コードが WIL の RAII 型を使用する
+  - 既存テストが回帰しない
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §9
 
 ## 横断テーマと Phase の対応
 

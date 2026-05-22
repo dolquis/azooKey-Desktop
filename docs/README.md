@@ -7,7 +7,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 | 正典範囲 |
 |---|---|---|
-| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M36 の定義・受け入れ条件・依存関係・Phase 1〜7・v1.0 実行計画・テスト体系の正典** |
+| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M43 の定義・受け入れ条件・依存関係・Phase 1〜7・開発基盤トラック・v1.0 実行計画・テスト体系の正典** |
 
 ## アーキテクチャ・設計
 
@@ -27,6 +27,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド |
 | [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI |
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 7（M28〜M34）サイドロード配信 |
+| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | 開発基盤・品質強化トラック（M37〜M43）ビルド再現性・CI・IPC/JSON 堅牢化・観測性・Host 可用性 |
 
 ## 運用
 
@@ -49,3 +50,4 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | Phase 6 | Windows ネイティブ深耕 | M20〜M27 |
 | Phase 7 | サイドロード配信 | M28〜M34 |
 | 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B |
+| 開発基盤 | ビルド再現性・CI・IPC 堅牢化・観測性・可用性（Phase 連番とは独立） | M37〜M43 |

@@ -1,4 +1,6 @@
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +21,22 @@ namespace ipc = azookey::ipc;
 namespace {
 
 constexpr int kProtocolVersion = 1;
+
+std::string TempPath(const char* name) {
+  return (std::filesystem::temp_directory_path() / name).string();
+}
+
+void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
+  std::ofstream out(path, std::ios::binary);
+  out.write("GGUF", 4);
+  const unsigned char bytes[4] = {
+      static_cast<unsigned char>(version & 0xFF),
+      static_cast<unsigned char>((version >> 8) & 0xFF),
+      static_cast<unsigned char>((version >> 16) & 0xFF),
+      static_cast<unsigned char>((version >> 24) & 0xFF),
+  };
+  out.write(reinterpret_cast<const char*>(bytes), 4);
+}
 
 }  // namespace
 
@@ -231,6 +249,45 @@ TEST_F(DispatcherTest, LoadModelRejectsUnsupportedBackend) {
   EXPECT_FALSE(parsed->ok);
   EXPECT_TRUE(parsed->error.has_value());
   EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cpu);
+}
+
+TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
+  const std::string model_path = TempPath("azookey_dispatcher_valid_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "cpu";
+
+  auto env = MakeReq(68, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseLoadModelResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_FALSE(parsed->error.has_value());
+
+  auto health_env = MakeReq(69, ipc::MessageType::Health, "{}");
+  auto health_resp = dispatcher.Dispatch(health_env);
+  ASSERT_TRUE(health_resp.has_value());
+  auto health = ipc::ParseHealth(health_resp->payload_json);
+  ASSERT_TRUE(health.has_value());
+  EXPECT_EQ(health->status, "ok");
+  EXPECT_EQ(health->backend, "cpu");
+  EXPECT_TRUE(health->model_loaded);
+
+  ipc::HandshakeRequest hreq;
+  hreq.tip_version = "0.1.0";
+  hreq.protocol_version = kProtocolVersion;
+  auto henv = MakeReq(70, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(hreq));
+  auto hresp = dispatcher.Dispatch(henv);
+  ASSERT_TRUE(hresp.has_value());
+  auto handshake = ipc::ParseHandshakeResponse(hresp->payload_json);
+  ASSERT_TRUE(handshake.has_value());
+  EXPECT_TRUE(handshake->model_loaded);
+
+  std::remove(model_path.c_str());
 }
 
 TEST_F(DispatcherTest, Health) {

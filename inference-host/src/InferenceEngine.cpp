@@ -1,7 +1,6 @@
 #include "azookey/host/InferenceEngine.h"
 
-#include <filesystem>
-#include <system_error>
+#include "azookey/host/ZenzaiModelConverter.h"
 
 namespace azookey::host {
 
@@ -17,7 +16,8 @@ core::ConversionContext BuildContext(const std::string& kana, const std::string&
 InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
                                  learning::LearningStore* store,
                                  EngineConfig config)
-    : converter_(std::move(converter)),
+    : fallback_converter_(std::move(converter)),
+      active_converter_(fallback_converter_.get()),
       store_(store),
       reranker_(store),
       config_(std::move(config)) {}
@@ -46,6 +46,8 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   config_.backend = options.backend;
   config_.n_gpu_layers = options.n_gpu_layers;
   model_loaded_ = false;
+  model_converter_.reset();
+  active_converter_ = fallback_converter_.get();
   last_error_.reset();
 
   if (config_.model_path.empty()) {
@@ -54,22 +56,23 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     return result;
   }
 
-  std::error_code ec;
-  const bool exists = std::filesystem::exists(config_.model_path, ec);
-  if (ec) {
-    result.error = "model file probe failed: " + ec.message();
-    last_error_ = result.error;
-    return result;
-  }
-  if (!exists) {
-    result.error = "model file not found";
+  auto probe = ProbeZenzaiGgufModel(config_.model_path);
+  if (!probe.ok) {
+    result.error = probe.error;
     last_error_ = result.error;
     return result;
   }
 
-  // M8 will replace this placeholder with a llama.cpp-backed IConverter.
-  result.error = "Zenzai model loading is not implemented yet";
-  last_error_ = result.error;
+  if (config_.backend == BackendKind::Cuda) {
+    config_.backend = BackendKind::Cpu;
+    last_error_ = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
+  }
+  model_converter_ = std::make_unique<ZenzaiModelConverter>(
+      std::move(probe.info), fallback_converter_.get());
+  active_converter_ = model_converter_.get();
+  model_loaded_ = true;
+  result.ok = true;
+  result.error = last_error_;
   return result;
 }
 
@@ -125,7 +128,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
-  auto converted = converter_->Convert(kana, BuildContext(kana, context));
+  auto converted = active_converter_->Convert(kana, BuildContext(kana, context));
   merged.insert(merged.end(),
                 std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
@@ -138,7 +141,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
                                                                const std::string& context,
                                                                uint64_t now_epoch_sec) {
-  auto candidates = converter_->PredictNext(kana, BuildContext(kana, context));
+  auto candidates = active_converter_->PredictNext(kana, BuildContext(kana, context));
   return reranker_.Apply(kana, std::move(candidates), now_epoch_sec);
 }
 
@@ -151,7 +154,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   core::CorrectionHint hint;
   hint.rejected_surface = rejected_surface;
   hint.intent = "user_rejection";
-  auto candidates = converter_->Correct(kana, hint, conversion_context);
+  auto candidates = active_converter_->Correct(kana, hint, conversion_context);
   return reranker_.Apply(kana, std::move(candidates), now_epoch_sec);
 }
 
@@ -160,8 +163,8 @@ void InferenceEngine::CommitObservation(const std::string& reading, const std::s
     store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
     store_->Save();
   }
-  converter_->Commit(core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
-                     core::ConversionContext{});
+  active_converter_->Commit(core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
+                            core::ConversionContext{});
 }
 
 
@@ -176,8 +179,8 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
 
   core::ConversionContext context;
   context.rejected_surfaces.push_back(rejected_surface);
-  converter_->Commit(core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary, "correction-commit"},
-                     context);
+  active_converter_->Commit(core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary, "correction-commit"},
+                            context);
 }
 
 }  // namespace azookey::host

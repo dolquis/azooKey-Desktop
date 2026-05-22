@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -22,6 +23,22 @@ std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
   cfg.learning_alpha = 0.8;
   return std::make_unique<azookey::host::InferenceEngine>(
       std::make_unique<azookey::core::SimpleConverter>(), &store, cfg);
+}
+
+std::string TempPath(const char* name) {
+  return (std::filesystem::temp_directory_path() / name).string();
+}
+
+void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
+  std::ofstream out(path, std::ios::binary);
+  out.write("GGUF", 4);
+  const unsigned char bytes[4] = {
+      static_cast<unsigned char>(version & 0xFF),
+      static_cast<unsigned char>((version >> 8) & 0xFF),
+      static_cast<unsigned char>((version >> 16) & 0xFF),
+      static_cast<unsigned char>((version >> 24) & 0xFF),
+  };
+  out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
 }  // namespace
@@ -144,6 +161,140 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   EXPECT_EQ(engine->config().n_gpu_layers.value(), 35);
   EXPECT_FALSE(engine->model_loaded());
 
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
+  const char* lpath = "azookey_host_engine_load_valid.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_minimal_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+
+  const auto result = engine->LoadModelWithResult(options);
+  EXPECT_TRUE(result.ok);
+  EXPECT_FALSE(result.error.has_value());
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_FALSE(engine->last_error().has_value());
+
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"),
+            std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
+  const char* lpath = "azookey_host_engine_load_invalid.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_invalid_zenzai.gguf");
+  {
+    std::ofstream out(model_path, std::ios::binary);
+    out << "not gguf";
+  }
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  const auto result = engine->LoadModelWithResult(options);
+  EXPECT_FALSE(result.ok);
+  EXPECT_TRUE(result.error.has_value());
+  EXPECT_FALSE(engine->model_loaded());
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
+  const char* lpath = "azookey_host_engine_load_cuda.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_cuda_fallback_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cuda;
+  options.n_gpu_layers = 35;
+
+  const auto result = engine->LoadModelWithResult(options);
+  EXPECT_TRUE(result.ok);
+  EXPECT_TRUE(result.error.has_value());
+  EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cpu);
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_EQ(engine->last_error(), result.error);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadModelFailureRestoresFallbackConverter) {
+  const char* lpath = "azookey_host_engine_reload_failure.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_reload_success_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions good;
+  good.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(good).ok);
+  ASSERT_TRUE(engine->model_loaded());
+
+  azookey::host::ModelLoadOptions bad;
+  bad.path = TempPath("azookey_missing_after_success.gguf");
+  const auto failed = engine->LoadModelWithResult(bad);
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(engine->model_loaded());
+
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().debug_info.find("zenzai-gguf-loaded"),
+            std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
+  const char* lpath = "azookey_host_engine_reload_success.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_reload_chain_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  const auto& debug = cands.front().debug_info;
+  const auto first = debug.find("zenzai-gguf-loaded");
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_EQ(debug.find("zenzai-gguf-loaded", first + 1), std::string::npos);
+
+  std::remove(model_path.c_str());
   std::remove(lpath);
 }
 

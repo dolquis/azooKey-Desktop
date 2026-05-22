@@ -13,6 +13,12 @@ option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 option(AZOOKEY_FETCH_GOOGLETEST
        "Download GoogleTest via FetchContent when it is not found locally" OFF)
+set(AZOOKEY_BACKEND "cpu" CACHE STRING "Default inference backend: cpu or cuda")
+set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda)
+
+if(NOT AZOOKEY_BACKEND STREQUAL "cpu" AND NOT AZOOKEY_BACKEND STREQUAL "cuda")
+  message(FATAL_ERROR "AZOOKEY_BACKEND must be either 'cpu' or 'cuda'")
+endif()
 
 if(AZOOKEY_BUILD_TESTS)
   enable_testing()

@@ -21,10 +21,20 @@ volatile std::sig_atomic_t g_stop_requested = 0;
 
 void HandleSignal(int) { g_stop_requested = 1; }
 
+void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
+  const std::string backend = AZOOKEY_BACKEND_DEFAULT;
+  if (backend == "cuda") {
+    config.backend = azookey::host::BackendKind::Cuda;
+  } else {
+    config.backend = azookey::host::BackendKind::Cpu;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
+  ApplyDefaultBackend(config);
   std::string learning_path = "azookey_learning.tsv";
   std::string user_dict_path = "azookey_user_dict.json";
   std::string mock_dict_path;

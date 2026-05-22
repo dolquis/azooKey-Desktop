@@ -177,7 +177,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 単体テスト: 同一 context で複数回確定した候補が上位に来る（確認済み）
   - 手動: 同じ語を 3 回確定後、4 回目に第一候補で出る（M6 TIP 配線後に実機確認）
 
-### M8: Zenzai モデルのロード ⚠️ スケルトンのみ
+### M8: Zenzai モデルのロード 🚧 初期ロード境界実装中
 
 - **目的**: `inference-host` が gguf モデルを optional にロードでき、
   CPU/CUDA 切替が configure 可能。
@@ -189,14 +189,16 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - モデル未配置時はモックにフォールバック
 - **現状**:
   - Payloads.cpp に `LoadModelRequest(path, backend, n_gpu_layers)` / `Response` 定義済み。
-  - `Dispatcher::HandleLoadModel` は OK/error を返すが、`InferenceEngine::LoadModel` は `return true` のスタブ。
-  - llama.cpp バインディング選定は未着手（`docs/zenzai-gpu-route.md` で ggml-cuda 採用方針あり）。
+  - `Dispatcher::HandleLoadModel` は `LoadModelRequest` を `InferenceEngine::LoadModelWithResult` に渡し、OK/error を返す。
+  - `InferenceEngine::LoadModel` は空 path では `SimpleConverter` fallback を維持し、GGUF path 指定時は `ZenzaiModelConverter` で magic/version を検証して `model_loaded` を立てる。
+  - `AZOOKEY_BACKEND=cpu|cuda` CMake オプションを追加済み。CUDA は llama.cpp 未接続のため、現時点では valid GGUF を CPU fallback としてロードし、`Health(status=degraded, last_error=...)` で観測する。
+  - `inference-host/tests` に valid GGUF / invalid GGUF / CUDA fallback / Handshake・Health 反映のテストを追加済み。
 - **残作業**:
-  - llama.cpp C-API バインディング選定（PoC で配布サイズ・初回起動時間を `bench/` で計測）。
-  - `LoadModel` 本実装、CMake オプション `AZOOKEY_BACKEND=cpu|cuda` の追加
-    （`AZOOKEY_BACKEND` は M37 の `CMakePresets.json` の `cacheVariables`
-    としても設定できるようにする）。
-  - モデル未配置時の `SimpleConverter` フォールバック維持。
+  - llama.cpp C-API を `ZenzaiModelConverter` 内に接続し、GGUF から実候補を生成する。
+  - Zenzai ロード時間・推論 p50/p95 を `bench/` に追加し、実モデルで計測する。
+  - CUDA backend を optional link し、CUDA 初期化失敗時の CPU fallback を実機で確認する。
+  - `AZOOKEY_BACKEND` を M37 の `CMakePresets.json` の `cacheVariables`
+    としても設定できるようにする。
 - **設計メモ**: バックエンド別実装（CPU/CUDA 等）は `core/IConverter` 実装
   として `SimpleConverter` と差し替える方式で吸収する。第三者レビューが
   提案した別系統の `IModelRuntime` 抽象は `IConverter` と二重抽象になるため
@@ -322,17 +324,20 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 | `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ |
 | `ipc_tip_client_tests` | `tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates |
 | `learning_tests` | `learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
+| `reranker_tests` | `reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
 | `user_dictionary_tests` | `user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
 | `host_engine_tests` | `engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload |
 | `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/Cancel/Commit/AddUserWord/RemoveUserWord/Health の全 8 ハンドラ |
+| `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)` |
+| `bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
-短期（Phase 3 着手前）:
-1. **`Reranker` 直接テスト** — 現状 `learning_test.cpp` で間接的に検証するのみ。`store_ == nullptr` パス、空 candidates、複数候補の安定ソート順、時間減衰 (`exp(-0.15 * days)`) の境界を直接 assertion 化。
-2. **`RequestScheduler` 直接テスト** — `dispatcher_test.cpp` の `TestQueryCancelBeforeReply`/`TestCancelMessageNoReply` で間接的に検証するのみ。`NextRequestId` 連番、`Cancel` → `IsCanceled` セット意味、`MarkLatest`/`IsLatest` の単一最新ガードを直接テスト。
-3. **`SimpleConverter` 長 reading 性能** — 8 文字以上の reading で prefix fallback 経路の品質を assertion 化。
+短期（Phase 3 着手前）: ✅ 解消済み
+1. **`Reranker` 直接テスト** — `reranker_tests` で `store_ == nullptr` パス、空 candidates、複数候補の安定ソート順、時間減衰 (`exp(-0.15 * days)`) 境界、学習ブースト、correction downweight を assertion 化。
+2. **`RequestScheduler` 直接テスト** — `host_scheduler_tests` で `NextRequestId` 連番、`Cancel` → `IsCanceled` セット意味、`MarkLatest`/`IsLatest` の単一最新ガード、並列 ID 採番 smoke を直接検証。
+3. **`SimpleConverter` 長 reading prefix fallback** — `simple_converter_test.cpp::TestLongReadingPrefixFallback` で 8 文字以上の reading から長い辞書 entry へ prefix fallback する品質を assertion 化。
 
 中期（Phase 3 / Zenzai 統合と並行）:
 4. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
@@ -342,7 +347,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 
 長期（Phase 4 / 配布前に必須）:
 8. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
-9. **bench smoke** — `bench/azookey_bench.exe` が CTest から呼べて exit=0 と p50 < 50ms（CPU SimpleConverter）を満たすことを CI で。
+9. ✅ **bench smoke** — `bench/azookey_bench.exe` を `bench_smoke` として CTest から呼び、exit=0 と p95 < 50ms（CPU SimpleConverter）を満たすことを CI で検証。
 10. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 11. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
@@ -405,7 +410,8 @@ v1.0 リリースに向けたリスクと対応:
 ### Phase 3: 実 Zenzai と辞書 UI のつなぎ込み（M8/M9、3〜5 週）🚧 着手対象
 
 1. **M8 Zenzai 統合** — `inference-host/src/InferenceEngine.cpp::LoadModel`
-   の本実装。llama.cpp の C-API バインディングを採用、CMake オプションで
+   の本実装。初期境界として GGUF magic/version 検証と `ZenzaiModelConverter`
+   差し替えを実装済み。次に llama.cpp の C-API バインディングを接続し、CMake オプションで
    `AZOOKEY_BACKEND=cpu|cuda` を切替。配布サイズと初回起動時間を `bench/` で
    計測。モデル未配置時は `SimpleConverter` フォールバックを維持。
    `docs/zenzai-gpu-route.md` を実装と整合させる。
@@ -427,6 +433,7 @@ v1.0 リリースに向けたリスクと対応:
 
 **Phase 3 で触るファイル**:
 - `inference-host/src/InferenceEngine.cpp` — `LoadModel` の本実装、Zenzai converter 配線
+- `inference-host/src/ZenzaiModelConverter.cpp` — GGUF ロード境界、llama.cpp 接続点
 - `inference-host/include/azookey/host/InferenceEngine.h` — モデル状態の保持・解放 API
 - `core/include/azookey/core/IConverter.h` — Zenzai 実装が嵌まることを確認
 - `bench/` — Zenzai ロード時間・推論レイテンシを計測

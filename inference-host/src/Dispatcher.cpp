@@ -98,10 +98,16 @@ std::optional<ipc::Envelope> Dispatcher::HandlePing(const ipc::Envelope& req) {
 
 std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) {
   ipc::HealthPayload p;
-  p.status = "ok";
   p.backend = BackendName(engine_->backend());
   p.model_loaded = engine_->model_loaded();
   p.last_error = engine_->last_error();
+  if (!p.last_error) {
+    p.status = "ok";
+  } else if (p.model_loaded) {
+    p.status = "degraded";
+  } else {
+    p.status = "error";
+  }
   return MakeResponse(req, ipc::BuildHealth(p));
 }
 

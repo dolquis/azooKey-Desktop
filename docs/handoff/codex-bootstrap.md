@@ -80,8 +80,40 @@ AGENTS.md                              ← 新規(または既存追記)。Codex
 > **重要**: Codex CLI は `.codex/config.toml` を **trust された project でのみ** 読み込む。
 > 各開発者が初回起動時に Codex の trust プロンプトに同意する必要がある。
 
+> **TOML 文法上の注意**: トップレベルのスカラーキー (例:
+> `sandbox_mode`, `approval_policy`) は **最初の `[テーブル]` 見出しより前** に
+> 置かなければ、後続のテーブルに飲み込まれてしまう。下記サンプルは
+> 「トップレベル → テーブル定義」の順に並べているのでこの順序を保つこと。
+
 ```toml
 #:schema https://developers.openai.com/codex/config-schema.json
+
+# ─────────────────────────────────────────────
+# トップレベル設定 (サンドボックス / 承認ポリシー)
+# ─────────────────────────────────────────────
+
+# workspace-write: リポジトリ内の書き込みは許可、外部ネットワークは別途許可
+sandbox_mode = "workspace-write"
+
+# 重要操作はユーザー承認を仰ぐ
+approval_policy = "on-request"
+
+# ─────────────────────────────────────────────
+# サンドボックス: workspace-write の挙動
+# ─────────────────────────────────────────────
+
+[sandbox_workspace_write]
+# MCP HTTP(context7 等)と GoogleTest FetchContent のためにネットワーク許可
+network_access = true
+
+# ─────────────────────────────────────────────
+# Windows ネイティブ実行時の設定
+# ─────────────────────────────────────────────
+
+# TIP 登録だけ別途管理者で実行する運用なので unelevated を維持
+[windows]
+sandbox = "unelevated"
+sandbox_private_desktop = true
 
 # ─────────────────────────────────────────────
 # MCP サーバー定義(共有)
@@ -93,39 +125,19 @@ url = "https://mcp.context7.com/mcp"
 startup_timeout_sec = 15
 
 # PowerShell.MCP: register.ps1 等の管理者コマンドを安全に提示
-# Windows ホスト側に PowerShell 7+ と PowerShell.MCP のインストールが必要
+# PowerShell.MCP は PowerShell.MCP.Proxy.exe を stdio で起動する仕様。
+# 各開発者は Install-PSResource PowerShell.MCP 後に
+# `[Environment]::SetEnvironmentVariable('POWERSHELL_MCP_PROXY',
+#   (Get-MCPProxyPath), 'User')` で環境変数にパスを永続化する。
 [mcp_servers.powershell]
-command = "pwsh"
-args = ["-NoProfile", "-Command", "Start-McpServer"]
+command = "${POWERSHELL_MCP_PROXY}"
 startup_timeout_sec = 30
 
 # Windows-MCP: UI Automation で TIP の実アプリ入力を検証
-# WSL 利用時は powershell.exe 経由で Windows 側に橋渡し
 [mcp_servers.windows-mcp]
-command = "powershell.exe"
-args = ["-Command", "uvx windows-mcp serve"]
+command = "uvx"
+args = ["windows-mcp", "serve"]
 startup_timeout_sec = 30
-
-# ─────────────────────────────────────────────
-# サンドボックス / 承認ポリシー
-# ─────────────────────────────────────────────
-
-# workspace-write: リポジトリ内の書き込みは許可、外部ネットワークは制限
-sandbox_mode = "workspace-write"
-
-[sandbox_workspace_write]
-network_access = true   # MCP HTTP(context7 等)と GoogleTest FetchContent のため
-
-# 既定 = on-request (重要操作はユーザー承認を仰ぐ)
-approval_policy = "on-request"
-
-# ─────────────────────────────────────────────
-# Windows ネイティブ実行時の設定
-# ─────────────────────────────────────────────
-
-[windows]
-sandbox = "unelevated"           # TIP 登録だけ別途管理者で実行する運用
-sandbox_private_desktop = true
 
 # ─────────────────────────────────────────────
 # プロジェクトルート判定
@@ -200,9 +212,11 @@ ctest --test-dir build -C Debug --output-on-failure
 
 `scripts/register.ps1` / `unregister.ps1` は管理者 PowerShell で実行する。
 **Codex CLI は単独で実行を完了させてはならない**。PowerShell.MCP の共有コンソール経由で、
-コマンド提示までに留め、実行はユーザーが管理者で確定する。失敗時は
-`HKLM\SOFTWARE\Classes\CLSID\{...}` と `HKLM\SOFTWARE\Microsoft\CTF\TIP\{...}` の
-登録状態を確認。
+コマンド提示までに留め、実行はユーザーが管理者で確定する。本リポジトリの
+`DllRegisterServer` と `register.ps1` は user-scope (HKCU) に登録するため、
+失敗時は `HKCU\Software\Classes\CLSID\{...}` と
+`HKCU\Software\Microsoft\CTF\TIP\{...}` の登録状態を確認すること
+(レビュー指摘で修正: 実装は HKLM ではなく HKCU を操作する)。
 
 ## レイテンシ計測
 

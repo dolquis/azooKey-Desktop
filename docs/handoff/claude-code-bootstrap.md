@@ -75,8 +75,7 @@
     },
     "powershell": {
       "type": "stdio",
-      "command": "pwsh",
-      "args": ["-NoProfile", "-Command", "Start-McpServer"]
+      "command": "${POWERSHELL_MCP_PROXY}"
     },
     "windows-mcp": {
       "type": "stdio",
@@ -96,6 +95,12 @@
    `WebFetch` で確認して正確な起動方法に置き換えること：
    - PowerShell.MCP: <https://github.com/yotsuda/PowerShell.MCP>
    - Windows-MCP: <https://github.com/CursorTouch/Windows-MCP>
+   - 上記サンプルでは PowerShell.MCP の `command` を環境変数
+     `${POWERSHELL_MCP_PROXY}` で参照している。
+     PowerShell.MCP は `pwsh -Command Start-McpServer` のような cmdlet ではなく
+     `PowerShell.MCP.Proxy.exe` という proxy 実行ファイルを stdio で起動する仕様
+     なので、各開発者は `Install-PSResource PowerShell.MCP` 後に
+     `Get-MCPProxyPath` の戻り値を `POWERSHELL_MCP_PROXY` に永続化する。
 2. macOS / Linux のメンテナがこのリポジトリを開いた場合、`powershell` / `windows-mcp` は
    起動失敗するが、それは想定動作(Windows 環境専用ツール)。`context7` だけは全 OS で動く。
 3. シークレットを直接書かない。必要があれば `${ENV_VAR}` で参照。
@@ -289,8 +294,11 @@ ctest --test-dir build -C Debug --output-on-failure
 
 `scripts/register.ps1` / `unregister.ps1` は管理者 PowerShell で実行する。
 **Claude Code が単独で実行を完了させてはならない**。PowerShell.MCP の共有コンソール経由で、
-コマンド提示までに留めること。失敗時は `HKLM\SOFTWARE\Classes\CLSID\{...}` と
-`HKLM\SOFTWARE\Microsoft\CTF\TIP\{...}` の登録状態を確認。
+コマンド提示までに留めること。本リポジトリの `DllRegisterServer` と `register.ps1` は
+user-scope (HKCU) に登録するため、失敗時は
+`HKCU\Software\Classes\CLSID\{...}` と
+`HKCU\Software\Microsoft\CTF\TIP\{...}` の登録状態を確認すること
+(レビュー指摘で修正: 実装は HKLM ではなく HKCU を操作する)。
 
 ## レイテンシ計測
 

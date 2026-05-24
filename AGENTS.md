@@ -57,3 +57,58 @@ gh pr create \
 - ロードマップへのリンクは README に置いてよいが、ロードマップの中身を
   README にコピーしない（リンクのみ、要約は 1〜2 行まで）。
 - 例外的に README を肥大化させる必要があるときは、ユーザーに事前確認する。
+
+## エージェントツール構成 (.claude/ .codex/ .agents/)
+
+本リポジトリには Claude Code と Codex CLI 双方のための共有設定がコミット
+されている。ビルド・CTest・bench 実行・TIP 登録の標準手順は `README.md` を
+参照する (重複記述はしない)。本セクションはエージェント固有の構成と運用ルール
+のみを扱う。再導入や横展開のための詳細手順書は `docs/handoff/` にある。
+
+### MCP サーバー (`.mcp.json` / `.codex/config.toml`)
+
+- `context7` … TSF / COM / Win32 API の公式ドキュメント参照 (全 OS で動作)。
+- `powershell` … PowerShell.MCP。`scripts/register.ps1` 等の管理者コマンドを
+  共有コンソール経由で提示する用途。**実行はユーザが管理者 PowerShell で
+  完了させること**。エージェントが単独で TIP 登録を完了させてはならない。
+- `windows-mcp` … UI Automation で TIP の実アプリ動作を検証 (Windows 専用)。
+
+`powershell` MCP の `command` には環境変数 `POWERSHELL_MCP_PROXY` を参照させて
+いる。Windows 開発者は `Install-PSResource PowerShell.MCP` 後に以下を一度実行
+して PowerShell.MCP の Proxy パスを永続化すること:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'POWERSHELL_MCP_PROXY', (Get-MCPProxyPath), 'User')
+```
+
+macOS / Linux のメンテナがリポジトリを開いた場合、`powershell` /
+`windows-mcp` は起動失敗するが想定動作 (`context7` のみ全 OS で動く)。
+
+### Claude Code 公式マーケットプラグイン (`.claude/settings.json`)
+
+`enabledPlugins` で以下を有効化している (公式マーケット `claude-plugins-official`
+は自動的に利用可能):
+
+- `clangd-lsp` … `core/` `tsf-tip/` 等で補完・型診断 (ホスト側に
+  `clangd.exe` のインストールが必要)。
+- `github` … `gh` 経由の PR 作業をエージェントから可能にする。
+- `commit-commands` … 規約に沿ったコミットメッセージ生成。
+- `pr-review-toolkit` … PR レビュー補助。
+
+### カスタムスキル (`.claude/skills/` `.agents/skills/`)
+
+- `tsf-tip-development` … TSF TIP 実装の中核ルールと参照リソース。
+- `tsf-ipc-protocol` … TIP ⇔ Inference Host の独自 IPC プロトコル仕様。
+
+Claude Code は `.claude/skills/`、Codex CLI は `.agents/skills/` を読む。
+**両ディレクトリは同一内容を維持する運用とし**、SKILL.md または `references/`
+配下を変更した際は両方を同時に更新する (将来的に symlink 統合の余地あり)。
+
+### 動作要件 (各メンテナのホスト側に必要)
+
+- PowerShell 7+ と PowerShell.MCP (`Install-PSResource PowerShell.MCP`)
+- `uv` (`uvx` コマンド) のインストール — `windows-mcp` の起動に必要
+- `clangd.exe` — `clangd-lsp` プラグイン用 (VS C++ ワークロードまたは LLVM
+  公式インストーラ経由)
+- WSL から Claude Code を使う場合は `powershell.exe` 経由で Windows 側を駆動

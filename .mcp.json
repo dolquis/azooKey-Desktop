@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/mcp.json",
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "powershell": {
+      "type": "stdio",
+      "command": "${POWERSHELL_MCP_PROXY}"
+    },
+    "windows-mcp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["windows-mcp", "serve"]
+    }
+  }
+}

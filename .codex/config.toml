@@ -1,0 +1,58 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Codex CLI のプロジェクト設定。Codex は trust された project でのみ読み込むため、
+# 各開発者が初回起動時に trust プロンプトに同意する必要がある。
+#
+# TOML の文法上、トップレベルのスカラーキーは最初の [テーブル] 見出しより前に
+# 置く必要があるため、本ファイルは「トップレベル設定」→「テーブル定義」の順で
+# 構成している。
+
+# ─────────────────────────────────────────────
+# トップレベル設定 (サンドボックス / 承認ポリシー)
+# ─────────────────────────────────────────────
+
+# workspace-write: リポジトリ内の書き込みは許可、外部ネットワークは別途許可
+sandbox_mode = "workspace-write"
+
+# 重要操作はユーザー承認を仰ぐ
+approval_policy = "on-request"
+
+# ─────────────────────────────────────────────
+# サンドボックス: workspace-write の挙動
+# ─────────────────────────────────────────────
+
+[sandbox_workspace_write]
+# MCP HTTP (context7 等) と GoogleTest FetchContent のためにネットワーク許可
+network_access = true
+
+# ─────────────────────────────────────────────
+# Windows ネイティブ実行時の設定
+# ─────────────────────────────────────────────
+
+# TIP 登録は別途管理者で実行する運用なので unelevated を維持
+[windows]
+sandbox = "unelevated"
+sandbox_private_desktop = true
+
+# ─────────────────────────────────────────────
+# MCP サーバー定義 (共有)
+# ─────────────────────────────────────────────
+
+# Context7: TSF/COM/Win32 API のドキュメントを最新で参照 (全 OS で動作)
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+startup_timeout_sec = 15
+
+# PowerShell.MCP: scripts/register.ps1 等の管理者コマンドを安全に提示
+# command は Get-MCPProxyPath が返す PowerShell.MCP.Proxy.exe の絶対パスを
+# 環境変数 POWERSHELL_MCP_PROXY に設定して参照する (Windows 専用)。
+# 詳細は AGENTS.md のエージェントツール構成セクションを参照。
+[mcp_servers.powershell]
+command = "${POWERSHELL_MCP_PROXY}"
+startup_timeout_sec = 30
+
+# Windows-MCP: UI Automation で TIP の実アプリ入力を検証 (Windows 専用)
+[mcp_servers.windows-mcp]
+command = "uvx"
+args = ["windows-mcp", "serve"]
+startup_timeout_sec = 30

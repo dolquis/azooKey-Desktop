@@ -1,7 +1,13 @@
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <memory>
-#include <csignal>
-#include <chrono>
+#include <optional>
+#include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -9,6 +15,7 @@
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/LearningStore.h"
@@ -30,16 +37,43 @@ void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   }
 }
 
+std::string GetEnvString(const char* name) {
+#if defined(_MSC_VER)
+  char* value = nullptr;
+  size_t length = 0;
+  if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) {
+    return {};
+  }
+  std::string result(value);
+  std::free(value);
+  return result;
+#else
+  const char* value = std::getenv(name);
+  return value ? std::string(value) : std::string();
+#endif
+}
+
+std::string GenerateHandshakeToken() {
+  std::random_device rd;
+  std::ostringstream out;
+  for (int i = 0; i < 32; ++i) {
+    const auto byte = static_cast<unsigned>(rd() & 0xFFu);
+    out << std::hex << std::setw(2) << std::setfill('0') << byte;
+  }
+  return out.str();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
-  std::string learning_path = "azookey_learning.tsv";
-  std::string user_dict_path = "azookey_user_dict.json";
+  std::optional<std::filesystem::path> explicit_learning_path;
+  std::optional<std::filesystem::path> explicit_user_dict_path;
   std::string mock_dict_path;
   bool pipe_mode = false;
   std::string pipe_name;
+  std::string handshake_token = GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN");
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -57,9 +91,9 @@ int main(int argc, char** argv) {
     } else if (arg == "--model" && i + 1 < argc) {
       config.model_path = argv[++i];
     } else if (arg == "--learning" && i + 1 < argc) {
-      learning_path = argv[++i];
+      explicit_learning_path = argv[++i];
     } else if (arg == "--user-dict" && i + 1 < argc) {
-      user_dict_path = argv[++i];
+      explicit_user_dict_path = argv[++i];
     } else if (arg == "--mock-dict" && i + 1 < argc) {
       mock_dict_path = argv[++i];
     } else if (arg == "--pipe") {
@@ -70,10 +104,30 @@ int main(int argc, char** argv) {
     } else if (arg == "--pipe-name" && i + 1 < argc) {
       pipe_mode = true;
       pipe_name = argv[++i];
+    } else if (arg == "--handshake-token" && i + 1 < argc) {
+      handshake_token = argv[++i];
     } else if (arg == "--stdio") {
       pipe_mode = false;
     }
   }
+
+  azookey::host::UserDataPathInputs path_inputs;
+  path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
+  path_inputs.explicit_learning_path = explicit_learning_path;
+  path_inputs.explicit_user_dict_path = explicit_user_dict_path;
+  auto user_paths = azookey::host::ResolveUserDataPaths(path_inputs);
+  if (!user_paths) {
+    std::cerr << "error: failed to resolve azooKey user data directory" << std::endl;
+    return 2;
+  }
+  if (!azookey::host::EnsureUserDataDirectories(*user_paths)) {
+    std::cerr << "error: failed to create azooKey user data directories under "
+              << user_paths->root_dir << std::endl;
+    return 2;
+  }
+
+  const std::string learning_path = user_paths->learning_path.string();
+  const std::string user_dict_path = user_paths->user_dict_path.string();
 
   azookey::learning::LearningStore store(learning_path);
   store.Load();
@@ -89,8 +143,7 @@ int main(int argc, char** argv) {
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
   if (!engine.LoadModel()) {
-    std::cerr << "warn: model load failed: "
-              << engine.last_error().value_or("unknown error")
+    std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
               << " (falling back to SimpleConverter)" << std::endl;
   }
 
@@ -98,13 +151,22 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
+  if (pipe_mode) {
+    if (handshake_token.empty()) {
+      handshake_token = GenerateHandshakeToken();
+      std::cerr << "warn: generated IPC handshake token for this host process; "
+                   "manual TIP connections should set AZOOKEY_IPC_HANDSHAKE_TOKEN or "
+                   "--handshake-token explicitly"
+                << std::endl;
+    }
+    dconf.handshake_token = handshake_token;
+  }
   azookey::host::Dispatcher dispatcher(&engine, &scheduler, &user_dict, dconf);
 
   std::cerr << "azookey inference-host started. backend="
             << (engine.backend() == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
             << " learning=" << learning_path << " user_dict=" << user_dict_path
-            << " model_loaded=" << (engine.model_loaded() ? "true" : "false")
-            << std::endl;
+            << " model_loaded=" << (engine.model_loaded() ? "true" : "false") << std::endl;
 
   if (pipe_mode) {
     if (pipe_name.empty()) {

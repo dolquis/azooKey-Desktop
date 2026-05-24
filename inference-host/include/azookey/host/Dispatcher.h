@@ -13,6 +13,7 @@ namespace azookey::host {
 struct DispatcherConfig {
   std::string host_version{"0.1.0"};
   int protocol_version{1};
+  std::string handshake_token;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code

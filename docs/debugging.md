@@ -5,37 +5,50 @@
 Windows (推奨):
 
 ```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-debug
+ctest --preset windows-debug --no-tests=error
 ```
 
-または Visual Studio Generator:
+Release 構成:
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-release
+ctest --preset windows-release --no-tests=error
 ```
 
 Linux/macOS では `tsf-tip/` 配下は自動スキップ。`core/` `ipc/` `learning/`
 `inference-host/` `bench/` のみ単体検証可能。
 
+```bash
+cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset linux-debug
+ctest --preset linux-debug --no-tests=error
+```
+
 ## Bench
 
 ```powershell
-./build/bench/azookey_bench.exe
+./build/windows-debug/bench/azookey_bench.exe
 ```
 
-出力例: `p50_ms=... p95_ms=... p99_ms=...`
+出力例: `p50_ms=... p95_ms=... p99_ms=...`。`azookey_bench_smoke` は
+CTest に登録され、p95 が 50ms 以上なら失敗する。
 
 ## 手動確認（Windows）
 
-1. `build/inference-host/azookey_inference_host.exe --pipe` で Host を起動。
+1. `build/windows-debug/inference-host/azookey_inference_host.exe --pipe` で Host を起動。
+   pipe mode では Handshake token を検証するため、手動接続では
+   `AZOOKEY_IPC_HANDSHAKE_TOKEN=<token>` を Host / TIP の両プロセスに設定する。
+   Host 側だけ `--handshake-token <token>` で指定してもよいが、TIP 側には同じ
+   環境変数を渡す。
    - `--cpu` / `--backend cpu` を明示すれば CPU バックエンド（既定）。
    - `--mock-dict <path.tsv>` で固定辞書を追加可能。
+   - `--learning <path.tsv>` / `--user-dict <path.json>` を指定すると明示パスを
+     優先する。未指定時は `%LOCALAPPDATA%\azooKey\data\` 配下を使う。
 2. **登録方法は 2 通り**:
-   - `regsvr32 build/tsf-tip/azookey_tsf_tip.dll` だけで `DllRegisterServer`
+   - `regsvr32 build/windows-debug/tsf-tip/azookey_tsf_tip.dll` だけで `DllRegisterServer`
      により CLSID + Profile + DisplayAttribute Provider まで HKCU に登録される。
    - `scripts/register.ps1` は上記 `regsvr32` 呼び出しに加えて Host EXE の
      Run キー登録（自動起動）まで行う。MSIX 化までは PS1 経由を推奨。
@@ -60,21 +73,20 @@ Linux/macOS では `tsf-tip/` 配下は自動スキップ。`core/` `ipc/` `lear
 
 ## CI
 
-`.github/workflows/windows.yml` で windows-latest + msvc-dev-cmd + Ninja:
+`.github/workflows/windows.yml` で `windows-2022` + msvc-dev-cmd + Ninja:
 
-1. configure（log を tee）
-2. build（log を tee）
-3. 各 `*_tests.exe` を個別実行し、失敗時 `::error::` annotation
-4. PR には `configure.log` / `build.log` / `test_report.md` の tail を
-   github-script で自動コメント
-5. `test_report.md` artifact を常時アップロード
+1. Debug / Release matrix を `windows-debug` / `windows-release` preset で実行。
+2. configure / build / CTest のログを config ごとに artifact 化。
+3. Release の `.pdb` を artifact 化。
+4. PR には config ごとの configure / build / test tail を github-script で自動コメント。
+5. Linux Debug 補助ジョブで非 Windows target を `linux-debug` preset で検証。
 
 ローカルで CI と同じ流れを再現:
 
 ```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-Get-ChildItem -Path build -Recurse -Filter "*_tests.exe" | ForEach-Object { & $_.FullName }
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-debug
+ctest --preset windows-debug --no-tests=error
 ```
 
 ## 典型トラブル
@@ -90,7 +102,8 @@ Get-ChildItem -Path build -Recurse -Filter "*_tests.exe" | ForEach-Object { & $_
   DebugView で `[azooKey TIP]` のフォローログ確認。
 - **`DllRegisterServer` 失敗（`SELFREG_E_CLASS`）**: HKCU 書き込み権限を確認。
   `regsvr32` は HKCU 配下のみ書くので elevation 不要。
-- **学習が反映されない**: `azookey_learning.tsv` の生成パス（Host CWD）と
-  permission を確認。CommitObservation 受信は Host stderr / Dispatcher テストで確認。
+- **学習が反映されない**: 未指定時は
+  `%LOCALAPPDATA%\azooKey\data\learning.tsv`、`--learning` 指定時はその明示パスを確認。
+  CommitObservation 受信は Host stderr / Dispatcher テストで確認。
 - **学習暴走**: `learning_alpha` を下げる（既定 0.8）。`LearningStore::Reset` または
-  TSV を削除して再起動。
+  `%LOCALAPPDATA%\azooKey\data\learning.tsv` を削除して再起動。

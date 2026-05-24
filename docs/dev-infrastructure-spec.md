@@ -164,7 +164,7 @@ compile_commands.json
 
 ## 4. CI 品質ゲート拡張（M38）
 
-現行 `.github/workflows/windows.yml`（windows-latest + msvc-dev-cmd +
+M38 着手前の `.github/workflows/windows.yml`（windows-latest + msvc-dev-cmd +
 Ninja + Debug 単一構成、失敗時 PR コメント + test_report artifact）を基盤に、
 以下を追加する。
 
@@ -205,7 +205,7 @@ configure / build / test の各ログと、Release ビルドの `.pdb` を artif
 ### 4.5 bench smoke と回帰監視
 
 `bench/azookey_bench` を CTest 登録し、CI で exit=0 と CPU `SimpleConverter`
-経路の p50 < 50ms を確認する。p50/p95 レイテンシの推移監視（夜間ベンチ回帰）
+経路の p95 < 50ms を確認する。p50/p95 レイテンシの推移監視（夜間ベンチ回帰）
 は将来拡張とし、本マイルストーンでは smoke 実行までを範囲とする。
 
 ### M38 受け入れ条件
@@ -220,7 +220,7 @@ configure / build / test の各ログと、Release ビルドの `.pdb` を artif
 
 ### 5.1 現状の問題
 
-`inference-host/src/main.cpp` は学習・辞書ファイルの既定パスを相対パス
+M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの既定パスを相対パス
 （`azookey_learning.tsv` / `azookey_user_dict.json`）で持つため、Host の
 起動元ディレクトリによって保存先が変わり、ユーザーデータが迷子になりやすい。
 
@@ -324,7 +324,7 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   （ビルド構成で分岐）
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` をやめ、
   IME 用途に十分な上限（例: `kMaxPipeInstances = 4`）を設ける
-- **6.4.3 最大フレームサイズ見直し** — 現状 16MB。IME の候補問い合わせ
+- **6.4.3 最大フレームサイズ見直し** — M40 着手前は 16MB。IME の候補問い合わせ
   には大きすぎるため、用途に見合う上限（256KB〜1MB 程度）へ引き下げる。
   §6.2 の JSON 最大入力長と整合させる
 - **6.4.4 Handshake トークン** — DACL は同一ユーザーまでしか絞れない。

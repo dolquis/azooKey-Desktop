@@ -8,6 +8,17 @@ xcuserdata/
 *.xcscmblueprint
 build/
 build_local/
+CMakeUserPresets.json
+out/
+install/
+compile_commands.json
+.cache/
+.idea/
+*.ilk
+*.pdb
+*.exp
+*.obj
+*.tlog
 Package.resolved
 DerivedData/
 .vs/

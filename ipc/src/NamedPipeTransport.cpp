@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -10,6 +11,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "azookey/ipc/Limits.h"
 
 #ifdef _WIN32
 
@@ -26,7 +29,6 @@ namespace azookey::ipc {
 namespace {
 
 constexpr DWORD kPipeBufferSize = 64 * 1024;
-constexpr uint32_t kMaxFrameSize = 16 * 1024 * 1024;
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) return {};
@@ -52,6 +54,13 @@ std::string WideToUtf8(const std::wstring& value) {
 }
 
 std::wstring CurrentUserSidString() {
+#ifndef NDEBUG
+  wchar_t forced[2]{};
+  if (GetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_SID_FAILURE", forced, 2) > 0) {
+    return {};
+  }
+#endif
+
   HANDLE token = nullptr;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
     return {};
@@ -79,6 +88,14 @@ std::wstring CurrentUserSidString() {
   std::wstring result(sid_text);
   LocalFree(sid_text);
   return result;
+}
+
+bool AllowsSidFallback() {
+#ifdef NDEBUG
+  return false;
+#else
+  return true;
+#endif
 }
 
 struct SecurityDescriptor {
@@ -124,10 +141,12 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
   const auto wide_name = Utf8ToWide(pipe_name);
   if (wide_name.empty()) return INVALID_HANDLE_VALUE;
 
-  // Build per-user DACL. Fall back to process-default security when the SID
-  // lookup fails (e.g. in sandboxed CI environments where token queries are
-  // restricted). The default DACL still limits access to the current user.
+  // Build per-user DACL. Debug/test builds may fall back to process-default
+  // security in restricted environments; Release fails closed.
   auto security = BuildCurrentUserSecurityDescriptor();
+  if (!security.descriptor && !AllowsSidFallback()) {
+    return INVALID_HANDLE_VALUE;
+  }
 
   SECURITY_ATTRIBUTES attrs;
   attrs.nLength = sizeof(attrs);
@@ -137,7 +156,7 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
   return CreateNamedPipeW(
       wide_name.c_str(), PIPE_ACCESS_DUPLEX,
       PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
-      PIPE_UNLIMITED_INSTANCES, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
+      kMaxPipeInstances, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
 }
 
 bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
@@ -202,6 +221,7 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe) {
 bool WriteEnvelope(HANDLE pipe, const Envelope& envelope) {
   const auto json = Serialize(envelope);
   const auto frame = EncodeLengthPrefixed(json);
+  if (frame.empty()) return false;
   return WriteBytes(pipe, frame.data(), frame.size());
 }
 
@@ -229,11 +249,12 @@ struct NamedPipeServer::Impl {
   std::string pipe_name;
   MessageHandler handler;
   std::thread accept_thread;
+  std::condition_variable client_cv;
+  std::size_t active_client_threads{0};
 
   mutable std::mutex mutex;
   HANDLE listen_pipe{INVALID_HANDLE_VALUE};
   std::vector<std::shared_ptr<ClientState>> clients;
-  std::vector<std::thread> client_threads;
 
   void AcceptLoop(HANDLE first_pipe) {
     HANDLE current = first_pipe;
@@ -267,10 +288,21 @@ struct NamedPipeServer::Impl {
         {
           std::lock_guard<std::mutex> lock(mutex);
           clients.push_back(client);
-          client_threads.emplace_back([this, client]() { ClientLoop(client); });
+          ++active_client_threads;
         }
+        std::thread([this, client]() { ClientLoop(client); }).detach();
       } else {
         CloseHandle(current);
+      }
+
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        client_cv.wait(lock, [this] {
+          return !running.load() || clients.size() < kMaxPipeInstances;
+        });
+        if (!running.load()) {
+          break;
+        }
       }
 
       current = CreatePipeInstance(pipe_name);
@@ -323,6 +355,15 @@ struct NamedPipeServer::Impl {
       DisconnectNamedPipe(pipe);
     }
     CloseClientPipe(client);
+
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      clients.erase(std::remove(clients.begin(), clients.end(), client), clients.end());
+      if (active_client_threads > 0) {
+        --active_client_threads;
+      }
+    }
+    client_cv.notify_all();
   }
 };
 
@@ -377,11 +418,10 @@ void NamedPipeServer::Stop() {
     impl_->accept_thread.join();
   }
 
-  std::vector<std::thread> threads;
   {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
+    std::unique_lock<std::mutex> lock(impl_->mutex);
+    impl_->client_cv.wait(lock, [this] { return impl_->active_client_threads == 0; });
     impl_->listen_pipe = INVALID_HANDLE_VALUE;
-    threads.swap(impl_->client_threads);
     clients = impl_->clients;
     impl_->clients.clear();
   }
@@ -389,14 +429,14 @@ void NamedPipeServer::Stop() {
   for (const auto& client : clients) {
     CloseClientPipe(client);
   }
-  for (auto& thread : threads) {
-    if (thread.joinable()) {
-      thread.join();
-    }
-  }
 }
 
 bool NamedPipeServer::IsRunning() const { return impl_->running.load(); }
+
+std::size_t NamedPipeServer::ActiveClientCountForTesting() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return impl_->clients.size();
+}
 
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
 NamedPipeClient::~NamedPipeClient() { Disconnect(); }
@@ -512,7 +552,7 @@ std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(uint32_t timeout_ms)
 std::string DefaultPipeName() {
   const auto sid = CurrentUserSidString();
   if (sid.empty()) {
-    return "\\\\.\\pipe\\azookey-default";
+    return AllowsSidFallback() ? "\\\\.\\pipe\\azookey-default" : std::string();
   }
   return "\\\\.\\pipe\\azookey-" + WideToUtf8(sid);
 }
@@ -527,6 +567,7 @@ NamedPipeServer::~NamedPipeServer() = default;
 bool NamedPipeServer::Start(const std::string&, MessageHandler) { return false; }
 void NamedPipeServer::Stop() {}
 bool NamedPipeServer::IsRunning() const { return false; }
+std::size_t NamedPipeServer::ActiveClientCountForTesting() const { return 0; }
 
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
 NamedPipeClient::~NamedPipeClient() = default;

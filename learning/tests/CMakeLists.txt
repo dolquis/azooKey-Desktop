@@ -1,11 +1,17 @@
 add_executable(learning_tests learning_test.cpp)
-target_link_libraries(learning_tests PRIVATE azookey_learning GTest::gtest_main)
+target_link_libraries(learning_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(learning_tests)
 
 add_executable(user_dictionary_tests user_dictionary_test.cpp)
-target_link_libraries(user_dictionary_tests PRIVATE azookey_learning GTest::gtest_main)
+target_link_libraries(user_dictionary_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(user_dictionary_tests)
 
 add_executable(reranker_tests reranker_test.cpp)
-target_link_libraries(reranker_tests PRIVATE azookey_learning GTest::gtest_main)
+target_link_libraries(reranker_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(reranker_tests)

@@ -196,8 +196,8 @@ host に送る。検出トリガは 2 種。
 
 ## 11. 検証手順（実装後）
 
-1. ビルド: `cmake -S . -B build -DAZOOKEY_BUILD_TESTS=ON && cmake --build build`
-2. テスト: `ctest --test-dir build --output-on-failure`
+1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
+2. テスト: `ctest --preset windows-debug --output-on-failure`
    （`typo_correction_store_tests` / `payloads_test` / `engine_test` /
    `dispatcher_test` が green であること）
 3. host を `--typo-mode suggest` / `auto_replace` で stdio 起動し、同一

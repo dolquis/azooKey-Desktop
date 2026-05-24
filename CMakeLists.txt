@@ -1,14 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-if(MSVC)
-  add_compile_options(/utf-8)
-endif()
-
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 option(AZOOKEY_FETCH_GOOGLETEST
@@ -19,6 +11,18 @@ set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda)
 if(NOT AZOOKEY_BACKEND STREQUAL "cpu" AND NOT AZOOKEY_BACKEND STREQUAL "cuda")
   message(FATAL_ERROR "AZOOKEY_BACKEND must be either 'cpu' or 'cuda'")
 endif()
+
+add_library(azookey_project_options INTERFACE)
+target_compile_features(azookey_project_options INTERFACE cxx_std_17)
+target_compile_options(azookey_project_options INTERFACE
+  $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /permissive- /EHsc /Zc:__cplusplus /sdl>
+)
+
+add_library(azookey_project_warnings INTERFACE)
+target_compile_options(azookey_project_warnings INTERFACE
+  $<$<CXX_COMPILER_ID:MSVC>:/W4>
+  $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
+)
 
 if(AZOOKEY_BUILD_TESTS)
   enable_testing()

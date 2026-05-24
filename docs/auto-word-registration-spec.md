@@ -334,7 +334,7 @@ struct ResolveNewWordResponse { bool ok{false}; };
   （User-Agent はバージョン文字列のみ、M32 と同様）。アップロードは行わない。
 - **DPAPI 暗号化（M34）対象に新ストアを含める** — `auto_words.tsv` はユーザーの
   未知語（固有名詞・個人情報を含みうる）を蓄積するため、`learning.tsv` /
-  `user-dict.json` と同等の機微情報として M34 の暗号化対象に追加する。
+  `user_dict.json` と同等の機微情報として M34 の暗号化対象に追加する。
   公開アセットである trending-words のローカルキャッシュは暗号化不要。
 
 ## 10. マイルストーン分割
@@ -386,8 +386,8 @@ struct ResolveNewWordResponse { bool ok{false}; };
 
 ## 13. 検証手順（実装後）
 
-1. ビルド: `cmake -S . -B build -DAZOOKEY_BUILD_TESTS=ON && cmake --build build`
-2. テスト: `ctest --test-dir build --output-on-failure`
+1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
+2. テスト: `ctest --preset windows-debug --output-on-failure`
    （`auto_word_store_tests` / `payloads_test` / `engine_test` /
    `dispatcher_test`、M36-B では `trending_word_fetcher_tests` が green）。
 3. host を `--auto-word-mining on --auto-word-mode auto` で stdio 起動し、

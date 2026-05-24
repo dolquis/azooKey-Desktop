@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Continue"
 
 if (-not $TipDllPath) {
-  $TipDllPath = Join-Path $PSScriptRoot "..\build\tsf-tip\azookey_tsf_tip.dll"
+  $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-debug\tsf-tip\azookey_tsf_tip.dll"
 }
 $TipDllPath = [System.IO.Path]::GetFullPath($TipDllPath)
 

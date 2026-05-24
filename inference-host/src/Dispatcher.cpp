@@ -80,7 +80,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
-    res.accepted = parsed->protocol_version == config_.protocol_version;
+    const bool version_ok = parsed->protocol_version == config_.protocol_version;
+    const bool token_ok =
+        config_.handshake_token.empty() || parsed->handshake_token == config_.handshake_token;
+    res.accepted = version_ok && token_ok;
   } else {
     res.accepted = false;
   }

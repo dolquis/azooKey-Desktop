@@ -42,7 +42,12 @@
 
 - モデル重みは更新しない（安全性優先）。
 - `learning.db` 相当の永続層へ観測を保存し、再ランキングで反映。
-- 永続フォーマットは現状 TSV（`azookey_learning.tsv`）。
+- 永続フォーマットは現状 TSV。未指定時は
+  `%LOCALAPPDATA%\azooKey\data\learning.tsv` に保存する。
+- ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` に保存する。
+  `--learning` / `--user-dict` 指定時は明示パスを優先する。
+- 保存時は一時ファイルへ書き込んでから replace し、書き込み中クラッシュによる
+  既存ファイル破損を避ける。
 - 破損時はリセット可能（`LearningStore::Reset` or ファイル削除）。
 - 時間減衰: `exp(-0.15 * days)` で `LearningStore::Score` 内で適用。
 

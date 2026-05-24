@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -48,6 +49,7 @@ class NamedPipeServer {
   void Stop();
 
   bool IsRunning() const;
+  std::size_t ActiveClientCountForTesting() const;
 
  private:
   struct Impl;

@@ -5,4 +5,7 @@ add_library(azookey_learning STATIC
 )
 
 target_include_directories(azookey_learning PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(azookey_learning PUBLIC azookey_core azookey_ipc)
+target_link_libraries(azookey_learning
+  PUBLIC azookey_core azookey_ipc azookey_project_options
+  PRIVATE azookey_project_warnings
+)

@@ -1,8 +1,9 @@
+#include <gtest/gtest.h>
+
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
-
-#include <gtest/gtest.h>
 
 #include "azookey/learning/UserDictionary.h"
 
@@ -92,7 +93,8 @@ TEST(UserDictionaryTest, SaveLoadRoundTrip) {
 
 TEST(UserDictionaryTest, LoadMissingFileIsOk) {
   const std::string p2 =
-      (std::filesystem::temp_directory_path() / "azookey_user_dict_definitely_missing.json").string();
+      (std::filesystem::temp_directory_path() / "azookey_user_dict_definitely_missing.json")
+          .string();
   azookey::learning::UserDictionary dict(p2);
   EXPECT_TRUE(dict.Load());
   EXPECT_EQ(dict.Size(), 0u);
@@ -101,12 +103,39 @@ TEST(UserDictionaryTest, LoadMissingFileIsOk) {
 TEST(UserDictionaryTest, LoadMalformedRejects) {
   const char* path = "azookey_user_dict_malformed.json";
   {
-    FILE* f = std::fopen(path, "w");
-    ASSERT_NE(f, nullptr);
-    std::fputs("not json at all", f);
-    std::fclose(f);
+    std::ofstream f(path);
+    ASSERT_TRUE(f.is_open());
+    f << "not json at all";
   }
   azookey::learning::UserDictionary dict(path);
   EXPECT_FALSE(dict.Load());
   std::remove(path);
+}
+
+TEST(UserDictionaryTest, SaveCreatesParentAndLeavesNoTempFile) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_atomic_test";
+  const auto path = root / "nested" / "user_dict.json";
+  std::filesystem::remove_all(root);
+
+  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserWord word;
+  word.word = "azooKey";
+  word.ruby = "あずきい";
+  dict.Add(word);
+  EXPECT_TRUE(dict.Save());
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  size_t temp_files = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
+    if (entry.path().filename().string().find(".tmp.") != std::string::npos) {
+      ++temp_files;
+    }
+  }
+  EXPECT_EQ(temp_files, 0u);
+
+  azookey::learning::UserDictionary loaded(path.string());
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Size(), 1u);
+
+  std::filesystem::remove_all(root);
 }

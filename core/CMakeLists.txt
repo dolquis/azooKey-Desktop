@@ -7,3 +7,8 @@ target_include_directories(azookey_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+target_link_libraries(azookey_core
+  PUBLIC azookey_project_options
+  PRIVATE azookey_project_warnings
+)

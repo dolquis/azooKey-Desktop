@@ -103,6 +103,41 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_FALSE(parsed2->accepted);
 }
 
+TEST_F(DispatcherTest, HandshakeRequiresConfiguredToken) {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+
+  auto missing = token_dispatcher.Dispatch(
+      MakeReq(3, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(missing.has_value());
+  auto missing_payload = ipc::ParseHandshakeResponse(missing->payload_json);
+  ASSERT_TRUE(missing_payload.has_value());
+  EXPECT_FALSE(missing_payload->accepted);
+
+  req.handshake_token = "wrong-token";
+  auto wrong = token_dispatcher.Dispatch(
+      MakeReq(4, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(wrong.has_value());
+  auto wrong_payload = ipc::ParseHandshakeResponse(wrong->payload_json);
+  ASSERT_TRUE(wrong_payload.has_value());
+  EXPECT_FALSE(wrong_payload->accepted);
+
+  req.handshake_token = "expected-token";
+  auto matched = token_dispatcher.Dispatch(
+      MakeReq(5, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(matched.has_value());
+  auto matched_payload = ipc::ParseHandshakeResponse(matched->payload_json);
+  ASSERT_TRUE(matched_payload.has_value());
+  EXPECT_TRUE(matched_payload->accepted);
+}
+
 TEST_F(DispatcherTest, Ping) {
   ipc::PingPayload p;
   p.nonce = 0xCAFEBABE;

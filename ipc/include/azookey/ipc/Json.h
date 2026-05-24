@@ -10,6 +10,8 @@
 
 namespace azookey::ipc::json {
 
+inline constexpr double kMaxSafeInteger = 9007199254740991.0;
+
 struct Value;
 using Object = std::map<std::string, Value>;
 using Array = std::vector<Value>;

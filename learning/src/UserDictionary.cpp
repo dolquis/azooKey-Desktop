@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "AtomicFile.h"
 #include "azookey/ipc/Json.h"
 
 namespace azookey::learning {
@@ -65,10 +66,6 @@ bool UserDictionary::Load() {
 }
 
 bool UserDictionary::Save() const {
-  std::ofstream ofs(path_, std::ios::trunc);
-  if (!ofs.is_open()) {
-    return false;
-  }
   j::Object root;
   root.emplace("version", j::Value(1));
   j::Array entries;
@@ -78,15 +75,13 @@ bool UserDictionary::Save() const {
     }
   }
   root.emplace("entries", j::Value(std::move(entries)));
-  ofs << j::Stringify(j::Value(std::move(root)));
-  return ofs.good();
+  return WriteTextFileAtomically(path_, j::Stringify(j::Value(std::move(root))));
 }
 
 bool UserDictionary::Add(const UserWord& w) {
   auto& bucket = by_ruby_[w.ruby];
-  auto it = std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) {
-    return x.word == w.word;
-  });
+  auto it = std::find_if(bucket.begin(), bucket.end(),
+                         [&](const UserWord& x) { return x.word == w.word; });
   if (it != bucket.end()) {
     *it = w;
     return false;
@@ -99,9 +94,8 @@ bool UserDictionary::Remove(const std::string& word, const std::string& ruby) {
   auto bit = by_ruby_.find(ruby);
   if (bit == by_ruby_.end()) return false;
   auto& bucket = bit->second;
-  auto it = std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) {
-    return x.word == word;
-  });
+  auto it =
+      std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) { return x.word == word; });
   if (it == bucket.end()) return false;
   bucket.erase(it);
   if (bucket.empty()) by_ruby_.erase(bit);
@@ -128,8 +122,6 @@ size_t UserDictionary::Size() const {
   return n;
 }
 
-void UserDictionary::Clear() {
-  by_ruby_.clear();
-}
+void UserDictionary::Clear() { by_ruby_.clear(); }
 
 }  // namespace azookey::learning

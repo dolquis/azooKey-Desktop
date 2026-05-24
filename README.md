@@ -43,15 +43,16 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 - Windows 10/11
 - Visual Studio 2022（C++ デスクトップ開発ワークロード）
 - CMake ≥ 3.21
+- Ninja
 - Windows SDK
 
 ## ビルド & テスト
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-./build/bench/Debug/azookey_bench.exe
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-debug
+ctest --preset windows-debug --output-on-failure
+./build/windows-debug/bench/azookey_bench.exe
 ```
 
 単体テストは GoogleTest を使う。`-DAZOOKEY_FETCH_GOOGLETEST=ON` は GoogleTest が
@@ -61,11 +62,11 @@ GoogleTest を導入済みなら省略可。フラグなし・未導入の場合
 
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
 
-## TIP の登録 / 解除（Windows、要管理者権限）
+## TIP の登録 / 解除（Windows、ユーザー権限）
 
 ```powershell
-./scripts/register.ps1 -TipDllPath ./build/tsf-tip/Debug/azookey_tsf_tip.dll -HostExePath ./build/inference-host/Debug/azookey_inference_host.exe
-./scripts/unregister.ps1 -TipDllPath ./build/tsf-tip/Debug/azookey_tsf_tip.dll
+./scripts/register.ps1 -TipDllPath ./build/windows-debug/tsf-tip/azookey_tsf_tip.dll -HostExePath ./build/windows-debug/inference-host/azookey_inference_host.exe
+./scripts/unregister.ps1 -TipDllPath ./build/windows-debug/tsf-tip/azookey_tsf_tip.dll
 ```
 
 ## ロードマップ

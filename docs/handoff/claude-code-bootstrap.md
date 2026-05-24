@@ -26,7 +26,7 @@
   - `ipc/` — Named Pipe + JSON + length-prefix の IPC 定義
   - `learning/` — 頻度＋時間減衰の再ランキング
   - `bench/` — レイテンシ計測 CLI
-  - `scripts/` — `register.ps1` / `unregister.ps1`(管理者権限要)
+  - `scripts/` — `register.ps1` / `unregister.ps1`(HKCU user-scope、elevation 不要)
 - ビルド：Windows 10/11 + Visual Studio 2022(C++ デスクトップ)+ CMake ≥ 3.21 + Windows SDK
 - テスト：CTest + GoogleTest(`-DAZOOKEY_FETCH_GOOGLETEST=ON` で FetchContent)
 - 既存メタファイル：`CLAUDE.md`, `AGENTS.md` あり(役割を被らせない)
@@ -192,7 +192,7 @@ allowed-tools: Read, Edit, Grep, Glob, WebFetch
 
 - 仕様確認：Context7 MCP 経由で <https://learn.microsoft.com/en-us/windows/win32/tsf/> を fetch
 - 補完・診断：`clangd-lsp` プラグイン
-- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)でユーザーが管理者実行
+- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)で対象ユーザーとして実行
 - 実アプリでの入力検証：Windows-MCP の UI Automation
 
 ## やってはいけない
@@ -282,17 +282,17 @@ allowed-tools: Read, Edit, Grep, Glob
 ## ビルド(CMake + MSVC)
 
 ```bash
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-debug
+ctest --preset windows-debug --output-on-failure
 ```
 
 `-DAZOOKEY_FETCH_GOOGLETEST=ON` は FetchContent で GoogleTest を取得する。
 オフライン環境では `-OFF` でテストのみスキップしてビルドを通す。
 
-## TIP 登録 / 解除(管理者権限)
+## TIP 登録 / 解除(HKCU user-scope)
 
-`scripts/register.ps1` / `unregister.ps1` は管理者 PowerShell で実行する。
+`scripts/register.ps1` / `unregister.ps1` は対象ユーザーの PowerShell で実行する。
 **Claude Code が単独で実行を完了させてはならない**。PowerShell.MCP の共有コンソール経由で、
 コマンド提示までに留めること。本リポジトリの `DllRegisterServer` と `register.ps1` は
 user-scope (HKCU) に登録するため、失敗時は
@@ -302,7 +302,7 @@ user-scope (HKCU) に登録するため、失敗時は
 
 ## レイテンシ計測
 
-`core/` `learning/` `ipc/` を編集したら、Release ビルドで `bench/azookey_bench.exe` を実行し、
+`core/` `learning/` `ipc/` を編集したら、Release ビルドで `build/windows-release/bench/azookey_bench.exe` を実行し、
 変更前後の数値を PR 本文に貼る。Debug 数値は性能評価に使わない。
 ````
 

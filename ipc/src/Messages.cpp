@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Limits.h"
 
 namespace azookey::ipc {
 
@@ -84,6 +85,9 @@ std::optional<Envelope> Deserialize(const std::string& json_text) {
 }
 
 std::vector<uint8_t> EncodeLengthPrefixed(const std::string& json_text) {
+  if (json_text.size() > kMaxFrameSize) {
+    return {};
+  }
   std::vector<uint8_t> bytes(4 + json_text.size());
   const uint32_t size = static_cast<uint32_t>(json_text.size());
   bytes[0] = static_cast<uint8_t>(size & 0xFF);
@@ -103,6 +107,9 @@ std::optional<std::string> DecodeLengthPrefixed(const std::vector<uint8_t>& byte
                         (static_cast<uint32_t>(bytes[2]) << 16) |
                         (static_cast<uint32_t>(bytes[3]) << 24);
   if (bytes.size() != size + 4) {
+    return std::nullopt;
+  }
+  if (size == 0 || size > kMaxFrameSize) {
     return std::nullopt;
   }
   return std::string(bytes.begin() + 4, bytes.end());

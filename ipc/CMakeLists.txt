@@ -6,6 +6,10 @@ add_library(azookey_ipc STATIC
 )
 
 target_include_directories(azookey_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(azookey_ipc
+  PUBLIC azookey_project_options
+  PRIVATE azookey_project_warnings
+)
 
 if(WIN32)
   # advapi32 is required by ConvertStringSecurityDescriptorToSecurityDescriptorW

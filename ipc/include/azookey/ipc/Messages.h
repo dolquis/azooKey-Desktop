@@ -38,7 +38,7 @@ std::optional<Envelope> Deserialize(const std::string& json);
 std::string TypeToString(MessageType type);
 MessageType TypeFromString(const std::string& value);
 
-std::vector<uint8_t> EncodeLengthPrefixed(const std::string& json);
+std::optional<std::vector<uint8_t>> EncodeLengthPrefixed(const std::string& json);
 std::optional<std::string> DecodeLengthPrefixed(const std::vector<uint8_t>& bytes);
 
 }  // namespace azookey::ipc

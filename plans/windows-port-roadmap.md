@@ -1085,9 +1085,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Release では SID 取得失敗時に pipe 名 / DACL の fallback を拒否し、
     Debug/test のみ fallback pipe を許可する。
   - Handshake token を payload に追加し、pipe mode の Host は
-    `AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` または起動時生成 token
-    を検証する。TIP は同環境変数から token を渡すため、手動接続では両プロセスに
-    同じ token を明示設定する。
+    `AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` が設定されている場合のみ
+    token を検証する。未指定時は per-user pipe ACL のみで動作する。
   - 切断済み client を Stop 待ちにせず解放し、複数接続・切断テストで検証済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
   - JSON: ネスト深度上限・最大入力長・サロゲートペア結合・不正 UTF-8/

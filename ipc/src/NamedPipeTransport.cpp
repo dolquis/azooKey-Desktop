@@ -221,8 +221,8 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe) {
 bool WriteEnvelope(HANDLE pipe, const Envelope& envelope) {
   const auto json = Serialize(envelope);
   const auto frame = EncodeLengthPrefixed(json);
-  if (frame.empty()) return false;
-  return WriteBytes(pipe, frame.data(), frame.size());
+  if (!frame) return false;
+  return WriteBytes(pipe, frame->data(), frame->size());
 }
 
 struct ClientState {
@@ -290,7 +290,19 @@ struct NamedPipeServer::Impl {
           clients.push_back(client);
           ++active_client_threads;
         }
-        std::thread([this, client]() { ClientLoop(client); }).detach();
+        try {
+          std::thread([this, client]() { ClientLoop(client); }).detach();
+        } catch (...) {
+          CloseClientPipe(client);
+          {
+            std::lock_guard<std::mutex> lock(mutex);
+            clients.erase(std::remove(clients.begin(), clients.end(), client), clients.end());
+            if (active_client_threads > 0) {
+              --active_client_threads;
+            }
+          }
+          client_cv.notify_all();
+        }
       } else {
         CloseHandle(current);
       }

@@ -1,4 +1,5 @@
 #include <string>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -51,7 +52,8 @@ TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {
   const auto json = azookey::ipc::Serialize(env);
 
   auto lp = azookey::ipc::EncodeLengthPrefixed(json);
-  auto restored = azookey::ipc::DecodeLengthPrefixed(lp);
+  ASSERT_TRUE(lp.has_value());
+  auto restored = azookey::ipc::DecodeLengthPrefixed(*lp);
   ASSERT_TRUE(restored.has_value());
   EXPECT_EQ(*restored, json);
 }
@@ -72,12 +74,32 @@ TEST(JsonTest, RejectsMalformedBoundaryInputs) {
   EXPECT_FALSE(json::Parse(too_deep));
   EXPECT_FALSE(json::Parse("{\"value\":1} trailing"));
   EXPECT_FALSE(json::Parse("{\"value\":1e9999}"));
-  EXPECT_FALSE(json::Parse("{\"value\":9007199254740992}"));
   EXPECT_FALSE(json::Parse("{\"value\":01}"));
   EXPECT_FALSE(json::Parse("{\"value\":1e}"));
   EXPECT_FALSE(json::Parse(std::string("{\"value\":\"bad") + '\x01' + "\"}"));
   EXPECT_FALSE(json::Parse("{\"value\":\"\\uD800\"}"));
   EXPECT_FALSE(json::Parse("{\"value\":\"\\uDC00\"}"));
+}
+
+TEST(JsonTest, PreservesLargeIntegerTokensForUIntExtraction) {
+  namespace json = azookey::ipc::json;
+
+  auto parsed = json::Parse("{\"request_id\":1716568000123456789}");
+  ASSERT_TRUE(parsed.has_value());
+  auto request_id = parsed->GetUInt("request_id");
+  ASSERT_TRUE(request_id.has_value());
+  EXPECT_EQ(*request_id, 1716568000123456789ULL);
+  EXPECT_EQ(json::Stringify(*parsed), "{\"request_id\":1716568000123456789}");
+
+  auto max_uint = json::Parse("{\"request_id\":18446744073709551615}");
+  ASSERT_TRUE(max_uint.has_value());
+  auto value = max_uint->GetUInt("request_id");
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(*value, std::numeric_limits<uint64_t>::max());
+
+  auto too_large = json::Parse("{\"request_id\":18446744073709551616}");
+  ASSERT_TRUE(too_large.has_value());
+  EXPECT_FALSE(too_large->GetUInt("request_id").has_value());
 }
 
 TEST(JsonTest, CombinesSurrogatePairsAndRejectsInvalidUtf8) {
@@ -119,5 +141,5 @@ TEST(MessagesTest, LengthPrefixedFramingRejectsOversizedFrames) {
   bytes.resize(static_cast<size_t>(oversized) + 4, 'x');
 
   EXPECT_FALSE(azookey::ipc::DecodeLengthPrefixed(bytes).has_value());
-  EXPECT_TRUE(azookey::ipc::EncodeLengthPrefixed(std::string(oversized, 'x')).empty());
+  EXPECT_FALSE(azookey::ipc::EncodeLengthPrefixed(std::string(oversized, 'x')).has_value());
 }

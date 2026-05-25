@@ -39,7 +39,8 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 ## 手動確認（Windows）
 
 1. `build/windows-debug/inference-host/azookey_inference_host.exe --pipe` で Host を起動。
-   pipe mode では Handshake token を検証するため、手動接続では
+   pipe mode では `AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` が
+   設定されている場合だけ Handshake token を検証する。手動で token を使う場合は
    `AZOOKEY_IPC_HANDSHAKE_TOKEN=<token>` を Host / TIP の両プロセスに設定する。
    Host 側だけ `--handshake-token <token>` で指定してもよいが、TIP 側には同じ
    環境変数を渡す。

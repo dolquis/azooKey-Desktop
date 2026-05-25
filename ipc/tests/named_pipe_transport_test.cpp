@@ -141,7 +141,8 @@ TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
   ASSERT_TRUE(started);
 
   std::vector<std::unique_ptr<azookey::ipc::NamedPipeClient>> clients;
-  for (uint64_t i = 0; i < 4; ++i) {
+  constexpr uint64_t kClientCount = 6;
+  for (uint64_t i = 0; i < kClientCount; ++i) {
     SCOPED_TRACE(i);
     auto client = std::make_unique<azookey::ipc::NamedPipeClient>();
     ASSERT_TRUE(client->Connect(pipe_name, 2000));
@@ -164,7 +165,7 @@ TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
     clients.push_back(std::move(client));
   }
 
-  ASSERT_TRUE(WaitForClientCount(server, 4));
+  ASSERT_TRUE(WaitForClientCount(server, kClientCount));
   for (auto& client : clients) {
     client->Disconnect();
   }

@@ -63,6 +63,16 @@ std::optional<size_t> Utf8SequenceLength(unsigned char first) {
   return std::nullopt;
 }
 
+bool IsPlainIntegerToken(const std::string& token) {
+  if (token.empty()) return false;
+  size_t pos = token[0] == '-' ? 1 : 0;
+  if (pos == token.size()) return false;
+  for (; pos < token.size(); ++pos) {
+    if (!std::isdigit(static_cast<unsigned char>(token[pos]))) return false;
+  }
+  return true;
+}
+
 class Parser {
  public:
   explicit Parser(std::string_view text) : text_(text), pos_(0) {}
@@ -288,11 +298,10 @@ class Parser {
       size_t parsed = 0;
       const auto token = std::string(text_.substr(start, pos_ - start));
       const double value = std::stod(token, &parsed);
-      if (parsed != token.size() || !std::isfinite(value) ||
-          std::abs(value) > kMaxSafeInteger) {
+      if (parsed != token.size() || !std::isfinite(value)) {
         return std::nullopt;
       }
-      return Value(value);
+      return Value(Number{value, token});
     } catch (...) {
       return std::nullopt;
     }
@@ -327,7 +336,17 @@ std::optional<double> Value::GetNumber(std::string_view key) const {
 std::optional<int64_t> Value::GetInt(std::string_view key) const {
   const auto* v = Find(key);
   if (!v || !v->IsNumber()) return std::nullopt;
-  double d = v->AsNumber();
+  const auto& number = v->AsNumberValue();
+  if (IsPlainIntegerToken(number.token)) {
+    try {
+      size_t parsed = 0;
+      const auto value = std::stoll(number.token, &parsed, 10);
+      if (parsed == number.token.size()) return value;
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  double d = number.value;
   double intpart = 0.0;
   if (!std::isfinite(d) || std::modf(d, &intpart) != 0.0 ||
       d < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
@@ -340,7 +359,17 @@ std::optional<int64_t> Value::GetInt(std::string_view key) const {
 std::optional<uint64_t> Value::GetUInt(std::string_view key) const {
   const auto* v = Find(key);
   if (!v || !v->IsNumber()) return std::nullopt;
-  double d = v->AsNumber();
+  const auto& number = v->AsNumberValue();
+  if (IsPlainIntegerToken(number.token) && number.token[0] != '-') {
+    try {
+      size_t parsed = 0;
+      const auto value = std::stoull(number.token, &parsed, 10);
+      if (parsed == number.token.size()) return value;
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  double d = number.value;
   double intpart = 0.0;
   if (!std::isfinite(d) || d < 0.0 || std::modf(d, &intpart) != 0.0 ||
       d > static_cast<double>(std::numeric_limits<uint64_t>::max())) {
@@ -404,7 +433,12 @@ std::string Stringify(const Value& v) {
   } else if (v.IsBool()) {
     oss << (v.AsBool() ? "true" : "false");
   } else if (v.IsNumber()) {
-    double d = v.AsNumber();
+    const auto& number = v.AsNumberValue();
+    if (!number.token.empty()) {
+      oss << number.token;
+      return oss.str();
+    }
+    double d = number.value;
     double intpart = 0;
     if (std::modf(d, &intpart) == 0.0 &&
         d >= -9.2233720368547758e18 && d <= 9.2233720368547758e18) {

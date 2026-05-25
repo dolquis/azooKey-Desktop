@@ -12,9 +12,34 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace azookey::learning {
+
+inline bool FlushFileToDisk(const std::filesystem::path& path) {
+#ifdef _WIN32
+  HANDLE file = CreateFileW(path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+  const bool ok = FlushFileBuffers(file) != 0;
+  CloseHandle(file);
+  return ok;
+#else
+  int fd = open(path.c_str(), O_RDONLY);
+  if (fd < 0) {
+    return false;
+  }
+  const bool ok = fsync(fd) == 0;
+  close(fd);
+  return ok;
+#endif
+}
 
 inline bool WriteTextFileAtomically(const std::string& path, const std::string& content) {
   const std::filesystem::path target(path);
@@ -38,6 +63,10 @@ inline bool WriteTextFileAtomically(const std::string& path, const std::string& 
       std::filesystem::remove(temp, ec);
       return false;
     }
+  }
+  if (!FlushFileToDisk(temp)) {
+    std::filesystem::remove(temp, ec);
+    return false;
   }
 
 #ifdef _WIN32

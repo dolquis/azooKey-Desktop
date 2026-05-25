@@ -35,10 +35,12 @@ class UserDictionary {
   explicit UserDictionary(std::string path);
 
   // Load entries from disk. Missing file -> empty dictionary, returns true.
-  // Malformed file -> dictionary becomes empty, returns false.
+  // Malformed file -> dictionary becomes empty, file is quarantined when
+  // possible, returns false.
   bool Load();
 
-  // Persist current state to disk. Returns false if the file cannot be opened.
+  // Persist current state to disk. Returns false if the file cannot be opened
+  // or a malformed prior file could not be quarantined.
   bool Save() const;
 
   // Insert a new entry, or replace the existing entry that has the same
@@ -63,6 +65,7 @@ class UserDictionary {
  private:
   std::string path_;
   std::map<std::string, std::vector<UserWord>> by_ruby_;
+  bool save_blocked_by_corrupt_load_{false};
 };
 
 }  // namespace azookey::learning

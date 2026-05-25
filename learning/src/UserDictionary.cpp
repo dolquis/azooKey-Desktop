@@ -1,8 +1,11 @@
 #include "azookey/learning/UserDictionary.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <system_error>
 
 #include "AtomicFile.h"
 #include "azookey/ipc/Json.h"
@@ -37,24 +40,47 @@ std::optional<UserWord> WordFromJson(const j::Value& v) {
   return w;
 }
 
+bool QuarantineCorruptFile(const std::string& path) {
+  const std::filesystem::path source(path);
+  if (!std::filesystem::exists(source)) return true;
+
+  const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
+  auto backup = source;
+  backup += ".corrupt." + std::to_string(stamp);
+  std::error_code ec;
+  std::filesystem::rename(source, backup, ec);
+  if (!ec) return true;
+
+  ec.clear();
+  std::filesystem::copy_file(source, backup, std::filesystem::copy_options::none, ec);
+  if (ec) return false;
+  ec.clear();
+  std::filesystem::remove(source, ec);
+  return true;
+}
+
 }  // namespace
 
 UserDictionary::UserDictionary(std::string path) : path_(std::move(path)) {}
 
 bool UserDictionary::Load() {
   by_ruby_.clear();
+  save_blocked_by_corrupt_load_ = false;
   std::ifstream ifs(path_);
   if (!ifs.is_open()) {
     return true;  // missing file is fine
   }
   std::ostringstream oss;
   oss << ifs.rdbuf();
+  ifs.close();
   auto v = j::Parse(oss.str());
   if (!v || !v->IsObject()) {
+    save_blocked_by_corrupt_load_ = !QuarantineCorruptFile(path_);
     return false;
   }
   const auto* entries = v->GetArray("entries");
   if (!entries) {
+    save_blocked_by_corrupt_load_ = !QuarantineCorruptFile(path_);
     return false;
   }
   for (const auto& e : *entries) {
@@ -66,6 +92,9 @@ bool UserDictionary::Load() {
 }
 
 bool UserDictionary::Save() const {
+  if (save_blocked_by_corrupt_load_) {
+    return false;
+  }
   j::Object root;
   root.emplace("version", j::Value(1));
   j::Array entries;

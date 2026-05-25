@@ -2,13 +2,11 @@
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
-#include <random>
-#include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 
 #include "azookey/core/SimpleConverter.h"
@@ -37,6 +35,25 @@ void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   }
 }
 
+void MigrateLegacyDefaultFileIfNeeded(const char* legacy_name,
+                                      const std::filesystem::path& target) {
+  const std::filesystem::path legacy(legacy_name);
+  if (std::filesystem::exists(target) || !std::filesystem::exists(legacy)) {
+    return;
+  }
+
+  std::error_code ec;
+  if (!target.parent_path().empty()) {
+    std::filesystem::create_directories(target.parent_path(), ec);
+    if (ec) return;
+  }
+  std::filesystem::copy_file(legacy, target, std::filesystem::copy_options::none, ec);
+  if (!ec) {
+    std::cerr << "info: migrated legacy user data file " << legacy << " -> " << target
+              << std::endl;
+  }
+}
+
 std::string GetEnvString(const char* name) {
 #if defined(_MSC_VER)
   char* value = nullptr;
@@ -51,16 +68,6 @@ std::string GetEnvString(const char* name) {
   const char* value = std::getenv(name);
   return value ? std::string(value) : std::string();
 #endif
-}
-
-std::string GenerateHandshakeToken() {
-  std::random_device rd;
-  std::ostringstream out;
-  for (int i = 0; i < 32; ++i) {
-    const auto byte = static_cast<unsigned>(rd() & 0xFFu);
-    out << std::hex << std::setw(2) << std::setfill('0') << byte;
-  }
-  return out.str();
 }
 
 }  // namespace
@@ -129,6 +136,13 @@ int main(int argc, char** argv) {
   const std::string learning_path = user_paths->learning_path.string();
   const std::string user_dict_path = user_paths->user_dict_path.string();
 
+  if (!explicit_learning_path) {
+    MigrateLegacyDefaultFileIfNeeded("azookey_learning.tsv", user_paths->learning_path);
+  }
+  if (!explicit_user_dict_path) {
+    MigrateLegacyDefaultFileIfNeeded("azookey_user_dict.json", user_paths->user_dict_path);
+  }
+
   azookey::learning::LearningStore store(learning_path);
   store.Load();
 
@@ -153,10 +167,7 @@ int main(int argc, char** argv) {
   dconf.protocol_version = 1;
   if (pipe_mode) {
     if (handshake_token.empty()) {
-      handshake_token = GenerateHandshakeToken();
-      std::cerr << "warn: generated IPC handshake token for this host process; "
-                   "manual TIP connections should set AZOOKEY_IPC_HANDSHAKE_TOKEN or "
-                   "--handshake-token explicitly"
+      std::cerr << "warn: no IPC handshake token configured; relying on per-user pipe ACL"
                 << std::endl;
     }
     dconf.handshake_token = handshake_token;

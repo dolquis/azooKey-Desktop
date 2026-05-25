@@ -84,9 +84,9 @@ std::optional<Envelope> Deserialize(const std::string& json_text) {
   return env;
 }
 
-std::vector<uint8_t> EncodeLengthPrefixed(const std::string& json_text) {
+std::optional<std::vector<uint8_t>> EncodeLengthPrefixed(const std::string& json_text) {
   if (json_text.size() > kMaxFrameSize) {
-    return {};
+    return std::nullopt;
   }
   std::vector<uint8_t> bytes(4 + json_text.size());
   const uint32_t size = static_cast<uint32_t>(json_text.size());

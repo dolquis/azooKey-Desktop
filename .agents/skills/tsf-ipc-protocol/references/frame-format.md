@@ -70,10 +70,9 @@ struct (例: `HandshakeRequest`, `QueryCandidatesRequest`, `CandidateField`,
 `HandshakeRequest` は任意の `handshake_token` を持つ。Host 側に token が設定
 されている場合、protocol version と token の両方が一致したときだけ
 `HandshakeResponse.accepted=true` になる。pipe mode の Host は
-`AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` を優先し、未指定時は起動時に
-token を生成する。TIP は `AZOOKEY_IPC_HANDSHAKE_TOKEN` から token を渡すため、
-手動接続では Host / TIP の両プロセスに同じ token を明示設定する。Host 起動側が
-token を生成する場合は、その起動側が TIP へ同じ token を渡す。
+`AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` を優先する。未指定時は
+per-user pipe ACL のみで動作し、token 検証は無効。手動で token を使う場合は
+Host / TIP の両プロセスに同じ `AZOOKEY_IPC_HANDSHAKE_TOKEN` を明示設定する。
 
 ## 既知の制約
 

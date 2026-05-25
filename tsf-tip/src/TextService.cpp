@@ -525,6 +525,10 @@ void TextService::IpcWorkerThread() {
   using namespace azookey::ipc;
 
   const auto pipe_name = DefaultPipeName();
+  if (pipe_name.empty()) {
+    DebugLog("IPC: default pipe name unavailable; current-user SID lookup failed");
+    return;
+  }
   constexpr uint32_t kSliceMs = 250;
   constexpr uint32_t kTotalMs = 5000;
   bool connected = false;

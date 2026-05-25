@@ -41,11 +41,13 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleCommitObservation(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleAddUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleRemoveUserWord(const ipc::Envelope& req);
+  bool RequiresAuthenticatedSession() const;
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;
   learning::UserDictionary* user_dict_;
   DispatcherConfig config_;
+  bool authenticated_{false};
 };
 
 }  // namespace azookey::host

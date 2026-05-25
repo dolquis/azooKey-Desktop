@@ -61,6 +61,9 @@ Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
     : engine_(engine), scheduler_(scheduler), user_dict_(user_dict), config_(std::move(config)) {}
 
 std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
+  if (req.type != ipc::MessageType::Handshake && RequiresAuthenticatedSession()) {
+    return std::nullopt;
+  }
   switch (req.type) {
     case ipc::MessageType::Handshake: return HandleHandshake(req);
     case ipc::MessageType::Ping: return HandlePing(req);
@@ -87,8 +90,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   } else {
     res.accepted = false;
   }
+  authenticated_ = res.accepted;
   res.model_loaded = engine_->model_loaded();
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
+}
+
+bool Dispatcher::RequiresAuthenticatedSession() const {
+  return !config_.handshake_token.empty() && !authenticated_;
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandlePing(const ipc::Envelope& req) {

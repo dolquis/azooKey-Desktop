@@ -103,6 +103,93 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_FALSE(parsed2->accepted);
 }
 
+TEST_F(DispatcherTest, HandshakeRequiresConfiguredToken) {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+
+  auto missing = token_dispatcher.Dispatch(
+      MakeReq(3, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(missing.has_value());
+  auto missing_payload = ipc::ParseHandshakeResponse(missing->payload_json);
+  ASSERT_TRUE(missing_payload.has_value());
+  EXPECT_FALSE(missing_payload->accepted);
+
+  req.handshake_token = "wrong-token";
+  auto wrong = token_dispatcher.Dispatch(
+      MakeReq(4, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(wrong.has_value());
+  auto wrong_payload = ipc::ParseHandshakeResponse(wrong->payload_json);
+  ASSERT_TRUE(wrong_payload.has_value());
+  EXPECT_FALSE(wrong_payload->accepted);
+
+  req.handshake_token = "expected-token";
+  auto matched = token_dispatcher.Dispatch(
+      MakeReq(5, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(matched.has_value());
+  auto matched_payload = ipc::ParseHandshakeResponse(matched->payload_json);
+  ASSERT_TRUE(matched_payload.has_value());
+  EXPECT_TRUE(matched_payload->accepted);
+}
+
+TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHandshake) {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.handshake_token = "expected-token";
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  ipc::AddUserWordRequest add;
+  add.word = "azooKey";
+  add.ruby = "あずきい";
+  // Unauthenticated requests receive a type-appropriate error response (ok=false)
+  // rather than nullopt, so blocking clients do not hang on receive.
+  auto add_before_handshake = token_dispatcher.Dispatch(
+      MakeReq(6, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(add_before_handshake.has_value());
+  auto add_before_payload = ipc::ParseAddUserWordResponse(add_before_handshake->payload_json);
+  ASSERT_TRUE(add_before_payload.has_value());
+  EXPECT_FALSE(add_before_payload->ok);
+  EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
+
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+  req.handshake_token = "wrong-token";
+  auto wrong = token_dispatcher.Dispatch(
+      MakeReq(7, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(wrong.has_value());
+  auto wrong_payload = ipc::ParseHandshakeResponse(wrong->payload_json);
+  ASSERT_TRUE(wrong_payload.has_value());
+  EXPECT_FALSE(wrong_payload->accepted);
+  auto add_after_wrong = token_dispatcher.Dispatch(
+      MakeReq(8, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(add_after_wrong.has_value());
+  EXPECT_FALSE(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->ok);
+
+  req.handshake_token = "expected-token";
+  auto matched = token_dispatcher.Dispatch(
+      MakeReq(9, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(matched.has_value());
+  auto matched_payload = ipc::ParseHandshakeResponse(matched->payload_json);
+  ASSERT_TRUE(matched_payload.has_value());
+  EXPECT_TRUE(matched_payload->accepted);
+
+  auto add_after_handshake = token_dispatcher.Dispatch(
+      MakeReq(10, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(add_after_handshake.has_value());
+  auto add_payload = ipc::ParseAddUserWordResponse(add_after_handshake->payload_json);
+  ASSERT_TRUE(add_payload.has_value());
+  EXPECT_TRUE(add_payload->ok);
+  EXPECT_EQ(user_dict.Lookup("あずきい").size(), 1u);
+}
+
 TEST_F(DispatcherTest, Ping) {
   ipc::PingPayload p;
   p.nonce = 0xCAFEBABE;
@@ -290,6 +377,36 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
   std::remove(model_path.c_str());
 }
 
+TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
+  const std::string model_path = TempPath("azookey_dispatcher_cuda_fallback_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "cuda";
+
+  auto env = MakeReq(71, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseLoadModelResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_TRUE(parsed->error.has_value());
+
+  auto health_env = MakeReq(72, ipc::MessageType::Health, "{}");
+  auto health_resp = dispatcher.Dispatch(health_env);
+  ASSERT_TRUE(health_resp.has_value());
+  auto health = ipc::ParseHealth(health_resp->payload_json);
+  ASSERT_TRUE(health.has_value());
+  EXPECT_EQ(health->status, "ok");
+  EXPECT_EQ(health->backend, "cpu");
+  EXPECT_TRUE(health->model_loaded);
+  EXPECT_FALSE(health->last_error.has_value());
+
+  std::remove(model_path.c_str());
+}
+
 TEST_F(DispatcherTest, Health) {
   auto env = MakeReq(70, ipc::MessageType::Health, "{}");
   auto resp = dispatcher.Dispatch(env);
@@ -298,4 +415,46 @@ TEST_F(DispatcherTest, Health) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->status, "ok");
   EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
+}
+
+// Verify that a token-configured Dispatcher isolates auth state per instance.
+// Connection A authenticates; a separate Dispatcher (simulating connection B)
+// must NOT inherit A's authenticated state.
+TEST_F(DispatcherTest, CrossClientAuthIsolation) {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.handshake_token = "secret";
+
+  azookey::host::Dispatcher conn_a(&engine, &scheduler, &user_dict, config);
+  azookey::host::Dispatcher conn_b(&engine, &scheduler, &user_dict, config);
+
+  // Connection A authenticates successfully.
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+  req.handshake_token = "secret";
+  auto resp_a = conn_a.Dispatch(MakeReq(1, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(resp_a.has_value());
+  EXPECT_TRUE(ipc::ParseHandshakeResponse(resp_a->payload_json)->accepted);
+
+  // Connection B has NOT performed a handshake; AddUserWord must be rejected
+  // (returns ok=false rather than nullopt so the client does not hang).
+  ipc::AddUserWordRequest add;
+  add.word = "test";
+  add.ruby = "てすと";
+  auto resp_b = conn_b.Dispatch(
+      MakeReq(2, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(resp_b.has_value());
+  EXPECT_FALSE(ipc::ParseAddUserWordResponse(resp_b->payload_json)->ok);
+  EXPECT_TRUE(user_dict.Lookup("てすと").empty());
+
+  // A failed handshake on B must not de-authenticate A.
+  ipc::HandshakeRequest bad_req = req;
+  bad_req.handshake_token = "wrong";
+  conn_b.Dispatch(MakeReq(3, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(bad_req)));
+  auto resp_a2 = conn_a.Dispatch(
+      MakeReq(4, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(resp_a2.has_value());
+  EXPECT_TRUE(ipc::ParseAddUserWordResponse(resp_a2->payload_json)->ok);
 }

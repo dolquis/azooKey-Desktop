@@ -7,10 +7,10 @@ $ErrorActionPreference = "Stop"
 
 # Resolve default paths relative to the script location.
 if (-not $TipDllPath) {
-  $TipDllPath = Join-Path $PSScriptRoot "..\build\tsf-tip\azookey_tsf_tip.dll"
+  $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-debug\tsf-tip\azookey_tsf_tip.dll"
 }
 if (-not $HostExePath) {
-  $HostExePath = Join-Path $PSScriptRoot "..\build\inference-host\azookey_inference_host.exe"
+  $HostExePath = Join-Path $PSScriptRoot "..\build\windows-debug\inference-host\azookey_inference_host.exe"
 }
 
 $TipDllPath  = [System.IO.Path]::GetFullPath($TipDllPath)

@@ -1,5 +1,10 @@
+#include <chrono>
+#include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -9,6 +14,20 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+
+namespace {
+
+bool WaitForClientCount(azookey::ipc::NamedPipeServer& server, std::size_t expected) {
+  for (int i = 0; i < 100; ++i) {
+    if (server.ActiveClientCountForTesting() == expected) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+}  // namespace
 
 TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   const std::string pipe_name =
@@ -91,6 +110,66 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   EXPECT_EQ(ppayload->nonce, 424242u);
 
   client.Disconnect();
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-multi-test-" + std::to_string(GetCurrentProcessId());
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        if (req.type != azookey::ipc::MessageType::Ping) {
+          return std::nullopt;
+        }
+
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+
+        azookey::ipc::PingPayload payload;
+        if (auto parsed = azookey::ipc::ParsePing(req.payload_json)) {
+          payload.nonce = parsed->nonce;
+        }
+        payload.t_ms = 123;
+        res.payload_json = azookey::ipc::BuildPing(payload);
+        return res;
+      });
+  ASSERT_TRUE(started);
+
+  std::vector<std::unique_ptr<azookey::ipc::NamedPipeClient>> clients;
+  constexpr uint64_t kClientCount = 6;
+  for (uint64_t i = 0; i < kClientCount; ++i) {
+    SCOPED_TRACE(i);
+    auto client = std::make_unique<azookey::ipc::NamedPipeClient>();
+    ASSERT_TRUE(client->Connect(pipe_name, 2000));
+
+    azookey::ipc::PingPayload ping;
+    ping.nonce = i + 100;
+    azookey::ipc::Envelope env;
+    env.version = 1;
+    env.request_id = i + 1;
+    env.trace_id = "multi-client";
+    env.type = azookey::ipc::MessageType::Ping;
+    env.payload_json = azookey::ipc::BuildPing(ping);
+
+    ASSERT_TRUE(client->Send(env));
+    auto response = client->Receive();
+    ASSERT_TRUE(response.has_value());
+    auto payload = azookey::ipc::ParsePing(response->payload_json);
+    ASSERT_TRUE(payload.has_value());
+    EXPECT_EQ(payload->nonce, i + 100);
+    clients.push_back(std::move(client));
+  }
+
+  ASSERT_TRUE(WaitForClientCount(server, kClientCount));
+  for (auto& client : clients) {
+    client->Disconnect();
+  }
+  EXPECT_TRUE(WaitForClientCount(server, 0));
   server.Stop();
 }
 

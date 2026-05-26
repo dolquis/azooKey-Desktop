@@ -236,13 +236,13 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
   EXPECT_TRUE(result.error.has_value());
   EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cpu);
   EXPECT_TRUE(engine->model_loaded());
-  EXPECT_EQ(engine->last_error(), result.error);
+  EXPECT_FALSE(engine->last_error().has_value());
 
   std::remove(model_path.c_str());
   std::remove(lpath);
 }
 
-TEST(InferenceEngineTest, LoadModelFailureRestoresFallbackConverter) {
+TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
   const char* lpath = "azookey_host_engine_reload_failure.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -261,11 +261,12 @@ TEST(InferenceEngineTest, LoadModelFailureRestoresFallbackConverter) {
   bad.path = TempPath("azookey_missing_after_success.gguf");
   const auto failed = engine->LoadModelWithResult(bad);
   EXPECT_FALSE(failed.ok);
-  EXPECT_FALSE(engine->model_loaded());
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_FALSE(engine->last_error().has_value());
 
   auto cands = engine->QueryCandidates("にほん", "", kNowBase);
   ASSERT_FALSE(cands.empty());
-  EXPECT_EQ(cands.front().debug_info.find("zenzai-gguf-loaded"),
+  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"),
             std::string::npos);
 
   std::remove(model_path.c_str());

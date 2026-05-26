@@ -274,14 +274,16 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - コード署名（証明書手当ては別途）
   - リリースタグ → アーティファクト自動公開
 - **現状**:
-  - `.github/workflows/windows.yml` で windows-latest + msvc-dev-cmd + Ninja で configure → build → 各 `*_tests.exe` を個別実行 → 失敗時 PR コメントと test_report.md artifact をアップ。
+  - `.github/workflows/windows.yml` で windows-2022 + msvc-dev-cmd + Ninja により
+    Debug / Release matrix を preset 経由で configure → build → CTest 実行。
+    失敗時 PR コメント、config ごとのログ artifact、Release `.pdb` artifact をアップ。
 - **残作業**:
   - signtool ステップ（EV/OV 証明書）。
   - MSIX/MSI 生成ステップ（M11 で `pkg/` 構成決定後）。
   - タグ push トリガで MSIX を Release に自動公開。
-- **設計メモ**: 現行 `windows.yml` の Debug/Release マトリクス化・preset
-  利用・Linux 補助ジョブ・bench smoke は M38（CI 品質ゲート拡張）で先に
-  整える。M12 はその拡張済み CI を前提に署名・Release 公開ステップを足す。
+- **設計メモ**: M38（CI 品質ゲート拡張）で整備済みの Debug/Release matrix・
+  preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では署名・Release
+  公開ステップを足す。
 - **受け入れ条件**:
   - main への merge で CI が緑 ✅（テストが個別 exe 実行で全件 pass）
   - タグ push で署名済み MSIX/MSI が Release に上がる
@@ -311,7 +313,8 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 `cmake -S . -B build` が失敗しないようにするため）。
 各テストは `gtest_discover_tests` により **ケース単位**（`SuiteName.TestName`）で
 CTest に登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに
-個別の CTest エントリへ展開される。実行は `ctest --test-dir build` で一括。
+個別の CTest エントリへ展開される。現行 preset では `ctest --preset windows-debug`
+または `ctest --preset windows-release` で一括実行する。
 
 ### 現存テスト一覧
 
@@ -330,7 +333,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 | `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/Cancel/Commit/AddUserWord/RemoveUserWord/Health の全 8 ハンドラ |
 | `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)` |
-| `bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
+| `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
@@ -347,13 +350,13 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 
 長期（Phase 4 / 配布前に必須）:
 8. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
-9. ✅ **bench smoke** — `bench/azookey_bench.exe` を `bench_smoke` として CTest から呼び、exit=0 と p95 < 50ms（CPU SimpleConverter）を満たすことを CI で検証。
+9. ✅ **bench smoke** — `bench/azookey_bench.exe` を `azookey_bench_smoke` として CTest から呼び、exit=0 と p95 < 50ms（CPU SimpleConverter）を満たすことを CI で検証。
 10. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 11. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
-12. **JSON malformed/fuzz テスト** — `ipc/src/Json.cpp` にランダムバイト列・深すぎるネスト・巨大数・不正 Unicode escape・末尾ゴミ・最大長超過を投げてもクラッシュせず失敗を返すことを assertion 化（M40）。
-13. **`NamedPipeServer` 再接続耐性** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオ（M40 の複数接続・切断テスト、M42 の状態機械テスト）。
+12. ✅ **JSON malformed/fuzz テスト** — `ipc/src/Json.cpp` にランダムバイト列・深すぎるネスト・巨大数・不正 Unicode escape・末尾ゴミ・最大長超過を投げてもクラッシュせず失敗を返すことを assertion 化（M40）。
+13. **`NamedPipeServer` 再接続耐性** — M40 で複数接続・切断時の client cleanup を unit test 化済み。Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオは M42 の状態機械テストで扱う。
 14. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
 15. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
 
@@ -450,14 +453,14 @@ v1.0 リリースに向けたリスクと対応:
   cuda|cpu` をリクエストで指定する設計
 
 **Phase 3 検証**:
-1. ビルド: `cmake -S . -B build -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BACKEND=cpu && cmake --build build`
-2. ユニットテスト: `ctest --test-dir build --output-on-failure` で全テスト緑
+1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
+2. ユニットテスト: `ctest --preset windows-debug --output-on-failure` で全テスト緑
 3. Windows 実機（Win11 VM 推奨）: `scripts/register.ps1` で TIP DLL 登録 →
    `azookey_inference_host.exe --pipe --backend cpu` 起動 → gguf を
    `%LOCALAPPDATA%\azooKey\models\` に配置し `LoadModel` 成功 → gguf 削除時は
    `SimpleConverter` フォールバック → メモ帳で `nihongo` 入力で Zenzai 候補
 4. GPU 経路: `--backend cuda` 起動で失敗時は CPU フォールバック
-5. ベンチ: `./build/bench/azookey_bench.exe` の p50/p95 が許容内
+5. ベンチ: `./build/windows-release/bench/azookey_bench.exe` の p50/p95 が許容内
 6. `unregister.ps1` でクリーン解除確認
 
 ### Phase 4: 配布可能化 — v1.0 リリースゲート（M11/M12、4〜6 週）
@@ -868,7 +871,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ### M34: DPAPI 学習データ暗号化
 
-- **目的**: `learning.tsv` / `user-dict.json` / OpenAI API キーをユーザースコープ
+- **目的**: `learning.tsv` / `user_dict.json` / OpenAI API キーをユーザースコープ
   で暗号化。M35 / M36 で追加される学習データ（`typo_corrections.tsv` /
   `auto_words.tsv`）も同等の機微情報として対象に含める。
 - **前提**: Phase 5 完了。
@@ -977,13 +980,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > M 番号は通し連番（既存最終 M36-B の続き）。spec から参照されるため
 > M 番号・Phase グルーピングは変更しない。
 
-### M37: ビルド再現性
+### M37: ビルド再現性 ✅ 実装済み
 
 - **目的**: 手元・CI・AI エージェントでビルド入口を統一し、コンパイル
   オプションを一元管理する。
 - **前提**: なし（独立トラック。Phase 3 着手前の実施を推奨）。
 - **変更対象**: `CMakePresets.json`（新規）、ルート `CMakeLists.txt`、
   各 `*/CMakeLists.txt`、`.clang-format`（新規）、`.gitignore`。
+- **現状**:
+  - `CMakePresets.json` に `windows-debug` / `windows-release` の configure /
+    build / test preset を追加済み。
+  - ルート `CMakeLists.txt` に `azookey_project_options` /
+    `azookey_project_warnings` を追加し、既存 target へ適用済み。
+  - `.clang-format` と Windows/CMake 向け `.gitignore` エントリを追加済み。
+  - 2026-05-23 に `AZOOKEY_FETCH_GOOGLETEST=ON` で Debug / Release とも
+    configure → build → CTest 72 件成功を確認済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §2。
   - `CMakePresets.json`（`windows-debug` / `windows-release`）
   - `azookey_project_options` / `azookey_project_warnings` の INTERFACE
@@ -998,12 +1009,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - ビルド生成物が `git status` に現れない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §2, §3
 
-### M38: CI 品質ゲート拡張
+### M38: CI 品質ゲート拡張 ✅ 実装済み
 
 - **目的**: Debug/Release 両構成・preset 利用・移植性チェックを CI に加え、
   品質ゲートを強化する。
 - **前提**: M37 完了（preset / clang-format）。
 - **変更対象**: `.github/workflows/windows.yml`、Linux 補助ワークフロー。
+- **現状**:
+  - `.github/workflows/windows.yml` を `windows-2022` の Debug / Release
+    matrix に変更し、configure / build / test を preset 経由に統一済み。
+  - Linux Debug 補助ジョブを追加し、非 Windows target の configure / build /
+    CTest を `linux-debug` preset で実行する。
+  - `azookey_bench_smoke` を CTest に登録し、p95 < 50ms を smoke 条件として
+    検証する。
+  - config ごとの configure / build / test ログ artifact と、Release `.pdb`
+    artifact をアップロードする。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §4。
   - Debug/Release マトリクス、runner を `windows-2022` に明示
   - CI の configure/build/test を preset 経由に統一
@@ -1017,7 +1037,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - PR コメントが config ごとの結果に対応する
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §4
 
-### M39: ユーザーデータ永続化の堅牢化
+### M39: ユーザーデータ永続化の堅牢化 ✅ 実装済み
 
 - **目的**: 学習・辞書ファイルの保存先を実行ディレクトリ依存から脱却させ、
   原子的書き込みで破損を防ぐ。
@@ -1025,6 +1045,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `inference-host/src/main.cpp`、
   `inference-host/src/`（パス解決ロジック新規）、
   `learning/src/LearningStore.cpp`・`UserDictionary.cpp`（原子的書き込み）。
+- **現状**:
+  - `UserDataPaths` で `%LOCALAPPDATA%\azooKey\{config,data,logs,models}\`
+    レイアウトと `learning.tsv` / `user_dict.json` の既定パスを解決する。
+  - `--learning` / `--user-dict` 指定時は明示パスを優先し、必要な親ディレクトリ
+    を自動作成する。
+  - `LearningStore::Save` / `UserDictionary::Save` は一時ファイルへ書き込んでから
+    replace する原子的保存に変更済み。
+  - 保存先決定とディレクトリ作成、原子的保存時の親ディレクトリ作成・一時
+    ファイル残骸なしを unit test で検証済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §5。
   - 既定保存先を `%LOCALAPPDATA%\azooKey\{config,data,logs,models}\` に
   - `SHGetKnownFolderPath` でのパス取得、サブディレクトリ自動作成
@@ -1039,13 +1068,26 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 保存先決定ロジックの unit test が緑、既存テストが回帰しない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §5
 
-### M40: IPC/JSON 堅牢化
+### M40: IPC/JSON 堅牢化 ✅ 実装済み
 
 - **目的**: 自前 JSON パーサと Named Pipe 入力の境界堅牢性を上げ、IPC
   境界での事故を減らす。
 - **前提**: なし（独立トラック。Phase 3/4 と並行可能）。
 - **変更対象**: `ipc/src/Json.cpp`、`ipc/src/Payloads.cpp`、
   `ipc/src/NamedPipeTransport.cpp`、`ipc/tests/`。
+- **現状**:
+  - JSON パーサに最大入力長 1MiB、ネスト深度 64、数値範囲チェック、
+    raw UTF-8 検証、制御文字拒否、サロゲートペア結合を追加済み。
+  - length-prefix / Named Pipe の最大フレームサイズを 1MiB に統一し、
+    Named Pipe インスタンス上限を 4 に制限済み。
+  - malformed JSON / ランダムバイト列 / 深すぎるネスト / 巨大数 /
+    不正 Unicode escape / 最大 payload 超過の unit test を追加済み。
+  - Release では SID 取得失敗時に pipe 名 / DACL の fallback を拒否し、
+    Debug/test のみ fallback pipe を許可する。
+  - Handshake token を payload に追加し、pipe mode の Host は
+    `AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` が設定されている場合のみ
+    token を検証する。未指定時は per-user pipe ACL のみで動作する。
+  - 切断済み client を Stop 待ちにせず解放し、複数接続・切断テストで検証済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
   - JSON: ネスト深度上限・最大入力長・サロゲートペア結合・不正 UTF-8/
     制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否
@@ -1055,8 +1097,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
   - malformed JSON・ランダムバイト列でクラッシュしない
+  - ネスト深度・最大長超過を拒否する
+  - サロゲートペアを正しく結合し、単独サロゲートを拒否する
   - Release ビルドで SID 取得失敗時に Host 起動が失敗する
   - 複数接続・切断テストが追加され緑
+  - 切断済み client が解放される
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §6
 
 ### M41: 構造化ログと可観測性

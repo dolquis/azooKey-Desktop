@@ -1,6 +1,7 @@
 #include "azookey/tsf/TextService.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <optional>
 #include <thread>
 
@@ -17,6 +18,22 @@ void DebugLog(const std::string& message) {
   OutputDebugStringA(("[azooKey TIP] " + message + "\n").c_str());
 #else
   UNREFERENCED_PARAMETER(message);
+#endif
+}
+
+std::string IpcHandshakeTokenFromEnv() {
+#if defined(_MSC_VER)
+  char* value = nullptr;
+  size_t length = 0;
+  if (_dupenv_s(&value, &length, "AZOOKEY_IPC_HANDSHAKE_TOKEN") != 0 || value == nullptr) {
+    return {};
+  }
+  std::string result(value);
+  std::free(value);
+  return result;
+#else
+  const char* value = std::getenv("AZOOKEY_IPC_HANDSHAKE_TOKEN");
+  return value ? std::string(value) : std::string();
 #endif
 }
 
@@ -508,6 +525,10 @@ void TextService::IpcWorkerThread() {
   using namespace azookey::ipc;
 
   const auto pipe_name = DefaultPipeName();
+  if (pipe_name.empty()) {
+    DebugLog("IPC: default pipe name unavailable; current-user SID lookup failed");
+    return;
+  }
   constexpr uint32_t kSliceMs = 250;
   constexpr uint32_t kTotalMs = 5000;
   bool connected = false;
@@ -523,6 +544,7 @@ void TextService::IpcWorkerThread() {
   hs.tip_version = kTipVersion;
   hs.protocol_version = 1;
   hs.capabilities = {"ping", "query_candidates", "commit_observation", "cancel"};
+  hs.handshake_token = IpcHandshakeTokenFromEnv();
 
   Envelope henv;
   henv.version = 1;

@@ -27,7 +27,7 @@
   - `ipc/` — Named Pipe + JSON + length-prefix の IPC 定義
   - `learning/` — 頻度＋時間減衰の再ランキング
   - `bench/` — レイテンシ計測 CLI
-  - `scripts/` — `register.ps1` / `unregister.ps1`(管理者権限要)
+  - `scripts/` — `register.ps1` / `unregister.ps1`(HKCU user-scope、elevation 不要)
 - ビルド：Windows 10/11 + Visual Studio 2022(C++ デスクトップ)+ CMake ≥ 3.21 + Windows SDK
 - テスト：CTest + GoogleTest(`-DAZOOKEY_FETCH_GOOGLETEST=ON` で FetchContent)
 - 既存メタファイル：`CLAUDE.md`(Claude Code 用)、`AGENTS.md`(Codex CLI および人間用)
@@ -110,7 +110,7 @@ network_access = true
 # Windows ネイティブ実行時の設定
 # ─────────────────────────────────────────────
 
-# TIP 登録だけ別途管理者で実行する運用なので unelevated を維持
+# TIP 登録は HKCU user-scope なので unelevated を維持
 [windows]
 sandbox = "unelevated"
 sandbox_private_desktop = true
@@ -124,7 +124,7 @@ sandbox_private_desktop = true
 url = "https://mcp.context7.com/mcp"
 startup_timeout_sec = 15
 
-# PowerShell.MCP: register.ps1 等の管理者コマンドを安全に提示
+# PowerShell.MCP: register.ps1 等の Windows 側コマンドを安全に提示
 # PowerShell.MCP は PowerShell.MCP.Proxy.exe を stdio で起動する仕様。
 # 各開発者は Install-PSResource PowerShell.MCP 後に
 # `[Environment]::SetEnvironmentVariable('POWERSHELL_MCP_PROXY',
@@ -200,19 +200,19 @@ Windows 版 IME。TSF Text Input Processor(in-proc COM DLL)+ 別プロセスの 
 ## ビルド(CMake + MSVC)
 
 ```bash
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-debug
+ctest --preset windows-debug --output-on-failure
 ```
 
 `-DAZOOKEY_FETCH_GOOGLETEST=ON` は FetchContent で GoogleTest を取得する。
 オフライン環境では `-OFF` でテストのみスキップしてビルドを通す。
 
-## TIP 登録 / 解除(管理者権限)
+## TIP 登録 / 解除(HKCU user-scope)
 
-`scripts/register.ps1` / `unregister.ps1` は管理者 PowerShell で実行する。
+`scripts/register.ps1` / `unregister.ps1` は対象ユーザーの PowerShell で実行する。
 **Codex CLI は単独で実行を完了させてはならない**。PowerShell.MCP の共有コンソール経由で、
-コマンド提示までに留め、実行はユーザーが管理者で確定する。本リポジトリの
+コマンド提示までに留め、実行はユーザーが確定する。本リポジトリの
 `DllRegisterServer` と `register.ps1` は user-scope (HKCU) に登録するため、
 失敗時は `HKCU\Software\Classes\CLSID\{...}` と
 `HKCU\Software\Microsoft\CTF\TIP\{...}` の登録状態を確認すること
@@ -220,7 +220,7 @@ ctest --test-dir build -C Debug --output-on-failure
 
 ## レイテンシ計測
 
-`core/` `learning/` `ipc/` を編集したら、Release ビルドで `bench/azookey_bench.exe` を
+`core/` `learning/` `ipc/` を編集したら、Release ビルドで `build/windows-release/bench/azookey_bench.exe` を
 実行し、変更前後の数値を PR 本文に貼る。Debug 数値は性能評価に使わない。
 
 ## スキル(`.agents/skills/`)
@@ -233,7 +233,7 @@ ctest --test-dir build -C Debug --output-on-failure
 ## MCP サーバー(`.codex/config.toml`)
 
 - `context7` — TSF/COM/Win32 API のドキュメント参照
-- `powershell` — 管理者コマンドの安全な提示と実行(人間介在)
+- `powershell` — Windows 側コマンドの安全な提示と実行(人間介在)
 - `windows-mcp` — UI Automation で TIP の動作検証
 ````
 
@@ -281,7 +281,7 @@ description: tsf-tip/ 配下の C++ コード(ITfTextInputProcessor 実装、COM
 ## 補助ツール(マーケット品を活用)
 
 - 仕様確認：context7 MCP 経由で <https://learn.microsoft.com/en-us/windows/win32/tsf/> を fetch
-- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)でユーザーが管理者実行
+- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)で対象ユーザーとして実行
 - 実アプリでの入力検証：Windows-MCP の UI Automation
 
 ## やってはいけない

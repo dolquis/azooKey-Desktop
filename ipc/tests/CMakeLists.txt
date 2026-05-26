@@ -1,15 +1,23 @@
 add_executable(ipc_tests messages_test.cpp)
-target_link_libraries(ipc_tests PRIVATE azookey_ipc GTest::gtest_main)
+target_link_libraries(ipc_tests
+  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(ipc_tests)
 
 add_executable(ipc_payloads_tests payloads_test.cpp)
-target_link_libraries(ipc_payloads_tests PRIVATE azookey_ipc GTest::gtest_main)
+target_link_libraries(ipc_payloads_tests
+  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(ipc_payloads_tests)
 
 add_executable(ipc_named_pipe_transport_tests named_pipe_transport_test.cpp)
-target_link_libraries(ipc_named_pipe_transport_tests PRIVATE azookey_ipc GTest::gtest_main)
+target_link_libraries(ipc_named_pipe_transport_tests
+  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(ipc_named_pipe_transport_tests)
 
 add_executable(ipc_tip_client_tests tip_client_ipc_test.cpp)
-target_link_libraries(ipc_tip_client_tests PRIVATE azookey_ipc GTest::gtest_main)
+target_link_libraries(ipc_tip_client_tests
+  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+)
 gtest_discover_tests(ipc_tip_client_tests)

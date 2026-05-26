@@ -8,7 +8,9 @@
 - Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE`
 - DACL: 現在のユーザ SID のみに RW 許可
   (`NamedPipeServer` Windows 実装で設定)
-- 1 サーバが複数クライアント (TIP + 設定 UI 等) を許容
+- 1 サーバが複数クライアント (TIP + 設定 UI 等) を許容するが、同時接続
+  インスタンスは 4 まで。
+- Release では SID 取得失敗時に per-user pipe 名 / DACL fallback を拒否する。
 
 ## フレーミング
 
@@ -22,6 +24,8 @@
 - 実装: `ipc::EncodeLengthPrefixed` / `ipc::DecodeLengthPrefixed`
   (`ipc/include/azookey/ipc/Messages.h`)
 - length-prefix は **必ず** payload と同じ 1 回の `Send` で書き出す。
+- 最大 payload サイズは 1MiB (`ipc::kMaxFrameSize`)。JSON パーサの最大入力長
+  と同じ値に揃え、超過フレームは送受信時に拒否する。
 - バイトオーダーが LE な理由: Windows ネイティブが LE のため zero-copy で
   処理できる。
 
@@ -63,11 +67,15 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 struct (例: `HandshakeRequest`, `QueryCandidatesRequest`, `CandidateField`,
 `CommitObservationRequest`) を参照。
 
+`HandshakeRequest` は任意の `handshake_token` を持つ。Host 側に token が設定
+されている場合、protocol version と token の両方が一致したときだけ
+`HandshakeResponse.accepted=true` になる。pipe mode の Host は
+`AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` を優先する。未指定時は
+per-user pipe ACL のみで動作し、token 検証は無効。手動で token を使う場合は
+Host / TIP の両プロセスに同じ `AZOOKEY_IPC_HANDSHAKE_TOKEN` を明示設定する。
+
 ## 既知の制約
 
-- ペイロード最大サイズの明示的な上限はコードで強制していない。
-  ただし `PIPE_TYPE_MESSAGE` のメッセージサイズは Windows 仕様に従う
-  (実用上、変換候補リクエスト/レスポンスは数 KB 程度の想定)。
 - `Receive()` はブロッキング、`ReceiveWithTimeout(timeout_ms)` は送信キューを
   drain したい呼び出し側のためのノンブロッキング版。
 

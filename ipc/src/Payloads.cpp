@@ -49,6 +49,9 @@ std::string BuildHandshakeRequest(const HandshakeRequest& p) {
   j::Array caps;
   for (const auto& c : p.capabilities) caps.emplace_back(j::Value(c));
   o.emplace("capabilities", j::Value(std::move(caps)));
+  if (!p.handshake_token.empty()) {
+    o.emplace("handshake_token", j::Value(p.handshake_token));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -66,6 +69,7 @@ std::optional<HandshakeRequest> ParseHandshakeRequest(const std::string& json) {
       if (e.IsString()) p.capabilities.push_back(e.AsString());
     }
   }
+  p.handshake_token = v->GetString("handshake_token").value_or(std::string());
   return p;
 }
 

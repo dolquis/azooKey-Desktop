@@ -1,14 +1,27 @@
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
-#include <csignal>
-#include <chrono>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <thread>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/LearningStore.h"
@@ -30,16 +43,66 @@ void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   }
 }
 
+#ifdef _WIN32
+std::filesystem::path GetExeDirectory() {
+  wchar_t buf[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, buf, MAX_PATH);
+  return std::filesystem::path(buf).parent_path();
+}
+#endif
+
+void MigrateLegacyDefaultFileIfNeeded(const char* legacy_name,
+                                      const std::filesystem::path& target) {
+#ifdef _WIN32
+  // Use the exe directory rather than CWD so the lookup is deterministic and
+  // limited to installer-controlled paths.
+  const std::filesystem::path legacy = GetExeDirectory() / legacy_name;
+#else
+  const std::filesystem::path legacy(legacy_name);
+#endif
+  if (std::filesystem::exists(target) || !std::filesystem::exists(legacy)) {
+    return;
+  }
+
+  std::error_code ec;
+  if (!target.parent_path().empty()) {
+    std::filesystem::create_directories(target.parent_path(), ec);
+    if (ec) return;
+  }
+  std::filesystem::copy_file(legacy, target, std::filesystem::copy_options::none, ec);
+  if (!ec) {
+    std::cerr << "info: migrated legacy user data file " << legacy << " -> " << target
+              << std::endl;
+  }
+}
+
+std::string GetEnvString(const char* name) {
+#if defined(_MSC_VER)
+  char* value = nullptr;
+  size_t length = 0;
+  if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) {
+    return {};
+  }
+  std::string result(value);
+  std::free(value);
+  return result;
+#else
+  const char* value = std::getenv(name);
+  return value ? std::string(value) : std::string();
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
-  std::string learning_path = "azookey_learning.tsv";
-  std::string user_dict_path = "azookey_user_dict.json";
+  std::optional<std::filesystem::path> explicit_learning_path;
+  std::optional<std::filesystem::path> explicit_user_dict_path;
   std::string mock_dict_path;
   bool pipe_mode = false;
   std::string pipe_name;
+  std::string handshake_token = GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN");
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -57,9 +120,9 @@ int main(int argc, char** argv) {
     } else if (arg == "--model" && i + 1 < argc) {
       config.model_path = argv[++i];
     } else if (arg == "--learning" && i + 1 < argc) {
-      learning_path = argv[++i];
+      explicit_learning_path = argv[++i];
     } else if (arg == "--user-dict" && i + 1 < argc) {
-      user_dict_path = argv[++i];
+      explicit_user_dict_path = argv[++i];
     } else if (arg == "--mock-dict" && i + 1 < argc) {
       mock_dict_path = argv[++i];
     } else if (arg == "--pipe") {
@@ -70,9 +133,36 @@ int main(int argc, char** argv) {
     } else if (arg == "--pipe-name" && i + 1 < argc) {
       pipe_mode = true;
       pipe_name = argv[++i];
+    } else if (arg == "--handshake-token" && i + 1 < argc) {
+      handshake_token = argv[++i];
     } else if (arg == "--stdio") {
       pipe_mode = false;
     }
+  }
+
+  azookey::host::UserDataPathInputs path_inputs;
+  path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
+  path_inputs.explicit_learning_path = explicit_learning_path;
+  path_inputs.explicit_user_dict_path = explicit_user_dict_path;
+  auto user_paths = azookey::host::ResolveUserDataPaths(path_inputs);
+  if (!user_paths) {
+    std::cerr << "error: failed to resolve azooKey user data directory" << std::endl;
+    return 2;
+  }
+  if (!azookey::host::EnsureUserDataDirectories(*user_paths)) {
+    std::cerr << "error: failed to create azooKey user data directories under "
+              << user_paths->root_dir << std::endl;
+    return 2;
+  }
+
+  const std::string learning_path = user_paths->learning_path.string();
+  const std::string user_dict_path = user_paths->user_dict_path.string();
+
+  if (!explicit_learning_path) {
+    MigrateLegacyDefaultFileIfNeeded("azookey_learning.tsv", user_paths->learning_path);
+  }
+  if (!explicit_user_dict_path) {
+    MigrateLegacyDefaultFileIfNeeded("azookey_user_dict.json", user_paths->user_dict_path);
   }
 
   azookey::learning::LearningStore store(learning_path);
@@ -89,8 +179,7 @@ int main(int argc, char** argv) {
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
   if (!engine.LoadModel()) {
-    std::cerr << "warn: model load failed: "
-              << engine.last_error().value_or("unknown error")
+    std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
               << " (falling back to SimpleConverter)" << std::endl;
   }
 
@@ -98,13 +187,22 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
-  azookey::host::Dispatcher dispatcher(&engine, &scheduler, &user_dict, dconf);
+  if (pipe_mode) {
+    if (handshake_token.empty()) {
+      std::cerr << "warn: no IPC handshake token configured; relying on per-user pipe ACL"
+                << std::endl;
+    }
+    dconf.handshake_token = handshake_token;
+  }
+  // For stdio mode a single Dispatcher suffices (one connection).
+  // For pipe mode a new Dispatcher is created per client connection so that
+  // each client's authentication state is isolated.
+  azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf);
 
   std::cerr << "azookey inference-host started. backend="
             << (engine.backend() == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
             << " learning=" << learning_path << " user_dict=" << user_dict_path
-            << " model_loaded=" << (engine.model_loaded() ? "true" : "false")
-            << std::endl;
+            << " model_loaded=" << (engine.model_loaded() ? "true" : "false") << std::endl;
 
   if (pipe_mode) {
     if (pipe_name.empty()) {
@@ -112,9 +210,14 @@ int main(int argc, char** argv) {
     }
 
     azookey::ipc::NamedPipeServer server;
-    if (!server.Start(pipe_name, [&dispatcher](const azookey::ipc::Envelope& env) {
-          return dispatcher.Dispatch(env);
-        })) {
+    if (!server.Start(pipe_name,
+                      [&engine, &scheduler, &user_dict, dconf]() {
+                        auto d = std::make_shared<azookey::host::Dispatcher>(
+                            &engine, &scheduler, &user_dict, dconf);
+                        return [d](const azookey::ipc::Envelope& env) {
+                          return d->Dispatch(env);
+                        };
+                      })) {
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
       return 2;
     }
@@ -137,7 +240,7 @@ int main(int argc, char** argv) {
       std::cerr << "warn: failed to parse envelope" << std::endl;
       continue;
     }
-    auto resp = dispatcher.Dispatch(*env);
+    auto resp = stdio_dispatcher.Dispatch(*env);
     if (resp) {
       std::cout << azookey::ipc::Serialize(*resp) << std::endl;
       std::cout.flush();

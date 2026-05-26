@@ -26,12 +26,14 @@ TEST(PayloadsTest, Handshake) {
   req.tip_version = "0.1.0";
   req.protocol_version = 1;
   req.capabilities = {"live_conversion", "cancel"};
+  req.handshake_token = "token-123";
   auto json = azookey::ipc::BuildHandshakeRequest(req);
   auto parsed = azookey::ipc::ParseHandshakeRequest(json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->tip_version, "0.1.0");
   ASSERT_EQ(parsed->capabilities.size(), 2u);
   EXPECT_EQ(parsed->capabilities[0], "live_conversion");
+  EXPECT_EQ(parsed->handshake_token, "token-123");
 
   azookey::ipc::HandshakeResponse res;
   res.host_version = "0.1.0";

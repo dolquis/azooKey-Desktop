@@ -13,6 +13,7 @@ namespace azookey::host {
 struct DispatcherConfig {
   std::string host_version{"0.1.0"};
   int protocol_version{1};
+  std::string handshake_token;
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code
@@ -31,6 +32,7 @@ class Dispatcher {
   const DispatcherConfig& config() const { return config_; }
 
  private:
+  std::optional<ipc::Envelope> HandleUnauthenticated(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleHandshake(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandlePing(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleHealth(const ipc::Envelope& req);
@@ -40,11 +42,13 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleCommitObservation(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleAddUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleRemoveUserWord(const ipc::Envelope& req);
+  bool RequiresAuthenticatedSession() const;
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;
   learning::UserDictionary* user_dict_;
   DispatcherConfig config_;
+  bool authenticated_{false};
 };
 
 }  // namespace azookey::host

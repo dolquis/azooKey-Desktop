@@ -455,7 +455,8 @@ public:
 
 ### 7.3 TSV 永続化
 
-既存 `azookey_learning.tsv` の該当行を weight=0 で書き戻す。
+既存の学習 TSV（未指定時は `%LOCALAPPDATA%\azooKey\data\learning.tsv`）の
+該当行を weight=0 で書き戻す。
 ファイルロックは既存の `Save()` フローに従う。
 
 ## 8. デバッグウィンドウ (M18-3)

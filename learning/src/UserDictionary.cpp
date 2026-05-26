@@ -1,9 +1,13 @@
 #include "azookey/learning/UserDictionary.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <system_error>
 
+#include "AtomicFile.h"
 #include "azookey/ipc/Json.h"
 
 namespace azookey::learning {
@@ -36,24 +40,47 @@ std::optional<UserWord> WordFromJson(const j::Value& v) {
   return w;
 }
 
+bool QuarantineCorruptFile(const std::string& path) {
+  const std::filesystem::path source(path);
+  if (!std::filesystem::exists(source)) return true;
+
+  const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
+  auto backup = source;
+  backup += ".corrupt." + std::to_string(stamp);
+  std::error_code ec;
+  std::filesystem::rename(source, backup, ec);
+  if (!ec) return true;
+
+  ec.clear();
+  std::filesystem::copy_file(source, backup, std::filesystem::copy_options::none, ec);
+  if (ec) return false;
+  ec.clear();
+  std::filesystem::remove(source, ec);
+  return !ec;
+}
+
 }  // namespace
 
 UserDictionary::UserDictionary(std::string path) : path_(std::move(path)) {}
 
 bool UserDictionary::Load() {
   by_ruby_.clear();
+  save_blocked_by_corrupt_load_ = false;
   std::ifstream ifs(path_);
   if (!ifs.is_open()) {
     return true;  // missing file is fine
   }
   std::ostringstream oss;
   oss << ifs.rdbuf();
+  ifs.close();
   auto v = j::Parse(oss.str());
   if (!v || !v->IsObject()) {
+    save_blocked_by_corrupt_load_ = !QuarantineCorruptFile(path_);
     return false;
   }
   const auto* entries = v->GetArray("entries");
   if (!entries) {
+    save_blocked_by_corrupt_load_ = !QuarantineCorruptFile(path_);
     return false;
   }
   for (const auto& e : *entries) {
@@ -65,8 +92,7 @@ bool UserDictionary::Load() {
 }
 
 bool UserDictionary::Save() const {
-  std::ofstream ofs(path_, std::ios::trunc);
-  if (!ofs.is_open()) {
+  if (save_blocked_by_corrupt_load_) {
     return false;
   }
   j::Object root;
@@ -78,15 +104,13 @@ bool UserDictionary::Save() const {
     }
   }
   root.emplace("entries", j::Value(std::move(entries)));
-  ofs << j::Stringify(j::Value(std::move(root)));
-  return ofs.good();
+  return WriteTextFileAtomically(path_, j::Stringify(j::Value(std::move(root))));
 }
 
 bool UserDictionary::Add(const UserWord& w) {
   auto& bucket = by_ruby_[w.ruby];
-  auto it = std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) {
-    return x.word == w.word;
-  });
+  auto it = std::find_if(bucket.begin(), bucket.end(),
+                         [&](const UserWord& x) { return x.word == w.word; });
   if (it != bucket.end()) {
     *it = w;
     return false;
@@ -99,9 +123,8 @@ bool UserDictionary::Remove(const std::string& word, const std::string& ruby) {
   auto bit = by_ruby_.find(ruby);
   if (bit == by_ruby_.end()) return false;
   auto& bucket = bit->second;
-  auto it = std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) {
-    return x.word == word;
-  });
+  auto it =
+      std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) { return x.word == word; });
   if (it == bucket.end()) return false;
   bucket.erase(it);
   if (bucket.empty()) by_ruby_.erase(bit);
@@ -128,8 +151,6 @@ size_t UserDictionary::Size() const {
   return n;
 }
 
-void UserDictionary::Clear() {
-  by_ruby_.clear();
-}
+void UserDictionary::Clear() { by_ruby_.clear(); }
 
 }  // namespace azookey::learning

@@ -61,6 +61,9 @@ Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
     : engine_(engine), scheduler_(scheduler), user_dict_(user_dict), config_(std::move(config)) {}
 
 std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
+  if (req.type != ipc::MessageType::Handshake && RequiresAuthenticatedSession()) {
+    return HandleUnauthenticated(req);
+  }
   switch (req.type) {
     case ipc::MessageType::Handshake: return HandleHandshake(req);
     case ipc::MessageType::Ping: return HandlePing(req);
@@ -75,17 +78,65 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
   }
 }
 
+std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelope& req) {
+  // Return a type-appropriate error response so blocking clients do not hang
+  // waiting for a reply that would never come if we returned nullopt.
+  switch (req.type) {
+    case ipc::MessageType::AddUserWord: {
+      ipc::AddUserWordResponse r; r.ok = false;
+      return MakeResponse(req, ipc::BuildAddUserWordResponse(r));
+    }
+    case ipc::MessageType::RemoveUserWord: {
+      ipc::RemoveUserWordResponse r; r.ok = false;
+      return MakeResponse(req, ipc::BuildRemoveUserWordResponse(r));
+    }
+    case ipc::MessageType::CommitObservation: {
+      ipc::CommitObservationResponse r; r.ok = false;
+      return MakeResponse(req, ipc::BuildCommitObservationResponse(r));
+    }
+    case ipc::MessageType::LoadModel: {
+      ipc::LoadModelResponse r; r.ok = false; r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildLoadModelResponse(r));
+    }
+    case ipc::MessageType::QueryCandidates: {
+      ipc::QueryCandidatesResponse r; r.partial = false;
+      return MakeResponse(req, ipc::BuildQueryCandidatesResponse(r));
+    }
+    case ipc::MessageType::Ping: {
+      ipc::PingPayload p; p.nonce = 0; p.t_ms = 0;
+      return MakeResponse(req, ipc::BuildPing(p));
+    }
+    case ipc::MessageType::Health: {
+      ipc::HealthPayload p;
+      p.status = "error"; p.backend = ""; p.model_loaded = false;
+      p.last_error = "not authenticated";
+      return MakeResponse(req, ipc::BuildHealth(p));
+    }
+    default:
+      // Cancel and unknown types are fire-and-forget; no response needed.
+      return std::nullopt;
+  }
+}
+
 std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& req) {
   ipc::HandshakeResponse res;
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
-    res.accepted = parsed->protocol_version == config_.protocol_version;
+    const bool version_ok = parsed->protocol_version == config_.protocol_version;
+    const bool token_ok =
+        config_.handshake_token.empty() || parsed->handshake_token == config_.handshake_token;
+    res.accepted = version_ok && token_ok;
   } else {
     res.accepted = false;
   }
+  authenticated_ = res.accepted;
   res.model_loaded = engine_->model_loaded();
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
+}
+
+bool Dispatcher::RequiresAuthenticatedSession() const {
+  return !config_.handshake_token.empty() && !authenticated_;
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandlePing(const ipc::Envelope& req) {

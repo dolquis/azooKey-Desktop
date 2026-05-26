@@ -175,22 +175,22 @@ on:
     tags: ['v*']
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build --preset windows-release
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --preset windows-release --no-tests=error
 
       - name: Import certificate
         run: |
@@ -258,18 +258,18 @@ UpdateSettingsResponse:
   error: optional<string>
 ```
 
-Host は受信した設定を `%LOCALAPPDATA%\azooKey\settings.json` に保存し、
+Host は受信した設定を `%LOCALAPPDATA%\azooKey\config\settings.json` に保存し、
 即時反映可能なものは適用、再起動が必要なものは `restart_required: bool` を返す。
 
 ### 3.4 設定ファイルパス
 
 | 用途 | パス |
 |---|---|
-| 設定 | `%LOCALAPPDATA%\azooKey\settings.json` |
-| カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
-| 学習データ | `%LOCALAPPDATA%\azooKey\learning.tsv`（DPAPI 暗号化、M34） |
-| ユーザー辞書 | `%LOCALAPPDATA%\azooKey\user-dict.json` |
-| モデル | `%LOCALAPPDATA%\azooKey\models\zenz-v3.1-small-Q5_K_M.gguf` |
+| 設定 | `%LOCALAPPDATA%\azooKey\config\settings.json` |
+| カスタムローマ字 | `%LOCALAPPDATA%\azooKey\config\custom-romaji.tsv` |
+| 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv`（DPAPI 暗号化、M34） |
+| ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json` |
+| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\zenz-v3.1-small-Q5_K_M.gguf` |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
 
 ## 4. WiX / Inno Setup インストーラ（M31）
@@ -629,7 +629,7 @@ bool LearningStore::Load() {
 
 ### 9.5 ユーザー辞書
 
-`user-dict.json` も同様に暗号化（M34 範囲）。
+`user_dict.json` も同様に暗号化（M34 範囲）。
 
 設定 JSON（`settings.json`）は **暗号化しない**（API キー以外は機密性低い）。
 ただし `openAiApiKey` は **個別に DPAPI 暗号化**：

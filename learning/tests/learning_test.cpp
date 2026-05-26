@@ -1,9 +1,9 @@
+#include <gtest/gtest.h>
+
 #include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/core/Candidate.h"
 #include "azookey/learning/LearningStore.h"
@@ -33,4 +33,29 @@ TEST(LearningStoreTest, SaveLoadAndCorrectionDownweight) {
   EXPECT_LE(loaded.Score("にほん", "日本", 120), loaded.Score("にほん", "二本", 120));
 
   std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_learning_atomic_test";
+  const auto path = root / "nested" / "learning.tsv";
+  std::filesystem::remove_all(root);
+
+  azookey::learning::LearningStore store(path.string());
+  store.Observe("とうきょう", "東京", 1.0, 200);
+  EXPECT_TRUE(store.Save());
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  size_t temp_files = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
+    if (entry.path().filename().string().find(".tmp.") != std::string::npos) {
+      ++temp_files;
+    }
+  }
+  EXPECT_EQ(temp_files, 0u);
+
+  azookey::learning::LearningStore loaded(path.string());
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_GT(loaded.Score("とうきょう", "東京", 200), 0.0);
+
+  std::filesystem::remove_all(root);
 }

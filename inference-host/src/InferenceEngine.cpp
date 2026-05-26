@@ -42,37 +42,46 @@ ModelLoadResult InferenceEngine::LoadModelWithResult() {
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   ModelLoadResult result;
-  config_.model_path = options.path;
-  config_.backend = options.backend;
-  config_.n_gpu_layers = options.n_gpu_layers;
-  model_loaded_ = false;
-  model_converter_.reset();
-  active_converter_ = fallback_converter_.get();
-  last_error_.reset();
+  EngineConfig next_config = config_;
+  next_config.model_path = options.path;
+  next_config.backend = options.backend;
+  next_config.n_gpu_layers = options.n_gpu_layers;
 
-  if (config_.model_path.empty()) {
+  if (next_config.model_path.empty()) {
     // No model path means the MVP converter remains active as the fallback.
+    config_ = std::move(next_config);
+    model_loaded_ = false;
+    model_converter_.reset();
+    active_converter_ = fallback_converter_.get();
+    last_error_.reset();
     result.ok = true;
     return result;
   }
 
-  auto probe = ProbeZenzaiGgufModel(config_.model_path);
+  auto probe = ProbeZenzaiGgufModel(next_config.model_path);
   if (!probe.ok) {
     result.error = probe.error;
-    last_error_ = result.error;
+    if (!model_loaded_) {
+      config_ = std::move(next_config);
+      model_converter_.reset();
+      active_converter_ = fallback_converter_.get();
+      last_error_ = result.error;
+    }
     return result;
   }
 
-  if (config_.backend == BackendKind::Cuda) {
-    config_.backend = BackendKind::Cpu;
-    last_error_ = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
+  if (next_config.backend == BackendKind::Cuda) {
+    next_config.backend = BackendKind::Cpu;
+    result.error = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
   }
-  model_converter_ = std::make_unique<ZenzaiModelConverter>(
+  auto next_converter = std::make_unique<ZenzaiModelConverter>(
       std::move(probe.info), fallback_converter_.get());
+  config_ = std::move(next_config);
+  model_converter_ = std::move(next_converter);
   active_converter_ = model_converter_.get();
   model_loaded_ = true;
+  last_error_.reset();
   result.ok = true;
-  result.error = last_error_;
   return result;
 }
 

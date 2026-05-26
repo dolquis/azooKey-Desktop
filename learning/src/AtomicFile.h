@@ -82,6 +82,15 @@ inline bool WriteTextFileAtomically(const std::string& path, const std::string& 
     std::filesystem::remove(temp, ec);
     return false;
   }
+  // Flush the parent directory to ensure the rename metadata is persisted.
+  const auto dir = target.parent_path();
+  if (!dir.empty()) {
+    const int dir_fd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dir_fd >= 0) {
+      fsync(dir_fd);
+      close(dir_fd);
+    }
+  }
   return true;
 #endif
 }

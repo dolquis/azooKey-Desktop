@@ -409,3 +409,43 @@ TEST_F(DispatcherTest, Health) {
   EXPECT_EQ(parsed->status, "ok");
   EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
 }
+
+// Verify that a token-configured Dispatcher isolates auth state per instance.
+// Connection A authenticates; a separate Dispatcher (simulating connection B)
+// must NOT inherit A's authenticated state.
+TEST_F(DispatcherTest, CrossClientAuthIsolation) {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.handshake_token = "secret";
+
+  azookey::host::Dispatcher conn_a(&engine, &scheduler, &user_dict, config);
+  azookey::host::Dispatcher conn_b(&engine, &scheduler, &user_dict, config);
+
+  // Connection A authenticates successfully.
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+  req.handshake_token = "secret";
+  auto resp_a = conn_a.Dispatch(MakeReq(1, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(resp_a.has_value());
+  EXPECT_TRUE(ipc::ParseHandshakeResponse(resp_a->payload_json)->accepted);
+
+  // Connection B has NOT performed a handshake; AddUserWord must be rejected.
+  ipc::AddUserWordRequest add;
+  add.word = "test";
+  add.ruby = "てすと";
+  auto resp_b = conn_b.Dispatch(
+      MakeReq(2, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  EXPECT_FALSE(resp_b.has_value());
+  EXPECT_TRUE(user_dict.Lookup("てすと").empty());
+
+  // A failed handshake on B must not de-authenticate A.
+  ipc::HandshakeRequest bad_req = req;
+  bad_req.handshake_token = "wrong";
+  conn_b.Dispatch(MakeReq(3, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(bad_req)));
+  auto resp_a2 = conn_a.Dispatch(
+      MakeReq(4, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(resp_a2.has_value());
+  EXPECT_TRUE(ipc::ParseAddUserWordResponse(resp_a2->payload_json)->ok);
+}

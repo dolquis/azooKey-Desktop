@@ -33,6 +33,11 @@ class NamedPipeServer {
   // returned Envelope is sent back to the originating client.
   using MessageHandler = std::function<std::optional<Envelope>(const Envelope&)>;
 
+  // Factory called once per accepted client; returns a per-connection handler.
+  // Use this overload when handler state (e.g. auth flags) must be isolated
+  // across simultaneous clients.
+  using ConnectionFactory = std::function<MessageHandler()>;
+
   NamedPipeServer();
   ~NamedPipeServer();
 
@@ -40,10 +45,12 @@ class NamedPipeServer {
   NamedPipeServer& operator=(const NamedPipeServer&) = delete;
 
   // Start listening on `pipe_name` (e.g. "\\\\.\\pipe\\azookey-<sid>").
-  // The handler is invoked on the server's worker thread once per inbound
-  // envelope. Returns false on platform error or if the pipe cannot be
-  // created.
+  // handler is shared across all client connections (backward-compatible form).
   bool Start(const std::string& pipe_name, MessageHandler handler);
+
+  // Per-connection factory variant: factory() is called once per accepted
+  // client and the returned handler is used exclusively for that connection.
+  bool Start(const std::string& pipe_name, ConnectionFactory factory);
 
   // Idempotent. After return, no more handler callbacks will fire.
   void Stop();

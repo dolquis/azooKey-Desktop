@@ -9,6 +9,14 @@
 #include <system_error>
 #include <thread>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
+
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
@@ -35,9 +43,23 @@ void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   }
 }
 
+#ifdef _WIN32
+std::filesystem::path GetExeDirectory() {
+  wchar_t buf[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, buf, MAX_PATH);
+  return std::filesystem::path(buf).parent_path();
+}
+#endif
+
 void MigrateLegacyDefaultFileIfNeeded(const char* legacy_name,
                                       const std::filesystem::path& target) {
+#ifdef _WIN32
+  // Use the exe directory rather than CWD so the lookup is deterministic and
+  // limited to installer-controlled paths.
+  const std::filesystem::path legacy = GetExeDirectory() / legacy_name;
+#else
   const std::filesystem::path legacy(legacy_name);
+#endif
   if (std::filesystem::exists(target) || !std::filesystem::exists(legacy)) {
     return;
   }
@@ -172,7 +194,10 @@ int main(int argc, char** argv) {
     }
     dconf.handshake_token = handshake_token;
   }
-  azookey::host::Dispatcher dispatcher(&engine, &scheduler, &user_dict, dconf);
+  // For stdio mode a single Dispatcher suffices (one connection).
+  // For pipe mode a new Dispatcher is created per client connection so that
+  // each client's authentication state is isolated.
+  azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf);
 
   std::cerr << "azookey inference-host started. backend="
             << (engine.backend() == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
@@ -185,9 +210,14 @@ int main(int argc, char** argv) {
     }
 
     azookey::ipc::NamedPipeServer server;
-    if (!server.Start(pipe_name, [&dispatcher](const azookey::ipc::Envelope& env) {
-          return dispatcher.Dispatch(env);
-        })) {
+    if (!server.Start(pipe_name,
+                      [&engine, &scheduler, &user_dict, dconf]() {
+                        auto d = std::make_shared<azookey::host::Dispatcher>(
+                            &engine, &scheduler, &user_dict, dconf);
+                        return [d](const azookey::ipc::Envelope& env) {
+                          return d->Dispatch(env);
+                        };
+                      })) {
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
       return 2;
     }
@@ -210,7 +240,7 @@ int main(int argc, char** argv) {
       std::cerr << "warn: failed to parse envelope" << std::endl;
       continue;
     }
-    auto resp = dispatcher.Dispatch(*env);
+    auto resp = stdio_dispatcher.Dispatch(*env);
     if (resp) {
       std::cout << azookey::ipc::Serialize(*resp) << std::endl;
       std::cout.flush();

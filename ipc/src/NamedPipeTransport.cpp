@@ -247,7 +247,7 @@ void CloseClientPipe(const std::shared_ptr<ClientState>& client) {
 struct NamedPipeServer::Impl {
   std::atomic<bool> running{false};
   std::string pipe_name;
-  MessageHandler handler;
+  ConnectionFactory conn_factory;
   std::thread accept_thread;
   std::condition_variable client_cv;
   std::size_t active_client_threads{0};
@@ -285,13 +285,18 @@ struct NamedPipeServer::Impl {
         SetNamedPipeHandleState(current, &mode, nullptr, nullptr);
 
         auto client = std::make_shared<ClientState>(current);
+        // Build a per-connection handler so each client has isolated state
+        // (e.g. independent authentication flags).
+        MessageHandler conn_handler = conn_factory ? conn_factory() : MessageHandler{};
         {
           std::lock_guard<std::mutex> lock(mutex);
           clients.push_back(client);
           ++active_client_threads;
         }
         try {
-          std::thread([this, client]() { ClientLoop(client); }).detach();
+          std::thread([this, client, conn_handler]() mutable {
+            ClientLoop(client, std::move(conn_handler));
+          }).detach();
         } catch (...) {
           CloseClientPipe(client);
           {
@@ -334,7 +339,7 @@ struct NamedPipeServer::Impl {
     }
   }
 
-  void ClientLoop(std::shared_ptr<ClientState> client) {
+  void ClientLoop(std::shared_ptr<ClientState> client, MessageHandler conn_handler) {
     while (running.load()) {
       HANDLE pipe = INVALID_HANDLE_VALUE;
       {
@@ -348,7 +353,7 @@ struct NamedPipeServer::Impl {
 
       std::optional<Envelope> response;
       try {
-        response = handler ? handler(*request) : std::nullopt;
+        response = conn_handler ? conn_handler(*request) : std::nullopt;
       } catch (...) {
         break;
       }
@@ -389,7 +394,12 @@ NamedPipeServer::NamedPipeServer() : impl_(std::make_unique<Impl>()) {}
 NamedPipeServer::~NamedPipeServer() { Stop(); }
 
 bool NamedPipeServer::Start(const std::string& pipe_name, MessageHandler handler) {
-  if (pipe_name.empty() || !handler) {
+  if (!handler) return false;
+  return Start(pipe_name, [h = std::move(handler)]() { return h; });
+}
+
+bool NamedPipeServer::Start(const std::string& pipe_name, ConnectionFactory factory) {
+  if (pipe_name.empty() || !factory) {
     return false;
   }
 
@@ -404,7 +414,7 @@ bool NamedPipeServer::Start(const std::string& pipe_name, MessageHandler handler
   }
 
   impl_->pipe_name = pipe_name;
-  impl_->handler = std::move(handler);
+  impl_->conn_factory = std::move(factory);
   impl_->listen_pipe = first_pipe;
   impl_->running.store(true);
   impl_->accept_thread = std::thread([this, first_pipe]() { impl_->AcceptLoop(first_pipe); });
@@ -577,6 +587,7 @@ struct NamedPipeClient::Impl {};
 NamedPipeServer::NamedPipeServer() : impl_(std::make_unique<Impl>()) {}
 NamedPipeServer::~NamedPipeServer() = default;
 bool NamedPipeServer::Start(const std::string&, MessageHandler) { return false; }
+bool NamedPipeServer::Start(const std::string&, ConnectionFactory) { return false; }
 void NamedPipeServer::Stop() {}
 bool NamedPipeServer::IsRunning() const { return false; }
 std::size_t NamedPipeServer::ActiveClientCountForTesting() const { return 0; }

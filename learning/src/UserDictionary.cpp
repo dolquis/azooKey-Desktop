@@ -56,7 +56,7 @@ bool QuarantineCorruptFile(const std::string& path) {
   if (ec) return false;
   ec.clear();
   std::filesystem::remove(source, ec);
-  return true;
+  return !ec;
 }
 
 }  // namespace

@@ -48,6 +48,22 @@ TEST(UserDataPathsTest, MissingLocalAppDataFailsClosed) {
   EXPECT_FALSE(azookey::host::ResolveUserDataPaths(inputs).has_value());
 }
 
+TEST(UserDataPathsTest, FullyExplicitPathsWorkWithoutLocalAppData) {
+  const auto learning = TestRoot("azookey_explicit_only") / "learn.tsv";
+  const auto user_dict = TestRoot("azookey_explicit_only") / "dict.json";
+  azookey::host::UserDataPathInputs inputs;
+  // local_app_data intentionally absent
+  inputs.explicit_learning_path = learning;
+  inputs.explicit_user_dict_path = user_dict;
+
+  auto paths = azookey::host::ResolveUserDataPaths(inputs);
+  ASSERT_TRUE(paths.has_value());
+  EXPECT_EQ(paths->learning_path, learning);
+  EXPECT_EQ(paths->user_dict_path, user_dict);
+  // Directory fields are empty (no LocalAppData to derive them from).
+  EXPECT_TRUE(paths->root_dir.empty());
+}
+
 TEST(UserDataPathsTest, EnsureCreatesLayoutAndExplicitParents) {
   const auto local = TestRoot("azookey_m39_layout");
   const auto explicit_dir = TestRoot("azookey_m39_explicit_parent") / "nested";

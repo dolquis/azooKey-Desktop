@@ -62,7 +62,7 @@ Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
 
 std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
   if (req.type != ipc::MessageType::Handshake && RequiresAuthenticatedSession()) {
-    return std::nullopt;
+    return HandleUnauthenticated(req);
   }
   switch (req.type) {
     case ipc::MessageType::Handshake: return HandleHandshake(req);
@@ -75,6 +75,46 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     case ipc::MessageType::AddUserWord: return HandleAddUserWord(req);
     case ipc::MessageType::RemoveUserWord: return HandleRemoveUserWord(req);
     default: return std::nullopt;
+  }
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelope& req) {
+  // Return a type-appropriate error response so blocking clients do not hang
+  // waiting for a reply that would never come if we returned nullopt.
+  switch (req.type) {
+    case ipc::MessageType::AddUserWord: {
+      ipc::AddUserWordResponse r; r.ok = false;
+      return MakeResponse(req, ipc::BuildAddUserWordResponse(r));
+    }
+    case ipc::MessageType::RemoveUserWord: {
+      ipc::RemoveUserWordResponse r; r.ok = false;
+      return MakeResponse(req, ipc::BuildRemoveUserWordResponse(r));
+    }
+    case ipc::MessageType::CommitObservation: {
+      ipc::CommitObservationResponse r; r.ok = false;
+      return MakeResponse(req, ipc::BuildCommitObservationResponse(r));
+    }
+    case ipc::MessageType::LoadModel: {
+      ipc::LoadModelResponse r; r.ok = false; r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildLoadModelResponse(r));
+    }
+    case ipc::MessageType::QueryCandidates: {
+      ipc::QueryCandidatesResponse r; r.partial = false;
+      return MakeResponse(req, ipc::BuildQueryCandidatesResponse(r));
+    }
+    case ipc::MessageType::Ping: {
+      ipc::PingPayload p; p.nonce = 0; p.t_ms = 0;
+      return MakeResponse(req, ipc::BuildPing(p));
+    }
+    case ipc::MessageType::Health: {
+      ipc::HealthPayload p;
+      p.status = "error"; p.backend = ""; p.model_loaded = false;
+      p.last_error = "not authenticated";
+      return MakeResponse(req, ipc::BuildHealth(p));
+    }
+    default:
+      // Cancel and unknown types are fire-and-forget; no response needed.
+      return std::nullopt;
   }
 }
 

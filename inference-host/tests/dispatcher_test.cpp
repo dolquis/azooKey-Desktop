@@ -148,9 +148,14 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   ipc::AddUserWordRequest add;
   add.word = "azooKey";
   add.ruby = "あずきい";
+  // Unauthenticated requests receive a type-appropriate error response (ok=false)
+  // rather than nullopt, so blocking clients do not hang on receive.
   auto add_before_handshake = token_dispatcher.Dispatch(
       MakeReq(6, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
-  EXPECT_FALSE(add_before_handshake.has_value());
+  ASSERT_TRUE(add_before_handshake.has_value());
+  auto add_before_payload = ipc::ParseAddUserWordResponse(add_before_handshake->payload_json);
+  ASSERT_TRUE(add_before_payload.has_value());
+  EXPECT_FALSE(add_before_payload->ok);
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
 
   ipc::HandshakeRequest req;
@@ -163,8 +168,10 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   auto wrong_payload = ipc::ParseHandshakeResponse(wrong->payload_json);
   ASSERT_TRUE(wrong_payload.has_value());
   EXPECT_FALSE(wrong_payload->accepted);
-  EXPECT_FALSE(token_dispatcher.Dispatch(
-      MakeReq(8, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add))).has_value());
+  auto add_after_wrong = token_dispatcher.Dispatch(
+      MakeReq(8, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  ASSERT_TRUE(add_after_wrong.has_value());
+  EXPECT_FALSE(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->ok);
 
   req.handshake_token = "expected-token";
   auto matched = token_dispatcher.Dispatch(
@@ -431,13 +438,15 @@ TEST_F(DispatcherTest, CrossClientAuthIsolation) {
   ASSERT_TRUE(resp_a.has_value());
   EXPECT_TRUE(ipc::ParseHandshakeResponse(resp_a->payload_json)->accepted);
 
-  // Connection B has NOT performed a handshake; AddUserWord must be rejected.
+  // Connection B has NOT performed a handshake; AddUserWord must be rejected
+  // (returns ok=false rather than nullopt so the client does not hang).
   ipc::AddUserWordRequest add;
   add.word = "test";
   add.ruby = "てすと";
   auto resp_b = conn_b.Dispatch(
       MakeReq(2, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
-  EXPECT_FALSE(resp_b.has_value());
+  ASSERT_TRUE(resp_b.has_value());
+  EXPECT_FALSE(ipc::ParseAddUserWordResponse(resp_b->payload_json)->ok);
   EXPECT_TRUE(user_dict.Lookup("てすと").empty());
 
   // A failed handshake on B must not de-authenticate A.

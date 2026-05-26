@@ -57,16 +57,23 @@ std::optional<std::filesystem::path> GetPlatformLocalAppData() {
 }
 
 std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inputs) {
-  if (!inputs.local_app_data || inputs.local_app_data->empty()) {
+  const bool have_local = inputs.local_app_data && !inputs.local_app_data->empty();
+  const bool have_explicit_all = inputs.explicit_learning_path && inputs.explicit_user_dict_path;
+
+  if (!have_local && !have_explicit_all) {
+    // Cannot determine any data paths: fail closed.
     return std::nullopt;
   }
 
   UserDataPaths paths;
-  paths.root_dir = (*inputs.local_app_data / "azooKey").lexically_normal();
-  paths.config_dir = (paths.root_dir / "config").lexically_normal();
-  paths.data_dir = (paths.root_dir / "data").lexically_normal();
-  paths.logs_dir = (paths.root_dir / "logs").lexically_normal();
-  paths.models_dir = (paths.root_dir / "models").lexically_normal();
+  if (have_local) {
+    paths.root_dir = (*inputs.local_app_data / "azooKey").lexically_normal();
+    paths.config_dir = (paths.root_dir / "config").lexically_normal();
+    paths.data_dir = (paths.root_dir / "data").lexically_normal();
+    paths.logs_dir = (paths.root_dir / "logs").lexically_normal();
+    paths.models_dir = (paths.root_dir / "models").lexically_normal();
+  }
+  // The data_dir default is only valid when have_local is true.
   paths.learning_path = inputs.explicit_learning_path
                             ? inputs.explicit_learning_path->lexically_normal()
                             : (paths.data_dir / "learning.tsv").lexically_normal();

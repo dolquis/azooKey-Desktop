@@ -32,6 +32,7 @@ class Dispatcher {
   const DispatcherConfig& config() const { return config_; }
 
  private:
+  std::optional<ipc::Envelope> HandleUnauthenticated(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleHandshake(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandlePing(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleHealth(const ipc::Envelope& req);

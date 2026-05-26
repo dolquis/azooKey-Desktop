@@ -284,29 +284,42 @@ struct NamedPipeServer::Impl {
         DWORD mode = PIPE_READMODE_MESSAGE | PIPE_WAIT;
         SetNamedPipeHandleState(current, &mode, nullptr, nullptr);
 
-        auto client = std::make_shared<ClientState>(current);
         // Build a per-connection handler so each client has isolated state
-        // (e.g. independent authentication flags).
-        MessageHandler conn_handler = conn_factory ? conn_factory() : MessageHandler{};
-        {
-          std::lock_guard<std::mutex> lock(mutex);
-          clients.push_back(client);
-          ++active_client_threads;
-        }
+        // (e.g. independent authentication flags). Guard against factory
+        // exceptions (e.g. OOM during Dispatcher construction) so a single
+        // bad connection does not bring down the whole server via std::terminate.
+        MessageHandler conn_handler;
+        bool handler_ok = true;
         try {
-          std::thread([this, client, conn_handler]() mutable {
-            ClientLoop(client, std::move(conn_handler));
-          }).detach();
+          conn_handler = conn_factory ? conn_factory() : MessageHandler{};
         } catch (...) {
-          CloseClientPipe(client);
+          handler_ok = false;
+        }
+        if (!handler_ok) {
+          DisconnectNamedPipe(current);
+          CloseHandle(current);
+        } else {
+          auto client = std::make_shared<ClientState>(current);
           {
             std::lock_guard<std::mutex> lock(mutex);
-            clients.erase(std::remove(clients.begin(), clients.end(), client), clients.end());
-            if (active_client_threads > 0) {
-              --active_client_threads;
-            }
+            clients.push_back(client);
+            ++active_client_threads;
           }
-          client_cv.notify_all();
+          try {
+            std::thread([this, client, conn_handler = std::move(conn_handler)]() mutable {
+              ClientLoop(client, std::move(conn_handler));
+            }).detach();
+          } catch (...) {
+            CloseClientPipe(client);
+            {
+              std::lock_guard<std::mutex> lock(mutex);
+              clients.erase(std::remove(clients.begin(), clients.end(), client), clients.end());
+              if (active_client_threads > 0) {
+                --active_client_threads;
+              }
+            }
+            client_cv.notify_all();
+          }
         }
       } else {
         CloseHandle(current);
@@ -395,7 +408,12 @@ NamedPipeServer::~NamedPipeServer() { Stop(); }
 
 bool NamedPipeServer::Start(const std::string& pipe_name, MessageHandler handler) {
   if (!handler) return false;
-  return Start(pipe_name, [h = std::move(handler)]() { return h; });
+  // Wrap in shared_ptr so all connections invoke the same handler object,
+  // preserving any shared mutable state the caller may hold inside it.
+  auto shared = std::make_shared<MessageHandler>(std::move(handler));
+  return Start(pipe_name, [shared]() -> MessageHandler {
+    return [shared](const Envelope& env) -> std::optional<Envelope> { return (*shared)(env); };
+  });
 }
 
 bool NamedPipeServer::Start(const std::string& pipe_name, ConnectionFactory factory) {

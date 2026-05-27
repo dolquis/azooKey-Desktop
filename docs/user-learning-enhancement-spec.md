@@ -205,7 +205,9 @@ private:
 - 同じ入力を複数回確定すると、次回以降候補順位が上がる
 - M52 ベンチで `user_adapt` カテゴリが学習前後で +3% 以上改善
 - 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
-- M46 secure 中は学習が発生しない
+- M46 完了済みの環境では secure 中に `Observe` が呼ばれない（M46 が
+  未完了の段階で M54 を実装する場合は、`PrivacyGate` フックポイントを
+  no-op stub で残しておき、M46 完了時に本条件を検証する follow-up とする）
 - `app_name` 列がイベントに記録され、`app_profile_weight` 計算経路が
   実装されている（M48 完了後の統合検証で実 boost を確認）。M48 未完了時
   は `app_profile_weight = 1.0` を返すデフォルト挙動で受け入れ可

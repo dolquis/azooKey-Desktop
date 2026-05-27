@@ -529,9 +529,12 @@ M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix →
 
 【変換品質トラック】（Phase 5〜7 と独立。bench / 学習 / 辞書を発展）
 bench / M7 / M9 ─→ M52
-                  ├─→ M53     （辞書・固有名詞・新語強化、M36-A/B 統合）
+                  ├─→ M53     （辞書・固有名詞・新語強化。M36-A/B 統合も前提）
                   ├─→ M54     （ユーザー学習強化、M7 発展）
-                  └─→ M55     （打ち間違え学習統合、M35 発展。M53 も前提）
+                  └─→ M55     （打ち間違え学習統合）
+M36-A / M36-B ─→ M53          （AutoWordStore の移行元として必須）
+M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジンへ昇格）
+M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
 M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
@@ -1279,8 +1282,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   状態遷移のトレースに使う。
 - **推奨実装時期**: M42 完了直後。Phase 5/6/7 と並行可能。
 - **変更対象**: `inference-host/src/HealthStateMachine.cpp`（新規）、
-  `tsf-tip/src/TextService.cpp`（候補ウィンドウ下部の控えめ UI 通知）、
-  `settings-app/`（SafeMode 入り通知）。
+  `tsf-tip/src/TextService.cpp`（候補ウィンドウ下部の控えめ UI 通知、
+  および SafeMode 入り時の TIP 内通知バナー）。`settings-app/` への
+  SafeMode 通知タイル統合は M30 完了後の follow-up とし、M47 v1 は
+  TIP 単体で完結させる（M30 を M47 の前提にはしない）。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §8 拡張。
   - 状態機械 5 種（`Healthy` / `DegradedSimple` / `DegradedModel` /
     `Recovering` / `SafeMode`）
@@ -1380,8 +1385,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `%LOCALAPPDATA%\azooKey\models\` のスキャン、GGUF magic / version /
     metadata 検証、quantization 推定
   - `ListModels` / `BenchmarkModel` IPC
-  - backend 自動選択（NPU > CUDA > DirectML > CPU、ベンチ履歴があれば
-    p95 最良）
+  - backend 自動選択は M24 の既存順位（NPU > DirectML > CUDA > CPU）に
+    委譲する。ベンチ履歴があれば同順位内で p95 最良を採用
   - 既存 `backendPreference` との後方互換（`model.backendPreference` >
     root `backendPreference` > `auto`）
 - **受け入れ条件**:
@@ -1505,7 +1510,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: Zenzai が苦手な固有名詞・新語・技術語・地名・人名・製品名を
   辞書層で補強する。M36-A/B（新語自動取得）の上に DictionaryStore 階層を
   載せて全体を再設計する。
-- **前提**: M9（ユーザー辞書）、M36-A/B（必要であれば改訂統合）、M52（ベンチ）。
+- **前提**: M9（ユーザー辞書）、**M36-A/B**（AutoWordStore の移行元として
+  必須）、M52（ベンチ）。
 - **推奨実装時期**: M52 完了後。M54 / M55 と並行可能。
 - **変更対象**: `learning/src/DictionaryStore.cpp`（新規）、
   `learning/src/DictionaryImporter.cpp`（新規）、
@@ -1538,19 +1544,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   学習し、個人適応を強化する。M7（既存 LearningStore）の発展。
 - **前提**: M7、M34（DPAPI）、M52（ベンチ）。
 - **推奨実装時期**: M52 完了後。M53 / M55 と並行可能。
-- **変更対象**: `learning/src/LearningStore.cpp`（SQLite 化を検討、既存 TSV
-  からの移行戦略を spec で明記）、`inference-host/src/UserLearningScorer.cpp`
-  （新規）、`docs/user-learning-enhancement-spec.md`（新規）。
-- **実装範囲**: `docs/user-learning-enhancement-spec.md`。
-  - テーブル設計: committed_candidates / correction_events /
-    user_dictionary / app_profiles
+- **変更対象**: `learning/src/LearningStore.cpp`（既存 TSV を後方互換で
+  拡張、SQLite 化は M54-B 以降の別 M に分離）、
+  `inference-host/src/UserLearningScorer.cpp`（新規）、
+  `docs/user-learning-enhancement-spec.md`（新規）。
+- **実装範囲**: `docs/user-learning-enhancement-spec.md`。M54 v1 は TSV
+  拡張で完結させ、SQLite 分割テーブル（committed_candidates /
+  correction_events / app_profiles）は spec §3.3 に将来案として残すのみ。
+  - TSV スキーマ拡張: `reading\tsurface\tweight\tlast_used_at\tcommit_count\tapp_name\tevent_type\tcontext_hash`
   - 学習イベント 7 種: 候補確定 / 即 Backspace / 再変換 / ユーザー辞書登録 /
-    アプリ別確定 / typo 採用 / typo 拒否
+    アプリ別確定 / typo 採用 / typo 拒否（typo 系は M55 完了後）
   - 時間減衰: half_life = 一般 30 日 / 固有名詞 90 日 / 技術語 120 日 /
     一時話題 14 日 / typo 60 日
   - `user_score` = log(1 + commit_count) × recency_score ×
     app_profile_weight × correction_penalty
-  - 既存 TSV からの自動マイグレーション戦略
+  - 既存 TSV（M7 形式）からの自動マイグレーション戦略
 - **受け入れ条件**:
   - 同じ入力を複数回確定すると、次回以降候補順位が上がる
   - M52 ベンチで user_adapt カテゴリが学習前後で改善する

@@ -232,8 +232,9 @@ redaction ポリシーと共通の関数で処理する。
 - 通常アプリに戻ると元のモードに復帰する
 - 候補ウィンドウに secure インジケータが表示される（`showSecureIndicator
   = true` 時）
-- M48 アプリ別プロファイルが secure 指定の場合、当該アプリで自動 secure
-  扱いになる
+- M48 完了後の follow-up: `profile.privacyMode = secure` のプロファイル
+  検出で当該アプリが自動 secure 扱いになる（M48 未完了時は M46 単独の
+  `secureApps` リストで判定し、本受け入れ条件は M48 統合時に検証する）
 
 ## 12. 将来拡張
 

@@ -104,10 +104,18 @@ candidate_length / segment_count）+ flag 4（bool を 0/1 で符号化）=
 
 ### 5.2 v1 MLP 構造
 
-- 入力: §4 の手作り特徴量（embedding なし、Option C）
+- 入力: §4 から **128 次元 embedding 3 つを除いた** 12 次元
+  （scalar 8 + flag 4 = 12）。Option C を採用するため §4 の 396 次元
+  契約とは別の v1 専用 input shape を持つ
+- ONNX 入力名: `features_v1`（shape `[batch, 12]`）。`features_v2`
+  （shape `[batch, 396]`、embedding 込み）は v2 以降で導入
 - 隠れ層: 2 層、各 64 ユニット、GELU
 - 出力: 1 unit（rerank_score）
 - パラメータ数: 約 6 KB（量子化なし）
+
+runtime FeatureExtractor は v1 / v2 で別ビルダーを持ち、ONNX のメタ情報
+`model_version`（`v1` / `v2`）から入力形を切り替える。両者を同時に
+ロードする場合は version ごとに別 session を保持する。
 
 ### 5.3 ONNX export
 

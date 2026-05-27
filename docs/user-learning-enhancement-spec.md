@@ -207,7 +207,10 @@ private:
 - 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
 - M46 secure 中は学習が発生しない
 - M48 アプリ別プロファイルが `app_profile_weight` に反映される
-- M55 `typo_accept` / `typo_reject` イベントを記録できる
+- `event_type` 列が拡張可能な enum として実装され、`commit` /
+  `correction_accept` / `correction_reject` を記録できる。M55 完了後は
+  同じ列で `typo_accept` / `typo_reject` も扱えること（M55 未完了時は
+  enum 値を予約しておくだけで可）
 
 ## 12. 将来拡張（M54 範囲外）
 

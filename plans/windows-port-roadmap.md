@@ -513,7 +513,8 @@ M37 ─┬─→ M38
      └─→ M43
 M39 ─→ M41 ─→ M42
 M40（独立）
-M41 ─→ M44 ─→ M51       （観測性 → 診断 → trace 拡張）
+M41 ─┬─→ M44             （観測性 → 診断ウィザード）
+     └─→ M51             （観測性 → trace 拡張。M44 とは独立）
 M42 ─→ M47               （Host 可用性 → ユーザー可視復旧 UX）
 M38 ─→ M50               （CI → アプリ互換性テスト）
 
@@ -528,8 +529,9 @@ M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix →
 bench / M7 / M9 ─→ M52
                   ├─→ M53     （辞書・固有名詞・新語強化、M36-A/B 統合）
                   ├─→ M54     （ユーザー学習強化、M7 発展）
-                  └─→ M55     （打ち間違え学習統合、M35 発展）
-M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker）
+                  └─→ M55     （打ち間違え学習統合、M35 発展。M53 も前提）
+M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
+M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
 M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 ```
 
@@ -1238,7 +1240,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `diagnostics/`（新規ディレクトリ、`azookey_diag.cpp` CLI）、
   `ipc/src/Payloads.cpp`（`QueryDiagnostics` 追加）、
   `inference-host/src/Health.cpp`（状態詳細化）、`settings-app/`（診断タブ）。
-- **実装範囲**: `docs/dev-infrastructure-spec.md` §10（本マイルストーンで
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで
   追加）。
   - 診断項目 D-001〜D-015（TIP DLL 存在 / COM 登録 / 言語プロファイル /
     Host 起動 / IPC Handshake / IPC Ping / モデルパス / モデル検証 /
@@ -1256,7 +1258,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Zenzai モデル未配置時に `warning` として fallback 状態を表示する
   - 診断 ZIP から秘密情報が除去されている
   - `--json` 出力が stable schema としてテストされる
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §10
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §12
 
 ### M47: Host / Zenzai 障害時の自動復旧 UX
 
@@ -1296,7 +1298,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   着手前に最低限のアプリ互換性ベースラインを確保する。
 - **変更対象**: `compat-test/`（新規ディレクトリ）、`.github/workflows/`
   （compat ジョブ追加、optional）。
-- **実装範囲**: `docs/dev-infrastructure-spec.md` §11（本マイルストーンで
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §13（本マイルストーンで
   追加）。
   - 対象アプリ: Notepad / WordPad / Edge / Chrome / Firefox / VS Code /
     Discord / Slack / Word / Excel / Outlook / Windows Terminal /
@@ -1312,7 +1314,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Notepad / VS Code / Edge で最低限の自動テストが通る
   - 失敗時にスクリーンショットとログが保存される
   - report.json が CI artifact としてアップロードできる
-- **参照仕様**: `docs/dev-infrastructure-spec.md` §11
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §13
 
 ### M51: レイテンシ内訳トレーサ
 
@@ -1592,9 +1594,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: Zenzai / 辞書 / ユーザー辞書 / 補正候補を、文脈・特徴量で軽量に
   並べ替える。生成は行わず、候補選択に専念する。
-- **前提**: M52（ベンチ）、M53（辞書）、M54（学習強化）、M55（打ち間違え統合）。
-- **推奨実装時期**: M53〜M55 のうち少なくとも 2 つが完了した時点。M52
-  ベンチで baseline を固定してから着手する。
+- **前提**: M52（ベンチ）、M53（辞書）、M54（学習強化）、M55（打ち間違え統合）
+  の **全 4 つが完了**。reranker の入力特徴量は `dictionary_score`（M53）/
+  `user_frequency`（M54）/ `typo_confidence`（M55）を含むため、いずれかが
+  欠けると acceptance を満たせない。
+- **推奨実装時期**: M53 / M54 / M55 がすべて完了し、M52 ベンチで baseline を
+  固定した時点。学習データ収集（§6）は M54 / M55 の出力に依存するため、
+  早期着手しても本実装フェーズは前提完了後に行う。
 - **変更対象**: `reranker/`（新規ディレクトリ）、
   `reranker/TinyReranker.h`、`reranker/TinyRerankerOnnx.cpp`、
   `models/tiny_reranker.onnx`（新規アセット）、

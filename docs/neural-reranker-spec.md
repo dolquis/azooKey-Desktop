@@ -7,7 +7,8 @@
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
       `docs/modernbert-ja-scoring-spec.md`（M57）
 作成日: 2026-05-27
-位置づけ: 変換品質トラック（M53〜M55 のうち少なくとも 2 つ完了後）
+位置づけ: 変換品質トラック（M53 / M54 / M55 のすべてが完了し、M52 ベンチで
+baseline 固定後）
 
 ## 1. 目的
 

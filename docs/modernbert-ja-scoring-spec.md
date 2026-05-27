@@ -104,8 +104,11 @@ modernbert_score = (1/N) Σ log P(token_i | sentence with token_i masked)
 | 配置 | `%LOCALAPPDATA%\azooKey\models\modernbert-ja-70m.onnx` |
 | backend | DirectML / NPU / CUDA（CPU は実用不可） |
 
-bundle するかユーザーダウンロードかは Phase 7 で決定する。初期は bundle
-せず、ユーザーが M45 モデル管理 UI から導入する想定。
+bundle するかユーザーダウンロードかは Phase 7 で決定する。M57 v1 では
+ロードマップ前提（M56 / M24）のみで成立させる必要があるため、初期は
+**bundled（MSIX 同梱 or 既定パスへの後段配置）+ ベンチ用 manual download
+スクリプト** で配布する。M45（モデル管理 UI）は前提ではなく、完了後の
+follow-up として GUI 経由のインストール / 切替を統合する位置づけ。
 
 ### 6.1 RSS 許容上限
 

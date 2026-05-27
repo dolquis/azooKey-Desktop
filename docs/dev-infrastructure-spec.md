@@ -834,9 +834,11 @@ Response: { "model_loaded": bool, "backend": str, "rss_mb": int,
 
 ### 12.7 UI
 
-設定アプリに `診断` タブを追加（M30 後の M44 着手時）。Host 未起動でも
-GUI 単体で項目 D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行
-可能とする。
+M44 v1（Phase 4 ゲート）は **CLI（`azookey_diag.exe`）+ 診断 ZIP** のみで
+完結させる。設定アプリ `診断` タブは M30 完了後の follow-up として
+v1.x で追加する位置づけ（M30 を M44 v1 の前提にはしない）。下記の GUI
+要件は v1.x（M30 完了後）に適用する。Host 未起動でも GUI 単体で項目
+D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行可能とする。
 
 ```
 [azooKey 診断]

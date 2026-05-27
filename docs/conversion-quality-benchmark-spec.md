@@ -28,9 +28,12 @@ M54（学習強化） / M55（打ち間違え統合） / M56（Tiny Reranker） 
 
 ## 3. 既存 `bench/` との関係
 
-既存 `bench/azookey_bench.cpp` は latency smoke（p50/p95 < 50ms）を測定
-する CTest として動作する（M38）。本 M52 はそれを発展させ、以下を追加
-する:
+既存 `bench/live_bench.cpp`（`bench/CMakeLists.txt` で `azookey_bench`
+ターゲットとしてビルド）は latency smoke（p50/p95 < 50ms）を測定する
+CTest として動作する（M38）。本 M52 は **同一ターゲット `azookey_bench`
+の `live_bench.cpp` を拡張する** か、評価ロジックを別 TU として
+`live_bench.cpp` から呼び出すことで以下を追加する（新規 `azookey_bench.cpp`
+は作らず、既存 CTest との後方互換を保つ）:
 
 - jsonl 評価データの読み込み
 - top-k accuracy / MRR / カテゴリ別精度の計算

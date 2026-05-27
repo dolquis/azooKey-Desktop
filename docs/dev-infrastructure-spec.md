@@ -6,7 +6,7 @@ Windows 版（C++ 移植: `core/` `ipc/` `learning/` `inference-host/` `tsf-tip/
 `bench/`）のみ。macOS 版 `legacy/` は対象外。
 
 対応マイルストーン: `plans/windows-port-roadmap.md` M37〜M43（開発基盤・品質
-強化トラック）。
+強化トラック） + M44/M47/M50/M51（同トラックの自然な延長）。
 
 本書は 2 通の第三者レビュー（開発環境・ライブラリ改善レビュー / プロジェクト
 レビュー 2026-05-22）の指摘を評価・取捨選択した結果を仕様化したものである。
@@ -413,6 +413,100 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 - タイムアウト規約がコードとログに反映される
 - Release ビルドで入力本文・候補語がログに出力されない
 
+### 7.7 M51 拡張: レイテンシ内訳トレーサ
+
+M41 の構造化ログ基盤を発展させ、キー押下から候補表示までの全 phase を
+1 リクエスト単位で追跡可能にする。Zenzai 最適化（M24 / M25 / M57）・
+Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定の前提と
+なる。
+
+#### 7.7.1 trace_id
+
+全 IPC envelope に `trace_id`（UUIDv7 推奨）を追加する。TIP 側で
+`OnKeyDown` のタイミングで生成し、対応する全 IPC 往復に付与する。
+既存 `request_id` は IPC リクエスト単位のままとし、`trace_id` は
+「ユーザーの 1 アクション（キー押下 → UI 更新）」単位で複数 IPC を
+束ねる。
+
+```json
+{
+  "trace_id": "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2",
+  "request_id": 123,
+  "message_type": "QueryCandidates"
+}
+```
+
+#### 7.7.2 計測フェーズ
+
+| フェーズ | 説明 | 計測コンポーネント |
+|---|---|---|
+| `key_down` | TIP がキーを受け取った時刻 | tsf-tip |
+| `romaji_convert` | ローマ字かな変換 | core / tsf-tip |
+| `ipc_serialize` | payload 生成（JSON 化） | ipc / tsf-tip |
+| `pipe_send` | Named Pipe 送信 | ipc |
+| `host_queue_wait` | Host scheduler 待ち | inference-host |
+| `model_inference` | SimpleConverter / Zenzai 推論 | inference-host |
+| `rerank` | 学習 / user dict / tag boost / Tiny / BERT | inference-host |
+| `pipe_recv` | 応答受信 | ipc / tsf-tip |
+| `staleness_check` | request_id 確認 | tsf-tip |
+| `ui_apply` | CandidateWindow / Preedit 更新 | tsf-tip |
+| `total` | key_down → ui_apply の通算 | tsf-tip |
+
+各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。
+`backend` フィールド（`cpu` / `cuda` / `directml` / `npu`）を
+`model_inference` 行に付与する。
+
+```json
+{"ts":"2026-05-27T10:00:00.000Z","trace_id":"abc","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.001Z","trace_id":"abc","component":"core","phase":"romaji_convert","duration_ms":0.04,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.015Z","trace_id":"abc","component":"host","phase":"model_inference","duration_ms":14.5,"backend":"cuda","level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.018Z","trace_id":"abc","component":"tip","phase":"total","duration_ms":18.3,"level":"info","result":"ok"}
+```
+
+#### 7.7.3 trace_viewer CLI
+
+`bench/azookey_trace_viewer.cpp` を新設し、JSONL ログを集計する:
+
+```powershell
+azookey_bench.exe --trace --backend cuda --model zenzai-small.gguf
+azookey_trace_viewer.exe trace.jsonl --summary
+```
+
+summary 出力例:
+
+```
+QueryCandidates latency summary (N=10000)
+  total_p50: 18.3 ms
+  total_p95: 42.1 ms
+  total_p99: 78.4 ms
+  model_inference_p95: 30.4 ms
+  pipe_p95: 1.2 ms
+  ui_apply_p95: 3.8 ms
+```
+
+#### 7.7.4 オーバーヘッド制御
+
+通常利用時は §7.6 のプライバシー方針に従い、Release では phase 別
+duration_ms のみ記録する。詳細な per-key trace は以下のいずれかで
+明示有効化する:
+
+- `bench/azookey_bench --trace`（ベンチ実行時）
+- `settings.latencyTracing.enabled = true`（設定 GUI から）
+- 環境変数 `AZOOKEY_TRACE=1`（開発時）
+
+サンプリングレート（`latencyTracing.sampleRate`、既定 0.01）で本番でも
+低コストで取得可能にする。
+
+### M51 受け入れ条件
+
+- 全 IPC envelope に `trace_id` フィールドが追加され、JSON parse 後
+  伝播する
+- 1 リクエスト単位で TIP / IPC / Host / UI の各 phase 時間を JSONL に
+  出力できる
+- `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる
+- Zenzai backend 比較（cpu / cuda / directml / npu）に使える
+- 通常利用時（trace 無効）の追加 overhead が p95 で +1ms 未満
+
 ## 8. Host 可用性・再接続（M42）
 
 ### 8.1 現状の問題
@@ -459,6 +553,90 @@ Ready ─→ Degraded （ハードタイムアウト / 連続失敗時）
 - Host 無応答時に TIP が劣化モードへ移行し、入力が止まらない
 - 状態遷移がログに記録される
 - Host 復帰後に `Ready` へ復帰する
+
+### 8.5 M47 拡張: ユーザー可視復旧 UX
+
+M42 は IPC transport 層の状態機械と劣化フォールバックまでを範囲とした。
+M47 はその上に乗る**ユーザー可視 UX レイヤ**を扱う。Zenzai モデル単位の
+劣化（モデル未配置 / ロード失敗 / 推論 timeout）と、連続クラッシュ時の
+SafeMode を導入する。
+
+#### 8.5.1 拡張状態機械
+
+M42 の `Ready` / `Degraded` を更に細分化する:
+
+```
+Healthy
+  ↓ Host no response (M42 transport)
+DegradedSimple   ← SimpleConverter で継続
+  ↓ reconnect success
+Recovering
+  ↓ health ok
+Healthy
+
+Healthy
+  ↓ model load failed / inference timeout
+DegradedModel    ← Host は健康だが Zenzai 無効、辞書 + 学習 + Simple
+  ↓ reload success
+Healthy
+
+Any
+  ↓ repeated crash (Host process が N 回連続クラッシュ)
+SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力のみ
+```
+
+| 状態 | 説明 | ユーザー影響 |
+|---|---|---|
+| `Healthy` | Host + Zenzai 正常 | 通常 |
+| `DegradedSimple` | Host またはモデル不調。SimpleConverter で継続 | 変換品質低下 |
+| `DegradedModel` | Host は正常だが Zenzai 無効 | 変換品質低下 |
+| `Recovering` | 再接続 / 再ロード中 | 一時的に候補更新遅延 |
+| `SafeMode` | 連続クラッシュにより AI / 学習を停止 | 安定優先 |
+
+#### 8.5.2 timeout 表
+
+M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
+
+| 処理 | timeout |
+|---|---:|
+| IPC Ping | 500ms |
+| QueryCandidates fast | 150ms |
+| QueryLiveConversion | 80ms |
+| Heavy inference（Magic / ModernBERT） | 800ms |
+| Model load | 30s |
+
+timeout 時は Cancel を送信し、古い結果は staleness check（M10）で
+破棄する。`request_id` と `trace_id`（M51）で staleness を判定する。
+
+#### 8.5.3 SafeMode 突入条件
+
+直近 60 秒以内に Host プロセスが 3 回連続でクラッシュした場合、TIP は
+`SafeMode` に入り、設定で AI / 学習を一時的に強制 OFF にする。次回起動
+時にユーザー通知（設定アプリ の通知バナー）で復旧手順を案内する。
+SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し、
+ユーザーが手動で解除するまで継続する。
+
+#### 8.5.4 UI 通知
+
+候補ウィンドウ下部の控えめインジケータで状態を表示する:
+
+```
+⚠️ Zenzai が応答しないため、簡易変換で継続しています [詳細] [再試行]
+```
+
+毎回ラベルを出すと邪魔になるため:
+
+- 状態遷移直後のみ 1 回表示（5 秒で自動消滅）
+- 詳細クリックで設定アプリの診断タブ（M44）を開く
+- 「再試行」クリックで `ReloadModel` IPC を送る
+
+### M47 受け入れ条件
+
+- Host を手動 kill しても入力中のアプリが固まらない（M42 と同じ）
+- Host 再起動後に自動復帰する（M42 と同じ）
+- Zenzai モデルロード失敗時に `DegradedModel` 状態が UI に明示される
+- 連続クラッシュ時は `SafeMode` に入り、次回起動時に通知する
+- 各処理の timeout が §8.5.2 の表通りに動作する
 
 ## 9. WIL 段階導入（M43）
 
@@ -543,3 +721,263 @@ DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー
 CI への clang-tidy / CodeQL 追加は導入・調整コストが高い。本トラックでは
 `clang-format` チェックまでを必須とし、clang-tidy / CodeQL は将来の任意
 拡張とする（§4.3）。
+
+## 12. IME 診断・修復ウィザード（M44）
+
+### 12.1 目的
+
+azooKey が動作しない、候補が出ない、Zenzai が使われていない、学習が
+反映されない、IME 登録が壊れているといった問題をユーザー自身または
+開発者が短時間で切り分けられるようにする。IME は「入力できない」時点で
+UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に優先実装する。
+
+### 12.2 診断項目
+
+| ID | 項目 | チェック内容 | 失敗時の推奨修復 |
+|---|---|---|---|
+| D-001 | TIP DLL 存在 | 登録済み DLL パスが存在するか | 再登録を促す |
+| D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `register-dev.ps1` または MSIX 修復 |
+| D-003 | 言語プロファイル | 日本語 `0x0411` の Profile があるか | Profile 再登録 |
+| D-004 | Host 起動 | Host プロセスが存在するか | Host 起動 |
+| D-005 | IPC Handshake | Named Pipe 接続 + Handshake 成功 | Host 再起動 |
+| D-006 | IPC Ping | Ping 往復 latency 測定 | pipe / firewall / Host 状態確認 |
+| D-007 | モデルパス | 設定上のモデルファイルが存在するか | モデル選択 UI（M45）へ誘導 |
+| D-008 | モデル検証 | GGUF magic / version / metadata 確認 | 破損モデル扱い |
+| D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行 |
+| D-010 | learning store | 読み込み可能か、破損していないか | バックアップ後に初期化 |
+| D-011 | user dict | JSON 読み込み可能か | バックアップ後に修復 |
+| D-012 | settings | schema validation 成功 | 不正値のリセット |
+| D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
+| D-014 | DPAPI | 暗号化データを復号できるか | 再認証 / 再入力を促す |
+| D-015 | app compatibility | 現在の前面アプリで TSF context が取得できるか | 互換性情報表示（M50 result） |
+
+### 12.3 `azookey_diag.exe` CLI
+
+3 サブコマンドを持つ:
+
+```powershell
+azookey_diag.exe --json                                  # 全項目を JSON で出力
+azookey_diag.exe --repair                                # 自動修復可能なものを実行
+azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
+```
+
+`--json` 出力例:
+
+```json
+{
+  "status": "warning",
+  "timestamp_ms": 1780000000000,
+  "checks": [
+    {
+      "id": "D-008",
+      "name": "model_validation",
+      "status": "warning",
+      "message": "Model is not loaded. SimpleConverter fallback is active.",
+      "details": {
+        "configured_path": "%LOCALAPPDATA%\\azooKey\\models\\zenzai.gguf",
+        "exists": false,
+        "backend": "cpu"
+      }
+    }
+  ]
+}
+```
+
+`status` は `ok` / `warning` / `error` の 3 値。`--json` はテスト可能な
+stable schema として固定する。
+
+### 12.4 診断 ZIP 構成
+
+```
+azookey-diagnostics-YYYYMMDD-HHMMSS.zip
+├── diag.json
+├── settings.redacted.json
+├── host-health.json
+├── ipc-ping.json
+├── logs/
+│   ├── host-YYYYMMDD.jsonl   (直近 7 日)
+│   └── tip-YYYYMMDD.jsonl    (直近 7 日)
+├── environment.txt           (OS バージョン / CPU / RAM / GPU)
+└── crash-summary.txt         (WER ダンプの要約のみ、ダンプ本体は含めない)
+```
+
+### 12.5 機密情報の取り扱い
+
+診断 ZIP には以下を**含めない**:
+
+- OpenAI API key（DPAPI 暗号化済みでも除外）
+- 入力本文・候補本文
+- Magic Conversion の prompt
+- 変換前後の全文
+- ユーザー辞書の実データ
+- 学習 TSV / typo_corrections.tsv / auto_words.tsv の本文
+
+必要な場合でも、**件数・サイズ・hash・mtime のみ**を記録する。
+`settings.redacted.json` は API key 等の機密 field を `***redacted***`
+に置換した copy。
+
+### 12.6 IPC: QueryDiagnostics
+
+Host 側の状態を取得する新規 IPC。MessageType enum 末尾に追加する
+（M40 互換性ルール）。
+
+```
+Request:  { "message_type": "QueryDiagnostics" }
+Response: { "model_loaded": bool, "backend": str, "rss_mb": int,
+            "learning_entries": int, "user_dict_entries": int,
+            "fallback_state": "healthy" | "degraded_simple" |
+                              "degraded_model" | "safe_mode",
+            "last_error": str (optional) }
+```
+
+`--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
+
+### 12.7 UI
+
+設定アプリに `診断` タブを追加（M30 後の M44 着手時）。Host 未起動でも
+GUI 単体で項目 D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行
+可能とする。
+
+```
+[azooKey 診断]
+
+状態: 一部問題があります
+
+[1] TIP 登録状態             ✅ 正常
+[2] Host 起動状態            ✅ 起動中
+[3] IPC 接続                 ✅ Ping 12ms
+[4] Zenzai モデル            ⚠️ 未ロード。SimpleConverter fallback 中
+[5] 学習データ               ✅ 正常
+[6] ユーザー辞書             ✅ 正常
+[7] 設定ファイル             ✅ 正常
+[8] ログ出力                 ✅ 有効
+[9] セキュリティ設定         ✅ API キーは DPAPI 暗号化済み
+
+[再チェック] [自動修復] [診断 ZIP を作成] [ログフォルダを開く]
+```
+
+### M44 受け入れ条件
+
+- クリーン環境で全項目チェックが実行できる
+- Host 未起動でも診断アプリがクラッシュしない
+- Zenzai モデル未配置時に `warning` として fallback 状態を表示する
+- 診断 ZIP に秘密情報が含まれない（snapshot テストで保証）
+- `--json` 出力が stable schema としてテストされる
+- `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く
+
+## 13. アプリ互換性テストハーネス（M50）
+
+### 13.1 目的
+
+主要アプリで TSF composition / 候補ウィンドウ位置 / 確定 / キャンセル /
+Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で検証する。
+M28（MSIX サイドロード）着手前にアプリ互換性のベースラインを確保する。
+
+### 13.2 対象アプリ
+
+| 種別 | アプリ | 自動化レベル |
+|---|---|---|
+| 標準 | Notepad | full |
+| 標準 | WordPad / Notepad 後継 | best-effort |
+| ブラウザ | Edge | full |
+| ブラウザ | Chrome | full |
+| ブラウザ | Firefox | best-effort |
+| Electron | VS Code | full |
+| Electron | Discord | best-effort |
+| Electron | Slack | best-effort |
+| Office | Word | recorder |
+| Office | Excel | recorder |
+| Office | Outlook | recorder |
+| Terminal | Windows Terminal | full |
+| Terminal | PowerShell ISE | best-effort |
+| UWP / WinUI | Windows Settings | full |
+| UWP / WinUI | Store apps | best-effort |
+
+`full` = UI Automation + SendInput + screenshot による完全自動。
+`best-effort` = 自動化可能な範囲のみ、残りは checklist。
+`recorder` = キーボード操作の記録・再生（Office は UI Automation の
+信頼性が低い）。
+
+### 13.3 テストケース
+
+| ID | ケース | 期待動作 |
+|---|---|---|
+| C-001 | `nihongo` → Space → Enter で確定 | 「日本語」が確定される |
+| C-002 | Backspace で preedit が戻る | 1 文字分戻る |
+| C-003 | ESC で composition 破棄 | preedit が消える |
+| C-004 | 候補ウィンドウがキャレット付近に出る | キャレット下に出る |
+| C-005 | マルチディスプレイ端で候補が画面外に出ない | 画面内にクランプ |
+| C-006 | DPI 150% で候補位置がずれない | 正しくスケール |
+| C-007 | 絵文字 / サロゲートペア入力 | 正しく入力される |
+| C-008 | Undo / Redo が破綻しない | 元に戻る |
+| C-009 | フォーカス移動時に composition が安全に処理される | crash しない |
+| C-010 | Host kill 中も入力が固まらない | DegradedSimple で継続 |
+
+### 13.4 実装
+
+`compat-test/` ディレクトリを新設:
+
+```
+compat-test/
+├── CMakeLists.txt
+├── runner/
+│   ├── CompatRunner.cpp        # UI Automation + SendInput
+│   ├── ScreenshotCapture.cpp   # GDI 経由のスクリーンショット
+│   └── ReportWriter.cpp
+├── cases/
+│   ├── C001_basic_input.cpp
+│   ├── C002_backspace.cpp
+│   ├── ...
+│   └── C010_host_kill.cpp
+└── targets/
+    ├── notepad.json
+    ├── edge.json
+    ├── vscode.json
+    └── ...
+```
+
+各 target JSON は AppId / window class / 自動化レベルを定義する。
+
+### 13.5 出力
+
+```
+compat-report-YYYYMMDD-HHMMSS/
+├── report.md         # 人間向けサマリ
+├── report.json       # CI artifact 用
+├── screenshots/
+│   ├── notepad_C001_pass.png
+│   └── vscode_C004_fail.png
+├── logs/
+│   └── ...
+└── failures/
+    └── vscode_C004_fail/  # 失敗時の詳細スクショ + ログ
+```
+
+### 13.6 CI 連携
+
+GitHub Actions の Windows ジョブに optional な `compat` ステージを
+追加する（M50 完了時）:
+
+```yaml
+- name: Run compat tests (optional)
+  if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'compat-test')
+  run: |
+    cmake --build --preset windows-release --target compat_test
+    .\build\windows-release\compat-test\compat_test.exe --output compat-report
+  continue-on-error: true
+- name: Upload compat report
+  uses: actions/upload-artifact@v4
+  with:
+    name: compat-report
+    path: compat-report-*/
+```
+
+CI で常時実行するとコストが高いため、`compat-test` ラベル付き PR
+または手動 dispatch でのみ実行する。
+
+### M50 受け入れ条件
+
+- Notepad / VS Code / Edge で C-001〜C-010 の自動テストが通る
+- 失敗時にスクリーンショットとログが `failures/` に保存される
+- `report.json` が CI artifact としてアップロードできる
+- `report.md` が PR コメント用に整形されている

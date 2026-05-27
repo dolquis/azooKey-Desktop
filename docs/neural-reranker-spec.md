@@ -59,7 +59,10 @@ ScorePipeline へ
 | `is_neologism` | bool | false | M53 category |
 | `is_typo_corrected` | bool | true | M55 |
 
-合計 vector 次元: 128 × 3 + scalar 11 = 395 次元 + flags 4。
+合計入力次元: 128 × 3（embeddings）+ scalar 8（zenzai / dictionary /
+user_frequency / recency / typo_confidence / app_profile /
+candidate_length / segment_count）+ flag 4（bool を 0/1 で符号化）=
+**396 次元**。ONNX 入力 shape はこの 396 に合わせる。
 
 ### 4.1 Embedding 供給元
 
@@ -148,8 +151,9 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
 - M54 の `correction_events` から自動生成（オフライン）
 - 個人ユーザーの学習データを **送信せず**、ローカルで個人 fine-tune（v2 で
   検討）
-- bundled モデルは公開コーパスから生成（青空文庫 / Wikipedia / 既存
-  IME 公開データセット）
+- bundled モデルは公開コーパスから生成（青空文庫 / CC0・MIT 互換の
+  IME 公開データセット）。M52 §11 と同じく CC BY-SA / GFDL 系
+  （Wikipedia 等）は採用しない
 
 ## 7. 推論仕様
 

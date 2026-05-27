@@ -519,10 +519,12 @@ M42 ─→ M47               （Host 可用性 → ユーザー可視復旧 UX�
 M38 ─→ M50               （CI → アプリ互換性テスト）
 
 【プライバシー / モデル管理 / 学習データ UI トラック】
-（Phase 5/6/7 の既存 M に依存する付加機能）
+（Phase 5/6/7 の既存 M に依存する付加機能。M48 は追加機能トラック側）
 M7 ─→ M46                （学習 → セーフ入力モード）
 M8  / M30 ─→ M45         （Zenzai ロード境界 + 設定アプリ → モデル管理 UI）
 M30 / M34 ─→ M49         （設定アプリ + DPAPI → 学習データ可視化）
+
+【追加機能トラック（続き）】
 M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix → アプリ別プロファイル）
 
 【変換品質トラック】（Phase 5〜7 と独立。bench / 学習 / 辞書を発展）
@@ -562,11 +564,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   テスト）・M51（trace）は本トラックの自然な延長**として M41/M42/M38 完了後に
   順次着手する。詳細は「開発基盤・品質強化トラック」章と
   `docs/dev-infrastructure-spec.md`。
-- **プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M48/M49）** —
+- **プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）** —
   Phase 5/6/7 の既存 M に依存する付加機能。M46（セーフ入力）は M7 完了後に
-  Phase 5 直後の前倒し対象。M45（モデル管理 UI）は M8/M30 完了後の Phase 6-C
-  併合トラック。M48（アプリ別プロファイル）は既存 `promptPrefixByApp` の発展
-  として M46 完了後。M49（学習データ可視化）は M30/M34 完了後、Phase 7 末尾。
+  Phase 5 直後の前倒し対象（M16 Magic Conversion を擁護する契約なので
+  M16 着手と同時期または前を推奨）。M45（モデル管理 UI）は M8/M30 完了後
+  の Phase 6-C 併合トラック。M49（学習データ可視化）は M30/M34 完了後、
+  Phase 7 末尾。
+- **追加機能トラック（M35/M36/M48）** — M48（アプリ別プロファイル）は
+  既存 `promptPrefixByApp` の発展として M46 完了後に着手し、本トラック
+  に属する。詳細は「追加機能マイルストーン」章および
+  `docs/app-profile-spec.md`。
 - **変換品質トラック（M52〜M57）は Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
   → M53（辞書）/ M54（学習強化）/ M55（打ち間違え統合）並行 → M56（Tiny
@@ -1239,7 +1246,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   ユーザーが自己解決できるようにする。
 - **変更対象**: `diagnostics/`（新規ディレクトリ、`azookey_diag.cpp` CLI）、
   `ipc/src/Payloads.cpp`（`QueryDiagnostics` 追加）、
-  `inference-host/src/Health.cpp`（状態詳細化）、`settings-app/`（診断タブ）。
+  `inference-host/src/Health.cpp`（状態詳細化）。Phase 4 ゲートでは
+  CLI + 診断 ZIP までを範囲とし、`settings-app/` 診断タブは M30 完了後の
+  follow-up タスクとして切り出す（M30 を M44 v1 の前提にはしない）。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで
   追加）。
   - 診断項目 D-001〜D-015（TIP DLL 存在 / COM 登録 / 言語プロファイル /
@@ -1389,8 +1398,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   機密入力時に自動で安全側に倒す。M16（Magic Conversion / OpenAI API）と
   M34（DPAPI）の前提として「ユーザーが AI/学習を停止できる」契約を確立する。
 - **前提**: M7（学習）完了。M34 と並行・前倒し可能。M46 は M48 の前提でもある。
-- **推奨実装時期**: Phase 5 直後の前倒し（M34 と並行）。M16 着手と同時期に
-  導入すると、機密アプリでの誤送信を初期から防止できる。
+- **推奨実装時期**: Phase 5 内で **M16 着手前または同時期** に投入する
+  （M16 Magic Conversion / OpenAI API は M46 の secure 抑止契約に依存する
+  ため、M16 が先行すると secure アプリ向けの初期プライバシーギャップが
+  発生する）。M34（DPAPI）とは並行で進められる。
 - **変更対象**: `settings/mvp-settings.schema.json`（`privacy.*` ブロック
   追加）、`inference-host/src/PrivacyGate.cpp`（新規）、
   `inference-host/src/Dispatcher.cpp`（CommitObservation /

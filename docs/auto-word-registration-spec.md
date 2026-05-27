@@ -581,4 +581,7 @@ private:
   として読み込まれる（後方互換）
 - 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる
 - 任意の layer を ON / OFF できる
-- M48 `app_specific_dictionary` の boost が候補順位に反映される
+- `app_specific_dictionary` layer のデータ構造と読み込み経路は M53 で
+  確立する（実際の boost 適用は M48 完了後の統合検証で確認）。M48 未完了時
+  は layer を空（無効）として扱い、本受け入れ条件は M48 完了後の follow-up
+  チェックとする

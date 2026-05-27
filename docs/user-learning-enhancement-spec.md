@@ -206,7 +206,9 @@ private:
 - M52 ベンチで `user_adapt` カテゴリが学習前後で +3% 以上改善
 - 既存 `learning.tsv`（M7 形式）から自動マイグレートできる
 - M46 secure 中は学習が発生しない
-- M48 アプリ別プロファイルが `app_profile_weight` に反映される
+- `app_name` 列がイベントに記録され、`app_profile_weight` 計算経路が
+  実装されている（M48 完了後の統合検証で実 boost を確認）。M48 未完了時
+  は `app_profile_weight = 1.0` を返すデフォルト挙動で受け入れ可
 - `event_type` 列が拡張可能な enum として実装され、`commit` /
   `correction_accept` / `correction_reject` を記録できる。M55 完了後は
   同じ列で `typo_accept` / `typo_reject` も扱えること（M55 未完了時は

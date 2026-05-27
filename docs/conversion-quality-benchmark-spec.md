@@ -54,7 +54,9 @@ bench/data/
 ```
 
 `*.jsonl` は 1 行 1 ケース。データ作成は手動キュレーション + 既存
-コーパス（青空文庫 / Wikipedia 等のオープンデータ）から派生させる。
+オープンコーパス（青空文庫など）から派生させる。§11 のライセンス方針
+（CC0 / MIT 互換のみ）に従い、CC BY-SA / GFDL 系（Wikipedia 等）は
+派生元として使用しない。
 
 ### 4.2 通常変換ケース形式
 
@@ -294,6 +296,8 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
   typo_result.json` で typo 指標が出る
 - 出力 JSON が §8 の stable schema に従う
 - baseline 比較レポート（diff_vs_baseline）が生成される
-- `--trace` フラグで M51 trace ログを出力できる
+- `--trace` フラグは M51 完了後の任意統合チェックとして扱う。M51
+  未完了時は本フラグの存在を確認するのみで、出力 schema 検証は M51
+  完了後の follow-up とする
 - 1 カテゴリ以上の評価データが `bench/data/` に存在する（初期版は
   general / homophone / typo の 3 カテゴリで十分）

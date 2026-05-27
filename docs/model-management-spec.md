@@ -140,8 +140,10 @@ M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF 
 
 ベンチ中は Host を一時的に占有するため、対象 backend を起動 → 全
 iteration 実行 → unload してから既存 backend に戻す。ベンチ実行中は
-他の QueryCandidates をブロックせず、Heavy レーン扱いで非同期実行
-する（M24 のスケジューラを利用）。
+他の QueryCandidates をブロックしない非同期実行を必須とする。M24
+完了済みの環境では Heavy レーンスケジューラに委譲し、M24 未完了時は
+M45 専用の単一 worker thread で逐次処理してメイン IPC ループを塞がない
+（前者を推奨実装、後者を fallback とする）。
 
 ### 4.3 IPC 追加方針
 
@@ -157,13 +159,15 @@ iteration 実行 → unload してから既存 backend に戻す。ベンチ実�
 
 1. **ベンチマーク履歴があれば p95 最良**（直近 7 日以内、同一モデルで
    `status = success` のもの）
-2. NPU が利用可能 かつ モデル対応あり → `npu`
-3. AC 電源 かつ CUDA 利用可能 → `cuda`
-4. DirectML 利用可能（DirectX 12 GPU 検出） → `directml`
-5. CPU fallback → `cpu`
+2. M24 の `auto` 優先順位に従う: NPU > DirectML > CUDA > CPU
+   （AC 電源 / バッテリーでの差し替えも M24 の挙動を踏襲）
 
-NPU 検出は `IDXCoreAdapterList` 経由（M24 で実装）。AC 電源判定は
-`GetSystemPowerStatus`。
+M45 は backend 順位を独自に上書きせず、M24 で定義した順位をそのまま
+利用する（既存 root `backendPreference` の `auto` 挙動を変えないため）。
+順位を変更したい場合は M24 spec を更新するか、ユーザーが明示的に
+`model.backendPreference` を非 `auto` 値に設定する。
+
+NPU 検出は `IDXCoreAdapterList` 経由（M24 で実装）。
 
 ### 5.2 後方互換
 

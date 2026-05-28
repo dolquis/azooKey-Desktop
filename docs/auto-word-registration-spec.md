@@ -4,8 +4,16 @@
 機能の仕様を定める。対象は **Windows 版（C++ 移植: `core/` `learning/` `ipc/`
 `inference-host/` `tsf-tip/`）** のみ。macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M36-A / M36-B。
-姉妹機能: `docs/typo-correction-learning-spec.md`（M35 個人タイプミス学習）。
+対応マイルストーン: `plans/windows-port-roadmap.md` M36-A（マイニング） /
+M36-B（トレンド）+ M53（辞書層全体再設計）。
+姉妹機能: `docs/typo-correction-learning-spec.md`（M35 + M55 統合補正）、
+`docs/conversion-quality-benchmark-spec.md`（M52）。
+
+> **本仕様の段差**: §1〜§13 は M36-A / M36-B の正典。
+> §14 以降は M53 の追補章で、`AutoWordStore` を **多層 DictionaryStore**
+> の 1 レイヤとして統合し、辞書層全体（base / sudachi / neologd /
+> named_entity / technical_terms / user / app_specific）を再設計する。
+> M36-A / M36-B の挙動は M53 でも下位互換として維持する。
 
 ## 1. 背景と目的
 
@@ -397,3 +405,211 @@ struct ResolveNewWordResponse { bool ok{false}; };
    `ResolveNewWord` で承認後に注入されることを確認。
 4. M36-B: 正規アセットとハッシュ不一致アセットの両方で `FetchOnce` を実行し、
    検証通過時のみ取り込まれることを確認。
+
+---
+
+## 14. M53 追補: 辞書層全体の再設計
+
+本章は M53 で導入する追補仕様。M36-A / M36-B の `AutoWordStore` を
+保持しつつ、辞書層全体を多層 `DictionaryStore` として整理する。Zenzai
+が苦手な固有名詞・新語・技術語・地名・人名・製品名を辞書層で補強する
+ことを目的とする。
+
+### 14.1 アーキテクチャ
+
+```
+DictionaryStore
+  ├─ base_lexicon            (SimpleConverter 内蔵)
+  ├─ sudachi_lexicon         (optional pack)
+  ├─ neologd_lexicon         (optional pack, M36-B が更新)
+  ├─ named_entity_lexicon    (bundled curated)
+  ├─ technical_terms_lexicon (bundled curated)
+  ├─ user_dictionary         (M9 の UserDictionary)
+  ├─ auto_words              (M36-A の AutoWordStore)
+  └─ app_specific_dictionary (M48 アプリ別)
+```
+
+各層は独立にロード / 無効化 / 更新可能。`DictionaryCandidateProvider`
+が全層を query して候補を merge する。
+
+### 14.2 辞書エントリ形式
+
+```json
+{
+  "surface": "TensorRT",
+  "reading": "てんそるあーるてぃー",
+  "normalized_reading": "てんそるあーるてぃー",
+  "pos": "名詞-固有名詞",
+  "category": ["technical", "proper_noun"],
+  "cost": 4200,
+  "frequency": 0.72,
+  "source": "technical_terms",
+  "priority": 0.85,
+  "created_at": "2026-05-27",
+  "updated_at": "2026-05-27"
+}
+```
+
+| フィールド | 内容 |
+|---|---|
+| `surface` | 表記 |
+| `reading` | 読み（ひらがな） |
+| `normalized_reading` | 正規化後（§14.3） |
+| `pos` | 品詞 |
+| `category` | カテゴリ配列（§14.5） |
+| `cost` | mecab 互換 cost |
+| `frequency` | 0.0〜1.0 |
+| `source` | どの層由来か |
+| `priority` | 0.0〜1.0、scoring 用 |
+
+### 14.3 読み正規化
+
+| 入力 | 正規化 |
+|---|---|
+| カタカナ | ひらがなへ |
+| 全角英数 | 半角英数へ |
+| 長音「ー」 | 保持。ただし一致判定では緩く扱う |
+| ヴァ / バ揺れ | alias として保持（双方ヒット） |
+| づ / ず、ぢ / じ | alias として保持 |
+
+完全一致 → alias 一致 → 緩い長音一致の順で評価する。
+
+### 14.4 カテゴリ
+
+| category | 例 |
+|---|---|
+| `general` | 一般語 |
+| `person_name` | 山田太郎 |
+| `place_name` | 三河八橋、豊田市 |
+| `station_name` | 名古屋駅、知立駅 |
+| `product_name` | iPhone 16 Pro、RTX 4070 |
+| `software` | TensorRT、DirectML、azooKey |
+| `anime_game` | 作品名・キャラ名 |
+| `company_org` | OpenAI、SB Intuitions |
+| `technical` | 技術用語 |
+| `neologism` | 新語 |
+
+M54 の time-decay half_life もこの category で切り替える（一般語 30 日、
+固有名詞 90 日、技術語 120 日）。
+
+### 14.5 dictionary_score
+
+```
+dictionary_score =
+  base_frequency
+  + source_priority
+  + exact_reading_bonus
+  + category_bonus
+  + app_profile_bonus
+  - obsolete_penalty
+```
+
+| 因子 | 説明 |
+|---|---|
+| `base_frequency` | エントリの frequency（0.0〜1.0） |
+| `source_priority` | 層 priority（user > technical > neologd > base） |
+| `exact_reading_bonus` | 完全一致 +0.10、alias 一致 +0.05 |
+| `category_bonus` | 辞書エントリ category（§14.4 の `person_name` / `place_name` / `technical` 等）に対する `settings.dictionary.categoryBoosts` 適用。M48 と独立した辞書層側のスコア因子 |
+| `app_profile_bonus` | M48 `profilesByApp[*].candidateTagBoosts` を **候補タグ**（M52 ベンチで定義する `Technical` / `Polite` / `English` 等）に適用。辞書エントリ category とは **別 namespace**（`category_bonus` と二重適用しない） |
+| `obsolete_penalty` | 最終使用が古いエントリに減点 |
+
+`category_bonus`（辞書 category への適用）と `app_profile_bonus`（候補タグ
+への適用）は別 namespace のため独立した因子として加算する。M48 で `code.exe`
+を開いていて `candidateTagBoosts.Technical = 1.5` が設定されていても、これは
+候補タグ `Technical` が付与された候補に作用するのであって、辞書 category
+`technical` への作用は `dictionary.categoryBoosts.technical` 側で制御する。
+
+### 14.6 辞書更新パイプライン
+
+| 種類 | 更新方法 | M |
+|---|---|---|
+| bundled dictionary | アプリ更新時に同梱 | M28 / M53 |
+| neologism pack | 任意更新（M36-B が SHA256 検証） | M36-B |
+| technical pack | 任意更新（bundled or download） | M53 |
+| user dictionary | 即時反映 | M9 |
+| auto_words | 即時反映（M36-A の confirm / auto） | M36-A |
+| app-specific dictionary | 設定画面で ON / OFF | M48 |
+
+### 14.7 DictionaryStore 実装
+
+`learning/src/DictionaryStore.cpp`（新規）として実装:
+
+```cpp
+class DictionaryStore {
+public:
+  // 全層 query
+  std::vector<DictionaryEntry> Lookup(
+      std::string_view reading,
+      const LookupContext& ctx);
+
+  // 個別層の有効化
+  void EnableLayer(LayerId layer, bool enabled);
+
+  // 層別 priority
+  double LayerPriority(LayerId layer) const;
+
+private:
+  std::vector<std::unique_ptr<IDictionaryLayer>> layers_;
+};
+```
+
+各 layer は `IDictionaryLayer` を実装。既存 `UserDictionary` /
+`AutoWordStore` も layer として wrap する（後方互換）。
+
+### 14.8 設定スキーマ拡張
+
+`mvp-settings.schema.json` に追加:
+
+```json
+{
+  "dictionary": {
+    "sudachiEnabled": true,
+    "neologdEnabled": true,
+    "namedEntityEnabled": true,
+    "technicalTermsEnabled": true,
+    "userDictionaryEnabled": true,
+    "autoWordsEnabled": true,
+    "appSpecificDictionaryEnabled": true,
+    "categoryBoosts": {
+      "person_name": 1.1,
+      "place_name": 1.1,
+      "station_name": 1.1,
+      "product_name": 1.1,
+      "company_org": 1.1,
+      "software": 1.0,
+      "anime_game": 1.0,
+      "technical": 1.0,
+      "neologism": 1.0,
+      "named_entity": 1.1
+    }
+  }
+}
+```
+
+`categoryBoosts` の key は §14.4 で定義する具体 category（`person_name`,
+`place_name`, `station_name`, `product_name`, `company_org`, `software`,
+`anime_game`, `technical`, `neologism`）と一致させる。`named_entity` は
+固有名詞系（`person_name` / `place_name` / `station_name` / `product_name` /
+`company_org`）の umbrella tag として scorer 側で同義扱いし、エントリ category
+が具体名（例: `person_name`）でも `categoryBoosts.named_entity` の
+値が当該カテゴリへ加算される（具体値が同時に設定されている場合は具体値が優先、
+umbrella は加算しない）。これにより M52 `named_entity_recall_at_5` の
+target を達成可能な scoring 経路を確保する。
+
+### 14.9 M53 受け入れ条件
+
+- M52 ベンチで `named_entity_recall_at_5` が 90% 以上
+- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 時点で bundled
+  されている `neologd_lexicon`** の範囲で baseline 比改善。neologd 更新
+  前提の追加改善（M36-B `neologism pack` の SHA256 検証付き再配布で得ら
+  れる新語追加）は **M36-B 完了時のみ** 評価し、M36-B 未完了時は本項を
+  bundled lexicon の範囲で測定する（M36-B 完了後の follow-up チェック
+  とする。`plans/windows-port-roadmap.md` M53 entry と整合）
+- 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
+  として読み込まれる（後方互換）
+- 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる
+- 任意の layer を ON / OFF できる
+- `app_specific_dictionary` layer のデータ構造と読み込み経路は M53 で
+  確立する（実際の boost 適用は M48 完了後の統合検証で確認）。M48 未完了時
+  は layer を空（無効）として扱い、本受け入れ条件は M48 完了後の follow-up
+  チェックとする

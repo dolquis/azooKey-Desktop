@@ -513,6 +513,32 @@ M37 ─┬─→ M38
      └─→ M43
 M39 ─→ M41 ─→ M42
 M40（独立）
+M41 ─┬─→ M44             （観測性 → 診断ウィザード）
+     └─→ M51             （観測性 → trace 拡張。M44 とは独立）
+M42 ─→ M47               （Host 可用性 → ユーザー可視復旧 UX）
+M38 ─→ M50               （CI → アプリ互換性テスト）
+
+【プライバシー / モデル管理 / 学習データ UI トラック】
+（Phase 5/6/7 の既存 M に依存する付加機能。M48 は追加機能トラック側）
+M7 ─→ M46                （学習 → セーフ入力モード）
+M8  / M30 ─→ M45         （Zenzai ロード境界 + 設定アプリ → モデル管理 UI）
+M30 / M34 ─→ M49         （設定アプリ + DPAPI → 学習データ可視化）
+
+【追加機能トラック（続き）】
+M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix → アプリ別プロファイル）
+
+【変換品質トラック】（Phase 5〜7 と独立。bench / 学習 / 辞書を発展）
+bench / M7 / M9 ─→ M52
+                  ├─→ M53     （辞書・固有名詞・新語強化。M36-A 統合が必須、M36-B は任意 pack のみ）
+                  ├─→ M54     （ユーザー学習強化、M7 発展）
+                  └─→ M55     （打ち間違え学習統合）
+M36-A ─→ M53                  （AutoWordStore の移行元として必須）
+M36-B（任意）─→ M53           （neologd_lexicon 等の optional pack 更新。未完了時は当該 pack 無効）
+M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジンへ昇格）
+M46 ─→ M55                    （secure 中の補正・学習抑止契約）
+M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
+M52 + M53 + M54 + M55 ─→ M56  （Tiny Neural Reranker。4 つ全てを前提）
+M56 + M24 ─→ M57              （ModernBERT-Ja 候補スコアリング）
 ```
 
 ### 推奨実行順（依存関係に基づく最適化）
@@ -538,8 +564,29 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   トラック** — 第三者レビューの改善指摘をマイルストーン化したもの。M37
   （ビルド再現性）・M38（CI 拡張）・M39（永続化）は Phase 3 着手前の実施を
   推奨し、M40（IPC/JSON 堅牢化）・M41（ログ）・M42（Host 再接続）・M43
-  （WIL）は Phase 3/4 と並行可能。詳細は「開発基盤・品質強化トラック」章と
+  （WIL）は Phase 3/4 と並行可能。**M44（診断）・M47（復旧 UX）・M50（互換性
+  テスト）・M51（trace）は本トラックの自然な延長**として M41/M42/M38 完了後に
+  順次着手する。詳細は「開発基盤・品質強化トラック」章と
   `docs/dev-infrastructure-spec.md`。
+- **プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）** —
+  Phase 5/6/7 の既存 M に依存する付加機能。M46（セーフ入力）は M7 完了後に
+  Phase 5 直後の前倒し対象（M16 Magic Conversion を擁護する契約なので
+  M16 着手と同時期または前を推奨）。M45（モデル管理 UI）は M8/M30 完了後
+  の Phase 6-C 併合トラック。M49（学習データ可視化）は M30/M34 完了後、
+  Phase 7 末尾。
+- **追加機能トラック（M35/M36/M48）** — M48（アプリ別プロファイル）は
+  既存 `promptPrefixByApp` の発展として M46 完了後に着手し、本トラック
+  に属する。詳細は「追加機能マイルストーン」章および
+  `docs/app-profile-spec.md`。
+- **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
+  M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
+  → M53（辞書）/ M54（学習強化）/ M55（打ち間違え統合）並行 → M56（Tiny
+  Reranker） → M57（ModernBERT スコアリング）の順で進める。M55 は M35 を、
+  M53 は **M36-A** を必須前提として `AutoWordStore` を多層
+  DictionaryStore に統合する。**M36-B（M32 / WinHTTP 依存）は M53 v1 の
+  必須前提ではなく**、`neologd_lexicon` 等の任意 pack 更新を担う follow-up
+  扱い（M36-B 未完了時は当該 pack を無効として M53 v1 を受け入れる）。
+  詳細は「変換品質トラック（M52〜M57）」章と各 `docs/*-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
 
@@ -598,6 +645,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 英数キーダブルタップで AI 自由テキスト変換、かなキーダブルタップで
   AI 言い換え。
 - **前提**: M13 完了。
+- **推奨**: M46（プライバシーゲート / セーフ入力モード）が同時期 or 先行で
+  実装されていることが望ましい（hard prerequisite ではない）。M16 が単独
+  で先行すると、M46 の secure 抑止契約が無いまま OpenAI 呼び出しが走り、
+  secure アプリ向けの初期プライバシーギャップが発生する。詳細は
+  `docs/privacy-and-secure-input-spec.md` §1 を参照。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（ダブルタップ検出）、
   `tsf-tip/src/PromptDialog.cpp`（新規）、`ipc/src/Payloads.cpp`
   （`TransformSelectedText` 追加）、`inference-host/src/AiBackend.cpp`（新規）。
@@ -971,7 +1023,35 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `trendingEnabled=false` で一切ネットワークアクセスしない
 - **参照仕様**: `docs/auto-word-registration-spec.md`
 
-## 開発基盤・品質強化トラック（M37〜M43）
+### M48: アプリ別入力プロファイル
+
+- **目的**: 前面アプリに応じて予測・学習・文体・AI backend・候補タグ重みを
+  切り替える。既存 `promptPrefixByApp`（`settings/mvp-settings.schema.json`）の
+  発展統合として位置づける。
+- **前提**: M46 完了（セーフ入力モード）。`ForegroundAppDetector` を M46 と
+  共用する。
+- **推奨実装時期**: M46 完了直後、Phase 6 と並行する独立トラック。M30（設定
+  アプリ）完成後に UI が揃う。
+- **変更対象**: `settings/mvp-settings.schema.json`（`profilesByApp` ブロック
+  追加、`promptPrefixByApp` を後方互換で読み続ける）、
+  `inference-host/src/AppProfileResolver.cpp`（新規）、
+  `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ `app_id` を伝播）、
+  `settings-app/`（アプリ別設定タブ）。
+- **実装範囲**: `docs/app-profile-spec.md`。
+  - `ForegroundAppDetector` + 500ms TTL キャッシュ
+  - 解決順: `profilesByApp[process_name]` →
+    `profilesByApp[window_class]` → `profilesByApp[default]` → グローバル
+  - 候補タグ重み（Technical / English / Polite など）の boost
+  - secure / private / normal の指定（M46 と接続）
+  - 既存 `promptPrefixByApp` 値は `profilesByApp[].promptPrefix` として読む
+- **受け入れ条件**:
+  - VS Code（`code.exe`）で技術語タグの候補順位が上がる
+  - Outlook（`outlook.exe`）で polite タグの候補順位が上がる
+  - secure 指定アプリで学習・外部 AI が停止する（M46 と整合）
+  - アプリ切替後 1 秒以内にプロファイルが反映される
+- **参照仕様**: `docs/app-profile-spec.md`
+
+## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。
 > **正典仕様**は `docs/dev-infrastructure-spec.md`。
@@ -979,6 +1059,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > もので、Phase 3（Zenzai 統合）/ Phase 4（配布）着手前の基盤固めにあたる。
 > M 番号は通し連番（既存最終 M36-B の続き）。spec から参照されるため
 > M 番号・Phase グルーピングは変更しない。
+>
+> M44（診断ウィザード）・M47（復旧 UX）・M50（互換性テスト）・M51（trace
+> 内訳）は本トラックの自然な延長として、M41（構造化ログ）・M42（Host 再接続）
+> ・M38（CI）の完了後に追加で取り組む。M44/M50 は配布前（Phase 4 ゲート）に
+> 投入することでサポートコストを大きく下げられる。
 
 ### M37: ビルド再現性 ✅ 実装済み
 
@@ -1162,6 +1247,448 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 既存テストが回帰しない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §9
 
+### M44: IME 診断・修復ウィザード
+
+- **目的**: TIP / Host / IPC / モデル / 学習 / 設定の状態をユーザー自身が
+  切り分けられるようにし、配布前のサポートコストを下げる。GitHub Issue /
+  Discord 報告用の診断 ZIP 生成も含む。
+- **前提**: M40（IPC/JSON 堅牢化）完了、M41（構造化ログ）完了。
+- **推奨実装時期**: Phase 4（v1.0 配布）ゲート前に投入。M11/M12 と並行可能。
+  クラッシュ・登録不整合・モデル未配置などの「即詰み」シナリオを早期に
+  ユーザーが自己解決できるようにする。
+- **変更対象**: `diagnostics/`（新規ディレクトリ、`azookey_diag.cpp` CLI）、
+  `ipc/src/Payloads.cpp`（`QueryDiagnostics` 追加）、
+  `inference-host/src/Health.cpp`（状態詳細化）。Phase 4 ゲートでは
+  CLI + 診断 ZIP までを範囲とし、`settings-app/` 診断タブは M30 完了後の
+  follow-up タスクとして切り出す（M30 を M44 v1 の前提にはしない）。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §12（本マイルストーンで
+  追加）。
+  - 診断項目 D-001〜D-015（TIP DLL 存在 / COM 登録 / 言語プロファイル /
+    Host 起動 / IPC Handshake / IPC Ping / モデルパス / モデル検証 /
+    fallback 状態 / learning store / user dict / settings / logs / DPAPI /
+    app compatibility）
+  - `azookey_diag.exe --json` / `--repair` / `--collect` の 3 サブコマンド
+  - 診断 ZIP（`diag.json` + `settings.redacted.json` + `host-health.json` +
+    `ipc-ping.json` + `logs/*.jsonl` + `environment.txt` +
+    `crash-summary.txt`）
+  - 機密除去: OpenAI API key、入力本文、Magic prompt、学習 TSV 中身を
+    含めない（件数 / サイズ / hash / mtime のみ記録）
+- **受け入れ条件**:
+  - クリーン環境で全項目チェックが実行できる
+  - Host 未起動でも診断アプリがクラッシュしない
+  - Zenzai モデル未配置時に `warning` として fallback 状態を表示する
+  - 診断 ZIP から秘密情報が除去されている
+  - `--json` 出力が stable schema としてテストされる
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §12
+
+### M47: Host / Zenzai 障害時の自動復旧 UX
+
+- **目的**: Host 停止・IPC 切断・Zenzai ロード失敗・推論 timeout が
+  発生しても最低限の入力を継続できるよう、ユーザー可視な状態機械と
+  UI 通知を実装する。**M42（transport 層の再接続）の上に乗るユーザー
+  体験レイヤ**として位置づける。
+- **前提**: **M42 完了**（再接続・劣化モードの基盤）。M41 の構造化ログを
+  状態遷移のトレースに使う。
+- **推奨実装時期**: M42 完了直後。Phase 5/6/7 と並行可能。
+- **変更対象**: `inference-host/src/HealthStateMachine.cpp`（新規）、
+  `tsf-tip/src/TextService.cpp`（候補ウィンドウ下部の控えめ UI 通知、
+  および SafeMode 入り時の TIP 内通知バナー）。`settings-app/` への
+  SafeMode 通知タイル統合は M30 完了後の follow-up とし、M47 v1 は
+  TIP 単体で完結させる（M30 を M47 の前提にはしない）。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §8 拡張。
+  - 状態機械 5 種（`Healthy` / `DegradedSimple` / `DegradedModel` /
+    `Recovering` / `SafeMode`）
+  - 各処理の timeout: Ping 500ms / QueryCandidates fast 150ms /
+    QueryLiveConversion 80ms / Heavy 800ms / Model load 30s
+  - timeout 時の Cancel + staleness check による古い結果破棄
+  - 連続クラッシュ N 回で `SafeMode` 突入、次回起動時にユーザー通知
+  - UI: `⚠️ Zenzai が応答しないため、簡易変換で継続しています [詳細]
+    [再試行]` を候補ウィンドウ下部の控えめインジケータで表示
+- **受け入れ条件**:
+  - Host を手動 kill しても入力中のアプリが固まらない
+  - Host 再起動後に自動復帰する
+  - Zenzai ロード失敗時に fallback 状態が UI に明示される
+  - 連続クラッシュ時は SafeMode に入り、次回起動時に通知する
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §8
+
+### M50: アプリ互換性テストハーネス
+
+- **目的**: 主要アプリで TSF composition / 候補ウィンドウ位置 / 確定 /
+  キャンセル / Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で
+  検証する。
+- **前提**: M38（CI 品質ゲート拡張）完了。
+- **推奨実装時期**: Phase 4 ゲート前または直後。M28（MSIX サイドロード）
+  着手前に最低限のアプリ互換性ベースラインを確保する。
+- **変更対象**: `compat-test/`（新規ディレクトリ）、`.github/workflows/`
+  （compat ジョブ追加、optional）。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §13（本マイルストーンで
+  追加）。
+  - 対象アプリ: Notepad / WordPad / Edge / Chrome / Firefox / VS Code /
+    Discord / Slack / Word / Excel / Outlook / Windows Terminal /
+    Windows Settings
+  - テストケース C-001〜C-010（`nihongo` Space-Enter / Backspace / ESC /
+    候補位置 / マルチディスプレイ端 / DPI 150% / 絵文字 / Undo Redo /
+    フォーカス移動 / Host kill 中）
+  - 実装方針: UI Automation + SendInput + screenshot による半自動テスト。
+    完全自動化が難しい Office はチェックリスト + recorder で代替可
+  - 出力: `compat-report-YYYYMMDD/{report.md, report.json, screenshots/,
+    logs/, failures/}`
+- **受け入れ条件**:
+  - Notepad / VS Code / Edge で最低限の自動テストが通る
+  - 失敗時にスクリーンショットとログが保存される
+  - report.json が CI artifact としてアップロードできる
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §13
+
+### M51: レイテンシ内訳トレーサ
+
+- **目的**: キー押下から候補表示までのどこに遅延があるかを 1 リクエスト
+  単位で可視化し、Zenzai 最適化 / 回帰検出の基盤にする。
+- **前提**: M41（構造化ログ）完了。
+- **推奨実装時期**: M41 完了後、Zenzai 最適化（M24 / M25 / M57）着手前。
+  M56（Tiny Reranker） / M57（ModernBERT）の効果測定の前提でもある。
+- **変更対象**: `ipc/src/Messages.cpp`（envelope に `trace_id` を追加）、
+  `tsf-tip/src/TextService.cpp` / `inference-host/src/Dispatcher.cpp` /
+  `inference-host/src/InferenceEngine.cpp`（各フェーズで `t_ms` 記録）、
+  `bench/live_bench.cpp`（既存 `azookey_bench` ターゲットに `--trace`
+  フラグ追加）、`bench/azookey_trace_viewer.cpp`（新規 CLI）。
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §7 拡張。
+  - phase 一覧: `key_down` / `romaji_convert` / `ipc_serialize` /
+    `pipe_send` / `host_queue_wait` / `model_inference` / `rerank` /
+    `pipe_recv` / `staleness_check` / `ui_apply` / `total`
+  - JSONL 出力（既存 M41 ログに合流。`trace_id` で相関）
+  - `azookey_trace_viewer trace.jsonl --summary` で p50/p95/p99 を出力
+  - 通常利用時の overhead を抑えるため、詳細出力は `--trace` 明示有効化
+    時のみ
+- **受け入れ条件**:
+  - 1 リクエスト単位で TIP / IPC / Host / UI の時間を追跡できる
+  - p50 / p95 / p99 を出力できる
+  - Zenzai backend 比較（cpu / cuda / directml / npu）に使える
+  - 通常利用時の overhead が小さい
+- **参照仕様**: `docs/dev-infrastructure-spec.md` §7
+
+## プライバシー / モデル管理 / 学習データ UI トラック（M45/M46/M49）
+
+> Phase 5/6/7 の既存 M に依存する付加機能トラック。Phase 連番に対し
+> M45/M46/M49 は依存先の都合で番号が前後する（M46 は Phase 5 直後、M45 は
+> M30 完了後、M49 は M34 完了後）。**正典仕様**は本トラック専用の
+> `docs/model-management-spec.md` / `docs/privacy-and-secure-input-spec.md` /
+> `docs/learning-data-management-spec.md` に分割する。
+>
+> M48（アプリ別入力プロファイル）は本トラックと密接だが、依存上は M46
+> 完了後の追加機能トラック扱いとし、上記「追加機能マイルストーン」章に
+> 配置する。
+
+### M45: Zenzai モデル管理 UI
+
+- **目的**: Zenzai GGUF モデルの配置・検証・ロード・backend 選択・fallback
+  状態確認を GUI で行えるようにする。M8（モデルロード境界）と M30（WinUI 3
+  設定アプリ）の上に乗る Phase 6-C 拡張。
+- **前提**: M8 完了（`LoadModel` 境界）、M30 完了（設定アプリ）。
+- **推奨実装時期**: M30 完了直後。M24（DirectML / NPU バックエンド）と並行
+  着手すると backend 推奨ロジックの実装が捗る。
+- **変更対象**: `settings-app/`（Model タブ追加）、`ipc/src/Payloads.cpp`
+  （`ListModels` / `BenchmarkModel` 追加）、
+  `inference-host/src/ModelCatalog.cpp`（新規）、
+  `settings/mvp-settings.schema.json`（`model.*` ブロック追加）。
+- **実装範囲**: `docs/model-management-spec.md`。
+  - `%LOCALAPPDATA%\azooKey\models\` のスキャン、GGUF magic / version /
+    metadata 検証、quantization 推定
+  - `ListModels` / `BenchmarkModel` IPC
+  - backend 自動選択は M24 の既存順位（NPU > DirectML > CUDA > CPU）に
+    委譲する。ベンチ履歴があれば同順位内で p95 最良を採用
+  - 既存 `backendPreference` との後方互換（`model.backendPreference` >
+    root `backendPreference` > `auto`）
+- **受け入れ条件**:
+  - モデル一覧が GUI に表示される
+  - invalid GGUF は「ロード不可」として明示される
+  - ロード失敗時も Host が落ちず `SimpleConverter` fallback へ移行する
+  - ベンチマーク結果（p50 / p95 / load_ms / rss_mb / vram_mb）が表示される
+  - 選択モデルが Host 再起動後も自動ロードされる
+- **参照仕様**: `docs/model-management-spec.md`
+
+### M46: プライバシー / セーフ入力モード
+
+- **目的**: 学習・予測・外部 AI・ログをユーザーが制御し、パスワード欄や
+  機密入力時に自動で安全側に倒す。M16（Magic Conversion / OpenAI API）と
+  M34（DPAPI）の前提として「ユーザーが AI/学習を停止できる」契約を確立する。
+- **前提**: M7（学習）完了。M34 と並行・前倒し可能。M46 は M48 の前提でもある。
+- **推奨実装時期**: Phase 5 内で **M16 着手前または同時期** に投入する
+  （M16 Magic Conversion / OpenAI API は M46 の secure 抑止契約に依存する
+  ため、M16 が先行すると secure アプリ向けの初期プライバシーギャップが
+  発生する）。M34（DPAPI）とは並行で進められる。
+- **変更対象**: `settings/mvp-settings.schema.json`（`privacy.*` ブロック
+  追加）、`inference-host/src/PrivacyGate.cpp`（新規）、
+  `inference-host/src/Dispatcher.cpp`（CommitObservation /
+  QueryPredictions / Magic Conversion の抑止）、
+  `tsf-tip/src/ForegroundAppDetector.cpp`（新規、M48 と共用）。
+- **実装範囲**: `docs/privacy-and-secure-input-spec.md`。
+  - モード 5 種（`normal` / `private` / `secure` / `offline` / `custom`）
+  - `secureApps` 自動判定（KeePass.exe / 1Password.exe / Bitwarden.exe など）
+  - secure 中の IPC 抑止契約（`CommitObservation` / `QueryPredictions` /
+    Magic Conversion を送らない、`aiBackend=none` 強制）
+  - ログ redaction（reading / surface を Release ログから除外）
+  - 候補ウィンドウ下部の控えめインジケータ
+- **受け入れ条件**:
+  - `secureApps` 指定アプリで `LearningStore::Observe` が呼ばれない
+  - secure 中は OpenAI API 呼び出しが発生しない
+  - 構造化ログに入力本文が残らない（Debug ビルドでもデフォルト無効）
+  - secure アプリから通常アプリへ復帰すると元のモードに戻る
+- **参照仕様**: `docs/privacy-and-secure-input-spec.md`
+
+### M49: 学習データ可視化・バックアップ
+
+- **目的**: ユーザーが学習内容を確認・削除・バックアップ・復元できるように
+  し、透明性を担保する。M34（DPAPI）と M30（設定アプリ）の自然な拡張。
+- **前提**: M30 完了（設定アプリ）、M34 完了（DPAPI 暗号化）。
+- **推奨実装時期**: Phase 7 末尾、M34 完了直後。M35 / M36-A / M55 の学習
+  データも対象に含めるため、これらが実装済みの場合は範囲を拡張する。
+- **変更対象**: `settings-app/`（学習データタブ）、`ipc/src/Payloads.cpp`
+  （`ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` /
+  `ImportLearningData` 追加）、`learning/src/LearningStore.cpp`（列挙 API 追加）、
+  `inference-host/src/BackupArchive.cpp`（新規）。
+- **実装範囲**: `docs/learning-data-management-spec.md`。
+  - 学習候補 / ユーザー辞書 / typo 補正 / 新語候補の 4 タブ UI
+  - 個別忘却（候補単位で weight を 0 化）
+  - DPAPI 暗号化済み ZIP バックアップ（`manifest.json` + 各 `*.tsv.enc` /
+    `*.json.enc`）
+  - インポート時の衝突解決（weight 加算 / 上書き / 両方保持を設定）
+- **受け入れ条件**:
+  - 学習データを UI から検索できる
+  - 個別忘却が次回候補順位に反映される
+  - 同一 Windows ユーザー / 同一マシン上で export → import の round-trip
+    が件数一致で復元できる（DPAPI ユーザースコープのため他マシン / 他
+    ユーザーへの移行は本受け入れ範囲外。クロス環境復元は §5.2 の
+    明示的平文エクスポートを使う）
+  - 暗号化済みデータは他ユーザーで復号できない
+- **参照仕様**: `docs/learning-data-management-spec.md`
+
+## 変換品質トラック（M52〜M57）
+
+> Phase 5〜7 と独立した新トラック。改善提案
+> `azookey_windows_ime_improvement_spec.md` の §5〜§10 を取り込み、変換品質
+> （top-k 精度 / 同音異義語選択 / 固有名詞 recall / 打ち間違え補正 /
+> latency）を数値で計測しながら段階改善する。
+>
+> **正典仕様**は本トラック専用の以下:
+> - `docs/conversion-quality-benchmark-spec.md`（M52）
+> - `docs/auto-word-registration-spec.md`（M36-A/B 改訂 + M53 追補）
+> - `docs/user-learning-enhancement-spec.md`（M54）
+> - `docs/typo-correction-learning-spec.md`（M35 改訂 + M55 追補）
+> - `docs/neural-reranker-spec.md`（M56）
+> - `docs/modernbert-ja-scoring-spec.md`（M57）
+
+### M52: 変換品質評価ベンチ
+
+- **目的**: 変換精度・同音異義語選択・固有名詞 recall・打ち間違え補正・
+  latency・メモリを数値で比較できるベンチを整備し、以降の M53〜M57 の
+  効果を baseline 比で測定可能にする。
+- **前提**: M7（学習）完了、M9（ユーザー辞書）完了、既存 `bench/`。
+- **推奨実装時期**: Phase 4 完了直後。M53〜M57 のいずれよりも先に着手する。
+- **変更対象**: 既存 `bench/live_bench.cpp`（`azookey_bench` ターゲットの
+  ソース。spec §3 の方針に従い拡張する。新規 `azookey_bench.cpp` は
+  作らない）、`bench/data/*.jsonl`（新規評価データ）、
+  `bench/CMakeLists.txt`、`.github/workflows/`（評価ジョブ追加、optional）。
+- **実装範囲**: `docs/conversion-quality-benchmark-spec.md`。
+  - 評価データ形式: `kana_kanji_eval.jsonl` / `typo_eval.jsonl`
+  - カテゴリ: general / homophone / named_entity / neologism /
+    mixed_script / business / coding / casual / creative / user_adapt /
+    typo
+  - 指標: top1/3/5 acc / MRR / reading_fidelity_rate /
+    named_entity_recall_at_5 / typo_correction_top5_accuracy /
+    typo_false_positive_rate / typo_overcorrection_rate /
+    latency_p50/95/99 / timeout_rate / memory_peak_mb / fallback_rate
+  - baseline 比較レポート（前 commit との diff）
+- **受け入れ条件**:
+  - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
+    result.json` で全指標を計算できる
+  - `azookey_bench --eval bench/data/typo_eval.jsonl --output
+    typo_result.json` で typo 指標が出る
+  - baseline 比較レポートが CI artifact 化される
+- **合格基準 v1**（M53〜M57 完了時点で達成）:
+  - top1_accuracy: baseline 比 +3% 以上
+  - top5_accuracy: 95% 以上
+  - homophone top1: baseline 比 +5% 以上
+  - named_entity top5: 90% 以上
+  - typo_correction_top5_accuracy: 85% 以上
+  - typo_false_positive_rate: 1% 未満
+  - typo_overcorrection_rate: 0.5% 未満
+  - p95 latency: 50ms 以下
+  - p99 latency: 100ms 以下
+  - timeout_rate: 0.1% 未満
+  - inference-host crash: 0 件
+- **参照仕様**: `docs/conversion-quality-benchmark-spec.md`
+
+### M53: 辞書・固有名詞・新語強化
+
+- **目的**: Zenzai が苦手な固有名詞・新語・技術語・地名・人名・製品名を
+  辞書層で補強する。M36-A（AutoWordStore）の上に DictionaryStore 階層を
+  載せて全体を再設計する（M36-B のリモート pack 更新は任意統合）。
+- **前提**: M9（ユーザー辞書）、**M36-A**（AutoWordStore の移行元として
+  必須）、M52（ベンチ）。M36-B（M32 / WinHTTP 依存）は M53 v1 必須では
+  なく、`neologd_lexicon` 等の optional pack 更新パスとして follow-up
+  扱い（未完了時は当該 layer を無効化して受け入れる）。
+- **推奨実装時期**: M52 完了後。M54 / M55 と並行可能。
+- **変更対象**: `learning/src/DictionaryStore.cpp`（新規）、
+  `learning/src/DictionaryImporter.cpp`（新規）、
+  `inference-host/src/DictionaryCandidateProvider.cpp`（新規）、
+  `learning/src/AutoWordStore.cpp`（M36-A から移行）、
+  `docs/auto-word-registration-spec.md`（改訂）。
+- **実装範囲**: `docs/auto-word-registration-spec.md` の M53 追補章。
+  - 辞書階層: base / sudachi / neologd / named_entity / technical_terms /
+    user / app_specific
+  - 辞書エントリ形式（surface / reading / normalized_reading / pos /
+    category / cost / frequency / source / priority / created_at /
+    updated_at）
+  - 読み正規化（カタカナ↔ひらがな / 長音緩和 / ヴァ↔バ alias /
+    づ↔ず alias）
+  - 固有名詞カテゴリ（person_name / place_name / station_name /
+    product_name / software / anime_game / company_org）
+  - `dictionary_score` = base_frequency + source_priority +
+    exact_reading_bonus + category_bonus + app_profile_bonus -
+    obsolete_penalty
+  - 辞書更新パイプライン（bundled / neologism pack / technical pack /
+    user / app-specific）
+- **受け入れ条件**:
+  - M52 ベンチで named_entity_recall_at_5 が 90% 以上
+  - M52 ベンチで neologism カテゴリの top5 が baseline 比で改善する
+    （M53 v1 時点では bundled `neologd_lexicon` の範囲で評価。M36-B
+    完了による neologd 更新前提の追加改善は M36-B follow-up で確認）
+- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14.9）
+
+### M54: ユーザー学習強化
+
+- **目的**: 確定履歴・訂正履歴・アプリ別傾向・打ち間違え採否を細粒度に
+  学習し、個人適応を強化する。M7（既存 LearningStore）の発展。
+- **前提**: M7、M34（DPAPI）、M52（ベンチ）。
+- **推奨実装時期**: M52 完了後。M53 / M55 と並行可能。
+- **変更対象**: `learning/src/LearningStore.cpp`（既存 TSV を後方互換で
+  拡張、SQLite 化は M54-B 以降の別 M に分離）、
+  `inference-host/src/UserLearningScorer.cpp`（新規）、
+  `docs/user-learning-enhancement-spec.md`（新規）。
+- **実装範囲**: `docs/user-learning-enhancement-spec.md`。M54 v1 は TSV
+  拡張で完結させ、SQLite 分割テーブル（committed_candidates /
+  correction_events / app_profiles）は spec §3.3 に将来案として残すのみ。
+  - TSV スキーマ拡張: `reading\tsurface\tweight\tlast_updated_epoch_sec\tcommit_count\tapp_name\tevent_type\tcontext_hash`（`last_updated_epoch_sec` は epoch 秒、ミリ秒ではない。`LearningStore.cpp` の単位と一致）
+  - 学習イベント 7 種: 候補確定 / 即 Backspace / 再変換 / ユーザー辞書登録 /
+    アプリ別確定 / typo 採用 / typo 拒否（typo 系は M55 完了後）
+  - 時間減衰: half_life = 一般 30 日 / 固有名詞 90 日 / 技術語 120 日 /
+    一時話題 14 日 / typo 60 日
+  - `user_score` = log(1 + commit_count) × recency_score ×
+    app_profile_weight × correction_penalty
+  - 既存 TSV（M7 形式）からの自動マイグレーション戦略
+- **受け入れ条件**:
+  - 同じ入力を複数回確定すると、次回以降候補順位が上がる
+  - M52 ベンチで user_adapt カテゴリが学習前後で改善する
+  - 既存 `learning.tsv` から自動マイグレートできる
+- **参照仕様**: `docs/user-learning-enhancement-spec.md`
+
+### M55: 打ち間違え学習統合（M35 発展）
+
+- **目的**: M35（個人タイプミス学習）を発展させ、ReadingHypothesis 経由で
+  CandidateGenerator 前段に補正を組み込む統合エンジンに昇格する。
+- **前提**: **M35 を改訂統合**、M46（secure mode で補正・学習無効化）、
+  M52（ベンチ）、M53（辞書）。
+- **推奨実装時期**: M52 / M53 完了後。M35 を v1（基本タイプミス学習）として
+  残し、M55 を v2（統合補正エンジン）として spec 内に段差をつける。
+- **変更対象**: `correction/`（新規ディレクトリ）、
+  `correction/TypoCorrectionEngine.cpp`、
+  `correction/KeyboardAdjacencyModel.cpp`、
+  `correction/RomajiVariantNormalizer.cpp`、
+  `correction/ReadingHypothesis.h`、
+  `learning/src/TypoLearningStore.cpp`（M35 の TypoCorrectionStore を改名・
+  拡張）、`ipc/src/Payloads.cpp`（`QueryCandidates` に `raw_keys`
+  optional フィールド追加）、`docs/typo-correction-learning-spec.md`
+  （改訂）。
+- **実装範囲**: `docs/typo-correction-learning-spec.md` の M55 追補章。
+  - TypoCorrectionEngine の位置: `InputNormalizer` →
+    `TypoCorrectionEngine` → `ReadingHypotheses` → `CandidateGenerator`
+  - Weighted Edit Graph（insertion / deletion / substitution /
+    transposition / personalized_pattern_cost）
+  - Keyboard Adjacency Model（JIS / US 配列差を考慮）
+  - Romaji Variant Normalizer（si↔shi / ti↔chi / tu↔tsu / syo↔sho /
+    nn↔n など）
+  - Dictionary-Constrained Correction（補正後の読みが辞書ヒットしない場合
+    は棄却）
+  - Context-Constrained Correction（補正候補の surface が文脈に合わない
+    場合は減点）
+  - 補正モード 4 種（`off` / `suggest` / `rank` / `aggressive`）
+  - TypoLearningStore テーブル: typo_patterns / typo_events / typo_settings
+  - 信頼度更新: accept_weight=0.25 / reject_weight=0.45（拒否を強く）
+  - 発動条件（top1/top2 gap 小 / dictionary hit なし / 高信頼 personal
+    pattern）
+  - 誤補正防止条件（top1 強 / confidence 低 / 過去拒否 / 入力短 /
+    パスワード欄 / コード入力）
+  - プライバシー: raw_keys は抽象化パターンのみ保存
+- **受け入れ条件**:
+  - M52 ベンチで typo_correction_top5_accuracy が 85% 以上
+  - M52 ベンチで typo_false_positive_rate が 1% 未満
+  - M52 ベンチで typo_overcorrection_rate が 0.5% 未満
+  - M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
+- **参照仕様**: `docs/typo-correction-learning-spec.md` M55 追補
+
+### M56: Tiny Neural Reranker
+
+- **目的**: Zenzai / 辞書 / ユーザー辞書 / 補正候補を、文脈・特徴量で軽量に
+  並べ替える。生成は行わず、候補選択に専念する。
+- **前提**: M52（ベンチ）、M53（辞書）、M54（学習強化）、M55（打ち間違え統合）
+  の **全 4 つが完了**。reranker の入力特徴量は `dictionary_score`（M53）/
+  `user_frequency`（M54）/ `typo_confidence`（M55）を含むため、いずれかが
+  欠けると acceptance を満たせない。
+- **推奨実装時期**: M53 / M54 / M55 がすべて完了し、M52 ベンチで baseline を
+  固定した時点。学習データ収集（§6）は M54 / M55 の出力に依存するため、
+  早期着手しても本実装フェーズは前提完了後に行う。
+- **変更対象**: `reranker/`（新規ディレクトリ）、
+  `reranker/TinyReranker.h`、`reranker/TinyRerankerOnnx.cpp`、
+  `models/tiny_reranker.onnx`（新規アセット）、
+  `inference-host/src/Dispatcher.cpp`（rerank フェーズに統合）、
+  `docs/neural-reranker-spec.md`（新規）。
+- **実装範囲**: `docs/neural-reranker-spec.md`。
+  - 特徴量: left_context_embedding / reading_embedding /
+    candidate_embedding / zenzai_score / dictionary_score / user_frequency /
+    recency_score / typo_confidence / app_profile_score / candidate_length /
+    segment_count / is_named_entity / is_user_dict / is_neologism /
+    is_typo_corrected
+  - モデル: v1 = MLP reranker、v2 候補 = Mini Transformer
+  - 学習データ: 正例 = 確定候補、負例 = 表示されたが選ばれなかった候補、
+    強い負例 = 訂正イベント
+  - ONNX Runtime CPU 優先、timeout 10〜20ms、failure 時は reranker なしで
+    返す fallback
+  - **embedding 供給方針を spec で固定**（ModernBERT 共用 / 独立小型
+    encoder のいずれかを M56 着手前に決定）
+- **受け入れ条件**:
+  - M52 ベンチで top1 が baseline 比 +3% 以上
+  - p95 latency 悪化が +10ms 以内
+  - timeout 時に reranker なしで候補が返る（fallback 動作）
+- **参照仕様**: `docs/neural-reranker-spec.md`
+
+### M57: ModernBERT-Ja 候補スコアリング
+
+- **目的**: 同音異義語など難しい候補のみ ModernBERT-Ja で文脈自然度を
+  評価し、品質を底上げする。**生成には使わない**。
+- **前提**: M56（Tiny Reranker）、M24（DirectML / NPU バックエンド）。
+- **推奨実装時期**: M56 完了後。v1.0 後の品質向上フェーズに位置づける。
+- **変更対象**: `reranker/ModernBertScorer.h`、
+  `reranker/ModernBertScorerOnnx.cpp`、
+  `models/modernbert-ja-70m.onnx`（新規アセット）、
+  `inference-host/src/Dispatcher.cpp`（ambiguity 判定で起動制御）、
+  `docs/modernbert-ja-scoring-spec.md`（新規）。
+- **実装範囲**: `docs/modernbert-ja-scoring-spec.md`。
+  - 起動条件: `candidate_count >= 2` かつ
+    `ambiguity_score >= threshold` かつ
+    `timeout_budget_remaining >= 30ms`
+  - `ambiguity_score` = top1/top2 gap + homophone_candidate_count +
+    context_dependency_score + named_entity_mix_score +
+    typo_correction_uncertainty
+  - PLL 近似（候補位置のみ mask、top-K のみ評価）
+  - cache（同一 context 再利用）
+  - timeout 30〜50ms、failure 時はスコアなしで続行
+  - **RSS 許容上限を spec で明示**（IME プロセスとしての許容値）
+- **受け入れ条件**:
+  - M52 ベンチで homophone top1 が baseline 比 +5% 以上
+  - 通常入力の p95 latency 悪化が +20ms 以内
+  - ModernBERT がロードできない環境でも fallback で動作する
+- **参照仕様**: `docs/modernbert-ja-scoring-spec.md`
+
 ## 横断テーマと Phase の対応
 
 各リッチ化テーマ（`docs/rich-features-spec.md`）の実装タイミングは
@@ -1176,7 +1703,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 個人タイプミス学習（M35）は X-3「誤変換訂正」と関連するが、**かな読みレベルの
 打鍵ミス**を対象とする独立機能であり、`docs/typo-correction-learning-spec.md` を
-正典とする。
+正典とする。M55 は M35 を発展させた統合補正エンジンであり、同じ正典 spec
+（M55 追補章）で扱う。
 
 新語自動取得（M36-A / M36-B）は手動登録の `UserDictionary` とは独立した辞書自動
-拡充機能であり、`docs/auto-word-registration-spec.md` を正典とする。
+拡充機能であり、`docs/auto-word-registration-spec.md` を正典とする。M53 は
+M36-A/B を内包する辞書層全体の再設計であり、同じ正典 spec（M53 追補章）で扱う。
+
+変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と
+1:1 対応する。M52 ベンチで baseline を固定し、M53〜M55 並行 → M56 → M57 の
+順で効果を測定しながら進める。

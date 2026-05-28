@@ -257,6 +257,12 @@ TIP 側は受信ごとに predict ウィンドウの候補テキストを末尾�
 `ForegroundAppDetector` が返す `process_name` で lookup。
 マッチしない場合は prefix なし（generic prompt）。
 
+> **M48 統合**: 本機能は M48（アプリ別入力プロファイル）で
+> `profilesByApp[].promptPrefix` に統合される。設定スキーマ上は
+> `promptPrefixByApp` を後方互換として 1〜3 マイナーバージョンの間
+> 読み続けるが、新規編集は `profilesByApp` 側で行う。詳細は
+> `docs/app-profile-spec.md`（M48）を参照。
+
 ### X-2-7. ペルソナ自動推定
 
 `LearningStore` 全件から以下の比率を算出：

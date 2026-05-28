@@ -5,8 +5,18 @@
 （C++ 移植: `core/` `learning/` `ipc/` `inference-host/` `tsf-tip/`）** のみ。
 macOS 版 `legacy/` は対象外。
 
-対応マイルストーン: `plans/windows-port-roadmap.md` M35。
-関連: `docs/rich-features-spec.md` X-3（誤変換訂正）。
+対応マイルストーン: `plans/windows-port-roadmap.md` M35（v1: 基本タイプ
+ミス学習）+ M55（v2: 統合補正エンジン）。
+関連: `docs/rich-features-spec.md` X-3（誤変換訂正）、
+      `docs/conversion-quality-benchmark-spec.md`（M52）、
+      `docs/user-learning-enhancement-spec.md`（M54）、
+      `docs/privacy-and-secure-input-spec.md`（M46）。
+
+> **本仕様の段差**: §1〜§11 は M35（v1: 基本タイプミス学習）の正典。
+> §12 以降は M55（v2: 統合補正エンジン）の追補章で、v1 の機能を発展
+> させ、ReadingHypothesis 経由で CandidateGenerator 前段に補正を組み
+> 込む統合エンジンに昇格する。v1 の `wrong_reading → correct_reading`
+> ペア学習は v2 でも下位互換として維持する。
 
 ## 1. 背景と目的
 
@@ -207,3 +217,409 @@ host に送る。検出トリガは 2 種。
 4. Windows 実機があれば TIP を導入し `AZOOKEY_TYPO_MODE` を設定して、未確定中
    backspace 訂正・確定直後打ち直しを実操作で確認。実機が無い場合はその旨を
    明示し、自動テストとプロトコルレベル確認で代替する。
+
+---
+
+## 12. M55 追補: 統合補正エンジン（v2）
+
+本章は M55 で導入する v2 仕様。M35（v1）が `wrong_reading →
+correct_reading` の頻度ペア学習だったのに対し、v2 は以下を統合する:
+
+- 入力 hypothesis 生成（Weighted Edit Graph + Keyboard Adjacency +
+  Romaji Variant + Dictionary/Context Constraint）
+- 4 モード（off / suggest / rank / aggressive）
+- TypoLearningStore による pattern 学習（accept_weight=0.25 /
+  reject_weight=0.45）
+- 11 種の `typo_type` 対応
+- raw_keys を IPC で受領（プライバシー処理）
+
+v1 の `wrong_reading → correct_reading` ペア学習は v2 でも下位互換
+として残す。マイグレート時は §12.8 の `typo_patterns` テーブル
+（`id INTEGER PRIMARY KEY`）に **legacy 集約用の予約行 1 行**
+（`typo_type = 'legacy_v1'`, `observed_pattern = ''`, `intended_pattern = ''`）
+を INSERT し、得られた整数 `id` を全 v1 由来 `typo_events.pattern_id`
+（INTEGER）に書き込む。`pattern_id` の文字列値（例: `"v1_legacy"`）は
+JSON 候補メタデータ（§12.2 の `pattern_id` フィールド、TEXT）でのみ使い、
+SQL の INTEGER 列とは混在させない。
+
+### 12.1 アーキテクチャ
+
+```
+raw_keys / observed_reading
+  ↓
+InputNormalizer
+  ↓
+TypoCorrectionEngine        ← M55 で新設
+  ↓
+ReadingHypotheses
+  ├─ original_reading
+  ├─ corrected_reading_1
+  ├─ corrected_reading_2
+  └─ corrected_reading_3
+  ↓
+CandidateGenerator
+  ├─ Zenzai
+  ├─ Dictionary
+  └─ UserDictionary
+  ↓
+CandidateMerger
+  ↓
+ScoringPipeline
+```
+
+`TypoCorrectionEngine` は CandidateGenerator の **前段** に置く。
+複数の reading hypothesis を生成し、それぞれに対して候補を求めて
+merge する。
+
+### 12.2 ReadingHypothesis
+
+```json
+{
+  "reading": "こうしょう",
+  "source": "typo_correction",
+  "confidence": 0.86,
+  "typo_type": "adjacent_key",
+  "pattern_id": "j_insert_after_u",
+  "edit_distance": 1,
+  "personalized": true
+}
+```
+
+| フィールド | 内容 |
+|---|---|
+| `reading` | 補正後の読み |
+| `source` | `original` / `typo_correction` |
+| `confidence` | 0.0〜1.0 |
+| `typo_type` | §12.3 の 11 種 |
+| `pattern_id` | TypoLearningStore の pattern_id |
+| `edit_distance` | observed との編集距離 |
+| `personalized` | 個人パターンか汎用ルールか |
+
+### 12.3 対象 typo_type（11 種）
+
+| `typo_type` | 内容 | 例 |
+|---|---|---|
+| `adjacent_key` | 隣のキーを押した | `koujsyou` → `kousyou` |
+| `missing_char` | 文字抜け | `kousho` → `koushou` |
+| `extra_char` | 余分な文字 | `kouhsyou` → `kousyou` |
+| `transposition` | 文字順入れ替わり | `ksouyou` → `kousyou` |
+| `double_key` | 同じキーを重複 | `koussyo` → `kousyo` |
+| `romaji_variant` | ローマ字表記揺れ | `syou` / `shou` / `syo` |
+| `n_handling` | んの入力ミス | `kani` / `kanni` / `kan'i` |
+| `small_tsu` | 促音の入力ミス | `kita` / `kitta` |
+| `long_vowel` | 長音・母音揺れ | `ou` / `oo` / `o` |
+| `dakuten_confusion` | 濁点・半濁点のミス | `かいしや` / `がいしゃ` |
+| `kana_shape_confusion` | かな形状・入力癖 | `しや` → `しゃ` |
+
+### 12.4 補正候補生成アルゴリズム
+
+#### 12.4.1 Weighted Edit Graph
+
+ローマ字列または読み列に対して重み付き編集距離を使う:
+
+```
+cost =
+  insertion_cost
++ deletion_cost
++ substitution_cost
++ transposition_cost
++ personalized_pattern_cost
+```
+
+個人がよく行う誤りは `personalized_pattern_cost` を下げる。
+
+例:
+
+```
+ユーザーがよく j を余分に打つ
+  koujsyou → kousyou
+  personalized_pattern_cost: low
+```
+
+#### 12.4.2 Keyboard Adjacency Model
+
+JIS / US 配列を考慮して隣接キー誤打鍵を低コストにする:
+
+```
+u の隣に i / y / j がある
+s の隣に a / d / w / x がある
+```
+
+`settings.typoCorrection.keyboardLayout`（`auto` / `jis` / `us`）で
+切替。
+
+#### 12.4.3 Romaji Variant Normalizer
+
+| variant | canonical |
+|---|---|
+| `si` | `shi` |
+| `ti` | `chi` |
+| `tu` | `tsu` |
+| `syo` | `sho` |
+| `syou` | `shou` |
+| `zya` | `ja` |
+| `jya` | `ja` |
+| `nn` | `n` |
+
+ただし全部を一律補正すると誤爆が増えるため、個人設定・辞書ヒット・
+文脈スコアと組み合わせて判定する。
+
+#### 12.4.4 Dictionary-Constrained Correction
+
+補正後の読みが辞書・Zenzai・ユーザー辞書いずれにも候補を持たない場合
+は **棄却** する:
+
+```
+observed_reading
+  ↓ typo correction
+corrected_reading
+  ↓ dictionary lookup（M53）
+候補あり → 採用候補
+候補なし → 棄却
+```
+
+#### 12.4.5 Context-Constrained Correction
+
+補正候補の surface が文脈に合わない場合は減点する:
+
+```
+left_context: 明日の会議では価格について
+observed: こうじゃう
+corrected: こうしょう
+candidate: 交渉
+```
+
+文脈上「交渉」が高スコアなら補正候補を上げる。M57 ModernBERT が有効
+なら文脈自然度スコアを利用する。
+
+### 12.5 発動条件
+
+打ち間違え補正は常時強制しない:
+
+```
+if original_candidates are weak
+or top1/top2 score gap is small
+or original_reading has no good dictionary hit
+or observed pattern matches high-confidence personal typo pattern
+then generate typo-corrected reading hypotheses
+```
+
+### 12.6 補正モード（v2）
+
+v1 の 3 モード（off / suggest / auto_replace）を **4 モード** に拡張:
+
+| mode | 動作 |
+|---|---|
+| `off` | 打ち間違え補正を無効（v1 と互換） |
+| `suggest` | 「もしかして」候補として提示（v1 互換、既定） |
+| `rank` | 通常候補に混ぜるが控えめに加点（新規） |
+| `aggressive` | 高信頼時のみ第一候補まで上げる（新規） |
+
+初期設定は `suggest` または `rank` を推奨。`aggressive` は誤爆リスクが
+あるため設定アプリで明示的に有効化する。
+
+v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替える
+（後方互換）。
+
+### 12.7 表示仕様
+
+| 条件 | 表示 |
+|---|---|
+| 初回補正 | ラベル表示「もしかして: ...」 |
+| 同じ補正を複数回採用済み | ラベル省略可 |
+| 高信頼補正 | 通常候補として自然に表示 |
+| 低信頼補正 | 下位に「もしかして」として表示 |
+
+```
+1 交渉      もしかして: こうしょう
+2 校章
+3 高尚
+```
+
+### 12.8 TypoLearningStore（v2）
+
+`last_used_at` / `created_at` / `updated_at` はいずれも epoch 秒
+（INTEGER、ミリ秒ではない。`docs/user-learning-enhancement-spec.md` §3.1
+の `LearningStore.cpp` 単位と整合）。
+
+#### typo_patterns
+
+```sql
+CREATE TABLE typo_patterns (
+  id INTEGER PRIMARY KEY,
+  observed_pattern TEXT NOT NULL,
+  intended_pattern TEXT NOT NULL,
+  typo_type TEXT NOT NULL,
+  keyboard_layout TEXT,
+  confidence REAL DEFAULT 0.5,
+  accept_count INTEGER DEFAULT 0,
+  reject_count INTEGER DEFAULT 0,
+  last_used_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+#### typo_events
+
+```sql
+CREATE TABLE typo_events (
+  id INTEGER PRIMARY KEY,
+  observed_reading TEXT NOT NULL,
+  corrected_reading TEXT NOT NULL,
+  selected_surface TEXT,
+  typo_type TEXT,
+  pattern_id INTEGER,
+  app_name TEXT,
+  left_context_hash TEXT,
+  event_type TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+```
+
+#### typo_settings
+
+```sql
+CREATE TABLE typo_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+実装は §3.1（M54）と同様に TSV 拡張で先行し、SQLite 化は将来 M に分離
+する。v1 の `typo_corrections.tsv` から自動マイグレートする。
+
+### 12.9 信頼度更新
+
+```
+confidence = sigmoid(
+  base
+  + accept_count * accept_weight
+  - reject_count * reject_weight
+  + recency_bonus
+  + app_specific_bonus
+)
+```
+
+初期パラメータ:
+
+| パラメータ | 値 |
+|---|---:|
+| `accept_weight` | 0.25 |
+| `reject_weight` | 0.45 |
+| `recency_half_life` | 60 日 |
+| `max_confidence` | 0.95 |
+| `min_confidence` | 0.05 |
+
+**拒否の重みを採用より強くする**。誤補正は IME 体験を大きく壊すため、
+学習は保守的に行う。
+
+### 12.10 スコアリング
+
+```
+typo_score =
+  typo_confidence
+  × dictionary_hit_score
+  × context_score
+  × app_profile_weight
+  × reading_similarity_score
+  - overcorrection_penalty
+```
+
+### 12.11 誤補正防止条件
+
+以下の場合は補正候補を第一候補にしない:
+
+| 条件 | 処理 |
+|---|---|
+| 通常候補の top1 が十分強い | 補正候補は下位または非表示 |
+| 補正 confidence が低い | 「もしかして」枠のみ |
+| ユーザーが過去に拒否した | 強く減点 |
+| 入力が短すぎる（2 文字以下） | 補正しない |
+| パスワード欄・秘匿アプリ（M46） | 補正・学習ともに無効 |
+| コード入力中（M48 profile） | 英字補正は控えめ |
+
+### 12.12 プライバシー（v2）
+
+| 項目 | 仕様 |
+|---|---|
+| `raw_keys` | 原則長期保存しない、抽象化パターンに変換して保存 |
+| `typo pattern` | 抽象化して保存（`j_insert_after_u` 等） |
+| `left_context` | hash 保存を標準（SHA-256 上位 4 bytes） |
+| `app_name` | 保存 ON/OFF 可能 |
+| 学習停止 | 必須（`enabled = false` でストア更新せず） |
+| 全削除 | 必須（M49 と連携） |
+| エクスポート | JSON / CSV（M49 と連携） |
+| secret apps | 補正・学習ともに無効（M46） |
+
+### 12.13 IPC（v2 拡張）
+
+v1 の `ObserveTypo` IPC に加え、既存 `QueryCandidates` の payload に
+optional フィールドを追加（エンベロープ schema 自体は変更しない）:
+
+```json
+{
+  "version": 1,
+  "request_id": 300,
+  "type": "QueryCandidates",
+  "trace_id": "018fd2c2-...",
+  "payload": {
+    "reading": "こうしょう",
+    "raw_keys": "kousyou",
+    "left_context": "...",
+    "app": {},
+    "typo_correction_mode": "rank"
+  }
+}
+```
+
+`raw_keys` / `typo_correction_mode` は optional（TIP が取得可能・送信意図が
+あるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま再利用し、
+新規 enum 値は追加しない。M40 互換性ルールに従い、optional フィールドが
+未指定のときは v1 動作に fallback する。
+
+### 12.14 設定スキーマ拡張
+
+v2 は nested `typoCorrection.*` に集約する:
+
+```json
+{
+  "typoCorrection": {
+    "enabled": true,
+    "mode": "suggest",
+    "learnPersonalPatterns": true,
+    "keyboardLayout": "auto",
+    "maxReadingHypotheses": 3,
+    "minConfidenceForRanking": 0.70,
+    "minConfidenceForTopCandidate": 0.90,
+    "disableInSecretApps": true
+  }
+}
+```
+
+**v1 互換性**: M55 リリース時点で v1 設定 `typoCorrectionMode`（root レベル、
+3 値 enum）を保持しているユーザーが存在する。SettingsManager は読み込み時に
+以下の migration を実行する:
+
+1. v2 の `typoCorrection.mode` が存在すればそれを採用
+2. v2 が未設定 / 空で、v1 root `typoCorrectionMode` が存在すれば値を読み、
+   `auto_replace` → `aggressive` に読み替え（§12.6 と整合）し、
+   `typoCorrection.mode` へコピー
+3. 両方未設定なら既定値 `suggest`
+
+migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出し、
+将来 3 マイナーバージョン後に v1 root key を削除予定（deprecation
+warning を CHANGELOG に記載）。M48 §6 の `promptPrefixByApp` と同じ
+段階的廃止ポリシー。
+
+### 12.15 M55 受け入れ条件
+
+- M52 ベンチで `typo_correction_top5_accuracy` が 85% 以上
+- M52 ベンチで `typo_false_positive_rate` が 1% 未満
+- M52 ベンチで `typo_overcorrection_rate` が 0.5% 未満
+- M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
+- M46 secure 中は補正・学習が一切発生しない
+- v1 互換: `mode = off / suggest` の挙動が v1 と等価
+- v1 の `mode = auto_replace` が v2 の `aggressive` として読み替え
+  られる

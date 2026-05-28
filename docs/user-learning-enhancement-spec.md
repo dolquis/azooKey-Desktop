@@ -52,10 +52,10 @@ M54 では以下のいずれかを選択する:
 
 ```
 # learning.tsv (v2)
-# reading	surface	weight	last_used_at	commit_count	app_name	event_type	context_hash
-にほんご	日本語	4.2	1780000000000	12	code.exe	commit	0xabcd1234
-こうしょう	交渉	2.8	1779999000000	8	outlook.exe	commit	0xef567890
-こうしょう	校章	0.0	1779990000000	0	outlook.exe	correction_reject	0xef567890
+# reading	surface	weight	last_updated_epoch_sec	commit_count	app_name	event_type	context_hash
+にほんご	日本語	4.2	1780000000	12	code.exe	commit	0xabcd1234
+こうしょう	交渉	2.8	1779999000	8	outlook.exe	commit	0xef567890
+こうしょう	校章	0.0	1779990000	0	outlook.exe	correction_reject	0xef567890
 ```
 
 | 列 | 内容 |
@@ -63,7 +63,7 @@ M54 では以下のいずれかを選択する:
 | `reading` | 読み（ひらがな） |
 | `surface` | 表記 |
 | `weight` | 重み（log(1 + commit_count) × recency × ...） |
-| `last_used_at` | UNIX ms |
+| `last_updated_epoch_sec` | epoch 秒（`LearningStore.cpp` の実装と一致。ミリ秒ではない） |
 | `commit_count` | 確定回数 |
 | `app_name` | 確定時の前面アプリ（M48）。空文字列 = グローバル |
 | `event_type` | `commit` / `correction_accept` / `correction_reject` / `typo_accept` / `typo_reject` |
@@ -71,7 +71,9 @@ M54 では以下のいずれかを選択する:
 
 ### 3.3 SQLite 化（v2 ロードマップ）
 
-将来 v2 で以下のテーブル分割を検討する（M54 範囲外）:
+将来 v2 で以下のテーブル分割を検討する（M54 範囲外）。`last_committed_at` /
+`created_at` / `updated_at` はいずれも epoch 秒（INTEGER、`LearningStore.cpp`
+の単位と一致させ、ミリ秒で保存しない）:
 
 ```sql
 CREATE TABLE committed_candidates (

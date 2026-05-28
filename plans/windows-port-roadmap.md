@@ -645,6 +645,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 英数キーダブルタップで AI 自由テキスト変換、かなキーダブルタップで
   AI 言い換え。
 - **前提**: M13 完了。
+- **推奨**: M46（プライバシーゲート / セーフ入力モード）が同時期 or 先行で
+  実装されていることが望ましい（hard prerequisite ではない）。M16 が単独
+  で先行すると、M46 の secure 抑止契約が無いまま OpenAI 呼び出しが走り、
+  secure アプリ向けの初期プライバシーギャップが発生する。詳細は
+  `docs/privacy-and-secure-input-spec.md` §1 を参照。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（ダブルタップ検出）、
   `tsf-tip/src/PromptDialog.cpp`（新規）、`ipc/src/Payloads.cpp`
   （`TransformSelectedText` 追加）、`inference-host/src/AiBackend.cpp`（新規）。
@@ -1546,7 +1551,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - M52 ベンチで named_entity_recall_at_5 が 90% 以上
   - M52 ベンチで neologism カテゴリの top5 が baseline 比で改善する
-- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補
+    （M53 v1 時点では bundled `neologd_lexicon` の範囲で評価。M36-B
+    完了による neologd 更新前提の追加改善は M36-B follow-up で確認）
+- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14.9）
 
 ### M54: ユーザー学習強化
 
@@ -1561,7 +1568,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/user-learning-enhancement-spec.md`。M54 v1 は TSV
   拡張で完結させ、SQLite 分割テーブル（committed_candidates /
   correction_events / app_profiles）は spec §3.3 に将来案として残すのみ。
-  - TSV スキーマ拡張: `reading\tsurface\tweight\tlast_used_at\tcommit_count\tapp_name\tevent_type\tcontext_hash`
+  - TSV スキーマ拡張: `reading\tsurface\tweight\tlast_updated_epoch_sec\tcommit_count\tapp_name\tevent_type\tcontext_hash`（`last_updated_epoch_sec` は epoch 秒、ミリ秒ではない。`LearningStore.cpp` の単位と一致）
   - 学習イベント 7 種: 候補確定 / 即 Backspace / 再変換 / ユーザー辞書登録 /
     アプリ別確定 / typo 採用 / typo 拒否（typo 系は M55 完了後）
   - 時間減衰: half_life = 一般 30 日 / 固有名詞 90 日 / 技術語 120 日 /

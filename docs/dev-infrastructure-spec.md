@@ -155,6 +155,7 @@ compile_commands.json
 | WIL | header-only | submodule または `FetchContent`（オプトイン） | M43 で導入（§9） |
 | nlohmann-json | header-only | 任意・保留 | §6・§11 参照（即時導入しない） |
 | spdlog | 要ビルド | 任意・保留 | §7・§11 参照（自前ロガーを優先評価） |
+| miniz | 要ビルド（C ソース 2 ファイル） | vendored（既定） →（オプトイン時）`FetchContent`（`-DAZOOKEY_FETCH_MINIZ=ON`） | M49 で導入予定（`docs/learning-data-management-spec.md` §7 の ZIP backup で使用） |
 
 ### 3.3 vcpkg.json の扱い
 
@@ -234,7 +235,15 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
   data\     learning.tsv / user_dict.json
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
+  typo_corrections.tsv   ← M35（root 直下）
+  auto_words.tsv         ← M36-A（root 直下）
 ```
+
+注: `typo_corrections.tsv`（M35）と `auto_words.tsv`（M36-A）は歴史的経緯
+により root 直下に配置されている。将来の独立 M で `data\` 配下へ統合する
+follow-up を予定（既存ユーザーデータ migration を伴うため、本 spec の M39
+範囲では維持する）。M49 backup（`docs/learning-data-management-spec.md` §2）
+の対象範囲は本レイアウトを正典とし、root 直下の TSV も含む。
 
 `%LOCALAPPDATA%` は `SHGetKnownFolderPath(FOLDERID_LocalAppData, ...)` で
 取得する（WIL 導入後は `wil::unique_cotaskmem_string` で受ける）。必要な

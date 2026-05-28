@@ -94,7 +94,7 @@ Response（host → settings-app）:
         "reading": "にほんご",
         "surface": "日本語",
         "weight": 4.2,
-        "last_used_at": 1780000000000,
+        "last_updated_epoch_sec": 1780000000,
         "tags": ["learned"],
         "metadata": {}
       }

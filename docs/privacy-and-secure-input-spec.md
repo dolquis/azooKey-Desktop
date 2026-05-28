@@ -14,7 +14,12 @@
 AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御できるように
 し、パスワード欄や機密入力時に自動で安全側に倒す。IME は機密入力を扱う
 ため、本機能は M16（Magic Conversion / OpenAI API）と M34（DPAPI 暗号化）
-の前提として「ユーザーが AI / 学習を停止できる」契約を確立する。
+の **設計前提条件** として「ユーザーが AI / 学習を停止できる」契約を
+確立する。実装順としては M16 着手前または同時期の投入を **推奨** する
+（hard prerequisite ではない。`plans/windows-port-roadmap.md` の M46
+「推奨実装時期」記述と整合）。M16 が単独で先行する場合は secure アプリ
+向けの初期プライバシーギャップが生じるため、その期間の暫定的な抑止
+方針を別途定める必要がある。
 
 ## 2. 設計原則
 
@@ -151,7 +156,12 @@ public:
 
 ## 7. 設定スキーマ
 
-`settings/mvp-settings.schema.json` に以下を追加:
+`settings/mvp-settings.schema.json` の既定 `additionalProperties: false`
+制約下で、新規 top-level key `privacy` を追加する。schema 追加と Host
+側の読み書き実装は同一 PR でまとめ、schema 不在のまま `privacy.*` を
+書き込む不整合状態を作らない。
+
+設定例（実際に書き込まれる JSON 値）:
 
 ```json
 {
@@ -170,6 +180,44 @@ public:
     "secureUrlPatterns": [],
     "privateApps": [],
     "showSecureIndicator": true
+  }
+}
+```
+
+schema fragment（`properties.privacy` への追加）:
+
+```json
+{
+  "privacy": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["normal", "private", "secure", "offline", "custom"],
+        "default": "normal"
+      },
+      "autoSecureInput": { "type": "boolean", "default": true },
+      "disableLearningInPrivateMode": { "type": "boolean", "default": true },
+      "disableExternalAIInPrivateMode": { "type": "boolean", "default": true },
+      "redactLogs": { "type": "boolean", "default": true },
+      "secureApps": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
+      "secureUrlPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
+      "privateApps": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
+      "showSecureIndicator": { "type": "boolean", "default": true }
+    }
   }
 }
 ```

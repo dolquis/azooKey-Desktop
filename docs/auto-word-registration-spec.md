@@ -509,9 +509,15 @@ dictionary_score =
 | `base_frequency` | エントリの frequency（0.0〜1.0） |
 | `source_priority` | 層 priority（user > technical > neologd > base） |
 | `exact_reading_bonus` | 完全一致 +0.10、alias 一致 +0.05 |
-| `category_bonus` | M48 アプリプロファイル と一致する category に boost |
-| `app_profile_bonus` | M48 `candidateTagBoosts` 適用 |
+| `category_bonus` | 辞書エントリ category（§14.4 の `person_name` / `place_name` / `technical` 等）に対する `settings.dictionary.categoryBoosts` 適用。M48 と独立した辞書層側のスコア因子 |
+| `app_profile_bonus` | M48 `profilesByApp[*].candidateTagBoosts` を **候補タグ**（M52 ベンチで定義する `Technical` / `Polite` / `English` 等）に適用。辞書エントリ category とは **別 namespace**（`category_bonus` と二重適用しない） |
 | `obsolete_penalty` | 最終使用が古いエントリに減点 |
+
+`category_bonus`（辞書 category への適用）と `app_profile_bonus`（候補タグ
+への適用）は別 namespace のため独立した因子として加算する。M48 で `code.exe`
+を開いていて `candidateTagBoosts.Technical = 1.5` が設定されていても、これは
+候補タグ `Technical` が付与された候補に作用するのであって、辞書 category
+`technical` への作用は `dictionary.categoryBoosts.technical` 側で制御する。
 
 ### 14.6 辞書更新パイプライン
 
@@ -593,7 +599,12 @@ target を達成可能な scoring 経路を確保する。
 ### 14.9 M53 受け入れ条件
 
 - M52 ベンチで `named_entity_recall_at_5` が 90% 以上
-- M52 ベンチで `neologism` カテゴリの top5 が baseline 比で改善
+- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 時点で bundled
+  されている `neologd_lexicon`** の範囲で baseline 比改善。neologd 更新
+  前提の追加改善（M36-B `neologism pack` の SHA256 検証付き再配布で得ら
+  れる新語追加）は **M36-B 完了時のみ** 評価し、M36-B 未完了時は本項を
+  bundled lexicon の範囲で測定する（M36-B 完了後の follow-up チェック
+  とする。`plans/windows-port-roadmap.md` M53 entry と整合）
 - 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
   として読み込まれる（後方互換）
 - 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる

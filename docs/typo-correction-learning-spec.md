@@ -438,6 +438,10 @@ v1 の `auto_replace` モードは v2 の `aggressive` 相当として読み替�
 
 ### 12.8 TypoLearningStore（v2）
 
+`last_used_at` / `created_at` / `updated_at` はいずれも epoch 秒
+（INTEGER、ミリ秒ではない。`docs/user-learning-enhancement-spec.md` §3.1
+の `LearningStore.cpp` 単位と整合）。
+
 #### typo_patterns
 
 ```sql

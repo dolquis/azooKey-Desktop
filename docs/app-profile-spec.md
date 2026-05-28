@@ -53,7 +53,12 @@ M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
 
 ## 4. 設定スキーマ
 
-`settings/mvp-settings.schema.json` に以下を追加:
+`settings/mvp-settings.schema.json` の既定 `additionalProperties: false`
+制約下で、新規 top-level key `profilesByApp` を追加する。schema 追加と
+Host 側の読み書き実装は同一 PR でまとめ、schema 不在のまま
+`profilesByApp` を書き込む不整合状態を作らない。
+
+設定例（実際に書き込まれる JSON 値）:
 
 ```json
 {
@@ -96,6 +101,51 @@ M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
 }
 ```
 
+schema fragment（`properties.profilesByApp` への追加）。プロファイル名は
+プロセス名 / ウィンドウクラス / `default` のいずれかで、各プロファイル
+オブジェクトは `additionalProperties: false`:
+
+```json
+{
+  "profilesByApp": {
+    "type": "object",
+    "additionalProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profileName": { "type": "string", "default": "" },
+        "predictionEnabled": { "type": "boolean", "default": true },
+        "sentenceCompletion": { "type": "boolean", "default": false },
+        "learningEnabled": { "type": "boolean", "default": true },
+        "aiBackend": {
+          "type": "string",
+          "enum": ["auto", "local-zenzai", "openai", "none"],
+          "default": "auto"
+        },
+        "promptPrefix": { "type": "string", "default": "" },
+        "style": {
+          "type": "string",
+          "enum": ["auto", "polite", "casual", "technical"],
+          "default": "auto"
+        },
+        "preferTechnicalTerms": { "type": "boolean", "default": false },
+        "candidateTagBoosts": {
+          "type": "object",
+          "additionalProperties": { "type": "number" },
+          "default": {}
+        },
+        "privacyMode": {
+          "type": "string",
+          "enum": ["inherit", "normal", "private", "secure"],
+          "default": "inherit"
+        }
+      }
+    },
+    "default": {}
+  }
+}
+```
+
 ### 4.1 プロファイルフィールド
 
 | キー | 型 | 既定 | 意味 |
@@ -108,7 +158,7 @@ M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
 | `promptPrefix` | string | "" | Magic Conversion のプロンプト前置 |
 | `style` | enum | "auto" | `auto` / `polite` / `casual` / `technical` |
 | `preferTechnicalTerms` | bool | false | 技術語辞書を boost |
-| `candidateTagBoosts` | map | {} | タグ名 → 倍率 |
+| `candidateTagBoosts` | map | {} | 候補タグ名 → 倍率（M52 ベンチで定義する候補タグ `Technical` / `Polite` / `English` 等。M53 の辞書エントリ category（`person_name` 等）に作用する `dictionary.categoryBoosts` とは **別 namespace**。詳細は `docs/auto-word-registration-spec.md` §14.5 を参照） |
 | `privacyMode` | enum | "inherit" | `inherit` / `normal` / `private` / `secure` |
 
 ## 5. 解決順

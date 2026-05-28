@@ -72,9 +72,20 @@ M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF 
 
 ### 4.1 ListModels
 
+既存 IPC エンベロープ `{version, request_id, type, trace_id, payload}`
+（`ipc/src/Messages.cpp`）に従い、`type` は `MessageType` enum 値文字列を
+使う（`ListModelsRequest` のような派生名ではなく `ListModels`）。
+request と response は同一 `type` を共有し、payload schema で区別する
+（他の `QueryCandidates` 等と同じ慣習）。
+
+Request（client → host）:
+
 ```json
 {
-  "message_type": "ListModelsRequest",
+  "version": 1,
+  "request_id": 42,
+  "type": "ListModels",
+  "trace_id": "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2",
   "payload": {
     "directory": "%LOCALAPPDATA%\\azooKey\\models",
     "compute_sha256": false
@@ -82,9 +93,14 @@ M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF 
 }
 ```
 
+Response（host → client、同一 `request_id` / `trace_id` を返す）:
+
 ```json
 {
-  "message_type": "ListModelsResponse",
+  "version": 1,
+  "request_id": 42,
+  "type": "ListModels",
+  "trace_id": "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2",
   "payload": {
     "models": [
       {
@@ -107,9 +123,14 @@ M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF 
 
 ### 4.2 BenchmarkModel
 
+Request（client → host）:
+
 ```json
 {
-  "message_type": "BenchmarkModelRequest",
+  "version": 1,
+  "request_id": 43,
+  "type": "BenchmarkModel",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "path": "...",
     "backend": "cuda",
@@ -120,9 +141,14 @@ M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF 
 }
 ```
 
+Response（host → client）:
+
 ```json
 {
-  "message_type": "BenchmarkModelResponse",
+  "version": 1,
+  "request_id": 43,
+  "type": "BenchmarkModel",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "backend": "cuda",
     "p50_ms": 18.2,
@@ -138,12 +164,15 @@ M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF 
 }
 ```
 
-ベンチ中は Host を一時的に占有するため、対象 backend を起動 → 全
-iteration 実行 → unload してから既存 backend に戻す。ベンチ実行中は
-他の QueryCandidates をブロックしない非同期実行を必須とする。M24
-完了済みの環境では Heavy レーンスケジューラに委譲し、M24 未完了時は
-M45 専用の単一 worker thread で逐次処理してメイン IPC ループを塞がない
-（前者を推奨実装、後者を fallback とする）。
+ベンチは **既存稼働中の backend と並行する独立 runtime インスタンス**
+（別 InferenceEngine + 別 model handle）で実行し、ライブの
+`QueryCandidates` は本番 backend に routing し続ける。M24 完了済み環境
+では Heavy レーンスケジューラ上に独立 worker として配置し、M24 未完了
+環境では M45 専用 worker thread で逐次処理する（どちらの場合も
+ライブクエリ用 worker とは別 thread / 別 backend ハンドルを保つ）。
+対象 backend のロード / iteration 実行 / unload が完了するまでベンチ用
+runtime のみを更新し、既存 backend の差し替えは行わない。これにより
+load/unload とライブクエリの race を構造的に排除する。
 
 ### 4.3 IPC 追加方針
 

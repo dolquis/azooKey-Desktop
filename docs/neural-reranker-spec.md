@@ -51,7 +51,7 @@ ScorePipeline へ
 | `user_frequency` | float | 0.25 | M54 |
 | `recency_score` | float | 0.41 | M54 |
 | `typo_confidence` | float | 0.82 | M55 |
-| `app_profile_score` | float | 0.08 | M48 |
+| `app_profile_score` | float | 0.08 | M48（未完了時は 0.0 既定） |
 | `candidate_length` | int | 4 | length |
 | `segment_count` | int | 2 | M55 segments |
 | `is_named_entity` | bool | false | M53 category |
@@ -69,6 +69,14 @@ v1（§5.2 Option C 採用）は 3 種類の embedding（合計 384 次元）を
 **入力に含めず**、scalar 8 + flag 4 = 12 次元の `features_v1` を入力
 shape とする（`[batch, 12]`）。FeatureExtractor は ONNX メタ情報
 `model_version` で v1 / v2 を切り替える（§5.2 と整合）。
+
+**M48（AppProfile）が未完了の環境への fallback**: M56 の hard prerequisite
+は M52 + M53 + M54 + M55 の 4 つで、M48 は含まれない（roadmap M56 §前提と
+整合）。M48 未完了 / 未配置の環境では、FeatureExtractor が
+`app_profile_score` を **0.0（neutral）** で埋める。これにより v1 ONNX の
+入力 shape `[batch, 12]` は M48 の完了状況によらず常に確定する。M48 が
+後から有効化されても feature の物理位置・dtype は変えず、値の供給元のみ
+切り替わる。
 
 ### 4.1 Embedding 供給元
 

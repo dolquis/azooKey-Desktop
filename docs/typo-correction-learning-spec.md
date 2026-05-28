@@ -234,7 +234,13 @@ correct_reading` の頻度ペア学習だったのに対し、v2 は以下を統
 - raw_keys を IPC で受領（プライバシー処理）
 
 v1 の `wrong_reading → correct_reading` ペア学習は v2 でも下位互換
-として残し、`pattern_id = "v1_legacy"` 扱いとする。
+として残す。マイグレート時は §12.8 の `typo_patterns` テーブル
+（`id INTEGER PRIMARY KEY`）に **legacy 集約用の予約行 1 行**
+（`typo_type = 'legacy_v1'`, `observed_pattern = ''`, `intended_pattern = ''`）
+を INSERT し、得られた整数 `id` を全 v1 由来 `typo_events.pattern_id`
+（INTEGER）に書き込む。`pattern_id` の文字列値（例: `"v1_legacy"`）は
+JSON 候補メタデータ（§12.2 の `pattern_id` フィールド、TEXT）でのみ使い、
+SQL の INTEGER 列とは混在させない。
 
 ### 12.1 アーキテクチャ
 

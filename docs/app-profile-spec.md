@@ -122,23 +122,40 @@ M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
 3. `profilesByApp["default"]`
 4. グローバル設定（`settings.predictionEnabled` 等）
 
-`privacyMode = secure` のプロファイルは、解決後に M46 `PrivacyGate` へ
-`auto_secure_app` 理由で通知する。
+`privacyMode` が `inherit` 以外（`normal` / `private` / `secure`）の
+プロファイルは、解決後に M46 `PrivacyGate` へ通知する。理由文字列は
+モードごとに以下:
+
+- `secure` → `auto_secure_app`（学習・外部 AI 完全 OFF）
+- `private` → `auto_private_app`（外部 AI OFF / 学習は context_hash のみ）
+- `normal` → `auto_normal_app`（グローバル既定に戻す。上位プロファイルから
+  `private` / `secure` を継承していた場合に明示解除する用途）
+
+`inherit` の場合は通知せず、グローバル設定（`settings.privacyMode` 等）を
+そのまま使う。`PrivacyGate` 側は同一ユーザーアクション内で複数通知を
+受けた場合、最も厳しいモード（`secure > private > normal`）を採用する。
 
 ## 6. 既存 `promptPrefixByApp` との統合
 
 既存設定キー `promptPrefixByApp` は値 `{"<process>": "<prefix>"}` の
-map（M30 横断テーマ X-2-6）。M48 では以下の移行戦略をとる:
+map（M30 横断テーマ X-2-6）で、key は大文字小文字混在の実プロセス名
+（例: `Code.exe`, `OUTLOOK.EXE`）で書かれている既存ユーザー設定がある。
+M48 の resolver は `profilesByApp[process_name.lower()]` で lookup する
+ため、legacy 側も **読み込み時に key を `lower()` 正規化**して同じ規約に
+揃える。M48 では以下の移行戦略をとる:
 
-1. `profilesByApp[process].promptPrefix` を優先
-2. それが未設定なら `promptPrefixByApp[process]` を読む
+1. `profilesByApp[process.lower()].promptPrefix` を優先
+2. それが未設定なら `promptPrefixByApp[process.lower()]` を読む
+   （`SettingsManager` 読み込み時に大文字混在キーは `lower()` 正規化済み）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
 4. M48 リリース後 3 マイナーバージョンで `promptPrefixByApp` 削除予定
    （deprecation warning を CHANGELOG に記載）
 
 `SettingsManager` で読み込み時に統合し、内部表現は `profilesByApp`
-ベースに統一する。
+ベースに統一する。lower 化で衝突した既存キー（例: `Code.exe` と
+`code.exe` の両方）は最後に読み込んだ値を採用し、warning を `azookey_diag.exe`
+に記録する。
 
 ## 7. 候補タグ Boost
 

@@ -243,7 +243,20 @@ private:
 ```
 
 ZIP 操作は標準ライブラリだけでは困難なため、`miniz`（header-only 互換）
-を `FetchContent` で取り込む（M37 §3.2 の依存追加方針に従う）。
+を依存に追加する。M37 §3.2 の **オフライン既定** ビルド方針に従い、
+配布形態は以下とする:
+
+1. **vendored（既定）**: `third_party/miniz/` にソース 1〜2 ファイル
+   （`miniz.h` / `miniz.c`）を **submodule または直接コピー**で取り込み、
+   オフライン CI / 開発機でもネットワーク無しで configure / build が成功する
+2. **opt-in `FetchContent`**: `-DAZOOKEY_FETCH_MINIZ=ON` でのみ
+   `FetchContent_Declare(miniz ...)` を有効化（vendored を選べない CI 等の
+   逃げ道として残す）。既定 OFF
+3. **system package**: distro パッケージ（`apt install libminizip-dev` 等）
+   は API 差異があるため、本 M49 範囲では vendored を優先する
+
+CMake の探索順は vendored → opt-in fetch の 2 段。M37 の
+configure offline ガードに違反しないことを CI で確認する。
 
 ## 8. プライバシー
 

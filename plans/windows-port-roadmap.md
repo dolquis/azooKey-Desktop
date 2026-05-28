@@ -1340,8 +1340,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `ipc/src/Messages.cpp`（envelope に `trace_id` を追加）、
   `tsf-tip/src/TextService.cpp` / `inference-host/src/Dispatcher.cpp` /
   `inference-host/src/InferenceEngine.cpp`（各フェーズで `t_ms` 記録）、
-  `bench/azookey_bench`（`--trace` フラグ追加）、
-  `bench/azookey_trace_viewer.cpp`（新規 CLI）。
+  `bench/live_bench.cpp`（既存 `azookey_bench` ターゲットに `--trace`
+  フラグ追加）、`bench/azookey_trace_viewer.cpp`（新規 CLI）。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §7 拡張。
   - phase 一覧: `key_down` / `romaji_convert` / `ipc_serialize` /
     `pipe_send` / `host_queue_wait` / `model_inference` / `rerank` /
@@ -1446,7 +1446,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - 学習データを UI から検索できる
   - 個別忘却が次回候補順位に反映される
-  - export → import で別環境に辞書を移せる
+  - 同一 Windows ユーザー / 同一マシン上で export → import の round-trip
+    が件数一致で復元できる（DPAPI ユーザースコープのため他マシン / 他
+    ユーザーへの移行は本受け入れ範囲外。クロス環境復元は §5.2 の
+    明示的平文エクスポートを使う）
   - 暗号化済みデータは他ユーザーで復号できない
 - **参照仕様**: `docs/learning-data-management-spec.md`
 
@@ -1472,9 +1475,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   効果を baseline 比で測定可能にする。
 - **前提**: M7（学習）完了、M9（ユーザー辞書）完了、既存 `bench/`。
 - **推奨実装時期**: Phase 4 完了直後。M53〜M57 のいずれよりも先に着手する。
-- **変更対象**: `bench/azookey_bench.cpp`（拡張）、
-  `bench/data/*.jsonl`（新規評価データ）、`bench/CMakeLists.txt`、
-  `.github/workflows/`（評価ジョブ追加、optional）。
+- **変更対象**: 既存 `bench/live_bench.cpp`（`azookey_bench` ターゲットの
+  ソース。spec §3 の方針に従い拡張する。新規 `azookey_bench.cpp` は
+  作らない）、`bench/data/*.jsonl`（新規評価データ）、
+  `bench/CMakeLists.txt`、`.github/workflows/`（評価ジョブ追加、optional）。
 - **実装範囲**: `docs/conversion-quality-benchmark-spec.md`。
   - 評価データ形式: `kana_kanji_eval.jsonl` / `typo_eval.jsonl`
   - カテゴリ: general / homophone / named_entity / neologism /

@@ -81,6 +81,10 @@ modernbert_score = (1/N) Σ log P(token_i | sentence with token_i masked)
 候補部分のトークンだけ順次 mask して forward。文全体を mask する MLM の
 完全 PLL は計算量が膨大なので回避する。
 
+PLL は **token 単位で別々の masked 文を作って forward する必要がある**
+ため、1 候補が N トークンなら N 回の forward を要する。K 候補・各 N
+トークンの場合、総 forward 回数は Σ N_k となる。
+
 ### 5.1 軽量化
 
 | 軽量化 | 内容 |
@@ -90,7 +94,7 @@ modernbert_score = (1/N) Σ log P(token_i | sentence with token_i masked)
 | キャッシュ | 同一 `(left_context, candidate)` ペアの結果を 5 分保持 |
 | timeout | 30〜50ms で打ち切り |
 | backend GPU/NPU | M24 の DirectML / NPU で実行 |
-| batch 5 候補一括 | 1 forward で 5 候補分の logits を取得 |
+| masked 文を batch | 各候補の各トークン位置で生成した masked 文を 1 つの batch（最大 K×max_token_len）にまとめて 1 回の forward で評価する。「1 forward で K 候補」ではなく「**1 forward で K×N 個の masked 文**」 |
 | FP16 | ONNX Runtime FP16 推論 |
 | 量子化 | INT8 量子化を検討（精度劣化を M52 で確認） |
 

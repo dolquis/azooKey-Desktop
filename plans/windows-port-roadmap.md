@@ -529,10 +529,11 @@ M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix →
 
 【変換品質トラック】（Phase 5〜7 と独立。bench / 学習 / 辞書を発展）
 bench / M7 / M9 ─→ M52
-                  ├─→ M53     （辞書・固有名詞・新語強化。M36-A/B 統合も前提）
+                  ├─→ M53     （辞書・固有名詞・新語強化。M36-A 統合が必須、M36-B は任意 pack のみ）
                   ├─→ M54     （ユーザー学習強化、M7 発展）
                   └─→ M55     （打ち間違え学習統合）
-M36-A / M36-B ─→ M53          （AutoWordStore の移行元として必須）
+M36-A ─→ M53                  （AutoWordStore の移行元として必須）
+M36-B（任意）─→ M53           （neologd_lexicon 等の optional pack 更新。未完了時は当該 pack 無効）
 M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジンへ昇格）
 M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
@@ -577,12 +578,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   既存 `promptPrefixByApp` の発展として M46 完了後に着手し、本トラック
   に属する。詳細は「追加機能マイルストーン」章および
   `docs/app-profile-spec.md`。
-- **変換品質トラック（M52〜M57）は Phase 5〜7 と独立した新トラック** —
+- **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
   → M53（辞書）/ M54（学習強化）/ M55（打ち間違え統合）並行 → M56（Tiny
   Reranker） → M57（ModernBERT スコアリング）の順で進める。M55 は M35 を、
-  M53 は M36-A/B を発展統合する位置づけ。詳細は「変換品質トラック（M52〜
-  M57）」章と各 `docs/*-spec.md`。
+  M53 は **M36-A** を必須前提として `AutoWordStore` を多層
+  DictionaryStore に統合する。**M36-B（M32 / WinHTTP 依存）は M53 v1 の
+  必須前提ではなく**、`neologd_lexicon` 等の任意 pack 更新を担う follow-up
+  扱い（M36-B 未完了時は当該 pack を無効として M53 v1 を受け入れる）。
+  詳細は「変換品質トラック（M52〜M57）」章と各 `docs/*-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
 
@@ -1512,10 +1516,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 ### M53: 辞書・固有名詞・新語強化
 
 - **目的**: Zenzai が苦手な固有名詞・新語・技術語・地名・人名・製品名を
-  辞書層で補強する。M36-A/B（新語自動取得）の上に DictionaryStore 階層を
-  載せて全体を再設計する。
-- **前提**: M9（ユーザー辞書）、**M36-A/B**（AutoWordStore の移行元として
-  必須）、M52（ベンチ）。
+  辞書層で補強する。M36-A（AutoWordStore）の上に DictionaryStore 階層を
+  載せて全体を再設計する（M36-B のリモート pack 更新は任意統合）。
+- **前提**: M9（ユーザー辞書）、**M36-A**（AutoWordStore の移行元として
+  必須）、M52（ベンチ）。M36-B（M32 / WinHTTP 依存）は M53 v1 必須では
+  なく、`neologd_lexicon` 等の optional pack 更新パスとして follow-up
+  扱い（未完了時は当該 layer を無効化して受け入れる）。
 - **推奨実装時期**: M52 完了後。M54 / M55 と並行可能。
 - **変更対象**: `learning/src/DictionaryStore.cpp`（新規）、
   `learning/src/DictionaryImporter.cpp`（新規）、

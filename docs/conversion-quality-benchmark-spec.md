@@ -118,6 +118,38 @@ bench/data/
 `double_key` / `romaji_variant` / `n_handling` / `small_tsu` /
 `long_vowel` / `dakuten_confusion` / `kana_shape_confusion`
 
+### 4.3.1 クリーン（非タイポ）ケース
+
+`typo_false_positive_rate` および `typo_overcorrection_rate` は分母に
+**typo 補正を発動すべきでない正常入力**を必要とする。`typo_eval.jsonl`
+には typo ケースと同数程度のクリーンケースを含めること（`typo_type`
+は不使用、`observed_reading == intended_reading`、`expected_surface` は
+正常変換結果）:
+
+```json
+{
+  "id": "typo_clean_001",
+  "domain": "business",
+  "raw_keys": "koushou",
+  "observed_reading": "こうしょう",
+  "intended_reading": "こうしょう",
+  "left_context": "価格について",
+  "expected_surface": "交渉",
+  "typo_type": null,
+  "category": ["typo_clean"],
+  "difficulty": 1
+}
+```
+
+**指標の分母**:
+- `typo_false_positive_rate` = クリーンケース中、補正候補が top1 に
+  上がってしまった件数 / クリーンケース総数
+- `typo_overcorrection_rate` = クリーンケース中、`aggressive` モードでも
+  元の `expected_surface` が top5 から外れた件数 / クリーンケース総数
+
+クリーン:typo 比率の既定は 1:1。`category = ["typo_clean"]` で
+typo メトリクスの分母にのみ採用し、その他のカテゴリ集計には含めない。
+
 ## 5. カテゴリ
 
 | category | 内容 | 例 |
@@ -133,6 +165,7 @@ bench/data/
 | `creative` | 創作文体 | 星明かり、記憶、名前 |
 | `user_adapt` | ユーザー学習評価 | 学習前後比較 |
 | `typo` | 打ち間違え補正 | koujsyou → こうしょう |
+| `typo_clean` | typo 補正発動すべきでない正常入力（false-positive 分母） | koushou → こうしょう |
 
 ## 6. 指標
 

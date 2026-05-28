@@ -62,7 +62,13 @@ ScorePipeline へ
 合計入力次元: 128 × 3（embeddings）+ scalar 8（zenzai / dictionary /
 user_frequency / recency / typo_confidence / app_profile /
 candidate_length / segment_count）+ flag 4（bool を 0/1 で符号化）=
-**396 次元**。ONNX 入力 shape はこの 396 に合わせる。
+**396 次元**。これは embedding を含めた **v2 契約**であり、ONNX 入力
+shape は `features_v2 = [batch, 396]`。
+
+v1（§5.2 Option C 採用）は 3 種類の embedding（合計 384 次元）を
+**入力に含めず**、scalar 8 + flag 4 = 12 次元の `features_v1` を入力
+shape とする（`[batch, 12]`）。FeatureExtractor は ONNX メタ情報
+`model_version` で v1 / v2 を切り替える（§5.2 と整合）。
 
 ### 4.1 Embedding 供給元
 

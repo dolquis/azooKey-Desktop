@@ -155,12 +155,14 @@ M45 専用の単一 worker thread で逐次処理してメイン IPC ループ�
 
 ### 5.1 推奨ロジック
 
-`backendPreference = auto` のとき、以下の優先順位で backend を選ぶ:
+`backendPreference = auto` のとき、以下の順で backend を選ぶ:
 
-1. **ベンチマーク履歴があれば p95 最良**（直近 7 日以内、同一モデルで
-   `status = success` のもの）
-2. M24 の `auto` 優先順位に従う: NPU > DirectML > CUDA > CPU
+1. M24 の `auto` 優先順位に従う: NPU > DirectML > CUDA > CPU
    （AC 電源 / バッテリーでの差し替えも M24 の挙動を踏襲）
+2. **同一順位内のタイブレーカーとしてのみ**ベンチマーク履歴を参照する
+   （直近 7 日以内、同一モデル、`status = success` のもの。同 rank 内に
+   複数 backend がある場合に p95 最良を採用）。順位を跨いだ並べ替えは
+   行わない
 
 M45 は backend 順位を独自に上書きせず、M24 で定義した順位をそのまま
 利用する（既存 root `backendPreference` の `auto` 挙動を変えないため）。

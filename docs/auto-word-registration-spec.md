@@ -565,13 +565,30 @@ private:
     "autoWordsEnabled": true,
     "appSpecificDictionaryEnabled": true,
     "categoryBoosts": {
-      "named_entity": 1.1,
+      "person_name": 1.1,
+      "place_name": 1.1,
+      "station_name": 1.1,
+      "product_name": 1.1,
+      "company_org": 1.1,
+      "software": 1.0,
+      "anime_game": 1.0,
       "technical": 1.0,
-      "neologism": 1.0
+      "neologism": 1.0,
+      "named_entity": 1.1
     }
   }
 }
 ```
+
+`categoryBoosts` の key は §14.4 で定義する具体 category（`person_name`,
+`place_name`, `station_name`, `product_name`, `company_org`, `software`,
+`anime_game`, `technical`, `neologism`）と一致させる。`named_entity` は
+固有名詞系（`person_name` / `place_name` / `station_name` / `product_name` /
+`company_org`）の umbrella tag として scorer 側で同義扱いし、エントリ category
+が具体名（例: `person_name`）でも `categoryBoosts.named_entity` の
+値が当該カテゴリへ加算される（具体値が同時に設定されている場合は具体値が優先、
+umbrella は加算しない）。これにより M52 `named_entity_recall_at_5` の
+target を達成可能な scoring 経路を確保する。
 
 ### 14.9 M53 受け入れ条件
 

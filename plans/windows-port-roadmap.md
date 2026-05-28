@@ -1438,8 +1438,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **推奨実装時期**: Phase 7 末尾、M34 完了直後。M35 / M36-A / M55 の学習
   データも対象に含めるため、これらが実装済みの場合は範囲を拡張する。
 - **変更対象**: `settings-app/`（学習データタブ）、`ipc/src/Payloads.cpp`
-  （`ListLearningEntries` / `ForgetLearningEntry` / `ExportUserData` /
-  `ImportUserData` 追加）、`learning/src/LearningStore.cpp`（列挙 API 追加）、
+  （`ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` /
+  `ImportLearningData` 追加）、`learning/src/LearningStore.cpp`（列挙 API 追加）、
   `inference-host/src/BackupArchive.cpp`（新規）。
 - **実装範囲**: `docs/learning-data-management-spec.md`。
   - 学習候補 / ユーザー辞書 / typo 補正 / 新語候補の 4 タブ UI

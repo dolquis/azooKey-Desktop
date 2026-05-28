@@ -113,14 +113,23 @@ M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
 
 ## 5. 解決順
 
-`AppProfileResolver::Resolve(app)` は以下の順で最初にヒットしたものを
-返す。複数フィールドのマージは行わず、最初に見つけた profile をそのまま
-適用する:
+`AppProfileResolver::Resolve(app)` は以下の優先順で値を **field 単位で
+overlay マージ** する。下位層で見つかった field は上位層の値で上書きされ、
+**未指定の field はそのまま下位層を引き継ぐ**:
 
-1. `profilesByApp[process_name.lower()]`
+1. `profilesByApp[process_name.lower()]`（最優先）
 2. `profilesByApp[window_class]`
 3. `profilesByApp["default"]`
-4. グローバル設定（`settings.predictionEnabled` 等）
+4. グローバル設定（`settings.predictionEnabled` 等）— **base**
+
+例: legacy `promptPrefixByApp` から移行した `profilesByApp[process]` が
+`promptPrefix` のみを持つ場合、`predictionEnabled` / `learningEnabled` 等は
+グローバル設定（base）の値を継承する。partial profile が無関係な機能を
+意図せず再有効化することはない。
+
+`privacyMode` のみ特殊扱い: `inherit` の場合だけ下位層を継承し、
+明示値（`normal` / `private` / `secure`）は下位を上書きする
+（プライバシー設定を意図せず緩める方向に継承しない方針）。
 
 `privacyMode` が `inherit` 以外（`normal` / `private` / `secure`）の
 プロファイルは、解決後に M46 `PrivacyGate` へ通知する。理由文字列は

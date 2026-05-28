@@ -551,29 +551,33 @@ typo_score =
 
 ### 12.13 IPC（v2 拡張）
 
-v1 の `ObserveTypo` IPC に加え、`QueryCandidates` に optional フィールド
-を追加:
+v1 の `ObserveTypo` IPC に加え、既存 `QueryCandidates` の payload に
+optional フィールドを追加（エンベロープ schema 自体は変更しない）:
 
 ```json
 {
-  "message_type": "QueryCandidatesRequest",
+  "version": 1,
+  "request_id": 300,
+  "type": "QueryCandidates",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "reading": "こうしょう",
     "raw_keys": "kousyou",
     "left_context": "...",
-    "app": { ... },
+    "app": {},
     "typo_correction_mode": "rank"
   }
 }
 ```
 
-`raw_keys` は optional（TIP が取得可能なときのみ送る）。
-`MessageType` は既存 enum 内に収まる。M40 互換性ルールに従い、未指定
-時は v1 動作に fallback する。
+`raw_keys` / `typo_correction_mode` は optional（TIP が取得可能・送信意図が
+あるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま再利用し、
+新規 enum 値は追加しない。M40 互換性ルールに従い、optional フィールドが
+未指定のときは v1 動作に fallback する。
 
 ### 12.14 設定スキーマ拡張
 
-v1 の `typoCorrection.*` に追加:
+v2 は nested `typoCorrection.*` に集約する:
 
 ```json
 {
@@ -589,6 +593,21 @@ v1 の `typoCorrection.*` に追加:
   }
 }
 ```
+
+**v1 互換性**: M55 リリース時点で v1 設定 `typoCorrectionMode`（root レベル、
+3 値 enum）を保持しているユーザーが存在する。SettingsManager は読み込み時に
+以下の migration を実行する:
+
+1. v2 の `typoCorrection.mode` が存在すればそれを採用
+2. v2 が未設定 / 空で、v1 root `typoCorrectionMode` が存在すれば値を読み、
+   `auto_replace` → `aggressive` に読み替え（§12.6 と整合）し、
+   `typoCorrection.mode` へコピー
+3. 両方未設定なら既定値 `suggest`
+
+migration 後は v1 key を残したまま（破壊的削除はしない）両方を書き出し、
+将来 3 マイナーバージョン後に v1 root key を削除予定（deprecation
+warning を CHANGELOG に記載）。M48 §6 の `promptPrefixByApp` と同じ
+段階的廃止ポリシー。
 
 ### 12.15 M55 受け入れ条件
 

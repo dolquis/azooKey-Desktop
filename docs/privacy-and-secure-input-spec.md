@@ -189,21 +189,45 @@ redaction ポリシーと共通の関数で処理する。
 
 ## 9. UpdatePrivacyMode IPC
 
-設定アプリから Host にモード変更を伝達する新規 IPC:
+設定アプリ / TIP から Host にモード変更を伝達する新規 IPC。エンベロープは
+既存 wire format `{version, request_id, type, trace_id, payload}` に従う。
+
+Request:
 
 ```json
 {
-  "message_type": "UpdatePrivacyModeRequest",
+  "version": 1,
+  "request_id": 200,
+  "type": "UpdatePrivacyMode",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "mode": "secure",
-    "reason": "user_explicit" | "auto_secure_app" | "auto_password_field"
+    "reason": "user_explicit"
   }
 }
 ```
 
+`reason` の取り得る値:
+
+| 値 | 送信元 | 用途 |
+|---|---|---|
+| `user_explicit` | 設定アプリ / ショートカット | ユーザーが明示的に切替 |
+| `auto_secure_app` | M48 AppProfileResolver | `privacyMode = secure` プロファイル解決時 |
+| `auto_private_app` | M48 AppProfileResolver | `privacyMode = private` プロファイル解決時 |
+| `auto_normal_app` | M48 AppProfileResolver | `privacyMode = normal` プロファイル解決時（厳格モードからの明示解除） |
+| `auto_password_field` | M46 secure 検出 | パスワード入力欄に focus した時 |
+
+`reason` 列は forward-compatible とし、未知の値は host 側で
+`unknown_reason` 扱いとしつつ `mode` だけ適用する（M40 互換性ルール）。
+
+Response:
+
 ```json
 {
-  "message_type": "UpdatePrivacyModeResponse",
+  "version": 1,
+  "request_id": 200,
+  "type": "UpdatePrivacyMode",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "applied_mode": "secure",
     "previous_mode": "normal"
@@ -211,7 +235,7 @@ redaction ポリシーと共通の関数で処理する。
 }
 ```
 
-`MessageType` enum 末尾に append（M40 互換性）。
+`MessageType` enum 末尾に `UpdatePrivacyMode` を append（M40 互換性）。
 
 ## 10. テスト
 

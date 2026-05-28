@@ -617,7 +617,26 @@ timeout 時は Cancel を送信し、古い結果は staleness check（M10）で
 候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。
 SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し、
-ユーザーが手動で解除するまで継続する。
+ユーザーが手動で解除するまで継続する。M47 実装時に
+`settings/mvp-settings.schema.json`（既存スキーマは
+`additionalProperties: false` のため、未定義キーは現状 reject される）に
+以下を追加する:
+
+```json
+"safeMode": {
+  "type": "object",
+  "description": "M47: Host 連続クラッシュ時の安全モード状態",
+  "properties": {
+    "enabled": { "type": "boolean", "default": false },
+    "entered_at": { "type": "string", "description": "RFC 3339 タイムスタンプ" },
+    "last_crash_count": { "type": "integer", "default": 0 }
+  },
+  "additionalProperties": false
+}
+```
+
+スキーマ追加と Host 側の読み書きパスを同じ PR / コミットで揃え、永続化
+されない不整合状態を作らない。
 
 #### 8.5.4 UI 通知
 
@@ -828,13 +847,24 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 Host 側の状態を取得する新規 IPC。MessageType enum 末尾に追加する
 （M40 互換性ルール）。
 
+エンベロープは既存 wire format `{version, request_id, type, trace_id, payload}`
+に従う。
+
 ```
-Request:  { "message_type": "QueryDiagnostics" }
-Response: { "model_loaded": bool, "backend": str, "rss_mb": int,
-            "learning_entries": int, "user_dict_entries": int,
-            "fallback_state": "healthy" | "degraded_simple" |
-                              "degraded_model" | "safe_mode",
-            "last_error": str (optional) }
+Request:
+  { "version": 1, "request_id": 1, "type": "QueryDiagnostics",
+    "trace_id": "...", "payload": {} }
+
+Response:
+  { "version": 1, "request_id": 1, "type": "QueryDiagnostics",
+    "trace_id": "...",
+    "payload": {
+      "model_loaded": bool, "backend": str, "rss_mb": int,
+      "learning_entries": int, "user_dict_entries": int,
+      "fallback_state": "healthy" | "degraded_simple" |
+                        "degraded_model" | "safe_mode",
+      "last_error": str (optional)
+    } }
 ```
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。

@@ -51,15 +51,24 @@
 
 ## 4. IPC
 
-`MessageType` enum 末尾に append（M40 互換性）:
+`MessageType` enum 末尾に append（M40 互換性）。新規 type 名は
+`ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` /
+`ImportLearningData`。エンベロープは `ipc/src/Messages.cpp` の既存
+wire format `{version, request_id, type, trace_id, payload}` に従い、
+request と response は同一 `type` を共有して payload schema で区別する。
 
 ### 4.1 ListLearningEntries
 
+Request（settings-app → host）:
+
 ```json
 {
-  "message_type": "ListLearningEntriesRequest",
+  "version": 1,
+  "request_id": 100,
+  "type": "ListLearningEntries",
+  "trace_id": "018fd2c2-...",
   "payload": {
-    "store": "learning" | "user_dict" | "typo" | "auto_word",
+    "store": "learning",
     "query": "にほん",
     "limit": 100,
     "offset": 0
@@ -67,9 +76,16 @@
 }
 ```
 
+`store` の取り得る値: `learning` / `user_dict` / `typo` / `auto_word`。
+
+Response（host → settings-app）:
+
 ```json
 {
-  "message_type": "ListLearningEntriesResponse",
+  "version": 1,
+  "request_id": 100,
+  "type": "ListLearningEntries",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "total": 1234,
     "entries": [
@@ -92,9 +108,14 @@
 
 ### 4.2 ForgetLearningEntry
 
+Request:
+
 ```json
 {
-  "message_type": "ForgetLearningEntryRequest",
+  "version": 1,
+  "request_id": 101,
+  "type": "ForgetLearningEntry",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "store": "learning",
     "id": "abc"
@@ -102,9 +123,14 @@
 }
 ```
 
+Response:
+
 ```json
 {
-  "message_type": "ForgetLearningEntryResponse",
+  "version": 1,
+  "request_id": 101,
+  "type": "ForgetLearningEntry",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "removed": true
   }
@@ -114,11 +140,16 @@
 該当エントリの weight を 0 化 + soft-delete。再観測時は新規エントリと
 して扱い、過去履歴を引き継がない。
 
-### 4.3 ExportUserData
+### 4.3 ExportLearningData
+
+Request:
 
 ```json
 {
-  "message_type": "ExportUserDataRequest",
+  "version": 1,
+  "request_id": 102,
+  "type": "ExportLearningData",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "stores": ["learning", "user_dict", "typo", "auto_word"],
     "destination_path": "C:\\Users\\me\\Desktop\\azookey-backup.zip",
@@ -128,13 +159,18 @@
 }
 ```
 
+Response:
+
 ```json
 {
-  "message_type": "ExportUserDataResponse",
+  "version": 1,
+  "request_id": 102,
+  "type": "ExportLearningData",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "status": "success",
     "file_size_bytes": 12345,
-    "manifest": { ... }
+    "manifest": {}
   }
 }
 ```
@@ -142,27 +178,39 @@
 `encrypt = true` のとき各ファイルを DPAPI で暗号化する。`encrypt =
 false` は明示的な選択時のみ許可し、UI で大きな警告を表示する。
 
-### 4.4 ImportUserData
+### 4.4 ImportLearningData
+
+Request:
 
 ```json
 {
-  "message_type": "ImportUserDataRequest",
+  "version": 1,
+  "request_id": 103,
+  "type": "ImportLearningData",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "source_path": "...",
-    "conflict_resolution": "merge" | "overwrite" | "keep_both",
+    "conflict_resolution": "merge",
     "stores": ["learning", "user_dict"]
   }
 }
 ```
 
+`conflict_resolution` の取り得る値: `merge` / `overwrite` / `keep_both`。
+
+Response:
+
 ```json
 {
-  "message_type": "ImportUserDataResponse",
+  "version": 1,
+  "request_id": 103,
+  "type": "ImportLearningData",
+  "trace_id": "018fd2c2-...",
   "payload": {
     "status": "success",
     "imported_counts": { "learning": 1234, "user_dict": 42 },
     "skipped_counts": { "learning": 5 },
-    "conflicts": [ ... ]
+    "conflicts": []
   }
 }
 ```
@@ -261,7 +309,9 @@ configure offline ガードに違反しないことを CI で確認する。
 ## 8. プライバシー
 
 - M46 secure mode 中はエクスポート / インポート操作を blocking する
-  （`PrivacyGate.SecretAppActive() == true` のとき）
+  （M46 `PrivacyGate::CurrentMode() == Mode::Secure` または
+  `!PrivacyGate::LearningAllowed()` のとき。`docs/privacy-and-secure-input-spec.md`
+  §6 の API を使用し、本 spec で新規 API を追加しない）
 - バックアップ ZIP には API キー / OpenAI 関連設定を含めない（`settings`
   含める場合は M44 §12.5 と同じ redaction）
 

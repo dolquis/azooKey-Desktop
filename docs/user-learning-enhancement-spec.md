@@ -31,8 +31,10 @@ M7 で実装した既存 `LearningStore`（reading/surface 頻度 + 時間減衰
 
 ### 3.1 既存 TSV からの移行
 
-M7 の `learning.tsv` は `reading\tsurface\tweight\tlast_used` 形式
-（タブ区切り）。M54 では以下のいずれかを選択する:
+M7 の `learning.tsv` は `reading<TAB>surface<TAB>weight<SPACE>last_updated_epoch_sec`
+形式（3 タブフィールド、weight と epoch_sec はスペース区切り）。`LearningStore::Save`
+の実装に合わせること（`last_updated_epoch_sec` は epoch 秒、ミリ秒ではない）。
+M54 では以下のいずれかを選択する:
 
 **Option A: TSV 拡張**（軽量・既定）
 - 新規列 `app_name` `event_type` `context_hash` を tab 末尾に追加

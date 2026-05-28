@@ -21,9 +21,9 @@
 |---|---|---|---|
 | `learning.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.tsv` | M7 | M34 で `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
-| `typo_corrections.tsv` | 同上 | M35 / M55 | M34 で `.enc` |
-| `auto_words.tsv` | 同上 | M36-A | M34 で `.enc` |
-| `user_learning.db` | 同上（将来 SQLite 化） | M54 | M34 で wrapper |
+| `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
+| `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\auto_words.tsv` | M36-A | M34 で `.enc` |
+| `user_learning.db` | `%LOCALAPPDATA%\azooKey\data\user_learning.db`（将来 SQLite 化） | M54 | M34 で wrapper |
 
 ## 3. UI（設定アプリ 学習データタブ）
 

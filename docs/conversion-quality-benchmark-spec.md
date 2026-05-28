@@ -189,10 +189,12 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 |---|---|
 | `typo_correction_top1_accuracy` | typo 入力に対し第一候補が正解になる率 |
 | `typo_correction_top5_accuracy` | 正解が上位 5 候補に入る率 |
-| `typo_false_positive_rate` | 正常入力を誤って typo 扱いした率 |
-| `typo_overcorrection_rate` | 意図した入力を別候補へ過補正した率 |
-| `typo_suggestion_accept_rate` | 補正候補が提示され採用された率 |
-| `typo_suggestion_reject_rate` | 補正候補が提示され明示拒否された率 |
+| `typo_false_positive_rate` | 正常入力を誤って typo 扱いした率（§4.3.1 クリーンケース分母） |
+| `typo_overcorrection_rate` | 意図した入力を別候補へ過補正した率（§4.3.1 クリーンケース分母） |
+
+`typo_suggestion_accept_rate` / `typo_suggestion_reject_rate` はユーザーの
+実インタラクション（提示→採用/拒否）を必要とするため **オフラインベンチの対象外**。
+M54 / M55 の訂正イベントテレメトリで収集・計測する。
 
 ### 6.3 性能指標
 

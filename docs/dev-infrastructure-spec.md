@@ -430,9 +430,9 @@ Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定�
 
 ```json
 {
-  "trace_id": "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2",
+  "type": "QueryCandidates",
   "request_id": 123,
-  "message_type": "QueryCandidates"
+  "trace_id": "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2"
 }
 ```
 
@@ -602,7 +602,8 @@ M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
 | IPC Ping | 500ms |
 | QueryCandidates fast | 150ms |
 | QueryLiveConversion | 80ms |
-| Heavy inference（Magic / ModernBERT） | 800ms |
+| Heavy inference（Magic Conversion 等） | 800ms |
+| ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 
 timeout 時は Cancel を送信し、古い結果は staleness check（M10）で
@@ -634,7 +635,7 @@ SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し�
   ポップアップを表示する。M30 完了と M44 §12.7 の診断タブ統合（M44
   follow-up）の両方が揃った後は、設定アプリの診断タブを直接開く動作に
   切り替える
-- 「再試行」クリックで `ReloadModel` IPC を送る
+- 「再試行」クリックで `LoadModel` IPC を送る（現在選択中のモデル・backend で再ロード）
 
 ### M47 受け入れ条件
 

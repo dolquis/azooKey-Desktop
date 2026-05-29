@@ -556,9 +556,9 @@ private:
 
 ## 参照
 
-- ライブ変換 旧実装：`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`
-- 予測候補 旧実装：`legacy/Core/Sources/Core/InputUtils/PredictionEngine.swift`
-- 誤変換訂正 旧実装：`legacy/Core/Sources/Core/InputUtils/CorrectionEngine.swift`
+- ライブ変換 / 予測候補 / 誤変換訂正 旧実装：`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`
+  （macOS 版ではこれらのロジックは独立ファイルではなく `SegmentsManager` 内に実装されている。
+  独立した `PredictionEngine.swift` / `CorrectionEngine.swift` は存在しない）
 - Phase 5 仕様：`docs/legacy-parity-spec.md`
 - Phase 6-A 仕様：`docs/tsf-deep-integration-spec.md`
 - Phase 6-B 仕様：`docs/copilot-pc-backend-spec.md`

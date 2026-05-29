@@ -8,8 +8,10 @@
 - Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE`
 - DACL: 現在のユーザ SID のみに RW 許可
   (`NamedPipeServer` Windows 実装で設定)
-- 1 サーバが複数クライアント (TIP + 設定 UI 等) を許容するが、同時接続
-  インスタンスは 4 まで。
+- 1 サーバが複数クライアント (TIP + 設定 UI 等) を許容する。同時接続
+  インスタンス上限は実装値 `kMaxPipeInstances = 32`
+  (`ipc/include/azookey/ipc/Limits.h`)。設計意図は小数 (TIP + 設定 UI 程度) で
+  あり、上限値を 4 へ絞るか 32 のままとするかは Issue #37 で検討する。
 - Release では SID 取得失敗時に per-user pipe 名 / DACL fallback を拒否する。
 
 ## フレーミング

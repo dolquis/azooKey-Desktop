@@ -176,8 +176,9 @@ load/unload とライブクエリの race を構造的に排除する。
 
 ### 4.3 IPC 追加方針
 
-`MessageType` enum 末尾に `ListModels` / `BenchmarkModel` を append。
-既存 14 種の後ろに追加するため M40 の互換性ルールを満たす。
+`MessageType` enum の `Unknown` sentinel の**前**に `ListModels` / `BenchmarkModel`
+を追加する（enum は 13 named 型 + `Unknown` = 14 entries。末尾の `Unknown` の後ろに
+追加しない）。これにより M40 の互換性ルールを満たす。
 `Handshake` 時の capabilities で client が対応版本を判別する。
 
 ## 5. Backend 自動選択

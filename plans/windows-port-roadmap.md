@@ -71,7 +71,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `ipc/tests` に Handshake/Ping のラウンドトリップ単体テストが通る ✅
   - TIP 側 NamedPipeClient のテストが CTest に統合される ✅
 
-### M2: TIP 登録と最小キーボード活性化 ✅ 完了
+### M2: TIP 登録と最小キーボード活性化 ⚠️ 未完了（キーイベント sink 未配線・Issue #33）
 
 - **目的**: Windows 側に TIP として登録され、IME バーから選択でき、
   キーイベントが TIP に届く。
@@ -82,11 +82,12 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `ITfKeyEventSink` 接続
 - **現状**:
   - `tsf-tip/src/TextService.cpp::Activate/ActivateEx/Deactivate`、`OnTestKeyDown`/`OnKeyDown` まで実装済み。A-Z は `romaji_.Feed()` で蓄積。
+  - ⚠️ **未配線**: `ActivateEx` が `ITfKeystrokeMgr::AdviseKeyEventSink` / `ITfSource::AdviseSink` を呼んでおらず（`tsf-tip/` に `Advise*` 0 件）、TSF がキーを配送しないため `OnKeyDown` が発火しない。実機での入力は成立しない（Issue #33）。
   - `tsf-tip/src/DllMain.cpp::DllRegisterServer/DllUnregisterServer` を本実装。HKCU 配下の CLSID `InprocServer32` + Profile GUID + Lang `0x0411` キー作成、`ITfCategoryMgr::RegisterCategory(GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER)` まで処理。
   - `scripts/register.ps1` / `scripts/unregister.ps1` は `regsvr32` を呼び出して `DllRegisterServer/DllUnregisterServer` 経由で統一登録、Run キーへの Host EXE 登録は best-effort。`tsf-tip/tests/com_smoke_test.cpp` で DLL の `DllGetClassObject` 経由の `IClassFactory::CreateInstance(IID_IUnknown)` 成功を回帰保護。
 - **受け入れ条件**:
   - 開発機にビルド成果物をインストールして言語切替で azooKey が選べる ✅
-  - キー押下が `ITfKeyEventSink::OnKeyDown` まで到達することをログで確認 ✅
+  - キー押下が `ITfKeyEventSink::OnKeyDown` まで到達することをログで確認 ❌（sink 未配線のため未達・Issue #33）
   - `regsvr32` 単体で CLSID + Profile が登録されること ✅
 
 ### M3: Composition / Preedit 表示 ✅ 完了
@@ -122,7 +123,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `inference-host/src/InferenceEngine.cpp` (119行) で `QueryCandidates` を実装。`atomic<bool>* cancel` でキャンセル対応。
   - `inference-host/src/RequestScheduler.cpp` (27行) で `NextRequestId`/`Cancel`/`IsCanceled`/`MarkLatest`/`IsLatest` を実装。
   - `inference-host/src/Dispatcher.cpp` (183行) で全 9 ハンドラ実装済み（`Handshake`/`Ping`/`Health`/`LoadModel`/`QueryCandidates`/`Cancel`/`CommitObservation`/`AddUserWord`/`RemoveUserWord`）。
-  - `core/src/SimpleConverter.cpp` (164行) で固定辞書テーブル + TSV ロード + prefix fallback + bigram context bonus + `Learn()` を実装。
+  - `core/src/SimpleConverter.cpp` (164行) で固定辞書テーブル + TSV ロード + prefix fallback + bigram context bonus + `Learn()` を実装。なお「bigram context bonus」は現状 `SimpleConverter.cpp:114` の単一ハードコード対（`にっぽん→日本 +0.15`）のデモ実装であり、本格的な bigram スコアリングは M52/M53 で対応する（Issue #40）。
   - `inference-host/tests/engine_test.cpp` で `QueryWithLearningBoost`, `UserDictionaryInjection`, `CancelEarlyReturn` を検証済み。
   - **`tsf-tip/src/TextService.cpp::IpcWorkerThread` で `PostQueryCandidates` → `QueryCandidates` Envelope 送信 → 応答を `candidates_` に格納するワーカースレッドを実装**。`ipc/tests/tip_client_ipc_test.cpp` で TIP-client 側のメッセージ構築・パースを CTest に統合。
 - **受け入れ条件**:
@@ -332,6 +333,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 | `host_engine_tests` | `engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload |
 | `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/Cancel/Commit/AddUserWord/RemoveUserWord/Health の全 8 ハンドラ |
 | `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
+| `host_user_data_paths_tests` | `user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
 | `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)` |
 | `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
 
@@ -401,14 +403,16 @@ v1.0 リリースに向けたリスクと対応:
 「マイルストーン」章の各 M「現状」欄を正典とする。macOS 版（Issue #181）は
 本計画の対象外（「スコープ外」参照）。
 
-### Phase 1: TIP 基盤完成（M1〜M4）✅ 完了（main マージ済み: `603cd1d`）
+### Phase 1: TIP 基盤完成（M1〜M4）⚠️ コード資産は main マージ済み（`603cd1d`）だが実機動作は未成立
 
 実機 IME としてローマ字を打鍵し、Host から候補を取得して候補ウィンドウに
-表示するまで動作。
+表示するまでのコードは実装済み。ただし **実機 IME 動作は M2 のキーイベント
+sink 未配線（Issue #33）が解消されるまで成立しない**。
 
-### Phase 2: 候補選択と確定動線（M5/M6/M10）✅ 完了（main マージ済み: `603cd1d`）
+### Phase 2: 候補選択と確定動線（M5/M6/M10）⚠️ コードは main マージ済み（`603cd1d`）だが実機動作は M2（Issue #33）に依存
 
-候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）まで動作。
+候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）のコードは
+実装済み。実機での動作確認は M2（Issue #33）解消後に行う。
 
 ### Phase 3: 実 Zenzai と辞書 UI のつなぎ込み（M8/M9、3〜5 週）🚧 着手対象
 

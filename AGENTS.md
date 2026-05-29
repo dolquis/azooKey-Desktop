@@ -40,6 +40,25 @@ gh pr create \
   検出した場合は push 前に必ず修正する。
 - セルフレビューで問題が見つかった場合は、push前に修正する。
 
+## レビュー指摘事項の追跡・修正方針
+
+レビュー・監査・セルフレビューで検出した問題は、以下の方針で必ず追跡・修正する。
+
+- **当該セッション内で修正しない問題は、必ず GitHub Issue
+  (`dolquis/<repository-name>`) に登録する。** 以後の修正は Issue を起点に行い、
+  対応する PR でその Issue をクローズする。
+- Issue 本文には最低限、次を記載する: 該当 file:line / 現象 / 影響 /
+  重要度 (Critical・High・Medium・Low) / 推奨修正 / 関連マイルストーン (あれば)。
+- 既存ロードマップ (`plans/windows-port-roadmap.md`) に該当節
+  (「既知のテストギャップ」「リスク」「現状」欄、対応する M 番号など) があれば、
+  Issue 番号で相互参照する。
+- 問題一覧を README や `docs/` に「TODO」「進捗」「状態」セクションとして
+  書かない (時系列で陳腐化するため。トラッカーは GitHub Issue に一本化する)。
+- セルフレビューで検出した P1・P2 は push 前に修正する。修正しないものは
+  本方針に従って Issue 化し、放置しない。
+- 例外: 対象リポジトリで Issues が無効な場合に限り、
+  `plans/windows-port-roadmap.md` の該当節に追記して引き継ぐ。
+
 ## README 編集ルール
 
 `README.md` はフォーク元 (ensan-hcl/azooKey) のオリジナル版に近い、

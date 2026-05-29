@@ -139,9 +139,14 @@
 
 ## 新規 IPC メッセージ
 
-既存 9 種（Handshake / Ping / Health / LoadModel / QueryCandidates / Cancel /
-CommitObservation / AddUserWord / RemoveUserWord）に加え、以下を Phase 5〜6 で
-順次追加する。
+既存の配線済み 9 種（Handshake / Ping / Health / LoadModel / QueryCandidates /
+Cancel / CommitObservation / AddUserWord / RemoveUserWord）に加え、以下を
+Phase 5〜6 で順次追加する。
+
+> 注: `MessageType` enum は 13 の named 型 + `Unknown` sentinel = 14 entries。
+> このうち Payload/Dispatcher まで配線済みは上記 9 種。新メッセージ型を enum に
+> 追加する際は **`Unknown` sentinel の前に挿入**すること（末尾の `Unknown` の
+> 後ろに追加しない）。
 
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|

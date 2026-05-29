@@ -2,8 +2,8 @@
 
 ## 調査結果（根拠）
 
-- `Core/Sources/Core/InputUtils/SegmentsManager.swift` で `ConvertRequestOptions.ZenzaiMode.on` に `weight: ...ggml-model-Q5_K_M.gguf` を渡している。
-- READMEでも `azooKeyMac/Resources/zenz-v3-small-gguf/ggml-model-Q5_K_M.gguf` (約70MB) が明記される。
+- `legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift` で `ConvertRequestOptions.ZenzaiMode.on` に `weight: ...ggml-model-Q5_K_M.gguf` を渡している。
+- READMEでも `azooKeyMac/Resources/zenz-v3-small-gguf/ggml-model-Q5_K_M.gguf` (約70MB) が明記されていた（**調査当時の記述**）。現行リポジトリでは submodule `zenz-v3.2-small-gguf`（`.gitmodules`、`https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf`）を `legacy/azooKeyMac/Resources/gguf/` にマウントする。
 - 依存は `AzooKeyKanaKanjiConverter` だが、呼び出し側の重み形式は GGUF である。
 
 → 現状のZenzaiは **GGUF/ggml系** と判断する。

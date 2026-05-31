@@ -13,6 +13,17 @@
 - フォーク元リポジトリへPRを出す必要がある場合は、作成前に必ずユーザーへ確認する。
 - base repository / base branch / head repository / compare branch を確認せずにPRを作成してはいけない。
 
+## 現行対象と legacy の扱い
+
+- 現行の開発対象は **Windows 版 azooKey-Desktop** である。保守対象は `tsf-tip/`
+  `inference-host/` `core/` `ipc/` `learning/` `settings/` などの Windows 実装。
+- `legacy/` 配下の macOS / Swift 実装は保全された参照資産であり、保守対象ではない。
+- `legacy/` の挙動を、そのまま Windows 版の正解として扱ってはいけない。参考にする場合も
+  Windows 版としての仕様判断は別途行う。
+- 仕様判断は `docs/*-spec.md`、開発順序・進捗判断は `plans/windows-port-roadmap.md` を
+  正典とする。`legacy/` と Windows 仕様が食い違う場合は後者を優先する。
+- `legacy/` を変更対象に含める必要がある場合は、作業前に必ずユーザーへ確認する。
+
 ## 通常のPR作成コマンド
 
 通常作業では、必ず以下の形式でDraft PRを作成する。
@@ -75,7 +86,47 @@ gh pr create \
   各マイルストーン「現状」欄に書く。
 - ロードマップへのリンクは README に置いてよいが、ロードマップの中身を
   README にコピーしない（リンクのみ、要約は 1〜2 行まで）。
+- 開発計画・マイルストーン・進捗状態の正典は `plans/windows-port-roadmap.md` に
+  一本化する。README へ転記せず、リンクと 1〜2 行の短い案内に留める。
+- 進捗表・状態表を README / `docs/` / Issue / PR 本文に重複作成しない。
+  トラッカーは roadmap と GitHub Issue に一本化する。
 - 例外的に README を肥大化させる必要があるときは、ユーザーに事前確認する。
+
+## 実装変更とドキュメント更新の同期
+
+コードを変更したら、影響範囲に応じて roadmap / docs / Issue / PR 本文を同時に更新する。
+既存記述が不正確になる場合、ドキュメント更新は任意ではなく必須とする。
+
+- **roadmap (`plans/windows-port-roadmap.md`)**: マイルストーンの完了状態・残作業・
+  受け入れ条件・既知のテストギャップ・リスクが変わる場合に更新する。README へ転記せず、
+  対応する M 番号の「現状」「残作業」「受け入れ条件」「リスク」「既知のテストギャップ」欄を
+  直接書き換える。
+- **仕様ドキュメント (`docs/*-spec.md`)**: IPC payload・JSON schema・永続化形式・
+  TIP / Host / learning / settings 間の責務境界・fallback・ログ・設定項目・
+  ユーザーから見える挙動が変わる場合に、対応する spec を更新する。
+- **Issue / PR 本文**: 追跡中の問題や受け入れ条件に影響する場合は該当 Issue / PR を更新する
+  （Issue 起票・追跡の詳細は「レビュー指摘事項の追跡・修正方針」に従う）。
+- typo・コメントのみ・挙動を変えない小規模リファクタリング・テスト内部の整理など、
+  ドキュメント記述に影響しない変更では roadmap / docs の更新は不要でよい。
+- README は原則として更新先にしない。更新する場合も簡潔な案内・リンク追加に留める
+  （「README 編集ルール」参照）。
+- 上記の判断結果は PR 本文の「Documentation impact」欄に必ず記載し、更新しなかった
+  場合はその理由も書く。
+
+### PR 本文テンプレート: Documentation impact
+
+PR 本文には次のチェック項目を含め、該当するものにチェックを入れる。
+
+```md
+## Documentation impact
+
+- [ ] Roadmap updated
+- [ ] Spec docs updated
+- [ ] README update not needed
+- [ ] No documentation impact
+
+Reason:
+```
 
 ## エージェントツール構成 (.claude/ .codex/ .agents/)
 
@@ -87,9 +138,10 @@ gh pr create \
 ### MCP サーバー (`.mcp.json` / `.codex/config.toml`)
 
 - `context7` … TSF / COM / Win32 API の公式ドキュメント参照 (全 OS で動作)。
-- `powershell` … PowerShell.MCP。`scripts/register.ps1` 等の管理者コマンドを
-  共有コンソール経由で提示する用途。**実行はユーザが管理者 PowerShell で
-  完了させること**。エージェントが単独で TIP 登録を完了させてはならない。
+- `powershell` … PowerShell.MCP。`scripts/register.ps1` 等のユーザースコープ (HKCU)
+  コマンドを共有コンソール経由で提示する用途。**実行はユーザが自分の PowerShell で
+  完了させること**（`register.ps1` は HKCU 登録のため昇格不要）。エージェントが
+  単独で TIP 登録を完了させてはならない。
 - `windows-mcp` … UI Automation で TIP の実アプリ動作を検証 (Windows 専用)。
 
 `powershell` MCP の `command` には環境変数 `POWERSHELL_MCP_PROXY` を参照させて
@@ -121,8 +173,10 @@ macOS / Linux のメンテナがリポジトリを開いた場合、`powershell`
 - `tsf-ipc-protocol` … TIP ⇔ Inference Host の独自 IPC プロトコル仕様。
 
 Claude Code は `.claude/skills/`、Codex CLI は `.agents/skills/` を読む。
-**両ディレクトリは同一内容を維持する運用とし**、SKILL.md または `references/`
-配下を変更した際は両方を同時に更新する (将来的に symlink 統合の余地あり)。
+**両ツリーは同一の skill 群と同一の実質ガイダンス（SKILL.md 本文・`references/` 配下）を
+維持する。** 片方の本文または参照を変更したら、もう片方も同時に更新する。ただし
+Claude Code 固有の `allowed-tools:` などのフロントマターは各ハーネス向けに差異が
+あってよく、ミラー対象外とする（将来的に symlink 統合の余地あり）。
 
 ### 動作要件 (各メンテナのホスト側に必要)
 

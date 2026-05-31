@@ -46,7 +46,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: 旧 `ime-tsf/` ディレクトリを削除し、現行の `tsf-tip/` のみが
   ビルド対象になっている状態を明示化。
-- **変更**: `ime-tsf/` 8 ファイルを削除（コミット `6a3dd7f`）。
+- **変更**: `ime-tsf/` 8 ファイルを削除（コミット `3938f49`）。
 - **受け入れ条件**:
   - `ime-tsf` への参照がリポジトリ全体に残らない
   - ルート `CMakeLists.txt` のサブディレクトリが現行構成と一致
@@ -61,7 +61,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `Handshake(version, capabilities)` と `Ping`/`Health` のメッセージ実装
   - バージョン不一致時の切断ポリシー
 - **現状**:
-  - `ipc/src/NamedPipeTransport.cpp` (522行) はサーバ/クライアント・DACL・長さプリフィックスフレーミングまで実装済み。
+  - `ipc/src/NamedPipeTransport.cpp` はサーバ/クライアント・DACL・長さプリフィックスフレーミングまで実装済み。
   - `ipc/src/Messages.cpp` で全 14 種の `MessageType` を定義。`ipc/src/Payloads.cpp` では 9 種（Handshake/Ping/Health/LoadModel/QueryCandidates/Cancel/CommitObservation/AddUserWord/RemoveUserWord）の build/parse 関数を実装済み。`QueryPredictions`/`QueryCorrections`/`CommitCorrection`/`UpdateUserWord` は enum のみで Payload 未実装（M11/M12 で必要になった時点で追加）。
   - `ipc/tests/named_pipe_transport_test.cpp`, `messages_test.cpp`, `payloads_test.cpp` で Handshake/Ping のラウンドトリップを検証。
   - `inference-host/src/main.cpp` は `--pipe` 起動で `NamedPipeServer` を立ち上げ、`Dispatcher` を MessageHandler として登録済み。
@@ -100,7 +100,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `RequestEditSession` 経由でのテキスト挿入・置換
   - ローマ字 → かな変換テーブル
 - **現状**:
-  - `core/src/RomajiKanaConverter.cpp` (119行) でローマ字→かなは完全実装（小書きっ・ん・長音対応）。`tests/romaji_kana_converter_test.cpp` で `konnichiha`→`こんにちは`, `gakkou`→`がっこう` 等を検証済み。
+  - `core/src/RomajiKanaConverter.cpp` でローマ字→かなは完全実装（小書きっ・ん・長音対応）。`tests/romaji_kana_converter_test.cpp` で `konnichiha`→`こんにちは`, `gakkou`→`がっこう` 等を検証済み。
   - `TextService::EditSession::DoEditSession` (`tsf-tip/src/TextService.cpp:807-921`) で composition lifecycle を本実装。`ITfContextComposition::StartComposition` → `ITfRange::SetText` → `GUID_PROP_ATTRIBUTE` で `kInputAttributeGuid` プロパティ設定 → caret 位置を `ITfContextView::GetTextExt` でキャッシュ。
   - `EnumDisplayAttributeInfo` / `GetDisplayAttributeInfo` を `azookey::tsf::EnumDisplayAttributeInfo` / `InputDisplayAttributeInfo` で本実装（アンダーライン）。
   - `DllRegisterServer` で `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` カテゴリ登録済み。
@@ -120,10 +120,10 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 固定テーブル or 簡易 N-best
   - `request_id` 追跡と古い ID の破棄
 - **現状**:
-  - `inference-host/src/InferenceEngine.cpp` (119行) で `QueryCandidates` を実装。`atomic<bool>* cancel` でキャンセル対応。
-  - `inference-host/src/RequestScheduler.cpp` (27行) で `NextRequestId`/`Cancel`/`IsCanceled`/`MarkLatest`/`IsLatest` を実装。
-  - `inference-host/src/Dispatcher.cpp` (183行) で全 9 ハンドラ実装済み（`Handshake`/`Ping`/`Health`/`LoadModel`/`QueryCandidates`/`Cancel`/`CommitObservation`/`AddUserWord`/`RemoveUserWord`）。
-  - `core/src/SimpleConverter.cpp` (164行) で固定辞書テーブル + TSV ロード + prefix fallback + bigram context bonus + `Learn()` を実装。なお「bigram context bonus」は現状 `SimpleConverter.cpp:114` の単一ハードコード対（`にっぽん→日本 +0.15`）のデモ実装であり、本格的な bigram スコアリングは M52/M53 で対応する（Issue #40）。
+  - `inference-host/src/InferenceEngine.cpp` で `QueryCandidates` を実装。`atomic<bool>* cancel` でキャンセル対応。
+  - `inference-host/src/RequestScheduler.cpp` で `NextRequestId`/`Cancel`/`IsCanceled`/`MarkLatest`/`IsLatest` を実装。
+  - `inference-host/src/Dispatcher.cpp` で全 9 ハンドラ実装済み（`Handshake`/`Ping`/`Health`/`LoadModel`/`QueryCandidates`/`Cancel`/`CommitObservation`/`AddUserWord`/`RemoveUserWord`）。
+  - `core/src/SimpleConverter.cpp` で固定辞書テーブル + TSV ロード + prefix fallback + bigram context bonus + `Learn()` を実装。なお「bigram context bonus」は現状 `SimpleConverter.cpp:114` の単一ハードコード対（`にっぽん→日本 +0.15`）のデモ実装であり、本格的な bigram スコアリングは M52/M53 で対応する（Issue #40）。
   - `inference-host/tests/engine_test.cpp` で `QueryWithLearningBoost`, `UserDictionaryInjection`, `CancelEarlyReturn` を検証済み。
   - **`tsf-tip/src/TextService.cpp::IpcWorkerThread` で `PostQueryCandidates` → `QueryCandidates` Envelope 送信 → 応答を `candidates_` に格納するワーカースレッドを実装**。`ipc/tests/tip_client_ipc_test.cpp` で TIP-client 側のメッセージ構築・パースを CTest に統合。
 - **受け入れ条件**:
@@ -155,7 +155,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **現状**:
   - Payloads.cpp に `CommitObservationRequest` / `Response` 定義済み。
   - `Dispatcher::HandleCommitObservation` で `LearningStore::Observe` + `Save` を実行。
-  - `learning/src/LearningStore.cpp` (83行) は重み累積 + 時間減衰 + TSV 永続化を実装済み。
+  - `learning/src/LearningStore.cpp` は重み累積 + 時間減衰 + TSV 永続化を実装済み。
   - TIP 側: `PostCommitObservation()` で IPC ワーカーの send_queue に積み、
     候補選択確定時（Enter/数字/クリック）に呼ぶ経路を実装。
 - **受け入れ条件**:
@@ -169,7 +169,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **前提**: M4 完了
 - **変更対象**: `learning/src/Reranker.cpp`, `inference-host/`
 - **現状**:
-  - `learning/src/Reranker.cpp` (25行) で `Apply(reading, candidates, now_epoch_sec)` を実装。`LearningStore::Score` (時間減衰 `exp(-0.15 * days)`) を足して `stable_sort`。
+  - `learning/src/Reranker.cpp` で `Apply(reading, candidates, now_epoch_sec)` を実装。`LearningStore::Score` (時間減衰 `exp(-0.15 * days)`) を足して `stable_sort`。
   - `InferenceEngine::QueryCandidates` のパイプラインに組み込み済み。
   - `learning/tests/learning_test.cpp` で重み付け→減衰→再ランクを検証。
 - **残作業**:

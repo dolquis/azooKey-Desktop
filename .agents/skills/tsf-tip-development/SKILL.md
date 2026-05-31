@@ -30,7 +30,8 @@ description: tsf-tip/ 配下の C++ コード(ITfTextInputProcessor 実装、COM
 ## 補助ツール(マーケット品を活用)
 
 - 仕様確認：context7 MCP 経由で <https://learn.microsoft.com/en-us/windows/win32/tsf/> を fetch
-- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)でユーザーが管理者実行
+- 補完・診断：clangd ベースの LSP（Claude Code は `clangd-lsp` プラグイン経由）
+- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)で対象ユーザーとして実行（HKCU user-scope、昇格不要）
 - 実アプリでの入力検証：Windows-MCP の UI Automation
 
 ## やってはいけない

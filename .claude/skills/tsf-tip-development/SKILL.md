@@ -30,9 +30,9 @@ allowed-tools: Read, Edit, Grep, Glob, WebFetch
 
 ## 補助ツール(マーケット品を活用)
 
-- 仕様確認：Context7 MCP 経由で <https://learn.microsoft.com/en-us/windows/win32/tsf/> を fetch
-- 補完・診断：`clangd-lsp` プラグイン
-- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)でユーザーが管理者実行
+- 仕様確認：context7 MCP 経由で <https://learn.microsoft.com/en-us/windows/win32/tsf/> を fetch
+- 補完・診断：clangd ベースの LSP（Claude Code は `clangd-lsp` プラグイン経由）
+- TIP登録/解除の検証：PowerShell.MCP(共有コンソール)で対象ユーザーとして実行（HKCU user-scope、昇格不要）
 - 実アプリでの入力検証：Windows-MCP の UI Automation
 
 ## やってはいけない
@@ -45,7 +45,7 @@ allowed-tools: Read, Edit, Grep, Glob, WebFetch
 ## 新規 ITf*** インターフェース実装時の手順
 
 1. `docs/` 配下に該当する仕様 md があるか確認。無ければ先に仕様を起こす。
-2. インターフェース ID(IID)と必要なメソッドを最新仕様で確認(Context7 経由)。
+2. インターフェース ID(IID)と必要なメソッドを最新仕様で確認(context7 経由)。
 3. `tsf-tip/` にヘッダ＋実装を追加。`ComPtr` で受け取り、`HRESULT` で返す。
 4. GoogleTest にユニットテスト(COM 境界を mock 化して呼び出し検証)。
 5. 既存 TIP に `QueryInterface` 経路を追加。

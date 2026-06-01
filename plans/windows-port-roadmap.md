@@ -288,28 +288,24 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
-短期（Phase 3 着手前）:
-1. **`Reranker` 直接テスト** — `reranker_tests` で `store_ == nullptr` パス、空 candidates、複数候補の安定ソート順、時間減衰 (`exp(-0.15 * days)`) 境界、学習ブースト、correction downweight を assertion 化。
-2. **`RequestScheduler` 直接テスト** — `host_scheduler_tests` で `NextRequestId` 連番、`Cancel` → `IsCanceled` セット意味、`MarkLatest`/`IsLatest` の単一最新ガード、並列 ID 採番 smoke を直接検証。
-3. **`SimpleConverter` 長 reading prefix fallback** — `simple_converter_test.cpp::TestLongReadingPrefixFallback` で 8 文字以上の reading から長い辞書 entry へ prefix fallback する品質を assertion 化。
+> 解消済みのギャップは本リストに残さず `現存テスト一覧` 表に反映する（達成状態の正典は Linear）。
+> 以下は未解消の目標カバレッジの定義。
 
 中期（Phase 3 / Zenzai 統合と並行）:
-4. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
-5. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
-6. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
-7. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 呼び出し後に HKCU `Software\\Classes\\CLSID\\{...}\\Profiles\\0x00000411\\{...}` が存在し、`DllUnregisterServer` 後に消えることをテスト。COM 初期化が必要なので Windows-only。
+1. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
+2. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
+3. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
+4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 呼び出し後に HKCU `Software\\Classes\\CLSID\\{...}\\Profiles\\0x00000411\\{...}` が存在し、`DllUnregisterServer` 後に消えることをテスト。COM 初期化が必要なので Windows-only。
 
 長期（Phase 4 / 配布前に必須）:
-8. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
-9. **bench smoke** — `bench/azookey_bench.exe` を `azookey_bench_smoke` として CTest から呼び、exit=0 と p95 < 50ms（CPU SimpleConverter）を満たすことを CI で検証。
-10. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
-11. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
+5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
+6. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
+7. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
-12. **JSON malformed/fuzz テスト** — `ipc/src/Json.cpp` にランダムバイト列・深すぎるネスト・巨大数・不正 Unicode escape・末尾ゴミ・最大長超過を投げてもクラッシュせず失敗を返すことを assertion 化（M40）。
-13. **`NamedPipeServer` 再接続耐性** — M40 で複数接続・切断時の client cleanup を unit test 化済み。Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオは M42 の状態機械テストで扱う。
-14. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
-15. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
+8. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械テストで扱う（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
+9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
+10. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
 
 ## リスクと不確実性
 
@@ -374,17 +370,17 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
    （Host 側完成済み）を TIP もしくは設定 UI から呼べる経路を作る。
    本フェーズではコマンドラインまたはデバッグ UI で十分。
 
-**Phase 3 着手前タスク**:
-- llama.cpp バインディング選定スパイク（2026-05-20）: M8 の初期実装は
+**Phase 3 着手前の確定事項（2026-05-20 決定の記録）**:
+- llama.cpp バインディング選定（2026-05-20 決定）: M8 の初期実装は
   llama.cpp C API + CPU backend から開始し、CUDA は optional backend として
-  追加する。DirectML / NPU は M24 まで予約値扱い。判断理由と計測ゲートは
+  追加する方針。DirectML / NPU は M24 まで予約値扱い。判断理由と計測ゲートは
   `docs/zenzai-gpu-route.md` を参照。
-- `LoadModel` 境界固定（2026-05-20）: `LoadModelRequest(path, backend,
+- `LoadModel` 境界（2026-05-20 決定）: `LoadModelRequest(path, backend,
   n_gpu_layers)` を `InferenceEngine::LoadModel` に渡し、`model_loaded` /
-  `last_error` を `Handshake` / `Health` で観測できる状態にする。
-- M9 最小操作面の決定（2026-05-20）: 本格設定 UI を待たず、`inference-host`
+  `last_error` を `Handshake` / `Health` で観測できる状態とする設計。
+- M9 最小操作面（2026-05-20 決定）: 本格設定 UI を待たず、`inference-host`
   の IPC 経由で `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug
-  probe を先に作る。設定アプリ統合は M11 に送る。
+  probe を先に用意する方針。設定アプリ統合は M11 に送る。
 
 **Phase 3 で触るファイル**:
 - `inference-host/src/InferenceEngine.cpp` — `LoadModel` の本実装、Zenzai converter 配線

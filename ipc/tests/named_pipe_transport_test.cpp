@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <memory>
@@ -21,6 +22,16 @@ namespace {
 bool WaitForClientCount(azookey::ipc::NamedPipeServer& server, std::size_t expected) {
   for (int i = 0; i < 100; ++i) {
     if (server.ActiveClientCountForTesting() == expected) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+bool WaitForFlag(const std::atomic<bool>& flag) {
+  for (int i = 0; i < 100; ++i) {
+    if (flag.load()) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -214,6 +225,50 @@ TEST(NamedPipeTransportTest, LargeFrameRoundTripExceedsPipeBuffer) {
   EXPECT_EQ(response->payload_json, env.payload_json);
 
   client.Disconnect();
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, ClientDisconnectDuringResponseWriteCleansUp) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-write-close-test-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> handler_entered{false};
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name,
+      [&handler_entered](
+          const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        handler_entered.store(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        res.payload_json = req.payload_json;
+        return res;
+      });
+  ASSERT_TRUE(started);
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+
+  azookey::ipc::PingPayload ping;
+  ping.nonce = 777;
+
+  azookey::ipc::Envelope env;
+  env.version = 1;
+  env.request_id = 100;
+  env.trace_id = "write-close";
+  env.type = azookey::ipc::MessageType::Ping;
+  env.payload_json = azookey::ipc::BuildPing(ping);
+
+  ASSERT_TRUE(client.Send(env));
+  ASSERT_TRUE(WaitForFlag(handler_entered));
+  client.Disconnect();
+
+  EXPECT_TRUE(WaitForClientCount(server, 0));
   server.Stop();
 }
 

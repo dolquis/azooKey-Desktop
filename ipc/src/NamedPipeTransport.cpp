@@ -217,7 +217,7 @@ bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
         std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
     if (!WriteFile(pipe, data + offset, chunk, &written, nullptr)) {
       const auto err = GetLastError();
-      if (err == ERROR_NO_DATA || err == ERROR_PIPE_BUSY) {
+      if (err == ERROR_PIPE_BUSY) {
         Sleep(1);
         continue;
       }

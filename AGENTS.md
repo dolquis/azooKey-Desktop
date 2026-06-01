@@ -57,8 +57,10 @@ gh pr create \
 レビュー・監査・セルフレビューで検出した問題は、以下の方針で必ず追跡・修正する。
 
 - **当該セッション内で修正しない問題は、必ず Linear（team `Dev` / 該当 Project）に
-  起票する。** 以後の修正は Linear 課題を起点に行い、対応する PR でその課題を Done にする。
-  GitHub Issues は mirror であり、Linear 課題には対応する GitHub Issue / PR リンクを必須付与する。
+  起票する。** 以後の修正は Linear 課題を起点に行い、PR 提出で In Review に、レビュー合格・
+  マージ・検証メモ記載後に Done に遷移させる（状態遷移は「Linear 運用（管制塔）」の
+  状態ライフサイクルに従う）。GitHub Issues は mirror であり、Linear 課題には対応する
+  GitHub Issue / PR リンクを必須付与する。
 - 課題本文には最低限、次を記載する: 該当 file:line / 現象 / 影響 / 推奨修正 /
   関連 Linear milestone (あれば)。重要度は Linear の **Priority**（Urgent・High・Medium・Low）で
   表し、`repo:*` / `area:*` / `agent:*` ラベルを付与する。

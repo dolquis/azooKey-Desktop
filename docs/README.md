@@ -3,11 +3,15 @@
 azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一覧と正典マップ。
 各ドキュメントの役割と「何の正典か」をここで把握できる。
 
+> **状態・進捗・優先度・課題トラッキングの正典は Linear**（team `Dev` / project
+> 「azooKey Desktop / Windows IME MVP」）。repo docs は仕様・構造・定義の正典であり、状態は持たない。
+> 運用は `AGENTS.md`「Linear 運用（管制塔）」を参照。
+
 ## 計画ドキュメント（`plans/`）
 
 | ドキュメント | 役割 | 正典範囲 |
 |---|---|---|
-| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M57 の定義・受け入れ条件・依存関係・Phase 1〜7・開発基盤トラック・プライバシー / モデル管理 / 学習データ UI トラック・変換品質トラック・v1.0 実行計画・テスト体系の正典** |
+| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M57 の定義・受け入れ条件（定義）・依存関係・Phase 1〜7・開発基盤トラック・プライバシー / モデル管理 / 学習データ UI トラック・変換品質トラック・v1.0 実行計画・テスト体系の正典。進捗・状態・優先度は持たず Linear を正典とする** |
 
 ## アーキテクチャ・設計
 
@@ -44,6 +48,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 役割 |
 |---|---|
 | [`debugging.md`](debugging.md) | ビルド・ベンチ・手動確認・ログ収集・CI・典型トラブル |
+| Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔）。`AGENTS.md`「Linear 運用（管制塔）」参照 |
 
 ## Phase 一覧
 

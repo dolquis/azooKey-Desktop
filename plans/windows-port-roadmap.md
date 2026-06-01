@@ -10,6 +10,11 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 
 本書はそれらを前提に、「いつ何をどの順で」「何をもって完了とするか」を定める。
 
+> **状態・進捗の正典は Linear。** 各マイルストーンの進捗・状態・優先度・担当は Linear
+> （team `Dev` / project「azooKey Desktop / Windows IME MVP」）を正典とする。本書は構造・
+> マイルストーン定義・依存関係・受け入れ条件の「定義」・テスト体系・リスクの正典であり、
+> 完了状態（✅/🚧/⚠️）や「現状」「残作業」は持たない。運用は `AGENTS.md`「Linear 運用（管制塔）」を参照。
+
 ## 全体目標
 
 - **MVP**: Windows 10/11 上で TSF 経由のローマ字入力 → かな漢字変換 → 確定までの
@@ -20,14 +25,14 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 
 ## 現在のソース構成（2026-05 時点）
 
-| ディレクトリ        | 役割                                                     | 現状                                        |
+| ディレクトリ        | 役割                                                     | 概要（構成・主な実装単位）                   |
 |---------------------|----------------------------------------------------------|---------------------------------------------|
-| `core/`             | OS 非依存の変換コア（C++）                               | `RomajiKanaConverter` / `SimpleConverter` / `IConverter` 実装済み・tests あり |
-| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | 全 14 `MessageType` 定義・9 Payload 実装済み・Named Pipe 実装済み・tests あり |
-| `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore` / `Reranker` / `UserDictionary` 実装済み・tests あり |
-| `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp` 実装済み・モデルロードは M8 でスタブ実装中 |
-| `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel まで実装済み（M1〜M10） |
-| `bench/`            | パフォーマンス計測                                       | `azookey_bench` 実装済み                    |
+| `core/`             | OS 非依存の変換コア（C++）                               | `RomajiKanaConverter` / `SimpleConverter` / `IConverter`（tests あり） |
+| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | 全 14 `MessageType` 定義・9 Payload・Named Pipe（tests あり） |
+| `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore` / `Reranker` / `UserDictionary`（tests あり） |
+| `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp`。モデルロード境界は M8 で扱う |
+| `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel（M1〜M10 の範囲） |
+| `bench/`            | パフォーマンス計測                                       | `azookey_bench`                             |
 | `legacy/Core/` (Swift) | macOS 版の仕様参照源                                  | 移植対象ではなく仕様参照のみ（`legacy/` に保全・未保守） |
 
 ## マイルストーン
@@ -42,7 +47,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
               └→ M10 (M5 完了後に並行)
 ```
 
-### M0: 廃止資産の削除 ✅ 完了
+### M0: 廃止資産の削除
 
 - **目的**: 旧 `ime-tsf/` ディレクトリを削除し、現行の `tsf-tip/` のみが
   ビルド対象になっている状態を明示化。
@@ -51,86 +56,67 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `ime-tsf` への参照がリポジトリ全体に残らない
   - ルート `CMakeLists.txt` のサブディレクトリが現行構成と一致
 
-### M1: IPC ハンドシェイク疎通 ✅ 完了
+### M1: IPC ハンドシェイク疎通
 
 - **目的**: TIP と Host 間で Named Pipe を確立し `Handshake` + `Ping` が
   往復するところまで到達。
 - **変更対象**: `ipc/`, `inference-host/main.cpp`, `tsf-tip/src/TextService.cpp`
 - **実装範囲**:
-  - Named Pipe サーバ (Host) / クライアント (TIP) 実装
+  - Named Pipe サーバ (Host) / クライアント (TIP) 実装（DACL・長さプリフィックスフレーミング）
   - `Handshake(version, capabilities)` と `Ping`/`Health` のメッセージ実装
   - バージョン不一致時の切断ポリシー
-- **現状**:
-  - `ipc/src/NamedPipeTransport.cpp` はサーバ/クライアント・DACL・長さプリフィックスフレーミングまで実装済み。
-  - `ipc/src/Messages.cpp` で全 14 種の `MessageType` を定義。`ipc/src/Payloads.cpp` では 9 種（Handshake/Ping/Health/LoadModel/QueryCandidates/Cancel/CommitObservation/AddUserWord/RemoveUserWord）の build/parse 関数を実装済み。`QueryPredictions`/`QueryCorrections`/`CommitCorrection`/`UpdateUserWord` は enum のみで Payload 未実装（M11/M12 で必要になった時点で追加）。
-  - `ipc/tests/named_pipe_transport_test.cpp`, `messages_test.cpp`, `payloads_test.cpp` で Handshake/Ping のラウンドトリップを検証。
-  - `inference-host/src/main.cpp` は `--pipe` 起動で `NamedPipeServer` を立ち上げ、`Dispatcher` を MessageHandler として登録済み。
-  - `tsf-tip/src/TextService.cpp` の `IpcWorkerThread` で Activate 後に Handshake → QueryCandidates ループを実走。
-  - **`ipc/tests/tip_client_ipc_test.cpp` を追加し、TIP-client 経路（Connect→Handshake→Ping→QueryCandidates）を CTest に統合**。
 - **受け入れ条件**:
-  - `ipc/tests` に Handshake/Ping のラウンドトリップ単体テストが通る ✅
-  - TIP 側 NamedPipeClient のテストが CTest に統合される ✅
+  - `ipc/tests` に Handshake/Ping のラウンドトリップ単体テストが通る
+  - TIP 側 NamedPipeClient（TIP-client 経路）のテストが CTest に統合される
 
-### M2: TIP 登録と最小キーボード活性化 ⚠️ 未完了（キーイベント sink 未配線・Issue #33）
+### M2: TIP 登録と最小キーボード活性化
 
 - **目的**: Windows 側に TIP として登録され、IME バーから選択でき、
   キーイベントが TIP に届く。
 - **変更対象**: `tsf-tip/src/DllMain.cpp`、`scripts/register.ps1`、`scripts/unregister.ps1`
 - **実装範囲**:
-  - `regsvr32` / インストーラ向けの自己登録ロジック
+  - `regsvr32` / インストーラ向けの自己登録ロジック（HKCU CLSID + Profile GUID + Lang `0x0411`）
   - 言語バー有効化
-  - `ITfKeyEventSink` 接続
-- **現状**:
-  - `tsf-tip/src/TextService.cpp::Activate/ActivateEx/Deactivate`、`OnTestKeyDown`/`OnKeyDown` まで実装済み。A-Z は `romaji_.Feed()` で蓄積。
-  - ⚠️ **未配線**: `ActivateEx` が `ITfKeystrokeMgr::AdviseKeyEventSink` / `ITfSource::AdviseSink` を呼んでおらず（`tsf-tip/` に `Advise*` 0 件）、TSF がキーを配送しないため `OnKeyDown` が発火しない。実機での入力は成立しない（Issue #33）。
-  - `tsf-tip/src/DllMain.cpp::DllRegisterServer/DllUnregisterServer` を本実装。HKCU 配下の CLSID `InprocServer32` + Profile GUID + Lang `0x0411` キー作成、`ITfCategoryMgr::RegisterCategory(GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER)` まで処理。
-  - `scripts/register.ps1` / `scripts/unregister.ps1` は `regsvr32` を呼び出して `DllRegisterServer/DllUnregisterServer` 経由で統一登録、Run キーへの Host EXE 登録は best-effort。`tsf-tip/tests/com_smoke_test.cpp` で DLL の `DllGetClassObject` 経由の `IClassFactory::CreateInstance(IID_IUnknown)` 成功を回帰保護。
+  - `ITfKeyEventSink` 接続（`ActivateEx` で `ITfKeystrokeMgr::AdviseKeyEventSink` /
+    `ITfSource::AdviseSink`、`Deactivate` で対応する Unadvise）
 - **受け入れ条件**:
-  - 開発機にビルド成果物をインストールして言語切替で azooKey が選べる ✅
-  - キー押下が `ITfKeyEventSink::OnKeyDown` まで到達することをログで確認 ❌（sink 未配線のため未達・Issue #33）
-  - `regsvr32` 単体で CLSID + Profile が登録されること ✅
+  - 開発機にビルド成果物をインストールして言語切替で azooKey が選べる
+  - キー押下が `ITfKeyEventSink::OnKeyDown` まで到達することをログで確認できる
+  - `regsvr32` 単体で CLSID + Profile が登録されること
 
-### M3: Composition / Preedit 表示 ✅ 完了
+### M3: Composition / Preedit 表示
 
 - **目的**: ローマ字キー入力が preedit としてアプリ側 (例: メモ帳) に
   表示され、Backspace で削除でき、ESC で破棄できる。
 - **変更対象**: `tsf-tip/src/TextService.cpp` 内の EditSession 周り。
 - **実装範囲**:
   - `ITfCompositionSink` / `ITfComposition` の保持
-  - `RequestEditSession` 経由でのテキスト挿入・置換
-  - ローマ字 → かな変換テーブル
-- **現状**:
-  - `core/src/RomajiKanaConverter.cpp` でローマ字→かなは完全実装（小書きっ・ん・長音対応）。`tests/romaji_kana_converter_test.cpp` で `konnichiha`→`こんにちは`, `gakkou`→`がっこう` 等を検証済み。
-  - `TextService::EditSession::DoEditSession` (`tsf-tip/src/TextService.cpp:807-921`) で composition lifecycle を本実装。`ITfContextComposition::StartComposition` → `ITfRange::SetText` → `GUID_PROP_ATTRIBUTE` で `kInputAttributeGuid` プロパティ設定 → caret 位置を `ITfContextView::GetTextExt` でキャッシュ。
-  - `EnumDisplayAttributeInfo` / `GetDisplayAttributeInfo` を `azookey::tsf::EnumDisplayAttributeInfo` / `InputDisplayAttributeInfo` で本実装（アンダーライン）。
-  - `DllRegisterServer` で `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` カテゴリ登録済み。
+  - `RequestEditSession` 経由でのテキスト挿入・置換（`GUID_PROP_ATTRIBUTE` でアンダーライン、
+    caret 位置を `ITfContextView::GetTextExt` でキャッシュ）
+  - ローマ字 → かな変換テーブル（小書きっ・ん・長音対応）
+  - `EnumDisplayAttributeInfo` / `GetDisplayAttributeInfo`（`GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` 登録）
 - **受け入れ条件**:
-  - 「ka」「ki」等の入力で「か」「き」がアンダーライン付きで表示される ✅
-  - ESC で composition がクリアされる ✅
-  - Backspace で 1 文字戻る ✅
+  - 「ka」「ki」等の入力で「か」「き」がアンダーライン付きで表示される
+  - ESC で composition がクリアされる
+  - Backspace で 1 文字戻る
 
-### M4: モック候補生成（Host 経由） ✅ 完了
+### M4: モック候補生成（Host 経由）
 
 - **目的**: Host 側に固定テーブルベースの簡易変換を実装し、
   `QueryCandidates` の往復が成立する。
 - **変更対象**: `inference-host/src/InferenceEngine.cpp`,
   `inference-host/src/RequestScheduler.cpp`, `tsf-tip/src/TextService.cpp`, `ipc/`
 - **実装範囲**:
-  - `QueryCandidates(request_id, kana, context)` の Host 実装
-  - 固定テーブル or 簡易 N-best
-  - `request_id` 追跡と古い ID の破棄
-- **現状**:
-  - `inference-host/src/InferenceEngine.cpp` で `QueryCandidates` を実装。`atomic<bool>* cancel` でキャンセル対応。
-  - `inference-host/src/RequestScheduler.cpp` で `NextRequestId`/`Cancel`/`IsCanceled`/`MarkLatest`/`IsLatest` を実装。
-  - `inference-host/src/Dispatcher.cpp` で全 9 ハンドラ実装済み（`Handshake`/`Ping`/`Health`/`LoadModel`/`QueryCandidates`/`Cancel`/`CommitObservation`/`AddUserWord`/`RemoveUserWord`）。
-  - `core/src/SimpleConverter.cpp` で固定辞書テーブル + TSV ロード + prefix fallback + bigram context bonus + `Learn()` を実装。なお「bigram context bonus」は現状 `SimpleConverter.cpp:114` の単一ハードコード対（`にっぽん→日本 +0.15`）のデモ実装であり、本格的な bigram スコアリングは M52/M53 で対応する（Issue #40）。
-  - `inference-host/tests/engine_test.cpp` で `QueryWithLearningBoost`, `UserDictionaryInjection`, `CancelEarlyReturn` を検証済み。
-  - **`tsf-tip/src/TextService.cpp::IpcWorkerThread` で `PostQueryCandidates` → `QueryCandidates` Envelope 送信 → 応答を `candidates_` に格納するワーカースレッドを実装**。`ipc/tests/tip_client_ipc_test.cpp` で TIP-client 側のメッセージ構築・パースを CTest に統合。
+  - `QueryCandidates(request_id, kana, context)` の Host 実装（`atomic<bool>* cancel` 対応）
+  - 固定テーブル or 簡易 N-best（`core/src/SimpleConverter.cpp`: 固定辞書 + TSV ロード + prefix fallback + `Learn()`）
+  - `request_id` 追跡と古い ID の破棄（`RequestScheduler`）
+- **設計メモ**: 「bigram context bonus」は当面 `SimpleConverter.cpp` の単一ハードコード対のデモであり、
+  本格的な bigram スコアリングは M52/M53 で対応する。
 - **受け入れ条件**:
-  - `inference-host/tests` で固定 kana → 期待候補リストが返る ✅
-  - TIP 側で `OnKeyDown` から `QueryCandidatesRequest` を `NamedPipeClient` 経由で送信し、TIP デバッグログで候補リストが Host から受信されること ✅
+  - `inference-host/tests` で固定 kana → 期待候補リストが返る
+  - TIP 側で `OnKeyDown` から `QueryCandidatesRequest` を `NamedPipeClient` 経由で送信し、候補リストが Host から受信される
 
-### M5: 候補 UI 表示 ✅ 実装済み
+### M5: 候補 UI 表示
 
 - **目的**: Space キーで候補ウィンドウが表示され、↑/↓ で選択、Enter で確定。
 - **変更対象**: `tsf-tip/` 内の Candidate UI (新規)
@@ -141,65 +127,49 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - マウス左クリックで即時確定
   - Host 候補リストをリアルタイムで差し替え
 - **受け入れ条件**:
-  - 「nihongo」入力 → Space で「日本語」等の候補が出る ✅
-  - 矢印キーで選択移動、Enter で確定、ESC でキャンセル ✅
+  - 「nihongo」入力 → Space で「日本語」等の候補が出る
+  - 矢印キーで選択移動、Enter で確定、ESC でキャンセル
 
-### M6: Commit と Observation ✅ 実装済み
+### M6: Commit と Observation
 
 - **目的**: 確定動作で composition が commit され、学習用 observation が
   Host に通知される。
 - **変更対象**: `tsf-tip/`, `inference-host/`, `learning/`
 - **実装範囲**:
-  - `CommitObservation(reading, chosen, shown, timestamp_ms)` 送信
-  - Host 側で `learning/LearningStore` に書き込み
-- **現状**:
-  - Payloads.cpp に `CommitObservationRequest` / `Response` 定義済み。
-  - `Dispatcher::HandleCommitObservation` で `LearningStore::Observe` + `Save` を実行。
-  - `learning/src/LearningStore.cpp` は重み累積 + 時間減衰 + TSV 永続化を実装済み。
-  - TIP 側: `PostCommitObservation()` で IPC ワーカーの send_queue に積み、
-    候補選択確定時（Enter/数字/クリック）に呼ぶ経路を実装。
+  - `CommitObservation(reading, chosen, shown, timestamp_ms)` 送信（候補確定時: Enter/数字/クリック）
+  - Host 側で `learning/LearningStore` に書き込み（重み累積 + 時間減衰 + TSV 永続化）
 - **受け入れ条件**:
-  - 確定時にアプリへ最終テキストが入る ✅
-  - `learning.db` 相当に observation 行が増える（Host 単体テスト済み、TIP 配線後に E2E 確認）
+  - 確定時にアプリへ最終テキストが入る
+  - `learning.tsv` に observation 行が増える
 
-### M7: 学習による再ランキング ✅ ほぼ完成
+### M7: 学習による再ランキング
 
 - **目的**: M6 で記録した observation を `Reranker` が読み、次回以降の
   候補順位に反映する。
-- **前提**: M4 完了
+- **前提**: M4
 - **変更対象**: `learning/src/Reranker.cpp`, `inference-host/`
-- **現状**:
-  - `learning/src/Reranker.cpp` で `Apply(reading, candidates, now_epoch_sec)` を実装。`LearningStore::Score` (時間減衰 `exp(-0.15 * days)`) を足して `stable_sort`。
-  - `InferenceEngine::QueryCandidates` のパイプラインに組み込み済み。
-  - `learning/tests/learning_test.cpp` で重み付け→減衰→再ランクを検証。
-- **残作業**:
-  - 手動: 実機で 3 回確定後 4 回目に第一候補で出ることの確認（M6 TIP 配線完了後）。
+- **実装範囲**:
+  - `Reranker::Apply(reading, candidates, now_epoch_sec)`（`LearningStore::Score` の
+    時間減衰 `exp(-0.15 * days)` を加算して `stable_sort`）
+  - `InferenceEngine::QueryCandidates` のパイプラインへ組み込み
 - **受け入れ条件**:
-  - 単体テスト: 同一 context で複数回確定した候補が上位に来る（確認済み）
-  - 手動: 同じ語を 3 回確定後、4 回目に第一候補で出る（M6 TIP 配線後に実機確認）
+  - 単体テスト: 同一 context で複数回確定した候補が上位に来る
+  - 手動: 同じ語を 3 回確定後、4 回目に第一候補で出る
 
-### M8: Zenzai モデルのロード 🚧 初期ロード境界実装中
+### M8: Zenzai モデルのロード
 
 - **目的**: `inference-host` が gguf モデルを optional にロードでき、
   CPU/CUDA 切替が configure 可能。
-- **前提**: M4 完了
+- **前提**: M4
 - **変更対象**: `inference-host/`
 - **実装範囲**:
-  - `LoadModel(path, options)` の実装
-  - llama.cpp 系バインディング統合（CMake オプション化）
+  - `LoadModel(path, options)` の実装（空 path は `SimpleConverter` fallback、
+    GGUF path は `ZenzaiModelConverter` で magic/version 検証 → `model_loaded`）
+  - llama.cpp C-API を `ZenzaiModelConverter` に接続し GGUF から実候補を生成
+  - `AZOOKEY_BACKEND=cpu|cuda` CMake オプション（M37 の `CMakePresets.json` の
+    `cacheVariables` 化を含む）。CUDA 初期化失敗時は CPU fallback、`Health(status=degraded)` で観測
   - モデル未配置時はモックにフォールバック
-- **現状**:
-  - Payloads.cpp に `LoadModelRequest(path, backend, n_gpu_layers)` / `Response` 定義済み。
-  - `Dispatcher::HandleLoadModel` は `LoadModelRequest` を `InferenceEngine::LoadModelWithResult` に渡し、OK/error を返す。
-  - `InferenceEngine::LoadModel` は空 path では `SimpleConverter` fallback を維持し、GGUF path 指定時は `ZenzaiModelConverter` で magic/version を検証して `model_loaded` を立てる。
-  - `AZOOKEY_BACKEND=cpu|cuda` CMake オプションを追加済み。CUDA は llama.cpp 未接続のため、現時点では valid GGUF を CPU fallback としてロードし、`Health(status=degraded, last_error=...)` で観測する。
-  - `inference-host/tests` に valid GGUF / invalid GGUF / CUDA fallback / Handshake・Health 反映のテストを追加済み。
-- **残作業**:
-  - llama.cpp C-API を `ZenzaiModelConverter` 内に接続し、GGUF から実候補を生成する。
-  - Zenzai ロード時間・推論 p50/p95 を `bench/` に追加し、実モデルで計測する。
-  - CUDA backend を optional link し、CUDA 初期化失敗時の CPU fallback を実機で確認する。
-  - `AZOOKEY_BACKEND` を M37 の `CMakePresets.json` の `cacheVariables`
-    としても設定できるようにする。
+  - Zenzai ロード時間・推論 p50/p95 を `bench/` で計測
 - **設計メモ**: バックエンド別実装（CPU/CUDA 等）は `core/IConverter` 実装
   として `SimpleConverter` と差し替える方式で吸収する。第三者レビューが
   提案した別系統の `IModelRuntime` 抽象は `IConverter` と二重抽象になるため
@@ -209,46 +179,31 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 未配置時も Host が落ちず、固定テーブル候補が動く
   - GPU/CPU 切替が設定で効く
 
-### M9: ユーザー辞書 ⚠️ バックエンド完成・UI 接続のみ
+### M9: ユーザー辞書
 
 - **目的**: ユーザー登録語の追加・削除がランタイムで反映される。
-- **前提**: M6 完了
+- **前提**: M6
 - **変更対象**: `learning/`, `inference-host/`
 - **実装範囲**:
-  - `AddUserWord` / `RemoveUserWord` メッセージ実装
-  - 永続化フォーマット定義
-- **現状**:
-  - `learning/src/UserDictionary.cpp` で JSON 永続化（`{version, entries: [{word, ruby, cid, mid, value}]}`）、`Load`/`Save`/`Lookup`/`Add`/`Remove` を実装済み。
-  - Payloads.cpp に `AddUserWordRequest`/`Response`、`RemoveUserWordRequest`/`Response` 定義済み（`UpdateUserWord` は MessageType enum のみ、Payload 未実装）。
-  - `Dispatcher::HandleAddUserWord`/`HandleRemoveUserWord` で永続化まで実行。
-  - `InferenceEngine::QueryCandidates` が `user_dict_->Lookup` を最優先で返す統合済み。
-  - `learning/tests/user_dictionary_test.cpp` で検証済み。
-- **残作業**:
-  - M11 で設定 UI を作る際に経路を接続（暫定 CLI/デバッグ UI も可）。
+  - `AddUserWord` / `RemoveUserWord` メッセージ実装（`Dispatcher` で永続化まで）
+  - 永続化フォーマット定義（`UserDictionary`: JSON `{version, entries: [{word, ruby, cid, mid, value}]}`）
+  - `InferenceEngine::QueryCandidates` が `user_dict_->Lookup` を最優先で返す統合
+  - 設定 UI（M11）または暫定 CLI/デバッグ UI から呼べる経路
 - **受け入れ条件**:
   - 設定 UI（M11 で繋ぐ）から語を追加し、即座に候補に出る
 
-### M10: Cancel とライブ変換同期 ✅ 実装済み
+### M10: Cancel とライブ変換同期
 
 - **目的**: 入力中の高速タイピングで、古い推論結果が UI に上書きしない。
-- **前提**: M5 完了
+- **前提**: M5
 - **変更対象**: `tsf-tip/`, `inference-host/`
 - **実装範囲**:
-  - `Cancel(request_id)` 送信と Host 側の早期中断
-  - TIP 側で最新 `request_id` のみ EditSession を要求するガード
-- **現状**:
-  - `RequestScheduler` で `Cancel`/`IsCanceled`/`MarkLatest`/`IsLatest` 実装。
-  - `InferenceEngine::QueryCandidates` は `atomic<bool>* cancel` をポーリングして早期中断。
-  - Payloads.cpp に `CancelPayload` 定義、`Dispatcher::HandleCancel` 実装。
-  - TIP 側:
-    - `ipc_has_request_` フラグで「新しいリクエストが既に待機中」を検出し、
-      古いレスポンスを破棄する staleness check を実装（候補が逆転しない）。
-    - CommitSelected / CommitPreeditAsIs 呼び出し時に `Cancel` メッセージを
-      IPC send_queue へ積み、未処理の QueryCandidates を Host に通知。
-    - `ipc_send_queue_` を IPC ワーカーが最優先でドレインする設計。
+  - `Cancel(request_id)` 送信と Host 側の早期中断（`InferenceEngine` が `atomic<bool>* cancel` をポーリング）
+  - TIP 側で最新 `request_id` のみ EditSession を要求するガード（staleness check で候補逆転を防止）
+  - 確定時（CommitSelected / CommitPreeditAsIs）に `Cancel` を送り、未処理 QueryCandidates を Host に通知
 - **受け入れ条件**:
-  - 単体テスト: 連続 5 リクエストのうち最新のみが UI 反映される ✅（staleness check）
-  - 手動: 早打ちしても候補が逆転しない ✅
+  - 単体テスト: 連続 5 リクエストのうち最新のみが UI 反映される（staleness check）
+  - 手動: 早打ちしても候補が逆転しない
 
 ### M11: 設定 UI とパッケージング
 
@@ -266,27 +221,21 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   する `%LOCALAPPDATA%\azooKey\` レイアウトに合わせる。先行して M37〜M39
   を完了しておくとパッケージング側の手戻りが減る。
 
-### M12: 配布署名と CI ⚠️ build/test のみ完了
+### M12: 配布署名と CI
 
 - **目的**: 署名済みリリースを GitHub Release から提供。
 - **変更対象**: `.github/workflows/`, `pkg/`
 - **実装範囲**:
-  - Windows ランナーでのビルド + 単体テスト
-  - コード署名（証明書手当ては別途）
-  - リリースタグ → アーティファクト自動公開
-- **現状**:
-  - `.github/workflows/windows.yml` で windows-2022 + msvc-dev-cmd + Ninja により
-    Debug / Release matrix を preset 経由で configure → build → CTest 実行。
-    失敗時 PR コメント、config ごとのログ artifact、Release `.pdb` artifact をアップ。
-- **残作業**:
-  - signtool ステップ（EV/OV 証明書）。
-  - MSIX/MSI 生成ステップ（M11 で `pkg/` 構成決定後）。
-  - タグ push トリガで MSIX を Release に自動公開。
+  - Windows ランナーでのビルド + 単体テスト（windows-2022 + msvc-dev-cmd + Ninja、
+    Debug / Release matrix を preset 経由で configure → build → CTest）
+  - コード署名（signtool、EV/OV 証明書手当ては別途）
+  - MSIX/MSI 生成（M11 で `pkg/` 構成決定後）
+  - リリースタグ push → アーティファクト自動公開
 - **設計メモ**: M38（CI 品質ゲート拡張）で整備済みの Debug/Release matrix・
   preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では署名・Release
   公開ステップを足す。
 - **受け入れ条件**:
-  - main への merge で CI が緑 ✅（テストが個別 exe 実行で全件 pass）
+  - main への merge で CI が緑（テストが個別 exe 実行で全件 pass）
   - タグ push で署名済み MSIX/MSI が Release に上がる
 
 ## 横断的な作業
@@ -295,7 +244,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   追加する。Windows 依存のないものは Linux/macOS CI でも回す。
   詳細なテストカバレッジとギャップは `## テスト体系` 章を参照。
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
-  に出す。現状は TIP=`OutputDebugStringA`（DebugView）/ Host=stderr。
+  に出す。当面は TIP=`OutputDebugStringA`（DebugView）/ Host=stderr。
   JSON Lines ファイルログへの切替は M41（構造化ログと可観測性）で行う。
   ログスキーマ・相関 ID・エラーコード体系は `docs/dev-infrastructure-spec.md`
   §7 を正典とする。
@@ -339,28 +288,24 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
-短期（Phase 3 着手前）: ✅ 解消済み
-1. **`Reranker` 直接テスト** — `reranker_tests` で `store_ == nullptr` パス、空 candidates、複数候補の安定ソート順、時間減衰 (`exp(-0.15 * days)`) 境界、学習ブースト、correction downweight を assertion 化。
-2. **`RequestScheduler` 直接テスト** — `host_scheduler_tests` で `NextRequestId` 連番、`Cancel` → `IsCanceled` セット意味、`MarkLatest`/`IsLatest` の単一最新ガード、並列 ID 採番 smoke を直接検証。
-3. **`SimpleConverter` 長 reading prefix fallback** — `simple_converter_test.cpp::TestLongReadingPrefixFallback` で 8 文字以上の reading から長い辞書 entry へ prefix fallback する品質を assertion 化。
+> 解消済みのギャップは本リストに残さず `現存テスト一覧` 表に反映する（達成状態の正典は Linear）。
+> 以下は未解消の目標カバレッジの定義。
 
 中期（Phase 3 / Zenzai 統合と並行）:
-4. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
-5. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
-6. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
-7. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 呼び出し後に HKCU `Software\\Classes\\CLSID\\{...}\\Profiles\\0x00000411\\{...}` が存在し、`DllUnregisterServer` 後に消えることをテスト。COM 初期化が必要なので Windows-only。
+1. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
+2. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
+3. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
+4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 呼び出し後に HKCU `Software\\Classes\\CLSID\\{...}\\Profiles\\0x00000411\\{...}` が存在し、`DllUnregisterServer` 後に消えることをテスト。COM 初期化が必要なので Windows-only。
 
 長期（Phase 4 / 配布前に必須）:
-8. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
-9. ✅ **bench smoke** — `bench/azookey_bench.exe` を `azookey_bench_smoke` として CTest から呼び、exit=0 と p95 < 50ms（CPU SimpleConverter）を満たすことを CI で検証。
-10. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
-11. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
+5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
+6. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
+7. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
-12. ✅ **JSON malformed/fuzz テスト** — `ipc/src/Json.cpp` にランダムバイト列・深すぎるネスト・巨大数・不正 Unicode escape・末尾ゴミ・最大長超過を投げてもクラッシュせず失敗を返すことを assertion 化（M40）。
-13. **`NamedPipeServer` 再接続耐性** — M40 で複数接続・切断時の client cleanup を unit test 化済み。Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオは M42 の状態機械テストで扱う。
-14. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
-15. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
+8. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械テストで扱う（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
+9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
+10. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
 
 ## リスクと不確実性
 
@@ -399,26 +344,25 @@ v1.0 リリースに向けたリスクと対応:
 ## v1.0 までの実行計画（Phase 1〜4）
 
 ロードマップの依存図とは別に、v1.0（MSIX 配布可能な最小 IME）リリースまでの
-実行順を 4 フェーズで管理する。各マイルストーンのステータスは上記
-「マイルストーン」章の各 M「現状」欄を正典とする。macOS 版（Issue #181）は
-本計画の対象外（「スコープ外」参照）。
+実行順を 4 フェーズで管理する。各マイルストーンの進捗・状態の正典は **Linear**
+（project「azooKey Desktop / Windows IME MVP」）であり、本章は定義・受け入れ条件・依存のみを持つ。
+macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照）。
 
-### Phase 1: TIP 基盤完成（M1〜M4）⚠️ コード資産は main マージ済み（`603cd1d`）だが実機動作は未成立
+### Phase 1: TIP 基盤完成（M1〜M4）
 
 実機 IME としてローマ字を打鍵し、Host から候補を取得して候補ウィンドウに
-表示するまでのコードは実装済み。ただし **実機 IME 動作は M2 のキーイベント
-sink 未配線（Issue #33）が解消されるまで成立しない**。
+表示するまでの動線。**実機 IME 動作は M2 のキーイベント sink 配線（Issue #33）に依存する**。
 
-### Phase 2: 候補選択と確定動線（M5/M6/M10）⚠️ コードは main マージ済み（`603cd1d`）だが実機動作は M2（Issue #33）に依存
+### Phase 2: 候補選択と確定動線（M5/M6/M10）
 
-候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）のコードは
-実装済み。実機での動作確認は M2（Issue #33）解消後に行う。
+候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機での
+動作確認は M2（Issue #33）に依存する。
 
-### Phase 3: 実 Zenzai と辞書 UI のつなぎ込み（M8/M9、3〜5 週）🚧 着手対象
+### Phase 3: 実 Zenzai と辞書 UI のつなぎ込み（M8/M9、3〜5 週）
 
 1. **M8 Zenzai 統合** — `inference-host/src/InferenceEngine.cpp::LoadModel`
    の本実装。初期境界として GGUF magic/version 検証と `ZenzaiModelConverter`
-   差し替えを実装済み。次に llama.cpp の C-API バインディングを接続し、CMake オプションで
+   差し替えを行う。続いて llama.cpp の C-API バインディングを接続し、CMake オプションで
    `AZOOKEY_BACKEND=cpu|cuda` を切替。配布サイズと初回起動時間を `bench/` で
    計測。モデル未配置時は `SimpleConverter` フォールバックを維持。
    `docs/zenzai-gpu-route.md` を実装と整合させる。
@@ -426,17 +370,17 @@ sink 未配線（Issue #33）が解消されるまで成立しない**。
    （Host 側完成済み）を TIP もしくは設定 UI から呼べる経路を作る。
    本フェーズではコマンドラインまたはデバッグ UI で十分。
 
-**Phase 3 着手前タスク**:
-- ✅ llama.cpp バインディング選定スパイク（2026-05-20）: M8 の初期実装は
+**Phase 3 着手前の確定事項（2026-05-20 決定の記録）**:
+- llama.cpp バインディング選定（2026-05-20 決定）: M8 の初期実装は
   llama.cpp C API + CPU backend から開始し、CUDA は optional backend として
-  追加する。DirectML / NPU は M24 まで予約値扱い。判断理由と計測ゲートは
+  追加する方針。DirectML / NPU は M24 まで予約値扱い。判断理由と計測ゲートは
   `docs/zenzai-gpu-route.md` を参照。
-- ✅ `LoadModel` 境界固定（2026-05-20）: `LoadModelRequest(path, backend,
+- `LoadModel` 境界（2026-05-20 決定）: `LoadModelRequest(path, backend,
   n_gpu_layers)` を `InferenceEngine::LoadModel` に渡し、`model_loaded` /
-  `last_error` を `Handshake` / `Health` で観測できる状態にする。
-- ✅ M9 最小操作面の決定（2026-05-20）: 本格設定 UI を待たず、`inference-host`
+  `last_error` を `Handshake` / `Health` で観測できる状態とする設計。
+- M9 最小操作面（2026-05-20 決定）: 本格設定 UI を待たず、`inference-host`
   の IPC 経由で `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug
-  probe を先に作る。設定アプリ統合は M11 に送る。
+  probe を先に用意する方針。設定アプリ統合は M11 に送る。
 
 **Phase 3 で触るファイル**:
 - `inference-host/src/InferenceEngine.cpp` — `LoadModel` の本実装、Zenzai converter 配線
@@ -475,9 +419,9 @@ sink 未配線（Issue #33）が解消されるまで成立しない**。
    変更。配布は MSIX（ユーザースコープ自動登録、アンインストールでの登録解除）。
    **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
    避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。
-4. **M12 CI 完成と署名配布** — 現状 `.github/workflows/windows.yml` で
-   build/test まで実施中。残: コード署名ステップ、タグ push 時の MSIX 自動
-   Release 公開、submodule 配信ポリシー確定。
+4. **M12 CI 完成と署名配布** — `.github/workflows/windows.yml` の build/test に
+   加え、コード署名ステップ、タグ push 時の MSIX 自動 Release 公開、submodule
+   配信ポリシー確定を行う。
 
 **Phase 4 検証**: クリーン Win11 VM での MSIX インストール → IME 選択 → 入力
 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に署名済み
@@ -1011,8 +955,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   定期ダウンロード・検証し、新語ストアにマージする。
 - **前提**: M36-A 完了 + M32 の WinHTTP 基盤（共通ヘルパ `HttpDownloader` の
   切り出し）。
-- **推奨実装時期**: M32 の WinHTTP 基盤にハード依存するため、M32 以降に配置
-  （現状どおり）。
+- **推奨実装時期**: M32 の WinHTTP 基盤にハード依存するため、M32 以降に配置する。
 - **変更対象**: `inference-host/src/TrendingWordFetcher.cpp`・
   `inference-host/src/HttpDownloader.cpp`（新規）、`inference-host/src/main.cpp`、
   `inference-host/CMakeLists.txt`（`winhttp.lib` リンク）。
@@ -1069,21 +1012,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > ・M38（CI）の完了後に追加で取り組む。M44/M50 は配布前（Phase 4 ゲート）に
 > 投入することでサポートコストを大きく下げられる。
 
-### M37: ビルド再現性 ✅ 実装済み
+### M37: ビルド再現性
 
 - **目的**: 手元・CI・AI エージェントでビルド入口を統一し、コンパイル
   オプションを一元管理する。
 - **前提**: なし（独立トラック。Phase 3 着手前の実施を推奨）。
 - **変更対象**: `CMakePresets.json`（新規）、ルート `CMakeLists.txt`、
   各 `*/CMakeLists.txt`、`.clang-format`（新規）、`.gitignore`。
-- **現状**:
-  - `CMakePresets.json` に `windows-debug` / `windows-release` の configure /
-    build / test preset を追加済み。
-  - ルート `CMakeLists.txt` に `azookey_project_options` /
-    `azookey_project_warnings` を追加し、既存 target へ適用済み。
-  - `.clang-format` と Windows/CMake 向け `.gitignore` エントリを追加済み。
-  - 2026-05-23 に `AZOOKEY_FETCH_GOOGLETEST=ON` で Debug / Release とも
-    configure → build → CTest 72 件成功を確認済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §2。
   - `CMakePresets.json`（`windows-debug` / `windows-release`）
   - `azookey_project_options` / `azookey_project_warnings` の INTERFACE
@@ -1098,21 +1033,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - ビルド生成物が `git status` に現れない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §2, §3
 
-### M38: CI 品質ゲート拡張 ✅ 実装済み
+### M38: CI 品質ゲート拡張
 
 - **目的**: Debug/Release 両構成・preset 利用・移植性チェックを CI に加え、
   品質ゲートを強化する。
 - **前提**: M37 完了（preset / clang-format）。
 - **変更対象**: `.github/workflows/windows.yml`、Linux 補助ワークフロー。
-- **現状**:
-  - `.github/workflows/windows.yml` を `windows-2022` の Debug / Release
-    matrix に変更し、configure / build / test を preset 経由に統一済み。
-  - Linux Debug 補助ジョブを追加し、非 Windows target の configure / build /
-    CTest を `linux-debug` preset で実行する。
-  - `azookey_bench_smoke` を CTest に登録し、p95 < 50ms を smoke 条件として
-    検証する。
-  - config ごとの configure / build / test ログ artifact と、Release `.pdb`
-    artifact をアップロードする。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §4。
   - Debug/Release マトリクス、runner を `windows-2022` に明示
   - CI の configure/build/test を preset 経由に統一
@@ -1126,7 +1052,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - PR コメントが config ごとの結果に対応する
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §4
 
-### M39: ユーザーデータ永続化の堅牢化 ✅ 実装済み
+### M39: ユーザーデータ永続化の堅牢化
 
 - **目的**: 学習・辞書ファイルの保存先を実行ディレクトリ依存から脱却させ、
   原子的書き込みで破損を防ぐ。
@@ -1134,15 +1060,6 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `inference-host/src/main.cpp`、
   `inference-host/src/`（パス解決ロジック新規）、
   `learning/src/LearningStore.cpp`・`UserDictionary.cpp`（原子的書き込み）。
-- **現状**:
-  - `UserDataPaths` で `%LOCALAPPDATA%\azooKey\{config,data,logs,models}\`
-    レイアウトと `learning.tsv` / `user_dict.json` の既定パスを解決する。
-  - `--learning` / `--user-dict` 指定時は明示パスを優先し、必要な親ディレクトリ
-    を自動作成する。
-  - `LearningStore::Save` / `UserDictionary::Save` は一時ファイルへ書き込んでから
-    replace する原子的保存に変更済み。
-  - 保存先決定とディレクトリ作成、原子的保存時の親ディレクトリ作成・一時
-    ファイル残骸なしを unit test で検証済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §5。
   - 既定保存先を `%LOCALAPPDATA%\azooKey\{config,data,logs,models}\` に
   - `SHGetKnownFolderPath` でのパス取得、サブディレクトリ自動作成
@@ -1157,26 +1074,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 保存先決定ロジックの unit test が緑、既存テストが回帰しない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §5
 
-### M40: IPC/JSON 堅牢化 ✅ 実装済み
+### M40: IPC/JSON 堅牢化
 
 - **目的**: 自前 JSON パーサと Named Pipe 入力の境界堅牢性を上げ、IPC
   境界での事故を減らす。
 - **前提**: なし（独立トラック。Phase 3/4 と並行可能）。
 - **変更対象**: `ipc/src/Json.cpp`、`ipc/src/Payloads.cpp`、
   `ipc/src/NamedPipeTransport.cpp`、`ipc/tests/`。
-- **現状**:
-  - JSON パーサに最大入力長 1MiB、ネスト深度 64、数値範囲チェック、
-    raw UTF-8 検証、制御文字拒否、サロゲートペア結合を追加済み。
-  - length-prefix / Named Pipe の最大フレームサイズを 1MiB に統一し、
-    Named Pipe インスタンス上限を 4 に制限済み。
-  - malformed JSON / ランダムバイト列 / 深すぎるネスト / 巨大数 /
-    不正 Unicode escape / 最大 payload 超過の unit test を追加済み。
-  - Release では SID 取得失敗時に pipe 名 / DACL の fallback を拒否し、
-    Debug/test のみ fallback pipe を許可する。
-  - Handshake token を payload に追加し、pipe mode の Host は
-    `AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` が設定されている場合のみ
-    token を検証する。未指定時は per-user pipe ACL のみで動作する。
-  - 切断済み client を Stop 待ちにせず解放し、複数接続・切断テストで検証済み。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
   - JSON: ネスト深度上限・最大入力長・サロゲートペア結合・不正 UTF-8/
     制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否

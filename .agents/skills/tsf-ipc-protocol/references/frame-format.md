@@ -5,13 +5,16 @@
 - Windows Named Pipe (`\\.\pipe\azookey-<sid>`)
   - パイプ名は `ipc::DefaultPipeName()` が現在のプロセストークンの SID から
     導出する (`ipc/include/azookey/ipc/NamedPipeTransport.h`)。
-- Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE`
+- Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE`。server は accept polling
+  のため作成時に `PIPE_NOWAIT` を使い、接続後は可能な場合 `PIPE_WAIT` に切り替える。
 - DACL: 現在のユーザ SID のみに RW 許可
-  (`NamedPipeServer` Windows 実装で設定)
+  (`NamedPipeServer` Windows 実装で設定)。Debug/test の restricted-token 実行環境では
+  Release 以外に限り互換 ACE を追加する。
+- Remote client は `PIPE_REJECT_REMOTE_CLIENTS` で拒否し、ローカル IME ↔ Host
+  専用 transport として扱う。
 - 1 サーバが複数クライアント (TIP + 設定 UI 等) を許容する。同時接続
   インスタンス上限は実装値 `kMaxPipeInstances = 32`
-  (`ipc/include/azookey/ipc/Limits.h`)。設計意図は小数 (TIP + 設定 UI 程度) で
-  あり、上限値を 4 へ絞るか 32 のままとするかは Issue #37 で検討する。
+  (`ipc/include/azookey/ipc/Limits.h`)。
 - Release では SID 取得失敗時に per-user pipe 名 / DACL fallback を拒否する。
 
 ## フレーミング
@@ -25,7 +28,9 @@
 
 - 実装: `ipc::EncodeLengthPrefixed` / `ipc::DecodeLengthPrefixed`
   (`ipc/include/azookey/ipc/Messages.h`)
-- length-prefix は **必ず** payload と同じ 1 回の `Send` で書き出す。
+- length-prefix と payload は連続して書き出し、受信側は length-prefix の長さまで
+  読み切って 1 フレームとして復元する。Named Pipe の message boundary や pipe
+  write 分割に依存してはならない。
 - 最大 payload サイズは 1MiB (`ipc::kMaxFrameSize`)。JSON パーサの最大入力長
   と同じ値に揃え、超過フレームは送受信時に拒否する。
 - バイトオーダーが LE な理由: Windows ネイティブが LE のため zero-copy で

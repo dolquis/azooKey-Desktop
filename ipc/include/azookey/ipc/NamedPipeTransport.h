@@ -21,10 +21,15 @@ namespace azookey::ipc {
 // Wire format:
 //   - Each message is one Envelope serialized via ipc::Serialize
 //   - Framed with EncodeLengthPrefixed (4-byte little-endian length prefix)
-//   - Pipe is PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE on Windows
+//   - Pipe is PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE on Windows.
+//     Server instances are created with PIPE_NOWAIT for accept polling, then
+//     connected server handles are switched to PIPE_WAIT when supported.
 //
 // Security (Windows):
 //   - DACL is restricted to the current user's SID (RW only)
+//   - Remote pipe clients are rejected; the transport is local-machine only
+//   - Debug/test builds may add a restricted-token compatibility ACE; Release
+//     remains current-user-only and fails closed if SID-based DACL creation fails
 //   - One server can accept multiple clients (TIP + settings UI)
 
 class NamedPipeServer {

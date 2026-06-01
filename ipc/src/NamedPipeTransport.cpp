@@ -29,6 +29,8 @@ namespace azookey::ipc {
 namespace {
 
 constexpr DWORD kPipeBufferSize = 64 * 1024;
+constexpr size_t kMaxTransientReadNoDataRetries = 100;
+constexpr size_t kMaxTransientWriteNoProgressRetries = 100;
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) return {};
@@ -90,12 +92,44 @@ std::wstring CurrentUserSidString() {
   return result;
 }
 
+bool CurrentProcessTokenIsRestrictedForTesting() {
+#ifdef NDEBUG
+  return false;
+#else
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+    return false;
+  }
+  const bool restricted = IsTokenRestricted(token) != FALSE;
+  CloseHandle(token);
+  return restricted;
+#endif
+}
+
 bool AllowsSidFallback() {
 #ifdef NDEBUG
   return false;
 #else
   return true;
 #endif
+}
+
+bool ForceZeroBytePipeWriteForTesting() {
+#ifdef NDEBUG
+  return false;
+#else
+  wchar_t forced[2]{};
+  return GetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE",
+                                 forced, 2) > 0;
+#endif
+}
+
+BOOL WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, DWORD* written) {
+  if (ForceZeroBytePipeWriteForTesting()) {
+    *written = 0;
+    return TRUE;
+  }
+  return WriteFile(pipe, data, size, written, nullptr);
 }
 
 struct SecurityDescriptor {
@@ -131,7 +165,14 @@ SecurityDescriptor BuildCurrentUserSecurityDescriptor() {
   if (sid.empty()) return result;
 
   // Protected DACL: only the current user can connect to the per-user pipe.
-  const std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
+  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
+#ifndef NDEBUG
+  if (CurrentProcessTokenIsRestrictedForTesting()) {
+    // Restricted-token test runners require an ACE that also matches a
+    // restricting SID. Keep this out of Release, where the pipe fails closed.
+    sddl += L"(A;;GA;;;WD)";
+  }
+#endif
   ConvertStringSecurityDescriptorToSecurityDescriptorW(
       sddl.c_str(), SDDL_REVISION_1, &result.descriptor, nullptr);
   return result;
@@ -155,12 +196,14 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
 
   return CreateNamedPipeW(
       wide_name.c_str(), PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
+      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT |
+          PIPE_REJECT_REMOTE_CLIENTS,
       kMaxPipeInstances, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
 }
 
 bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
   size_t offset = 0;
+  size_t transient_no_data_retries = 0;
   while (offset < size) {
     DWORD read = 0;
     const DWORD chunk = static_cast<DWORD>(
@@ -168,30 +211,60 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
     const BOOL ok = ReadFile(pipe, data + offset, chunk, &read, nullptr);
     if (!ok) {
       const auto err = GetLastError();
-      if (err != ERROR_MORE_DATA || read == 0) {
-        return false;
+      if (err == ERROR_NO_DATA) {
+        if (offset == 0 ||
+            ++transient_no_data_retries > kMaxTransientReadNoDataRetries) {
+          return false;
+        }
+        Sleep(1);
+        continue;
       }
+      if (err == ERROR_MORE_DATA && read > 0) {
+        offset += read;
+        transient_no_data_retries = 0;
+        continue;
+      }
+      return false;
     }
     if (read == 0) {
       return false;
     }
     offset += read;
+    transient_no_data_retries = 0;
   }
   return true;
 }
 
 bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
   size_t offset = 0;
+  size_t no_progress_retries = 0;
   while (offset < size) {
     DWORD written = 0;
     const DWORD chunk = static_cast<DWORD>(
         std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    if (!WriteFile(pipe, data + offset, chunk, &written, nullptr) || written == 0) {
+    if (!WritePipeChunk(pipe, data + offset, chunk, &written)) {
+      const auto err = GetLastError();
+      if (err == ERROR_PIPE_BUSY) {
+        if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
+          return false;
+        }
+        Sleep(1);
+        continue;
+      }
       return false;
     }
+    if (written == 0) {
+      if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
+        return false;
+      }
+      Sleep(1);
+      continue;
+    }
     offset += written;
+    no_progress_retries = 0;
   }
-  FlushFileBuffers(pipe);
+  // FlushFileBuffers on a named pipe can block until the peer drains all data;
+  // completed WriteFile chunks are enough for this framed message transport.
   return true;
 }
 
@@ -282,7 +355,10 @@ struct NamedPipeServer::Impl {
 
       if (connected) {
         DWORD mode = PIPE_READMODE_MESSAGE | PIPE_WAIT;
-        SetNamedPipeHandleState(current, &mode, nullptr, nullptr);
+        if (!SetNamedPipeHandleState(current, &mode, nullptr, nullptr)) {
+          // Keep the connection: ReadBytes/WriteBytes still validate the
+          // length-prefixed frame and fail closed on unrecoverable I/O errors.
+        }
 
         // Build a per-connection handler so each client has isolated state
         // (e.g. independent authentication flags). Guard against factory

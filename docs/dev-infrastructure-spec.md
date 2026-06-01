@@ -330,9 +330,16 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - **6.4.1 Release で fail-closed** — SID 取得失敗時、現在は fallback pipe
   名 / 既定セキュリティに落ちる。Debug/test ではこの fallback を許可し、
   Release/production では SID 取得失敗時に Host 起動を失敗させる
-  （ビルド構成で分岐）
-- **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` をやめ、
-  IME 用途に十分な上限（例: `kMaxPipeInstances = 4`）を設ける
+  （ビルド構成で分岐）。Debug/test の restricted-token 実行環境では current-user
+  SID ACE だけでは同一プロセス client の write open が拒否されるため、Release 以外に限り
+  restricted-token 互換 ACE を追加して transport tests を実行可能にする
+- **6.4.1a remote client rejection** — Named Pipe はローカル IME ↔ Host 専用
+  であり、server 作成時に `PIPE_REJECT_REMOTE_CLIENTS` を指定して remote client
+  接続を OS レベルで拒否する。これは DACL / per-user pipe 名の補助防御であり、
+  同一ユーザー内の別プロセス対策は §6.4.4 の Handshake トークンで扱う
+- **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
+  TIP と設定 UI などの同時接続を許容する有界な上限
+  (`kMaxPipeInstances = 32`) を設ける
 - **6.4.3 最大フレームサイズ見直し** — M40 着手前は 16MB。IME の候補問い合わせ
   には大きすぎるため、用途に見合う上限（256KB〜1MB 程度）へ引き下げる。
   §6.2 の JSON 最大入力長と整合させる
@@ -341,6 +348,16 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   方式を導入し、同一ユーザー内の別プロセスからの接続を弾く
 - **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
   見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
+- **6.4.6 length-prefix read/write hardening** — Named Pipe は
+  `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE` を使う。server は accept polling の
+  ため作成時に `PIPE_NOWAIT` を使い、接続後は可能な場合 `PIPE_WAIT` に切り替える。
+  4-byte little-endian length-prefix によってフレーム境界を復元し、`ERROR_MORE_DATA`
+  を扱って指定長まで読み切る。フレーム途中の一時的な `ERROR_NO_DATA` は bounded
+  retry に留め、フレーム開始前の no-data / zero-byte read は切断扱いにして
+  peer close 後の client thread 滞留を防ぐ。write 側も `PIPE_NOWAIT` 継続時の
+  `ERROR_PIPE_BUSY` / zero-byte write を bounded retry に留め、読まない peer による
+  client thread 滞留を防ぐため blocking flush に依存しない。64KiB を超えるフレームが
+  pipe write 単位で分割されても往復できる。
 
 ### M40 受け入れ条件
 
@@ -351,6 +368,7 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - Release ビルドで SID 取得失敗時に Host 起動が失敗する
 - 複数接続・切断テストが追加され緑
 - 切断済み client が解放される
+- 64KiB を超える length-prefix フレームが往復できる
 
 ## 7. 構造化ログと可観測性（M41）
 

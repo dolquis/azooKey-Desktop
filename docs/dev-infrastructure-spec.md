@@ -352,8 +352,10 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE` を使う。server は accept polling の
   ため作成時に `PIPE_NOWAIT` を使い、接続後は可能な場合 `PIPE_WAIT` に切り替える。
   4-byte little-endian length-prefix によってフレーム境界を復元し、`ERROR_MORE_DATA`
-  や一時的な `ERROR_NO_DATA` を切断扱いにせず、指定長まで読み切る。64KiB を超える
-  フレームが pipe write 単位で分割されても往復できる。
+  を扱って指定長まで読み切る。フレーム途中の一時的な `ERROR_NO_DATA` は bounded
+  retry に留め、フレーム開始前の no-data / zero-byte read は切断扱いにして
+  peer close 後の client thread 滞留を防ぐ。64KiB を超えるフレームが pipe write
+  単位で分割されても往復できる。
 
 ### M40 受け入れ条件
 

@@ -272,6 +272,33 @@ TEST(NamedPipeTransportTest, ClientDisconnectDuringResponseWriteCleansUp) {
   server.Stop();
 }
 
+TEST(NamedPipeTransportTest, ClientDisconnectBeforeNextFrameCleansUp) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-read-close-test-" + std::to_string(GetCurrentProcessId());
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        res.payload_json = req.payload_json;
+        return res;
+      });
+  ASSERT_TRUE(started);
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+  ASSERT_TRUE(WaitForClientCount(server, 1));
+
+  client.Disconnect();
+
+  EXPECT_TRUE(WaitForClientCount(server, 0));
+  server.Stop();
+}
+
 #else
 
 TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {

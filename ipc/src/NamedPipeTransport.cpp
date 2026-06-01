@@ -29,6 +29,7 @@ namespace azookey::ipc {
 namespace {
 
 constexpr DWORD kPipeBufferSize = 64 * 1024;
+constexpr size_t kMaxTransientReadNoDataRetries = 100;
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) return {};
@@ -183,6 +184,7 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
 
 bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
   size_t offset = 0;
+  size_t transient_no_data_retries = 0;
   while (offset < size) {
     DWORD read = 0;
     const DWORD chunk = static_cast<DWORD>(
@@ -191,20 +193,25 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
     if (!ok) {
       const auto err = GetLastError();
       if (err == ERROR_NO_DATA) {
+        if (offset == 0 ||
+            ++transient_no_data_retries > kMaxTransientReadNoDataRetries) {
+          return false;
+        }
         Sleep(1);
         continue;
       }
       if (err == ERROR_MORE_DATA && read > 0) {
         offset += read;
+        transient_no_data_retries = 0;
         continue;
       }
       return false;
     }
     if (read == 0) {
-      Sleep(1);
-      continue;
+      return false;
     }
     offset += read;
+    transient_no_data_retries = 0;
   }
   return true;
 }

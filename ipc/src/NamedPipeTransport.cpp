@@ -90,6 +90,20 @@ std::wstring CurrentUserSidString() {
   return result;
 }
 
+bool CurrentProcessTokenIsRestrictedForTesting() {
+#ifdef NDEBUG
+  return false;
+#else
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+    return false;
+  }
+  const bool restricted = IsTokenRestricted(token) != FALSE;
+  CloseHandle(token);
+  return restricted;
+#endif
+}
+
 bool AllowsSidFallback() {
 #ifdef NDEBUG
   return false;
@@ -131,7 +145,14 @@ SecurityDescriptor BuildCurrentUserSecurityDescriptor() {
   if (sid.empty()) return result;
 
   // Protected DACL: only the current user can connect to the per-user pipe.
-  const std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
+  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
+#ifndef NDEBUG
+  if (CurrentProcessTokenIsRestrictedForTesting()) {
+    // Restricted-token test runners require an ACE that also matches a
+    // restricting SID. Keep this out of Release, where the pipe fails closed.
+    sddl += L"(A;;GA;;;WD)";
+  }
+#endif
   ConvertStringSecurityDescriptorToSecurityDescriptorW(
       sddl.c_str(), SDDL_REVISION_1, &result.descriptor, nullptr);
   return result;
@@ -155,7 +176,8 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
 
   return CreateNamedPipeW(
       wide_name.c_str(), PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
+      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT |
+          PIPE_REJECT_REMOTE_CLIENTS,
       kMaxPipeInstances, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
 }
 
@@ -168,12 +190,19 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
     const BOOL ok = ReadFile(pipe, data + offset, chunk, &read, nullptr);
     if (!ok) {
       const auto err = GetLastError();
-      if (err != ERROR_MORE_DATA || read == 0) {
-        return false;
+      if (err == ERROR_NO_DATA) {
+        Sleep(1);
+        continue;
       }
+      if (err == ERROR_MORE_DATA && read > 0) {
+        offset += read;
+        continue;
+      }
+      return false;
     }
     if (read == 0) {
-      return false;
+      Sleep(1);
+      continue;
     }
     offset += read;
   }
@@ -186,8 +215,17 @@ bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
     DWORD written = 0;
     const DWORD chunk = static_cast<DWORD>(
         std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    if (!WriteFile(pipe, data + offset, chunk, &written, nullptr) || written == 0) {
+    if (!WriteFile(pipe, data + offset, chunk, &written, nullptr)) {
+      const auto err = GetLastError();
+      if (err == ERROR_NO_DATA || err == ERROR_PIPE_BUSY) {
+        Sleep(1);
+        continue;
+      }
       return false;
+    }
+    if (written == 0) {
+      Sleep(1);
+      continue;
     }
     offset += written;
   }
@@ -282,7 +320,10 @@ struct NamedPipeServer::Impl {
 
       if (connected) {
         DWORD mode = PIPE_READMODE_MESSAGE | PIPE_WAIT;
-        SetNamedPipeHandleState(current, &mode, nullptr, nullptr);
+        if (!SetNamedPipeHandleState(current, &mode, nullptr, nullptr)) {
+          // Keep the connection: ReadBytes/WriteBytes still validate the
+          // length-prefixed frame and fail closed on unrecoverable I/O errors.
+        }
 
         // Build a per-connection handler so each client has isolated state
         // (e.g. independent authentication flags). Guard against factory

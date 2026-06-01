@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 
@@ -170,6 +171,49 @@ TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
     client->Disconnect();
   }
   EXPECT_TRUE(WaitForClientCount(server, 0));
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, LargeFrameRoundTripExceedsPipeBuffer) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-large-test-" + std::to_string(GetCurrentProcessId());
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        res.payload_json = req.payload_json;
+        return res;
+      });
+  ASSERT_TRUE(started);
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+
+  constexpr std::size_t kLargePayloadBytes = 128 * 1024;
+  static_assert(kLargePayloadBytes < azookey::ipc::kMaxFrameSize);
+  const std::string large_payload(kLargePayloadBytes, 'x');
+
+  azookey::ipc::Envelope env;
+  env.version = 1;
+  env.request_id = 99;
+  env.trace_id = "large-frame";
+  env.type = azookey::ipc::MessageType::Ping;
+  env.payload_json = "{\"blob\":\"" + large_payload + "\"}";
+  ASSERT_LT(env.payload_json.size(), azookey::ipc::kMaxFrameSize);
+
+  ASSERT_TRUE(client.Send(env));
+  auto response = client.Receive();
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->request_id, env.request_id);
+  EXPECT_EQ(response->trace_id, env.trace_id);
+  EXPECT_EQ(response->payload_json, env.payload_json);
+
+  client.Disconnect();
   server.Stop();
 }
 

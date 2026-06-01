@@ -19,8 +19,9 @@
 
 namespace {
 
-bool WaitForClientCount(azookey::ipc::NamedPipeServer& server, std::size_t expected) {
-  for (int i = 0; i < 100; ++i) {
+bool WaitForClientCount(azookey::ipc::NamedPipeServer& server, std::size_t expected,
+                        int attempts = 100) {
+  for (int i = 0; i < attempts; ++i) {
     if (server.ActiveClientCountForTesting() == expected) {
       return true;
     }
@@ -38,6 +39,37 @@ bool WaitForFlag(const std::atomic<bool>& flag) {
   }
   return false;
 }
+
+class ScopedEnvironmentVariable {
+ public:
+  ScopedEnvironmentVariable(const wchar_t* name, const wchar_t* value)
+      : name_(name) {
+    const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
+    if (required > 0) {
+      previous_.resize(required);
+      const DWORD copied =
+          GetEnvironmentVariableW(name, previous_.data(), required);
+      if (copied > 0) {
+        previous_.resize(copied);
+        had_previous_ = true;
+      }
+    }
+    SetEnvironmentVariableW(name_.c_str(), value);
+  }
+
+  ~ScopedEnvironmentVariable() {
+    SetEnvironmentVariableW(name_.c_str(),
+                            had_previous_ ? previous_.c_str() : nullptr);
+  }
+
+  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+  ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+ private:
+  std::wstring name_;
+  std::wstring previous_;
+  bool had_previous_{false};
+};
 
 }  // namespace
 
@@ -295,9 +327,57 @@ TEST(NamedPipeTransportTest, ClientDisconnectBeforeNextFrameCleansUp) {
 
   client.Disconnect();
 
-  EXPECT_TRUE(WaitForClientCount(server, 0));
+  EXPECT_TRUE(WaitForClientCount(server, 0, 250));
   server.Stop();
 }
+
+#ifndef NDEBUG
+TEST(NamedPipeTransportTest, ZeroByteResponseWriteRetryIsBounded) {
+  ScopedEnvironmentVariable force_zero_write(
+      L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE", nullptr);
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-zero-write-test-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> handler_entered{false};
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name,
+      [&handler_entered](
+          const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        handler_entered.store(true);
+        SetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE", L"1");
+
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        res.payload_json = req.payload_json;
+        return res;
+      });
+  ASSERT_TRUE(started);
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+
+  azookey::ipc::PingPayload ping;
+  ping.nonce = 888;
+
+  azookey::ipc::Envelope env;
+  env.version = 1;
+  env.request_id = 101;
+  env.trace_id = "zero-write";
+  env.type = azookey::ipc::MessageType::Ping;
+  env.payload_json = azookey::ipc::BuildPing(ping);
+
+  ASSERT_TRUE(client.Send(env));
+  ASSERT_TRUE(WaitForFlag(handler_entered));
+
+  EXPECT_TRUE(WaitForClientCount(server, 0, 250));
+  client.Disconnect();
+  server.Stop();
+}
+#endif
 
 #else
 

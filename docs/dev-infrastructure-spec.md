@@ -354,8 +354,10 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   4-byte little-endian length-prefix によってフレーム境界を復元し、`ERROR_MORE_DATA`
   を扱って指定長まで読み切る。フレーム途中の一時的な `ERROR_NO_DATA` は bounded
   retry に留め、フレーム開始前の no-data / zero-byte read は切断扱いにして
-  peer close 後の client thread 滞留を防ぐ。64KiB を超えるフレームが pipe write
-  単位で分割されても往復できる。
+  peer close 後の client thread 滞留を防ぐ。write 側も `PIPE_NOWAIT` 継続時の
+  `ERROR_PIPE_BUSY` / zero-byte write を bounded retry に留め、読まない peer による
+  client thread 滞留を防ぐため blocking flush に依存しない。64KiB を超えるフレームが
+  pipe write 単位で分割されても往復できる。
 
 ### M40 受け入れ条件
 

@@ -30,6 +30,7 @@ namespace {
 
 constexpr DWORD kPipeBufferSize = 64 * 1024;
 constexpr size_t kMaxTransientReadNoDataRetries = 100;
+constexpr size_t kMaxTransientWriteNoProgressRetries = 100;
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) return {};
@@ -111,6 +112,24 @@ bool AllowsSidFallback() {
 #else
   return true;
 #endif
+}
+
+bool ForceZeroBytePipeWriteForTesting() {
+#ifdef NDEBUG
+  return false;
+#else
+  wchar_t forced[2]{};
+  return GetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE",
+                                 forced, 2) > 0;
+#endif
+}
+
+BOOL WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, DWORD* written) {
+  if (ForceZeroBytePipeWriteForTesting()) {
+    *written = 0;
+    return TRUE;
+  }
+  return WriteFile(pipe, data, size, written, nullptr);
 }
 
 struct SecurityDescriptor {
@@ -218,25 +237,34 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
 
 bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
   size_t offset = 0;
+  size_t no_progress_retries = 0;
   while (offset < size) {
     DWORD written = 0;
     const DWORD chunk = static_cast<DWORD>(
         std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    if (!WriteFile(pipe, data + offset, chunk, &written, nullptr)) {
+    if (!WritePipeChunk(pipe, data + offset, chunk, &written)) {
       const auto err = GetLastError();
       if (err == ERROR_PIPE_BUSY) {
+        if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
+          return false;
+        }
         Sleep(1);
         continue;
       }
       return false;
     }
     if (written == 0) {
+      if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
+        return false;
+      }
       Sleep(1);
       continue;
     }
     offset += written;
+    no_progress_retries = 0;
   }
-  FlushFileBuffers(pipe);
+  // FlushFileBuffers on a named pipe can block until the peer drains all data;
+  // completed WriteFile chunks are enough for this framed message transport.
   return true;
 }
 

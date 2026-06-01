@@ -88,9 +88,22 @@ STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) { return 
 
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
   UNREFERENCED_PARAMETER(dwFlags);
+  if (!ptim) return E_INVALIDARG;
+  if (thread_mgr_) return E_UNEXPECTED;
+
   thread_mgr_ = ptim;
   client_id_ = tid;
-  if (thread_mgr_) thread_mgr_->AddRef();
+  thread_mgr_->AddRef();
+
+  HRESULT hr = AdviseTextServiceSinks();
+  if (FAILED(hr)) {
+    DebugLog("ActivateEx: failed to advise TSF sinks");
+    UnadviseTextServiceSinks();
+    thread_mgr_->Release();
+    thread_mgr_ = nullptr;
+    client_id_ = TF_CLIENTID_NULL;
+    return hr;
+  }
 
   candidate_window_.Create();
   candidate_window_.SetOnClick([this](int idx) {
@@ -103,6 +116,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 }
 
 STDMETHODIMP TextService::Deactivate() {
+  HRESULT result = UnadviseTextServiceSinks();
+
   StopIpcWorker();
 
   candidate_window_.Hide();
@@ -130,7 +145,71 @@ STDMETHODIMP TextService::Deactivate() {
     thread_mgr_->Release();
     thread_mgr_ = nullptr;
   }
+  client_id_ = TF_CLIENTID_NULL;
+  return result;
+}
+
+HRESULT TextService::AdviseTextServiceSinks() {
+  if (!thread_mgr_) return E_UNEXPECTED;
+
+  ITfKeystrokeMgr* key_mgr = nullptr;
+  HRESULT hr = thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr,
+                                           reinterpret_cast<void**>(&key_mgr));
+  if (FAILED(hr) || !key_mgr) return FAILED(hr) ? hr : E_NOINTERFACE;
+
+  hr = key_mgr->AdviseKeyEventSink(client_id_, this, TRUE);
+  key_mgr->Release();
+  if (FAILED(hr)) return hr;
+  key_event_sink_advised_ = true;
+
+  ITfSource* source = nullptr;
+  hr = thread_mgr_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
+  if (FAILED(hr) || !source) return FAILED(hr) ? hr : E_NOINTERFACE;
+
+  hr = source->AdviseSink(IID_ITfThreadMgrEventSink,
+                          static_cast<ITfThreadMgrEventSink*>(this),
+                          &thread_mgr_sink_cookie_);
+  source->Release();
+  if (FAILED(hr)) return hr;
   return S_OK;
+}
+
+HRESULT TextService::UnadviseTextServiceSinks() {
+  HRESULT result = S_OK;
+
+  if (thread_mgr_ && thread_mgr_sink_cookie_ != TF_INVALID_COOKIE) {
+    ITfSource* source = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_ITfSource,
+                                             reinterpret_cast<void**>(&source));
+    if (SUCCEEDED(hr) && source) {
+      hr = source->UnadviseSink(thread_mgr_sink_cookie_);
+      source->Release();
+    }
+    if (FAILED(hr)) {
+      DebugLog("Deactivate: failed to unadvise thread manager sink");
+      result = hr;
+    } else {
+      thread_mgr_sink_cookie_ = TF_INVALID_COOKIE;
+    }
+  }
+
+  if (thread_mgr_ && key_event_sink_advised_) {
+    ITfKeystrokeMgr* key_mgr = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr,
+                                             reinterpret_cast<void**>(&key_mgr));
+    if (SUCCEEDED(hr) && key_mgr) {
+      hr = key_mgr->UnadviseKeyEventSink(client_id_);
+      key_mgr->Release();
+    }
+    if (FAILED(hr)) {
+      DebugLog("Deactivate: failed to unadvise key event sink");
+      if (SUCCEEDED(result)) result = hr;
+    } else {
+      key_event_sink_advised_ = false;
+    }
+  }
+
+  return result;
 }
 
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {

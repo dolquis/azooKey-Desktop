@@ -69,6 +69,7 @@ class TextService final : public ITfTextInputProcessorEx,
   LONG ref_count_{1};
   ITfThreadMgr* thread_mgr_{nullptr};
   TfClientId client_id_{TF_CLIENTID_NULL};
+  bool key_event_sink_advised_{false};
   DWORD thread_mgr_sink_cookie_{TF_INVALID_COOKIE};
 
   core::RomajiKanaConverter romaji_;
@@ -114,6 +115,8 @@ class TextService final : public ITfTextInputProcessorEx,
 
   void StartIpcWorker();
   void StopIpcWorker();
+  HRESULT AdviseTextServiceSinks();
+  HRESULT UnadviseTextServiceSinks();
   void IpcWorkerThread();
   void PostQueryCandidates(const std::string& reading);
 

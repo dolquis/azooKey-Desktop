@@ -1,0 +1,252 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
+#include <gtest/gtest.h>
+#include <msctf.h>
+
+#include "azookey/tsf/TextService.h"
+
+namespace {
+
+class NoopContext final : public ITfContext {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfContext) {
+      *ppvObject = static_cast<ITfContext*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP RequestEditSession(TfClientId tid,
+                                  ITfEditSession* edit_session,
+                                  DWORD flags,
+                                  HRESULT* session_result) override {
+    UNREFERENCED_PARAMETER(edit_session);
+    request_count++;
+    last_client_id = tid;
+    last_flags = flags;
+    if (!session_result) return E_POINTER;
+    *session_result = request_session_result;
+    return request_result;
+  }
+
+  STDMETHODIMP InWriteSession(TfClientId, BOOL* write_session) override {
+    if (!write_session) return E_POINTER;
+    *write_session = FALSE;
+    return S_OK;
+  }
+
+  STDMETHODIMP GetSelection(TfEditCookie,
+                            ULONG,
+                            ULONG,
+                            TF_SELECTION*,
+                            ULONG* fetched) override {
+    if (fetched) *fetched = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override {
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetStart(TfEditCookie, ITfRange** start) override {
+    if (start) *start = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetEnd(TfEditCookie, ITfRange** end) override {
+    if (end) *end = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetActiveView(ITfContextView** view) override {
+    if (view) *view = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP EnumViews(IEnumTfContextViews** enum_views) override {
+    if (enum_views) *enum_views = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetStatus(TF_STATUS* status) override {
+    if (!status) return E_POINTER;
+    *status = {};
+    return S_OK;
+  }
+
+  STDMETHODIMP GetProperty(REFGUID, ITfProperty** property) override {
+    if (property) *property = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetAppProperty(REFGUID, ITfReadOnlyProperty** property) override {
+    if (property) *property = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP TrackProperties(const GUID**,
+                               ULONG,
+                               const GUID**,
+                               ULONG,
+                               ITfReadOnlyProperty** property) override {
+    if (property) *property = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP EnumProperties(IEnumTfProperties** enum_properties) override {
+    if (enum_properties) *enum_properties = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetDocumentMgr(ITfDocumentMgr** document_mgr) override {
+    if (document_mgr) *document_mgr = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP CreateRangeBackup(TfEditCookie,
+                                 ITfRange*,
+                                 ITfRangeBackup** backup) override {
+    if (backup) *backup = nullptr;
+    return E_NOTIMPL;
+  }
+
+  int request_count{0};
+  TfClientId last_client_id{TF_CLIENTID_NULL};
+  DWORD last_flags{0};
+  HRESULT request_result{S_OK};
+  HRESULT request_session_result{S_OK};
+
+ private:
+  LONG ref_count_{1};
+};
+
+class TextServiceHarness {
+ public:
+  ~TextServiceHarness() { service.Deactivate(); }
+
+  BOOL Press(WPARAM key) {
+    BOOL eaten = FALSE;
+    const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
+    EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
+    return eaten;
+  }
+
+  BOOL TestPress(WPARAM key) {
+    BOOL eaten = FALSE;
+    const HRESULT hr = service.OnTestKeyDown(&context, key, 0, &eaten);
+    EXPECT_TRUE(SUCCEEDED(hr)) << "OnTestKeyDown failed for key " << key;
+    return eaten;
+  }
+
+  NoopContext context;
+  azookey::tsf::TextService service;
+};
+
+}  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.TestPress('K'));
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  EXPECT_TRUE(h.TestPress('A'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_GE(h.context.request_count, 2);
+  EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BackspaceRemovesPendingRomajiBeforeKana) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BackspaceDeletesOneUtf8KanaFromPreedit) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"かな");
+
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  EXPECT_FALSE(h.Press(VK_BACK));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, EscapeClearsPreeditAndPendingRomaji) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  EXPECT_TRUE(h.TestPress(VK_ESCAPE));
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SpaceFlushesPendingRomajiAndIsEatenDuringPreedit) {
+  TextServiceHarness h;
+
+  EXPECT_FALSE(h.TestPress(VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_TRUE(h.TestPress(VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.preedit_kana_, u8"ん");
+
+  EXPECT_TRUE(h.TestPress(VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.preedit_kana_, u8"ん");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NonPreeditControlKeysAreNotEatenWithoutCandidates) {
+  TextServiceHarness h;
+
+  EXPECT_FALSE(h.TestPress(VK_BACK));
+  EXPECT_FALSE(h.Press(VK_BACK));
+  EXPECT_FALSE(h.TestPress(VK_ESCAPE));
+  EXPECT_FALSE(h.Press(VK_ESCAPE));
+  EXPECT_FALSE(h.TestPress('1'));
+  EXPECT_FALSE(h.Press('1'));
+}

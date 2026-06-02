@@ -18,6 +18,6 @@ gtest_discover_tests(ipc_named_pipe_transport_tests)
 
 add_executable(ipc_tip_client_tests tip_client_ipc_test.cpp)
 target_link_libraries(ipc_tip_client_tests
-  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+  PRIVATE azookey_ipc azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
 gtest_discover_tests(ipc_tip_client_tests)

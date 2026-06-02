@@ -86,6 +86,24 @@ TEST(RequestSchedulerTest, MarkLatestPrunesInactiveOlderCancelsOnly) {
   EXPECT_TRUE(s.IsCanceled(6));
 }
 
+TEST(RequestSchedulerTest, OlderUntrackedCancelSurvivesUntilRequestCanTrack) {
+  host::RequestScheduler s;
+  s.MarkLatest(10);
+
+  s.Cancel(6);
+  EXPECT_TRUE(s.IsCanceled(6));
+  auto tracked = s.TrackCancellation(6);
+  EXPECT_TRUE(tracked->load());
+
+  s.CompleteRequest(6);
+  EXPECT_FALSE(s.IsCanceled(6));
+
+  s.Cancel(7);
+  EXPECT_TRUE(s.IsCanceled(7));
+  s.MarkLatest(11);
+  EXPECT_FALSE(s.IsCanceled(7));
+}
+
 TEST(RequestSchedulerTest, LatestSingleId) {
   host::RequestScheduler s;
   s.MarkLatest(7);

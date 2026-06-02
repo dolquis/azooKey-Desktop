@@ -8,9 +8,6 @@ void RequestScheduler::Cancel(uint64_t request_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = cancel_states_.find(request_id);
   if (it == cancel_states_.end()) {
-    if (request_id < latest_) {
-      return;
-    }
     it = cancel_states_
              .emplace(request_id,
                       CancelState{std::make_shared<std::atomic<bool>>(false), false})

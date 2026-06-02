@@ -122,6 +122,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
+  // Keep converter calls under state_mutex_: LoadModelWithResult can replace
+  // model_converter_ and active_converter_ under the same mutex.
   std::lock_guard<std::mutex> lock(state_mutex_);
 
   if (canceled()) return {};

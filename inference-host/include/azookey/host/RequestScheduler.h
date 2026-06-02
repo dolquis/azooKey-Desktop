@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -21,7 +22,7 @@ class RequestScheduler {
  private:
   struct CancelState {
     std::shared_ptr<std::atomic<bool>> flag;
-    bool active{false};
+    std::size_t active_count{0};
   };
 
   void PruneInactiveBeforeLocked(uint64_t request_id);

@@ -10,7 +10,7 @@ void RequestScheduler::Cancel(uint64_t request_id) {
   if (it == cancel_states_.end()) {
     it = cancel_states_
              .emplace(request_id,
-                      CancelState{std::make_shared<std::atomic<bool>>(false), false})
+                      CancelState{std::make_shared<std::atomic<bool>>(false), 0})
              .first;
   }
   it->second.flag->store(true, std::memory_order_release);
@@ -29,13 +29,22 @@ std::shared_ptr<std::atomic<bool>> RequestScheduler::TrackCancellation(uint64_t 
   if (!state.flag) {
     state.flag = std::make_shared<std::atomic<bool>>(false);
   }
-  state.active = true;
+  ++state.active_count;
   return state.flag;
 }
 
 void RequestScheduler::CompleteRequest(uint64_t request_id) {
   std::lock_guard<std::mutex> lock(mutex_);
-  cancel_states_.erase(request_id);
+  auto it = cancel_states_.find(request_id);
+  if (it == cancel_states_.end()) {
+    return;
+  }
+  if (it->second.active_count > 0) {
+    --it->second.active_count;
+  }
+  if (it->second.active_count == 0) {
+    cancel_states_.erase(it);
+  }
 }
 
 void RequestScheduler::MarkLatest(uint64_t request_id) {
@@ -51,7 +60,7 @@ bool RequestScheduler::IsLatest(uint64_t request_id) const {
 
 void RequestScheduler::PruneInactiveBeforeLocked(uint64_t request_id) {
   for (auto it = cancel_states_.begin(); it != cancel_states_.end();) {
-    if (it->first < request_id && !it->second.active) {
+    if (it->first < request_id && it->second.active_count == 0) {
       it = cancel_states_.erase(it);
     } else {
       ++it;

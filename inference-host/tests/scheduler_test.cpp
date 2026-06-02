@@ -70,6 +70,25 @@ TEST(RequestSchedulerTest, PreCanceledRequestUsesSharedFlagAndCompletes) {
   EXPECT_FALSE(s.IsCanceled(12));
 }
 
+TEST(RequestSchedulerTest, SameIdCancelStateLivesUntilAllTrackersComplete) {
+  host::RequestScheduler s;
+  auto first = s.TrackCancellation(20);
+  auto second = s.TrackCancellation(20);
+  EXPECT_EQ(first, second);
+
+  s.CompleteRequest(20);
+  EXPECT_FALSE(s.IsCanceled(20));
+
+  s.Cancel(20);
+  EXPECT_TRUE(first->load());
+  EXPECT_TRUE(second->load());
+  EXPECT_TRUE(s.IsCanceled(20));
+
+  s.CompleteRequest(20);
+  EXPECT_FALSE(s.IsCanceled(20));
+  EXPECT_TRUE(second->load());
+}
+
 TEST(RequestSchedulerTest, MarkLatestPrunesInactiveOlderCancelsOnly) {
   host::RequestScheduler s;
   s.Cancel(1);

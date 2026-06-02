@@ -59,3 +59,17 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
 
   std::filesystem::remove_all(root);
 }
+
+TEST(LearningStoreTest, ScoreClampsClockRollbackToFullWeight) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_clock_rollback.tsv").string();
+  std::remove(path.c_str());
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほん", "二本", 3.25, 1000);
+
+  EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1000), 3.25);
+  EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 900), 3.25);
+
+  std::remove(path.c_str());
+}

@@ -75,9 +75,12 @@ double LearningStore::Score(const std::string& reading, const std::string& surfa
     return 0.0;
   }
   const auto& rec = it->second;
-  const double days =
-      static_cast<double>(now_epoch_sec - rec.last_updated_epoch_sec) / (60.0 * 60.0 * 24.0);
-  const double decay = std::exp(-0.15 * std::max(0.0, days));
+  const double elapsed_seconds =
+      now_epoch_sec >= rec.last_updated_epoch_sec
+          ? static_cast<double>(now_epoch_sec - rec.last_updated_epoch_sec)
+          : 0.0;
+  const double days = elapsed_seconds / (60.0 * 60.0 * 24.0);
+  const double decay = std::exp(-0.15 * days);
   return rec.weight * decay;
 }
 

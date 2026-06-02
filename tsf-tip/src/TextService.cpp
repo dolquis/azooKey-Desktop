@@ -227,6 +227,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
   if (wParam >= 'A' && wParam <= 'Z') {
     *eaten = TRUE;
+  } else if (wParam == VK_OEM_MINUS) {
+    // 長音: ハイフンキーは composition 中のみ長音符「ー」として取り込む。
+    // composition が無いときは通常のハイフンとしてアプリへ通す。
+    *eaten = has_preedit ? TRUE : FALSE;
   } else if (wParam == VK_BACK) {
     *eaten = has_preedit ? TRUE : FALSE;
   } else if (wParam == VK_SPACE) {
@@ -271,6 +275,22 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidates_.clear();
       }
       preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
+      RequestPreeditUpdate(context);
+      PostQueryCandidates(preedit_kana_);
+      *eaten = TRUE;
+
+    } else if (wParam == VK_OEM_MINUS && (!preedit_kana_.empty() || romaji_.HasPending())) {
+      // 長音: composition 中のハイフンキーを長音符「ー」として preedit に取り込む。
+      // composition が無いときは本分岐に入らず、ハイフンはアプリへパススルーする。
+      if (cand_visible) {
+        candidate_window_.Hide();
+        selected_candidate_idx_ = 0;
+      }
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_.clear();
+      }
+      preedit_kana_ += romaji_.Feed('-');
       RequestPreeditUpdate(context);
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;

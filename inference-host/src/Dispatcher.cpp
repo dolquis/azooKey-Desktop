@@ -54,6 +54,28 @@ std::optional<BackendKind> ParseBackend(const std::string& backend) {
   return std::nullopt;
 }
 
+class RequestCompletionGuard {
+ public:
+  RequestCompletionGuard(RequestScheduler* scheduler, uint64_t request_id)
+      : scheduler_(scheduler), request_id_(request_id) {}
+
+  ~RequestCompletionGuard() {
+    Complete();
+  }
+
+  void Complete() {
+    if (active_) {
+      scheduler_->CompleteRequest(request_id_);
+      active_ = false;
+    }
+  }
+
+ private:
+  RequestScheduler* scheduler_;
+  uint64_t request_id_;
+  bool active_{true};
+};
+
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
@@ -194,14 +216,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     res.partial = false;
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
   }
+  auto cancel = scheduler_->TrackCancellation(req.request_id);
   scheduler_->MarkLatest(req.request_id);
-  std::atomic<bool> cancel{false};
-  if (scheduler_->IsCanceled(req.request_id)) cancel.store(true);
+  RequestCompletionGuard completion(scheduler_, req.request_id);
 
   auto candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context,
-                                              NowSec(), &cancel);
+                                              NowSec(), cancel.get());
 
-  if (scheduler_->IsCanceled(req.request_id)) {
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  completion.Complete();
+  if (canceled) {
     return std::nullopt;  // don't reply to canceled requests
   }
 

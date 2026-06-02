@@ -1,8 +1,12 @@
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -41,6 +45,59 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
+class BlockingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(
+      const std::string& kana,
+      const azookey::core::ConversionContext&) override {
+    WaitForRelease();
+    return {azookey::core::Candidate{kana, kana, 1.0,
+                                     azookey::core::CandidateSource::Heuristic,
+                                     "blocking-converter"}};
+  }
+
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana,
+      const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+  bool WaitUntilEntered(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return cv_.wait_for(lock, timeout, [this]() { return entered_; });
+  }
+
+  void Release() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      released_ = true;
+    }
+    cv_.notify_all();
+  }
+
+ private:
+  void WaitForRelease() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    entered_ = true;
+    cv_.notify_all();
+    cv_.wait(lock, [this]() { return released_; });
+  }
+
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool entered_{false};
+  bool released_{false};
+};
 }  // namespace
 
 TEST(InferenceEngineTest, QueryWithLearningBoost) {
@@ -329,5 +386,57 @@ TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   reader.join();
   EXPECT_FALSE(engine->model_loaded());
 
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
+  using namespace std::chrono_literals;
+
+  const char* lpath = "azookey_host_engine_query_load_serialized.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+
+  auto converter = std::make_unique<BlockingConverter>();
+  auto* blocking_converter = converter.get();
+  azookey::host::EngineConfig cfg;
+  azookey::host::InferenceEngine engine(std::move(converter), &store, cfg);
+
+  const std::string model_path = TempPath("azookey_query_load_serialized.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  std::vector<azookey::core::Candidate> query_result;
+  std::thread query_thread([&]() {
+    query_result = engine.QueryCandidates("にほん", "", kNowBase);
+  });
+
+  const bool query_entered = blocking_converter->WaitUntilEntered(1s);
+  EXPECT_TRUE(query_entered);
+
+  std::promise<void> load_started_promise;
+  auto load_started = load_started_promise.get_future();
+  auto load_future = std::async(std::launch::async, [&]() {
+    load_started_promise.set_value();
+    azookey::host::ModelLoadOptions options;
+    options.path = model_path;
+    return engine.LoadModelWithResult(options);
+  });
+
+  const bool load_started_ready = load_started.wait_for(1s) == std::future_status::ready;
+  EXPECT_TRUE(load_started_ready);
+  if (query_entered && load_started_ready) {
+    EXPECT_EQ(load_future.wait_for(50ms), std::future_status::timeout);
+  }
+
+  blocking_converter->Release();
+  query_thread.join();
+
+  const auto load_result = load_future.get();
+  EXPECT_TRUE(load_result.ok);
+  EXPECT_TRUE(engine.model_loaded());
+  ASSERT_FALSE(query_result.empty());
+  EXPECT_EQ(query_result.front().debug_info, "blocking-converter");
+
+  std::remove(model_path.c_str());
   std::remove(lpath);
 }

@@ -3,7 +3,9 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -38,6 +40,29 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
+class ThrowingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    throw std::runtime_error("convert failed");
+  }
+
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana,
+      const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
 }  // namespace
 
 class DispatcherTest : public ::testing::Test {
@@ -227,6 +252,30 @@ TEST_F(DispatcherTest, QueryCancelBeforeReply) {
   auto env = MakeReq(30, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q));
   auto resp = dispatcher.Dispatch(env);
   EXPECT_FALSE(resp.has_value());
+  EXPECT_FALSE(scheduler.IsCanceled(30));
+}
+
+TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
+  const char* throwing_path = "azookey_dispatcher_throwing_learning.tsv";
+  std::remove(throwing_path);
+  azookey::learning::LearningStore throwing_store(throwing_path);
+  azookey::host::InferenceEngine throwing_engine(
+      std::make_unique<ThrowingConverter>(), &throwing_store, {});
+  azookey::host::RequestScheduler throwing_scheduler;
+  azookey::host::Dispatcher throwing_dispatcher(
+      &throwing_engine, &throwing_scheduler, nullptr,
+      {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion});
+
+  ipc::QueryCandidatesRequest q;
+  q.reading = "わたし";
+  auto env = MakeReq(31, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q));
+  EXPECT_THROW((void)throwing_dispatcher.Dispatch(env), std::runtime_error);
+
+  throwing_scheduler.Cancel(31);
+  throwing_scheduler.MarkLatest(32);
+  EXPECT_FALSE(throwing_scheduler.IsCanceled(31));
+
+  std::remove(throwing_path);
 }
 
 TEST_F(DispatcherTest, CancelMessageNoReply) {
@@ -235,6 +284,8 @@ TEST_F(DispatcherTest, CancelMessageNoReply) {
   auto env = MakeReq(40, ipc::MessageType::Cancel, ipc::BuildCancel(c));
   auto resp = dispatcher.Dispatch(env);
   EXPECT_FALSE(resp.has_value());
+  scheduler.MarkLatest(1000);
+  EXPECT_FALSE(scheduler.IsCanceled(999));
 }
 
 TEST_F(DispatcherTest, CommitObservation) {

@@ -105,8 +105,10 @@ gh pr create \
 - `area:*` … 技術領域（例 `area:tsf-tip` `area:ipc` `area:learning` `area:inference-host`
   `area:converter-core`）。
 - `agent:*` … 担当エージェント（`agent:claude-design` `agent:claude-review`
-  `agent:codex-impl` `agent:codex-pr-review`）。
+  `agent:codex-impl` `agent:codex-pr-review`）。ただし `gate:human-required` を付与した
+  人間専任タスク（実機検証など）は AI 担当が存在しないため `agent:*` を免除する。
 - `gate:human-required` … 完了前に人間の検証が必須な作業（実機確認・署名値設定など）。
+  本ラベルを付与した課題は `agent:*` を省略してよい（上記 `agent:*` 参照）。
 - `Migrated` … GitHub から移行した課題（対応する GitHub Issue リンクを必須付与）。
 
 ### 状態ライフサイクル
@@ -134,8 +136,9 @@ gh pr create \
 ### 週次 control tower audit
 
 Linear の定期監査課題（`[Recurring] Linear control tower audit`）で次を点検する:
-Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落、`Migrated` の GitHub リンク欠落、
-人間検証作業の `gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落。
+Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-required` の人間専任
+タスクは `agent:*` 免除）、`Migrated` の GitHub リンク欠落、人間検証作業の
+`gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落。
 点検は Linear のルーティング衛生のみを対象とし、仕様・設計の正典は引き続き repo docs に置く。
 
 ## README 編集ルール

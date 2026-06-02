@@ -30,6 +30,13 @@ TEST(RomajiKanaConverterTest, FeedAndFlush) {
 
   converter.Reset();
   EXPECT_EQ(FeedAll(converter, "konn"), "こん");
+
+  // 長音: '-' は長音符「ー」に変換される。
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "ra-men"), "らーめん");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "ko-hi-"), "こーひー");
 }
 
 TEST(RomajiKanaConverterTest, Preview) {
@@ -41,6 +48,7 @@ TEST(RomajiKanaConverterTest, Preview) {
   EXPECT_EQ(RomajiKanaConverter::Preview("konn"), "こん");
   EXPECT_EQ(RomajiKanaConverter::Preview("konnichiha"), "こんにちは");
   EXPECT_EQ(RomajiKanaConverter::Preview("gakkou"), "がっこう");
+  EXPECT_EQ(RomajiKanaConverter::Preview("ko-"), "こー");
 }
 
 TEST(RomajiKanaConverterTest, ConvertForCommit) {
@@ -48,4 +56,5 @@ TEST(RomajiKanaConverterTest, ConvertForCommit) {
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kan"), "かん");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("na"), "な");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("konn"), "こん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("me-ru"), "めーる");
 }

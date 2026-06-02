@@ -79,11 +79,8 @@
     },
     "windows-mcp": {
       "type": "stdio",
-      "command": "powershell.exe",
-      "args": [
-        "-Command",
-        "uvx windows-mcp serve"
-      ]
+      "command": "uvx",
+      "args": ["windows-mcp", "serve"]
     }
   }
 }
@@ -125,12 +122,12 @@
       }
     }
   },
-  "enabledPlugins": [
-    "clangd-lsp@claude-plugins-official",
-    "github@claude-plugins-official",
-    "commit-commands@claude-plugins-official",
-    "pr-review-toolkit@claude-plugins-official"
-  ]
+  "enabledPlugins": {
+    "clangd-lsp@claude-plugins-official": true,
+    "github@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "pr-review-toolkit@claude-plugins-official": true
+  }
 }
 ```
 

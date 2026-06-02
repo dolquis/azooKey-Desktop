@@ -49,6 +49,13 @@ bool IsVowelOrY(char c) {
 
 std::string RomajiKanaConverter::Feed(char ascii) {
   const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ascii)));
+  // 長音: '-' キーは長音符「ー」に変換する（MS-IME 標準のローマ字挙動）。
+  // 直前の未確定ローマ字があれば先に確定してから長音符を付与する。
+  if (ascii == '-') {
+    std::string out = ConvertPending(true);
+    out += "ー";
+    return out;
+  }
   if (!std::isalpha(static_cast<unsigned char>(lower))) {
     std::string out = ConvertPending(true);
     out.push_back(ascii);

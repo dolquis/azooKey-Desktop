@@ -227,6 +227,7 @@ TEST_F(DispatcherTest, QueryCancelBeforeReply) {
   auto env = MakeReq(30, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q));
   auto resp = dispatcher.Dispatch(env);
   EXPECT_FALSE(resp.has_value());
+  EXPECT_FALSE(scheduler.IsCanceled(30));
 }
 
 TEST_F(DispatcherTest, CancelMessageNoReply) {
@@ -235,6 +236,8 @@ TEST_F(DispatcherTest, CancelMessageNoReply) {
   auto env = MakeReq(40, ipc::MessageType::Cancel, ipc::BuildCancel(c));
   auto resp = dispatcher.Dispatch(env);
   EXPECT_FALSE(resp.has_value());
+  scheduler.MarkLatest(1000);
+  EXPECT_FALSE(scheduler.IsCanceled(999));
 }
 
 TEST_F(DispatcherTest, CommitObservation) {

@@ -195,13 +195,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
   }
   scheduler_->MarkLatest(req.request_id);
-  std::atomic<bool> cancel{false};
-  if (scheduler_->IsCanceled(req.request_id)) cancel.store(true);
+  auto cancel = scheduler_->TrackCancellation(req.request_id);
 
   auto candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context,
-                                              NowSec(), &cancel);
+                                              NowSec(), cancel.get());
 
-  if (scheduler_->IsCanceled(req.request_id)) {
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  scheduler_->CompleteRequest(req.request_id);
+  if (canceled) {
     return std::nullopt;  // don't reply to canceled requests
   }
 

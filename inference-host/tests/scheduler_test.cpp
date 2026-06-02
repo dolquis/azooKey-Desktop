@@ -44,6 +44,48 @@ TEST(RequestSchedulerTest, CancelMultiple) {
   EXPECT_TRUE(s.IsCanceled(1));
 }
 
+TEST(RequestSchedulerTest, TrackCancellationProvidesLiveFlagAndCompleteReclaims) {
+  host::RequestScheduler s;
+  auto flag = s.TrackCancellation(10);
+  EXPECT_FALSE(flag->load());
+  EXPECT_FALSE(s.IsCanceled(10));
+
+  s.Cancel(10);
+  EXPECT_TRUE(flag->load());
+  EXPECT_TRUE(s.IsCanceled(10));
+
+  s.CompleteRequest(10);
+  EXPECT_FALSE(s.IsCanceled(10));
+  EXPECT_TRUE(flag->load());
+}
+
+TEST(RequestSchedulerTest, PreCanceledRequestUsesSharedFlagAndCompletes) {
+  host::RequestScheduler s;
+  s.Cancel(12);
+  auto flag = s.TrackCancellation(12);
+  EXPECT_TRUE(flag->load());
+  EXPECT_TRUE(s.IsCanceled(12));
+
+  s.CompleteRequest(12);
+  EXPECT_FALSE(s.IsCanceled(12));
+}
+
+TEST(RequestSchedulerTest, MarkLatestPrunesInactiveOlderCancelsOnly) {
+  host::RequestScheduler s;
+  s.Cancel(1);
+  s.Cancel(5);
+  auto active = s.TrackCancellation(6);
+
+  s.MarkLatest(10);
+  EXPECT_FALSE(s.IsCanceled(1));
+  EXPECT_FALSE(s.IsCanceled(5));
+  EXPECT_FALSE(active->load());
+
+  s.Cancel(6);
+  EXPECT_TRUE(active->load());
+  EXPECT_TRUE(s.IsCanceled(6));
+}
+
 TEST(RequestSchedulerTest, LatestSingleId) {
   host::RequestScheduler s;
   s.MarkLatest(7);

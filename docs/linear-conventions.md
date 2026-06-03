@@ -53,14 +53,14 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 
 ---
 
-## 4. ラベル分類体系（multi-select area を除きコロン式）
+## 4. ラベル分類体系（コロン式に統一）
 
-ラベル prefix は原則コロン式に統一する。ただし複数付与が必要な技術領域は、Linear label group の排他制約を避けるため、移行後 target として `area-` を使う（2026-06-03 決定）。Phase 4 完了までは各 repo の Delta / `AGENTS.md` が定める active label を優先する。
+ラベル prefix はコロン式に統一する。技術領域 `area:` も複数付与するが、Linear 上では label group 化せずフラットなラベルとして運用するため、コロン式でも複数選択できる（Linear のラベルグループ排他制約は明示的なグループにのみ働き、`area:foo` のような prefix 付きフラットラベルには働かない。2026-06-03 決定、後日コロン式へ統一）。Phase 4 完了までは各 repo の Delta / `AGENTS.md` が定める active label を優先する。
 
 | プレフィックス | 用途 | 値 |
 | -- | -- | -- |
 | `repo:` | 対象 GitHub リポジトリ（実 repo 名をそのまま反映） | 各 1 つ必須（Phase 4 完了までは旧 repo ラベルも有効） |
-| `area-` | 技術領域 | 1 つ以上（移行後 target。Phase 4 完了までは各 repo の active `area:` / `area_*` ラベルも有効） |
+| `area:` | 技術領域 | 1 つ以上（複数付与可。Linear ではフラットなラベルとして運用。旧 `area_*` は Phase 4 で付け替え） |
 | `agent:` | 次の AI 役割（§2） | 原則 1 つ（人間専任タスクを除く） |
 | `type:` | Issue の役割 | `tracking` / `implementation` / `review` |
 | `gate:` | 人間ゲート（横断フラグ） | `human-required` |
@@ -68,10 +68,10 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 | `Migrated` | 由来フラグ（他サービス起票） | 任意 |
 
 ルール:
-- `area-` は複数選択可能にするため Linear label group にしない（例 `area-converter-core`）。`repo:` は実 GitHub repo 名をそのまま使い区切りを正規化しない。
+- `area:` は複数選択可能にするため Linear label group にせずフラットなラベルとして運用する（例 `area:converter-core`）。`repo:` は実 GitHub repo 名をそのまま使い区切りを正規化しない。
 - **人間ゲートは `type:` ではなく `gate:human-required`（横断フラグ）で表す。** 例: 人間確認が必要なレビュー Issue は `type:review` + `gate:human-required`。旧 `type:human-gate` は本規約で廃止。移行期は旧ラベルが残る Issue があるため Phase 4 で `gate:human-required` へ付け替える（読むときは両対応）。
 - **変更カテゴリは `kind:*` を正典とする**（`feature` / `improvement` / `bug` / `docs`）。旧 `Feature` / `Improvement` / `Bug` / `enhancement` / `documentation` は Phase 4 まで移行互換として扱い、Phase 4 で物理退役（ラベル削除は設定画面で手動）する。`Migrated` は由来フラグとして存続。
-- **Phase 4 完了までの移行互換**: 旧 `repo_*` / 旧 `area:` / `area_*` / 旧カテゴリラベルのみが付いた Issue も、Ready / Missing Metadata / 週次監査では欠落扱いしない。新規作成・更新時は repo の Delta または既存 `AGENTS.md` の現行ラベルを優先し、Phase 4 後に `repo:` / `area-` / `kind:*` へ収束する。
+- **Phase 4 完了までの移行互換**: 旧 `repo_*` / 旧 `area_*` / 旧カテゴリラベルのみが付いた Issue も、Ready / Missing Metadata / 週次監査では欠落扱いしない。新規作成・更新時は repo の Delta または既存 `AGENTS.md` の現行ラベルを優先し、Phase 4 後に `repo:` / `area:` / `kind:*` へ収束する。
 
 ---
 
@@ -125,7 +125,7 @@ Tracking Issue または Project description 上部には、`## Next AI Tasks` �
 ### Ready
 - Project が正しく設定されている。
 - `repo:*` ラベルがある（Phase 4 完了までは repo 固有の旧 repo ラベルも有効）。
-- 関連する `area-*` が 1 つ以上ある（Phase 4 完了までは repo 固有の旧 `area:` / `area_*` ラベルも有効）。
+- 関連する `area:*` が 1 つ以上ある（Phase 4 完了までは repo 固有の旧 `area_*` ラベルも有効）。
 - 次の AI 役割を示す `agent:*` がある。ただし `gate:human-required` または旧 `type:human-gate` の人間専任タスクは `agent:*` を省略してよい。
 - 可能なら GitHub Issue / PR リンクが添付されている。
 - Goal と done criteria が明確。
@@ -184,11 +184,11 @@ GitHub docs remain canonical.
 ## 11. Recurring Control Tower Audit（週次・統一チェックリスト）
 
 各プロジェクトに `[Recurring] Linear control tower audit — <PROJECT>` を 1 件持つ
-（`type:review` + `agent:claude-review` + `repo:*`。この recurring audit Issue 自体は `area-*` 免除）。チェック項目:
+（`type:review` + `agent:claude-review` + `repo:*`。この recurring audit Issue 自体は `area:*` 免除）。チェック項目:
 
 - [ ] Project 未設定の Issue
 - [ ] `repo:` ラベル欠落（Phase 4 完了までは repo 固有の旧 repo ラベルも有効）
-- [ ] `area-*` ラベル欠落（Phase 4 完了までは repo 固有の旧 `area:` / `area_*` ラベルも有効。recurring audit Issue 自体を除く）
+- [ ] `area:*` ラベル欠落（Phase 4 完了までは repo 固有の旧 `area_*` ラベルも有効。recurring audit Issue 自体を除く）
 - [ ] `agent:` ラベル欠落（`gate:human-required` または旧 `type:human-gate` の人間専任タスクを除く）
 - [ ] Migrated なのに GitHub リンク欠落
 - [ ] 人間確認が要るのに `gate:human-required` 欠落
@@ -246,7 +246,7 @@ Next checkpoint: <YYYY-MM-DD>。<その日に判定する内容>
 - REPO: <例: dolquis/azooKey-Desktop>
 - REPO_LABEL: <例: repo:azooKey-Desktop>
 - CANONICAL_DOCS: <例: AGENTS.md, plans/windows-port-roadmap.md, docs/*-spec.md>
-- AREA_LABELS: <例: area-tsf-tip, area-inference-host, area-ipc, area-learning, area-converter-core>
+- AREA_LABELS: <例: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core>
 - STAGE_MAP: <例: MVP-0 基盤 / MVP-1 TIP / MVP-2 Host・IPC / ...>
 ```
 
@@ -261,8 +261,7 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - REPO: dolquis/azooKey-Desktop
 - REPO_LABEL: repo:azooKey-Desktop
 - CANONICAL_DOCS: AGENTS.md, README.md, plans/windows-port-roadmap.md, docs/*-spec.md
-- AREA_LABELS_ACTIVE_BEFORE_PHASE_4: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core
-- AREA_LABELS_TARGET_AFTER_PHASE_4: area-tsf-tip, area-inference-host, area-ipc, area-learning, area-converter-core
+- AREA_LABELS: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜4）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
 - DELTA_DOCS（この repo 固有で別途維持）: GitHub↔Linear Mapping, Decision Log, Agent Prompt Cards

@@ -172,7 +172,7 @@ GitHub docs remain canonical.
 各プロジェクトで以下のフィルタビューを用意する（Project でスコープ）:
 
 - **Ready for Claude Design**: `agent:claude-design` + Backlog/Todo
-- **Ready for Codex Implementation**: `agent:codex-impl` + Backlog/Todo + 非ブロック
+- **Ready for Codex Implementation**: `agent:codex-impl` + Todo + 非ブロック
 - **Ready for Review**: (`agent:claude-review` か `agent:codex-pr-review`) + In Review
 - **Needs Human Verification**: `gate:human-required` または旧 `type:human-gate`
 - **Missing Metadata**: repo / area / agent ラベル欠落、または Migrated Issue の GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` / 旧 `type:human-gate` 人間専任タスクの `agent:*` 免除を考慮）

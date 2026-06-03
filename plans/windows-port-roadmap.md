@@ -1087,7 +1087,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否
   - malformed/fuzz テスト追加（ランダムバイト列でクラッシュしない 等）
   - Named Pipe: Release で SID 取得失敗時 fail-closed、接続インスタンス
-    上限、最大フレームサイズ見直し、Handshake トークン、client cleanup
+    上限、最大フレームサイズ見直し、Handshake トークン、client cleanup、
+    overlapped accept と `Stop()` 時の pending accept cancel
 - **受け入れ条件**:
   - 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
   - malformed JSON・ランダムバイト列でクラッシュしない
@@ -1095,6 +1096,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - サロゲートペアを正しく結合し、単独サロゲートを拒否する
   - Release ビルドで SID 取得失敗時に Host 起動が失敗する
   - 複数接続・切断テストが追加され緑
+  - pending accept 中の `Stop()` が無期限に待たない
   - 切断済み client が解放される
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §6
 

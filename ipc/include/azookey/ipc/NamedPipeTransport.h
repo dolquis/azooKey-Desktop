@@ -22,8 +22,8 @@ namespace azookey::ipc {
 //   - Each message is one Envelope serialized via ipc::Serialize
 //   - Framed with EncodeLengthPrefixed (4-byte little-endian length prefix)
 //   - Pipe is PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE on Windows.
-//     Server instances are created with PIPE_NOWAIT for accept polling, then
-//     connected server handles are switched to PIPE_WAIT when supported.
+//     Server instances use FILE_FLAG_OVERLAPPED for cancelable accept while
+//     preserving blocking wait mode for connected message I/O.
 //
 // Security (Windows):
 //   - DACL is restricted to the current user's SID (RW only)

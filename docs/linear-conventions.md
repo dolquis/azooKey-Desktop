@@ -37,7 +37,7 @@ Dev チーム配下の全プロジェクトで共通の、Linear 運用ルール
 | `agent:codex-impl` | 実装担当 |
 | `agent:codex-pr-review` | PR 差分レビュー担当 |
 
-Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。ただし `gate:human-required` の人間専任タスクは `agent:*` を省略してよい。
+Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。ただし `gate:human-required` または旧 `type:human-gate` の人間専任タスクは `agent:*` を省略してよい。
 
 ---
 
@@ -59,8 +59,8 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 
 | プレフィックス | 用途 | 値 |
 | -- | -- | -- |
-| `repo:` | 対象 GitHub リポジトリ（実 repo 名をそのまま反映） | 各 1 つ必須 |
-| `area:` | 技術領域 | 1 つ以上 |
+| `repo:` | 対象 GitHub リポジトリ（実 repo 名をそのまま反映） | 各 1 つ必須（Phase 4 完了までは旧 repo ラベルも有効） |
+| `area:` | 技術領域 | 1 つ以上（Phase 4 完了までは旧 area ラベルも有効） |
 | `agent:` | 次の AI 役割（§2） | 原則 1 つ |
 | `type:` | Issue の役割 | `tracking` / `implementation` / `review` |
 | `gate:` | 人間ゲート（横断フラグ） | `human-required` |
@@ -126,7 +126,7 @@ Tracking Issue または Project description 上部には、見出しを **Next 
 - Project が正しく設定されている。
 - `repo:*` ラベルがある（Phase 4 完了までは repo 固有の旧 repo ラベルも有効）。
 - 関連する `area:*` が 1 つ以上ある（Phase 4 完了までは repo 固有の旧 area ラベルも有効）。
-- 次の AI 役割を示す `agent:*` がある。ただし `gate:human-required` の人間専任タスクは `agent:*` を省略してよい。
+- 次の AI 役割を示す `agent:*` がある。ただし `gate:human-required` または旧 `type:human-gate` の人間専任タスクは `agent:*` を省略してよい。
 - 可能なら GitHub Issue / PR リンクが添付されている。
 - Goal と done criteria が明確。
 - 実行順序が重要な場合、ブロッカーが relation で表現されている。
@@ -137,7 +137,7 @@ Tracking Issue または Project description 上部には、見出しを **Next 
 - GitHub 正典に対するドキュメント影響を確認済み。
 - 可能なら関連 PR / GitHub Issue がリンクされている。
 - 必要な follow-up Issue が作成/リンクされている。
-- `gate:human-required` の Issue は人間確認が取れている。
+- `gate:human-required` または旧 `type:human-gate` の Issue は人間確認が取れている。
 - repo 固有 Delta / `AGENTS.md` / `WORKFLOW.md` が追加ゲート（PR マージ、検証メモなど）を要求する場合、それを満たしている。
 
 Done は「Linear 上で運用的に完了」を意味し、GitHub docs のリリース基準を置き換えない。
@@ -175,7 +175,7 @@ GitHub docs remain canonical.
 - **Ready for Codex Implementation**: `agent:codex-impl` + Backlog/Todo + 非ブロック
 - **Ready for Review**: (`agent:claude-review` か `agent:codex-pr-review`) + In Review
 - **Needs Human Verification**: `gate:human-required`
-- **Missing Metadata**: repo / area / agent ラベルまたは GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` 人間専任タスクの `agent:*` 免除を考慮）
+- **Missing Metadata**: repo / area / agent ラベルまたは GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` / 旧 `type:human-gate` 人間専任タスクの `agent:*` 免除を考慮）
 
 ビューはレーダー画面であって仕様ではない。曖昧なら GitHub docs と連携 GitHub Issue を見てから動く。
 
@@ -189,7 +189,7 @@ GitHub docs remain canonical.
 - [ ] Project 未設定の Issue
 - [ ] `repo:` ラベル欠落（Phase 4 完了までは repo 固有の旧 repo ラベルも有効）
 - [ ] `area:` ラベル欠落（Phase 4 完了までは repo 固有の旧 area ラベルも有効。recurring audit Issue 自体を除く）
-- [ ] `agent:` ラベル欠落（`gate:human-required` の人間専任タスクを除く）
+- [ ] `agent:` ラベル欠落（`gate:human-required` または旧 `type:human-gate` の人間専任タスクを除く）
 - [ ] Migrated なのに GitHub リンク欠落
 - [ ] 人間確認が要るのに `gate:human-required` 欠落
 - [ ] Tracking Issue で子が未リンク

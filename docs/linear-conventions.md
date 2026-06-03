@@ -184,11 +184,11 @@ GitHub docs remain canonical.
 ## 11. Recurring Control Tower Audit（週次・統一チェックリスト）
 
 各プロジェクトに `[Recurring] Linear control tower audit — <PROJECT>` を 1 件持つ
-（`type:review` + `agent:claude-review` + `repo:*`）。チェック項目:
+（`type:review` + `agent:claude-review` + `repo:*`。この recurring audit Issue 自体は `area:*` 免除）。チェック項目:
 
 - [ ] Project 未設定の Issue
 - [ ] `repo:` ラベル欠落（Phase 4 完了までは repo 固有の旧 repo ラベルも有効）
-- [ ] `area:` ラベル欠落（Phase 4 完了までは repo 固有の旧 area ラベルも有効）
+- [ ] `area:` ラベル欠落（Phase 4 完了までは repo 固有の旧 area ラベルも有効。recurring audit Issue 自体を除く）
 - [ ] `agent:` ラベル欠落（`gate:human-required` の人間専任タスクを除く）
 - [ ] Migrated なのに GitHub リンク欠落
 - [ ] 人間確認が要るのに `gate:human-required` 欠落

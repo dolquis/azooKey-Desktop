@@ -1,5 +1,6 @@
 #include "azookey/host/InferenceEngine.h"
 
+#include <chrono>
 #include <iostream>
 #include <utility>
 
@@ -25,11 +26,23 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       active_converter_(fallback_converter_.get()),
       store_(store),
       reranker_(store),
-      config_(std::move(config)) {}
+      config_(std::move(config)) {
+  if (store_) {
+    learning_flush_thread_ = std::thread(&InferenceEngine::LearningFlushWorker, this);
+  }
+}
 
 InferenceEngine::~InferenceEngine() {
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    learning_flush_stop_ = true;
+  }
+  learning_flush_cv_.notify_all();
+  if (learning_flush_thread_.joinable()) {
+    learning_flush_thread_.join();
+  }
   std::lock_guard<std::mutex> lock(state_mutex_);
-  (void)FlushLearningStoreLocked(std::nullopt);
+  (void)FlushLearningStoreLocked();
 }
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
@@ -52,7 +65,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult() {
 
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  (void)FlushLearningStoreLocked(std::nullopt);
+  (void)FlushLearningStoreLocked();
   ModelLoadResult result;
   EngineConfig next_config = config_;
   next_config.model_path = options.path;
@@ -216,7 +229,7 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
 
 bool InferenceEngine::FlushLearningStore() {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return FlushLearningStoreLocked(std::nullopt);
+  return FlushLearningStoreLocked();
 }
 
 void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
@@ -228,10 +241,12 @@ void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
   ++unsaved_observations_;
   if (!first_unsaved_observation_epoch_sec_.has_value()) {
     first_unsaved_observation_epoch_sec_ = now_epoch_sec;
+    first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
   }
+  learning_flush_cv_.notify_all();
 
   if (ShouldFlushLearningStoreLocked(now_epoch_sec)) {
-    (void)FlushLearningStoreLocked(now_epoch_sec);
+    (void)FlushLearningStoreLocked();
   }
 }
 
@@ -252,21 +267,24 @@ bool InferenceEngine::ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) con
              config_.learning_flush_interval_sec;
 }
 
-bool InferenceEngine::FlushLearningStoreLocked(std::optional<uint64_t>) {
+bool InferenceEngine::FlushLearningStoreLocked() {
   if (!store_) {
     return true;
   }
   if (!store_->dirty()) {
     unsaved_observations_ = 0;
     first_unsaved_observation_epoch_sec_.reset();
+    first_unsaved_observation_steady_.reset();
     return true;
   }
   if (!store_->Save()) {
     RecordLearningSaveFailureLocked();
+    first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
     return false;
   }
   unsaved_observations_ = 0;
   first_unsaved_observation_epoch_sec_.reset();
+  first_unsaved_observation_steady_.reset();
   return true;
 }
 
@@ -275,4 +293,31 @@ void InferenceEngine::RecordLearningSaveFailureLocked() {
   std::cerr << "error: " << kLearningSaveError << std::endl;
 }
 
+void InferenceEngine::LearningFlushWorker() {
+  std::unique_lock<std::mutex> lock(state_mutex_);
+  while (!learning_flush_stop_) {
+    if (!store_ || !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
+        !first_unsaved_observation_steady_.has_value()) {
+      learning_flush_cv_.wait(lock, [this]() {
+        return learning_flush_stop_ ||
+               (store_ && store_->dirty() && config_.learning_flush_interval_sec > 0 &&
+                first_unsaved_observation_steady_.has_value());
+      });
+      continue;
+    }
+
+    const auto deadline = *first_unsaved_observation_steady_ +
+                          std::chrono::seconds(config_.learning_flush_interval_sec);
+    const bool changed = learning_flush_cv_.wait_until(lock, deadline, [this]() {
+      return learning_flush_stop_ || !store_ || !store_->dirty() ||
+             config_.learning_flush_interval_sec == 0 ||
+             !first_unsaved_observation_steady_.has_value();
+    });
+    if (changed) {
+      continue;
+    }
+
+    (void)FlushLearningStoreLocked();
+  }
+}
 }  // namespace azookey::host

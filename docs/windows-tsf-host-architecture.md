@@ -50,7 +50,7 @@
   既存ファイル破損を避ける。
 - 確定・訂正ごとの観測はメモリ上で即時反映し、TSV への永続化は
   `learning_flush_every_n`（既定 8 件）または `learning_flush_interval_sec`
-  （既定 5 秒）でデバウンスする。Host 破棄時と `LoadModel` 境界では
+  （既定 5 秒）の background timer でデバウンスする。Host 破棄時と `LoadModel` 境界では
   `FlushLearningStore()` で明示 flush する。
 - `Save()` 失敗時は Host stderr に error を出し、dirty 状態を維持して
   次回 observation または明示 flush で再試行する。

@@ -38,7 +38,16 @@ std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
 std::string TempPath(const char* name) {
   return (std::filesystem::temp_directory_path() / name).string();
 }
-
+bool WaitForFileExists(const std::string& path, std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (std::filesystem::exists(path)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  return std::filesystem::exists(path);
+}
 void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   std::ofstream out(path, std::ios::binary);
   out.write("GGUF", 4);
@@ -175,6 +184,30 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   engine->CommitObservation("reading", "surface", kNowBase + 15);
   EXPECT_TRUE(std::filesystem::exists(path));
   EXPECT_FALSE(store.dirty());
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObservation) {
+  const std::string path = TempPath("azookey_host_engine_learning_idle_interval.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("reading", "surface", kNowBase + 10);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(WaitForFileExists(path, std::chrono::milliseconds(2500)));
+
+  azookey::learning::LearningStore loaded(path);
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 10), 0.0);
 
   engine.reset();
   std::remove(path.c_str());

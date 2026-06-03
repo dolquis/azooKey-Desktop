@@ -1,12 +1,15 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "azookey/core/IConverter.h"
@@ -92,8 +95,9 @@ class InferenceEngine {
  private:
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
-  bool FlushLearningStoreLocked(std::optional<uint64_t> now_epoch_sec);
+  bool FlushLearningStoreLocked();
   void RecordLearningSaveFailureLocked();
+  void LearningFlushWorker();
 
   std::unique_ptr<core::IConverter> fallback_converter_;
   std::unique_ptr<core::IConverter> model_converter_;
@@ -107,6 +111,10 @@ class InferenceEngine {
   std::optional<std::string> last_error_;
   size_t unsaved_observations_{0};
   std::optional<uint64_t> first_unsaved_observation_epoch_sec_;
+  std::optional<std::chrono::steady_clock::time_point> first_unsaved_observation_steady_;
+  std::condition_variable learning_flush_cv_;
+  std::thread learning_flush_thread_;
+  bool learning_flush_stop_{false};
 };
 
 }  // namespace azookey::host

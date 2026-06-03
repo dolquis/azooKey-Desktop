@@ -61,7 +61,7 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 | -- | -- | -- |
 | `repo:` | 対象 GitHub リポジトリ（実 repo 名をそのまま反映） | 各 1 つ必須（Phase 4 完了までは旧 repo ラベルも有効） |
 | `area:` | 技術領域 | 1 つ以上（Phase 4 完了までは旧 area ラベルも有効） |
-| `agent:` | 次の AI 役割（§2） | 原則 1 つ |
+| `agent:` | 次の AI 役割（§2） | 原則 1 つ（人間専任タスクを除く） |
 | `type:` | Issue の役割 | `tracking` / `implementation` / `review` |
 | `gate:` | 人間ゲート（横断フラグ） | `human-required` |
 | `kind:` | 変更カテゴリ | `feature` / `improvement` / `bug` / `docs` |

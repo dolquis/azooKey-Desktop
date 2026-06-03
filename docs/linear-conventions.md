@@ -101,7 +101,7 @@ Issue タイプ（`type:`）:
 - `implementation` — 1 PR で完了可能な実装・修正・テスト追加。
 - `review` — 設計レビュー・PR レビュー・整合性確認。
 
-Tracking Issue または Project description 上部には、見出しを **Next AI Tasks:** として最大 3 件を書く。
+Tracking Issue または Project description 上部には、`## Next AI Tasks` 見出しで最大 3 件を書く（Project description ではこの見出しを含む §12 の 5 H2 形式に従う）。
 
 ---
 

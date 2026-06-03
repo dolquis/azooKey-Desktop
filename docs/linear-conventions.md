@@ -101,7 +101,7 @@ Issue タイプ（`type:`）:
 - `implementation` — 1 PR で完了可能な実装・修正・テスト追加。
 - `review` — 設計レビュー・PR レビュー・整合性確認。
 
-Tracking Issue または Project description 上部には、見出しを **Next AI Tasks:** として最大 3 件を書く。
+Tracking Issue または Project description 上部には、`## Next AI Tasks` 見出しで最大 3 件を書く（Project description ではこの見出しを含む §12 の 5 H2 形式に従う）。
 
 ---
 
@@ -202,7 +202,7 @@ Rule: Linear のルーティングのみを点検する。GitHub docs が正典�
 
 ## 12. Project description テンプレート
 
-各プロジェクト description 冒頭は次の固定形にする:
+各プロジェクト description は次の 5 つの独立した H2 セクションで構成する（順序もこの通り）:
 
 ```md
 ## Current control policy
@@ -211,20 +211,26 @@ Lead: <name>
 Current focus: <一文>
 Next checkpoint: <YYYY-MM-DD>。<その日に判定する内容>
 
-Next AI Tasks:
+## Next AI Tasks
+
 1. <DEV-xx> <内容>
 2. <DEV-xx> <内容>
 3. <DEV-xx> <内容>   （最大3件）
 
-Human Gate:
+## Human Gate
+
 * <DEV-xx> <内容> は人間確認必須。
 
----
+## Canonical docs
+
 正典: <REPO>/docs/linear-conventions.md, <REPO>/docs/<WORKFLOW or ROADMAP>.md
-Stage map: <ステージ定義>
+
+## Stage map
+
+<ステージ定義>
 ```
 
-見出し名は上記に統一する（`Next AI Task` 等の表記揺れを使わない）。
+見出しは上記 5 つ（`## Current control policy` / `## Next AI Tasks` / `## Human Gate` / `## Canonical docs` / `## Stage map`）に統一する。単一ブロック化したり `Next AI Task` 等へ表記を揺らさない。
 
 ### マイルストーン命名
 - 1 プロジェクト内では 1 つのトークン体系に統一する（`Stage N` / `P N` / `MVP-N` のいずれか）。

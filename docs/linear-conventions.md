@@ -174,8 +174,8 @@ GitHub docs remain canonical.
 - **Ready for Claude Design**: `agent:claude-design` + Backlog/Todo
 - **Ready for Codex Implementation**: `agent:codex-impl` + Backlog/Todo + 非ブロック
 - **Ready for Review**: (`agent:claude-review` か `agent:codex-pr-review`) + In Review
-- **Needs Human Verification**: `gate:human-required`
-- **Missing Metadata**: repo / area / agent ラベルまたは GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` / 旧 `type:human-gate` 人間専任タスクの `agent:*` 免除を考慮）
+- **Needs Human Verification**: `gate:human-required` または旧 `type:human-gate`
+- **Missing Metadata**: repo / area / agent ラベル欠落、または Migrated Issue の GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` / 旧 `type:human-gate` 人間専任タスクの `agent:*` 免除を考慮）
 
 ビューはレーダー画面であって仕様ではない。曖昧なら GitHub docs と連携 GitHub Issue を見てから動く。
 
@@ -257,9 +257,5 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - CANONICAL_DOCS: AGENTS.md, README.md, plans/windows-port-roadmap.md, docs/*-spec.md
 - AREA_LABELS: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Done（レビュー合格 + マージ + 検証メモ記載後）
-- STAGE_MAP:
-  - MVP-0 ビルド・テスト基盤安定化
-  - MVP-1 TSF TIP 基本入力
-  - MVP-2 Inference Host / IPC 安定化
-  - 以降: 残ハードニング + 実機 Win11 ゲート
+- STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜4）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
 - DELTA_DOCS（この repo 固有で別途維持）: GitHub↔Linear Mapping, Decision Log, Agent Prompt Cards

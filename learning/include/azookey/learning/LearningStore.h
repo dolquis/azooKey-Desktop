@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -18,6 +19,8 @@ class LearningStore {
   bool Load();
   bool Save() const;
   void Reset();
+  bool dirty() const;
+  size_t size() const;
 
   void Observe(const std::string& reading, const std::string& surface, double alpha, uint64_t now_epoch_sec);
   void ObserveCorrection(const std::string& reading,
@@ -25,6 +28,7 @@ class LearningStore {
                          const std::string& selected_surface,
                          double alpha,
                          uint64_t now_epoch_sec);
+  void Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec);
   double Score(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec) const;
 
  private:
@@ -32,6 +36,7 @@ class LearningStore {
 
   std::string path_;
   std::unordered_map<std::string, LearningRecord> table_;
+  mutable bool dirty_{false};
 };
 
 }  // namespace azookey::learning

@@ -1,10 +1,16 @@
 #include "azookey/host/InferenceEngine.h"
 
+#include <chrono>
+#include <iostream>
+#include <utility>
+
 #include "azookey/host/ZenzaiModelConverter.h"
 
 namespace azookey::host {
 
 namespace {
+constexpr const char* kLearningSaveError = "failed to save learning store";
+
 core::ConversionContext BuildContext(const std::string& kana, const std::string& context) {
   core::ConversionContext conversion_context;
   conversion_context.preceding_text = context;
@@ -20,7 +26,24 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       active_converter_(fallback_converter_.get()),
       store_(store),
       reranker_(store),
-      config_(std::move(config)) {}
+      config_(std::move(config)) {
+  if (store_) {
+    learning_flush_thread_ = std::thread(&InferenceEngine::LearningFlushWorker, this);
+  }
+}
+
+InferenceEngine::~InferenceEngine() {
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    learning_flush_stop_ = true;
+  }
+  learning_flush_cv_.notify_all();
+  if (learning_flush_thread_.joinable()) {
+    learning_flush_thread_.join();
+  }
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  (void)FlushLearningStoreLocked();
+}
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
@@ -42,6 +65,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult() {
 
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  (void)FlushLearningStoreLocked();
   ModelLoadResult result;
   EngineConfig next_config = config_;
   next_config.model_path = options.path;
@@ -180,7 +204,7 @@ void InferenceEngine::CommitObservation(const std::string& reading, const std::s
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (store_) {
     store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
-    store_->Save();
+    NoteLearningMutationLocked(now_epoch_sec);
   }
   active_converter_->Commit(core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
                             core::ConversionContext{});
@@ -194,7 +218,7 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (store_) {
     store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha, now_epoch_sec);
-    store_->Save();
+    NoteLearningMutationLocked(now_epoch_sec);
   }
 
   core::ConversionContext context;
@@ -203,4 +227,97 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
                             context);
 }
 
+bool InferenceEngine::FlushLearningStore() {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return FlushLearningStoreLocked();
+}
+
+void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
+  if (!store_) {
+    return;
+  }
+
+  store_->Prune(config_.learning_max_records, config_.learning_min_weight, now_epoch_sec);
+  ++unsaved_observations_;
+  if (!first_unsaved_observation_epoch_sec_.has_value()) {
+    first_unsaved_observation_epoch_sec_ = now_epoch_sec;
+    first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
+  }
+  learning_flush_cv_.notify_all();
+
+  if (ShouldFlushLearningStoreLocked(now_epoch_sec)) {
+    (void)FlushLearningStoreLocked();
+  }
+}
+
+bool InferenceEngine::ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const {
+  if (!store_ || !store_->dirty() || unsaved_observations_ == 0) {
+    return false;
+  }
+  if (config_.learning_flush_every_n > 0 &&
+      unsaved_observations_ >= config_.learning_flush_every_n) {
+    return true;
+  }
+  if (config_.learning_flush_interval_sec == 0) {
+    return true;
+  }
+  return first_unsaved_observation_epoch_sec_.has_value() &&
+         now_epoch_sec >= *first_unsaved_observation_epoch_sec_ &&
+         now_epoch_sec - *first_unsaved_observation_epoch_sec_ >=
+             config_.learning_flush_interval_sec;
+}
+
+bool InferenceEngine::FlushLearningStoreLocked() {
+  if (!store_) {
+    return true;
+  }
+  if (!store_->dirty()) {
+    unsaved_observations_ = 0;
+    first_unsaved_observation_epoch_sec_.reset();
+    first_unsaved_observation_steady_.reset();
+    return true;
+  }
+  if (!store_->Save()) {
+    RecordLearningSaveFailureLocked();
+    first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
+    return false;
+  }
+  unsaved_observations_ = 0;
+  first_unsaved_observation_epoch_sec_.reset();
+  first_unsaved_observation_steady_.reset();
+  return true;
+}
+
+void InferenceEngine::RecordLearningSaveFailureLocked() {
+  last_error_ = kLearningSaveError;
+  std::cerr << "error: " << kLearningSaveError << std::endl;
+}
+
+void InferenceEngine::LearningFlushWorker() {
+  std::unique_lock<std::mutex> lock(state_mutex_);
+  while (!learning_flush_stop_) {
+    if (!store_ || !store_->dirty() || config_.learning_flush_interval_sec == 0 ||
+        !first_unsaved_observation_steady_.has_value()) {
+      learning_flush_cv_.wait(lock, [this]() {
+        return learning_flush_stop_ ||
+               (store_ && store_->dirty() && config_.learning_flush_interval_sec > 0 &&
+                first_unsaved_observation_steady_.has_value());
+      });
+      continue;
+    }
+
+    const auto deadline = *first_unsaved_observation_steady_ +
+                          std::chrono::seconds(config_.learning_flush_interval_sec);
+    const bool changed = learning_flush_cv_.wait_until(lock, deadline, [this]() {
+      return learning_flush_stop_ || !store_ || !store_->dirty() ||
+             config_.learning_flush_interval_sec == 0 ||
+             !first_unsaved_observation_steady_.has_value();
+    });
+    if (changed) {
+      continue;
+    }
+
+    (void)FlushLearningStoreLocked();
+  }
+}
 }  // namespace azookey::host

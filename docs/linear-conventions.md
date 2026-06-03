@@ -55,12 +55,12 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 
 ## 4. ラベル分類体系（multi-select area を除きコロン式）
 
-ラベル prefix は原則コロン式に統一する。ただし複数付与が必要な技術領域は、Linear label group の排他制約を避けるため `area-` を使う（2026-06-03 決定）。
+ラベル prefix は原則コロン式に統一する。ただし複数付与が必要な技術領域は、Linear label group の排他制約を避けるため、移行後 target として `area-` を使う（2026-06-03 決定）。Phase 4 完了までは各 repo の Delta / `AGENTS.md` が定める active label を優先する。
 
 | プレフィックス | 用途 | 値 |
 | -- | -- | -- |
 | `repo:` | 対象 GitHub リポジトリ（実 repo 名をそのまま反映） | 各 1 つ必須（Phase 4 完了までは旧 repo ラベルも有効） |
-| `area-` | 技術領域 | 1 つ以上（Phase 4 完了までは旧 `area:` / `area_*` ラベルも有効） |
+| `area-` | 技術領域 | 1 つ以上（移行後 target。Phase 4 完了までは各 repo の active `area:` / `area_*` ラベルも有効） |
 | `agent:` | 次の AI 役割（§2） | 原則 1 つ（人間専任タスクを除く） |
 | `type:` | Issue の役割 | `tracking` / `implementation` / `review` |
 | `gate:` | 人間ゲート（横断フラグ） | `human-required` |
@@ -255,6 +255,7 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - REPO: dolquis/azooKey-Desktop
 - REPO_LABEL: repo:azooKey-Desktop
 - CANONICAL_DOCS: AGENTS.md, README.md, plans/windows-port-roadmap.md, docs/*-spec.md
+- AREA_LABELS_ACTIVE_BEFORE_PHASE_4: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core
 - AREA_LABELS_TARGET_AFTER_PHASE_4: area-tsf-tip, area-inference-host, area-ipc, area-learning, area-converter-core
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜4）。Linear 側へ転記する場合も roadmap の milestone 名を使う。

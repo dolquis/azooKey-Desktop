@@ -22,11 +22,17 @@ namespace {
 constexpr uint64_t kNowBase = 1'700'000'000ULL;
 
 std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
+    azookey::learning::LearningStore& store,
+    azookey::host::EngineConfig cfg) {
+  return std::make_unique<azookey::host::InferenceEngine>(
+      std::make_unique<azookey::core::SimpleConverter>(), &store, cfg);
+}
+
+std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
     azookey::learning::LearningStore& store) {
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
-  return std::make_unique<azookey::host::InferenceEngine>(
-      std::make_unique<azookey::core::SimpleConverter>(), &store, cfg);
+  return MakeEngine(store, cfg);
 }
 
 std::string TempPath(const char* name) {
@@ -121,7 +127,107 @@ TEST(InferenceEngineTest, QueryWithLearningBoost) {
   ASSERT_FALSE(fourth.empty());
   EXPECT_EQ(fourth.front().surface, "二本");
 
+  engine.reset();
   std::remove(path);
+}
+
+TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
+  const std::string path = TempPath("azookey_host_engine_learning_debounce_count.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 3;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("reading", "surface", kNowBase + 1);
+  engine->CommitObservation("reading", "surface", kNowBase + 2);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(store.dirty());
+
+  engine->CommitObservation("reading", "surface", kNowBase + 3);
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(store.dirty());
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
+  const std::string path = TempPath("azookey_host_engine_learning_debounce_interval.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 5;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("reading", "surface", kNowBase + 10);
+  engine->CommitObservation("reading", "surface", kNowBase + 14);
+  EXPECT_FALSE(std::filesystem::exists(path));
+
+  engine->CommitObservation("reading", "surface", kNowBase + 15);
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(store.dirty());
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
+  const std::string path = TempPath("azookey_host_engine_learning_flush.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("reading", "surface", kNowBase + 1);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(store.dirty());
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_host_engine_learning_save_failure";
+  const auto blocked_path = root / "learning-as-directory.tsv";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(blocked_path);
+  azookey::learning::LearningStore store(blocked_path.string());
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 1;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("reading", "surface", kNowBase + 1);
+  EXPECT_TRUE(store.dirty());
+  ASSERT_TRUE(engine->last_error().has_value());
+  EXPECT_NE(engine->last_error()->find("failed to save learning store"), std::string::npos);
+
+  std::filesystem::remove_all(root);
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_FALSE(store.dirty());
+  EXPECT_TRUE(std::filesystem::exists(blocked_path));
+
+  engine.reset();
+  std::filesystem::remove_all(root);
 }
 
 TEST(InferenceEngineTest, UserDictionaryInjection) {

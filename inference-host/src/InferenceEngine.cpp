@@ -1,10 +1,15 @@
 #include "azookey/host/InferenceEngine.h"
 
+#include <iostream>
+#include <utility>
+
 #include "azookey/host/ZenzaiModelConverter.h"
 
 namespace azookey::host {
 
 namespace {
+constexpr const char* kLearningSaveError = "failed to save learning store";
+
 core::ConversionContext BuildContext(const std::string& kana, const std::string& context) {
   core::ConversionContext conversion_context;
   conversion_context.preceding_text = context;
@@ -21,6 +26,11 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       store_(store),
       reranker_(store),
       config_(std::move(config)) {}
+
+InferenceEngine::~InferenceEngine() {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  (void)FlushLearningStoreLocked(std::nullopt);
+}
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
@@ -42,6 +52,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult() {
 
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  (void)FlushLearningStoreLocked(std::nullopt);
   ModelLoadResult result;
   EngineConfig next_config = config_;
   next_config.model_path = options.path;
@@ -180,7 +191,7 @@ void InferenceEngine::CommitObservation(const std::string& reading, const std::s
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (store_) {
     store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
-    store_->Save();
+    NoteLearningMutationLocked(now_epoch_sec);
   }
   active_converter_->Commit(core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
                             core::ConversionContext{});
@@ -194,13 +205,74 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (store_) {
     store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha, now_epoch_sec);
-    store_->Save();
+    NoteLearningMutationLocked(now_epoch_sec);
   }
 
   core::ConversionContext context;
   context.rejected_surfaces.push_back(rejected_surface);
   active_converter_->Commit(core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary, "correction-commit"},
                             context);
+}
+
+bool InferenceEngine::FlushLearningStore() {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return FlushLearningStoreLocked(std::nullopt);
+}
+
+void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
+  if (!store_) {
+    return;
+  }
+
+  store_->Prune(config_.learning_max_records, config_.learning_min_weight, now_epoch_sec);
+  ++unsaved_observations_;
+  if (!first_unsaved_observation_epoch_sec_.has_value()) {
+    first_unsaved_observation_epoch_sec_ = now_epoch_sec;
+  }
+
+  if (ShouldFlushLearningStoreLocked(now_epoch_sec)) {
+    (void)FlushLearningStoreLocked(now_epoch_sec);
+  }
+}
+
+bool InferenceEngine::ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const {
+  if (!store_ || !store_->dirty() || unsaved_observations_ == 0) {
+    return false;
+  }
+  if (config_.learning_flush_every_n > 0 &&
+      unsaved_observations_ >= config_.learning_flush_every_n) {
+    return true;
+  }
+  if (config_.learning_flush_interval_sec == 0) {
+    return true;
+  }
+  return first_unsaved_observation_epoch_sec_.has_value() &&
+         now_epoch_sec >= *first_unsaved_observation_epoch_sec_ &&
+         now_epoch_sec - *first_unsaved_observation_epoch_sec_ >=
+             config_.learning_flush_interval_sec;
+}
+
+bool InferenceEngine::FlushLearningStoreLocked(std::optional<uint64_t>) {
+  if (!store_) {
+    return true;
+  }
+  if (!store_->dirty()) {
+    unsaved_observations_ = 0;
+    first_unsaved_observation_epoch_sec_.reset();
+    return true;
+  }
+  if (!store_->Save()) {
+    RecordLearningSaveFailureLocked();
+    return false;
+  }
+  unsaved_observations_ = 0;
+  first_unsaved_observation_epoch_sec_.reset();
+  return true;
+}
+
+void InferenceEngine::RecordLearningSaveFailureLocked() {
+  last_error_ = kLearningSaveError;
+  std::cerr << "error: " << kLearningSaveError << std::endl;
 }
 
 }  // namespace azookey::host

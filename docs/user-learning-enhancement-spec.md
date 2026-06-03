@@ -48,6 +48,23 @@ M54 では以下のいずれかを選択する:
 本 M54 では **Option A** を採用する。SQLite 化は将来の独立 M（M54-B
 など）で扱う。
 
+### 3.1.1 M7 現行 LearningStore の永続化運用（DEV-11）
+
+M7 の現行 `LearningStore` は TSV 全体を書き出すため、Host は確定ごとに
+同期 `Save()` を呼ばない。`InferenceEngine` は以下の設定で dirty な学習変更を
+バッチ化し、上限と GC を適用する:
+
+| 設定 | 既定 | 意味 |
+|---|---:|---|
+| `learning_flush_every_n` | 8 | 未保存の observation が N 件に達したら `Save()` |
+| `learning_flush_interval_sec` | 5 | 最初の未保存 observation から T 秒経過したら `Save()` |
+| `learning_max_records` | 10000 | 保持する `(reading, surface)` レコード上限。0 は上限なし |
+| `learning_min_weight` | 0.05 | `Score(now)` が閾値未満のレコードを GC。0 以下は閾値 GC 無効 |
+
+`FlushLearningStore()` は明示 flush API とし、Host の破棄時および `LoadModel`
+境界で呼ぶ。`Save()` 失敗時は Host stderr に error ログを出し、dirty と
+未保存件数を維持して次回 observation または明示 flush で再試行する。
+
 ### 3.2 TSV スキーマ（拡張）
 
 ```

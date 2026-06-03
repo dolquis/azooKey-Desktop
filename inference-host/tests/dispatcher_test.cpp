@@ -81,6 +81,7 @@ class DispatcherTest : public ::testing::Test {
   }
 
   ~DispatcherTest() override {
+    engine.FlushLearningStore();
     std::remove(learning_path.c_str());
     std::remove(user_dict_path.c_str());
   }

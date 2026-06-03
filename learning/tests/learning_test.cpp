@@ -73,3 +73,54 @@ TEST(LearningStoreTest, ScoreClampsClockRollbackToFullWeight) {
 
   std::remove(path.c_str());
 }
+TEST(LearningStoreTest, DirtyTracksSaveSuccessAndFailure) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_learning_dirty_test";
+  const auto path = root / "learning.tsv";
+  std::filesystem::remove_all(root);
+
+  azookey::learning::LearningStore store(path.string());
+  EXPECT_FALSE(store.dirty());
+  store.Observe("reading", "surface", 1.0, 300);
+  EXPECT_TRUE(store.dirty());
+  EXPECT_EQ(store.size(), 1u);
+  EXPECT_TRUE(store.Save());
+  EXPECT_FALSE(store.dirty());
+
+  azookey::learning::LearningStore loaded(path.string());
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_FALSE(loaded.dirty());
+  EXPECT_EQ(loaded.size(), 1u);
+
+  const auto blocked_path = root / "blocked-directory";
+  std::filesystem::create_directories(blocked_path);
+  azookey::learning::LearningStore failing(blocked_path.string());
+  failing.Observe("reading", "blocked", 1.0, 300);
+  EXPECT_FALSE(failing.Save());
+  EXPECT_TRUE(failing.dirty());
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(LearningStoreTest, PruneDropsLowScoresAndCapsRecordCount) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_prune_test.tsv").string();
+  std::remove(path.c_str());
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("r", "drop-low", 1.0, kNow);
+  store.Observe("r", "keep-mid", 2.0, kNow);
+  store.Observe("r", "keep-high", 3.0, kNow);
+
+  store.Prune(/*max_records=*/2, /*min_weight=*/0.0, kNow);
+  EXPECT_EQ(store.size(), 2u);
+  EXPECT_DOUBLE_EQ(store.Score("r", "drop-low", kNow), 0.0);
+  EXPECT_GT(store.Score("r", "keep-mid", kNow), 0.0);
+  EXPECT_GT(store.Score("r", "keep-high", kNow), 0.0);
+
+  store.Observe("r", "drop-decayed", 1.0, kNow - 365ull * 24ull * 60ull * 60ull);
+  store.Prune(/*max_records=*/10, /*min_weight=*/0.05, kNow);
+  EXPECT_DOUBLE_EQ(store.Score("r", "drop-decayed", kNow), 0.0);
+
+  std::remove(path.c_str());
+}

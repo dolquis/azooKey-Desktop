@@ -157,6 +157,27 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   server.Stop();
 }
 
+TEST(NamedPipeTransportTest, StopReturnsWhileAcceptIsPending) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-stop-pending-test-" + std::to_string(GetCurrentProcessId());
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [](const azookey::ipc::Envelope&) -> std::optional<azookey::ipc::Envelope> {
+        return std::nullopt;
+      });
+  ASSERT_TRUE(started);
+
+  const auto start = std::chrono::steady_clock::now();
+  server.Stop();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_LT(elapsed, std::chrono::milliseconds(1000));
+  EXPECT_FALSE(server.IsRunning());
+  EXPECT_EQ(server.ActiveClientCountForTesting(), 0u);
+}
+
 TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-ipc-multi-test-" + std::to_string(GetCurrentProcessId());
@@ -214,6 +235,81 @@ TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
     client->Disconnect();
   }
   EXPECT_TRUE(WaitForClientCount(server, 0));
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, ConcurrentClientsConnectDuringAcceptChurn) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-accept-churn-test-" + std::to_string(GetCurrentProcessId());
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        if (req.type != azookey::ipc::MessageType::Ping) {
+          return std::nullopt;
+        }
+
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+
+        azookey::ipc::PingPayload payload;
+        if (auto parsed = azookey::ipc::ParsePing(req.payload_json)) {
+          payload.nonce = parsed->nonce;
+        }
+        payload.t_ms = 456;
+        res.payload_json = azookey::ipc::BuildPing(payload);
+        return res;
+      });
+  ASSERT_TRUE(started);
+
+  constexpr uint64_t kClientCount = 12;
+  std::atomic<uint64_t> successes{0};
+  std::atomic<uint64_t> failures{0};
+  std::vector<std::thread> threads;
+  threads.reserve(kClientCount);
+
+  for (uint64_t i = 0; i < kClientCount; ++i) {
+    threads.emplace_back([&, i] {
+      azookey::ipc::NamedPipeClient client;
+      if (!client.Connect(pipe_name, 2000)) {
+        ++failures;
+        return;
+      }
+
+      azookey::ipc::PingPayload ping;
+      ping.nonce = i + 1000;
+      azookey::ipc::Envelope env;
+      env.version = 1;
+      env.request_id = i + 1;
+      env.trace_id = "accept-churn";
+      env.type = azookey::ipc::MessageType::Ping;
+      env.payload_json = azookey::ipc::BuildPing(ping);
+
+      if (!client.Send(env)) {
+        ++failures;
+        return;
+      }
+      auto response = client.Receive();
+      auto payload = response ? azookey::ipc::ParsePing(response->payload_json) : std::nullopt;
+      if (response && payload && payload->nonce == ping.nonce) {
+        ++successes;
+      } else {
+        ++failures;
+      }
+      client.Disconnect();
+    });
+  }
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  EXPECT_EQ(successes.load(), kClientCount);
+  EXPECT_EQ(failures.load(), 0u);
+  EXPECT_TRUE(WaitForClientCount(server, 0, 250));
   server.Stop();
 }
 

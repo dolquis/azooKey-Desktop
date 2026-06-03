@@ -349,15 +349,16 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
   見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
 - **6.4.6 length-prefix read/write hardening** — Named Pipe は
-  `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE` を使う。server は accept polling の
-  ため作成時に `PIPE_NOWAIT` を使い、接続後は可能な場合 `PIPE_WAIT` に切り替える。
-  4-byte little-endian length-prefix によってフレーム境界を復元し、`ERROR_MORE_DATA`
+  `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT` を使う。server は
+  `FILE_FLAG_OVERLAPPED` 付きで instance を作成し、`ConnectNamedPipe` の
+  pending accept を `OVERLAPPED` event で待つ。`Stop()` 時は accept / client I/O
+  を cancel して、listen 中の thread が無期限に残らないようにする。4-byte
+  little-endian length-prefix によってフレーム境界を復元し、`ERROR_MORE_DATA`
   を扱って指定長まで読み切る。フレーム途中の一時的な `ERROR_NO_DATA` は bounded
-  retry に留め、フレーム開始前の no-data / zero-byte read は切断扱いにして
-  peer close 後の client thread 滞留を防ぐ。write 側も `PIPE_NOWAIT` 継続時の
-  `ERROR_PIPE_BUSY` / zero-byte write を bounded retry に留め、読まない peer による
-  client thread 滞留を防ぐため blocking flush に依存しない。64KiB を超えるフレームが
-  pipe write 単位で分割されても往復できる。
+  retry に留め、フレーム開始前の no-data / zero-byte read は切断扱いにする。
+  write 側も `ERROR_PIPE_BUSY` / zero-byte write を bounded retry に留め、
+  読まない peer による client thread 滞留を防ぐため blocking flush に依存しない。
+  64KiB を超えるフレームが pipe write 単位で分割されても往復できる。
 
 ### M40 受け入れ条件
 

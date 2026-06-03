@@ -124,12 +124,176 @@ bool ForceZeroBytePipeWriteForTesting() {
 #endif
 }
 
-BOOL WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, DWORD* written) {
-  if (ForceZeroBytePipeWriteForTesting()) {
-    *written = 0;
-    return TRUE;
+class ScopedHandle {
+ public:
+  explicit ScopedHandle(HANDLE handle = nullptr) : handle_(handle) {}
+  ~ScopedHandle() { reset(); }
+
+  ScopedHandle(const ScopedHandle&) = delete;
+  ScopedHandle& operator=(const ScopedHandle&) = delete;
+
+  HANDLE get() const { return handle_; }
+  bool valid() const { return handle_ && handle_ != INVALID_HANDLE_VALUE; }
+
+  void reset(HANDLE handle = nullptr) {
+    if (valid()) {
+      CloseHandle(handle_);
+    }
+    handle_ = handle;
   }
-  return WriteFile(pipe, data, size, written, nullptr);
+
+ private:
+  HANDLE handle_{nullptr};
+};
+
+struct PipeIoResult {
+  BOOL ok{FALSE};
+  DWORD error{ERROR_SUCCESS};
+  DWORD transferred{0};
+  bool stopped{false};
+};
+
+enum class ConnectWaitResult {
+  Connected,
+  Stopped,
+  Failed,
+};
+
+PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop_event) {
+  HANDLE handles[2] = {overlapped.hEvent, stop_event};
+  const DWORD handle_count = stop_event ? 2 : 1;
+  const DWORD wait = WaitForMultipleObjects(handle_count, handles, FALSE, INFINITE);
+  if (wait == WAIT_OBJECT_0) {
+    PipeIoResult result;
+    result.ok = GetOverlappedResult(pipe, &overlapped, &result.transferred, FALSE);
+    result.error = result.ok ? ERROR_SUCCESS : GetLastError();
+    return result;
+  }
+  if (handle_count == 2 && wait == WAIT_OBJECT_0 + 1) {
+    CancelIoEx(pipe, &overlapped);
+    PipeIoResult result;
+    result.stopped = true;
+    result.error = ERROR_OPERATION_ABORTED;
+    GetOverlappedResult(pipe, &overlapped, &result.transferred, TRUE);
+    return result;
+  }
+
+  PipeIoResult result;
+  result.error = GetLastError();
+  return result;
+}
+
+PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, HANDLE stop_event) {
+  if (!stop_event) {
+    PipeIoResult result;
+    result.ok = ReadFile(pipe, data, size, &result.transferred, nullptr);
+    result.error = result.ok ? ERROR_SUCCESS : GetLastError();
+    return result;
+  }
+
+  ScopedHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event.valid()) {
+    PipeIoResult result;
+    result.error = GetLastError();
+    return result;
+  }
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+
+  PipeIoResult result;
+  result.ok = ReadFile(pipe, data, size, nullptr, &overlapped);
+  result.error = result.ok ? ERROR_SUCCESS : GetLastError();
+  if (!result.ok && result.error == ERROR_IO_PENDING) {
+    return FinishOverlappedIo(pipe, overlapped, stop_event);
+  }
+  DWORD transferred = 0;
+  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
+  const DWORD completed_error = completed ? ERROR_SUCCESS : GetLastError();
+  if (completed || completed_error != ERROR_IO_INCOMPLETE) {
+    result.ok = completed;
+    result.error = completed_error;
+    result.transferred = transferred;
+  }
+  return result;
+}
+
+PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, HANDLE stop_event) {
+  if (ForceZeroBytePipeWriteForTesting()) {
+    PipeIoResult result;
+    result.ok = TRUE;
+    return result;
+  }
+  if (!stop_event) {
+    PipeIoResult result;
+    result.ok = WriteFile(pipe, data, size, &result.transferred, nullptr);
+    result.error = result.ok ? ERROR_SUCCESS : GetLastError();
+    return result;
+  }
+
+  ScopedHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event.valid()) {
+    PipeIoResult result;
+    result.error = GetLastError();
+    return result;
+  }
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+
+  PipeIoResult result;
+  result.ok = WriteFile(pipe, data, size, nullptr, &overlapped);
+  result.error = result.ok ? ERROR_SUCCESS : GetLastError();
+  if (!result.ok && result.error == ERROR_IO_PENDING) {
+    return FinishOverlappedIo(pipe, overlapped, stop_event);
+  }
+  DWORD transferred = 0;
+  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
+  const DWORD completed_error = completed ? ERROR_SUCCESS : GetLastError();
+  if (completed || completed_error != ERROR_IO_INCOMPLETE) {
+    result.ok = completed;
+    result.error = completed_error;
+    result.transferred = transferred;
+  }
+  return result;
+}
+
+ConnectWaitResult WaitForClientConnect(HANDLE pipe, HANDLE stop_event) {
+  ScopedHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event.valid()) {
+    return ConnectWaitResult::Failed;
+  }
+
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+  const BOOL ok = ConnectNamedPipe(pipe, &overlapped);
+  if (ok) {
+    return ConnectWaitResult::Connected;
+  }
+
+  switch (GetLastError()) {
+    case ERROR_IO_PENDING:
+      break;
+    case ERROR_PIPE_CONNECTED:
+      return ConnectWaitResult::Connected;
+    default:
+      return ConnectWaitResult::Failed;
+  }
+
+  HANDLE handles[2] = {event.get(), stop_event};
+  const DWORD handle_count = stop_event ? 2 : 1;
+  const DWORD wait = WaitForMultipleObjects(handle_count, handles, FALSE, INFINITE);
+  if (wait == WAIT_OBJECT_0) {
+    DWORD transferred = 0;
+    return GetOverlappedResult(pipe, &overlapped, &transferred, FALSE)
+               ? ConnectWaitResult::Connected
+               : ConnectWaitResult::Failed;
+  }
+  if (handle_count == 2 && wait == WAIT_OBJECT_0 + 1) {
+    CancelIoEx(pipe, &overlapped);
+    DWORD transferred = 0;
+    GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
+    return ConnectWaitResult::Stopped;
+  }
+  return ConnectWaitResult::Failed;
 }
 
 struct SecurityDescriptor {
@@ -195,55 +359,54 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
   attrs.bInheritHandle = FALSE;
 
   return CreateNamedPipeW(
-      wide_name.c_str(), PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT |
-          PIPE_REJECT_REMOTE_CLIENTS,
+      wide_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
       kMaxPipeInstances, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
 }
 
-bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size) {
+bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size, HANDLE stop_event = nullptr) {
   size_t offset = 0;
   size_t transient_no_data_retries = 0;
   while (offset < size) {
-    DWORD read = 0;
-    const DWORD chunk = static_cast<DWORD>(
-        std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    const BOOL ok = ReadFile(pipe, data + offset, chunk, &read, nullptr);
-    if (!ok) {
-      const auto err = GetLastError();
+    const DWORD chunk =
+        static_cast<DWORD>(std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
+    const auto result = ReadPipeChunk(pipe, data + offset, chunk, stop_event);
+    if (!result.ok) {
+      if (result.stopped) return false;
+      const auto err = result.error;
       if (err == ERROR_NO_DATA) {
-        if (offset == 0 ||
-            ++transient_no_data_retries > kMaxTransientReadNoDataRetries) {
+        if (offset == 0 || ++transient_no_data_retries > kMaxTransientReadNoDataRetries) {
           return false;
         }
         Sleep(1);
         continue;
       }
-      if (err == ERROR_MORE_DATA && read > 0) {
-        offset += read;
+      if (err == ERROR_MORE_DATA && result.transferred > 0) {
+        offset += result.transferred;
         transient_no_data_retries = 0;
         continue;
       }
       return false;
     }
-    if (read == 0) {
+    if (result.transferred == 0) {
       return false;
     }
-    offset += read;
+    offset += result.transferred;
     transient_no_data_retries = 0;
   }
   return true;
 }
 
-bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
+bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size, HANDLE stop_event = nullptr) {
   size_t offset = 0;
   size_t no_progress_retries = 0;
   while (offset < size) {
-    DWORD written = 0;
-    const DWORD chunk = static_cast<DWORD>(
-        std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    if (!WritePipeChunk(pipe, data + offset, chunk, &written)) {
-      const auto err = GetLastError();
+    const DWORD chunk =
+        static_cast<DWORD>(std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
+    const auto result = WritePipeChunk(pipe, data + offset, chunk, stop_event);
+    if (!result.ok) {
+      if (result.stopped) return false;
+      const auto err = result.error;
       if (err == ERROR_PIPE_BUSY) {
         if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
           return false;
@@ -253,14 +416,14 @@ bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
       }
       return false;
     }
-    if (written == 0) {
+    if (result.transferred == 0) {
       if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
         return false;
       }
       Sleep(1);
       continue;
     }
-    offset += written;
+    offset += result.transferred;
     no_progress_retries = 0;
   }
   // FlushFileBuffers on a named pipe can block until the peer drains all data;
@@ -268,14 +431,13 @@ bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size) {
   return true;
 }
 
-std::optional<Envelope> ReadEnvelope(HANDLE pipe) {
+std::optional<Envelope> ReadEnvelope(HANDLE pipe, HANDLE stop_event = nullptr) {
   uint8_t header[4]{};
-  if (!ReadBytes(pipe, header, sizeof(header))) {
+  if (!ReadBytes(pipe, header, sizeof(header), stop_event)) {
     return std::nullopt;
   }
 
-  const uint32_t size = static_cast<uint32_t>(header[0]) |
-                        (static_cast<uint32_t>(header[1]) << 8) |
+  const uint32_t size = static_cast<uint32_t>(header[0]) | (static_cast<uint32_t>(header[1]) << 8) |
                         (static_cast<uint32_t>(header[2]) << 16) |
                         (static_cast<uint32_t>(header[3]) << 24);
   if (size == 0 || size > kMaxFrameSize) {
@@ -283,7 +445,7 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe) {
   }
 
   std::vector<uint8_t> payload(size);
-  if (!ReadBytes(pipe, payload.data(), payload.size())) {
+  if (!ReadBytes(pipe, payload.data(), payload.size(), stop_event)) {
     return std::nullopt;
   }
 
@@ -291,11 +453,11 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe) {
   return Deserialize(json);
 }
 
-bool WriteEnvelope(HANDLE pipe, const Envelope& envelope) {
+bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, HANDLE stop_event = nullptr) {
   const auto json = Serialize(envelope);
   const auto frame = EncodeLengthPrefixed(json);
   if (!frame) return false;
-  return WriteBytes(pipe, frame->data(), frame->size());
+  return WriteBytes(pipe, frame->data(), frame->size(), stop_event);
 }
 
 struct ClientState {
@@ -309,9 +471,17 @@ struct ClientState {
 void CloseClientPipe(const std::shared_ptr<ClientState>& client) {
   std::lock_guard<std::mutex> lock(client->mutex);
   if (!client->closed && client->pipe != INVALID_HANDLE_VALUE) {
+    CancelIoEx(client->pipe, nullptr);
     CloseHandle(client->pipe);
     client->closed = true;
     client->pipe = INVALID_HANDLE_VALUE;
+  }
+}
+
+void CancelClientPipeIo(const std::shared_ptr<ClientState>& client) {
+  std::lock_guard<std::mutex> lock(client->mutex);
+  if (!client->closed && client->pipe != INVALID_HANDLE_VALUE) {
+    CancelIoEx(client->pipe, nullptr);
   }
 }
 
@@ -327,19 +497,20 @@ struct NamedPipeServer::Impl {
 
   mutable std::mutex mutex;
   HANDLE listen_pipe{INVALID_HANDLE_VALUE};
+  HANDLE stop_event{nullptr};
   std::vector<std::shared_ptr<ClientState>> clients;
+
+  ~Impl() {
+    if (stop_event) {
+      CloseHandle(stop_event);
+    }
+  }
 
   void AcceptLoop(HANDLE first_pipe) {
     HANDLE current = first_pipe;
     while (running.load()) {
-      const BOOL ok = ConnectNamedPipe(current, nullptr);
-      const DWORD err = ok ? ERROR_SUCCESS : GetLastError();
-      const bool connected = ok || err == ERROR_PIPE_CONNECTED;
-
-      if (!connected && (err == ERROR_PIPE_LISTENING || err == ERROR_NO_DATA)) {
-        Sleep(25);
-        continue;
-      }
+      const auto connect_result = WaitForClientConnect(current, stop_event);
+      const bool connected = connect_result == ConnectWaitResult::Connected;
 
       {
         std::lock_guard<std::mutex> lock(mutex);
@@ -348,7 +519,7 @@ struct NamedPipeServer::Impl {
         }
       }
 
-      if (!running.load()) {
+      if (!running.load() || connect_result == ConnectWaitResult::Stopped) {
         CloseHandle(current);
         break;
       }
@@ -437,7 +608,7 @@ struct NamedPipeServer::Impl {
         pipe = client->pipe;
       }
 
-      auto request = ReadEnvelope(pipe);
+      auto request = ReadEnvelope(pipe, stop_event);
       if (!request) break;
 
       std::optional<Envelope> response;
@@ -447,7 +618,7 @@ struct NamedPipeServer::Impl {
         break;
       }
 
-      if (response && !WriteEnvelope(pipe, *response)) {
+      if (response && !WriteEnvelope(pipe, *response, stop_event)) {
         break;
       }
     }
@@ -502,6 +673,14 @@ bool NamedPipeServer::Start(const std::string& pipe_name, ConnectionFactory fact
     return false;
   }
 
+  if (!impl_->stop_event) {
+    impl_->stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!impl_->stop_event) {
+      return false;
+    }
+  }
+  ResetEvent(impl_->stop_event);
+
   HANDLE first_pipe = CreatePipeInstance(pipe_name);
   if (first_pipe == INVALID_HANDLE_VALUE) {
     return false;
@@ -523,11 +702,14 @@ void NamedPipeServer::Stop() {
       return;
     }
     impl_->running.store(false);
+    if (impl_->stop_event) {
+      SetEvent(impl_->stop_event);
+    }
     clients = impl_->clients;
   }
 
   for (const auto& client : clients) {
-    CloseClientPipe(client);
+    CancelClientPipeIo(client);
   }
 
   if (impl_->accept_thread.joinable()) {

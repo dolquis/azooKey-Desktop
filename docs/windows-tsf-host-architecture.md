@@ -44,6 +44,9 @@
 - `learning.db` 相当の永続層へ観測を保存し、再ランキングで反映。
 - 永続フォーマットは現状 TSV。未指定時は
   `%LOCALAPPDATA%\azooKey\data\learning.tsv` に保存する。
+- TSV の `reading` / `surface` は保存時に `\` → `\\`、tab → `\t`、
+  LF → `\n`、CR → `\r` としてエスケープし、tab / 改行を含む表記で
+  レコード境界が壊れないようにする。
 - ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` に保存する。
   `--learning` / `--user-dict` 指定時は明示パスを優先する。
 - 保存時は一時ファイルへ書き込んでから replace し、書き込み中クラッシュによる

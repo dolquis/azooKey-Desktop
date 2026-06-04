@@ -34,6 +34,12 @@ M7 で実装した既存 `LearningStore`（reading/surface 頻度 + 時間減衰
 M7 の `learning.tsv` は `reading<TAB>surface<TAB>weight<SPACE>last_updated_epoch_sec`
 形式（3 タブフィールド、weight と epoch_sec はスペース区切り）。`LearningStore::Save`
 の実装に合わせること（`last_updated_epoch_sec` は epoch 秒、ミリ秒ではない）。
+DEV-7 以降、M7 形式の `reading` / `surface` フィールドは TSV 境界で
+エスケープする。保存時は `\` → `\\`、tab → `\t`、LF → `\n`、CR → `\r`
+の順で表現し、読み込み時に復元する。これにより表記に tab / 改行 /
+バックスラッシュが含まれても 1 レコード 1 行を維持する。旧 M7 TSV は
+通常の日本語 reading / surface であればそのまま読み込める。復旧不能な
+行は Host stderr に警告を出してスキップし、正常行の読み込みを継続する。
 M54 では以下のいずれかを選択する:
 
 **Option A: TSV 拡張**（軽量・既定）
@@ -85,6 +91,10 @@ Interval flush は次の observation を待たずに background timer で実行�
 | `app_name` | 確定時の前面アプリ（M48）。空文字列 = グローバル |
 | `event_type` | `commit` / `correction_accept` / `correction_reject` / `typo_accept` / `typo_reject` |
 | `context_hash` | 左文脈 hash（M46 と整合） |
+
+TSV の text 列には §3.1 と同じエスケープ規約を適用する。`reading` /
+`surface` だけでなく、将来追加する `app_name` などの文字列列も raw tab /
+raw 改行を含めない。
 
 ### 3.3 SQLite 化（v2 ロードマップ）
 

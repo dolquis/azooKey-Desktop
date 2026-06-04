@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,51 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
   EXPECT_GT(loaded.Score("とうきょう", "東京", 200), 0.0);
 
   std::filesystem::remove_all(root);
+}
+
+TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInSurface) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_escape_test.tsv").string();
+  std::remove(path.c_str());
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほん", "日本", 1.0, 300);
+  store.Observe("にほん", "日\t本", 2.0, 300);
+  store.Observe("にほん", "日\n本", 3.0, 300);
+  store.Observe("にほん", "C:\\temp", 4.0, 300);
+  EXPECT_TRUE(store.Save());
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 4u);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日本", 300), 1.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日\t本", 300), 2.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日\n本", 300), 3.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "C:\\temp", 300), 4.0);
+
+  std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, LoadSkipsMalformedRowsAndKeepsValidRows) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_malformed_test.tsv").string();
+  std::remove(path.c_str());
+
+  {
+    std::ofstream ofs(path);
+    ofs << "valid\tentry\t1.5 400\n";
+    ofs << "missing-weight\tentry\n";
+    ofs << "bad-number\tentry\tnot-a-number 401\n";
+    ofs << "valid\tsecond\t2.5 401\n";
+  }
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 2u);
+  EXPECT_DOUBLE_EQ(loaded.Score("valid", "entry", 400), 1.5);
+  EXPECT_DOUBLE_EQ(loaded.Score("valid", "second", 401), 2.5);
+
+  std::remove(path.c_str());
 }
 
 TEST(LearningStoreTest, ScoreClampsClockRollbackToFullWeight) {

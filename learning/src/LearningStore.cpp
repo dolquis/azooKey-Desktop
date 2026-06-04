@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <vector>
 
@@ -11,6 +12,8 @@
 namespace azookey::learning {
 
 namespace {
+constexpr char kEscapedTsvHeader[] = "# azookey-learning-tsv escaped=1";
+
 double DecayedWeight(const LearningRecord& rec, uint64_t now_epoch_sec) {
   const double elapsed_seconds =
       now_epoch_sec >= rec.last_updated_epoch_sec
@@ -20,12 +23,83 @@ double DecayedWeight(const LearningRecord& rec, uint64_t now_epoch_sec) {
   const double decay = std::exp(-0.15 * days);
   return rec.weight * decay;
 }
+
+std::string EscapeTsvField(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (const char ch : value) {
+    switch (ch) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      default:
+        escaped.push_back(ch);
+        break;
+    }
+  }
+  return escaped;
+}
+
+std::string UnescapeTsvField(const std::string& value) {
+  std::string unescaped;
+  unescaped.reserve(value.size());
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (value[i] != '\\' || i + 1 == value.size()) {
+      unescaped.push_back(value[i]);
+      continue;
+    }
+
+    const char escaped = value[++i];
+    switch (escaped) {
+      case '\\':
+        unescaped.push_back('\\');
+        break;
+      case 't':
+        unescaped.push_back('\t');
+        break;
+      case 'n':
+        unescaped.push_back('\n');
+        break;
+      case 'r':
+        unescaped.push_back('\r');
+        break;
+      default:
+        unescaped.push_back('\\');
+        unescaped.push_back(escaped);
+        break;
+    }
+  }
+  return unescaped;
+}
+
+void LogMalformedLine(const std::string& path, size_t line_number) {
+  std::cerr << "LearningStore: skipped malformed record in " << path << ":" << line_number << '\n';
+}
+
+bool SplitKey(const std::string& key, std::string& reading, std::string& surface) {
+  const auto tab = key.find('\t');
+  if (tab == std::string::npos) {
+    return false;
+  }
+  reading = UnescapeTsvField(key.substr(0, tab));
+  surface = UnescapeTsvField(key.substr(tab + 1));
+  return true;
+}
 }  // namespace
 
 LearningStore::LearningStore(std::string path) : path_(std::move(path)) {}
 
 std::string LearningStore::Key(const std::string& reading, const std::string& surface) const {
-  return reading + "\t" + surface;
+  return EscapeTsvField(reading) + "\t" + EscapeTsvField(surface);
 }
 
 bool LearningStore::Load() {
@@ -36,14 +110,34 @@ bool LearningStore::Load() {
     return false;
   }
   std::string line;
+  size_t line_number = 0;
+  bool escaped_fields = false;
   while (std::getline(ifs, line)) {
+    ++line_number;
+    if (line_number == 1 && line == kEscapedTsvHeader) {
+      escaped_fields = true;
+      continue;
+    }
+
     std::istringstream iss(line);
     std::string reading;
     std::string surface;
+    std::string weight_timestamp;
     LearningRecord rec;
     if (!(std::getline(iss, reading, '\t') && std::getline(iss, surface, '\t') &&
-          (iss >> rec.weight) && (iss >> rec.last_updated_epoch_sec))) {
+          std::getline(iss, weight_timestamp))) {
+      LogMalformedLine(path_, line_number);
       continue;
+    }
+
+    std::istringstream values(weight_timestamp);
+    if (!((values >> rec.weight) && (values >> rec.last_updated_epoch_sec))) {
+      LogMalformedLine(path_, line_number);
+      continue;
+    }
+    if (escaped_fields) {
+      reading = UnescapeTsvField(reading);
+      surface = UnescapeTsvField(surface);
     }
     table_.emplace(Key(reading, surface), rec);
   }
@@ -52,6 +146,7 @@ bool LearningStore::Load() {
 
 bool LearningStore::Save() const {
   std::ostringstream out;
+  out << kEscapedTsvHeader << '\n';
   std::vector<std::string> keys;
   keys.reserve(table_.size());
   for (const auto& [key, _] : table_) {
@@ -60,11 +155,12 @@ bool LearningStore::Save() const {
   std::sort(keys.begin(), keys.end());
   for (const auto& key : keys) {
     const auto& rec = table_.at(key);
-    const auto tab = key.find('\t');
-    if (tab == std::string::npos) {
+    std::string reading;
+    std::string surface;
+    if (!SplitKey(key, reading, surface)) {
       continue;
     }
-    out << key.substr(0, tab) << '\t' << key.substr(tab + 1) << '\t' << rec.weight << ' '
+    out << EscapeTsvField(reading) << '\t' << EscapeTsvField(surface) << '\t' << rec.weight << ' '
         << rec.last_updated_epoch_sec << '\n';
   }
   const bool saved = WriteTextFileAtomically(path_, out.str());

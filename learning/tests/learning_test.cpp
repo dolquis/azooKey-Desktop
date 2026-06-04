@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,104 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
   EXPECT_GT(loaded.Score("とうきょう", "東京", 200), 0.0);
 
   std::filesystem::remove_all(root);
+}
+
+TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInSurface) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_escape_test.tsv").string();
+  std::remove(path.c_str());
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほん", "日本", 1.0, 300);
+  store.Observe("にほん", "日\t本", 2.0, 300);
+  store.Observe("にほん", "日\n本", 3.0, 300);
+  store.Observe("にほん", "C:\\temp", 4.0, 300);
+  EXPECT_TRUE(store.Save());
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 4u);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日本", 300), 1.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日\t本", 300), 2.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日\n本", 300), 3.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("にほん", "C:\\temp", 300), 4.0);
+
+  std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInReading) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_reading_escape_test.tsv")
+          .string();
+  std::remove(path.c_str());
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("a\tb", "surface", 1.0, 350);
+  store.Observe("a\nb", "surface", 2.0, 350);
+  store.Observe("C:\\temp", "surface", 3.0, 350);
+  EXPECT_TRUE(store.Save());
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 3u);
+  EXPECT_DOUBLE_EQ(loaded.Score("a\tb", "surface", 350), 1.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("a\nb", "surface", 350), 2.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("C:\\temp", "surface", 350), 3.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("a", "b\tsurface", 350), 0.0);
+
+  std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, LegacyTsvKeepsBackslashSequencesLiteral) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_legacy_escape_test.tsv").string();
+  std::remove(path.c_str());
+
+  {
+    std::ofstream ofs(path);
+    ofs << "legacy\tC:\\temp\t2.0 500\n";
+    ofs << "legacy\tC:\\new\t3.0 500\n";
+  }
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 2u);
+  EXPECT_DOUBLE_EQ(loaded.Score("legacy", "C:\\temp", 500), 2.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("legacy", "C:\\new", 500), 3.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("legacy", std::string("C:") + '\t' + "emp", 500), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("legacy", std::string("C:") + '\n' + "ew", 500), 0.0);
+
+  EXPECT_TRUE(loaded.Save());
+
+  azookey::learning::LearningStore migrated(path);
+  EXPECT_TRUE(migrated.Load());
+  EXPECT_EQ(migrated.size(), 2u);
+  EXPECT_DOUBLE_EQ(migrated.Score("legacy", "C:\\temp", 500), 2.0);
+  EXPECT_DOUBLE_EQ(migrated.Score("legacy", "C:\\new", 500), 3.0);
+
+  std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, LoadSkipsMalformedRowsAndKeepsValidRows) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_malformed_test.tsv").string();
+  std::remove(path.c_str());
+
+  {
+    std::ofstream ofs(path);
+    ofs << "valid\tentry\t1.5 400\n";
+    ofs << "missing-weight\tentry\n";
+    ofs << "bad-number\tentry\tnot-a-number 401\n";
+    ofs << "valid\tsecond\t2.5 401\n";
+  }
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 2u);
+  EXPECT_DOUBLE_EQ(loaded.Score("valid", "entry", 400), 1.5);
+  EXPECT_DOUBLE_EQ(loaded.Score("valid", "second", 401), 2.5);
+
+  std::remove(path.c_str());
 }
 
 TEST(LearningStoreTest, ScoreClampsClockRollbackToFullWeight) {

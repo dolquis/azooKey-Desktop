@@ -34,12 +34,15 @@ M7 で実装した既存 `LearningStore`（reading/surface 頻度 + 時間減衰
 M7 の `learning.tsv` は `reading<TAB>surface<TAB>weight<SPACE>last_updated_epoch_sec`
 形式（3 タブフィールド、weight と epoch_sec はスペース区切り）。`LearningStore::Save`
 の実装に合わせること（`last_updated_epoch_sec` は epoch 秒、ミリ秒ではない）。
-DEV-7 以降、M7 形式の `reading` / `surface` フィールドは TSV 境界で
-エスケープする。保存時は `\` → `\\`、tab → `\t`、LF → `\n`、CR → `\r`
-の順で表現し、読み込み時に復元する。これにより表記に tab / 改行 /
-バックスラッシュが含まれても 1 レコード 1 行を維持する。旧 M7 TSV は
-通常の日本語 reading / surface であればそのまま読み込める。復旧不能な
-行は Host stderr に警告を出してスキップし、正常行の読み込みを継続する。
+DEV-7 以降、`LearningStore::Save()` は先頭に
+`# azookey-learning-tsv escaped=1` ヘッダーを書き、M7 形式の `reading` /
+`surface` フィールドを TSV 境界でエスケープする。保存時は `\` → `\\`、
+tab → `\t`、LF → `\n`、CR → `\r` の順で表現し、ヘッダー付きファイルの
+読み込み時だけ復元する。これにより表記に tab / 改行 / バックスラッシュが
+含まれても 1 レコード 1 行を維持する。ヘッダーのない旧 M7 TSV は
+backslash を literal として扱い、`C:\temp` のような既存 surface を `\t`
+escape と誤解しない。復旧不能な行は Host stderr に警告を出してスキップし、
+正常行の読み込みを継続する。
 M54 では以下のいずれかを選択する:
 
 **Option A: TSV 拡張**（軽量・既定）

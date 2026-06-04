@@ -84,12 +84,22 @@ std::string UnescapeTsvField(const std::string& value) {
 void LogMalformedLine(const std::string& path, size_t line_number) {
   std::cerr << "LearningStore: skipped malformed record in " << path << ":" << line_number << '\n';
 }
+
+bool SplitKey(const std::string& key, std::string& reading, std::string& surface) {
+  const auto tab = key.find('\t');
+  if (tab == std::string::npos) {
+    return false;
+  }
+  reading = UnescapeTsvField(key.substr(0, tab));
+  surface = UnescapeTsvField(key.substr(tab + 1));
+  return true;
+}
 }  // namespace
 
 LearningStore::LearningStore(std::string path) : path_(std::move(path)) {}
 
 std::string LearningStore::Key(const std::string& reading, const std::string& surface) const {
-  return reading + "\t" + surface;
+  return EscapeTsvField(reading) + "\t" + EscapeTsvField(surface);
 }
 
 bool LearningStore::Load() {
@@ -145,12 +155,13 @@ bool LearningStore::Save() const {
   std::sort(keys.begin(), keys.end());
   for (const auto& key : keys) {
     const auto& rec = table_.at(key);
-    const auto tab = key.find('\t');
-    if (tab == std::string::npos) {
+    std::string reading;
+    std::string surface;
+    if (!SplitKey(key, reading, surface)) {
       continue;
     }
-    out << EscapeTsvField(key.substr(0, tab)) << '\t' << EscapeTsvField(key.substr(tab + 1)) << '\t'
-        << rec.weight << ' ' << rec.last_updated_epoch_sec << '\n';
+    out << EscapeTsvField(reading) << '\t' << EscapeTsvField(surface) << '\t' << rec.weight << ' '
+        << rec.last_updated_epoch_sec << '\n';
   }
   const bool saved = WriteTextFileAtomically(path_, out.str());
   if (saved) {

@@ -84,6 +84,29 @@ TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInSurface) {
   std::remove(path.c_str());
 }
 
+TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInReading) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_reading_escape_test.tsv")
+          .string();
+  std::remove(path.c_str());
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("a\tb", "surface", 1.0, 350);
+  store.Observe("a\nb", "surface", 2.0, 350);
+  store.Observe("C:\\temp", "surface", 3.0, 350);
+  EXPECT_TRUE(store.Save());
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 3u);
+  EXPECT_DOUBLE_EQ(loaded.Score("a\tb", "surface", 350), 1.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("a\nb", "surface", 350), 2.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("C:\\temp", "surface", 350), 3.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("a", "b\tsurface", 350), 0.0);
+
+  std::remove(path.c_str());
+}
+
 TEST(LearningStoreTest, LegacyTsvKeepsBackslashSequencesLiteral) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_legacy_escape_test.tsv").string();

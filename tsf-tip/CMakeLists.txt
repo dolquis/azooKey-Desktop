@@ -21,6 +21,31 @@ target_link_libraries(azookey_tsf_tip
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 if(AZOOKEY_BUILD_TESTS)
+  function(add_tsf_tip_unit_test target_name test_source)
+    add_executable(${target_name}
+      src/CandidateWindow.cpp
+      src/DisplayAttribute.cpp
+      src/TextService.cpp
+      ${test_source}
+    )
+    target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_definitions(${target_name} PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(${target_name}
+      PRIVATE
+        azookey_core
+        azookey_ipc
+        GTest::gtest_main
+        azookey_project_options
+        azookey_project_warnings
+        ole32
+        uuid
+        shlwapi
+        user32
+        gdi32
+    )
+    gtest_discover_tests(${target_name})
+  endfunction()
+
   add_executable(tsf_tip_com_smoke_tests
     tests/com_smoke_test.cpp
   )
@@ -35,49 +60,6 @@ if(AZOOKEY_BUILD_TESTS)
   add_dependencies(tsf_tip_com_smoke_tests azookey_tsf_tip)
   gtest_discover_tests(tsf_tip_com_smoke_tests)
 
-  add_executable(tsf_tip_onkeydown_preedit_tests
-    src/CandidateWindow.cpp
-    src/DisplayAttribute.cpp
-    src/TextService.cpp
-    tests/onkeydown_preedit_test.cpp
-  )
-  target_include_directories(tsf_tip_onkeydown_preedit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_compile_definitions(tsf_tip_onkeydown_preedit_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(tsf_tip_onkeydown_preedit_tests
-    PRIVATE
-      azookey_core
-      azookey_ipc
-      GTest::gtest_main
-      azookey_project_options
-      azookey_project_warnings
-      ole32
-      uuid
-      shlwapi
-      user32
-      gdi32
-  )
-  gtest_discover_tests(tsf_tip_onkeydown_preedit_tests)
-
-  add_executable(tsf_tip_display_attribute_tests
-    src/CandidateWindow.cpp
-    src/DisplayAttribute.cpp
-    src/TextService.cpp
-    tests/display_attribute_test.cpp
-  )
-  target_include_directories(tsf_tip_display_attribute_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_compile_definitions(tsf_tip_display_attribute_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_link_libraries(tsf_tip_display_attribute_tests
-    PRIVATE
-      azookey_core
-      azookey_ipc
-      GTest::gtest_main
-      azookey_project_options
-      azookey_project_warnings
-      ole32
-      uuid
-      shlwapi
-      user32
-      gdi32
-  )
-  gtest_discover_tests(tsf_tip_display_attribute_tests)
+  add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp)
 endif()

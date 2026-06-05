@@ -68,6 +68,51 @@ TEST(TsfTipDisplayAttributeTest, TextServiceEnumeratesInputAttributeAndResets) {
   EXPECT_EQ(service.EnumDisplayAttributeInfo(nullptr), E_INVALIDARG);
 }
 
+TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorSkipsToEnd) {
+  azookey::tsf::TextService service;
+
+  IEnumTfDisplayAttributeInfo* enumerator = nullptr;
+  ASSERT_EQ(service.EnumDisplayAttributeInfo(&enumerator), S_OK);
+  ASSERT_NE(enumerator, nullptr);
+
+  EXPECT_EQ(enumerator->Skip(1), S_OK);
+
+  ITfDisplayAttributeInfo* info = nullptr;
+  ULONG fetched = 999;
+  EXPECT_EQ(enumerator->Next(1, &info, &fetched), S_FALSE);
+  EXPECT_EQ(fetched, 0u);
+  EXPECT_EQ(info, nullptr);
+
+  enumerator->Release();
+}
+
+TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorCloneKeepsCurrentPosition) {
+  azookey::tsf::TextService service;
+
+  IEnumTfDisplayAttributeInfo* enumerator = nullptr;
+  ASSERT_EQ(service.EnumDisplayAttributeInfo(&enumerator), S_OK);
+  ASSERT_NE(enumerator, nullptr);
+
+  ITfDisplayAttributeInfo* info = nullptr;
+  ULONG fetched = 0;
+  ASSERT_EQ(enumerator->Next(1, &info, &fetched), S_OK);
+  EXPECT_EQ(fetched, 1u);
+  info->Release();
+
+  IEnumTfDisplayAttributeInfo* clone = nullptr;
+  ASSERT_EQ(enumerator->Clone(&clone), S_OK);
+  ASSERT_NE(clone, nullptr);
+
+  info = nullptr;
+  fetched = 999;
+  EXPECT_EQ(clone->Next(1, &info, &fetched), S_FALSE);
+  EXPECT_EQ(fetched, 0u);
+  EXPECT_EQ(info, nullptr);
+
+  clone->Release();
+  enumerator->Release();
+}
+
 TEST(TsfTipDisplayAttributeTest, InputAttributeInfoReturnsUnderlineDefinition) {
   azookey::tsf::InputDisplayAttributeInfo info;
 

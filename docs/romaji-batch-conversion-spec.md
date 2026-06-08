@@ -32,6 +32,9 @@ Linear。`AGENTS.md`「Linear 運用（管制塔）」参照）。
   を有効化したときのみ動作する追加モードである（既定 OFF）。
 - 上流のデータ生成・LLM ホスティングは範囲外。AI 整文は既存 `aiBackend`
   （local-zenzai / openai）に委譲する。
+- セキュリティ非目標: `ai-cleanup`（M58-C）は secure 入力のセーフモード契約
+  （M46 / `docs/privacy-and-secure-input-spec.md`）に従い、secure 指定時は外部 AI へ
+  送らない。secure ゲートを迂回する独自の送信経路は設けない。
 
 ## 2. 設計原則
 
@@ -86,12 +89,14 @@ BatchAccumulating 中は抑制する。
 `BatchConverting`（応答待ち）に入る。応答前の追加打鍵 / Esc は in-flight を `Cancel`
 して `BatchAccumulating` に戻す（空の候補集合で `Selecting` に入らない）。
 
-M58-B の長文変換では `partial:true` の中間応答が複数届きうる。中間応答は
-`BatchConverting` のまま `full_surface` を Preedit に漸進更新するだけで**確定不可**と
-し、**最終応答 `partial:false` を受信してから初めて `Selecting`（確定可能）へ遷移**
-する。これにより、最初のチャンクだけが確定して残りの蓄積入力が欠落する事故を防ぐ
-（`BatchConverting` 中の Enter は無視する）。M58-A は単一の `partial:false` 応答で
-即 `Selecting` へ遷移する。
+M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合、`partial:true` の中間応答が
+複数届きうる。中間応答は `BatchConverting` のまま `full_surface` を Preedit に漸進更新
+するだけで**確定不可**とし、**最終応答 `partial:false` を受信してから初めて
+`Selecting`（確定可能）へ遷移**する。これにより、最初のチャンクだけが確定して残りの
+蓄積入力が欠落する事故を防ぐ（`BatchConverting` 中の Enter は無視する）。ストリーミング
+拡張が無い構成では各（サブ）リクエストは `partial:false` の最終応答を 1 つ返し、TIP は
+論理バッチ集約（§6.3）で全サブリクエスト完了後に `Selecting` へ遷移する。M58-A は単一
+リクエスト・単一 `partial:false` 応答で即 `Selecting` へ遷移する。
 
 ## 4. 入力中の表示・トリガ・確定
 
@@ -139,6 +144,10 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
   `includeContextInAITransform` の文脈付与方針と整合させる。`aiBackend == none`
   のときは `neural` に fallback する。**このモードでは `raw_romaji`（生ローマ字）が
   必須**（§6.1）。誤字補正は打鍵そのものの誤りパターンを参照するため。
+  **secure 入力（M46 PrivacyGate）では本モードを強制無効化**し、全文を外部 AI へ
+  送らない（`neural` / かな確定へ fallback）。`ai-cleanup` は全文を外部 AI
+  （OpenAI 等）に渡しうるため、secure-app・パスワード欄の入力が漏れないよう M46 の
+  セーフ入力契約（`docs/privacy-and-secure-input-spec.md`）に従う。
 
 ## 6. IPC プロトコル
 
@@ -209,6 +218,19 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
   できない。
 - これとは別に、フレーム上限内のリクエストでも zenz のコンテキスト長に収めるため、
   `inference-host` 側でさらに文境界でチャンク分割して逐次変換する（§7）。
+- **トランスポート契約と `partial` の扱い**: 現行の Named Pipe は **1 リクエストにつき
+  1 Envelope 応答**の request/response 契約である（`ipc/include/azookey/ipc/NamedPipeTransport.h`
+  のハンドラ戻り値・`ipc/src/NamedPipeTransport.cpp` の `ClientLoop` は単一応答のみ書き出す）。
+  したがって**正しさの担保には streaming を前提にしない**: 各 `QueryBatchConversion`
+  （およびサブリクエスト）は host 側で内部チャンク分割・変換・連結を済ませ、
+  **`partial:false` の最終応答を 1 つだけ返す**。長文の進捗フィードバックは、TIP 側
+  論理バッチで**サブリクエストが 1 つ完了するたびに Preedit を更新**することで得る
+  （サブリクエストはフレーム上限超のときのみ複数になる）。
+- **（任意）request 内の `partial:true` ストリーミング**は、1 リクエストの変換途中経過を
+  逐次表示するための**トランスポート拡張**（同一 `request_id` に対する複数応答の
+  ストリーミング）を必要とし、**M58-B のスコープに明示的に含める**（`NamedPipeTransport`
+  の多重応答対応）。この拡張が無い構成では `partial:true` 中間応答は送られず、上記の
+  単一 `partial:false` 応答 + サブリクエスト粒度の進捗で動作する。
 
 ## 7. 長文・性能・失敗時（主に M58-B）
 
@@ -221,8 +243,10 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
   送る（§6.3）。
 - **host 側チャンク分割（モデルコンテキスト対策）**: フレーム上限内の 1 リクエストでも、
   `inference-host` 側で文境界（句点・改行・推定文節境界）により分割し、zenz の
-  コンテキスト長制限内で逐次変換 → 結合する。途中経過は `partial: true` で返し、
-  Preedit を漸進更新する。
+  コンテキスト長制限内で逐次変換 → 結合する。**分割・連結は host 内部で完結し、
+  当該リクエストには `partial:false` の最終応答を 1 つだけ返す**（現行トランスポートの
+  1 リクエスト 1 応答契約に従う。§6.3）。request 内の `partial:true` 逐次表示は
+  トランスポート拡張を要する M58-B の任意項目。
 - **蓄積長上限**: バッファ長の上限と超過時の挙動（強制分割 / 警告ビープ）を実装で
   規定する。
 - **非同期・キャンセル可能**: 一括変換は UI スレッドをブロックしない。

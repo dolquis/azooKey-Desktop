@@ -1054,6 +1054,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
     Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は各 in-flight
     サブリクエスト ID へ個別送信
+  - 既定の正しさ経路は現行トランスポートの 1 リクエスト 1 応答契約に従い、host 内部
+    チャンク分割で `partial:false` を 1 つ返す（進捗はサブリクエスト粒度）
+  - （任意）request 内 `partial:true` 逐次表示にはトランスポート拡張（同一 `request_id`
+    への複数応答ストリーミング、`ipc/.../NamedPipeTransport.{h,cpp}` の多重応答対応）が
+    必要。本拡張を採用する場合は M58-B のスコープに含める
 - **受け入れ条件**:
   - フレーム上限内の長文が host 側チャンク分割で変換される
   - `partial:true` の途中で Enter を押しても部分結果が確定されず、残りの蓄積入力が
@@ -1071,18 +1076,25 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 #### M58-C: AI 整文モード
 
 - **目的**: `ai-cleanup` モードで誤字補正・句読点挿入・整文まで AI に委譲する。
-- **前提**: M58-A 完了、M16（aiBackend）、M24（local-zenzai）。
+- **前提**: M58-A 完了、M16（aiBackend）、M24（local-zenzai）、**M46（セーフ入力モード /
+  PrivacyGate）**。`ai-cleanup` は全文を外部 AI（OpenAI 等）に送りうるため、M46 の
+  secure ゲートを前提とする（`docs/privacy-and-secure-input-spec.md`）。
 - **変更対象**: `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`
   （`mode="ai-cleanup"` 経路）、`settings/mvp-settings.schema.json`
-  （`batchAutoPunctuation`）。
+  （`batchAutoPunctuation`）、M46 の `PrivacyGate` 連携。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §5・§6.1・§7。
   - `aiBackend`（local-zenzai / openai）へ全文委譲、`includeContextInAITransform` 整合
   - `mode=ai-cleanup` のリクエストでは `raw_romaji`（生ローマ字）を必須で送る
+  - **secure 入力（M46 PrivacyGate）では `ai-cleanup` を強制無効化**し外部 AI へ送らない
+    （`neural` / かな確定へ fallback）。secure-app・パスワード欄の全文が外部 AI に
+    渡らないことを保証する
   - `batchAutoPunctuation` による句読点自動挿入
   - `ai-cleanup` 失敗時 `neural` fallback、`neural` 失敗時かな確定の連鎖
 - **受け入れ条件**:
   - `batchConversionMode=ai-cleanup` で誤字を含むローマ字全文が補正・整文される
     （`raw_romaji` を必須送信し、生ローマ字の誤字パターンを補正に使う）
+  - secure 指定アプリ / パスワード欄では `ai-cleanup` が外部 AI に送信せず `neural`
+    / かな確定に fallback する（M46 PrivacyGate と整合）
   - `aiBackend=none` のとき `neural` に fallback して動作する
   - `batchAutoPunctuation` ON/OFF で句読点挿入が切り替わる
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`

@@ -47,7 +47,7 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 
 - `agent:codex-impl` / `agent:codex-pr-review` は **ルーティング（候補）ラベル**であり、Codex Cloud の実行を許可しない（滑走路前の待機列）。
 - Claude は Codex 候補 Issue の作成・分割・ラベル付け・関連付け・整理と、実行指示文の下書きまで行ってよい。ただし Codex への assign / delegate / `@Codex` mention は **行わない**。
-- Codex Cloud の実行には人間 lead の明示許可（Issue コメント）が必要。いかなるコメントにもリテラルな `@Codex` を再生産しない（言及時は無害化する）。
+- Codex Cloud の実行には人間 lead の明示許可（Issue コメント）が必要。Claude / エージェントはいかなる Linear コメントにもリテラルな mention トークン（`@`+`Codex`）を再生産しない（無害化する）。承認後に実際の mention で起動するのは人間 lead のみ。
 - triage rule による Codex 自動 delegate は使わない。
 - 実行したら Codex Run Record（§6）に approval / Codex task link / branch / commit / PR / validation / remaining risk を記録する。
 - 無許可で Codex Cloud が動いた場合はインシデントとして扱う: delegate を解除して Issue を候補へ戻し、GitHub に branch / PR が到達していないか確認し、Issue に記録する。
@@ -195,7 +195,7 @@ GitHub docs remain canonical.
 - Migrated 作業で GitHub Issue リンクを省略しない。
 - Linear 作業から README に進捗表/TODO を増やさない。
 - Claude から Codex へ assign / delegate / mention しない。実行は人間 lead が明示許可コメント後に自ら行う（Claude は実行指示文の下書きまで）。
-- いかなる Linear コメント / Issue にもリテラルな Codex mention トークン（`@` + `Codex`）を再生産しない（無害化する）。
+- Claude / エージェントはいかなる Linear コメント / Issue にもリテラルな Codex mention トークン（`@` + `Codex`）を再生産しない（無害化する）。承認後に実際の mention で起動するのは人間 lead のみ。
 - triage rule で Codex を自動 delegate しない。
 
 ---
@@ -237,7 +237,7 @@ Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済
 Codex safety checks:
 
 - [ ] 人間 lead の明示許可なく Codex へ delegate された Issue がない
-- [ ] 明示許可なく `@Codex` を含むコメントがない
+- [ ] 明示許可なく Codex mention トークン（`@`+`Codex`）を含むコメントがない
 - [ ] `agent:codex-*` をルーティング（候補）ラベルとしてのみ扱っている
 - [ ] Codex 実行開始後に Todo へ放置された delegate 済み Issue がない
 - [ ] Codex 完了タスクに task / PR / commit リンク・検証・残リスクが記録されている
@@ -258,7 +258,7 @@ Rule: Linear のルーティングのみを点検する。GitHub docs が正典�
 
 Lead: <name>
 Current focus: <一文>
-Codex safety: `agent:codex-*` は候補ラベルのみ。明示許可なく Codex へ delegate / assign / `@Codex` しない。
+Codex safety: `agent:codex-*` は候補ラベルのみ。Claude は Codex へ delegate / assign / mention しない（実行は人間 lead のみ）。
 Next checkpoint: <YYYY-MM-DD>。<その日に判定する内容>
 
 ## Next AI Tasks

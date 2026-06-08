@@ -103,6 +103,28 @@
       "additionalProperties": { "type": "string" },
       "description": "rich X-2-6: 前面アプリ実行ファイル名 → prompt prefix のマップ（例: 'Code.exe', 'OUTLOOK.EXE'）"
     },
+    "batchRomajiConversion": {
+      "type": "boolean",
+      "default": false,
+      "description": "M58-A: true でローマ字を蓄積し最後に一括変換するモードを有効化。蓄積中は候補/予測/ライブ変換の IPC を発火しない"
+    },
+    "batchRomajiPreviewStyle": {
+      "type": "string",
+      "enum": ["kana", "romaji"],
+      "default": "kana",
+      "description": "M58-A: 蓄積中 Preedit の表示。kana=ローマ字→かなプレビュー / romaji=生ローマ字をそのまま表示"
+    },
+    "batchConversionMode": {
+      "type": "string",
+      "enum": ["neural", "ai-cleanup"],
+      "default": "neural",
+      "description": "M58-A/M58-C: 一括変換の処理系。neural=zenz かな漢字変換 / ai-cleanup=aiBackend で誤字補正・句読点挿入・整文"
+    },
+    "batchAutoPunctuation": {
+      "type": "boolean",
+      "default": false,
+      "description": "M58-C: batchConversionMode=ai-cleanup 時に句読点を自動挿入"
+    },
     "autoUpdate": {
       "type": "object",
       "description": "Phase 7 (M32): 自動更新設定",

@@ -1,0 +1,201 @@
+# ローマ字一括変換 仕様（追加機能 / M58）
+
+本書は azooKey-Desktop Windows 版の「ローマ字一括変換（Batch Romaji
+Conversion）」機能を定める。`plans/windows-port-roadmap.md` の M58（M58-A /
+M58-B / M58-C）が本書を参照する。本書は機能仕様（InputState・IPC payload・
+設定項目・ユーザー可視挙動）の正典であり、進捗・状態は持たない（状態の正典は
+Linear。`AGENTS.md`「Linear 運用（管制塔）」参照）。
+
+関連 spec:
+
+- `docs/legacy-parity-spec.md` … InputState 状態機械（§1.2）、キーバインド（§1.4）、
+  ライブ変換（§2）。本機能はこれらを土台にする。
+- `docs/rich-features-spec.md` … AI 変換・文単位予測。M58-C の AI 整文と接続。
+- `docs/tsf-deep-integration-spec.md` … 再変換・multi-segment。M58-B の文節再変換と接続。
+
+## 1. 目的（と背景）
+
+「かな漢字変換のたびに思考と視線が中断される」問題を解消する。ユーザーは
+ローマ字で文章を最後まで打ち切り、**最後に一度だけ一括変換**する。変換待ち・
+候補選択・誤変換修正が入力の流れに割り込まないため、画面を注視せず（相手の目を
+見たまま）連続入力できる。
+
+参考: note 記事「ローマ字のまま入力して最後に AI 変換」
+（https://note.com/fta7/n/nb8ccb733c425）、議論まとめ
+（https://togetter.com/li/2702866）。これらが提起する入力スタイルを、決定的な
+ニューラルかな漢字変換（既定）と、AI による誤字補正・整文（オプション）の
+2 系統として IME 機能化する。
+
+### 1.1 非目標
+
+- 既定の逐次変換（liveConversion / 予測）の置き換えではない。`batchRomajiConversion`
+  を有効化したときのみ動作する追加モードである（既定 OFF）。
+- 上流のデータ生成・LLM ホスティングは範囲外。AI 整文は既存 `aiBackend`
+  （local-zenzai / openai）に委譲する。
+
+## 2. 設計原則
+
+- **蓄積中は IPC を発火しない。** ローマ字→かな変換はローカル（`RomajiKanaConverter`、
+  `core/src/RomajiKanaConverter.cpp`）で逐次行い、推論（候補・予測・ライブ変換）の
+  クエリは一括変換トリガまで一切送らない。これが「中断ゼロ」の中核。
+- **既定 OFF・後方互換。** OFF のときは従来の逐次変換・状態遷移を一切変えない。
+- **段階導入。** M58-A（コア）→ M58-B（長文・文節再変換）→ M58-C（AI 整文）。
+
+## 3. InputState への統合
+
+`core/include/azookey/core/InputState.h`（`docs/legacy-parity-spec.md` §1.2 で
+定義）の `InputStateKind` に状態を 1 つ追加する。
+
+```cpp
+enum class InputStateKind {
+    Idle,
+    Composing,
+    Previewing,
+    BatchAccumulating,   // 追加: ローマ字蓄積中（推論クエリを発火しない）
+    Selecting,
+    ReplaceSuggestion,
+    UnicodeInput,
+};
+```
+
+遷移表（`batchRomajiConversion == true` のとき。主要遷移のみ）:
+
+| 現状 | 入力 | 次状態 | 副作用 |
+|---|---|---|---|
+| Idle | Input | BatchAccumulating | StartComposition / ローカルでかなバッファ更新 / Preedit 更新 |
+| BatchAccumulating | Input | BatchAccumulating | かなバッファ更新 / Preedit 更新（**IPC 無し**） |
+| BatchAccumulating | Backspace | BatchAccumulating / Idle | バッファ 1 単位削除（空になれば Idle） |
+| BatchAccumulating | StartConversion (Space) | Selecting | `QueryBatchConversion` 送信 → 全文最良候補を Preedit 表示 |
+| Selecting | NextCandidate / SelectByDigit | Selecting | 候補選択（M58-B では文節単位） |
+| Selecting | Forward/Backward | Selecting | 文節カーソル移動（M58-B） |
+| Selecting | Commit (Enter) | Idle | EndComposition + CommitObservation（全文確定） |
+| Selecting | Cancel (Esc) | BatchAccumulating | 変換結果を破棄し蓄積状態へ戻す |
+| BatchAccumulating | Cancel (Esc) | Idle | CancelComposition |
+
+`batchRomajiConversion == false` のときは従来どおり Composing / Previewing に
+遷移し、本状態は使われない。ライブ変換（M14）・予測（M15）は
+BatchAccumulating 中は抑制する。
+
+## 4. 入力中の表示・トリガ・確定
+
+### 4.1 蓄積中の Preedit 表示
+
+設定 `batchRomajiPreviewStyle` で切替える（両対応）。
+
+- `kana`（既定）: `RomajiKanaConverter` の出力かな（例: `kiiboodo` → `きーぼーど`）を
+  アンダーライン付き Preedit に表示。漢字変換はしない。読みやすく既存 IME に近い。
+- `romaji`: 入力された生ローマ字（半角英字、例 `kiiboodo`）をそのまま Preedit に
+  表示。画面を見ない運用に最適。`TextService` は生ローマ字文字列を別途保持する。
+
+いずれのモードでも内部ではかなバッファを保持し、一括変換時の読みとして使う。
+
+### 4.2 一括変換トリガ
+
+**Space（`StartConversion`）をバッファ全体に適用**する。日本語入力中は空白を
+打たないため、`docs/legacy-parity-spec.md` §1.4 の既存キーバインドと衝突しない。
+全文かな（または生ローマ字）を `QueryBatchConversion` で送信する。
+
+### 4.3 確定・キャンセル
+
+- Enter（`Commit`）で全文を確定（`EndComposition` + `CommitObservation`）。
+- Esc（`Cancel`）は Selecting からは蓄積状態へ戻し、BatchAccumulating からは破棄。
+- M58-B では Selecting 中に ←/→ で文節カーソル移動、Space/数字キーで文節候補切替。
+
+## 5. 一括変換モード（2 系統）
+
+設定 `batchConversionMode` で選択する。
+
+- `neural`（既定 / M58-A）: 蓄積かなを Zenzai/zenz でかな漢字変換する。誤字補正・
+  句読点の自動挿入はしない素直な変換。
+- `ai-cleanup`（M58-C）: `aiBackend`（local-zenzai / openai）に全文を渡し、
+  誤字補正・句読点挿入・整文まで委譲する。非決定的でレイテンシが大きい。
+  `includeContextInAITransform` の文脈付与方針と整合させる。`aiBackend == none`
+  のときは `neural` に fallback する。
+
+## 6. IPC プロトコル
+
+新 `MessageType::QueryBatchConversion` を追加する（`ipc/include/azookey/ipc/Messages.h`
+・`ipc/include/azookey/ipc/Payloads.h`）。
+
+### 6.1 Request
+
+```jsonc
+{
+  "reading": "全文かな",        // 蓄積したかなバッファ
+  "raw_romaji": "kiiboodo...",  // 任意。ai-cleanup で誤字補正に使う
+  "left_context": "",            // 直近確定文（任意）
+  "mode": "neural",             // "neural" | "ai-cleanup"
+  "max_candidates": 5            // 文節あたり候補数
+}
+```
+
+### 6.2 Response
+
+```jsonc
+{
+  "segments": [                  // 文節構造（M58-B で複数、M58-A は単一でも可）
+    {
+      "surface": "キーボード",
+      "reading": "きーぼーど",
+      "candidates": [ { "surface": "...", "reading": "...", "score": 0.0 } ]
+    }
+  ],
+  "full_surface": "キーボードを使う", // 全文の最良連結（Preedit 即時表示用）
+  "partial": false               // チャンク逐次変換途中は true
+}
+```
+
+既存 `QueryCandidates`（単一読み・単一候補列）と分離する理由: 一括変換は
+**複数文節（segments）構造**を返す必要があり、既存 `Candidate`
+（`core/include/azookey/core/Candidate.h`、segments フィールド無し）では表現
+できない。multi-segment は `docs/tsf-deep-integration-spec.md` で将来課題と
+されていた領域であり、本機能で初めて必須化する。
+
+### 6.3 キャンセル・長文
+
+- 進行中の一括変換は既存 `CancelPayload`（`target_request_id`）でキャンセルできる。
+  Selecting 移行前に追加打鍵があれば in-flight リクエストを破棄して蓄積へ戻す。
+- リクエスト全体は `ipc/include/azookey/ipc/Limits.h` の `kMaxJsonInputBytes`
+  （1 MB）以内に収める。超過しうる長文は M58-B のチャンク分割で対応する。
+
+## 7. 長文・性能・失敗時（主に M58-B）
+
+- **チャンク分割**: `inference-host` 側で文境界（句点・改行・推定文節境界）により
+  分割し、zenz のコンテキスト長制限内で逐次変換 → 結合する。途中経過は
+  `partial: true` で返し、Preedit を漸進更新する。
+- **蓄積長上限**: バッファ長の上限と超過時の挙動（強制分割 / 警告ビープ）を実装で
+  規定する。
+- **非同期・キャンセル可能**: 一括変換は UI スレッドをブロックしない。
+- **fallback 連鎖**: `ai-cleanup` 失敗時は `neural` へ、`neural` 失敗時はかなのまま
+  確定可能にする（入力を失わない）。
+
+## 8. 設定スキーマ
+
+`settings/mvp-settings.schema.json` に以下を追加する（`additionalProperties:false`
+を維持。`description` に対応 M を記載する既存流儀に合わせる）。
+
+| キー | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `batchRomajiConversion` | boolean | `false` | M58-A: ローマ字を蓄積し最後に一括変換するモードを有効化 |
+| `batchRomajiPreviewStyle` | enum `kana`/`romaji` | `kana` | M58-A: 蓄積中 Preedit の表示（かなプレビュー / 生ローマ字） |
+| `batchConversionMode` | enum `neural`/`ai-cleanup` | `neural` | M58-A/M58-C: 一括変換の処理系（zenz かな漢字変換 / AI 整文） |
+| `batchAutoPunctuation` | boolean | `false` | M58-C: `ai-cleanup` 時に句読点を自動挿入 |
+
+## 9. テスト計画
+
+- **状態機械** (`core/tests/input_state_test.cpp`): `batchRomajiConversion` ON で
+  Idle→BatchAccumulating→（Space）→Selecting→（Enter）→Idle、Esc の戻り、OFF で
+  従来遷移が不変であることを網羅。
+- **IPC** (`ipc/tests/payloads_test.cpp`): `QueryBatchConversion` の build/parse、
+  segments 構造の往復、`partial` フラグ、Cancel の ID 整合。
+- **変換** (`inference-host/tests`): 固定かな全文 → 妥当な segments / full_surface。
+  チャンク分割（句点を含む長文）・キャンセルの動作。
+- **手動 / 実機（Win11、`gate:human-required`）**: `watashihakiiboodowotukau` 等を
+  蓄積 → Space で一括変換 → Enter 確定で妥当な日本語が入る。設定 OFF で従来逐次
+  動作が不変。`batchRomajiPreviewStyle` 切替が反映される。
+
+## 10. 受け入れ条件（M58 全体）
+
+M58-A / M58-B / M58-C ごとの受け入れ条件は `plans/windows-port-roadmap.md` の
+各マイルストーンに定義する（本書は仕様、roadmap は受け入れ条件の「定義」、
+達成状態は Linear）。

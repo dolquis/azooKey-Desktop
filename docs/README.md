@@ -11,7 +11,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 | 正典範囲 |
 |---|---|---|
-| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M57 の定義・受け入れ条件（定義）・依存関係・Phase 1〜7・開発基盤トラック・プライバシー / モデル管理 / 学習データ UI トラック・変換品質トラック・v1.0 実行計画・テスト体系の正典。進捗・状態・優先度は持たず Linear を正典とする** |
+| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M58 の定義・受け入れ条件（定義）・依存関係・Phase 1〜7・開発基盤トラック・プライバシー / モデル管理 / 学習データ UI トラック・変換品質トラック・v1.0 実行計画・テスト体系の正典。進捗・状態・優先度は持たず Linear を正典とする** |
 
 ## アーキテクチャ・設計
 
@@ -37,6 +37,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`model-management-spec.md`](model-management-spec.md) | プライバシー / モデル管理 / 学習データ UI トラック M45（Zenzai モデル管理 UI） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード） |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
+| [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | 同トラック M49（学習データ可視化・バックアップ） |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | 同トラック M54（ユーザー学習強化） |
@@ -64,7 +65,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | Phase 5 | レガシー parity 復元 | M13〜M19 |
 | Phase 6 | Windows ネイティブ深耕 | M20〜M27 |
 | Phase 7 | サイドロード配信 | M28〜M34 |
-| 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B / M48 |
+| 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B / M48 / M58 |
 | 開発基盤 | ビルド再現性・CI・IPC 堅牢化・観測性・可用性・診断・復旧 UX・互換性テスト・trace（Phase 連番とは独立） | M37〜M43 + M44/M47/M50/M51 |
 | プライバシー / モデル管理 / 学習データ UI | Phase 5/6/7 の既存 M に依存する付加機能 | M45 / M46 / M49 |
 | 変換品質 | 評価ベンチ・辞書・学習強化・打ち間違え統合・Tiny Reranker・ModernBERT スコアリング（Phase 連番とは独立） | M52〜M57 |

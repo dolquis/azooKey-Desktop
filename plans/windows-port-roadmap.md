@@ -999,6 +999,74 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - アプリ切替後 1 秒以内にプロファイルが反映される
 - **参照仕様**: `docs/app-profile-spec.md`
 
+### M58: ローマ字一括変換（Batch Romaji Conversion）
+
+> ローマ字で文章を最後まで打ち切り、最後に一度だけ一括変換する追加入力モード。
+> 「変換のたびに思考と視線が中断される」問題の解消を狙う差別化機能。既定 OFF・
+> 後方互換で、有効化時のみ動作する。M58-A（コア）→ M58-B（長文・文節再変換）→
+> M58-C（AI 整文）の段階構成。正典仕様は `docs/romaji-batch-conversion-spec.md`。
+
+#### M58-A: 一括変換コア
+
+- **目的**: ローマ字蓄積中は推論クエリを発火せず、トリガ（Space）で全文かなを
+  Zenzai でかな漢字変換し、全体確定する最小フローを実現する。
+- **前提**: M6（Commit / Observation）、M13（InputState 状態機械）、M14（ライブ変換の
+  状態基盤）完了。**推奨**: M8/M9（実 Zenzai）完了後に品質が揃う。
+- **変更対象**: `core/include/azookey/core/InputState.h`（`BatchAccumulating` 追加）、
+  `tsf-tip/src/TextService.cpp`（`OnKeyDown` の蓄積分岐・Preedit 表示切替）、
+  `core/src/RomajiKanaConverter.cpp`（蓄積運用）、`ipc/src/Messages.cpp`・
+  `ipc/src/Payloads.cpp`（`QueryBatchConversion` 追加）、
+  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`、
+  `settings/mvp-settings.schema.json`。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §3〜§6・§8。
+  - `BatchAccumulating` 状態と遷移（Space=一括変換、Enter=全体確定、Esc=破棄/戻し）
+  - 蓄積中は IPC 非発火（ローカルでかなバッファのみ更新）
+  - `batchRomajiPreviewStyle`（`kana` / `romaji`）の Preedit 表示切替
+  - `QueryBatchConversion`（`mode="neural"`）IPC の往復、設定キー 3 種
+- **受け入れ条件**:
+  - `batchRomajiConversion=true` で、ローマ字全文を蓄積中に候補/予測/ライブ変換の
+    IPC が一切送られない（中断ゼロ）
+  - Space で全文が一括変換され、Enter で妥当な日本語が確定する
+    （例: `watashihakiiboodowotukau` → 妥当な変換）
+  - `batchRomajiPreviewStyle` 切替で Preedit がかな / 生ローマ字に切り替わる
+  - `batchRomajiConversion=false` で従来の逐次変換・状態遷移が一切変わらない
+  - 実機 Win11 での end-to-end 確認（`gate:human-required`）
+- **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
+#### M58-B: 長文・文節再変換
+
+- **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
+- **前提**: M58-A 完了、M20（再変換）。
+- **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
+  進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知）、
+  `tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§7。
+  - 文境界（句点・改行・推定文節境界）でのチャンク分割 → 逐次変換 → 結合
+  - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
+  - 進捗（`partial`）の Preedit 漸進更新と `Cancel` によるキャンセル
+- **受け入れ条件**:
+  - 句点を含む長文が `kMaxJsonInputBytes` 超でもチャンク分割で変換される
+  - 変換結果の特定文節だけ候補を選び直して確定できる
+  - 変換中に追加打鍵 / Esc でキャンセルでき、入力が失われない
+- **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
+#### M58-C: AI 整文モード
+
+- **目的**: `ai-cleanup` モードで誤字補正・句読点挿入・整文まで AI に委譲する。
+- **前提**: M58-A 完了、M16（aiBackend）、M24（local-zenzai）。
+- **変更対象**: `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`
+  （`mode="ai-cleanup"` 経路）、`settings/mvp-settings.schema.json`
+  （`batchAutoPunctuation`）。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §5・§7。
+  - `aiBackend`（local-zenzai / openai）へ全文委譲、`includeContextInAITransform` 整合
+  - `batchAutoPunctuation` による句読点自動挿入
+  - `ai-cleanup` 失敗時 `neural` fallback、`neural` 失敗時かな確定の連鎖
+- **受け入れ条件**:
+  - `batchConversionMode=ai-cleanup` で誤字を含むローマ字全文が補正・整文される
+  - `aiBackend=none` のとき `neural` に fallback して動作する
+  - `batchAutoPunctuation` ON/OFF で句読点挿入が切り替わる
+- **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。

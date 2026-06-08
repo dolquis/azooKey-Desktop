@@ -121,10 +121,10 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
 打たないため、`docs/legacy-parity-spec.md` §1.4 の既存キーバインドと衝突しない。
 `QueryBatchConversion` を送信する際は、`batchRomajiPreviewStyle` の表示設定や
 `batchConversionMode` に関わらず、**常に蓄積した全文かなを `reading` に入れる**。
-生ローマ字は `reading` に入れず、`ai-cleanup` 用に `raw_romaji`（任意）へ別途
-格納する（§6.1）。`reading` に生ローマ字を入れると `neural` 変換および
-`ai-cleanup`→`neural` fallback が zenz にアルファベットを渡してしまい、変換が
-成立しなくなるため。
+生ローマ字は `reading` に入れず、`raw_romaji` へ別途格納する。`raw_romaji` は
+**`mode=ai-cleanup` では必須**、`mode=neural` では任意である（§5・§6.1）。`reading` に
+生ローマ字を入れると `neural` 変換および `ai-cleanup`→`neural` fallback が zenz に
+アルファベットを渡してしまい、変換が成立しなくなるため。
 
 ### 4.3 確定・キャンセル
 

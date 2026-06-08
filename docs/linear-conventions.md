@@ -116,7 +116,7 @@ Claude が Issue を作成・更新・分割するときは、本文冒頭に **
 - Expected PR size:
 - Blocks:
 - Blocked by:
-- Codex safety: `agent:codex-*` はルーティングのみ。明示許可なく Codex へ delegate / assign / `@Codex` しない。
+- Codex safety: `agent:codex-*` はルーティングのみ。Claude は Codex へ delegate / assign / mention しない（実行は人間 lead のみ。mention トークンは候補段階で書かない）。
 ```
 
 Issue タイプ（`type:`）:
@@ -194,8 +194,8 @@ GitHub docs remain canonical.
 - 実機・署名など人間判断が必要な作業を AI 判断だけで Done にしない。
 - Migrated 作業で GitHub Issue リンクを省略しない。
 - Linear 作業から README に進捗表/TODO を増やさない。
-- Claude から Codex へ assign / delegate / `@Codex` mention しない（人間 lead の明示許可があるときを除く）。
-- いかなる Linear コメントにもリテラルな `@Codex` を再生産しない（無害化する）。
+- Claude から Codex へ assign / delegate / mention しない。実行は人間 lead が明示許可コメント後に自ら行う（Claude は実行指示文の下書きまで）。
+- いかなる Linear コメント / Issue にもリテラルな Codex mention トークン（`@` + `Codex`）を再生産しない（無害化する）。
 - triage rule で Codex を自動 delegate しない。
 
 ---

@@ -137,7 +137,8 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
 - `ai-cleanup`（M58-C）: `aiBackend`（local-zenzai / openai）に全文を渡し、
   誤字補正・句読点挿入・整文まで委譲する。非決定的でレイテンシが大きい。
   `includeContextInAITransform` の文脈付与方針と整合させる。`aiBackend == none`
-  のときは `neural` に fallback する。
+  のときは `neural` に fallback する。**このモードでは `raw_romaji`（生ローマ字）が
+  必須**（§6.1）。誤字補正は打鍵そのものの誤りパターンを参照するため。
 
 ## 6. IPC プロトコル
 
@@ -149,12 +150,20 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
 ```jsonc
 {
   "reading": "全文かな",        // 必ず蓄積した全文かな（生ローマ字は入れない）
-  "raw_romaji": "nihongo...",   // 任意。生ローマ字。ai-cleanup の誤字補正に使う
+  "raw_romaji": "nihongo...",   // 生ローマ字。mode=ai-cleanup では必須 / neural では任意
   "left_context": "",            // 直近確定文（任意）
   "mode": "neural",             // "neural" | "ai-cleanup"
   "max_candidates": 5            // 文節あたり候補数
 }
 ```
+
+フィールド制約:
+
+- `reading` は常に全文かな（必須）。`mode=neural` はこれを変換入力に使う。
+- `raw_romaji` は **`mode=ai-cleanup` では必須**（任意ではない）。AI 整文は
+  ユーザーが打った生ローマ字の誤字パターン（アルファベットの打ち間違い）を見て補正
+  するため、かなの `reading` だけでは元の誤りを復元できず M58-C の補正挙動を満たせない。
+  `mode=neural` では `raw_romaji` は任意。
 
 ### 6.2 Response
 
@@ -183,6 +192,15 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
 - 進行中の一括変換は既存 `CancelPayload`（`target_request_id`）でキャンセルできる。
   `BatchConverting`（応答待ち）中に追加打鍵 / Esc があれば in-flight リクエストを
   破棄して `BatchAccumulating` へ戻す（§3）。
+- **論理バッチ（複数サブリクエストの集約）**: TIP がフレーム上限超の蓄積を複数の
+  `QueryBatchConversion` へ事前分割した場合、それらを **1 つの論理バッチ**として扱う。
+  TIP は全サブリクエストの `request_id` 集合と、各サブリクエストの最終応答
+  （`partial:false`）受信状況を管理し、**全サブリクエストが最終応答を返してから初めて**
+  `BatchConverting` → `Selecting` へ遷移する（最初のチャンクの最終応答で `Selecting`
+  に入らない）。`full_surface` / `segments` は送信順どおりに連結する。`CancelPayload`
+  は単数（`target_request_id`）のため、キャンセル時は **in-flight な各サブリクエスト
+  ID に対して `Cancel` を 1 件ずつ送る**（取りこぼしたサブリクエストを走らせ続けない）。
+  M58-A（単一リクエスト）は論理バッチがサブリクエスト 1 件の特殊ケース。
 - 1 リクエストは `ipc/include/azookey/ipc/Limits.h` の `kMaxJsonInputBytes` /
   `kMaxFrameSize`（ともに 1 MB）以内に収める必要がある。IPC フレーミング/パーサが
   この上限を超えるフレームを `inference-host` 到達前に拒否するため、フレーム上限を
@@ -198,6 +216,9 @@ M58-B の長文変換では `partial:true` の中間応答が複数届きうる�
   （`kMaxFrameSize` = 1 MB）を超えうる場合、TIP は送信前に文境界で複数の
   `QueryBatchConversion` リクエスト（各々上限未満）へ分割して送る。フレーム上限を
   超える単一リクエストは IPC 層で拒否されるため、host 側分割では救済できない。
+  分割した複数リクエストは 1 つの論理バッチとして集約し、全サブリクエストの最終応答
+  受信で `Selecting` へ、Esc / 追加打鍵では全 in-flight サブリクエストへ `Cancel` を
+  送る（§6.3）。
 - **host 側チャンク分割（モデルコンテキスト対策）**: フレーム上限内の 1 リクエストでも、
   `inference-host` 側で文境界（句点・改行・推定文節境界）により分割し、zenz の
   コンテキスト長制限内で逐次変換 → 結合する。途中経過は `partial: true` で返し、

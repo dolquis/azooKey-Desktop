@@ -1051,7 +1051,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
   - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
     最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
-  - `Cancel` によるキャンセル
+  - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
+    Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は各 in-flight
+    サブリクエスト ID へ個別送信
 - **受け入れ条件**:
   - フレーム上限内の長文が host 側チャンク分割で変換される
   - `partial:true` の途中で Enter を押しても部分結果が確定されず、残りの蓄積入力が
@@ -1059,8 +1061,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - フレーム上限（`kMaxFrameSize` = 1 MB）を超える蓄積は TIP 側で複数リクエストへ
     事前分割され、各リクエストが上限未満で送信・変換される（フレーム上限超の単一
     リクエストは IPC 層で拒否されるため送らない）
+  - 事前分割した複数サブリクエストは 1 論理バッチとして集約され、全サブリクエストの
+    最終応答が揃ってから確定可能になる（最初のチャンクだけで Selecting に入らない）
+  - 変換中の Esc / 追加打鍵で **全 in-flight サブリクエスト**がキャンセルされ、
+    取り残されたサブリクエストが走り続けない
   - 変換結果の特定文節だけ候補を選び直して確定できる
-  - 変換中に追加打鍵 / Esc でキャンセルでき、入力が失われない
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`
 
 #### M58-C: AI 整文モード
@@ -1070,12 +1075,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`
   （`mode="ai-cleanup"` 経路）、`settings/mvp-settings.schema.json`
   （`batchAutoPunctuation`）。
-- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §5・§7。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §5・§6.1・§7。
   - `aiBackend`（local-zenzai / openai）へ全文委譲、`includeContextInAITransform` 整合
+  - `mode=ai-cleanup` のリクエストでは `raw_romaji`（生ローマ字）を必須で送る
   - `batchAutoPunctuation` による句読点自動挿入
   - `ai-cleanup` 失敗時 `neural` fallback、`neural` 失敗時かな確定の連鎖
 - **受け入れ条件**:
   - `batchConversionMode=ai-cleanup` で誤字を含むローマ字全文が補正・整文される
+    （`raw_romaji` を必須送信し、生ローマ字の誤字パターンを補正に使う）
   - `aiBackend=none` のとき `neural` に fallback して動作する
   - `batchAutoPunctuation` ON/OFF で句読点挿入が切り替わる
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`

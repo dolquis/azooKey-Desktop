@@ -999,6 +999,116 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - アプリ切替後 1 秒以内にプロファイルが反映される
 - **参照仕様**: `docs/app-profile-spec.md`
 
+### M58: ローマ字一括変換（Batch Romaji Conversion）
+
+> ローマ字で文章を最後まで打ち切り、最後に一度だけ一括変換する追加入力モード。
+> 「変換のたびに思考と視線が中断される」問題の解消を狙う差別化機能。既定 OFF・
+> 後方互換で、有効化時のみ動作する。M58-A（コア）→ M58-B（長文・文節再変換）→
+> M58-C（AI 整文）の段階構成。正典仕様は `docs/romaji-batch-conversion-spec.md`。
+
+#### M58-A: 一括変換コア
+
+- **目的**: ローマ字蓄積中は推論クエリを発火せず、トリガ（Space）で全文かなを
+  Zenzai でかな漢字変換し、全体確定する最小フローを実現する。
+- **前提**: M6（Commit / Observation）、M13（InputState 状態機械）、M14（ライブ変換の
+  状態基盤）完了。**推奨**: M8/M9（実 Zenzai）完了後に品質が揃う。
+- **変更対象**: `core/include/azookey/core/InputState.h`（`BatchAccumulating` /
+  `BatchConverting` 追加）、
+  `tsf-tip/src/TextService.cpp`（`OnKeyDown` の蓄積分岐・Preedit 表示切替）、
+  `core/src/RomajiKanaConverter.cpp`（蓄積運用）、`ipc/src/Messages.cpp`・
+  `ipc/src/Payloads.cpp`（`QueryBatchConversion` 追加）、
+  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`、
+  `settings/mvp-settings.schema.json`。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §3〜§6・§8。
+  - `BatchAccumulating` / `BatchConverting`（応答待ち）状態と遷移（Space=一括変換要求、
+    応答受信=Selecting、応答前の追加打鍵/Esc=in-flight Cancel→蓄積復帰、Enter=全体確定）
+  - 蓄積中は IPC 非発火（ローカルでかなバッファのみ更新）
+  - `batchRomajiPreviewStyle`（`kana` / `romaji`）の Preedit 表示切替
+  - `QueryBatchConversion`（`mode="neural"`）IPC の往復、設定キー 3 種
+- **受け入れ条件**:
+  - `batchRomajiConversion=true` で、ローマ字全文を蓄積中に候補/予測/ライブ変換の
+    IPC が一切送られない（中断ゼロ）
+  - Space で全文が一括変換され、Enter で妥当な日本語が確定する
+    （例: `kyouhaiitenkidesu` → きょうはいいてんきです → 今日はいい天気です。
+    既存 `RomajiKanaConverter` が実際に出力するかなで例を取り、`ii`/`oo` を `ー` に
+    正規化しない前提）
+  - `batchRomajiPreviewStyle` 切替で Preedit がかな / 生ローマ字に切り替わる
+  - `batchRomajiConversion=false` で従来の逐次変換・状態遷移が一切変わらない
+  - 実機 Win11 での end-to-end 確認（`gate:human-required`）
+- **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
+#### M58-B: 長文・文節再変換
+
+- **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
+- **前提**: M58-A 完了、M20（再変換）。
+- **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
+  進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知・Cancel 専用接続 or 非同期
+  ディスパッチ）、`tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）、
+  `ipc/.../NamedPipeTransport.{h,cpp}`（アウトオブバンド Cancel 経路）。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
+  - アウトオブバンドな Cancel 経路（Cancel 専用接続 or host 非同期ディスパッチャ）。
+    同期 ClientLoop + 単一接続では遅い変換中に Cancel が処理されないため必須
+  - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ。
+    文境界が無い場合はバイト安全ハード分割でフォールバック）
+  - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→
+    逐次変換 → 結合。文境界が無くコンテキスト超の場合はバイト/トークン安全ハード分割で
+    フォールバック
+  - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
+  - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
+    最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
+  - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
+    Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は各 in-flight
+    サブリクエスト ID へ個別送信
+  - 既定の正しさ経路は現行トランスポートの 1 リクエスト 1 応答契約に従い、host 内部
+    チャンク分割で `partial:false` を 1 つ返す（進捗はサブリクエスト粒度）
+  - （任意）request 内 `partial:true` 逐次表示にはトランスポート拡張（同一 `request_id`
+    への複数応答ストリーミング、`ipc/.../NamedPipeTransport.{h,cpp}` の多重応答対応）が
+    必要。本拡張を採用する場合は M58-B のスコープに含める
+- **受け入れ条件**:
+  - フレーム上限内の長文が host 側チャンク分割で変換される
+  - 既定経路（単一 `partial:false`／論理バッチ）: 論理バッチの全（サブ）リクエストの
+    最終応答が揃うまでは確定不可で、途中の Enter は部分結果を確定しない
+  - ストリーミング拡張を採用する場合のみ: `partial:true` の途中で Enter を押しても
+    部分結果が確定されず、最終応答まで確定不可
+  - フレーム上限（`kMaxFrameSize` = 1 MB）を超える蓄積は TIP 側で複数リクエストへ
+    事前分割され、各リクエストが上限未満で送信・変換される（フレーム上限超の単一
+    リクエストは IPC 層で拒否されるため送らない）。**分割判定は元バッファ長ではなく
+    シリアライズ後のフレーム/エンベロープバイト数で行う**（`reading` +（ai-cleanup の）
+    `raw_romaji` + JSON/envelope オーバーヘッド込み）
+  - 事前分割した複数サブリクエストは 1 論理バッチとして集約され、全サブリクエストの
+    最終応答が揃ってから確定可能になる（最初のチャンクだけで Selecting に入らない）
+  - 変換中の Esc / 追加打鍵で **全 in-flight サブリクエスト**がキャンセルされ、
+    取り残されたサブリクエストが走り続けない
+  - 変換結果の特定文節だけ候補を選び直して確定できる
+- **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
+#### M58-C: AI 整文モード
+
+- **目的**: `ai-cleanup` モードで誤字補正・句読点挿入・整文まで AI に委譲する。
+- **前提**: M58-A 完了、M16（aiBackend）、M24（local-zenzai）、**M46（セーフ入力モード /
+  PrivacyGate）**。`ai-cleanup` は全文を外部 AI（OpenAI 等）に送りうるため、M46 の
+  secure ゲートを前提とする（`docs/privacy-and-secure-input-spec.md`）。
+- **変更対象**: `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`
+  （`mode="ai-cleanup"` 経路）、`settings/mvp-settings.schema.json`
+  （`batchAutoPunctuation`）、M46 の `PrivacyGate` 連携。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §5・§6.1・§7。
+  - `aiBackend`（local-zenzai / openai）へ全文委譲、`includeContextInAITransform` 整合
+  - `mode=ai-cleanup` のリクエストでは `raw_romaji`（生ローマ字）を必須で送る
+  - **secure 入力（M46 PrivacyGate）では `ai-cleanup` を強制無効化**し外部 AI へ送らない
+    （`neural` / かな確定へ fallback）。secure-app・パスワード欄の全文が外部 AI に
+    渡らないことを保証する
+  - `batchAutoPunctuation` を `QueryBatchConversion` の `auto_punctuation` として host へ
+    伝搬し、句読点自動挿入を行う（host が ON/OFF を判別できるようペイロードに載せる）
+  - `ai-cleanup` 失敗時 `neural` fallback、`neural` 失敗時かな確定の連鎖
+- **受け入れ条件**:
+  - `batchConversionMode=ai-cleanup` で誤字を含むローマ字全文が補正・整文される
+    （`raw_romaji` を必須送信し、生ローマ字の誤字パターンを補正に使う）
+  - secure 指定アプリ / パスワード欄では `ai-cleanup` が外部 AI に送信せず `neural`
+    / かな確定に fallback する（M46 PrivacyGate と整合）
+  - `aiBackend=none` のとき `neural` に fallback して動作する
+  - `batchAutoPunctuation` ON/OFF で句読点挿入が切り替わる
+- **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。

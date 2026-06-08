@@ -93,7 +93,12 @@ BatchAccumulating 中は抑制する。
 
 **Space（`StartConversion`）をバッファ全体に適用**する。日本語入力中は空白を
 打たないため、`docs/legacy-parity-spec.md` §1.4 の既存キーバインドと衝突しない。
-全文かな（または生ローマ字）を `QueryBatchConversion` で送信する。
+`QueryBatchConversion` を送信する際は、`batchRomajiPreviewStyle` の表示設定や
+`batchConversionMode` に関わらず、**常に蓄積した全文かなを `reading` に入れる**。
+生ローマ字は `reading` に入れず、`ai-cleanup` 用に `raw_romaji`（任意）へ別途
+格納する（§6.1）。`reading` に生ローマ字を入れると `neural` 変換および
+`ai-cleanup`→`neural` fallback が zenz にアルファベットを渡してしまい、変換が
+成立しなくなるため。
 
 ### 4.3 確定・キャンセル
 
@@ -121,8 +126,8 @@ BatchAccumulating 中は抑制する。
 
 ```jsonc
 {
-  "reading": "全文かな",        // 蓄積したかなバッファ
-  "raw_romaji": "kiiboodo...",  // 任意。ai-cleanup で誤字補正に使う
+  "reading": "全文かな",        // 必ず蓄積した全文かな（生ローマ字は入れない）
+  "raw_romaji": "kiiboodo...",  // 任意。生ローマ字。ai-cleanup の誤字補正に使う
   "left_context": "",            // 直近確定文（任意）
   "mode": "neural",             // "neural" | "ai-cleanup"
   "max_candidates": 5            // 文節あたり候補数

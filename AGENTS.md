@@ -110,7 +110,7 @@ gh pr create \
 - `gate:human-required` … 完了前に人間の検証が必須な作業（実機確認・署名値設定など）。
   本ラベルを付与した課題は `agent:*` を省略してよい（上記 `agent:*` 参照）。
 - `Migrated` … GitHub から移行した課題（対応する GitHub Issue リンクを必須付与）。
-- **Codex 実行ポリシー** … `agent:codex-*` は候補（ルーティング）ラベルであり Codex 実行許可ではない。Codex Cloud の起動（assign / delegate / `@Codex`）は人間の明示許可があるときのみで、Claude は行わない。正典は `docs/linear-conventions.md` §2.1 Codex Execution Policy。
+- **Codex 実行ポリシー** … `agent:codex-*` は候補（ルーティング）ラベルであり Codex 実行許可ではない。Codex Cloud の起動（assign / delegate / mention）は人間の明示許可があるときのみで、Claude は行わない。正典は `docs/linear-conventions.md` §2.1 Codex Execution Policy。
 
 ### 状態ライフサイクル
 
@@ -139,7 +139,9 @@ gh pr create \
 Linear の定期監査課題（`[Recurring] Linear control tower audit`）で次を点検する:
 Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-required` の人間専任
 タスクは `agent:*` 免除）、`Migrated` の GitHub リンク欠落、人間検証作業の
-`gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落。
+`gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落。加えて
+Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
+`docs/linear-conventions.md` §11）も点検する。
 点検は Linear のルーティング衛生のみを対象とし、仕様・設計の正典は引き続き repo docs に置く。
 
 ## README 編集ルール

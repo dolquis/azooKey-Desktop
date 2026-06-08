@@ -37,12 +37,12 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`model-management-spec.md`](model-management-spec.md) | プライバシー / モデル管理 / 学習データ UI トラック M45（Zenzai モデル管理 UI） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード） |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
-| [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`learning-data-management-spec.md`](learning-data-management-spec.md) | 同トラック M49（学習データ可視化・バックアップ） |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | 同トラック M54（ユーザー学習強化） |
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | 同トラック M56（Tiny Neural Reranker） |
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
+| [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 
 ## 運用
 

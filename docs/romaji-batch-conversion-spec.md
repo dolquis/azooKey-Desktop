@@ -67,7 +67,9 @@ enum class InputStateKind {
 | BatchAccumulating | Input | BatchAccumulating | かなバッファ更新 / Preedit 更新（**IPC 無し**） |
 | BatchAccumulating | Backspace | BatchAccumulating / Idle | バッファ 1 単位削除（空になれば Idle） |
 | BatchAccumulating | StartConversion (Space) | BatchConverting | `QueryBatchConversion` 送信（応答待ち。Preedit は蓄積内容のまま） |
-| BatchConverting | BatchResponse 受信 | Selecting | `full_surface` を Preedit 表示（`segments` を保持） |
+| BatchConverting | 中間応答 (`partial:true`) | BatchConverting | `full_surface` を Preedit に漸進更新（**確定不可**。`segments` を蓄積） |
+| BatchConverting | 最終応答 (`partial:false`) | Selecting | 完全な `full_surface` / `segments` を確定可能候補として表示 |
+| BatchConverting | Commit (Enter) | BatchConverting | 無視（最終応答前は確定しない。部分結果を commit させない） |
 | BatchConverting | Input | BatchAccumulating | in-flight を `Cancel` → 打鍵をバッファに追加 |
 | BatchConverting | Cancel (Esc) | BatchAccumulating | in-flight を `Cancel` → 蓄積状態へ戻す |
 | Selecting | NextCandidate / SelectByDigit | Selecting | 候補選択（M58-B では文節単位） |
@@ -81,10 +83,15 @@ enum class InputStateKind {
 BatchAccumulating 中は抑制する。
 
 `QueryBatchConversion` は非同期のため、Space 直後は `Selecting` ではなく
-`BatchConverting`（応答待ち）に入る。最初の応答（`partial` 含む）を受信して初めて
-`Selecting` へ遷移する。応答前の追加打鍵 / Esc は in-flight を `Cancel` して
-`BatchAccumulating` に戻す（空の候補集合で `Selecting` に入らない）。M58-B の
-`partial` 応答は `Selecting` 中に表示を漸進更新する。
+`BatchConverting`（応答待ち）に入る。応答前の追加打鍵 / Esc は in-flight を `Cancel`
+して `BatchAccumulating` に戻す（空の候補集合で `Selecting` に入らない）。
+
+M58-B の長文変換では `partial:true` の中間応答が複数届きうる。中間応答は
+`BatchConverting` のまま `full_surface` を Preedit に漸進更新するだけで**確定不可**と
+し、**最終応答 `partial:false` を受信してから初めて `Selecting`（確定可能）へ遷移**
+する。これにより、最初のチャンクだけが確定して残りの蓄積入力が欠落する事故を防ぐ
+（`BatchConverting` 中の Enter は無視する）。M58-A は単一の `partial:false` 応答で
+即 `Selecting` へ遷移する。
 
 ## 4. 入力中の表示・トリガ・確定
 
@@ -92,12 +99,16 @@ BatchAccumulating 中は抑制する。
 
 設定 `batchRomajiPreviewStyle` で切替える（両対応）。
 
-- `kana`（既定）: `RomajiKanaConverter` の出力かな（例: `kiiboodo` → `きーぼーど`）を
+- `kana`（既定）: `RomajiKanaConverter` の出力かな（例: `nihongo` → `にほんご`）を
   アンダーライン付き Preedit に表示。漢字変換はしない。読みやすく既存 IME に近い。
-- `romaji`: 入力された生ローマ字（半角英字、例 `kiiboodo`）をそのまま Preedit に
+- `romaji`: 入力された生ローマ字（半角英字、例 `nihongo`）をそのまま Preedit に
   表示。画面を見ない運用に最適。`TextService` は生ローマ字文字列を別途保持する。
 
 いずれのモードでも内部ではかなバッファを保持し、一括変換時の読みとして使う。
+長音は既存 `RomajiKanaConverter` の仕様どおり `-`（ハイフン）入力で `ー` になる
+（例: `ko-` → `こー`）。`ii` / `oo` 等は `いい` / `おお` になり `ー` には正規化
+されないため、本書の例も実際の出力に合わせる（`kana` 読みがそのまま `reading` と
+して zenz に渡るため、例と実装の不一致は変換品質を損なう）。
 
 ### 4.2 一括変換トリガ
 
@@ -138,7 +149,7 @@ BatchAccumulating 中は抑制する。
 ```jsonc
 {
   "reading": "全文かな",        // 必ず蓄積した全文かな（生ローマ字は入れない）
-  "raw_romaji": "kiiboodo...",  // 任意。生ローマ字。ai-cleanup の誤字補正に使う
+  "raw_romaji": "nihongo...",   // 任意。生ローマ字。ai-cleanup の誤字補正に使う
   "left_context": "",            // 直近確定文（任意）
   "mode": "neural",             // "neural" | "ai-cleanup"
   "max_candidates": 5            // 文節あたり候補数
@@ -151,12 +162,12 @@ BatchAccumulating 中は抑制する。
 {
   "segments": [                  // 文節構造（M58-B で複数、M58-A は単一でも可）
     {
-      "surface": "キーボード",
-      "reading": "きーぼーど",
+      "surface": "日本語",
+      "reading": "にほんご",
       "candidates": [ { "surface": "...", "reading": "...", "score": 0.0 } ]
     }
   ],
-  "full_surface": "キーボードを使う", // 全文の最良連結（Preedit 即時表示用）
+  "full_surface": "日本語を入力する", // 全文の最良連結（Preedit 即時表示用）
   "partial": false               // チャンク逐次変換途中は true
 }
 ```
@@ -212,16 +223,18 @@ BatchAccumulating 中は抑制する。
 ## 9. テスト計画
 
 - **状態機械** (`core/tests/input_state_test.cpp`): `batchRomajiConversion` ON で
-  Idle→BatchAccumulating→（Space）→BatchConverting→（応答）→Selecting→（Enter）→Idle、
-  BatchConverting 中の追加打鍵 / Esc で in-flight Cancel → BatchAccumulating 復帰、
-  Esc の戻り、OFF で従来遷移が不変であることを網羅。
+  Idle→BatchAccumulating→（Space）→BatchConverting→（`partial:false`）→Selecting→
+  （Enter）→Idle、`partial:true` 中間応答では BatchConverting に留まり Enter が
+  確定しないこと、BatchConverting 中の追加打鍵 / Esc で in-flight Cancel →
+  BatchAccumulating 復帰、Esc の戻り、OFF で従来遷移が不変であることを網羅。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryBatchConversion` の build/parse、
   segments 構造の往復、`partial` フラグ、Cancel の ID 整合。
 - **変換** (`inference-host/tests`): 固定かな全文 → 妥当な segments / full_surface。
   チャンク分割（句点を含む長文）・キャンセルの動作。
-- **手動 / 実機（Win11、`gate:human-required`）**: `watashihakiiboodowotukau` 等を
-  蓄積 → Space で一括変換 → Enter 確定で妥当な日本語が入る。設定 OFF で従来逐次
-  動作が不変。`batchRomajiPreviewStyle` 切替が反映される。
+- **手動 / 実機（Win11、`gate:human-required`）**: `kyouhaiitenkidesu`（→ きょうは
+  いいてんきです → 今日はいい天気です）等を蓄積 → Space で一括変換 → Enter 確定で
+  妥当な日本語が入る。設定 OFF で従来逐次動作が不変。`batchRomajiPreviewStyle`
+  切替が反映される。
 
 ## 10. 受け入れ条件（M58 全体）
 

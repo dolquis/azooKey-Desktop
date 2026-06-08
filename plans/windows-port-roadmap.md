@@ -1029,7 +1029,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `batchRomajiConversion=true` で、ローマ字全文を蓄積中に候補/予測/ライブ変換の
     IPC が一切送られない（中断ゼロ）
   - Space で全文が一括変換され、Enter で妥当な日本語が確定する
-    （例: `watashihakiiboodowotukau` → 妥当な変換）
+    （例: `kyouhaiitenkidesu` → きょうはいいてんきです → 今日はいい天気です。
+    既存 `RomajiKanaConverter` が実際に出力するかなで例を取り、`ii`/`oo` を `ー` に
+    正規化しない前提）
   - `batchRomajiPreviewStyle` 切替で Preedit がかな / 生ローマ字に切り替わる
   - `batchRomajiConversion=false` で従来の逐次変換・状態遷移が一切変わらない
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
@@ -1047,9 +1049,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→
     逐次変換 → 結合
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
-  - 進捗（`partial`）の Preedit 漸進更新と `Cancel` によるキャンセル
+  - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
+    最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
+  - `Cancel` によるキャンセル
 - **受け入れ条件**:
   - フレーム上限内の長文が host 側チャンク分割で変換される
+  - `partial:true` の途中で Enter を押しても部分結果が確定されず、残りの蓄積入力が
+    欠落しない（最終応答までは確定不可）
   - フレーム上限（`kMaxFrameSize` = 1 MB）を超える蓄積は TIP 側で複数リクエストへ
     事前分割され、各リクエストが上限未満で送信・変換される（フレーム上限超の単一
     リクエストは IPC 層で拒否されるため送らない）

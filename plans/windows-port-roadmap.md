@@ -1042,9 +1042,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
 - **前提**: M58-A 完了、M20（再変換）。
 - **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
-  進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知）、
-  `tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）。
+  進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知・Cancel 専用接続 or 非同期
+  ディスパッチ）、`tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）、
+  `ipc/.../NamedPipeTransport.{h,cpp}`（アウトオブバンド Cancel 経路）。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
+  - アウトオブバンドな Cancel 経路（Cancel 専用接続 or host 非同期ディスパッチャ）。
+    同期 ClientLoop + 単一接続では遅い変換中に Cancel が処理されないため必須
   - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ。
     文境界が無い場合はバイト安全ハード分割でフォールバック）
   - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→

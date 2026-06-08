@@ -1012,14 +1012,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   Zenzai でかな漢字変換し、全体確定する最小フローを実現する。
 - **前提**: M6（Commit / Observation）、M13（InputState 状態機械）、M14（ライブ変換の
   状態基盤）完了。**推奨**: M8/M9（実 Zenzai）完了後に品質が揃う。
-- **変更対象**: `core/include/azookey/core/InputState.h`（`BatchAccumulating` 追加）、
+- **変更対象**: `core/include/azookey/core/InputState.h`（`BatchAccumulating` /
+  `BatchConverting` 追加）、
   `tsf-tip/src/TextService.cpp`（`OnKeyDown` の蓄積分岐・Preedit 表示切替）、
   `core/src/RomajiKanaConverter.cpp`（蓄積運用）、`ipc/src/Messages.cpp`・
   `ipc/src/Payloads.cpp`（`QueryBatchConversion` 追加）、
   `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`、
   `settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §3〜§6・§8。
-  - `BatchAccumulating` 状態と遷移（Space=一括変換、Enter=全体確定、Esc=破棄/戻し）
+  - `BatchAccumulating` / `BatchConverting`（応答待ち）状態と遷移（Space=一括変換要求、
+    応答受信=Selecting、応答前の追加打鍵/Esc=in-flight Cancel→蓄積復帰、Enter=全体確定）
   - 蓄積中は IPC 非発火（ローカルでかなバッファのみ更新）
   - `batchRomajiPreviewStyle`（`kana` / `romaji`）の Preedit 表示切替
   - `QueryBatchConversion`（`mode="neural"`）IPC の往復、設定キー 3 種

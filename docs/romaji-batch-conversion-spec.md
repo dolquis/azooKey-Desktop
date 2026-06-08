@@ -52,6 +52,7 @@ enum class InputStateKind {
     Composing,
     Previewing,
     BatchAccumulating,   // 追加: ローマ字蓄積中（推論クエリを発火しない）
+    BatchConverting,     // 追加: 一括変換リクエスト送信済み・応答待ち（候補未確定）
     Selecting,
     ReplaceSuggestion,
     UnicodeInput,
@@ -65,7 +66,10 @@ enum class InputStateKind {
 | Idle | Input | BatchAccumulating | StartComposition / ローカルでかなバッファ更新 / Preedit 更新 |
 | BatchAccumulating | Input | BatchAccumulating | かなバッファ更新 / Preedit 更新（**IPC 無し**） |
 | BatchAccumulating | Backspace | BatchAccumulating / Idle | バッファ 1 単位削除（空になれば Idle） |
-| BatchAccumulating | StartConversion (Space) | Selecting | `QueryBatchConversion` 送信 → 全文最良候補を Preedit 表示 |
+| BatchAccumulating | StartConversion (Space) | BatchConverting | `QueryBatchConversion` 送信（応答待ち。Preedit は蓄積内容のまま） |
+| BatchConverting | BatchResponse 受信 | Selecting | `full_surface` を Preedit 表示（`segments` を保持） |
+| BatchConverting | Input | BatchAccumulating | in-flight を `Cancel` → 打鍵をバッファに追加 |
+| BatchConverting | Cancel (Esc) | BatchAccumulating | in-flight を `Cancel` → 蓄積状態へ戻す |
 | Selecting | NextCandidate / SelectByDigit | Selecting | 候補選択（M58-B では文節単位） |
 | Selecting | Forward/Backward | Selecting | 文節カーソル移動（M58-B） |
 | Selecting | Commit (Enter) | Idle | EndComposition + CommitObservation（全文確定） |
@@ -75,6 +79,12 @@ enum class InputStateKind {
 `batchRomajiConversion == false` のときは従来どおり Composing / Previewing に
 遷移し、本状態は使われない。ライブ変換（M14）・予測（M15）は
 BatchAccumulating 中は抑制する。
+
+`QueryBatchConversion` は非同期のため、Space 直後は `Selecting` ではなく
+`BatchConverting`（応答待ち）に入る。最初の応答（`partial` 含む）を受信して初めて
+`Selecting` へ遷移する。応答前の追加打鍵 / Esc は in-flight を `Cancel` して
+`BatchAccumulating` に戻す（空の候補集合で `Selecting` に入らない）。M58-B の
+`partial` 応答は `Selecting` 中に表示を漸進更新する。
 
 ## 4. 入力中の表示・トリガ・確定
 
@@ -103,7 +113,8 @@ BatchAccumulating 中は抑制する。
 ### 4.3 確定・キャンセル
 
 - Enter（`Commit`）で全文を確定（`EndComposition` + `CommitObservation`）。
-- Esc（`Cancel`）は Selecting からは蓄積状態へ戻し、BatchAccumulating からは破棄。
+- Esc（`Cancel`）は Selecting / BatchConverting からは蓄積状態へ戻し（後者は in-flight を
+  `Cancel`）、BatchAccumulating からは破棄。
 - M58-B では Selecting 中に ←/→ で文節カーソル移動、Space/数字キーで文節候補切替。
 
 ## 5. 一括変換モード（2 系統）
@@ -159,7 +170,8 @@ BatchAccumulating 中は抑制する。
 ### 6.3 キャンセル・長文
 
 - 進行中の一括変換は既存 `CancelPayload`（`target_request_id`）でキャンセルできる。
-  Selecting 移行前に追加打鍵があれば in-flight リクエストを破棄して蓄積へ戻す。
+  `BatchConverting`（応答待ち）中に追加打鍵 / Esc があれば in-flight リクエストを
+  破棄して `BatchAccumulating` へ戻す（§3）。
 - 1 リクエストは `ipc/include/azookey/ipc/Limits.h` の `kMaxJsonInputBytes` /
   `kMaxFrameSize`（ともに 1 MB）以内に収める必要がある。IPC フレーミング/パーサが
   この上限を超えるフレームを `inference-host` 到達前に拒否するため、フレーム上限を
@@ -200,8 +212,9 @@ BatchAccumulating 中は抑制する。
 ## 9. テスト計画
 
 - **状態機械** (`core/tests/input_state_test.cpp`): `batchRomajiConversion` ON で
-  Idle→BatchAccumulating→（Space）→Selecting→（Enter）→Idle、Esc の戻り、OFF で
-  従来遷移が不変であることを網羅。
+  Idle→BatchAccumulating→（Space）→BatchConverting→（応答）→Selecting→（Enter）→Idle、
+  BatchConverting 中の追加打鍵 / Esc で in-flight Cancel → BatchAccumulating 復帰、
+  Esc の戻り、OFF で従来遷移が不変であることを網羅。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryBatchConversion` の build/parse、
   segments 構造の往復、`partial` フラグ、Cancel の ID 整合。
 - **変換** (`inference-host/tests`): 固定かな全文 → 妥当な segments / full_surface。

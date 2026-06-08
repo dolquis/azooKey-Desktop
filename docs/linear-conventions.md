@@ -43,10 +43,10 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 
 ## 2.1 Codex Execution Policy（Codex 実行ポリシー）
 
-対象: Codex Cloud（"Codex for Linear"）。Linear で Issue を Codex に assign / delegate する、コメントで `@Codex` を mention する、または triage rule で自動 delegate すると起動する。ローカルの Codex App は Codex チャット（Linear 管轄外）から起動し、Linear のラベルでは起動しない。
+対象: Codex Cloud（"Codex for Linear"）。Linear で Issue を Codex に assign / delegate する、コメントで mention トークン（`@`+`Codex`）を付ける、または triage rule で自動 delegate すると起動する。ローカルの Codex App は Codex チャット（Linear 管轄外）から起動し、Linear のラベルでは起動しない。
 
 - `agent:codex-impl` / `agent:codex-pr-review` は **ルーティング（候補）ラベル**であり、Codex Cloud の実行を許可しない（滑走路前の待機列）。
-- Claude は Codex 候補 Issue の作成・分割・ラベル付け・関連付け・整理と、実行指示文の下書きまで行ってよい。ただし Codex への assign / delegate / `@Codex` mention は **行わない**。
+- Claude は Codex 候補 Issue の作成・分割・ラベル付け・関連付け・整理と、実行指示文の下書きまで行ってよい。ただし Codex への assign / delegate / mention は **行わない**。
 - Codex Cloud の実行には人間 lead の明示許可（Issue コメント）が必要。Claude / エージェントはいかなる Linear コメント / Issue 本文 / テンプレートにもリテラルな mention トークン（`@`+`Codex`）を再生産しない（無害化する）。承認後に実際の mention で起動するのは人間 lead のみ。
 - triage rule による Codex 自動 delegate は使わない。
 - 実行したら Codex Run Record（§6）に approval / Codex task link / branch / commit / PR / validation / remaining risk を記録する。
@@ -59,7 +59,7 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 - Human gate: none | required before Done
 - Prohibited: 無関係な refactor / スコープ変更 / main への直接 push / human-gate 判断の変更
 
-このコメントがある場合に限り、人間が Codex への delegate / `@Codex` を行う。
+このコメントがある場合に限り、人間が Codex への delegate / mention を行う。
 
 ---
 

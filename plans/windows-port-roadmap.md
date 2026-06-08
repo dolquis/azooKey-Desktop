@@ -1040,12 +1040,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
   進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知）、
   `tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）。
-- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§7。
-  - 文境界（句点・改行・推定文節境界）でのチャンク分割 → 逐次変換 → 結合
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
+  - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ）
+  - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→
+    逐次変換 → 結合
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
   - 進捗（`partial`）の Preedit 漸進更新と `Cancel` によるキャンセル
 - **受け入れ条件**:
-  - 句点を含む長文が `kMaxJsonInputBytes` 超でもチャンク分割で変換される
+  - フレーム上限内の長文が host 側チャンク分割で変換される
+  - フレーム上限（`kMaxFrameSize` = 1 MB）を超える蓄積は TIP 側で複数リクエストへ
+    事前分割され、各リクエストが上限未満で送信・変換される（フレーム上限超の単一
+    リクエストは IPC 層で拒否されるため送らない）
   - 変換結果の特定文節だけ候補を選び直して確定できる
   - 変換中に追加打鍵 / Esc でキャンセルでき、入力が失われない
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`

@@ -1045,9 +1045,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知）、
   `tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
-  - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ）
+  - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ。
+    文境界が無い場合はバイト安全ハード分割でフォールバック）
   - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→
-    逐次変換 → 結合
+    逐次変換 → 結合。文境界が無くコンテキスト超の場合はバイト/トークン安全ハード分割で
+    フォールバック
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
   - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
     最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
@@ -1092,7 +1094,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - **secure 入力（M46 PrivacyGate）では `ai-cleanup` を強制無効化**し外部 AI へ送らない
     （`neural` / かな確定へ fallback）。secure-app・パスワード欄の全文が外部 AI に
     渡らないことを保証する
-  - `batchAutoPunctuation` による句読点自動挿入
+  - `batchAutoPunctuation` を `QueryBatchConversion` の `auto_punctuation` として host へ
+    伝搬し、句読点自動挿入を行う（host が ON/OFF を判別できるようペイロードに載せる）
   - `ai-cleanup` 失敗時 `neural` fallback、`neural` 失敗時かな確定の連鎖
 - **受け入れ条件**:
   - `batchConversionMode=ai-cleanup` で誤字を含むローマ字全文が補正・整文される

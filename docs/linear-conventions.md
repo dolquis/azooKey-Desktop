@@ -55,7 +55,7 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 ### 実行許可フォーマット（人間 → Issue コメント）
 
 - Issue / Repo / Scope（Acceptance Criteria のみ）
-- Allowed output: summary only | branch only | draft PR | PR
+- Allowed output: summary only | branch only | draft PR | PR（repo の PR 規約に従う。Draft PR 必須の repo では draft PR までとする）
 - Human gate: none | required before Done
 - Prohibited: 無関係な refactor / スコープ変更 / main への直接 push / human-gate 判断の変更
 
@@ -237,7 +237,7 @@ Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済
 Codex safety checks:
 
 - [ ] 人間 lead の明示許可なく Codex へ delegate された Issue がない
-- [ ] 明示許可なく Codex mention トークン（`@`+`Codex`）を含むコメントがない
+- [ ] 明示許可なく Codex mention トークン（`@`+`Codex`）を含むコメント / Issue 本文 / テンプレートがない
 - [ ] `agent:codex-*` をルーティング（候補）ラベルとしてのみ扱っている
 - [ ] Codex 実行開始後に Todo へ放置された delegate 済み Issue がない
 - [ ] Codex 完了タスクに task / PR / commit リンク・検証・残リスクが記録されている

@@ -43,6 +43,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | 同トラック M56（Tiny Neural Reranker） |
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
 | [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
+| [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
+| [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入） |
 
 ## 運用
 
@@ -65,7 +67,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | Phase 5 | レガシー parity 復元 | M13〜M19 |
 | Phase 6 | Windows ネイティブ深耕 | M20〜M27 |
 | Phase 7 | サイドロード配信 | M28〜M34 |
-| 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B / M48 / M58 |
+| 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B / M48 / M58 / M59 / M60 |
 | 開発基盤 | ビルド再現性・CI・IPC 堅牢化・観測性・可用性・診断・復旧 UX・互換性テスト・trace（Phase 連番とは独立） | M37〜M43 + M44/M47/M50/M51 |
 | プライバシー / モデル管理 / 学習データ UI | Phase 5/6/7 の既存 M に依存する付加機能 | M45 / M46 / M49 |
 | 変換品質 | 評価ベンチ・辞書・学習強化・打ち間違え統合・Tiny Reranker・ModernBERT スコアリング（Phase 連番とは独立） | M52〜M57 |

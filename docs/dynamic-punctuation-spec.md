@@ -69,13 +69,13 @@ surface へ自動句読点を含めて表示する。
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
-| Composing/Previewing | Input | Previewing | `QueryLiveConversion(auto_punctuation=true)` 送信。応答 surface に句読点を含めて Preedit 全体を差し替え（句読点は再計算で増減しうる） |
-| Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再 `QueryLiveConversion` |
+| Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`、`auto_punctuation=true`。§7）を送信。応答 surface に句読点を含めて Preedit 全体を差し替え（句読点は再計算で増減しうる） |
+| Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求 |
 | Previewing | Commit (Enter) | Idle | 句読点を含む全文を確定。`CommitObservation` は自動句読点を分離して観測（§5・§7） |
 | Previewing | Cancel (Esc) | Idle | CancelComposition |
 
 `dynamicPunctuation == false` または `liveConversion == false` のときは、
-`QueryLiveConversion` に `auto_punctuation=false` を載せ、従来どおり句読点を挿入しない。
+ライブ変換要求に `auto_punctuation=false` を載せ、従来どおり句読点を挿入しない。
 
 ## 4. 挿入・削除の判定
 
@@ -122,6 +122,69 @@ host 側（`inference-host`）で判定する。二層構成:
 - **ニューラルレイヤ（任意・品質向上）**: zenz が surface に句読点を直接出力できる構成
   では、その出力を採用する。zenz 出力と決定的レイヤの整合は実装時に定める（既定は
   決定的レイヤ、zenz 句読点が利用可能なら上書き）。
+
+#### 4.1.1 境界評価モデル（スコアリング）
+
+各文節境界 `b`（`seg_i` と `seg_{i+1}` の間）と最終境界（バッファ末尾）を評価する。
+
+```text
+for each boundary b between seg_i and seg_{i+1}:
+    rule = longest_suffix_match(seg_i.surface, 読点ルール表)   # 最長サフィックス一致
+    if rule is None: continue
+    score  = rule.base_score
+    score *= next_guard_factor(rule, seg_{i+1})    # 曖昧性ガード(§4.1.2) ∈ [0,1]
+    score -= suppression_penalty(b)                # 抑制(§4.1) で減点
+    if score >= kCommaThreshold and not hard_suppressed(b):
+        insert 読点 at b
+```
+
+`kCommaThreshold` は `PunctuationInserter` の**内部定数**（既定 0.5、bench M52 で調整）。
+ユーザー設定にはしない（base_score とセットで調整する実装パラメータのため）。複数ルールが
+一致したら最長サフィックスを採り、同長なら base_score 最大を採る。
+
+読点ルール表の `base_score`（§4.1 の分類に付与）:
+
+| 分類 | base_score |
+|---|---|
+| 文頭接続詞（しかし/だから/また/そして/ただし/つまり） | 0.90 |
+| 逆接接続助詞（が/けど/けれど/のに/ても/でも） | 0.85 |
+| 順接・理由（ので/から/ため） | 0.80 |
+| 引用・条件（と/ば/なら/たら） | 0.70 |
+| 副詞節（とき/ところ/場合/うえで） | 0.65 |
+| 連用中止・並列（て/で/し/たり） | 0.60 |
+
+#### 4.1.2 曖昧性ガード（格助詞 vs 接続助詞 等）
+
+表層サフィックスだけでは節境界か否かを誤判定する代表例を `next_guard_factor`
+（0=挿入しない 〜 1=フル base_score）でガードする。
+
+- **「が」**: 逆接接続助詞（読点要）と主格格助詞（読点不要）の判別。
+  - `seg_i` が用言で終わる（例「行った→が」）→ 接続助詞とみなし factor=1。
+  - `seg_i` が体言で終わる（例「私→が」）→ 格助詞とみなし factor=0。
+  - 体言/用言判定は `seg_i` 末尾 +（あれば）変換器の品詞情報。品詞が無い構成では
+    「直前が動詞/形容詞の活用語尾（た/だ/る/い/う 段 等）か」のヒューリスティック。
+- **「て」「で」**: 連用中止（読点要）と補助用言への接続（読点不要、例「食べて→いる」）の判別。
+  - `seg_{i+1}` が補助用言（いる/ある/おく/みる/しまう/くれる/もらう/いく/くる 等）で
+    始まる → factor=0。
+  - それ以外 → factor=1。
+- **「と」**: 引用・条件（読点要）と並列格助詞（「A と B」読点不要）の判別。
+  - `seg_{i+1}` が体言で始まり並列が続く → factor=0。
+  - 引用（「〜だと→思う」等、`seg_{i+1}` が思考/発話動詞）or 条件 → factor=1。
+
+ガードに必要な品詞情報は、可能なら live 変換応答の segment に付与する（§7.2 の
+`segments[]` を将来 `pos` フィールドで拡張可能）。M59 コアは品詞無しヒューリスティックで
+動作し、品詞付与は任意の品質向上とする。
+
+#### 4.1.3 句点の精緻化（終止形 vs 連体形・数値）
+
+- 句点はバッファ末尾境界でのみ評価する。
+- **終止形 vs 連体形**: 「食べる」は終止（句点可）にも連体（後続体言を修飾、句点不可）にも
+  なる。**続く入力が無く（確定 or `onPause` idle）かつ末尾が終止/丁寧**（です/ます/だ/
+  である/した/ない/終止活用）のときのみ句点。連用・連体接続が続きうる間は句点を入れず、
+  確定時の最終評価（§5.3）で補う。
+- **数値・小数・略記**: 末尾が数字（「3.14」「No.5」）の場合はピリオドを句点化しない。
+  英数字列・記号列内部は §4.1 抑制規則に従う（M60 英単語候補とも干渉させない）。
+- **疑問**: 末尾が疑問終助詞「か」→ 句点。`？` 化は将来・設定。
 
 ### 4.2 削除・再配置
 
@@ -221,15 +284,13 @@ on Commit(Enter):
     # auto_punctuation セグメントは学習に渡さない（reading 無し）
 ```
 
-**学習不変条件**: 自動句読点の文字は `CommitObservation` の `reading` にも
-`chosen.surface` にも含めない。既存 `CommitObservationRequest`（単一 `reading` +
-`chosen`）で表現するには 2 経路:
-
-- (推奨) 文節ごとに複数回 `CommitObservation` を送る（`!auto_punctuation` のみ）。
-- (縮退) 単一文節時は `chosen.surface` から自動句読点を除去した文字列を 1 回送る。
-
-どちらも IPC payload の変更を要しない（§7.4）。multi-segment commit を専用 payload 化
-する場合は M58-B の segments commit と統合する（将来）。
+**学習不変条件**: 自動句読点の文字は確定観測の `reading` にも `chosen.surface` にも
+学習入力として含めない（句読点はテキストには入るが Observe しない）。確定は
+**`CommitSegmentsObservation`（`docs/romaji-batch-conversion-spec.md` §6.4、M58-B と共有）**で
+行い、自動句読点文節を `is_auto_punctuation=true` として送る。host は当該文節を Observe
+せず文脈連結のみ行う。host が `commit_segments` capability 非対応の場合は、TIP が
+`!auto_punctuation` の各文節を既存 `CommitObservation` で順次送るフォールバックに切替える
+（§6.4.3）。
 
 ### 5.4 カーソル/オフセット写像
 
@@ -342,13 +403,15 @@ M59 は**任意配列 `segments[]` を新規追加**する（X-1-1 の segments 
 古い応答は破棄。確定時は in-flight のライブ変換リクエストに `Cancel` を送ってから
 `EndComposition`。
 
-### 7.4 CommitObservation 整合（学習分離）
+### 7.4 確定観測の整合（学習分離 / multi-segment commit）
 
-既存 `CommitObservationRequest`（`reading` + `chosen:CandidateField` + `shown[]` +
-`left_context` + `timestamp_ms`）を**変更せず**、§5.3 の不変条件（自動句読点を `reading` /
-`chosen.surface` に含めない）を満たす。文節ごとに複数回 `CommitObservation` を送るか
-（推奨）、単一文節時は句読点除去済み `chosen.surface` を 1 回送る（縮退）。multi-segment
-commit を専用 payload にするのは M58-B segments commit との統合（将来）に委ねる。
+句読点込み文の確定は、**M58-B と共有する `CommitSegmentsObservation`**
+（`docs/romaji-batch-conversion-spec.md` §6.4）で行う。`!auto_punctuation` 文節を `chosen`、
+自動句読点を `is_auto_punctuation=true`（`reading=""`、`chosen.surface="、"`/`"。"`）として
+1 メッセージで原子的に送り、host は前者のみ Observe、後者は文脈連結のみ行う（§5.3）。
+これにより §5.3 の学習不変条件を満たす。host が `commit_segments` capability 非対応のときは
+TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送る（§6.4.3 フォールバック）。
+単一文節（句読点なし）確定は従来どおり `CommitObservation` を使う。
 
 ### 7.5 payloads_test 期待値（`ipc/tests/payloads_test.cpp`）
 
@@ -381,8 +444,9 @@ commit を専用 payload にするのは M58-B segments commit との統合（�
   Backspace がかな単位を削除し自動句読点を削除単位に数えないこと、入力変化で句読点が
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で
   あること、OFF で従来遷移が不変であること。
-- **IPC** (`ipc/tests/payloads_test.cpp`): `QueryLiveConversion` の `auto_punctuation` /
-  `punctuation_style` フィールド、`segments[].auto_punctuation` の build/parse 往復。
+- **IPC** (`ipc/tests/payloads_test.cpp`): ライブ変換要求（現状 `QueryCandidates`、§7）の
+  `auto_punctuation` / `punctuation_style` フィールド、応答 `segments[].auto_punctuation` の
+  build/parse 往復。`CommitSegmentsObservation` の往復（§7.4）。
 - **学習分離** (`learning/tests`): 自動句読点を含む確定で、句読点が `(reading, surface)`
   観測に混入しないこと。
 - **安定化** (host テスト or 状態機械): `onPause` でタイピング中は句読点が出ず、idle で

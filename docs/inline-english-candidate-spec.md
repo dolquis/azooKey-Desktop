@@ -145,6 +145,60 @@ else:
 - 記号/数字混在は `s_nonkana` に寄与しうるが、英字を 1 文字も含まない純記号/純数字列は
   `inlineEnglishMinLength` と「英字含有」チェックで除外する。
 
+### 4.4 英単語辞書フォーマット（`inlineEnglishDictionary`）
+
+辞書は品質レイヤ（§4.2 の `s_dict` と順位上乗せ）に使う。非搭載でもベースライン
+（生ローマ字 + 大文字化）は動作する。
+
+**ファイル形式**: TSV、UTF-8（BOM 許容）。M17 カスタムローマ字テーブルと同流儀
+（`docs/legacy-parity-spec.md` §5.1）。1 行 1 エントリ:
+
+```text
+# english-words.tsv (UTF-8, BOM 許容)
+# 行頭 # はコメント、空行は無視
+# <surface>\t<frequency>\t[flags（カンマ区切り・任意）]
+the	22038615
+apple	542316
+Apple	118242	proper
+GitHub	30551	proper,tech
+NASA	8123	acronym
+```
+
+| 列 | 必須 | 内容 |
+|---|---|---|
+| `surface` | ○ | 表示する英語表層（大小文字を保持。例 `Apple` / `GitHub` / `NASA`） |
+| `frequency` | ○ | 出現頻度（正整数）。`s_dict` 判定と `score` 上乗せ・候補順に使う |
+| `flags` | 任意 | カンマ区切り。`proper`（固有名詞・先頭大文字 surface を優先）/ `acronym`（全大文字）/ `tech`（技術語・M48 で boost 連携） |
+
+**ルックアップ**: 入力 `raw_romaji` を lowercase したものをキーに引く（`apple` →
+`apple`）。同一 lower キーに複数エントリを許す（`apple` 一般 / `Apple` 固有）。ヒット時は
+**頻度降順**で複数 surface を返し、§4.3 の候補並び・順位に反映する。`flags` は大文字化
+バリアントの既定優先度に影響する（`proper` は先頭大文字、`acronym` は全大文字を上位に）。
+
+**配置と設定**:
+
+- 既定パス: `%LOCALAPPDATA%\azooKey\dict\english-words.tsv`。
+- 設定 `inlineEnglishDictionaryPath` で上書き可。
+- `inlineEnglishDictionary == true` のときのみロード。
+
+**ロードと性能**:
+
+- 起動時にメモリへロード（`std::unordered_map<lower_surface, std::vector<Entry>>`）。
+- 想定規模は数万〜十数万語。10 万語 × 平均 16 B 表層 + 頻度で数 MB 程度を目安とし、
+  超える場合はコンパイル済みバイナリ形式（将来・M53 辞書層と共有）を検討する。
+- パース失敗行は warning ログでスキップ（M17 と同流儀）。同一 `surface` 完全一致の重複は
+  **ファイル末尾の定義を優先**（M17 と揃える）。
+- ホットリロード（任意）: M17 の `ReadDirectoryChangesW` 監視基盤を再利用し、変更検出で
+  差し替える（進行中の preedit は触らない）。
+
+**配布元・ライセンス**: バンドルする初期辞書は公開された英単語頻度リスト由来とし、
+ライセンスを明記する。上流のデータ生成パイプラインはクライアント実装の範囲外
+（M36-B と同方針）。
+
+**M53 辞書層との関係**: M60 は独立した軽量英単語辞書として始め、将来 M53
+（`docs/auto-word-registration-spec.md` の DictionaryStore 再設計）に吸収・統合してよい。
+本書は「ヒット有無と頻度で gating / 順位に寄与する」契約のみを正典とする。
+
 ## 5. 確定と学習
 
 - 英単語候補を確定したとき、surface = 選んだ英語形（`apple` / `Apple` …）。
@@ -250,6 +304,11 @@ CommitObservationRequest{
 分離する（混線させない。§5）。host 側は `chosen.tag == English` を見て English チャネル
 （or source タグ）へ振り分ける。
 
+英単語確定が**文の一部（multi-segment）**の場合は、当該文節を `ObservedSegment`
+（`reading=生ローマ字`、`chosen.tag=English`）として
+**`CommitSegmentsObservation`**（`docs/romaji-batch-conversion-spec.md` §6.4）に含めて送る。
+単発の英単語確定は上記の単発 `CommitObservation` を使う。
+
 ### 6.5 staleness・Cancel
 
 候補生成経路のため、既存 M10 の staleness / Cancel（`CancelPayload.target_request_id`）を
@@ -277,6 +336,7 @@ CommitObservationRequest{
 | `inlineEnglishMinLength` | integer (≥1) | `2` | M60: 英単語候補を出す生ローマ字の最小長 |
 | `inlineEnglishPromoteThreshold` | number (0.0–1.0) | `0.6` | M60: `english_intent` がこの値以上で英単語候補を上位化（§4.3） |
 | `inlineEnglishDictionary` | boolean | `false` | M60: 英単語辞書によるランキング・ゲーティングを有効化（品質レイヤ。OFF でも生ローマ字 + 大文字化は出せる） |
+| `inlineEnglishDictionaryPath` | string | `%LOCALAPPDATA%\azooKey\dict\english-words.tsv` | M60: 英単語辞書 TSV のパス（§4.4）。ホットリロード対応 |
 
 ## 8. テスト計画
 

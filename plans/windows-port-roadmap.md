@@ -1055,6 +1055,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     逐次変換 → 結合。文境界が無くコンテキスト超の場合はバイト/トークン安全ハード分割で
     フォールバック
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
+  - multi-segment commit payload `CommitSegmentsObservation`（新 `MessageType`。文節列を
+    1 メッセージで原子的に確定・学習。`commit_segments` capability ネゴシエーションと未対応
+    host への単発 `CommitObservation` フォールバック）。M59 / M60 と共有（spec §6.4）
   - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
     最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
@@ -1126,9 +1129,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **推奨実装時期**: M14（ライブ変換）完了直後、X-1 リッチ化と並行する独立トラック。
   設定 UI（M30）完成までは host CLI / 環境変数で実効値を受ける。
 - **変更対象**: `inference-host/src/PunctuationInserter.cpp`（新規・決定的挿入レイヤ）、
-  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`（`QueryLiveConversion` の
-  `auto_punctuation` / `punctuation_style` 処理、`segments[].auto_punctuation` 返却）、
-  `ipc/src/Payloads.cpp`（`QueryLiveConversion` 拡張・segments の自動句読点マーカ）、
+  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`（ライブ変換要求
+  〔現状 `QueryCandidatesRequest.live`〕の `auto_punctuation` / `punctuation_style` 処理、
+  `segments[].auto_punctuation` 返却、`CommitSegmentsObservation` ハンドラ）、
+  `ipc/src/Messages.cpp`・`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・応答 segments の
+  自動句読点マーカ・`CommitSegmentsObservation` 追加。spec §6.4／M58-B と共有）、
   `core/include/azookey/core/InputState.h` / 状態機械（Backspace 削除単位から自動句読点を
   除外）、`tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
   `settings/mvp-settings.schema.json`。
@@ -1140,6 +1145,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `TypingTempoTracker` を再利用）
   - 読み↔surface 非対称の扱い: Backspace はかな単位を削除し自動句読点を数えない／
     確定時に自動句読点スパンを分離して学習を汚染しない／文中キャレット編集は M20 統合へ送る
+  - 確定は M58-B と共有の `CommitSegmentsObservation`（spec §6.4）で行い、自動句読点文節を
+    `is_auto_punctuation=true` として送って学習対象外にする（capability 非対応 host は単発
+    `CommitObservation` フォールバック）。M58-B 未着手時は単発フォールバック経路で先行可能
   - 字種切替（`dynamicPunctuationStyle` = `ja` / `fullwidth_latin`）
   - 設定キー 4 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
     `dynamicPunctuationStability` / `segmentBoundaryConfidence`）
@@ -1186,9 +1194,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     奪わない／自動選択しない）
   - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）
   - 確定時 reading=生ローマ字での学習（かな漢字学習と混線させない）
-  - 設定キー 6 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
+  - 英単語辞書フォーマット（TSV: `surface`/`frequency`/`flags`。`spec` §4.4）と
+    ルックアップ（lower キー・頻度降順・`flags` で大文字化優先）。ベースラインは辞書なしで動作
+  - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
     `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary` /
-    `inlineEnglishPromoteThreshold`）
+    `inlineEnglishPromoteThreshold` / `inlineEnglishDictionaryPath`）
 - **受け入れ条件**:
   - `inlineEnglishCandidates=true` で、Japanese モードのまま `apple` を打つと候補列に
     `apple` / `Apple` が現れ、選択すると英数モード切替なしで英単語が確定する

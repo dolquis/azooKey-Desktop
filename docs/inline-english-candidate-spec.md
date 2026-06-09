@@ -199,6 +199,66 @@ NASA	8123	acronym
 （`docs/auto-word-registration-spec.md` の DictionaryStore 再設計）に吸収・統合してよい。
 本書は「ヒット有無と頻度で gating / 順位に寄与する」契約のみを正典とする。
 
+### 4.5 辞書バイナリ形式（コンパイル済みキャッシュ）
+
+§4.4 の TSV は**編集可能なソース**、本節の `.bin` は**起動高速化・低メモリのための
+コンパイル済みキャッシュ**。起動時の TSV パースを避け、mmap で必要ページのみ読み込む
+（M25 mmap ロードと整合）。
+
+**ファイル構成**（全オフセットはファイル先頭からの絶対値。**リトルエンディアン固定**。
+Windows x64 / ARM64 とも LE）:
+
+```text
+ヘッダ（32 B）
+  off  size  field
+  0    4     magic     = 'A','Z','E','D'（azooKey English Dict）
+  4    4     version   (uint32) = 1
+  8    4     entry_count (uint32)
+  12   4     flags     (uint32; bit0 = records がキー昇順ソート済み)
+  16   4     records_offset (uint32)
+  20   4     strings_offset (uint32)
+  24   8     reserved  (0)
+
+レコード配列（entry_count × 20 B、キー（lower）昇順 → 同キー内 frequency 降順）
+  off  size  field
+  +0   4     key_offset     (string pool 内・lowercase キー先頭)
+  +4   2     key_len        (バイト長)
+  +6   2     surface_len    (バイト長)
+  +8   4     surface_offset (string pool 内・表示表層)
+  +12  4     frequency      (uint32)
+  +16  1     flags          (bit0 proper, bit1 acronym, bit2 tech)
+  +17  3     pad            (0)
+
+string pool（strings_offset 以降）
+  全キー・全表層の UTF-8 バイト列（連結。NUL 終端なし、長さは len フィールド）
+```
+
+**ルックアップ**: 入力 `raw_romaji` を lowercase 化し、レコード配列を**キーで二分探索**。
+比較は string pool のバイト列で行う。同一キーのレコードは連続し frequency 降順なので、
+ヒット位置から同キーの run を走査して複数 surface を頻度順に得る（§4.3 の並びへ反映）。
+
+**ビルド / キャッシュ運用**:
+
+- host は TSV と同ディレクトリの同名 `.bin`（拡張子のみ差替え。例
+  `english-words.tsv` → `english-words.bin`）を参照する。
+- **優先順**: `.bin` が存在し、`version` 一致かつ TSV より新しい（mtime）→ `.bin` を mmap。
+  そうでなければ TSV をパースし、**`.bin` を再生成してキャッシュ**してから使う。
+- バンドル配布時はビルド済み `.bin` を同梱してよい（初回パースも不要にできる）。
+- オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
+
+**バージョニング・堅牢化**:
+
+- `magic` 不一致 / `version` 不一致 / サイズ不整合の `.bin` は破棄し、TSV から再生成。
+- 破損 `.bin` で起動を妨げない（TSV へフォールバック）。`.bin` 生成不可（書込権限なし等）でも
+  TSV パースで動作する（キャッシュは最適化であり必須ではない）。
+
+**設定**: 新規キーは増やさない。`.bin` パスは `inlineEnglishDictionaryPath`（§7）から
+拡張子差替えで導出する。コンパイルキャッシュの無効化が要る場合の内部フラグは実装時に定める。
+
+**M53 辞書層との関係**: 大規模化時は LOUDS trie 等のより高密度な索引（azooKey 本家辞書系
+で実績）への移行余地がある。M53 DictionaryStore が同形式 or 上位形式を採用する場合は
+本節フォーマットを統合・置換してよい。
+
 ## 5. 確定と学習
 
 - 英単語候補を確定したとき、surface = 選んだ英語形（`apple` / `Apple` …）。
@@ -345,6 +405,11 @@ CommitObservationRequest{
   （`xyz` 等の非日本語ローマ字判定）。
 - **順位** (host テスト): 弱シグナル時に英単語候補が日本語上位候補より下に来ること、
   自動選択されないこと、強シグナル時のみ上位化されること。
+- **辞書 TSV** (`core/tests` or host テスト): TSV パース（surface/frequency/flags）、
+  lower キー・頻度降順ルックアップ、同一キー複数 surface、不正行スキップ、末尾優先の重複。
+- **辞書バイナリ** (同上): TSV→`.bin` 生成と round-trip（ルックアップ結果が TSV と一致）、
+  `magic`/`version` 不一致・破損 `.bin` で TSV フォールバック、`.bin` が TSV より新しい
+  ときに `.bin` 経路、古いときに再生成。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

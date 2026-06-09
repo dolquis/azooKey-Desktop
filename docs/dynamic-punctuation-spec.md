@@ -156,24 +156,27 @@ for each boundary b between seg_i and seg_{i+1}:
 #### 4.1.2 曖昧性ガード（格助詞 vs 接続助詞 等）
 
 表層サフィックスだけでは節境界か否かを誤判定する代表例を `next_guard_factor`
-（0=挿入しない 〜 1=フル base_score）でガードする。
+（0=挿入しない 〜 1=フル base_score）でガードする。**品詞情報（§7.2.1 の `pos` /
+`head_pos`）が応答に付与されていれば、それを一次根拠**とし、無い（`Unknown`）構成では
+表層ヒューリスティック（括弧内）にフォールバックする。
 
 - **「が」**: 逆接接続助詞（読点要）と主格格助詞（読点不要）の判別。
-  - `seg_i` が用言で終わる（例「行った→が」）→ 接続助詞とみなし factor=1。
-  - `seg_i` が体言で終わる（例「私→が」）→ 格助詞とみなし factor=0。
-  - 体言/用言判定は `seg_i` 末尾 +（あれば）変換器の品詞情報。品詞が無い構成では
-    「直前が動詞/形容詞の活用語尾（た/だ/る/い/う 段 等）か」のヒューリスティック。
+  - `seg_i.pos == JoshiConj`（接続助詞、例「行った→が」）→ factor=1。
+  - `seg_i.pos == JoshiCase`（格助詞、例「私→が」）→ factor=0。
+  - フォールバック（pos 無し）: 「直前が動詞/形容詞の活用語尾（た/だ/る/い/う 段 等）」なら
+    接続助詞とみなし factor=1、体言終止なら factor=0。
 - **「て」「で」**: 連用中止（読点要）と補助用言への接続（読点不要、例「食べて→いる」）の判別。
-  - `seg_{i+1}` が補助用言（いる/ある/おく/みる/しまう/くれる/もらう/いく/くる 等）で
-    始まる → factor=0。
+  - `seg_{i+1}.head_pos == HojoYougen`（補助用言: いる/ある/おく/みる/しまう/くれる/もらう/
+    いく/くる 等）→ factor=0。
   - それ以外 → factor=1。
+  - フォールバック: `seg_{i+1}` 先頭表層が補助用言語彙集合に一致するか。
 - **「と」**: 引用・条件（読点要）と並列格助詞（「A と B」読点不要）の判別。
-  - `seg_{i+1}` が体言で始まり並列が続く → factor=0。
-  - 引用（「〜だと→思う」等、`seg_{i+1}` が思考/発話動詞）or 条件 → factor=1。
+  - `seg_{i+1}.head_pos == Taigen` かつ並列継続 → factor=0。
+  - `seg_{i+1}.head_pos == Yougen`（思考/発話動詞等、引用）or 条件文脈 → factor=1。
+  - フォールバック: `seg_{i+1}` 先頭が体言か用言かの表層推定。
 
-ガードに必要な品詞情報は、可能なら live 変換応答の segment に付与する（§7.2 の
-`segments[]` を将来 `pos` フィールドで拡張可能）。M59 コアは品詞無しヒューリスティックで
-動作し、品詞付与は任意の品質向上とする。
+品詞付与は任意の品質向上であり、M59 コアは pos 無しフォールバックでも動作する。pos が
+あるほど誤挿入が減る（特に「が」の格/接続判別）。
 
 #### 4.1.3 句点の精緻化（終止形 vs 連体形・数値）
 
@@ -185,6 +188,64 @@ for each boundary b between seg_i and seg_{i+1}:
 - **数値・小数・略記**: 末尾が数字（「3.14」「No.5」）の場合はピリオドを句点化しない。
   英数字列・記号列内部は §4.1 抑制規則に従う（M60 英単語候補とも干渉させない）。
 - **疑問**: 末尾が疑問終助詞「か」→ 句点。`？` 化は将来・設定。
+
+#### 4.1.4 ルール定義の外部化（TSV）
+
+§4.1〜§4.1.3 の規則は `PunctuationInserter` に**組み込みの既定ルール**として持つが、
+再コンパイルせず調整・カスタムできるよう **TSV で上書き・追加**できる。M17 カスタム
+ローマ字テーブル（`docs/legacy-parity-spec.md` §5）と同じファイル運用・ホットリロード基盤を
+再利用する。
+
+**ファイル形式**: TSV、UTF-8（BOM 許容）。1 行 1 ルール:
+
+```text
+# punctuation-rules.tsv (UTF-8)
+# 行頭 # はコメント、空行は無視
+# <kind>\t<match>\t<base_score>\t<guard>
+#   kind      : comma | period
+#   match     : comma=直前文節末尾の表層パターン / period=文末の終止形キーワード
+#   base_score: 0.0–1.0（comma のスコア。0 で当該ルールを無効化＝既定の打消し）
+#   guard     : 任意。';' 区切り AND。下記ミニ言語
+comma	が	0.85	prev_pos=JoshiConj
+comma	ので	0.80
+comma	て	0.60	next_head_pos!=HojoYougen
+comma	しかし	0.90	prev_pos=Setsuzoku
+period	です	1.0
+period	ます	1.0
+period	か	1.0	sentence_final
+```
+
+**guard ミニ言語**（評価系は `PunctuationInserter` 内に固定。未知トークンは warning 行スキップ）:
+
+| guard | 意味 |
+|---|---|
+| `prev_pos=<SegmentPos>` / `prev_pos!=<SegmentPos>` | 直前文節 `seg_i.pos`（§7.2.1） |
+| `next_head_pos=<SegmentPos>` / `!=` | 次文節 `seg_{i+1}.head_pos` |
+| `sentence_final` | バッファ末尾境界でのみ適用（period 既定） |
+
+`<SegmentPos>` は §7.2.1 の列挙名（`Taigen` `Yougen` `JoshiCase` `JoshiConj`
+`HojoYougen` `Setsuzoku` …）。guard が満たされないルールは `next_guard_factor=0`
+（適用しない）。pos が `Unknown`（品詞付与なし）のときは `prev_pos` / `next_head_pos`
+guard を**表層フォールバック**（§4.1.2）で評価する。
+
+**字種**: TSV には字（`、` `。`）を書かない。`kind=comma`→読点、`kind=period`→句点として、
+実際の字は `dynamicPunctuationStyle`（§6）で決まる（`ja`=`、。` / `fullwidth_latin`=`，．`）。
+これにより字種設定と外部ルールが独立する。
+
+**マージ規則（M17 の「置換」と異なる）**: 組み込み既定は常にロードし、TSV 行は
+**`(kind, match)` キーで既定を上書き**し、新規キーは追加する（同一キーはファイル末尾が
+勝つ）。`base_score=0` の comma 行は当該既定ルールの**無効化**として働く（打消しの
+エスケープハッチ）。これにより「数ルールだけ微調整」が安全にできる。
+
+**配置・ロード**:
+
+- 既定パス: `%LOCALAPPDATA%\azooKey\punctuation-rules.tsv`。設定 `punctuationRulesPath` で上書き。
+- ファイルが無ければ組み込み既定のみで動作（後方互換）。
+- パース失敗行は warning ログでスキップ（M17 流儀）。
+- ホットリロード: M17 の `ReadDirectoryChangesW` 監視基盤を再利用し、変更検出で新規入力から
+  差し替える（進行中の preedit は触らない）。
+- 既定ルールを TSV へ書き出して編集の土台にするダンプは Phase 7 設定アプリ（M30）で提供
+  （M17 §5.4 と同方針）。
 
 ### 4.2 削除・再配置
 
@@ -396,6 +457,52 @@ M59 は**任意配列 `segments[]` を新規追加**する（X-1-1 の segments 
 > Property を UTF-16 オフセットで操作するため、UTF-8 codepoint で返すと TIP 側で再計算が
 > 必要になり境界ズレの温床になる。host は UTF-16 単位でオフセットを計算して返す。
 
+#### 7.2.1 品詞フィールド（`pos` / `head_pos`）の正式化
+
+§4.1.2 の曖昧性ガードを品詞で駆動するため、各 segment に**任意の品詞フィールド**を追加する。
+
+```cpp
+// core/include/azookey/core/SegmentPos.h（新規・core で converter と host が共有）
+enum class SegmentPos : uint8_t {
+  Unknown    = 0,   // 品詞不明（既定。フォールバックで表層ヒューリスティック）
+  Taigen     = 1,   // 体言（名詞・代名詞・数詞）
+  Yougen     = 2,   // 用言（動詞・形容詞・形容動詞の活用語）
+  JoshiCase  = 3,   // 格助詞（が・を・に・へ・で・と・から・より）
+  JoshiConj  = 4,   // 接続助詞（が・ので・から・て・し・のに・ても）
+  JoshiOther = 5,   // 副助詞・係助詞・終助詞（は・も・か・ね・よ 等）
+  Setsuzoku  = 6,   // 接続詞（しかし・だから・また・そして）
+  Jodoushi   = 7,   // 助動詞（です・ます・た・ない・だ・である）
+  HojoYougen = 8,   // 補助用言（いる・ある・おく・しまう・くれる・もらう・いく・くる）
+  Rentai     = 9,   // 連体詞
+  Fukushi    = 10,  // 副詞
+  Kigou      = 11,  // 記号・句読点
+  English    = 12,  // 英単語（M60）
+};
+```
+
+各 segment への追加フィールド（すべて任意・後方互換、既定 `0=Unknown`）:
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `pos` | uint8 | `0` | 文節の**末尾形態素**の品詞（`SegmentPos`）。境界助詞の格/接続判別（「が」等）に使う |
+| `head_pos` | uint8 | `0` | 文節の**先頭自立語**の品詞。次文節の補助用言/体言判別（「て・で」「と」）に使う |
+
+- **末尾形態素の `pos`** を主に使う理由: 文節境界マーカは末尾の付属語（助詞）であり、
+  「行った**が**」=`JoshiConj` / 「私**が**」=`JoshiCase` のように末尾品詞が格/接続を直接
+  決めるため、表層一致より頑健。
+- **host 側導出**: 変換器の品詞 ID（辞書の `cid`/`mid`。`AddUserWordRequest.cid/mid` と
+  同系）から `SegmentPos` への**粗いマッピング表**を host が持ち、応答に詰める。細粒度
+  `cid` の直接公開はしない（粗 enum に正規化。将来必要なら別フィールドで追加）。
+- **後方互換**: `pos`/`head_pos` を欠く応答は `Unknown` となり、§4.1.2 は表層フォールバックで
+  動作する。Build/Parse は `o.emplace("pos", j::Value((double)seg.pos))` /
+  `seg.pos = (uint8_t)v.GetUInt("pos").value_or(0)`（既存流儀）。
+
+```jsonc
+// §7.2 の segment に pos/head_pos を加えた例
+{ "start_char": 0, "end_char": 4, "score": 0.95, "auto_punctuation": false,
+  "reading": "いったが", "pos": 4, "head_pos": 2 }   // 末尾=JoshiConj(が), 先頭=Yougen(行っ)
+```
+
 ### 7.3 キャンセル・staleness
 
 ライブ変換経路のため、既存 M10 の `ipc_pending_id_` staleness check と `Cancel`
@@ -434,12 +541,19 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 | `dynamicPunctuationStyle` | enum `ja`/`fullwidth_latin` | `ja` | M59: 自動挿入する句読点の字種（`、。` / `，．`） |
 | `dynamicPunctuationStability` | enum `onPause`/`eager` | `onPause` | M59: 挿入タイミング（入力停止時のみ / 打鍵ごと） |
 | `segmentBoundaryConfidence` | number (0.0–1.0) | `0.5` | M59: この境界スコア未満の文節境界には読点を挿入しない（§4.1 抑制規則） |
+| `punctuationRulesPath` | string | `%LOCALAPPDATA%\azooKey\punctuation-rules.tsv` | M59: 句読点ルール TSV のパス（§4.1.4）。無ければ組み込み既定のみ。ホットリロード対応 |
 
 ## 9. テスト計画
 
 - **句読点挿入ロジック** (`core/tests/punctuation_inserter_test.cpp` 新規 or
   host テスト): 文節境界・接続表現での読点挿入、文末句点、連続読点の抑制、字種切替
   （`ja` / `fullwidth_latin`）。
+- **品詞ガード** (同上): `pos`/`head_pos` 駆動で「が」の格助詞（読点なし）/接続助詞（読点）、
+  「て・で」の補助用言接続（読点なし）/連用中止（読点）が分岐すること。`pos=Unknown` で
+  表層フォールバックに切替わること。
+- **TSV ルール外部化** (`core/tests/punctuation_rules_test.cpp` 新規): TSV のパース、`(kind,match)`
+  上書き・新規追加・`base_score=0` 無効化、guard ミニ言語の評価、不正行スキップ、字を
+  含めない（字種は `dynamicPunctuationStyle` 由来）こと。
 - **状態機械** (`core/tests/input_state_test.cpp`): `dynamicPunctuation` ON で
   Backspace がかな単位を削除し自動句読点を削除単位に数えないこと、入力変化で句読点が
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で

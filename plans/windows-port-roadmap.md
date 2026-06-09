@@ -1135,7 +1135,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `ipc/src/Messages.cpp`・`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・応答 segments の
   自動句読点マーカ・`CommitSegmentsObservation` 追加。spec §6.4／M58-B と共有）、
   `core/include/azookey/core/InputState.h` / 状態機械（Backspace 削除単位から自動句読点を
-  除外）、`tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
+  除外）、`core/include/azookey/core/SegmentPos.h`（新規・`pos` 列挙）、
+  `core/src/PunctuationRules.cpp`（新規・TSV ルールパーサ／マージ／ホットリロード）、
+  `tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
   `settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/dynamic-punctuation-spec.md` §3〜§9。
   - host 側 `PunctuationInserter`（決定的な節境界・文末ヒューリスティック挿入）
@@ -1149,8 +1151,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `is_auto_punctuation=true` として送って学習対象外にする（capability 非対応 host は単発
     `CommitObservation` フォールバック）。M58-B 未着手時は単発フォールバック経路で先行可能
   - 字種切替（`dynamicPunctuationStyle` = `ja` / `fullwidth_latin`）
-  - 設定キー 4 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
-    `dynamicPunctuationStability` / `segmentBoundaryConfidence`）
+  - 品詞フィールド `segments[].pos` / `head_pos`（`core` の `SegmentPos` 列挙。任意・後方互換。
+    曖昧性ガード〔「が」格/接続、「て・で」補助用言〕を品詞駆動化。pos 無しは表層フォールバック。spec §7.2.1）
+  - 句読点ルールの TSV 外部化（`punctuation-rules.tsv`: kind/match/base_score/guard。組み込み既定を
+    `(kind,match)` で上書き・追加、`base_score=0` で無効化。字種は TSV に書かず `dynamicPunctuationStyle`
+    由来。M17 ホットリロード基盤再利用。spec §4.1.4）
+  - 設定キー 5 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
+    `dynamicPunctuationStability` / `segmentBoundaryConfidence` / `punctuationRulesPath`）
 - **受け入れ条件**:
   - `liveConversion=true` + `dynamicPunctuation=true` で、文を打つと節境界・文末に
     句読点が現れ、続けて打つと文節構造の変化に応じて句読点が再配置・削除される
@@ -1185,6 +1192,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   英単語確定時の reading=生ローマ字での Observe）、`ipc/src/Payloads.cpp`
   （`QueryCandidates` に `raw_romaji` / `english_candidates`、候補 `tag` 付与）、
   `inference-host/src/EnglishCandidateProvider.cpp`（新規・生成/ゲーティング/順位）、
+  `inference-host/src/EnglishDictionary.cpp`（新規・TSV パース / `.bin` コンパイル・mmap・
+  ルックアップ。spec §4.4・§4.5）、
   `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`、
   `learning/`（English チャネル or source タグでの区別）、
   `settings/mvp-settings.schema.json`。
@@ -1196,6 +1205,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 確定時 reading=生ローマ字での学習（かな漢字学習と混線させない）
   - 英単語辞書フォーマット（TSV: `surface`/`frequency`/`flags`。`spec` §4.4）と
     ルックアップ（lower キー・頻度降順・`flags` で大文字化優先）。ベースラインは辞書なしで動作
+  - 辞書バイナリ形式（コンパイル済み `.bin`: ヘッダ + ソート済みレコード配列 + string pool。
+    LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュとし破損時 TSV フォールバック。spec §4.5）
   - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
     `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary` /
     `inlineEnglishPromoteThreshold` / `inlineEnglishDictionaryPath`）

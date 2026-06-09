@@ -110,8 +110,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - `QueryCandidates(request_id, kana, context)` の Host 実装（`atomic<bool>* cancel` 対応）
   - 固定テーブル or 簡易 N-best（`core/src/SimpleConverter.cpp`: 固定辞書 + TSV ロード + prefix fallback + `Learn()`）
   - `request_id` 追跡と古い ID の破棄（`RequestScheduler`）
-- **設計メモ**: 「bigram context bonus」は当面 `SimpleConverter.cpp` の単一ハードコード対のデモであり、
-  本格的な bigram スコアリングは M52/M53 で対応する。
+- **設計メモ**: 「bigram context bonus」は `SimpleConverter.cpp` のデータ駆動の静的
+  bigram ボーナス表（組み込みシード + TSV ロード）で扱う。これは CPU fallback の
+  de-stub であり、本格的な統計的/辞書ベース bigram スコアリングは M52/M53 で対応する。
 - **受け入れ条件**:
   - `inference-host/tests` で固定 kana → 期待候補リストが返る
   - TIP 側で `OnKeyDown` から `QueryCandidatesRequest` を `NamedPipeClient` 経由で送信し、候補リストが Host から受信される
@@ -271,7 +272,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 | ターゲット | テスト | 主要シナリオ |
 |---|---|---|
 | `core_tests`（`core/tests/`） | `romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音） |
-| `core_tests` | `simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、bigram コンテキスト、`Correct`、`Learn` |
+| `core_tests` | `simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn` |
 | `ipc_tests` | `messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
 | `ipc_payloads_tests` | `payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/Cancel/Commit/UserWord の build/parse + malformed reject |
 | `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ |

@@ -10,6 +10,14 @@
 
 namespace {
 
+const azookey::core::Candidate* FindCandidate(const std::vector<azookey::core::Candidate>& candidates,
+                                              const std::string& surface) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(), [&](const azookey::core::Candidate& c) {
+    return c.surface == surface;
+  });
+  return it == candidates.end() ? nullptr : &*it;
+}
+
 // Fixture that writes TSV fixtures and removes them in TearDown so a failing
 // assertion never leaves a stale file behind.
 class SimpleConverterTsvTest : public ::testing::Test {
@@ -68,6 +76,116 @@ TEST_F(SimpleConverterTsvTest, TsvLoad) {
 
   // Missing file returns false but does not throw.
   EXPECT_FALSE(converter.LoadFromTsv("/nonexistent/azookey_no_such_file.tsv"));
+}
+
+TEST_F(SimpleConverterTsvTest, BigramContextUsesSuffixMatch) {
+  const std::string path = "simple_converter_suffix_fixture.tsv";
+  WriteFixture(path, "にほん\tNIPPON\t1.10\tfixture\n");
+
+  azookey::core::SimpleConverter converter;
+  ASSERT_TRUE(converter.LoadFromTsv(path));
+
+  azookey::core::ConversionContext context;
+  context.preceding_text = "きょうはにっぽん";
+  const auto candidates = converter.Convert("にほん", context);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "日本");
+
+  const auto* nihon = FindCandidate(candidates, "日本");
+  ASSERT_NE(nihon, nullptr);
+  EXPECT_NE(nihon->debug_info.find("ctx-bigram"), std::string::npos);
+  EXPECT_NEAR(nihon->score, 1.15, 0.000001);
+}
+
+TEST_F(SimpleConverterTsvTest, BigramTsvLoadsAdditionalPairsAndSkipsBadRows) {
+  const std::string dict_path = "simple_converter_bigram_dict_fixture.tsv";
+  const std::string bigram_path = "simple_converter_bigram_fixture.tsv";
+  WriteFixture(dict_path,
+               "あずきい\tvalid\t1.0\tfixture\n"
+               "あずきい\tbad\t1.1\tfixture\n");
+  WriteFixture(bigram_path,
+               "# comment line\n"
+               "\n"
+               "ctx\tbad\tnotanumber\n"
+               "ctx\tvalid\t0.2\n"
+               "malformed line without tabs\n"
+               "\tmissing-key\t0.5\n"
+               "ctx\t\t0.5\n");
+
+  azookey::core::SimpleConverter converter;
+  ASSERT_TRUE(converter.LoadFromTsv(dict_path));
+  ASSERT_TRUE(converter.LoadBigramFromTsv(bigram_path));
+
+  azookey::core::ConversionContext context;
+  context.preceding_text = "prefix ctx";
+  const auto candidates = converter.Convert("あずきい", context);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "valid");
+
+  const auto* valid = FindCandidate(candidates, "valid");
+  ASSERT_NE(valid, nullptr);
+  EXPECT_NE(valid->debug_info.find("ctx-bigram"), std::string::npos);
+  EXPECT_NEAR(valid->score, 1.2, 0.000001);
+
+  const auto* bad = FindCandidate(candidates, "bad");
+  ASSERT_NE(bad, nullptr);
+  EXPECT_EQ(bad->debug_info.find("ctx-bigram"), std::string::npos);
+  EXPECT_NEAR(bad->score, 1.1, 0.000001);
+
+  EXPECT_FALSE(converter.LoadBigramFromTsv("/nonexistent/azookey_no_such_bigram_file.tsv"));
+}
+
+TEST_F(SimpleConverterTsvTest, EmptyPrecedingTextDoesNotApplyBigramBonus) {
+  const std::string dict_path = "simple_converter_empty_context_dict_fixture.tsv";
+  const std::string bigram_path = "simple_converter_empty_context_bigram_fixture.tsv";
+  WriteFixture(dict_path,
+               "あずきい\tvalid\t1.0\tfixture\n"
+               "あずきい\tplain\t1.1\tfixture\n");
+  WriteFixture(bigram_path, "ctx\tvalid\t0.2\n");
+
+  azookey::core::SimpleConverter converter;
+  ASSERT_TRUE(converter.LoadFromTsv(dict_path));
+  ASSERT_TRUE(converter.LoadBigramFromTsv(bigram_path));
+
+  const auto candidates = converter.Convert("あずきい", azookey::core::ConversionContext{});
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "plain");
+
+  const auto* valid = FindCandidate(candidates, "valid");
+  ASSERT_NE(valid, nullptr);
+  EXPECT_EQ(valid->debug_info.find("ctx-bigram"), std::string::npos);
+  EXPECT_NEAR(valid->score, 1.0, 0.000001);
+}
+
+TEST_F(SimpleConverterTsvTest, BigramContextUsesLongestSuffixOnly) {
+  const std::string dict_path = "simple_converter_longest_bigram_dict_fixture.tsv";
+  const std::string bigram_path = "simple_converter_longest_bigram_fixture.tsv";
+  WriteFixture(dict_path,
+               "てすと\t短い\t1.0\tshort\n"
+               "てすと\t長い\t1.0\tlong\n");
+  WriteFixture(bigram_path,
+               "にっぽん\t短い\t10.0\n"
+               "きょうはにっぽん\t長い\t0.2\n");
+
+  azookey::core::SimpleConverter converter;
+  ASSERT_TRUE(converter.LoadFromTsv(dict_path));
+  ASSERT_TRUE(converter.LoadBigramFromTsv(bigram_path));
+
+  azookey::core::ConversionContext context;
+  context.preceding_text = "きょうはにっぽん";
+  const auto candidates = converter.Convert("てすと", context);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "長い");
+
+  const auto* long_match = FindCandidate(candidates, "長い");
+  ASSERT_NE(long_match, nullptr);
+  EXPECT_NE(long_match->debug_info.find("ctx-bigram"), std::string::npos);
+  EXPECT_NEAR(long_match->score, 1.2, 0.000001);
+
+  const auto* short_match = FindCandidate(candidates, "短い");
+  ASSERT_NE(short_match, nullptr);
+  EXPECT_EQ(short_match->debug_info.find("ctx-bigram"), std::string::npos);
+  EXPECT_NEAR(short_match->score, 1.0, 0.000001);
 }
 
 TEST(SimpleConverterTest, PrefixFallback) {

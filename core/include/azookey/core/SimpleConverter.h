@@ -16,6 +16,12 @@ class SimpleConverter final : public IConverter {
   // return false without throwing; rows that fail to parse are skipped.
   bool LoadFromTsv(const std::string& path);
 
+  // Load additional bigram context bonuses from a TSV file. Each non-blank,
+  // non-'#'-prefixed line must contain: key \t surface \t bonus
+  // Returns true if at least one row was loaded. Missing or unreadable files
+  // return false without throwing; rows that fail to parse are skipped.
+  bool LoadBigramFromTsv(const std::string& path);
+
   std::vector<Candidate> Convert(const std::string& kana, const ConversionContext& context) override;
   std::vector<Candidate> PredictNext(const std::string& kana, const ConversionContext& context) override;
   std::vector<Candidate> Correct(const std::string& kana,
@@ -26,6 +32,7 @@ class SimpleConverter final : public IConverter {
 
  private:
   std::unordered_map<std::string, std::vector<Candidate>> dictionary_;
+  std::unordered_map<std::string, std::unordered_map<std::string, double>> bigram_bonus_;
 };
 
 }  // namespace azookey::core

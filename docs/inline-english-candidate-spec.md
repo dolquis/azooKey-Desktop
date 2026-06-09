@@ -83,24 +83,67 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 ### 4.2 ゲーティング（いつ出すか）
 
 あらゆるローマ字に英単語候補を出すと雑音になる（例: `ko` で英語を出さない）。host 側で
-以下のシグナルにより**注入可否と順位**を決める:
+生ローマ字 `r` から**英語意図スコア** `english_intent ∈ [0,1]` を算出し、注入可否と順位を
+決める。
 
-- 生ローマ字が英単語辞書にヒットする（品質レイヤ）。
-- 生ローマ字がかなとして成立しにくい列を含む（例: `xyz`、日本語ローマ字で生成
-  困難な子音連続）。
-- 長さが `inlineEnglishMinLength`（既定 2）以上。
-- 大文字を含む（Shift 併用で打鍵された）など、英語意図シグナルがある。
+シグナル（各 `[0,1]`）:
 
-辞書が無いベースライン構成では、最低限「生ローマ字そのもの」を**下位の追加候補**として
-常に提示しうる（順位は §4.3）。
+| シグナル | 定義 |
+|---|---|
+| `s_dict` | 英単語辞書に `lower(r)` がヒット = 1、else 0（`inlineEnglishDictionary` OFF 時は常に 0） |
+| `s_nonkana` | `r` を `RomajiKanaConverter` で完全にかな分解できず ASCII 残余が出る = 1、else 0 |
+| `s_cluster` | 英語特有の子音連続/2-gram（`th` `ck` `wr` `ght` 等）の出現割合 |
+| `s_len` | `clamp((len(r) - inlineEnglishMinLength) / 4, 0, 1)`（長いほど英語らしい） |
+| `s_case` | `r` が大文字を含む（Shift 併用打鍵）= 1、else 0 |
+
+合成（重みは既定。bench M52 / 実機で調整。本式が既定の正典）:
+
+```text
+english_intent = 0.40*s_dict + 0.25*s_nonkana + 0.15*s_cluster
+               + 0.10*s_len  + 0.10*s_case
+```
+
+注入可否（gating）:
+
+```text
+if !inlineEnglishCandidates:           英単語候補なし
+if len(r) < inlineEnglishMinLength:     英単語候補なし（既定 2）
+else:
+    生ローマ字そのもの候補は常に生成可（順位は §4.3）
+    先頭大文字 / 全大文字バリアントは inlineEnglishCaseVariants ON 時
+    全角ローマ字は fullWidthEnglishCandidate ON 時
+    辞書一致語（surface 差し替え・score 上乗せ）は inlineEnglishDictionary ON 時
+```
+
+辞書非搭載（`inlineEnglishDictionary=false`）でも `s_dict=0` のまま他シグナルで
+ベースライン動作する（生ローマ字 + 大文字化は出せる）。
 
 ### 4.3 順位（日本語を奪わない）
 
-- 英語意図シグナルが弱いときは、英単語候補を**日本語上位候補より下**の安定した順位に
-  置く（マッスルメモリのため順位を固定）。
-- 英語意図シグナルが強い（辞書ヒット + かな不成立など）ときのみ上位化を許す。
-- **自動選択はしない。** 第一候補を英単語に自動で差し替えない。ユーザーが明示選択した
-  ときだけ確定する。
+```text
+threshold_promote = inlineEnglishPromoteThreshold（既定 0.6）
+if english_intent >= threshold_promote:
+    英単語候補を日本語第 1 候補の直後（index 1 付近）へ昇格
+else:
+    英単語候補を日本語候補群の後ろ（固定下位。例: 上位 5 件の後）へ
+自動選択はしない（第 1 候補を英単語へ置換しない。ユーザー明示選択時のみ確定）
+順位安定化: 同一 r では順位を固定（マッスルメモリ）。english_intent はしきい値を
+           跨いだときのみ段階的に順位が変わる（連続値での微振動で順位を動かさない）
+```
+
+候補内の英語形の並び（固定順）:
+
+```text
+生ローマ字そのもの → 先頭大文字 → 全大文字 → 全角ローマ字
+（辞書一致語があれば「生ローマ字そのもの」位置の surface を辞書 surface に差し替え）
+```
+
+エッジ:
+
+- ローマ字未確定（`RomajiKanaConverter` に pending がある。例: `n` 終端）でも、`raw_romaji`
+  にその ASCII を含めて英単語素材にする。
+- 記号/数字混在は `s_nonkana` に寄与しうるが、英字を 1 文字も含まない純記号/純数字列は
+  `inlineEnglishMinLength` と「英字含有」チェックで除外する。
 
 ## 5. 確定と学習
 
@@ -115,47 +158,109 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 ## 6. IPC プロトコル
 
 新 `MessageType` は追加しない。既存 `QueryCandidates`
-（`docs/legacy-parity-spec.md` §1.2、`ipc/include/azookey/ipc/Messages.h`）を
-オプションフィールドで拡張する。
+（`ipc/include/azookey/ipc/Messages.h` / `Payloads.h`）をオプションフィールドで拡張する。
+すべての追加フィールドは**任意・後方互換**とし、既存 `Payloads.cpp` の流儀
+（Build = `o.emplace(...)`、Parse = `GetString/GetBool/GetUInt().value_or(既定)`）に従う。
 
-### 6.1 Request
+### 6.1 `CandidateField` に `tag` を追加
+
+現状 `CandidateField` は `surface` / `reading` / `score` / `source` のみで候補タグを
+持たない。M60 は X-2-3 と統一して `tag`（`uint8`）を**新規追加**する。
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `tag` | uint8 | `0`（None） | `docs/rich-features-spec.md` X-2-3 の `CandidateTag`。英単語候補は `English = 4` |
+
+`CandidateToJson` / `CandidateFromJson` 追記（規約例）:
+
+```cpp
+// CandidateToJson
+o.emplace("tag", j::Value(static_cast<double>(c.tag)));
+// CandidateFromJson（後方互換: 省略時 0=None）
+c.tag = static_cast<uint8_t>(v.GetUInt("tag").value_or(0));
+```
+
+`tag` の追加は `QueryCandidatesResponse` / `CommitObservationRequest`（`chosen` / `shown[]`）
+など `CandidateField` を含む全 payload に波及するが、既定 0 で後方互換。
+
+### 6.2 Request（`QueryCandidatesRequest` 拡張）
+
+既存フィールド: `reading` / `left_context` / `max_candidates` / `live`。追加:
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `raw_romaji` | string | `""` | 生ローマ字（英単語候補の素材）。`reading` とは別フィールド |
+| `english_candidates` | bool | `false` | `inlineEnglishCandidates` を伝搬 |
 
 ```jsonc
 {
-  "request_id": 0,
-  "kana": "あっぷる",
-  "raw_romaji": "apple",          // 追加: 生ローマ字（英単語候補の素材）
-  "english_candidates": true,      // 追加: 英単語候補注入を有効化（inlineEnglishCandidates 伝搬）
-  "context": ""
+  "reading": "あっぷる",
+  "left_context": "",
+  "max_candidates": 10,
+  "live": false,
+  "raw_romaji": "apple",          // 追加
+  "english_candidates": true       // 追加
 }
 ```
 
-`raw_romaji` は本機能の核。`reading`/`kana` には生ローマ字を入れず、別フィールドに
-分離する（かな漢字変換の入力を汚染しないため。M58 §4.2 と同じ原則）。
-`english_candidates` は `inlineEnglishCandidates` 設定を host へ伝搬する。
+`raw_romaji` は本機能の核。`reading` には生ローマ字を入れず別フィールドに分離する
+（かな漢字変換の入力を汚染しないため。M58 §4.2 と同原則）。Build/Parse 規約:
 
-### 6.2 Response
+```cpp
+// Build
+o.emplace("raw_romaji", j::Value(p.raw_romaji));
+o.emplace("english_candidates", j::Value(p.english_candidates));
+// Parse（後方互換）
+p.raw_romaji         = v->GetString("raw_romaji").value_or(std::string());
+p.english_candidates = v->GetBool("english_candidates").value_or(false);
+```
 
-既存候補列（`surface` / `reading` / `score` / `source`）に、X-2-3 で計画済みの
-`tag: uint8` を付与して English を識別する。新しい応答構造は要らない。
+### 6.3 Response
+
+`QueryCandidatesResponse` は構造不変（`candidates[]` + `partial`）。英単語候補は
+`candidates[]` に `tag = English(4)` を付けて混在させる（§6.1）。
 
 ```jsonc
 {
-  "request_id": 0,
   "candidates": [
-    { "surface": "アップル", "reading": "あっぷる", "score": 0.0, "tag": 0 },
-    { "surface": "apple",   "reading": "apple",   "score": 0.0, "tag": 4 },  // tag=English
-    { "surface": "Apple",   "reading": "apple",   "score": 0.0, "tag": 4 }
-  ]
+    { "surface": "アップル", "reading": "あっぷる", "score": 0.80, "source": "model",     "tag": 0 },
+    { "surface": "apple",   "reading": "apple",   "score": 0.55, "source": "heuristic", "tag": 4 },
+    { "surface": "Apple",   "reading": "apple",   "score": 0.50, "source": "heuristic", "tag": 4 }
+  ],
+  "partial": false
 }
 ```
 
-`tag` 値は `docs/rich-features-spec.md` X-2-3 の `CandidateTag`（`English = 4`）に
-合わせる。
+英単語候補の `reading` には**生ローマ字**を入れる（§5 の学習方針と一致。確定時に
+`reading=apple` で学習し、再入力で再提示するため）。
 
-### 6.3 staleness・Cancel
+### 6.4 確定時学習（`CommitObservationRequest`）
 
-候補生成経路のため、既存 M10 の staleness / Cancel をそのまま使う。追加経路は無い。
+payload は §6.1 の `tag` 追加以外**変更しない**。英単語候補を確定したとき:
+
+```text
+CommitObservationRequest{
+  reading = raw_romaji,          // 例 "apple"（かな "あっぷる" ではない）
+  chosen  = { surface:"Apple", reading:"apple", source:"...", tag:4 },
+  ...
+}
+```
+
+`reading` を生ローマ字にすることで、かな漢字学習（`reading="あっぷる"`）と学習空間を
+分離する（混線させない。§5）。host 側は `chosen.tag == English` を見て English チャネル
+（or source タグ）へ振り分ける。
+
+### 6.5 staleness・Cancel
+
+候補生成経路のため、既存 M10 の staleness / Cancel（`CancelPayload.target_request_id`）を
+そのまま使う。追加経路は無い。
+
+### 6.6 payloads_test 期待値（`ipc/tests/payloads_test.cpp`）
+
+- `CandidateField` round-trip で `tag` が保存される。`tag` を欠く JSON のパースで `0`（None）。
+- `QueryCandidatesRequest` round-trip で `raw_romaji` / `english_candidates` が保存される。
+  欠落 JSON で `""` / `false` の既定（後方互換）。
+- 英単語候補（`tag=4`、`reading=生ローマ字`）を含む `QueryCandidatesResponse` の往復。
 
 ## 7. 設定スキーマ
 
@@ -170,6 +275,7 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 | `inlineEnglishCaseVariants` | boolean | `true` | M60: 先頭大文字 / 全大文字バリアントも候補に出す |
 | `fullWidthEnglishCandidate` | boolean | `false` | M60: 全角ローマ字候補も出す（legacy `fullWidthRomanCandidate` 相当） |
 | `inlineEnglishMinLength` | integer (≥1) | `2` | M60: 英単語候補を出す生ローマ字の最小長 |
+| `inlineEnglishPromoteThreshold` | number (0.0–1.0) | `0.6` | M60: `english_intent` がこの値以上で英単語候補を上位化（§4.3） |
 | `inlineEnglishDictionary` | boolean | `false` | M60: 英単語辞書によるランキング・ゲーティングを有効化（品質レイヤ。OFF でも生ローマ字 + 大文字化は出せる） |
 
 ## 8. テスト計画

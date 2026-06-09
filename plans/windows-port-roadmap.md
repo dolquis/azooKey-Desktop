@@ -1141,8 +1141,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 読み↔surface 非対称の扱い: Backspace はかな単位を削除し自動句読点を数えない／
     確定時に自動句読点スパンを分離して学習を汚染しない／文中キャレット編集は M20 統合へ送る
   - 字種切替（`dynamicPunctuationStyle` = `ja` / `fullwidth_latin`）
-  - 設定キー 3 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
-    `dynamicPunctuationStability`）
+  - 設定キー 4 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
+    `dynamicPunctuationStability` / `segmentBoundaryConfidence`）
 - **受け入れ条件**:
   - `liveConversion=true` + `dynamicPunctuation=true` で、文を打つと節境界・文末に
     句読点が現れ、続けて打つと文節構造の変化に応じて句読点が再配置・削除される
@@ -1186,8 +1186,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     奪わない／自動選択しない）
   - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）
   - 確定時 reading=生ローマ字での学習（かな漢字学習と混線させない）
-  - 設定キー 5 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
-    `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary`）
+  - 設定キー 6 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
+    `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary` /
+    `inlineEnglishPromoteThreshold`）
 - **受け入れ条件**:
   - `inlineEnglishCandidates=true` で、Japanese モードのまま `apple` を打つと候補列に
     `apple` / `Apple` が現れ、選択すると英数モード切替なしで英単語が確定する

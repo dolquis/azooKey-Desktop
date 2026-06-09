@@ -31,6 +31,7 @@ namespace {
 constexpr DWORD kPipeBufferSize = 64 * 1024;
 constexpr size_t kMaxTransientReadNoDataRetries = 100;
 constexpr size_t kMaxTransientWriteNoProgressRetries = 100;
+constexpr std::chrono::milliseconds kFailedAcceptBackoff(25);
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) return {};
@@ -159,6 +160,35 @@ enum class ConnectWaitResult {
   Failed,
 };
 
+HANDLE PrepareReusableOverlappedEvent() {
+  thread_local ScopedHandle event;
+  if (!event.valid()) {
+    event.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  }
+  if (!event.valid()) {
+    return nullptr;
+  }
+  if (!ResetEvent(event.get())) {
+    return nullptr;
+  }
+  return event.get();
+}
+
+void CaptureImmediateOverlappedTransfer(HANDLE pipe, OVERLAPPED& overlapped, PipeIoResult& result) {
+  // ERROR_MORE_DATA is a completed partial message-mode read; keep
+  // its byte count while hard synchronous failures preserve their error.
+  if (!result.ok && result.error != ERROR_MORE_DATA) {
+    return;
+  }
+
+  DWORD transferred = 0;
+  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
+  const DWORD completed_error = completed ? ERROR_SUCCESS : GetLastError();
+  if (completed || completed_error == ERROR_MORE_DATA) {
+    result.transferred = transferred;
+  }
+}
+
 PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop_event) {
   HANDLE handles[2] = {overlapped.hEvent, stop_event};
   const DWORD handle_count = stop_event ? 2 : 1;
@@ -191,14 +221,14 @@ PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, HANDLE stop_e
     return result;
   }
 
-  ScopedHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-  if (!event.valid()) {
+  HANDLE event = PrepareReusableOverlappedEvent();
+  if (!event) {
     PipeIoResult result;
     result.error = GetLastError();
     return result;
   }
   OVERLAPPED overlapped{};
-  overlapped.hEvent = event.get();
+  overlapped.hEvent = event;
 
   PipeIoResult result;
   result.ok = ReadFile(pipe, data, size, nullptr, &overlapped);
@@ -206,14 +236,7 @@ PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, HANDLE stop_e
   if (!result.ok && result.error == ERROR_IO_PENDING) {
     return FinishOverlappedIo(pipe, overlapped, stop_event);
   }
-  DWORD transferred = 0;
-  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
-  const DWORD completed_error = completed ? ERROR_SUCCESS : GetLastError();
-  if (completed || completed_error != ERROR_IO_INCOMPLETE) {
-    result.ok = completed;
-    result.error = completed_error;
-    result.transferred = transferred;
-  }
+  CaptureImmediateOverlappedTransfer(pipe, overlapped, result);
   return result;
 }
 
@@ -230,14 +253,14 @@ PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, HANDLE
     return result;
   }
 
-  ScopedHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-  if (!event.valid()) {
+  HANDLE event = PrepareReusableOverlappedEvent();
+  if (!event) {
     PipeIoResult result;
     result.error = GetLastError();
     return result;
   }
   OVERLAPPED overlapped{};
-  overlapped.hEvent = event.get();
+  overlapped.hEvent = event;
 
   PipeIoResult result;
   result.ok = WriteFile(pipe, data, size, nullptr, &overlapped);
@@ -245,14 +268,7 @@ PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, HANDLE
   if (!result.ok && result.error == ERROR_IO_PENDING) {
     return FinishOverlappedIo(pipe, overlapped, stop_event);
   }
-  DWORD transferred = 0;
-  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
-  const DWORD completed_error = completed ? ERROR_SUCCESS : GetLastError();
-  if (completed || completed_error != ERROR_IO_INCOMPLETE) {
-    result.ok = completed;
-    result.error = completed_error;
-    result.transferred = transferred;
-  }
+  CaptureImmediateOverlappedTransfer(pipe, overlapped, result);
   return result;
 }
 
@@ -570,6 +586,9 @@ struct NamedPipeServer::Impl {
         }
       } else {
         CloseHandle(current);
+        if (connect_result == ConnectWaitResult::Failed) {
+          std::this_thread::sleep_for(kFailedAcceptBackoff);
+        }
       }
 
       {
@@ -705,6 +724,7 @@ void NamedPipeServer::Stop() {
     if (impl_->stop_event) {
       SetEvent(impl_->stop_event);
     }
+    impl_->client_cv.notify_all();
     clients = impl_->clients;
   }
 

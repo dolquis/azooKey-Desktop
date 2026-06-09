@@ -2,8 +2,8 @@
   SHARED CORE — Agent / Linear 運用規約（管制塔モデル）
   この「共有コア」は全リポジトリで同一内容をミラーする。
   個別 repo で直接編集しない。編集は origin（後述）で行い、各 repo へ伝播する。
-  version: 0.3-draft   updated: 2026-06-03
-  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。
+  version: 0.4-draft   updated: 2026-06-07
+  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。
   origin(編集の起点・単一正典): dolquis/agent-ops/linear-conventions.md（このファイル）
   各 repo の docs/linear-conventions.md は本ファイルのベンダリングコピー + §13 Delta。
   プロジェクト固有の差分は各 repo の「Project Delta」節（本ファイル末尾）に置く。
@@ -38,6 +38,28 @@ Dev チーム配下の全プロジェクトで共通の、Linear 運用ルール
 | `agent:codex-pr-review` | PR 差分レビュー担当 |
 
 Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。ただし `gate:human-required` または旧 `type:human-gate` の人間専任タスクは `agent:*` を省略してよい。
+
+---
+
+## 2.1 Codex Execution Policy（Codex 実行ポリシー）
+
+対象: Codex Cloud（"Codex for Linear"）。Linear で Issue を Codex に assign / delegate する、コメントで mention トークン（`@`+`Codex`）を付ける、または triage rule で自動 delegate すると起動する。ローカルの Codex App は Codex チャット（Linear 管轄外）から起動し、Linear のラベルでは起動しない。
+
+- `agent:codex-impl` / `agent:codex-pr-review` は **ルーティング（候補）ラベル**であり、Codex Cloud の実行を許可しない（滑走路前の待機列）。
+- Claude は Codex 候補 Issue の作成・分割・ラベル付け・関連付け・整理と、実行指示文の下書きまで行ってよい。ただし Codex への assign / delegate / mention は **行わない**。
+- Codex Cloud の実行には人間 lead の明示許可（Issue コメント）が必要。Claude / エージェントはいかなる Linear コメント / Issue 本文 / テンプレートにもリテラルな mention トークン（`@`+`Codex`）を再生産しない（無害化する）。承認後に実際の mention で起動するのは人間 lead のみ。
+- triage rule による Codex 自動 delegate は使わない。
+- 実行したら Codex Run Record（§6）に approval / Codex task link / branch / commit / PR / validation / remaining risk を記録する。
+- 無許可で Codex Cloud が動いた場合はインシデントとして扱う: delegate を解除して Issue を候補へ戻し、GitHub に branch / PR が到達していないか確認し、Issue に記録する。
+
+### 実行許可フォーマット（人間 → Issue コメント）
+
+- Issue / Repo / Scope（Acceptance Criteria のみ）
+- Allowed output: summary only | branch only | draft PR | PR（repo の PR 規約に従う。Draft PR 必須の repo では draft PR までとする）
+- Human gate: none | required before Done
+- Prohibited: 無関係な refactor / スコープ変更 / main への直接 push / human-gate 判断の変更
+
+このコメントがある場合に限り、人間が Codex への delegate / mention を行う。
 
 ---
 
@@ -94,6 +116,7 @@ Claude が Issue を作成・更新・分割するときは、本文冒頭に **
 - Expected PR size:
 - Blocks:
 - Blocked by:
+- Codex safety: `agent:codex-*` はルーティングのみ。Claude は Codex へ delegate / assign / mention しない（実行は人間 lead のみ。mention トークンは候補段階で書かない）。
 ```
 
 Issue タイプ（`type:`）:
@@ -115,6 +138,13 @@ Tracking Issue または Project description 上部には、`## Next AI Tasks` �
 - **Validation**: test / lint / build / 手動確認、スキップ時は理由
 - **Findings**: リスク・ブロッカー・follow-up
 - **Next**: 次アクションと次オーナー
+
+Codex Cloud を実行した場合は、追加で **Codex Run Record** を残す:
+
+- Execution approved by / approval comment
+- Codex task link / branch / commit / PR
+- Validation / known limitations
+- Human gate required / next reviewer
 
 短く保ち、仕様はコピーせず GitHub へリンクする。
 
@@ -164,6 +194,9 @@ GitHub docs remain canonical.
 - 実機・署名など人間判断が必要な作業を AI 判断だけで Done にしない。
 - Migrated 作業で GitHub Issue リンクを省略しない。
 - Linear 作業から README に進捗表/TODO を増やさない。
+- Claude から Codex へ assign / delegate / mention しない。実行は人間 lead が明示許可コメント後に自ら行う（Claude は実行指示文の下書きまで）。
+- Claude / エージェントはいかなる Linear コメント / Issue にもリテラルな Codex mention トークン（`@` + `Codex`）を再生産しない（無害化する）。承認後に実際の mention で起動するのは人間 lead のみ。
+- triage rule で Codex を自動 delegate しない。
 
 ---
 
@@ -172,10 +205,15 @@ GitHub docs remain canonical.
 各プロジェクトで以下のフィルタビューを用意する（Project でスコープ）:
 
 - **Ready for Claude Design**: `agent:claude-design` + Backlog/Todo
-- **Ready for Codex Implementation**: `agent:codex-impl` + Todo + 非ブロック
-- **Ready for Review**: (`agent:claude-review` か `agent:codex-pr-review`) + In Review
-- **Needs Human Verification**: `gate:human-required` または旧 `type:human-gate`
+- **Ready for Claude Review**: `agent:claude-review` + Todo/In Review
+- **Codex Candidate Queue**: `agent:codex-impl` + Todo + delegate なし + 非ブロック（候補。実行はしない）
+- **Codex Review Candidate Queue**: `agent:codex-pr-review` + Todo/In Review + delegate なし（候補。実行はしない）
+- **Delegated to Codex**: delegate = Codex（暴発・実行中・実行済みの監査用。Candidate と必ず分離する）
+- **Needs Human Verification**: `gate:human-required`（+ not Done。旧 `type:human-gate` も読む）
+- **In Review**: status In Review（PR・設計・実行結果のレビュー待ち）
 - **Missing Metadata**: repo / area / agent ラベル欠落、または Migrated Issue の GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` / 旧 `type:human-gate` 人間専任タスクの `agent:*` 免除を考慮）
+
+Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済み・実行）は絶対に混ぜない。`delegate = Codex` が見えたら必ずレビュー対象にする。
 
 ビューはレーダー画面であって仕様ではない。曖昧なら GitHub docs と連携 GitHub Issue を見てから動く。
 
@@ -196,6 +234,17 @@ GitHub docs remain canonical.
 - [ ] 実行順序を表さなくなったブロッカー
 - [ ] Done なのに検証ノート欠落
 
+Codex safety checks:
+
+- [ ] 人間 lead の明示許可なく Codex へ delegate された Issue がない
+- [ ] 明示許可なく Codex mention トークン（`@`+`Codex`）を含むコメント / Issue 本文 / テンプレートがない
+- [ ] `agent:codex-*` をルーティング（候補）ラベルとしてのみ扱っている
+- [ ] Codex 実行開始後に Todo へ放置された delegate 済み Issue がない
+- [ ] Codex 完了タスクに task / PR / commit リンク・検証・残リスクが記録されている
+- [ ] 人間ゲート Issue が人間確認なしで Done になっていない
+- [ ] Project description の Next AI Tasks に Done / Canceled の Issue が含まれない
+- [ ] ブロック中の Codex 候補が Ready として表示されていない
+
 Rule: Linear のルーティングのみを点検する。GitHub docs が正典。
 
 ---
@@ -209,6 +258,7 @@ Rule: Linear のルーティングのみを点検する。GitHub docs が正典�
 
 Lead: <name>
 Current focus: <一文>
+Codex safety: `agent:codex-*` は候補ラベルのみ。Claude は Codex へ delegate / assign / mention しない（実行は人間 lead のみ）。
 Next checkpoint: <YYYY-MM-DD>。<その日に判定する内容>
 
 ## Next AI Tasks

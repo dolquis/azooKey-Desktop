@@ -22,6 +22,25 @@ bool IsRejectedInContext(const ConversionContext& context, const std::string& su
          context.rejected_surfaces.end();
 }
 
+bool EndsWith(const std::string& text, const std::string& suffix) {
+  return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+const std::unordered_map<std::string, double>* FindLongestBigramMatch(
+    const std::string& preceding_text,
+    const std::unordered_map<std::string, std::unordered_map<std::string, double>>& bigram_bonus) {
+  if (preceding_text.empty()) return nullptr;
+
+  const std::unordered_map<std::string, double>* best = nullptr;
+  std::size_t best_key_size = 0;
+  for (const auto& [key, surface_bonus] : bigram_bonus) {
+    if (key.size() <= best_key_size || !EndsWith(preceding_text, key)) continue;
+    best = &surface_bonus;
+    best_key_size = key.size();
+  }
+  return best;
+}
+
 }  // namespace
 
 SimpleConverter::SimpleConverter() {
@@ -40,6 +59,10 @@ SimpleConverter::SimpleConverter() {
       Candidate{"とうきょう", "とうきょう", 0.8, CandidateSource::Heuristic, "identity"},
       Candidate{"投棄用", "とうきょう", 0.1, CandidateSource::SystemDictionary, "fallback"},
   };
+
+  bigram_bonus_["にっぽん"]["日本"] = 0.15;
+  bigram_bonus_["とうきょう"]["東京"] = 0.10;
+  bigram_bonus_["わたし"]["私"] = 0.10;
 }
 
 bool SimpleConverter::LoadFromTsv(const std::string& path) {
@@ -68,6 +91,31 @@ bool SimpleConverter::LoadFromTsv(const std::string& path) {
     c.score = score;
     c.debug_info = source.empty() ? "tsv" : source;
     dictionary_[reading].push_back(std::move(c));
+    any = true;
+  }
+  return any;
+}
+
+bool SimpleConverter::LoadBigramFromTsv(const std::string& path) {
+  std::ifstream f(path);
+  if (!f.is_open()) return false;
+  std::string line;
+  bool any = false;
+  while (std::getline(f, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream iss(line);
+    std::string key, surface, bonus_str;
+    if (!std::getline(iss, key, '\t')) continue;
+    if (!std::getline(iss, surface, '\t')) continue;
+    if (!std::getline(iss, bonus_str, '\t')) continue;
+    if (key.empty() || surface.empty()) continue;
+    double bonus = 0.0;
+    try {
+      bonus = std::stod(bonus_str);
+    } catch (...) {
+      continue;
+    }
+    bigram_bonus_[std::move(key)][std::move(surface)] = bonus;
     any = true;
   }
   return any;
@@ -106,14 +154,18 @@ std::vector<Candidate> SimpleConverter::Convert(const std::string& kana, const C
     }
   }
 
+  const auto* context_bonus = FindLongestBigramMatch(context.preceding_text, bigram_bonus_);
   for (auto& c : candidates) {
     if (IsRejectedInContext(context, c.surface)) {
       c.score -= 1.0;
       AppendDebugTag(c.debug_info, "ctx-rejected");
     }
-    if (context.preceding_text == "にっぽん" && c.surface == "日本") {
-      c.score += 0.15;
-      AppendDebugTag(c.debug_info, "ctx-bigram");
+    if (context_bonus != nullptr) {
+      const auto bonus = context_bonus->find(c.surface);
+      if (bonus != context_bonus->end()) {
+        c.score += bonus->second;
+        AppendDebugTag(c.debug_info, "ctx-bigram");
+      }
     }
   }
 

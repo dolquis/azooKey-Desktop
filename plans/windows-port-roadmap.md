@@ -1153,7 +1153,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 字種切替（`dynamicPunctuationStyle` = `ja` / `fullwidth_latin`）
   - 品詞フィールド `segments[].pos` / `head_pos`（`core` の `SegmentPos` 列挙。任意・後方互換。
     曖昧性ガード〔「が」格/接続、「て・で」補助用言〕を品詞駆動化。pos 無しは表層フォールバック。spec §7.2.1）。
-    host が辞書 cid/mid（rcid/lcid → 品詞名 → `SegmentPos`）から導出（数値直書きせず cid→品詞名表経由。spec §7.2.2）
+    host が辞書 cid/mid（rcid/lcid → 品詞名 → `SegmentPos`）から導出（数値直書きせず cid→品詞名表経由。spec §7.2.2）。
+    mid → `SegmentSemantic`（人名/地名/組織/日付…）を補助判定に（固有名詞連鎖・日付の読点抑制。spec §7.2.3）。
+    cid/mid 表は辞書アセット同梱 `id.def` / mid 定義から M8 ロード時に密配列化、欠落時は全 `Unknown` へ縮退（spec §7.2.4）
   - 句読点ルールの TSV 外部化（`punctuation-rules.tsv`: kind/match/base_score/guard。組み込み既定を
     `(kind,match)` で上書き・追加、`base_score=0` で無効化。字種は TSV に書かず `dynamicPunctuationStyle`
     由来。M17 ホットリロード基盤再利用。spec §4.1.4）。guard はミニ言語（EBNF・`;` AND・`=`/`!=`・
@@ -1211,6 +1213,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュとし破損時 TSV フォールバック。spec §4.5）
   - 辞書の差分更新（overlay `english-words.delta.bin`: upsert/delete tombstone を append-only、
     base+overlay マージ参照、周期コンパクションで原子置換。M36 自動取得語の注入経路。spec §4.6）
+  - overlay の同時実行（プロセス内 `shared_mutex` + プロセス間 `LockFileEx`、`op_count` 最後更新の
+    クラッシュ安全 append、rename 原子置換、reader の `generation` 追従・lock-free 読み。spec §4.7）
   - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
     `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary` /
     `inlineEnglishPromoteThreshold` / `inlineEnglishDictionaryPath`）

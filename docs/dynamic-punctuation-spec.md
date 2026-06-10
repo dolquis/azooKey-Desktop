@@ -256,43 +256,47 @@ guard を**表層フォールバック**（§4.1.2）で評価する。
 
 ```ebnf
 guard        = [ ws ] , [ condition , { [ ws ] , ";" , [ ws ] , condition } ] , [ ws ] ;
-condition    = pos-cond | flag-cond ;
+condition    = pos-cond | sem-cond | flag-cond ;
 pos-cond     = pos-field , [ ws ] , ( "=" | "!=" ) , [ ws ] , pos-value ;
+sem-cond     = sem-field , [ ws ] , ( "=" | "!=" ) , [ ws ] , sem-value ;
 pos-field    = "prev_pos" | "next_head_pos" ;
+sem-field    = "prev_sem" | "next_head_sem" ;
 pos-value    = "Unknown" | "Taigen" | "Yougen" | "JoshiCase" | "JoshiConj"
              | "JoshiOther" | "Setsuzoku" | "Jodoushi" | "HojoYougen"
              | "Rentai" | "Fukushi" | "Kigou" | "English" ;
+sem-value    = "Unknown" | "Generic" | "PersonName" | "PlaceName"
+             | "OrgName" | "ProductName" | "DateTime" | "Number" ;
 flag-cond    = "sentence_final" ;
 ws           = { " " | "\t" } ;
 ```
 
 字句・評価規約:
 
-- `pos-field` / `pos-value` / `flag-cond` は **厳密一致**（`SegmentPos` 列挙名と同綴り。
-  大文字小文字を区別）。
+- `pos-field` / `pos-value` / `sem-field` / `sem-value` / `flag-cond` は **厳密一致**
+  （`SegmentPos` / `SegmentSemantic` 列挙名と同綴り。大文字小文字を区別）。
 - **空 guard**（空文字列）は **常に真**（無条件適用）。
 - 複数 `condition` は **`;` で AND**。OR は提供しない（OR が要る場合は同じ `(kind,match)` の
   別行で表現する）。
-- `prev_pos` は `seg_i.pos`（末尾形態素）、`next_head_pos` は `seg_{i+1}.head_pos`（先頭自立語）を
-  参照する。
-- **未知トークン**（未定義 `pos-field` / `pos-value`、余分なトークン、構文崩れ）を含む行は
+- `prev_pos` / `prev_sem` は `seg_i` の `pos` / `sem`（末尾形態素）、`next_head_pos` /
+  `next_head_sem` は `seg_{i+1}` の `head_pos` / `head_sem`（先頭自立語）を参照する。
+- **未知トークン**（未定義 field / value、余分なトークン、構文崩れ）を含む行は
   **warning ログを出して行ごとスキップ**（§4.1.4 のパース失敗扱い）。他行は読み続ける。
 
-**Unknown pos 時の評価**（不確実性を誤挿入回避側へ倒すバイアス）:
+**Unknown pos / sem 時の評価**（不確実性を誤挿入回避側へ倒すバイアス）:
 
-- 当該 field の pos が `Unknown` のとき、host はまず表層ヒューリスティック（§4.1.2）で
-  `SegmentPos` を推定し、その値で比較する。
-- 推定も `Unknown` のとき:
+- 当該 field の `pos` / `sem` が `Unknown` のとき、host はまず表層ヒューリスティック（§4.1.2）で
+  `SegmentPos` を推定し（sem には表層推定が無いので `Unknown` のまま）、その値で比較する。
+- 値が `Unknown` のままのとき:
   - `=` 条件 → **偽**（一致を確認できない＝挿入根拠なし）。
   - `!=` 条件 → **真**（不一致を否定できない＝抑制根拠なし）。
   - 例: `next_head_pos!=HojoYougen` は次文節品詞が不明なら真（補助用言と断定できない →
-    読点挿入を許す）。
+    読点挿入を許す）。`prev_sem=PlaceName` は意味不明なら偽（連鎖抑制を発動しない）。
 
 **将来拡張（予約。`# version` で管理）**:
 
-- `prev_surface_endswith="…"` / `next_head_surface="…"` 等の表層条件、`prev_mid=` / `next_mid=`
-  の意味 ID 条件。
-- 追加時は本 EBNF を改訂し、TSV 先頭 `# version: <N>` で互換判定する。
+- `prev_surface_endswith="…"` / `next_head_surface="…"` 等の表層条件。
+- 追加時は本 EBNF を改訂し、TSV 先頭 `# version: <N>` で互換判定する（`prev_sem` /
+  `next_head_sem` は本版で正式採用済み）。
 
 ### 4.2 削除・再配置
 
@@ -591,6 +595,64 @@ enum class SegmentPos : uint8_t {
 - 代表 cid の数値は辞書ビルド依存のため**数値直書きせず** cid→品詞名表経由で解決する
   （`id.def` 差し替えに追従）。
 
+#### 7.2.3 mid → SegmentSemantic（固有名詞の細分化・補助判定）
+
+`pos` は構文カテゴリ（体言/用言…）を表すが、固有名詞の**意味細分類**（人名/地名/組織/製品/
+日付/数）は句読点の一部判断に効く。これを `mid`（意味 ID）から導出する**任意の補助分類**
+`SegmentSemantic` として持つ。`pos` を上書きはしない（補助シグナル）。
+
+```cpp
+// core/include/azookey/core/SegmentPos.h（SegmentPos と同居）
+enum class SegmentSemantic : uint8_t {
+  Unknown     = 0,
+  Generic     = 1,   // 一般（固有性なし）
+  PersonName  = 2,   // 人名
+  PlaceName   = 3,   // 地名
+  OrgName     = 4,   // 組織・団体名
+  ProductName = 5,   // 製品・作品名
+  DateTime    = 6,   // 日付・時刻
+  Number      = 7,   // 数量
+};
+```
+
+任意フィールド（既定 `0=Unknown`・後方互換）:
+
+| field | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `sem` | uint8 | `0` | 文節末尾自立語の `SegmentSemantic`（mid 由来） |
+| `head_sem` | uint8 | `0` | 文節先頭自立語の `SegmentSemantic` |
+
+句読点への補助適用（§4.1.4 の guard で参照。`prev_sem` / `next_head_sem`、§4.1.5）:
+
+- **固有名詞連鎖の読点抑制**: `prev_sem` と `next_head_sem` がともに `PlaceName`（例「東京都→
+  新宿区」）/ ともに固有名詞系 → 読点抑制（連鎖の途中に読点を入れない）。
+- **日付・数の内部抑制**: `sem == DateTime` / `Number` の連なり（「2026年→6月→10日」）内部は
+  読点を入れない（§4.1.3 の数値抑制を意味側からも補強）。
+- **呼びかけ読点（任意・既定 OFF）**: `PersonName` + 敬称（さん/様）で文節が切れる呼びかけに
+  読点（「田中さん、」）。誤爆しやすいため**既定ルールには入れず TSV で opt-in**。
+
+host 側導出: `mid` → `SegmentSemantic` の対応表を mid 定義（§7.2.4）から作る。mid が
+無い / 未知なら `Unknown`（補助判定は無効＝従来どおり pos のみで判断）。
+
+#### 7.2.4 cid/mid 表のロード経路（`id.def`）
+
+host は §7.2.2・§7.2.3 のマッピングを、辞書アセット同梱の **`id.def`（cid→品詞名）** と
+**mid 定義表（mid→意味名）** から構築する。
+
+- **配置**: 辞書 / モデルアセット群の一部として配布（zenz モデル・辞書と同じ場所）。アセット
+  管理は M45（`docs/model-management-spec.md`）の対象。
+- **形式（mecab / Mozc 系）**: `id.def` は 1 行 `<cid> <品詞-細分類,活用,…>`（例
+  `1285 名詞,固有名詞,一般,*,*,*`）。mid 表は `<mid> <意味名>`（例 `501 人名`）。
+- **ロード時機**: モデルロード（M8 `LoadModel`）時に host が読み、**cid→SegmentPos** と
+  **mid→SegmentSemantic** の密配列（cid / mid を添字、値 1 byte）を構築する。lookup は O(1)。
+- **名前→enum 変換**: §7.2.2 の「品詞名→SegmentPos」表は **品詞-細分類のプレフィックス一致**で
+  適用（例 `名詞,固有名詞,*`→`Taigen`、`動詞,非自立,*`→`HojoYougen`、`助詞,接続助詞`→
+  `JoshiConj`、`助詞,格助詞`→`JoshiCase`）。mid→`SegmentSemantic` も意味名一致で適用。
+- **堅牢化**: `id.def` / mid 表が欠落・パース不能なら、全 cid / mid を `Unknown` とし、ルールは
+  表層フォールバック（§4.1.2）で動作する（機能低下のみ・クラッシュしない）。
+- **更新**: 辞書差し替え（M45）で `id.def` が変わったら配列を再構築する。cid / mid の数値は
+  ビルド依存だが本経路（表経由）で吸収する。
+
 ### 7.3 キャンセル・staleness
 
 ライブ変換経路のため、既存 M10 の `ipc_pending_id_` staleness check と `Cancel`
@@ -641,12 +703,15 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
   表層フォールバックに切替わること。
 - **cid → SegmentPos マッピング** (host テスト): 代表 cid（例 1285=固有名詞→`Taigen`）と
   格助詞/接続助詞「が」の別 cid が正しい `SegmentPos` に写ること、未知 cid が `Unknown` に
-  なること（§7.2.2）。
+  なること（§7.2.2）。`id.def` 欠落・パース不能時に全 cid が `Unknown` へ縮退すること（§7.2.4）。
+- **mid → SegmentSemantic 補助判定** (host テスト): 地名連鎖（`prev_sem=next_head_sem=PlaceName`）
+  で読点抑制、日付連なりの内部抑制、mid 欠落時に `Unknown`（補助無効）になること（§7.2.3）。
 - **TSV ルール外部化** (`core/tests/punctuation_rules_test.cpp` 新規): TSV のパース、`(kind,match)`
   上書き・新規追加・`base_score=0` 無効化、不正行スキップ、字を含めない（字種は
   `dynamicPunctuationStyle` 由来）こと。
-- **guard EBNF 評価** (同上): `=`/`!=`/`;`(AND)・空 guard 常真・`sentence_final`、Unknown pos での
-  評価バイアス（`=`→偽 / `!=`→真）、未知トークン行スキップ（§4.1.5）。
+- **guard EBNF 評価** (同上): `=`/`!=`/`;`(AND)・空 guard 常真・`sentence_final`・`prev_sem` /
+  `next_head_sem`、Unknown pos/sem での評価バイアス（`=`→偽 / `!=`→真）、未知トークン行
+  スキップ（§4.1.5）。
 - **状態機械** (`core/tests/input_state_test.cpp`): `dynamicPunctuation` ON で
   Backspace がかな単位を削除し自動句読点を削除単位に数えないこと、入力変化で句読点が
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で

@@ -217,7 +217,8 @@ Windows x64 / ARM64 とも LE）:
   12   4     flags     (uint32; bit0 = records がキー昇順ソート済み)
   16   4     records_offset (uint32)
   20   4     strings_offset (uint32)
-  24   8     reserved  (0)
+  24   4     generation (uint32; コンパクションごとに +1。reader の base 追従に使う。§4.7)
+  28   4     reserved  (0)
 
 レコード配列（entry_count × 20 B、キー（lower）昇順 → 同キー内 frequency 降順）
   off  size  field
@@ -331,6 +332,45 @@ string pool（strings_offset 以降。キー・表層の UTF-8 連結）
 
 - **M36-A/B**: 自動取得した英単語（confirmed）を overlay の `upsert` として注入する自然な経路。
 - **M53 辞書層**: 同じ base + overlay + コンパクション方式を共有・統合してよい。
+
+### 4.7 overlay の同時実行・ロック
+
+通常は 1 ユーザーセッションに inference-host が 1 つだが、再起動の重なり・複数 TIP
+クライアント・将来のアプリ別 host 等で**複数プロセスが同じ辞書ファイルに触れうる**。
+2 層のロックで整合を保つ。
+
+**(A) プロセス内（host 内のワーカスレッド間）**:
+
+- base ポインタ + overlay 構造を `std::shared_mutex` で保護。lookup は **shared（読み）**、
+  append / コンパクションは **exclusive（書き）**。
+- base 差し替え（コンパクション）は新 mmap を作ってから**ポインタを atomic swap**し、
+  旧 mmap は参照が抜けてから unmap（読み取りは無停止）。
+
+**(B) プロセス間（複数 host）**:
+
+- **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
+  append / コンパクションを行う。reader はロック不要（下記コミット規約で安全に読む）。
+- **append コミット規約（クラッシュ安全）**: 排他ロック下で
+  1. op レコードと string バイトを末尾へ書く、2. `FlushFileBuffers`、3. **最後に**ヘッダ
+  `op_count` を +N（4 byte の整列書き込み＝原子的）、4. flush、5. ロック解放。
+  reader は**先に `op_count` を読み、その件数ぶんのレコードしか信用しない**。ライタが
+  途中でクラッシュしても `op_count` 超の半端レコードは無視される（次のライタが
+  `op_count × recsize` へ truncate して回収）。
+- **コンパクション規約（原子置換）**: 排他ロック下で新 base を一時ファイルへ書き
+  `FlushFileBuffers` → `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で rename →
+  overlay を `op_count=0` にリセット → base ヘッダの `generation`（§4.5 reserved を 1 つ
+  使う）を +1 → ロック解放。失敗時は一時ファイルを捨て旧 base + overlay を維持
+  （部分置換を採用しない）。
+- **reader の base 追従**: reader は保持中 base の `generation` / `base_fingerprint` を、
+  lookup バッチの境で軽くチェックし、変化していれば base を**再 mmap**して overlay を
+  読み直す（`base_fingerprint` 不一致の overlay は §4.6 のとおり破棄）。
+- **権限なし / ロック不可**: overlay ファイルを開けない・ロックできない環境では、当該
+  host は**メモリ内差分のみ**で動作し永続化しない（再起動で消える）。base は read-only で
+  常に読める。
+
+**まとめ**: 「単一ライタを file lock で保証」「op_count を最後に更新する append」「rename に
+よる原子置換」「reader は lock-free + 境界チェック + 世代追従」により、複数 host でも
+破損・取りこぼし・部分読みを起こさない。
 
 ## 5. 確定と学習
 
@@ -486,6 +526,9 @@ CommitObservationRequest{
 - **差分更新** (同上): overlay の `upsert` が base を上書き、`delete` tombstone が base ヒットを
   隠す、base+overlay マージの frequency 降順、コンパクション後の新 base がマージ結果と一致、
   `base_fingerprint` 不一致で overlay 破棄、overlay 破損時に base のみで動作。
+- **同時実行** (host テスト): `op_count` を最後に更新する append でクラッシュ時に半端レコードが
+  無視される（`op_count` 超を信用しない）、rename によるコンパクション原子置換、reader が
+  `generation` 変化で base を再 mmap、ロック不可時にメモリ内差分のみで動作（§4.7）。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

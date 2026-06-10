@@ -72,7 +72,7 @@ surface へ自動句読点を含めて表示する。
 | Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface で Preedit 全体を差し替え |
 | Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求（Backspace も編集イベント。`auto_punctuation` は §7.1.1 の timing 規則に従い `onPause` 編集中は `false`、idle タイマー再アーム） |
 | Previewing | IdleTimeout（`onPause`時） | Previewing | idle タイマー満了で `auto_punctuation=true` のライブ変換要求を post し、句読点込みで Preedit 更新（§4.3.1）。`onPause` で句読点を出す必須トリガ |
-| Previewing | Commit (Enter) | Idle | 句読点を含む全文を確定。`CommitObservation` は自動句読点を分離して観測（§5・§7） |
+| Previewing | Commit (Enter) | Idle | **`onPause` で句読点未反映なら最終 `auto_punctuation=true` 要求を発行・待機**してから確定（§7.3。in-flight 打鍵要求は Cancel、タイムアウト時は現 surface 確定）。`CommitSegmentsObservation` は自動句読点を分離して観測（§5・§7） |
 | Previewing | Cancel (Esc) | Idle | CancelComposition |
 
 `dynamicPunctuation == false` または `liveConversion == false` のときは、
@@ -429,7 +429,12 @@ Backspace は他の打鍵と同じく**編集イベント**なので、`auto_pun
 
 ```text
 on Commit(Enter):
-    final = re-evaluate(kana_buffer_, auto_punctuation=true)  # 文末句点を補う最終評価
+    cancel in-flight typing request (auto_punctuation=false)  # §7.3
+    if last_applied.auto_punctuation && buffer unchanged since:
+        final = last_applied                                 # 省略: 再発行不要(§7.3)
+    else:
+        final = AWAIT re-evaluate(kana_buffer_, auto_punctuation=true)  # 文末句点を補う最終評価
+        # 失敗/タイムアウト時は final = current surface(句読点なしでも入力を失わない。§7.3)
     EndComposition(final.rendered_surface)                    # 句読点込みでアプリへ確定
     # 学習は auto_punctuation セグメントを除外し、文節ごとに観測
     # 重要: chosen.surface は seg.surface（UTF-8 文字列）を直接使う。
@@ -716,12 +721,31 @@ host は §7.2.2・§7.2.3 のマッピングを、辞書アセット同梱の *
 - **更新**: 辞書差し替え（M45）で `id.def` が変わったら配列を再構築する。cid / mid の数値は
   ビルド依存だが本経路（表経由）で吸収する。
 
-### 7.3 キャンセル・staleness
+### 7.3 キャンセル・staleness・確定時の最終評価
 
 ライブ変換経路のため、既存 M10 の `ipc_pending_id_` staleness check と `Cancel`
 （`CancelPayload.target_request_id`）をそのまま使う（`docs/legacy-parity-spec.md` §2.5）。
-古い応答は破棄。確定時は in-flight のライブ変換リクエストに `Cancel` を送ってから
-`EndComposition`。
+古い応答は破棄。
+
+**確定（Enter）時の最終評価（必須）**: `onPause` ではタイピング中のリクエストが
+`auto_punctuation=false`（句読点なし）であり、**idle タイマー（§4.3.1）が発火する前や最終
+リクエスト in-flight 中に Enter を押すと、現在の Preedit にはまだ文末句点が入っていない**。
+よって確定は「in-flight を Cancel して現在の surface を即 `EndComposition`」では**不可**で、
+以下を行う:
+
+1. in-flight の打鍵由来リクエスト（`auto_punctuation=false`）を `Cancel` する。
+2. **`auto_punctuation=true` の最終ライブ変換要求を発行し、その応答を待つ**（§5.3 の
+   `re-evaluate`）。応答の句読点込み `segments` / surface で確定する。
+3. その結果で `EndComposition`（句読点込み）し、`CommitSegmentsObservation`（§7.4）で学習。
+
+**省略条件（追加レイテンシ回避）**: 直近に適用済みの結果が既に `auto_punctuation=true` で、
+かつそれ以降バッファが未変更（idle タイマーが発火済みで以後無入力）なら、最終要求を再発行
+せず現在の `rendered_surface_` をそのまま確定してよい。`eager` も常に
+`auto_punctuation=true` のため再発行不要。
+
+**タイムアウト fallback**: 最終要求が失敗 / タイムアウト（実装定義、目安 200ms）したら、
+**入力を失わないため現在の surface（句読点なしでも）を確定**する。確定でユーザーをブロック
+し続けない。
 
 ### 7.4 確定観測の整合（学習分離 / multi-segment commit）
 
@@ -793,8 +817,12 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 - **idle タイマー / timing 符号化** (状態機械): `onPause` で**打鍵 Input リクエストは
   `auto_punctuation=false`**（抑制）、最後の打鍵後の **`IdleTimeout` は `auto_punctuation=true`**
   のライブ変換要求が 1 回 post され句読点が挿入されること、次の打鍵でタイマーが再アーム
-  されること、`eager` では打鍵ごとに `auto_punctuation=true` で挿入されること、`commit` 前の
-  最終評価が `auto_punctuation=true` であること（§4.3.1・§7.1.1）。
+  されること、`eager` では打鍵ごとに `auto_punctuation=true` で挿入されること（§4.3.1・§7.1.1）。
+- **確定時の最終評価** (状態機械): `onPause` で **idle タイマー発火前（or 最終要求 in-flight 中）に
+  Enter** すると、commit が in-flight を Cancel した上で `auto_punctuation=true` の最終要求を
+  発行・**待機**し、その句読点込み結果で確定すること（現在の句読点なし surface を即確定しない）。
+  直近結果が既に `auto_punctuation=true` かつバッファ未変更なら再発行を省略すること。最終要求の
+  タイムアウト時は現 surface を確定して入力を失わないこと（§7.3）。
 - **手動 / 実機（Win11、`gate:human-required`）**: ライブ変換 ON + `dynamicPunctuation`
   ON で文を打つと節境界・文末に句読点が現れ、続けて打つと再配置・削除され、Enter で
   妥当な句読点付き日本語が確定する。OFF で句読点が一切自動挿入されない。学習が汚染

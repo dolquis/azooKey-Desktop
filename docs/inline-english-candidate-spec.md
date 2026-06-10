@@ -463,6 +463,20 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
   - **共有モード**: 全プロセスは base / overlay を **`FILE_SHARE_READ | FILE_SHARE_WRITE |
     FILE_SHARE_DELETE`** で開く。`FILE_SHARE_DELETE` が無いと writer の `MoveFileEx`
     （REPLACE_EXISTING）が共有違反で失敗する。
+- **読み取りの一貫性（seqlock 的リトライ）**: lock-free reader は base 置換 / overlay 再初期化と
+  競合しうる。例: reader が `MoveFileEx` 直前に base ヘッダを sample し旧 mmap を保持したまま、
+  compaction step 4a で `op_count=0`（`base_fingerprint` はまだ旧値の窓）を読むと、「旧 base に対する
+  空 overlay」を受理し、旧 overlay にしか無かった更新（新 base へマージ済みだが reader 未 remap）を
+  取りこぼす。これを**読み取り後の再チェック・リトライ**で防ぐ:
+  1. 現 base ヘッダ（`generation`/`content_hash`、パスから read）を snapshot `S1` とし、保持 mmap が
+     `S1` と一致するよう必要なら remap する。overlay ヘッダ（`base_fingerprint`/`op_count`）も読む。
+  2. base + overlay から結果を計算する。
+  3. **計算後に base ヘッダを再 read（`S2`）し、`S2 != S1`（base が置換された）または overlay の
+     `base_fingerprint`/`op_count` が変化していれば、読み取りが compaction / 再初期化境界を跨いだと
+     判断して手順 1 からリトライ**する（compaction は稀なので有界リトライで収束）。
+  - これにより reader は compaction 境界を跨いだ不整合な結果（クリア済み overlay × 旧 base）を返さない。
+    通常 append（`op_count` 増加）でも同様にリトライしうるが、追記はユーザー打鍵レートで稀なため
+    実害は無い。snapshot は 32 B ヘッダ + overlay ヘッダの read のみで安価。
 - **権限なし / ロック不可**: overlay ファイルを開けない・ロックできない環境では、当該
   host は**メモリ内差分のみ**で動作し永続化しない（再起動で消える）。base は read-only で
   常に読める。
@@ -470,8 +484,9 @@ overlay ヘッダの `base_fingerprint` は、その overlay が対象とする 
 **まとめ**: 「単一ライタを file lock で保証」「append は frame→`op_count` の順（op_count 最後）／
 reinit・clear は `op_count=0`→fingerprint の順（空状態を先に publish）」「rename による原子置換 +
 generation 先行永続化」「writer は書込前に fingerprint 不一致 overlay を再初期化」「reader は
-lock-free + 現 base ヘッダの再読込（保持 mmap ではなく）で置換を検出し再 mmap」により、複数 host
-でも破損・取りこぼし・部分読み・stale 適用を起こさない。
+lock-free + 現 base ヘッダ（パス再読込）で置換を検出し再 mmap + **読み取り後再チェックの seqlock
+リトライ**で compaction 境界跨ぎを排除」により、複数 host でも破損・取りこぼし・部分読み・
+stale 適用を起こさない。
 
 ## 5. 確定と学習
 
@@ -641,6 +656,10 @@ CommitObservationRequest{
   検出し再 mmap すること（保持 mmap だけ見る実装は置換に気づかず旧 base を出し続ける回帰を防ぐ）。
   **同一 `generation` でも `content_hash` 差で置換を検出**できること。base/overlay を
   `FILE_SHARE_DELETE` 付きで開くこと（無いと `MoveFileEx` が共有違反で失敗）。
+- **読み取り一貫性（seqlock リトライ）** (host テスト): reader が base ヘッダ sample 後・結果計算後の
+  再チェックで、compaction による base 置換 / overlay 再初期化（`op_count=0`）を跨いだ読み取りを
+  検出してリトライし、「クリア済み overlay × 旧 base」で**更新を取りこぼした stale 結果を返さない**
+  こと（再チェックなし実装の回帰を防ぐ。§4.7）。
 - **コンパクションのクラッシュ安全** (host テスト): 新 base に generation を**先行書込**してから
   rename し、**overlay 初期化は新 base の durable 後**に行う順序で、rename 後・overlay 初期化前の
   クラッシュでも新 base（新 generation）から学習語が失われないこと。overlay 未クリアの op 再適用が

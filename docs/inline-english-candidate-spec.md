@@ -357,8 +357,10 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 
 **整合・堅牢化**:
 
-- overlay の `base_fingerprint` が現 base と不一致（base が TSV から再生成された等）→ overlay を
-  破棄 or 再構築する。
+- overlay の `base_fingerprint` が現 base と不一致（base が TSV から再生成された等）のときの扱い:
+  **reader は当該 overlay を読み捨てる**（base のみで動作）、**writer は最初の append 前に overlay
+  ヘッダを再初期化**してから追記する（§4.7「attach 前の fingerprint 検査」）。これにより
+  stale な差分が現 base へ誤適用されず、かつ不一致 overlay へ追記して後で失う事故も防ぐ。
 - overlay 破損 → 破棄して base のみで動作（差分は最適化であり必須でない）。
 - 書込権限が無い環境では overlay を作らず**メモリ内差分のみ**（再起動で消える）。
 - reader は base を read-only mmap、overlay 反映はメモリ上で COW ポインタ swap。
@@ -385,7 +387,19 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 
 - **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
   append / コンパクションを行う。reader はロック不要（下記コミット規約で安全に読む）。
-- **append コミット規約（クラッシュ安全）**: 排他ロック下で
+- **attach 前の fingerprint 検査（必須前提・overlay を書く全操作に適用）**: ライタは overlay を
+  書く操作（**append / コンパクション**）に入る前に、現 live base の fingerprint（§4.6 全内容
+  ハッシュ）を計算し、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら操作前に overlay
+  ヘッダを再初期化**する（`base_fingerprint` を現 base 値に更新、`op_count=0`、ヘッダ末尾へ
+  `SetEndOfFile` で truncate ＝ stale フレームを破棄）。これは (a) コンパクションのクラッシュ分岐で
+  overlay が旧 fingerprint のまま残った場合、(b) コンパクション外の base 再生成（再バンドル / TSV
+  再コンパイル）後に古い overlay が残った場合に、**stale な差分が現 base へ誤適用される / 追記語が
+  後の reload で不一致破棄されて失われる**事故を防ぐ。とくに**コンパクションは stale overlay を
+  マージしてはならない**（再初期化後は実質 base のみから新 base を作る）。stale フレームを捨てて
+  よい理由: それらは別 base 向けの差分であり（クラッシュ分岐では既に新 base へマージ済みのため
+  冪等に失える）、現 base へ適用すると誤上書き/誤隠蔽になるため破棄が正しい（reader 側も §4.6 で
+  不一致 overlay を読み捨てる）。
+- **append コミット規約（クラッシュ安全）**: 排他ロック下で（上記 fingerprint 検査・必要なら再初期化の後）
   1. op フレーム（ヘッダ + key/surface インライン。§4.6）を末尾へ 1 つ書く、2. `FlushFileBuffers`、
   3. **最後に**ヘッダ `op_count` を +1（4 byte の整列書き込み＝原子的）、4. flush、5. ロック解放。
   reader は**先に `op_count` を読み、その件数ぶんのフレームだけをオフセット 16 から長さ計算で
@@ -410,10 +424,11 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
   - クラッシュ地点別の安全性:
     - rename 前（手順 1–2 中）にクラッシュ → 旧 base（旧 generation）+ overlay 健全。読みは
       旧 base + overlay で正しい。一時ファイルは破棄。
-    - rename 後・overlay クリア前（手順 3–4 間）にクラッシュ → 新 base（新 generation・merged 済み）が
-      live。reader は `generation` 変化で再 mmap。overlay は未クリアだが、その op は既に新 base へ
-      取り込み済みで**再適用しても冪等**（upsert は同値、delete tombstone は無害）。次のライタが
-      クリアする。
+    - rename 後・overlay 初期化前（手順 3–4 間）にクラッシュ → 新 base（新 generation・merged 済み）が
+      live。reader は `generation` 変化で再 mmap し、overlay は fingerprint 不一致（旧 base 値のまま）の
+      ため §4.6 で破棄する（その op は既に新 base へ取り込み済みなので欠落なし）。次のライタは
+      **attach 前の fingerprint 検査**（上記）で overlay を再初期化してから追記するため、
+      残存 overlay のまま追記して後で失う事故は起きない。
   - 失敗時は一時ファイルを捨て旧 base + overlay を維持（部分置換しない）。**overlay を先にクリア
     してから新 base / generation を永続化する順序は採らない**（クリア後・新 base 永続化前の
     クラッシュで新規学習語が失われ、generation 不変のため lock-free reader が旧 base のまま
@@ -592,6 +607,10 @@ CommitObservationRequest{
   rename し、**overlay 初期化は新 base の durable 後**に行う順序で、rename 後・overlay 初期化前の
   クラッシュでも新 base（新 generation）から学習語が失われないこと。overlay 未クリアの op 再適用が
   冪等であること（§4.7）。
+- **append 前 fingerprint 検査** (host テスト): overlay が**現 base と不一致な `base_fingerprint`**
+  （コンパクションのクラッシュ残存 / base 再生成後）の状態で append すると、ライタが追記前に
+  overlay を再初期化（新 fingerprint + `op_count=0` + truncate）してから追記し、その追記語が
+  reload 後も残ること（再初期化せず追記すると後で不一致破棄される回帰を防ぐ。§4.7）。
 - **コンパクション後の overlay fingerprint** (host テスト): コンパクションが overlay の
   `base_fingerprint` を**新 base の値に更新**すること、更新後に append → reload しても fingerprint
   一致で overlay が破棄されず追記語が残ること（旧 fingerprint のまま `op_count=0` だけにすると

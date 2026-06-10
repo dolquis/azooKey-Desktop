@@ -369,11 +369,26 @@ string pool（strings_offset 以降。キー・表層の UTF-8 連結）
   reader は**先に `op_count` を読み、その件数ぶんのレコードだけを到着順にメモリ内索引へ
   再生する**（§4.6。後勝ち）。ライタが途中でクラッシュしても `op_count` 超の半端レコードは
   無視される（次のライタが `op_count × recsize` へ truncate して回収）。
-- **コンパクション規約（原子置換）**: 排他ロック下で新 base を一時ファイルへ書き
-  `FlushFileBuffers` → `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で rename →
-  overlay を `op_count=0` にリセット → base ヘッダの `generation`（§4.5 reserved を 1 つ
-  使う）を +1 → ロック解放。失敗時は一時ファイルを捨て旧 base + overlay を維持
-  （部分置換を採用しない）。
+- **コンパクション規約（原子置換・generation 先行永続化）**: 排他ロック下で
+  1. base + overlay をマージした新 base を一時ファイルへ書く。**このときヘッダ `generation` に
+     「旧 base の `generation` + 1」を書き込んでおく**（merged データと新 generation を一体で持たせ、
+     後追いの別書き込みにしない）。
+  2. `FlushFileBuffers`（一時 base を durable 化）。
+  3. `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で原子 rename（新 generation 入りの新 base が
+     live になる）。
+  4. **新 base が durable になった後で初めて** overlay を `op_count=0` にリセット（+ flush）。
+  5. ロック解放。
+  - クラッシュ地点別の安全性:
+    - rename 前（手順 1–2 中）にクラッシュ → 旧 base（旧 generation）+ overlay 健全。読みは
+      旧 base + overlay で正しい。一時ファイルは破棄。
+    - rename 後・overlay クリア前（手順 3–4 間）にクラッシュ → 新 base（新 generation・merged 済み）が
+      live。reader は `generation` 変化で再 mmap。overlay は未クリアだが、その op は既に新 base へ
+      取り込み済みで**再適用しても冪等**（upsert は同値、delete tombstone は無害）。次のライタが
+      クリアする。
+  - 失敗時は一時ファイルを捨て旧 base + overlay を維持（部分置換しない）。**overlay を先にクリア
+    してから新 base / generation を永続化する順序は採らない**（クリア後・新 base 永続化前の
+    クラッシュで新規学習語が失われ、generation 不変のため lock-free reader が旧 base のまま
+    取りこぼすため。本順序の核心）。
 - **reader の base 追従**: reader は保持中 base の `generation` / `base_fingerprint` を、
   lookup バッチの境で軽くチェックし、変化していれば base を**再 mmap**して overlay を
   読み直す（`base_fingerprint` 不一致の overlay は §4.6 のとおり破棄）。
@@ -544,6 +559,10 @@ CommitObservationRequest{
 - **同時実行** (host テスト): `op_count` を最後に更新する append でクラッシュ時に半端レコードが
   無視される（`op_count` 超を信用しない）、rename によるコンパクション原子置換、reader が
   `generation` 変化で base を再 mmap、ロック不可時にメモリ内差分のみで動作（§4.7）。
+- **コンパクションのクラッシュ安全** (host テスト): 新 base に generation を**先行書込**してから
+  rename し、**overlay クリアは新 base の durable 後**に行う順序で、rename 後・overlay クリア前の
+  クラッシュでも新 base（新 generation）から学習語が失われないこと。overlay 未クリアの op 再適用が
+  冪等であること（§4.7）。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

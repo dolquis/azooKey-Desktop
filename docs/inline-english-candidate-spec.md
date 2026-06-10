@@ -284,7 +284,7 @@ string pool（strings_offset 以降）
   20 4  strings_offset
   24 8  reserved (0)
 
-op レコード（op_count × 24 B、(lower_key, surface) 昇順）
+op レコード（op_count × 24 B、**到着順（append-only）。キー順ソートはしない**）
   +0  1  op             (0 = upsert, 1 = delete[tombstone])
   +1  3  pad (0)
   +4  4  key_offset
@@ -298,9 +298,22 @@ op レコード（op_count × 24 B、(lower_key, surface) 昇順）
 string pool（strings_offset 以降。キー・表層の UTF-8 連結）
 ```
 
+> overlay の on-disk レコードは**到着順**（末尾追記の append-only。§4.7 のクラッシュ安全 append と
+> 整合）であり、**キー順にソートしない**。同一 `(lower_key, surface)` に複数 op が現れうる
+> （後勝ち）。したがって**ファイル上の二分探索はしない**（下記のメモリ内索引で引く）。
+
+**メモリ内索引（overlay の読み取り構造）**:
+
+- host は overlay の op を**到着順に再生**して **`(lower_key, surface)` → 最新 op**（upsert か
+  tombstone）の**ソート済みインメモリ索引**を構築する（後の op が前を上書き＝後勝ち）。
+- 索引はキーで二分探索 / ハッシュ引きできる（lookup が速い）。overlay 追記時は当該
+  `(lower_key, surface)` の索引エントリを差分更新する（全再生は不要）。
+- overlay はコンパクション（§4.6 末・§4.7）で上限を超えないため索引は小さく保たれる。
+
 **ルックアップ統合**:
 
-- 入力キー（lowercase）で **base（二分探索）と overlay（二分探索）を両方**引く。
+- 入力キー（lowercase）で **base はファイル上で二分探索、overlay はメモリ内索引で引く**
+  （overlay ファイルは二分探索しない）。
 - overlay の **`upsert` は base を上書き**（同一 `(lower_key, surface)` を同一視）、**`delete` は
   tombstone** として base のヒットを隠す。
 - 同キー複数 surface は base + overlay をマージし、tombstone を除外して frequency 降順で返す。
@@ -353,9 +366,9 @@ string pool（strings_offset 以降。キー・表層の UTF-8 連結）
 - **append コミット規約（クラッシュ安全）**: 排他ロック下で
   1. op レコードと string バイトを末尾へ書く、2. `FlushFileBuffers`、3. **最後に**ヘッダ
   `op_count` を +N（4 byte の整列書き込み＝原子的）、4. flush、5. ロック解放。
-  reader は**先に `op_count` を読み、その件数ぶんのレコードしか信用しない**。ライタが
-  途中でクラッシュしても `op_count` 超の半端レコードは無視される（次のライタが
-  `op_count × recsize` へ truncate して回収）。
+  reader は**先に `op_count` を読み、その件数ぶんのレコードだけを到着順にメモリ内索引へ
+  再生する**（§4.6。後勝ち）。ライタが途中でクラッシュしても `op_count` 超の半端レコードは
+  無視される（次のライタが `op_count × recsize` へ truncate して回収）。
 - **コンパクション規約（原子置換）**: 排他ロック下で新 base を一時ファイルへ書き
   `FlushFileBuffers` → `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で rename →
   overlay を `op_count=0` にリセット → base ヘッダの `generation`（§4.5 reserved を 1 つ
@@ -524,8 +537,10 @@ CommitObservationRequest{
   `magic`/`version` 不一致・破損 `.bin` で TSV フォールバック、`.bin` が TSV より新しい
   ときに `.bin` 経路、古いときに再生成。
 - **差分更新** (同上): overlay の `upsert` が base を上書き、`delete` tombstone が base ヒットを
-  隠す、base+overlay マージの frequency 降順、コンパクション後の新 base がマージ結果と一致、
-  `base_fingerprint` 不一致で overlay 破棄、overlay 破損時に base のみで動作。
+  隠す、**到着順（非ソート）の op をメモリ内索引へ再生して後勝ち解決**（同一
+  `(lower_key,surface)` の複数 op）、base+overlay マージの frequency 降順、コンパクション後の
+  新 base がマージ結果と一致、`base_fingerprint` 不一致で overlay 破棄、overlay 破損時に
+  base のみで動作。
 - **同時実行** (host テスト): `op_count` を最後に更新する append でクラッシュ時に半端レコードが
   無視される（`op_count` 超を信用しない）、rename によるコンパクション原子置換、reader が
   `generation` 変化で base を再 mmap、ロック不可時にメモリ内差分のみで動作（§4.7）。

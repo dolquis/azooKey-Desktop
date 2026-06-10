@@ -1211,8 +1211,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     ルックアップ（lower キー・頻度降順・`flags` で大文字化優先）。ベースラインは辞書なしで動作
   - 辞書バイナリ形式（コンパイル済み `.bin`: ヘッダ + ソート済みレコード配列 + string pool。
     LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュとし破損時 TSV フォールバック。spec §4.5）
-  - 辞書の差分更新（overlay `english-words.delta.bin`: upsert/delete tombstone を append-only、
-    base+overlay マージ参照、周期コンパクションで原子置換。M36 自動取得語の注入経路。spec §4.6）
+  - 辞書の差分更新（overlay `english-words.delta.bin`: upsert/delete tombstone を on-disk は
+    到着順 append-only、ルックアップはメモリ内ソート索引（後勝ち）、base+overlay マージ参照、
+    周期コンパクションで原子置換。M36 自動取得語の注入経路。spec §4.6）
   - overlay の同時実行（プロセス内 `shared_mutex` + プロセス間 `LockFileEx`、`op_count` 最後更新の
     クラッシュ安全 append、rename 原子置換、reader の `generation` 追従・lock-free 読み。spec §4.7）
   - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /

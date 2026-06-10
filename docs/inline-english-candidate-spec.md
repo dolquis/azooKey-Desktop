@@ -242,16 +242,21 @@ string pool（strings_offset 以降）
 
 - host は TSV と同ディレクトリの同名 `.bin`（拡張子のみ差替え。例
   `english-words.tsv` → `english-words.bin`）を参照する。
-- **優先順**: `.bin` が存在し、`version` 一致かつ TSV より新しい（mtime）→ `.bin` を mmap。
-  そうでなければ TSV をパースし、**`.bin` を再生成してキャッシュ**してから使う。
-- バンドル配布時はビルド済み `.bin` を同梱してよい（初回パースも不要にできる）。
+- **優先順**:
+  1. `.bin` が存在し妥当（`magic`/`version` OK）で、かつ **TSV が無い、または `.bin` mtime ≥ TSV
+     mtime** → `.bin` を mmap（**TSV 不在は `.bin` 単体ロードの正規ケース**）。
+  2. そうでなく **TSV が存在** → TSV をパースし、書込可能なら `.bin` を再生成してキャッシュ。
+  3. **どちらも無い** → 英単語辞書は無効（辞書なし。生ローマ字 + 大文字化のベースラインは動作）。
+- **バンドル配布時はビルド済み `.bin` のみを同梱してよい（TSV 同梱は不要）**。TSV 無し +
+  妥当な `.bin` は上記 1 でロードされる。
 - オフラインのコンパイルツール（`tools/` 等、実装時に配置）でも TSV→`.bin` を生成可能とする。
 
 **バージョニング・堅牢化**:
 
-- `magic` 不一致 / `version` 不一致 / サイズ不整合の `.bin` は破棄し、TSV から再生成。
-- 破損 `.bin` で起動を妨げない（TSV へフォールバック）。`.bin` 生成不可（書込権限なし等）でも
-  TSV パースで動作する（キャッシュは最適化であり必須ではない）。
+- `magic` 不一致 / `version` 不一致 / サイズ不整合の `.bin` は破棄し、**TSV があれば**再生成、
+  **TSV が無ければ辞書無効**（ベースライン動作）。
+- 破損 `.bin` で起動を妨げない（TSV があれば フォールバック、無ければ辞書無効）。`.bin` 生成
+  不可（書込権限なし等）でも TSV パースで動作する（キャッシュは最適化であり必須ではない）。
 
 **設定**: 新規キーは増やさない。`.bin` パスは `inlineEnglishDictionaryPath`（§7）から
 拡張子差替えで導出する。コンパイルキャッシュの無効化が要る場合の内部フラグは実装時に定める。
@@ -272,35 +277,35 @@ string pool（strings_offset 以降）
 - **overlay（差分）**: サイドカー `english-words.delta.bin`。base への追加 / 更新 / 削除の op 列。
   小さく保ち、起動時にメモリへ読む（小さければそのまま二分探索）。
 
-**overlay フォーマット**（LE 固定。base と同系）:
+**overlay フォーマット**（LE 固定。**末尾追記可能な自己完結フレーム列**。base の §4.5 形式とは
+別物で、別個の string pool は持たない）:
 
 ```text
-ヘッダ（32 B）
+ヘッダ（16 B 固定）
   0  4  magic = 'A','Z','E','O'（azooKey English Overlay）
   4  4  version (uint32) = 1
   8  4  base_fingerprint (uint32; 適用先 base の version^entry_count^records 先頭ハッシュ)
   12 4  op_count (uint32)
-  16 4  records_offset
-  20 4  strings_offset
-  24 8  reserved (0)
 
-op レコード（op_count × 24 B、**到着順（append-only）。キー順ソートはしない**）
-  +0  1  op             (0 = upsert, 1 = delete[tombstone])
-  +1  3  pad (0)
-  +4  4  key_offset
-  +8  2  key_len
-  +10 2  surface_len
-  +12 4  surface_offset
-  +16 4  frequency
-  +20 1  flags          (bit0 proper, bit1 acronym, bit2 tech)
-  +21 3  pad (0)
-
-string pool（strings_offset 以降。キー・表層の UTF-8 連結）
+op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個が連続。到着順 append-only）
+  各フレームは可変長・自己完結（文字列はフレーム内にインライン。別 string pool を参照しない）:
+  +0  1   op            (0 = upsert, 1 = delete[tombstone])
+  +1  1   flags         (bit0 proper, bit1 acronym, bit2 tech)
+  +2  2   key_len       (uint16, バイト長)
+  +4  2   surface_len   (uint16, バイト長; delete でも 0 以上可)
+  +6  4   frequency     (uint32)
+  +10 …   key bytes     (key_len、UTF-8 lowercase キー)
+  …       surface bytes (surface_len、UTF-8 表層)
+  → 次フレームは直後（フレーム長 = 10 + key_len + surface_len）に続く
 ```
 
-> overlay の on-disk レコードは**到着順**（末尾追記の append-only。§4.7 のクラッシュ安全 append と
-> 整合）であり、**キー順にソートしない**。同一 `(lower_key, surface)` に複数 op が現れうる
-> （後勝ち）。したがって**ファイル上の二分探索はしない**（下記のメモリ内索引で引く）。
+> overlay は**到着順の自己完結フレーム列**で、フレーム内に key/surface をインラインに持つ
+> （別 string pool を持たない）。これにより**末尾に 1 フレーム追記するだけ**でよく、固定長
+> レコード配列 + 後置 string pool（追記すると文字列領域が次レコード位置を侵食する）という
+> base 形式の流用バグを避ける。reader は**オフセット 16 から op_count 個のフレームを長さ
+> 計算で順に辿る**（`10 + key_len + surface_len`）。キー順にはソートしない（同一
+> `(lower_key, surface)` に複数フレームが現れうる＝後勝ち）。**ファイル上の二分探索はしない**
+> （下記のメモリ内索引で引く）。
 
 **メモリ内索引（overlay の読み取り構造）**:
 
@@ -364,11 +369,13 @@ string pool（strings_offset 以降。キー・表層の UTF-8 連結）
 - **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
   append / コンパクションを行う。reader はロック不要（下記コミット規約で安全に読む）。
 - **append コミット規約（クラッシュ安全）**: 排他ロック下で
-  1. op レコードと string バイトを末尾へ書く、2. `FlushFileBuffers`、3. **最後に**ヘッダ
-  `op_count` を +N（4 byte の整列書き込み＝原子的）、4. flush、5. ロック解放。
-  reader は**先に `op_count` を読み、その件数ぶんのレコードだけを到着順にメモリ内索引へ
-  再生する**（§4.6。後勝ち）。ライタが途中でクラッシュしても `op_count` 超の半端レコードは
-  無視される（次のライタが `op_count × recsize` へ truncate して回収）。
+  1. op フレーム（ヘッダ + key/surface インライン。§4.6）を末尾へ 1 つ書く、2. `FlushFileBuffers`、
+  3. **最後に**ヘッダ `op_count` を +1（4 byte の整列書き込み＝原子的）、4. flush、5. ロック解放。
+  reader は**先に `op_count` を読み、その件数ぶんのフレームだけをオフセット 16 から長さ計算で
+  順に辿ってメモリ内索引へ再生する**（§4.6。後勝ち）。ライタが途中でクラッシュしても
+  `op_count` 超の半端フレームは辿られず無視される（次のライタは `op_count` 個のフレームを
+  歩いて末尾オフセットを求め、そこへ `SetEndOfFile` で truncate して回収する。フレームは
+  可変長のため固定 `recsize` 計算ではなく**フレーム走査で末尾を決める**）。
 - **コンパクション規約（原子置換・generation 先行永続化）**: 排他ロック下で
   1. base + overlay をマージした新 base を一時ファイルへ書く。**このときヘッダ `generation` に
      「旧 base の `generation` + 1」を書き込んでおく**（merged データと新 generation を一体で持たせ、

@@ -1161,8 +1161,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `(kind,match)` で上書き・追加、`base_score=0` で無効化。字種は TSV に書かず `dynamicPunctuationStyle`
     由来。M17 ホットリロード基盤再利用。spec §4.1.4）。guard はミニ言語（EBNF・`;` AND・`=`/`!=`・
     Unknown 評価バイアス・未知トークン行スキップ。spec §4.1.5）
-  - 設定キー 5 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
-    `dynamicPunctuationStability` / `segmentBoundaryConfidence` / `punctuationRulesPath`）
+  - 安定化（`onPause` は idle タイマー `dynamicPunctuationIdleMs` で `IdleTimeout` 駆動の
+    再評価が必須。最後の打鍵後にライブ変換要求を post し句読点を挿入。spec §4.3.1）
+  - 設定キー 6 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
+    `dynamicPunctuationStability` / `dynamicPunctuationIdleMs` / `segmentBoundaryConfidence` /
+    `punctuationRulesPath`）
 - **受け入れ条件**:
   - `liveConversion=true` + `dynamicPunctuation=true` で、文を打つと節境界・文末に
     句読点が現れ、続けて打つと文節構造の変化に応じて句読点が再配置・削除される
@@ -1211,10 +1214,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 英単語辞書フォーマット（TSV: `surface`/`frequency`/`flags`。`spec` §4.4）と
     ルックアップ（lower キー・頻度降順・`flags` で大文字化優先）。ベースラインは辞書なしで動作
   - 辞書バイナリ形式（コンパイル済み `.bin`: ヘッダ + ソート済みレコード配列 + string pool。
-    LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュとし破損時 TSV フォールバック。spec §4.5）
-  - 辞書の差分更新（overlay `english-words.delta.bin`: upsert/delete tombstone を on-disk は
-    到着順 append-only、ルックアップはメモリ内ソート索引（後勝ち）、base+overlay マージ参照、
-    周期コンパクションで原子置換。M36 自動取得語の注入経路。spec §4.6）
+    LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュ。**TSV 不在のバンドル `.bin` 単体
+    ロードも正規ケース**、破損時は TSV があればフォールバック・無ければ辞書無効。spec §4.5）
+  - 辞書の差分更新（overlay `english-words.delta.bin`: **末尾追記可能な自己完結フレーム列**
+    〔文字列インライン・別 string pool 無し〕、upsert/delete tombstone を到着順 append-only、
+    ルックアップはメモリ内ソート索引〔後勝ち〕、base+overlay マージ参照、周期コンパクションで
+    原子置換。M36 自動取得語の注入経路。spec §4.6）
   - overlay の同時実行（プロセス内 `shared_mutex` + プロセス間 `LockFileEx`、`op_count` 最後更新の
     クラッシュ安全 append、rename 原子置換、reader の `generation` 追従・lock-free 読み。spec §4.7）
   - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /

@@ -71,6 +71,7 @@ surface へ自動句読点を含めて表示する。
 |---|---|---|---|
 | Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`、`auto_punctuation=true`。§7）を送信。応答 surface に句読点を含めて Preedit 全体を差し替え（句読点は再計算で増減しうる） |
 | Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求 |
+| Previewing | IdleTimeout（`onPause`時） | Previewing | idle タイマー満了で `auto_punctuation=true` のライブ変換要求を post し、句読点込みで Preedit 更新（§4.3.1）。`onPause` で句読点を出す必須トリガ |
 | Previewing | Commit (Enter) | Idle | 句読点を含む全文を確定。`CommitObservation` は自動句読点を分離して観測（§5・§7） |
 | Previewing | Cancel (Esc) | Idle | CancelComposition |
 
@@ -315,6 +316,21 @@ ws           = { " " | "\t" } ;
     挿入する。連続入力中のちらつきを防ぐ。
   - `eager`: 打鍵ごとに常に再評価して挿入する（反応は速いがちらつきうる）。
 - どちらでも、確定（Enter）直前には必ず最終評価を行い、文末句点を補う。
+
+#### 4.3.1 idle タイマー（`onPause` の挿入トリガ）
+
+`onPause` では「タイピング中は挿入しない」ため、**最後の打鍵の後に句読点を出す追加トリガが
+必要**である。打鍵イベントだけに依存すると、最後のキー以降は次の打鍵や Enter までイベントが
+発生せず句読点が現れない。よって TIP は**idle タイマーで再評価を駆動する**ことを必須とする。
+
+- TIP は `Previewing` 中、各打鍵で **idle タイマーを `dynamicPunctuationIdleMs`（既定 400ms、
+  目安は `TypingTempoTracker` の閾値以上）でリセット（再アーム）**する。
+- タイマー満了（= idle 確定）で、TIP は **`auto_punctuation=true` のライブ変換要求を 1 回 post**
+  し、応答で Preedit を句読点込みに更新する（§3 の `IdleTimeout` 遷移）。
+- 次の打鍵が来たらタイマーをキャンセル/再アームし、`eager` でない限り満了まで挿入しない。
+- 実装は TIP プロセス内のタイマー（`SetTimer` / スレッドタイマー等。実装時に選択）。`eager` では
+  打鍵ごとに挿入するため idle タイマーは不要（無効化してよい）。
+- このトリガは `dynamicPunctuation && liveConversion && onPause` のときのみ動作する。
 
 ## 5. 読み↔surface の非対称と編集
 
@@ -690,6 +706,7 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 | `dynamicPunctuation` | boolean | `false` | M59: ライブ変換中に句読点を動的挿入・削除する（`liveConversion=true` のときのみ有効） |
 | `dynamicPunctuationStyle` | enum `ja`/`fullwidth_latin` | `ja` | M59: 自動挿入する句読点の字種（`、。` / `，．`） |
 | `dynamicPunctuationStability` | enum `onPause`/`eager` | `onPause` | M59: 挿入タイミング（入力停止時のみ / 打鍵ごと） |
+| `dynamicPunctuationIdleMs` | integer (ms) | `400` | M59: `onPause` の idle タイマー閾値。最後の打鍵からこの時間で句読点を再評価・挿入（§4.3.1） |
 | `segmentBoundaryConfidence` | number (0.0–1.0) | `0.5` | M59: この境界スコア未満の文節境界には読点を挿入しない（§4.1 抑制規則） |
 | `punctuationRulesPath` | string | `%LOCALAPPDATA%\azooKey\punctuation-rules.tsv` | M59: 句読点ルール TSV のパス（§4.1.4）。無ければ組み込み既定のみ。ホットリロード対応 |
 
@@ -723,6 +740,9 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
   観測に混入しないこと。
 - **安定化** (host テスト or 状態機械): `onPause` でタイピング中は句読点が出ず、idle で
   挿入されること（`TypingTempoTracker` をモックした時間注入）。
+- **idle タイマー** (状態機械): `onPause` で最後の打鍵後に **`IdleTimeout` で
+  `auto_punctuation=true` のライブ変換要求が 1 回 post され**句読点が挿入されること、次の打鍵で
+  タイマーが再アームされること、`eager` ではタイマー不要で打鍵ごとに挿入されること（§4.3.1）。
 - **手動 / 実機（Win11、`gate:human-required`）**: ライブ変換 ON + `dynamicPunctuation`
   ON で文を打つと節境界・文末に句読点が現れ、続けて打つと再配置・削除され、Enter で
   妥当な句読点付き日本語が確定する。OFF で句読点が一切自動挿入されない。学習が汚染

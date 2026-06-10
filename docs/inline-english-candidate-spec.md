@@ -259,6 +259,79 @@ string pool（strings_offset 以降）
 で実績）への移行余地がある。M53 DictionaryStore が同形式 or 上位形式を採用する場合は
 本節フォーマットを統合・置換してよい。
 
+### 4.6 辞書の差分更新（増分コンパイル）
+
+§4.5 の base `.bin` は不変・ソート済み・mmap。実行中の追加（M36 新語自動取得の英単語、
+ユーザー追加）や TSV の小変更で**全再コンパイルを避ける**ため、オーバーレイ方式の差分更新を
+定義する（append-only + 周期コンパクション。学習ストアの追記方式と同系の LSM 的構成）。
+
+**構成**:
+
+- **base**: `english-words.bin`（§4.5）。読み取り専用 mmap。
+- **overlay（差分）**: サイドカー `english-words.delta.bin`。base への追加 / 更新 / 削除の op 列。
+  小さく保ち、起動時にメモリへ読む（小さければそのまま二分探索）。
+
+**overlay フォーマット**（LE 固定。base と同系）:
+
+```text
+ヘッダ（32 B）
+  0  4  magic = 'A','Z','E','O'（azooKey English Overlay）
+  4  4  version (uint32) = 1
+  8  4  base_fingerprint (uint32; 適用先 base の version^entry_count^records 先頭ハッシュ)
+  12 4  op_count (uint32)
+  16 4  records_offset
+  20 4  strings_offset
+  24 8  reserved (0)
+
+op レコード（op_count × 24 B、(lower_key, surface) 昇順）
+  +0  1  op             (0 = upsert, 1 = delete[tombstone])
+  +1  3  pad (0)
+  +4  4  key_offset
+  +8  2  key_len
+  +10 2  surface_len
+  +12 4  surface_offset
+  +16 4  frequency
+  +20 1  flags          (bit0 proper, bit1 acronym, bit2 tech)
+  +21 3  pad (0)
+
+string pool（strings_offset 以降。キー・表層の UTF-8 連結）
+```
+
+**ルックアップ統合**:
+
+- 入力キー（lowercase）で **base（二分探索）と overlay（二分探索）を両方**引く。
+- overlay の **`upsert` は base を上書き**（同一 `(lower_key, surface)` を同一視）、**`delete` は
+  tombstone** として base のヒットを隠す。
+- 同キー複数 surface は base + overlay をマージし、tombstone を除外して frequency 降順で返す。
+
+**書き込み（増分）**:
+
+- **実行時追加（M36 英単語 / ユーザー追加・削除）**: overlay に op を**追記するのみ**。base は
+  触らない（全再コンパイル不要）。追記は単一ライタ（host）で行う。
+- **TSV 小変更**: 既定は base 再コンパイル（§4.5）。**増分モード（任意）**では、保存済み TSV
+  スナップショットとの行差分を取り、変更分のみ overlay へ反映して base 再コンパイルを
+  コンパクションまで遅延する。
+
+**コンパクション（base への取り込み）**:
+
+- トリガ: overlay の op 数が base の一定割合（例 10%）超 or `op_count` > 閾値、または明示要求。
+- 動作: base + overlay をマージして**新 base を一時ファイルへ書き、rename で原子置換**、
+  overlay をクリア（`op_count=0`）。読み取りは mmap ポインタ swap で無停止。
+- 失敗時は旧 base + overlay を維持（部分書き込みを採用しない）。
+
+**整合・堅牢化**:
+
+- overlay の `base_fingerprint` が現 base と不一致（base が TSV から再生成された等）→ overlay を
+  破棄 or 再構築する。
+- overlay 破損 → 破棄して base のみで動作（差分は最適化であり必須でない）。
+- 書込権限が無い環境では overlay を作らず**メモリ内差分のみ**（再起動で消える）。
+- reader は base を read-only mmap、overlay 反映はメモリ上で COW ポインタ swap。
+
+**連携**:
+
+- **M36-A/B**: 自動取得した英単語（confirmed）を overlay の `upsert` として注入する自然な経路。
+- **M53 辞書層**: 同じ base + overlay + コンパクション方式を共有・統合してよい。
+
 ## 5. 確定と学習
 
 - 英単語候補を確定したとき、surface = 選んだ英語形（`apple` / `Apple` …）。
@@ -410,6 +483,9 @@ CommitObservationRequest{
 - **辞書バイナリ** (同上): TSV→`.bin` 生成と round-trip（ルックアップ結果が TSV と一致）、
   `magic`/`version` 不一致・破損 `.bin` で TSV フォールバック、`.bin` が TSV より新しい
   ときに `.bin` 経路、古いときに再生成。
+- **差分更新** (同上): overlay の `upsert` が base を上書き、`delete` tombstone が base ヒットを
+  隠す、base+overlay マージの frequency 降順、コンパクション後の新 base がマージ結果と一致、
+  `base_fingerprint` 不一致で overlay 破棄、overlay 破損時に base のみで動作。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

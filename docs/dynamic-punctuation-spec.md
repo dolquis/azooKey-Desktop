@@ -246,6 +246,53 @@ guard を**表層フォールバック**（§4.1.2）で評価する。
   差し替える（進行中の preedit は触らない）。
 - 既定ルールを TSV へ書き出して編集の土台にするダンプは Phase 7 設定アプリ（M30）で提供
   （M17 §5.4 と同方針）。
+- 任意の先頭ディレクティブ `# version: <N>`（1 行目のコメント形式）で文法バージョンを
+  宣言できる。未知バージョンは warning を出しつつ既知トークンのみ解釈する（前方互換）。
+
+#### 4.1.5 guard ミニ言語の文法（EBNF）
+
+§4.1.4 の `guard` 列の文法を EBNF（ISO/IEC 14977 準拠記法）で固定する。評価系は
+`PunctuationRules`（`core`）に実装する。
+
+```ebnf
+guard        = [ ws ] , [ condition , { [ ws ] , ";" , [ ws ] , condition } ] , [ ws ] ;
+condition    = pos-cond | flag-cond ;
+pos-cond     = pos-field , [ ws ] , ( "=" | "!=" ) , [ ws ] , pos-value ;
+pos-field    = "prev_pos" | "next_head_pos" ;
+pos-value    = "Unknown" | "Taigen" | "Yougen" | "JoshiCase" | "JoshiConj"
+             | "JoshiOther" | "Setsuzoku" | "Jodoushi" | "HojoYougen"
+             | "Rentai" | "Fukushi" | "Kigou" | "English" ;
+flag-cond    = "sentence_final" ;
+ws           = { " " | "\t" } ;
+```
+
+字句・評価規約:
+
+- `pos-field` / `pos-value` / `flag-cond` は **厳密一致**（`SegmentPos` 列挙名と同綴り。
+  大文字小文字を区別）。
+- **空 guard**（空文字列）は **常に真**（無条件適用）。
+- 複数 `condition` は **`;` で AND**。OR は提供しない（OR が要る場合は同じ `(kind,match)` の
+  別行で表現する）。
+- `prev_pos` は `seg_i.pos`（末尾形態素）、`next_head_pos` は `seg_{i+1}.head_pos`（先頭自立語）を
+  参照する。
+- **未知トークン**（未定義 `pos-field` / `pos-value`、余分なトークン、構文崩れ）を含む行は
+  **warning ログを出して行ごとスキップ**（§4.1.4 のパース失敗扱い）。他行は読み続ける。
+
+**Unknown pos 時の評価**（不確実性を誤挿入回避側へ倒すバイアス）:
+
+- 当該 field の pos が `Unknown` のとき、host はまず表層ヒューリスティック（§4.1.2）で
+  `SegmentPos` を推定し、その値で比較する。
+- 推定も `Unknown` のとき:
+  - `=` 条件 → **偽**（一致を確認できない＝挿入根拠なし）。
+  - `!=` 条件 → **真**（不一致を否定できない＝抑制根拠なし）。
+  - 例: `next_head_pos!=HojoYougen` は次文節品詞が不明なら真（補助用言と断定できない →
+    読点挿入を許す）。
+
+**将来拡張（予約。`# version` で管理）**:
+
+- `prev_surface_endswith="…"` / `next_head_surface="…"` 等の表層条件、`prev_mid=` / `next_mid=`
+  の意味 ID 条件。
+- 追加時は本 EBNF を改訂し、TSV 先頭 `# version: <N>` で互換判定する。
 
 ### 4.2 削除・再配置
 
@@ -503,6 +550,47 @@ enum class SegmentPos : uint8_t {
   "reading": "いったが", "pos": 4, "head_pos": 2 }   // 末尾=JoshiConj(が), 先頭=Yougen(行っ)
 ```
 
+#### 7.2.2 辞書 cid/mid → SegmentPos マッピング
+
+`pos` / `head_pos`（§7.2.1）は host が変換器辞書の品詞 ID から導出する。azooKey 系辞書は
+各形態素に **`cid`**（接続 ID。mecab / Mozc 系の品詞細分類に対応。`AddUserWordRequest.cid`
+と同体系）と `mid`（意味 ID）を持つ。`cid` の数値は辞書ビルドの `id.def`（cid→品詞名）で
+決まるため、**正典マッピングは「品詞名 → SegmentPos」**とし、host は辞書同梱の cid→品詞名表を
+介して適用する（cid 番号の振り直しに頑健）。
+
+- **末尾 `pos`**: 文節末尾形態素の **rcid**（右文脈 ID）→ 品詞名 → SegmentPos。
+- **`head_pos`**: 文節先頭自立語の **lcid**（左文脈 ID）→ 品詞名 → SegmentPos。
+- `mid` は意味分類（人名 / 地名 / 組織等）で句読点判定には原則使わない。固有名詞細分類が
+  必要なときの補助に留める。
+
+品詞名 → SegmentPos（mecab / azooKey 細分類。本表が正典。`pos` 列は
+`docs/auto-word-registration-spec.md` §14.2 の `pos:"名詞-固有名詞"` 等と同体系）:
+
+| 品詞名（細分類） | 代表 cid 例 | SegmentPos |
+|---|---|---|
+| 名詞-一般 / 名詞-固有名詞-* / 代名詞 / 名詞-数 | 1285（固有名詞-一般。`learning/tests/user_dictionary_test.cpp` の例） | `Taigen` |
+| 動詞-自立 / 形容詞-自立 / 名詞-形容動詞語幹 | | `Yougen` |
+| 助詞-格助詞（が・を・に・へ・で・と・から・より） | | `JoshiCase` |
+| 助詞-接続助詞（て・で・が・し・から・ので・のに・ても・けど） | | `JoshiConj` |
+| 助詞-係助詞 / 副助詞 / 終助詞（は・も・こそ・さえ・か・ね・よ） | | `JoshiOther` |
+| 接続詞（しかし・だから・また・そして・ただし） | | `Setsuzoku` |
+| 助動詞（です・ます・た・ない・だ・である・れる・られる） | | `Jodoushi` |
+| 動詞-非自立 / 補助（いる・ある・おく・しまう・くる・いく・くれる・もらう） | | `HojoYougen` |
+| 連体詞（この・その・大きな） | | `Rentai` |
+| 副詞 | | `Fukushi` |
+| 記号-* / 補助記号 / 句点読点 | | `Kigou` |
+| 辞書登録の英単語（M60） | | `English` |
+
+実装メモ:
+
+- **「が」格/接続の判別は cid が直接担う**: 格助詞「が」と接続助詞「が」は別 cid のため、
+  表層 "が" だけでは区別できないが rcid → 品詞名で確定する。§4.1.2 の最重要ガードが頑健になる。
+- **「て・で」**は連用接続後の**次文節 head（lcid）**が「動詞-非自立（補助用言）」か否かで判別。
+- host はマッピング失敗（未知 cid / 辞書由来でない候補）時に `Unknown` を返し、ルールは
+  表層フォールバック（§4.1.2）へ切替える。
+- 代表 cid の数値は辞書ビルド依存のため**数値直書きせず** cid→品詞名表経由で解決する
+  （`id.def` 差し替えに追従）。
+
 ### 7.3 キャンセル・staleness
 
 ライブ変換経路のため、既存 M10 の `ipc_pending_id_` staleness check と `Cancel`
@@ -551,9 +639,14 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 - **品詞ガード** (同上): `pos`/`head_pos` 駆動で「が」の格助詞（読点なし）/接続助詞（読点）、
   「て・で」の補助用言接続（読点なし）/連用中止（読点）が分岐すること。`pos=Unknown` で
   表層フォールバックに切替わること。
+- **cid → SegmentPos マッピング** (host テスト): 代表 cid（例 1285=固有名詞→`Taigen`）と
+  格助詞/接続助詞「が」の別 cid が正しい `SegmentPos` に写ること、未知 cid が `Unknown` に
+  なること（§7.2.2）。
 - **TSV ルール外部化** (`core/tests/punctuation_rules_test.cpp` 新規): TSV のパース、`(kind,match)`
-  上書き・新規追加・`base_score=0` 無効化、guard ミニ言語の評価、不正行スキップ、字を
-  含めない（字種は `dynamicPunctuationStyle` 由来）こと。
+  上書き・新規追加・`base_score=0` 無効化、不正行スキップ、字を含めない（字種は
+  `dynamicPunctuationStyle` 由来）こと。
+- **guard EBNF 評価** (同上): `=`/`!=`/`;`(AND)・空 guard 常真・`sentence_final`、Unknown pos での
+  評価バイアス（`=`→偽 / `!=`→真）、未知トークン行スキップ（§4.1.5）。
 - **状態機械** (`core/tests/input_state_test.cpp`): `dynamicPunctuation` ON で
   Backspace がかな単位を削除し自動句読点を削除単位に数えないこと、入力変化で句読点が
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で

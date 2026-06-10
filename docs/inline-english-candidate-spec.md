@@ -335,8 +335,9 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 
 - トリガ: overlay の op 数が base の一定割合（例 10%）超 or `op_count` > 閾値、または明示要求。
 - 動作: base + overlay をマージして**新 base を一時ファイルへ書き、rename で原子置換**、
-  overlay をクリア。読み取りは mmap ポインタ swap で無停止。**正確な順序（generation を
-  rename 前の新 base に先行書込し、overlay クリアは新 base が durable になった後）は §4.7**。
+  overlay を**新 base の `base_fingerprint` + `op_count=0` で初期化**。読み取りは mmap ポインタ
+  swap で無停止。**正確な順序（generation を rename 前の新 base に先行書込し、overlay 初期化
+  〔fingerprint 更新含む〕は新 base が durable になった後）は §4.7**。
 - 失敗時は旧 base + overlay を維持（部分書き込みを採用しない）。
 
 **整合・堅牢化**:
@@ -384,7 +385,12 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
   2. `FlushFileBuffers`（一時 base を durable 化）。
   3. `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で原子 rename（新 generation 入りの新 base が
      live になる）。
-  4. **新 base が durable になった後で初めて** overlay を `op_count=0` にリセット（+ flush）。
+  4. **新 base が durable になった後で初めて** overlay ヘッダを**初期化し直す**:
+     `base_fingerprint` を**新 base の fingerprint に更新**し、`op_count=0` にする（+ flush）。
+     `base_fingerprint` を旧値のまま `op_count` だけ 0 にすると、次の append が reload/restart 後に
+     「現 base と fingerprint 不一致」で overlay ごと破棄され、追記語が失われる（本指摘の核心）。
+     書き込み順は `base_fingerprint` → `op_count`（`op_count` を最後に）とし、途中状態でも
+     reader が空 overlay として安全に読めるようにする。
   5. ロック解放。
   - クラッシュ地点別の安全性:
     - rename 前（手順 1–2 中）にクラッシュ → 旧 base（旧 generation）+ overlay 健全。読みは
@@ -568,9 +574,13 @@ CommitObservationRequest{
   無視される（`op_count` 超を信用しない）、rename によるコンパクション原子置換、reader が
   `generation` 変化で base を再 mmap、ロック不可時にメモリ内差分のみで動作（§4.7）。
 - **コンパクションのクラッシュ安全** (host テスト): 新 base に generation を**先行書込**してから
-  rename し、**overlay クリアは新 base の durable 後**に行う順序で、rename 後・overlay クリア前の
+  rename し、**overlay 初期化は新 base の durable 後**に行う順序で、rename 後・overlay 初期化前の
   クラッシュでも新 base（新 generation）から学習語が失われないこと。overlay 未クリアの op 再適用が
   冪等であること（§4.7）。
+- **コンパクション後の overlay fingerprint** (host テスト): コンパクションが overlay の
+  `base_fingerprint` を**新 base の値に更新**すること、更新後に append → reload しても fingerprint
+  一致で overlay が破棄されず追記語が残ること（旧 fingerprint のまま `op_count=0` だけにすると
+  reload で破棄される回帰を防ぐ。§4.7）。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

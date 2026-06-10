@@ -70,7 +70,7 @@ surface へ自動句読点を含めて表示する。
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface で Preedit 全体を差し替え |
-| Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求 |
+| Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求（Backspace も編集イベント。`auto_punctuation` は §7.1.1 の timing 規則に従い `onPause` 編集中は `false`、idle タイマー再アーム） |
 | Previewing | IdleTimeout（`onPause`時） | Previewing | idle タイマー満了で `auto_punctuation=true` のライブ変換要求を post し、句読点込みで Preedit 更新（§4.3.1）。`onPause` で句読点を出す必須トリガ |
 | Previewing | Commit (Enter) | Idle | 句読点を含む全文を確定。`CommitObservation` は自動句読点を分離して観測（§5・§7） |
 | Previewing | Cancel (Esc) | Idle | CancelComposition |
@@ -332,8 +332,9 @@ ws           = { " " | "\t" } ;
 必要**である。打鍵イベントだけに依存すると、最後のキー以降は次の打鍵や Enter までイベントが
 発生せず句読点が現れない。よって TIP は**idle タイマーで再評価を駆動する**ことを必須とする。
 
-- TIP は `Previewing` 中、各打鍵で **idle タイマーを `dynamicPunctuationIdleMs`（既定 400ms、
-  目安は `TypingTempoTracker` の閾値以上）でリセット（再アーム）**する。
+- TIP は `Previewing` 中、各**編集イベント（打鍵 Input / Backspace）**で **idle タイマーを
+  `dynamicPunctuationIdleMs`（既定 400ms、目安は `TypingTempoTracker` の閾値以上）で
+  リセット（再アーム）**する。
 - タイマー満了（= idle 確定）で、TIP は **`auto_punctuation=true` のライブ変換要求を 1 回 post**
   し、応答で Preedit を句読点込みに更新する（§3 の `IdleTimeout` 遷移）。
 - 次の打鍵が来たらタイマーをキャンセル/再アームし、`eager` でない限り満了まで挿入しない。
@@ -400,9 +401,17 @@ on Backspace in Previewing(dynamicPunctuation && liveConversion):
         PopPending()                      # 生ローマ字を 1 つ戻す
     else:
         remove last 1 kana unit from kana_buffer_ (+ 対応 raw_romaji_ 末尾)
-    re-issue live conversion (auto_punctuation=true)
-    # rendered_surface_ と segments_ を新応答で全置換 → 句読点は再計算で増減
+    # Backspace も編集（打鍵）イベント: auto_punctuation は timing 規則(§7.1.1)に従う
+    #   onPause → false（抑制）, eager → true。idle タイマー(§4.3.1)を再アーム
+    re-issue live conversion (auto_punctuation = timing_flag())   # onPause 編集中は false
+    rearm idle timer (onPause)
+    # rendered_surface_ と segments_ を新応答で全置換
 ```
+
+Backspace は他の打鍵と同じく**編集イベント**なので、`auto_punctuation` を `true` 固定にせず
+§7.1.1 の timing 規則で導出する（`onPause` の編集中は `false`＝抑制し、idle タイマー満了で
+初めて挿入）。これにより「idle で句読点が出た後に Backspace すると即座に再挿入されて
+ちらつく」事象を防ぐ。
 
 ユーザーには「Backspace で句読点が消えた」ように見える場合があるが、実際は読みが
 変わって再計算で句読点が落ちただけ。「読点だけ残してかなを消す」「かなだけ残して
@@ -480,7 +489,7 @@ host は受け取った `auto_punctuation` が `true` のときだけ句読点�
 
 | 状況（`dynamicPunctuation=true` かつ `liveConversion=true`） | TIP が送る `auto_punctuation` |
 |---|---|
-| `onPause`・打鍵による Input（タイピング中） | `false`（抑制。句読点なしの surface を返させる） |
+| `onPause`・編集イベント（打鍵 Input / **Backspace**、タイピング中） | `false`（抑制。句読点なしの surface を返させる。idle タイマー再アーム） |
 | `onPause`・`IdleTimeout`（§4.3.1）/ Commit 前の最終評価 | `true`（挿入） |
 | `eager`・打鍵による Input | `true`（毎回挿入） |
 | `dynamicPunctuation=false` または `liveConversion=false` | `false`（常に） |

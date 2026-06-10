@@ -390,8 +390,9 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 - **attach 前の fingerprint 検査（必須前提・overlay を書く全操作に適用）**: ライタは overlay を
   書く操作（**append / コンパクション**）に入る前に、現 live base の fingerprint（§4.6 全内容
   ハッシュ）を計算し、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら操作前に overlay
-  ヘッダを再初期化**する（`base_fingerprint` を現 base 値に更新、`op_count=0`、ヘッダ末尾へ
-  `SetEndOfFile` で truncate ＝ stale フレームを破棄）。これは (a) コンパクションのクラッシュ分岐で
+  ヘッダを再初期化**する（コンパクション §4.7 step 4 と同じ順序: **先に `op_count=0` を flush** →
+  `SetEndOfFile` で stale フレーム truncate → **その後 `base_fingerprint` を現 base 値に更新**。
+  fingerprint を先に書くと旧フレームが新 base に valid 化される窓ができるため）。これは (a) コンパクションのクラッシュ分岐で
   overlay が旧 fingerprint のまま残った場合、(b) コンパクション外の base 再生成（再バンドル / TSV
   再コンパイル）後に古い overlay が残った場合に、**stale な差分が現 base へ誤適用される / 追記語が
   後の reload で不一致破棄されて失われる**事故を防ぐ。とくに**コンパクションは stale overlay を
@@ -414,35 +415,53 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
   2. `FlushFileBuffers`（一時 base を durable 化）。
   3. `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で原子 rename（新 generation 入りの新 base が
      live になる）。
-  4. **新 base が durable になった後で初めて** overlay ヘッダを**初期化し直す**:
-     `base_fingerprint` を**新 base の fingerprint に更新**し、`op_count=0` にする（+ flush）。
-     `base_fingerprint` を旧値のまま `op_count` だけ 0 にすると、次の append が reload/restart 後に
-     「現 base と fingerprint 不一致」で overlay ごと破棄され、追記語が失われる（本指摘の核心）。
-     書き込み順は `base_fingerprint` → `op_count`（`op_count` を最後に）とし、途中状態でも
-     reader が空 overlay として安全に読めるようにする。
+  4. **新 base が durable になった後で初めて** overlay ヘッダを**初期化し直す**。**書き込み順が重要**:
+     (a) **先に `op_count=0` を書いて flush**（＝空状態を publish）、(b) ヘッダ末尾へ `SetEndOfFile`
+     で truncate（stale フレーム破棄）、(c) **その後で `base_fingerprint` を新 base の fingerprint に
+     更新**して flush。
+     - **順序の理由**: `base_fingerprint` を先に新値へ書くと、`op_count` がまだ旧値（非0・旧 base
+       フレームを指す）の窓で overlay が「新 base に valid」に見え、lock-free reader が旧 op を新 base へ
+       適用して**誤候補を返す**。`op_count=0` を先に publish すれば、その窓では fingerprint が新旧
+       どちらでも replay 0 件＝空 overlay となり安全（旧 fingerprint 中は reader が不一致破棄、
+       いずれにせよ空）。
+     - 逆に「`base_fingerprint` を旧値のまま `op_count` だけ 0」も不可（次の append が reload 後に
+       不一致破棄され追記語を失う）。だから両方更新しつつ**空状態を先**に出す。
   5. ロック解放。
   - クラッシュ地点別の安全性:
     - rename 前（手順 1–2 中）にクラッシュ → 旧 base（旧 generation）+ overlay 健全。読みは
       旧 base + overlay で正しい。一時ファイルは破棄。
-    - rename 後・overlay 初期化前（手順 3–4 間）にクラッシュ → 新 base（新 generation・merged 済み）が
-      live。reader は `generation` 変化で再 mmap し、overlay は fingerprint 不一致（旧 base 値のまま）の
-      ため §4.6 で破棄する（その op は既に新 base へ取り込み済みなので欠落なし）。次のライタは
+    - rename 後・overlay 初期化前/途中（手順 3–4 間）にクラッシュ → 新 base（新 generation・
+      merged 済み）が live。reader は現 base ヘッダ再読込で `generation` 変化を検出し再 mmap、overlay は
+      **fingerprint 不一致（旧 base 値のまま）か `op_count=0`（4a 完了後）**のどちらでも空/破棄として
+      安全に読まれる（その op は既に新 base へ取り込み済みなので欠落なし）。次のライタは
       **attach 前の fingerprint 検査**（上記）で overlay を再初期化してから追記するため、
       残存 overlay のまま追記して後で失う事故は起きない。
   - 失敗時は一時ファイルを捨て旧 base + overlay を維持（部分置換しない）。**overlay を先にクリア
     してから新 base / generation を永続化する順序は採らない**（クリア後・新 base 永続化前の
     クラッシュで新規学習語が失われ、generation 不変のため lock-free reader が旧 base のまま
     取りこぼすため。本順序の核心）。
-- **reader の base 追従**: reader は保持中 base の `generation` / `base_fingerprint` を、
-  lookup バッチの境で軽くチェックし、変化していれば base を**再 mmap**して overlay を
-  読み直す（`base_fingerprint` 不一致の overlay は §4.6 のとおり破棄）。
+- **reader の base 追従（置換検出）**: `MoveFileEx` で base が置換されても、reader が保持中の
+  mmap は**旧 file object のビューのまま**で `generation` も変わらない（置換は別ファイル実体に
+  なるため、保持マッピングを見ても気づけない）。よって reader は**保持 mmap のヘッダではなく、
+  現在の base ファイルをパスから読み直して**追従する:
+  - lookup バッチの境で、現 base ファイルを**開き直して 32 B ヘッダだけ読む**（`generation` /
+    `base_fingerprint`）。保持中マッピングの値と異なれば、**現ファイルを新規に mmap して swap**し
+    overlay を読み直す（`base_fingerprint` 不一致の overlay は §4.6 のとおり破棄）。ヘッダ 32 B
+    read は安価。
+  - もしくは `FindFirstChangeNotification` / `ReadDirectoryChangesW` で当該ディレクトリの変更通知を
+    受け、通知時のみ上記の再オープン・再 mmap を行う（ポーリング回避）。
+  - **共有モード**: 全プロセスは base / overlay を **`FILE_SHARE_READ | FILE_SHARE_WRITE |
+    FILE_SHARE_DELETE`** で開く。`FILE_SHARE_DELETE` が無いと writer の `MoveFileEx`
+    （REPLACE_EXISTING）が共有違反で失敗する。
 - **権限なし / ロック不可**: overlay ファイルを開けない・ロックできない環境では、当該
   host は**メモリ内差分のみ**で動作し永続化しない（再起動で消える）。base は read-only で
   常に読める。
 
-**まとめ**: 「単一ライタを file lock で保証」「op_count を最後に更新する append」「rename に
-よる原子置換」「reader は lock-free + 境界チェック + 世代追従」により、複数 host でも
-破損・取りこぼし・部分読みを起こさない。
+**まとめ**: 「単一ライタを file lock で保証」「append は frame→`op_count` の順（op_count 最後）／
+reinit・clear は `op_count=0`→fingerprint の順（空状態を先に publish）」「rename による原子置換 +
+generation 先行永続化」「writer は書込前に fingerprint 不一致 overlay を再初期化」「reader は
+lock-free + 現 base ヘッダの再読込（保持 mmap ではなく）で置換を検出し再 mmap」により、複数 host
+でも破損・取りこぼし・部分読み・stale 適用を起こさない。
 
 ## 5. 確定と学習
 
@@ -601,8 +620,16 @@ CommitObservationRequest{
   新 base がマージ結果と一致、`base_fingerprint` 不一致で overlay 破棄、overlay 破損時に
   base のみで動作。
 - **同時実行** (host テスト): `op_count` を最後に更新する append でクラッシュ時に半端レコードが
-  無視される（`op_count` 超を信用しない）、rename によるコンパクション原子置換、reader が
-  `generation` 変化で base を再 mmap、ロック不可時にメモリ内差分のみで動作（§4.7）。
+  無視される（`op_count` 超を信用しない）、rename によるコンパクション原子置換、ロック不可時に
+  メモリ内差分のみで動作（§4.7）。
+- **reinit の書込順** (host テスト): overlay 再初期化が **`op_count=0` を先に publish→ truncate→
+  `base_fingerprint` 更新**の順であること。`base_fingerprint` を先に書く実装だと「新 fingerprint +
+  旧 `op_count`>0 + 旧フレーム」の窓で reader が stale op を新 base へ適用してしまう回帰を、
+  その窓を再現して検出する（§4.7）。
+- **base 置換の検出** (host テスト): 別ライタが `MoveFileEx` で base を置換した後、reader が
+  **保持 mmap のヘッダではなく現 base ファイルを開き直して** `generation` 変化を検出し再 mmap
+  すること（保持 mmap だけ見る実装は置換に気づかず旧 base を出し続ける回帰を防ぐ）。base/overlay を
+  `FILE_SHARE_DELETE` 付きで開くこと（無いと `MoveFileEx` が共有違反で失敗）。
 - **コンパクションのクラッシュ安全** (host テスト): 新 base に generation を**先行書込**してから
   rename し、**overlay 初期化は新 base の durable 後**に行う順序で、rename 後・overlay 初期化前の
   クラッシュでも新 base（新 generation）から学習語が失われないこと。overlay 未クリアの op 再適用が

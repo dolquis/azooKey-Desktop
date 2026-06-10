@@ -1056,8 +1056,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     フォールバック
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
   - multi-segment commit payload `CommitSegmentsObservation`（新 `MessageType`。文節列を
-    1 メッセージで原子的に確定・学習。`commit_segments` capability ネゴシエーションと未対応
-    host への単発 `CommitObservation` フォールバック）。M59 / M60 と共有（spec §6.4）
+    1 メッセージで原子的に確定・学習。`HandshakeResponse` に host 側 `capabilities` を追加して
+    `commit_segments` を広告、TIP は応答に含まれるときだけ送り未対応 host へは単発
+    `CommitObservation` フォールバック）。M59 / M60 と共有（spec §6.4）
   - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
     最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で

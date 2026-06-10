@@ -323,11 +323,30 @@ return { ok: true }
 
 - 単一文節確定（通常確定 / M58-A 単一）は既存 `CommitObservation`（単発）を継続使用。
   本 payload は廃止・置換しない。
-- 旧 host は新 `MessageType` を解せない。`HandshakeRequest.capabilities` に
-  **`"commit_segments"`** を加えて host 能力を広告し、TIP は Handshake 応答で当該
-  capability を確認してから使う。**未対応 host では TIP がフォールバック**して、
-  `!is_auto_punctuation` の各文節を既存 `CommitObservation` で順次送る（自動句読点は
-  学習に送らない、という不変条件は同じ）。
+- 旧 host は新 `MessageType` を解せない。**TIP は host が `CommitSegmentsObservation` を
+  解せると確認できたときだけ送る**。確認は Handshake で行うが、**現行スキーマでは
+  `capabilities` は `HandshakeRequest` 側にしか無く**（`ipc/include/azookey/ipc/Payloads.h`。
+  これは TIP→host の広告）、host→TIP の広告フィールドが存在しない。そこで M58-B は
+  **`HandshakeResponse` に host 側 `capabilities` を追加**する:
+
+  ```cpp
+  struct HandshakeResponse {
+    std::string host_version;
+    int protocol_version{1};
+    bool accepted{false};
+    bool model_loaded{false};
+    std::vector<std::string> capabilities;   // 追加: host が解せる拡張機能の広告
+  };
+  ```
+
+  - host は対応時に `capabilities` へ **`"commit_segments"`** を載せて応答する。
+  - TIP は `HandshakeResponse.capabilities` に `"commit_segments"` が**含まれるときだけ**
+    `CommitSegmentsObservation` を送る。
+  - Build/Parse は既存流儀（`BuildHandshakeResponse` で `o.emplace("capabilities", array)`、
+    `ParseHandshakeResponse` で配列が無ければ**空**）。**後方互換**: 旧 host は本フィールドを
+    返さない → TIP からは空 capabilities = 未対応とみなす。
+- **未対応 host では TIP がフォールバック**して、`!is_auto_punctuation` の各文節を既存
+  `CommitObservation` で順次送る（自動句読点は学習に送らない、という不変条件は同じ）。
 
 #### 6.4.4 M58-B 統合点
 
@@ -353,6 +372,9 @@ return { ok: true }
   `chosen`(tag 含む) / `shown[]` / `is_auto_punctuation` / `left_context` / `timestamp_ms`）。
 - `is_auto_punctuation=true` 要素が学習対象外であることを host テスト（`inference-host/tests`）で
   検証（Observe 呼び出し回数 = `!is_auto_punctuation` 文節数）。
+- `HandshakeResponse.capabilities` の round-trip（`"commit_segments"` を含む応答・欠落応答の
+  build/parse）。欠落時に空 capabilities へパースされ、TIP が単発 `CommitObservation`
+  フォールバックを選ぶこと（§6.4.3）。
 
 ## 7. 長文・性能・失敗時（主に M58-B）
 

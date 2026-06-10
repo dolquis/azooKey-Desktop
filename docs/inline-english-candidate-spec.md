@@ -218,7 +218,8 @@ Windows x64 / ARM64 とも LE）:
   16   4     records_offset (uint32)
   20   4     strings_offset (uint32)
   24   4     generation (uint32; コンパクションごとに +1。reader の base 追従に使う。§4.7)
-  28   4     reserved  (0)
+  28   4     content_hash (uint32; この base の全内容ハッシュ。**base 生成者**〔build / 再コンパイル /
+              コンパクション〕が書き込む。定義は §4.6「base_fingerprint / content_hash の定義」)
 
 レコード配列（entry_count × 20 B、キー（lower）昇順 → 同キー内 frequency 降順）
   off  size  field
@@ -284,7 +285,7 @@ string pool（strings_offset 以降）
 ヘッダ（16 B 固定）
   0  4  magic = 'A','Z','E','O'（azooKey English Overlay）
   4  4  version (uint32) = 1
-  8  4  base_fingerprint (uint32; 適用先 base の全内容ハッシュ。定義は §4.6「base_fingerprint の定義」)
+  8  4  base_fingerprint (uint32; 適用先 base ヘッダの content_hash をコピーした値。§4.6「定義」)
   12 4  op_count (uint32)
 
 op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個が連続。到着順 append-only）
@@ -307,20 +308,27 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 > `(lower_key, surface)` に複数フレームが現れうる＝後勝ち）。**ファイル上の二分探索はしない**
 > （下記のメモリ内索引で引く）。
 
-**`base_fingerprint` の定義**:
+**`base_fingerprint` / `content_hash` の定義**:
 
-`base_fingerprint` は overlay がどの base に対する差分かを識別する。**base の全内容に対する
-32-bit ハッシュ**（FNV-1a 等）で定義する。対象は base ファイルの `version` + `entry_count` +
-`generation` + **全レコード配列 + 全 string pool**（= ヘッダ予約以外の全実体）。
+`content_hash` は base の全内容に対する **32-bit ハッシュ**（FNV-1a 等）。対象は base の
+`version` + `entry_count` + `generation` + **全レコード配列 + 全 string pool**（構造フィールド
+〔magic/flags/offsets/`content_hash` 自身/予約〕を除く全実体）。**base 生成者**（build ツール /
+TSV 再コンパイル / コンパクション）が算出して **base ヘッダ offset 28（§4.5）に書き込む**。
+overlay ヘッダの `base_fingerprint` は、その overlay が対象とする **base の `content_hash` を
+コピーした値**（同一なら一致）。
 
-- **「先頭レコードのみ」や「count だけ」では不十分**: 同一 `version`/`entry_count` で先頭が
-  不変でも後方エントリだけ差し替えた base 再生成（**コンパクション外での再バンドル / TSV 再
-  コンパイル**）を検出できず、古い overlay の tombstone/upsert が新 base に誤適用され、正規
-  エントリを隠す/上書きする。よって**全内容ハッシュ**にして、どのエントリが変わっても
-  fingerprint が変わるようにする。
-- 算出コストは base 1 パス（数 MB で ms オーダ）で、overlay が存在するときのみ行えばよい。
-- 32-bit は事故的不一致検出が目的（敵対的衝突は非対象）。衝突を嫌う場合は `generation` 併用
-  で更に弁別できる（コンパクション由来の変化は generation でも捕捉）。
+- **基本方針**: base 自身が `content_hash` をヘッダに持つので、**reader / writer は base を
+  全走査せずヘッダの 4 byte を読むだけ**で base の同一性を判定できる（フルハッシュ算出は base
+  生成時の 1 回のみ）。overlay の妥当性は `overlay.base_fingerprint == 現 base header.content_hash`
+  で判定する。
+- **「先頭レコードのみ」や「count だけ」では不十分**: 同一 `version`/`entry_count`/`generation`
+  で先頭が不変でも後方エントリだけ差し替えた base 再生成（**コンパクション外での再バンドル /
+  TSV 再コンパイル**）も、全内容ハッシュなら `content_hash` が変わって検出できる（古い overlay の
+  tombstone/upsert が新 base へ誤適用されるのを防ぐ）。
+- 32-bit は事故的不一致検出が目的（敵対的衝突は非対象）。衝突を嫌う場合は `generation` 併用で
+  更に弁別できる。
+- `content_hash` を欠く（旧式・手製・破損）base はフィールドが 0 / 不整合になり、現 overlay と
+  不一致扱い → overlay は破棄され base のみで動作（安全側）。
 
 **メモリ内索引（overlay の読み取り構造）**:
 
@@ -388,9 +396,9 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 - **ライタロック**: `english-words.lock` を `LockFileEx`（排他）で取得してから overlay の
   append / コンパクションを行う。reader はロック不要（下記コミット規約で安全に読む）。
 - **attach 前の fingerprint 検査（必須前提・overlay を書く全操作に適用）**: ライタは overlay を
-  書く操作（**append / コンパクション**）に入る前に、現 live base の fingerprint（§4.6 全内容
-  ハッシュ）を計算し、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら操作前に overlay
-  ヘッダを再初期化**する（コンパクション §4.7 step 4 と同じ順序: **先に `op_count=0` を flush** →
+  書く操作（**append / コンパクション**）に入る前に、現 live base ヘッダの `content_hash`（§4.5
+  offset 28 を read。フル走査不要）を、overlay ヘッダの `base_fingerprint` と照合する。**不一致なら
+  操作前に overlay ヘッダを再初期化**する（コンパクション §4.7 step 4 と同じ順序: **先に `op_count=0` を flush** →
   `SetEndOfFile` で stale フレーム truncate → **その後 `base_fingerprint` を現 base 値に更新**。
   fingerprint を先に書くと旧フレームが新 base に valid 化される窓ができるため）。これは (a) コンパクションのクラッシュ分岐で
   overlay が旧 fingerprint のまま残った場合、(b) コンパクション外の base 再生成（再バンドル / TSV
@@ -410,15 +418,16 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
   可変長のため固定 `recsize` 計算ではなく**フレーム走査で末尾を決める**）。
 - **コンパクション規約（原子置換・generation 先行永続化）**: 排他ロック下で
   1. base + overlay をマージした新 base を一時ファイルへ書く。**このときヘッダ `generation` に
-     「旧 base の `generation` + 1」を書き込んでおく**（merged データと新 generation を一体で持たせ、
-     後追いの別書き込みにしない）。
+     「旧 base の `generation` + 1」を、`content_hash` に新 base の全内容ハッシュ（§4.6）を
+     書き込んでおく**（merged データと新 generation/content_hash を一体で持たせ、後追いの別書き込みに
+     しない）。
   2. `FlushFileBuffers`（一時 base を durable 化）。
   3. `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` で原子 rename（新 generation 入りの新 base が
      live になる）。
   4. **新 base が durable になった後で初めて** overlay ヘッダを**初期化し直す**。**書き込み順が重要**:
      (a) **先に `op_count=0` を書いて flush**（＝空状態を publish）、(b) ヘッダ末尾へ `SetEndOfFile`
-     で truncate（stale フレーム破棄）、(c) **その後で `base_fingerprint` を新 base の fingerprint に
-     更新**して flush。
+     で truncate（stale フレーム破棄）、(c) **その後で `base_fingerprint` を新 base ヘッダの
+     `content_hash`（手順 1 で書込済）に更新**して flush。
      - **順序の理由**: `base_fingerprint` を先に新値へ書くと、`op_count` がまだ旧値（非0・旧 base
        フレームを指す）の窓で overlay が「新 base に valid」に見え、lock-free reader が旧 op を新 base へ
        適用して**誤候補を返す**。`op_count=0` を先に publish すれば、その窓では fingerprint が新旧
@@ -444,8 +453,9 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
   mmap は**旧 file object のビューのまま**で `generation` も変わらない（置換は別ファイル実体に
   なるため、保持マッピングを見ても気づけない）。よって reader は**保持 mmap のヘッダではなく、
   現在の base ファイルをパスから読み直して**追従する:
-  - lookup バッチの境で、現 base ファイルを**開き直して 32 B ヘッダだけ読む**（`generation` /
-    `base_fingerprint`）。保持中マッピングの値と異なれば、**現ファイルを新規に mmap して swap**し
+  - lookup バッチの境で、現 base ファイルを**開き直して 32 B ヘッダだけ読む**（`generation` と
+    **`content_hash`**〔§4.5 offset 28〕）。保持中マッピングの値と異なれば、**現ファイルを新規に mmap
+    して swap**し
     overlay を読み直す（`base_fingerprint` 不一致の overlay は §4.6 のとおり破棄）。ヘッダ 32 B
     read は安価。
   - もしくは `FindFirstChangeNotification` / `ReadDirectoryChangesW` で当該ディレクトリの変更通知を
@@ -627,8 +637,9 @@ CommitObservationRequest{
   旧 `op_count`>0 + 旧フレーム」の窓で reader が stale op を新 base へ適用してしまう回帰を、
   その窓を再現して検出する（§4.7）。
 - **base 置換の検出** (host テスト): 別ライタが `MoveFileEx` で base を置換した後、reader が
-  **保持 mmap のヘッダではなく現 base ファイルを開き直して** `generation` 変化を検出し再 mmap
-  すること（保持 mmap だけ見る実装は置換に気づかず旧 base を出し続ける回帰を防ぐ）。base/overlay を
+  **保持 mmap のヘッダではなく現 base ファイルを開き直して** `generation` / **`content_hash`** 変化を
+  検出し再 mmap すること（保持 mmap だけ見る実装は置換に気づかず旧 base を出し続ける回帰を防ぐ）。
+  **同一 `generation` でも `content_hash` 差で置換を検出**できること。base/overlay を
   `FILE_SHARE_DELETE` 付きで開くこと（無いと `MoveFileEx` が共有違反で失敗）。
 - **コンパクションのクラッシュ安全** (host テスト): 新 base に generation を**先行書込**してから
   rename し、**overlay 初期化は新 base の durable 後**に行う順序で、rename 後・overlay 初期化前の
@@ -642,9 +653,10 @@ CommitObservationRequest{
   `base_fingerprint` を**新 base の値に更新**すること、更新後に append → reload しても fingerprint
   一致で overlay が破棄されず追記語が残ること（旧 fingerprint のまま `op_count=0` だけにすると
   reload で破棄される回帰を防ぐ。§4.7）。
-- **base 再生成の検出（全内容 fingerprint）** (host テスト): base を**同一 `version`/`entry_count`・
-  先頭レコード不変で後方エントリだけ差し替え**て再生成すると `base_fingerprint` が変わり、
-  古い overlay が不一致で破棄されること（先頭/件数のみのハッシュなら見逃す回帰を防ぐ。§4.6）。
+- **base 再生成の検出（全内容 content_hash）** (host テスト): base を**同一 `version`/`entry_count`/
+  `generation`・先頭レコード不変で後方エントリだけ差し替え**て再生成すると base ヘッダの
+  `content_hash` が変わり、`overlay.base_fingerprint` と不一致で overlay が破棄されること
+  （先頭/件数のみのハッシュなら見逃す回帰を防ぐ。§4.6）。`content_hash` が base ヘッダから読めること。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

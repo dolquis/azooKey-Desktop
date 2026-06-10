@@ -380,16 +380,24 @@ std::vector<LiveSegment> segments_;  // host 応答（§7.2）。auto_punctuatio
 
 ```cpp
 struct LiveSegment {
-  uint32_t start_char;       // rendered_surface_ 上の開始（UTF-16 code unit）
+  uint32_t start_char;       // rendered_surface_ 上の開始（UTF-16 code unit。ITfRange 操作用）
   uint32_t end_char;         // 同 終了（排他）
   double   score;            // 文節境界/変換信頼度
   bool     auto_punctuation; // true: 読みを持たない自動挿入句読点
+  std::string surface;       // 文節の表層（UTF-8。学習・確定はこれを直接使う。§5.3）
   std::string reading;       // 文節読み（auto_punctuation=true は空）
 };
 ```
 
 不変条件: `auto_punctuation == true` の要素は `reading.empty()` かつ
-`kana_buffer_` に対応文字を持たない（純粋な派生物）。
+`kana_buffer_` に対応文字を持たない（純粋な派生物）。各 `surface` の連結は
+`rendered_surface_` と一致する。
+
+> **`start_char`/`end_char`（UTF-16）と `surface`（UTF-8）の使い分け**: オフセットは TIP の
+> `ITfRange::SetText` / DisplayAttribute など**範囲操作専用**。**学習スライスにオフセットを使って
+> `rendered_surface_`（UTF-8 `std::string`）を `substr` してはならない**（UTF-16 単位を UTF-8 バイト
+> 位置に誤用し、日本語でマルチバイト境界を割って壊れた surface を学習する）。学習・確定には
+> 各 segment が自前で持つ `surface` 文字列を使う。
 
 ### 5.2 Backspace（削除単位）
 
@@ -424,9 +432,11 @@ on Commit(Enter):
     final = re-evaluate(kana_buffer_, auto_punctuation=true)  # 文末句点を補う最終評価
     EndComposition(final.rendered_surface)                    # 句読点込みでアプリへ確定
     # 学習は auto_punctuation セグメントを除外し、文節ごとに観測
+    # 重要: chosen.surface は seg.surface（UTF-8 文字列）を直接使う。
+    #       UTF-16 オフセット(start_char/end_char)で rendered_surface_ を substr しない(§5.1)
     for seg in final.segments where !seg.auto_punctuation:
         CommitObservation(reading = seg.reading,
-                          chosen.surface = substr(final.rendered_surface, seg))
+                          chosen.surface = seg.surface)
     # auto_punctuation セグメントは学習に渡さない（reading 無し）
 ```
 
@@ -535,10 +545,13 @@ M59 は**任意配列 `segments[]` を新規追加**する（X-1-1 の segments 
 | `end_char` | uint32 | ○ | 同 終了（排他） |
 | `score` | number | ○ | 文節境界/変換信頼度（抑制判定 `segmentBoundaryConfidence` に使用） |
 | `auto_punctuation` | bool | 既定 false | true = 読みを持たない自動挿入句読点スパン |
+| `surface` | string | ○ | 文節の表層（UTF-8）。**学習・確定はこれを直接使う**（§5.3） |
 | `reading` | string | 既定 "" | 文節読み（`auto_punctuation=true` は空） |
 
-最良 surface は既存 `candidates[0].surface`（句読点込み）を用い、`segments[]` がその
-内部構造を与える（重複した `surface` フィールドは追加しない）。
+最良 surface 全体は `candidates[0].surface`（句読点込み）に等しく、各 `segments[].surface` の
+連結と一致する。**per-segment `surface` を持たせる**のは、学習・確定で `start_char`/`end_char`
+（UTF-16）を UTF-8 文字列のバイトオフセットに誤用して切り出す事故を避けるため（§5.1）。オフセットは
+TIP の `ITfRange` 範囲操作専用、学習スライスは `surface` 文字列を使う。
 
 ```jsonc
 {
@@ -547,9 +560,9 @@ M59 は**任意配列 `segments[]` を新規追加**する（X-1-1 の segments 
   ],
   "partial": false,
   "segments": [
-    { "start_char": 0,  "end_char": 3,  "score": 0.95, "auto_punctuation": false, "reading": "きょうは" },
-    { "start_char": 3,  "end_char": 9,  "score": 0.90, "auto_punctuation": false, "reading": "いいてんきです" },
-    { "start_char": 9,  "end_char": 10, "score": 0.0,  "auto_punctuation": true,  "reading": "" }
+    { "start_char": 0,  "end_char": 3,  "score": 0.95, "auto_punctuation": false, "surface": "今日は",     "reading": "きょうは" },
+    { "start_char": 3,  "end_char": 9,  "score": 0.90, "auto_punctuation": false, "surface": "いい天気です", "reading": "いいてんきです" },
+    { "start_char": 9,  "end_char": 10, "score": 0.0,  "auto_punctuation": true,  "surface": "。",          "reading": "" }
   ]
 }
 ```
@@ -724,9 +737,12 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 
 - `QueryCandidatesRequest` round-trip で `auto_punctuation` / `punctuation_style` が保存される。
 - これらを欠く JSON のパースで `false` / `"ja"` の既定になる（後方互換）。
-- `QueryCandidatesResponse` round-trip で `segments[]`（`auto_punctuation` マーカ・`reading`・
-  UTF-16 オフセット）が保存される。`segments` を欠く JSON は空 `segments` にパースされ、
-  従来応答として解釈できる。
+- `QueryCandidatesResponse` round-trip で `segments[]`（`auto_punctuation` マーカ・`surface`・
+  `reading`・UTF-16 オフセット）が保存される。`segments` を欠く JSON は空 `segments` にパースされ、
+  従来応答として解釈できる。各 `segments[].surface` の連結が `candidates[0].surface` と一致する。
+- **学習スライスのバイト安全性** (host or 状態機械テスト): 日本語を含む確定で、各文節の学習
+  surface が **`seg.surface` 文字列**から取られ、UTF-16 オフセットでの `substr` で壊れないこと
+  （マルチバイト境界を割らない。§5.1・§5.3）。
 
 ## 8. 設定スキーマ
 
@@ -768,8 +784,8 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で
   あること、OFF で従来遷移が不変であること。
 - **IPC** (`ipc/tests/payloads_test.cpp`): ライブ変換要求（現状 `QueryCandidates`、§7）の
-  `auto_punctuation` / `punctuation_style` フィールド、応答 `segments[].auto_punctuation` の
-  build/parse 往復。`CommitSegmentsObservation` の往復（§7.4）。
+  `auto_punctuation` / `punctuation_style` フィールド、応答 `segments[]`（`auto_punctuation` /
+  `surface` / `reading`）の build/parse 往復。`CommitSegmentsObservation` の往復（§7.4）。
 - **学習分離** (`learning/tests`): 自動句読点を含む確定で、句読点が `(reading, surface)`
   観測に混入しないこと。
 - **安定化** (host テスト or 状態機械): `onPause` でタイピング中は句読点が出ず、idle で

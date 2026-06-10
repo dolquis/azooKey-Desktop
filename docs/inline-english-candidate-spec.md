@@ -275,7 +275,7 @@ string pool（strings_offset 以降）
 
 - **base**: `english-words.bin`（§4.5）。読み取り専用 mmap。
 - **overlay（差分）**: サイドカー `english-words.delta.bin`。base への追加 / 更新 / 削除の op 列。
-  小さく保ち、起動時にメモリへ読む（小さければそのまま二分探索）。
+  小さく保ち、起動時に**メモリ内ソート索引**へ読む（後述。overlay ファイル自体は二分探索しない）。
 
 **overlay フォーマット**（LE 固定。**末尾追記可能な自己完結フレーム列**。base の §4.5 形式とは
 別物で、別個の string pool は持たない）:
@@ -335,7 +335,8 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 
 - トリガ: overlay の op 数が base の一定割合（例 10%）超 or `op_count` > 閾値、または明示要求。
 - 動作: base + overlay をマージして**新 base を一時ファイルへ書き、rename で原子置換**、
-  overlay をクリア（`op_count=0`）。読み取りは mmap ポインタ swap で無停止。
+  overlay をクリア。読み取りは mmap ポインタ swap で無停止。**正確な順序（generation を
+  rename 前の新 base に先行書込し、overlay クリアは新 base が durable になった後）は §4.7**。
 - 失敗時は旧 base + overlay を維持（部分書き込みを採用しない）。
 
 **整合・堅牢化**:

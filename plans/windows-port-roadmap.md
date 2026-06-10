@@ -1162,7 +1162,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     由来。M17 ホットリロード基盤再利用。spec §4.1.4）。guard はミニ言語（EBNF・`;` AND・`=`/`!=`・
     Unknown 評価バイアス・未知トークン行スキップ。spec §4.1.5）
   - 安定化（`onPause` は idle タイマー `dynamicPunctuationIdleMs` で `IdleTimeout` 駆動の
-    再評価が必須。最後の打鍵後にライブ変換要求を post し句読点を挿入。spec §4.3.1）
+    再評価が必須。最後の打鍵後にライブ変換要求を post し句読点を挿入。spec §4.3.1）。timing は
+    TIP がリクエストの `auto_punctuation` に符号化（打鍵中=false 抑制／idle・commit=true 挿入。
+    host は typing/idle を知らず `true` のときだけ挿入。spec §7.1.1）
   - 設定キー 6 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
     `dynamicPunctuationStability` / `dynamicPunctuationIdleMs` / `segmentBoundaryConfidence` /
     `punctuationRulesPath`）

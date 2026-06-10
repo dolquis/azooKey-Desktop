@@ -69,7 +69,7 @@ surface へ自動句読点を含めて表示する。
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
-| Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`、`auto_punctuation=true`。§7）を送信。応答 surface に句読点を含めて Preedit 全体を差し替え（句読点は再計算で増減しうる） |
+| Composing/Previewing | Input | Previewing | ライブ変換要求（現状 `QueryCandidates` の `live=true`。§7）を送信。`auto_punctuation` は安定化モードに従う（**`onPause` のタイピング中は `false`＝抑制**、`eager` は `true`。§7.1.1）。応答 surface で Preedit 全体を差し替え |
 | Previewing | Backspace | Previewing/Composing | **かなバッファを 1 単位削除**（自動句読点は削除単位に数えない。§5）。再ライブ変換要求 |
 | Previewing | IdleTimeout（`onPause`時） | Previewing | idle タイマー満了で `auto_punctuation=true` のライブ変換要求を post し、句読点込みで Preedit 更新（§4.3.1）。`onPause` で句読点を出す必須トリガ |
 | Previewing | Commit (Enter) | Idle | 句読点を含む全文を確定。`CommitObservation` は自動句読点を分離して観測（§5・§7） |
@@ -82,7 +82,9 @@ surface へ自動句読点を含めて表示する。
 
 ### 4.1 挿入位置
 
-host 側（`inference-host`）で判定する。二層構成:
+host 側（`inference-host`）で判定する。**host はリクエストの `auto_punctuation=true`
+（§7.1.1）のときだけ**句読点を挿入し、`false` のときは句読点なしの surface を返す
+（タイピング中の抑制は TIP がこのフラグで制御する）。挿入位置の判定は二層構成:
 
 - **決定的レイヤ（既定・M59 コア）**: `PunctuationInserter`（新規）が、変換後 surface と
   **文節境界（live 変換応答の `segments[]`、§7.2）**を入力に、文節境界での読点 `、` と
@@ -118,7 +120,10 @@ host 側（`inference-host`）で判定する。二層構成:
   | 全体が N=8 文字未満かつ単一文節 | 短文への過剰挿入防止 |
   | 英数字列・記号列・URL 様パターンの内部 | 誤挿入防止（M60 英単語候補・記号との干渉回避） |
   | 当該文節境界スコアが `segmentBoundaryConfidence`（既定 0.5）未満 | ライブ変換中の不安定境界への挿入を防ぐ |
-  | タイピング中（`onPause` 設定時） | §4.3 安定化 |
+
+  （`onPause` のタイピング中の抑制は host 側のこの表ではなく、**TIP がリクエストに
+  `auto_punctuation=false` を載せる**ことで実現する。host は `auto_punctuation=true` の
+  リクエストでのみ上表に従って挿入する。§7.1.1・§4.3）
 
 - **ニューラルレイヤ（任意・品質向上）**: zenz が surface に句読点を直接出力できる構成
   では、その出力を採用する。zenz 出力と決定的レイヤの整合は実装時に定める（既定は
@@ -310,11 +315,15 @@ ws           = { " " | "\t" } ;
 
 打鍵ごとに句読点が出現・消滅すると視覚的に不安定になる。安定化規則:
 
+安定化の制御は **TIP がリクエストの `auto_punctuation` で行う**（§7.1.1。host はモードを
+知らず、`auto_punctuation=true` のときだけ挿入する）。
+
 - 設定 `dynamicPunctuationStability`:
   - `onPause`（既定）: タイピング中（`TypingTempoTracker::IsTyping()` = X-1-2 を再利用、
-    平均打鍵間隔 < 閾値）は句読点を**挿入しない**。入力が止まった（idle）瞬間に再評価して
-    挿入する。連続入力中のちらつきを防ぐ。
-  - `eager`: 打鍵ごとに常に再評価して挿入する（反応は速いがちらつきうる）。
+    平均打鍵間隔 < 閾値）は TIP が打鍵リクエストに `auto_punctuation=false` を載せて句読点を
+    **挿入させない**。入力が止まった（idle）瞬間に `IdleTimeout`（§4.3.1）で
+    `auto_punctuation=true` のリクエストを送って挿入する。連続入力中のちらつきを防ぐ。
+  - `eager`: 打鍵ごとに `auto_punctuation=true` を送り常に挿入する（反応は速いがちらつきうる）。
 - どちらでも、確定（Enter）直前には必ず最終評価を行い、文末句点を補う。
 
 #### 4.3.1 idle タイマー（`onPause` の挿入トリガ）
@@ -460,8 +469,24 @@ reading 長 0 として写像に組み込む。
 
 | field | 型 | 既定 | 説明 |
 |---|---|---|---|
-| `auto_punctuation` | bool | `false` | `dynamicPunctuation` を伝搬。host が ON/OFF を判別できるよう必須伝搬 |
+| `auto_punctuation` | bool | `false` | **このリクエストの応答で句読点を挿入するか**（per-request）。host は `true` のときだけ挿入する。timing 判断（onPause のタイピング中は抑制 / idle・commit で挿入）は **TIP 側**が行い、本フラグに符号化する（§7.1.1） |
 | `punctuation_style` | string | `"ja"` | `"ja"`（`、。`）/ `"fullwidth_latin"`（`，．`） |
+
+#### 7.1.1 `auto_punctuation` の timing 符号化（host は typing/idle を知らない）
+
+host は「タイピング中か idle か」を知らない（その情報はリクエストに無い）。よって
+**挿入タイミングの判断は TIP が持ち、各リクエストの `auto_punctuation` に符号化する**。
+host は受け取った `auto_punctuation` が `true` のときだけ句読点を挿入する（§4.1）。
+
+| 状況（`dynamicPunctuation=true` かつ `liveConversion=true`） | TIP が送る `auto_punctuation` |
+|---|---|
+| `onPause`・打鍵による Input（タイピング中） | `false`（抑制。句読点なしの surface を返させる） |
+| `onPause`・`IdleTimeout`（§4.3.1）/ Commit 前の最終評価 | `true`（挿入） |
+| `eager`・打鍵による Input | `true`（毎回挿入） |
+| `dynamicPunctuation=false` または `liveConversion=false` | `false`（常に） |
+
+これにより、同じ kana バッファでも「打鍵時リクエスト＝抑制」「idle/commit リクエスト＝挿入」を
+host 側のモード判定なしに区別できる（Codex 指摘の「host が打鍵と idle を区別できない」問題の解消）。
 
 ```jsonc
 {
@@ -469,7 +494,7 @@ reading 長 0 として写像に組み込む。
   "left_context": "",
   "max_candidates": 10,
   "live": true,                  // ライブ変換経路（既存）
-  "auto_punctuation": true,       // 追加
+  "auto_punctuation": true,       // 追加（例: idle/commit/eager の挿入リクエスト。onPause 打鍵中は false。§7.1.1）
   "punctuation_style": "ja"       // 追加
 }
 ```
@@ -740,9 +765,11 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
   観測に混入しないこと。
 - **安定化** (host テスト or 状態機械): `onPause` でタイピング中は句読点が出ず、idle で
   挿入されること（`TypingTempoTracker` をモックした時間注入）。
-- **idle タイマー** (状態機械): `onPause` で最後の打鍵後に **`IdleTimeout` で
-  `auto_punctuation=true` のライブ変換要求が 1 回 post され**句読点が挿入されること、次の打鍵で
-  タイマーが再アームされること、`eager` ではタイマー不要で打鍵ごとに挿入されること（§4.3.1）。
+- **idle タイマー / timing 符号化** (状態機械): `onPause` で**打鍵 Input リクエストは
+  `auto_punctuation=false`**（抑制）、最後の打鍵後の **`IdleTimeout` は `auto_punctuation=true`**
+  のライブ変換要求が 1 回 post され句読点が挿入されること、次の打鍵でタイマーが再アーム
+  されること、`eager` では打鍵ごとに `auto_punctuation=true` で挿入されること、`commit` 前の
+  最終評価が `auto_punctuation=true` であること（§4.3.1・§7.1.1）。
 - **手動 / 実機（Win11、`gate:human-required`）**: ライブ変換 ON + `dynamicPunctuation`
   ON で文を打つと節境界・文末に句読点が現れ、続けて打つと再配置・削除され、Enter で
   妥当な句読点付き日本語が確定する。OFF で句読点が一切自動挿入されない。学習が汚染

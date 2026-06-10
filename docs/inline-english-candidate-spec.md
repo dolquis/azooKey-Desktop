@@ -284,7 +284,7 @@ string pool（strings_offset 以降）
 ヘッダ（16 B 固定）
   0  4  magic = 'A','Z','E','O'（azooKey English Overlay）
   4  4  version (uint32) = 1
-  8  4  base_fingerprint (uint32; 適用先 base の version^entry_count^records 先頭ハッシュ)
+  8  4  base_fingerprint (uint32; 適用先 base の全内容ハッシュ。定義は §4.6「base_fingerprint の定義」)
   12 4  op_count (uint32)
 
 op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個が連続。到着順 append-only）
@@ -306,6 +306,21 @@ op フレーム列（ヘッダ直後 = オフセット 16 から、op_count 個�
 > 計算で順に辿る**（`10 + key_len + surface_len`）。キー順にはソートしない（同一
 > `(lower_key, surface)` に複数フレームが現れうる＝後勝ち）。**ファイル上の二分探索はしない**
 > （下記のメモリ内索引で引く）。
+
+**`base_fingerprint` の定義**:
+
+`base_fingerprint` は overlay がどの base に対する差分かを識別する。**base の全内容に対する
+32-bit ハッシュ**（FNV-1a 等）で定義する。対象は base ファイルの `version` + `entry_count` +
+`generation` + **全レコード配列 + 全 string pool**（= ヘッダ予約以外の全実体）。
+
+- **「先頭レコードのみ」や「count だけ」では不十分**: 同一 `version`/`entry_count` で先頭が
+  不変でも後方エントリだけ差し替えた base 再生成（**コンパクション外での再バンドル / TSV 再
+  コンパイル**）を検出できず、古い overlay の tombstone/upsert が新 base に誤適用され、正規
+  エントリを隠す/上書きする。よって**全内容ハッシュ**にして、どのエントリが変わっても
+  fingerprint が変わるようにする。
+- 算出コストは base 1 パス（数 MB で ms オーダ）で、overlay が存在するときのみ行えばよい。
+- 32-bit は事故的不一致検出が目的（敵対的衝突は非対象）。衝突を嫌う場合は `generation` 併用
+  で更に弁別できる（コンパクション由来の変化は generation でも捕捉）。
 
 **メモリ内索引（overlay の読み取り構造）**:
 
@@ -581,6 +596,9 @@ CommitObservationRequest{
   `base_fingerprint` を**新 base の値に更新**すること、更新後に append → reload しても fingerprint
   一致で overlay が破棄されず追記語が残ること（旧 fingerprint のまま `op_count=0` だけにすると
   reload で破棄される回帰を防ぐ。§4.7）。
+- **base 再生成の検出（全内容 fingerprint）** (host テスト): base を**同一 `version`/`entry_count`・
+  先頭レコード不変で後方エントリだけ差し替え**て再生成すると `base_fingerprint` が変わり、
+  古い overlay が不一致で破棄されること（先頭/件数のみのハッシュなら見逃す回帰を防ぐ。§4.6）。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryCandidates` の `raw_romaji` /
   `english_candidates` フィールド、候補 `tag` の build/parse 往復。
 - **学習** (`learning/tests`): 英単語確定で reading=生ローマ字として記録され、かな漢字

@@ -166,10 +166,12 @@ private:
 ### 2.4 動作分岐
 
 - `ui_less_mode_ == false`: 既存の自前 `CandidateWindow::Show` を呼ぶ
-- `ui_less_mode_ == true`: `BeginUIElement(elem, &pbShown)` を呼び、OS に通知
+- `ui_less_mode_ == true`: `BeginUIElement(elem, &pbShow, &uiElementId)` を呼ぶ。
+  3 引数は順に `pElement`（UI 要素）/ `pbShow`（アプリが TIP UI を許可するかの
+  返却。§2.6 参照）/ `pdwUIElementId`（OS 側 UI 要素 ID 返却）
 
-UI 要素 ID は ITfUIElementMgr に格納。`Show(true)` 時に OS が `GetString` 等を
-ポーリングして自前 UI を描画する。
+UI 要素 ID は ITfUIElementMgr に格納。`pbShow == TRUE` で TIP が自前 UI を出す
+場合、`Show(true)` を経て OS が `GetString` 等をポーリングしつつ表示が継続する。
 
 ### 2.5 受け入れ条件
 

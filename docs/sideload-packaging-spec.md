@@ -8,7 +8,38 @@
 
 ## 1. MSIX サイドロード（M28）
 
-### 1.1 AppxManifest.xml
+> **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
+> Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
+> は「外部位置（external location / sparse package）向け」と明記されており、
+> 通常の `.msix` では install location ACL により **外部クライアント（ctfmon
+> 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 例は
+> 暫定参考であり、M28 着手前に下表のいずれかへ確定する必要がある。Linear
+> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡。
+
+### 1.0 TIP 配布経路 3 候補
+
+| 経路 | DLL ロード可否 | 配布形態 | OS 要件 | 評価 |
+|---|---|---|---|---|
+| A. **external-location packaging (sparse package)** + 既存 `regsvr32` 経路 | ◎ 外部から in-proc ロード可 | sparse manifest + 自前 installer（or xcopy） | Win10 2004 (19041) / Win11 21H2+ | 推奨候補。TIP DLL を MSIX 外に置けば従来の `InprocServer32` レジストリで動く |
+| B. **通常 `.msix` + `com4:InProcessServer`** | ✗ ACL でブロックされる可能性大 | フル MSIX | Win10 21H2 server (20348+) / Win11 21H2+ | Microsoft が「外部位置向け」と明記。通常 MSIX では動かない事例あり |
+| C. **通常 `.msix` + `com4:SurrogateServer`**（[ClassReference Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-inprocessserverclassreference#remarks) が推奨） | △ out-of-proc 経路。TIP の標準的 in-proc 活性化と semantics が異なる | フル MSIX | Win10 21H2 server / Win11 21H2+ | runFullTrust 下で COM 活性化は確実だが、TIP 動作と整合するか要検証 |
+
+> 補足: D ルートとして **WiX/MSI installer** で従来の `regsvr32` 経路（§4）を
+> 使う選択肢もある。MSIX 不可環境（LTSC 等）向けには結局 §4 を持つので、
+> v1.0 は §4 / WiX で確定 + §1 は M28 PoC へ送る選択もあり得る。
+
+### 1.1 AppxManifest.xml（Option B の参考例。M28 PoC で要確定）
+
+> 以下は Option B（通常 MSIX + `com4:InProcessServer`）の schema-valid な
+> 雛形である。**この XML 単体ではアクティベーションが成立しない可能性**を
+> 上記 §1.0 で示したため、M28 着手時に Option A への切替を含めた PoC で
+> 確定すること。schema validation の観点では以下 4 点を満たす:
+>
+> * `com4:Extension` / `com4:InProcessServer` は **Win10 build 20348+** を要求
+>   するので、`MinVersion="10.0.20348.0"` まで引き上げる
+> * `IgnorableNamespaces` に `com4` を追加
+> * `com4:Class` の `Virtualization` は **必須属性**（`enabled` or `disabled`）
+> * `com4:InProcessServerDll` は **必須**（`Path` + `ProcessorArchitecture`）
 
 `pkg/msix/AppxManifest.xml`（新規）：
 
@@ -18,8 +49,9 @@
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
     xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
     xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-    IgnorableNamespaces="uap uap3 rescap">
+    IgnorableNamespaces="uap uap3 com4 rescap">
 
   <Identity Name="dolquis.azooKey"
             Publisher="CN=dolquis"
@@ -33,8 +65,11 @@
   </Properties>
 
   <Dependencies>
+    <!-- com4:Extension / com4:InProcessServer は Windows 10 build 20348 以上を
+         要求するため MinVersion を引き上げる。Win10 22H2 (build 19045) では
+         schema validation で reject される。 -->
     <TargetDeviceFamily Name="Windows.Desktop"
-                       MinVersion="10.0.19041.0"
+                       MinVersion="10.0.20348.0"
                        MaxVersionTested="10.0.22631.0" />
   </Dependencies>
 
@@ -54,26 +89,22 @@
           </uap3:AppExecutionAlias>
         </uap3:Extension>
 
-        <!-- TIP の COM 登録（in-proc DLL なので InProcessServer 必須。
-             SurrogateServer は別 EXE で動く out-of-proc サーバ用なので NG）。
-             com4: 名前空間は Build 20348+ を要求するが、対応する MSIX manifest
-             バリデーションが厳しく、ProgId と CLSID 整合性をチェックできる。
-             min OS が 19041 のままなら com2: で fallback。 -->
-        <com4:Extension Category="windows.comServer"
-                        xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4">
+        <!-- TIP の COM 登録（Option B 参考例。§1.0 の制限を再確認のこと）。 -->
+        <com4:Extension Category="windows.comServer">
           <com4:ComServer>
             <com4:InProcessServer>
-              <!-- DLL パスは `InProcessServerDll` 子要素で明示する。`com4:Class` には
-                   Path 属性が無く、`com4:InProcessServer` 直下の `Path` 属性は optional
-                   なので、ProcessorArchitecture も一緒に書ける `InProcessServerDll` を
-                   採用する。 -->
+              <!-- `com4:Class` には Path 属性が無い。DLL パスは
+                   `com4:InProcessServerDll` 子要素で明示する（Path +
+                   ProcessorArchitecture とも必須）。 -->
               <com4:InProcessServerDll Path="azookey_tsf_tip.dll"
                                        ProcessorArchitecture="x64" />
               <!-- ThreadingModel の許容値は Both / STA / MTA / MainSTA / Neutral
                    ("Apartment" はクラシックレジストリ値で MSIX schema では invalid)。
-                   TIP は TSF の standard STA で動作する。 -->
+                   TIP は TSF の standard STA で動作する。Virtualization は
+                   `com4:Class` で必須属性、classic COM 互換のため "disabled"。 -->
               <com4:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
-                          ThreadingModel="STA" />
+                          ThreadingModel="STA"
+                          Virtualization="disabled" />
             </com4:InProcessServer>
           </com4:ComServer>
         </com4:Extension>
@@ -98,7 +129,7 @@
 `Class Id` と `Profile GUID` は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid`
 / `kProfileGuid` と一致させる。
 
-#### MSIX `comServer` の AAP（Activate As Package）挙動
+#### MSIX `comServer` の AAP（Activate As Package）挙動と既知制限
 
 MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な COM サーバと異な
 り **Activate As Package (AAP)** で活性化される。具体的には:
@@ -107,9 +138,23 @@ MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な C
 * `runFullTrust` capability を宣言した本パッケージでは追加の制限なく動作する
 * `RunAs` 等の代替活性化挙動は **サポートされない**（[`com4:ComServer` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-comserver#remarks)）
 
+**ただし in-proc サーバの DLL ロードに既知制限**:
+
+* `com4:InProcessServer` は「**packages with external location** での利用が
+  想定されており、通常 MSIX では install location の ACL により外部クライアント
+  が DLL をロードできない場合がある」（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）
+* TSF / ctfmon は TIP DLL を外部クライアントとしてロードするので、この制限に
+  直撃する可能性が高い。Option A（sparse package + 外部 DLL 配置）への切替を
+  M28 着手時に PoC で検証する
+* [`com4:InProcessServerClassReference` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-inprocessserverclassreference#remarks) は packaged app では
+  runFullTrust + SurrogateServer のみの登録（Option C）を推奨。ただし TIP は
+  in-proc 活性化が前提なので surrogate にすると挙動が変わる可能性がある
+
 TIP 側のレジストリ登録（`DllRegisterServer` 内の HKCU `Software\Classes\CLSID\...`）
 は MSIX 経路では使われない。MSIX manifest が registry を上書きする形になるた
 め、TIP 側の自己登録ロジックは MSIX 同梱時に動かないことを前提に書く。
+**ただし Option A（external location）を採用する場合は逆に従来の `regsvr32`
+経路で `InprocServer32` を登録するため、TIP 側自己登録ロジックがそのまま使える**。
 
 #### TSF Profile 登録のライフサイクル
 

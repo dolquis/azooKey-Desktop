@@ -648,8 +648,9 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 - **mozc 辞書**（BSD-3-Clause）は採用しない（base + SudachiDict で充足）。将来
   base 強化が必要になった場合の代替候補としてのみ記録する。
 - 判定理由の核心は「**Apache-2.0 / BSD-3-Clause（SudachiDict 内包 UniDic）/
-  CC0 / CC-BY のクリーンソースのみを同梱し、上流データに個別条件が付く NEologd
-  は同梱せず opt-in の別 pack DL に分離する**」。
+  CC0 / CC-BY / 権利主張なし（パブリックドメイン相当）のクリーンソースのみを
+  同梱し、上流データに個別条件が付く NEologd は同梱せず opt-in の別 pack DL に
+  分離する**」。
   これにより「ライセンス未確認のまま同梱した場合の配布差し止め」リスクを回避する。
 
 ### 14.10 パッケージング方式と第三者帰属（ThirdPartyNotices）
@@ -807,8 +808,10 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   チェックとする
 - 配布 MSIX に同梱する辞書（`base` / `sudachi`(core) / `named_entity` /
   `technical_terms`）が全て再配布可ライセンス（**Apache-2.0 / BSD-3-Clause /
-  CC0 / CC-BY-4.0**）であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属
-  表示される（§14.9。BSD-3-Clause は SudachiDict が内包する UniDic 由来）
+  CC0 / CC-BY-4.0 / 権利主張なし（パブリックドメイン相当。例: 日本郵便 郵便
+  番号データ）**）であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属
+  表示される（§14.9。BSD-3-Clause は SudachiDict が内包する UniDic 由来、
+  権利主張なしは `named_entity` の郵便データ由来）
 - `neologd_lexicon`（standalone mecab-ipadic-NEologd パック）は MSIX 非同梱
   （別 pack DL・M36-B の SHA256 検証・既定無効）。MSIX 構築の配布ガードで
   **NEologd 単体パック**の混入なしが CI で緑（SudachiDict 内包の NEologd 由来

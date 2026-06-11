@@ -37,6 +37,15 @@ TEST(RomajiKanaConverterTest, FeedAndFlush) {
 
   converter.Reset();
   EXPECT_EQ(FeedAll(converter, "ko-hi-"), "こーひー");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "janai"), "じゃない");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "juku"), "じゅく");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "jyou"), "じょう");
 }
 
 TEST(RomajiKanaConverterTest, Preview) {
@@ -49,6 +58,13 @@ TEST(RomajiKanaConverterTest, Preview) {
   EXPECT_EQ(RomajiKanaConverter::Preview("konnichiha"), "こんにちは");
   EXPECT_EQ(RomajiKanaConverter::Preview("gakkou"), "がっこう");
   EXPECT_EQ(RomajiKanaConverter::Preview("ko-"), "こー");
+  EXPECT_EQ(RomajiKanaConverter::Preview("ja"), "じゃ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("ju"), "じゅ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("jo"), "じょ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("je"), "じぇ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("jya"), "じゃ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("jyu"), "じゅ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("jyo"), "じょ");
 }
 
 TEST(RomajiKanaConverterTest, ConvertForCommit) {
@@ -57,4 +73,8 @@ TEST(RomajiKanaConverterTest, ConvertForCommit) {
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("na"), "な");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("konn"), "こん");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("me-ru"), "めーる");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("janken"), "じゃんけん");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("juu"), "じゅう");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("jojo"), "じょじょ");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("jenga"), "じぇんが");
 }

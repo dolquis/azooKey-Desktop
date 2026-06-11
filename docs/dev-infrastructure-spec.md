@@ -979,6 +979,8 @@ M28（MSIX サイドロード）着手前にアプリ互換性のベースライ
 | C-008 | Undo / Redo が破綻しない | 元に戻る |
 | C-009 | フォーカス移動時に composition が安全に処理される | crash しない |
 | C-010 | Host kill 中も入力が固まらない | DegradedSimple で継続 |
+| C-011 | `Ctrl+A/C/V/L/S`、Alt メニュー、Win キー併用を押す | TIP が食わずアプリ / OS へ通る |
+| C-012 | `ja` / `ju` / `jo` / `jya` / `jyu` / `jyo` を入力 | 「じゃ」「じゅ」「じょ」として preedit / commit できる |
 
 ### 13.4 実装
 

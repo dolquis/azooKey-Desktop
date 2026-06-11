@@ -3,12 +3,47 @@
 #endif
 #include <Windows.h>
 
+#include <array>
+
 #include <gtest/gtest.h>
 #include <msctf.h>
 
 #include "azookey/tsf/TextService.h"
 
 namespace {
+
+class KeyboardStateGuard {
+ public:
+  KeyboardStateGuard() {
+    GetKeyboardState(original_.data());
+    ClearSystemModifiers();
+  }
+
+  ~KeyboardStateGuard() { SetKeyboardState(original_.data()); }
+
+  void SetDown(int vk, bool down) {
+    std::array<BYTE, 256> state{};
+    GetKeyboardState(state.data());
+    const auto index = static_cast<size_t>(vk);
+    state[index] =
+        down ? static_cast<BYTE>(state[index] | 0x80) : static_cast<BYTE>(state[index] & 0x7f);
+    SetKeyboardState(state.data());
+  }
+
+  void ClearSystemModifiers() {
+    SetDown(VK_CONTROL, false);
+    SetDown(VK_LCONTROL, false);
+    SetDown(VK_RCONTROL, false);
+    SetDown(VK_MENU, false);
+    SetDown(VK_LMENU, false);
+    SetDown(VK_RMENU, false);
+    SetDown(VK_LWIN, false);
+    SetDown(VK_RWIN, false);
+  }
+
+ private:
+  std::array<BYTE, 256> original_{};
+};
 
 class NoopContext final : public ITfContext {
  public:
@@ -153,6 +188,7 @@ class TextServiceHarness {
     return eaten;
   }
 
+  KeyboardStateGuard keyboard_state;
   NoopContext context;
   azookey::tsf::TextService service;
 };
@@ -249,4 +285,66 @@ TEST(TsfTipOnKeyDownPreeditTest, NonPreeditControlKeysAreNotEatenWithoutCandidat
   EXPECT_FALSE(h.Press(VK_ESCAPE));
   EXPECT_FALSE(h.TestPress('1'));
   EXPECT_FALSE(h.Press('1'));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SystemModifiedKeysPassThroughWithoutStartingPreedit) {
+  TextServiceHarness h;
+
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  constexpr WPARAM kCtrlShortcutKeys[] = {'A', 'C', 'L', 'S', 'V'};
+  for (WPARAM key : kCtrlShortcutKeys) {
+    EXPECT_FALSE(h.TestPress(key));
+    EXPECT_FALSE(h.Press(key));
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.context.request_count, 0);
+
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  h.keyboard_state.SetDown(VK_MENU, true);
+  EXPECT_FALSE(h.TestPress(VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.TestPress('F'));
+  EXPECT_FALSE(h.Press('F'));
+  h.keyboard_state.SetDown(VK_MENU, false);
+
+  h.keyboard_state.SetDown(VK_LWIN, true);
+  EXPECT_FALSE(h.TestPress(VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.TestPress('L'));
+  EXPECT_FALSE(h.Press('L'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SystemModifiedKeysPassThroughDuringPreedit) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  const int request_count = h.context.request_count;
+
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_FALSE(h.TestPress('C'));
+  EXPECT_FALSE(h.Press('C'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.context.request_count, request_count);
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+
+  h.keyboard_state.SetDown(VK_MENU, true);
+  EXPECT_FALSE(h.TestPress(VK_SPACE));
+  EXPECT_FALSE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.context.request_count, request_count);
+  h.keyboard_state.SetDown(VK_MENU, false);
+
+  h.keyboard_state.SetDown(VK_RWIN, true);
+  EXPECT_FALSE(h.TestPress('L'));
+  EXPECT_FALSE(h.Press('L'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.context.request_count, request_count);
+  h.keyboard_state.SetDown(VK_RWIN, false);
+
+  EXPECT_TRUE(h.TestPress('A'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"かあ");
 }

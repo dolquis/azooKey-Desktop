@@ -421,7 +421,7 @@ struct ResolveNewWordResponse { bool ok{false}; };
 DictionaryStore
   ├─ base_lexicon            (SimpleConverter 内蔵, bundled)
   ├─ sudachi_lexicon         (bundled。配布判定 §14.9 / §14.10)
-  ├─ neologd_lexicon         (別 pack DL・同梱不可, M36-B が更新。§14.9)
+  ├─ neologd_lexicon         (別 pack DL・同梱不可, follow-up で取り込み。§14.9/§14.10)
   ├─ named_entity_lexicon    (bundled curated)
   ├─ technical_terms_lexicon (bundled curated)
   ├─ user_dictionary         (M9 の UserDictionary, local-only)
@@ -527,7 +527,7 @@ key・別 namespace の辞書層内因子であり、二重適用しない。
 | 種類 | 更新方法 | M |
 |---|---|---|
 | bundled dictionary | アプリ更新時に同梱 | M28 / M53 |
-| neologism pack | 任意更新（M36-B が SHA256 検証） | M36-B |
+| neologism pack（`neologd_lexicon`） | 任意更新（SHA256 検証 DL。M36-B/M32 の `HttpDownloader` 基盤を再利用） | neologd pack follow-up（§14.10） |
 | technical pack | 任意更新（bundled or download） | M53 |
 | user dictionary | 即時反映 | M9 |
 | auto_words | 即時反映（M36-A の confirm / auto） | M36-A |
@@ -624,7 +624,7 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 |---|---|---|---|---|
 | `base_lexicon` | azooKey_dictionary_storage | Apache-2.0 | **同梱可**（既存） | azooKey 内蔵辞書。LICENSE / NOTICE を ThirdPartyNotices に保持 |
 | `sudachi_lexicon` | SudachiDict（`core` 版） | Apache-2.0（内包: UniDic=BSD-3-Clause / NEologd 由来データ） | **同梱可** | LEGAL に基づき配布物全体が Apache-2.0。UniDic の BSD-3 著作権表示に加え、SudachiDict NOTICE（内包 NEologd 由来データの Hatena / 郵便 / 駅名 / 人名 帰属）も帰属に伝播（§14.10）。サイズの観点で `full` ではなく `core` を採用 |
-| `neologd_lexicon` | mecab-ipadic-NEologd | Apache-2.0（ただし上流データに個別条件: Hatena キーワード=はてな社条件・要帰属 / 駅名 / 人名 / 郵便 等） | **別 pack DL（同梱不可）** | サイズ大 + 上流データの provenance が個別条件付き。MSIX に含めず M36-B の SHA256 検証 DL（既定無効）。DL 時に上流ライセンス/帰属を提示 |
+| `neologd_lexicon` | mecab-ipadic-NEologd | Apache-2.0（ただし上流データに個別条件: Hatena キーワード=はてな社条件・要帰属 / 駅名 / 人名 / 郵便 等） | **別 pack DL（同梱不可）** | サイズ大 + 上流データの provenance が個別条件付き。MSIX に含めず SHA256 検証 DL（既定無効）。取り込み経路は §14.10 の neologd pack follow-up（M36-B とは別作業）。DL 時に上流ライセンス/帰属を提示 |
 | `named_entity_lexicon` | Wikidata（CC0）+ GeoNames（CC-BY-4.0）+ 日本郵便 郵便番号データ | CC0 / CC-BY-4.0 / 権利主張なし | **同梱可**（curated 派生） | Wikidata=CC0（人名/組織/製品 + 読み）。GeoNames=CC-BY-4.0（**帰属必須**）。CC-BY-SA の Wikipedia 本文は **不使用**（share-alike 回避）。郵便データは権利主張なし（帰属歓迎） |
 | `technical_terms_lexicon` | プロジェクト自作 + CC0/CC-BY 上流 | Apache-2.0（自作分）/ 上流に従う | **同梱可** | リポジトリ内で手入れ。外部由来分は上流ライセンス・帰属を ThirdPartyNotices に記載 |
 | `user_dictionary` / `auto_words` / `app_specific_dictionary` | ユーザー生成 | N/A（ユーザーデータ） | **非配布**（ローカルのみ） | 配布物に含めない。`%LOCALAPPDATA%` に保存（`docs/sideload-packaging-spec.md` §1.4 / §9） |
@@ -658,8 +658,22 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 | 方式 | 対象 layer | 配置 | 更新 |
 |---|---|---|---|
 | **同梱（bundled）** | base / sudachi(core) / named_entity / technical_terms | MSIX 内 read-only データ（`docs/sideload-packaging-spec.md` §1） | アプリ更新時（§14.6） |
-| **別 pack DL（optional）** | neologd | 上流 release を SHA256 検証 DL → `%LOCALAPPDATA%\azooKey\packs\` | M36-B（既定無効） |
+| **別 pack DL（optional）** | neologd | SHA256 検証 DL → `%LOCALAPPDATA%\azooKey\packs\` | neologd pack follow-up・既定無効（下記） |
 | **非配布（local-only）** | user / auto_words / app_specific | `%LOCALAPPDATA%\azooKey\data\` | ランタイム |
+
+**`neologd_lexicon` pack の取り込み経路（follow-up。M36-B とは別作業）**:
+M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
+`AutoWordStore` へ取り込む経路であり、**mecab-ipadic-NEologd を `DictionaryStore`
+の `neologd_lexicon` 層へ入れる経路ではない**。`neologd_lexicon` pack は次を要する
+**別 follow-up**（Linear で別課題化）であり、M53 v1 / M36-B の成果物には含めない:
+
+- **pack 形式**: mecab-ipadic-NEologd を §14.2 のエントリ形式へ変換した
+  コンパイル済み DictionaryStore 層アーティファクト（生 NEologd ソースではない。
+  ファイル名/マニフェストは `neologd_lexicon.*` 識別子）。
+- **DL/検証**: M36-B / M32 が共有する `HttpDownloader`（§5-4）+ SHA256 検証
+  基盤を**再利用**して `%LOCALAPPDATA%\azooKey\packs\` へ取得（既定無効・opt-in）。
+- **ローダ**: pack を `neologd_lexicon` 層としてロードする `DictionaryStore`
+  ローダ（§14.7）。M36-B の `AutoWordStore::IngestTrending` とは別経路。
 
 帰属（**ThirdPartyNotices**）:
 
@@ -793,9 +807,10 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   `sudachi_lexicon`（core 版。NEologd 由来データを Apache-2.0 で内包）+
   `base_lexicon`** の範囲で baseline 比改善。**NEologd 本体（`neologd_lexicon`）は
   同梱しない**ため v1 のベンチ対象外（§14.9）。`neologd_lexicon`（別 DL
-  pack）有効時の追加新語改善は **M36-B 完了時のみ**、当該 pack を有効化した
-  構成で評価する（M36-B follow-up チェック。`plans/windows-port-roadmap.md`
-  M53 entry と整合）。本項は §14.10 の配布ガード（standalone NEologd
+  pack）有効時の追加新語改善は **neologd pack follow-up（§14.10。M36-B とは
+  別作業）完了時のみ**、当該 pack を有効化した構成で評価する（follow-up
+  チェック。`plans/windows-port-roadmap.md` M53 entry と整合）。本項は §14.10
+  の配布ガード（standalone NEologd
   単体パック非同梱。SudachiDict 内包の NEologd 由来データは対象外）と
   矛盾しない（v1 ベンチは同梱の sudachi/base を測る）
 - 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
@@ -813,7 +828,8 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   表示される（§14.9。BSD-3-Clause は SudachiDict が内包する UniDic 由来、
   権利主張なしは `named_entity` の郵便データ由来）
 - `neologd_lexicon`（standalone mecab-ipadic-NEologd パック）は MSIX 非同梱
-  （別 pack DL・M36-B の SHA256 検証・既定無効）。MSIX 構築の配布ガードで
+  （別 pack DL・SHA256 検証・既定無効。取り込みは §14.10 の neologd pack
+  follow-up 経路。M36-B とは別作業）。MSIX 構築の配布ガードで
   **NEologd 単体パック**の混入なしが CI で緑（SudachiDict 内包の NEologd 由来
   データは対象外。§14.10）
 - GeoNames 由来データを同梱する場合、設定アプリのライセンス画面に CC-BY-4.0

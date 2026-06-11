@@ -665,8 +665,7 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
 `AutoWordStore` へ取り込む経路であり、**mecab-ipadic-NEologd を `DictionaryStore`
 の `neologd_lexicon` 層へ入れる経路ではない**。`neologd_lexicon` pack は次を要する
-**別 follow-up**（Linear DEV-159 で起票済み）であり、M53 v1 / M36-B の成果物には
-含めない:
+**別 follow-up**であり、M53 v1 / M36-B の成果物には含めない（追跡は Linear）:
 
 - **pack 形式**: mecab-ipadic-NEologd を §14.2 のエントリ形式へ変換した
   コンパイル済み DictionaryStore 層アーティファクト（生 NEologd ソースではない。
@@ -729,8 +728,18 @@ M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
 |---|---|---|
 | `base_frequency` | エントリ `frequency`（§14.2） | 0.00–1.00 |
 | `exact_reading_bonus` | 完全一致 +0.10 / alias 一致 +0.05 / 緩い長音一致 +0.02（§14.3 の評価順） | 0.00–0.10 |
-| `category_bonus` | `clamp(categoryBoosts[category] − 1.0, 0.00, 0.20)`（§14.8。`named_entity` umbrella 規則を適用）。**boost-only**: `categoryBoosts` は [1.0, 1.2] に検証し降格に使わない | 0.00–0.20 |
+| `category_bonus` | `clamp(max_c(resolve(c)) − 1.0, 0.00, 0.20)`。エントリの `category[]`（§14.2。§14.12 dedup で union）に対し各 `c` を `resolve(c)` へ解決し**最大値**を採る（集約規則）。**boost-only**: `categoryBoosts` は [1.0, 1.2] に検証し降格に使わない | 0.00–0.20 |
 | `obsolete_penalty` | `0.10 × (1 − 2^(−Δdays / half_life))`。Δdays = 最終使用からの日数。half_life は §14.4 category（一般 30 / 固有名詞 90 / 技術 120 / 新語 60 日）。**usage timestamp を持つ層（user / auto_words / app_specific）のみ**適用。静的同梱層は 0 | 0.00–0.10 |
+
+`category_bonus` の **集約規則**: エントリが複数 category を持つ場合
+（§14.2 の `category[]` 配列、§14.12 の dedup union）、各 category `c` を
+`resolve(c)` = `categoryBoosts[c]`（**§14.8 の具体値優先**。未設定かつ
+named_entity 系（`person_name` / `place_name` / `station_name` / `product_name` /
+`company_org`）なら umbrella `categoryBoosts.named_entity`、それ以外で未設定なら
+`1.0`）へ解決し、その **最大値**を採る（first/sum ではなく max。決定的・再現可能）。
+例: `category=["technical","proper_noun"]` で `categoryBoosts.technical=1.0`・
+`proper_noun` 未設定（umbrella 非該当）→ `max(1.0, 1.0)=1.0` → `category_bonus=0.00`
+（§14.11 worked example と整合）。
 
 M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` の因子では
 **ない**（§14.5）。M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の

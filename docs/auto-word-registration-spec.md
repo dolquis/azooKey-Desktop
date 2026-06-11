@@ -658,8 +658,14 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 - **GeoNames を含む場合は CC-BY-4.0 の帰属表示が必須**（リンク付きクレジット）。
 - NEologd は同梱しないため ThirdPartyNotices には載せない。別 pack DL 時に上流
   ライセンス/帰属を DL 画面で提示する。
-- **配布ガード**（受け入れ条件 §14.13）: MSIX 構築時に同梱アセットへ NEologd
-  由来ファイルが混入しないことを CI でチェックする。
+- **配布ガード**（受け入れ条件 §14.13）: MSIX 構築時に同梱アセットへ
+  **standalone の mecab-ipadic-NEologd パック（`neologd_lexicon` 層アセット）**
+  が混入しないことを CI でチェックする。ガードの対象は NEologd 単体パックで
+  あり、**SudachiDict(core) が Apache-2.0 で内包する NEologd 由来データは対象外**
+  （SudachiDict は配布物全体が Apache-2.0 であり同梱可、§14.9）。判定は
+  ファイル名/マニフェスト（`neologd_lexicon.*` 等の pack 識別子）で行い、
+  「NEologd 由来の語彙が含まれるか」ではなく「NEologd 単体パックが同梱物に
+  あるか」で評価する。
 
 ### 14.11 レイヤ優先度と dictionary_score 係数の確定
 
@@ -688,7 +694,7 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 | `base_frequency` | エントリ `frequency`（§14.2） | 0.00–1.00 |
 | `exact_reading_bonus` | 完全一致 +0.10 / alias 一致 +0.05 / 緩い長音一致 +0.02（§14.3 の評価順） | 0.00–0.10 |
 | `category_bonus` | `settings.dictionary.categoryBoosts[category] − 1.0`（§14.8。`named_entity` umbrella 規則を適用） | 0.00–0.20 |
-| `app_profile_bonus` | `clamp((candidateTagBoosts[tag] − 1.0) × 0.4, −0.40, +0.40)`（§14.12 の category→tag を経由。候補タグ namespace） | −0.40–+0.40 |
+| `app_profile_bonus` | `min(0.40, (max(1.0, candidateTagBoosts[tag]) − 1.0) × 0.4)`（§14.12 の category→tag を経由。候補タグ namespace）。**boost-only**: `candidateTagBoosts` は降格に使わない（`max(1.0, …)` で 1.0 未満を無効化）。`docs/app-profile-spec.md` §7 の boost-only 契約と整合 | 0.00–+0.40 |
 | `obsolete_penalty` | `0.10 × (1 − 2^(−Δdays / half_life))`。Δdays = 最終使用からの日数。half_life は §14.4 category（一般 30 / 固有名詞 90 / 技術 120 / 新語 60 日）。**usage timestamp を持つ層（user / auto_words / app_specific）のみ**適用。静的同梱層は 0 | 0.00–0.10 |
 
 worked example（`code.exe` 前面・`candidateTagBoosts.Technical = 1.5`、エントリ
@@ -748,8 +754,9 @@ dictionary_score
   同梱しない**ため v1 のベンチ対象外（§14.9）。`neologd_lexicon`（別 DL
   pack）有効時の追加新語改善は **M36-B 完了時のみ**、当該 pack を有効化した
   構成で評価する（M36-B follow-up チェック。`plans/windows-port-roadmap.md`
-  M53 entry と整合）。本項は §14.10 の配布ガード（NEologd 由来ファイル
-  非同梱）と矛盾しない（v1 ベンチは同梱の sudachi/base を測る）
+  M53 entry と整合）。本項は §14.10 の配布ガード（standalone NEologd
+  単体パック非同梱。SudachiDict 内包の NEologd 由来データは対象外）と
+  矛盾しない（v1 ベンチは同梱の sudachi/base を測る）
 - 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
   として読み込まれる（後方互換）
 - 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる
@@ -761,9 +768,10 @@ dictionary_score
 - 配布 MSIX に同梱する辞書（`base` / `sudachi`(core) / `named_entity` /
   `technical_terms`）が全て再配布可ライセンス（Apache-2.0 / CC0 / CC-BY-4.0）
   であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属表示される（§14.9）
-- `neologd_lexicon` は MSIX 非同梱（別 pack DL・M36-B の SHA256 検証・既定
-  無効）。MSIX 構築の配布ガードで NEologd 由来ファイルの混入なしが CI で緑
-  （§14.10）
+- `neologd_lexicon`（standalone mecab-ipadic-NEologd パック）は MSIX 非同梱
+  （別 pack DL・M36-B の SHA256 検証・既定無効）。MSIX 構築の配布ガードで
+  **NEologd 単体パック**の混入なしが CI で緑（SudachiDict 内包の NEologd 由来
+  データは対象外。§14.10）
 - GeoNames 由来データを同梱する場合、設定アプリのライセンス画面に CC-BY-4.0
   の帰属が表示される（§14.10）
 - `dictionary_score` の確定係数（§14.11）が実装の既定値と一致し、worked

@@ -1728,8 +1728,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     当該 pack 有効構成にて確認）
   - 同梱辞書のライセンス遵守（`docs/auto-word-registration-spec.md` §14.9
     の配布判定に従う。同梱は Apache-2.0 / CC0 / CC-BY-4.0 のみ、NEologd は
-    同梱せず別 pack DL）。NEologd 由来ファイル混入なしを MSIX 構築の配布
-    ガードで CI チェック（§14.10）
+    同梱せず別 pack DL）。**standalone NEologd 単体パック**の混入なしを
+    MSIX 構築の配布ガードで CI チェック（SudachiDict 内包の NEologd 由来
+    データは対象外。§14.10）
 - **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14。
   ライセンス & 配布判定 §14.9 / パッケージング §14.10 / スコア係数 §14.11 /
   source tagging §14.12 / 受け入れ条件 §14.13）

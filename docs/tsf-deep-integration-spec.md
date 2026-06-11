@@ -177,20 +177,26 @@ UI 要素 ID は ITfUIElementMgr に格納。`Show(true)` 時に OS が `GetStri
   出ず、Windows 11 標準の候補 UI に候補が表示される
 - それ以外のアプリでは従来通り `CandidateWindow` が出る
 
-### 2.6 `pbShown` の per-call 切替
+### 2.6 `pbShow` の per-call 切替
 
-`ITfUIElementMgr::BeginUIElement(IUnknown* pElement, BOOL* pbShown, DWORD* pdwUIElementId)`
-は呼び出しごとに `pbShown` の値が変わり得る。アプリ側が `ITfUIElementSink::
-BeginUIElement` で UI 表示可否を選択するため、TIP は **per-call** で:
+`ITfUIElementMgr::BeginUIElement(IUnknown* pElement, BOOL* pbShow, DWORD* pdwUIElementId)`
+は呼び出しごとに `pbShow` の値が変わり得る。アプリ側が
+`ITfUIElementSink::BeginUIElement` の `pbShow` で **TIP に描かせるか / アプリが
+描くか** を返すため、TIP は **per-call** で次のように切り替える（[`ITfUIElementSink::BeginUIElement`](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itfuielementsink-beginuielement) パラメータ定義より）:
 
-| `pbShown` 戻り値 | TIP 側挙動 |
-|---|---|
-| `TRUE`（アプリが描画する） | 自前 HWND を出さない。`ITfCandidateListUIElement::GetString` 等の問い合わせに応答 |
-| `FALSE`（アプリが拒否、TIP が描画） | `UpdateUIElement` で OS にも更新通知しつつ、自前 HWND を表示 |
+| `pbShow` 戻り値 | アプリ側の意思 | TIP 側挙動 |
+|---|---|---|
+| `TRUE`（既定 / アプリが描画しない） | アプリは UI を描かない。TIP に自前 UI を出してよい | 自前 HWND を表示し、以降は更新が無くてもよい（OS は `UpdateUIElement` を要求しない） |
+| `FALSE`（アプリが代替描画する） | アプリが `ITfCandidateListUIElement` 等を QI して自前で描画する | 自前 HWND は出さない。`UpdateUIElement` を呼んでアプリに更新を通知 |
 
-を切り替える。`UpdateUIElement` は `pbShown == FALSE` の場合のみ呼ぶ（[フローチャート](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview#the-flow-chart-of-uilessmode)）。
+`UpdateUIElement` は `pbShow == FALSE` の場合に呼ぶ（[フローチャート](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview#the-flow-chart-of-uilessmode)：「TIP must calls UpdateUIElement() after BeginUIElement() returns FALSE in *pbShow」）。
 
-`EndUIElement` は `pbShown` の値にかかわらず呼ぶ（UI 要素のライフサイクル管理用）。
+`EndUIElement` は `pbShow` の値にかかわらず呼ぶ（UI 要素のライフサイクル管理用）。
+
+なお Microsoft Learn では `pbShow` と `pbShown` の表記が混在する。`ITfUIElementSink::
+BeginUIElement` の正式パラメータ名は `pbShow`（API リファレンス）、`ITfUIElementMgr::
+BeginUIElement` のフローチャート解説では `*pbShown` と書かれる。本書では `pbShow` で
+統一する。
 
 ### 2.7 `ITfIntegratableCandidateListUIElement`（Win11 Search 統合・任意）
 

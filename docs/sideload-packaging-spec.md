@@ -63,8 +63,17 @@
                         xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4">
           <com4:ComServer>
             <com4:InProcessServer>
+              <!-- DLL パスは `InProcessServerDll` 子要素で明示する。`com4:Class` には
+                   Path 属性が無く、`com4:InProcessServer` 直下の `Path` 属性は optional
+                   なので、ProcessorArchitecture も一緒に書ける `InProcessServerDll` を
+                   採用する。 -->
+              <com4:InProcessServerDll Path="azookey_tsf_tip.dll"
+                                       ProcessorArchitecture="x64" />
+              <!-- ThreadingModel の許容値は Both / STA / MTA / MainSTA / Neutral
+                   ("Apartment" はクラシックレジストリ値で MSIX schema では invalid)。
+                   TIP は TSF の standard STA で動作する。 -->
               <com4:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
-                          ThreadingModel="Apartment" />
+                          ThreadingModel="STA" />
             </com4:InProcessServer>
           </com4:ComServer>
         </com4:Extension>

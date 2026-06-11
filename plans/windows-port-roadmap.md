@@ -1723,7 +1723,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - M52 ベンチで neologism カテゴリの top5 が baseline 比で改善する
     （M53 v1 時点では bundled `neologd_lexicon` の範囲で評価。M36-B
     完了による neologd 更新前提の追加改善は M36-B follow-up で確認）
-- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14.9）
+  - 同梱辞書のライセンス遵守（`docs/auto-word-registration-spec.md` §14.9
+    の配布判定に従う。同梱は Apache-2.0 / CC0 / CC-BY-4.0 のみ、NEologd は
+    同梱せず別 pack DL）。NEologd 由来ファイル混入なしを MSIX 構築の配布
+    ガードで CI チェック（§14.10）
+- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14。
+  ライセンス & 配布判定 §14.9 / パッケージング §14.10 / スコア係数 §14.11 /
+  source tagging §14.12 / 受け入れ条件 §14.13）
 
 ### M54: ユーザー学習強化
 

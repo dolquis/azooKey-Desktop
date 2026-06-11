@@ -97,8 +97,8 @@ UI-less mode は本文 §2.1〜§2.5 で扱う full な実装 (M21) と独立に
 1. `ITfTextInputProcessorEx` を実装する（`ITfTextInputProcessor` だけだと UI-less
    mode スレッドで TIP が **activate されない**。Microsoft Learn [UILess Mode
    Overview](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview#how-to-create-uilessmode)）
-2. `ActivateEx` の `dwFlags` で `TF_TMF_UIELEMENTENABLEDONLY` を検出し
-   `ui_less_mode_` を保持
+2. `ITfThreadMgrEx::GetActiveFlags` で `TF_TMF_UIELEMENTENABLEDONLY` を検出し
+   `ui_less_mode_` を保持（フラグ系統の正確な扱いは §2.2・§2.10）
 3. `ITfUIElementMgr::BeginUIElement` の戻り値 `pbShown` を見て自前 HWND を出すか
    抑制するかを切り替え（§2.4・§2.6 参照）
 
@@ -121,13 +121,38 @@ Windows 11 / Office アプリ等で OS 側が候補ウィンドウを描画す�
 TIP 自前の `CandidateWindow` を抑制し、`ITfCandidateListUIElement` 経由で
 OS 側 Suggestion UI に候補を渡す。
 
-### 2.2 ActivateEx の検出
+### 2.2 ActivateEx の検出（フラグ系統と一次情報）
+
+TSF のアクティベーションフラグには 2 系統あり（いずれも msctf.h 定義）、混同し
+やすいので明確化する:
+
+| 系統 | 用途 | 例 |
+|---|---|---|
+| `TF_TMAE_*` | アプリが `ITfThreadMgr2/Ex::ActivateEx` に**渡す入力**フラグ | `TF_TMAE_UIELEMENTENABLEDONLY`, `TF_TMAE_SECUREMODE` |
+| `TF_TMF_*` | `ITfThreadMgr2/Ex::GetActiveFlags` が**返す現在状態** | `TF_TMF_UIELEMENTENABLEDONLY`, `TF_TMF_SECUREMODE` |
+
+重要な注意（[`ITfTextInputProcessorEx::ActivateEx`](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itftextinputprocessorex-activateex) /
+[`ITfThreadMgrEx::GetActiveFlags`](https://learn.microsoft.com/windows/win32/api/msctf/nf-msctf-itfthreadmgrex-getactiveflags)）:
+`ITfTextInputProcessorEx::ActivateEx` の `dwFlags` は公式リファレンス上
+`TF_TMAE_SECUREMODE` / `TF_TMAE_COMLESS` / `TF_TMAE_WOW16` / `TF_TMAE_CONSOLE` のみを
+列挙し、**UIElement 用ビットを明示していない**。したがって UI-less 判定を
+`ActivateEx` の `dwFlags` に依存させるのは脆い。**一次情報として
+`ITfThreadMgrEx::GetActiveFlags` を使い `TF_TMF_UIELEMENTENABLEDONLY` を確認する**
+方式を採る。
 
 ```cpp
 HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
                                 TfClientId tid,
                                 DWORD dwFlags) {
-    ui_less_mode_ = (dwFlags & TF_TMF_UIELEMENTENABLEDONLY) != 0;
+    // dwFlags は UIElement ビットを公式に列挙しないため GetActiveFlags を一次情報に。
+    ui_less_mode_ = false;
+    ITfThreadMgrEx* tmex = nullptr;
+    if (SUCCEEDED(pThreadMgr->QueryInterface(IID_PPV_ARGS(&tmex))) && tmex) {
+        DWORD active = 0;
+        if (SUCCEEDED(tmex->GetActiveFlags(&active)))
+            ui_less_mode_ = (active & TF_TMF_UIELEMENTENABLEDONLY) != 0;
+        tmex->Release();
+    }
     // ...
 }
 ```
@@ -377,19 +402,30 @@ round-trip）で covered できる。
 UI-less か否かを保持していない**ため §2.8 の `pbShow` 分岐の前提（`ui_less_mode_`）
 が満たせない。
 
-**v1.0 で必要な最小実装（M5）**:
+**v1.0 で必要な最小実装（M5）**: UI-less 判定は §2.2 のとおり
+`ITfThreadMgrEx::GetActiveFlags` を一次情報とする（`ActivateEx` の `dwFlags` は
+UIElement ビットを公式に列挙しないため）。
 
 ```cpp
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
-  ui_less_mode_ = (dwFlags & TF_TMF_UIELEMENTENABLEDONLY) != 0;
+  ui_less_mode_ = false;
+  ITfThreadMgrEx* tmex = nullptr;
+  if (SUCCEEDED(ptim->QueryInterface(IID_PPV_ARGS(&tmex))) && tmex) {
+    DWORD active = 0;
+    if (SUCCEEDED(tmex->GetActiveFlags(&active)))
+      ui_less_mode_ = (active & TF_TMF_UIELEMENTENABLEDONLY) != 0;
+    tmex->Release();
+  }
   candidate_ui_.SetUiLessMode(ui_less_mode_);
   // 既存の sink advise / candidate UI 生成 / IPC worker 起動はそのまま
 }
 ```
 
-`TF_TMF_SECUREMODE`（パスワード欄等のセキュア入力）等の他フラグは M46 プライバシー
-/ セーフ入力で扱う。本変更は COM smoke テスト（`ActivateEx(dwFlags =
-TF_TMF_UIELEMENTENABLEDONLY)` で `ui_less_mode_` が true になる）で covered。
+`TF_TMF_SECUREMODE`（パスワード欄等のセキュア入力）等の他フラグも同じ
+`GetActiveFlags` 経由で取得でき、M46 プライバシー / セーフ入力で扱う。本変更は
+COM smoke テスト（モック `ITfThreadMgrEx::GetActiveFlags` が
+`TF_TMF_UIELEMENTENABLEDONLY` を返すとき `ui_less_mode_` が true になる）で
+covered。
 
 ### 2.11 アプリ互換チェックリスト（実機 Win11・`gate:human-required`）
 

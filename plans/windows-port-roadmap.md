@@ -127,8 +127,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - Space で候補表示/次候補へ巡回、↑/↓ で上下移動、1〜9 で直接選択
   - マウス左クリックで即時確定
   - Host 候補リストをリアルタイムで差し替え
-  - UI-less mode 最小契約（`CandidateUiCoordinator`・`ActivateEx` フラグ検出・
-    `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` 登録・`BeginUIElement` 動線）。詳細は
+  - UI-less mode 最小契約（`CandidateUiCoordinator`・UI-less フラグ検出
+    （`ITfThreadMgrEx::GetActiveFlags`）・`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
+    登録・`BeginUIElement` 動線）。詳細は
     `docs/tsf-deep-integration-spec.md` §2.0・§2.8〜§2.11
 - **受け入れ条件**:
   - 「nihongo」入力 → Space で「日本語」等の候補が出る
@@ -324,8 +325,9 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
   → **確定（DEV-97 / D-01）**: 二者択一ではなく「両立 (coexistence)」。
   `ITfCandidateListUIElement`（3-interface 契約）と自前 `WS_POPUP` HWND を両方
   実装し、`ITfUIElementMgr::BeginUIElement` の `pbShow` で per-call に切り替える。
-  v1.0（M5）で最小契約（`ActivateEx` フラグ検出・`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
-  カテゴリ登録・`CandidateUiCoordinator`）まで実装し、M21 で full 実装。詳細は
+  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・
+  `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）まで
+  実装し、M21 で full 実装。詳細は
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - 設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。
 

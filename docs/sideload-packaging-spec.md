@@ -163,15 +163,29 @@ TSF Profile（Language Profile）の登録には **MSIX manifest の専用拡張
 `Unregister` を呼ぶ**しか方法がない。Microsoft の TSF ドキュメント [Text Service
 Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registration) も同じ規約。
 
-* MSIX 経路 (Option B/C): `DllMain.cpp::DllRegisterServer` は MSIX 経由では呼ばれ
-  ないため、`Application` の `Executable`（本書では `azookey_inference_host.exe`）
-  に Profile 登録ロジックを組み込み、初回起動 / 再活性時に
-  `ITfInputProcessorProfiles::Register` を idempotent に呼ぶ。Unregister は
-  package uninstall hook で MSIX runtime が tear down するタイミングか、または
-  別 CLI（D-09 user dict CLI と同じ host CLI）で `Unregister` を呼ぶ。
+* MSIX 経路 (Option B/C) — **登録**: `DllMain.cpp::DllRegisterServer` は MSIX
+  経由では呼ばれないため、`Application` の `Executable`（本書では
+  `azookey_inference_host.exe`）に Profile 登録ロジックを組み込み、初回起動 /
+  再活性時に `ITfInputProcessorProfiles::Register` を idempotent に呼ぶ。
+* MSIX 経路 (Option B/C) — **解除の既知制限**: MSIX には標準の **pre-uninstall
+  hook が存在しない**（`Remove-AppxPackage` / 設定アプリのアンインストールは
+  package を atomic に削除し、host プロセスを kill するだけ）。したがって
+  `Remove-AppxPackage` だけでは `ITfInputProcessorProfiles::Unregister` を呼ぶ
+  契機が無く、§1.5 受け入れ条件「言語バーから死んだエントリが消える」を
+  自動で満たせない。M28 PoC で次のいずれかを確定する:
+    1. **Companion uninstall script を README で案内**: `Remove-AppxPackage` の
+       前にユーザーに `azookey-host.exe userdict unregister-profile` を実行させ、
+       明示的に `Unregister` を呼ぶ。
+    2. **External-location（Option A）への変更**: 従来の `regsvr32 /u` 経路で
+       `DllUnregisterServer` を呼べるので、本制限は発生しない。
+    3. **PackageCatalog observer process**: `PackageCatalog.PackageStatusChanged`
+       を独立 worker / Windows service で監視し、自パッケージの uninstall を
+       検出して `Unregister` を呼ぶ。実装コストが高く、v1.0 範囲外と想定。
+
+    本制限は MSIX 同梱 TIP の本質的な課題であり、Option A の優位性として記録する。
 * Option A（external location）: 従来の `regsvr32 azookey_tsf_tip.dll` 経路で
-  `DllRegisterServer` が呼ばれるので、その中で `ITfInputProcessorProfiles::Register`
-  を従来通り呼んで完結する。
+  `DllRegisterServer` / `DllUnregisterServer` が呼ばれるので、その中で
+  `ITfInputProcessorProfiles::Register` / `Unregister` を従来通り呼んで完結する。
 * `DllRegisterServer` / `DllUnregisterServer` を MSIX context で誤って呼ぶと
   HKCU `\Software\Classes\CLSID\...` に二重エントリが残るので、TIP 内では
   `IsRunningInMsixContext()`（Win32 API `GetCurrentPackageFamilyName` の戻り値
@@ -355,6 +369,7 @@ Microsoft Learn の [MSIX and CI/CD Pipeline signing with Azure Key Vault](https
 | Secret 名 | 内容 |
 |---|---|
 | `AZURE_KEY_VAULT_URL` | Key Vault URL |
+| `AZURE_KEY_VAULT_TENANT_ID` | Azure AD テナント ID（service principal 認証で必須） |
 | `AZURE_KEY_VAULT_CLIENT_ID` | Azure AD アプリ ID |
 | `AZURE_KEY_VAULT_CLIENT_SECRET` | クライアントシークレット |
 | `AZURE_KEY_VAULT_CERT_NAME` | 証明書フレンドリ名 |
@@ -367,12 +382,17 @@ Microsoft Learn の [MSIX and CI/CD Pipeline signing with Azure Key Vault](https
   run: |
     AzureSignTool sign `
       -kvu ${{ secrets.AZURE_KEY_VAULT_URL }} `
+      -kvt ${{ secrets.AZURE_KEY_VAULT_TENANT_ID }} `
       -kvi ${{ secrets.AZURE_KEY_VAULT_CLIENT_ID }} `
       -kvs ${{ secrets.AZURE_KEY_VAULT_CLIENT_SECRET }} `
       -kvc ${{ secrets.AZURE_KEY_VAULT_CERT_NAME }} `
       -tr http://timestamp.digicert.com `
       -v pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
 ```
+
+`-kvt`（テナント ID）は client ID / secret 認証時に必須。Managed Identity /
+アクセストークン認証を使う場合は `-kvt` 不要だが、本書では明示性のため
+service principal 経路の例を示す。
 
 物理 USB トークン不要、HSM 連携を Key Vault 内で完結できる利点がある。
 

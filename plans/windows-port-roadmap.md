@@ -1055,6 +1055,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     逐次変換 → 結合。文境界が無くコンテキスト超の場合はバイト/トークン安全ハード分割で
     フォールバック
   - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
+  - multi-segment commit payload `CommitSegmentsObservation`（新 `MessageType`。文節列を
+    1 メッセージで原子的に確定・学習。`HandshakeResponse` に host 側 `capabilities` を追加して
+    `commit_segments` を広告、TIP は応答に含まれるときだけ送り未対応 host へは単発
+    `CommitObservation` フォールバック）。M59 / M60 と共有（spec §6.4）
   - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
     最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
@@ -1109,6 +1113,133 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `aiBackend=none` のとき `neural` に fallback して動作する
   - `batchAutoPunctuation` ON/OFF で句読点挿入が切り替わる
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`
+
+### M59: 動的自動句読点（ライブ変換）
+
+> ライブ変換中に、文章の適切な位置へ句読点（読点 `、` / 句点 `。`）を動的に挿入し、
+> 文脈の変化に応じて削除・再配置する追加機能。既定 OFF・後方互換で、有効化時のみ
+> 動作する。M58-C（一括変換 + AI 整文の句読点）とは別経路で、**通常の逐次ライブ変換中**に
+> 動作する。正典仕様は `docs/dynamic-punctuation-spec.md`。
+
+- **目的**: ローマ字でかな漢字変換しながら書くとき、句読点キーを明示的に打鍵しなくても
+  IME が節境界・文末へ句読点を補い、入力変化に応じて再配置・削除する。
+- **前提**: M13（InputState 状態機械）、**M14（ライブ変換）完了**。決定的ベースライン
+  （`PunctuationInserter`）は M14 後に着手可能。ニューラル句読点（zenz 出力）品質レイヤは
+  M8（Zenzai）に依存。X-1-2（`TypingTempoTracker`）を安定化に再利用するため M14 末の
+  リッチ化と前後して実装すると効率がよい。
+- **推奨実装時期**: M14（ライブ変換）完了直後、X-1 リッチ化と並行する独立トラック。
+  設定 UI（M30）完成までは host CLI / 環境変数で実効値を受ける。
+- **変更対象**: `inference-host/src/PunctuationInserter.cpp`（新規・決定的挿入レイヤ）、
+  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`（ライブ変換要求
+  〔現状 `QueryCandidatesRequest.live`〕の `auto_punctuation` / `punctuation_style` 処理、
+  `segments[].auto_punctuation` 返却、`CommitSegmentsObservation` ハンドラ）、
+  `ipc/src/Messages.cpp`・`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・応答 segments の
+  自動句読点マーカ・`CommitSegmentsObservation` 追加。spec §6.4／M58-B と共有）、
+  `core/include/azookey/core/InputState.h` / 状態機械（Backspace 削除単位から自動句読点を
+  除外）、`core/include/azookey/core/SegmentPos.h`（新規・`pos` 列挙）、
+  `core/src/PunctuationRules.cpp`（新規・TSV ルールパーサ／マージ／ホットリロード）、
+  `tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
+  `settings/mvp-settings.schema.json`。
+- **実装範囲**: `docs/dynamic-punctuation-spec.md` §3〜§9。
+  - host 側 `PunctuationInserter`（決定的な節境界・文末ヒューリスティック挿入）
+  - ライブ変換経路（M14）への統合。`liveConversion=true` のときのみ動作
+  - full-preedit 再計算による挿入・削除・再配置（明示的削除ロジックを持たない）
+  - 安定化（`dynamicPunctuationStability` = `onPause` でタイピング中は挿入せず idle で挿入。
+    `TypingTempoTracker` を再利用）
+  - 読み↔surface 非対称の扱い: Backspace はかな単位を削除し自動句読点を数えない／
+    確定時に自動句読点スパンを分離して学習を汚染しない／文中キャレット編集は M20 統合へ送る
+  - 確定は M58-B と共有の `CommitSegmentsObservation`（spec §6.4）で行い、自動句読点文節を
+    `is_auto_punctuation=true` として送って学習対象外にする（capability 非対応 host は単発
+    `CommitObservation` フォールバック）。M58-B 未着手時は単発フォールバック経路で先行可能
+  - 字種切替（`dynamicPunctuationStyle` = `ja` / `fullwidth_latin`）
+  - 品詞フィールド `segments[].pos` / `head_pos`（`core` の `SegmentPos` 列挙。任意・後方互換。
+    曖昧性ガード〔「が」格/接続、「て・で」補助用言〕を品詞駆動化。pos 無しは表層フォールバック。spec §7.2.1）。
+    host が辞書 cid/mid（rcid/lcid → 品詞名 → `SegmentPos`）から導出（数値直書きせず cid→品詞名表経由。spec §7.2.2）。
+    mid → `SegmentSemantic`（人名/地名/組織/日付…）を補助判定に（固有名詞連鎖・日付の読点抑制。spec §7.2.3）。
+    cid/mid 表は辞書アセット同梱 `id.def` / mid 定義から M8 ロード時に密配列化、欠落時は全 `Unknown` へ縮退（spec §7.2.4）
+  - 句読点ルールの TSV 外部化（`punctuation-rules.tsv`: kind/match/base_score/guard。組み込み既定を
+    `(kind,match)` で上書き・追加、`base_score=0` で無効化。字種は TSV に書かず `dynamicPunctuationStyle`
+    由来。M17 ホットリロード基盤再利用。spec §4.1.4）。guard はミニ言語（EBNF・`;` AND・`=`/`!=`・
+    Unknown 評価バイアス・未知トークン行スキップ。spec §4.1.5）
+  - 安定化（`onPause` は idle タイマー `dynamicPunctuationIdleMs` で `IdleTimeout` 駆動の
+    再評価が必須。最後の打鍵後にライブ変換要求を post し句読点を挿入。spec §4.3.1）。timing は
+    TIP がリクエストの `auto_punctuation` に符号化（打鍵中=false 抑制／idle・commit=true 挿入。
+    host は typing/idle を知らず `true` のときだけ挿入。spec §7.1.1）
+  - 設定キー 6 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
+    `dynamicPunctuationStability` / `dynamicPunctuationIdleMs` / `segmentBoundaryConfidence` /
+    `punctuationRulesPath`）
+- **受け入れ条件**:
+  - `liveConversion=true` + `dynamicPunctuation=true` で、文を打つと節境界・文末に
+    句読点が現れ、続けて打つと文節構造の変化に応じて句読点が再配置・削除される
+  - Enter で句読点を含む妥当な日本語が確定する
+  - Backspace がかな 1 単位を削除し、自動句読点を削除単位に数えない
+  - 自動句読点を含む確定で学習が汚染されない（直後に同じ読みを打って句読点なしの
+    素直な候補が出る）
+  - `dynamicPunctuationStyle` 切替で挿入字種が `、。` / `，．` に切り替わる
+  - `dynamicPunctuationStability=onPause` でタイピング中は句読点が出ず、入力停止時に挿入される
+  - `liveConversion=false` または `dynamicPunctuation=false` で句読点が一切自動挿入されず、
+    従来のライブ変換・候補ウィンドウ・状態遷移が一切変わらない
+  - 実機 Win11 での end-to-end 確認（`gate:human-required`）
+- **参照仕様**: `docs/dynamic-punctuation-spec.md`
+
+### M60: ローマ字入力中インライン英単語候補
+
+> 日本語ローマ字入力中に、英数モードへ切り替えることなく英単語を候補列へ注入し、
+> 選択で英単語を確定できる追加機能。azooKey 本家 `englishCandidateInRoman2KanaInput`
+> 相当。既定 OFF・後方互換。**スコープは候補注入のみ（1 語単位）**。連続英文タイプは
+> 将来課題。正典仕様は `docs/inline-english-candidate-spec.md`。
+
+- **目的**: ローマ字で `apple` と打つと、かな漢字候補に加え英単語候補（`apple` /
+  `Apple` …）を注入し、英数モード切替なしで英単語を入力できるようにする。
+- **前提**: M5（候補 UI）、M6（Commit / Observation）完了。生ローマ字バッファ保持
+  （`docs/romaji-batch-conversion-spec.md` §4.1）を M58 と共有・再利用する。English タグ
+  描画は X-2-3（`CandidateTag`）を再利用。辞書ゲーティング（品質レイヤ）は任意で、
+  ベースライン（生ローマ字 + 大文字化）は辞書なしで動作する。
+- **推奨実装時期**: v1.0（Phase 4）完了直後、Phase 5 と並行する独立トラックとして
+  前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定 UI（M30）
+  完成までは host CLI / 環境変数で実効値を受ける。
+- **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持の共有・候補注入経路・
+  英単語確定時の reading=生ローマ字での Observe）、`ipc/src/Payloads.cpp`
+  （`QueryCandidates` に `raw_romaji` / `english_candidates`、候補 `tag` 付与）、
+  `inference-host/src/EnglishCandidateProvider.cpp`（新規・生成/ゲーティング/順位）、
+  `inference-host/src/EnglishDictionary.cpp`（新規・TSV パース / `.bin` コンパイル・mmap・
+  ルックアップ。spec §4.4・§4.5）、
+  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`、
+  `learning/`（English チャネル or source タグでの区別）、
+  `settings/mvp-settings.schema.json`。
+- **実装範囲**: `docs/inline-english-candidate-spec.md` §3〜§8。
+  - 候補生成（生ローマ字そのもの + 大文字化バリアント + 任意で全角ローマ字・辞書一致語）
+  - ゲーティング（最小長・英語意図ヒューリスティック・辞書ヒット）と順位（日本語上位候補を
+    奪わない／自動選択しない）
+  - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）
+  - 確定時 reading=生ローマ字での学習（かな漢字学習と混線させない）
+  - 英単語辞書フォーマット（TSV: `surface`/`frequency`/`flags`。`spec` §4.4）と
+    ルックアップ（lower キー・頻度降順・`flags` で大文字化優先）。ベースラインは辞書なしで動作
+  - 辞書バイナリ形式（コンパイル済み `.bin`: ヘッダ + ソート済みレコード配列 + string pool。
+    LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュ。**TSV 不在のバンドル `.bin` 単体
+    ロードも正規ケース**、破損時は TSV があればフォールバック・無ければ辞書無効。spec §4.5）
+  - 辞書の差分更新（overlay `english-words.delta.bin`: **末尾追記可能な自己完結フレーム列**
+    〔文字列インライン・別 string pool 無し〕、upsert/delete tombstone を到着順 append-only、
+    ルックアップはメモリ内ソート索引〔後勝ち〕、base+overlay マージ参照、周期コンパクションで
+    原子置換。M36 自動取得語の注入経路。spec §4.6）
+  - overlay の同時実行（プロセス内 `shared_mutex` + プロセス間 `LockFileEx`、`op_count` 最後更新の
+    クラッシュ安全 append、rename 原子置換、reader の `generation` 追従・lock-free 読み。spec §4.7）
+  - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
+    `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary` /
+    `inlineEnglishPromoteThreshold` / `inlineEnglishDictionaryPath`）
+- **受け入れ条件**:
+  - `inlineEnglishCandidates=true` で、Japanese モードのまま `apple` を打つと候補列に
+    `apple` / `Apple` が現れ、選択すると英数モード切替なしで英単語が確定する
+  - `inlineEnglishCaseVariants` / `fullWidthEnglishCandidate` の ON/OFF で対応する
+    バリアント候補が増減する
+  - `inlineEnglishMinLength` 未満の生ローマ字では英単語候補を出さない
+  - 弱シグナル（例: `ko`）では英単語候補が第一候補を奪わない／自動選択されない
+  - 英単語確定で reading=生ローマ字として学習され、再度同じローマ字で英単語候補が
+    再提示される（かな漢字学習と混線しない）
+  - `inlineEnglishCandidates=false` で英単語候補が一切出ず、従来の候補生成・rerank・確定が
+    一切変わらない
+  - 実機 Win11 での end-to-end 確認（`gate:human-required`）
+- **参照仕様**: `docs/inline-english-candidate-spec.md`
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
@@ -1731,6 +1862,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 新語自動取得（M36-A / M36-B）は手動登録の `UserDictionary` とは独立した辞書自動
 拡充機能であり、`docs/auto-word-registration-spec.md` を正典とする。M53 は
 M36-A/B を内包する辞書層全体の再設計であり、同じ正典 spec（M53 追補章）で扱う。
+
+動的自動句読点（M59）は X-1「ライブ変換」経路の上に載る enhancement であり、
+`docs/dynamic-punctuation-spec.md` を正典とする。M58-C の `batchAutoPunctuation`
+（一括変換 + ai-cleanup 限定の句読点挿入）とは別経路で、逐次ライブ変換中に動作する。
+X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
+
+インライン英単語候補（M60）は X-2-3（`CandidateTag::English`）と生ローマ字バッファ保持
+（M58 §4.1）を再利用する候補注入機能であり、`docs/inline-english-candidate-spec.md` を
+正典とする。スコープは 1 語単位の候補注入のみで、連続英文タイプは将来課題。
 
 変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と
 1:1 対応する。M52 ベンチで baseline を固定し、M53〜M55 並行 → M56 → M57 の

@@ -77,7 +77,7 @@ enum class InputStateKind {
 | BatchConverting | Cancel (Esc) | BatchAccumulating | in-flight を `Cancel` → 蓄積状態へ戻す |
 | Selecting | NextCandidate / SelectByDigit | Selecting | 候補選択（M58-B では文節単位） |
 | Selecting | Forward/Backward | Selecting | 文節カーソル移動（M58-B） |
-| Selecting | Commit (Enter) | Idle | EndComposition + CommitObservation（全文確定） |
+| Selecting | Commit (Enter) | Idle | EndComposition + 全文確定（multi-segment は `CommitSegmentsObservation` §6.4、単一は `CommitObservation`） |
 | Selecting | Cancel (Esc) | BatchAccumulating | 変換結果を破棄し蓄積状態へ戻す |
 | BatchAccumulating | Cancel (Esc) | Idle | CancelComposition |
 
@@ -132,7 +132,8 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
 
 ### 4.3 確定・キャンセル
 
-- Enter（`Commit`）で全文を確定（`EndComposition` + `CommitObservation`）。
+- Enter（`Commit`）で全文を確定（`EndComposition` + 確定観測。multi-segment は
+  `CommitSegmentsObservation`（§6.4）、単一文節は `CommitObservation`）。
 - Esc（`Cancel`）は Selecting / BatchConverting からは蓄積状態へ戻し（後者は in-flight を
   `Cancel`）、BatchAccumulating からは破棄。
 - M58-B では Selecting 中に ←/→ で文節カーソル移動、Space/数字キーで文節候補切替。
@@ -255,6 +256,125 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
   ストリーミング）を必要とし、**M58-B のスコープに明示的に含める**（`NamedPipeTransport`
   の多重応答対応）。この拡張が無い構成では `partial:true` 中間応答は送られず、上記の
   単一 `partial:false` 応答 + サブリクエスト粒度の進捗で動作する。
+
+### 6.4 multi-segment commit observation（M58-B / M59 / M60 共有）
+
+文節列を **1 メッセージで原子的に確定・学習**するため、新
+`MessageType::CommitSegmentsObservation` を追加する（`ipc/include/azookey/ipc/Messages.h`・
+`Payloads.h`）。M58-B（一括変換の文節列確定）・M59（句読点込み文の確定、自動句読点除外。
+`docs/dynamic-punctuation-spec.md` §5.3）・M60（英単語確定 `reading=生ローマ字`。
+`docs/inline-english-candidate-spec.md` §6.4）が共有する正典 payload。
+
+#### 6.4.1 Payload
+
+```cpp
+struct ObservedSegment {
+  std::string reading;                 // 文節読み（is_auto_punctuation=true は空）
+  CandidateField chosen;               // 確定候補（surface はテキストに含む。tag/source 付き）
+  std::vector<CandidateField> shown;   // その文節で提示した候補（任意・学習文脈）
+  bool is_auto_punctuation{false};     // true: テキストには含むが Observe しない（M59）
+};
+
+struct CommitSegmentsObservationRequest {
+  std::vector<ObservedSegment> segments;  // 送信順 = テキスト連結順
+  std::string left_context;               // 文全体の直前確定文脈（文頭のみ）
+  uint64_t timestamp_ms{};
+};
+
+struct CommitSegmentsObservationResponse {
+  bool ok{false};
+};
+```
+
+```jsonc
+{
+  "segments": [
+    { "reading": "きょうは",       "chosen": { "surface": "今日は",   "reading": "きょうは",       "score": 0.95, "source": "model", "tag": 0 }, "shown": [], "is_auto_punctuation": false },
+    { "reading": "いいてんきです", "chosen": { "surface": "いい天気です","reading": "いいてんきです","score": 0.90, "source": "model", "tag": 0 }, "shown": [], "is_auto_punctuation": false },
+    { "reading": "",               "chosen": { "surface": "。",        "reading": "",               "score": 0.0,  "source": "punct", "tag": 0 }, "shown": [], "is_auto_punctuation": true }
+  ],
+  "left_context": "",
+  "timestamp_ms": 0
+}
+```
+
+#### 6.4.2 host セマンティクス
+
+既存 `InferenceEngine::CommitObservation`（`store_->Observe` +
+`active_converter_->Commit`）を文節列へ一般化する:
+
+```text
+ctx = request.left_context
+for seg in request.segments:                       # 送信順
+    if !seg.is_auto_punctuation:
+        store_->Observe(seg.reading, seg.chosen.surface, alpha, ts)
+        active_converter_->Commit(Candidate{seg.chosen.surface, seg.reading, ...}, ctx)
+    ctx += seg.chosen.surface                       # 句読点含め文脈を伸ばす
+return { ok: true }
+```
+
+- `is_auto_punctuation` セグメントは Observe / Commit しないが、`ctx` には連結する
+  （後続文節の文脈に句読点を反映）。
+- **原子性**: 1 メッセージで全文節を確定し、N 回の単発 `CommitObservation` 往復を置換。
+- `left_context` は文頭の 1 つだけ送り、host が文節ごとに伸ばす（TIP は文節別 context を
+  組まなくてよい）。
+
+#### 6.4.3 後方互換・capability ネゴシエーション
+
+- 単一文節確定（通常確定 / M58-A 単一）は既存 `CommitObservation`（単発）を継続使用。
+  本 payload は廃止・置換しない。
+- 旧 host は新 `MessageType` を解せない。**TIP は host が `CommitSegmentsObservation` を
+  解せると確認できたときだけ送る**。確認は Handshake で行うが、**現行スキーマでは
+  `capabilities` は `HandshakeRequest` 側にしか無く**（`ipc/include/azookey/ipc/Payloads.h`。
+  これは TIP→host の広告）、host→TIP の広告フィールドが存在しない。そこで M58-B は
+  **`HandshakeResponse` に host 側 `capabilities` を追加**する:
+
+  ```cpp
+  struct HandshakeResponse {
+    std::string host_version;
+    int protocol_version{1};
+    bool accepted{false};
+    bool model_loaded{false};
+    std::vector<std::string> capabilities;   // 追加: host が解せる拡張機能の広告
+  };
+  ```
+
+  - host は対応時に `capabilities` へ **`"commit_segments"`** を載せて応答する。
+  - TIP は `HandshakeResponse.capabilities` に `"commit_segments"` が**含まれるときだけ**
+    `CommitSegmentsObservation` を送る。
+  - Build/Parse は既存流儀（`BuildHandshakeResponse` で `o.emplace("capabilities", array)`、
+    `ParseHandshakeResponse` で配列が無ければ**空**）。**後方互換**: 旧 host は本フィールドを
+    返さない → TIP からは空 capabilities = 未対応とみなす。
+- **未対応 host では TIP がフォールバック**して、`!is_auto_punctuation` の各文節を既存
+  `CommitObservation` で順次送る（自動句読点は学習に送らない、という不変条件は同じ）。
+
+#### 6.4.4 M58-B 統合点
+
+- M58-B の Selecting 確定（Enter）で、各 segment の**選択候補**を `ObservedSegment.chosen`
+  に、残りを `shown` に詰めて送る（§6.2 の `segments[].candidates` から選ぶ）。
+- §6.2 応答の `full_surface` は `ObservedSegment.chosen.surface` の連結と一致する
+  （不一致はバグ）。これにより §3 遷移表「Selecting →（Enter）→ Idle: EndComposition +
+  CommitObservation（全文確定）」は本 payload を使う（下記注記）。
+
+#### 6.4.5 M59 / M60 統合点
+
+- **M59**: 句読点込み文の確定で、`!auto_punctuation` 文節を `chosen` に、自動句読点を
+  `is_auto_punctuation=true`（`reading=""`、`chosen.surface="、"`/`"。"`）として送る。
+  host は前者のみ学習、後者は `ctx` 連結のみ。`docs/dynamic-punctuation-spec.md` §5.3 /
+  §7.4 の「文節ごと複数回 CommitObservation」を本 payload に統合する。
+- **M60**: 英単語確定が文の一部（multi-segment）の場合、その `ObservedSegment.reading=
+  生ローマ字`、`chosen.tag=English`。単発確定なら既存 `CommitObservation`
+  （`reading=生ローマ字`）を使う。
+
+#### 6.4.6 テスト（`ipc/tests/payloads_test.cpp`）
+
+- `CommitSegmentsObservationRequest` の round-trip（`segments[]` の `reading` /
+  `chosen`(tag 含む) / `shown[]` / `is_auto_punctuation` / `left_context` / `timestamp_ms`）。
+- `is_auto_punctuation=true` 要素が学習対象外であることを host テスト（`inference-host/tests`）で
+  検証（Observe 呼び出し回数 = `!is_auto_punctuation` 文節数）。
+- `HandshakeResponse.capabilities` の round-trip（`"commit_segments"` を含む応答・欠落応答の
+  build/parse）。欠落時に空 capabilities へパースされ、TIP が単発 `CommitObservation`
+  フォールバックを選ぶこと（§6.4.3）。
 
 ## 7. 長文・性能・失敗時（主に M58-B）
 

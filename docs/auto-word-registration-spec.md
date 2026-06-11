@@ -419,14 +419,14 @@ struct ResolveNewWordResponse { bool ok{false}; };
 
 ```
 DictionaryStore
-  ├─ base_lexicon            (SimpleConverter 内蔵)
-  ├─ sudachi_lexicon         (optional pack)
-  ├─ neologd_lexicon         (optional pack, M36-B が更新)
+  ├─ base_lexicon            (SimpleConverter 内蔵, bundled)
+  ├─ sudachi_lexicon         (bundled。配布判定 §14.9 / §14.10)
+  ├─ neologd_lexicon         (別 pack DL・同梱不可, M36-B が更新。§14.9)
   ├─ named_entity_lexicon    (bundled curated)
   ├─ technical_terms_lexicon (bundled curated)
-  ├─ user_dictionary         (M9 の UserDictionary)
-  ├─ auto_words              (M36-A の AutoWordStore)
-  └─ app_specific_dictionary (M48 アプリ別)
+  ├─ user_dictionary         (M9 の UserDictionary, local-only)
+  ├─ auto_words              (M36-A の AutoWordStore, local-only)
+  └─ app_specific_dictionary (M48 アプリ別, local-only)
 ```
 
 各層は独立にロード / 無効化 / 更新可能。`DictionaryCandidateProvider`
@@ -742,12 +742,14 @@ dictionary_score
 ### 14.13 M53 受け入れ条件
 
 - M52 ベンチで `named_entity_recall_at_5` が 90% 以上
-- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 時点で bundled
-  されている `neologd_lexicon`** の範囲で baseline 比改善。neologd 更新
-  前提の追加改善（M36-B `neologism pack` の SHA256 検証付き再配布で得ら
-  れる新語追加）は **M36-B 完了時のみ** 評価し、M36-B 未完了時は本項を
-  bundled lexicon の範囲で測定する（M36-B 完了後の follow-up チェック
-  とする。`plans/windows-port-roadmap.md` M53 entry と整合）
+- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 で同梱される
+  `sudachi_lexicon`（core 版。NEologd 由来データを Apache-2.0 で内包）+
+  `base_lexicon`** の範囲で baseline 比改善。**NEologd 本体（`neologd_lexicon`）は
+  同梱しない**ため v1 のベンチ対象外（§14.9）。`neologd_lexicon`（別 DL
+  pack）有効時の追加新語改善は **M36-B 完了時のみ**、当該 pack を有効化した
+  構成で評価する（M36-B follow-up チェック。`plans/windows-port-roadmap.md`
+  M53 entry と整合）。本項は §14.10 の配布ガード（NEologd 由来ファイル
+  非同梱）と矛盾しない（v1 ベンチは同梱の sudachi/base を測る）
 - 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
   として読み込まれる（後方互換）
 - 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる

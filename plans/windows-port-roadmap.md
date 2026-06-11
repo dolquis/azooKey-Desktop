@@ -1721,8 +1721,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - M52 ベンチで named_entity_recall_at_5 が 90% 以上
   - M52 ベンチで neologism カテゴリの top5 が baseline 比で改善する
-    （M53 v1 時点では bundled `neologd_lexicon` の範囲で評価。M36-B
-    完了による neologd 更新前提の追加改善は M36-B follow-up で確認）
+    （M53 v1 では**同梱の `sudachi_lexicon`(core, NEologd 由来データを
+    Apache-2.0 で内包) + `base_lexicon`** の範囲で評価。NEologd 本体は
+    同梱しない（`docs/auto-word-registration-spec.md` §14.9）。optional
+    `neologd_lexicon` pack（別 DL）有効時の追加改善は M36-B follow-up で
+    当該 pack 有効構成にて確認）
   - 同梱辞書のライセンス遵守（`docs/auto-word-registration-spec.md` §14.9
     の配布判定に従う。同梱は Apache-2.0 / CC0 / CC-BY-4.0 のみ、NEologd は
     同梱せず別 pack DL）。NEologd 由来ファイル混入なしを MSIX 構築の配布

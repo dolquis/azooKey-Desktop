@@ -202,27 +202,34 @@ private:
 
 ### 2.4 動作分岐
 
-- `ui_less_mode_ == false`: 既存の自前 `CandidateWindow::Show` を呼ぶ
-- `ui_less_mode_ == true`: `BeginUIElement(elem, &pbShow, &uiElementId)` を呼ぶ。
-  3 引数は順に `pElement`（UI 要素）/ `pbShow`（アプリが TIP UI を許可するかの
-  返却。§2.6 参照）/ `pdwUIElementId`（OS 側 UI 要素 ID 返却）
+> **改訂（§2.8 両立方式に統合）**: 描画分岐は `ui_less_mode_` ではなく
+> `BeginUIElement` の戻り値 `pbShow` で行う。TIP は UI-less / 通常モードに関わらず
+> **常に `BeginUIElement(elem, &pbShow, &uiElementId)` を呼ぶ**（UIElement 対応 TIP
+> の要件。§2.8・§2.9）。`ui_less_mode_`（`GetActiveFlags`）は冗長な自前 UI を事前に
+> 抑制するためのヒントに留め、最終的な描画責務は per-call の `pbShow` で確定する。
+> 通常スレッドでもアプリが `ITfUIElementSink` を advise していれば `pbShow ==
+> FALSE` を返し得るため、`ui_less_mode_ == false` で `BeginUIElement` をバイパスして
+> はならない。実装は §2.8 の `CandidateUiCoordinator` に集約する。
 
-UI 要素 ID は ITfUIElementMgr に格納。`pbShow` の値による分岐は次の通り（§2.6
-の表と整合）:
+`BeginUIElement(elem, &pbShow, &uiElementId)` の 3 引数は順に `pElement`（UI 要素）/
+`pbShow`（アプリが TIP UI を許可するかの返却。§2.6 参照）/ `pdwUIElementId`（OS 側
+UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 の表と整合）:
 
 - **`pbShow == TRUE`（アプリは描画しない / TIP に自前 UI を許可）**: TIP が自前
   HWND を populate / update する。`ITfUIElement::Show(true)` で表示を開始し、以降
   は候補リストの差し替えや選択変更を TIP 自身が HWND に直接書く。OS / アプリは
   描画 / ポーリングしない。
 - **`pbShow == FALSE`（アプリが代替描画する）**: 自前 HWND は出さず、TIP が
-  `UpdateUIElement` で OS に更新通知する。アプリは `ITfCandidateListUIElement::
-  GetString` 等を QI 経由で呼んで候補を取得し、自身で描画する。
+  `UpdateUIElement` で OS に更新通知する（初回は `BeginUIElement` 直後に即時呼び
+  出す。§2.6・§2.8）。アプリは `ITfCandidateListUIElement::GetString` 等を QI 経由
+  で呼んで候補を取得し、自身で描画する。
 
 ### 2.5 受け入れ条件
 
 - Windows 11 / Office (TF_TMF_UIELEMENTENABLEDONLY) で TIP の自前ウィンドウが
   出ず、Windows 11 標準の候補 UI に候補が表示される
-- それ以外のアプリでは従来通り `CandidateWindow` が出る
+- `pbShow == TRUE` を返すアプリ（UI element sink を持たない大多数のレガシー Win32
+  等）では従来通り `CandidateWindow` が出る
 
 ### 2.6 `pbShow` の per-call 切替
 
@@ -307,6 +314,10 @@ class CandidateUiCoordinator {
   //   1) ITfCandidateListUIElement インスタンスを生成（候補を保持）
   //   2) ITfUIElementMgr::BeginUIElement(elem, &pbShow, &ui_element_id_)
   //   3) OnPbShown(pbShow) で描画責務を確定
+  //   4) pbShow==FALSE のときは続けて UpdateUIElement(ui_element_id_) を即時に
+  //      呼び初回候補内容をアプリへ通知する。アプリは BeginUIElement では内容を
+  //      読まず最初の UpdateUIElement（全 update フラグ立ち）で読み始めるため、
+  //      これを省くと初回候補が描画されない（§2.6 フローチャート）。
   // pt は自前 HWND を出す場合のキャレット直下スクリーン座標。
   HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
                   const std::vector<std::wstring>& items, int selected_idx);
@@ -324,7 +335,7 @@ class CandidateUiCoordinator {
  private:
   // BeginUIElement の戻り値を受けて描画経路を確定:
   //   true  → 自前 HWND を Show（OS/アプリは描画しない）
-  //   false → 自前 HWND は出さず UpdateUIElement でアプリに委譲
+  //   false → 自前 HWND は出さず、即時 UpdateUIElement で初回内容をアプリへ委譲
   void OnPbShown(bool tip_draws);
 
   CandidateWindow own_window_;                  // pbShow==TRUE 経路
@@ -348,7 +359,7 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
 
 | 状態 | `BeginUI` | `UpdateUI` | `EndUI` |
 |---|---|---|---|
-| Hidden | `BeginUIElement` → `pbShow` 判定 → Showing(TIP) / Showing(App) | (no-op) | (no-op) |
+| Hidden | `BeginUIElement` → `pbShow` 判定 → Showing(TIP) / Showing(App)。FALSE のときは続けて即時 `UpdateUIElement`（初回内容通知） | (no-op) | (no-op) |
 | Showing(TIP)（`pbShow==TRUE`） | （再 `BeginUI` は `EndUI` 後） | 自前 HWND 再描画のみ | HWND Hide + `EndUIElement` |
 | Showing(App)（`pbShow==FALSE`） | 同上 | `UpdateUIElement` のみ | `EndUIElement`（HWND は元から非表示） |
 

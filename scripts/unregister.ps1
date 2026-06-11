@@ -57,12 +57,23 @@ if (Test-Path $TipDllPath) {
   Write-Warning "TIP DLL not found, skipping regsvr32 /u: $TipDllPath"
 }
 
-# Belt-and-suspenders: remove any leftover machine-wide COM keys (HKLM).
-# DllUnregisterServer already removes this subtree; kept for the case where the
-# DLL is missing and regsvr32 /u could not run.
-$clsidHklm = "HKLM:\Software\Classes\CLSID\$clsid"
-if (Test-Path $clsidHklm) {
-  Remove-Item -Path $clsidHklm -Recurse -Force -ErrorAction SilentlyContinue
+# Belt-and-suspenders: remove leftover machine-wide registration directly.
+# DllUnregisterServer already removes these via the TSF APIs, but when the DLL is
+# missing (build cleaned / path changed) regsvr32 /u cannot run — so also delete
+# the TSF profile + category registration under CTF\TIP, not just the COM CLSID
+# subtree. Otherwise the language profile is orphaned and Windows keeps showing /
+# resolving a broken azooKey input method. Both the native and WOW6432Node views
+# are cleaned; Remove-Item tolerates absent keys.
+$leftovers = @(
+  "HKLM:\Software\Classes\CLSID\$clsid",
+  "HKLM:\Software\Microsoft\CTF\TIP\$clsid",
+  "HKLM:\Software\WOW6432Node\Classes\CLSID\$clsid",
+  "HKLM:\Software\WOW6432Node\Microsoft\CTF\TIP\$clsid"
+)
+foreach ($key in $leftovers) {
+  if (Test-Path $key) {
+    Remove-Item -Path $key -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 Write-Host "TSF TIP unregistered (machine-wide)."

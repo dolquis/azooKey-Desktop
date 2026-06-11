@@ -1,6 +1,12 @@
 param(
   [string]$TipDllPath = "",
-  [string]$HostExePath = ""
+  [string]$HostExePath = "",
+  # Internal: set when the script relaunches itself elevated. The per-user
+  # (HKCU) inference-host auto-start is written in the original user's process
+  # *before* elevation, so the elevated reentry must skip it — otherwise, when a
+  # standard user elevates with a *separate* administrator account, the Run value
+  # would land in that administrator's hive instead of the interactive user's.
+  [switch]$ElevatedReentry
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,21 +24,38 @@ if (-not $HostExePath) {
 $TipDllPath  = [System.IO.Path]::GetFullPath($TipDllPath)
 $HostExePath = [System.IO.Path]::GetFullPath($HostExePath)
 
-# Machine-wide TSF registration writes the COM CLSID under HKLM and the TSF
-# profile under HKLM\...\CTF\TIP, both of which require administrator rights.
+# Per-user step (HKCU, no elevation needed): register the inference host for
+# auto-start in the *interactive* user's hive. Done in the original process so a
+# relaunch under a different administrator account cannot write it to the wrong
+# profile. Best-effort. Skipped on the elevated reentry.
+if (-not $ElevatedReentry) {
+  if (Test-Path $HostExePath) {
+    $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    try {
+      New-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" `
+        -Value "`"$HostExePath`" --pipe" -PropertyType String -Force | Out-Null
+      Write-Host "Inference host auto-start registered (current user): $HostExePath"
+    } catch {
+      Write-Warning "Could not register inference host auto-start: $_"
+    }
+  } else {
+    Write-Warning "Inference host not found, skipping auto-start registration: $HostExePath"
+  }
+}
+
+# Machine-wide step (HKLM COM + TSF profile under CTF\TIP): requires elevation.
 # TSF has no persistent per-user TIP registration (see
-# docs/sideload-packaging-spec.md §1), so elevation is mandatory. Relaunch
-# elevated if needed, forwarding the already-resolved (absolute) arguments.
+# docs/sideload-packaging-spec.md §1). Relaunch elevated if needed. The argument
+# list is built as a single string with each path wrapped in escaped double
+# quotes so values containing spaces survive the relaunch (Start-Process does not
+# re-quote array elements).
 $principal = New-Object Security.Principal.WindowsPrincipal(
   [Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   Write-Host "Machine-wide registration requires elevation; relaunching as administrator..."
-  Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
-    "-NoExit", "-ExecutionPolicy", "Bypass",
-    "-File", $PSCommandPath,
-    "-TipDllPath", $TipDllPath,
-    "-HostExePath", $HostExePath
-  )
+  $relaunchArgs = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" " +
+                  "-TipDllPath `"$TipDllPath`" -HostExePath `"$HostExePath`" -ElevatedReentry"
+  Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $relaunchArgs
   return
 }
 
@@ -51,23 +74,6 @@ $result = Start-Process -FilePath "regsvr32.exe" -ArgumentList "/s `"$TipDllPath
   -Wait -PassThru -NoNewWindow
 if ($result.ExitCode -ne 0) {
   throw "regsvr32 failed with exit code $($result.ExitCode). Confirm this is running elevated (administrator)."
-}
-
-# Register inference host for auto-start (best-effort). This is intentionally
-# per-user (HKCU Run): the host runs in the interactive user's session. On a
-# multi-user machine each user re-runs this step; machine-wide host auto-start
-# is deferred to the installer / MSIX work.
-if (Test-Path $HostExePath) {
-  $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-  try {
-    New-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" `
-      -Value "`"$HostExePath`" --pipe" -PropertyType String -Force | Out-Null
-    Write-Host "Inference host auto-start registered: $HostExePath"
-  } catch {
-    Write-Warning "Could not register inference host auto-start: $_"
-  }
-} else {
-  Write-Warning "Inference host not found, skipping auto-start registration: $HostExePath"
 }
 
 Write-Host "TSF TIP registration complete (machine-wide)."

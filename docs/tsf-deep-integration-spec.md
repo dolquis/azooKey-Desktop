@@ -87,9 +87,27 @@ mgr->RegisterCategory(kTextServiceClsid,
   「アシタ」「Ashita」等の候補が出る
 - 候補選択で範囲が置換される
 
-## 2. UI-less Mode (M21)
+## 2. UI-less Mode (M21・基本契約は M5 で必須)
 
-### 2.1 目的
+### 2.0 v1.0 (M5) でカバーする最小契約
+
+UI-less mode は本文 §2.1〜§2.5 で扱う full な実装 (M21) と独立に、**基本契約
+のみ v1.0 (M5 候補ウィンドウ) で要求される**。具体的には:
+
+1. `ITfTextInputProcessorEx` を実装する（`ITfTextInputProcessor` だけだと UI-less
+   mode スレッドで TIP が **activate されない**。Microsoft Learn [UILess Mode
+   Overview](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview#how-to-create-uilessmode)）
+2. `ActivateEx` の `dwFlags` で `TF_TMF_UIELEMENTENABLEDONLY` を検出し
+   `ui_less_mode_` を保持
+3. `ITfUIElementMgr::BeginUIElement` の戻り値 `pbShown` を見て自前 HWND を出すか
+   抑制するかを切り替え（§2.4・§2.6 参照）
+
+これらを満たさないと、Win11 スタート検索 / Office 365 / Edge 等で TIP が活性化
+されないアプリが出る。**M5 受け入れ条件の暗黙の前提**として扱い、M21 で拡張
+（`ITfIntegratableCandidateListUIElement` 等）するが、最小契約は v1.0 で要求さ
+れる。
+
+### 2.1 目的（M21 拡張）
 
 Windows 11 / Office アプリ等で OS 側が候補ウィンドウを描画するモード
 （TF_TMF_UIELEMENTENABLEDONLY）に対応する。
@@ -148,7 +166,7 @@ private:
 ### 2.4 動作分岐
 
 - `ui_less_mode_ == false`: 既存の自前 `CandidateWindow::Show` を呼ぶ
-- `ui_less_mode_ == true`: `BeginUIElement(elem, &id)` を呼び、OS に通知
+- `ui_less_mode_ == true`: `BeginUIElement(elem, &pbShown)` を呼び、OS に通知
 
 UI 要素 ID は ITfUIElementMgr に格納。`Show(true)` 時に OS が `GetString` 等を
 ポーリングして自前 UI を描画する。
@@ -158,6 +176,43 @@ UI 要素 ID は ITfUIElementMgr に格納。`Show(true)` 時に OS が `GetStri
 - Windows 11 / Office (TF_TMF_UIELEMENTENABLEDONLY) で TIP の自前ウィンドウが
   出ず、Windows 11 標準の候補 UI に候補が表示される
 - それ以外のアプリでは従来通り `CandidateWindow` が出る
+
+### 2.6 `pbShown` の per-call 切替
+
+`ITfUIElementMgr::BeginUIElement(IUnknown* pElement, BOOL* pbShown, DWORD* pdwUIElementId)`
+は呼び出しごとに `pbShown` の値が変わり得る。アプリ側が `ITfUIElementSink::
+BeginUIElement` で UI 表示可否を選択するため、TIP は **per-call** で:
+
+| `pbShown` 戻り値 | TIP 側挙動 |
+|---|---|
+| `TRUE`（アプリが描画する） | 自前 HWND を出さない。`ITfCandidateListUIElement::GetString` 等の問い合わせに応答 |
+| `FALSE`（アプリが拒否、TIP が描画） | `UpdateUIElement` で OS にも更新通知しつつ、自前 HWND を表示 |
+
+を切り替える。`UpdateUIElement` は `pbShown == FALSE` の場合のみ呼ぶ（[フローチャート](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview#the-flow-chart-of-uilessmode)）。
+
+`EndUIElement` は `pbShown` の値にかかわらず呼ぶ（UI 要素のライフサイクル管理用）。
+
+### 2.7 `ITfIntegratableCandidateListUIElement`（Win11 Search 統合・任意）
+
+検索ボックスや軽量入力フィールド（Windows 8 Search box、Windows 11 Start メニュー
+の検索など）に統合された IME 体験を提供したい場合、`ITfIntegratableCandidateList
+UIElement`（[ctffunc.h](https://learn.microsoft.com/windows/win32/api/ctffunc/nn-ctffunc-itfintegratablecandidatelistuielement)）を上記 3 つの interface と同じ
+クラスに実装する。
+
+これを実装し、かつ `ITfFnSearchCandidateProvider` も実装すると IME 検索統合
+（[IME search integration](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements#ime-search-integration)）の要件を満たす。
+
+実装する場合は次の追加メソッド:
+
+| メソッド | 用途 |
+|---|---|
+| `FinalizeExactCompositionString` | 現在の composition を「表示中の値」で確定 |
+| `GetSelectionStyle` | 選択スタイル取得 |
+| `OnKeyDown` | キー押下処理（搭載アプリ側から呼ばれる） |
+| `SetIntegrationStyle` | 統合スタイル設定 |
+| `ShowCandidateNumbers` | 候補番号の表示制御 |
+
+任意であり、v1.0 では実装しない方針。M21 着手時に検索統合スコープ判断を行う。
 
 ## 3. 半角全角・無変換・変換・Caps (M22)
 

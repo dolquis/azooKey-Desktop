@@ -54,16 +54,20 @@
           </uap3:AppExecutionAlias>
         </uap3:Extension>
 
-        <!-- TIP の COM 登録 -->
-        <com:Extension Category="windows.comServer"
-                       xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10">
-          <com:ComServer>
-            <com:SurrogateServer>
-              <com:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
-                         Path="azookey_tsf_tip.dll" />
-            </com:SurrogateServer>
-          </com:ComServer>
-        </com:Extension>
+        <!-- TIP の COM 登録（in-proc DLL なので InProcessServer 必須。
+             SurrogateServer は別 EXE で動く out-of-proc サーバ用なので NG）。
+             com4: 名前空間は Build 20348+ を要求するが、対応する MSIX manifest
+             バリデーションが厳しく、ProgId と CLSID 整合性をチェックできる。
+             min OS が 19041 のままなら com2: で fallback。 -->
+        <com4:Extension Category="windows.comServer"
+                        xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4">
+          <com4:ComServer>
+            <com4:InProcessServer>
+              <com4:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
+                          ThreadingModel="Apartment" />
+            </com4:InProcessServer>
+          </com4:ComServer>
+        </com4:Extension>
 
         <!-- TSF Profile 登録（Windows 11 でも有効） -->
         <uap3:Extension Category="windows.inputMethod">
@@ -84,6 +88,41 @@
 
 `Class Id` と `Profile GUID` は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid`
 / `kProfileGuid` と一致させる。
+
+#### MSIX `comServer` の AAP（Activate As Package）挙動
+
+MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な COM サーバと異な
+り **Activate As Package (AAP)** で活性化される。具体的には:
+
+* package 識別子と app identity 込みの user session token で実行される
+* `runFullTrust` capability を宣言した本パッケージでは追加の制限なく動作する
+* `RunAs` 等の代替活性化挙動は **サポートされない**（[`com4:ComServer` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-comserver#remarks)）
+
+TIP 側のレジストリ登録（`DllRegisterServer` 内の HKCU `Software\Classes\CLSID\...`）
+は MSIX 経路では使われない。MSIX manifest が registry を上書きする形になるた
+め、TIP 側の自己登録ロジックは MSIX 同梱時に動かないことを前提に書く。
+
+#### TSF Profile 登録のライフサイクル
+
+`uap3:Extension Category="windows.inputMethod"` で宣言した Profile GUID は MSIX
+インストール時に OS に登録される。一方、`ITfInputProcessorProfiles::Register` /
+`Unregister` は伝統的な開発用 `regsvr32` 経路（`DllRegisterServer` / `DllUn
+registerServer`）専用とし、MSIX 経路では呼ばない。両方を二重に登録すると言語
+バーに重複エントリが残るので、TIP 内では `IsRunningInMsixContext()`（Win32 API
+`GetCurrentPackageFamilyName` の戻り値で判定）を見て分岐させる。
+
+### 1.1.1 HKCU 開発用登録 vs MSIX 登録の取り違え事故防止
+
+`scripts/register.ps1` / `unregister.ps1` は HKCU を直接書く開発用スクリプトで
+あり、MSIX 経路と衝突する。両者を取り違えると、片方の登録解除が漏れて言語バー
+に古いエントリが残る (M28 設計メモ)。本書では以下を運用ルールとして固定:
+
+* `scripts/register-dev.ps1` / `unregister-dev.ps1` にリネーム（接尾辞 `-dev`
+  を必須化）
+* MSIX 同梱の TIP は HKCU 自己登録ロジックを skip（上記 `IsRunningInMsixContext`
+  で分岐）
+* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、`compat-test/
+  msix_install_uninstall.ps1` の smoke ハーネスで残骸 0 を確認
 
 ### 1.2 Package.wapproj
 
@@ -130,6 +169,23 @@ Get-AppxPackage -Name dolquis.azooKey | Remove-AppxPackage
 
 ## 2. EV/OV コード署名（M29）
 
+### 2.0 署名経路の選定
+
+署名証明書の調達ルートは v1.0 / v1.x で 3 候補ある。Microsoft Learn の現行ガイ
+ダンスは **Azure Artifact Signing（旧 Trusted Signing）** を非ストア配布の推奨
+として提示する（[Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
+
+| 経路 | 推奨度 | 価格 | CI 統合 | SmartScreen 信頼 | 制約 |
+|---|---|---|---|---|---|
+| A. **Azure Artifact Signing** | 推奨 | ≈$10/月 | ◎（GitHub Actions / Azure DevOps） | reputation building（OV と同等） | 組織: 米/カナダ/EU/英国のみ。個人: 米/カナダのみ |
+| B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
+| C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 既存 §2.3 経路 | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | EV のみ即時信頼 | PFX 漏えいリスク、CI でのキー回転が煩雑 |
+
+**v1.0 の判定**: 開発者の所在地・組織化状況に応じて A or B or C を選ぶ。日本の
+個人開発者で組織化していない場合は B（Azure Key Vault + AzureSignTool）が現実
+的。組織化済みで該当地域なら A を強く推奨。詳細運用と申請手順は別途調査タスク
+（[Linear DEV-100](https://linear.app/dolquis/issue/DEV-100)）で確定する。
+
 ### 2.1 signtool 引数
 
 ```powershell
@@ -163,6 +219,74 @@ EV/OV 証明書（PFX）を GitHub Secrets に格納：
 | `WINDOWS_PFX_BASE64` | PFX ファイルを base64 エンコードしたもの |
 | `WINDOWS_PFX_PASSWORD` | PFX のパスワード |
 | `WINDOWS_CERT_THUMBPRINT` | 証明書のフィンガープリント |
+
+#### Publisher 名と CN= の整合（必須）
+
+`AppxManifest.xml` の `Identity@Publisher` 属性と署名証明書の Subject CN= は
+**完全一致**（distinguished name のフィールド順含む）でなければならない。不一
+致だと `Add-AppxPackage` が `0x8007000B` ([Publisher name mismatch](https://learn.microsoft.com/windows/msix/msix-troubleshooting-guide#publisher-name-mismatch-0x8007000b-event-id-150)) で失敗する。
+
+* §1.1 manifest 例の `Publisher="CN=dolquis"` は **CN=dolquis** とのみ一致
+* OV/EV cert を取得する場合は CN を `dolquis` で揃える（または取得後に manifest
+  側を CN に合わせる）
+* CI で署名失敗時は AppxPackagingOM operational log の Event ID 150 を確認
+
+### 2.2.A Azure Artifact Signing 経路（推奨）
+
+Microsoft Identity Verification Root CA 配下で発行されるため、Windows 10 1809+ /
+Windows 11 で **既定で信頼される**（追加の Trusted Root インストール不要）。
+
+GitHub Actions ワークフローでの最小構成（詳細は別途公式ドキュメント参照）:
+
+```yaml
+- name: Azure CLI login
+  uses: azure/login@v2
+  with:
+    creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+- name: Sign MSIX with Azure Artifact Signing
+  uses: azure/trusted-signing-action@v0
+  with:
+    azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+    azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+    azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+    endpoint: https://eus.codesigning.azure.net/
+    trusted-signing-account-name: <account>
+    certificate-profile-name: <profile>
+    files-folder: pkg\msix\AppPackages\Package_1.0.0_Test
+    files-folder-filter: msix
+    file-digest: SHA256
+    timestamp-rfc3161: http://timestamp.acs.microsoft.com
+```
+
+### 2.2.B Azure Key Vault + AzureSignTool 経路
+
+Key Vault に OV cert を import し、AzureSignTool（.NET global tool）で署名する。
+Microsoft Learn の [MSIX and CI/CD Pipeline signing with Azure Key Vault](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault) に詳細手順あり。
+
+| Secret 名 | 内容 |
+|---|---|
+| `AZURE_KEY_VAULT_URL` | Key Vault URL |
+| `AZURE_KEY_VAULT_CLIENT_ID` | Azure AD アプリ ID |
+| `AZURE_KEY_VAULT_CLIENT_SECRET` | クライアントシークレット |
+| `AZURE_KEY_VAULT_CERT_NAME` | 証明書フレンドリ名 |
+
+```yaml
+- name: Install AzureSignTool
+  run: dotnet tool install --global AzureSignTool
+
+- name: Sign MSIX with AzureSignTool
+  run: |
+    AzureSignTool sign `
+      -kvu ${{ secrets.AZURE_KEY_VAULT_URL }} `
+      -kvi ${{ secrets.AZURE_KEY_VAULT_CLIENT_ID }} `
+      -kvs ${{ secrets.AZURE_KEY_VAULT_CLIENT_SECRET }} `
+      -kvc ${{ secrets.AZURE_KEY_VAULT_CERT_NAME }} `
+      -tr http://timestamp.digicert.com `
+      -v pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
+```
+
+物理 USB トークン不要、HSM 連携を Key Vault 内で完結できる利点がある。
 
 ### 2.3 CI ステップ
 
@@ -221,6 +345,32 @@ jobs:
         with:
           files: pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
           draft: true
+```
+
+### 2.4 ローカル署名検証手順
+
+CI で署名した MSIX を手元で確認する。Windows SDK の `signtool` で:
+
+```powershell
+# 署名チェーンを検証（exit 0 で成功）
+& signtool verify /pa /v azooKey-1.0.0.msix
+
+# 詳細をテキストファイルへ
+& signtool verify /pa /v /all azooKey-1.0.0.msix > sign-verify.log
+```
+
+`/pa` は default authentication policy で検証する。`/v` は verbose。chain が
+途中の Trusted Root にしか繋がっていない場合は警告が出るので、Azure Artifact
+Signing 利用時は問題なし（Microsoft Identity Verification Root が Windows に
+組み込まれているため）。
+
+開発者が Azure Key Vault 経路を使う場合は、署名後に `Get-AuthenticodeSignature`
+で chain を確認:
+
+```powershell
+$sig = Get-AuthenticodeSignature -FilePath .\azooKey-1.0.0.msix
+$sig.Status                                  # Valid を期待
+$sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 ```
 
 ## 3. WinUI 3 設定アプリ（M30）

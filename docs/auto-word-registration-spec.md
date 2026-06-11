@@ -500,7 +500,6 @@ dictionary_score =
   + source_priority
   + exact_reading_bonus
   + category_bonus
-  + app_profile_bonus
   - obsolete_penalty
 ```
 
@@ -510,14 +509,15 @@ dictionary_score =
 | `source_priority` | 層 priority（user > technical > neologd > base） |
 | `exact_reading_bonus` | 完全一致 +0.10、alias 一致 +0.05 |
 | `category_bonus` | 辞書エントリ category（§14.4 の `person_name` / `place_name` / `technical` 等）に対する `settings.dictionary.categoryBoosts` 適用。M48 と独立した辞書層側のスコア因子 |
-| `app_profile_bonus` | M48 `profilesByApp[*].candidateTagBoosts` を **候補タグ**（M52 ベンチで定義する `Technical` / `Polite` / `English` 等）に適用。辞書エントリ category とは **別 namespace**（`category_bonus` と二重適用しない） |
 | `obsolete_penalty` | 最終使用が古いエントリに減点 |
 
-`category_bonus`（辞書 category への適用）と `app_profile_bonus`（候補タグ
-への適用）は別 namespace のため独立した因子として加算する。M48 で `code.exe`
-を開いていて `candidateTagBoosts.Technical = 1.5` が設定されていても、これは
-候補タグ `Technical` が付与された候補に作用するのであって、辞書 category
-`technical` への作用は `dictionary.categoryBoosts.technical` 側で制御する。
+**M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` に含めない。**
+M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の `final_score` に対して
+**1 回だけ**乗算的に適用する正典機構であり、DictionaryStore 由来候補にも同一
+経路で（§14.12 が付与する候補タグに基づき）作用する。`dictionary_score` 側で
+重ねて加算すると二重適用になるため、ここでは扱わない。`category_bonus`（辞書
+category への `dictionary.categoryBoosts` 適用）は M48 タグ boost とは別 setting
+key・別 namespace の辞書層内因子であり、二重適用しない。
 
 各因子の確定係数（`source_priority` 表・bonus/penalty の式と既定値）は §14.11、
 辞書 category から候補タグへの写像と source tagging 戦略は §14.12 を参照。
@@ -647,8 +647,9 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
   ライセンス。SudachiDict と同様に **BSD-3 オプション**で取り扱う（GPL 伝播なし）。
 - **mozc 辞書**（BSD-3-Clause）は採用しない（base + SudachiDict で充足）。将来
   base 強化が必要になった場合の代替候補としてのみ記録する。
-- 判定理由の核心は「**Apache-2.0 / CC0 / CC-BY のクリーンソースのみを同梱し、
-  上流データに個別条件が付く NEologd は同梱せず opt-in の別 pack DL に分離する**」。
+- 判定理由の核心は「**Apache-2.0 / BSD-3-Clause（SudachiDict 内包 UniDic）/
+  CC0 / CC-BY のクリーンソースのみを同梱し、上流データに個別条件が付く NEologd
+  は同梱せず opt-in の別 pack DL に分離する**」。
   これにより「ライセンス未確認のまま同梱した場合の配布差し止め」リスクを回避する。
 
 ### 14.10 パッケージング方式と第三者帰属（ThirdPartyNotices）
@@ -713,8 +714,13 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 | `base_frequency` | エントリ `frequency`（§14.2） | 0.00–1.00 |
 | `exact_reading_bonus` | 完全一致 +0.10 / alias 一致 +0.05 / 緩い長音一致 +0.02（§14.3 の評価順） | 0.00–0.10 |
 | `category_bonus` | `clamp(categoryBoosts[category] − 1.0, 0.00, 0.20)`（§14.8。`named_entity` umbrella 規則を適用）。**boost-only**: `categoryBoosts` は [1.0, 1.2] に検証し降格に使わない | 0.00–0.20 |
-| `app_profile_bonus` | `min(0.40, (max(1.0, candidateTagBoosts[tag]) − 1.0) × 0.4)`（§14.12 の category→tag を経由。候補タグ namespace）。**boost-only**: `candidateTagBoosts` は降格に使わない（`max(1.0, …)` で 1.0 未満を無効化）。`docs/app-profile-spec.md` §7 の boost-only 契約と整合 | 0.00–+0.40 |
 | `obsolete_penalty` | `0.10 × (1 − 2^(−Δdays / half_life))`。Δdays = 最終使用からの日数。half_life は §14.4 category（一般 30 / 固有名詞 90 / 技術 120 / 新語 60 日）。**usage timestamp を持つ層（user / auto_words / app_specific）のみ**適用。静的同梱層は 0 | 0.00–0.10 |
+
+M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` の因子では
+**ない**（§14.5）。M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の
+`final_score` に対し `final_score *= max(1.0, candidateTagBoosts[tag])` を **1 回
+だけ**適用する（DictionaryStore 由来候補にも §14.12 で付与した単一タグに基づき
+同経路で作用。二重適用を避けるため `dictionary_score` には入れない）。
 
 worked example（`code.exe` 前面・`candidateTagBoosts.Technical = 1.5`、エントリ
 "TensorRT" / `technical_terms` / frequency 0.72 / 完全一致 / `categoryBoosts.technical = 1.0`）:
@@ -724,14 +730,17 @@ dictionary_score
   = 0.72 (base_frequency)
   + 0.50 (source_priority: technical_terms)
   + 0.10 (exact_reading_bonus: 完全一致)
-  + 0.00 (category_bonus: 1.0 − 1.0)
-  + 0.20 (app_profile_bonus: (1.5 − 1.0) × 0.4  ← §14.12 で Technical タグ付与)
+  + 0.00 (category_bonus: clamp(1.0 − 1.0, 0, 0.20))
   − 0.00 (obsolete_penalty: 静的層)
-  = 1.52
+  = 1.32
 ```
 
-正規化は不要（DictionaryStore 内の相対ランク + merge ブースト量として使用）。
-本例は単体テストの期待値とする（§14.13）。
+その後、M48 タグ boost は app-profile-spec §7 が `final_score` に対して別途
+適用する（"TensorRT" は §14.12 で `Technical` タグが付くため
+`final_score *= max(1.0, 1.5)`。`dictionary_score` 内では二重適用しない）。
+`dictionary_score` の正規化は不要（DictionaryStore 内の相対ランク + merge
+ブースト量として使用）。本例（`dictionary_score = 1.32`）は単体テストの
+期待値とする（§14.13）。
 
 ### 14.12 source tagging 戦略と M48 連携
 
@@ -745,8 +754,9 @@ dictionary_score
 - `sources[]` provenance は debug probe（M9 / D-09）・ETW（M33）にのみ出力し、
   ユーザー可視 UI には出さない。
 
-**category → 候補タグ マッピング**（M48 `candidateTagBoosts` 適用のため。
-`category_bonus` とは別 namespace で **二重加算しない**）:
+**category → 候補タグ マッピング**（候補に単一タグを **付与**し、M48
+`candidateTagBoosts` を `final_score` 段で適用可能にするため。タグ boost 自体は
+app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。§14.5）:
 
 | 辞書 category（§14.4） / 条件 | 候補タグ（M52） |
 |---|---|
@@ -761,18 +771,19 @@ dictionary_score
   （辞書 category 由来タグを surface 形式由来タグより優先）。両タグの同時保持・
   同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
   の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
-- `app_profile_bonus`（§14.11）は **選択された単一タグ**の
-  `candidateTagBoosts[tag]` を用いる（"TensorRT" は `Technical` が選ばれるため
-  §14.11 の worked example と整合）。
+- 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
+  `final_score *= max(1.0, candidateTagBoosts[tag])` として 1 回適用する
+  （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
+  含めない（二重適用回避）。
 - 候補タグの確定 taxonomy は M52 ベンチで定義する。上表は既知タグ
   （`Technical` / `English`）への写像であり、未知タグは「なし」とする。
 - 固有名詞系のスコア寄与は **`category_bonus`（§14.8 の `categoryBoosts` +
-  `named_entity` umbrella）** で行い、候補タグ経由ではない。`app_profile_bonus`
-  は候補タグ（前面アプリ文脈）専用であり、両者は別 setting key・別 namespace
-  （§14.5 と整合）。
+  `named_entity` umbrella、`dictionary_score` 内）** で行い、候補タグ経由では
+  ない。M48 タグ boost は候補タグ（前面アプリ文脈）専用で `final_score` 段
+  （§7）に作用し、両者は別 setting key・別 namespace・別段（§14.5 と整合）。
 - `app_specific_dictionary` 層自体は §14.11 の `source_priority`（0.70）で
-  スコアされる DictionaryStore 層であり、M48 の `candidateTagBoosts`
-  （`app_profile_bonus`）とは独立に働く（層スコア + タグブーストの二経路）。
+  スコアされる DictionaryStore 層であり、M48 の `candidateTagBoosts`（§7 の
+  `final_score` 乗算）とは独立に働く（層スコア + タグブーストの二経路）。
 
 ### 14.13 M53 受け入れ条件
 
@@ -795,8 +806,9 @@ dictionary_score
   は layer を空（無効）として扱い、本受け入れ条件は M48 完了後の follow-up
   チェックとする
 - 配布 MSIX に同梱する辞書（`base` / `sudachi`(core) / `named_entity` /
-  `technical_terms`）が全て再配布可ライセンス（Apache-2.0 / CC0 / CC-BY-4.0）
-  であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属表示される（§14.9）
+  `technical_terms`）が全て再配布可ライセンス（**Apache-2.0 / BSD-3-Clause /
+  CC0 / CC-BY-4.0**）であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属
+  表示される（§14.9。BSD-3-Clause は SudachiDict が内包する UniDic 由来）
 - `neologd_lexicon`（standalone mecab-ipadic-NEologd パック）は MSIX 非同梱
   （別 pack DL・M36-B の SHA256 検証・既定無効）。MSIX 構築の配布ガードで
   **NEologd 単体パック**の混入なしが CI で緑（SudachiDict 内包の NEologd 由来
@@ -804,4 +816,6 @@ dictionary_score
 - GeoNames 由来データを同梱する場合、設定アプリのライセンス画面に CC-BY-4.0
   の帰属が表示される（§14.10）
 - `dictionary_score` の確定係数（§14.11）が実装の既定値と一致し、worked
-  example（"TensorRT" = 1.52）が単体テストで再現される
+  example（"TensorRT" = 1.32。M48 タグ boost は含まない）が単体テストで再現
+  される。M48 タグ boost は app-profile-spec §7 が `final_score` に 1 回適用
+  し、`dictionary_score` には二重適用しない

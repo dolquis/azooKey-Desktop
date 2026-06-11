@@ -1714,8 +1714,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 固有名詞カテゴリ（person_name / place_name / station_name /
     product_name / software / anime_game / company_org）
   - `dictionary_score` = base_frequency + source_priority +
-    exact_reading_bonus + category_bonus + app_profile_bonus -
-    obsolete_penalty
+    exact_reading_bonus + category_bonus - obsolete_penalty
+    （M48 候補タグ boost は含めない。app-profile-spec §7 が `final_score`
+    に 1 回適用。spec §14.5/§14.11）
   - 辞書更新パイプライン（bundled / neologism pack / technical pack /
     user / app-specific）
 - **受け入れ条件**:
@@ -1727,8 +1728,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `neologd_lexicon` pack（別 DL）有効時の追加改善は M36-B follow-up で
     当該 pack 有効構成にて確認）
   - 同梱辞書のライセンス遵守（`docs/auto-word-registration-spec.md` §14.9
-    の配布判定に従う。同梱は Apache-2.0 / CC0 / CC-BY-4.0 のみ、NEologd は
-    同梱せず別 pack DL）。**standalone NEologd 単体パック**の混入なしを
+    の配布判定に従う。同梱は Apache-2.0 / BSD-3-Clause（SudachiDict 内包
+    UniDic）/ CC0 / CC-BY-4.0 のみ、NEologd は同梱せず別 pack DL）。
+    **standalone NEologd 単体パック**の混入なしを
     MSIX 構築の配布ガードで CI チェック（SudachiDict 内包の NEologd 由来
     データは対象外。§14.10）
 - **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14。

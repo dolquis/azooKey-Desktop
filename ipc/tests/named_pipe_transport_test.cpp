@@ -17,7 +17,23 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include "../src/NamedPipeTransportInternal.h"
+
 namespace {
+
+int g_immediate_probe_calls = 0;
+
+azookey::ipc::internal::ImmediateOverlappedResult CompletedImmediateProbeForTesting(HANDLE,
+                                                                                    OVERLAPPED&) {
+  ++g_immediate_probe_calls;
+  return {TRUE, ERROR_SUCCESS, 123};
+}
+
+azookey::ipc::internal::ImmediateOverlappedResult PartialMessageProbeForTesting(HANDLE,
+                                                                                OVERLAPPED&) {
+  ++g_immediate_probe_calls;
+  return {FALSE, ERROR_MORE_DATA, 7};
+}
 
 bool WaitForClientCount(azookey::ipc::NamedPipeServer& server, std::size_t expected,
                         int attempts = 100) {
@@ -72,6 +88,38 @@ class ScopedEnvironmentVariable {
 };
 
 }  // namespace
+
+TEST(NamedPipeTransportTest, ImmediateOverlappedHardErrorDoesNotProbeCompletion) {
+  OVERLAPPED overlapped{};
+  azookey::ipc::internal::PipeIoResult result;
+  result.ok = FALSE;
+  result.error = ERROR_BROKEN_PIPE;
+
+  g_immediate_probe_calls = 0;
+  azookey::ipc::internal::CaptureImmediateOverlappedTransfer(
+      INVALID_HANDLE_VALUE, overlapped, result, CompletedImmediateProbeForTesting);
+
+  EXPECT_EQ(g_immediate_probe_calls, 0);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.error, static_cast<DWORD>(ERROR_BROKEN_PIPE));
+  EXPECT_EQ(result.transferred, 0u);
+}
+
+TEST(NamedPipeTransportTest, ImmediateOverlappedMoreDataKeepsPartialByteCount) {
+  OVERLAPPED overlapped{};
+  azookey::ipc::internal::PipeIoResult result;
+  result.ok = FALSE;
+  result.error = ERROR_MORE_DATA;
+
+  g_immediate_probe_calls = 0;
+  azookey::ipc::internal::CaptureImmediateOverlappedTransfer(INVALID_HANDLE_VALUE, overlapped,
+                                                             result, PartialMessageProbeForTesting);
+
+  EXPECT_EQ(g_immediate_probe_calls, 1);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.error, static_cast<DWORD>(ERROR_MORE_DATA));
+  EXPECT_EQ(result.transferred, 7u);
+}
 
 TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   const std::string pipe_name =

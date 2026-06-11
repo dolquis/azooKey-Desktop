@@ -258,6 +258,13 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 - 言語バーから azooKey が選べる
 - アンインストールで `HKCU\Software\Classes\CLSID\...`（A: `regsvr32` 経路）/
   package manifest 由来の OS 内部 CLSID 登録（B/C）が残骸なく消える
+- 同梱辞書アセットの第三者ライセンス（Apache-2.0 / BSD-3-Clause / CC0 /
+  CC-BY-4.0 / 権利主張なし（日本郵便 郵便番号データ等のパブリックドメイン
+  相当））の `ThirdPartyNotices.txt` 同梱と帰属表示（GeoNames=CC-BY-4.0 は
+  帰属必須。BSD-3-Clause は SudachiDict 内包の UniDic 由来で著作権表示必須）は
+  `docs/auto-word-registration-spec.md` §14.10 に従う。standalone NEologd 単体
+  パックは同梱しない（同 §14.9。ただし SudachiDict 内包の NEologd 由来データの
+  帰属は §14.10 に従い ThirdPartyNotices に含める）
 
 > Win10 22H2 必須を維持するなら **Option A 確定が前提**。Option B/C を選ぶ場合
 > は本受け入れ条件から Win10 22H2 を外し、Win Server 2022 ベースに置換する。

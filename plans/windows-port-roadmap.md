@@ -496,11 +496,11 @@ M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix →
 
 【変換品質トラック】（Phase 5〜7 と独立。bench / 学習 / 辞書を発展）
 bench / M7 / M9 ─→ M52
-                  ├─→ M53     （辞書・固有名詞・新語強化。M36-A 統合が必須、M36-B は任意 pack のみ）
+                  ├─→ M53     （辞書・固有名詞・新語強化。M36-A 統合が必須、neologd optional pack は別 follow-up）
                   ├─→ M54     （ユーザー学習強化、M7 発展）
                   └─→ M55     （打ち間違え学習統合）
 M36-A ─→ M53                  （AutoWordStore の移行元として必須）
-M36-B（任意）─→ M53           （neologd_lexicon 等の optional pack 更新。未完了時は当該 pack 無効）
+M36-B / M32（DL 基盤）⇢ M53    （neologd_lexicon optional pack の取り込みは別 follow-up が M36-B/M32 の HttpDownloader+SHA256 を再利用。M36-B 単体は trending→AutoWordStore で別経路。spec §14.10。未完了時は当該 pack 無効）
 M35 ─→ M55                    （TypoLearningStore v1 を v2 統合エンジンへ昇格）
 M46 ─→ M55                    （secure 中の補正・学習抑止契約）
 M53 ─→ M55                    （Dictionary-Constrained Correction が辞書層を要する）
@@ -550,9 +550,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   → M53（辞書）/ M54（学習強化）/ M55（打ち間違え統合）並行 → M56（Tiny
   Reranker） → M57（ModernBERT スコアリング）の順で進める。M55 は M35 を、
   M53 は **M36-A** を必須前提として `AutoWordStore` を多層
-  DictionaryStore に統合する。**M36-B（M32 / WinHTTP 依存）は M53 v1 の
-  必須前提ではなく**、`neologd_lexicon` 等の任意 pack 更新を担う follow-up
-  扱い（M36-B 未完了時は当該 pack を無効として M53 v1 を受け入れる）。
+  DictionaryStore に統合する。**`neologd_lexicon` 任意 pack の取り込みは
+  M53 v1 の必須前提ではなく別 follow-up**（M36-B/M32 の `HttpDownloader`+SHA256
+  基盤を再利用するが、専用 pack 形式 + DictionaryStore ローダを要する別作業。
+  M36-B 単体の trending→AutoWordStore とは別経路。spec §14.10。未完了時は当該
+  pack を無効として M53 v1 を受け入れる）。
   詳細は「変換品質トラック（M52〜M57）」章と各 `docs/*-spec.md`。
 
 ## Phase 5: レガシー parity 復元（M13〜M19）
@@ -1692,11 +1694,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: Zenzai が苦手な固有名詞・新語・技術語・地名・人名・製品名を
   辞書層で補強する。M36-A（AutoWordStore）の上に DictionaryStore 階層を
-  載せて全体を再設計する（M36-B のリモート pack 更新は任意統合）。
+  載せて全体を再設計する（`neologd_lexicon` optional pack の取り込みは別
+  follow-up）。
 - **前提**: M9（ユーザー辞書）、**M36-A**（AutoWordStore の移行元として
-  必須）、M52（ベンチ）。M36-B（M32 / WinHTTP 依存）は M53 v1 必須では
-  なく、`neologd_lexicon` 等の optional pack 更新パスとして follow-up
-  扱い（未完了時は当該 layer を無効化して受け入れる）。
+  必須）、M52（ベンチ）。`neologd_lexicon` optional pack は M53 v1 必須では
+  なく別 follow-up 扱い（M36-B / M32 の `HttpDownloader` + SHA256 基盤を
+  再利用するが、専用 pack 形式 + DictionaryStore ローダを要する別作業。
+  M36-B の trending→AutoWordStore とは別経路。`docs/auto-word-registration-spec.md`
+  §14.10）。未完了時は当該 layer を無効化して受け入れる。
 - **推奨実装時期**: M52 完了後。M54 / M55 と並行可能。
 - **変更対象**: `learning/src/DictionaryStore.cpp`（新規）、
   `learning/src/DictionaryImporter.cpp`（新規）、
@@ -1714,16 +1719,29 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 固有名詞カテゴリ（person_name / place_name / station_name /
     product_name / software / anime_game / company_org）
   - `dictionary_score` = base_frequency + source_priority +
-    exact_reading_bonus + category_bonus + app_profile_bonus -
-    obsolete_penalty
+    exact_reading_bonus + category_bonus - obsolete_penalty
+    （M48 候補タグ boost は含めない。app-profile-spec §7 が `final_score`
+    に 1 回適用。spec §14.5/§14.11）
   - 辞書更新パイプライン（bundled / neologism pack / technical pack /
     user / app-specific）
 - **受け入れ条件**:
   - M52 ベンチで named_entity_recall_at_5 が 90% 以上
   - M52 ベンチで neologism カテゴリの top5 が baseline 比で改善する
-    （M53 v1 時点では bundled `neologd_lexicon` の範囲で評価。M36-B
-    完了による neologd 更新前提の追加改善は M36-B follow-up で確認）
-- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14.9）
+    （M53 v1 では**同梱の `sudachi_lexicon`(core, NEologd 由来データを
+    Apache-2.0 で内包) + `base_lexicon`** の範囲で評価。NEologd 本体は
+    同梱しない（`docs/auto-word-registration-spec.md` §14.9）。optional
+    `neologd_lexicon` pack（別 DL）有効時の追加改善は neologd pack
+    follow-up（spec §14.10。M36-B とは別作業）で当該 pack 有効構成にて確認）
+  - 同梱辞書のライセンス遵守（`docs/auto-word-registration-spec.md` §14.9
+    の配布判定に従う。同梱は Apache-2.0 / BSD-3-Clause（SudachiDict 内包
+    UniDic）/ CC0 / CC-BY-4.0 / 権利主張なし（日本郵便 郵便番号データ等の
+    パブリックドメイン相当）のみ、NEologd は同梱せず別 pack DL）。
+    **standalone NEologd 単体パック**の混入なしを
+    MSIX 構築の配布ガードで CI チェック（SudachiDict 内包の NEologd 由来
+    データは対象外。§14.10）
+- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14。
+  ライセンス & 配布判定 §14.9 / パッケージング §14.10 / スコア係数 §14.11 /
+  source tagging §14.12 / 受け入れ条件 §14.13）
 
 ### M54: ユーザー学習強化
 

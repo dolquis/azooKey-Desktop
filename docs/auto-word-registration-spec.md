@@ -419,14 +419,14 @@ struct ResolveNewWordResponse { bool ok{false}; };
 
 ```
 DictionaryStore
-  ├─ base_lexicon            (SimpleConverter 内蔵)
-  ├─ sudachi_lexicon         (optional pack)
-  ├─ neologd_lexicon         (optional pack, M36-B が更新)
+  ├─ base_lexicon            (SimpleConverter 内蔵, bundled)
+  ├─ sudachi_lexicon         (bundled。配布判定 §14.9 / §14.10)
+  ├─ neologd_lexicon         (別 pack DL・同梱不可, follow-up で取り込み。§14.9/§14.10)
   ├─ named_entity_lexicon    (bundled curated)
   ├─ technical_terms_lexicon (bundled curated)
-  ├─ user_dictionary         (M9 の UserDictionary)
-  ├─ auto_words              (M36-A の AutoWordStore)
-  └─ app_specific_dictionary (M48 アプリ別)
+  ├─ user_dictionary         (M9 の UserDictionary, local-only)
+  ├─ auto_words              (M36-A の AutoWordStore, local-only)
+  └─ app_specific_dictionary (M48 アプリ別, local-only)
 ```
 
 各層は独立にロード / 無効化 / 更新可能。`DictionaryCandidateProvider`
@@ -500,7 +500,6 @@ dictionary_score =
   + source_priority
   + exact_reading_bonus
   + category_bonus
-  + app_profile_bonus
   - obsolete_penalty
 ```
 
@@ -510,25 +509,32 @@ dictionary_score =
 | `source_priority` | 層 priority（user > technical > neologd > base） |
 | `exact_reading_bonus` | 完全一致 +0.10、alias 一致 +0.05 |
 | `category_bonus` | 辞書エントリ category（§14.4 の `person_name` / `place_name` / `technical` 等）に対する `settings.dictionary.categoryBoosts` 適用。M48 と独立した辞書層側のスコア因子 |
-| `app_profile_bonus` | M48 `profilesByApp[*].candidateTagBoosts` を **候補タグ**（M52 ベンチで定義する `Technical` / `Polite` / `English` 等）に適用。辞書エントリ category とは **別 namespace**（`category_bonus` と二重適用しない） |
 | `obsolete_penalty` | 最終使用が古いエントリに減点 |
 
-`category_bonus`（辞書 category への適用）と `app_profile_bonus`（候補タグ
-への適用）は別 namespace のため独立した因子として加算する。M48 で `code.exe`
-を開いていて `candidateTagBoosts.Technical = 1.5` が設定されていても、これは
-候補タグ `Technical` が付与された候補に作用するのであって、辞書 category
-`technical` への作用は `dictionary.categoryBoosts.technical` 側で制御する。
+**M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` に含めない。**
+M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の `final_score` に対して
+**1 回だけ**乗算的に適用する正典機構であり、DictionaryStore 由来候補にも同一
+経路で（§14.12 が付与する候補タグに基づき）作用する。`dictionary_score` 側で
+重ねて加算すると二重適用になるため、ここでは扱わない。`category_bonus`（辞書
+category への `dictionary.categoryBoosts` 適用）は M48 タグ boost とは別 setting
+key・別 namespace の辞書層内因子であり、二重適用しない。
+
+各因子の確定係数（`source_priority` 表・bonus/penalty の式と既定値）は §14.11、
+辞書 category から候補タグへの写像と source tagging 戦略は §14.12 を参照。
 
 ### 14.6 辞書更新パイプライン
 
 | 種類 | 更新方法 | M |
 |---|---|---|
 | bundled dictionary | アプリ更新時に同梱 | M28 / M53 |
-| neologism pack | 任意更新（M36-B が SHA256 検証） | M36-B |
+| neologism pack（`neologd_lexicon`） | 任意更新（SHA256 検証 DL。M36-B/M32 の `HttpDownloader` 基盤を再利用） | neologd pack follow-up（§14.10） |
 | technical pack | 任意更新（bundled or download） | M53 |
 | user dictionary | 即時反映 | M9 |
 | auto_words | 即時反映（M36-A の confirm / auto） | M36-A |
 | app-specific dictionary | 設定画面で ON / OFF | M48 |
+
+各層のライセンス可否・同梱/別 pack/非配布の判定は §14.9、パッケージング方式と
+第三者帰属（ThirdPartyNotices）は §14.10 を正典とする。
 
 ### 14.7 DictionaryStore 実装
 
@@ -564,7 +570,7 @@ private:
 {
   "dictionary": {
     "sudachiEnabled": true,
-    "neologdEnabled": true,
+    "neologdEnabled": false,
     "namedEntityEnabled": true,
     "technicalTermsEnabled": true,
     "userDictionaryEnabled": true,
@@ -586,6 +592,17 @@ private:
 }
 ```
 
+`neologdEnabled` の既定は **`false`**（opt-in）。`neologd_lexicon` は MSIX 非同梱の
+別 DL pack（§14.9 / §14.10）であり、pack が未ダウンロードの状態で `true` にしても
+当該 layer は無効（missing-pack）として扱う。bundled 層（`sudachi` / `named_entity` /
+`technical_terms`）の既定は `true`。
+
+`categoryBoosts` は **boost-only** とし、各値は schema 上 **[1.0, 1.2] に検証
+（clamp）** する（1.0 未満による降格を禁止し、上限を `category_bonus` の宣言レンジ
+0.20 に対応させる。§14.11 の `category_bonus = clamp(categoryBoosts − 1.0, 0.00,
+0.20)` と整合。`candidateTagBoosts` の boost-only 契約（`docs/app-profile-spec.md`
+§7）と同方針）。
+
 `categoryBoosts` の key は §14.4 で定義する具体 category（`person_name`,
 `place_name`, `station_name`, `product_name`, `company_org`, `software`,
 `anime_game`, `technical`, `neologism`）と一致させる。`named_entity` は
@@ -596,15 +613,216 @@ private:
 umbrella は加算しない）。これにより M52 `named_entity_recall_at_5` の
 target を達成可能な scoring 経路を確保する。
 
-### 14.9 M53 受け入れ条件
+### 14.9 辞書ソースのライセンスと配布判定
+
+各辞書層のソース・ライセンス・配布可否。**配布判定の正典は本節**であり、
+MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従う。ライセンスは
+外部上流の変更があり得るため、各ソースの一次情報（下記 URL）を **取り込み時に
+再検証**する（最終確認: 2026-06-11）。
+
+| layer | 採用ソース | ライセンス | 配布判定 | 条件・注記 |
+|---|---|---|---|---|
+| `base_lexicon` | azooKey_dictionary_storage | Apache-2.0 | **同梱可**（既存） | azooKey 内蔵辞書。LICENSE / NOTICE を ThirdPartyNotices に保持 |
+| `sudachi_lexicon` | SudachiDict（`core` 版） | Apache-2.0（内包: UniDic=BSD-3-Clause / NEologd 由来データ） | **同梱可** | LEGAL に基づき配布物全体が Apache-2.0。UniDic の BSD-3 著作権表示に加え、SudachiDict NOTICE（内包 NEologd 由来データの Hatena / 郵便 / 駅名 / 人名 帰属）も帰属に伝播（§14.10）。サイズの観点で `full` ではなく `core` を採用 |
+| `neologd_lexicon` | mecab-ipadic-NEologd | Apache-2.0（ただし上流データに個別条件: Hatena キーワード=はてな社条件・要帰属 / 駅名 / 人名 / 郵便 等） | **別 pack DL（同梱不可）** | サイズ大 + 上流データの provenance が個別条件付き。MSIX に含めず SHA256 検証 DL（既定無効）。取り込み経路は §14.10 の neologd pack follow-up（M36-B とは別作業）。DL 時に上流ライセンス/帰属を提示 |
+| `named_entity_lexicon` | Wikidata（CC0）+ GeoNames（CC-BY-4.0）+ 日本郵便 郵便番号データ | CC0 / CC-BY-4.0 / 権利主張なし | **同梱可**（curated 派生） | Wikidata=CC0（人名/組織/製品 + 読み）。GeoNames=CC-BY-4.0（**帰属必須**）。CC-BY-SA の Wikipedia 本文は **不使用**（share-alike 回避）。郵便データは権利主張なし（帰属歓迎） |
+| `technical_terms_lexicon` | プロジェクト自作 + CC0/CC-BY 上流 | Apache-2.0（自作分）/ 上流に従う | **同梱可** | リポジトリ内で手入れ。外部由来分は上流ライセンス・帰属を ThirdPartyNotices に記載 |
+| `user_dictionary` / `auto_words` / `app_specific_dictionary` | ユーザー生成 | N/A（ユーザーデータ） | **非配布**（ローカルのみ） | 配布物に含めない。`%LOCALAPPDATA%` に保存（`docs/sideload-packaging-spec.md` §1.4 / §9） |
+
+一次情報（取り込み時に再検証する URL）:
+
+- SudachiDict LEGAL: `https://github.com/WorksApplications/SudachiDict/blob/develop/LEGAL`
+- mecab-ipadic-NEologd COPYING / README: `https://github.com/neologd/mecab-ipadic-neologd`
+- azooKey_dictionary_storage: `https://github.com/ensan-hcl/azooKey_dictionary_storage`（Apache-2.0）
+- Wikidata licensing（CC0）: `https://www.wikidata.org/wiki/Wikidata:Licensing`
+- GeoNames（CC-BY-4.0）: `https://www.geonames.org/about.html`
+
+補足:
+
+- **SudachiDict を同梱の主力**とし、固有名詞・新語の相当部分を Apache-2.0 の
+  クリーンな単一ソースで賄う。これにより NEologd を同梱しなくても M53 v1 の
+  named_entity / neologism 改善が成立する（NEologd は更なる新語のための
+  optional pack に限定）。
+- **UniDic**（SudachiDict 内包）は GPL-2.0 / LGPL-2.1 / 修正 BSD のトリプル
+  ライセンス。SudachiDict と同様に **BSD-3 オプション**で取り扱う（GPL 伝播なし）。
+- **mozc 辞書**（BSD-3-Clause）は採用しない（base + SudachiDict で充足）。将来
+  base 強化が必要になった場合の代替候補としてのみ記録する。
+- 判定理由の核心は「**Apache-2.0 / BSD-3-Clause（SudachiDict 内包 UniDic）/
+  CC0 / CC-BY / 権利主張なし（パブリックドメイン相当）のクリーンソースのみを
+  同梱し、上流データに個別条件が付く NEologd は同梱せず opt-in の別 pack DL に
+  分離する**」。
+  これにより「ライセンス未確認のまま同梱した場合の配布差し止め」リスクを回避する。
+
+### 14.10 パッケージング方式と第三者帰属（ThirdPartyNotices）
+
+| 方式 | 対象 layer | 配置 | 更新 |
+|---|---|---|---|
+| **同梱（bundled）** | base / sudachi(core) / named_entity / technical_terms | MSIX 内 read-only データ（`docs/sideload-packaging-spec.md` §1） | アプリ更新時（§14.6） |
+| **別 pack DL（optional）** | neologd | SHA256 検証 DL → `%LOCALAPPDATA%\azooKey\packs\` | neologd pack follow-up・既定無効（下記） |
+| **非配布（local-only）** | user / auto_words / app_specific | `%LOCALAPPDATA%\azooKey\data\` | ランタイム |
+
+**`neologd_lexicon` pack の取り込み経路（follow-up。M36-B とは別作業）**:
+M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
+`AutoWordStore` へ取り込む経路であり、**mecab-ipadic-NEologd を `DictionaryStore`
+の `neologd_lexicon` 層へ入れる経路ではない**。`neologd_lexicon` pack は次を要する
+**別 follow-up**であり、M53 v1 / M36-B の成果物には含めない（追跡は Linear）:
+
+- **pack 形式**: mecab-ipadic-NEologd を §14.2 のエントリ形式へ変換した
+  コンパイル済み DictionaryStore 層アーティファクト（生 NEologd ソースではない。
+  ファイル名/マニフェストは `neologd_lexicon.*` 識別子）。
+- **DL/検証**: M36-B / M32 が共有する `HttpDownloader`（§5-4）+ SHA256 検証
+  基盤を**再利用**して `%LOCALAPPDATA%\azooKey\packs\` へ取得（既定無効・opt-in）。
+- **ローダ**: pack を `neologd_lexicon` 層としてロードする `DictionaryStore`
+  ローダ（§14.7）。M36-B の `AutoWordStore::IngestTrending` とは別経路。
+
+帰属（**ThirdPartyNotices**）:
+
+- 同梱辞書の全ライセンス（Apache-2.0 LICENSE + NOTICE、UniDic BSD-3 著作権表示、
+  GeoNames CC-BY-4.0 クレジット、郵便データ出典）を 1 つの
+  `ThirdPartyNotices.txt` に集約して MSIX に同梱し、設定アプリのライセンス画面
+  （`docs/sideload-packaging-spec.md` §3.2 のバージョン/ライセンス導線）から参照
+  可能にする。
+- **bundled の SudachiDict(core) は NEologd 由来データを内包する**（LEGAL が
+  `core_lex.csv` / `notcore_lex.csv` の由来として明記）。Apache-2.0 の
+  NOTICE 伝播の一部として、**SudachiDict LEGAL / NOTICE が列挙する内包データの
+  帰属（Hatena キーワード / 日本郵便 / 駅名 / 人名 等）を ThirdPartyNotices に
+  含める**。standalone の mecab-ipadic-NEologd 単体パックを同梱しないこと
+  （下記配布ガード）と、SudachiDict 内包データの帰属を載せることは両立する。
+- **GeoNames を含む場合は CC-BY-4.0 の帰属表示が必須**（リンク付きクレジット）。
+- standalone の mecab-ipadic-NEologd 単体パックは同梱しないため、その**単体配布
+  としての** notices は ThirdPartyNotices に不要（別 pack DL 時に上流ライセンス/
+  帰属を DL 画面で提示する）。ただし上記のとおり SudachiDict 内包の NEologd 由来
+  データの帰属は同梱物の一部として含める。
+- **配布ガード**（受け入れ条件 §14.13）: MSIX 構築時に同梱アセットへ
+  **standalone の mecab-ipadic-NEologd パック（`neologd_lexicon` 層アセット）**
+  が混入しないことを CI でチェックする。ガードの対象は NEologd 単体パックで
+  あり、**SudachiDict(core) が Apache-2.0 で内包する NEologd 由来データは対象外**
+  （SudachiDict は配布物全体が Apache-2.0 であり同梱可、§14.9）。判定は
+  ファイル名/マニフェスト（`neologd_lexicon.*` 等の pack 識別子）で行い、
+  「NEologd 由来の語彙が含まれるか」ではなく「NEologd 単体パックが同梱物に
+  あるか」で評価する。
+
+### 14.11 レイヤ優先度と dictionary_score 係数の確定
+
+§14.5 の各因子の確定係数。`dictionary_score` は **DictionaryStore 内候補のランク
+付け**と、Zenzai n-best への **merge 時のブースト量**に用いる（Zenzai 候補との
+最終統合ランキングは M56 Tiny Reranker の責務であり本節の対象外）。
+
+`source_priority`（層別の加算定数。大きいほど優先）:
+
+| layer | source_priority |
+|---|---|
+| `user_dictionary` | 1.00 |
+| `auto_words`（confirm 済み） | 0.85 |
+| `app_specific_dictionary` | 0.70 |
+| `auto_words`（auto mined） | 0.55 |
+| `technical_terms_lexicon` | 0.50 |
+| `named_entity_lexicon` | 0.45 |
+| `neologd_lexicon` | 0.35 |
+| `sudachi_lexicon` | 0.30 |
+| `base_lexicon` | 0.20 |
+
+その他の因子:
+
+| 因子 | 確定式 / 既定値 | 範囲 |
+|---|---|---|
+| `base_frequency` | エントリ `frequency`（§14.2） | 0.00–1.00 |
+| `exact_reading_bonus` | 完全一致 +0.10 / alias 一致 +0.05 / 緩い長音一致 +0.02（§14.3 の評価順） | 0.00–0.10 |
+| `category_bonus` | `clamp(max_c(resolve(c)) − 1.0, 0.00, 0.20)`。エントリの `category[]`（§14.2。§14.12 dedup で union）に対し各 `c` を `resolve(c)` へ解決し**最大値**を採る（集約規則）。**boost-only**: `categoryBoosts` は [1.0, 1.2] に検証し降格に使わない | 0.00–0.20 |
+| `obsolete_penalty` | `0.10 × (1 − 2^(−Δdays / half_life))`。Δdays = 最終使用からの日数。half_life は §14.4 category（一般 30 / 固有名詞 90 / 技術 120 / 新語 60 日）。**usage timestamp を持つ層（user / auto_words / app_specific）のみ**適用。静的同梱層は 0 | 0.00–0.10 |
+
+`category_bonus` の **集約規則**: エントリが複数 category を持つ場合
+（§14.2 の `category[]` 配列、§14.12 の dedup union）、各 category `c` を
+`resolve(c)` = `categoryBoosts[c]`（**§14.8 の具体値優先**。未設定かつ
+named_entity 系（`person_name` / `place_name` / `station_name` / `product_name` /
+`company_org`）なら umbrella `categoryBoosts.named_entity`、それ以外で未設定なら
+`1.0`）へ解決し、その **最大値**を採る（first/sum ではなく max。決定的・再現可能）。
+例: `category=["technical","proper_noun"]` で `categoryBoosts.technical=1.0`・
+`proper_noun` 未設定（umbrella 非該当）→ `max(1.0, 1.0)=1.0` → `category_bonus=0.00`
+（§14.11 worked example と整合）。
+
+M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` の因子では
+**ない**（§14.5）。M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の
+`final_score` に対し `final_score *= max(1.0, candidateTagBoosts[tag])` を **1 回
+だけ**適用する（DictionaryStore 由来候補にも §14.12 で付与した単一タグに基づき
+同経路で作用。二重適用を避けるため `dictionary_score` には入れない）。
+
+worked example（`code.exe` 前面・`candidateTagBoosts.Technical = 1.5`、エントリ
+"TensorRT" / `technical_terms` / frequency 0.72 / 完全一致 / `categoryBoosts.technical = 1.0`）:
+
+```
+dictionary_score
+  = 0.72 (base_frequency)
+  + 0.50 (source_priority: technical_terms)
+  + 0.10 (exact_reading_bonus: 完全一致)
+  + 0.00 (category_bonus: clamp(1.0 − 1.0, 0, 0.20))
+  − 0.00 (obsolete_penalty: 静的層)
+  = 1.32
+```
+
+その後、M48 タグ boost は app-profile-spec §7 が `final_score` に対して別途
+適用する（"TensorRT" は §14.12 で `Technical` タグが付くため
+`final_score *= max(1.0, 1.5)`。`dictionary_score` 内では二重適用しない）。
+`dictionary_score` の正規化は不要（DictionaryStore 内の相対ランク + merge
+ブースト量として使用）。本例（`dictionary_score = 1.32`）は単体テストの
+期待値とする（§14.13）。
+
+### 14.12 source tagging 戦略と M48 連携
+
+**source tagging**:
+
+- 各候補は `source`（由来 LayerId）と `category[]`（§14.4）を保持する（§14.2）。
+- 層横断の **dedup**（同一 `normalized_reading` かつ同一 `surface`）では、
+  `source_priority + base_frequency` が最大のエントリを残し、`category` 配列は
+  **union**、寄与した全層を `sources[]` provenance として記録する（スコアは
+  勝者層の `source_priority` を用いる）。
+- `sources[]` provenance は debug probe（M9 / D-09）・ETW（M33）にのみ出力し、
+  ユーザー可視 UI には出さない。
+
+**category → 候補タグ マッピング**（候補に単一タグを **付与**し、M48
+`candidateTagBoosts` を `final_score` 段で適用可能にするため。タグ boost 自体は
+app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。§14.5）:
+
+| 辞書 category（§14.4） / 条件 | 候補タグ（M52） |
+|---|---|
+| `software` / `technical` / `product_name` | `Technical` |
+| surface が ASCII/ラテン文字主体（例 "TensorRT", "iPhone"） | `English` |
+| その他（`person_name` / `place_name` / `station_name` / `company_org` / `anime_game` / `neologism` / `general`） | なし（既定） |
+
+- **候補タグは単一（スカラ）**。候補モデルは `docs/rich-features-spec.md`
+  X-2-3 の `CandidateTag tag`（IPC `tag: uint8`）でタグを 1 つだけ保持する。
+  複数行に該当する候補（例 "TensorRT" = `Technical` かつ surface=ASCII）には
+  **precedence で 1 つだけ付与**する: **`Technical` > `English` > なし**
+  （辞書 category 由来タグを surface 形式由来タグより優先）。両タグの同時保持・
+  同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
+  の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
+- 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
+  `final_score *= max(1.0, candidateTagBoosts[tag])` として 1 回適用する
+  （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
+  含めない（二重適用回避）。
+- 候補タグの確定 taxonomy は M52 ベンチで定義する。上表は既知タグ
+  （`Technical` / `English`）への写像であり、未知タグは「なし」とする。
+- 固有名詞系のスコア寄与は **`category_bonus`（§14.8 の `categoryBoosts` +
+  `named_entity` umbrella、`dictionary_score` 内）** で行い、候補タグ経由では
+  ない。M48 タグ boost は候補タグ（前面アプリ文脈）専用で `final_score` 段
+  （§7）に作用し、両者は別 setting key・別 namespace・別段（§14.5 と整合）。
+- `app_specific_dictionary` 層自体は §14.11 の `source_priority`（0.70）で
+  スコアされる DictionaryStore 層であり、M48 の `candidateTagBoosts`（§7 の
+  `final_score` 乗算）とは独立に働く（層スコア + タグブーストの二経路）。
+
+### 14.13 M53 受け入れ条件
 
 - M52 ベンチで `named_entity_recall_at_5` が 90% 以上
-- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 時点で bundled
-  されている `neologd_lexicon`** の範囲で baseline 比改善。neologd 更新
-  前提の追加改善（M36-B `neologism pack` の SHA256 検証付き再配布で得ら
-  れる新語追加）は **M36-B 完了時のみ** 評価し、M36-B 未完了時は本項を
-  bundled lexicon の範囲で測定する（M36-B 完了後の follow-up チェック
-  とする。`plans/windows-port-roadmap.md` M53 entry と整合）
+- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 で同梱される
+  `sudachi_lexicon`（core 版。NEologd 由来データを Apache-2.0 で内包）+
+  `base_lexicon`** の範囲で baseline 比改善。**NEologd 本体（`neologd_lexicon`）は
+  同梱しない**ため v1 のベンチ対象外（§14.9）。`neologd_lexicon`（別 DL
+  pack）有効時の追加新語改善は **neologd pack follow-up（§14.10。M36-B とは
+  別作業）完了時のみ**、当該 pack を有効化した構成で評価する（follow-up
+  チェック。`plans/windows-port-roadmap.md` M53 entry と整合）。本項は §14.10
+  の配布ガード（standalone NEologd
+  単体パック非同梱。SudachiDict 内包の NEologd 由来データは対象外）と
+  矛盾しない（v1 ベンチは同梱の sudachi/base を測る）
 - 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
   として読み込まれる（後方互換）
 - 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる
@@ -613,3 +831,20 @@ target を達成可能な scoring 経路を確保する。
   確立する（実際の boost 適用は M48 完了後の統合検証で確認）。M48 未完了時
   は layer を空（無効）として扱い、本受け入れ条件は M48 完了後の follow-up
   チェックとする
+- 配布 MSIX に同梱する辞書（`base` / `sudachi`(core) / `named_entity` /
+  `technical_terms`）が全て再配布可ライセンス（**Apache-2.0 / BSD-3-Clause /
+  CC0 / CC-BY-4.0 / 権利主張なし（パブリックドメイン相当。例: 日本郵便 郵便
+  番号データ）**）であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属
+  表示される（§14.9。BSD-3-Clause は SudachiDict が内包する UniDic 由来、
+  権利主張なしは `named_entity` の郵便データ由来）
+- `neologd_lexicon`（standalone mecab-ipadic-NEologd パック）は MSIX 非同梱
+  （別 pack DL・SHA256 検証・既定無効。取り込みは §14.10 の neologd pack
+  follow-up 経路。M36-B とは別作業）。MSIX 構築の配布ガードで
+  **NEologd 単体パック**の混入なしが CI で緑（SudachiDict 内包の NEologd 由来
+  データは対象外。§14.10）
+- GeoNames 由来データを同梱する場合、設定アプリのライセンス画面に CC-BY-4.0
+  の帰属が表示される（§14.10）
+- `dictionary_score` の確定係数（§14.11）が実装の既定値と一致し、worked
+  example（"TensorRT" = 1.32。M48 タグ boost は含まない）が単体テストで再現
+  される。M48 タグ boost は app-profile-spec §7 が `final_score` に 1 回適用
+  し、`dictionary_score` には二重適用しない

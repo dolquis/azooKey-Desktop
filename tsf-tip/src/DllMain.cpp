@@ -106,11 +106,15 @@ extern "C" STDAPI DllRegisterServer() {
   if (SUCCEEDED(profiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
                                          reinterpret_cast<void**>(&profile_mgr))) &&
       profile_mgr) {
+    // bEnabledByDefault=TRUE so azooKey is enabled and selectable for ja-JP
+    // immediately after registration (the M2 flow), instead of requiring the
+    // user to add it manually in Settings. This makes it available — not the
+    // forced active default — so the user's existing IME is not displaced.
     hr = profile_mgr->RegisterProfile(
         azookey::tsf::kTextServiceClsid, kJapaneseLangId,
         azookey::tsf::kTextServiceProfileGuid, kProfileDesc, desc_len, dll_path, path_len,
         /*uIconIndex=*/0, /*hklsubstitute=*/nullptr, /*dwPreferredLayout=*/0,
-        /*bEnabledByDefault=*/FALSE, /*dwFlags=*/0);
+        /*bEnabledByDefault=*/TRUE, /*dwFlags=*/0);
     profile_mgr->Release();
   } else {
     hr = profiles->Register(azookey::tsf::kTextServiceClsid);
@@ -118,6 +122,12 @@ extern "C" STDAPI DllRegisterServer() {
       hr = profiles->AddLanguageProfile(azookey::tsf::kTextServiceClsid, kJapaneseLangId,
                                         azookey::tsf::kTextServiceProfileGuid, kProfileDesc,
                                         desc_len, dll_path, path_len, /*uIconIndex=*/0);
+    // The legacy AddLanguageProfile has no enabled-by-default parameter, so
+    // enable it explicitly to match the RegisterProfile path above.
+    if (SUCCEEDED(hr))
+      hr = profiles->EnableLanguageProfileByDefault(azookey::tsf::kTextServiceClsid,
+                                                    kJapaneseLangId,
+                                                    azookey::tsf::kTextServiceProfileGuid, TRUE);
   }
   profiles->Release();
   if (FAILED(hr)) return SELFREG_E_CLASS;

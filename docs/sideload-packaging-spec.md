@@ -8,7 +8,38 @@
 
 ## 1. MSIX サイドロード（M28）
 
-### 1.1 AppxManifest.xml
+> **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
+> Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
+> は「外部位置（external location / sparse package）向け」と明記されており、
+> 通常の `.msix` では install location ACL により **外部クライアント（ctfmon
+> 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 例は
+> 暫定参考であり、M28 着手前に下表のいずれかへ確定する必要がある。Linear
+> [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡。
+
+### 1.0 TIP 配布経路 3 候補
+
+| 経路 | DLL ロード可否 | 配布形態 | OS 要件 | 評価 |
+|---|---|---|---|---|
+| A. **external-location packaging (sparse package)** + 既存 `regsvr32` 経路 | ◎ 外部から in-proc ロード可 | sparse manifest + 自前 installer（or xcopy） | Win10 2004 (19041) / Win11 21H2+ | 推奨候補。TIP DLL を MSIX 外に置けば従来の `InprocServer32` レジストリで動く |
+| B. **通常 `.msix` + `com4:InProcessServer`** | ✗ ACL でブロックされる可能性大 | フル MSIX | Win10 21H2 server (20348+) / Win11 21H2+ | Microsoft が「外部位置向け」と明記。通常 MSIX では動かない事例あり |
+| C. **通常 `.msix` + `com4:SurrogateServer`**（[ClassReference Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-inprocessserverclassreference#remarks) が推奨） | △ out-of-proc 経路。TIP の標準的 in-proc 活性化と semantics が異なる | フル MSIX | Win10 21H2 server / Win11 21H2+ | runFullTrust 下で COM 活性化は確実だが、TIP 動作と整合するか要検証 |
+
+> 補足: D ルートとして **WiX/MSI installer** で従来の `regsvr32` 経路（§4）を
+> 使う選択肢もある。MSIX 不可環境（LTSC 等）向けには結局 §4 を持つので、
+> v1.0 は §4 / WiX で確定 + §1 は M28 PoC へ送る選択もあり得る。
+
+### 1.1 AppxManifest.xml（Option B の参考例。M28 PoC で要確定）
+
+> 以下は Option B（通常 MSIX + `com4:InProcessServer`）の schema-valid な
+> 雛形である。**この XML 単体ではアクティベーションが成立しない可能性**を
+> 上記 §1.0 で示したため、M28 着手時に Option A への切替を含めた PoC で
+> 確定すること。schema validation の観点では以下 4 点を満たす:
+>
+> * `com4:Extension` / `com4:InProcessServer` は **Win10 build 20348+** を要求
+>   するので、`MinVersion="10.0.20348.0"` まで引き上げる
+> * `IgnorableNamespaces` に `com4` を追加
+> * `com4:Class` の `Virtualization` は **必須属性**（`enabled` or `disabled`）
+> * `com4:InProcessServerDll` は **必須**（`Path` + `ProcessorArchitecture`）
 
 `pkg/msix/AppxManifest.xml`（新規）：
 
@@ -18,8 +49,9 @@
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
     xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
     xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-    IgnorableNamespaces="uap uap3 rescap">
+    IgnorableNamespaces="uap uap3 com4 rescap">
 
   <Identity Name="dolquis.azooKey"
             Publisher="CN=dolquis"
@@ -33,8 +65,11 @@
   </Properties>
 
   <Dependencies>
+    <!-- com4:Extension / com4:InProcessServer は Windows 10 build 20348 以上を
+         要求するため MinVersion を引き上げる。Win10 22H2 (build 19045) では
+         schema validation で reject される。 -->
     <TargetDeviceFamily Name="Windows.Desktop"
-                       MinVersion="10.0.19041.0"
+                       MinVersion="10.0.20348.0"
                        MaxVersionTested="10.0.22631.0" />
   </Dependencies>
 
@@ -54,24 +89,30 @@
           </uap3:AppExecutionAlias>
         </uap3:Extension>
 
-        <!-- TIP の COM 登録 -->
-        <com:Extension Category="windows.comServer"
-                       xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10">
-          <com:ComServer>
-            <com:SurrogateServer>
-              <com:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
-                         Path="azookey_tsf_tip.dll" />
-            </com:SurrogateServer>
-          </com:ComServer>
-        </com:Extension>
+        <!-- TIP の COM 登録（Option B 参考例。§1.0 の制限を再確認のこと）。 -->
+        <com4:Extension Category="windows.comServer">
+          <com4:ComServer>
+            <com4:InProcessServer>
+              <!-- `com4:Class` には Path 属性が無い。DLL パスは
+                   `com4:InProcessServerDll` 子要素で明示する（Path +
+                   ProcessorArchitecture とも必須）。 -->
+              <com4:InProcessServerDll Path="azookey_tsf_tip.dll"
+                                       ProcessorArchitecture="x64" />
+              <!-- ThreadingModel の許容値は Both / STA / MTA / MainSTA / Neutral
+                   ("Apartment" はクラシックレジストリ値で MSIX schema では invalid)。
+                   TIP は TSF の standard STA で動作する。Virtualization は
+                   `com4:Class` で必須属性、classic COM 互換のため "disabled"。 -->
+              <com4:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
+                          ThreadingModel="STA"
+                          Virtualization="disabled" />
+            </com4:InProcessServer>
+          </com4:ComServer>
+        </com4:Extension>
 
-        <!-- TSF Profile 登録（Windows 11 でも有効） -->
-        <uap3:Extension Category="windows.inputMethod">
-          <uap3:InputMethod>
-            <uap3:Profile InputProfileGuid="{YYYYYYYY-YYYY-YYYY-YYYY-YYYYYYYYYYYY}"
-                          LanguageTag="ja-JP" />
-          </uap3:InputMethod>
-        </uap3:Extension>
+        <!-- TSF Profile 登録は MSIX manifest では扱わない（windows.inputMethod
+             は uap3:Extension の許容 Category に存在しない）。runtime に
+             `ITfInputProcessorProfiles::Register` を呼ぶ。詳細は本節下記
+             「TSF Profile 登録のライフサイクル」を参照。 -->
       </Extensions>
     </Application>
   </Applications>
@@ -84,6 +125,84 @@
 
 `Class Id` と `Profile GUID` は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid`
 / `kProfileGuid` と一致させる。
+
+#### MSIX `comServer` の AAP（Activate As Package）挙動と既知制限
+
+MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な COM サーバと異な
+り **Activate As Package (AAP)** で活性化される。具体的には:
+
+* package 識別子と app identity 込みの user session token で実行される
+* `runFullTrust` capability を宣言した本パッケージでは追加の制限なく動作する
+* `RunAs` 等の代替活性化挙動は **サポートされない**（[`com4:ComServer` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-comserver#remarks)）
+
+**ただし in-proc サーバの DLL ロードに既知制限**:
+
+* `com4:InProcessServer` は「**packages with external location** での利用が
+  想定されており、通常 MSIX では install location の ACL により外部クライアント
+  が DLL をロードできない場合がある」（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）
+* TSF / ctfmon は TIP DLL を外部クライアントとしてロードするので、この制限に
+  直撃する可能性が高い。Option A（sparse package + 外部 DLL 配置）への切替を
+  M28 着手時に PoC で検証する
+* [`com4:InProcessServerClassReference` Remarks](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-inprocessserverclassreference#remarks) は packaged app では
+  runFullTrust + SurrogateServer のみの登録（Option C）を推奨。ただし TIP は
+  in-proc 活性化が前提なので surrogate にすると挙動が変わる可能性がある
+
+TIP 側のレジストリ登録（`DllRegisterServer` 内の HKCU `Software\Classes\CLSID\...`）
+は MSIX 経路では使われない。MSIX manifest が registry を上書きする形になるた
+め、TIP 側の自己登録ロジックは MSIX 同梱時に動かないことを前提に書く。
+**ただし Option A（external location）を採用する場合は逆に従来の `regsvr32`
+経路で `InprocServer32` を登録するため、TIP 側自己登録ロジックがそのまま使える**。
+
+#### TSF Profile 登録のライフサイクル
+
+TSF Profile（Language Profile）の登録には **MSIX manifest の専用拡張は存在しない**。
+`uap3:Extension` の許容 `Category` は `windows.appExecutionAlias` /
+`windows.protocol` / `windows.fileTypeAssociation` / `windows.appExtension` 系
+のみで、`windows.inputMethod` カテゴリは無い（[uap3:Extension 仕様](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-extension)）。
+よって TSF Profile 登録は **runtime に `ITfInputProcessorProfiles::Register` /
+`Unregister` を呼ぶ**しか方法がない。Microsoft の TSF ドキュメント [Text Service
+Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registration) も同じ規約。
+
+* MSIX 経路 (Option B/C) — **登録**: `DllMain.cpp::DllRegisterServer` は MSIX
+  経由では呼ばれないため、`Application` の `Executable`（本書では
+  `azookey_inference_host.exe`）に Profile 登録ロジックを組み込み、初回起動 /
+  再活性時に `ITfInputProcessorProfiles::Register` を idempotent に呼ぶ。
+* MSIX 経路 (Option B/C) — **解除の既知制限**: MSIX には標準の **pre-uninstall
+  hook が存在しない**（`Remove-AppxPackage` / 設定アプリのアンインストールは
+  package を atomic に削除し、host プロセスを kill するだけ）。したがって
+  `Remove-AppxPackage` だけでは `ITfInputProcessorProfiles::Unregister` を呼ぶ
+  契機が無く、§1.5 受け入れ条件「言語バーから死んだエントリが消える」を
+  自動で満たせない。M28 PoC で次のいずれかを確定する:
+    1. **Companion uninstall script を README で案内**: `Remove-AppxPackage` の
+       前にユーザーに `azookey-host.exe userdict unregister-profile` を実行させ、
+       明示的に `Unregister` を呼ぶ。
+    2. **External-location（Option A）への変更**: 従来の `regsvr32 /u` 経路で
+       `DllUnregisterServer` を呼べるので、本制限は発生しない。
+    3. **PackageCatalog observer process**: `PackageCatalog.PackageStatusChanged`
+       を独立 worker / Windows service で監視し、自パッケージの uninstall を
+       検出して `Unregister` を呼ぶ。実装コストが高く、v1.0 範囲外と想定。
+
+    本制限は MSIX 同梱 TIP の本質的な課題であり、Option A の優位性として記録する。
+* Option A（external location）: 従来の `regsvr32 azookey_tsf_tip.dll` 経路で
+  `DllRegisterServer` / `DllUnregisterServer` が呼ばれるので、その中で
+  `ITfInputProcessorProfiles::Register` / `Unregister` を従来通り呼んで完結する。
+* `DllRegisterServer` / `DllUnregisterServer` を MSIX context で誤って呼ぶと
+  HKCU `\Software\Classes\CLSID\...` に二重エントリが残るので、TIP 内では
+  `IsRunningInMsixContext()`（Win32 API `GetCurrentPackageFamilyName` の戻り値
+  で判定）で MSIX context での自己登録を skip させる。
+
+### 1.1.1 HKCU 開発用登録 vs MSIX 登録の取り違え事故防止
+
+`scripts/register.ps1` / `unregister.ps1` は HKCU を直接書く開発用スクリプトで
+あり、MSIX 経路と衝突する。両者を取り違えると、片方の登録解除が漏れて言語バー
+に古いエントリが残る (M28 設計メモ)。本書では以下を運用ルールとして固定:
+
+* `scripts/register-dev.ps1` / `unregister-dev.ps1` にリネーム（接尾辞 `-dev`
+  を必須化）
+* MSIX 同梱の TIP は HKCU 自己登録ロジックを skip（上記 `IsRunningInMsixContext`
+  で分岐）
+* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、`compat-test/
+  msix_install_uninstall.ps1` の smoke ハーネスで残骸 0 を確認
 
 ### 1.2 Package.wapproj
 
@@ -124,11 +243,43 @@ Get-AppxPackage -Name dolquis.azooKey | Remove-AppxPackage
 
 ### 1.5 受け入れ条件
 
-- クリーンな Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
+OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1 経路に確定したら、
+当該経路の受け入れ条件を満たす。
+
+| 経路 | Win11 23H2 | Win10 22H2 (build 19045) | Win Server 2022 (build 20348+) |
+|---|---|---|---|
+| A. external-location packaging | ✅ 必須 | ✅ 必須（`com4:InProcessServer` を使わないため build 19045 で動く） | （対象外） |
+| B. 通常 MSIX + `com4:InProcessServer` | ✅ 必須 | ✗ schema reject（com4 が build 20348+ を要求） | ✅ |
+| C. 通常 MSIX + `com4:SurrogateServer` | ✅ 必須 | ✗ 同上 | ✅ |
+
+共通の受け入れ条件:
+
+- クリーン VM で `Add-AppxPackage`（A は sparse 登録）成功
 - 言語バーから azooKey が選べる
-- アンインストールで `HKCU\Software\Classes\CLSID\...` が消える
+- アンインストールで `HKCU\Software\Classes\CLSID\...`（A: `regsvr32` 経路）/
+  package manifest 由来の OS 内部 CLSID 登録（B/C）が残骸なく消える
+
+> Win10 22H2 必須を維持するなら **Option A 確定が前提**。Option B/C を選ぶ場合
+> は本受け入れ条件から Win10 22H2 を外し、Win Server 2022 ベースに置換する。
 
 ## 2. EV/OV コード署名（M29）
+
+### 2.0 署名経路の選定
+
+署名証明書の調達ルートは v1.0 / v1.x で 3 候補ある。Microsoft Learn の現行ガイ
+ダンスは **Azure Artifact Signing（旧 Trusted Signing）** を非ストア配布の推奨
+として提示する（[Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
+
+| 経路 | 推奨度 | 価格 | CI 統合 | SmartScreen 信頼 | 制約 |
+|---|---|---|---|---|---|
+| A. **Azure Artifact Signing** | 推奨 | ≈$10/月 | ◎（GitHub Actions / Azure DevOps） | reputation building（OV と同等） | 組織: 米/カナダ/EU/英国のみ。個人: 米/カナダのみ |
+| B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
+| C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 既存 §2.3 経路 | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | EV のみ即時信頼 | PFX 漏えいリスク、CI でのキー回転が煩雑 |
+
+**v1.0 の判定**: 開発者の所在地・組織化状況に応じて A or B or C を選ぶ。日本の
+個人開発者で組織化していない場合は B（Azure Key Vault + AzureSignTool）が現実
+的。組織化済みで該当地域なら A を強く推奨。詳細運用と申請手順は別途調査タスク
+（[Linear DEV-100](https://linear.app/dolquis/issue/DEV-100)）で確定する。
 
 ### 2.1 signtool 引数
 
@@ -163,6 +314,87 @@ EV/OV 証明書（PFX）を GitHub Secrets に格納：
 | `WINDOWS_PFX_BASE64` | PFX ファイルを base64 エンコードしたもの |
 | `WINDOWS_PFX_PASSWORD` | PFX のパスワード |
 | `WINDOWS_CERT_THUMBPRINT` | 証明書のフィンガープリント |
+
+#### Publisher と証明書 Subject の整合（必須）
+
+`AppxManifest.xml` の `Identity@Publisher` 属性は、署名証明書の **Subject
+distinguished name (DN) 全体と完全一致**（フィールド順含む）でなければならない。
+CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が含まれる。
+不一致だと `Add-AppxPackage` が `0x8007000B` ([Publisher name mismatch](https://learn.microsoft.com/windows/msix/msix-troubleshooting-guide#publisher-name-mismatch-0x8007000b-event-id-150)) で失敗する。
+
+* §1.1 manifest 例の `Publisher="CN=dolquis"` は **`CN=dolquis` のみの Subject**
+  を持つ自己署名 dev cert で動作する想定（OV/EV cert ではほぼ通らない）
+* OV/EV cert 取得後は **certutil / openssl で Subject を取得**し、その全文を
+  `Publisher` に貼る。例:
+  * 証明書 Subject: `CN=dolquis, O="Sample LLC", L=Tokyo, S=Tokyo, C=JP`
+  * manifest: `Publisher="CN=dolquis, O=&quot;Sample LLC&quot;, L=Tokyo, S=Tokyo, C=JP"`
+    （XML 属性内のダブルクォートは `&quot;` でエスケープ）
+* RDN の順序とスペース・カンマの形式まで完全一致。`Get-PfxCertificate` /
+  `signtool /pa /v` で Subject 表記を必ず確認してから manifest 側へ貼る
+* CI で署名失敗時は AppxPackagingOM operational log の Event ID 150 を確認
+
+### 2.2.A Azure Artifact Signing 経路（推奨）
+
+Microsoft Identity Verification Root CA 配下で発行されるため、Windows 10 1809+ /
+Windows 11 で **既定で信頼される**（追加の Trusted Root インストール不要）。
+
+GitHub Actions ワークフローでの最小構成（詳細は別途公式ドキュメント参照）:
+
+```yaml
+- name: Azure CLI login
+  uses: azure/login@v2
+  with:
+    creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+- name: Sign MSIX with Azure Artifact Signing
+  uses: azure/trusted-signing-action@v0
+  with:
+    azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+    azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+    azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+    endpoint: https://eus.codesigning.azure.net/
+    trusted-signing-account-name: <account>
+    certificate-profile-name: <profile>
+    files-folder: pkg\msix\AppPackages\Package_1.0.0_Test
+    files-folder-filter: msix
+    file-digest: SHA256
+    timestamp-rfc3161: http://timestamp.acs.microsoft.com
+```
+
+### 2.2.B Azure Key Vault + AzureSignTool 経路
+
+Key Vault に OV cert を import し、AzureSignTool（.NET global tool）で署名する。
+Microsoft Learn の [MSIX and CI/CD Pipeline signing with Azure Key Vault](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault) に詳細手順あり。
+
+| Secret 名 | 内容 |
+|---|---|
+| `AZURE_KEY_VAULT_URL` | Key Vault URL |
+| `AZURE_KEY_VAULT_TENANT_ID` | Azure AD テナント ID（service principal 認証で必須） |
+| `AZURE_KEY_VAULT_CLIENT_ID` | Azure AD アプリ ID |
+| `AZURE_KEY_VAULT_CLIENT_SECRET` | クライアントシークレット |
+| `AZURE_KEY_VAULT_CERT_NAME` | 証明書フレンドリ名 |
+
+```yaml
+- name: Install AzureSignTool
+  run: dotnet tool install --global AzureSignTool
+
+- name: Sign MSIX with AzureSignTool
+  run: |
+    AzureSignTool sign `
+      -kvu ${{ secrets.AZURE_KEY_VAULT_URL }} `
+      -kvt ${{ secrets.AZURE_KEY_VAULT_TENANT_ID }} `
+      -kvi ${{ secrets.AZURE_KEY_VAULT_CLIENT_ID }} `
+      -kvs ${{ secrets.AZURE_KEY_VAULT_CLIENT_SECRET }} `
+      -kvc ${{ secrets.AZURE_KEY_VAULT_CERT_NAME }} `
+      -tr http://timestamp.digicert.com `
+      -v pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
+```
+
+`-kvt`（テナント ID）は client ID / secret 認証時に必須。Managed Identity /
+アクセストークン認証を使う場合は `-kvt` 不要だが、本書では明示性のため
+service principal 経路の例を示す。
+
+物理 USB トークン不要、HSM 連携を Key Vault 内で完結できる利点がある。
 
 ### 2.3 CI ステップ
 
@@ -221,6 +453,32 @@ jobs:
         with:
           files: pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
           draft: true
+```
+
+### 2.4 ローカル署名検証手順
+
+CI で署名した MSIX を手元で確認する。Windows SDK の `signtool` で:
+
+```powershell
+# 署名チェーンを検証（exit 0 で成功）
+& signtool verify /pa /v azooKey-1.0.0.msix
+
+# 詳細をテキストファイルへ
+& signtool verify /pa /v /all azooKey-1.0.0.msix > sign-verify.log
+```
+
+`/pa` は default authentication policy で検証する。`/v` は verbose。chain が
+途中の Trusted Root にしか繋がっていない場合は警告が出るので、Azure Artifact
+Signing 利用時は問題なし（Microsoft Identity Verification Root が Windows に
+組み込まれているため）。
+
+開発者が Azure Key Vault 経路を使う場合は、署名後に `Get-AuthenticodeSignature`
+で chain を確認:
+
+```powershell
+$sig = Get-AuthenticodeSignature -FilePath .\azooKey-1.0.0.msix
+$sig.Status                                  # Valid を期待
+$sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 ```
 
 ## 3. WinUI 3 設定アプリ（M30）

@@ -37,8 +37,10 @@
 - ✅ `LoadModel(path, backend, n_gpu_layers?)` / `LoadModelResponse(ok, error?)`。
   Host は `ProbeZenzaiGgufModel` で GGUF を実プローブし、成功時は `ZenzaiModelConverter`
   を構築する（`InferenceEngine::LoadModelWithResult`）。CUDA backend は未リンクのため
-  CPU に fallback し、`error` にその旨を入れて `ok=true` を返す。`path` 空文字や probe
-  失敗時は MVP fallback converter を active のまま維持する。
+  CPU に fallback し、`error` にその旨を入れて `ok=true` を返す。`path` 空文字時は MVP
+  fallback converter を active にする。probe 失敗時は、まだモデル未ロードの初回ロードなら
+  MVP fallback converter へ切り替える一方、既にモデルロード済みの再ロードでは直前にロード
+  済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
 - ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live)` /
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
   応答前に `max_candidates` で件数を切り詰める。

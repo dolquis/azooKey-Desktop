@@ -5,7 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Resolve default paths relative to the script location.
+# Resolve default paths relative to the script location, then make them absolute
+# *before* any elevation relaunch: the elevated process starts in a different
+# working directory, so relative paths would otherwise resolve incorrectly.
 if (-not $TipDllPath) {
   $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-debug\tsf-tip\azookey_tsf_tip.dll"
 }
@@ -16,34 +18,45 @@ if (-not $HostExePath) {
 $TipDllPath  = [System.IO.Path]::GetFullPath($TipDllPath)
 $HostExePath = [System.IO.Path]::GetFullPath($HostExePath)
 
+# Machine-wide TSF registration writes the COM CLSID under HKLM and the TSF
+# profile under HKLM\...\CTF\TIP, both of which require administrator rights.
+# TSF has no persistent per-user TIP registration (see
+# docs/sideload-packaging-spec.md §1), so elevation is mandatory. Relaunch
+# elevated if needed, forwarding the already-resolved (absolute) arguments.
+$principal = New-Object Security.Principal.WindowsPrincipal(
+  [Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host "Machine-wide registration requires elevation; relaunching as administrator..."
+  Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
+    "-NoExit", "-ExecutionPolicy", "Bypass",
+    "-File", $PSCommandPath,
+    "-TipDllPath", $TipDllPath,
+    "-HostExePath", $HostExePath
+  )
+  return
+}
+
 if (!(Test-Path $TipDllPath)) {
   throw "TIP DLL not found: $TipDllPath"
 }
 
-Write-Host "Registering TIP DLL: $TipDllPath"
+Write-Host "Registering TIP DLL (machine-wide): $TipDllPath"
 
-# regsvr32 calls DllRegisterServer which handles COM + TSF profile keys.
+# regsvr32 calls DllRegisterServer, which performs the machine-wide COM
+# registration, the TSF profile registration (ITfInputProcessorProfileMgr::
+# RegisterProfile) and the keyboard / display-attribute / UI-element category
+# registration. There is no manual registry fallback: the previous hand-written
+# CLSID\...\Profiles keys were never read by TSF and have been removed.
 $result = Start-Process -FilePath "regsvr32.exe" -ArgumentList "/s `"$TipDllPath`"" `
   -Wait -PassThru -NoNewWindow
 if ($result.ExitCode -ne 0) {
-  throw "regsvr32 failed with exit code $($result.ExitCode). Run as the target user (no elevation needed for HKCU registration)."
+  throw "regsvr32 failed with exit code $($result.ExitCode). Confirm this is running elevated (administrator)."
 }
 
-$clsid       = "{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}"
-$profileGuid = "{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}"
-$langId      = "0x00000411"
-
-# Verify that DllRegisterServer wrote the expected profile keys.
-$profileKey = "HKCU:\Software\Classes\CLSID\$clsid\Profiles\$langId\$profileGuid"
-if (!(Test-Path $profileKey)) {
-  # DllRegisterServer should have created these; fall back to manual write.
-  Write-Warning "Profile key missing after regsvr32; writing manually."
-  New-Item         -Path $profileKey -Force | Out-Null
-  New-ItemProperty -Path $profileKey -Name "Description" -Value "azooKey TSF" -PropertyType String -Force | Out-Null
-  New-ItemProperty -Path $profileKey -Name "DisplayName"  -Value "azooKey"     -PropertyType String -Force | Out-Null
-}
-
-# Register inference host for auto-start (best-effort).
+# Register inference host for auto-start (best-effort). This is intentionally
+# per-user (HKCU Run): the host runs in the interactive user's session. On a
+# multi-user machine each user re-runs this step; machine-wide host auto-start
+# is deferred to the installer / MSIX work.
 if (Test-Path $HostExePath) {
   $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
   try {
@@ -57,4 +70,4 @@ if (Test-Path $HostExePath) {
   Write-Warning "Inference host not found, skipping auto-start registration: $HostExePath"
 }
 
-Write-Host "TSF TIP registration complete."
+Write-Host "TSF TIP registration complete (machine-wide)."

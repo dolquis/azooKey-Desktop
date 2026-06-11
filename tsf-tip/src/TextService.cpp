@@ -87,6 +87,8 @@ STDMETHODIMP_(ULONG) TextService::Release() {
 STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) { return ActivateEx(ptim, tid, 0); }
 
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
+  // dwFlags does not officially enumerate the UIElement bit, so UI-less state
+  // is taken from ITfThreadMgrEx::GetActiveFlags instead (spec §2.10).
   UNREFERENCED_PARAMETER(dwFlags);
   if (!ptim) return E_INVALIDARG;
   if (thread_mgr_) return E_UNEXPECTED;
@@ -94,6 +96,21 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   thread_mgr_ = ptim;
   client_id_ = tid;
   thread_mgr_->AddRef();
+
+  // Detect UI-less mode (Windows 11 / Office). ITfThreadMgrEx may be absent on
+  // older hosts; default to false and treat any failure as "not UI-less".
+  ui_less_mode_ = false;
+  {
+    ITfThreadMgrEx* thread_mgr_ex = nullptr;
+    if (SUCCEEDED(thread_mgr_->QueryInterface(IID_ITfThreadMgrEx,
+                                              reinterpret_cast<void**>(&thread_mgr_ex))) &&
+        thread_mgr_ex) {
+      DWORD active_flags = 0;
+      if (SUCCEEDED(thread_mgr_ex->GetActiveFlags(&active_flags)))
+        ui_less_mode_ = (active_flags & TF_TMF_UIELEMENTENABLEDONLY) != 0;
+      thread_mgr_ex->Release();
+    }
+  }
 
   HRESULT hr = AdviseTextServiceSinks();
   if (FAILED(hr)) {

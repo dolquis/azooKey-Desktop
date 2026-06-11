@@ -27,7 +27,7 @@
   - `ipc/` — Named Pipe + JSON + length-prefix の IPC 定義
   - `learning/` — 頻度＋時間減衰の再ランキング
   - `bench/` — レイテンシ計測 CLI
-  - `scripts/` — `register.ps1` / `unregister.ps1`(HKCU user-scope、elevation 不要)
+  - `scripts/` — `register.ps1` / `unregister.ps1`(machine-wide / HKLM、管理者権限が必要・非管理者なら自動昇格)
 - ビルド：Windows 10/11 + Visual Studio 2022(C++ デスクトップ)+ CMake ≥ 3.21 + Windows SDK
 - テスト：CTest + GoogleTest(`-DAZOOKEY_FETCH_GOOGLETEST=ON` で FetchContent)
 - 既存メタファイル：`CLAUDE.md`(Claude Code 用)、`AGENTS.md`(Codex CLI および人間用)
@@ -110,7 +110,7 @@ network_access = true
 # Windows ネイティブ実行時の設定
 # ─────────────────────────────────────────────
 
-# TIP 登録は HKCU user-scope なので unelevated を維持
+# TIP の machine-wide 登録は管理者が別途実行する運用。Codex 自身は昇格しない（unelevated を維持）
 [windows]
 sandbox = "unelevated"
 sandbox_private_desktop = true
@@ -208,15 +208,15 @@ ctest --preset windows-debug --output-on-failure
 `-DAZOOKEY_FETCH_GOOGLETEST=ON` は FetchContent で GoogleTest を取得する。
 オフライン環境では `-OFF` でテストのみスキップしてビルドを通す。
 
-## TIP 登録 / 解除(HKCU user-scope)
+## TIP 登録 / 解除(machine-wide / 管理者権限)
 
-`scripts/register.ps1` / `unregister.ps1` は対象ユーザーの PowerShell で実行する。
-**Codex CLI は単独で実行を完了させてはならない**。PowerShell.MCP の共有コンソール経由で、
-コマンド提示までに留め、実行はユーザーが確定する。本リポジトリの
-`DllRegisterServer` と `register.ps1` は user-scope (HKCU) に登録するため、
-失敗時は `HKCU\Software\Classes\CLSID\{...}` と
-`HKCU\Software\Microsoft\CTF\TIP\{...}` の登録状態を確認すること
-(レビュー指摘で修正: 実装は HKLM ではなく HKCU を操作する)。
+`scripts/register.ps1` / `unregister.ps1` は管理者 PowerShell で実行する（非管理者で
+起動した場合は自動で UAC 昇格する）。**Codex CLI は単独で実行を完了させてはならない**。
+PowerShell.MCP の共有コンソール経由で、コマンド提示までに留め、実行はユーザーが確定する。
+`DllRegisterServer` と `register.ps1` は machine-wide に登録するため、失敗時は
+`HKLM\Software\Classes\CLSID\{...}`（COM in-proc）と
+`HKLM\Software\Microsoft\CTF\TIP\{...}`（TSF プロファイル）の登録状態、および
+プロセスが昇格しているかを確認すること。
 
 ## レイテンシ計測
 

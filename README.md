@@ -62,12 +62,14 @@ GoogleTest を導入済みなら省略可。フラグなし・未導入の場合
 
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
 
-## TIP の登録 / 解除（Windows、ユーザー権限）
+## TIP の登録 / 解除（Windows、管理者権限）
 
 ```powershell
 ./scripts/register.ps1 -TipDllPath ./build/windows-debug/tsf-tip/azookey_tsf_tip.dll -HostExePath ./build/windows-debug/inference-host/azookey_inference_host.exe
 ./scripts/unregister.ps1 -TipDllPath ./build/windows-debug/tsf-tip/azookey_tsf_tip.dll
 ```
+
+machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。
 
 ## ロードマップ
 

@@ -58,6 +58,12 @@ class TextService final : public ITfTextInputProcessorEx,
 
   HRESULT RequestPreeditUpdate(ITfContext* context);
 
+  // True when the active TSF thread runs in UI-less mode (Windows 11 / Office
+  // route candidate UI through the application). Sourced from
+  // ITfThreadMgrEx::GetActiveFlags in ActivateEx (spec §2.10). Consuming this
+  // to suppress our own candidate window is tracked separately (spec §2.8/M21).
+  bool ui_less_mode() const { return ui_less_mode_; }
+
   // Accessed by EditSession.
   std::string preedit_kana_;
   ITfComposition* composition_{nullptr};
@@ -71,6 +77,7 @@ class TextService final : public ITfTextInputProcessorEx,
   TfClientId client_id_{TF_CLIENTID_NULL};
   bool key_event_sink_advised_{false};
   DWORD thread_mgr_sink_cookie_{TF_INVALID_COOKIE};
+  bool ui_less_mode_{false};
 
   core::RomajiKanaConverter romaji_;
 

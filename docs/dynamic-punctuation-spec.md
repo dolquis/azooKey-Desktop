@@ -476,14 +476,22 @@ reading 長 0 として写像に組み込む。
 
 ## 7. IPC プロトコル
 
-新 `MessageType` は追加しない。**実装の現状整合**: ライブ変換は現状
+**クエリ（ライブ変換）経路は新 `MessageType` を追加しない。実装の現状整合**: ライブ変換は現状
 `QueryCandidatesRequest.live = true`（`ipc/include/azookey/ipc/Payloads.h`）で運ばれており、
 `docs/legacy-parity-spec.md` §2.2 が提案した独立 `QueryLiveConversion` payload は未実装。
-よって M59 は**現行 `QueryCandidates` 経路にオプションフィールドを追加**する。M14 が独立
+よって M59 のクエリ拡張は**現行 `QueryCandidates` 経路にオプションフィールドを追加**する。M14 が独立
 `QueryLiveConversion` payload に分離する場合は、本節のフィールドを**そのまま新 payload へ
 移設**する（フィールド定義・既定値・後方互換規約は不変）。
 
-すべての追加フィールドは**任意・後方互換**とし、既存 `Payloads.cpp` の流儀
+> **確定（commit）経路は別**: 自動句読点を学習から除外する原子的な multi-segment 確定には、
+> **新 `MessageType::CommitSegmentsObservation`（M58-B と共有。`docs/romaji-batch-conversion-spec.md`
+> §6.4）が必要**で、`HandshakeResponse.capabilities` の `commit_segments` ネゴシエーション（§6.4.3）も
+> 伴う。**M59 を M58-B より先に / M58-B 無しで実装する場合**、この新 MessageType と capability 広告を
+> M59 側で導入する（または当面は §6.4.3 のフォールバックどおり `!auto_punctuation` 文節を単発
+> `CommitObservation` で送る最小実装にする）。「新 MessageType を追加しない」のは**クエリ経路に限った
+> 記述**であり、確定経路には当てはまらない（§5.3・§7.4）。
+
+すべての**クエリ追加フィールド**は**任意・後方互換**とし、既存 `Payloads.cpp` の流儀
 （Build = `o.emplace(...)`、Parse = `GetBool/GetString/GetUInt/...().value_or(既定)`）に従う。
 省略時は既定値となり、旧 TIP / 旧 host と相互運用できる。
 

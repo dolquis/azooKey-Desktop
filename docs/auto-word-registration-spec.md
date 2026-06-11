@@ -748,12 +748,22 @@ dictionary_score
 **category → 候補タグ マッピング**（M48 `candidateTagBoosts` 適用のため。
 `category_bonus` とは別 namespace で **二重加算しない**）:
 
-| 辞書 category（§14.4） | 候補タグ（M52） |
+| 辞書 category（§14.4） / 条件 | 候補タグ（M52） |
 |---|---|
 | `software` / `technical` / `product_name` | `Technical` |
-| surface が ASCII/ラテン文字主体（例 "TensorRT", "iPhone"） | `English`（上記と併存可） |
+| surface が ASCII/ラテン文字主体（例 "TensorRT", "iPhone"） | `English` |
 | その他（`person_name` / `place_name` / `station_name` / `company_org` / `anime_game` / `neologism` / `general`） | なし（既定） |
 
+- **候補タグは単一（スカラ）**。候補モデルは `docs/rich-features-spec.md`
+  X-2-3 の `CandidateTag tag`（IPC `tag: uint8`）でタグを 1 つだけ保持する。
+  複数行に該当する候補（例 "TensorRT" = `Technical` かつ surface=ASCII）には
+  **precedence で 1 つだけ付与**する: **`Technical` > `English` > なし**
+  （辞書 category 由来タグを surface 形式由来タグより優先）。両タグの同時保持・
+  同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
+  の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
+- `app_profile_bonus`（§14.11）は **選択された単一タグ**の
+  `candidateTagBoosts[tag]` を用いる（"TensorRT" は `Technical` が選ばれるため
+  §14.11 の worked example と整合）。
 - 候補タグの確定 taxonomy は M52 ベンチで定義する。上表は既知タグ
   （`Technical` / `English`）への写像であり、未知タグは「なし」とする。
 - 固有名詞系のスコア寄与は **`category_bonus`（§14.8 の `categoryBoosts` +

@@ -533,28 +533,31 @@ DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` のみ。
 - ウィンドウ配置：`legacy/Core/Sources/Core/Windows/WindowPositioning.swift`
 - 横断リッチ化：`docs/rich-features-spec.md`
 
-## 12. UI-less / `pbShow` アプリ互換チェックリスト（M5・実機計測）
+## 12. UI-less / `pbShow` アプリ互換チェック（M5・実機 Win11）
 
 > 本節は `docs/tsf-deep-integration-spec.md` §2.8〜§2.11 の候補 UI「両立
-> (coexistence)」方式に対する**実機 Win11 計測ログ**。`ITfUIElementMgr::
-> BeginUIElement` が返す `pbShow` の値とアプリの描画責務はアプリ実装に依存するため
-> 代表アプリで実測する。実機 Win11 が必要なため DEV-97（D-01）の子課題として
-> `gate:human-required` で実施し、結果を本表に記入する。
+> (coexistence)」方式に対する**実機 Win11 確認の手順・対象・合格条件**（安定仕様）
+> のみを定める。**アプリ別の実測 pass/fail 結果（可変ログ）は本ドキュメントに記入
+> しない。** 実機検証は DEV-97（D-01）の子課題 DEV-153（`gate:human-required`）で
+> 実施し、実測結果・スクリーンショット等は当該 Linear 課題のコメントに記録する
+> （`AGENTS.md`「進捗・状態を README/docs/roadmap に置かず Linear に一本化」）。
 
-**計測手順**: 各アプリで `nihongo` → Space で候補表示し、(a) TIP が activate される
-か、(b) `BeginUIElement` の `pbShow` 戻り値、(c) 自前 HWND が出るか / OS・アプリ側
-UI に乗るか、を記録する。`pbShow` はデバッグウィンドウ（§8）かログ（`docs/
+**計測手順**: 各対象アプリで `nihongo` → Space で候補表示し、(a) TIP が activate
+されるか、(b) `BeginUIElement` の `pbShow` 戻り値、(c) 自前 HWND が出るか / OS・アプリ
+側 UI に乗るか、を確認する。`pbShow` はデバッグウィンドウ（§8）かログ（`docs/
 dev-infrastructure-spec.md` の構造化ログ）に出力して確認する。
 
-| アプリ | TIP activate | `pbShow` 戻り値 | 描画 | 備考 |
-|---|---|---|---|---|
-| メモ帳 (Notepad) | ☐ | ☐ TRUE / ☐ FALSE | ☐ 自前 HWND / ☐ OS・アプリ | レガシー Win32 想定 |
-| Edge（アドレスバー / テキストエリア） | ☐ | ☐ | ☐ | |
-| Chrome | ☐ | ☐ | ☐ | |
-| VS Code | ☐ | ☐ | ☐ | |
-| Windows ターミナル | ☐ | ☐ | ☐ | |
-| Win11 スタート検索 | ☐ | ☐ | ☐ | activate + 入力のみ確認（統合インライン検索は M21） |
-| Office 365（Word） | ☐ | ☐ | ☐ | UI-less 想定 |
+**対象アプリと期待挙動**（pass 基準の定義。実測値は DEV-153 に記録）:
+
+| アプリ | 区分 | 期待挙動 |
+|---|---|---|
+| メモ帳 (Notepad) | レガシー Win32 | activate / `pbShow==TRUE` / 自前 HWND |
+| Edge（アドレスバー / テキストエリア） | Chromium | activate（`pbShow` はホスト依存） |
+| Chrome | Chromium | activate（`pbShow` はホスト依存） |
+| VS Code | Electron | activate（`pbShow` はホスト依存） |
+| Windows ターミナル | Win32 | activate / 自前 HWND |
+| Win11 スタート検索 | UI-less | activate + 入力（統合インライン検索表示は M21） |
+| Office 365（Word） | UI-less / アプリ描画 | activate / `pbShow==FALSE` / OS・アプリ UI に候補 |
 
 > Win11 スタート検索の**統合インライン検索**体験（候補が検索ボックス直下に統合表示
 > される）は検索統合 API（`ITfIntegratableCandidateListUIElement` +

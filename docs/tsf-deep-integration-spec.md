@@ -450,9 +450,10 @@ covered。
 ### 2.11 アプリ互換チェックリスト（実機 Win11・`gate:human-required`）
 
 `pbShow` の戻り値とアプリの描画責務はアプリ実装に依存するため、代表アプリでの実測が
-必要。実測テンプレートと結果ログは `docs/legacy-parity-spec.md` §12 に置く（実機
-Win11 が必要なため、DEV-97 の子課題として `gate:human-required` で M5 着手時に
-実施する）。
+必要。**計測手順・対象アプリ・合格条件（安定仕様）は `docs/legacy-parity-spec.md`
+§12** に定める。実機 Win11 が必要なため DEV-97 の子課題 DEV-153
+（`gate:human-required`）で M5 着手時に実施し、**アプリ別の実測結果（可変ログ）は
+docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 Linear 一本化方針）。
 
 ## 3. 半角全角・無変換・変換・Caps (M22)
 

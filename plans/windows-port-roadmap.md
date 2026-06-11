@@ -75,14 +75,14 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   キーイベントが TIP に届く。
 - **変更対象**: `tsf-tip/src/DllMain.cpp`、`scripts/register.ps1`、`scripts/unregister.ps1`
 - **実装範囲**:
-  - `regsvr32` / インストーラ向けの自己登録ロジック（HKCU CLSID + Profile GUID + Lang `0x0411`）
+  - `regsvr32` / インストーラ向けの自己登録ロジック（machine-wide HKLM CLSID + `RegisterProfile` による TSF プロファイル + キーボード / UIElement カテゴリ + Lang `0x0411`、管理者権限が必要）
   - 言語バー有効化
   - `ITfKeyEventSink` 接続（`ActivateEx` で `ITfKeystrokeMgr::AdviseKeyEventSink` /
     `ITfSource::AdviseSink`、`Deactivate` で対応する Unadvise）
 - **受け入れ条件**:
   - 開発機にビルド成果物をインストールして言語切替で azooKey が選べる
   - キー押下が `ITfKeyEventSink::OnKeyDown` まで到達することをログで確認できる
-  - `regsvr32` 単体で CLSID + Profile が登録されること
+  - `regsvr32` 単体（管理者）で CLSID + TSF プロファイル + キーボードカテゴリが登録されること
 
 ### M3: Composition / Preedit 表示
 
@@ -307,7 +307,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 1. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
 2. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
 3. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
-4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 呼び出し後に HKCU `Software\\Classes\\CLSID\\{...}\\Profiles\\0x00000411\\{...}` が存在し、`DllUnregisterServer` 後に消えることをテスト。COM 初期化が必要なので Windows-only。
+4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 後に HKLM の COM in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する round-trip テスト。`com_smoke_test.cpp` に実装済み。対話的 TSF セッションを要するため opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**（headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
 
 長期（Phase 4 / 配布前に必須）:
 5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
@@ -329,9 +329,10 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
   → **確定（DEV-97 / D-01）**: 二者択一ではなく「両立 (coexistence)」。
   `ITfCandidateListUIElement`（3-interface 契約）と自前 `WS_POPUP` HWND を両方
   実装し、`ITfUIElementMgr::BeginUIElement` の `pbShow` で per-call に切り替える。
-  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・
-  `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）まで
-  実装し、M21 で full 実装。詳細は
+  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・最小 UIElement 候補公開と
+  それに伴う `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）
+  まで実装し、M21 で full 実装。カテゴリ登録は候補公開実装と必ず一体で行う（公開が
+  無いまま登録すると UI-less-only ホストで候補が消える）。詳細は
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - 設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。
 
@@ -341,7 +342,7 @@ v1.0 リリースに向けたリスクと対応:
 |---|---|---|
 | llama.cpp バインディング選定 (M8) | 配布サイズ・初回起動時間に直結 | Phase 3 着手スパイクで確定 (`docs/zenzai-gpu-route.md` 更新)、`bench/` で計測 |
 | CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
-| MSIX 配布 (M11) のユーザースコープ登録 | アンインストール後にレジストリが残る | 既に `DllRegisterServer` で HKCU 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
+| MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
 | 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | Phase 3 中に WinUI 3 / WPF / Tauri を 1〜2 日比較スパイク |
 | 署名証明書の調達 (M12) | リリース日に直結 | Phase 4 着手前に EV/OV 証明書の手当てを並行 |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |

@@ -395,10 +395,14 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
 をサポートする TIP は `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` でカテゴリ登録されねば
 ならない」。
 
-**現状ギャップ**: `tsf-tip/src/DllMain.cpp::DllRegisterServer` は現在
-`GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` のみを `RegisterCategory` しており、
-`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` を登録していない。このままでは TIP が
-UIElement 対応として OS に認識されず、UI-less mode 経路（§2.8）が機能しない。
+**要件**: `tsf-tip/src/DllMain.cpp::DllRegisterServer` は `GUID_TFCAT_TIP_KEYBOARD`
+（キーボード型 TIP の必須カテゴリ）と `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` を
+`RegisterCategory` する（DEV-157 で実装済み）。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
+は **§2.8 の UIElement 公開実装（`ITfUIElementMgr` / `ITfCandidateListUIElement`）と
+同時に登録する**。公開実装が無いまま本カテゴリだけ登録すると、UI-less-only ホスト
+（Windows 11 / Office）が TIP 自前ウィンドウを抑制した上で候補が TSF 経由で公開されず、
+候補が消える / 選択不能になる。したがって本カテゴリ登録は §2.8 / M21 の最小 UIElement
+公開実装に内包し、DEV-157 では登録しない（`ui_less_mode_` 検出のみ先行 = §2.10）。
 
 **v1.0 で必要な追加（M5）**:
 
@@ -409,18 +413,20 @@ pCatMgr->RegisterCategory(kTextServiceClsid,
                           kTextServiceClsid);
 ```
 
-`DllUnregisterServer` でも対応する `UnregisterCategory` を追加する。既存方針同様、
-user-scope (HKCU) で失敗し得るため戻り値は致命扱いしない。検証は
-`tsf-tip/tests/com_smoke_test.cpp` のレジストリ smoke（カテゴリ登録/解除の
-round-trip）で covered できる。
+`DllUnregisterServer` でも対応する `UnregisterCategory` を呼ぶ。machine-wide 登録は
+管理者権限で HKLM へ書き込む前提のため、カテゴリ登録失敗は `SELFREG_E_CLASS` を返す
+致命エラーとして扱う。検証は `tsf-tip/tests/com_smoke_test.cpp` の登録 round-trip
+smoke（`RegisterProfile` / カテゴリ登録 → `GetProfile` で確認 → 解除）で covered。
+対話的 TSF セッションを要するため、opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE`
++ 昇格時のみ実行で、CI（headless）では走らない。
 
 ### 2.10 `ActivateEx` の最小実装と現状ギャップ
 
-**現状**: `TextService::ActivateEx` は `UNREFERENCED_PARAMETER(dwFlags);` で UI-less
-フラグを破棄している（`tsf-tip/src/TextService.cpp`）。`ITfTextInputProcessorEx`
-自体は QI で返しており UI-less スレッドでの activate 自体は成立するが、**自身が
-UI-less か否かを保持していない**ため §2.8 の `pbShow` 分岐の前提（`ui_less_mode_`）
-が満たせない。
+**実装済み（DEV-157）**: `TextService::ActivateEx` は `ITfThreadMgrEx` を QI して
+`GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無を `ui_less_mode_` に
+保持する（`tsf-tip/src/TextService.cpp`）。`dwFlags` は UIElement ビットを公式に
+列挙しないため一次情報にしない。`ui_less_mode_` を消費して自前候補ウィンドウを
+抑制する `pbShow` 分岐（§2.8）は M21 で実装する。
 
 **v1.0 で必要な最小実装（M5）**: UI-less 判定は §2.2 のとおり
 `ITfThreadMgrEx::GetActiveFlags` を一次情報とする（`ActivateEx` の `dwFlags` は

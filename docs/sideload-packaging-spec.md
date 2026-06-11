@@ -147,9 +147,10 @@ MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な C
   runFullTrust + SurrogateServer のみの登録（Option C）を推奨。ただし TIP は
   in-proc 活性化が前提なので surrogate にすると挙動が変わる可能性がある
 
-TIP 側のレジストリ登録（`DllRegisterServer` 内の HKCU `Software\Classes\CLSID\...`）
-は MSIX 経路では使われない。MSIX manifest が registry を上書きする形になるた
-め、TIP 側の自己登録ロジックは MSIX 同梱時に動かないことを前提に書く。
+TIP 側のレジストリ登録（`DllRegisterServer` 内の machine-wide HKLM
+`Software\Classes\CLSID\...` と TSF プロファイル `...\CTF\TIP\...`）は MSIX 経路では
+使われない。MSIX manifest が registry を上書きする形になるため、TIP 側の自己登録
+ロジックは MSIX 同梱時に動かないことを前提に書く。
 **ただし Option A（external location）を採用する場合は逆に従来の `regsvr32`
 経路で `InprocServer32` を登録するため、TIP 側自己登録ロジックがそのまま使える**。
 
@@ -193,9 +194,10 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
 
 ### 1.1.1 HKCU 開発用登録 vs MSIX 登録の取り違え事故防止
 
-`scripts/register.ps1` / `unregister.ps1` は HKCU を直接書く開発用スクリプトで
-あり、MSIX 経路と衝突する。両者を取り違えると、片方の登録解除が漏れて言語バー
-に古いエントリが残る (M28 設計メモ)。本書では以下を運用ルールとして固定:
+`scripts/register.ps1` / `unregister.ps1` は `regsvr32` 経由で machine-wide (HKLM)
+登録を行う管理者向け開発用スクリプトであり、MSIX 経路と衝突する。両者を取り違える
+と、片方の登録解除が漏れて言語バーに古いエントリが残る (M28 設計メモ)。本書では
+以下を運用ルールとして固定:
 
 * `scripts/register-dev.ps1` / `unregister-dev.ps1` にリネーム（接尾辞 `-dev`
   を必須化）
@@ -256,7 +258,7 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 
 - クリーン VM で `Add-AppxPackage`（A は sparse 登録）成功
 - 言語バーから azooKey が選べる
-- アンインストールで `HKCU\Software\Classes\CLSID\...`（A: `regsvr32` 経路）/
+- アンインストールで `HKLM\Software\Classes\CLSID\...`（A: `regsvr32` 経路、machine-wide）/
   package manifest 由来の OS 内部 CLSID 登録（B/C）が残骸なく消える
 - 同梱辞書アセットの第三者ライセンス（Apache-2.0 / BSD-3-Clause / CC0 /
   CC-BY-4.0 / 権利主張なし（日本郵便 郵便番号データ等のパブリックドメイン

@@ -49,10 +49,12 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
    - `--learning <path.tsv>` / `--user-dict <path.json>` を指定すると明示パスを
      優先する。未指定時は `%LOCALAPPDATA%\azooKey\data\` 配下を使う。
 2. **登録方法は 2 通り**:
-   - `regsvr32 build/windows-debug/tsf-tip/azookey_tsf_tip.dll` だけで `DllRegisterServer`
-     により CLSID + Profile + DisplayAttribute Provider まで HKCU に登録される。
+   - `regsvr32 build/windows-debug/tsf-tip/azookey_tsf_tip.dll`（**管理者権限が必要**）で
+     `DllRegisterServer` が machine-wide COM 登録（HKLM）+ TSF プロファイル登録
+     （`RegisterProfile`）+ キーボード / DisplayAttribute / UIElement カテゴリ登録を行う。
    - `scripts/register.ps1` は上記 `regsvr32` 呼び出しに加えて Host EXE の
-     Run キー登録（自動起動）まで行う。MSIX 化までは PS1 経由を推奨。
+     Run キー登録（自動起動・HKCU）まで行う。非管理者で起動すると自動で UAC 昇格する。
+     MSIX 化までは PS1 経由を推奨。
 3. Notepad でローマ字入力しプレエディット表示を確認（アンダーライン付き）。
 4. Space で候補、↑↓ で選択、Enter or 1〜9 で確定、Esc でキャンセル。
 5. 候補確定後、同じ reading を再変換し、確定済み候補が上位に来る（学習効果）。
@@ -101,8 +103,9 @@ ctest --preset windows-debug --no-tests=error
 - **確定時に空文字が入る**: `shown_candidates_` がスナップショットされる前に
   TSF EditSession が拒否（lock denial）された可能性。
   DebugView で `[azooKey TIP]` のフォローログ確認。
-- **`DllRegisterServer` 失敗（`SELFREG_E_CLASS`）**: HKCU 書き込み権限を確認。
-  `regsvr32` は HKCU 配下のみ書くので elevation 不要。
+- **`DllRegisterServer` 失敗（`SELFREG_E_CLASS`）**: 多くは **非管理者実行**が原因。
+  machine-wide 登録は HKLM と CTF\TIP プロファイルに書くため昇格が必須。管理者
+  PowerShell（または自動昇格した `register.ps1`）で再実行する。
 - **学習が反映されない**: 未指定時は
   `%LOCALAPPDATA%\azooKey\data\learning.tsv`、`--learning` 指定時はその明示パスを確認。
   CommitObservation 受信は Host stderr / Dispatcher テストで確認。

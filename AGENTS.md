@@ -211,10 +211,10 @@ Reason:
 ### MCP サーバー (`.mcp.json` / `.codex/config.toml`)
 
 - `context7` … TSF / COM / Win32 API の公式ドキュメント参照 (全 OS で動作)。
-- `powershell` … PowerShell.MCP。`scripts/register.ps1` 等のユーザースコープ (HKCU)
-  コマンドを共有コンソール経由で提示する用途。**実行はユーザが自分の PowerShell で
-  完了させること**（`register.ps1` は HKCU 登録のため昇格不要）。エージェントが
-  単独で TIP 登録を完了させてはならない。
+- `powershell` … PowerShell.MCP。`scripts/register.ps1` 等の machine-wide (HKLM)
+  登録コマンドを共有コンソール経由で提示する用途。**実行はユーザが管理者 PowerShell で
+  完了させること**（`register.ps1` は machine-wide 登録のため管理者権限が必要。非管理者で
+  起動した場合は自動で UAC 昇格する）。エージェントが単独で TIP 登録を完了させてはならない。
 - `windows-mcp` … UI Automation で TIP の実アプリ動作を検証 (Windows 専用)。
 
 `powershell` MCP の `command` には環境変数 `POWERSHELL_MCP_PROXY` を参照させて

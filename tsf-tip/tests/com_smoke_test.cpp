@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 #include <msctf.h>
 
+#include <string>
+
 #include "azookey/tsf/TextServiceFactory.h"
 
 namespace {
@@ -316,4 +318,121 @@ TEST(TsfTipComSmokeTest, ActivateExAdvisesAndDeactivateUnadvisesSinks) {
   EXPECT_EQ(thread_mgr.unadvised_cookie, thread_mgr.sink_cookie);
 
   service->Release();
+}
+
+namespace {
+
+using DllRegisterFn = HRESULT(STDAPICALLTYPE*)();
+
+bool IsProcessElevated() {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  TOKEN_ELEVATION elevation{};
+  DWORD size = 0;
+  const BOOL ok =
+      GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+  CloseHandle(token);
+  return ok && elevation.TokenIsElevated != 0;
+}
+
+// Opt-in gate. The round-trip mutates machine-wide TSF state and depends on an
+// interactive TSF session (ctfmon), so an elevation check alone is not enough to
+// keep it out of CI: GitHub's Windows runners run elevated but headless, where
+// GetProfile cannot observe the just-registered profile. Require an explicit
+// env opt-in so it only runs when a developer asks for it on a real session.
+bool RegistrationSmokeOptedIn() {
+  return GetEnvironmentVariableW(L"AZOOKEY_RUN_REGISTRATION_SMOKE", nullptr, 0) > 0;
+}
+
+std::wstring InprocServerKeyPath() {
+  wchar_t clsid_str[64] = {};
+  StringFromGUID2(azookey::tsf::kTextServiceClsid, clsid_str, ARRAYSIZE(clsid_str));
+  return std::wstring(L"Software\\Classes\\CLSID\\") + clsid_str + L"\\InprocServer32";
+}
+
+bool InprocServerKeyExists() {
+  HKEY hkey = nullptr;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, InprocServerKeyPath().c_str(), 0, KEY_READ, &hkey) !=
+      ERROR_SUCCESS)
+    return false;
+  RegCloseKey(hkey);
+  return true;
+}
+
+}  // namespace
+
+// Machine-wide registration round-trip. This mutates machine-wide TSF state and
+// relies on an interactive TSF session, so it is opt-in (env
+// AZOOKEY_RUN_REGISTRATION_SMOKE) and elevation-gated, and never runs in CI:
+// GitHub's Windows runners are elevated but headless, so GetProfile cannot see
+// the just-registered profile there. A TearDown always unregisters so a failed
+// assertion cannot leave azooKey registered machine-wide.
+class TsfTipRegistrationSmokeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (!RegistrationSmokeOptedIn())
+      GTEST_SKIP() << "opt-in only: set AZOOKEY_RUN_REGISTRATION_SMOKE=1 in an "
+                      "interactive, elevated session to exercise the round-trip "
+                      "(never run in CI; headless runners lack an active TSF session)";
+    if (!IsProcessElevated())
+      GTEST_SKIP() << "machine-wide TSF registration requires elevation";
+
+    module_ = LoadLibraryW(WIDEN_LITERAL(AZOOKEY_TSF_TIP_DLL_PATH));
+    ASSERT_NE(module_, nullptr) << "LoadLibraryW failed";
+    register_ = reinterpret_cast<DllRegisterFn>(GetProcAddress(module_, "DllRegisterServer"));
+    unregister_ = reinterpret_cast<DllRegisterFn>(GetProcAddress(module_, "DllUnregisterServer"));
+    ASSERT_NE(register_, nullptr) << "DllRegisterServer export not found";
+    ASSERT_NE(unregister_, nullptr) << "DllUnregisterServer export not found";
+    ASSERT_TRUE(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
+    co_initialized_ = true;
+  }
+
+  void TearDown() override {
+    if (unregister_) unregister_();  // best-effort cleanup; tolerates missing keys
+    if (co_initialized_) CoUninitialize();
+    if (module_) FreeLibrary(module_);
+  }
+
+  HMODULE module_{nullptr};
+  DllRegisterFn register_{nullptr};
+  DllRegisterFn unregister_{nullptr};
+  bool co_initialized_{false};
+};
+
+TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemovesIt) {
+  ASSERT_EQ(register_(), S_OK);
+  EXPECT_TRUE(InprocServerKeyExists()) << "InprocServer32 not written under HKLM";
+
+  ITfInputProcessorProfiles* profiles = nullptr;
+  ASSERT_EQ(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
+                             IID_ITfInputProcessorProfiles,
+                             reinterpret_cast<void**>(&profiles)),
+            S_OK);
+  ITfInputProcessorProfileMgr* mgr = nullptr;
+  ASSERT_EQ(profiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
+                                     reinterpret_cast<void**>(&mgr)),
+            S_OK);
+
+  // The whole point of DEV-157: the profile is actually registered with TSF and
+  // under the keyboard category, so azooKey can appear as an input method.
+  TF_INPUTPROCESSORPROFILE profile{};
+  EXPECT_EQ(mgr->GetProfile(TF_PROFILETYPE_INPUTPROCESSOR, 0x0411,
+                            azookey::tsf::kTextServiceClsid,
+                            azookey::tsf::kTextServiceProfileGuid, nullptr, &profile),
+            S_OK)
+      << "TSF profile not registered (DEV-157 regression)";
+  EXPECT_TRUE(IsEqualGUID(profile.catid, GUID_TFCAT_TIP_KEYBOARD))
+      << "profile not registered under GUID_TFCAT_TIP_KEYBOARD";
+
+  ASSERT_EQ(unregister_(), S_OK);
+  TF_INPUTPROCESSORPROFILE removed{};
+  EXPECT_NE(mgr->GetProfile(TF_PROFILETYPE_INPUTPROCESSOR, 0x0411,
+                            azookey::tsf::kTextServiceClsid,
+                            azookey::tsf::kTextServiceProfileGuid, nullptr, &removed),
+            S_OK)
+      << "TSF profile still present after DllUnregisterServer";
+  EXPECT_FALSE(InprocServerKeyExists()) << "InprocServer32 not removed from HKLM";
+
+  mgr->Release();
+  profiles->Release();
 }

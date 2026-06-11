@@ -20,13 +20,42 @@
 #include <Windows.h>
 #include <sddl.h>
 
+#include "NamedPipeTransportInternal.h"
+
 #endif
 
 namespace azookey::ipc {
 
 #ifdef _WIN32
 
+namespace internal {
+
+ImmediateOverlappedResult QueryImmediateOverlappedTransfer(HANDLE pipe, OVERLAPPED& overlapped) {
+  DWORD transferred = 0;
+  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
+  return {completed, completed ? ERROR_SUCCESS : GetLastError(), transferred};
+}
+
+void CaptureImmediateOverlappedTransfer(HANDLE pipe, OVERLAPPED& overlapped, PipeIoResult& result,
+                                        ImmediateOverlappedProbe probe) {
+  // ERROR_MORE_DATA is a completed partial message-mode read; keep
+  // its byte count while hard synchronous failures preserve their error.
+  if (!result.ok && result.error != ERROR_MORE_DATA) {
+    return;
+  }
+
+  const auto completed = probe(pipe, overlapped);
+  if (completed.completed || completed.error == ERROR_MORE_DATA) {
+    result.transferred = completed.transferred;
+  }
+}
+
+}  // namespace internal
+
 namespace {
+
+using internal::CaptureImmediateOverlappedTransfer;
+using internal::PipeIoResult;
 
 constexpr DWORD kPipeBufferSize = 64 * 1024;
 constexpr size_t kMaxTransientReadNoDataRetries = 100;
@@ -147,13 +176,6 @@ class ScopedHandle {
   HANDLE handle_{nullptr};
 };
 
-struct PipeIoResult {
-  BOOL ok{FALSE};
-  DWORD error{ERROR_SUCCESS};
-  DWORD transferred{0};
-  bool stopped{false};
-};
-
 enum class ConnectWaitResult {
   Connected,
   Stopped,
@@ -172,21 +194,6 @@ HANDLE PrepareReusableOverlappedEvent() {
     return nullptr;
   }
   return event.get();
-}
-
-void CaptureImmediateOverlappedTransfer(HANDLE pipe, OVERLAPPED& overlapped, PipeIoResult& result) {
-  // ERROR_MORE_DATA is a completed partial message-mode read; keep
-  // its byte count while hard synchronous failures preserve their error.
-  if (!result.ok && result.error != ERROR_MORE_DATA) {
-    return;
-  }
-
-  DWORD transferred = 0;
-  const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
-  const DWORD completed_error = completed ? ERROR_SUCCESS : GetLastError();
-  if (completed || completed_error == ERROR_MORE_DATA) {
-    result.transferred = transferred;
-  }
 }
 
 PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop_event) {

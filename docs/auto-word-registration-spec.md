@@ -623,7 +623,7 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 | layer | 採用ソース | ライセンス | 配布判定 | 条件・注記 |
 |---|---|---|---|---|
 | `base_lexicon` | azooKey_dictionary_storage | Apache-2.0 | **同梱可**（既存） | azooKey 内蔵辞書。LICENSE / NOTICE を ThirdPartyNotices に保持 |
-| `sudachi_lexicon` | SudachiDict（`core` 版） | Apache-2.0（内包: UniDic=BSD-3-Clause / NEologd 由来データ） | **同梱可** | LEGAL に基づき配布物全体が Apache-2.0。UniDic の BSD-3 著作権表示を帰属に含める。サイズの観点で `full` ではなく `core` を採用 |
+| `sudachi_lexicon` | SudachiDict（`core` 版） | Apache-2.0（内包: UniDic=BSD-3-Clause / NEologd 由来データ） | **同梱可** | LEGAL に基づき配布物全体が Apache-2.0。UniDic の BSD-3 著作権表示に加え、SudachiDict NOTICE（内包 NEologd 由来データの Hatena / 郵便 / 駅名 / 人名 帰属）も帰属に伝播（§14.10）。サイズの観点で `full` ではなく `core` を採用 |
 | `neologd_lexicon` | mecab-ipadic-NEologd | Apache-2.0（ただし上流データに個別条件: Hatena キーワード=はてな社条件・要帰属 / 駅名 / 人名 / 郵便 等） | **別 pack DL（同梱不可）** | サイズ大 + 上流データの provenance が個別条件付き。MSIX に含めず M36-B の SHA256 検証 DL（既定無効）。DL 時に上流ライセンス/帰属を提示 |
 | `named_entity_lexicon` | Wikidata（CC0）+ GeoNames（CC-BY-4.0）+ 日本郵便 郵便番号データ | CC0 / CC-BY-4.0 / 権利主張なし | **同梱可**（curated 派生） | Wikidata=CC0（人名/組織/製品 + 読み）。GeoNames=CC-BY-4.0（**帰属必須**）。CC-BY-SA の Wikipedia 本文は **不使用**（share-alike 回避）。郵便データは権利主張なし（帰属歓迎） |
 | `technical_terms_lexicon` | プロジェクト自作 + CC0/CC-BY 上流 | Apache-2.0（自作分）/ 上流に従う | **同梱可** | リポジトリ内で手入れ。外部由来分は上流ライセンス・帰属を ThirdPartyNotices に記載 |
@@ -666,9 +666,17 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
   `ThirdPartyNotices.txt` に集約して MSIX に同梱し、設定アプリのライセンス画面
   （`docs/sideload-packaging-spec.md` §3.2 のバージョン/ライセンス導線）から参照
   可能にする。
+- **bundled の SudachiDict(core) は NEologd 由来データを内包する**（LEGAL が
+  `core_lex.csv` / `notcore_lex.csv` の由来として明記）。Apache-2.0 の
+  NOTICE 伝播の一部として、**SudachiDict LEGAL / NOTICE が列挙する内包データの
+  帰属（Hatena キーワード / 日本郵便 / 駅名 / 人名 等）を ThirdPartyNotices に
+  含める**。standalone の mecab-ipadic-NEologd 単体パックを同梱しないこと
+  （下記配布ガード）と、SudachiDict 内包データの帰属を載せることは両立する。
 - **GeoNames を含む場合は CC-BY-4.0 の帰属表示が必須**（リンク付きクレジット）。
-- NEologd は同梱しないため ThirdPartyNotices には載せない。別 pack DL 時に上流
-  ライセンス/帰属を DL 画面で提示する。
+- standalone の mecab-ipadic-NEologd 単体パックは同梱しないため、その**単体配布
+  としての** notices は ThirdPartyNotices に不要（別 pack DL 時に上流ライセンス/
+  帰属を DL 画面で提示する）。ただし上記のとおり SudachiDict 内包の NEologd 由来
+  データの帰属は同梱物の一部として含める。
 - **配布ガード**（受け入れ条件 §14.13）: MSIX 構築時に同梱アセットへ
   **standalone の mecab-ipadic-NEologd パック（`neologd_lexicon` 層アセット）**
   が混入しないことを CI でチェックする。ガードの対象は NEologd 単体パックで

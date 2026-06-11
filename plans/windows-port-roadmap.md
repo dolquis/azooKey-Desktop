@@ -329,9 +329,10 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
   → **確定（DEV-97 / D-01）**: 二者択一ではなく「両立 (coexistence)」。
   `ITfCandidateListUIElement`（3-interface 契約）と自前 `WS_POPUP` HWND を両方
   実装し、`ITfUIElementMgr::BeginUIElement` の `pbShow` で per-call に切り替える。
-  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・
-  `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）まで
-  実装し、M21 で full 実装。詳細は
+  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・最小 UIElement 候補公開と
+  それに伴う `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）
+  まで実装し、M21 で full 実装。カテゴリ登録は候補公開実装と必ず一体で行う（公開が
+  無いまま登録すると UI-less-only ホストで候補が消える）。詳細は
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - 設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。
 

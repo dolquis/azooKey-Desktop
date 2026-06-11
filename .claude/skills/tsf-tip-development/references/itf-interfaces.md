@@ -48,9 +48,10 @@
   `DllRegisterServer`, `DllUnregisterServer` (`tsf-tip/src/exports.def`)。
 - `DllRegisterServer` は machine-wide (HKLM) に COM クラスを登録し、
   `ITfInputProcessorProfileMgr::RegisterProfile` で TSF プロファイルを登録、
-  `ITfCategoryMgr::RegisterCategory` で `GUID_TFCAT_TIP_KEYBOARD` /
-  `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` / `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` を
-  追加する（HKLM / CTF\TIP 書き込みのため管理者権限が必要）。
+  `ITfCategoryMgr::RegisterCategory` で `GUID_TFCAT_TIP_KEYBOARD` と
+  `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` を追加する（HKLM / CTF\TIP 書き込みのため
+  管理者権限が必要）。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` は UIElement 公開実装
+  （§2.8 / M21）と同時に登録するため、ここではまだ登録しない。
 - `DllUnregisterServer` は `UnregisterProfile` / `Unregister` でプロファイルと
   カテゴリを解除し、`SHDeleteKeyW` で HKLM の CLSID サブツリーを削除する。
 

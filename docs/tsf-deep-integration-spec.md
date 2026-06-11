@@ -396,10 +396,13 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
 ならない」。
 
 **要件**: `tsf-tip/src/DllMain.cpp::DllRegisterServer` は `GUID_TFCAT_TIP_KEYBOARD`
-（キーボード型 TIP の必須カテゴリ）・`GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER`・
-`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` の 3 カテゴリを `RegisterCategory` する
-（DEV-157 で実装済み）。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` が無いと TIP は
-UIElement 対応として OS に認識されず、UI-less mode 経路（§2.8）が機能しない。
+（キーボード型 TIP の必須カテゴリ）と `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` を
+`RegisterCategory` する（DEV-157 で実装済み）。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
+は **§2.8 の UIElement 公開実装（`ITfUIElementMgr` / `ITfCandidateListUIElement`）と
+同時に登録する**。公開実装が無いまま本カテゴリだけ登録すると、UI-less-only ホスト
+（Windows 11 / Office）が TIP 自前ウィンドウを抑制した上で候補が TSF 経由で公開されず、
+候補が消える / 選択不能になる。したがって本カテゴリ登録は §2.8 / M21 の最小 UIElement
+公開実装に内包し、DEV-157 では登録しない（`ui_less_mode_` 検出のみ先行 = §2.10）。
 
 **v1.0 で必要な追加（M5）**:
 

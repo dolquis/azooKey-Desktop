@@ -127,9 +127,20 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - Space で候補表示/次候補へ巡回、↑/↓ で上下移動、1〜9 で直接選択
   - マウス左クリックで即時確定
   - Host 候補リストをリアルタイムで差し替え
+  - UI-less mode 最小契約（`CandidateUiCoordinator`・UI-less フラグ検出
+    （`ITfThreadMgrEx::GetActiveFlags`）・`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
+    登録・`BeginUIElement` 動線）。詳細は
+    `docs/tsf-deep-integration-spec.md` §2.0・§2.8〜§2.11
 - **受け入れ条件**:
   - 「nihongo」入力 → Space で「日本語」等の候補が出る
   - 矢印キーで選択移動、Enter で確定、ESC でキャンセル
+  - UI-less / アプリ描画ホスト（Office 等、`pbShow==FALSE` を返すアプリ）で TIP が
+    activate され、自前 HWND が出ず OS/アプリ UI に候補が乗る（実機確認は
+    `docs/legacy-parity-spec.md` §12 の `gate:human-required` チェックリスト）
+  - Win11 スタート検索では TIP が activate され入力できること（統合インライン検索の
+    **統合表示は M21 スコープ**。検索統合 API `ITfIntegratableCandidateListUIElement`
+    + `ITfFnSearchCandidateProvider` を要するため M5 は統合表示なしの劣化モードまで。
+    `docs/tsf-deep-integration-spec.md` §2.7）
 
 ### M6: Commit と Observation
 
@@ -314,8 +325,14 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 
 - llama.cpp バインディング選択（M8）はビルド時間と配布サイズに影響大。
   M4 → M8 の間で技術調査が必要。
-- 候補 UI（M5）を `ITfCandidateListUIElement` で実装するか自前 HWND にするかは
-  プロトタイプ後に決める。
+- ~~候補 UI（M5）を `ITfCandidateListUIElement` で実装するか自前 HWND にするか~~
+  → **確定（DEV-97 / D-01）**: 二者択一ではなく「両立 (coexistence)」。
+  `ITfCandidateListUIElement`（3-interface 契約）と自前 `WS_POPUP` HWND を両方
+  実装し、`ITfUIElementMgr::BeginUIElement` の `pbShow` で per-call に切り替える。
+  v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・
+  `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）まで
+  実装し、M21 で full 実装。詳細は
+  `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - 設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。
 
 v1.0 リリースに向けたリスクと対応:

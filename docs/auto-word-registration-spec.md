@@ -665,7 +665,8 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
 `AutoWordStore` へ取り込む経路であり、**mecab-ipadic-NEologd を `DictionaryStore`
 の `neologd_lexicon` 層へ入れる経路ではない**。`neologd_lexicon` pack は次を要する
-**別 follow-up**（Linear で別課題化）であり、M53 v1 / M36-B の成果物には含めない:
+**別 follow-up**（Linear DEV-159 で起票済み）であり、M53 v1 / M36-B の成果物には
+含めない:
 
 - **pack 形式**: mecab-ipadic-NEologd を §14.2 のエントリ形式へ変換した
   コンパイル済み DictionaryStore 層アーティファクト（生 NEologd ソースではない。

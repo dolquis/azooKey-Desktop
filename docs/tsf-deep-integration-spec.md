@@ -107,6 +107,15 @@ UI-less mode は本文 §2.1〜§2.5 で扱う full な実装 (M21) と独立に
 （`ITfIntegratableCandidateListUIElement` 等）するが、最小契約は v1.0 で要求さ
 れる。
 
+ただし最小契約が満たすのは **UI-less ホストでの「活性化 + 基本 UI-less 描画」まで**
+である。Win11 スタート検索の**統合インライン検索**体験（候補が検索ボックスに統合
+表示される）は、UI-less mode に加えて検索統合 API（`ITfFnSearchCandidateProvider`
++ `ITfIntegratableCandidateListUIElement`）の実装を要し（[IME search integration
+requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements#ime-search-integration)）、これは §2.7 のとおり **M21 スコープ**。
+未実装でもスタート検索で活性化・入力は可能だが、統合表示は得られず composition 完了
+後にのみクエリが渡る劣化モードになる。したがって **M5 の受け入れに「スタート検索の
+統合表示」を含めない**（活性化・入力のみを範囲とする）。
+
 最小契約を満たすための具体的な API 設計（自前 HWND と TSF UI element の「両立」
 方式 = `CandidateUiCoordinator`）・カテゴリ登録要件・`ActivateEx` 最小実装・実機
 互換チェックリストは §2.8〜§2.11 に定める。これらが DEV-97（D-01）で確定した

@@ -134,9 +134,13 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **受け入れ条件**:
   - 「nihongo」入力 → Space で「日本語」等の候補が出る
   - 矢印キーで選択移動、Enter で確定、ESC でキャンセル
-  - UI-less 想定アプリ（Win11 スタート検索 / Office）で TIP が activate され、
-    `pbShow==FALSE` 時に自前 HWND が出ず OS/アプリ UI に候補が乗る（実機確認は
+  - UI-less / アプリ描画ホスト（Office 等、`pbShow==FALSE` を返すアプリ）で TIP が
+    activate され、自前 HWND が出ず OS/アプリ UI に候補が乗る（実機確認は
     `docs/legacy-parity-spec.md` §12 の `gate:human-required` チェックリスト）
+  - Win11 スタート検索では TIP が activate され入力できること（統合インライン検索の
+    **統合表示は M21 スコープ**。検索統合 API `ITfIntegratableCandidateListUIElement`
+    + `ITfFnSearchCandidateProvider` を要するため M5 は統合表示なしの劣化モードまで。
+    `docs/tsf-deep-integration-spec.md` §2.7）
 
 ### M6: Commit と Observation
 

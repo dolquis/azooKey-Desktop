@@ -170,8 +170,16 @@ private:
   3 引数は順に `pElement`（UI 要素）/ `pbShow`（アプリが TIP UI を許可するかの
   返却。§2.6 参照）/ `pdwUIElementId`（OS 側 UI 要素 ID 返却）
 
-UI 要素 ID は ITfUIElementMgr に格納。`pbShow == TRUE` で TIP が自前 UI を出す
-場合、`Show(true)` を経て OS が `GetString` 等をポーリングしつつ表示が継続する。
+UI 要素 ID は ITfUIElementMgr に格納。`pbShow` の値による分岐は次の通り（§2.6
+の表と整合）:
+
+- **`pbShow == TRUE`（アプリは描画しない / TIP に自前 UI を許可）**: TIP が自前
+  HWND を populate / update する。`ITfUIElement::Show(true)` で表示を開始し、以降
+  は候補リストの差し替えや選択変更を TIP 自身が HWND に直接書く。OS / アプリは
+  描画 / ポーリングしない。
+- **`pbShow == FALSE`（アプリが代替描画する）**: 自前 HWND は出さず、TIP が
+  `UpdateUIElement` で OS に更新通知する。アプリは `ITfCandidateListUIElement::
+  GetString` 等を QI 経由で呼んで候補を取得し、自身で描画する。
 
 ### 2.5 受け入れ条件
 

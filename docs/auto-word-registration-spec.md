@@ -570,7 +570,7 @@ private:
 {
   "dictionary": {
     "sudachiEnabled": true,
-    "neologdEnabled": true,
+    "neologdEnabled": false,
     "namedEntityEnabled": true,
     "technicalTermsEnabled": true,
     "userDictionaryEnabled": true,
@@ -591,6 +591,17 @@ private:
   }
 }
 ```
+
+`neologdEnabled` の既定は **`false`**（opt-in）。`neologd_lexicon` は MSIX 非同梱の
+別 DL pack（§14.9 / §14.10）であり、pack が未ダウンロードの状態で `true` にしても
+当該 layer は無効（missing-pack）として扱う。bundled 層（`sudachi` / `named_entity` /
+`technical_terms`）の既定は `true`。
+
+`categoryBoosts` は **boost-only** とし、各値は schema 上 **[1.0, 1.2] に検証
+（clamp）** する（1.0 未満による降格を禁止し、上限を `category_bonus` の宣言レンジ
+0.20 に対応させる。§14.11 の `category_bonus = clamp(categoryBoosts − 1.0, 0.00,
+0.20)` と整合。`candidateTagBoosts` の boost-only 契約（`docs/app-profile-spec.md`
+§7）と同方針）。
 
 `categoryBoosts` の key は §14.4 で定義する具体 category（`person_name`,
 `place_name`, `station_name`, `product_name`, `company_org`, `software`,
@@ -693,7 +704,7 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 |---|---|---|
 | `base_frequency` | エントリ `frequency`（§14.2） | 0.00–1.00 |
 | `exact_reading_bonus` | 完全一致 +0.10 / alias 一致 +0.05 / 緩い長音一致 +0.02（§14.3 の評価順） | 0.00–0.10 |
-| `category_bonus` | `settings.dictionary.categoryBoosts[category] − 1.0`（§14.8。`named_entity` umbrella 規則を適用） | 0.00–0.20 |
+| `category_bonus` | `clamp(categoryBoosts[category] − 1.0, 0.00, 0.20)`（§14.8。`named_entity` umbrella 規則を適用）。**boost-only**: `categoryBoosts` は [1.0, 1.2] に検証し降格に使わない | 0.00–0.20 |
 | `app_profile_bonus` | `min(0.40, (max(1.0, candidateTagBoosts[tag]) − 1.0) × 0.4)`（§14.12 の category→tag を経由。候補タグ namespace）。**boost-only**: `candidateTagBoosts` は降格に使わない（`max(1.0, …)` で 1.0 未満を無効化）。`docs/app-profile-spec.md` §7 の boost-only 契約と整合 | 0.00–+0.40 |
 | `obsolete_penalty` | `0.10 × (1 − 2^(−Δdays / half_life))`。Δdays = 最終使用からの日数。half_life は §14.4 category（一般 30 / 固有名詞 90 / 技術 120 / 新語 60 日）。**usage timestamp を持つ層（user / auto_words / app_specific）のみ**適用。静的同梱層は 0 | 0.00–0.10 |
 

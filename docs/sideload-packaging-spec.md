@@ -217,9 +217,24 @@ Get-AppxPackage -Name dolquis.azooKey | Remove-AppxPackage
 
 ### 1.5 受け入れ条件
 
-- クリーンな Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
+OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1 経路に確定したら、
+当該経路の受け入れ条件を満たす。
+
+| 経路 | Win11 23H2 | Win10 22H2 (build 19045) | Win Server 2022 (build 20348+) |
+|---|---|---|---|
+| A. external-location packaging | ✅ 必須 | ✅ 必須（`com4:InProcessServer` を使わないため build 19045 で動く） | （対象外） |
+| B. 通常 MSIX + `com4:InProcessServer` | ✅ 必須 | ✗ schema reject（com4 が build 20348+ を要求） | ✅ |
+| C. 通常 MSIX + `com4:SurrogateServer` | ✅ 必須 | ✗ 同上 | ✅ |
+
+共通の受け入れ条件:
+
+- クリーン VM で `Add-AppxPackage`（A は sparse 登録）成功
 - 言語バーから azooKey が選べる
-- アンインストールで `HKCU\Software\Classes\CLSID\...` が消える
+- アンインストールで `HKCU\Software\Classes\CLSID\...`（A: `regsvr32` 経路）/
+  package manifest 由来の OS 内部 CLSID 登録（B/C）が残骸なく消える
+
+> Win10 22H2 必須を維持するなら **Option A 確定が前提**。Option B/C を選ぶ場合
+> は本受け入れ条件から Win10 22H2 を外し、Win Server 2022 ベースに置換する。
 
 ## 2. EV/OV コード署名（M29）
 
@@ -274,15 +289,22 @@ EV/OV 証明書（PFX）を GitHub Secrets に格納：
 | `WINDOWS_PFX_PASSWORD` | PFX のパスワード |
 | `WINDOWS_CERT_THUMBPRINT` | 証明書のフィンガープリント |
 
-#### Publisher 名と CN= の整合（必須）
+#### Publisher と証明書 Subject の整合（必須）
 
-`AppxManifest.xml` の `Identity@Publisher` 属性と署名証明書の Subject CN= は
-**完全一致**（distinguished name のフィールド順含む）でなければならない。不一
-致だと `Add-AppxPackage` が `0x8007000B` ([Publisher name mismatch](https://learn.microsoft.com/windows/msix/msix-troubleshooting-guide#publisher-name-mismatch-0x8007000b-event-id-150)) で失敗する。
+`AppxManifest.xml` の `Identity@Publisher` 属性は、署名証明書の **Subject
+distinguished name (DN) 全体と完全一致**（フィールド順含む）でなければならない。
+CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が含まれる。
+不一致だと `Add-AppxPackage` が `0x8007000B` ([Publisher name mismatch](https://learn.microsoft.com/windows/msix/msix-troubleshooting-guide#publisher-name-mismatch-0x8007000b-event-id-150)) で失敗する。
 
-* §1.1 manifest 例の `Publisher="CN=dolquis"` は **CN=dolquis** とのみ一致
-* OV/EV cert を取得する場合は CN を `dolquis` で揃える（または取得後に manifest
-  側を CN に合わせる）
+* §1.1 manifest 例の `Publisher="CN=dolquis"` は **`CN=dolquis` のみの Subject**
+  を持つ自己署名 dev cert で動作する想定（OV/EV cert ではほぼ通らない）
+* OV/EV cert 取得後は **certutil / openssl で Subject を取得**し、その全文を
+  `Publisher` に貼る。例:
+  * 証明書 Subject: `CN=dolquis, O="Sample LLC", L=Tokyo, S=Tokyo, C=JP`
+  * manifest: `Publisher="CN=dolquis, O=&quot;Sample LLC&quot;, L=Tokyo, S=Tokyo, C=JP"`
+    （XML 属性内のダブルクォートは `&quot;` でエスケープ）
+* RDN の順序とスペース・カンマの形式まで完全一致。`Get-PfxCertificate` /
+  `signtool /pa /v` で Subject 表記を必ず確認してから manifest 側へ貼る
 * CI で署名失敗時は AppxPackagingOM operational log の Event ID 150 を確認
 
 ### 2.2.A Azure Artifact Signing 経路（推奨）

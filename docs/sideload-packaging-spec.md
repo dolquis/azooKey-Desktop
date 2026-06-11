@@ -109,13 +109,10 @@
           </com4:ComServer>
         </com4:Extension>
 
-        <!-- TSF Profile 登録（Windows 11 でも有効） -->
-        <uap3:Extension Category="windows.inputMethod">
-          <uap3:InputMethod>
-            <uap3:Profile InputProfileGuid="{YYYYYYYY-YYYY-YYYY-YYYY-YYYYYYYYYYYY}"
-                          LanguageTag="ja-JP" />
-          </uap3:InputMethod>
-        </uap3:Extension>
+        <!-- TSF Profile 登録は MSIX manifest では扱わない（windows.inputMethod
+             は uap3:Extension の許容 Category に存在しない）。runtime に
+             `ITfInputProcessorProfiles::Register` を呼ぶ。詳細は本節下記
+             「TSF Profile 登録のライフサイクル」を参照。 -->
       </Extensions>
     </Application>
   </Applications>
@@ -158,12 +155,27 @@ TIP 側のレジストリ登録（`DllRegisterServer` 内の HKCU `Software\Clas
 
 #### TSF Profile 登録のライフサイクル
 
-`uap3:Extension Category="windows.inputMethod"` で宣言した Profile GUID は MSIX
-インストール時に OS に登録される。一方、`ITfInputProcessorProfiles::Register` /
-`Unregister` は伝統的な開発用 `regsvr32` 経路（`DllRegisterServer` / `DllUn
-registerServer`）専用とし、MSIX 経路では呼ばない。両方を二重に登録すると言語
-バーに重複エントリが残るので、TIP 内では `IsRunningInMsixContext()`（Win32 API
-`GetCurrentPackageFamilyName` の戻り値で判定）を見て分岐させる。
+TSF Profile（Language Profile）の登録には **MSIX manifest の専用拡張は存在しない**。
+`uap3:Extension` の許容 `Category` は `windows.appExecutionAlias` /
+`windows.protocol` / `windows.fileTypeAssociation` / `windows.appExtension` 系
+のみで、`windows.inputMethod` カテゴリは無い（[uap3:Extension 仕様](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-extension)）。
+よって TSF Profile 登録は **runtime に `ITfInputProcessorProfiles::Register` /
+`Unregister` を呼ぶ**しか方法がない。Microsoft の TSF ドキュメント [Text Service
+Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registration) も同じ規約。
+
+* MSIX 経路 (Option B/C): `DllMain.cpp::DllRegisterServer` は MSIX 経由では呼ばれ
+  ないため、`Application` の `Executable`（本書では `azookey_inference_host.exe`）
+  に Profile 登録ロジックを組み込み、初回起動 / 再活性時に
+  `ITfInputProcessorProfiles::Register` を idempotent に呼ぶ。Unregister は
+  package uninstall hook で MSIX runtime が tear down するタイミングか、または
+  別 CLI（D-09 user dict CLI と同じ host CLI）で `Unregister` を呼ぶ。
+* Option A（external location）: 従来の `regsvr32 azookey_tsf_tip.dll` 経路で
+  `DllRegisterServer` が呼ばれるので、その中で `ITfInputProcessorProfiles::Register`
+  を従来通り呼んで完結する。
+* `DllRegisterServer` / `DllUnregisterServer` を MSIX context で誤って呼ぶと
+  HKCU `\Software\Classes\CLSID\...` に二重エントリが残るので、TIP 内では
+  `IsRunningInMsixContext()`（Win32 API `GetCurrentPackageFamilyName` の戻り値
+  で判定）で MSIX context での自己登録を skip させる。
 
 ### 1.1.1 HKCU 開発用登録 vs MSIX 登録の取り違え事故防止
 

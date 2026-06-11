@@ -532,3 +532,34 @@ DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` のみ。
 - AI バックエンド：`legacy/Core/Sources/Core/MagicConversion/AIBackend.swift`
 - ウィンドウ配置：`legacy/Core/Sources/Core/Windows/WindowPositioning.swift`
 - 横断リッチ化：`docs/rich-features-spec.md`
+
+## 12. UI-less / `pbShow` アプリ互換チェックリスト（M5・実機計測）
+
+> 本節は `docs/tsf-deep-integration-spec.md` §2.8〜§2.11 の候補 UI「両立
+> (coexistence)」方式に対する**実機 Win11 計測ログ**。`ITfUIElementMgr::
+> BeginUIElement` が返す `pbShow` の値とアプリの描画責務はアプリ実装に依存するため
+> 代表アプリで実測する。実機 Win11 が必要なため DEV-97（D-01）の子課題として
+> `gate:human-required` で実施し、結果を本表に記入する。
+
+**計測手順**: 各アプリで `nihongo` → Space で候補表示し、(a) TIP が activate される
+か、(b) `BeginUIElement` の `pbShow` 戻り値、(c) 自前 HWND が出るか / OS・アプリ側
+UI に乗るか、を記録する。`pbShow` はデバッグウィンドウ（§8）かログ（`docs/
+dev-infrastructure-spec.md` の構造化ログ）に出力して確認する。
+
+| アプリ | TIP activate | `pbShow` 戻り値 | 描画 | 備考 |
+|---|---|---|---|---|
+| メモ帳 (Notepad) | ☐ | ☐ TRUE / ☐ FALSE | ☐ 自前 HWND / ☐ OS・アプリ | レガシー Win32 想定 |
+| Edge（アドレスバー / テキストエリア） | ☐ | ☐ | ☐ | |
+| Chrome | ☐ | ☐ | ☐ | |
+| VS Code | ☐ | ☐ | ☐ | |
+| Windows ターミナル | ☐ | ☐ | ☐ | |
+| Win11 スタート検索 | ☐ | ☐ | ☐ | UI-less 想定 |
+| Office 365（Word） | ☐ | ☐ | ☐ | UI-less 想定 |
+
+**合格条件**:
+
+- UI-less 想定アプリ（Win11 スタート検索 / Office）で TIP が activate され、
+  `pbShow == FALSE` のとき自前 HWND が出ず OS/アプリ UI に候補が乗る。
+- レガシー Win32（メモ帳等）で従来通り自前 HWND が出る（`pbShow == TRUE` 経路）。
+- いずれのアプリでも TIP が activate されない事象が出ないこと（`ActivateEx` /
+  `ITfTextInputProcessorEx` / カテゴリ登録の不備の早期検出）。

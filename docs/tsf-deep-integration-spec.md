@@ -107,6 +107,13 @@ UI-less mode は本文 §2.1〜§2.5 で扱う full な実装 (M21) と独立に
 （`ITfIntegratableCandidateListUIElement` 等）するが、最小契約は v1.0 で要求さ
 れる。
 
+最小契約を満たすための具体的な API 設計（自前 HWND と TSF UI element の「両立」
+方式 = `CandidateUiCoordinator`）・カテゴリ登録要件・`ActivateEx` 最小実装・実機
+互換チェックリストは §2.8〜§2.11 に定める。これらが DEV-97（D-01）で確定した
+v1.0 方針であり、`plans/windows-port-roadmap.md`「リスクと不確実性」の未決事項
+（候補 UI を `ITfCandidateListUIElement` か自前 HWND かプロトタイプ後に決める）を
+解消する。
+
 ### 2.1 目的（M21 拡張）
 
 Windows 11 / Office アプリ等で OS 側が候補ウィンドウを描画するモード
@@ -124,6 +131,11 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
     // ...
 }
 ```
+
+> **現状ギャップ（M5 で解消）**: 現行 `TextService::ActivateEx` は
+> `UNREFERENCED_PARAMETER(dwFlags);` でフラグを破棄しており、`ui_less_mode_` を
+> 保持していない（`tsf-tip/src/TextService.cpp`）。最小実装の手順とテスト方針は
+> §2.10 に詳述する。
 
 ### 2.3 CandidateListUIElement 実装
 
@@ -229,6 +241,162 @@ UIElement`（[ctffunc.h](https://learn.microsoft.com/windows/win32/api/ctffunc/n
 | `ShowCandidateNumbers` | 候補番号の表示制御 |
 
 任意であり、v1.0 では実装しない方針。M21 着手時に検索統合スコープ判断を行う。
+
+### 2.8 候補 UI 統合方針と `CandidateUiCoordinator`（v1.0 / M5・DEV-97 確定）
+
+**設計判断（確定）**: 候補 UI は「`ITfCandidateListUIElement`（3-interface 契約）
+か自前 `WS_POPUP` HWND か」の二者択一ではなく、**両方を常に実装し `BeginUIElement`
+の戻り値 `pbShow` で per-call に描画責務を切り替える「両立 (coexistence)」方式**を
+v1.0 方針として確定する。
+
+両立が必要な根拠（[UILess Mode Overview](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview)）:
+
+- UI-less aware TIP は可視 UI を出す前に必ず `ITfUIElementMgr::BeginUIElement` を
+  呼ぶ義務がある。通常モード（非 UI-less スレッド）でも、アプリが
+  `ITfUIElementSink` を advise していれば `pbShow == FALSE` を返し得る。よって
+  自前 HWND だけの実装では「アプリが自分で描画したい」ケースを満たせない。
+- 逆に `ITfCandidateListUIElement` だけでは、UI element sink を持たない大多数の
+  レガシー Win32 アプリ（メモ帳等）で OS もアプリも候補を描画しないため、自前
+  HWND が必須。
+
+→ v1.0 では **自前 HWND と TSF UI element の両方を 1 つの調整役（coordinator）に
+集約**し、`pbShow` で振り分ける。`TextService` は `CandidateWindow` /
+`ITfCandidateListUIElement` を直接操作せず、本 coordinator のみを呼ぶ。
+
+#### API: `tsf-tip/include/azookey/tsf/CandidateUiCoordinator.h`（新規）
+
+> 注: DEV-97 起票時の表記 `azookey/tip/CandidateUiCoordinator.h` は、既存 include
+> 規約 `azookey/tsf/`（`CandidateWindow.h` 等と同階層）に合わせ
+> **`azookey/tsf/CandidateUiCoordinator.h`** に統一する。
+
+```cpp
+namespace azookey::tsf {
+
+// 候補 UI の単一統合点。pbShow に応じて自前 HWND と TSF UI element を振り分ける。
+class CandidateUiCoordinator {
+ public:
+  // ActivateEx で受け取った UI-less フラグを保持（§2.10）。
+  void SetUiLessMode(bool ui_less);
+
+  // 候補表示を開始する。内部で:
+  //   1) ITfCandidateListUIElement インスタンスを生成（候補を保持）
+  //   2) ITfUIElementMgr::BeginUIElement(elem, &pbShow, &ui_element_id_)
+  //   3) OnPbShown(pbShow) で描画責務を確定
+  // pt は自前 HWND を出す場合のキャレット直下スクリーン座標。
+  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
+                  const std::vector<std::wstring>& items, int selected_idx);
+
+  // 候補リスト or 選択変更時。
+  //   pbShow==TRUE 経路: 自前 HWND を再描画（UpdateUIElement は呼ばない）
+  //   pbShow==FALSE 経路: ITfUIElementMgr::UpdateUIElement(ui_element_id_) のみ
+  HRESULT UpdateUI(const std::vector<std::wstring>& items, int selected_idx);
+
+  // 終了。pbShow の値に関わらず HWND を Hide し EndUIElement を必ず呼ぶ。
+  HRESULT EndUI();
+
+  bool IsShowing() const;
+
+ private:
+  // BeginUIElement の戻り値を受けて描画経路を確定:
+  //   true  → 自前 HWND を Show（OS/アプリは描画しない）
+  //   false → 自前 HWND は出さず UpdateUIElement でアプリに委譲
+  void OnPbShown(bool tip_draws);
+
+  CandidateWindow own_window_;                  // pbShow==TRUE 経路
+  ComPtr<CandidateListUIElement> ui_element_;   // pbShow==FALSE / UI-less 経路
+  ITfUIElementMgr* ui_element_mgr_{nullptr};
+  DWORD ui_element_id_{0xFFFFFFFF};             // BeginUIElement が返す ID
+  bool ui_less_mode_{false};                    // TF_TMF_UIELEMENTENABLEDONLY
+  bool tip_draws_{true};                        // 直近 BeginUI の pbShow 結果
+  bool showing_{false};
+};
+
+}  // namespace azookey::tsf
+```
+
+`ITfUIElementMgr::BeginUIElement(ITfUIElement* pElement, BOOL* pbShow,
+DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の各
+シグネチャは msctf.h 準拠。`ui_element_mgr_` は `ActivateEx` 時に
+`thread_mgr->QueryInterface(IID_ITfUIElementMgr, ...)` で取得しキャッシュする。
+
+#### 状態遷移
+
+| 状態 | `BeginUI` | `UpdateUI` | `EndUI` |
+|---|---|---|---|
+| Hidden | `BeginUIElement` → `pbShow` 判定 → Showing(TIP) / Showing(App) | (no-op) | (no-op) |
+| Showing(TIP)（`pbShow==TRUE`） | （再 `BeginUI` は `EndUI` 後） | 自前 HWND 再描画のみ | HWND Hide + `EndUIElement` |
+| Showing(App)（`pbShow==FALSE`） | 同上 | `UpdateUIElement` のみ | `EndUIElement`（HWND は元から非表示） |
+
+`ITfUIElement::Show(FALSE)`（アプリが途中で UI-less に移行し TIP UI を隠す要求）を
+受けた場合は Showing(TIP) → Showing(App) へ遷移し、以後 `UpdateUIElement` 経路に
+切り替える（[UILess Mode Overview「Show/Hide status of UIElement」](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview)）。
+
+#### M5 と M21 の役割分担（改訂）
+
+- **M5（v1.0）**: 上記 coordinator の骨格 + `pbShow==TRUE` 経路（自前 HWND）+
+  `BeginUIElement`/`EndUIElement` 動線 + `ActivateEx` フラグ検出（§2.10）+
+  カテゴリ登録（§2.9）。`pbShow==FALSE` 経路は `CandidateListUIElement` の最小実装
+  （`GetCount`/`GetString`/`GetSelection`/`GetUpdatedFlags` + `UpdateUIElement`
+  通知）まで。
+- **M21**: `CandidateListUIElement` の full 実装（paging・`...Behavior`・
+  `ITfIntegratableCandidateListUIElement` 等 §2.3/§2.7）、IME On/Off（§4）、予測
+  候補の UIElement 化（§8）。M21 の役割は「UI-less mode の full 動作確認とリッチ
+  化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
+  する。
+
+### 2.9 カテゴリ登録要件（`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`）
+
+[UILess Mode Overview「UIElement Supporting TIP」](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview): 「UIElement
+をサポートする TIP は `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` でカテゴリ登録されねば
+ならない」。
+
+**現状ギャップ**: `tsf-tip/src/DllMain.cpp::DllRegisterServer` は現在
+`GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` のみを `RegisterCategory` しており、
+`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` を登録していない。このままでは TIP が
+UIElement 対応として OS に認識されず、UI-less mode 経路（§2.8）が機能しない。
+
+**v1.0 で必要な追加（M5）**:
+
+```cpp
+// DllRegisterServer 内、DISPLAYATTRIBUTEPROVIDER 登録に続けて:
+pCatMgr->RegisterCategory(kTextServiceClsid,
+                          GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+                          kTextServiceClsid);
+```
+
+`DllUnregisterServer` でも対応する `UnregisterCategory` を追加する。既存方針同様、
+user-scope (HKCU) で失敗し得るため戻り値は致命扱いしない。検証は
+`tsf-tip/tests/com_smoke_test.cpp` のレジストリ smoke（カテゴリ登録/解除の
+round-trip）で covered できる。
+
+### 2.10 `ActivateEx` の最小実装と現状ギャップ
+
+**現状**: `TextService::ActivateEx` は `UNREFERENCED_PARAMETER(dwFlags);` で UI-less
+フラグを破棄している（`tsf-tip/src/TextService.cpp`）。`ITfTextInputProcessorEx`
+自体は QI で返しており UI-less スレッドでの activate 自体は成立するが、**自身が
+UI-less か否かを保持していない**ため §2.8 の `pbShow` 分岐の前提（`ui_less_mode_`）
+が満たせない。
+
+**v1.0 で必要な最小実装（M5）**:
+
+```cpp
+STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
+  ui_less_mode_ = (dwFlags & TF_TMF_UIELEMENTENABLEDONLY) != 0;
+  candidate_ui_.SetUiLessMode(ui_less_mode_);
+  // 既存の sink advise / candidate UI 生成 / IPC worker 起動はそのまま
+}
+```
+
+`TF_TMF_SECUREMODE`（パスワード欄等のセキュア入力）等の他フラグは M46 プライバシー
+/ セーフ入力で扱う。本変更は COM smoke テスト（`ActivateEx(dwFlags =
+TF_TMF_UIELEMENTENABLEDONLY)` で `ui_less_mode_` が true になる）で covered。
+
+### 2.11 アプリ互換チェックリスト（実機 Win11・`gate:human-required`）
+
+`pbShow` の戻り値とアプリの描画責務はアプリ実装に依存するため、代表アプリでの実測が
+必要。実測テンプレートと結果ログは `docs/legacy-parity-spec.md` §12 に置く（実機
+Win11 が必要なため、DEV-97 の子課題として `gate:human-required` で M5 着手時に
+実施する）。
 
 ## 3. 半角全角・無変換・変換・Caps (M22)
 

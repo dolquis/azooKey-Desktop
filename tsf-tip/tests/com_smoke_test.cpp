@@ -335,6 +335,15 @@ bool IsProcessElevated() {
   return ok && elevation.TokenIsElevated != 0;
 }
 
+// Opt-in gate. The round-trip mutates machine-wide TSF state and depends on an
+// interactive TSF session (ctfmon), so an elevation check alone is not enough to
+// keep it out of CI: GitHub's Windows runners run elevated but headless, where
+// GetProfile cannot observe the just-registered profile. Require an explicit
+// env opt-in so it only runs when a developer asks for it on a real session.
+bool RegistrationSmokeOptedIn() {
+  return GetEnvironmentVariableW(L"AZOOKEY_RUN_REGISTRATION_SMOKE", nullptr, 0) > 0;
+}
+
 std::wstring InprocServerKeyPath() {
   wchar_t clsid_str[64] = {};
   StringFromGUID2(azookey::tsf::kTextServiceClsid, clsid_str, ARRAYSIZE(clsid_str));
@@ -352,16 +361,21 @@ bool InprocServerKeyExists() {
 
 }  // namespace
 
-// Machine-wide registration round-trip. Writing HKLM (and the TSF CTF\TIP
-// entries) requires elevation, so this is skipped unless the test runs in an
-// elevated process. A TearDown always unregisters so a failed assertion cannot
-// leave azooKey registered machine-wide.
+// Machine-wide registration round-trip. This mutates machine-wide TSF state and
+// relies on an interactive TSF session, so it is opt-in (env
+// AZOOKEY_RUN_REGISTRATION_SMOKE) and elevation-gated, and never runs in CI:
+// GitHub's Windows runners are elevated but headless, so GetProfile cannot see
+// the just-registered profile there. A TearDown always unregisters so a failed
+// assertion cannot leave azooKey registered machine-wide.
 class TsfTipRegistrationSmokeTest : public ::testing::Test {
  protected:
   void SetUp() override {
+    if (!RegistrationSmokeOptedIn())
+      GTEST_SKIP() << "opt-in only: set AZOOKEY_RUN_REGISTRATION_SMOKE=1 in an "
+                      "interactive, elevated session to exercise the round-trip "
+                      "(never run in CI; headless runners lack an active TSF session)";
     if (!IsProcessElevated())
-      GTEST_SKIP() << "machine-wide TSF registration requires elevation; "
-                      "run this test from an elevated shell to exercise it";
+      GTEST_SKIP() << "machine-wide TSF registration requires elevation";
 
     module_ = LoadLibraryW(WIDEN_LITERAL(AZOOKEY_TSF_TIP_DLL_PATH));
     ASSERT_NE(module_, nullptr) << "LoadLibraryW failed";

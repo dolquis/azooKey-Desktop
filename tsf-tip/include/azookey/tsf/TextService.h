@@ -150,7 +150,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void ClearCandidateStateForLifecycle();
   void CancelPendingQueriesForLifecycle();
   void ClearTextStateForLifecycle();
-  bool RequestEndCompositionForLifecycle(ITfContext* context);
+  bool RequestLifecycleCommitOrEndComposition(ITfContext* context);
   void CleanupForLifecycleLoss(ITfContext* context,
                                bool release_active_context,
                                LifecycleCleanupFailurePolicy failure_policy);

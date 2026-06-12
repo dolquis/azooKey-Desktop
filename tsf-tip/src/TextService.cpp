@@ -576,20 +576,32 @@ void TextService::ClearTextStateForLifecycle() {
   commit_surface_.clear();
 }
 
-bool TextService::RequestEndCompositionForLifecycle(ITfContext* context) {
-  if (!composition_) return true;
+bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
+  std::string pending_surface = preedit_kana_;
+  if (!composition_ && romaji_.HasPending()) {
+    auto romaji_preview = romaji_;
+    pending_surface += romaji_preview.Flush();
+  }
+  if (!composition_ && pending_surface.empty()) return true;
   if (!context) return false;
 
   const std::string saved_preedit = preedit_kana_;
   const bool saved_committing = committing_;
   const std::string saved_commit_surface = commit_surface_;
 
-  // The empty-preedit edit session ends the TSF composition without replacing
-  // its range text, so focus loss/Deactivate auto-commits the current preedit
-  // as specified in docs/tsf-deep-integration-spec.md §4.3.
-  preedit_kana_.clear();
-  committing_ = false;
-  commit_surface_.clear();
+  const bool commit_without_composition = composition_ == nullptr;
+  if (commit_without_composition) {
+    committing_ = true;
+    commit_surface_ = pending_surface;
+    preedit_kana_.clear();
+  } else {
+    // The empty-preedit edit session ends the TSF composition without replacing
+    // its range text, so focus loss/Deactivate auto-commits the current preedit
+    // as specified in docs/tsf-deep-integration-spec.md §4.3.
+    preedit_kana_.clear();
+    committing_ = false;
+    commit_surface_.clear();
+  }
 
   ITfEditSession* edit = new EditSession(this, context);
   HRESULT hr_session = E_FAIL;
@@ -597,14 +609,17 @@ bool TextService::RequestEndCompositionForLifecycle(ITfContext* context) {
       context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
   edit->Release();
 
-  const bool ended = SUCCEEDED(hr) && SUCCEEDED(hr_session) && composition_ == nullptr;
-  if (!ended) {
+  const bool completed =
+      SUCCEEDED(hr) && SUCCEEDED(hr_session) &&
+      (commit_without_composition ? (!committing_ && commit_surface_.empty())
+                                  : (composition_ == nullptr));
+  if (!completed) {
     preedit_kana_ = saved_preedit;
     committing_ = saved_committing;
     commit_surface_ = saved_commit_surface;
-    DebugLog("Lifecycle cleanup: composition end edit session was rejected or incomplete");
+    DebugLog("Lifecycle cleanup: commit/end edit session was rejected or incomplete");
   }
-  return ended;
+  return completed;
 }
 
 void TextService::CleanupForLifecycleLoss(ITfContext* context,
@@ -614,8 +629,8 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context,
   CancelPendingQueriesForLifecycle();
 
   ITfContext* cleanup_context = context ? context : active_context_;
-  const bool composition_ended = RequestEndCompositionForLifecycle(cleanup_context);
-  if (composition_ended) {
+  const bool lifecycle_text_committed = RequestLifecycleCommitOrEndComposition(cleanup_context);
+  if (lifecycle_text_committed) {
     ClearTextStateForLifecycle();
   } else {
     if (failure_policy == LifecycleCleanupFailurePolicy::PreserveComposition) {
@@ -1250,13 +1265,16 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       // session ran); insert the surface text directly at the cursor.
       TF_SELECTION sel{};
       ULONG fetched = 0;
+      HRESULT text_hr = E_FAIL;
       if (SUCCEEDED(context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched)) &&
-          fetched > 0) {
-        sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
-        sel.range->Collapse(ec, TF_ANCHOR_END);
-        context_->SetSelection(ec, 1, &sel);
+          fetched > 0 && sel.range) {
+        text_hr = sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+        if (SUCCEEDED(text_hr) && SUCCEEDED(sel.range->Collapse(ec, TF_ANCHOR_END))) {
+          context_->SetSelection(ec, 1, &sel);
+        }
         sel.range->Release();
       }
+      if (FAILED(text_hr)) return text_hr;
     }
     return S_OK;
   }

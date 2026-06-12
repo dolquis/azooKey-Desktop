@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <array>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,151 @@ class KeyboardStateGuard {
 
  private:
   std::array<BYTE, 256> original_{};
+};
+
+class FakeRange final : public ITfRange {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfRange) {
+      *ppvObject = static_cast<ITfRange*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP GetText(TfEditCookie,
+                       DWORD,
+                       WCHAR*,
+                       ULONG,
+                       ULONG* text_length) override {
+    if (text_length) *text_length = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
+    ++set_text_count;
+    last_text.assign(text, text + length);
+    return set_text_result;
+  }
+
+  STDMETHODIMP GetFormattedText(TfEditCookie, IDataObject** data_object) override {
+    if (data_object) *data_object = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetEmbedded(TfEditCookie, REFGUID, REFIID, IUnknown** object) override {
+    if (object) *object = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP InsertEmbedded(TfEditCookie, DWORD, IDataObject*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP ShiftStart(TfEditCookie, LONG, LONG* shifted, const TF_HALTCOND*) override {
+    if (shifted) *shifted = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftEnd(TfEditCookie, LONG, LONG* shifted, const TF_HALTCOND*) override {
+    if (shifted) *shifted = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override {
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override {
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftStartRegion(TfEditCookie, TfShiftDir, BOOL* no_region) override {
+    if (no_region) *no_region = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftEndRegion(TfEditCookie, TfShiftDir, BOOL* no_region) override {
+    if (no_region) *no_region = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP IsEmpty(TfEditCookie, BOOL* empty) override {
+    if (!empty) return E_POINTER;
+    *empty = last_text.empty() ? TRUE : FALSE;
+    return S_OK;
+  }
+
+  STDMETHODIMP Collapse(TfEditCookie, TfAnchor anchor) override {
+    ++collapse_count;
+    last_anchor = anchor;
+    return collapse_result;
+  }
+
+  STDMETHODIMP IsEqualStart(TfEditCookie, ITfRange*, TfAnchor, BOOL* equal) override {
+    if (equal) *equal = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP IsEqualEnd(TfEditCookie, ITfRange*, TfAnchor, BOOL* equal) override {
+    if (equal) *equal = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP CompareStart(TfEditCookie, ITfRange*, TfAnchor, LONG* result) override {
+    if (result) *result = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP CompareEnd(TfEditCookie, ITfRange*, TfAnchor, LONG* result) override {
+    if (result) *result = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP AdjustForInsert(TfEditCookie, ULONG, BOOL* insert_ok) override {
+    if (insert_ok) *insert_ok = TRUE;
+    return S_OK;
+  }
+
+  STDMETHODIMP GetGravity(TfGravity* start, TfGravity* end) override {
+    if (!start || !end) return E_POINTER;
+    *start = TF_GRAVITY_FORWARD;
+    *end = TF_GRAVITY_FORWARD;
+    return S_OK;
+  }
+
+  STDMETHODIMP SetGravity(TfEditCookie, TfGravity, TfGravity) override { return S_OK; }
+
+  STDMETHODIMP Clone(ITfRange** clone) override {
+    if (!clone) return E_POINTER;
+    *clone = static_cast<ITfRange*>(this);
+    AddRef();
+    return S_OK;
+  }
+
+  STDMETHODIMP GetContext(ITfContext** context) override {
+    if (context) *context = nullptr;
+    return E_NOTIMPL;
+  }
+
+  int set_text_count{0};
+  int collapse_count{0};
+  std::wstring last_text;
+  TfAnchor last_anchor{TF_ANCHOR_START};
+  HRESULT set_text_result{S_OK};
+  HRESULT collapse_result{S_OK};
+
+ private:
+  LONG ref_count_{1};
 };
 
 class NoopContext final : public ITfContext {
@@ -96,15 +242,23 @@ class NoopContext final : public ITfContext {
 
   STDMETHODIMP GetSelection(TfEditCookie,
                             ULONG,
-                            ULONG,
-                            TF_SELECTION*,
+                            ULONG selection_count,
+                            TF_SELECTION* selection,
                             ULONG* fetched) override {
-    if (fetched) *fetched = 0;
-    return E_NOTIMPL;
+    if (!fetched) return E_POINTER;
+    *fetched = 0;
+    if (!selection_range || selection_count == 0 || !selection) return E_NOTIMPL;
+    selection[0] = {};
+    selection_range->AddRef();
+    selection[0].range = selection_range;
+    *fetched = 1;
+    return S_OK;
   }
 
-  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override {
-    return E_NOTIMPL;
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG selection_count, const TF_SELECTION*) override {
+    ++set_selection_count;
+    last_selection_count = selection_count;
+    return set_selection_result;
   }
 
   STDMETHODIMP GetStart(TfEditCookie, ITfRange** start) override {
@@ -176,6 +330,10 @@ class NoopContext final : public ITfContext {
   HRESULT request_session_result{S_OK};
   bool run_edit_session{false};
   TfEditCookie edit_cookie{1};
+  ITfRange* selection_range{nullptr};
+  int set_selection_count{0};
+  ULONG last_selection_count{0};
+  HRESULT set_selection_result{S_OK};
 
  private:
   LONG ref_count_{1};
@@ -448,6 +606,53 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossEndsCompositionAndClearsStaleState) {
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
   EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeCompositionExists) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_TRUE(h.service.has_active_context_for_test());
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsRejected) {

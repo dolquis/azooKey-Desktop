@@ -16,7 +16,8 @@ GUI で完結して操作可能にする。M8 で実装したモデルロード�
 WinUI 3 設定アプリを土台に、ユーザーが以下を行えるようにする:
 
 - モデル一覧の閲覧と検証状態（valid / invalid / VRAM 不足の可能性）
-- backend の自動推奨と手動切替（CPU / CUDA / DirectML / NPU）
+- backend の自動推奨と手動切替（CPU / CUDA / WinML〔EP 自動選択〕。旧 `directml` /
+  `npu` は `winml` に統合・非推奨。`docs/copilot-pc-backend-spec.md` §4.4 参照）
 - ベンチマーク実行と p50/p95/load_ms/rss_mb/vram_mb の表示
 - 選択モデルの永続化（Host 再起動後の自動ロード）
 
@@ -52,7 +53,7 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 | `model_family` | metadata から推定（`gpt2` / `llama` / `mistral` 等） | GGUF metadata |
 | `quantization` | `Q4_K_M` / `Q5_K_M` / `Q8_0` 等 | GGUF metadata |
 | `n_params` | 推定パラメータ数 | GGUF metadata |
-| `recommended_backend` | `cpu` / `cuda` / `directml` / `npu` | §5 ロジック |
+| `recommended_backend` | `cpu` / `cuda` / `winml` | §5 ロジック（旧 `directml` / `npu` は `winml` に統合・非推奨） |
 | `last_load_status` | `success` / `failed` / `not_loaded` | 過去ログ |
 | `last_error` | 直近エラー文字列 | 過去ログ |
 | `last_benchmark` | 直近ベンチマーク結果（§6） | 過去ログ |
@@ -185,21 +186,31 @@ load/unload とライブクエリの race を構造的に排除する。
 
 ### 5.1 推奨ロジック
 
-`backendPreference = auto` のとき、以下の順で backend を選ぶ:
+`backendPreference = auto` のとき、`docs/copilot-pc-backend-spec.md` §4.3 / §4.5 の
+M24 決定（R1=llama.cpp / R2=Windows ML）に従って選ぶ:
 
-1. M24 の `auto` 優先順位に従う: NPU > DirectML > CUDA > CPU
-   （AC 電源 / バッテリーでの差し替えも M24 の挙動を踏襲）
+1. **engine の選択**: ONNX 変換モデルかつ Win11 24H2+ かつ対象 EP 取得・登録済み
+   （§4.6）なら **R2（`winml`、EP 自動選択 NPU→GPU→CPU）**。それ以外（GGUF モデル /
+   非対応 OS / EP 未取得）は **R1**: NVIDIA かつ CUDA 可なら `cuda`、不可なら `cpu`。
+   バッテリ駆動時は §4.5 に従い discrete GPU(CUDA) を後回しにする。
 2. **同一順位内のタイブレーカーとしてのみ**ベンチマーク履歴を参照する
    （直近 7 日以内、同一モデル、`status = success` のもの。同 rank 内に
    複数 backend がある場合に p95 最良を採用）。順位を跨いだ並べ替えは
    行わない
 
-M45 は backend 順位を独自に上書きせず、M24 で定義した順位をそのまま
-利用する（既存 root `backendPreference` の `auto` 挙動を変えないため）。
-順位を変更したい場合は M24 spec を更新するか、ユーザーが明示的に
+M45 は backend 順位を独自に上書きせず、`copilot-pc-backend-spec.md` §4 で定義した
+順位をそのまま利用する（既存 root `backendPreference` の `auto` 挙動を変えないため）。
+順位を変更したい場合は同 spec を更新するか、ユーザーが明示的に
 `model.backendPreference` を非 `auto` 値に設定する。
 
-NPU 検出は `IDXCoreAdapterList` 経由（M24 で実装）。
+R2 の可用性検出（NPU/GPU EP）は Windows ML の `ExecutionProviderCatalog`
+（`FindAllProviders()` の `ReadyState`、§4.6）で行う。`IDXCoreAdapter` 列挙は
+device 名表示などの補助に留める。
+
+> **`directml` / `npu` 値の非推奨（M24 決定で更新）**: 旧 `backendPreference` の
+> `directml` / `npu` は、具体 EP を enum 値化しない方針（§4.4）に伴い **`winml` に
+> 統合・非推奨**とする。後方互換のため受理はするが、内部的に `winml`（EP 自動選択）へ
+> マップする（不能なら §5.3 で R1 CPU フォールバック）。新規設定は `winml` を使う。
 
 ### 5.2 後方互換
 
@@ -274,6 +285,7 @@ Backend: auto → CPU
     "enabled": true,
     "selectedPath": "",
     "backendPreference": "auto",
+    "epPreference": "auto",
     "nGpuLayers": -1,
     "autoLoadOnHostStart": true,
     "fallbackToSimpleConverter": true,
@@ -287,8 +299,9 @@ Backend: auto → CPU
 |---|---|---|---|
 | `enabled` | bool | true | Zenzai を使うか（false なら SimpleConverter 固定） |
 | `selectedPath` | string | "" | 選択中モデルの絶対パス |
-| `backendPreference` | enum | "auto" | `auto` / `cpu` / `cuda` / `directml` / `npu` |
-| `nGpuLayers` | int | -1 | -1 = 全レイヤ GPU、0 = CPU only、正値 = 部分オフロード |
+| `backendPreference` | enum | "auto" | `auto` / `cpu` / `cuda` / `winml`。旧 `directml` / `npu` は受理するが `winml` に統合・**非推奨**（§5.1） |
+| `epPreference` | enum | "auto" | R2(`winml`) 時の EP 希望: `auto` / `npu` / `gpu` / `cpu`（`copilot-pc-backend-spec.md` §4.4） |
+| `nGpuLayers` | int | -1 | R1(llama.cpp) 専用。-1 = 全レイヤ GPU、0 = CPU only、正値 = 部分オフロード |
 | `autoLoadOnHostStart` | bool | true | Host 起動時に `selectedPath` を自動ロード |
 | `fallbackToSimpleConverter` | bool | true | ロード失敗時に Simple へ落ちる |
 | `benchmarkOnModelChange` | bool | false | モデル変更時に自動ベンチ |

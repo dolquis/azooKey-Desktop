@@ -187,7 +187,8 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
    使え、M8 で実装済み。Copilot+ PC でも当面は zenz-v3 を R1 CPU で動かす（小型モデル
    のため CPU でも省電力許容）。
 2. **M24 の Copilot+ NPU 経路 = R2（Windows ML）に振る**。ベンダ別 SDK を同梱せず、
-   Windows ML の自動 EP 配信・自動選択・NPU→GPU→CPU フォールバックに委ねる。
+   Windows ML の自動 EP 配信・自動選択・NPU→GPU→CPU フォールバックに委ねる（ただし
+   first-run の EP 取得・登録は §4.6 のとおりアプリ側で明示実行が必要）。
 3. **R2 は zenz-v3 → ONNX Runtime GenAI 変換の成否に依存する後続トラック（v1.0 後）**。
    変換可否スパイクを R2 着手の前提課題とし、不可なら R2 を保留して R1 CPU を Copilot+
    の既定に据える。**NPU 必須化はしない**（入力が止まらないことを最優先）。
@@ -225,6 +226,40 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
 Update 配信で非バンドル、CUDA は optional add-on、base MSIX は llama.cpp CPU ランタイム
 + Windows ML bootstrap。**モデル本体（GGUF / ONNX）は MSIX 非同梱で初回起動時 DL**＝
 同 §1.2 と一貫）。
+
+### 4.6 R2 の EP 取得・登録（first-run フロー）
+
+> **重要**: R2 の EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx）が非バンドル＝Windows
+> Update 配信であることは、**初回起動時に自動で使える意味ではない**。EP が
+> `NotPresent` の機器では、アプリが `ExecutionProviderCatalog` API を呼んで
+> **取得（download/install）+ 登録（register）するまで ONNX Runtime はその EP を
+> ロードできない**。この明示ステップを省くと、対応 NPU/GPU を積んだ Copilot+ PC でも
+> R1 CPU フォールバックに張り付く。出典:
+> [Install Windows ML execution providers](https://learn.microsoft.com/windows/ai/new-windows-ml/initialize-execution-providers)、
+> [Register Windows ML execution providers](https://learn.microsoft.com/windows/ai/new-windows-ml/register-execution-providers)。
+
+R2 エンジン初期化時（`WinMlBackend` 起動 / 初回モデルロード前）に以下を行う:
+
+1. `ExecutionProviderCatalog.GetDefault()` を取得。
+2. 取得方針:
+   - 簡易: `EnsureAndRegisterCertifiedAsync()`（対応 EP を全 DL + 一括登録。初回は
+     ネットワーク速度次第で数秒〜数分。**進捗 UX 必須**）。
+   - 個別: `FindAllProviders()` で `ReadyState` を確認し、目的 EP に
+     `EnsureReadyAsync()` → 成功時 `TryRegister()`。`ep_preference`（§4.4）で対象 EP を絞る。
+3. `ReadyState` 遷移を扱う: `NotPresent`（未 DL）/ `NotReady`（DL 済・未登録）はいずれも
+   `EnsureReadyAsync()`、`Ready` は `TryRegister()`。
+4. **エラー / 進行中処理**: `EnsureReadyAsync()` の結果 `Status` を確認し、
+   - `Failure` → `ExtendedError`(HRESULT) / `DiagnosticText` をログし、当該 EP を諦めて
+     **R1 CPU にフォールバック**（§4.5、`Health=degraded` + `last_error`）。
+   - `InProgress` → 完了を待ってからセッション生成。
+5. **first-run UX**: 初回 DL は時間がかかるため、進捗インジケータ（download progress
+   callback）を出す。オフライン / 制限ネットワーク環境は EP DL 不可のため R1 CPU 継続
+   （bring-your-own EP は将来検討）。
+6. 登録結果は ONNX Runtime の `GetEpDevices()` で検証可能（例: 登録後に
+   `QNNExecutionProvider (DeviceType: NPU)` が現れる）。
+
+この EP 取得・登録ステップの実装は M24（`WinMlBackend`）の必須要件とし、
+`docs/dev-infrastructure-spec.md` の起動シーケンス / 診断にも EP ReadyState を含める。
 
 ## 5. mmap モデルロード
 

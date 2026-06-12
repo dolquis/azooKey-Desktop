@@ -87,9 +87,15 @@
     },
     "backendPreference": {
       "type": "string",
-      "enum": ["auto", "cpu", "cuda", "directml", "npu"],
+      "enum": ["auto", "cpu", "cuda", "winml", "directml", "npu"],
       "default": "auto",
-      "description": "Phase 6-B (M24): 推論バックエンド優先順位。auto は NPU>DirectML>CUDA>CPU（バッテリ時は NPU>CPU>DirectML>CUDA）"
+      "description": "Phase 6-B (M24): 推論エンジン選択。auto は docs/copilot-pc-backend-spec.md §4.3/§4.5 に従い R2(winml: EP 自動選択 NPU>GPU>CPU) / R1(cuda,cpu) を選ぶ。winml は ONNX+Windows ML 経路で具体 EP を自動選択。directml/npu は非推奨（互換のため受理し内部的に winml にマップ）"
+    },
+    "epPreference": {
+      "type": "string",
+      "enum": ["auto", "npu", "gpu", "cpu"],
+      "default": "auto",
+      "description": "Phase 6-B (M24): backendPreference=winml(R2) 時の Windows ML EP 希望。docs/copilot-pc-backend-spec.md §4.4"
     },
     "powerProfile": {
       "type": "string",

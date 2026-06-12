@@ -301,6 +301,25 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
   EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, SpaceUsesCachedCandidatesWithoutPending) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) {
   TextServiceHarness h;
 

@@ -381,20 +381,28 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         } else {
           // Snapshot the candidate list so commit always reflects what was
           // displayed, even if a late QueryCandidates response arrives later.
+          std::vector<ipc::CandidateField> snapshot;
+          bool wait_for_candidates = false;
           {
             std::lock_guard<std::mutex> lk(candidates_mtx_);
-            shown_candidates_ = candidates_;
+            if (candidates_.empty()) {
+              candidate_window_show_pending_ = true;
+              wait_for_candidates = true;
+            } else {
+              candidate_window_show_pending_ = false;
+              shown_candidates_ = candidates_;
+              snapshot = shown_candidates_;
+            }
           }
-          std::vector<std::wstring> items;
-          for (auto& c : shown_candidates_) items.push_back(Utf8ToWide(c.surface));
-          if (!items.empty()) {
-            selected_candidate_idx_ = 0;
-            POINT pt = caret_pt_;
-            if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
-            candidate_window_.Show(pt, items, 0);
-          } else {
-            std::lock_guard<std::mutex> lk(candidates_mtx_);
-            candidate_window_show_pending_ = true;
+          if (!wait_for_candidates) {
+            std::vector<std::wstring> items;
+            for (const auto& c : snapshot) items.push_back(Utf8ToWide(c.surface));
+            if (!items.empty()) {
+              selected_candidate_idx_ = 0;
+              POINT pt = caret_pt_;
+              if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+              candidate_window_.Show(pt, items, 0);
+            }
           }
         }
       }

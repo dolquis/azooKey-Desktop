@@ -260,7 +260,8 @@ R2 エンジン初期化時（`WinMlBackend` 起動 / 初回モデルロード�
    `QNNExecutionProvider (DeviceType: NPU)` が現れる）。
 
 この EP 取得・登録ステップの実装は M24（`WinMlBackend`）の必須要件とし、
-`docs/dev-infrastructure-spec.md` の起動シーケンス / 診断にも EP ReadyState を含める。
+EP の `ep` / `ep_state` / `ep_last_error` を診断に含める（`docs/dev-infrastructure-spec.md`
+§7.7.2 トレースログ・§12.6 `QueryDiagnostics` に反映済み）。
 
 ## 5. mmap モデルロード
 

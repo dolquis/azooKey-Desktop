@@ -720,6 +720,15 @@ bool TextService::PerformHandshake() {
   return true;
 }
 
+// Re-arm a QueryCandidates that was pulled from the queue but not delivered
+// because the pipe dropped, so the reconnected serve loop re-issues it without
+// the user retyping. Skipped when a newer request or a commit already
+// superseded it (ipc_pending_id_ has moved on).
+void TextService::RearmPendingQuery(uint64_t req_id) {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  if (ipc_pending_id_ == req_id) ipc_has_request_ = true;
+}
+
 void TextService::IpcWorkerThread() {
   using namespace azookey::ipc;
 
@@ -795,7 +804,10 @@ void TextService::ServeConnection() {
       }
     }
 
-    // Drain fire-and-forget queue (CommitObservation, Cancel) first.
+    // Drain fire-and-forget queue (CommitObservation, Cancel) first. A send or
+    // response failure here means the pipe dropped (e.g. the host restarted):
+    // re-arm any query pulled this iteration and return so the outer loop
+    // reconnects, instead of looping back to the wait on a dead connection.
     for (auto& item : to_send) {
       Envelope env;
       env.version = 1;
@@ -804,13 +816,20 @@ void TextService::ServeConnection() {
       env.type = item.type;
       env.payload_json = item.payload_json;
       if (!ipc_client_.Send(env)) {
-        DebugLog("IPC: faf send failed for type=" + TypeToString(item.type));
-        continue;
+        if (!ipc_stop_.load())
+          DebugLog("IPC: faf send failed for type=" + TypeToString(item.type) +
+                   "; reconnecting");
+        if (has_qc) RearmPendingQuery(req_id);
+        return;
       }
       if (item.expects_response) {
         auto res = ipc_client_.Receive();
-        if (!res && !ipc_stop_.load()) {
-          DebugLog("IPC: faf receive failed for type=" + TypeToString(item.type));
+        if (!res) {
+          if (!ipc_stop_.load())
+            DebugLog("IPC: faf receive failed for type=" + TypeToString(item.type) +
+                     "; reconnecting");
+          if (has_qc) RearmPendingQuery(req_id);
+          return;
         }
       }
     }
@@ -838,9 +857,15 @@ void TextService::ServeConnection() {
     }
 
     if (!ipc_client_.Send(qenv)) {
-      std::lock_guard<std::mutex> lock(ipc_mtx_);
-      ipc_inflight_id_ = 0;
-      DebugLog("IPC: QueryCandidates send failed");
+      {
+        std::lock_guard<std::mutex> lock(ipc_mtx_);
+        ipc_inflight_id_ = 0;
+      }
+      // Pipe died after we cleared ipc_has_request_: re-arm so the reconnected
+      // loop re-issues this reading without the user retyping.
+      RearmPendingQuery(req_id);
+      if (!ipc_stop_.load())
+        DebugLog("IPC: QueryCandidates send failed; will retry after reconnect");
       break;
     }
 
@@ -921,7 +946,11 @@ void TextService::ServeConnection() {
       ipc_inflight_id_ = 0;
     }
     if (!qres) {
-      if (!ipc_stop_.load()) DebugLog("IPC: QueryCandidates receive failed");
+      // Host died after the query was sent: re-arm so the reconnected loop
+      // re-issues it (recover without retyping).
+      RearmPendingQuery(req_id);
+      if (!ipc_stop_.load())
+        DebugLog("IPC: QueryCandidates receive failed; will retry after reconnect");
       break;
     }
 

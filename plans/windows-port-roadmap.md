@@ -1574,8 +1574,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/model-management-spec.md`。
   - `%LOCALAPPDATA%\azooKey\models\` のスキャン。R1=`.gguf` ファイル
     （GGUF magic / version / metadata 検証、quantization 推定）と
-    R2=ORT GenAI モデルディレクトリ（`genai_config.json` + `model.onnx` の
-    presence 検証）の両方式を検出する（§3.1）。zenz-v3 変換 ONNX の
+    R2=ORT GenAI モデルディレクトリ（`genai_config.json` をパースし、その
+    config が参照する ONNX の presence 検証。ファイル名はハードコードしない、
+    §3.3）の両方式を検出する（§3.1）。zenz-v3 変換 ONNX の
     optional パッケージはここで discovery される
   - `ListModels`（`format` = `gguf` / `onnx_genai` を含む）/ `BenchmarkModel` IPC
   - backend 自動選択は M24 決定（`docs/copilot-pc-backend-spec.md` §4.3 / §4.5、

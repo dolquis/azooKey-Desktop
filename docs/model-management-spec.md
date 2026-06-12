@@ -59,8 +59,8 @@ R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）�
 | `file_name` | ファイル名 / ディレクトリ名 | filesystem |
 | `format` | `gguf`（R1）/ `onnx_genai`（R2 ORT GenAI ディレクトリ） | filesystem |
 | `size_bytes` | ファイル / ディレクトリ合計サイズ | filesystem |
-| `sha256` | SHA-256 ハッシュ（任意、初回または明示時のみ計算。R2 は `model.onnx` 等） | computed |
-| `valid` | 形式別検証結果（R1=GGUF magic/version、R2=`genai_config.json` + `model.onnx` 存在）。旧 `gguf_valid` は R1 別名として後方互換維持 | parse |
+| `sha256` | SHA-256 ハッシュ（任意、初回または明示時のみ計算。R2 は config 参照 ONNX 等） | computed |
+| `valid` | 形式別検証結果（R1=GGUF magic/version、R2=`genai_config.json` + その config が参照する ONNX の存在、§3.3）。旧 `gguf_valid` は R1 別名として後方互換維持 | parse |
 | `model_family` | metadata から推定（`gpt2` / `llama` 等。R2 は `genai_config.json` から） | GGUF metadata / genai_config |
 | `quantization` | `Q4_K_M` / `Q5_K_M` / `Q8_0` 等（R1）。R2 は int4/int8 等 | GGUF metadata / genai_config |
 | `n_params` | 推定パラメータ数 | GGUF metadata / genai_config |
@@ -80,10 +80,19 @@ R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）�
 - ファイル末端切詰め（claimed size > actual size）
 - metadata 必須キー欠落
 
-**R2（ONNX Runtime GenAI）**: ディレクトリに `genai_config.json` と参照される
-`model.onnx`（および tokenizer 関連ファイル）が揃うことを検証する。欠落・JSON 不正は
-`valid = false` として一覧に残し、ロード対象から除外する（R1 と同じ degraded 扱い）。
-深い ONNX グラフ検証は行わず、ロード失敗時は §5.3 の fallback に委ねる。
+**R2（ONNX Runtime GenAI）**: ディレクトリに `genai_config.json` が存在すること、
+かつ **その config がパースでき、参照する ONNX ファイルが実在すること**を検証する。
+ONNX のファイル名は `model.onnx` 固定ではなく config が指すため、ファイル名を
+ハードコードせず config から解決する: `model.decoder.filename`（および pipeline 構成
+では各ステージの `filename`）が指す相対パスのファイル、および tokenizer 関連ファイル
+（`tokenizer.json` / `tokenizer_config.json` 等、config / 規約で要求されるもの）が揃うかを
+確認する（ORT GenAI C API はディレクトリに `genai_config.json` があることを要件とし、
+ONNX 本体パスは config の `filename` 系フィールドで定義される。
+cf. https://onnxruntime.ai/docs/genai/api/c.html ,
+https://onnxruntime.ai/docs/genai/reference/config.html ）。
+`genai_config.json` 欠落・JSON 不正・参照 ONNX 欠落のいずれも `valid = false` として
+一覧に残し、ロード対象から除外する（R1 と同じ degraded 扱い）。深い ONNX グラフ検証は
+行わず、ロード失敗時は §5.3 の fallback に委ねる。
 
 ## 4. IPC
 
@@ -311,7 +320,7 @@ Backend: auto → CPU
 
 | 表示 | 意味 |
 |---|---|
-| ✅ | `valid = true` かつ ロード成功履歴あり（R1=GGUF 検証 OK / R2=`genai_config.json` + `model.onnx` 存在） |
+| ✅ | `valid = true` かつ ロード成功履歴あり（R1=GGUF 検証 OK / R2=`genai_config.json` + その config が参照する ONNX 存在、§3.3） |
 | ⚠️ | `valid = true` だが VRAM 不足 / ロード失敗履歴あり |
 | ❌ | `valid = false` または重大エラー |
 | 🔄 | ロード中 / ベンチマーク中 |

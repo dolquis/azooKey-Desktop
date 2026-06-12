@@ -53,7 +53,7 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 | `model_family` | metadata から推定（`gpt2` / `llama` / `mistral` 等） | GGUF metadata |
 | `quantization` | `Q4_K_M` / `Q5_K_M` / `Q8_0` 等 | GGUF metadata |
 | `n_params` | 推定パラメータ数 | GGUF metadata |
-| `recommended_backend` | `cpu` / `cuda` / `winml` | §5 ロジック（旧 `directml` / `npu` は `winml` に統合・非推奨） |
+| `recommended_backend` | `cpu` / `cuda` / `vulkan` / `winml` | §5 ロジック（`vulkan`=R1 ベンダ横断 GPU。旧 `directml` / `npu` は `winml` に統合・非推奨） |
 | `last_load_status` | `success` / `failed` / `not_loaded` | 過去ログ |
 | `last_error` | 直近エラー文字列 | 過去ログ |
 | `last_benchmark` | 直近ベンチマーク結果（§6） | 過去ログ |
@@ -191,8 +191,9 @@ M24 決定（R1=llama.cpp / R2=Windows ML）に従って選ぶ:
 
 1. **engine の選択**: ONNX 変換モデルかつ Win11 24H2+ かつ対象 EP 取得・登録済み
    （§4.6）なら **R2（`winml`、EP 自動選択 NPU→GPU→CPU）**。それ以外（GGUF モデル /
-   非対応 OS / EP 未取得）は **R1**: NVIDIA かつ CUDA 可なら `cuda`、不可なら `cpu`。
-   バッテリ駆動時は §4.5 に従い discrete GPU(CUDA) を後回しにする。
+   非対応 OS / EP 未取得）は **R1**: NVIDIA かつ CUDA 可なら `cuda`、ベンダ横断 GPU
+   （非 NVIDIA / R2 不可）なら `vulkan`（ggml-vulkan ビルド時）、いずれも不可なら `cpu`。
+   バッテリ駆動時は §4.5 に従い discrete GPU(CUDA / Vulkan) を後回しにする。
 2. **同一順位内のタイブレーカーとしてのみ**ベンチマーク履歴を参照する
    （直近 7 日以内、同一モデル、`status = success` のもの。同 rank 内に
    複数 backend がある場合に p95 最良を採用）。順位を跨いだ並べ替えは
@@ -303,7 +304,7 @@ Backend: auto → CPU
 |---|---|---|---|
 | `enabled` | bool | true | Zenzai を使うか（false なら SimpleConverter 固定） |
 | `selectedPath` | string | "" | 選択中モデルの絶対パス |
-| `backendPreference` | enum | "auto" | `auto` / `cpu` / `cuda` / `winml`。旧 `directml` / `npu` は受理するが `winml` に統合・**非推奨**（§5.1） |
+| `backendPreference` | enum | "auto" | `auto` / `cpu` / `cuda` / `vulkan` / `winml`。`vulkan`=R1 ggml-vulkan（ベンダ横断 GPU）。旧 `directml` / `npu` は受理するが `winml` に統合・**非推奨**（§5.1） |
 | `epPreference` | enum | "auto" | R2(`winml`) 時の EP 希望: `auto` / `npu` / `gpu` / `cpu`（`copilot-pc-backend-spec.md` §4.4） |
 | `nGpuLayers` | int | -1 | R1(llama.cpp) 専用。-1 = 全レイヤ GPU、0 = CPU only、正値 = 部分オフロード |
 | `autoLoadOnHostStart` | bool | true | Host 起動時に `selectedPath` を自動ロード |

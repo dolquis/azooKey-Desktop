@@ -219,7 +219,8 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
 |---|---|---|
 | AC | R2(auto) | NPU EP → GPU EP → CPU EP →（engine 不可なら）R1 CPU |
 | AC | R1 CUDA | CUDA → R1 CPU |
-| バッテリ | auto | NPU EP(R2) → R1 CPU（CUDA / discrete GPU を回避） |
+| AC | R1 Vulkan（非 NVIDIA / R2 不可の GPU） | Vulkan(ggml-vulkan) → R1 CPU |
+| バッテリ | auto | NPU EP(R2) → R1 CPU（CUDA / Vulkan 等 discrete GPU を回避） |
 | 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
 
 配布形態の決定は `docs/sideload-packaging-spec.md` §1.6 に反映する（R2 の EP は Windows

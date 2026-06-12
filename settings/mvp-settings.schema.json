@@ -87,9 +87,41 @@
     },
     "backendPreference": {
       "type": "string",
-      "enum": ["auto", "cpu", "cuda", "directml", "npu"],
+      "enum": ["auto", "cpu", "cuda", "vulkan", "winml", "directml", "npu"],
       "default": "auto",
-      "description": "Phase 6-B (M24): 推論バックエンド優先順位。auto は NPU>DirectML>CUDA>CPU（バッテリ時は NPU>CPU>DirectML>CUDA）"
+      "description": "Phase 6-B (M24): 推論エンジン選択。auto は docs/copilot-pc-backend-spec.md §4.3/§4.5 に従い R2(winml: EP 自動選択 NPU>GPU>CPU) / R1(cuda,vulkan,cpu) を選ぶ。winml は ONNX+Windows ML 経路で具体 EP を自動選択。vulkan は R1 ggml-vulkan（ベンダ横断 GPU フォールバック、ggml-vulkan ビルド要）。directml/npu は非推奨（互換のため受理し内部的に winml にマップ）"
+    },
+    "epPreference": {
+      "type": "string",
+      "enum": ["auto", "npu", "gpu", "cpu"],
+      "default": "auto",
+      "description": "Phase 6-B (M24): backendPreference=winml(R2) 時の Windows ML EP 希望。docs/copilot-pc-backend-spec.md §4.4。root tier。model.epPreference があればそちらが優先（docs/model-management-spec.md §5.2）"
+    },
+    "model": {
+      "type": "object",
+      "description": "Phase 6-C (M45): モデル管理タブ設定。docs/model-management-spec.md §7。model.* は root の同名キー(backendPreference / epPreference)を上書きする（§5.2）",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "selectedPath": { "type": "string", "default": "" },
+        "backendPreference": {
+          "type": "string",
+          "enum": ["auto", "cpu", "cuda", "vulkan", "winml", "directml", "npu"],
+          "default": "auto",
+          "description": "docs/model-management-spec.md §5.1。vulkan は R1 ggml-vulkan（ベンダ横断 GPU フォールバック）。directml/npu は非推奨・winml に統合（互換受理し内部 winml マップ）"
+        },
+        "epPreference": {
+          "type": "string",
+          "enum": ["auto", "npu", "gpu", "cpu"],
+          "default": "auto",
+          "description": "backendPreference=winml(R2) 時の EP 希望。docs/copilot-pc-backend-spec.md §4.4"
+        },
+        "nGpuLayers": { "type": "integer", "default": -1, "description": "R1(llama.cpp) 専用。-1=全レイヤ GPU / 0=CPU only / 正値=部分オフロード" },
+        "autoLoadOnHostStart": { "type": "boolean", "default": true },
+        "fallbackToSimpleConverter": { "type": "boolean", "default": true },
+        "benchmarkOnModelChange": { "type": "boolean", "default": false },
+        "benchmarkHistory": { "type": "array", "default": [] }
+      },
+      "additionalProperties": false
     },
     "powerProfile": {
       "type": "string",

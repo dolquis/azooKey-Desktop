@@ -751,10 +751,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   として着手可能（M25/M27 がこの先に連なる）。Phase 6 への配置は主題分類で
   あり、Phase 5 完了を待つ必要はない。
 - **変更対象**: `inference-host/src/BackendSelector.cpp`（新規）、
-  `inference-host/src/InferenceEngine.cpp`（バックエンド分岐）、
-  `inference-host/src/DirectMlBackend.cpp` / `QnnBackend.cpp`（新規、
-  M8 スパイク結果次第）。
-- **実装範囲**: `docs/copilot-pc-backend-spec.md` §1〜§4。
+  `inference-host/src/InferenceEngine.cpp`（エンジン分岐）、
+  `inference-host/src/WinMlBackend.cpp`（新規、ONNX Runtime GenAI + Windows ML。
+  DirectML が sustained engineering 化したため旧 `DirectMlBackend.cpp` /
+  `QnnBackend.cpp` の個別 SDK 実装は採らず、EP は Windows ML の自動配信に委ねる）。
+- **前提（追加）**: zenz-v3 → ONNX Runtime GenAI 形式の変換可否スパイク
+  （Windows ML 経路 R2 のブロッカー。不可なら Copilot+ も R1 CPU を既定とする）。
+- **実装範囲**: `docs/copilot-pc-backend-spec.md` §1〜§4（決定は §4.3、enum / 境界
+  ポリシーは §4.4、フォールバック段位は §4.5）。
 - **横断**: X-1-2 (TypingTempoTracker)・X-2-4 (PredictWithLLM)・
   X-3-4 (DetectAnomalies) はこの段階で Heavy レーンに乗せる。
 - **受け入れ条件**:
@@ -1556,24 +1560,34 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ### M45: Zenzai モデル管理 UI
 
-- **目的**: Zenzai GGUF モデルの配置・検証・ロード・backend 選択・fallback
-  状態確認を GUI で行えるようにする。M8（モデルロード境界）と M30（WinUI 3
-  設定アプリ）の上に乗る Phase 6-C 拡張。
+- **目的**: Zenzai モデル（R1=GGUF / R2=ONNX Runtime GenAI 変換モデル）の
+  配置・検証・ロード・backend 選択・fallback 状態確認を GUI で行えるように
+  する。M8（モデルロード境界）と M30（WinUI 3 設定アプリ）の上に乗る
+  Phase 6-C 拡張。
 - **前提**: M8 完了（`LoadModel` 境界）、M30 完了（設定アプリ）。
-- **推奨実装時期**: M30 完了直後。M24（DirectML / NPU バックエンド）と並行
-  着手すると backend 推奨ロジックの実装が捗る。
+- **推奨実装時期**: M30 完了直後。M24（推論バックエンド選定 = R1 llama.cpp /
+  R2 Windows ML）と並行着手すると backend 推奨ロジックの実装が捗る。
 - **変更対象**: `settings-app/`（Model タブ追加）、`ipc/src/Payloads.cpp`
   （`ListModels` / `BenchmarkModel` 追加）、
   `inference-host/src/ModelCatalog.cpp`（新規）、
   `settings/mvp-settings.schema.json`（`model.*` ブロック追加）。
 - **実装範囲**: `docs/model-management-spec.md`。
-  - `%LOCALAPPDATA%\azooKey\models\` のスキャン、GGUF magic / version /
-    metadata 検証、quantization 推定
-  - `ListModels` / `BenchmarkModel` IPC
-  - backend 自動選択は M24 の既存順位（NPU > DirectML > CUDA > CPU）に
-    委譲する。ベンチ履歴があれば同順位内で p95 最良を採用
+  - `%LOCALAPPDATA%\azooKey\models\` のスキャン。R1=`.gguf` ファイル
+    （GGUF magic / version / metadata 検証、quantization 推定）と
+    R2=ORT GenAI モデルディレクトリ（`genai_config.json` をパースし、その
+    config が参照する ONNX の presence 検証。ファイル名はハードコードしない、
+    §3.3）の両方式を検出する（§3.1）。zenz-v3 変換 ONNX の
+    optional パッケージはここで discovery される
+  - `ListModels`（`format` = `gguf` / `onnx_genai` を含む）/ `BenchmarkModel` IPC
+  - backend 自動選択は M24 決定（`docs/copilot-pc-backend-spec.md` §4.3 / §4.5、
+    R1=llama.cpp / R2=Windows ML）に委譲する。旧 `NPU > DirectML > CUDA > CPU`
+    順は使わない。ONNX モデルがあり対応 HW なら §4.6 の EP 取得・登録を試みて
+    R2（`winml`）、不可なら R1（`cuda` / `vulkan` / `cpu`）。バッテリ時は
+    §4.5 / §4.6 に従い NPU device のみ（device-level フィルタ）。ベンチ履歴は
+    同順位内のタイブレーカーとしてのみ p95 最良を採用
   - 既存 `backendPreference` との後方互換（`model.backendPreference` >
-    root `backendPreference` > `auto`）
+    root `backendPreference` > `auto`）。`directml` / `npu` は deprecated で
+    内部的に `winml`（EP 自動選択）へ集約、ベンダ横断 GPU は `vulkan`
 - **受け入れ条件**:
   - モデル一覧が GUI に表示される
   - invalid GGUF は「ロード不可」として明示される

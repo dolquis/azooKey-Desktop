@@ -481,8 +481,14 @@ Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定�
 | `total` | key_down → ui_apply の通算 | tsf-tip |
 
 各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。
-`backend` フィールド（`cpu` / `cuda` / `directml` / `npu`）を
-`model_inference` 行に付与する。
+`model_inference` 行に以下を付与する（M24 `docs/copilot-pc-backend-spec.md` §4 整合）:
+
+- `engine`: `"llama_cpp" | "winml"`
+- `backend`: R1 アクセラレータ `cpu` / `cuda` / `vulkan`（旧 `directml` / `npu` は
+  非推奨。R2 では `winml`）
+- R2(`winml`) 時のみ `ep`（選択 EP 名。例 `QNNExecutionProvider`）と `ep_state`
+  （`NotPresent` / `NotReady` / `Ready` / `Registered` / `Failed`、§4.6）。EP 取得・登録
+  失敗をトレースで切り分け可能にする。
 
 ```json
 {"ts":"2026-05-27T10:00:00.000Z","trace_id":"abc","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}
@@ -532,7 +538,7 @@ duration_ms のみ記録する。詳細な per-key trace は以下のいずれ�
 - 1 リクエスト単位で TIP / IPC / Host / UI の各 phase 時間を JSONL に
   出力できる
 - `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる
-- Zenzai backend 比較（cpu / cuda / directml / npu）に使える
+- Zenzai backend 比較（R1: cpu / cuda / vulkan、R2: winml〔EP 自動選択〕）に使える
 - 通常利用時（trace 無効）の追加 overhead が p95 で +1ms 未満
 
 ## 8. Host 可用性・再接続（M42）
@@ -887,7 +893,10 @@ Response:
   { "version": 1, "request_id": 1, "type": "QueryDiagnostics",
     "trace_id": "...",
     "payload": {
-      "model_loaded": bool, "backend": str, "rss_mb": int,
+      "model_loaded": bool, "engine": str, "backend": str, "rss_mb": int,
+      "ep": str (optional, R2/winml 時の選択 EP 名),
+      "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
+      "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; §4.6),
       "learning_entries": int, "user_dict_entries": int,
       "fallback_state": "healthy" | "degraded_simple" |
                         "degraded_model" | "safe_mode",

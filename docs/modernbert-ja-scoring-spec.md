@@ -31,8 +31,9 @@ M52 ベンチで homophone top1 を baseline 比 +5% 以上 / 通常入力 p95 �
 - **PLL 近似**: 候補位置のみ mask、文全体 mask しない
 - **キャッシュ**: 同一 context を再利用
 - **timeout 必須**: 30〜50ms で打ち切り、failure 時は scoreなしで続行
-- **GPU/NPU 優先**: M24 の DirectML / NPU backend で実行（CPU は実用上
-  時間に合わない）
+- **アクセラレータ優先**: M24 の R2（Windows ML EP: NPU/GPU）または
+  R1 GPU（CUDA / ggml-vulkan）で実行（CPU は実用上時間に合わない）。
+  旧 `directml` / `npu` 値は deprecated で `winml`（EP 自動選択）に集約される
 
 ## 4. 起動条件
 
@@ -40,7 +41,8 @@ M52 ベンチで homophone top1 を baseline 比 +5% 以上 / 通常入力 p95 �
 if candidate_count >= 2
 and ambiguity_score >= threshold
 and timeout_budget_remaining >= 30ms
-and backend in {cuda, directml, npu}    # CPU は除外
+and backend in {winml, cuda, vulkan}    # R2(WinML EP: NPU/GPU) / R1 GPU。CPU は除外
+                                        # 旧 directml/npu は deprecated → winml に集約
 then ModernBERTScorer ON
 else skip
 ```
@@ -93,7 +95,7 @@ PLL は **token 単位で別々の masked 文を作って forward する必要�
 | 候補部分のみ mask | 文全体ではなく候補トークンのみ |
 | キャッシュ | 同一 `(left_context, candidate)` ペアの結果を 5 分保持 |
 | timeout | 30〜50ms で打ち切り |
-| backend GPU/NPU | M24 の DirectML / NPU で実行 |
+| backend アクセラレータ | M24 の R2（Windows ML EP: NPU/GPU）/ R1（CUDA・Vulkan）で実行 |
 | masked 文を batch | 各候補の各トークン位置で生成した masked 文を 1 つの batch（最大 K×max_token_len）にまとめて 1 回の forward で評価する。「1 forward で K 候補」ではなく「**1 forward で K×N 個の masked 文**」 |
 | FP16 | ONNX Runtime FP16 推論 |
 | 量子化 | INT8 量子化を検討（精度劣化を M52 で確認） |
@@ -106,7 +108,7 @@ PLL は **token 単位で別々の masked 文を作って forward する必要�
 | 形式 | ONNX FP16 / INT8 量子化 |
 | サイズ | 140MB（FP16） / 80MB（INT8） |
 | 配置 | `%LOCALAPPDATA%\azooKey\models\modernbert-ja-70m.onnx` |
-| backend | DirectML / NPU / CUDA（CPU は実用不可） |
+| backend | R2 `winml`（Windows ML EP: NPU/GPU）/ R1 `cuda` / `vulkan`（CPU は実用不可。旧 `directml` / `npu` は deprecated → `winml`） |
 
 bundle するかユーザーダウンロードかは Phase 7 で決定する。M57 v1 では
 ロードマップ前提（M56 / M24）のみで成立させる必要があるため、初期は

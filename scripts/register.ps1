@@ -47,11 +47,24 @@ if (-not $ElevatedReentry) {
     # interactive user — same rationale as the Run entry. Best-effort; uses the
     # same `--pipe` arguments so the in-session host matches the auto-start one.
     #
-    # Skip when a host is already running: a second instance would open another
-    # listener on the same per-user pipe and split candidate / learning state.
-    $existingHost = Get-Process -Name "azookey_inference_host" -ErrorAction SilentlyContinue
-    if ($existingHost) {
-      Write-Host "Inference host already running (PID $($existingHost.Id -join ', ')); not starting another."
+    # Skip only when *this user's* pipe is already being served. The pipe name is
+    # per-user — DefaultPipeName() is \\.\pipe\azookey-<current user SID> — so a
+    # global process-name match would, on RDP / Fast User Switching, find another
+    # account's host (listening on a different pipe) and wrongly suppress starting
+    # one for the interactive user. Probe the exact per-user pipe instead. On
+    # enumeration failure, fall through and start (best-effort: a redundant start
+    # is preferable to leaving the just-registered TIP with no candidate server).
+    $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $myPipe = "azookey-$mySid"
+    $hostServing = $false
+    try {
+      $hostServing = [bool]([System.IO.Directory]::GetFiles("\\.\pipe\") |
+        Where-Object { [System.IO.Path]::GetFileName($_) -eq $myPipe })
+    } catch {
+      $hostServing = $false
+    }
+    if ($hostServing) {
+      Write-Host "Inference host already serving this user's pipe ($myPipe); not starting another."
     } else {
       try {
         Start-Process -FilePath $HostExePath -ArgumentList "--pipe" -WindowStyle Hidden

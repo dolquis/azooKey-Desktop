@@ -38,28 +38,30 @@ struct BackendInfo {
 > 自動選択に委ね**、`BackendSelector` は「R2(auto) を要求するか / R1 のどの
 > アクセラレータを要求するか」と電源状態の判断のみを担う。詳細な降格段位は §4.5。
 
-### 2.1 既定優先順位
+### 2.1 既定優先順位（概念）
+
+正典の降格段位は §4.5。概念的な優先順は次のとおり（`DirectML` は legacy のため
+**R2=Windows ML（EP 自動選択）** に置換し、ベンダ横断 GPU は R1=`Vulkan`）:
 
 ```
-NPU > DirectML > CUDA > CPU
+R2(NPU) > R2/R1(GPU) > R1(CPU)
 ```
 
 理由：
-- NPU は省電力で常時稼働に最適
-- DirectML はベンダー横断、Windows 標準
-- CUDA は速度最強だが NVIDIA 専用
-- CPU は最終フォールバック
+- NPU は省電力で常時稼働に最適（R2 / Windows ML）
+- GPU は高スループット（R2 GPU EP / R1 CUDA(NVIDIA) / R1 Vulkan(ベンダ横断)）
+- CPU は最終フォールバック（R1）
 
 ### 2.2 バッテリ駆動時の逆転
 
-`SystemPowerStatus.ACLineStatus == 0`（バッテリ駆動）のとき：
+`SystemPowerStatus.ACLineStatus == 0`（バッテリ駆動）のとき、discrete GPU を避ける:
 
 ```
-NPU > CPU > DirectML > CUDA
+R2(NPU) > R1(CPU)   （GPU = R2 GPU device / R1 CUDA / R1 Vulkan は回避）
 ```
 
-CUDA / DirectML（GPU） はバッテリを激しく消費するため後回し。
-NPU は省電力なので最優先のまま。
+NPU は省電力なので最優先のまま。GPU はバッテリを激しく消費するため使わない。
+バッテリ時の R2 は **NPU device のみ**に絞る（§4.6 のデバイスレベル選択）。詳細は §4.5。
 
 ### 2.3 BackendSelector
 
@@ -370,7 +372,7 @@ case WM_POWERBROADCAST:
 
 | 項目 | AC 接続時 | バッテリ駆動時 |
 |---|---|---|
-| バックエンド優先順 | NPU > DirectML > CUDA > CPU | NPU > CPU > DirectML > CUDA |
+| バックエンド選択 | §4.5 のフォールバック段位に従う（R2 NPU/GPU → R1 CUDA/Vulkan/CPU） | §4.5 に従う（**R2 は NPU device のみ**、§4.6 のデバイスレベル絞り込み。discrete GPU / CUDA / Vulkan を回避し、NPU 不可なら R1 CPU） |
 | 予測頻度 | 入力ごと | 200ms デバウンス |
 | ライブ変換重い推論 | 有効 | 無効（Fast レーンのみ） |
 | Post-Commit Lint | 有効 | 無効 |

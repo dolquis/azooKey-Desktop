@@ -313,8 +313,12 @@ class NoopContext final : public ITfContext {
   }
 
   STDMETHODIMP GetDocumentMgr(ITfDocumentMgr** document_mgr) override {
-    if (document_mgr) *document_mgr = nullptr;
-    return E_NOTIMPL;
+    if (!document_mgr) return E_POINTER;
+    *document_mgr = nullptr;
+    if (!document_mgr_) return E_NOTIMPL;
+    document_mgr_->AddRef();
+    *document_mgr = document_mgr_;
+    return S_OK;
   }
 
   STDMETHODIMP CreateRangeBackup(TfEditCookie,
@@ -332,11 +336,75 @@ class NoopContext final : public ITfContext {
   bool run_edit_session{false};
   TfEditCookie edit_cookie{1};
   ITfRange* selection_range{nullptr};
+  ITfDocumentMgr* document_mgr_{nullptr};
   int set_selection_count{0};
   ULONG last_selection_count{0};
   HRESULT set_selection_result{S_OK};
 
  private:
+  LONG ref_count_{1};
+};
+
+class FakeDocumentMgr final : public ITfDocumentMgr {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfDocumentMgr) {
+      *ppvObject = static_cast<ITfDocumentMgr*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP CreateContext(TfClientId,
+                             DWORD,
+                             IUnknown*,
+                             ITfContext** context,
+                             TfEditCookie* edit_cookie) override {
+    if (context) *context = nullptr;
+    if (edit_cookie) *edit_cookie = TF_INVALID_EDIT_COOKIE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP Push(ITfContext*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
+
+  STDMETHODIMP GetTop(ITfContext** context) override {
+    return ReturnContext(context);
+  }
+
+  STDMETHODIMP GetBase(ITfContext** context) override {
+    return ReturnContext(context);
+  }
+
+  STDMETHODIMP EnumContexts(IEnumTfContexts** enum_contexts) override {
+    if (enum_contexts) *enum_contexts = nullptr;
+    return E_NOTIMPL;
+  }
+
+  ITfContext* context_{nullptr};
+
+ private:
+  HRESULT ReturnContext(ITfContext** context) {
+    if (!context) return E_POINTER;
+    *context = nullptr;
+    if (!context_) return E_NOTIMPL;
+    context_->AddRef();
+    *context = context_;
+    return S_OK;
+  }
+
   LONG ref_count_{1};
 };
 
@@ -759,6 +827,64 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsR
 
   h.service.composition_->Release();
   h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActiveContext) {
+  FakeDocumentMgr focused_document;
+  FakeDocumentMgr background_document;
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  focused_document.context_ = &h.context;
+  h.context.document_mgr_ = &focused_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  h.service.composition_ = &composition;
+  const int request_count = h.context.request_count;
+
+  EXPECT_EQ(h.service.OnUninitDocumentMgr(&background_document), S_OK);
+
+  EXPECT_EQ(h.context.request_count, request_count);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, UninitActiveDocumentMgrCleansUpActiveContext) {
+  FakeDocumentMgr active_document;
+  FakeComposition composition;
+  FakeRange range;
+  TextServiceHarness h;
+
+  active_document.context_ = &h.context;
+  h.context.document_mgr_ = &active_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnUninitDocumentMgr(&active_document), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsStaleState) {

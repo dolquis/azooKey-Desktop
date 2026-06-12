@@ -56,6 +56,19 @@ bool HasSystemModifierDown() {
          IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
 }
 
+bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
+  if (lhs == rhs) return true;
+  if (!lhs || !rhs) return lhs == rhs;
+  IUnknown* lhs_unknown = nullptr;
+  IUnknown* rhs_unknown = nullptr;
+  const HRESULT lhs_hr = lhs->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&lhs_unknown));
+  const HRESULT rhs_hr = rhs->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&rhs_unknown));
+  const bool same = SUCCEEDED(lhs_hr) && SUCCEEDED(rhs_hr) && lhs_unknown == rhs_unknown;
+  if (lhs_unknown) lhs_unknown->Release();
+  if (rhs_unknown) rhs_unknown->Release();
+  return same;
+}
+
 }  // namespace
 
 namespace azookey::tsf {
@@ -469,9 +482,10 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
 
 STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) { UNREFERENCED_PARAMETER(pdim); return S_OK; }
 STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
-  UNREFERENCED_PARAMETER(pdim);
-  CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
-                          LifecycleCleanupFailurePolicy::ReleaseComposition);
+  if (ActiveContextBelongsToDocumentMgr(pdim)) {
+    CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
+                            LifecycleCleanupFailurePolicy::ReleaseComposition);
+  }
   return S_OK;
 }
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
@@ -574,6 +588,31 @@ void TextService::ClearTextStateForLifecycle() {
   romaji_.Reset();
   committing_ = false;
   commit_surface_.clear();
+}
+
+bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
+  if (!document_mgr || !active_context_) return false;
+
+  ITfDocumentMgr* active_document_mgr = nullptr;
+  if (SUCCEEDED(active_context_->GetDocumentMgr(&active_document_mgr)) && active_document_mgr) {
+    const bool owns_active_context = SameComIdentity(active_document_mgr, document_mgr);
+    active_document_mgr->Release();
+    if (owns_active_context) return true;
+  }
+
+  ITfContext* context = nullptr;
+  if (SUCCEEDED(document_mgr->GetTop(&context)) && context) {
+    const bool is_active_context = SameComIdentity(context, active_context_);
+    context->Release();
+    if (is_active_context) return true;
+  }
+  context = nullptr;
+  if (SUCCEEDED(document_mgr->GetBase(&context)) && context) {
+    const bool is_active_context = SameComIdentity(context, active_context_);
+    context->Release();
+    if (is_active_context) return true;
+  }
+  return false;
 }
 
 bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {

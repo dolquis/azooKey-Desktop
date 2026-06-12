@@ -11,11 +11,12 @@
 
 ## 1. 目的
 
-Zenzai GGUF モデルの配置・検証・ロード・backend 選択・fallback 状態を、
-GUI で完結して操作可能にする。M8 で実装したモデルロード境界と、M30 の
+Zenzai モデル（R1=GGUF / R2=ONNX Runtime GenAI ディレクトリ。
+`docs/copilot-pc-backend-spec.md` §4）の配置・検証・ロード・backend 選択・fallback
+状態を、GUI で完結して操作可能にする。M8 で実装したモデルロード境界と、M30 の
 WinUI 3 設定アプリを土台に、ユーザーが以下を行えるようにする:
 
-- モデル一覧の閲覧と検証状態（valid / invalid / VRAM 不足の可能性）
+- モデル一覧の閲覧と検証状態（valid / invalid / VRAM 不足の可能性。R1/R2 両形式）
 - backend の自動推奨と手動切替（CPU / CUDA / WinML〔EP 自動選択〕。旧 `directml` /
   `npu` は `winml` に統合・非推奨。`docs/copilot-pc-backend-spec.md` §4.4 参照）
 - ベンチマーク実行と p50/p95/load_ms/rss_mb/vram_mb の表示
@@ -36,8 +37,17 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 %LOCALAPPDATA%\azooKey\models\
 ```
 
-サブディレクトリは再帰的にスキャンする（1 階層のみ）。
-拡張子は `.gguf` のみ。
+サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
+
+- **R1（llama.cpp）**: 拡張子 `.gguf` ファイル。
+- **R2（Windows ML / ONNX Runtime GenAI）**: ORT GenAI モデル**ディレクトリ**
+  （`genai_config.json` を含むフォルダを 1 エントリとして扱う）。zenz-v3 の ONNX 変換
+  モデルが optional パッケージとして配置された場合に検出する
+  （`docs/copilot-pc-backend-spec.md` §4.3、変換可否は同 §4.2 のスパイク依存）。
+
+R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）を満たす場合のみ `winml`
+経路へ入れる（§5.1）。R2 モデルが無ければ R1（GGUF）のみを一覧する。非対応拡張子の
+ファイルは無視する。
 
 ### 3.2 検出情報
 
@@ -45,29 +55,35 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 
 | フィールド | 内容 | 取得元 |
 |---|---|---|
-| `path` | 絶対パス | filesystem |
-| `file_name` | ファイル名 | filesystem |
-| `size_bytes` | ファイルサイズ | filesystem |
-| `sha256` | SHA-256 ハッシュ（任意、初回または明示時のみ計算） | computed |
-| `gguf_valid` | magic / version 検証結果 | GGUF parse |
-| `model_family` | metadata から推定（`gpt2` / `llama` / `mistral` 等） | GGUF metadata |
-| `quantization` | `Q4_K_M` / `Q5_K_M` / `Q8_0` 等 | GGUF metadata |
-| `n_params` | 推定パラメータ数 | GGUF metadata |
+| `path` | 絶対パス（R2 はモデルディレクトリのパス） | filesystem |
+| `file_name` | ファイル名 / ディレクトリ名 | filesystem |
+| `format` | `gguf`（R1）/ `onnx_genai`（R2 ORT GenAI ディレクトリ） | filesystem |
+| `size_bytes` | ファイル / ディレクトリ合計サイズ | filesystem |
+| `sha256` | SHA-256 ハッシュ（任意、初回または明示時のみ計算。R2 は `model.onnx` 等） | computed |
+| `valid` | 形式別検証結果（R1=GGUF magic/version、R2=`genai_config.json` + `model.onnx` 存在）。旧 `gguf_valid` は R1 別名として後方互換維持 | parse |
+| `model_family` | metadata から推定（`gpt2` / `llama` 等。R2 は `genai_config.json` から） | GGUF metadata / genai_config |
+| `quantization` | `Q4_K_M` / `Q5_K_M` / `Q8_0` 等（R1）。R2 は int4/int8 等 | GGUF metadata / genai_config |
+| `n_params` | 推定パラメータ数 | GGUF metadata / genai_config |
 | `recommended_backend` | `cpu` / `cuda` / `vulkan` / `winml` | §5 ロジック（`vulkan`=R1 ベンダ横断 GPU。旧 `directml` / `npu` は `winml` に統合・非推奨） |
 | `last_load_status` | `success` / `failed` / `not_loaded` | 過去ログ |
 | `last_error` | 直近エラー文字列 | 過去ログ |
 | `last_benchmark` | 直近ベンチマーク結果（§6） | 過去ログ |
 
-### 3.3 GGUF 検証
+### 3.3 形式別検証
 
-M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF は
-`gguf_valid = false` として一覧に残し、ロード対象から除外する。
+**R1（GGUF）**: M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF は
+`valid = false`（旧 `gguf_valid`）として一覧に残し、ロード対象から除外する。
 
 不正検出パターン:
 - magic mismatch（`GGUF` 以外）
 - version 不一致（サポート範囲外）
 - ファイル末端切詰め（claimed size > actual size）
 - metadata 必須キー欠落
+
+**R2（ONNX Runtime GenAI）**: ディレクトリに `genai_config.json` と参照される
+`model.onnx`（および tokenizer 関連ファイル）が揃うことを検証する。欠落・JSON 不正は
+`valid = false` として一覧に残し、ロード対象から除外する（R1 と同じ degraded 扱い）。
+深い ONNX グラフ検証は行わず、ロード失敗時は §5.3 の fallback に委ねる。
 
 ## 4. IPC
 
@@ -107,8 +123,9 @@ Response（host → client、同一 `request_id` / `trace_id` を返す）:
       {
         "path": "C:\\Users\\me\\AppData\\Local\\azooKey\\models\\zenzai-small-q4.gguf",
         "file_name": "zenzai-small-q4.gguf",
+        "format": "gguf",
         "size_bytes": 1234567890,
-        "gguf_valid": true,
+        "valid": true,
         "metadata": {
           "model_family": "llama",
           "quantization": "Q4_K_M",
@@ -116,6 +133,20 @@ Response（host → client、同一 `request_id` / `trace_id` を返す）:
         },
         "recommended_backend": "cuda",
         "last_load_status": "success"
+      },
+      {
+        "path": "C:\\Users\\me\\AppData\\Local\\azooKey\\models\\zenz-v3-onnx",
+        "file_name": "zenz-v3-onnx",
+        "format": "onnx_genai",
+        "size_bytes": 980000000,
+        "valid": true,
+        "metadata": {
+          "model_family": "gpt2",
+          "quantization": "int4",
+          "n_params": 760000000
+        },
+        "recommended_backend": "winml",
+        "last_load_status": "not_loaded"
       }
     ]
   }

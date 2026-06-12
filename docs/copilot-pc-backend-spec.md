@@ -214,9 +214,10 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
 | バッテリ | auto | NPU EP(R2) → R1 CPU（CUDA / discrete GPU を回避） |
 | 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
 
-配布形態の決定は `docs/sideload-packaging-spec.md` §1 に反映する（R2 の EP は Windows
-Update 配信で非バンドル、CUDA は optional add-on、base MSIX は CPU(GGUF) + Windows ML
-bootstrap）。
+配布形態の決定は `docs/sideload-packaging-spec.md` §1.6 に反映する（R2 の EP は Windows
+Update 配信で非バンドル、CUDA は optional add-on、base MSIX は llama.cpp CPU ランタイム
++ Windows ML bootstrap。**モデル本体（GGUF / ONNX）は MSIX 非同梱で初回起動時 DL**＝
+同 §1.2 と一貫）。
 
 ## 5. mmap モデルロード
 

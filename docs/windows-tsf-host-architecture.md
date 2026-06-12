@@ -111,6 +111,8 @@
 ### 互換性優先の実装ルール
 
 - Notepad / Chrome / VSCode / Office の挙動差を前提に、未処理キーは極力食わない。
+- Ctrl / Alt / Win 併用のキーは、明示的に実装済みの TIP 機能でない限りアプリまたは
+  OS ショートカットへ pass-through する。Shift 単独は通常のローマ字入力として扱う。
 - composition 状態の不整合時は安全側（キャンセル）で復帰する。
 
 ## 新規モジュール（Phase 5/6 で追加予定）

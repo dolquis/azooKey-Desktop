@@ -47,6 +47,14 @@ std::wstring Utf8ToWide(const std::string& utf8) {
   return result;
 }
 
+bool IsVirtualKeyDown(int vk) { return (GetKeyState(vk) & 0x8000) != 0; }
+
+bool HasSystemModifierDown() {
+  return IsVirtualKeyDown(VK_CONTROL) || IsVirtualKeyDown(VK_LCONTROL) ||
+         IsVirtualKeyDown(VK_RCONTROL) || IsVirtualKeyDown(VK_MENU) || IsVirtualKeyDown(VK_LMENU) ||
+         IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+}
+
 }  // namespace
 
 namespace azookey::tsf {
@@ -239,6 +247,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
 
+  if (HasSystemModifierDown()) return S_OK;
+
   const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
   const bool cand_visible = candidate_window_.IsVisible();
 
@@ -276,6 +286,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   try {
+    if (HasSystemModifierDown()) return S_OK;
+
     const bool cand_visible = candidate_window_.IsVisible();
 
     if (wParam >= 'A' && wParam <= 'Z') {

@@ -32,6 +32,8 @@ const std::unordered_map<std::string, std::string> kRomajiMap = {
     {"mya", "みゃ"}, {"myu", "みゅ"}, {"myo", "みょ"},
     {"rya", "りゃ"}, {"ryu", "りゅ"}, {"ryo", "りょ"},
     {"gya", "ぎゃ"}, {"gyu", "ぎゅ"}, {"gyo", "ぎょ"},
+    {"ja", "じゃ"}, {"ju", "じゅ"}, {"je", "じぇ"}, {"jo", "じょ"},
+    {"jya", "じゃ"}, {"jyu", "じゅ"}, {"jyo", "じょ"},
     {"bya", "びゃ"}, {"byu", "びゅ"}, {"byo", "びょ"},
     {"pya", "ぴゃ"}, {"pyu", "ぴゅ"}, {"pyo", "ぴょ"}};
 

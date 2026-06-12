@@ -296,6 +296,9 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 | `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `host_user_data_paths_tests` | `user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
 | `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)` |
+| `tsf_tip_onkeydown_preedit_tests` | `onkeydown_preedit_test.cpp` | `OnKeyDown`/`OnTestKeyDown` で romaji→kana preedit 蓄積、Backspace（pending romaji / UTF-8 単位 kana 削除）、Escape クリア、Space で pending flush、preedit 無し時の制御キー非消費 |
+| `tsf_tip_display_attribute_tests` | `display_attribute_test.cpp` | `ITfDisplayAttributeProvider`（`GetDisplayAttributeInfo`/`EnumDisplayAttributeInfo`）と `InputDisplayAttributeInfo`（GUID/説明/下線属性、`Next`/`Reset`/`Skip`/`Clone`、null 引数 reject） |
+| `tsf_tip_activate_uiless_tests` | `activate_uiless_test.cpp` | `ActivateEx` が `ITfThreadMgrEx::GetActiveFlags`（`dwFlags` ではなく）から UI-less 状態を導出する（spec §2.10） |
 | `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）

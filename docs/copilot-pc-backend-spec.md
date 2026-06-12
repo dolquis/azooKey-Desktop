@@ -220,8 +220,13 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
 | AC | R2(auto) | NPU EP → GPU EP → CPU EP →（engine 不可なら）R1 CPU |
 | AC | R1 CUDA | CUDA → R1 CPU |
 | AC | R1 Vulkan（非 NVIDIA / R2 不可の GPU） | Vulkan(ggml-vulkan) → R1 CPU |
-| バッテリ | auto | NPU EP(R2) → R1 CPU（CUDA / Vulkan 等 discrete GPU を回避） |
+| バッテリ | auto | **NPU EP のみ取得・選択**（§4.6 でバッテリ時は GPU EP を登録しない）→ NPU EP ready なら R2(NPU) / 不可なら R1 CPU。**GPU EP / CUDA / Vulkan を回避** |
 | 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
+
+> バッテリ時に R2(auto) を Windows ML の全 EP 自動選択（NPU→GPU→CPU）に委ねると、NPU
+> 非 ready の GPU ラップトップで GPU EP が選ばれ得る。これを防ぐため、バッテリ時は §4.6
+> のとおり **GPU EP を登録せず NPU EP のみ取得**し、NPU 不可なら R2 を bypass して R1 CPU
+> とする（AC 時のみ GPU EP を許可）。
 
 配布形態の決定は `docs/sideload-packaging-spec.md` §1.6 に反映する（R2 の EP は Windows
 Update 配信で非バンドル、CUDA は optional add-on、base MSIX は llama.cpp CPU ランタイム
@@ -242,10 +247,16 @@ Update 配信で非バンドル、CUDA は optional add-on、base MSIX は llama
 R2 エンジン初期化時（`WinMlBackend` 起動 / 初回モデルロード前）に以下を行う:
 
 1. `ExecutionProviderCatalog.GetDefault()` を取得。
-2. 取得方針:
-   - 簡易: `EnsureAndRegisterCertifiedAsync()`（対応 EP を全 DL + 一括登録。初回は
-     ネットワーク速度次第で数秒〜数分。**進捗 UX 必須**）。
-   - 個別: `FindAllProviders()` で `ReadyState` を確認し、目的 EP に
+2. 取得方針（**電源状態でスコープを絞る**、§4.5 と一致）:
+   - **AC 接続時**: 簡易に `EnsureAndRegisterCertifiedAsync()`（対応 EP を全 DL + 一括
+     登録。初回はネットワーク速度次第で数秒〜数分。**進捗 UX 必須**）か、`ep_preference`
+     指定時は個別取得。
+   - **バッテリ駆動時**: `EnsureAndRegisterCertifiedAsync()`（GPU EP も登録される）は
+     **使わず**、`FindAllProviders()` で NPU EP のみを `EnsureReadyAsync()` →
+     `TryRegister()` する（`ep_preference=npu` 相当）。**GPU EP を登録しない**ことで
+     §4.5 のバッテリ方針（discrete GPU 回避）を保証する。NPU EP が取得不能なら R2 を
+     bypass し R1 CPU。
+   - 個別取得は `FindAllProviders()` で `ReadyState` を確認し、目的 EP に
      `EnsureReadyAsync()` → 成功時 `TryRegister()`。`ep_preference`（§4.4）で対象 EP を絞る。
 3. `ReadyState` 遷移を扱う: `NotPresent`（未 DL）/ `NotReady`（DL 済・未登録）はいずれも
    `EnsureReadyAsync()`、`Ready` は `TryRegister()`。

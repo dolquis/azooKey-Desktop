@@ -220,11 +220,14 @@ load/unload とライブクエリの race を構造的に排除する。
 `backendPreference = auto` のとき、`docs/copilot-pc-backend-spec.md` §4.3 / §4.5 の
 M24 決定（R1=llama.cpp / R2=Windows ML）に従って選ぶ:
 
-1. **engine の選択**: ONNX 変換モデルかつ Win11 24H2+ かつ対象 EP 取得・登録済み
-   （§4.6）なら **R2（`winml`、EP 自動選択 NPU→GPU→CPU）**。それ以外（GGUF モデル /
-   非対応 OS / EP 未取得）は **R1**: NVIDIA かつ CUDA 可なら `cuda`、ベンダ横断 GPU
-   （非 NVIDIA / R2 不可）なら `vulkan`（ggml-vulkan ビルド時）、いずれも不可なら `cpu`。
-   バッテリ駆動時は §4.5 に従い discrete GPU(CUDA / Vulkan) を後回しにする。
+1. **engine の選択**: ONNX 変換モデルがあり Win11 24H2+ かつ対応 HW なら、まず §4.6 の
+   EP 取得・登録フローを試行する（EP が `NotPresent` でも `EnsureReadyAsync()` で取得を
+   試みる。**「未取得」を理由に即 R1 へ落とさない**）。取得・登録に成功したら
+   **R2（`winml`）**。取得失敗（`Failure`）/ ONNX モデル無し / 非対応 OS のときに **R1**:
+   NVIDIA かつ CUDA 可なら `cuda`、ベンダ横断 GPU（非 NVIDIA / R2 不可）なら `vulkan`
+   （ggml-vulkan ビルド時）、いずれも不可なら `cpu`。
+   バッテリ駆動時は §4.5 / §4.6 に従い取得対象を **NPU EP に限定**し（GPU EP を登録
+   しない）、discrete GPU(CUDA / Vulkan / GPU EP) を回避する（NPU EP 不可なら R1 CPU）。
 2. **同一順位内のタイブレーカーとしてのみ**ベンチマーク履歴を参照する
    （直近 7 日以内、同一モデル、`status = success` のもの。同 rank 内に
    複数 backend がある場合に p95 最良を採用）。順位を跨いだ並べ替えは

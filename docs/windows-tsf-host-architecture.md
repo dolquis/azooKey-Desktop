@@ -26,17 +26,39 @@
 
 ## IPCメッセージ（実装済み = ✅）
 
-- ✅ `Handshake(version, capabilities)` / `HandshakeResponse(accepted, model_loaded)`
+各メッセージの payload フィールドの正典スキーマは `ipc/include/azookey/ipc/Payloads.h`
+（および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下は現状の配線済み
+フィールドの要約。
+
+- ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, handshake_token?)` /
+  応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded)`。
+  `handshake_token` 経由の per-connection 認証ゲートを持つ（後述）。
 - ✅ `Ping` / `Health`
-- ✅ `LoadModel(path, backend, n_gpu_layers)` — 現状 Host は OK を返すスタブ。M8 で本実装。
-- ✅ `QueryCandidates(request_id, kana, context)`
+- ✅ `LoadModel(path, backend, n_gpu_layers?)` / `LoadModelResponse(ok, error?)`。
+  Host は `ProbeZenzaiGgufModel` で GGUF を実プローブし、成功時は `ZenzaiModelConverter`
+  を構築する（`InferenceEngine::LoadModelWithResult`）。CUDA backend は未リンクのため
+  CPU に fallback し、`error` にその旨を入れて `ok=true` を返す。`path` 空文字時は MVP
+  fallback converter を active にする。probe 失敗時は、まだモデル未ロードの初回ロードなら
+  MVP fallback converter へ切り替える一方、既にモデルロード済みの再ロードでは直前にロード
+  済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
+- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live)` /
+  応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
+  応答前に `max_candidates` で件数を切り詰める。
 - ✅ `Cancel(target_request_id)`
-- ✅ `CommitObservation(reading, chosen, shown, timestamp_ms)`
+- ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms)`
 - ✅ `AddUserWord` / `RemoveUserWord`
 - ⚠️ enum のみ定義済み、Payload/Dispatcher 未実装:
   - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
   - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`
     関数があるため、Payload と Dispatcher ハンドラを追加すれば配線可能。
+
+### Handshake 認証ゲート
+
+- Host 設定 `handshake_token` が非空のとき、`Dispatcher::RequiresAuthenticatedSession`
+  が有効化され、Handshake 成立（`protocol_version` 一致 + `handshake_token` 一致）まで
+  後続メッセージを拒否する。token 未設定（空）の場合は認証不要で全メッセージを受け付ける。
+- Handshake の成否は接続ごとの `authenticated_` 状態に反映され、未認証時は Health が
+  `last_error="not authenticated"` を返す。
 
 ## 学習
 
@@ -51,7 +73,10 @@
 - ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` に保存する。
   `--learning` / `--user-dict` 指定時は明示パスを優先する。
 - 保存時は一時ファイルへ書き込んでから replace し、書き込み中クラッシュによる
-  既存ファイル破損を避ける。
+  既存ファイル破損を避ける（`learning/src/AtomicFile.h`）。一時ファイルは
+  `FlushFileBuffers` / `fsync` で flush 後、`MoveFileExW(MOVEFILE_REPLACE_EXISTING |
+  MOVEFILE_WRITE_THROUGH)` で原子的に置換し、置換途中のクラッシュでも既存ファイルを
+  無傷に保つ。
 - 確定・訂正ごとの観測はメモリ上で即時反映し、TSV への永続化は
   `learning_flush_every_n`（既定 8 件）または `learning_flush_interval_sec`
   （既定 5 秒）の background timer でデバウンスする。Host 破棄時と `LoadModel` 境界では

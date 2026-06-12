@@ -311,10 +311,16 @@ Backend: auto → CPU
 
 | 表示 | 意味 |
 |---|---|
-| ✅ | `gguf_valid = true` かつ ロード成功履歴あり |
-| ⚠️ | `gguf_valid = true` だが VRAM 不足 / ロード失敗履歴あり |
-| ❌ | `gguf_valid = false` または重大エラー |
+| ✅ | `valid = true` かつ ロード成功履歴あり（R1=GGUF 検証 OK / R2=`genai_config.json` + `model.onnx` 存在） |
+| ⚠️ | `valid = true` だが VRAM 不足 / ロード失敗履歴あり |
+| ❌ | `valid = false` または重大エラー |
 | 🔄 | ロード中 / ベンチマーク中 |
+
+ステータスは format-neutral な `valid`（§3.2）で駆動する。`gguf_valid` は
+R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_valid` を持たない
+ため、これを参照すると valid な ONNX GenAI モデルが ❌ 扱いになり Model タブ
+から除外される。形式固有の詳細（GGUF magic / `genai_config.json`）は補助情報
+としてのみ用いる。
 
 ## 7. 設定スキーマ
 

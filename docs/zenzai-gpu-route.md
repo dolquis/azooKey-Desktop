@@ -71,7 +71,9 @@ DirectML を直接叩く旧 2 候補（llama.cpp + DirectML backend / ORT + Dire
 - **前提**: zenz-v3 を ONNX Runtime GenAI 形式へ変換できること（Foundry Toolkit の
   turn-key 変換は対応モデルが限定列挙で zenz-v3 は対象外。手動変換可否を先にスパイク）。
 - **アクセラレータ選択**: Windows ML が NPU（QNN / OpenVINO / VitisAI）→ GPU
-  （NvTensorRtRtx / MIGraphX / OpenVINO）→ CPU の順で自動選択・自動フォールバック。
+  （NvTensorRtRtx / OpenVINO）→ CPU の順で自動選択・自動フォールバック。GenAI 経路の
+  ため MIGraphX(AMD GPU) は現状除外（GenAI 未対応。`docs/copilot-pc-backend-spec.md`
+  §4.1 注記参照）。
 - **配布**: EP は Windows Update 経由で配信され MSIX に同梱不要（配布サイズ最小化）。
 
 詳細選定の判断基準・enum 拡張ポリシー・フォールバック段位・DXCore 列挙アルゴリズムは

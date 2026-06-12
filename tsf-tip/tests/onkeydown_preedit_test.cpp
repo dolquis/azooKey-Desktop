@@ -80,6 +80,7 @@ class FakeRange final : public ITfRange {
 
   STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
     ++set_text_count;
+    if (FAILED(set_text_result)) return set_text_result;
     last_text.assign(text, text + length);
     return set_text_result;
   }
@@ -361,8 +362,13 @@ class FakeComposition final : public ITfComposition {
   }
 
   STDMETHODIMP GetRange(ITfRange** range) override {
-    if (range) *range = nullptr;
-    return E_NOTIMPL;
+    if (!range) return E_POINTER;
+    *range = nullptr;
+    if (FAILED(get_range_result)) return get_range_result;
+    if (!range_) return E_NOTIMPL;
+    range_->AddRef();
+    *range = range_;
+    return S_OK;
   }
 
   STDMETHODIMP ShiftStart(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
@@ -376,6 +382,8 @@ class FakeComposition final : public ITfComposition {
 
   int end_count{0};
   HRESULT end_result{S_OK};
+  ITfRange* range_{nullptr};
+  HRESULT get_range_result{S_OK};
 
  private:
   LONG ref_count_{1};
@@ -566,6 +574,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DeactivateReleasesCompositionWhenSyncCleanupIsR
 TEST(TsfTipOnKeyDownPreeditTest, DeactivateEndsCompositionWhenSyncCleanupRuns) {
   TextServiceHarness h;
   FakeComposition composition;
+  FakeRange range;
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -573,6 +582,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DeactivateEndsCompositionWhenSyncCleanupRuns) {
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
+  composition.range_ = &range;
   h.service.composition_ = &composition;
   h.context.run_edit_session = true;
 
@@ -580,6 +590,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DeactivateEndsCompositionWhenSyncCleanupRuns) {
 
   EXPECT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_FALSE(h.service.has_active_context_for_test());
 }
@@ -587,6 +598,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DeactivateEndsCompositionWhenSyncCleanupRuns) {
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossEndsCompositionAndClearsStaleState) {
   TextServiceHarness h;
   FakeComposition composition;
+  FakeRange range;
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -596,6 +608,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossEndsCompositionAndClearsStaleState) {
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
+  composition.range_ = &range;
   h.service.composition_ = &composition;
   h.context.run_edit_session = true;
 
@@ -603,9 +616,77 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossEndsCompositionAndClearsStaleState) {
 
   EXPECT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
   EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsLatestPreeditIntoExistingComposition) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.last_text = std::wstring(1, L'\x304b');
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"かき");
+  ASSERT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring({L'\x304b', L'\x304d'}));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenLatestPreeditSetTextFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.last_text = std::wstring(1, L'\x304b');
+  range.set_text_result = E_FAIL;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"かき");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"かき");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeCompositionExists) {
@@ -683,6 +764,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsR
 TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsStaleState) {
   TextServiceHarness h;
   FakeComposition composition;
+  FakeRange range;
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -690,6 +772,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsSta
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
+  composition.range_ = &range;
   h.service.composition_ = &composition;
   h.context.run_edit_session = true;
 
@@ -697,6 +780,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsSta
 
   EXPECT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_FALSE(h.service.has_active_context_for_test());
 }

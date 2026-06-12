@@ -578,7 +578,7 @@ void TextService::ClearTextStateForLifecycle() {
 
 bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   std::string pending_surface = preedit_kana_;
-  if (!composition_ && romaji_.HasPending()) {
+  if (romaji_.HasPending()) {
     auto romaji_preview = romaji_;
     pending_surface += romaji_preview.Flush();
   }
@@ -590,7 +590,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   const std::string saved_commit_surface = commit_surface_;
 
   const bool commit_without_composition = composition_ == nullptr;
-  if (commit_without_composition) {
+  if (!pending_surface.empty()) {
     committing_ = true;
     commit_surface_ = pending_surface;
     preedit_kana_.clear();
@@ -1250,16 +1250,23 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     if (service_->composition_) {
       if (!surface.empty()) {
         ITfRange* pRange = nullptr;
-        if (SUCCEEDED(service_->composition_->GetRange(&pRange)) && pRange) {
-          pRange->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+        HRESULT text_hr = service_->composition_->GetRange(&pRange);
+        if (SUCCEEDED(text_hr) && pRange) {
+          text_hr = pRange->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
           pRange->Release();
         }
+        if (FAILED(text_hr) || !pRange) return FAILED(text_hr) ? text_hr : E_FAIL;
       }
       // EndComposition finalizes the text in the document.
       ITfComposition* comp = service_->composition_;
-      service_->composition_ = nullptr;
-      comp->EndComposition(ec);
+      comp->AddRef();
+      const HRESULT end_hr = comp->EndComposition(ec);
+      if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
+        service_->composition_ = nullptr;
+        comp->Release();
+      }
       comp->Release();
+      if (FAILED(end_hr)) return end_hr;
     } else if (!surface.empty()) {
       // No active composition (e.g. commit triggered before the async preedit
       // session ran); insert the surface text directly at the cursor.

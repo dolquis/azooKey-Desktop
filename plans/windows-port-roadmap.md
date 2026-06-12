@@ -751,10 +751,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   として着手可能（M25/M27 がこの先に連なる）。Phase 6 への配置は主題分類で
   あり、Phase 5 完了を待つ必要はない。
 - **変更対象**: `inference-host/src/BackendSelector.cpp`（新規）、
-  `inference-host/src/InferenceEngine.cpp`（バックエンド分岐）、
-  `inference-host/src/DirectMlBackend.cpp` / `QnnBackend.cpp`（新規、
-  M8 スパイク結果次第）。
-- **実装範囲**: `docs/copilot-pc-backend-spec.md` §1〜§4。
+  `inference-host/src/InferenceEngine.cpp`（エンジン分岐）、
+  `inference-host/src/WinMlBackend.cpp`（新規、ONNX Runtime GenAI + Windows ML。
+  DirectML が sustained engineering 化したため旧 `DirectMlBackend.cpp` /
+  `QnnBackend.cpp` の個別 SDK 実装は採らず、EP は Windows ML の自動配信に委ねる）。
+- **前提（追加）**: zenz-v3 → ONNX Runtime GenAI 形式の変換可否スパイク
+  （Windows ML 経路 R2 のブロッカー。不可なら Copilot+ も R1 CPU を既定とする）。
+- **実装範囲**: `docs/copilot-pc-backend-spec.md` §1〜§4（決定は §4.3、enum / 境界
+  ポリシーは §4.4、フォールバック段位は §4.5）。
 - **横断**: X-1-2 (TypingTempoTracker)・X-2-4 (PredictWithLLM)・
   X-3-4 (DetectAnomalies) はこの段階で Heavy レーンに乗せる。
 - **受け入れ条件**:

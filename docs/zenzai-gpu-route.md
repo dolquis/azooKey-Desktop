@@ -55,35 +55,35 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
 
 ## 将来拡張
 
-### DirectML EP ルート（Phase 6-B M24 採用予定）
+> **M24 決定（2026 更新、正典は `docs/copilot-pc-backend-spec.md` §4.3）**:
+> DirectML が Microsoft により sustained engineering（新規開発停止）化されたため、
+> 下記「DirectML EP ルート」「NPU ルート」を **Windows ML（ORT ベース・EP 自動配信／
+> 自動選択）への一本化**として再定義する。ベンダ別 SDK（QNN / OpenVINO / MIGraphX）
+> の個別バンドルは行わない。NPU / DirectML 系は独立 `BackendKind` 値ではなく
+> `WinML` エンジン値で表し、具体 EP は Windows ML に委ねる。
 
-ONNX 化を経ない経路として、以下のいずれかを Phase 6-B M24 で採用する。
-M8 スパイクで配布サイズ / 初回起動時間 / レイテンシ / 量子化対応を比較して決定する。
+### Windows ML ルート（R2、Phase 6-B M24 採用予定）
 
-候補:
+ONNX Runtime GenAI + Windows ML により、ベンダ横断で NPU / GPU / CPU を自動選択する。
+DirectML を直接叩く旧 2 候補（llama.cpp + DirectML backend / ORT + DirectML EP）は、
+前者を不採用、後者を Windows ML へ統合した。
 
-1. **llama.cpp + DirectML backend** — GGUF をそのまま流用。配布サイズ最小。
-   ベンダー横断（Intel / AMD / NVIDIA / Qualcomm）。NPU 対応は実験的。
-2. **ONNX Runtime + DirectML EP** — 中間 ONNX 化が必要だが、NPU 対応が成熟。
-   量子化 int4/int8 のサポートが厚い。配布サイズ中。
+- **前提**: zenz-v3 を ONNX Runtime GenAI 形式へ変換できること（Foundry Toolkit の
+  turn-key 変換は対応モデルが限定列挙で zenz-v3 は対象外。手動変換可否を先にスパイク）。
+- **アクセラレータ選択**: Windows ML が NPU（QNN / OpenVINO / VitisAI）→ GPU
+  （NvTensorRtRtx / MIGraphX / OpenVINO）→ CPU の順で自動選択・自動フォールバック。
+- **配布**: EP は Windows Update 経由で配信され MSIX に同梱不要（配布サイズ最小化）。
 
-詳細選定の判断基準と DXCore 列挙アルゴリズムは
+詳細選定の判断基準・enum 拡張ポリシー・フォールバック段位・DXCore 列挙アルゴリズムは
 `docs/copilot-pc-backend-spec.md` §3〜§4 を参照。
 
-### NPU ルート（Copilot+ PC）
+### NPU ルート（Copilot+ PC）= Windows ML に統合
 
-Copilot+ PC（Snapdragon X Elite / Intel Meteor Lake+ / AMD XDNA）の NPU を
-活用する経路として以下を比較対象に追加：
-
-- **Qualcomm QNN SDK** — Snapdragon X Elite の Hexagon NPU。ARM64 専用、
-  省電力で常時稼働に最適。
-- **Intel OpenVINO** — Intel Core Ultra の NPU + iGPU + CPU を統合制御。
-  配布サイズが大きい（〜100MB）が int4/int8 量子化が成熟。
-- **AMD MIGraphX** — Ryzen AI 300 系の XDNA NPU。
-
-Phase 6-B M24 で `BackendKind::NPU` として統合し、`BackendSelector` の優先順位
-は **NPU > DirectML > CUDA > CPU**（バッテリ駆動時は **NPU > CPU > DirectML
-> CUDA**）とする。
+Copilot+ PC（Snapdragon X Elite / Intel Core Ultra / AMD Ryzen AI）の NPU は、上記
+Windows ML ルート（R2）の自動 EP 選択（Qualcomm=QNN / Intel=OpenVINO / AMD=VitisAI）
+で扱う。個別 SDK をバンドルせず、`BackendSelector` は R2(auto) 要求と電源状態の判断のみを
+担う（概念的な優先順位は AC 時 **NPU > GPU > CPU**、バッテリ時 **NPU > CPU > GPU**。
+GGUF/llama.cpp（R1）の CUDA / discrete GPU はバッテリ時に後回し）。
 
 ### ONNX/TensorRT ルート（保留）
 

@@ -271,6 +271,22 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 > Win10 22H2 必須を維持するなら **Option A 確定が前提**。Option B/C を選ぶ場合
 > は本受け入れ条件から Win10 22H2 を外し、Win Server 2022 ベースに置換する。
 
+### 1.6 推論バックエンド / EP / モデルの配布方針（M24 連動）
+
+推論バックエンドの選定は `docs/copilot-pc-backend-spec.md` §4 が正典。配布形態の
+決定のみを以下に固定する（同 §4.5 から参照）。
+
+| 構成要素 | 配布形態 | 理由 |
+|---|---|---|
+| llama.cpp（R1）CPU + zenz-v3 GGUF | **base MSIX に同梱** | v1.0 既定。GGUF は既存資産・無変換 |
+| Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
+| Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
+| ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない） | CUDA ランタイムが大きく NVIDIA 環境限定 |
+| zenz-v3 ONNX 変換モデル（R2, 変換スパイク成功時） | **optional モデルパッケージ** | 変換可否が未確定・対象環境限定 |
+
+NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
+フォールバックする（同 §4.3-5）。
+
 ## 2. EV/OV コード署名（M29）
 
 ### 2.0 署名経路の選定

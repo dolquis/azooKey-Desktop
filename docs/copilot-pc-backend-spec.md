@@ -24,7 +24,19 @@ struct BackendInfo {
 };
 ```
 
+> **注（M24 決定で更新、§4.4 が正典）**: 上の 4 値 enum（CPU/CUDA/DirectML/NPU）は
+> 初期スケッチであり、最終的な enum 拡張は §4.4 のポリシーに従う。DirectML が
+> sustained engineering となったため、NPU / DirectML 系アクセラレーションは個別
+> enum 値ではなく **`WinML` エンジン値（具体 EP は Windows ML が自動選択）**で表現し、
+> `DirectML` / `NPU` を独立値として実装しない。現行コードの enum は `{ Cpu, Cuda }`
+> （llama.cpp）であり、拡張は後方互換の追記のみで行う。
+
 ## 2. 自動選択優先度
+
+> **注（M24 決定）**: 下記の優先順位は「アクセラレータ種別」の概念的順位である。
+> 実装では R2（`WinML` エンジン）内の NPU→GPU→CPU 自動選択は **Windows ML の EP
+> 自動選択に委ね**、`BackendSelector` は「R2(auto) を要求するか / R1 のどの
+> アクセラレータを要求するか」と電源状態の判断のみを担う。詳細な降格段位は §4.5。
 
 ### 2.1 既定優先順位
 
@@ -112,34 +124,99 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 
 これらは `BackendSelector::IsNpuAdapter(IDXCoreAdapter*)` 内で判定。
 
-## 4. llama.cpp 経路 vs ONNX Runtime + DirectML EP
+## 4. 推論エンジン × アクセラレータの選定（M8 / M24）
 
-### 4.1 候補
+> **重要（2026 時点の Windows AI 指針）**: Microsoft は **DirectML を sustained
+> engineering（保守のみ・新規機能開発停止）** とし、NPU / GPU アクセラレーションの
+> 推奨経路を **Windows ML**（ONNX Runtime ベース、Execution Provider を Windows
+> Update 経由で自動配信・自動選択）へ移行した。よって本書の旧 4 候補表（DirectML
+> EP を前提）は前提が変わった。以下では「エンジン軸」と「アクセラレータ軸」を分離して
+> 再定義する。
+> 出典: [Get Started with DirectML（sustained engineering 注記）](https://learn.microsoft.com/windows/ai/directml/dml-get-started)、
+> [What is Windows ML](https://learn.microsoft.com/windows/ai/new-windows-ml/overview)、
+> [Accelerate AI models — Silicon-to-EP mapping](https://learn.microsoft.com/windows/ai/new-windows-ml/accelerate-ai-models#silicon-to-ep-mapping)、
+> [Develop AI applications for Copilot+ PCs](https://learn.microsoft.com/windows/ai/npu-devices/)。
 
-| 経路 | バインディング | 配布サイズ | 量子化 | NPU 対応 |
-|---|---|---|---|---|
-| A. llama.cpp + DirectML backend | llama.cpp DML | 小 (〜20MB) | gguf | △ (実験) |
-| B. ORT + DirectML EP | ONNX Runtime | 中 (〜50MB) | int4/int8 ONNX | ◯ |
-| C. QNN SDK (Qualcomm) | QNN HTP | 小 | int4/int8 | ◎ (Snapdragon X) |
-| D. OpenVINO | OpenVINO Runtime | 大 (〜100MB) | int4/int8 | ◎ (Intel) |
+### 4.1 2 つのエンジン経路
 
-### 4.2 選定スパイク（M8 で実施）
+| 軸 | エンジン | モデル形式 | アクセラレータ | NPU | EP 配布 |
+|---|---|---|---|---|---|
+| **R1** | llama.cpp C-API | GGUF（既存 zenz-v3 資産） | CPU（既定）/ CUDA（ggml-cuda, NVIDIA）/ Vulkan（ggml-vulkan, ベンダ横断 GPU） | ✕（実用外） | 自前バンドル |
+| **R2** | ONNX Runtime GenAI + Windows ML | ONNX Runtime GenAI 形式（**要変換**） | Windows ML が自動選択（NPU: QNN/OpenVINO/VitisAI、GPU: NvTensorRtRtx/MIGraphX/OpenVINO、CPU: ORT） | ◎（Copilot+ PC） | Windows Update 配信（**非バンドル**） |
 
-`bench/zenzai_backend_bench.cpp`（新規）：
+- 旧候補 **A（llama.cpp + DirectML backend）は不採用**。ggml の DirectML backend は
+  保守経路でなく、ベンダ横断 GPU は R1 では **ggml-vulkan** に集約する。
+- 旧候補 **B/C/D（ORT+DirectML EP / QNN SDK / OpenVINO Runtime の個別バンドル）は
+  Windows ML（R2）の自動 EP 配信へ統合**し、ベンダ別 SDK は同梱しない。これにより
+  MSIX サイズ肥大（旧 C/D の懸念）と EP 保守コストを回避する。
 
-- 同一プロンプト「こんにちは」「日本語」等 20 件を各経路で実行
-- メトリクス: 初回 LoadModel 時間 / P50 推論レイテンシ / RSS / 配布サイズ
-- 判定基準（重み順）:
+### 4.2 計測スパイク（bench）
+
+`bench/zenzai_backend_bench.cpp`（新規）で R1 / R2 を横断計測する。
+
+- 同一プロンプト「こんにちは」「日本語」「今日は良い天気です」等 20 件を各経路で実行。
+- メトリクス: 初回 LoadModel 時間 / P50 推論レイテンシ / RSS / 実効配布サイズ。
+- 判定ゲート（重み順）:
   1. P50 推論レイテンシ < 30ms
-  2. 配布サイズ < 50MB
+  2. 実効配布サイズ < 50MB（EP 非バンドル前提で R2 が有利）
   3. 初回 LoadModel 時間 < 3 秒
-  4. ARM64 サポート
+  4. ARM64 / NPU 可用性
+- **前提スパイク（R2 のブロッカー）**: R2 は zenz-v3 を **ONNX Runtime GenAI 形式へ
+  変換できること**が前提。Foundry Toolkit の変換は Preview かつ対応モデルが限定列挙
+  （Phi / Qwen / Llama-3.2-1B / DeepSeek-distill）で、**zenz-v3（独自小型 JP モデル）は
+  turn-key 変換対象外**。ORT GenAI model builder による手動変換の可否を別スパイクで
+  先に判定する（§4.3 の前提課題）。出典:
+  [Run LLMs and other generative models（ONNX Runtime GenAI / Windows ML）](https://learn.microsoft.com/windows/ai/new-windows-ml/run-genai-onnx-models)、
+  [Use any ONNX LLM in the AI Dev Gallery（変換対応モデル列挙）](https://learn.microsoft.com/windows/ai/ai-dev-gallery/tutorial-onnx)。
+- 実機計測（NVIDIA GPU / Snapdragon X Elite / Intel Core Ultra）は人手が必要なため
+  `gate:human-required` の子課題に分離する。
 
-### 4.3 結論プレースホルダ
+### 4.3 結論（M24 暫定方針）
 
-M8 のスパイク結果でルートを 1〜2 本に絞る。本書ではここを **「TBD（M8 完了時に
-本書を更新）」** とする。Phase 6 着手時点では「DirectML EP + ggml-cuda CUDA」を
-仮の構成として実装スケジュールに組む。
+M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する前提で、現時点の設計
+決定を以下に固定する。
+
+1. **v1.0 ベースライン = R1（llama.cpp, CPU 既定 + CUDA optional）**。GGUF 資産を無変換で
+   使え、M8 で実装済み。Copilot+ PC でも当面は zenz-v3 を R1 CPU で動かす（小型モデル
+   のため CPU でも省電力許容）。
+2. **M24 の Copilot+ NPU 経路 = R2（Windows ML）に振る**。ベンダ別 SDK を同梱せず、
+   Windows ML の自動 EP 配信・自動選択・NPU→GPU→CPU フォールバックに委ねる。
+3. **R2 は zenz-v3 → ONNX Runtime GenAI 変換の成否に依存する後続トラック（v1.0 後）**。
+   変換可否スパイクを R2 着手の前提課題とし、不可なら R2 を保留して R1 CPU を Copilot+
+   の既定に据える。**NPU 必須化はしない**（入力が止まらないことを最優先）。
+4. **不採用 / 集約**: 単体 DirectML backend（旧 A）は不採用。ベンダ横断 GPU は
+   R1=ggml-vulkan。DirectML 由来のアクセラレーションは R2（Windows ML）に一本化。
+5. Win11 24H2 (build 26100) 未満では R2 の NPU / HW EP が使えないため、OS バージョン
+   判定で R1 CPU にフォールバックする。
+
+### 4.4 BackendKind / LoadModel 境界の拡張ポリシー
+
+現行コードの enum は `enum class BackendKind { Cpu, Cuda };`
+（`inference-host/include/azookey/host/InferenceEngine.h`、いずれも llama.cpp エンジン）。
+拡張は**後方互換（既存シリアライズ値を不変・追記のみ）**で行う。
+
+- R1 アクセラレータ追加: `Vulkan`（ggml-vulkan, ベンダ横断 GPU）を予約追加。
+- R2 エンジン追加: `WinML`（ONNX Runtime GenAI + Windows ML）を追加。**具体 EP
+  （QNN / OpenVINO / VitisAI / …）は enum 値化せず**、Windows ML の自動選択に委ねる。
+- `LoadModelRequest`（`ipc/include/azookey/ipc/Payloads.h`）に optional 予約 fields を追加:
+  - `engine`: `"llama_cpp" | "winml"`（既定 `llama_cpp`、後方互換）
+  - `ep_preference`: `"auto" | "npu" | "gpu" | "cpu"`（R2 のみ、既定 `auto`）
+  - 既存 `n_gpu_layers` は R1（llama.cpp）専用として維持。
+- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**し、`Health=degraded`
+  + `last_error` で理由を返す（M8 の既存劣化モード契約と一致）。
+
+### 4.5 フォールバック段位
+
+| 電源 | 要求 | 降格順 |
+|---|---|---|
+| AC | R2(auto) | NPU EP → GPU EP → CPU EP →（engine 不可なら）R1 CPU |
+| AC | R1 CUDA | CUDA → R1 CPU |
+| バッテリ | auto | NPU EP(R2) → R1 CPU（CUDA / discrete GPU を回避） |
+| 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
+
+配布形態の決定は `docs/sideload-packaging-spec.md` §1 に反映する（R2 の EP は Windows
+Update 配信で非バンドル、CUDA は optional add-on、base MSIX は CPU(GGUF) + Windows ML
+bootstrap）。
 
 ## 5. mmap モデルロード
 
@@ -331,13 +408,19 @@ endif()
 
 ### 8.3 Snapdragon X Elite NPU
 
-QNN SDK を使う場合：
+> **更新（M24 決定、§4.3 が正典）**: 既定方針は **Windows ML（R2）経由で QNN EP を
+> 自動利用**することであり、**QNN SDK を直接同梱しない**（EP は Windows Update 配信）。
+> 以下の QNN SDK 直叩き構成は、Windows ML / QNN EP が要件を満たさないと判明した場合
+> にのみ検討する fallback（非既定）として残す。`inference-host/src/QnnBackend.cpp` も
+> その場合に限る新規ファイルであり、既定実装は `WinMlBackend.cpp`（§4.4）とする。
+
+QNN SDK を直接使う場合（非既定・fallback）：
 
 - `qnn_sdk/include/QNN/` をインクルードパスに追加
 - `qnn_htp/lib/aarch64-windows-msvc/` をリンク
 - バイナリ配布時は QNN ランタイム DLL を MSIX に同梱
 
-`inference-host/src/QnnBackend.cpp`（新規、Phase 6-B 中盤）：
+`inference-host/src/QnnBackend.cpp`（非既定・fallback 時のみ新規）：
 
 ```cpp
 class QnnBackend : public IBackend {

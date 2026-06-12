@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
@@ -135,6 +136,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     selected_candidate_idx_ = idx;
     if (active_context_) CommitSelected(active_context_);
   });
+  candidate_window_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
 
   StartIpcWorker();
   return S_OK;
@@ -302,6 +304,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_.clear();
+        candidate_window_show_pending_ = false;
       }
       preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
       RequestPreeditUpdate(context);
@@ -320,6 +323,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_.clear();
+        candidate_window_show_pending_ = false;
       }
       preedit_kana_ += romaji_.Feed('-');
       RequestPreeditUpdate(context);
@@ -338,6 +342,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         {
           std::lock_guard<std::mutex> lk(candidates_mtx_);
           candidates_.clear();
+          candidate_window_show_pending_ = false;
         }
         auto& s = preedit_kana_;
         size_t i = s.size();
@@ -361,6 +366,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         {
           std::lock_guard<std::mutex> lk(candidates_mtx_);
           candidates_.clear();
+          candidate_window_show_pending_ = false;
         }
         PostQueryCandidates(preedit_kana_);
       }
@@ -375,17 +381,28 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         } else {
           // Snapshot the candidate list so commit always reflects what was
           // displayed, even if a late QueryCandidates response arrives later.
+          std::vector<ipc::CandidateField> snapshot;
+          bool wait_for_candidates = false;
           {
             std::lock_guard<std::mutex> lk(candidates_mtx_);
-            shown_candidates_ = candidates_;
+            if (candidates_.empty()) {
+              candidate_window_show_pending_ = true;
+              wait_for_candidates = true;
+            } else {
+              candidate_window_show_pending_ = false;
+              shown_candidates_ = candidates_;
+              snapshot = shown_candidates_;
+            }
           }
-          std::vector<std::wstring> items;
-          for (auto& c : shown_candidates_) items.push_back(Utf8ToWide(c.surface));
-          if (!items.empty()) {
-            selected_candidate_idx_ = 0;
-            POINT pt = caret_pt_;
-            if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
-            candidate_window_.Show(pt, items, 0);
+          if (!wait_for_candidates) {
+            std::vector<std::wstring> items;
+            for (const auto& c : snapshot) items.push_back(Utf8ToWide(c.surface));
+            if (!items.empty()) {
+              selected_candidate_idx_ = 0;
+              POINT pt = caret_pt_;
+              if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+              candidate_window_.Show(pt, items, 0);
+            }
           }
         }
       }
@@ -434,6 +451,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         {
           std::lock_guard<std::mutex> lk(candidates_mtx_);
           candidates_.clear();
+          candidate_window_show_pending_ = false;
         }
         RequestPreeditUpdate(context);
         *eaten = TRUE;
@@ -474,6 +492,11 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfC
   }
   candidate_window_.Hide();
   selected_candidate_idx_ = 0;
+  {
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
   preedit_kana_.clear();
   romaji_.Reset();
   return S_OK;
@@ -531,6 +554,7 @@ void TextService::CommitSelected(ITfContext* context) {
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidates_.clear();
+    candidate_window_show_pending_ = false;
   }
   const std::string reading = preedit_kana_;
 
@@ -596,6 +620,7 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidates_.clear();
+    candidate_window_show_pending_ = false;
   }
 
   // M10: cancel queued AND in-flight QC; bump pending_id to invalidate
@@ -877,8 +902,19 @@ void TextService::IpcWorkerThread() {
         DebugLog("IPC: " + std::to_string(qpayload->candidates.size()) +
                  " candidates for [" + reading + "] top=" + qpayload->candidates[0].surface);
       }
-      std::lock_guard<std::mutex> lock(candidates_mtx_);
-      candidates_ = qpayload->candidates;
+      bool notify_ui = false;
+      {
+        std::lock_guard<std::mutex> lock(candidates_mtx_);
+        candidates_ = qpayload->candidates;
+        if (candidate_window_show_pending_) {
+          if (candidates_.empty()) {
+            candidate_window_show_pending_ = false;
+          } else {
+            notify_ui = true;
+          }
+        }
+      }
+      if (notify_ui) candidate_window_.PostCandidatesReady();
     } else {
       DebugLog("IPC: stale response for req_id=" + std::to_string(req_id) + ", discarding");
     }
@@ -896,6 +932,54 @@ void TextService::PostQueryCandidates(const std::string& reading) {
   ipc_has_request_ = true;
   ipc_cv_.notify_one();
 }
+
+void TextService::OnCandidatesReady(void* context) {
+  if (!context) return;
+  static_cast<TextService*>(context)->ShowCandidateWindowFromCache();
+}
+
+void TextService::ShowCandidateWindowFromCache() {
+  if (preedit_kana_.empty() || candidate_window_.IsVisible()) {
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    candidate_window_show_pending_ = false;
+    return;
+  }
+
+  std::vector<ipc::CandidateField> snapshot;
+  {
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    if (!candidate_window_show_pending_) return;
+    candidate_window_show_pending_ = false;
+    if (candidates_.empty()) return;
+    shown_candidates_ = candidates_;
+    snapshot = shown_candidates_;
+  }
+
+  std::vector<std::wstring> items;
+  for (const auto& candidate : snapshot) items.push_back(Utf8ToWide(candidate.surface));
+  if (items.empty()) return;
+
+  selected_candidate_idx_ = 0;
+  POINT pt = caret_pt_;
+  if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+  candidate_window_.Show(pt, items, 0);
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+bool TextService::candidate_window_show_pending_for_test() {
+  std::lock_guard<std::mutex> lk(candidates_mtx_);
+  return candidate_window_show_pending_;
+}
+
+void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates) {
+  std::lock_guard<std::mutex> lk(candidates_mtx_);
+  candidates_ = std::move(candidates);
+}
+
+void TextService::show_candidate_window_from_cache_for_test() {
+  ShowCandidateWindowFromCache();
+}
+#endif
 
 void TextService::PostCommitObservation(const std::string& reading,
                                         const ipc::CandidateField& chosen,

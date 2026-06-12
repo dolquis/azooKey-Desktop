@@ -29,7 +29,8 @@ if(AZOOKEY_BUILD_TESTS)
       ${test_source}
     )
     target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_compile_definitions(${target_name} PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(${target_name} PRIVATE
+      UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN AZOOKEY_TSF_TESTING)
     target_link_libraries(${target_name}
       PRIVATE
         azookey_core

@@ -13,7 +13,7 @@ enum class BackendKind : uint8_t {
     CPU      = 0,   // 既定。llama.cpp 純 CPU
     CUDA     = 1,   // NVIDIA GPU (ggml-cuda)
     DirectML = 2,   // Windows DirectML (Intel/AMD/NVIDIA 横断)
-    NPU      = 3,   // NPU 経由 (Qualcomm QNN / Intel OpenVINO / AMD MIGraphX)
+    NPU      = 3,   // NPU 経由 (Qualcomm QNN / Intel OpenVINO / AMD VitisAI)
 };
 
 struct BackendInfo {

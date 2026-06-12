@@ -224,9 +224,12 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
 | 任意 | 終端 | 常に **R1 CPU(GGUF)**。入力をブロックしない |
 
 > バッテリ時に R2(auto) を Windows ML の全 EP 自動選択（NPU→GPU→CPU）に委ねると、NPU
-> 非 ready の GPU ラップトップで GPU EP が選ばれ得る。これを防ぐため、バッテリ時は §4.6
-> のとおり **GPU EP を登録せず NPU EP のみ取得**し、NPU 不可なら R2 を bypass して R1 CPU
-> とする（AC 時のみ GPU EP を許可）。
+> 非 ready の GPU ラップトップで GPU が選ばれ得る。これを防ぐため、バッテリ時は §4.6 の
+> とおり **(a) NPU 系 EP のみ取得・登録**し、かつ **(b) EP は silicon と 1:1 でない**
+> （OpenVINO/QNN は 1 EP で NPU/GPU/CPU を露出）ため、**セッションでデバイスレベルに NPU
+> へ絞る**（`SetEpSelectionPolicy(MAX_EFFICIENCY)` か `GetEpDevices()` の
+> `HardwareDevice.Type == NPU` フィルタ）。NPU device が無ければ R2 を bypass して R1 CPU
+> とする（AC 時のみ GPU を許可）。
 
 配布形態の決定は `docs/sideload-packaging-spec.md` §1.6 に反映する（R2 の EP は Windows
 Update 配信で非バンドル、CUDA は optional add-on、base MSIX は llama.cpp CPU ランタイム
@@ -252,22 +255,33 @@ R2 エンジン初期化時（`WinMlBackend` 起動 / 初回モデルロード�
      登録。初回はネットワーク速度次第で数秒〜数分。**進捗 UX 必須**）か、`ep_preference`
      指定時は個別取得。
    - **バッテリ駆動時**: `EnsureAndRegisterCertifiedAsync()`（GPU EP も登録される）は
-     **使わず**、`FindAllProviders()` で NPU EP のみを `EnsureReadyAsync()` →
-     `TryRegister()` する（`ep_preference=npu` 相当）。**GPU EP を登録しない**ことで
-     §4.5 のバッテリ方針（discrete GPU 回避）を保証する。NPU EP が取得不能なら R2 を
-     bypass し R1 CPU。
+     **使わず**、`FindAllProviders()` で NPU 系 EP（QNN/OpenVINO/VitisAI）のみを
+     `EnsureReadyAsync()` → `TryRegister()` する。NPU EP が取得不能なら R2 を bypass し
+     R1 CPU。
    - 個別取得は `FindAllProviders()` で `ReadyState` を確認し、目的 EP に
      `EnsureReadyAsync()` → 成功時 `TryRegister()`。`ep_preference`（§4.4）で対象 EP を絞る。
-3. `ReadyState` 遷移を扱う: `NotPresent`（未 DL）/ `NotReady`（DL 済・未登録）はいずれも
+3. **デバイスレベルの選択（重要）**: EP は silicon と 1:1 ではない（OpenVINO / QNN は
+   1 EP で **NPU / GPU / CPU 複数デバイス**を露出する）。EP の登録を絞るだけでは GPU 選択
+   を防げないため、セッション側でデバイスを絞る:
+   - **バッテリ時**: `SessionOptions.SetEpSelectionPolicy(MAX_EFFICIENCY)`（NPU 優先 +
+     CPU fallback、discrete GPU を避ける）を用いるか、明示選択で `GetEpDevices()` を
+     `HardwareDevice.Type == NPU`（+ CPU fallback）でフィルタし、`AppendExecutionProvider_V2`
+     で **NPU device のみ append**（GPU device は append しない）。NPU device が無ければ
+     R2 を bypass し R1 CPU。
+   - **AC 時**: `MAX_PERFORMANCE` / `PREFER_NPU` など、もしくは明示選択で GPU device も許可。
+   - EP device 一覧は EP / ドライバ更新で**動的に変わる**ため、選択ロジックは再列挙に
+     耐えるよう実装する。出典:
+     [Select execution providers（Device Policies / GetEpDevices フィルタ）](https://learn.microsoft.com/windows/ai/new-windows-ml/select-execution-providers)。
+4. `ReadyState` 遷移を扱う: `NotPresent`（未 DL）/ `NotReady`（DL 済・未登録）はいずれも
    `EnsureReadyAsync()`、`Ready` は `TryRegister()`。
-4. **エラー / 進行中処理**: `EnsureReadyAsync()` の結果 `Status` を確認し、
+5. **エラー / 進行中処理**: `EnsureReadyAsync()` の結果 `Status` を確認し、
    - `Failure` → `ExtendedError`(HRESULT) / `DiagnosticText` をログし、当該 EP を諦めて
      **R1 CPU にフォールバック**（§4.5、`Health=degraded` + `last_error`）。
    - `InProgress` → 完了を待ってからセッション生成。
-5. **first-run UX**: 初回 DL は時間がかかるため、進捗インジケータ（download progress
+6. **first-run UX**: 初回 DL は時間がかかるため、進捗インジケータ（download progress
    callback）を出す。オフライン / 制限ネットワーク環境は EP DL 不可のため R1 CPU 継続
    （bring-your-own EP は将来検討）。
-6. 登録結果は ONNX Runtime の `GetEpDevices()` で検証可能（例: 登録後に
+7. 登録結果は ONNX Runtime の `GetEpDevices()` で検証可能（例: 登録後に
    `QNNExecutionProvider (DeviceType: NPU)` が現れる）。
 
 この EP 取得・登録ステップの実装は M24（`WinMlBackend`）の必須要件とし、

@@ -226,8 +226,11 @@ M24 決定（R1=llama.cpp / R2=Windows ML）に従って選ぶ:
    **R2（`winml`）**。取得失敗（`Failure`）/ ONNX モデル無し / 非対応 OS のときに **R1**:
    NVIDIA かつ CUDA 可なら `cuda`、ベンダ横断 GPU（非 NVIDIA / R2 不可）なら `vulkan`
    （ggml-vulkan ビルド時）、いずれも不可なら `cpu`。
-   バッテリ駆動時は §4.5 / §4.6 に従い取得対象を **NPU EP に限定**し（GPU EP を登録
-   しない）、discrete GPU(CUDA / Vulkan / GPU EP) を回避する（NPU EP 不可なら R1 CPU）。
+   バッテリ駆動時は §4.5 / §4.6 に従い、NPU 系 EP のみ取得し、かつ **セッションで
+   デバイスレベルに NPU へ絞る**（`SetEpSelectionPolicy(MAX_EFFICIENCY)` か `GetEpDevices()`
+   の `HardwareDevice.Type == NPU` フィルタ。EP は silicon と 1:1 でないため登録の限定だけ
+   では不十分）。discrete GPU(CUDA / Vulkan / GPU device) を回避し、NPU device が無ければ
+   R1 CPU。
 2. **同一順位内のタイブレーカーとしてのみ**ベンチマーク履歴を参照する
    （直近 7 日以内、同一モデル、`status = success` のもの。同 rank 内に
    複数 backend がある場合に p95 最良を採用）。順位を跨いだ並べ替えは

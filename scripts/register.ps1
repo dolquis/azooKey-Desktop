@@ -38,6 +38,28 @@ if (-not $ElevatedReentry) {
     } catch {
       Write-Warning "Could not register inference host auto-start: $_"
     }
+
+    # Start the host for the *current* session as well. The HKCU Run entry above
+    # only takes effect at the next logon, so without this the first verification
+    # right after registration sees a live TIP (preedit works) but no candidates
+    # (Space returns nothing) because nothing is serving the per-user pipe yet.
+    # Started here, in the original (non-elevated) process, so it runs as the
+    # interactive user — same rationale as the Run entry. Best-effort; uses the
+    # same `--pipe` arguments so the in-session host matches the auto-start one.
+    #
+    # Skip when a host is already running: a second instance would open another
+    # listener on the same per-user pipe and split candidate / learning state.
+    $existingHost = Get-Process -Name "azookey_inference_host" -ErrorAction SilentlyContinue
+    if ($existingHost) {
+      Write-Host "Inference host already running (PID $($existingHost.Id -join ', ')); not starting another."
+    } else {
+      try {
+        Start-Process -FilePath $HostExePath -ArgumentList "--pipe" -WindowStyle Hidden
+        Write-Host "Inference host started for current session: $HostExePath"
+      } catch {
+        Write-Warning "Could not start inference host for current session: $_"
+      }
+    }
   } else {
     Write-Warning "Inference host not found, skipping auto-start registration: $HostExePath"
   }

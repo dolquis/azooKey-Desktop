@@ -135,6 +135,9 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT AdviseTextServiceSinks();
   HRESULT UnadviseTextServiceSinks();
   void IpcWorkerThread();
+  void ServeConnection();
+  bool PerformHandshake();
+  bool WaitForReconnectOrStop(uint32_t delay_ms);
   void PostQueryCandidates(const std::string& reading);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();

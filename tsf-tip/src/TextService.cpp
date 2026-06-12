@@ -676,24 +676,21 @@ void TextService::StopIpcWorker() {
   ipc_thread_.join();
 }
 
-void TextService::IpcWorkerThread() {
-  using namespace azookey::ipc;
+// Interruptible backoff between reconnect attempts. Returns true when the
+// worker should stop (Deactivate set ipc_stop_); StopIpcWorker notifies
+// ipc_cv_ so this wakes promptly instead of sleeping out the full delay.
+bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
+  std::unique_lock<std::mutex> lock(ipc_mtx_);
+  ipc_cv_.wait_for(lock, std::chrono::milliseconds(delay_ms),
+                   [this] { return ipc_stop_.load(); });
+  return ipc_stop_.load();
+}
 
-  const auto pipe_name = DefaultPipeName();
-  if (pipe_name.empty()) {
-    DebugLog("IPC: default pipe name unavailable; current-user SID lookup failed");
-    return;
-  }
-  constexpr uint32_t kSliceMs = 250;
-  constexpr uint32_t kTotalMs = 5000;
-  bool connected = false;
-  for (uint32_t elapsed = 0; elapsed < kTotalMs && !ipc_stop_.load(); elapsed += kSliceMs) {
-    if (ipc_client_.Connect(pipe_name, kSliceMs)) { connected = true; break; }
-  }
-  if (!connected) {
-    if (!ipc_stop_.load()) DebugLog("IPC: host pipe unavailable: " + pipe_name);
-    return;
-  }
+// Send the activation handshake and wait (bounded) for acceptance. The bounded
+// wait prevents a host that accepts the pipe but never replies from hanging the
+// reconnect loop. Returns false on send failure, timeout, or rejection.
+bool TextService::PerformHandshake() {
+  using namespace azookey::ipc;
 
   HandshakeRequest hs;
   hs.tip_version = kTipVersion;
@@ -708,11 +705,69 @@ void TextService::IpcWorkerThread() {
   henv.type = MessageType::Handshake;
   henv.payload_json = BuildHandshakeRequest(hs);
 
-  if (!ipc_client_.Send(henv)) { DebugLog("IPC: handshake send failed"); return; }
-  auto hres = ipc_client_.Receive();
+  if (!ipc_client_.Send(henv)) {
+    DebugLog("IPC: handshake send failed");
+    return false;
+  }
+  constexpr uint32_t kHandshakeTimeoutMs = 3000;
+  auto hres = ipc_client_.ReceiveWithTimeout(kHandshakeTimeoutMs);
   auto hpayload = hres ? ParseHandshakeResponse(hres->payload_json) : std::nullopt;
-  if (!hpayload || !hpayload->accepted) { DebugLog("IPC: handshake rejected"); return; }
+  if (!hpayload || !hpayload->accepted) {
+    DebugLog("IPC: handshake rejected or no response");
+    return false;
+  }
   DebugLog("IPC: connected to host " + hpayload->host_version);
+  return true;
+}
+
+void TextService::IpcWorkerThread() {
+  using namespace azookey::ipc;
+
+  const auto pipe_name = DefaultPipeName();
+  if (pipe_name.empty()) {
+    DebugLog("IPC: default pipe name unavailable; current-user SID lookup failed");
+    return;
+  }
+  // Reconnect with exponential backoff so the worker survives a host that is
+  // started after the TIP, crashes, or restarts. The thread exits only on
+  // Deactivate (ipc_stop_), never on a dropped connection (DEV-168).
+  constexpr uint32_t kConnectTimeoutMs = 500;
+  constexpr uint32_t kBackoffMinMs = 250;
+  constexpr uint32_t kBackoffMaxMs = 3000;
+  uint32_t backoff_ms = kBackoffMinMs;
+
+  while (!ipc_stop_.load()) {
+    const bool established =
+        ipc_client_.Connect(pipe_name, kConnectTimeoutMs) && PerformHandshake();
+    if (!established) {
+      ipc_client_.Disconnect();
+      if (WaitForReconnectOrStop(backoff_ms)) break;
+      backoff_ms *= 2;
+      if (backoff_ms > kBackoffMaxMs) backoff_ms = kBackoffMaxMs;
+      continue;
+    }
+
+    // Healthy connection: reset backoff and serve until the pipe drops. A
+    // QueryCandidates enqueued while the host was down is still pending and is
+    // picked up immediately, so candidates recover without the user retyping.
+    backoff_ms = kBackoffMinMs;
+    ServeConnection();
+
+    ipc_client_.Disconnect();
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      ipc_inflight_id_ = 0;
+    }
+  }
+
+  DebugLog("IPC: worker exiting");
+}
+
+// Serve QueryCandidates / fire-and-forget traffic over an already-handshaken
+// connection. Returns when the pipe drops (so the caller reconnects) or when
+// Deactivate sets ipc_stop_. All M10 cancel / staleness handling is unchanged.
+void TextService::ServeConnection() {
+  using namespace azookey::ipc;
 
   uint64_t next_id = 2;
 
@@ -921,8 +976,6 @@ void TextService::IpcWorkerThread() {
 
     ++next_id;
   }
-
-  DebugLog("IPC: worker exiting");
 }
 
 void TextService::PostQueryCandidates(const std::string& reading) {

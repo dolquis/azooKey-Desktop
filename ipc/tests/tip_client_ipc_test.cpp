@@ -250,6 +250,90 @@ TEST(TipClientIpcTest, QueryCandidatesRoundTripThroughHostDispatcher) {
   std::remove(learning_path.c_str());
   std::remove(user_dict_path.c_str());
 }
+
+// DEV-168: the worker's reconnect loop relies on a NamedPipeClient being able to
+// reconnect to a freshly restarted host on the same per-user pipe. Simulate a
+// host crash + restart and assert the client recovers the handshake and query
+// roundtrip without being recreated.
+TEST(TipClientIpcTest, ClientReconnectsAfterHostRestart) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-reconnect-test-" +
+      std::to_string(GetCurrentProcessId());
+
+  auto mock_handler =
+      [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+    azookey::ipc::Envelope res;
+    res.version = req.version;
+    res.request_id = req.request_id;
+    res.trace_id = req.trace_id;
+    res.type = req.type;
+    if (req.type == azookey::ipc::MessageType::Handshake) {
+      auto parsed = azookey::ipc::ParseHandshakeRequest(req.payload_json);
+      azookey::ipc::HandshakeResponse payload;
+      payload.host_version = "mock-host-0.1.0";
+      payload.protocol_version = 1;
+      payload.accepted = parsed && parsed->protocol_version == 1;
+      payload.model_loaded = false;
+      res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+      return res;
+    }
+    if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+      auto parsed = azookey::ipc::ParseQueryCandidatesRequest(req.payload_json);
+      azookey::ipc::QueryCandidatesResponse payload;
+      if (parsed) {
+        azookey::ipc::CandidateField c;
+        c.surface = "mock:" + parsed->reading;
+        c.reading = parsed->reading;
+        c.score = 1.0;
+        c.source = "mock";
+        payload.candidates = {c};
+      }
+      payload.partial = false;
+      res.payload_json = azookey::ipc::BuildQueryCandidatesResponse(payload);
+      return res;
+    }
+    return std::nullopt;
+  };
+
+  azookey::ipc::NamedPipeClient client;
+
+  // First host instance: connect + handshake succeed, then the host goes away.
+  {
+    azookey::ipc::NamedPipeServer first;
+    ASSERT_TRUE(first.Start(pipe_name, mock_handler));
+    ASSERT_TRUE(client.Connect(pipe_name, 2000));
+    ASSERT_NO_FATAL_FAILURE(ExpectAcceptedHandshake(client));
+    first.Stop();  // simulate host crash / restart
+  }
+  // Drop the broken pipe, exactly as the worker does before reconnecting.
+  client.Disconnect();
+
+  // Second host instance on the same per-user pipe name.
+  azookey::ipc::NamedPipeServer second;
+  ASSERT_TRUE(second.Start(pipe_name, mock_handler));
+
+  // Reconnect must re-establish the handshake and a query roundtrip (DEV-168).
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+  ASSERT_NO_FATAL_FAILURE(ExpectAcceptedHandshake(client));
+
+  azookey::ipc::QueryCandidatesRequest qreq;
+  qreq.reading = "ほん";
+  qreq.left_context = "";
+  qreq.max_candidates = 5;
+  qreq.live = true;
+  ASSERT_TRUE(client.Send(MakeEnvelope(
+      2, azookey::ipc::MessageType::QueryCandidates,
+      azookey::ipc::BuildQueryCandidatesRequest(qreq), "tip-key-query")));
+  auto qres = client.Receive();
+  ASSERT_TRUE(qres.has_value());
+  auto qpayload = azookey::ipc::ParseQueryCandidatesResponse(qres->payload_json);
+  ASSERT_TRUE(qpayload.has_value());
+  ASSERT_FALSE(qpayload->candidates.empty());
+  EXPECT_EQ(qpayload->candidates.front().reading, "ほん");
+
+  client.Disconnect();
+  second.Stop();
+}
 #else
 
 TEST(TipClientIpcTest, ActivationFlowAndQueryRoundTrip) {

@@ -38,6 +38,41 @@ if (-not $ElevatedReentry) {
     } catch {
       Write-Warning "Could not register inference host auto-start: $_"
     }
+
+    # Start the host for the *current* session as well. The HKCU Run entry above
+    # only takes effect at the next logon, so without this the first verification
+    # right after registration sees a live TIP (preedit works) but no candidates
+    # (Space returns nothing) because nothing is serving the per-user pipe yet.
+    # Started here, in the original (non-elevated) process, so it runs as the
+    # interactive user — same rationale as the Run entry. Best-effort; uses the
+    # same `--pipe` arguments so the in-session host matches the auto-start one.
+    #
+    # Skip only when *this user's* pipe is already being served. The pipe name is
+    # per-user — DefaultPipeName() is \\.\pipe\azookey-<current user SID> — so a
+    # global process-name match would, on RDP / Fast User Switching, find another
+    # account's host (listening on a different pipe) and wrongly suppress starting
+    # one for the interactive user. Probe the exact per-user pipe instead. On
+    # enumeration failure, fall through and start (best-effort: a redundant start
+    # is preferable to leaving the just-registered TIP with no candidate server).
+    $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $myPipe = "azookey-$mySid"
+    $hostServing = $false
+    try {
+      $hostServing = [bool]([System.IO.Directory]::GetFiles("\\.\pipe\") |
+        Where-Object { [System.IO.Path]::GetFileName($_) -eq $myPipe })
+    } catch {
+      $hostServing = $false
+    }
+    if ($hostServing) {
+      Write-Host "Inference host already serving this user's pipe ($myPipe); not starting another."
+    } else {
+      try {
+        Start-Process -FilePath $HostExePath -ArgumentList "--pipe" -WindowStyle Hidden
+        Write-Host "Inference host started for current session: $HostExePath"
+      } catch {
+        Write-Warning "Could not start inference host for current session: $_"
+      }
+    }
   } else {
     Write-Warning "Inference host not found, skipping auto-start registration: $HostExePath"
   }

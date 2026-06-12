@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace azookey::tsf {
@@ -37,15 +38,26 @@ class CandidateWindow {
   using OnClickFn = std::function<void(int idx)>;
   void SetOnClick(OnClickFn fn) { on_click_ = std::move(fn); }
 
+  // Posted from non-UI threads when cached candidates become available.
+  using OnCandidatesReadyFn = void (*)(void* context);
+  void SetOnCandidatesReady(OnCandidatesReadyFn fn, void* context) {
+    on_candidates_ready_ = fn;
+    on_candidates_ready_context_ = context;
+  }
+  void PostCandidatesReady();
+
  private:
   HWND hwnd_{nullptr};
   std::vector<std::wstring> items_;
   int selected_idx_{0};
   OnClickFn on_click_;
+  OnCandidatesReadyFn on_candidates_ready_{nullptr};
+  void* on_candidates_ready_context_{nullptr};
 
   static constexpr int kItemHeight = 24;
   static constexpr int kHorzPad = 8;
   static constexpr int kMaxWidth = 400;
+  static constexpr UINT kCandidatesReadyMessage = WM_APP + 0x4b1;
 
   static ATOM RegisterWindowClass();
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

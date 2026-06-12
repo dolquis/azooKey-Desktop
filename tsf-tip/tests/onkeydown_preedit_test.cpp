@@ -4,6 +4,8 @@
 #include <Windows.h>
 
 #include <array>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <msctf.h>
@@ -274,6 +276,41 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceFlushesPendingRomajiAndIsEatenDuringPreedi
   EXPECT_TRUE(h.TestPress(VK_SPACE));
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_EQ(h.service.preedit_kana_, u8"ん");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NonPreeditControlKeysAreNotEatenWithoutCandidates) {

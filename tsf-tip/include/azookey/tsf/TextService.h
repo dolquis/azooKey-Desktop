@@ -71,6 +71,15 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string commit_surface_;
   POINT caret_pt_{0, 0};
 
+#ifdef AZOOKEY_TSF_TESTING
+  bool candidate_window_show_pending_for_test();
+  void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
+  const std::vector<ipc::CandidateField>& shown_candidates_for_test() const {
+    return shown_candidates_;
+  }
+  void show_candidate_window_from_cache_for_test();
+#endif
+
  private:
   LONG ref_count_{1};
   ITfThreadMgr* thread_mgr_{nullptr};
@@ -119,6 +128,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // Latest candidates from Host (written by IPC thread, read by TIP thread).
   std::mutex candidates_mtx_;
   std::vector<ipc::CandidateField> candidates_;
+  bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
 
   void StartIpcWorker();
   void StopIpcWorker();
@@ -126,6 +136,8 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT UnadviseTextServiceSinks();
   void IpcWorkerThread();
   void PostQueryCandidates(const std::string& reading);
+  static void OnCandidatesReady(void* context);
+  void ShowCandidateWindowFromCache();
 
   // M6: enqueue a CommitObservation to the IPC worker.
   void PostCommitObservation(const std::string& reading,

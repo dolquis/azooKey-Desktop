@@ -115,6 +115,10 @@ void CandidateWindow::Hide() {
   if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
 }
 
+void CandidateWindow::PostCandidatesReady() {
+  if (hwnd_) PostMessageW(hwnd_, kCandidatesReadyMessage, 0, 0);
+}
+
 bool CandidateWindow::IsVisible() const {
   return hwnd_ && IsWindowVisible(hwnd_);
 }
@@ -198,6 +202,10 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       }
       return 0;
     }
+
+    case kCandidatesReadyMessage:
+      if (on_candidates_ready_) on_candidates_ready_(on_candidates_ready_context_);
+      return 0;
 
     case WM_DESTROY:
       hwnd_ = nullptr;

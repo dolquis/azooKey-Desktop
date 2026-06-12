@@ -224,6 +224,10 @@ device 名表示などの補助に留める。
 両方が存在する場合は警告ログを出し、`model.backendPreference` を採用
 する。
 
+`epPreference` も同様に二層（`model.epPreference` → root `epPreference` → 既定 `auto`）で
+解決する。schema 正典は `settings/mvp-settings.schema.json`（root tier の
+`backendPreference` / `epPreference` と、`model` オブジェクト内の同名キーの双方を定義）。
+
 ### 5.3 失敗時 fallback
 
 選択した backend で `LoadModel` が失敗した場合:

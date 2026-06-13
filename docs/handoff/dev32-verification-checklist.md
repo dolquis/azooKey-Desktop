@@ -38,7 +38,10 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 ☐ PASS ☐ FAIL — 備考:
 
 **A5. 候補変換（M4/M5）** — `watashi`（組込辞書語）→ Space で「私」等の漢字候補が出る
-☐ PASS ☐ FAIL ☐ 既知(DEV-190) — 備考:（※ 辞書外語の漢字変換は `--mock-dict` か学習が必要。冒頭 ⚠️ 参照。`nihon`/`toukyou` も組込辞書語）
+☐ PASS ☐ FAIL — 備考:（`watashi`/`nihon`/`toukyou` は組込辞書で必ず変換される。ここでの Fail は IPC/flush/候補 UI 等の **新規リグレッション**）
+
+**A5-opt. 辞書外語の変換（任意・DEV-190 確認用。結果サマリのコア 8 にはカウントしない）** — `nihongo`（辞書外語）→ Space。`--mock-dict`/学習が無ければ漢字化されない（Zenzai 未実装）
+☐ 既知(DEV-190: 漢字が出ない) ☐ PASS（`--mock-dict`/学習時に漢字化）— 備考:
 
 **A6. 候補選択（M5）** — ↑↓ で選択移動、preedit 更新
 ☐ PASS ☐ FAIL — 備考:

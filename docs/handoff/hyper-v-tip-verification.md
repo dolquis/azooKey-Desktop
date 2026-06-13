@@ -88,11 +88,11 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 1. **Win+Space** で **azooKey** を選択できる（DEV-157 修正で言語一覧に出る）
 2. `ka` → 「か」がアンダーライン付き **preedit**（M3）
 3. **Backspace** で1文字戻る / **ESC** で composition クリア（M3）
-4. `nihongo` → **Space** で候補ウィンドウに「日本語」等（M4/M5）
+4. `watashi`（組込辞書語）→ **Space** で「私」等の漢字候補（M4/M5）。※ `にほんご` 等の辞書外語は `--mock-dict` か学習が無いと漢字化されない（下記 ⚠️ 参照）
 5. **↑↓** 選択・**Enter/数字** で確定、確定テキストがアプリに入る（M5/M6）
 6. 候補が出れば IPC 往復成立（= Host 由来）。詳細ログは VM に DebugView を入れると `IPC: connected to host ...` 等が見える
 
-> モデル（gguf）は不要。CPU `SimpleConverter` で基本変換が出る（Zenzai 高品質変換のみ gguf 要、MVP 動線確認には不要）。
+> ⚠️ **変換能力の前提（重要）**: 現状 Zenzai 推論は未実装（`ZenzaiModelConverter` は gguf を probe するのみで `SimpleConverter` へ委譲。DEV-190）。そのため **辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。一般のかな漢字変換を確認するには `--mock-dict <TSV>` で辞書を渡すか学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを確認済み（DEV-190。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi` で評価する）。Zenzai 推論本体は M8/M9 系で未完。
 
 ### 6. 記録と後始末
 

@@ -1295,9 +1295,14 @@ STDMETHODIMP_(ULONG) EditSession::Release() {
 STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
   // M5/M6: commit path — set final surface text and end composition.
   if (service_->committing_) {
+    const std::string pending_commit_surface = service_->commit_surface_;
     service_->committing_ = false;
-    const std::wstring surface = Utf8ToWide(service_->commit_surface_);
+    const std::wstring surface = Utf8ToWide(pending_commit_surface);
     service_->commit_surface_.clear();
+    const auto restore_pending_commit = [&]() {
+      service_->committing_ = true;
+      service_->commit_surface_ = pending_commit_surface;
+    };
 
     if (service_->composition_) {
       if (!surface.empty()) {
@@ -1307,7 +1312,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           text_hr = pRange->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
           pRange->Release();
         }
-        if (FAILED(text_hr) || !pRange) return FAILED(text_hr) ? text_hr : E_FAIL;
+        if (FAILED(text_hr) || !pRange) {
+          restore_pending_commit();
+          return FAILED(text_hr) ? text_hr : E_FAIL;
+        }
       }
       // EndComposition finalizes the text in the document.
       ITfComposition* comp = service_->composition_;
@@ -1318,7 +1326,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         comp->Release();
       }
       comp->Release();
-      if (FAILED(end_hr)) return end_hr;
+      if (FAILED(end_hr)) {
+        restore_pending_commit();
+        return end_hr;
+      }
     } else if (!surface.empty()) {
       // No active composition (e.g. commit triggered before the async preedit
       // session ran); insert the surface text directly at the cursor.
@@ -1333,7 +1344,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         }
         sel.range->Release();
       }
-      if (FAILED(text_hr)) return text_hr;
+      if (FAILED(text_hr)) {
+        restore_pending_commit();
+        return text_hr;
+      }
     }
     return S_OK;
   }

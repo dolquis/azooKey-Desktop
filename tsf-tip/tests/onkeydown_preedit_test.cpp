@@ -890,6 +890,63 @@ TEST(TsfTipOnKeyDownPreeditTest, CompositionTerminationPreservesQueuedCommitUnti
   EXPECT_FALSE(h.service.committing_);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenGetRangeFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.get_range_result = TF_E_LOCKED;
+  h.service.composition_ = &composition;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.run_edit_session = true;
+  EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context), TF_E_LOCKED);
+
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTextFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.set_text_result = E_FAIL;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.run_edit_session = true;
+  EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context), E_FAIL);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
   TextServiceHarness h;
 

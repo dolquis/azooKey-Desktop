@@ -28,7 +28,7 @@ TIP は全プロセスにロードされる IME であり、machine-wide 登録�
 - Release ビルド（`windows-release`）の依存は `VCRUNTIME140.dll` / `MSVCP140.dll` のみで、VC++ Redistributable (x64) で充足できる（配布形態に近い）。
 - CMake は CRT を明示設定しておらず既定の動的 `/MD`（Release）/ `/MDd`（Debug）。
 
-繰り返しコード修正→再検証する場合は、代替として VM 内にビルド環境（VS2022 Build Tools + CMake + Ninja + git）を構築し VM 内ビルドする方式もある。
+繰り返しコード修正→再検証する場合や、**ログを見ながら検証・デバッグする場合**は、代替として VM 内にビルド環境（VS2022 Build Tools + CMake + Ninja + git）を構築し VM 内で **Debug ビルド**する方式もある。TIP のログは Debug ビルドでのみ出力されるため、ログ目的の検証はこちらを使う。詳細は末尾の **付録: Debug ビルド + ログ取得方式** を参照。
 
 ## ホスト側の準備
 
@@ -117,6 +117,74 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 | preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（手順4）。 |
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順5）。 |
 | 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp:1001` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
+
+## 付録: Debug ビルド + ログ取得方式（VM に開発環境がある場合）
+
+VM に開発環境（VS2022・CMake・Ninja・Windows SDK・git）が揃っている場合は、リポジトリを取得して
+**Debug ビルド**を行い、ログを見ながら検証できる。**TIP のログ（`DebugLog`）は Debug ビルド
+（`_DEBUG`）でのみ `OutputDebugString` に出力され、Release では no-op**（`tsf-tip/src/TextService.cpp:17-23`）
+なので、ログ目的の検証はこの方式を使う。デバッガ接続・修正→再ビルドも回しやすく、DEV-173 等のバグ調査に適する。
+
+### ログの出力先
+
+| 対象 | 出力先 | ビルド依存 | 取得方法 |
+|---|---|---|---|
+| TIP（`tsf-tip`） | `OutputDebugStringA`（`[azooKey TIP] …`） | **Debug のみ**（Release は no-op） | DebugView でキャプチャ |
+| host（`inference-host`） | `std::cerr`（info/warn/error）+ `std::cout`（IPC 応答 JSON） | 常時 | コンソール起動 or `2> host.log` |
+
+TIP のログ例: `IPC: connected to host …` / `handshake …` / `QueryCandidates …` / `worker exiting`。
+
+### 手順
+
+0. 検証前にチェックポイント取得。コマンドは **"Developer PowerShell for VS 2022"** から実行（`cl` / `ninja` / `cmake` が PATH に乗る）。
+
+1. Git 取得（private リポジトリなら `gh auth login` か PAT で認証）:
+   ```powershell
+   cd C:\dev
+   git clone https://github.com/dolquis/azooKey-Desktop.git
+   cd azooKey-Desktop
+   git checkout <検証したいブランチ>
+   ```
+
+2. Debug ビルド（Debug CRT は VS が供給するため Redist 不要）:
+   ```powershell
+   cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+   cmake --build --preset windows-debug
+   ```
+
+3. host を**コンソールで**起動（ログを見るため。このウィンドウは閉じない）:
+   ```powershell
+   .\build\windows-debug\inference-host\azookey_inference_host.exe --pipe --backend cpu
+   # 永続ログも欲しい場合: ... --pipe --backend cpu 2> host.log
+   ```
+
+4. TIP 登録（別の管理者 PowerShell）:
+   ```powershell
+   cd C:\dev\azooKey-Desktop
+   .\scripts\register.ps1
+   ```
+   - **Debug 方式は `register.ps1` の既定パスがそのまま `build\windows-debug\…` を指す**ため、`-TipDllPath` / `-HostExePath` の明示は不要（Release 方式と対照的）。
+   - 手順3で host を先に起動済みなら、`register.ps1` は per-user pipe を probe して既起動を検知し、二重起動しない。
+
+5. TIP ログを DebugView でキャプチャ:
+   - VM に [DebugView](https://learn.microsoft.com/sysinternals/downloads/debugview) を入れ、**管理者で起動 → Capture → "Capture Global Win32"**（TIP は各アプリのプロセス内で動くため Global 推奨）。
+   - フィルタに `[azooKey TIP]`。
+
+6. 検証（★基本セッション）: DEV-32 チェックリストを実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
+
+7. 後始末: `Stop-Process -Name azookey_inference_host -Force` → `.\scripts\unregister.ps1` → またはチェックポイント復元。
+
+### Release 方式との使い分け
+
+| | Debug + 開発環境 | Release + zip コピー |
+|---|---|---|
+| TIP ログ | 出る（DebugView） | no-op |
+| host ログ | stderr | stderr |
+| デバッガ・再ビルド | 回しやすい | ホスト再ビルド要 |
+| 開発環境 | 必要 | 不要（Redist のみ） |
+| 向き | 検証 + デバッグ（DEV-173 等の調査） | 配布形態の動作確認・軽量 |
+
+`OutputDebugString` はファイルに残らないため、永続ログは DebugView の Save + host の `2> host.log` で取得する。
 
 ## 技術根拠（確認済み）
 

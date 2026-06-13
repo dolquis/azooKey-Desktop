@@ -511,7 +511,13 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfC
   }
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
+  const bool preserve_pending_commit = committing_;
+  const std::string pending_commit_surface = commit_surface_;
   ClearTextStateForLifecycle();
+  if (preserve_pending_commit) {
+    committing_ = true;
+    commit_surface_ = pending_commit_surface;
+  }
   return S_OK;
 }
 

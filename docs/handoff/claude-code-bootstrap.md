@@ -147,6 +147,42 @@
    Visual Studio の C++ ワークロード or LLVM 公式インストーラ経由で `clangd.exe` を入れる旨を
    `README.md` の「推奨開発環境」セクションに追記すること。
 
+## 4.5 clangd / Serena の C++ 解決（compile_commands.json）
+
+`clangd-lsp` プラグインと Serena の cpp 言語サーバーは、いずれも内部で clangd を使う。
+clangd は `compile_commands.json`（compile database）が無いと include パスを知らず、
+`windows.h` / `msctf.h` / STL を解決できずに診断・シンボル解決が壊れる。本プロジェクトは
+MSVC + Ninja だが、clangd 用には **clang-cl ベースの DB** を別ディレクトリに生成する。
+
+```powershell
+cmake -S . -B build/clangd -G Ninja `
+  -DCMAKE_CXX_COMPILER=clang-cl `
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
+  -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF
+```
+
+- 通常の MSVC ビルド（`build/windows-debug`）とは別の `build/clangd` に出して互いを汚さない。
+- コンパイラを **clang-cl** にする理由：clangd が MSVC / Windows SDK のシステムヘッダを
+  自動検出でき、`--query-driver` 引数が不要になる（`cl.exe` 版 DB だと query-driver が必要で、
+  Serena 経由では clangd に渡しづらい）。要 LLVM（`clang-cl` / `clangd`）。
+- 配線はリポジトリ直下の **`.clangd`**（コミット済み）が担う：`CompilationDatabase: build/clangd`。
+  `build/` は `.gitignore` 済みなので DB 実体は各開発者が上記コマンドで生成する。
+
+### Serena プロジェクト設定（`.serena/project.yml`、コミット済み）
+
+Serena は `--project-from-cwd` で起動ディレクトリ（worktree を含む）を自動アクティブ化する。
+このとき `.serena/project.yml` が無いと言語自動判定が `legacy/` の Swift 群（最多ファイル数）を
+拾って cpp を見落とすため、設定をコミットして固定する。
+
+- `languages: [cpp, json, markdown, powershell]` … swift は `legacy/` 専用なので含めない
+  （SourceKit は Windows で不安定。除外で起動高速化＋孤児プロセス回避）。
+- `ignored_paths: [legacy, .claude/worktrees]` … 非保守の Swift ツリーと入れ子 worktree を除外。
+- `.serena/cache` と `project.local.yml` は `.serena/.gitignore` で無視（コミットしない）。
+
+> 検証：`get_diagnostics_for_file tsf-tip/src/TextService.cpp` が空（エラー無し）になり、
+> `tsf-tip/include/azookey/tsf/TextService.h` の `azookey/tsf/TextService` がメソッド付きで取得でき、
+> `find_referencing_symbols` が他ファイル（例 `TextServiceFactory.cpp`）まで追えれば成功。
+
 ## 5. 自作スキル個別仕様
 
 ### 5.1 `tsf-tip-development`

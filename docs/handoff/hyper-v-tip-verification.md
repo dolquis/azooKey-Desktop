@@ -88,7 +88,7 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 1. **Win+Space** で **azooKey** を選択できる（DEV-157 修正で言語一覧に出る）
 2. `ka` → 「か」がアンダーライン付き **preedit**（M3）
 3. **Backspace** で1文字戻る / **ESC** で composition クリア（M3）
-4. `nihongo` → **Space** で候補ウィンドウに「日本語」等（M4/M5）
+4. `watashi`（組込辞書語）→ **Space** で「私」等の漢字候補（M4/M5）。※ `にほんご` 等の辞書外語は `--mock-dict` か学習が無いと漢字化されない（下記 ⚠️ 参照）
 5. **↑↓** 選択・**Enter/数字** で確定、確定テキストがアプリに入る（M5/M6）
 6. 候補が出れば IPC 往復成立（= Host 由来）。詳細ログは VM に DebugView を入れると `IPC: connected to host ...` 等が見える
 

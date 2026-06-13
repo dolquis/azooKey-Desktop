@@ -1310,14 +1310,15 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     };
 
     if (service_->composition_) {
+      ITfRange* committed_range = nullptr;
       if (!surface.empty()) {
-        ITfRange* pRange = nullptr;
-        HRESULT text_hr = service_->composition_->GetRange(&pRange);
-        if (SUCCEEDED(text_hr) && pRange) {
-          text_hr = pRange->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
-          pRange->Release();
+        HRESULT text_hr = service_->composition_->GetRange(&committed_range);
+        if (SUCCEEDED(text_hr) && committed_range) {
+          text_hr =
+              committed_range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
         }
-        if (FAILED(text_hr) || !pRange) {
+        if (FAILED(text_hr) || !committed_range) {
+          if (committed_range) committed_range->Release();
           restore_pending_commit();
           return FAILED(text_hr) ? text_hr : E_FAIL;
         }
@@ -1332,8 +1333,17 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       }
       comp->Release();
       if (FAILED(end_hr)) {
+        if (committed_range) committed_range->Release();
         restore_pending_commit();
         return end_hr;
+      }
+      if (committed_range) {
+        TF_SELECTION sel{};
+        sel.range = committed_range;
+        if (SUCCEEDED(committed_range->Collapse(ec, TF_ANCHOR_END))) {
+          context_->SetSelection(ec, 1, &sel);
+        }
+        committed_range->Release();
       }
     } else if (!surface.empty()) {
       // No active composition (e.g. commit triggered before the async preedit

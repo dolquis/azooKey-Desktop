@@ -167,6 +167,10 @@ cmake -S . -B build/clangd -G Ninja `
   Serena 経由では clangd に渡しづらい）。要 LLVM（`clang-cl` / `clangd`）。
 - 配線はリポジトリ直下の **`.clangd`**（コミット済み）が担う：`CompilationDatabase: build/clangd`。
   `build/` は `.gitignore` 済みなので DB 実体は各開発者が上記コマンドで生成する。
+- Serena/clangd-lsp がバンドルする clangd が古い（< Clang 20）場合、最新の MSVC STL（14.5x）が
+  `STL1000` で弾くため、`.clangd` で `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` を定義し、併せて
+  C++17 プロジェクトに無意味な `-Wc++98-compat` 系ノイズを抑制している（いずれも IntelliSense 限定で
+  実ビルドには無関係）。
 
 ### Serena プロジェクト設定（`.serena/project.yml`、コミット済み）
 

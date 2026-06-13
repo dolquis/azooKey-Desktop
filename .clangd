@@ -10,3 +10,9 @@
 # headers automatically without needing a --query-driver argument.
 CompileFlags:
   CompilationDatabase: build/clangd
+  # Serena/clangd-lsp may bundle clangd < 20, but a recent MSVC STL (14.5x)
+  # static-asserts (STL1000) unless the compiler is Clang 20+. Skip that version
+  # gate for IntelliSense only; the real cl.exe build is unaffected.
+  # The -Wno-c++98-compat* flags drop spurious "incompatible with C++98" noise
+  # (the project targets C++17; the compile DB carries -Wall -Wextra -Wpedantic).
+  Add: [-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH, -Wno-c++98-compat, -Wno-c++98-compat-pedantic, -Wno-pre-c++17-compat]

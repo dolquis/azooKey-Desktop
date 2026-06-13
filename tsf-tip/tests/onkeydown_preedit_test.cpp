@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <array>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -47,11 +48,162 @@ class KeyboardStateGuard {
   std::array<BYTE, 256> original_{};
 };
 
+class FakeRange final : public ITfRange {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfRange) {
+      *ppvObject = static_cast<ITfRange*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP GetText(TfEditCookie,
+                       DWORD,
+                       WCHAR*,
+                       ULONG,
+                       ULONG* text_length) override {
+    if (text_length) *text_length = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
+    ++set_text_count;
+    if (FAILED(set_text_result)) return set_text_result;
+    last_text.assign(text, text + length);
+    return set_text_result;
+  }
+
+  STDMETHODIMP GetFormattedText(TfEditCookie, IDataObject** data_object) override {
+    if (data_object) *data_object = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetEmbedded(TfEditCookie, REFGUID, REFIID, IUnknown** object) override {
+    if (object) *object = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP InsertEmbedded(TfEditCookie, DWORD, IDataObject*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP ShiftStart(TfEditCookie, LONG, LONG* shifted, const TF_HALTCOND*) override {
+    if (shifted) *shifted = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftEnd(TfEditCookie, LONG, LONG* shifted, const TF_HALTCOND*) override {
+    if (shifted) *shifted = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override {
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override {
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftStartRegion(TfEditCookie, TfShiftDir, BOOL* no_region) override {
+    if (no_region) *no_region = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP ShiftEndRegion(TfEditCookie, TfShiftDir, BOOL* no_region) override {
+    if (no_region) *no_region = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP IsEmpty(TfEditCookie, BOOL* empty) override {
+    if (!empty) return E_POINTER;
+    *empty = last_text.empty() ? TRUE : FALSE;
+    return S_OK;
+  }
+
+  STDMETHODIMP Collapse(TfEditCookie, TfAnchor anchor) override {
+    ++collapse_count;
+    last_anchor = anchor;
+    return collapse_result;
+  }
+
+  STDMETHODIMP IsEqualStart(TfEditCookie, ITfRange*, TfAnchor, BOOL* equal) override {
+    if (equal) *equal = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP IsEqualEnd(TfEditCookie, ITfRange*, TfAnchor, BOOL* equal) override {
+    if (equal) *equal = FALSE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP CompareStart(TfEditCookie, ITfRange*, TfAnchor, LONG* result) override {
+    if (result) *result = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP CompareEnd(TfEditCookie, ITfRange*, TfAnchor, LONG* result) override {
+    if (result) *result = 0;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP AdjustForInsert(TfEditCookie, ULONG, BOOL* insert_ok) override {
+    if (insert_ok) *insert_ok = TRUE;
+    return S_OK;
+  }
+
+  STDMETHODIMP GetGravity(TfGravity* start, TfGravity* end) override {
+    if (!start || !end) return E_POINTER;
+    *start = TF_GRAVITY_FORWARD;
+    *end = TF_GRAVITY_FORWARD;
+    return S_OK;
+  }
+
+  STDMETHODIMP SetGravity(TfEditCookie, TfGravity, TfGravity) override { return S_OK; }
+
+  STDMETHODIMP Clone(ITfRange** clone) override {
+    if (!clone) return E_POINTER;
+    *clone = static_cast<ITfRange*>(this);
+    AddRef();
+    return S_OK;
+  }
+
+  STDMETHODIMP GetContext(ITfContext** context) override {
+    if (context) *context = nullptr;
+    return E_NOTIMPL;
+  }
+
+  int set_text_count{0};
+  int collapse_count{0};
+  std::wstring last_text;
+  TfAnchor last_anchor{TF_ANCHOR_START};
+  HRESULT set_text_result{S_OK};
+  HRESULT collapse_result{S_OK};
+
+ private:
+  LONG ref_count_{1};
+};
+
 class NoopContext final : public ITfContext {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
     if (!ppvObject) return E_POINTER;
     *ppvObject = nullptr;
+    if (riid == IID_IUnknown && identity_unknown_) {
+      identity_unknown_->AddRef();
+      *ppvObject = identity_unknown_;
+      return S_OK;
+    }
     if (riid == IID_IUnknown || riid == IID_ITfContext) {
       *ppvObject = static_cast<ITfContext*>(this);
       AddRef();
@@ -72,11 +224,18 @@ class NoopContext final : public ITfContext {
                                   ITfEditSession* edit_session,
                                   DWORD flags,
                                   HRESULT* session_result) override {
-    UNREFERENCED_PARAMETER(edit_session);
     request_count++;
     last_client_id = tid;
     last_flags = flags;
     if (!session_result) return E_POINTER;
+    if (FAILED(request_result)) {
+      *session_result = request_session_result;
+      return request_result;
+    }
+    if (run_edit_session && edit_session) {
+      *session_result = edit_session->DoEditSession(edit_cookie);
+      return request_result;
+    }
     *session_result = request_session_result;
     return request_result;
   }
@@ -89,15 +248,23 @@ class NoopContext final : public ITfContext {
 
   STDMETHODIMP GetSelection(TfEditCookie,
                             ULONG,
-                            ULONG,
-                            TF_SELECTION*,
+                            ULONG selection_count,
+                            TF_SELECTION* selection,
                             ULONG* fetched) override {
-    if (fetched) *fetched = 0;
-    return E_NOTIMPL;
+    if (!fetched) return E_POINTER;
+    *fetched = 0;
+    if (!selection_range || selection_count == 0 || !selection) return E_NOTIMPL;
+    selection[0] = {};
+    selection_range->AddRef();
+    selection[0].range = selection_range;
+    *fetched = 1;
+    return S_OK;
   }
 
-  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION*) override {
-    return E_NOTIMPL;
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG selection_count, const TF_SELECTION*) override {
+    ++set_selection_count;
+    last_selection_count = selection_count;
+    return set_selection_result;
   }
 
   STDMETHODIMP GetStart(TfEditCookie, ITfRange** start) override {
@@ -151,8 +318,12 @@ class NoopContext final : public ITfContext {
   }
 
   STDMETHODIMP GetDocumentMgr(ITfDocumentMgr** document_mgr) override {
-    if (document_mgr) *document_mgr = nullptr;
-    return E_NOTIMPL;
+    if (!document_mgr) return E_POINTER;
+    *document_mgr = nullptr;
+    if (!document_mgr_) return E_NOTIMPL;
+    document_mgr_->AddRef();
+    *document_mgr = document_mgr_;
+    return S_OK;
   }
 
   STDMETHODIMP CreateRangeBackup(TfEditCookie,
@@ -167,6 +338,132 @@ class NoopContext final : public ITfContext {
   DWORD last_flags{0};
   HRESULT request_result{S_OK};
   HRESULT request_session_result{S_OK};
+  bool run_edit_session{false};
+  TfEditCookie edit_cookie{1};
+  ITfRange* selection_range{nullptr};
+  ITfDocumentMgr* document_mgr_{nullptr};
+  IUnknown* identity_unknown_{nullptr};
+  int set_selection_count{0};
+  ULONG last_selection_count{0};
+  HRESULT set_selection_result{S_OK};
+
+ private:
+  LONG ref_count_{1};
+};
+
+class FakeDocumentMgr final : public ITfDocumentMgr {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown && identity_unknown_) {
+      identity_unknown_->AddRef();
+      *ppvObject = identity_unknown_;
+      return S_OK;
+    }
+    if (riid == IID_IUnknown || riid == IID_ITfDocumentMgr) {
+      *ppvObject = static_cast<ITfDocumentMgr*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP CreateContext(TfClientId,
+                             DWORD,
+                             IUnknown*,
+                             ITfContext** context,
+                             TfEditCookie* edit_cookie) override {
+    if (context) *context = nullptr;
+    if (edit_cookie) *edit_cookie = TF_INVALID_EDIT_COOKIE;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP Push(ITfContext*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
+
+  STDMETHODIMP GetTop(ITfContext** context) override {
+    return ReturnContext(context);
+  }
+
+  STDMETHODIMP GetBase(ITfContext** context) override {
+    return ReturnContext(context);
+  }
+
+  STDMETHODIMP EnumContexts(IEnumTfContexts** enum_contexts) override {
+    if (enum_contexts) *enum_contexts = nullptr;
+    return E_NOTIMPL;
+  }
+
+  ITfContext* context_{nullptr};
+  IUnknown* identity_unknown_{nullptr};
+
+ private:
+  HRESULT ReturnContext(ITfContext** context) {
+    if (!context) return E_POINTER;
+    *context = nullptr;
+    if (!context_) return E_NOTIMPL;
+    context_->AddRef();
+    *context = context_;
+    return S_OK;
+  }
+
+  LONG ref_count_{1};
+};
+
+class FakeComposition final : public ITfComposition {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfComposition) {
+      *ppvObject = static_cast<ITfComposition*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP GetRange(ITfRange** range) override {
+    if (!range) return E_POINTER;
+    *range = nullptr;
+    if (FAILED(get_range_result)) return get_range_result;
+    if (!range_) return E_NOTIMPL;
+    range_->AddRef();
+    *range = range_;
+    return S_OK;
+  }
+
+  STDMETHODIMP ShiftStart(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP ShiftEnd(TfEditCookie, ITfRange*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP EndComposition(TfEditCookie) override {
+    ++end_count;
+    return end_result;
+  }
+
+  int end_count{0};
+  HRESULT end_result{S_OK};
+  ITfRange* range_{nullptr};
+  HRESULT get_range_result{S_OK};
 
  private:
   LONG ref_count_{1};
@@ -330,6 +627,594 @@ TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) 
 
   EXPECT_TRUE(h.Press('N'));
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DeactivateReleasesCompositionWhenSyncCleanupIsRejected) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  h.service.composition_ = &composition;
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_TRUE(SUCCEEDED(h.service.Deactivate()));
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DeactivateEndsCompositionWhenSyncCleanupRuns) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(SUCCEEDED(h.service.Deactivate()));
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossEndsCompositionAndClearsStaleState) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsLatestPreeditIntoExistingComposition) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.last_text = std::wstring(1, L'\x304b');
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"かき");
+  ASSERT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring({L'\x304b', L'\x304d'}));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenLatestPreeditSetTextFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.last_text = std::wstring(1, L'\x304b');
+  range.set_text_result = E_FAIL;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"かき");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"かき");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeCompositionExists) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsQueuedPreeditCommitBeforeCompositionExists) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsRejected) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CompositionTerminationPreservesQueuedCommitUntilEditSessionRuns) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  h.service.composition_ = &composition;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.composition_, &composition);
+
+  EXPECT_EQ(h.service.OnCompositionTerminated(1, &composition), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+  EXPECT_TRUE(SUCCEEDED(h.service.RequestPreeditUpdate(&h.context)));
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenGetRangeFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.get_range_result = TF_E_LOCKED;
+  h.service.composition_ = &composition;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.run_edit_session = true;
+  EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context), TF_E_LOCKED);
+
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTextFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.set_text_result = E_FAIL;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.run_edit_session = true;
+  EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context), E_FAIL);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsPreservesQueuedCommitWhenInlineGetRangeFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.get_range_result = TF_E_LOCKED;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSetTextFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.set_text_result = E_FAIL;
+  h.context.run_edit_session = true;
+
+  h.service.commit_selected_for_test(&h.context);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsRejected) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  h.service.composition_ = &composition;
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiveContext) {
+  FakeDocumentMgr focused_document;
+  FakeDocumentMgr alias_document;
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  focused_document.context_ = &h.context;
+  alias_document.identity_unknown_ = static_cast<ITfDocumentMgr*>(&focused_document);
+  h.context.document_mgr_ = &focused_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+  const int request_count = h.context.request_count;
+
+  EXPECT_EQ(h.service.OnSetFocus(&alias_document, &focused_document), S_OK);
+
+  EXPECT_EQ(h.context.request_count, request_count);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(range.set_text_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActiveContext) {
+  FakeDocumentMgr focused_document;
+  FakeDocumentMgr background_document;
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  focused_document.context_ = &h.context;
+  h.context.document_mgr_ = &focused_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  h.service.composition_ = &composition;
+  const int request_count = h.context.request_count;
+
+  EXPECT_EQ(h.service.OnUninitDocumentMgr(&background_document), S_OK);
+
+  EXPECT_EQ(h.context.request_count, request_count);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, UninitActiveDocumentMgrCleansUpActiveContext) {
+  FakeDocumentMgr active_document;
+  FakeComposition composition;
+  FakeRange range;
+  TextServiceHarness h;
+
+  active_document.context_ = &h.context;
+  h.context.document_mgr_ = &active_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnUninitDocumentMgr(&active_document), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsStaleState) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnPopContext(&h.context), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PoppingContextAliasCleansUpByComIdentity) {
+  TextServiceHarness h;
+  NoopContext alias_context;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+
+  alias_context.identity_unknown_ = static_cast<ITfContext*>(&h.context);
+  alias_context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnPopContext(&alias_context), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextPreservesCompositionWhenSyncCleanupIsRejected) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  h.service.composition_ = &composition;
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_EQ(h.service.OnPopContext(&h.context), S_OK);
+
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NonPreeditControlKeysAreNotEatenWithoutCandidates) {

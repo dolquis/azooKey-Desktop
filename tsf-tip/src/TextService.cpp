@@ -56,6 +56,19 @@ bool HasSystemModifierDown() {
          IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
 }
 
+bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
+  if (lhs == rhs) return true;
+  if (!lhs || !rhs) return lhs == rhs;
+  IUnknown* lhs_unknown = nullptr;
+  IUnknown* rhs_unknown = nullptr;
+  const HRESULT lhs_hr = lhs->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&lhs_unknown));
+  const HRESULT rhs_hr = rhs->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&rhs_unknown));
+  const bool same = SUCCEEDED(lhs_hr) && SUCCEEDED(rhs_hr) && lhs_unknown == rhs_unknown;
+  if (lhs_unknown) lhs_unknown->Release();
+  if (rhs_unknown) rhs_unknown->Release();
+  return same;
+}
+
 }  // namespace
 
 namespace azookey::tsf {
@@ -147,23 +160,10 @@ STDMETHODIMP TextService::Deactivate() {
 
   StopIpcWorker();
 
-  candidate_window_.Hide();
+  CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
+                          LifecycleCleanupFailurePolicy::ReleaseComposition);
   candidate_window_.Destroy();
 
-  if (composition_ && active_context_) {
-    preedit_kana_.clear();
-    romaji_.Reset();
-    committing_ = false;
-    commit_surface_.clear();
-    ITfEditSession* edit = new EditSession(this, active_context_);
-    HRESULT hr = S_OK;
-    active_context_->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr);
-    edit->Release();
-  }
-  if (composition_) {
-    composition_->Release();
-    composition_ = nullptr;
-  }
   if (active_context_) {
     active_context_->Release();
     active_context_ = nullptr;
@@ -240,7 +240,10 @@ HRESULT TextService::UnadviseTextServiceSinks() {
 }
 
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
-  UNREFERENCED_PARAMETER(foreground);
+  if (!foreground) {
+    CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
+                            LifecycleCleanupFailurePolicy::PreserveComposition);
+  }
   return S_OK;
 }
 
@@ -478,27 +481,43 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
 }
 
 STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) { UNREFERENCED_PARAMETER(pdim); return S_OK; }
-STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) { UNREFERENCED_PARAMETER(pdim); return S_OK; }
+STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
+  if (ActiveContextBelongsToDocumentMgr(pdim)) {
+    CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
+                            LifecycleCleanupFailurePolicy::ReleaseComposition);
+  }
+  return S_OK;
+}
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
-  UNREFERENCED_PARAMETER(pdimFocus); UNREFERENCED_PARAMETER(pdimPrevFocus); return S_OK;
+  if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
+    CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
+                            LifecycleCleanupFailurePolicy::PreserveComposition);
+  }
+  return S_OK;
 }
 STDMETHODIMP TextService::OnPushContext(ITfContext* pic) { UNREFERENCED_PARAMETER(pic); return S_OK; }
-STDMETHODIMP TextService::OnPopContext(ITfContext* pic) { UNREFERENCED_PARAMETER(pic); return S_OK; }
+STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
+  if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
+    CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
+                            LifecycleCleanupFailurePolicy::PreserveComposition);
+  }
+  return S_OK;
+}
 
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfComposition* pComposition) {
   if (composition_ == pComposition) {
     composition_->Release();
     composition_ = nullptr;
   }
-  candidate_window_.Hide();
-  selected_candidate_idx_ = 0;
-  {
-    std::lock_guard<std::mutex> lk(candidates_mtx_);
-    candidates_.clear();
-    candidate_window_show_pending_ = false;
+  ClearCandidateStateForLifecycle();
+  CancelPendingQueriesForLifecycle();
+  const bool preserve_pending_commit = committing_;
+  const std::string pending_commit_surface = commit_surface_;
+  ClearTextStateForLifecycle();
+  if (preserve_pending_commit) {
+    committing_ = true;
+    commit_surface_ = pending_commit_surface;
   }
-  preedit_kana_.clear();
-  romaji_.Reset();
   return S_OK;
 }
 
@@ -518,7 +537,8 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAt
   return E_INVALIDARG;
 }
 
-HRESULT TextService::RequestPreeditUpdate(ITfContext* context) {
+HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {
+  if (request_accepted) *request_accepted = false;
   if (!context) return E_INVALIDARG;
   if (active_context_ != context) {
     if (active_context_) active_context_->Release();
@@ -529,11 +549,163 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context) {
   HRESULT hr_session = S_OK;
   HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr_session);
   edit->Release();
+  if (request_accepted) *request_accepted = SUCCEEDED(hr);
   // For synchronous sessions TSF writes DoEditSession's result into hr_session
   // while returning S_OK from RequestEditSession itself.  Return hr_session so
   // callers see real failures.  For async sessions hr_session stays S_OK
   // (initialized value), so this is always safe to return.
   return SUCCEEDED(hr) ? hr_session : hr;
+}
+
+void TextService::ClearCandidateStateForLifecycle() {
+  candidate_window_.Hide();
+  selected_candidate_idx_ = 0;
+  shown_candidates_.clear();
+  {
+    std::lock_guard<std::mutex> lk(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
+}
+
+void TextService::CancelPendingQueriesForLifecycle() {
+  std::lock_guard<std::mutex> lk(ipc_mtx_);
+  const bool can_send_cancel = ipc_thread_.joinable() && !ipc_stop_.load();
+  bool need_notify = false;
+  if (ipc_has_request_) {
+    if (can_send_cancel) {
+      ipc_send_queue_.push_back(
+          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false,
+           ipc_pending_id_});
+      need_notify = true;
+    }
+    ipc_has_request_ = false;
+  }
+  if (can_send_cancel && ipc_inflight_id_ != 0) {
+    ipc_send_queue_.push_back(
+        {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false,
+         ipc_inflight_id_});
+    need_notify = true;
+  }
+  ++ipc_pending_id_;
+  if (need_notify) ipc_cv_.notify_one();
+}
+
+void TextService::ClearTextStateForLifecycle() {
+  preedit_kana_.clear();
+  romaji_.Reset();
+  committing_ = false;
+  commit_surface_.clear();
+}
+
+bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
+  if (!document_mgr || !active_context_) return false;
+
+  ITfDocumentMgr* active_document_mgr = nullptr;
+  if (SUCCEEDED(active_context_->GetDocumentMgr(&active_document_mgr)) && active_document_mgr) {
+    const bool owns_active_context = SameComIdentity(active_document_mgr, document_mgr);
+    active_document_mgr->Release();
+    if (owns_active_context) return true;
+  }
+
+  ITfContext* context = nullptr;
+  if (SUCCEEDED(document_mgr->GetTop(&context)) && context) {
+    const bool is_active_context = SameComIdentity(context, active_context_);
+    context->Release();
+    if (is_active_context) return true;
+  }
+  context = nullptr;
+  if (SUCCEEDED(document_mgr->GetBase(&context)) && context) {
+    const bool is_active_context = SameComIdentity(context, active_context_);
+    context->Release();
+    if (is_active_context) return true;
+  }
+  return false;
+}
+
+bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
+  std::string pending_surface;
+  if (committing_) {
+    pending_surface = commit_surface_;
+  } else {
+    pending_surface = preedit_kana_;
+    if (romaji_.HasPending()) {
+      auto romaji_preview = romaji_;
+      pending_surface += romaji_preview.Flush();
+    }
+  }
+  const bool has_lifecycle_commit_surface = committing_ || !pending_surface.empty();
+  if (!composition_ && !has_lifecycle_commit_surface) return true;
+  if (!context) return false;
+
+  const std::string saved_preedit = preedit_kana_;
+  const bool saved_committing = committing_;
+  const std::string saved_commit_surface = commit_surface_;
+
+  const bool commit_without_composition = composition_ == nullptr;
+  if (has_lifecycle_commit_surface) {
+    committing_ = true;
+    commit_surface_ = pending_surface;
+    preedit_kana_.clear();
+  } else {
+    // The empty-preedit edit session ends the TSF composition without replacing
+    // its range text, so focus loss/Deactivate auto-commits the current preedit
+    // as specified in docs/tsf-deep-integration-spec.md §4.3.
+    preedit_kana_.clear();
+    committing_ = false;
+    commit_surface_.clear();
+  }
+
+  ITfEditSession* edit = new EditSession(this, context);
+  HRESULT hr_session = E_FAIL;
+  const HRESULT hr =
+      context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
+  edit->Release();
+
+  const bool completed =
+      SUCCEEDED(hr) && SUCCEEDED(hr_session) &&
+      (commit_without_composition ? (!committing_ && commit_surface_.empty())
+                                  : (composition_ == nullptr));
+  if (!completed) {
+    preedit_kana_ = saved_preedit;
+    committing_ = saved_committing;
+    commit_surface_ = saved_commit_surface;
+    DebugLog("Lifecycle cleanup: commit/end edit session was rejected or incomplete");
+  }
+  return completed;
+}
+
+void TextService::CleanupForLifecycleLoss(ITfContext* context,
+                                          bool release_active_context,
+                                          LifecycleCleanupFailurePolicy failure_policy) {
+  ClearCandidateStateForLifecycle();
+  CancelPendingQueriesForLifecycle();
+
+  ITfContext* cleanup_context = context ? context : active_context_;
+  const bool lifecycle_text_committed = RequestLifecycleCommitOrEndComposition(cleanup_context);
+  if (lifecycle_text_committed) {
+    ClearTextStateForLifecycle();
+  } else {
+    if (failure_policy == LifecycleCleanupFailurePolicy::PreserveComposition) {
+      // Focus/context loss can race with transient TSF lock denial. Keep the
+      // active context/composition so a later accepted session or termination
+      // callback can finish the lifecycle cleanup.
+      return;
+    }
+    if (composition_) {
+      composition_->Release();
+      composition_ = nullptr;
+    }
+    ClearTextStateForLifecycle();
+  }
+
+  if (release_active_context &&
+      (!cleanup_context || SameComIdentity(cleanup_context, active_context_))) {
+    if (active_context_) {
+      active_context_->Release();
+      active_context_ = nullptr;
+    }
+  }
 }
 
 // --- Commit helpers (M5) ---
@@ -590,8 +762,9 @@ void TextService::CommitSelected(ITfContext* context) {
   // Defer clearing preedit until the session is accepted so that if TSF
   // rejects the request (lock denial, context teardown) the composition text
   // is not lost and the user can still see/retry their input.
-  const bool session_ok = SUCCEEDED(RequestPreeditUpdate(context));
-  if (session_ok) {
+  bool request_accepted = false;
+  const bool session_ok = SUCCEEDED(RequestPreeditUpdate(context, &request_accepted));
+  if (request_accepted) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else {
@@ -649,7 +822,9 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
   committing_ = true;
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
   // session is accepted so rejection does not silently discard the reading.
-  if (SUCCEEDED(RequestPreeditUpdate(context))) {
+  bool request_accepted = false;
+  RequestPreeditUpdate(context, &request_accepted);
+  if (request_accepted) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else {
@@ -1125,34 +1300,58 @@ STDMETHODIMP_(ULONG) EditSession::Release() {
 STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
   // M5/M6: commit path — set final surface text and end composition.
   if (service_->committing_) {
+    const std::string pending_commit_surface = service_->commit_surface_;
     service_->committing_ = false;
-    const std::wstring surface = Utf8ToWide(service_->commit_surface_);
+    const std::wstring surface = Utf8ToWide(pending_commit_surface);
     service_->commit_surface_.clear();
+    const auto restore_pending_commit = [&]() {
+      service_->committing_ = true;
+      service_->commit_surface_ = pending_commit_surface;
+    };
 
     if (service_->composition_) {
       if (!surface.empty()) {
         ITfRange* pRange = nullptr;
-        if (SUCCEEDED(service_->composition_->GetRange(&pRange)) && pRange) {
-          pRange->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+        HRESULT text_hr = service_->composition_->GetRange(&pRange);
+        if (SUCCEEDED(text_hr) && pRange) {
+          text_hr = pRange->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
           pRange->Release();
+        }
+        if (FAILED(text_hr) || !pRange) {
+          restore_pending_commit();
+          return FAILED(text_hr) ? text_hr : E_FAIL;
         }
       }
       // EndComposition finalizes the text in the document.
       ITfComposition* comp = service_->composition_;
-      service_->composition_ = nullptr;
-      comp->EndComposition(ec);
+      comp->AddRef();
+      const HRESULT end_hr = comp->EndComposition(ec);
+      if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
+        service_->composition_ = nullptr;
+        comp->Release();
+      }
       comp->Release();
+      if (FAILED(end_hr)) {
+        restore_pending_commit();
+        return end_hr;
+      }
     } else if (!surface.empty()) {
       // No active composition (e.g. commit triggered before the async preedit
       // session ran); insert the surface text directly at the cursor.
       TF_SELECTION sel{};
       ULONG fetched = 0;
+      HRESULT text_hr = E_FAIL;
       if (SUCCEEDED(context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched)) &&
-          fetched > 0) {
-        sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
-        sel.range->Collapse(ec, TF_ANCHOR_END);
-        context_->SetSelection(ec, 1, &sel);
+          fetched > 0 && sel.range) {
+        text_hr = sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+        if (SUCCEEDED(text_hr) && SUCCEEDED(sel.range->Collapse(ec, TF_ANCHOR_END))) {
+          context_->SetSelection(ec, 1, &sel);
+        }
         sel.range->Release();
+      }
+      if (FAILED(text_hr)) {
+        restore_pending_commit();
+        return text_hr;
       }
     }
     return S_OK;

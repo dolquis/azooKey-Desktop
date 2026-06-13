@@ -56,7 +56,7 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) override;
   STDMETHODIMP GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAttributeInfo** ppInfo) override;
 
-  HRESULT RequestPreeditUpdate(ITfContext* context);
+  HRESULT RequestPreeditUpdate(ITfContext* context, bool* request_accepted = nullptr);
 
   // True when the active TSF thread runs in UI-less mode (Windows 11 / Office
   // route candidate UI through the application). Sourced from
@@ -78,6 +78,8 @@ class TextService final : public ITfTextInputProcessorEx,
     return shown_candidates_;
   }
   void show_candidate_window_from_cache_for_test();
+  bool has_active_context_for_test() const { return active_context_ != nullptr; }
+  void commit_selected_for_test(ITfContext* context) { CommitSelected(context); }
 #endif
 
  private:
@@ -142,6 +144,18 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostQueryCandidates(const std::string& reading);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
+  enum class LifecycleCleanupFailurePolicy {
+    PreserveComposition,
+    ReleaseComposition,
+  };
+  void ClearCandidateStateForLifecycle();
+  void CancelPendingQueriesForLifecycle();
+  void ClearTextStateForLifecycle();
+  bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
+  bool RequestLifecycleCommitOrEndComposition(ITfContext* context);
+  void CleanupForLifecycleLoss(ITfContext* context,
+                               bool release_active_context,
+                               LifecycleCleanupFailurePolicy failure_policy);
 
   // M6: enqueue a CommitObservation to the IPC worker.
   void PostCommitObservation(const std::string& reading,

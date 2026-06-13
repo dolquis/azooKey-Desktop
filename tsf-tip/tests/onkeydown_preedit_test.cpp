@@ -356,6 +356,11 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
     if (!ppvObject) return E_POINTER;
     *ppvObject = nullptr;
+    if (riid == IID_IUnknown && identity_unknown_) {
+      identity_unknown_->AddRef();
+      *ppvObject = identity_unknown_;
+      return S_OK;
+    }
     if (riid == IID_IUnknown || riid == IID_ITfDocumentMgr) {
       *ppvObject = static_cast<ITfDocumentMgr*>(this);
       AddRef();
@@ -400,6 +405,7 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
   }
 
   ITfContext* context_{nullptr};
+  IUnknown* identity_unknown_{nullptr};
 
  private:
   HRESULT ReturnContext(ITfContext** context) {
@@ -885,6 +891,41 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsR
 
   EXPECT_EQ(h.service.composition_, &composition);
   EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiveContext) {
+  FakeDocumentMgr focused_document;
+  FakeDocumentMgr alias_document;
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  focused_document.context_ = &h.context;
+  alias_document.identity_unknown_ = static_cast<ITfDocumentMgr*>(&focused_document);
+  h.context.document_mgr_ = &focused_document;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+  const int request_count = h.context.request_count;
+
+  EXPECT_EQ(h.service.OnSetFocus(&alias_document, &focused_document), S_OK);
+
+  EXPECT_EQ(h.context.request_count, request_count);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(range.set_text_count, 0);
   EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_TRUE(h.service.has_active_context_for_test());
 

@@ -489,7 +489,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
   return S_OK;
 }
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
-  if (pdimFocus != pdimPrevFocus) {
+  if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }

@@ -730,6 +730,10 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsLatestPreeditIntoExistingCompos
   EXPECT_EQ(composition.end_count, 1);
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(range.last_text, std::wstring({L'\x304b', L'\x304d'}));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.context.last_selection_count, 1u);
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_FALSE(h.service.has_active_context_for_test());
 }

@@ -56,7 +56,7 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) override;
   STDMETHODIMP GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAttributeInfo** ppInfo) override;
 
-  HRESULT RequestPreeditUpdate(ITfContext* context);
+  HRESULT RequestPreeditUpdate(ITfContext* context, bool* request_accepted = nullptr);
 
   // True when the active TSF thread runs in UI-less mode (Windows 11 / Office
   // route candidate UI through the application). Sourced from
@@ -79,6 +79,7 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
+  void commit_selected_for_test(ITfContext* context) { CommitSelected(context); }
 #endif
 
  private:

@@ -537,7 +537,8 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAt
   return E_INVALIDARG;
 }
 
-HRESULT TextService::RequestPreeditUpdate(ITfContext* context) {
+HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {
+  if (request_accepted) *request_accepted = false;
   if (!context) return E_INVALIDARG;
   if (active_context_ != context) {
     if (active_context_) active_context_->Release();
@@ -548,6 +549,7 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context) {
   HRESULT hr_session = S_OK;
   HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr_session);
   edit->Release();
+  if (request_accepted) *request_accepted = SUCCEEDED(hr);
   // For synchronous sessions TSF writes DoEditSession's result into hr_session
   // while returning S_OK from RequestEditSession itself.  Return hr_session so
   // callers see real failures.  For async sessions hr_session stays S_OK
@@ -760,8 +762,9 @@ void TextService::CommitSelected(ITfContext* context) {
   // Defer clearing preedit until the session is accepted so that if TSF
   // rejects the request (lock denial, context teardown) the composition text
   // is not lost and the user can still see/retry their input.
-  const bool session_ok = SUCCEEDED(RequestPreeditUpdate(context));
-  if (session_ok) {
+  bool request_accepted = false;
+  const bool session_ok = SUCCEEDED(RequestPreeditUpdate(context, &request_accepted));
+  if (request_accepted) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else {
@@ -819,7 +822,9 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
   committing_ = true;
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
   // session is accepted so rejection does not silently discard the reading.
-  if (SUCCEEDED(RequestPreeditUpdate(context))) {
+  bool request_accepted = false;
+  RequestPreeditUpdate(context, &request_accepted);
+  if (request_accepted) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else {

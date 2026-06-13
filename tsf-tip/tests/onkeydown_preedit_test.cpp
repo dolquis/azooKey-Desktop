@@ -947,6 +947,61 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTex
   EXPECT_TRUE(h.service.committing_);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsPreservesQueuedCommitWhenInlineGetRangeFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  composition.AddRef();
+  composition.get_range_result = TF_E_LOCKED;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSetTextFails) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  range.set_text_result = E_FAIL;
+  h.context.run_edit_session = true;
+
+  h.service.commit_selected_for_test(&h.context);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(composition.end_count, 0);
+  EXPECT_EQ(h.service.composition_, &composition);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_TRUE(h.service.committing_);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
   TextServiceHarness h;
 

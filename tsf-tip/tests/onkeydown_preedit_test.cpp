@@ -789,6 +789,63 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeComposition
   EXPECT_FALSE(h.service.has_active_context_for_test());
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsQueuedPreeditCommitBeforeCompositionExists) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsRejected) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
   TextServiceHarness h;
 

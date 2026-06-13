@@ -616,12 +616,18 @@ bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr
 }
 
 bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
-  std::string pending_surface = preedit_kana_;
-  if (romaji_.HasPending()) {
-    auto romaji_preview = romaji_;
-    pending_surface += romaji_preview.Flush();
+  std::string pending_surface;
+  if (committing_) {
+    pending_surface = commit_surface_;
+  } else {
+    pending_surface = preedit_kana_;
+    if (romaji_.HasPending()) {
+      auto romaji_preview = romaji_;
+      pending_surface += romaji_preview.Flush();
+    }
   }
-  if (!composition_ && pending_surface.empty()) return true;
+  const bool has_lifecycle_commit_surface = committing_ || !pending_surface.empty();
+  if (!composition_ && !has_lifecycle_commit_surface) return true;
   if (!context) return false;
 
   const std::string saved_preedit = preedit_kana_;
@@ -629,7 +635,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   const std::string saved_commit_surface = commit_surface_;
 
   const bool commit_without_composition = composition_ == nullptr;
-  if (!pending_surface.empty()) {
+  if (has_lifecycle_commit_surface) {
     committing_ = true;
     commit_surface_ = pending_surface;
     preedit_kana_.clear();

@@ -199,6 +199,11 @@ class NoopContext final : public ITfContext {
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
     if (!ppvObject) return E_POINTER;
     *ppvObject = nullptr;
+    if (riid == IID_IUnknown && identity_unknown_) {
+      identity_unknown_->AddRef();
+      *ppvObject = identity_unknown_;
+      return S_OK;
+    }
     if (riid == IID_IUnknown || riid == IID_ITfContext) {
       *ppvObject = static_cast<ITfContext*>(this);
       AddRef();
@@ -337,6 +342,7 @@ class NoopContext final : public ITfContext {
   TfEditCookie edit_cookie{1};
   ITfRange* selection_range{nullptr};
   ITfDocumentMgr* document_mgr_{nullptr};
+  IUnknown* identity_unknown_{nullptr};
   int set_selection_count{0};
   ULONG last_selection_count{0};
   HRESULT set_selection_result{S_OK};
@@ -903,6 +909,33 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsSta
   h.context.run_edit_session = true;
 
   EXPECT_EQ(h.service.OnPopContext(&h.context), S_OK);
+
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PoppingContextAliasCleansUpByComIdentity) {
+  TextServiceHarness h;
+  NoopContext alias_context;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+
+  alias_context.identity_unknown_ = static_cast<ITfContext*>(&h.context);
+  alias_context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnPopContext(&alias_context), S_OK);
 
   EXPECT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(composition.end_count, 1);

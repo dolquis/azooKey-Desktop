@@ -497,7 +497,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
 }
 STDMETHODIMP TextService::OnPushContext(ITfContext* pic) { UNREFERENCED_PARAMETER(pic); return S_OK; }
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
-  if (pic && pic == active_context_) {
+  if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
     CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
@@ -685,7 +685,8 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context,
     ClearTextStateForLifecycle();
   }
 
-  if (release_active_context && (!cleanup_context || cleanup_context == active_context_)) {
+  if (release_active_context &&
+      (!cleanup_context || SameComIdentity(cleanup_context, active_context_))) {
     if (active_context_) {
       active_context_->Release();
       active_context_ = nullptr;

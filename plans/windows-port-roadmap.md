@@ -1339,12 +1339,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/bracket-pairing-spec.md` §4.1.1・§4.5・§4.5.1・§4.9。
   - カッコ対応表・denylist の TSV 外部化（`bracket-pairs.tsv`: `open`/`close`/`flags`。
     組み込み既定を `open` キーで上書き・追加、`off` で無効化。M17 ホットリロード基盤再利用）
-  - per-app 有効範囲（`bracketPairingAppPolicy` = denylist（既定）/ allowlist。既定 denylist に
-    VS Code / Visual Studio / JetBrains 系等。M48 プロファイル統合）
+  - per-app 有効範囲（`bracketPairingAppPolicy` = denylist（既定）/ allowlist。アプリリストは
+    プロセス名配列 `bracketPairingApps`（カッコ対 TSV とは別スキーマ）+ 組み込み既定 denylist
+    シード〔VS Code / Visual Studio / JetBrains 系等〕。M48 プロファイルがあれば優先。spec §4.5.0）
   - 対称デリミタ（`"` `'` `` ` ``）の語境界判定付きペアリング（`bracketSymmetricQuotePairing`、既定 OFF）
   - 範囲選択中の開きカッコで選択を囲む（`bracketWrapSelection`、既定 OFF）
-  - 設定キー 4 種（`bracketSymmetricQuotePairing` / `bracketWrapSelection` /
-    `bracketPairingAppPolicy` / `bracketPairsPath`）
+  - 設定キー 5 種（`bracketSymmetricQuotePairing` / `bracketWrapSelection` /
+    `bracketPairingAppPolicy` / `bracketPairingApps` / `bracketPairsPath`）
 - **受け入れ条件**:
   - `bracket-pairs.tsv` でカッコ対の追加・上書き・`off` 無効化ができ、保存で次の入力から
     反映される（ホットリロード）。不正行は warning でスキップ

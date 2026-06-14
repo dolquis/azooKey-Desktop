@@ -250,24 +250,41 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
   - `denylist`: denylist 掲載アプリ以外で有効。
   - `allowlist`: allowlist 掲載アプリのみで有効。
 - 前面アプリ判定は `promptPrefixByApp`（rich X-2-6）と同じ「前面プロセス実行ファイル名」
-  解決基盤を再利用する。per-app の有効/無効は **M48 アプリ別入力プロファイル
-  （`docs/app-profile-spec.md`）に統合**する（M61-B）。M48 未完了時は本機能専用の最小
-  リスト設定で先行できる。
-- 既定 denylist（保守的なシード。実機・フィードバックで調整）: `Code.exe`（VS Code）/
-  `devenv.exe`（Visual Studio）/ `idea64.exe`・`pycharm64.exe` 等 JetBrains 系 /
-  `sublime_text.exe`。これらはアプリ側自動ペアが既定で働くため。
-- 本リストは固定表ではなく `bracket-pairs.tsv` と同じファイル運用（§4.5.1）または M48
-  プロファイルから供給する（M61-B）。
+  解決基盤を再利用する（拡張子込みのファイル名、大文字小文字を区別しない）。
 
-#### 4.5.1 カッコ対応・denylist の外部化（TSV、M61-B）
+#### 4.5.0 アプリリストのシリアライズ（`bracketPairingApps`）
 
-§4.1 の対応表と denylist は組み込み既定として持つが、再コンパイルせず調整できるよう
-**TSV で上書き・追加**できる。M17 カスタムローマ字テーブル（`docs/legacy-parity-spec.md`
-§5）と同じファイル運用・ホットリロード基盤（`ReadDirectoryChangesW`）を再利用する。
+アプリの deny/allow リストは**カッコ対応表（§4.5.1 の `bracket-pairs.tsv`）とは別物**で、
+プロセス名を encode する独自スキーマを持つ。`bracket-pairs.tsv` には**アプリ名を書かない**
+（同 TSV は `<open>\t<close>\t<flags>` のカッコ対専用）。アプリリストは次の二経路で供給する:
+
+- **設定 `bracketPairingApps`（配列、`string[]`、M61-B）**: 前面プロセスの実行ファイル名
+  （例 `"Code.exe"` `"devenv.exe"`）の配列。大文字小文字を区別しない。`bracketPairingAppPolicy`
+  に従って解釈する:
+  - `denylist`: **組み込み既定 denylist（定数シード）∪ `bracketPairingApps`** に載るアプリで
+    本機能を無効化、その他で有効。
+  - `allowlist`: `bracketPairingApps` に載るアプリでのみ有効（組み込みシードは無視）。
+- **M48 アプリ別入力プロファイル（`docs/app-profile-spec.md`）**: M48 完了後は per-app の
+  有効/無効をプロファイルが持ち、**`bracketPairingApps` 設定より優先**する（プロファイルに
+  当該アプリのエントリがあればそれを使う）。M48 未完了時は `bracketPairingApps` 単独で動作する。
+
+組み込み既定 denylist（`denylist` ポリシー時のシード。定数。実機・フィードバックで調整）:
+`Code.exe`（VS Code）/ `devenv.exe`（Visual Studio）/ `idea64.exe`・`pycharm64.exe` 等
+JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既定で働くため。`allowlist`
+ポリシーではこのシードを使わず `bracketPairingApps` のみを許可集合とする。
+
+#### 4.5.1 カッコ対応表の外部化（TSV、M61-B）
+
+§4.1 の**カッコ対応表**（アプリリストではない。アプリリストは §4.5.0）は組み込み既定として
+持つが、再コンパイルせず調整できるよう **TSV で上書き・追加**できる。M17 カスタムローマ字
+テーブル（`docs/legacy-parity-spec.md` §5）と同じファイル運用・ホットリロード基盤
+（`ReadDirectoryChangesW`）を再利用する。
 
 - 既定パス: `%LOCALAPPDATA%\azooKey\bracket-pairs.tsv`（`bracketPairsPath` で上書き）。
 - 形式（UTF-8、BOM 許容、1 行 1 対）: `<open>\t<close>\t<flags>`。`open == close` の行は
-  対称デリミタ（§4.1.1）。`flags` は任意（例 `off` で当該既定対を無効化＝打消し）。
+  対称デリミタ（§4.1.1）。`flags` は任意（例 `off` で当該既定対を無効化＝打消し）。**本 TSV は
+  カッコ対専用で、アプリ名（プロセス名）は書かない**（アプリ deny/allow は §4.5.0 の
+  `bracketPairingApps` 設定 / M48 プロファイル）。
 - マージ規則: 組み込み既定を常にロードし、TSV 行は `open` キーで上書き・新規追加、
   `off` フラグで無効化（M59 §4.1.4 と同方針）。
 - ファイル無しなら組み込み既定のみで動作（後方互換）。不正行は warning ログでスキップ。
@@ -351,8 +368,12 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
    `O` と `C` の境界へ。
 3. `TF_SELECTION sel{ .range = range, ... }` を `context_->SetSelection(ec, 1, &sel)`。
 
-代替実装: SetText 後の range を `Collapse(TF_ANCHOR_END)` してから `ShiftStart(ec, -len(C), ...)`
-で `C` の前へ戻す（同値）。実装時にどちらかへ確定。
+代替実装: SetText 後の range を `Collapse(TF_ANCHOR_END)`（`C` の後）→ `ShiftStart(ec,
+-len(C), ...)` で **start のみ**を `O` と `C` の境界へ戻し、**最後に `Collapse(TF_ANCHOR_START)`
+で end を start に揃えて collapse する**。この最終 collapse を省くと range は start=境界・
+end=`C` の後で**非 collapsed のまま `C` を選択範囲に含み**、`SetSelection` がキャレットでなく
+`C` を選択してしまう（immediate では直後の入力が `C` を置換する）。最終 collapse まで行えば
+主経路（手順 1〜3）と同値。実装時にどちらかへ確定。
 
 ### 5.3 隣接文字の読取（スキップ・削除判定）
 
@@ -399,8 +420,9 @@ EditSession**（`TF_ES_SYNC | TF_ES_READ`。既存 lifecycle commit が `TF_ES_S
 | `bracketPairingInAlnumMode` | boolean | `true` | M61-A | 半角 / 全角英数モードでもペアリングを有効化（§4.4） |
 | `bracketSymmetricQuotePairing` | boolean | `false` | M61-B | 対称デリミタ（`"` `'` `` ` ``）のペアリングを有効化（§4.1.1） |
 | `bracketWrapSelection` | boolean | `false` | M61-B | 範囲選択中の開きカッコで選択を囲む（§4.9） |
-| `bracketPairingAppPolicy` | enum `denylist`/`allowlist` | `denylist` | M61-B | per-app 有効範囲ポリシー（§4.5。M48 統合） |
-| `bracketPairsPath` | string | `%LOCALAPPDATA%\azooKey\bracket-pairs.tsv` | M61-B | カッコ対応・denylist TSV のパス（§4.5.1）。無ければ組み込み既定のみ。ホットリロード対応 |
+| `bracketPairingAppPolicy` | enum `denylist`/`allowlist` | `denylist` | M61-B | per-app 有効範囲ポリシー（§4.5・§4.5.0。M48 統合） |
+| `bracketPairingApps` | array(string) | `[]` | M61-B | deny/allow 対象の前面プロセス実行ファイル名（例 `"Code.exe"`）。`bracketPairingAppPolicy` に従い解釈。大文字小文字を区別しない（§4.5.0）。M48 プロファイルがあればそちらが優先 |
+| `bracketPairsPath` | string | `%LOCALAPPDATA%\azooKey\bracket-pairs.tsv` | M61-B | カッコ対応表 TSV のパス（カッコ対専用・アプリ名は含まない。§4.5.1）。無ければ組み込み既定のみ。ホットリロード対応 |
 
 設定 UI（M30）完成までは host CLI / 環境変数 / settings.json（`DEV-203` の SettingsStore）
 経由で実効値を受ける（M58〜M60 と同方針）。

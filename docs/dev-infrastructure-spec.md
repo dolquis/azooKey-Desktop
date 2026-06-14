@@ -145,6 +145,10 @@ compile_commands.json
 1. header-only ライブラリ → submodule または `FetchContent`（オプトイン）
 2. ビルドが必要な依存 → 導入価値を個別評価し、必要なら `FetchContent` を
    明示オプトインで
+3. 外部から取得する prebuilt バイナリ / モデル（llama.cpp ランタイム・GGUF 等）は
+   **供給源を固定し SHA256 等でハッシュ pin** する。先行実装 fkunn1326/azooKey-Windows が
+   CI で個人 gist / 個人 fork の成果物をチェックサム無しで取得しているのは**反面教師**とし、
+   自分側は採らない（サプライチェーン耐性）。
 
 ### 3.2 依存ごとの導入手段
 
@@ -321,6 +325,10 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
 - 末尾ゴミを拒否する
 - 最大 payload 長超過入力を拒否する
 - `Payloads.cpp` 側で期待外の型・必須キー欠損を安全に拒否する
+- **enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
+  `CommitCorrection` / `UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の ⚠️ 項）を
+  受信した際、Dispatcher が**明示的に「未対応 type」エラーを返す**（黙って無視しない）。
+  併せて MessageType 列挙 ↔ `Payloads` codec の網羅整合を CI で検査する（DEV-102）。
 
 ### 6.4 Named Pipe セキュリティ強化
 

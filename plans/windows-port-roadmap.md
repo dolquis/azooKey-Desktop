@@ -497,6 +497,7 @@ M30 / M34 ─→ M49         （設定アプリ + DPAPI → 学習データ可�
 
 【追加機能トラック（続き）】
 M46 / promptPrefixByApp ─→ M48  （セーフ入力 + 既存 promptPrefix → アプリ別プロファイル）
+M13 ─→ M61-A ─→ M61-B            （自動カッコペアリング。M61-B は M48 にも依存。無 IPC・Host 非依存の独立トラック）
 
 【変換品質トラック】（Phase 5〜7 と独立。bench / 学習 / 辞書を発展）
 bench / M7 / M9 ─→ M52
@@ -549,6 +550,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   既存 `promptPrefixByApp` の発展として M46 完了後に着手し、本トラック
   に属する。詳細は「追加機能マイルストーン」章および
   `docs/app-profile-spec.md`。
+- **自動カッコペアリング（M61）は M13 のみに依存する無 IPC・Host 非依存の独立
+  トラック** — M61-A（コア）は M13（InputState）完了後、Phase 5 と並行で前倒し
+  可能。M61-B（TSV 外部化・per-app 互換）は M61-A + M48 を前提とする。推論
+  バックエンド・TSF 深耕・パッケージングに依存しない小規模機能。詳細は
+  `docs/bracket-pairing-spec.md`。
 - **変換品質トラック（M52〜M57）は主に Phase 5〜7 と独立した新トラック** —
   M7（学習）・M9（ユーザー辞書）・既存 `bench/` を前提に、M52（評価ベンチ）
   → M53（辞書）/ M54（学習強化）/ M55（打ち間違え統合）並行 → M56（Tiny
@@ -1267,6 +1273,87 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     一切変わらない
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
 - **参照仕様**: `docs/inline-english-candidate-spec.md`
+
+### M61: 自動カッコペアリング（Bracket Auto-Pairing）
+
+> 開きカッコ（`（` `「` `[` `{` `"` など）を打鍵したとき、iPhone の日本語入力
+> キーボードのように対応する閉じカッコを自動補完し、**カーソルをカッコの内側に置く**
+> 追加機能。閉じカッコの飛び越え（スキップ）・空ペアの一括削除を含む。既定 OFF・後方
+> 互換で、有効化時のみ動作する。**TIP ローカルかつ決定的で、IPC・推論ホストに依存しない**
+> （M58/M59/M60 と異なる固有性質）。M61-A（コア）→ M61-B（外部化・アプリ互換・拡張）の
+> 段階構成。正典仕様は `docs/bracket-pairing-spec.md`。
+
+#### M61-A: ペアリングコア
+
+- **目的**: 開きカッコ打鍵で対を自動挿入してカーソルを内側へ置き、閉じカッコの飛び越えと
+  空ペアの Backspace 一括削除を、英数モードを含めて実現する最小フローを作る。
+- **前提**: M13（InputState 状態機械）完了。確定 + カーソル配置は既存 M5/M6 の commit
+  経路（`SetText` → `Collapse` → `SetSelection`）を再利用するため追加の前提なし。
+- **推奨実装時期**: M13 完了直後、Phase 5 と並行可能な独立トラック。Zenzai・TSF 深耕・
+  パッケージングに依存しない小規模・無 IPC 機能。設定 UI（M30）完成までは host CLI /
+  環境変数 / settings.json（`SettingsStore`）で実効値を受ける。
+- **変更対象**: `core/include/azookey/core/InputState.h` / 状態機械（開き・閉じカッコ
+  codepoint の分類と新 ClientAction `insertBracketPair` / `skipOverClosing` /
+  `deleteBracketPair`。新 `UserAction` enum 値は追加しない）、
+  `core/src/BracketTable.cpp`（新規・組み込み対応表）、
+  `tsf-tip/src/TextService.cpp`（`OnTestKeyDown` / `OnKeyDown` のカッコ・Backspace 分岐、
+  隣接文字の同期読取、`ApplyClientAction` のカーソル内側配置・スキップ・空ペア削除）、
+  `settings/mvp-settings.schema.json`（設定キー 5 種）。
+- **実装範囲**: `docs/bracket-pairing-spec.md` §3〜§5・§6・§8。
+  - 組み込みカッコ対応表（全角 + 半角の非対称ペア。対称デリミタ・`<>` は既定除外）
+  - immediate トリガ（既定）の対挿入とカーソル内側配置（§5.2）。`composition` トリガは
+    設定で選択可能にする（§4.0.1）
+  - 閉じカッコのスキップ（カーソル右 1 文字読取で飛び越え判定。§4.2）
+  - 空ペアの Backspace 一括削除（カーソル左右読取で判定。§4.3）
+  - 英数モード（`alnum_half` / `alnum_full`）でのペアリング（§4.4）
+  - 隣接文字の同期読取 EditSession と、拒否時のリテラル挿入 / 通常 Backspace
+    フォールバック（§4.8・§5.3）。`OnTestKeyDown` の eaten 宣言（アプリ素通し防止）
+  - 設定キー 5 種（`bracketPairing` / `bracketPairingTrigger` / `bracketSkipOverClosing` /
+    `bracketBackspaceDeletesPair` / `bracketPairingInAlnumMode`）
+- **受け入れ条件**:
+  - `bracketPairing=true` で、`「` を打つと `「」` が入りカーソルが内側に来る。続けて
+    入力するとカッコ内に入る（immediate、Enter 不要）
+  - `「あ」` の `」` 直前で `」` を打つと二重化せずカーソルが `」` の外へ進む（スキップ）
+  - 空ペア `「|」` の内側で Backspace を押すと開き・閉じが両方消える
+  - `hiragana` と `alnum_half` の双方でペアリングが働く（`bracketPairingInAlnumMode=false`
+    で英数モードのみリテラル挿入になる）
+  - `bracketPairingTrigger=composition` で `「` 打鍵時に preedit に `「」` が出て、確定操作で
+    カーソル内側に確定する。Esc で破棄される
+  - 読取 EditSession 拒否・選択取得失敗時にリテラル挿入 / 通常 Backspace へフォールバックし、
+    入力を失わない
+  - `bracketPairing=false` でカッコ・Backspace・確定・候補・学習の挙動が一切変わらない
+  - IPC メッセージを一切追加せず、Host 未接続でも本機能が動作する
+  - 実機 Win11 での end-to-end 確認（`gate:human-required`）
+- **参照仕様**: `docs/bracket-pairing-spec.md`
+
+#### M61-B: 外部化・アプリ互換・拡張
+
+- **目的**: カッコ対応表・denylist の TSV 外部化、自動ペアするエディタでの二重化回避
+  （per-app 制御）、対称デリミタ・選択囲みなどの拡張挙動を追加する。
+- **前提**: M61-A 完了。per-app 制御は M48（アプリ別入力プロファイル）に統合する
+  （`docs/app-profile-spec.md`）。M48 未完了時は本機能専用の最小リスト設定で先行可能。
+- **変更対象**: `core/src/BracketTable.cpp`（TSV パース / マージ / ホットリロード。M17
+  基盤再利用）、`tsf-tip/src/TextService.cpp`（前面アプリ判定 = `promptPrefixByApp` 基盤
+  再利用・選択囲み・対称デリミタの語境界判定）、M48 プロファイル連携、
+  `settings/mvp-settings.schema.json`（設定キー 4 種）。
+- **実装範囲**: `docs/bracket-pairing-spec.md` §4.1.1・§4.5・§4.5.1・§4.9。
+  - カッコ対応表・denylist の TSV 外部化（`bracket-pairs.tsv`: `open`/`close`/`flags`。
+    組み込み既定を `open` キーで上書き・追加、`off` で無効化。M17 ホットリロード基盤再利用）
+  - per-app 有効範囲（`bracketPairingAppPolicy` = denylist（既定）/ allowlist。既定 denylist に
+    VS Code / Visual Studio / JetBrains 系等。M48 プロファイル統合）
+  - 対称デリミタ（`"` `'` `` ` ``）の語境界判定付きペアリング（`bracketSymmetricQuotePairing`、既定 OFF）
+  - 範囲選択中の開きカッコで選択を囲む（`bracketWrapSelection`、既定 OFF）
+  - 設定キー 4 種（`bracketSymmetricQuotePairing` / `bracketWrapSelection` /
+    `bracketPairingAppPolicy` / `bracketPairsPath`）
+- **受け入れ条件**:
+  - `bracket-pairs.tsv` でカッコ対の追加・上書き・`off` 無効化ができ、保存で次の入力から
+    反映される（ホットリロード）。不正行は warning でスキップ
+  - denylist 掲載アプリ（VS Code 等）でペアリングが抑制され二重化しない。allowlist ポリシーで
+    掲載アプリのみ有効になる
+  - `bracketSymmetricQuotePairing=true` で語境界の `"` がペアになり、語の途中では単一挿入になる
+  - `bracketWrapSelection=true` で範囲選択中の開きカッコが選択を囲む
+  - 実機 Win11 での end-to-end 確認（`gate:human-required`）
+- **参照仕様**: `docs/bracket-pairing-spec.md`
 
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 

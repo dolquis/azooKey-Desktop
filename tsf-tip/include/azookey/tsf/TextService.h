@@ -140,6 +140,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void ServeConnection();
   bool PerformHandshake();
   bool WaitForReconnectOrStop(uint32_t delay_ms);
+  bool WaitForIpcResponseOrStop(uint32_t timeout_ms);
   void RearmPendingQuery(uint64_t req_id);
   void PostQueryCandidates(const std::string& reading);
   static void OnCandidatesReady(void* context);

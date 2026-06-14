@@ -205,6 +205,49 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   server.Stop();
 }
 
+TEST(NamedPipeTransportTest, ReceiveWithTimeoutReturnsWhenServerKeepsConnectionOpenWithoutReply) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-timeout-test-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> saw_request{false};
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name,
+      [&saw_request](const azookey::ipc::Envelope&) -> std::optional<azookey::ipc::Envelope> {
+        saw_request.store(true);
+        return std::nullopt;
+      });
+  ASSERT_TRUE(started);
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+
+  azookey::ipc::PingPayload ping;
+  ping.nonce = 42;
+  ping.t_ms = 1;
+
+  azookey::ipc::Envelope env;
+  env.version = 1;
+  env.request_id = 1;
+  env.trace_id = "transport-timeout";
+  env.type = azookey::ipc::MessageType::Ping;
+  env.payload_json = azookey::ipc::BuildPing(ping);
+
+  ASSERT_TRUE(client.Send(env));
+  ASSERT_TRUE(WaitForFlag(saw_request));
+  const auto start_time = std::chrono::steady_clock::now();
+  auto response = client.ReceiveWithTimeout(150);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start_time);
+
+  EXPECT_FALSE(response.has_value());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(1000));
+  EXPECT_TRUE(client.IsConnected());
+
+  client.Disconnect();
+  server.Stop();
+}
+
 TEST(NamedPipeTransportTest, StopReturnsWhileAcceptIsPending) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-ipc-stop-pending-test-" + std::to_string(GetCurrentProcessId());

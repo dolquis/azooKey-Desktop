@@ -68,13 +68,33 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
 
 ## 3. InputState への統合（M13）
 
-### 3.1 UserAction（新 enum 値なし）
+### 3.1 UserAction（新 enum 値なし・VK マッピングは拡張が必要）
 
 `docs/legacy-parity-spec.md` §1.1 の `UserAction::Input`（および英数モードの
 `InputAlnum`）は `UserActionEvent.codepoint` に打鍵由来の Unicode コードポイントを
-持つ。本機能は **codepoint を分類する層**を InputState に足すだけで、新しい
-`UserAction` enum 値・新しい VK マッピングは**追加しない**。これにより M13 の
-VK→UserAction 表（§1.4）は不変。
+持つ。本機能は **codepoint を分類する層**を InputState に足すだけでよく、新しい
+`UserAction` enum 値は**追加しない**（`Input` / `InputAlnum` を再利用する）。
+
+ただし **VK→UserAction マッピング（§1.4）は拡張が必要**である。M13 §1.4 の表は現状
+`VK_A〜VK_Z` のみを `Input` に写し、カッコ・記号を生む OEM キー（`VK_OEM_4`=`[`、
+`VK_OEM_6`=`]`、`VK_OEM_1` 等、および JIS 配列で `「」` 等を生むキー）は写していない。
+このままだとブラケットキーが `UserActionEvent.codepoint` を生まず、InputState が開き/
+閉じカッコを分類できないため**本機能が発火しない**。したがって M61-A は次を行う:
+
+- **ブラケット/記号を生む VK を `Input` / `InputAlnum` へ写すエントリを M13 §1.4 の
+  VK→UserAction 表（`tsf-tip/src/TextService.cpp::OnKeyDown` 内テーブル /
+  `core/src/UserActionMap.cpp`）へ追加する。** codepoint は**入力モード依存**で、
+  `ToUnicode`（キーボードレイアウト + シフト状態）または IME の現在モード
+  （`hiragana` で `[`→`「` 等）から解決し、`UserActionEvent.codepoint` に載せる（§4.4）。
+- 分類自体は codepoint ベース（下記）なので、表に載せる VK 集合は §4.1 の対応表を包含
+  すれば十分（OEM_4/6/1/7/さらに丸括弧を生む Shift+8/9 等。実装時に対象 VK を確定）。
+- `bracketPairing == false` のときは、これら VK は従来どおりアプリへパススルー（あるいは
+  IME の通常文字処理）であり、新マッピングが既存挙動を変えないようガードする（§5.3 の
+  `OnTestKeyDown` eaten 判定も `bracketPairing` ＆有効モードでのみ TRUE）。
+
+> このマッピング拡張は M13（入力パイプライン）の VK 表を「不変」とはしないが、`UserAction`
+> 列挙・InputState 種別・ClientAction 枠組みには破壊的変更を加えない（純粋追加）。M13 が
+> 既に OEM キーを `Input` へ写すよう実装済みなら、本機能は分類層の追加のみで足りる。
 
 分類（`bracketPairing == true` かつ現在の入力モードで有効なとき。§4.4）:
 

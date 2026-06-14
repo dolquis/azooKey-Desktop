@@ -861,6 +861,28 @@ bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
   return ipc_stop_.load();
 }
 
+bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms) {
+  using namespace std::chrono;
+
+  constexpr uint32_t kResponsePollMs = 50;
+  const auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+
+  while (!ipc_stop_.load() && ipc_client_.IsConnected()) {
+    const auto now = steady_clock::now();
+    if (now >= deadline) break;
+
+    const auto remaining_ms = duration_cast<milliseconds>(deadline - now).count();
+    uint32_t wait_ms = kResponsePollMs;
+    if (remaining_ms > 0 && remaining_ms < static_cast<long long>(wait_ms)) {
+      wait_ms = static_cast<uint32_t>(remaining_ms);
+    }
+
+    if (ipc_client_.ReceiveWithTimeout(wait_ms)) return true;
+  }
+
+  return false;
+}
+
 // Send the activation handshake and wait (bounded) for acceptance. The bounded
 // wait prevents a host that accepts the pipe but never replies from hanging the
 // reconnect loop. Returns false on send failure, timeout, or rejection.
@@ -998,8 +1020,9 @@ void TextService::ServeConnection() {
         return;
       }
       if (item.expects_response) {
-        auto res = ipc_client_.Receive();
-        if (!res) {
+        constexpr uint32_t kFafResponseTimeoutMs = 3000;
+        if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs)) {
+          if (ipc_stop_.load()) return;
           if (!ipc_stop_.load())
             DebugLog("IPC: faf receive failed for type=" + TypeToString(item.type) +
                      "; reconnecting");

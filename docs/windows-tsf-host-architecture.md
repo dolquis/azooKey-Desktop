@@ -21,8 +21,13 @@
     比較する staleness check。
 - 確定時は `shown_candidates_` をスナップショットし、in-flight `QueryCandidates`
   に `Cancel` を送ってから EditSession を要求する。
-- EditSession が拒否されたとき (`hr_session != S_OK`) は preedit と
-  `committing_` フラグをロールバックし、確定済み観測も送らない。
+- 確定時の EditSession は同期要求で実行し、`SetText` / `EndComposition` が完了した
+  場合だけ preedit を clear して `CommitObservation` を送る。
+- EditSession が拒否または失敗したとき (`hr_session != S_OK`) は preedit と
+  queued commit (`committing_` / `commit_surface_`) を保持し、確定済み観測も送らない。
+- queued commit が残っている間、後続の通常キー入力は先頭で元の context に対する
+  commit を再試行し、成功・再拒否のどちらでもそのキーを消費して stale preedit や
+  確定直後のテキストと新規入力が混ざらないようにする。
 
 ## IPCメッセージ（実装済み = ✅）
 

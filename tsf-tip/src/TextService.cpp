@@ -77,6 +77,7 @@ TextService::TextService() = default;
 
 TextService::~TextService() {
   StopIpcWorker();
+  ClearCommitContext();
 }
 
 STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
@@ -253,6 +254,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   *eaten = FALSE;
 
   if (HasSystemModifierDown()) return S_OK;
+  if (committing_) {
+    *eaten = TRUE;
+    return S_OK;
+  }
 
   const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
   const bool cand_visible = candidate_window_.IsVisible();
@@ -292,6 +297,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   *eaten = FALSE;
   try {
     if (HasSystemModifierDown()) return S_OK;
+
+    if (committing_) {
+      ITfContext* retry_context = commit_context_ ? commit_context_ : active_context_;
+      if (retry_context && SUCCEEDED(RequestCommitEditSession(retry_context))) {
+        preedit_kana_.clear();
+        romaji_.Reset();
+        *eaten = TRUE;
+        return S_OK;
+      } else {
+        // Keep queued commit and preserved preedit isolated from new input.
+        *eaten = TRUE;
+        return S_OK;
+      }
+    }
 
     const bool cand_visible = candidate_window_.IsVisible();
 
@@ -513,11 +532,17 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfC
   CancelPendingQueriesForLifecycle();
   const bool preserve_pending_commit = committing_;
   const std::string pending_commit_surface = commit_surface_;
+  const auto pending_commit_observation = pending_commit_observation_;
+  ITfContext* pending_commit_context = commit_context_;
+  if (pending_commit_context) pending_commit_context->AddRef();
   ClearTextStateForLifecycle();
   if (preserve_pending_commit) {
     committing_ = true;
     commit_surface_ = pending_commit_surface;
+    pending_commit_observation_ = pending_commit_observation;
+    SetCommitContext(pending_commit_context);
   }
+  if (pending_commit_context) pending_commit_context->Release();
   return S_OK;
 }
 
@@ -557,6 +582,28 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
   return SUCCEEDED(hr) ? hr_session : hr;
 }
 
+HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
+  if (!context) return E_INVALIDARG;
+  if (active_context_ != context) {
+    if (active_context_) active_context_->Release();
+    active_context_ = context;
+    active_context_->AddRef();
+  }
+
+  ITfEditSession* edit = new EditSession(this, context);
+  HRESULT hr_session = E_FAIL;
+  const HRESULT hr =
+      context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
+  edit->Release();
+  if (FAILED(hr)) return hr;
+  if (FAILED(hr_session)) return hr_session;
+  // RequestEditSession can report S_OK even when a sync session was not run.
+  // DoEditSession clears this state only after the commit path really finishes.
+  const bool commit_completed = !committing_ && commit_surface_.empty();
+  if (commit_completed) ClearCommitContext();
+  return commit_completed ? S_OK : E_FAIL;
+}
+
 void TextService::ClearCandidateStateForLifecycle() {
   candidate_window_.Hide();
   selected_candidate_idx_ = 0;
@@ -591,11 +638,34 @@ void TextService::CancelPendingQueriesForLifecycle() {
   if (need_notify) ipc_cv_.notify_one();
 }
 
+void TextService::SetCommitContext(ITfContext* context) {
+  if (commit_context_ == context) return;
+  ClearCommitContext();
+  commit_context_ = context;
+  if (commit_context_) commit_context_->AddRef();
+}
+
+void TextService::ClearCommitContext() {
+  if (commit_context_) {
+    commit_context_->Release();
+    commit_context_ = nullptr;
+  }
+}
+
+void TextService::PostPendingCommitObservation() {
+  if (!pending_commit_observation_) return;
+  auto pending = std::move(*pending_commit_observation_);
+  pending_commit_observation_.reset();
+  PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+}
+
 void TextService::ClearTextStateForLifecycle() {
   preedit_kana_.clear();
   romaji_.Reset();
   committing_ = false;
   commit_surface_.clear();
+  pending_commit_observation_.reset();
+  ClearCommitContext();
 }
 
 bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const {
@@ -759,23 +829,23 @@ void TextService::CommitSelected(ITfContext* context) {
 
   commit_surface_ = chosen.surface.empty() ? preedit_kana_ : chosen.surface;
   committing_ = true;
-  // Defer clearing preedit until the session is accepted so that if TSF
-  // rejects the request (lock denial, context teardown) the composition text
-  // is not lost and the user can still see/retry their input.
-  bool request_accepted = false;
-  const bool session_ok = SUCCEEDED(RequestPreeditUpdate(context, &request_accepted));
-  if (request_accepted) {
+  SetCommitContext(context);
+  if (!chosen.surface.empty() && !reading.empty()) {
+    pending_commit_observation_ = PendingCommitObservation{reading, chosen, shown};
+  } else {
+    pending_commit_observation_.reset();
+  }
+  // Defer clearing preedit and recording learning until the synchronous commit
+  // edit session has actually completed.  A request accepted asynchronously is
+  // not enough: SetText/EndComposition may still fail and the user input must
+  // stay retryable.
+  const bool commit_completed = SUCCEEDED(RequestCommitEditSession(context));
+  if (commit_completed) {
     preedit_kana_.clear();
     romaji_.Reset();
-  } else {
-    committing_ = false;
+  } else if (!committing_) {
     commit_surface_.clear();
-  }
-
-  // Only record the learning event when the edit session was accepted; an
-  // observation for a commit that never happened would skew ranking data.
-  if (session_ok && !chosen.surface.empty() && !reading.empty()) {
-    PostCommitObservation(reading, chosen, shown);
+    pending_commit_observation_.reset();
   }
 }
 
@@ -820,15 +890,15 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
 
   commit_surface_ = preedit_kana_;
   committing_ = true;
+  SetCommitContext(context);
+  pending_commit_observation_.reset();
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
-  // session is accepted so rejection does not silently discard the reading.
-  bool request_accepted = false;
-  RequestPreeditUpdate(context, &request_accepted);
-  if (request_accepted) {
+  // synchronous commit edit session has actually completed.
+  const bool commit_completed = SUCCEEDED(RequestCommitEditSession(context));
+  if (commit_completed) {
     preedit_kana_.clear();
     romaji_.Reset();
-  } else {
-    committing_ = false;
+  } else if (!committing_) {
     commit_surface_.clear();
   }
 }
@@ -1259,6 +1329,16 @@ void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField
 void TextService::show_candidate_window_from_cache_for_test() {
   ShowCandidateWindowFromCache();
 }
+
+std::optional<ipc::CommitObservationRequest> TextService::last_queued_commit_observation_for_test() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  for (auto it = ipc_send_queue_.rbegin(); it != ipc_send_queue_.rend(); ++it) {
+    if (it->type == ipc::MessageType::CommitObservation) {
+      return ipc::ParseCommitObservationRequest(it->payload_json);
+    }
+  }
+  return std::nullopt;
+}
 #endif
 
 void TextService::PostCommitObservation(const std::string& reading,
@@ -1324,12 +1404,22 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
   // M5/M6: commit path — set final surface text and end composition.
   if (service_->committing_) {
     const std::string pending_commit_surface = service_->commit_surface_;
+    const auto pending_commit_observation = service_->pending_commit_observation_;
     service_->committing_ = false;
     const std::wstring surface = Utf8ToWide(pending_commit_surface);
     service_->commit_surface_.clear();
     const auto restore_pending_commit = [&]() {
       service_->committing_ = true;
       service_->commit_surface_ = pending_commit_surface;
+      service_->pending_commit_observation_ = pending_commit_observation;
+    };
+    const auto post_pending_commit_observation = [&]() {
+      if (!pending_commit_observation) {
+        service_->pending_commit_observation_.reset();
+        return;
+      }
+      service_->pending_commit_observation_ = pending_commit_observation;
+      service_->PostPendingCommitObservation();
     };
 
     if (service_->composition_) {
@@ -1387,6 +1477,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         return text_hr;
       }
     }
+    post_pending_commit_observation();
     return S_OK;
   }
 
@@ -1396,9 +1487,14 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
   if (kana.empty()) {
     if (service_->composition_) {
       ITfComposition* comp = service_->composition_;
-      service_->composition_ = nullptr;
-      comp->EndComposition(ec);
+      comp->AddRef();
+      const HRESULT end_hr = comp->EndComposition(ec);
+      if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
+        service_->composition_ = nullptr;
+        comp->Release();
+      }
       comp->Release();
+      if (FAILED(end_hr)) return end_hr;
     }
     return S_OK;
   }
@@ -1431,7 +1527,12 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
   ITfRange* pRange = nullptr;
   if (FAILED(service_->composition_->GetRange(&pRange)) || !pRange) return E_FAIL;
 
-  pRange->SetText(ec, 0, kana.c_str(), static_cast<LONG>(kana.size()));
+  const HRESULT set_text_hr =
+      pRange->SetText(ec, 0, kana.c_str(), static_cast<LONG>(kana.size()));
+  if (FAILED(set_text_hr)) {
+    pRange->Release();
+    return set_text_hr;
+  }
 
   // Cache the caret screen position for the candidate window anchor (M5).
   {
@@ -1459,7 +1560,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         VARIANT var;
         var.vt = VT_I4;
         var.lVal = static_cast<LONG>(atom);
-        pProp->SetValue(ec, pRange, &var);
+        const HRESULT attr_hr = pProp->SetValue(ec, pRange, &var);
+        if (FAILED(attr_hr)) DebugLog("Preedit display attribute SetValue failed");
       }
       pCatMgr->Release();
     }

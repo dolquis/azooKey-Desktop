@@ -199,6 +199,14 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
 5. Win11 24H2 (build 26100) 未満では R2 の NPU / HW EP が使えないため、OS バージョン
    判定で R1 CPU にフォールバックする。
 
+> **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装が R1（llama.cpp）を
+> **CPU / CUDA / Vulkan の 3 プリビルド**で実働実証済み（Vulkan(ggml-vulkan) を含む）。
+> R1 を v1.0 ベースラインとする本方針の外部裏付け。バックエンド可否の **一次フィルタ**
+> として、当該バックエンドのランタイム DLL の存在判定（`cudart64_12.dll`+`cublas64_12.dll`
+> = CUDA / `vulkan-1.dll` = Vulkan）を設定 UI の可否提示に流用できる（ただし DLL 存在 ≠
+> 動作保証。版不一致・破損は検出不可のため、実選択は §3 DXCore 列挙 + `BackendSelector`
+> に委ねる）。詳細は DEV-98 / DEV-120 のコメント参照。
+
 ### 4.4 BackendKind / LoadModel 境界の拡張ポリシー
 
 現行コードの enum は `enum class BackendKind { Cpu, Cuda };`

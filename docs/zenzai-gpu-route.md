@@ -99,6 +99,21 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。
 で最速だが、ノート PC のバッテリ消費が激しい。Phase 6-B M24 完了後は
 `BackendSelector` の優先順位下位（CPU の手前）にフォールバックとして残す。
 
+## 参考: 先行 Windows 実装（fkunn1326/azooKey-Windows, MIT）による R1 実証
+
+先行 Windows 実装は、本書のルート A / R1（GGUF/ggml + llama.cpp）を実働で実証している。
+
+- 変換エンジンは azooKey の Swift `AzooKeyKanaKanjiConverter` を Windows ビルドし、
+  `zenz.gguf`（`Miwa-Keita/zenz-v3.x-small-gguf`）を `ConvertRequestOptions.zenzaiMode.on`
+  に渡す。重み形式が GGUF である点は本書の判断と一致する。
+- llama.cpp を **CPU / CUDA / Vulkan の 3 プリビルド**で同梱し、`launcher` が設定値に
+  応じて該当フォルダを PATH 先頭へ注入して切り替える。**Vulkan(ggml-vulkan) も実働**
+  しており、`docs/copilot-pc-backend-spec.md` §4.4-§4.5 の R1 Vulkan 経路の実在性を裏付ける。
+- 自分側は同じ R1 を **C++ `inference-host` から llama.cpp C-API 直結**で実装する点が
+  参考と異なる（参考は Swift FFI 経由）。FFI を採る場合は **C 文字列の所有権・解放規約を
+  別途設計**する必要がある（参考実装は `strdup` 戻り値を解放しておらずリーク懸念＝反面教師）。
+- 関連: DEV-98（R1/R2 選定スパイク・コメント）/ DEV-202（zenz GGUF 配布ライセンス確認）。
+
 ## 参照
 
 - バックエンド選定の詳細：`docs/copilot-pc-backend-spec.md`

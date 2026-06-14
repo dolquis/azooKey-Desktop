@@ -46,8 +46,8 @@ macOS 版 `legacy/` は対象外。
 | `suggest`（既定） | する | 補正後読みの変換結果を `typo-correction` マーク付きで候補リスト先頭付近に注入。元の読みの候補も残す。 |
 | `auto_replace` | する | 補正後読みのみで変換し、preedit のかなも補正後へ置換。 |
 
-- 設定ローダーは未実装（`settings/mvp-settings.schema.json` はスキーマ文書のみ）。
-  当面の実効値は次の経路で受ける:
+- 設定ローダーは未実装（`settings/mvp-settings.schema.json` はスキーマ文書のみ。
+  実装は `SettingsStore`: DEV-203 / M11）。当面の実効値は次の経路で受ける:
   - inference-host: CLI 引数 `--typo-mode off|suggest|auto_replace`
     （環境変数 `AZOOKEY_TYPO_MODE` フォールバック）
   - TIP: 環境変数 `AZOOKEY_TYPO_MODE`（`ActivateEx` で取得）

@@ -10,6 +10,12 @@
 既に確定済みのテキストに対して、「再変換」操作を提供する。
 ユーザーが「明日」を「あした」と再変換したい、等。
 
+> **参考（fkunn1326/azooKey-Windows, MIT）**: 周辺テキスト取得には、transitory context
+> （検索ボックス等）の親コンテキストを `GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT` で
+> 辿る手法が有効（先行実装の `surrounded_text` が mozc `tip_surrounding_text.cc` を参照して
+> 実装）。再変換時の周辺文字列取得や、Zenzai への前方文脈供給（`SetContext`）に流用できる。
+> 原典は mozc（C++）であり、実装時は原典に当たること。
+
 ### 1.2 インターフェース実装スケルトン
 
 `tsf-tip/src/ReconversionFunction.h` / `.cpp`（新規）：

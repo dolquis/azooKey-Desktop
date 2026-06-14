@@ -66,6 +66,12 @@ VK → UserAction マッピングは `tsf-tip/src/TextService.cpp::OnKeyDown` �
 テーブルで実装する。テーブルは `core/src/UserActionMap.cpp` に切り出し、
 TIP と将来の Linux ポート両方で再利用できる形にする。
 
+> **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装も独立に
+> **UserAction（物理キー→意味）→ process_key（状態機械で ClientAction 列を生成）→
+> handle_action（副作用実行）** の三段分離を採っており、本節の UserAction →（§1.2 InputState
+> 状態機械）→ ClientAction 設計の妥当性を裏付ける。状態遷移を宣言的な表へ集約する思想は
+> 参照価値が高い（ただし参考実装は `Selecting` 状態が未配線等の未完成があり、鵜呑みにしない）。
+
 ### 1.2 InputState
 
 レガシー `legacy/Core/Sources/Core/InputUtils/InputState.swift` の状態機械を

@@ -289,6 +289,23 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 フォールバックする（同 §4.3-5）。モデル本体（GGUF / ONNX）はいずれも MSIX に同梱せず
 初回起動時 DL とする方針で §1.2 と一貫させる。
 
+### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
+
+**AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
+有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への RX 付与が
+要る。Option A（external-location / `regsvr32` 機械全体登録）や開発用
+`scripts/register.ps1` 経路ではこれが既定で付かないため、
+`icacls <dll> /grant "*S-1-15-2-1:(RX)"` 相当を登録ステップに加える（x64 / x86 両 DLL、
+ビルド時・登録時）。先行実装 fkunn1326/azooKey-Windows はビルド時+インストール時に
+二重付与している。Option B/C（通常 MSIX）はパッケージ側で解決されるため不要。
+設計・実機検証は DEV-204、DEV-101（com4:ComServer ACL 制限）と連動。
+
+**常駐起動（参考）**: Host / launcher のログオン常駐を Run キーでなく **Task Scheduler
+（LogonTrigger + RunLevel=HighestAvailable）+ VBS 非表示起動**で実現し、アンインストール
+時に `schtasks /Delete` する方式がある（UAC プロンプト無しの常駐）。
+`RunLevel=HighestAvailable` は UAC 構成依存である点に注意。MSIX 配布では startup task /
+app execution alias の利用を優先する。
+
 ## 2. EV/OV コード署名（M29）
 
 ### 2.0 署名経路の選定
@@ -527,6 +544,13 @@ $sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 | 詳細 | backendPreference / powerProfile / logLevel / etwProvider |
 | 校正 | （M30 後半）バッチ訂正ビュー |
 | バージョン | バージョン情報 / 更新確認 / ライセンス |
+
+> **参考（fkunn1326/azooKey-Windows, MIT）**: 「詳細」ペインの `backendPreference` 選択は、
+> 各バックエンドのランタイム DLL 存在判定（`cudart64_12.dll`+`cublas64_12.dll` / `vulkan-1.dll`）
+> で**未対応バックエンドを disable + 理由 Tooltip 表示**する能力検出 UX を採れる（先行実装の
+> `check_capability` 相当）。一次フィルタ扱いとし、実 EP 選択は `docs/copilot-pc-backend-spec.md`
+> §3-§4 に委ねる。`backendPreference` は自分側 schema が `cpu/cuda/vulkan/winml/directml/npu`
+> を持ち、参考側（cpu/cuda/vulkan）より広い。詳細は DEV-120 のコメント参照。
 
 ### 3.3 Host との IPC
 

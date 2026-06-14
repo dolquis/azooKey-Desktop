@@ -322,8 +322,8 @@ struct ResolveNewWordResponse { bool ok{false}; };
 }
 ```
 
-設定ローダーは未実装のため、当面の実効値は host CLI 引数 / 環境変数で受ける
-（M35 と同じ運用）:
+設定ローダーは未実装（実装は `SettingsStore`: DEV-203 / M11）のため、当面の実効値は
+host CLI 引数 / 環境変数で受ける（M35 と同じ運用）:
 `--auto-word-mining on|off` / `--auto-word-trending on|off` /
 `--auto-word-mode confirm|auto` / `--auto-word-min-count N` /
 `--auto-word-store <path>` / `--trending-url <url>`

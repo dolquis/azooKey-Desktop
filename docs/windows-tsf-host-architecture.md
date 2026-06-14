@@ -88,6 +88,21 @@
 - 破損時はリセット可能（`LearningStore::Reset` or ファイル削除）。
 - 時間減衰: `exp(-0.15 * days)` で `LearningStore::Score` 内で適用。
 
+## 設定（SettingsStore）
+
+- 設定の正典スキーマは `settings/mvp-settings.schema.json`。現状、これを**ランタイムで
+  読む層が無く**、実効値は host の CLI 引数 / 環境変数で受けている（DEV-203）。
+- `SettingsStore`（`inference-host`、新規）が起動時に
+  `%LOCALAPPDATA%\azooKey\config\settings.json` を読み、未指定キーを schema default に
+  フォールバックして提供する。設定アプリからの反映は `docs/sideload-packaging-spec.md`
+  §3.3 の `UpdateSettings`（settings_json を host が受信し settings.json へ保存）に従う。
+- **参考（fkunn1326/azooKey-Windows, MIT）**: 先行実装は『settings.json をファイル正典とし、
+  `UpdateConfig` は payload 空の再読込トリガのみ（設定アプリが settings.json を直接書く）』
+  という別パターンを採る。自分側 §3.3 は full JSON を IPC で送る方式であり、どちらを採るかは
+  設計判断（ファイル競合・反映タイミングの扱いは DEV-181 のプロセス間ロックと整合させる）。
+- 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
+  「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
+
 ## 実装ルール
 
 ### スレッドモデル

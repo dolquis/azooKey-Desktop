@@ -77,12 +77,18 @@ class TextService final : public ITfTextInputProcessorEx,
   const std::vector<ipc::CandidateField>& shown_candidates_for_test() const {
     return shown_candidates_;
   }
+  bool has_pending_commit_observation_for_test() const {
+    return pending_commit_observation_.has_value();
+  }
+  std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
   void commit_selected_for_test(ITfContext* context) { CommitSelected(context); }
 #endif
 
  private:
+  friend class EditSession;
+
   LONG ref_count_{1};
   ITfThreadMgr* thread_mgr_{nullptr};
   TfClientId client_id_{TF_CLIENTID_NULL};
@@ -94,6 +100,8 @@ class TextService final : public ITfTextInputProcessorEx,
 
   // Last context used for preedit updates; allows Deactivate to end composition.
   ITfContext* active_context_{nullptr};
+  // Context that owns a queued commit after a sync EditSession rejection.
+  ITfContext* commit_context_{nullptr};
 
   // Candidate window (M5).
   CandidateWindow candidate_window_;
@@ -101,6 +109,12 @@ class TextService final : public ITfTextInputProcessorEx,
   // Snapshot of candidates taken when the window was opened (used for commit
   // so that a late QueryCandidates response cannot change what is confirmed).
   std::vector<ipc::CandidateField> shown_candidates_;
+  struct PendingCommitObservation {
+    std::string reading;
+    ipc::CandidateField chosen;
+    std::vector<ipc::CandidateField> shown;
+  };
+  std::optional<PendingCommitObservation> pending_commit_observation_;
 
   // IPC worker thread state.
   ipc::NamedPipeClient ipc_client_;
@@ -151,8 +165,12 @@ class TextService final : public ITfTextInputProcessorEx,
   };
   void ClearCandidateStateForLifecycle();
   void CancelPendingQueriesForLifecycle();
+  void SetCommitContext(ITfContext* context);
+  void ClearCommitContext();
+  void PostPendingCommitObservation();
   void ClearTextStateForLifecycle();
   bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
+  HRESULT RequestCommitEditSession(ITfContext* context);
   bool RequestLifecycleCommitOrEndComposition(ITfContext* context);
   void CleanupForLifecycleLoss(ITfContext* context,
                                bool release_active_context,

@@ -773,6 +773,156 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenLatestPreeditS
   h.service.composition_ = nullptr;
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsUsesSyncEditSessionAndClearsAfterCommit) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+
+  EXPECT_EQ(h.context.last_flags, TF_ES_SYNC | TF_ES_READWRITE);
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(range.collapse_count, 1);
+  EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesBeforeNextInputAndClearsStalePreedit) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.TestPress('K'));
+  EXPECT_TRUE(h.Press('K'));
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryConsumesTriggerKeyAfterSuccess) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_BACK));
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesOnOriginalContextWhenNextKeyUsesDifferentContext) {
+  TextServiceHarness h;
+  NoopContext next_context;
+  FakeRange old_range;
+  FakeRange next_range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+  h.context.selection_range = &old_range;
+  h.context.run_edit_session = true;
+
+  next_context.selection_range = &next_range;
+  next_context.run_edit_session = true;
+
+  BOOL eaten = FALSE;
+  EXPECT_EQ(h.service.OnTestKeyDown(&next_context, 'K', 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&next_context, 'K', 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+
+  EXPECT_EQ(old_range.set_text_count, 1);
+  EXPECT_EQ(old_range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_EQ(next_range.set_text_count, 0);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitConsumesNextInputWhenRetryIsStillRejected) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  EXPECT_TRUE(h.TestPress('A'));
+  EXPECT_TRUE(h.Press('A'));
+
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeCompositionExists) {
   TextServiceHarness h;
   FakeRange range;
@@ -809,10 +959,11 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsQueuedPreeditCommitBeforeCompos
   ASSERT_EQ(h.service.composition_, nullptr);
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
   ASSERT_TRUE(h.service.committing_);
   ASSERT_EQ(h.service.commit_surface_, u8"か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
+  EXPECT_EQ(h.context.last_flags, TF_ES_SYNC | TF_ES_READWRITE);
 
   h.context.selection_range = &range;
   h.context.run_edit_session = true;
@@ -839,7 +990,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsR
   ASSERT_EQ(h.service.composition_, nullptr);
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
   ASSERT_TRUE(h.service.committing_);
   ASSERT_EQ(h.service.commit_surface_, u8"か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
@@ -850,7 +1001,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsR
   EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
 
   EXPECT_EQ(h.service.composition_, nullptr);
-  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_EQ(h.service.commit_surface_, u8"か");
   EXPECT_TRUE(h.service.committing_);
   EXPECT_TRUE(h.service.has_active_context_for_test());
@@ -869,7 +1020,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CompositionTerminationPreservesQueuedCommitUnti
   h.service.composition_ = &composition;
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
   ASSERT_TRUE(h.service.committing_);
   ASSERT_EQ(h.service.commit_surface_, u8"か");
   ASSERT_EQ(h.service.composition_, &composition);
@@ -907,7 +1058,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenGetRan
   h.service.composition_ = &composition;
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
   ASSERT_TRUE(h.service.committing_);
   ASSERT_EQ(h.service.commit_surface_, u8"か");
 
@@ -916,7 +1067,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenGetRan
 
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_EQ(h.service.commit_surface_, u8"か");
   EXPECT_TRUE(h.service.committing_);
 }
@@ -936,7 +1087,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTex
   range.set_text_result = E_FAIL;
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
   ASSERT_TRUE(h.service.committing_);
   ASSERT_EQ(h.service.commit_surface_, u8"か");
 
@@ -946,7 +1097,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTex
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_EQ(h.service.commit_surface_, u8"か");
   EXPECT_TRUE(h.service.committing_);
 }
@@ -968,7 +1119,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsPreservesQueuedCommitWhenInlin
 
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_EQ(h.service.commit_surface_, u8"か");
   EXPECT_TRUE(h.service.committing_);
 }
@@ -1001,9 +1152,53 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSe
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_EQ(h.service.commit_surface_, u8"蚊");
   EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetrySucceeds) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  h.service.commit_selected_for_test(&h.context);
+
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('K'));
+
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, u8"か");
+  EXPECT_EQ(observation->chosen.surface, u8"蚊");
+  ASSERT_EQ(observation->shown.size(), 1u);
+  EXPECT_EQ(observation->shown[0].surface, u8"蚊");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {

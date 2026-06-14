@@ -311,7 +311,7 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - REPO: dolquis/azooKey-Desktop
 - REPO_LABEL: repo:azooKey-Desktop
 - CANONICAL_DOCS: AGENTS.md, README.md, plans/windows-port-roadmap.md, docs/*-spec.md
-- AREA_LABELS: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core
+- AREA_LABELS: area:tsf-tip, area:inference-host, area:ipc, area:learning, area:converter-core, area:settings, area:build, area:docs
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜4）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
 - DELTA_DOCS（この repo 固有で別途維持）: GitHub↔Linear Mapping, Decision Log, Agent Prompt Cards

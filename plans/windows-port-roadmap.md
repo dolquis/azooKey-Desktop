@@ -1480,12 +1480,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `Recovering` / `SafeMode`）
   - 各処理の timeout: Ping 500ms / QueryCandidates fast 150ms /
     QueryLiveConversion 80ms / Heavy 800ms / Model load 30s
+  - Host process / pipe 接続が生きていても有効応答が返らない
+    connected-but-silent 状態を timeout として扱い、pipe 切断を待たず
+    `DegradedSimple` へ遷移する
   - timeout 時の Cancel + staleness check による古い結果破棄
+  - Cancel / deadline を Host Dispatcher から converter / reranker /
+    backend 推論処理まで伝播し、応答抑止だけに依存しない
   - 連続クラッシュ N 回で `SafeMode` 突入、次回起動時にユーザー通知
   - UI: `⚠️ Zenzai が応答しないため、簡易変換で継続しています [詳細]
     [再試行]` を候補ウィンドウ下部の控えめインジケータで表示
 - **受け入れ条件**:
   - Host を手動 kill しても入力中のアプリが固まらない
+  - Host が接続済みのまま `QueryCandidates` に応答しない場合でも、
+    `QueryCandidates fast` timeout 後に簡易変換へ劣化し、次の入力を処理できる
   - Host 再起動後に自動復帰する
   - Zenzai ロード失敗時に fallback 状態が UI に明示される
   - 連続クラッシュ時は SafeMode に入り、次回起動時に通知する

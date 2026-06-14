@@ -579,6 +579,10 @@ Ready ─→ Degraded （ハードタイムアウト / 連続失敗時）
   ヘルス監視の無応答）、TIP は `Degraded` 状態へ移行し、`SimpleConverter`
   相当のローカルフォールバックで入力継続を保証する。Host 復帰後は
   `Ready` へ戻す。
+- 「Host から一定時間応答がない場合」には、pipe 接続自体は維持されているが
+  `QueryCandidates` / `Health` の有効応答が deadline 内に返らない
+  connected-but-silent 状態を含める。TIP は pipe 切断を待たず、処理種別ごとの
+  deadline で劣化判定する。
 - ヘルス監視は既存 `Health` メッセージを流用し、定期的に往復確認する。
 
 ### 8.4 本マイルストーンの範囲
@@ -648,8 +652,14 @@ M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
 | ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 
+timeout は request 送信または backend 処理開始からの wall-clock deadline として扱う。
+connected-but-silent Host でも、pipe 切断や blocking read の解除を待たない。
+
 timeout 時は Cancel を送信し、古い結果は staleness check（M10）で
 破棄する。`request_id` と `trace_id`（M51）で staleness を判定する。
+Cancel / deadline は Dispatcher の応答抑止だけでなく、converter / reranker /
+backend 推論処理まで伝播させる。重い処理が deadline 後も継続し、IME 側の
+fallback や次リクエスト処理を妨げる設計は不可とする。
 
 #### 8.5.3 SafeMode 突入条件
 

@@ -1294,18 +1294,25 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   環境変数 / settings.json（`SettingsStore`）で実効値を受ける。
 - **変更対象**: `core/include/azookey/core/InputState.h` / 状態機械（開き・閉じカッコ
   codepoint の分類と新 ClientAction `insertBracketPair` / `skipOverClosing` /
-  `deleteBracketPair`。新 `UserAction` enum 値は追加しない）、
+  `deleteBracketPair`、純粋 core 用 `EditContextHint`〔隣接文字を TIP から渡す。§3.1.1〕。
+  新 `UserAction` enum 値は追加しない）、
   `core/src/UserActionMap.cpp` / `tsf-tip/src/TextService.cpp::OnKeyDown` 内テーブル
   （ブラケット/記号を生む VK〔`VK_OEM_4`/`VK_OEM_6` 等・JIS の `「」` キー〕を
   `Input`/`InputAlnum` へ写し、入力モード/`ToUnicode` から codepoint を解決して載せる
   VK→UserAction 表の拡張。新 enum 値なし・純粋追加。§3.1）、
   `core/src/BracketTable.cpp`（新規・組み込み対応表）、
   `tsf-tip/src/TextService.cpp`（`OnTestKeyDown` / `OnKeyDown` のカッコ・Backspace 分岐、
-  隣接文字の同期読取、`ApplyClientAction` のカーソル内側配置・スキップ・空ペア削除）、
+  隣接文字の同期読取→`EditContextHint` 構築→純粋 core 呼び出し、`ApplyClientAction` の
+  カーソル内側配置・スキップ・空ペア削除、**TIP ローカル設定読み取り**〔`settings.json` を
+  in-proc で読む + `ReadDirectoryChangesW` ホットリロード。Host 非依存。§6.1〕）、
   `settings/mvp-settings.schema.json`（設定キー 5 種）。
-- **実装範囲**: `docs/bracket-pairing-spec.md` §3〜§5・§6・§8。
+- **実装範囲**: `docs/bracket-pairing-spec.md` §3〜§6・§8。
   - VK→UserAction 表の拡張: ブラケット/記号 VK を `Input`/`InputAlnum` へ写し codepoint を
     入力モード/`ToUnicode` から解決（M13 §1.4 は A〜Z のみのため OEM キー追加が必須。§3.1）
+  - 純粋 core の維持: 隣接文字は TIP が §5.3 で読んで `EditContextHint` に詰め、
+    `HandleEvent(event, hint)` へ渡す。core は文書を直接見ず hint から分岐（テスト可能。§3.1.1）
+  - TIP ローカル設定読み取り: `bracketPairing` ほか M61 設定を TIP が `settings.json` から
+    in-proc で読み、Host 非依存で `OnKeyDown` 判定に使う（host 側 SettingsStore 経由にしない。§6.1）
   - 組み込みカッコ対応表（全角 + 半角の非対称ペア。対称デリミタ・`<>` は既定除外）
   - immediate トリガ（既定）の対挿入とカーソル内側配置（§5.2）。`composition` トリガは
     設定で選択可能にする（§4.0.1）
@@ -1328,7 +1335,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 読取 EditSession 拒否・選択取得失敗時にリテラル挿入 / 通常 Backspace へフォールバックし、
     入力を失わない
   - `bracketPairing=false` でカッコ・Backspace・確定・候補・学習の挙動が一切変わらない
-  - IPC メッセージを一切追加せず、Host 未接続でも本機能が動作する
+  - IPC メッセージを一切追加せず、Host 未接続でも本機能が動作する（TIP が `settings.json` を
+    ローカル読みして `bracketPairing` を判定。host 側 SettingsStore 非依存。§6.1）
+  - core `HandleEvent` が純粋関数のまま `EditContextHint` 注入で全分岐をテストできる（§3.1.1）
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
 - **参照仕様**: `docs/bracket-pairing-spec.md`
 

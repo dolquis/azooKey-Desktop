@@ -105,6 +105,34 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
 開き・閉じ両用の対称デリミタ（`"` `'` `` ` `` 等、`open == close`）は特別扱いする
 （§4.1.1。既定 OFF）。
 
+#### 3.1.1 隣接文字ヒント（core purity の維持）
+
+`docs/legacy-parity-spec.md` は `InputState::HandleEvent(UserActionEvent)` を**純粋な core
+関数**（同一入力→同一出力、TSF/エディタバッファに依存しない・テスト可能）と定める。一方
+スキップ（§4.2）・空ペア削除（§4.3）の判定は「カーソル隣接文字」というエディタバッファの
+事実を要する。両立のため、**隣接文字は TIP が読んで core へ明示的に渡す**。core は文書を
+直接見ない。
+
+- core 入力を拡張: `HandleEvent(UserActionEvent, const EditContextHint&)`（純粋関数のまま。
+  hint も入力の一部）。
+  ```cpp
+  // core/include/azookey/core/InputState.h（追加。純粋・TSF 非依存）
+  struct EditContextHint {
+    std::optional<char32_t> char_before;  // キャレット直前 1 文字（無ければ nullopt）
+    std::optional<char32_t> char_after;   // キャレット直後 1 文字
+    bool selection_collapsed = true;      // 範囲選択でないか
+  };
+  ```
+- **順序**: TIP は `OnKeyDown` で、開きカッコ / 閉じカッコ / Backspace（`bracketPairing` ON ＆
+  有効モード）について、まず §5.3 の同期読取で `char_before` / `char_after` /
+  `selection_collapsed` を埋め、**その hint を付けて純粋 core `HandleEvent` を呼ぶ**。core が
+  返した ClientAction 列を TIP が適用する。読取が拒否されたら hint は空（`nullopt`）で渡し、
+  core は安全側（リテラル挿入 / 通常 Backspace）の ClientAction を返す（§4.8）。
+- これにより core 遷移テスト（`input_state_test.cpp`）は hint を注入して
+  `skipOverClosing` / リテラル挿入 / `deleteBracketPair` / 通常 Backspace の分岐を**文書なしで
+  網羅**できる。§3.3 の遷移表の「カーソル直後 / 左右」は、実装上は**この hint フィールド**を
+  指す（文書アクセスではない）。
+
 ### 3.2 ClientAction（新規 3 種）
 
 `docs/legacy-parity-spec.md` §1.3 の ClientAction に以下を追加する。
@@ -128,9 +156,13 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 | Idle | Input(開きカッコ) | Idle | `insertBracketPair`（commit OC + カーソル内側）。composition は残らない |
 | Composing/Previewing | Input(開きカッコ) | Idle | **現在の composition を先に確定**（候補窓表示中は `CommitSelected`、それ以外は `CommitPreeditAsIs` / ローマ字 flush）→ その後 `insertBracketPair` |
 | Selecting | Input(開きカッコ) | Idle | `CommitSelected` → `insertBracketPair` |
-| Idle | Input(閉じカッコ) | Idle | カーソル直後が同じ閉じカッコなら `skipOverClosing`、無ければリテラル 1 文字挿入（§4.2） |
-| Idle | Backspace | Idle | カーソル左右が空ペアなら `deleteBracketPair`、無ければ通常 Backspace（§4.3） |
+| Idle | Input(閉じカッコ) | Idle | `hint.char_after` が同じ閉じカッコなら `skipOverClosing`、無ければリテラル 1 文字挿入（§4.2） |
+| Idle | Backspace | Idle | `hint.selection_collapsed` かつ `hint.char_before`/`char_after` が空ペアなら `deleteBracketPair`、無ければ通常 Backspace（§4.3） |
 | UnicodeInput / ReplaceSuggestion | Input(カッコ) | （変更なし） | これらの特殊モード中はペアリングしない（§4.6） |
+
+> 上表の「`hint.*`」は §3.1.1 の `EditContextHint`（TIP が §5.3 で読んで渡す隣接文字）を指す。
+> core の `HandleEvent` は文書を直接読まず、hint のみから決定するため純粋関数を保つ。hint が
+> 空（読取失敗）なら安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
 
 `composition` トリガ（`bracketPairingTrigger == "composition"`）の遷移は §4.0.1。
 
@@ -404,10 +436,13 @@ EditSession**（`TF_ES_SYNC | TF_ES_READ`。既存 lifecycle commit が `TF_ES_S
 - 右 1 文字: 選択 range を clone → `Collapse(TF_ANCHOR_END)` → `ShiftEnd(ec, +1, &shifted)` →
   `GetText` で 1 code unit 取得。
 - 左 1 文字: 同様に `Collapse(TF_ANCHOR_START)` → `ShiftStart(ec, -1, &shifted)` → `GetText`。
+- 範囲選択か否か（`selection_collapsed`）も同セッションで確認する。
 
-読み取り結果で §4.2 / §4.3 の分岐を決め、続く読み書き EditSession（または同一 RW
-セッション）で `skipOverClosing` / `deleteBracketPair` / リテラル挿入を適用する。同期
-セッションが拒否されたらフォールバック（§4.8）。
+読み取り結果を **§3.1.1 の `EditContextHint`** に詰め、**純粋 core の `HandleEvent(event, hint)`**
+を呼ぶ。分岐（`skipOverClosing` / `deleteBracketPair` / リテラル挿入 / 通常 Backspace）の決定は
+core が hint から行い（文書を直接見ない）、TIP は返った ClientAction を続く読み書き
+EditSession（または同一 RW セッション）で適用する。同期セッションが拒否されたら hint を空で
+渡し、core は安全側へフォールバック（§4.8）。
 
 > **OnTestKeyDown の eaten 判定**: `bracketPairing == true` かつ現モードで有効なとき、
 > 開きカッコ / （スキップ対象の）閉じカッコ / 空ペア内 Backspace を `*eaten = TRUE` に
@@ -444,8 +479,29 @@ EditSession**（`TF_ES_SYNC | TF_ES_READ`。既存 lifecycle commit が `TF_ES_S
 | `bracketPairingApps` | array(string) | `[]` | M61-B | deny/allow 対象の前面プロセス実行ファイル名（例 `"Code.exe"`）。`bracketPairingAppPolicy` に従い解釈。大文字小文字を区別しない（§4.5.0）。M48 プロファイルがあればそちらが優先 |
 | `bracketPairsPath` | string | `%LOCALAPPDATA%\azooKey\bracket-pairs.tsv` | M61-B | カッコ対応表 TSV のパス（カッコ対専用・アプリ名は含まない。§4.5.1）。無ければ組み込み既定のみ。ホットリロード対応 |
 
-設定 UI（M30）完成までは host CLI / 環境変数 / settings.json（`DEV-203` の SettingsStore）
-経由で実効値を受ける（M58〜M60 と同方針）。
+### 6.1 設定の供給経路（TIP ローカル読み取り・Host 非依存）
+
+本機能の判定は **in-proc TIP が `OnTestKeyDown` / `OnKeyDown` で同期的に行い**、§7 のとおり
+**Host 非依存・IPC なし**で動く必要がある。`docs/windows-tsf-host-architecture.md` の
+`SettingsStore`（および `DEV-203`）は `inference-host` 側の設定ローダであり、**TIP が M61 設定を
+取得する経路にはならない**（Host 切断時は読めない）。したがって M61 設定は次のように供給する:
+
+- **TIP がローカルに設定ファイルを直接読む。** 正典の `%LOCALAPPDATA%\azooKey\settings.json`
+  （schema = `settings/mvp-settings.schema.json`）を **TIP プロセス内で読み取る**（IPC を介さない）。
+  読み取りは TIP 有効化時（`ActivateEx`）に 1 回、以後は M17 の `ReadDirectoryChangesW` 監視
+  基盤を再利用してホットリロードする（変更検出で新規入力から実効値を差し替え。進行中の
+  composition は触らない）。
+- ファイルが無い / パース不能なら **schema 既定値**（`bracketPairing=false` 等）にフォールバック
+  する（後方互換・既定 OFF）。これにより Host 未起動・切断時でも本機能の ON/OFF を確定できる。
+- host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
+  TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定 UI / 既存経路）。
+- 設定 UI（M30）完成までは、この settings.json を手編集 / 環境変数で補う（host CLI 経由には
+  しない。M58〜M60 は host 側機能のため CLI 経由だったが、本機能は TIP ローカルで完結する点が
+  異なる）。
+
+> TIP 側ローカル設定読み取りは本機能だけでなく、TIP が単独で挙動を決める他機能（将来）にも
+> 効く共通基盤になりうる。M61-A 実装時に最小の TIP-side settings reader を導入し、`bracketPairing`
+> ほか M61 キーをそこから読む。
 
 ## 7. IPC（追加なし）
 
@@ -468,20 +524,26 @@ EditSession**（`TF_ES_SYNC | TF_ES_READ`。既存 lifecycle commit が `TF_ES_S
 - **カッコ対応表 / 分類** (`core/tests/bracket_pairing_test.cpp` 新規 or
   `input_state_test.cpp` 拡張): §4.1 の各 open→(open,close) 写像、対称デリミタの
   既定 OFF、`<`/`>` の既定除外、BMP code unit 長。
-- **InputState 遷移** (`core/tests/input_state_test.cpp`):
+- **InputState 遷移**（`core/tests/input_state_test.cpp`。純粋 core なので `EditContextHint` を
+  注入して文書なしで網羅。§3.1.1）:
   - Idle + 開きカッコ → `insertBracketPair`（immediate、カーソル内側）。
   - Composing/Selecting + 開きカッコ → 確定（CommitSelected / CommitPreeditAsIs）後に挿入。
-  - 閉じカッコ：右隣が同一閉じカッコ → `skipOverClosing` / そうでなければリテラル挿入。
-  - Backspace：左右が空ペア → `deleteBracketPair` / そうでなければ通常 Backspace、範囲
-    選択中は通常削除。
+  - 閉じカッコ：`hint.char_after` が同一閉じカッコ → `skipOverClosing` / そうでなければリテラル挿入。
+  - Backspace：`hint` の左右が空ペア（かつ `selection_collapsed`）→ `deleteBracketPair` /
+    そうでなければ通常 Backspace、範囲選択中（`selection_collapsed == false`）は通常削除。
+  - hint が空（読取失敗相当）→ 安全側（リテラル挿入 / 通常 Backspace）になること。
   - `bracketPairing == false` で全カッコ・Backspace が従来挙動（回帰：挙動不変）。
   - `bracketPairingInAlnumMode == false` の英数モードでリテラル挿入になること。
   - `composition` トリガで preedit に OC が出て確定でカーソル内側、Esc で破棄。
 - **TSF レベル** (`tsf-tip/tests/`、既存 `onkeydown_preedit_test.cpp` 流儀のモック context):
   - immediate 挿入後の `SetSelection` が `O` と `C` の境界に来ること（§5.2）。
-  - 隣接 1 文字読取（右・左）でスキップ / 空ペア削除が分岐すること（§5.3）。
-  - 同期読取セッション拒否時にリテラル挿入 / 通常 Backspace へフォールバックすること（§4.8）。
+  - 隣接 1 文字読取（右・左）が `EditContextHint` を正しく構築すること（§5.3・§3.1.1）。
+  - 同期読取セッション拒否時に空 hint で core を呼びリテラル挿入 / 通常 Backspace へ
+    フォールバックすること（§4.8）。
   - `OnTestKeyDown` がカッコ・該当 Backspace を eaten 宣言し、アプリへ素通ししないこと（§5.3）。
+  - **TIP ローカル設定読み取り**: `settings.json` から `bracketPairing` を読み、Host 未接続でも
+    ON/OFF が反映されること、ファイル変更でホットリロードされること、ファイル不在で
+    既定 OFF になること（§6.1）。
 - **TSV 外部化** (`core/tests/`、M61-B): TSV パース・`open` キー上書き・`off` 無効化・
   不正行スキップ・対称デリミタ行。
 - **アプリ互換** (状態機械 or TIP、M61-B): denylist 掲載アプリで抑制、allowlist ポリシーの

@@ -103,7 +103,8 @@ gh pr create \
 
 - `repo:*` … リポジトリ識別（例 `repo:azooKey-Desktop`）。
 - `area:*` … 技術領域（例 `area:tsf-tip` `area:ipc` `area:learning` `area:inference-host`
-  `area:converter-core`）。
+  `area:converter-core` `area:settings`（設定アプリ / schema）`area:build`（CMake / CTest /
+  CI / コード署名 / MSIX）`area:docs`（ドキュメント・ガバナンス、repo 横断共有））。
 - `agent:*` … 担当エージェント（`agent:claude-design` `agent:claude-review`
   `agent:codex-impl` `agent:codex-pr-review`）。ただし `gate:human-required` を付与した
   人間専任タスク（実機検証など）は AI 担当が存在しないため `agent:*` を免除する。

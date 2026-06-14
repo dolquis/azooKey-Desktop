@@ -92,7 +92,7 @@
 
 - 設定の正典スキーマは `settings/mvp-settings.schema.json`。現状、これを**ランタイムで
   読む層が無く**、実効値は host の CLI 引数 / 環境変数で受けている（DEV-203）。
-- `SettingsStore`（`inference-host`、新規）が起動時に
+- 実装予定の `SettingsStore`（`inference-host`、新規）は、起動時に
   `%LOCALAPPDATA%\azooKey\config\settings.json` を読み、未指定キーを schema default に
   フォールバックして提供する。設定アプリからの反映は `docs/sideload-packaging-spec.md`
   §3.3 の `UpdateSettings`（settings_json を host が受信し settings.json へ保存）に従う。

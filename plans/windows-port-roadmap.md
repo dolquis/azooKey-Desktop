@@ -1334,19 +1334,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 #### M61-B: 外部化・アプリ互換・拡張
 
-- **目的**: カッコ対応表・denylist の TSV 外部化、自動ペアするエディタでの二重化回避
-  （per-app 制御）、対称デリミタ・選択囲みなどの拡張挙動を追加する。
+- **目的**: カッコ対応表の TSV 外部化（カッコ対専用）、自動ペアするエディタでの二重化回避
+  （per-app 制御。アプリリストは `bracketPairingApps` / M48 プロファイル）、対称デリミタ・
+  選択囲みなどの拡張挙動を追加する。
 - **前提**: M61-A 完了。per-app 制御は M48（アプリ別入力プロファイル）に統合する
   （`docs/app-profile-spec.md`）。M48 未完了時は本機能専用の最小リスト設定で先行可能。
 - **変更対象**: `core/src/BracketTable.cpp`（TSV パース / マージ / ホットリロード。M17
   基盤再利用）、`tsf-tip/src/TextService.cpp`（前面アプリ判定 = `promptPrefixByApp` 基盤
   再利用・選択囲み・対称デリミタの語境界判定）、M48 プロファイル連携、
   `settings/mvp-settings.schema.json`（設定キー 4 種）。
-- **実装範囲**: `docs/bracket-pairing-spec.md` §4.1.1・§4.5・§4.5.1・§4.9。
-  - カッコ対応表・denylist の TSV 外部化（`bracket-pairs.tsv`: `open`/`close`/`flags`。
-    組み込み既定を `open` キーで上書き・追加、`off` で無効化。M17 ホットリロード基盤再利用）
+- **実装範囲**: `docs/bracket-pairing-spec.md` §4.1.1・§4.5・§4.5.0・§4.5.1・§4.9。
+  - カッコ対応表（**カッコ対専用**）の TSV 外部化（`bracket-pairs.tsv`: `open`/`close`/`flags`。
+    組み込み既定を `open` キーで上書き・追加、`off` で無効化。M17 ホットリロード基盤再利用。
+    **アプリ名〔プロセス名〕はこの TSV に書かない**。spec §4.5.1）
   - per-app 有効範囲（`bracketPairingAppPolicy` = denylist（既定）/ allowlist。アプリリストは
-    プロセス名配列 `bracketPairingApps`（カッコ対 TSV とは別スキーマ）+ 組み込み既定 denylist
+    プロセス名配列 `bracketPairingApps`（**カッコ対 TSV とは別スキーマ**）+ 組み込み既定 denylist
     シード〔VS Code / Visual Studio / JetBrains 系等〕。M48 プロファイルがあれば優先。spec §4.5.0）
   - 対称デリミタ（`"` `'` `` ` ``）の語境界判定付きペアリング（`bracketSymmetricQuotePairing`、既定 OFF）
   - 範囲選択中の開きカッコで選択を囲む（`bracketWrapSelection`、既定 OFF）

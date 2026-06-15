@@ -73,6 +73,7 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
 
 #ifdef AZOOKEY_TSF_TESTING
 std::atomic<int> g_com_boundary_allocation_failures{0};
+std::atomic<int> g_pending_commit_observation_failures{0};
 #endif
 
 template <typename T, typename... Args>
@@ -100,6 +101,22 @@ bool ConsumeComBoundaryAllocationFailureForTest() {
   int remaining = g_com_boundary_allocation_failures.load();
   while (remaining > 0) {
     if (g_com_boundary_allocation_failures.compare_exchange_weak(remaining, remaining - 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void FailNextPendingCommitObservationForTest() { g_pending_commit_observation_failures.store(1); }
+
+void ClearPendingCommitObservationFailureForTest() {
+  g_pending_commit_observation_failures.store(0);
+}
+
+bool ConsumePendingCommitObservationFailureForTest() {
+  int remaining = g_pending_commit_observation_failures.load();
+  while (remaining > 0) {
+    if (g_pending_commit_observation_failures.compare_exchange_weak(remaining, remaining - 1)) {
       return true;
     }
   }
@@ -771,7 +788,18 @@ void TextService::PostPendingCommitObservation() {
   if (!pending_commit_observation_) return;
   auto pending = std::move(*pending_commit_observation_);
   pending_commit_observation_.reset();
-  PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+  try {
+#ifdef AZOOKEY_TSF_TESTING
+    if (testing::ConsumePendingCommitObservationFailureForTest()) {
+      throw std::bad_alloc();
+    }
+#endif
+    PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+  } catch (...) {
+    // The document commit has already succeeded by the time pending commit
+    // observations are posted. Drop best-effort learning telemetry rather than
+    // reporting commit failure and making the same text retryable.
+  }
 }
 
 void TextService::ClearTextStateForLifecycle() {

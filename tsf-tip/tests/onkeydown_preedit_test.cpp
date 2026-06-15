@@ -1250,6 +1250,48 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   EXPECT_EQ(observation->shown[0].surface, u8"蚊");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, SelectedCommitObservationFailureDoesNotRetryCommittedText) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  azookey::tsf::testing::FailNextPendingCommitObservationForTest();
+  h.service.commit_selected_for_test(&h.context);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x868a'));
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  EXPECT_FALSE(h.Press(VK_RETURN));
+  EXPECT_EQ(range.set_text_count, 1);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
   TextServiceHarness h;
 

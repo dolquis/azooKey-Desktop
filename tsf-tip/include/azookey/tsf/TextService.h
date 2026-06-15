@@ -24,6 +24,9 @@ namespace testing {
 void FailNextComBoundaryAllocationForTest();
 void ClearComBoundaryAllocationFailureForTest();
 bool ConsumeComBoundaryAllocationFailureForTest();
+void FailNextPendingCommitObservationForTest();
+void ClearPendingCommitObservationFailureForTest();
+bool ConsumePendingCommitObservationFailureForTest();
 }  // namespace testing
 #endif
 

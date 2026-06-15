@@ -368,6 +368,17 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     }
 
     const bool cand_visible = candidate_window_.IsVisible();
+    auto request_preedit_update_or_restore_on_oom =
+        [&](const std::string& previous_preedit,
+            const core::RomajiKanaConverter& previous_romaji) -> HRESULT {
+      const HRESULT update_hr = RequestPreeditUpdate(context);
+      if (update_hr == E_OUTOFMEMORY) {
+        preedit_kana_ = previous_preedit;
+        romaji_ = previous_romaji;
+        return update_hr;
+      }
+      return S_OK;
+    };
 
     if (wParam >= 'A' && wParam <= 'Z') {
       // Hide candidate window when the user resumes typing.
@@ -383,8 +394,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidates_.clear();
         candidate_window_show_pending_ = false;
       }
+      const std::string previous_preedit = preedit_kana_;
+      const auto previous_romaji = romaji_;
       preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
-      RequestPreeditUpdate(context);
+      const HRESULT update_hr =
+          request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+      if (FAILED(update_hr)) return update_hr;
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;
 
@@ -402,8 +417,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidates_.clear();
         candidate_window_show_pending_ = false;
       }
+      const std::string previous_preedit = preedit_kana_;
+      const auto previous_romaji = romaji_;
       preedit_kana_ += romaji_.Feed('-');
-      RequestPreeditUpdate(context);
+      const HRESULT update_hr =
+          request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+      if (FAILED(update_hr)) return update_hr;
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;
 
@@ -422,21 +441,29 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidate_window_show_pending_ = false;
         }
         auto& s = preedit_kana_;
+        const std::string previous_preedit = preedit_kana_;
+        const auto previous_romaji = romaji_;
         size_t i = s.size();
         while (i > 0 && (s[i - 1] & 0xC0) == 0x80) --i;
         if (i > 0) --i;
         s.erase(i);
-        RequestPreeditUpdate(context);
+        const HRESULT update_hr =
+            request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+        if (FAILED(update_hr)) return update_hr;
         if (!preedit_kana_.empty()) PostQueryCandidates(preedit_kana_);
         *eaten = TRUE;
       }
 
     } else if (wParam == VK_SPACE) {
       // Flush any pending romaji so the reading is complete.
+      const std::string previous_preedit = preedit_kana_;
+      const auto previous_romaji = romaji_;
       const std::string flushed = romaji_.Flush();
       if (!flushed.empty()) {
         preedit_kana_ += flushed;
-        RequestPreeditUpdate(context);
+        const HRESULT update_hr =
+            request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+        if (FAILED(update_hr)) return update_hr;
         // Reading changed due to romaji flush; old candidates are now stale.
         // Clear them and query for the updated reading so the candidate window
         // (opened below) reflects the complete input, not the pre-flush state.
@@ -523,6 +550,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         selected_candidate_idx_ = 0;
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
+        const std::string previous_preedit = preedit_kana_;
+        const auto previous_romaji = romaji_;
         preedit_kana_.clear();
         romaji_.Reset();
         {
@@ -530,7 +559,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidates_.clear();
           candidate_window_show_pending_ = false;
         }
-        RequestPreeditUpdate(context);
+        const HRESULT update_hr =
+            request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+        if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
       }
     }

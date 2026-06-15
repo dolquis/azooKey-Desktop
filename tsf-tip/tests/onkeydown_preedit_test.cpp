@@ -488,6 +488,60 @@ TEST(TsfTipOnKeyDownPreeditTest, DoEditSessionAllocationFailureReturnsOutOfMemor
   session->Release();
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackTypedKey) {
+  TextServiceHarness h;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'K', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.context.request_count, 0);
+
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(eaten, TRUE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackBackspaceAndEscape) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+
+  eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_ESCAPE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackSpaceFlush) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(eaten, TRUE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
 

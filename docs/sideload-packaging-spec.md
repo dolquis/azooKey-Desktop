@@ -547,11 +547,13 @@ v1.0 の設定アプリ（M11 最小 + M30 フル）、および同一 UI スタ
 
 > **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
 > - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
-> - **unpackaged（MSIX なし）配布は Windows App SDK 1.0 以降サポート済み**
->   （Windows 10 1909+ / x86・x64・arm64）。旧記述「WinUI 3 デスクトップは MSIX 必須・
->   unpackaged 不可」は**誤り**。ただし本プロジェクトは TIP の CLSID/Profile 登録と
->   MSIX サイドロード配布の都合で **packaged（MSIX）を採用**するため、結論は不変。
-> - 現行安定版は **Windows App SDK 1.8**（§3.1 の下限は目安。実装時に最新安定版へ追従）。
+> - WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**。
+> - **unpackaged（MSIX なし）配布もサポートされる**（Windows App SDK 1.0 以降）。旧記述
+>   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。ただし本プロジェクトは
+>   TIP の CLSID/Profile 登録と MSIX サイドロード配布の都合で **packaged（MSIX）を採用**
+>   するため、結論は不変（packaged の最小 OS は 1809+）。
+> - 現行安定版は **Windows App SDK 2.2.0（2026-06-09）**（バージョン系列は 2.x）。版は
+>   固定せず実装時の最新安定版に追従する（§3.1）。
 
 #### フレームワーク比較
 
@@ -582,7 +584,7 @@ v1.0 の設定アプリ（M11 最小 + M30 フル）、および同一 UI スタ
 ### 3.1 構成
 
 - 言語: C++/WinRT（TIP / Host と統一）
-- フレームワーク: WinUI 3（Windows App SDK 1.8 系。実装時の最新安定版に追従）
+- フレームワーク: WinUI 3（Windows App SDK 2.x。2026-06 時点の最新安定版は 2.2.0。版は固定せず実装時の最新安定版に追従）
 - 配布: MSIX 内同梱（別 EXE `azookey_settings.exe`）
 
 ### 3.2 ナビゲーション
@@ -646,20 +648,22 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   `CoCreateInstance` するため。語句登録の `ITfFnConfigureRegisterWord` が
   `ITfFunctionProvider::GetFunction` 経由で取得されるのと異なり、`ITfFnConfigure` は
   **CLSID 直 `CoCreateInstance`** で取得される点に注意。
-- **動作**: `Show` は**任意のホストアプリ（メモ帳・ブラウザ等）のスレッド上で同期的に呼ばれ、
-  ダイアログが閉じるまで return してはならない**（Microsoft Learn: `ITfFnConfigure::Show`
-  Remarks「This method should not return until the user closes the dialog box」）。
-  そのため `Show` 内で WinUI 3 を直接起動して設定 UI のランタイムをホストアプリ
-  プロセスへ load することは避け、**別プロセスの `azookey_settings.exe` を
-  `CreateProcess` で起動し、`WaitForSingleObject` でプロセス終了まで待ってから `S_OK` を
-  返す**。これにより設定 UI の WinUI 3 / Windows App SDK ランタイムをホストアプリへ
-  持ち込まず、TIP DLL の常駐負荷とクラッシュ面を最小化する。
+- **呼び出し元**: `Show` は **Windows の言語/IME 設定（Text Services コントロールパネル
+  相当）が TIP の CLSID を `CoCreateInstance` したプロセス上**で同期的に呼ばれ、
+  `hwndParent` はその設定 UI のウィンドウである（入力先のメモ帳・ブラウザ等ではない）。
+- **方式（非同期起動）**: 設定 UI は WinUI 3 の独立した**長命**プロセス
+  （`azookey_settings.exe`）であり、`Show` を設定アプリ終了までブロックすると呼び出し元
+  （言語/IME 設定 UI）をその間フリーズさせる。よって **`Show` は設定アプリを起動
+  （既存インスタンスがあれば前面化、single-instance）したうえで `S_OK` を即時返す**。
+  `ITfFnConfigure::Show` の Remarks「ダイアログを閉じるまで return しない」は短命なモーダル
+  プロパティ シートを想定した記述であり、別プロセスの設定アプリを採る本実装では非同期起動と
+  する（設定値の反映はプロパティ シートの OK/Apply ではなく §3.3 の `UpdateSettings` IPC で
+  行う）。WinUI 3 / Windows App SDK ランタイムを設定 UI ホストプロセスへ load しない利点も保つ。
 - **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
   `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。
-- **関連**: §1.1 の TIP CLSID / Profile 登録、`ITfInputProcessorProfiles::Register` /
-  `AddLanguageProfile`。`hwndParent` は設定アプリのオーナーウィンドウとして渡す
-  （`azookey_settings.exe` 側で `SetWindowLongPtr(GWLP_HWNDPARENT)` 相当の設定が必要なら
-  引数で受ける）。
+- **正典実装**: 具体コード（`ConfigureFunction`・`ShellExecuteExW` による起動・カテゴリ登録
+  `GUID_TFCAT_TIP_PROPERTY_UI_TEXT_SERVICE`・インストールパス解決）は
+  `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。
 
 ## 4. WiX / Inno Setup インストーラ（M31）
 

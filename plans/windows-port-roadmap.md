@@ -447,7 +447,8 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
    変更。配布は MSIX（ユーザースコープ自動登録、アンインストールでの登録解除）。
    **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
    避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。`ITfFnConfigure`
-   からの起動は別プロセス EXE を起動して待つ方式（§3.5）。
+   からの起動は別プロセス EXE を非同期起動する方式（§3.5、正典は
+   `docs/tsf-deep-integration-spec.md` §6）。
 4. **M12 CI 完成と署名配布** — `.github/workflows/windows.yml` の build/test に
    加え、コード署名ステップ、タグ push 時の MSIX 自動 Release 公開、submodule
    配信ポリシー確定を行う。

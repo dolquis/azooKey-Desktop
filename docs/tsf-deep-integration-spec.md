@@ -629,6 +629,17 @@ public:
 };
 ```
 
+> **`Show` を非同期にする理由（`docs/sideload-packaging-spec.md` §3.5 と整合）**:
+> `ITfFnConfigure::Show` の Remarks は「ダイアログを閉じるまで return しない」（短命な
+> モーダル プロパティ シートを想定）だが、本 IME の設定 UI は WinUI 3 の独立した**長命**
+> プロセスである。`Show` を `azookey_settings.exe` 終了までブロックすると、呼び出し元
+> （言語/IME 設定 UI）をその間フリーズさせるため、**起動後ただちに `S_OK` を返す
+> 非同期方式**を採る（`WaitForSingleObject` で終了待ちしない）。設定値の反映はプロパティ
+> シートの OK/Apply ではなく `UpdateSettings` IPC（§3）で行う。多重起動を避けるため設定
+> アプリは single-instance とし、既存インスタンスがあれば前面化する
+> （`SEE_MASK_NOCLOSEPROCESS` で得たプロセスハンドルは前面化・監視用途に使い、
+> 終了待ちには使わない）。
+
 ### 6.3 Category 登録
 
 ```cpp

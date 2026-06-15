@@ -7,6 +7,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -112,6 +113,17 @@ class BlockingConverter final : public azookey::core::IConverter {
   std::condition_variable cv_;
   bool entered_{false};
   bool released_{false};
+};
+
+class ThrowingLearningStore final : public azookey::learning::LearningStore {
+ public:
+  ThrowingLearningStore()
+      : azookey::learning::LearningStore(
+            TempPath("azookey_host_engine_reranker_throw.tsv")) {}
+
+  double Score(const std::string&, const std::string&, uint64_t) const override {
+    throw std::runtime_error("score failure");
+  }
 };
 }  // namespace
 
@@ -321,6 +333,28 @@ TEST(InferenceEngineTest, LegacyOverloadStillWorks) {
   auto cands = engine->QueryCandidates("わたし", "", kNowBase);
   EXPECT_FALSE(cands.empty());
   std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
+  ThrowingLearningStore store;
+  auto engine = MakeEngine(store);
+
+  auto candidates = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "日本");
+  ASSERT_TRUE(engine->last_error().has_value());
+  EXPECT_NE(engine->last_error()->find("reranker failed: score failure"),
+            std::string::npos);
+
+  auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
+  ASSERT_FALSE(predictions.empty());
+  EXPECT_NE(predictions.front().debug_info.find("predict"), std::string::npos);
+
+  auto corrections = engine->QueryCorrections("にほん", "", "日本", kNowBase);
+  ASSERT_FALSE(corrections.empty());
+  EXPECT_NE(corrections.front().surface, "日本");
+  ASSERT_TRUE(engine->last_error().has_value());
+  EXPECT_NE(engine->last_error()->find("reranker failed"), std::string::npos);
 }
 
 TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {

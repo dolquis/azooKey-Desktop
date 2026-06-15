@@ -1,6 +1,7 @@
 #include "azookey/host/InferenceEngine.h"
 
 #include <chrono>
+#include <exception>
 #include <iostream>
 #include <utility>
 
@@ -48,6 +49,22 @@ InferenceEngine::~InferenceEngine() {
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
+}
+
+std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
+    const std::string& kana,
+    std::vector<core::Candidate> candidates,
+    uint64_t now_epoch_sec) {
+  try {
+    // Do not move candidates into Apply: fallback needs the raw order/scores.
+    return reranker_.Apply(kana, candidates, now_epoch_sec);
+  } catch (const std::exception& ex) {
+    last_error_ = std::string("reranker failed: ") + ex.what();
+    return candidates;
+  } catch (...) {
+    last_error_ = "reranker failed: unknown exception";
+    return candidates;
+  }
 }
 
 bool InferenceEngine::LoadModel() {
@@ -175,7 +192,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
-  return reranker_.Apply(kana, std::move(merged), now_epoch_sec);
+  return ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
@@ -183,7 +200,7 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
                                                                uint64_t now_epoch_sec) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   auto candidates = active_converter_->PredictNext(kana, BuildContext(kana, context));
-  return reranker_.Apply(kana, std::move(candidates), now_epoch_sec);
+  return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string& kana,
@@ -197,7 +214,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   hint.rejected_surface = rejected_surface;
   hint.intent = "user_rejection";
   auto candidates = active_converter_->Correct(kana, hint, conversion_context);
-  return reranker_.Apply(kana, std::move(candidates), now_epoch_sec);
+  return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
 void InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec) {

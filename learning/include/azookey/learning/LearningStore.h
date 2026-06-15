@@ -15,6 +15,7 @@ struct LearningRecord {
 class LearningStore {
  public:
   explicit LearningStore(std::string path);
+  virtual ~LearningStore() = default;
 
   bool Load();
   bool Save() const;
@@ -29,7 +30,7 @@ class LearningStore {
                          double alpha,
                          uint64_t now_epoch_sec);
   void Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec);
-  double Score(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec) const;
+  virtual double Score(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec) const;
 
  private:
   std::string Key(const std::string& reading, const std::string& surface) const;

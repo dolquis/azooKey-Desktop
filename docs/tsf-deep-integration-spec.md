@@ -624,9 +624,14 @@ public:
         wchar_t args[128] = {};
         swprintf_s(args, L"--langid 0x%04X --profile %s", langid, profile);
 
+        // 設定アプリ EXE のフルパスを TIP インストールディレクトリ基準で解決（§6.4）。
+        // bare ファイル名のままだと ShellExecuteExW は呼び出し元プロセス（言語/IME 設定 UI）の
+        // カレントディレクトリ基準で探すため、インストール環境（MSIX/WiX）で起動失敗し得る。
+        std::wstring exe = GetInstalledExePath(L"azookey_settings.exe");
+
         // 設定アプリ EXE を非同期起動（終了待ちしない。理由は下記注記）
         SHELLEXECUTEINFOW sei{ sizeof(sei) };
-        sei.lpFile       = L"azookey_settings.exe"; // 実体は §6.4 GetInstalledExePath で解決
+        sei.lpFile       = exe.c_str();
         sei.lpParameters = args;
         sei.hwnd         = hwndParent;
         sei.nShow        = SW_SHOW;

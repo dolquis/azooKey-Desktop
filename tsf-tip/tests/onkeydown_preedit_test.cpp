@@ -2,14 +2,13 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <gtest/gtest.h>
+#include <msctf.h>
 
 #include <array>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <gtest/gtest.h>
-#include <msctf.h>
 
 #include "azookey/tsf/TextService.h"
 
@@ -69,11 +68,7 @@ class FakeRange final : public ITfRange {
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
-  STDMETHODIMP GetText(TfEditCookie,
-                       DWORD,
-                       WCHAR*,
-                       ULONG,
-                       ULONG* text_length) override {
+  STDMETHODIMP GetText(TfEditCookie, DWORD, WCHAR*, ULONG, ULONG* text_length) override {
     if (text_length) *text_length = 0;
     return E_NOTIMPL;
   }
@@ -107,13 +102,9 @@ class FakeRange final : public ITfRange {
     return E_NOTIMPL;
   }
 
-  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override {
-    return E_NOTIMPL;
-  }
+  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override { return E_NOTIMPL; }
 
-  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override {
-    return E_NOTIMPL;
-  }
+  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override { return E_NOTIMPL; }
 
   STDMETHODIMP ShiftStartRegion(TfEditCookie, TfShiftDir, BOOL* no_region) override {
     if (no_region) *no_region = FALSE;
@@ -220,9 +211,7 @@ class NoopContext final : public ITfContext {
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
-  STDMETHODIMP RequestEditSession(TfClientId tid,
-                                  ITfEditSession* edit_session,
-                                  DWORD flags,
+  STDMETHODIMP RequestEditSession(TfClientId tid, ITfEditSession* edit_session, DWORD flags,
                                   HRESULT* session_result) override {
     request_count++;
     last_client_id = tid;
@@ -246,10 +235,7 @@ class NoopContext final : public ITfContext {
     return S_OK;
   }
 
-  STDMETHODIMP GetSelection(TfEditCookie,
-                            ULONG,
-                            ULONG selection_count,
-                            TF_SELECTION* selection,
+  STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG selection_count, TF_SELECTION* selection,
                             ULONG* fetched) override {
     if (!fetched) return E_POINTER;
     *fetched = 0;
@@ -303,10 +289,7 @@ class NoopContext final : public ITfContext {
     return E_NOTIMPL;
   }
 
-  STDMETHODIMP TrackProperties(const GUID**,
-                               ULONG,
-                               const GUID**,
-                               ULONG,
+  STDMETHODIMP TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
                                ITfReadOnlyProperty** property) override {
     if (property) *property = nullptr;
     return E_NOTIMPL;
@@ -326,9 +309,7 @@ class NoopContext final : public ITfContext {
     return S_OK;
   }
 
-  STDMETHODIMP CreateRangeBackup(TfEditCookie,
-                                 ITfRange*,
-                                 ITfRangeBackup** backup) override {
+  STDMETHODIMP CreateRangeBackup(TfEditCookie, ITfRange*, ITfRangeBackup** backup) override {
     if (backup) *backup = nullptr;
     return E_NOTIMPL;
   }
@@ -377,10 +358,7 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
-  STDMETHODIMP CreateContext(TfClientId,
-                             DWORD,
-                             IUnknown*,
-                             ITfContext** context,
+  STDMETHODIMP CreateContext(TfClientId, DWORD, IUnknown*, ITfContext** context,
                              TfEditCookie* edit_cookie) override {
     if (context) *context = nullptr;
     if (edit_cookie) *edit_cookie = TF_INVALID_EDIT_COOKIE;
@@ -391,13 +369,9 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
 
   STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
 
-  STDMETHODIMP GetTop(ITfContext** context) override {
-    return ReturnContext(context);
-  }
+  STDMETHODIMP GetTop(ITfContext** context) override { return ReturnContext(context); }
 
-  STDMETHODIMP GetBase(ITfContext** context) override {
-    return ReturnContext(context);
-  }
+  STDMETHODIMP GetBase(ITfContext** context) override { return ReturnContext(context); }
 
   STDMETHODIMP EnumContexts(IEnumTfContexts** enum_contexts) override {
     if (enum_contexts) *enum_contexts = nullptr;
@@ -493,6 +467,26 @@ class TextServiceHarness {
 };
 
 }  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, OnTestKeyDownAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DoEditSessionAllocationFailureReturnsOutOfMemory) {
+  NoopContext context;
+  azookey::tsf::TextService service;
+  auto* session = new azookey::tsf::EditSession(&service, &context);
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(session->DoEditSession(1), E_OUTOFMEMORY);
+
+  session->Release();
+}
 
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
@@ -861,7 +855,8 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryConsumesTriggerKeyAfterSuccess
   EXPECT_FALSE(h.service.committing_);
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesOnOriginalContextWhenNextKeyUsesDifferentContext) {
+TEST(TsfTipOnKeyDownPreeditTest,
+     QueuedCommitRetriesOnOriginalContextWhenNextKeyUsesDifferentContext) {
   TextServiceHarness h;
   NoopContext next_context;
   FakeRange old_range;
@@ -1391,7 +1386,8 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingContextAliasCleansUpByComIdentity) {
   EXPECT_FALSE(h.service.has_active_context_for_test());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextPreservesCompositionWhenSyncCleanupIsRejected) {
+TEST(TsfTipOnKeyDownPreeditTest,
+     PoppingActiveContextPreservesCompositionWhenSyncCleanupIsRejected) {
   TextServiceHarness h;
   FakeComposition composition;
 

@@ -19,6 +19,14 @@
 
 namespace azookey::tsf {
 
+#ifdef AZOOKEY_TSF_TESTING
+namespace testing {
+void FailNextComBoundaryAllocationForTest();
+void ClearComBoundaryAllocationFailureForTest();
+bool ConsumeComBoundaryAllocationFailureForTest();
+}  // namespace testing
+#endif
+
 class EditSession;
 
 class TextService final : public ITfTextInputProcessorEx,

@@ -239,10 +239,14 @@ C++ ランタイム依存（`msvcp140.dll` 等）を MSIX に同梱：
 依存する。VCLibs だけではクリーン VM で起動しないため、次のいずれかで同梱する（ビルド側は
 `Microsoft.WindowsAppSDK` NuGet の `PackageReference` が必須。版は §3.1 の採用 WASDK に揃える）:
 
-- **self-contained 配置（推奨・サイドロード向け）**: 設定アプリ（WAP）プロジェクトに
-  `<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>` を設定し、ランタイムを
-  アプリへバンドルする。フレームワークパッケージ依存が無くなり、外部配信に依存せず
-  クリーン VM で確実に起動する（配布サイズは増える）。
+- **self-contained 配置（推奨・サイドロード向け）**:
+  `<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>` を **設定アプリ本体の
+  プロジェクト（`azookey_settings`）に設定し、さらに WAP パッケージングプロジェクト
+  （`pkg/msix/Package.wapproj`）にも同プロパティを設定する**（Microsoft の self-contained 配置
+  ガイド: アプリプロジェクトに必須、WAP 利用時はパッケージングプロジェクトにも追加。WAP のみだと
+  ランタイムファイルが設定アプリ出力に展開されず起動失敗し得る）。これによりランタイムを
+  アプリへバンドルし、フレームワークパッケージ依存が無くなり、外部配信に依存せずクリーン VM で
+  確実に起動する（配布サイズは増える）。
 - **framework-dependent 配置**: manifest に Windows App SDK のフレームワーク依存を宣言し、
   `Microsoft.WindowsAppRuntime` フレームワークパッケージ（または `WindowsAppRuntimeInstall.exe`）
   の配信をインストーラ手順（§4 / §5）に含める。

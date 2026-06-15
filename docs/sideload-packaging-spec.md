@@ -707,6 +707,13 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 
 MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向け。
 
+> **設定アプリと WinUI 3 ランタイムの同梱（必須）**: TIP の `ITfFnConfigure`（§3.5）は
+> `azookey_settings.exe` を起動するため、本経路でも **設定アプリ本体と WinUI 3 ランタイムを
+> ペイロードに含める**。MSIX フレームワーク依存が使えない LTSC 等では、設定アプリを
+> **self-contained 配置（§1.3）でビルドし、その出力フォルダ一式（ランタイム同梱）を配置する**
+> のが最も確実。self-contained を採らない場合は `WindowsAppRuntimeInstall.exe` をペイロードに
+> 含めてインストール時に実行する。TIP DLL / Host は WinUI 3 非依存（§1.3）。
+
 ### 4.1 WiX 構成
 
 `pkg/wix/Product.wxs`（新規）：
@@ -718,6 +725,7 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向け。
     <Feature Id="Main" Title="azooKey">
       <ComponentGroupRef Id="Files" />
       <ComponentRef Id="RegisterTip" />
+      <ComponentRef Id="SettingsApp" />
     </Feature>
 
     <Component Id="RegisterTip" Directory="INSTALLFOLDER" Guid="...">
@@ -727,6 +735,14 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向け。
         <RegistryValue Type="string" Value="azooKey TIP" />
       </RegistryKey>
       <!-- ... profile / category 登録 ... -->
+    </Component>
+
+    <!-- 設定アプリ本体 + WinUI 3 ランタイム。ITfFnConfigure(§3.5) の起動先。
+         self-contained 配置（§1.3）では azookey_settings 出力の WASDK ランタイム DLL 群も
+         同梱する（ComponentGroup へ harvest）。framework-dependent の場合は
+         WindowsAppRuntimeInstall.exe を実行する CustomAction を別途追加する。 -->
+    <Component Id="SettingsApp" Directory="INSTALLFOLDER" Guid="...">
+      <File Source="$(var.SettingsExe)" />
     </Component>
 
     <CustomAction Id="RegisterTipDll"
@@ -762,10 +778,17 @@ PrivilegesRequired=lowest
 [Files]
 Source: "build\tsf-tip\Release\azookey_tsf_tip.dll"; DestDir: "{app}"
 Source: "build\inference-host\Release\azookey_inference_host.exe"; DestDir: "{app}"
+; 設定アプリ本体 + WinUI 3 ランタイム（self-contained 出力一式を recurse で同梱）
+Source: "build\settings-app\Release\*"; DestDir: "{app}"; Flags: recursesubdirs
+; framework-dependent の場合のみ: ランタイムインストーラを同梱して [Run] で実行
+; Source: "redist\WindowsAppRuntimeInstall.exe"; DestDir: "{tmp}"
 
 [Run]
 Filename: "regsvr32"; Parameters: "/s ""{app}\azookey_tsf_tip.dll"""; \
     Flags: runhidden waituntilterminated
+; framework-dependent の場合のみ: WinUI 3 ランタイムをインストール（self-contained 時は不要）
+; Filename: "{tmp}\WindowsAppRuntimeInstall.exe"; Parameters: "--quiet"; \
+;     Flags: runhidden waituntilterminated
 
 [UninstallRun]
 Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \

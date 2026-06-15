@@ -642,6 +642,17 @@ public:
 };
 ```
 
+> **重要: `kTextServiceClsid` の COM オブジェクトが `ITfFnConfigure` を QI で返すこと**:
+> 言語/IME 設定は `CoCreateInstance(kTextServiceClsid, IID_ITfFnConfigure)` でこの機能を取得する
+> （Microsoft Learn: ITfFnConfigure は「`ITfInputProcessorProfiles::Register` に渡した CLSID」+
+> `IID_ITfFnConfigure` で CoCreateInstance される）。したがって **`DllGetClassObject` / class
+> factory が `kTextServiceClsid` 用に生成する TextService オブジェクト自身が `ITfFnConfigure`
+> を実装し、`QueryInterface(IID_ITfFnConfigure)` で返す**必要がある。上記のように
+> `ConfigureFunction` を別クラスにする場合も、TextService の `QueryInterface` がそれを返すよう
+> 配線する。さもないとクラスとカテゴリ登録を足しても設定側が `E_NOINTERFACE` を受け取り、
+> 「詳細設定」が開かない。実務上は TextService が `ITfTextInputProcessorEx` と併せて
+> `ITfFnConfigure` を多重継承し `Show` を直接実装するのが簡潔。
+
 > **`Show` を非同期にする理由（`docs/sideload-packaging-spec.md` §3.5 と整合）**:
 > `ITfFnConfigure::Show` の Remarks は「ダイアログを閉じるまで return しない」（短命な
 > モーダル プロパティ シートを想定）だが、本 IME の設定 UI は WinUI 3 の独立した**長命**

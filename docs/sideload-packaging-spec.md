@@ -685,7 +685,11 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   ではない）。TSF が `DllRegisterServer`（§1）で登録した CLSID に対して直接
   `CoCreateInstance` するため。語句登録の `ITfFnConfigureRegisterWord` が
   `ITfFunctionProvider::GetFunction` 経由で取得されるのと異なり、`ITfFnConfigure` は
-  **CLSID 直 `CoCreateInstance`** で取得される点に注意。
+  **CLSID 直 `CoCreateInstance`** で取得される点に注意 — すなわち
+  `CoCreateInstance(kTextServiceClsid, IID_ITfFnConfigure)` であり、**TextService オブジェクト
+  自身が `QueryInterface(IID_ITfFnConfigure)` で応答する**必要がある（別クラスで実装する場合も
+  TextService の QI 経由で到達可能にする。さもないと `E_NOINTERFACE` で「詳細設定」が開かない。
+  `docs/tsf-deep-integration-spec.md` §6.2）。
 - **呼び出し元**: `Show` は **Windows の言語/IME 設定（Text Services コントロールパネル
   相当）が TIP の CLSID を `CoCreateInstance` したプロセス上**で同期的に呼ばれ、
   `hwndParent` はその設定 UI のウィンドウである（入力先のメモ帳・ブラウザ等ではない）。

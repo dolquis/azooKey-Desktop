@@ -223,7 +223,12 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   最小設定アプリと、配布可能なインストーラ。
 - **変更対象**: 新規 `settings-app/`（WinUI 3 / C++/WinRT に確定、§3.0）、`pkg/` 配下 (新規)
 - **実装範囲**:
-  - 設定アプリ (TIP/Host とは別プロセス、IPC 経由で Host 設定変更)
+  - 設定アプリ (TIP/Host とは別プロセス)
+  - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
+    `ipc/src/Payloads.cpp` の `UpdateSettings`（`docs/sideload-packaging-spec.md` §3.3）と
+    `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映、
+    DEV-203）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
+    スコープとする（M30 はこの最小層の上に UI を本格化する）。
   - MSIX または WiX ベースの MSI
   - ユーザースコープ自動登録、アンインストール時の自動解除
 - **受け入れ条件**:
@@ -865,9 +870,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   依存しない）。M36-A の承認 UI（`confirm` モード）が M30 に依存するため、
   早期着手が望ましい。M11 の最小設定 UI と UI フレームワーク（WinUI 3）を
   揃えること。
-- **変更対象**: `settings-app/`（新規ディレクトリ、C++/WinRT + WinUI 3）、
-  `ipc/src/Payloads.cpp`（`UpdateSettings` 追加）、
-  `inference-host/src/SettingsManager.cpp`（新規）。
+- **変更対象**: `settings-app/`（M11 で導入した設定アプリを本格化）、
+  `ipc/src/Payloads.cpp`（M11 の最小 `UpdateSettings` を拡張）、
+  `inference-host/src/SettingsManager.cpp`（M11 の SettingsStore 最小実装を拡張）。
+  ※ 最小 IPC / 設定ストア（`UpdateSettings` / settings.json 読込・反映）は M11 で導入済み。
+  M30 はその上に UI とフル機能（横断項目・バッチ訂正等）を載せる。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §3。
 - **横断**: X-3-6（バッチ訂正ビュー）、X-2-6（promptPrefixByApp UI）、
   X-2-7（Persona 表示）を本マイルストーンで設定アプリ内に集約。

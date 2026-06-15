@@ -214,7 +214,7 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
 - 同梱物:
   - `azookey_tsf_tip.dll`
   - `azookey_inference_host.exe`
-  - `azookey_settings.exe`（M30）
+  - `azookey_settings.exe`（M11 で最小版を同梱 / M30 でフル UI 化。§3.0）
   - `Assets/*.png`
   - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に
     GitHub Release から DL
@@ -247,9 +247,12 @@ C++ ランタイム依存（`msvcp140.dll` 等）を MSIX に同梱：
   `Microsoft.WindowsAppRuntime` フレームワークパッケージ（または `WindowsAppRuntimeInstall.exe`）
   の配信をインストーラ手順（§4 / §5）に含める。
   ```xml
-  <!-- Name / MinVersion は §3.1 で採用する WASDK 版に合わせる（系列 2.x） -->
-  <PackageDependency Name="Microsoft.WindowsAppRuntime.2.2"
-                     MinVersion="2.2.0.0"
+  <!-- framework package family は major 版に揃う（WASDK 2.0 SemVer 移行）。NuGet/版が
+       2.2.0 でも family は Microsoft.WindowsAppRuntime.2.0 のまま（".2.2" は存在せず、
+       clean VM で解決失敗する）。MinVersion は採用する WASDK 版（§3.1）に対応する
+       ランタイムパッケージ版に合わせる。 -->
+  <PackageDependency Name="Microsoft.WindowsAppRuntime.2.0"
+                     MinVersion="..."
                      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
   ```
 

@@ -184,7 +184,9 @@
 
 ### Phase 7（サイドロード配信、`docs/sideload-packaging-spec.md`）
 
-- `settings-app/` — C++/WinRT WinUI 3 設定アプリ
+- `settings-app/` — C++/WinRT WinUI 3 設定アプリ（**最小版は M11 / v1.0** で導入し
+  `UpdateSettings` + SettingsStore 最小実装まで含む。フル UI は M30。roadmap M11 / M30、
+  `docs/sideload-packaging-spec.md` §3.0）
 - `core/src/EtwLogger.cpp` — ETW Provider ラッパ
 - `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認
 - `inference-host/src/CrashHandler.cpp` — `SetUnhandledExceptionFilter`

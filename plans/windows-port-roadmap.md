@@ -221,9 +221,14 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: ユーザーが Zenzai ON/OFF、辞書管理、デバイス選択を行える
   最小設定アプリと、配布可能なインストーラ。
-- **変更対象**: 新規 `settings-ui/`（WinUI 3 想定）、`pkg/` 配下 (新規)
+- **変更対象**: 新規 `settings-app/`（WinUI 3 / C++/WinRT に確定、§3.0）、`pkg/` 配下 (新規)
 - **実装範囲**:
-  - 設定アプリ (TIP/Host とは別プロセス、IPC 経由で Host 設定変更)
+  - 設定アプリ (TIP/Host とは別プロセス)
+  - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
+    `ipc/src/Payloads.cpp` の `UpdateSettings`（`docs/sideload-packaging-spec.md` §3.3）と
+    `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映、
+    DEV-203）。Zenzai ON/OFF・ユーザー辞書の変更が Host に反映されるところまでを M11 の
+    スコープとする（M30 はこの最小層の上に UI を本格化する）。
   - MSIX または WiX ベースの MSI
   - ユーザースコープ自動登録、アンインストール時の自動解除
 - **受け入れ条件**:
@@ -337,7 +342,11 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
   まで実装し、M21 で full 実装。カテゴリ登録は候補公開実装と必ず一体で行う（公開が
   無いまま登録すると UI-less-only ホストで候補が消える）。詳細は
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
-- 設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。
+- ~~設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。~~
+  → **確定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は既存 C++/WinRT スタック
+  との親和性・Fluent/Mica 標準対応・MSIX 整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
+  縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイクは `gate:human-required`
+  で残す。詳細は `docs/sideload-packaging-spec.md` §3.0。
 
 v1.0 リリースに向けたリスクと対応:
 
@@ -346,7 +355,7 @@ v1.0 リリースに向けたリスクと対応:
 | llama.cpp バインディング選定 (M8) | 配布サイズ・初回起動時間に直結 | Phase 3 着手スパイクで確定 (`docs/zenzai-gpu-route.md` 更新)、`bench/` で計測 |
 | CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
 | MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
-| 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | Phase 3 中に WinUI 3 / WPF / Tauri を 1〜2 日比較スパイク |
+| 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | **WinUI 3（C++/WinRT）に確定（DEV-99 / `docs/sideload-packaging-spec.md` §3.0）**。残る確証は実機での配布サイズ・初回起動・IPC 行数の 1〜2 日スパイク（`gate:human-required`） |
 | 署名証明書の調達 (M12) | リリース日に直結 | Phase 4 着手前に EV/OV 証明書の手当てを並行 |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
@@ -436,12 +445,15 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
 
 ### Phase 4: 配布可能化 — v1.0 リリースゲート（M11/M12、4〜6 週）
 
-3. **M11 設定 UI とインストーラ** — フレームワークは WinUI 3 を第一候補とし、
-   Phase 3 中に 1〜2 日のスパイクで WPF/Tauri と比較してから着手。設定アプリは
+3. **M11 設定 UI とインストーラ** — フレームワークは **WinUI 3（C++/WinRT）に確定**
+   （DEV-99 / D-03、`docs/sideload-packaging-spec.md` §3.0）。残る確証は実機での
+   配布サイズ・初回起動・IPC 連携行数の 1〜2 日スパイク（`gate:human-required`）。設定アプリは
    TIP/Host と別プロセス、IPC 経由で Host 設定（Zenzai ON/OFF、ユーザー辞書）を
    変更。配布は MSIX（ユーザースコープ自動登録、アンインストールでの登録解除）。
    **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
-   避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。
+   避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。`ITfFnConfigure`
+   からの起動は別プロセス EXE を非同期起動する方式（§3.5、正典は
+   `docs/tsf-deep-integration-spec.md` §6）。
 4. **M12 CI 完成と署名配布** — `.github/workflows/windows.yml` の build/test に
    加え、コード署名ステップ、タグ push 時の MSIX 自動 Release 公開、submodule
    配信ポリシー確定を行う。
@@ -858,9 +870,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   依存しない）。M36-A の承認 UI（`confirm` モード）が M30 に依存するため、
   早期着手が望ましい。M11 の最小設定 UI と UI フレームワーク（WinUI 3）を
   揃えること。
-- **変更対象**: `settings-app/`（新規ディレクトリ、C++/WinRT + WinUI 3）、
-  `ipc/src/Payloads.cpp`（`UpdateSettings` 追加）、
-  `inference-host/src/SettingsManager.cpp`（新規）。
+- **変更対象**: `settings-app/`（M11 で導入した設定アプリを本格化）、
+  `ipc/src/Payloads.cpp`（M11 の最小 `UpdateSettings` を拡張）、
+  `inference-host/src/SettingsManager.cpp`（M11 の SettingsStore 最小実装を拡張）。
+  ※ 最小 IPC / 設定ストア（`UpdateSettings` / settings.json 読込・反映）は M11 で導入済み。
+  M30 はその上に UI とフル機能（横断項目・バッチ訂正等）を載せる。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §3。
 - **横断**: X-3-6（バッチ訂正ビュー）、X-2-6（promptPrefixByApp UI）、
   X-2-7（Persona 表示）を本マイルストーンで設定アプリ内に集約。

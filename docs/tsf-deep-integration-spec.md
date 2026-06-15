@@ -617,17 +617,52 @@ public:
         return S_OK;
     }
     STDMETHODIMP Show(HWND hwndParent, LANGID langid, REFGUID rguidProfile) override {
-        // 設定アプリ EXE を起動
+        // 選択中の言語プロファイルを引数として設定アプリへ渡す
+        // （複数プロファイル時に既定ページではなく該当プロファイルを初期表示するため）
+        wchar_t profile[64] = {};
+        StringFromGUID2(rguidProfile, profile, ARRAYSIZE(profile));
+        wchar_t args[128] = {};
+        swprintf_s(args, L"--langid 0x%04X --profile %s", langid, profile);
+
+        // 設定アプリ EXE のフルパスを TIP インストールディレクトリ基準で解決（§6.4）。
+        // bare ファイル名のままだと ShellExecuteExW は呼び出し元プロセス（言語/IME 設定 UI）の
+        // カレントディレクトリ基準で探すため、インストール環境（MSIX/WiX）で起動失敗し得る。
+        std::wstring exe = GetInstalledExePath(L"azookey_settings.exe");
+
+        // 設定アプリ EXE を非同期起動（終了待ちしない。理由は下記注記）
         SHELLEXECUTEINFOW sei{ sizeof(sei) };
-        sei.lpFile  = L"azookey_settings.exe";
-        sei.hwnd    = hwndParent;
-        sei.nShow   = SW_SHOW;
-        sei.fMask   = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpFile       = exe.c_str();
+        sei.lpParameters = args;
+        sei.hwnd         = hwndParent;
+        sei.nShow        = SW_SHOW;
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
         ShellExecuteExW(&sei);
         return S_OK;
     }
 };
 ```
+
+> **重要: `kTextServiceClsid` の COM オブジェクトが `ITfFnConfigure` を QI で返すこと**:
+> 言語/IME 設定は `CoCreateInstance(kTextServiceClsid, IID_ITfFnConfigure)` でこの機能を取得する
+> （Microsoft Learn: ITfFnConfigure は「`ITfInputProcessorProfiles::Register` に渡した CLSID」+
+> `IID_ITfFnConfigure` で CoCreateInstance される）。したがって **`DllGetClassObject` / class
+> factory が `kTextServiceClsid` 用に生成する TextService オブジェクト自身が `ITfFnConfigure`
+> を実装し、`QueryInterface(IID_ITfFnConfigure)` で返す**必要がある。上記のように
+> `ConfigureFunction` を別クラスにする場合も、TextService の `QueryInterface` がそれを返すよう
+> 配線する。さもないとクラスとカテゴリ登録を足しても設定側が `E_NOINTERFACE` を受け取り、
+> 「詳細設定」が開かない。実務上は TextService が `ITfTextInputProcessorEx` と併せて
+> `ITfFnConfigure` を多重継承し `Show` を直接実装するのが簡潔。
+
+> **`Show` を非同期にする理由（`docs/sideload-packaging-spec.md` §3.5 と整合）**:
+> `ITfFnConfigure::Show` の Remarks は「ダイアログを閉じるまで return しない」（短命な
+> モーダル プロパティ シートを想定）だが、本 IME の設定 UI は WinUI 3 の独立した**長命**
+> プロセスである。`Show` を `azookey_settings.exe` 終了までブロックすると、呼び出し元
+> （言語/IME 設定 UI）をその間フリーズさせるため、**起動後ただちに `S_OK` を返す
+> 非同期方式**を採る（`WaitForSingleObject` で終了待ちしない）。設定値の反映はプロパティ
+> シートの OK/Apply ではなく `UpdateSettings` IPC（§3）で行う。多重起動を避けるため設定
+> アプリは single-instance とし、既存インスタンスがあれば前面化する
+> （`SEE_MASK_NOCLOSEPROCESS` で得たプロセスハンドルは前面化・監視用途に使い、
+> 終了待ちには使わない）。
 
 ### 6.3 Category 登録
 

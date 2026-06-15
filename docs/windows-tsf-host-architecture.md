@@ -184,7 +184,9 @@
 
 ### Phase 7（サイドロード配信、`docs/sideload-packaging-spec.md`）
 
-- `settings-app/` — C++/WinRT WinUI 3 設定アプリ
+- `settings-app/` — C++/WinRT WinUI 3 設定アプリ（**最小版は M11 / v1.0** で導入し
+  `UpdateSettings` + SettingsStore 最小実装まで含む。フル UI は M30。roadmap M11 / M30、
+  `docs/sideload-packaging-spec.md` §3.0）
 - `core/src/EtwLogger.cpp` — ETW Provider ラッパ
 - `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認
 - `inference-host/src/CrashHandler.cpp` — `SetUnhandledExceptionFilter`
@@ -216,7 +218,7 @@ Phase 5〜6 で順次追加する。
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
 | `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20) | tsf-deep §1 |
-| `UpdateSettings` / `Response` | Settings → Host | Phase 7 (M30) | sideload §3 |
+| `UpdateSettings` / `Response` | Settings → Host | **M11 最小（v1.0） / M30 拡張** | sideload §3 + roadmap M11 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
@@ -235,5 +237,8 @@ TIP DLL がアプリプロセスにロードされた状態で、最大以下の
 | `PromptDialog` | Magic Conversion / Replace Suggestion（M16） | フォアグラウンド | モーダル表示中のみ |
 | `DebugWindow` | F10 デバッグ（M18-3） | デスクトップ | トグル表示 |
 
-設定アプリ（M30）は **別プロセス**（`azookey_settings.exe`）で、IPC 経由で
-Host 設定を変更する。TIP プロセスからは `ITfFnConfigure::Show` で起動するのみ。
+設定アプリは **別プロセス**（`azookey_settings.exe`）で、IPC 経由で Host 設定を変更する。
+最小の設定永続化・反映（`UpdateSettings` + SettingsStore 最小実装）は **M11**（v1.0）で
+導入し、フル設定 UI は **M30**（post-v1.0）で本格化する（roadmap M11 / M30、
+`docs/sideload-packaging-spec.md` §3）。TIP プロセスからは `ITfFnConfigure::Show` で
+起動するのみ。

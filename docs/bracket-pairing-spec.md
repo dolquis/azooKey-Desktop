@@ -157,7 +157,7 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 | Composing/Previewing | Input(開きカッコ) | Idle | **現在の composition を先に確定**（候補窓表示中は `CommitSelected`、それ以外は `CommitPreeditAsIs` / ローマ字 flush）→ その後 `insertBracketPair` |
 | Selecting | Input(開きカッコ) | Idle | `CommitSelected` → `insertBracketPair` |
 | Idle | Input(閉じカッコ) | Idle | `hint.char_after` が同じ閉じカッコなら `skipOverClosing`、無ければリテラル 1 文字挿入（§4.2） |
-| Idle | Backspace | Idle | `hint.selection_collapsed` かつ `hint.char_before`/`char_after` が空ペアなら `deleteBracketPair`、無ければ通常 Backspace（§4.3） |
+| Idle | Backspace | Idle | `hint.selection_collapsed` かつ `hint.char_before`/`char_after` が空ペアなら `deleteBracketPair`、無ければ Backspace をアプリへパススルー（TIP は eaten しない。§4.3・§5.3） |
 | UnicodeInput / ReplaceSuggestion | Input(カッコ) | （変更なし） | これらの特殊モード中はペアリングしない（§4.6） |
 
 > 上表の「`hint.*`」は §3.1.1 の `EditContextHint`（TIP が §5.3 で読んで渡す隣接文字）を指す。
@@ -269,9 +269,11 @@ TIP の composition が無い（カーソルが確定済みテキスト中にあ
 1. 選択が**collapsed**（範囲選択でない）であることを確認する。範囲選択中は通常 Backspace。
 2. 読み取り用 EditSession で**カーソル直前（左）1 code unit と直後（右）1 code unit**を読む。
 3. 左が開きカッコ `O`、右がその対応閉じカッコ `C`（§4.1 の同一ペア）で**空ペア**（間に
-   文字が無い）なら、左右 2 文字をまとめて削除する（`deleteBracketPair`）。
-4. それ以外は通常の Backspace（左 1 文字削除。サロゲートペアは 2 code unit を 1 単位として
-   削除する一般規則に従う）。
+   文字が無い）なら、左右 2 文字をまとめて削除する（`deleteBracketPair`。TIP が `OnTestKeyDown`
+   で空ペアを確認して eaten=TRUE にしたケース。§5.3）。
+4. それ以外（空ペアでない / 範囲選択中 / 隣接読取不能）は、**TIP は Backspace を eaten せず
+   アプリへパススルー**する（`OnTestKeyDown` が FALSE を返す。§5.3）。通常削除は**アプリが
+   処理**し、TIP は合成しない（read-only 欄・アプリ固有削除・Undo 粒度を変えない）。
 
 composition 中の Backspace は従来どおり（ローマ字 pending を戻す / かな 1 単位削除。
 `docs/legacy-parity-spec.md` §1 / 既存 `TextService::OnKeyDown` の VK_BACK 経路）であり、
@@ -317,8 +319,16 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
     本機能を無効化、その他で有効。
   - `allowlist`: `bracketPairingApps` に載るアプリでのみ有効（組み込みシードは無視）。
 - **M48 アプリ別入力プロファイル（`docs/app-profile-spec.md`）**: M48 完了後は per-app の
-  有効/無効をプロファイルが持ち、**`bracketPairingApps` 設定より優先**する（プロファイルに
-  当該アプリのエントリがあればそれを使う）。M48 未完了時は `bracketPairingApps` 単独で動作する。
+  有効/無効をプロファイルが持ち、**`bracketPairingApps` 設定より優先**する。ただし M48 の
+  `profilesByApp` 各プロファイルは `additionalProperties: false`（同 spec §4）で、現状
+  カッコペアリング用フィールドが無い。よって **M61-B は M48 プロファイルスキーマ（同 §4.1）へ
+  専用フィールドを追加する**（`docs/app-profile-spec.md` の更新を M61-B の作業に含める）:
+  - 追加フィールド: `bracketPairing`（enum `auto` / `on` / `off`、既定 `auto`）。`auto` =
+    グローバル設定（`bracketPairing` + `bracketPairingApps`/`bracketPairingAppPolicy`）に従う、
+    `on`/`off` = 当該アプリで明示的に有効/無効（resolver は §4 の優先順位
+    `profilesByApp[process]` → `[window_class]` → `["default"]` で解決）。
+  - M48 未実装の間は本フィールドが無いため、`bracketPairingApps` 設定が単独の per-app 源になる
+    （後方互換）。M48 実装と同時に本フィールドを追加し、`auto` 既定で従来挙動を保つ。
 
 組み込み既定 denylist（`denylist` ポリシー時のシード。定数。実機・フィードバックで調整）:
 `Code.exe`（VS Code）/ `devenv.exe`（Visual Studio）/ `idea64.exe`・`pycharm64.exe` 等
@@ -444,12 +454,21 @@ core が hint から行い（文書を直接見ない）、TIP は返った Clie
 EditSession（または同一 RW セッション）で適用する。同期セッションが拒否されたら hint を空で
 渡し、core は安全側へフォールバック（§4.8）。
 
-> **OnTestKeyDown の eaten 判定**: `bracketPairing == true` かつ現モードで有効なとき、
-> 開きカッコ / （スキップ対象の）閉じカッコ / 空ペア内 Backspace を `*eaten = TRUE` に
-> する必要がある。閉じカッコ・Backspace の最終挙動は隣接文字に依存するが、`OnTestKeyDown`
-> 時点で「本機能が処理しうる」キーは eaten 宣言し、`OnKeyDown` で隣接文字を読んで実際の
-> 挙動（スキップ or リテラル）を決める。リテラル挿入になる場合も TIP が文字を挿入する
-> （eaten のまま）ため、アプリへ素通ししない（二重入力防止）。
+> **OnTestKeyDown の eaten 判定**: `bracketPairing == true` かつ現モードで有効なときの eaten は
+> キー種別で扱いを分ける。
+>
+> - **開きカッコ / 閉じカッコ**: `*eaten = TRUE`。これらは最終挙動が「ペア挿入 / スキップ /
+>   リテラル**挿入**」のいずれでも **TIP が文字を挿入する**（挿入はアプリへ渡しても TIP が
+>   出しても結果は同じで、破壊的副作用が無い）。`OnKeyDown` で隣接文字を読んで分岐し、
+>   リテラルでも TIP が挿入する（アプリへ素通しせず二重入力を防ぐ）。
+> - **Backspace**: 既定は `*eaten = FALSE`（パススルー）。**空ペアを確認できたときだけ TRUE**。
+>   現行 TIP も idle Backspace を eaten しない（`tsf-tip/src/TextService.cpp`）。Backspace を
+>   無条件に eaten すると、空ペアでない通常削除を TIP が肩代わりすることになり、read-only 欄・
+>   アプリ固有の削除・Undo 粒度を壊す。よって `OnTestKeyDown` で §5.3 の隣接読取
+>   （`hint.selection_collapsed` ＆左右が空ペア）を行い、**空ペア確認時のみ `TRUE`**（→ `OnKeyDown`
+>   で `deleteBracketPair`）、それ以外・読取不能時は `FALSE` で **VK_BACK をアプリへ通す**
+>   （通常 Backspace はアプリが処理。TIP は合成しない）。これにより通常 Backspace のアプリ挙動を
+>   一切変えない。
 
 ### 5.4 Undo 単位
 
@@ -486,11 +505,13 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
 `SettingsStore`（および `DEV-203`）は `inference-host` 側の設定ローダであり、**TIP が M61 設定を
 取得する経路にはならない**（Host 切断時は読めない）。したがって M61 設定は次のように供給する:
 
-- **TIP がローカルに設定ファイルを直接読む。** 正典の `%LOCALAPPDATA%\azooKey\settings.json`
-  （schema = `settings/mvp-settings.schema.json`）を **TIP プロセス内で読み取る**（IPC を介さない）。
-  読み取りは TIP 有効化時（`ActivateEx`）に 1 回、以後は M17 の `ReadDirectoryChangesW` 監視
-  基盤を再利用してホットリロードする（変更検出で新規入力から実効値を差し替え。進行中の
-  composition は触らない）。
+- **TIP がローカルに設定ファイルを直接読む。** 正典の **`%LOCALAPPDATA%\azooKey\config\settings.json`**
+  （`docs/windows-tsf-host-architecture.md` §設定 / `docs/sideload-packaging-spec.md` §3.4 が定める
+  正典パス。`config\` サブディレクトリ配下。schema = `settings/mvp-settings.schema.json`）を
+  **TIP プロセス内で読み取る**（IPC を介さない）。設定 UI / host が書き込むのと**同一ファイル**を
+  TIP が読むため、Host-offline でも `bracketPairing` が確実に反映される。読み取りは TIP 有効化時
+  （`ActivateEx`）に 1 回、以後は M17 の `ReadDirectoryChangesW` 監視基盤を再利用してホット
+  リロードする（変更検出で新規入力から実効値を差し替え。進行中の composition は触らない）。
 - ファイルが無い / パース不能なら **schema 既定値**（`bracketPairing=false` 等）にフォールバック
   する（後方互換・既定 OFF）。これにより Host 未起動・切断時でも本機能の ON/OFF を確定できる。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。

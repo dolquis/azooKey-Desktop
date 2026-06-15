@@ -1290,8 +1290,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M13（InputState 状態機械）完了。確定 + カーソル配置は既存 M5/M6 の commit
   経路（`SetText` → `Collapse` → `SetSelection`）を再利用するため追加の前提なし。
 - **推奨実装時期**: M13 完了直後、Phase 5 と並行可能な独立トラック。Zenzai・TSF 深耕・
-  パッケージングに依存しない小規模・無 IPC 機能。設定 UI（M30）完成までは host CLI /
-  環境変数 / settings.json（`SettingsStore`）で実効値を受ける。
+  パッケージングに依存しない小規模・無 IPC 機能。設定 UI（M30）完成までは
+  `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読み（手編集 / 環境変数で補う。
+  host CLI 経由にしない。§6.1）。
 - **変更対象**: `core/include/azookey/core/InputState.h` / 状態機械（開き・閉じカッコ
   codepoint の分類と新 ClientAction `insertBracketPair` / `skipOverClosing` /
   `deleteBracketPair`、純粋 core 用 `EditContextHint`〔隣接文字を TIP から渡す。§3.1.1〕。
@@ -1303,16 +1304,20 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `core/src/BracketTable.cpp`（新規・組み込み対応表）、
   `tsf-tip/src/TextService.cpp`（`OnTestKeyDown` / `OnKeyDown` のカッコ・Backspace 分岐、
   隣接文字の同期読取→`EditContextHint` 構築→純粋 core 呼び出し、`ApplyClientAction` の
-  カーソル内側配置・スキップ・空ペア削除、**TIP ローカル設定読み取り**〔`settings.json` を
-  in-proc で読む + `ReadDirectoryChangesW` ホットリロード。Host 非依存。§6.1〕）、
+  カーソル内側配置・空ペア削除〔空ペア確認時のみ Backspace を eaten、それ以外はアプリへ
+  パススルー。§5.3〕、**TIP ローカル設定読み取り**〔`config\settings.json` を in-proc で読む +
+  `ReadDirectoryChangesW` ホットリロード。Host 非依存。§6.1〕）、
   `settings/mvp-settings.schema.json`（設定キー 5 種）。
 - **実装範囲**: `docs/bracket-pairing-spec.md` §3〜§6・§8。
   - VK→UserAction 表の拡張: ブラケット/記号 VK を `Input`/`InputAlnum` へ写し codepoint を
     入力モード/`ToUnicode` から解決（M13 §1.4 は A〜Z のみのため OEM キー追加が必須。§3.1）
   - 純粋 core の維持: 隣接文字は TIP が §5.3 で読んで `EditContextHint` に詰め、
     `HandleEvent(event, hint)` へ渡す。core は文書を直接見ず hint から分岐（テスト可能。§3.1.1）
-  - TIP ローカル設定読み取り: `bracketPairing` ほか M61 設定を TIP が `settings.json` から
-    in-proc で読み、Host 非依存で `OnKeyDown` 判定に使う（host 側 SettingsStore 経由にしない。§6.1）
+  - TIP ローカル設定読み取り: `bracketPairing` ほか M61 設定を TIP が正典
+    `%LOCALAPPDATA%\azooKey\config\settings.json` から in-proc で読み、Host 非依存で `OnKeyDown`
+    判定に使う（設定 UI / host が書くのと同一ファイル。host 側 SettingsStore 経由にしない。§6.1）
+  - Backspace は**空ペア確認時のみ** TIP が eaten して `deleteBracketPair`、それ以外はアプリへ
+    パススルーし通常削除の挙動を変えない（§5.3・§4.3）
   - 組み込みカッコ対応表（全角 + 半角の非対称ペア。対称デリミタ・`<>` は既定除外）
   - immediate トリガ（既定）の対挿入とカーソル内側配置（§5.2）。`composition` トリガは
     設定で選択可能にする（§4.0.1）
@@ -1335,8 +1340,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 読取 EditSession 拒否・選択取得失敗時にリテラル挿入 / 通常 Backspace へフォールバックし、
     入力を失わない
   - `bracketPairing=false` でカッコ・Backspace・確定・候補・学習の挙動が一切変わらない
-  - IPC メッセージを一切追加せず、Host 未接続でも本機能が動作する（TIP が `settings.json` を
-    ローカル読みして `bracketPairing` を判定。host 側 SettingsStore 非依存。§6.1）
+  - IPC メッセージを一切追加せず、Host 未接続でも本機能が動作する（TIP が正典
+    `config\settings.json` をローカル読みして `bracketPairing` を判定。host 側 SettingsStore 非依存。§6.1）
+  - `bracketPairing=true` でも空ペアでない Backspace はアプリへパススルーされ、通常削除・
+    read-only 欄・Undo の挙動が変わらない（§5.3）
   - core `HandleEvent` が純粋関数のまま `EditContextHint` 注入で全分岐をテストできる（§3.1.1）
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
 - **参照仕様**: `docs/bracket-pairing-spec.md`
@@ -1350,7 +1357,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （`docs/app-profile-spec.md`）。M48 未完了時は本機能専用の最小リスト設定で先行可能。
 - **変更対象**: `core/src/BracketTable.cpp`（TSV パース / マージ / ホットリロード。M17
   基盤再利用）、`tsf-tip/src/TextService.cpp`（前面アプリ判定 = `promptPrefixByApp` 基盤
-  再利用・選択囲み・対称デリミタの語境界判定）、M48 プロファイル連携、
+  再利用・選択囲み・対称デリミタの語境界判定）、M48 プロファイル連携 +
+  `docs/app-profile-spec.md` 更新（`profilesByApp` プロファイル〔`additionalProperties:false`〕へ
+  `bracketPairing`〔`auto`/`on`/`off`、既定 `auto`〕フィールドを追加。spec §4.5.0）、
   `settings/mvp-settings.schema.json`（設定キー 4 種）。
 - **実装範囲**: `docs/bracket-pairing-spec.md` §4.1.1・§4.5・§4.5.0・§4.5.1・§4.9。
   - カッコ対応表（**カッコ対専用**）の TSV 外部化（`bracket-pairs.tsv`: `open`/`close`/`flags`。
@@ -1359,6 +1368,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - per-app 有効範囲（`bracketPairingAppPolicy` = denylist（既定）/ allowlist。アプリリストは
     プロセス名配列 `bracketPairingApps`（**カッコ対 TSV とは別スキーマ**）+ 組み込み既定 denylist
     シード〔VS Code / Visual Studio / JetBrains 系等〕。M48 プロファイルがあれば優先。spec §4.5.0）
+  - M48 プロファイルスキーマ拡張（`profilesByApp` 各プロファイルへ `bracketPairing` enum
+    `auto`/`on`/`off` を追加。`additionalProperties:false` のため明示追加が必須。`docs/app-profile-spec.md`
+    §4.1 を更新。spec §4.5.0）
   - 対称デリミタ（`"` `'` `` ` ``）の語境界判定付きペアリング（`bracketSymmetricQuotePairing`、既定 OFF）
   - 範囲選択中の開きカッコで選択を囲む（`bracketWrapSelection`、既定 OFF）
   - 設定キー 5 種（`bracketSymmetricQuotePairing` / `bracketWrapSelection` /

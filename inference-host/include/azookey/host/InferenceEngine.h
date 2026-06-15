@@ -94,6 +94,9 @@ class InferenceEngine {
 
  private:
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
+  std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
+                                                  std::vector<core::Candidate> candidates,
+                                                  uint64_t now_epoch_sec);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   bool FlushLearningStoreLocked();
   void RecordLearningSaveFailureLocked();

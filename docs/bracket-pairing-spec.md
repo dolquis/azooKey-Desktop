@@ -153,8 +153,9 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
-| Idle | Input(開きカッコ) | Idle | `insertBracketPair`（commit OC + カーソル内側）。composition は残らない |
-| Composing/Previewing | Input(開きカッコ) | Idle | **現在の composition を先に確定**（候補窓表示中は `CommitSelected`、それ以外は `CommitPreeditAsIs` / ローマ字 flush）→ その後 `insertBracketPair` |
+| Idle | Input(開きカッコ)・`hint.selection_collapsed==true` | Idle | `insertBracketPair`（commit OC + カーソル内側）。composition は残らない |
+| Idle | Input(開きカッコ)・`hint.selection_collapsed==false`（範囲選択中） | Idle | `bracketWrapSelection==true`（M61-B）なら選択を囲む（§4.9）。**そうでなければ（M61-A 既定）開きカッコ 1 文字で選択を置換するリテラル挿入**（ペア化・カーソル内側化しない。§4.8） |
+| Composing/Previewing | Input(開きカッコ) | Idle | **現在の composition を先に確定**（候補窓表示中は `CommitSelected`、それ以外は `CommitPreeditAsIs` / ローマ字 flush）→ その後（確定後の選択は collapsed なので）`insertBracketPair` |
 | Selecting | Input(開きカッコ) | Idle | `CommitSelected` → `insertBracketPair` |
 | Idle | Input(閉じカッコ) | Idle | `hint.char_after` が同じ閉じカッコなら `skipOverClosing`、無ければリテラル 1 文字挿入（§4.2） |
 | Idle | Backspace | Idle | `hint.selection_collapsed` かつ `hint.char_before`/`char_after` が空ペアなら `deleteBracketPair`、無ければ Backspace をアプリへパススルー（TIP は eaten しない。§4.3・§5.3） |
@@ -308,9 +309,20 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
 
 #### 4.5.0 アプリリストのシリアライズ（`bracketPairingApps`）
 
+> **マスタートグル優先（最重要）**: マスタースイッチ `bracketPairing`（§1.1・§6）が
+> **最優先・権威**である。`bracketPairing == false` のとき本機能は**アプリ・プロファイル設定に
+> 関わらず完全に無効**で、カッコ/キー挙動は一切変わらない。per-app の有効範囲判定
+> （`bracketPairingApps` / `bracketPairingAppPolicy` / M48 プロファイルの `bracketPairing` フィールド）は
+> **`bracketPairing == true` のときに限り**、どのアプリで動かすかを絞り込む副次レイヤである。
+> したがってプロファイル `bracketPairing:"on"` でも、マスターが `false` なら有効化されない
+> （グローバル無効化は常に確実）。評価順序: ① マスター `bracketPairing` → false なら終了（無効）、
+> ② per-app 解決（M48 プロファイル `bracketPairing` `on`/`off` → 次に `bracketPairingApps` +
+> `bracketPairingAppPolicy`。`auto` / 未指定はグローバル既定に従う）。
+
 アプリの deny/allow リストは**カッコ対応表（§4.5.1 の `bracket-pairs.tsv`）とは別物**で、
 プロセス名を encode する独自スキーマを持つ。`bracket-pairs.tsv` には**アプリ名を書かない**
-（同 TSV は `<open>\t<close>\t<flags>` のカッコ対専用）。アプリリストは次の二経路で供給する:
+（同 TSV は `<open>\t<close>\t<flags>` のカッコ対専用）。アプリリストは次の二経路で供給する
+（いずれも上記マスタートグルが `true` のときのみ作用する）:
 
 - **設定 `bracketPairingApps`（配列、`string[]`、M61-B）**: 前面プロセスの実行ファイル名
   （例 `"Code.exe"` `"devenv.exe"`）の配列。大文字小文字を区別しない。`bracketPairingAppPolicy`
@@ -487,7 +499,7 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
 
 | キー | 型 | 既定 | M | 説明 |
 |---|---|---|---|---|
-| `bracketPairing` | boolean | `false` | M61-A | マスタートグル。true で自動カッコペアリングを有効化 |
+| `bracketPairing` | boolean | `false` | M61-A | マスタートグル。true で自動カッコペアリングを有効化。**最優先・権威**で、false なら per-app/プロファイル設定に関わらず完全無効（§1.1・§4.5.0） |
 | `bracketPairingTrigger` | enum `immediate`/`composition` | `immediate` | M61-A | 挿入・確定の方式（即時挿入 / preedit→確定操作。§4.0） |
 | `bracketSkipOverClosing` | boolean | `true` | M61-A | 閉じカッコ直前で同じ閉じカッコを打つと飛び越える（§4.2） |
 | `bracketBackspaceDeletesPair` | boolean | `true` | M61-A | 空ペア内側の Backspace で開き・閉じを一括削除（§4.3） |

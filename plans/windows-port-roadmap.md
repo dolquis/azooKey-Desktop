@@ -1320,7 +1320,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     パススルーし通常削除の挙動を変えない（§5.3・§4.3）
   - 組み込みカッコ対応表（全角 + 半角の非対称ペア。対称デリミタ・`<>` は既定除外）
   - immediate トリガ（既定）の対挿入とカーソル内側配置（§5.2）。`composition` トリガは
-    設定で選択可能にする（§4.0.1）
+    設定で選択可能にする（§4.0.1）。**範囲選択中の開きカッコは（M61-A は wrap OFF 固定のため）
+    開きカッコ 1 文字で選択を置換するリテラル挿入とし、ペア化・カーソル内側化しない**（§3.3・§4.8）
   - 閉じカッコのスキップ（カーソル右 1 文字読取で飛び越え判定。§4.2）
   - 空ペアの Backspace 一括削除（カーソル左右読取で判定。§4.3）
   - 英数モード（`alnum_half` / `alnum_full`）でのペアリング（§4.4）
@@ -1370,7 +1371,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     シード〔VS Code / Visual Studio / JetBrains 系等〕。M48 プロファイルがあれば優先。spec §4.5.0）
   - M48 プロファイルスキーマ拡張（`profilesByApp` 各プロファイルへ `bracketPairing` enum
     `auto`/`on`/`off` を追加。`additionalProperties:false` のため明示追加が必須。`docs/app-profile-spec.md`
-    §4.1 を更新。spec §4.5.0）
+    §4.1 を更新。spec §4.5.0）。**マスタートグル `bracketPairing` が最優先**で、false なら
+    プロファイル `on` でも有効化しない（評価順: マスター → per-app。§4.5.0）
   - 対称デリミタ（`"` `'` `` ` ``）の語境界判定付きペアリング（`bracketSymmetricQuotePairing`、既定 OFF）
   - 範囲選択中の開きカッコで選択を囲む（`bracketWrapSelection`、既定 OFF）
   - 設定キー 5 種（`bracketSymmetricQuotePairing` / `bracketWrapSelection` /

@@ -525,12 +525,64 @@ $sig.Status                                  # Valid を期待
 $sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 ```
 
-## 3. WinUI 3 設定アプリ（M30）
+## 3. 設定アプリ（M11 最小 / M30 フル）
+
+### 3.0 UI フレームワーク選定（v1.0 決定: WinUI 3 / C++/WinRT）
+
+v1.0 の設定アプリ（M11 最小 + M30 フル）、および同一 UI スタックに乗る後続機能
+（モデル管理 UI = M45、学習データ可視化 UI = M49、リッチ設定 = M30 拡張）の
+フレームワークは、**WinUI 3（Windows App SDK, C++/WinRT）を第一候補として確定する**。
+根拠は次の 3 点:
+
+1. **C++/WinRT 親和性** — TIP（`tsf-tip/`）・Inference Host（`inference-host/`）が
+   すでに C++ / C++/WinRT スタックであり、IPC クライアント（Named Pipe + 4-byte
+   length-prefix + JSON、§3.3）の型・実装・ビルド系を設定アプリと共有できる。別言語
+   ランタイム（.NET / Rust）を追加で持ち込まずに済む。
+2. **Fluent Design 標準対応** — Mica / Acrylic backdrop（`Window.SystemBackdrop` に
+   `MicaBackdrop` / `DesktopAcrylicBackdrop`）・Light/Dark・PerMonitorV2 DPI・
+   アクセントカラーが追加実装なしで得られ、M26（Win11 ネイティブ体験）と整合する。
+3. **MSIX サイドロード整合** — v1.0 の配布形態（§1 MSIX サイドロード）と一致し、
+   設定アプリ EXE をパッケージ内同梱として配布できる（§1.1 の `comServer` は TIP の
+   in-proc サーバ宣言であり、設定アプリは通常の packaged EXE として同梱する）。
+
+> **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
+> - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
+> - **unpackaged（MSIX なし）配布は Windows App SDK 1.0 以降サポート済み**
+>   （Windows 10 1909+ / x86・x64・arm64）。旧記述「WinUI 3 デスクトップは MSIX 必須・
+>   unpackaged 不可」は**誤り**。ただし本プロジェクトは TIP の CLSID/Profile 登録と
+>   MSIX サイドロード配布の都合で **packaged（MSIX）を採用**するため、結論は不変。
+> - 現行安定版は **Windows App SDK 1.8**（§3.1 の下限は目安。実装時に最新安定版へ追従）。
+
+#### フレームワーク比較
+
+| 軸 | **WinUI 3 (C++/WinRT) ★採用** | WPF (.NET 9+) | Tauri (Rust + WebView2) |
+|---|---|---|---|
+| 言語 | C++/WinRT（既存スタックと同一） | C#（.NET ランタイム追加） | Rust + JS/TS |
+| Fluent / Mica | 標準（`SystemBackdrop`） | .NET 9 で Fluent テーマ標準化（Mica は DWM API 併用） | WebView2 任せ（CSS 自前実装） |
+| DPI / Dark | 標準（PerMonitorV2） | 対応（Fluent テーマ・`ThemeMode`） | WebView2 / 自前 |
+| 配布 | packaged / unpackaged 両対応 | unpackaged 可・MSIX 可 | 最小バイナリ・WebView2 ランタイム前提 |
+| C++ IPC 連携 | 同一言語で interop 不要 | C#↔C++ interop 層が必要 | Rust↔C++ FFI（または既存 Named Pipe を再利用） |
+| MS サポート | first-party | first-party | 非サポート（OSS） |
+| MSIX 整合 | ◎ | ○ | △（WebView2 依存） |
+
+**代替案メモ**:
+- **WPF (.NET 9+)** — .NET 9 で Fluent テーマ（Light/Dark/アクセント、`ThemeMode`、
+  `PresentationFramework.Fluent`）が標準化され UI 体験差は縮小した（旧記述「Fluent /
+  Mica は非標準」は .NET 9 以降では不正確）。ただし設定アプリに .NET ランタイム依存が
+  増え、C++ IPC クライアントとの interop 層が必要になる。**v1.0 では非採用**。
+- **Tauri** — 配布サイズ最小だが Microsoft 非サポートで、C++/WinRT との境界が増える
+  （既存 Named Pipe IPC を再利用すれば緩和可能）。**v1.x の差別化リッチ UI（M30 拡張）で
+  WebView ベースへ切り替える余地を残す**が、v1.0 では非採用。
+
+**仮決定の確証（v1.0 着手前、`gate:human-required`）**: Windows 実機で WinUI 3 / WPF の
+最小サンプル（チェックボックス + テキスト入力 + リストボックス + IPC 往復 1 経路）を作り、
+(a) 同梱配布サイズ増分、(b) 初回起動時間、(c) C++/WinRT IPC 連携コード行数 の 3 指標を
+計測してこの選定を確証する（実測値は Linear 課題に記録し、本 spec には決定と設計のみ残す）。
 
 ### 3.1 構成
 
 - 言語: C++/WinRT（TIP / Host と統一）
-- フレームワーク: WinUI 3 (Windows App SDK 1.5+)
+- フレームワーク: WinUI 3（Windows App SDK 1.8 系。実装時の最新安定版に追従）
 - 配布: MSIX 内同梱（別 EXE `azookey_settings.exe`）
 
 ### 3.2 ナビゲーション
@@ -580,6 +632,34 @@ Host は受信した設定を `%LOCALAPPDATA%\azooKey\config\settings.json` に�
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json` |
 | モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\zenz-v3.1-small-Q5_K_M.gguf` |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
+
+### 3.5 `ITfFnConfigure` 連携（Windows 設定「詳細設定」からの起動）
+
+Windows の「設定 > 時刻と言語 > 言語と地域 > 日本語 > キーボード」や従来の Text Services
+コントロールパネルから本 IME の「プロパティ / オプション」を開くと、TSF マネージャは TIP の
+CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
+`ITfFnConfigure::Show(hwndParent, langid, rguidProfile)` を呼ぶ（M30 受け入れ条件
+「Windows 設定からの『詳細設定』起動で開く」に対応）。
+
+- **実装場所**: `ITfFnConfigure` は **TIP DLL（`tsf-tip/`）側**が実装する（設定アプリ EXE
+  ではない）。TSF が `DllRegisterServer`（§1）で登録した CLSID に対して直接
+  `CoCreateInstance` するため。語句登録の `ITfFnConfigureRegisterWord` が
+  `ITfFunctionProvider::GetFunction` 経由で取得されるのと異なり、`ITfFnConfigure` は
+  **CLSID 直 `CoCreateInstance`** で取得される点に注意。
+- **動作**: `Show` は**任意のホストアプリ（メモ帳・ブラウザ等）のスレッド上で同期的に呼ばれ、
+  ダイアログが閉じるまで return してはならない**（Microsoft Learn: `ITfFnConfigure::Show`
+  Remarks「This method should not return until the user closes the dialog box」）。
+  そのため `Show` 内で WinUI 3 を直接起動して設定 UI のランタイムをホストアプリ
+  プロセスへ load することは避け、**別プロセスの `azookey_settings.exe` を
+  `CreateProcess` で起動し、`WaitForSingleObject` でプロセス終了まで待ってから `S_OK` を
+  返す**。これにより設定 UI の WinUI 3 / Windows App SDK ランタイムをホストアプリへ
+  持ち込まず、TIP DLL の常駐負荷とクラッシュ面を最小化する。
+- **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
+  `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。
+- **関連**: §1.1 の TIP CLSID / Profile 登録、`ITfInputProcessorProfiles::Register` /
+  `AddLanguageProfile`。`hwndParent` は設定アプリのオーナーウィンドウとして渡す
+  （`azookey_settings.exe` 側で `SetWindowLongPtr(GWLP_HWNDPARENT)` 相当の設定が必要なら
+  引数で受ける）。
 
 ## 4. WiX / Inno Setup インストーラ（M31）
 

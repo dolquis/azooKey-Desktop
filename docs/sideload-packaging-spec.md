@@ -550,10 +550,16 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 > **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
 > - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
 > - WinUI 3 / Windows App SDK の対応 OS は **Windows 10 バージョン 1809（build 17763）以降**。
+>   ただしこれは**設定アプリ（WinUI 3）単体の下限**であり、配布パッケージ全体の最小 OS では
+>   ない（下記）。
 > - **unpackaged（MSIX なし）配布もサポートされる**（Windows App SDK 1.0 以降）。旧記述
 >   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。ただし本プロジェクトは
->   TIP の CLSID/Profile 登録と MSIX サイドロード配布の都合で **packaged（MSIX）を採用**
->   するため、結論は不変（packaged の最小 OS は 1809+）。
+>   TIP の CLSID/Profile 登録と MSIX サイドロード配布の都合で **packaged（MSIX）を採用**する。
+> - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
+>   §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
+>   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
+>   §1.1）。設定アプリの WinUI 3（1809+）はこのパッケージ下限に内包されるため、MSIX の
+>   `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
 > - 現行安定版は **Windows App SDK 2.2.0（2026-06-09）**（バージョン系列は 2.x）。版は
 >   固定せず実装時の最新安定版に追従する（§3.1）。
 

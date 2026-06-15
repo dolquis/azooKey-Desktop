@@ -233,6 +233,29 @@ C++ ランタイム依存（`msvcp140.dll` 等）を MSIX に同梱：
 
 これにより、ユーザー環境に VCRedist が無くても動作する。
 
+#### Windows App SDK ランタイム（設定アプリ = WinUI 3 の依存）
+
+設定アプリ `azookey_settings.exe` は WinUI 3（§3.0）のため **Windows App SDK ランタイム**に
+依存する。VCLibs だけではクリーン VM で起動しないため、次のいずれかで同梱する（ビルド側は
+`Microsoft.WindowsAppSDK` NuGet の `PackageReference` が必須。版は §3.1 の採用 WASDK に揃える）:
+
+- **self-contained 配置（推奨・サイドロード向け）**: 設定アプリ（WAP）プロジェクトに
+  `<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>` を設定し、ランタイムを
+  アプリへバンドルする。フレームワークパッケージ依存が無くなり、外部配信に依存せず
+  クリーン VM で確実に起動する（配布サイズは増える）。
+- **framework-dependent 配置**: manifest に Windows App SDK のフレームワーク依存を宣言し、
+  `Microsoft.WindowsAppRuntime` フレームワークパッケージ（または `WindowsAppRuntimeInstall.exe`）
+  の配信をインストーラ手順（§4 / §5）に含める。
+  ```xml
+  <!-- Name / MinVersion は §3.1 で採用する WASDK 版に合わせる（系列 2.x） -->
+  <PackageDependency Name="Microsoft.WindowsAppRuntime.2.2"
+                     MinVersion="2.2.0.0"
+                     Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  ```
+
+TIP DLL（`tsf-tip/`）と Host（`inference-host/`）は WinUI 3 非依存のため、本ランタイムは
+**設定アプリのみ**が必要（TIP/Host パッケージには不要）。
+
 ### 1.4 インストール / アンインストール
 
 ```powershell

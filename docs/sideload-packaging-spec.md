@@ -527,12 +527,14 @@ $sig.SignerCertificate | Format-List Subject, Issuer, NotAfter
 
 ## 3. 設定アプリ（M11 最小 / M30 フル）
 
-### 3.0 UI フレームワーク選定（v1.0 決定: WinUI 3 / C++/WinRT）
+### 3.0 UI フレームワーク選定（採用: WinUI 3 / C++/WinRT）
 
-v1.0 の設定アプリ（M11 最小 + M30 フル）、および同一 UI スタックに乗る後続機能
-（モデル管理 UI = M45、学習データ可視化 UI = M49、リッチ設定 = M30 拡張）の
-フレームワークは、**WinUI 3（Windows App SDK, C++/WinRT）を第一候補として確定する**。
-根拠は次の 3 点:
+設定アプリの UI フレームワークは、**WinUI 3（Windows App SDK, C++/WinRT）を第一候補と
+して確定する**。対象は **v1.0 スコープの M11（最小設定アプリ。Phase 4 リリースゲート）** と、
+それを **post-v1.0 で本格化する M30（フル設定 UI）**、および同一 UI スタックに乗る後続機能
+（モデル管理 UI = M45、学習データ可視化 UI = M49）。同一フレームワークに揃えて後続の
+作り直しを避ける（v1.0 では M11 の最小機能セットのみを出荷し、M30 のフル UI / 横断機能は
+v1.0 に引き込まない）。根拠は次の 3 点:
 
 1. **C++/WinRT 親和性** — TIP（`tsf-tip/`）・Inference Host（`inference-host/`）が
    すでに C++ / C++/WinRT スタックであり、IPC クライアント（Named Pipe + 4-byte

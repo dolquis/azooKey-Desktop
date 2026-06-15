@@ -116,6 +116,8 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。
 
 ## 参照
 
+- 推論コントラクト（プロンプト整形・制約デコード・n-best・候補統合・性能予算）：
+  `docs/zenzai-inference-spec.md`（本書は「どの実行系か」、同書は「どう推論するか」の正典）
 - バックエンド選定の詳細：`docs/copilot-pc-backend-spec.md`
 - mmap モデルロード：`docs/copilot-pc-backend-spec.md` §5
 - 省電力モード連動：`docs/copilot-pc-backend-spec.md` §6

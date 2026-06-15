@@ -617,12 +617,20 @@ public:
         return S_OK;
     }
     STDMETHODIMP Show(HWND hwndParent, LANGID langid, REFGUID rguidProfile) override {
-        // 設定アプリ EXE を起動
+        // 選択中の言語プロファイルを引数として設定アプリへ渡す
+        // （複数プロファイル時に既定ページではなく該当プロファイルを初期表示するため）
+        wchar_t profile[64] = {};
+        StringFromGUID2(rguidProfile, profile, ARRAYSIZE(profile));
+        wchar_t args[128] = {};
+        swprintf_s(args, L"--langid 0x%04X --profile %s", langid, profile);
+
+        // 設定アプリ EXE を非同期起動（終了待ちしない。理由は下記注記）
         SHELLEXECUTEINFOW sei{ sizeof(sei) };
-        sei.lpFile  = L"azookey_settings.exe";
-        sei.hwnd    = hwndParent;
-        sei.nShow   = SW_SHOW;
-        sei.fMask   = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpFile       = L"azookey_settings.exe"; // 実体は §6.4 GetInstalledExePath で解決
+        sei.lpParameters = args;
+        sei.hwnd         = hwndParent;
+        sei.nShow        = SW_SHOW;
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
         ShellExecuteExW(&sei);
         return S_OK;
     }

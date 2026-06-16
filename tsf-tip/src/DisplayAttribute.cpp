@@ -1,5 +1,22 @@
 #include "azookey/tsf/DisplayAttribute.h"
 
+#include <new>
+#include <utility>
+
+namespace {
+
+template <typename T, typename... Args>
+T* NewComBoundaryObject(Args&&... args) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (azookey::tsf::testing::ConsumeComBoundaryAllocationFailureForTest()) {
+    return nullptr;
+  }
+#endif
+  return new (std::nothrow) T(std::forward<Args>(args)...);
+}
+
+}  // namespace
+
 namespace azookey::tsf {
 
 // --- InputDisplayAttributeInfo ---
@@ -77,10 +94,23 @@ STDMETHODIMP EnumDisplayAttributeInfo::Next(ULONG ulCount, ITfDisplayAttributeIn
                                             ULONG* pcFetched) {
   if (!rgInfo) return E_INVALIDARG;
   ULONG fetched = 0;
-  while (fetched < ulCount && index_ == 0) {
-    rgInfo[fetched] = new InputDisplayAttributeInfo();
-    ++fetched;
-    ++index_;
+  try {
+    while (fetched < ulCount && index_ == 0) {
+      auto* info = NewComBoundaryObject<InputDisplayAttributeInfo>();
+      if (!info) {
+        if (pcFetched) *pcFetched = fetched;
+        return E_OUTOFMEMORY;
+      }
+      rgInfo[fetched] = info;
+      ++fetched;
+      ++index_;
+    }
+  } catch (const std::bad_alloc&) {
+    if (pcFetched) *pcFetched = fetched;
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    if (pcFetched) *pcFetched = fetched;
+    return E_FAIL;
   }
   if (pcFetched) *pcFetched = fetched;
   return fetched == ulCount ? S_OK : S_FALSE;
@@ -98,10 +128,18 @@ STDMETHODIMP EnumDisplayAttributeInfo::Reset() {
 
 STDMETHODIMP EnumDisplayAttributeInfo::Clone(IEnumTfDisplayAttributeInfo** ppEnum) {
   if (!ppEnum) return E_INVALIDARG;
-  auto* clone = new EnumDisplayAttributeInfo();
-  clone->index_ = index_;
-  *ppEnum = clone;
-  return S_OK;
+  *ppEnum = nullptr;
+  try {
+    auto* clone = NewComBoundaryObject<EnumDisplayAttributeInfo>();
+    if (!clone) return E_OUTOFMEMORY;
+    clone->index_ = index_;
+    *ppEnum = clone;
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
 }
 
 }  // namespace azookey::tsf

@@ -1,7 +1,9 @@
 #include "azookey/tsf/TextService.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <new>
 #include <optional>
 #include <thread>
 #include <utility>
@@ -40,8 +42,8 @@ std::string IpcHandshakeTokenFromEnv() {
 
 std::wstring Utf8ToWide(const std::string& utf8) {
   if (utf8.empty()) return {};
-  const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()),
-                                      nullptr, 0);
+  const int len =
+      MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
   if (len <= 0) return {};
   std::wstring result(len, L'\0');
   MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), result.data(), len);
@@ -69,9 +71,60 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
   return same;
 }
 
+#ifdef AZOOKEY_TSF_TESTING
+std::atomic<int> g_com_boundary_allocation_failures{0};
+std::atomic<int> g_pending_commit_observation_failures{0};
+#endif
+
+template <typename T, typename... Args>
+T* NewComBoundaryObject(Args&&... args) {
+#ifdef AZOOKEY_TSF_TESTING
+  if (azookey::tsf::testing::ConsumeComBoundaryAllocationFailureForTest()) {
+    return nullptr;
+  }
+#endif
+  return new (std::nothrow) T(std::forward<Args>(args)...);
+}
+
 }  // namespace
 
 namespace azookey::tsf {
+
+#ifdef AZOOKEY_TSF_TESTING
+namespace testing {
+
+void FailNextComBoundaryAllocationForTest() { g_com_boundary_allocation_failures.store(1); }
+
+void ClearComBoundaryAllocationFailureForTest() { g_com_boundary_allocation_failures.store(0); }
+
+bool ConsumeComBoundaryAllocationFailureForTest() {
+  int remaining = g_com_boundary_allocation_failures.load();
+  while (remaining > 0) {
+    if (g_com_boundary_allocation_failures.compare_exchange_weak(remaining, remaining - 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void FailNextPendingCommitObservationForTest() { g_pending_commit_observation_failures.store(1); }
+
+void ClearPendingCommitObservationFailureForTest() {
+  g_pending_commit_observation_failures.store(0);
+}
+
+bool ConsumePendingCommitObservationFailureForTest() {
+  int remaining = g_pending_commit_observation_failures.load();
+  while (remaining > 0) {
+    if (g_pending_commit_observation_failures.compare_exchange_weak(remaining, remaining - 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace testing
+#endif
 
 TextService::TextService() = default;
 
@@ -83,7 +136,8 @@ TextService::~TextService() {
 STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
   if (!ppvObj) return E_INVALIDARG;
   *ppvObj = nullptr;
-  if (riid == IID_IUnknown || riid == IID_ITfTextInputProcessor || riid == IID_ITfTextInputProcessorEx) {
+  if (riid == IID_IUnknown || riid == IID_ITfTextInputProcessor ||
+      riid == IID_ITfTextInputProcessorEx) {
     *ppvObj = static_cast<ITfTextInputProcessorEx*>(this);
   } else if (riid == IID_ITfKeyEventSink) {
     *ppvObj = static_cast<ITfKeyEventSink*>(this);
@@ -100,14 +154,18 @@ STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
   return S_OK;
 }
 
-STDMETHODIMP_(ULONG) TextService::AddRef() { return static_cast<ULONG>(InterlockedIncrement(&ref_count_)); }
+STDMETHODIMP_(ULONG) TextService::AddRef() {
+  return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+}
 STDMETHODIMP_(ULONG) TextService::Release() {
   const auto c = static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   if (c == 0) delete this;
   return c;
 }
 
-STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) { return ActivateEx(ptim, tid, 0); }
+STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) {
+  return ActivateEx(ptim, tid, 0);
+}
 
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
   // dwFlags does not officially enumerate the UIElement bit, so UI-less state
@@ -181,8 +239,7 @@ HRESULT TextService::AdviseTextServiceSinks() {
   if (!thread_mgr_) return E_UNEXPECTED;
 
   ITfKeystrokeMgr* key_mgr = nullptr;
-  HRESULT hr = thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr,
-                                           reinterpret_cast<void**>(&key_mgr));
+  HRESULT hr = thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr));
   if (FAILED(hr) || !key_mgr) return FAILED(hr) ? hr : E_NOINTERFACE;
 
   hr = key_mgr->AdviseKeyEventSink(client_id_, this, TRUE);
@@ -194,8 +251,7 @@ HRESULT TextService::AdviseTextServiceSinks() {
   hr = thread_mgr_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
   if (FAILED(hr) || !source) return FAILED(hr) ? hr : E_NOINTERFACE;
 
-  hr = source->AdviseSink(IID_ITfThreadMgrEventSink,
-                          static_cast<ITfThreadMgrEventSink*>(this),
+  hr = source->AdviseSink(IID_ITfThreadMgrEventSink, static_cast<ITfThreadMgrEventSink*>(this),
                           &thread_mgr_sink_cookie_);
   source->Release();
   if (FAILED(hr)) return hr;
@@ -207,8 +263,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
 
   if (thread_mgr_ && thread_mgr_sink_cookie_ != TF_INVALID_COOKIE) {
     ITfSource* source = nullptr;
-    HRESULT hr = thread_mgr_->QueryInterface(IID_ITfSource,
-                                             reinterpret_cast<void**>(&source));
+    HRESULT hr = thread_mgr_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
     if (SUCCEEDED(hr) && source) {
       hr = source->UnadviseSink(thread_mgr_sink_cookie_);
       source->Release();
@@ -223,8 +278,8 @@ HRESULT TextService::UnadviseTextServiceSinks() {
 
   if (thread_mgr_ && key_event_sink_advised_) {
     ITfKeystrokeMgr* key_mgr = nullptr;
-    HRESULT hr = thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr,
-                                             reinterpret_cast<void**>(&key_mgr));
+    HRESULT hr =
+        thread_mgr_->QueryInterface(IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&key_mgr));
     if (SUCCEEDED(hr) && key_mgr) {
       hr = key_mgr->UnadviseKeyEventSink(client_id_);
       key_mgr->Release();
@@ -248,50 +303,67 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
   return S_OK;
 }
 
-STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
-  UNREFERENCED_PARAMETER(context); UNREFERENCED_PARAMETER(lParam);
+STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
+                                        BOOL* eaten) {
+  UNREFERENCED_PARAMETER(context);
+  UNREFERENCED_PARAMETER(lParam);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  try {
+#ifdef AZOOKEY_TSF_TESTING
+    if (testing::ConsumeComBoundaryAllocationFailureForTest()) {
+      throw std::bad_alloc();
+    }
+#endif
 
-  if (HasSystemModifierDown()) return S_OK;
-  if (committing_) {
-    *eaten = TRUE;
+    if (HasSystemModifierDown()) return S_OK;
+    if (committing_) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+
+    const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
+    const bool cand_visible = candidate_window_.IsVisible();
+
+    if (wParam >= 'A' && wParam <= 'Z') {
+      *eaten = TRUE;
+    } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
+      // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
+      // composition が無いときは通常のハイフンとしてアプリへ通す。
+      *eaten = has_preedit ? TRUE : FALSE;
+    } else if (wParam == VK_BACK) {
+      *eaten = has_preedit ? TRUE : FALSE;
+    } else if (wParam == VK_SPACE) {
+      *eaten = (has_preedit || cand_visible) ? TRUE : FALSE;
+    } else if (wParam == VK_UP || wParam == VK_DOWN) {
+      *eaten = cand_visible ? TRUE : FALSE;
+    } else if (wParam == VK_RETURN) {
+      *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
+    } else if (wParam == VK_ESCAPE) {
+      *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
+    } else if (wParam >= '1' && wParam <= '9') {
+      *eaten = cand_visible ? TRUE : FALSE;
+    }
     return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
   }
-
-  const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
-  const bool cand_visible = candidate_window_.IsVisible();
-
-  if (wParam >= 'A' && wParam <= 'Z') {
-    *eaten = TRUE;
-  } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
-    // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
-    // composition が無いときは通常のハイフンとしてアプリへ通す。
-    *eaten = has_preedit ? TRUE : FALSE;
-  } else if (wParam == VK_BACK) {
-    *eaten = has_preedit ? TRUE : FALSE;
-  } else if (wParam == VK_SPACE) {
-    *eaten = (has_preedit || cand_visible) ? TRUE : FALSE;
-  } else if (wParam == VK_UP || wParam == VK_DOWN) {
-    *eaten = cand_visible ? TRUE : FALSE;
-  } else if (wParam == VK_RETURN) {
-    *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
-  } else if (wParam == VK_ESCAPE) {
-    *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
-  } else if (wParam >= '1' && wParam <= '9') {
-    *eaten = cand_visible ? TRUE : FALSE;
-  }
-  return S_OK;
 }
 
-STDMETHODIMP TextService::OnTestKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
-  UNREFERENCED_PARAMETER(context); UNREFERENCED_PARAMETER(wParam); UNREFERENCED_PARAMETER(lParam);
+STDMETHODIMP TextService::OnTestKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam,
+                                      BOOL* eaten) {
+  UNREFERENCED_PARAMETER(context);
+  UNREFERENCED_PARAMETER(wParam);
+  UNREFERENCED_PARAMETER(lParam);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   return S_OK;
 }
 
-STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
+STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
+                                    BOOL* eaten) {
   UNREFERENCED_PARAMETER(lParam);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
@@ -300,7 +372,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     if (committing_) {
       ITfContext* retry_context = commit_context_ ? commit_context_ : active_context_;
-      if (retry_context && SUCCEEDED(RequestCommitEditSession(retry_context))) {
+      const HRESULT retry_hr = retry_context ? RequestCommitEditSession(retry_context) : E_FAIL;
+      if (retry_hr == E_OUTOFMEMORY) return retry_hr;
+      if (SUCCEEDED(retry_hr)) {
         preedit_kana_.clear();
         romaji_.Reset();
         *eaten = TRUE;
@@ -312,9 +386,60 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
 
-    const bool cand_visible = candidate_window_.IsVisible();
+    struct PreeditRollbackState {
+      std::string preedit;
+      core::RomajiKanaConverter romaji;
+      bool candidate_window_visible{false};
+      int selected_candidate_idx{0};
+      std::vector<ipc::CandidateField> shown_candidates;
+      std::vector<ipc::CandidateField> cached_candidates;
+      bool candidate_window_show_pending{false};
+    };
+    auto capture_preedit_rollback_state = [&]() {
+      PreeditRollbackState state;
+      state.preedit = preedit_kana_;
+      state.romaji = romaji_;
+      state.candidate_window_visible = candidate_window_.IsVisible();
+      state.selected_candidate_idx = selected_candidate_idx_;
+      state.shown_candidates = shown_candidates_;
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        state.cached_candidates = candidates_;
+        state.candidate_window_show_pending = candidate_window_show_pending_;
+      }
+      return state;
+    };
+    auto restore_preedit_state = [&](const PreeditRollbackState& state) {
+      preedit_kana_ = state.preedit;
+      romaji_ = state.romaji;
+      selected_candidate_idx_ = state.selected_candidate_idx;
+      shown_candidates_ = state.shown_candidates;
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_ = state.cached_candidates;
+        candidate_window_show_pending_ = state.candidate_window_show_pending;
+      }
+      if (state.candidate_window_visible && !state.shown_candidates.empty()) {
+        std::vector<std::wstring> items;
+        for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
+        POINT pt = caret_pt_;
+        if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+        candidate_window_.Show(pt, items, state.selected_candidate_idx);
+      }
+    };
+    auto request_preedit_update_or_restore_on_oom =
+        [&](const PreeditRollbackState& rollback_state) -> HRESULT {
+      const HRESULT update_hr = RequestPreeditUpdate(context);
+      if (update_hr == E_OUTOFMEMORY) {
+        restore_preedit_state(rollback_state);
+        return update_hr;
+      }
+      return S_OK;
+    };
 
+    const bool cand_visible = candidate_window_.IsVisible();
     if (wParam >= 'A' && wParam <= 'Z') {
+      const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
       if (cand_visible) {
         candidate_window_.Hide();
@@ -329,7 +454,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidate_window_show_pending_ = false;
       }
       preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
-      RequestPreeditUpdate(context);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;
 
@@ -338,6 +464,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       // 長音: composition 中のハイフンキー（主キー・テンキー）を長音符「ー」として
       // preedit に取り込む。composition が無いときは本分岐に入らず、ハイフンはアプリへ
       // パススルーする。
+      const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_window_.Hide();
         selected_candidate_idx_ = 0;
@@ -348,11 +475,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidate_window_show_pending_ = false;
       }
       preedit_kana_ += romaji_.Feed('-');
-      RequestPreeditUpdate(context);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;
 
     } else if (wParam == VK_BACK) {
+      const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_window_.Hide();
         selected_candidate_idx_ = 0;
@@ -371,17 +500,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         while (i > 0 && (s[i - 1] & 0xC0) == 0x80) --i;
         if (i > 0) --i;
         s.erase(i);
-        RequestPreeditUpdate(context);
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
         if (!preedit_kana_.empty()) PostQueryCandidates(preedit_kana_);
         *eaten = TRUE;
       }
 
     } else if (wParam == VK_SPACE) {
       // Flush any pending romaji so the reading is complete.
+      const auto rollback_state = capture_preedit_rollback_state();
       const std::string flushed = romaji_.Flush();
       if (!flushed.empty()) {
         preedit_kana_ += flushed;
-        RequestPreeditUpdate(context);
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
         // Reading changed due to romaji flush; old candidates are now stale.
         // Clear them and query for the updated reading so the candidate window
         // (opened below) reflects the complete input, not the pre-flush state.
@@ -445,21 +577,24 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_RETURN) {
       if (cand_visible) {
-        CommitSelected(context);
+        const HRESULT commit_hr = CommitSelected(context);
+        if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
-        CommitPreeditAsIs(context);
+        const HRESULT commit_hr = CommitPreeditAsIs(context);
+        if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
       }
 
     } else if (wParam >= '1' && wParam <= '9') {
       if (cand_visible) {
-        *eaten = TRUE;
         int idx = static_cast<int>(wParam - '1');
         if (idx < candidate_window_.GetCount()) {
           selected_candidate_idx_ = idx;
-          CommitSelected(context);
+          const HRESULT commit_hr = CommitSelected(context);
+          if (FAILED(commit_hr)) return commit_hr;
         }
+        *eaten = TRUE;
       }
 
     } else if (wParam == VK_ESCAPE) {
@@ -468,6 +603,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         selected_candidate_idx_ = 0;
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
+        const auto rollback_state = capture_preedit_rollback_state();
         preedit_kana_.clear();
         romaji_.Reset();
         {
@@ -475,10 +611,13 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidates_.clear();
           candidate_window_show_pending_ = false;
         }
-        RequestPreeditUpdate(context);
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
       }
     }
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
   } catch (...) {
     return E_FAIL;
   }
@@ -486,20 +625,26 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 }
 
 STDMETHODIMP TextService::OnKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
-  UNREFERENCED_PARAMETER(context); UNREFERENCED_PARAMETER(wParam); UNREFERENCED_PARAMETER(lParam);
+  UNREFERENCED_PARAMETER(context);
+  UNREFERENCED_PARAMETER(wParam);
+  UNREFERENCED_PARAMETER(lParam);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   return S_OK;
 }
 
 STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOOL* eaten) {
-  UNREFERENCED_PARAMETER(context); UNREFERENCED_PARAMETER(rguid);
+  UNREFERENCED_PARAMETER(context);
+  UNREFERENCED_PARAMETER(rguid);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   return S_OK;
 }
 
-STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) { UNREFERENCED_PARAMETER(pdim); return S_OK; }
+STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) {
+  UNREFERENCED_PARAMETER(pdim);
+  return S_OK;
+}
 STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
@@ -514,7 +659,10 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   }
   return S_OK;
 }
-STDMETHODIMP TextService::OnPushContext(ITfContext* pic) { UNREFERENCED_PARAMETER(pic); return S_OK; }
+STDMETHODIMP TextService::OnPushContext(ITfContext* pic) {
+  UNREFERENCED_PARAMETER(pic);
+  return S_OK;
+}
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
   if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
     CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
@@ -523,7 +671,8 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
   return S_OK;
 }
 
-STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfComposition* pComposition) {
+STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
+                                                  ITfComposition* pComposition) {
   if (composition_ == pComposition) {
     composition_->Release();
     composition_ = nullptr;
@@ -548,16 +697,34 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfC
 
 STDMETHODIMP TextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) {
   if (!ppEnum) return E_INVALIDARG;
-  *ppEnum = new azookey::tsf::EnumDisplayAttributeInfo();
-  return S_OK;
+  *ppEnum = nullptr;
+  try {
+    auto* enumerator = NewComBoundaryObject<azookey::tsf::EnumDisplayAttributeInfo>();
+    if (!enumerator) return E_OUTOFMEMORY;
+    *ppEnum = enumerator;
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
 }
 
-STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAttributeInfo** ppInfo) {
+STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
+                                                  ITfDisplayAttributeInfo** ppInfo) {
   if (!ppInfo) return E_INVALIDARG;
   *ppInfo = nullptr;
   if (IsEqualGUID(guidInfo, kInputAttributeGuid)) {
-    *ppInfo = new InputDisplayAttributeInfo();
-    return S_OK;
+    try {
+      auto* info = NewComBoundaryObject<InputDisplayAttributeInfo>();
+      if (!info) return E_OUTOFMEMORY;
+      *ppInfo = info;
+      return S_OK;
+    } catch (const std::bad_alloc&) {
+      return E_OUTOFMEMORY;
+    } catch (...) {
+      return E_FAIL;
+    }
   }
   return E_INVALIDARG;
 }
@@ -565,14 +732,16 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAt
 HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {
   if (request_accepted) *request_accepted = false;
   if (!context) return E_INVALIDARG;
+  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
+  if (!edit) return E_OUTOFMEMORY;
   if (active_context_ != context) {
     if (active_context_) active_context_->Release();
     active_context_ = context;
     active_context_->AddRef();
   }
-  ITfEditSession* edit = new EditSession(this, context);
   HRESULT hr_session = S_OK;
-  HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr_session);
+  HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
+                                           &hr_session);
   edit->Release();
   if (request_accepted) *request_accepted = SUCCEEDED(hr);
   // For synchronous sessions TSF writes DoEditSession's result into hr_session
@@ -590,7 +759,8 @@ HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
     active_context_->AddRef();
   }
 
-  ITfEditSession* edit = new EditSession(this, context);
+  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
+  if (!edit) return E_OUTOFMEMORY;
   HRESULT hr_session = E_FAIL;
   const HRESULT hr =
       context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
@@ -622,16 +792,14 @@ void TextService::CancelPendingQueriesForLifecycle() {
   if (ipc_has_request_) {
     if (can_send_cancel) {
       ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false,
-           ipc_pending_id_});
+          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false, ipc_pending_id_});
       need_notify = true;
     }
     ipc_has_request_ = false;
   }
   if (can_send_cancel && ipc_inflight_id_ != 0) {
     ipc_send_queue_.push_back(
-        {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false,
-         ipc_inflight_id_});
+        {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false, ipc_inflight_id_});
     need_notify = true;
   }
   ++ipc_pending_id_;
@@ -656,7 +824,18 @@ void TextService::PostPendingCommitObservation() {
   if (!pending_commit_observation_) return;
   auto pending = std::move(*pending_commit_observation_);
   pending_commit_observation_.reset();
-  PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+  try {
+#ifdef AZOOKEY_TSF_TESTING
+    if (testing::ConsumePendingCommitObservationFailureForTest()) {
+      throw std::bad_alloc();
+    }
+#endif
+    PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+  } catch (...) {
+    // The document commit has already succeeded by the time pending commit
+    // observations are posted. Drop best-effort learning telemetry rather than
+    // reporting commit failure and making the same text retryable.
+  }
 }
 
 void TextService::ClearTextStateForLifecycle() {
@@ -726,16 +905,22 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
     commit_surface_.clear();
   }
 
-  ITfEditSession* edit = new EditSession(this, context);
+  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
+  if (!edit) {
+    preedit_kana_ = saved_preedit;
+    committing_ = saved_committing;
+    commit_surface_ = saved_commit_surface;
+    DebugLog("Lifecycle cleanup: edit session allocation failed");
+    return false;
+  }
   HRESULT hr_session = E_FAIL;
   const HRESULT hr =
       context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &hr_session);
   edit->Release();
 
-  const bool completed =
-      SUCCEEDED(hr) && SUCCEEDED(hr_session) &&
-      (commit_without_composition ? (!committing_ && commit_surface_.empty())
-                                  : (composition_ == nullptr));
+  const bool completed = SUCCEEDED(hr) && SUCCEEDED(hr_session) &&
+                         (commit_without_composition ? (!committing_ && commit_surface_.empty())
+                                                     : (composition_ == nullptr));
   if (!completed) {
     preedit_kana_ = saved_preedit;
     committing_ = saved_committing;
@@ -745,8 +930,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   return completed;
 }
 
-void TextService::CleanupForLifecycleLoss(ITfContext* context,
-                                          bool release_active_context,
+void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                           LifecycleCleanupFailurePolicy failure_policy) {
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
@@ -780,15 +964,14 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context,
 
 // --- Commit helpers (M5) ---
 
-void TextService::CommitSelected(ITfContext* context) {
-  if (!context) return;
+HRESULT TextService::CommitSelected(ITfContext* context) {
+  if (!context) return S_OK;
 
   // Use the snapshot taken when Space opened the window so that a late
   // QueryCandidates response cannot silently alter what gets committed.
   ipc::CandidateField chosen;
   std::vector<ipc::CandidateField> shown = shown_candidates_;
-  if (!shown_candidates_.empty() &&
-      selected_candidate_idx_ >= 0 &&
+  if (!shown_candidates_.empty() && selected_candidate_idx_ >= 0 &&
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
     chosen = shown_candidates_[selected_candidate_idx_];
   }
@@ -812,15 +995,13 @@ void TextService::CommitSelected(ITfContext* context) {
     bool need_notify = false;
     if (ipc_has_request_) {
       ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false,
-           ipc_pending_id_});
+          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false, ipc_pending_id_});
       ipc_has_request_ = false;
       need_notify = true;
     }
     if (ipc_inflight_id_ != 0) {
-      ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false,
-           ipc_inflight_id_});
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                                 false, ipc_inflight_id_});
       need_notify = true;
     }
     ++ipc_pending_id_;
@@ -839,24 +1020,25 @@ void TextService::CommitSelected(ITfContext* context) {
   // edit session has actually completed.  A request accepted asynchronously is
   // not enough: SetText/EndComposition may still fail and the user input must
   // stay retryable.
-  const bool commit_completed = SUCCEEDED(RequestCommitEditSession(context));
-  if (commit_completed) {
+  const HRESULT commit_hr = RequestCommitEditSession(context);
+  if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else if (!committing_) {
     commit_surface_.clear();
     pending_commit_observation_.reset();
   }
+  return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
 }
 
-void TextService::CommitPreeditAsIs(ITfContext* context) {
-  if (!context) return;
+HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
+  if (!context) return S_OK;
 
   // Flush any pending romaji first.
   const std::string flushed = romaji_.Flush();
   preedit_kana_ += flushed;
 
-  if (preedit_kana_.empty()) return;
+  if (preedit_kana_.empty()) return S_OK;
 
   candidate_window_.Hide();
   selected_candidate_idx_ = 0;
@@ -873,15 +1055,13 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
     bool need_notify = false;
     if (ipc_has_request_) {
       ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false,
-           ipc_pending_id_});
+          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false, ipc_pending_id_});
       ipc_has_request_ = false;
       need_notify = true;
     }
     if (ipc_inflight_id_ != 0) {
-      ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false,
-           ipc_inflight_id_});
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                                 false, ipc_inflight_id_});
       need_notify = true;
     }
     ++ipc_pending_id_;
@@ -894,13 +1074,14 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
   pending_commit_observation_.reset();
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
   // synchronous commit edit session has actually completed.
-  const bool commit_completed = SUCCEEDED(RequestCommitEditSession(context));
-  if (commit_completed) {
+  const HRESULT commit_hr = RequestCommitEditSession(context);
+  if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else if (!committing_) {
     commit_surface_.clear();
   }
+  return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
 }
 
 // --- IPC worker (M4 + M6 + M10) ---
@@ -926,8 +1107,7 @@ void TextService::StopIpcWorker() {
 // ipc_cv_ so this wakes promptly instead of sleeping out the full delay.
 bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
   std::unique_lock<std::mutex> lock(ipc_mtx_);
-  ipc_cv_.wait_for(lock, std::chrono::milliseconds(delay_ms),
-                   [this] { return ipc_stop_.load(); });
+  ipc_cv_.wait_for(lock, std::chrono::milliseconds(delay_ms), [this] { return ipc_stop_.load(); });
   return ipc_stop_.load();
 }
 
@@ -1084,8 +1264,7 @@ void TextService::ServeConnection() {
       env.payload_json = item.payload_json;
       if (!ipc_client_.Send(env)) {
         if (!ipc_stop_.load())
-          DebugLog("IPC: faf send failed for type=" + TypeToString(item.type) +
-                   "; reconnecting");
+          DebugLog("IPC: faf send failed for type=" + TypeToString(item.type) + "; reconnecting");
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
@@ -1203,8 +1382,7 @@ void TextService::ServeConnection() {
         env.type = item.type;
         env.payload_json = item.payload_json;
         if (!ipc_client_.Send(env))
-          DebugLog("IPC: mid-receive cancel send failed for type=" +
-                   ipc::TypeToString(item.type));
+          DebugLog("IPC: mid-receive cancel send failed for type=" + ipc::TypeToString(item.type));
         if (item.type == ipc::MessageType::Cancel && item.cancel_target_id == req_id)
           cancel_inflight = true;
       }
@@ -1251,8 +1429,8 @@ void TextService::ServeConnection() {
 
     if (is_fresh) {
       if (!qpayload->candidates.empty()) {
-        DebugLog("IPC: " + std::to_string(qpayload->candidates.size()) +
-                 " candidates for [" + reading + "] top=" + qpayload->candidates[0].surface);
+        DebugLog("IPC: " + std::to_string(qpayload->candidates.size()) + " candidates for [" +
+                 reading + "] top=" + qpayload->candidates[0].surface);
       }
       bool notify_ui = false;
       {
@@ -1326,11 +1504,10 @@ void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField
   candidates_ = std::move(candidates);
 }
 
-void TextService::show_candidate_window_from_cache_for_test() {
-  ShowCandidateWindowFromCache();
-}
+void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }
 
-std::optional<ipc::CommitObservationRequest> TextService::last_queued_commit_observation_for_test() {
+std::optional<ipc::CommitObservationRequest>
+TextService::last_queued_commit_observation_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   for (auto it = ipc_send_queue_.rbegin(); it != ipc_send_queue_.rend(); ++it) {
     if (it->type == ipc::MessageType::CommitObservation) {
@@ -1355,15 +1532,13 @@ void TextService::PostCommitObservation(const std::string& reading,
   req.left_context = "";
   req.timestamp_ms = now_ms;
 
-  PostIpcSend(ipc::MessageType::CommitObservation,
-              ipc::BuildCommitObservationRequest(req), true);
+  PostIpcSend(ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(req), true);
 }
 
 void TextService::PostCancel(uint64_t target_request_id) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back(
-      {ipc::MessageType::Cancel, ipc::BuildCancel({target_request_id}), false,
-       target_request_id});
+      {ipc::MessageType::Cancel, ipc::BuildCancel({target_request_id}), false, target_request_id});
   ipc_cv_.notify_one();
 }
 
@@ -1390,7 +1565,9 @@ STDMETHODIMP EditSession::QueryInterface(REFIID riid, void** ppvObj) {
   }
   return E_NOINTERFACE;
 }
-STDMETHODIMP_(ULONG) EditSession::AddRef() { return static_cast<ULONG>(InterlockedIncrement(&ref_count_)); }
+STDMETHODIMP_(ULONG) EditSession::AddRef() {
+  return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+}
 STDMETHODIMP_(ULONG) EditSession::Release() {
   const auto c = static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   if (c == 0) {
@@ -1401,175 +1578,185 @@ STDMETHODIMP_(ULONG) EditSession::Release() {
 }
 
 STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
-  // M5/M6: commit path — set final surface text and end composition.
-  if (service_->committing_) {
-    const std::string pending_commit_surface = service_->commit_surface_;
-    const auto pending_commit_observation = service_->pending_commit_observation_;
-    service_->committing_ = false;
-    const std::wstring surface = Utf8ToWide(pending_commit_surface);
-    service_->commit_surface_.clear();
-    const auto restore_pending_commit = [&]() {
-      service_->committing_ = true;
-      service_->commit_surface_ = pending_commit_surface;
-      service_->pending_commit_observation_ = pending_commit_observation;
-    };
-    const auto post_pending_commit_observation = [&]() {
-      if (!pending_commit_observation) {
-        service_->pending_commit_observation_.reset();
-        return;
-      }
-      service_->pending_commit_observation_ = pending_commit_observation;
-      service_->PostPendingCommitObservation();
-    };
-
-    if (service_->composition_) {
-      ITfRange* committed_range = nullptr;
-      if (!surface.empty()) {
-        HRESULT text_hr = service_->composition_->GetRange(&committed_range);
-        if (SUCCEEDED(text_hr) && committed_range) {
-          text_hr =
-              committed_range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+  try {
+#ifdef AZOOKEY_TSF_TESTING
+    if (testing::ConsumeComBoundaryAllocationFailureForTest()) {
+      throw std::bad_alloc();
+    }
+#endif
+    // M5/M6: commit path — set final surface text and end composition.
+    if (service_->committing_) {
+      const std::string pending_commit_surface = service_->commit_surface_;
+      const auto pending_commit_observation = service_->pending_commit_observation_;
+      const std::wstring surface = Utf8ToWide(pending_commit_surface);
+      service_->committing_ = false;
+      service_->commit_surface_.clear();
+      const auto restore_pending_commit = [&]() {
+        service_->committing_ = true;
+        service_->commit_surface_ = pending_commit_surface;
+        service_->pending_commit_observation_ = pending_commit_observation;
+      };
+      const auto post_pending_commit_observation = [&]() {
+        if (!pending_commit_observation) {
+          service_->pending_commit_observation_.reset();
+          return;
         }
-        if (FAILED(text_hr) || !committed_range) {
+        service_->pending_commit_observation_ = pending_commit_observation;
+        service_->PostPendingCommitObservation();
+      };
+
+      if (service_->composition_) {
+        ITfRange* committed_range = nullptr;
+        if (!surface.empty()) {
+          HRESULT text_hr = service_->composition_->GetRange(&committed_range);
+          if (SUCCEEDED(text_hr) && committed_range) {
+            text_hr =
+                committed_range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+          }
+          if (FAILED(text_hr) || !committed_range) {
+            if (committed_range) committed_range->Release();
+            restore_pending_commit();
+            return FAILED(text_hr) ? text_hr : E_FAIL;
+          }
+        }
+        // EndComposition finalizes the text in the document.
+        ITfComposition* comp = service_->composition_;
+        comp->AddRef();
+        const HRESULT end_hr = comp->EndComposition(ec);
+        if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
+          service_->composition_ = nullptr;
+          comp->Release();
+        }
+        comp->Release();
+        if (FAILED(end_hr)) {
           if (committed_range) committed_range->Release();
           restore_pending_commit();
-          return FAILED(text_hr) ? text_hr : E_FAIL;
+          return end_hr;
         }
-      }
-      // EndComposition finalizes the text in the document.
-      ITfComposition* comp = service_->composition_;
-      comp->AddRef();
-      const HRESULT end_hr = comp->EndComposition(ec);
-      if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
-        service_->composition_ = nullptr;
-        comp->Release();
-      }
-      comp->Release();
-      if (FAILED(end_hr)) {
-        if (committed_range) committed_range->Release();
-        restore_pending_commit();
-        return end_hr;
-      }
-      if (committed_range) {
+        if (committed_range) {
+          TF_SELECTION sel{};
+          sel.range = committed_range;
+          if (SUCCEEDED(committed_range->Collapse(ec, TF_ANCHOR_END))) {
+            context_->SetSelection(ec, 1, &sel);
+          }
+          committed_range->Release();
+        }
+      } else if (!surface.empty()) {
+        // No active composition (e.g. commit triggered before the async preedit
+        // session ran); insert the surface text directly at the cursor.
         TF_SELECTION sel{};
-        sel.range = committed_range;
-        if (SUCCEEDED(committed_range->Collapse(ec, TF_ANCHOR_END))) {
-          context_->SetSelection(ec, 1, &sel);
+        ULONG fetched = 0;
+        HRESULT text_hr = E_FAIL;
+        if (SUCCEEDED(context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched)) &&
+            fetched > 0 && sel.range) {
+          text_hr = sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+          if (SUCCEEDED(text_hr) && SUCCEEDED(sel.range->Collapse(ec, TF_ANCHOR_END))) {
+            context_->SetSelection(ec, 1, &sel);
+          }
+          sel.range->Release();
         }
-        committed_range->Release();
+        if (FAILED(text_hr)) {
+          restore_pending_commit();
+          return text_hr;
+        }
       }
-    } else if (!surface.empty()) {
-      // No active composition (e.g. commit triggered before the async preedit
-      // session ran); insert the surface text directly at the cursor.
+      post_pending_commit_observation();
+      return S_OK;
+    }
+
+    // Normal preedit update.
+    const std::wstring kana = Utf8ToWide(service_->preedit_kana_);
+
+    if (kana.empty()) {
+      if (service_->composition_) {
+        ITfComposition* comp = service_->composition_;
+        comp->AddRef();
+        const HRESULT end_hr = comp->EndComposition(ec);
+        if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
+          service_->composition_ = nullptr;
+          comp->Release();
+        }
+        comp->Release();
+        if (FAILED(end_hr)) return end_hr;
+      }
+      return S_OK;
+    }
+
+    // Create composition if not active.
+    if (!service_->composition_) {
+      ITfContextComposition* pCtxComp = nullptr;
+      if (FAILED(context_->QueryInterface(IID_ITfContextComposition,
+                                          reinterpret_cast<void**>(&pCtxComp))) ||
+          !pCtxComp)
+        return E_FAIL;
+
       TF_SELECTION sel{};
       ULONG fetched = 0;
-      HRESULT text_hr = E_FAIL;
-      if (SUCCEEDED(context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched)) &&
-          fetched > 0 && sel.range) {
-        text_hr = sel.range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
-        if (SUCCEEDED(text_hr) && SUCCEEDED(sel.range->Collapse(ec, TF_ANCHOR_END))) {
-          context_->SetSelection(ec, 1, &sel);
-        }
-        sel.range->Release();
+      context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched);
+      if (fetched == 0) {
+        pCtxComp->Release();
+        return E_FAIL;
       }
-      if (FAILED(text_hr)) {
-        restore_pending_commit();
-        return text_hr;
-      }
-    }
-    post_pending_commit_observation();
-    return S_OK;
-  }
 
-  // Normal preedit update.
-  const std::wstring kana = Utf8ToWide(service_->preedit_kana_);
-
-  if (kana.empty()) {
-    if (service_->composition_) {
-      ITfComposition* comp = service_->composition_;
-      comp->AddRef();
-      const HRESULT end_hr = comp->EndComposition(ec);
-      if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
-        service_->composition_ = nullptr;
-        comp->Release();
-      }
-      comp->Release();
-      if (FAILED(end_hr)) return end_hr;
-    }
-    return S_OK;
-  }
-
-  // Create composition if not active.
-  if (!service_->composition_) {
-    ITfContextComposition* pCtxComp = nullptr;
-    if (FAILED(context_->QueryInterface(IID_ITfContextComposition,
-                                        reinterpret_cast<void**>(&pCtxComp))) ||
-        !pCtxComp)
-      return E_FAIL;
-
-    TF_SELECTION sel{};
-    ULONG fetched = 0;
-    context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &fetched);
-    if (fetched == 0) {
+      sel.range->Collapse(ec, TF_ANCHOR_END);
+      HRESULT hr = pCtxComp->StartComposition(ec, sel.range, service_, &service_->composition_);
+      sel.range->Release();
       pCtxComp->Release();
-      return E_FAIL;
+      if (FAILED(hr) || !service_->composition_) return hr;
     }
 
-    sel.range->Collapse(ec, TF_ANCHOR_END);
-    HRESULT hr = pCtxComp->StartComposition(ec, sel.range, service_,
-                                             &service_->composition_);
-    sel.range->Release();
-    pCtxComp->Release();
-    if (FAILED(hr) || !service_->composition_) return hr;
-  }
+    // Update composition text.
+    ITfRange* pRange = nullptr;
+    if (FAILED(service_->composition_->GetRange(&pRange)) || !pRange) return E_FAIL;
 
-  // Update composition text.
-  ITfRange* pRange = nullptr;
-  if (FAILED(service_->composition_->GetRange(&pRange)) || !pRange) return E_FAIL;
+    const HRESULT set_text_hr =
+        pRange->SetText(ec, 0, kana.c_str(), static_cast<LONG>(kana.size()));
+    if (FAILED(set_text_hr)) {
+      pRange->Release();
+      return set_text_hr;
+    }
 
-  const HRESULT set_text_hr =
-      pRange->SetText(ec, 0, kana.c_str(), static_cast<LONG>(kana.size()));
-  if (FAILED(set_text_hr)) {
+    // Cache the caret screen position for the candidate window anchor (M5).
+    {
+      ITfContextView* pView = nullptr;
+      if (SUCCEEDED(context_->GetActiveView(&pView)) && pView) {
+        RECT rc{};
+        BOOL clipped = FALSE;
+        if (SUCCEEDED(pView->GetTextExt(ec, pRange, &rc, &clipped))) {
+          service_->caret_pt_ = {rc.left, rc.bottom};
+        }
+        pView->Release();
+      }
+    }
+
+    // Apply underline display attribute via GUID_PROP_ATTRIBUTE.
+    ITfProperty* pProp = nullptr;
+    if (SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) && pProp) {
+      ITfCategoryMgr* pCatMgr = nullptr;
+      if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                                     IID_ITfCategoryMgr, reinterpret_cast<void**>(&pCatMgr))) &&
+          pCatMgr) {
+        TfGuidAtom atom = TF_INVALID_GUIDATOM;
+        pCatMgr->RegisterGUID(kInputAttributeGuid, &atom);
+        if (atom != TF_INVALID_GUIDATOM) {
+          VARIANT var;
+          var.vt = VT_I4;
+          var.lVal = static_cast<LONG>(atom);
+          const HRESULT attr_hr = pProp->SetValue(ec, pRange, &var);
+          if (FAILED(attr_hr)) DebugLog("Preedit display attribute SetValue failed");
+        }
+        pCatMgr->Release();
+      }
+      pProp->Release();
+    }
+
     pRange->Release();
-    return set_text_hr;
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
   }
-
-  // Cache the caret screen position for the candidate window anchor (M5).
-  {
-    ITfContextView* pView = nullptr;
-    if (SUCCEEDED(context_->GetActiveView(&pView)) && pView) {
-      RECT rc{};
-      BOOL clipped = FALSE;
-      if (SUCCEEDED(pView->GetTextExt(ec, pRange, &rc, &clipped))) {
-        service_->caret_pt_ = {rc.left, rc.bottom};
-      }
-      pView->Release();
-    }
-  }
-
-  // Apply underline display attribute via GUID_PROP_ATTRIBUTE.
-  ITfProperty* pProp = nullptr;
-  if (SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) && pProp) {
-    ITfCategoryMgr* pCatMgr = nullptr;
-    if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
-                                   IID_ITfCategoryMgr, reinterpret_cast<void**>(&pCatMgr))) &&
-        pCatMgr) {
-      TfGuidAtom atom = TF_INVALID_GUIDATOM;
-      pCatMgr->RegisterGUID(kInputAttributeGuid, &atom);
-      if (atom != TF_INVALID_GUIDATOM) {
-        VARIANT var;
-        var.vt = VT_I4;
-        var.lVal = static_cast<LONG>(atom);
-        const HRESULT attr_hr = pProp->SetValue(ec, pRange, &var);
-        if (FAILED(attr_hr)) DebugLog("Preedit display attribute SetValue failed");
-      }
-      pCatMgr->Release();
-    }
-    pProp->Release();
-  }
-
-  pRange->Release();
-  return S_OK;
 }
 
 }  // namespace azookey::tsf

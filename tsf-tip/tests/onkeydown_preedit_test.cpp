@@ -2,14 +2,13 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <gtest/gtest.h>
+#include <msctf.h>
 
 #include <array>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <gtest/gtest.h>
-#include <msctf.h>
 
 #include "azookey/tsf/TextService.h"
 
@@ -69,11 +68,7 @@ class FakeRange final : public ITfRange {
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
-  STDMETHODIMP GetText(TfEditCookie,
-                       DWORD,
-                       WCHAR*,
-                       ULONG,
-                       ULONG* text_length) override {
+  STDMETHODIMP GetText(TfEditCookie, DWORD, WCHAR*, ULONG, ULONG* text_length) override {
     if (text_length) *text_length = 0;
     return E_NOTIMPL;
   }
@@ -107,13 +102,9 @@ class FakeRange final : public ITfRange {
     return E_NOTIMPL;
   }
 
-  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override {
-    return E_NOTIMPL;
-  }
+  STDMETHODIMP ShiftStartToRange(TfEditCookie, ITfRange*, TfAnchor) override { return E_NOTIMPL; }
 
-  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override {
-    return E_NOTIMPL;
-  }
+  STDMETHODIMP ShiftEndToRange(TfEditCookie, ITfRange*, TfAnchor) override { return E_NOTIMPL; }
 
   STDMETHODIMP ShiftStartRegion(TfEditCookie, TfShiftDir, BOOL* no_region) override {
     if (no_region) *no_region = FALSE;
@@ -220,9 +211,7 @@ class NoopContext final : public ITfContext {
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
-  STDMETHODIMP RequestEditSession(TfClientId tid,
-                                  ITfEditSession* edit_session,
-                                  DWORD flags,
+  STDMETHODIMP RequestEditSession(TfClientId tid, ITfEditSession* edit_session, DWORD flags,
                                   HRESULT* session_result) override {
     request_count++;
     last_client_id = tid;
@@ -246,10 +235,7 @@ class NoopContext final : public ITfContext {
     return S_OK;
   }
 
-  STDMETHODIMP GetSelection(TfEditCookie,
-                            ULONG,
-                            ULONG selection_count,
-                            TF_SELECTION* selection,
+  STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG selection_count, TF_SELECTION* selection,
                             ULONG* fetched) override {
     if (!fetched) return E_POINTER;
     *fetched = 0;
@@ -303,10 +289,7 @@ class NoopContext final : public ITfContext {
     return E_NOTIMPL;
   }
 
-  STDMETHODIMP TrackProperties(const GUID**,
-                               ULONG,
-                               const GUID**,
-                               ULONG,
+  STDMETHODIMP TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
                                ITfReadOnlyProperty** property) override {
     if (property) *property = nullptr;
     return E_NOTIMPL;
@@ -326,9 +309,7 @@ class NoopContext final : public ITfContext {
     return S_OK;
   }
 
-  STDMETHODIMP CreateRangeBackup(TfEditCookie,
-                                 ITfRange*,
-                                 ITfRangeBackup** backup) override {
+  STDMETHODIMP CreateRangeBackup(TfEditCookie, ITfRange*, ITfRangeBackup** backup) override {
     if (backup) *backup = nullptr;
     return E_NOTIMPL;
   }
@@ -377,10 +358,7 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
-  STDMETHODIMP CreateContext(TfClientId,
-                             DWORD,
-                             IUnknown*,
-                             ITfContext** context,
+  STDMETHODIMP CreateContext(TfClientId, DWORD, IUnknown*, ITfContext** context,
                              TfEditCookie* edit_cookie) override {
     if (context) *context = nullptr;
     if (edit_cookie) *edit_cookie = TF_INVALID_EDIT_COOKIE;
@@ -391,13 +369,9 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
 
   STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
 
-  STDMETHODIMP GetTop(ITfContext** context) override {
-    return ReturnContext(context);
-  }
+  STDMETHODIMP GetTop(ITfContext** context) override { return ReturnContext(context); }
 
-  STDMETHODIMP GetBase(ITfContext** context) override {
-    return ReturnContext(context);
-  }
+  STDMETHODIMP GetBase(ITfContext** context) override { return ReturnContext(context); }
 
   STDMETHODIMP EnumContexts(IEnumTfContexts** enum_contexts) override {
     if (enum_contexts) *enum_contexts = nullptr;
@@ -493,6 +467,180 @@ class TextServiceHarness {
 };
 
 }  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, OnTestKeyDownAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DoEditSessionAllocationFailureReturnsOutOfMemory) {
+  NoopContext context;
+  azookey::tsf::TextService service;
+  auto* session = new azookey::tsf::EditSession(&service, &context);
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(session->DoEditSession(1), E_OUTOFMEMORY);
+
+  session->Release();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackTypedKey) {
+  TextServiceHarness h;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'K', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.context.request_count, 0);
+
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(eaten, TRUE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureKeepsActiveContext) {
+  TextServiceHarness h;
+  NoopContext next_context;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.active_context_is_for_test(&h.context));
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&next_context, 'N', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_TRUE(h.service.active_context_is_for_test(&h.context));
+  EXPECT_FALSE(h.service.active_context_is_for_test(&next_context));
+  EXPECT_EQ(next_context.request_count, 0);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRestoresCandidateState) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'N', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackBackspaceAndEscape) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+
+  eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_ESCAPE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackSpaceFlush) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
+  EXPECT_EQ(eaten, TRUE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  const int previous_request_count = h.context.request_count;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_RETURN, 0, &eaten), E_OUTOFMEMORY);
+
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.context.request_count, previous_request_count);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  const int previous_request_count = h.context.request_count;
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), E_OUTOFMEMORY);
+
+  EXPECT_EQ(h.context.request_count, previous_request_count);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
+}
 
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
@@ -861,7 +1009,8 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryConsumesTriggerKeyAfterSuccess
   EXPECT_FALSE(h.service.committing_);
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesOnOriginalContextWhenNextKeyUsesDifferentContext) {
+TEST(TsfTipOnKeyDownPreeditTest,
+     QueuedCommitRetriesOnOriginalContextWhenNextKeyUsesDifferentContext) {
   TextServiceHarness h;
   NoopContext next_context;
   FakeRange old_range;
@@ -918,6 +1067,32 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitConsumesNextInputWhenRetryIsStillRe
   EXPECT_TRUE(h.TestPress('A'));
   EXPECT_TRUE(h.Press('A'));
 
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.service.preedit_kana_, u8"か");
   EXPECT_EQ(h.service.commit_surface_, u8"か");
   EXPECT_TRUE(h.service.committing_);
@@ -1201,6 +1376,48 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   EXPECT_EQ(observation->shown[0].surface, u8"蚊");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, SelectedCommitObservationFailureDoesNotRetryCommittedText) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  azookey::tsf::testing::FailNextPendingCommitObservationForTest();
+  h.service.commit_selected_for_test(&h.context);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x868a'));
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  EXPECT_FALSE(h.Press(VK_RETURN));
+  EXPECT_EQ(range.set_text_count, 1);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitIsRejected) {
   TextServiceHarness h;
 
@@ -1391,7 +1608,8 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingContextAliasCleansUpByComIdentity) {
   EXPECT_FALSE(h.service.has_active_context_for_test());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextPreservesCompositionWhenSyncCleanupIsRejected) {
+TEST(TsfTipOnKeyDownPreeditTest,
+     PoppingActiveContextPreservesCompositionWhenSyncCleanupIsRejected) {
   TextServiceHarness h;
   FakeComposition composition;
 

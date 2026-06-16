@@ -1,9 +1,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// clang-format off
 #include <Windows.h>
 #include <OleAuto.h>
-
+// clang-format on
 #include <gtest/gtest.h>
 #include <msctf.h>
 
@@ -111,6 +112,32 @@ TEST(TsfTipDisplayAttributeTest, DisplayAttributeEnumeratorCloneKeepsCurrentPosi
 
   clone->Release();
   enumerator->Release();
+}
+
+TEST(TsfTipDisplayAttributeTest, DisplayAttributeAllocationFailuresReturnOutOfMemory) {
+  azookey::tsf::TextService service;
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  IEnumTfDisplayAttributeInfo* enumerator = nullptr;
+  EXPECT_EQ(service.EnumDisplayAttributeInfo(&enumerator), E_OUTOFMEMORY);
+  EXPECT_EQ(enumerator, nullptr);
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  ITfDisplayAttributeInfo* info = nullptr;
+  EXPECT_EQ(service.GetDisplayAttributeInfo(azookey::tsf::kInputAttributeGuid, &info),
+            E_OUTOFMEMORY);
+  EXPECT_EQ(info, nullptr);
+
+  azookey::tsf::EnumDisplayAttributeInfo local_enumerator;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  ULONG fetched = 999;
+  EXPECT_EQ(local_enumerator.Next(1, &info, &fetched), E_OUTOFMEMORY);
+  EXPECT_EQ(fetched, 0u);
+  EXPECT_EQ(info, nullptr);
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(local_enumerator.Clone(&enumerator), E_OUTOFMEMORY);
+  EXPECT_EQ(enumerator, nullptr);
 }
 
 TEST(TsfTipDisplayAttributeTest, InputAttributeInfoReturnsUnderlineDefinition) {

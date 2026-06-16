@@ -5,6 +5,14 @@
 
 namespace azookey::tsf {
 
+#ifdef AZOOKEY_TSF_TESTING
+namespace testing {
+void FailNextComBoundaryAllocationForTest();
+void ClearComBoundaryAllocationFailureForTest();
+bool ConsumeComBoundaryAllocationFailureForTest();
+}  // namespace testing
+#endif
+
 // GUID for the input-composition underline display attribute registered by the TIP.
 // {5D8F0A63-2B5E-4F8C-A1D4-7E9B2C3F4A5D}
 inline constexpr GUID kInputAttributeGuid = {0x5d8f0a63,

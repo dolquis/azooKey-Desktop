@@ -19,6 +19,17 @@
 
 namespace azookey::tsf {
 
+#ifdef AZOOKEY_TSF_TESTING
+namespace testing {
+void FailNextComBoundaryAllocationForTest();
+void ClearComBoundaryAllocationFailureForTest();
+bool ConsumeComBoundaryAllocationFailureForTest();
+void FailNextPendingCommitObservationForTest();
+void ClearPendingCommitObservationFailureForTest();
+bool ConsumePendingCommitObservationFailureForTest();
+}  // namespace testing
+#endif
+
 class EditSession;
 
 class TextService final : public ITfTextInputProcessorEx,
@@ -83,7 +94,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
-  void commit_selected_for_test(ITfContext* context) { CommitSelected(context); }
+  bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
+  HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
 #endif
 
  private:
@@ -186,8 +198,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostIpcSend(ipc::MessageType type, std::string payload, bool expects_response);
 
   // M5 commit helpers.
-  void CommitSelected(ITfContext* context);
-  void CommitPreeditAsIs(ITfContext* context);
+  HRESULT CommitSelected(ITfContext* context);
+  HRESULT CommitPreeditAsIs(ITfContext* context);
 };
 
 class EditSession final : public ITfEditSession {

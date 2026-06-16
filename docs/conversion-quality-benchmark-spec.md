@@ -59,10 +59,11 @@ bench/data/
 `*.jsonl` は 1 行 1 ケース。**第一の作成ルートは自前で書き起こす
 オリジナルケース**（読み → 表層 → 文脈を本リポジトリ著者が新規作成）で、
 公開コーパスは限定的な seed・文脈素材としてのみ二次利用する。利用可能な
-出典・ライセンスはカテゴリ別に §13 で確定する。§11 のライセンス方針
-（CC0 / パブリックドメイン / MIT・Apache・BSD 互換のみ。コピーレフトは
-不可）に従い、CC BY-SA / GFDL 系（Wikipedia 本文・JMdict/EDICT 等）と
-再配布不可・来歴不透明なデータ（BCCWJ・京大コーパス・NEologd 等）は
+出典・ライセンスはカテゴリ別に §13 で確定する。§13.1 のライセンス方針
+（**データへ複製・派生する出典は CC0 / パブリックドメイン / `authored`
+のみ**。notice 付き許諾物 MIT/Apache/BSD は参照のみで複製不可。コピー
+レフトは不可）に従い、CC BY-SA / GFDL 系（Wikipedia 本文・JMdict/EDICT 等）
+と再配布不可・来歴不透明なデータ（BCCWJ・京大コーパス・NEologd 等）は
 **派生元として使用しない**（§13 の除外表を正典とする）。
 
 ### 4.2 通常変換ケース形式
@@ -406,11 +407,16 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 
 ### 13.1 方針
 
-配布物（公開 GitHub リポジトリ）に同梱・再配布するため、評価データの
-派生元は **CC0 / パブリックドメイン / MIT・Apache・BSD 互換**に限る。
-コピーレフト（CC BY-SA / GFDL / GPL）と再配布不可・来歴不透明なデータは
-派生元に使わない。本リポジトリ本体は MIT（`LICENSE`）。`authored` ケースは
-著者の新規創作物であり、データ部は CC0 専用宣言（§13.4）で配布する。
+配布物（公開 GitHub リポジトリ）に同梱・再配布するため、**評価データへ
+複製・派生する出典は CC0 / パブリックドメイン / `authored`（自前作成）の
+3 種のみ**に限る。これらは notice / attribution / NOTICE 同梱義務を持たず、
+データ部の一律 CC0 宣言（§13.4）と矛盾しない。MIT / Apache-2.0 / BSD など
+**notice 付き許諾物（mozc・SudachiDict 等）はアイデア参照のみ**とし、
+エントリ・文字列をデータへ複製・派生しない（複製すると上流の著作権表示・
+NOTICE 義務が一律 CC0 と衝突するため）。コピーレフト（CC BY-SA / GFDL /
+GPL）と再配布不可・来歴不透明なデータは参照・派生いずれも使わない。
+本リポジトリ本体は MIT（`LICENSE`）。`authored` ケースは著者の新規創作物
+であり、データ部は CC0 専用宣言（§13.4）で配布する。
 
 調査根拠（2026-06、DEV-114）。各出典の一次情報 URL は §13.5。
 
@@ -473,8 +479,11 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 **CC0 1.0（パブリックドメイン専用宣言）**として配布する旨を
 `bench/data/DATA-LICENSE.md` に明記する（M52 実装時に追加）。これにより
 評価データを他プロジェクトが再利用しても share-alike が伝播しない。
-青空文庫由来の文脈素材を含む場合は §13.3 manifest と DATA-LICENSE.md に
-パブリックドメイン根拠（底本著作権満了）と希望クレジットを併記する。
+一律 CC0 が成立するのは §13.1 のとおり**複製・派生する出典を CC0 / PD /
+`authored` のみに限定**し、notice 付き許諾物（MIT/Apache/BSD）由来データを
+含めないためである。青空文庫由来の文脈素材を含む場合は §13.3 manifest と
+DATA-LICENSE.md にパブリックドメイン根拠（底本著作権満了）と希望クレジット
+を併記する（PD は法的義務ではないが出所明示として残す）。
 
 ### 13.5 一次情報 URL
 
@@ -498,14 +507,20 @@ llama.cpp は backend / スレッド数 / batch の違いで浮動小数演算�
 
 ### 14.1 決定的採取の固定条件
 
-baseline 採取・比較時に以下を固定し、§8 `config` に記録する:
+baseline 採取・比較時に以下の**決定的入力（互換キー）**を固定し、§8 `config`
+に記録する。これらが一致する限り、commit をまたいでも `diff_vs_baseline` は
+有効（§14.2）:
 
-- モデルファイル（`model_sha256` で固定）/ `backend` / `build_id`
+- モデルファイル（`model_sha256` で固定）/ `backend`
 - `decode = "beam"`、`beam_width`（=`B`）、`n_best`（=`N_zenzai`）、`max_new_tokens`
 - `prompt_template_version`（プロンプト改訂で baseline 無効化）
 - `thread_count`（既定 1。FP 非決定性を避けるため baseline は単一スレッド固定）
 - `learning_state`（`empty` または固定スナップショットの SHA。学習状態が
   混ざると user_adapt 以外の再現性が壊れる）
+
+`build_id` / `host_version` は**追跡用に記録するのみで互換キーに含めない**
+（commit ごとに変わるため。これらをキーにすると毎 PR で baseline が無効化され
+回帰ゲートが回らない）。
 
 ### 14.2 安定性の合否
 
@@ -515,9 +530,14 @@ baseline 採取・比較時に以下を固定し、§8 `config` に記録する:
   調査してから baseline を確定する。
 - **latency 系（§6.3）は本質的に可変**のため安定性合否の対象外。`--iterations N`
   （既定 N ≥ 30）で採取し p50/p95/p99 は複数実行の中央値で報告する。
-- baseline は (`build_id`, `backend`, `model_sha256`, `prompt_template_version`)
-  の組ごとに固定する。**diff_vs_baseline は同一の組に対してのみ有効**。
-  組が変わる比較は「baseline 再採取が必要」と明示し、誤った回帰判定をしない。
+- baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
+  `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
+  `thread_count` / `learning_state`）の組ごとに固定する。**diff_vs_baseline は
+  互換キーが一致するときのみ有効**で、`build_id` 差（=通常の commit 差）では
+  無効化しない。よって `bench/baselines/main.json` に対する commit 間の回帰判定
+  （roadmap M52 の「前 commit との diff」）が成立する。互換キーが変わる比較
+  （モデル・デコード設定・プロンプト改訂など）のみ「baseline 再採取が必要」と
+  明示し、誤った回帰判定をしない。
 
 ### 14.3 回帰ゲート（CI §10）
 

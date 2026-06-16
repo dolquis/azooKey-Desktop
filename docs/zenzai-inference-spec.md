@@ -280,8 +280,11 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 
 ### 6.5 重複除去と logprob 正規化
 
-- **重複除去**: 表層 `surface` 完全一致で dedup（先に出た高 logprob を残す）。
-  user_dict / SimpleConverter 由来の同一表層との重複は §7 のマージ後に dedup。
+- **重複除去（converter 内）**: `ZenzaiModelConverter` は自身の n-best を表層 `surface`
+  完全一致で dedup（先に出た高 logprob を残す）。
+- **クロスソース重複除去**: user_dict / SimpleConverter 由来の同一表層との重複は、
+  converter 内 dedup では消えない（別ソースのため）。`QueryCandidates` のマージ経路で
+  dedup する（**§7.6**）。
 - **logprob 正規化**（候補 score への写像）: 系列長で割った**平均トークン logprob**の
   指数を取り、加算スケールへ写す:
 
@@ -354,6 +357,22 @@ M52 ベンチ後、`neural-reranker-spec` §9 の `final_score`
 供給する（§6.5 で `debug_info` に保持済み）。本書の [0.3,1.4] 写像は**それまでの
 暫定加算統合**であり、M56 で学習重みへ置換される。`Candidate` 構造体に raw score 用の
 数値フィールドを足すかは M56 で判断（M8 では `debug_info` 文字列で前方互換）。
+
+### 7.6 クロスソース重複除去（QueryCandidates マージ経路）
+
+§7.1 の合成では user_dict と converter（Zenzai/Simple）が**独立に同一表層を出し得る**
+（例: user_dict「日本語」と Zenzai「日本語」）。現行 `QueryCandidates` は両者を連結し
+reranker でソートするのみで**クロスソース dedup をしない**ため、UI に重複候補が出る。
+これを防ぐため**マージ経路に表層 dedup を追加する**（M8 統合 = DEV-221 スコープの小改修）。
+
+規則:
+
+- キーは表層 `surface`（同一読み `kana` 内での合成のため読みは共通）。
+- 重複時は**最高 score の 1 件を残す**。§7.2 の帯設計（user_dict 1.5 > Zenzai ≤1.4）に
+  より、user_dict と Zenzai が衝突した場合は user_dict が残る。残す側の `debug_info` に
+  脱落側 source を併記（例 `user-dict;dup:zenzai`）して証跡を保つ。
+- dedup は**学習加点（reranker）適用後の最終 score** で判定し、降順 stable_sort の**後**に
+  先頭優先で重複を落とす（順位規則 §7.3 を保ったまま重複のみ除去）。
 
 ---
 
@@ -472,10 +491,11 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 |---|---|
 | unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置 |
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
-| unit | `DedupBySurface`: 同一表層で高 logprob 残存 |
+| unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
+| unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
 | unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り `last_error_` 観測可、候補ゼロにならない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
-| integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時 `nihongo`→「日本語」を含む候補（**A5 解消**、DEV-221 受け入れ条件 / DEV-225 実機ゲート） |
+| integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |
 
 ---

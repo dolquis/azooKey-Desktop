@@ -732,13 +732,13 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
 HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {
   if (request_accepted) *request_accepted = false;
   if (!context) return E_INVALIDARG;
+  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
+  if (!edit) return E_OUTOFMEMORY;
   if (active_context_ != context) {
     if (active_context_) active_context_->Release();
     active_context_ = context;
     active_context_->AddRef();
   }
-  ITfEditSession* edit = NewComBoundaryObject<EditSession>(this, context);
-  if (!edit) return E_OUTOFMEMORY;
   HRESULT hr_session = S_OK;
   HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
                                            &hr_session);

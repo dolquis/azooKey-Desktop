@@ -94,6 +94,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
+  bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
 #endif
 

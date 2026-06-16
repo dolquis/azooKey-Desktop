@@ -534,15 +534,19 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 | ID | 型 | 粒度 | 発番元 |
 |---|---|---|---|
-| `request_id` | uint64（≥1, 単調増加） | IPC リクエスト 1 往復 | Host `RequestScheduler::NextRequestId`（`inference-host/src/RequestScheduler.cpp`） |
+| `request_id` | uint64（≥1, 単調増加） | IPC リクエスト 1 往復 | **TIP（client）が採番**（`ipc_pending_id_`、`tsf-tip/src/TextService.cpp`）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
 | `trace_id` | string（UUIDv7 推奨） | ユーザー 1 アクション（キー押下 → UI 更新） | TIP が `OnKeyDown` で発番（§7.7.1） |
 
 - 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
   1 アクション内の複数 IPC を束ね、`request_id` がその中の個々の往復を識別する。
 - 両 ID は既存 IPC エンベロープ `{version, request_id, type, trace_id, payload}`
   にそのまま乗る（§12.6 / `docs/privacy-and-secure-input-spec.md` §9）。新フィールドは追加しない。
-- `request_id` は `RequestScheduler` の連番をそのまま再利用し、ログ上の相関 ID と
-  staleness check（M10）/ Cancel の対象 ID を一致させる。別系統の採番は作らない。
+- `request_id` の発番は **TIP 側 `ipc_pending_id_`** に一本化する。TIP が staleness
+  判定（M10、`req_id == ipc_pending_id_`）と `Cancel.target_request_id` を同 ID で行い、
+  Host は応答で echo するのみ。別系統の採番は作らない。
+- Host の `RequestScheduler`（`inference-host/src/RequestScheduler.cpp`）は wire
+  `request_id` を **発番しない**。TIP 由来の id をキーに cancellation / latest 追跡を
+  行う側であり、`NextRequestId()` は wire ID の採番元ではない。
 
 フェーズは §7.7.2 の **11 値に固定** し、正典 enum は
 `core/include/azookey/logging/Phase.h`（`azookey::logging::Phase`）とする。

@@ -1,0 +1,4 @@
+# 評価データは eol=lf を強制（eval_dataset_sha256 の安定性のため。
+# docs/conversion-quality-benchmark-spec.md §14.1）。
+bench/data/**.jsonl text eol=lf
+bench/data/PROVENANCE.json text eol=lf

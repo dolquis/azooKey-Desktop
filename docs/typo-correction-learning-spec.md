@@ -615,9 +615,12 @@ warning を CHANGELOG に記載）。M48 §6 の `promptPrefixByApp` と同じ
 
 ### 12.15 M55 受け入れ条件
 
-- M52 ベンチで `typo_correction_top5_accuracy` が 85% 以上
-- M52 ベンチで `typo_false_positive_rate` が 1% 未満
-- M52 ベンチで `typo_overcorrection_rate` が 0.5% 未満
+typo 補正指標は補正有効モードで採取する（`conversion-quality-benchmark-spec.md`
+§7・§14。`--typo-mode off` での値は受け入れに用いない。baseline はモード別管理）。
+
+- M52 ベンチ（`--typo-mode rank`）で `typo_correction_top5_accuracy` が 85% 以上
+- M52 ベンチ（`--typo-mode rank`）で `typo_false_positive_rate` が 1% 未満
+- M52 ベンチ（`--typo-mode aggressive`）で `typo_overcorrection_rate` が 0.5% 未満
 - M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
 - M46 secure 中は補正・学習が一切発生しない
 - v1 互換: `mode = off / suggest` の挙動が v1 と等価

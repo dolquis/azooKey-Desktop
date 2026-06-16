@@ -1845,8 +1845,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
     result.json` で全指標を計算できる
   - `azookey_bench --eval bench/data/typo_eval.jsonl --output
-    typo_result.json` で typo 指標が出る
+    typo_result.json` で typo 指標が算出・schema 出力される（M52 時点では
+    typo 補正は未実装＝M55 のため既定 `off`。補正有効モード `rank`/`aggressive`
+    での実測値検証は M55 受け入れで行う。spec §7 参照）
   - baseline 比較レポートが CI artifact 化される
+  - 初期評価データが spec §11.2「M52 初期」を満たす（general / homophone /
+    typo / typo_clean 各 100・計 ≥400。typo_clean は false-positive /
+    overcorrection の分母のため必須）
+  - 全評価ケースが `provenance` を持ち spec §13.1 のライセンス方針に適合する
+    （データへ複製・派生する出典は CC0 / PD / authored のみ。notice 付き許諾物
+    MIT/Apache/BSD は参照のみで複製不可、コピーレフト・来歴不透明は使用不可）
+  - `bench/data/DATA-LICENSE.md`（spec §13.4 の CC0 専用宣言。`bench/data/` を
+    CC0 として再配布する根拠）が存在する。`authored` 以外の `provenance` を含む
+    場合は `bench/data/PROVENANCE.json`（spec §13.3）も存在し各出典に対応する
+  - baseline が spec §14 の安定性基準（決定的採取・精度系の再実行差 ≤ 0.2pp）
+    を満たす
 - **合格基準 v1**（M53〜M57 完了時点で達成）:
   - top1_accuracy: baseline 比 +3% 以上
   - top5_accuracy: 95% 以上
@@ -1978,10 +1991,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 誤補正防止条件（top1 強 / confidence 低 / 過去拒否 / 入力短 /
     パスワード欄 / コード入力）
   - プライバシー: raw_keys は抽象化パターンのみ保存
-- **受け入れ条件**:
-  - M52 ベンチで typo_correction_top5_accuracy が 85% 以上
-  - M52 ベンチで typo_false_positive_rate が 1% 未満
-  - M52 ベンチで typo_overcorrection_rate が 0.5% 未満
+- **受け入れ条件**（typo 補正指標は補正有効モードで採取する。
+  `conversion-quality-benchmark-spec.md` §7・§14。`--typo-mode off` での値は
+  受け入れに用いない）:
+  - M52 ベンチ（`--typo-mode rank`）で typo_correction_top5_accuracy が 85% 以上
+  - M52 ベンチ（`--typo-mode rank`）で typo_false_positive_rate が 1% 未満
+  - M52 ベンチ（`--typo-mode aggressive`）で typo_overcorrection_rate が
+    0.5% 未満
   - M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
 - **参照仕様**: `docs/typo-correction-learning-spec.md` M55 追補
 

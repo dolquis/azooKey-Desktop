@@ -384,31 +384,44 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   （数 KB）には十分で、長文一括変換（5,000 文字 ≒ 15 KB）も収まる。5 万文字級の
   超長文は分割前提（M58-B、`docs/romaji-batch-conversion-spec.md` と整合）。
   §6.2 の JSON 最大入力長と**同値に固定**し、片方だけ広げない
-- **6.4.4 Handshake トークン** — per-user pipe ACL（§6.4.1a / DACL）は同一
-  ユーザーの別プロセスまでしか絞れない。これを超えて「正規の TIP のみ」を
-  識別するため、Handshake で共有秘密トークンを検証する
+- **6.4.4 Handshake トークン** — Handshake で共有秘密トークンを検証する
   （`HandshakeRequest.handshake_token` ↔ Host の
   `DispatcherConfig.handshake_token`）。トークンが設定されている場合、Host は
   Handshake 成立まで他メッセージを未認証として type 別エラーで弾く
   （`Dispatcher::RequiresAuthenticatedSession`）。
 
-  **トークンの配布チャネル（v1.0 決定）**: TIP は TSF DLL として任意のアプリ
-  プロセスにロードされ、Host 起動時の環境を共有しない。よって環境変数の
-  事前共有だけでは production で成立しない（現状 TIP / Host とも
-  `AZOOKEY_IPC_HANDSHAKE_TOKEN` を参照するが、これはグローバル env を設定できる
-  開発・テスト環境でのみ機能する）。production では Host が起動時に暗号論的乱数
-  16 byte（hex 32 文字）を生成し、現在ユーザーのみが読める
-  `%LOCALAPPDATA%\azooKey\config\ipc-token`（NTFS ACL 継承で current-user RX）へ
-  §5.4 の write-then-rename で原子的に書き出す。TIP は Handshake の直前に同
-  ファイルを読みトークンを得る。Host 再起動時はファイルを新トークンで上書きし、
-  TIP は**再 Handshake のたびにファイルを読み直す**（M42 再接続時も同様）。
+  **脅威モデルと到達限界（重要）**: 本トークンは**多層防御（defense-in-depth）**で
+  あり、**悪意ある同一ユーザープロセスからのなりすましを防ぐ認証ではない**。
+  TIP は TSF DLL として任意のアプリプロセスに in-proc ロードされるため、Host と
+  「正規の TIP プロセス」を結ぶ事前の信頼チャネルが存在しない。共有秘密を
+  どのチャネルで配っても、同一ユーザー権限で動く悪意あるプロセスは正規 TIP と
+  同じ経路でその秘密を入手でき（ファイルなら読み取り、env なら環境継承）、同一
+  ユーザー内のプロセス同士を秘密だけで区別することは Windows のセキュリティ
+  モデル上できない。**同一ユーザー境界の主防御は per-user pipe ACL + SID
+  fail-closed（§6.4.1）+ remote 拒否（§6.4.1a）**であり、「どのプロセスが正規 TIP か」
+  の信頼境界は TSF 自体が担う。トークンに認証を期待しない。
+
+  **トークンが実際に与える価値**:
+  - 非悪意の誤接続（バージョン違い / 別ビルドの Host・TIP / 残存プロセス）を弾く
+  - トークン格納先（`%LOCALAPPDATA%`）を**読めない**同一ユーザープロセス（例:
+    AppContainer / 低 IL のサンドボックスプロセス。`docs/` の AppContainer 対応
+    DEV-204 と関連）を結果的に排除する
+  - 攻撃の手数を一段増やす speed bump
+
+  **トークンの配布チャネル（v1.0 決定）**: env 事前共有（`AZOOKEY_IPC_HANDSHAKE_TOKEN`）
+  は in-proc TIP が Host 起動時の環境を共有しないため production では成立しない。
+  そこで Host が起動時に暗号論的乱数 16 byte（hex 32 文字）を生成し、現在ユーザー
+  のみが読める `%LOCALAPPDATA%\azooKey\config\ipc-token`（NTFS ACL 継承で
+  current-user RX）へ §5.4 の write-then-rename で原子的に書き出す。TIP は Handshake
+  直前に同ファイルを読みトークンを得る。Host 再起動時はファイルを新トークンで
+  上書きし、TIP は**再 Handshake のたびにファイルを読み直す**（M42 再接続時も同様）。
   環境変数 `AZOOKEY_IPC_HANDSHAKE_TOKEN` は開発・テスト用の上書き経路として残す。
+  本チャネルは上記の defense-in-depth 価値に見合うものであり、認証の保証は与えない。
 
   **トークン未設定時の縮退**: ファイルも環境変数も無い場合は per-user pipe ACL
   のみに依拠し、Host は warn ログを出す（現行 `inference-host/src/main.cpp` の
   挙動）。Release では §6.4.1 の SID fail-closed により pipe 自体が current-user
-  に限定されるため、トークン未設定でも remote / 別ユーザーは到達しない。
-  トークンの目的は**同一ユーザー内の別プロセスなりすまし**対策である
+  に限定されるため、トークン未設定でも remote / 別ユーザーは到達しない
 - **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
   見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
 - **6.4.6 length-prefix read/write hardening** — Named Pipe は

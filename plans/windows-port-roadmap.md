@@ -1485,12 +1485,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `ipc/src/Json.cpp`、`ipc/src/Payloads.cpp`、
   `ipc/src/NamedPipeTransport.cpp`、`ipc/tests/`。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
-  - JSON: ネスト深度上限・最大入力長・サロゲートペア結合・不正 UTF-8/
-    制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否
-  - malformed/fuzz テスト追加（ランダムバイト列でクラッシュしない 等）
+  - JSON: ネスト深度上限（64）・最大入力長（1 MiB）・サロゲートペア結合・
+    不正 UTF-8/制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否。数値 codec の
+    locale 非依存（C ロケール固定 / `from_chars`・`to_chars`）
+  - malformed/fuzz テスト追加（決定的境界コーパス + 有界擬似乱数スモーク。
+    libFuzzer は任意拡張）
+  - 未配線 MessageType への明示エラー応答 + 列挙↔codec 整合検査
+    （client ハング防止）
   - Named Pipe: Release で SID 取得失敗時 fail-closed、接続インスタンス
-    上限、最大フレームサイズ見直し、Handshake トークン、client cleanup、
-    overlapped accept と `Stop()` 時の pending accept cancel
+    上限（32）、最大フレームサイズ 1 MiB 固定、Handshake トークン
+    （per-user ファイル `%LOCALAPPDATA%\azooKey\config\ipc-token` 配布 +
+    env 上書き）、client cleanup、overlapped accept と `Stop()` 時の
+    pending accept cancel
 - **受け入れ条件**:
   - 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
   - malformed JSON・ランダムバイト列でクラッシュしない
@@ -1500,6 +1506,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 複数接続・切断テストが追加され緑
   - pending accept 中の `Stop()` が無期限に待たない
   - 切断済み client が解放される
+  - 未配線 MessageType に明示エラー応答が返り blocking client がハングしない
+  - 数値 codec が locale 非依存で round-trip する
+  - Handshake トークンが per-user ファイルチャネルで配布される
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §6
 
 ### M41: 構造化ログと可観測性

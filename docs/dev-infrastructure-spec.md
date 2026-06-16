@@ -396,7 +396,9 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - **6.4.1a remote client rejection** — Named Pipe はローカル IME ↔ Host 専用
   であり、server 作成時に `PIPE_REJECT_REMOTE_CLIENTS` を指定して remote client
   接続を OS レベルで拒否する。これは DACL / per-user pipe 名の補助防御であり、
-  同一ユーザー内の別プロセス対策は §6.4.4 の Handshake トークンで扱う
+  本項は remote client 拒否に限る。**同一ユーザー内の別プロセスを秘密だけで
+  区別する認証は不可能**であり（§6.4.4）、Handshake トークンは同一ユーザー
+  なりすまし対策の認証ではなく多層防御として §6.4.4 で扱う
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
   TIP と設定 UI などの同時接続を許容する有界な上限
   (`kMaxPipeInstances = 32`) を設ける

@@ -5,8 +5,11 @@
 - Windows Named Pipe (`\\.\pipe\azookey-<sid>`)
   - パイプ名は `ipc::DefaultPipeName()` が現在のプロセストークンの SID から
     導出する (`ipc/include/azookey/ipc/NamedPipeTransport.h`)。
-- Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE`。server は accept polling
-  のため作成時に `PIPE_NOWAIT` を使い、接続後は可能な場合 `PIPE_WAIT` に切り替える。
+- Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT`。server は
+  生成時から `FILE_FLAG_OVERLAPPED` を付け、overlapped I/O でキャンセル可能な
+  accept を実現する(`PIPE_NOWAIT` は使わない)。接続後のメッセージ I/O は
+  ブロッキング(`PIPE_WAIT`)のまま扱う
+  (`ipc/src/NamedPipeTransport.cpp`)。
 - DACL: 現在のユーザ SID のみに RW 許可
   (`NamedPipeServer` Windows 実装で設定)。Debug/test の restricted-token 実行環境では
   Release 以外に限り互換 ACE を追加する。

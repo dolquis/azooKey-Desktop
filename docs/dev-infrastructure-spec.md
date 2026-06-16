@@ -299,10 +299,13 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
 
 ### 6.2 JSON パーサ強化要件
 
-`ipc/src/Json.cpp` は次の防御を備える。各上限値は
-`ipc/include/azookey/ipc/Limits.h` を**唯一の正典**とし、本節の数値と齟齬が
-出た場合は Limits.h を優先して本節を改訂する（数値はコードにハードコードされた
-定数であり「例」ではなく確定値）。
+`ipc/src/Json.cpp` は次の防御を備える。各上限値は**本節（spec）を正典**とする
+（AGENTS.md 正典マトリクス: IPC payload / JSON schema / 挙動の決定は
+`docs/*-spec.md`）。`ipc/include/azookey/ipc/Limits.h` の定数は本節の値に
+一致させ、齟齬が出た場合は spec を正として Limits.h を修正する。コード側の
+上限変更は wire contract と受け入れ条件に影響するため、spec 更新（レビュー）と
+セットで行うこと。定数と spec 値の同期は `static_assert` / テストで担保する
+（code-only な変更で wire contract が無断で変わる drift を防ぐ）。
 
 - **ネスト深度上限 = 64**（`kMaxJsonNestDepth`） — 配列/オブジェクトのネストが
   64 を超えたらパース失敗を返す（再帰によるスタック枯渇防止）。`ParseValue` は
@@ -320,10 +323,16 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
   （`ParseDocument` が `pos_ == size` を要求）。
 - **数値の安全な扱い** — `0` 始まりの多桁・小数点後桁なし・指数部桁なし等の
   不正形を拒否し、`1e9999` 等は `std::isfinite` で弾く。
-- **uint64 精度（抽出側は保持・直列化側は残課題）** — 整数**抽出**
-  （`GetInt` / `GetUInt`）は元トークン文字列から `std::stoll` / `std::stoull`
-  で復元するため double 経由の精度欠落がなく、uint64 全域
-  `18446744073709551615` まで正しく取り出せる（範囲外は `nullopt`）。一方
+- **uint64 精度（plain 整数 token のみ保持・非 plain 形と直列化は残課題）** —
+  **plain 整数 token**（符号なし数字のみ）の抽出（`GetInt` / `GetUInt`）は
+  元トークン文字列から `std::stoll` / `std::stoull` で復元するため double 経由の
+  精度欠落がなく、uint64 全域 `18446744073709551615` まで正しく取り出せ、桁あふれは
+  `nullopt`。ただし**小数・指数形**（例 `18446744073709551616.0`）は
+  `IsPlainIntegerToken` が false となり double 経路へフォールバックし、丸めに加え
+  範囲ガードが不十分（`d > static_cast<double>(UINT64_MAX)` は `(double)UINT64_MAX`
+  が 2^64 に丸まるため 2^64 を弾けず、範囲外 double を `nullopt` にせずキャスト
+  し得る）。非 plain 形の桁あふれ拒否は残課題として overflow テスト / 修正を要する
+  （DEV-188 / DEV-163）。一方
   **直列化**側は現状 `ipc/src/Messages.cpp` / `ipc/src/Payloads.cpp` が uint64
   フィールド（`request_id` / `Ping.nonce` / `t_ms` / `Cancel.target_request_id`
   / `CommitObservation.timestamp_ms` 等）を `static_cast<double>` してから
@@ -338,9 +347,10 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
   locale 依存のため、`std::from_chars` / `std::to_chars`（または明示 `C`
   ロケール）への置換を要する。
 
-  上記 2 つの残課題（直列化側 uint64 精度・locale 非依存）は numeric codec
-  correctness として Linear DEV-163 で一括追跡し、上記フィールドの round-trip
-  テスト追加までを完了条件とする。
+  上記の残課題（直列化側 uint64 精度・非 plain 数値形の桁あふれ拒否・locale
+  非依存）は numeric codec correctness として Linear DEV-163 で一括追跡し、
+  該当 uint64 フィールドの round-trip テストと非 plain 形 overflow テストの追加
+  までを完了条件とする（パーサ直接単体テストの拡充は DEV-188）。
 
 ### 6.3 追加テストと協定外メッセージの扱い
 

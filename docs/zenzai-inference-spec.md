@@ -310,10 +310,16 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 統合は **converter ではなく `QueryCandidates` 側**で行われる（現行コード）:
 
 ```
-1. user_dict_->Lookup(kana)   → score = value or user_word_default_score(1.5), source=UserDictionary, debug="user-dict"
+1. user_dict_->Lookup(kana)   → score = value or user_word_default_score(1.5), debug="user-dict"〔source は §7.2 上 UserDictionary だが現状コード未設定。下記注〕
 2. active_converter_->Convert(kana, ctx)  → Zenzai or SimpleConverter の候補を末尾連結
 3. Reranker::Apply → 各候補 score += LearningStore::Score(reading, surface, now)  → score 降順 stable_sort
 ```
+
+> ⚠️ **現状コードの不整合（DEV-221 が修正）**: 手順 1 の user_dict 候補は現行
+> `QueryCandidates` で `c.surface`/`reading`/`score`/`debug_info` のみ設定し、**`c.source` を
+> 設定していない**ため既定 `CandidateSource::Heuristic` のまま（`core/Candidate.h`）。§7.2 の
+> source 帯・source 依存のマージ/dedup（§7.6）を正しく効かせるには、マージ経路で
+> **`c.source = core::CandidateSource::UserDictionary` を明示設定する**（1 行修正、本契約に含む）。
 
 `ZenzaiModelConverter::Convert` は **手順 2 の候補列を返すだけ**であり、user_dict や
 reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source / debug_info）が
@@ -348,8 +354,10 @@ reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source
   `fallback_->Convert`（SimpleConverter）の結果を返す（現行委譲を維持）。この時の
   候補 source は SimpleConverter 由来（`SystemDictionary`/`Heuristic`、0.1〜1.2 帯）。
 - `debug_info` に `zenzai-degraded;<理由>` を付与。degraded を `/Health` に出すための
-  converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を
-  engine が同ロック内で吸い上げて `engine_->last_error()` に反映）。
+  converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を engine が
+  同ロック内で**専用フィールド `model_runtime_error_` にミラー**し `effective_last_error()`
+  経由で Health に反映。汎用 `last_error_`〔load/learning〕には**混ぜない**ので成功変換で確実に
+  クリアできる）。
 - user_dict は degraded でも手順 1 でそのまま最優先帯に残る（Host は落ちない）。
 
 ### 7.5 将来の score 統合（参照）
@@ -539,6 +547,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `BuildZenzaiPrompt`: かな→カタカナ正規化、文脈 30 文字切詰、空文脈/空profile の省略、特殊トークン配置 |
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
+| unit | マージ経路の source 設定（§7.1 注）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
 | unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `TakeLastError()` 非空 → engine が吸い上げ（§9.2.1） |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |

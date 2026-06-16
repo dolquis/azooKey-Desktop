@@ -341,9 +341,13 @@ reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source
 ### 7.3 順位規則
 
 - 最終順位は `score + 学習加点` の**降順 stable_sort**（現行 reranker のまま）。
-- **user_dict 最優先**（roadmap M9）は、Zenzai 帯上限（1.4）を user_dict 既定（1.5）
-  より低く設計することで**スコア単独キーのまま自然に担保**する。よって
-  `QueryCandidates` の合成順・reranker のソートキーは**変更不要**。
+- **user_dict 最優先**（roadmap M9）は **既定 value（無指定＝1.5）** の場合、Zenzai 帯上限
+  （1.4）より上に収まるため**スコア単独キーのまま自然に担保**される（合成順・reranker の
+  ソートキーは変更不要）。
+- **明示 value の扱い**: user_dict の score は `w.value.value_or(1.5)`。user が**明示的に低い/
+  負の value** を設定した場合（`AddUserWord` 任意値）はその値で順位付けされる＝user の意図的な
+  格下げを尊重する（M9「最優先」は既定登録語が対象）。ただし**重複表層の dedup** では value に
+  関わらず user_dict を保持する（§7.6 のソース優先）。
 - 例外: ユーザーが Zenzai 候補を繰り返し確定すると学習加点でその候補が 1.5 を超え
   user_dict 既定を上回り得る — これは**学習された選好の反映**として正しい挙動。
 - 同点時は stable_sort により**挿入順**（user_dict → Zenzai → Simple）が保たれる。
@@ -378,9 +382,13 @@ reranker でソートするのみで**クロスソース dedup をしない**た
 規則:
 
 - キーは表層 `surface`（同一読み `kana` 内での合成のため読みは共通）。
-- 重複時は**最高 score の 1 件を残す**。§7.2 の帯設計（user_dict 1.5 > Zenzai ≤1.4）に
-  より、user_dict と Zenzai が衝突した場合は user_dict が残る。残す側の `debug_info` に
-  脱落側 source を併記（例 `user-dict;dup:zenzai`）して証跡を保つ。
+- **ソース優先で残す**: 重複集合に user_dict（`source==UserDictionary`）候補があれば
+  **score の高低に関わらず user_dict を残す**（user が登録した表層はその値ごと user の
+  エントリで代表させる）。`w.value` が明示的に低い/負（`AddUserWord` は任意値を受理、既存
+  テストは -3.0 を送る）でも user_dict を保持する — §7.2 の帯依存（1.5>1.4）では保証
+  できないため **source 優先で担保**する。
+- user_dict を含まない重複（Zenzai × Simple 等）は**最高 score の 1 件**を残す。残す側の
+  `debug_info` に脱落側 source を併記（例 `user-dict;dup:zenzai`）して証跡を保つ。
 - dedup は**学習加点（reranker）適用後の最終 score** で判定し、降順 stable_sort の**後**に
   先頭優先で重複を落とす（順位規則 §7.3 を保ったまま重複のみ除去）。
 
@@ -479,10 +487,17 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
    （`ApplyRerankerOrRaw` の reranker 例外境界と同型）。converter が万一再 throw した
    場合は engine 側で捕捉して `model_runtime_error_` を設定し、fallback または空を返す
    （Host は落とさない）。
-5. `Health` は `last_error_`（load/learning）**と** `model_runtime_error_`（runtime 変換）
-   の**いずれかが立てば `degraded`**。engine は両者を畳んだ `effective_last_error()` を
-   公開し、`Dispatcher::HandleHealth` はそれを使う（現行の `engine_->last_error()` 単独
-   参照を置換）。これにより:
+5. `Health` の status は**既存の `model_loaded` 3 値分岐を保つ**。engine は `last_error_`
+   （load/learning）と `model_runtime_error_`（runtime 変換）を畳んだ `effective_last_error()`
+   を公開し、`Dispatcher::HandleHealth` はそれを使う（現行の `engine_->last_error()` 単独参照を
+   置換）。status マッピング:
+   - `effective_last_error()` 空 → **`ok`**。
+   - 設定あり **かつ `model_loaded()`** → **`degraded`**（recoverable: runtime 変換劣化や
+     loaded-model 警告）。
+   - 設定あり **かつ `!model_loaded()`** → **`error`**（GGUF 欠落/不正等の hard load 失敗。
+     既存 `HandleHealth` の error 分類を維持し、**degraded へ格下げしない**。`model_runtime_error_`
+     は model loaded 時のみ立つので、この枝に来るのは load 失敗の `last_error_` のみ）。
+   これにより:
    - runtime 劣化 → `model_runtime_error_` 立つ → `degraded`。
    - **その後の成功変換** → `model_runtime_error_` が nullopt に上書き → （他要因が無ければ）
      `ok` に**復帰**（§10 の Health テストと整合。stuck degraded を回避）。
@@ -573,10 +588,11 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | マージ経路の source 設定（§7.1 注）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
-| unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
+| unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき**ソース優先で user_dict を保持**（明示 value が低い/負 例 -3.0 でも Zenzai に落とされない）。user_dict を含まない重複は最高 score を残す |
 | unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー（§9.2.1） |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
 | unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
+| unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・空返し、deadline 超過で best-so-far。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |

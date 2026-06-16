@@ -236,11 +236,11 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
                   --backend cpu \
                   --model %LOCALAPPDATA%\azooKey\models\zenzai-small.gguf
 
-# 打ち間違え評価（補正モードを明示。typo 指標は補正有効モードで測る）
+# 打ち間違え評価（M55 で補正有効モードを指定。M52 では既定 off で schema 確認）
 azookey_bench.exe --eval bench/data/typo_eval.jsonl \
                   --typo-mode rank \
                   --output typo_result.json \
-                  --baseline typo_baseline.json
+                  --baseline typo_baseline.json   # rank/aggressive は M55 機能
 
 # trace 連携（M51）
 azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
@@ -262,13 +262,19 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--iterations <N>` | 各ケースの繰返し回数（latency 用） |
 | `--typo-mode <mode>` | typo 補正モード（`off` / `suggest` / `rank` / `aggressive`、既定 `off`）。`config.typo_correction_mode` に記録（§14.1 互換キー） |
 
-**typo 評価のモード指定（必須運用）**: §6.2 の typo 補正指標は補正が有効な
-モードでのみ意味を持つ。`typo_eval` を `--typo-mode off`（既定）で走らせると
-`typo_correction_top1/5_accuracy` が補正無効で測られ無意味になるため、typo
-ベンチは評価対象モード（M55 既定の `rank` 等）を明示する。とくに
-`typo_overcorrection_rate` は §4.3.1 のとおり `aggressive` モードで測る。
-通常変換（`kana_kanji_eval`）は `off` で走らせる（補正非対象）。baseline は
-モードごとに別管理（互換キーに `typo_correction_mode` を含む、§14）。
+**typo 評価のモード指定（マイルストーン別運用）**: §6.2 の typo 補正指標は
+補正が有効なモードでのみ意味を持つ。ただし**補正有効モード `suggest` /
+`rank` / `aggressive` は M55（打ち間違え統合）の機能**で、M52 時点では未実装。
+そのため:
+
+- **M52 受け入れ**: typo 補正は未実装のため `--typo-mode off`（既定、M55 前の
+  唯一のモード）で走らせ、typo 指標の**算出・schema 出力**を確認する（実測値
+  の良否は問わない。off では `typo_correction_top*` は自明な値になる）。
+- **M55 受け入れ**: 補正有効モードでの**実測値**を検証する。
+  `typo_correction_top1/5_accuracy` は評価対象モード（M55 既定の `rank` 等）で、
+  `typo_overcorrection_rate` は §4.3.1 のとおり `aggressive` モードで測る。
+- 通常変換（`kana_kanji_eval`）は常に `off`（補正非対象）。baseline は
+  モードごとに別管理（互換キーに `typo_correction_mode` を含む、§14）。
 
 ## 8. 出力 JSON 形式
 
@@ -416,10 +422,11 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 
 - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
   result.json` で全指標を計算できる
-- `azookey_bench --eval bench/data/typo_eval.jsonl --typo-mode rank
-  --output typo_result.json` で typo 指標が出る（補正有効モードで採取。
-  `--typo-mode off` は補正無効で typo 指標が無意味になるため受け入れに用いない。
-  §7「typo 評価のモード指定」参照）
+- `azookey_bench --eval bench/data/typo_eval.jsonl --output
+  typo_result.json` で typo 指標が**算出・schema 出力**される（M52 時点では
+  typo 補正は未実装＝M55 のため既定 `off` で走る。補正有効モード `rank` /
+  `aggressive` での**実測値**検証は M55 受け入れで行う。§7「typo 評価のモード
+  指定」参照）
 - 出力 JSON が §8 の stable schema に従う
 - baseline 比較レポート（diff_vs_baseline）が生成される
 - `--trace` フラグは M51 完了後の任意統合チェックとして扱う。M51

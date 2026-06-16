@@ -56,23 +56,54 @@ jobs:
       - name: Test
         run: ctest --preset windows-release --no-tests=error
 
+      # 以降は実リリース専用（タグ push 時のみ）。workflow_dispatch による手動
+      # 起動は configure/build/test までの dry-run として通すため tag-ref で gate する
+      # （非タグ ref でリリース用タグ／Release が作られる事故を防ぐ。spec §2.3）。
+
+      # ----------------------------------------------------------------------
+      # 署名（pre-package）: ルート C は MSIX へ同梱する前にバイナリへ署名する。
+      # msbuild の後にバイナリへ署名すると MSIX には未署名コピーが残るため、
+      # バイナリ署名は必ず Build MSIX の前に置く（spec §2.1 / §2.3 の順序）。
+      # ルート A/B は MSIX パッケージのみ署名するため本ステップは不要。
+      # ----------------------------------------------------------------------
+      # - name: Import certificate (route C)
+      #   if: github.ref_type == 'tag'
+      #   run: |
+      #     $bytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_PFX_BASE64 }}")
+      #     [IO.File]::WriteAllBytes("$env:TEMP\cert.pfx", $bytes)
+      #     $pwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_PFX_PASSWORD }}" -AsPlainText -Force
+      #     Import-PfxCertificate -FilePath $env:TEMP\cert.pfx -Password $pwd -CertStoreLocation Cert:\CurrentUser\My
+      # - name: Sign binaries (route C, pre-package)
+      #   if: github.ref_type == 'tag'
+      #   run: |
+      #     $tools = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64"
+      #     & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+      #         /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
+      #         build\windows-release\tsf-tip\azookey_tsf_tip.dll `
+      #         build\windows-release\inference-host\azookey_inference_host.exe
+
       # ----------------------------------------------------------------------
       # MSIX パッケージング（M28 / DEV-101 確定後に有効化）
       # `pkg/msix/Package.wapproj` は M28 PoC で経路 A/B/C を確定してから作成する。
+      # ルート C ではこの時点で署名済みバイナリが取り込まれる。
       # ----------------------------------------------------------------------
       - name: Build MSIX
+        if: github.ref_type == 'tag'
         run: msbuild pkg\msix\Package.wapproj /p:Configuration=Release /p:Platform=x64
 
       # ----------------------------------------------------------------------
-      # 署名（D-04-A で確定した 1 ルートを有効化する。下記は相互排他）
+      # 署名（post-package）: MSIX パッケージへ署名する。D-04-A で確定した 1 ルート
+      # だけを有効化する（下記 A/B/C は相互排他）。
       #
       # ルート A: Azure Artifact Signing（旧 Trusted Signing）— spec §2.2.A
       # ----------------------------------------------------------------------
       # - name: Azure CLI login
+      #   if: github.ref_type == 'tag'
       #   uses: azure/login@v2
       #   with:
       #     creds: ${{ secrets.AZURE_CREDENTIALS }}
       # - name: Sign MSIX with Azure Artifact Signing
+      #   if: github.ref_type == 'tag'
       #   uses: azure/trusted-signing-action@v0
       #   with:
       #     azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -90,8 +121,10 @@ jobs:
       # ルート B: Azure Key Vault + AzureSignTool（日本の個人開発者向け次善）— spec §2.2.B
       # ----------------------------------------------------------------------
       # - name: Install AzureSignTool
+      #   if: github.ref_type == 'tag'
       #   run: dotnet tool install --global AzureSignTool
       # - name: Sign MSIX with AzureSignTool
+      #   if: github.ref_type == 'tag'
       #   run: |
       #     AzureSignTool sign `
       #       -kvu ${{ secrets.AZURE_KEY_VAULT_URL }} `
@@ -105,29 +138,23 @@ jobs:
       # ----------------------------------------------------------------------
       # ルート C: 伝統的 OV/EV cert（PFX を GitHub Secrets）— spec §2.2 / §2.3
       # EV の HSM 物理トークンは CI で使えない点に注意（spec §2.0 表）。
+      # バイナリは上の pre-package ステップで署名済み。ここでは MSIX のみ署名する。
       # ----------------------------------------------------------------------
-      # - name: Import certificate
-      #   run: |
-      #     $bytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_PFX_BASE64 }}")
-      #     [IO.File]::WriteAllBytes("$env:TEMP\cert.pfx", $bytes)
-      #     $pwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_PFX_PASSWORD }}" -AsPlainText -Force
-      #     Import-PfxCertificate -FilePath $env:TEMP\cert.pfx -Password $pwd -CertStoreLocation Cert:\CurrentUser\My
-      # - name: Sign binaries and MSIX
+      # - name: Sign MSIX (route C, post-package)
+      #   if: github.ref_type == 'tag'
       #   run: |
       #     $tools = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64"
-      #     & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-      #         /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
-      #         build\windows-release\tsf-tip\azookey_tsf_tip.dll `
-      #         build\windows-release\inference-host\azookey_inference_host.exe
       #     & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
       #         /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
       #         pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
 
       - name: Verify signature
+        if: github.ref_type == 'tag'
         run: |
           & signtool verify /pa /v pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
 
       - name: Upload Release asset (draft)
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           draft: true

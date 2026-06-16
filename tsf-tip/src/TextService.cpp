@@ -372,7 +372,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     if (committing_) {
       ITfContext* retry_context = commit_context_ ? commit_context_ : active_context_;
-      if (retry_context && SUCCEEDED(RequestCommitEditSession(retry_context))) {
+      const HRESULT retry_hr = retry_context ? RequestCommitEditSession(retry_context) : E_FAIL;
+      if (retry_hr == E_OUTOFMEMORY) return retry_hr;
+      if (SUCCEEDED(retry_hr)) {
         preedit_kana_.clear();
         romaji_.Reset();
         *eaten = TRUE;

@@ -1053,6 +1053,32 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitConsumesNextInputWhenRetryIsStillRe
   EXPECT_TRUE(h.service.committing_);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, u8"か");
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeCompositionExists) {
   TextServiceHarness h;
   FakeRange range;

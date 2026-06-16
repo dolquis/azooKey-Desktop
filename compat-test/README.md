@@ -8,17 +8,18 @@
 > 状態 / 進捗・優先度は Linear（team `Dev` / project *azooKey Desktop /
 > Windows IME MVP*）が正典。本 README には進捗を書かない（`AGENTS.md`）。
 
-## ステータス
+## ビルド配線
 
-雛形のみ。runner / cases の実装は M50 で行う。現時点では **トップ
-`CMakeLists.txt` のビルド対象に組み込んでいない**（`add_subdirectory` を
-明示列挙する方式のため、雛形を置いても既存ビルド・CTest に影響しない）。
+この `compat-test/` はトップ `CMakeLists.txt` のビルド対象に登録しない方針。
+トップは `add_subdirectory` を明示列挙する方式のため、本ディレクトリを置いても
+既存のビルド・CTest には影響しない。runner / cases を実装する際に
+`add_subdirectory(compat-test)` を追加して配線する。
 
 ## 想定ディレクトリ構成（§13.4）
 
 ```
 compat-test/
-├── CMakeLists.txt              # M50 で追加（runner / cases を配線）
+├── CMakeLists.txt              # runner / cases を配線する compat_test ターゲット
 ├── runner/
 │   ├── CompatRunner.cpp        # UI Automation + SendInput
 │   ├── ScreenshotCapture.cpp   # GDI 経由のスクリーンショット

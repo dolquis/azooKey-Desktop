@@ -17,6 +17,7 @@ target_link_libraries(azookey_tsf_tip
     ole32
     uuid
     shlwapi
+    shcore
 )
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
@@ -41,6 +42,7 @@ if(AZOOKEY_BUILD_TESTS)
         ole32
         uuid
         shlwapi
+        shcore
         user32
         gdi32
     )
@@ -67,4 +69,5 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_activate_uiless_tests tests/activate_uiless_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
 endif()

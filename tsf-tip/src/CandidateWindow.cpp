@@ -1,5 +1,7 @@
 #include "azookey/tsf/CandidateWindow.h"
 
+#include <ShellScalingApi.h>
+
 #include <algorithm>
 #include <string>
 
@@ -7,21 +9,96 @@ namespace azookey::tsf {
 
 namespace {
 constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
+constexpr wchar_t kFallbackFontFace[] = L"Yu Gothic UI";
 
 HMODULE GetTipModuleHandle() {
   HMODULE module = nullptr;
-  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         reinterpret_cast<LPCWSTR>(&GetTipModuleHandle), &module)) {
+  if (GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          reinterpret_cast<LPCWSTR>(&GetTipModuleHandle), &module)) {
     return module;
   }
   return nullptr;
 }
-}
+
+UINT NormalizeDpi(UINT dpi) { return dpi == 0 ? USER_DEFAULT_SCREEN_DPI : dpi; }
+}  // namespace
 
 CandidateWindow::CandidateWindow() = default;
 
 CandidateWindow::~CandidateWindow() { Destroy(); }
+
+// static
+int CandidateWindow::ScaleForDpi(int value, UINT dpi) {
+  return MulDiv(value, static_cast<int>(NormalizeDpi(dpi)), static_cast<int>(kDefaultDpi));
+}
+
+// static
+CandidateWindow::LayoutMetrics CandidateWindow::ComputeLayoutMetrics(UINT dpi) {
+  return {
+      std::max(1, ScaleForDpi(kBaseItemHeight, dpi)),
+      std::max(1, ScaleForDpi(kBaseHorzPad, dpi)),
+      std::max(1, ScaleForDpi(kBaseMaxWidth, dpi)),
+      std::max(1, ScaleForDpi(kBaseCaretGap, dpi)),
+      std::max(1, ScaleForDpi(kBaseMinTextWidth, dpi)),
+      std::max(1, ScaleForDpi(kBaseExtraWidth, dpi)),
+  };
+}
+
+// static
+UINT CandidateWindow::DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd) {
+  UINT dpi_x = 0;
+  UINT dpi_y = 0;
+  if (monitor && SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) &&
+      dpi_x != 0) {
+    return dpi_x;
+  }
+  if (fallback_hwnd) {
+    UINT window_dpi = GetDpiForWindow(fallback_hwnd);
+    if (window_dpi != 0) return window_dpi;
+  }
+  return kDefaultDpi;
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+// static
+CandidateWindow::LayoutMetricsForTest CandidateWindow::ComputeLayoutMetricsForTest(UINT dpi) {
+  const LayoutMetrics metrics = ComputeLayoutMetrics(dpi);
+  return {metrics.item_height, metrics.horizontal_padding, metrics.max_width,
+          metrics.caret_gap,   metrics.min_text_width,     metrics.extra_width};
+}
+#endif
+
+// static
+HFONT CandidateWindow::CreateMessageFont(UINT dpi) {
+  dpi = NormalizeDpi(dpi);
+
+  NONCLIENTMETRICSW nonclient_metrics{};
+  nonclient_metrics.cbSize = sizeof(nonclient_metrics);
+  LOGFONTW log_font{};
+  if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(nonclient_metrics),
+                                 &nonclient_metrics, 0, dpi)) {
+    log_font = nonclient_metrics.lfMessageFont;
+  } else {
+    log_font.lfHeight = -MulDiv(9, static_cast<int>(dpi), 72);
+    log_font.lfWeight = FW_NORMAL;
+    lstrcpynW(log_font.lfFaceName, kFallbackFontFace, LF_FACESIZE);
+  }
+  return CreateFontIndirectW(&log_font);
+}
+
+void CandidateWindow::UpdateDpi(UINT dpi) {
+  dpi = NormalizeDpi(dpi);
+  if (dpi == dpi_ && font_) return;
+
+  metrics_ = ComputeLayoutMetrics(dpi);
+  HFONT next_font = CreateMessageFont(dpi);
+  if (next_font) {
+    if (font_) DeleteObject(font_);
+    font_ = next_font;
+  }
+  dpi_ = dpi;
+}
 
 // static
 ATOM CandidateWindow::RegisterWindowClass() {
@@ -40,8 +117,7 @@ ATOM CandidateWindow::RegisterWindowClass() {
     existing.cbSize = sizeof(existing);
     GetClassInfoExW(GetTipModuleHandle(), kClassName, &existing);
     a = static_cast<ATOM>(GetClassLongW(
-        FindWindowW(kClassName, nullptr) ? FindWindowW(kClassName, nullptr)
-                                         : HWND_DESKTOP,
+        FindWindowW(kClassName, nullptr) ? FindWindowW(kClassName, nullptr) : HWND_DESKTOP,
         GCW_ATOM));
     // Fallback: return a non-zero sentinel so Create() proceeds.
     if (!a) a = 1;
@@ -53,13 +129,17 @@ bool CandidateWindow::Create() {
   static ATOM s_atom = RegisterWindowClass();
   (void)s_atom;
 
-  hwnd_ = CreateWindowExW(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-      kClassName, nullptr,
-      WS_POPUP | WS_BORDER,
-      0, 0, 200, kItemHeight,
-      nullptr, nullptr,
-      GetTipModuleHandle(), this);
+  DPI_AWARENESS_CONTEXT previous_context =
+      SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, nullptr,
+                          WS_POPUP | WS_BORDER, 0, 0, 200, metrics_.item_height, nullptr, nullptr,
+                          GetTipModuleHandle(), this);
+  if (previous_context) {
+    SetThreadDpiAwarenessContext(previous_context);
+  }
+  if (hwnd_) {
+    UpdateDpi(GetDpiForWindow(hwnd_));
+  }
   return hwnd_ != nullptr;
 }
 
@@ -68,6 +148,10 @@ void CandidateWindow::Destroy() {
     DestroyWindow(hwnd_);
     // hwnd_ is cleared in WM_DESTROY handler.
   }
+  if (font_) {
+    DeleteObject(font_);
+    font_ = nullptr;
+  }
 }
 
 void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int selected_idx) {
@@ -75,39 +159,44 @@ void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int
 
   items_ = items;
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
+  HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+  UpdateDpi(DpiForMonitor(mon, hwnd_));
 
   // Measure maximum text width using the window's DC.
   HDC hdc = GetDC(hwnd_);
-  HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-  HFONT old_font = static_cast<HFONT>(SelectObject(hdc, font));
-  int max_text_w = 60;
-  for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-    std::wstring label = std::to_wstring(i + 1) + L". " + items_[i];
-    SIZE sz{};
-    GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
-    max_text_w = std::max(max_text_w, static_cast<int>(sz.cx));
+  HGDIOBJ old_font = nullptr;
+  if (hdc && font_) old_font = SelectObject(hdc, font_);
+  int max_text_w = metrics_.min_text_width;
+  if (hdc) {
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+      std::wstring label = std::to_wstring(i + 1) + L". " + items_[i];
+      SIZE sz{};
+      GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
+      max_text_w = std::max(max_text_w, static_cast<int>(sz.cx));
+    }
   }
-  SelectObject(hdc, old_font);
-  ReleaseDC(hwnd_, hdc);
+  if (hdc) {
+    if (old_font) SelectObject(hdc, old_font);
+    ReleaseDC(hwnd_, hdc);
+  }
 
-  int width = std::min(max_text_w + kHorzPad * 2 + 4, kMaxWidth);
-  int height = kItemHeight * static_cast<int>(items_.size());
+  int width = std::min(max_text_w + metrics_.horizontal_padding * 2 + metrics_.extra_width,
+                       metrics_.max_width);
+  int height = metrics_.item_height * static_cast<int>(items_.size());
 
   // Keep window on-screen: flip above caret if it would overflow below.
-  HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
   MONITORINFO mi{};
   mi.cbSize = sizeof(mi);
   GetMonitorInfoW(mon, &mi);
   if (pt.x + width > mi.rcWork.right) pt.x = mi.rcWork.right - width;
   if (pt.x < mi.rcWork.left) pt.x = mi.rcWork.left;
   if (pt.y + height > mi.rcWork.bottom) {
-    // Estimate caret height ~20px — flip to open upward.
-    pt.y = pt.y - height - 20;
+    // Estimate caret height and flip to open upward when it would overflow.
+    pt.y = pt.y - height - metrics_.caret_gap;
   }
   if (pt.y < mi.rcWork.top) pt.y = mi.rcWork.top;
 
-  SetWindowPos(hwnd_, HWND_TOPMOST, pt.x, pt.y, width, height,
-               SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  SetWindowPos(hwnd_, HWND_TOPMOST, pt.x, pt.y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
   InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
@@ -119,9 +208,7 @@ void CandidateWindow::PostCandidatesReady() {
   if (hwnd_) PostMessageW(hwnd_, kCandidatesReadyMessage, 0, 0);
 }
 
-bool CandidateWindow::IsVisible() const {
-  return hwnd_ && IsWindowVisible(hwnd_);
-}
+bool CandidateWindow::IsVisible() const { return hwnd_ && IsWindowVisible(hwnd_); }
 
 void CandidateWindow::MoveSelection(int delta) {
   if (items_.empty()) return;
@@ -162,39 +249,40 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
     case WM_PAINT: {
       PAINTSTRUCT ps;
-      HDC hdc = BeginPaint(hwnd_, &ps);
-      HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-      HFONT old_font = static_cast<HFONT>(SelectObject(hdc, font));
+      HDC hdc = BeginPaint(hwnd, &ps);
+      UpdateDpi(GetDpiForWindow(hwnd));
+      HGDIOBJ old_font = nullptr;
+      if (font_) old_font = SelectObject(hdc, font_);
       SetBkMode(hdc, TRANSPARENT);
 
       RECT client_rc{};
-      GetClientRect(hwnd_, &client_rc);
+      GetClientRect(hwnd, &client_rc);
 
       for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-        RECT row_rc = {0, i * kItemHeight, client_rc.right, (i + 1) * kItemHeight};
+        RECT row_rc = {0, i * metrics_.item_height, client_rc.right,
+                       (i + 1) * metrics_.item_height};
         if (i == selected_idx_) {
           FillRect(hdc, &row_rc,
                    reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_HIGHLIGHT + 1)));
           SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
         } else {
-          FillRect(hdc, &row_rc,
-                   reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_WINDOW + 1)));
+          FillRect(hdc, &row_rc, reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_WINDOW + 1)));
           SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
         }
         std::wstring label = std::to_wstring(i + 1) + L". " + items_[i];
         RECT text_rc = row_rc;
-        text_rc.left += kHorzPad;
+        text_rc.left += metrics_.horizontal_padding;
         DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &text_rc,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
       }
-      SelectObject(hdc, old_font);
-      EndPaint(hwnd_, &ps);
+      if (old_font) SelectObject(hdc, old_font);
+      EndPaint(hwnd, &ps);
       return 0;
     }
 
     case WM_LBUTTONDOWN: {
       int y = static_cast<int>(HIWORD(lParam));
-      int idx = y / kItemHeight;
+      int idx = y / metrics_.item_height;
       if (idx >= 0 && idx < static_cast<int>(items_.size())) {
         selected_idx_ = idx;
         Repaint();
@@ -206,6 +294,18 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case kCandidatesReadyMessage:
       if (on_candidates_ready_) on_candidates_ready_(on_candidates_ready_context_);
       return 0;
+
+    case WM_DPICHANGED: {
+      UpdateDpi(LOWORD(wParam));
+      RECT* suggested = reinterpret_cast<RECT*>(lParam);
+      if (suggested) {
+        SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
+                     suggested->right - suggested->left, suggested->bottom - suggested->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+      }
+      InvalidateRect(hwnd, nullptr, TRUE);
+      return 0;
+    }
 
     case WM_DESTROY:
       hwnd_ = nullptr;

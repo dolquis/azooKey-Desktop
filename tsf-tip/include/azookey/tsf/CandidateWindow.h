@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+
 #include <functional>
 #include <string>
 #include <utility>
@@ -46,25 +47,60 @@ class CandidateWindow {
   }
   void PostCandidatesReady();
 
+#ifdef AZOOKEY_TSF_TESTING
+  struct LayoutMetricsForTest {
+    int item_height;
+    int horizontal_padding;
+    int max_width;
+    int caret_gap;
+    int min_text_width;
+    int extra_width;
+  };
+
+  static LayoutMetricsForTest ComputeLayoutMetricsForTest(UINT dpi);
+#endif
+
  private:
+  struct LayoutMetrics {
+    int item_height;
+    int horizontal_padding;
+    int max_width;
+    int caret_gap;
+    int min_text_width;
+    int extra_width;
+  };
+
+  static constexpr UINT kDefaultDpi = USER_DEFAULT_SCREEN_DPI;
+  static constexpr int kBaseItemHeight = 24;
+  static constexpr int kBaseHorzPad = 8;
+  static constexpr int kBaseMaxWidth = 400;
+  static constexpr int kBaseCaretGap = 20;
+  static constexpr int kBaseMinTextWidth = 60;
+  static constexpr int kBaseExtraWidth = 4;
+  static constexpr UINT kCandidatesReadyMessage = WM_APP + 0x4b1;
+
   HWND hwnd_{nullptr};
+  UINT dpi_{kDefaultDpi};
+  HFONT font_{nullptr};
+  LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
+                         kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<std::wstring> items_;
   int selected_idx_{0};
   OnClickFn on_click_;
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
   void* on_candidates_ready_context_{nullptr};
 
-  static constexpr int kItemHeight = 24;
-  static constexpr int kHorzPad = 8;
-  static constexpr int kMaxWidth = 400;
-  static constexpr UINT kCandidatesReadyMessage = WM_APP + 0x4b1;
-
+  static int ScaleForDpi(int value, UINT dpi);
+  static LayoutMetrics ComputeLayoutMetrics(UINT dpi);
+  static UINT DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd);
+  static HFONT CreateMessageFont(UINT dpi);
   static ATOM RegisterWindowClass();
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   // hwnd is the HWND from the WndProc delivery (authoritative; hwnd_ may be
   // null after WM_DESTROY, but trailing messages like WM_NCDESTROY still need
   // a valid handle for DefWindowProcW).
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  void UpdateDpi(UINT dpi);
   void Repaint() const;
 };
 

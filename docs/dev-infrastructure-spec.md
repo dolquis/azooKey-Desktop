@@ -425,9 +425,13 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 
   **トークンが実際に与える価値**:
   - 非悪意の誤接続（バージョン違い / 別ビルドの Host・TIP / 残存プロセス）を弾く
-  - トークン格納先（`%LOCALAPPDATA%`）を**読めない**同一ユーザープロセス（例:
-    AppContainer / 低 IL のサンドボックスプロセス。`docs/` の AppContainer 対応
-    DEV-204 と関連）を結果的に排除する
+  - トークン格納先（`%LOCALAPPDATA%`）を**読めない**同一ユーザープロセス、
+    具体的には **capability 分離された AppContainer プロセス**（ユーザー通常 SID で
+    `%LOCALAPPDATA%` を読めず、パッケージ SID / capability で隔離。DEV-204 関連）を
+    結果的に排除する。**低 IL（low integrity）プロセスは排除できない** — Windows の
+    整合性レベルは通常 write-up のみ制限し read-up は許すため、低 IL でも同一ユーザー
+    DACL のトークンファイルを読めてしまう。この価値は AppContainer 等の capability
+    隔離ケースに限る
   - 攻撃の手数を一段増やす speed bump
 
   **トークンの配布チャネル（v1.0 決定）**: env 事前共有（`AZOOKEY_IPC_HANDSHAKE_TOKEN`）

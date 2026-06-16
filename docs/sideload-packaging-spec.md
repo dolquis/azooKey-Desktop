@@ -126,6 +126,11 @@
 `Class Id` と `Profile GUID` は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid`
 / `kProfileGuid` と一致させる。
 
+> **署名 cert を入れたら `Publisher` を必ず差し替える**: 上記 `Publisher="CN=dolquis"`
+> は自己署名 dev cert 用の暫定値である。OV/EV cert で署名する場合、`Identity@Publisher`
+> は署名証明書の Subject DN 全体と完全一致しないと `Add-AppxPackage` が `0x8007000B`
+> で失敗する。具体手順は §2.2「Publisher と証明書 Subject の整合（必須）」を参照。
+
 #### MSIX `comServer` の AAP（Activate As Package）挙動と既知制限
 
 MSIX に同梱した COM サーバは、`regsvr32` で登録した classic な COM サーバと異な
@@ -352,8 +357,9 @@ app execution alias の利用を優先する。
 
 **v1.0 の判定**: 開発者の所在地・組織化状況に応じて A or B or C を選ぶ。日本の
 個人開発者で組織化していない場合は B（Azure Key Vault + AzureSignTool）が現実
-的。組織化済みで該当地域なら A を強く推奨。詳細運用と申請手順は別途調査タスク
-（[Linear DEV-100](https://linear.app/dolquis/issue/DEV-100)）で確定する。
+的。組織化済みで該当地域なら A を強く推奨。ルートの最終選定・証明書調達・申請手順は
+人間判断が必須のため、`gate:human-required` 課題
+（[Linear DEV-255](https://linear.app/dolquis/issue/DEV-255)）で確定する。
 
 ### 2.1 signtool 引数
 
@@ -472,7 +478,16 @@ service principal 経路の例を示す。
 
 ### 2.3 CI ステップ
 
-`.github/workflows/release.yml`（新規）：
+`.github/workflows/release.yml` を**雛形として作成済み**（DEV-100）。本ファイルが
+実装の正典であり、本節の YAML はその設計の写しである。雛形は以下の前提で**既定無効**:
+
+* job 全体を repository variable `RELEASE_ENABLED == 'true'` でガードし、誤発火を防ぐ。
+* MSIX ビルド（`pkg/msix/Package.wapproj`）は M28 PoC（DEV-101）確定後に作成する。
+* 署名ステップは経路 A/B/C（§2.0）の 3 ルートをコメントで併記し、採用ルートは
+  人間ゲート課題 D-04-A（`gate:human-required`）で確定してから 1 つだけ有効化する。
+* 各ルートの Secrets スキーマは §2.2 / §2.2.A / §2.2.B の表を正典とする。
+
+有効化手順（M28/M29 完了・証明書手当て済み後に人間が実施）は同ファイル冒頭コメントに記す。
 
 ```yaml
 name: Release

@@ -614,6 +614,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
       }
     }
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
   } catch (...) {
     return E_FAIL;
   }

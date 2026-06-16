@@ -659,7 +659,7 @@ public:
 > プロセスである。`Show` を `azookey_settings.exe` 終了までブロックすると、呼び出し元
 > （言語/IME 設定 UI）をその間フリーズさせるため、**起動後ただちに `S_OK` を返す
 > 非同期方式**を採る（`WaitForSingleObject` で終了待ちしない）。設定値の反映はプロパティ
-> シートの OK/Apply ではなく `UpdateSettings` IPC（§3）で行う。多重起動を避けるため設定
+> シートの OK/Apply ではなく `UpdateConfig` IPC（§3）で行う。多重起動を避けるため設定
 > アプリは single-instance とし、既存インスタンスがあれば前面化する
 > （`SEE_MASK_NOCLOSEPROCESS` で得たプロセスハンドルは前面化・監視用途に使い、
 > 終了待ちには使わない）。

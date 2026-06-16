@@ -79,8 +79,13 @@ class RequestCompletionGuard {
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
-                       learning::UserDictionary* user_dict, DispatcherConfig config)
-    : engine_(engine), scheduler_(scheduler), user_dict_(user_dict), config_(std::move(config)) {}
+                       learning::UserDictionary* user_dict, DispatcherConfig config,
+                       SettingsStore* settings_store)
+    : engine_(engine),
+      scheduler_(scheduler),
+      user_dict_(user_dict),
+      settings_store_(settings_store),
+      config_(std::move(config)) {}
 
 std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
   if (req.type != ipc::MessageType::Handshake && RequiresAuthenticatedSession()) {
@@ -96,6 +101,7 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     case ipc::MessageType::CommitObservation: return HandleCommitObservation(req);
     case ipc::MessageType::AddUserWord: return HandleAddUserWord(req);
     case ipc::MessageType::RemoveUserWord: return HandleRemoveUserWord(req);
+    case ipc::MessageType::UpdateConfig: return HandleUpdateConfig(req);
     default: return std::nullopt;
   }
 }
@@ -111,6 +117,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     case ipc::MessageType::RemoveUserWord: {
       ipc::RemoveUserWordResponse r; r.ok = false;
       return MakeResponse(req, ipc::BuildRemoveUserWordResponse(r));
+    }
+    case ipc::MessageType::UpdateConfig: {
+      ipc::UpdateConfigResponse r;
+      r.ok = false;
+      r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildUpdateConfigResponse(r));
     }
     case ipc::MessageType::CommitObservation: {
       ipc::CommitObservationResponse r; r.ok = false;
@@ -286,6 +298,29 @@ std::optional<ipc::Envelope> Dispatcher::HandleRemoveUserWord(const ipc::Envelop
     if (res.ok) user_dict_->Save();
   }
   return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope& req) {
+  ipc::UpdateConfigResponse res;
+  if (!settings_store_) {
+    res.ok = false;
+    res.error = "settings store not configured";
+    return MakeResponse(req, ipc::BuildUpdateConfigResponse(res));
+  }
+
+  const auto load_result = settings_store_->Reload();
+  auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings);
+  engine_->ApplyConfig(next_config);
+  const auto model_result = engine_->LoadModelWithResult(
+      ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers});
+
+  res.ok = load_result.status != SettingsLoadStatus::Invalid && model_result.ok;
+  if (load_result.error) {
+    res.error = *load_result.error;
+  } else if (!model_result.ok) {
+    res.error = model_result.error.value_or("model load failed");
+  }
+  return MakeResponse(req, ipc::BuildUpdateConfigResponse(res));
 }
 
 }  // namespace azookey::host

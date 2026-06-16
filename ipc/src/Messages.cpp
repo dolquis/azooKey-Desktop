@@ -20,6 +20,7 @@ std::string TypeToString(MessageType type) {
     case MessageType::AddUserWord: return "AddUserWord";
     case MessageType::UpdateUserWord: return "UpdateUserWord";
     case MessageType::RemoveUserWord: return "RemoveUserWord";
+    case MessageType::UpdateConfig: return "UpdateConfig";
     case MessageType::Ping: return "Ping";
     case MessageType::Health: return "Health";
     default: return "Unknown";
@@ -38,6 +39,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "AddUserWord") return MessageType::AddUserWord;
   if (value == "UpdateUserWord") return MessageType::UpdateUserWord;
   if (value == "RemoveUserWord") return MessageType::RemoveUserWord;
+  if (value == "UpdateConfig") return MessageType::UpdateConfig;
   if (value == "Ping") return MessageType::Ping;
   if (value == "Health") return MessageType::Health;
   return MessageType::Unknown;

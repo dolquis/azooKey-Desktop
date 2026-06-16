@@ -13,6 +13,7 @@
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/LearningStore.h"
@@ -467,6 +468,54 @@ TEST_F(DispatcherTest, Health) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->status, "ok");
   EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
+}
+
+TEST_F(DispatcherTest, UpdateConfigWithoutSettingsStoreReturnsError) {
+  auto resp = dispatcher.Dispatch(MakeReq(73, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  EXPECT_EQ(resp->type, ipc::MessageType::UpdateConfig);
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->ok);
+  ASSERT_TRUE(parsed->error.has_value());
+  EXPECT_EQ(*parsed->error, "settings store not configured");
+}
+
+TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
+  const auto settings_path = TempPath("azookey_dispatcher_settings.json");
+  std::remove(settings_path.c_str());
+
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({"liveConversion":false,"backendPreference":"cuda"})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::Dispatcher config_dispatcher(
+      &engine, &scheduler, &user_dict,
+      {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion}, &settings_store);
+
+  auto resp = config_dispatcher.Dispatch(MakeReq(74, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_FALSE(engine.config().enable_live_conversion);
+  EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cuda);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << R"({"liveConversion":true,"backendPreference":"cpu"})";
+  }
+
+  auto second = config_dispatcher.Dispatch(MakeReq(75, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(second.has_value());
+  auto second_payload = ipc::ParseUpdateConfigResponse(second->payload_json);
+  ASSERT_TRUE(second_payload.has_value());
+  EXPECT_TRUE(second_payload->ok);
+  EXPECT_TRUE(engine.config().enable_live_conversion);
+  EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cpu);
+
+  std::remove(settings_path.c_str());
 }
 
 // Verify that a token-configured Dispatcher isolates auth state per instance.

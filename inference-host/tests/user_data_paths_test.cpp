@@ -24,6 +24,7 @@ TEST(UserDataPathsTest, DefaultPathsUseLocalAppDataLayout) {
   EXPECT_EQ(paths->data_dir, local / "azooKey" / "data");
   EXPECT_EQ(paths->logs_dir, local / "azooKey" / "logs");
   EXPECT_EQ(paths->models_dir, local / "azooKey" / "models");
+  EXPECT_EQ(paths->settings_path, local / "azooKey" / "config" / "settings.json");
   EXPECT_EQ(paths->learning_path, local / "azooKey" / "data" / "learning.tsv");
   EXPECT_EQ(paths->user_dict_path, local / "azooKey" / "data" / "user_dict.json");
 }
@@ -62,6 +63,7 @@ TEST(UserDataPathsTest, FullyExplicitPathsWorkWithoutLocalAppData) {
   EXPECT_EQ(paths->user_dict_path, user_dict);
   // Directory fields are empty (no LocalAppData to derive them from).
   EXPECT_TRUE(paths->root_dir.empty());
+  EXPECT_TRUE(paths->settings_path.empty());
 }
 
 TEST(UserDataPathsTest, EnsureCreatesLayoutAndExplicitParents) {

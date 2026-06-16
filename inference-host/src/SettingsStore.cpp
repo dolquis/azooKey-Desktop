@@ -1,0 +1,244 @@
+#include "azookey/host/SettingsStore.h"
+
+#include <fstream>
+#include <sstream>
+#include <system_error>
+#include <utility>
+
+#include "azookey/ipc/Json.h"
+
+namespace azookey::host {
+
+namespace {
+
+namespace j = ::azookey::ipc::json;
+
+bool IsOneOf(const std::string& value, std::initializer_list<const char*> allowed) {
+  for (const char* item : allowed) {
+    if (value == item) return true;
+  }
+  return false;
+}
+
+std::string ReadString(const j::Object& object, const char* key, const std::string& fallback) {
+  auto it = object.find(key);
+  if (it == object.end() || !it->second.IsString()) return fallback;
+  return it->second.AsString();
+}
+
+std::string ReadEnum(const j::Object& object, const char* key, const std::string& fallback,
+                     std::initializer_list<const char*> allowed) {
+  const auto value = ReadString(object, key, fallback);
+  return IsOneOf(value, allowed) ? value : fallback;
+}
+
+bool ReadBool(const j::Object& object, const char* key, bool fallback) {
+  auto it = object.find(key);
+  if (it == object.end() || !it->second.IsBool()) return fallback;
+  return it->second.AsBool();
+}
+
+int32_t ReadInt32(const j::Object& object, const char* key, int32_t fallback) {
+  auto it = object.find(key);
+  if (it == object.end() || !it->second.IsNumber()) return fallback;
+  return static_cast<int32_t>(it->second.AsNumber());
+}
+
+const j::Object* ReadObject(const j::Object& object, const char* key) {
+  auto it = object.find(key);
+  if (it == object.end() || !it->second.IsObject()) return nullptr;
+  return &it->second.AsObject();
+}
+
+std::optional<std::string> ReadFile(const std::filesystem::path& path,
+                                    std::optional<std::string>* error) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return std::nullopt;
+  }
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  if (in.bad()) {
+    if (error) *error = "failed to read settings.json";
+    return std::nullopt;
+  }
+  return buffer.str();
+}
+
+std::optional<std::filesystem::path> QuarantineInvalidFile(const std::filesystem::path& path,
+                                                           std::optional<std::string>* error) {
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) return std::nullopt;
+
+  for (int i = 0; i < 100; ++i) {
+    auto candidate = path;
+    candidate += (i == 0) ? ".invalid" : ".invalid." + std::to_string(i);
+    if (std::filesystem::exists(candidate, ec)) continue;
+
+    std::filesystem::rename(path, candidate, ec);
+    if (!ec) return candidate;
+    if (error) *error = "failed to quarantine invalid settings.json: " + ec.message();
+    return std::nullopt;
+  }
+  if (error) *error = "failed to quarantine invalid settings.json: no available suffix";
+  return std::nullopt;
+}
+
+RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
+  RuntimeSettings settings;
+  settings.input_mode =
+      ReadEnum(object, "inputMode", settings.input_mode, {"hiragana", "alnum_half", "alnum_full"});
+  settings.live_conversion = ReadBool(object, "liveConversion", settings.live_conversion);
+  settings.llm_magic_conversion =
+      ReadBool(object, "llmMagicConversion", settings.llm_magic_conversion);
+  settings.log_level =
+      ReadEnum(object, "logLevel", settings.log_level, {"error", "warn", "info", "debug"});
+  settings.input_style =
+      ReadEnum(object, "inputStyle", settings.input_style, {"default", "custom"});
+  settings.custom_romaji_table_path =
+      ReadString(object, "customRomajiTablePath", settings.custom_romaji_table_path);
+  settings.prediction_enabled = ReadBool(object, "predictionEnabled", settings.prediction_enabled);
+  settings.ai_backend =
+      ReadEnum(object, "aiBackend", settings.ai_backend, {"none", "openai", "local-zenzai"});
+  settings.open_ai_api_key = ReadString(object, "openAiApiKey", settings.open_ai_api_key);
+  settings.open_ai_api_endpoint =
+      ReadString(object, "openAiApiEndpoint", settings.open_ai_api_endpoint);
+  settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
+  settings.include_context_in_ai_transform =
+      ReadBool(object, "includeContextInAITransform", settings.include_context_in_ai_transform);
+  settings.context_reselection =
+      ReadBool(object, "contextReselection", settings.context_reselection);
+  settings.post_commit_lint = ReadBool(object, "postCommitLint", settings.post_commit_lint);
+  settings.retroactive_recompute =
+      ReadBool(object, "retroactiveRecompute", settings.retroactive_recompute);
+  settings.sentence_completion =
+      ReadBool(object, "sentenceCompletion", settings.sentence_completion);
+  settings.backend_preference =
+      ReadEnum(object, "backendPreference", settings.backend_preference,
+               {"auto", "cpu", "cuda", "vulkan", "winml", "directml", "npu"});
+  settings.ep_preference =
+      ReadEnum(object, "epPreference", settings.ep_preference, {"auto", "npu", "gpu", "cpu"});
+  settings.power_profile = ReadEnum(object, "powerProfile", settings.power_profile,
+                                    {"auto", "performance", "battery_saver"});
+  settings.batch_romaji_conversion =
+      ReadBool(object, "batchRomajiConversion", settings.batch_romaji_conversion);
+  settings.batch_romaji_preview_style = ReadEnum(
+      object, "batchRomajiPreviewStyle", settings.batch_romaji_preview_style, {"kana", "romaji"});
+  settings.batch_conversion_mode = ReadEnum(
+      object, "batchConversionMode", settings.batch_conversion_mode, {"neural", "ai-cleanup"});
+  settings.batch_auto_punctuation =
+      ReadBool(object, "batchAutoPunctuation", settings.batch_auto_punctuation);
+
+  if (const auto* model = ReadObject(object, "model")) {
+    settings.model.enabled = ReadBool(*model, "enabled", settings.model.enabled);
+    settings.model.selected_path = ReadString(*model, "selectedPath", settings.model.selected_path);
+    settings.model.backend_preference =
+        ReadEnum(*model, "backendPreference", settings.model.backend_preference,
+                 {"auto", "cpu", "cuda", "vulkan", "winml", "directml", "npu"});
+    settings.model.ep_preference = ReadEnum(*model, "epPreference", settings.model.ep_preference,
+                                            {"auto", "npu", "gpu", "cpu"});
+    settings.model.n_gpu_layers = ReadInt32(*model, "nGpuLayers", settings.model.n_gpu_layers);
+    settings.model.auto_load_on_host_start =
+        ReadBool(*model, "autoLoadOnHostStart", settings.model.auto_load_on_host_start);
+    settings.model.fallback_to_simple_converter =
+        ReadBool(*model, "fallbackToSimpleConverter", settings.model.fallback_to_simple_converter);
+    settings.model.benchmark_on_model_change =
+        ReadBool(*model, "benchmarkOnModelChange", settings.model.benchmark_on_model_change);
+  }
+
+  if (const auto* auto_update = ReadObject(object, "autoUpdate")) {
+    settings.auto_update.enabled = ReadBool(*auto_update, "enabled", settings.auto_update.enabled);
+    settings.auto_update.channel =
+        ReadEnum(*auto_update, "channel", settings.auto_update.channel, {"stable", "beta"});
+    settings.auto_update.check_interval_hours =
+        ReadInt32(*auto_update, "checkIntervalHours", settings.auto_update.check_interval_hours);
+  }
+
+  return settings;
+}
+
+BackendKind BackendFromPreference(const std::string& preference, BackendKind fallback) {
+  if (preference == "cuda") return BackendKind::Cuda;
+  if (preference == "cpu" || preference == "vulkan" || preference == "winml" ||
+      preference == "directml" || preference == "npu") {
+    return BackendKind::Cpu;
+  }
+  return fallback;
+}
+
+}  // namespace
+
+SettingsStore::SettingsStore(std::filesystem::path settings_path)
+    : settings_path_(std::move(settings_path)) {
+  last_result_.settings = settings_;
+}
+
+SettingsLoadResult SettingsStore::Load() {
+  RuntimeSettings defaults;
+  SettingsLoadResult result;
+  result.settings = defaults;
+
+  std::error_code ec;
+  if (!std::filesystem::exists(settings_path_, ec)) {
+    settings_ = result.settings;
+    last_result_ = result;
+    return last_result_;
+  }
+
+  auto read_error = std::optional<std::string>();
+  auto content = ReadFile(settings_path_, &read_error);
+  if (!content) {
+    result.status = SettingsLoadStatus::Invalid;
+    result.error = read_error.value_or("failed to read settings.json");
+    result.quarantined_path = QuarantineInvalidFile(settings_path_, &result.error);
+    settings_ = result.settings;
+    last_result_ = result;
+    return last_result_;
+  }
+
+  auto parsed = j::Parse(*content);
+  if (!parsed || !parsed->IsObject()) {
+    result.status = SettingsLoadStatus::Invalid;
+    result.error = "invalid settings.json";
+    result.quarantined_path = QuarantineInvalidFile(settings_path_, &result.error);
+    settings_ = result.settings;
+    last_result_ = result;
+    return last_result_;
+  }
+
+  result.settings = ParseRuntimeSettings(parsed->AsObject());
+  result.status = SettingsLoadStatus::Loaded;
+  settings_ = result.settings;
+  last_result_ = result;
+  return last_result_;
+}
+
+SettingsLoadResult SettingsStore::Reload() { return Load(); }
+
+EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
+                                                const RuntimeSettings& settings) {
+  config.enable_live_conversion = settings.live_conversion;
+
+  std::string backend_preference = settings.backend_preference;
+  if (settings.model.backend_preference != "auto") {
+    backend_preference = settings.model.backend_preference;
+  }
+  config.backend = BackendFromPreference(backend_preference, config.backend);
+
+  if (!settings.model.enabled) {
+    config.model_path.clear();
+    config.n_gpu_layers.reset();
+    return config;
+  }
+  if (!settings.model.selected_path.empty()) {
+    config.model_path = settings.model.selected_path;
+  }
+  if (settings.model.n_gpu_layers >= 0) {
+    config.n_gpu_layers = settings.model.n_gpu_layers;
+  } else {
+    config.n_gpu_layers.reset();
+  }
+  return config;
+}
+
+}  // namespace azookey::host

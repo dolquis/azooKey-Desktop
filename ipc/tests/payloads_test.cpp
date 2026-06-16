@@ -172,6 +172,26 @@ TEST(PayloadsTest, UserWord) {
   EXPECT_EQ(parsed2->word, "azooKey");
 }
 
+TEST(PayloadsTest, UpdateConfigResponse) {
+  azookey::ipc::UpdateConfigResponse ok;
+  ok.ok = true;
+  auto ok_json = azookey::ipc::BuildUpdateConfigResponse(ok);
+  auto ok_parsed = azookey::ipc::ParseUpdateConfigResponse(ok_json);
+  ASSERT_TRUE(ok_parsed.has_value());
+  EXPECT_TRUE(ok_parsed->ok);
+  EXPECT_FALSE(ok_parsed->error.has_value());
+
+  azookey::ipc::UpdateConfigResponse error;
+  error.ok = false;
+  error.error = "invalid settings.json";
+  auto error_json = azookey::ipc::BuildUpdateConfigResponse(error);
+  auto error_parsed = azookey::ipc::ParseUpdateConfigResponse(error_json);
+  ASSERT_TRUE(error_parsed.has_value());
+  EXPECT_FALSE(error_parsed->ok);
+  ASSERT_TRUE(error_parsed->error.has_value());
+  EXPECT_EQ(*error_parsed->error, "invalid settings.json");
+}
+
 TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseHandshakeRequest("not json").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());

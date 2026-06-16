@@ -27,8 +27,8 @@ struct PingPayload {
 };
 
 struct HealthPayload {
-  std::string status;             // "ok" | "degraded" | "error"
-  std::string backend;            // "cpu" | "cuda" | "directml"
+  std::string status;   // "ok" | "degraded" | "error"
+  std::string backend;  // "cpu" | "cuda" | "directml"
   bool model_loaded{false};
   std::optional<uint32_t> vram_mb;
   std::optional<std::string> last_error;
@@ -36,7 +36,7 @@ struct HealthPayload {
 
 struct LoadModelRequest {
   std::string path;
-  std::string backend;            // "cpu" | "cuda" | "directml"
+  std::string backend;  // "cpu" | "cuda" | "directml"
   std::optional<int32_t> n_gpu_layers;
 };
 
@@ -102,6 +102,11 @@ struct RemoveUserWordResponse {
   bool ok{false};
 };
 
+struct UpdateConfigResponse {
+  bool ok{false};
+  std::optional<std::string> error;
+};
+
 // Builders return the JSON payload string (Envelope.payload_json content).
 std::string BuildHandshakeRequest(const HandshakeRequest& p);
 std::string BuildHandshakeResponse(const HandshakeResponse& p);
@@ -118,6 +123,7 @@ std::string BuildAddUserWordRequest(const AddUserWordRequest& p);
 std::string BuildAddUserWordResponse(const AddUserWordResponse& p);
 std::string BuildRemoveUserWordRequest(const RemoveUserWordRequest& p);
 std::string BuildRemoveUserWordResponse(const RemoveUserWordResponse& p);
+std::string BuildUpdateConfigResponse(const UpdateConfigResponse& p);
 
 // Parsers accept the JSON payload string (Envelope.payload_json content).
 std::optional<HandshakeRequest> ParseHandshakeRequest(const std::string& json);
@@ -135,5 +141,6 @@ std::optional<AddUserWordRequest> ParseAddUserWordRequest(const std::string& jso
 std::optional<AddUserWordResponse> ParseAddUserWordResponse(const std::string& json);
 std::optional<RemoveUserWordRequest> ParseRemoveUserWordRequest(const std::string& json);
 std::optional<RemoveUserWordResponse> ParseRemoveUserWordResponse(const std::string& json);
+std::optional<UpdateConfigResponse> ParseUpdateConfigResponse(const std::string& json);
 
 }  // namespace azookey::ipc

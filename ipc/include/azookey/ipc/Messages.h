@@ -19,6 +19,7 @@ enum class MessageType {
   AddUserWord,
   UpdateUserWord,
   RemoveUserWord,
+  UpdateConfig,
   Ping,
   Health,
   Unknown,

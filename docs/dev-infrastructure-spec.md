@@ -477,6 +477,9 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - 未配線 MessageType に明示エラー応答が返り、blocking client がハングしない。
   MessageType 列挙 ↔ `Payloads` codec の網羅整合が検査される（DEV-162）
 - 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する（DEV-163）
+- uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
+  `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する（DEV-163）
+- 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する（DEV-163 / DEV-188）
 - Handshake トークンが per-user ファイルチャネルで配布され、未設定時は
   ACL 縮退 + warn ログとなる（§6.4.4）
 

@@ -56,10 +56,14 @@ bench/data/
 └── typo_eval.jsonl             # 打ち間違え補正
 ```
 
-`*.jsonl` は 1 行 1 ケース。データ作成は手動キュレーション + 既存
-オープンコーパス（青空文庫など）から派生させる。§11 のライセンス方針
-（CC0 / MIT 互換のみ）に従い、CC BY-SA / GFDL 系（Wikipedia 等）は
-派生元として使用しない。
+`*.jsonl` は 1 行 1 ケース。**第一の作成ルートは自前で書き起こす
+オリジナルケース**（読み → 表層 → 文脈を本リポジトリ著者が新規作成）で、
+公開コーパスは限定的な seed・文脈素材としてのみ二次利用する。利用可能な
+出典・ライセンスはカテゴリ別に §13 で確定する。§11 のライセンス方針
+（CC0 / パブリックドメイン / MIT・Apache・BSD 互換のみ。コピーレフトは
+不可）に従い、CC BY-SA / GFDL 系（Wikipedia 本文・JMdict/EDICT 等）と
+再配布不可・来歴不透明なデータ（BCCWJ・京大コーパス・NEologd 等）は
+**派生元として使用しない**（§13 の除外表を正典とする）。
 
 ### 4.2 通常変換ケース形式
 
@@ -76,7 +80,8 @@ bench/data/
   "expected": "交渉する",
   "acceptable": ["交渉する", "交渉します"],
   "category": ["homophone", "contextual"],
-  "difficulty": 3
+  "difficulty": 3,
+  "provenance": "authored"
 }
 ```
 
@@ -92,6 +97,10 @@ bench/data/
 | `acceptable` | 許容候補（top-1 == acceptable で正解扱い） |
 | `category` | カテゴリ tag の配列 |
 | `difficulty` | 1（易）〜 5（難） |
+| `provenance` | 出典種別（§13）。`authored`（自前作成・既定） / `wikidata`（CC0 seed） / `aozora`（青空文庫・著作権切れ）。値はデータセット manifest（§13.3）の `id` と対応し、ライセンス追跡に用いる |
+
+`provenance` は必須。クリーン/typo ケース（§4.3）にも同じ規約で付与する。
+`authored` 以外を付けたケースは §13.3 の manifest に対応エントリを持つこと。
 
 ### 4.3 打ち間違え評価ケース形式
 
@@ -250,8 +259,16 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
   "config": {
     "backend": "cpu",
     "model": "zenzai-small.gguf",
+    "model_sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
     "host_version": "0.1.0",
-    "build_id": "abc123"
+    "build_id": "abc123",
+    "decode": "beam",
+    "beam_width": 4,
+    "n_best": 4,
+    "max_new_tokens": 64,
+    "prompt_template_version": 1,
+    "thread_count": 1,
+    "learning_state": "empty"
   },
   "summary": {
     "top1_accuracy": 0.85,
@@ -318,13 +335,50 @@ M53〜M57 完了時点で達成する目標:
 PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが品質改善を
 数値で確認できるように）。
 
-## 11. 評価データの整備方針
+## 11. 評価データの整備方針（件数・代表性）
 
-- 初期データは 1 カテゴリあたり最低 100 ケース、合計 1000 ケース以上
-- 手動キュレーション + 既存コーパス由来の派生で構築
-- ライセンス: CC0 / MIT 互換のみ
-- ユーザー入力ログからの自動生成は **行わない**（プライバシー優先）
-- データ追加・修正は PR レビュー必須
+### 11.1 構築原則
+
+- **第一ルートは自前作成**（`provenance: authored`）。読み → 表層 → 文脈を
+  本リポジトリ著者が新規に書き起こす。これにより配布物のライセンスを
+  本リポジトリ（MIT）+ データ部 CC0 専用宣言（§13.4）に一本化し、
+  上流ライセンスの巻き込みを避ける。
+- 公開コーパスは §13 で USABLE と確定した CC0 / パブリックドメイン由来
+  （Wikidata ラベル・青空文庫の著作権切れ作品）に限り、seed・文脈素材
+  としてのみ二次利用する。コピーレフト（CC BY-SA / GFDL / GPL）と
+  再配布不可・来歴不透明なデータは派生元に使わない（§13.2）。
+- ユーザー入力ログからの自動生成は **行わない**（プライバシー優先）。
+- データ追加・修正は PR レビュー必須。`authored` 以外を追加する PR は
+  §13.3 manifest の更新を必須とする。
+
+### 11.2 カテゴリ別件数（代表性）
+
+段階導入する。**M52 初期版**は受け入れ条件（§12）に必要な 3 カテゴリの
+最小セットで緑化し、**v1 完全版**（合格基準 §9 を測る規模）を M53 着手前
+までに満たす。
+
+| category | M52 初期 | v1 完全版 | 代表性の要点 |
+|---|---:|---:|---|
+| `general` | 100 | 200 | domain 5 種をほぼ均等。difficulty 1–5 を 2:3:3:1:1 目安 |
+| `homophone` | 100 | 200 | 高頻度同音異義（こうしょう/たいしょう 等）を文脈で弁別。`left_context` 必須 |
+| `typo` | 100 | 150 | §4.3 の typo_type 11 種を各最低 10 件で網羅 |
+| `typo_clean` | 100 | 150 | typo と 1:1（§4.3.1）。false-positive 分母 |
+| `named_entity` | — | 150 | person/place/station/product/software/company を各最低 20。seed は Wikidata(CC0) |
+| `neologism` | — | 100 | 直近 2–3 年の新語。`authored`（語自体は事実、来歴非依存） |
+| `mixed_script` | — | 80 | 英数字混在（RTX4070 等） |
+| `business` | — | 80 | 敬語・定型文 |
+| `coding` | — | 60 | 技術語・識別子読み |
+| `casual` | — | 60 | 口語・SNS |
+| `creative` | — | 60 | 創作文体。文脈素材に青空文庫(著作権切れ)を許容 |
+| `user_adapt` | — | 60 | 学習前後比較（M54）。学習注入スクリプトとペアで管理 |
+| **合計** | **≥400** | **≥1350** | カテゴリ最小 60、計 1000 超を満たす |
+
+- 1 ケースは複数 `category` tag を持ってよい（例 typo ∧ homophone）が、
+  件数カウントは主カテゴリ 1 つで数える（重複カウントしない）。
+- `difficulty` と `domain` の分布は各カテゴリ内で偏らせない。極端な難問
+  のみ／特定ドメインのみのカテゴリは代表性不足として PR レビューで差し戻す。
+- 1 表層・1 読みの重複ケースは禁止（`id` 単位で一意、(`input`,`left_context`)
+  の完全重複も不可）。
 
 ## 12. M52 受け入れ条件
 
@@ -338,4 +392,133 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
   未完了時は本フラグの存在を確認するのみで、出力 schema 検証は M51
   完了後の follow-up とする
 - 1 カテゴリ以上の評価データが `bench/data/` に存在する（初期版は
-  general / homophone / typo の 3 カテゴリで十分）
+  general / homophone / typo の 3 カテゴリで十分。件数は §11.2 の
+  「M52 初期」列を満たす）
+- すべての評価ケースが §13 の USABLE 出典・ライセンス方針に適合し、
+  `provenance` を持つ。`authored` 以外を含む場合は §13.3 manifest が存在する
+- baseline が §14 の安定性基準（決定的設定で再実行差 ≤ 0.2pp）を満たす
+
+## 13. 評価データの出典・ライセンス（確定）
+
+### 13.1 方針
+
+配布物（公開 GitHub リポジトリ）に同梱・再配布するため、評価データの
+派生元は **CC0 / パブリックドメイン / MIT・Apache・BSD 互換**に限る。
+コピーレフト（CC BY-SA / GFDL / GPL）と再配布不可・来歴不透明なデータは
+派生元に使わない。本リポジトリ本体は MIT（`LICENSE`）。`authored` ケースは
+著者の新規創作物であり、データ部は CC0 専用宣言（§13.4）で配布する。
+
+調査根拠（2026-06、DEV-114）。各出典の一次情報 URL は §13.5。
+
+### 13.2 出典判定表
+
+| 出典 | ライセンス | 派生再配布 | 本ベンチでの扱い |
+|---|---|---|---|
+| 自前作成（authored） | 著者帰属 → CC0 専用宣言 | 可 | **PRIMARY**。全カテゴリの基幹 |
+| Wikidata ラベル | CC0 1.0 | 可（義務なし） | **USABLE**。named_entity の seed |
+| 青空文庫（著作権切れ作品） | パブリックドメイン | 可（商用可・改変可、クレジットは希望） | **USABLE（限定）**。creative/general の文脈素材のみ。著作権存続作品は不可 |
+| mozc 辞書データ | BSD-3 + 第三者混在（IPAdic/ICOT 等） | 帰属付きで可・但し混在 | **参照のみ**（語の着想）。エントリ複製はしない |
+| SudachiDict | Apache-2.0（UniDic + NEologd 一部内包） | 帰属付きで可・但し由来混在 | **参照のみ**。エントリ複製はしない |
+| mecab-ipadic-NEologd | Apache-2.0 表示／語は Web・はてな・ニュース由来 | 来歴不透明 | **EXCLUDE**（派生元不可） |
+| UniDic | GPL/LGPL/BSD 三重（BCCWJ 由来） | BCCWJ 由来で来歴制約 | **EXCLUDE** |
+| JMdict / EDICT / KANJIDIC | CC BY-SA 4.0 | share-alike 伝播 | **EXCLUDE**（コピーレフト） |
+| Wikipedia（日本語）本文・タイトル | CC BY-SA 4.0 + GFDL | share-alike 伝播 | **EXCLUDE** |
+| Anthy 辞書/テスト | GPL | コピーレフト | **EXCLUDE** |
+| BCCWJ / CSJ（NINJAL） | 有償・申請制 | 再配布不可 | **EXCLUDE** |
+| 京大テキストコーパス / KWDLC | 注釈のみ（毎日新聞 CD-ROM 別途）/ 非許諾 | 本文再配布不可 | **EXCLUDE** |
+
+> 注意（誤解しやすい点）: JMdict/EDICT/KANJIDIC は「自由辞書」と誤認され
+> やすいが EDRDG の CC BY-SA 4.0（コピーレフト）であり、これを参照して
+> 読み→表層ペアを書き起こす行為も派生物の share-alike を誘発し得るため
+> 派生元に使わない。NEologd は Apache 表示だが語が Web/はてな由来で上流
+> 著作権の来歴が追えないため EXCLUDE。
+
+### 13.3 出典 manifest（`bench/data/PROVENANCE.json`）
+
+`authored` 以外の `provenance` を 1 件でも含む場合、`bench/data/PROVENANCE.json`
+に出典エントリを置く。ケースの `provenance` 値は manifest の `id` と対応する。
+
+```json
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "wikidata",
+      "name": "Wikidata structured data (labels)",
+      "license": "CC0-1.0",
+      "url": "https://www.wikidata.org/wiki/Wikidata:Licensing",
+      "used_for": ["named_entity seed surface/reading"],
+      "attribution_required": false
+    },
+    {
+      "id": "aozora",
+      "name": "Aozora Bunko (copyright-expired works only)",
+      "license": "Public-Domain",
+      "url": "https://www.aozora.gr.jp/guide/kijyunn.html",
+      "used_for": ["creative/general left_context snippets"],
+      "attribution_required": false,
+      "note": "作品名・著者名・入力者名の表示は青空文庫の希望事項。著作権存続作品は使用不可"
+    }
+  ]
+}
+```
+
+### 13.4 データ部ライセンス宣言（`bench/data/DATA-LICENSE.md`）
+
+`bench/data/` 配下の評価データは、リポジトリ本体（MIT）とは別に
+**CC0 1.0（パブリックドメイン専用宣言）**として配布する旨を
+`bench/data/DATA-LICENSE.md` に明記する（M52 実装時に追加）。これにより
+評価データを他プロジェクトが再利用しても share-alike が伝播しない。
+青空文庫由来の文脈素材を含む場合は §13.3 manifest と DATA-LICENSE.md に
+パブリックドメイン根拠（底本著作権満了）と希望クレジットを併記する。
+
+### 13.5 一次情報 URL
+
+- Wikidata Licensing（構造化データは CC0）: https://www.wikidata.org/wiki/Wikidata:Licensing
+- 青空文庫 収録ファイルの取り扱い基準: https://www.aozora.gr.jp/guide/kijyunn.html
+- EDRDG（JMdict/EDICT）Licence＝CC BY-SA 4.0: https://www.edrdg.org/edrdg/licence.html
+- SudachiDict（Apache-2.0、UniDic+NEologd 内包）: https://github.com/WorksApplications/SudachiDict
+- mecab-ipadic-NEologd: https://github.com/neologd/mecab-ipadic-neologd
+- mozc LICENSE（BSD-3 + 第三者データ）: https://github.com/google/mozc/blob/master/LICENSE
+- 京大テキストコーパス（本文非同梱）: https://github.com/ku-nlp/KyotoCorpus
+- KWDLC（ライセンス未付与）: https://github.com/ku-nlp/KWDLC
+- CSJ（有償・申請制）: https://clrd.ninjal.ac.jp/csj/en/subscription.html
+
+## 14. baseline 安定性基準（再現性）
+
+合格基準（§9）と diff_vs_baseline は、**精度系指標が同一条件で再実行しても
+ブレない**ことを前提とする。Zenzai のデコードはビームサーチ・サンプリング
+非使用（`docs/zenzai-inference-spec.md` §6.2、temperature 0）で原理上決定的だが、
+llama.cpp は backend / スレッド数 / batch の違いで浮動小数演算順序が変わり、
+僅差ビームの順位が反転し得る。よって baseline は固定条件に対して採取する。
+
+### 14.1 決定的採取の固定条件
+
+baseline 採取・比較時に以下を固定し、§8 `config` に記録する:
+
+- モデルファイル（`model_sha256` で固定）/ `backend` / `build_id`
+- `decode = "beam"`、`beam_width`（=`B`）、`n_best`（=`N_zenzai`）、`max_new_tokens`
+- `prompt_template_version`（プロンプト改訂で baseline 無効化）
+- `thread_count`（既定 1。FP 非決定性を避けるため baseline は単一スレッド固定）
+- `learning_state`（`empty` または固定スナップショットの SHA。学習状態が
+  混ざると user_adapt 以外の再現性が壊れる）
+
+### 14.2 安定性の合否
+
+- **精度系指標は決定的**であること: 同一マシン・同一 `config` で連続 2 回の
+  フル実行が、全ケースの top-k 順位を bit 一致で再現し、§6.1/§6.2 の各指標の
+  差が **≤ 0.2pp**。超過時は非決定要因（スレッド数・batch・未固定 seed）を
+  調査してから baseline を確定する。
+- **latency 系（§6.3）は本質的に可変**のため安定性合否の対象外。`--iterations N`
+  （既定 N ≥ 30）で採取し p50/p95/p99 は複数実行の中央値で報告する。
+- baseline は (`build_id`, `backend`, `model_sha256`, `prompt_template_version`)
+  の組ごとに固定する。**diff_vs_baseline は同一の組に対してのみ有効**。
+  組が変わる比較は「baseline 再採取が必要」と明示し、誤った回帰判定をしない。
+
+### 14.3 回帰ゲート（CI §10）
+
+- `quality-bench` ジョブの回帰判定は精度系のみを fail 条件にする
+  （latency は警告レポートに留める）。
+- 既定の fail 閾値: `top1_accuracy` が baseline 比 **−0.5pp 超**の悪化。
+  flaky 誤検出を避けるため、悪化検出時は同一 config で 1 回再実行して確認した
+  うえで fail を確定する（§14.2 が満たされていれば 2 回目は一致するはず）。

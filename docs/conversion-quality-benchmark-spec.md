@@ -574,6 +574,10 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   LF に固定する（Windows の `core.autocrlf` で CRLF 化しても Win/Linux/CI で
   同一ハッシュになるように）。これにより glob 順・プラットフォーム差で同一
   データが別ハッシュになることを防ぐ
+- `version`（§8 出力 JSON の**指標スキーマ版**。指標計算ロジックや JSON 意味論
+  を変えたら +1 する。同一の model/dataset/decode でも指標定義が変わると旧
+  baseline との比較は無意味になるため、**`version` 変更時は baseline 再採取が
+  必須**）
 
 `build_id` / `host_version` は**追跡用に記録するのみで互換キーに含めない**
 （commit ごとに変わるため。これらをキーにすると毎 PR で baseline が無効化され
@@ -590,7 +594,7 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
   `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
-  `category_filter` / `eval_dataset_sha256`）の組ごとに固定する。
+  `category_filter` / `eval_dataset_sha256` / `version`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `bench/baselines/main.json` に
   対する commit 間の回帰判定（roadmap M52 の「前 commit との diff」）が成立する。

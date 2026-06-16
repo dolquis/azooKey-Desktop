@@ -1991,10 +1991,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 誤補正防止条件（top1 強 / confidence 低 / 過去拒否 / 入力短 /
     パスワード欄 / コード入力）
   - プライバシー: raw_keys は抽象化パターンのみ保存
-- **受け入れ条件**:
-  - M52 ベンチで typo_correction_top5_accuracy が 85% 以上
-  - M52 ベンチで typo_false_positive_rate が 1% 未満
-  - M52 ベンチで typo_overcorrection_rate が 0.5% 未満
+- **受け入れ条件**（typo 補正指標は補正有効モードで採取する。
+  `conversion-quality-benchmark-spec.md` §7・§14。`--typo-mode off` での値は
+  受け入れに用いない）:
+  - M52 ベンチ（`--typo-mode rank`）で typo_correction_top5_accuracy が 85% 以上
+  - M52 ベンチ（`--typo-mode rank`）で typo_false_positive_rate が 1% 未満
+  - M52 ベンチ（`--typo-mode aggressive`）で typo_overcorrection_rate が
+    0.5% 未満
   - M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
 - **参照仕様**: `docs/typo-correction-learning-spec.md` M55 追補
 

@@ -423,20 +423,36 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
 ### 9.3 設定項目（`EngineConfig` / settings.json）
 
-M8 で追加する最小キー（`settings/mvp-settings.schema.json` への追加は M11 / DEV-203 と
-整合）:
+Zenzai 推論パラメータは **既存の `model.*` 名前空間**（`settings/mvp-settings.schema.json` の
+`model` オブジェクト、`docs/model-management-spec.md` §5/§7）に載せる。**`zenzai.*` の新規 root
+キーは作らない** — schema は root も `model` も `additionalProperties: false` のため、未知 root
+キー（例 `zenzai.*`）は M11 / DEV-203 の設定検証で reject される。
+
+**既存キーを再利用**（schema 変更不要）:
+
+| キー | 既定 | 対応 |
+|---|---|---|
+| `model.enabled` | true | Zenzai 有効化（`model.selectedPath` 有 + probe 成功で実効） |
+| `model.selectedPath` | "" | GGUF パス（`EngineConfig.model_path`） |
+| `model.backendPreference` / `model.nGpuLayers` | auto / -1 | backend 選択（§1.3、`copilot-pc-backend-spec`） |
+| `model.fallbackToSimpleConverter` | true | 劣化モードの SimpleConverter フォールバック（§7.4） |
+
+**新規に追加する推論整形キー**（`model` オブジェクトへ追加。`model` は
+`additionalProperties: false` のため **schema 拡張が必要**。拡張は `area:settings` /
+M11 / DEV-203 が `docs/model-management-spec.md` と整合のうえ反映する。本 docs PR では
+schema 自体は変更しない）:
 
 | キー | 既定 | 範囲 | 対応 |
 |---|---|---|---|
-| `zenzai.enabled` | true | bool | model_path 有 + probe 成功で有効 |
-| `zenzai.inferenceLimit` | 4 | 1〜8（MVP）/ 1〜50（将来） | §6.3 ビーム幅 |
-| `zenzai.nBest` | 4 | 1〜8 | §6.1 出力上限 |
-| `zenzai.profile` | "" | 文字列 | §3.2（将来。M8 は空既定） |
-| `zenzai.maxNewTokens` | 64 | 16〜256 | §8 |
+| `model.inferenceLimit` | 4 | 1〜8（MVP）/ 1〜50（将来） | §6.3 ビーム幅 |
+| `model.nBest` | 4 | 1〜8 | §6.1 出力上限 |
+| `model.profile` | "" | 文字列 | §3.2（将来。M8 は空既定） |
+| `model.maxNewTokens` | 64 | 16〜256 | §8 |
 
 > M8 受け入れ条件（roadmap）は「配置時 LoadModel 成功 / 未配置でも落ちない / CPU・GPU
 > 切替が効く」。本 spec の設定は既存 `EngineConfig`（backend / model_path / n_gpu_layers）に
-> 上記 Zenzai パラメータを足す形で、IPC payload の互換を壊さない（`tsf-ipc-protocol`）。
+> 上記 Zenzai パラメータを足す形で、IPC payload の互換を壊さない（`tsf-ipc-protocol`）。新規
+> `model.*` キーの schema 反映は M11 / DEV-203 のスコープ。
 
 ### 9.4 個人化（将来拡張・M8 非対象）
 
@@ -483,5 +499,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 - [ ] No documentation impact
 
 Reason: Zenzai 推論コントラクトを新規 spec として確定する設計タスク。マイルストーン
-定義（roadmap M8）・受け入れ条件（定義）は不変のため roadmap は更新しない。状態・進捗は
-Linear（DEV-228）が正典。
+定義（roadmap M8）・受け入れ条件（定義）は不変のため roadmap は更新しない。設定キーは既存
+`model.*` 名前空間（§9.3）に載せ、`settings/mvp-settings.schema.json` の拡張（`model` への
+推論整形キー追加）は `area:settings` / M11 / DEV-203 のスコープとして本 PR では変更しない。
+状態・進捗は Linear（DEV-228）が正典。

@@ -542,6 +542,53 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackSpaceFlu
   EXPECT_EQ(h.service.preedit_kana_, u8"か");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  const int previous_request_count = h.context.request_count;
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_RETURN, 0, &eaten), E_OUTOFMEMORY);
+
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.context.request_count, previous_request_count);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_TRUE(h.service.committing_);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemory) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  const int previous_request_count = h.context.request_count;
+
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), E_OUTOFMEMORY);
+
+  EXPECT_EQ(h.context.request_count, previous_request_count);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
 

@@ -544,21 +544,24 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_RETURN) {
       if (cand_visible) {
-        CommitSelected(context);
+        const HRESULT commit_hr = CommitSelected(context);
+        if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
-        CommitPreeditAsIs(context);
+        const HRESULT commit_hr = CommitPreeditAsIs(context);
+        if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
       }
 
     } else if (wParam >= '1' && wParam <= '9') {
       if (cand_visible) {
-        *eaten = TRUE;
         int idx = static_cast<int>(wParam - '1');
         if (idx < candidate_window_.GetCount()) {
           selected_candidate_idx_ = idx;
-          CommitSelected(context);
+          const HRESULT commit_hr = CommitSelected(context);
+          if (FAILED(commit_hr)) return commit_hr;
         }
+        *eaten = TRUE;
       }
 
     } else if (wParam == VK_ESCAPE) {
@@ -928,8 +931,8 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
 
 // --- Commit helpers (M5) ---
 
-void TextService::CommitSelected(ITfContext* context) {
-  if (!context) return;
+HRESULT TextService::CommitSelected(ITfContext* context) {
+  if (!context) return S_OK;
 
   // Use the snapshot taken when Space opened the window so that a late
   // QueryCandidates response cannot silently alter what gets committed.
@@ -984,24 +987,25 @@ void TextService::CommitSelected(ITfContext* context) {
   // edit session has actually completed.  A request accepted asynchronously is
   // not enough: SetText/EndComposition may still fail and the user input must
   // stay retryable.
-  const bool commit_completed = SUCCEEDED(RequestCommitEditSession(context));
-  if (commit_completed) {
+  const HRESULT commit_hr = RequestCommitEditSession(context);
+  if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else if (!committing_) {
     commit_surface_.clear();
     pending_commit_observation_.reset();
   }
+  return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
 }
 
-void TextService::CommitPreeditAsIs(ITfContext* context) {
-  if (!context) return;
+HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
+  if (!context) return S_OK;
 
   // Flush any pending romaji first.
   const std::string flushed = romaji_.Flush();
   preedit_kana_ += flushed;
 
-  if (preedit_kana_.empty()) return;
+  if (preedit_kana_.empty()) return S_OK;
 
   candidate_window_.Hide();
   selected_candidate_idx_ = 0;
@@ -1037,13 +1041,14 @@ void TextService::CommitPreeditAsIs(ITfContext* context) {
   pending_commit_observation_.reset();
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
   // synchronous commit edit session has actually completed.
-  const bool commit_completed = SUCCEEDED(RequestCommitEditSession(context));
-  if (commit_completed) {
+  const HRESULT commit_hr = RequestCommitEditSession(context);
+  if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
     romaji_.Reset();
   } else if (!committing_) {
     commit_surface_.clear();
   }
+  return commit_hr == E_OUTOFMEMORY ? commit_hr : S_OK;
 }
 
 // --- IPC worker (M4 + M6 + M10) ---

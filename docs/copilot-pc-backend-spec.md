@@ -220,8 +220,14 @@ M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する
   - `engine`: `"llama_cpp" | "winml"`（既定 `llama_cpp`、後方互換）
   - `ep_preference`: `"auto" | "npu" | "gpu" | "cpu"`（R2 のみ、既定 `auto`）
   - 既存 `n_gpu_layers` は R1（llama.cpp）専用として維持。
-- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**し、`Health=degraded`
-  + `last_error` で理由を返す（M8 の既存劣化モード契約と一致）。
+- 非対応の engine / EP 組合せは **fail-closed で R1 CPU に降格**する。Health 反映は
+  **ロード成否と error 有無で決める**（`docs/zenzai-inference-spec.md` §9.2.1 と一致）:
+  - **R1 CUDA 要求 → R1 CPU 降格**（CUDA 未配線の "for now"、§4.5）は**成功 LoadModel**。降格は
+    `ModelLoadResult.error`（警告）で返すのみで `engine->last_error()` は空＝**`Health=ok`** を維持
+    する（engine テスト `LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`
+    が回帰防止に assert）。
+  - 要求 EP が**実エラーで失敗**して降格した場合（例 §4.6 step5 の WinML `Failure`）は
+    `last_error` に理由を設定。CPU でロードできれば `Health=degraded`、ロード不可なら `error`。
 
 ### 4.5 フォールバック段位
 

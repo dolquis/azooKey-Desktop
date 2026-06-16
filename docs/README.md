@@ -25,6 +25,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 対応フェーズ／マイルストーン |
 |---|---|
+| [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
 | [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）レガシー parity 復元 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）。M48 と統合 |
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合 |

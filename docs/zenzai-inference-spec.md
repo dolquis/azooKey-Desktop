@@ -347,7 +347,9 @@ reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source
 - Zenzai 推論が例外 / タイムアウト / 空のとき、`ZenzaiModelConverter::Convert` は
   `fallback_->Convert`（SimpleConverter）の結果を返す（現行委譲を維持）。この時の
   候補 source は SimpleConverter 由来（`SystemDictionary`/`Heuristic`、0.1〜1.2 帯）。
-- `debug_info` に `zenzai-degraded;<理由>` を付与し、`last_error_` を更新（観測可能性）。
+- `debug_info` に `zenzai-degraded;<理由>` を付与。degraded を `/Health` に出すための
+  converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を
+  engine が同ロック内で吸い上げて `engine_->last_error()` に反映）。
 - user_dict は degraded でも手順 1 でそのまま最優先帯に残る（Host は落ちない）。
 
 ### 7.5 将来の score 統合（参照）
@@ -427,7 +429,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 ```
 
 - `DegradeToFallback` は `fallback_->Convert` の結果に `zenzai-degraded;<reason>` を付与し、
-  `last_error_` 相当（Host 観測点）へ理由を残す。例外は**握り潰さない**。
+  **converter 自身の** `last_error_` / `degraded_` を設定する（**engine の private
+  `last_error_` を直接触らない** — §9.2.1 で engine が吸い上げる）。例外は**握り潰さない**。
 - `PredictNext` / `Correct` は当面 fallback 委譲のまま（zenz 対応要否は将来 spec 判断、
   DEV-221 は `Convert` を優先 — DEV-221 スコープと一致）。
 
@@ -439,6 +442,37 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
 - KV キャッシュはプロンプトの共通接頭辞（文脈）でビーム間共有可（最適化、任意）。
+
+### 9.2.1 Host 可観測なエラーシンク（degraded → Health）
+
+**問題**: `ZenzaiModelConverter` は現状 `(ZenzaiModelInfo, IConverter* fallback)` だけで
+構築され、`InferenceEngine::last_error_`（private）への経路を持たない。一方 `Health`
+（`Dispatcher::HandleHealth`）は `engine_->last_error()` のみで `ok` / `degraded` / `error`
+を決める。`Convert` 内で例外/タイムアウト/空結果を握って fallback 候補を返すと、
+**実推論が劣化しているのに `/Health` が `ok` を返す**（サイレント劣化）。
+
+**契約**（DEV-221 が満たす）— *poll-after-call*（engine ロック内で吸い上げ）方式:
+
+1. `ZenzaiModelConverter` に自前のエラー状態を持たせる:
+   `std::optional<std::string> last_error_` + `bool degraded_`、アクセサ
+   `std::optional<std::string> TakeLastError()`（読んだら clear）/ `degraded()`。
+   `Convert` 成功時は clear、`DegradeToFallback` 時にセット。
+2. `InferenceEngine::QueryCandidates` は **既に `state_mutex_` を保持**したまま
+   `active_converter_->Convert(...)` を呼ぶ。その直後（同ロック内）に、active が
+   model converter なら `model_converter_->TakeLastError()` を読み、非空なら
+   engine `last_error_` に反映する。**シンクをコールバックにして Convert 内から
+   engine をロックし直すと `state_mutex_` の再入デッドロックになる**ため、
+   コールバック push ではなく **呼び出し後ポーリング**を採る。
+3. さらに防御として、`QueryCandidates` の `active_converter_->Convert` 呼び出しを
+   `try/catch` で囲む（`ApplyRerankerOrRaw` の reranker 例外境界と同型）。converter が
+   万一再 throw した場合は engine 側で捕捉して `last_error_` を設定し、fallback または
+   空を返す（Host は落とさない）。
+4. これにより runtime 劣化が `engine_->last_error()` 経由で `Health=degraded` に反映される
+   （LoadModel 時の CUDA→CPU 降格が `Health=degraded` を立てる既存挙動
+   — `docs/zenzai-gpu-route.md` — と一貫）。
+
+> 設計判断: converter の劣化は **engine が吸い上げて Health に出す**のが正典。converter は
+> 自分の `last_error_` を持ち、engine の private メンバには触れない（責務分離 + ロック安全）。
 
 ### 9.3 設定項目（`EngineConfig` / settings.json）
 
@@ -493,7 +527,8 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `NormalizeLogprob`: 単調性、帯 [0.3,1.4] クランプ、num_tokens=0 ガード |
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
-| unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り `last_error_` 観測可、候補ゼロにならない |
+| unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `TakeLastError()` 非空 → engine が吸い上げ（§9.2.1） |
+| unit | Health 反映（§9.2.1）: 劣化変換後に `engine_->last_error()` が立ち `Health=degraded`、成功変換後は clear され `ok`（サイレント劣化が起きない） |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |

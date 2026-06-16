@@ -279,7 +279,9 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "prompt_template_version": 1,
     "thread_count": 1,
     "batch_size": 1,
+    "typo_correction_mode": "off",
     "learning_state": "empty",
+    "category_filter": "all",
     "eval_dataset_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
   },
   "summary": {
@@ -535,8 +537,14 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `batch_size`（llama.cpp の `n_batch`。バッチも FP 演算順序を変え僅差ビームの
   順位を反転し得るため baseline は固定（既定 1）。bench / inference-host 側で
   バッチを調整した場合は互換キー差として baseline 再採取が必要）
+- `typo_correction_mode`（`off` / `suggest` / `rank` / `aggressive`。M55 補正
+  モードは候補集合を変える（§4.3.1 は `aggressive` で overcorrection を定義）。
+  bench は既定 `off`。モードを変えた採取は互換キー差として baseline 再採取が必要）
 - `learning_state`（`empty` または固定スナップショットの SHA。学習状態が
   混ざると user_adapt 以外の再現性が壊れる）
+- `category_filter`（`--category` の値。既定 `all`。フィルタすると評価対象
+  ケース集合が変わるが `eval_dataset_sha256` はファイル全体ハッシュで不変なため、
+  本キーで区別する。フィルタ実行を全体 baseline と誤って比較しない）
 - `eval_dataset_sha256`（評価対象 `bench/data/*.jsonl` の内容ハッシュ。
   ケース集合が変わると指標差は converter 挙動ではなくデータ差に由来するため、
   **eval ファイル変更時は baseline 再採取が必須**）。**正準算法**: 評価対象の
@@ -560,8 +568,8 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   （既定 N ≥ 30）で採取し p50/p95/p99 は複数実行の中央値で報告する。
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
-  `thread_count` / `batch_size` / `learning_state` / `eval_dataset_sha256`）の
-  組ごとに固定する。
+  `thread_count` / `batch_size` / `typo_correction_mode` / `learning_state` /
+  `category_filter` / `eval_dataset_sha256`）の組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `bench/baselines/main.json` に
   対する commit 間の回帰判定（roadmap M52 の「前 commit との diff」）が成立する。

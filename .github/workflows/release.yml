@@ -42,7 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # legacy/ 配下の macOS モデル submodule は Windows パッケージングに不要。
+          # 既存 windows.yml と同じく無効化する（取得の遅延・脆弱性を避ける）。
+          submodules: false
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -61,10 +63,12 @@ jobs:
       # （非タグ ref でリリース用タグ／Release が作られる事故を防ぐ。spec §2.3）。
 
       # ----------------------------------------------------------------------
-      # 署名（pre-package）: ルート C は MSIX へ同梱する前にバイナリへ署名する。
-      # msbuild の後にバイナリへ署名すると MSIX には未署名コピーが残るため、
-      # バイナリ署名は必ず Build MSIX の前に置く（spec §2.1 / §2.3 の順序）。
-      # ルート A/B は MSIX パッケージのみ署名するため本ステップは不要。
+      # 署名（pre-package）: spec §2.1 は TIP DLL / host / settings EXE と MSIX の
+      # 双方への署名を要求する。msbuild の後にバイナリへ署名すると MSIX には未署名
+      # コピーが残るため、バイナリ署名は必ず Build MSIX の前に置く（§2.1 / §2.3 の順序）。
+      # これは採用ルート A/B/C いずれでも必要で、ルートは署名ツールだけを変える
+      # （A/B は下記 post-package と同じ Azure ツール／資格情報をバイナリパスに適用、
+      #  C は signtool）。下記は C の signtool 例。A/B では同じ手順を Azure ツールに置換。
       # ----------------------------------------------------------------------
       # - name: Import certificate (route C)
       #   if: github.ref_type == 'tag'
@@ -73,14 +77,18 @@ jobs:
       #     [IO.File]::WriteAllBytes("$env:TEMP\cert.pfx", $bytes)
       #     $pwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_PFX_PASSWORD }}" -AsPlainText -Force
       #     Import-PfxCertificate -FilePath $env:TEMP\cert.pfx -Password $pwd -CertStoreLocation Cert:\CurrentUser\My
-      # - name: Sign binaries (route C, pre-package)
+      # - name: Sign binaries (pre-package)
       #   if: github.ref_type == 'tag'
       #   run: |
+      #     # ルート C（signtool）の例。ルート A は azure/trusted-signing-action の
+      #     # files-folder にバイナリ出力先を指定、ルート B は AzureSignTool で同じ
+      #     # バイナリパスへ署名する。いずれも MSIX 化の前に実行する。
       #     $tools = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64"
       #     & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
       #         /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
       #         build\windows-release\tsf-tip\azookey_tsf_tip.dll `
-      #         build\windows-release\inference-host\azookey_inference_host.exe
+      #         build\windows-release\inference-host\azookey_inference_host.exe `
+      #         build\windows-release\settings\azookey_settings.exe
 
       # ----------------------------------------------------------------------
       # MSIX パッケージング（M28 / DEV-101 確定後に有効化）

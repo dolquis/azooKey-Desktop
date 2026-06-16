@@ -1853,6 +1853,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 全評価ケースが `provenance` を持ち spec §13.1 のライセンス方針に適合する
     （データへ複製・派生する出典は CC0 / PD / authored のみ。notice 付き許諾物
     MIT/Apache/BSD は参照のみで複製不可、コピーレフト・来歴不透明は使用不可）
+  - `bench/data/DATA-LICENSE.md`（spec §13.4 の CC0 専用宣言。`bench/data/` を
+    CC0 として再配布する根拠）が存在する。`authored` 以外の `provenance` を含む
+    場合は `bench/data/PROVENANCE.json`（spec §13.3）も存在し各出典に対応する
   - baseline が spec §14 の安定性基準（決定的採取・精度系の再実行差 ≤ 0.2pp）
     を満たす
 - **合格基準 v1**（M53〜M57 完了時点で達成）:

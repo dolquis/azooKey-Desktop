@@ -453,26 +453,39 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
 **契約**（DEV-221 が満たす）— *poll-after-call*（engine ロック内で吸い上げ）方式:
 
-1. `ZenzaiModelConverter` に自前のエラー状態を持たせる:
-   `std::optional<std::string> last_error_` + `bool degraded_`、アクセサ
-   `std::optional<std::string> TakeLastError()`（読んだら clear）/ `degraded()`。
-   `Convert` 成功時は clear、`DegradeToFallback` 時にセット。
-2. `InferenceEngine::QueryCandidates` は **既に `state_mutex_` を保持**したまま
-   `active_converter_->Convert(...)` を呼ぶ。その直後（同ロック内）に、active が
-   model converter なら `model_converter_->TakeLastError()` を読み、非空なら
-   engine `last_error_` に反映する。**シンクをコールバックにして Convert 内から
-   engine をロックし直すと `state_mutex_` の再入デッドロックになる**ため、
-   コールバック push ではなく **呼び出し後ポーリング**を採る。
-3. さらに防御として、`QueryCandidates` の `active_converter_->Convert` 呼び出しを
-   `try/catch` で囲む（`ApplyRerankerOrRaw` の reranker 例外境界と同型）。converter が
-   万一再 throw した場合は engine 側で捕捉して `last_error_` を設定し、fallback または
-   空を返す（Host は落とさない）。
-4. これにより runtime 劣化が `engine_->last_error()` 経由で `Health=degraded` に反映される
-   （LoadModel 時の CUDA→CPU 降格が `Health=degraded` を立てる既存挙動
-   — `docs/zenzai-gpu-route.md` — と一貫）。
+1. `ZenzaiModelConverter` に**直近 `Convert` の結果を反映する**エラー状態を持たせる:
+   `std::optional<std::string> last_error_` + `bool degraded_`、非消費アクセサ
+   `last_error()` / `degraded()`。**`Convert` の冒頭で必ず clear** し、`DegradeToFallback`
+   時にセットする（⇒ 成功変換後は `last_error()` が nullopt を返す）。
+2. `InferenceEngine` は runtime 変換劣化を**専用フィールド** `model_runtime_error_`
+   （`std::optional<std::string>`）に持つ。これは load 時 / learning 由来の汎用
+   `last_error_`（例 CUDA→CPU 降格理由・`failed to save learning store`）**とは別管理**。
+3. `QueryCandidates` は **既に `state_mutex_` を保持**したまま `active_converter_->Convert(...)`
+   を呼ぶ。その**直後（同ロック内）に毎回**、active が model converter なら
+   `model_runtime_error_ = model_converter_->last_error();` で**ミラーする**
+   （degrade 時はセット、**成功時は nullopt で上書き＝クリア**）。これが「成功で
+   stuck degraded を解除する」明示パス。**コールバック push は `Convert` 内からの
+   engine 再ロックで `state_mutex_` 再入デッドロックになる**ため採らない。
+4. 防御として `QueryCandidates` の `Convert` 呼び出しを `try/catch` で囲む
+   （`ApplyRerankerOrRaw` の reranker 例外境界と同型）。converter が万一再 throw した
+   場合は engine 側で捕捉して `model_runtime_error_` を設定し、fallback または空を返す
+   （Host は落とさない）。
+5. `Health` は `last_error_`（load/learning）**と** `model_runtime_error_`（runtime 変換）
+   の**いずれかが立てば `degraded`**。engine は両者を畳んだ `effective_last_error()` を
+   公開し、`Dispatcher::HandleHealth` はそれを使う（現行の `engine_->last_error()` 単独
+   参照を置換）。これにより:
+   - runtime 劣化 → `model_runtime_error_` 立つ → `degraded`。
+   - **その後の成功変換** → `model_runtime_error_` が nullopt に上書き → （他要因が無ければ）
+     `ok` に**復帰**（§10 の Health テストと整合。stuck degraded を回避）。
+   - 成功変換は `model_runtime_error_` のみクリアし、**load/learning 由来の `last_error_` は
+     消さない**（別フィールドのため誤って健全化しない）。
+   - LoadModel 時の CUDA→CPU 降格が `Health=degraded` を立てる既存挙動
+     （`docs/zenzai-gpu-route.md`）とも一貫。
 
-> 設計判断: converter の劣化は **engine が吸い上げて Health に出す**のが正典。converter は
-> 自分の `last_error_` を持ち、engine の private メンバには触れない（責務分離 + ロック安全）。
+> 設計判断: converter の劣化は **engine が毎回ミラーして Health に出す**のが正典。converter は
+> 自分の per-call `last_error_` を持つだけで engine の private には触れない（責務分離 +
+> ロック安全）。runtime 劣化は **専用フィールド**に隔離し、成功で確実にクリアしつつ
+> load/learning エラーと混ざらないようにする。
 
 ### 9.3 設定項目（`EngineConfig` / settings.json）
 
@@ -528,7 +541,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
 | unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `TakeLastError()` 非空 → engine が吸い上げ（§9.2.1） |
-| unit | Health 反映（§9.2.1）: 劣化変換後に `engine_->last_error()` が立ち `Health=degraded`、成功変換後は clear され `ok`（サイレント劣化が起きない） |
+| unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |

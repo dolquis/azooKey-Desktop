@@ -129,9 +129,14 @@ bool CandidateWindow::Create() {
   static ATOM s_atom = RegisterWindowClass();
   (void)s_atom;
 
+  DPI_AWARENESS_CONTEXT previous_context =
+      SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, nullptr,
                           WS_POPUP | WS_BORDER, 0, 0, 200, metrics_.item_height, nullptr, nullptr,
                           GetTipModuleHandle(), this);
+  if (previous_context) {
+    SetThreadDpiAwarenessContext(previous_context);
+  }
   if (hwnd_) {
     UpdateDpi(GetDpiForWindow(hwnd_));
   }

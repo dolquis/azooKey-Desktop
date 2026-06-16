@@ -271,7 +271,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "max_new_tokens": 64,
     "prompt_template_version": 1,
     "thread_count": 1,
-    "learning_state": "empty"
+    "learning_state": "empty",
+    "eval_dataset_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
   },
   "summary": {
     "top1_accuracy": 0.85,
@@ -517,6 +518,9 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `thread_count`（既定 1。FP 非決定性を避けるため baseline は単一スレッド固定）
 - `learning_state`（`empty` または固定スナップショットの SHA。学習状態が
   混ざると user_adapt 以外の再現性が壊れる）
+- `eval_dataset_sha256`（評価対象 `bench/data/*.jsonl` の内容ハッシュ。
+  ケース集合が変わると指標差は converter 挙動ではなくデータ差に由来するため、
+  **eval ファイル変更時は baseline 再採取が必須**）
 
 `build_id` / `host_version` は**追跡用に記録するのみで互換キーに含めない**
 （commit ごとに変わるため。これらをキーにすると毎 PR で baseline が無効化され
@@ -532,12 +536,13 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   （既定 N ≥ 30）で採取し p50/p95/p99 は複数実行の中央値で報告する。
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
-  `thread_count` / `learning_state`）の組ごとに固定する。**diff_vs_baseline は
-  互換キーが一致するときのみ有効**で、`build_id` 差（=通常の commit 差）では
-  無効化しない。よって `bench/baselines/main.json` に対する commit 間の回帰判定
-  （roadmap M52 の「前 commit との diff」）が成立する。互換キーが変わる比較
-  （モデル・デコード設定・プロンプト改訂など）のみ「baseline 再採取が必要」と
-  明示し、誤った回帰判定をしない。
+  `thread_count` / `learning_state` / `eval_dataset_sha256`）の組ごとに固定する。
+  **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
+  （=通常の commit 差）では無効化しない。よって `bench/baselines/main.json` に
+  対する commit 間の回帰判定（roadmap M52 の「前 commit との diff」）が成立する。
+  互換キーが変わる比較（モデル・デコード設定・プロンプト改訂、**および評価
+  データセット自体の変更**）のみ「baseline 再採取が必要」と明示し、データ差を
+  converter 回帰と誤認しない。
 
 ### 14.3 回帰ゲート（CI §10）
 

@@ -1847,6 +1847,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `azookey_bench --eval bench/data/typo_eval.jsonl --output
     typo_result.json` で typo 指標が出る
   - baseline 比較レポートが CI artifact 化される
+  - 初期評価データが spec §11.2「M52 初期」を満たす（general / homophone /
+    typo / typo_clean 各 100・計 ≥400。typo_clean は false-positive /
+    overcorrection の分母のため必須）
+  - 全評価ケースが `provenance` を持ち spec §13 のライセンス方針（CC0 / PD /
+    MIT・Apache・BSD 互換のみ。コピーレフト・来歴不透明は派生元不可）に適合する
+  - baseline が spec §14 の安定性基準（決定的採取・精度系の再実行差 ≤ 0.2pp）
+    を満たす
 - **合格基準 v1**（M53〜M57 完了時点で達成）:
   - top1_accuracy: baseline 比 +3% 以上
   - top5_accuracy: 95% 以上

@@ -363,7 +363,7 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 |---|---:|---:|---|
 | `general` | 100 | 200 | domain 5 種をほぼ均等。difficulty 1–5 を 2:3:3:1:1 目安 |
 | `homophone` | 100 | 200 | 高頻度同音異義（こうしょう/たいしょう 等）を文脈で弁別。`left_context` 必須 |
-| `typo` | 100 | 150 | §4.3 の typo_type 11 種を各最低 10 件で網羅 |
+| `typo` | 100 | 150 | M52 初期は §4.3 の typo_type 11 種を各最低 1 件で網羅（計 100）。v1 完全版で各最低 10 件（計 ≥110、150 枠内）に深掘り |
 | `typo_clean` | 100 | 150 | typo と 1:1（§4.3.1）。false-positive 分母 |
 | `named_entity` | — | 150 | person/place/station/product/software/company を各最低 20。seed は Wikidata(CC0) |
 | `neologism` | — | 100 | 直近 2–3 年の新語。`authored`（語自体は事実、来歴非依存） |

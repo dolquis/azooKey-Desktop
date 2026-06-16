@@ -210,8 +210,10 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
     （かな候補は SimpleConverter 帯でも出るため重複は §6.5 で除去）。
 - **厳密な読み等価検証（surface→yomi 突合）は M8 では行わない**。理由: 漢字→読みの
   逆引きには辞書（M53）が要る。MVP は zenz の学習に委ね、破綻時はフォールバック。
-- 破綻（例外 / タイムアウト / 空生成 / 文字化け）時は `SimpleConverter` へ劣化
-  （§7.4）。例外は握り潰さず `last_error_` / log に残す（DEV-177 と同方針）。
+- 破綻（例外 / 空生成 / 文字化け / **best-so-far の無い**タイムアウト）時は `SimpleConverter`
+  へ劣化（§7.4）。例外は握り潰さず `last_error_` / log に残す（DEV-177 と同方針）。
+- **deadline 超過でも best-so-far beam があれば**それを返す（§6.4）＝正常出力であり劣化扱い
+  しない（fallback も `degraded` もしない。§9.2.2 と整合）。
 
 #### 4.2.2 目標形（将来 M53 以降）— 辞書ラティス制約付き協調デコード
 
@@ -513,6 +515,12 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
      が assert）。`model_runtime_error_` は **runtime 変換劣化専用**であり、backend フォールバック
      警告を degraded に**再分類しない**（`docs/zenzai-gpu-route.md` の旧「degraded」表現は
      engine テストの実挙動が優先）。
+6. **モデル lifecycle で `model_runtime_error_` をクリアする**: `LoadModelWithResult` の
+   **成功**（リロード含む）・モデルの**無効化 / アンロード**時、既存の `last_error_.reset()` と
+   **同じ箇所で `model_runtime_error_.reset()` も行う**。これを怠ると、直近 `Convert` が degraded を
+   立てた後にリロード/無効化しても次の `QueryCandidates` まで stale runtime エラーが残り、リロード
+   直後の Health が新しい健全状態（または fallback-only 状態）を degraded/error と誤報告する
+   （poll-after-call は次回 `Convert` でしか上書きしないため、lifecycle 境界での明示クリアが要る）。
 
 > 設計判断: converter の劣化は **engine が毎回ミラーして Health に出す**のが正典。converter は
 > 自分の per-call `last_error_` を持つだけで engine の private には触れない（責務分離 +
@@ -596,7 +604,9 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | マージ経路の source 設定（§7.1 注）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき**ソース優先で user_dict を保持**（明示 value が低い/負 例 -3.0 でも Zenzai に落とされない）。user_dict を含まない重複は最高 score を残す |
-| unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー（§9.2.1） |
+| unit | 劣化モード（hard failure）: 例外/空生成/**usable beam が無い**ケースで `DegradeToFallback` され候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー＝`degraded`（§9.2.1） |
+| unit | deadline 超過で **best-so-far beam あり**（§6.4/§9.2.2）: Zenzai の best-so-far を返し、`DegradeToFallback` を経由しない・valid な Zenzai 出力を捨てない・`degraded` にしない（normal budget expiry を hard failure と区別） |
+| unit | モデル lifecycle クリア（§9.2.1）: degraded 変換後に LoadModel 成功/無効化/アンロードすると `model_runtime_error_` がクリアされ、直後の Health が stale な degraded/error を報告しない |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
 | unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |

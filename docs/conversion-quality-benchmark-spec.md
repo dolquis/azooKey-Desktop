@@ -236,8 +236,9 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
                   --backend cpu \
                   --model %LOCALAPPDATA%\azooKey\models\zenzai-small.gguf
 
-# 打ち間違え評価
+# 打ち間違え評価（補正モードを明示。typo 指標は補正有効モードで測る）
 azookey_bench.exe --eval bench/data/typo_eval.jsonl \
+                  --typo-mode rank \
                   --output typo_result.json \
                   --baseline typo_baseline.json
 
@@ -259,6 +260,15 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--trace` | M51 trace ログを出す |
 | `--category <name>` | カテゴリ絞込 |
 | `--iterations <N>` | 各ケースの繰返し回数（latency 用） |
+| `--typo-mode <mode>` | typo 補正モード（`off` / `suggest` / `rank` / `aggressive`、既定 `off`）。`config.typo_correction_mode` に記録（§14.1 互換キー） |
+
+**typo 評価のモード指定（必須運用）**: §6.2 の typo 補正指標は補正が有効な
+モードでのみ意味を持つ。`typo_eval` を `--typo-mode off`（既定）で走らせると
+`typo_correction_top1/5_accuracy` が補正無効で測られ無意味になるため、typo
+ベンチは評価対象モード（M55 既定の `rank` 等）を明示する。とくに
+`typo_overcorrection_rate` は §4.3.1 のとおり `aggressive` モードで測る。
+通常変換（`kana_kanji_eval`）は `off` で走らせる（補正非対象）。baseline は
+モードごとに別管理（互換キーに `typo_correction_mode` を含む、§14）。
 
 ## 8. 出力 JSON 形式
 

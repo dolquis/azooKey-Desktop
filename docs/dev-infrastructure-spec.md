@@ -319,16 +319,28 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
 - **末尾ゴミの拒否** — 値の後ろに空白以外が残る入力を拒否する
   （`ParseDocument` が `pos_ == size` を要求）。
 - **数値の安全な扱い** — `0` 始まりの多桁・小数点後桁なし・指数部桁なし等の
-  不正形を拒否し、`1e9999` 等は `std::isfinite` で弾く。整数抽出
-  （`GetInt` / `GetUInt`）は元トークン文字列から `std::stoll` / `std::stoull` で
-  復元し、double 経由の精度欠落を避ける（uint64 全域
-  `18446744073709551615` まで round-trip 可能、範囲外は `nullopt`）。
+  不正形を拒否し、`1e9999` 等は `std::isfinite` で弾く。
+- **uint64 精度（抽出側は保持・直列化側は残課題）** — 整数**抽出**
+  （`GetInt` / `GetUInt`）は元トークン文字列から `std::stoll` / `std::stoull`
+  で復元するため double 経由の精度欠落がなく、uint64 全域
+  `18446744073709551615` まで正しく取り出せる（範囲外は `nullopt`）。一方
+  **直列化**側は現状 `ipc/src/Messages.cpp` / `ipc/src/Payloads.cpp` が uint64
+  フィールド（`request_id` / `Ping.nonce` / `t_ms` / `Cancel.target_request_id`
+  / `CommitObservation.timestamp_ms` 等）を `static_cast<double>` してから
+  `Value` 化するため、token を持たない `Value(double)` 経路に落ち、2^53 超の値が
+  wire 上で丸まる。token 保持版 `Value(uint64_t)`（`std::to_string` 済み）または
+  `std::to_chars` 経由へ改め、**parse / serialize の双方向**で uint64 全域を
+  保証すること（残課題）。
 - **数値 codec の locale 非依存（残課題）** — 数値の parse / stringify は
   C ロケール固定で行い、ホストプロセス（TIP は任意アプリ内 in-proc、Host も
   CRT locale を変える可能性）が非 C ロケール（小数点が `,` 等）を設定しても
   wire 表現が壊れないこと。現状 `std::stod` / `std::ostringstream` は実行時
   locale 依存のため、`std::from_chars` / `std::to_chars`（または明示 `C`
-  ロケール）への置換を要する。追跡は Linear DEV-163。
+  ロケール）への置換を要する。
+
+  上記 2 つの残課題（直列化側 uint64 精度・locale 非依存）は numeric codec
+  correctness として Linear DEV-163 で一括追跡し、上記フィールドの round-trip
+  テスト追加までを完了条件とする。
 
 ### 6.3 追加テストと協定外メッセージの扱い
 

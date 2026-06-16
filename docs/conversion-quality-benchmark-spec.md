@@ -96,7 +96,7 @@ bench/data/
 | `input` | 読み（ひらがな） |
 | `expected` | 期待第一候補 |
 | `acceptable` | 許容候補（top-1 == acceptable で正解扱い） |
-| `category` | カテゴリ tag の配列 |
+| `category` | カテゴリ tag の配列。**先頭要素を主カテゴリ**とし §11.2 の件数カウントに用いる（順序が意味を持つ） |
 | `difficulty` | 1（易）〜 5（難） |
 | `provenance` | 出典種別（§13）。`authored`（自前作成・既定） / `wikidata`（CC0 seed） / `aozora`（青空文庫・著作権切れ）。値はデータセット manifest（§13.3）の `id` と対応し、ライセンス追跡に用いる |
 
@@ -271,6 +271,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "max_new_tokens": 64,
     "prompt_template_version": 1,
     "thread_count": 1,
+    "batch_size": 1,
     "learning_state": "empty",
     "eval_dataset_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
   },
@@ -377,8 +378,10 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 | `user_adapt` | — | 60 | 学習前後比較（M54）。学習注入スクリプトとペアで管理 |
 | **合計** | **≥400** | **≥1350** | カテゴリ最小 60、計 1000 超を満たす |
 
-- 1 ケースは複数 `category` tag を持ってよい（例 typo ∧ homophone）が、
-  件数カウントは主カテゴリ 1 つで数える（重複カウントしない）。
+- 1 ケースは複数 `category` tag を持ってよい（例 `["typo","homophone"]`）が、
+  **`category` 配列の先頭要素を主カテゴリ**と定め、件数は主カテゴリでのみ
+  数える（重複カウントしない）。主カテゴリは §5 の 12 種のいずれかであること。
+  この規則により「各 100」ゲートは機械的に検証可能（重複・恣意的選択が起きない）。
 - `difficulty` と `domain` の分布は各カテゴリ内で偏らせない。極端な難問
   のみ／特定ドメインのみのカテゴリは代表性不足として PR レビューで差し戻す。
 - 1 表層・1 読みの重複ケースは禁止（`id` 単位で一意、(`input`,`left_context`)
@@ -516,11 +519,19 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `decode = "beam"`、`beam_width`（=`B`）、`n_best`（=`N_zenzai`）、`max_new_tokens`
 - `prompt_template_version`（プロンプト改訂で baseline 無効化）
 - `thread_count`（既定 1。FP 非決定性を避けるため baseline は単一スレッド固定）
+- `batch_size`（llama.cpp の `n_batch`。バッチも FP 演算順序を変え僅差ビームの
+  順位を反転し得るため baseline は固定（既定 1）。bench / inference-host 側で
+  バッチを調整した場合は互換キー差として baseline 再採取が必要）
 - `learning_state`（`empty` または固定スナップショットの SHA。学習状態が
   混ざると user_adapt 以外の再現性が壊れる）
 - `eval_dataset_sha256`（評価対象 `bench/data/*.jsonl` の内容ハッシュ。
   ケース集合が変わると指標差は converter 挙動ではなくデータ差に由来するため、
-  **eval ファイル変更時は baseline 再採取が必須**）
+  **eval ファイル変更時は baseline 再採取が必須**）。**正準算法**: 評価対象の
+  `*.jsonl` を `bench/data/` 起点の相対パスでバイト昇順ソートし、各ファイルに
+  つき `相対パス(UTF-8) + 0x00 + ファイル生バイト列` を境界デリミタ無しで連結
+  した全体を SHA-256。改行は LF 固定でコミットし（リポジトリ標準）ハッシュ時の
+  正規化は行わない。これにより glob 順・プラットフォーム差で同一データが別
+  ハッシュになることを防ぐ
 
 `build_id` / `host_version` は**追跡用に記録するのみで互換キーに含めない**
 （commit ごとに変わるため。これらをキーにすると毎 PR で baseline が無効化され
@@ -536,7 +547,8 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
   （既定 N ≥ 30）で採取し p50/p95/p99 は複数実行の中央値で報告する。
 - baseline は §14.1 の**互換キー**（`model_sha256` / `backend` / `decode` /
   `beam_width` / `n_best` / `max_new_tokens` / `prompt_template_version` /
-  `thread_count` / `learning_state` / `eval_dataset_sha256`）の組ごとに固定する。
+  `thread_count` / `batch_size` / `learning_state` / `eval_dataset_sha256`）の
+  組ごとに固定する。
   **diff_vs_baseline は互換キーが一致するときのみ有効**で、`build_id` 差
   （=通常の commit 差）では無効化しない。よって `bench/baselines/main.json` に
   対する commit 間の回帰判定（roadmap M52 の「前 commit との diff」）が成立する。

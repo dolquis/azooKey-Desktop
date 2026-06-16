@@ -549,7 +549,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | `DedupBySurface`（converter 内）: 同一表層で高 logprob 残存 |
 | unit | マージ経路の source 設定（§7.1 注）: user_dict 候補が `CandidateSource::UserDictionary`（既定 Heuristic のままにしない） |
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
-| unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `TakeLastError()` 非空 → engine が吸い上げ（§9.2.1） |
+| unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー（§9.2.1） |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |

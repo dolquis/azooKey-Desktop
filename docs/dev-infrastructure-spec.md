@@ -508,11 +508,17 @@ TIP / Host とも JSON Lines 形式のログを出力する。出力先は §5.2
 | `ts` | ISO 8601 タイムスタンプ |
 | `level` | `info` / `warn` / `error` |
 | `component` | `tip` / `host` / `ipc` |
-| `request_id` | IPC リクエスト相関 ID（該当時） |
-| `phase` | 処理フェーズ（§7.3） |
-| `latency_ms` | 当該フェーズの所要時間（計測時） |
-| `result` | `ok` / `error` / `cancelled` |
+| `request_id` | IPC リクエスト相関 ID（該当時。§7.3） |
+| `trace_id` | ユーザー 1 アクション相関 ID（該当時。§7.3 / §7.7.1） |
+| `phase` | 処理フェーズ。正典 enum は `core/include/azookey/logging/Phase.h`（§7.3 / §7.7.2） |
+| `latency_ms` | 当該フェーズの所要時間 ms（計測時）。本フィールド名を全コンポーネント共通の正典とする |
+| `result` | `ok` / `error` / `cancelled` / `blocked`（secure 抑止時。`docs/privacy-and-secure-input-spec.md` §5.1） |
 | `error_code` | §7.4 のエラーコード（error 時） |
+
+`phase` の取り得る値は §7.7.2 の 11 値に固定し、`core/include/azookey/logging/Phase.h`
+の `azookey::logging::Phase` を全コンポーネント（tip / ipc / host）の正典とする。
+所要時間フィールドは `latency_ms` を正典名とし、`duration_ms` 等の別名は使わない。
+phase 別の絶対オフセット（key_down=0 起点）が必要な場合のみ任意で `t_ms` を併記する。
 
 記録対象イベント: Host 起動・終了、pipe listen 開始、model load 成否、
 backend 選択、query latency、error、exception summary、learning/user-dict
@@ -524,10 +530,25 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 ### 7.3 相関 ID とフェーズ
 
-IPC リクエストに `request_id` を付与し（既存 `RequestScheduler` の連番を
-流用）、TIP / IPC / Host のログを横断追跡できるようにする。フェーズは
-`serialize` / `send` / `host_compute` / `recv` / `apply_ui` に分類し、
-各フェーズの `latency_ms` を記録して遅延要因を切り分け可能にする。
+相関 ID は **2 軸のみ** とし、3 つ目の概念（`correlation_id` 等）は導入しない。
+
+| ID | 型 | 粒度 | 発番元 |
+|---|---|---|---|
+| `request_id` | uint64（≥1, 単調増加） | IPC リクエスト 1 往復 | Host `RequestScheduler::NextRequestId`（`inference-host/src/RequestScheduler.cpp`） |
+| `trace_id` | string（UUIDv7 推奨） | ユーザー 1 アクション（キー押下 → UI 更新） | TIP が `OnKeyDown` で発番（§7.7.1） |
+
+- 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
+  1 アクション内の複数 IPC を束ね、`request_id` がその中の個々の往復を識別する。
+- 両 ID は既存 IPC エンベロープ `{version, request_id, type, trace_id, payload}`
+  にそのまま乗る（§12.6 / `docs/privacy-and-secure-input-spec.md` §9）。新フィールドは追加しない。
+- `request_id` は `RequestScheduler` の連番をそのまま再利用し、ログ上の相関 ID と
+  staleness check（M10）/ Cancel の対象 ID を一致させる。別系統の採番は作らない。
+
+フェーズは §7.7.2 の **11 値に固定** し、正典 enum は
+`core/include/azookey/logging/Phase.h`（`azookey::logging::Phase`）とする。
+M41 では粗い部分集合（例: `romaji_convert` / `model_inference` / `total`）のみ記録し、
+M51 で全 11 phase を記録する。phase 体系は 1 つだけで、M41 用と M51 用の別系統は持たない。
+各フェーズの所要時間は §7.2 の `latency_ms` フィールドに記録して遅延要因を切り分ける。
 
 ### 7.4 エラーコード体系
 
@@ -543,12 +564,28 @@ IPC リクエストに `request_id` を付与し（既存 `RequestScheduler` の
 300ms）。ソフト超過はログに記録、ハード超過は当該リクエストを打ち切り
 劣化モード（§8.3）へ移行する。
 
-### 7.6 プライバシー配慮
+### 7.6 プライバシー配慮（redaction ポリシー正典）
 
 IME である以上、入力本文・候補語をそのままログに出すとプライバシー
-リスクがある。**本文・候補語のログ出力は Debug ビルド限定、または明示
-設定 ON 時のみ**とする。既定（Release）では `request_id` ・長さ・結果
-コードなどメタ情報のみを記録する。
+リスクがある。本文系フィールド（`reading` / `surface` / `candidate.text` /
+確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）の出力可否は、
+以下の **優先順位** で 1 つに定める。上位が下位を常に上書きする。
+
+| 優先 | 条件 | 本文系フィールドの扱い |
+|---|---|---|
+| 1（最優先） | secure 中（`PrivacyGate::IsSecure()==true`） | **常に redact**。Debug でも `AZOOKEY_LOG_BODY=1` でも出力しない |
+| 2 | Release ビルド（既定） | **常に redact**。`request_id` / `trace_id` / 長さ / `result` / `latency_ms` 等のメタ情報のみ |
+| 3 | Debug ビルド かつ `AZOOKEY_LOG_BODY=1` | 本文を出力（opt-in。開発時のみ） |
+| 4 | Debug ビルド（既定、env 未設定） | redact（メタ情報のみ） |
+
+- redact 時は値を `***redacted***` に置換し、`window_title` は `window_title_hash`
+  のみに置換する（`docs/privacy-and-secure-input-spec.md` §8 と同一規約）。
+- 本ポリシーの実装は M44 診断 ZIP（§12.5）と secure redaction（同 §5 / §8）で
+  **共通の redaction 関数** を用い、二重定義・不整合を作らない。
+- レイテンシ trace（§7.7）は本文を含まないメタ情報であり、本ポリシーの
+  redact 対象外（phase 別 `latency_ms` は Release でも記録してよい）。
+- 互換性テスト（§13）でも、Release 既定で本文がログ・成果物に残らないことを
+  確認対象に含める。
 
 ### M41 受け入れ条件
 
@@ -597,7 +634,14 @@ Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定�
 | `ui_apply` | CandidateWindow / Preedit 更新 | tsf-tip |
 | `total` | key_down → ui_apply の通算 | tsf-tip |
 
-各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。
+この 11 値が phase の正典であり、`core/include/azookey/logging/Phase.h` の
+`azookey::logging::Phase` と 1:1 で対応する（wire 名は `PhaseName()`）。
+値の **追加は後方互換（patch）**、**削除 / 改名は破壊的変更（major）** とする
+（読み手は未知 phase を無視。集計ツールは wire 名に依存するため改名不可）。
+
+各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。所要時間は
+`latency_ms`（正典名）に入れ、`key_down` 等の絶対オフセット（key_down=0 起点）が
+必要なときのみ任意で `t_ms` を併記する。
 `model_inference` 行に以下を付与する（M24 `docs/copilot-pc-backend-spec.md` §4 整合）:
 
 - `engine`: `"llama_cpp" | "winml"`
@@ -609,9 +653,9 @@ Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定�
 
 ```json
 {"ts":"2026-05-27T10:00:00.000Z","trace_id":"abc","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.001Z","trace_id":"abc","component":"core","phase":"romaji_convert","duration_ms":0.04,"level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.015Z","trace_id":"abc","component":"host","phase":"model_inference","duration_ms":14.5,"backend":"cuda","level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.018Z","trace_id":"abc","component":"tip","phase":"total","duration_ms":18.3,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.001Z","trace_id":"abc","component":"core","phase":"romaji_convert","latency_ms":0.04,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.015Z","trace_id":"abc","component":"host","phase":"model_inference","latency_ms":14.5,"backend":"cuda","level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.018Z","trace_id":"abc","component":"tip","phase":"total","latency_ms":18.3,"level":"info","result":"ok"}
 ```
 
 #### 7.7.3 trace_viewer CLI
@@ -638,8 +682,8 @@ QueryCandidates latency summary (N=10000)
 #### 7.7.4 オーバーヘッド制御
 
 通常利用時は §7.6 のプライバシー方針に従い、Release では phase 別
-duration_ms のみ記録する。詳細な per-key trace は以下のいずれかで
-明示有効化する:
+`latency_ms`（メタ情報のみ。本文は含まない）を記録する。詳細な per-key
+trace は以下のいずれかで明示有効化する:
 
 - `bench/azookey_bench --trace`（ベンチ実行時）
 - `settings.latencyTracing.enabled = true`（設定 GUI から）
@@ -747,6 +791,20 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 | `DegradedModel` | Host は正常だが Zenzai 無効 | 変換品質低下 |
 | `Recovering` | 再接続 / 再ロード中 | 一時的に候補更新遅延 |
 | `SafeMode` | 連続クラッシュにより AI / 学習を停止 | 安定優先 |
+
+遷移トリガと駆動 timeout（§8.5.2）を一覧化する。`request_id` / `trace_id`
+（§7.3）で staleness を判定し、状態遷移は §7 のログに記録する。
+
+| From | To | トリガ | 駆動 timeout / 閾値 |
+|---|---|---|---|
+| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent） | Ping 500ms / QueryCandidates fast 150ms / Live 80ms / Heavy 800ms 超過 |
+| `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 or 推論 timeout | Model load 30s / 推論 deadline 超過 |
+| `DegradedSimple` | `Recovering` | 再接続成功（pipe 再確立 + Handshake） | exponential backoff（§8.3） |
+| `DegradedModel` | `Recovering` | `LoadModel` 再ロード受理 | Model load 30s |
+| `Recovering` | `Healthy` | health OK（Ping 往復成功） | Ping 500ms 以内 |
+| `Recovering` | `DegradedSimple` / `DegradedModel` | 再接続 / 再ロード失敗 | 同上 timeout 再超過 |
+| `Any` | `SafeMode` | Host プロセスが 60s 以内に 3 回連続クラッシュ（§8.5.3） | crash カウンタ ≥3 / 60s |
+| `SafeMode` | `Healthy` | ユーザーが手動解除（`settings.safeMode.enabled=false`） | 手動のみ（自動復帰しない） |
 
 #### 8.5.2 timeout 表
 
@@ -988,6 +1046,30 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 └── crash-summary.txt         (WER ダンプの要約のみ、ダンプ本体は含めない)
 ```
 
+`diag.json` は §12.3 `--json` 出力と同一の **stable schema** とし、以下を正典とする
+（snapshot テストで固定。本文系フィールドは持たない）:
+
+```json
+{
+  "status": "ok | warning | error",
+  "timestamp_ms": 0,
+  "checks": [
+    {
+      "id": "D-001 .. D-015",
+      "name": "string (安定 ID。例 model_validation)",
+      "status": "ok | warning | error",
+      "message": "string (人間向け。本文・候補・prompt を含めない)",
+      "details": { "...": "check 固有のメタ情報のみ（パス / bool / 件数 / hash / mtime）" }
+    }
+  ]
+}
+```
+
+- `status` は `checks[].status` の最悪値（error > warning > ok）。
+- 各 ZIP メンバの突き合わせは §7.3 の相関 ID では行わず、診断は単発スナップショット。
+  `host-health.json` は §12.6 `QueryDiagnostics` の payload をそのまま保存する。
+- 新しい check は `D-0NN` を末尾追加（後方互換）。既存 ID の `name` 改名は破壊的変更扱い。
+
 ### 12.5 機密情報の取り扱い
 
 診断 ZIP には以下を**含めない**:
@@ -1142,6 +1224,10 @@ compat-test/
 ```
 
 各 target JSON は AppId / window class / 自動化レベルを定義する。
+本ディレクトリの雛形（README + `targets/notepad.json` サンプル）は
+`compat-test/` に置く。雛形はまだ CMake のビルド対象に組み込まず（トップ
+`CMakeLists.txt` は `add_subdirectory` を明示列挙する方式）、M50 実装時に
+runner / cases を追加して配線する。
 
 ### 13.5 出力
 

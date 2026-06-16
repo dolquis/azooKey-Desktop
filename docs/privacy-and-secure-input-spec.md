@@ -107,7 +107,7 @@ public:
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/PredictionWindow.cpp` |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
-| ログに `reading` / `surface` を含めない | M41 logger の redaction フラグ |
+| ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/dev-infrastructure-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |
 | M55 補正候補の学習・適用を停止 | `correction/TypoCorrectionEngine.cpp` |
 
@@ -224,8 +224,10 @@ schema fragment（`properties.privacy` への追加）:
 
 ## 8. ログ redaction
 
-M41 §7.6 のプライバシー配慮と整合する。secure 中は以下を Release ・
-Debug 双方で抑止する:
+`docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシー正典に従う。secure は
+同表の **優先順位 1**（最優先）であり、Release・Debug いずれでも、また
+`AZOOKEY_LOG_BODY=1` が設定されていても本文系フィールドを出力しない。
+具体的には secure 中は以下を Release・Debug 双方で抑止する:
 
 - `reading`, `surface`, `candidate.text` を `***redacted***` に置換
 - `window_title` を `window_title_hash` のみに置換

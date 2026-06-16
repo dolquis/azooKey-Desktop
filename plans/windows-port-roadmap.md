@@ -1487,7 +1487,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
   - JSON: ネスト深度上限（64）・最大入力長（1 MiB）・サロゲートペア結合・
     不正 UTF-8/制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否。数値 codec の
-    locale 非依存（C ロケール固定 / `from_chars`・`to_chars`）
+    correctness（locale 非依存 / uint64 全域の双方向 round-trip /
+    非 plain 数値形の桁あふれ拒否）
   - malformed/fuzz テスト追加（決定的境界コーパス + 有界擬似乱数スモーク。
     libFuzzer は任意拡張）
   - 未配線 MessageType への明示エラー応答 + 列挙↔codec 整合検査
@@ -1508,6 +1509,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 切断済み client が解放される
   - 未配線 MessageType に明示エラー応答が返り blocking client がハングしない
   - 数値 codec が locale 非依存で round-trip する
+  - uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
+    `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する
+  - 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する
   - Handshake トークンが per-user ファイルチャネルで配布される
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §6
 

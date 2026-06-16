@@ -299,36 +299,88 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
 
 ### 6.2 JSON パーサ強化要件
 
-`ipc/src/Json.cpp` に次の防御を追加する:
+`ipc/src/Json.cpp` は次の防御を備える。各上限値は**本節（spec）を正典**とする
+（AGENTS.md 正典マトリクス: IPC payload / JSON schema / 挙動の決定は
+`docs/*-spec.md`）。`ipc/include/azookey/ipc/Limits.h` の定数は本節の値に
+一致させ、齟齬が出た場合は spec を正として Limits.h を修正する。コード側の
+上限変更は wire contract と受け入れ条件に影響するため、spec 更新（レビュー）と
+セットで行うこと。定数と spec 値の同期は `static_assert` / テストで担保する
+（code-only な変更で wire contract が無断で変わる drift を防ぐ）。
 
-- **ネスト深度上限** — 配列/オブジェクトのネストに上限（例: 64）を設け、
-  超過時はパース失敗を返す（スタック枯渇防止）
-- **最大入力長** — パース対象バイト長に上限を設ける。length-prefix
-  フレーミングの最大フレームサイズ（§6.4）と整合させる
-- **サロゲートペア結合** — `\uXXXX` の上位/下位サロゲートを正しく結合し、
-  単独サロゲートは不正として拒否する
-- **不正 UTF-8 / 制御文字の拒否** — 文字列内の生の制御文字（U+0000〜
-  U+001F）と不正 UTF-8 シーケンスを拒否する
-- **末尾ゴミの拒否** — 値の後ろに非空白バイトが残る入力を拒否する
-- **数値** — 現状 `std::stod` 経由。整数精度・巨大数の扱いを見直し、
-  範囲外は安全に拒否する
+- **ネスト深度上限 = 64**（`kMaxJsonNestDepth`） — 配列/オブジェクトのネストが
+  64 を超えたらパース失敗を返す（再帰によるスタック枯渇防止）。`ParseValue` は
+  depth を持ち回り、`ParseObject` / `ParseArray` が超過を検査する。
+- **最大入力長 = 1 MiB**（`kMaxJsonInputBytes = 1024 * 1024`） — `ParseDocument`
+  冒頭で入力バイト長を検査し、超過は即失敗。§6.4.3 の最大フレームサイズと同値で
+  揃える（フレームを読み切れた時点で入力長上限も満たされる）。
+- **サロゲートペア結合** — `\uXXXX` の上位（U+D800–U+DBFF）に続く下位
+  （U+DC00–U+DFFF）を結合し、単独サロゲート（上位のみ / 下位のみ）は不正として
+  拒否する。
+- **不正 UTF-8 / 制御文字の拒否** — 文字列内の生の制御文字（U+0000–U+001F）を
+  拒否し、生 UTF-8 バイト列は長さ・継続バイト・overlong（C0/C1、E0<A0、F0<90）・
+  範囲外（F4>8F、> U+10FFFF）を検査して不正シーケンスを拒否する。
+- **末尾ゴミの拒否** — 値の後ろに空白以外が残る入力を拒否する
+  （`ParseDocument` が `pos_ == size` を要求）。
+- **数値の安全な扱い** — `0` 始まりの多桁・小数点後桁なし・指数部桁なし等の
+  不正形を拒否し、`1e9999` 等は `std::isfinite` で弾く。
+- **uint64 精度（plain 整数 token のみ保持・非 plain 形と直列化は残課題）** —
+  **plain 整数 token**（符号なし数字のみ）の抽出（`GetInt` / `GetUInt`）は
+  元トークン文字列から `std::stoll` / `std::stoull` で復元するため double 経由の
+  精度欠落がなく、uint64 全域 `18446744073709551615` まで正しく取り出せ、桁あふれは
+  `nullopt`。ただし**小数・指数形**（例 `18446744073709551616.0`）は
+  `IsPlainIntegerToken` が false となり double 経路へフォールバックし、丸めに加え
+  範囲ガードが不十分（`d > static_cast<double>(UINT64_MAX)` は `(double)UINT64_MAX`
+  が 2^64 に丸まるため 2^64 を弾けず、範囲外 double を `nullopt` にせずキャスト
+  し得る）。非 plain 形の桁あふれ拒否は残課題として overflow テスト / 修正を要する
+  （DEV-188 / DEV-163）。一方
+  **直列化**側は現状 `ipc/src/Messages.cpp` / `ipc/src/Payloads.cpp` が uint64
+  フィールド（`request_id` / `Ping.nonce` / `t_ms` / `Cancel.target_request_id`
+  / `CommitObservation.timestamp_ms` 等）を `static_cast<double>` してから
+  `Value` 化するため、token を持たない `Value(double)` 経路に落ち、2^53 超の値が
+  wire 上で丸まる。token 保持版 `Value(uint64_t)`（`std::to_string` 済み）または
+  `std::to_chars` 経由へ改め、**parse / serialize の双方向**で uint64 全域を
+  保証すること（残課題）。
+- **数値 codec の locale 非依存（残課題）** — 数値の parse / stringify は
+  C ロケール固定で行い、ホストプロセス（TIP は任意アプリ内 in-proc、Host も
+  CRT locale を変える可能性）が非 C ロケール（小数点が `,` 等）を設定しても
+  wire 表現が壊れないこと。現状 `std::stod` / `std::ostringstream` は実行時
+  locale 依存のため、`std::from_chars` / `std::to_chars`（または明示 `C`
+  ロケール）への置換を要する。
 
-### 6.3 追加テスト
+  上記の残課題（直列化側 uint64 精度・非 plain 数値形の桁あふれ拒否・locale
+  非依存）は numeric codec correctness として Linear DEV-163 で一括追跡し、
+  該当 uint64 フィールドの round-trip テストと非 plain 形 overflow テストの追加
+  までを完了条件とする（パーサ直接単体テストの拡充は DEV-188）。
 
-`ipc/tests/` に malformed/fuzz 系テストを追加する:
+### 6.3 追加テストと協定外メッセージの扱い
 
-- ランダムバイト列を `Parse` してもクラッシュせず失敗を返す
-- 深すぎるネストを拒否する
-- 巨大数・桁あふれを安全に拒否する
-- 不正な Unicode escape（単独サロゲート等）を拒否する
-- 文字列内の生制御文字を拒否する
-- 末尾ゴミを拒否する
-- 最大 payload 長超過入力を拒否する
-- `Payloads.cpp` 側で期待外の型・必須キー欠損を安全に拒否する
-- **enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
-  `CommitCorrection` / `UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の ⚠️ 項）を
-  受信した際、Dispatcher が**明示的に「未対応 type」エラーを返す**（黙って無視しない）。
-  併せて MessageType 列挙 ↔ `Payloads` codec の網羅整合を CI で検査する（DEV-102）。
+`ipc/tests/`（`messages_test.cpp` の `JsonTest` スイートほか）に境界・malformed
+テストを置く。v1.0 の堅牢性バーは「**決定的な境界コーパス** + **有界な擬似乱数
+スモーク**」で満たす。libFuzzer ベースの継続 fuzz ハーネスはオフラインビルド
+原則（§1）・MSVC 主体の CI と相性が悪いため**任意の将来拡張**とし、必須には
+しない。
+
+- 深すぎるネスト・最大長超過を拒否する（`kMaxJsonNestDepth + 1` /
+  `kMaxJsonInputBytes + 1`）
+- 末尾ゴミ・`0` 始まり・指数部欠落を拒否する
+- 巨大数（`1e9999`）・uint64 桁あふれ（`...616`）を安全に拒否する
+- 不正 Unicode escape（単独サロゲート `\uD800` / `\uDC00`）を拒否する
+- 文字列内の生制御文字（`\x01`）・overlong UTF-8（`C0 AF`、`E0 80 80`）を拒否する
+- 擬似乱数バイト列を `Parse` してもクラッシュせず失敗を返す（有界回数スモーク）
+- 最大フレーム超過の length-prefix を `Decode/EncodeLengthPrefixed` が拒否する
+- `Payloads.cpp` 側で必須キー欠損・型不一致を安全に拒否する
+- 自前 JSON パーサの直接単体テスト（int64/uint64 精度・深度・unicode escape・
+  round-trip）を独立ファイルへ拡充する（残課題、Linear DEV-188）
+
+**enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
+`CommitCorrection` / `UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の
+⚠️ 項）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
+応答待ちの blocking client をハングさせないため、既存ワイヤ形式の envelope に
+「未対応 type」を表すエラー payload（例: `{"ok":false,"error":"unsupported_message_type"}`）
+を載せて返す。`Cancel` など fire-and-forget の type のみ無応答を許す。現状の
+Dispatcher は `default:` で `nullopt` を返し client をハングさせ得るため要修正
+（残課題、Linear DEV-162）。併せて MessageType 列挙 ↔ `Payloads` codec の網羅
+整合をテスト / CI で検査し、列挙追加時の codec 取りこぼしを防ぐ。
 
 ### 6.4 Named Pipe セキュリティ強化
 
@@ -344,16 +396,60 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - **6.4.1a remote client rejection** — Named Pipe はローカル IME ↔ Host 専用
   であり、server 作成時に `PIPE_REJECT_REMOTE_CLIENTS` を指定して remote client
   接続を OS レベルで拒否する。これは DACL / per-user pipe 名の補助防御であり、
-  同一ユーザー内の別プロセス対策は §6.4.4 の Handshake トークンで扱う
+  本項は remote client 拒否に限る。**同一ユーザー内の別プロセスを秘密だけで
+  区別する認証は不可能**であり（§6.4.4）、Handshake トークンは同一ユーザー
+  なりすまし対策の認証ではなく多層防御として §6.4.4 で扱う
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
   TIP と設定 UI などの同時接続を許容する有界な上限
   (`kMaxPipeInstances = 32`) を設ける
-- **6.4.3 最大フレームサイズ見直し** — M40 着手前は 16MB。IME の候補問い合わせ
-  には大きすぎるため、用途に見合う上限（256KB〜1MB 程度）へ引き下げる。
-  §6.2 の JSON 最大入力長と整合させる
-- **6.4.4 Handshake トークン** — DACL は同一ユーザーまでしか絞れない。
-  Host 起動時にランダムトークンを生成し、TIP との Handshake で検証する
-  方式を導入し、同一ユーザー内の別プロセスからの接続を弾く
+- **6.4.3 最大フレームサイズ = 1 MiB** — `kMaxFrameSize`（`= kMaxJsonInputBytes`、
+  `Limits.h`）。4-byte little-endian length-prefix の値が 0 または本上限超過の
+  フレームは `ReadEnvelope` / `DecodeLengthPrefixed` が拒否する。候補問い合わせ
+  （数 KB）には十分で、長文一括変換（5,000 文字 ≒ 15 KB）も収まる。5 万文字級の
+  超長文は分割前提（M58-B、`docs/romaji-batch-conversion-spec.md` と整合）。
+  §6.2 の JSON 最大入力長と**同値に固定**し、片方だけ広げない
+- **6.4.4 Handshake トークン** — Handshake で共有秘密トークンを検証する
+  （`HandshakeRequest.handshake_token` ↔ Host の
+  `DispatcherConfig.handshake_token`）。トークンが設定されている場合、Host は
+  Handshake 成立まで他メッセージを未認証として type 別エラーで弾く
+  （`Dispatcher::RequiresAuthenticatedSession`）。
+
+  **脅威モデルと到達限界（重要）**: 本トークンは**多層防御（defense-in-depth）**で
+  あり、**悪意ある同一ユーザープロセスからのなりすましを防ぐ認証ではない**。
+  TIP は TSF DLL として任意のアプリプロセスに in-proc ロードされるため、Host と
+  「正規の TIP プロセス」を結ぶ事前の信頼チャネルが存在しない。共有秘密を
+  どのチャネルで配っても、同一ユーザー権限で動く悪意あるプロセスは正規 TIP と
+  同じ経路でその秘密を入手でき（ファイルなら読み取り、env なら環境継承）、同一
+  ユーザー内のプロセス同士を秘密だけで区別することは Windows のセキュリティ
+  モデル上できない。**同一ユーザー境界の主防御は per-user pipe ACL + SID
+  fail-closed（§6.4.1）+ remote 拒否（§6.4.1a）**であり、「どのプロセスが正規 TIP か」
+  の信頼境界は TSF 自体が担う。トークンに認証を期待しない。
+
+  **トークンが実際に与える価値**:
+  - 非悪意の誤接続（バージョン違い / 別ビルドの Host・TIP / 残存プロセス）を弾く
+  - トークン格納先（`%LOCALAPPDATA%`）を**読めない**同一ユーザープロセス、
+    具体的には **capability 分離された AppContainer プロセス**（ユーザー通常 SID で
+    `%LOCALAPPDATA%` を読めず、パッケージ SID / capability で隔離。DEV-204 関連）を
+    結果的に排除する。**低 IL（low integrity）プロセスは排除できない** — Windows の
+    整合性レベルは通常 write-up のみ制限し read-up は許すため、低 IL でも同一ユーザー
+    DACL のトークンファイルを読めてしまう。この価値は AppContainer 等の capability
+    隔離ケースに限る
+  - 攻撃の手数を一段増やす speed bump
+
+  **トークンの配布チャネル（v1.0 決定）**: env 事前共有（`AZOOKEY_IPC_HANDSHAKE_TOKEN`）
+  は in-proc TIP が Host 起動時の環境を共有しないため production では成立しない。
+  そこで Host が起動時に暗号論的乱数 16 byte（hex 32 文字）を生成し、現在ユーザー
+  のみが読める `%LOCALAPPDATA%\azooKey\config\ipc-token`（NTFS ACL 継承で
+  current-user RX）へ §5.4 の write-then-rename で原子的に書き出す。TIP は Handshake
+  直前に同ファイルを読みトークンを得る。Host 再起動時はファイルを新トークンで
+  上書きし、TIP は**再 Handshake のたびにファイルを読み直す**（M42 再接続時も同様）。
+  環境変数 `AZOOKEY_IPC_HANDSHAKE_TOKEN` は開発・テスト用の上書き経路として残す。
+  本チャネルは上記の defense-in-depth 価値に見合うものであり、認証の保証は与えない。
+
+  **トークン未設定時の縮退**: ファイルも環境変数も無い場合は per-user pipe ACL
+  のみに依拠し、Host は warn ログを出す（現行 `inference-host/src/main.cpp` の
+  挙動）。Release では §6.4.1 の SID fail-closed により pipe 自体が current-user
+  に限定されるため、トークン未設定でも remote / 別ユーザーは到達しない
 - **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
   見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
 - **6.4.6 length-prefix read/write hardening** — Named Pipe は
@@ -378,6 +474,19 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - 複数接続・切断テストが追加され緑
 - 切断済み client が解放される
 - 64KiB を超える length-prefix フレームが往復できる
+- 未配線 MessageType に明示エラー応答が返り、blocking client がハングしない。
+  MessageType 列挙 ↔ `Payloads` codec の網羅整合が検査される（DEV-162）
+- 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する（DEV-163）
+- uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
+  `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する（DEV-163）
+- 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する（DEV-163 / DEV-188）
+- Handshake トークンが per-user ファイルチャネルで配布され、未設定時は
+  ACL 縮退 + warn ログとなる（§6.4.4）
+
+> 注: 本節は受け入れ条件の「定義」のみを持ち、各項目の達成状態は持たない
+> （正典は Linear）。協定外メッセージ（DEV-162）・数値 codec の locale 非依存
+> （DEV-163）・直接パーサ単体テスト拡充（DEV-188）・トークン配布チャネル
+> （§6.4.4）の進捗は対応する Linear 課題で追跡する。
 
 ## 7. 構造化ログと可観測性（M41）
 

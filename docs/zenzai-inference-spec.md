@@ -356,9 +356,12 @@ reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source
 
 ### 7.4 劣化モード（degraded）の順位
 
-- Zenzai 推論が例外 / タイムアウト / 空のとき、`ZenzaiModelConverter::Convert` は
-  `fallback_->Convert`（SimpleConverter）の結果を返す（現行委譲を維持）。この時の
-  候補 source は SimpleConverter 由来（`SystemDictionary`/`Heuristic`、0.1〜1.2 帯）。
+- Zenzai 推論が例外 / 空生成 / **best-so-far beam の無い**タイムアウトのとき、
+  `ZenzaiModelConverter::Convert` は `fallback_->Convert`（SimpleConverter）の結果を返す
+  （現行委譲を維持）。この時の候補 source は SimpleConverter 由来（`SystemDictionary`/
+  `Heuristic`、0.1〜1.2 帯）。
+- **deadline 超過でも best-so-far beam があれば** Zenzai のその beam を返す（§6.4/§9.2.2）＝
+  正常出力であり degraded 扱いしない（fallback も `model_runtime_error_` もセットしない）。
 - `debug_info` に `zenzai-degraded;<理由>` を付与。degraded を `/Health` に出すための
   converter→engine→Health 吸い上げ機構は **§9.2.1**（converter 自前 `last_error_` を engine が
   同ロック内で**専用フィールド `model_runtime_error_` にミラー**し `effective_last_error()`

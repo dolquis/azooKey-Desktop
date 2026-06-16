@@ -413,7 +413,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
   try {
     const std::string prompt = BuildZenzaiPrompt(kana, ctx.preceding_text, profile_); // §3.3
-    const auto beams = BeamSearch(prompt, /*B=*/beam_width_, /*max_new=*/MaxNewTokens(kana)); // §4.2.1 §6.2 §8
+    const auto beams = BeamSearch(prompt, /*B=*/beam_width_, /*max_new=*/MaxNewTokens(kana),
+                                  deadline_, cancel_);  // §4.2.1 §6.2 §8 ＋ §9.2.2（decode 中も cancel/deadline をポーリング）
     if (beams.empty()) return DegradeToFallback(kana, ctx, "empty-generation");
 
     std::vector<core::Candidate> out;
@@ -467,7 +468,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
    時にセットする（⇒ 成功変換後は `last_error()` が nullopt を返す）。
 2. `InferenceEngine` は runtime 変換劣化を**専用フィールド** `model_runtime_error_`
    （`std::optional<std::string>`）に持つ。これは load 時 / learning 由来の汎用
-   `last_error_`（例 CUDA→CPU 降格理由・`failed to save learning store`）**とは別管理**。
+   `last_error_`（例 `failed to save learning store`〔learning〕）**とは別管理**。
 3. `QueryCandidates` は **既に `state_mutex_` を保持**したまま `active_converter_->Convert(...)`
    を呼ぶ。その**直後（同ロック内）に毎回**、active が model converter なら
    `model_runtime_error_ = model_converter_->last_error();` で**ミラーする**
@@ -487,13 +488,37 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
      `ok` に**復帰**（§10 の Health テストと整合。stuck degraded を回避）。
    - 成功変換は `model_runtime_error_` のみクリアし、**load/learning 由来の `last_error_` は
      消さない**（別フィールドのため誤って健全化しない）。
-   - LoadModel 時の CUDA→CPU 降格が `Health=degraded` を立てる既存挙動
-     （`docs/zenzai-gpu-route.md`）とも一貫。
+   - **既存 API セマンティクスを壊さない**: CUDA 要求→CPU フォールバックは**成功 LoadModel**
+     であり、警告は `ModelLoadResult.error` に返すのみ。`engine->last_error()` は空＝`Health=ok`
+     のまま（既存テスト `LoadModelCudaFallsBackToCpuForNow` / `LoadModelCudaFallbackKeepsHealthOk`
+     が assert）。`model_runtime_error_` は **runtime 変換劣化専用**であり、backend フォールバック
+     警告を degraded に**再分類しない**（`docs/zenzai-gpu-route.md` の旧「degraded」表現は
+     engine テストの実挙動が優先）。
 
 > 設計判断: converter の劣化は **engine が毎回ミラーして Health に出す**のが正典。converter は
 > 自分の per-call `last_error_` を持つだけで engine の private には触れない（責務分離 +
 > ロック安全）。runtime 劣化は **専用フィールド**に隔離し、成功で確実にクリアしつつ
 > load/learning エラーと混ざらないようにする。
+
+### 9.2.2 キャンセル / デッドラインの decode ループ反映（M10 整合）
+
+**問題**: `QueryCandidates` は `const std::atomic<bool>* cancel` を `Convert` の**前後でのみ**
+チェックし、かつ `state_mutex_` を保持したまま `Convert` を呼ぶ。`IConverter::Convert` は
+cancel を受け取らないため、長い Zenzai decode は途中中断できず、stale な推論が token/latency
+予算まで走って**新規クエリをブロック**する（roadmap M10 の host 側早期中断と乖離）。
+
+**契約**（DEV-221、M10＝DEV-106 と協調）:
+
+1. `BeamSearch` の decode ループは**毎反復**（または数トークンごと）に (a) `cancel`
+   （QueryCandidates の `atomic<bool>*`）と (b) §8 由来の wall-clock **deadline** をポーリング:
+   - cancel 観測 → 即中断し空を返す（QueryCandidates が `{}` を返す既存挙動と一致）。
+   - deadline 超過 → その時点の best-so-far を返す（§6.4）。
+2. `IConverter::Convert` は cancel を引数に持たないため、engine は `Convert` 呼び出し前
+   （`state_mutex_` 内）に converter へ **cancel ポインタ + deadline を設定**する
+   （converter-local setter。`Convert` 後にクリア）。最小実装として **deadline 強制のみ**でも
+   stale work を bound できる（hard mid-decode cancel の完全対応は M10 / DEV-106 と協調）。
+3. これにより long decode が `state_mutex_` を保持して後続クエリを待たせる時間を、§8 の
+   p95 予算で上限化する。
 
 ### 9.3 設定項目（`EngineConfig` / settings.json）
 
@@ -551,6 +576,8 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | クロスソース dedup（§7.6）: user_dict と converter が同一表層のとき最終 score 最大の 1 件に集約され、順位規則（§7.3）が保たれる |
 | unit | 劣化モード: 例外/空生成/タイムアウトで fallback 候補が返り候補ゼロにならない。converter の `last_error()` 非空 → engine が `model_runtime_error_` にミラー（§9.2.1） |
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
+| unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
+| unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・空返し、deadline 超過で best-so-far。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |

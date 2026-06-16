@@ -117,7 +117,8 @@ bench/data/
   "expected_surface": "交渉",
   "typo_type": "adjacent_key",
   "category": ["typo", "homophone"],
-  "difficulty": 2
+  "difficulty": 2,
+  "provenance": "authored"
 }
 ```
 
@@ -146,7 +147,8 @@ bench/data/
   "expected_surface": "交渉",
   "typo_type": null,
   "category": ["typo_clean"],
-  "difficulty": 1
+  "difficulty": 1,
+  "provenance": "authored"
 }
 ```
 
@@ -353,9 +355,9 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 
 ### 11.2 カテゴリ別件数（代表性）
 
-段階導入する。**M52 初期版**は受け入れ条件（§12）に必要な 3 カテゴリの
-最小セットで緑化し、**v1 完全版**（合格基準 §9 を測る規模）を M53 着手前
-までに満たす。
+段階導入する。**M52 初期版**は受け入れ条件（§12）に必要な 4 カテゴリ
+（general / homophone / typo / typo_clean）の最小セットで緑化し、
+**v1 完全版**（合格基準 §9 を測る規模）を M53 着手前までに満たす。
 
 | category | M52 初期 | v1 完全版 | 代表性の要点 |
 |---|---:|---:|---|
@@ -391,9 +393,11 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 - `--trace` フラグは M51 完了後の任意統合チェックとして扱う。M51
   未完了時は本フラグの存在を確認するのみで、出力 schema 検証は M51
   完了後の follow-up とする
-- 1 カテゴリ以上の評価データが `bench/data/` に存在する（初期版は
-  general / homophone / typo の 3 カテゴリで十分。件数は §11.2 の
-  「M52 初期」列を満たす）
+- 初期版の評価データが §11.2「M52 初期」列を満たす
+  （general / homophone / typo / **typo_clean** の 4 カテゴリ各 100、計 ≥400）。
+  `typo_clean` は §4.3.1 のとおり `typo_false_positive_rate` /
+  `typo_overcorrection_rate` の分母であり、欠くと typo 指標を正しく計算
+  できないため初期版から必須とする
 - すべての評価ケースが §13 の USABLE 出典・ライセンス方針に適合し、
   `provenance` を持つ。`authored` 以外を含む場合は §13.3 manifest が存在する
 - baseline が §14 の安定性基準（決定的設定で再実行差 ≤ 0.2pp）を満たす

@@ -1844,8 +1844,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
     result.json` で全指標を計算できる
-  - `azookey_bench --eval bench/data/typo_eval.jsonl --output
-    typo_result.json` で typo 指標が出る
+  - `azookey_bench --eval bench/data/typo_eval.jsonl --typo-mode rank
+    --output typo_result.json` で typo 指標が出る（補正有効モードで採取。
+    `--typo-mode off` は受け入れに用いない。spec §7 参照）
   - baseline 比較レポートが CI artifact 化される
   - 初期評価データが spec §11.2「M52 初期」を満たす（general / homophone /
     typo / typo_clean 各 100・計 ≥400。typo_clean は false-positive /

@@ -416,8 +416,10 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
 
 - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
   result.json` で全指標を計算できる
-- `azookey_bench --eval bench/data/typo_eval.jsonl --output
-  typo_result.json` で typo 指標が出る
+- `azookey_bench --eval bench/data/typo_eval.jsonl --typo-mode rank
+  --output typo_result.json` で typo 指標が出る（補正有効モードで採取。
+  `--typo-mode off` は補正無効で typo 指標が無意味になるため受け入れに用いない。
+  §7「typo 評価のモード指定」参照）
 - 出力 JSON が §8 の stable schema に従う
 - baseline 比較レポート（diff_vs_baseline）が生成される
 - `--trace` フラグは M51 完了後の任意統合チェックとして扱う。M51

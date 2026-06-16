@@ -195,6 +195,13 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 | `named_entity_recall_at_5` | category=named_entity の top5 率 |
 | `neologism_recall_at_5` | category=neologism の top5 率 |
 
+> **top5 系指標の前提**: `top5_accuracy` / `named_entity_recall_at_5` /
+> `neologism_recall_at_5` / `typo_correction_top5_accuracy`（§6.2）は候補が
+> 5 件以上あって初めて top5 として成立する。Zenzai の N_zenzai 既定は 4
+> （`docs/zenzai-inference-spec.md` §6.1）だが、**bench 採取時は `beam_width` /
+> `n_best` を 5 以上に上書き**して採取する（§8 config 例は 5）。4 のまま採ると
+> top5 が実質 top4 になり §9 合格基準と不整合になる。
+
 ### 6.2 打ち間違え補正指標
 
 | 指標 | 定義 |
@@ -266,8 +273,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "host_version": "0.1.0",
     "build_id": "abc123",
     "decode": "beam",
-    "beam_width": 4,
-    "n_best": 4,
+    "beam_width": 5,
+    "n_best": 5,
     "max_new_tokens": 64,
     "prompt_template_version": 1,
     "thread_count": 1,

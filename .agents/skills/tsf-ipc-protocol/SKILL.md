@@ -27,7 +27,13 @@ description: ipc/ 配下の IPC 定義、TIP と inference-host 間の Named Pip
 ## ハンドシェイク失敗時の挙動
 
 - TIP は **無入力フォールバック** に切り替える(変換せずパススルー)。
-- Host プロセスが落ちている場合、TIP は再起動を試行(リトライ上限あり)。
+- Host プロセスが落ちている場合でも、TIP は **Host を起動・再起動しない**
+  (TIP 側に `CreateProcess` 等は持たない)。Host は別経路
+  (`scripts/register.ps1` の HKCU `Run` キー等)で起動される前提。
+- TIP の IPC worker は **パイプへ指数バックオフで無期限に再接続**する
+  (250ms→最大 3000ms で頭打ち。回数上限は無い)。worker は `Deactivate`
+  (`ipc_stop_`) のときのみ終了し、接続断では終了しない
+  (`tsf-tip/src/TextService.cpp` `IpcWorkerThread`、DEV-168)。
 - ユーザーに見えるエラー UI は出さない(TIP からモーダル禁止)。
 
 ## やってはいけない

@@ -389,8 +389,11 @@ reranker でソートするのみで**クロスソース dedup をしない**た
   できないため **source 優先で担保**する。
 - user_dict を含まない重複（Zenzai × Simple 等）は**最高 score の 1 件**を残す。残す側の
   `debug_info` に脱落側 source を併記（例 `user-dict;dup:zenzai`）して証跡を保つ。
-- dedup は**学習加点（reranker）適用後の最終 score** で判定し、降順 stable_sort の**後**に
-  先頭優先で重複を落とす（順位規則 §7.3 を保ったまま重複のみ除去）。
+- **survivor 選択はソース優先を一次キーとする**（score-based first-wins より前）: 表層グループ
+  ごとに ①user_dict があれば user_dict、②無ければ最高 score、を survivor に選び他を除去する。
+  最終順位（§7.3 降順 stable_sort）は survivor 確定後の集合に適用する。**sort 後の単純 first-wins は
+  使わない**（低 value user_dict が高 score Zenzai に落とされ source 優先と矛盾するため、survivor
+  選択を sort と独立に行う）。
 
 ---
 
@@ -423,6 +426,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
     const std::string prompt = BuildZenzaiPrompt(kana, ctx.preceding_text, profile_); // §3.3
     const auto beams = BeamSearch(prompt, /*B=*/beam_width_, /*max_new=*/MaxNewTokens(kana),
                                   deadline_, cancel_);  // §4.2.1 §6.2 §8 ＋ §9.2.2（decode 中も cancel/deadline をポーリング）
+    if (Canceled(cancel_)) return {};                 // §9.2.2 キャンセルは fallback せず空（M10。stale 候補を出さない）
     if (beams.empty()) return DegradeToFallback(kana, ctx, "empty-generation");
 
     std::vector<core::Candidate> out;
@@ -526,8 +530,11 @@ cancel を受け取らないため、長い Zenzai decode は途中中断でき�
 
 1. `BeamSearch` の decode ループは**毎反復**（または数トークンごと）に (a) `cancel`
    （QueryCandidates の `atomic<bool>*`）と (b) §8 由来の wall-clock **deadline** をポーリング:
-   - cancel 観測 → 即中断し空を返す（QueryCandidates が `{}` を返す既存挙動と一致）。
-   - deadline 超過 → その時点の best-so-far を返す（§6.4）。
+   - cancel 観測 → 即中断。**`Convert` は cancel を空生成（empty-generation）と区別し、
+     `DegradeToFallback` を経由せず `{}` を返す**（§9.1 で BeamSearch 後に `Canceled(cancel_)` を
+     empty チェックより**先に**判定）。fallback を返すと stale preedit に対する SimpleConverter
+     候補が TIP に表示され M10 早期中断に反するため。QueryCandidates 側の `{}` 返却と一致。
+   - deadline 超過 → cancel とは別扱い。その時点の best-so-far を返す（§6.4。候補は出す）。
 2. `IConverter::Convert` は cancel を引数に持たないため、engine は `Convert` 呼び出し前
    （`state_mutex_` 内）に converter へ **cancel ポインタ + deadline を設定**する
    （converter-local setter。`Convert` 後にクリア）。最小実装として **deadline 強制のみ**でも
@@ -593,7 +600,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | Health 反映（§9.2.1）: ①劣化変換後 `Health=degraded`、②**その後の成功変換で `model_runtime_error_` がクリアされ `ok` に復帰**（stuck degraded を回避）、③load/learning 由来の `last_error_` は成功変換で消えない（別フィールド隔離） |
 | unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
-| unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・空返し、deadline 超過で best-so-far。long decode が後続クエリを §8 予算超で待たせない |
+| unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | integration（モデル有・任意/手動） | `zenz-v3.1-small-gguf` 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |

@@ -504,6 +504,40 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackTypedKey
   EXPECT_EQ(h.service.preedit_kana_, u8"あ");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRestoresCandidateState) {
+  TextServiceHarness h;
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  std::vector<azookey::ipc::CandidateField> candidates;
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = u8"蚊";
+  candidate.reading = u8"か";
+  candidate.source = "test";
+  candidates.push_back(candidate);
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+
+  BOOL eaten = TRUE;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, 'N', 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_EQ(eaten, FALSE);
+  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackBackspaceAndEscape) {
   TextServiceHarness h;
 

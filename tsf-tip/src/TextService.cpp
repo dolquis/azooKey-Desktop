@@ -384,20 +384,60 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
 
-    const bool cand_visible = candidate_window_.IsVisible();
+    struct PreeditRollbackState {
+      std::string preedit;
+      core::RomajiKanaConverter romaji;
+      bool candidate_window_visible{false};
+      int selected_candidate_idx{0};
+      std::vector<ipc::CandidateField> shown_candidates;
+      std::vector<ipc::CandidateField> cached_candidates;
+      bool candidate_window_show_pending{false};
+    };
+    auto capture_preedit_rollback_state = [&]() {
+      PreeditRollbackState state;
+      state.preedit = preedit_kana_;
+      state.romaji = romaji_;
+      state.candidate_window_visible = candidate_window_.IsVisible();
+      state.selected_candidate_idx = selected_candidate_idx_;
+      state.shown_candidates = shown_candidates_;
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        state.cached_candidates = candidates_;
+        state.candidate_window_show_pending = candidate_window_show_pending_;
+      }
+      return state;
+    };
+    auto restore_preedit_state = [&](const PreeditRollbackState& state) {
+      preedit_kana_ = state.preedit;
+      romaji_ = state.romaji;
+      selected_candidate_idx_ = state.selected_candidate_idx;
+      shown_candidates_ = state.shown_candidates;
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_ = state.cached_candidates;
+        candidate_window_show_pending_ = state.candidate_window_show_pending;
+      }
+      if (state.candidate_window_visible && !state.shown_candidates.empty()) {
+        std::vector<std::wstring> items;
+        for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
+        POINT pt = caret_pt_;
+        if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+        candidate_window_.Show(pt, items, state.selected_candidate_idx);
+      }
+    };
     auto request_preedit_update_or_restore_on_oom =
-        [&](const std::string& previous_preedit,
-            const core::RomajiKanaConverter& previous_romaji) -> HRESULT {
+        [&](const PreeditRollbackState& rollback_state) -> HRESULT {
       const HRESULT update_hr = RequestPreeditUpdate(context);
       if (update_hr == E_OUTOFMEMORY) {
-        preedit_kana_ = previous_preedit;
-        romaji_ = previous_romaji;
+        restore_preedit_state(rollback_state);
         return update_hr;
       }
       return S_OK;
     };
 
+    const bool cand_visible = candidate_window_.IsVisible();
     if (wParam >= 'A' && wParam <= 'Z') {
+      const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
       if (cand_visible) {
         candidate_window_.Hide();
@@ -411,11 +451,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidates_.clear();
         candidate_window_show_pending_ = false;
       }
-      const std::string previous_preedit = preedit_kana_;
-      const auto previous_romaji = romaji_;
       preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
-      const HRESULT update_hr =
-          request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;
@@ -425,6 +462,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       // 長音: composition 中のハイフンキー（主キー・テンキー）を長音符「ー」として
       // preedit に取り込む。composition が無いときは本分岐に入らず、ハイフンはアプリへ
       // パススルーする。
+      const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_window_.Hide();
         selected_candidate_idx_ = 0;
@@ -434,16 +472,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidates_.clear();
         candidate_window_show_pending_ = false;
       }
-      const std::string previous_preedit = preedit_kana_;
-      const auto previous_romaji = romaji_;
       preedit_kana_ += romaji_.Feed('-');
-      const HRESULT update_hr =
-          request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
       PostQueryCandidates(preedit_kana_);
       *eaten = TRUE;
 
     } else if (wParam == VK_BACK) {
+      const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_window_.Hide();
         selected_candidate_idx_ = 0;
@@ -458,14 +494,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidate_window_show_pending_ = false;
         }
         auto& s = preedit_kana_;
-        const std::string previous_preedit = preedit_kana_;
-        const auto previous_romaji = romaji_;
         size_t i = s.size();
         while (i > 0 && (s[i - 1] & 0xC0) == 0x80) --i;
         if (i > 0) --i;
         s.erase(i);
-        const HRESULT update_hr =
-            request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         if (!preedit_kana_.empty()) PostQueryCandidates(preedit_kana_);
         *eaten = TRUE;
@@ -473,13 +506,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_SPACE) {
       // Flush any pending romaji so the reading is complete.
-      const std::string previous_preedit = preedit_kana_;
-      const auto previous_romaji = romaji_;
+      const auto rollback_state = capture_preedit_rollback_state();
       const std::string flushed = romaji_.Flush();
       if (!flushed.empty()) {
         preedit_kana_ += flushed;
-        const HRESULT update_hr =
-            request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         // Reading changed due to romaji flush; old candidates are now stale.
         // Clear them and query for the updated reading so the candidate window
@@ -570,8 +601,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         selected_candidate_idx_ = 0;
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
-        const std::string previous_preedit = preedit_kana_;
-        const auto previous_romaji = romaji_;
+        const auto rollback_state = capture_preedit_rollback_state();
         preedit_kana_.clear();
         romaji_.Reset();
         {
@@ -579,8 +609,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidates_.clear();
           candidate_window_show_pending_ = false;
         }
-        const HRESULT update_hr =
-            request_preedit_update_or_restore_on_oom(previous_preedit, previous_romaji);
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
       }

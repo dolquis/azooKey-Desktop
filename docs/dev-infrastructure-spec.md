@@ -1068,9 +1068,9 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-004 | Host プロセス存在 | — | プロセス不在 | ✗（起動案内のみ。自動起動は M42 / 起動経路の責務） |
 | D-005 | 接続 + Handshake Ready | — | 接続不可 or Handshake 失敗 | ✗ |
 | D-006 | Ping RTT ≤ 100ms | 100ms < RTT ≤ 500ms | RTT > 500ms or 無応答（§8.5.2 Ping timeout） | ✗ |
-| D-007 | `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | パス未設定（既定で SimpleConverter） | 設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
-| D-008 | モデルが `valid`（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | 未ロード（fallback 動作中） | 形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
-| D-009 | `fallback_state == healthy` | `degraded_simple` / `degraded_model` | `safe_mode` | ✗（復旧は D-005 / D-008 修復経由） |
+| D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
+| D-008 | `model.enabled=false`、または enabled かつモデルが `valid`（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled だが未ロード（fallback 動作中） | enabled かつ形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
+| D-009 | `fallback_state == healthy`、または `model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化） | `safe_mode` | ✗（復旧は D-005 / D-008 修復経由） |
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
@@ -1091,6 +1091,10 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 （機能を選択したのに資格情報が欠落している状態）。`warning` / `error` は
 migration 要・読み込み不可・破損・**選択中機能の資格情報欠落**、または
 **設定済みの値が期待どおり復号 / 読込できない**場合に限る。
+同様に、`model.enabled=false`（SimpleConverter 固定。model-management-spec
+§モデル設定）は Zenzai を使わない意図的構成のため、D-007 / D-008 / D-009 は
+`ok`（該当なし）とし、モデル未選択・未ロード・`degraded_model` を `warning`
+扱いしない。これらが `warning` になるのは `model.enabled=true` のときのみ。
 
 ### 12.3 `azookey_diag.exe` CLI
 

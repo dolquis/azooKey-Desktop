@@ -1272,7 +1272,8 @@ D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行可能とする。
 
 - クリーン環境で全項目チェックが実行できる
 - Host 未起動でも診断アプリがクラッシュしない
-- Zenzai モデル未配置時に `warning` として fallback 状態を表示する
+- Zenzai 有効でモデル未選択（`model.selectedPath` 空）時に `warning`、
+  設定済みパスが不在の場合は `error` として fallback 状態を表示する（§12.2.1 D-007 / D-008）
 - 診断 ZIP に秘密情報が含まれない（snapshot テストで保証）。各 ZIP メンバが
   §12.5 の redaction ルール表どおりに処理される
 - `--json` 出力が stable schema としてテストされる

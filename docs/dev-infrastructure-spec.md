@@ -1167,7 +1167,9 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 
 - `status` は `checks[].status` の最悪値（error > warning > ok）。
 - 各 ZIP メンバの突き合わせは §7.3 の相関 ID では行わず、診断は単発スナップショット。
-  `host-health.json` は §12.6 `QueryDiagnostics` の payload をそのまま保存する。
+  `host-health.json` は §12.6 `QueryDiagnostics` の payload を保存する。ただし
+  自由文字列の `last_error` / `ep_last_error` はパス正規化 + 本文 redaction を
+  通してから保存し（§12.5 / §12.6）、生の payload を**そのまま書き出す経路は持たない**。
 - 新しい check は `D-0NN` を末尾追加（後方互換）。既存 ID の `name` 改名は破壊的変更扱い。
 
 ### 12.5 機密情報の取り扱い

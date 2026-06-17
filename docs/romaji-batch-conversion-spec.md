@@ -263,6 +263,17 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   - control: `Cancel`（fire-and-forget。ハンドラは `nullopt` 応答）専用。`BatchConverting`
     中の Esc / 追加打鍵で、in-flight な各サブリクエスト ID に対し control 接続から
     `Cancel` を送る（§6.3.3 論理バッチ）。
+  - **control 接続は最初に自身の Handshake を完了してから Cancel を送る（必須）**:
+    host の認証状態は**接続単位**で持たれる（`inference-host/src/main.cpp` は接続ごとに
+    `Dispatcher` を生成し、`Dispatcher::Dispatch` は `AZOOKEY_IPC_HANDSHAKE_TOKEN` /
+    `--handshake-token` 設定時、Handshake 以外を `authenticated_` 確立まで
+    `HandleUnauthenticated` で拒否する。`Cancel` も認証ゲートの後）。したがって control
+    接続が Handshake を踏まないと、token 保護構成では `Cancel` が未認証として捨てられ
+    out-of-band cancel が**無言で効かなくなる**。control 接続は primary と同じ
+    `handshake_token` で Handshake を済ませてから Cancel を送る。
+  - 共有 `CancellationRegistry` / scheduler は process-wide（全接続の `Dispatcher` が同一
+    インスタンスを参照。`inference-host/src/main.cpp`）なので、認証済み control 接続から
+    の `Cancel` は primary 接続で in-flight な変換に到達する（§6.3.2 冒頭の機構）。
 - **capability ネゴシエーション**: out-of-band cancel は host 側の共有レジストリ +
   協調キャンセル実装に依存する。§6.4.3 で追加する `HandshakeResponse.capabilities` に
   **`"oob_cancel"`** を載せて広告する。
@@ -524,7 +535,10 @@ return { ok: true }
   `CancellationRegistry` 経由で、別接続（control 接続相当）からの `Cancel` が in-flight な
   長い `QueryBatchConversion` をチャンク境界で中止させ、canceled 応答（部分結果なし・
   確定不可）を 1 つ返すこと。パイプにバッファされ未読のサブリクエストが冒頭の
-  `IsCanceled` チェックで変換せず短絡すること（§6.3.2）。
+  `IsCanceled` チェックで変換せず短絡すること（§6.3.2）。token 保護構成
+  （`handshake_token` 設定）では、Handshake 前の control 接続からの `Cancel` が
+  `HandleUnauthenticated` で捨てられ in-flight を止めないこと、Handshake 済み control
+  接続からの `Cancel` が共有 registry/scheduler 経由で停止させることの双方を検証（§6.3.2）。
 - **論理バッチ集約・タイムアウト** (`core/tests` + `inference-host/tests`): 複数サブ
   リクエストの全 `partial:false` 受信まで `Selecting` へ遷移しないこと、いずれかの
   サブリクエストが `T_sub` タイムアウト / エラーのとき部分確定せず全 in-flight を

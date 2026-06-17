@@ -1101,7 +1101,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `CancellationRegistry` + チャンク境界協調キャンセル**。spec §6.3.2）。同期 ClientLoop +
     単一接続では遅い変換中に Cancel が処理されないため必須。host は `HandshakeResponse.
     capabilities` に `"oob_cancel"` を広告し、TIP は対応 host にのみ依存（非対応 host は
-    best-effort Cancel + 結果破棄に fallback）
+    best-effort Cancel + 結果破棄に fallback）。host 認証は接続単位のため、control 接続は
+    primary と同じ `handshake_token` で Handshake 後に Cancel を送る（token 保護構成で
+    Cancel が無言で捨てられるのを防ぐ。spec §6.3.2）
   - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ。
     文境界が無い場合はバイト安全ハード分割でフォールバック）
   - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→

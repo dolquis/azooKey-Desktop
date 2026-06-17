@@ -1097,8 +1097,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   協調キャンセル**で実現し（spec §6.3.2 で確定）、`NamedPipeTransport` の多重応答改造は
   不要（spec §6.3.5）。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
-  - アウトオブバンドな Cancel 経路（**確定: Cancel 専用 control 接続 + host 共有
-    `CancellationRegistry` + チャンク境界協調キャンセル**。spec §6.3.2）。同期 ClientLoop +
+  - アウトオブバンドな Cancel 経路（**確定: Cancel 専用 control 接続 + 既存
+    `RequestScheduler` を `(trace_id, request_id)` キーへ一般化した共有レジストリ +
+    チャンク境界協調キャンセル**。新規並行構造は作らず `TrackCancellation` /
+    `IsCanceled` / `CompleteRequest` / prune を踏襲し、全終端パスで `CompleteRequest`
+    してエントリをリークさせない。spec §6.3.2）。同期 ClientLoop +
     単一接続では遅い変換中に Cancel が処理されないため必須。host は `HandshakeResponse.
     capabilities` に `"oob_cancel"` を広告し、TIP は対応 host にのみ依存（非対応 host は
     best-effort Cancel + 結果破棄に fallback）。host 認証は接続単位のため、control 接続は

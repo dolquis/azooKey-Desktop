@@ -246,10 +246,14 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
 
 確定した機構:
 
-- **host 側 共有キャンセルレジストリ**: host は接続をまたいで共有されるスレッド
-  セーフな `CancellationRegistry`（process-wide）を 1 つ持ち、全 per-connection ハンドラ
-  がこれをキャプチャする（`NamedPipeServer::Start(handler)` が `shared` を全接続で
-  共有するのと同じパターン。接続ごとの分離状態とは別に共有する）。
+- **host 側 共有キャンセルレジストリ = 既存 `RequestScheduler` の一般化**: 新しい並行
+  構造は作らず、**既存 `RequestScheduler`（`inference-host/.../RequestScheduler.{h,cpp}`、
+  全 `Dispatcher` が `scheduler_` で共有する process-wide オブジェクト）の cancel-state
+  マップを `(trace_id, request_id)` キーへ一般化**して使う。既存の
+  `TrackCancellation` / `IsCanceled` / `Cancel` / `CompleteRequest` /
+  `PruneInactiveBefore` のライフサイクルをそのまま踏襲する（本書では便宜上
+  「キャンセルレジストリ」と呼ぶが実体は `RequestScheduler`）。接続をまたいで共有
+  される点は既存と同じ（接続ごとの分離状態とは別に共有）。
   - **レジストリのキーは `(trace_id, request_id)`（`target_request_id` 単独ではない）**:
     `request_id` は allocator ごとの単調増加で**グローバル一意ではない**（TIP の
     `ipc_pending_id_` はインスタンスごと。`docs/dev-infrastructure-spec.md` §相関 ID
@@ -261,14 +265,25 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
     `docs/dev-infrastructure-spec.md` の「3 つ目の ID 概念を導入しない」方針に従い、
     新たな session/cancel トークンは足さない）。
   - `MessageType::Cancel` を受けた接続は（どの接続でも）受信 envelope の `trace_id` と
-    `target_request_id` で `registry.RequestCancel(trace_id, target_request_id)` を呼ぶ。
-  - `QueryBatchConversion` ハンドラは自身の `(trace_id, request_id)` をレジストリに登録し、
-    §7 の host 側チャンク分割の**各チャンク境界で `registry.IsCanceled(trace_id,
-    request_id)` を協調的にポーリング**する。canceled なら以降のチャンク変換を中止し、
-    現接続へ「canceled」応答（部分結果なし・確定不可）を 1 つ返して終了する
-    （1 リクエスト 1 応答契約を維持）。
+    `target_request_id` で `scheduler_->Cancel(trace_id, target_request_id)` を呼ぶ。
+  - `QueryBatchConversion` ハンドラは処理開始時に自身の `(trace_id, request_id)` を
+    `TrackCancellation(trace_id, request_id)` で登録し、§7 の host 側チャンク分割の
+    **各チャンク境界で `IsCanceled(trace_id, request_id)` を協調的にポーリング**する。
+    canceled なら以降のチャンク変換を中止し、現接続へ「canceled」応答（部分結果なし・
+    確定不可）を 1 つ返して終了する（1 リクエスト 1 応答契約を維持）。
   - パイプにバッファされ未読のサブリクエストは、`ClientLoop` が読み出した時点で
     ハンドラが**冒頭で `IsCanceled` を確認**し、変換せず canceled 応答で短絡する。
+  - **終端パスでの cleanup（必須・リーク防止）**: ハンドラは**全ての終端パス**
+    （最終 `partial:false` / canceled / エラー応答のいずれを返す場合も）で
+    `CompleteRequest(trace_id, request_id)` を呼ぶ（既存 `Dispatcher` が
+    `scheduler_->CompleteRequest(request_id_)` を呼ぶのと同じ。`active_count` を減算し
+    0 で当該エントリを erase）。これにより長時間稼働 host でバッチごとのエントリが
+    無限に残らない。さらに、query が一度も走らなかった `(trace_id, request_id)` への
+    `Cancel`（先行到着・取りこぼし）で生じる**孤児 cancel マーカ**は、既存
+    `PruneInactiveBefore` 相当の掃除（`active_count == 0` の非アクティブエントリを
+    プルーン）で回収し、cancel-state マップの非有界増加を防ぐ。`trace_id` キーは
+    クライアントをまたぐため、プルーンは単調 `request_id` 軸ではなく非アクティブ
+    マーカの TTL / 上限で行う（具体値は実装で規定）。
 - **TIP 側 制御接続**: TIP は同一パイプへ 2 本の `NamedPipeClient` 接続を張る。
   - primary: `QueryBatchConversion` / `CommitSegmentsObservation` 等の query と応答。
   - control: `Cancel`（fire-and-forget。ハンドラは `nullopt` 応答）専用。`BatchConverting`
@@ -577,7 +592,10 @@ return { ok: true }
   **クロスクライアント分離**: 2 つのクライアント（別 `trace_id`）が同じ `request_id` を
   持つとき、片方の `(trace_id, request_id)` への `Cancel` が他方の in-flight バッチを
   キャンセルしないこと（レジストリが `(trace_id, request_id)` でキーされ、`request_id`
-  単独では引かないこと。§6.3.2）。
+  単独では引かないこと。§6.3.2）。**レジストリ cleanup** (`scheduler_test.cpp`):
+  終端パス（最終 `partial:false` / canceled / エラー）で `CompleteRequest(trace_id,
+  request_id)` によりエントリが erase されること、query が走らなかった孤児 cancel
+  マーカがプルーンされ cancel-state マップが非有界増加しないこと（§6.3.2 cleanup）。
 - **論理バッチ集約・タイムアウト** (`core/tests` + `inference-host/tests`): 複数サブ
   リクエストの全 `partial:false` 受信まで `Selecting` へ遷移しないこと、いずれかの
   サブリクエストが `T_sub` タイムアウト / エラーのとき部分確定せず全 in-flight を

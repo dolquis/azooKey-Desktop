@@ -1119,9 +1119,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
     Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は control 接続から
     各 in-flight サブリクエスト ID へ個別送信。タイムアウト / エラー時は部分確定せず
-    全 in-flight を Cancel して fallback 連鎖へ。応答は `request_id` で相関し、タイム
-    アウト / キャンセル済み ID の stale 応答は fallback / 新バッチ送信前に drain・破棄
-    （または primary 再接続）して古い segments の誤結合を防ぐ（spec §6.3.3）
+    全 in-flight を Cancel して fallback 連鎖へ。host キャンセルレジストリと TIP 応答相関は
+    `(trace_id, request_id)` でキーする（`request_id` 単独はインスタンスごと採番で衝突し、
+    別クライアントを誤キャンセルするため。`trace_id` は全 envelope 必須の UUIDv7）。
+    タイムアウト / キャンセル済みの stale 応答は fallback / 新バッチ送信前に drain・破棄
+    （または primary 再接続）して古い segments の誤結合を防ぐ（spec §6.3.2・§6.3.3）
   - 既定の正しさ経路は現行トランスポートの 1 リクエスト 1 応答契約に従い、host 内部
     チャンク分割で `partial:false` を 1 つ返す（進捗はサブリクエスト粒度）
   - request 内 `partial:true` 逐次表示（同一 `request_id` への複数応答ストリーミング、

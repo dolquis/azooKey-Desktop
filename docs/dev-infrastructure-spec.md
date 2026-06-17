@@ -534,7 +534,7 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 | ID | 型 | 粒度 | 発番元 |
 |---|---|---|---|
-| `request_id` | uint64（≥1, allocator ごとに単調増加） | IPC リクエスト 1 往復 | **TIP（client）採番**。`QueryCandidates`/staleness は `ipc_pending_id_`、fire-and-forget（commit / cancel 等）は接続ローカル連番（§7.3 注記）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
+| `request_id` | uint64（≥1, allocator ごとに単調増加） | IPC リクエスト 1 往復 | **TIP（client）採番**。`QueryCandidates`/staleness は `ipc_pending_id_`、送信キュー（`CommitObservation` / `Cancel`）は接続ローカル連番（§7.3 注記）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
 | `trace_id` | string（UUIDv7 推奨） | ユーザー 1 アクション（キー押下 → UI 更新） | TIP が `OnKeyDown` で発番（§7.7.1） |
 
 - 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
@@ -545,10 +545,15 @@ backend 選択、query latency、error、exception summary、learning/user-dict
   TIP には 2 系統の allocator があり、実装はこの分担を維持する（新たに統合しない）:
   - `ipc_pending_id_`（TIP メンバ）— `QueryCandidates` の応答相関と staleness 判定
     （M10、`req_id == ipc_pending_id_`）・`Cancel.target_request_id` に用いる「最新リクエスト」id。
-  - 接続ローカル連番（`next_id`、Handshake=1 の後 2 から開始）— 応答相関を要しない
-    fire-and-forget envelope（`CommitObservation` 等）の wire id。
+  - 接続ローカル連番（`next_id`、Handshake=1 の後 2 から開始）— 送信キュー
+    （`ipc_send_queue_`）に積む `CommitObservation` / `Cancel` の wire id。このキューは
+    応答有無が混在する: **`CommitObservation` は応答あり**（TIP が `expects_response=true`
+    で送り、`CommitObservationResponse` を待つ。`tsf-tip/src/TextService.cpp` /
+    `inference-host/src/Dispatcher.cpp`）、**`Cancel` のみ応答なし**。
   どちらも `tsf-tip/src/TextService.cpp`。ログ相関では `(trace_id, request_id)` に加え
-  MessageType で系統を区別する。
+  MessageType で系統を区別する。`CommitObservation` の応答は**必ず受信・相関する**
+  （読み飛ばすと次の受信が stale 応答を拾い pipe ストリームが desync するため、
+  「応答なし」扱いにできるのは `Cancel` のみ）。
 - Host の `RequestScheduler`（`inference-host/src/RequestScheduler.cpp`）は wire
   `request_id` を **発番しない**。TIP 由来の id をキーに cancellation / latest 追跡を
   行う側であり、`NextRequestId()` は wire ID の採番元ではない。
@@ -709,6 +714,24 @@ trace は以下のいずれかで明示有効化する:
 
 サンプリングレート（`latencyTracing.sampleRate`、既定 0.01）で本番でも
 低コストで取得可能にする。
+
+`settings.latencyTracing.*` を設定 GUI から扱うため、M51 実装時に
+`settings/mvp-settings.schema.json`（root が `additionalProperties: false` のため
+未定義トップレベルキーは reject される）へ以下を追加する。スキーマ追加と読み書き
+パスを同じ PR / コミットで揃え、永続化されない不整合状態を作らない（§8.5.3
+`safeMode` と同じ方針）:
+
+```json
+"latencyTracing": {
+  "type": "object",
+  "description": "M51: レイテンシ内訳トレースの取得設定",
+  "properties": {
+    "enabled": { "type": "boolean", "default": false },
+    "sampleRate": { "type": "number", "default": 0.01, "minimum": 0.0, "maximum": 1.0 }
+  },
+  "additionalProperties": false
+}
+```
 
 ### M51 受け入れ条件
 

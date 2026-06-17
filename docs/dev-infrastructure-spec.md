@@ -817,12 +817,18 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 |---|---|---|---|
 | `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent） | Ping 500ms / QueryCandidates fast 150ms / Live 80ms / Heavy 800ms 超過 |
 | `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 or 推論 timeout | Model load 30s / 推論 deadline 超過 |
-| `DegradedSimple` | `Recovering` | 再接続成功（pipe 再確立 + Handshake） | exponential backoff（§8.3） |
-| `DegradedModel` | `Recovering` | `LoadModel` 再ロード受理 | Model load 30s |
-| `Recovering` | `Healthy` | health OK（Ping 往復成功） | Ping 500ms 以内 |
-| `Recovering` | `DegradedSimple` / `DegradedModel` | 再接続 / 再ロード失敗 | 同上 timeout 再超過 |
+| `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake） | exponential backoff（§8.3） |
+| `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` 再ロード**受理**（完了ではない） | Model load 30s |
+| `Recovering`（transport 復旧） | `Healthy` | Ping 往復成功（pipe + Handshake Ready） | Ping 500ms 以内 |
+| `Recovering`（model 復旧） | `Healthy` | **`LoadModelResponse.ok==true` かつ `model_loaded==true`**（または Health の `model_loaded==true`）。Ping 成功だけでは遷移しない | Model load 30s |
+| `Recovering`（transport 復旧） | `DegradedSimple` | 再接続失敗 / 再 timeout | 同上 timeout 再超過 |
+| `Recovering`（model 復旧） | `DegradedModel` | 再ロード失敗 / timeout / `model_loaded==false` | Model load 30s 超過 |
 | `Any` | `SafeMode` | Host プロセスが 60s 以内に 3 回連続クラッシュ（§8.5.3） | crash カウンタ ≥3 / 60s |
 | `SafeMode` | `Healthy` | ユーザーが手動解除（`settings.safeMode.enabled=false`） | 手動のみ（自動復帰しない） |
+
+`Recovering` は突入元（transport / model）を保持し、退出条件は元の劣化種別に対応する
+ものだけを満たす。model 復旧中は pipe が生きていても（Ping OK）モデル未ロードのうちは
+`DegradedModel` に留め、`degraded-model` UI（§8.5.4）を消さない。
 
 #### 8.5.2 timeout 表
 

@@ -481,6 +481,16 @@ TEST_F(DispatcherTest, UpdateConfigWithoutSettingsStoreReturnsError) {
   EXPECT_EQ(*parsed->error, "settings store not configured");
 }
 
+TEST_F(DispatcherTest, DispatcherConfigCopiesShareUpdateConfigMutex) {
+  azookey::host::DispatcherConfig config;
+  const auto shared_mutex = config.update_config_mutex;
+  azookey::host::DispatcherConfig copy = config;
+
+  ASSERT_TRUE(shared_mutex);
+  EXPECT_EQ(copy.update_config_mutex, shared_mutex);
+  EXPECT_NE(azookey::host::DispatcherConfig{}.update_config_mutex, shared_mutex);
+}
+
 TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
   const auto settings_path = TempPath("azookey_dispatcher_settings.json");
   std::remove(settings_path.c_str());

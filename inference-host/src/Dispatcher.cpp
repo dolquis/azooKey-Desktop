@@ -85,7 +85,11 @@ Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
       scheduler_(scheduler),
       user_dict_(user_dict),
       settings_store_(settings_store),
-      config_(std::move(config)) {}
+      config_(std::move(config)) {
+  if (!config_.update_config_mutex) {
+    config_.update_config_mutex = std::make_shared<std::mutex>();
+  }
+}
 
 std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
   if (req.type != ipc::MessageType::Handshake && RequiresAuthenticatedSession()) {
@@ -308,6 +312,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
     return MakeResponse(req, ipc::BuildUpdateConfigResponse(res));
   }
 
+  std::lock_guard<std::mutex> lock(*config_.update_config_mutex);
   const auto load_result = settings_store_->Reload();
   auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings);
   engine_->ApplyConfig(next_config);

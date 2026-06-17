@@ -1043,8 +1043,8 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-004 | Host 起動 | Host プロセスが存在するか | Host 起動 |
 | D-005 | IPC Handshake | Named Pipe 接続 + Handshake 成功 | Host 再起動 |
 | D-006 | IPC Ping | Ping 往復 latency 測定 | pipe / firewall / Host 状態確認 |
-| D-007 | モデルパス | 設定上のモデルファイルが存在するか | モデル選択 UI（M45）へ誘導 |
-| D-008 | モデル検証 | GGUF magic / version / metadata 確認 | 破損モデル扱い |
+| D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
+| D-008 | モデル検証 | 形式別検証（R1=GGUF magic / version、R2=`genai_config.json` + 参照 ONNX） | 破損モデル扱い |
 | D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行 |
 | D-010 | learning store | 読み込み可能か、破損していないか | バックアップ後に初期化 |
 | D-011 | user dict | JSON 読み込み可能か | バックアップ後に修復 |
@@ -1068,8 +1068,8 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-004 | Host プロセス存在 | — | プロセス不在 | ✗（起動案内のみ。自動起動は M42 / 起動経路の責務） |
 | D-005 | 接続 + Handshake Ready | — | 接続不可 or Handshake 失敗 | ✗ |
 | D-006 | Ping RTT ≤ 100ms | 100ms < RTT ≤ 500ms | RTT > 500ms or 無応答（§8.5.2 Ping timeout） | ✗ |
-| D-007 | 設定パスのモデルファイル存在 | パス未設定（既定で SimpleConverter） | 設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
-| D-008 | GGUF magic / version / metadata 妥当 | 未ロード（fallback 動作中） | magic 不一致 / version 非対応 / 破損 | ✗ |
+| D-007 | `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | パス未設定（既定で SimpleConverter） | 設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
+| D-008 | モデルが `valid`（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | 未ロード（fallback 動作中） | 形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
 | D-009 | `fallback_state == healthy` | `degraded_simple` / `degraded_model` | `safe_mode` | ✗（復旧は D-005 / D-008 修復経由） |
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
@@ -1188,7 +1188,7 @@ ZIP メンバごとの redaction ルールを以下に固定する。本文系�
 | ZIP メンバ | redaction ルール |
 |---|---|
 | `diag.json` | §12.4 stable schema の制約に従い `message` / `details` に本文・候補・prompt を含めない。パス中のユーザー名は `%LOCALAPPDATA%` 等の環境変数表記へ正規化する |
-| `settings.redacted.json` | API key 等の機密 field を `***redacted***` に置換（§7.6 共通関数） |
+| `settings.redacted.json` | API key 等の機密 field に加え、Magic Conversion prompt 系 field（`promptPrefixByApp` の各値、および移行後の `profilesByApp[].promptPrefix`）を `***redacted***` に置換。§7.6 はログ本文の正典で settings の prompt field を対象に含めないため、診断 ZIP では本欄で明示的に redact し、§12.5 の「prompt を含めない」方針と整合させる |
 | `host-health.json` | §12.6 `QueryDiagnostics` payload のみ（本文系 field を持たない） |
 | `ipc-ping.json` | RTT / 成否のみ |
 | `logs/*.jsonl` | §7.6 を適用済みのログを収集（Release 既定で本文なし）。Debug かつ `AZOOKEY_LOG_BODY=1` の本文入りログは収集時に再 redact する |

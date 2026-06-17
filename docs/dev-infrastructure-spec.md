@@ -1075,7 +1075,7 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
-| D-014 | 復号成功、または機密未設定（`aiBackend=none` / `openAiApiKey` 空 = 該当なし） | — | 設定済みの暗号化値（`dpapi:` prefix 付き）が復号失敗 | ✗（再認証 / 再入力を促す） |
+| D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ鍵が設定済みで復号成功 | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | 設定済みの暗号化値（`dpapi:` prefix 付き）が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | 前面アプリで TSF context 取得可 | 既知の best-effort / recorder アプリ（§13.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
 
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
@@ -1084,9 +1084,12 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 アイコン（✅ / ⚠️ / ❌）に対応させる。任意データ・任意機密の「未設定」は
 正常系として扱い、`warning` を出さない。具体的には、クリーンインストール
 直後で学習・辞書が空（`UserDictionary::Load()` は欠損ファイルを空の成功
-ロードとして扱う）の D-010 / D-011 と、AI 未設定（`aiBackend=none` /
-`openAiApiKey` 空）で復号対象の機密が無い D-014 は `ok` とする。
-`warning` / `error` は migration 要・読み込み不可・破損、または
+ロードとして扱う）の D-010 / D-011 と、OpenAI 鍵を必要としない構成
+（`aiBackend` が `none` / `local-zenzai`）で復号対象の機密が無い D-014 は
+`ok` とする。ただし `aiBackend=openai` で `openAiApiKey` が空の場合は、
+選択中の AI backend が認証できないため D-014 を `warning` とする
+（機能を選択したのに資格情報が欠落している状態）。`warning` / `error` は
+migration 要・読み込み不可・破損・**選択中機能の資格情報欠落**、または
 **設定済みの値が期待どおり復号 / 読込できない**場合に限る。
 
 ### 12.3 `azookey_diag.exe` CLI

@@ -1663,15 +1663,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 対象アプリ: Notepad / WordPad / Edge / Chrome / Firefox / VS Code /
     Discord / Slack / Word / Excel / Outlook / Windows Terminal /
     Windows Settings
-  - テストケース C-001〜C-010（`nihongo` Space-Enter / Backspace / ESC /
+  - テストケース C-001〜C-012（`nihongo` Space-Enter / Backspace / ESC /
     候補位置 / マルチディスプレイ端 / DPI 150% / 絵文字 / Undo Redo /
-    フォーカス移動 / Host kill 中）
+    フォーカス移動 / Host kill 中 / ショートカット・修飾キー透過 /
+    ローマ字 ja-ju-jo 系）
   - 実装方針: UI Automation + SendInput + screenshot による半自動テスト。
-    完全自動化が難しい Office はチェックリスト + recorder で代替可
+    完全自動化が難しい Office はチェックリスト + recorder で代替
+    （詳細は spec §13.3.1）
   - 出力: `compat-report-YYYYMMDD/{report.md, report.json, screenshots/,
     logs/, failures/}`
 - **受け入れ条件**:
-  - Notepad / VS Code / Edge で最低限の自動テストが通る
+  - Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
+  - Office（Word / Excel / Outlook）が手動チェックリスト（spec §13.3.1）で
+    検証され、結果が `report.md` に記録される
   - 失敗時にスクリーンショットとログが保存される
   - report.json が CI artifact としてアップロードできる
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §13

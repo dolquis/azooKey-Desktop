@@ -1401,6 +1401,16 @@ compat-test/
 ```
 
 各 target JSON は AppId / window class / 自動化レベルを定義する。
+
+**クリップボード安全化（C-011）**: C-011 は `Ctrl+V` 貼り付けの透過を検証する
+ため、実機・self-hosted runner の実クリップボードに依存すると利用者の私的な
+クリップボード内容を対象アプリに貼り付け、§13.5 の screenshot / log artifact
+として保存してしまうおそれがある。ハーネスは **C-011 実行直前に決定的な
+テストデータでクリップボードを置換し、実行後に元の内容を復元する**こと
+（復元失敗時も元データを artifact に残さない）。クリップボード退避が
+不可能な環境では C-011 の `Ctrl+V` を自動ゲートから除外し、§13.3.1 相当の
+手動確認に回す。
+
 本ディレクトリの雛形（README + `targets/notepad.json` サンプル）は
 `compat-test/` に置く。雛形はまだ CMake のビルド対象に組み込まず（トップ
 `CMakeLists.txt` は `add_subdirectory` を明示列挙する方式）、M50 実装時に

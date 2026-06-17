@@ -1071,8 +1071,8 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-007 | 設定パスのモデルファイル存在 | パス未設定（既定で SimpleConverter） | 設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
 | D-008 | GGUF magic / version / metadata 妥当 | 未ロード（fallback 動作中） | magic 不一致 / version 非対応 / 破損 | ✗ |
 | D-009 | `fallback_state == healthy` | `degraded_simple` / `degraded_model` | `safe_mode` | ✗（復旧は D-005 / D-008 修復経由） |
-| D-010 | 読み込み成功・schema 妥当 | エントリ 0 件（新規） | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
-| D-011 | JSON 読み込み成功 | エントリ 0 件 | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
+| D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
+| D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
 | D-014 | 暗号化データを復号成功 | 暗号化データ未設定（API key 等が無い） | 復号失敗 | ✗（再認証 / 再入力を促す） |
@@ -1081,7 +1081,10 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
 （`error` > `warning` > `ok`）とする。`warning` は「縮退しているが入力は
 継続できる」、`error` は「当該機能が成立しない」を意味し、UI（§12.7）の
-アイコン（✅ / ⚠️ / ❌）に対応させる。
+アイコン（✅ / ⚠️ / ❌）に対応させる。クリーンインストール直後で学習・辞書が
+空（`UserDictionary::Load()` は欠損ファイルを空の成功ロードとして扱う）の
+状態は正常系であり、D-010 / D-011 は `ok` とする。`warning` / `error` は
+migration 要・読み込み不可・破損に限る。
 
 ### 12.3 `azookey_diag.exe` CLI
 
@@ -1414,7 +1417,7 @@ CI で常時実行するとコストが高いため、`compat-test` ラベル付
 
 ### M50 受け入れ条件
 
-- Notepad / VS Code / Edge で C-001〜C-010 の自動テストが通る
+- Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
 - Office（Word / Excel / Outlook）が §13.3.1 の手動チェックリストで検証され、
   結果が `report.md` の Office セクションに記録される
 - 失敗時にスクリーンショットとログが `failures/` に保存される

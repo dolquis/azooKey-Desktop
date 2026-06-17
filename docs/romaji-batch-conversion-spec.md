@@ -278,12 +278,23 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
     `CompleteRequest(trace_id, request_id)` を呼ぶ（既存 `Dispatcher` が
     `scheduler_->CompleteRequest(request_id_)` を呼ぶのと同じ。`active_count` を減算し
     0 で当該エントリを erase）。これにより長時間稼働 host でバッチごとのエントリが
-    無限に残らない。さらに、query が一度も走らなかった `(trace_id, request_id)` への
-    `Cancel`（先行到着・取りこぼし）で生じる**孤児 cancel マーカ**は、既存
-    `PruneInactiveBefore` 相当の掃除（`active_count == 0` の非アクティブエントリを
-    プルーン）で回収し、cancel-state マップの非有界増加を防ぐ。`trace_id` キーは
-    クライアントをまたぐため、プルーンは単調 `request_id` 軸ではなく非アクティブ
-    マーカの TTL / 上限で行う（具体値は実装で規定）。
+    無限に残らない。
+  - **送信済みサブリクエストの cancel マーカは読み出し / 終端まで保持（必須）**:
+    論理バッチは複数サブリクエストを primary パイプにまとめて送るため、先頭の長い
+    変換中に後続サブリクエストは**未読のままキュー**に残る。これらに対する `Cancel`
+    （Esc / 追加打鍵）で生じるマーカは `active_count == 0`（まだ `TrackCancellation`
+    されていない）だが、**`ClientLoop` がそのフレームを読むまでプルーンしてはならない**。
+    プルーンすると、ハンドラ冒頭の `IsCanceled(trace_id, request_id)` がマーカを取り
+    こぼし、キャンセル済みの queued サブリクエストが変換されてしまい out-of-band
+    cancel 契約を破る。したがって、**TIP が実際に送った `(trace_id, request_id)` の
+    マーカは、対応フレームが読まれて終端（`CompleteRequest`）に達するまで保持**する。
+  - **孤児マーカのプルーン**: query が一度も来ない `(trace_id, request_id)` への
+    `Cancel`（真の取りこぼし）のみを、`active_count == 0` の非アクティブマーカとして
+    回収し cancel-state マップの非有界増加を防ぐ。`trace_id` キーはクライアントを
+    またぐため単調 `request_id` 軸では掃けないので、プルーンの TTL は**queued サブ
+    リクエストが未読で待ちうる最大時間（per-サブリクエスト / 論理バッチのタイム
+    アウト予算）より長く**取り、上記「送信済みマーカ保持」を侵さない（具体値は実装で
+    規定）。
 - **TIP 側 制御接続**: TIP は同一パイプへ 2 本の `NamedPipeClient` 接続を張る。
   - primary: `QueryBatchConversion` / `CommitSegmentsObservation` 等の query と応答。
   - control: `Cancel`（fire-and-forget。ハンドラは `nullopt` 応答）専用。`BatchConverting`

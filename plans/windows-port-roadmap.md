@@ -1117,8 +1117,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     1 メッセージで原子的に確定・学習。`HandshakeResponse` に host 側 `capabilities` を追加して
     `commit_segments` を広告、TIP は応答に含まれるときだけ送り未対応 host へは単発
     `CommitObservation` フォールバック）。M59 / M60 と共有（spec §6.4）
-  - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
-    最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
+  - 進捗フィードバックは**サブリクエスト粒度**（各サブリクエスト完了ごとに Preedit を
+    漸進更新し**確定不可**、全サブリクエストの最終応答 `partial:false` が揃って初めて
+    `Selecting`（確定可能）へ遷移）。request 内 `partial:true` ストリーミングは下記の
+    将来拡張のみで使い、M58-B 既定経路では使わない（spec §6.3.5）
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
     Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は control 接続から
     各 in-flight サブリクエスト ID へ個別送信。タイムアウト / エラー時は部分確定せず

@@ -1038,7 +1038,7 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | ID | 項目 | チェック内容 | 失敗時の推奨修復 |
 |---|---|---|---|
 | D-001 | TIP DLL 存在 | 登録済み DLL パスが存在するか | 再登録を促す |
-| D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `register-dev.ps1` または MSIX 修復 |
+| D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `scripts/register.ps1` または MSIX 修復 |
 | D-003 | 言語プロファイル | 日本語 `0x0411` の Profile があるか | Profile 再登録 |
 | D-004 | Host 起動 | Host プロセスが存在するか | Host 起動 |
 | D-005 | IPC Handshake | Named Pipe 接続 + Handshake 成功 | Host 再起動 |
@@ -1063,7 +1063,7 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | ID | ok | warning | error | `--repair` |
 |---|---|---|---|---|
 | D-001 | DLL パス存在かつ呼び出し元 bitness と一致 | — | パス不在 or bitness 不一致 | ✓ 再登録 |
-| D-002 | CLSID / InprocServer32 / Profile GUID が全一致 | 任意キー欠落（動作には影響しない） | 必須キー欠落 or 値不一致 | ✓ `register-dev.ps1` / MSIX 修復 |
+| D-002 | CLSID / InprocServer32 / Profile GUID が全一致 | 任意キー欠落（動作には影響しない） | 必須キー欠落 or 値不一致 | ✓ `scripts/register.ps1`（M28 で `register-dev.ps1` へ改称予定）/ MSIX 修復 |
 | D-003 | `0x0411` Profile 登録済み | — | 未登録 | ✓ Profile 再登録 |
 | D-004 | Host プロセス存在 | — | プロセス不在 | ✗（起動案内のみ。自動起動は M42 / 起動経路の責務） |
 | D-005 | 接続 + Handshake Ready | — | 接続不可 or Handshake 失敗 | ✗ |

@@ -1090,12 +1090,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
 - **前提**: M58-A 完了、M20（再変換）。
 - **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
-  進捗 `partial` 返却）、`ipc/`（segments 構造・進捗通知・Cancel 専用接続 or 非同期
-  ディスパッチ）、`tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI）、
-  `ipc/.../NamedPipeTransport.{h,cpp}`（アウトオブバンド Cancel 経路）。
+  共有キャンセルレジストリへの協調キャンセルチェック）、`ipc/`（segments 構造・
+  `HandshakeResponse.capabilities`・共有 `CancellationRegistry`）、
+  `tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI・Cancel 専用 control 接続）。
+  out-of-band Cancel は **control 接続 + 共有キャンセルレジストリ + チャンク境界での
+  協調キャンセル**で実現し（spec §6.3.2 で確定）、`NamedPipeTransport` の多重応答改造は
+  不要（spec §6.3.5）。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
-  - アウトオブバンドな Cancel 経路（Cancel 専用接続 or host 非同期ディスパッチャ）。
-    同期 ClientLoop + 単一接続では遅い変換中に Cancel が処理されないため必須
+  - アウトオブバンドな Cancel 経路（**確定: Cancel 専用 control 接続 + host 共有
+    `CancellationRegistry` + チャンク境界協調キャンセル**。spec §6.3.2）。同期 ClientLoop +
+    単一接続では遅い変換中に Cancel が処理されないため必須。host は `HandshakeResponse.
+    capabilities` に `"oob_cancel"` を広告し、TIP は対応 host にのみ依存（非対応 host は
+    best-effort Cancel + 結果破棄に fallback）
   - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ。
     文境界が無い場合はバイト安全ハード分割でフォールバック）
   - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→
@@ -1109,13 +1115,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 進捗（`partial:true`）は `BatchConverting` のまま Preedit を漸進更新し**確定不可**、
     最終応答 `partial:false` で初めて `Selecting`（確定可能）へ遷移
   - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
-    Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は各 in-flight
-    サブリクエスト ID へ個別送信
+    Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は control 接続から
+    各 in-flight サブリクエスト ID へ個別送信。タイムアウト / エラー時は部分確定せず
+    全 in-flight を Cancel して fallback 連鎖へ（spec §6.3.3）
   - 既定の正しさ経路は現行トランスポートの 1 リクエスト 1 応答契約に従い、host 内部
     チャンク分割で `partial:false` を 1 つ返す（進捗はサブリクエスト粒度）
-  - （任意）request 内 `partial:true` 逐次表示にはトランスポート拡張（同一 `request_id`
-    への複数応答ストリーミング、`ipc/.../NamedPipeTransport.{h,cpp}` の多重応答対応）が
-    必要。本拡張を採用する場合は M58-B のスコープに含める
+  - request 内 `partial:true` 逐次表示（同一 `request_id` への複数応答ストリーミング、
+    `NamedPipeTransport` の多重応答対応）は **M58-B では採用しない（spec §6.3.5 で確定。
+    将来の任意拡張）**。`Response.partial` は予約フィールドとして既定 `false`
 - **受け入れ条件**:
   - フレーム上限内の長文が host 側チャンク分割で変換される
   - 既定経路（単一 `partial:false`／論理バッチ）: 論理バッチの全（サブ）リクエストの

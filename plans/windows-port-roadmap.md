@@ -1606,9 +1606,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - クリーン環境で全項目チェックが実行できる
   - Host 未起動でも診断アプリがクラッシュしない
-  - Zenzai モデル未配置時に `warning` として fallback 状態を表示する
-  - 診断 ZIP から秘密情報が除去されている
+  - Zenzai 有効でモデル未選択時に `warning` として fallback 状態を表示する
+    （設定済みパスが不在の場合は `error`。spec §12.2.1）
+  - 各診断項目が判定基準（spec §12.2.1）どおりに ok / warning / error を返す
+    （空ストア・未設定 optional 機密は誤検知させない）
+  - 診断 ZIP から秘密情報が除去され、各メンバが redaction ルール
+    （spec §12.5）どおり処理される
   - `--json` 出力が stable schema としてテストされる
+  - `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く（spec §12.2.1）
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §12
 
 ### M47: Host / Zenzai 障害時の自動復旧 UX
@@ -1663,15 +1668,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 対象アプリ: Notepad / WordPad / Edge / Chrome / Firefox / VS Code /
     Discord / Slack / Word / Excel / Outlook / Windows Terminal /
     Windows Settings
-  - テストケース C-001〜C-010（`nihongo` Space-Enter / Backspace / ESC /
+  - テストケース C-001〜C-012（`nihongo` Space-Enter / Backspace / ESC /
     候補位置 / マルチディスプレイ端 / DPI 150% / 絵文字 / Undo Redo /
-    フォーカス移動 / Host kill 中）
+    フォーカス移動 / Host kill 中 / ショートカット・修飾キー透過 /
+    ローマ字 ja-ju-jo 系）
   - 実装方針: UI Automation + SendInput + screenshot による半自動テスト。
-    完全自動化が難しい Office はチェックリスト + recorder で代替可
+    完全自動化が難しい Office はチェックリスト + recorder で代替
+    （詳細は spec §13.3.1）
   - 出力: `compat-report-YYYYMMDD/{report.md, report.json, screenshots/,
     logs/, failures/}`
 - **受け入れ条件**:
-  - Notepad / VS Code / Edge で最低限の自動テストが通る
+  - Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
+  - Office（Word / Excel / Outlook）が手動チェックリスト（spec §13.3.1）で
+    検証され、結果が `report.md` に記録される
   - 失敗時にスクリーンショットとログが保存される
   - report.json が CI artifact としてアップロードできる
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §13

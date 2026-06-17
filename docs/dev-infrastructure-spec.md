@@ -1038,13 +1038,13 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | ID | 項目 | チェック内容 | 失敗時の推奨修復 |
 |---|---|---|---|
 | D-001 | TIP DLL 存在 | 登録済み DLL パスが存在するか | 再登録を促す |
-| D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `register-dev.ps1` または MSIX 修復 |
+| D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `scripts/register.ps1` または MSIX 修復 |
 | D-003 | 言語プロファイル | 日本語 `0x0411` の Profile があるか | Profile 再登録 |
 | D-004 | Host 起動 | Host プロセスが存在するか | Host 起動 |
 | D-005 | IPC Handshake | Named Pipe 接続 + Handshake 成功 | Host 再起動 |
 | D-006 | IPC Ping | Ping 往復 latency 測定 | pipe / firewall / Host 状態確認 |
-| D-007 | モデルパス | 設定上のモデルファイルが存在するか | モデル選択 UI（M45）へ誘導 |
-| D-008 | モデル検証 | GGUF magic / version / metadata 確認 | 破損モデル扱い |
+| D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
+| D-008 | モデル検証 | 形式別検証（R1=GGUF magic / version、R2=`genai_config.json` + 参照 ONNX） | 破損モデル扱い |
 | D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行 |
 | D-010 | learning store | 読み込み可能か、破損していないか | バックアップ後に初期化 |
 | D-011 | user dict | JSON 読み込み可能か | バックアップ後に修復 |
@@ -1052,6 +1052,56 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
 | D-014 | DPAPI | 暗号化データを復号できるか | 再認証 / 再入力を促す |
 | D-015 | app compatibility | 現在の前面アプリで TSF context が取得できるか | 互換性情報表示（M50 result） |
+
+### 12.2.1 判定基準（status 決定ルール）
+
+各項目の `status`（§12.3 の `ok` / `warning` / `error`）は以下の閾値で確定する。
+閾値は §8.5.2 timeout 表・§12.6 `fallback_state` enum・§13.2 自動化レベルと
+同一値を参照し、二重定義しない。`--repair` 列は「M44 受け入れ条件」の
+自動修復対象（D-001 / D-002 / D-003 / D-013）と一致する。
+
+**評価順序（重複時の優先）**: 各行の `ok` / `warning` / `error` 述語が重複し
+うる場合は、**`error` → `warning` → `ok` の順に評価し、最初に一致した（最も
+厳しい）status を採用する**。これにより各行の status は一意に定まり、緩い
+`ok` 述語が厳しい状態を隠さない。
+
+| ID | ok | warning | error | `--repair` |
+|---|---|---|---|---|
+| D-001 | DLL パス存在かつ呼び出し元 bitness と一致 | — | パス不在 or bitness 不一致 | ✓ 再登録 |
+| D-002 | CLSID / InprocServer32 / Profile GUID が全一致 | 任意キー欠落（動作には影響しない） | 必須キー欠落 or 値不一致 | ✓ `scripts/register.ps1`（M28 で `register-dev.ps1` へ改称予定）/ MSIX 修復 |
+| D-003 | `0x0411` Profile 登録済み | — | 未登録 | ✓ Profile 再登録 |
+| D-004 | Host プロセス存在 | — | プロセス不在 | ✗（起動案内のみ。自動起動は M42 / 起動経路の責務） |
+| D-005 | 接続 + Handshake Ready | — | 接続不可 or Handshake 失敗 | ✗ |
+| D-006 | Ping RTT ≤ 100ms | 100ms < RTT ≤ 500ms | RTT > 500ms or 無応答（§8.5.2 Ping timeout） | ✗ |
+| D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
+| D-008 | `model.enabled=false`、またはモデル未選択（`model.selectedPath` 空 = 検証対象なし。該当なしとし、未選択の warning は D-007 が担う）、または enabled かつ**選択済み**モデルが `valid` **かつ loaded**（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled かつ選択済みモデルが `valid` だが未ロード（fallback 動作中） | enabled かつ**選択済み**モデルの形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
+| D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由） |
+| D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
+| D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
+| D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
+| D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
+| D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
+| D-015 | 前面アプリで TSF context 取得可**かつ §13.3.2 の既知の劣化 / workaround なし**（§13.2 の自動化レベルに関わらず、context が取れれば automation level では warning にしない） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
+
+全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
+（`error` > `warning` > `ok`）とする。`warning` は「縮退しているが入力は
+継続できる」、`error` は「当該機能が成立しない」を意味し、UI（§12.7）の
+アイコン（✅ / ⚠️ / ❌）に対応させる。任意データ・任意機密の「未設定」は
+正常系として扱い、`warning` を出さない。具体的には、クリーンインストール
+直後で学習・辞書が空（`UserDictionary::Load()` は欠損ファイルを空の成功
+ロードとして扱う）の D-010 / D-011 と、OpenAI 鍵を必要としない構成
+（`aiBackend` が `none` / `local-zenzai`）で復号対象の機密が無い D-014 は
+`ok` とする。ただし `aiBackend=openai` で `openAiApiKey` が空の場合は、
+選択中の AI backend が認証できないため D-014 を `warning` とする
+（機能を選択したのに資格情報が欠落している状態）。`warning` / `error` は
+migration 要・読み込み不可・破損・**選択中機能の資格情報欠落**、または
+**設定済みの値が期待どおり復号 / 読込できない**場合に限る。
+同様に、`model.enabled=false`（SimpleConverter 固定。model-management-spec
+§モデル設定）は Zenzai を使わない意図的構成のため、D-007 / D-008 / D-009 は
+`ok`（該当なし）とし、モデル未選択・未ロード・`degraded_model` を `warning`
+扱いしない。これらが `warning` になるのは `model.enabled=true` のときのみ。
+ただし `safe_mode`（連続クラッシュによる安全モード）は `model.enabled` に
+関わらず D-009 を `error` とし、この「該当なし」ショートカットより優先する。
 
 ### 12.3 `azookey_diag.exe` CLI
 
@@ -1074,10 +1124,12 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
       "id": "D-008",
       "name": "model_validation",
       "status": "warning",
-      "message": "Model is not loaded. SimpleConverter fallback is active.",
+      "message": "Model is valid but not loaded yet. SimpleConverter fallback is active.",
       "details": {
         "configured_path": "%LOCALAPPDATA%\\azooKey\\models\\zenzai.gguf",
-        "exists": false,
+        "exists": true,
+        "valid": true,
+        "loaded": false,
         "backend": "cpu"
       }
     }
@@ -1124,7 +1176,9 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 
 - `status` は `checks[].status` の最悪値（error > warning > ok）。
 - 各 ZIP メンバの突き合わせは §7.3 の相関 ID では行わず、診断は単発スナップショット。
-  `host-health.json` は §12.6 `QueryDiagnostics` の payload をそのまま保存する。
+  `host-health.json` は §12.6 `QueryDiagnostics` の payload を保存する。ただし
+  自由文字列の `last_error` / `ep_last_error` はパス正規化 + 本文 redaction を
+  通してから保存し（§12.5 / §12.6）、生の payload を**そのまま書き出す経路は持たない**。
 - 新しい check は `D-0NN` を末尾追加（後方互換）。既存 ID の `name` 改名は破壊的変更扱い。
 
 ### 12.5 機密情報の取り扱い
@@ -1141,6 +1195,20 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 必要な場合でも、**件数・サイズ・hash・mtime のみ**を記録する。
 `settings.redacted.json` は API key 等の機密 field を `***redacted***`
 に置換した copy。
+
+ZIP メンバごとの redaction ルールを以下に固定する。本文系フィールドの
+出力可否は §7.6 redaction ポリシーを正典とし、診断 ZIP は §7.6 と
+**共通の redaction 関数**を用いて二重定義を作らない。
+
+| ZIP メンバ | redaction ルール |
+|---|---|
+| `diag.json` | §12.4 stable schema の制約に従い `message` / `details` に本文・候補・prompt を含めない。パス中のユーザー名は `%LOCALAPPDATA%` 等の環境変数表記へ正規化する |
+| `settings.redacted.json` | API key 等の機密 field に加え、Magic Conversion prompt 系 field（`promptPrefixByApp` の各値、および移行後の `profilesByApp.*.promptPrefix`〔`profilesByApp` は process / window class をキーとする map。配列ではなく全エントリ値が対象〕）を `***redacted***` に置換。さらに path 系 field（`model.selectedPath` / `model.directory` / `customRomajiTablePath` 等の絶対パス）は `diag.json` / `host-health.json` と同じくユーザー名を含む生パス（`C:\Users\...`）を残さないよう `%LOCALAPPDATA%` 等の環境変数表記へ正規化する。§7.6 はログ本文の正典で settings の prompt / path field を対象に含めないため、診断 ZIP では本欄で明示的に処理し、§12.5 の「prompt を含めない」方針と整合させる |
+| `host-health.json` | §12.6 `QueryDiagnostics` payload。構造化 field（bool / enum / 数値）はそのまま保存するが、自由文字列の `last_error` / `ep_last_error` はパス正規化（`%LOCALAPPDATA%` 等）+ 本文 redaction を通してから保存し、生のユーザーパス・backend / API 診断文を残さない |
+| `ipc-ping.json` | RTT / 成否のみ |
+| `logs/*.jsonl` | §7.6 を適用済みのログを収集（Release 既定で本文なし）。Debug かつ `AZOOKEY_LOG_BODY=1` の本文入りログは収集時に再 redact する |
+| `environment.txt` | OS バージョン / CPU / RAM / GPU のみ。ホスト名・ユーザー名・シリアル番号を含めない |
+| `crash-summary.txt` | WER ダンプの要約のみ。ダンプ本体・スタック上の文字列バッファを含めない |
 
 ### 12.6 IPC: QueryDiagnostics
 
@@ -1171,6 +1239,8 @@ Response:
 ```
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
+自由文字列の `last_error` / `ep_last_error` は失敗時にユーザーパスや backend /
+API 診断文を含みうるため、保存前にパス正規化 + 本文 redaction を通す（§12.5）。
 
 ### 12.7 UI
 
@@ -1202,9 +1272,12 @@ D-001〜D-003 / D-007 / D-008 / D-011〜D-013 までは実行可能とする。
 
 - クリーン環境で全項目チェックが実行できる
 - Host 未起動でも診断アプリがクラッシュしない
-- Zenzai モデル未配置時に `warning` として fallback 状態を表示する
-- 診断 ZIP に秘密情報が含まれない（snapshot テストで保証）
+- Zenzai 有効でモデル未選択（`model.selectedPath` 空）時に `warning`、
+  設定済みパスが不在の場合は `error` として fallback 状態を表示する（§12.2.1 D-007 / D-008）
+- 診断 ZIP に秘密情報が含まれない（snapshot テストで保証）。各 ZIP メンバが
+  §12.5 の redaction ルール表どおりに処理される
 - `--json` 出力が stable schema としてテストされる
+- 各診断項目が §12.2.1 の判定基準どおりに `ok` / `warning` / `error` を返す
 - `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く
 
 ## 13. アプリ互換性テストハーネス（M50）
@@ -1257,6 +1330,53 @@ M28（MSIX サイドロード）着手前にアプリ互換性のベースライ
 | C-011 | `Ctrl+A/C/V/L/S`、Alt メニュー、Win キー併用を押す | TIP が食わずアプリ / OS へ通る |
 | C-012 | `ja` / `ju` / `jo` / `jya` / `jyu` / `jyo` を入力 | 「じゃ」「じゅ」「じょ」として preedit / commit できる |
 
+C-001〜C-012 は `full` アプリ（§13.2）で UI Automation により自動判定できる。
+ただし M50 完了ゲートの**必須対象は Notepad / VS Code / Edge**（M50 受け入れ
+条件）であり、その他の `full` アプリ（Chrome / Windows Terminal /
+Windows Settings 等）は実行可能な範囲で自動判定する best-effort 対象とする。
+`best-effort` / `recorder` アプリでは自動化できないケースを §13.3.1 の
+手動チェックリストで補完する。
+
+### 13.3.1 Office 手動チェックリスト（recorder 補完）
+
+Office（Word / Excel / Outlook）は UI Automation の TSF テキストパターン
+信頼性が低く（§13.2 `recorder`）、キー操作の記録・再生 + 目視チェック
+リストで代替する。各行は「対象」列のアプリでのみ確認し、対象外アプリでは
+N/A（`report.md` に `N/A` と記録し pass/fail 判定に含めない）とする。pass /
+fail を手動記録して `report.md` の Office セクション（§13.5）へ転記する。
+
+| ID | 対象 | チェック項目 | 期待 |
+|---|---|---|---|
+| O-01 | Word / Excel / Outlook | 本文（Word 段落 / Excel セル / Outlook 本文）で `nihongo`→Space→Enter | 「日本語」確定、文字化けなし |
+| O-02 | Word / Excel / Outlook | 候補ウィンドウがキャレット付近に出る | キャレット下に出て、セル / 行移動に追従 |
+| O-03 | Excel | セル編集（F2）と数式バーの双方で composition が成立 | 双方で確定できる |
+| O-04 | Excel | 未確定中の矢印キーが preedit 内移動になる | preedit 内で動く（確定後はセル移動） |
+| O-05 | Word | オートコレクト / オートフォーマットが composition を破壊しない | preedit 中は介入しない |
+| O-06 | Outlook | 宛先（To / Cc）欄と本文の双方で入力できる | 双方で確定できる |
+| O-07 | Word / Excel / Outlook | 絵文字 / サロゲートペア確定後の表示（C-007 相当） | 正しく表示される |
+| O-08 | Word / Excel / Outlook | ESC で composition 破棄 / Backspace で 1 文字戻る（C-002 / C-003 相当） | preedit が消える / 1 文字戻る |
+| O-09 | Word / Excel / Outlook | Host kill 中の入力（C-010 相当） | 固まらず DegradedSimple で継続 |
+| O-10 | Word / Excel / Outlook | Release 既定で本文がログ / 成果物に残らない（§7.6） | 残らない |
+
+recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対象列に該当する
+もの）のキー列を記録・再生し、結果は目視 + screenshot で判定する。
+
+### 13.3.2 アプリ別 workaround / 既知の差異
+
+`full` 自動化が成立しない、または TSF 実装差で挙動が分かれるアプリの
+既知差異と対処方針を固定する。実装（§13.4）の target JSON にこの方針を
+反映する。
+
+| アプリ / 種別 | 既知の差異 | workaround |
+|---|---|---|
+| Chrome / Edge（Chromium） | display attribute（下線）が完全反映されない場合がある | 位置取得は `ITfContextView::GetTextExt` を優先。下線は IME 既定描画にフォールバック |
+| Firefox | TSF サポートが best-effort。`GetTextExt` が空矩形を返すことがある | 空矩形時は直近 caret rect のキャッシュへフォールバック |
+| VS Code / Electron | Monaco が composition 中に独自補完を出す | preedit 中は IME 候補を優先し、Electron 側 IME イベント順序に依存しない |
+| Discord / Slack（Electron） | `contenteditable` で `GetTextExt` 精度が低い | best-effort。位置ずれ時はキャレット位置 fallback |
+| Word / Excel / Outlook | UI Automation TextPattern の信頼性が低い | recorder + §13.3.1 チェックリスト。Excel はセル編集と数式バーで context が切り替わる点に注意 |
+| Windows Terminal / PowerShell | conhost 系で TSF level 3 非対応の場面がある | level 1（最小 composition）で確定を優先、候補位置はキャレット概算 |
+| UWP / WinUI（Store apps） | AppContainer で TIP DLL の ACL 付与が必要 | `ALL APPLICATION PACKAGES`（S-1-15-2-1）RX 付与（DEV-204 で扱う）。本ハーネスは Windows Settings を `full`、その他 Store apps を `best-effort` とする |
+
 ### 13.4 実装
 
 `compat-test/` ディレクトリを新設:
@@ -1281,6 +1401,18 @@ compat-test/
 ```
 
 各 target JSON は AppId / window class / 自動化レベルを定義する。
+
+**クリップボード安全化（C-011）**: C-011 は `Ctrl+V` 貼り付けの透過を検証する
+ため、実機・self-hosted runner の実クリップボードに依存すると利用者の私的な
+クリップボード内容を対象アプリに貼り付け、§13.5 の screenshot / log artifact
+として保存してしまうおそれがある。ハーネスは **C-011 実行直前に決定的な
+テストデータでクリップボードを置換し、実行後に元の内容を復元する**こと
+（復元失敗時も元データを artifact に残さない）。**クリップボード退避は
+M50 ゲート対象（Notepad / VS Code / Edge）では前提条件**であり、退避が
+不可能な runner では C-011 を pass にできない（gate 未達の failing skip 扱い。
+自動ゲートから silent に除外しない）。手動確認（§13.3.1 相当）への振り替えは
+best-effort / 非ゲート対象に限る。
+
 本ディレクトリの雛形（README + `targets/notepad.json` サンプル）は
 `compat-test/` に置く。雛形はまだ CMake のビルド対象に組み込まず（トップ
 `CMakeLists.txt` は `add_subdirectory` を明示列挙する方式）、M50 実装時に
@@ -1325,7 +1457,9 @@ CI で常時実行するとコストが高いため、`compat-test` ラベル付
 
 ### M50 受け入れ条件
 
-- Notepad / VS Code / Edge で C-001〜C-010 の自動テストが通る
+- Notepad / VS Code / Edge で C-001〜C-012 の自動テストが通る
+- Office（Word / Excel / Outlook）が §13.3.1 の手動チェックリストで検証され、
+  結果が `report.md` の Office セクションに記録される
 - 失敗時にスクリーンショットとログが `failures/` に保存される
 - `report.json` が CI artifact としてアップロードできる
 - `report.md` が PR コメント用に整形されている

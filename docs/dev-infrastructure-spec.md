@@ -851,7 +851,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 | `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake） | exponential backoff（§8.3） |
 | `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` 再ロード**受理**（完了ではない） | Model load 30s |
 | `Recovering`（transport 復旧） | `Healthy` | Ping 往復成功（pipe + Handshake Ready） | Ping 500ms 以内 |
-| `Recovering`（model 復旧） | `Healthy` | **`LoadModelResponse.ok==true` かつ `model_loaded==true`**（または Health の `model_loaded==true`）。Ping 成功だけでは遷移しない | Model load 30s |
+| `Recovering`（model 復旧） | `Healthy` | `LoadModelResponse.ok==true`（受理）**かつ後続 `Health.model_loaded==true`**（`model_loaded` は `HealthPayload`／`HandshakeResponse` の field。`LoadModelResponse` は `ok`/`error` のみ）。Ping や ok だけでは遷移しない | Model load 30s |
 | `Recovering`（transport 復旧） | `DegradedSimple` | 再接続失敗 / 再 timeout | 同上 timeout 再超過 |
 | `Recovering`（model 復旧） | `DegradedModel` | 再ロード失敗 / timeout / `model_loaded==false` | Model load 30s 超過 |
 | `Any` | `SafeMode` | Host プロセスが 60s 以内に 3 回連続クラッシュ（§8.5.3） | crash カウンタ ≥3 / 60s |

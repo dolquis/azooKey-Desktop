@@ -1683,7 +1683,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M41（構造化ログ）完了。
 - **推奨実装時期**: M41 完了後、Zenzai 最適化（M24 / M25 / M57）着手前。
   M56（Tiny Reranker） / M57（ModernBERT）の効果測定の前提でもある。
-- **変更対象**: `ipc/src/Messages.cpp`（envelope に `trace_id` を追加）、
+- **変更対象**: `ipc/src/Messages.cpp`（envelope の既存 `trace_id` フィールドへ
+  UUIDv7 を生成・伝播。wire format 変更ではない）、
   `tsf-tip/src/TextService.cpp` / `inference-host/src/Dispatcher.cpp` /
   `inference-host/src/InferenceEngine.cpp`（各フェーズで `latency_ms` 記録、
   絶対オフセットが要る場合のみ任意 `t_ms`）、

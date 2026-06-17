@@ -634,7 +634,9 @@ Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定�
 
 #### 7.7.1 trace_id
 
-全 IPC envelope に `trace_id`（UUIDv7 推奨）を追加する。キー駆動操作では TIP が
+`trace_id` は §7.3 の wire format `{version, request_id, type, trace_id, payload}` に
+**既に存在するフィールド**であり（`ipc::Deserialize` が欠落を reject）、M51 は wire format を
+変更せず、この既存フィールドへ **UUIDv7 値を生成・伝播**するのみ。キー駆動操作では TIP が
 `OnKeyDown` で生成し、対応する全 IPC 往復に付与する。非キー（lifecycle / settings）
 IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope 必須は §7.3 参照）。
 既存 `request_id` は IPC リクエスト単位のままとし、`trace_id` は

@@ -19,9 +19,14 @@
 //   - The wire name (PhaseName) is the stable contract, not the enumerator
 //     order. Keep PhaseName() and Phase in sync.
 //
-// The M41 coarse subset (`romaji_convert` ~= old "serialize/host_compute"
-// rollups) is expressed by recording only a subset of these phases; M51
-// records the full set. There is no separate phase taxonomy.
+// M41 (coarse) vs M51 (full): there is one taxonomy. M41 records only a
+// subset of these phases; M51 records the full set. The old M41 phase names
+// map onto this enum 1:1 (do NOT collapse them into romaji_convert):
+//   serialize    -> ipc_serialize
+//   send         -> pipe_send
+//   host_compute -> model_inference
+//   recv         -> pipe_recv
+//   apply_ui     -> ui_apply
 
 namespace azookey::logging {
 

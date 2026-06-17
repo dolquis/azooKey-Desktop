@@ -306,6 +306,22 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   なった論理バッチは**部分確定しない**。TIP は残る in-flight 全サブリクエスト ID へ
   control 接続から `Cancel` を送り、§7 の fallback 連鎖（`ai-cleanup` → `neural` →
   かな確定）で入力を失わずに確定可能にする。
+- **stale 応答の drain（必須）**: `ReceiveWithTimeout` はタイムアウト時に応答を消費
+  せず `nullopt` を返す（`ipc/src/NamedPipeTransport.cpp`）。host 側 `ClientLoop` は
+  ハンドラ完了後に最終 / canceled 応答を **primary 接続に必ず書き込む**ため、タイム
+  アウト / キャンセルした各サブリクエストの応答は遅れて primary パイプに到着する。
+  したがって TIP は、**fallback / 新しいバッチを同じ primary 接続へ送る前に**、次の
+  いずれかで stale 応答を排除しなければならない:
+  - **(推奨) `request_id` 相関**: TIP は全応答を `Envelope.request_id`
+    （`ipc/include/azookey/ipc/Messages.h`）で照合し、**現在 await 中の in-flight
+    サブリクエスト集合に属さない `request_id` の応答は drain して破棄**する
+    （タイムアウト / キャンセル済み ID の遅延応答を含む）。これにより古い `segments` が
+    新しい入力に誤って結合される事故を防ぐ。
+  - **(代替) primary 接続の再接続**: タイムアウト / キャンセル後に primary
+    `NamedPipeClient` を `Disconnect` → 再 `Connect`（+ 再 Handshake）して未読の stale
+    応答を捨てる。
+  どちらの場合も、`request_id` での応答相関は論理バッチの正しさの前提とする（送信順
+  だけに依存して応答を結合しない）。
 
 #### 6.3.4 フレーム上限と分割（シリアライズ後バイト基準）
 
@@ -543,6 +559,9 @@ return { ok: true }
   リクエストの全 `partial:false` 受信まで `Selecting` へ遷移しないこと、いずれかの
   サブリクエストが `T_sub` タイムアウト / エラーのとき部分確定せず全 in-flight を
   Cancel して fallback 連鎖（`ai-cleanup`→`neural`→かな確定）へ進むこと（§6.3.3）。
+  タイムアウト後に遅れて届く stale 応答（タイムアウト / キャンセル済み `request_id`）が
+  `request_id` 相関で drain・破棄され、fallback / 新バッチの応答に古い `segments` が
+  結合されないこと（§6.3.3 stale 応答の drain）。
 - **変換** (`inference-host/tests`): 固定かな全文 → 妥当な segments / full_surface。
   チャンク分割（句点を含む長文）・キャンセルの動作。
 - **手動 / 実機（Win11、`gate:human-required`）**: `kyouhaiitenkidesu`（→ きょうは

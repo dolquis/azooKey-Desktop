@@ -583,10 +583,19 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 | 優先 | 条件 | 本文系フィールドの扱い |
 |---|---|---|
 | 1（最優先） | secure 中（`PrivacyGate::IsSecure()==true`） | **常に redact**。Debug でも `AZOOKEY_LOG_BODY=1` でも出力しない |
-| 2 | Release ビルド（既定） | **常に redact**。`request_id` / `trace_id` / 長さ / `result` / `latency_ms` 等のメタ情報のみ |
-| 3 | Debug ビルド かつ `AZOOKEY_LOG_BODY=1` | 本文を出力（opt-in。開発時のみ） |
-| 4 | Debug ビルド（既定、env 未設定） | redact（メタ情報のみ） |
+| 2 | プライバシー設定が詳細ログ不許可（`PrivacyGate::DetailedLoggingAllowed()==false`。`privacy.redactLogs=true`〔既定〕、または mode が `private`／`secure`） | **常に redact**。build / env を無視 |
+| 3 | Release ビルド（既定） | **常に redact**。`request_id` / `trace_id` / 長さ / `result` / `latency_ms` 等のメタ情報のみ |
+| 4 | Debug ビルド かつ `AZOOKEY_LOG_BODY=1` | 本文を出力（opt-in。開発時のみ） |
+| 5 | Debug ビルド（既定、env 未設定） | redact（メタ情報のみ） |
 
+等価な単一条件として、本文出力は
+**`Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬IsSecure() ∧ DetailedLoggingAllowed()`** が成り立つ
+ときのみ。いずれか 1 つでも偽なら redact する。
+
+- `PrivacyGate::DetailedLoggingAllowed()`（`docs/privacy-and-secure-input-spec.md` §5.1）が
+  mode（§3）と `privacy.redactLogs`（同 §7 schema, 既定 `true`）を集約した正典クエリであり、
+  本表 優先 2 はそれを参照するだけで重複ロジックを持たない。`redactLogs` の既定が `true` の
+  ため、**設定未変更のユーザーは Debug + `AZOOKEY_LOG_BODY=1` でも本文が出ない**。
 - redact 時は値を `***redacted***` に置換し、`window_title` は `window_title_hash`
   のみに置換する（`docs/privacy-and-secure-input-spec.md` §8 と同一規約）。
 - 本ポリシーの実装は M44 診断 ZIP（§12.5）と secure redaction（同 §5 / §8）で

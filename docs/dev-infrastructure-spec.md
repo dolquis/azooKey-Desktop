@@ -1070,13 +1070,13 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-006 | Ping RTT ≤ 100ms | 100ms < RTT ≤ 500ms | RTT > 500ms or 無応答（§8.5.2 Ping timeout） | ✗ |
 | D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
 | D-008 | `model.enabled=false`、または enabled かつモデルが `valid`（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled だが未ロード（fallback 動作中） | enabled かつ形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
-| D-009 | `fallback_state == healthy`、または `model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化） | `safe_mode` | ✗（復旧は D-005 / D-008 修復経由） |
+| D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由） |
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
 | D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ鍵が設定済みで復号成功 | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | 設定済みの暗号化値（`dpapi:` prefix 付き）が復号失敗 | ✗（再認証 / 再入力を促す） |
-| D-015 | 前面アプリで TSF context 取得可 | 既知の best-effort / recorder アプリ（§13.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
+| D-015 | 前面アプリで TSF context 取得可（§13.2 の自動化レベルに関わらず、context が取れれば `ok`） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
 
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
 （`error` > `warning` > `ok`）とする。`warning` は「縮退しているが入力は
@@ -1095,6 +1095,8 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 §モデル設定）は Zenzai を使わない意図的構成のため、D-007 / D-008 / D-009 は
 `ok`（該当なし）とし、モデル未選択・未ロード・`degraded_model` を `warning`
 扱いしない。これらが `warning` になるのは `model.enabled=true` のときのみ。
+ただし `safe_mode`（連続クラッシュによる安全モード）は `model.enabled` に
+関わらず D-009 を `error` とし、この「該当なし」ショートカットより優先する。
 
 ### 12.3 `azookey_diag.exe` CLI
 

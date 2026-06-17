@@ -1,0 +1,19 @@
+{
+  "id": "notepad",
+  "display_name": "Notepad",
+  "category": "standard",
+  "automation_level": "full",
+  "launch": {
+    "executable": "notepad.exe",
+    "args": []
+  },
+  "window": {
+    "class": "Notepad",
+    "edit_control_class": "Edit"
+  },
+  "cases": [
+    "C-001", "C-002", "C-003", "C-004", "C-005", "C-006",
+    "C-007", "C-008", "C-009", "C-010", "C-011", "C-012"
+  ],
+  "notes": "Win11 では Notepad 後継 (UWP) の場合 automation_level=best-effort に下げる。仕様は docs/dev-infrastructure-spec.md §13."
+}

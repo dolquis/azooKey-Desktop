@@ -1526,10 +1526,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §7。
   - JSON Lines ログ（`ts`/`level`/`component`/`request_id`/`phase`/
     `latency_ms`/`result`/`error_code`）
-  - 相関 ID（`RequestScheduler` の連番を流用）とフェーズ別レイテンシ
+  - 相関 ID（`request_id` は TIP 採番。`QueryCandidates`/staleness は `ipc_pending_id_`、
+    送信キュー〔`CommitObservation`〔応答あり〕/ `Cancel`〔応答なし〕〕は接続ローカル連番。
+    `trace_id` と組で相関。詳細は `docs/dev-infrastructure-spec.md` §7.3）とフェーズ別レイテンシ
   - エラーコード体系 enum（transport / protocol / business）
   - タイムアウト規約（ソフト/ハード）
-  - 入力本文・候補語のログ出力は Debug 限定（プライバシー配慮）
+  - 入力本文・候補語のログ redaction は §7.6 の優先順位に従う。本文出力は
+    `Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬secure ∧ DetailedLoggingAllowed()` のときのみ
+    （`privacy.redactLogs` 既定 `true`。単に Debug というだけでは出さない）
 - **受け入れ条件**:
   - TIP / Host が JSON Lines ログを所定ディレクトリに出力する
   - 各行に `request_id` / `phase` / `latency_ms` / `result` が含まれる
@@ -1679,9 +1683,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M41（構造化ログ）完了。
 - **推奨実装時期**: M41 完了後、Zenzai 最適化（M24 / M25 / M57）着手前。
   M56（Tiny Reranker） / M57（ModernBERT）の効果測定の前提でもある。
-- **変更対象**: `ipc/src/Messages.cpp`（envelope に `trace_id` を追加）、
+- **変更対象**: `ipc/src/Messages.cpp`（envelope の既存 `trace_id` フィールドへ
+  UUIDv7 を生成・伝播。wire format 変更ではない）、
   `tsf-tip/src/TextService.cpp` / `inference-host/src/Dispatcher.cpp` /
-  `inference-host/src/InferenceEngine.cpp`（各フェーズで `t_ms` 記録）、
+  `inference-host/src/InferenceEngine.cpp`（各フェーズで `latency_ms` 記録、
+  絶対オフセットが要る場合のみ任意 `t_ms`）、
   `bench/live_bench.cpp`（既存 `azookey_bench` ターゲットに `--trace`
   フラグ追加）、`bench/azookey_trace_viewer.cpp`（新規 CLI）。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §7 拡張。

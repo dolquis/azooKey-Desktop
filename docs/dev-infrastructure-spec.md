@@ -1119,10 +1119,12 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
       "id": "D-008",
       "name": "model_validation",
       "status": "warning",
-      "message": "Model is not loaded. SimpleConverter fallback is active.",
+      "message": "Model is valid but not loaded yet. SimpleConverter fallback is active.",
       "details": {
         "configured_path": "%LOCALAPPDATA%\\azooKey\\models\\zenzai.gguf",
-        "exists": false,
+        "exists": true,
+        "valid": true,
+        "loaded": false,
         "backend": "cpu"
       }
     }

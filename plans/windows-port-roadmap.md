@@ -1606,12 +1606,14 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - クリーン環境で全項目チェックが実行できる
   - Host 未起動でも診断アプリがクラッシュしない
-  - Zenzai モデル未配置時に `warning` として fallback 状態を表示する
+  - Zenzai 有効でモデル未選択時に `warning` として fallback 状態を表示する
+    （設定済みパスが不在の場合は `error`。spec §12.2.1）
   - 各診断項目が判定基準（spec §12.2.1）どおりに ok / warning / error を返す
     （空ストア・未設定 optional 機密は誤検知させない）
   - 診断 ZIP から秘密情報が除去され、各メンバが redaction ルール
     （spec §12.5）どおり処理される
   - `--json` 出力が stable schema としてテストされる
+  - `--repair` で D-001 / D-002 / D-003 / D-013 の自動修復が動く（spec §12.2.1）
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §12
 
 ### M47: Host / Zenzai 障害時の自動復旧 UX

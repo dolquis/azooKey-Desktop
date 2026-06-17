@@ -89,14 +89,15 @@ BatchAccumulating 中は抑制する。
 `BatchConverting`（応答待ち）に入る。応答前の追加打鍵 / Esc は in-flight を `Cancel`
 して `BatchAccumulating` に戻す（空の候補集合で `Selecting` に入らない）。
 
-M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合、`partial:true` の中間応答が
-複数届きうる。中間応答は `BatchConverting` のまま `full_surface` を Preedit に漸進更新
-するだけで**確定不可**とし、**最終応答 `partial:false` を受信してから初めて
-`Selecting`（確定可能）へ遷移**する。これにより、最初のチャンクだけが確定して残りの
-蓄積入力が欠落する事故を防ぐ（`BatchConverting` 中の Enter は無視する）。ストリーミング
-拡張が無い構成では各（サブ）リクエストは `partial:false` の最終応答を 1 つ返し、TIP は
-論理バッチ集約（§6.3）で全サブリクエスト完了後に `Selecting` へ遷移する。M58-A は単一
-リクエスト・単一 `partial:false` 応答で即 `Selecting` へ遷移する。
+ストリーミング拡張（同一 `request_id` への複数応答）は **M58-B 既定では採用しない
+（§6.3.5 で決定。将来の任意拡張）**。この拡張を採用した場合に限り `partial:true` の
+中間応答が複数届きうる。その場合、中間応答は `BatchConverting` のまま `full_surface`
+を Preedit に漸進更新するだけで**確定不可**とし、**最終応答 `partial:false` を受信して
+から初めて `Selecting`（確定可能）へ遷移**する。これにより、最初のチャンクだけが確定
+して残りの蓄積入力が欠落する事故を防ぐ（`BatchConverting` 中の Enter は無視する）。
+M58-B 既定（ストリーミング非採用）では各（サブ）リクエストは `partial:false` の最終
+応答を 1 つ返し、TIP は論理バッチ集約（§6.3.3）で全サブリクエスト完了後に `Selecting`
+へ遷移する。M58-A は単一リクエスト・単一 `partial:false` 応答で即 `Selecting` へ遷移する。
 
 ## 4. 入力中の表示・トリガ・確定
 
@@ -206,19 +207,128 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
 できない。multi-segment は `docs/tsf-deep-integration-spec.md` で将来課題と
 されていた領域であり、本機能で初めて必須化する。
 
-### 6.3 キャンセル・長文
+### 6.3 キャンセル・長文・トランスポート契約
 
-- 進行中の一括変換は既存 `CancelPayload`（`target_request_id`）でキャンセルできる。
-  `BatchConverting`（応答待ち）中に追加打鍵 / Esc があれば in-flight リクエストを
-  破棄して `BatchAccumulating` へ戻す（§3）。
-- **アウトオブバンドなキャンセル経路（必須）**: 現行の `NamedPipeTransport::ClientLoop`
-  はハンドラを同期実行し、応答を返すまで同一接続の次メッセージを読まない。TIP IPC
-  ワーカも単一クライアント接続を使うため、遅い `QueryBatchConversion`（長文 /
-  `ai-cleanup`）と同じ接続に `Cancel` を載せても、変換完了まで処理されず**実際には
-  キャンセルされない**（後続リクエストも滞留する）。したがって M58 は、(a) Cancel 専用の
-  別接続（別パイプインスタンス）、または (b) host 側で in-flight 変換と並行して Cancel を
-  処理する非同期ディスパッチャ経路の**いずれかを必須**とする。長文・AI 経路を持つ
-  M58-B / M58-C はこの経路に依存する。
+本節は M58-B のトランスポート設計を**確定**する。out-of-band Cancel 経路（§6.3.2）と
+ストリーミング拡張の採否（§6.3.5）は本書で決定済みであり、実装はこの決定に従う。
+
+#### 6.3.1 in-flight Cancel と状態
+
+進行中の一括変換は既存 `CancelPayload`（`target_request_id`）でキャンセルする。
+`BatchConverting`（応答待ち）中に追加打鍵 / Esc があれば in-flight リクエストを
+`Cancel` して結果を破棄し、`BatchAccumulating` へ戻す（§3）。
+
+#### 6.3.2 out-of-band Cancel 経路の確定（決定）
+
+**決定: 案 (a)「Cancel 専用の制御接続（control connection）+ host 共有キャンセル
+レジストリ + チャンク境界での協調キャンセル」を採用する。案 (b)（host 非同期
+ディスパッチャ）は採用しない。**
+
+決定の根拠（IPC 設計影響の比較）:
+
+- 現行 `NamedPipeServer` は接続ごとに専用スレッドで `ClientLoop` を回す
+  （`AcceptLoop` が接続ごとに `std::thread(ClientLoop).detach()` する。
+  `ipc/src/NamedPipeTransport.cpp`）。`ClientLoop` はハンドラを同期実行し、応答を
+  返すまで**同一接続**の次フレームを読まない。すなわちブロッキングは**接続単位**で
+  あり、サーバは複数接続を**並行**処理できる（ヘッダ「One server can accept multiple
+  clients」）。したがって `Cancel` を**別接続**（control connection）に載せれば、遅い
+  `QueryBatchConversion`（長文 / `ai-cleanup`）を処理中の接続スレッドとは別スレッドで
+  Cancel が即時に読まれる。必要なトランスポート変更は「TIP が 2 本目の接続を張る」
+  ことだけで、現行 `NamedPipeTransport` の **1 リクエスト 1 応答（request/response）
+  契約を温存**できる。
+- 案 (b) は、`QueryBatchConversion` ハンドラを即時 `return std::nullopt` してワーカへ
+  委譲しない限り同一接続で Cancel を読めない。だが `ClientLoop` は `nullopt` のとき
+  応答を書かない（`ipc/src/NamedPipeTransport.cpp` の `if (response && ...)`）ため、
+  変換結果を**後から**同じ接続へ届けるには server 起点の push（同一接続への複数応答）
+  = multi-response/streaming 拡張が必須になる。これは「正しさは streaming を前提に
+  しない」原則（§6.3.5）に反し、本来 optional の拡張へ必須 Cancel 経路を結合させ、
+  IPC トランスポート層の作り直しを招く。よって却下する。
+
+確定した機構:
+
+- **host 側 共有キャンセルレジストリ = 既存 `RequestScheduler` の一般化**: 新しい並行
+  構造は作らず、**既存 `RequestScheduler`（`inference-host/.../RequestScheduler.{h,cpp}`、
+  全 `Dispatcher` が `scheduler_` で共有する process-wide オブジェクト）の cancel-state
+  マップを `(trace_id, request_id)` キーへ一般化**して使う。既存の
+  `TrackCancellation` / `IsCanceled` / `Cancel` / `CompleteRequest` /
+  `PruneInactiveBefore` のライフサイクルをそのまま踏襲する（本書では便宜上
+  「キャンセルレジストリ」と呼ぶが実体は `RequestScheduler`）。接続をまたいで共有
+  される点は既存と同じ（接続ごとの分離状態とは別に共有）。
+  - **レジストリのキーは `(trace_id, request_id)`（`target_request_id` 単独ではない）**:
+    `request_id` は allocator ごとの単調増加で**グローバル一意ではない**（TIP の
+    `ipc_pending_id_` はインスタンスごと。`docs/dev-infrastructure-spec.md` §相関 ID
+    の表）。複数 TIP インスタンス / アプリプロセスが per-user パイプを共有すると
+    `request_id` が衝突し、`target_request_id` 単独で引く process-wide レジストリでは
+    あるクライアントの `Cancel` が**別クライアントの同 id バッチを誤って canceled に
+    する**。そこでキーは、全 envelope 必須でグローバル一意な **`trace_id`（UUIDv7）**
+    と `request_id` の組とする（横断追跡キー `(trace_id, request_id)` をそのまま流用。
+    `docs/dev-infrastructure-spec.md` の「3 つ目の ID 概念を導入しない」方針に従い、
+    新たな session/cancel トークンは足さない）。
+  - `MessageType::Cancel` を受けた接続は（どの接続でも）受信 envelope の `trace_id` と
+    `target_request_id` で `scheduler_->Cancel(trace_id, target_request_id)` を呼ぶ。
+  - `QueryBatchConversion` ハンドラは処理開始時に自身の `(trace_id, request_id)` を
+    `TrackCancellation(trace_id, request_id)` で登録し、§7 の host 側チャンク分割の
+    **各チャンク境界で `IsCanceled(trace_id, request_id)` を協調的にポーリング**する。
+    canceled なら以降のチャンク変換を中止し、現接続へ「canceled」応答（部分結果なし・
+    確定不可）を 1 つ返して終了する（1 リクエスト 1 応答契約を維持）。
+  - パイプにバッファされ未読のサブリクエストは、`ClientLoop` が読み出した時点で
+    ハンドラが**冒頭で `IsCanceled` を確認**し、変換せず canceled 応答で短絡する。
+  - **終端パスでの cleanup（必須・リーク防止）**: ハンドラは**全ての終端パス**
+    （最終 `partial:false` / canceled / エラー応答のいずれを返す場合も）で
+    `CompleteRequest(trace_id, request_id)` を呼ぶ（既存 `Dispatcher` が
+    `scheduler_->CompleteRequest(request_id_)` を呼ぶのと同じ。`active_count` を減算し
+    0 で当該エントリを erase）。これにより長時間稼働 host でバッチごとのエントリが
+    無限に残らない。
+  - **送信済みサブリクエストの cancel マーカは読み出し / 終端まで保持（必須）**:
+    論理バッチは複数サブリクエストを primary パイプにまとめて送るため、先頭の長い
+    変換中に後続サブリクエストは**未読のままキュー**に残る。これらに対する `Cancel`
+    （Esc / 追加打鍵）で生じるマーカは `active_count == 0`（まだ `TrackCancellation`
+    されていない）だが、**`ClientLoop` がそのフレームを読むまでプルーンしてはならない**。
+    プルーンすると、ハンドラ冒頭の `IsCanceled(trace_id, request_id)` がマーカを取り
+    こぼし、キャンセル済みの queued サブリクエストが変換されてしまい out-of-band
+    cancel 契約を破る。したがって、**TIP が実際に送った `(trace_id, request_id)` の
+    マーカは、対応フレームが読まれて終端（`CompleteRequest`）に達するまで保持**する。
+  - **孤児マーカのプルーン**: query が一度も来ない `(trace_id, request_id)` への
+    `Cancel`（真の取りこぼし）のみを、`active_count == 0` の非アクティブマーカとして
+    回収し cancel-state マップの非有界増加を防ぐ。`trace_id` キーはクライアントを
+    またぐため単調 `request_id` 軸では掃けないので、プルーンの TTL は**queued サブ
+    リクエストが未読で待ちうる最大時間（per-サブリクエスト / 論理バッチのタイム
+    アウト予算）より長く**取り、上記「送信済みマーカ保持」を侵さない（具体値は実装で
+    規定）。
+- **TIP 側 制御接続**: TIP は同一パイプへ 2 本の `NamedPipeClient` 接続を張る。
+  - primary: `QueryBatchConversion` / `CommitSegmentsObservation` 等の query と応答。
+  - control: `Cancel`（fire-and-forget。ハンドラは `nullopt` 応答）専用。`BatchConverting`
+    中の Esc / 追加打鍵で、in-flight な各サブリクエスト ID に対し control 接続から
+    `Cancel` を送る（§6.3.3 論理バッチ）。**control 接続から送る `Cancel` envelope の
+    `trace_id` は、対象バッチ（primary で送った `QueryBatchConversion`）の `trace_id` と
+    同一にする**。host は `(trace_id, target_request_id)` でキャンセル対象を一意に
+    特定するため、これにより別 TIP インスタンス / 別バッチの誤キャンセルを防ぐ
+    （§6.3.2 レジストリ）。1 論理バッチの全サブリクエストは同一 `trace_id` を共有する
+    （1 論理操作 = Space トリガの一括変換。`docs/dev-infrastructure-spec.md` の
+    `trace_id` 粒度に整合）。
+  - **control 接続は最初に自身の Handshake を完了してから Cancel を送る（必須）**:
+    host の認証状態は**接続単位**で持たれる（`inference-host/src/main.cpp` は接続ごとに
+    `Dispatcher` を生成し、`Dispatcher::Dispatch` は `AZOOKEY_IPC_HANDSHAKE_TOKEN` /
+    `--handshake-token` 設定時、Handshake 以外を `authenticated_` 確立まで
+    `HandleUnauthenticated` で拒否する。`Cancel` も認証ゲートの後）。したがって control
+    接続が Handshake を踏まないと、token 保護構成では `Cancel` が未認証として捨てられ
+    out-of-band cancel が**無言で効かなくなる**。control 接続は primary と同じ
+    `handshake_token` で Handshake を済ませてから Cancel を送る。
+  - 共有 `CancellationRegistry` / scheduler は process-wide（全接続の `Dispatcher` が同一
+    インスタンスを参照。`inference-host/src/main.cpp`）なので、認証済み control 接続から
+    の `Cancel` は primary 接続で in-flight な変換に到達する（§6.3.2 冒頭の機構）。
+- **capability ネゴシエーション**: out-of-band cancel は host 側の共有レジストリ +
+  協調キャンセル実装に依存する。§6.4.3 で追加する `HandshakeResponse.capabilities` に
+  **`"oob_cancel"`** を載せて広告する。
+  - TIP は応答 capabilities に `"oob_cancel"` が**含まれるときだけ** control 接続経由の
+    out-of-band Cancel に依存する。
+  - 含まれないとき（旧 host）は、TIP は primary 接続に best-effort で `Cancel` を送り
+    （現行 query 完了後に処理される）、ローカル状態遷移で in-flight 結果を**到着時に
+    破棄**する（M58-A 相当）。長文 / `ai-cleanup` の即時キャンセルは保証されないため、
+    その構成では M58-B の長文経路は `oob_cancel` 対応 host を要求する。
+
+#### 6.3.3 論理バッチ集約・タイムアウト・確定可否
+
 - **論理バッチ（複数サブリクエストの集約）**: TIP がフレーム上限超の蓄積を複数の
   `QueryBatchConversion` へ事前分割した場合、それらを **1 つの論理バッチ**として扱う。
   TIP は全サブリクエストの `request_id` 集合と、各サブリクエストの最終応答
@@ -226,8 +336,40 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
   `BatchConverting` → `Selecting` へ遷移する（最初のチャンクの最終応答で `Selecting`
   に入らない）。`full_surface` / `segments` は送信順どおりに連結する。`CancelPayload`
   は単数（`target_request_id`）のため、キャンセル時は **in-flight な各サブリクエスト
-  ID に対して `Cancel` を 1 件ずつ送る**（取りこぼしたサブリクエストを走らせ続けない）。
-  M58-A（単一リクエスト）は論理バッチがサブリクエスト 1 件の特殊ケース。
+  ID に対して control 接続から `Cancel` を 1 件ずつ送る**（§6.3.2。取りこぼした
+  サブリクエストを走らせ続けない）。M58-A（単一リクエスト）は論理バッチがサブ
+  リクエスト 1 件の特殊ケース。
+- **確定可否**: 論理バッチは全サブリクエストが `partial:false` を返すまで**確定不可**。
+  途中の Enter は無視する（部分結果を commit させない。§3）。
+- **タイムアウト戦略**: TIP は各 in-flight サブリクエストに受信タイムアウト `T_sub` を
+  設ける（`NamedPipeClient::ReceiveWithTimeout` を利用）。`T_sub` 超過は当該サブ
+  リクエストの**失敗**とみなす。論理バッチ全体にも上限予算を設けてよい（具体値は
+  実装で規定。spec は戦略のみ固定）。
+- **失敗時方針（部分確定しない）**: いずれかのサブリクエストがタイムアウト / エラーに
+  なった論理バッチは**部分確定しない**。TIP は残る in-flight 全サブリクエスト ID へ
+  control 接続から `Cancel` を送り、§7 の fallback 連鎖（`ai-cleanup` → `neural` →
+  かな確定）で入力を失わずに確定可能にする。
+- **stale 応答の drain（必須）**: `ReceiveWithTimeout` はタイムアウト時に応答を消費
+  せず `nullopt` を返す（`ipc/src/NamedPipeTransport.cpp`）。host 側 `ClientLoop` は
+  ハンドラ完了後に最終 / canceled 応答を **primary 接続に必ず書き込む**ため、タイム
+  アウト / キャンセルした各サブリクエストの応答は遅れて primary パイプに到着する。
+  したがって TIP は、**fallback / 新しいバッチを同じ primary 接続へ送る前に**、次の
+  いずれかで stale 応答を排除しなければならない:
+  - **(推奨) `(trace_id, request_id)` 相関**: TIP は全応答を envelope の
+    `(trace_id, request_id)`（`ipc/include/azookey/ipc/Messages.h`・
+    `docs/dev-infrastructure-spec.md` の横断追跡キー）で照合し、**現在 await 中の
+    in-flight サブリクエスト集合に属さない応答は drain して破棄**する（タイムアウト /
+    キャンセル済みの遅延応答を含む）。`request_id` 単独はインスタンスごと採番で
+    衝突しうるため、グローバル一意な `trace_id` を組で使う（§6.3.2）。これにより
+    古い `segments` が新しい入力に誤って結合される事故を防ぐ。
+  - **(代替) primary 接続の再接続**: タイムアウト / キャンセル後に primary
+    `NamedPipeClient` を `Disconnect` → 再 `Connect`（+ 再 Handshake）して未読の stale
+    応答を捨てる。
+  どちらの場合も、`(trace_id, request_id)` での応答相関は論理バッチの正しさの前提と
+  する（送信順だけに依存して応答を結合しない）。
+
+#### 6.3.4 フレーム上限と分割（シリアライズ後バイト基準）
+
 - 1 リクエストは `ipc/include/azookey/ipc/Limits.h` の `kMaxJsonInputBytes` /
   `kMaxFrameSize`（ともに 1 MB）以内に収める必要がある。IPC フレーミング/パーサが
   この上限を超えるフレームを `inference-host` 到達前に拒否するため、フレーム上限を
@@ -243,6 +385,9 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
   `raw_romaji` で実効ペイロードがほぼ倍になる点に注意する。
 - これとは別に、フレーム上限内のリクエストでも zenz のコンテキスト長に収めるため、
   `inference-host` 側でさらに文境界でチャンク分割して逐次変換する（§7）。
+
+#### 6.3.5 トランスポート契約とストリーミング拡張の採否（決定）
+
 - **トランスポート契約と `partial` の扱い**: 現行の Named Pipe は **1 リクエストにつき
   1 Envelope 応答**の request/response 契約である（`ipc/include/azookey/ipc/NamedPipeTransport.h`
   のハンドラ戻り値・`ipc/src/NamedPipeTransport.cpp` の `ClientLoop` は単一応答のみ書き出す）。
@@ -251,11 +396,16 @@ M58-B の長文変換でストリーミング拡張（§6.3）が有効な場合
   **`partial:false` の最終応答を 1 つだけ返す**。長文の進捗フィードバックは、TIP 側
   論理バッチで**サブリクエストが 1 つ完了するたびに Preedit を更新**することで得る
   （サブリクエストはフレーム上限超のときのみ複数になる）。
-- **（任意）request 内の `partial:true` ストリーミング**は、1 リクエストの変換途中経過を
-  逐次表示するための**トランスポート拡張**（同一 `request_id` に対する複数応答の
-  ストリーミング）を必要とし、**M58-B のスコープに明示的に含める**（`NamedPipeTransport`
-  の多重応答対応）。この拡張が無い構成では `partial:true` 中間応答は送られず、上記の
-  単一 `partial:false` 応答 + サブリクエスト粒度の進捗で動作する。
+- **ストリーミング拡張の採否（決定）**: M58-B の既定（正しさ）経路では request 内の
+  `partial:true` ストリーミング（同一 `request_id` への複数応答）を**採用しない**。
+  採用には案 (b) と同じ multi-response トランスポート改造（`NamedPipeTransport` の
+  多重応答対応）が必要であり、§6.3.2 で温存した 1 リクエスト 1 応答契約を崩すため、
+  **M58-B 必須スコープから除外**し、将来マイルストーンの任意拡張に回す。これにより
+  M58-B が必須とするトランスポート変更は「control 接続 + 共有キャンセルレジストリ +
+  協調キャンセル」（§6.3.2）に限定され、multi-response 改造を要しない。`partial:true`
+  中間応答は送られず、`Response.partial` フィールド自体は将来拡張のために予約する
+  （既定では常に `false`）。`partial:true` を扱う §3 遷移表の行は、この任意拡張を
+  採用したときにのみ有効になる。
 
 ### 6.4 multi-segment commit observation（M58-B / M59 / M60 共有）
 
@@ -339,6 +489,11 @@ return { ok: true }
   };
   ```
 
+  このフィールドは複数の host 拡張機能を広告する共通枠であり、M58-B では少なくとも
+  **`"commit_segments"`**（本節）と **`"oob_cancel"`**（§6.3.2 の out-of-band Cancel
+  対応）を載せうる。TIP は各 capability 文字列の有無で当該拡張への依存可否を個別に
+  判定する。
+
   - host は対応時に `capabilities` へ **`"commit_segments"`** を載せて応答する。
   - TIP は `HandshakeResponse.capabilities` に `"commit_segments"` が**含まれるときだけ**
     `CommitSegmentsObservation` を送る。
@@ -398,7 +553,8 @@ return { ok: true }
   コンテキスト長制限内で逐次変換 → 結合する。**分割・連結は host 内部で完結し、
   当該リクエストには `partial:false` の最終応答を 1 つだけ返す**（現行トランスポートの
   1 リクエスト 1 応答契約に従う。§6.3）。request 内の `partial:true` 逐次表示は
-  トランスポート拡張を要する M58-B の任意項目。
+  multi-response トランスポート拡張を要するため **M58-B では非採用**（§6.3.5。将来の
+  任意拡張）。
 - **host 側のコンテキスト超フォールバック分割**: TIP のフレーム上限分割とは別問題として、
   フレーム上限内（< 1 MB）でも zenz のコンテキスト長を超え、かつ文境界（句点・改行・
   推定文節境界）が無いリクエスト（長い無区切り入力）があり得る。この場合 host チャンカは
@@ -433,7 +589,30 @@ return { ok: true }
   確定しないこと、BatchConverting 中の追加打鍵 / Esc で in-flight Cancel →
   BatchAccumulating 復帰、Esc の戻り、OFF で従来遷移が不変であることを網羅。
 - **IPC** (`ipc/tests/payloads_test.cpp`): `QueryBatchConversion` の build/parse、
-  segments 構造の往復、`partial` フラグ、Cancel の ID 整合。
+  segments 構造の往復、`partial` フラグ、Cancel の ID 整合。`HandshakeResponse.
+  capabilities` の round-trip（`"oob_cancel"` を含む応答 / 欠落応答）と、欠落時に TIP が
+  out-of-band Cancel に依存せず best-effort fallback を選ぶこと（§6.3.2）。
+- **out-of-band Cancel** (`inference-host/tests` + `ipc/tests`): 共有
+  `CancellationRegistry` 経由で、別接続（control 接続相当）からの `Cancel` が in-flight な
+  長い `QueryBatchConversion` をチャンク境界で中止させ、canceled 応答（部分結果なし・
+  確定不可）を 1 つ返すこと。パイプにバッファされ未読のサブリクエストが冒頭の
+  `IsCanceled` チェックで変換せず短絡すること（§6.3.2）。token 保護構成
+  （`handshake_token` 設定）では、Handshake 前の control 接続からの `Cancel` が
+  `HandleUnauthenticated` で捨てられ in-flight を止めないこと、Handshake 済み control
+  接続からの `Cancel` が共有 registry/scheduler 経由で停止させることの双方を検証（§6.3.2）。
+  **クロスクライアント分離**: 2 つのクライアント（別 `trace_id`）が同じ `request_id` を
+  持つとき、片方の `(trace_id, request_id)` への `Cancel` が他方の in-flight バッチを
+  キャンセルしないこと（レジストリが `(trace_id, request_id)` でキーされ、`request_id`
+  単独では引かないこと。§6.3.2）。**レジストリ cleanup** (`scheduler_test.cpp`):
+  終端パス（最終 `partial:false` / canceled / エラー）で `CompleteRequest(trace_id,
+  request_id)` によりエントリが erase されること、query が走らなかった孤児 cancel
+  マーカがプルーンされ cancel-state マップが非有界増加しないこと（§6.3.2 cleanup）。
+- **論理バッチ集約・タイムアウト** (`core/tests` + `inference-host/tests`): 複数サブ
+  リクエストの全 `partial:false` 受信まで `Selecting` へ遷移しないこと、いずれかの
+  サブリクエストが `T_sub` タイムアウト / エラーのとき部分確定せず全 in-flight を
+  Cancel して fallback 連鎖（`ai-cleanup`→`neural`→かな確定）へ進むこと（§6.3.3）。
+  タイムアウト後に遅れて届く stale 応答が `(trace_id, request_id)` 相関で drain・破棄され、
+  fallback / 新バッチの応答に古い `segments` が結合されないこと（§6.3.3 stale 応答の drain）。
 - **変換** (`inference-host/tests`): 固定かな全文 → 妥当な segments / full_surface。
   チャンク分割（句点を含む長文）・キャンセルの動作。
 - **手動 / 実機（Win11、`gate:human-required`）**: `kyouhaiitenkidesu`（→ きょうは

@@ -1075,7 +1075,7 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
-| D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ鍵が設定済みで復号成功 | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | 設定済みの暗号化値（`dpapi:` prefix 付き）が復号失敗 | ✗（再認証 / 再入力を促す） |
+| D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | 前面アプリで TSF context 取得可（§13.2 の自動化レベルに関わらず、context が取れれば `ok`） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
 
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
@@ -1335,24 +1335,25 @@ Windows Settings 等）は実行可能な範囲で自動判定する best-effort
 
 Office（Word / Excel / Outlook）は UI Automation の TSF テキストパターン
 信頼性が低く（§13.2 `recorder`）、キー操作の記録・再生 + 目視チェック
-リストで代替する。各アプリで以下を確認し、pass / fail を手動記録して
-`report.md` の Office セクション（§13.5）へ転記する。
+リストで代替する。各行は「対象」列のアプリでのみ確認し、対象外アプリでは
+N/A（`report.md` に `N/A` と記録し pass/fail 判定に含めない）とする。pass /
+fail を手動記録して `report.md` の Office セクション（§13.5）へ転記する。
 
-| ID | チェック項目 | 期待 |
-|---|---|---|
-| O-01 | 本文（Word 段落 / Excel セル / Outlook 本文）で `nihongo`→Space→Enter | 「日本語」確定、文字化けなし |
-| O-02 | 候補ウィンドウがキャレット付近に出る | キャレット下に出て、セル / 行移動に追従 |
-| O-03 | Excel: セル編集（F2）と数式バーの双方で composition が成立 | 双方で確定できる |
-| O-04 | Excel: 未確定中の矢印キーが preedit 内移動になる | preedit 内で動く（確定後はセル移動） |
-| O-05 | Word: オートコレクト / オートフォーマットが composition を破壊しない | preedit 中は介入しない |
-| O-06 | Outlook: 宛先（To / Cc）欄と本文の双方で入力できる | 双方で確定できる |
-| O-07 | 絵文字 / サロゲートペア確定後の表示（C-007 相当） | 正しく表示される |
-| O-08 | ESC で composition 破棄 / Backspace で 1 文字戻る（C-002 / C-003 相当） | preedit が消える / 1 文字戻る |
-| O-09 | Host kill 中の入力（C-010 相当） | 固まらず DegradedSimple で継続 |
-| O-10 | Release 既定で本文がログ / 成果物に残らない（§7.6） | 残らない |
+| ID | 対象 | チェック項目 | 期待 |
+|---|---|---|---|
+| O-01 | Word / Excel / Outlook | 本文（Word 段落 / Excel セル / Outlook 本文）で `nihongo`→Space→Enter | 「日本語」確定、文字化けなし |
+| O-02 | Word / Excel / Outlook | 候補ウィンドウがキャレット付近に出る | キャレット下に出て、セル / 行移動に追従 |
+| O-03 | Excel | セル編集（F2）と数式バーの双方で composition が成立 | 双方で確定できる |
+| O-04 | Excel | 未確定中の矢印キーが preedit 内移動になる | preedit 内で動く（確定後はセル移動） |
+| O-05 | Word | オートコレクト / オートフォーマットが composition を破壊しない | preedit 中は介入しない |
+| O-06 | Outlook | 宛先（To / Cc）欄と本文の双方で入力できる | 双方で確定できる |
+| O-07 | Word / Excel / Outlook | 絵文字 / サロゲートペア確定後の表示（C-007 相当） | 正しく表示される |
+| O-08 | Word / Excel / Outlook | ESC で composition 破棄 / Backspace で 1 文字戻る（C-002 / C-003 相当） | preedit が消える / 1 文字戻る |
+| O-09 | Word / Excel / Outlook | Host kill 中の入力（C-010 相当） | 固まらず DegradedSimple で継続 |
+| O-10 | Word / Excel / Outlook | Release 既定で本文がログ / 成果物に残らない（§7.6） | 残らない |
 
-recorder スクリプトは O-01〜O-09 のキー列を記録・再生し、結果は目視 +
-screenshot で判定する。
+recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対象列に該当する
+もの）のキー列を記録・再生し、結果は目視 + screenshot で判定する。
 
 ### 13.3.2 アプリ別 workaround / 既知の差異
 

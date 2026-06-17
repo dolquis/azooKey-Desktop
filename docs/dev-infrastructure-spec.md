@@ -535,12 +535,19 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 | ID | 型 | 粒度 | 発番元 |
 |---|---|---|---|
 | `request_id` | uint64（≥1, allocator ごとに単調増加） | IPC リクエスト 1 往復 | **TIP（client）採番**。`QueryCandidates`/staleness は `ipc_pending_id_`、送信キュー（`CommitObservation` / `Cancel`）は接続ローカル連番（§7.3 注記）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
-| `trace_id` | string（UUIDv7 推奨） | ユーザー 1 アクション（キー押下 → UI 更新） | TIP が `OnKeyDown` で発番（§7.7.1） |
+| `trace_id` | string（UUIDv7。**全 envelope 必須**） | 1 論理操作（キー押下 → UI 更新、または 1 lifecycle / settings IPC） | 操作の発行側が採番（キー駆動は TIP の `OnKeyDown`、§7.7.1） |
 
 - 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
   1 アクション内の複数 IPC を束ね、`request_id` がその中の個々の往復を識別する。
 - 両 ID は既存 IPC エンベロープ `{version, request_id, type, trace_id, payload}`
   にそのまま乗る（§12.6 / `docs/privacy-and-secure-input-spec.md` §9）。新フィールドは追加しない。
+- `trace_id` は **全 IPC envelope に必須**（`ipc::Deserialize` は `trace_id` 欠落を
+  reject、`ipc/src/Messages.cpp`）。発番単位は「1 論理操作」:
+  - キー駆動操作 — TIP が `OnKeyDown` で 1 `trace_id` を発番し、その操作の複数 IPC
+    （`QueryCandidates` 等）を束ねる。
+  - 非キー（lifecycle / settings）IPC — `Handshake` / `Ping` / `LoadModel` /
+    `QueryDiagnostics`（§12.6）/ `UpdatePrivacyMode`（privacy §9）等は、その発行側
+    （TIP / 設定アプリ）が操作開始時に UUIDv7 を採番する。単発操作は 1 envelope = 1 `trace_id`。
 - `request_id` は **すべて TIP（client）側で採番**し、Host は応答で echo するのみ。
   TIP には 2 系統の allocator があり、実装はこの分担を維持する（新たに統合しない）:
   - `ipc_pending_id_`（TIP メンバ）— `QueryCandidates` の応答相関と staleness 判定
@@ -627,8 +634,9 @@ Tiny Reranker（M56）・ModernBERT スコアリング（M57）の効果測定�
 
 #### 7.7.1 trace_id
 
-全 IPC envelope に `trace_id`（UUIDv7 推奨）を追加する。TIP 側で
-`OnKeyDown` のタイミングで生成し、対応する全 IPC 往復に付与する。
+全 IPC envelope に `trace_id`（UUIDv7 推奨）を追加する。キー駆動操作では TIP が
+`OnKeyDown` で生成し、対応する全 IPC 往復に付与する。非キー（lifecycle / settings）
+IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope 必須は §7.3 参照）。
 既存 `request_id` は IPC リクエスト単位のままとし、`trace_id` は
 「ユーザーの 1 アクション（キー押下 → UI 更新）」単位で複数 IPC を
 束ねる。

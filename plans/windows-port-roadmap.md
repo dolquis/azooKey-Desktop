@@ -1527,8 +1527,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - JSON Lines ログ（`ts`/`level`/`component`/`request_id`/`phase`/
     `latency_ms`/`result`/`error_code`）
   - 相関 ID（`request_id` は TIP 採番。`QueryCandidates`/staleness は `ipc_pending_id_`、
-    fire-and-forget は接続ローカル連番。`trace_id` と組で相関。詳細は
-    `docs/dev-infrastructure-spec.md` §7.3）とフェーズ別レイテンシ
+    送信キュー〔`CommitObservation`〔応答あり〕/ `Cancel`〔応答なし〕〕は接続ローカル連番。
+    `trace_id` と組で相関。詳細は `docs/dev-infrastructure-spec.md` §7.3）とフェーズ別レイテンシ
   - エラーコード体系 enum（transport / protocol / business）
   - タイムアウト規約（ソフト/ハード）
   - 入力本文・候補語のログ出力は Debug 限定（プライバシー配慮）

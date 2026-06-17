@@ -1060,6 +1060,11 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 同一値を参照し、二重定義しない。`--repair` 列は「M44 受け入れ条件」の
 自動修復対象（D-001 / D-002 / D-003 / D-013）と一致する。
 
+**評価順序（重複時の優先）**: 各行の `ok` / `warning` / `error` 述語が重複し
+うる場合は、**`error` → `warning` → `ok` の順に評価し、最初に一致した（最も
+厳しい）status を採用する**。これにより各行の status は一意に定まり、緩い
+`ok` 述語が厳しい状態を隠さない。
+
 | ID | ok | warning | error | `--repair` |
 |---|---|---|---|---|
 | D-001 | DLL パス存在かつ呼び出し元 bitness と一致 | — | パス不在 or bitness 不一致 | ✓ 再登録 |
@@ -1069,14 +1074,14 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-005 | 接続 + Handshake Ready | — | 接続不可 or Handshake 失敗 | ✗ |
 | D-006 | Ping RTT ≤ 100ms | 100ms < RTT ≤ 500ms | RTT > 500ms or 無応答（§8.5.2 Ping timeout） | ✗ |
 | D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
-| D-008 | `model.enabled=false`、または enabled かつモデルが `valid`（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled だが未ロード（fallback 動作中） | enabled かつ形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
+| D-008 | `model.enabled=false`、または enabled かつモデルが `valid` **かつ loaded**（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled かつ `valid` だが未ロード（fallback 動作中） | enabled かつ形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
 | D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由） |
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
 | D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
-| D-015 | 前面アプリで TSF context 取得可（§13.2 の自動化レベルに関わらず、context が取れれば `ok`） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
+| D-015 | 前面アプリで TSF context 取得可**かつ §13.3.2 の既知の劣化 / workaround なし**（§13.2 の自動化レベルに関わらず、context が取れれば automation level では warning にしない） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
 
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
 （`error` > `warning` > `ok`）とする。`warning` は「縮退しているが入力は

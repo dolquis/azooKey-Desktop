@@ -1312,7 +1312,10 @@ M28（MSIX サイドロード）着手前にアプリ互換性のベースライ
 | C-011 | `Ctrl+A/C/V/L/S`、Alt メニュー、Win キー併用を押す | TIP が食わずアプリ / OS へ通る |
 | C-012 | `ja` / `ju` / `jo` / `jya` / `jyu` / `jyo` を入力 | 「じゃ」「じゅ」「じょ」として preedit / commit できる |
 
-C-001〜C-012 は `full` アプリで UI Automation により自動判定する。
+C-001〜C-012 は `full` アプリ（§13.2）で UI Automation により自動判定できる。
+ただし M50 完了ゲートの**必須対象は Notepad / VS Code / Edge**（M50 受け入れ
+条件）であり、その他の `full` アプリ（Chrome / Windows Terminal /
+Windows Settings 等）は実行可能な範囲で自動判定する best-effort 対象とする。
 `best-effort` / `recorder` アプリでは自動化できないケースを §13.3.1 の
 手動チェックリストで補完する。
 

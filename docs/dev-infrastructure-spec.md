@@ -534,16 +534,21 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 | ID | 型 | 粒度 | 発番元 |
 |---|---|---|---|
-| `request_id` | uint64（≥1, 単調増加） | IPC リクエスト 1 往復 | **TIP（client）が採番**（`ipc_pending_id_`、`tsf-tip/src/TextService.cpp`）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
+| `request_id` | uint64（≥1, allocator ごとに単調増加） | IPC リクエスト 1 往復 | **TIP（client）採番**。`QueryCandidates`/staleness は `ipc_pending_id_`、fire-and-forget（commit / cancel 等）は接続ローカル連番（§7.3 注記）。Host は `req.request_id` を echo（`Dispatcher::MakeResponse`） |
 | `trace_id` | string（UUIDv7 推奨） | ユーザー 1 アクション（キー押下 → UI 更新） | TIP が `OnKeyDown` で発番（§7.7.1） |
 
 - 横断追跡のキーは **`(trace_id, request_id)` の組** とする。`trace_id` が
   1 アクション内の複数 IPC を束ね、`request_id` がその中の個々の往復を識別する。
 - 両 ID は既存 IPC エンベロープ `{version, request_id, type, trace_id, payload}`
   にそのまま乗る（§12.6 / `docs/privacy-and-secure-input-spec.md` §9）。新フィールドは追加しない。
-- `request_id` の発番は **TIP 側 `ipc_pending_id_`** に一本化する。TIP が staleness
-  判定（M10、`req_id == ipc_pending_id_`）と `Cancel.target_request_id` を同 ID で行い、
-  Host は応答で echo するのみ。別系統の採番は作らない。
+- `request_id` は **すべて TIP（client）側で採番**し、Host は応答で echo するのみ。
+  TIP には 2 系統の allocator があり、実装はこの分担を維持する（新たに統合しない）:
+  - `ipc_pending_id_`（TIP メンバ）— `QueryCandidates` の応答相関と staleness 判定
+    （M10、`req_id == ipc_pending_id_`）・`Cancel.target_request_id` に用いる「最新リクエスト」id。
+  - 接続ローカル連番（`next_id`、Handshake=1 の後 2 から開始）— 応答相関を要しない
+    fire-and-forget envelope（`CommitObservation` 等）の wire id。
+  どちらも `tsf-tip/src/TextService.cpp`。ログ相関では `(trace_id, request_id)` に加え
+  MessageType で系統を区別する。
 - Host の `RequestScheduler`（`inference-host/src/RequestScheduler.cpp`）は wire
   `request_id` を **発番しない**。TIP 由来の id をキーに cancellation / latest 追跡を
   行う側であり、`NextRequestId()` は wire ID の採番元ではない。

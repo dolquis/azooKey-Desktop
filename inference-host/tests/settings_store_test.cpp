@@ -105,6 +105,21 @@ TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsStoreTest, EmptySelectedPathClearsExistingModelPath) {
+  azookey::host::RuntimeSettings settings;
+  settings.model.enabled = true;
+  settings.model.selected_path.clear();
+
+  azookey::host::EngineConfig config;
+  config.model_path = "C:/models/existing.gguf";
+  config.n_gpu_layers = 12;
+
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+
+  EXPECT_TRUE(config.model_path.empty());
+  EXPECT_FALSE(config.n_gpu_layers.has_value());
+}
+
 TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
   const auto dir = TestDir("azookey_settings_invalid");
   const auto path = dir / "settings.json";

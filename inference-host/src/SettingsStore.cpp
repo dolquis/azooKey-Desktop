@@ -230,9 +230,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
     config.n_gpu_layers.reset();
     return config;
   }
-  if (!settings.model.selected_path.empty()) {
-    config.model_path = settings.model.selected_path;
-  }
+  config.model_path = settings.model.selected_path;
   if (settings.model.n_gpu_layers >= 0) {
     config.n_gpu_layers = settings.model.n_gpu_layers;
   } else {

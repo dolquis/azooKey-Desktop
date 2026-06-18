@@ -41,6 +41,13 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
+azookey::host::DispatcherConfig DefaultDispatcherConfig() {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  return config;
+}
+
 class ThrowingConverter final : public azookey::core::IConverter {
  public:
   std::vector<azookey::core::Candidate> Convert(
@@ -74,8 +81,7 @@ class DispatcherTest : public ::testing::Test {
         store(learning_path),
         user_dict(user_dict_path),
         engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {}),
-        dispatcher(&engine, &scheduler, &user_dict,
-                   {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion}) {
+        dispatcher(&engine, &scheduler, &user_dict, DefaultDispatcherConfig()) {
     std::remove(learning_path.c_str());
     std::remove(user_dict_path.c_str());
     engine.SetUserDictionary(&user_dict);
@@ -264,9 +270,8 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
   azookey::host::InferenceEngine throwing_engine(
       std::make_unique<ThrowingConverter>(), &throwing_store, {});
   azookey::host::RequestScheduler throwing_scheduler;
-  azookey::host::Dispatcher throwing_dispatcher(
-      &throwing_engine, &throwing_scheduler, nullptr,
-      {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion});
+  azookey::host::Dispatcher throwing_dispatcher(&throwing_engine, &throwing_scheduler, nullptr,
+                                                DefaultDispatcherConfig());
 
   ipc::QueryCandidatesRequest q;
   q.reading = "わたし";
@@ -500,9 +505,8 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
     out << R"({"liveConversion":false,"backendPreference":"cuda"})";
   }
   azookey::host::SettingsStore settings_store(settings_path);
-  azookey::host::Dispatcher config_dispatcher(
-      &engine, &scheduler, &user_dict,
-      {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion}, &settings_store);
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict,
+                                              DefaultDispatcherConfig(), &settings_store);
 
   auto resp = config_dispatcher.Dispatch(MakeReq(74, ipc::MessageType::UpdateConfig, "{}"));
   ASSERT_TRUE(resp.has_value());

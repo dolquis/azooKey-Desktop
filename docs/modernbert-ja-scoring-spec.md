@@ -63,13 +63,16 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
 | 3 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ。CPU backend ではそもそもモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
 | 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 で上限超過によりロード抑止）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止理由を保持して引き継ぐ。RSS 上限超過は `rss_cap` を立て、§11 の RSS fallback 検証に使う |
-| 5 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
-| 6 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 6 をスキップ |
-| 7 | `timeout_budget_remaining >= 30ms` | `no_time_budget` | §5.4 の予算管理 |
+| 5 | circuit breaker が開いていない | `circuit_open` | §5.4 の連続失敗で開く **runtime 状態**（ユーザー設定 `modernbertEnabled` とは独立）。次回モデル再ロードまで閉じない。`off` のようなユーザー設定値ではない |
+| 6 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
+| 7 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 7 をスキップ |
+| 8 | `timeout_budget_remaining >= 30ms` | `no_time_budget` | §5.4 の予算管理 |
 
 `reason` は構造化ログ（`modernbert_used=false, reason=<上記>`）と M52 ベンチ
-集計に用いる。`always` は曖昧性ゲート（順 6）のみスキップし、その他の
-安全ゲート（secure / RSS / backend / timeout）は必ず適用する。
+集計に用いる。`always` は曖昧性ゲート（順 7）のみスキップし、その他の
+安全ゲート（secure / circuit breaker / RSS / backend / timeout）は必ず適用する。
+circuit breaker（順 5）はユーザー設定ではなく runtime 状態であり、`always`
+でもスキップしない。
 
 ### 4.1 ambiguity_score
 
@@ -183,7 +186,7 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
 ### 5.4 timeout 予算と部分結果
 
 - 1 リクエストの ModernBERT 予算は `modernbertTimeoutMs`（既定 40ms、範囲
-  30〜50ms）。起動ゲート（§4.0 順 7）で残予算 `>= 30ms` を要求する。
+  30〜50ms）。起動ゲート（§4.0 順 8）で残予算 `>= 30ms` を要求する。
 - 予算は **top1 候補から順に**消費する。§5.2 の batch は**候補単位**（1 候補 =
   1 forward）なので、各候補の forward 完了ごとに残時間を確認できる。予算切れ
   時点で**評価済み候補のみ** `modernbert_score` を適用し、未評価候補は
@@ -192,8 +195,11 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
   部分結果が取れず予算超過・全キャンセルに陥るため）。
 - forward 自体が失敗（EP 例外・モデル異常）した場合は当該リクエストを
   **スコアなしで続行**し、`modernbert_used=false, reason=infer_error` を記録する。
-- 連続失敗が閾値（既定 3 回）に達したら当該セッションで一時的に
-  `disabled`（circuit breaker）にし、次回モデル再ロードまで起動しない。
+- 連続失敗が閾値（既定 3 回）に達したら **circuit breaker を開く**。これは
+  §4.0 順 5 で判定する **runtime 状態**であり、ユーザー設定
+  `modernbertEnabled`（`auto`/`always`/`off`）とは独立した内部フラグで、設定値を
+  書き換えない。開いている間は順 5 が `reason=circuit_open` で fallback し、
+  次回モデル再ロード（またはセッション再初期化）で閉じる。
 
 ## 6. モデル
 
@@ -264,8 +270,13 @@ loop:
   で M56 `final_score`（ModernBERT 抜き）に fallback する（IME は通常動作）。
 - ユーザーが `always` を選んでも上限は不変（上限超過時はロードしない）。
   これは「IME ごと不安定化させない」ための安全契約であり、設定で緩められない。
-- ロード後に Host 合計 RSS が 2 GB を継続的に超過（既定: 5 秒移動平均で超過）
-  した場合は ModernBERT を**アンロード**し、`reason=rss_runtime` で以降 fallback。
+- ロード直前のベースライン RSS を保持し、ロード後も runtime ガードを継続する。
+  以下のいずれかを継続的に超過（既定: 5 秒移動平均）した場合は ModernBERT を
+  **アンロード**し、`reason=rss_runtime` で以降 fallback する:
+  - (a) Host 合計 RSS が **2 GB** を超過
+  - (b) **ModernBERT 増分**（現在 RSS − ロード前ベースライン RSS）が **+200 MB**
+    を超過（合計が 2 GB 未満でも増分上限は強制。表値は実測まで推定であり、
+    負荷時 activation 変動で増分が膨らみ得るため runtime でも増分を監視する）
 - 採用した `load_target`（fp16/int8）と推定/実測 RSS は load イベントログと
   M52 ベンチ（`rss_mb` / `vram_mb` / `load_ms`、benchmark spec §8）に記録する。
 
@@ -316,8 +327,8 @@ M56 で予約した `reranker.modernbert*` を本 M57 で使う:
 
 - `modernbertEnabled`:
   - `auto`（既定）: ambiguity_score とリソース可用性に応じて自動 ON/OFF
-  - `always`: 曖昧性ゲート（§4.0 順 6）のみスキップ。secure / RSS / backend /
-    timeout の安全ゲートは適用され、上限超過時はロードしない
+  - `always`: 曖昧性ゲート（§4.0 順 7）のみスキップ。secure / circuit breaker /
+    RSS / backend / timeout の安全ゲートは適用され、上限超過時はロードしない
   - `off`: 無効
 - `modernbertQuantization`: **初期ロード対象**（`fp16` 既定）。RSS 上限超過時は
   §6.1 の降格ラダー（fp16→int8→ロードせず）で実効値が変わりうる。

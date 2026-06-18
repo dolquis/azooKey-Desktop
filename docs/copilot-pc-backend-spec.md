@@ -542,20 +542,35 @@ steps:
 > 明示 preset 変数で判定する。出典:
 > [CMAKE_SYSTEM_PROCESSOR（host 追従の注記）](https://cmake.org/cmake/help/latest/variable/CMAKE_SYSTEM_PROCESSOR.html)。
 
+> **重要（i8mm を配布バイナリに焼き込まない）**: `GGML_CPU_ARM_ARCH` の指定機能は
+> ggml CPU バイナリ全体の**必須命令**になる。**i8mm（FEAT_I8MM）は ARMv8.2〜v8.5 で任意**
+> （必須化は v8.6 以降）であり、§8.4 のテスト経路に挙げた **Ampere Altra / Neoverse N1 は
+> ARMv8.2 で i8mm 非対応**。よって `+i8mm` をベースラインに焼き込むと、その同じ Ampere
+> Altra（および i8mm 非搭載の他 ARM64 Windows）で ARM64 ctest / 実行が **illegal
+> instruction で落ちる**。配布ベースラインは **stated target が保証する機能のみ**に
+> 留める。**dotprod（FEAT_DotProd）は ARMv8.2-A で Snapdragon X / Neoverse N1(Ampere
+> Altra) / Cobalt(N2, CI ランナー) いずれも搭載**のため許可してよいが、**i8mm は外す**。
+
 ```cmake
 # §8.1 の toolchain で CMAKE_SYSTEM_PROCESSOR=ARM64 を設定している前提（クロスモード）。
 # toolchain を使わない場合は下記 MATCHES の代わりに
 # CMAKE_CXX_COMPILER_ARCHITECTURE_ID / $ENV{VSCMD_ARG_TGT_ARCH} で判定する。
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)   # クロス時のホスト誤検出を防ぐ
-    # ggml は ARM64 で NEON を常時有効化する。Copilot+ PC（Snapdragon X /
-    # Win11 24H2+）のベースラインは ARMv8.2-A 以降のため dotprod / i8mm を許可してよい。
-    set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "")
+    # 配布ベースラインは全 stated ARM64 Windows ターゲットで安全な機能のみ。
+    # dotprod は ARMv8.2 の Ampere Altra(N1) でも搭載。i8mm は v8.2〜v8.5 で任意
+    # （Altra/N1 非搭載）のため焼き込まない（illegal instruction 回避）。
+    set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod" CACHE STRING "")
 endif()
 ```
 
-- ベースライン ISA は **ARMv8.2-A**（Snapdragon X Elite / Copilot+ PC が満たす）。
-  これ未満の古い ARM64 Windows を切る判断は M27 の前提（Copilot+ PC ターゲット）と整合。
+- ベースライン ISA は **ARMv8.2-A + dotprod**（Snapdragon X / Ampere Altra(N1) /
+  Cobalt(N2) いずれも満たす最小公倍数）。これ未満の古い ARM64 Windows を切る判断は M27 の
+  前提（Copilot+ PC ターゲット）と整合。
+- **i8mm を使いたい場合**（Copilot+ Snapdragon X の行列演算高速化）は、ベースラインに
+  焼き込まず **i8mm 専用 variant を別ビルドし実行時ディスパッチ**で選ぶ（非搭載機では
+  ベースライン variant を使う）。v1.0 では複雑性回避のためベースライン単一とし、i8mm
+  variant は後続評価とする。
 - ネイティブ ARM64 ビルド（§8.4）でも上記明示フラグを使い、クロス/ネイティブで同一
   バイナリ特性に揃える（再現性のため `GGML_NATIVE` は両構成で OFF）。
 - コンパイラは §8.1 のとおり **clang-cl**（`cl.exe` は ggml が ARM で拒否）。

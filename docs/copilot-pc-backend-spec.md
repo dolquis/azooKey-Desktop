@@ -500,28 +500,51 @@ set(CMAKE_C_COMPILER_TARGET   arm64-pc-windows-msvc)
 set(CMAKE_CXX_COMPILER_TARGET arm64-pc-windows-msvc)
 ```
 
-`.github/workflows/windows.yml` のジョブ matrix 例（**ビルドゲート**）:
+**ARM64 クロスビルドは既存 `windows-build` matrix に行追加せず、専用ジョブに分離する**。
+理由は既存 `windows.yml` の後段ステップが x64 native（build + ctest）前提で書かれており、
+ARM64 行を相乗りさせると次の 2 点で**ビルド成功後にジョブが失敗**するため（いずれも
+Codex review 指摘）:
+
+- **artifact 名の衝突**: 既存の upload ステップは `windows-${{ matrix.config }}-logs` /
+  `windows-release-pdb` と **config のみ**で命名する。x64 Release と ARM64 Release は
+  どちらも `config == Release` のため、`actions/upload-artifact@v4` の「matrix 内で
+  artifact 名は一意」制約に違反しアップロードが失敗する。
+- **最終 fail ゲートの誤判定**: 既存の最終ステップは `steps.run_tests.outputs.tests_ec`
+  が `'0'` でなければ `exit 1` する。ARM64 行で ctest を**スキップ**すると `tests_ec` が
+  未設定（空文字）になり、`'' -ne '0'` が真となってビルド成功でも落ちる。
+
+専用ジョブ例（**ビルドゲートのみ・ctest なし・arch を含む一意な artifact 名**）:
 
 ```yaml
-strategy:
-  fail-fast: false
-  matrix:
-    include:
-      - { config: Debug,   preset: windows-debug }      # x64 native
-      - { config: Release, preset: windows-release }    # x64 native
-      - { config: Release, preset: windows-release-arm64, arch_env: amd64_arm64 }  # ARM64 cross-build only
-steps:
-  - uses: ilammy/msvc-dev-cmd@v1
-    with:
-      arch: ${{ matrix.arch_env || 'x64' }}   # ARM64 ジョブは SDK/リンカ環境を x64_arm64 に
-  - run: cmake --preset ${{ matrix.preset }} -DAZOOKEY_FETCH_GOOGLETEST=ON
-  - run: cmake --build --preset ${{ matrix.preset }}
-  # ARM64 クロスビルドのジョブは ctest を実行しない（x64 ホストで ARM64 バイナリは
-  # 走らない）。テスト実行は §8.4。
+jobs:
+  windows-arm64-crossbuild:        # 既存 windows-build とは別ジョブ
+    name: Windows ARM64 cross-build
+    runs-on: windows-2022          # x64 ホストでクロスビルド
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: false }
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64        # ARM64 の SDK ヘッダ / import lib / リンカ環境
+      - run: cmake --preset windows-release-arm64 -DAZOOKEY_FETCH_GOOGLETEST=ON
+      - run: cmake --build --preset windows-release-arm64
+      # ctest は実行しない（x64 ホストで ARM64 バイナリは走らない）。実行は §8.4。
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-arm64-crossbuild-logs   # ← arch を含め一意化
+          path: |
+            configure-arm64.log
+            build-arm64.log
+          if-no-files-found: ignore
+      # このジョブの fail ゲートは configure + build のみを見る（tests_ec は参照しない）。
 ```
 
-`windows-release-arm64` preset は `windows-release` を継承し、上記 toolchain file を
-`CMAKE_TOOLCHAIN_FILE` で指す（または同じ変数群を `cacheVariables` で直接指定する）。
+既存 `windows-build`（x64）matrix に ARM64 を**足さない**ため、x64 側の artifact 名・
+fail ゲートは無改変で済む。`windows-release-arm64` preset は `windows-release` を継承し、
+上記 toolchain file を `CMAKE_TOOLCHAIN_FILE` で指す（または同じ変数群を
+`cacheVariables` で直接指定する）。なお §8.4 の `windows-11-arm` ネイティブテストジョブも
+別ジョブとして独立させ、そちらは build + ctest + 自前の fail ゲートを持つ。
 
 ### 8.2 ARM 最適化フラグ（cross-compile セーフ）
 

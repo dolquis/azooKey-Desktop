@@ -174,7 +174,7 @@ batched forward にまとめるため、**実 forward 呼び出し回数は K �
 | TTL | 300 秒（`modernbertCacheTtlSec`） |
 | 最大エントリ数 | 2,048（LRU evict）。超過時は最古アクセスから破棄 |
 | 無効化 | TTL 失効 / LRU 押し出し / `model_id`・`quantization` 変更 / モデル再ロード時に全 flush |
-| メトリクス | `cache_hit` / `cache_miss` を構造化ログ・M52 ベンチに記録 |
+| メトリクス | `cache_hit` / `cache_miss` を**構造化ログ**に記録し、§10 の integration テストで cache hit を検証する。M52 bench スキーマ（`docs/conversion-quality-benchmark-spec.md` §6.3/§8）には cache カウンタが無いため bench 出力には含めない。bench で可視化する場合は §6.1 の `load_ms`/`vram_mb` と同じく bench スキーマ拡張として実装時に同期する |
 
 キーが確定テキストのみに依存するため、同一文を再変換しても打鍵途中の
 未確定文字列ではキーが変動せず、再変換・候補再表示で再利用できる。
@@ -247,8 +247,13 @@ ModernBERT-Ja 70M をロードした場合の Host プロセス RSS 増分（**�
 
 | 指標 | 上限 |
 |---|---|
-| ModernBERT による Host **RSS 増分** | **+200 MB** |
-| Host プロセス合計 RSS（SimpleConverter + Zenzai + ModernBERT 込み） | **2 GB 以下** |
+| ModernBERT による Host **RSS 増分** | **`modernbertRssCapMb`（既定 200 MB、§7）** |
+| Host プロセス合計 RSS（SimpleConverter + Zenzai + ModernBERT 込み） | **2 GB 以下**（固定の絶対上限。設定では緩められない） |
+
+RSS 増分上限は `modernbertRssCapMb` を参照する（リテラル固定ではない）。設定で
+既定 200 MB より小さい値（例 100 MB）にした場合は、その値が§6.1 のロードゲート・
+runtime ガード双方の判定境界になる。合計 2 GB は固定の絶対上限で、増分上限とは
+独立に常に適用する。`always` でもこれらの上限は緩めない。
 
 上限は「既定で無効」という弱い扱いではなく、**ロードゲートで強制**する。
 `modernbertEnabled` が `auto` / `always` であっても、下記ロードゲートを
@@ -261,7 +266,7 @@ load_target = modernbertQuantization        # 既定 fp16
 loop:
   est_rss   = RSS_INCREMENT[backend][load_target]      # 上表
   proj_total = current_host_rss + est_rss
-  if est_rss <= 200MB and proj_total <= 2GB:
+  if est_rss <= modernbertRssCapMb and proj_total <= 2GB:
       load(load_target); break               # ロード成功
   elif load_target == fp16:
       load_target = int8                      # 降格して再評価（fp16→int8）
@@ -280,9 +285,10 @@ loop:
   以下のいずれかを継続的に超過（既定: 5 秒移動平均）した場合は ModernBERT を
   **アンロード**し、`reason=rss_runtime` で以降 fallback する:
   - (a) Host 合計 RSS が **2 GB** を超過
-  - (b) **ModernBERT 増分**（現在 RSS − ロード前ベースライン RSS）が **+200 MB**
-    を超過（合計が 2 GB 未満でも増分上限は強制。表値は実測まで推定であり、
-    負荷時 activation 変動で増分が膨らみ得るため runtime でも増分を監視する）
+  - (b) **ModernBERT 増分**（現在 RSS − ロード前ベースライン RSS）が
+    **`modernbertRssCapMb`（既定 200 MB）** を超過（合計が 2 GB 未満でも増分上限は
+    強制。表値は実測まで推定であり、負荷時 activation 変動で増分が膨らみ得るため
+    runtime でも増分を監視する）
 - 採用した `load_target`（fp16/int8）と推定/実測 RSS は load イベントログと
   M52 ベンチに記録する。RSS ピークは既存フィールド `memory_peak_mb`
   （`docs/conversion-quality-benchmark-spec.md` §6.3/§8）に対応づける。

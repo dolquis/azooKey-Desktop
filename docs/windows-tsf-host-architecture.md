@@ -95,16 +95,14 @@
 
 ## 設定（SettingsStore）
 
-- 設定の正典スキーマは `settings/mvp-settings.schema.json`。現状、これを**ランタイムで
-  読む層が無く**、実効値は host の CLI 引数 / 環境変数で受けている（DEV-203）。
-- 実装予定の `SettingsStore`（`inference-host`、新規）は、起動時に
-  `%LOCALAPPDATA%\azooKey\config\settings.json` を読み、未指定キーを schema default に
-  フォールバックして提供する。設定アプリからの反映は `docs/sideload-packaging-spec.md`
-  §3.3 の `UpdateSettings`（settings_json を host が受信し settings.json へ保存）に従う。
-- **参考（fkunn1326/azooKey-Windows, MIT）**: 先行実装は『settings.json をファイル正典とし、
-  `UpdateConfig` は payload 空の再読込トリガのみ（設定アプリが settings.json を直接書く）』
-  という別パターンを採る。自分側 §3.3 は full JSON を IPC で送る方式であり、どちらを採るかは
-  設計判断（ファイル競合・反映タイミングの扱いは DEV-181 のプロセス間ロックと整合させる）。
+- 設定の正典スキーマは `settings/mvp-settings.schema.json`。`inference-host` の
+  `SettingsStore` は起動時に `%LOCALAPPDATA%\azooKey\config\settings.json` を読み、
+  未指定キーを schema default にフォールバックして提供する。
+- `settings.json` はファイル正典とし、設定アプリからの IPC `UpdateConfig` は payload 空の
+  再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
+- 破損した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
+  `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。ファイル競合・
+  同時書き込みの排他は DEV-181 のプロセス間ロック方針と整合させる。
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 
@@ -185,7 +183,7 @@
 ### Phase 7（サイドロード配信、`docs/sideload-packaging-spec.md`）
 
 - `settings-app/` — C++/WinRT WinUI 3 設定アプリ（**最小版は M11 / v1.0** で導入し
-  `UpdateSettings` + SettingsStore 最小実装まで含む。フル UI は M30。roadmap M11 / M30、
+  settings.json 書き込み + `UpdateConfig` 再読込まで含む。フル UI は M30。roadmap M11 / M30、
   `docs/sideload-packaging-spec.md` §3.0）
 - `core/src/EtwLogger.cpp` — ETW Provider ラッパ
 - `inference-host/src/UpdateChecker.cpp` — GitHub Releases ベース更新確認
@@ -218,7 +216,7 @@ Phase 5〜6 で順次追加する。
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
 | `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20) | tsf-deep §1 |
-| `UpdateSettings` / `Response` | Settings → Host | **M11 最小（v1.0） / M30 拡張** | sideload §3 + roadmap M11 |
+| `UpdateConfig` / `Response` | Settings → Host | **M11 最小（v1.0） / M30 拡張** | sideload §3 + roadmap M11 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
@@ -238,7 +236,7 @@ TIP DLL がアプリプロセスにロードされた状態で、最大以下の
 | `DebugWindow` | F10 デバッグ（M18-3） | デスクトップ | トグル表示 |
 
 設定アプリは **別プロセス**（`azookey_settings.exe`）で、IPC 経由で Host 設定を変更する。
-最小の設定永続化・反映（`UpdateSettings` + SettingsStore 最小実装）は **M11**（v1.0）で
+最小の設定永続化・反映（settings.json 書き込み + `UpdateConfig` 再読込）は **M11**（v1.0）で
 導入し、フル設定 UI は **M30**（post-v1.0）で本格化する（roadmap M11 / M30、
 `docs/sideload-packaging-spec.md` §3）。TIP プロセスからは `ITfFnConfigure::Show` で
 起動するのみ。

@@ -21,6 +21,7 @@
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/host/SettingsStore.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -97,9 +98,12 @@ std::string GetEnvString(const char* name) {
 int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
+  const auto default_backend = config.backend;
   std::optional<std::filesystem::path> explicit_learning_path;
   std::optional<std::filesystem::path> explicit_user_dict_path;
   std::string mock_dict_path;
+  bool explicit_backend = false;
+  bool explicit_model_path = false;
   bool pipe_mode = false;
   std::string pipe_name;
   std::string handshake_token = GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN");
@@ -108,17 +112,22 @@ int main(int argc, char** argv) {
     const std::string arg = argv[i];
     if (arg == "--cuda") {
       config.backend = azookey::host::BackendKind::Cuda;
+      explicit_backend = true;
     } else if (arg == "--cpu") {
       config.backend = azookey::host::BackendKind::Cpu;
+      explicit_backend = true;
     } else if (arg == "--backend" && i + 1 < argc) {
       const std::string value = argv[++i];
       if (value == "cuda") {
         config.backend = azookey::host::BackendKind::Cuda;
+        explicit_backend = true;
       } else if (value == "cpu") {
         config.backend = azookey::host::BackendKind::Cpu;
+        explicit_backend = true;
       }
     } else if (arg == "--model" && i + 1 < argc) {
       config.model_path = argv[++i];
+      explicit_model_path = true;
     } else if (arg == "--learning" && i + 1 < argc) {
       explicit_learning_path = argv[++i];
     } else if (arg == "--user-dict" && i + 1 < argc) {
@@ -165,6 +174,27 @@ int main(int argc, char** argv) {
     MigrateLegacyDefaultFileIfNeeded("azookey_user_dict.json", user_paths->user_dict_path);
   }
 
+  azookey::host::SettingsStore settings_store(user_paths->settings_path);
+  const auto settings_result = settings_store.Load();
+  const auto cli_backend = config.backend;
+  const auto cli_model_path = config.model_path;
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings,
+                                                             default_backend);
+  if (explicit_backend) {
+    config.backend = cli_backend;
+  }
+  if (explicit_model_path) {
+    config.model_path = cli_model_path;
+  }
+  if (settings_result.status == azookey::host::SettingsLoadStatus::Invalid) {
+    std::cerr << "warn: invalid settings.json";
+    if (settings_result.error) std::cerr << ": " << *settings_result.error;
+    if (settings_result.quarantined_path) {
+      std::cerr << " (quarantined at " << *settings_result.quarantined_path << ")";
+    }
+    std::cerr << std::endl;
+  }
+
   azookey::learning::LearningStore store(learning_path);
   store.Load();
 
@@ -178,7 +208,8 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
-  if (!engine.LoadModel()) {
+  if ((settings_store.settings().model.auto_load_on_host_start || explicit_model_path) &&
+      !engine.LoadModel()) {
     std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
               << " (falling back to SimpleConverter)" << std::endl;
   }
@@ -187,6 +218,13 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
+  dconf.default_backend = default_backend;
+  if (explicit_backend) {
+    dconf.override_backend = cli_backend;
+  }
+  if (explicit_model_path) {
+    dconf.override_model_path = cli_model_path;
+  }
   if (pipe_mode) {
     if (handshake_token.empty()) {
       std::cerr << "warn: no IPC handshake token configured; relying on per-user pipe ACL"
@@ -197,7 +235,8 @@ int main(int argc, char** argv) {
   // For stdio mode a single Dispatcher suffices (one connection).
   // For pipe mode a new Dispatcher is created per client connection so that
   // each client's authentication state is isolated.
-  azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf);
+  azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf,
+                                             &settings_store);
 
   std::cerr << "azookey inference-host started. backend="
             << (engine.backend() == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
@@ -211,9 +250,9 @@ int main(int argc, char** argv) {
 
     azookey::ipc::NamedPipeServer server;
     if (!server.Start(pipe_name,
-                      [&engine, &scheduler, &user_dict, dconf]() {
+                      [&engine, &scheduler, &user_dict, &settings_store, dconf]() {
                         auto d = std::make_shared<azookey::host::Dispatcher>(
-                            &engine, &scheduler, &user_dict, dconf);
+                            &engine, &scheduler, &user_dict, dconf, &settings_store);
                         return [d](const azookey::ipc::Envelope& env) {
                           return d->Dispatch(env);
                         };

@@ -380,4 +380,24 @@ std::optional<RemoveUserWordResponse> ParseRemoveUserWordResponse(const std::str
   return p;
 }
 
+// -------- UpdateConfig --------
+
+std::string BuildUpdateConfigResponse(const UpdateConfigResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<UpdateConfigResponse> ParseUpdateConfigResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  UpdateConfigResponse p;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  p.ok = *ok;
+  if (auto error = v->GetString("error")) p.error = std::move(*error);
+  return p;
+}
+
 }  // namespace azookey::ipc

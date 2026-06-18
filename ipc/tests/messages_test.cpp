@@ -40,8 +40,12 @@ TEST(MessagesTest, TypeStringMapping) {
             azookey::ipc::MessageType::CommitCorrection);
   EXPECT_EQ(azookey::ipc::TypeFromString("UpdateUserWord"),
             azookey::ipc::MessageType::UpdateUserWord);
+  EXPECT_EQ(azookey::ipc::TypeFromString("UpdateConfig"),
+            azookey::ipc::MessageType::UpdateConfig);
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryPredictions),
             "QueryPredictions");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::UpdateConfig),
+            "UpdateConfig");
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {

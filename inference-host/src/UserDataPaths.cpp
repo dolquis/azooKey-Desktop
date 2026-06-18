@@ -72,6 +72,7 @@ std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inpu
     paths.data_dir = (paths.root_dir / "data").lexically_normal();
     paths.logs_dir = (paths.root_dir / "logs").lexically_normal();
     paths.models_dir = (paths.root_dir / "models").lexically_normal();
+    paths.settings_path = (paths.config_dir / "settings.json").lexically_normal();
   }
   // The data_dir default is only valid when have_local is true.
   paths.learning_path = inputs.explicit_learning_path

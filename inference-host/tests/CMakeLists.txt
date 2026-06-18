@@ -21,3 +21,9 @@ target_link_libraries(host_user_data_paths_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
 gtest_discover_tests(host_user_data_paths_tests)
+
+add_executable(host_settings_store_tests settings_store_test.cpp)
+target_link_libraries(host_settings_store_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+gtest_discover_tests(host_settings_store_tests)

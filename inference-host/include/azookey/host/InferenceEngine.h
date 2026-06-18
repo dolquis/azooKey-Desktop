@@ -86,6 +86,7 @@ class InferenceEngine {
                         const std::string& selected_surface,
                         uint64_t now_epoch_sec);
   bool FlushLearningStore();
+  void ApplyConfig(const EngineConfig& config);
 
   BackendKind backend() const;
   EngineConfig config() const;

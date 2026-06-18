@@ -17,6 +17,7 @@ struct UserDataPaths {
   std::filesystem::path data_dir;
   std::filesystem::path logs_dir;
   std::filesystem::path models_dir;
+  std::filesystem::path settings_path;
   std::filesystem::path learning_path;
   std::filesystem::path user_dict_path;
 };

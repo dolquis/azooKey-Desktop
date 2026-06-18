@@ -127,6 +127,17 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   return result;
 }
 
+void InferenceEngine::ApplyConfig(const EngineConfig& config) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  config_.enable_live_conversion = config.enable_live_conversion;
+  config_.learning_alpha = config.learning_alpha;
+  config_.learning_flush_every_n = config.learning_flush_every_n;
+  config_.learning_flush_interval_sec = config.learning_flush_interval_sec;
+  config_.learning_max_records = config.learning_max_records;
+  config_.learning_min_weight = config.learning_min_weight;
+  config_.user_word_default_score = config.user_word_default_score;
+}
+
 BackendKind InferenceEngine::backend() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
   return config_.backend;

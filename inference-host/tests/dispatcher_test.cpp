@@ -13,6 +13,7 @@
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/LearningStore.h"
@@ -38,6 +39,13 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
       static_cast<unsigned char>((version >> 24) & 0xFF),
   };
   out.write(reinterpret_cast<const char*>(bytes), 4);
+}
+
+azookey::host::DispatcherConfig DefaultDispatcherConfig() {
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  return config;
 }
 
 class ThrowingConverter final : public azookey::core::IConverter {
@@ -73,8 +81,7 @@ class DispatcherTest : public ::testing::Test {
         store(learning_path),
         user_dict(user_dict_path),
         engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {}),
-        dispatcher(&engine, &scheduler, &user_dict,
-                   {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion}) {
+        dispatcher(&engine, &scheduler, &user_dict, DefaultDispatcherConfig()) {
     std::remove(learning_path.c_str());
     std::remove(user_dict_path.c_str());
     engine.SetUserDictionary(&user_dict);
@@ -263,9 +270,8 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
   azookey::host::InferenceEngine throwing_engine(
       std::make_unique<ThrowingConverter>(), &throwing_store, {});
   azookey::host::RequestScheduler throwing_scheduler;
-  azookey::host::Dispatcher throwing_dispatcher(
-      &throwing_engine, &throwing_scheduler, nullptr,
-      {/*host_version=*/"0.1.0", /*protocol_version=*/kProtocolVersion});
+  azookey::host::Dispatcher throwing_dispatcher(&throwing_engine, &throwing_scheduler, nullptr,
+                                                DefaultDispatcherConfig());
 
   ipc::QueryCandidatesRequest q;
   q.reading = "わたし";
@@ -467,6 +473,143 @@ TEST_F(DispatcherTest, Health) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->status, "ok");
   EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
+}
+
+TEST_F(DispatcherTest, UpdateConfigWithoutSettingsStoreReturnsError) {
+  auto resp = dispatcher.Dispatch(MakeReq(73, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  EXPECT_EQ(resp->type, ipc::MessageType::UpdateConfig);
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->ok);
+  ASSERT_TRUE(parsed->error.has_value());
+  EXPECT_EQ(*parsed->error, "settings store not configured");
+}
+
+TEST_F(DispatcherTest, DispatcherConfigCopiesShareUpdateConfigMutex) {
+  azookey::host::DispatcherConfig config;
+  const auto shared_mutex = config.update_config_mutex;
+  azookey::host::DispatcherConfig copy = config;
+
+  ASSERT_TRUE(shared_mutex);
+  EXPECT_EQ(copy.update_config_mutex, shared_mutex);
+  EXPECT_NE(azookey::host::DispatcherConfig{}.update_config_mutex, shared_mutex);
+}
+
+TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
+  const auto settings_path = TempPath("azookey_dispatcher_settings.json");
+  std::remove(settings_path.c_str());
+
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({"liveConversion":false,"backendPreference":"cuda"})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict,
+                                              DefaultDispatcherConfig(), &settings_store);
+
+  auto resp = config_dispatcher.Dispatch(MakeReq(74, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_FALSE(engine.config().enable_live_conversion);
+  EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cuda);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << R"({"liveConversion":true,"backendPreference":"auto"})";
+  }
+
+  auto second = config_dispatcher.Dispatch(MakeReq(75, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(second.has_value());
+  auto second_payload = ipc::ParseUpdateConfigResponse(second->payload_json);
+  ASSERT_TRUE(second_payload.has_value());
+  EXPECT_TRUE(second_payload->ok);
+  EXPECT_TRUE(engine.config().enable_live_conversion);
+  EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cpu);
+
+  std::remove(settings_path.c_str());
+}
+
+TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
+  const auto settings_path = TempPath("azookey_dispatcher_invalid_reload_settings.json");
+  const auto model_path = TempPath("azookey_dispatcher_invalid_reload_zenzai.gguf");
+  const auto model_json_path = std::filesystem::path(model_path).generic_string();
+  std::remove(settings_path.c_str());
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({"model":{"selectedPath":")" << model_json_path << R"("}})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict,
+                                              DefaultDispatcherConfig(), &settings_store);
+
+  auto resp = config_dispatcher.Dispatch(MakeReq(76, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_TRUE(parsed->ok);
+  ASSERT_TRUE(engine.model_loaded());
+  EXPECT_EQ(engine.config().model_path, model_json_path);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << "{ invalid json";
+  }
+
+  auto invalid = config_dispatcher.Dispatch(MakeReq(77, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(invalid.has_value());
+  auto invalid_payload = ipc::ParseUpdateConfigResponse(invalid->payload_json);
+  ASSERT_TRUE(invalid_payload.has_value());
+  EXPECT_FALSE(invalid_payload->ok);
+  ASSERT_TRUE(invalid_payload->error.has_value());
+  EXPECT_TRUE(engine.model_loaded());
+  EXPECT_EQ(engine.config().model_path, model_json_path);
+
+  std::remove(settings_path.c_str());
+  std::remove(model_path.c_str());
+}
+
+TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
+  const auto settings_path = TempPath("azookey_dispatcher_override_settings.json");
+  const auto cli_model_path = TempPath("azookey_dispatcher_override_zenzai.gguf");
+  std::remove(settings_path.c_str());
+  std::remove(cli_model_path.c_str());
+  WriteMinimalGguf(cli_model_path);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({
+      "backendPreference": "cuda",
+      "model": {
+        "selectedPath": "C:/models/settings-selected.gguf"
+      }
+    })";
+  }
+
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.override_backend = azookey::host::BackendKind::Cpu;
+  config.override_model_path = cli_model_path;
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict, config,
+                                              &settings_store);
+
+  auto resp = config_dispatcher.Dispatch(MakeReq(76, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cpu);
+  EXPECT_EQ(engine.config().model_path, cli_model_path);
+
+  std::remove(settings_path.c_str());
+  std::remove(cli_model_path.c_str());
 }
 
 // Verify that a token-configured Dispatcher isolates auth state per instance.

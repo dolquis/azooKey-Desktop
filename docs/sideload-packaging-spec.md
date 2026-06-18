@@ -661,21 +661,23 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 ### 3.3 Host との IPC
 
-設定変更時は Host に `UpdateSettings` メッセージを送信：
+設定アプリは `%LOCALAPPDATA%\azooKey\config\settings.json` を更新した後、Host に
+payload 空の `UpdateConfig` メッセージを送信して再読込を促す。設定オブジェクトは
+IPC schema に二重定義しない。
 
 ```
-UpdateSettingsRequest:
+UpdateConfigRequest:
   request_id
-  settings_json: string   // JSON schema 適用済み
 
-UpdateSettingsResponse:
+UpdateConfigResponse:
   request_id
   ok: bool
   error: optional<string>
 ```
 
-Host は受信した設定を `%LOCALAPPDATA%\azooKey\config\settings.json` に保存し、
-即時反映可能なものは適用、再起動が必要なものは `restart_required: bool` を返す。
+Host は `settings.json` を再読込し、即時反映可能なものを適用する。破損などで
+再読込結果が invalid の場合、`ok=false` と `error` を返し、現在の runtime 設定は
+維持する。再起動が必要な設定は M30 の UI 本格化時に settings app 側の表示で扱う。
 
 ### 3.4 設定ファイルパス
 
@@ -714,7 +716,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   （既存インスタンスがあれば前面化、single-instance）したうえで `S_OK` を即時返す**。
   `ITfFnConfigure::Show` の Remarks「ダイアログを閉じるまで return しない」は短命なモーダル
   プロパティ シートを想定した記述であり、別プロセスの設定アプリを採る本実装では非同期起動と
-  する（設定値の反映はプロパティ シートの OK/Apply ではなく §3.3 の `UpdateSettings` IPC で
+  する（設定値の反映はプロパティ シートの OK/Apply ではなく §3.3 の `UpdateConfig` IPC で
   行う）。WinUI 3 / Windows App SDK ランタイムを設定 UI ホストプロセスへ load しない利点も保つ。
 - **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
   `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。

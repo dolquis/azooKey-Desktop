@@ -528,6 +528,44 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
   std::remove(settings_path.c_str());
 }
 
+TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
+  const auto settings_path = TempPath("azookey_dispatcher_override_settings.json");
+  const auto cli_model_path = TempPath("azookey_dispatcher_override_zenzai.gguf");
+  std::remove(settings_path.c_str());
+  std::remove(cli_model_path.c_str());
+  WriteMinimalGguf(cli_model_path);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({
+      "backendPreference": "cuda",
+      "model": {
+        "selectedPath": "C:/models/settings-selected.gguf"
+      }
+    })";
+  }
+
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::DispatcherConfig config;
+  config.host_version = "0.1.0";
+  config.protocol_version = kProtocolVersion;
+  config.override_backend = azookey::host::BackendKind::Cpu;
+  config.override_model_path = cli_model_path;
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict, config,
+                                              &settings_store);
+
+  auto resp = config_dispatcher.Dispatch(MakeReq(76, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cpu);
+  EXPECT_EQ(engine.config().model_path, cli_model_path);
+
+  std::remove(settings_path.c_str());
+  std::remove(cli_model_path.c_str());
+}
+
 // Verify that a token-configured Dispatcher isolates auth state per instance.
 // Connection A authenticates; a separate Dispatcher (simulating connection B)
 // must NOT inherit A's authenticated state.

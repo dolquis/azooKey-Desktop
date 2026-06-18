@@ -216,6 +216,12 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
+  if (explicit_backend) {
+    dconf.override_backend = cli_backend;
+  }
+  if (explicit_model_path) {
+    dconf.override_model_path = cli_model_path;
+  }
   if (pipe_mode) {
     if (handshake_token.empty()) {
       std::cerr << "warn: no IPC handshake token configured; relying on per-user pipe ACL"

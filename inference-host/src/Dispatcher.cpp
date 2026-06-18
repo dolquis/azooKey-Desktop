@@ -315,6 +315,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   std::lock_guard<std::mutex> lock(*config_.update_config_mutex);
   const auto load_result = settings_store_->Reload();
   auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings);
+  if (config_.override_backend) {
+    next_config.backend = *config_.override_backend;
+  }
+  if (config_.override_model_path) {
+    next_config.model_path = *config_.override_model_path;
+  }
   engine_->ApplyConfig(next_config);
   const auto model_result = engine_->LoadModelWithResult(
       ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers});

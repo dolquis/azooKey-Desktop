@@ -17,6 +17,8 @@ struct DispatcherConfig {
   std::string host_version{"0.1.0"};
   int protocol_version{1};
   std::string handshake_token;
+  std::optional<BackendKind> override_backend;
+  std::optional<std::string> override_model_path;
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.
   std::shared_ptr<std::mutex> update_config_mutex{std::make_shared<std::mutex>()};
 };

@@ -62,7 +62,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
 | 3 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ。CPU backend ではそもそもモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
-| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 で上限超過によりロード抑止）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止理由を保持して引き継ぐ。RSS 上限超過は `rss_cap` を立て、§11 の RSS fallback 検証に使う |
+| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 ロード時に上限超過で抑止）/ `rss_runtime`（§6.1 runtime ガードでアンロード済み）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止 / runtime アンロード理由を保持して引き継ぐ。ロード時上限超過は `rss_cap`、ロード後 runtime 超過は `rss_runtime` を立て、§11 の RSS fallback 検証に使う（`not_loaded` に潰さない） |
 | 5 | circuit breaker が開いていない | `circuit_open` | §5.4 の連続失敗で開く **runtime 状態**（ユーザー設定 `modernbertEnabled` とは独立）。次回モデル再ロードまで閉じない。`off` のようなユーザー設定値ではない |
 | 6 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
 | 7 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 7 をスキップ |
@@ -139,9 +139,15 @@ modernbert_score = (1/N) Σ log P(token_i | sentence with token_i masked)
 候補部分のトークンだけ順次 mask して forward。文全体を mask する MLM の
 完全 PLL は計算量が膨大なので回避する。
 
-PLL は **token 単位で別々の masked 文を作って forward する必要がある**
-ため、1 候補が N トークンなら N 回の forward を要する。K 候補・各 N
-トークンの場合、総 forward 回数は Σ N_k となる。
+PLL は **token 単位で別々の masked 文（サンプル）を作る必要がある**ため、
+1 候補が N トークンなら **N 個の masked サンプル**を生む。K 候補・各 N
+トークンの場合、masked サンプル総数は **Σ N_k**。
+
+ここで「masked サンプル数（Σ N_k）」と「backend forward **呼び出し**回数」は
+別単位である。§5.2 の候補単位 batch により、1 候補の N_k サンプルを 1 回の
+batched forward にまとめるため、**実 forward 呼び出し回数は K 回**（候補数）に
+なる。§5.4 の timeout 予算と部分適用は「1 候補 = 1 forward 呼び出し」を単位と
+し、latency 見積り・キャンセルもこの forward 呼び出し単位で行う。
 
 ### 5.2 軽量化
 
@@ -278,7 +284,12 @@ loop:
     を超過（合計が 2 GB 未満でも増分上限は強制。表値は実測まで推定であり、
     負荷時 activation 変動で増分が膨らみ得るため runtime でも増分を監視する）
 - 採用した `load_target`（fp16/int8）と推定/実測 RSS は load イベントログと
-  M52 ベンチ（`rss_mb` / `vram_mb` / `load_ms`、benchmark spec §8）に記録する。
+  M52 ベンチに記録する。RSS ピークは既存フィールド `memory_peak_mb`
+  （`docs/conversion-quality-benchmark-spec.md` §6.3/§8）に対応づける。
+  GPU の `vram_mb` とモデルの `load_ms` は **M52 bench スキーマに未定義**であり、
+  M57/M45（モデル管理 UI が同じ `load_ms` / `vram_mb` を表示、roadmap M45）実装時に
+  bench 出力スキーマへ追加する拡張として扱う（本 PR では bench spec は変更せず、
+  追加は当該実装 PR で benchmark spec と同期する）。
 
 ### 6.2 RSS 実測による上限の確定（検証ゲート）
 

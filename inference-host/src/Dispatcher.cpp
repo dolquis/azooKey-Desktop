@@ -189,7 +189,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) 
   ipc::HealthPayload p;
   p.backend = BackendName(engine_->backend());
   p.model_loaded = engine_->model_loaded();
-  p.last_error = engine_->last_error();
+  p.last_error = engine_->effective_last_error();
   if (!p.last_error) {
     p.status = "ok";
   } else if (p.model_loaded) {

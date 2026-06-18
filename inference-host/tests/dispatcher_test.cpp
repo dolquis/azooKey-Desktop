@@ -444,6 +444,58 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
   std::remove(model_path.c_str());
 }
 
+TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
+  const std::string model_path = TempPath("azookey_dispatcher_degraded_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "cpu";
+  auto env = MakeReq(71, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  ASSERT_TRUE(ipc::ParseLoadModelResponse(resp->payload_json)->ok);
+
+  ipc::QueryCandidatesRequest degraded_query;
+  degraded_query.reading = "にほん";
+  auto degraded_env = MakeReq(72, ipc::MessageType::QueryCandidates,
+                              ipc::BuildQueryCandidatesRequest(degraded_query));
+  auto degraded_resp = dispatcher.Dispatch(degraded_env);
+  ASSERT_TRUE(degraded_resp.has_value());
+  ASSERT_TRUE(ipc::ParseQueryCandidatesResponse(degraded_resp->payload_json).has_value());
+
+  auto degraded_health_resp = dispatcher.Dispatch(MakeReq(73, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(degraded_health_resp.has_value());
+  auto degraded_health = ipc::ParseHealth(degraded_health_resp->payload_json);
+  ASSERT_TRUE(degraded_health.has_value());
+  EXPECT_EQ(degraded_health->status, "degraded");
+  ASSERT_TRUE(degraded_health->last_error.has_value());
+  EXPECT_NE(degraded_health->last_error->find("empty-generation"), std::string::npos);
+
+  ipc::QueryCandidatesRequest ok_query;
+  ok_query.reading = "にほんご";
+  auto ok_env =
+      MakeReq(74, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(ok_query));
+  auto ok_resp = dispatcher.Dispatch(ok_env);
+  ASSERT_TRUE(ok_resp.has_value());
+  auto ok_candidates = ipc::ParseQueryCandidatesResponse(ok_resp->payload_json);
+  ASSERT_TRUE(ok_candidates.has_value());
+  ASSERT_FALSE(ok_candidates->candidates.empty());
+  EXPECT_EQ(ok_candidates->candidates.front().surface, "日本語");
+
+  auto ok_health_resp = dispatcher.Dispatch(MakeReq(75, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(ok_health_resp.has_value());
+  auto ok_health = ipc::ParseHealth(ok_health_resp->payload_json);
+  ASSERT_TRUE(ok_health.has_value());
+  EXPECT_EQ(ok_health->status, "ok");
+  EXPECT_FALSE(ok_health->last_error.has_value());
+
+  std::remove(model_path.c_str());
+}
+
 TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
   SkipProbeOnlyGgufWhenUsingRealLlama();
 

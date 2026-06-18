@@ -295,6 +295,7 @@ TEST(InferenceEngineTest, UserDictionaryInjection) {
   auto cands = engine->QueryCandidates("あずきい", "", kNowBase);
   ASSERT_FALSE(cands.empty());
   EXPECT_EQ(cands.front().surface, "azooKey");
+  EXPECT_EQ(cands.front().source, azookey::core::CandidateSource::UserDictionary);
   EXPECT_NE(cands.front().debug_info.find("user-dict"), std::string::npos);
 
   // Removing the user word makes it disappear from results.
@@ -345,6 +346,7 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
   ASSERT_FALSE(candidates.empty());
   EXPECT_EQ(candidates.front().surface, "日本");
   ASSERT_TRUE(engine->last_error().has_value());
+  ASSERT_TRUE(engine->effective_last_error().has_value());
   EXPECT_NE(engine->last_error()->find("reranker failed: score failure"), std::string::npos);
 
   auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
@@ -417,9 +419,45 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   EXPECT_TRUE(engine->model_loaded());
   EXPECT_FALSE(engine->last_error().has_value());
 
-  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
   ASSERT_FALSE(cands.empty());
-  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"), std::string::npos);
+  EXPECT_EQ(cands.front().surface, "日本語");
+  EXPECT_EQ(cands.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_NE(cands.front().debug_info.find("zenzai;lp="), std::string::npos);
+  EXPECT_NE(cands.front().debug_info.find(";avg="), std::string::npos);
+  EXPECT_FALSE(engine->effective_last_error().has_value());
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
+  const char* lpath = "azookey_host_engine_zenzai_degraded.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_degraded_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  ASSERT_TRUE(engine->model_loaded());
+
+  auto degraded = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(degraded.empty());
+  EXPECT_NE(degraded.front().debug_info.find("zenzai-degraded"), std::string::npos);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+
+  auto recovered = engine->QueryCandidates("にほんご", "", kNowBase);
+  ASSERT_FALSE(recovered.empty());
+  EXPECT_EQ(recovered.front().surface, "日本語");
+  EXPECT_FALSE(engine->effective_last_error().has_value());
 
   std::remove(model_path.c_str());
   std::remove(lpath);
@@ -500,9 +538,10 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
   EXPECT_TRUE(engine->model_loaded());
   EXPECT_FALSE(engine->last_error().has_value());
 
-  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
   ASSERT_FALSE(cands.empty());
-  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"), std::string::npos);
+  EXPECT_EQ(cands.front().surface, "日本語");
+  EXPECT_NE(cands.front().debug_info.find("zenzai;lp="), std::string::npos);
 
   std::remove(model_path.c_str());
   std::remove(lpath);
@@ -525,14 +564,52 @@ TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
-  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
   ASSERT_FALSE(cands.empty());
   const auto& debug = cands.front().debug_info;
-  const auto first = debug.find("zenzai-gguf-loaded");
+  const auto first = debug.find("zenzai;lp=");
   ASSERT_NE(first, std::string::npos);
-  EXPECT_EQ(debug.find("zenzai-gguf-loaded", first + 1), std::string::npos);
+  EXPECT_EQ(debug.find("fallback-converter"), std::string::npos);
 
   std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
+  const char* lpath = "azookey_host_engine_user_dict_zenzai_dedup.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string udict_path =
+      (std::filesystem::temp_directory_path() / "azookey_host_engine_user_zenzai.json").string();
+  std::remove(udict_path.c_str());
+  azookey::learning::UserDictionary dict(udict_path);
+  azookey::learning::UserWord w;
+  w.word = "日本語";
+  w.ruby = "にほんご";
+  w.value = -3.0;
+  dict.Add(w);
+  engine->SetUserDictionary(&dict);
+
+  const std::string model_path = TempPath("azookey_user_dict_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
+  ASSERT_EQ(cands.size(), 1u);
+  EXPECT_EQ(cands.front().surface, "日本語");
+  EXPECT_EQ(cands.front().source, azookey::core::CandidateSource::UserDictionary);
+  EXPECT_NE(cands.front().debug_info.find("user-dict"), std::string::npos);
+  EXPECT_NE(cands.front().debug_info.find("dup:zenzai"), std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(udict_path.c_str());
   std::remove(lpath);
 }
 

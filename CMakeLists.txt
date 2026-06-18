@@ -5,11 +5,60 @@ option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 option(AZOOKEY_FETCH_GOOGLETEST
        "Download GoogleTest via FetchContent when it is not found locally" OFF)
+option(AZOOKEY_FETCH_LLAMA_CPP
+       "Download llama.cpp via FetchContent when no local source tree is provided" OFF)
+set(AZOOKEY_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
+    "Path to an existing llama.cpp source tree to add_subdirectory")
+set(AZOOKEY_LLAMA_CPP_GIT_TAG
+    "05f6ac6283a7859a03cd59405504262c85c4bf06" CACHE STRING
+    "Pinned llama.cpp revision used when AZOOKEY_FETCH_LLAMA_CPP is ON")
 set(AZOOKEY_BACKEND "cpu" CACHE STRING "Default inference backend: cpu or cuda")
 set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda)
 
 if(NOT AZOOKEY_BACKEND STREQUAL "cpu" AND NOT AZOOKEY_BACKEND STREQUAL "cuda")
   message(FATAL_ERROR "AZOOKEY_BACKEND must be either 'cpu' or 'cuda'")
+endif()
+
+set(AZOOKEY_WITH_LLAMA_CPP OFF)
+if(AZOOKEY_LLAMA_CPP_SOURCE_DIR)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+  set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${AZOOKEY_LLAMA_CPP_SOURCE_DIR}"
+                   "${CMAKE_BINARY_DIR}/_deps/llama.cpp-build"
+                   EXCLUDE_FROM_ALL)
+elseif(AZOOKEY_FETCH_LLAMA_CPP)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+  set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+  include(FetchContent)
+  FetchContent_Declare(
+    llama_cpp
+    GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+    GIT_TAG        ${AZOOKEY_LLAMA_CPP_GIT_TAG}
+    GIT_PROGRESS   TRUE
+  )
+  FetchContent_MakeAvailable(llama_cpp)
+endif()
+
+if(TARGET llama)
+  set(AZOOKEY_WITH_LLAMA_CPP ON)
+else()
+  message(STATUS
+    "llama.cpp target not available; Zenzai loader uses no-egress mock runtime. "
+    "Set AZOOKEY_LLAMA_CPP_SOURCE_DIR or AZOOKEY_FETCH_LLAMA_CPP=ON for real loads.")
 endif()
 
 add_library(azookey_project_options INTERFACE)

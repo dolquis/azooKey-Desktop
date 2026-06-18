@@ -61,7 +61,7 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 |---:|---|---|---|
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
-| 3 | model がロード済み（§6.1 のロードゲート通過） | `not_loaded` | RSS 上限超過時はそもそもロードしない |
+| 3 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 で上限超過によりロード抑止）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止理由を保持して引き継ぐ。RSS 上限超過は `rss_cap` を立て、§11 の RSS fallback 検証に使う |
 | 4 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ |
 | 5 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
 | 6 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 6 をスキップ |
@@ -89,7 +89,7 @@ ambiguity_score =
 
 | 因子 | 重み | 定義 / 正規化 | 入力源 |
 |---|---:|---|---|
-| `small_gap` | 0.30 | `1 - sigmoid(α·(s1 - s2))`。`s1,s2` は top1/top2 の `final_score`（`modernbert_score` 抜き）。`α` は M52 で校正（初期 8.0、score を 0〜1 正規化済み前提） | M56 rerank 出力 |
+| `small_gap` | 0.30 | `2·(1 - sigmoid(α·(s1 - s2)))` を `[0,1]` にクランプ。§5.3 で候補は `final_score` 降順に並ぶため `s1 >= s2`（gap >= 0）であり、tie（gap=0）で 1.0・gap 大で 0 に漸近する。`s1,s2` は top1/top2 の `final_score`（`modernbert_score` 抜き）。`α` は M52 で校正（初期 8.0、score を 0〜1 正規化済み前提） | M56 rerank 出力 |
 | `homophone_candidate_count_norm` | 0.20 | `min(homophone_count, C_max) / C_max`。`homophone_count` = 同一 reading を共有する上位候補数、`C_max=5`（初期） | converter-core 候補列 |
 | `context_dependency_score` | 0.20 | `left_context` トークン数に対する飽和関数 `min(left_tokens, L_sat)/L_sat`（`L_sat=16`）。文脈が無い変換（先頭・記号直後）では 0 に近づき起動を抑制 | §5.0 context |
 | `named_entity_mix_score` | 0.15 | 上位候補に固有名詞タグ（`CandidateTag::NamedEntity` 等）と一般語が**混在**する場合 1.0、単一種なら 0.0。タグ未整備環境では 0.0（安全側） | 候補タグ |
@@ -218,13 +218,16 @@ ModernBERT-Ja 70M をロードした場合の Host プロセス RSS 増分（**�
 |---|---:|---:|---:|---:|---|
 | CPU FP32 | 280 MB | 50 MB | 330 MB | — | 参照のみ（§4.0 順 4 で CPU 除外） |
 | CPU FP16 | 140 MB | 30 MB | 170 MB | — | 参照のみ（CPU 除外） |
-| winml/cuda FP16 | 50 MB (RSS) | host 30 MB | **80 MB** | 240 MB | 既定。`modernbertQuantization=fp16` |
-| winml/cuda INT8 | 30 MB (RSS) | host 20 MB | **50 MB** | 130 MB | 低メモリ降格段 / 明示選択 |
+| winml/cuda/vulkan FP16 | 50 MB (RSS) | host 30 MB | **80 MB** | 240 MB | 既定。`modernbertQuantization=fp16` |
+| winml/cuda/vulkan INT8 | 30 MB (RSS) | host 20 MB | **50 MB** | 130 MB | 低メモリ降格段 / 明示選択 |
 
 > CPU 行は参照情報。§4.0 順 4 で backend は `{winml, cuda, vulkan}` に限定され、
 > CPU FP32/FP16 はこの scorer ではロード対象にならない。GPU/NPU EP では
 > モデル重みは VRAM 側に載るため、プロセス RSS 増分は host 側 activation +
-> ランタイム分が支配的になる。
+> ランタイム分が支配的になる。`vulkan`（R1 GPU）は cuda と同じ GPU クラスとして
+> 同等推定を用いる（`RSS_INCREMENT[vulkan][*]` = cuda 行と同値を初期既定とし、
+> §6.2 の実測で backend 別に確定する）。これにより `backend=vulkan` でも
+> ロードゲートの `RSS_INCREMENT[backend][load_target]` が定義済みになる。
 
 **ハード上限（enforce する）**
 
@@ -272,8 +275,9 @@ loop:
 
 実測手順（M52 ベンチ基盤を流用）:
 
-1. backend = `winml`（R2 EP）/ `cuda`（R1）それぞれで、量子化 = `fp16` / `int8`
-   をロードし、idle RSS と homophone ベンチ実行中ピーク RSS / VRAM を採取する。
+1. backend = `winml`（R2 EP）/ `cuda`（R1）/ `vulkan`（R1）それぞれで、量子化 =
+   `fp16` / `int8` をロードし、idle RSS と homophone ベンチ実行中ピーク RSS / VRAM を
+   採取する（`vulkan` は §6.1 で cuda 同値を初期既定としているため実測で確定する）。
 2. ベースライン（ModernBERT 未ロード）との差分を「RSS 増分」「VRAM 増分」とする。
 3. §6.1 の表と乖離がある場合は表値を実測へ更新し、ハード上限（+200 MB /
    合計 2 GB）に対する降格ラダーの分岐点が妥当か確認する。

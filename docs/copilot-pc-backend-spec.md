@@ -461,38 +461,126 @@ RECT rc = { 0, 0, MulDiv(640, dpi, 96), MulDiv(480, dpi, 96) };
 AdjustWindowRectExForDpi(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
 ```
 
-## 8. ARM64 ビルド
+## 8. ARM64 ビルド（M27）
 
-### 8.1 CMake / CI
+> **本節の確定方針（M27 調査・DEV-111）**: ARM64 対応は「**ビルド（クロスコンパイル）**」と
+> 「**テスト実行（ネイティブ ARM64 が必要）**」を分離して扱う。CI の緑ゲートは既存 x64
+> ランナー上のクロスビルドで満たし、ARM64 バイナリの**実行テスト**は別経路（§8.4）に置く。
+> NPU 経路は §4.3（R2=Windows ML）が正典であり、本節はビルド系・配布系の確定に限る。
 
-`.github/workflows/windows.yml` に matrix を追加：
+### 8.1 ビルド方式（クロスコンパイル前提）
+
+現行 CI（`.github/workflows/windows.yml`）は **Ninja + CMakePresets**（`windows-release`
+等）で構成され、VS generator は使わない。よって ARM64 ターゲットは **VS generator の
+`-A ARM64` ではなく、MSVC クロスツールチェーン環境（`vcvarsall x64_arm64`）+ Ninja** で
+指定する。`ilammy/msvc-dev-cmd@v1` の `arch` パラメータがこの環境を構成する。
+
+- **クロスビルド（x64 ホスト → ARM64 出力）**: `arch: amd64_arm64`（既存
+  `windows-2022` ランナーで動作。新インフラ不要）。
+- **ネイティブビルド（ARM64 ホスト）**: `arch: arm64`（§8.4 の `windows-11-arm`
+  ランナー使用時のみ）。
+
+ARM64 用に専用 preset を追加する（`windows-release` を継承し、クロス時は
+`hostSystemName == Windows` のまま MSVC 環境側でターゲット arch を切り替える）。
+`.github/workflows/windows.yml` のジョブ matrix 例（**ビルドゲート**）:
 
 ```yaml
 strategy:
+  fail-fast: false
   matrix:
-    arch: [x64, arm64]
     include:
-      - arch: x64
-        cmake_arch: x64
-      - arch: arm64
-        cmake_arch: ARM64
-
+      - { config: Debug,   preset: windows-debug }      # x64 native
+      - { config: Release, preset: windows-release }    # x64 native
+      - { config: Release, preset: windows-release, arch_env: amd64_arm64 }  # ARM64 cross-build only
 steps:
-  - name: configure
-    run: cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.cmake_arch }}
+  - uses: ilammy/msvc-dev-cmd@v1
+    with:
+      arch: ${{ matrix.arch_env || 'x64' }}
+  - run: cmake --preset ${{ matrix.preset }} -DAZOOKEY_FETCH_GOOGLETEST=ON
+  - run: cmake --build --preset ${{ matrix.preset }}
+  # ARM64 クロスビルドのジョブは ctest を実行しない（x64 ホストで ARM64 バイナリは
+  # 走らない）。テスト実行は §8.4。
 ```
 
-### 8.2 ARM NEON 最適化
+> **注（CMake のターゲット arch 指定）**: Ninja は single-config・single-arch であり、
+> ターゲット arch は **コンパイラ環境（vcvarsall のクロスツール）で決まる**。VS generator
+> の `-A ARM64` は Ninja preset では無効なので使わない。クロス検出のため
+> `CMAKE_SYSTEM_PROCESSOR` は MSVC 環境から自動的に `ARM64` になる（明示上書き不要だが、
+> §8.2 の最適化フラグ分岐はこの値で判定する）。
 
-llama.cpp は `LLAMA_NATIVE=ON` で NEON を自動有効化。CMake オプション：
+### 8.2 ARM 最適化フラグ（cross-compile セーフ）
+
+> **重要（クロスコンパイルの落とし穴）**: llama.cpp / ggml の `GGML_NATIVE`（旧
+> `LLAMA_NATIVE`）`=ON` は **ビルドホストの CPU を検出**して `-march=native` 相当を当てる。
+> x64 ホストから ARM64 をクロスビルドする本構成では、`GGML_NATIVE=ON` は **誤って x64 の
+> 機能を検出**するか、ARM 向けに無意味な検出を行う。よって **クロスビルドでは
+> `GGML_NATIVE=OFF` を強制**し、ARM の機能は明示フラグで指定する。
 
 ```cmake
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64")
-    set(GGML_ARM_NEON ON)
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)   # クロス時のホスト誤検出を防ぐ
+    # ggml は ARM64 で NEON を常時有効化する。Copilot+ PC（Snapdragon X /
+    # Win11 24H2+）のベースラインは ARMv8.2-A 以降のため dotprod / i8mm を許可してよい。
+    set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+i8mm" CACHE STRING "")
 endif()
 ```
 
-### 8.3 Snapdragon X Elite NPU
+- ベースライン ISA は **ARMv8.2-A**（Snapdragon X Elite / Copilot+ PC が満たす）。
+  これ未満の古い ARM64 Windows を切る判断は M27 の前提（Copilot+ PC ターゲット）と整合。
+- ネイティブ ARM64 ビルド（§8.4）でも上記明示フラグを使い、クロス/ネイティブで同一
+  バイナリ特性に揃える（再現性のため `GGML_NATIVE` は両構成で OFF）。
+
+### 8.3 アーキ別 backend payload 同梱表
+
+配布物の「同梱 / 非バンドル / DL」の正典は `docs/sideload-packaging-spec.md` §1.6、
+フォールバック段位の正典は §4.5。本表は **アーキ軸**でどの payload が x64 / ARM64 に
+存在するかを固定する（同梱可否は §1.6 を参照、本表で重複定義しない）。
+
+| payload / エンジン | x64 | ARM64 | 備考 |
+|---|---|---|---|
+| llama.cpp（R1）CPU ランタイム | ◎ AVX2 等 | ◎ NEON（§8.2） | base MSIX 同梱（§1.6）。両アーキの **v1.0 既定** |
+| ggml-cuda（R1 CUDA） | ○ optional add-on | **✕ N/A** | Windows on ARM に NVIDIA CUDA は無い。ARM64 では add-on を**作らない** |
+| ggml-vulkan（R1 ベンダ横断 GPU） | ○ | △ 後続（Adreno）優先度低 | x64 を先行。ARM64 GPU 経路は v1.0 後に評価 |
+| Windows ML bootstrap（R2） | ◎ | ◎ | base MSIX 同梱（薄い）。EP 本体は含めない（§1.6） |
+| R2 EP（Windows Update 配信・非バンドル） | OpenVINO(Intel) / VitisAI(AMD) / NvTensorRtRtx(NVIDIA) / QNN(該当時) | **QNN（Snapdragon NPU）**中心 | EP は silicon 別に Windows ML が自動取得・選択（§4.6）。アーキで同梱物は変わらない（どちらも非バンドル） |
+| zenz-v3 GGUF / ONNX モデル本体 | 非同梱・初回 DL | 非同梱・初回 DL | §1.2 / §1.6 と一貫。アーキ非依存（モデルは共通） |
+
+要点:
+
+- **ARM64 の add-on は作らない**（CUDA add-on は x64 限定）。ARM64 のアクセラレーションは
+  R2（Windows ML / QNN EP、非バンドル）に一本化し、MSIX を肥大させない。
+- これにより配布パッケージ構成は **base MSIX（x64 / ARM64 の 2 アーキ）+ x64 専用 CUDA
+  optional add-on** に収束する。アーキ別に別 payload を後決めする必要はない（後戻り回避）。
+- リリース CI（`.github/workflows/release.yml`）は現状 `Platform=x64` のみ MSIX をビルド
+  する。winget マニフェスト（`docs/sideload-packaging-spec.md`）が `arm64.msix` を参照する
+  ため、M28/M29 有効化時に **wapproj を `Platform=ARM64` でも build する matrix**へ拡張
+  する（wapproj は x64 ホストから ARM64 MSIX をクロスパッケージ可能）。
+
+### 8.4 ARM64 テスト実行と受け入れ条件
+
+ARM64 バイナリは x64 ホストで実行できないため、`ctest` は ARM64 ネイティブ環境が要る。
+
+| 経路 | 用途 | 制約 |
+|---|---|---|
+| **`windows-11-arm` GitHub-hosted ランナー**（4 vCPU） | ARM64 ネイティブ build + ctest | **public リポジトリ限定・無料**。private リポジトリでは label が解決されずジョブが失敗する（2025-04 GA） |
+| **self-hosted ARM64 / Azure ARM64 VM**（Ampere Altra） | private リポジトリ / 反復テスト | インフラ用意・運用コストが要る。ARM64 VM は x64 ハードでは作成不可（クラウドホスト必須） |
+| **Snapdragon X Elite 実機** | NPU 含む統合検証 | `gate:human-required`（実装フェーズで付与）。CI 化しない |
+
+**M27 受け入れ条件の確定（roadmap M27 を補足）**:
+
+1. **CI 緑ゲート（必須・自動）** = §8.1 のクロスビルドが既存 x64 ランナーで成功すること。
+   ARM64 バイナリの生成までを CI の最小ゲートとする（新インフラ不要）。
+2. **ARM64 単体テスト実行** = リポジトリが **public の間は `windows-11-arm` ランナーで
+   ctest を緑**にする（任意ジョブとして追加可能）。private の場合は label が失敗するため、
+   self-hosted を用意するまで実行テストを **`gate:human-required` 扱い**にフォールバックする。
+3. **実機（NPU 含む）動作確認** = Snapdragon X 実機で人手検証（`gate:human-required`）。
+   §4.3（NPU 必須化はしない）と整合し、CI のブロッカーにはしない。
+
+> リポジトリ可視性（public / private）が `windows-11-arm` の可否を直接左右するため、
+> ARM64 実行テストを CI に常設するかは可視性確定後に決める（本 spec は両分岐を許容する
+> 設計に留める）。
+
+### 8.5 Snapdragon X Elite NPU（QNN SDK 直叩きは非既定 fallback）
 
 > **更新（M24 決定、§4.3 が正典）**: 既定方針は **Windows ML（R2）経由で QNN EP を
 > 自動利用**することであり、**QNN SDK を直接同梱しない**（EP は Windows Update 配信）。
@@ -504,7 +592,8 @@ QNN SDK を直接使う場合（非既定・fallback）：
 
 - `qnn_sdk/include/QNN/` をインクルードパスに追加
 - `qnn_htp/lib/aarch64-windows-msvc/` をリンク
-- バイナリ配布時は QNN ランタイム DLL を MSIX に同梱
+- バイナリ配布時は QNN ランタイム DLL を MSIX に同梱（§8.3 の「非バンドル」方針の例外と
+  なるため、この fallback 採用時は §1.6 の配布表も更新する）
 
 `inference-host/src/QnnBackend.cpp`（非既定・fallback 時のみ新規）：
 
@@ -515,6 +604,13 @@ public:
     Result Infer(const std::string& prompt) override;
 };
 ```
+
+### 8.6 出典（M27 調査の一次情報）
+
+- [GitHub Actions: Windows on Arm runners for all public repos（`windows-11-arm`・public 限定・無料）](https://blogs.windows.com/windowsdeveloper/2025/04/14/github-actions-now-supports-windows-on-arm-runners-for-all-public-repos/)
+- [GitHub-hosted runners reference（ランナー label / 仕様）](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+- [Add Arm support to your Windows app（クロスコンパイル可・テストは ARM64 実機/VM 必須）](https://learn.microsoft.com/windows/arm/add-arm-support)
+- [Windows on Arm overview（ARM64 VM はクラウドホスト必須・開発ツール）](https://learn.microsoft.com/windows/arm/overview)
 
 ## 9. テスト
 

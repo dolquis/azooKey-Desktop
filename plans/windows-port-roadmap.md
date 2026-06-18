@@ -819,12 +819,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: Snapdragon X Elite / 他 ARM64 Windows をネイティブサポート。
 - **前提**: M24 完了。
-- **変更対象**: `.github/workflows/windows.yml`（matrix x64/arm64）、
-  各 `CMakeLists.txt`（NEON フラグ）。
+- **変更対象**: `.github/workflows/windows.yml`（ARM64 クロスビルドジョブ追加。
+  MSVC `amd64_arm64` 環境 + Ninja preset。§8.1）、各 `CMakeLists.txt`（ARM 最適化
+  フラグ。クロス時 `GGML_NATIVE=OFF` 強制。§8.2）。
 - **実装範囲**: `docs/copilot-pc-backend-spec.md` §8。
-- **受け入れ条件**:
-  - ARM64 ビルドが CI で緑
-  - Snapdragon X 実機で動作確認
+- **受け入れ条件**（§8.4 で詳細確定）:
+  - **CI 緑ゲート（必須・自動）**: 既存 x64 ランナー上の ARM64 **クロスビルド**が成功
+    （ARM64 バイナリ生成まで。新インフラ不要）。
+  - **ARM64 単体テスト実行**: リポジトリが public の間は `windows-11-arm` ランナーで
+    ctest 緑。private では label 失敗のため self-hosted まで `gate:human-required`。
+  - **実機検証**: Snapdragon X 実機での動作確認（`gate:human-required`。CI ブロッカーに
+    しない。§4.3 の NPU 非必須方針と整合）。
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §8
 
 ## Phase 7: サイドロード配信（M28〜M34）

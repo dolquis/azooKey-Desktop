@@ -13,6 +13,12 @@ target_link_libraries(azookey_host
   PRIVATE azookey_project_warnings
 )
 target_compile_definitions(azookey_host PUBLIC AZOOKEY_BACKEND_DEFAULT="${AZOOKEY_BACKEND}")
+if(AZOOKEY_WITH_LLAMA_CPP)
+  target_link_libraries(azookey_host PRIVATE llama)
+  target_compile_definitions(azookey_host PUBLIC AZOOKEY_WITH_LLAMA_CPP=1)
+else()
+  target_compile_definitions(azookey_host PUBLIC AZOOKEY_WITH_LLAMA_CPP=0)
+endif()
 
 if(WIN32)
   target_link_libraries(azookey_host PUBLIC ole32 shell32)

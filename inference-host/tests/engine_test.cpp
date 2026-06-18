@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -11,8 +13,6 @@
 #include <string>
 #include <thread>
 
-#include <gtest/gtest.h>
-
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/learning/LearningStore.h"
@@ -22,9 +22,8 @@ namespace {
 
 constexpr uint64_t kNowBase = 1'700'000'000ULL;
 
-std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
-    azookey::learning::LearningStore& store,
-    azookey::host::EngineConfig cfg) {
+std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(azookey::learning::LearningStore& store,
+                                                           azookey::host::EngineConfig cfg) {
   return std::make_unique<azookey::host::InferenceEngine>(
       std::make_unique<azookey::core::SimpleConverter>(), &store, cfg);
 }
@@ -61,26 +60,29 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
+void SkipProbeOnlyGgufWhenUsingRealLlama() {
+#if AZOOKEY_WITH_LLAMA_CPP
+  GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                  "loads require a full model fixture.";
+#endif
+}
+
 class BlockingConverter final : public azookey::core::IConverter {
  public:
-  std::vector<azookey::core::Candidate> Convert(
-      const std::string& kana,
-      const azookey::core::ConversionContext&) override {
+  std::vector<azookey::core::Candidate> Convert(const std::string& kana,
+                                                const azookey::core::ConversionContext&) override {
     WaitForRelease();
-    return {azookey::core::Candidate{kana, kana, 1.0,
-                                     azookey::core::CandidateSource::Heuristic,
+    return {azookey::core::Candidate{kana, kana, 1.0, azookey::core::CandidateSource::Heuristic,
                                      "blocking-converter"}};
   }
 
   std::vector<azookey::core::Candidate> PredictNext(
-      const std::string& kana,
-      const azookey::core::ConversionContext& context) override {
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
     return Convert(kana, context);
   }
 
   std::vector<azookey::core::Candidate> Correct(
-      const std::string& kana,
-      const azookey::core::CorrectionHint&,
+      const std::string& kana, const azookey::core::CorrectionHint&,
       const azookey::core::ConversionContext& context) override {
     return Convert(kana, context);
   }
@@ -118,8 +120,7 @@ class BlockingConverter final : public azookey::core::IConverter {
 class ThrowingLearningStore final : public azookey::learning::LearningStore {
  public:
   ThrowingLearningStore()
-      : azookey::learning::LearningStore(
-            TempPath("azookey_host_engine_reranker_throw.tsv")) {}
+      : azookey::learning::LearningStore(TempPath("azookey_host_engine_reranker_throw.tsv")) {}
 
   double Score(const std::string&, const std::string&, uint64_t) const override {
     throw std::runtime_error("score failure");
@@ -248,7 +249,8 @@ TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
 }
 
 TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
-  const auto root = std::filesystem::temp_directory_path() / "azookey_host_engine_learning_save_failure";
+  const auto root =
+      std::filesystem::temp_directory_path() / "azookey_host_engine_learning_save_failure";
   const auto blocked_path = root / "learning-as-directory.tsv";
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(blocked_path);
@@ -343,8 +345,7 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
   ASSERT_FALSE(candidates.empty());
   EXPECT_EQ(candidates.front().surface, "日本");
   ASSERT_TRUE(engine->last_error().has_value());
-  EXPECT_NE(engine->last_error()->find("reranker failed: score failure"),
-            std::string::npos);
+  EXPECT_NE(engine->last_error()->find("reranker failed: score failure"), std::string::npos);
 
   auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
   ASSERT_FALSE(predictions.empty());
@@ -395,6 +396,8 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
 }
 
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const char* lpath = "azookey_host_engine_load_valid.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -416,8 +419,7 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
 
   auto cands = engine->QueryCandidates("にほん", "", kNowBase);
   ASSERT_FALSE(cands.empty());
-  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"),
-            std::string::npos);
+  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"), std::string::npos);
 
   std::remove(model_path.c_str());
   std::remove(lpath);
@@ -447,6 +449,8 @@ TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
 }
 
 TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const char* lpath = "azookey_host_engine_load_cuda.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -473,6 +477,8 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
 }
 
 TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const char* lpath = "azookey_host_engine_reload_failure.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -496,14 +502,15 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
 
   auto cands = engine->QueryCandidates("にほん", "", kNowBase);
   ASSERT_FALSE(cands.empty());
-  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"),
-            std::string::npos);
+  EXPECT_NE(cands.front().debug_info.find("zenzai-gguf-loaded"), std::string::npos);
 
   std::remove(model_path.c_str());
   std::remove(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const char* lpath = "azookey_host_engine_reload_success.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
@@ -539,8 +546,8 @@ TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
     for (int i = 0; i < 100; ++i) {
       azookey::host::ModelLoadOptions options;
       options.path = "azookey_missing_zenzai_model_threaded.gguf";
-      options.backend = (i % 2 == 0) ? azookey::host::BackendKind::Cpu
-                                     : azookey::host::BackendKind::Cuda;
+      options.backend =
+          (i % 2 == 0) ? azookey::host::BackendKind::Cpu : azookey::host::BackendKind::Cuda;
       options.n_gpu_layers = i;
       engine->LoadModel(options);
     }
@@ -563,6 +570,8 @@ TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
 }
 
 TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   using namespace std::chrono_literals;
 
   const char* lpath = "azookey_host_engine_query_load_serialized.tsv";
@@ -579,9 +588,8 @@ TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
   WriteMinimalGguf(model_path);
 
   std::vector<azookey::core::Candidate> query_result;
-  std::thread query_thread([&]() {
-    query_result = engine.QueryCandidates("にほん", "", kNowBase);
-  });
+  std::thread query_thread(
+      [&]() { query_result = engine.QueryCandidates("にほん", "", kNowBase); });
 
   const bool query_entered = blocking_converter->WaitUntilEntered(1s);
   EXPECT_TRUE(query_entered);

@@ -21,8 +21,7 @@ core::ConversionContext BuildContext(const std::string& kana, const std::string&
 }  // namespace
 
 InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
-                                 learning::LearningStore* store,
-                                 EngineConfig config)
+                                 learning::LearningStore* store, EngineConfig config)
     : fallback_converter_(std::move(converter)),
       active_converter_(fallback_converter_.get()),
       store_(store),
@@ -52,9 +51,7 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
 }
 
 std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
-    const std::string& kana,
-    std::vector<core::Candidate> candidates,
-    uint64_t now_epoch_sec) {
+    const std::string& kana, std::vector<core::Candidate> candidates, uint64_t now_epoch_sec) {
   try {
     // Do not move candidates into Apply: fallback needs the raw order/scores.
     return reranker_.Apply(kana, candidates, now_epoch_sec);
@@ -67,9 +64,7 @@ std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
   }
 }
 
-bool InferenceEngine::LoadModel() {
-  return LoadModelWithResult().ok;
-}
+bool InferenceEngine::LoadModel() { return LoadModelWithResult().ok; }
 
 bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
   return LoadModelWithResult(options).ok;
@@ -77,7 +72,8 @@ bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
 
 ModelLoadResult InferenceEngine::LoadModelWithResult() {
   const auto current = config();
-  return LoadModelWithResult(ModelLoadOptions{current.model_path, current.backend, current.n_gpu_layers});
+  return LoadModelWithResult(
+      ModelLoadOptions{current.model_path, current.backend, current.n_gpu_layers});
 }
 
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
@@ -116,8 +112,22 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     next_config.backend = BackendKind::Cpu;
     result.error = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
   }
-  auto next_converter = std::make_unique<ZenzaiModelConverter>(
-      std::move(probe.info), fallback_converter_.get());
+  ZenzaiRuntimeOptions runtime_options;
+  runtime_options.n_gpu_layers =
+      next_config.backend == BackendKind::Cuda ? options.n_gpu_layers.value_or(0) : 0;
+  auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
+  if (!loaded.ok) {
+    result.error = loaded.error;
+    if (!model_loaded_) {
+      config_ = std::move(next_config);
+      model_converter_.reset();
+      active_converter_ = fallback_converter_.get();
+      last_error_ = result.error;
+    }
+    return result;
+  }
+  auto next_converter =
+      std::make_unique<ZenzaiModelConverter>(std::move(loaded), fallback_converter_.get());
   config_ = std::move(next_config);
   model_converter_ = std::move(next_converter);
   active_converter_ = model_converter_.get();
@@ -168,9 +178,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
                                                               const std::string& context,
                                                               uint64_t now_epoch_sec,
                                                               const std::atomic<bool>* cancel) {
-  auto canceled = [cancel]() {
-    return cancel && cancel->load(std::memory_order_relaxed);
-  };
+  auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
 
@@ -197,8 +205,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   if (canceled()) return {};
 
   auto converted = active_converter_->Convert(kana, BuildContext(kana, context));
-  merged.insert(merged.end(),
-                std::make_move_iterator(converted.begin()),
+  merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
 
   if (canceled()) return {};
@@ -228,16 +235,17 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
-void InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec) {
+void InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
+                                        uint64_t now_epoch_sec) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (store_) {
     store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
     NoteLearningMutationLocked(now_epoch_sec);
   }
-  active_converter_->Commit(core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
-                            core::ConversionContext{});
+  active_converter_->Commit(
+      core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
+      core::ConversionContext{});
 }
-
 
 void InferenceEngine::CommitCorrection(const std::string& reading,
                                        const std::string& rejected_surface,
@@ -245,14 +253,17 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
                                        uint64_t now_epoch_sec) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (store_) {
-    store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha, now_epoch_sec);
+    store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha,
+                              now_epoch_sec);
     NoteLearningMutationLocked(now_epoch_sec);
   }
 
   core::ConversionContext context;
   context.rejected_surfaces.push_back(rejected_surface);
-  active_converter_->Commit(core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary, "correction-commit"},
-                            context);
+  active_converter_->Commit(
+      core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary,
+                      "correction-commit"},
+      context);
 }
 
 bool InferenceEngine::FlushLearningStore() {

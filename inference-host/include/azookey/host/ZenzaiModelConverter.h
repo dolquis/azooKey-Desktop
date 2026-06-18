@@ -15,37 +15,53 @@ struct ZenzaiModelInfo {
   uint64_t file_size_bytes{};
 };
 
+struct ZenzaiRuntimeOptions {
+  int32_t n_gpu_layers{};
+};
+
+struct ZenzaiModelRuntime;
+
 struct ZenzaiLoadResult {
+  ZenzaiLoadResult();
+  ~ZenzaiLoadResult();
+  ZenzaiLoadResult(ZenzaiLoadResult&&) noexcept;
+  ZenzaiLoadResult& operator=(ZenzaiLoadResult&&) noexcept;
+  ZenzaiLoadResult(const ZenzaiLoadResult&) = delete;
+  ZenzaiLoadResult& operator=(const ZenzaiLoadResult&) = delete;
+
   bool ok{false};
   ZenzaiModelInfo info;
   std::string error;
+  std::unique_ptr<ZenzaiModelRuntime> runtime;
 };
 
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
+ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
+                                     const ZenzaiRuntimeOptions& options = {});
 
 class ZenzaiModelConverter final : public core::IConverter {
  public:
-  ZenzaiModelConverter(ZenzaiModelInfo info, core::IConverter* fallback);
+  ZenzaiModelConverter(ZenzaiLoadResult&& loaded, core::IConverter* fallback);
+  ~ZenzaiModelConverter() override;
 
   const ZenzaiModelInfo& info() const { return info_; }
+  bool runtime_loaded() const { return runtime_ != nullptr; }
 
-  std::vector<core::Candidate> Convert(
-      const std::string& kana, const core::ConversionContext& context) override;
-  std::vector<core::Candidate> PredictNext(
-      const std::string& kana, const core::ConversionContext& context) override;
-  std::vector<core::Candidate> Correct(
-      const std::string& kana,
-      const core::CorrectionHint& hint,
-      const core::ConversionContext& context) override;
+  std::vector<core::Candidate> Convert(const std::string& kana,
+                                       const core::ConversionContext& context) override;
+  std::vector<core::Candidate> PredictNext(const std::string& kana,
+                                           const core::ConversionContext& context) override;
+  std::vector<core::Candidate> Correct(const std::string& kana, const core::CorrectionHint& hint,
+                                       const core::ConversionContext& context) override;
   void Commit(const core::Candidate& selected_candidate,
               const core::ConversionContext& context) override;
-  void Learn(const std::string& committed_surface,
-             const std::string& committed_reading) override;
+  void Learn(const std::string& committed_surface, const std::string& committed_reading) override;
 
  private:
   void TagFallback(std::vector<core::Candidate>& candidates) const;
 
   ZenzaiModelInfo info_;
+  std::unique_ptr<ZenzaiModelRuntime> runtime_;
   core::IConverter* fallback_;
 };
 

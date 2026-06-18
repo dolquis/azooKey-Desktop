@@ -1,3 +1,7 @@
+#include "azookey/host/Dispatcher.h"
+
+#include <gtest/gtest.h>
+
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -7,10 +11,7 @@
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
-
 #include "azookey/core/SimpleConverter.h"
-#include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
@@ -48,22 +49,27 @@ azookey::host::DispatcherConfig DefaultDispatcherConfig() {
   return config;
 }
 
+void SkipProbeOnlyGgufWhenUsingRealLlama() {
+#if AZOOKEY_WITH_LLAMA_CPP
+  GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                  "loads require a full model fixture.";
+#endif
+}
+
 class ThrowingConverter final : public azookey::core::IConverter {
  public:
-  std::vector<azookey::core::Candidate> Convert(
-      const std::string&, const azookey::core::ConversionContext&) override {
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
     throw std::runtime_error("convert failed");
   }
 
   std::vector<azookey::core::Candidate> PredictNext(
-      const std::string& kana,
-      const azookey::core::ConversionContext& context) override {
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
     return Convert(kana, context);
   }
 
   std::vector<azookey::core::Candidate> Correct(
-      const std::string& kana,
-      const azookey::core::CorrectionHint&,
+      const std::string& kana, const azookey::core::CorrectionHint&,
       const azookey::core::ConversionContext& context) override {
     return Convert(kana, context);
   }
@@ -267,8 +273,8 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
   const char* throwing_path = "azookey_dispatcher_throwing_learning.tsv";
   std::remove(throwing_path);
   azookey::learning::LearningStore throwing_store(throwing_path);
-  azookey::host::InferenceEngine throwing_engine(
-      std::make_unique<ThrowingConverter>(), &throwing_store, {});
+  azookey::host::InferenceEngine throwing_engine(std::make_unique<ThrowingConverter>(),
+                                                 &throwing_store, {});
   azookey::host::RequestScheduler throwing_scheduler;
   azookey::host::Dispatcher throwing_dispatcher(&throwing_engine, &throwing_scheduler, nullptr,
                                                 DefaultDispatcherConfig());
@@ -301,7 +307,8 @@ TEST_F(DispatcherTest, CommitObservation) {
   c.chosen = {"二本", "にほん", 0.4, "fallback"};
   c.shown = {{"日本", "にほん", 1.0, "static"}, c.chosen};
   c.timestamp_ms = 1700000000000ULL;
-  auto env = MakeReq(50, ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(c));
+  auto env =
+      MakeReq(50, ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(c));
   auto resp = dispatcher.Dispatch(env);
   ASSERT_TRUE(resp.has_value());
   auto parsed = ipc::ParseCommitObservationResponse(resp->payload_json);
@@ -397,6 +404,8 @@ TEST_F(DispatcherTest, LoadModelRejectsUnsupportedBackend) {
 }
 
 TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const std::string model_path = TempPath("azookey_dispatcher_valid_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
@@ -436,6 +445,8 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
 }
 
 TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const std::string model_path = TempPath("azookey_dispatcher_cuda_fallback_zenzai.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
@@ -533,6 +544,8 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const auto settings_path = TempPath("azookey_dispatcher_invalid_reload_settings.json");
   const auto model_path = TempPath("azookey_dispatcher_invalid_reload_zenzai.gguf");
   const auto model_json_path = std::filesystem::path(model_path).generic_string();
@@ -575,6 +588,8 @@ TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
   const auto settings_path = TempPath("azookey_dispatcher_override_settings.json");
   const auto cli_model_path = TempPath("azookey_dispatcher_override_zenzai.gguf");
   std::remove(settings_path.c_str());
@@ -629,7 +644,8 @@ TEST_F(DispatcherTest, CrossClientAuthIsolation) {
   req.tip_version = "0.1.0";
   req.protocol_version = kProtocolVersion;
   req.handshake_token = "secret";
-  auto resp_a = conn_a.Dispatch(MakeReq(1, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  auto resp_a =
+      conn_a.Dispatch(MakeReq(1, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
   ASSERT_TRUE(resp_a.has_value());
   EXPECT_TRUE(ipc::ParseHandshakeResponse(resp_a->payload_json)->accepted);
 
@@ -638,8 +654,8 @@ TEST_F(DispatcherTest, CrossClientAuthIsolation) {
   ipc::AddUserWordRequest add;
   add.word = "test";
   add.ruby = "てすと";
-  auto resp_b = conn_b.Dispatch(
-      MakeReq(2, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  auto resp_b =
+      conn_b.Dispatch(MakeReq(2, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
   ASSERT_TRUE(resp_b.has_value());
   EXPECT_FALSE(ipc::ParseAddUserWordResponse(resp_b->payload_json)->ok);
   EXPECT_TRUE(user_dict.Lookup("てすと").empty());
@@ -648,8 +664,8 @@ TEST_F(DispatcherTest, CrossClientAuthIsolation) {
   ipc::HandshakeRequest bad_req = req;
   bad_req.handshake_token = "wrong";
   conn_b.Dispatch(MakeReq(3, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(bad_req)));
-  auto resp_a2 = conn_a.Dispatch(
-      MakeReq(4, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+  auto resp_a2 =
+      conn_a.Dispatch(MakeReq(4, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
   ASSERT_TRUE(resp_a2.has_value());
   EXPECT_TRUE(ipc::ParseAddUserWordResponse(resp_a2->payload_json)->ok);
 }

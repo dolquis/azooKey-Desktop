@@ -619,10 +619,21 @@ endif()
   R2（Windows ML / QNN EP、非バンドル）に一本化し、MSIX を肥大させない。
 - これにより配布パッケージ構成は **base MSIX（x64 / ARM64 の 2 アーキ）+ x64 専用 CUDA
   optional add-on** に収束する。アーキ別に別 payload を後決めする必要はない（後戻り回避）。
-- リリース CI（`.github/workflows/release.yml`）は現状 `Platform=x64` のみ MSIX をビルド
-  する。winget マニフェスト（`docs/sideload-packaging-spec.md`）が `arm64.msix` を参照する
-  ため、M28/M29 有効化時に **wapproj を `Platform=ARM64` でも build する matrix**へ拡張
-  する（wapproj は x64 ホストから ARM64 MSIX をクロスパッケージ可能）。
+- リリース CI（`.github/workflows/release.yml`）は現状 **x64 専用**で、`cmake --preset
+  windows-release`（x64）を configure/build し、署名・verify・upload 対象を
+  `Package_1.0.0_x64.msix` に**ハードコード**している。winget マニフェスト
+  （`docs/sideload-packaging-spec.md`）が `arm64.msix` を参照するため、M28/M29 有効化時の
+  ARM64 リリースは **wapproj の `Platform=ARM64` だけでは不十分**で、次を一式アーキ別に
+  parameterize する必要がある（さもないと x64 バイナリを包むか、`arm64.msix` が署名・
+  公開されない）:
+  1. **ARM64 CMake ビルド出力**: `windows-release-arm64` preset（clang-cl・§8.1）で
+     ARM64 バイナリ（TIP DLL / host / settings EXE）を生成。
+  2. **wapproj `Platform=ARM64`** でその ARM64 出力を取り込み MSIX 化。
+  3. **署名 / verify / upload をアーキ別パスに一般化**（`Package_1.0.0_x64.msix`
+     ハードコードを `Package_1.0.0_${arch}.msix` 等へ）。
+  WAP 自体は x64 ホストから ARM64 をクロスパッケージ可能だが、上記 1〜3 が揃って初めて
+  `arm64.msix` が成立する。詳細レシピは M28/M29（`docs/sideload-packaging-spec.md` §1/§2）で
+  確定する。
 
 ### 8.4 ARM64 テスト実行と受け入れ条件
 

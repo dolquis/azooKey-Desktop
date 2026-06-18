@@ -61,8 +61,8 @@ ModernBERT を**呼ばず**に M56 の `final_score`（`modernbert_score` 抜き
 |---:|---|---|---|
 | 1 | `modernbertEnabled != off` | `disabled` | `off` は明示無効。`auto` / `always` は通過 |
 | 2 | secure モードでない（M46） | `secure_mode` | §9。最優先で OFF（順序上は 1 の直後） |
-| 3 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 で上限超過によりロード抑止）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止理由を保持して引き継ぐ。RSS 上限超過は `rss_cap` を立て、§11 の RSS fallback 検証に使う |
-| 4 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ |
+| 3 | `backend in {winml, cuda, vulkan}` | `cpu_backend` | CPU は実用不可。R2 EP / R1 GPU のみ。CPU backend ではそもそもモデルをロードしない（§6.1）ため、loaded ゲートより**前**に判定して `cpu_backend` を握り潰さない |
+| 4 | model がロード済み（§6.1 のロードゲート通過） | `rss_cap`（§6.1 で上限超過によりロード抑止）/ `not_loaded`（モデル未配置・ロード失敗） | §6.1 のロード抑止理由を保持して引き継ぐ。RSS 上限超過は `rss_cap` を立て、§11 の RSS fallback 検証に使う |
 | 5 | `candidate_count >= 2` | `single_candidate` | 候補 1 件は曖昧性なし |
 | 6 | `ambiguity_score >= threshold`（`always` 時は無条件通過） | `low_ambiguity` | §4.1。`always` は 6 をスキップ |
 | 7 | `timeout_budget_remaining >= 30ms` | `no_time_budget` | §5.4 の予算管理 |
@@ -149,7 +149,7 @@ PLL は **token 単位で別々の masked 文を作って forward する必要�
 | キャッシュ | 同一 `(left_context, candidate)` ペアの結果を 5 分保持（§5.2.1） |
 | timeout | 30〜50ms で打ち切り（予算管理は §5.4） |
 | backend アクセラレータ | M24 の R2（Windows ML EP: NPU/GPU）/ R1（CUDA・Vulkan）で実行 |
-| masked 文を batch | 各候補の各トークン位置で生成した masked 文を 1 つの batch（最大 K×max_token_len）にまとめて 1 回の forward で評価する。「1 forward で K 候補」ではなく「**1 forward で K×N 個の masked 文**」 |
+| masked 文を batch（**候補単位**） | **1 候補分**の N 個の masked 文を 1 batch（最大 `N_k`、上限 `max_token_len`）にまとめ、その候補を 1 forward で評価する。K 候補なら **K 回**の forward（naive な Σ N_k 回ではなく候補数 K 回）。候補をまたいで 1 batch にはせず、候補単位で区切ることで §5.4 の候補単位 timeout チェック・部分適用を可能にする |
 | FP16 | ONNX Runtime FP16 推論 |
 | 量子化 | INT8 量子化を検討（精度劣化を M52 で確認）。低メモリ時の降格段でも使用（§6.1） |
 
@@ -184,10 +184,12 @@ timeout に当たりやすくなるため既定 5 を上限の目安とする。
 
 - 1 リクエストの ModernBERT 予算は `modernbertTimeoutMs`（既定 40ms、範囲
   30〜50ms）。起動ゲート（§4.0 順 7）で残予算 `>= 30ms` を要求する。
-- 予算は **top1 候補から順に**消費し、各候補の全 mask forward 完了ごとに
-  残時間を確認する。予算切れ時点で**評価済み候補のみ** `modernbert_score` を
-  適用し、未評価候補は `modernbert_score` 抜きの `final_score` のまま順位付けする
-  （部分適用は許容、IME を止めない）。
+- 予算は **top1 候補から順に**消費する。§5.2 の batch は**候補単位**（1 候補 =
+  1 forward）なので、各候補の forward 完了ごとに残時間を確認できる。予算切れ
+  時点で**評価済み候補のみ** `modernbert_score` を適用し、未評価候補は
+  `modernbert_score` 抜きの `final_score` のまま順位付けする（部分適用は許容、
+  IME を止めない）。候補をまたぐ単一 batch にはしない（全候補一括だと候補単位の
+  部分結果が取れず予算超過・全キャンセルに陥るため）。
 - forward 自体が失敗（EP 例外・モデル異常）した場合は当該リクエストを
   **スコアなしで続行**し、`modernbert_used=false, reason=infer_error` を記録する。
 - 連続失敗が閾値（既定 3 回）に達したら当該セッションで一時的に
@@ -216,12 +218,12 @@ ModernBERT-Ja 70M をロードした場合の Host プロセス RSS 増分（**�
 
 | backend / 量子化 | model RSS | activations | RSS 増分 | VRAM 増分 | 本 scorer での扱い |
 |---|---:|---:|---:|---:|---|
-| CPU FP32 | 280 MB | 50 MB | 330 MB | — | 参照のみ（§4.0 順 4 で CPU 除外） |
+| CPU FP32 | 280 MB | 50 MB | 330 MB | — | 参照のみ（§4.0 順 3 で CPU 除外） |
 | CPU FP16 | 140 MB | 30 MB | 170 MB | — | 参照のみ（CPU 除外） |
 | winml/cuda/vulkan FP16 | 50 MB (RSS) | host 30 MB | **80 MB** | 240 MB | 既定。`modernbertQuantization=fp16` |
 | winml/cuda/vulkan INT8 | 30 MB (RSS) | host 20 MB | **50 MB** | 130 MB | 低メモリ降格段 / 明示選択 |
 
-> CPU 行は参照情報。§4.0 順 4 で backend は `{winml, cuda, vulkan}` に限定され、
+> CPU 行は参照情報。§4.0 順 3 で backend は `{winml, cuda, vulkan}` に限定され、
 > CPU FP32/FP16 はこの scorer ではロード対象にならない。GPU/NPU EP では
 > モデル重みは VRAM 側に載るため、プロセス RSS 増分は host 側 activation +
 > ランタイム分が支配的になる。`vulkan`（R1 GPU）は cuda と同じ GPU クラスとして

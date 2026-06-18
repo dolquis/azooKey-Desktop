@@ -472,16 +472,34 @@ AdjustWindowRectExForDpi(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
 
 現行 CI（`.github/workflows/windows.yml`）は **Ninja + CMakePresets**（`windows-release`
 等）で構成され、VS generator は使わない。よって ARM64 ターゲットは **VS generator の
-`-A ARM64` ではなく、MSVC クロスツールチェーン環境（`vcvarsall x64_arm64`）+ Ninja** で
-指定する。`ilammy/msvc-dev-cmd@v1` の `arch` パラメータがこの環境を構成する。
+`-A ARM64` ではなく、MSVC ARM64 環境（`vcvarsall x64_arm64`）+ Ninja + 明示クロス
+toolchain** で指定する。`ilammy/msvc-dev-cmd@v1` の `arch` パラメータが SDK ヘッダ /
+import lib / リンカの ARM64 環境を構成する。
 
-- **クロスビルド（x64 ホスト → ARM64 出力）**: `arch: amd64_arm64`（既存
-  `windows-2022` ランナーで動作。新インフラ不要）。
-- **ネイティブビルド（ARM64 ホスト）**: `arch: arm64`（§8.4 の `windows-11-arm`
-  ランナー使用時のみ）。
+> **重要（コンパイラは clang-cl、`cl.exe` ではない）**: llama.cpp / ggml は **ARM ターゲットで
+> MSVC `cl.exe` を明示的に拒否**する。`ggml/src/ggml-cpu/CMakeLists.txt` に
+> `if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang") → message(FATAL_ERROR "MSVC is
+> not supported for ARM, use clang")` がある。よって ARM64 ビルドの**コンパイラは
+> `clang-cl`**（`vcvarsall x64_arm64` の SDK/リンカ環境を流用しつつ `--target=arm64-pc-windows-msvc`）
+> とする。`cl.exe` のままだと llama.cpp 依存を有効化した瞬間にクロスビルドゲートが
+> FATAL_ERROR で落ちる。clang-cl は VS の「C++ Clang tools for Windows」コンポーネント、
+> または LLVM 公式インストーラで入る。出典:
+> [ggml-cpu CMakeLists.txt（MSVC ARM 非対応の FATAL_ERROR）](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-cpu/CMakeLists.txt)。
 
-ARM64 用に専用 preset を追加する（`windows-release` を継承し、クロス時は
-`hostSystemName == Windows` のまま MSVC 環境側でターゲット arch を切り替える）。
+ARM64 用に**明示クロス toolchain（または同等の preset 変数）**を用意する。`CMAKE_SYSTEM_NAME`
+を設定するとクロスコンパイルモードに入り、`CMAKE_SYSTEM_PROCESSOR` が確実に `ARM64` に
+なる（§8.2 のフラグ分岐の前提。設定しないとホスト値 `AMD64` のまま＝§8.2 注を参照）:
+
+```cmake
+# cmake/toolchains/win-arm64-clang.cmake（新規）
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR ARM64)          # ← クロスモードを有効化し、分岐を確定させる
+set(CMAKE_C_COMPILER   clang-cl)
+set(CMAKE_CXX_COMPILER clang-cl)
+set(CMAKE_C_COMPILER_TARGET   arm64-pc-windows-msvc)
+set(CMAKE_CXX_COMPILER_TARGET arm64-pc-windows-msvc)
+```
+
 `.github/workflows/windows.yml` のジョブ matrix 例（**ビルドゲート**）:
 
 ```yaml
@@ -491,22 +509,19 @@ strategy:
     include:
       - { config: Debug,   preset: windows-debug }      # x64 native
       - { config: Release, preset: windows-release }    # x64 native
-      - { config: Release, preset: windows-release, arch_env: amd64_arm64 }  # ARM64 cross-build only
+      - { config: Release, preset: windows-release-arm64, arch_env: amd64_arm64 }  # ARM64 cross-build only
 steps:
   - uses: ilammy/msvc-dev-cmd@v1
     with:
-      arch: ${{ matrix.arch_env || 'x64' }}
+      arch: ${{ matrix.arch_env || 'x64' }}   # ARM64 ジョブは SDK/リンカ環境を x64_arm64 に
   - run: cmake --preset ${{ matrix.preset }} -DAZOOKEY_FETCH_GOOGLETEST=ON
   - run: cmake --build --preset ${{ matrix.preset }}
   # ARM64 クロスビルドのジョブは ctest を実行しない（x64 ホストで ARM64 バイナリは
   # 走らない）。テスト実行は §8.4。
 ```
 
-> **注（CMake のターゲット arch 指定）**: Ninja は single-config・single-arch であり、
-> ターゲット arch は **コンパイラ環境（vcvarsall のクロスツール）で決まる**。VS generator
-> の `-A ARM64` は Ninja preset では無効なので使わない。クロス検出のため
-> `CMAKE_SYSTEM_PROCESSOR` は MSVC 環境から自動的に `ARM64` になる（明示上書き不要だが、
-> §8.2 の最適化フラグ分岐はこの値で判定する）。
+`windows-release-arm64` preset は `windows-release` を継承し、上記 toolchain file を
+`CMAKE_TOOLCHAIN_FILE` で指す（または同じ変数群を `cacheVariables` で直接指定する）。
 
 ### 8.2 ARM 最適化フラグ（cross-compile セーフ）
 
@@ -516,7 +531,21 @@ steps:
 > 機能を検出**するか、ARM 向けに無意味な検出を行う。よって **クロスビルドでは
 > `GGML_NATIVE=OFF` を強制**し、ARM の機能は明示フラグで指定する。
 
+> **重要（ARM64 検出を `CMAKE_SYSTEM_PROCESSOR` だけに頼らない）**: toolchain file を
+> 使わない Ninja + `vcvarsall` 構成では、CMake は `CMAKE_SYSTEM_PROCESSOR` を**ホスト値
+> （Windows では `AMD64`）に追従**させ、コンパイラが ARM64 を狙っていても `ARM64` に
+> ならない。この値だけで下記分岐を組むと、ARM64 クロスジョブで分岐が**無音スキップ**され
+> host-native/x64 検出のまま通ってしまう。§8.1 のとおり **toolchain file で
+> `CMAKE_SYSTEM_NAME` + `CMAKE_SYSTEM_PROCESSOR ARM64` を設定**すればクロスモードに入り
+> 値が確実に `ARM64` になる。toolchain を使わない場合は `CMAKE_CXX_COMPILER_ARCHITECTURE_ID`
+> （MSVC/clang-cl が `ARM64` を返す）や環境変数 `VSCMD_ARG_TGT_ARCH == arm64`、または
+> 明示 preset 変数で判定する。出典:
+> [CMAKE_SYSTEM_PROCESSOR（host 追従の注記）](https://cmake.org/cmake/help/latest/variable/CMAKE_SYSTEM_PROCESSOR.html)。
+
 ```cmake
+# §8.1 の toolchain で CMAKE_SYSTEM_PROCESSOR=ARM64 を設定している前提（クロスモード）。
+# toolchain を使わない場合は下記 MATCHES の代わりに
+# CMAKE_CXX_COMPILER_ARCHITECTURE_ID / $ENV{VSCMD_ARG_TGT_ARCH} で判定する。
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)   # クロス時のホスト誤検出を防ぐ
     # ggml は ARM64 で NEON を常時有効化する。Copilot+ PC（Snapdragon X /
@@ -529,6 +558,7 @@ endif()
   これ未満の古い ARM64 Windows を切る判断は M27 の前提（Copilot+ PC ターゲット）と整合。
 - ネイティブ ARM64 ビルド（§8.4）でも上記明示フラグを使い、クロス/ネイティブで同一
   バイナリ特性に揃える（再現性のため `GGML_NATIVE` は両構成で OFF）。
+- コンパイラは §8.1 のとおり **clang-cl**（`cl.exe` は ggml が ARM で拒否）。
 
 ### 8.3 アーキ別 backend payload 同梱表
 
@@ -562,23 +592,25 @@ ARM64 バイナリは x64 ホストで実行できないため、`ctest` は ARM
 
 | 経路 | 用途 | 制約 |
 |---|---|---|
-| **`windows-11-arm` GitHub-hosted ランナー**（4 vCPU） | ARM64 ネイティブ build + ctest | **public リポジトリ限定・無料**。private リポジトリでは label が解決されずジョブが失敗する（2025-04 GA） |
-| **self-hosted ARM64 / Azure ARM64 VM**（Ampere Altra） | private リポジトリ / 反復テスト | インフラ用意・運用コストが要る。ARM64 VM は x64 ハードでは作成不可（クラウドホスト必須） |
+| **`windows-11-arm` GitHub-hosted ランナー** | ARM64 ネイティブ build + ctest | **public / private 両方で利用可**（標準ランナー）。public は無料、private は spec 4 vCPU/16GB ではなく **2 vCPU/8GB**で **GitHub の無料枠を消費し超過分は従量課金**。label 失敗ではない |
+| **self-hosted ARM64 / Azure ARM64 VM**（Ampere Altra） | 課金回避 / 反復テスト最適化 | インフラ用意・運用コストが要る。ARM64 VM は x64 ハードでは作成不可（クラウドホスト必須） |
 | **Snapdragon X Elite 実機** | NPU 含む統合検証 | `gate:human-required`（実装フェーズで付与）。CI 化しない |
 
 **M27 受け入れ条件の確定（roadmap M27 を補足）**:
 
-1. **CI 緑ゲート（必須・自動）** = §8.1 のクロスビルドが既存 x64 ランナーで成功すること。
-   ARM64 バイナリの生成までを CI の最小ゲートとする（新インフラ不要）。
-2. **ARM64 単体テスト実行** = リポジトリが **public の間は `windows-11-arm` ランナーで
-   ctest を緑**にする（任意ジョブとして追加可能）。private の場合は label が失敗するため、
-   self-hosted を用意するまで実行テストを **`gate:human-required` 扱い**にフォールバックする。
+1. **CI 緑ゲート（必須・自動）** = §8.1 のクロスビルド（clang-cl / ARM64 toolchain）が
+   既存 x64 ランナーで成功すること。ARM64 バイナリの生成までを CI の最小ゲートとする
+   （新インフラ不要）。
+2. **ARM64 単体テスト実行** = `windows-11-arm` ランナーで `ctest` を緑にする。**public /
+   private いずれでも label は有効**（private は従量課金）なので、リポジトリ可視性に
+   依らず CI 化できる。課金やキュー待ちを避けたい場合のみ self-hosted ARM64 を選ぶ。
 3. **実機（NPU 含む）動作確認** = Snapdragon X 実機で人手検証（`gate:human-required`）。
    §4.3（NPU 必須化はしない）と整合し、CI のブロッカーにはしない。
 
-> リポジトリ可視性（public / private）が `windows-11-arm` の可否を直接左右するため、
-> ARM64 実行テストを CI に常設するかは可視性確定後に決める（本 spec は両分岐を許容する
-> 設計に留める）。
+> 以前の「private では label 失敗」という制約は撤回する。現行の GitHub hosted-runner
+> リファレンスは `windows-11-arm` を public / private 双方の標準ランナーとして掲載して
+> おり、private は従量課金で実行される（label 解決失敗ではない）。出典:
+> [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
 
 ### 8.5 Snapdragon X Elite NPU（QNN SDK 直叩きは非既定 fallback）
 
@@ -607,8 +639,10 @@ public:
 
 ### 8.6 出典（M27 調査の一次情報）
 
-- [GitHub Actions: Windows on Arm runners for all public repos（`windows-11-arm`・public 限定・無料）](https://blogs.windows.com/windowsdeveloper/2025/04/14/github-actions-now-supports-windows-on-arm-runners-for-all-public-repos/)
-- [GitHub-hosted runners reference（ランナー label / 仕様）](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+- [GitHub-hosted runners reference（`windows-11-arm` は public / private 両対応の標準ランナー・spec / 課金）](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+- [GitHub Actions: Windows on Arm runners for all public repos（2025-04 の public 無料化アナウンス。private 対応はその後 reference に掲載）](https://blogs.windows.com/windowsdeveloper/2025/04/14/github-actions-now-supports-windows-on-arm-runners-for-all-public-repos/)
+- [ggml-cpu CMakeLists.txt（MSVC は ARM 非対応・clang 必須の FATAL_ERROR）](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-cpu/CMakeLists.txt)
+- [CMAKE_SYSTEM_PROCESSOR（toolchain なしでは host 値に追従）](https://cmake.org/cmake/help/latest/variable/CMAKE_SYSTEM_PROCESSOR.html)
 - [Add Arm support to your Windows app（クロスコンパイル可・テストは ARM64 実機/VM 必須）](https://learn.microsoft.com/windows/arm/add-arm-support)
 - [Windows on Arm overview（ARM64 VM はクラウドホスト必須・開発ツール）](https://learn.microsoft.com/windows/arm/overview)
 

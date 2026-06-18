@@ -518,7 +518,7 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
 
   {
     std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
-    out << R"({"liveConversion":true,"backendPreference":"cpu"})";
+    out << R"({"liveConversion":true,"backendPreference":"auto"})";
   }
 
   auto second = config_dispatcher.Dispatch(MakeReq(75, ipc::MessageType::UpdateConfig, "{}"));
@@ -530,6 +530,48 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
   EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cpu);
 
   std::remove(settings_path.c_str());
+}
+
+TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
+  const auto settings_path = TempPath("azookey_dispatcher_invalid_reload_settings.json");
+  const auto model_path = TempPath("azookey_dispatcher_invalid_reload_zenzai.gguf");
+  const auto model_json_path = std::filesystem::path(model_path).generic_string();
+  std::remove(settings_path.c_str());
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({"model":{"selectedPath":")" << model_json_path << R"("}})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict,
+                                              DefaultDispatcherConfig(), &settings_store);
+
+  auto resp = config_dispatcher.Dispatch(MakeReq(76, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseUpdateConfigResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_TRUE(parsed->ok);
+  ASSERT_TRUE(engine.model_loaded());
+  EXPECT_EQ(engine.config().model_path, model_json_path);
+
+  {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << "{ invalid json";
+  }
+
+  auto invalid = config_dispatcher.Dispatch(MakeReq(77, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(invalid.has_value());
+  auto invalid_payload = ipc::ParseUpdateConfigResponse(invalid->payload_json);
+  ASSERT_TRUE(invalid_payload.has_value());
+  EXPECT_FALSE(invalid_payload->ok);
+  ASSERT_TRUE(invalid_payload->error.has_value());
+  EXPECT_TRUE(engine.model_loaded());
+  EXPECT_EQ(engine.config().model_path, model_json_path);
+
+  std::remove(settings_path.c_str());
+  std::remove(model_path.c_str());
 }
 
 TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {

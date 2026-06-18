@@ -120,6 +120,21 @@ TEST(SettingsStoreTest, EmptySelectedPathClearsExistingModelPath) {
   EXPECT_FALSE(config.n_gpu_layers.has_value());
 }
 
+TEST(SettingsStoreTest, AutoBackendCanUseExplicitDefaultBackend) {
+  azookey::host::RuntimeSettings settings;
+  settings.backend_preference = "auto";
+
+  azookey::host::EngineConfig config;
+  config.backend = azookey::host::BackendKind::Cuda;
+
+  auto legacy_fallback = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+  EXPECT_EQ(legacy_fallback.backend, azookey::host::BackendKind::Cuda);
+
+  auto explicit_default = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      config, settings, azookey::host::BackendKind::Cpu);
+  EXPECT_EQ(explicit_default.backend, azookey::host::BackendKind::Cpu);
+}
+
 TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
   const auto dir = TestDir("azookey_settings_invalid");
   const auto path = dir / "settings.json";

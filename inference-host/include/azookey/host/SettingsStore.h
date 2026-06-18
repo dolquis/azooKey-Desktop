@@ -86,5 +86,8 @@ class SettingsStore {
 
 EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings);
+EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
+                                                const RuntimeSettings& settings,
+                                                BackendKind auto_backend);
 
 }  // namespace azookey::host

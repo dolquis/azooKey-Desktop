@@ -98,6 +98,7 @@ std::string GetEnvString(const char* name) {
 int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
+  const auto default_backend = config.backend;
   std::optional<std::filesystem::path> explicit_learning_path;
   std::optional<std::filesystem::path> explicit_user_dict_path;
   std::string mock_dict_path;
@@ -177,7 +178,8 @@ int main(int argc, char** argv) {
   const auto settings_result = settings_store.Load();
   const auto cli_backend = config.backend;
   const auto cli_model_path = config.model_path;
-  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings);
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings,
+                                                             default_backend);
   if (explicit_backend) {
     config.backend = cli_backend;
   }
@@ -216,6 +218,7 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
+  dconf.default_backend = default_backend;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }

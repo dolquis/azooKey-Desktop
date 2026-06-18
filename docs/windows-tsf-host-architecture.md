@@ -100,8 +100,9 @@
   未指定キーを schema default にフォールバックして提供する。
 - `settings.json` はファイル正典とし、設定アプリからの IPC `UpdateConfig` は payload 空の
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
-- 破損した `settings.json` は `.invalid` suffix へ隔離し、Host は default 設定で継続する。
-  ファイル競合・同時書き込みの排他は DEV-181 のプロセス間ロック方針と整合させる。
+- 破損した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
+  `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。ファイル競合・
+  同時書き込みの排他は DEV-181 のプロセス間ロック方針と整合させる。
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 

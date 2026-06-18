@@ -17,6 +17,7 @@ struct DispatcherConfig {
   std::string host_version{"0.1.0"};
   int protocol_version{1};
   std::string handshake_token;
+  BackendKind default_backend{BackendKind::Cpu};
   std::optional<BackendKind> override_backend;
   std::optional<std::string> override_model_path;
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.

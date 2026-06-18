@@ -217,13 +217,19 @@ SettingsLoadResult SettingsStore::Reload() { return Load(); }
 
 EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings) {
+  return ApplyRuntimeSettingsToEngineConfig(config, settings, config.backend);
+}
+
+EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
+                                                const RuntimeSettings& settings,
+                                                BackendKind auto_backend) {
   config.enable_live_conversion = settings.live_conversion;
 
   std::string backend_preference = settings.backend_preference;
   if (settings.model.backend_preference != "auto") {
     backend_preference = settings.model.backend_preference;
   }
-  config.backend = BackendFromPreference(backend_preference, config.backend);
+  config.backend = BackendFromPreference(backend_preference, auto_backend);
 
   if (!settings.model.enabled) {
     config.model_path.clear();

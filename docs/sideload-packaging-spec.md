@@ -660,8 +660,9 @@ UpdateConfigResponse:
   error: optional<string>
 ```
 
-Host は `settings.json` を再読込し、即時反映可能なものを適用する。再起動が必要な
-設定は M30 の UI 本格化時に settings app 側の表示で扱う。
+Host は `settings.json` を再読込し、即時反映可能なものを適用する。破損などで
+再読込結果が invalid の場合、`ok=false` と `error` を返し、現在の runtime 設定は
+維持する。再起動が必要な設定は M30 の UI 本格化時に settings app 側の表示で扱う。
 
 ### 3.4 設定ファイルパス
 

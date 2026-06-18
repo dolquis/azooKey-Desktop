@@ -314,7 +314,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
 
   std::lock_guard<std::mutex> lock(*config_.update_config_mutex);
   const auto load_result = settings_store_->Reload();
-  auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings);
+  if (load_result.status == SettingsLoadStatus::Invalid) {
+    res.ok = false;
+    res.error = load_result.error.value_or("invalid settings.json");
+    return MakeResponse(req, ipc::BuildUpdateConfigResponse(res));
+  }
+
+  auto next_config = ApplyRuntimeSettingsToEngineConfig(engine_->config(), load_result.settings,
+                                                        config_.default_backend);
   if (config_.override_backend) {
     next_config.backend = *config_.override_backend;
   }
@@ -325,7 +332,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   const auto model_result = engine_->LoadModelWithResult(
       ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers});
 
-  res.ok = load_result.status != SettingsLoadStatus::Invalid && model_result.ok;
+  res.ok = model_result.ok;
   if (load_result.error) {
     res.error = *load_result.error;
   } else if (!model_result.ok) {

@@ -1088,7 +1088,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 #### M58-B: 長文・文節再変換
 
 - **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
-- **前提**: M58-A 完了、M20（再変換）。
+- **前提**: M58-A 完了、M20（再変換）、**M51 の UUIDv7 `trace_id` 生成・伝播**。
+  out-of-band Cancel のクロスクライアント分離（spec §6.3.2）は host キャンセルレジストリ /
+  TIP 応答相関を `(trace_id, request_id)` でキーするが、これは `trace_id` が実際に
+  グローバル一意（UUIDv7）であることを前提とする。現行 TIP は envelope に**定数
+  `trace_id`**（`tsf-tip/src/TextService.cpp` の `"tip-key-query"` / `"tip-faf"` 等）を
+  載せており、UUIDv7 採番は M51 のスコープ（§7.7.1 / 本書 M51）であるため、これが無いと
+  複数 TIP インスタンスが同一の定数 `trace_id` を共有し `request_id` も衝突しうるため、
+  `(trace_id, request_id)` でも一意にならずクロスクライアント誤キャンセルが再発する。
+  M51 本体のうち本 M58-B が依存するのは **`trace_id` の UUIDv7 生成・伝播の部分のみ**で
+  あり、レイテンシトレーサ / viewer CLI には依存しない。**M58-B を M51 本体より先行
+  させる場合**は、out-of-band cancel 対象 envelope（batch query / cancel）に限り UUIDv7
+  `trace_id` を採番する処理を M58-B スコープに含め、M51 の生成セマンティクス（1 論理操作
+  = 1 `trace_id`、§7.7.1）と一致させること（後の M51 全体実装と矛盾しない）。spec §6.3.2。
 - **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
   共有キャンセルレジストリへの協調キャンセルチェック）、`ipc/`（segments 構造・
   `HandshakeResponse.capabilities`・共有 `CancellationRegistry`）、
@@ -1126,7 +1138,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     各 in-flight サブリクエスト ID へ個別送信。タイムアウト / エラー時は部分確定せず
     全 in-flight を Cancel して fallback 連鎖へ。host キャンセルレジストリと TIP 応答相関は
     `(trace_id, request_id)` でキーする（`request_id` 単独はインスタンスごと採番で衝突し、
-    別クライアントを誤キャンセルするため。`trace_id` は全 envelope 必須の UUIDv7）。
+    別クライアントを誤キャンセルするため。`trace_id` は全 envelope 必須の UUIDv7 で、その
+    生成は M51 前提。上記 M58-B 前提節参照）。
     タイムアウト / キャンセル済みの stale 応答は fallback / 新バッチ送信前に drain・破棄
     （または primary 再接続）して古い segments の誤結合を防ぐ（spec §6.3.2・§6.3.3）
   - 既定の正しさ経路は現行トランスポートの 1 リクエスト 1 応答契約に従い、host 内部

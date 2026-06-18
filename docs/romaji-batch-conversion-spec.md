@@ -264,6 +264,19 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
     と `request_id` の組とする（横断追跡キー `(trace_id, request_id)` をそのまま流用。
     `docs/dev-infrastructure-spec.md` の「3 つ目の ID 概念を導入しない」方針に従い、
     新たな session/cancel トークンは足さない）。
+  - **前提（クロスマイルストーン依存・M51）**: 上記キーがクロスクライアント分離として
+    機能するには、`trace_id` が実際にグローバル一意（UUIDv7）でなければならない。現行
+    TIP は envelope に**定数 `trace_id`**（`tsf-tip/src/TextService.cpp` の `"tip-key-query"`
+    / `"tip-faf"` 等）を載せており、UUIDv7 採番は **M51**（`docs/dev-infrastructure-spec.md`
+    §7.7.1 / `plans/windows-port-roadmap.md` M51）のスコープである。M51 の trace 生成が無い
+    まま M58-B を実装すると、複数 TIP インスタンスが同一の定数 `trace_id` を共有し
+    `request_id` も衝突しうるため、`(trace_id, request_id)` でも一意にならず本節が防ごう
+    とするクロスクライアント誤キャンセルが再発する。したがって **M58-B は M51 の UUIDv7
+    `trace_id` 生成・伝播を前提**とする（roadmap M58-B 前提に明記）。M58-B を M51 本体より
+    先行させる場合は、out-of-band cancel 対象 envelope（batch query / cancel）に限り UUIDv7
+    `trace_id` を採番する処理を M58-B スコープに含め、M51 の生成セマンティクス（1 論理操作
+    = 1 `trace_id`、§7.7.1）と一致させること。いずれにせよ定数 `trace_id` の現状実装の
+    ままでは本節のクロスクライアント分離は成立しない。
   - `MessageType::Cancel` を受けた接続は（どの接続でも）受信 envelope の `trace_id` と
     `target_request_id` で `scheduler_->Cancel(trace_id, target_request_id)` を呼ぶ。
   - `QueryBatchConversion` ハンドラは処理開始時に自身の `(trace_id, request_id)` を
@@ -603,7 +616,9 @@ return { ok: true }
   **クロスクライアント分離**: 2 つのクライアント（別 `trace_id`）が同じ `request_id` を
   持つとき、片方の `(trace_id, request_id)` への `Cancel` が他方の in-flight バッチを
   キャンセルしないこと（レジストリが `(trace_id, request_id)` でキーされ、`request_id`
-  単独では引かないこと。§6.3.2）。**レジストリ cleanup** (`scheduler_test.cpp`):
+  単独では引かないこと。§6.3.2）。本テストは各クライアントが**一意な UUIDv7 `trace_id`**
+  を持つこと（M51 の trace 生成前提。§6.3.2 前提）を前提とし、定数 `trace_id` のままでは
+  分離が成立しないことを併せて確認する。**レジストリ cleanup** (`scheduler_test.cpp`):
   終端パス（最終 `partial:false` / canceled / エラー）で `CompleteRequest(trace_id,
   request_id)` によりエントリが erase されること、query が走らなかった孤児 cancel
   マーカがプルーンされ cancel-state マップが非有界増加しないこと（§6.3.2 cleanup）。

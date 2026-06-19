@@ -203,8 +203,10 @@ Done は「Linear 上で運用的に完了」を意味し、GitHub docs のリ�
 事故の根本原因は、Linear–GitHub 連携が PR マージ / ブランチ名連動で Issue を Done 化し、人間ゲートを飛び越える点にある。次の多層で防ぐ:
 
 1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく In Review** にする。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは In Review で止まり、人間ゲートの取りこぼしが構造的に起きない（この設定変更は人間 lead が Linear 側で行う）。
-2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。
+2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。 GitHub ミラー Issue も同様に、人間ゲート / 検証メモ待ちの Issue では `Fixes #<N>`（マージで GitHub Issue をクローズ → Linear 同期で Done 化し In Review を迂回する）を避け、`Refs #<N>` 等の非クローズ参照にする。
 3. **分割の徹底**: §7.1.1 に該当する Issue は分割し、auto-close が人間ゲート Issue に当たらないようにする。
+
+本節の遷移規約（PR マージ→In Review、Done は明示遷移）は、各 repo の `AGENTS.md` / `docs/GITHUB_LINEAR_MAPPING.md` / `docs/WORKFLOW.md` 等のライフサイクル要約より**優先**する。要約側が「PR マージ→Done」と記す場合は本節に読み替え、可能なら要約側も更新する。
 
 ---
 
@@ -270,7 +272,7 @@ Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済
 - [ ] 実行順序を表さなくなったブロッカー
 - [ ] Done なのに検証ノート欠落
 - [ ] `agent:claude-*` と `gate:human-required` が同居した Issue（Design / Gate 分割漏れ。§7.1）
-- [ ] Done なのに `gate:human-required` が残っている Issue
+- [ ] Done の設計 Issue（`agent:claude-*` 付き）に `gate:human-required` が残っている（分割後に除去すべき stale ラベル。人間ゲート Issue 自体が検証メモ付きで Done なのは正常）
 - [ ] 人間ゲート Issue が PR の auto-close 対象になっている（closing キーワードで参照されている）
 
 Codex safety checks:

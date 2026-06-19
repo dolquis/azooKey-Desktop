@@ -403,12 +403,11 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
 
 **要件**: `tsf-tip/src/DllMain.cpp::DllRegisterServer` は `GUID_TFCAT_TIP_KEYBOARD`
 （キーボード型 TIP の必須カテゴリ）と `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` を
-`RegisterCategory` する（DEV-157 で実装済み）。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
-は **§2.8 の UIElement 公開実装（`ITfUIElementMgr` / `ITfCandidateListUIElement`）と
-同時に登録する**。公開実装が無いまま本カテゴリだけ登録すると、UI-less-only ホスト
-（Windows 11 / Office）が TIP 自前ウィンドウを抑制した上で候補が TSF 経由で公開されず、
-候補が消える / 選択不能になる。したがって本カテゴリ登録は §2.8 / M21 の最小 UIElement
-公開実装に内包し、DEV-157 では登録しない（`ui_less_mode_` 検出のみ先行 = §2.10）。
+`RegisterCategory` する。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` は **§2.8 の
+UIElement 公開実装（`ITfUIElementMgr` / `ITfCandidateListUIElement`）と同時に登録する**。
+公開実装が無いまま本カテゴリだけ登録すると、UI-less-only ホスト（Windows 11 / Office）
+が TIP 自前ウィンドウを抑制した上で候補が TSF 経由で公開されず、候補が消える /
+選択不能になる。したがって本カテゴリ登録は M5 の最小 UIElement 公開実装に内包する。
 
 **v1.0 で必要な追加（M5）**:
 
@@ -428,11 +427,12 @@ smoke（`RegisterProfile` / カテゴリ登録 → `GetProfile` で確認 → �
 
 ### 2.10 `ActivateEx` の最小実装と現状ギャップ
 
-**実装済み（DEV-157）**: `TextService::ActivateEx` は `ITfThreadMgrEx` を QI して
-`GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無を `ui_less_mode_` に
-保持する（`tsf-tip/src/TextService.cpp`）。`dwFlags` は UIElement ビットを公式に
-列挙しないため一次情報にしない。`ui_less_mode_` を消費して自前候補ウィンドウを
-抑制する `pbShow` 分岐（§2.8）は M21 で実装する。
+**実装済み（DEV-157 / DEV-154）**: `TextService::ActivateEx` は `ITfThreadMgrEx` を
+QI して `GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無を
+`ui_less_mode_` に保持する（`tsf-tip/src/TextService.cpp`）。`dwFlags` は UIElement
+ビットを公式に列挙しないため一次情報にしない。`ui_less_mode_` は
+`CandidateUiCoordinator` に伝播し、§2.8 の `pbShow` 分岐で自前 HWND と
+app-drawn UIElement 経路を切り替える。
 
 **v1.0 で必要な最小実装（M5）**: UI-less 判定は §2.2 のとおり
 `ITfThreadMgrEx::GetActiveFlags` を一次情報とする（`ActivateEx` の `dwFlags` は

@@ -15,7 +15,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
-#include "azookey/tsf/CandidateWindow.h"
+#include "azookey/tsf/CandidateUiCoordinator.h"
 
 namespace azookey::tsf {
 
@@ -71,8 +71,8 @@ class TextService final : public ITfTextInputProcessorEx,
 
   // True when the active TSF thread runs in UI-less mode (Windows 11 / Office
   // route candidate UI through the application). Sourced from
-  // ITfThreadMgrEx::GetActiveFlags in ActivateEx (spec §2.10). Consuming this
-  // to suppress our own candidate window is tracked separately (spec §2.8/M21).
+  // ITfThreadMgrEx::GetActiveFlags in ActivateEx (spec §2.10) and propagated to
+  // CandidateUiCoordinator for pbShow-driven candidate UI routing.
   bool ui_less_mode() const { return ui_less_mode_; }
 
   // Accessed by EditSession.
@@ -115,8 +115,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // Context that owns a queued commit after a sync EditSession rejection.
   ITfContext* commit_context_{nullptr};
 
-  // Candidate window (M5).
-  CandidateWindow candidate_window_;
+  // Candidate UI coordinator (M5).
+  CandidateUiCoordinator candidate_ui_;
   int selected_candidate_idx_{0};
   // Snapshot of candidates taken when the window was opened (used for commit
   // so that a late QueryCandidates response cannot change what is confirmed).

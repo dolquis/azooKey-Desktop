@@ -192,6 +192,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
       thread_mgr_ex->Release();
     }
   }
+  candidate_ui_.SetUiLessMode(ui_less_mode_);
 
   HRESULT hr = AdviseTextServiceSinks();
   if (FAILED(hr)) {
@@ -203,12 +204,12 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     return hr;
   }
 
-  candidate_window_.Create();
-  candidate_window_.SetOnClick([this](int idx) {
+  candidate_ui_.Create();
+  candidate_ui_.SetOnClick([this](int idx) {
     selected_candidate_idx_ = idx;
     if (active_context_) CommitSelected(active_context_);
   });
-  candidate_window_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
+  candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
 
   StartIpcWorker();
   return S_OK;
@@ -221,7 +222,7 @@ STDMETHODIMP TextService::Deactivate() {
 
   CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                           LifecycleCleanupFailurePolicy::ReleaseComposition);
-  candidate_window_.Destroy();
+  candidate_ui_.Destroy();
 
   if (active_context_) {
     active_context_->Release();
@@ -323,7 +324,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
-    const bool cand_visible = candidate_window_.IsVisible();
+    const bool cand_visible = candidate_ui_.IsShowing();
 
     if (wParam >= 'A' && wParam <= 'Z') {
       *eaten = TRUE;
@@ -399,7 +400,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       PreeditRollbackState state;
       state.preedit = preedit_kana_;
       state.romaji = romaji_;
-      state.candidate_window_visible = candidate_window_.IsVisible();
+      state.candidate_window_visible = candidate_ui_.IsShowing();
       state.selected_candidate_idx = selected_candidate_idx_;
       state.shown_candidates = shown_candidates_;
       {
@@ -424,7 +425,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
         POINT pt = caret_pt_;
         if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
-        candidate_window_.Show(pt, items, state.selected_candidate_idx);
+        candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
       }
     };
     auto request_preedit_update_or_restore_on_oom =
@@ -437,12 +438,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     };
 
-    const bool cand_visible = candidate_window_.IsVisible();
+    const bool cand_visible = candidate_ui_.IsShowing();
     if (wParam >= 'A' && wParam <= 'Z') {
       const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
       if (cand_visible) {
-        candidate_window_.Hide();
+        candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
       }
       // Always clear stale candidates when the reading changes, not only when
@@ -466,7 +467,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       // パススルーする。
       const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
-        candidate_window_.Hide();
+        candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
       }
       {
@@ -483,7 +484,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     } else if (wParam == VK_BACK) {
       const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
-        candidate_window_.Hide();
+        candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
       }
       if (romaji_.HasPending()) {
@@ -530,8 +531,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
         if (cand_visible) {
           // Cycle to next candidate using the existing snapshot.
-          candidate_window_.MoveSelection(+1);
-          selected_candidate_idx_ = candidate_window_.GetSelected();
+          const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
+          if (FAILED(move_hr)) return move_hr;
+          selected_candidate_idx_ = candidate_ui_.GetSelected();
         } else {
           // Snapshot the candidate list so commit always reflects what was
           // displayed, even if a late QueryCandidates response arrives later.
@@ -555,7 +557,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
               selected_candidate_idx_ = 0;
               POINT pt = caret_pt_;
               if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
-              candidate_window_.Show(pt, items, 0);
+              const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+              if (FAILED(begin_hr)) return begin_hr;
             }
           }
         }
@@ -563,15 +566,17 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_UP) {
       if (cand_visible) {
-        candidate_window_.MoveSelection(-1);
-        selected_candidate_idx_ = candidate_window_.GetSelected();
+        const HRESULT move_hr = candidate_ui_.MoveSelection(-1);
+        if (FAILED(move_hr)) return move_hr;
+        selected_candidate_idx_ = candidate_ui_.GetSelected();
         *eaten = TRUE;
       }
 
     } else if (wParam == VK_DOWN) {
       if (cand_visible) {
-        candidate_window_.MoveSelection(+1);
-        selected_candidate_idx_ = candidate_window_.GetSelected();
+        const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
+        if (FAILED(move_hr)) return move_hr;
+        selected_candidate_idx_ = candidate_ui_.GetSelected();
         *eaten = TRUE;
       }
 
@@ -589,7 +594,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     } else if (wParam >= '1' && wParam <= '9') {
       if (cand_visible) {
         int idx = static_cast<int>(wParam - '1');
-        if (idx < candidate_window_.GetCount()) {
+        if (idx < candidate_ui_.GetCount()) {
           selected_candidate_idx_ = idx;
           const HRESULT commit_hr = CommitSelected(context);
           if (FAILED(commit_hr)) return commit_hr;
@@ -599,7 +604,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_ESCAPE) {
       if (cand_visible) {
-        candidate_window_.Hide();
+        candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
@@ -775,7 +780,7 @@ HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
 }
 
 void TextService::ClearCandidateStateForLifecycle() {
-  candidate_window_.Hide();
+  candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
   shown_candidates_.clear();
   {
@@ -983,7 +988,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   }
   const std::string reading = preedit_kana_;
 
-  candidate_window_.Hide();
+  candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
 
   // M10: cancel queued AND in-flight QC so the host can abort early.
@@ -1040,7 +1045,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
 
   if (preedit_kana_.empty()) return S_OK;
 
-  candidate_window_.Hide();
+  candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
@@ -1444,7 +1449,7 @@ void TextService::ServeConnection() {
           }
         }
       }
-      if (notify_ui) candidate_window_.PostCandidatesReady();
+      if (notify_ui) candidate_ui_.PostCandidatesReady();
     } else {
       DebugLog("IPC: stale response for req_id=" + std::to_string(req_id) + ", discarding");
     }
@@ -1467,7 +1472,7 @@ void TextService::OnCandidatesReady(void* context) {
 }
 
 void TextService::ShowCandidateWindowFromCache() {
-  if (preedit_kana_.empty() || candidate_window_.IsVisible()) {
+  if (preedit_kana_.empty() || candidate_ui_.IsShowing()) {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidate_window_show_pending_ = false;
     return;
@@ -1490,7 +1495,7 @@ void TextService::ShowCandidateWindowFromCache() {
   selected_candidate_idx_ = 0;
   POINT pt = caret_pt_;
   if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
-  candidate_window_.Show(pt, items, 0);
+  candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
 }
 
 #ifdef AZOOKEY_TSF_TESTING

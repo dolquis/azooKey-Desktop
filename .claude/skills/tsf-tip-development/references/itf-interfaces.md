@@ -42,16 +42,22 @@
 - 列挙子 (`IEnumTfDisplayAttributeInfo` 相当) は `DisplayAttribute.cpp` 側で
   実装される。
 
+## CandidateListUIElement (`tsf-tip/include/azookey/tsf/CandidateListUIElement.h`)
+
+- `ITfUIElement` — UI-less / app-rendered 候補 UI へ公開する UIElement の基底契約
+  (`GetDescription`, `GetGUID`, `Show`, `IsShown`)。
+- `ITfCandidateListUIElement` — 候補リストの最小公開契約
+  (`GetCount`, `GetString`, `GetSelection`, `GetUpdatedFlags` ほか)。
+
 ## DllMain (`tsf-tip/src/DllMain.cpp`)
 
 - エクスポート: `DllMain`, `DllGetClassObject`, `DllCanUnloadNow`,
   `DllRegisterServer`, `DllUnregisterServer` (`tsf-tip/src/exports.def`)。
 - `DllRegisterServer` は machine-wide (HKLM) に COM クラスを登録し、
   `ITfInputProcessorProfileMgr::RegisterProfile` で TSF プロファイルを登録、
-  `ITfCategoryMgr::RegisterCategory` で `GUID_TFCAT_TIP_KEYBOARD` と
-  `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` を追加する（HKLM / CTF\TIP 書き込みのため
-  管理者権限が必要）。`GUID_TFCAT_TIPCAP_UIELEMENTENABLED` は UIElement 公開実装
-  （§2.8 / M21）と同時に登録するため、ここではまだ登録しない。
+  `ITfCategoryMgr::RegisterCategory` で `GUID_TFCAT_TIP_KEYBOARD`、
+  `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER`、`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
+  を追加する（HKLM / CTF\TIP 書き込みのため管理者権限が必要）。
 - `DllUnregisterServer` は `UnregisterProfile` / `Unregister` でプロファイルと
   カテゴリを解除し、`SHDeleteKeyW` で HKLM の CLSID サブツリーを削除する。
 

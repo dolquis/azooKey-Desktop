@@ -136,17 +136,15 @@ extern "C" STDAPI DllRegisterServer() {
   //    or the OS does not treat it as a keyboard input method (so it never
   //    reaches the keyboard list). DISPLAYATTRIBUTEPROVIDER lets TSF resolve our
   //    preedit-underline display attribute (we implement ITfDisplayAttributeProvider).
-  //    GUID_TFCAT_TIPCAP_UIELEMENTENABLED is intentionally NOT registered yet: it
-  //    advertises that candidate UI is published through TSF (ITfUIElementMgr /
-  //    ITfCandidateListUIElement), which is not implemented. Advertising it before
-  //    that path exists makes UI-less-only hosts (Windows 11 / Office) suppress our
-  //    own candidate window without a TSF-published replacement, so candidates would
-  //    vanish. Register it together with the UI-less publishing path (§2.8 / M21).
+  //    UIELEMENTENABLED advertises that candidate UI is published through TSF
+  //    (ITfUIElementMgr / ITfCandidateListUIElement) so UI-less hosts can activate
+  //    and route candidate drawing through their app-side UIElement sink.
   ITfCategoryMgr* cat_mgr = nullptr;
   hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_ITfCategoryMgr,
                         reinterpret_cast<void**>(&cat_mgr));
   if (FAILED(hr) || !cat_mgr) return SELFREG_E_CLASS;
-  static const GUID kCategories[] = {GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER};
+  static const GUID kCategories[] = {GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                                     GUID_TFCAT_TIPCAP_UIELEMENTENABLED};
   for (const GUID& category : kCategories) {
     hr = cat_mgr->RegisterCategory(azookey::tsf::kTextServiceClsid, category,
                                    azookey::tsf::kTextServiceClsid);
@@ -169,10 +167,8 @@ extern "C" STDAPI DllUnregisterServer() {
       // Remove category registrations. ITfInputProcessorProfiles::Unregister
       // below also clears categories, but unregister them explicitly so a
       // failure partway through still leaves no stale category entries.
-      // GUID_TFCAT_TIPCAP_UIELEMENTENABLED is no longer registered (see
-      // DllRegisterServer), but it is unregistered here too so earlier builds
-      // that did register it get cleaned up; UnregisterCategory of an absent
-      // category is a no-op.
+      // UnregisterCategory of an absent category is a no-op, so this is safe
+      // even after partial registration failures.
       ITfCategoryMgr* cat_mgr = nullptr;
       if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
                                      IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr))) &&

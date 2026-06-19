@@ -261,6 +261,41 @@ TEST_F(DispatcherTest, QueryCandidates) {
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
 }
 
+TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {
+  const std::string dict_path = TempPath("azookey_dispatcher_tsv_source_fixture.tsv");
+  const std::string tsv_learning_path = TempPath("azookey_dispatcher_tsv_source_learning.tsv");
+  std::remove(dict_path.c_str());
+  std::remove(tsv_learning_path.c_str());
+  {
+    std::ofstream out(dict_path);
+    ASSERT_TRUE(out.is_open());
+    out << "かすたむ\tカスタム\t1.0\tgeneral\n";
+  }
+
+  auto converter = std::make_unique<azookey::core::SimpleConverter>();
+  ASSERT_TRUE(converter->LoadFromTsv(dict_path));
+  azookey::learning::LearningStore local_store(tsv_learning_path);
+  azookey::host::InferenceEngine local_engine(std::move(converter), &local_store, {});
+  azookey::host::RequestScheduler local_scheduler;
+  azookey::host::Dispatcher local_dispatcher(&local_engine, &local_scheduler, nullptr,
+                                             DefaultDispatcherConfig());
+
+  ipc::QueryCandidatesRequest q;
+  q.reading = "かすたむ";
+  q.max_candidates = 10;
+  auto env = MakeReq(21, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q));
+  auto resp = local_dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_FALSE(parsed->candidates.empty());
+  EXPECT_EQ(parsed->candidates.front().surface, "カスタム");
+  EXPECT_EQ(parsed->candidates.front().source, "system");
+
+  std::remove(dict_path.c_str());
+  std::remove(tsv_learning_path.c_str());
+}
+
 TEST_F(DispatcherTest, QueryCancelBeforeReply) {
   // Pre-cancel the request id. Dispatcher must return nullopt
   // (no reply for canceled requests).

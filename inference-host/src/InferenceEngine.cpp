@@ -163,6 +163,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   ZenzaiRuntimeOptions runtime_options;
   runtime_options.n_gpu_layers =
       next_config.backend == BackendKind::Cuda ? options.n_gpu_layers.value_or(0) : 0;
+  runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
   auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
   if (!loaded.ok) {
     result.error = loaded.error;

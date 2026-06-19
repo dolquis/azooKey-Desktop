@@ -448,7 +448,7 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
   std::remove(model_path.c_str());
 }
 
-TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert) {
+TEST_F(DispatcherTest, NoLlamaZenzaiRuntimeStaysFallbackOnly) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
                     "loads require a full model fixture.";
@@ -466,13 +466,16 @@ TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert
   ASSERT_TRUE(resp.has_value());
   ASSERT_TRUE(ipc::ParseLoadModelResponse(resp->payload_json)->ok);
 
-  ipc::QueryCandidatesRequest degraded_query;
-  degraded_query.reading = "にほん";
-  auto degraded_env = MakeReq(72, ipc::MessageType::QueryCandidates,
-                              ipc::BuildQueryCandidatesRequest(degraded_query));
-  auto degraded_resp = dispatcher.Dispatch(degraded_env);
-  ASSERT_TRUE(degraded_resp.has_value());
-  ASSERT_TRUE(ipc::ParseQueryCandidatesResponse(degraded_resp->payload_json).has_value());
+  ipc::QueryCandidatesRequest fallback_query;
+  fallback_query.reading = "にほんご";
+  auto fallback_env = MakeReq(72, ipc::MessageType::QueryCandidates,
+                              ipc::BuildQueryCandidatesRequest(fallback_query));
+  auto fallback_resp = dispatcher.Dispatch(fallback_env);
+  ASSERT_TRUE(fallback_resp.has_value());
+  auto fallback_candidates = ipc::ParseQueryCandidatesResponse(fallback_resp->payload_json);
+  ASSERT_TRUE(fallback_candidates.has_value());
+  ASSERT_FALSE(fallback_candidates->candidates.empty());
+  EXPECT_EQ(fallback_candidates->candidates.front().surface, "にほんご");
 
   auto degraded_health_resp = dispatcher.Dispatch(MakeReq(73, ipc::MessageType::Health, "{}"));
   ASSERT_TRUE(degraded_health_resp.has_value());
@@ -482,28 +485,10 @@ TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert
   ASSERT_TRUE(degraded_health->last_error.has_value());
   EXPECT_NE(degraded_health->last_error->find("empty-generation"), std::string::npos);
 
-  ipc::QueryCandidatesRequest ok_query;
-  ok_query.reading = "にほんご";
-  auto ok_env =
-      MakeReq(74, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(ok_query));
-  auto ok_resp = dispatcher.Dispatch(ok_env);
-  ASSERT_TRUE(ok_resp.has_value());
-  auto ok_candidates = ipc::ParseQueryCandidatesResponse(ok_resp->payload_json);
-  ASSERT_TRUE(ok_candidates.has_value());
-  ASSERT_FALSE(ok_candidates->candidates.empty());
-  EXPECT_EQ(ok_candidates->candidates.front().surface, "日本語");
-
-  auto ok_health_resp = dispatcher.Dispatch(MakeReq(75, ipc::MessageType::Health, "{}"));
-  ASSERT_TRUE(ok_health_resp.has_value());
-  auto ok_health = ipc::ParseHealth(ok_health_resp->payload_json);
-  ASSERT_TRUE(ok_health.has_value());
-  EXPECT_EQ(ok_health->status, "ok");
-  EXPECT_FALSE(ok_health->last_error.has_value());
-
   std::remove(model_path.c_str());
 }
 
-TEST_F(DispatcherTest, InvalidZenzaiSurfaceFallsBackToParseableQueryResponse) {
+TEST_F(DispatcherTest, NoLlamaZenzaiFallbackResponseIsParseable) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
                     "loads require a full model fixture.";
@@ -538,7 +523,7 @@ TEST_F(DispatcherTest, InvalidZenzaiSurfaceFallsBackToParseableQueryResponse) {
   ASSERT_TRUE(health.has_value());
   EXPECT_EQ(health->status, "degraded");
   ASSERT_TRUE(health->last_error.has_value());
-  EXPECT_NE(health->last_error->find("invalid-utf8-surface"), std::string::npos);
+  EXPECT_NE(health->last_error->find("empty-generation"), std::string::npos);
 
   std::remove(model_path.c_str());
 }

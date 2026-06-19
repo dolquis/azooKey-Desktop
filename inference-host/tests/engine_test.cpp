@@ -61,6 +61,10 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
+void EnableMockZenzaiCandidatesForTests(azookey::host::ModelLoadOptions& options) {
+  options.mock_zenzai_candidates_for_tests = true;
+}
+
 bool ProbeOnlyGgufUnsupportedWithRealLlama() {
 #if AZOOKEY_WITH_LLAMA_CPP
   return true;
@@ -427,6 +431,7 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   azookey::host::ModelLoadOptions options;
   options.path = model_path;
   options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
 
   const auto result = engine->LoadModelWithResult(options);
   EXPECT_TRUE(result.ok);
@@ -452,6 +457,40 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_no_mock.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_no_mock_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().surface, "にほんご");
+  EXPECT_NE(cands.front().debug_info.find("zenzai-degraded"), std::string::npos);
+  EXPECT_TRUE(std::none_of(cands.begin(), cands.end(), [](const auto& candidate) {
+    return candidate.source == azookey::core::CandidateSource::Model;
+  }));
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -469,6 +508,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
 
   azookey::host::ModelLoadOptions options;
   options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
   ASSERT_TRUE(engine->model_loaded());
 
@@ -504,6 +544,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
 
   azookey::host::ModelLoadOptions options;
   options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
   ASSERT_TRUE(engine->model_loaded());
 
@@ -590,6 +631,7 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
 
   azookey::host::ModelLoadOptions good;
   good.path = model_path;
+  EnableMockZenzaiCandidatesForTests(good);
   ASSERT_TRUE(engine->LoadModelWithResult(good).ok);
   ASSERT_TRUE(engine->model_loaded());
 
@@ -632,6 +674,7 @@ TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
 
   azookey::host::ModelLoadOptions options;
   options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
@@ -672,6 +715,7 @@ TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel)
   WriteMinimalGguf(model_path);
   azookey::host::ModelLoadOptions options;
   options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
   auto cands = engine->QueryCandidates("にほんご", "", kNowBase);

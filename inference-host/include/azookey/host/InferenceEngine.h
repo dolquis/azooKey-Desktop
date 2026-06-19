@@ -42,6 +42,8 @@ struct ModelLoadOptions {
   std::string path;
   BackendKind backend{BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
+  // Test-only fixture switch for no-llama builds; production callers leave this false.
+  bool mock_zenzai_candidates_for_tests{false};
 };
 
 struct ModelLoadResult {

@@ -547,9 +547,14 @@ struct ZenzaiModelRuntime {
     return generated;
   }
 #else
+  bool mock_candidates_for_tests{false};
+
   std::vector<GeneratedCandidate> Generate(const std::string& kana,
                                            const core::ConversionContext& conversion_context) {
     if (IsCanceled(conversion_context)) {
+      return {};
+    }
+    if (!mock_candidates_for_tests) {
       return {};
     }
     if (ToKatakana(kana) == u8"ニホンゴ") {
@@ -663,8 +668,9 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 
   result.runtime = std::move(runtime);
 #else
-  (void)options;
-  result.runtime = std::make_unique<ZenzaiModelRuntime>();
+  auto runtime = std::make_unique<ZenzaiModelRuntime>();
+  runtime->mock_candidates_for_tests = options.mock_candidates_for_tests;
+  result.runtime = std::move(runtime);
 #endif
   result.ok = true;
   result.error.clear();

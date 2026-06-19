@@ -18,6 +18,8 @@ struct ZenzaiModelInfo {
 
 struct ZenzaiRuntimeOptions {
   int32_t n_gpu_layers{};
+  // Test-only fixture switch for no-llama builds; production callers leave this false.
+  bool mock_candidates_for_tests{false};
 };
 
 struct ZenzaiModelRuntime;

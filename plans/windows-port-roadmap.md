@@ -318,7 +318,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 後に HKLM の COM in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する round-trip テスト。`com_smoke_test.cpp` に実装済み。対話的 TSF セッションを要するため opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**（headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
 
 長期（Phase 4 / 配布前に必須）:
-5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。`compat-test/msix_install_uninstall.ps1` に半自動ハーネス雛形を実装（`Add-AppxPackage` → 登録確認 → `Remove-AppxPackage` → 残骸 0）。実機 VM 緑化は `gate:human-required`（DEV-101）。配布経路（spec §1.0 Option A/B/C）確定後に経路別アサーションを強化する。
+5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID / TSF プロファイルキーが残らない smoke（`Add-AppxPackage` → 登録確認 → `Remove-AppxPackage` → 残骸 0）。配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。
 6. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 7. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
@@ -851,10 +851,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
 - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
-  `scripts/register-dev.ps1` / `unregister-dev.ps1` へ命名分離済み（DEV-101）。
+  `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
   MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
-  ため、`compat-test/msix_install_uninstall.ps1`（残骸 0 smoke、`gate:human-required`）
-  で検証する。詳細は `docs/sideload-packaging-spec.md` §1.1.1。
+  ため、`compat-test/msix_install_uninstall.ps1`（残骸 0 smoke）で検証する。
+  詳細は `docs/sideload-packaging-spec.md` §1.1.1。
 - **参照仕様**: `docs/sideload-packaging-spec.md` §1
 
 ### M29: EV/OV コード署名 CI

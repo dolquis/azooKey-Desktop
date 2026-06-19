@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -11,6 +14,8 @@ struct ConversionContext {
   std::string preceding_text;
   std::string preedit_text;
   std::vector<std::string> rejected_surfaces;
+  const std::atomic<bool>* cancel{nullptr};
+  std::optional<std::chrono::steady_clock::time_point> deadline;
 };
 
 struct CorrectionHint {
@@ -22,13 +27,15 @@ class IConverter {
  public:
   virtual ~IConverter() = default;
 
-  virtual std::vector<Candidate> Convert(const std::string& kana, const ConversionContext& context) = 0;
-  virtual std::vector<Candidate> PredictNext(const std::string& kana, const ConversionContext& context) = 0;
-  virtual std::vector<Candidate> Correct(const std::string& kana,
-                                         const CorrectionHint& hint,
+  virtual std::vector<Candidate> Convert(const std::string& kana,
+                                         const ConversionContext& context) = 0;
+  virtual std::vector<Candidate> PredictNext(const std::string& kana,
+                                             const ConversionContext& context) = 0;
+  virtual std::vector<Candidate> Correct(const std::string& kana, const CorrectionHint& hint,
                                          const ConversionContext& context) = 0;
   virtual void Commit(const Candidate& selected_candidate, const ConversionContext& context) = 0;
-  virtual void Learn(const std::string& committed_surface, const std::string& committed_reading) = 0;
+  virtual void Learn(const std::string& committed_surface,
+                     const std::string& committed_reading) = 0;
 };
 
 }  // namespace azookey::core

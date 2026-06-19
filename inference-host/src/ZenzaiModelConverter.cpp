@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +32,7 @@ constexpr double kZenzaiScoreFloor = 0.3;
 constexpr double kZenzaiScoreCeil = 1.4;
 constexpr size_t kMaxLeftContextCodepoints = 30;
 constexpr int32_t kMaxNewTokens = 64;
+constexpr size_t kMaxModelCandidates = 4;
 
 struct GeneratedCandidate {
   std::string surface;
@@ -109,6 +112,14 @@ bool IsValidUtf8String(const std::string& input) {
     }
   }
   return true;
+}
+
+bool IsCanceled(const core::ConversionContext& context) {
+  return context.cancel && context.cancel->load(std::memory_order_relaxed);
+}
+
+bool DeadlineExpired(const core::ConversionContext& context) {
+  return context.deadline && std::chrono::steady_clock::now() >= *context.deadline;
 }
 
 void AppendUtf8(std::string& output, char32_t codepoint) {
@@ -249,6 +260,66 @@ LlamaBackendSession& LlamaBackend() {
   static LlamaBackendSession session;
   return session;
 }
+
+struct LlamaTokenChoice {
+  llama_token token{LLAMA_TOKEN_NULL};
+  float logit{-std::numeric_limits<float>::infinity()};
+  double logprob{-std::numeric_limits<double>::infinity()};
+};
+
+std::vector<LlamaTokenChoice> CollectTokenChoices(const llama_vocab* vocab, const float* logits,
+                                                  int32_t vocab_size, size_t max_choices) {
+  if (max_choices == 0 || vocab_size <= 0) {
+    return {};
+  }
+  std::vector<LlamaTokenChoice> choices;
+  choices.reserve(max_choices);
+  double max_logit = -std::numeric_limits<double>::infinity();
+  for (int32_t id = 0; id < vocab_size; ++id) {
+    max_logit = std::max(max_logit, static_cast<double>(logits[id]));
+    const auto token = static_cast<llama_token>(id);
+    if (llama_vocab_is_control(vocab, token) && !llama_vocab_is_eog(vocab, token)) {
+      continue;
+    }
+    if (choices.size() < max_choices || logits[id] > choices.back().logit) {
+      choices.push_back(LlamaTokenChoice{token, logits[id], 0.0});
+      std::sort(choices.begin(), choices.end(),
+                [](const auto& lhs, const auto& rhs) { return lhs.logit > rhs.logit; });
+      if (choices.size() > max_choices) {
+        choices.resize(max_choices);
+      }
+    }
+  }
+  double denom = 0.0;
+  for (int32_t id = 0; id < vocab_size; ++id) {
+    denom += std::exp(static_cast<double>(logits[id]) - max_logit);
+  }
+  const double log_denom = max_logit + std::log(denom);
+  for (auto& choice : choices) {
+    choice.logprob = static_cast<double>(choice.logit) - log_denom;
+  }
+  return choices;
+}
+
+std::string TokenPiece(const llama_vocab* vocab, llama_token token) {
+  std::array<char, 256> piece_buffer{};
+  int32_t piece_size = llama_token_to_piece(vocab, token, piece_buffer.data(),
+                                            static_cast<int32_t>(piece_buffer.size()), 0, false);
+  if (piece_size < 0) {
+    std::string piece(static_cast<size_t>(-piece_size), '\0');
+    piece_size = llama_token_to_piece(vocab, token, piece.data(),
+                                      static_cast<int32_t>(piece.size()), 0, false);
+    if (piece_size > 0) {
+      piece.resize(static_cast<size_t>(piece_size));
+      return piece;
+    }
+    return {};
+  }
+  if (piece_size <= 0) {
+    return {};
+  }
+  return std::string(piece_buffer.data(), static_cast<size_t>(piece_size));
+}
 #endif
 
 }  // namespace
@@ -281,6 +352,9 @@ struct ZenzaiModelRuntime {
     if (!vocab) {
       throw std::runtime_error("llama.cpp vocab is not available");
     }
+    if (IsCanceled(conversion_context)) {
+      return {};
+    }
 
     const auto prompt = BuildZenzaiPrompt(kana, conversion_context);
     const bool add_bos = llama_vocab_get_add_bos(vocab);
@@ -305,84 +379,99 @@ struct ZenzaiModelRuntime {
       throw std::runtime_error("llama.cpp prompt decode failed");
     }
 
-    std::string surface;
-    double total_logprob = 0.0;
-    int32_t output_tokens = 0;
+    const int32_t vocab_size = llama_vocab_n_tokens(vocab);
     const int32_t max_new = MaxNewTokensForReading(kana);
-    for (int32_t step = 0; step < max_new; ++step) {
-      float* logits = llama_get_logits_ith(context, -1);
-      if (!logits) {
-        throw std::runtime_error("llama.cpp logits are not available");
+    float* initial_logits = llama_get_logits_ith(context, -1);
+    if (!initial_logits) {
+      throw std::runtime_error("llama.cpp logits are not available");
+    }
+    auto first_choices =
+        CollectTokenChoices(vocab, initial_logits, vocab_size, kMaxModelCandidates);
+    if (first_choices.empty()) {
+      throw std::runtime_error("llama.cpp did not select a token");
+    }
+
+    std::vector<GeneratedCandidate> generated;
+    generated.reserve(first_choices.size());
+    for (const auto& first_choice : first_choices) {
+      if (IsCanceled(conversion_context)) {
+        return {};
       }
-      const int32_t vocab_size = llama_vocab_n_tokens(vocab);
-      llama_token selected = LLAMA_TOKEN_NULL;
-      float best_logit = -std::numeric_limits<float>::infinity();
-      for (int32_t id = 0; id < vocab_size; ++id) {
-        const auto token = static_cast<llama_token>(id);
-        if (llama_vocab_is_control(vocab, token) && !llama_vocab_is_eog(vocab, token)) {
-          continue;
-        }
-        if (logits[id] > best_logit) {
-          best_logit = logits[id];
-          selected = token;
-        }
-      }
-      if (selected == LLAMA_TOKEN_NULL) {
-        throw std::runtime_error("llama.cpp did not select a token");
+      if (DeadlineExpired(conversion_context) || llama_vocab_is_eog(vocab, first_choice.token)) {
+        continue;
       }
 
-      double max_logit = -std::numeric_limits<double>::infinity();
-      for (int32_t id = 0; id < vocab_size; ++id) {
-        max_logit = std::max(max_logit, static_cast<double>(logits[id]));
-      }
-      double denom = 0.0;
-      for (int32_t id = 0; id < vocab_size; ++id) {
-        denom += std::exp(static_cast<double>(logits[id]) - max_logit);
-      }
-      if (llama_vocab_is_eog(vocab, selected)) {
-        break;
-      }
+      std::string surface = TokenPiece(vocab, first_choice.token);
+      double total_logprob = first_choice.logprob;
+      int32_t output_tokens = 1;
+      std::vector<llama_token> decoded_tokens = prompt_tokens;
+      decoded_tokens.push_back(first_choice.token);
 
-      total_logprob += static_cast<double>(best_logit) - (max_logit + std::log(denom));
-
-      std::array<char, 256> piece_buffer{};
-      int32_t piece_size =
-          llama_token_to_piece(vocab, selected, piece_buffer.data(),
-                               static_cast<int32_t>(piece_buffer.size()), 0, false);
-      if (piece_size < 0) {
-        std::string piece(static_cast<size_t>(-piece_size), '\0');
-        piece_size = llama_token_to_piece(vocab, selected, piece.data(),
-                                          static_cast<int32_t>(piece.size()), 0, false);
-        if (piece_size > 0) {
-          surface.append(piece.data(), static_cast<size_t>(piece_size));
+      if (max_new > 1) {
+        llama_kv_self_clear(context);
+        auto first_batch =
+            llama_batch_get_one(decoded_tokens.data(), static_cast<int32_t>(decoded_tokens.size()));
+        if (llama_decode(context, first_batch) != 0) {
+          throw std::runtime_error("llama.cpp first token decode failed");
         }
-      } else if (piece_size > 0) {
-        surface.append(piece_buffer.data(), static_cast<size_t>(piece_size));
       }
-      ++output_tokens;
 
-      if (step + 1 < max_new) {
-        llama_token next = selected;
-        auto next_batch = llama_batch_get_one(&next, 1);
-        if (llama_decode(context, next_batch) != 0) {
-          throw std::runtime_error("llama.cpp token decode failed");
+      for (int32_t step = 1; step < max_new; ++step) {
+        if (IsCanceled(conversion_context)) {
+          return {};
         }
+        if (DeadlineExpired(conversion_context)) {
+          break;
+        }
+        float* logits = llama_get_logits_ith(context, -1);
+        if (!logits) {
+          throw std::runtime_error("llama.cpp logits are not available");
+        }
+        auto choices = CollectTokenChoices(vocab, logits, vocab_size, 1);
+        if (choices.empty()) {
+          throw std::runtime_error("llama.cpp did not select a token");
+        }
+        const auto& selected = choices.front();
+        if (llama_vocab_is_eog(vocab, selected.token)) {
+          break;
+        }
+
+        surface += TokenPiece(vocab, selected.token);
+        total_logprob += selected.logprob;
+        ++output_tokens;
+
+        if (step + 1 < max_new) {
+          if (IsCanceled(conversion_context)) {
+            return {};
+          }
+          if (DeadlineExpired(conversion_context)) {
+            break;
+          }
+          decoded_tokens.push_back(selected.token);
+          llama_token next = selected.token;
+          auto next_batch = llama_batch_get_one(&next, 1);
+          if (llama_decode(context, next_batch) != 0) {
+            throw std::runtime_error("llama.cpp token decode failed");
+          }
+        }
+      }
+
+      if (!surface.empty()) {
+        generated.push_back(GeneratedCandidate{surface, total_logprob, output_tokens});
       }
     }
 
-    if (surface.empty()) {
-      return {};
-    }
-    if (!IsValidUtf8String(surface)) {
-      throw std::runtime_error("invalid-utf8-surface");
-    }
-    return {GeneratedCandidate{surface, total_logprob, output_tokens}};
+    return generated;
   }
 #else
   std::vector<GeneratedCandidate> Generate(const std::string& kana,
-                                           const core::ConversionContext&) {
+                                           const core::ConversionContext& conversion_context) {
+    if (IsCanceled(conversion_context)) {
+      return {};
+    }
     if (ToKatakana(kana) == u8"ニホンゴ") {
-      return {GeneratedCandidate{u8"日本語", -0.42, 2}};
+      return {GeneratedCandidate{u8"日本語", -0.42, 2},
+              GeneratedCandidate{u8"日本語入力", -1.4, 4}};
     }
     if (ToKatakana(kana) == u8"ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
@@ -479,8 +568,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 
   auto context_params = llama_context_default_params();
   context_params.n_ctx = 512;
-  context_params.n_batch = 64;
-  context_params.n_ubatch = 64;
+  context_params.n_batch = context_params.n_ctx;
+  context_params.n_ubatch = context_params.n_ctx;
   runtime->context = llama_init_from_model(runtime->model, context_params);
   if (!runtime->context) {
     result.ok = false;
@@ -506,7 +595,9 @@ ZenzaiModelConverter::~ZenzaiModelConverter() = default;
 std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& kana,
                                                            const core::ConversionContext& context) {
   last_error_.reset();
-  degraded_ = false;
+  if (IsCanceled(context)) {
+    return {};
+  }
   if (!runtime_) {
     return DegradeToFallback(kana, context, "model-not-ready");
   }
@@ -514,6 +605,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
   std::vector<core::Candidate> candidates;
   try {
     const auto generated = runtime_->Generate(kana, context);
+    if (IsCanceled(context)) {
+      return {};
+    }
     candidates.reserve(generated.size());
     for (const auto& item : generated) {
       if (item.surface.empty()) {
@@ -540,6 +634,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
   }
 
   DedupBySurface(candidates);
+  if (IsCanceled(context)) {
+    return {};
+  }
   if (candidates.empty()) {
     return DegradeToFallback(kana, context, "empty-generation");
   }
@@ -577,7 +674,6 @@ void ZenzaiModelConverter::Learn(const std::string& committed_surface,
 
 std::vector<core::Candidate> ZenzaiModelConverter::DegradeToFallback(
     const std::string& kana, const core::ConversionContext& context, const std::string& reason) {
-  degraded_ = true;
   last_error_ = "zenzai-degraded:" + reason;
   if (!fallback_) return {};
   auto candidates = fallback_->Convert(kana, context);

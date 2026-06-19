@@ -49,10 +49,11 @@ azookey::host::DispatcherConfig DefaultDispatcherConfig() {
   return config;
 }
 
-void SkipProbeOnlyGgufWhenUsingRealLlama() {
+bool ProbeOnlyGgufUnsupportedWithRealLlama() {
 #if AZOOKEY_WITH_LLAMA_CPP
-  GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
-                  "loads require a full model fixture.";
+  return true;
+#else
+  return false;
 #endif
 }
 
@@ -404,7 +405,10 @@ TEST_F(DispatcherTest, LoadModelRejectsUnsupportedBackend) {
 }
 
 TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const std::string model_path = TempPath("azookey_dispatcher_valid_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -445,7 +449,10 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
 }
 
 TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const std::string model_path = TempPath("azookey_dispatcher_degraded_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -497,7 +504,10 @@ TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert
 }
 
 TEST_F(DispatcherTest, InvalidZenzaiSurfaceFallsBackToParseableQueryResponse) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const std::string model_path = TempPath("azookey_dispatcher_invalid_utf8_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -534,7 +544,10 @@ TEST_F(DispatcherTest, InvalidZenzaiSurfaceFallsBackToParseableQueryResponse) {
 }
 
 TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const std::string model_path = TempPath("azookey_dispatcher_cuda_fallback_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -633,7 +646,10 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const auto settings_path = TempPath("azookey_dispatcher_invalid_reload_settings.json");
   const auto model_path = TempPath("azookey_dispatcher_invalid_reload_zenzai.gguf");
@@ -677,7 +693,10 @@ TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const auto settings_path = TempPath("azookey_dispatcher_override_settings.json");
   const auto cli_model_path = TempPath("azookey_dispatcher_override_zenzai.gguf");

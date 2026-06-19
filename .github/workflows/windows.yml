@@ -122,6 +122,45 @@ jobs:
           Write-Host "configure_ec=$cfg build_ec=$bld tests_ec=$tst"
           if ($cfg -ne '0' -or $bld -ne '0' -or $tst -ne '0') { exit 1 }
 
+  windows-llama-build:
+    name: Windows llama.cpp compile
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/windows-llama/_deps
+          key: llama-cpp-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure llama.cpp build
+        shell: pwsh
+        run: |
+          cmake -S . -B build/windows-llama -G Ninja -DCMAKE_BUILD_TYPE=Debug -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON 2>&1 | Tee-Object -FilePath configure-llama.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build host tests with llama.cpp
+        shell: pwsh
+        run: |
+          cmake --build build/windows-llama --target host_engine_tests --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload llama.cpp build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-llama-build-logs
+          path: |
+            configure-llama.log
+            build-llama.log
+          if-no-files-found: ignore
+
   linux-build:
     name: Linux Debug
     runs-on: ubuntu-24.04

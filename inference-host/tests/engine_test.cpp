@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -60,11 +61,22 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
-void SkipProbeOnlyGgufWhenUsingRealLlama() {
+bool ProbeOnlyGgufUnsupportedWithRealLlama() {
 #if AZOOKEY_WITH_LLAMA_CPP
-  GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
-                  "loads require a full model fixture.";
+  return true;
+#else
+  return false;
 #endif
+}
+
+size_t CountOccurrences(const std::string& haystack, const std::string& needle) {
+  size_t count = 0;
+  size_t pos = 0;
+  while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+    ++count;
+    pos += needle.size();
+  }
+  return count;
 }
 
 class BlockingConverter final : public azookey::core::IConverter {
@@ -398,7 +410,10 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
 }
 
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_load_valid.tsv";
   std::remove(lpath);
@@ -432,7 +447,10 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
 }
 
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_zenzai_degraded.tsv";
   std::remove(lpath);
@@ -464,7 +482,10 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
 }
 
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_zenzai_invalid_utf8.tsv";
   std::remove(lpath);
@@ -516,7 +537,10 @@ TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
 }
 
 TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_load_cuda.tsv";
   std::remove(lpath);
@@ -544,7 +568,10 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
 }
 
 TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_reload_failure.tsv";
   std::remove(lpath);
@@ -571,13 +598,22 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
   ASSERT_FALSE(cands.empty());
   EXPECT_EQ(cands.front().surface, "日本語");
   EXPECT_NE(cands.front().debug_info.find("zenzai;lp="), std::string::npos);
+  EXPECT_NE(std::find_if(cands.begin(), cands.end(),
+                         [](const auto& candidate) {
+                           return candidate.surface == "日本語入力" &&
+                                  candidate.source == azookey::core::CandidateSource::Model;
+                         }),
+            cands.end());
 
   std::remove(model_path.c_str());
   std::remove(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_reload_success.tsv";
   std::remove(lpath);
@@ -593,19 +629,21 @@ TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
-  auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
   ASSERT_FALSE(cands.empty());
   const auto& debug = cands.front().debug_info;
-  const auto first = debug.find("zenzai;lp=");
-  ASSERT_NE(first, std::string::npos);
-  EXPECT_EQ(debug.find("fallback-converter"), std::string::npos);
+  EXPECT_NE(debug.find("zenzai-degraded"), std::string::npos);
+  EXPECT_EQ(CountOccurrences(debug, "zenzai-degraded"), 1u);
 
   std::remove(model_path.c_str());
   std::remove(lpath);
 }
 
 TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const char* lpath = "azookey_host_engine_user_dict_zenzai_dedup.tsv";
   std::remove(lpath);
@@ -631,11 +669,19 @@ TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel)
   ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
 
   auto cands = engine->QueryCandidates("にほんご", "", kNowBase);
-  ASSERT_EQ(cands.size(), 1u);
-  EXPECT_EQ(cands.front().surface, "日本語");
-  EXPECT_EQ(cands.front().source, azookey::core::CandidateSource::UserDictionary);
-  EXPECT_NE(cands.front().debug_info.find("user-dict"), std::string::npos);
-  EXPECT_NE(cands.front().debug_info.find("dup:zenzai"), std::string::npos);
+  const auto user_candidate = std::find_if(cands.begin(), cands.end(), [](const auto& candidate) {
+    return candidate.surface == "日本語";
+  });
+  ASSERT_NE(user_candidate, cands.end());
+  EXPECT_EQ(user_candidate->source, azookey::core::CandidateSource::UserDictionary);
+  EXPECT_NE(user_candidate->debug_info.find("user-dict"), std::string::npos);
+  EXPECT_NE(user_candidate->debug_info.find("dup:zenzai"), std::string::npos);
+  EXPECT_NE(std::find_if(cands.begin(), cands.end(),
+                         [](const auto& candidate) {
+                           return candidate.surface == "日本語入力" &&
+                                  candidate.source == azookey::core::CandidateSource::Model;
+                         }),
+            cands.end());
 
   std::remove(model_path.c_str());
   std::remove(udict_path.c_str());
@@ -676,7 +722,10 @@ TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
 }
 
 TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   using namespace std::chrono_literals;
 

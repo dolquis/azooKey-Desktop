@@ -48,7 +48,6 @@ class ZenzaiModelConverter final : public core::IConverter {
   const ZenzaiModelInfo& info() const { return info_; }
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
-  bool degraded() const { return degraded_; }
 
   std::vector<core::Candidate> Convert(const std::string& kana,
                                        const core::ConversionContext& context) override;
@@ -70,7 +69,6 @@ class ZenzaiModelConverter final : public core::IConverter {
   std::unique_ptr<ZenzaiModelRuntime> runtime_;
   core::IConverter* fallback_;
   std::optional<std::string> last_error_;
-  bool degraded_{false};
 };
 
 }  // namespace azookey::host

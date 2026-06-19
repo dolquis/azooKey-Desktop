@@ -12,27 +12,26 @@ namespace azookey::host {
 
 namespace {
 constexpr const char* kLearningSaveError = "failed to save learning store";
+constexpr auto kModelConversionBudget = std::chrono::seconds(2);
 
-core::ConversionContext BuildContext(const std::string& kana, const std::string& context) {
+core::ConversionContext BuildContext(
+    const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
+    std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) {
   core::ConversionContext conversion_context;
   conversion_context.preceding_text = context;
   conversion_context.preedit_text = kana;
+  conversion_context.cancel = cancel;
+  conversion_context.deadline = deadline;
   return conversion_context;
 }
 
-int SourcePriority(core::CandidateSource source) {
-  switch (source) {
-    case core::CandidateSource::UserDictionary:
-      return 3;
-    case core::CandidateSource::Model:
-      return 2;
-    case core::CandidateSource::SystemDictionary:
-      return 1;
-    case core::CandidateSource::Llm:
-    case core::CandidateSource::Heuristic:
-      return 0;
+bool PreferMergedCandidate(const core::Candidate& candidate, const core::Candidate& existing) {
+  const bool candidate_is_user = candidate.source == core::CandidateSource::UserDictionary;
+  const bool existing_is_user = existing.source == core::CandidateSource::UserDictionary;
+  if (candidate_is_user != existing_is_user) {
+    return candidate_is_user;
   }
-  return 0;
+  return candidate.score > existing.score;
 }
 
 void AppendDebugTag(std::string& debug_info, const std::string& tag) {
@@ -55,9 +54,7 @@ void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
       continue;
     }
 
-    const bool replace = SourcePriority(candidate.source) > SourcePriority(existing->source) ||
-                         (SourcePriority(candidate.source) == SourcePriority(existing->source) &&
-                          candidate.score > existing->score);
+    const bool replace = PreferMergedCandidate(candidate, *existing);
     if (replace) {
       AppendDebugTag(candidate.debug_info, "dup:" + existing->debug_info);
       *existing = std::move(candidate);
@@ -276,8 +273,10 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   std::vector<core::Candidate> converted;
   const bool using_model_converter =
       model_converter_ && active_converter_ == model_converter_.get();
+  const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
   try {
-    converted = active_converter_->Convert(kana, BuildContext(kana, context));
+    converted =
+        active_converter_->Convert(kana, BuildContext(kana, context, cancel, conversion_deadline));
     if (using_model_converter) {
       MirrorModelRuntimeErrorLocked();
     }
@@ -285,12 +284,14 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     if (!using_model_converter || !fallback_converter_) {
       throw;
     }
+    if (canceled()) return {};
     model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
     converted = fallback_converter_->Convert(kana, BuildContext(kana, context));
   } catch (...) {
     if (!using_model_converter || !fallback_converter_) {
       throw;
     }
+    if (canceled()) return {};
     model_runtime_error_ = "zenzai-convert-exception:unknown";
     converted = fallback_converter_->Convert(kana, BuildContext(kana, context));
   }

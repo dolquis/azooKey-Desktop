@@ -635,6 +635,47 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_sane_unique.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_sane_unique_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto live = engine->QueryCandidates("せいん", "", kNowBase, nullptr, 1, true);
+  ASSERT_EQ(live.size(), 1u);
+  EXPECT_EQ(live.front().surface, "正しい");
+  EXPECT_EQ(live.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_FALSE(engine->effective_last_error().has_value());
+
+  auto nbest = engine->QueryCandidates("じゅうふく", "", kNowBase + 1, nullptr, 2, false);
+  ASSERT_EQ(nbest.size(), 2u);
+  EXPECT_EQ(nbest.front().surface, "重複");
+  EXPECT_EQ(nbest.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_NE(std::find_if(nbest.begin(), nbest.end(), [](const auto& candidate) {
+              return candidate.surface == "別候補" &&
+                     candidate.source == azookey::core::CandidateSource::Model;
+            }),
+            nbest.end());
+  EXPECT_FALSE(engine->effective_last_error().has_value());
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
   const char* lpath = "azookey_host_engine_load_invalid.tsv";
   std::remove(lpath);

@@ -260,7 +260,31 @@ void DedupBySurface(std::vector<core::Candidate>& candidates) {
   candidates = std::move(deduped);
 }
 
+void SortAndLimitModelCandidates(std::vector<core::Candidate>& candidates, size_t limit) {
+  std::stable_sort(candidates.begin(), candidates.end(),
+                   [](const auto& lhs, const auto& rhs) { return lhs.score > rhs.score; });
+  if (candidates.size() > limit) {
+    candidates.resize(limit);
+  }
+}
+
 #if AZOOKEY_WITH_LLAMA_CPP
+size_t CountSaneUniqueGeneratedCandidates(const std::vector<GeneratedCandidate>& candidates) {
+  std::vector<std::string> seen_surfaces;
+  seen_surfaces.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    if (candidate.surface.empty() || !IsValidUtf8String(candidate.surface)) {
+      continue;
+    }
+    if (std::find(seen_surfaces.begin(), seen_surfaces.end(), candidate.surface) !=
+        seen_surfaces.end()) {
+      continue;
+    }
+    seen_surfaces.push_back(candidate.surface);
+  }
+  return seen_surfaces.size();
+}
+
 class LlamaBackendSession {
  public:
   LlamaBackendSession() { llama_backend_init(); }
@@ -540,7 +564,7 @@ struct ZenzaiModelRuntime {
 
       PruneBeams(next_beams, candidate_limit);
       beams = std::move(next_beams);
-      if (generated.size() >= candidate_limit) {
+      if (CountSaneUniqueGeneratedCandidates(generated) >= candidate_limit) {
         completed_quota_reached = true;
         break;
       }
@@ -555,9 +579,6 @@ struct ZenzaiModelRuntime {
       return BeamRankScore(lhs.total_logprob, lhs.token_count) >
              BeamRankScore(rhs.total_logprob, rhs.token_count);
     });
-    if (generated.size() > candidate_limit) {
-      generated.resize(candidate_limit);
-    }
 
     return generated;
   }
@@ -581,15 +602,19 @@ struct ZenzaiModelRuntime {
       return {};
     }
     if (ToKatakana(kana) == u8"ニホンゴ") {
-      std::vector<GeneratedCandidate> generated{
+      return {
           GeneratedCandidate{u8"日本語", -0.42, 2},
           GeneratedCandidate{u8"日本語入力", -1.4, 4},
           GeneratedCandidate{std::string("\xE3\x81", 2), -2.2, 1}};
-      const size_t candidate_limit = RequestedCandidateLimit(conversion_context);
-      if (generated.size() > candidate_limit) {
-        generated.resize(candidate_limit);
-      }
-      return generated;
+    }
+    if (ToKatakana(kana) == u8"セイン") {
+      return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.1, 1},
+              GeneratedCandidate{u8"正しい", -1.0, 3}};
+    }
+    if (ToKatakana(kana) == u8"ジュウフク") {
+      return {GeneratedCandidate{u8"重複", -0.2, 2},
+              GeneratedCandidate{u8"重複", -0.4, 2},
+              GeneratedCandidate{u8"別候補", -0.8, 3}};
     }
     if (ToKatakana(kana) == u8"ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
@@ -761,6 +786,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
   if (candidates.empty()) {
     return DegradeToFallback(kana, context, skipped_reason.value_or("empty-generation"));
   }
+  SortAndLimitModelCandidates(candidates, RequestedCandidateLimit(context));
   return candidates;
 }
 

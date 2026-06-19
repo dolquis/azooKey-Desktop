@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,8 @@ struct ZenzaiModelInfo {
 
 struct ZenzaiRuntimeOptions {
   int32_t n_gpu_layers{};
+  // Test-only fixture switch for no-llama builds; production callers leave this false.
+  bool mock_candidates_for_tests{false};
 };
 
 struct ZenzaiModelRuntime;
@@ -46,6 +49,7 @@ class ZenzaiModelConverter final : public core::IConverter {
 
   const ZenzaiModelInfo& info() const { return info_; }
   bool runtime_loaded() const { return runtime_ != nullptr; }
+  std::optional<std::string> last_error() const { return last_error_; }
 
   std::vector<core::Candidate> Convert(const std::string& kana,
                                        const core::ConversionContext& context) override;
@@ -58,11 +62,15 @@ class ZenzaiModelConverter final : public core::IConverter {
   void Learn(const std::string& committed_surface, const std::string& committed_reading) override;
 
  private:
+  std::vector<core::Candidate> DegradeToFallback(const std::string& kana,
+                                                 const core::ConversionContext& context,
+                                                 const std::string& reason);
   void TagFallback(std::vector<core::Candidate>& candidates) const;
 
   ZenzaiModelInfo info_;
   std::unique_ptr<ZenzaiModelRuntime> runtime_;
   core::IConverter* fallback_;
+  std::optional<std::string> last_error_;
 };
 
 }  // namespace azookey::host

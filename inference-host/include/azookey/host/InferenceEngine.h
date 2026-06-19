@@ -42,6 +42,8 @@ struct ModelLoadOptions {
   std::string path;
   BackendKind backend{BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
+  // Test-only fixture switch for no-llama builds; production callers leave this false.
+  bool mock_zenzai_candidates_for_tests{false};
 };
 
 struct ModelLoadResult {
@@ -68,7 +70,9 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCandidates(const std::string& kana,
                                                 const std::string& context,
                                                 uint64_t now_epoch_sec,
-                                                const std::atomic<bool>* cancel);
+                                                const std::atomic<bool>* cancel,
+                                                uint32_t max_candidates = 0,
+                                                bool live = false);
 
   // Backwards-compatible overload without cancel support.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana,
@@ -92,12 +96,14 @@ class InferenceEngine {
   EngineConfig config() const;
   bool model_loaded() const;
   std::optional<std::string> last_error() const;
+  std::optional<std::string> effective_last_error() const;
 
  private:
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec);
+  void MirrorModelRuntimeErrorLocked();
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   bool FlushLearningStoreLocked();
   void RecordLearningSaveFailureLocked();
@@ -113,6 +119,7 @@ class InferenceEngine {
   EngineConfig config_;
   bool model_loaded_{false};
   std::optional<std::string> last_error_;
+  std::optional<std::string> model_runtime_error_;
   size_t unsaved_observations_{0};
   std::optional<uint64_t> first_unsaved_observation_epoch_sec_;
   std::optional<std::chrono::steady_clock::time_point> first_unsaved_observation_steady_;

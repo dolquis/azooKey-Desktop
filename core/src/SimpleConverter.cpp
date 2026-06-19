@@ -26,6 +26,24 @@ bool EndsWith(const std::string& text, const std::string& suffix) {
   return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+CandidateSource SourceFromTsvTag(const std::string& source) {
+  if (source == "user" || source == "user_dict" || source == "user-dict" ||
+      source == "learned" || source == "learned-new") {
+    return CandidateSource::UserDictionary;
+  }
+  if (source == "identity" || source == "heuristic" || source == "heuristic-long-vowel" ||
+      source == "heuristic-quote") {
+    return CandidateSource::Heuristic;
+  }
+  if (source == "model") {
+    return CandidateSource::Model;
+  }
+  if (source == "llm") {
+    return CandidateSource::Llm;
+  }
+  return CandidateSource::SystemDictionary;
+}
+
 const std::unordered_map<std::string, double>* FindLongestBigramMatch(
     const std::string& preceding_text,
     const std::unordered_map<std::string, std::unordered_map<std::string, double>>& bigram_bonus) {
@@ -89,6 +107,7 @@ bool SimpleConverter::LoadFromTsv(const std::string& path) {
     c.surface = std::move(surface);
     c.reading = reading;
     c.score = score;
+    c.source = SourceFromTsvTag(source);
     c.debug_info = source.empty() ? "tsv" : source;
     dictionary_[reading].push_back(std::move(c));
     any = true;

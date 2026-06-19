@@ -31,12 +31,20 @@ ipc::Envelope MakeResponse(const ipc::Envelope& req, std::string payload_json) {
   return r;
 }
 
+const char* SourceToWire(core::CandidateSource source) {
+  if (source == core::CandidateSource::SystemDictionary) return "system";
+  if (source == core::CandidateSource::UserDictionary) return "user_dict";
+  if (source == core::CandidateSource::Model) return "model";
+  if (source == core::CandidateSource::Llm) return "llm";
+  return "heuristic";
+}
+
 ipc::CandidateField ToField(const core::Candidate& c) {
   ipc::CandidateField f;
   f.surface = c.surface;
   f.reading = c.reading;
   f.score = c.score;
-  f.source = c.debug_info;
+  f.source = SourceToWire(c.source);
   return f;
 }
 
@@ -189,7 +197,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) 
   ipc::HealthPayload p;
   p.backend = BackendName(engine_->backend());
   p.model_loaded = engine_->model_loaded();
-  p.last_error = engine_->last_error();
+  p.last_error = engine_->effective_last_error();
   if (!p.last_error) {
     p.status = "ok";
   } else if (p.model_loaded) {
@@ -236,8 +244,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   scheduler_->MarkLatest(req.request_id);
   RequestCompletionGuard completion(scheduler_, req.request_id);
 
-  auto candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context,
-                                              NowSec(), cancel.get());
+  auto candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(),
+                                             cancel.get(), parsed->max_candidates, parsed->live);
 
   const bool canceled = cancel->load(std::memory_order_acquire);
   completion.Complete();

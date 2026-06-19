@@ -70,12 +70,66 @@ TEST_F(SimpleConverterTsvTest, TsvLoad) {
   EXPECT_EQ(candidates.front().surface, "azooKey");
   EXPECT_EQ(candidates.front().score, 1.0);
 
+  const auto* azookey_candidate = FindCandidate(candidates, "azooKey");
+  ASSERT_NE(azookey_candidate, nullptr);
+  EXPECT_EQ(azookey_candidate->source, azookey::core::CandidateSource::UserDictionary);
+  EXPECT_EQ(azookey_candidate->debug_info, "user");
+
+  const auto* identity_candidate = FindCandidate(candidates, "あずきい");
+  ASSERT_NE(identity_candidate, nullptr);
+  EXPECT_EQ(identity_candidate->source, azookey::core::CandidateSource::Heuristic);
+  EXPECT_EQ(identity_candidate->debug_info, "identity");
+
   // Built-in entry is preserved alongside TSV entries.
   const auto nihon = converter.Convert("にほん", azookey::core::ConversionContext{});
   EXPECT_FALSE(nihon.empty());
 
   // Missing file returns false but does not throw.
   EXPECT_FALSE(converter.LoadFromTsv("/nonexistent/azookey_no_such_file.tsv"));
+}
+
+TEST_F(SimpleConverterTsvTest, TsvSourceTagsMapToCandidateSources) {
+  const std::string path = "simple_converter_tsv_source_tags_fixture.tsv";
+  WriteFixture(path,
+               "てすと\tユーザー\t1.0\tuser\n"
+               "てすと\tモデル\t0.9\tmodel\n"
+               "てすと\tLLM\t0.8\tllm\n"
+               "てすと\tそのまま\t0.7\tidentity\n"
+               "てすと\t辞書\t0.6\tgeneral\n"
+               "てすと\t空\t0.5\n");
+
+  azookey::core::SimpleConverter converter;
+  ASSERT_TRUE(converter.LoadFromTsv(path));
+
+  const auto candidates = converter.Convert("てすと", azookey::core::ConversionContext{});
+  ASSERT_EQ(candidates.size(), 6u);
+
+  const auto* user = FindCandidate(candidates, "ユーザー");
+  ASSERT_NE(user, nullptr);
+  EXPECT_EQ(user->source, azookey::core::CandidateSource::UserDictionary);
+  EXPECT_EQ(user->debug_info, "user");
+
+  const auto* model = FindCandidate(candidates, "モデル");
+  ASSERT_NE(model, nullptr);
+  EXPECT_EQ(model->source, azookey::core::CandidateSource::Model);
+
+  const auto* llm = FindCandidate(candidates, "LLM");
+  ASSERT_NE(llm, nullptr);
+  EXPECT_EQ(llm->source, azookey::core::CandidateSource::Llm);
+
+  const auto* identity = FindCandidate(candidates, "そのまま");
+  ASSERT_NE(identity, nullptr);
+  EXPECT_EQ(identity->source, azookey::core::CandidateSource::Heuristic);
+
+  const auto* dictionary = FindCandidate(candidates, "辞書");
+  ASSERT_NE(dictionary, nullptr);
+  EXPECT_EQ(dictionary->source, azookey::core::CandidateSource::SystemDictionary);
+  EXPECT_EQ(dictionary->debug_info, "general");
+
+  const auto* empty_source = FindCandidate(candidates, "空");
+  ASSERT_NE(empty_source, nullptr);
+  EXPECT_EQ(empty_source->source, azookey::core::CandidateSource::SystemDictionary);
+  EXPECT_EQ(empty_source->debug_info, "tsv");
 }
 
 TEST_F(SimpleConverterTsvTest, BigramContextUsesSuffixMatch) {

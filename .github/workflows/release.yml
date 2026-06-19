@@ -50,10 +50,10 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure
-        run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
+        run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
 
       - name: Build
-        run: cmake --build --preset windows-release
+        run: cmake --build --preset windows-release --parallel 1
 
       - name: Test
         run: ctest --preset windows-release --no-tests=error

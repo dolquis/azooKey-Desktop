@@ -42,6 +42,10 @@ void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
   out.write(reinterpret_cast<const char*>(bytes), 4);
 }
 
+void EnableMockZenzaiCandidatesForTests(azookey::host::ModelLoadOptions& options) {
+  options.mock_zenzai_candidates_for_tests = true;
+}
+
 azookey::host::DispatcherConfig DefaultDispatcherConfig() {
   azookey::host::DispatcherConfig config;
   config.host_version = "0.1.0";
@@ -49,10 +53,11 @@ azookey::host::DispatcherConfig DefaultDispatcherConfig() {
   return config;
 }
 
-void SkipProbeOnlyGgufWhenUsingRealLlama() {
+bool ProbeOnlyGgufUnsupportedWithRealLlama() {
 #if AZOOKEY_WITH_LLAMA_CPP
-  GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
-                  "loads require a full model fixture.";
+  return true;
+#else
+  return false;
 #endif
 }
 
@@ -256,6 +261,41 @@ TEST_F(DispatcherTest, QueryCandidates) {
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
 }
 
+TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {
+  const std::string dict_path = TempPath("azookey_dispatcher_tsv_source_fixture.tsv");
+  const std::string tsv_learning_path = TempPath("azookey_dispatcher_tsv_source_learning.tsv");
+  std::remove(dict_path.c_str());
+  std::remove(tsv_learning_path.c_str());
+  {
+    std::ofstream out(dict_path);
+    ASSERT_TRUE(out.is_open());
+    out << "かすたむ\tカスタム\t1.0\tgeneral\n";
+  }
+
+  auto converter = std::make_unique<azookey::core::SimpleConverter>();
+  ASSERT_TRUE(converter->LoadFromTsv(dict_path));
+  azookey::learning::LearningStore local_store(tsv_learning_path);
+  azookey::host::InferenceEngine local_engine(std::move(converter), &local_store, {});
+  azookey::host::RequestScheduler local_scheduler;
+  azookey::host::Dispatcher local_dispatcher(&local_engine, &local_scheduler, nullptr,
+                                             DefaultDispatcherConfig());
+
+  ipc::QueryCandidatesRequest q;
+  q.reading = "かすたむ";
+  q.max_candidates = 10;
+  auto env = MakeReq(21, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(q));
+  auto resp = local_dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_FALSE(parsed->candidates.empty());
+  EXPECT_EQ(parsed->candidates.front().surface, "カスタム");
+  EXPECT_EQ(parsed->candidates.front().source, "system");
+
+  std::remove(dict_path.c_str());
+  std::remove(tsv_learning_path.c_str());
+}
+
 TEST_F(DispatcherTest, QueryCancelBeforeReply) {
   // Pre-cancel the request id. Dispatcher must return nullopt
   // (no reply for canceled requests).
@@ -404,7 +444,10 @@ TEST_F(DispatcherTest, LoadModelRejectsUnsupportedBackend) {
 }
 
 TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const std::string model_path = TempPath("azookey_dispatcher_valid_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -444,8 +487,122 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
   std::remove(model_path.c_str());
 }
 
+TEST_F(DispatcherTest, NoLlamaZenzaiRuntimeStaysFallbackOnly) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_dispatcher_degraded_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "cpu";
+  auto env = MakeReq(71, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  ASSERT_TRUE(ipc::ParseLoadModelResponse(resp->payload_json)->ok);
+
+  ipc::QueryCandidatesRequest fallback_query;
+  fallback_query.reading = "にほんご";
+  auto fallback_env = MakeReq(72, ipc::MessageType::QueryCandidates,
+                              ipc::BuildQueryCandidatesRequest(fallback_query));
+  auto fallback_resp = dispatcher.Dispatch(fallback_env);
+  ASSERT_TRUE(fallback_resp.has_value());
+  auto fallback_candidates = ipc::ParseQueryCandidatesResponse(fallback_resp->payload_json);
+  ASSERT_TRUE(fallback_candidates.has_value());
+  ASSERT_FALSE(fallback_candidates->candidates.empty());
+  EXPECT_EQ(fallback_candidates->candidates.front().surface, "にほんご");
+
+  auto degraded_health_resp = dispatcher.Dispatch(MakeReq(73, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(degraded_health_resp.has_value());
+  auto degraded_health = ipc::ParseHealth(degraded_health_resp->payload_json);
+  ASSERT_TRUE(degraded_health.has_value());
+  EXPECT_EQ(degraded_health->status, "degraded");
+  ASSERT_TRUE(degraded_health->last_error.has_value());
+  EXPECT_NE(degraded_health->last_error->find("empty-generation"), std::string::npos);
+
+  std::remove(model_path.c_str());
+}
+
+TEST_F(DispatcherTest, QueryCandidatesSerializesStableModelSource) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_dispatcher_model_source_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "にほんご";
+  query.max_candidates = 10;
+  auto query_env =
+      MakeReq(74, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query));
+  auto query_resp = dispatcher.Dispatch(query_env);
+  ASSERT_TRUE(query_resp.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(query_resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_FALSE(parsed->candidates.empty());
+  EXPECT_EQ(parsed->candidates.front().surface, "日本語");
+  EXPECT_EQ(parsed->candidates.front().source, "model");
+
+  std::remove(model_path.c_str());
+}
+
+TEST_F(DispatcherTest, NoLlamaZenzaiFallbackResponseIsParseable) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const std::string model_path = TempPath("azookey_dispatcher_invalid_utf8_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "cpu";
+  auto load_env = MakeReq(76, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto load_resp = dispatcher.Dispatch(load_env);
+  ASSERT_TRUE(load_resp.has_value());
+  ASSERT_TRUE(ipc::ParseLoadModelResponse(load_resp->payload_json)->ok);
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "むこう";
+  auto query_env =
+      MakeReq(77, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query));
+  auto query_resp = dispatcher.Dispatch(query_env);
+  ASSERT_TRUE(query_resp.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(query_resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_FALSE(parsed->candidates.empty());
+  EXPECT_EQ(parsed->candidates.front().surface, "むこう");
+
+  auto health_resp = dispatcher.Dispatch(MakeReq(78, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(health_resp.has_value());
+  auto health = ipc::ParseHealth(health_resp->payload_json);
+  ASSERT_TRUE(health.has_value());
+  EXPECT_EQ(health->status, "degraded");
+  ASSERT_TRUE(health->last_error.has_value());
+  EXPECT_NE(health->last_error->find("empty-generation"), std::string::npos);
+
+  std::remove(model_path.c_str());
+}
+
 TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const std::string model_path = TempPath("azookey_dispatcher_cuda_fallback_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -544,7 +701,10 @@ TEST_F(DispatcherTest, UpdateConfigReloadsSettingsAndAppliesEngineConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const auto settings_path = TempPath("azookey_dispatcher_invalid_reload_settings.json");
   const auto model_path = TempPath("azookey_dispatcher_invalid_reload_zenzai.gguf");
@@ -588,7 +748,10 @@ TEST_F(DispatcherTest, UpdateConfigInvalidSettingsPreservesRuntimeConfig) {
 }
 
 TEST_F(DispatcherTest, UpdateConfigPreservesCliBackendAndModelOverrides) {
-  SkipProbeOnlyGgufWhenUsingRealLlama();
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
 
   const auto settings_path = TempPath("azookey_dispatcher_override_settings.json");
   const auto cli_model_path = TempPath("azookey_dispatcher_override_zenzai.gguf");

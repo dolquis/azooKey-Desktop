@@ -1,5 +1,6 @@
 #include "azookey/host/InferenceEngine.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iostream>
@@ -11,12 +12,60 @@ namespace azookey::host {
 
 namespace {
 constexpr const char* kLearningSaveError = "failed to save learning store";
+constexpr auto kModelConversionBudget = std::chrono::seconds(2);
 
-core::ConversionContext BuildContext(const std::string& kana, const std::string& context) {
+core::ConversionContext BuildContext(
+    const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
+    std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
+    uint32_t max_candidates = 0, bool live = false) {
   core::ConversionContext conversion_context;
   conversion_context.preceding_text = context;
   conversion_context.preedit_text = kana;
+  conversion_context.cancel = cancel;
+  conversion_context.deadline = deadline;
+  conversion_context.max_candidates = max_candidates;
+  conversion_context.live = live;
   return conversion_context;
+}
+
+bool PreferMergedCandidate(const core::Candidate& candidate, const core::Candidate& existing) {
+  const bool candidate_is_user = candidate.source == core::CandidateSource::UserDictionary;
+  const bool existing_is_user = existing.source == core::CandidateSource::UserDictionary;
+  if (candidate_is_user != existing_is_user) {
+    return candidate_is_user;
+  }
+  return candidate.score > existing.score;
+}
+
+void AppendDebugTag(std::string& debug_info, const std::string& tag) {
+  if (debug_info.empty()) {
+    debug_info = tag;
+    return;
+  }
+  debug_info += ";" + tag;
+}
+
+void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
+  std::vector<core::Candidate> deduped;
+  deduped.reserve(candidates.size());
+  for (auto& candidate : candidates) {
+    auto existing = std::find_if(deduped.begin(), deduped.end(), [&](const auto& item) {
+      return item.surface == candidate.surface;
+    });
+    if (existing == deduped.end()) {
+      deduped.push_back(std::move(candidate));
+      continue;
+    }
+
+    const bool replace = PreferMergedCandidate(candidate, *existing);
+    if (replace) {
+      AppendDebugTag(candidate.debug_info, "dup:" + existing->debug_info);
+      *existing = std::move(candidate);
+    } else {
+      AppendDebugTag(existing->debug_info, "dup:" + candidate.debug_info);
+    }
+  }
+  candidates = std::move(deduped);
 }
 }  // namespace
 
@@ -92,6 +141,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     model_converter_.reset();
     active_converter_ = fallback_converter_.get();
     last_error_.reset();
+    model_runtime_error_.reset();
     result.ok = true;
     return result;
   }
@@ -104,6 +154,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       model_converter_.reset();
       active_converter_ = fallback_converter_.get();
       last_error_ = result.error;
+      model_runtime_error_.reset();
     }
     return result;
   }
@@ -115,6 +166,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   ZenzaiRuntimeOptions runtime_options;
   runtime_options.n_gpu_layers =
       next_config.backend == BackendKind::Cuda ? options.n_gpu_layers.value_or(0) : 0;
+  runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
   auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
   if (!loaded.ok) {
     result.error = loaded.error;
@@ -123,6 +175,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       model_converter_.reset();
       active_converter_ = fallback_converter_.get();
       last_error_ = result.error;
+      model_runtime_error_.reset();
     }
     return result;
   }
@@ -133,6 +186,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   active_converter_ = model_converter_.get();
   model_loaded_ = true;
   last_error_.reset();
+  model_runtime_error_.reset();
   result.ok = true;
   return result;
 }
@@ -168,6 +222,21 @@ std::optional<std::string> InferenceEngine::last_error() const {
   return last_error_;
 }
 
+std::optional<std::string> InferenceEngine::effective_last_error() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (last_error_) {
+    return last_error_;
+  }
+  return model_runtime_error_;
+}
+
+void InferenceEngine::MirrorModelRuntimeErrorLocked() {
+  auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(model_converter_.get());
+  if (zenzai && active_converter_ == zenzai) {
+    model_runtime_error_ = zenzai->last_error();
+  }
+}
+
 std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string& kana,
                                                               const std::string& context,
                                                               uint64_t now_epoch_sec) {
@@ -177,7 +246,9 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string& kana,
                                                               const std::string& context,
                                                               uint64_t now_epoch_sec,
-                                                              const std::atomic<bool>* cancel) {
+                                                              const std::atomic<bool>* cancel,
+                                                              uint32_t max_candidates,
+                                                              bool live) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -197,6 +268,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
       c.surface = w.word;
       c.reading = w.ruby;
       c.score = w.value.value_or(config_.user_word_default_score);
+      c.source = core::CandidateSource::UserDictionary;
       c.debug_info = "user-dict";
       merged.push_back(std::move(c));
     }
@@ -204,9 +276,36 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
-  auto converted = active_converter_->Convert(kana, BuildContext(kana, context));
+  std::vector<core::Candidate> converted;
+  const bool using_model_converter =
+      model_converter_ && active_converter_ == model_converter_.get();
+  const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+  try {
+    converted =
+        active_converter_->Convert(kana, BuildContext(kana, context, cancel, conversion_deadline,
+                                                      max_candidates, live));
+    if (canceled()) return {};
+    if (using_model_converter) {
+      MirrorModelRuntimeErrorLocked();
+    }
+  } catch (const std::exception& ex) {
+    if (!using_model_converter || !fallback_converter_) {
+      throw;
+    }
+    if (canceled()) return {};
+    model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
+    converted = fallback_converter_->Convert(kana, BuildContext(kana, context));
+  } catch (...) {
+    if (!using_model_converter || !fallback_converter_) {
+      throw;
+    }
+    if (canceled()) return {};
+    model_runtime_error_ = "zenzai-convert-exception:unknown";
+    converted = fallback_converter_->Convert(kana, BuildContext(kana, context));
+  }
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
+  DedupMergedCandidates(merged);
 
   if (canceled()) return {};
 

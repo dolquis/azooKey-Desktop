@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -553,7 +554,8 @@ struct ZenzaiModelRuntime {
     }
     if (ToKatakana(kana) == u8"ニホンゴ") {
       return {GeneratedCandidate{u8"日本語", -0.42, 2},
-              GeneratedCandidate{u8"日本語入力", -1.4, 4}};
+              GeneratedCandidate{u8"日本語入力", -1.4, 4},
+              GeneratedCandidate{std::string("\xE3\x81", 2), -2.2, 1}};
     }
     if (ToKatakana(kana) == u8"ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
@@ -685,6 +687,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
   }
 
   std::vector<core::Candidate> candidates;
+  std::optional<std::string> skipped_reason;
   try {
     const auto generated = runtime_->Generate(kana, context);
     if (IsCanceled(context)) {
@@ -696,7 +699,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
         continue;
       }
       if (!IsValidUtf8String(item.surface)) {
-        return DegradeToFallback(kana, context, "invalid-utf8-surface");
+        skipped_reason = "invalid-utf8-surface";
+        continue;
       }
       const auto avg =
           item.token_count > 0 ? item.total_logprob / static_cast<double>(item.token_count) : 0.0;
@@ -720,7 +724,7 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
     return {};
   }
   if (candidates.empty()) {
-    return DegradeToFallback(kana, context, "empty-generation");
+    return DegradeToFallback(kana, context, skipped_reason.value_or("empty-generation"));
   }
   return candidates;
 }

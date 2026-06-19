@@ -440,6 +440,12 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   EXPECT_EQ(cands.front().source, azookey::core::CandidateSource::Model);
   EXPECT_NE(cands.front().debug_info.find("zenzai;lp="), std::string::npos);
   EXPECT_NE(cands.front().debug_info.find(";avg="), std::string::npos);
+  EXPECT_NE(std::find_if(cands.begin(), cands.end(),
+                         [](const auto& candidate) {
+                           return candidate.surface == "日本語入力" &&
+                                  candidate.source == azookey::core::CandidateSource::Model;
+                         }),
+            cands.end());
   EXPECT_FALSE(engine->effective_last_error().has_value());
 
   std::remove(model_path.c_str());

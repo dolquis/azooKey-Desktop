@@ -75,7 +75,7 @@ extern "C" STDAPI DllRegisterServer() {
   //    is loaded into arbitrary processes (other users, elevated apps, the
   //    secure desktop), so the CLSID must resolve for all of them — an HKCU
   //    registration would only work for the installing user. Writing HKLM
-  //    requires elevation; scripts/register.ps1 elevates before regsvr32.
+  //    requires elevation; scripts/register-dev.ps1 elevates before regsvr32.
   const std::wstring clsid_key = std::wstring(L"Software\\Classes\\CLSID\\") + clsid_str;
   const std::wstring inproc = clsid_key + L"\\InprocServer32";
   if (!RegSetSz(HKEY_LOCAL_MACHINE, inproc.c_str(), nullptr, dll_path)) return SELFREG_E_CLASS;

@@ -26,7 +26,7 @@
   - `ipc/` — Named Pipe + JSON + length-prefix の IPC 定義
   - `learning/` — 頻度＋時間減衰の再ランキング
   - `bench/` — レイテンシ計測 CLI
-  - `scripts/` — `register.ps1` / `unregister.ps1`(HKCU user-scope、elevation 不要)
+  - `scripts/` — `register-dev.ps1` / `unregister-dev.ps1`(HKCU user-scope、elevation 不要)
 - ビルド：Windows 10/11 + Visual Studio 2022(C++ デスクトップ)+ CMake ≥ 3.21 + Windows SDK
 - テスト：CTest + GoogleTest(`-DAZOOKEY_FETCH_GOOGLETEST=ON` で FetchContent)
 - 既存メタファイル：`CLAUDE.md`, `AGENTS.md` あり(役割を被らせない)
@@ -329,9 +329,9 @@ ctest --preset windows-debug --output-on-failure
 
 ## TIP 登録 / 解除(HKCU user-scope)
 
-`scripts/register.ps1` / `unregister.ps1` は対象ユーザーの PowerShell で実行する。
+`scripts/register-dev.ps1` / `unregister-dev.ps1` は対象ユーザーの PowerShell で実行する。
 **Claude Code が単独で実行を完了させてはならない**。PowerShell.MCP の共有コンソール経由で、
-コマンド提示までに留めること。本リポジトリの `DllRegisterServer` と `register.ps1` は
+コマンド提示までに留めること。本リポジトリの `DllRegisterServer` と `register-dev.ps1` は
 user-scope (HKCU) に登録するため、失敗時は
 `HKCU\Software\Classes\CLSID\{...}` と
 `HKCU\Software\Microsoft\CTF\TIP\{...}` の登録状態を確認すること

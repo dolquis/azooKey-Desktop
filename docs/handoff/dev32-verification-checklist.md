@@ -12,7 +12,7 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 > ⚠️ **変換能力の前提**: 現状 Zenzai 推論は未実装（DEV-190）。`--mock-dict <TSV>` を使わない限り、**辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。A5 を「Pass」で評価したい場合は、辞書内語または `--mock-dict` を用意すること。
 
 ## 事前確認（検証開始前）
-- ☐ `register.ps1` が `TSF TIP registration complete (machine-wide).` を出力
+- ☐ `register-dev.ps1` が `TSF TIP registration complete (machine-wide).` を出力
 - ☐ host 稼働:`Get-Process azookey_inference_host`
 - ☐ host 稼働の確認は上の `Get-Process` で足りる（Release の Hidden 起動ではログ非表示）。**host をコンソール/Debug 起動した場合のみ** `named pipe listening: \\.\pipe\azookey-<SID>` をログで確認
 - ☐ DebugView 起動・**Capture Global Win32** ON・フィルタ `[azooKey TIP]`（Debug 時）
@@ -101,4 +101,4 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 
 ## 後始末
 - ☐ 記入済みチェックリスト・スクショ・ログを DEV-32 にコメント（→ DEV-5 human gate 判断）
-- ☐ host 停止 → `unregister.ps1` → またはチェックポイント復元
+- ☐ host 停止 → `unregister-dev.ps1` → またはチェックポイント復元

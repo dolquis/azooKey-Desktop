@@ -33,7 +33,7 @@
 - `IClassFactory` — COM クラスファクトリ。`DllGetClassObject` から
   `kTextServiceClsid` の問い合わせに応答して `TextService` を生成する。
 - `kTextServiceClsid` / `kTextServiceProfileGuid` は本ヘッダで固定値として
-  宣言されており、**変更禁止** (`scripts/register.ps1` および
+  宣言されており、**変更禁止** (`scripts/register-dev.ps1` および
   `DllRegisterServer` 側と一致する必要がある)。
 
 ## DisplayAttribute (`tsf-tip/include/azookey/tsf/DisplayAttribute.h`)

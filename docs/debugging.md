@@ -52,7 +52,7 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
    - `regsvr32 build/windows-debug/tsf-tip/azookey_tsf_tip.dll`（**管理者権限が必要**）で
      `DllRegisterServer` が machine-wide COM 登録（HKLM）+ TSF プロファイル登録
      （`RegisterProfile`）+ キーボード / DisplayAttribute / UIElement カテゴリ登録を行う。
-   - `scripts/register.ps1` は上記 `regsvr32` 呼び出しに加えて Host EXE の
+   - `scripts/register-dev.ps1` は上記 `regsvr32` 呼び出しに加えて Host EXE の
      Run キー登録（自動起動・HKCU）まで行う。非管理者で起動すると自動で UAC 昇格する。
      MSIX 化までは PS1 経由を推奨。
 3. Notepad でローマ字入力しプレエディット表示を確認（アンダーライン付き）。
@@ -105,7 +105,7 @@ ctest --preset windows-debug --no-tests=error
   DebugView で `[azooKey TIP]` のフォローログ確認。
 - **`DllRegisterServer` 失敗（`SELFREG_E_CLASS`）**: 多くは **非管理者実行**が原因。
   machine-wide 登録は HKLM と CTF\TIP プロファイルに書くため昇格が必須。管理者
-  PowerShell（または自動昇格した `register.ps1`）で再実行する。
+  PowerShell（または自動昇格した `register-dev.ps1`）で再実行する。
 - **学習が反映されない**: 未指定時は
   `%LOCALAPPDATA%\azooKey\data\learning.tsv`、`--learning` 指定時はその明示パスを確認。
   CommitObservation 受信は Host stderr / Dispatcher テストで確認。

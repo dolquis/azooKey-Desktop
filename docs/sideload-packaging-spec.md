@@ -199,17 +199,20 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
 
 ### 1.1.1 HKCU 開発用登録 vs MSIX 登録の取り違え事故防止
 
-`scripts/register.ps1` / `unregister.ps1` は `regsvr32` 経由で machine-wide (HKLM)
-登録を行う管理者向け開発用スクリプトであり、MSIX 経路と衝突する。両者を取り違える
-と、片方の登録解除が漏れて言語バーに古いエントリが残る (M28 設計メモ)。本書では
-以下を運用ルールとして固定:
+`scripts/register-dev.ps1` / `unregister-dev.ps1` は `regsvr32` 経由で machine-wide
+(HKLM) 登録を行う管理者向け開発用スクリプトであり、MSIX 経路と衝突する。両者を
+取り違えると、片方の登録解除が漏れて言語バーに古いエントリが残る (M28 設計メモ)。
+本書では以下を運用ルールとして固定:
 
-* `scripts/register-dev.ps1` / `unregister-dev.ps1` にリネーム（接尾辞 `-dev`
-  を必須化）
+* `scripts/register-dev.ps1` / `unregister-dev.ps1`（接尾辞 `-dev` を必須化。
+  DEV-101 でリネーム済み）。`regsvr32` 開発用経路であることを名前で明示する
 * MSIX 同梱の TIP は HKCU 自己登録ロジックを skip（上記 `IsRunningInMsixContext`
   で分岐）
-* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、`compat-test/
-  msix_install_uninstall.ps1` の smoke ハーネスで残骸 0 を確認
+* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、`compat-test/msix_install_uninstall.ps1`
+  の smoke ハーネスで Add-AppxPackage → 登録確認 → Remove-AppxPackage → 残骸 0 を
+  確認する（実機 VM で実行する `gate:human-required`。COM 登録ラウンドトリップ自体は
+  CTest `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
+  MSIX パッケージング層を補完する）
 
 ### 1.2 Package.wapproj
 
@@ -329,7 +332,7 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 **AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
 有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への RX 付与が
 要る。Option A（external-location / `regsvr32` 機械全体登録）や開発用
-`scripts/register.ps1` 経路ではこれが既定で付かないため、
+`scripts/register-dev.ps1` 経路ではこれが既定で付かないため、
 `icacls <dll> /grant "*S-1-15-2-1:(RX)"` 相当を登録ステップに加える（x64 / x86 両 DLL、
 ビルド時・登録時）。先行実装 fkunn1326/azooKey-Windows はビルド時+インストール時に
 二重付与している。Option B/C（通常 MSIX）はパッケージ側で解決されるため不要。
@@ -1121,7 +1124,8 @@ bool LearningStore::Load() {
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| MSIX 登録 | `tsf-tip/tests/msix_smoke_test.cpp` | Windows 限定。MSIX 内に CLSID が登録されているか |
+| TIP 登録ラウンドトリップ | `tsf-tip/tests/com_smoke_test.cpp`（`TsfTipRegistrationSmokeTest`） | Windows 限定。`DllRegisterServer` 後に HKLM InprocServer32 + TSF プロファイルが存在し、`DllUnregisterServer` で消えるかを検証。env `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格 opt-in（CI 非実行） |
+| MSIX install/uninstall 残骸 | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。`Add-AppxPackage` → CLSID / TSF プロファイル登録の存在確認 → `Remove-AppxPackage` → 残骸 0 を半自動検証（DEV-101 / M28） |
 | 署名検証 | `pkg/tests/signature_test.ps1` | signtool /verify で成功するか |
 | UpdateChecker | `inference-host/tests/update_checker_test.cpp` | GitHub API モック、バージョン比較 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |
@@ -1147,5 +1151,5 @@ bool LearningStore::Load() {
 - ETW: <https://learn.microsoft.com/windows/win32/etw/>
 - WiX v4: <https://wixtoolset.org/docs/intro/>
 - WinGet manifest: <https://github.com/microsoft/winget-cli/blob/master/doc/ManifestSpecv1.5.md>
-- 既存：`scripts/register.ps1` / `scripts/unregister.ps1`
+- 既存：`scripts/register-dev.ps1` / `scripts/unregister-dev.ps1`（`regsvr32` 開発用経路）
 - ベース：`docs/windows-tsf-host-architecture.md`

@@ -44,7 +44,7 @@ VM へ渡す一式（`scripts/make-vm-verify-package`（任意）または手動
 |---|---|
 | `azookey_tsf_tip.dll` | `build/windows-release/tsf-tip/` |
 | `azookey_inference_host.exe` | `build/windows-release/inference-host/` |
-| `register.ps1` / `unregister.ps1` | `scripts/` |
+| `register-dev.ps1` / `unregister-dev.ps1` | `scripts/` |
 | `vc_redist.x64.exe` | https://aka.ms/vs/17/release/vc_redist.x64.exe |
 
 ## 手順
@@ -71,13 +71,13 @@ C:\azookey-verify\vc_redist.x64.exe /install /quiet /norestart
 
 ```powershell
 cd C:\azookey-verify
-powershell -ExecutionPolicy Bypass -File .\register.ps1 `
+powershell -ExecutionPolicy Bypass -File .\register-dev.ps1 `
   -TipDllPath .\azookey_tsf_tip.dll `
   -HostExePath .\azookey_inference_host.exe
 ```
 
 - **`-TipDllPath` / `-HostExePath` の明示は必須**（スクリプト既定は `..\build\windows-debug\...` を指すため）。
-- `register.ps1` の動作: 非昇格で host を HKCU `Run` に自動起動登録 + 現セッションで host 起動（per-user pipe `\\.\pipe\azookey-<SID>` を probe）→ 昇格して `regsvr32 /s`（`DllRegisterServer` = HKLM COM + TSF profile + keyboard/display-attribute/UI-element category 登録）。非管理者から実行すると UAC 自動昇格する。
+- `register-dev.ps1` の動作: 非昇格で host を HKCU `Run` に自動起動登録 + 現セッションで host 起動（per-user pipe `\\.\pipe\azookey-<SID>` を probe）→ 昇格して `regsvr32 /s`（`DllRegisterServer` = HKLM COM + TSF profile + keyboard/display-attribute/UI-element category 登録）。非管理者から実行すると UAC 自動昇格する。
 - 「TSF TIP registration complete (machine-wide).」が出れば成功。
 - host 稼働確認: `Get-Process azookey_inference_host`。出ない場合は `Start-Process .\azookey_inference_host.exe -ArgumentList "--pipe" -WindowStyle Hidden`。
 
@@ -105,9 +105,9 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
   - スクリプトで解除:
     ```powershell
     Stop-Process -Name azookey_inference_host -Force -ErrorAction SilentlyContinue
-    powershell -ExecutionPolicy Bypass -File .\unregister.ps1 -TipDllPath .\azookey_tsf_tip.dll
+    powershell -ExecutionPolicy Bypass -File .\unregister-dev.ps1 -TipDllPath .\azookey_tsf_tip.dll
     ```
-    `unregister.ps1` は HKCU の host 自動起動解除 + `regsvr32 /u`（`DllUnregisterServer`）+ HKLM CLSID / `CTF\TIP`（native / WOW6432Node 両方）の残骸削除を行う。
+    `unregister-dev.ps1` は HKCU の host 自動起動解除 + `regsvr32 /u`（`DllUnregisterServer`）+ HKLM CLSID / `CTF\TIP`（native / WOW6432Node 両方）の残骸削除を行う。
 
 ## トラブルシュート
 
@@ -161,10 +161,10 @@ TIP のログ例: `IPC: connected to host …` / `handshake …` / `QueryCandida
 4. TIP 登録（別の管理者 PowerShell）:
    ```powershell
    cd C:\dev\azooKey-Desktop
-   .\scripts\register.ps1
+   .\scripts\register-dev.ps1
    ```
-   - **Debug 方式は `register.ps1` の既定パスがそのまま `build\windows-debug\…` を指す**ため、`-TipDllPath` / `-HostExePath` の明示は不要（Release 方式と対照的）。
-   - 手順3で host を先に起動済みなら、`register.ps1` は per-user pipe を probe して既起動を検知し、二重起動しない。
+   - **Debug 方式は `register-dev.ps1` の既定パスがそのまま `build\windows-debug\…` を指す**ため、`-TipDllPath` / `-HostExePath` の明示は不要（Release 方式と対照的）。
+   - 手順3で host を先に起動済みなら、`register-dev.ps1` は per-user pipe を probe して既起動を検知し、二重起動しない。
 
 5. TIP ログを DebugView でキャプチャ:
    - VM に [DebugView](https://learn.microsoft.com/sysinternals/downloads/debugview) を入れ、**管理者で起動 → Capture → "Capture Global Win32"**（TIP は各アプリのプロセス内で動くため Global 推奨）。
@@ -172,7 +172,7 @@ TIP のログ例: `IPC: connected to host …` / `handshake …` / `QueryCandida
 
 6. 検証（★基本セッション）: DEV-32 チェックリストを実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
 
-7. 後始末: `Stop-Process -Name azookey_inference_host -Force` → `.\scripts\unregister.ps1` → またはチェックポイント復元。
+7. 後始末: `Stop-Process -Name azookey_inference_host -Force` → `.\scripts\unregister-dev.ps1` → またはチェックポイント復元。
 
 ### Release 方式との使い分け
 

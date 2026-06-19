@@ -135,12 +135,38 @@ function Test-ClsidRegistered {
   return $null
 }
 
-function Test-TsfProfileRegistered {
-  # TSF プロファイル登録は CTF\TIP\{CLSID}\LanguageProfile\{LANGID}\{ProfileGUID}
-  # に現れる（DllMain.cpp の RegisterProfile 経由、machine-wide）。
+function Get-LangProfileKey {
+  # CTF\TIP の LanguageProfile キーは LANGID を 8 桁 16 進（例 0x00000411）で持つ。
+  # 入力 $LangId は "0x0411" / "0x00000411" / "411" いずれでも受ける。
+  $val = [Convert]::ToInt32(($LangId -replace '^0x', ''), 16)
+  return ('0x{0:x8}' -f $val)
+}
+
+function Test-TsfRegistrationKey {
+  # テキストサービス本体（カテゴリ含む）の登録キー CTF\TIP\{CLSID}。
+  # アンインストール後の「残骸 0」判定に使う（言語プロファイル単体だけでなく
+  # トップレベルキーの残存も検出するため）。
   $paths = @(
     "HKLM:\Software\Microsoft\CTF\TIP\$Clsid",
     "HKLM:\Software\WOW6432Node\Microsoft\CTF\TIP\$Clsid"
+  )
+  foreach ($p in $paths) {
+    if (Test-Path $p) { return $p }
+  }
+  return $null
+}
+
+function Test-TsfLanguageProfileRegistered {
+  # 具体的な ja-JP 言語プロファイル
+  # CTF\TIP\{CLSID}\LanguageProfile\{LANGID8}\{ProfileGUID} を確認する
+  # （DllMain.cpp の RegisterProfile 経由、machine-wide）。トップレベルの
+  # CTF\TIP\{CLSID} の存在だけでは、テキストサービスは登録済みでも ja-JP
+  # 言語プロファイルが未登録という言語バー回帰を見逃すため、LANGID /
+  # ProfileGUID まで含めた具体キーを判定する。
+  $langKey = Get-LangProfileKey
+  $paths = @(
+    "HKLM:\Software\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$langKey\$ProfileGuid",
+    "HKLM:\Software\WOW6432Node\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$langKey\$ProfileGuid"
   )
   foreach ($p in $paths) {
     if (Test-Path $p) { return $p }
@@ -172,18 +198,32 @@ if ($pre) {
 }
 
 $installed = $false
+# Add 時に実際に追加されたパッケージの full name。-PackageName が stale でも
+# before/after 差分で確定し、finally で確実にクリーンアップするための真実源。
+$addedFullNames = @()
 try {
   # --- インストール ---
   Write-Step "Add-AppxPackage 実行"
+  # 名前検索に頼らず、Add 前後のパッケージ集合差分で「実際に追加された」ものを
+  # 特定する。-PackageName が AppxManifest の Identity@Name と食い違っても
+  # 取り逃さず、クリーン VM にパッケージを置き去りにしない（残骸検証の前提を保つ）。
+  $before = @(Get-AppxPackage | ForEach-Object { $_.PackageFullName })
   try {
     Add-AppxPackage -Path $MsixPath
-    $pkg = Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue
-    if ($pkg) {
+    $added = @(Get-AppxPackage | Where-Object { $before -notcontains $_.PackageFullName })
+    $addedFullNames = @($added | ForEach-Object { $_.PackageFullName })
+    if ($addedFullNames.Count -gt 0) {
       $installed = $true
-      Add-Check -Name "Add-AppxPackage 成功" -Status "PASS" -Detail $pkg.PackageFullName
+      Add-Check -Name "Add-AppxPackage 成功" -Status "PASS" -Detail ($addedFullNames -join ", ")
+      # -PackageName が実 Identity と一致するかを交差確認（不一致だと name ベースの
+      # 事前チェックが意味を持たないため明示的に FAIL で気付かせる）。
+      if (-not (Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue)) {
+        Add-Check -Name "PackageName が実 Identity と一致する" -Status "FAIL" `
+          -Detail "追加された $($addedFullNames -join ', ') が -PackageName '$PackageName' に一致しない。AppxManifest の Identity@Name に合わせること。"
+      }
     } else {
       Add-Check -Name "Add-AppxPackage 成功" -Status "FAIL" `
-        -Detail "Add-AppxPackage はエラーを返さなかったが Get-AppxPackage で見つからない"
+        -Detail "Add-AppxPackage はエラーを返さなかったが新規パッケージを検出できない"
     }
   } catch {
     # Publisher 不一致 (0x8007000B) は spec §2.2 を参照。
@@ -202,11 +242,17 @@ try {
         -Detail "観測可能な HKLM/HKCU CLSID キー無し。Option B/C の OS 内部登録の可能性（spec §1.0）。"
     }
 
-    $tsfPath = Test-TsfProfileRegistered
-    if ($tsfPath) {
-      Add-Check -Name "インストール後に TSF プロファイル登録が存在する" -Status "PASS" -Detail $tsfPath
+    $tsfProfilePath = Test-TsfLanguageProfileRegistered
+    $tsfTopKey = Test-TsfRegistrationKey
+    if ($tsfProfilePath) {
+      Add-Check -Name "インストール後に ja-JP TSF 言語プロファイル登録が存在する" -Status "PASS" -Detail $tsfProfilePath
+    } elseif ($tsfTopKey) {
+      # テキストサービス本体は登録されているのに ja-JP 言語プロファイルが無い =
+      # 言語バーに出ない部分登録。本ハーネスが捕まえるべき回帰なので FAIL。
+      Add-Check -Name "インストール後に ja-JP TSF 言語プロファイル登録が存在する" -Status "FAIL" `
+        -Detail "テキストサービスキー ($tsfTopKey) は存在するが LanguageProfile\$(Get-LangProfileKey)\$ProfileGuid が無い（ja-JP 言語プロファイル未登録＝言語バー回帰）。"
     } else {
-      Add-Check -Name "インストール後に TSF プロファイル登録が存在する" -Status "INFO" `
+      Add-Check -Name "インストール後に ja-JP TSF 言語プロファイル登録が存在する" -Status "INFO" `
         -Detail "CTF\TIP に machine-wide 登録無し。MSIX 経路では host 初回起動時の ITfInputProcessorProfiles::Register が契機（spec §1.1 TSF Profile 登録のライフサイクル）。"
     }
 
@@ -219,10 +265,11 @@ try {
   if ($installed) {
     Write-Step "Remove-AppxPackage 実行"
     try {
-      Get-AppxPackage -Name $PackageName | Remove-AppxPackage
-      $still = Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue
-      if ($still) {
-        Add-Check -Name "Remove-AppxPackage 成功" -Status "FAIL" -Detail "まだ残存: $($still.PackageFullName)"
+      foreach ($fn in $addedFullNames) { Remove-AppxPackage -Package $fn }
+      $still = @(Get-AppxPackage | Where-Object { $addedFullNames -contains $_.PackageFullName })
+      if ($still.Count -gt 0) {
+        Add-Check -Name "Remove-AppxPackage 成功" -Status "FAIL" `
+          -Detail "まだ残存: $(($still | ForEach-Object { $_.PackageFullName }) -join ', ')"
       } else {
         $installed = $false
         Add-Check -Name "Remove-AppxPackage 成功" -Status "PASS"
@@ -241,21 +288,28 @@ try {
     Add-Check -Name "アンインストール後に CLSID 残骸が無い" -Status "PASS"
   }
 
-  $tsfAfter = Test-TsfProfileRegistered
+  # 残骸はトップレベルキー（テキストサービス本体）の存在で判定する。具体的な
+  # 言語プロファイルだけが消えてトップレベルキーが残ると言語バーに死んだ
+  # エントリが残るため、LanguageProfile 単体ではなく CTF\TIP\{CLSID} を見る。
+  $tsfAfter = Test-TsfRegistrationKey
   if ($tsfAfter) {
-    Add-Check -Name "アンインストール後に TSF プロファイル残骸が無い" -Status "FAIL" `
+    Add-Check -Name "アンインストール後に TSF 登録残骸が無い" -Status "FAIL" `
       -Detail "残存キー: $tsfAfter（言語バーに死んだエントリが残る / リリース blocker）"
   } else {
-    Add-Check -Name "アンインストール後に TSF プロファイル残骸が無い" -Status "PASS"
+    Add-Check -Name "アンインストール後に TSF 登録残骸が無い" -Status "PASS"
   }
 } finally {
   # 後始末: アサーション失敗で抜けても、テストで入れたパッケージは必ず剥がす。
-  if ($installed) {
+  # 名前検索ではなく Add 時に確定した full name で剥がすので、-PackageName が
+  # stale でも置き去りにならない。
+  if ($installed -and $addedFullNames.Count -gt 0) {
     Write-Step "クリーンアップ: 残存パッケージを Remove-AppxPackage"
-    try {
-      Get-AppxPackage -Name $PackageName | Remove-AppxPackage -ErrorAction SilentlyContinue
-    } catch {
-      Write-Warning "クリーンアップに失敗: $_"
+    foreach ($fn in $addedFullNames) {
+      try {
+        Remove-AppxPackage -Package $fn -ErrorAction SilentlyContinue
+      } catch {
+        Write-Warning "クリーンアップに失敗 ($fn): $_"
+      }
     }
   }
 }

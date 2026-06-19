@@ -16,12 +16,15 @@ constexpr auto kModelConversionBudget = std::chrono::seconds(2);
 
 core::ConversionContext BuildContext(
     const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
-    std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) {
+    std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
+    uint32_t max_candidates = 0, bool live = false) {
   core::ConversionContext conversion_context;
   conversion_context.preceding_text = context;
   conversion_context.preedit_text = kana;
   conversion_context.cancel = cancel;
   conversion_context.deadline = deadline;
+  conversion_context.max_candidates = max_candidates;
+  conversion_context.live = live;
   return conversion_context;
 }
 
@@ -243,7 +246,9 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string& kana,
                                                               const std::string& context,
                                                               uint64_t now_epoch_sec,
-                                                              const std::atomic<bool>* cancel) {
+                                                              const std::atomic<bool>* cancel,
+                                                              uint32_t max_candidates,
+                                                              bool live) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -277,7 +282,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
   try {
     converted =
-        active_converter_->Convert(kana, BuildContext(kana, context, cancel, conversion_deadline));
+        active_converter_->Convert(kana, BuildContext(kana, context, cancel, conversion_deadline,
+                                                      max_candidates, live));
     if (canceled()) return {};
     if (using_model_converter) {
       MirrorModelRuntimeErrorLocked();

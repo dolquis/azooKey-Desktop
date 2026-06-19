@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +17,8 @@ struct ConversionContext {
   std::vector<std::string> rejected_surfaces;
   const std::atomic<bool>* cancel{nullptr};
   std::optional<std::chrono::steady_clock::time_point> deadline;
+  uint32_t max_candidates{0};
+  bool live{false};
 };
 
 struct CorrectionHint {

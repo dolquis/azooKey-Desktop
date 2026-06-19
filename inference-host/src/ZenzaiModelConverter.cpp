@@ -41,6 +41,16 @@ struct GeneratedCandidate {
   int32_t token_count{};
 };
 
+size_t RequestedCandidateLimit(const core::ConversionContext& context) {
+  if (context.live || context.max_candidates == 1) {
+    return 1;
+  }
+  if (context.max_candidates > 0) {
+    return std::min<size_t>(context.max_candidates, kMaxModelCandidates);
+  }
+  return kMaxModelCandidates;
+}
+
 uint32_t ReadLe32(const std::array<unsigned char, 4>& bytes) {
   return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
          (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
@@ -394,13 +404,13 @@ double BeamRankScore(double total_logprob, int32_t output_tokens) {
   return total_logprob / static_cast<double>(output_tokens);
 }
 
-void PruneBeams(std::vector<LlamaBeam>& beams) {
+void PruneBeams(std::vector<LlamaBeam>& beams, size_t max_beams) {
   std::sort(beams.begin(), beams.end(), [](const auto& lhs, const auto& rhs) {
     return BeamRankScore(lhs.total_logprob, lhs.output_tokens) >
            BeamRankScore(rhs.total_logprob, rhs.output_tokens);
   });
-  if (beams.size() > kMaxModelCandidates) {
-    beams.resize(kMaxModelCandidates);
+  if (beams.size() > max_beams) {
+    beams.resize(max_beams);
   }
 }
 
@@ -469,17 +479,18 @@ struct ZenzaiModelRuntime {
     }
     prompt_tokens.resize(static_cast<size_t>(token_count));
 
+    const size_t candidate_limit = RequestedCandidateLimit(conversion_context);
     const int32_t vocab_size = llama_vocab_n_tokens(vocab);
     const int32_t max_new = MaxNewTokensForReading(kana);
     LlamaDecodeControl decode_control{&conversion_context};
     LlamaDecodeAbortScope abort_scope(context, &decode_control);
     std::vector<GeneratedCandidate> generated;
-    generated.reserve(kMaxModelCandidates);
+    generated.reserve(candidate_limit);
     std::vector<LlamaBeam> beams(1);
 
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
       std::vector<LlamaBeam> next_beams;
-      next_beams.reserve(kMaxModelCandidates * kMaxModelCandidates);
+      next_beams.reserve(candidate_limit * candidate_limit);
       for (const auto& beam : beams) {
         if (IsCanceled(conversion_context)) {
           return {};
@@ -504,7 +515,7 @@ struct ZenzaiModelRuntime {
           throw std::runtime_error("llama.cpp logits are not available");
         }
 
-        auto choices = CollectTokenChoices(vocab, logits, vocab_size, kMaxModelCandidates);
+        auto choices = CollectTokenChoices(vocab, logits, vocab_size, candidate_limit);
         if (choices.empty()) {
           throw std::runtime_error("llama.cpp did not select a token");
         }
@@ -526,9 +537,9 @@ struct ZenzaiModelRuntime {
         }
       }
 
-      PruneBeams(next_beams);
+      PruneBeams(next_beams, candidate_limit);
       beams = std::move(next_beams);
-      if (generated.size() >= kMaxModelCandidates) {
+      if (generated.size() >= candidate_limit) {
         break;
       }
     }
@@ -540,8 +551,8 @@ struct ZenzaiModelRuntime {
       return BeamRankScore(lhs.total_logprob, lhs.token_count) >
              BeamRankScore(rhs.total_logprob, rhs.token_count);
     });
-    if (generated.size() > kMaxModelCandidates) {
-      generated.resize(kMaxModelCandidates);
+    if (generated.size() > candidate_limit) {
+      generated.resize(candidate_limit);
     }
 
     return generated;
@@ -566,9 +577,15 @@ struct ZenzaiModelRuntime {
       return {};
     }
     if (ToKatakana(kana) == u8"ニホンゴ") {
-      return {GeneratedCandidate{u8"日本語", -0.42, 2},
-              GeneratedCandidate{u8"日本語入力", -1.4, 4},
-              GeneratedCandidate{std::string("\xE3\x81", 2), -2.2, 1}};
+      std::vector<GeneratedCandidate> generated{
+          GeneratedCandidate{u8"日本語", -0.42, 2},
+          GeneratedCandidate{u8"日本語入力", -1.4, 4},
+          GeneratedCandidate{std::string("\xE3\x81", 2), -2.2, 1}};
+      const size_t candidate_limit = RequestedCandidateLimit(conversion_context);
+      if (generated.size() > candidate_limit) {
+        generated.resize(candidate_limit);
+      }
+      return generated;
     }
     if (ToKatakana(kana) == u8"ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};

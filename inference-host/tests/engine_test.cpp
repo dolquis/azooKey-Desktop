@@ -527,6 +527,44 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_live_top_one.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_live_top_one_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto nbest = engine->QueryCandidates("にほんご", "", kNowBase, nullptr, 10, false);
+  ASSERT_GE(nbest.size(), 2u);
+  EXPECT_EQ(nbest.front().source, azookey::core::CandidateSource::Model);
+
+  auto live = engine->QueryCandidates("にほんご", "", kNowBase + 1, nullptr, 10, true);
+  ASSERT_EQ(live.size(), 1u);
+  EXPECT_EQ(live.front().surface, "日本語");
+  EXPECT_EQ(live.front().source, azookey::core::CandidateSource::Model);
+
+  auto top_one = engine->QueryCandidates("にほんご", "", kNowBase + 2, nullptr, 1, false);
+  ASSERT_EQ(top_one.size(), 1u);
+  EXPECT_EQ(top_one.front().surface, "日本語");
+  EXPECT_EQ(top_one.front().source, azookey::core::CandidateSource::Model);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, CanceledZenzaiConvertPreservesDegradedHealth) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

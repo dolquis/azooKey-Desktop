@@ -70,7 +70,9 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCandidates(const std::string& kana,
                                                 const std::string& context,
                                                 uint64_t now_epoch_sec,
-                                                const std::atomic<bool>* cancel);
+                                                const std::atomic<bool>* cancel,
+                                                uint32_t max_candidates = 0,
+                                                bool live = false);
 
   // Backwards-compatible overload without cancel support.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana,

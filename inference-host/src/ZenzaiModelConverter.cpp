@@ -320,6 +320,101 @@ std::string TokenPiece(const llama_vocab* vocab, llama_token token) {
   }
   return std::string(piece_buffer.data(), static_cast<size_t>(piece_size));
 }
+
+struct LlamaDecodeControl {
+  const core::ConversionContext* conversion_context{};
+
+  bool ShouldAbort() const {
+    return conversion_context &&
+           (IsCanceled(*conversion_context) || DeadlineExpired(*conversion_context));
+  }
+};
+
+bool LlamaDecodeAbortCallback(void* data) {
+  auto* control = static_cast<LlamaDecodeControl*>(data);
+  return control && control->ShouldAbort();
+}
+
+class LlamaDecodeAbortScope {
+ public:
+  LlamaDecodeAbortScope(llama_context* context, LlamaDecodeControl* control) : context_(context) {
+    llama_set_abort_callback(context_, LlamaDecodeAbortCallback, control);
+  }
+
+  ~LlamaDecodeAbortScope() { llama_set_abort_callback(context_, nullptr, nullptr); }
+
+  LlamaDecodeAbortScope(const LlamaDecodeAbortScope&) = delete;
+  LlamaDecodeAbortScope& operator=(const LlamaDecodeAbortScope&) = delete;
+
+ private:
+  llama_context* context_;
+};
+
+bool DecodeTokens(llama_context* context, std::vector<llama_token>& tokens,
+                  LlamaDecodeControl& control, const char* error_message) {
+  if (tokens.empty()) {
+    return true;
+  }
+  llama_kv_self_clear(context);
+  const auto context_batch = std::max<uint32_t>(1, llama_n_batch(context));
+  const int32_t chunk_limit =
+      std::max<int32_t>(1, std::min<int32_t>(32, static_cast<int32_t>(context_batch)));
+  for (size_t offset = 0; offset < tokens.size();) {
+    if (control.ShouldAbort()) {
+      return false;
+    }
+    const auto remaining = tokens.size() - offset;
+    const int32_t chunk_size =
+        static_cast<int32_t>(std::min<size_t>(remaining, static_cast<size_t>(chunk_limit)));
+    auto batch = llama_batch_get_one(tokens.data() + offset, chunk_size);
+    const int32_t result = llama_decode(context, batch);
+    if (result == 2 || control.ShouldAbort()) {
+      return false;
+    }
+    if (result != 0) {
+      throw std::runtime_error(error_message);
+    }
+    offset += static_cast<size_t>(chunk_size);
+  }
+  return true;
+}
+
+struct LlamaBeam {
+  std::vector<llama_token> tokens;
+  std::string surface;
+  double total_logprob{};
+  int32_t output_tokens{};
+};
+
+double BeamRankScore(double total_logprob, int32_t output_tokens) {
+  if (output_tokens <= 0) {
+    return -std::numeric_limits<double>::infinity();
+  }
+  return total_logprob / static_cast<double>(output_tokens);
+}
+
+void PruneBeams(std::vector<LlamaBeam>& beams) {
+  std::sort(beams.begin(), beams.end(), [](const auto& lhs, const auto& rhs) {
+    return BeamRankScore(lhs.total_logprob, lhs.output_tokens) >
+           BeamRankScore(rhs.total_logprob, rhs.output_tokens);
+  });
+  if (beams.size() > kMaxModelCandidates) {
+    beams.resize(kMaxModelCandidates);
+  }
+}
+
+void AppendCompletedBeam(std::vector<GeneratedCandidate>& generated, const LlamaBeam& beam) {
+  if (!beam.surface.empty() && beam.output_tokens > 0) {
+    generated.push_back(GeneratedCandidate{beam.surface, beam.total_logprob, beam.output_tokens});
+  }
+}
+
+std::vector<llama_token> PromptWithBeamTokens(const std::vector<llama_token>& prompt_tokens,
+                                              const LlamaBeam& beam) {
+  std::vector<llama_token> tokens = prompt_tokens;
+  tokens.insert(tokens.end(), beam.tokens.begin(), beam.tokens.end());
+  return tokens;
+}
 #endif
 
 }  // namespace
@@ -373,92 +468,79 @@ struct ZenzaiModelRuntime {
     }
     prompt_tokens.resize(static_cast<size_t>(token_count));
 
-    llama_kv_self_clear(context);
-    auto prompt_batch = llama_batch_get_one(prompt_tokens.data(), token_count);
-    if (llama_decode(context, prompt_batch) != 0) {
-      throw std::runtime_error("llama.cpp prompt decode failed");
-    }
-
     const int32_t vocab_size = llama_vocab_n_tokens(vocab);
     const int32_t max_new = MaxNewTokensForReading(kana);
-    float* initial_logits = llama_get_logits_ith(context, -1);
-    if (!initial_logits) {
-      throw std::runtime_error("llama.cpp logits are not available");
-    }
-    auto first_choices =
-        CollectTokenChoices(vocab, initial_logits, vocab_size, kMaxModelCandidates);
-    if (first_choices.empty()) {
-      throw std::runtime_error("llama.cpp did not select a token");
-    }
-
+    LlamaDecodeControl decode_control{&conversion_context};
+    LlamaDecodeAbortScope abort_scope(context, &decode_control);
     std::vector<GeneratedCandidate> generated;
-    generated.reserve(first_choices.size());
-    for (const auto& first_choice : first_choices) {
-      if (IsCanceled(conversion_context)) {
-        return {};
-      }
-      if (DeadlineExpired(conversion_context) || llama_vocab_is_eog(vocab, first_choice.token)) {
-        continue;
-      }
+    generated.reserve(kMaxModelCandidates);
+    std::vector<LlamaBeam> beams(1);
 
-      std::string surface = TokenPiece(vocab, first_choice.token);
-      double total_logprob = first_choice.logprob;
-      int32_t output_tokens = 1;
-      std::vector<llama_token> decoded_tokens = prompt_tokens;
-      decoded_tokens.push_back(first_choice.token);
-
-      if (max_new > 1) {
-        llama_kv_self_clear(context);
-        auto first_batch =
-            llama_batch_get_one(decoded_tokens.data(), static_cast<int32_t>(decoded_tokens.size()));
-        if (llama_decode(context, first_batch) != 0) {
-          throw std::runtime_error("llama.cpp first token decode failed");
-        }
-      }
-
-      for (int32_t step = 1; step < max_new; ++step) {
+    for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
+      std::vector<LlamaBeam> next_beams;
+      next_beams.reserve(kMaxModelCandidates * kMaxModelCandidates);
+      for (const auto& beam : beams) {
         if (IsCanceled(conversion_context)) {
           return {};
         }
         if (DeadlineExpired(conversion_context)) {
-          break;
+          AppendCompletedBeam(generated, beam);
+          continue;
         }
+
+        auto decoded_tokens = PromptWithBeamTokens(prompt_tokens, beam);
+        if (!DecodeTokens(context, decoded_tokens, decode_control,
+                          "llama.cpp beam decode failed")) {
+          if (IsCanceled(conversion_context)) {
+            return {};
+          }
+          AppendCompletedBeam(generated, beam);
+          continue;
+        }
+
         float* logits = llama_get_logits_ith(context, -1);
         if (!logits) {
           throw std::runtime_error("llama.cpp logits are not available");
         }
-        auto choices = CollectTokenChoices(vocab, logits, vocab_size, 1);
+
+        auto choices = CollectTokenChoices(vocab, logits, vocab_size, kMaxModelCandidates);
         if (choices.empty()) {
           throw std::runtime_error("llama.cpp did not select a token");
         }
-        const auto& selected = choices.front();
-        if (llama_vocab_is_eog(vocab, selected.token)) {
-          break;
-        }
 
-        surface += TokenPiece(vocab, selected.token);
-        total_logprob += selected.logprob;
-        ++output_tokens;
+        for (const auto& choice : choices) {
+          if (llama_vocab_is_eog(vocab, choice.token)) {
+            AppendCompletedBeam(generated, beam);
+            continue;
+          }
 
-        if (step + 1 < max_new) {
-          if (IsCanceled(conversion_context)) {
-            return {};
-          }
-          if (DeadlineExpired(conversion_context)) {
-            break;
-          }
-          decoded_tokens.push_back(selected.token);
-          llama_token next = selected.token;
-          auto next_batch = llama_batch_get_one(&next, 1);
-          if (llama_decode(context, next_batch) != 0) {
-            throw std::runtime_error("llama.cpp token decode failed");
+          auto next = beam;
+          next.tokens.push_back(choice.token);
+          next.surface += TokenPiece(vocab, choice.token);
+          next.total_logprob += choice.logprob;
+          ++next.output_tokens;
+          if (!next.surface.empty()) {
+            next_beams.push_back(std::move(next));
           }
         }
       }
 
-      if (!surface.empty()) {
-        generated.push_back(GeneratedCandidate{surface, total_logprob, output_tokens});
+      PruneBeams(next_beams);
+      beams = std::move(next_beams);
+      if (generated.size() >= kMaxModelCandidates) {
+        break;
       }
+    }
+
+    for (const auto& beam : beams) {
+      AppendCompletedBeam(generated, beam);
+    }
+    std::sort(generated.begin(), generated.end(), [](const auto& lhs, const auto& rhs) {
+      return BeamRankScore(lhs.total_logprob, lhs.token_count) >
+             BeamRankScore(rhs.total_logprob, rhs.token_count);
+    });
+    if (generated.size() > kMaxModelCandidates) {
+      generated.resize(kMaxModelCandidates);
     }
 
     return generated;

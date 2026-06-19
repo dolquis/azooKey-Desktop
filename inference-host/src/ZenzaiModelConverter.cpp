@@ -487,6 +487,7 @@ struct ZenzaiModelRuntime {
     std::vector<GeneratedCandidate> generated;
     generated.reserve(candidate_limit);
     std::vector<LlamaBeam> beams(1);
+    bool completed_quota_reached = false;
 
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
       std::vector<LlamaBeam> next_beams;
@@ -540,12 +541,15 @@ struct ZenzaiModelRuntime {
       PruneBeams(next_beams, candidate_limit);
       beams = std::move(next_beams);
       if (generated.size() >= candidate_limit) {
+        completed_quota_reached = true;
         break;
       }
     }
 
-    for (const auto& beam : beams) {
-      AppendCompletedBeam(generated, beam);
+    if (!completed_quota_reached) {
+      for (const auto& beam : beams) {
+        AppendCompletedBeam(generated, beam);
+      }
     }
     std::sort(generated.begin(), generated.end(), [](const auto& lhs, const auto& rhs) {
       return BeamRankScore(lhs.total_logprob, lhs.token_count) >

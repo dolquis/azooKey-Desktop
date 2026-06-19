@@ -2,8 +2,8 @@
   SHARED CORE — Agent / Linear 運用規約（管制塔モデル）
   この「共有コア」は全リポジトリで同一内容をミラーする。
   個別 repo で直接編集しない。編集は origin（後述）で行い、各 repo へ伝播する。
-  version: 0.4-draft   updated: 2026-06-07
-  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。
+  version: 0.5-draft   updated: 2026-06-19
+  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。
   origin(編集の起点・単一正典): dolquis/agent-ops/linear-conventions.md（このファイル）
   各 repo の docs/linear-conventions.md は本ファイルのベンダリングコピー + §13 Delta。
   プロジェクト固有の差分は各 repo の「Project Delta」節（本ファイル末尾）に置く。
@@ -174,6 +174,40 @@ Done は「Linear 上で運用的に完了」を意味し、GitHub docs のリ�
 
 ---
 
+## 7.1 Design / Gate Split（設計層と人間ゲートの分離）
+
+`agent:claude-design` / `agent:claude-review` の AI 設計作業と `gate:human-required` の人間判断が両方絡む Issue は、原則として **設計 Issue** と **人間ゲート Issue** の 2 件に分離する。1 件に同居させると、設計 PR のマージで Issue 全体が誤って Done 化し、未達の人間ゲートを飛び越える（管制塔の状態が実態と乖離する）。
+
+### 7.1.1 分離テスト（分割するか否か）
+
+人間が必要とする作業が、**AI セッションでは生み出せず、かつ同一レビュー内で人間が即座に記録もできない**もの（実機・実データ計測 / 購入・契約 / 外部アカウント開設 / 法務・ライセンス確定 / 署名値設定 / 本番デプロイ 等）を含むなら **分割必須**。
+
+人間の入力が「AI が用意した決定ブリーフの『決定』欄を埋める」程度で、**同一サイクル内に完了**するなら、分割せず単一 Issue のままその場でゲートをクリアしてよい（決定内容・合意日を検証メモに記録）。
+
+### 7.1.2 分割後の規格
+
+| 項目 | 設計 Issue | 人間ゲート Issue |
+| -- | -- | -- |
+| タイトル | 元のまま | `Human Gate: <決定内容>` で開始（roadmap コード併記可: 例 `D-04-A`） |
+| `agent:*` | `agent:claude-design` / `claude-review` | 付けない（人間専任。§2 / §7 Ready で免除） |
+| `gate:human-required` | **付けない** | 付ける |
+| `type:` | `review` 等 | `review` |
+| `repo:` / `area:` / `kind:` | 通常どおり | 通常どおり |
+| 関連付け | — | 設計 Issue へ `related`、所属 tracking / epic を parent、リリース律速なら下流へ `blocks` |
+| Done 条件 | 調査 / spec / 雛形 / ハーネスが PR マージ + 検証メモで確定 | 人間判断・実機検証 + 決定 / 計測値の記録（検証メモ） |
+
+設計 Issue は純 AI スコープになるため、Done 化時に `gate:human-required` を残さない（クリア済みなら除去、未クリアなら Done にしない）。
+
+### 7.1.3 自動 Done の防止（設定・運用）
+
+事故の根本原因は、Linear–GitHub 連携が PR マージ / ブランチ名連動で Issue を Done 化し、人間ゲートを飛び越える点にある。次の多層で防ぐ:
+
+1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく In Review** にする。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは In Review で止まり、人間ゲートの取りこぼしが構造的に起きない（この設定変更は人間 lead が Linear 側で行う）。
+2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。
+3. **分割の徹底**: §7.1.1 に該当する Issue は分割し、auto-close が人間ゲート Issue に当たらないようにする。
+
+---
+
 ## 8. Navigation Rules
 
 - Linear リンクはナビゲーションと計画にのみ使う。
@@ -197,6 +231,8 @@ GitHub docs remain canonical.
 - Claude から Codex へ assign / delegate / mention しない。実行は人間 lead が明示許可コメント後に自ら行う（Claude は実行指示文の下書きまで）。
 - Claude / エージェントはいかなる Linear コメント / Issue にもリテラルな Codex mention トークン（`@` + `Codex`）を再生産しない（無害化する）。承認後に実際の mention で起動するのは人間 lead のみ。
 - triage rule で Codex を自動 delegate しない。
+- `agent:claude-*`（design / review）と `gate:human-required` を同居させたまま PR で auto-close される構成にしない。分離テスト（§7.1.1）に該当するなら 2 件に分割する。
+- Done 化時に `gate:human-required` を残さない（人間判断がクリア済みなら除去、未クリアなら Done にしない）。
 
 ---
 
@@ -233,6 +269,9 @@ Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済
 - [ ] Tracking Issue で子が未リンク
 - [ ] 実行順序を表さなくなったブロッカー
 - [ ] Done なのに検証ノート欠落
+- [ ] `agent:claude-*` と `gate:human-required` が同居した Issue（Design / Gate 分割漏れ。§7.1）
+- [ ] Done なのに `gate:human-required` が残っている Issue
+- [ ] 人間ゲート Issue が PR の auto-close 対象になっている（closing キーワードで参照されている）
 
 Codex safety checks:
 

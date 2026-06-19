@@ -133,7 +133,8 @@ gh pr create \
 
 - ブランチ命名は Linear の自動命名に合わせ **`dolquis/dev-<番号>-<slug>`** とする。
 - PR 本文に対応課題（`Fixes #<GitHub Issue 番号>` または `DEV-<番号>`）を記載し、Linear と相互リンクする。
-- PR オープン → 該当 Linear 課題を In Review、PR マージ / Issue クローズ → Done。
+- PR オープン → 該当 Linear 課題を In Review。**PR マージは In Review までで止め（自動 Done にしない）**、Done は検証メモ記載後に Claude / 人間が明示遷移する（`docs/linear-conventions.md` §7.1.3）。
+- `agent:claude-design` / `claude-review` と `gate:human-required` が両方絡む課題は、設計 Issue と人間ゲート Issue（`Human Gate: …`）に分離する（分離テストと規格は `docs/linear-conventions.md` §7.1）。
 
 ### 週次 control tower audit
 

@@ -527,6 +527,43 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, CanceledZenzaiConvertPreservesDegradedHealth) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_cancel_health.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_cancel_health_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+
+  auto degraded = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(degraded.empty());
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  const auto degraded_error = *engine->effective_last_error();
+  EXPECT_NE(degraded_error.find("empty-generation"), std::string::npos);
+
+  std::atomic<bool> cancel{false};
+  auto canceled = engine->QueryCandidates("きゃんせる", "", kNowBase + 1, &cancel);
+  EXPECT_TRUE(cancel.load(std::memory_order_relaxed));
+  EXPECT_TRUE(canceled.empty());
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_EQ(*engine->effective_last_error(), degraded_error);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

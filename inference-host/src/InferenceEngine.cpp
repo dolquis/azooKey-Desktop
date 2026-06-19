@@ -278,6 +278,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   try {
     converted =
         active_converter_->Convert(kana, BuildContext(kana, context, cancel, conversion_deadline));
+    if (canceled()) return {};
     if (using_model_converter) {
       MirrorModelRuntimeErrorLocked();
     }

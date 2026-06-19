@@ -557,6 +557,14 @@ struct ZenzaiModelRuntime {
     if (!mock_candidates_for_tests) {
       return {};
     }
+    if (ToKatakana(kana) == u8"キャンセル") {
+      // Test fixture: simulate scheduler cancellation after Convert has begun.
+      if (conversion_context.cancel) {
+        const_cast<std::atomic<bool>*>(conversion_context.cancel)->store(true,
+                                                                         std::memory_order_relaxed);
+      }
+      return {};
+    }
     if (ToKatakana(kana) == u8"ニホンゴ") {
       return {GeneratedCandidate{u8"日本語", -0.42, 2},
               GeneratedCandidate{u8"日本語入力", -1.4, 4},

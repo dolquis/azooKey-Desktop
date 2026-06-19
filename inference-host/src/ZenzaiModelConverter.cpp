@@ -51,6 +51,7 @@ void AppendDebugTag(std::string& debug_info, const std::string& tag) {
 }
 
 bool DecodeNextUtf8(const std::string& input, size_t& offset, char32_t& codepoint) {
+  const size_t start = offset;
   const auto first = static_cast<unsigned char>(input[offset]);
   if (first < 0x80) {
     codepoint = first;
@@ -77,20 +78,36 @@ bool DecodeNextUtf8(const std::string& input, size_t& offset, char32_t& codepoin
 
   if (offset + static_cast<size_t>(width) > input.size()) {
     codepoint = first;
-    ++offset;
+    offset = start + 1;
     return false;
   }
   for (int i = 1; i < width; ++i) {
     const auto byte = static_cast<unsigned char>(input[offset + static_cast<size_t>(i)]);
     if ((byte & 0xC0) != 0x80) {
       codepoint = first;
-      ++offset;
+      offset = start + 1;
       return false;
     }
     value = (value << 6) | (byte & 0x3F);
   }
+  if ((width == 2 && value < 0x80) || (width == 3 && value < 0x800) ||
+      (width == 4 && value < 0x10000) || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
+    codepoint = first;
+    offset = start + 1;
+    return false;
+  }
   offset += static_cast<size_t>(width);
   codepoint = value;
+  return true;
+}
+
+bool IsValidUtf8String(const std::string& input) {
+  for (size_t offset = 0; offset < input.size();) {
+    char32_t codepoint = 0;
+    if (!DecodeNextUtf8(input, offset, codepoint)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -356,6 +373,9 @@ struct ZenzaiModelRuntime {
     if (surface.empty()) {
       return {};
     }
+    if (!IsValidUtf8String(surface)) {
+      throw std::runtime_error("invalid-utf8-surface");
+    }
     return {GeneratedCandidate{surface, total_logprob, output_tokens}};
   }
 #else
@@ -363,6 +383,9 @@ struct ZenzaiModelRuntime {
                                            const core::ConversionContext&) {
     if (ToKatakana(kana) == u8"ニホンゴ") {
       return {GeneratedCandidate{u8"日本語", -0.42, 2}};
+    }
+    if (ToKatakana(kana) == u8"ムコウ") {
+      return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
     }
     return {};
   }
@@ -495,6 +518,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
     for (const auto& item : generated) {
       if (item.surface.empty()) {
         continue;
+      }
+      if (!IsValidUtf8String(item.surface)) {
+        return DegradeToFallback(kana, context, "invalid-utf8-surface");
       }
       const auto avg =
           item.token_count > 0 ? item.total_logprob / static_cast<double>(item.token_count) : 0.0;

@@ -496,6 +496,43 @@ TEST_F(DispatcherTest, RuntimeDegradedHealthRecoversAfterSuccessfulZenzaiConvert
   std::remove(model_path.c_str());
 }
 
+TEST_F(DispatcherTest, InvalidZenzaiSurfaceFallsBackToParseableQueryResponse) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
+  const std::string model_path = TempPath("azookey_dispatcher_invalid_utf8_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "cpu";
+  auto load_env = MakeReq(76, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req));
+  auto load_resp = dispatcher.Dispatch(load_env);
+  ASSERT_TRUE(load_resp.has_value());
+  ASSERT_TRUE(ipc::ParseLoadModelResponse(load_resp->payload_json)->ok);
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "むこう";
+  auto query_env =
+      MakeReq(77, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query));
+  auto query_resp = dispatcher.Dispatch(query_env);
+  ASSERT_TRUE(query_resp.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(query_resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_FALSE(parsed->candidates.empty());
+  EXPECT_EQ(parsed->candidates.front().surface, "むこう");
+
+  auto health_resp = dispatcher.Dispatch(MakeReq(78, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(health_resp.has_value());
+  auto health = ipc::ParseHealth(health_resp->payload_json);
+  ASSERT_TRUE(health.has_value());
+  EXPECT_EQ(health->status, "degraded");
+  ASSERT_TRUE(health->last_error.has_value());
+  EXPECT_NE(health->last_error->find("invalid-utf8-surface"), std::string::npos);
+
+  std::remove(model_path.c_str());
+}
+
 TEST_F(DispatcherTest, LoadModelCudaFallbackKeepsHealthOk) {
   SkipProbeOnlyGgufWhenUsingRealLlama();
 

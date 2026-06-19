@@ -463,6 +463,35 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
+  SkipProbeOnlyGgufWhenUsingRealLlama();
+
+  const char* lpath = "azookey_host_engine_zenzai_invalid_utf8.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_invalid_utf8_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  ASSERT_TRUE(engine->model_loaded());
+
+  auto degraded = engine->QueryCandidates("むこう", "", kNowBase);
+  ASSERT_FALSE(degraded.empty());
+  EXPECT_EQ(degraded.front().surface, "むこう");
+  EXPECT_NE(degraded.front().debug_info.find("zenzai-degraded"), std::string::npos);
+  EXPECT_NE(degraded.front().debug_info.find("invalid-utf8-surface"), std::string::npos);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
   const char* lpath = "azookey_host_engine_load_invalid.tsv";
   std::remove(lpath);

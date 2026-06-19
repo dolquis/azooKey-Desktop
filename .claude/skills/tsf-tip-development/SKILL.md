@@ -34,7 +34,7 @@ allowed-tools: Read, Edit, Grep, Glob, WebFetch
 - 補完・診断：clangd ベースの LSP（Claude Code は `clangd-lsp` プラグイン経由）
 - TIP登録/解除の検証：`DllRegisterServer` は COM クラスと TSF プロファイルを
   machine-wide (HKLM / CTF\TIP) に登録するため**管理者権限が必須**
-  (`scripts/register.ps1` は非管理者なら UAC 昇格して `regsvr32` を実行)。
+  (`scripts/register-dev.ps1` は非管理者なら UAC 昇格して `regsvr32` を実行)。
   PowerShell.MCP(共有コンソール)で登録コマンドを提示し、**実行はユーザーが
   管理者 PowerShell で完了させる**。エージェント単独で登録を完了させない。
   なお HKCU を使うのは inference-host の自動起動(`Run` キー)のみで、TIP の

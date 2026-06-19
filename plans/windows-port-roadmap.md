@@ -73,7 +73,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: Windows 側に TIP として登録され、IME バーから選択でき、
   キーイベントが TIP に届く。
-- **変更対象**: `tsf-tip/src/DllMain.cpp`、`scripts/register.ps1`、`scripts/unregister.ps1`
+- **変更対象**: `tsf-tip/src/DllMain.cpp`、`scripts/register-dev.ps1`、`scripts/unregister-dev.ps1`
 - **実装範囲**:
   - `regsvr32` / インストーラ向けの自己登録ロジック（machine-wide HKLM CLSID + `RegisterProfile` による TSF プロファイル + キーボード / UIElement カテゴリ + Lang `0x0411`、管理者権限が必要）
   - 言語バー有効化
@@ -318,7 +318,7 @@ CTest に登録されるため、下表の各実行ファイルは内部の `TES
 4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 後に HKLM の COM in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する round-trip テスト。`com_smoke_test.cpp` に実装済み。対話的 TSF セッションを要するため opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**（headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
 
 長期（Phase 4 / 配布前に必須）:
-5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID キーが残らない smoke。
+5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID / TSF プロファイルキーが残らない smoke（`Add-AppxPackage` → 登録確認 → `Remove-AppxPackage` → 残骸 0）。配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。
 6. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 7. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
@@ -435,13 +435,13 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
 **Phase 3 検証**:
 1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
 2. ユニットテスト: `ctest --preset windows-debug --output-on-failure` で全テスト緑
-3. Windows 実機（Win11 VM 推奨）: `scripts/register.ps1` で TIP DLL 登録 →
+3. Windows 実機（Win11 VM 推奨）: `scripts/register-dev.ps1` で TIP DLL 登録 →
    `azookey_inference_host.exe --pipe --backend cpu` 起動 → gguf を
    `%LOCALAPPDATA%\azooKey\models\` に配置し `LoadModel` 成功 → gguf 削除時は
    `SimpleConverter` フォールバック → メモ帳で `nihongo` 入力で Zenzai 候補
 4. GPU 経路: `--backend cuda` 起動で失敗時は CPU フォールバック
 5. ベンチ: `./build/windows-release/bench/azookey_bench.exe` の p50/p95 が許容内
-6. `unregister.ps1` でクリーン解除確認
+6. `unregister-dev.ps1` でクリーン解除確認
 
 ### Phase 4: 配布可能化 — v1.0 リリースゲート（M11/M12、4〜6 週）
 
@@ -850,11 +850,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
-- **設計メモ**: 既存 `scripts/register.ps1` / `unregister.ps1` は MSIX
-  登録方式と混同されないよう「開発用」と明確化する（README 明記、または
-  `register-dev.ps1` への命名分離）。MSIX 登録経路と開発用 `regsvr32`
-  経路を取り違えると登録・解除事故につながるため、本マイルストーンで整理
-  する。
+- **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
+  `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
+  MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
+  ため、`compat-test/msix_install_uninstall.ps1`（残骸 0 smoke）で検証する。
+  詳細は `docs/sideload-packaging-spec.md` §1.1.1。
 - **参照仕様**: `docs/sideload-packaging-spec.md` §1
 
 ### M29: EV/OV コード署名 CI

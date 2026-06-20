@@ -1,6 +1,6 @@
 ---
 name: japanese-doc-workflow
-description: 日本語の技術文書、README、設計書、ADR、解説記事、書籍原稿を書く・推敲するときに使う統合ワークフロー。japanese-tech-writing、argument-gap-edit、doc-coauthoring、docs-codebase、textlintを併用する。
+description: 日本語の技術文書、README、設計書、ADR、解説記事、書籍原稿を書く・推敲するときに使う統合ワークフロー。japanese-tech-writing、argument-gap-edit、doc-coauthoring、textlintを併用する。
 ---
 
 # Japanese Doc Workflow
@@ -15,7 +15,6 @@ description: 日本語の技術文書、README、設計書、ADR、解説記事�
 - `../argument-gap-edit/SKILL.md`
 
 新規文書を共同で作る場合は `../doc-coauthoring/SKILL.md` を使う。
-README、API docs、ADR、CHANGELOG、Contributing Guideを書く場合は `../docs-codebase/SKILL.md` を使う。
 
 ## 作業手順
 

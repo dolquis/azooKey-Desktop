@@ -10,7 +10,9 @@ upstream license.
   - Per the upstream repository README: "Many skills in this repo are open source
     (Apache 2.0)." `doc-coauthoring` is not among the source-available
     `docx` / `pdf` / `pptx` / `xlsx` skills, so it falls under the Apache 2.0 grant.
-  - Full license text: https://www.apache.org/licenses/LICENSE-2.0
+  - The full Apache License 2.0 text is bundled alongside this notice in the
+    `LICENSE` file (per Apache-2.0 §4, redistributions include a copy of the License).
+    Upstream reference: https://www.apache.org/licenses/LICENSE-2.0
 
 Modifications:
 - The `SKILL.md` body is redistributed unmodified.

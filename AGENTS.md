@@ -248,9 +248,8 @@ macOS / Linux のメンテナがリポジトリを開いた場合、`powershell`
 - `tsf-ipc-protocol` … TIP ⇔ Inference Host の独自 IPC プロトコル仕様。
 - `japanese-tech-writing` … 日本語の技術文書・原稿の文章規範。`dolquis/agent-ops` を origin とする共有スキルのベンダリングコピーで、本 repo では本文を直接編集しない（改訂は origin 側で行い伝播する）。
 - `argument-gap-edit` … 論証のギャップ・割り込み・見せびらかしを検出して再配置する編集スキル。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
-- `japanese-doc-workflow` … 日本語ドキュメントの統合ワークフロー（上記スキルと下記ドキュメント系スキルを束ねる）。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
-- `doc-coauthoring` … 文書共同執筆の構造化ワークフロー。第三者スキル（Apache-2.0、© Anthropic、`github.com/anthropics/skills`）のベンダリングコピー。出典・ライセンスは同スキル直下の `NOTICE.md` を参照。
-- `docs-codebase` … README・API docs・ADR 等の docs-as-code 規範。第三者スキル（MIT、© 2025 Vasiliy Uvarov、`majiayu000/claude-skill-registry` 経由）のベンダリングコピー。出典・ライセンスは同スキル直下の `NOTICE.md` を参照。
+- `japanese-doc-workflow` … 日本語ドキュメントの統合ワークフロー（上記の文章規範スキルと `doc-coauthoring` を束ねる）。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
+- `doc-coauthoring` … 文書共同執筆の構造化ワークフロー。第三者スキル（Apache-2.0、© Anthropic、`github.com/anthropics/skills`）のベンダリングコピー。出典は同スキル直下の `NOTICE.md`、ライセンス全文は同 `LICENSE`（Apache-2.0）を参照。
 
 Claude Code は `.claude/skills/`、Codex CLI は `.agents/skills/` を読む。
 **両ツリーは同一の skill 群と同一の実質ガイダンス（SKILL.md 本文・`references/` 配下）を

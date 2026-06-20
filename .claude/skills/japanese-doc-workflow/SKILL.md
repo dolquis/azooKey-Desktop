@@ -1,7 +1,7 @@
 ---
 name: japanese-doc-workflow
 description: 日本語の技術文書、README、設計書、ADR、解説記事、書籍原稿を書く・推敲するときに使う統合ワークフロー。japanese-tech-writing、argument-gap-edit、doc-coauthoring、textlintを併用する。
-allowed-tools: Read, Edit, Grep, Glob
+allowed-tools: Read, Edit, Grep, Glob, Bash
 ---
 
 # Japanese Doc Workflow
@@ -15,7 +15,8 @@ allowed-tools: Read, Edit, Grep, Glob
 - `../japanese-tech-writing/SKILL.md`
 - `../argument-gap-edit/SKILL.md`
 
-新規文書を共同で作る場合は `../doc-coauthoring/SKILL.md`（Claude Code 限定）を使う。
+新規文書を共同で作る場合、Claude Code では `doc-coauthoring` スキルを併用する。
+このスキルは Claude 専用で Codex CLI の `.agents/skills/` には無いため、Codex ではこの手順を省略する。
 
 ## 作業手順
 

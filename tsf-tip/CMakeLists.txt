@@ -1,4 +1,6 @@
 add_library(azookey_tsf_tip SHARED
+  src/CandidateListUIElement.cpp
+  src/CandidateUiCoordinator.cpp
   src/CandidateWindow.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
@@ -15,6 +17,7 @@ target_link_libraries(azookey_tsf_tip
     azookey_project_options
     azookey_project_warnings
     ole32
+    oleaut32
     uuid
     shlwapi
     shcore
@@ -24,6 +27,8 @@ target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN
 if(AZOOKEY_BUILD_TESTS)
   function(add_tsf_tip_unit_test target_name test_source)
     add_executable(${target_name}
+      src/CandidateListUIElement.cpp
+      src/CandidateUiCoordinator.cpp
       src/CandidateWindow.cpp
       src/DisplayAttribute.cpp
       src/TextService.cpp
@@ -40,6 +45,7 @@ if(AZOOKEY_BUILD_TESTS)
         azookey_project_options
         azookey_project_warnings
         ole32
+        oleaut32
         uuid
         shlwapi
         shcore
@@ -69,5 +75,6 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_activate_uiless_tests tests/activate_uiless_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
 endif()

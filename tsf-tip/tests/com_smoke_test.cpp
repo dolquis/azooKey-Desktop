@@ -359,6 +359,32 @@ bool InprocServerKeyExists() {
   return true;
 }
 
+bool CategoryContainsTextService(REFGUID category) {
+  ITfCategoryMgr* cat_mgr = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr))) ||
+      !cat_mgr) {
+    return false;
+  }
+
+  IEnumGUID* items = nullptr;
+  HRESULT hr = cat_mgr->EnumItemsInCategory(category, &items);
+  cat_mgr->Release();
+  if (FAILED(hr) || !items) return false;
+
+  bool found = false;
+  GUID item{};
+  ULONG fetched = 0;
+  while (items->Next(1, &item, &fetched) == S_OK && fetched == 1) {
+    if (IsEqualGUID(item, azookey::tsf::kTextServiceClsid)) {
+      found = true;
+      break;
+    }
+  }
+  items->Release();
+  return found;
+}
+
 }  // namespace
 
 // Machine-wide registration round-trip. This mutates machine-wide TSF state and
@@ -423,6 +449,8 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
       << "TSF profile not registered (DEV-157 regression)";
   EXPECT_TRUE(IsEqualGUID(profile.catid, GUID_TFCAT_TIP_KEYBOARD))
       << "profile not registered under GUID_TFCAT_TIP_KEYBOARD";
+  EXPECT_TRUE(CategoryContainsTextService(GUID_TFCAT_TIPCAP_UIELEMENTENABLED))
+      << "UIElement-enabled category not registered";
 
   ASSERT_EQ(unregister_(), S_OK);
   TF_INPUTPROCESSORPROFILE removed{};

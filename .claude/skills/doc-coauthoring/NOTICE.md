@@ -14,9 +14,14 @@ upstream license.
     `LICENSE` file (per Apache-2.0 §4, redistributions include a copy of the License).
     Upstream reference: https://www.apache.org/licenses/LICENSE-2.0
 
-Modifications:
+Placement and modifications:
+- This is a Claude-authored workflow skill (it launches `Task` sub-agents for reader
+  testing and uses Claude editing tools such as `str_replace`). It is vendored into
+  Claude Code locations only — `.claude/skills/` and the personal `~/.claude/skills/` —
+  and is intentionally NOT placed in the Codex `.agents/skills/` tree, where those
+  Claude-specific instructions do not apply.
 - The `SKILL.md` body is redistributed unmodified.
-- The copy placed under `.claude/skills/` adds a single `allowed-tools:` line to the
-  YAML frontmatter as a Claude Code harness adaptation. The copy under `.agents/skills/`
-  (Codex) and the personal `~/.claude/skills/` copy preserve the upstream frontmatter
-  unchanged.
+- The `.claude/skills/` copy's frontmatter grants
+  `allowed-tools: Read, Edit, Write, Grep, Glob, Task` so the drafting and sub-agent
+  reader-testing stages work under Claude Code. The `~/.claude/skills/` copy preserves
+  the upstream frontmatter (unrestricted).

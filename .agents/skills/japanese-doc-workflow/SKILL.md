@@ -14,7 +14,7 @@ description: 日本語の技術文書、README、設計書、ADR、解説記事�
 - `../japanese-tech-writing/SKILL.md`
 - `../argument-gap-edit/SKILL.md`
 
-新規文書を共同で作る場合は `../doc-coauthoring/SKILL.md` を使う。
+新規文書を共同で作る場合は `../doc-coauthoring/SKILL.md`（Claude Code 限定）を使う。
 
 ## 作業手順
 

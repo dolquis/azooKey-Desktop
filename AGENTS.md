@@ -246,6 +246,7 @@ macOS / Linux のメンテナがリポジトリを開いた場合、`powershell`
 
 - `tsf-tip-development` … TSF TIP 実装の中核ルールと参照リソース。
 - `tsf-ipc-protocol` … TIP ⇔ Inference Host の独自 IPC プロトコル仕様。
+- `japanese-tech-writing` … 日本語の技術文書・原稿の文章規範。`dolquis/agent-ops` を origin とする共有スキルのベンダリングコピーで、本 repo では本文を直接編集しない（改訂は origin 側で行い伝播する）。
 
 Claude Code は `.claude/skills/`、Codex CLI は `.agents/skills/` を読む。
 **両ツリーは同一の skill 群と同一の実質ガイダンス（SKILL.md 本文・`references/` 配下）を

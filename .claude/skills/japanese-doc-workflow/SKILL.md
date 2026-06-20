@@ -1,7 +1,7 @@
 ---
 name: japanese-doc-workflow
 description: 日本語の技術文書、README、設計書、ADR、解説記事、書籍原稿を書く・推敲するときに使う統合ワークフロー。japanese-tech-writing、argument-gap-edit、doc-coauthoring、textlintを併用する。
-allowed-tools: Read, Edit, Grep, Glob, Bash
+allowed-tools: Read, Edit, Grep, Glob, Bash(npx textlint:*)
 ---
 
 # Japanese Doc Workflow

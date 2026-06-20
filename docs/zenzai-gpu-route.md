@@ -36,22 +36,32 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
 `directml` は IPC payload の予約値として残すが、Phase 3 では unsupported として
 扱い、Phase 6-B M24 の DirectML / NPU スパイクで再度有効化する。
 
-2026-05-23 時点の初期実装:
+2026-06-21 時点の実装:
 
 - `AZOOKEY_BACKEND=cpu|cuda` を CMake cache option として追加。
-- `ZenzaiModelConverter` を追加し、GGUF magic/version を検証して
+- `AZOOKEY_LLAMA_CPP_SOURCE_DIR` または `AZOOKEY_FETCH_LLAMA_CPP=ON` で
+  llama.cpp `llama` target を接続し、`azookey_host` に `AZOOKEY_WITH_LLAMA_CPP`
+  を伝播する。未接続時は no-egress の mock runtime でビルド・テストを継続する。
+- `ZenzaiModelConverter` は GGUF magic/version を検証して
   `InferenceEngine::model_loaded()` / `Handshake` / `Health` に反映する。
-- llama.cpp 未接続の間は既存 converter に委譲し、候補には
-  `zenzai-gguf-loaded;fallback-converter` を付与する。
-- CUDA 指定時は valid GGUF を CPU fallback としてロードし、`Health` を
-  `degraded` にして `last_error` で理由を返す。
+- llama.cpp 接続時は `llama_model_load_from_file` / `llama_init_from_model` で
+  GGUF をロードし、`Convert` のモデル生成候補を `CandidateSource::Model` と
+  `debug_info=zenzai;lp=...;avg=...` に写像する。
+- モデル未配置・破損・推論例外・空生成時は既存 converter に劣化し、候補には
+  `zenzai-degraded:<reason>` を付与する。
+- CUDA 指定時は valid GGUF を CPU fallback としてロードし、降格理由は
+  `ModelLoadResult.error` の警告として返す。CPU ロード自体が成功した場合、
+  `Health` は ok を保つ。
 
 計測ゲート:
 
 - CPU fallback: `bench/azookey_bench.exe` が exit=0、p95 < 50ms。
   2026-05-20 Debug build baseline: p50=0.0179ms, p95=0.0249ms, p99=0.052ms。
-- Zenzai CPU: GGUF 配置時の `LoadModel` 成功、初回ロード時間、p50/p95。
-- Zenzai CUDA: CUDA 初期化失敗時に CPU または `SimpleConverter` へフォールバック。
+- Zenzai CPU: `bench/azookey_zenzai_bench.exe --model <gguf>`（または
+  `AZOOKEY_ZENZAI_MODEL=<gguf>`）で `LoadModel` 成功、初回ロード時間、p50/p95/p99、
+  `zenzai_candidates`、先頭候補の `debug_info` を記録する。モデル未指定時は
+  `status=skipped` で成功終了し、CTest では `--mock-zenzai` で no-egress smoke を行う。
+- Zenzai CUDA: CUDA 未配線・初期化失敗時に CPU または `SimpleConverter` へフォールバック。
 
 ## 将来拡張
 

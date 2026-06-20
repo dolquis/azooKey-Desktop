@@ -165,6 +165,11 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
   if (!show) {
     tip_draws_ = false;
     own_window_.Hide();
+    if (showing_ && ui_element_ && ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
+      ui_element_->Update(items_, selected_idx_, kAllInitialCandidateFlags);
+      const HRESULT update_hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
+      UNREFERENCED_PARAMETER(update_hr);
+    }
     return;
   }
   tip_draws_ = true;

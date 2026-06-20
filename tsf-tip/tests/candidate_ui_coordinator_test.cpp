@@ -241,8 +241,18 @@ TEST(TsfTipCandidateUiCoordinatorTest, ElementShowFalseSwitchesSubsequentUpdates
   ASSERT_NE(thread_mgr.element, nullptr);
 
   EXPECT_EQ(thread_mgr.element->Show(FALSE), S_OK);
-  EXPECT_EQ(coordinator.MoveSelection(+1), S_OK);
   EXPECT_EQ(thread_mgr.update_count, 1);
+
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+  DWORD flags = 0;
+  EXPECT_EQ(candidates->GetUpdatedFlags(&flags), S_OK);
+  EXPECT_EQ(flags & (TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION),
+            TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION);
+  candidates->Release();
+
+  EXPECT_EQ(coordinator.MoveSelection(+1), S_OK);
+  EXPECT_EQ(thread_mgr.update_count, 2);
 
   EXPECT_EQ(coordinator.EndUI(), S_OK);
   EXPECT_EQ(thread_mgr.end_count, 1);

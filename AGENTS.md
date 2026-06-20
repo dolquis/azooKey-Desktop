@@ -246,12 +246,18 @@ macOS / Linux のメンテナがリポジトリを開いた場合、`powershell`
 
 - `tsf-tip-development` … TSF TIP 実装の中核ルールと参照リソース。
 - `tsf-ipc-protocol` … TIP ⇔ Inference Host の独自 IPC プロトコル仕様。
+- `japanese-tech-writing` … 日本語の技術文書・原稿の文章規範。`dolquis/agent-ops` を origin とする共有スキルのベンダリングコピーで、本 repo では本文を直接編集しない（改訂は origin 側で行い伝播する）。
+- `argument-gap-edit` … 論証のギャップ・割り込み・見せびらかしを検出して再配置する編集スキル。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
+- `japanese-doc-workflow` … 日本語ドキュメントの統合ワークフロー（上記の文章規範スキルと `doc-coauthoring` を束ねる）。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
+- `doc-coauthoring` … 文書共同執筆の構造化ワークフロー。第三者スキル（Apache-2.0、© Anthropic、`github.com/anthropics/skills`）のベンダリングコピー。出典は同スキル直下の `NOTICE.md`、ライセンス全文は同 `LICENSE`（Apache-2.0）を参照。**Claude 専用**で `.claude/skills/` のみに置く（サブエージェント検証・Claude 固有の編集ツールを前提とするため、Codex の `.agents/skills/` には置かない）。
 
 Claude Code は `.claude/skills/`、Codex CLI は `.agents/skills/` を読む。
 **両ツリーは同一の skill 群と同一の実質ガイダンス（SKILL.md 本文・`references/` 配下）を
 維持する。** 片方の本文または参照を変更したら、もう片方も同時に更新する。ただし
 Claude Code 固有の `allowed-tools:` などのフロントマターは各ハーネス向けに差異が
-あってよく、ミラー対象外とする（将来的に symlink 統合の余地あり）。
+あってよく、ミラー対象外とする（将来的に symlink 統合の余地あり）。例外として、
+**Claude 専用スキル（`doc-coauthoring` など）は `.claude/skills/` のみに置き**、Codex 非対応の
+ツールやサブエージェントを前提とするため `.agents/skills/` には置かない（ミラー対象外）。
 
 ### 動作要件 (各メンテナのホスト側に必要)
 
@@ -260,3 +266,34 @@ Claude Code 固有の `allowed-tools:` などのフロントマターは各ハ�
 - `clangd.exe` — `clangd-lsp` プラグイン用 (VS C++ ワークロードまたは LLVM
   公式インストーラ経由)
 - WSL から Claude Code を使う場合は `powershell.exe` 経由で Windows 側を駆動
+
+## 日本語技術文書の執筆・推敲
+
+日本語の技術文書、README、設計書、ADR、仕様書、解説記事、書籍原稿を作成・修正・レビューするときは、必要に応じて `japanese-doc-workflow` スキルを入口に使う。
+
+特に次の場合は、このワークフローを優先する。
+
+- 日本語の説明文、設計文書、README、ADR、仕様書を新規作成する。
+- 既存の日本語ドキュメントを読みやすく、論理的に直す。
+- 文章の論理の飛躍、段落構成、冗長さ、LLM っぽい表現を点検する。
+- README、API docs、ADR、CHANGELOG、Contributing Guide など、定型構造を持つ文書を書く。
+
+使い分けの目安:
+
+- 日本語技術文書としての文体、冗長さ、見出し、表現を整えるときは `japanese-tech-writing` を使う。
+- 段落間の論理の飛躍や議論の無理筋を直すときは `argument-gap-edit` を使う。
+- 新規文書の共同設計やアウトライン作成には `doc-coauthoring` を使う（**Claude Code のみ**。Codex CLI では `japanese-doc-workflow` の手順に従い、この工程は省略する）。
+- 迷った場合は `japanese-doc-workflow` を入口にする（上記スキルを束ねる）。
+
+使わない条件:
+
+- コードだけの変更。
+- 短いコメント、コミットメッセージ、軽い箇条書きだけの作成。
+- 日本語技術文書ではない創作、雑談、翻訳。
+- ユーザーが明示的に「スキルを使わない」「軽く答えて」と言った場合。
+
+作業時の注意:
+
+- 既存文書を編集するときは、事実関係や用語、既存の文体を勝手に変えない。
+- 根拠のない断定、架空の引用、未確認の仕様説明を追加しない。
+- 大きく書き換える前に、必要なら「レビューのみ」「差分修正」「全面リライト」のどれを行うか確認する。

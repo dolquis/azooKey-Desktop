@@ -186,8 +186,9 @@ enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファ�
 持たない）。実装は `auto` を root へ書き戻さず、解決時に `settings.aiBackend` へ展開する。
 
 **secure / offline / private が profile に優先（backend 制約）**: 解決後の実効
-プライバシーモード（M46 §3 / 本書 §5 の通知結果）は `profile.aiBackend` に優先する。
-優先順位を以下に確定する:
+プライバシーモード（M46 §3 / 本書 §5 の通知結果。**§5 のグローバル floor 適用後**の値で
+あり、per-app `normal` がグローバル `offline` / `secure` を緩和した後の値ではない）は
+`profile.aiBackend` に優先する。優先順位を以下に確定する:
 
 1. 実効モード `secure` → `aiBackend = none` 強制（profile・global を上書き）。学習・
    予測・外部 AI も M46 §5 の抑止契約に従う。
@@ -221,9 +222,25 @@ overlay マージ** する。下位層で見つかった field は上位層の�
 グローバル設定（base）の値を継承する。partial profile が無関係な機能を
 意図せず再有効化することはない。
 
-`privacyMode` のみ特殊扱い: `inherit` の場合だけ下位層を継承し、
-明示値（`normal` / `private` / `secure`）は下位を上書きする
-（プライバシー設定を意図せず緩める方向に継承しない方針）。
+`privacyMode` のみ特殊扱い: `inherit` の場合だけ下位層を継承し、明示値
+（`normal` / `private` / `secure`）は下位を上書きする（プライバシー設定を意図せず
+緩める方向に継承しない方針）。ただしこの上書きは **profile レイヤ内**（process →
+window_class → default）に限り、下記の **グローバル floor** を下回ることはできない。
+
+**グローバル `privacy.mode` は floor（最小保証）**: profile レイヤ解決の結果は、
+グローバル `privacy.mode` が与える保証を **下回ってはならない**。実効モードは
+「グローバル `privacy.mode` の制約」と「profile 解決後モードの制約」を **各軸で厳しい方**
+（union of restrictions）に取る。特に:
+
+- グローバル `offline`（ネットワーク禁止 / 外部 AI 不可）は per-app `privacyMode = normal`
+  や `profile.aiBackend` では **解除されない**。`offline` は端末全体のネットワーク方針で
+  あり、アプリ単位で緩められない。
+- グローバル `secure` も terminal で per-app では緩和できない。
+
+したがって per-app `normal` は「**グローバル floor まで** 戻す」意味であり、上位 profile
+レイヤが付けた `private` / `secure` を明示解除する用途に限る。グローバルが `offline` /
+`private` / `secure` の場合、`normal` はその floor までしか戻らず、リテラルな `normal`
+（保護なし）には落とさない。
 
 `privacyMode` が `inherit` 以外（`normal` / `private` / `secure`）の
 プロファイルは、解決後に M46 `PrivacyGate` へ通知する。理由文字列は
@@ -231,12 +248,14 @@ overlay マージ** する。下位層で見つかった field は上位層の�
 
 - `secure` → `auto_secure_app`（学習・外部 AI 完全 OFF）
 - `private` → `auto_private_app`（外部 AI OFF / 学習は context_hash のみ）
-- `normal` → `auto_normal_app`（グローバル既定に戻す。上位プロファイルから
-  `private` / `secure` を継承していた場合に明示解除する用途）
+- `normal` → `auto_normal_app`（上位 profile レイヤの `private` / `secure` を明示解除して
+  **グローバル floor** に戻す。グローバルが `offline` / `private` / `secure` の場合はその
+  floor を維持する）
 
 `inherit` の場合は通知せず、グローバル設定（`settings.privacyMode` 等）を
-そのまま使う。`PrivacyGate` 側は同一ユーザーアクション内で複数通知を
-受けた場合、最も厳しいモード（`secure > private > normal`）を採用する。
+そのまま使う。`PrivacyGate` 側は同一ユーザーアクション内で複数通知を受けた場合、
+各軸で最も厳しい制約を採り（`secure` > `private` / `offline` > `normal`。`private` と
+`offline` は各軸の union）、かつグローバル `privacy.mode` を floor として下回らない。
 
 ## 6. 既存 `promptPrefixByApp` との統合
 

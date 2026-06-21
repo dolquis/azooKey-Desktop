@@ -172,10 +172,12 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 ### 4.2 フィールド制約と backend 優先順位（確定）
 
 **`candidateTagBoosts` の値域**: 各倍率は `[1.0, 3.0]`（schema で `minimum: 1.0` /
-`maximum: 3.0`）。実行時も §7 の `max(1.0, …)` で下限をクランプし、**下げ方向には
-使わない**（1.0 未満は 1.0 として扱う no-op）。3.0 は暴走防止の上限（3× 倍率で実質
-最上位を占有するため十分）。未知のタグ名は無視する（forward-compat。タグ namespace は
-M52 ベンチの `Technical` / `English` / `Polite` / `Casual` / `NamedEntity` 等）。
+`maximum: 3.0`）。schema の min/max は宣言であり、設定ローダが手動パースである以上、
+手編集・移行で混入した範囲外値（例 `100`）には効かない。よって**ランタイム側でも必ず
+`[1.0, 3.0]` にクランプ**する（§7 の `min(3.0, max(1.0, value))`）。下げ方向には使わない
+（1.0 未満は 1.0 の no-op）。3.0 は暴走防止の上限（3× 倍率で実質最上位を占有するため
+十分）。未知のタグ名は無視する（forward-compat。タグ namespace は M52 ベンチの
+`Technical` / `English` / `Polite` / `Casual` / `NamedEntity` 等）。
 
 **`aiBackend` の `auto` センチネルと root enum の整合**: プロファイルの `aiBackend`
 enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファイル専用
@@ -189,10 +191,13 @@ enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファ�
 
 1. 実効モード `secure` → `aiBackend = none` 強制（profile・global を上書き）。学習・
    予測・外部 AI も M46 §5 の抑止契約に従う。
-2. 実効モード `offline`（グローバル専用）または `private` → 外部 `openai` を禁止。
-   `openai` 指定はモデル搭載時 `local-zenzai` へ降格、未搭載なら `none`。`auto` /
-   `local-zenzai` は許可。
-3. 上記以外 → `profile.aiBackend` を適用（`auto` は `settings.aiBackend` へ展開）。
+2. それ以外は **まず `auto` を `settings.aiBackend` へ展開**して実効 backend 値を確定する
+   （`auto` のまま下の判定に渡さない。継承された `openai` を `private` / `offline` 判定で
+   取りこぼさないため）。
+3. 実効モード `offline`（グローバル専用）または `private` → 外部 `openai` を禁止。展開後の
+   値が `openai`（明示・`auto` 継承のいずれも）ならモデル搭載時 `local-zenzai` へ降格、
+   未搭載なら `none`。`local-zenzai` は許可。
+4. 上記以外（`normal`）→ 展開後の `profile.aiBackend` をそのまま適用。
 
 **`privacyMode` enum の範囲**: profile の `privacyMode` は
 `["inherit", "normal", "private", "secure"]` とし、`offline` / `custom` を **per-app
@@ -242,10 +247,14 @@ M48 の resolver は `profilesByApp[process_name.lower()]` で lookup する
 ため、legacy 側も **読み込み時に key を `lower()` 正規化**して同じ規約に
 揃える。M48 では以下の移行戦略をとる:
 
-1. `profilesByApp[process.lower()].promptPrefix` を優先
-2. それが**未設定**（プロファイル不在、または `promptPrefix` が既定の空文字 `""`）
-   なら `promptPrefixByApp[process.lower()]` を読む（`SettingsManager` 読み込み時に
-   大文字混在キーは `lower()` 正規化済み）
+1. `profilesByApp[process.lower()].promptPrefix` が**存在すれば**（明示的な空文字 `""`
+   を含む）それを使う。`""` は「レガシー prefix をクリアする」上書き値であり、レガシーへ
+   フォールスルーしない。
+2. `promptPrefix` フィールドが**存在しない**（プロファイル自体が無い、または profile に
+   `promptPrefix` キーが無い）場合のみ `promptPrefixByApp[process.lower()]` を読む（§5
+   overlay と同じく「未指定 field のみ下位層を継承」。空 `""` は未指定ではない）。このため
+   設定ローダは `promptPrefix` の**キー有無を保持**し、既定 `""` を overlay / legacy 解決前に
+   先食いで適用しない（読み込み時に大文字混在キーは `lower()` 正規化済み）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
 4. M48 リリース後 3 マイナーバージョンで `promptPrefixByApp` 削除予定
@@ -264,12 +273,14 @@ M48 の resolver は `profilesByApp[process_name.lower()]` で lookup する
 `final_score` に以下を掛ける:
 
 ```
-boost = max(1.0, profile.candidateTagBoosts.get(tag, 1.0))
+raw   = profile.candidateTagBoosts.get(tag, 1.0)
+boost = min(3.0, max(1.0, raw))   // [1.0, 3.0] にクランプ（手編集・移行値の暴走防止）
 candidate.final_score *= boost
 ```
 
-`max(1.0, ...)` で実効的に「下げる」ことはせず、boost のみ許可する。
-逆方向の調整はタグ別の score weight 設定で行う（M11 範疇）。
+`max(1.0, …)` で下げ方向には使わず、`min(3.0, …)` で上限もクランプする（§4.2 の
+`[1.0, 3.0]` を実際に強制するのはこのランタイム式）。boost のみ許可し、逆方向の調整は
+タグ別の score weight 設定で行う（M11 範疇）。
 
 ## 8. UI（設定アプリ）
 

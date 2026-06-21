@@ -213,6 +213,7 @@ public:
   bool LearningAllowed() const;
   bool PredictionAllowed() const;
   bool ExternalAiAllowed() const;
+  bool AiCandidateAllowed() const;   // AI 候補生成（ローカル zenzai / 外部 LLM）が許可されるか
   bool DetailedLoggingAllowed() const;
 
   // モード遷移
@@ -225,6 +226,15 @@ public:
 `Dispatcher` は各 IPC ハンドラの先頭で `PrivacyGate` に問い合わせ、
 許可されない処理は早期 return + ログ記録（`result = "blocked"`）と
 する。
+
+**AI 軸の 2 クエリ**: `AiCandidateAllowed()` は AI ベースの候補生成（ローカル zenzai
+変換・外部 LLM のいずれも）が許可されるかを表し、`ExternalAiAllowed()` はそのうち
+**外部 LLM** のみを表す。不変条件: `ExternalAiAllowed() ⇒ AiCandidateAllowed()`（外部が
+許可されるなら AI 候補も許可）。`AiCandidateAllowed()` が false になるのは `secure`、および
+`custom` で AI 候補生成を無効化した場合で、このとき backend は `none`（ローカル zenzai も
+動かさない）。`private` / `offline` は `AiCandidateAllowed()=true` かつ
+`ExternalAiAllowed()=false`（ローカルのみ）。`docs/app-profile-spec.md` §4.2 の backend
+解決はこの 2 クエリを参照する。
 
 ## 6. UI 表示
 

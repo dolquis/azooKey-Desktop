@@ -193,8 +193,8 @@ enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファ�
 
 1. まず `auto` を `settings.aiBackend` へ展開する（`auto` のまま下の判定に渡さない。
    継承された `openai` を取りこぼさないため）。
-2. `secure`（AI 全面 OFF）、または `custom` で AI 候補生成を無効化した場合 →
-   `aiBackend = none`（外部・ローカルとも AI を使わない。M46 §5 の抑止契約に従う）。
+2. `PrivacyGate::AiCandidateAllowed() == false`（`secure`、または `custom` で AI 候補生成を
+   無効化）→ `aiBackend = none`（外部・ローカルとも AI を使わない。M46 §5 の抑止契約に従う）。
 3. `PrivacyGate::ExternalAiAllowed() == false`（`private` / `offline` / `custom` で外部 AI
    無効）→ 外部 `openai` を禁止。展開後の値が `openai`（明示・`auto` 継承のいずれも）なら
    モデル搭載時 `local-zenzai` へ降格、未搭載なら `none`。`local-zenzai` は許可。

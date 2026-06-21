@@ -1,6 +1,7 @@
 #include "azookey/core/SimpleConverter.h"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -103,6 +104,7 @@ bool SimpleConverter::LoadFromTsv(const std::string& path) {
     } catch (...) {
       continue;
     }
+    if (!std::isfinite(score)) continue;
     Candidate c;
     c.surface = std::move(surface);
     c.reading = reading;
@@ -134,6 +136,7 @@ bool SimpleConverter::LoadBigramFromTsv(const std::string& path) {
     } catch (...) {
       continue;
     }
+    if (!std::isfinite(bonus)) continue;
     bigram_bonus_[std::move(key)][std::move(surface)] = bonus;
     any = true;
   }

@@ -185,20 +185,20 @@ enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファ�
 `settings.aiBackend` は具体値のみ（`["none", "openai", "local-zenzai"]`、`auto` を
 持たない）。実装は `auto` を root へ書き戻さず、解決時に `settings.aiBackend` へ展開する。
 
-**secure / offline / private が profile に優先（backend 制約）**: 解決後の実効
-プライバシーモード（M46 §3 / 本書 §5 の通知結果。**§5 のグローバル floor 適用後**の値で
-あり、per-app `normal` がグローバル `offline` / `secure` を緩和した後の値ではない）は
-`profile.aiBackend` に優先する。優先順位を以下に確定する:
+**プライバシーが profile backend に優先（backend 制約）**: backend 解決はモード名の
+列挙ではなく M46 `PrivacyGate` の per-axis クエリ（§5.1。**§5 のグローバル floor 適用後**の
+実効状態で評価し、per-app `normal` がグローバル `offline` / `secure` / `custom` を緩和した
+後の値ではない）に従う。これにより `custom`（例: 外部 AI のみ無効化）を含め全モードを
+統一的に扱う。優先順位を以下に確定する:
 
-1. 実効モード `secure` → `aiBackend = none` 強制（profile・global を上書き）。学習・
-   予測・外部 AI も M46 §5 の抑止契約に従う。
-2. それ以外は **まず `auto` を `settings.aiBackend` へ展開**して実効 backend 値を確定する
-   （`auto` のまま下の判定に渡さない。継承された `openai` を `private` / `offline` 判定で
-   取りこぼさないため）。
-3. 実効モード `offline`（グローバル専用）または `private` → 外部 `openai` を禁止。展開後の
-   値が `openai`（明示・`auto` 継承のいずれも）ならモデル搭載時 `local-zenzai` へ降格、
-   未搭載なら `none`。`local-zenzai` は許可。
-4. 上記以外（`normal`）→ 展開後の `profile.aiBackend` をそのまま適用。
+1. まず `auto` を `settings.aiBackend` へ展開する（`auto` のまま下の判定に渡さない。
+   継承された `openai` を取りこぼさないため）。
+2. `secure`（AI 全面 OFF）、または `custom` で AI 候補生成を無効化した場合 →
+   `aiBackend = none`（外部・ローカルとも AI を使わない。M46 §5 の抑止契約に従う）。
+3. `PrivacyGate::ExternalAiAllowed() == false`（`private` / `offline` / `custom` で外部 AI
+   無効）→ 外部 `openai` を禁止。展開後の値が `openai`（明示・`auto` 継承のいずれも）なら
+   モデル搭載時 `local-zenzai` へ降格、未搭載なら `none`。`local-zenzai` は許可。
+4. 上記いずれにも該当しない（外部 AI 許可）→ 展開後の `profile.aiBackend` を適用。
 
 **`privacyMode` enum の範囲**: profile の `privacyMode` は
 `["inherit", "normal", "private", "secure"]` とし、`offline` / `custom` を **per-app

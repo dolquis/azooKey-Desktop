@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -212,8 +213,12 @@ uint64_t NowEpochSec() {
 }
 
 double Percentile(const std::vector<double>& sorted, double percentile) {
+  if (sorted.empty()) {
+    return 0.0;
+  }
+  const double clamped = std::clamp(percentile, 0.0, 100.0);
   const size_t idx =
-      static_cast<size_t>((percentile / 100.0) * static_cast<double>(sorted.size() - 1));
+      static_cast<size_t>(std::ceil((clamped / 100.0) * static_cast<double>(sorted.size() - 1)));
   return sorted[idx];
 }
 

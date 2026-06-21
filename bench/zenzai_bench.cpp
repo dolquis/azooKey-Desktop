@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -11,6 +13,12 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
@@ -102,6 +110,23 @@ double ParseDouble(const std::string& value, const char* name) {
   } catch (const std::exception& ex) {
     throw std::invalid_argument(std::string(name) + " must be a number: " + ex.what());
   }
+}
+
+uint32_t CurrentProcessId() {
+#if defined(_WIN32)
+  return static_cast<uint32_t>(_getpid());
+#else
+  return static_cast<uint32_t>(getpid());
+#endif
+}
+
+std::filesystem::path UniqueTempPath(const std::string& stem, const std::string& extension) {
+  static std::atomic<uint64_t> counter{0};
+  const auto ticks = std::chrono::system_clock::now().time_since_epoch().count();
+  const auto sequence = counter.fetch_add(1, std::memory_order_relaxed);
+  return std::filesystem::temp_directory_path() /
+         (stem + "-" + std::to_string(CurrentProcessId()) + "-" + std::to_string(ticks) + "-" +
+          std::to_string(sequence) + extension);
 }
 
 std::string RequireValue(int argc, char** argv, int& index, const char* option) {
@@ -225,7 +250,7 @@ int main(int argc, char** argv) {
 
   std::optional<std::filesystem::path> mock_model_path;
   if (options.model_path.empty() && options.mock_zenzai && !AZOOKEY_WITH_LLAMA_CPP) {
-    mock_model_path = std::filesystem::temp_directory_path() / "azookey_zenzai_bench_mock.gguf";
+    mock_model_path = UniqueTempPath("azookey_zenzai_bench_mock", ".gguf");
     WriteMinimalGguf(*mock_model_path);
     options.model_path = mock_model_path->string();
     options.require_zenzai = true;
@@ -237,8 +262,7 @@ int main(int argc, char** argv) {
     return options.require_model ? 1 : 0;
   }
 
-  const auto learning_path =
-      std::filesystem::temp_directory_path() / "azookey_zenzai_bench_learning.tsv";
+  const auto learning_path = UniqueTempPath("azookey_zenzai_bench_learning", ".tsv");
   std::remove(learning_path.string().c_str());
 
   azookey::learning::LearningStore store(learning_path.string());

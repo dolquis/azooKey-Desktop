@@ -56,45 +56,127 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 検出が難しい場合でも、**§4.1 の `secureApps` ベースの自動切替は必ず
 実装する**。
 
-### 4.1 `secureApps`（既定値）
+### 4.1 `secureApps`（バンドル既定リスト + ユーザー追加）
+
+`secureApps` の実効リストは **2 層**で構成する。両層とも実行ファイル
+basename の **大文字小文字を無視**（`lower()` 正規化して比較）する。
+
+1. **バンドル既定リスト** `kDefaultSecureApps`（コード内定数。アプリと
+   一緒にバージョン管理され、リリースでのみ更新される）:
 
 ```json
 [
-  "KeePass.exe",
-  "KeePassXC.exe",
-  "1Password.exe",
-  "Bitwarden.exe",
-  "LastPass.exe",
-  "CredentialUIBroker.exe",
+  "keepass.exe",
+  "keepassxc.exe",
+  "1password.exe",
+  "bitwarden.exe",
+  "lastpass.exe",
+  "credentialuibroker.exe",
   "lsass.exe"
 ]
 ```
 
-`lsass.exe` は Windows の UAC 認証ダイアログで前面に来ることがあるため
-保険として含める。ユーザーは設定で追加・削除できる。
+2. **ユーザー追加リスト** `privacy.secureApps`（設定。既定 `[]`）。
+   ユーザーが独自に追加するアプリのみを保持し、**バンドル既定を再掲しない**
+   （§7 schema の既定が `[]` なのはこのため）。
 
-### 4.2 ForegroundAppDetector
+実効判定は `effectiveSecureApps = kDefaultSecureApps ∪ lower(privacy.secureApps)`。
+`ForegroundApp.process_name`（§4.2 で `lower()` 済み）が実効集合に含まれる
+場合に自動 secure とする。`lsass.exe` は Windows の UAC 認証ダイアログで
+前面に来ることがあるため保険として含める。
 
-M48 と共用するモジュール。`tsf-tip/src/ForegroundAppDetector.cpp`
-（新規）として実装し、以下を提供する:
+> **バンドル既定の無効化（将来）**: 特定のバンドル既定をユーザーが個別に
+> 無効化する用途（`privacy.secureAppsDisabled` 等の減算）は M46 範囲外とし
+> §12 の将来拡張で扱う。M46 では実効リストを「バンドル既定 ∪ ユーザー追加」
+> とし、減算はサポートしない（プライバシーを緩める方向の操作は後送り）。
+
+#### 4.1.1 バンドル既定リストの保守手順・更新元
+
+- **更新元はリポジトリのみ**: `kDefaultSecureApps` はコード内の静的定数
+  （`tsf-tip/src/ForegroundAppDetector.cpp` に隣接する単一ヘッダ等）で定義し、
+  **ネットワーク取得・テレメトリ駆動の自動更新は行わない**（§12 および
+  `docs/app-profile-spec.md` §12「クラウド辞書はプライバシー上非対応」と整合）。
+- **更新はアプリリリース経由**: エントリの追加・削除は通常の PR としてレビュー
+  し、リリースに同梱して配布する。本 spec §4.1 のリストとコード定数は同一 PR で
+  同期し、片方だけ更新しない。
+- **掲載基準**: 広く認知された資格情報 / 秘密情報マネージャ、または OS の認証
+  ブローカ（`CredentialUIBroker.exe` / `lsass.exe` 等）に限る。一般アプリは誤検出で
+  ユーザーの学習機会を不必要に奪うため入れない。追加 PR には掲載基準を満たす
+  根拠を記載する。
+- **照合規約**: basename の完全一致（パス・引数を含めない）で `lower()` 比較する。
+  ワイルドカード・正規表現は使わない（M46 範囲外）。
+
+### 4.2 ForegroundAppDetector（共有・正準定義）
+
+M46 が導入し M48（`docs/app-profile-spec.md`）と**共用する正準コンポーネント**。
+TIP プロセス側 `tsf-tip/src/ForegroundAppDetector.cpp`（新規）に**単一
+インスタンス**として実装し、自動 secure 判定（§4）と M48 の per-request
+`app` フィールド（app-profile §3.1）の双方を、この 1 つの検出器から供給する
+（二重実装を作らない。`docs/windows-tsf-host-architecture.md` のコンポーネント
+一覧と整合）。app-profile §3 は本定義を参照し、再定義しない。
 
 ```cpp
 struct ForegroundApp {
-  std::wstring process_name;   // "KeePass.exe"
-  std::wstring window_class;   // "Notepad" / "Chrome_WidgetWin_1"
-  std::wstring window_title;   // best-effort, 機密の可能性あり
-  uint32_t window_title_hash;  // 学習用 hash
+  bool         resolved = false;       // 解決可否（false = 前面/プロセス取得不可）
+  std::wstring process_name;           // "keepass.exe"（basename, lower() 正規化）
+  std::wstring window_class;           // "Notepad" / "Chrome_WidgetWin_1"
+  uint32_t     window_title_hash = 0;  // 学習・IPC 用 hash（FNV-1a 等）
+
+  // 検出器プロセス内専用。IPC payload にもログにも載せない（§8 / dev-infra §7.6）。
+  // hash 計算と将来のパスワード欄ヒューリスティック（§12）のためだけに保持する。
+  std::wstring window_title;
 };
 
 class ForegroundAppDetector {
 public:
-  ForegroundApp Current();           // 500ms TTL キャッシュ
-  void Invalidate();                  // フォーカス変更時
+  const ForegroundApp& Current();    // 500ms TTL キャッシュ（§4.3）
+  void Invalidate();                  // フォーカス変更時に次回 Current() を強制再解決
 };
 ```
 
-`window_title` 自体は機密の可能性があるため、Host へ送る IPC payload
-には `window_title_hash` のみを含める（M41 §7.6 と整合）。
+`process_name` は検出器境界で `lower()` 正規化し、全消費側（`secureApps` 照合 /
+M48 `AppProfileResolver` lookup）が小文字で比較できるようにする。`window_title`
+生値は機密の可能性があるため、Host へ送る IPC payload には `window_title_hash`
+のみを含める（§8 / `docs/dev-infrastructure-spec.md` §7.6 と整合）。
+
+### 4.3 キャッシュ戦略・スレッド・解決機構・フェイルクローズ
+
+**スレッド親和性**: `Current()` / `Invalidate()` は TIP の STA スレッド（TSF
+コールバックスレッド）から呼ぶ。検出器は IPC を行わずブロッキングしない
+（per-keystroke 呼び出しに耐える軽量同期処理）。
+
+**キャッシュ（500ms TTL + イベント無効化）**:
+
+- `Current()` は前回解決から 500ms 以内ならキャッシュ値を返し、超過時のみ
+  再解決する。500ms TTL はイベント取りこぼし（同一ウィンドウのタイトル変更など）
+  に対するバックストップ。
+- フォーカス変更は `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, …,
+  WINEVENT_OUTOFCONTEXT)` で監視し、コールバックで `Invalidate()` を呼ぶ。次回
+  `Current()` は TTL を待たず即再解決する。
+- 優先順位: **イベント無効化が TTL に優先**（無効化されたら必ず再解決）、TTL は
+  イベント間の上限。フック登録は検出器生成時、解除は破棄時に行いリークさせない。
+
+**解決機構**:
+
+1. `GetForegroundWindow()` → `GetWindowThreadProcessId()`
+2. `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, …)`
+3. `QueryFullProcessImageNameW` で実行ファイルパス → basename → `lower()`
+   （`docs/rich-features-spec.md` §X-4-4 の `K32GetModuleFileNameExW` 経路は本定義で
+   置換する。UWP / 保護プロセスでの取得性が高い方を正典とする）
+4. `RealGetWindowClassW` で `window_class`
+5. `window_title`（内部専用）→ `window_title_hash`
+
+**フェイルクローズ（fail closed）**: 前面ウィンドウ / プロセス名が解決できない
+場合（HWND が null、`OpenProcess` が UIPI で拒否される＝TIP 非昇格で**昇格アプリ**が
+前面、など）、`ForegroundApp{ resolved = false }` を返す。§2「fail closed」原則に従い:
+
+- **プライバシー軸**: `autoSecureInput = true`（既定）のとき、解決不能な前面は
+  **secure 扱い**にする（アプリが見えない＝機密の可能性があるため安全側へ）。
+- **プロファイル軸（M48）**: 解決不能時はプロファイル未適用＝`default` / グローバルで
+  扱う（boost なし）。プロファイルは非プライバシー軸のため fail-closed の対象外。
+
+この非対称により、検出不能でも学習・外部 AI が秘密入力へ漏れない一方、通常の
+候補生成は素の挙動を維持する。
 
 ## 5. secure 中の挙動契約
 
@@ -171,18 +253,16 @@ public:
     "disableLearningInPrivateMode": true,
     "disableExternalAIInPrivateMode": true,
     "redactLogs": true,
-    "secureApps": [
-      "KeePass.exe", "KeePassXC.exe",
-      "1Password.exe", "Bitwarden.exe",
-      "LastPass.exe", "CredentialUIBroker.exe",
-      "lsass.exe"
-    ],
+    "secureApps": [],
     "secureUrlPatterns": [],
     "privateApps": [],
     "showSecureIndicator": true
   }
 }
 ```
+
+`secureApps` には §4.1 のバンドル既定を再掲せず、ユーザー追加分のみを保存する
+（既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
 schema fragment（`properties.privacy` への追加）:
 

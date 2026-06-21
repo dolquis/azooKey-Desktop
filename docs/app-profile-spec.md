@@ -29,9 +29,17 @@
 ## 3. ForegroundAppDetector
 
 M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
-`ForegroundApp` 構造体（process_name / window_class / window_title_hash）
-を取得し、500ms TTL でキャッシュ。フォーカス変更（`WinEventHookProc`
-監視）で invalidate する。
+**`ForegroundApp` 構造体・キャッシュ戦略・スレッド親和性・解決機構・
+fail-closed の正準定義は `docs/privacy-and-secure-input-spec.md` §4.2 / §4.3**
+とし、本 spec では再定義しない。M48 は同一インスタンスから `ForegroundApp`
+（`process_name` は `lower()` 正規化済み / `window_class` / `window_title_hash`）
+を取得する。`window_title` 生値は検出器プロセス内専用で IPC には出さない（§3.1）。
+フォーカス変更時の invalidate（`EVENT_SYSTEM_FOREGROUND`）と 500ms TTL も §4.3 に従う。
+
+`ForegroundApp.resolved == false`（前面 / プロセス名が解決不能）の場合、M48 は
+プロファイル未適用＝`default` / グローバルで扱う（boost なし）。プライバシー軸の
+fail-closed（解決不能を secure 扱い）は M46 §4.3 が担当し、プロファイル軸はそれに
+従属する。
 
 ### 3.1 Host への伝達
 
@@ -131,7 +139,7 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
         "preferTechnicalTerms": { "type": "boolean", "default": false },
         "candidateTagBoosts": {
           "type": "object",
-          "additionalProperties": { "type": "number" },
+          "additionalProperties": { "type": "number", "minimum": 1.0, "maximum": 3.0 },
           "default": {}
         },
         "privacyMode": {
@@ -160,6 +168,37 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 | `preferTechnicalTerms` | bool | false | 技術語辞書を boost |
 | `candidateTagBoosts` | map | {} | 候補タグ名 → 倍率（M52 ベンチで定義する候補タグ `Technical` / `Polite` / `English` 等。M53 の辞書エントリ category（`person_name` 等）に作用する `dictionary.categoryBoosts` とは **別 namespace**。詳細は `docs/auto-word-registration-spec.md` §14.5 を参照） |
 | `privacyMode` | enum | "inherit" | `inherit` / `normal` / `private` / `secure` |
+
+### 4.2 フィールド制約と backend 優先順位（確定）
+
+**`candidateTagBoosts` の値域**: 各倍率は `[1.0, 3.0]`（schema で `minimum: 1.0` /
+`maximum: 3.0`）。実行時も §7 の `max(1.0, …)` で下限をクランプし、**下げ方向には
+使わない**（1.0 未満は 1.0 として扱う no-op）。3.0 は暴走防止の上限（3× 倍率で実質
+最上位を占有するため十分）。未知のタグ名は無視する（forward-compat。タグ namespace は
+M52 ベンチの `Technical` / `English` / `Polite` / `Casual` / `NamedEntity` 等）。
+
+**`aiBackend` の `auto` センチネルと root enum の整合**: プロファイルの `aiBackend`
+enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファイル専用
+センチネル**で「グローバル `settings.aiBackend` を継承」を意味する。root の
+`settings.aiBackend` は具体値のみ（`["none", "openai", "local-zenzai"]`、`auto` を
+持たない）。実装は `auto` を root へ書き戻さず、解決時に `settings.aiBackend` へ展開する。
+
+**secure / offline / private が profile に優先（backend 制約）**: 解決後の実効
+プライバシーモード（M46 §3 / 本書 §5 の通知結果）は `profile.aiBackend` に優先する。
+優先順位を以下に確定する:
+
+1. 実効モード `secure` → `aiBackend = none` 強制（profile・global を上書き）。学習・
+   予測・外部 AI も M46 §5 の抑止契約に従う。
+2. 実効モード `offline`（グローバル専用）または `private` → 外部 `openai` を禁止。
+   `openai` 指定はモデル搭載時 `local-zenzai` へ降格、未搭載なら `none`。`auto` /
+   `local-zenzai` は許可。
+3. 上記以外 → `profile.aiBackend` を適用（`auto` は `settings.aiBackend` へ展開）。
+
+**`privacyMode` enum の範囲**: profile の `privacyMode` は
+`["inherit", "normal", "private", "secure"]` とし、`offline` / `custom` を **per-app
+では持たない**。`offline`（ネットワーク禁止）は端末全体のグローバル方針、`custom` は
+上級者向けグローバル詳細指定であり、アプリ単位では意味が薄く誤設定リスクも高いため
+M48 では除外する（グローバル `privacy.mode` で扱う）。
 
 ## 5. 解決順
 
@@ -204,17 +243,19 @@ M48 の resolver は `profilesByApp[process_name.lower()]` で lookup する
 揃える。M48 では以下の移行戦略をとる:
 
 1. `profilesByApp[process.lower()].promptPrefix` を優先
-2. それが未設定なら `promptPrefixByApp[process.lower()]` を読む
-   （`SettingsManager` 読み込み時に大文字混在キーは `lower()` 正規化済み）
+2. それが**未設定**（プロファイル不在、または `promptPrefix` が既定の空文字 `""`）
+   なら `promptPrefixByApp[process.lower()]` を読む（`SettingsManager` 読み込み時に
+   大文字混在キーは `lower()` 正規化済み）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
 4. M48 リリース後 3 マイナーバージョンで `promptPrefixByApp` 削除予定
    （deprecation warning を CHANGELOG に記載）
 
 `SettingsManager` で読み込み時に統合し、内部表現は `profilesByApp`
-ベースに統一する。lower 化で衝突した既存キー（例: `Code.exe` と
-`code.exe` の両方）は最後に読み込んだ値を採用し、warning を `azookey_diag.exe`
-に記録する。
+ベースに統一する。lower 化で衝突した既存キー（例: `Code.exe` と `code.exe` の
+両方）は、**JSON のキー列挙順に依存しない決定的規則**として、衝突元キーを Unicode
+コードポイント順で昇順ソートし**末尾（最大）を採用**、warning を `azookey_diag.exe`
+に記録する（map 反復順による非決定を避けるための明示規則）。
 
 ## 7. 候補タグ Boost
 

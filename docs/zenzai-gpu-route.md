@@ -59,8 +59,9 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
   2026-05-20 Debug build baseline: p50=0.0179ms, p95=0.0249ms, p99=0.052ms。
 - Zenzai CPU: `bench/azookey_zenzai_bench.exe --model <gguf>`（または
   `AZOOKEY_ZENZAI_MODEL=<gguf>`）で `LoadModel` 成功、初回ロード時間、p50/p95/p99、
-  `zenzai_candidates`、先頭候補の `debug_info` を記録する。モデル未指定時は
-  `status=skipped` で成功終了し、CTest では `--mock-zenzai` で no-egress smoke を行う。
+  `zenzai_candidates`、先頭候補の `debug_info`、`requested_backend`、
+  `effective_backend`、`load_warning` を記録する。モデル未指定時は `status=skipped`
+  で成功終了し、CTest では `--mock-zenzai` で no-egress smoke を行う。
 - Zenzai CUDA: CUDA 未配線・初期化失敗時に CPU または `SimpleConverter` へフォールバック。
 
 ## 将来拡張

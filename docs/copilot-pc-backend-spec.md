@@ -167,7 +167,8 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
 
 - 同一プロンプト「こんにちは」「日本語」「今日は良い天気です」等 20 件を各経路で実行。
 - R1 メトリクス: 初回 `LoadModel` 時間 / P50・P95・P99 推論レイテンシ /
-  `zenzai_candidates` / 先頭候補 `debug_info`。実行は
+  `zenzai_candidates` / 先頭候補 `debug_info` / `requested_backend` /
+  `effective_backend` / `load_warning`。実行は
   `azookey_zenzai_bench --model <gguf>` または `AZOOKEY_ZENZAI_MODEL=<gguf>`。
 - R2 比較メトリクス: 初回 LoadModel 時間 / P50 推論レイテンシ / RSS / 実効配布サイズ。
 - 判定ゲート（重み順）:

@@ -63,6 +63,9 @@ std::string EnvOrEmpty(const char* name) {
 
 size_t ParseSize(const std::string& value, const char* name) {
   try {
+    if (!value.empty() && value.front() == '-') {
+      throw std::invalid_argument("negative value");
+    }
     size_t idx = 0;
     const auto parsed = std::stoull(value, &idx, 10);
     if (idx != value.size()) {
@@ -112,6 +115,7 @@ std::string RequireValue(int argc, char** argv, int& index, const char* option) 
 Options ParseOptions(int argc, char** argv) {
   Options options;
   options.model_path = EnvOrEmpty("AZOOKEY_ZENZAI_MODEL");
+  bool model_path_from_cli = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -121,6 +125,7 @@ Options ParseOptions(int argc, char** argv) {
     }
     if (arg == "--model") {
       options.model_path = RequireValue(argc, argv, i, "--model");
+      model_path_from_cli = true;
     } else if (arg == "--input") {
       options.input = RequireValue(argc, argv, i, "--input");
     } else if (arg == "--context") {
@@ -155,6 +160,9 @@ Options ParseOptions(int argc, char** argv) {
     }
   }
 
+  if (options.mock_zenzai && !model_path_from_cli) {
+    options.model_path.clear();
+  }
   if (options.iterations == 0) {
     throw std::invalid_argument("--iterations must be greater than 0");
   }
@@ -185,11 +193,22 @@ double Percentile(const std::vector<double>& sorted, double percentile) {
 }
 
 bool HasZenzaiTag(const azookey::core::Candidate& candidate) {
-  return candidate.debug_info.find("zenzai") != std::string::npos;
+  return candidate.source == azookey::core::CandidateSource::Model &&
+         candidate.debug_info.rfind("zenzai;", 0) == 0;
 }
 
 std::string OptionalString(const std::optional<std::string>& value) {
   return value ? *value : std::string("none");
+}
+
+std::string BackendName(azookey::host::BackendKind backend) {
+  switch (backend) {
+    case azookey::host::BackendKind::Cpu:
+      return "cpu";
+    case azookey::host::BackendKind::Cuda:
+      return "cuda";
+  }
+  return "unknown";
 }
 
 }  // namespace
@@ -282,6 +301,9 @@ int main(int argc, char** argv) {
   std::cout << std::fixed << std::setprecision(4) << "status=ok"
             << " llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
             << " mock_zenzai=" << (load_options.mock_zenzai_candidates_for_tests ? 1 : 0)
+            << " requested_backend=" << BackendName(options.backend)
+            << " effective_backend=" << BackendName(engine.backend())
+            << " load_warning=" << OptionalString(load_result.error)
             << " model_loaded=" << (engine.model_loaded() ? 1 : 0) << " load_ms=" << load_ms
             << " p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99
             << " iterations=" << options.iterations << " candidates=" << last_candidates.size()

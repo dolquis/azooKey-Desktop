@@ -45,7 +45,12 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 
 ## 4. 自動 secure 判定
 
-以下のいずれかに該当した場合、モードを一時的に `secure` とする:
+本章の自動 secure 判定は **`privacy.autoSecureInput`（§7、既定 `true`）が有効なときのみ**
+動作する。`autoSecureInput=false` の場合、`secureApps` 一致・パスワード欄・URL パターンの
+いずれの自動判定も行わず（§4.3 の解決不能時 fail-closed も含め auto-secure しない）、secure は
+ユーザーが明示設定したときのみ有効になる。
+
+以下のいずれかに該当した場合（`autoSecureInput` 有効時）、モードを一時的に `secure` とする:
 
 | 判定 | 実装 | 優先 |
 |---|---|---|
@@ -82,8 +87,8 @@ basename の **大文字小文字を無視**（`lower()` 正規化して比較�
 
 実効判定は `effectiveSecureApps = kDefaultSecureApps ∪ lower(privacy.secureApps)`。
 `ForegroundApp.process_name`（§4.2 で `lower()` 済み）が実効集合に含まれる
-場合に自動 secure とする。`lsass.exe` は Windows の UAC 認証ダイアログで
-前面に来ることがあるため保険として含める。
+場合、`autoSecureInput` 有効時（§4 前段）に自動 secure とする。`lsass.exe` は
+Windows の UAC 認証ダイアログで前面に来ることがあるため保険として含める。
 
 > **バンドル既定の無効化（将来）**: 特定のバンドル既定をユーザーが個別に
 > 無効化する用途（`privacy.secureAppsDisabled` 等の減算）は M46 範囲外とし

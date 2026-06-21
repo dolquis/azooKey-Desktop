@@ -262,7 +262,7 @@ learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸�
 | `PredictionAllowed()` | `privacy.custom.prediction` | `true` |
 | `AiCandidateAllowed()` | `privacy.custom.aiCandidate` | `true` |
 | `ExternalAiAllowed()` | `privacy.custom.externalAi ∧ privacy.custom.aiCandidate` | `false` |
-| `DetailedLoggingAllowed()` | `privacy.custom.detailedLogging` | `false` |
+| `DetailedLoggingAllowed()` | `privacy.custom.detailedLogging ∧ ¬privacy.redactLogs` | `false`（`redactLogs` 既定 `true` のため） |
 
 **解決順（precedence）**:
 
@@ -276,6 +276,12 @@ learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸�
    `aiCandidate = false` のときは `externalAi` の保存値によらず `ExternalAiAllowed() = false` に
    強制する（AI 候補生成を止めるなら外部送信も止まる、の安全側固定）。このとき backend は
    `none`（ローカル zenzai も外部 LLM も動かさない。§5.1 と整合）。
+4. **`redactLogs` は詳細ログの floor**: `DetailedLoggingAllowed()` は per-axis フラグ単独では
+   true にならず、`privacy.redactLogs = false`（既定 `true`）を併せて満たす場合のみ true になる。
+   `privacy.custom.detailedLogging = true` でも `redactLogs = true` の間は本文系フィールドを
+   redact し続ける（`docs/dev-infrastructure-spec.md` §7.6 優先順位 2「DetailedLoggingAllowed()
+   は mode と `redactLogs` を集約した正典クエリ」と整合。`custom` でも `redactLogs` を迂回しない）。
+   これにより Debug + `AZOOKEY_LOG_BODY=1` であっても、`redactLogs` が有効な限り入力本文は出力されない。
 
 **既定の意味**: per-axis 既定（learning OFF / prediction ON / aiCandidate ON / externalAi OFF /
 detailedLogging OFF）は §2「fail closed」に沿った private 相当の安全側であり、軸を 1 つも

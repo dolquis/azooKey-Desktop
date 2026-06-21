@@ -59,6 +59,8 @@ TEST_F(SimpleConverterTsvTest, TsvLoad) {
                "\n"
                "あずきい\tazooKey\t1.0\tuser\n"
                "あずきい\tあずきい\t0.4\tidentity\n"
+               "あずきい\tNaN候補\tnan\tuser\n"
+               "あずきい\tInf候補\tinf\tuser\n"
                "malformed line without tabs\n"
                "てすと\tテスト\tnotanumber\tuser\n");  // last row dropped (bad score)
 
@@ -79,6 +81,8 @@ TEST_F(SimpleConverterTsvTest, TsvLoad) {
   ASSERT_NE(identity_candidate, nullptr);
   EXPECT_EQ(identity_candidate->source, azookey::core::CandidateSource::Heuristic);
   EXPECT_EQ(identity_candidate->debug_info, "identity");
+  EXPECT_EQ(FindCandidate(candidates, "NaN候補"), nullptr);
+  EXPECT_EQ(FindCandidate(candidates, "Inf候補"), nullptr);
 
   // Built-in entry is preserved alongside TSV entries.
   const auto nihon = converter.Convert("にほん", azookey::core::ConversionContext{});
@@ -161,6 +165,8 @@ TEST_F(SimpleConverterTsvTest, BigramTsvLoadsAdditionalPairsAndSkipsBadRows) {
                "# comment line\n"
                "\n"
                "ctx\tbad\tnotanumber\n"
+               "ctx\tbad\tnan\n"
+               "ctx\tbad\tinf\n"
                "ctx\tvalid\t0.2\n"
                "malformed line without tabs\n"
                "\tmissing-key\t0.5\n"

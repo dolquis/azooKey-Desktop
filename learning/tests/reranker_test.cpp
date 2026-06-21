@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -74,6 +75,29 @@ TEST(RerankerTest, StableSortOnTie) {
   EXPECT_EQ(out[0].surface, "A");
   EXPECT_EQ(out[1].surface, "B");
   EXPECT_EQ(out[2].surface, "C");
+}
+
+TEST(RerankerTest, DropsNonFiniteScoresBeforeSorting) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_reranker_nonfinite.tsv").string();
+  std::remove(path.c_str());
+  learn::LearningStore store(path);
+  learn::Reranker reranker(&store);
+
+  store.Observe("x", "boosted-inf", std::numeric_limits<double>::infinity(), /*now=*/100);
+
+  auto cands = MakeCandidates({
+                                  {"finite", 1.0},
+                                  {"nan", std::numeric_limits<double>::quiet_NaN()},
+                                  {"inf", std::numeric_limits<double>::infinity()},
+                                  {"boosted-inf", 1.0},
+                              },
+                              "x");
+  auto out = reranker.Apply("x", std::move(cands), /*now=*/100);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out.front().surface, "finite");
+
+  std::remove(path.c_str());
 }
 
 TEST(RerankerTest, LearningBoostFlipsTop) {

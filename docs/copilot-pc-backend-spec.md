@@ -161,10 +161,16 @@ for (uint32_t i = 0; i < adapter_list->GetAdapterCount(); ++i) {
 
 ### 4.2 計測スパイク（bench）
 
-`bench/zenzai_backend_bench.cpp`（新規）で R1 / R2 を横断計測する。
+R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
+（生成物 `azookey_zenzai_bench`）で行う。R2（Windows ML）比較スパイクでは、
+この CLI と同じ入力セット・出力メトリクスに揃えて横断計測する。
 
 - 同一プロンプト「こんにちは」「日本語」「今日は良い天気です」等 20 件を各経路で実行。
-- メトリクス: 初回 LoadModel 時間 / P50 推論レイテンシ / RSS / 実効配布サイズ。
+- R1 メトリクス: 初回 `LoadModel` 時間 / P50・P95・P99 推論レイテンシ /
+  `zenzai_candidates` / 先頭候補 `debug_info` / `requested_backend` /
+  `effective_backend` / `load_warning`。実行は
+  `azookey_zenzai_bench --model <gguf>` または `AZOOKEY_ZENZAI_MODEL=<gguf>`。
+- R2 比較メトリクス: 初回 LoadModel 時間 / P50 推論レイテンシ / RSS / 実効配布サイズ。
 - 判定ゲート（重み順）:
   1. P50 推論レイテンシ < 30ms
   2. 実効配布サイズ < 50MB（EP 非バンドル前提で R2 が有利）

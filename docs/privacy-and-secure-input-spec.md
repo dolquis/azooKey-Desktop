@@ -236,6 +236,16 @@ public:
 `ExternalAiAllowed()=false`（ローカルのみ）。`docs/app-profile-spec.md` §4.2 の backend
 解決はこの 2 クエリを参照する。
 
+**`custom` モードの per-axis スキーマは本 spec スコープ外（deferred → DEV-319）**: §3 の
+`custom`（個別指定）を永続化する per-axis スキーマ（`privacy.custom.*` で learning /
+prediction / external-AI / AI-candidate / logging を個別指定）と各 PrivacyGate クエリへの
+対応は M46 の別設計項目（**DEV-319**）とし、本 PR（DEV-121）では確定しない。**安全な暫定
+既定**: 当該スキーマが入るまで `privacy.mode = custom` は `private` 相当に解決する
+（`LearningAllowed()=false` / `PredictionAllowed()=true` / `ExternalAiAllowed()=false` /
+`AiCandidateAllowed()=true` / `DetailedLoggingAllowed()=false`。AI 候補はローカルのみ・
+外部送信なし・学習なし・ログ最小）。これにより custom の per-axis フラグが未定義でも Host の
+挙動は一意で、AI 候補生成・外部送信が曖昧にならない。
+
 ## 6. UI 表示
 
 候補ウィンドウ下部 or 設定アプリで現在のプライバシー状態を確認できる。

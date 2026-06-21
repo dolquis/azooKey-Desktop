@@ -743,7 +743,8 @@ named_entity 系（`person_name` / `place_name` / `station_name` / `product_name
 
 M48 の `candidateTagBoosts`（候補タグ boost）は `dictionary_score` の因子では
 **ない**（§14.5）。M48 タグ boost は `docs/app-profile-spec.md` §7 が候補の
-`final_score` に対し `final_score *= max(1.0, candidateTagBoosts[tag])` を **1 回
+`final_score` に対し §7 正準の clamp 式
+`final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]）を **1 回
 だけ**適用する（DictionaryStore 由来候補にも §14.12 で付与した単一タグに基づき
 同経路で作用。二重適用を避けるため `dictionary_score` には入れない）。
 
@@ -762,7 +763,7 @@ dictionary_score
 
 その後、M48 タグ boost は app-profile-spec §7 が `final_score` に対して別途
 適用する（"TensorRT" は §14.12 で `Technical` タグが付くため
-`final_score *= max(1.0, 1.5)`。`dictionary_score` 内では二重適用しない）。
+`final_score *= min(3.0, max(1.0, 1.5))`（= 1.5）。`dictionary_score` 内では二重適用しない）。
 `dictionary_score` の正規化は不要（DictionaryStore 内の相対ランク + merge
 ブースト量として使用）。本例（`dictionary_score = 1.32`）は単体テストの
 期待値とする（§14.13）。
@@ -797,7 +798,7 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   同時 boost は行わない（multi-tag 化は X-2-3 / IPC のスキーマ変更を要し本仕様
   の前提外。将来 `CandidateTag` がリスト化されれば本 precedence を緩和できる）。
 - 付与された単一タグに対する M48 boost は **app-profile-spec §7** が
-  `final_score *= max(1.0, candidateTagBoosts[tag])` として 1 回適用する
+  §7 正準の clamp 式 `final_score *= min(3.0, max(1.0, candidateTagBoosts[tag]))`（[1.0, 3.0]）として 1 回適用する
   （"TensorRT" は `Technical` が選ばれる）。`dictionary_score`（§14.11）には
   含めない（二重適用回避）。
 - 候補タグの確定 taxonomy は M52 ベンチで定義する。上表は既知タグ

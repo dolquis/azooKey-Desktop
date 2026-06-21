@@ -43,6 +43,11 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 既定モードは `normal`。ユーザーが明示的に変更しない限り、自動 secure
 判定（§4）でのみ一時的に `secure` へ落とす。
 
+`custom`（個別指定）は固定プリセットを持たず、learning / prediction /
+external-AI / AI-candidate / detailed-logging の 5 軸をユーザーが個別に
+指定する上級者向けモードである。各軸を永続化する per-axis スキーマと
+PrivacyGate クエリへの解決は §5.2 / §7（`privacy.custom`）で定義する。
+
 ## 4. 自動 secure 判定
 
 本章の自動 secure 判定は **`privacy.autoSecureInput`（§7、既定 `true`）が有効なときのみ**
@@ -236,15 +241,57 @@ public:
 `ExternalAiAllowed()=false`（ローカルのみ）。`docs/app-profile-spec.md` §4.2 の backend
 解決はこの 2 クエリを参照する。
 
-**`custom` モードの per-axis スキーマは本 spec スコープ外（deferred → DEV-319）**: §3 の
-`custom`（個別指定）を永続化する per-axis スキーマ（`privacy.custom.*` で learning /
-prediction / external-AI / AI-candidate / logging を個別指定）と各 PrivacyGate クエリへの
-対応は M46 の別設計項目（**DEV-319**）とし、本 PR（DEV-121）では確定しない。**安全な暫定
-既定**: 当該スキーマが入るまで `privacy.mode = custom` は `private` 相当に解決する
-（`LearningAllowed()=false` / `PredictionAllowed()=true` / `ExternalAiAllowed()=false` /
-`AiCandidateAllowed()=true` / `DetailedLoggingAllowed()=false`。AI 候補はローカルのみ・
-外部送信なし・学習なし・ログ最小）。これにより custom の per-axis フラグが未定義でも Host の
-挙動は一意で、AI 候補生成・外部送信が曖昧にならない。
+**`custom` モードの per-axis スキーマ（DEV-319 で確定）**: §3 の `custom`（個別指定）は、
+learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸を `privacy.custom`
+（§7）で個別に永続化する。各 PrivacyGate クエリと per-axis フラグの対応・解決順・既定は
+**§5.2** で定義する。DEV-121（PR #145）で暫定的に置いた「`privacy.mode = custom` → `private`
+相当」の fallback は、§5.2 の per-axis 既定（未指定軸は private 相当の安全側）に置換される。
+軸を 1 つも指定しない `custom` は従来どおり private 相当に解決するため、移行は後方互換である。
+
+### 5.2 `custom` モードの per-axis 解決
+
+`privacy.mode = custom` のとき、各 PrivacyGate クエリは `privacy.custom`（§7）の対応フラグを
+返す。`custom` は §3 の他モードのような固定プリセットを持たず、軸ごとにユーザーが許可・抑止
+を指定する上級者向けモードである。
+
+**クエリと per-axis フラグの対応**:
+
+| PrivacyGate クエリ | backing フラグ | 既定 |
+|---|---|---|
+| `LearningAllowed()` | `privacy.custom.learning` | `false` |
+| `PredictionAllowed()` | `privacy.custom.prediction` | `true` |
+| `AiCandidateAllowed()` | `privacy.custom.aiCandidate` | `true` |
+| `ExternalAiAllowed()` | `privacy.custom.externalAi ∧ privacy.custom.aiCandidate` | `false` |
+| `DetailedLoggingAllowed()` | `privacy.custom.detailedLogging ∧ ¬privacy.redactLogs` | `false`（`redactLogs` 既定 `true` のため） |
+
+**解決順（precedence）**:
+
+1. **secure が最優先**（§2）。自動 secure 判定（§4）または明示 secure の間は `custom` の
+   per-axis フラグを無視し、§5 の secure 契約（全軸抑止・backend `none`・ログ redaction）を
+   適用する。`custom` は secure を緩めない。
+2. secure でないとき `mode = custom` なら、各クエリは上表の backing フラグをそのまま返す。
+   未指定の軸は §7 schema の既定（= private 相当の安全側）で補完するため、欠落キーがあっても
+   挙動は一意に定まる。
+3. **不変条件の強制**: §5.1 の `ExternalAiAllowed() ⇒ AiCandidateAllowed()` を保つため、
+   `aiCandidate = false` のときは `externalAi` の保存値によらず `ExternalAiAllowed() = false` に
+   強制する（AI 候補生成を止めるなら外部送信も止まる、の安全側固定）。このとき backend は
+   `none`（ローカル zenzai も外部 LLM も動かさない。§5.1 と整合）。
+4. **`redactLogs` は詳細ログの floor**: `DetailedLoggingAllowed()` は per-axis フラグ単独では
+   true にならず、`privacy.redactLogs = false`（既定 `true`）を併せて満たす場合のみ true になる。
+   `privacy.custom.detailedLogging = true` でも `redactLogs = true` の間は本文系フィールドを
+   redact し続ける（`docs/dev-infrastructure-spec.md` §7.6 優先順位 2「DetailedLoggingAllowed()
+   は mode と `redactLogs` を集約した正典クエリ」と整合。`custom` でも `redactLogs` を迂回しない）。
+   これにより Debug + `AZOOKEY_LOG_BODY=1` であっても、`redactLogs` が有効な限り入力本文は出力されない。
+
+**既定の意味**: per-axis 既定（learning OFF / prediction ON / aiCandidate ON / externalAi OFF /
+detailedLogging OFF）は §2「fail closed」に沿った private 相当の安全側であり、軸を 1 つも
+指定しない `custom` は private と同じ実効挙動になる。これにより DEV-121 の暫定 fallback
+（`custom` → `private`）が後方互換に置換される。
+
+**他設定との関係**: `disableLearningInPrivateMode` / `disableExternalAIInPrivateMode`（§7）は
+`private` モード専用のトグルであり、`custom` には適用しない（`custom` では `privacy.custom.*`
+が唯一の権威）。`docs/app-profile-spec.md` §4.2 の backend 解決は、`custom` でも
+`AiCandidateAllowed()` / `ExternalAiAllowed()` の 2 クエリ経由で一貫して評価される。
 
 ## 6. UI 表示
 
@@ -274,6 +321,13 @@ prediction / external-AI / AI-candidate / logging を個別指定）と各 Priva
 {
   "privacy": {
     "mode": "normal",
+    "custom": {
+      "learning": false,
+      "prediction": true,
+      "externalAi": false,
+      "aiCandidate": true,
+      "detailedLogging": false
+    },
     "autoSecureInput": true,
     "disableLearningInPrivateMode": true,
     "disableExternalAIInPrivateMode": true,
@@ -289,6 +343,10 @@ prediction / external-AI / AI-candidate / logging を個別指定）と各 Priva
 `secureApps` には §4.1 のバンドル既定を再掲せず、ユーザー追加分のみを保存する
 （既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
+`privacy.custom` は `mode = custom` のときのみ参照する（他モードでは無視する）。
+各軸の既定は §5.2 の private 相当の安全側に揃え、欠落キーは schema 既定で補完される。
+`custom` の解決順・不変条件（`aiCandidate = false` で `externalAi` を強制 OFF）は §5.2 を正典とする。
+
 schema fragment（`properties.privacy` への追加）:
 
 ```json
@@ -301,6 +359,24 @@ schema fragment（`properties.privacy` への追加）:
         "type": "string",
         "enum": ["normal", "private", "secure", "offline", "custom"],
         "default": "normal"
+      },
+      "custom": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "learning": { "type": "boolean", "default": false },
+          "prediction": { "type": "boolean", "default": true },
+          "externalAi": { "type": "boolean", "default": false },
+          "aiCandidate": { "type": "boolean", "default": true },
+          "detailedLogging": { "type": "boolean", "default": false }
+        },
+        "default": {
+          "learning": false,
+          "prediction": true,
+          "externalAi": false,
+          "aiCandidate": true,
+          "detailedLogging": false
+        }
       },
       "autoSecureInput": { "type": "boolean", "default": true },
       "disableLearningInPrivateMode": { "type": "boolean", "default": true },

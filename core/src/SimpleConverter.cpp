@@ -60,6 +60,12 @@ const std::unordered_map<std::string, double>* FindLongestBigramMatch(
   return best;
 }
 
+bool PrefixFallbackRankLess(const Candidate& lhs, const Candidate& rhs) {
+  if (lhs.score != rhs.score) return lhs.score > rhs.score;
+  if (lhs.reading != rhs.reading) return lhs.reading < rhs.reading;
+  return lhs.surface < rhs.surface;
+}
+
 }  // namespace
 
 SimpleConverter::SimpleConverter() {
@@ -163,8 +169,7 @@ std::vector<Candidate> SimpleConverter::Convert(const std::string& kana, const C
       }
     }
     if (!prefix_hits.empty()) {
-      std::sort(prefix_hits.begin(), prefix_hits.end(),
-                [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
+      std::stable_sort(prefix_hits.begin(), prefix_hits.end(), PrefixFallbackRankLess);
       if (prefix_hits.size() > 10) prefix_hits.resize(10);
       candidates = std::move(prefix_hits);
     } else {

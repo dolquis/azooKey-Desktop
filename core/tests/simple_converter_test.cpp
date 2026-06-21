@@ -272,6 +272,39 @@ TEST_F(SimpleConverterTsvTest, LongReadingPrefixFallback) {
   EXPECT_EQ(cands.front().reading, "あずきいきーぼーど");
 }
 
+TEST_F(SimpleConverterTsvTest, PrefixFallbackTiesUseDeterministicTopKOrder) {
+  const std::string path = "simple_converter_prefix_tie_fixture.tsv";
+  WriteFixture(path,
+               "prefix-l\tlima\t1.0\tfixture\n"
+               "prefix-a\tbeta\t1.0\tfixture\n"
+               "prefix-k\tkilo\t1.0\tfixture\n"
+               "prefix-c\tcharlie\t1.0\tfixture\n"
+               "prefix-a\talpha\t1.0\tfixture\n"
+               "prefix-j\tjuliet\t1.0\tfixture\n"
+               "prefix-e\techo\t1.0\tfixture\n"
+               "prefix-h\thotel\t1.0\tfixture\n"
+               "prefix-d\tdelta\t1.0\tfixture\n"
+               "prefix-g\tgolf\t1.0\tfixture\n"
+               "prefix-i\tindia\t1.0\tfixture\n"
+               "prefix-f\tfoxtrot\t1.0\tfixture\n"
+               "prefix-b\tbravo\t1.0\tfixture\n");
+
+  azookey::core::SimpleConverter converter;
+  ASSERT_TRUE(converter.LoadFromTsv(path));
+
+  const auto cands = converter.Convert("prefix", azookey::core::ConversionContext{});
+  ASSERT_EQ(cands.size(), 10u);
+  const std::vector<std::string> expected_surfaces = {
+      "alpha", "beta", "bravo", "charlie", "delta",
+      "echo", "foxtrot", "golf", "hotel", "india",
+  };
+  for (std::size_t i = 0; i < expected_surfaces.size(); ++i) {
+    EXPECT_EQ(cands[i].surface, expected_surfaces[i]) << "index " << i;
+    EXPECT_EQ(cands[i].debug_info, "fixture;prefix");
+    EXPECT_DOUBLE_EQ(cands[i].score, 0.5);
+  }
+}
+
 TEST(SimpleConverterTest, DebugInfoFormatting) {
   azookey::core::SimpleConverter converter;
 

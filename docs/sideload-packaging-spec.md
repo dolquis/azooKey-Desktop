@@ -409,21 +409,30 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
     - **(b) 初回 DL**: ダウンローダが rename 後の確定パスをプローブロードし、
       成功して初めて `model.selectedPath`（`model-management-spec.md` §7）へ
       コミットする（更新時と同じ probe→commit 規律）。
-    - **(c) 手動配置**: Host 起動時の **default-path autoselect** で橋渡しする。
-      **`model.enabled` かつ `model.autoLoadOnHostStart=true`
-      （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の場合に
-      限り、`models\zenzai\` の中から **SHA256 が `expected.json` のピンと一致する
-      ファイル**を選び（単に format-valid な GGUF では不可。**ピン一致を*前提条件*
-      とし**、licensing / 版ゲートを迂回しない。`model-management-spec.md`
-      §3.1/§3.3 の形式検証も併せて満たすこと）、プローブロード成功時に
-      `selectedPath` へコミットする。**ピン一致ファイルが無い / ピン未投入の場合は
-      autoselect しない**（任意の有効 GGUF を勝手に選ばない）＝ (c) 未配置として
-      扱い、M8/M47 の劣化モード（下記）に従う。次は autoselect の
-      対象外とする: (i) `autoLoadOnHostStart=false`（起動時ロードを抑止する設定を
-      尊重し、何もしない）、(ii) `selectedPath` が**非空だが不在**
-      （`dev-infrastructure-spec.md` D-007 が *error* 扱いする「設定済みパス不在」。
-      silently 切り替えず error / M45 モデル選択誘導に委ねる）、(iii) `selectedPath`
-      が非空かつ実在（ユーザー明示選択を上書きしない）。
+    - **(c) 手動配置**: 2 経路を持つ。
+        - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
+          **`model.enabled` かつ `model.autoLoadOnHostStart=true`
+          （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の
+          場合に限り、`models\zenzai\` の中から **SHA256 が `expected.json` の
+          ピンと一致するファイル**を選び（単に format-valid な GGUF では不可。
+          **ピン一致を*前提条件*とし**、licensing / 版ゲートを迂回しない。
+          `model-management-spec.md` §3.1/§3.3 の形式検証も併せて満たすこと）、
+          プローブロード成功時に `selectedPath` へコミットする。**ピン一致
+          ファイルが無い / ピン未投入の場合は autoselect しない**（任意の有効
+          GGUF を勝手に選ばない）＝ (c1) 適用外で、(c2) か劣化モード（下記）に
+          委ねる。次も autoselect の対象外: (i) `autoLoadOnHostStart=false`
+          （起動時ロードを抑止する設定を尊重し、何もしない）、(ii) `selectedPath`
+          が**非空だが不在**（`dev-infrastructure-spec.md` D-007 が *error* 扱い
+          する「設定済みパス不在」。silently 切り替えず error / M45 モデル選択
+          誘導に委ねる）、(iii) `selectedPath` が非空かつ実在（下記 (c2) の明示
+          選択。autoselect は上書きしない）。
+        - **(c2) ユーザーによる明示選択（ピン非依存）**: ユーザー / 管理者が
+          `model.selectedPath` を直接設定する経路（`settings.json` 手編集、または
+          設定 UI / M45 の「モデルを追加」「選択モデルをロード」）。設定された
+          実在パスを probe-load して使う。**`expected.json` ピンが未投入でも成立
+          する唯一の手動経路**であり、autoselect が無効な状況（ピン未投入等）の
+          受け皿になる。ファイルを `models\zenzai\` に置くだけでは不十分で、必ず
+          `selectedPath` を明示設定する（空のままでは degraded）。
 - **期待版のピン**: 対象の repo / ファイル名 / version / 量子化 / SHA256 は
   Windows 側が所有する `models\zenzai\expected.json`（または同等のビルド定数）に
   独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記

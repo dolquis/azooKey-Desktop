@@ -45,7 +45,7 @@ std::optional<j::Value> ParseObject(const std::string& s) {
 std::string BuildHandshakeRequest(const HandshakeRequest& p) {
   j::Object o;
   o.emplace("tip_version", j::Value(p.tip_version));
-  o.emplace("protocol_version", j::Value(static_cast<double>(p.protocol_version)));
+  o.emplace("protocol_version", j::Value(p.protocol_version));
   j::Array caps;
   for (const auto& c : p.capabilities) caps.emplace_back(j::Value(c));
   o.emplace("capabilities", j::Value(std::move(caps)));
@@ -76,7 +76,7 @@ std::optional<HandshakeRequest> ParseHandshakeRequest(const std::string& json) {
 std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   j::Object o;
   o.emplace("host_version", j::Value(p.host_version));
-  o.emplace("protocol_version", j::Value(static_cast<double>(p.protocol_version)));
+  o.emplace("protocol_version", j::Value(p.protocol_version));
   o.emplace("accepted", j::Value(p.accepted));
   o.emplace("model_loaded", j::Value(p.model_loaded));
   return j::Stringify(j::Value(std::move(o)));
@@ -99,8 +99,8 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
 
 std::string BuildPing(const PingPayload& p) {
   j::Object o;
-  o.emplace("nonce", j::Value(static_cast<double>(p.nonce)));
-  o.emplace("t_ms", j::Value(static_cast<double>(p.t_ms)));
+  o.emplace("nonce", j::Value(p.nonce));
+  o.emplace("t_ms", j::Value(p.t_ms));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -123,7 +123,7 @@ std::string BuildHealth(const HealthPayload& p) {
   o.emplace("status", j::Value(p.status));
   o.emplace("backend", j::Value(p.backend));
   o.emplace("model_loaded", j::Value(p.model_loaded));
-  if (p.vram_mb) o.emplace("vram_mb", j::Value(static_cast<double>(*p.vram_mb)));
+  if (p.vram_mb) o.emplace("vram_mb", j::Value(static_cast<uint64_t>(*p.vram_mb)));
   if (p.last_error) o.emplace("last_error", j::Value(*p.last_error));
   return j::Stringify(j::Value(std::move(o)));
 }
@@ -149,7 +149,7 @@ std::string BuildLoadModelRequest(const LoadModelRequest& p) {
   j::Object o;
   o.emplace("path", j::Value(p.path));
   o.emplace("backend", j::Value(p.backend));
-  if (p.n_gpu_layers) o.emplace("n_gpu_layers", j::Value(static_cast<double>(*p.n_gpu_layers)));
+  if (p.n_gpu_layers) o.emplace("n_gpu_layers", j::Value(static_cast<int64_t>(*p.n_gpu_layers)));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -190,7 +190,7 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   j::Object o;
   o.emplace("reading", j::Value(p.reading));
   o.emplace("left_context", j::Value(p.left_context));
-  o.emplace("max_candidates", j::Value(static_cast<double>(p.max_candidates)));
+  o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   o.emplace("live", j::Value(p.live));
   return j::Stringify(j::Value(std::move(o)));
 }
@@ -234,7 +234,7 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
 
 std::string BuildCancel(const CancelPayload& p) {
   j::Object o;
-  o.emplace("target_request_id", j::Value(static_cast<double>(p.target_request_id)));
+  o.emplace("target_request_id", j::Value(p.target_request_id));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -258,7 +258,7 @@ std::string BuildCommitObservationRequest(const CommitObservationRequest& p) {
   for (const auto& c : p.shown) shown.push_back(CandidateToJson(c));
   o.emplace("shown", j::Value(std::move(shown)));
   o.emplace("left_context", j::Value(p.left_context));
-  o.emplace("timestamp_ms", j::Value(static_cast<double>(p.timestamp_ms)));
+  o.emplace("timestamp_ms", j::Value(p.timestamp_ms));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -306,8 +306,8 @@ std::string BuildAddUserWordRequest(const AddUserWordRequest& p) {
   j::Object o;
   o.emplace("word", j::Value(p.word));
   o.emplace("ruby", j::Value(p.ruby));
-  if (p.cid) o.emplace("cid", j::Value(static_cast<double>(*p.cid)));
-  if (p.mid) o.emplace("mid", j::Value(static_cast<double>(*p.mid)));
+  if (p.cid) o.emplace("cid", j::Value(static_cast<int64_t>(*p.cid)));
+  if (p.mid) o.emplace("mid", j::Value(static_cast<int64_t>(*p.mid)));
   if (p.value) o.emplace("value", j::Value(*p.value));
   return j::Stringify(j::Value(std::move(o)));
 }

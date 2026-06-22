@@ -1,12 +1,14 @@
 #include "azookey/ipc/Json.h"
 
+#include <array>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <limits>
-#include <sstream>
+#include <string>
+#include <system_error>
 
 #include "azookey/ipc/Limits.h"
 
@@ -71,6 +73,45 @@ bool IsPlainIntegerToken(const std::string& token) {
     if (!std::isdigit(static_cast<unsigned char>(token[pos]))) return false;
   }
   return true;
+}
+
+std::optional<double> ParseFiniteDouble(std::string_view token) {
+  double value = 0.0;
+  const char* first = token.data();
+  const char* last = first + token.size();
+  const auto [ptr, ec] = std::from_chars(first, last, value);
+  if (ec != std::errc{} || ptr != last || !std::isfinite(value)) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+template <typename Int>
+std::string FormatInteger(Int value) {
+  std::array<char, 32> buffer{};
+  const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+  if (ec != std::errc{}) return {};
+  return std::string(buffer.data(), ptr);
+}
+
+std::optional<std::string> FormatDouble(double value) {
+  if (!std::isfinite(value)) return std::nullopt;
+  std::array<char, 128> buffer{};
+  const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+  if (ec != std::errc{}) return std::nullopt;
+  return std::string(buffer.data(), ptr);
+}
+
+std::string StringifyNumber(const Number& number) {
+  if (!number.token.empty()) return number.token;
+
+  double d = number.value;
+  double intpart = 0;
+  if (std::modf(d, &intpart) == 0.0 &&
+      d >= -9.2233720368547758e18 && d <= 9.2233720368547758e18) {
+    return FormatInteger(static_cast<int64_t>(d));
+  }
+  return FormatDouble(d).value_or("null");
 }
 
 class Parser {
@@ -294,17 +335,10 @@ class Parser {
       while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
     }
     if (pos_ == start) return std::nullopt;
-    try {
-      size_t parsed = 0;
-      const auto token = std::string(text_.substr(start, pos_ - start));
-      const double value = std::stod(token, &parsed);
-      if (parsed != token.size() || !std::isfinite(value)) {
-        return std::nullopt;
-      }
-      return Value(Number{value, token});
-    } catch (...) {
-      return std::nullopt;
-    }
+    const auto token = std::string(text_.substr(start, pos_ - start));
+    auto value = ParseFiniteDouble(token);
+    if (!value) return std::nullopt;
+    return Value(Number{*value, token});
   }
 
   std::string_view text_;
@@ -427,47 +461,39 @@ std::string EscapeString(std::string_view s) {
 }
 
 std::string Stringify(const Value& v) {
-  std::ostringstream oss;
   if (v.IsNull()) {
-    oss << "null";
+    return "null";
   } else if (v.IsBool()) {
-    oss << (v.AsBool() ? "true" : "false");
+    return v.AsBool() ? "true" : "false";
   } else if (v.IsNumber()) {
-    const auto& number = v.AsNumberValue();
-    if (!number.token.empty()) {
-      oss << number.token;
-      return oss.str();
-    }
-    double d = number.value;
-    double intpart = 0;
-    if (std::modf(d, &intpart) == 0.0 &&
-        d >= -9.2233720368547758e18 && d <= 9.2233720368547758e18) {
-      oss << static_cast<int64_t>(d);
-    } else {
-      oss << d;
-    }
+    return StringifyNumber(v.AsNumberValue());
   } else if (v.IsString()) {
-    oss << '"' << EscapeString(v.AsString()) << '"';
+    return "\"" + EscapeString(v.AsString()) + "\"";
   } else if (v.IsArray()) {
-    oss << '[';
+    std::string out = "[";
     bool first = true;
     for (const auto& e : v.AsArray()) {
-      if (!first) oss << ',';
-      oss << Stringify(e);
+      if (!first) out.push_back(',');
+      out += Stringify(e);
       first = false;
     }
-    oss << ']';
+    out.push_back(']');
+    return out;
   } else if (v.IsObject()) {
-    oss << '{';
+    std::string out = "{";
     bool first = true;
     for (const auto& [k, val] : v.AsObject()) {
-      if (!first) oss << ',';
-      oss << '"' << EscapeString(k) << "\":" << Stringify(val);
+      if (!first) out.push_back(',');
+      out.push_back('"');
+      out += EscapeString(k);
+      out += "\":";
+      out += Stringify(val);
       first = false;
     }
-    oss << '}';
+    out.push_back('}');
+    return out;
   }
-  return oss.str();
+  return {};
 }
 
 }  // namespace azookey::ipc::json

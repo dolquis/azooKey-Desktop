@@ -1,5 +1,6 @@
 #include <string>
 #include <limits>
+#include <locale>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -7,6 +8,29 @@
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
+
+namespace {
+
+class CommaDecimalPunct : public std::numpunct<char> {
+ protected:
+  char do_decimal_point() const override { return ','; }
+};
+
+class ScopedGlobalLocale {
+ public:
+  explicit ScopedGlobalLocale(const std::locale& locale) : previous_(std::locale()) {
+    std::locale::global(locale);
+  }
+
+  ~ScopedGlobalLocale() {
+    std::locale::global(previous_);
+  }
+
+ private:
+  std::locale previous_;
+};
+
+}  // namespace
 
 TEST(MessagesTest, EnvelopeRoundTrip) {
   azookey::ipc::Envelope env;
@@ -29,6 +53,21 @@ TEST(MessagesTest, EnvelopeRoundTrip) {
   auto redecoded = azookey::ipc::Deserialize(rejson);
   ASSERT_TRUE(redecoded.has_value());
   EXPECT_EQ(redecoded->payload_json, decoded->payload_json);
+}
+
+TEST(MessagesTest, EnvelopeRoundTripPreservesFullUInt64RequestId) {
+  azookey::ipc::Envelope env;
+  env.request_id = std::numeric_limits<uint64_t>::max();
+  env.trace_id = "large";
+  env.type = azookey::ipc::MessageType::Ping;
+  env.payload_json = "{}";
+
+  const auto serialized = azookey::ipc::Serialize(env);
+  EXPECT_NE(serialized.find("\"request_id\":18446744073709551615"), std::string::npos);
+
+  auto decoded = azookey::ipc::Deserialize(serialized);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->request_id, std::numeric_limits<uint64_t>::max());
 }
 
 TEST(MessagesTest, TypeStringMapping) {
@@ -104,6 +143,23 @@ TEST(JsonTest, PreservesLargeIntegerTokensForUIntExtraction) {
   auto too_large = json::Parse("{\"request_id\":18446744073709551616}");
   ASSERT_TRUE(too_large.has_value());
   EXPECT_FALSE(too_large->GetUInt("request_id").has_value());
+}
+
+TEST(JsonTest, NumberCodecIgnoresGlobalCppLocale) {
+  namespace json = azookey::ipc::json;
+
+  ScopedGlobalLocale scoped(std::locale(std::locale::classic(), new CommaDecimalPunct));
+
+  json::Object o;
+  o.emplace("score", json::Value(0.75));
+  EXPECT_EQ(json::Stringify(json::Value(std::move(o))), "{\"score\":0.75}");
+
+  auto parsed = json::Parse("{\"score\":0.75}");
+  ASSERT_TRUE(parsed.has_value());
+  auto score = parsed->GetNumber("score");
+  ASSERT_TRUE(score.has_value());
+  EXPECT_DOUBLE_EQ(*score, 0.75);
+  EXPECT_FALSE(json::Parse("{\"score\":0,75}").has_value());
 }
 
 TEST(JsonTest, CombinesSurrogatePairsAndRejectsInvalidUtf8) {

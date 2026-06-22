@@ -59,6 +59,8 @@ class InferenceEngine {
 
   // External, non-owning. May be nullptr (no user dictionary).
   void SetUserDictionary(learning::UserDictionary* dict);
+  bool AddUserWord(const learning::UserWord& word);
+  bool RemoveUserWord(const std::string& word, const std::string& ruby);
 
   bool LoadModel();
   bool LoadModel(const ModelLoadOptions& options);
@@ -104,9 +106,11 @@ class InferenceEngine {
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec);
   void MirrorModelRuntimeErrorLocked();
+  void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   bool FlushLearningStoreLocked();
   void RecordLearningSaveFailureLocked();
+  void RecordUserDictionarySaveFailureLocked();
   void LearningFlushWorker();
 
   std::unique_ptr<core::IConverter> fallback_converter_;

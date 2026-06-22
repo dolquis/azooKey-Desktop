@@ -12,6 +12,7 @@ namespace azookey::host {
 
 namespace {
 constexpr const char* kLearningSaveError = "failed to save learning store";
+constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::seconds(2);
 
 core::ConversionContext BuildContext(
@@ -97,6 +98,42 @@ InferenceEngine::~InferenceEngine() {
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
+}
+
+bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (!user_dict_) {
+    return false;
+  }
+
+  const auto before = user_dict_->All();
+  user_dict_->Add(word);
+  if (user_dict_->Save()) {
+    return true;
+  }
+
+  RestoreUserDictionaryLocked(before);
+  RecordUserDictionarySaveFailureLocked();
+  return false;
+}
+
+bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string& ruby) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (!user_dict_) {
+    return false;
+  }
+
+  const auto before = user_dict_->All();
+  if (!user_dict_->Remove(word, ruby)) {
+    return false;
+  }
+  if (user_dict_->Save()) {
+    return true;
+  }
+
+  RestoreUserDictionaryLocked(before);
+  RecordUserDictionarySaveFailureLocked();
+  return false;
 }
 
 std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
@@ -426,9 +463,25 @@ bool InferenceEngine::FlushLearningStoreLocked() {
   return true;
 }
 
+void InferenceEngine::RestoreUserDictionaryLocked(
+    const std::vector<learning::UserWord>& entries) {
+  if (!user_dict_) {
+    return;
+  }
+  user_dict_->Clear();
+  for (const auto& entry : entries) {
+    user_dict_->Add(entry);
+  }
+}
+
 void InferenceEngine::RecordLearningSaveFailureLocked() {
   last_error_ = kLearningSaveError;
   std::cerr << "error: " << kLearningSaveError << std::endl;
+}
+
+void InferenceEngine::RecordUserDictionarySaveFailureLocked() {
+  last_error_ = kUserDictionarySaveError;
+  std::cerr << "error: " << kUserDictionarySaveError << std::endl;
 }
 
 void InferenceEngine::LearningFlushWorker() {

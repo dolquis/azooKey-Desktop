@@ -92,9 +92,8 @@ Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**�
   `Docs/zenzai.md`、zenz モデルカード（Hugging Face `Miwa-Keita/zenz-*`）。
 - メモリ: small モデルで概ね 150MB 級。
 - 配布形式: GGUF（`docs/zenzai-gpu-route.md` と整合）。
-- v1.0 採用モデル: `expected.json` ピンの Zenzai GGUF（上流
-  `Miwa-Keita/zenz-v3.2-small-gguf`、`sideload-packaging-spec.md` §1.6.1。roadmap M8
-  受け入れ条件の配置対象）。
+- v1.0 採用モデル: 上流 `Miwa-Keita/zenz-v3.2-small-gguf`（roadmap M8 受け入れ条件の
+  配置対象。v1.0 配布での取得・配置の正は `sideload-packaging-spec.md` §1.6.1）。
   プロンプトは **v3 系フォーマット**（§3）を用いる。
 
 > ⚠️ **実装時検証点（DEV-221）**: 特殊トークンのコードポイント・BOS/EOS の
@@ -617,7 +616,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
-| integration（モデル有・任意/手動） | `expected.json` ピンの Zenzai GGUF（上流 `Miwa-Keita/zenz-v3.2-small-gguf`）配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
+| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |
 
 ---

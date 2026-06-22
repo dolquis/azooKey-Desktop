@@ -847,7 +847,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: Phase 6 完了。
 - **変更対象**: `pkg/msix/AppxManifest.xml`（新規）、`pkg/msix/Package.wapproj`
   （新規）、`pkg/msix/Assets/*.png`（新規）。
-- **実装範囲**: `docs/sideload-packaging-spec.md` §1。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
+  DL は共有 `HttpDownloader` に依存するため M32 へ送り、M28 は (c) 手動配置を
+  operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
 - **受け入れ条件**:
   - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
@@ -901,17 +903,25 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Win10 LTSC でインストール → IME 選択 → 入力 → 確定 → アンインストール
 - **参照仕様**: `docs/sideload-packaging-spec.md` §4
 
-### M32: WinGet マニフェスト + 自動更新
+### M32: WinGet マニフェスト + 自動更新 + 初回モデル取得（§1.6.1 (b)）
 
-- **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新。
+- **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
+  v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
 - **前提**: M29 完了。
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
-  外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、設定アプリ UI。
-- **実装範囲**: `docs/sideload-packaging-spec.md` §5、§6。
+  外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、
+  `inference-host/src/HttpDownloader.cpp`（新規。WinHTTP + SHA256 共通ヘルパの
+  切り出し。M36-B が再利用）、初回モデル取得ロジック（`expected.json` ピン照合 →
+  `.part`→検証→rename → probe-load → `selectedPath` コミット）、設定アプリ UI。
+- **実装範囲**: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b)
+  （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）。
 - **受け入れ条件**:
   - winget-pkgs に PR が merge され `winget install` で導入可能
   - 起動時 + 24h 周期で新版検出、ユーザー承認で MSIX 適用
-- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6
+  - 初回起動時に `expected.json` ピンと一致する GGUF を DL → SHA256 検証 →
+    probe-load 成功 → `selectedPath` コミット。ピン未投入 / 不一致 / DL 失敗時は
+    手動配置へフォールバックし Host は落ちない（§1.6.1 / M8 / M47 と整合）
+- **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1
 
 ### M33: ETW / WER
 
@@ -1013,7 +1023,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   切り出し）。
 - **推奨実装時期**: M32 の WinHTTP 基盤にハード依存するため、M32 以降に配置する。
 - **変更対象**: `inference-host/src/TrendingWordFetcher.cpp`・
-  `inference-host/src/HttpDownloader.cpp`（新規）、`inference-host/src/main.cpp`、
+  `inference-host/src/HttpDownloader.cpp`（M32 で新規作成・共有する WinHTTP +
+  SHA256 ヘルパを再利用）、`inference-host/src/main.cpp`、
   `inference-host/CMakeLists.txt`（`winhttp.lib` リンク）。
 - **実装範囲**: `docs/auto-word-registration-spec.md` §5。
   - WinHTTP による定期 DL → SHA256 検証 → `AutoWordStore::IngestTrending`

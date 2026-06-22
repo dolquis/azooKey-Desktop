@@ -368,7 +368,9 @@ M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、
 **M28（§1 全体を実装）→ M29 → M32** の順で、M28 時点では `HttpDownloader` が未だ
 存在しない。したがって **M28 出荷時の operative default は (c) 手動配置**とし、(b)
 は **M32 の共有 `HttpDownloader` が揃った時点で既定化する fast-follow** として扱う
-（M28 で one-off の重複ダウンローダを書かない＝二重実装回避）。(b) を v1.0 ローンチ
+（M28 で one-off の重複ダウンローダを書かない＝二重実装回避）。この (b) の実装は
+**roadmap M32 のスコープに計上**し（`plans/windows-port-roadmap.md` M32 / M28 実装
+範囲の注記）、宙に浮かせない。(b) を v1.0 ローンチ
 までに既定化したい場合は、ダウンローダ基盤の切り出しを M28 の前提として前倒しする
 （roadmap 側で M32 の該当スコープを M28 前へ移す）必要があり、これは roadmap 更新を
 伴う別判断とする。

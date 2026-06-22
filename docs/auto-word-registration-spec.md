@@ -231,9 +231,11 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 ### 5-4. M32 WinHTTP 基盤との関係
 
 M32（自動更新）の `UpdateChecker.cpp` と HTTP DL + SHA256 検証パターンが共通。
-共通ヘルパ `inference-host/src/HttpDownloader.{h,cpp}`（新規）に切り出し、
-`UpdateChecker`（M32）と `TrendingWordFetcher`（M36-B）で共有する。M36-B 着手者が
-`HttpDownloader` を新設し、M32 はそれを利用するよう調整する。
+共通ヘルパ `inference-host/src/HttpDownloader.{h,cpp}` を `UpdateChecker`（M32）と
+`TrendingWordFetcher`（M36-B）で共有する。**`HttpDownloader` は M32 が新設し
+（M32 は自動更新 §6 に加え `docs/sideload-packaging-spec.md` §1.6.1 (b) の初回
+モデル DL でも利用）、M36-B はそれを再利用する**（依存順は M32 → M36-B。
+`plans/windows-port-roadmap.md` の M32 / M36-B と整合）。
 
 ## 6. 適用（`QueryCandidates` への注入）
 
@@ -359,7 +361,7 @@ M36 実装範囲のため、当面の実効値は host CLI 引数 / 環境変数
 | 新規 | `learning/include/azookey/learning/AutoWordStore.h` / `src/AutoWordStore.cpp` | A |
 | 新規 | `learning/tests/auto_word_store_test.cpp` | A |
 | 新規 | `inference-host/include/azookey/host/TrendingWordFetcher.h` / `src/TrendingWordFetcher.cpp` | B |
-| 新規 | `inference-host/include/azookey/host/HttpDownloader.h` / `src/HttpDownloader.cpp` | B |
+| 再利用 | `inference-host/include/azookey/host/HttpDownloader.h` / `src/HttpDownloader.cpp`（M32 で新設。§5-4） | B |
 | 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` | A |
 | 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` | A |
 | 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` | A |

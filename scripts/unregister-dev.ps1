@@ -10,10 +10,19 @@ param(
 
 $ErrorActionPreference = "Continue"
 
+function Resolve-DevPath {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$Path
+  )
+
+  return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
 if (-not $TipDllPath) {
   $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-debug\tsf-tip\azookey_tsf_tip.dll"
 }
-$TipDllPath = [System.IO.Path]::GetFullPath($TipDllPath)
+$TipDllPath = Resolve-DevPath $TipDllPath
 
 $clsid = "{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}"
 

@@ -344,9 +344,10 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 > ない。legacy submodule の更新・削除で Windows v1.0 のアーティファクトや
 > 期待 SHA が暗黙に変わらないよう、**Windows のピンは `.gitmodules` を参照せず
 > `expected.json` に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
-> §3.4 の `zenz-v3.1-small-…` 例や roadmap M8 受け入れの版表記が現行上流（v3.2）と
-> 食い違う場合は、版の決定権を持つ DEV-219〔M8 統合対象〕で `expected.json` へ
-> 揃える（追跡: DEV-336）。
+> §3.4 のモデルパス例や roadmap M8 受け入れの版表記も、本ピン（上流
+> `Miwa-Keita/zenz-v3.2-small-gguf` = v3.2）を正として揃える。版番号は各 doc に
+> 直書きせず本ピンを参照し、版の更新は版の決定権を持つ DEV-219〔M8 統合〕が
+> `expected.json` で行う。
 
 M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、二重実装を
 避けて先に敷くことを目的とする。
@@ -446,8 +447,7 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   アーティファクトを指す。SHA256 の値域は M45 の `ModelCatalogEntry.sha256`
   （`model-management-spec.md` §3.2）と同一。本書はこのピンの**契約（schema）を
   定義**し、**具体値（正確なファイル名と SHA256）は M8/M28 実装時に版の決定権を
-  持つ DEV-219 が投入する**（本 PR は docs のみのため値ファイルは未コミット。
-  値の確定 = DEV-336 / DEV-219）:
+  持つ DEV-219 が投入する**（docs は値ファイルを未コミット。値の確定 = DEV-219）:
 
   ```jsonc
   // models\zenzai\expected.json（Windows 所有のピン。値は M8/M28 で投入）
@@ -857,7 +857,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 | カスタムローマ字 | `%LOCALAPPDATA%\azooKey\config\custom-romaji.tsv` |
 | 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv`（DPAPI 暗号化、M34） |
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json` |
-| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\zenz-v3.1-small-Q5_K_M.gguf` |
+| モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 の `expected.json` ピンが定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
 
 ### 3.5 `ITfFnConfigure` 連携（Windows 設定「詳細設定」からの起動）

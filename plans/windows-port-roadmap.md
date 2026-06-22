@@ -187,7 +187,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   提案した別系統の `IModelRuntime` 抽象は `IConverter` と二重抽象になるため
   新設しない（`docs/dev-infrastructure-spec.md` §11.3）。
 - **受け入れ条件**:
-  - `zenz-v3.1-small-gguf` 配置時に `LoadModel` 成功
+  - Zenzai GGUF（上流 `Miwa-Keita/zenz-v3.2-small-gguf`）配置時に `LoadModel` 成功
   - 未配置時も Host が落ちず、固定テーブル候補が動く
   - GPU/CPU 切替が設定で効く
 

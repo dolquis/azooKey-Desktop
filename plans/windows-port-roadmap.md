@@ -921,9 +921,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - winget-pkgs に PR が merge され `winget install` で導入可能
   - 起動時 + 24h 周期で新版検出、ユーザー承認で MSIX 適用
-  - **DEV-202 確定（配信元決定）かつ `expected.json` ピン投入済みのとき**: 初回
-    起動時に ピンと一致する GGUF を DL → SHA256 検証 → probe-load 成功 →
-    `selectedPath` コミット。
+  - **DEV-202 確定（配信元決定）かつ `expected.json` ピン投入済みのとき**: 既定
+    設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ
+    非 `offline`）で初回起動時に ピンと一致する GGUF を DL → SHA256 検証 →
+    probe-load 成功 → `selectedPath` コミット。`offline` / `autoLoadOnHostStart=false`
+    時は DL せず (c2) 明示選択に委ねる。
   - **DEV-202 未確定（配信元 保留）または ピン未投入のとき**: (b) DL を有効化せず、
     **(c2) ユーザー明示選択（`model.selectedPath` を `settings.json` / 設定 UI で
     設定）で Zenzai がロードできること**を受け入れ条件とする。ピン未投入では

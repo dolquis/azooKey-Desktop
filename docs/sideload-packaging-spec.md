@@ -406,9 +406,15 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   「モデル未選択 → SimpleConverter」になる。よって**ファイルを配置しただけでは
   再起動後も degraded のまま**になり得る。これを防ぐため、取得方式ごとに次で
   `selectedPath` を確定させる:
-    - **(b) 初回 DL**: ダウンローダが rename 後の確定パスをプローブロードし、
-      成功して初めて `model.selectedPath`（`model-management-spec.md` §7）へ
-      コミットする（更新時と同じ probe→commit 規律）。
+    - **(b) 初回 DL**: headless 取得のため、(c1) と同じ前提ガードを
+      **ネットワーク I/O・probe-load の前に**評価し、満たす場合のみ起動する —
+      **`model.enabled` かつ `model.autoLoadOnHostStart=true`
+      （`model-management-spec.md` §7）かつ `privacy.mode` がネットワーク禁止
+      （`offline`。M46 / `privacy-and-secure-input-spec.md`）でない**こと。
+      いずれか不成立なら DL せず手動配置に委ねる（offline でも (c1) ローカル
+      autoselect / (c2) 明示選択は network なしで成立）。ガードを満たす場合、
+      ダウンローダが rename 後の確定パスをプローブロードし、成功して初めて
+      `model.selectedPath` へコミットする（更新時と同じ probe→commit 規律）。
     - **(c) 手動配置**: 2 経路を持つ。
         - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
           **`model.enabled` かつ `model.autoLoadOnHostStart=true`

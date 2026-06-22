@@ -1,9 +1,34 @@
+#include <limits>
+#include <locale>
 #include <string>
 
 #include <gtest/gtest.h>
 
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Payloads.h"
+
+namespace {
+
+class CommaDecimalPunct : public std::numpunct<char> {
+ protected:
+  char do_decimal_point() const override { return ','; }
+};
+
+class ScopedGlobalLocale {
+ public:
+  explicit ScopedGlobalLocale(const std::locale& locale) : previous_(std::locale()) {
+    std::locale::global(locale);
+  }
+
+  ~ScopedGlobalLocale() {
+    std::locale::global(previous_);
+  }
+
+ private:
+  std::locale previous_;
+};
+
+}  // namespace
 
 TEST(PayloadsTest, JsonEscapeAndRoundTrip) {
   // U+0001 is a control character with no named escape, so it must be emitted
@@ -55,6 +80,21 @@ TEST(PayloadsTest, Ping) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->nonce, 12345u);
   EXPECT_EQ(parsed->t_ms, 1700000000123ULL);
+}
+
+TEST(PayloadsTest, PingPreservesLargeIntegerFields) {
+  azookey::ipc::PingPayload p;
+  p.nonce = 9007199254740993ULL;
+  p.t_ms = std::numeric_limits<uint64_t>::max();
+
+  auto json = azookey::ipc::BuildPing(p);
+  EXPECT_NE(json.find("\"nonce\":9007199254740993"), std::string::npos);
+  EXPECT_NE(json.find("\"t_ms\":18446744073709551615"), std::string::npos);
+
+  auto parsed = azookey::ipc::ParsePing(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->nonce, 9007199254740993ULL);
+  EXPECT_EQ(parsed->t_ms, std::numeric_limits<uint64_t>::max());
 }
 
 TEST(PayloadsTest, Health) {
@@ -122,6 +162,23 @@ TEST(PayloadsTest, QueryCandidates) {
   EXPECT_EQ(parsed2->candidates[0].score, 1.0);
 }
 
+TEST(PayloadsTest, CandidateScoresIgnoreGlobalCppLocale) {
+  ScopedGlobalLocale scoped(std::locale(std::locale::classic(), new CommaDecimalPunct));
+
+  azookey::ipc::QueryCandidatesResponse res;
+  res.candidates = {{"日本語", "にほんご", 0.75, "static-dict"}};
+  res.partial = false;
+
+  auto json = azookey::ipc::BuildQueryCandidatesResponse(res);
+  EXPECT_NE(json.find("\"score\":0.75"), std::string::npos);
+  EXPECT_EQ(json.find("0,75"), std::string::npos);
+
+  auto parsed = azookey::ipc::ParseQueryCandidatesResponse(json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->candidates.size(), 1u);
+  EXPECT_DOUBLE_EQ(parsed->candidates[0].score, 0.75);
+}
+
 TEST(PayloadsTest, Cancel) {
   azookey::ipc::CancelPayload p;
   p.target_request_id = 7777;
@@ -129,6 +186,18 @@ TEST(PayloadsTest, Cancel) {
   auto parsed = azookey::ipc::ParseCancel(json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->target_request_id, 7777u);
+}
+
+TEST(PayloadsTest, CancelPreservesLargeTargetRequestId) {
+  azookey::ipc::CancelPayload p;
+  p.target_request_id = std::numeric_limits<uint64_t>::max();
+
+  auto json = azookey::ipc::BuildCancel(p);
+  EXPECT_NE(json.find("\"target_request_id\":18446744073709551615"), std::string::npos);
+
+  auto parsed = azookey::ipc::ParseCancel(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->target_request_id, std::numeric_limits<uint64_t>::max());
 }
 
 TEST(PayloadsTest, CommitObservation) {
@@ -147,6 +216,21 @@ TEST(PayloadsTest, CommitObservation) {
   EXPECT_EQ(parsed->chosen.surface, "日本語");
   EXPECT_EQ(parsed->shown.size(), 2u);
   EXPECT_EQ(parsed->timestamp_ms, 1700000000123ULL);
+}
+
+TEST(PayloadsTest, CommitObservationPreservesLargeTimestamp) {
+  azookey::ipc::CommitObservationRequest req;
+  req.reading = "にほんご";
+  req.chosen = {"日本語", "にほんご", 1.0, "user"};
+  req.left_context = "";
+  req.timestamp_ms = 9007199254740993ULL;
+
+  auto json = azookey::ipc::BuildCommitObservationRequest(req);
+  EXPECT_NE(json.find("\"timestamp_ms\":9007199254740993"), std::string::npos);
+
+  auto parsed = azookey::ipc::ParseCommitObservationRequest(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->timestamp_ms, 9007199254740993ULL);
 }
 
 TEST(PayloadsTest, UserWord) {

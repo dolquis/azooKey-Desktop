@@ -323,34 +323,21 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
   （`ParseDocument` が `pos_ == size` を要求）。
 - **数値の安全な扱い** — `0` 始まりの多桁・小数点後桁なし・指数部桁なし等の
   不正形を拒否し、`1e9999` 等は `std::isfinite` で弾く。
-- **uint64 精度（plain 整数 token のみ保持・非 plain 形と直列化は残課題）** —
-  **plain 整数 token**（符号なし数字のみ）の抽出（`GetInt` / `GetUInt`）は
-  元トークン文字列から `std::stoll` / `std::stoull` で復元するため double 経由の
-  精度欠落がなく、uint64 全域 `18446744073709551615` まで正しく取り出せ、桁あふれは
-  `nullopt`。ただし**小数・指数形**（例 `18446744073709551616.0`）は
-  `IsPlainIntegerToken` が false となり double 経路へフォールバックし、丸めに加え
-  範囲ガードが不十分（`d > static_cast<double>(UINT64_MAX)` は `(double)UINT64_MAX`
-  が 2^64 に丸まるため 2^64 を弾けず、範囲外 double を `nullopt` にせずキャスト
-  し得る）。非 plain 形の桁あふれ拒否は残課題として overflow テスト / 修正を要する
-  （DEV-188 / DEV-163）。一方
-  **直列化**側は現状 `ipc/src/Messages.cpp` / `ipc/src/Payloads.cpp` が uint64
-  フィールド（`request_id` / `Ping.nonce` / `t_ms` / `Cancel.target_request_id`
-  / `CommitObservation.timestamp_ms` 等）を `static_cast<double>` してから
-  `Value` 化するため、token を持たない `Value(double)` 経路に落ち、2^53 超の値が
-  wire 上で丸まる。token 保持版 `Value(uint64_t)`（`std::to_string` 済み）または
-  `std::to_chars` 経由へ改め、**parse / serialize の双方向**で uint64 全域を
-  保証すること（残課題）。
-- **数値 codec の locale 非依存（残課題）** — 数値の parse / stringify は
-  C ロケール固定で行い、ホストプロセス（TIP は任意アプリ内 in-proc、Host も
-  CRT locale を変える可能性）が非 C ロケール（小数点が `,` 等）を設定しても
-  wire 表現が壊れないこと。現状 `std::stod` / `std::ostringstream` は実行時
-  locale 依存のため、`std::from_chars` / `std::to_chars`（または明示 `C`
-  ロケール）への置換を要する。
-
-  上記の残課題（直列化側 uint64 精度・非 plain 数値形の桁あふれ拒否・locale
-  非依存）は numeric codec correctness として Linear DEV-163 で一括追跡し、
-  該当 uint64 フィールドの round-trip テストと非 plain 形 overflow テストの追加
-  までを完了条件とする（パーサ直接単体テストの拡充は DEV-188）。
+- **uint64 精度** — **plain 整数 token**（符号なし数字のみ）の抽出
+  （`GetInt` / `GetUInt`）は元トークン文字列から `std::stoll` /
+  `std::stoull` で復元し、double 経由の精度欠落を避ける。
+  `uint64_t` 全域 `18446744073709551615` まで正しく取り出せ、桁あふれは
+  `nullopt` とする。小数・指数形などの非 plain 数値形は double 経路に入るため、
+  `int64_t` / `uint64_t` の変換前に exclusive upper bound を検査し、範囲外 double
+  を整数へキャストしてはならない。直列化側は `request_id` / `Ping.nonce` /
+  `t_ms` / `Cancel.target_request_id` / `CommitObservation.timestamp_ms` 等の
+  uint64 フィールドを token 保持版 `Value(uint64_t)` に渡し、2^53 超の値でも
+  wire 上で丸めない。
+- **数値 codec の locale 非依存** — 数値の parse / stringify は
+  `std::from_chars` / `std::to_chars` で行い、ホストプロセス（TIP は任意アプリ内
+  in-proc、Host も CRT locale を変える可能性）が非 C ロケール（小数点が `,` 等）
+  を設定しても wire 表現を壊さない。overflow は `nullopt` で拒否し、
+  underflow は JSON 数値として受け入れて 0.0（符号付きゼロを含む）へ丸める。
 
 ### 6.3 追加テストと協定外メッセージの扱い
 

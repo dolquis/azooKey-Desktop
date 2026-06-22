@@ -47,8 +47,8 @@ MessageType TypeFromString(const std::string& value) {
 
 std::string Serialize(const Envelope& env) {
   json::Object o;
-  o.emplace("version", json::Value(static_cast<double>(env.version)));
-  o.emplace("request_id", json::Value(static_cast<double>(env.request_id)));
+  o.emplace("version", json::Value(env.version));
+  o.emplace("request_id", json::Value(env.request_id));
   o.emplace("trace_id", json::Value(env.trace_id));
   o.emplace("type", json::Value(TypeToString(env.type)));
   if (env.payload_json.empty()) {

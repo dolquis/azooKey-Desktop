@@ -423,7 +423,28 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
   独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記
   注記参照）。(b) の配信元と (c) の手動配置先は、いずれもこのピンと同一
   アーティファクトを指す。SHA256 の値域は M45 の `ModelCatalogEntry.sha256`
-  （`model-management-spec.md` §3.2）と同一。
+  （`model-management-spec.md` §3.2）と同一。本書はこのピンの**契約（schema）を
+  定義**し、**具体値（正確なファイル名と SHA256）は M8/M28 実装時に版の決定権を
+  持つ DEV-219 が投入する**（本 PR は docs のみのため値ファイルは未コミット。
+  値の確定 = DEV-336 / DEV-219）:
+
+  ```jsonc
+  // models\zenzai\expected.json（Windows 所有のピン。値は M8/M28 で投入）
+  {
+    "repo": "Miwa-Keita/zenz-v3.2-small-gguf",   // 出所（上流）。再ホスト時も artifact は同一
+    "file": "<exact-file-name>.gguf",             // 例: ggml-model-Q5_K_M.gguf（DEV-219 で確定）
+    "version": "v3.2-small",
+    "quantization": "Q5_K_M",
+    "sha256": "<64-hex>",                          // 検証の基準。DEV-219 で実値投入
+    "size_bytes": 0                                // 任意（部分 DL 早期検出用）
+  }
+  ```
+
+  **ピン未投入時の挙動（明示）**: `expected.json`（または定数）が未投入の間は、
+  照合すべき正確な artifact / SHA256 が無いため **(b) DL は発火させない**（誤った
+  v3.1/v3.2 を引いたり検証不能になるのを防ぐ）。この期間の operative path は
+  (c) 手動配置のみで、未配置なら M8/M47 の劣化モード（下記）に従う。これにより
+  「ピンが正、未投入なら DL せず degraded」が決定的になる。
 - **更新時の置換（無停止更新）**: 新版を別ファイル名で DL → SHA256 検証 →
   **新版をプローブロード（実際にロード成功を確認）** → 成功して初めて
   `model.selectedPath`（`model-management-spec.md` §7）を新版へコミット →

@@ -11,9 +11,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-DevPath {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$Path
+  )
+
+  return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
 # Resolve default paths relative to the script location, then make them absolute
 # *before* any elevation relaunch: the elevated process starts in a different
-# working directory, so relative paths would otherwise resolve incorrectly.
+# working directory, so relative paths would otherwise resolve incorrectly. Use
+# PowerShell's location resolver rather than .NET's process current directory:
+# Developer PowerShell sessions can leave those two out of sync after cd.
 if (-not $TipDllPath) {
   $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-debug\tsf-tip\azookey_tsf_tip.dll"
 }
@@ -21,8 +32,8 @@ if (-not $HostExePath) {
   $HostExePath = Join-Path $PSScriptRoot "..\build\windows-debug\inference-host\azookey_inference_host.exe"
 }
 
-$TipDllPath  = [System.IO.Path]::GetFullPath($TipDllPath)
-$HostExePath = [System.IO.Path]::GetFullPath($HostExePath)
+$TipDllPath  = Resolve-DevPath $TipDllPath
+$HostExePath = Resolve-DevPath $HostExePath
 
 # Per-user step (HKCU, no elevation needed): register the inference host for
 # auto-start in the *interactive* user's hive. Done in the original process so a

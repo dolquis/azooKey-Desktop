@@ -397,6 +397,22 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
   rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
   ファイルをロード対象に入れない。
+- **初回取得後の `selectedPath` コミット（必須）**: Host は起動時に既定
+  ディレクトリを自動スキャン**しない** —
+  `inference-host/src/SettingsStore.cpp::ApplyRuntimeSettingsToEngineConfig` は
+  `model.selectedPath` を `config.model_path` へコピーするのみで、空 path は
+  「モデル未選択 → SimpleConverter」になる。よって**ファイルを配置しただけでは
+  再起動後も degraded のまま**になり得る。これを防ぐため、取得方式ごとに次で
+  `selectedPath` を確定させる:
+    - **(b) 初回 DL**: ダウンローダが rename 後の確定パスをプローブロードし、
+      成功して初めて `model.selectedPath`（`model-management-spec.md` §7）へ
+      コミットする（更新時と同じ probe→commit 規律）。
+    - **(c) 手動配置**: Host 起動時の **default-path autoselect** で橋渡しする。
+      `model.enabled` かつ `selectedPath` が空 / 実在しない場合に限り、
+      `models\zenzai\` の有効モデル（`expected.json` の SHA256 一致を優先、
+      `model-management-spec.md` §3.1/§3.3 の検証に準拠）を 1 つ決定的に選び、
+      プローブロード成功時に `selectedPath` へコミットする。ユーザーが明示選択
+      済み（`selectedPath` 非空かつ実在）なら上書きしない。
 - **期待版のピン**: 対象の repo / ファイル名 / version / 量子化 / SHA256 は
   Windows 側が所有する `models\zenzai\expected.json`（または同等のビルド定数）に
   独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記

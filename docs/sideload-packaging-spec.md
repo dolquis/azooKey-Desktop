@@ -408,11 +408,16 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
       成功して初めて `model.selectedPath`（`model-management-spec.md` §7）へ
       コミットする（更新時と同じ probe→commit 規律）。
     - **(c) 手動配置**: Host 起動時の **default-path autoselect** で橋渡しする。
-      `model.enabled` かつ `selectedPath` が空 / 実在しない場合に限り、
-      `models\zenzai\` の有効モデル（`expected.json` の SHA256 一致を優先、
+      **`model.enabled` かつ `model.autoLoadOnHostStart=true`
+      （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の場合に
+      限り、`models\zenzai\` の有効モデル（`expected.json` の SHA256 一致を優先、
       `model-management-spec.md` §3.1/§3.3 の検証に準拠）を 1 つ決定的に選び、
-      プローブロード成功時に `selectedPath` へコミットする。ユーザーが明示選択
-      済み（`selectedPath` 非空かつ実在）なら上書きしない。
+      プローブロード成功時に `selectedPath` へコミットする。次は autoselect の
+      対象外とする: (i) `autoLoadOnHostStart=false`（起動時ロードを抑止する設定を
+      尊重し、何もしない）、(ii) `selectedPath` が**非空だが不在**
+      （`dev-infrastructure-spec.md` D-007 が *error* 扱いする「設定済みパス不在」。
+      silently 切り替えず error / M45 モデル選択誘導に委ねる）、(iii) `selectedPath`
+      が非空かつ実在（ユーザー明示選択を上書きしない）。
 - **期待版のピン**: 対象の repo / ファイル名 / version / 量子化 / SHA256 は
   Windows 側が所有する `models\zenzai\expected.json`（または同等のビルド定数）に
   独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記

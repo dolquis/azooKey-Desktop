@@ -197,7 +197,8 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **前提**: M6
 - **変更対象**: `learning/`, `inference-host/`
 - **実装範囲**:
-  - `AddUserWord` / `RemoveUserWord` メッセージ実装（`Dispatcher` で永続化まで）
+  - `AddUserWord` / `RemoveUserWord` メッセージ実装（`Dispatcher` から
+    `InferenceEngine` 経由で同期・永続化まで）
   - 永続化フォーマット定義（`UserDictionary`: JSON `{version, entries: [{word, ruby, cid, mid, value}]}`）
   - `InferenceEngine::QueryCandidates` が `user_dict_->Lookup` を最優先で返す統合
   - 設定 UI（M11）または暫定 CLI/デバッグ UI から呼べる経路

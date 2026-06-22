@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "azookey/core/SimpleConverter.h"
@@ -28,6 +29,11 @@ constexpr int kProtocolVersion = 1;
 
 std::string TempPath(const char* name) {
   return (std::filesystem::temp_directory_path() / name).string();
+}
+
+void RemovePathNoThrow(const std::filesystem::path& path) {
+  std::error_code ec;
+  std::filesystem::remove_all(path, ec);
 }
 
 void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
@@ -398,6 +404,82 @@ TEST_F(DispatcherTest, AddRemoveUserWord) {
   ASSERT_TRUE(rparsed.has_value());
   EXPECT_TRUE(rparsed->ok);
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
+}
+
+TEST_F(DispatcherTest, AddUserWordSaveFailureReturnsFalseAndRollsBack) {
+  const auto blocking_parent =
+      std::filesystem::path(TempPath("azookey_dispatcher_user_dict_blocker_add"));
+  RemovePathNoThrow(blocking_parent);
+  {
+    std::ofstream blocker(blocking_parent, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "not a directory";
+  }
+
+  const auto bad_dict_path = (blocking_parent / "user.json").string();
+  azookey::learning::UserDictionary bad_dict(bad_dict_path);
+  engine.SetUserDictionary(&bad_dict);
+  azookey::host::Dispatcher bad_dispatcher(&engine, &scheduler, &bad_dict,
+                                           DefaultDispatcherConfig());
+
+  ipc::AddUserWordRequest add;
+  add.word = "azooKey";
+  add.ruby = "あずきい";
+  add.value = -3.0;
+  auto resp = bad_dispatcher.Dispatch(
+      MakeReq(63, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
+
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseAddUserWordResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_TRUE(bad_dict.Lookup("あずきい").empty());
+  ASSERT_TRUE(engine.last_error().has_value());
+  EXPECT_EQ(*engine.last_error(), "failed to save user dictionary");
+
+  engine.SetUserDictionary(&user_dict);
+  RemovePathNoThrow(blocking_parent);
+}
+
+TEST_F(DispatcherTest, RemoveUserWordSaveFailureReturnsFalseAndRollsBack) {
+  const auto blocking_parent =
+      std::filesystem::path(TempPath("azookey_dispatcher_user_dict_blocker_remove"));
+  RemovePathNoThrow(blocking_parent);
+  {
+    std::ofstream blocker(blocking_parent, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "not a directory";
+  }
+
+  const auto bad_dict_path = (blocking_parent / "user.json").string();
+  azookey::learning::UserDictionary bad_dict(bad_dict_path);
+  azookey::learning::UserWord existing;
+  existing.word = "azooKey";
+  existing.ruby = "あずきい";
+  existing.value = -3.0;
+  bad_dict.Add(existing);
+  engine.SetUserDictionary(&bad_dict);
+  azookey::host::Dispatcher bad_dispatcher(&engine, &scheduler, &bad_dict,
+                                           DefaultDispatcherConfig());
+
+  ipc::RemoveUserWordRequest rm;
+  rm.word = "azooKey";
+  rm.ruby = "あずきい";
+  auto resp = bad_dispatcher.Dispatch(
+      MakeReq(64, ipc::MessageType::RemoveUserWord, ipc::BuildRemoveUserWordRequest(rm)));
+
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseRemoveUserWordResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->ok);
+  auto hits = bad_dict.Lookup("あずきい");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits.front(), existing);
+  ASSERT_TRUE(engine.last_error().has_value());
+  EXPECT_EQ(*engine.last_error(), "failed to save user dictionary");
+
+  engine.SetUserDictionary(&user_dict);
+  RemovePathNoThrow(blocking_parent);
 }
 
 TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {

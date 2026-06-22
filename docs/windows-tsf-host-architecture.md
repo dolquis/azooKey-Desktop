@@ -51,7 +51,9 @@
   応答前に `max_candidates` で件数を切り詰める。
 - ✅ `Cancel(target_request_id)`
 - ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms)`
-- ✅ `AddUserWord` / `RemoveUserWord`
+- ✅ `AddUserWord` / `RemoveUserWord` — `InferenceEngine` の状態ロック下で
+  `UserDictionary` を更新し、永続化に成功した場合だけ `ok=true` を返す。
+  永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。
 - ⚠️ enum のみ定義済み、Payload/Dispatcher 未実装:
   - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
   - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`

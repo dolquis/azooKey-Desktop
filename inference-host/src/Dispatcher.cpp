@@ -292,9 +292,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleAddUserWord(const ipc::Envelope& 
     w.cid = parsed->cid;
     w.mid = parsed->mid;
     w.value = parsed->value;
-    user_dict_->Add(w);
-    user_dict_->Save();
-    res.ok = true;
+    res.ok = engine_->AddUserWord(w);
   }
   return MakeResponse(req, ipc::BuildAddUserWordResponse(res));
 }
@@ -306,8 +304,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleRemoveUserWord(const ipc::Envelop
     return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
   }
   if (auto parsed = ipc::ParseRemoveUserWordRequest(req.payload_json)) {
-    res.ok = user_dict_->Remove(parsed->word, parsed->ruby);
-    if (res.ok) user_dict_->Save();
+    res.ok = engine_->RemoveUserWord(parsed->word, parsed->ruby);
   }
   return MakeResponse(req, ipc::BuildRemoveUserWordResponse(res));
 }

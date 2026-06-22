@@ -907,7 +907,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
-- **前提**: M29 完了。
+- **前提**: M29 完了。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+  再配布可否。`gate:human-required`）の確定を追加前提とする — 配信元が
+  GitHub 再ホスト / 上流 HF / 保留 のいずれになるかを律するため（§1.6.1
+  ライセンス分岐）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
   外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、
   `inference-host/src/HttpDownloader.cpp`（新規。WinHTTP + SHA256 共通ヘルパの
@@ -918,9 +921,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - winget-pkgs に PR が merge され `winget install` で導入可能
   - 起動時 + 24h 周期で新版検出、ユーザー承認で MSIX 適用
-  - 初回起動時に `expected.json` ピンと一致する GGUF を DL → SHA256 検証 →
-    probe-load 成功 → `selectedPath` コミット。ピン未投入 / 不一致 / DL 失敗時は
-    手動配置へフォールバックし Host は落ちない（§1.6.1 / M8 / M47 と整合）
+  - **DEV-202 確定（配信元決定）かつ `expected.json` ピン投入済みのとき**: 初回
+    起動時に ピンと一致する GGUF を DL → SHA256 検証 → probe-load 成功 →
+    `selectedPath` コミット。
+  - **DEV-202 未確定（配信元 保留）または ピン未投入のとき**: (b) DL を有効化せず、
+    (c) 手動配置を受け入れ条件とする（DL 受け入れ項目は DEV-202 確定 + ピン投入後に
+    適用）。いずれの分岐でも ピン未投入 / 不一致 / DL 失敗時は手動配置へ
+    フォールバックし Host は落ちない（§1.6.1 / M8 / M47 と整合）
 - **参照仕様**: `docs/sideload-packaging-spec.md` §5, §6, §1.6.1
 
 ### M33: ETW / WER

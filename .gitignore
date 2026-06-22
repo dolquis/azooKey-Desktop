@@ -13,6 +13,8 @@ out/
 install/
 compile_commands.json
 .cache/
+.codegraph/
+.serena/memories/
 .idea/
 *.ilk
 *.pdb

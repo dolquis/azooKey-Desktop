@@ -1,10 +1,15 @@
 #include "azookey/learning/LearningStore.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <locale>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "AtomicFile.h"
@@ -85,6 +90,97 @@ void LogMalformedLine(const std::string& path, size_t line_number) {
   std::cerr << "LearningStore: skipped malformed record in " << path << ":" << line_number << '\n';
 }
 
+bool IsAsciiWhitespace(char ch) {
+  switch (ch) {
+    case ' ':
+    case '\t':
+    case '\n':
+    case '\r':
+    case '\f':
+    case '\v':
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::string_view TrimLeadingAsciiWhitespace(std::string_view value) {
+  while (!value.empty() && IsAsciiWhitespace(value.front())) {
+    value.remove_prefix(1);
+  }
+  return value;
+}
+
+bool ConsumeAsciiToken(std::string_view& input, std::string_view& token) {
+  input = TrimLeadingAsciiWhitespace(input);
+  if (input.empty()) {
+    return false;
+  }
+
+  size_t end = 0;
+  while (end < input.size() && !IsAsciiWhitespace(input[end])) {
+    ++end;
+  }
+  token = input.substr(0, end);
+  input.remove_prefix(end);
+  return true;
+}
+
+bool ParseFiniteNonNegativeDouble(std::string_view token, double& value) {
+  if (token.empty()) {
+    return false;
+  }
+
+  double parsed = 0.0;
+  const char* const first = token.data();
+  const char* const last = first + token.size();
+  const auto result = std::from_chars(first, last, parsed);
+  if (result.ec != std::errc{} || result.ptr != last || !std::isfinite(parsed) ||
+      parsed < 0.0) {
+    return false;
+  }
+
+  value = parsed;
+  return true;
+}
+
+bool ParseUint64(std::string_view token, uint64_t& value) {
+  if (token.empty()) {
+    return false;
+  }
+
+  uint64_t parsed = 0;
+  const char* const first = token.data();
+  const char* const last = first + token.size();
+  const auto result = std::from_chars(first, last, parsed);
+  if (result.ec != std::errc{} || result.ptr != last) {
+    return false;
+  }
+
+  value = parsed;
+  return true;
+}
+
+bool ParseRecordValues(std::string_view value, LearningRecord& rec) {
+  std::string_view weight_token;
+  std::string_view timestamp_token;
+  if (!ConsumeAsciiToken(value, weight_token) || !ConsumeAsciiToken(value, timestamp_token)) {
+    return false;
+  }
+  if (!TrimLeadingAsciiWhitespace(value).empty()) {
+    return false;
+  }
+
+  LearningRecord parsed;
+  if (!ParseFiniteNonNegativeDouble(weight_token, parsed.weight) ||
+      !ParseUint64(timestamp_token, parsed.last_updated_epoch_sec)) {
+    return false;
+  }
+
+  rec = parsed;
+  return true;
+}
+
 bool SplitKey(const std::string& key, std::string& reading, std::string& surface) {
   const auto tab = key.find('\t');
   if (tab == std::string::npos) {
@@ -130,8 +226,7 @@ bool LearningStore::Load() {
       continue;
     }
 
-    std::istringstream values(weight_timestamp);
-    if (!((values >> rec.weight) && (values >> rec.last_updated_epoch_sec))) {
+    if (!ParseRecordValues(weight_timestamp, rec)) {
       LogMalformedLine(path_, line_number);
       continue;
     }
@@ -146,6 +241,7 @@ bool LearningStore::Load() {
 
 bool LearningStore::Save() const {
   std::ostringstream out;
+  out.imbue(std::locale::classic());
   out << kEscapedTsvHeader << '\n';
   std::vector<std::string> keys;
   keys.reserve(table_.size());

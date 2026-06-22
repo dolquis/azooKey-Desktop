@@ -3,12 +3,35 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <locale>
 #include <string>
 #include <vector>
 
 #include "azookey/core/Candidate.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
+
+namespace {
+
+class CommaDecimalPunct : public std::numpunct<char> {
+ protected:
+  char do_decimal_point() const override { return ','; }
+};
+
+class ScopedGlobalLocale {
+ public:
+  explicit ScopedGlobalLocale(const std::locale& locale) : previous_(std::locale()) {
+    std::locale::global(locale);
+  }
+
+  ~ScopedGlobalLocale() { std::locale::global(previous_); }
+
+ private:
+  std::locale previous_;
+};
+
+}  // namespace
 
 TEST(LearningStoreTest, SaveLoadAndCorrectionDownweight) {
   const std::string path =
@@ -137,6 +160,46 @@ TEST(LearningStoreTest, LegacyTsvKeepsBackslashSequencesLiteral) {
   std::remove(path.c_str());
 }
 
+TEST(LearningStoreTest, LoadParsesNumericFieldsIndependentOfGlobalLocale) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_locale_test.tsv").string();
+  std::remove(path.c_str());
+
+  {
+    std::ofstream ofs(path);
+    ofs << "# azookey-learning-tsv escaped=1\n";
+    ofs << "reading\tsurface\t1.5 400\n";
+  }
+
+  ScopedGlobalLocale locale(std::locale(std::locale::classic(), new CommaDecimalPunct));
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 1u);
+  EXPECT_DOUBLE_EQ(loaded.Score("reading", "surface", 400), 1.5);
+
+  std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, SaveWritesClassicNumericFieldsIndependentOfGlobalLocale) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_save_locale_test.tsv").string();
+  std::remove(path.c_str());
+
+  {
+    ScopedGlobalLocale locale(std::locale(std::locale::classic(), new CommaDecimalPunct));
+    azookey::learning::LearningStore store(path);
+    store.Observe("reading", "surface", 1.5, 400);
+    EXPECT_TRUE(store.Save());
+  }
+
+  std::ifstream ifs(path);
+  std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  EXPECT_NE(content.find("1.5 400"), std::string::npos);
+  EXPECT_EQ(content.find("1,5 400"), std::string::npos);
+
+  std::remove(path.c_str());
+}
+
 TEST(LearningStoreTest, LoadSkipsMalformedRowsAndKeepsValidRows) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_malformed_test.tsv").string();
@@ -155,6 +218,42 @@ TEST(LearningStoreTest, LoadSkipsMalformedRowsAndKeepsValidRows) {
   EXPECT_EQ(loaded.size(), 2u);
   EXPECT_DOUBLE_EQ(loaded.Score("valid", "entry", 400), 1.5);
   EXPECT_DOUBLE_EQ(loaded.Score("valid", "second", 401), 2.5);
+
+  std::remove(path.c_str());
+}
+
+TEST(LearningStoreTest, LoadSkipsNonFiniteAndOutOfRangeNumericFields) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_learning_numeric_validation.tsv").string();
+  std::remove(path.c_str());
+
+  {
+    std::ofstream ofs(path);
+    ofs << "valid\tentry\t1.5 400\n";
+    ofs << "comma\tentry\t1,5 401\n";
+    ofs << "nan\tentry\tnan 402\n";
+    ofs << "inf\tentry\tinf 403\n";
+    ofs << "negative\tentry\t-1.0 404\n";
+    ofs << "overflow-weight\tentry\t1e9999 405\n";
+    ofs << "negative-time\tentry\t1.0 -1\n";
+    ofs << "overflow-time\tentry\t1.0 18446744073709551616\n";
+    ofs << "trailing-token\tentry\t1.0 406 extra\n";
+    ofs << "valid\tsecond\t2.5 407\n";
+  }
+
+  azookey::learning::LearningStore loaded(path);
+  EXPECT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.size(), 2u);
+  EXPECT_DOUBLE_EQ(loaded.Score("valid", "entry", 400), 1.5);
+  EXPECT_DOUBLE_EQ(loaded.Score("valid", "second", 407), 2.5);
+  EXPECT_DOUBLE_EQ(loaded.Score("comma", "entry", 401), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("nan", "entry", 402), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("inf", "entry", 403), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("negative", "entry", 404), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("overflow-weight", "entry", 405), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("negative-time", "entry", 0), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("overflow-time", "entry", 0), 0.0);
+  EXPECT_DOUBLE_EQ(loaded.Score("trailing-token", "entry", 406), 0.0);
 
   std::remove(path.c_str());
 }

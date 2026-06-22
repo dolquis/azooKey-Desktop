@@ -359,7 +359,7 @@ GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 
 | DEV-202 結論 | (b) の配信元 | (a) 同梱 |
 |---|---|---|
 | 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
-| 再配布不可 / 条件付き | 再ホストせず上流（HuggingFace `Miwa-Keita/zenz-v3.x-small-gguf`）から DL。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
+| 再配布不可 / 条件付き | 再ホストせず上流（HuggingFace の concrete repo。配信元は `.gitmodules` がピンする submodule と同一にする＝現状 `Miwa-Keita/zenz-v3.2-small-gguf` の該当 GGUF ファイル）から DL。これにより取得物が「期待版のピン」（下記）の SHA256 と一致する。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
 | 未確定（現状） | 配信元 URL を設定 / ビルド定数の間接参照にしておき、(c) 手動配置を確実な既定経路として案内する | 保留 |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
@@ -375,9 +375,14 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **期待版のピン**: 期待する version + SHA256 をビルド定数（または
   `models\zenzai\expected.json`）に保持し、DL / 検証の照合に使う。値域は M45 の
   `ModelCatalogEntry.sha256`（`model-management-spec.md` §3.2）と同一。
-- **更新時の置換**: 新版を別ファイル名で DL → 検証 → `model.selectedPath`
-  （`model-management-spec.md` §7）を新版へ更新 → ロード成功後に旧版を削除する。
-  失敗時は旧版を残し切替しない（無停止更新）。
+- **更新時の置換（無停止更新）**: 新版を別ファイル名で DL → SHA256 検証 →
+  **新版をプローブロード（実際にロード成功を確認）** → 成功して初めて
+  `model.selectedPath`（`model-management-spec.md` §7）を新版へコミット →
+  旧版を削除する。SHA256 一致でもロード非互換だったり途中でクラッシュした場合に
+  備え、`selectedPath` のコミットはロード成功後に限定する（`autoLoadOnHostStart`
+  が次回起動で参照するのはコミット済みの値のみ）。いずれかの段で失敗したら
+  `selectedPath` は旧版のまま据え置き、新版ファイルは破棄して切替しない。これに
+  より「失敗時は旧版を残す」を原子的に保証する。
 - **未配置 / 破損時の劣化モード**: ロード境界は M8 のとおり Host を落とさず
   `SimpleConverter` にフォールバックし、M47 の状態機械（`DegradedModel` /
   `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。破損 / 部分 DL

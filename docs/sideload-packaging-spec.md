@@ -224,8 +224,8 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   - `azookey_inference_host.exe`
   - `azookey_settings.exe`（M11 で最小版を同梱 / M30 でフル UI 化。§3.0）
   - `Assets/*.png`
-  - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に
-    GitHub Release から DL
+  - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に DL
+    （v1.0 の最小取得経路と配信元の分岐は §1.6.1）
 
 ### 1.3 Microsoft.VCRTForwarders 同梱
 
@@ -317,7 +317,7 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
-| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時に GitHub Release から DL） | サイズ過大。§1.2 の既存方針に従う |
+| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 のライセンス結論で配信元が分岐） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない） | CUDA ランタイムが大きく NVIDIA 環境限定 |
@@ -326,6 +326,77 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
 フォールバックする（同 §4.3-5）。モデル本体（GGUF / ONNX）はいずれも MSIX に同梱せず
 初回起動時 DL とする方針で §1.2 と一貫させる。
+
+#### 1.6.1 v1.0 における Zenzai GGUF の最小取得経路（M8 / M28）
+
+§1.6 はモデルを「MSIX 非同梱・初回取得」と定める。本節はその **v1.0 最小実装**を
+確定する。対象は **zenz-v3 系 GGUF 1 種**（既定配置
+`%LOCALAPPDATA%\azooKey\models\zenzai\zenz-v3.1-small-Q5_K_M.gguf`。量子化の最終
+選定は M8 ベンチに従う。§3.4）。M45 のフル管理 UI
+（`docs/model-management-spec.md`）が乗る土台を、二重実装を避けて先に敷くことを
+目的とする。
+
+##### 取得方式の選定
+
+| 方式 | v1.0 採否 | 理由 |
+|---|---|---|
+| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えて再配布可否が DEV-202 未確定で、同梱は最もライセンスリスクが高い |
+| (b) 初回起動時オンデマンド DL | ✅ **v1.0 既定** | M32 / M36-B の `HttpDownloader` + SHA256 検証基盤（§6.3 / `docs/auto-word-registration-spec.md` §5）を再利用。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる |
+| (c) 手動配置 | ✅ **常時併存（恒久フォールバック）** | オフライン / 企業環境 / DL 失敗時の確実な経路。Phase 3 検証の既存前提（M8 受け入れ条件「未配置時も Host が落ちない」）をそのまま恒久サポートする |
+
+**確定**: v1.0 は **(b) を既定取得経路、(c) を常時フォールバック**とし、(a) は
+採らない。(b) と (c) は同一の配置レイアウト（後述）に収束するため、Host / M45
+から見た「モデルがそこに在る」状態は取得方式に依存しない。
+
+##### ライセンス分岐（DEV-202 連動。確定までは「配信元 保留」で設計）
+
+再配布可否は DEV-202（`gate:human-required`、未確定）の結論に従う。ここで重要な
+のは、**取得*機構*（HttpDownloader + SHA256 検証 + 原子的配置）は結論に依存せず
+同一**で、分岐するのは **配信元 URL と同梱可否だけ**である点。プロジェクトの
+GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 は (a) だけでなく
+(b) の配信元選択も律する。
+
+| DEV-202 結論 | (b) の配信元 | (a) 同梱 |
+|---|---|---|
+| 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
+| 再配布不可 / 条件付き | 再ホストせず上流（HuggingFace `Miwa-Keita/zenz-v3.x-small-gguf`）から DL。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
+| 未確定（現状） | 配信元 URL を設定 / ビルド定数の間接参照にしておき、(c) 手動配置を確実な既定経路として案内する | 保留 |
+
+CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
+（モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。
+
+##### 配置パスとバージョニング
+
+- **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
+  `model-management-spec.md` §3.1 の 1 階層スキャンと整合）。
+- **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
+  rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
+  ファイルをロード対象に入れない。
+- **期待版のピン**: 期待する version + SHA256 をビルド定数（または
+  `models\zenzai\expected.json`）に保持し、DL / 検証の照合に使う。値域は M45 の
+  `ModelCatalogEntry.sha256`（`model-management-spec.md` §3.2）と同一。
+- **更新時の置換**: 新版を別ファイル名で DL → 検証 → `model.selectedPath`
+  （`model-management-spec.md` §7）を新版へ更新 → ロード成功後に旧版を削除する。
+  失敗時は旧版を残し切替しない（無停止更新）。
+- **未配置 / 破損時の劣化モード**: ロード境界は M8 のとおり Host を落とさず
+  `SimpleConverter` にフォールバックし、M47 の状態機械（`DegradedModel` /
+  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。破損 / 部分 DL
+  （`.part` 残骸）は破棄し、直前の有効モデルか SimpleConverter を維持する。
+
+##### M45（フル管理 UI）への橋渡し
+
+`docs/model-management-spec.md` §2 はモデル DL を M45 の非目標（将来 M へ分離）と
+する。本 v1.0 最小取得経路がその「将来 M」の最小サブセットであり、次の責務分担で
+二重実装を避ける:
+
+- **v1.0（本節）が敷く土台**: 配置レイアウト（`models\zenzai\`）・取得機構
+  （HttpDownloader + SHA256 + 原子置換）・期待版ピン。対象は既知の zenz-v3 1 種に
+  限定し、汎用ダウンロードマネージャ UI は持たない。
+- **M45 が上に足す**: 検出 / 検証（`ListModels`、GGUF magic）・backend 選択・
+  ベンチマーク・管理 UI（`model-management-spec.md` §6）。M45 はこの配置レイアウト
+  と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
+- **将来のモデル DL UI（M45 後続 M）**: 本節の取得機構をそのまま UI 化し、上表の
+  配信元分岐を引き継ぐ。
 
 ### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
 

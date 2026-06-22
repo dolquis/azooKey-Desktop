@@ -331,14 +331,25 @@ NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R
 
 §1.6 はモデルを「MSIX 非同梱・初回取得」と定める。本節はその **v1.0 最小実装**を
 確定する。対象は **zenz-v3 系 GGUF 1 種**（既定配置
-`%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`）。**どの version / 量子化 /
-ファイルを v1.0 の対象とするかは submodule のピン（`.gitmodules`、現状
-`Miwa-Keita/zenz-v3.2-small-gguf`）を唯一の正とし、(b) の配信元・(c) の手動配置先・
-「期待版のピン」の SHA256 はすべてこの同一アーティファクトを指す**（§3.4 の
-`zenz-v3.1-small-…` 例や roadmap M8 受け入れの版表記が `.gitmodules` と食い違う場合
-は、版の決定権を持つ DEV-219〔M8 統合対象〕でピンへ揃える）。M45 のフル管理 UI
-（`docs/model-management-spec.md`）が乗る土台を、二重実装を避けて先に敷くことを
-目的とする。
+`%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`）。**v1.0 が対象とする
+モデル（repo / ファイル / version / 量子化 / SHA256）は Windows 側が所有する
+ピン定義 `models\zenzai\expected.json`（または同等のビルド定数）を唯一の正とし、
+(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
+アーティファクトを指す**。
+
+> **legacy submodule を Windows の正にしない（AGENTS.md 準拠）**: 上流の出所は
+> HuggingFace `Miwa-Keita/zenz-v3.2-small-gguf`（legacy macOS ビルドが
+> `.gitmodules` / `legacy/azooKeyMac/Resources/gguf` で参照するのと同じモデル）
+> だが、`legacy/` は保全された参照資産であり Windows 版の source of truth では
+> ない。legacy submodule の更新・削除で Windows v1.0 のアーティファクトや
+> 期待 SHA が暗黙に変わらないよう、**Windows のピンは `.gitmodules` を参照せず
+> `expected.json` に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
+> §3.4 の `zenz-v3.1-small-…` 例や roadmap M8 受け入れの版表記が現行上流（v3.2）と
+> 食い違う場合は、版の決定権を持つ DEV-219〔M8 統合対象〕で `expected.json` へ
+> 揃える（追跡: DEV-336）。
+
+M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、二重実装を
+避けて先に敷くことを目的とする。
 
 ##### 取得方式の選定
 
@@ -373,7 +384,7 @@ GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 
 | DEV-202 結論 | (b) の配信元 | (a) 同梱 |
 |---|---|---|
 | 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
-| 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**ピンと同一 repo / ファイル**（上記 `.gitmodules` ピン）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
+| 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**`expected.json` が定める repo / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
 | 未確定（現状） | 配信元 URL を設定 / ビルド定数の間接参照にしておき、(c) 手動配置を確実な既定経路として案内する | 保留 |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
@@ -386,11 +397,12 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
   rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
   ファイルをロード対象に入れない。
-- **期待版のピン**: 対象の version / 量子化 / ファイル名は submodule ピン
-  （`.gitmodules`）を正とし、その SHA256 をビルド定数（または
-  `models\zenzai\expected.json`）に保持して DL / 検証の照合に使う。(b) の配信元と
-  (c) の手動配置先は、いずれもこのピンと同一アーティファクトを指す。値域は M45 の
-  `ModelCatalogEntry.sha256`（`model-management-spec.md` §3.2）と同一。
+- **期待版のピン**: 対象の repo / ファイル名 / version / 量子化 / SHA256 は
+  Windows 側が所有する `models\zenzai\expected.json`（または同等のビルド定数）に
+  独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記
+  注記参照）。(b) の配信元と (c) の手動配置先は、いずれもこのピンと同一
+  アーティファクトを指す。SHA256 の値域は M45 の `ModelCatalogEntry.sha256`
+  （`model-management-spec.md` §3.2）と同一。
 - **更新時の置換（無停止更新）**: 新版を別ファイル名で DL → SHA256 検証 →
   **新版をプローブロード（実際にロード成功を確認）** → 成功して初めて
   `model.selectedPath`（`model-management-spec.md` §7）を新版へコミット →

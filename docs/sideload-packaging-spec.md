@@ -410,9 +410,13 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
     - **(c) 手動配置**: Host 起動時の **default-path autoselect** で橋渡しする。
       **`model.enabled` かつ `model.autoLoadOnHostStart=true`
       （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の場合に
-      限り、`models\zenzai\` の有効モデル（`expected.json` の SHA256 一致を優先、
-      `model-management-spec.md` §3.1/§3.3 の検証に準拠）を 1 つ決定的に選び、
-      プローブロード成功時に `selectedPath` へコミットする。次は autoselect の
+      限り、`models\zenzai\` の中から **SHA256 が `expected.json` のピンと一致する
+      ファイル**を選び（単に format-valid な GGUF では不可。**ピン一致を*前提条件*
+      とし**、licensing / 版ゲートを迂回しない。`model-management-spec.md`
+      §3.1/§3.3 の形式検証も併せて満たすこと）、プローブロード成功時に
+      `selectedPath` へコミットする。**ピン一致ファイルが無い / ピン未投入の場合は
+      autoselect しない**（任意の有効 GGUF を勝手に選ばない）＝ (c) 未配置として
+      扱い、M8/M47 の劣化モード（下記）に従う。次は autoselect の
       対象外とする: (i) `autoLoadOnHostStart=false`（起動時ロードを抑止する設定を
       尊重し、何もしない）、(ii) `selectedPath` が**非空だが不在**
       （`dev-infrastructure-spec.md` D-007 が *error* 扱いする「設定済みパス不在」。

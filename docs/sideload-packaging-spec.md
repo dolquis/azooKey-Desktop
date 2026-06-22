@@ -224,8 +224,8 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   - `azookey_inference_host.exe`
   - `azookey_settings.exe`（M11 で最小版を同梱 / M30 でフル UI 化。§3.0）
   - `Assets/*.png`
-  - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に
-    GitHub Release から DL
+  - `models/`（gguf）は **MSIX に含めない**（サイズ過大）→ 初回起動時に DL
+    （v1.0 の最小取得経路と配信元の分岐は §1.6.1）
 
 ### 1.3 Microsoft.VCRTForwarders 同梱
 
@@ -317,7 +317,7 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
-| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時に GitHub Release から DL） | サイズ過大。§1.2 の既存方針に従う |
+| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 のライセンス結論で配信元が分岐） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない） | CUDA ランタイムが大きく NVIDIA 環境限定 |
@@ -326,6 +326,173 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
 フォールバックする（同 §4.3-5）。モデル本体（GGUF / ONNX）はいずれも MSIX に同梱せず
 初回起動時 DL とする方針で §1.2 と一貫させる。
+
+#### 1.6.1 v1.0 における Zenzai GGUF の最小取得経路（M8 / M28）
+
+§1.6 はモデルを「MSIX 非同梱・初回取得」と定める。本節はその **v1.0 最小実装**を
+確定する。対象は **zenz-v3 系 GGUF 1 種**（既定配置
+`%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`）。**v1.0 が対象とする
+モデル（repo / ファイル / version / 量子化 / SHA256）は Windows 側が所有する
+ピン定義 `models\zenzai\expected.json`（または同等のビルド定数）を唯一の正とし、
+(b) の配信元・(c) の手動配置先・「期待版のピン」の SHA256 はすべてこの同一
+アーティファクトを指す**。
+
+> **legacy submodule を Windows の正にしない（AGENTS.md 準拠）**: 上流の出所は
+> HuggingFace `Miwa-Keita/zenz-v3.2-small-gguf`（legacy macOS ビルドが
+> `.gitmodules` / `legacy/azooKeyMac/Resources/gguf` で参照するのと同じモデル）
+> だが、`legacy/` は保全された参照資産であり Windows 版の source of truth では
+> ない。legacy submodule の更新・削除で Windows v1.0 のアーティファクトや
+> 期待 SHA が暗黙に変わらないよう、**Windows のピンは `.gitmodules` を参照せず
+> `expected.json` に独立に固定する**（`.gitmodules` は出所の参考としてのみ引く）。
+> §3.4 の `zenz-v3.1-small-…` 例や roadmap M8 受け入れの版表記が現行上流（v3.2）と
+> 食い違う場合は、版の決定権を持つ DEV-219〔M8 統合対象〕で `expected.json` へ
+> 揃える（追跡: DEV-336）。
+
+M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、二重実装を
+避けて先に敷くことを目的とする。
+
+##### 取得方式の選定
+
+| 方式 | v1.0 採否 | 理由 |
+|---|---|---|
+| (a) MSIX 同梱 | ✗ 不採用 | base MSIX が GGUF 分（数百 MB〜）肥大する（§1.2）。加えて再配布可否が DEV-202 未確定で、同梱は最もライセンスリスクが高い |
+| (b) 初回起動時オンデマンド DL | ✅ **v1.0 目標既定（M32 後）** | M32 で切り出す共有 `HttpDownloader` + SHA256 検証基盤（§6.3 / M36-B が再利用 / `docs/auto-word-registration-spec.md` §5）を再利用。サイズ問題を回避し、配信元を DEV-202 結論で差し替えられる。M32 前（M28 時点）は (c) が operative |
+| (c) 手動配置 | ✅ **常時併存（M28 の operative default 兼 恒久フォールバック）** | オフライン / 企業環境 / DL 失敗時の確実な経路。Phase 3 検証の既存前提（M8 受け入れ条件「未配置時も Host が落ちない」）をそのまま恒久サポートする |
+
+**確定**: v1.0 の取得方式は **(b) 初回起動時 DL を目標既定、(c) 手動配置を常時
+フォールバック**とし、(a) は採らない。(b) と (c) は同一の配置レイアウト（後述）に
+収束するため、Host / M45 から見た「モデルがそこに在る」状態は取得方式に依存しない。
+
+**マイルストーン順序の制約（M28 を M32 の DL 基盤に依存させない）**: (b) は共有
+ヘルパ `HttpDownloader`（M32 で切り出し、M36-B が再利用）に依存する。roadmap は
+**M28（§1 全体を実装）→ M29 → M32** の順で、M28 時点では `HttpDownloader` が未だ
+存在しない。したがって **M28 出荷時の operative default は (c) 手動配置**とし、(b)
+は **M32 の共有 `HttpDownloader` が揃った時点で既定化する fast-follow** として扱う
+（M28 で one-off の重複ダウンローダを書かない＝二重実装回避）。この (b) の実装は
+**roadmap M32 のスコープに計上**し（`plans/windows-port-roadmap.md` M32 / M28 実装
+範囲の注記）、宙に浮かせない。(b) を v1.0 ローンチ
+までに既定化したい場合は、ダウンローダ基盤の切り出しを M28 の前提として前倒しする
+（roadmap 側で M32 の該当スコープを M28 前へ移す）必要があり、これは roadmap 更新を
+伴う別判断とする。
+
+##### ライセンス分岐（DEV-202 連動。確定までは「配信元 保留」で設計）
+
+再配布可否は DEV-202（`gate:human-required`、未確定）の結論に従う。ここで重要な
+のは、**取得*機構*（HttpDownloader + SHA256 検証 + 原子的配置）は結論に依存せず
+同一**で、分岐するのは **配信元 URL と同梱可否だけ**である点。プロジェクトの
+GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 は (a) だけでなく
+(b) の配信元選択も律する。
+
+| DEV-202 結論 | (b) の配信元 | (a) 同梱 |
+|---|---|---|
+| 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
+| 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**`expected.json` が定める repo / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
+| 未確定（現状） | 配信元 URL を設定 / ビルド定数の間接参照にしておき、(c) 手動配置を確実な既定経路として案内する | 保留 |
+
+CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
+（モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。
+
+##### 配置パスとバージョニング
+
+- **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
+  `model-management-spec.md` §3.1 の 1 階層スキャンと整合）。
+- **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
+  rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
+  ファイルをロード対象に入れない。
+- **初回取得後の `selectedPath` コミット（必須）**: Host は起動時に既定
+  ディレクトリを自動スキャン**しない** —
+  `inference-host/src/SettingsStore.cpp::ApplyRuntimeSettingsToEngineConfig` は
+  `model.selectedPath` を `config.model_path` へコピーするのみで、空 path は
+  「モデル未選択 → SimpleConverter」になる。よって**ファイルを配置しただけでは
+  再起動後も degraded のまま**になり得る。これを防ぐため、取得方式ごとに次で
+  `selectedPath` を確定させる:
+    - **(b) 初回 DL**: headless 取得のため、(c1) と同じ前提ガードを
+      **ネットワーク I/O・probe-load の前に**評価し、満たす場合のみ起動する —
+      **`model.enabled` かつ `model.autoLoadOnHostStart=true`
+      （`model-management-spec.md` §7）かつ `privacy.mode` がネットワーク禁止
+      （`offline`。M46 / `privacy-and-secure-input-spec.md`）でない**こと。
+      いずれか不成立なら DL せず手動配置に委ねる（offline でも (c1) ローカル
+      autoselect / (c2) 明示選択は network なしで成立）。ガードを満たす場合、
+      ダウンローダが rename 後の確定パスをプローブロードし、成功して初めて
+      `model.selectedPath` へコミットする（更新時と同じ probe→commit 規律）。
+    - **(c) 手動配置**: 2 経路を持つ。
+        - **(c1) Host 起動時の default-path autoselect（ピン依存）**:
+          **`model.enabled` かつ `model.autoLoadOnHostStart=true`
+          （`model-management-spec.md` §7）かつ `selectedPath` が空 / 未設定**の
+          場合に限り、`models\zenzai\` の中から **SHA256 が `expected.json` の
+          ピンと一致するファイル**を選び（単に format-valid な GGUF では不可。
+          **ピン一致を*前提条件*とし**、licensing / 版ゲートを迂回しない。
+          `model-management-spec.md` §3.1/§3.3 の形式検証も併せて満たすこと）、
+          プローブロード成功時に `selectedPath` へコミットする。**ピン一致
+          ファイルが無い / ピン未投入の場合は autoselect しない**（任意の有効
+          GGUF を勝手に選ばない）＝ (c1) 適用外で、(c2) か劣化モード（下記）に
+          委ねる。次も autoselect の対象外: (i) `autoLoadOnHostStart=false`
+          （起動時ロードを抑止する設定を尊重し、何もしない）、(ii) `selectedPath`
+          が**非空だが不在**（`dev-infrastructure-spec.md` D-007 が *error* 扱い
+          する「設定済みパス不在」。silently 切り替えず error / M45 モデル選択
+          誘導に委ねる）、(iii) `selectedPath` が非空かつ実在（下記 (c2) の明示
+          選択。autoselect は上書きしない）。
+        - **(c2) ユーザーによる明示選択（ピン非依存）**: ユーザー / 管理者が
+          `model.selectedPath` を直接設定する経路（`settings.json` 手編集、または
+          設定 UI / M45 の「モデルを追加」「選択モデルをロード」）。設定された
+          実在パスを probe-load して使う。**`expected.json` ピンが未投入でも成立
+          する唯一の手動経路**であり、autoselect が無効な状況（ピン未投入等）の
+          受け皿になる。ファイルを `models\zenzai\` に置くだけでは不十分で、必ず
+          `selectedPath` を明示設定する（空のままでは degraded）。
+- **期待版のピン**: 対象の repo / ファイル名 / version / 量子化 / SHA256 は
+  Windows 側が所有する `models\zenzai\expected.json`（または同等のビルド定数）に
+  独立に固定し、DL / 検証の照合に使う（legacy `.gitmodules` は参照しない。上記
+  注記参照）。(b) の配信元と (c) の手動配置先は、いずれもこのピンと同一
+  アーティファクトを指す。SHA256 の値域は M45 の `ModelCatalogEntry.sha256`
+  （`model-management-spec.md` §3.2）と同一。本書はこのピンの**契約（schema）を
+  定義**し、**具体値（正確なファイル名と SHA256）は M8/M28 実装時に版の決定権を
+  持つ DEV-219 が投入する**（本 PR は docs のみのため値ファイルは未コミット。
+  値の確定 = DEV-336 / DEV-219）:
+
+  ```jsonc
+  // models\zenzai\expected.json（Windows 所有のピン。値は M8/M28 で投入）
+  {
+    "repo": "Miwa-Keita/zenz-v3.2-small-gguf",   // 出所（上流）。再ホスト時も artifact は同一
+    "file": "<exact-file-name>.gguf",             // 例: ggml-model-Q5_K_M.gguf（DEV-219 で確定）
+    "version": "v3.2-small",
+    "quantization": "Q5_K_M",
+    "sha256": "<64-hex>",                          // 検証の基準。DEV-219 で実値投入
+    "size_bytes": 0                                // 任意（部分 DL 早期検出用）
+  }
+  ```
+
+  **ピン未投入時の挙動（明示）**: `expected.json`（または定数）が未投入の間は、
+  照合すべき正確な artifact / SHA256 が無いため **(b) DL は発火させない**（誤った
+  v3.1/v3.2 を引いたり検証不能になるのを防ぐ）。この期間の operative path は
+  (c) 手動配置のみで、未配置なら M8/M47 の劣化モード（下記）に従う。これにより
+  「ピンが正、未投入なら DL せず degraded」が決定的になる。
+- **更新時の置換（無停止更新）**: 新版を別ファイル名で DL → SHA256 検証 →
+  **新版をプローブロード（実際にロード成功を確認）** → 成功して初めて
+  `model.selectedPath`（`model-management-spec.md` §7）を新版へコミット →
+  旧版を削除する。SHA256 一致でもロード非互換だったり途中でクラッシュした場合に
+  備え、`selectedPath` のコミットはロード成功後に限定する（`autoLoadOnHostStart`
+  が次回起動で参照するのはコミット済みの値のみ）。いずれかの段で失敗したら
+  `selectedPath` は旧版のまま据え置き、新版ファイルは破棄して切替しない。これに
+  より「失敗時は旧版を残す」を原子的に保証する。
+- **未配置 / 破損時の劣化モード**: ロード境界は M8 のとおり Host を落とさず
+  `SimpleConverter` にフォールバックし、M47 の状態機械（`DegradedModel` /
+  `SafeMode`）と UI 通知に従う（`⚠️ … 簡易変換で継続`）。破損 / 部分 DL
+  （`.part` 残骸）は破棄し、直前の有効モデルか SimpleConverter を維持する。
+
+##### M45（フル管理 UI）への橋渡し
+
+`docs/model-management-spec.md` §2 はモデル DL を M45 の非目標（将来 M へ分離）と
+する。本 v1.0 最小取得経路がその「将来 M」の最小サブセットであり、次の責務分担で
+二重実装を避ける:
+
+- **v1.0（本節）が敷く土台**: 配置レイアウト（`models\zenzai\`）・取得機構
+  （HttpDownloader + SHA256 + 原子置換）・期待版ピン。対象は既知の zenz-v3 1 種に
+  限定し、汎用ダウンロードマネージャ UI は持たない。
+- **M45 が上に足す**: 検出 / 検証（`ListModels`、GGUF magic）・backend 選択・
+  ベンチマーク・管理 UI（`model-management-spec.md` §6）。M45 はこの配置レイアウト
+  と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
+- **将来のモデル DL UI（M45 後続 M）**: 本節の取得機構をそのまま UI 化し、上表の
+  配信元分岐を引き継ぐ。
 
 ### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
 

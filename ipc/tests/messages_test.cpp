@@ -1,3 +1,4 @@
+#include <cmath>
 #include <string>
 #include <limits>
 #include <locale>
@@ -143,6 +144,10 @@ TEST(JsonTest, PreservesLargeIntegerTokensForUIntExtraction) {
   auto too_large = json::Parse("{\"request_id\":18446744073709551616}");
   ASSERT_TRUE(too_large.has_value());
   EXPECT_FALSE(too_large->GetUInt("request_id").has_value());
+
+  auto non_plain_too_large = json::Parse("{\"request_id\":18446744073709551616.0}");
+  ASSERT_TRUE(non_plain_too_large.has_value());
+  EXPECT_FALSE(non_plain_too_large->GetUInt("request_id").has_value());
 }
 
 TEST(JsonTest, NumberCodecIgnoresGlobalCppLocale) {
@@ -160,6 +165,32 @@ TEST(JsonTest, NumberCodecIgnoresGlobalCppLocale) {
   ASSERT_TRUE(score.has_value());
   EXPECT_DOUBLE_EQ(*score, 0.75);
   EXPECT_FALSE(json::Parse("{\"score\":0,75}").has_value());
+}
+
+TEST(JsonTest, HandlesFloatingUnderflowAsZero) {
+  namespace json = azookey::ipc::json;
+
+  auto parsed = json::Parse("{\"value\":1e-400}");
+  ASSERT_TRUE(parsed.has_value());
+  auto value = parsed->GetNumber("value");
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(*value, 0.0);
+
+  auto negative = json::Parse("{\"value\":-1e-400}");
+  ASSERT_TRUE(negative.has_value());
+  auto negative_value = negative->GetNumber("value");
+  ASSERT_TRUE(negative_value.has_value());
+  EXPECT_EQ(*negative_value, 0.0);
+  EXPECT_TRUE(std::signbit(*negative_value));
+}
+
+TEST(JsonTest, StringifiesIntegralDoubleBoundariesSafely) {
+  namespace json = azookey::ipc::json;
+
+  EXPECT_EQ(json::Stringify(json::Value(std::ldexp(1.0, 63))),
+            "9223372036854775808");
+  EXPECT_EQ(json::Stringify(json::Value(-std::ldexp(1.0, 63))),
+            "-9223372036854775808");
 }
 
 TEST(JsonTest, CombinesSurrogatePairsAndRejectsInvalidUtf8) {

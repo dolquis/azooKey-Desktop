@@ -1,5 +1,6 @@
 #include "azookey/ipc/Json.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cctype>
@@ -75,11 +76,59 @@ bool IsPlainIntegerToken(const std::string& token) {
   return true;
 }
 
+std::optional<int> AdjustedDecimalExponent(std::string_view token) {
+  const size_t exponent_pos = token.find_first_of("eE");
+  const size_t significand_end =
+      exponent_pos == std::string_view::npos ? token.size() : exponent_pos;
+
+  int explicit_exponent = 0;
+  if (exponent_pos != std::string_view::npos) {
+    size_t pos = exponent_pos + 1;
+    bool negative_exponent = false;
+    if (pos < token.size() && (token[pos] == '+' || token[pos] == '-')) {
+      negative_exponent = token[pos] == '-';
+      ++pos;
+    }
+    int exponent_value = 0;
+    for (; pos < token.size(); ++pos) {
+      exponent_value = std::min(exponent_value * 10 + (token[pos] - '0'), 10000);
+    }
+    explicit_exponent = negative_exponent ? -exponent_value : exponent_value;
+  }
+
+  size_t pos = token[0] == '-' ? 1 : 0;
+  int digits_before_decimal = 0;
+  int digit_index = 0;
+  std::optional<int> first_nonzero_index;
+  bool past_decimal = false;
+  for (; pos < significand_end; ++pos) {
+    if (token[pos] == '.') {
+      past_decimal = true;
+      continue;
+    }
+    if (!past_decimal) ++digits_before_decimal;
+    if (token[pos] != '0' && !first_nonzero_index) {
+      first_nonzero_index = digit_index;
+    }
+    ++digit_index;
+  }
+  if (!first_nonzero_index) return std::nullopt;
+  return explicit_exponent + digits_before_decimal - *first_nonzero_index - 1;
+}
+
+bool UnderflowsToZero(std::string_view token) {
+  auto adjusted_exponent = AdjustedDecimalExponent(token);
+  return adjusted_exponent && *adjusted_exponent < -324;
+}
+
 std::optional<double> ParseFiniteDouble(std::string_view token) {
   double value = 0.0;
   const char* first = token.data();
   const char* last = first + token.size();
   const auto [ptr, ec] = std::from_chars(first, last, value);
+  if (ec == std::errc::result_out_of_range && ptr == last && UnderflowsToZero(token)) {
+    return token[0] == '-' ? -0.0 : 0.0;
+  }
   if (ec != std::errc{} || ptr != last || !std::isfinite(value)) {
     return std::nullopt;
   }
@@ -107,9 +156,16 @@ std::string StringifyNumber(const Number& number) {
 
   double d = number.value;
   double intpart = 0;
-  if (std::modf(d, &intpart) == 0.0 &&
-      d >= -9.2233720368547758e18 && d <= 9.2233720368547758e18) {
-    return FormatInteger(static_cast<int64_t>(d));
+  if (std::modf(d, &intpart) == 0.0) {
+    const double int64_min = static_cast<double>(std::numeric_limits<int64_t>::min());
+    const double int64_max_exclusive = std::ldexp(1.0, 63);
+    const double uint64_max_exclusive = std::ldexp(1.0, 64);
+    if (d >= 0.0 && d < uint64_max_exclusive) {
+      return FormatInteger(static_cast<uint64_t>(d));
+    }
+    if (d >= int64_min && d < int64_max_exclusive) {
+      return FormatInteger(static_cast<int64_t>(d));
+    }
   }
   return FormatDouble(d).value_or("null");
 }
@@ -382,9 +438,10 @@ std::optional<int64_t> Value::GetInt(std::string_view key) const {
   }
   double d = number.value;
   double intpart = 0.0;
+  const double int64_min = static_cast<double>(std::numeric_limits<int64_t>::min());
+  const double int64_max_exclusive = std::ldexp(1.0, 63);
   if (!std::isfinite(d) || std::modf(d, &intpart) != 0.0 ||
-      d < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
-      d > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+      d < int64_min || d >= int64_max_exclusive) {
     return std::nullopt;
   }
   return static_cast<int64_t>(d);
@@ -405,8 +462,9 @@ std::optional<uint64_t> Value::GetUInt(std::string_view key) const {
   }
   double d = number.value;
   double intpart = 0.0;
+  const double uint64_max_exclusive = std::ldexp(1.0, 64);
   if (!std::isfinite(d) || d < 0.0 || std::modf(d, &intpart) != 0.0 ||
-      d > static_cast<double>(std::numeric_limits<uint64_t>::max())) {
+      d >= uint64_max_exclusive) {
     return std::nullopt;
   }
   return static_cast<uint64_t>(d);

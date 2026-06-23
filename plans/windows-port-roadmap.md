@@ -650,11 +650,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   結果反映）。
 - **横断**: 仕様完了後に X-3-3（Post-Commit Lint）を本マイルストーン末尾に
   追加実装する（同じ AiBackend 経路を流用）。
+- **AiBackend 契約（DEV-346 で確定。`docs/ai-backend-spec.md` 正典）**:
+  - M16 / M58-C / X-3-3 は別 IPC メッセージだが Host 側 `AiBackend::Transform` に集約。
+  - **HTTP 経路**: M16 は共通 WinHTTP 基盤を最小導入し、M32 はその基盤上に
+    GET+SHA256 ダウンロードを後から実装（**M32 を Phase 5 へ前倒ししない**。§6 / §13）。
+  - **API キー**: `dpapi:` prefix 規約で保存（§9）。M34 を Phase 5 直後へ前倒し、ただし
+    M16 は M34 を hard prerequisite にしない（暫定平文 + README 注意喚起）。
+  - **secure ゲート**: `AiBackend` 入口で `PrivacyGate` を強制チェック（§8、M46 連携）。
 - **受け入れ条件**:
   - 英数 / かな双方のダブルタップで `TransformSelectedText` が呼ばれる
   - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答が表示される
   - 結果が selection range に置換される
-- **参照仕様**: `docs/legacy-parity-spec.md` §4、`docs/rich-features-spec.md` X-3-3
+- **参照仕様**: `docs/ai-backend-spec.md`（AiBackend 契約・正典）、
+  `docs/legacy-parity-spec.md` §4、`docs/rich-features-spec.md` X-3-3
 
 ### M17: カスタムローマ字テーブル
 
@@ -915,7 +923,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
   外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、
   `inference-host/src/HttpDownloader.cpp`（新規。WinHTTP + SHA256 共通ヘルパの
-  切り出し。M36-B が再利用）、初回モデル取得ロジック（`expected.json` ピン照合 →
+  切り出し。M36-B が再利用）。**共通 WinHTTP 基盤（セッション/プロキシ/TLS/タイムアウト）は
+  M16 が先に最小導入し（`docs/ai-backend-spec.md` §6 で契約化）、M32 はその基盤上に
+  GET+SHA256 ダウンロード経路を追加する（Phase 5 への前倒しは不要）**、初回モデル取得
+  ロジック（`expected.json` ピン照合 →
   `.part`→検証→rename → probe-load → `selectedPath` コミット）、設定アプリ UI。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §5、§6、および §1.6.1 (b)
   （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）。
@@ -958,6 +969,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   M16（Magic Conversion）が OpenAI API キーの平文保存を持ち込むため、M34 を
   Phase 7 末尾に置くと平文保存期間が長期化する。Phase 5 直後に前倒しして
   暗号化ギャップを早期に塞ぐ。M16 着手時点では README で平文保存を注意喚起する。
+  API キーの at-rest 保存は `dpapi:` prefix 規約（`docs/ai-backend-spec.md` §9）で行い、
+  prefix の有無で復号/平文を分岐する。M34 投入後は設定値の移行のみで AiBackend は不変。
 - **変更対象**: `learning/src/DpapiCrypto.cpp`（新規）、`learning/src/LearningStore.cpp`
   （Load/Save をラップ）、`settings-app/`（API キー入力時に暗号化）。M35 / M36 着手
   済みの場合は `TypoCorrectionStore` / `AutoWordStore` の Load/Save も同様にラップ。

@@ -7,4 +7,4 @@ target_link_libraries(core_tests
   PRIVATE azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings
 )
 
-gtest_discover_tests(core_tests)
+azookey_discover_tests(core_tests)

@@ -8,9 +8,9 @@
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
 - `docs/rich-features-spec.md` X-3-3（Post-Commit Lint）/ X-3-5（訂正の学習）
 - `docs/privacy-and-secure-input-spec.md` §5（secure 中の挙動契約、`PrivacyGate`）
-- `docs/app-profile-spec.md` §4.2（アプリ別 backend 解決）
+- `docs/app-profile-spec.md` §4.2（M48 アプリ別 backend 解決）
 - `docs/sideload-packaging-spec.md` §9（M34 DPAPI）
-- `plans/windows-port-roadmap.md` M16 / M32 / M34 / M46 / M47 / M58-C
+- `plans/windows-port-roadmap.md` M16 / M32 / M34 / M46 / M47 / M48 / M58-C
 - `legacy/Core/Sources/Core/MagicConversion/{AIBackend,OpenAIClient}.swift`（参照のみ）
 作成日: 2026-06-24
 位置づけ: Phase 5（M16）正典仕様。`AiBackend` は M16 単独でなく M58-C / X-3-3 が
@@ -140,7 +140,8 @@ struct AiTransformResult {
 class AiBackend {
 public:
   // 入口で PrivacyGate を強制チェックし（§8）、backend ごとの実装へ委譲する。
-  // 同期 API。非同期化（X-3-3 / streaming）は RequestScheduler 側で行う。
+  // 同期 API。非同期化（X-3-3 / streaming）は既存 RequestScheduler
+  // (inference-host/src/RequestScheduler.cpp) 側で行う。
   AiTransformResult Transform(const AiTransformRequest& req);
 };
 
@@ -154,6 +155,8 @@ public:
      禁止、`AiCandidateAllowed()==false` なら AI 自体を禁止 → 実効 backend を
      `None` に強制（§8）。`privacy-and-secure-input-spec.md` §5 / §5.2 が正典。
   2. **アプリ別プロファイル**（M48）: `app-profile-spec.md` §4.2 の backend 解決。
+     **M48 未実装時はこの段を飛ばし、3 のグローバル設定へフォールバックする**
+     （M16 は M48 に依存しない。§13）。
   3. **グローバル設定** `aiBackend`（`settings/mvp-settings.schema.json`）。
 - **X-3-3 の既定寄せ**: X-3-3（自動・毎 commit）は、`aiBackend=openai` でも
   Post-Commit Lint の送信先を `local-zenzai` へ寄せる。`local-zenzai` 不在時は
@@ -172,7 +175,11 @@ length-prefixed フレーム（4 byte LE 長 + JSON、`kMaxFrameSize = 1 MiB`）
 `ipc/src/Payloads.cpp` に追加する。各メッセージ名を `MessageType` enum と
 `TypeToString` / `TypeFromString` に追加する。
 
-### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を確定）
+### 4.1 M16: `TransformSelectedText`（`docs/legacy-parity-spec.md` §4.4 を拡張・確定）
+
+> `legacy-parity-spec.md` §4.4 の骨子に対し、本節は `max_results` / `results` /
+> `error_class` を追加する。本節が当該 payload の正典であり、§4.4 の旧定義は骨子参照に
+> 留める（`legacy-parity-spec.md` §4 冒頭の委譲注記参照）。
 
 ```
 TransformSelectedTextRequest:
@@ -201,7 +208,9 @@ M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の
 `AiTransformRequest`（`task=Cleanup`、`text=reading`、`raw_romaji`、`auto_punctuation`、
 `left_context`）へ正規化して `AiBackend::Transform` を呼ぶ。`romaji-batch-conversion-spec.md`
 §6.1 の必須フィールド（`mode=ai-cleanup` のとき `raw_romaji` 必須）と本書 §3.2 の
-`AiTransformRequest` を相互に一致させる。
+`AiTransformRequest` を相互に一致させる。`QueryBatchConversion` の `max_candidates`
+（文節あたり候補数）は Cleanup task では使わず、Host 正規化時に `max_results=1` 固定とする
+（文節候補数は M58-C 側の変換経路で扱う）。
 
 > 共有点: M58-C と M16 は**別 IPC メッセージ**だが、Host 側で同じ
 > `AiBackend::Transform` に集約される。これが「3 消費者の共有」の実体である。
@@ -312,6 +321,8 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 ### 7.1 タイムアウト階層
 
 外部 API（OpenAI）のタイムアウトと、Host/IPC のタイムアウト（M47）を**区別**する。
+以下の具体値（30 s / 10 s、§7.3 の再試行回数）は目安であり、実装 PR で `openAiTimeoutMs`
+（§11）と連動して調整可とする。
 
 | 層 | 対象 | 値（既定） | 備考 |
 |---|---|---|---|
@@ -489,6 +500,9 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 - **M16 ↔ M46**: secure ガードは §8 で `AiBackend` 入口に強制。M46 同時期/先行が
   望ましい（roadmap M16 既述）。`PrivacyGate` 不在時は外部 AI を有効化しない安全側に
   倒す（実装上の暫定は M16 PR でレビュー）。
+- **M16 ↔ M48**: backend 解決順（§3.3）の第 2 段がアプリ別プロファイル
+  （`app-profile-spec.md` §4.2）。M16 は M48 に依存せず、M48 未実装時はこの段を
+  飛ばしてグローバル `aiBackend` へフォールバックする。
 - **M58-C / X-3-3**: 本書の `AiBackend` 抽象・fallback・secure 契約を前提に積む。
 
 ---

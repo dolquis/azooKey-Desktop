@@ -329,6 +329,9 @@ WinUI 3 への移行は Phase 7-M30。
 
 ### 4.4 IPC
 
+> 以下は骨子。確定版の payload（`max_results` / `results` / `error_class` 追加を含む）は
+> `docs/ai-backend-spec.md` §4.1 が正典。
+
 新規メッセージ：
 
 ```

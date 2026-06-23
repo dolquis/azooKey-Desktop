@@ -818,9 +818,12 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | 入力 | inputStyle / customRomajiTablePath / liveConversion / predictionEnabled |
 | AI | aiBackend / openAiApiKey / openAiApiEndpoint / promptPrefixByApp |
 | 学習 | LearningStore 表示 / エクスポート / リセット / Persona 表示 |
-| 詳細 | backendPreference / powerProfile / logLevel / etwProvider |
+| 詳細 | backendPreference / epPreference / powerProfile / logLevel |
 | 校正 | （M30 後半）バッチ訂正ビュー |
 | バージョン | バージョン情報 / 更新確認 / ライセンス |
+
+> 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
+> 反映方法・拡張方針）は §3.6 を参照する。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 「詳細」ペインの `backendPreference` 選択は、
 > 各バックエンドのランタイム DLL 存在判定（`cudart64_12.dll`+`cublas64_12.dll` / `vulkan-1.dll`）
@@ -893,6 +896,89 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **正典実装**: 具体コード（`ConfigureFunction`・`ShellExecuteExW` による起動・カテゴリ登録
   `GUID_TFCAT_TIP_PROPERTY_UI_TEXT_SERVICE`・インストールパス解決）は
   `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。
+
+### 3.6 設定スキーマの確定（キー一覧・永続化・拡張方針）
+
+設定キーが各機能 spec に分散したまま実装に入ると、設定アプリと Host の整合が崩れる。
+本節は schema の最終形（全 top-level キー）と永続化・拡張方針を一箇所に確定する索引で
+あり、M30 設定アプリ・後続 UI（M45 モデル管理 / M49 学習データ可視化）の共通基盤とする。
+
+**正典アーティファクトと責務境界**:
+
+- **スキーマ正典**: `settings/mvp-settings.schema.json`（JSON Schema draft 2020-12）。
+  全オブジェクト階層で `additionalProperties: false` を維持し、未知キーを拒否する。
+- **永続インスタンス**: `%LOCALAPPDATA%\azooKey\config\settings.json`（§3.4）。設定アプリが
+  書き込み、Host が読み込んで適用する（往復は §3.3 の `UpdateConfig`）。
+- **意味論の正典は各機能 spec**: 各キーの挙動・enum 値の意味・閾値は下表「正典」列の spec が
+  定義する。本節はそれらを **再定義せず**、設定アプリ統合の観点（UI ペイン / 導入マイルストーン /
+  反映方法）を一覧化する。v1.0 出荷時に同梱する**最小サブセット**の選定は DEV-107（M11 schema
+  サブセット）が扱い、本節は schema 最終形と永続化・拡張方針を確定する。
+
+#### キー一覧（top-level）
+
+| キー | 型 / enum | 既定 | UI ペイン | 導入 | 反映 | 正典 |
+|---|---|---|---|---|---|---|
+| `inputMode` | enum `hiragana`/`alnum_half`/`alnum_full` | `hiragana` | 入力 | Phase 5（基本） | 即時 | schema |
+| `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
+| `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
+| `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
+| `predictionEnabled` | bool | `true` | 入力 | M15 | 即時 | roadmap M15 |
+| `batchRomajiConversion` | bool | `false` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
+| `batchRomajiPreviewStyle` | enum `kana`/`romaji` | `kana` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
+| `batchConversionMode` | enum `neural`/`ai-cleanup` | `neural` | 入力 | M58-A/C | 即時 | `romaji-batch-conversion-spec.md` |
+| `batchAutoPunctuation` | bool | `false` | 入力 | M58-C | 即時 | `dynamic-punctuation-spec.md` |
+| `llmMagicConversion` | bool | `false` | AI | M16 | 即時 | roadmap M16 |
+| `aiBackend` | enum `none`/`openai`/`local-zenzai` | `none` | AI | M16 | 即時 | roadmap M16 |
+| `openAiApiKey` | string（機微・§9 DPAPI） | `""` | AI | M16 / M34 | 即時 | roadmap M16 / §9 |
+| `openAiApiEndpoint` | string（URL） | `https://api.openai.com/v1` | AI | M16 | 即時 | roadmap M16 |
+| `openAiModel` | string | `gpt-4o-mini` | AI | M16 | 即時 | roadmap M16 |
+| `includeContextInAITransform` | bool | `true` | AI | M16 | 即時 | roadmap M16 |
+| `promptPrefixByApp` | map<string,string> | `{}` | AI | rich X-2-6 | 即時 | `rich-features-spec.md` X-2-6 / `app-profile-spec.md` §6 |
+| `contextReselection` | bool（実験） | `false` | 詳細 | rich X-3-2 | 即時 | `rich-features-spec.md` X-3-2 |
+| `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
+| `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
+| `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
+| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
+| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
+| `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
+| `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
+| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル | M45 | モデル再ロード | `model-management-spec.md` §5/§7 |
+| `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
+
+> オブジェクト型キー（`model` / `autoUpdate`）の下位フィールドは「正典」列の spec が確定形を
+> 持つ。本表で再掲せず、ネスト構造の単一情報源を維持する。
+
+#### 永続化形式と適用順
+
+- 単一の `settings.json`（UTF-8）に top-level キーを格納する。書き込みは破損耐性のため
+  atomic write（一時ファイル → rename）で行う。
+- **レイヤリング / 優先順位**: per-app `profilesByApp`（M48）＞ `model.*`（同名 root キーを上書き、
+  `model-management-spec.md` §5.2）＞ root。実効値の解決順は `app-profile-spec.md` §5 を正典とする。
+- **反映方法の確定（v1.0 キー）**: Host は `settings.json` を hot-reload し、**プロセス再起動を要する
+  キーを持たない**。モデルロードに影響するキー（`backendPreference` / `epPreference` / `model.*`）は
+  Host 内部の推論エンジン再ロードで反映する（`model-management-spec.md` §5.3、`model.autoLoadOnHostStart`）。
+  それ以外は次回変換から即時反映する。§3.3 の「再起動が必要な設定」は v1.0 では発生せず、将来キーで
+  必要になった場合のみ M30 設定アプリが再起動指示を表示する。
+- **機微値**: `openAiApiKey` は M34 で DPAPI 暗号化し `dpapi:` プレフィックス付きで保存する（§9）。
+  平文保存は移行期のみ許容し、Host は両形式を受理する。
+
+#### 拡張方針（`additionalProperties: false` 下でのキー追加）
+
+- **追加は加算的**: 新規キーは既定値付きで追加し、旧 `settings.json` は欠落キーを schema 既定で
+  補完して前方互換を保つ。リネーム・削除・enum 縮小は破壊的変更とし、`SettingsManager` に移行処理を
+  実装してから schema を変更する。
+- **schema とコードの同時更新**: 新規 top-level キーの schema 追加と Host 側読み書き実装は同一 PR で
+  行い、schema 不在のままキーを書き込む不整合を作らない（`privacy-and-secure-input-spec.md` §7 /
+  `app-profile-spec.md` §4 と同方針）。
+- **予定済み top-level 拡張**（現行 `mvp-settings.schema.json` には未統合。各 spec の fragment が確定形で、
+  統合 PR で本ファイルへマージする）:
+  - `privacy`（M46。プライバシー / secure 各軸。`docs/privacy-and-secure-input-spec.md` §7 が schema
+    fragment を正典とする）。
+  - `profilesByApp`（M48。前面アプリ別プロファイル。`docs/app-profile-spec.md` §4 が schema fragment を
+    正典とする。既存 `promptPrefixByApp` との統合は同 §6）。
+- **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
+  §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
+  が制御する）。LearningStore / Persona 表示はキーではなく読み取り専用ビューである。
 
 ## 4. WiX / Inno Setup インストーラ（M31）
 

@@ -48,6 +48,41 @@ TEST(RomajiKanaConverterTest, FeedAndFlush) {
   EXPECT_EQ(FeedAll(converter, "jyou"), "じょう");
 }
 
+TEST(RomajiKanaConverterTest, AlternativeRomajiAliases) {
+  azookey::core::RomajiKanaConverter converter;
+  EXPECT_EQ(FeedAll(converter, "siro"), "しろ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "tu"), "つ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "syatu"), "しゃつ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "tyotto"), "ちょっと");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "zibun"), "じぶん");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "di"), "ぢ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "du"), "づ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "zya"), "じゃ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "dya"), "ぢゃ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "huji"), "ふじ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "ttuki"), "っつき");
+}
+
 TEST(RomajiKanaConverterTest, Preview) {
   using azookey::core::RomajiKanaConverter;
   EXPECT_EQ(RomajiKanaConverter::Preview("k"), "k");
@@ -65,6 +100,9 @@ TEST(RomajiKanaConverterTest, Preview) {
   EXPECT_EQ(RomajiKanaConverter::Preview("jya"), "じゃ");
   EXPECT_EQ(RomajiKanaConverter::Preview("jyu"), "じゅ");
   EXPECT_EQ(RomajiKanaConverter::Preview("jyo"), "じょ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("si"), "し");
+  EXPECT_EQ(RomajiKanaConverter::Preview("tu"), "つ");
+  EXPECT_EQ(RomajiKanaConverter::Preview("sya"), "しゃ");
 }
 
 TEST(RomajiKanaConverterTest, ConvertForCommit) {
@@ -77,4 +115,6 @@ TEST(RomajiKanaConverterTest, ConvertForCommit) {
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("juu"), "じゅう");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("jojo"), "じょじょ");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("jenga"), "じぇんが");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("siro"), "しろ");
+  EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("syatu"), "しゃつ");
 }

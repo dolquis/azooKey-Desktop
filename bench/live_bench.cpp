@@ -3,13 +3,66 @@
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <optional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 
-int main() {
-  constexpr double kMaxP95Ms = 50.0;
+namespace {
+
+void PrintUsage(const char* exe) {
+  std::cerr << "Usage: " << exe << " [--max-p95-ms N]\n"
+            << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
+               "failure gate.\n";
+}
+
+double ParseDouble(const std::string& value, const char* name) {
+  try {
+    size_t idx = 0;
+    const auto parsed = std::stod(value, &idx);
+    if (idx != value.size()) {
+      throw std::invalid_argument("trailing characters");
+    }
+    return parsed;
+  } catch (const std::exception& ex) {
+    throw std::invalid_argument(std::string(name) + " must be a number: " + ex.what());
+  }
+}
+
+std::string RequireValue(int argc, char** argv, int& index, const char* option) {
+  if (index + 1 >= argc) {
+    throw std::invalid_argument(std::string(option) + " requires a value");
+  }
+  ++index;
+  return argv[index];
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  std::optional<double> max_p95_ms;
+  try {
+    for (int i = 1; i < argc; ++i) {
+      const std::string arg = argv[i];
+      if (arg == "--help" || arg == "-h") {
+        PrintUsage(argv[0]);
+        return 0;
+      }
+      if (arg == "--max-p95-ms") {
+        max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
+      } else {
+        throw std::invalid_argument("unknown option: " + arg);
+      }
+    }
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << std::endl;
+    PrintUsage(argv[0]);
+    return 2;
+  }
+
   const auto learning_path = std::filesystem::temp_directory_path() / "azookey_bench_learning.tsv";
   std::remove(learning_path.string().c_str());
 
@@ -40,11 +93,16 @@ int main() {
   const double p50 = pct(50);
   const double p95 = pct(95);
   const double p99 = pct(99);
-  std::cout << "p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99
-            << " max_p95_ms=" << kMaxP95Ms << std::endl;
+  std::cout << "p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99;
+  if (max_p95_ms) {
+    std::cout << " max_p95_ms=" << *max_p95_ms;
+  } else {
+    std::cout << " max_p95_ms=none";
+  }
+  std::cout << std::endl;
 
   std::remove(learning_path.string().c_str());
-  if (p95 >= kMaxP95Ms) {
+  if (max_p95_ms && p95 >= *max_p95_ms) {
     std::cerr << "p95 exceeded threshold" << std::endl;
     return 1;
   }

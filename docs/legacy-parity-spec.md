@@ -279,6 +279,12 @@ OFF のときは `PredictionWindow` を生成しない。
 
 ## 4. Magic Conversion / Replace Suggestion (M16)
 
+> AI 変換バックエンド（`AiBackend` / OpenAI 互換 API 呼び出し）の契約は
+> **`docs/ai-backend-spec.md` が正典**である。本節 §4.4（IPC）/ §4.5（OpenAI 呼び出し）/
+> §4.6（結果反映）は骨子であり、IPC payload・`mode`→system-prompt マッピング・
+> HTTP 経路・エラー/リトライ/タイムアウト・secure ゲート（M46）・API キー保存（M34）・
+> ストリーミング境界・M58-C / X-3-3 との共有契約は同書で確定する。
+
 ### 4.1 トリガ検出（ダブルタップ）
 
 英数キー（VK_OEM_AUTO もしくは VK_DBE_ALPHANUMERIC）または

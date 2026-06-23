@@ -906,7 +906,11 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 **正典アーティファクトと責務境界**:
 
 - **スキーマ正典**: `settings/mvp-settings.schema.json`（JSON Schema draft 2020-12）。
-  全オブジェクト階層で `additionalProperties: false` を維持し、未知キーを拒否する。
+  **固定形オブジェクト**（root、および `model` / `autoUpdate` のように既知フィールド集合を持つもの）は
+  `additionalProperties: false` を維持し、未知キーを拒否する。一方、**マップ形オブジェクト**は値の型を
+  制約した `additionalProperties`（`false` ではない）で任意キーを許容する設計であり、本規則の対象外とする
+  （例: `promptPrefixByApp` = `additionalProperties: {type: string}`、予定済みの `profilesByApp` および
+  プロファイル内 `candidateTagBoosts` も同様のマップ）。
 - **永続インスタンス**: `%LOCALAPPDATA%\azooKey\config\settings.json`（§3.4）。設定アプリが
   書き込み、Host が読み込んで適用する（往復は §3.3 の `UpdateConfig`）。
 - **意味論の正典は各機能 spec**: 各キーの挙動・enum 値の意味・閾値は下表「正典」列の spec が

@@ -95,6 +95,13 @@ if(AZOOKEY_BUILD_TESTS)
 
   if(TARGET GTest::gtest_main)
     include(GoogleTest)
+    set(AZOOKEY_GTEST_DISCOVERY_TIMEOUT 60 CACHE STRING
+        "Seconds to wait while CMake enumerates GoogleTest cases")
+    function(azookey_discover_tests target_name)
+      gtest_discover_tests(${target_name}
+        DISCOVERY_TIMEOUT ${AZOOKEY_GTEST_DISCOVERY_TIMEOUT}
+      )
+    endfunction()
   else()
     message(WARNING
       "GoogleTest not found; unit tests are disabled. Install GoogleTest or "

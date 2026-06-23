@@ -279,10 +279,11 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 ダウンロードする（ネットワーク取得は明示オプトイン）。いずれでも入手できない
 場合は警告を出してテストのみスキップし、ビルド自体は継続する（オフライン環境で
 `cmake -S . -B build` が失敗しないようにするため）。
-各テストは `gtest_discover_tests` により **ケース単位**（`SuiteName.TestName`）で
-CTest に登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに
-個別の CTest エントリへ展開される。現行 preset では `ctest --preset windows-debug`
-または `ctest --preset windows-release` で一括実行する。
+各テストは共通ヘルパ `azookey_discover_tests`（内部で `gtest_discover_tests` を呼び出し、
+`DISCOVERY_TIMEOUT` は既定 60 秒）により **ケース単位**（`SuiteName.TestName`）で CTest に
+登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに個別の CTest
+エントリへ展開される。現行 preset では `ctest --preset windows-debug` または
+`ctest --preset windows-release` で一括実行する。
 
 ### 現存テスト一覧
 

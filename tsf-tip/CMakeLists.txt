@@ -52,7 +52,7 @@ if(AZOOKEY_BUILD_TESTS)
         user32
         gdi32
     )
-    gtest_discover_tests(${target_name})
+    azookey_discover_tests(${target_name})
   endfunction()
 
   add_executable(tsf_tip_com_smoke_tests
@@ -70,7 +70,7 @@ if(AZOOKEY_BUILD_TESTS)
             ole32 uuid advapi32
   )
   add_dependencies(tsf_tip_com_smoke_tests azookey_tsf_tip)
-  gtest_discover_tests(tsf_tip_com_smoke_tests)
+  azookey_discover_tests(tsf_tip_com_smoke_tests)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp)

@@ -2,28 +2,28 @@ add_executable(host_engine_tests engine_test.cpp)
 target_link_libraries(host_engine_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
-gtest_discover_tests(host_engine_tests)
+azookey_discover_tests(host_engine_tests)
 
 add_executable(host_dispatcher_tests dispatcher_test.cpp)
 target_link_libraries(host_dispatcher_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
-gtest_discover_tests(host_dispatcher_tests)
+azookey_discover_tests(host_dispatcher_tests)
 
 add_executable(host_scheduler_tests scheduler_test.cpp)
 target_link_libraries(host_scheduler_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
-gtest_discover_tests(host_scheduler_tests)
+azookey_discover_tests(host_scheduler_tests)
 
 add_executable(host_user_data_paths_tests user_data_paths_test.cpp)
 target_link_libraries(host_user_data_paths_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
-gtest_discover_tests(host_user_data_paths_tests)
+azookey_discover_tests(host_user_data_paths_tests)
 
 add_executable(host_settings_store_tests settings_store_test.cpp)
 target_link_libraries(host_settings_store_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
-gtest_discover_tests(host_settings_store_tests)
+azookey_discover_tests(host_settings_store_tests)

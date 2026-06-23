@@ -930,7 +930,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `batchRomajiConversion` | bool | `false` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
 | `batchRomajiPreviewStyle` | enum `kana`/`romaji` | `kana` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
 | `batchConversionMode` | enum `neural`/`ai-cleanup` | `neural` | 入力 | M58-A/C | 即時 | `romaji-batch-conversion-spec.md` |
-| `batchAutoPunctuation` | bool | `false` | 入力 | M58-C | 即時 | `dynamic-punctuation-spec.md` |
+| `batchAutoPunctuation` | bool | `false` | 入力 | M58-C | 即時 | `romaji-batch-conversion-spec.md` |
 | `llmMagicConversion` | bool | `false` | AI | M16 | 即時 | roadmap M16 |
 | `aiBackend` | enum `none`/`openai`/`local-zenzai` | `none` | AI | M16 | 即時 | roadmap M16 |
 | `openAiApiKey` | string（機微・§9 DPAPI） | `""` | AI | M16 / M34 | 即時 | roadmap M16 / §9 |

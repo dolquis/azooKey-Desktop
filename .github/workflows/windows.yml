@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: |
           cmake --preset ${{ matrix.preset }} -DAZOOKEY_FETCH_GOOGLETEST=ON 2>&1 | Tee-Object -FilePath configure-${{ matrix.config }}.log
-          "configure_ec=$LASTEXITCODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
         id: build
@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           cmake --build --preset ${{ matrix.preset }} 2>&1 | Tee-Object -FilePath build-${{ matrix.config }}.log
-          "build_ec=$LASTEXITCODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run tests via CTest
         id: run_tests
@@ -57,7 +57,7 @@ jobs:
         shell: pwsh
         run: |
           ctest --preset ${{ matrix.preset }} --no-tests=error 2>&1 | Tee-Object -FilePath test-report-${{ matrix.config }}.md
-          "tests_ec=$LASTEXITCODE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Post diagnostic comment to PR
         if: always() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork
@@ -113,14 +113,26 @@ jobs:
           path: build/${{ matrix.preset }}/**/*.pdb
           if-no-files-found: ignore
 
-      - name: Fail if any step failed
+      - name: Fail if configure, build, or tests failed
+        if: always()
         shell: pwsh
         run: |
-          $cfg = '${{ steps.configure.outputs.configure_ec }}'
-          $bld = '${{ steps.build.outputs.build_ec }}'
-          $tst = '${{ steps.run_tests.outputs.tests_ec }}'
-          Write-Host "configure_ec=$cfg build_ec=$bld tests_ec=$tst"
-          if ($cfg -ne '0' -or $bld -ne '0' -or $tst -ne '0') { exit 1 }
+          $results = [ordered]@{
+            Configure = '${{ steps.configure.outcome }}'
+            Build = '${{ steps.build.outcome }}'
+            Tests = '${{ steps.run_tests.outcome }}'
+          }
+          $failed = @()
+          foreach ($entry in $results.GetEnumerator()) {
+            Write-Host "$($entry.Key): $($entry.Value)"
+            if ($entry.Value -ne 'success') {
+              $failed += $entry.Key
+            }
+          }
+          if ($failed.Count -gt 0) {
+            Write-Error "Failed CI phases: $($failed -join ', ')"
+            exit 1
+          }
 
   windows-llama-build:
     name: Windows llama.cpp compile
@@ -173,6 +185,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build
+
+      - name: Cache GoogleTest source
+        uses: actions/cache@v4
+        with:
+          path: build/linux-debug/_deps
+          key: googletest-v1.17.0-${{ runner.os }}-Debug
+          restore-keys: |
+            googletest-v1.17.0-${{ runner.os }}-
 
       - name: Configure
         run: cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=ON

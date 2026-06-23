@@ -9,7 +9,7 @@ target_link_libraries(azookey_zenzai_bench
 )
 
 if(AZOOKEY_BUILD_TESTS)
-  add_test(NAME azookey_bench_smoke COMMAND azookey_bench)
+  add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
   if(NOT AZOOKEY_WITH_LLAMA_CPP)
     add_test(NAME azookey_zenzai_bench_smoke

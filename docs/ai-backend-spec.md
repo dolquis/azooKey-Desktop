@@ -327,11 +327,17 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 | 層 | 対象 | 値（既定） | 備考 |
 |---|---|---|---|
 | 外部 API（本書） | OpenAI HTTP receive | **30 s**（接続/送信は各 10 s） | `chat/completions`。設定 `openAiTimeoutMs`（§11、既定 30000）で調整可 |
-| Host/IPC（M47） | TIP↔Host 応答 | M47 規約（heavy 800 ms 等） | 外部 API 待ちは「heavy」扱い。connected-but-silent を timeout 視（M47） |
+| **外部 AI 経路の IPC deadline** | TIP↔Host（M16 / M58-C の openai backend） | **`openAiTimeoutMs` + 余裕（既定 約 35 s）** | **M47 の Heavy 800 ms を流用しない**。外部 AI 応答は通常 800 ms を超え、Heavy を流用すると正常応答が stale 化して M16 が壊れて見える。`dev-infrastructure-spec.md` の timeout 表「Heavy inference（Magic Conversion 等）」行は本値に従う |
+| ローカル経路の IPC（M47） | Zenzai 変換等（外部 AI でない重処理） | M47 規約（Heavy 800 ms 等） | connected-but-silent を timeout 視（M47） |
 
-- TIP は IPC 応答を M47 のタイムアウトで監視する。Host は外部 API 待ちの間に
+- **外部 AI 経路（openai backend）は M47 の Heavy 800 ms ではなく、上表の「外部 AI 経路の
+  IPC deadline」（`openAiTimeoutMs` + 余裕）で TIP が監視する**。Host は外部 API 待ちの間に
   TIP からの `Cancel`（§6.1）を受理し得る。タイムアウトした要求は破棄し、古い結果が
   後着しても捨てる（staleness check。M47 準拠）。
+- 代替として M16 ダイアログ経路を**非同期化**してよい（変換中はスピナー表示で同期 deadline で
+  殺さず、応答到着またはユーザーの明示キャンセルで確定）。長い API レイテンシでも M16 が
+  壊れないことを保証する。同期 deadline か非同期かは実装 PR で選択する。
+- `local-zenzai` backend での AI 経路は外部 API ではないため、ローカル経路の M47 deadline に従う。
 - X-3-3 は非同期 push であり、TIP の同期応答タイムアウトには載らない。
 
 ### 7.2 HTTP ステータス → `AiErrorClass` マッピング（legacy 準拠）

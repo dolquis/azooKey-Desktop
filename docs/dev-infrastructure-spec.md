@@ -859,7 +859,8 @@ M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
 | IPC Ping | 500ms |
 | QueryCandidates fast | 150ms |
 | QueryLiveConversion | 80ms |
-| Heavy inference（Magic Conversion 等） | 800ms |
+| Heavy inference（ローカル Zenzai 変換等） | 800ms |
+| 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕。正典は `docs/ai-backend-spec.md` §7.1 |
 | ModernBERT scoring（M57） | 30〜50ms |
 | Model load | 30s |
 

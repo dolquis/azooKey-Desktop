@@ -158,7 +158,7 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 | Composing/Previewing | Input(開きカッコ) | Idle | **現在の composition を先に確定**（候補窓表示中は `CommitSelected`、それ以外は `CommitPreeditAsIs` / ローマ字 flush）→ その後（確定後の選択は collapsed なので）`insertBracketPair` |
 | Selecting | Input(開きカッコ) | Idle | `CommitSelected` → `insertBracketPair` |
 | Idle | Input(閉じカッコ) | Idle | `hint.char_after` が同じ閉じカッコなら `skipOverClosing`、無ければリテラル 1 文字挿入（§4.2） |
-| Idle | Backspace | Idle | `hint.selection_collapsed` かつ `hint.char_before`/`char_after` が空ペアなら `deleteBracketPair`、無ければ Backspace をアプリへパススルー（TIP は eaten しない。§4.3・§5.3） |
+| Idle | Backspace | Idle | `hint.selection_collapsed == true` かつ `hint.char_before`/`char_after` が空ペアなら `deleteBracketPair`、無ければ Backspace をアプリへパススルー（TIP は eaten しない。§4.3・§5.3） |
 | UnicodeInput / ReplaceSuggestion | Input(カッコ) | （変更なし） | これらの特殊モード中はペアリングしない（§4.6） |
 
 > 上表の「`hint.*`」は §3.1.1 の `EditContextHint`（TIP が §5.3 で読んで渡す隣接文字）を指す。
@@ -477,7 +477,7 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
 >   現行 TIP も idle Backspace を eaten しない（`tsf-tip/src/TextService.cpp`）。Backspace を
 >   無条件に eaten すると、空ペアでない通常削除を TIP が肩代わりすることになり、read-only 欄・
 >   アプリ固有の削除・Undo 粒度を壊す。よって `OnTestKeyDown` で §5.3 の隣接読取
->   （`hint.selection_collapsed` ＆左右が空ペア）を行い、**空ペア確認時のみ `TRUE`**（→ `OnKeyDown`
+>   （`hint.selection_collapsed == true` ＆左右が空ペア）を行い、**空ペア確認時のみ `TRUE`**（→ `OnKeyDown`
 >   で `deleteBracketPair`）、それ以外・読取不能時は `FALSE` で **VK_BACK をアプリへ通す**
 >   （通常 Backspace はアプリが処理。TIP は合成しない）。これにより通常 Backspace のアプリ挙動を
 >   一切変えない。
@@ -562,7 +562,7 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
   - Idle + 開きカッコ → `insertBracketPair`（immediate、カーソル内側）。
   - Composing/Selecting + 開きカッコ → 確定（CommitSelected / CommitPreeditAsIs）後に挿入。
   - 閉じカッコ：`hint.char_after` が同一閉じカッコ → `skipOverClosing` / そうでなければリテラル挿入。
-  - Backspace：`hint` の左右が空ペア（かつ `selection_collapsed`）→ `deleteBracketPair` /
+  - Backspace：`hint` の左右が空ペア（かつ `selection_collapsed == true`）→ `deleteBracketPair` /
     そうでなければ通常 Backspace、範囲選択中（`selection_collapsed == false`）は通常削除。
   - hint が空（読取失敗相当）→ 安全側（リテラル挿入 / 通常 Backspace）になること。
   - `bracketPairing == false` で全カッコ・Backspace が従来挙動（回帰：挙動不変）。

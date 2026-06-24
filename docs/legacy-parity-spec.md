@@ -218,7 +218,10 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
   経路**（M61-A の開きカッコ→`insertBracketPair` 等）を採り、`false`・`nullopt` はいずれも安全側
   （M61-A 既定はリテラル挿入。M61-B の `bracketWrapSelection` は `false` 確定時のみ選択を囲む）へ
   倒す。plain `bool`（既定 `true`）にすると空 hint が「collapsed 確定」と区別できず、範囲選択中の
-  読取失敗が誤ってペア挿入に倒れるため避ける（`docs/bracket-pairing-spec.md` §3.3）。
+  読取失敗が誤ってペア挿入に倒れるため避ける（`docs/bracket-pairing-spec.md` §3.3）。実装は
+  collapsed 判定を必ず `hint.selection_collapsed == true`（または `.value_or(false)`）で書く。
+  `std::optional<bool>` は engaged な `false` も真と評価されるため、`if (hint.selection_collapsed)`
+  の素の真偽評価は使わない（`docs/bracket-pairing-spec.md` §3.3 / §5.3 の collapsed 条件も同様）。
 - **遡及適用**: この純粋性契約は M13 本体にも適用する（M61-A だけでなく、M13 の
   Composing / Selecting / Commit 経路も文書非依存に保つ）。現行 `TextService.cpp` の OnKeyDown は
   EditSession 内で `GetSelection` を呼ぶが、これは **TIP 側のレンダリング / EditSession 都合**で
@@ -271,8 +274,9 @@ Unicode 16 進バッファ。
 VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界する。
 
 - **第 1 層 — core `UserActionMap`（純粋・構造的・モード非依存）**: `(VK, modifiers)` →
-  `UserAction` の **種別**（`Input` / `Backspace` / `StartConversion` / …）を返す。キーボード
-  レイアウト・入力モードに依存しない構造的写像で、Windows 非依存にテストでき、将来の Linux
+  `UserAction` の **状態非依存なキー意図**（`Input` / `Backspace` / `Space{shift}` / `Digit{n}` /
+  `Enter` / `Cancel` / `Forward` 等 + modifiers）を返す。キーボードレイアウト・入力モード・
+  **現在の `InputState` に依存しない**構造的写像で、Windows 非依存にテストでき、将来の Linux
   ポートで再利用する。M61-A の OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、`VK_OEM_1` 等、
   および JIS 配列で `「」` を生むキー）は **本表へ `Input` 種別として追加**する
   （`docs/bracket-pairing-spec.md` §3.1）。本表は **codepoint を解決しない**。
@@ -283,8 +287,20 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
 - **分界規則**: **core は「キーがどの種別の操作か」を決め、TIP は「どの文字を生むか」を
   決める**。これにより M61-A の OEM 追加は「core 表への種別追加（`Input`）」＋「TIP の
   codepoint 解決追加」で済み、`UserAction` enum を不変に保てる。
+- **状態依存の意味は状態機械が解決（map に状態を渡さない）**: §1.1 の `StartConversion` /
+  `NextCandidate` / `PrevCandidate` / `SelectByDigit` は「同一の生キー意図を現在状態で解決した
+  結果」であり、第 1 層 map の出力ではない。生 `Space` は `HandleEvent` が Composing / Previewing
+  では StartConversion 相当、Selecting では NextCandidate 相当（`Space{shift}` は Selecting で
+  PrevCandidate）へ解決し、生 `Digit{n}` は Selecting で SelectByDigit、それ以外で `Input`
+  （codepoint）へ解決する。§1.2 遷移表の状態依存アクション名は、この状態機械側の解決結果の
+  ラベルである。map に `InputStateKind` を渡すと状態が 2 箇所へ分散し状態機械が二重化するため
+  行わない（レガシー `InputState.event` も UserAction を状態非依存に受け、状態側で解決する）。
+  これに伴い §1.1 の当該 4 値は「map 出力の生キー意図」ではなく「状態機械が §1.2 表へ渡す
+  解決済みイベント」として読む。
 - **テスト分界**: roadmap M13 受け入れの `tsf-tip/tests/keymap_test.cpp` は第 1 層
-  （VK→種別）を検証する。codepoint 解決（モード依存）は TIP レベルのテストで別途検証する。
+  （VK→生キー意図・状態非依存）を検証する。状態依存の解決（Space→StartConversion / NextCandidate
+  等）は `core/tests/input_state_test.cpp`、codepoint 解決（モード依存）は TIP レベルのテストで
+  検証する。
 
 #### 1.5.4 非回帰移行戦略（M3〜M10 の挙動保存）
 

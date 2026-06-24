@@ -281,8 +281,11 @@ Unicode 16 進バッファ。
 VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界する。
 
 - **第 1 層 — core `UserActionMap`（純粋・モード非依存・状態は明示引数）**: `(VK, modifiers,
-  現在の InputStateKind)` → `std::optional<UserAction>` を返す純粋関数（`nullopt` = その状態で
-  IME が消費しない＝アプリへパススルー。`OnTestKeyDown` の eaten=FALSE に対応）。状態依存の解決
+  現在の InputStateKind)` → `std::optional<UserActionEvent>` を返す純粋関数（`nullopt` = その状態で
+  IME が消費しない＝アプリへパススルー。`OnTestKeyDown` の eaten=FALSE に対応）。戻り値は enum 単体
+  ではなく **`UserActionEvent` 全体**で、`action` / `modifiers` / `digit`（`SelectByDigit` の 1〜9 を
+  VK から決定）を埋める（`codepoint` は第 2 層で TIP が解決した値を載せる）。これにより数字キーは
+  index 付きで一意に識別でき、TIP が VK から digit を再導出する二重マッピングを不要にする。状態依存の解決
   （`Space` は Composing / Previewing で `StartConversion`、Selecting で `NextCandidate`、
   `Shift+Space` で `PrevCandidate` / 数字は Selecting で `SelectByDigit`、**それ以外は `nullopt`＝
   パススルー（`Input` にしない）**）は、**現在状態を引数として明示的に受け取って**決める。ある状態でその IME が扱わないキーは `nullopt` を返す（例: Selecting 以外の
@@ -311,11 +314,11 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   純粋関数なので、テスト容易性と Linux 再利用性は保たれる。§1.1 の `StartConversion` /
   `NextCandidate` / `PrevCandidate` / `SelectByDigit` は本写像が返す値であり、別途の raw 変種を
   §1.1 へ追加しない（append-only 方針を維持）。
-- **分界規則**: **core は「キー（＋現在状態）がどの `UserAction`（消費しないなら `nullopt`）か」を決め、TIP は「どの文字を
+- **分界規則**: **core は「キー（＋現在状態）がどの `UserAction`（種別・`digit` 等。消費しないなら `nullopt`）か」を決め、TIP は「どの文字を
   生むか（codepoint）」を決める**。これにより M61-A の OEM 追加は「core 表への `Input` 追加」＋
   「TIP の codepoint 解決追加」で済み、`UserAction` enum を不変に保てる。
 - **テスト分界**: roadmap M13 受け入れの `tsf-tip/tests/keymap_test.cpp` は
-  `UserActionMap(VK, modifiers, kind)` → `std::optional<UserAction>` の全エントリ（状態依存解決・`nullopt` パススルーを含む）を各 `kind`
+  `UserActionMap(VK, modifiers, kind)` → `std::optional<UserActionEvent>` の全エントリ（状態依存解決・`digit` ペイロード・`nullopt` パススルーを含む）を各 `kind`
   注入で検証する。状態遷移・副作用は `core/tests/input_state_test.cpp`、codepoint 解決（モード依存）は
   TIP レベルのテストで検証する。
 

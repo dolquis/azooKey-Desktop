@@ -274,11 +274,15 @@ Unicode 16 進バッファ。
 VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界する。
 
 - **第 1 層 — core `UserActionMap`（純粋・モード非依存・状態は明示引数）**: `(VK, modifiers,
-  現在の InputStateKind)` → `UserAction` を返す純粋関数。状態依存の解決（`Space` は Composing /
-  Previewing で `StartConversion`、Selecting で `NextCandidate`、`Shift+Space` で `PrevCandidate` /
-  数字は Selecting で `SelectByDigit`、それ以外で `Input`）は、**現在状態を引数として明示的に
-  受け取って**決める。文書・TSF・IO に触れないため純粋関数のままで、`kind` を注入して
-  `tsf-tip/tests/keymap_test.cpp` で網羅テストできる。キーボードレイアウト・入力モードには依存しない
+  現在の InputStateKind)` → `std::optional<UserAction>` を返す純粋関数（`nullopt` = その状態で
+  IME が消費しない＝アプリへパススルー。`OnTestKeyDown` の eaten=FALSE に対応）。状態依存の解決
+  （`Space` は Composing / Previewing で `StartConversion`、Selecting で `NextCandidate`、
+  `Shift+Space` で `PrevCandidate` / 数字は Selecting で `SelectByDigit`、**それ以外は `nullopt`＝
+  パススルー（`Input` にしない）**）は、**現在状態を引数として明示的に受け取って**決める。ある状態で
+  その IME が扱わないキーは `nullopt` を返す（例: Selecting 以外の数字、composition 無し（Idle）の
+  Backspace）。これは現行 `OnTestKeyDown`/`OnKeyDown` の eaten 判定（数字は `candidate_ui_.IsShowing()`
+  時のみ消費）と一致し、M10 を保存する。文書・TSF・IO に触れないため純粋関数のままで、`kind` を
+  注入して `tsf-tip/tests/keymap_test.cpp` で網羅テストできる。キーボードレイアウト・入力モードには依存しない
   （codepoint は解決しない＝第 2 層の責務）。M61-A の OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、
   `VK_OEM_1` 等、および JIS 配列で `「」` を生むキー）は **本表へ `Input` として追加**する
   （`docs/bracket-pairing-spec.md` §3.1）。core が `InputState` を所有するため本写像も **core 側**に
@@ -297,11 +301,11 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   純粋関数なので、テスト容易性と Linux 再利用性は保たれる。§1.1 の `StartConversion` /
   `NextCandidate` / `PrevCandidate` / `SelectByDigit` は本写像が返す値であり、別途の raw 変種を
   §1.1 へ追加しない（append-only 方針を維持）。
-- **分界規則**: **core は「キー（＋現在状態）がどの `UserAction` か」を決め、TIP は「どの文字を
+- **分界規則**: **core は「キー（＋現在状態）がどの `UserAction`（消費しないなら `nullopt`）か」を決め、TIP は「どの文字を
   生むか（codepoint）」を決める**。これにより M61-A の OEM 追加は「core 表への `Input` 追加」＋
   「TIP の codepoint 解決追加」で済み、`UserAction` enum を不変に保てる。
 - **テスト分界**: roadmap M13 受け入れの `tsf-tip/tests/keymap_test.cpp` は
-  `UserActionMap(VK, modifiers, kind)` → `UserAction` の全エントリ（状態依存解決を含む）を各 `kind`
+  `UserActionMap(VK, modifiers, kind)` → `std::optional<UserAction>` の全エントリ（状態依存解決・`nullopt` パススルーを含む）を各 `kind`
   注入で検証する。状態遷移・副作用は `core/tests/input_state_test.cpp`、codepoint 解決（モード依存）は
   TIP レベルのテストで検証する。
 
@@ -330,8 +334,8 @@ inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替
   `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading)]` を出すが、
   **候補が未到着のうちは `Selecting` へ遷移しない**（候補スナップショット・窓が無い状態で Enter /
   数字 / 矢印が Selecting 挙動になると、現行の pending-candidate 経路を回帰させる）。`Composing`
-  （または下記の pending 状態）に留まり、Enter は `CommitPreeditAsIs`、数字 / 矢印は無視のまま
-  M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: キャッシュヒット時は
+  （または下記の pending 状態）に留まり、Enter は `CommitPreeditAsIs`、数字は IME 非消費で
+  アプリへパススルー（現行は候補窓表示時のみ消費。§1.5.3）のまま M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: キャッシュヒット時は
   同期に、cache miss 時は応答到着を TIP が core へ供給するフィードバックイベント
   （例 `HandleCandidatesArrived(list)`）で。応答到着時の窓表示は TIP 側の既存機構
   （`candidate_window_show_pending_` + request_id staleness）が処理し、staleness を core へ

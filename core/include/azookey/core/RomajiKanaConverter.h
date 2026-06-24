@@ -10,7 +10,7 @@ class RomajiKanaConverter {
   std::string Flush();
   void Reset();
   bool HasPending() const { return !pending_.empty(); }
-  void PopPending() { if (!pending_.empty()) pending_.pop_back(); }
+  void PopPendingPreview();
   std::string PreviewPending() const;
 
   static std::string Preview(const std::string& ascii);

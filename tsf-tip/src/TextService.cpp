@@ -493,7 +493,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidates_.clear();
           candidate_window_show_pending_ = false;
         }
-        romaji_.PopPending();
+        romaji_.PopPendingPreview();
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         const std::string reading = CurrentPreeditSurface();

@@ -697,6 +697,28 @@ TEST(TsfTipOnKeyDownPreeditTest, BackspaceClearsPendingNPreeditPreview) {
   EXPECT_EQ(range.last_text, std::wstring());
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, BackspaceClearsPendingNnPreeditPreview) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('N'));
+  ASSERT_EQ(h.service.preedit_kana_, "");
+  ASSERT_EQ(range.last_text, std::wstring(1, L'\x3093'));
+
+  EXPECT_TRUE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, EscapeClearsPendingNPreeditPreviewText) {
   TextServiceHarness h;
   FakeComposition composition;

@@ -107,6 +107,25 @@ TEST(RomajiKanaConverterTest, Preview) {
   EXPECT_EQ(RomajiKanaConverter::Preview("sya"), "しゃ");
 }
 
+TEST(RomajiKanaConverterTest, PopPendingPreviewRemovesDisplayedPreviewUnit) {
+  azookey::core::RomajiKanaConverter converter;
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_EQ(converter.PreviewPending(), "ん");
+
+  converter.PopPendingPreview();
+  EXPECT_FALSE(converter.HasPending());
+  EXPECT_EQ(converter.PreviewPending(), "");
+
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_EQ(converter.Feed('y'), "");
+  EXPECT_EQ(converter.PreviewPending(), "ny");
+
+  converter.PopPendingPreview();
+  EXPECT_TRUE(converter.HasPending());
+  EXPECT_EQ(converter.PreviewPending(), "ん");
+}
+
 TEST(RomajiKanaConverterTest, ConvertForCommit) {
   using azookey::core::RomajiKanaConverter;
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("kan"), "かん");

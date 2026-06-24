@@ -1688,6 +1688,17 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 
     if (kana.empty()) {
       if (service_->composition_) {
+        ITfRange* cleared_range = nullptr;
+        HRESULT clear_hr = service_->composition_->GetRange(&cleared_range);
+        if (SUCCEEDED(clear_hr) && cleared_range) {
+          clear_hr = cleared_range->SetText(ec, 0, L"", 0);
+        }
+        const bool had_range = cleared_range != nullptr;
+        if (cleared_range) cleared_range->Release();
+        if (FAILED(clear_hr) || !had_range) {
+          return FAILED(clear_hr) ? clear_hr : E_FAIL;
+        }
+
         ITfComposition* comp = service_->composition_;
         comp->AddRef();
         const HRESULT end_hr = comp->EndComposition(ec);

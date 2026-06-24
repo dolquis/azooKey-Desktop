@@ -87,8 +87,10 @@ TEST(RomajiKanaConverterTest, Preview) {
   using azookey::core::RomajiKanaConverter;
   EXPECT_EQ(RomajiKanaConverter::Preview("k"), "k");
   EXPECT_EQ(RomajiKanaConverter::Preview("ka"), "か");
-  EXPECT_EQ(RomajiKanaConverter::Preview("kan"), "かn");
+  EXPECT_EQ(RomajiKanaConverter::Preview("n"), "ん");
+  EXPECT_EQ(RomajiKanaConverter::Preview("kan"), "かん");
   EXPECT_EQ(RomajiKanaConverter::Preview("na"), "な");
+  EXPECT_EQ(RomajiKanaConverter::Preview("ny"), "ny");
   EXPECT_EQ(RomajiKanaConverter::Preview("konn"), "こん");
   EXPECT_EQ(RomajiKanaConverter::Preview("konnichiha"), "こんにちは");
   EXPECT_EQ(RomajiKanaConverter::Preview("gakkou"), "がっこう");
@@ -103,6 +105,25 @@ TEST(RomajiKanaConverterTest, Preview) {
   EXPECT_EQ(RomajiKanaConverter::Preview("si"), "し");
   EXPECT_EQ(RomajiKanaConverter::Preview("tu"), "つ");
   EXPECT_EQ(RomajiKanaConverter::Preview("sya"), "しゃ");
+}
+
+TEST(RomajiKanaConverterTest, PopPendingPreviewRemovesDisplayedPreviewUnit) {
+  azookey::core::RomajiKanaConverter converter;
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_EQ(converter.PreviewPending(), "ん");
+
+  converter.PopPendingPreview();
+  EXPECT_FALSE(converter.HasPending());
+  EXPECT_EQ(converter.PreviewPending(), "");
+
+  EXPECT_EQ(converter.Feed('n'), "");
+  EXPECT_EQ(converter.Feed('y'), "");
+  EXPECT_EQ(converter.PreviewPending(), "ny");
+
+  converter.PopPendingPreview();
+  EXPECT_TRUE(converter.HasPending());
+  EXPECT_EQ(converter.PreviewPending(), "ん");
 }
 
 TEST(RomajiKanaConverterTest, ConvertForCommit) {

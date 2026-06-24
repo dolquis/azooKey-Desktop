@@ -171,6 +171,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostQueryCandidates(const std::string& reading);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
+  std::string CurrentPreeditSurface() const;
   enum class LifecycleCleanupFailurePolicy {
     PreserveComposition,
     ReleaseComposition,

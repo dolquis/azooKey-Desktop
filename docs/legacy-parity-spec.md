@@ -107,8 +107,10 @@ enum class InputStateKind {
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
-各遷移を `InputState::HandleEvent(UserActionEvent)` → `std::vector<ClientAction>` で
-返す純粋関数として実装し、テストで網羅する（`core/tests/input_state_test.cpp`）。
+各遷移を `InputState::HandleEvent(UserActionEvent, const EditContextHint&)` →
+`HandleResult`（`ClientAction` 列 + 次状態）を返す純粋関数として実装し、テストで網羅する
+（`core/tests/input_state_test.cpp`）。シグネチャ・純粋性契約・条件遷移（レガシーの
+`ClientActionCallback`）の扱いは §1.5.1 を正典とする。
 
 ### 1.3 ClientAction → TSF 翻訳
 
@@ -168,7 +170,160 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
 | VK_NONCONVERT | (none) | ToggleHiraKata |
 | VK_F10 | (none) | ToggleDebugWindow |
 
-「英数キー」「かな」のダブルタップは独自検出ロジック → 1.5 節参照。
+「英数キー」「かな」のダブルタップは独自検出ロジック → §4.1（トリガ検出）参照。
+
+### 1.5 C++ 移植境界（純粋性契約・拡張点・VK 表所有権・非回帰戦略）
+
+§1.1〜§1.4 はレガシー（macOS）の UserAction / InputState / ClientAction / VK 表を定義する。
+本節は、それを C++ へ移植する際の **境界判断**（実装着手前に固定すべき責務分界・拡張点・
+純粋性契約・非回帰戦略）を確定する。M13 の状態機械の上には後続マイルストーン
+（M14 / M15 / M16 / M17 / M58-A / M59 / M61-A）がすべて載るため、各自が `InputState` /
+`ClientAction` / `UserAction` を場当たり拡張すると enum 破壊・二重実装・回帰を招く。
+後続はいずれも本節を正典として拡張すること。
+
+#### 1.5.1 純粋性契約（core は文書を読まない）
+
+`InputState::HandleEvent` は **純粋関数**である。同一の (現在状態, イベント, ヒント) からは
+同一の (`ClientAction` 列, 次状態) のみを返し、TSF / エディタバッファ / IPC / ファイル /
+グローバル状態に依存しない。
+
+- **シグネチャ**（M13 で確定。M61-A `docs/bracket-pairing-spec.md` §3.1.1 が前提とする
+  `EditContextHint` 引数を最初から含め、後続が引数を増やさずに済むようにする）:
+  ```cpp
+  // core/include/azookey/core/InputState.h（純粋・TSF 非依存）
+  struct HandleResult {
+      std::vector<ClientAction> actions;  // TIP が順に適用する副作用指示
+      InputState                next;     // 適用後の論理状態（値）
+  };
+
+  // 文書事実は hint 経由でのみ core へ渡る。既定は空（全 nullopt）。
+  HandleResult HandleEvent(const UserActionEvent& event,
+                           const EditContextHint& hint = {}) const;
+  ```
+- **`EditContextHint`**（正典定義。`docs/bracket-pairing-spec.md` §3.1.1 は本定義を参照する）:
+  ```cpp
+  struct EditContextHint {
+      std::optional<char32_t> char_before;  // キャレット直前 1 文字（無ければ nullopt）
+      std::optional<char32_t> char_after;   // キャレット直後 1 文字
+      bool selection_collapsed = true;      // 範囲選択でないか
+  };
+  ```
+- **責務分界**: core は文書（`ITfContext` / `ITfRange` / 選択範囲 / 周辺文字）を
+  **直接読まない**。隣接文字・選択状態が必要な判定（M61-A のスキップ / 空ペア削除など）は、
+  TIP が同期読取専用 EditSession（`docs/bracket-pairing-spec.md` §5.3）で `EditContextHint` を
+  埋め、その hint を付けて `HandleEvent` を呼ぶ。読取が拒否されたら hint は空（`nullopt`）で
+  渡し、core は安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
+- **遡及適用**: この純粋性契約は M13 本体にも適用する（M61-A だけでなく、M13 の
+  Composing / Selecting / Commit 経路も文書非依存に保つ）。現行 `TextService.cpp` の OnKeyDown は
+  EditSession 内で `GetSelection` を呼ぶが、これは **TIP 側のレンダリング / EditSession 都合**で
+  あり、状態遷移の判断材料ではない。状態遷移に必要な文書事実は `EditContextHint` のみに限定する。
+
+> **型の整理（レガシーとの差異）**: レガシー Swift は
+> `event(...) -> (ClientAction, ClientActionCallback)` で、遷移を `ClientActionCallback`
+> （`transition` / `basedOnBackspace` / `basedOnSubmitCandidate` 等の条件分岐）として返す。
+> C++ 版は **core が論理 composition バッファ（reading）と候補・選択 index を所有する**ため、
+> `basedOnBackspace`（削除後に空か）・`basedOnSubmitCandidate`（確定後に残りがあるか）は
+> **core 内部で決定的に解決**できる。したがって `ClientActionCallback` は移植せず、
+> `HandleResult.next` に解決済みの次状態を載せる。文書依存の分岐のみ `EditContextHint`
+> から解決する。
+
+#### 1.5.2 拡張点ポリシー（どの enum を後続が拡張してよいか）
+
+3 つの enum は安定性のティアが異なる。新機能は以下に従って拡張する。
+
+- **`UserAction`（最安定・原則追加しない）**: 新しい文字・記号は `Input` / `InputAlnum` を
+  再利用し、`UserActionEvent.codepoint` に載せる（M61-A のカッコ入力もこの方式で新 enum 値
+  なし。`docs/bracket-pairing-spec.md` §3.1）。新 case の追加は「新しい *意味的キー意図*」
+  （既存のどの UserAction でも表現できない操作）に限る。追加時は末尾に append し、
+  `UserActionMap` と全 consumer を同時更新する。
+- **`InputStateKind`（append-only・追加的拡張可）**: 新状態は **末尾に追加**し、既存値の
+  並び替え・削除・renumber をしない。実例: M14 の `Previewing`（§1.2 に既出）、M58-A の
+  `BatchAccumulating` / `BatchConverting`（`docs/romaji-batch-conversion-spec.md` §3）。
+  **既存状態 + `EditContextHint` で表現できる機能は状態を追加しない**（M61-A は状態追加ゼロで
+  `Idle` を再利用）。状態追加は「IPC 発火条件・確定可否・preedit の意味が既存と質的に異なる
+  ライフサイクル」（batch の無 IPC 蓄積など）に限る。
+- **`ClientAction`（拡張の主戦場・append-only variant）**: 新しい副作用は ClientAction を
+  末尾追加する。パラメータ付きは payload を持つ（`insertBracketPair(open, close)` 等。
+  variant 型）。**複合アクションを作らない**: レガシーの `commitMarkedTextAndAppendToMarkedText`
+  相当は `[commitMarkedText, appendToMarkedText(s)]` のように **細粒度アクションの列**で表現する
+  （組合せ爆発を防ぐ）。
+
+**状態データ（associated value）の扱い**: C++ `enum class InputStateKind` は値を持てない。
+レガシーの `unicodeInput(String)`（16 進バッファ）・`attachDiacritic(String)`（デッドキー）に
+相当する状態データは、`InputState` 値オブジェクトのフィールド（`kind` でスイッチして使う）
+として保持する。`InputState` が持つもの: `kind`、reading バッファ
+（`core::RomajiKanaConverter` + 確定済みかな）、候補スナップショット + 選択 index、
+Unicode 16 進バッファ。
+
+- **予約状態**: レガシーの `attachDiacritic` は §1.2 の表に未掲載だが、M16（Magic）/
+  M17（カスタムローマ字・デッドキー）で必要になりうる。M13 では実装せず、`InputStateKind` の
+  **将来追加候補として予約**する（M17 着手時に末尾追加）。M13 のスコープは §1.2 に列挙した
+  6 状態 + M3〜M10 parity に限定する。
+
+#### 1.5.3 VK→UserAction 表の所有権（2 層分界）
+
+VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界する。
+
+- **第 1 層 — core `UserActionMap`（純粋・構造的・モード非依存）**: `(VK, modifiers)` →
+  `UserAction` の **種別**（`Input` / `Backspace` / `StartConversion` / …）を返す。キーボード
+  レイアウト・入力モードに依存しない構造的写像で、Windows 非依存にテストでき、将来の Linux
+  ポートで再利用する。M61-A の OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、`VK_OEM_1` 等、
+  および JIS 配列で `「」` を生むキー）は **本表へ `Input` 種別として追加**する
+  （`docs/bracket-pairing-spec.md` §3.1）。本表は **codepoint を解決しない**。
+- **第 2 層 — TIP `TextService.cpp::OnKeyDown`（プラットフォーム・モード依存）**:
+  `Input` / `InputAlnum` の **codepoint** を、`ToUnicodeEx` + 現在の入力モード
+  （ひらがな / カタカナ / 英数）と記号写像（`hiragana` で `[`→`「` 等）から解決し、
+  `UserActionEvent.codepoint` に載せる。キーボードレイアウト・IME モードの関心を所有する。
+- **分界規則**: **core は「キーがどの種別の操作か」を決め、TIP は「どの文字を生むか」を
+  決める**。これにより M61-A の OEM 追加は「core 表への種別追加（`Input`）」＋「TIP の
+  codepoint 解決追加」で済み、`UserAction` enum を不変に保てる。
+- **テスト分界**: roadmap M13 受け入れの `tsf-tip/tests/keymap_test.cpp` は第 1 層
+  （VK→種別）を検証する。codepoint 解決（モード依存）は TIP レベルのテストで別途検証する。
+
+#### 1.5.4 非回帰移行戦略（M3〜M10 の挙動保存）
+
+現行 `tsf-tip/src/TextService.cpp::OnKeyDown` は、状態を約 19 個のメンバ変数に分散させた
+inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替えは以下の戦略で、挙動回帰なし
+（roadmap M13 受け入れ条件）を担保する。
+
+- **特性化テスト先行（strangler 移行）**: リファクタ前に、現行 OnKeyDown の M3〜M10 挙動を
+  状態遷移として `core/tests/input_state_test.cpp` に固定する。既存
+  `tsf-tip/tests/onkeydown_preedit_test.cpp` は移行中も常に緑に保つ（等価性ゲート）。
+- **状態所有の分割**: 現行の暗黙状態を以下に振り分ける。
+  - **core `InputState`（論理状態）**: `kind`、reading バッファ（`preedit_kana_` + `romaji_` の
+    ペンディング = `core::RomajiKanaConverter`）、候補スナップショット（`shown_candidates_`）+
+    選択 index（`selected_candidate_idx_`）、Unicode 16 進バッファ。
+  - **TIP 専有（プランビング・`TextService` に残す）**: `ITfComposition* composition_`、
+    `ITfContext*`（active / commit context）、IPC の id 群（`ipc_pending_id_` /
+    `ipc_inflight_id_` / `ipc_has_request_` — **staleness は TIP 側に残す**）、
+    `CandidateUiCoordinator`（ウィンドウ）、`caret_pt_`、`committing_`（EditSession 再入ガード）、
+    `ui_less_mode_`。
+  - **分界の根拠**: IPC staleness と TSF オブジェクトは本質的に非同期・プラットフォーム依存。
+    core は同期・純粋に保つ。候補の **データ + 選択 index** は core へ、候補 **ウィンドウ** は
+    TIP に残す。
+- **非同期候補と staleness の保存**: 候補問い合わせは非同期のため、純粋 core は待てない。
+  `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading),
+  enterCandidateSelectionMode]` 相当の ClientAction を出して `Selecting` へ遷移し、
+  **応答到着時の表示は TIP 側の既存機構**（`candidate_window_show_pending_` + request_id
+  staleness）が処理する。staleness を core へ移さないことで M10 を保存する。
+- **挙動デルタの明示**（silent regression を避けるため、現行に無い挙動は「意図的追加」として
+  区別する。下記は現行 OnKeyDown の inline 分岐に基づく区分であり、実装時に現行コードと
+  突き合わせて確定する）:
+  - **保存**（現行実装あり）: Space での romaji flush→候補表示 / 巡回(+1)、Up/Down 巡回、
+    数字 1〜9 選択、Enter 確定（`CommitSelected` / `CommitPreeditAsIs`）、Esc、フォーカス喪失時の
+    確定 / composition 終了、長音 `ー`（composing 中の `-` / `VK_SUBTRACT`）。
+  - **意図的追加**（§1.4 は規定するが現行 OnKeyDown に未実装または部分的。M13 で新規・新テストで
+    担保。M3〜M10 の回帰ではない）: Shift+Space の後退巡回（`PrevCandidate`）、
+    Ctrl+H/P/N/F/B/A/E バインド、`VK_KANJI` / `VK_NONCONVERT` のモード切替、
+    Ctrl+Shift+U（Unicode 入力）、Ctrl+Shift+Backspace（Forget）、F10（デバッグ窓）。
+- **削除単位の契約（M59 連携）**: Backspace は **かな / 生ローマ字バッファの 1 単位**を削除し、
+  自動句読点（M59）は削除単位に数えない（`docs/dynamic-punctuation-spec.md` §5.2）。reading
+  バッファを core が所有することで、この「削除単位」を core 内部で定義でき、M59 は状態追加なしで
+  載る。
+- **等価性ゲート（roadmap M13 受け入れ条件に対応）**: (1) `onkeydown_preedit_test.cpp` が緑の
+  まま、(2) `input_state_test.cpp` が全状態 × 全 UserAction の遷移を網羅（純粋 core なので
+  `EditContextHint` 注入で文書なしに網羅）、(3) `keymap_test.cpp` が VK 表（第 1 層）の全
+  エントリを検証。
 
 ## 2. ライブ変換 (M14)
 

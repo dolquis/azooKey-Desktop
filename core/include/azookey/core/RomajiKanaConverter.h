@@ -11,6 +11,7 @@ class RomajiKanaConverter {
   void Reset();
   bool HasPending() const { return !pending_.empty(); }
   void PopPending() { if (!pending_.empty()) pending_.pop_back(); }
+  std::string PreviewPending() const;
 
   static std::string Preview(const std::string& ascii);
   static std::string ConvertForCommit(const std::string& ascii);

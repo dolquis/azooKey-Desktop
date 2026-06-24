@@ -98,6 +98,13 @@ std::string RomajiKanaConverter::Flush() { return ConvertPending(true); }
 
 void RomajiKanaConverter::Reset() { pending_.clear(); }
 
+std::string RomajiKanaConverter::PreviewPending() const {
+  if (pending_ == "n" || pending_ == "nn") {
+    return "ん";
+  }
+  return pending_;
+}
+
 std::string RomajiKanaConverter::Preview(const std::string& ascii) {
   RomajiKanaConverter converter;
   std::string output;
@@ -105,11 +112,7 @@ std::string RomajiKanaConverter::Preview(const std::string& ascii) {
     output += converter.Feed(raw);
   }
 
-  if (converter.pending_ == "nn") {
-    output += "ん";
-  } else {
-    output += converter.pending_;
-  }
+  output += converter.PreviewPending();
   return output;
 }
 

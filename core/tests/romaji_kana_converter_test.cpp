@@ -87,8 +87,10 @@ TEST(RomajiKanaConverterTest, Preview) {
   using azookey::core::RomajiKanaConverter;
   EXPECT_EQ(RomajiKanaConverter::Preview("k"), "k");
   EXPECT_EQ(RomajiKanaConverter::Preview("ka"), "か");
-  EXPECT_EQ(RomajiKanaConverter::Preview("kan"), "かn");
+  EXPECT_EQ(RomajiKanaConverter::Preview("n"), "ん");
+  EXPECT_EQ(RomajiKanaConverter::Preview("kan"), "かん");
   EXPECT_EQ(RomajiKanaConverter::Preview("na"), "な");
+  EXPECT_EQ(RomajiKanaConverter::Preview("ny"), "ny");
   EXPECT_EQ(RomajiKanaConverter::Preview("konn"), "こん");
   EXPECT_EQ(RomajiKanaConverter::Preview("konnichiha"), "こんにちは");
   EXPECT_EQ(RomajiKanaConverter::Preview("gakkou"), "がっこう");

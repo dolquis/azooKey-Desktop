@@ -32,7 +32,7 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 ☐ PASS ☐ FAIL — 備考:
 
 **A3. 連続・拗音/促音/撥音（M3）** — `nihongo` / `kitto` / `syatu`(しゃつ) / `siro`(しろ) / `nn`(ん) が正しく生成
-☐ PASS ☐ FAIL ☐ 既知(DEV-198/199) — 備考:
+☐ PASS ☐ FAIL ☐ 既知(DEV-198) — 備考:
 
 **A4. 編集（M3）** — Backspace で1文字戻る / ESC で composition 全クリア
 ☐ PASS ☐ FAIL — 備考:
@@ -61,7 +61,7 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 ☐ PASS ☐ FAIL — 備考:
 
 **B2. 早打ち / 候補未到着（DEV-166）** — 即 Space・高速入力で固まらず復帰
-☐ PASS ☐ FAIL — 備考:（B2 は DEV-166 早打ち耐性の確認。preedit 反映遅延の体感は A3/DEV-199 側で記録）
+☐ PASS ☐ FAIL — 備考:（B2 は DEV-166 早打ち耐性の確認。preedit 反映は A3 側で記録）
 
 **B3. ライフサイクル・残留（DEV-175/170）** — フォーカス移動/アプリ終了/IME 切替で入力残留・ゴースト候補窓が出ない
 ☐ PASS ☐ FAIL — 備考:
@@ -85,7 +85,7 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 既知の未解決バグの一覧・優先度・状態は **Linear で管理**する（`AGENTS.md`: docs に進捗/状態リストを置かない）。本チェックリストは状態を持たず、各行の `☐ 既知(DEV-xxx)` がそのバグへの参照。現在の状態は Linear で確認すること:
 
 - team `Dev` / project `azooKey Desktop / Windows IME MVP` / label `repo:azooKey-Desktop`
-- 本検証で参照する主な既知バグ: DEV-197 / DEV-198 / DEV-199 / DEV-190 / DEV-171 / DEV-173 / DEV-160（各 ID を Linear で開いて最新状態を参照）
+- 本検証で参照する主な既知バグ: DEV-197 / DEV-198 / DEV-190 / DEV-171 / DEV-173 / DEV-160（各 ID を Linear で開いて最新状態を参照）
 
 ## 結果サマリ
 - コア(A): ___ / 8（PASS ___ / 既知 ___ / 新規 FAIL ___）

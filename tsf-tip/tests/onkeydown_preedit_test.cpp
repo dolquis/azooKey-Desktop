@@ -656,6 +656,46 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PendingNIsShownInPreeditWithoutCommittingRomaji) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x3093'));
+
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"な");
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x306a'));
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BackspaceClearsPendingNPreeditPreview) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange range;
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('N'));
+  ASSERT_EQ(range.last_text, std::wstring(1, L'\x3093'));
+
+  EXPECT_TRUE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(composition.end_count, 1);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, BackspaceRemovesPendingRomajiBeforeKana) {
   TextServiceHarness h;
 

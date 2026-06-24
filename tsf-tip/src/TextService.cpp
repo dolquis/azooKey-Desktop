@@ -457,7 +457,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      PostQueryCandidates(preedit_kana_);
+      PostQueryCandidates(CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
@@ -478,7 +478,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       preedit_kana_ += romaji_.Feed('-');
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      PostQueryCandidates(preedit_kana_);
+      PostQueryCandidates(CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (wParam == VK_BACK) {
@@ -488,7 +488,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         selected_candidate_idx_ = 0;
       }
       if (romaji_.HasPending()) {
+        {
+          std::lock_guard<std::mutex> lk(candidates_mtx_);
+          candidates_.clear();
+          candidate_window_show_pending_ = false;
+        }
         romaji_.PopPending();
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
+        const std::string reading = CurrentPreeditSurface();
+        if (!reading.empty()) PostQueryCandidates(reading);
         *eaten = TRUE;
       } else if (!preedit_kana_.empty()) {
         {
@@ -503,7 +512,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         s.erase(i);
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
-        if (!preedit_kana_.empty()) PostQueryCandidates(preedit_kana_);
+        const std::string reading = CurrentPreeditSurface();
+        if (!reading.empty()) PostQueryCandidates(reading);
         *eaten = TRUE;
       }
 
@@ -523,7 +533,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           candidates_.clear();
           candidate_window_show_pending_ = false;
         }
-        PostQueryCandidates(preedit_kana_);
+        PostQueryCandidates(CurrentPreeditSurface());
       }
       if (!preedit_kana_.empty()) {
         // Always eat Space during preedit — even if candidates haven't arrived
@@ -1466,13 +1476,17 @@ void TextService::PostQueryCandidates(const std::string& reading) {
   ipc_cv_.notify_one();
 }
 
+std::string TextService::CurrentPreeditSurface() const {
+  return preedit_kana_ + romaji_.PreviewPending();
+}
+
 void TextService::OnCandidatesReady(void* context) {
   if (!context) return;
   static_cast<TextService*>(context)->ShowCandidateWindowFromCache();
 }
 
 void TextService::ShowCandidateWindowFromCache() {
-  if (preedit_kana_.empty() || candidate_ui_.IsShowing()) {
+  if (CurrentPreeditSurface().empty() || candidate_ui_.IsShowing()) {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidate_window_show_pending_ = false;
     return;
@@ -1670,7 +1684,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     }
 
     // Normal preedit update.
-    const std::wstring kana = Utf8ToWide(service_->preedit_kana_);
+    const std::wstring kana = Utf8ToWide(service_->CurrentPreeditSurface());
 
     if (kana.empty()) {
       if (service_->composition_) {

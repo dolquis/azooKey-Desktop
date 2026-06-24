@@ -205,14 +205,20 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
   struct EditContextHint {
       std::optional<char32_t> char_before;  // キャレット直前 1 文字（無ければ nullopt）
       std::optional<char32_t> char_after;   // キャレット直後 1 文字
-      bool selection_collapsed = true;      // 範囲選択でないか
+      std::optional<bool> selection_collapsed;  // true=collapsed / false=範囲選択 / nullopt=不明
   };
   ```
 - **責務分界**: core は文書（`ITfContext` / `ITfRange` / 選択範囲 / 周辺文字）を
   **直接読まない**。隣接文字・選択状態が必要な判定（M61-A のスキップ / 空ペア削除など）は、
   TIP が同期読取専用 EditSession（`docs/bracket-pairing-spec.md` §5.3）で `EditContextHint` を
-  埋め、その hint を付けて `HandleEvent` を呼ぶ。読取が拒否されたら hint は空（`nullopt`）で
-  渡し、core は安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
+  埋め、その hint を付けて `HandleEvent` を呼ぶ。読取が拒否されたら hint は空
+  （全フィールド `nullopt`）で渡し、core は安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
+- **選択状態は三値**: `selection_collapsed` は `std::optional<bool>` とし、`true`=collapsed 確定 /
+  `false`=範囲選択確定 / `nullopt`=不明（読取失敗）を区別する。**`true` のときだけ collapsed 前提の
+  経路**（M61-A の開きカッコ→`insertBracketPair` 等）を採り、`false`・`nullopt` はいずれも安全側
+  （M61-A 既定はリテラル挿入。M61-B の `bracketWrapSelection` は `false` 確定時のみ選択を囲む）へ
+  倒す。plain `bool`（既定 `true`）にすると空 hint が「collapsed 確定」と区別できず、範囲選択中の
+  読取失敗が誤ってペア挿入に倒れるため避ける（`docs/bracket-pairing-spec.md` §3.3）。
 - **遡及適用**: この純粋性契約は M13 本体にも適用する（M61-A だけでなく、M13 の
   Composing / Selecting / Commit 経路も文書非依存に保つ）。現行 `TextService.cpp` の OnKeyDown は
   EditSession 内で `GetSelection` を呼ぶが、これは **TIP 側のレンダリング / EditSession 都合**で
@@ -302,10 +308,18 @@ inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替
     core は同期・純粋に保つ。候補の **データ + 選択 index** は core へ、候補 **ウィンドウ** は
     TIP に残す。
 - **非同期候補と staleness の保存**: 候補問い合わせは非同期のため、純粋 core は待てない。
-  `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading),
-  enterCandidateSelectionMode]` 相当の ClientAction を出して `Selecting` へ遷移し、
-  **応答到着時の表示は TIP 側の既存機構**（`candidate_window_show_pending_` + request_id
-  staleness）が処理する。staleness を core へ移さないことで M10 を保存する。
+  `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading)]` を出すが、
+  **候補が未到着のうちは `Selecting` へ遷移しない**（候補スナップショット・窓が無い状態で Enter /
+  数字 / 矢印が Selecting 挙動になると、現行の pending-candidate 経路を回帰させる）。`Composing`
+  （または下記の pending 状態）に留まり、Enter は `CommitPreeditAsIs`、数字 / 矢印は無視のまま
+  M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: キャッシュヒット時は
+  同期に、cache miss 時は応答到着を TIP が core へ供給するフィードバックイベント
+  （例 `HandleCandidatesArrived(list)`）で。応答到着時の窓表示は TIP 側の既存機構
+  （`candidate_window_show_pending_` + request_id staleness）が処理し、staleness を core へ
+  移さないことで M10 を保存する。
+  - **代替**: 「クエリ送信済み・応答待ち」を明示する pending 状態（M58-A の `BatchConverting`
+    `docs/romaji-batch-conversion-spec.md` §3 と同型）を `InputStateKind` へ append しても良い。
+    その場合も確定可否・キー挙動は上記（Enter=as-is 確定・候補選択操作は不可）に一致させる。
 - **挙動デルタの明示**（silent regression を避けるため、現行に無い挙動は「意図的追加」として
   区別する。下記は現行 OnKeyDown の inline 分岐に基づく区分であり、実装時に現行コードと
   突き合わせて確定する）:

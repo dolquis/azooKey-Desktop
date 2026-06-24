@@ -116,11 +116,11 @@ IPC も追加しない。したがって Host 未接続・劣化モードでも�
 - core 入力を拡張: `HandleEvent(UserActionEvent, const EditContextHint&)`（純粋関数のまま。
   hint も入力の一部）。
   ```cpp
-  // core/include/azookey/core/InputState.h（追加。純粋・TSF 非依存）
+  // core/include/azookey/core/InputState.h（正典は legacy-parity-spec.md §1.5.1。純粋・TSF 非依存）
   struct EditContextHint {
     std::optional<char32_t> char_before;  // キャレット直前 1 文字（無ければ nullopt）
     std::optional<char32_t> char_after;   // キャレット直後 1 文字
-    bool selection_collapsed = true;      // 範囲選択でないか
+    std::optional<bool> selection_collapsed;  // true=collapsed / false=範囲選択 / nullopt=不明（読取失敗）
   };
   ```
 - **順序**: TIP は `OnKeyDown` で、開きカッコ / 閉じカッコ / Backspace（`bracketPairing` ON ＆

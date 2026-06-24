@@ -95,7 +95,8 @@ enum class InputStateKind {
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | Composing | StartComposition |
-| Composing | StartConversion | Selecting | QueryCandidates + Show CandidateWindow |
+| Composing | StartConversion（候補キャッシュ有） | Selecting | Show CandidateWindow（§1.5.4） |
+| Composing | StartConversion（候補キャッシュ無＝cache miss） | Composing | `QueryCandidates` 送信のみ。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新 |
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新 |
 | Previewing | StartConversion | Selecting | Show CandidateWindow（最良候補にハイライト） |
@@ -107,8 +108,16 @@ enum class InputStateKind {
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
-各遷移を `InputState::HandleEvent(UserActionEvent)` → `std::vector<ClientAction>` で
-返す純粋関数として実装し、テストで網羅する（`core/tests/input_state_test.cpp`）。
+> **候補表示の cache hit / miss 分岐**: `StartConversion` での `Selecting` 遷移は候補キャッシュ有の
+> ときのみ即時。キャッシュ無（cache miss）は `QueryCandidates` を送って **`Composing` を維持**し、応答
+> 到着時に `Selecting` へ遷移する。`Previewing | StartConversion` も未キャッシュなら同様に応答到着まで
+> `Selecting` に入らない。候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる
+> 回帰を防ぐためで、詳細は §1.5.4。
+
+各遷移を `InputState::HandleEvent(UserActionEvent, const EditContextHint&)` →
+`HandleResult`（`ClientAction` 列 + 次状態）を返す純粋関数として実装し、テストで網羅する
+（`core/tests/input_state_test.cpp`）。シグネチャ・純粋性契約・条件遷移（レガシーの
+`ClientActionCallback`）の扱いは §1.5.1 を正典とする。
 
 ### 1.3 ClientAction → TSF 翻訳
 
@@ -168,7 +177,203 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
 | VK_NONCONVERT | (none) | ToggleHiraKata |
 | VK_F10 | (none) | ToggleDebugWindow |
 
-「英数キー」「かな」のダブルタップは独自検出ロジック → 1.5 節参照。
+「英数キー」「かな」のダブルタップは独自検出ロジック → §4.1（トリガ検出）参照。
+
+### 1.5 C++ 移植境界（純粋性契約・拡張点・VK 表所有権・非回帰戦略）
+
+§1.1〜§1.4 はレガシー（macOS）の UserAction / InputState / ClientAction / VK 表を定義する。
+本節は、それを C++ へ移植する際の **境界判断**（実装着手前に固定すべき責務分界・拡張点・
+純粋性契約・非回帰戦略）を確定する。M13 の状態機械の上には後続マイルストーン
+（M14 / M15 / M16 / M17 / M58-A / M59 / M61-A）がすべて載るため、各自が `InputState` /
+`ClientAction` / `UserAction` を場当たり拡張すると enum 破壊・二重実装・回帰を招く。
+後続はいずれも本節を正典として拡張すること。
+
+#### 1.5.1 純粋性契約（core は文書を読まない）
+
+`InputState::HandleEvent` は **純粋関数**である。同一の (現在状態, イベント, ヒント) からは
+同一の (`ClientAction` 列, 次状態) のみを返し、TSF / エディタバッファ / IPC / ファイル /
+グローバル状態に依存しない。
+
+- **シグネチャ**（M13 で確定。M61-A `docs/bracket-pairing-spec.md` §3.1.1 が前提とする
+  `EditContextHint` 引数を最初から含め、後続が引数を増やさずに済むようにする）:
+  ```cpp
+  // core/include/azookey/core/InputState.h（純粋・TSF 非依存）
+  struct HandleResult {
+      std::vector<ClientAction> actions;  // TIP が順に適用する副作用指示
+      InputState                next;     // 適用後の論理状態（値）
+  };
+
+  // 文書事実は hint 経由でのみ core へ渡る。既定は空（全 nullopt）。
+  HandleResult HandleEvent(const UserActionEvent& event,
+                           const EditContextHint& hint = {}) const;
+  ```
+- **`EditContextHint`**（正典定義。`docs/bracket-pairing-spec.md` §3.1.1 は本定義を参照する）:
+  ```cpp
+  struct EditContextHint {
+      std::optional<char32_t> char_before;  // キャレット直前 1 文字（無ければ nullopt）
+      std::optional<char32_t> char_after;   // キャレット直後 1 文字
+      std::optional<bool> selection_collapsed;  // true=collapsed / false=範囲選択 / nullopt=不明
+  };
+  ```
+- **責務分界**: core は文書（`ITfContext` / `ITfRange` / 選択範囲 / 周辺文字）を
+  **直接読まない**。隣接文字・選択状態が必要な判定（M61-A のスキップ / 空ペア削除など）は、
+  TIP が同期読取専用 EditSession（`docs/bracket-pairing-spec.md` §5.3）で `EditContextHint` を
+  埋め、その hint を付けて `HandleEvent` を呼ぶ。読取が拒否されたら hint は空
+  （全フィールド `nullopt`）で渡し、core は安全側（リテラル挿入 / 通常 Backspace）へ分岐する。
+- **選択状態は三値**: `selection_collapsed` は `std::optional<bool>` とし、`true`=collapsed 確定 /
+  `false`=範囲選択確定 / `nullopt`=不明（読取失敗）を区別する。**`true` のときだけ collapsed 前提の
+  経路**（M61-A の開きカッコ→`insertBracketPair` 等）を採り、`false`・`nullopt` はいずれも安全側
+  （M61-A 既定はリテラル挿入。M61-B の `bracketWrapSelection` は `false` 確定時のみ選択を囲む）へ
+  倒す。plain `bool`（既定 `true`）にすると空 hint が「collapsed 確定」と区別できず、範囲選択中の
+  読取失敗が誤ってペア挿入に倒れるため避ける（`docs/bracket-pairing-spec.md` §3.3）。実装は
+  collapsed 判定を必ず `hint.selection_collapsed == true`（または `.value_or(false)`）で書く。
+  `std::optional<bool>` は engaged な `false` も真と評価されるため、`if (hint.selection_collapsed)`
+  の素の真偽評価は使わない（`docs/bracket-pairing-spec.md` §3.3 / §5.3 の collapsed 条件も同様）。
+- **遡及適用**: この純粋性契約は M13 本体にも適用する（M61-A だけでなく、M13 の
+  Composing / Selecting / Commit 経路も文書非依存に保つ）。現行 `TextService.cpp` の OnKeyDown は
+  EditSession 内で `GetSelection` を呼ぶが、これは **TIP 側のレンダリング / EditSession 都合**で
+  あり、状態遷移の判断材料ではない。状態遷移に必要な文書事実は `EditContextHint` のみに限定する。
+
+> **型の整理（レガシーとの差異）**: レガシー Swift は
+> `event(...) -> (ClientAction, ClientActionCallback)` で、遷移を `ClientActionCallback`
+> （`transition` / `basedOnBackspace` / `basedOnSubmitCandidate` 等の条件分岐）として返す。
+> C++ 版は **core が論理 composition バッファ（reading）と候補・選択 index を所有する**ため、
+> `basedOnBackspace`（削除後に空か）・`basedOnSubmitCandidate`（確定後に残りがあるか）は
+> **core 内部で決定的に解決**できる。したがって `ClientActionCallback` は移植せず、
+> `HandleResult.next` に解決済みの次状態を載せる。文書依存の分岐のみ `EditContextHint`
+> から解決する。
+
+#### 1.5.2 拡張点ポリシー（どの enum を後続が拡張してよいか）
+
+3 つの enum は安定性のティアが異なる。新機能は以下に従って拡張する。
+
+- **`UserAction`（最安定・原則追加しない）**: 新しい文字・記号は `Input` / `InputAlnum` を
+  再利用し、`UserActionEvent.codepoint` に載せる（M61-A のカッコ入力もこの方式で新 enum 値
+  なし。`docs/bracket-pairing-spec.md` §3.1）。新 case の追加は「新しい *意味的キー意図*」
+  （既存のどの UserAction でも表現できない操作）に限る。追加時は末尾に append し、
+  `UserActionMap` と全 consumer を同時更新する。
+- **`InputStateKind`（append-only・追加的拡張可）**: 新状態は **末尾に追加**し、既存値の
+  並び替え・削除・renumber をしない。実例: M14 の `Previewing`（§1.2 に既出）、M58-A の
+  `BatchAccumulating` / `BatchConverting`（`docs/romaji-batch-conversion-spec.md` §3）。
+  **既存状態 + `EditContextHint` で表現できる機能は状態を追加しない**（M61-A は状態追加ゼロで
+  `Idle` を再利用）。状態追加は「IPC 発火条件・確定可否・preedit の意味が既存と質的に異なる
+  ライフサイクル」（batch の無 IPC 蓄積など）に限る。
+- **`ClientAction`（拡張の主戦場・append-only variant）**: 新しい副作用は ClientAction を
+  末尾追加する。パラメータ付きは payload を持つ（`insertBracketPair(open, close)` 等。
+  variant 型）。**複合アクションを作らない**: レガシーの `commitMarkedTextAndAppendToMarkedText`
+  相当は `[commitMarkedText, appendToMarkedText(s)]` のように **細粒度アクションの列**で表現する
+  （組合せ爆発を防ぐ）。
+
+**状態データ（associated value）の扱い**: C++ `enum class InputStateKind` は値を持てない。
+レガシーの `unicodeInput(String)`（16 進バッファ）・`attachDiacritic(String)`（デッドキー）に
+相当する状態データは、`InputState` 値オブジェクトのフィールド（`kind` でスイッチして使う）
+として保持する。`InputState` が持つもの: `kind`、reading バッファ
+（`core::RomajiKanaConverter` + 確定済みかな）、候補スナップショット + 選択 index、
+Unicode 16 進バッファ。
+
+- **予約状態**: レガシーの `attachDiacritic` は §1.2 の表に未掲載だが、M16（Magic）/
+  M17（カスタムローマ字・デッドキー）で必要になりうる。M13 では実装せず、`InputStateKind` の
+  **将来追加候補として予約**する（M17 着手時に末尾追加）。M13 のスコープは §1.2 に列挙した
+  6 状態 + M3〜M10 parity に限定する。
+
+#### 1.5.3 VK→UserAction 表の所有権（2 層分界）
+
+VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界する。
+
+- **第 1 層 — core `UserActionMap`（純粋・モード非依存・状態は明示引数）**: `(VK, modifiers,
+  現在の InputStateKind)` → `std::optional<UserActionEvent>` を返す純粋関数（`nullopt` = その状態で
+  IME が消費しない＝アプリへパススルー。`OnTestKeyDown` の eaten=FALSE に対応）。戻り値は enum 単体
+  ではなく **`UserActionEvent` 全体**で、`action` / `modifiers` / `digit`（`SelectByDigit` の 1〜9 を
+  VK から決定）を埋める（`codepoint` は第 2 層で TIP が解決した値を載せる）。これにより数字キーは
+  index 付きで一意に識別でき、TIP が VK から digit を再導出する二重マッピングを不要にする。状態依存の解決
+  （`Space` は Composing / Previewing で `StartConversion`、Selecting で `NextCandidate`、
+  `Shift+Space` で `PrevCandidate` / 数字は Selecting で `SelectByDigit`、**それ以外は `nullopt`＝
+  パススルー（`Input` にしない）**）は、**現在状態を引数として明示的に受け取って**決める。ある状態でその IME が扱わないキーは `nullopt` を返す（例: Selecting 以外の
+  数字）。これは現行 `OnTestKeyDown`/`OnKeyDown` の eaten 判定（数字は `candidate_ui_.IsShowing()`
+  時のみ消費）と一致し、M10 を保存する。**hint 依存の例外**: Idle の Backspace は既定 `nullopt`
+  （パススルー）だが、M61-A（`bracketPairing` ON）では TIP が §5.3 の同期読取で空ペアを確認した
+  ときだけ Backspace を core へ回し（`HandleEvent(Backspace, hint)` → `deleteBracketPair`）eaten=TRUE
+  にする（`docs/bracket-pairing-spec.md` §3.3・§5.3）。すなわち **hint に依存する eaten 判定は map
+  （VK, mod, kind）ではなく OnKeyDown / OnTestKeyDown 層で hint を用いて上書き**する。文書・TSF・IO に触れないため純粋関数のままで、`kind` を
+  注入して `tsf-tip/tests/keymap_test.cpp` で網羅テストできる。キーボードレイアウト・入力モードには依存しない
+  （codepoint は解決しない＝第 2 層の責務）。M61-A の OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、
+  `VK_OEM_1` 等、および JIS 配列で `「」` を生むキー）は **本表へ `Input` として追加**する
+  （`docs/bracket-pairing-spec.md` §3.1）。core が `InputState` を所有するため本写像も **core 側**に
+  置き、TIP は `(VK, modifiers, 解決済み codepoint)` を core へ渡す。
+- **第 2 層 — TIP `TextService.cpp::OnKeyDown`（プラットフォーム・モード依存）**:
+  `Input` / `InputAlnum` の **codepoint** を、`ToUnicodeEx` + 現在の入力モード
+  （ひらがな / カタカナ / 英数）と記号写像（`hiragana` で `[`→`「` 等）から解決し、
+  `UserActionEvent.codepoint` に載せる。キーボードレイアウト・IME モードの関心を所有する。
+- **状態を翻訳境界に含める根拠（無状態 map にしない）**: `Space` は Selecting で次候補・他で変換
+  開始、数字は Selecting で候補選択・他で文字入力と、**同一キーの意味が現在状態に依存する**。
+  無状態 `(VK, modifiers)` 写像ではこれを表現できず、§1.1 に raw `Space` / `Digit` 変種を増やすと
+  状態解決を状態機械の外へ二重化してしまう。そこで **`InputStateKind` を写像の引数に含める**
+  （round-2 レビュー提示の選択肢「状態を翻訳境界に含める」）。これは状態の二重保持ではない:
+  写像は「キー＋状態 → どの `UserAction` か」の宣言的解決だけを担い、**遷移と副作用は引き続き
+  状態機械（`HandleEvent`）が単独で所有**する。`UserActionMap` は状態を保持せず引数として受ける
+  純粋関数なので、テスト容易性と Linux 再利用性は保たれる。§1.1 の `StartConversion` /
+  `NextCandidate` / `PrevCandidate` / `SelectByDigit` は本写像が返す値であり、別途の raw 変種を
+  §1.1 へ追加しない（append-only 方針を維持）。
+- **分界規則**: **core は「キー（＋現在状態）がどの `UserAction`（種別・`digit` 等。消費しないなら `nullopt`）か」を決め、TIP は「どの文字を
+  生むか（codepoint）」を決める**。これにより M61-A の OEM 追加は「core 表への `Input` 追加」＋
+  「TIP の codepoint 解決追加」で済み、`UserAction` enum を不変に保てる。
+- **テスト分界**: roadmap M13 受け入れの `tsf-tip/tests/keymap_test.cpp` は
+  `UserActionMap(VK, modifiers, kind)` → `std::optional<UserActionEvent>` の全エントリ（状態依存解決・`digit` ペイロード・`nullopt` パススルーを含む）を各 `kind`
+  注入で検証する。状態遷移・副作用は `core/tests/input_state_test.cpp`、codepoint 解決（モード依存）は
+  TIP レベルのテストで検証する。
+
+#### 1.5.4 非回帰移行戦略（M3〜M10 の挙動保存）
+
+現行 `tsf-tip/src/TextService.cpp::OnKeyDown` は、状態を約 19 個のメンバ変数に分散させた
+inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替えは以下の戦略で、挙動回帰なし
+（roadmap M13 受け入れ条件）を担保する。
+
+- **特性化テスト先行（strangler 移行）**: リファクタ前に、現行 OnKeyDown の M3〜M10 挙動を
+  状態遷移として `core/tests/input_state_test.cpp` に固定する。既存
+  `tsf-tip/tests/onkeydown_preedit_test.cpp` は移行中も常に緑に保つ（等価性ゲート）。
+- **状態所有の分割**: 現行の暗黙状態を以下に振り分ける。
+  - **core `InputState`（論理状態）**: `kind`、reading バッファ（`preedit_kana_` + `romaji_` の
+    ペンディング = `core::RomajiKanaConverter`）、候補スナップショット（`shown_candidates_`）+
+    選択 index（`selected_candidate_idx_`）、Unicode 16 進バッファ。
+  - **TIP 専有（プランビング・`TextService` に残す）**: `ITfComposition* composition_`、
+    `ITfContext*`（active / commit context）、IPC の id 群（`ipc_pending_id_` /
+    `ipc_inflight_id_` / `ipc_has_request_` — **staleness は TIP 側に残す**）、
+    `CandidateUiCoordinator`（ウィンドウ）、`caret_pt_`、`committing_`（EditSession 再入ガード）、
+    `ui_less_mode_`。
+  - **分界の根拠**: IPC staleness と TSF オブジェクトは本質的に非同期・プラットフォーム依存。
+    core は同期・純粋に保つ。候補の **データ + 選択 index** は core へ、候補 **ウィンドウ** は
+    TIP に残す。
+- **非同期候補と staleness の保存**: 候補問い合わせは非同期のため、純粋 core は待てない。
+  `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading)]` を出すが、
+  **候補が未到着のうちは `Selecting` へ遷移しない**（候補スナップショット・窓が無い状態で Enter /
+  数字 / 矢印が Selecting 挙動になると、現行の pending-candidate 経路を回帰させる）。`Composing`
+  （または下記の pending 状態）に留まり、Enter は `CommitPreeditAsIs`、数字は IME 非消費で
+  アプリへパススルー（現行は候補窓表示時のみ消費。§1.5.3）のまま M10 挙動を保つ。`Selecting` への遷移は **候補が適用された時点**で起きる: キャッシュヒット時は
+  同期に、cache miss 時は応答到着を TIP が core へ供給するフィードバックイベント
+  （例 `HandleCandidatesArrived(list)`）で。応答到着時の窓表示は TIP 側の既存機構
+  （`candidate_window_show_pending_` + request_id staleness）が処理し、staleness を core へ
+  移さないことで M10 を保存する。
+  - **代替**: 「クエリ送信済み・応答待ち」を明示する pending 状態（M58-A の `BatchConverting`
+    `docs/romaji-batch-conversion-spec.md` §3 と同型）を `InputStateKind` へ append しても良い。
+    その場合も確定可否・キー挙動は上記（Enter=as-is 確定・候補選択操作は不可）に一致させる。
+- **挙動デルタの明示**（silent regression を避けるため、現行に無い挙動は「意図的追加」として
+  区別する。下記は現行 OnKeyDown の inline 分岐に基づく区分であり、実装時に現行コードと
+  突き合わせて確定する）:
+  - **保存**（現行実装あり）: Space での romaji flush→候補表示 / 巡回(+1)、Up/Down 巡回、
+    数字 1〜9 選択、Enter 確定（`CommitSelected` / `CommitPreeditAsIs`）、Esc、フォーカス喪失時の
+    確定 / composition 終了、長音 `ー`（composing 中の `-` / `VK_SUBTRACT`）。
+  - **意図的追加**（§1.4 は規定するが現行 OnKeyDown に未実装または部分的。M13 で新規・新テストで
+    担保。M3〜M10 の回帰ではない）: Shift+Space の後退巡回（`PrevCandidate`）、
+    Ctrl+H/P/N/F/B/A/E バインド、`VK_KANJI` / `VK_NONCONVERT` のモード切替、
+    Ctrl+Shift+U（Unicode 入力）、Ctrl+Shift+Backspace（Forget）、F10（デバッグ窓）。
+- **削除単位の契約（M59 連携）**: Backspace は **かな / 生ローマ字バッファの 1 単位**を削除し、
+  自動句読点（M59）は削除単位に数えない（`docs/dynamic-punctuation-spec.md` §5.2）。reading
+  バッファを core が所有することで、この「削除単位」を core 内部で定義でき、M59 は状態追加なしで
+  載る。
+- **等価性ゲート（roadmap M13 受け入れ条件に対応）**: (1) `onkeydown_preedit_test.cpp` が緑の
+  まま、(2) `input_state_test.cpp` が全状態 × 全 UserAction の遷移を網羅（純粋 core なので
+  `EditContextHint` 注入で文書なしに網羅）、(3) `keymap_test.cpp` が VK 表（第 1 層）の全
+  エントリを検証。
 
 ## 2. ライブ変換 (M14)
 

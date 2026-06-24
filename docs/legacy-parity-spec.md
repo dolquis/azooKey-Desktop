@@ -95,7 +95,8 @@ enum class InputStateKind {
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
 | Idle | Input | Composing | StartComposition |
-| Composing | StartConversion | Selecting | QueryCandidates + Show CandidateWindow |
+| Composing | StartConversion（候補キャッシュ有） | Selecting | Show CandidateWindow（§1.5.4） |
+| Composing | StartConversion（候補キャッシュ無＝cache miss） | Composing | `QueryCandidates` 送信のみ。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新 |
 | Previewing | Input | Previewing | QueryLiveConversion + Preedit 更新 |
 | Previewing | StartConversion | Selecting | Show CandidateWindow（最良候補にハイライト） |
@@ -106,6 +107,12 @@ enum class InputStateKind {
 | ReplaceSuggestion | Commit | Idle | TransformSelectedText IPC + ReplaceSelection |
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
+
+> **候補表示の cache hit / miss 分岐**: `StartConversion` での `Selecting` 遷移は候補キャッシュ有の
+> ときのみ即時。キャッシュ無（cache miss）は `QueryCandidates` を送って **`Composing` を維持**し、応答
+> 到着時に `Selecting` へ遷移する。`Previewing | StartConversion` も未キャッシュなら同様に応答到着まで
+> `Selecting` に入らない。候補スナップショット未確定のまま Enter / 数字 / 矢印が Selecting 挙動になる
+> 回帰を防ぐためで、詳細は §1.5.4。
 
 各遷移を `InputState::HandleEvent(UserActionEvent, const EditContextHint&)` →
 `HandleResult`（`ClientAction` 列 + 次状態）を返す純粋関数として実装し、テストで網羅する
@@ -278,10 +285,13 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
   IME が消費しない＝アプリへパススルー。`OnTestKeyDown` の eaten=FALSE に対応）。状態依存の解決
   （`Space` は Composing / Previewing で `StartConversion`、Selecting で `NextCandidate`、
   `Shift+Space` で `PrevCandidate` / 数字は Selecting で `SelectByDigit`、**それ以外は `nullopt`＝
-  パススルー（`Input` にしない）**）は、**現在状態を引数として明示的に受け取って**決める。ある状態で
-  その IME が扱わないキーは `nullopt` を返す（例: Selecting 以外の数字、composition 無し（Idle）の
-  Backspace）。これは現行 `OnTestKeyDown`/`OnKeyDown` の eaten 判定（数字は `candidate_ui_.IsShowing()`
-  時のみ消費）と一致し、M10 を保存する。文書・TSF・IO に触れないため純粋関数のままで、`kind` を
+  パススルー（`Input` にしない）**）は、**現在状態を引数として明示的に受け取って**決める。ある状態でその IME が扱わないキーは `nullopt` を返す（例: Selecting 以外の
+  数字）。これは現行 `OnTestKeyDown`/`OnKeyDown` の eaten 判定（数字は `candidate_ui_.IsShowing()`
+  時のみ消費）と一致し、M10 を保存する。**hint 依存の例外**: Idle の Backspace は既定 `nullopt`
+  （パススルー）だが、M61-A（`bracketPairing` ON）では TIP が §5.3 の同期読取で空ペアを確認した
+  ときだけ Backspace を core へ回し（`HandleEvent(Backspace, hint)` → `deleteBracketPair`）eaten=TRUE
+  にする（`docs/bracket-pairing-spec.md` §3.3・§5.3）。すなわち **hint に依存する eaten 判定は map
+  （VK, mod, kind）ではなく OnKeyDown / OnTestKeyDown 層で hint を用いて上書き**する。文書・TSF・IO に触れないため純粋関数のままで、`kind` を
   注入して `tsf-tip/tests/keymap_test.cpp` で網羅テストできる。キーボードレイアウト・入力モードには依存しない
   （codepoint は解決しない＝第 2 層の責務）。M61-A の OEM キー（`VK_OEM_4`=`[`、`VK_OEM_6`=`]`、
   `VK_OEM_1` 等、および JIS 配列で `「」` を生むキー）は **本表へ `Input` として追加**する

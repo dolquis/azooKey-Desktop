@@ -60,7 +60,7 @@ bool RequestScheduler::IsLatest(uint64_t request_id) const {
 
 void RequestScheduler::PruneInactiveBeforeLocked(uint64_t request_id) {
   for (auto it = cancel_states_.begin(); it != cancel_states_.end();) {
-    if (it->first < request_id && it->second.active_count == 0) {
+    if (it->first <= request_id && it->second.active_count == 0) {
       it = cancel_states_.erase(it);
     } else {
       ++it;

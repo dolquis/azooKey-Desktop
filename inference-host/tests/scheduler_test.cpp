@@ -66,6 +66,9 @@ TEST(RequestSchedulerTest, PreCanceledRequestUsesSharedFlagAndCompletes) {
   EXPECT_TRUE(flag->load());
   EXPECT_TRUE(s.IsCanceled(12));
 
+  s.MarkLatest(12);
+  EXPECT_TRUE(s.IsCanceled(12));
+
   s.CompleteRequest(12);
   EXPECT_FALSE(s.IsCanceled(12));
 }
@@ -121,6 +124,17 @@ TEST(RequestSchedulerTest, OlderUntrackedCancelSurvivesUntilRequestCanTrack) {
   EXPECT_TRUE(s.IsCanceled(7));
   s.MarkLatest(11);
   EXPECT_FALSE(s.IsCanceled(7));
+}
+
+TEST(RequestSchedulerTest, MarkLatestPrunesInactivePreCancelAtCurrentRequest) {
+  host::RequestScheduler s;
+  s.MarkLatest(10);
+
+  s.Cancel(12);
+  EXPECT_TRUE(s.IsCanceled(12));
+
+  s.MarkLatest(12);
+  EXPECT_FALSE(s.IsCanceled(12));
 }
 
 TEST(RequestSchedulerTest, LatestSingleId) {

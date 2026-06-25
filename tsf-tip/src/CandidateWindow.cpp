@@ -3,7 +3,10 @@
 #include <ShellScalingApi.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
+
+#include "CandidateSelection.h"
 
 namespace azookey::tsf {
 
@@ -112,22 +115,16 @@ ATOM CandidateWindow::RegisterWindowClass() {
   wc.lpszClassName = kClassName;
   ATOM a = RegisterClassExW(&wc);
   if (!a && GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
-    // Already registered from a previous activation; retrieve the atom.
-    WNDCLASSEXW existing{};
-    existing.cbSize = sizeof(existing);
-    GetClassInfoExW(GetTipModuleHandle(), kClassName, &existing);
-    a = static_cast<ATOM>(GetClassLongW(
-        FindWindowW(kClassName, nullptr) ? FindWindowW(kClassName, nullptr) : HWND_DESKTOP,
-        GCW_ATOM));
-    // Fallback: return a non-zero sentinel so Create() proceeds.
-    if (!a) a = 1;
+    // CreateWindowExW uses the class name, so a non-zero sentinel is enough to
+    // distinguish "already registered" from real registration failure.
+    a = 1;
   }
   return a;
 }
 
 bool CandidateWindow::Create() {
   static ATOM s_atom = RegisterWindowClass();
-  (void)s_atom;
+  if (!s_atom) return false;
 
   DPI_AWARENESS_CONTEXT previous_context =
       SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -169,7 +166,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int
   int max_text_w = metrics_.min_text_width;
   if (hdc) {
     for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-      std::wstring label = std::to_wstring(i + 1) + L". " + items_[i];
+      std::wstring label = std::to_wstring(i + 1) + L". " + items_[static_cast<size_t>(i)];
       SIZE sz{};
       GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
       max_text_w = std::max(max_text_w, static_cast<int>(sz.cx));
@@ -213,7 +210,7 @@ bool CandidateWindow::IsVisible() const { return hwnd_ && IsWindowVisible(hwnd_)
 void CandidateWindow::MoveSelection(int delta) {
   if (items_.empty()) return;
   int n = static_cast<int>(items_.size());
-  selected_idx_ = (selected_idx_ + delta % n + n) % n;
+  selected_idx_ = internal::WrapCandidateSelectionIndex(selected_idx_, delta, n);
   Repaint();
 }
 
@@ -269,7 +266,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           FillRect(hdc, &row_rc, reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_WINDOW + 1)));
           SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
         }
-        std::wstring label = std::to_wstring(i + 1) + L". " + items_[i];
+        std::wstring label = std::to_wstring(i + 1) + L". " + items_[static_cast<size_t>(i)];
         RECT text_rc = row_rc;
         text_rc.left += metrics_.horizontal_padding;
         DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &text_rc,

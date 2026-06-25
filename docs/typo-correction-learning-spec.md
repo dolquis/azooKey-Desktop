@@ -402,7 +402,7 @@ candidate: 交渉
 
 ```
 activate_typo_correction(reading, observed_pattern):
-  if utf8_len(reading) <= LEN_MIN              → false   // §12.11、既定 2
+  if Utf8CharLength(reading) <= LEN_MIN        → false   // §12.11。既定 2 = 2 文字以下は補正しない
   weak       = (dict_best < S_WEAK)            // 元候補が弱い。既定 0.40
   small_gap  = ((1.0 - s2) < G_GAP)            // top1/top2 が拮抗。既定 0.15
   no_dict    = (dict_best == 0)                // 辞書ヒットなし
@@ -512,8 +512,11 @@ CREATE TABLE typo_settings (
 
 ```
 days_idle    = max(0, (now_epoch_sec - last_used_at) / 86400)
-recency_bonus = B_rec * (2 * exp(-days_idle / recency_half_life) - 1)
+recency_bonus = B_rec * (2 * exp(-ln(2) * days_idle / recency_half_life) - 1)
                 // 値域 [-B_rec, +B_rec]。直近利用で +、放置で −。
+                // recency_half_life は真の半減期: days_idle == recency_half_life
+                // で exp 項が 0.5 になり recency_bonus = 0（中立）。ln(2) 係数を
+                // 省くと半減期にならない（M54 §5 と同じ正規化）。
 app_specific_bonus =
     B_app   if app_aware_learning_enabled
             and current_app == dominant_app(pattern)   // accept 多数派 app
@@ -595,7 +598,7 @@ overcorrection_penalty =
 | 補正 confidence が低い（`typo_confidence < minConfidenceForRanking`、0.70） | 「もしかして」枠のみ（rank 非混在） |
 | top 候補化の信頼不足（`typo_score < minConfidenceForTopCandidate`、0.90） | 第一候補にしない |
 | ユーザーが過去に拒否（`net_reject >= 1`） | `overcorrection_penalty` で強く減点（§12.10）し top 化不可 |
-| 入力が短すぎる（`utf8_len(reading) <= LEN_MIN`、既定 2） | 補正しない（§12.5 で生成前に遮断） |
+| 入力が短すぎる（`Utf8CharLength(reading) <= LEN_MIN`、既定 2 = 2 文字以下） | 補正しない（§12.5 で生成前に遮断） |
 | パスワード欄・秘匿アプリ（M46） | 補正・学習ともに無効（§12.12.1 のゲートで遮断） |
 | コード入力中（M48 profile = code） | 英字・ローマ字補正を控えめにする（発動ゲートに `code` 抑制を加味） |
 
@@ -670,9 +673,10 @@ secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評�
    （§12.13 の optional フィールド省略 = v1 fallback）。
 4. **host（適用・蓄積ゲート、二次・fail-closed）**: host は窓を見られないため
    TIP を信頼するが、防御的二重化として、直近 `QueryCandidates` の `secure`
-   フラグ（M46 が IPC に載せる既存フラグ）が secure を示すセッションでは
-   `ObserveTypo` を記録せず `Lookup`（適用）も行わない。secure フラグが
-   **未知のとき**の既定は、§5 の「`off` の最終ゲートは host」方針に従い
+   フラグ（§12.13 で M55 が追加する optional bool。`PrivacyGate::IsSecure()`
+   の IPC 表出）が secure を示すセッションでは `ObserveTypo` を記録せず
+   `Lookup`（適用）も行わない。`secure` フラグが **未指定（未知）のとき**の
+   既定は、§5 の「`off` の最終ゲートは host」方針に従い
    補正・学習を**行う側**ではなく、M46 が配線済みの環境では fail-closed
    （未知 = secure 扱いで抑止）にできるよう、host は `--secure-unknown=
    {allow|deny}`（既定 `allow`、M46 完了環境では `deny` 推奨）で切替可能と
@@ -695,15 +699,28 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
     "raw_keys": "kousyou",
     "left_context": "...",
     "app": {},
-    "typo_correction_mode": "rank"
+    "typo_correction_mode": "rank",
+    "secure": false
   }
 }
 ```
 
-`raw_keys` / `typo_correction_mode` は optional（TIP が取得可能・送信意図が
-あるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま再利用し、
-新規 enum 値は追加しない。M40 互換性ルールに従い、optional フィールドが
-未指定のときは v1 動作に fallback する。
+`raw_keys` / `typo_correction_mode` / `secure` は optional（TIP が取得可能・
+送信意図があるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま
+再利用し、新規 enum 値は追加しない。M40 互換性ルールに従い、optional
+フィールドが未指定のときは v1 動作に fallback する。
+
+- `secure`（bool）は TIP 側 M46 `PrivacyGate::IsSecure()`
+  （`docs/privacy-and-secure-input-spec.md` §5）の IPC 表出であり、host 二次
+  ゲート（§12.12.2-4）が参照する唯一の secure シグナルである。**現行
+  `QueryCandidatesRequest` には secure 相当フィールドが無いため、本フィールドは
+  M55 が追加する。** M46 が同等のリクエスト単位 privacy フィールド（例
+  `privacy_mode`）を別途定義する場合は、二重定義せず M46 のフィールドへ寄せて
+  本フィールドを廃止する（その場合 §12.12.2 の参照先も M46 フィールドへ更新）。
+- secure 中は §12.12.2-3 のとおり TIP が `raw_keys` を省略し
+  `typo_correction_mode` を実効 `off` で送るが、`secure: true` は明示的な
+  fail-closed シグナルとして併送し、host が未配線時にフォールバック解釈で
+  漏れることを防ぐ。
 
 ### 12.14 設定スキーマ拡張
 
@@ -768,7 +785,7 @@ typo 補正指標は補正有効モードで採取する（`conversion-quality-b
 | `B_app`（§12.9） | 0.20 | `0 <= B_app < accept_weight×3` | app 別 FP 率（rank） |
 | `S_WEAK`（§12.5） | 0.40 | `0 < S_WEAK < 1` | `typo_false_positive_rate`（rank） |
 | `G_GAP`（§12.5） | 0.15 | `0 < G_GAP < 1` | 同上 |
-| `LEN_MIN`（§12.5/§12.11） | 2 | `LEN_MIN >= 2`（1 文字は補正しない） | FP 率（rank） |
+| `LEN_MIN`（§12.5/§12.11） | 2 | `LEN_MIN >= 2`。`Utf8CharLength(reading) <= LEN_MIN` を遮断するため 2 文字以下は補正しない（文字数 = UTF-8 コードポイント、§5-1） | FP 率（rank） |
 | `P_reject`（§12.10） | 0.50 | 拒否済みパターンを top 化させない強さ | `typo_overcorrection_rate`（aggressive） |
 | `P_strong_top1` / `S_STRONG`（§12.10/§12.11） | 0.40 / 0.85 | `S_STRONG` は強い元 top1 の下限 | `typo_overcorrection_rate`（aggressive） |
 | `P_lowconf`（§12.10） | 0.50 | — | overcorrection 率（aggressive） |

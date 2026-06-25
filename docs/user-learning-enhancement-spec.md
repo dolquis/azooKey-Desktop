@@ -158,14 +158,16 @@ CREATE TABLE app_profiles_learning (
 
 ```
 days_since_last_commit = max(0, (now_epoch_sec - last_updated_epoch_sec) / 86400)
-recency_score          = exp(-days_since_last_commit / half_life_days)
+recency_score          = exp(-ln(2) * days_since_last_commit / half_life_days)
 ```
 
 `now_epoch_sec` / `last_updated_epoch_sec` はいずれも epoch 秒（§3.1。ミリ秒
-ではない）。時計の巻き戻りや未来の `last_updated`（NTP 補正・手動時刻変更）で
-差が負になった場合は `days_since_last_commit = 0` にクランプし、
-`recency_score = 1.0`（減衰なし）として扱う。`recency_score` の値域は
-`(0, 1]`。
+ではない）。`half_life_days` は**真の半減期**であり、`days_since_last_commit ==
+half_life_days` のとき `recency_score = 0.5` になる（`ln(2)` 係数で正規化する。
+係数を省くと e-folding 時定数になり半減しないので注意）。時計の巻き戻りや未来の
+`last_updated`（NTP 補正・手動時刻変更）で差が負になった場合は
+`days_since_last_commit = 0` にクランプし、`recency_score = 1.0`（減衰なし）
+として扱う。`recency_score` の値域は `(0, 1]`。
 
 | 用途 | half_life | 根拠（なぜこの値か） |
 |---|---:|---|
@@ -245,9 +247,11 @@ correction_penalty = max(P_min, 1 - k_reject × net_reject)
 - 既定係数は `k_reject = 0.3` / `P_min = 0.0`。`net_reject = 1` で 0.7、
   3〜4 回の純拒否で 0.0 に達し、繰り返し明示的に拒否された surface は
   候補から実質排除される（`P_min = 0.0` を許容する）。
-- **訂正は確定より強い負例**（§2 設計原則）のため、1 回の純拒否の減衰量
-  `k_reject` は、確定 1 回が `log(1 + commit_count)` に与える増分より大きく
-  なるよう設定する。`k_reject` / `P_min` は M52 で校正する（§13）。
+- **訂正は確定より強い負例**（§2 設計原則）を、ペナルティが
+  **乗算で効く**ことで表現する。`net_reject = 1` で `user_score` を 30% 下げ
+  （0.7 倍）、純拒否が累積するほど倍率が下がる。`log(1 + commit_count)` の
+  加法的増分と `k_reject` を直接比較はしない（次元が異なる）。`k_reject` /
+  `P_min` は M52 で校正する（§13）。
 
 ## 7. UserLearningScorer
 
@@ -353,7 +357,7 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 | `half_life`（§5） | 30/90/120/14/60 日 | 一時話題 < 一般語 < 固有名詞・typo < 技術語 の順序 | `user_adapt` 改善を最大化しつつ古い確定の過保持を避ける |
 | `W_same`（§6.1） | 1.2 | `W_diff ≤ 1.0 ≤ W_same` | M48 別 app 検証で同 app 候補の正答率向上 |
 | `W_diff`（§6.1） | 0.8 | `W_same × W_diff ≈ 1`（対称） | 別 app 由来の誤った boost を抑制 |
-| `k_reject`（§6.2） | 0.3 | 純拒否 1 回の減衰 > 確定 1 回の増分 | 拒否 surface の再浮上を防ぐ |
+| `k_reject`（§6.2） | 0.3 | `0 < k_reject ≤ 1`（純拒否 1 回で倍率を 30% 下げる乗算ペナルティ） | 拒否 surface の再浮上を防ぐ |
 | `P_min`（§6.2） | 0.0 | `0 ≤ P_min < 1` | 繰り返し拒否された surface を排除 |
 | `K`（§8.1, context_hash 長） | 8 コードポイント | 復元不能な短さを保つ（プライバシー） | 文脈弁別性とのバランス |
 | `W_ctx_match`（§8.1, v1 では未使用） | 1.0（中立） | `W_ctx_match ≥ 1.0` | 将来 context バケット導入時に校正 |

@@ -394,15 +394,29 @@ candidate: 交渉
 
 ### 12.5 発動条件
 
-打ち間違え補正は常時強制しない:
+打ち間違え補正は常時強制しない。発動判定は **正規化済みスコア**で行う。
+`s1 = score_top1_original`、`s2 = score_top2_original` を、元読みの変換候補
+スコアを top1 で割って `[0, 1]` に正規化した値とする（`s1 = 1.0` 固定、
+`s2 ∈ [0, 1]`）。`dict_best` は元読みの最良辞書 / Zenzai ヒットの正規化スコア
+（ヒットなしは 0）。
 
 ```
-if original_candidates are weak
-or top1/top2 score gap is small
-or original_reading has no good dictionary hit
-or observed pattern matches high-confidence personal typo pattern
-then generate typo-corrected reading hypotheses
+activate_typo_correction(reading, observed_pattern):
+  if utf8_len(reading) <= LEN_MIN              → false   // §12.11、既定 2
+  weak       = (dict_best < S_WEAK)            // 元候補が弱い。既定 0.40
+  small_gap  = ((1.0 - s2) < G_GAP)            // top1/top2 が拮抗。既定 0.15
+  no_dict    = (dict_best == 0)                // 辞書ヒットなし
+  strong_pat = (personal_pattern_confidence(observed_pattern)
+                 >= minConfidenceForRanking)   // 既定 0.70（§12.14）
+  return weak or small_gap or no_dict or strong_pat
 ```
+
+- `S_WEAK` / `G_GAP` は初期値であり M52（`typo_false_positive_rate`）で校正
+  する（§12.16）。`strong_pat` のしきい値は設定 `minConfidenceForRanking`
+  （§12.14）と同一値を使い、二重定義しない。
+- 発動しても補正候補が第一候補になるとは限らない。順位は §12.10 のスコアと
+  §12.11 の誤補正防止条件で決まる。発動は「補正 hypothesis を **生成する**
+  か」だけを決める前段ゲートである。
 
 ### 12.6 補正モード（v2）
 
@@ -492,53 +506,106 @@ CREATE TABLE typo_settings (
 
 ### 12.9 信頼度更新
 
+`confidence` は logit 空間で線形に積み上げ、sigmoid で `(0, 1)` に写してから
+`[min_confidence, max_confidence]` にクランプする。各項は logit（対数オッズ）
+単位で定義する。
+
 ```
-confidence = sigmoid(
-  base
-  + accept_count * accept_weight
-  - reject_count * reject_weight
-  + recency_bonus
-  + app_specific_bonus
-)
+days_idle    = max(0, (now_epoch_sec - last_used_at) / 86400)
+recency_bonus = B_rec * (2 * exp(-days_idle / recency_half_life) - 1)
+                // 値域 [-B_rec, +B_rec]。直近利用で +、放置で −。
+app_specific_bonus =
+    B_app   if app_aware_learning_enabled
+            and current_app == dominant_app(pattern)   // accept 多数派 app
+    else 0
+
+raw_conf   = sigmoid(
+               base
+             + accept_count * accept_weight
+             - reject_count * reject_weight
+             + recency_bonus
+             + app_specific_bonus
+             )
+confidence = clamp(raw_conf, min_confidence, max_confidence)
 ```
 
 初期パラメータ:
 
-| パラメータ | 値 |
-|---|---:|
-| `accept_weight` | 0.25 |
-| `reject_weight` | 0.45 |
-| `recency_half_life` | 60 日 |
-| `max_confidence` | 0.95 |
-| `min_confidence` | 0.05 |
+| パラメータ | 値 | 意味 / 根拠 |
+|---|---:|---|
+| `base` | 0.0 | logit(0.5)。実績ゼロの新規パターンは中立 0.5 から始める。 |
+| `accept_weight` | 0.25 | logit 増分。採用約 4 回で発動しきい値 `minConfidenceForRanking`（0.70 ≈ logit 0.847）に到達。`typo_min_count`（§5、既定 3）と整合する慎重さ。 |
+| `reject_weight` | 0.45 | 拒否の logit 減分。採用の約 1.8 倍。**拒否を採用より強く**し、1 回の誤補正拒否を 2 回弱の採用で相殺する。 |
+| `recency_half_life` | 60 日 | `recency_bonus` の減衰時定数。`docs/user-learning-enhancement-spec.md` §5（打ち間違えパターン 60 日）と一致させる。 |
+| `B_rec` | 0.30 | `recency_bonus` の振幅（logit）。放置パターンを最大 0.30 減点。 |
+| `B_app` | 0.20 | app 一致時の小さな加点（logit）。app をまたいだ過剰一般化を防ぐ弱さ。 |
+| `max_confidence` | 0.95 | 上限。常に「もしかして」で覆せる余地を残す。 |
+| `min_confidence` | 0.05 | 下限。完全な 0 にせず再学習の余地を残す。 |
 
-**拒否の重みを採用より強くする**。誤補正は IME 体験を大きく壊すため、
-学習は保守的に行う。
+- **拒否の重みを採用より強くする**。誤補正は IME 体験を大きく壊すため、学習は
+  保守的に行う。新規パターン（accept=reject=0）の `raw_conf` は recency/app 項
+  のみで約 0.5 になるが、発動ゲート `minConfidenceForRanking`（0.70）に届かない
+  ため、**約 3〜4 回の採用実績を経るまで rank に混ざらない**。これが
+  `typo_min_count` と二重の安全マージンになる。
+- `dominant_app(pattern)` は当該パターンの `typo_events`（§12.8）で
+  `event_type='typo_accept'` が最多の `app_name`。同数・該当なしは bonus 0。
+- `accept_weight` / `reject_weight` / `B_rec` / `B_app` は初期値であり M52 で
+  校正する（§12.16）。`reject_weight > accept_weight` の不変条件は固定する。
 
 ### 12.10 スコアリング
 
+補正候補のスコアは、`[0, 1]` 値域の因子の積から `overcorrection_penalty`
+（加法・`[0, 1]`）を引いて求める。各因子は **1.0 を中立**とし、欠ける情報
+（M48 app / M57 context など未完了）は 1.0 にフォールバックする。
+
 ```
-typo_score =
-  typo_confidence
-  × dictionary_hit_score
-  × context_score
-  × app_profile_weight
-  × reading_similarity_score
-  - overcorrection_penalty
+typo_score = clamp(
+    typo_confidence            // §12.9。[min_confidence, max_confidence]
+  × dictionary_hit_score       // 補正後読みの最良候補の正規化スコア。ヒットなしは §12.4.4 で棄却済
+  × context_score              // M57 ModernBERT 文脈自然度 [0,1]。M57 未使用時は 1.0
+  × app_profile_weight         // M54 §6.1 と同一定義。M48 未完了時は 1.0
+  × reading_similarity_score   // = 1 - normalized_edit_distance(observed, corrected)
+  - overcorrection_penalty,    // 下記
+    0.0, 1.0)
+
+overcorrection_penalty =
+    P_reject     if net_reject(pattern) >= 1                  // 既定 0.50。過去に拒否
+  + P_strong_top1 * max(0, s1_strength - S_STRONG)           // 既定 P=0.40, S_STRONG=0.85
+  + P_lowconf    * max(0, minConfidenceForRanking - typo_confidence)  // 既定 0.50
 ```
+
+- `net_reject(pattern) = max(0, reject_count - accept_count)`（M54 §6.2 と
+  同じ純拒否の考え方）。
+- `s1_strength` は **元読み top1 の絶対的な確からしさ** `[0, 1]` で、元 top1 の
+  `dictionary_hit_score × context_score` で定義する。§12.5 の `s1`（top1 で
+  正規化したため常に 1.0）とは別物で、こちらは「元 top1 がどれだけ強いか」を
+  測る。M57 文脈スコア未使用時は `context_score = 1.0` フォールバック。
+- 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
+  校正する（§12.16）。
 
 ### 12.11 誤補正防止条件
 
-以下の場合は補正候補を第一候補にしない:
+§12.10 の `typo_score` に加え、**順位の上限（rank cap）** を次の閾値で課す。
+補正候補を第一候補に昇格できるのは `aggressive` モードかつ全ガードを満たす
+ときのみとする。
 
-| 条件 | 処理 |
+| 条件（しきい値） | 処理 |
 |---|---|
-| 通常候補の top1 が十分強い | 補正候補は下位または非表示 |
-| 補正 confidence が低い | 「もしかして」枠のみ |
-| ユーザーが過去に拒否した | 強く減点 |
-| 入力が短すぎる（2 文字以下） | 補正しない |
-| パスワード欄・秘匿アプリ（M46） | 補正・学習ともに無効 |
-| コード入力中（M48 profile） | 英字補正は控えめ |
+| 元 top1 が十分強い（`s1_strength >= S_STRONG`、既定 0.85） | 補正候補を元 top1 より上にしない（rank cap = 2 位以下） |
+| 補正 confidence が低い（`typo_confidence < minConfidenceForRanking`、0.70） | 「もしかして」枠のみ（rank 非混在） |
+| top 候補化の信頼不足（`typo_score < minConfidenceForTopCandidate`、0.90） | 第一候補にしない |
+| ユーザーが過去に拒否（`net_reject >= 1`） | `overcorrection_penalty` で強く減点（§12.10）し top 化不可 |
+| 入力が短すぎる（`utf8_len(reading) <= LEN_MIN`、既定 2） | 補正しない（§12.5 で生成前に遮断） |
+| パスワード欄・秘匿アプリ（M46） | 補正・学習ともに無効（§12.12.1 のゲートで遮断） |
+| コード入力中（M48 profile = code） | 英字・ローマ字補正を控えめにする（発動ゲートに `code` 抑制を加味） |
+
+- `minConfidenceForRanking`（0.70）/ `minConfidenceForTopCandidate`（0.90）は
+  設定スキーマ §12.14 の同名フィールドと一致させ、ここで再定義しない。
+- モード別の rank cap: `suggest` = 常に「もしかして」枠（元候補を一切上書き
+  しない）、`rank` = `typo_confidence >= 0.70` で通常候補に混在（ただし元 top1
+  が強ければ 2 位以下）、`aggressive` = 全ガード通過時のみ第一候補化。これは
+  M52 で `--typo-mode rank`（FP 率）と `--typo-mode aggressive`（overcorrection
+  率）を別管理する受け入れ基準（§12.15）と対応する。
 
 ### 12.12 プライバシー（v2）
 
@@ -551,7 +618,66 @@ typo_score =
 | 学習停止 | 必須（`enabled = false` でストア更新せず） |
 | 全削除 | 必須（M49 と連携） |
 | エクスポート | JSON / CSV（M49 と連携） |
-| secret apps | 補正・学習ともに無効（M46） |
+| secret apps | 補正・学習ともに無効（M46。§12.12.2） |
+
+#### 12.12.1 `raw_keys` のパターン抽象化スキーム
+
+`raw_keys`（生の打鍵列）は **メモリ上で抽象化トークンへ変換した直後に破棄し、
+永続化・ログ出力しない**。`typo_patterns.observed_pattern` /
+`intended_pattern`（§12.8）に保存するのは原文ではなく抽象化トークンである。
+
+抽象化は §12.4.1 Weighted Edit Graph が出力する編集操作列から構成する:
+
+```
+align(observed, intended) → 編集操作の列（各操作は 1 文字単位）
+各操作を次のトークンに写す（prev は直前の確定文字、なければ '^'）:
+  insertion(c, prev)      → "<c>_insert_after_<prev>"   例 "j_insert_after_u"
+  deletion(c, prev)       → "<c>_delete_after_<prev>"
+  substitution(a → b)     → "<a>_sub_<b>"               例 "z_sub_x"
+  transposition(a, b)     → "<a><b>_swap"               例 "ts_swap"
+observed_pattern  = 上記トークンを連結（複数編集時は '+' 区切り）
+intended_pattern  = 対応する canonical 形（Romaji Variant 正規化後、§12.4.3）
+```
+
+プライバシー上の不変条件:
+
+- トークンは **1 文字 + 直前 1 文字の局所コンテキスト**のみを含み、単語全体や
+  原文の読みを復元できない。
+- 抽象化アルファベットは `[a-z]` 打鍵・かな・ローマ字正規化記号に限定する。
+  この集合外の文字（数字・記号・貼り付け由来の任意文字列）を含む `raw_keys`
+  は **抽象化せず破棄**し、パターン化しない。これによりパスワードや貼り付け
+  文字列を誤って取り込まない。
+- `left_context` は §8 と同じく SHA-256 上位 4 bytes の hash で保存する
+  （`docs/user-learning-enhancement-spec.md` §8.1 と同一算出式）。
+
+#### 12.12.2 M46 secure 抑止との連携タイミング
+
+secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評価する fail-closed**
+とし、TIP（検出）と host（蓄積・適用）の二段で遮断する。M46 `PrivacyGate` の
+判定主体は前面フォーカスを見られる TIP 側である。
+
+1. **TIP（検出・送信ゲート、一次）**: `ObserveTypo` の発火条件（§4-1 / §4-2）
+   を満たしても、その時点の M46 `PrivacyGate` が secure を返すなら
+   `pre_correction_reading_` のスナップショットを取らず、`ObserveTypo` も
+   `raw_keys` 送信も行わない。判定は **イベント発生時（OnKeyDown / commit）**
+   に行い、flush 時ではない。
+2. **フォーカス遷移時のクリア**: secure コンテキストへ遷移した瞬間、TIP は
+   §4-3 のリセット（`pre_correction_reading_` 等）を実行する。これにより
+   non-secure 中に取ったスナップショットが secure 確定に巻き込まれて漏れる
+   こと、およびその逆を防ぐ。
+3. **`raw_keys` 同梱の抑止**: secure 中の `QueryCandidates` では TIP は
+   `raw_keys` を省略し、`typo_correction_mode` を実効 `off` として送る
+   （§12.13 の optional フィールド省略 = v1 fallback）。
+4. **host（適用・蓄積ゲート、二次・fail-closed）**: host は窓を見られないため
+   TIP を信頼するが、防御的二重化として、直近 `QueryCandidates` の `secure`
+   フラグ（M46 が IPC に載せる既存フラグ）が secure を示すセッションでは
+   `ObserveTypo` を記録せず `Lookup`（適用）も行わない。secure フラグが
+   **未知のとき**の既定は、§5 の「`off` の最終ゲートは host」方針に従い
+   補正・学習を**行う側**ではなく、M46 が配線済みの環境では fail-closed
+   （未知 = secure 扱いで抑止）にできるよう、host は `--secure-unknown=
+   {allow|deny}`（既定 `allow`、M46 完了環境では `deny` 推奨）で切替可能と
+   する。M46 未完了段階は `allow` で従来動作、完了後の統合検証で `deny` に
+   切替えて §12.15「secure 中は補正・学習が一切発生しない」を検証する。
 
 ### 12.13 IPC（v2 拡張）
 
@@ -626,3 +752,32 @@ typo 補正指標は補正有効モードで採取する（`conversion-quality-b
 - v1 互換: `mode = off / suggest` の挙動が v1 と等価
 - v1 の `mode = auto_replace` が v2 の `aggressive` として読み替え
   られる
+
+### 12.16 補正定数と M52 校正の対応
+
+§12.5 / §12.9 / §12.10 / §12.11 の定数は **式の形を本書で確定し、係数は初期値
+として与える**。係数は M52 ベンチ（`conversion-quality-benchmark-spec.md`）の
+モード別指標で校正する。`--typo-mode off` の値は校正にも受け入れにも用いない
+（§12.15）。
+
+| 定数 | 既定 | 不変条件（校正で破ってはならない） | 校正に用いる指標（モード） |
+|---|---:|---|---|
+| `accept_weight`（§12.9） | 0.25 | `reject_weight > accept_weight` | `typo_correction_top5_accuracy`（rank） |
+| `reject_weight`（§12.9） | 0.45 | 同上 | `typo_false_positive_rate`（rank） |
+| `B_rec` / `recency_half_life`（§12.9） | 0.30 / 60 日 | `recency_half_life` は `user-learning-enhancement-spec.md` §5（typo 60 日）と一致 | top5 accuracy（rank） |
+| `B_app`（§12.9） | 0.20 | `0 <= B_app < accept_weight×3` | app 別 FP 率（rank） |
+| `S_WEAK`（§12.5） | 0.40 | `0 < S_WEAK < 1` | `typo_false_positive_rate`（rank） |
+| `G_GAP`（§12.5） | 0.15 | `0 < G_GAP < 1` | 同上 |
+| `LEN_MIN`（§12.5/§12.11） | 2 | `LEN_MIN >= 2`（1 文字は補正しない） | FP 率（rank） |
+| `P_reject`（§12.10） | 0.50 | 拒否済みパターンを top 化させない強さ | `typo_overcorrection_rate`（aggressive） |
+| `P_strong_top1` / `S_STRONG`（§12.10/§12.11） | 0.40 / 0.85 | `S_STRONG` は強い元 top1 の下限 | `typo_overcorrection_rate`（aggressive） |
+| `P_lowconf`（§12.10） | 0.50 | — | overcorrection 率（aggressive） |
+| `minConfidenceForRanking`（§12.14） | 0.70 | `< minConfidenceForTopCandidate` | FP 率（rank） |
+| `minConfidenceForTopCandidate`（§12.14） | 0.90 | `> minConfidenceForRanking` | overcorrection 率（aggressive） |
+
+- **受け入れ判定（§12.15）の指標と閾値**: `typo_correction_top5_accuracy`
+  ≥ 85%（rank）/ `typo_false_positive_rate` < 1%（rank）/
+  `typo_overcorrection_rate` < 0.5%（aggressive）。
+- 校正は係数の数値のみを動かし、本表の不変条件・式の形・モード別の rank cap
+  （§12.11）は固定する。SQLite/TSV スキーマ（§12.8）を変える結果が出た場合は
+  M55 範囲外とし別 M で扱う。

@@ -341,8 +341,9 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
 
 ### 6.3 追加テストと協定外メッセージの扱い
 
-`ipc/tests/`（`messages_test.cpp` の `JsonTest` スイートほか）に境界・malformed
-テストを置く。v1.0 の堅牢性バーは「**決定的な境界コーパス** + **有界な擬似乱数
+`ipc/tests/` に境界・malformed テストを置く。JSON パーサ単体の境界は
+`json_test.cpp` の `JsonTest` スイートで扱い、Envelope と length-prefix framing は
+`messages_test.cpp` に置く。v1.0 の堅牢性バーは「**決定的な境界コーパス** + **有界な擬似乱数
 スモーク**」で満たす。libFuzzer ベースの継続 fuzz ハーネスはオフラインビルド
 原則（§1）・MSVC 主体の CI と相性が悪いため**任意の将来拡張**とし、必須には
 しない。
@@ -354,10 +355,10 @@ rename」で原子的に行い、書き込み中クラッシュによる破損�
 - 不正 Unicode escape（単独サロゲート `\uD800` / `\uDC00`）を拒否する
 - 文字列内の生制御文字（`\x01`）・overlong UTF-8（`C0 AF`、`E0 80 80`）を拒否する
 - 擬似乱数バイト列を `Parse` してもクラッシュせず失敗を返す（有界回数スモーク）
+- 自前 JSON パーサの直接単体テスト（int64/uint64 精度・深度・unicode escape・
+  round-trip）を `ipc_json_tests`（`json_test.cpp`）に置く
 - 最大フレーム超過の length-prefix を `Decode/EncodeLengthPrefixed` が拒否する
 - `Payloads.cpp` 側で必須キー欠損・型不一致を安全に拒否する
-- 自前 JSON パーサの直接単体テスト（int64/uint64 精度・深度・unicode escape・
-  round-trip）を独立ファイルへ拡充する（残課題、Linear DEV-188）
 
 **enum 予約のみで未配線の MessageType**（`QueryPredictions` / `QueryCorrections` /
 `CommitCorrection` / `UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の

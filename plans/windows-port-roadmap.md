@@ -292,6 +292,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests`（`core/tests/`） | `romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音） |
 | `core_tests` | `simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn` |
 | `ipc_tests` | `messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
+| `ipc_json_tests` | `json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
 | `ipc_payloads_tests` | `payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/Cancel/Commit/UserWord の build/parse + malformed reject |
 | `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持 |
 | `ipc_tip_client_tests` | `tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates |

@@ -562,11 +562,13 @@ confidence = clamp(raw_conf, min_confidence, max_confidence)
 （M48 app / M57 context など未完了）は 1.0 にフォールバックする。
 
 ```
+app_factor_typo = min(1.0, app_profile_weight)   // M54 §6.1 を [0,1] に丸める（下記）
+
 typo_score = clamp(
     typo_confidence            // §12.9。[min_confidence, max_confidence]
   × dictionary_hit_score       // 補正後読みの最良候補の正規化スコア。ヒットなしは §12.4.4 で棄却済
   × context_score              // M57 ModernBERT 文脈自然度 [0,1]。M57 未使用時は 1.0
-  × app_profile_weight         // M54 §6.1 と同一定義。M48 未完了時は 1.0
+  × app_factor_typo            // [0,1]。同 app/不明=1.0、別 app=W_diff(0.8)。M48 未完了時は 1.0
   × reading_similarity_score   // = 1 - normalized_edit_distance(observed, corrected)
   - overcorrection_penalty,    // 下記
     0.0, 1.0)
@@ -577,6 +579,14 @@ overcorrection_penalty =
   + P_lowconf    * max(0, minConfidenceForRanking - typo_confidence)  // 既定 0.50
 ```
 
+- `app_factor_typo` は M54 §6.1 の `app_profile_weight`（同 app 1.2 / 別 app
+  0.8 / 不明 1.0）を `min(1.0, ·)` で `[0, 1]` に丸めた typo 専用因子。**補正
+  スコアでは app 一致を加点しない**（同 app でも 1.0 = 中立にとどめ、別 app は
+  0.8 に減点）。M54 の `user_score`（純粋な乗算合成で 1.2 倍まで許す）と異なり、
+  ここで 1.2 を許すと §12.10 冒頭の「因子は `[0,1]`・1.0 中立」契約を破り、
+  clamp 前に app 一致が補正候補を第一候補へ押し上げる隠れ boost になる。
+  §12.11 の「app 一致だけで top 化させない」誤補正防止方針と整合させるため、
+  上限を 1.0 に固定する。
 - `net_reject(pattern) = max(0, reject_count - accept_count)`（M54 §6.2 と
   同じ純拒否の考え方）。
 - `s1_strength` は **元読み top1 の絶対的な確からしさ** `[0, 1]` で、元 top1 の
@@ -673,15 +683,22 @@ secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評�
    （§12.13 の optional フィールド省略 = v1 fallback）。
 4. **host（適用・蓄積ゲート、二次・fail-closed）**: host は窓を見られないため
    TIP を信頼するが、防御的二重化として、直近 `QueryCandidates` の `secure`
-   フラグ（§12.13 で M55 が追加する optional bool。`PrivacyGate::IsSecure()`
-   の IPC 表出）が secure を示すセッションでは `ObserveTypo` を記録せず
-   `Lookup`（適用）も行わない。`secure` フラグが **未指定（未知）のとき**の
-   既定は、§5 の「`off` の最終ゲートは host」方針に従い
-   補正・学習を**行う側**ではなく、M46 が配線済みの環境では fail-closed
-   （未知 = secure 扱いで抑止）にできるよう、host は `--secure-unknown=
-   {allow|deny}`（既定 `allow`、M46 完了環境では `deny` 推奨）で切替可能と
-   する。M46 未完了段階は `allow` で従来動作、完了後の統合検証で `deny` に
-   切替えて §12.15「secure 中は補正・学習が一切発生しない」を検証する。
+   フラグ（§12.13 で M55 が追加する bool。`PrivacyGate::IsSecure()` の IPC
+   表出）が secure を示すセッションでは `ObserveTypo` を記録せず `Lookup`
+   （適用）も行わない。`secure` が **未指定（未知）のとき**は、M46 の
+   「解決不能な privacy 状態は secure 扱い」契約（`privacy-and-secure-input-spec.md`
+   §4.3）に従い **fail-closed（deny: 補正・学習を抑止）を既定**とする。
+   - これを正常入力のブロックなく成立させるため、privacy 対応 TIP は
+     handshake `capabilities` に `"secure_flag"` を広告し（§7）、**毎回の
+     `QueryCandidates` に `secure`（secure 時 true / 非 secure 時 false）を
+     必ず載せる**（§12.13）。`secure_flag` を広告した TIP からのリクエストで
+     `secure` が欠落することは無く、欠落＝privacy 非対応 TIP（古い TIP・未配線）
+     と判定できるため、その場合に deny へ倒しても通常入力を巻き込まない。
+   - 例外として、secure 検出が存在しない M46 未完了の暫定期間に限り、
+     host は `--secure-unknown=allow` を明示指定して未知を allow に倒せる
+     （`secure_flag` 未広告 TIP のみが対象）。M46 完了・`secure_flag` 配線後は
+     既定の `deny` で運用し、§12.15「secure 中は補正・学習が一切発生しない」を
+     検証する。`--secure-unknown` の既定は **`deny`** とする。
 
 ### 12.13 IPC（v2 拡張）
 
@@ -717,6 +734,12 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
   M55 が追加する。** M46 が同等のリクエスト単位 privacy フィールド（例
   `privacy_mode`）を別途定義する場合は、二重定義せず M46 のフィールドへ寄せて
   本フィールドを廃止する（その場合 §12.12.2 の参照先も M46 フィールドへ更新）。
+- **フィールド存在規約**: `secure` は wire 上は optional だが、handshake
+  `capabilities` に `"secure_flag"` を広告する TIP（= M46 配線済み）は
+  **毎リクエストで `secure` を必ず送る**（secure 時 true / 非 secure 時 false）。
+  欠落は `secure_flag` 非広告 TIP（古い TIP・未配線）を意味し、host は
+  §12.12.2-4 のとおり既定 `deny`（fail-closed）で扱う。`raw_keys` /
+  `typo_correction_mode` の「送信意図があるときのみ」とは規約が異なる点に注意。
 - secure 中は §12.12.2-3 のとおり TIP が `raw_keys` を省略し
   `typo_correction_mode` を実効 `off` で送るが、`secure: true` は明示的な
   fail-closed シグナルとして併送し、host が未配線時にフォールバック解釈で

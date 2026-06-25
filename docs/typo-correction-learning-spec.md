@@ -722,10 +722,15 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
 }
 ```
 
-`raw_keys` / `typo_correction_mode` / `secure` は optional（TIP が取得可能・
-送信意図があるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま
-再利用し、新規 enum 値は追加しない。M40 互換性ルールに従い、optional
-フィールドが未指定のときは v1 動作に fallback する。
+`raw_keys` / `typo_correction_mode` は optional（TIP が取得可能・送信意図が
+あるときのみ送る）。`MessageType` は既存 `QueryCandidates` のまま再利用し、
+新規 enum 値は追加しない。M40 互換性ルールに従い、**`raw_keys` /
+`typo_correction_mode` が**未指定のときは v1 動作に fallback する。
+
+> **`secure` は v1 fallback の対象外**。上記の「未指定 ⇒ v1 動作」ルールは
+> `secure` には適用しない。`secure` の欠落は v1 互換の allow ではなく、
+> §12.12.2-4 の fail-closed 規約に従い **deny（補正・学習を抑止）** として
+> 扱う（既定 `--secure-unknown=deny`）。privacy は後方互換より優先する。
 
 - `secure`（bool）は TIP 側 M46 `PrivacyGate::IsSecure()`
   （`docs/privacy-and-secure-input-spec.md` §5）の IPC 表出であり、host 二次

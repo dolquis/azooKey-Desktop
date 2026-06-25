@@ -9,8 +9,10 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <vector>
 
+#include "../src/CandidateSelection.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
 
 namespace {
@@ -150,6 +152,17 @@ ITfCandidateListUIElement* QueryCandidateList(ITfUIElement* element) {
 
 }  // namespace
 
+TEST(TsfTipCandidateSelectionTest, WrapSelectionHandlesLargeDeltasWithoutOverflow) {
+  using azookey::tsf::internal::WrapCandidateSelectionIndex;
+
+  EXPECT_EQ(WrapCandidateSelectionIndex(1, +5, 3), 0);
+  EXPECT_EQ(WrapCandidateSelectionIndex(0, -5, 3), 1);
+  EXPECT_EQ(WrapCandidateSelectionIndex(1, std::numeric_limits<int>::min(), 3), 2);
+  EXPECT_EQ(WrapCandidateSelectionIndex(1, std::numeric_limits<int>::max(), 3), 2);
+  EXPECT_EQ(WrapCandidateSelectionIndex(4, +1, 3), 2);
+  EXPECT_EQ(WrapCandidateSelectionIndex(0, +1, 0), 0);
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;
@@ -226,6 +239,27 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowTrueUsesTipUiWithoutUpdateNotificat
   EXPECT_EQ(coordinator.MoveSelection(+1), S_OK);
   EXPECT_EQ(coordinator.GetSelected(), 1);
   EXPECT_EQ(thread_mgr.update_count, 0);
+
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+  EXPECT_EQ(thread_mgr.end_count, 1);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, MoveSelectionWrapsLargePositiveAndNegativeDeltas) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+
+  POINT pt{10, 20};
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 1), S_OK);
+
+  EXPECT_EQ(coordinator.MoveSelection(+5), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 0);
+
+  EXPECT_EQ(coordinator.MoveSelection(-5), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 1);
+
+  EXPECT_EQ(coordinator.MoveSelection(std::numeric_limits<int>::min()), S_OK);
+  EXPECT_EQ(coordinator.GetSelected(), 2);
 
   EXPECT_EQ(coordinator.EndUI(), S_OK);
   EXPECT_EQ(thread_mgr.end_count, 1);

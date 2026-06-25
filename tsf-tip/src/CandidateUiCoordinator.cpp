@@ -4,6 +4,8 @@
 #include <new>
 #include <utility>
 
+#include "CandidateSelection.h"
+
 namespace azookey::tsf {
 
 namespace {
@@ -126,7 +128,7 @@ HRESULT CandidateUiCoordinator::EndUI() {
 HRESULT CandidateUiCoordinator::MoveSelection(int delta) {
   if (items_.empty()) return S_OK;
   const int count = static_cast<int>(items_.size());
-  selected_idx_ = (selected_idx_ + delta % count + count) % count;
+  selected_idx_ = internal::WrapCandidateSelectionIndex(selected_idx_, delta, count);
   if (ui_element_) ui_element_->SetSelection(selected_idx_, TF_CLUIE_SELECTION);
   if (tip_draws_) {
     own_window_.SetSelected(selected_idx_);

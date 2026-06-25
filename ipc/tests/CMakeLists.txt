@@ -4,6 +4,12 @@ target_link_libraries(ipc_tests
 )
 azookey_discover_tests(ipc_tests)
 
+add_executable(ipc_json_tests json_test.cpp)
+target_link_libraries(ipc_json_tests
+  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(ipc_json_tests)
+
 add_executable(ipc_payloads_tests payloads_test.cpp)
 target_link_libraries(ipc_payloads_tests
   PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings

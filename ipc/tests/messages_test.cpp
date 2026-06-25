@@ -1,37 +1,11 @@
-#include <cmath>
-#include <string>
 #include <limits>
-#include <locale>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
-#include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
-
-namespace {
-
-class CommaDecimalPunct : public std::numpunct<char> {
- protected:
-  char do_decimal_point() const override { return ','; }
-};
-
-class ScopedGlobalLocale {
- public:
-  explicit ScopedGlobalLocale(const std::locale& locale) : previous_(std::locale()) {
-    std::locale::global(locale);
-  }
-
-  ~ScopedGlobalLocale() {
-    std::locale::global(previous_);
-  }
-
- private:
-  std::locale previous_;
-};
-
-}  // namespace
 
 TEST(MessagesTest, EnvelopeRoundTrip) {
   azookey::ipc::Envelope env;
@@ -104,122 +78,6 @@ TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {
 
 TEST(MessagesTest, MalformedInputRejected) {
   EXPECT_FALSE(azookey::ipc::Deserialize("not json").has_value());
-}
-
-TEST(JsonTest, RejectsMalformedBoundaryInputs) {
-  namespace json = azookey::ipc::json;
-
-  std::string too_deep = "0";
-  for (size_t i = 0; i <= azookey::ipc::kMaxJsonNestDepth; ++i) {
-    too_deep = "[" + too_deep + "]";
-  }
-
-  EXPECT_FALSE(json::Parse(std::string(azookey::ipc::kMaxJsonInputBytes + 1, ' ')));
-  EXPECT_FALSE(json::Parse(too_deep));
-  EXPECT_FALSE(json::Parse("{\"value\":1} trailing"));
-  EXPECT_FALSE(json::Parse("{\"value\":1e9999}"));
-  EXPECT_FALSE(json::Parse("{\"value\":01}"));
-  EXPECT_FALSE(json::Parse("{\"value\":1e}"));
-  EXPECT_FALSE(json::Parse(std::string("{\"value\":\"bad") + '\x01' + "\"}"));
-  EXPECT_FALSE(json::Parse("{\"value\":\"\\uD800\"}"));
-  EXPECT_FALSE(json::Parse("{\"value\":\"\\uDC00\"}"));
-}
-
-TEST(JsonTest, PreservesLargeIntegerTokensForUIntExtraction) {
-  namespace json = azookey::ipc::json;
-
-  auto parsed = json::Parse("{\"request_id\":1716568000123456789}");
-  ASSERT_TRUE(parsed.has_value());
-  auto request_id = parsed->GetUInt("request_id");
-  ASSERT_TRUE(request_id.has_value());
-  EXPECT_EQ(*request_id, 1716568000123456789ULL);
-  EXPECT_EQ(json::Stringify(*parsed), "{\"request_id\":1716568000123456789}");
-
-  auto max_uint = json::Parse("{\"request_id\":18446744073709551615}");
-  ASSERT_TRUE(max_uint.has_value());
-  auto value = max_uint->GetUInt("request_id");
-  ASSERT_TRUE(value.has_value());
-  EXPECT_EQ(*value, std::numeric_limits<uint64_t>::max());
-
-  auto too_large = json::Parse("{\"request_id\":18446744073709551616}");
-  ASSERT_TRUE(too_large.has_value());
-  EXPECT_FALSE(too_large->GetUInt("request_id").has_value());
-
-  auto non_plain_too_large = json::Parse("{\"request_id\":18446744073709551616.0}");
-  ASSERT_TRUE(non_plain_too_large.has_value());
-  EXPECT_FALSE(non_plain_too_large->GetUInt("request_id").has_value());
-}
-
-TEST(JsonTest, NumberCodecIgnoresGlobalCppLocale) {
-  namespace json = azookey::ipc::json;
-
-  ScopedGlobalLocale scoped(std::locale(std::locale::classic(), new CommaDecimalPunct));
-
-  json::Object o;
-  o.emplace("score", json::Value(0.75));
-  EXPECT_EQ(json::Stringify(json::Value(std::move(o))), "{\"score\":0.75}");
-
-  auto parsed = json::Parse("{\"score\":0.75}");
-  ASSERT_TRUE(parsed.has_value());
-  auto score = parsed->GetNumber("score");
-  ASSERT_TRUE(score.has_value());
-  EXPECT_DOUBLE_EQ(*score, 0.75);
-  EXPECT_FALSE(json::Parse("{\"score\":0,75}").has_value());
-}
-
-TEST(JsonTest, HandlesFloatingUnderflowAsZero) {
-  namespace json = azookey::ipc::json;
-
-  auto parsed = json::Parse("{\"value\":1e-400}");
-  ASSERT_TRUE(parsed.has_value());
-  auto value = parsed->GetNumber("value");
-  ASSERT_TRUE(value.has_value());
-  EXPECT_EQ(*value, 0.0);
-
-  auto negative = json::Parse("{\"value\":-1e-400}");
-  ASSERT_TRUE(negative.has_value());
-  auto negative_value = negative->GetNumber("value");
-  ASSERT_TRUE(negative_value.has_value());
-  EXPECT_EQ(*negative_value, 0.0);
-  EXPECT_TRUE(std::signbit(*negative_value));
-}
-
-TEST(JsonTest, StringifiesIntegralDoubleBoundariesSafely) {
-  namespace json = azookey::ipc::json;
-
-  EXPECT_EQ(json::Stringify(json::Value(std::ldexp(1.0, 63))),
-            "9223372036854775808");
-  EXPECT_EQ(json::Stringify(json::Value(-std::ldexp(1.0, 63))),
-            "-9223372036854775808");
-}
-
-TEST(JsonTest, CombinesSurrogatePairsAndRejectsInvalidUtf8) {
-  namespace json = azookey::ipc::json;
-
-  auto parsed = json::Parse("{\"value\":\"\\uD83D\\uDE00\"}");
-  ASSERT_TRUE(parsed.has_value());
-  auto value = parsed->GetString("value");
-  ASSERT_TRUE(value.has_value());
-  EXPECT_EQ(*value, "\xF0\x9F\x98\x80");
-
-  EXPECT_FALSE(json::Parse(std::string("{\"value\":\"") + '\xC0' + '\xAF' + "\"}"));
-  EXPECT_FALSE(json::Parse(std::string("{\"value\":\"") + '\xE0' + '\x80' + '\x80' + "\"}"));
-}
-
-TEST(JsonTest, RandomBytesFailSafely) {
-  namespace json = azookey::ipc::json;
-
-  uint32_t state = 0xA5001234u;
-  for (int i = 0; i < 256; ++i) {
-    std::string input;
-    const size_t length = static_cast<size_t>((state >> 24) & 0x3F);
-    input.reserve(length);
-    for (size_t j = 0; j < length; ++j) {
-      state = state * 1664525u + 1013904223u;
-      input.push_back(static_cast<char>((state >> 16) & 0xFF));
-    }
-    (void)json::Parse(input);
-  }
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRejectsOversizedFrames) {

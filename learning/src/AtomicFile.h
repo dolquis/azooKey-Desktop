@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -49,9 +51,25 @@ inline bool WriteTextFileAtomically(const std::string& path, const std::string& 
     if (ec) return false;
   }
 
-  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  // Build a temp name that is unique per write across threads and processes.
+  // A monotonic clock value alone collides when two writers hit the same coarse
+  // tick: they would then open and truncate the *same* temp file concurrently,
+  // interleaving their content and racing the final rename. The process id makes
+  // the name unique across processes, and a process-local atomic counter makes
+  // it unique across every write within this process (covering all threads),
+  // independent of clock resolution.
+  static std::atomic<std::uint64_t> sequence{0};
+  const auto stamp =
+      static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  const std::uint64_t seq = sequence.fetch_add(1, std::memory_order_relaxed);
+#ifdef _WIN32
+  const unsigned long pid = ::GetCurrentProcessId();
+#else
+  const unsigned long pid = static_cast<unsigned long>(::getpid());
+#endif
   auto temp = target;
-  temp += ".tmp." + std::to_string(stamp);
+  temp += ".tmp." + std::to_string(pid) + "." + std::to_string(stamp) + "." +
+          std::to_string(seq);
   {
     std::ofstream ofs(temp, std::ios::binary | std::ios::trunc);
     if (!ofs.is_open()) {

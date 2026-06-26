@@ -1007,7 +1007,7 @@ schema 自体は superset のまま変えない。
 |---|---|---|---|---|
 | `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
 | `model.backendPreference` | enum **`auto` / `cpu` / `cuda` に縮小** | 一般 | M8 | 完全 enum（`vulkan`/`winml`/`directml`/`npu`）と `epPreference` は v1.x（M24）。M8 受け入れ条件「GPU/CPU 切替が設定で効く」に対応 |
-| `model.selectedPath` | string（モデル選択。空＝§1.6.1 のピン既定） | 一般 | M8 | 空なら `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4 / §1.6.1） |
+| `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 
 - **デバイス選択の enum 縮小**: v1.0 の推論経路は M8 の CPU / CUDA のみ（`AZOOKEY_BACKEND` および
@@ -1020,9 +1020,20 @@ schema 自体は superset のまま変えない。
   等の全フィールド）の導入時期である。v1.0 はそのうち `enabled` / `backendPreference`（縮小）/ `selectedPath`
   の 3 フィールドのみを露出する。キーは schema に既存のため schema 変更は不要で、変わるのは UI 露出の時期だけ。
   実効値の解決順（`model.*` ＞ root 同名キー、§3.6 永続化 / `model-management-spec.md` §5.2）は v1.0 でも同一。
-- **root `backendPreference` を v1.0 UI に二重表示しない**: デバイス選択は `model.backendPreference` 一本に
-  統一する（`model-management-spec.md` §5.2 で `model.*` が root を上書きするため、UI を 2 つ出すと実効値が紛らわしい）。root
-  `backendPreference` / `epPreference` は schema には残るが v1.0 UI では非表示（v1.x で詳細ペインに整理）。
+- **モデルパスの probe-then-commit**: 空 `model.selectedPath` は「ピン既定モデルを使う」を意味しない
+  （Host は空を未選択として扱い SimpleConverter へ落ちる、`model-management-spec.md` §7 / `autoLoadOnHostStart`）。
+  よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。代わりに、DL（§1.6.1 (b)）または手動配置（(c)）で
+  ピン定義（`models\zenzai\expected.json`）のモデルファイルが**実在することを probe してから、その絶対パスを
+  `model.selectedPath` に commit する**（commit 後に「既定モデル使用中」と表示）。ファイル未配置の間は
+  `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を表示する。これにより
+  「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」という不整合を防ぐ。
+- **root `backendPreference` を v1.0 UI に二重表示せず、保存時に root を移行する**: デバイス選択は
+  `model.backendPreference` 一本に統一する（`model-management-spec.md` §5.2 の解決順は `model.backendPreference`
+  → root `backendPreference` → 既定 `auto`）。root を非表示にしたまま write-back で温存すると、ユーザーが直書きした
+  root `cuda` 等が UI の「auto」選択を上書きし続け、UI からバックエンドを auto へ戻せない。これを防ぐため、**v1.0 UI が
+  デバイス選択を保存するとき、既存の root `backendPreference` / `epPreference` があれば `model.*` 側へ移行して
+  root キーを削除する**（`model.backendPreference` を単一の実効ソースにする）。移行は後述 write-back 規則の例外と
+  し、root レベルの当該 2 キーのみを対象とする（他キーは温存）。
 
 #### v1.0（M11）の UI アクション（設定キーではないボタン）
 
@@ -1065,9 +1076,12 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
   検証する。**未知キー / 型不正 / enum 外の値は警告ログ（`logLevel`）に記録して skip し、当該キーは既定値
   （§3.6 拡張方針「欠落キーは schema 既定で補完」）で扱う。**破損キー 1 つで設定アプリやランタイムを
   停止させない（fail-safe）。
-- **write-back 規則**: 設定アプリが `settings.json` を保存するとき、UI に露出していないキー（v1.x キー・
-  ユーザーが直書きした値）を**保持して書き戻す**。v1.0 UI が知らないキーを silently に消去しない（直書き
-  ワークフローを壊さないため）。書き込みは破損耐性のため atomic write（一時ファイル → rename、§3.6 永続化）。
+- **write-back 規則**: 設定アプリが `settings.json` を保存するとき、**schema 上有効で UI に露出していないキー**
+  （v1.x キー・ユーザーが直書きした有効値）を**保持して書き戻す**。v1.0 UI が知らないだけの有効キーを silently に
+  消去しない（直書きワークフローを壊さないため）。一方、**起動時バリデーションで弾いた未知キー / 型不正 / enum 外の
+  エントリは write-back で温存しない**（quarantine して書き戻さない）。これらを温存すると、`additionalProperties: false`
+  の固定オブジェクト（§3.6）に対して Host 再読込が `ok=false`（§3.3）になり、UI 側の有効な変更まで Host に拒否されるため。
+  すなわち保持対象は「schema-known かつ UI-hidden」に限る。書き込みは破損耐性のため atomic write（一時ファイル → rename、§3.6 永続化）。
 - Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
   §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 

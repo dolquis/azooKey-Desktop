@@ -942,7 +942,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
 | `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
-| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細 | M24（v1.0 は `model.backendPreference` を `auto`/`cpu`/`cuda` に縮小して露出、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
+| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 は `auto`/`cpu`/`cuda` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
@@ -951,6 +951,14 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 
 > オブジェクト型キー（`model` / `autoUpdate`）の下位フィールドは「正典」列の spec が確定形を
 > 持つ。本表で再掲せず、ネスト構造の単一情報源を維持する。
+
+> **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
+> 下位レイヤ**であり（解決順 `model.*` ＞ root、`model-management-spec.md` §5.2）、設定アプリの device 選択 UI は
+> **v1.0 / M24 とも `model.backendPreference` / `model.epPreference`（`model.*` tier）にバインド**する。**root tier は
+> UI にバインドしない** — M24 で root を再露出すると、`model.*` を設定済みのユーザーでは編集しても実効値が変わらず
+> （`model.*` ＞ root）「selector が壊れて見える」二重ソース問題に戻るため。root tier は `settings.json` 直書きの
+> 後方互換としてのみ残し、§3.7 の保存規律（device 保存時に root `backendPreference` を削除して `model.*` を単一
+> 実効ソースにする）と整合させる。
 
 #### 永続化形式と適用順
 
@@ -1020,13 +1028,20 @@ schema 自体は superset のまま変えない。
   等の全フィールド）の導入時期である。v1.0 はそのうち `enabled` / `backendPreference`（縮小）/ `selectedPath`
   の 3 フィールドのみを露出する。キーは schema に既存のため schema 変更は不要で、変わるのは UI 露出の時期だけ。
   実効値の解決順（`model.*` ＞ root 同名キー、§3.6 永続化 / `model-management-spec.md` §5.2）は v1.0 でも同一。
-- **モデルパスの probe-then-commit**: 空 `model.selectedPath` は「ピン既定モデルを使う」を意味しない
-  （Host は空を未選択として扱い SimpleConverter へ落ちる、`model-management-spec.md` §7 / `autoLoadOnHostStart`）。
-  よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。代わりに、DL（§1.6.1 (b)）または手動配置（(c)）で
-  ピン定義（`models\zenzai\expected.json`）のモデルファイルが**実在することを probe してから、その絶対パスを
-  `model.selectedPath` に commit する**（commit 後に「既定モデル使用中」と表示）。ファイル未配置の間は
-  `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を表示する。これにより
-  「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」という不整合を防ぐ。
+- **モデルパスの probe-then-commit（既定 autoselect と明示選択を分ける）**: 空 `model.selectedPath` は
+  「ピン既定モデルを使う」を意味しない（Host は空を未選択として扱い SimpleConverter へ落ちる、
+  `model-management-spec.md` §7 / `autoLoadOnHostStart`）。よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。
+  `selectedPath` 確定の規律は §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
+    - **既定モデルの autoselect（ピン依存、§1.6.1 (b) DL / (c1)）**: ピン定義（`models\zenzai\expected.json`）の
+      モデルファイルが**実在し SHA256 がピン一致することを probe してから**、その絶対パスを `model.selectedPath`
+      へ commit する（commit 後に「既定モデル使用中」と表示）。ピン未投入 / 不一致なら autoselect しない。
+    - **ユーザー / 管理者の明示選択（ピン非依存、§1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
+      `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
+      **ピン未投入でも成立し、ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
+      非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
+  いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を
+  表示する。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン
+  モデルが commit されず degraded のまま」の両方の不整合を防ぐ。
 - **root `backendPreference` を v1.0 UI に二重表示せず、保存時に UI 選択値で上書きする**: デバイス選択は
   `model.backendPreference` 一本に統一する（`model-management-spec.md` §5.2 の解決順は `model.backendPreference`
   → root `backendPreference` → 既定 `auto`）。root を非表示のまま write-back で温存すると、ユーザーが直書きした

@@ -699,16 +699,25 @@ secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評�
    `raw_keys` を省略し、`typo_correction_mode` を実効 `off` として送る
    （§12.13 の optional フィールド省略 = v1 fallback）。
 4. **host（適用・蓄積ゲート、二次・fail-closed）**: host は窓を見られないため
-   TIP を信頼するが、防御的二重化として、直近 `QueryCandidates` の `secure`
-   フラグ（§12.13 で M55 が追加する bool。`PrivacyGate::IsSecure()` の IPC
-   表出）が secure を示すセッションでは `ObserveTypo` を記録せず `Lookup`
-   （適用）も行わない。`secure` が **未指定（未知）のとき**は、M46 の
-   「解決不能な privacy 状態は secure 扱い」契約（`privacy-and-secure-input-spec.md`
-   §4.3）に従い **fail-closed（deny: 補正・学習を抑止）を既定**とする。
-   - これを正常入力のブロックなく成立させるため、privacy 対応 TIP は
-     handshake `capabilities` に `"secure_flag"` を広告し（§7）、**毎回の
-     `QueryCandidates` に `secure`（secure 時 true / 非 secure 時 false）を
-     必ず載せる**（§12.13）。`secure_flag` を広告した TIP からのリクエストで
+   TIP を信頼するが、防御的二重化として `secure` フラグ（§12.13 で M55 が
+   追加する bool。`PrivacyGate::IsSecure()` の IPC 表出）が secure を示す
+   ときは補正・学習を抑止する。**ただし参照する `secure` は操作ごとに別経路で
+   持つ**:
+   - **`Lookup`（適用）**は当該 `QueryCandidates` リクエストの `secure` を見る。
+   - **`ObserveTypo`（蓄積）は fire-and-forget で対応する `QueryCandidates` を
+     持たない**ため、`ObserveTypoRequest` 自身が **per-event の `secure`**
+     （TIP が検出時点 = §12.12.2-1 のイベント発生時に評価した値）を必ず運ぶ
+     （§12.13）。host は直近 `QueryCandidates` の値を `ObserveTypo` に流用して
+     はならない。normal→secure へフォーカスが移った直後、secure な
+     `QueryCandidates` が来る前に `ObserveTypo` が届く競合があり、直近値
+     （`secure=false`）を流用すると secure 入力を学習してしまうため。
+   - `secure` が **未指定（未知）のとき**は、M46 の「解決不能な privacy 状態は
+     secure 扱い」契約（`privacy-and-secure-input-spec.md` §4.3）に従い
+     **fail-closed（deny: 補正・学習を抑止）を既定**とする。
+   - これを正常入力のブロックなく成立させるため、privacy 対応 TIP は handshake
+     `capabilities` に `"secure_flag"` を広告し（§7）、**毎回の `QueryCandidates`
+     と毎回の `ObserveTypo` に `secure`（secure 時 true / 非 secure 時 false）を
+     必ず載せる**（§12.13）。`secure_flag` を広告した TIP からのメッセージで
      `secure` が欠落することは無く、欠落＝privacy 非対応 TIP（古い TIP・未配線）
      と判定できるため、その場合に deny へ倒しても通常入力を巻き込まない。
    - 例外として、secure 検出が存在しない M46 未完了の暫定期間に限り、
@@ -751,21 +760,48 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
 
 - `secure`（bool）は TIP 側 M46 `PrivacyGate::IsSecure()`
   （`docs/privacy-and-secure-input-spec.md` §5）の IPC 表出であり、host 二次
-  ゲート（§12.12.2-4）が参照する唯一の secure シグナルである。**現行
-  `QueryCandidatesRequest` には secure 相当フィールドが無いため、本フィールドは
-  M55 が追加する。** M46 が同等のリクエスト単位 privacy フィールド（例
-  `privacy_mode`）を別途定義する場合は、二重定義せず M46 のフィールドへ寄せて
-  本フィールドを廃止する（その場合 §12.12.2 の参照先も M46 フィールドへ更新）。
+  ゲート（§12.12.2-4）が参照する secure シグナルである。`QueryCandidates`
+  （適用ゲート用）と `ObserveTypo`（蓄積ゲート用、per-event）の両方に載せる。
+  **現行 `QueryCandidatesRequest` / `ObserveTypoRequest` には secure 相当
+  フィールドが無いため、本フィールドは M55 が追加する。** M46 が同等の
+  リクエスト単位 privacy フィールド（例 `privacy_mode`）を別途定義する場合は、
+  二重定義せず M46 のフィールドへ寄せて本フィールドを廃止する（その場合
+  §12.12.2 の参照先も M46 フィールドへ更新）。
 - **フィールド存在規約**: `secure` は wire 上は optional だが、handshake
   `capabilities` に `"secure_flag"` を広告する TIP（= M46 配線済み）は
-  **毎リクエストで `secure` を必ず送る**（secure 時 true / 非 secure 時 false）。
-  欠落は `secure_flag` 非広告 TIP（古い TIP・未配線）を意味し、host は
-  §12.12.2-4 のとおり既定 `deny`（fail-closed）で扱う。`raw_keys` /
-  `typo_correction_mode` の「送信意図があるときのみ」とは規約が異なる点に注意。
+  **毎 `QueryCandidates` と毎 `ObserveTypo` で `secure` を必ず送る**
+  （secure 時 true / 非 secure 時 false）。欠落は `secure_flag` 非広告 TIP
+  （古い TIP・未配線）を意味し、host は §12.12.2-4 のとおり既定 `deny`
+  （fail-closed）で扱う。`raw_keys` / `typo_correction_mode` の「送信意図が
+  あるときのみ」とは規約が異なる点に注意。
 - secure 中は §12.12.2-3 のとおり TIP が `raw_keys` を省略し
   `typo_correction_mode` を実効 `off` で送るが、`secure: true` は明示的な
   fail-closed シグナルとして併送し、host が未配線時にフォールバック解釈で
   漏れることを防ぐ。
+
+#### `ObserveTypoRequest` への per-event `secure`
+
+`ObserveTypo` は fire-and-forget で対応する `QueryCandidates` を持たないため、
+v1 の `ObserveTypoRequest { wrong_reading, correct_reading, timestamp_ms }`
+（§7）に **v2 で `bool secure` を追加**する。
+
+```json
+{ "type": "ObserveTypo",
+  "payload": {
+    "wrong_reading": "こんちには",
+    "correct_reading": "こんにちは",
+    "timestamp_ms": 1780000000000,
+    "secure": false
+  } }
+```
+
+- `secure` は TIP が **検出時点（§12.12.2-1 のイベント発生時）** に評価した
+  `PrivacyGate::IsSecure()` の値。host は ObserveTypo の蓄積可否をこの
+  per-event 値で判定し、**直近 `QueryCandidates` の `secure` を流用しない**
+  （§12.12.2-4。normal→secure 遷移直後の競合で secure 入力を学習しないため）。
+- 存在規約・欠落時の扱いは `QueryCandidates.secure` と同じ: `secure_flag`
+  広告 TIP は毎 `ObserveTypo` で必ず送り、欠落は §12.12.2-4 のとおり deny
+  （fail-closed）。v1 fallback の対象外。
 
 ### 12.14 設定スキーマ拡張
 

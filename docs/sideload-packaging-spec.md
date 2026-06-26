@@ -942,11 +942,11 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
 | `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
-| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
+| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細 | M24（v1.0 は `model.backendPreference` を `auto`/`cpu`/`cuda` に縮小して露出、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
-| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル | M45 | モデル再ロード | `model-management-spec.md` §5/§7 |
+| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル / 一般 | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
 | `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
 
 > オブジェクト型キー（`model` / `autoUpdate`）の下位フィールドは「正典」列の spec が確定形を
@@ -983,6 +983,93 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
   §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
   が制御する）。LearningStore / Persona 表示はキーではなく読み取り専用ビューである。
+
+### 3.7 v1.0 設定 UI の最小機能セット（M11）と v1.0 / v1.x 境界
+
+§3.6 は schema の最終形（全 top-level キー）を確定する索引である。本節はそのうち
+**v1.0（M11）出荷時に設定アプリへ UI として出す最小サブセット**を確定し、残りを v1.x（M30
+フル UI）へ送る境界を引く。狙いは 2 つ: D-03（WinUI 3 UI フレームワークスパイク）の実装
+ボリュームを確定させ、v1.0 を遅らせないこと。本節は新キーを追加しない —— v1.0 UI は
+`settings/mvp-settings.schema.json`（§3.6 の正典 schema）の**部分集合**を描画するだけで、
+schema 自体は superset のまま変えない。
+
+> **設計判断（DEV-107）**: 起票時の推奨案は `zenzaiEnabled` / `modelPath` / `userDictionaryPath`
+> という新キーを提案していたが、§3.6 で schema 正典が確定した後はこれらを新設しない。M11 の目的
+> （`plans/windows-port-roadmap.md` M11「Zenzai ON/OFF・辞書管理・デバイス選択」）を**既存の正典
+> キーへ写像**して実現する: Zenzai ON/OFF → `model.enabled`、デバイス選択 → `model.backendPreference`
+> （v1.0 は enum を縮小）、モデル選択 → `model.selectedPath`。ユーザー辞書は設定 `settings.json` の
+> キーではなく `%LOCALAPPDATA%\azooKey\data\user_dict.json`（§3.4）の内容であり、v1.0 はキーではなく
+> 「編集」アクション（下記ボタン）で扱う。
+
+#### v1.0（M11）で UI 化するキー（最小サブセット）
+
+| キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
+|---|---|---|---|---|
+| `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
+| `model.backendPreference` | enum **`auto` / `cpu` / `cuda` に縮小** | 一般 | M8 | 完全 enum（`vulkan`/`winml`/`directml`/`npu`）と `epPreference` は v1.x（M24）。M8 受け入れ条件「GPU/CPU 切替が設定で効く」に対応 |
+| `model.selectedPath` | string（モデル選択。空＝§1.6.1 のピン既定） | 一般 | M8 | 空なら `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4 / §1.6.1） |
+| `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
+
+- **デバイス選択の enum 縮小**: v1.0 の推論経路は M8 の CPU / CUDA のみ（`AZOOKEY_BACKEND` および
+  `LoadModel` 経路）。よって v1.0 UI は `model.backendPreference` を `auto` / `cpu` / `cuda` の 3 値だけ
+  描画する。schema 正典（§3.6）は完全 enum を保持し、v1.x（M24）で `vulkan` / `winml` 等と `epPreference`
+  を UI に追加する。`settings.json` に v1.x 値（例 `winml`）が直書きされていても v1.0 の Host は schema 上
+  受理し、選択肢として描画しないだけで破棄はしない（能力検出による disable + Tooltip は §3.2 参考実装注を参照）。
+- **`model.*` の UI 露出を M11 へ前倒し**: §3.6 の「導入」列は `model` を M45 と記すが、これは**フル
+  モデル管理 UI**（`epPreference` / `nGpuLayers` / `benchmark*` / `autoLoadOnHostStart` / `fallbackToSimpleConverter`
+  等の全フィールド）の導入時期である。v1.0 はそのうち `enabled` / `backendPreference`（縮小）/ `selectedPath`
+  の 3 フィールドのみを露出する。キーは schema に既存のため schema 変更は不要で、変わるのは UI 露出の時期だけ。
+  実効値の解決順（`model.*` ＞ root 同名キー、§3.6 永続化 / `model-management-spec.md` §5.2）は v1.0 でも同一。
+- **root `backendPreference` を v1.0 UI に二重表示しない**: デバイス選択は `model.backendPreference` 一本に
+  統一する（`model-management-spec.md` §5.2 で `model.*` が root を上書きするため、UI を 2 つ出すと実効値が紛らわしい）。root
+  `backendPreference` / `epPreference` は schema には残るが v1.0 UI では非表示（v1.x で詳細ペインに整理）。
+
+#### v1.0（M11）の UI アクション（設定キーではないボタン）
+
+- **「ユーザー辞書を編集」** → ユーザー辞書（M9、`user_dict.json`）の追加 / 削除を行う CLI / デバッグ
+  probe を起動する（D-09 と接続。`AddUserWord` / `RemoveUserWord` 経路は roadmap M9）。v1.0 は専用 GUI を
+  作らず、最小の編集導線のみを提供する。フル辞書管理 GUI は v1.x（M30）。
+- **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
+
+#### v1.0 / v1.x 境界表
+
+「v1.0 で UI 化」しないキーは、v1.0 では `settings.json` 直書き（＋ Host hot-reload、§3.3）か
+debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイルストーン）で UI 露出する。下表は
+§3.6 の全キーに対する v1.0 / v1.x の UI 露出区分である（意味論の正典は §3.6「正典」列に従う）。
+
+| キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
+|---|---|---|
+| `model.enabled` | ◯（一般） | — |
+| `model.backendPreference` | ◯（一般、`auto`/`cpu`/`cuda` のみ） | 残り enum（`vulkan`/`winml`/`directml`/`npu`）= M24 |
+| `model.selectedPath` | ◯（一般） | — |
+| `logLevel` | ◯（詳細） | — |
+| `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |
+| `epPreference`（root） / `powerProfile` | — | M24 / M25 |
+| `inputMode` | —（実行時にキー操作で切替） | M30（任意） |
+| `inputStyle` / `customRomajiTablePath` | — | M17 |
+| `liveConversion` | — | M14 |
+| `predictionEnabled` | — | M15 |
+| `llmMagicConversion` / `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `includeContextInAITransform` | — | M16（鍵は §9 DPAPI、M34） |
+| `promptPrefixByApp` | — | rich X-2-6 / M48（`profilesByApp` 統合） |
+| `contextReselection` / `postCommitLint` / `retroactiveRecompute` / `sentenceCompletion`（実験） | — | rich（M30 以降。実験フラグ） |
+| `batchRomajiConversion` / `batchRomajiPreviewStyle` / `batchConversionMode` / `batchAutoPunctuation` | — | M58 |
+| `autoUpdate.*` | — | M32（v1.0＝M11/M12 より後。一般ペインに UI 化） |
+| 予定済み拡張: `privacy.*` / `profilesByApp` | — | M46 / M48（schema 統合は §3.6 拡張方針） |
+
+> v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
+> 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。
+
+#### 設定アプリ起動時の schema バリデーション
+
+- 設定アプリは起動時に `settings.json` を `settings/mvp-settings.schema.json`（JSON Schema draft 2020-12）で
+  検証する。**未知キー / 型不正 / enum 外の値は警告ログ（`logLevel`）に記録して skip し、当該キーは既定値
+  （§3.6 拡張方針「欠落キーは schema 既定で補完」）で扱う。**破損キー 1 つで設定アプリやランタイムを
+  停止させない（fail-safe）。
+- **write-back 規則**: 設定アプリが `settings.json` を保存するとき、UI に露出していないキー（v1.x キー・
+  ユーザーが直書きした値）を**保持して書き戻す**。v1.0 UI が知らないキーを silently に消去しない（直書き
+  ワークフローを壊さないため）。書き込みは破損耐性のため atomic write（一時ファイル → rename、§3.6 永続化）。
+- Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
+  §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 
 ## 4. WiX / Inno Setup インストーラ（M31）
 

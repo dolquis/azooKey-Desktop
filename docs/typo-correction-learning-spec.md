@@ -395,22 +395,34 @@ candidate: 交渉
 ### 12.5 発動条件
 
 打ち間違え補正は常時強制しない。発動判定は **正規化済みスコア**で行う。
-`s1 = score_top1_original`、`s2 = score_top2_original` を、元読みの変換候補
-スコアを top1 で割って `[0, 1]` に正規化した値とする（`s1 = 1.0` 固定、
-`s2 ∈ [0, 1]`）。`dict_best` は元読みの最良辞書 / Zenzai ヒットの正規化スコア
-（ヒットなしは 0）。
+元読みの変換候補の生スコアを降順に `r1 = score_top1_original`、
+`r2 = score_top2_original` とする。**生スコアは正とは限らない**点に注意する
+（例: `SimpleConverter` は棄却 surface から 1.0 を引くため、retry/訂正文脈で
+残候補が全て棄却され `r1 <= 0` になりうる）。そこで top1 で割る正規化は
+`r1 > 0` のときだけ行い、`s2 = clamp(r2 / r1, 0, 1)` とする。`dict_best` は
+元読みの最良辞書 / Zenzai ヒットの正規化スコア（ヒットなしは 0）。
 
 ```
 activate_typo_correction(reading, observed_pattern):
   if Utf8CharLength(reading) <= LEN_MIN        → false   // §12.11。既定 2 = 2 文字以下は補正しない
-  weak       = (dict_best < S_WEAK)            // 元候補が弱い。既定 0.40
-  small_gap  = ((1.0 - s2) < G_GAP)            // top1/top2 が拮抗。既定 0.15
+  // 非正規化フォールバック: 元候補なし or r1 <= 0 は「元候補が無効に弱い」
+  // = まさに補正したい状況。weak を立て、s2 正規化はスキップ。
+  if (no original candidates) or (r1 <= 0):
+    weak = true; small_gap = false
+  else:
+    s2        = clamp(r2 / r1, 0, 1)
+    weak      = (dict_best < S_WEAK)           // 元候補が弱い。既定 0.40
+    small_gap = ((1.0 - s2) < G_GAP)           // top1/top2 が拮抗。既定 0.15
   no_dict    = (dict_best == 0)                // 辞書ヒットなし
   strong_pat = (personal_pattern_confidence(observed_pattern)
                  >= minConfidenceForRanking)   // 既定 0.70（§12.14）
   return weak or small_gap or no_dict or strong_pat
 ```
 
+- **非正の top1 / 候補なしのガード**: `r1 <= 0` や候補ゼロのときに `r2 / r1` を
+  計算しない（ゼロ除算・符号反転で `s2` が `[0,1]` を外れ `small_gap` が誤作動
+  するのを防ぐ）。この状況は元候補が事実上無効なので `weak = true` として補正を
+  発動させる（訂正・retry 文脈で補正を出したい意図と一致）。
 - `S_WEAK` / `G_GAP` は初期値であり M52（`typo_false_positive_rate`）で校正
   する（§12.16）。`strong_pat` のしきい値は設定 `minConfidenceForRanking`
   （§12.14）と同一値を使い、二重定義しない。
@@ -595,9 +607,11 @@ overcorrection_penalty =
 - `net_reject(pattern) = max(0, reject_count - accept_count)`（M54 §6.2 と
   同じ純拒否の考え方）。
 - `s1_strength` は **元読み top1 の絶対的な確からしさ** `[0, 1]` で、元 top1 の
-  `dictionary_hit_score × context_score` で定義する。§12.5 の `s1`（top1 で
-  正規化したため常に 1.0）とは別物で、こちらは「元 top1 がどれだけ強いか」を
-  測る。M57 文脈スコア未使用時は `context_score = 1.0` フォールバック。
+  `dictionary_hit_score × context_score` で定義する。§12.5 の生スコア `r1`
+  （converter の生の点数で、符号も値域も保証されない）とは別物で、こちらは
+  「元 top1 がどれだけ強いか」を `[0,1]` で測る。元候補なし / `r1 <= 0` のときは
+  `s1_strength = 0`（元 top1 は強くない）とする。M57 文脈スコア未使用時は
+  `context_score = 1.0` フォールバック。
 - 係数 `P_*` / `S_STRONG` は初期値であり M52（`typo_overcorrection_rate`）で
   校正する（§12.16）。
 

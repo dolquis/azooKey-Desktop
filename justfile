@@ -16,8 +16,10 @@ src_dirs := "core ipc learning inference-host tsf-tip bench"
 default:
     @just --list
 
-# Configure. fetch=ON downloads GoogleTest when not found locally.
-configure preset=preset fetch="ON":
+# Configure. Offline by default (dev-infra spec §1: network fetches are opt-in);
+# tests are skipped when GoogleTest is absent. Pass fetch=ON to download it:
+#   just configure windows-debug ON
+configure preset=preset fetch="OFF":
     cmake --preset {{preset}} -DAZOOKEY_FETCH_GOOGLETEST={{fetch}}
 
 # Build (configure first if needed)

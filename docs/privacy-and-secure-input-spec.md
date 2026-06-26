@@ -348,10 +348,14 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 各軸の既定は §5.2 の private 相当の安全側に揃え、欠落キーは schema 既定で補完される。
 `custom` の解決順・不変条件（`aiCandidate = false` で `externalAi` を強制 OFF）は §5.2 を正典とする。
 
-`crashReportConsent`（M33）は WER クラッシュダンプの収集・送信同意を表す。本キーは
-schema をここで正典として定義し、値の意味（`off` / `local` / `upload` の挙動・ダンプ
-最小化・保持運用）は `docs/sideload-packaging-spec.md` §8.3 を正典とする。既定 `local`
+`crashReportConsent`（M33）は WER クラッシュダンプの収集同意を表す。本キーは
+schema をここで正典として定義し、値の意味（`off` / `local` の挙動・ダンプ最小化・
+保持運用）は `docs/sideload-packaging-spec.md` §8.3 を正典とする。既定 `local`
 はローカル保存のみで自動送信しない（§2「ローカル完結」「明示同意なしにクラウド送信しない」）。
+**M33 の enum は `off` / `local` のみ**とし、送信（upload）は schema 化しない。送信経路は
+将来 M で実装する際に、**バージョン / タイムスタンプ付きの明示同意レコード**として別途導入する
+（bare な `"upload"` 値を先行して永続化しない。理由は §8.3）。ローダは未知値を `local` に
+正規化する（前方互換は `docs/sideload-packaging-spec.md` §3.6 拡張方針）。
 **導入 M の区別**: 本 `crashReportConsent` のみ M33（ETW/WER）で先行導入し、他の `privacy.*`
 subfield（`mode` / `custom` / secure 各軸）は M46 で導入する。M33 では `privacy` object に
 `crashReportConsent` を既定値付きで加算的に追加する（`docs/sideload-packaging-spec.md` §3.6
@@ -394,7 +398,7 @@ schema fragment（`properties.privacy` への追加）:
       "redactLogs": { "type": "boolean", "default": true },
       "crashReportConsent": {
         "type": "string",
-        "enum": ["off", "local", "upload"],
+        "enum": ["off", "local"],
         "default": "local"
       },
       "secureApps": {

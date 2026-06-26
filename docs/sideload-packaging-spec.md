@@ -1368,11 +1368,14 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 - 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
   載せていたが §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
   `surface_len`（整数）で記録し、内容は復元できないようにする。
-- `9000 Error` は自由文 `message` を載せず、`source`（モジュール識別子）/ `error_code`
-  （`docs/dev-infrastructure-spec.md` §7.4 の 3 カテゴリ enum）/ `hr`（HRESULT）のみとする。
-  例外メッセージ等の自由文は §7.6 を適用済みの構造化ログ側へ出し、ETW には載せない。
+- `9000 Error` は自由文 `message` を載せず、`source`（`Module` enum で符号化したモジュール
+  識別子）/ `error_code`（`docs/dev-infrastructure-spec.md` §7.4 の 3 カテゴリ enum）/
+  `hr`（HRESULT）のみとする。例外メッセージ等の自由文は §7.6 を適用済みの構造化ログ側へ
+  出し、ETW には載せない。
 - `EtwLogger`（§7.3）は本文型の引数を受ける API を**持たない**。長さ・件数・enum・
   数値・GUID・ID のみを受ける型シグネチャに限定し、本文混入をコンパイル時に防ぐ。
+  `source` も `const char*` ではなく `Module` enum とし、呼び出し側が任意 / ユーザー由来の
+  文字列を渡せる引数を一切残さない。
 - ETW は本文を含まないメタ情報のみのため、レイテンシ trace（§7.6 redact 対象外）と
   同じく追加の同意を要さない。WPR トレース（`.etl`）の採取・共有はユーザー / 開発者の
   明示操作（§7.4）であり、その成果物にも本文は含まれない。
@@ -1382,8 +1385,10 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 `core/src/EtwLogger.cpp`（新規）：
 
 ```cpp
-// ErrorCode は dev-infrastructure-spec.md §7.4 の 3 カテゴリ enum
-// （transport / protocol / business）。§7.2 9000 Error と同一。
+// Module / ErrorCode は閉じた enum。文字列引数を一切持たせず、本文混入を
+// コンパイル時に防ぐ（§7.2.1）。ErrorCode は dev-infrastructure-spec.md §7.4 の
+// 3 カテゴリ（transport / protocol / business）。§7.2 9000 Error と同一。
+enum class Module { Tip, Host, Settings };
 enum class ErrorCode { Transport, Protocol, Business };
 
 class EtwLogger {
@@ -1392,10 +1397,10 @@ public:
     static void Unregister();
     static void LogActivate(...);
     static void LogIpcRequest(...);
-    // 自由文字列は受けない。source はコンパイル時固定のモジュール識別子
-    // （"tip" / "host" / "settings" 等の ID）、code は enum、hr は HRESULT。
-    // 例外メッセージ等の自由文は ETW に載せず、§7.6 適用済みの構造化ログへ出す（§7.2.1）。
-    static void LogError(const char* source, ErrorCode code, HRESULT hr);
+    // 自由文字列は受けない。source は Module enum、code は ErrorCode enum、
+    // hr は HRESULT。例外メッセージ等の自由文は ETW に載せず、§7.6 適用済みの
+    // 構造化ログへ出す（§7.2.1）。
+    static void LogError(Module source, ErrorCode code, HRESULT hr);
 };
 ```
 
@@ -1486,12 +1491,19 @@ TIP DLL は in-proc なのでアプリ側を巻き込まないよう **設定し
   抑える。
 - **同意キー** `privacy.crashReportConsent`（enum、既定 `local`。schema 正典は
   `docs/privacy-and-secure-input-spec.md` §7）:
-  - `off` — azooKey のダンプを書かず、OS 既定処理（既定の `UnhandledExceptionFilter` =
-    WER 等）へ委ねる。`UnhandledFilter` は `DumpAllowed()==false` のとき
-    **`EXCEPTION_CONTINUE_SEARCH`** を返して既定フィルタへ進める（自前 dump 生成のみ抑止し、
-    OS レベルの WER 動作はユーザーの OS 設定に委ねる。`EXCEPTION_EXECUTE_HANDLER` は
-    WER を迂回してプロセス終了へ進む値であり `off` の意図と逆になるため用いない）。
+  - `off` — azooKey 管理のダンプ（§8.2 の `%LOCALAPPDATA%\azooKey\crashes\`）を書かない。
+    `UnhandledFilter` は `DumpAllowed()==false` のとき **`EXCEPTION_CONTINUE_SEARCH`** を返して
+    既定の `UnhandledExceptionFilter` へ進める（`EXCEPTION_EXECUTE_HANDLER` は WER を迂回して
+    プロセス終了へ進む値であり、IME がマシンの障害処理を上書きするのは不適切なため用いない）。
     なお自前 dump を書いた経路は二重ダンプ回避のため `EXCEPTION_EXECUTE_HANDLER` を返す（§8.1）。
+    - **同意スコープの明確化**: `crashReportConsent` は **azooKey 管理ダンプの生成可否のみ**を
+      制御する。OS の WER / LocalDumps はマシン全体のポリシー（管理者 / ユーザーの OS 設定）で
+      あり azooKey の同意スコープ外とする。azooKey は **自身向けの WER LocalDumps 登録を行わず**
+      （`HKLM/HKCU\...\Windows Error Reporting\LocalDumps\<exe>` を作らない）、OS 既定を有効化も
+      強制無効化もしない。したがって `off` でも、既にマシンに WER / LocalDumps ポリシーが
+      設定されていれば OS 側ダンプは生じ得るが、それは azooKey 管理外であり本同意の対象外。
+      `off` が保証するのは「azooKey が自前ダンプを書かない／自前の WER 収集を仕込まない」こと
+      である。
   - `local` — `%LOCALAPPDATA%` 配下に保存のみ。自動送信は一切しない（Phase 7 の実装範囲・
     既定）。
   - `upload` — 将来の送信経路用に予約。送信経路が未実装の Phase 7 では `local` と同義に

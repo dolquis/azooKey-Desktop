@@ -237,17 +237,30 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
   chosen, shown, left_context, timestamp_ms)` の `shown[]` に存在するが、既存の
   集約学習ストア `learning.tsv`（M54、`user-learning-enhancement-spec.md` §8）には
   **永続化されない**（同ストアは reading / surface / weight / context_hash 等のみ）。
-  そのため reranker 学習では、確定時に
-  `(left_context_hash, reading, chosen_surface, shown_surfaces[], 各候補の features,
-  timestamp)` を記録する**専用の露出トレース**をローカルへ永続化する
-  （`learning.tsv` とは別ファイル。例: `%LOCALAPPDATA%\azooKey\data\reranker_trace.jsonl`）。
+  そのため reranker 学習では、確定時に次を記録する**専用の露出トレース**を
+  ローカルへ永続化する（`learning.tsv` とは別ファイル。例:
+  `%LOCALAPPDATA%\azooKey\data\reranker_trace.jsonl`）。各レコードのフィールド:
+  - `left_context_hash`（§8.1 と同方式。raw 文脈は持たない）/ `reading` /
+    `chosen_surface` / `shown_surfaces[]`（露出した候補集合）/ 各候補の `features`
+  - `shown_at_ms`（候補ウィンドウ表示時刻）と `commit_ts`（確定時刻）。両者から
+    `dwell_ms = commit_ts - shown_at_ms` を算出でき、§6.2 の `minDwellMs` 判定に使う
+    （`CommitObservation.timestamp_ms` は確定時刻のみで dwell を出せないため、表示
+    時刻を TIP 側で付与してトレースに含める）
+  - 訂正レコード（**強負例の源**）: 訂正発生時に `event_type`（`correction_reject`
+    / `correction_accept`）・`rejected_surface` / `accepted_surface`・`correction_ts`
+    を同トレースに記録する。これにより `correctionWindowMs` を `correction_ts` と
+    確定時刻の差で判定でき、ペアリングもトレース内で完結する。
   - secure モード中は記録しない（§13）。`shown[]` が利用できる確定時にのみ書く。
-  - 露出トレースが**負例・正例ラベルの正典**。`learning.tsv` は scalar 特徴
-    （`user_frequency` / `recency_score`）の供給に使うが、露出情報は持たない。
-  - 露出トレースは context を raw で持たず `left_context_hash`（§8.1 と同方式）で
-    保持し、プライバシー方針（§13）を `learning.tsv` と揃える。
-- **強負例**: M54 の `correction_events` から自動生成（オフライン）。訂正の
-  reject/accept ペアは learning ストア側に持つため露出トレース無しでも得られる。
+  - 露出トレースが**正例・負例・強負例ラベルの正典**。`learning.tsv` は scalar
+    特徴（`user_frequency` / `recency_score`）の供給に使うが、露出・dwell・訂正
+    ペアの情報は持たない。
+  - プライバシー方針（§13）を `learning.tsv` と揃える（local 限定・secure 除外）。
+- **強負例は露出トレースの訂正レコードを源とする**: M54 v1 の集約 TSV は単一
+  `surface` + `event_type` + `context_hash` のみで、`rejected_surface` /
+  `accepted_surface` のペアや event timestamp を durable に持たない（ペア保持は
+  将来の SQLite オプション、`user-learning-enhancement-spec.md` §8）。そのため強負例
+  と `correctionWindowMs` は上記トレースの訂正レコードから生成する（M54 集約 TSV に
+  依存しない）。M54 SQLite オプションが有効な環境ではそのペアテーブルを併用してよい。
 - 個人ユーザーの学習データを **送信せず**、ローカルで個人 fine-tune（v2 で検討）。
 - bundled モデルは公開コーパスから生成（青空文庫 / CC0・MIT 互換の IME 公開
   データセット）。M52 §11 と同じく CC BY-SA / GFDL 系（Wikipedia 等）は採用しない。
@@ -263,7 +276,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 |---|---|---|
 | 正例（`label`=1） | 同一変換機会でユーザーが確定した候補 | 候補ウィンドウに**表示された**こと。確定が即時取り消し（直後の undo / 再変換）された場合は除外 |
 | 負例（`label`=0） | 同一機会で表示されたが選ばれなかった候補 | **露出トレース（§6.1）の `shown[]` を源とする**（集約 `learning.tsv` には露出情報が無いため負例は生成不可）。表示された候補のみを対象（表示されなかった候補は負例にしない＝露出バイアスを入れない）。1 機会あたり負例は上位 N（既定 `trainNegativesPerSample`=8）まで |
-| 強負例（`label_strength`=`strong_negative`） | 訂正イベントで reject され別候補へ訂正された候補 | M54 `correction_events` 由来（§6.1）。`rejected_candidate` と `accepted_candidate` のペアで保持。確定後**一定時間内**（既定 `correctionWindowMs`=10000）の訂正のみ採用 |
+| 強負例（`label_strength`=`strong_negative`） | 訂正イベントで reject され別候補へ訂正された候補 | **露出トレース（§6.1）の訂正レコード**（`rejected_surface` / `accepted_surface` / `correction_ts`）を源とする。`correctionWindowMs`（既定 10000）は `correction_ts` と確定時刻の差で判定。M54 集約 TSV はペア・event timestamp を durable に持たないため使わない（SQLite オプションがあれば併用可） |
 
 追加の採否・整形ルール:
 
@@ -277,7 +290,9 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
     得られる。`(normalize(left_context), input, candidate)` を使う。
   - 集約後、label を多数決でまとめ、出現回数を frequency 系特徴の補強に使う。
 - **滞留時間ゲート**: 候補ウィンドウ表示から確定までが極端に短い（誤確定の疑い、
-  既定 `minDwellMs`=120 未満）サンプルは正例から除外する。
+  既定 `minDwellMs`=120 未満）サンプルは正例から除外する。判定には露出トレース
+  （§6.1）の `dwell_ms = commit_ts - shown_at_ms` を用いる（`shown_at_ms` を
+  持たない bundled 合成データでは本ゲートを適用しない）。
 - **セッション境界**: bundled コーパス生成では `left_context` をその確定時点の
   **確定済みテキスト**とし、後続編集の影響を混ぜない（§7 推論時の context 定義と
   一致させる）。個人データでは M54 が確定時点の `context_hash` を保持するため

@@ -398,9 +398,11 @@ candidate: 交渉
 元読みの変換候補の生スコアを降順に `r1 = score_top1_original`、
 `r2 = score_top2_original` とする。**生スコアは正とは限らない**点に注意する
 （例: `SimpleConverter` は棄却 surface から 1.0 を引くため、retry/訂正文脈で
-残候補が全て棄却され `r1 <= 0` になりうる）。そこで top1 で割る正規化は
-`r1 > 0` のときだけ行い、`s2 = clamp(r2 / r1, 0, 1)` とする。`dict_best` は
-元読みの最良辞書 / Zenzai ヒットの正規化スコア（ヒットなしは 0）。
+残候補が全て棄却され `r1 <= 0` になりうる）。また **top2 が存在するとは限らない**
+（候補が 1 件、または `QueryCandidatesRequest.max_candidates = 1` で 1 件に制限）。
+top2 が無いときは `r2 = 0` を既定とする（拮抗相手がいない = gap は最大）。そこで
+top1 で割る正規化は `r1 > 0` のときだけ行い、`s2 = clamp(r2 / r1, 0, 1)` とする。
+`dict_best` は元読みの最良辞書 / Zenzai ヒットの正規化スコア（ヒットなしは 0）。
 
 ```
 activate_typo_correction(reading, observed_pattern):
@@ -410,9 +412,10 @@ activate_typo_correction(reading, observed_pattern):
   if (no original candidates) or (r1 <= 0):
     weak = true; small_gap = false
   else:
+    r2        = (top2 が無ければ 0)             // 候補 1 件 / max_candidates=1 のガード
     s2        = clamp(r2 / r1, 0, 1)
     weak      = (dict_best < S_WEAK)           // 元候補が弱い。既定 0.40
-    small_gap = ((1.0 - s2) < G_GAP)           // top1/top2 が拮抗。既定 0.15
+    small_gap = ((1.0 - s2) < G_GAP)           // top1/top2 が拮抗。既定 0.15（top2 無し ⇒ s2=0 ⇒ false）
   no_dict    = (dict_best == 0)                // 辞書ヒットなし
   strong_pat = (personal_pattern_confidence(observed_pattern)
                  >= minConfidenceForRanking)   // 既定 0.70（§12.14）

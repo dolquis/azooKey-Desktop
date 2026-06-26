@@ -2119,8 +2119,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     強い負例 = 訂正イベント
   - ONNX Runtime CPU 優先、timeout 10〜20ms、failure 時は reranker なしで
     返す fallback
-  - **embedding 供給方針を spec で固定**（ModernBERT 共用 / 独立小型
-    encoder のいずれかを M56 着手前に決定）
+  - **embedding 供給方針は `docs/neural-reranker-spec.md` §4.1 で決定済み**
+    （v1 = 手作り特徴量のみ / Option C、v2 以降 = 独立小型 encoder / Option A の
+    段階導入。M57 ModernBERT 共用 / Option B は不採用）。同 §4.1 を正典とする
 - **受け入れ条件**:
   - M52 ベンチで top1 が baseline 比 +3% 以上
   - p95 latency 悪化が +10ms 以内

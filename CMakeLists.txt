@@ -24,7 +24,10 @@ project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
 # (gitignored). Kept separate from the committed clang-cl DB used by clangd.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(AZOOKEY_COMPILER_CACHE)
+# Guard on the option too: find_program() caches AZOOKEY_COMPILER_CACHE, so a
+# build dir first configured with the cache ON would otherwise keep setting the
+# launcher even after re-configuring with -DAZOOKEY_USE_COMPILER_CACHE=OFF.
+if(AZOOKEY_USE_COMPILER_CACHE AND AZOOKEY_COMPILER_CACHE)
   set(CMAKE_C_COMPILER_LAUNCHER "${AZOOKEY_COMPILER_CACHE}")
   set(CMAKE_CXX_COMPILER_LAUNCHER "${AZOOKEY_COMPILER_CACHE}")
   message(STATUS "Compiler cache enabled: ${AZOOKEY_COMPILER_CACHE}")

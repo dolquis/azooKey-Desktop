@@ -2,13 +2,15 @@
 # Cloud bootstrap for "Claude Code on the web" (the Ubuntu 24.04 sandbox).
 #
 # HOW IT IS WIRED:
-#   Invoked from the SessionStart hook in .claude/settings.json on every session
-#   start. That hook runs locally too, but the CLAUDE_CODE_REMOTE guard below
-#   makes it a clean no-op outside a cloud session, so local development is
-#   unaffected (the skip notice goes to stderr, not stdout, to avoid injecting
-#   anything into the session context). The same command can alternatively be
-#   pasted into the web console's Environment -> Setup script field; both run
-#   `bash scripts/cloud-setup.sh`.
+#   Invoked from the SessionStart hook in .claude/settings.json. The hook gates
+#   on CLAUDE_CODE_REMOTE *before* launching bash, via:
+#       sh -c 'if [ "$CLAUDE_CODE_REMOTE" = "true" ]; then exec bash "$CLAUDE_PROJECT_DIR/scripts/cloud-setup.sh"; fi'
+#   Using `sh` (which never resolves to WSL on Windows) and gating up front means
+#   a local session never starts a bare `bash` (which could resolve to WSL) and
+#   only execs this script in the cloud, with an absolute $CLAUDE_PROJECT_DIR path
+#   (so it does not depend on the hook's cwd). The CLAUDE_CODE_REMOTE guard below
+#   is kept as defense-in-depth (e.g. if pasted into the web console's
+#   Environment -> Setup script field, or run by hand).
 #
 # WHAT IT DOES:
 #   Installs the Linux toolchain and builds the OS-independent parts
@@ -41,11 +43,33 @@ $SUDO apt-get update
 $SUDO apt-get install -y --no-install-recommends \
   build-essential cmake ninja-build clang clang-format clang-tidy git
 
-# Build + test the Linux-buildable subset. Best-effort: a transient build/test
-# failure should surface in logs without marking the whole environment failed.
+# Build + test the Linux-buildable subset. Non-blocking by design (a broken
+# build must not wedge the session), but each phase's exit status is captured
+# and logged explicitly so a broken cloud environment is visible, not masked by
+# a blanket `exit 0`. The chain stops at the first failing phase.
 set +e
+overall=0
+
 cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build --preset linux-debug
-ctest --preset linux-debug --no-tests=error --output-on-failure
-echo "cloud-setup: configure/build/test finished (exit=$?)."
+rc=$?
+if [ "$rc" -ne 0 ]; then echo "cloud-setup: configure FAILED (exit=$rc)" >&2; overall=$rc; fi
+
+if [ "$overall" -eq 0 ]; then
+  cmake --build --preset linux-debug
+  rc=$?
+  if [ "$rc" -ne 0 ]; then echo "cloud-setup: build FAILED (exit=$rc)" >&2; overall=$rc; fi
+fi
+
+if [ "$overall" -eq 0 ]; then
+  ctest --preset linux-debug --no-tests=error --output-on-failure
+  rc=$?
+  if [ "$rc" -ne 0 ]; then echo "cloud-setup: tests FAILED (exit=$rc)" >&2; overall=$rc; fi
+fi
+
+if [ "$overall" -eq 0 ]; then
+  echo "cloud-setup: bootstrap OK (configure/build/test all passed)."
+else
+  echo "cloud-setup: bootstrap completed WITH FAILURES (first failing exit=$overall); see log above." >&2
+fi
+# Non-blocking: never fail the SessionStart hook on a build/test error.
 exit 0

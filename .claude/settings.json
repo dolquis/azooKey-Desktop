@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash scripts/cloud-setup.sh"
+            "command": "sh -c 'if [ \"$CLAUDE_CODE_REMOTE\" = \"true\" ]; then exec bash \"$CLAUDE_PROJECT_DIR/scripts/cloud-setup.sh\"; fi'"
           }
         ]
       }

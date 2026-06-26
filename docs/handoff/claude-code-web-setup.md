@@ -10,15 +10,27 @@
 "hooks": {
   "SessionStart": [
     { "matcher": "startup|resume",
-      "hooks": [ { "type": "command", "command": "bash scripts/cloud-setup.sh" } ] }
+      "hooks": [ {
+        "type": "command",
+        "command": "sh -c 'if [ \"$CLAUDE_CODE_REMOTE\" = \"true\" ]; then exec bash \"$CLAUDE_PROJECT_DIR/scripts/cloud-setup.sh\"; fi'"
+      } ] }
   ]
 }
 ```
 
-このフックは**ローカルCLIでも読み込まれて実行される**が、スクリプト冒頭の
-`CLAUDE_CODE_REMOTE` ガードにより、**Cloud 以外では即座に no-op で抜ける**
-（スキップ通知は stdout ではなく stderr に出すため、セッションのコンテキストを汚さない）。
-Cloud（`CLAUDE_CODE_REMOTE=true`）でのみ apt 導入とビルドが走る。
+このフックは**ローカルCLIでも読み込まれて実行される**が、`sh -c` でまず
+`CLAUDE_CODE_REMOTE` を判定し、**Cloud（`=true`）でのみ `bash` でスクリプトを
+exec する**。判定を `bash` 起動の前段に置く理由は2つ:
+
+- Windows では裸の `bash` が WSL 側（`C:\Windows\System32\bash.exe`）に解決され
+  得るため、ローカルで `bash` を起動せずに済ませる。`sh` は WSL 版が存在せず
+  Git Bash にのみ解決されるため安全。
+- スクリプトを `${CLAUDE_PROJECT_DIR}` の絶対パスで呼ぶため、SessionStart の
+  cwd が repo root でなくても解決できる。
+
+スクリプト冒頭にも `CLAUDE_CODE_REMOTE` ガードがあり（多層防御。Web UI Setup
+script 経由や手動実行に備える）、Cloud 以外では stderr にスキップ通知を出して
+no-op で抜ける（stdout を汚さない）。
 
 | 設定 | 保存先 | ローカルCLI | Cloud |
 |---|---|---|---|

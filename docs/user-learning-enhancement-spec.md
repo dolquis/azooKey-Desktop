@@ -157,19 +157,35 @@ CREATE TABLE app_profiles_learning (
 ## 5. 時間減衰
 
 ```
-recency_score = exp(-days_since_last_commit / half_life_days)
+days_since_last_commit = max(0, (now_epoch_sec - last_updated_epoch_sec) / 86400)
+recency_score          = exp(-ln(2) * days_since_last_commit / half_life_days)
 ```
 
-| 用途 | half_life |
-|---|---:|
-| 一般語 | 30 日 |
-| 固有名詞 | 90 日 |
-| 技術語 | 120 日 |
-| 一時的な話題語 | 14 日 |
-| 打ち間違えパターン | 60 日 |
+`now_epoch_sec` / `last_updated_epoch_sec` はいずれも epoch 秒（§3.1。ミリ秒
+ではない）。`half_life_days` は**真の半減期**であり、`days_since_last_commit ==
+half_life_days` のとき `recency_score = 0.5` になる（`ln(2)` 係数で正規化する。
+係数を省くと e-folding 時定数になり半減しないので注意）。時計の巻き戻りや未来の
+`last_updated`（NTP 補正・手動時刻変更）で差が負になった場合は
+`days_since_last_commit = 0` にクランプし、`recency_score = 1.0`（減衰なし）
+として扱う。`recency_score` の値域は `(0, 1]`。
 
-half_life は category（M53 辞書層から取得）で切り替える。category が
-不明な場合は 30 日（一般語）を既定とする。
+| 用途 | half_life | 根拠（なぜこの値か） |
+|---|---:|---|
+| 一般語 | 30 日 | 日々の話題に追従して入れ替わる語彙。約 1 か月で半減し、月単位の作業サイクルを 1 周期として古い確定を緩やかに忘れる。 |
+| 固有名詞 | 90 日 | 人名・地名・組織名は一度関わると数か月は再出現しうる。一般語の 3 倍残し、四半期スパンの再利用を拾う。 |
+| 技術語 | 120 日 | ドメイン語彙は語彙交替が遅く安定。最長の half_life を与え、長期プロジェクト中の専門用語を維持する。 |
+| 一時的な話題語 | 14 日 | ニュース・イベント由来の語は陳腐化が速い。約 2 週間で半減させ、話題が去れば速やかに順位を下げる。 |
+| 打ち間違えパターン | 60 日 | 打鍵の癖は安定して持続する一方、ユーザーが癖を直せばフェードすべき。一般語より長く技術語より短い中庸値とする。 |
+
+half_life は category（M53 辞書層から取得）で切り替える。category が不明な
+場合は 30 日（一般語）を既定とする。1 レコードが複数 category を取りうる場合
+（辞書で多義）は **最長の half_life** を採用する（保守的に長く保持し、誤って
+速く忘れない）。
+
+これらの half_life は初期値であり、M52 `user_adapt` カテゴリの学習前後比較
+（§11・`conversion-quality-benchmark-spec.md`）で校正する対象である（§13）。
+ただし「一般語 < 固有名詞・打ち間違え < 技術語」「一時話題が最短」という
+**大小関係（順序）は設計上の不変条件**として固定し、校正で順序を反転させない。
 
 ## 6. ユーザー学習スコア
 
@@ -185,11 +201,57 @@ user_score =
 |---|---|
 | `log(1 + commit_count)` | 確定回数の対数（飽和効果） |
 | `recency_score` | §5 の時間減衰 |
-| `app_profile_weight` | M48 のプロファイル一致度（同 app: 1.2、別 app: 0.8） |
-| `correction_penalty` | `correction_reject` 件数に応じ減衰（0.0〜1.0） |
+| `app_profile_weight` | M48 のプロファイル一致度（§6.1） |
+| `correction_penalty` | `correction_reject` 件数に応じ減衰（§6.2、値域 0.0〜1.0） |
 
-`correction_penalty = max(0, 1 - 0.3 × reject_count)` を初期値とする。
-詳細は M52 ベンチで校正する。
+`user_score` は乗算合成であり、各因子は **1.0 を中立（影響なし）** とする。
+これにより M48（app）/ M46（context）/ M55（typo）いずれかが未完了の段階でも、
+該当因子を 1.0 にすれば残りの因子だけで成立する（§11 受け入れ条件と整合）。
+
+### 6.1 `app_profile_weight` の算出式
+
+```
+app_name_n(s) = lowercase(basename(s))   // "C:\...\Code.exe" → "code.exe"
+
+app_profile_weight(e_app, ctx_app):
+  if not app_aware_learning_enabled        → 1.0   // M48 未完了 / 設定 OFF
+  else if e_app == "" (global record)      → 1.0   // app 非依存の確定
+  else if ctx_app == "" (前面 app 不明)     → 1.0
+  else if app_name_n(e_app) == app_name_n(ctx_app) → W_same   // 既定 1.2
+  else                                     → W_diff           // 既定 0.8
+```
+
+- `e_app` は学習レコードの `app_name` 列（§3.2）、`ctx_app` は変換要求時の
+  前面アプリ（M48 `ForegroundAppDetector`）。比較は **正規化後（小文字化 +
+  パス除去した実行ファイル名）** で行う。
+- 既定係数は `W_same = 1.2` / `W_diff = 0.8`。これは中立 1.0 に対する
+  **±20% のナッジ**であり、`user_score` が乗算であることから、commit_count が
+  2 倍以上開いた明確な頻度差（`log` 差）を覆さない程度に弱く、同程度の
+  競合候補の並びだけを入れ替える強さに設定する。`W_same × W_diff = 0.96 ≈ 1`
+  とし、同 app 加点と別 app 減点をほぼ対称にする。
+- `W_same` / `W_diff` は初期値であり M52 / M48 統合検証で校正する（§13）。
+  ただし `W_diff ≤ 1.0 ≤ W_same` の順序は不変条件として固定する。
+
+### 6.2 `correction_penalty` の算出式
+
+```
+net_reject       = max(0, correction_reject_count - correction_accept_count)
+correction_penalty = max(P_min, 1 - k_reject × net_reject)
+```
+
+- `correction_reject_count` / `correction_accept_count` は当該
+  `(reading, surface[, app_name])` に対する `correction_reject` /
+  `correction_accept` イベント（§4）の累積数。`net_reject` を使うことで、
+  一度拒否された surface を後に再採用した場合（状況依存の拒否だった）に
+  ペナルティが回復する。
+- 既定係数は `k_reject = 0.3` / `P_min = 0.0`。`net_reject = 1` で 0.7、
+  3〜4 回の純拒否で 0.0 に達し、繰り返し明示的に拒否された surface は
+  候補から実質排除される（`P_min = 0.0` を許容する）。
+- **訂正は確定より強い負例**（§2 設計原則）を、ペナルティが
+  **乗算で効く**ことで表現する。`net_reject = 1` で `user_score` を 30% 下げ
+  （0.7 倍）、純拒否が累積するほど倍率が下がる。`log(1 + commit_count)` の
+  加法的増分と `k_reject` を直接比較はしない（次元が異なる）。`k_reject` /
+  `P_min` は M52 で校正する（§13）。
 
 ## 7. UserLearningScorer
 
@@ -213,9 +275,37 @@ private:
 ## 8. プライバシー
 
 - M46 secure mode 中は `Observe` を呼ばない（M46 §5 と整合）
-- `context_hash` は SHA-256 の上位 4 bytes のみを使う（衝突容認）
+- `context_hash` は §8.1 の算出式に従い、SHA-256 の上位 4 bytes のみを使う
+  （衝突容認）
 - ログ出力時は `reading` / `surface` を M41 §7.6 の方針で扱う
 - 学習データの export / import は M49 が担当
+
+### 8.1 `context_hash` の算出式と役割
+
+```
+left_ctx   = 確定対象 reading の直前にある確定済みテキストの
+             末尾 K コードポイント（既定 K = 8。NFC 正規化後に切り出す）
+ctx_bytes  = UTF-8(left_ctx)
+digest     = SHA-256(ctx_bytes)
+context_hash = uint32(digest[0..3])          // 先頭 4 bytes をビッグエンディアンで
+TSV 表記    = "0x%08x"                        // 例 0xabcd1234
+```
+
+- **入力**: 直前の確定済みテキスト（surface）の末尾 K コードポイント。読み
+  （reading）ではなく確定表記を使う。`left_ctx` が空（行頭・文書先頭）の場合は
+  予約値 `0x00000000` とする。K は左文脈の語数を概ね 1〜2 文節に収める長さで、
+  プライバシー（長い原文を復元させない）と弁別性のバランスから既定 8。
+- **正規化**: NFC 正規化のみ行い、大文字小文字や字種はそのまま保つ（日本語
+  文脈が主対象のため lowercase 化はしない）。
+- **役割**: `context_hash` は `user_score`（§6）の連続因子ではなく、学習
+  レコードの **検索・バケット用キー**である。同一 `context_hash` のレコードに
+  限定して優先採用する将来拡張（context 一致ボーナス `W_ctx_match`）の
+  フックとして列を確定させるが、**M54 v1 では `user_score` に context 因子を
+  加えない**（中立 1.0 相当）。これにより §6 の 4 因子構成を保ったまま、
+  スキーマだけ前方互換に確定する。
+- **衝突容認**: 4 bytes（32 bit）は左文脈の弱いシグネチャであり衝突しうる。
+  context_hash 一致は「同じ文脈で確定された可能性が高い」程度の弱い手掛かり
+  として扱い、一致だけで候補を確定しない（誤バケットの影響を限定する）。
 
 ## 9. 既存 M7 との関係
 
@@ -254,3 +344,26 @@ private:
 
 - SQLite 化（テーブル分割、index、複雑クエリ）
 - 学習データのクラウド同期 → ポリシー違反のため恒久的に非採用
+
+## 13. スコア定数と M52 校正の対応
+
+§5〜§6 のスコア定数は **式の形（functional form）を本書で確定し、係数の値は
+初期値として与える**。係数は M52 ベンチ（`conversion-quality-benchmark-spec.md`）
+の `user_adapt` カテゴリ（学習前後比較・60 ケース）で校正する。各定数が
+どの不変条件のもとで、どの指標を目標に動かされるかを次に固定する。
+
+| 定数 | 既定 | 不変条件（校正で破ってはならない） | 校正の目標 |
+|---|---:|---|---|
+| `half_life`（§5） | 30/90/120/14/60 日 | 一時話題 < 一般語 < 固有名詞・typo < 技術語 の順序 | `user_adapt` 改善を最大化しつつ古い確定の過保持を避ける |
+| `W_same`（§6.1） | 1.2 | `W_diff ≤ 1.0 ≤ W_same` | M48 別 app 検証で同 app 候補の正答率向上 |
+| `W_diff`（§6.1） | 0.8 | `W_same × W_diff ≈ 1`（対称） | 別 app 由来の誤った boost を抑制 |
+| `k_reject`（§6.2） | 0.3 | `0 < k_reject ≤ 1`（純拒否 1 回で倍率を 30% 下げる乗算ペナルティ） | 拒否 surface の再浮上を防ぐ |
+| `P_min`（§6.2） | 0.0 | `0 ≤ P_min < 1` | 繰り返し拒否された surface を排除 |
+| `K`（§8.1, context_hash 長） | 8 コードポイント | 復元不能な短さを保つ（プライバシー） | 文脈弁別性とのバランス |
+| `W_ctx_match`（§8.1, v1 では未使用） | 1.0（中立） | `W_ctx_match ≥ 1.0` | 将来 context バケット導入時に校正 |
+
+- **受け入れ判定（§11）に用いる指標**: `user_adapt` カテゴリが学習前後で
+  +3% 以上改善（`conversion-quality-benchmark-spec.md` の閾値表と整合）。
+- 校正は係数の数値のみを動かし、本表の「不変条件」列と §6 の 4 因子構成
+  （乗算合成・各因子の中立 1.0）は固定する。スキーマ（§3.2 の TSV 列）を
+  変える校正結果が出た場合は M54 範囲外とし、別 M（§12）で扱う。

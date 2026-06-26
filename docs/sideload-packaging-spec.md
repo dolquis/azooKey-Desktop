@@ -1382,17 +1382,27 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 `core/src/EtwLogger.cpp`（新規）：
 
 ```cpp
+// ErrorCode は dev-infrastructure-spec.md §7.4 の 3 カテゴリ enum
+// （transport / protocol / business）。§7.2 9000 Error と同一。
+enum class ErrorCode { Transport, Protocol, Business };
+
 class EtwLogger {
 public:
     static void Register();
     static void Unregister();
     static void LogActivate(...);
     static void LogIpcRequest(...);
-    static void LogError(const char* source, const char* msg, HRESULT hr);
+    // 自由文字列は受けない。source はコンパイル時固定のモジュール識別子
+    // （"tip" / "host" / "settings" 等の ID）、code は enum、hr は HRESULT。
+    // 例外メッセージ等の自由文は ETW に載せず、§7.6 適用済みの構造化ログへ出す（§7.2.1）。
+    static void LogError(const char* source, ErrorCode code, HRESULT hr);
 };
 ```
 
-`EventRegister`/`EventWriteString` の薄いラッパ。
+`EventRegister` + manifest 定義イベントの `EventWrite`（または TraceLogging）で
+**型付きフィールド**を書き込む薄いラッパ。任意文字列を書く `EventWriteString` は
+本文混入経路になるため**使わない**（§7.2.1）。各 `Log*` は §7.2 表のフィールド
+（長さ・件数・enum・数値・GUID・ID）のみを型付き引数で受け、本文型引数を持たない。
 全モジュール（TIP/Host/Settings）から呼べるよう `core/` 配下に置く。
 
 ### 7.4 観測

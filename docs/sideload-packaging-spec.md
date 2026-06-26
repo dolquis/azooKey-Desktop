@@ -942,15 +942,23 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
 | `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
-| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
-| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
+| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 は `auto`/`cpu`/`cuda` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
+| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
-| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル | M45 | モデル再ロード | `model-management-spec.md` §5/§7 |
+| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル / 一般 | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
 | `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
 
 > オブジェクト型キー（`model` / `autoUpdate`）の下位フィールドは「正典」列の spec が確定形を
 > 持つ。本表で再掲せず、ネスト構造の単一情報源を維持する。
+
+> **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
+> 下位レイヤ**であり（解決順 `model.*` ＞ root、`model-management-spec.md` §5.2）、設定アプリの device 選択 UI は
+> **v1.0 / M24 とも `model.backendPreference` / `model.epPreference`（`model.*` tier）にバインド**する。**root tier は
+> UI にバインドしない** — M24 で root を再露出すると、`model.*` を設定済みのユーザーでは編集しても実効値が変わらず
+> （`model.*` ＞ root）「selector が壊れて見える」二重ソース問題に戻るため。root tier は `settings.json` 直書きの
+> 後方互換としてのみ残し、§3.7 の保存規律（device 保存時に root `backendPreference` を削除して `model.*` を単一
+> 実効ソースにする）と整合させる。
 
 #### 永続化形式と適用順
 
@@ -983,6 +991,117 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
   §3.2 に挙げる「ETW プロバイダ」は固定 GUID（§7.1）であって設定キーではない（ログ詳細度は `logLevel`
   が制御する）。LearningStore / Persona 表示はキーではなく読み取り専用ビューである。
+
+### 3.7 v1.0 設定 UI の最小機能セット（M11）と v1.0 / v1.x 境界
+
+§3.6 は schema の最終形（全 top-level キー）を確定する索引である。本節はそのうち
+**v1.0（M11）出荷時に設定アプリへ UI として出す最小サブセット**を確定し、残りを v1.x（M30
+フル UI）へ送る境界を引く。狙いは 2 つ: D-03（WinUI 3 UI フレームワークスパイク）の実装
+ボリュームを確定させ、v1.0 を遅らせないこと。本節は新キーを追加しない —— v1.0 UI は
+`settings/mvp-settings.schema.json`（§3.6 の正典 schema）の**部分集合**を描画するだけで、
+schema 自体は superset のまま変えない。
+
+> **設計判断（DEV-107）**: 起票時の推奨案は `zenzaiEnabled` / `modelPath` / `userDictionaryPath`
+> という新キーを提案していたが、§3.6 で schema 正典が確定した後はこれらを新設しない。M11 の目的
+> （`plans/windows-port-roadmap.md` M11「Zenzai ON/OFF・辞書管理・デバイス選択」）を**既存の正典
+> キーへ写像**して実現する: Zenzai ON/OFF → `model.enabled`、デバイス選択 → `model.backendPreference`
+> （v1.0 は enum を縮小）、モデル選択 → `model.selectedPath`。ユーザー辞書は設定 `settings.json` の
+> キーではなく `%LOCALAPPDATA%\azooKey\data\user_dict.json`（§3.4）の内容であり、v1.0 はキーではなく
+> 「編集」アクション（下記ボタン）で扱う。
+
+#### v1.0（M11）で UI 化するキー（最小サブセット）
+
+| キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
+|---|---|---|---|---|
+| `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
+| `model.backendPreference` | enum **`auto` / `cpu` / `cuda` に縮小** | 一般 | M8 | 完全 enum（`vulkan`/`winml`/`directml`/`npu`）と `epPreference` は v1.x（M24）。M8 受け入れ条件「GPU/CPU 切替が設定で効く」に対応 |
+| `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
+| `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
+
+- **デバイス選択の enum 縮小**: v1.0 の推論経路は M8 の CPU / CUDA のみ（`AZOOKEY_BACKEND` および
+  `LoadModel` 経路）。よって v1.0 UI は `model.backendPreference` を `auto` / `cpu` / `cuda` の 3 値だけ
+  描画する。schema 正典（§3.6）は完全 enum を保持し、v1.x（M24）で `vulkan` / `winml` 等と `epPreference`
+  を UI に追加する。`settings.json` に v1.x 値（例 `winml`）が直書きされていても v1.0 の Host は schema 上
+  受理し、選択肢として描画しないだけで破棄はしない（能力検出による disable + Tooltip は §3.2 参考実装注を参照）。
+- **`model.*` の UI 露出を M11 へ前倒し**: §3.6 の「導入」列は `model` を M45 と記すが、これは**フル
+  モデル管理 UI**（`epPreference` / `nGpuLayers` / `benchmark*` / `autoLoadOnHostStart` / `fallbackToSimpleConverter`
+  等の全フィールド）の導入時期である。v1.0 はそのうち `enabled` / `backendPreference`（縮小）/ `selectedPath`
+  の 3 フィールドのみを露出する。キーは schema に既存のため schema 変更は不要で、変わるのは UI 露出の時期だけ。
+  実効値の解決順（`model.*` ＞ root 同名キー、§3.6 永続化 / `model-management-spec.md` §5.2）は v1.0 でも同一。
+- **モデルパスの probe-then-commit（既定 autoselect と明示選択を分ける）**: 空 `model.selectedPath` は
+  「ピン既定モデルを使う」を意味しない（Host は空を未選択として扱い SimpleConverter へ落ちる、
+  `model-management-spec.md` §7 / `autoLoadOnHostStart`）。よって v1.0 UI は**空を既定ファイルへ暗黙解決しない**。
+  `selectedPath` 確定の規律は §1.6.1「配置パスとバージョニング」の取得経路定義に従い、**2 経路を混同しない**:
+    - **既定モデルの autoselect（ピン依存、§1.6.1 (b) DL / (c1)）**: ピン定義（`models\zenzai\expected.json`）の
+      モデルファイルが**実在し SHA256 がピン一致することを probe してから**、その絶対パスを `model.selectedPath`
+      へ commit する（commit 後に「既定モデル使用中」と表示）。ピン未投入 / 不一致なら autoselect しない。
+    - **ユーザー / 管理者の明示選択（ピン非依存、§1.6.1 (c2)）**: 設定 UI のモデル選択（ファイルピッカ）や
+      `settings.json` 手編集で選ばれた**任意の実在 GGUF パス**を probe-load して `model.selectedPath` へ commit する。
+      **ピン未投入でも成立し、ピン一致を要求しない**（§1.6.1 (c2)「ピン非依存の唯一の手動経路」を v1.0 UI が塞がない。
+      非ピンのローカル GGUF を管理者が選ぶ M28/M11 経路を degraded に落とさない）。
+  いずれの経路でも、パス未確定の間は `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を
+  表示する。これにより「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」と「明示選択した非ピン
+  モデルが commit されず degraded のまま」の両方の不整合を防ぐ。
+- **root `backendPreference` を v1.0 UI に二重表示せず、保存時に UI 選択値で上書きする**: デバイス選択は
+  `model.backendPreference` 一本に統一する（`model-management-spec.md` §5.2 の解決順は `model.backendPreference`
+  → root `backendPreference` → 既定 `auto`）。root を非表示のまま write-back で温存すると、ユーザーが直書きした
+  root `cuda` 等が UI の「auto」選択を上書きし続け、UI からバックエンドを auto へ戻せない。これを防ぐため、**v1.0 UI が
+  デバイス選択を保存するとき、UI で選んだ値（`auto` を含む）を `model.backendPreference` に書き、root `backendPreference`
+  を削除する**。**root の隠れ値を `model.*` へ「移行」してはならない** —— 移行すると root `cuda` が
+  `model.backendPreference` に複製され、UI の `auto` 選択を上書きし続けてリセット不能になる（root 値を持ち越さず、
+  常に現在の UI 選択で上書きする）。これにより `model.backendPreference` が単一の実効ソースになる。この root
+  `backendPreference` 削除は後述 write-back 規則の例外（保持対象外）とする。`epPreference` は v1.0 UI が露出せず
+  device 選択にも従属しないため、root / `model.epPreference` とも温存する（直書き intent を壊さない。v1.x で管理）。
+
+#### v1.0（M11）の UI アクション（設定キーではないボタン）
+
+- **「ユーザー辞書を編集」** → ユーザー辞書（M9、`user_dict.json`）の追加 / 削除を行う CLI / デバッグ
+  probe を起動する（D-09 と接続。`AddUserWord` / `RemoveUserWord` 経路は roadmap M9）。v1.0 は専用 GUI を
+  作らず、最小の編集導線のみを提供する。フル辞書管理 GUI は v1.x（M30）。
+- **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
+
+#### v1.0 / v1.x 境界表
+
+「v1.0 で UI 化」しないキーは、v1.0 では `settings.json` 直書き（＋ Host hot-reload、§3.3）か
+debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイルストーン）で UI 露出する。下表は
+§3.6 の全キーに対する v1.0 / v1.x の UI 露出区分である（意味論の正典は §3.6「正典」列に従う）。
+
+| キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
+|---|---|---|
+| `model.enabled` | ◯（一般） | — |
+| `model.backendPreference` | ◯（一般、`auto`/`cpu`/`cuda` のみ） | 残り enum（`vulkan`/`winml`/`directml`/`npu`）= M24 |
+| `model.selectedPath` | ◯（一般） | — |
+| `logLevel` | ◯（詳細） | — |
+| `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |
+| `epPreference`（root） / `powerProfile` | — | M24 / M25 |
+| `inputMode` | —（実行時にキー操作で切替） | M30（任意） |
+| `inputStyle` / `customRomajiTablePath` | — | M17 |
+| `liveConversion` | — | M14 |
+| `predictionEnabled` | — | M15 |
+| `llmMagicConversion` / `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `includeContextInAITransform` | — | M16（鍵は §9 DPAPI、M34） |
+| `promptPrefixByApp` | — | rich X-2-6 / M48（`profilesByApp` 統合） |
+| `contextReselection` / `postCommitLint` / `retroactiveRecompute` / `sentenceCompletion`（実験） | — | rich（M30 以降。実験フラグ） |
+| `batchRomajiConversion` / `batchRomajiPreviewStyle` / `batchConversionMode` / `batchAutoPunctuation` | — | M58 |
+| `autoUpdate.*` | — | M32（v1.0＝M11/M12 より後。一般ペインに UI 化） |
+| 予定済み拡張: `privacy.*` / `profilesByApp` | — | M46 / M48（schema 統合は §3.6 拡張方針） |
+
+> v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
+> 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。
+
+#### 設定アプリ起動時の schema バリデーション
+
+- 設定アプリは起動時に `settings.json` を `settings/mvp-settings.schema.json`（JSON Schema draft 2020-12）で
+  検証する。**未知キー / 型不正 / enum 外の値は警告ログ（`logLevel`）に記録して skip し、当該キーは既定値
+  （§3.6 拡張方針「欠落キーは schema 既定で補完」）で扱う。**破損キー 1 つで設定アプリやランタイムを
+  停止させない（fail-safe）。
+- **write-back 規則**: 設定アプリが `settings.json` を保存するとき、**schema 上有効で UI に露出していないキー**
+  （v1.x キー・ユーザーが直書きした有効値）を**保持して書き戻す**。v1.0 UI が知らないだけの有効キーを silently に
+  消去しない（直書きワークフローを壊さないため）。一方、**起動時バリデーションで弾いた未知キー / 型不正 / enum 外の
+  エントリは write-back で温存しない**（quarantine して書き戻さない）。これらを温存すると、`additionalProperties: false`
+  の固定オブジェクト（§3.6）に対して Host 再読込が `ok=false`（§3.3）になり、UI 側の有効な変更まで Host に拒否されるため。
+  すなわち保持対象は「schema-known かつ UI-hidden」に限る。書き込みは破損耐性のため atomic write（一時ファイル → rename、§3.6 永続化）。
+- Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
+  §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 
 ## 4. WiX / Inno Setup インストーラ（M31）
 

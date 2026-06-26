@@ -224,7 +224,10 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   最小設定アプリと、配布可能なインストーラ。
 - **変更対象**: 新規 `settings-app/`（WinUI 3 / C++/WinRT に確定、§3.0）、`pkg/` 配下 (新規)
 - **実装範囲**:
-  - 設定アプリ (TIP/Host とは別プロセス)
+  - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
+    `model.enabled`/`model.backendPreference`〔`auto`/`cpu`/`cuda` 縮小〕/`model.selectedPath`/`logLevel`
+    と「ユーザー辞書を編集」「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
+    `docs/sideload-packaging-spec.md` §3.7 を正典とする
   - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
     `ipc/src/Payloads.cpp` の `UpdateConfig`（`docs/sideload-packaging-spec.md` §3.3）と
     `inference-host` 側 SettingsStore 最小実装（settings.json 読込 / default 補完 / 反映、

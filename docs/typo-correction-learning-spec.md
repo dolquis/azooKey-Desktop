@@ -537,7 +537,7 @@ confidence = clamp(raw_conf, min_confidence, max_confidence)
 | パラメータ | 値 | 意味 / 根拠 |
 |---|---:|---|
 | `base` | 0.0 | logit(0.5)。実績ゼロの新規パターンは中立 0.5 から始める。 |
-| `accept_weight` | 0.25 | logit 増分。採用約 4 回で発動しきい値 `minConfidenceForRanking`（0.70 ≈ logit 0.847）に到達。`typo_min_count`（§5、既定 3）と整合する慎重さ。 |
+| `accept_weight` | 0.25 | logit 増分。bonus 無しでは採用約 4 回で `minConfidenceForRanking`（0.70 ≈ logit 0.847）相当。ただし warm-up は confidence ではなく件数ゲート（§12.11、`accept_count >= typo_min_count`）で担保する。 |
 | `reject_weight` | 0.45 | 拒否の logit 減分。採用の約 1.8 倍。**拒否を採用より強く**し、1 回の誤補正拒否を 2 回弱の採用で相殺する。 |
 | `recency_half_life` | 60 日 | `recency_bonus` の減衰時定数。`docs/user-learning-enhancement-spec.md` §5（打ち間違えパターン 60 日）と一致させる。 |
 | `B_rec` | 0.30 | `recency_bonus` の振幅（logit）。放置パターンを最大 0.30 減点。 |
@@ -546,10 +546,15 @@ confidence = clamp(raw_conf, min_confidence, max_confidence)
 | `min_confidence` | 0.05 | 下限。完全な 0 にせず再学習の余地を残す。 |
 
 - **拒否の重みを採用より強くする**。誤補正は IME 体験を大きく壊すため、学習は
-  保守的に行う。新規パターン（accept=reject=0）の `raw_conf` は recency/app 項
-  のみで約 0.5 になるが、発動ゲート `minConfidenceForRanking`（0.70）に届かない
-  ため、**約 3〜4 回の採用実績を経るまで rank に混ざらない**。これが
-  `typo_min_count` と二重の安全マージンになる。
+  保守的に行う。
+- **warm-up は confidence ではなく独立した件数ゲートで担保する**。`recency_bonus`
+  （直近 +0.30）と `app_specific_bonus`（同 app +0.20）が加わると、採用 2 回でも
+  logit = `2×0.25 + 0.30 + 0.20 = 1.0` → `sigmoid ≈ 0.73` となり、bonus だけで
+  `minConfidenceForRanking`（0.70）を越えてしまう。confidence の値に warm-up を
+  依存させない。代わりに §12.11 の **件数ゲート `accept_count >= typo_min_count`
+  （既定 3）を confidence と独立した必須条件**として課し、bonus の有無に関わらず
+  3 回の採用実績を経るまで `rank` / `aggressive` に昇格させない。confidence は
+  順位付けの強さを表し、件数ゲートは昇格可否を表す（役割を分離する）。
 - `dominant_app(pattern)` は当該パターンの `typo_events`（§12.8）で
   `event_type='typo_accept'` が最多の `app_name`。同数・該当なしは bonus 0。
 - `accept_weight` / `reject_weight` / `B_rec` / `B_app` は初期値であり M52 で
@@ -604,16 +609,28 @@ overcorrection_penalty =
 
 | 条件（しきい値） | 処理 |
 |---|---|
+| warm-up 未達（`accept_count < typo_min_count`、既定 3） | 個人パターンを `rank` / `aggressive` に昇格させない（confidence・bonus とは独立の必須ゲート） |
 | 元 top1 が十分強い（`s1_strength >= S_STRONG`、既定 0.85） | 補正候補を元 top1 より上にしない（rank cap = 2 位以下） |
 | 補正 confidence が低い（`typo_confidence < minConfidenceForRanking`、0.70） | 「もしかして」枠のみ（rank 非混在） |
-| top 候補化の信頼不足（`typo_score < minConfidenceForTopCandidate`、0.90） | 第一候補にしない |
+| top 候補化の信頼不足（`typo_confidence < minConfidenceForTopCandidate`、0.90） | 第一候補にしない（**`typo_score` ではなく `typo_confidence` で判定**） |
 | ユーザーが過去に拒否（`net_reject >= 1`） | `overcorrection_penalty` で強く減点（§12.10）し top 化不可 |
 | 入力が短すぎる（`Utf8CharLength(reading) <= LEN_MIN`、既定 2 = 2 文字以下） | 補正しない（§12.5 で生成前に遮断） |
 | パスワード欄・秘匿アプリ（M46） | 補正・学習ともに無効（§12.12.1 のゲートで遮断） |
 | コード入力中（M48 profile = code） | 英字・ローマ字補正を控えめにする（発動ゲートに `code` 抑制を加味） |
 
+- **`typo_score` と昇格ゲートの役割分離**: `typo_score`（§12.10）は候補の
+  **順位付け**にのみ使い、昇格可否のしきい値判定には使わない。`typo_score` は
+  capped confidence（`max_confidence = 0.95`）に `reading_similarity_score`
+  （= `1 - 1/編集距離長`、実 typo では常に < 1）を掛けるため構造的に上限が低く、
+  例えば 1 編集・長さ n の補正は他因子が完璧でも `0.95 × (1 - 1/n)` までしか
+  伸びず、`n < 19` だと 0.90 に決して届かない。これを top 化ゲートに使うと
+  通常長（3〜8 文字）の typo が `aggressive` でも昇格不能になる。したがって
+  ランキング閾値（0.70）/ top 化閾値（0.90）は **`typo_confidence`**（学習で
+  0.95 まで到達しうる、パターンの信頼度）に対して評価する。`reading_similarity`
+  は順位付け（`typo_score`）にのみ効かせ、昇格可否は塞がない。
 - `minConfidenceForRanking`（0.70）/ `minConfidenceForTopCandidate`（0.90）は
-  設定スキーマ §12.14 の同名フィールドと一致させ、ここで再定義しない。
+  設定スキーマ §12.14 の同名フィールドと一致させ、ここで再定義しない。両者は
+  `typo_confidence` に対するしきい値である。
 - モード別の rank cap: `suggest` = 常に「もしかして」枠（元候補を一切上書き
   しない）、`rank` = `typo_confidence >= 0.70` で通常候補に混在（ただし元 top1
   が強ければ 2 位以下）、`aggressive` = 全ガード通過時のみ第一候補化。これは

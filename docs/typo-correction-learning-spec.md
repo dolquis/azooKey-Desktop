@@ -704,10 +704,16 @@ secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評�
 判定主体は前面フォーカスを見られる TIP 側である。
 
 1. **TIP（検出・送信ゲート、一次）**: `ObserveTypo` の発火条件（§4-1 / §4-2）
-   を満たしても、その時点の M46 `PrivacyGate` が secure を返すなら
-   `pre_correction_reading_` のスナップショットを取らず、`ObserveTypo` も
-   `raw_keys` 送信も行わない。判定は **イベント発生時（OnKeyDown / commit）**
-   に行い、flush 時ではない。
+   を満たしても、その時点の M46 `PrivacyGate` が **`IsSecure()` を返す、または
+   `LearningAllowed()` が false** なら `pre_correction_reading_` のスナップ
+   ショットを取らず、`ObserveTypo` も `raw_keys` 送信も行わない。`ObserveTypo`
+   は純粋な学習イベントのため、`private` / `custom`（`learning` OFF）モードの
+   ように `IsSecure()=false` でも `LearningAllowed()=false` の状態
+   （`privacy-and-secure-input-spec.md` §3 `private`: 学習 OFF・予測 ON、§5.2）
+   では発火しない。判定は **イベント発生時（OnKeyDown / commit）** に行い、
+   flush 時ではない。なお `Lookup`（既学習パターンの適用 = 予測）は private で
+   許可されるため、`QueryCandidates` 経路は `LearningAllowed` では止めず
+   `secure` のみで止める（§12.12.2-4）。
 2. **フォーカス遷移時のクリア**: secure コンテキストへ遷移した瞬間、TIP は
    §4-3 のリセット（`pre_correction_reading_` 等）を実行する。これにより
    non-secure 中に取ったスナップショットが secure 確定に巻き込まれて漏れる
@@ -721,21 +727,32 @@ secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評�
    ときは補正・学習を抑止する。**ただし参照する `secure` は操作ごとに別経路で
    持つ**:
    - **`Lookup`（適用）**は当該 `QueryCandidates` リクエストの `secure` を見る。
-   - **`ObserveTypo`（蓄積）は fire-and-forget で対応する `QueryCandidates` を
-     持たない**ため、`ObserveTypoRequest` 自身が **per-event の `secure`**
-     （TIP が検出時点 = §12.12.2-1 のイベント発生時に評価した値）を必ず運ぶ
-     （§12.13）。host は直近 `QueryCandidates` の値を `ObserveTypo` に流用して
-     はならない。normal→secure へフォーカスが移った直後、secure な
-     `QueryCandidates` が来る前に `ObserveTypo` が届く競合があり、直近値
-     （`secure=false`）を流用すると secure 入力を学習してしまうため。
-   - `secure` が **未指定（未知）のとき**は、M46 の「解決不能な privacy 状態は
-     secure 扱い」契約（`privacy-and-secure-input-spec.md` §4.3）に従い
-     **fail-closed（deny: 補正・学習を抑止）を既定**とする。
+   - **`ObserveTypo`（蓄積 = 学習）は fire-and-forget で対応する
+     `QueryCandidates` を持たない**ため、`ObserveTypoRequest` 自身が
+     **per-event の `secure` と `learning_allowed`**（TIP が検出時点 =
+     §12.12.2-1 のイベント発生時に評価した値）を必ず運ぶ（§12.13）。host は
+     `secure == true` **または `learning_allowed == false`** のとき
+     `ObserveTypo` を記録しない。host は直近 `QueryCandidates` の値を
+     `ObserveTypo` に流用してはならない。normal→secure / normal→private へ
+     フォーカスが移った直後、状態を反映した `QueryCandidates` より先に
+     `ObserveTypo` が届く競合があり、直近値を流用すると secure / private 入力を
+     学習してしまうため。
+   - **`learning_allowed` は `secure` と別軸**。M46 `private` /
+     `custom`（`learning` OFF）モードは `IsSecure()=false` でも学習だけを止める
+     （`privacy-and-secure-input-spec.md` §3 / §5.2 `LearningAllowed()`）。
+     `secure` は補正・学習の両方を、`learning_allowed=false` は **学習
+     （`ObserveTypo`）のみ**を止める。`Lookup`（予測）は private で許可される
+     ため `QueryCandidates` 経路は `learning_allowed` を見ない。
+   - `secure` / `learning_allowed` が **未指定（未知）のとき**は、M46 の
+     「解決不能な privacy 状態は安全側」契約（`privacy-and-secure-input-spec.md`
+     §4.3 / §2 fail-closed）に従い **fail-closed（deny: 該当軸を抑止）を既定**
+     とする（`secure` 不明 ⇒ 補正・学習を抑止、`learning_allowed` 不明 ⇒ 学習を
+     抑止）。
    - これを正常入力のブロックなく成立させるため、privacy 対応 TIP は handshake
      `capabilities` に `"secure_flag"` を広告し（§7）、**毎回の `QueryCandidates`
-     と毎回の `ObserveTypo` に `secure`（secure 時 true / 非 secure 時 false）を
+     に `secure` を、毎回の `ObserveTypo` に `secure` と `learning_allowed` を
      必ず載せる**（§12.13）。`secure_flag` を広告した TIP からのメッセージで
-     `secure` が欠落することは無く、欠落＝privacy 非対応 TIP（古い TIP・未配線）
+     これらが欠落することは無く、欠落＝privacy 非対応 TIP（古い TIP・未配線）
      と判定できるため、その場合に deny へ倒しても通常入力を巻き込まない。
    - 例外として、secure 検出が存在しない M46 未完了の暫定期間に限り、
      host は `--secure-unknown=allow` を明示指定して未知を allow に倒せる
@@ -784,10 +801,10 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
   リクエスト単位 privacy フィールド（例 `privacy_mode`）を別途定義する場合は、
   二重定義せず M46 のフィールドへ寄せて本フィールドを廃止する（その場合
   §12.12.2 の参照先も M46 フィールドへ更新）。
-- **フィールド存在規約**: `secure` は wire 上は optional だが、handshake
-  `capabilities` に `"secure_flag"` を広告する TIP（= M46 配線済み）は
-  **毎 `QueryCandidates` と毎 `ObserveTypo` で `secure` を必ず送る**
-  （secure 時 true / 非 secure 時 false）。欠落は `secure_flag` 非広告 TIP
+- **フィールド存在規約**: `secure` / `learning_allowed` は wire 上は optional
+  だが、handshake `capabilities` に `"secure_flag"` を広告する TIP（= M46
+  配線済み）は **毎 `QueryCandidates` で `secure` を、毎 `ObserveTypo` で
+  `secure` と `learning_allowed` を必ず送る**。欠落は `secure_flag` 非広告 TIP
   （古い TIP・未配線）を意味し、host は §12.12.2-4 のとおり既定 `deny`
   （fail-closed）で扱う。`raw_keys` / `typo_correction_mode` の「送信意図が
   あるときのみ」とは規約が異なる点に注意。
@@ -796,11 +813,11 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
   fail-closed シグナルとして併送し、host が未配線時にフォールバック解釈で
   漏れることを防ぐ。
 
-#### `ObserveTypoRequest` への per-event `secure`
+#### `ObserveTypoRequest` への per-event `secure` / `learning_allowed`
 
 `ObserveTypo` は fire-and-forget で対応する `QueryCandidates` を持たないため、
 v1 の `ObserveTypoRequest { wrong_reading, correct_reading, timestamp_ms }`
-（§7）に **v2 で `bool secure` を追加**する。
+（§7）に **v2 で `bool secure` と `bool learning_allowed` を追加**する。
 
 ```json
 { "type": "ObserveTypo",
@@ -808,17 +825,25 @@ v1 の `ObserveTypoRequest { wrong_reading, correct_reading, timestamp_ms }`
     "wrong_reading": "こんちには",
     "correct_reading": "こんにちは",
     "timestamp_ms": 1780000000000,
-    "secure": false
+    "secure": false,
+    "learning_allowed": true
   } }
 ```
 
-- `secure` は TIP が **検出時点（§12.12.2-1 のイベント発生時）** に評価した
-  `PrivacyGate::IsSecure()` の値。host は ObserveTypo の蓄積可否をこの
-  per-event 値で判定し、**直近 `QueryCandidates` の `secure` を流用しない**
-  （§12.12.2-4。normal→secure 遷移直後の競合で secure 入力を学習しないため）。
+- `secure` / `learning_allowed` は TIP が **検出時点（§12.12.2-1 のイベント
+  発生時）** に評価した `PrivacyGate::IsSecure()` / `PrivacyGate::LearningAllowed()`
+  の値。host は ObserveTypo の蓄積可否を **`secure == false かつ
+  learning_allowed == true`** で判定し、**直近 `QueryCandidates` の値を流用
+  しない**（§12.12.2-4。normal→secure / normal→private 遷移直後の競合で
+  secure / private 入力を学習しないため）。
+- `learning_allowed` は `secure` と別軸（§12.12.2-4）。M46 `private` /
+  `custom`（`learning` OFF）は `IsSecure()=false` でも学習だけを止めるため、
+  `secure` だけでは private 入力の学習を防げない。`QueryCandidates`（予測 =
+  `Lookup`）は private で許可されるので `learning_allowed` を運ばない。
 - 存在規約・欠落時の扱いは `QueryCandidates.secure` と同じ: `secure_flag`
-  広告 TIP は毎 `ObserveTypo` で必ず送り、欠落は §12.12.2-4 のとおり deny
-  （fail-closed）。v1 fallback の対象外。
+  広告 TIP は毎 `ObserveTypo` で `secure` / `learning_allowed` を必ず送り、
+  欠落は §12.12.2-4 のとおり該当軸を deny（fail-closed: `learning_allowed`
+  不明 ⇒ 学習を抑止）。v1 fallback の対象外。
 
 ### 12.14 設定スキーマ拡張
 

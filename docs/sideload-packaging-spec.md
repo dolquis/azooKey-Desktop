@@ -943,7 +943,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
 | `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
 | `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 は `auto`/`cpu`/`cuda` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
-| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細 | M24 | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
+| `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
 | `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル / 一般 | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |

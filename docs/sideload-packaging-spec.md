@@ -1436,24 +1436,28 @@ LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
     if (!CrashReporting::DumpAllowed()) return EXCEPTION_CONTINUE_SEARCH;
 
     // 保存先は %LOCALAPPDATA%\azooKey\crashes\ に統一（§8.2）。GetTempPath は使わない。
+    // NextDumpPath() はディレクトリの存在を保証してからパスを返す（起動時にも作成済み。
+    // 新規プロファイル / アンインストール後の掃除で親ディレクトリが無くても dump を失わない。§8.2）。
     std::wstring path = CrashReporting::NextDumpPath();  // azookey-<module>-<UTCstamp>-<pid>.dmp
 
+    bool wrote = false;
     HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hFile != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION mei{
             GetCurrentThreadId(), ep, FALSE
         };
-        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
-                          hFile,
-                          kAzooKeyDumpType,
-                          &mei, nullptr, nullptr);
+        wrote = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
+                                  hFile,
+                                  kAzooKeyDumpType,
+                                  &mei, nullptr, nullptr);
         CloseHandle(hFile);
     }
     CrashReporting::RotateDumps();  // 保持上限を適用（§8.2）
-    // 自前ダンプ取得済み。OS 既定 WER による二重ダンプを避け、関連ハンドラ実行
-    // （通常はプロセス終了）へ進めるため EXCEPTION_EXECUTE_HANDLER を返す。
-    return EXCEPTION_EXECUTE_HANDLER;
+    // 自前 dump を書けたときのみ EXCEPTION_EXECUTE_HANDLER（OS 既定 WER の二重ダンプを避け
+    // プロセス終了へ）。ディレクトリ欠落・書き込み失敗で dump を残せなかったときは OS 既定
+    // フォールバックを潰さないよう EXCEPTION_CONTINUE_SEARCH を返す（§8.2）。
+    return wrote ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
 }
 
 // main で
@@ -1469,6 +1473,12 @@ TIP DLL は in-proc なのでアプリ側を巻き込まないよう **設定し
 - **保存先**: `%LOCALAPPDATA%\azooKey\crashes\`。ファイル名は
   `azookey-<module>-<UTC: yyyyMMddTHHmmssZ>-<pid>.dmp`（`<module>` は `host` /
   `settings`）。`GetTempPath` 直下への書き込み（旧 §8.1）は廃止し、保存先を一本化する。
+- **ディレクトリ作成（必須）**: クラッシュディレクトリは **起動時**（`CrashReporting` 初期化 /
+  `SetUnhandledExceptionFilter` 設定時）に作成し、`NextDumpPath()` も呼び出しのたびに存在を
+  冪等に保証する（`SHCreateDirectoryEx` 等で再帰作成）。新規プロファイルやアンインストール後の
+  掃除で親ディレクトリが無い状態でも初回 dump を失わないため。ディレクトリ欠落・書き込み失敗で
+  自前 dump を残せなかった場合、`UnhandledFilter` は `EXCEPTION_CONTINUE_SEARCH` を返して OS 既定
+  フォールバックを潰さない（§8.1。自前 dump 取得時のみ `EXCEPTION_EXECUTE_HANDLER`）。
 - **保持上限（ローテーション）**: 既定で **最新 5 個 / 合計 50 MB / 30 日**を上限とし、
   いずれかを超えた古いダンプから削除する。`module` をまたいだ全体集合に対して適用する。
 - **適用タイミング**: Host / Settings 起動時に一度、および各ダンプ書き込み直後

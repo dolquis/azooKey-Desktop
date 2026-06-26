@@ -1,5 +1,37 @@
 cmake_minimum_required(VERSION 3.21)
+
+# --- Compiler cache (sccache/ccache) -----------------------------------------
+# Detected before project() so that, on MSVC, we can pick a debug-information
+# format compatible with the cache. sccache/ccache cannot cache objects that
+# share a PDB (the MSVC /Zi default); embedding debug info in the object
+# (/Z7 via CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded) restores cache hits.
+# Opt out with -DAZOOKEY_USE_COMPILER_CACHE=OFF. CI does not ship sccache, so
+# this stays a no-op there (the Release PDB artifact is unaffected).
+option(AZOOKEY_USE_COMPILER_CACHE
+       "Use sccache/ccache as the compiler launcher when found on PATH" ON)
+if(AZOOKEY_USE_COMPILER_CACHE AND NOT DEFINED CMAKE_CXX_COMPILER_LAUNCHER)
+  find_program(AZOOKEY_COMPILER_CACHE NAMES sccache ccache)
+  if(AZOOKEY_COMPILER_CACHE AND POLICY CMP0141)
+    cmake_policy(SET CMP0141 NEW)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+        "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+  endif()
+endif()
+
 project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
+
+# Emit compile_commands.json in the build dir for clang-tidy and editor tooling
+# (gitignored). Kept separate from the committed clang-cl DB used by clangd.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Guard on the option too: find_program() caches AZOOKEY_COMPILER_CACHE, so a
+# build dir first configured with the cache ON would otherwise keep setting the
+# launcher even after re-configuring with -DAZOOKEY_USE_COMPILER_CACHE=OFF.
+if(AZOOKEY_USE_COMPILER_CACHE AND AZOOKEY_COMPILER_CACHE)
+  set(CMAKE_C_COMPILER_LAUNCHER "${AZOOKEY_COMPILER_CACHE}")
+  set(CMAKE_CXX_COMPILER_LAUNCHER "${AZOOKEY_COMPILER_CACHE}")
+  message(STATUS "Compiler cache enabled: ${AZOOKEY_COMPILER_CACHE}")
+endif()
 
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)

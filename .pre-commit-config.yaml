@@ -1,0 +1,45 @@
+# Pre-commit hooks wired to locally-installed tools (LLVM + scoop), so no hook
+# repos are fetched over the network — consistent with the project's offline
+# build principle. These mirror the lightweight CI gates (format, secret scan,
+# workflow lint) so problems surface before pushing.
+#
+#   pre-commit install         # enable the git hook (one time)
+#   pre-commit run --all-files # run across the whole tree (or: just lint)
+#
+# Tool sources: clang-format/LLVM, gitleaks/yamlfmt/taplo/actionlint via scoop.
+minimum_pre_commit_version: "3.0.0"
+repos:
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format (C/C++)
+        entry: clang-format
+        args: [-i]
+        language: system
+        types_or: [c, c++]
+        exclude: '^legacy/'
+
+      - id: gitleaks
+        name: gitleaks (staged secret scan)
+        entry: gitleaks git --staged --no-banner --redact
+        language: system
+        pass_filenames: false
+
+      - id: actionlint
+        name: actionlint (GitHub workflows)
+        entry: actionlint
+        language: system
+        files: '^\.github/workflows/.*\.(yml|yaml)$'
+
+      - id: yamlfmt
+        name: yamlfmt
+        entry: yamlfmt
+        language: system
+        types: [yaml]
+        exclude: '^legacy/'
+
+      - id: taplo
+        name: taplo fmt (TOML)
+        entry: taplo fmt
+        language: system
+        types: [toml]

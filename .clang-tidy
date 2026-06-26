@@ -1,0 +1,32 @@
+---
+# Static analysis config for the LLVM clang-tidy in the toolchain. Pairs with
+# .clang-format. Run via `just tidy` (consumes build/<preset>/compile_commands.json).
+#
+# Adoption is staged (dev-infra spec M38: clang-tidy is optional / not yet a
+# required CI gate). The check set is intentionally conservative — correctness
+# and bug-prone families, with noisy or purely stylistic checks disabled — so
+# it gives signal without a wall of findings on existing code. Tighten over time.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-slicing,
+  misc-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-using,
+  modernize-use-emplace,
+  performance-*,
+  readability-misleading-indentation,
+  readability-redundant-*,
+  -bugprone-easily-swappable-parameters,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -misc-non-private-member-variables-in-classes,
+  -performance-avoid-endl
+WarningsAsErrors: ''
+# Only diagnose headers under our own modules; skips _deps/ (FetchContent) and legacy/.
+HeaderFilterRegex: '.*[/\\](core|ipc|learning|inference-host|tsf-tip|bench)[/\\].*'
+FormatStyle: file
+...

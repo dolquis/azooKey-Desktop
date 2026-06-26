@@ -332,6 +332,7 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
     "disableLearningInPrivateMode": true,
     "disableExternalAIInPrivateMode": true,
     "redactLogs": true,
+    "crashReportConsent": "local",
     "secureApps": [],
     "secureUrlPatterns": [],
     "privateApps": [],
@@ -346,6 +347,11 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 `privacy.custom` は `mode = custom` のときのみ参照する（他モードでは無視する）。
 各軸の既定は §5.2 の private 相当の安全側に揃え、欠落キーは schema 既定で補完される。
 `custom` の解決順・不変条件（`aiCandidate = false` で `externalAi` を強制 OFF）は §5.2 を正典とする。
+
+`crashReportConsent`（M33）は WER クラッシュダンプの収集・送信同意を表す。本キーは
+schema をここで正典として定義し、値の意味（`off` / `local` / `upload` の挙動・ダンプ
+最小化・保持運用）は `docs/sideload-packaging-spec.md` §8.3 を正典とする。既定 `local`
+はローカル保存のみで自動送信しない（§2「ローカル完結」「明示同意なしにクラウド送信しない」）。
 
 schema fragment（`properties.privacy` への追加）:
 
@@ -382,6 +388,11 @@ schema fragment（`properties.privacy` への追加）:
       "disableLearningInPrivateMode": { "type": "boolean", "default": true },
       "disableExternalAIInPrivateMode": { "type": "boolean", "default": true },
       "redactLogs": { "type": "boolean", "default": true },
+      "crashReportConsent": {
+        "type": "string",
+        "enum": ["off", "local", "upload"],
+        "default": "local"
+      },
       "secureApps": {
         "type": "array",
         "items": { "type": "string" },

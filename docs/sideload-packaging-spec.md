@@ -1344,9 +1344,34 @@ GUID 実値は M33 着手時に `uuidgen` で確定。
 | 3002 | IpcCancel | target_request_id |
 | 4000 | InferenceStart | request_id, backend, kana_len |
 | 4001 | InferenceEnd | request_id, n_candidates, latency_ms |
-| 5000 | LearningObserve | reading, surface |
-| 5001 | LearningForget | reading, surface |
-| 9000 | Error | source, message, hr |
+| 5000 | LearningObserve | reading_len, surface_len |
+| 5001 | LearningForget | reading_len, surface_len |
+| 9000 | Error | source, error_code, hr |
+
+> 上表のフィールドは長さ・件数・enum・数値・GUID・ID のみで構成し、入力本文を
+> 含めない。本文を載せない理由と禁止対象は §7.2.1 を正典とする。
+
+#### 7.2.1 本文を ETW に載せない（redaction 規律）
+
+ETW は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシー正典が適用
+される観測経路である。ETW トレース（`.etl`）は WPA で誰でも閲覧でき、secure /
+`privacy.redactLogs` の状態に応じて**事後にフィルタできない**（消費側に redaction
+ゲートが無い）。そのため本文系フィールド（`reading` / `surface` / `candidate.text` /
+確定文字列 / Magic Conversion prompt / typo の `raw_keys` 等）は **build / env / mode に
+よらず一切 ETW へ書き込まない**。構造化ログ（`logs/*.jsonl`）が §7.6 優先順位 4 の
+opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を持たない。
+
+- 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
+  載せていたが §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
+  `surface_len`（整数）で記録し、内容は復元できないようにする。
+- `9000 Error` は自由文 `message` を載せず、`source`（モジュール識別子）/ `error_code`
+  （`docs/dev-infrastructure-spec.md` §7.4 の 3 カテゴリ enum）/ `hr`（HRESULT）のみとする。
+  例外メッセージ等の自由文は §7.6 を適用済みの構造化ログ側へ出し、ETW には載せない。
+- `EtwLogger`（§7.3）は本文型の引数を受ける API を**持たない**。長さ・件数・enum・
+  数値・GUID・ID のみを受ける型シグネチャに限定し、本文混入をコンパイル時に防ぐ。
+- ETW は本文を含まないメタ情報のみのため、レイテンシ trace（§7.6 redact 対象外）と
+  同じく追加の同意を要さない。WPR トレース（`.etl`）の採取・共有はユーザー / 開発者の
+  明示操作（§7.4）であり、その成果物にも本文は含まれない。
 
 ### 7.3 ラッパ
 
@@ -1376,12 +1401,23 @@ public:
 ### 8.1 MiniDumpWriteDump
 
 ```cpp
-LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
-    wchar_t path[MAX_PATH];
-    GetTempPathW(MAX_PATH, path);
-    wcscat_s(path, L"azookey-crash.dmp");
+// ダンプ種別: 本文（入力バッファ・候補・学習データ・API キー）を取り込みやすい
+// データセグメント / フルメモリ / ヒープは含めず、原因解析に要る最小集合に限定する。
+// 詳細な根拠と禁止フラグは §8.3 を正典とする。
+constexpr MINIDUMP_TYPE kAzooKeyDumpType = static_cast<MINIDUMP_TYPE>(
+    MiniDumpNormal |                  // スタック + モジュール一覧（最小）
+    MiniDumpWithThreadInfo |          // スレッド状態（本文を含まない）
+    MiniDumpWithUnloadedModules |     // アンロード済みモジュール
+    MiniDumpIgnoreInaccessibleMemory);
 
-    HANDLE hFile = CreateFileW(path, GENERIC_WRITE, 0, nullptr,
+LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
+    // crashReportConsent=off ならダンプを書かずに既定処理へ（§8.3）。
+    if (!CrashReporting::DumpAllowed()) return EXCEPTION_EXECUTE_HANDLER;
+
+    // 保存先は %LOCALAPPDATA%\azooKey\crashes\ に統一（§8.2）。GetTempPath は使わない。
+    std::wstring path = CrashReporting::NextDumpPath();  // azookey-<module>-<UTCstamp>-<pid>.dmp
+
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hFile != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION mei{
@@ -1389,10 +1425,11 @@ LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
         };
         MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
                           hFile,
-                          MiniDumpWithDataSegs,
+                          kAzooKeyDumpType,
                           &mei, nullptr, nullptr);
         CloseHandle(hFile);
     }
+    CrashReporting::RotateDumps();  // 保持上限を適用（§8.2）
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -1404,12 +1441,45 @@ Host / Settings は明示的に `SetUnhandledExceptionFilter` で設定。
 TIP DLL は in-proc なのでアプリ側を巻き込まないよう **設定しない**。
 代わりに `__try`/`__except` で IPC ループ等のスコープを囲む。
 
-### 8.2 クラッシュレポート送信
+### 8.2 保存先・保持・削除運用
 
-Phase 7 では `%LOCALAPPDATA%\azooKey\crashes\` に保存のみ。
-送信先 UI は将来課題（GitHub Issue 自動起票はプライバシ懸念で見送り）。
+- **保存先**: `%LOCALAPPDATA%\azooKey\crashes\`。ファイル名は
+  `azookey-<module>-<UTC: yyyyMMddTHHmmssZ>-<pid>.dmp`（`<module>` は `host` /
+  `settings`）。`GetTempPath` 直下への書き込み（旧 §8.1）は廃止し、保存先を一本化する。
+- **保持上限（ローテーション）**: 既定で **最新 5 個 / 合計 50 MB / 30 日**を上限とし、
+  いずれかを超えた古いダンプから削除する。`module` をまたいだ全体集合に対して適用する。
+- **適用タイミング**: Host / Settings 起動時に一度、および各ダンプ書き込み直後
+  （`RotateDumps()`）に実行する。クラッシュ時の `UnhandledFilter` 内処理は最小限に保つ。
+- **アンインストール時**: MSIX（§1.4）・手動アンインストール経路ともに当該ディレクトリを
+  削除し、ダンプを残骸として残さない（`compat-test` の残骸 0 smoke 対象に含める）。
 
-設定アプリ「詳細 → クラッシュレポート」から手動でアーカイブして添付。
+### 8.3 ダンプ内容の最小化と同意（redaction / consent）
+
+クラッシュダンプはメモリ断片を含むため、入力本文・候補・学習データ（`reading` /
+`surface`）・OpenAI API キーを意図せず取り込み得る。これを設計原則
+（`docs/privacy-and-secure-input-spec.md` §2「ローカル完結」「明示同意なしにクラウド
+送信しない」「fail closed」）に沿って最小化する。
+
+- **ダンプ種別の最小化（§8.1）**: `MiniDumpWithDataSegs`（データセグメント = グローバル /
+  静的バッファ）・`MiniDumpWithFullMemory`・`MiniDumpWithProcessThreadData`・
+  `MiniDumpWithHandleData` は**使わない**。これらは入力バッファ・学習データ・API キーを
+  取り込む可能性が高い。スタックメモリには確定前の入力断片が残り得るが、原因解析に必須の
+  ため許容し、データセグメント / ヒープ / フルメモリの全面取り込みは行わないことで露出面を
+  抑える。
+- **同意キー** `privacy.crashReportConsent`（enum、既定 `local`。schema 正典は
+  `docs/privacy-and-secure-input-spec.md` §7）:
+  - `off` — ダンプを書かない（`UnhandledFilter` は `DumpAllowed()==false` で素通り）。
+  - `local` — `%LOCALAPPDATA%` 配下に保存のみ。自動送信は一切しない（Phase 7 の実装範囲・
+    既定）。
+  - `upload` — 将来の送信経路用に予約。送信経路が未実装の Phase 7 では `local` と同義に
+    扱い送信は発生しない。送信経路導入時に **one-shot の明示再同意**を要求する（未知 enum 値も
+    `local` 相当にフォールバックする。前方互換は §3.6 拡張方針）。
+- **送信は常に明示操作**: 自動アップロード・GitHub Issue 自動起票は行わない。ユーザーは
+  設定アプリ「詳細 → クラッシュレポート」から、対象ダンプを選んで手動でアーカイブ・添付
+  する（§8.2 の保存ディレクトリを開く）。
+- **要約の redaction**: M44 診断 ZIP の `crash-summary.txt` は
+  `docs/dev-infrastructure-spec.md` §12.5 のとおり **WER ダンプの要約のみ**を含め、
+  ダンプ本体・スタック上の文字列バッファを含めない。本書 §8 と §12.5 は同一方針とする。
 
 ## 9. DPAPI 学習データ暗号化（M34）
 

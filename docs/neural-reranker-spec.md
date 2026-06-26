@@ -232,12 +232,27 @@ PyTorch / scikit-learn で学習 → ONNX export。配置先:
 
 ### 6.1 データ収集
 
-- M54 の `correction_events` から自動生成（オフライン）
-- 個人ユーザーの学習データを **送信せず**、ローカルで個人 fine-tune（v2 で
-  検討）
-- bundled モデルは公開コーパスから生成（青空文庫 / CC0・MIT 互換の
-  IME 公開データセット）。M52 §11 と同じく CC BY-SA / GFDL 系
-  （Wikipedia 等）は採用しない
+- **露出トレース（負例・正例の源、確定時に記録）**: 負例（§6.2）は確定時に
+  表示されていた候補集合を必要とする。これは IPC `CommitObservation(reading,
+  chosen, shown, left_context, timestamp_ms)` の `shown[]` に存在するが、既存の
+  集約学習ストア `learning.tsv`（M54、`user-learning-enhancement-spec.md` §8）には
+  **永続化されない**（同ストアは reading / surface / weight / context_hash 等のみ）。
+  そのため reranker 学習では、確定時に
+  `(left_context_hash, reading, chosen_surface, shown_surfaces[], 各候補の features,
+  timestamp)` を記録する**専用の露出トレース**をローカルへ永続化する
+  （`learning.tsv` とは別ファイル。例: `%LOCALAPPDATA%\azooKey\data\reranker_trace.jsonl`）。
+  - secure モード中は記録しない（§13）。`shown[]` が利用できる確定時にのみ書く。
+  - 露出トレースが**負例・正例ラベルの正典**。`learning.tsv` は scalar 特徴
+    （`user_frequency` / `recency_score`）の供給に使うが、露出情報は持たない。
+  - 露出トレースは context を raw で持たず `left_context_hash`（§8.1 と同方式）で
+    保持し、プライバシー方針（§13）を `learning.tsv` と揃える。
+- **強負例**: M54 の `correction_events` から自動生成（オフライン）。訂正の
+  reject/accept ペアは learning ストア側に持つため露出トレース無しでも得られる。
+- 個人ユーザーの学習データを **送信せず**、ローカルで個人 fine-tune（v2 で検討）。
+- bundled モデルは公開コーパスから生成（青空文庫 / CC0・MIT 互換の IME 公開
+  データセット）。M52 §11 と同じく CC BY-SA / GFDL 系（Wikipedia 等）は採用しない。
+  bundled 生成では露出（chosen / shown）を公開コーパスの正解 + distractor 候補から
+  **合成的に構成**する（実ユーザーの露出トレースは使わない）。
 
 ### 6.2 ラベリングプロトコル（決定）
 
@@ -247,7 +262,7 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 | ラベル | 定義 | 採否条件 |
 |---|---|---|
 | 正例（`label`=1） | 同一変換機会でユーザーが確定した候補 | 候補ウィンドウに**表示された**こと。確定が即時取り消し（直後の undo / 再変換）された場合は除外 |
-| 負例（`label`=0） | 同一機会で表示されたが選ばれなかった候補 | **表示された候補のみ**を対象とする（表示されなかった候補は負例にしない＝露出バイアスを入れない）。1 機会あたり負例は上位 N（既定 `trainNegativesPerSample`=8）まで |
+| 負例（`label`=0） | 同一機会で表示されたが選ばれなかった候補 | **露出トレース（§6.1）の `shown[]` を源とする**（集約 `learning.tsv` には露出情報が無いため負例は生成不可）。表示された候補のみを対象（表示されなかった候補は負例にしない＝露出バイアスを入れない）。1 機会あたり負例は上位 N（既定 `trainNegativesPerSample`=8）まで |
 | 強負例（`label_strength`=`strong_negative`） | 訂正イベントで reject され別候補へ訂正された候補 | M54 `correction_events` 由来（§6.1）。`rejected_candidate` と `accepted_candidate` のペアで保持。確定後**一定時間内**（既定 `correctionWindowMs`=10000）の訂正のみ採用 |
 
 追加の採否・整形ルール:

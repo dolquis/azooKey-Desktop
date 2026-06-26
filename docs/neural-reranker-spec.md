@@ -252,12 +252,21 @@ M52 ベンチの精度評価を歪めるため、採否条件まで spec で固�
 
 追加の採否・整形ルール:
 
-- **重複排除**: 同一 `(normalize(left_context), input, candidate)` のサンプルは
-  集約し、label を多数決でまとめ、出現回数を frequency 系特徴の補強に使う。
+- **重複排除**: dedup キーは文脈源によって使い分ける。
+  - **個人（M54 由来）データ**: M54 / M46 は raw `left_context` を永続化せず
+    `context_hash` のみを保持する（`user-learning-enhancement-spec.md` §8.1、
+    SHA-256 上位 4 bytes・復元不能）。したがって dedup キーは
+    `(context_hash, input, candidate)` とする。`context_hash` は衝突を許容する
+    弱い 4-byte シグネチャ（同 §8.1）のため、集約は**近似的**であることを許容する。
+  - **bundled コーパス生成（§6.1）**: 公開コーパスから生成するため raw 文脈が
+    得られる。`(normalize(left_context), input, candidate)` を使う。
+  - 集約後、label を多数決でまとめ、出現回数を frequency 系特徴の補強に使う。
 - **滞留時間ゲート**: 候補ウィンドウ表示から確定までが極端に短い（誤確定の疑い、
   既定 `minDwellMs`=120 未満）サンプルは正例から除外する。
-- **セッション境界**: `left_context` はその確定時点の**確定済みテキスト**を使い、
-  後続編集の影響を混ぜない（§7 推論時の context 定義と一致させる）。
+- **セッション境界**: bundled コーパス生成では `left_context` をその確定時点の
+  **確定済みテキスト**とし、後続編集の影響を混ぜない（§7 推論時の context 定義と
+  一致させる）。個人データでは M54 が確定時点の `context_hash` を保持するため
+  同等の境界が保たれる（raw 文脈は使わない）。
 - **クラス不均衡**: 正例 1 に対し負例が多くなるため、学習時に負例をサブサンプル
   （または class weight）で調整する。比率は M52 ベンチで校正する。
 - **強負例の loss 重み**: 強負例は通常負例より大きい loss 重み（既定 2.0）を与える。
@@ -307,9 +316,10 @@ M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
   （`docs/modernbert-ja-scoring-spec.md` §5.4）の circuit breaker と同じ runtime
   安全パターンであり、ユーザー設定 `tinyNeuralEnabled` とは独立した内部フラグである。
 - **部分適用**: 入力 NaN / Inf を含む候補は当該候補のみ skip し、他候補には rerank を
-  適用する（§7.1）。全候補が skip された場合は順序維持で返す。
+  適用する（§7.1）。全候補が skip された場合は `reason=invalid_input` で順序維持して
+  返す（circuit breaker の連続失敗にはカウントしない＝入力データ起因のため）。
 - **fallback は失敗ではなく既定パス**: 上記いずれの fallback も
-  `tiny_used=false, reason=<load_failed | timeout | infer_error | circuit_open | disabled>`
+  `tiny_used=false, reason=<load_failed | timeout | infer_error | invalid_input | circuit_open | disabled>`
   を構造化ログに記録し、M52 ベンチの `fallback_rate`
   （`docs/conversion-quality-benchmark-spec.md`）集計に使う。`infer_error` は circuit
   breaker が開く前の単発推論例外にも用い（M57 §5.4 の `infer_error` と整合）、

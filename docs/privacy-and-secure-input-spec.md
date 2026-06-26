@@ -352,6 +352,10 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 schema をここで正典として定義し、値の意味（`off` / `local` / `upload` の挙動・ダンプ
 最小化・保持運用）は `docs/sideload-packaging-spec.md` §8.3 を正典とする。既定 `local`
 はローカル保存のみで自動送信しない（§2「ローカル完結」「明示同意なしにクラウド送信しない」）。
+**導入 M の区別**: 本 `crashReportConsent` のみ M33（ETW/WER）で先行導入し、他の `privacy.*`
+subfield（`mode` / `custom` / secure 各軸）は M46 で導入する。M33 では `privacy` object に
+`crashReportConsent` を既定値付きで加算的に追加する（`docs/sideload-packaging-spec.md` §3.6
+「予定済み top-level 拡張」と整合）。
 
 schema fragment（`properties.privacy` への追加）:
 

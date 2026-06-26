@@ -984,8 +984,12 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   `app-profile-spec.md` §4 と同方針）。
 - **予定済み top-level 拡張**（現行 `mvp-settings.schema.json` には未統合。各 spec の fragment が確定形で、
   統合 PR で本ファイルへマージする）:
-  - `privacy`（M46。プライバシー / secure 各軸。`docs/privacy-and-secure-input-spec.md` §7 が schema
-    fragment を正典とする）。
+  - `privacy`（`docs/privacy-and-secure-input-spec.md` §7 が schema fragment を正典とする）。
+    object 全体（`mode` / `custom` / secure 各軸）の統合は **M46** だが、**`crashReportConsent`
+    subfield のみ M33（ETW/WER）で先行導入**する。M33 受け入れ条件が
+    `privacy.crashReportConsent = off` を要求するため（§8.3）、M33 統合 PR で `privacy` object に
+    `crashReportConsent` を既定値付きで追加し（schema とコードを同一 PR で）、残り subfield は M46 で
+    加算する（加算的拡張は本節「拡張方針」）。subfield ごとの導入 M は privacy spec §7 を正典とする。
   - `profilesByApp`（M48。前面アプリ別プロファイル。`docs/app-profile-spec.md` §4 が schema fragment を
     正典とする。既存 `promptPrefixByApp` との統合は同 §6）。
 - **§3.2 ナビゲーションとの整合**: §3.2 はペイン割り当ての概観であり、キーの正典一覧は本節とする。
@@ -1411,8 +1415,10 @@ constexpr MINIDUMP_TYPE kAzooKeyDumpType = static_cast<MINIDUMP_TYPE>(
     MiniDumpIgnoreInaccessibleMemory);
 
 LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
-    // crashReportConsent=off ならダンプを書かずに既定処理へ（§8.3）。
-    if (!CrashReporting::DumpAllowed()) return EXCEPTION_EXECUTE_HANDLER;
+    // crashReportConsent=off: azooKey のダンプを書かず OS 既定処理（既定の
+    // UnhandledExceptionFilter = WER 等）へ委ねる。次フィルタ / 既定へ進める
+    // 戻り値は EXCEPTION_CONTINUE_SEARCH（§8.3）。
+    if (!CrashReporting::DumpAllowed()) return EXCEPTION_CONTINUE_SEARCH;
 
     // 保存先は %LOCALAPPDATA%\azooKey\crashes\ に統一（§8.2）。GetTempPath は使わない。
     std::wstring path = CrashReporting::NextDumpPath();  // azookey-<module>-<UTCstamp>-<pid>.dmp
@@ -1430,6 +1436,8 @@ LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
         CloseHandle(hFile);
     }
     CrashReporting::RotateDumps();  // 保持上限を適用（§8.2）
+    // 自前ダンプ取得済み。OS 既定 WER による二重ダンプを避け、関連ハンドラ実行
+    // （通常はプロセス終了）へ進めるため EXCEPTION_EXECUTE_HANDLER を返す。
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -1468,7 +1476,12 @@ TIP DLL は in-proc なのでアプリ側を巻き込まないよう **設定し
   抑える。
 - **同意キー** `privacy.crashReportConsent`（enum、既定 `local`。schema 正典は
   `docs/privacy-and-secure-input-spec.md` §7）:
-  - `off` — ダンプを書かない（`UnhandledFilter` は `DumpAllowed()==false` で素通り）。
+  - `off` — azooKey のダンプを書かず、OS 既定処理（既定の `UnhandledExceptionFilter` =
+    WER 等）へ委ねる。`UnhandledFilter` は `DumpAllowed()==false` のとき
+    **`EXCEPTION_CONTINUE_SEARCH`** を返して既定フィルタへ進める（自前 dump 生成のみ抑止し、
+    OS レベルの WER 動作はユーザーの OS 設定に委ねる。`EXCEPTION_EXECUTE_HANDLER` は
+    WER を迂回してプロセス終了へ進む値であり `off` の意図と逆になるため用いない）。
+    なお自前 dump を書いた経路は二重ダンプ回避のため `EXCEPTION_EXECUTE_HANDLER` を返す（§8.1）。
   - `local` — `%LOCALAPPDATA%` 配下に保存のみ。自動送信は一切しない（Phase 7 の実装範囲・
     既定）。
   - `upload` — 将来の送信経路用に予約。送信経路が未実装の Phase 7 では `local` と同義に

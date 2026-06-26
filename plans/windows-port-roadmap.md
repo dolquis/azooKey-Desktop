@@ -956,7 +956,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 本番環境の観測性とクラッシュ収集。
 - **前提**: M28 完了。
 - **変更対象**: `core/src/EtwLogger.cpp`（新規）、`inference-host/src/CrashHandler.cpp`
-  （新規、`SetUnhandledExceptionFilter`）。
+  （新規、`SetUnhandledExceptionFilter`）、`settings/mvp-settings.schema.json`
+  （`privacy.crashReportConsent` subfield を先行導入。§3.6 / `privacy-and-secure-input-spec.md` §7）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §7、§8。
 - **受け入れ条件**:
   - `wpr -start` でトレース取得、`wpa` で Event ID が見える

@@ -2109,18 +2109,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `inference-host/src/Dispatcher.cpp`（rerank フェーズに統合）、
   `docs/neural-reranker-spec.md`（新規）。
 - **実装範囲**: `docs/neural-reranker-spec.md`。
-  - 特徴量: left_context_embedding / reading_embedding /
-    candidate_embedding / zenzai_score / dictionary_score / user_frequency /
-    recency_score / typo_confidence / app_profile_score / candidate_length /
-    segment_count / is_named_entity / is_user_dict / is_neologism /
-    is_typo_corrected
+  - 特徴量（v1 = embedding を除く 12 種）: zenzai_score / dictionary_score /
+    user_frequency / recency_score / typo_confidence / app_profile_score /
+    candidate_length / segment_count / is_named_entity / is_user_dict /
+    is_neologism / is_typo_corrected。
+    left_context_embedding / reading_embedding / candidate_embedding は
+    **v2 以降**（embedding 導入時）の追加特徴で v1 には含めない
+    （spec §4 / §4.1 / §5.2 の `features_v1`=12 次元固定と整合）
   - モデル: v1 = MLP reranker、v2 候補 = Mini Transformer
   - 学習データ: 正例 = 確定候補、負例 = 表示されたが選ばれなかった候補、
     強い負例 = 訂正イベント
   - ONNX Runtime CPU 優先、timeout 10〜20ms、failure 時は reranker なしで
     返す fallback
-  - **embedding 供給方針を spec で固定**（ModernBERT 共用 / 独立小型
-    encoder のいずれかを M56 着手前に決定）
+  - **embedding 供給方針は `docs/neural-reranker-spec.md` §4.1 で決定済み**
+    （v1 = 手作り特徴量のみ / Option C、v2 以降 = 独立小型 encoder / Option A の
+    段階導入。M57 ModernBERT 共用 / Option B は不採用）。同 §4.1 を正典とする
 - **受け入れ条件**:
   - M52 ベンチで top1 が baseline 比 +3% 以上
   - p95 latency 悪化が +10ms 以内

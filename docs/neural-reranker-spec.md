@@ -102,10 +102,15 @@ shape とする（`[batch, 12]`）。FeatureExtractor は ONNX メタ情報
 - → **不採用**（理由は下記）
 
 **Option C**: 計算により回避（手作り特徴量）
-- candidate / reading の char n-gram + reading-candidate edit distance
-  などの手作り特徴量で代替し、embedding を使わない
+- embedding ベクトルを使わず、§4 / §5.2 の既存 **12 次元 `features_v1`**
+  （scalar 8 + flag 4）のみで構成する。これらは `candidate_length` /
+  `segment_count` / `typo_confidence` など**それ自体が手作り特徴量**であり、
+  v1 はこの 12 次元に固定する（embedding 代替の追加次元は導入しない）。
+- char n-gram / reading-candidate edit distance などの追加手作り特徴量は
+  **v1 範囲外**。導入する場合は `features_v1.x` として次元を versioning し、
+  ONNX schema（input 名・shape）を更新する（後方互換は §5.2 の version 切替に従う）。
 - ONNX は最小 MLP のみ（embedder 不要）、推論軽量、CPU で完結
-- → **v1 で採用**（§5.2 / §10）
+- → **v1 で採用**（§5.2 / §10）。v1 の入力は 12 次元固定
 
 **Option B（ModernBERT 共用）を不採用とする理由**（M57 spec と整合）:
 
@@ -294,8 +299,9 @@ M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
   1〜2ms で完了するため、timeout は**病的な stall（ONNX session の一時的ハング等）
   に対する安全弁**であり、通常 path の p95 を支配しない。これにより §12 の
   「p95 latency 悪化 +10ms 以内」を脅かさない。
-- **連続失敗の circuit breaker**: ONNX load 失敗・推論例外・timeout が**連続
-  `tinyNeuralFailureThreshold`=3 回**に達したら、当該セッションで reranker を
+- **連続失敗の circuit breaker**: ONNX load 失敗（`load_failed`）・推論例外
+  （`infer_error`）・timeout（`timeout`）が**連続 `tinyNeuralFailureThreshold`=3 回**
+  に達したら、当該セッションで reranker を
   **無効化**し（runtime 状態）、以降は fallback（candidate 順序維持）で返す。
   次回モデル再ロード / セッション再初期化で再有効化する。これは M57
   （`docs/modernbert-ja-scoring-spec.md` §5.4）の circuit breaker と同じ runtime
@@ -303,9 +309,11 @@ M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
 - **部分適用**: 入力 NaN / Inf を含む候補は当該候補のみ skip し、他候補には rerank を
   適用する（§7.1）。全候補が skip された場合は順序維持で返す。
 - **fallback は失敗ではなく既定パス**: 上記いずれの fallback も
-  `tiny_used=false, reason=<load_failed | timeout | circuit_open | disabled>` を
-  構造化ログに記録し、M52 ベンチの `fallback_rate`
-  （`docs/conversion-quality-benchmark-spec.md`）集計に使う。
+  `tiny_used=false, reason=<load_failed | timeout | infer_error | circuit_open | disabled>`
+  を構造化ログに記録し、M52 ベンチの `fallback_rate`
+  （`docs/conversion-quality-benchmark-spec.md`）集計に使う。`infer_error` は circuit
+  breaker が開く前の単発推論例外にも用い（M57 §5.4 の `infer_error` と整合）、
+  失敗が集計から漏れない。
 
 ## 8. 設定スキーマ
 

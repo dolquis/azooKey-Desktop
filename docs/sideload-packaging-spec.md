@@ -1027,13 +1027,16 @@ schema 自体は superset のまま変えない。
   `model.selectedPath` に commit する**（commit 後に「既定モデル使用中」と表示）。ファイル未配置の間は
   `selectedPath` を空のまま残し、UI は「モデル未配置（SimpleConverter 動作）」を表示する。これにより
   「既定モデルと表示しているのに Host にパスが渡らず fallback のまま」という不整合を防ぐ。
-- **root `backendPreference` を v1.0 UI に二重表示せず、保存時に root を移行する**: デバイス選択は
+- **root `backendPreference` を v1.0 UI に二重表示せず、保存時に UI 選択値で上書きする**: デバイス選択は
   `model.backendPreference` 一本に統一する（`model-management-spec.md` §5.2 の解決順は `model.backendPreference`
-  → root `backendPreference` → 既定 `auto`）。root を非表示にしたまま write-back で温存すると、ユーザーが直書きした
+  → root `backendPreference` → 既定 `auto`）。root を非表示のまま write-back で温存すると、ユーザーが直書きした
   root `cuda` 等が UI の「auto」選択を上書きし続け、UI からバックエンドを auto へ戻せない。これを防ぐため、**v1.0 UI が
-  デバイス選択を保存するとき、既存の root `backendPreference` / `epPreference` があれば `model.*` 側へ移行して
-  root キーを削除する**（`model.backendPreference` を単一の実効ソースにする）。移行は後述 write-back 規則の例外と
-  し、root レベルの当該 2 キーのみを対象とする（他キーは温存）。
+  デバイス選択を保存するとき、UI で選んだ値（`auto` を含む）を `model.backendPreference` に書き、root `backendPreference`
+  を削除する**。**root の隠れ値を `model.*` へ「移行」してはならない** —— 移行すると root `cuda` が
+  `model.backendPreference` に複製され、UI の `auto` 選択を上書きし続けてリセット不能になる（root 値を持ち越さず、
+  常に現在の UI 選択で上書きする）。これにより `model.backendPreference` が単一の実効ソースになる。この root
+  `backendPreference` 削除は後述 write-back 規則の例外（保持対象外）とする。`epPreference` は v1.0 UI が露出せず
+  device 選択にも従属しないため、root / `model.epPreference` とも温存する（直書き intent を壊さない。v1.x で管理）。
 
 #### v1.0（M11）の UI アクション（設定キーではないボタン）
 

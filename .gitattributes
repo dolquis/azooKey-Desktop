@@ -2,3 +2,7 @@
 # docs/conversion-quality-benchmark-spec.md §14.1）。
 bench/data/**.jsonl text eol=lf
 bench/data/PROVENANCE.json text eol=lf
+
+# Shell scripts must stay LF so they run in the Linux cloud sandbox
+# (Claude Code on the web). See docs/handoff/claude-code-web-setup.md.
+*.sh text eol=lf

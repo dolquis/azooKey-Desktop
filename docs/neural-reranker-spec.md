@@ -308,22 +308,34 @@ M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
   1〜2ms で完了するため、timeout は**病的な stall（ONNX session の一時的ハング等）
   に対する安全弁**であり、通常 path の p95 を支配しない。これにより §12 の
   「p95 latency 悪化 +10ms 以内」を脅かさない。
-- **連続失敗の circuit breaker**: ONNX load 失敗（`load_failed`）・推論例外
-  （`infer_error`）・timeout（`timeout`）が**連続 `tinyNeuralFailureThreshold`=3 回**
-  に達したら、当該セッションで reranker を
-  **無効化**し（runtime 状態）、以降は fallback（candidate 順序維持）で返す。
-  次回モデル再ロード / セッション再初期化で再有効化する。これは M57
-  （`docs/modernbert-ja-scoring-spec.md` §5.4）の circuit breaker と同じ runtime
+- **ロード失敗は即時無効化（breaker とは別経路）**: ONNX load 失敗時は §7.1 の
+  とおり当該セッションで reranker を**即時無効化**し、`reason=load_failed` で
+  fallback する。使えるセッションが残らず後続のリクエスト失敗を生まないため、
+  circuit breaker の連続カウントには**載せない**。次回モデル再ロード（設定変更・
+  Host 再起動）で再評価する。
+- **連続失敗の circuit breaker**: **runtime の失敗**（推論例外 `infer_error` /
+  timeout `timeout`）が**連続 `tinyNeuralFailureThreshold`=3 回**に達したら、当該
+  セッションで reranker を**無効化**し（runtime 状態）、以降は fallback（candidate
+  順序維持）で返す。次回モデル再ロード / セッション再初期化で再有効化する。これは
+  M57（`docs/modernbert-ja-scoring-spec.md` §5.4）の circuit breaker と同じ runtime
   安全パターンであり、ユーザー設定 `tinyNeuralEnabled` とは独立した内部フラグである。
+  `load_failed`（上記）と `invalid_input`（下記、入力起因）は breaker に載せない。
 - **部分適用**: 入力 NaN / Inf を含む候補は当該候補のみ skip し、他候補には rerank を
   適用する（§7.1）。全候補が skip された場合は `reason=invalid_input` で順序維持して
   返す（circuit breaker の連続失敗にはカウントしない＝入力データ起因のため）。
 - **fallback は失敗ではなく既定パス**: 上記いずれの fallback も
-  `tiny_used=false, reason=<load_failed | timeout | infer_error | invalid_input | circuit_open | disabled>`
+  `tiny_used=false, reason=<load_failed | timeout | infer_error | invalid_input | secure_mode | circuit_open | disabled>`
   を構造化ログに記録し、M52 ベンチの `fallback_rate`
-  （`docs/conversion-quality-benchmark-spec.md`）集計に使う。`infer_error` は circuit
-  breaker が開く前の単発推論例外にも用い（M57 §5.4 の `infer_error` と整合）、
-  失敗が集計から漏れない。
+  （`docs/conversion-quality-benchmark-spec.md`）集計に使う。各 reason の意味:
+  - `load_failed`: ONNX ロード失敗による即時無効化（上記）
+  - `timeout` / `infer_error`: runtime 失敗（circuit breaker にカウント）。
+    `infer_error` は breaker が開く前の単発推論例外にも用いる（M57 §5.4 と整合）
+  - `invalid_input`: 全候補が NaN / Inf で skip（入力起因、breaker 対象外）
+  - `secure_mode`: M46 secure による抑止（§13。ユーザー設定 off の `disabled` とは
+    区別し、プライバシー監査・fallback 分析で識別可能にする。M57 §9 の
+    `secure_mode` と整合）
+  - `circuit_open`: circuit breaker 作動中（runtime 状態）
+  - `disabled`: ユーザー設定 `tinyNeuralEnabled=false`
 
 ## 8. 設定スキーマ
 
@@ -409,7 +421,8 @@ final_score =
 
 ## 13. プライバシー
 
-- M46 secure 中は reranker を無効化（学習データへの影響を避ける）
+- M46 secure 中は reranker を無効化（学習データへの影響を避ける）。fallback は
+  `reason=secure_mode` で記録し（§7.2）、ユーザー設定 off の `disabled` と区別する
 - 学習データは個人ローカルでのみ収集（クラウド送信なし）
 - bundled モデルは公開コーパス由来のみ
 

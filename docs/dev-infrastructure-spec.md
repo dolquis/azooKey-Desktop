@@ -1068,7 +1068,7 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
-| D-014 | OpenAI 鍵が不要な構成（`aiBackend` が `none` / `local-zenzai`）、または `aiBackend=openai` かつ `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | `aiBackend=openai` だが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
+| D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | 前面アプリで TSF context 取得可**かつ §13.3.2 の既知の劣化 / workaround なし**（§13.2 の自動化レベルに関わらず、context が取れれば automation level では warning にしない） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
 
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
@@ -1077,13 +1077,26 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 アイコン（✅ / ⚠️ / ❌）に対応させる。任意データ・任意機密の「未設定」は
 正常系として扱い、`warning` を出さない。具体的には、クリーンインストール
 直後で学習・辞書が空（`UserDictionary::Load()` は欠損ファイルを空の成功
-ロードとして扱う）の D-010 / D-011 と、OpenAI 鍵を必要としない構成
-（`aiBackend` が `none` / `local-zenzai`）で復号対象の機密が無い D-014 は
-`ok` とする。ただし `aiBackend=openai` で `openAiApiKey` が空の場合は、
-選択中の AI backend が認証できないため D-014 を `warning` とする
+ロードとして扱う）の D-010 / D-011 と、OpenAI 鍵を要求する**実効バックエンド**が
+無い構成（global および全 app-profile の §4.2 実効 `aiBackend` が
+`none` / `local-zenzai`）で復号対象の機密が無い D-014 は
+`ok` とする。ただし global もしくはいずれかの app-profile の実効バックエンドが
+`openai`（§4.2 解決後）で `openAiApiKey` が空の場合は、
+当該 AI backend が認証できないため D-014 を `warning` とする
 （機能を選択したのに資格情報が欠落している状態）。`warning` / `error` は
 migration 要・読み込み不可・破損・**選択中機能の資格情報欠落**、または
 **設定済みの値が期待どおり復号 / 読込できない**場合に限る。
+
+**D-014 の「実効バックエンド」の定義**: global `settings.aiBackend` と、設定された
+全 `profilesByApp.*` プロファイルの `aiBackend` を `docs/app-profile-spec.md` §4.2 の
+解決規則（`auto` を global へ展開 → `PrivacyGate` による降格を適用）で評価した実効値の
+集合を指す。診断は前面アプリに依存しない**静的構成チェック**のため、その集合の
+**いずれか 1 つでも** `openai` に解決されれば「OpenAI 鍵を要求する」とみなす。逆に
+プロファイルが `aiBackend=openai` を宣言しても、privacy（`secure`、または `private` /
+`offline` / `custom` の外部 AI 無効）で §4.2 step 2–3 により `local-zenzai` / `none` へ
+降格する実効値は鍵を要求しない（D-014 の判定対象に含めない）。`profilesByApp` が未導入
+（M48 前）の構成では実効集合は global のみとなり、従来の D-014（global `aiBackend` のみで
+判定）と等価で後方互換である。
 同様に、`model.enabled=false`（SimpleConverter 固定。model-management-spec
 §モデル設定）は Zenzai を使わない意図的構成のため、D-007 / D-008 / D-009 は
 `ok`（該当なし）とし、モデル未選択・未ロード・`degraded_model` を `warning`

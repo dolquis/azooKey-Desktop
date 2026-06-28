@@ -51,6 +51,10 @@ class UserDictionary {
   // Remove the entry matching (word, ruby). Returns true if removed.
   bool Remove(const std::string& word, const std::string& ruby);
 
+  // Replace all entries. Duplicate (word, ruby) pairs follow Add semantics:
+  // later entries replace earlier entries.
+  void ReplaceAll(const std::vector<UserWord>& entries);
+
   // Look up all entries by reading. Returns empty vector if unknown.
   std::vector<UserWord> Lookup(const std::string& ruby) const;
 

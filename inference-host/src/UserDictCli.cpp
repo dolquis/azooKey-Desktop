@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <locale>
 #include <sstream>
@@ -128,6 +129,93 @@ std::string ListEntryTsvLine(const learning::UserWord& word) {
   oss << '\t';
   if (word.value) oss << *word.value;
   return oss.str();
+}
+
+std::string BulkOperationJsonLine(const char* op, bool ok, const std::string& path,
+                                  size_t affected, size_t skipped, bool dry_run,
+                                  const std::string& error = {}) {
+  auto object = BaseOperationJson(op, ok);
+  object.emplace("path", j::Value(path));
+  object.emplace(op == std::string("import") ? "imported" : "exported",
+                 j::Value(static_cast<uint64_t>(affected)));
+  if (op == std::string("import")) {
+    object.emplace("skipped", j::Value(static_cast<uint64_t>(skipped)));
+  }
+  object.emplace("via", j::Value("direct"));
+  if (dry_run) {
+    object.emplace("dry_run", j::Value(true));
+  }
+  if (!error.empty()) {
+    object.emplace("error", j::Value(error));
+  }
+  return j::Stringify(j::Value(std::move(object)));
+}
+
+void StripTrailingCarriageReturn(std::string* value) {
+  if (!value->empty() && value->back() == '\r') {
+    value->pop_back();
+  }
+}
+
+std::vector<std::string> SplitTsvLine(const std::string& line) {
+  std::vector<std::string> cells;
+  std::string cell;
+  std::istringstream iss(line);
+  while (std::getline(iss, cell, '\t')) {
+    cells.push_back(cell);
+  }
+  if (!line.empty() && line.back() == '\t') {
+    cells.emplace_back();
+  }
+  return cells;
+}
+
+bool ParseOptionalInt32Cell(const std::string& value, std::optional<int32_t>* out) {
+  if (value.empty()) {
+    out->reset();
+    return true;
+  }
+  int32_t parsed = 0;
+  if (!ParseInt32(value, &parsed)) {
+    return false;
+  }
+  *out = parsed;
+  return true;
+}
+
+bool ParseOptionalFiniteDoubleCell(const std::string& value, std::optional<double>* out) {
+  if (value.empty()) {
+    out->reset();
+    return true;
+  }
+  double parsed = 0.0;
+  if (!ParseFiniteDouble(value, &parsed)) {
+    return false;
+  }
+  *out = parsed;
+  return true;
+}
+
+std::optional<learning::UserWord> ParseUserWordTsvLine(std::string line) {
+  StripTrailingCarriageReturn(&line);
+  if (line.empty()) {
+    return std::nullopt;
+  }
+  auto cells = SplitTsvLine(line);
+  if (cells.size() < 2 || cells.size() > 5 || cells[0].empty() || cells[1].empty()) {
+    return std::nullopt;
+  }
+  cells.resize(5);
+
+  learning::UserWord word;
+  word.ruby = cells[0];
+  word.word = cells[1];
+  if (!ParseOptionalInt32Cell(cells[2], &word.cid) ||
+      !ParseOptionalInt32Cell(cells[3], &word.mid) ||
+      !ParseOptionalFiniteDoubleCell(cells[4], &word.value)) {
+    return std::nullopt;
+  }
+  return word;
 }
 
 learning::UserWord ToUserWord(const UserDictCliOptions& options) {
@@ -279,6 +367,63 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     return result;
   }
 
+  if (options.command == UserDictCliCommand::Import) {
+    std::ifstream input(options.path);
+    if (!input.is_open()) {
+      result.exit_code = 1;
+      result.error = "failed to open import TSV";
+      result.output_lines.push_back(
+          BulkOperationJsonLine("import", false, options.path, 0, 0, options.dry_run, result.error));
+      return result;
+    }
+
+    const auto before = dict.All();
+    std::string line;
+    size_t imported = 0;
+    size_t skipped = 0;
+    while (std::getline(input, line)) {
+      StripTrailingCarriageReturn(&line);
+      if (line.empty()) {
+        continue;
+      }
+      if (auto word = ParseUserWordTsvLine(line)) {
+        if (!options.dry_run) {
+          dict.Add(*word);
+        }
+        ++imported;
+      } else {
+        ++skipped;
+      }
+    }
+
+    if (!options.dry_run && !dict.Save()) {
+      dict.ReplaceAll(before);
+      result.exit_code = 1;
+      result.error = "failed to save user dictionary";
+    }
+    result.output_lines.push_back(BulkOperationJsonLine(
+        "import", result.exit_code == 0, options.path, imported, skipped, options.dry_run,
+        result.error));
+    return result;
+  }
+
+  if (options.command == UserDictCliCommand::Export) {
+    auto entries = dict.All();
+    SortEntries(&entries);
+    if (!options.dry_run) {
+      azookey::learning::UserDictionary exported(options.path);
+      exported.ReplaceAll(entries);
+      if (!exported.Save()) {
+        result.exit_code = 1;
+        result.error = "failed to save export JSON";
+      }
+    }
+    result.output_lines.push_back(BulkOperationJsonLine(
+        "export", result.exit_code == 0, options.path, entries.size(), 0, options.dry_run,
+        result.error));
+    return result;
+  }
+
   const auto word = ToUserWord(options);
   if (options.command == UserDictCliCommand::Add) {
     if (!options.dry_run) {
@@ -328,6 +473,10 @@ std::optional<UserDictCliOptions> ParseUserDictCliArgs(const std::vector<std::st
     options.command = UserDictCliCommand::Remove;
   } else if (command == "list") {
     options.command = UserDictCliCommand::List;
+  } else if (command == "import") {
+    options.command = UserDictCliCommand::Import;
+  } else if (command == "export") {
+    options.command = UserDictCliCommand::Export;
   } else {
     SetError(error, "unknown userdict subcommand: " + command);
     return std::nullopt;
@@ -381,6 +530,10 @@ std::optional<UserDictCliOptions> ParseUserDictCliArgs(const std::vector<std::st
         SetError(error, "invalid --format value: " + value);
         return std::nullopt;
       }
+    } else if ((options.command == UserDictCliCommand::Import ||
+                options.command == UserDictCliCommand::Export) &&
+               options.path.empty()) {
+      options.path = arg;
     } else {
       SetError(error, "unknown userdict option: " + arg);
       return std::nullopt;
@@ -394,6 +547,13 @@ std::optional<UserDictCliOptions> ParseUserDictCliArgs(const std::vector<std::st
     }
     if (options.surface.empty()) {
       SetError(error, "--surface is required");
+      return std::nullopt;
+    }
+  }
+  if (options.command == UserDictCliCommand::Import ||
+      options.command == UserDictCliCommand::Export) {
+    if (options.path.empty()) {
+      SetError(error, command + " path is required");
       return std::nullopt;
     }
   }

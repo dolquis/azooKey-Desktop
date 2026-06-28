@@ -441,13 +441,21 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
 **Phase 3 検証**:
 1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
 2. ユニットテスト: `ctest --preset windows-debug --output-on-failure` で全テスト緑
-3. Windows 実機（Win11 VM 推奨）: `scripts/register-dev.ps1` で TIP DLL 登録 →
+3. ユーザー辞書 round-trip:
+   1. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict add --reading azookey --surface azooKey --offline`
+   2. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict list --format tsv`
+      で追加語を確認
+   3. 同じ `--user-dict` で Host/TIP を起動し、`azookey` の `QueryCandidates` で
+      ユーザー辞書候補が最優先に出ることを確認
+   4. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict remove --reading azookey --surface azooKey --offline`
+   5. `list --format tsv` で削除済みを確認
+4. Windows 実機（Win11 VM 推奨）: `scripts/register-dev.ps1` で TIP DLL 登録 →
    `azookey_inference_host.exe --pipe --backend cpu` 起動 → gguf を
    `%LOCALAPPDATA%\azooKey\models\` に配置し `LoadModel` 成功 → gguf 削除時は
    `SimpleConverter` フォールバック → メモ帳で `nihongo` 入力で Zenzai 候補
-4. GPU 経路: `--backend cuda` 起動で失敗時は CPU フォールバック
-5. ベンチ: `./build/windows-release/bench/azookey_bench.exe` の p50/p95 が許容内
-6. `unregister-dev.ps1` でクリーン解除確認
+5. GPU 経路: `--backend cuda` 起動で失敗時は CPU フォールバック
+6. ベンチ: `./build/windows-release/bench/azookey_bench.exe` の p50/p95 が許容内
+7. `unregister-dev.ps1` でクリーン解除確認
 
 ### Phase 4: 配布可能化 — v1.0 リリースゲート（M11/M12、4〜6 週）
 

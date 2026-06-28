@@ -79,6 +79,19 @@
   旧ファイルは backslash を literal として扱い、既存データを壊さない。
 - ユーザー辞書は未指定時 `%LOCALAPPDATA%\azooKey\data\user_dict.json` に保存する。
   `--learning` / `--user-dict` 指定時は明示パスを優先する。
+- Debug CLI（M9 移行措置）として
+  `azookey_inference_host.exe [--user-dict <path>] userdict ...` を提供する。
+  `add` / `remove` は既定で起動中 Host へ IPC 送信し、未起動時や検証用の直接編集では
+  `--offline` を付ける。`list` / `import <path-to-tsv>` / `export <path-to-json>` は
+  永続ファイルを直接読み書きする。
+- `userdict import` の TSV は
+  `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` の 5 列（後ろ 3 列は空可）を受け付ける。
+  不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで
+  置換する。`userdict export` は既存 JSON schema
+  `{ "version": 1, "entries": [...] }` で書き出す。
+- M11 / M30 の設定アプリ完成後も、`userdict` サブコマンドは v1.x の診断・移行用
+  CLI として併存させる。GUI が通常操作面になった後も、CI やサポート手順から再現できる
+  低レベル操作面として削除しない。
 - 保存時は一時ファイルへ書き込んでから replace し、書き込み中クラッシュによる
   既存ファイル破損を避ける（`learning/src/AtomicFile.h`）。一時ファイルは
   `FlushFileBuffers` / `fsync` で flush 後、`MoveFileExW(MOVEFILE_REPLACE_EXISTING |

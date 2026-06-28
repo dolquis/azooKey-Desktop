@@ -131,6 +131,13 @@ bool UserDictionary::Remove(const std::string& word, const std::string& ruby) {
   return true;
 }
 
+void UserDictionary::ReplaceAll(const std::vector<UserWord>& entries) {
+  Clear();
+  for (const auto& entry : entries) {
+    Add(entry);
+  }
+}
+
 std::vector<UserWord> UserDictionary::Lookup(const std::string& ruby) const {
   auto it = by_ruby_.find(ruby);
   if (it == by_ruby_.end()) return {};

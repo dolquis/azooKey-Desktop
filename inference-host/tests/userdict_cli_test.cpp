@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -62,6 +63,12 @@ TEST(UserDictCliTest, RejectsInvalidAddArguments) {
 
   EXPECT_FALSE(Parse({"clear"}, &error).has_value());
   EXPECT_EQ(error, "unknown userdict subcommand: clear");
+
+  EXPECT_FALSE(Parse({"import"}, &error).has_value());
+  EXPECT_EQ(error, "import path is required");
+
+  EXPECT_FALSE(Parse({"export"}, &error).has_value());
+  EXPECT_EQ(error, "export path is required");
 }
 
 TEST(UserDictCliTest, DirectAddListRemoveRoundTrip) {
@@ -383,4 +390,65 @@ TEST(UserDictCliTest, ListTsvUsesStableColumns) {
   EXPECT_EQ(result.output_lines.front(), "a\tA\t\t\t");
 
   std::filesystem::remove_all(path.parent_path());
+}
+
+TEST(UserDictCliTest, DirectImportExportRoundTrip) {
+  const auto path = TestPath("azookey_userdict_cli_import_export");
+  const auto root = path.parent_path();
+  const auto import_path = root / "import.tsv";
+  const auto export_path = root / "export.json";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream tsv(import_path);
+    ASSERT_TRUE(tsv.is_open());
+    tsv << "nihongo\tNihongo\t1285\t501\t-5.5\n";
+    tsv << "azookey\tazooKey\t\t\t\n";
+    tsv << "bad\tBad\tnot-int\t\t\n";
+    tsv << "\tNoReading\t\t\t\n";
+    tsv << "nihongo\tNihongo\t1285\t501\t-10.0\n";
+  }
+
+  std::vector<std::string> import_args = {"import", import_path.string()};
+  std::string error;
+  auto import_options = azookey::host::ParseUserDictCliArgs(import_args, &error);
+  ASSERT_TRUE(import_options.has_value()) << error;
+  auto import_result = azookey::host::RunUserDictCli(*import_options, DirectRunOptions(path));
+  EXPECT_EQ(import_result.exit_code, 0);
+  ASSERT_EQ(import_result.output_lines.size(), 1u);
+  auto import_json = azookey::ipc::json::Parse(import_result.output_lines.front());
+  ASSERT_TRUE(import_json.has_value());
+  EXPECT_EQ(import_json->GetString("op"), "import");
+  EXPECT_TRUE(import_json->GetBool("ok").value_or(false));
+  EXPECT_EQ(import_json->GetUInt("imported"), 3u);
+  EXPECT_EQ(import_json->GetUInt("skipped"), 2u);
+
+  azookey::learning::UserDictionary dict(path.string());
+  ASSERT_TRUE(dict.Load());
+  EXPECT_EQ(dict.Size(), 2u);
+  auto matches = dict.Lookup("nihongo");
+  ASSERT_EQ(matches.size(), 1u);
+  ASSERT_TRUE(matches.front().value.has_value());
+  EXPECT_DOUBLE_EQ(*matches.front().value, -10.0);
+
+  std::vector<std::string> export_args = {"export", export_path.string()};
+  auto export_options = azookey::host::ParseUserDictCliArgs(export_args, &error);
+  ASSERT_TRUE(export_options.has_value()) << error;
+  auto export_result = azookey::host::RunUserDictCli(*export_options, DirectRunOptions(path));
+  EXPECT_EQ(export_result.exit_code, 0);
+  ASSERT_EQ(export_result.output_lines.size(), 1u);
+  auto export_json = azookey::ipc::json::Parse(export_result.output_lines.front());
+  ASSERT_TRUE(export_json.has_value());
+  EXPECT_EQ(export_json->GetString("op"), "export");
+  EXPECT_TRUE(export_json->GetBool("ok").value_or(false));
+  EXPECT_EQ(export_json->GetUInt("exported"), 2u);
+
+  azookey::learning::UserDictionary exported(export_path.string());
+  ASSERT_TRUE(exported.Load());
+  EXPECT_EQ(exported.Size(), 2u);
+  auto exported_matches = exported.Lookup("azookey");
+  ASSERT_EQ(exported_matches.size(), 1u);
+  EXPECT_EQ(exported_matches.front().word, "azooKey");
+
+  std::filesystem::remove_all(root);
 }

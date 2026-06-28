@@ -91,6 +91,32 @@ TEST(UserDictionaryTest, SaveLoadRoundTrip) {
   std::remove(path);
 }
 
+TEST(UserDictionaryTest, ReplaceAllUsesAddSemanticsForDuplicates) {
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "azookey_user_dict_replace_all.json").string();
+  std::remove(path.c_str());
+
+  azookey::learning::UserWord first;
+  first.word = "azooKey";
+  first.ruby = "azookey";
+  first.value = -5.0;
+
+  azookey::learning::UserWord replacement = first;
+  replacement.value = -10.0;
+
+  azookey::learning::UserWord other;
+  other.word = "Nihongo";
+  other.ruby = "nihongo";
+
+  azookey::learning::UserDictionary dict(path);
+  dict.ReplaceAll({first, other, replacement});
+  EXPECT_EQ(dict.Size(), 2u);
+  auto hits = dict.Lookup("azookey");
+  ASSERT_EQ(hits.size(), 1u);
+  ASSERT_TRUE(hits.front().value.has_value());
+  EXPECT_DOUBLE_EQ(*hits.front().value, -10.0);
+}
+
 TEST(UserDictionaryTest, LoadMissingFileIsOk) {
   const std::string p2 =
       (std::filesystem::temp_directory_path() / "azookey_user_dict_definitely_missing.json")

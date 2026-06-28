@@ -11,6 +11,8 @@ enum class UserDictCliCommand {
   Add,
   Remove,
   List,
+  Import,
+  Export,
 };
 
 enum class UserDictCliFormat {
@@ -25,6 +27,7 @@ struct UserDictCliOptions {
   std::optional<int32_t> cid;
   std::optional<int32_t> mid;
   std::optional<double> weight;
+  std::string path;
   UserDictCliFormat format{UserDictCliFormat::Json};
   bool dry_run{false};
   bool offline{false};

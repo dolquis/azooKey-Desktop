@@ -10,6 +10,26 @@ permissions:
   pull-requests: write
 
 jobs:
+  settings-schema:
+    name: Settings JSON Schema
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install check-jsonschema
+        run: python -m pip install check-jsonschema==0.37.3
+
+      - name: Validate settings schema
+        run: check-jsonschema --check-metaschema settings/mvp-settings.schema.json
+
+      - name: Validate default settings sample
+        run: check-jsonschema --schemafile settings/mvp-settings.schema.json settings/default-settings.sample.json
+
   windows-build:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022

@@ -6,7 +6,8 @@
 #   pre-commit install         # enable the git hook (one time)
 #   pre-commit run --all-files # run across the whole tree (or: just lint)
 #
-# Tool sources: clang-format/LLVM, gitleaks/yamlfmt/taplo/actionlint via scoop.
+# Tool sources: clang-format/LLVM, gitleaks/yamlfmt/taplo/actionlint via scoop,
+# check-jsonschema via pipx (`pipx install check-jsonschema==0.37.3`).
 minimum_pre_commit_version: "3.0.0"
 repos:
   - repo: local
@@ -30,6 +31,27 @@ repos:
         entry: actionlint
         language: system
         files: '^\.github/workflows/.*\.(yml|yaml)$'
+
+      - id: settings-json-schema-metaschema
+        name: settings JSON Schema metaschema
+        entry: check-jsonschema
+        args:
+          - --check-metaschema
+          - settings/mvp-settings.schema.json
+        language: system
+        pass_filenames: false
+        files: '^settings/mvp-settings\.schema\.json$'
+
+      - id: settings-json-schema-sample
+        name: settings sample JSON Schema
+        entry: check-jsonschema
+        args:
+          - --schemafile
+          - settings/mvp-settings.schema.json
+          - settings/default-settings.sample.json
+        language: system
+        pass_filenames: false
+        files: '^settings/(mvp-settings\.schema\.json|default-settings\.sample\.json)$'
 
       - id: yamlfmt
         name: yamlfmt

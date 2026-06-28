@@ -8,6 +8,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -23,6 +24,7 @@
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/UserDataPaths.h"
+#include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/LearningStore.h"
@@ -72,9 +74,18 @@ void MigrateLegacyDefaultFileIfNeeded(const char* legacy_name,
   }
   std::filesystem::copy_file(legacy, target, std::filesystem::copy_options::none, ec);
   if (!ec) {
-    std::cerr << "info: migrated legacy user data file " << legacy << " -> " << target
-              << std::endl;
+    std::cerr << "info: migrated legacy user data file " << legacy << " -> " << target << std::endl;
   }
+}
+
+bool EnsureFileParentDirectory(const std::filesystem::path& file_path) {
+  const auto parent = file_path.parent_path();
+  if (parent.empty()) {
+    return true;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(parent, ec);
+  return !ec;
 }
 
 std::string GetEnvString(const char* name) {
@@ -107,10 +118,17 @@ int main(int argc, char** argv) {
   bool pipe_mode = false;
   std::string pipe_name;
   std::string handshake_token = GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN");
+  std::optional<std::vector<std::string>> userdict_args;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--cuda") {
+    if (arg == "userdict") {
+      userdict_args.emplace();
+      for (int j = i + 1; j < argc; ++j) {
+        userdict_args->push_back(argv[j]);
+      }
+      break;
+    } else if (arg == "--cuda") {
       config.backend = azookey::host::BackendKind::Cuda;
       explicit_backend = true;
     } else if (arg == "--cpu") {
@@ -158,14 +176,45 @@ int main(int argc, char** argv) {
     std::cerr << "error: failed to resolve azooKey user data directory" << std::endl;
     return 2;
   }
+
+  const std::string learning_path = user_paths->learning_path.string();
+  const std::string user_dict_path = user_paths->user_dict_path.string();
+
+  if (userdict_args) {
+    if (!EnsureFileParentDirectory(user_paths->user_dict_path)) {
+      std::cerr << "error: failed to create user dictionary directory: "
+                << user_paths->user_dict_path.parent_path() << std::endl;
+      return 2;
+    }
+    if (!explicit_user_dict_path) {
+      MigrateLegacyDefaultFileIfNeeded("azookey_user_dict.json", user_paths->user_dict_path);
+    }
+
+    std::string parse_error;
+    auto cli_options = azookey::host::ParseUserDictCliArgs(*userdict_args, &parse_error);
+    if (!cli_options) {
+      std::cerr << "error: " << parse_error << std::endl;
+      return 2;
+    }
+    azookey::host::UserDictCliRunOptions run_options;
+    run_options.user_dict_path = user_dict_path;
+    run_options.pipe_name = pipe_name.empty() ? azookey::ipc::DefaultPipeName() : pipe_name;
+    run_options.handshake_token = handshake_token;
+    auto result = azookey::host::RunUserDictCli(*cli_options, run_options);
+    for (const auto& line : result.output_lines) {
+      std::cout << line << std::endl;
+    }
+    if (!result.error.empty()) {
+      std::cerr << "error: " << result.error << std::endl;
+    }
+    return result.exit_code;
+  }
+
   if (!azookey::host::EnsureUserDataDirectories(*user_paths)) {
     std::cerr << "error: failed to create azooKey user data directories under "
               << user_paths->root_dir << std::endl;
     return 2;
   }
-
-  const std::string learning_path = user_paths->learning_path.string();
-  const std::string user_dict_path = user_paths->user_dict_path.string();
 
   if (!explicit_learning_path) {
     MigrateLegacyDefaultFileIfNeeded("azookey_learning.tsv", user_paths->learning_path);
@@ -249,14 +298,11 @@ int main(int argc, char** argv) {
     }
 
     azookey::ipc::NamedPipeServer server;
-    if (!server.Start(pipe_name,
-                      [&engine, &scheduler, &user_dict, &settings_store, dconf]() {
-                        auto d = std::make_shared<azookey::host::Dispatcher>(
-                            &engine, &scheduler, &user_dict, dconf, &settings_store);
-                        return [d](const azookey::ipc::Envelope& env) {
-                          return d->Dispatch(env);
-                        };
-                      })) {
+    if (!server.Start(pipe_name, [&engine, &scheduler, &user_dict, &settings_store, dconf]() {
+          auto d = std::make_shared<azookey::host::Dispatcher>(&engine, &scheduler, &user_dict,
+                                                               dconf, &settings_store);
+          return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };
+        })) {
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
       return 2;
     }

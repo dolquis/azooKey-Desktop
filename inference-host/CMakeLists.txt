@@ -3,6 +3,7 @@ add_library(azookey_host STATIC
   src/InferenceEngine.cpp
   src/RequestScheduler.cpp
   src/SettingsStore.cpp
+  src/UserDictCli.cpp
   src/UserDataPaths.cpp
   src/ZenzaiModelConverter.cpp
 )

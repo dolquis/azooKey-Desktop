@@ -197,6 +197,9 @@ OFF のまま）。
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ
+- settings JSON Schema — `check-jsonschema==0.37.3` で
+  `settings/mvp-settings.schema.json` の meta-schema 妥当性と、
+  `settings/default-settings.sample.json` の schema 適合性を確認する
 
 clang-tidy / CodeQL はオプション扱いとし、本マイルストーンの必須範囲には
 含めない（導入コストが高く、段階導入とする）。
@@ -1040,6 +1043,9 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
 | D-014 | DPAPI | 暗号化データを復号できるか | 再認証 / 再入力を促す |
 | D-015 | app compatibility | 現在の前面アプリで TSF context が取得できるか | 互換性情報表示（M50 result） |
+
+D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre-commit は
+同 schema の meta-schema 妥当性と代表サンプルの適合性を静的に検証する（§4.3）。
 
 ### 12.2.1 判定基準（status 決定ルール）
 

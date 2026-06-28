@@ -1,0 +1,42 @@
+{
+  "inputMode": "hiragana",
+  "liveConversion": false,
+  "llmMagicConversion": false,
+  "logLevel": "info",
+  "inputStyle": "default",
+  "customRomajiTablePath": "%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv",
+  "predictionEnabled": true,
+  "aiBackend": "none",
+  "openAiApiKey": "",
+  "openAiApiEndpoint": "https://api.openai.com/v1",
+  "openAiModel": "gpt-4o-mini",
+  "includeContextInAITransform": true,
+  "contextReselection": false,
+  "postCommitLint": false,
+  "retroactiveRecompute": false,
+  "sentenceCompletion": false,
+  "backendPreference": "auto",
+  "epPreference": "auto",
+  "model": {
+    "enabled": true,
+    "selectedPath": "",
+    "backendPreference": "auto",
+    "epPreference": "auto",
+    "nGpuLayers": -1,
+    "autoLoadOnHostStart": true,
+    "fallbackToSimpleConverter": true,
+    "benchmarkOnModelChange": false,
+    "benchmarkHistory": []
+  },
+  "powerProfile": "auto",
+  "promptPrefixByApp": {},
+  "batchRomajiConversion": false,
+  "batchRomajiPreviewStyle": "kana",
+  "batchConversionMode": "neural",
+  "batchAutoPunctuation": false,
+  "autoUpdate": {
+    "enabled": true,
+    "channel": "stable",
+    "checkIntervalHours": 24
+  }
+}

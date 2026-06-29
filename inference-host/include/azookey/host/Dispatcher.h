@@ -47,6 +47,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleHealth(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleLoadModel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryCandidates(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleQueryBatchConversion(const ipc::Envelope& req);
   void HandleCancel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleCommitObservation(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleAddUserWord(const ipc::Envelope& req);

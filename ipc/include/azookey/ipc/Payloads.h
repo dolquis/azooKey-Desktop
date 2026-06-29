@@ -19,6 +19,9 @@ struct HandshakeResponse {
   int protocol_version{1};
   bool accepted{false};
   bool model_loaded{false};
+  bool batch_romaji_conversion{false};
+  std::string batch_romaji_preview_style{"kana"};
+  std::string batch_conversion_mode{"neural"};
 };
 
 struct PingPayload {
@@ -62,6 +65,26 @@ struct QueryCandidatesRequest {
 struct QueryCandidatesResponse {
   std::vector<CandidateField> candidates;
   bool partial{false};
+};
+
+struct BatchConversionSegment {
+  std::string reading;
+  std::vector<CandidateField> candidates;
+};
+
+struct QueryBatchConversionRequest {
+  std::string reading;
+  std::string raw_romaji;
+  std::string mode{"neural"};
+  bool auto_punctuation{false};
+  uint32_t max_candidates{10};
+};
+
+struct QueryBatchConversionResponse {
+  std::vector<BatchConversionSegment> segments;
+  std::string full_surface;
+  bool partial{false};
+  bool canceled{false};
 };
 
 struct CancelPayload {
@@ -116,6 +139,8 @@ std::string BuildLoadModelRequest(const LoadModelRequest& p);
 std::string BuildLoadModelResponse(const LoadModelResponse& p);
 std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p);
 std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p);
+std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& p);
+std::string BuildQueryBatchConversionResponse(const QueryBatchConversionResponse& p);
 std::string BuildCancel(const CancelPayload& p);
 std::string BuildCommitObservationRequest(const CommitObservationRequest& p);
 std::string BuildCommitObservationResponse(const CommitObservationResponse& p);
@@ -134,6 +159,10 @@ std::optional<LoadModelRequest> ParseLoadModelRequest(const std::string& json);
 std::optional<LoadModelResponse> ParseLoadModelResponse(const std::string& json);
 std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::string& json);
 std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::string& json);
+std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
+    const std::string& json);
+std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(
+    const std::string& json);
 std::optional<CancelPayload> ParseCancel(const std::string& json);
 std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std::string& json);
 std::optional<CommitObservationResponse> ParseCommitObservationResponse(const std::string& json);

@@ -12,6 +12,7 @@ std::string TypeToString(MessageType type) {
     case MessageType::Handshake: return "Handshake";
     case MessageType::LoadModel: return "LoadModel";
     case MessageType::QueryCandidates: return "QueryCandidates";
+    case MessageType::QueryBatchConversion: return "QueryBatchConversion";
     case MessageType::QueryPredictions: return "QueryPredictions";
     case MessageType::QueryCorrections: return "QueryCorrections";
     case MessageType::Cancel: return "Cancel";
@@ -31,6 +32,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "Handshake") return MessageType::Handshake;
   if (value == "LoadModel") return MessageType::LoadModel;
   if (value == "QueryCandidates") return MessageType::QueryCandidates;
+  if (value == "QueryBatchConversion") return MessageType::QueryBatchConversion;
   if (value == "QueryPredictions") return MessageType::QueryPredictions;
   if (value == "QueryCorrections") return MessageType::QueryCorrections;
   if (value == "Cancel") return MessageType::Cancel;

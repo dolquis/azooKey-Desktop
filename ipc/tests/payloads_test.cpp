@@ -1,11 +1,12 @@
+#include "azookey/ipc/Payloads.h"
+
+#include <gtest/gtest.h>
+
 #include <limits>
 #include <locale>
 #include <string>
 
-#include <gtest/gtest.h>
-
 #include "azookey/ipc/Json.h"
-#include "azookey/ipc/Payloads.h"
 
 namespace {
 
@@ -20,9 +21,7 @@ class ScopedGlobalLocale {
     std::locale::global(locale);
   }
 
-  ~ScopedGlobalLocale() {
-    std::locale::global(previous_);
-  }
+  ~ScopedGlobalLocale() { std::locale::global(previous_); }
 
  private:
   std::locale previous_;
@@ -64,11 +63,17 @@ TEST(PayloadsTest, Handshake) {
   res.host_version = "0.1.0";
   res.accepted = true;
   res.model_loaded = false;
+  res.batch_romaji_conversion = true;
+  res.batch_romaji_preview_style = "romaji";
+  res.batch_conversion_mode = "neural";
   auto json2 = azookey::ipc::BuildHandshakeResponse(res);
   auto parsed2 = azookey::ipc::ParseHandshakeResponse(json2);
   ASSERT_TRUE(parsed2.has_value());
   EXPECT_TRUE(parsed2->accepted);
   EXPECT_FALSE(parsed2->model_loaded);
+  EXPECT_TRUE(parsed2->batch_romaji_conversion);
+  EXPECT_EQ(parsed2->batch_romaji_preview_style, "romaji");
+  EXPECT_EQ(parsed2->batch_conversion_mode, "neural");
 }
 
 TEST(PayloadsTest, Ping) {
@@ -186,6 +191,37 @@ TEST(PayloadsTest, Cancel) {
   auto parsed = azookey::ipc::ParseCancel(json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->target_request_id, 7777u);
+}
+
+TEST(PayloadsTest, QueryBatchConversion) {
+  azookey::ipc::QueryBatchConversionRequest req;
+  req.reading = "にほんご";
+  req.raw_romaji = "nihongo";
+  req.mode = "neural";
+  req.max_candidates = 5;
+
+  auto json = azookey::ipc::BuildQueryBatchConversionRequest(req);
+  auto parsed = azookey::ipc::ParseQueryBatchConversionRequest(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->reading, "にほんご");
+  EXPECT_EQ(parsed->raw_romaji, "nihongo");
+  EXPECT_EQ(parsed->mode, "neural");
+  EXPECT_EQ(parsed->max_candidates, 5u);
+
+  azookey::ipc::QueryBatchConversionResponse res;
+  res.full_surface = "日本語";
+  azookey::ipc::BatchConversionSegment segment;
+  segment.reading = "にほんご";
+  segment.candidates.push_back({"日本語", "にほんご", 1.0, "model"});
+  res.segments.push_back(segment);
+
+  auto res_json = azookey::ipc::BuildQueryBatchConversionResponse(res);
+  auto res_parsed = azookey::ipc::ParseQueryBatchConversionResponse(res_json);
+  ASSERT_TRUE(res_parsed.has_value());
+  EXPECT_EQ(res_parsed->full_surface, "日本語");
+  ASSERT_EQ(res_parsed->segments.size(), 1u);
+  ASSERT_EQ(res_parsed->segments[0].candidates.size(), 1u);
+  EXPECT_EQ(res_parsed->segments[0].candidates[0].surface, "日本語");
 }
 
 TEST(PayloadsTest, CancelPreservesLargeTargetRequestId) {

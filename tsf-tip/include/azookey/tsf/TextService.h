@@ -50,7 +50,8 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) override;
 
   STDMETHODIMP OnSetFocus(BOOL foreground) override;
-  STDMETHODIMP OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) override;
+  STDMETHODIMP OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
+                             BOOL* eaten) override;
   STDMETHODIMP OnTestKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) override;
   STDMETHODIMP OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) override;
   STDMETHODIMP OnKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) override;
@@ -96,6 +97,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
+  void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false);
+  bool has_pending_ipc_query_for_test();
+  bool pending_ipc_query_is_batch_for_test();
+  std::string pending_ipc_reading_for_test();
+  std::string pending_ipc_raw_romaji_for_test();
 #endif
 
  private:
@@ -109,6 +115,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ui_less_mode_{false};
 
   core::RomajiKanaConverter romaji_;
+  std::string batch_raw_romaji_;
+  bool batch_query_in_progress_{false};
+  std::atomic<bool> batch_romaji_conversion_{false};
+  std::atomic<bool> batch_romaji_preview_romaji_{false};
+  std::atomic<bool> batch_conversion_ai_cleanup_{false};
 
   // Last context used for preedit updates; allows Deactivate to end composition.
   ITfContext* active_context_{nullptr};
@@ -135,8 +146,11 @@ class TextService final : public ITfTextInputProcessorEx,
   std::thread ipc_thread_;
   std::atomic<bool> ipc_stop_{false};
   std::string ipc_pending_reading_;
+  std::string ipc_pending_raw_romaji_;
+  std::string ipc_pending_batch_mode_;
   uint64_t ipc_pending_id_{0};
   bool ipc_has_request_{false};
+  bool ipc_pending_is_batch_{false};
   // ID of the QueryCandidates currently sent but not yet received (0 = none).
   // Protected by ipc_mtx_; written by the worker thread, read by TIP thread.
   uint64_t ipc_inflight_id_{0};
@@ -169,9 +183,15 @@ class TextService final : public ITfTextInputProcessorEx,
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms);
   void RearmPendingQuery(uint64_t req_id);
   void PostQueryCandidates(const std::string& reading);
+  void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
   std::string CurrentPreeditSurface() const;
+  bool BatchRomajiEnabled() const;
+  std::string BatchPreviewSurface() const;
+  std::string BatchReadingForConversion() const;
+  void RefreshBatchPreeditSurface();
+  void ClearBatchState();
   enum class LifecycleCleanupFailurePolicy {
     PreserveComposition,
     ReleaseComposition,
@@ -185,13 +205,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   HRESULT RequestCommitEditSession(ITfContext* context);
   bool RequestLifecycleCommitOrEndComposition(ITfContext* context);
-  void CleanupForLifecycleLoss(ITfContext* context,
-                               bool release_active_context,
+  void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                LifecycleCleanupFailurePolicy failure_policy);
 
   // M6: enqueue a CommitObservation to the IPC worker.
-  void PostCommitObservation(const std::string& reading,
-                             const ipc::CandidateField& chosen,
+  void PostCommitObservation(const std::string& reading, const ipc::CandidateField& chosen,
                              const std::vector<ipc::CandidateField>& shown);
   // M10: enqueue a Cancel message to the IPC worker.
   void PostCancel(uint64_t target_request_id);

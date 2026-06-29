@@ -656,6 +656,70 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiAccumulatesKanaPreviewWithoutQuerying) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  EXPECT_TRUE(h.Press('H'));
+  EXPECT_TRUE(h.Press('O'));
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('G'));
+  EXPECT_TRUE(h.Press('O'));
+
+  EXPECT_EQ(h.service.preedit_kana_, u8"にほんご");
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"にほんご");
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "nihongo");
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiPreviewCanShowRawRomaji) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true, true);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+
+  EXPECT_EQ(h.service.preedit_kana_, "ni");
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"に");
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingEscapeCancelsAndKeepsAccumulation) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.service.preedit_kana_, u8"に");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, u8"に");
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"に");
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, PendingNIsShownInPreeditWithoutCommittingRomaji) {
   TextServiceHarness h;
   FakeComposition composition;

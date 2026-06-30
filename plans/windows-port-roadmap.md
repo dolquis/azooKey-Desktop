@@ -28,7 +28,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | ディレクトリ        | 役割                                                     | 概要（構成・主な実装単位）                   |
 |---------------------|----------------------------------------------------------|---------------------------------------------|
 | `core/`             | OS 非依存の変換コア（C++）                               | `RomajiKanaConverter` / `SimpleConverter` / `IConverter`（tests あり） |
-| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | 全 14 `MessageType` 定義・9 Payload・Named Pipe（tests あり） |
+| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | 全 15 `MessageType` 定義・主要 Payload・Named Pipe（tests あり） |
 | `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore` / `Reranker` / `UserDictionary`（tests あり） |
 | `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp`。モデルロード境界は M8 で扱う |
 | `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel（M1〜M10 の範囲） |
@@ -296,14 +296,14 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn` |
 | `ipc_tests` | `messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
 | `ipc_json_tests` | `json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
-| `ipc_payloads_tests` | `payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/Cancel/Commit/UserWord の build/parse + malformed reject |
+| `ipc_payloads_tests` | `payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject |
 | `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持 |
 | `ipc_tip_client_tests` | `tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates |
 | `learning_tests` | `learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
 | `reranker_tests` | `reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
 | `user_dictionary_tests` | `user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
 | `host_engine_tests` | `engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload |
-| `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/Cancel/Commit/AddUserWord/RemoveUserWord/Health の全 8 ハンドラ |
+| `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ |
 | `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `host_user_data_paths_tests` | `user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
 | `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)` |

@@ -32,6 +32,29 @@ std::optional<CandidateField> CandidateFromJson(const j::Value& v) {
   return c;
 }
 
+std::optional<BatchConversionSegment> BatchSegmentFromJson(const j::Value& v) {
+  if (!v.IsObject()) return std::nullopt;
+  BatchConversionSegment segment;
+  auto reading = v.GetString("reading");
+  if (!reading) return std::nullopt;
+  segment.reading = std::move(*reading);
+  if (const auto* arr = v.GetArray("candidates")) {
+    for (const auto& e : *arr) {
+      if (auto c = CandidateFromJson(e)) segment.candidates.push_back(std::move(*c));
+    }
+  }
+  return segment;
+}
+
+j::Value BatchSegmentToJson(const BatchConversionSegment& segment) {
+  j::Object o;
+  o.emplace("reading", j::Value(segment.reading));
+  j::Array candidates;
+  for (const auto& c : segment.candidates) candidates.push_back(CandidateToJson(c));
+  o.emplace("candidates", j::Value(std::move(candidates)));
+  return j::Value(std::move(o));
+}
+
 std::optional<j::Value> ParseObject(const std::string& s) {
   auto v = j::Parse(s);
   if (!v || !v->IsObject()) return std::nullopt;
@@ -79,6 +102,10 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("protocol_version", j::Value(p.protocol_version));
   o.emplace("accepted", j::Value(p.accepted));
   o.emplace("model_loaded", j::Value(p.model_loaded));
+  o.emplace("batch_romaji_conversion", j::Value(p.batch_romaji_conversion));
+  o.emplace("batch_romaji_preview_style", j::Value(p.batch_romaji_preview_style));
+  o.emplace("batch_conversion_mode", j::Value(p.batch_conversion_mode));
+  o.emplace("batch_auto_punctuation", j::Value(p.batch_auto_punctuation));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -92,6 +119,11 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.protocol_version = static_cast<int>(v->GetInt("protocol_version").value_or(1));
   p.accepted = v->GetBool("accepted").value_or(false);
   p.model_loaded = v->GetBool("model_loaded").value_or(false);
+  p.batch_romaji_conversion = v->GetBool("batch_romaji_conversion").value_or(false);
+  p.batch_romaji_preview_style =
+      v->GetString("batch_romaji_preview_style").value_or(std::string("kana"));
+  p.batch_conversion_mode = v->GetString("batch_conversion_mode").value_or(std::string("neural"));
+  p.batch_auto_punctuation = v->GetBool("batch_auto_punctuation").value_or(false);
   return p;
 }
 
@@ -227,6 +259,60 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
     }
   }
   p.partial = v->GetBool("partial").value_or(false);
+  return p;
+}
+
+// -------- QueryBatchConversion --------
+
+std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& p) {
+  j::Object o;
+  o.emplace("reading", j::Value(p.reading));
+  if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
+  o.emplace("mode", j::Value(p.mode));
+  o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
+  o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  QueryBatchConversionRequest p;
+  auto reading = v->GetString("reading");
+  if (!reading) return std::nullopt;
+  p.reading = std::move(*reading);
+  p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
+  p.mode = v->GetString("mode").value_or(std::string("neural"));
+  p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
+  if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
+  return p;
+}
+
+std::string BuildQueryBatchConversionResponse(const QueryBatchConversionResponse& p) {
+  j::Object o;
+  j::Array segments;
+  for (const auto& segment : p.segments) segments.push_back(BatchSegmentToJson(segment));
+  o.emplace("segments", j::Value(std::move(segments)));
+  o.emplace("full_surface", j::Value(p.full_surface));
+  o.emplace("partial", j::Value(p.partial));
+  o.emplace("canceled", j::Value(p.canceled));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  QueryBatchConversionResponse p;
+  if (const auto* arr = v->GetArray("segments")) {
+    for (const auto& e : *arr) {
+      if (auto segment = BatchSegmentFromJson(e)) p.segments.push_back(std::move(*segment));
+    }
+  }
+  p.full_surface = v->GetString("full_surface").value_or(std::string());
+  p.partial = v->GetBool("partial").value_or(false);
+  p.canceled = v->GetBool("canceled").value_or(false);
   return p;
 }
 

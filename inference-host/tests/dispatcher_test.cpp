@@ -153,6 +153,41 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_FALSE(parsed2->accepted);
 }
 
+TEST_F(DispatcherTest, HandshakeIncludesBatchRomajiSettings) {
+  const std::string settings_path = TempPath("azookey_dispatcher_batch_settings.json");
+  std::remove(settings_path.c_str());
+  {
+    std::ofstream out(settings_path);
+    ASSERT_TRUE(out.is_open());
+    out << "{"
+        << "\"batchRomajiConversion\":true,"
+        << "\"batchRomajiPreviewStyle\":\"romaji\","
+        << "\"batchConversionMode\":\"neural\","
+        << "\"batchAutoPunctuation\":true"
+        << "}";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  settings_store.Load();
+  azookey::host::Dispatcher settings_dispatcher(&engine, &scheduler, &user_dict,
+                                                DefaultDispatcherConfig(), &settings_store);
+
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+  auto resp = settings_dispatcher.Dispatch(
+      MakeReq(3, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseHandshakeResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->accepted);
+  EXPECT_TRUE(parsed->batch_romaji_conversion);
+  EXPECT_EQ(parsed->batch_romaji_preview_style, "romaji");
+  EXPECT_EQ(parsed->batch_conversion_mode, "neural");
+  EXPECT_TRUE(parsed->batch_auto_punctuation);
+
+  std::remove(settings_path.c_str());
+}
+
 TEST_F(DispatcherTest, HandshakeRequiresConfiguredToken) {
   azookey::host::DispatcherConfig config;
   config.host_version = "0.1.0";
@@ -222,6 +257,17 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
       MakeReq(8, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
   ASSERT_TRUE(add_after_wrong.has_value());
   EXPECT_FALSE(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->ok);
+  ipc::QueryBatchConversionRequest batch;
+  batch.reading = "にほん";
+  batch.raw_romaji = "nihon";
+  auto batch_after_wrong = token_dispatcher.Dispatch(MakeReq(
+      81, ipc::MessageType::QueryBatchConversion, ipc::BuildQueryBatchConversionRequest(batch)));
+  ASSERT_TRUE(batch_after_wrong.has_value());
+  auto batch_payload = ipc::ParseQueryBatchConversionResponse(batch_after_wrong->payload_json);
+  ASSERT_TRUE(batch_payload.has_value());
+  EXPECT_EQ(batch_payload->full_surface, "にほん");
+  EXPECT_FALSE(batch_payload->partial);
+  EXPECT_FALSE(batch_payload->canceled);
 
   req.handshake_token = "expected-token";
   auto matched = token_dispatcher.Dispatch(
@@ -265,6 +311,27 @@ TEST_F(DispatcherTest, QueryCandidates) {
   ASSERT_TRUE(parsed.has_value());
   ASSERT_FALSE(parsed->candidates.empty());
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
+}
+
+TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
+  ipc::QueryBatchConversionRequest q;
+  q.reading = "にほん";
+  q.raw_romaji = "nihon";
+  q.mode = "neural";
+  q.max_candidates = 10;
+  auto env =
+      MakeReq(22, ipc::MessageType::QueryBatchConversion, ipc::BuildQueryBatchConversionRequest(q));
+  auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  auto parsed = ipc::ParseQueryBatchConversionResponse(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_FALSE(parsed->partial);
+  EXPECT_FALSE(parsed->canceled);
+  ASSERT_EQ(parsed->segments.size(), 1u);
+  EXPECT_EQ(parsed->segments.front().reading, "にほん");
+  ASSERT_FALSE(parsed->segments.front().candidates.empty());
+  EXPECT_EQ(parsed->segments.front().candidates.front().surface, "日本");
+  EXPECT_EQ(parsed->full_surface, "日本");
 }
 
 TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {

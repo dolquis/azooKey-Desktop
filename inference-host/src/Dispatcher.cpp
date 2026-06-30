@@ -109,6 +109,7 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     case ipc::MessageType::Health: return HandleHealth(req);
     case ipc::MessageType::LoadModel: return HandleLoadModel(req);
     case ipc::MessageType::QueryCandidates: return HandleQueryCandidates(req);
+    case ipc::MessageType::QueryBatchConversion: return HandleQueryBatchConversion(req);
     case ipc::MessageType::Cancel: HandleCancel(req); return std::nullopt;
     case ipc::MessageType::CommitObservation: return HandleCommitObservation(req);
     case ipc::MessageType::AddUserWord: return HandleAddUserWord(req);
@@ -148,6 +149,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       ipc::QueryCandidatesResponse r; r.partial = false;
       return MakeResponse(req, ipc::BuildQueryCandidatesResponse(r));
     }
+    case ipc::MessageType::QueryBatchConversion: {
+      ipc::QueryBatchConversionResponse r;
+      if (auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json)) {
+        r.full_surface = parsed->reading;
+      }
+      r.partial = false;
+      r.canceled = false;
+      return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(r));
+    }
     case ipc::MessageType::Ping: {
       ipc::PingPayload p; p.nonce = 0; p.t_ms = 0;
       return MakeResponse(req, ipc::BuildPing(p));
@@ -178,6 +188,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   }
   authenticated_ = res.accepted;
   res.model_loaded = engine_->model_loaded();
+  if (settings_store_) {
+    const auto& settings = settings_store_->settings();
+    res.batch_romaji_conversion = settings.batch_romaji_conversion;
+    res.batch_romaji_preview_style = settings.batch_romaji_preview_style;
+    res.batch_conversion_mode = settings.batch_conversion_mode;
+    res.batch_auto_punctuation = settings.batch_auto_punctuation;
+  }
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
 }
 
@@ -260,6 +277,45 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   }
   res.partial = false;
   return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {
+  auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json);
+  if (!parsed) {
+    ipc::QueryBatchConversionResponse res;
+    return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
+  }
+
+  auto cancel = scheduler_->TrackCancellation(req.request_id);
+  scheduler_->MarkLatest(req.request_id);
+  RequestCompletionGuard completion(scheduler_, req.request_id);
+
+  auto candidates = engine_->QueryCandidates(parsed->reading, "", NowSec(), cancel.get(),
+                                             parsed->max_candidates, false);
+
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  completion.Complete();
+
+  ipc::QueryBatchConversionResponse res;
+  res.partial = false;
+  res.canceled = canceled;
+  if (canceled) {
+    return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
+  }
+
+  ipc::BatchConversionSegment segment;
+  segment.reading = parsed->reading;
+  for (auto& c : candidates) segment.candidates.push_back(ToField(c));
+  if (parsed->max_candidates > 0 && segment.candidates.size() > parsed->max_candidates) {
+    segment.candidates.resize(parsed->max_candidates);
+  }
+  if (!segment.candidates.empty()) {
+    res.full_surface = segment.candidates.front().surface;
+  } else {
+    res.full_surface = parsed->reading;
+  }
+  res.segments.push_back(std::move(segment));
+  return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
 }
 
 void Dispatcher::HandleCancel(const ipc::Envelope& req) {

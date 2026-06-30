@@ -48,6 +48,8 @@ TEST(MessagesTest, EnvelopeRoundTripPreservesFullUInt64RequestId) {
 TEST(MessagesTest, TypeStringMapping) {
   EXPECT_EQ(azookey::ipc::TypeFromString("QueryPredictions"),
             azookey::ipc::MessageType::QueryPredictions);
+  EXPECT_EQ(azookey::ipc::TypeFromString("QueryBatchConversion"),
+            azookey::ipc::MessageType::QueryBatchConversion);
   EXPECT_EQ(azookey::ipc::TypeFromString("QueryCorrections"),
             azookey::ipc::MessageType::QueryCorrections);
   EXPECT_EQ(azookey::ipc::TypeFromString("CommitCorrection"),
@@ -58,6 +60,8 @@ TEST(MessagesTest, TypeStringMapping) {
             azookey::ipc::MessageType::UpdateConfig);
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryPredictions),
             "QueryPredictions");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryBatchConversion),
+            "QueryBatchConversion");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::UpdateConfig),
             "UpdateConfig");
 }

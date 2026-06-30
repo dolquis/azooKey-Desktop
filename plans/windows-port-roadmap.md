@@ -1495,6 +1495,111 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 実機 Win11 での end-to-end 確認（`gate:human-required`）
 - **参照仕様**: `docs/bracket-pairing-spec.md`
 
+### M62: 候補リライター層（数字・記号・半角カタカナ・英字・絵文字の異表記候補生成）
+
+> 確定済み候補（または読み）から、数字の各種表記（漢数字・大字・ローマ数字・丸数字・
+> 16/8/2 進数）、記号の関連候補、半角/全角カタカナ、英字の大小・全半角、絵文字を
+> **自動派生して候補列へ注入する**追加機能。現状 `core/` `tsf-tip/` `inference-host/` に
+> 該当機能は存在しない（真のギャップ。`docs/rich-features-spec.md` は richness X-1〜X-3 を
+> 定めるが、数字/記号/絵文字の異表記展開リライターは未定義）。参考実装は karukan
+> （`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。**ロジック（アルゴリズム）と
+> データ（Mozc 由来）を分離**して扱い、karukan のコードは逐語コピーせず設計移植する。
+> M62-A（数字）→ M62-B（半角カタカナ/英字）→ M62-C（記号）→ M62-D（絵文字）の段階構成。
+> 既定 OFF・後方互換。正典仕様は新設予定の `docs/candidate-rewriter-spec.md`。
+>
+> ライセンス方針: M62-A/B はアルゴリズムのみで Mozc 由来データに依存しない（最も安全）。
+> M62-C/D が Mozc 由来データ（`symbol.tsv` / `emoji_data.tsv`、BSD 3-Clause © Google）+
+> Unicode CLDR を使う場合、各データの著作権表記保持と `THIRD_PARTY_LICENSES` 集約ファイルの
+> 新設が前提（横断依存。azooKey には現状この集約ファイルが不在）。
+
+#### M62-A: 数字リライター（コア・最小）
+
+- **目的**: 読みが純十進数字のとき、漢数字・大字（壱弐参）・ローマ数字（ⅻ/Ⅻ）・丸数字（⑫）・
+  16/8/2 進数（`0x7b` / `0173` / `0b1111011`）の異表記候補を生成し、各候補に和文注釈
+  （「漢数字」「大字」「16進数」等）を付けて候補列へ注入する。
+- **前提**: M5/M6（候補 UI・確定）と M13（InputState / ClientAction）完了。辞書・推論・IPC に
+  依存しない決定的処理で、M61 と同じ **TIP ローカル・無 IPC・Host 非依存**モデルに乗る。
+- **変更対象**: `core/include/azookey/core/NumberRewriter.h`・`core/src/NumberRewriter.cpp`（新規。
+  漢数字/大字/ローマ/丸数字テーブルを自前定義。Mozc 由来データ非依存）、
+  `core/include/azookey/core/Candidate.h`（候補注釈 description フィールド追加）、
+  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup、および**注釈表示のための候補ウィンドウ
+  view-model 拡張**。現状 `TextService.cpp:1654-1655` は `candidate.surface` のみで候補ウィンドウを
+  構築するため、TIP ローカルの注釈付き候補型を導入し surface とは別に description を保持・表示する。
+  確定文字列には注釈を畳み込まない。詳細は下記「M62 横断依存」の候補注釈伝送を参照）、
+  `settings/mvp-settings.schema.json`（`numberRewriter`、既定 OFF）、
+  `core/tests/number_rewriter_test.cpp`（新規）。
+- **受け入れ条件**:
+  - `numberRewriter=true` で `123` の変換候補に `百二十三`/`壱百弐拾参`/`0x7b`/`0b1111011`
+    等が注釈付きで出る（丸数字・ローマ数字は範囲内の入力のみ。例: `12`→`⑫`/`ⅻ`）
+  - 範囲外（丸数字 51 超等）の表記はスキップし、巨大数で 16 進等を破綻させない
+  - `20世紀` のような数字混在は素通し（リライトしない）
+  - `numberRewriter=false` で候補・確定・学習の挙動が一切変わらない
+  - `core` の純粋関数として全分岐を単体テストできる（TSF/IPC/モデル非起動）
+- **参照仕様**: `docs/candidate-rewriter-spec.md`（新設）
+
+#### M62-B: 半角カタカナ・英字リライター
+
+- **目的**: 純かな候補から全角/半角カタカナ、ASCII/全角英字から半角小・半角大・全角小・全角大の
+  各バリアントを生成する。英字部分は M60（インライン英単語候補）と機能重複するため **M60 設計へ
+  統合**し、独立実装にしない。
+- **前提**: M62-A 完了。英字部分は M60（`docs/inline-english-candidate-spec.md`）に統合。
+  いずれも決定的・Mozc データ非依存で TIP ローカル可。
+- **変更対象**: `core/`（HalfKatakana / Alphabet リライター）、M60 設計への統合、
+  `settings/mvp-settings.schema.json`、`core/tests/`。
+- **受け入れ条件**:
+  - 純かな候補に全/半角カタカナ候補が注釈付きで出る。漢字混在（`愛してる`）はリライトしない
+  - 英字の幅・大小バリアントが M60 の候補注入経路に統合され二重実装しない
+  - 既定 OFF で既存挙動不変
+- **参照仕様**: `docs/candidate-rewriter-spec.md` / `docs/inline-english-candidate-spec.md`
+
+#### M62-C: 記号リライター（Mozc 由来データ）
+
+- **目的**: 記号の関連候補チェーン（`「`→`『【〔（`）と、かな読み→記号（`かぎかっこ`→`「」`）を
+  生成する。データは Mozc `symbol.tsv` 由来。
+- **前提**: M62-A 完了 + **`THIRD_PARTY_LICENSES` 集約ファイル新設**（Mozc BSD-3 表記保持）。
+  データ駆動かつ大きくなりうるため、かな読み引きは **inference-host 側**（別プロセス）で
+  `QueryCandidates` 応答に混ぜ、in-proc TIP に大データを抱えない。variant chain（小データ）は
+  TIP ローカル可。
+- **変更対象**: `core/`（SymbolRewriter ロジック）、記号データの再ポート（Mozc 原典準拠で
+  azooKey 形式へ。逐語コピーせず）、`inference-host/`（読み引き経路）、`THIRD_PARTY_LICENSES`、
+  `docs/candidate-rewriter-spec.md`。
+- **受け入れ条件**:
+  - `「`→`『【〔（` の関連候補、`かぎかっこ`→`「」` の読み引きが出る
+  - データ欠損時にフォールバックして既存候補が壊れない
+  - Mozc 由来データの BSD-3 表記が `THIRD_PARTY_LICENSES` とデータヘッダに保持される
+- **参照仕様**: `docs/candidate-rewriter-spec.md`
+
+#### M62-D: 絵文字リライター（Mozc + CLDR 由来データ）
+
+- **目的**: かな読み→絵文字（`わらい`→`😄`）と Slack 風 `:trigger` 曖昧検索（`:smile`→`😄`）を
+  生成する。データは Mozc `emoji_data.tsv` + Unicode CLDR 由来。
+- **前提**: M62-C 完了 + `THIRD_PARTY_LICENSES` に Mozc BSD-3 + CLDR 表記。大規模データ
+  （数万行）のため Host 側配信が前提。候補窓 UX（注釈・確定動線）は M5/M14/M15 に合わせ再設計。
+- **変更対象**: `core/`（EmojiRewriter ロジック・`:trigger` 曖昧検索スコアリング）、絵文字データ
+  再ポート、`inference-host/`、`THIRD_PARTY_LICENSES`、`docs/candidate-rewriter-spec.md`。
+- **受け入れ条件**:
+  - かな読み引きと `:trigger` 曖昧検索が機能し、ランキングが妥当
+  - 既定 OFF で既存挙動不変。Mozc / CLDR 表記保持
+- **参照仕様**: `docs/candidate-rewriter-spec.md`
+
+#### M62 横断依存・既知のテストギャップ
+
+- **横断依存**: `THIRD_PARTY_LICENSES` 集約ファイル新設（M62-C/D と M53 辞書強化の共通前提）。
+  `docs/candidate-rewriter-spec.md`（IPC payload・データ形式・ライセンス・TIP/Host 責務境界・
+  確定時の学習 reading 扱いの正典）新設。
+- **候補注釈の伝送（必須）**: リライタ候補は注釈（description）付きで表示するため、候補表示経路の
+  拡張が前提。現状 `ipc::CandidateField`（`ipc/include/azookey/ipc/Payloads.h:52-57`）は
+  `surface`/`reading`/`score`/`source` のみ、候補ウィンドウは `candidate.surface` のみで構築
+  （`tsf-tip/src/TextService.cpp:1654-1655`）。よって (a) TIP ローカルリライタ（M62-A/B）は
+  **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で description を保持・表示し、
+  (b) Host 側データ駆動リライタ（M62-C/D）は **`ipc::CandidateField` に description フィールドを
+  追加**して伝送する。いずれも確定文字列には注釈を畳み込まない。正典は `docs/candidate-rewriter-spec.md`。
+- **既知のテストギャップ**: `core/tests/number_rewriter_test.cpp` 等の純粋関数テスト未作成
+  （karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植する。逐語コピーしない）。
+  記号/絵文字のデータ駆動リライトは再ポート出力に対する round-trip テストが必要。
+- **リスク**: Mozc 由来データ（M62-C/D）の取り込みは BSD-3 / CLDR 表記義務を新規に背負う。
+  数字（M62-A）はデータ非依存で最もリスクが低く、ここから着手する。
+
 ## 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）
 
 > Phase 5〜7 の番号体系とは独立した、開発基盤・品質の負債解消トラック。
@@ -2209,3 +2314,14 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と
 1:1 対応する。M52 ベンチで baseline を固定し、M53〜M55 並行 → M56 → M57 の
 順で効果を測定しながら進める。
+
+karukan（`togatoga/karukan`、MIT OR Apache-2.0、Linux/macOS 向け日本語 IME）は、azooKey が
+計画済みのいくつかのマイルストーンに対する**設計参照実装**として扱う。コードは逐語移植せず
+設計思想のみ参照する。主な対応: M13（TSF 非依存 IM 状態機械 = `karukan-im` の InputState /
+EngineAction / 純粋関数。`docs/legacy-parity-spec.md` §1.1 が既に引用済み）、M14（ライブ変換の
+増分再チャンク・非日本語チャンク verbatim 通過）、M32 / M45（モデル DL・宣言的レジストリ・
+プリフェッチ・pre-tokenizer 上書き。ブロッカー: zenz GGUF 配布ライセンス DEV-202）、M52（Exact
+Match / CER 評価 CLI。評価データは品質ベンチ spec §13 準拠で自前作成）、M15 / M54（学習の
+reading-keyed 二層 + 前方一致予測）、M62（候補リライター層、上記）。詳細な比較・優先度・最小
+導入案・テスト方針・ライセンス注記は調査レポート `plans/karukan-comparison-report.md`
+（特定時点のスナップショット）を参照する。

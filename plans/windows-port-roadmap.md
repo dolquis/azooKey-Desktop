@@ -1522,7 +1522,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `core/include/azookey/core/NumberRewriter.h`・`core/src/NumberRewriter.cpp`（新規。
   漢数字/大字/ローマ/丸数字テーブルを自前定義。Mozc 由来データ非依存）、
   `core/include/azookey/core/Candidate.h`（候補注釈 description フィールド追加）、
-  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup・注釈表示）、
+  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup、および**注釈表示のための候補ウィンドウ
+  view-model 拡張**。現状 `TextService.cpp:1654-1655` は `candidate.surface` のみで候補ウィンドウを
+  構築するため、TIP ローカルの注釈付き候補型を導入し surface とは別に description を保持・表示する。
+  確定文字列には注釈を畳み込まない。詳細は下記「M62 横断依存」の候補注釈伝送を参照）、
   `settings/mvp-settings.schema.json`（`numberRewriter`、既定 OFF）、
   `core/tests/number_rewriter_test.cpp`（新規）。
 - **受け入れ条件**:
@@ -1584,6 +1587,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **横断依存**: `THIRD_PARTY_LICENSES` 集約ファイル新設（M62-C/D と M53 辞書強化の共通前提）。
   `docs/candidate-rewriter-spec.md`（IPC payload・データ形式・ライセンス・TIP/Host 責務境界・
   確定時の学習 reading 扱いの正典）新設。
+- **候補注釈の伝送（必須）**: リライタ候補は注釈（description）付きで表示するため、候補表示経路の
+  拡張が前提。現状 `ipc::CandidateField`（`ipc/include/azookey/ipc/Payloads.h:52-57`）は
+  `surface`/`reading`/`score`/`source` のみ、候補ウィンドウは `candidate.surface` のみで構築
+  （`tsf-tip/src/TextService.cpp:1654-1655`）。よって (a) TIP ローカルリライタ（M62-A/B）は
+  **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で description を保持・表示し、
+  (b) Host 側データ駆動リライタ（M62-C/D）は **`ipc::CandidateField` に description フィールドを
+  追加**して伝送する。いずれも確定文字列には注釈を畳み込まない。正典は `docs/candidate-rewriter-spec.md`。
 - **既知のテストギャップ**: `core/tests/number_rewriter_test.cpp` 等の純粋関数テスト未作成
   （karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植する。逐語コピーしない）。
   記号/絵文字のデータ駆動リライトは再ポート出力に対する round-trip テストが必要。

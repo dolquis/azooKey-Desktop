@@ -242,22 +242,21 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   する `%LOCALAPPDATA%\azooKey\` レイアウトに合わせる。先行して M37〜M39
   を完了しておくとパッケージング側の手戻りが減る。
 
-### M12: 配布署名と CI
+### M12: 配布リリースと CI
 
-- **目的**: 署名済みリリースを GitHub Release から提供。
+- **目的**: GitHub Release から MVP リリースを提供。MVP は **未署名 MSI**（配布方針は spec §0 / DEV-415）。
 - **変更対象**: `.github/workflows/`, `pkg/`
 - **実装範囲**:
   - Windows ランナーでのビルド + 単体テスト（windows-2022 + msvc-dev-cmd + Ninja、
     Debug / Release matrix を preset 経由で configure → build → CTest）
-  - コード署名（signtool、EV/OV 証明書手当ては別途）
-  - MSIX/MSI 生成（M11 で `pkg/` 構成決定後）
+  - MSI 生成（M11 で `pkg/` 構成決定後）。コード署名は MVP では行わない（M29 で延期、DEV-255）。
   - リリースタグ push → アーティファクト自動公開
 - **設計メモ**: M38（CI 品質ゲート拡張）で整備済みの Debug/Release matrix・
-  preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では署名・Release
-  公開ステップを足す。
+  preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では MSI 生成・Release
+  公開ステップを足す（署名は MVP 対象外、spec §0）。
 - **受け入れ条件**:
   - main への merge で CI が緑（テストが個別 exe 実行で全件 pass）
-  - タグ push で署名済み MSIX/MSI が Release に上がる
+  - タグ push で未署名 MSI が Draft Release に上がる
 
 ## 横断的な作業
 
@@ -362,7 +361,7 @@ v1.0 リリースに向けたリスクと対応:
 | CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
 | MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
 | 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | **WinUI 3（C++/WinRT）に確定（DEV-99 / `docs/sideload-packaging-spec.md` §3.0）**。残る確証は実機での配布サイズ・初回起動・IPC 行数の 1〜2 日スパイク（`gate:human-required`） |
-| 署名証明書の調達 (M12) | リリース日に直結 | Phase 4 着手前に EV/OV 証明書の手当てを並行 |
+| 署名証明書の調達 (M29) | MVP リリースには影響しない（配布方針転換、spec §0） | MVP は未署名 MSI（DEV-415）、MS Store は MS 再署名（DEV-416）で有料証明書不要。証明書はスタンドアロン MSIX サイドロード着手時のみ（経路 B 確定済み・延期、DEV-255） |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
 | 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。即時の `nlohmann-json` 全置換はせず段階対応（同 §6, §11.2） |
@@ -857,14 +856,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ## Phase 7: サイドロード配信（M28〜M34）
 
-> Phase 6 完了後に着手。Microsoft Store 配信は対象外（サイドロード専念）。
-> **正典仕様**は `docs/sideload-packaging-spec.md`。
+> Phase 6 完了後に着手。**配布方針（2026-06 確定）**: MVP は未署名 MSI 直接配布（DEV-415）、
+> MSIX は Microsoft Store 経由で並行準備（MS 再署名のため自前署名不要、DEV-416）、有料署名を要する
+> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。**正典仕様**は `docs/sideload-packaging-spec.md` §0。
 > なお M30（設定アプリ）・M34（DPAPI 暗号化）は Phase 5 完了のみが前提で、
 > Phase 6 と並行・Phase 5 直後への前倒しが可能（依存関係の節を参照）。
 
-### M28: MSIX サイドロード
+### M28: MSIX パッケージング（MS Store 向け）
 
-- **目的**: MSIX パッケージで配布、ユーザースコープ登録 / アンインストール。
+- **目的**: MSIX パッケージを構成し、MS Store 配布（DEV-416）の基盤とする。Store は Microsoft が
+  再署名するため自前署名不要。MVP の直接配布は未署名 MSI（DEV-415、spec §4）であり、本マイルストーンは
+  Store チャネル準備として位置づける（配布方針は spec §0）。
 - **前提**: Phase 6 完了。
 - **変更対象**: `pkg/msix/AppxManifest.xml`（新規）、`pkg/msix/Package.wapproj`
   （新規）、`pkg/msix/Assets/*.png`（新規）。
@@ -881,9 +883,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   詳細は `docs/sideload-packaging-spec.md` §1.1.1。
 - **参照仕様**: `docs/sideload-packaging-spec.md` §1
 
-### M29: EV/OV コード署名 CI
+### M29: EV/OV コード署名 CI（当面延期）
 
-- **目的**: GitHub Actions で署名済み MSIX を自動生成。
+- **位置づけ**: 自前コード署名はスタンドアロン MSIX サイドロード専用であり、配布方針転換
+  （spec §0）により **当面延期**（DEV-255）。MVP の未署名 MSI（DEV-415）・MS Store の MSIX
+  （MS 再署名、DEV-416）はいずれも本マイルストーンを必要としない。
+- **目的**: GitHub Actions で署名済み MSIX を自動生成（延期チャネル着手時）。
 - **前提**: M28 完了 + EV/OV 証明書手当て済み。
 - **変更対象**: `.github/workflows/release.yml`（新規）、GitHub Secrets 設定。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §2。
@@ -914,9 +919,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
   X-2-6, X-2-7, X-3-6
 
-### M31: WiX インストーラ
+### M31: WiX MSI インストーラ（MVP 既定配布）
 
-- **目的**: MSIX 不可環境（LTSC 等）向けの代替インストーラ。
+- **目的**: v1.0 MVP の既定配布形態となる未署名 WiX MSI（DEV-415）。MSIX 不可環境（LTSC 等）も
+  本経路で対応する。配布方針転換（spec §0）により代替から MVP 主経路へ格上げ。
 - **前提**: M28 完了。
 - **変更対象**: `pkg/wix/Product.wxs`（新規）、`pkg/inno/setup.iss`（オプション）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §4。

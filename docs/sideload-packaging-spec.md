@@ -1,12 +1,38 @@
-# サイドロード配信 仕様（Phase 7）
+# 配布・パッケージング 仕様（Phase 7）
 
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。
 `plans/windows-port-roadmap.md` の Phase 7 の M28〜M34 が本書を参照する。
 
-**Microsoft Store 配信は対象外** とし、サイドロード（自己署名 + EV/OV 証明書
-配布）に専念する。
+## 0. 配布方針（v1.0 MVP 確定 / 2026-06）
+
+配布チャネルと署名要否を次のとおり確定する（Linear DEV-415 / DEV-416 / DEV-255）。
+
+| チャネル | 形式 | 自前コード署名 | 位置づけ |
+|---|---|---|---|
+| **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | v1.0 の既定。§4 が正典。GitHub Release で配布 |
+| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成（DEV-416） |
+| **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | **当面延期**。§2 の署名ルート（経路 B 確定済み）は本チャネル着手時に実施（DEV-255） |
+
+判断根拠:
+
+- MSIX は署名がインストールの前提条件だが、MSI/EXE は署名が任意である。未署名 MSI も
+  インストール可能で、SmartScreen 警告 + UAC「不明な発行元」は出るが reputation building で
+  許容する（出典: [Create an unsigned MSIX package](https://learn.microsoft.com/windows/msix/package/unsigned-package) /
+  [Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
+- Microsoft Store 提出 MSIX は Microsoft が再署名するため、開発者側の有料証明書が不要
+  （出典: [Publish your first Windows app](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app)）。
+- 有料コード署名証明書を要するのはスタンドアロン MSIX サイドロードのみ。MVP では不要のため延期する。
+- 先行実装（fkunn1326/azooKey-Windows = Inno Setup EXE、CorvusSKK = WiX/Inno EXE）も MSIX では
+  なく MSI/EXE インストーラで配布している。
+
+以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
+**§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
 
 ## 1. MSIX サイドロード（M28）
+
+> **スコープ注記（§0 配布方針）**: 本節の MSIX は **MS Store 配布（DEV-416）の構成**として読む。
+> Store 提出パッケージは Microsoft が再署名するため §2 の自前署名は不要。有料署名を要する
+> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
 
 > **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
 > Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
@@ -513,6 +539,12 @@ app execution alias の利用を優先する。
 
 ## 2. EV/OV コード署名（M29）
 
+> **スコープ注記（§0 配布方針）**: 本節（自前コード署名）が必要なのは **スタンドアロン MSIX
+> サイドロード**のみであり、これは **当面延期**（DEV-255）。MVP の MSI 直接配布は未署名（§4 /
+> DEV-415）、MS Store の MSIX は Microsoft が再署名するため、いずれも本節の自前署名を要しない。
+> 本節は延期チャネル着手時の正典として残す。なお §2.2 の PFX 前提は CA/Browser Forum の
+> HSM 必須化（2023-06-01）で陳腐化しており、改訂を DEV-414 で追跡する。
+
 ### 2.0 署名経路の選定
 
 署名証明書の調達ルートは v1.0 / v1.x で 3 候補ある。Microsoft Learn の現行ガイ
@@ -525,11 +557,13 @@ app execution alias の利用を優先する。
 | B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
 | C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 既存 §2.3 経路 | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | EV のみ即時信頼 | PFX 漏えいリスク、CI でのキー回転が煩雑 |
 
-**v1.0 の判定**: 開発者の所在地・組織化状況に応じて A or B or C を選ぶ。日本の
-個人開発者で組織化していない場合は B（Azure Key Vault + AzureSignTool）が現実
-的。組織化済みで該当地域なら A を強く推奨。ルートの最終選定・証明書調達・申請手順は
-人間判断が必須のため、`gate:human-required` 課題
-（[Linear DEV-255](https://linear.app/dolquis/issue/DEV-255)）で確定する。
+**判定（DEV-255 で確定）**: 署名主体は日本の個人開発者であり、経路 A（Azure Artifact
+Signing）は地域制限で不可（個人 = 米/加のみ）。reputation building 許容のため EV（経路 C）は
+不採用。新規 OV は HSM 必須化で PFX を入手できないため、CI 署名を保てる **経路 B（Azure Key
+Vault + AzureSignTool）/ B'（CA クラウド署名: SSL.com eSigner / DigiCert KeyLocker 等）** を
+採用する。ただし本署名はスタンドアロン MSIX サイドロード専用であり、§0 のとおり当面延期する
+（MVP の MSI / MS Store の MSIX はいずれも自前署名不要）。証明書調達・申請手順は人間判断が
+必須のため、`gate:human-required` 課題（[Linear DEV-255](https://linear.app/dolquis/issue/DEV-255)）で扱う。
 
 ### 2.1 signtool 引数
 
@@ -1107,9 +1141,14 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 - Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
   §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 
-## 4. WiX / Inno Setup インストーラ（M31）
+## 4. WiX / MSI インストーラ（MVP 既定 / 旧 M31）
 
-MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向け。
+> **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が v1.0 MVP の既定配布形態**（未署名、DEV-415）。
+> 当初は MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向けの代替として位置づけていたが、
+> 配布方針転換により MVP の主経路へ格上げした。MSIX は §1（MS Store 用）に回す。MSI は署名が任意で、
+> 未署名でもインストール可能（SmartScreen 警告 + UAC「不明な発行元」は出る）。
+
+MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経路で対応する。
 
 > **設定アプリと WinUI 3 ランタイムの同梱（必須）**: TIP の `ITfFnConfigure`（§3.5）は
 > `azookey_settings.exe` を起動するため、本経路でも **設定アプリ本体と WinUI 3 ランタイムを

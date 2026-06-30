@@ -151,6 +151,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     }
     case ipc::MessageType::QueryBatchConversion: {
       ipc::QueryBatchConversionResponse r;
+      if (auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json)) {
+        r.full_surface = parsed->reading;
+      }
       r.partial = false;
       r.canceled = false;
       return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(r));
@@ -190,6 +193,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     res.batch_romaji_conversion = settings.batch_romaji_conversion;
     res.batch_romaji_preview_style = settings.batch_romaji_preview_style;
     res.batch_conversion_mode = settings.batch_conversion_mode;
+    res.batch_auto_punctuation = settings.batch_auto_punctuation;
   }
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
 }

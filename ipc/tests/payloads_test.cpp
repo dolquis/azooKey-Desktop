@@ -66,6 +66,7 @@ TEST(PayloadsTest, Handshake) {
   res.batch_romaji_conversion = true;
   res.batch_romaji_preview_style = "romaji";
   res.batch_conversion_mode = "neural";
+  res.batch_auto_punctuation = true;
   auto json2 = azookey::ipc::BuildHandshakeResponse(res);
   auto parsed2 = azookey::ipc::ParseHandshakeResponse(json2);
   ASSERT_TRUE(parsed2.has_value());
@@ -74,6 +75,7 @@ TEST(PayloadsTest, Handshake) {
   EXPECT_TRUE(parsed2->batch_romaji_conversion);
   EXPECT_EQ(parsed2->batch_romaji_preview_style, "romaji");
   EXPECT_EQ(parsed2->batch_conversion_mode, "neural");
+  EXPECT_TRUE(parsed2->batch_auto_punctuation);
 }
 
 TEST(PayloadsTest, Ping) {

@@ -720,6 +720,43 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingEscapeCancelsAndKeepsAccumulatio
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingSpaceDoesNotResendRequest) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+  const uint64_t first_request_id = h.service.pending_ipc_request_id_for_test();
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_EQ(h.service.pending_ipc_request_id_for_test(), first_request_id);
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"に");
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BatchRawRomajiPreviewCommitsKanaReadingAsIs) {
+  TextServiceHarness h;
+  FakeRange range;
+  h.service.set_batch_romaji_options_for_test(true, true);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.service.preedit_kana_, "ni");
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x306b'));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, PendingNIsShownInPreeditWithoutCommittingRomaji) {
   TextServiceHarness h;
   FakeComposition composition;
@@ -1265,6 +1302,30 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeComposition
   EXPECT_EQ(range.collapse_count, 1);
   EXPECT_EQ(range.last_anchor, TF_ANCHOR_END);
   EXPECT_EQ(h.context.set_selection_count, 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.service.commit_surface_, "");
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsBatchRawRomajiPreviewAsKanaReading) {
+  TextServiceHarness h;
+  FakeRange range;
+  h.service.set_batch_romaji_options_for_test(true, true);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.preedit_kana_, "ni");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x306b'));
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_EQ(h.service.commit_surface_, "");
   EXPECT_FALSE(h.service.committing_);

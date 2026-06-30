@@ -162,7 +162,8 @@ TEST_F(DispatcherTest, HandshakeIncludesBatchRomajiSettings) {
     out << "{"
         << "\"batchRomajiConversion\":true,"
         << "\"batchRomajiPreviewStyle\":\"romaji\","
-        << "\"batchConversionMode\":\"neural\""
+        << "\"batchConversionMode\":\"neural\","
+        << "\"batchAutoPunctuation\":true"
         << "}";
   }
   azookey::host::SettingsStore settings_store(settings_path);
@@ -182,6 +183,7 @@ TEST_F(DispatcherTest, HandshakeIncludesBatchRomajiSettings) {
   EXPECT_TRUE(parsed->batch_romaji_conversion);
   EXPECT_EQ(parsed->batch_romaji_preview_style, "romaji");
   EXPECT_EQ(parsed->batch_conversion_mode, "neural");
+  EXPECT_TRUE(parsed->batch_auto_punctuation);
 
   std::remove(settings_path.c_str());
 }
@@ -255,6 +257,17 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
       MakeReq(8, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
   ASSERT_TRUE(add_after_wrong.has_value());
   EXPECT_FALSE(ipc::ParseAddUserWordResponse(add_after_wrong->payload_json)->ok);
+  ipc::QueryBatchConversionRequest batch;
+  batch.reading = "にほん";
+  batch.raw_romaji = "nihon";
+  auto batch_after_wrong = token_dispatcher.Dispatch(MakeReq(
+      81, ipc::MessageType::QueryBatchConversion, ipc::BuildQueryBatchConversionRequest(batch)));
+  ASSERT_TRUE(batch_after_wrong.has_value());
+  auto batch_payload = ipc::ParseQueryBatchConversionResponse(batch_after_wrong->payload_json);
+  ASSERT_TRUE(batch_payload.has_value());
+  EXPECT_EQ(batch_payload->full_surface, "にほん");
+  EXPECT_FALSE(batch_payload->partial);
+  EXPECT_FALSE(batch_payload->canceled);
 
   req.handshake_token = "expected-token";
   auto matched = token_dispatcher.Dispatch(

@@ -105,6 +105,7 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("batch_romaji_conversion", j::Value(p.batch_romaji_conversion));
   o.emplace("batch_romaji_preview_style", j::Value(p.batch_romaji_preview_style));
   o.emplace("batch_conversion_mode", j::Value(p.batch_conversion_mode));
+  o.emplace("batch_auto_punctuation", j::Value(p.batch_auto_punctuation));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -122,6 +123,7 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.batch_romaji_preview_style =
       v->GetString("batch_romaji_preview_style").value_or(std::string("kana"));
   p.batch_conversion_mode = v->GetString("batch_conversion_mode").value_or(std::string("neural"));
+  p.batch_auto_punctuation = v->GetBool("batch_auto_punctuation").value_or(false);
   return p;
 }
 

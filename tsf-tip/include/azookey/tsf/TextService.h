@@ -97,9 +97,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
-  void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false);
+  void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false,
+                                         bool auto_punctuation = false);
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
+  uint64_t pending_ipc_request_id_for_test();
   std::string pending_ipc_reading_for_test();
   std::string pending_ipc_raw_romaji_for_test();
 #endif
@@ -120,6 +122,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> batch_romaji_conversion_{false};
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
+  std::atomic<bool> batch_auto_punctuation_{false};
 
   // Last context used for preedit updates; allows Deactivate to end composition.
   ITfContext* active_context_{nullptr};

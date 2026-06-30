@@ -561,6 +561,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
           if (FAILED(move_hr)) return move_hr;
           selected_candidate_idx_ = candidate_ui_.GetSelected();
+        } else if (batch_query_in_progress_) {
+          // Batch conversion is already waiting for a response.  Eat repeated
+          // Space presses without re-sending the same request.
         } else {
           const std::string reading = BatchReadingForConversion();
           {
@@ -960,6 +963,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   std::string pending_surface;
   if (committing_) {
     pending_surface = commit_surface_;
+  } else if (!batch_raw_romaji_.empty()) {
+    pending_surface = BatchReadingForConversion();
   } else {
     pending_surface = preedit_kana_;
     if (romaji_.HasPending()) {
@@ -1093,7 +1098,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     if (need_notify) ipc_cv_.notify_one();
   }
 
-  commit_surface_ = chosen.surface.empty() ? preedit_kana_ : chosen.surface;
+  commit_surface_ = chosen.surface.empty() ? reading : chosen.surface;
   committing_ = true;
   SetCommitContext(context);
   if (!chosen.surface.empty() && !reading.empty()) {
@@ -1120,11 +1125,17 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
 HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
   if (!context) return S_OK;
 
-  // Flush any pending romaji first.
-  const std::string flushed = romaji_.Flush();
-  preedit_kana_ += flushed;
+  std::string surface;
+  if (!batch_raw_romaji_.empty()) {
+    surface = BatchReadingForConversion();
+  } else {
+    // Flush any pending romaji first.
+    const std::string flushed = romaji_.Flush();
+    preedit_kana_ += flushed;
+    surface = preedit_kana_;
+  }
 
-  if (preedit_kana_.empty()) return S_OK;
+  if (surface.empty()) return S_OK;
 
   candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
@@ -1154,7 +1165,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     if (need_notify) ipc_cv_.notify_one();
   }
 
-  commit_surface_ = preedit_kana_;
+  commit_surface_ = surface;
   committing_ = true;
   SetCommitContext(context);
   pending_commit_observation_.reset();
@@ -1256,6 +1267,7 @@ bool TextService::PerformHandshake() {
                                      std::memory_order_relaxed);
   batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
                                      std::memory_order_relaxed);
+  batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
   DebugLog("IPC: connected to host " + hpayload->host_version);
   return true;
 }
@@ -1390,6 +1402,7 @@ void TextService::ServeConnection() {
       qreq.reading = reading;
       qreq.raw_romaji = raw_romaji;
       qreq.mode = batch_mode.empty() ? "neural" : batch_mode;
+      qreq.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
       qreq.max_candidates = 9;
       qenv.trace_id = "tip-batch-query";
       qenv.type = MessageType::QueryBatchConversion;
@@ -1536,6 +1549,13 @@ void TextService::ServeConnection() {
         fallback.source = "model";
         response_candidates.push_back(std::move(fallback));
       }
+      if (response_candidates.empty()) {
+        CandidateField fallback;
+        fallback.surface = reading;
+        fallback.reading = reading;
+        fallback.source = "fallback";
+        response_candidates.push_back(std::move(fallback));
+      }
     } else {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
@@ -1666,10 +1686,12 @@ TextService::last_queued_commit_observation_for_test() {
   return std::nullopt;
 }
 
-void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_romaji) {
+void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_romaji,
+                                                   bool auto_punctuation) {
   batch_romaji_conversion_.store(enabled);
   batch_romaji_preview_romaji_.store(preview_romaji);
   batch_conversion_ai_cleanup_.store(false);
+  batch_auto_punctuation_.store(auto_punctuation);
 }
 
 bool TextService::has_pending_ipc_query_for_test() {
@@ -1680,6 +1702,11 @@ bool TextService::has_pending_ipc_query_for_test() {
 bool TextService::pending_ipc_query_is_batch_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   return ipc_pending_is_batch_;
+}
+
+uint64_t TextService::pending_ipc_request_id_for_test() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  return ipc_pending_id_;
 }
 
 std::string TextService::pending_ipc_reading_for_test() {

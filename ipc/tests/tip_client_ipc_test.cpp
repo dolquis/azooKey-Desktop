@@ -1,6 +1,8 @@
 // Tests the TIP-client IPC flow that mirrors StartDebugIpcProbe in TextService.cpp.
 // Verifies: connect → Handshake → Ping roundtrip, and QueryCandidates roundtrip.
 
+#include <gtest/gtest.h>
+
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -8,8 +10,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
@@ -27,15 +27,12 @@
 namespace {
 
 std::string TempFilePath(const char* stem) {
-  const auto filename =
-      std::string(stem) + "-" + std::to_string(GetCurrentProcessId()) + ".tmp";
+  const auto filename = std::string(stem) + "-" + std::to_string(GetCurrentProcessId()) + ".tmp";
   return (std::filesystem::temp_directory_path() / filename).string();
 }
 
-azookey::ipc::Envelope MakeEnvelope(uint64_t request_id,
-                                    azookey::ipc::MessageType type,
-                                    std::string payload_json,
-                                    std::string trace_id) {
+azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageType type,
+                                    std::string payload_json, std::string trace_id) {
   azookey::ipc::Envelope env;
   env.version = 1;
   env.request_id = request_id;
@@ -51,10 +48,9 @@ void ExpectAcceptedHandshake(azookey::ipc::NamedPipeClient& client) {
   handshake.protocol_version = 1;
   handshake.capabilities = {"ping", "query_candidates"};
 
-  ASSERT_TRUE(client.Send(MakeEnvelope(
-      1, azookey::ipc::MessageType::Handshake,
-      azookey::ipc::BuildHandshakeRequest(handshake),
-      "tip-activate-handshake")));
+  ASSERT_TRUE(client.Send(MakeEnvelope(1, azookey::ipc::MessageType::Handshake,
+                                       azookey::ipc::BuildHandshakeRequest(handshake),
+                                       "tip-activate-handshake")));
   auto hres = client.Receive();
   ASSERT_TRUE(hres.has_value());
   EXPECT_EQ(hres->request_id, 1u);
@@ -72,8 +68,7 @@ TEST(TipClientIpcTest, ActivationFlowAndQueryRoundTrip) {
   // Mock server that mimics inference-host behaviour needed by TIP activation.
   azookey::ipc::NamedPipeServer server;
   const bool started = server.Start(
-      pipe_name,
-      [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+      pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
         azookey::ipc::Envelope res;
         res.version = req.version;
         res.request_id = req.request_id;
@@ -195,8 +190,7 @@ TEST(TipClientIpcTest, ActivationFlowAndQueryRoundTrip) {
 
 TEST(TipClientIpcTest, QueryCandidatesRoundTripThroughHostDispatcher) {
   const std::string pipe_name =
-      "\\\\.\\pipe\\azookey-tip-host-roundtrip-test-" +
-      std::to_string(GetCurrentProcessId());
+      "\\\\.\\pipe\\azookey-tip-host-roundtrip-test-" + std::to_string(GetCurrentProcessId());
   const std::string learning_path = TempFilePath("azookey-tip-host-learning");
   const std::string user_dict_path = TempFilePath("azookey-tip-host-userdict");
   std::remove(learning_path.c_str());
@@ -204,19 +198,17 @@ TEST(TipClientIpcTest, QueryCandidatesRoundTripThroughHostDispatcher) {
 
   azookey::learning::LearningStore store(learning_path);
   azookey::learning::UserDictionary user_dict(user_dict_path);
-  azookey::host::InferenceEngine engine(
-      std::make_unique<azookey::core::SimpleConverter>(), &store, {});
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
+                                        {});
   engine.SetUserDictionary(&user_dict);
   azookey::host::RequestScheduler scheduler;
-  azookey::host::Dispatcher dispatcher(
-      &engine, &scheduler, &user_dict,
-      {/*host_version=*/"0.1.0", /*protocol_version=*/1});
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, &user_dict,
+                                       {/*host_version=*/"0.1.0", /*protocol_version=*/1});
 
   azookey::ipc::NamedPipeServer server;
   const bool started = server.Start(
       pipe_name,
-      [&dispatcher](const azookey::ipc::Envelope& req)
-          -> std::optional<azookey::ipc::Envelope> {
+      [&dispatcher](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
         return dispatcher.Dispatch(req);
       });
   ASSERT_TRUE(started);
@@ -226,14 +218,14 @@ TEST(TipClientIpcTest, QueryCandidatesRoundTripThroughHostDispatcher) {
   ASSERT_NO_FATAL_FAILURE(ExpectAcceptedHandshake(client));
 
   azookey::ipc::QueryCandidatesRequest qreq;
-  qreq.reading = u8"\u306B\u307B\u3093";
+  qreq.reading = "\u306B\u307B\u3093";
   qreq.left_context = "";
   qreq.max_candidates = 5;
   qreq.live = true;
 
-  ASSERT_TRUE(client.Send(MakeEnvelope(
-      2, azookey::ipc::MessageType::QueryCandidates,
-      azookey::ipc::BuildQueryCandidatesRequest(qreq), "tip-key-query")));
+  ASSERT_TRUE(
+      client.Send(MakeEnvelope(2, azookey::ipc::MessageType::QueryCandidates,
+                               azookey::ipc::BuildQueryCandidatesRequest(qreq), "tip-key-query")));
   auto qres = client.Receive();
   ASSERT_TRUE(qres.has_value());
   EXPECT_EQ(qres->request_id, 2u);
@@ -242,8 +234,8 @@ TEST(TipClientIpcTest, QueryCandidatesRoundTripThroughHostDispatcher) {
   auto qpayload = azookey::ipc::ParseQueryCandidatesResponse(qres->payload_json);
   ASSERT_TRUE(qpayload.has_value());
   ASSERT_FALSE(qpayload->candidates.empty());
-  EXPECT_EQ(qpayload->candidates.front().surface, u8"\u65E5\u672C");
-  EXPECT_EQ(qpayload->candidates.front().reading, u8"\u306B\u307B\u3093");
+  EXPECT_EQ(qpayload->candidates.front().surface, "\u65E5\u672C");
+  EXPECT_EQ(qpayload->candidates.front().reading, "\u306B\u307B\u3093");
 
   client.Disconnect();
   server.Stop();
@@ -257,8 +249,7 @@ TEST(TipClientIpcTest, QueryCandidatesRoundTripThroughHostDispatcher) {
 // roundtrip without being recreated.
 TEST(TipClientIpcTest, ClientReconnectsAfterHostRestart) {
   const std::string pipe_name =
-      "\\\\.\\pipe\\azookey-tip-reconnect-test-" +
-      std::to_string(GetCurrentProcessId());
+      "\\\\.\\pipe\\azookey-tip-reconnect-test-" + std::to_string(GetCurrentProcessId());
 
   auto mock_handler =
       [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
@@ -321,9 +312,9 @@ TEST(TipClientIpcTest, ClientReconnectsAfterHostRestart) {
   qreq.left_context = "";
   qreq.max_candidates = 5;
   qreq.live = true;
-  ASSERT_TRUE(client.Send(MakeEnvelope(
-      2, azookey::ipc::MessageType::QueryCandidates,
-      azookey::ipc::BuildQueryCandidatesRequest(qreq), "tip-key-query")));
+  ASSERT_TRUE(
+      client.Send(MakeEnvelope(2, azookey::ipc::MessageType::QueryCandidates,
+                               azookey::ipc::BuildQueryCandidatesRequest(qreq), "tip-key-query")));
   auto qres = client.Receive();
   ASSERT_TRUE(qres.has_value());
   auto qpayload = azookey::ipc::ParseQueryCandidatesResponse(qres->payload_json);

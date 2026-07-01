@@ -501,7 +501,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackTypedKey
   eaten = FALSE;
   EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
   EXPECT_EQ(eaten, TRUE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+  EXPECT_EQ(h.service.preedit_kana_, "あ");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureKeepsActiveContext) {
@@ -510,14 +510,14 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureKeepsActiveContex
 
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.active_context_is_for_test(&h.context));
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(h.service.OnKeyDown(&next_context, 'N', 0, &eaten), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.service.active_context_is_for_test(&h.context));
   EXPECT_FALSE(h.service.active_context_is_for_test(&next_context));
   EXPECT_EQ(next_context.request_count, 0);
@@ -528,14 +528,14 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRestoresCandidate
 
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
-  candidate.reading = u8"か";
+  candidate.surface = "蚊";
+  candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
@@ -547,14 +547,14 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRestoresCandidate
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(h.service.OnKeyDown(&h.context, 'N', 0, &eaten), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
-  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
-  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackBackspaceAndEscape) {
@@ -562,19 +562,19 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackBackspac
 
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   BOOL eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_BACK, 0, &eaten), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
 
   eaten = TRUE;
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_ESCAPE, 0, &eaten), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackSpaceFlush) {
@@ -592,7 +592,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateAllocationFailureRollsBackSpaceFlu
   eaten = FALSE;
   EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), S_OK);
   EXPECT_EQ(eaten, TRUE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAllocationFailureReturnsOutOfMemory) {
@@ -600,7 +600,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAllocationFailureReturnsOutOfMemor
 
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   const int previous_request_count = h.context.request_count;
 
   BOOL eaten = TRUE;
@@ -609,8 +609,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAllocationFailureReturnsOutOfMemor
 
   EXPECT_EQ(eaten, FALSE);
   EXPECT_EQ(h.context.request_count, previous_request_count);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -619,12 +619,12 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemo
 
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
-  candidate.reading = u8"か";
+  candidate.surface = "蚊";
+  candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
@@ -636,8 +636,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemo
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), E_OUTOFMEMORY);
 
   EXPECT_EQ(h.context.request_count, previous_request_count);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "蚊");
   EXPECT_TRUE(h.service.committing_);
   EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
 }
@@ -651,7 +651,7 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
 
   EXPECT_TRUE(h.TestPress('A'));
   EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_GE(h.context.request_count, 2);
   EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
 }
@@ -668,14 +668,14 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiAccumulatesKanaPreviewWithoutQueryin
   EXPECT_TRUE(h.Press('G'));
   EXPECT_TRUE(h.Press('O'));
 
-  EXPECT_EQ(h.service.preedit_kana_, u8"にほんご");
+  EXPECT_EQ(h.service.preedit_kana_, "にほんご");
   EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
   EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
-  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"にほんご");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "にほんご");
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "nihongo");
   EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
 }
@@ -691,7 +691,7 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiPreviewCanShowRawRomaji) {
   EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
 
   EXPECT_TRUE(h.Press(VK_SPACE));
-  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"に");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に");
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
 }
 
@@ -701,7 +701,7 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingEscapeCancelsAndKeepsAccumulatio
 
   EXPECT_TRUE(h.Press('N'));
   EXPECT_TRUE(h.Press('I'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"に");
+  EXPECT_EQ(h.service.preedit_kana_, "に");
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
@@ -709,14 +709,14 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingEscapeCancelsAndKeepsAccumulatio
   EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
 
   EXPECT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(h.service.preedit_kana_, u8"に");
+  EXPECT_EQ(h.service.preedit_kana_, "に");
   EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
   EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
-  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"に");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に");
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
 }
 
@@ -733,7 +733,7 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingSpaceDoesNotResendRequest) {
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
   EXPECT_EQ(h.service.pending_ipc_request_id_for_test(), first_request_id);
-  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), u8"に");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に");
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
 }
 
@@ -771,7 +771,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PendingNIsShownInPreeditWithoutCommittingRomaji
   EXPECT_EQ(range.last_text, std::wstring(1, L'\x3093'));
 
   EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"な");
+  EXPECT_EQ(h.service.preedit_kana_, "な");
   EXPECT_EQ(range.last_text, std::wstring(1, L'\x306a'));
 
   h.service.composition_->Release();
@@ -849,7 +849,7 @@ TEST(TsfTipOnKeyDownPreeditTest, BackspaceRemovesPendingRomajiBeforeKana) {
   EXPECT_EQ(h.service.preedit_kana_, "");
 
   EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+  EXPECT_EQ(h.service.preedit_kana_, "あ");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BackspaceDeletesOneUtf8KanaFromPreedit) {
@@ -859,10 +859,10 @@ TEST(TsfTipOnKeyDownPreeditTest, BackspaceDeletesOneUtf8KanaFromPreedit) {
   EXPECT_TRUE(h.Press('A'));
   EXPECT_TRUE(h.Press('N'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"かな");
+  ASSERT_EQ(h.service.preedit_kana_, "かな");
 
   EXPECT_TRUE(h.Press(VK_BACK));
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.Press(VK_BACK));
   EXPECT_EQ(h.service.preedit_kana_, "");
@@ -876,7 +876,7 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeClearsPreeditAndPendingRomaji) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.TestPress(VK_ESCAPE));
   EXPECT_TRUE(h.Press(VK_ESCAPE));
@@ -887,7 +887,7 @@ TEST(TsfTipOnKeyDownPreeditTest, EscapeClearsPreeditAndPendingRomaji) {
   EXPECT_EQ(h.service.preedit_kana_, "");
 
   EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"あ");
+  EXPECT_EQ(h.service.preedit_kana_, "あ");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, SpaceFlushesPendingRomajiAndIsEatenDuringPreedit) {
@@ -900,11 +900,11 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceFlushesPendingRomajiAndIsEatenDuringPreedi
   EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_TRUE(h.TestPress(VK_SPACE));
   EXPECT_TRUE(h.Press(VK_SPACE));
-  EXPECT_EQ(h.service.preedit_kana_, u8"ん");
+  EXPECT_EQ(h.service.preedit_kana_, "ん");
 
   EXPECT_TRUE(h.TestPress(VK_SPACE));
   EXPECT_TRUE(h.Press(VK_SPACE));
-  EXPECT_EQ(h.service.preedit_kana_, u8"ん");
+  EXPECT_EQ(h.service.preedit_kana_, "ん");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
@@ -912,7 +912,7 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
@@ -920,14 +920,14 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceWaitsForLateCandidatesWhenCacheIsEmpty) {
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
+  candidate.surface = "蚊";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
   h.service.show_candidate_window_from_cache_for_test();
 
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
-  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, SpaceUsesCachedCandidatesWithoutPending) {
@@ -935,18 +935,18 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceUsesCachedCandidatesWithoutPending) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
+  candidate.surface = "蚊";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
   ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
-  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, u8"蚊");
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) {
@@ -967,7 +967,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DeactivateReleasesCompositionWhenSyncCleanupIsR
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -990,7 +990,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DeactivateEndsCompositionWhenSyncCleanupRuns) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1014,7 +1014,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossEndsCompositionAndClearsStaleState) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
   ASSERT_TRUE(h.service.has_active_context_for_test());
@@ -1041,7 +1041,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsLatestPreeditIntoExistingCompos
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   composition.AddRef();
   composition.range_ = &range;
@@ -1050,7 +1050,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsLatestPreeditIntoExistingCompos
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('I'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"かき");
+  ASSERT_EQ(h.service.preedit_kana_, "かき");
   ASSERT_EQ(range.last_text, std::wstring(1, L'\x304b'));
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
@@ -1077,7 +1077,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenLatestPreeditS
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   composition.AddRef();
   composition.range_ = &range;
@@ -1087,7 +1087,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenLatestPreeditS
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('I'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"かき");
+  ASSERT_EQ(h.service.preedit_kana_, "かき");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   h.context.run_edit_session = true;
@@ -1098,7 +1098,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenLatestPreeditS
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"かき");
+  EXPECT_EQ(h.service.preedit_kana_, "かき");
   EXPECT_TRUE(h.service.has_active_context_for_test());
 
   h.service.composition_->Release();
@@ -1111,7 +1111,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsUsesSyncEditSessionAndClearsAf
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   h.context.selection_range = &range;
   h.context.run_edit_session = true;
@@ -1135,14 +1135,14 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesBeforeNextInputAndClearsStal
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   h.context.request_result = TF_E_LOCKED;
   h.context.request_session_result = TF_E_LOCKED;
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   h.context.request_result = S_OK;
   h.context.request_session_result = S_OK;
@@ -1160,7 +1160,7 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetriesBeforeNextInputAndClearsStal
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryConsumesTriggerKeyAfterSuccess) {
@@ -1169,14 +1169,14 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryConsumesTriggerKeyAfterSuccess
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   h.context.request_result = TF_E_LOCKED;
   h.context.request_session_result = TF_E_LOCKED;
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   h.context.request_result = S_OK;
   h.context.request_session_result = S_OK;
@@ -1202,14 +1202,14 @@ TEST(TsfTipOnKeyDownPreeditTest,
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   h.context.request_result = TF_E_LOCKED;
   h.context.request_session_result = TF_E_LOCKED;
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   h.context.request_result = S_OK;
   h.context.request_session_result = S_OK;
@@ -1239,20 +1239,20 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitConsumesNextInputWhenRetryIsStillRe
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   h.context.request_result = TF_E_LOCKED;
   h.context.request_session_result = TF_E_LOCKED;
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   EXPECT_TRUE(h.TestPress('A'));
   EXPECT_TRUE(h.Press('A'));
 
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -1261,14 +1261,14 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryAllocationFailureReturnsOutOfM
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   h.context.request_result = TF_E_LOCKED;
   h.context.request_session_result = TF_E_LOCKED;
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   h.context.request_result = S_OK;
   h.context.request_session_result = S_OK;
@@ -1277,8 +1277,8 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitRetryAllocationFailureReturnsOutOfM
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(h.service.OnKeyDown(&h.context, 'A', 0, &eaten), E_OUTOFMEMORY);
   EXPECT_EQ(eaten, FALSE);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -1288,7 +1288,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsPendingPreeditBeforeComposition
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_EQ(h.service.composition_, nullptr);
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
@@ -1338,13 +1338,13 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossCommitsQueuedPreeditCommitBeforeCompos
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_EQ(h.service.composition_, nullptr);
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
   EXPECT_EQ(h.context.last_flags, TF_ES_SYNC | TF_ES_READWRITE);
 
@@ -1369,13 +1369,13 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsR
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_EQ(h.service.composition_, nullptr);
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   h.context.request_result = TF_E_LOCKED;
@@ -1384,8 +1384,8 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsR
   EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
 
   EXPECT_EQ(h.service.composition_, nullptr);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
   EXPECT_TRUE(h.service.has_active_context_for_test());
 }
@@ -1397,22 +1397,22 @@ TEST(TsfTipOnKeyDownPreeditTest, CompositionTerminationPreservesQueuedCommitUnti
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   composition.AddRef();
   h.service.composition_ = &composition;
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
   ASSERT_EQ(h.service.composition_, &composition);
 
   EXPECT_EQ(h.service.OnCompositionTerminated(1, &composition), S_OK);
 
   EXPECT_EQ(h.service.composition_, nullptr);
   EXPECT_EQ(h.service.preedit_kana_, "");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 
   h.context.selection_range = &range;
@@ -1434,24 +1434,24 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenGetRan
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   composition.AddRef();
   composition.get_range_result = TF_E_LOCKED;
   h.service.composition_ = &composition;
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   h.context.run_edit_session = true;
   EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context), TF_E_LOCKED);
 
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -1462,7 +1462,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTex
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   composition.AddRef();
   composition.range_ = &range;
@@ -1470,9 +1470,9 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTex
   range.set_text_result = E_FAIL;
 
   EXPECT_TRUE(h.Press(VK_RETURN));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"か");
+  ASSERT_EQ(h.service.commit_surface_, "か");
 
   h.context.run_edit_session = true;
   EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context), E_FAIL);
@@ -1480,8 +1480,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitEditSessionRestoresQueuedCommitWhenSetTex
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -1491,7 +1491,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsPreservesQueuedCommitWhenInlin
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   composition.AddRef();
   composition.get_range_result = TF_E_LOCKED;
@@ -1502,8 +1502,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsPreservesQueuedCommitWhenInlin
 
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -1514,11 +1514,11 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSe
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
+  candidate.surface = "蚊";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
   EXPECT_TRUE(h.Press(VK_SPACE));
@@ -1535,8 +1535,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedPreservesQueuedCommitWhenInlineSe
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(h.service.composition_, &composition);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
-  EXPECT_EQ(h.service.commit_surface_, u8"蚊");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_EQ(h.service.commit_surface_, "蚊");
   EXPECT_TRUE(h.service.committing_);
 }
 
@@ -1546,12 +1546,12 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
-  candidate.reading = u8"か";
+  candidate.surface = "蚊";
+  candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
@@ -1563,7 +1563,7 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   h.service.commit_selected_for_test(&h.context);
 
   ASSERT_TRUE(h.service.committing_);
-  ASSERT_EQ(h.service.commit_surface_, u8"蚊");
+  ASSERT_EQ(h.service.commit_surface_, "蚊");
   EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 
@@ -1578,10 +1578,10 @@ TEST(TsfTipOnKeyDownPreeditTest, CandidateObservationPostsAfterQueuedCommitRetry
   EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
   auto observation = h.service.last_queued_commit_observation_for_test();
   ASSERT_TRUE(observation.has_value());
-  EXPECT_EQ(observation->reading, u8"か");
-  EXPECT_EQ(observation->chosen.surface, u8"蚊");
+  EXPECT_EQ(observation->reading, "か");
+  EXPECT_EQ(observation->chosen.surface, "蚊");
   ASSERT_EQ(observation->shown.size(), 1u);
-  EXPECT_EQ(observation->shown[0].surface, u8"蚊");
+  EXPECT_EQ(observation->shown[0].surface, "蚊");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, SelectedCommitObservationFailureDoesNotRetryCommittedText) {
@@ -1591,12 +1591,12 @@ TEST(TsfTipOnKeyDownPreeditTest, SelectedCommitObservationFailureDoesNotRetryCom
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
 
   std::vector<azookey::ipc::CandidateField> candidates;
   azookey::ipc::CandidateField candidate;
-  candidate.surface = u8"蚊";
-  candidate.reading = u8"か";
+  candidate.surface = "蚊";
+  candidate.reading = "か";
   candidate.source = "test";
   candidates.push_back(candidate);
   h.service.set_cached_candidates_for_test(std::move(candidates));
@@ -1631,7 +1631,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitI
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_EQ(h.service.composition_, nullptr);
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
@@ -1641,7 +1641,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesPendingPreeditWhenSyncCommitI
   EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
 
   EXPECT_EQ(h.service.composition_, nullptr);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.service.commit_surface_, "");
   EXPECT_FALSE(h.service.committing_);
   EXPECT_TRUE(h.service.has_active_context_for_test());
@@ -1653,7 +1653,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsR
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1665,7 +1665,7 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesCompositionWhenSyncCleanupIsR
 
   EXPECT_EQ(h.service.composition_, &composition);
   EXPECT_EQ(composition.end_count, 0);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.service.has_active_context_for_test());
 
   h.service.composition_->Release();
@@ -1685,7 +1685,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiv
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1700,7 +1700,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DocumentMgrFocusRefreshAliasDoesNotCleanupActiv
   EXPECT_EQ(h.service.composition_, &composition);
   EXPECT_EQ(composition.end_count, 0);
   EXPECT_EQ(range.set_text_count, 0);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.service.has_active_context_for_test());
 
   h.service.composition_->Release();
@@ -1718,7 +1718,7 @@ TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActive
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1730,7 +1730,7 @@ TEST(TsfTipOnKeyDownPreeditTest, UninitBackgroundDocumentMgrDoesNotCleanupActive
   EXPECT_EQ(h.context.request_count, request_count);
   EXPECT_EQ(h.service.composition_, &composition);
   EXPECT_EQ(composition.end_count, 0);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.service.has_active_context_for_test());
 
   h.service.composition_->Release();
@@ -1748,7 +1748,7 @@ TEST(TsfTipOnKeyDownPreeditTest, UninitActiveDocumentMgrCleansUpActiveContext) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1772,7 +1772,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingActiveContextEndsCompositionAndClearsSta
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1797,7 +1797,7 @@ TEST(TsfTipOnKeyDownPreeditTest, PoppingContextAliasCleansUpByComIdentity) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1823,7 +1823,7 @@ TEST(TsfTipOnKeyDownPreeditTest,
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   ASSERT_TRUE(h.service.has_active_context_for_test());
 
   composition.AddRef();
@@ -1835,7 +1835,7 @@ TEST(TsfTipOnKeyDownPreeditTest,
 
   EXPECT_EQ(h.service.composition_, &composition);
   EXPECT_EQ(composition.end_count, 0);
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_TRUE(h.service.has_active_context_for_test());
 
   h.service.composition_->Release();
@@ -1886,31 +1886,31 @@ TEST(TsfTipOnKeyDownPreeditTest, SystemModifiedKeysPassThroughDuringPreedit) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(h.service.preedit_kana_, u8"か");
+  ASSERT_EQ(h.service.preedit_kana_, "か");
   const int request_count = h.context.request_count;
 
   h.keyboard_state.SetDown(VK_CONTROL, true);
   EXPECT_FALSE(h.TestPress('C'));
   EXPECT_FALSE(h.Press('C'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.context.request_count, request_count);
   h.keyboard_state.SetDown(VK_CONTROL, false);
 
   h.keyboard_state.SetDown(VK_MENU, true);
   EXPECT_FALSE(h.TestPress(VK_SPACE));
   EXPECT_FALSE(h.Press(VK_SPACE));
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.context.request_count, request_count);
   h.keyboard_state.SetDown(VK_MENU, false);
 
   h.keyboard_state.SetDown(VK_RWIN, true);
   EXPECT_FALSE(h.TestPress('L'));
   EXPECT_FALSE(h.Press('L'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.context.request_count, request_count);
   h.keyboard_state.SetDown(VK_RWIN, false);
 
   EXPECT_TRUE(h.TestPress('A'));
   EXPECT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.preedit_kana_, u8"かあ");
+  EXPECT_EQ(h.service.preedit_kana_, "かあ");
 }

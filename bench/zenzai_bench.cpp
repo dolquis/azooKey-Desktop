@@ -32,7 +32,7 @@ namespace {
 
 struct Options {
   std::string model_path;
-  std::string input = u8"にほんご";
+  std::string input = "にほんご";
   std::string context;
   size_t iterations{50};
   size_t warmup{3};
@@ -82,8 +82,8 @@ size_t ParseSize(const std::string& value, const char* name) {
     }
     return static_cast<size_t>(parsed);
   } catch (const std::exception& ex) {
-    throw std::invalid_argument(std::string(name) + " must be a non-negative integer: " +
-                                ex.what());
+    throw std::invalid_argument(std::string(name) +
+                                " must be a non-negative integer: " + ex.what());
   }
 }
 
@@ -170,11 +170,10 @@ Options ParseOptions(int argc, char** argv) {
         throw std::invalid_argument("--backend must be cpu or cuda");
       }
     } else if (arg == "--n-gpu-layers") {
-      options.n_gpu_layers = ParseI32(RequireValue(argc, argv, i, "--n-gpu-layers"),
-                                      "--n-gpu-layers");
+      options.n_gpu_layers =
+          ParseI32(RequireValue(argc, argv, i, "--n-gpu-layers"), "--n-gpu-layers");
     } else if (arg == "--max-p95-ms") {
-      options.max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"),
-                                       "--max-p95-ms");
+      options.max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
     } else if (arg == "--require-model") {
       options.require_model = true;
     } else if (arg == "--mock-zenzai") {
@@ -208,8 +207,8 @@ void WriteMinimalGguf(const std::filesystem::path& path, uint32_t version = 3) {
 }
 
 uint64_t NowEpochSec() {
-  return static_cast<uint64_t>(std::chrono::system_clock::to_time_t(
-      std::chrono::system_clock::now()));
+  return static_cast<uint64_t>(
+      std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
 }
 
 double Percentile(const std::vector<double>& sorted, double percentile) {
@@ -271,8 +270,8 @@ int main(int argc, char** argv) {
   std::remove(learning_path.string().c_str());
 
   azookey::learning::LearningStore store(learning_path.string());
-  azookey::host::InferenceEngine engine(
-      std::make_unique<azookey::core::SimpleConverter>(), &store, {});
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
+                                        {});
 
   azookey::host::ModelLoadOptions load_options;
   load_options.path = options.model_path;
@@ -285,9 +284,8 @@ int main(int argc, char** argv) {
   const auto load_end = std::chrono::steady_clock::now();
   const double load_ms = std::chrono::duration<double, std::milli>(load_end - load_start).count();
   if (!load_result.ok) {
-    std::cerr << "status=load-failed llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
-              << " load_ms=" << load_ms << " error=" << OptionalString(load_result.error)
-              << std::endl;
+    std::cerr << "status=load-failed llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP << " load_ms=" << load_ms
+              << " error=" << OptionalString(load_result.error) << std::endl;
     std::remove(learning_path.string().c_str());
     if (mock_model_path) {
       std::remove(mock_model_path->string().c_str());
@@ -315,17 +313,16 @@ int main(int argc, char** argv) {
   const double p95 = Percentile(lat_ms, 95.0);
   const double p99 = Percentile(lat_ms, 99.0);
 
-  const auto zenzai_count = std::count_if(last_candidates.begin(), last_candidates.end(),
-                                          [](const auto& candidate) {
-                                            return HasZenzaiTag(candidate);
-                                          });
-  const std::string top_surface = last_candidates.empty() ? "none" : last_candidates.front().surface;
-  const std::string top_debug =
-      last_candidates.empty()
-          ? "none"
-          : OptionalString(last_candidates.front().debug_info.empty()
-                               ? std::optional<std::string>()
-                               : last_candidates.front().debug_info);
+  const auto zenzai_count =
+      std::count_if(last_candidates.begin(), last_candidates.end(),
+                    [](const auto& candidate) { return HasZenzaiTag(candidate); });
+  const std::string top_surface =
+      last_candidates.empty() ? "none" : last_candidates.front().surface;
+  const std::string top_debug = last_candidates.empty()
+                                    ? "none"
+                                    : OptionalString(last_candidates.front().debug_info.empty()
+                                                         ? std::optional<std::string>()
+                                                         : last_candidates.front().debug_info);
 
   std::cout << std::fixed << std::setprecision(4) << "status=ok"
             << " llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP

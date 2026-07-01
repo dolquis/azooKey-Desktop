@@ -28,7 +28,7 @@
 以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
 **§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
 
-## 1. MSIX サイドロード（M28）
+## 1. MSIX パッケージング（MS Store 向け・M28）
 
 > **スコープ注記（§0 配布方針）**: 本節の MSIX は **MS Store 配布（DEV-416）の構成**として読む。
 > Store 提出パッケージは Microsoft が再署名するため §2 の自前署名は不要。有料署名を要する
@@ -802,8 +802,9 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 >   ただしこれは**設定アプリ（WinUI 3）単体の下限**であり、配布パッケージ全体の最小 OS では
 >   ない（下記）。
 > - **unpackaged（MSIX なし）配布もサポートされる**（Windows App SDK 1.0 以降）。旧記述
->   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。ただし本プロジェクトは
->   TIP の CLSID/Profile 登録と MSIX サイドロード配布の都合で **packaged（MSIX）を採用**する。
+>   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。本プロジェクトは §0 の
+>   とおり **MVP を未署名 MSI（設定アプリは unpackaged / self-contained 同梱）**で配布し、
+>   **MS Store 向けには packaged（MSIX）**を用いる。WinUI 3 は両形態に対応するため単一 UI スタックで両立する。
 > - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
 >   §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
 >   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、

@@ -19,7 +19,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 
 - **MVP**: Windows 10/11 上で TSF 経由のローマ字入力 → かな漢字変換 → 確定までの
   最小フローが動作する IME。
-- **配布形態**: ユーザーごとインストールの MSIX または MSI。
+- **配布形態**: ユーザーごとインストールの MSI（MVP 既定・未署名）または MSIX（MS Store）。配布方針は `docs/sideload-packaging-spec.md` §0。
 - **コア方針**: TIP (in-proc COM DLL) はキー処理と UI のみ担当し、推論・学習は
   Named Pipe 経由で `inference-host` (per-user 常駐 EXE) に委譲する。
 
@@ -349,7 +349,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - ~~設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。~~
   → **確定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は既存 C++/WinRT スタック
-  との親和性・Fluent/Mica 標準対応・MSIX 整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
+  との親和性・Fluent/Mica 標準対応・配布形態（MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
   縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイクは `gate:human-required`
   で残す。詳細は `docs/sideload-packaging-spec.md` §3.0。
 
@@ -380,7 +380,7 @@ v1.0 リリースに向けたリスクと対応:
 
 ## v1.0 までの実行計画（Phase 1〜4）
 
-ロードマップの依存図とは別に、v1.0（MSIX 配布可能な最小 IME）リリースまでの
+ロードマップの依存図とは別に、v1.0（MSI で配布可能な最小 IME）リリースまでの
 実行順を 4 フェーズで管理する。各マイルストーンの進捗・状態の正典は **Linear**
 （project「azooKey Desktop / Windows IME MVP」）であり、本章は定義・受け入れ条件・依存のみを持つ。
 macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照）。
@@ -856,7 +856,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     しない。§4.3 の NPU 非必須方針と整合）。
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §8
 
-## Phase 7: サイドロード配信（M28〜M34）
+## Phase 7: 配布・パッケージング（M28〜M34）
 
 > Phase 6 完了後に着手。**配布方針（2026-06 確定）**: MVP は未署名 MSI 直接配布（DEV-415）、
 > MSIX は Microsoft Store 経由で並行準備（MS 再署名のため自前署名不要、DEV-416）、有料署名を要する
@@ -1874,7 +1874,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   キャンセル / Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で
   検証する。
 - **前提**: M38（CI 品質ゲート拡張）完了。
-- **推奨実装時期**: Phase 4 ゲート前または直後。M28（MSIX サイドロード）
+- **推奨実装時期**: Phase 4 ゲート前または直後。M28（MSIX パッケージング）
   着手前に最低限のアプリ互換性ベースラインを確保する。
 - **変更対象**: `compat-test/`（新規ディレクトリ）、`.github/workflows/`
   （compat ジョブ追加、optional）。

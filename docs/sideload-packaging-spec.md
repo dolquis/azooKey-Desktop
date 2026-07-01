@@ -420,42 +420,6 @@ GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
 （モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。結論は §1.6.2 参照。
 
-#### 1.6.2 配布ライセンス結論（DEV-202・暫定確定）
-
-DEV-202（`gate:human-required`）の調査結論を固定する。**本節は法的助言ではなく、
-一次情報の整理と当面の運用方針である**。最終確定には著者確認（下記「残作業」）を要する。
-
-##### モデル（zenz GGUF）
-
-| 項目 | 内容 |
-|---|---|
-| ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf`（§1.6.1 の `expected.json` が正） |
-| HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
-| 矛盾兆候 | 直前の `zenz-v3.1-small-gguf` は `cc-by-sa-4.0`。v1/v2 のベース `ku-nlp/gpt2-small-japanese-char` も `cc-by-sa-4.0`。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性 |
-| **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
-| 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
-| 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
-| 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
-
-##### CUDA ランタイム（optional add-on として同梱・再配布する）
-
-- `ggml-cuda`（R1 CUDA, NVIDIA）は §1.6 のとおり base 非同梱の optional add-on。**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
-- 根拠: NVIDIA CUDA Toolkit EULA の Attachment A（redistributable 一覧）が CUDA Runtime（cudart）・cuBLAS（cublas）等の再配布を許可する。
-- 遵守条件: 配布物に **NVIDIA の著作権表示を保持**し、利用者へ **EULA と整合する条項を pass-down** する（`ThirdPartyNotices.txt` に NVIDIA CUDA Toolkit EULA の該当条項と著作権表示を記載）。
-- **配置制約（app-only）**: 再配布する DLL は**アプリ専用（private）ディレクトリに配置し、本アプリからのみアクセスされる**ようにする。CUDA Toolkit EULA は redistributable な SDK 部分を「アプリからのみアクセスされる」ことを条件とするため（§2.6 が cudart/cublas を redistributable と定める一方、§1.1.2 がアクセス主体をアプリに限定）、共有 `PATH` / システムディレクトリ（`System32` 等）へ設置して他アプリから参照可能にしない。DLL 探索は app-local ディレクトリに限定する（例: add-on の配置フォルダを `SetDllDirectory` / manifest で明示し、グローバル `PATH` へ注入しない）。
-- 版・ファイル名はビルドで固定し、`ThirdPartyNotices.txt` に列挙する。
-
-##### Vulkan（最小リスク）
-
-- `ggml-vulkan` 自体は llama.cpp（MIT）のビルド成果物であり再配布に制約は薄い。
-- **Vulkan ローダ / ドライバは GPU ベンダのドライバが提供**し、こちらで同梱・再配布しない → Vulkan 経路に固有の再配布義務は無い。
-- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/zenzai-gpu-route.md` 参考節）。
-
-##### 残作業（`gate:human-required`）
-
-- **著者（Miwa-Keita 氏）へ v3.2 の実ライセンスとベースモデルを書面確認**する。Apache-2.0 が確定したら本節の帰属義務（改変明示・SA 相当の配慮）を緩め、再ホスト DL（§1.6.1 表「再配布可」行）へ移行してよい。
-- 確認結果は DEV-202 に検証メモとして記録し、確定後に本節を更新する。
-
 ##### 配置パスとバージョニング
 
 - **配置先**: `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（§3.4、および
@@ -556,6 +520,42 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
   と SHA256 値域をそのまま再利用し、独自の取得 / 配置スキームを作らない。
 - **将来のモデル DL UI（M45 後続 M）**: 本節の取得機構をそのまま UI 化し、上表の
   配信元分岐を引き継ぐ。
+
+#### 1.6.2 配布ライセンス結論（DEV-202・暫定確定）
+
+DEV-202（`gate:human-required`）の調査結論を固定する。**本節は法的助言ではなく、
+一次情報の整理と当面の運用方針である**。最終確定には著者確認（下記「残作業」）を要する。
+
+##### モデル（zenz GGUF）
+
+| 項目 | 内容 |
+|---|---|
+| ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf`（§1.6.1 の `expected.json` が正） |
+| HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
+| 矛盾兆候 | 直前の `zenz-v3.1-small-gguf` は `cc-by-sa-4.0`。v1/v2 のベース `ku-nlp/gpt2-small-japanese-char` も `cc-by-sa-4.0`。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性 |
+| **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
+| 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
+| 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
+| 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
+
+##### CUDA ランタイム（optional add-on として同梱・再配布する）
+
+- `ggml-cuda`（R1 CUDA, NVIDIA）は §1.6 のとおり base 非同梱の optional add-on。**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
+- 根拠: NVIDIA CUDA Toolkit EULA の Attachment A（redistributable 一覧）が CUDA Runtime（cudart）・cuBLAS（cublas）等の再配布を許可する。
+- 遵守条件: 配布物に **NVIDIA の著作権表示を保持**し、利用者へ **EULA と整合する条項を pass-down** する（`ThirdPartyNotices.txt` に NVIDIA CUDA Toolkit EULA の該当条項と著作権表示を記載）。
+- **配置制約（app-only）**: 再配布する DLL は**アプリ専用（private）ディレクトリに配置し、本アプリからのみアクセスされる**ようにする。CUDA Toolkit EULA は redistributable な SDK 部分を「アプリからのみアクセスされる」ことを条件とするため（§2.6 が cudart/cublas を redistributable と定める一方、§1.1.2 がアクセス主体をアプリに限定）、共有 `PATH` / システムディレクトリ（`System32` 等）へ設置して他アプリから参照可能にしない。DLL 探索は app-local ディレクトリに限定する（例: add-on の配置フォルダを `SetDllDirectory` / manifest で明示し、グローバル `PATH` へ注入しない）。
+- 版・ファイル名はビルドで固定し、`ThirdPartyNotices.txt` に列挙する。
+
+##### Vulkan（最小リスク）
+
+- `ggml-vulkan` 自体は llama.cpp（MIT）のビルド成果物であり再配布に制約は薄い。
+- **Vulkan ローダ / ドライバは GPU ベンダのドライバが提供**し、こちらで同梱・再配布しない → Vulkan 経路に固有の再配布義務は無い。
+- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/zenzai-gpu-route.md` 参考節）。
+
+##### 残作業（`gate:human-required`）
+
+- **著者（Miwa-Keita 氏）へ v3.2 の実ライセンスとベースモデルを書面確認**する。Apache-2.0 が確定したら本節の帰属義務（改変明示・SA 相当の配慮）を緩め、再ホスト DL（§1.6.1 表「再配布可」行）へ移行してよい。
+- 確認結果は DEV-202 に検証メモとして記録し、確定後に本節を更新する。
 
 ### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
 

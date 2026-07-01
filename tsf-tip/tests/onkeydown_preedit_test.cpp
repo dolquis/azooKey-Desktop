@@ -6,7 +6,11 @@
 #include <msctf.h>
 
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -46,6 +50,17 @@ class KeyboardStateGuard {
  private:
   std::array<BYTE, 256> original_{};
 };
+
+template <typename Predicate>
+bool WaitUntil(Predicate predicate,
+               std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return predicate();
+}
 
 class FakeRange final : public ITfRange {
  public:
@@ -735,6 +750,80 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingSpaceDoesNotResendRequest) {
   EXPECT_EQ(h.service.pending_ipc_request_id_for_test(), first_request_id);
   EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に");
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallback) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-qc-timeout-test-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> saw_query{false};
+  std::atomic<bool> saw_cancel{false};
+  std::atomic<uint64_t> query_request_id{0};
+  std::atomic<uint64_t> cancel_target_id{0};
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "test-host";
+          payload.protocol_version = 1;
+          payload.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+
+        if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+          saw_query.store(true);
+          query_request_id.store(req.request_id);
+          return std::nullopt;
+        }
+
+        if (req.type == azookey::ipc::MessageType::Cancel) {
+          auto payload = azookey::ipc::ParseCancel(req.payload_json);
+          if (payload) cancel_target_id.store(payload->target_request_id);
+          saw_cancel.store(true);
+          return std::nullopt;
+        }
+
+        return std::nullopt;
+      });
+  ASSERT_TRUE(started);
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  h.service.start_ipc_worker_for_test();
+
+  ASSERT_TRUE(WaitUntil([&] { return saw_query.load(); }));
+  ASSERT_TRUE(WaitUntil([&] { return saw_cancel.load(); }));
+  EXPECT_EQ(cancel_target_id.load(), query_request_id.load());
+
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  auto cached = h.service.cached_candidates_for_test();
+  ASSERT_EQ(cached.size(), 1u);
+  EXPECT_EQ(cached[0].surface, "か");
+  EXPECT_EQ(cached[0].reading, "か");
+  EXPECT_EQ(cached[0].source, "fallback");
+
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "か");
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchRawRomajiPreviewCommitsKanaReadingAsIs) {

@@ -593,30 +593,27 @@ struct ZenzaiModelRuntime {
     if (!mock_candidates_for_tests) {
       return {};
     }
-    if (ToKatakana(kana) == u8"キャンセル") {
+    if (ToKatakana(kana) == "キャンセル") {
       // Test fixture: simulate scheduler cancellation after Convert has begun.
       if (conversion_context.cancel) {
-        const_cast<std::atomic<bool>*>(conversion_context.cancel)->store(true,
-                                                                         std::memory_order_relaxed);
+        const_cast<std::atomic<bool>*>(conversion_context.cancel)
+            ->store(true, std::memory_order_relaxed);
       }
       return {};
     }
-    if (ToKatakana(kana) == u8"ニホンゴ") {
-      return {
-          GeneratedCandidate{u8"日本語", -0.42, 2},
-          GeneratedCandidate{u8"日本語入力", -1.4, 4},
-          GeneratedCandidate{std::string("\xE3\x81", 2), -2.2, 1}};
+    if (ToKatakana(kana) == "ニホンゴ") {
+      return {GeneratedCandidate{"日本語", -0.42, 2}, GeneratedCandidate{"日本語入力", -1.4, 4},
+              GeneratedCandidate{std::string("\xE3\x81", 2), -2.2, 1}};
     }
-    if (ToKatakana(kana) == u8"セイン") {
+    if (ToKatakana(kana) == "セイン") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.1, 1},
-              GeneratedCandidate{u8"正しい", -1.0, 3}};
+              GeneratedCandidate{"正しい", -1.0, 3}};
     }
-    if (ToKatakana(kana) == u8"ジュウフク") {
-      return {GeneratedCandidate{u8"重複", -0.2, 2},
-              GeneratedCandidate{u8"重複", -0.4, 2},
-              GeneratedCandidate{u8"別候補", -0.8, 3}};
+    if (ToKatakana(kana) == "ジュウフク") {
+      return {GeneratedCandidate{"重複", -0.2, 2}, GeneratedCandidate{"重複", -0.4, 2},
+              GeneratedCandidate{"別候補", -0.8, 3}};
     }
-    if (ToKatakana(kana) == u8"ムコウ") {
+    if (ToKatakana(kana) == "ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
     }
     return {};

@@ -78,7 +78,7 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 ルート `CMakeLists.txt` で 2 つの `INTERFACE` ライブラリを定義し、コンパイル
 オプションを一元管理する。
 
-- `azookey_project_options` — C++ 標準（`cxx_std_17`）と MSVC ハードニング
+- `azookey_project_options` — C++ 標準（`cxx_std_20`）と MSVC ハードニング
   系オプション（`/utf-8` `/permissive-` `/EHsc` `/Zc:__cplusplus` `/sdl`）。
   各実体 target が `PUBLIC` でリンク。
 - `azookey_project_warnings` — 警告レベル（MSVC `/W4`、非 MSVC
@@ -92,7 +92,7 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 ### 2.3 .clang-format
 
 ルートに `.clang-format` を追加する。初期値は `BasedOnStyle: Google`,
-`Standard: c++17`, `ColumnLimit: 100`, `IndentWidth: 2`,
+`Standard: c++20`, `ColumnLimit: 100`, `IndentWidth: 2`,
 `PointerAlignment: Left`, `DerivePointerAlignment: false`,
 `SortIncludes: true`。
 

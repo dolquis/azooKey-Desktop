@@ -94,7 +94,7 @@ else()
 endif()
 
 add_library(azookey_project_options INTERFACE)
-target_compile_features(azookey_project_options INTERFACE cxx_std_17)
+target_compile_features(azookey_project_options INTERFACE cxx_std_20)
 target_compile_options(azookey_project_options INTERFACE
   $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /permissive- /EHsc /Zc:__cplusplus /sdl>
 )

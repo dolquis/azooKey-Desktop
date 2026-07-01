@@ -129,10 +129,14 @@ if(AZOOKEY_BUILD_TESTS)
     include(GoogleTest)
     set(AZOOKEY_GTEST_DISCOVERY_TIMEOUT 60 CACHE STRING
         "Seconds to wait while CMake enumerates GoogleTest cases")
+    set(AZOOKEY_GTEST_TEST_TIMEOUT 60 CACHE STRING
+        "Seconds to allow each discovered GoogleTest case to run")
     function(azookey_discover_tests target_name)
       gtest_discover_tests(${target_name}
         DISCOVERY_TIMEOUT ${AZOOKEY_GTEST_DISCOVERY_TIMEOUT}
+        PROPERTIES TIMEOUT ${AZOOKEY_GTEST_TEST_TIMEOUT}
       )
+      set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS ${target_name})
     endfunction()
   else()
     message(WARNING
@@ -160,4 +164,18 @@ if(AZOOKEY_BUILD_TESTS)
   add_subdirectory(ipc/tests)
   add_subdirectory(learning/tests)
   add_subdirectory(inference-host/tests)
+endif()
+
+if(AZOOKEY_BUILD_TESTS)
+  get_property(AZOOKEY_CHECK_DEPENDS GLOBAL PROPERTY AZOOKEY_TEST_TARGETS)
+  if(AZOOKEY_CHECK_DEPENDS)
+    add_custom_target(azookey_check
+      COMMAND ${CMAKE_CTEST_COMMAND}
+              --test-dir "${CMAKE_BINARY_DIR}"
+              --output-on-failure
+              --no-tests=error
+      USES_TERMINAL
+      COMMENT "Build test executables and run CTest")
+    add_dependencies(azookey_check ${AZOOKEY_CHECK_DEPENDS})
+  endif()
 endif()

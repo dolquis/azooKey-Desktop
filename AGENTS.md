@@ -203,6 +203,20 @@ PR 本文には次のチェック項目を含め、該当するものにチェ�
 Reason:
 ```
 
+## Windows CMake / CTest 運用
+
+- Full CTest を確認するときは、可能なら `cmake --build --preset windows-debug --target azookey_check`
+  を使う。`azookey_check` はテスト実行ファイルと bench 実行ファイルを先にビルドしてから
+  CTest を実行するため、古い実行ファイルに対して `ctest` だけを走らせる事故を避けやすい。
+- `ctest --preset windows-debug` を単独で実行する場合は、対象 target が最新であることを
+  事前に確認する。停止に見える場合は、`build/agent-logs/*-test-*.log` と
+  `build/windows-debug/Testing/Temporary/LastTest.log*` で最後に開始された case を確認し、
+  該当 GoogleTest を `--gtest_filter=<Suite.Test>` で単体実行する。
+- Ninja / CMake の dry-run で対象 target が stale と分かった場合は、CTest の不具合と
+  断定せず、対象 target または `azookey_check` を再ビルドしてから再検証する。
+- `.ninja_lock` は残留 `ninja` / `cmake` / `cl` / `link` / `ctest` プロセスの有無を
+  確認するまで削除しない。
+
 ## エージェントツール構成 (.claude/ .codex/ .agents/)
 
 本リポジトリには Claude Code と Codex CLI 双方のための共有設定がコミット

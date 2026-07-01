@@ -343,10 +343,10 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
 | llama.cpp（R1）CPU ランタイム | **base MSIX に同梱** | v1.0 既定エンジン。バイナリは小さい |
-| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 のライセンス結論で配信元が分岐） |
+| zenz-v3 GGUF モデル本体 | **MSIX 非同梱**（初回起動時 DL。配信元は §1.6.1） | サイズ過大。§1.2 の既存方針に従う。v1.0 最小取得経路の確定は §1.6.1（DEV-202 の結論＝暫定 CC-BY-SA 保守・上流 HF から取得。§1.6.2） |
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
-| ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない） | CUDA ランタイムが大きく NVIDIA 環境限定 |
+| ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
 | zenz-v3 ONNX 変換モデル（R2, 変換スパイク成功時） | **optional モデルパッケージ**（同 §1.2 同様に非同梱・DL） | 変換可否が未確定・対象環境限定 |
 
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
@@ -413,10 +413,45 @@ GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 
 |---|---|---|
 | 再配布可 | プロジェクトの GitHub Release に再ホストして DL | サイズ理由で引き続き不採用 |
 | 再配布不可 / 条件付き | 再ホストせず上流 HuggingFace の**`expected.json` が定める repo / ファイル**（出所は `Miwa-Keita/zenz-v3.2-small-gguf`）から DL。取得物は「期待版のピン」（下記）の SHA256 と一致する＝同一アーティファクトなので 404 や版ズレを起こさない。帰属・条項は `ThirdPartyNotices.txt` と UI に明示 | 不可 |
-| 未確定（現状） | 配信元 URL を設定 / ビルド定数の間接参照にしておき、(c) 手動配置を確実な既定経路として案内する | 保留 |
+| 暫定確定（保守・CC-BY-SA 前提。§1.6.2） | 上流 HuggingFace（`expected.json` ピンが定める repo / ファイル）から DL し、当面プロジェクト側へ**再ホストしない**。(c) 手動配置を確実な既定経路として案内する。帰属・改変明示を `ThirdPartyNotices.txt` と UI に記載 | 不採用（サイズ＋保守方針） |
 
 CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路と独立した判断である
-（モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。
+（モデルではなくランタイム。§1.6 の optional add-on 行で扱う）。結論は §1.6.2 参照。
+
+#### 1.6.2 配布ライセンス結論（DEV-202・暫定確定）
+
+DEV-202（`gate:human-required`）の調査結論を固定する。**本節は法的助言ではなく、
+一次情報の整理と当面の運用方針である**。最終確定には著者確認（下記「残作業」）を要する。
+
+##### モデル（zenz GGUF）
+
+| 項目 | 内容 |
+|---|---|
+| ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf`（§1.6.1 の `expected.json` が正） |
+| HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
+| 矛盾兆候 | 直前の `zenz-v3.1-small-gguf` は `cc-by-sa-4.0`。v1/v2 のベース `ku-nlp/gpt2-small-japanese-char` も `cc-by-sa-4.0`。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性 |
+| **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
+| 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
+| 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
+| 商用 | Apache-2.0 / CC-BY-SA-4.0 とも商用可。ブロッカーではない |
+
+##### CUDA ランタイム（optional add-on として同梱・再配布する）
+
+- `ggml-cuda`（R1 CUDA, NVIDIA）は §1.6 のとおり base 非同梱の optional add-on。**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
+- 根拠: NVIDIA CUDA Toolkit EULA の Attachment A（redistributable 一覧）が CUDA Runtime（cudart）・cuBLAS（cublas）等の再配布を許可する。
+- 遵守条件: 配布物に **NVIDIA の著作権表示を保持**し、利用者へ **EULA と整合する条項を pass-down** する（`ThirdPartyNotices.txt` に NVIDIA CUDA Toolkit EULA の該当条項と著作権表示を記載）。
+- 版・ファイル名はビルドで固定し、`ThirdPartyNotices.txt` に列挙する。
+
+##### Vulkan（最小リスク）
+
+- `ggml-vulkan` 自体は llama.cpp（MIT）のビルド成果物であり再配布に制約は薄い。
+- **Vulkan ローダ / ドライバは GPU ベンダのドライバが提供**し、こちらで同梱・再配布しない → Vulkan 経路に固有の再配布義務は無い。
+- 先行実装 fkunn1326/azooKey-Windows でも実働実証済み（`docs/zenzai-gpu-route.md` 参考節）。
+
+##### 残作業（`gate:human-required`）
+
+- **著者（Miwa-Keita 氏）へ v3.2 の実ライセンスとベースモデルを書面確認**する。Apache-2.0 が確定したら本節の帰属義務（改変明示・SA 相当の配慮）を緩め、再ホスト DL（§1.6.1 表「再配布可」行）へ移行してよい。
+- 確認結果は DEV-202 に検証メモとして記録し、確定後に本節を更新する。
 
 ##### 配置パスとバージョニング
 

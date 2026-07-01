@@ -125,6 +125,23 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。
   別途設計**する必要がある（参考実装は `strdup` 戻り値を解放しておらずリーク懸念＝反面教師）。
 - 関連: DEV-98（R1/R2 選定スパイク・コメント）/ DEV-202（zenz GGUF 配布ライセンス確認）。
 
+## 配布ライセンス（DEV-202）
+
+配布形態の正典は `docs/sideload-packaging-spec.md` §1.6 / §1.6.2。本節は GPU ルート
+視点の要約を置く（**法的助言ではなく一次情報の整理**。最終確定は著者確認を要する）。
+
+- **モデル（zenz GGUF）**: ピンは `Miwa-Keita/zenz-v3.2-small-gguf`。HF タグは
+  `apache-2.0` だが、直前 v3.1 は `cc-by-sa-4.0`、ベース `ku-nlp/gpt2-small-japanese-char`
+  も `cc-by-sa-4.0` で、CC-BY-SA-4.0 の ShareAlike と Apache-2.0 の非互換により
+  apache タグは誤りの可能性がある。**当面は保守側に倒し CC-BY-SA-4.0 として扱う**
+  （帰属＋量子化改変の明示。再ホストせず上流 HF から取得）。詳細と残作業（著者確認）は
+  spec §1.6.2。
+- **CUDA（ルート A / R1 CUDA）**: `cudart64_*` / `cublas64_*` は CUDA Toolkit EULA
+  Attachment A で再配布可。**optional add-on として同梱・再配布する**（NVIDIA 著作権
+  表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載）。
+- **Vulkan（R1 Vulkan）**: `ggml-vulkan` は llama.cpp（MIT）成果物。ローダ / ドライバは
+  GPU ベンダ提供で同梱不要 → 固有の再配布義務は無い（最小リスク）。
+
 ## 参照
 
 - 推論コントラクト（プロンプト整形・制約デコード・n-best・候補統合・性能予算）：

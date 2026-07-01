@@ -421,16 +421,30 @@ karukan の抽象出力（`EngineAction` 6 種: `UpdatePreedit` / `ShowCandidate
 「karukan の欠け」と誤って正典化しないため）。追加はいずれも append-only 方針（§1.5.2）に従い、
 最終決定は M13 実装 PR で行う（本節は enum を確定変更しない）。
 
-**(A) 真の欠け — aux / 注釈テキスト（候補説明）チャネル（確度: 高）**: karukan は `UpdateAuxText` /
-`HideAuxText` を持ち、「全角／半角」「丸数字」のような異表記の説明を候補脇に出す。一方 azooKey の
-`core::Candidate`（`core/include/azookey/core/Candidate.h`）は `surface` / `reading` / `score` /
-`source` / `debug_info` のみで、**ユーザー可視の候補説明（annotation / aux text）フィールドを
-持たない**。§1.3 にも aux テキスト表示アクションが無い。karukan が `UpdateAuxText` を持つのに
-azooKey に対応が無いため、これは karukan 由来の**真の欠け**である。この欠落は **M62 候補リライター**
-（`plans/karukan-comparison-report.md` 候補 2・5、数字/記号リライターが `Candidate{surface, description}`
-を返す設計）が載る前提と直接衝突する。→ **推奨**: M62 着手前に `Candidate` へ `annotation`（説明文）を
-append-only で追加し、`showCandidateWindow(list)` の各要素が注釈を運べるようにする方針を M13 の
-enum 設計時点で予約する（M13 本体では未使用でよい）。
+**(A) 真の欠け — 2 つの別チャネルに分離**: karukan は「候補ごとの説明」と「aux / ステータス
+テキスト」を**別チャネル**で扱う。azooKey の欠けも 2 つに分離して確定する。両者を混同すると、
+aux テキスト用 `ClientAction` を 1 つ足しただけで、M62 リライターが実際に必要とする候補説明
+データ経路（候補データ構造・ビューモデル・候補 IPC）が未拡張のまま残るため、明確に分ける。
+
+- **(A1) 候補注釈（per-candidate description）データの欠落（確度: 高・M62 の直接前提）**:
+  karukan は `karukan-im/src/core/candidate.rs` の `Candidate.description` として**候補ごと**の
+  右側コメントを運ぶ。一方 azooKey の `core::Candidate`
+  （`core/include/azookey/core/Candidate.h`）は `surface` / `reading` / `score` / `source` /
+  `debug_info` のみで、**ユーザー可視の候補説明フィールドを持たない**。これは **M62 候補リライター**
+  （`plans/karukan-comparison-report.md` 候補 2・5、数字/記号リライターが
+  `Candidate{surface, description}` を返す設計）が載る前提と直接衝突する **データ / ビューモデルの
+  欠け**である。§1.3 に `ClientAction` を 1 つ足すだけでは満たせない（本体は候補データ構造・
+  候補リストビューモデル・候補 IPC 経路の拡張）。→ **推奨**: M62 着手前に `core::Candidate` へ
+  `description`（注釈）フィールドを append-only 追加し、候補リストビューモデルと候補 IPC ペイロード
+  （`ipc::CandidateField`）を各候補が説明を運べるよう拡張する方針を M13 の設計時点で予約する
+  （M13 本体では未使用でよい）。
+- **(A2) aux / ステータステキスト表示アクションの欠落（確度: 中・M62 とは別チャネル）**: karukan の
+  `EngineAction::UpdateAuxText` / `HideAuxText`（`engine/types.rs`）は、reading やモード表示など
+  **候補に紐づかない補助 / ステータステキスト**のためのチャネルで、(A1) の候補ごとの説明とは別物。
+  azooKey の §1.3 には対応する aux テキストアクションが無い。ただし azooKey は reading を preedit、
+  モードを別 UI で扱うため、これが実機能上の欠けかは M13 で要判断（`UpdateAuxText` 相当を導入する
+  なら §1.3 に `showAuxText(s)` / `hideAuxText` を append-only 追加）。**(A1) とは独立**に扱い、
+  aux テキストアクションの追加で (A1) を満たしたと誤認しないこと。
 
 **(B) 設計オプション（karukan 由来の欠けではない）**: 以下は karukan にも専用アクションが無く、
 azooKey が自分で決める設計判断である。karukan の欠けとして正典化せず、azooKey 側の選択肢として記す。
@@ -516,10 +530,13 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 - **XKB keysym キー抽象 / 一方向モードトグル**（§1.6.3-1 参照）。VK / MS-IME 互換が正典。
 - **同期変換前提の状態表**（§1.6.3-2 参照）。IPC 非同期・staleness 契約が正典。
 
-以上より、DEV-400 の設計レビューは §1.1〜§1.5 を破壊せず、(1) §1.6.2 で karukan 由来の**真の欠け**
-（aux/注釈テキストチャネル）を §1.3 への append-only 追加候補として確定し、候補選択更新・候補
-ページングは karukan 由来の欠けではなく azooKey 側の**設計オプション**として区別（karukan は
-`ShowCandidates` 再発行で反映し専用アクションを持たない）、(2) azooKey 独自再設計 3 点を境界として
+以上より、DEV-400 の設計レビューは §1.1〜§1.5 を破壊せず、(1) §1.6.2 で karukan 由来の**真の欠け**を
+2 チャネルに分離して確定した — (A1) 候補注釈（per-candidate `description`）データの欠け（M62 の
+直接前提。本体は `core::Candidate` + 候補ビューモデル + `ipc::CandidateField` の拡張で、§1.3 の
+`ClientAction` 追加だけでは満たせない）と、(A2) aux/ステータステキストアクションの欠け
+（`UpdateAuxText` 相当・候補注釈とは別チャネル・M13 で要否判断）。候補選択更新・候補ページングは
+karukan 由来の欠けではなく azooKey 側の**設計オプション**として区別した（karukan は
+`ShowCandidates` 再発行で反映し専用アクションを持たない）。(2) azooKey 独自再設計 3 点を境界として
 固定し、(3) M13 の `input_state_test.cpp` 様式雛形を提示した。これらは M13 実装 PR の受け入れ条件
 （§1.5.4 等価性ゲート）へ反映する。
 

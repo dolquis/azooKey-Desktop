@@ -792,9 +792,10 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 2. **Fluent Design 標準対応** — Mica / Acrylic backdrop（`Window.SystemBackdrop` に
    `MicaBackdrop` / `DesktopAcrylicBackdrop`）・Light/Dark・PerMonitorV2 DPI・
    アクセントカラーが追加実装なしで得られ、M26（Win11 ネイティブ体験）と整合する。
-3. **MSIX サイドロード整合** — v1.0 の配布形態（§1 MSIX サイドロード）と一致し、
-   設定アプリ EXE をパッケージ内同梱として配布できる（§1.1 の `comServer` は TIP の
-   in-proc サーバ宣言であり、設定アプリは通常の packaged EXE として同梱する）。
+3. **配布形態との整合** — v1.0 MVP の配布形態（§0 / §4 の未署名 MSI）に、設定アプリ
+   `azookey_settings.exe` を **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロード同梱できる。
+   MS Store 用 MSIX（§1）では packaged EXE として同梱する。いずれも WinUI 3 の unpackaged /
+   packaged 両対応（下記事実更新）で成立し、単一 UI スタックのまま両チャネルに載る。
 
 > **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
 > - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
@@ -842,7 +843,8 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 - 言語: C++/WinRT（TIP / Host と統一）
 - フレームワーク: WinUI 3（Windows App SDK 2.x。2026-06 時点の最新安定版は 2.2.0。版は固定せず実装時の最新安定版に追従）
-- 配布: MSIX 内同梱（別 EXE `azookey_settings.exe`）
+- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、§1.3 / §4）。
+  MS Store 用 MSIX（§1）では packaged EXE として同梱（配布方針は §0）
 
 ### 3.2 ナビゲーション
 
@@ -1346,7 +1348,11 @@ User-Agent: azooKey/1.0.0 (Windows)
 2. ユーザーが「インストール」をクリック
 3. MSI を `%TEMP%` にダウンロード（`WinHttpReadData`）
 4. SHA256 検証
-5. `msiexec /i <msi> /qn` で更新（同一 `UpgradeCode` により in-place アップグレード。要昇格）
+5. `msiexec /i <msi> /qn /norestart` で更新（同一 `UpgradeCode` により in-place アップグレード。要昇格）。
+   使用中の TIP DLL 置換で再起動要求が起き得るため、`/norestart` で自動再起動を抑止する
+   （[Standard Installer Command-Line Options](https://learn.microsoft.com/windows/win32/msi/standard-installer-command-line-options)）
+6. 終了コード `3010`（`ERROR_SUCCESS_REBOOT_REQUIRED`）の場合は、自動再起動せず「再起動が必要」を
+   ユーザーに通知して同意を得てから再起動する
 
 ### 6.4 WinSparkle 互換
 

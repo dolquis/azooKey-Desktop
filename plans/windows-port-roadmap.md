@@ -877,8 +877,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
 - **受け入れ条件**（Store 提出パッケージは Partner Center 提出後に Microsoft が署名するため、
   ローカル検証は**開発用自己署名テスト証明書**で行う。配布方針は spec §0）:
-  - ローカル検証: 自己署名テスト証明書で署名した MSIX を、証明書を信頼させたクリーン
-    Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）
+  - ローカル検証: 自己署名テスト証明書で署名した MSIX を、証明書を信頼させたクリーン VM で
+    `Add-AppxPackage` 成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）。**対象 OS は
+    §1.0 で確定する TIP 配布経路に従う**（Option A = external-location は Win10 2004/build 19041+ / Win11、
+    Option B/C = `com4` により build 20348+ = Win11 21H2+。Win10 22H2 client(19045) は B/C では対象外。spec §1.1）
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
   - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
 - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう

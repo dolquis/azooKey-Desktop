@@ -499,8 +499,9 @@ M8 完了 ─→ M24 ─┬─→ M25
 【設定・配信トラック】
 Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
 Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
-Phase 6 完了 ─→ M28 ─┬─→ M31 ─→ M32
-                     └─→ M33
+Phase 6 完了 ─→ M31（MVP MSI 直接配布）─→ M32
+Phase 6 完了 ─→ M28（Store MSIX。並行準備。MVP 直接配布の前提ではない）
+Phase 6 完了 ─→ M33
 （M29 = スタンドアロン MSIX 署名は当面延期。M28 の後続だが M32 等の能動チェーンの前提からは外す。spec §0 / DEV-255）
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
@@ -927,7 +928,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: v1.0 MVP の既定配布形態となる未署名 WiX MSI（DEV-415）。MSIX 不可環境（LTSC 等）も
   本経路で対応する。配布方針転換（spec §0）により代替から MVP 主経路へ格上げ。
-- **前提**: M28 完了。
+- **前提**: Phase 6 完了（MVP 直接配布。Store MSIX の M28 には依存しない。spec §0 / DEV-415）。
 - **変更対象**: `pkg/wix/Product.wxs`（新規）、`pkg/inno/setup.iss`（オプション）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §4。
 - **受け入れ条件**:

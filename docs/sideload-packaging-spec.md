@@ -1243,6 +1243,10 @@ Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \
 
 ## 5. WinGet マニフェスト（M32）
 
+> **スコープ注記（§0 配布方針）**: WinGet が配布するのは **MVP の未署名 MSI**（DEV-415）。
+> Release に MSIX は含まれないため `InstallerType` は `msi`。MS Store 配布（DEV-416）は Store が
+> 更新を担うため、本節の WinGet / §6 自動更新は Store チャネルには適用しない。
+
 ### 5.1 構成
 
 `manifests/d/dolquis/azooKey/<version>/`（winget-pkgs リポジトリへの PR で配布）：
@@ -1258,15 +1262,13 @@ dolquis.azooKey.yaml
 ```yaml
 PackageIdentifier: dolquis.azooKey
 PackageVersion: 1.0.0
+InstallerType: msi
 Installers:
   - Architecture: x64
-    InstallerType: msix
-    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-x64.msix
+    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-x64.msi
     InstallerSha256: <SHA256>
-    SignatureSha256: <SignatureSHA256>
   - Architecture: arm64
-    InstallerType: msix
-    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-arm64.msix
+    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-arm64.msi
     InstallerSha256: <SHA256>
 ManifestType: installer
 ManifestVersion: 1.5.0
@@ -1289,7 +1291,7 @@ ManifestVersion: 1.5.0
 
 ### 5.2 リリースフロー
 
-1. GitHub Release で MSIX を公開
+1. GitHub Release で MSI を公開
 2. SHA256 を計算
 3. winget-pkgs リポジトリへ PR
 4. マージ後 `winget install dolquis.azooKey` で利用可能
@@ -1298,7 +1300,7 @@ ManifestVersion: 1.5.0
 
 ```powershell
 wingetcreate update --urls `
-  "https://github.com/dolquis/azooKey-Desktop/releases/download/v$ver/azooKey-$ver-x64.msix" `
+  "https://github.com/dolquis/azooKey-Desktop/releases/download/v$ver/azooKey-$ver-x64.msi" `
   --version $ver dolquis.azooKey
 ```
 
@@ -1313,7 +1315,7 @@ class UpdateChecker {
 public:
     struct Release {
         std::string version;
-        std::string url;        // MSIX ダウンロード URL
+        std::string url;        // MSI installer ダウンロード URL
         std::string sha256;
         std::string body;       // changelog
     };
@@ -1342,9 +1344,9 @@ User-Agent: azooKey/1.0.0 (Windows)
 
 1. 通知（トースト）「新しいバージョン v1.1.0 が利用可能」
 2. ユーザーが「インストール」をクリック
-3. MSIX を `%TEMP%` にダウンロード（`WinHttpReadData`）
+3. MSI を `%TEMP%` にダウンロード（`WinHttpReadData`）
 4. SHA256 検証
-5. `Add-AppxPackage -Path` で更新（既存パッケージは自動アンインストール）
+5. `msiexec /i <msi> /qn` で更新（同一 `UpgradeCode` により in-place アップグレード。要昇格）
 
 ### 6.4 WinSparkle 互換
 

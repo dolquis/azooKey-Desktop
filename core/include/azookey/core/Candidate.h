@@ -18,6 +18,7 @@ struct Candidate {
   double score{};
   CandidateSource source{CandidateSource::Heuristic};
   std::string debug_info;
+  std::string description;
 };
 
 }  // namespace azookey::core

@@ -1,4 +1,5 @@
 add_executable(core_tests
+  number_rewriter_test.cpp
   romaji_kana_converter_test.cpp
   simple_converter_test.cpp
 )

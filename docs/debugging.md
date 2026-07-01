@@ -10,6 +10,13 @@ cmake --build --preset windows-debug
 ctest --preset windows-debug --no-tests=error
 ```
 
+ローカルで全テストを一括確認する場合は、`azookey_check` target を使う。
+この target はテスト実行ファイルと bench 実行ファイルを先にビルドしてから CTest を起動するため、古い実行ファイルに対して `ctest` だけを実行する事故を避けやすい。
+
+```powershell
+cmake --build --preset windows-debug --target azookey_check
+```
+
 Release 構成:
 
 ```powershell
@@ -88,8 +95,7 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 
 ```powershell
 cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build --preset windows-debug
-ctest --preset windows-debug --no-tests=error
+cmake --build --preset windows-debug --target azookey_check
 ```
 
 ## 典型トラブル
@@ -97,6 +103,15 @@ ctest --preset windows-debug --no-tests=error
 - **TIP は動くが候補が遅延**: Host 未起動 / 名前付きパイプ接続失敗を疑う。
   TIP は Activate 後 5 秒間（250ms slice）リトライする。
   Host stderr に `named pipe listening: \\.\pipe\azookey-host` が出ているか確認。
+- **Full CTest が途中で止まる**: まず `build/agent-logs/*-test-*.log` と
+  `build/<preset>/Testing/Temporary/LastTest.log*` を確認し、最後に開始された
+  CTest case を特定する。
+  その case を該当 GoogleTest 実行ファイルの `--gtest_filter=<Suite.Test>` で単体実行する。
+  さらに `cmake --build --preset <preset> --target <target> -- -n` で対象実行ファイルが
+  stale でないか確認する。
+  stale の場合は `azookey_check` または対象 target の再ビルド後に CTest をやり直す。
+  各 GoogleTest case には CTest `TIMEOUT` が設定されているため、停止は無限待ちではなく
+  timeout failure として扱う。
 - **候補が反転する（古い候補が上書きされる）**: `ipc_pending_id_` の比較で
   staleness check しているはず（`tsf-tip/src/TextService.cpp:717`）。
   DebugView で `IPC: stale response for req_id=N, discarding` が出るか確認。

@@ -444,10 +444,15 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
    1. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict add --reading azookey --surface azooKey --offline`
    2. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict list --format tsv`
       で追加語を確認
-   3. 同じ `--user-dict` で Host/TIP を起動し、`azookey` の `QueryCandidates` で
+   3. `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` 形式の TSV を用意し、
+      `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict import <temp>\import.tsv`
+      で `imported` / `skipped` 件数と重複語の後勝ち置換を確認
+   4. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict export <temp>\export\user_dict.json`
+      で `{ "version": 1, "entries": [...] }` 形式の JSON が書き出されることを確認
+   5. 同じ `--user-dict` で Host/TIP を起動し、`azookey` の `QueryCandidates` で
       ユーザー辞書候補が最優先に出ることを確認
-   4. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict remove --reading azookey --surface azooKey --offline`
-   5. `list --format tsv` で削除済みを確認
+   6. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict remove --reading azookey --surface azooKey --offline`
+   7. `list --format tsv` で削除済みを確認
 4. Windows 実機（Win11 VM 推奨）: `scripts/register-dev.ps1` で TIP DLL 登録 →
    `azookey_inference_host.exe --pipe --backend cpu` 起動 → gguf を
    `%LOCALAPPDATA%\azooKey\models\` に配置し `LoadModel` 成功 → gguf 削除時は

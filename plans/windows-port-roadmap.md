@@ -946,9 +946,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet は出荷アーティファクト
   （未署名 MSI）をラップし、自動更新・モデル DL は署名に依存しないため、延期した M29
   （スタンドアロン MSIX 署名）は前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
-  再配布可否。`gate:human-required`）の確定を追加前提とする — 配信元が
-  GitHub 再ホスト / 上流 HF / 保留 のいずれになるかを律するため（§1.6.1
-  ライセンス分岐）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。
+  再配布可否。`gate:human-required`）の auto-DL 承認を追加前提とする。暫定確定
+  （保守・CC-BY-SA、§1.6.2）で配信元は上流 HF に固定済みだが、auto-DL の有効化は
+  別途承認を要し、GitHub 再ホスト最適化は著者確認後に解禁する（§1.6.1 ライセンス
+  分岐 / §1.6.2）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。
 - **変更対象**: `manifests/d/dolquis/azooKey/<ver>/*.yaml`（winget-pkgs への
   外部 PR）、`inference-host/src/UpdateChecker.cpp`（新規）、
   `inference-host/src/HttpDownloader.cpp`（新規。WinHTTP + SHA256 共通ヘルパの

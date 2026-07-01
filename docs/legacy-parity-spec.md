@@ -375,6 +375,184 @@ inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替
   `EditContextHint` 注入で文書なしに網羅）、(3) `keymap_test.cpp` が VK 表（第 1 層）の全
   エントリを検証。
 
+### 1.6 karukan-im 設計参照レビュー（M13 / DEV-400）
+
+本節は、参考実装 `togatoga/karukan`（Rust / Linux + macOS）の状態機械層 `karukan-im` を
+**M13 の設計レビュー資産**として併置した結果を確定する（Linear DEV-400、親 DEV-397。分析の
+スナップショットは `plans/karukan-comparison-report.md` 候補 1 / §5-1）。目的は §1.1〜§1.5 の
+enum 設計・純粋性契約・受け入れ条件の質を底上げすることであり、**コード移植ではない**
+（新規スコープ増加ゼロ）。karukan は読み取り専用の参考実装で、コードは逐語移植せず設計思想
+のみ参照する。§1.1 が既に karukan の三段分離（物理キー→意味／状態機械／副作用）を M13 の
+設計根拠として引用済みである点を前提に、本節は「突き合わせで判明した azooKey 側の欠け」と
+「azooKey 独自に再設計が必要な境界」を正典として固定する。
+
+karukan 側の参照点（`plans/karukan-comparison-report.md §9`・DEV-400 記載。**外部リポジトリ
+のため file:line は M13 実装着手時に現物で確認する**）: `karukan-im/src/core/state.rs:10-30`
+（`InputState`＝状態が値）、`karukan-im/src/core/engine/types.rs:11-25`（`EngineAction`
+＝6 種の抽象出力アクション）、`karukan-im/src/core/engine/mod.rs:482-486`（状態でディスパッチ）、
+`karukan-macos/.../KarukanInputController.swift:4-9`（薄いフロントエンドの到達点）。
+
+#### 1.6.1 三段分離の対応（karukan の到達点 ↔ azooKey M13 の設計）
+
+| 段 | karukan（到達済み・参照） | azooKey M13（本書の設計） |
+|---|---|---|
+| 物理キー → 意味 | XKB keysym → 内部キー抽象 | §1.5.3 第 1 層 `UserActionMap(VK, modifiers, kind) → optional<UserActionEvent>`（純粋・状態注入） |
+| 状態機械（OS 非依存・アクション出力） | `InputState` enum（値）を保持し、`process_key(&mut self, ...)` が `self.state` でディスパッチして `EngineAction` 列を出力（**engine 状態を内包・可変。純粋関数ではない**。`engine/mod.rs`） | §1.5.1 `InputState::HandleEvent(event, hint) → HandleResult{actions, next}`（**純粋・文書非依存＝azooKey 独自の設計選択**） |
+| 副作用の抽象出力 | `EngineAction` 6 種（`UpdatePreedit` / `ShowCandidates` / `HideCandidates` / `Commit` / `UpdateAuxText` / `HideAuxText`。`types.rs`） | §1.3 `ClientAction`（variant・append-only。§1.5.2） |
+| 薄いフロントエンド | fcitx5 / macOS が抽象アクションを実行するだけ | `TextService.cpp::ApplyClientAction`（§1.3）が TSF 操作へ翻訳 |
+
+karukan が「状態を単一の OS 非依存クレートに内包し、抽象アクションを出力してフロントエンドを
+本当に薄く保つ」点が、azooKey の §1.5.3 2 層分界（状態機械を OS 非依存層へ閉じる）が目指す構造の
+**動作実例**である。**ただし karukan の `process_key(&mut self, ...)` は `self.state` を可変に持ち
+メトリクス更新や状態変更ヘルパを呼ぶステートフルなアクション発行器であり、純粋関数ではない**
+（`engine/mod.rs`）。したがって azooKey の §1.5.1 純粋関数境界（値状態＋副作用なしの `HandleEvent`）は
+**karukan が実証済みの性質ではなく azooKey 独自の設計選択**である。この純粋境界を karukan の既成
+事実と誤認して API・テスト設計の根拠にしないこと（karukan から借りるのは「OS 非依存層に状態と
+アクション出力を閉じる構造」であって、関数の純粋性ではない）。現状 azooKey は `tsf-tip/src/TextService.cpp:307-640`
+の `OnTestKeyDown` / `OnKeyDown` に VK 別 if/else と暗黙フラグ（`preedit_kana_` /
+`candidate_ui_.IsShowing()` / `committing_` の組合せ）で状態が集中し、純粋状態機械層が未実装
+であることを裏取りした（本レビュー時点の現物確認）。
+
+#### 1.6.2 `EngineAction` ↔ `ClientAction` 突き合わせ（真の欠け / 設計オプションの区別）
+
+karukan の抽象出力（`EngineAction` 6 種: `UpdatePreedit` / `ShowCandidates` / `HideCandidates` /
+`Commit` / `UpdateAuxText` / `HideAuxText`。以下は PR #180 Codex レビューで karukan `types.rs` /
+`conversion.rs` に照合済み）と azooKey の §1.3 `ClientAction→TSF` 表を突き合わせた。§1.3 は現状 10 行
+（`appendToMarkedText` / `replaceMarkedText` / `commitMarkedText` / `cancelMarkedText` /
+`showCandidateWindow` / `hideCandidateWindow` / `showPredictionWindow` / `hidePredictionWindow` /
+`replaceSelectedText` / `playBeep`）である。突き合わせの結論を、**(A) karukan にも対応アクションが
+在り azooKey に無い「真の欠け」**と、**(B) karukan にも対応アクションが無く azooKey 側で決める
+「設計オプション」**に区別して確定する（区別を明示するのは、karukan 由来でない設計判断を
+「karukan の欠け」と誤って正典化しないため）。追加はいずれも append-only 方針（§1.5.2）に従い、
+最終決定は M13 実装 PR で行う（本節は enum を確定変更しない）。
+
+**(A) 真の欠け — 2 つの別チャネルに分離**: karukan は「候補ごとの説明」と「aux / ステータス
+テキスト」を**別チャネル**で扱う。azooKey の欠けも 2 つに分離して確定する。両者を混同すると、
+aux テキスト用 `ClientAction` を 1 つ足しただけで、M62 リライターが実際に必要とする候補説明
+データ経路（候補データ構造・ビューモデル）が未拡張のまま残るため、明確に分ける。
+
+- **(A1) 候補注釈（per-candidate description）データの欠落（確度: 高・M62 の直接前提）**:
+  karukan は `karukan-im/src/core/candidate.rs` の `Candidate.description` として**候補ごと**の
+  右側コメントを運ぶ。一方 azooKey の `core::Candidate`
+  （`core/include/azookey/core/Candidate.h`）は `surface` / `reading` / `score` / `source` /
+  `debug_info` のみで、**ユーザー可視の候補説明フィールドを持たない**。これは **M62 候補リライター**
+  （`plans/karukan-comparison-report.md` 候補 2・5、数字/記号リライターが
+  `Candidate{surface, description}` を返す設計）が載る前提と直接衝突する **データ / ビューモデルの
+  欠け**である。§1.3 に `ClientAction` を 1 つ足すだけでは満たせない。
+  → **推奨（伝送経路は M62 のローカル / Host 分割に従う。正典は
+  `plans/windows-port-roadmap.md` M62 横断依存 §「候補注釈の伝送」＋ 新設予定
+  `docs/candidate-rewriter-spec.md`）**: **IPC 拡張を一律の前提にしない**。
+  - **TIP ローカルリライタ（M62-A 数字 / M62-B 半角カナ・英字。無 IPC・Host 非依存）**: description は
+    **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で保持・表示する。`ipc::CandidateField`
+    の変更は**不要**（M62-A を膨らませない）。
+  - **Host 側データ駆動リライタ（M62-C 記号 / M62-D 絵文字）**: このときに限り `ipc::CandidateField`
+    に `description` フィールドを append-only 追加して伝送する。
+  M13 の設計時点では `core::Candidate` に `description`（注釈）を append-only 追加できる余地を予約する
+  に留め（M13 本体では未使用）、IPC ペイロード拡張は Host 側リライタ（M62-C/D）着手時に行う。
+- **(A2) aux / ステータステキスト表示アクションの欠落（確度: 中・M62 とは別チャネル）**: karukan の
+  `EngineAction::UpdateAuxText` / `HideAuxText`（`engine/types.rs`）は、reading やモード表示など
+  **候補に紐づかない補助 / ステータステキスト**のためのチャネルで、(A1) の候補ごとの説明とは別物。
+  azooKey の §1.3 には対応する aux テキストアクションが無い。ただし azooKey は reading を preedit、
+  モードを別 UI で扱うため、これが実機能上の欠けかは M13 で要判断（`UpdateAuxText` 相当を導入する
+  なら §1.3 に `showAuxText(s)` / `hideAuxText` を append-only 追加）。**(A1) とは独立**に扱い、
+  aux テキストアクションの追加で (A1) を満たしたと誤認しないこと。
+
+**(B) 設計オプション（karukan 由来の欠けではない）**: 以下は karukan にも専用アクションが無く、
+azooKey が自分で決める設計判断である。karukan の欠けとして正典化せず、azooKey 側の選択肢として記す。
+
+- **候補選択（ハイライト）更新の反映方式（azooKey 設計判断）**: §1.2 の遷移表は
+  `Selecting | NextCandidate → 選択 index +1` を副作用として要求する。**karukan は候補移動専用の
+  アクションを持たず**、`update_conversion_preedit`（`conversion.rs`）から `UpdatePreedit` +
+  `ShowCandidates` を再発行して選択状態を更新する（＝再描画で反映）。よって「選択移動アクションの
+  欠落」は karukan 由来の欠けではない。azooKey は次のいずれかを M13 で選ぶ: (a) karukan と同様に
+  `showCandidateWindow(list, selected_index)` を再発行して反映する、(b) `CandidateWindow` の
+  ハイライトのみ更新する `updateCandidateSelection(index)` を**最適化として**追加し窓の作り直しを
+  避ける、(c) `HandleResult.next` の選択 index を TIP が読んで反映する契約に一本化する。レガシー
+  Swift `ClientAction`（`legacy/.../Actions/ClientAction.swift:25-27`）は
+  `selectNextCandidate` 系を持つが、これは Swift 実装の選択であって C++ 側の必須要件ではない。
+  推奨は (b)（TSF では窓の再構築コストが実測課題になり得るため）だが、決定は M13 実装 PR に委ねる。
+- **候補ページング・スクロールの反映方式（azooKey 設計判断）**: 候補数が窓の表示件数を超えるときの
+  ページ送りも karukan に専用アクションは無い（同様に `ShowCandidates` 再発行で表現しうる）。
+  M13 スコープでは 1〜9 の数字選択と Up/Down 巡回のみを保存（§1.5.4）すれば足りる。候補窓が複数
+  ページを持つ設計へ進む場合に限り、`pageCandidates(delta)` 相当を append-only で足すか
+  `showCandidateWindow` 再発行で表現するかを選ぶ（`UserAction` は §1.5.2 に従い新規追加せず、
+  既存 Up/Down の意味拡張で吸収可）。
+
+- **取りこぼしでないもの（確認済み）**: レガシー Swift の複合アクション
+  （`commitMarkedTextAndAppendToMarkedText` 等）は §1.5.2 の「複合アクションを作らない」方針
+  どおり細粒度アクションの列 `[commitMarkedText, appendToMarkedText(s)]` で表現するため、
+  §1.3 に複合行が無いのは**意図的**であり欠けではない。`consume` / `fallthrough` は
+  §1.5.3 の `optional<UserActionEvent>`（`nullopt`＝パススルー）と eaten 判定に吸収され、
+  ClientAction 化しないのが正しい。
+
+#### 1.6.3 azooKey 独自に再設計が必要な 3 点（karukan を写経しない境界）
+
+karukan は参考になるが、以下 3 点は **karukan に対応概念が無いか、TSF / Windows 固有のため
+逐語移植不可**である。M13 は本書 §1 の設計（レガシー Swift + spec）を一次参照とし、karukan は
+補助に留める。
+
+1. **VK → UserAction 表（karukan は XKB keysym ベース）**: karukan のキー抽象は XKB keysym で
+   あり、Windows の VK コード・修飾・IME モード（`VK_KANJI` / `VK_NONCONVERT` / `VK_DBE_*`、
+   MS-IME 互換）とは写像が根本的に異なる。§1.4 の VK 表と §1.5.3 の 2 層分界（core が
+   `(VK, modifiers, kind) → UserAction`、TIP が codepoint 解決）が azooKey の正典であり、
+   karukan のキー層は**取り込まない**。
+2. **IPC 非同期の cache hit / miss 分岐（karukan に対応概念なし）**: karukan は同期変換前提で
+   状態表を組むため、「候補問い合わせを送って応答到着まで `Selecting` に遷移しない」という
+   §1.5.4 の非同期契約に相当する概念を持たない。azooKey は候補生成が別プロセス
+   （`inference-host`）への非同期 IPC で、cache hit は同期・cache miss は応答到着イベント
+   （例 `HandleCandidatesArrived(list)`）で `Selecting` へ遷移する（§1.2 の cache hit/miss 行・
+   §1.5.4）。staleness（`ipc_pending_id_` 等）は TIP 側に残し core を純粋に保つ。この非同期
+   境界は azooKey 独自設計であり、karukan の同期状態表を**そのまま持ち込まない**。
+3. **`ClientAction` → `ITfComposition` / `ITfRange` 翻訳層（karukan は preedit を自前 String 保持）**:
+   karukan はフロントエンドが preedit を自前 `String` バッファで持つが、TSF はアプリの実テキストを
+   `ITfComposition` / `ITfRange::SetText` 経由で編集する。§1.3 の `ClientAction→TSF` 対応表と
+   `ApplyClientAction`（EditSession キューイング）が azooKey の翻訳層であり、毎キーの preedit
+   自前保持・高頻度 `UpdatePreedit` は**取り込まない**（再描画・ちらつき要因。
+   `plans/karukan-comparison-report.md §6`）。
+
+#### 1.6.4 テスト様式の雛形（karukan tests → `input_state_test.cpp`）
+
+karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor,mode_toggle}.rs` を、
+§10 の `core/tests/input_state_test.cpp`（全状態 × 全 UserAction 網羅）の**様式雛形**として使う
+（データの逐語移植ではなく、テスト設計の観点を借りる）。
+
+| karukan テスト観点 | azooKey `input_state_test.cpp` での対応 |
+|---|---|
+| `basic.rs`: 入力 → composition 生成 → 確定の基本往復 | `Idle→Composing→(Selecting)→Commit→Idle` の基本経路。`HandleEvent` が返す `(actions, next)` を AAA で固定 |
+| `cursor.rs`: カーソル移動・削除単位 | `Backward` / `Forward` / `Backspace` の削除単位（§1.5.4「かな/生ローマ字 1 単位・自動句読点は数えない」）を検証 |
+| `mode_toggle.rs`: モード切替の状態保存 | `ToggleHiraKata` / `ToggleHankaku` / `VK_KANJI` / `VK_NONCONVERT`（§1.5.4「意図的追加」）の切替で reading バッファが壊れないこと |
+
+雛形化の要点（§1.5.1 純粋性契約を活かす）: (a) `HandleEvent` は純粋関数なので TSF / Zenzai / IPC を
+起動せず、`EditContextHint` を注入して文書なしに網羅できる。(b) 各ケースは
+`(現在状態, UserActionEvent, hint) → (期待 ClientAction 列, 期待 next)` の表明に落とす。
+(c) cache miss 経路は `HandleCandidatesArrived` 相当のフィードバックイベント注入で
+`Composing→Selecting` 遷移を検証し、応答未到着中の Enter=as-is 確定・数字パススルー（§1.5.4）を
+回帰ガードとして固定する。
+
+#### 1.6.5 取り込まない範囲（明示）
+
+`plans/karukan-comparison-report.md §6`（取り込まない方がよいもの）のうち、M13（状態機械）に
+関わる範囲を本節でも明示的に除外する。
+
+- **プロセス結合トポロジ**: karukan の macOS 子プロセス spawn / fcitx5 in-proc FFI は取り込まない。
+  azooKey は共有 per-user `inference-host` + Named Pipe + クラッシュ隔離が正典
+  （`docs/windows-tsf-host-architecture.md`）。
+- **preedit 自前 String 保持 + 毎キー UpdatePreedit**（§1.6.3-3 参照）。
+- **XKB keysym キー抽象 / 一方向モードトグル**（§1.6.3-1 参照）。VK / MS-IME 互換が正典。
+- **同期変換前提の状態表**（§1.6.3-2 参照）。IPC 非同期・staleness 契約が正典。
+
+以上より、DEV-400 の設計レビューは §1.1〜§1.5 を破壊せず、(1) §1.6.2 で karukan 由来の**真の欠け**を
+2 チャネルに分離して確定した — (A1) 候補注釈（per-candidate `description`）データの欠け（M62 の
+直接前提。本体は `core::Candidate` + 候補ビューモデルの拡張で、§1.3 の `ClientAction` 追加だけでは
+満たせない。伝送経路は M62 のローカル / Host 分割に従い、TIP ローカルリライタ M62-A/B は TIP 内
+view-model のみ・無 IPC、`ipc::CandidateField` への `description` 追加は Host 側 M62-C/D 着手時に限る。
+正典は `plans/windows-port-roadmap.md` M62 横断依存）と、(A2) aux/ステータステキストアクションの欠け
+（`UpdateAuxText` 相当・候補注釈とは別チャネル・M13 で要否判断）。候補選択更新・候補ページングは
+karukan 由来の欠けではなく azooKey 側の**設計オプション**として区別した（karukan は
+`ShowCandidates` 再発行で反映し専用アクションを持たない）。(2) azooKey 独自再設計 3 点を境界として
+固定し、(3) M13 の `input_state_test.cpp` 様式雛形を提示した。これらは M13 実装 PR の受け入れ条件
+（§1.5.4 等価性ゲート）へ反映する。
+
 ## 2. ライブ変換 (M14)
 
 ### 2.1 動作概要

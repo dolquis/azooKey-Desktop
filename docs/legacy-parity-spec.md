@@ -397,13 +397,18 @@ karukan 側の参照点（`plans/karukan-comparison-report.md §9`・DEV-400 記
 | 段 | karukan（到達済み・参照） | azooKey M13（本書の設計） |
 |---|---|---|
 | 物理キー → 意味 | XKB keysym → 内部キー抽象 | §1.5.3 第 1 層 `UserActionMap(VK, modifiers, kind) → optional<UserActionEvent>`（純粋・状態注入） |
-| 状態機械（値＋純粋関数） | `InputState` enum ＋ `process_key` が `EngineAction` 列を返す純粋関数 | §1.5.1 `InputState::HandleEvent(event, hint) → HandleResult{actions, next}`（純粋・文書非依存） |
+| 状態機械（OS 非依存・アクション出力） | `InputState` enum（値）を保持し、`process_key(&mut self, ...)` が `self.state` でディスパッチして `EngineAction` 列を出力（**engine 状態を内包・可変。純粋関数ではない**。`engine/mod.rs`） | §1.5.1 `InputState::HandleEvent(event, hint) → HandleResult{actions, next}`（**純粋・文書非依存＝azooKey 独自の設計選択**） |
 | 副作用の抽象出力 | `EngineAction` 6 種（`UpdatePreedit` / `ShowCandidates` / `HideCandidates` / `Commit` / `UpdateAuxText` / `HideAuxText`。`types.rs`） | §1.3 `ClientAction`（variant・append-only。§1.5.2） |
 | 薄いフロントエンド | fcitx5 / macOS が抽象アクションを実行するだけ | `TextService.cpp::ApplyClientAction`（§1.3）が TSF 操作へ翻訳 |
 
-karukan が「状態＝値／遷移＝純粋関数／出力＝抽象アクション」を単一の OS 非依存クレートに
-閉じ込め、フロントエンドを本当に薄く保てている点が、azooKey の §1.5.1 純粋性契約・§1.5.3
-2 層分界が目指す到達点の**動作実例**である。現状 azooKey は `tsf-tip/src/TextService.cpp:307-640`
+karukan が「状態を単一の OS 非依存クレートに内包し、抽象アクションを出力してフロントエンドを
+本当に薄く保つ」点が、azooKey の §1.5.3 2 層分界（状態機械を OS 非依存層へ閉じる）が目指す構造の
+**動作実例**である。**ただし karukan の `process_key(&mut self, ...)` は `self.state` を可変に持ち
+メトリクス更新や状態変更ヘルパを呼ぶステートフルなアクション発行器であり、純粋関数ではない**
+（`engine/mod.rs`）。したがって azooKey の §1.5.1 純粋関数境界（値状態＋副作用なしの `HandleEvent`）は
+**karukan が実証済みの性質ではなく azooKey 独自の設計選択**である。この純粋境界を karukan の既成
+事実と誤認して API・テスト設計の根拠にしないこと（karukan から借りるのは「OS 非依存層に状態と
+アクション出力を閉じる構造」であって、関数の純粋性ではない）。現状 azooKey は `tsf-tip/src/TextService.cpp:307-640`
 の `OnTestKeyDown` / `OnKeyDown` に VK 別 if/else と暗黙フラグ（`preedit_kana_` /
 `candidate_ui_.IsShowing()` / `committing_` の組合せ）で状態が集中し、純粋状態機械層が未実装
 であることを裏取りした（本レビュー時点の現物確認）。

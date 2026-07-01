@@ -959,7 +959,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）。
 - **受け入れ条件**:
   - winget-pkgs に PR が merge され `winget install` で導入可能
-  - 起動時 + 24h 周期で新版検出、ユーザー承認で MSIX 適用
+  - 起動時 + 24h 周期で新版検出、ユーザー承認で MSI 適用（`msiexec /i /qn /norestart`、
+    要再起動時は通知。spec §6.3）
   - **DEV-202 確定（配信元決定）かつ `expected.json` ピン投入済みのとき**: 既定
     設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ
     非 `offline`）で初回起動時に ピンと一致する GGUF を DL → SHA256 検証 →
@@ -977,7 +978,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 ### M33: ETW / WER
 
 - **目的**: 本番環境の観測性とクラッシュ収集。
-- **前提**: M28 完了。
+- **前提**: Phase 6 完了（観測性はパッケージング非依存。Store MSIX の M28 には依存しない。spec §0）。
 - **変更対象**: `core/src/EtwLogger.cpp`（新規）、`inference-host/src/CrashHandler.cpp`
   （新規、`SetUnhandledExceptionFilter`）、`settings/mvp-settings.schema.json`
   （`privacy.crashReportConsent` subfield を先行導入。§3.6 / `privacy-and-secure-input-spec.md` §7）。

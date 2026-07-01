@@ -19,7 +19,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 
 - **MVP**: Windows 10/11 上で TSF 経由のローマ字入力 → かな漢字変換 → 確定までの
   最小フローが動作する IME。
-- **配布形態**: ユーザーごとインストールの MSI（MVP 既定・未署名）または MSIX（MS Store）。配布方針は `docs/sideload-packaging-spec.md` §0。
+- **配布形態**: MVP は未署名 MSI（**per-machine・要昇格**。TIP 登録が HKLM `DllRegisterServer` のため）、MS Store は MSIX（ユーザースコープ・MS 再署名）。配布方針は `docs/sideload-packaging-spec.md` §0。
 - **コア方針**: TIP (in-proc COM DLL) はキー処理と UI のみ担当し、推論・学習は
   Named Pipe 経由で `inference-host` (per-user 常駐 EXE) に委譲する。
 
@@ -462,8 +462,8 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
    （DEV-99 / D-03、`docs/sideload-packaging-spec.md` §3.0）。残る確証は実機での
    配布サイズ・初回起動・IPC 連携行数の 1〜2 日スパイク（`gate:human-required`）。設定アプリは
    TIP/Host と別プロセス、IPC 経由で Host 設定（Zenzai ON/OFF、ユーザー辞書）を
-   変更。配布は未署名 MSI（MVP 既定。TIP 登録はインストーラのカスタムアクション。
-   spec §0 / DEV-415。MSIX は MS Store 経由 = DEV-416）。
+   変更。配布は未署名 MSI（MVP 既定。TIP 登録はインストーラのカスタムアクションで
+   HKLM `DllRegisterServer` を呼ぶため **per-machine・要昇格**。spec §0 / DEV-415。MSIX は MS Store 経由 = DEV-416）。
    **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
    避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。`ITfFnConfigure`
    からの起動は別プロセス EXE を非同期起動する方式（§3.5、正典は
@@ -499,8 +499,9 @@ M8 完了 ─→ M24 ─┬─→ M25
 【設定・配信トラック】
 Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
 Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
-Phase 6 完了 ─→ M31（MVP MSI 直接配布）─→ M32
+Phase 4（M11/M12 = MVP 未署名 MSI 構築・公開）─→ M32（WinGet + 自動更新 + 初回モデル取得）
 Phase 6 完了 ─→ M28（Store MSIX。並行準備。MVP 直接配布の前提ではない）
+Phase 6 完了 ─→ M31（MVP MSI の post-v1.0 拡張。Inno 代替 / LTSC 硬化）
 Phase 6 完了 ─→ M33
 （M29 = スタンドアロン MSIX 署名は当面延期。M28 の後続だが M32 等の能動チェーンの前提からは外す。spec §0 / DEV-255）
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
@@ -926,11 +927,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
   X-2-6, X-2-7, X-3-6
 
-### M31: WiX MSI インストーラ（MVP 既定配布）
+### M31: WiX MSI インストーラ拡張（post-v1.0）
 
-- **目的**: v1.0 MVP の既定配布形態となる未署名 WiX MSI（DEV-415）。MSIX 不可環境（LTSC 等）も
-  本経路で対応する。配布方針転換（spec §0）により代替から MVP 主経路へ格上げ。
-- **前提**: Phase 6 完了（MVP 直接配布。Store MSIX の M28 には依存しない。spec §0 / DEV-415）。
+- **目的**: MVP の未署名 WiX MSI **本体は M11/M12（Phase 4 リリースゲート）で構築・公開する**
+  （spec §0 / §4 / DEV-415）。本マイルストーンは v1.0 後の拡張に絞る（Inno Setup 代替、
+  LTSC / AppX 無効環境の硬化、インストール UX 拡充）。MVP 配布経路のブロッカーではない。
+- **前提**: M12 完了（Phase 4 で MVP MSI を公開済み）。
 - **変更対象**: `pkg/wix/Product.wxs`（新規）、`pkg/inno/setup.iss`（オプション）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §4。
 - **受け入れ条件**:
@@ -941,9 +943,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
-- **前提**: M31（MVP MSI インストーラ）完了。WinGet は出荷アーティファクト（未署名 MSI）を
-  ラップし、自動更新・モデル DL は署名に依存しないため、延期した M29（スタンドアロン MSIX 署名）は
-  前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+- **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet は出荷アーティファクト
+  （未署名 MSI）をラップし、自動更新・モデル DL は署名に依存しないため、延期した M29
+  （スタンドアロン MSIX 署名）は前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
   再配布可否。`gate:human-required`）の確定を追加前提とする — 配信元が
   GitHub 再ホスト / 上流 HF / 保留 のいずれになるかを律するため（§1.6.1
   ライセンス分岐）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。

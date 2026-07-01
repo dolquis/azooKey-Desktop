@@ -429,7 +429,7 @@ karukan の抽象出力（`EngineAction` 6 種: `UpdatePreedit` / `ShowCandidate
 **(A) 真の欠け — 2 つの別チャネルに分離**: karukan は「候補ごとの説明」と「aux / ステータス
 テキスト」を**別チャネル**で扱う。azooKey の欠けも 2 つに分離して確定する。両者を混同すると、
 aux テキスト用 `ClientAction` を 1 つ足しただけで、M62 リライターが実際に必要とする候補説明
-データ経路（候補データ構造・ビューモデル・候補 IPC）が未拡張のまま残るため、明確に分ける。
+データ経路（候補データ構造・ビューモデル）が未拡張のまま残るため、明確に分ける。
 
 - **(A1) 候補注釈（per-candidate description）データの欠落（確度: 高・M62 の直接前提）**:
   karukan は `karukan-im/src/core/candidate.rs` の `Candidate.description` として**候補ごと**の
@@ -438,11 +438,17 @@ aux テキスト用 `ClientAction` を 1 つ足しただけで、M62 リライ�
   `debug_info` のみで、**ユーザー可視の候補説明フィールドを持たない**。これは **M62 候補リライター**
   （`plans/karukan-comparison-report.md` 候補 2・5、数字/記号リライターが
   `Candidate{surface, description}` を返す設計）が載る前提と直接衝突する **データ / ビューモデルの
-  欠け**である。§1.3 に `ClientAction` を 1 つ足すだけでは満たせない（本体は候補データ構造・
-  候補リストビューモデル・候補 IPC 経路の拡張）。→ **推奨**: M62 着手前に `core::Candidate` へ
-  `description`（注釈）フィールドを append-only 追加し、候補リストビューモデルと候補 IPC ペイロード
-  （`ipc::CandidateField`）を各候補が説明を運べるよう拡張する方針を M13 の設計時点で予約する
-  （M13 本体では未使用でよい）。
+  欠け**である。§1.3 に `ClientAction` を 1 つ足すだけでは満たせない。
+  → **推奨（伝送経路は M62 のローカル / Host 分割に従う。正典は
+  `plans/windows-port-roadmap.md` M62 横断依存 §「候補注釈の伝送」＋ 新設予定
+  `docs/candidate-rewriter-spec.md`）**: **IPC 拡張を一律の前提にしない**。
+  - **TIP ローカルリライタ（M62-A 数字 / M62-B 半角カナ・英字。無 IPC・Host 非依存）**: description は
+    **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で保持・表示する。`ipc::CandidateField`
+    の変更は**不要**（M62-A を膨らませない）。
+  - **Host 側データ駆動リライタ（M62-C 記号 / M62-D 絵文字）**: このときに限り `ipc::CandidateField`
+    に `description` フィールドを append-only 追加して伝送する。
+  M13 の設計時点では `core::Candidate` に `description`（注釈）を append-only 追加できる余地を予約する
+  に留め（M13 本体では未使用）、IPC ペイロード拡張は Host 側リライタ（M62-C/D）着手時に行う。
 - **(A2) aux / ステータステキスト表示アクションの欠落（確度: 中・M62 とは別チャネル）**: karukan の
   `EngineAction::UpdateAuxText` / `HideAuxText`（`engine/types.rs`）は、reading やモード表示など
   **候補に紐づかない補助 / ステータステキスト**のためのチャネルで、(A1) の候補ごとの説明とは別物。
@@ -537,8 +543,10 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 
 以上より、DEV-400 の設計レビューは §1.1〜§1.5 を破壊せず、(1) §1.6.2 で karukan 由来の**真の欠け**を
 2 チャネルに分離して確定した — (A1) 候補注釈（per-candidate `description`）データの欠け（M62 の
-直接前提。本体は `core::Candidate` + 候補ビューモデル + `ipc::CandidateField` の拡張で、§1.3 の
-`ClientAction` 追加だけでは満たせない）と、(A2) aux/ステータステキストアクションの欠け
+直接前提。本体は `core::Candidate` + 候補ビューモデルの拡張で、§1.3 の `ClientAction` 追加だけでは
+満たせない。伝送経路は M62 のローカル / Host 分割に従い、TIP ローカルリライタ M62-A/B は TIP 内
+view-model のみ・無 IPC、`ipc::CandidateField` への `description` 追加は Host 側 M62-C/D 着手時に限る。
+正典は `plans/windows-port-roadmap.md` M62 横断依存）と、(A2) aux/ステータステキストアクションの欠け
 （`UpdateAuxText` 相当・候補注釈とは別チャネル・M13 で要否判断）。候補選択更新・候補ページングは
 karukan 由来の欠けではなく azooKey 側の**設計オプション**として区別した（karukan は
 `ShowCandidates` 再発行で反映し専用アクションを持たない）。(2) azooKey 独自再設計 3 点を境界として

@@ -1672,7 +1672,7 @@ bool LearningStore::Load() {
 2. バージョンタグを打つ (`git tag v1.0.0`)
 3. `git push --tags`
 4. `.github/workflows/release.yml` が自動実行
-5. Draft Release が作成される（MSIX 添付済み、署名済み）
+5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2、当面延期）
 6. 動作確認（クリーン VM でインストール → 入力 → 確定 → アンインストール）
 7. Draft → Publish
 8. winget-pkgs に PR（`wingetcreate update`）

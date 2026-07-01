@@ -462,18 +462,19 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
    （DEV-99 / D-03、`docs/sideload-packaging-spec.md` §3.0）。残る確証は実機での
    配布サイズ・初回起動・IPC 連携行数の 1〜2 日スパイク（`gate:human-required`）。設定アプリは
    TIP/Host と別プロセス、IPC 経由で Host 設定（Zenzai ON/OFF、ユーザー辞書）を
-   変更。配布は MSIX（ユーザースコープ自動登録、アンインストールでの登録解除）。
+   変更。配布は未署名 MSI（MVP 既定。TIP 登録はインストーラのカスタムアクション。
+   spec §0 / DEV-415。MSIX は MS Store 経由 = DEV-416）。
    **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
    避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。`ITfFnConfigure`
    からの起動は別プロセス EXE を非同期起動する方式（§3.5、正典は
    `docs/tsf-deep-integration-spec.md` §6）。
-4. **M12 CI 完成と署名配布** — `.github/workflows/windows.yml` の build/test に
-   加え、コード署名ステップ、タグ push 時の MSIX 自動 Release 公開、submodule
-   配信ポリシー確定を行う。
+4. **M12 CI 完成と配布** — `.github/workflows/windows.yml` の build/test に
+   加え、タグ push 時の未署名 MSI 自動 Release 公開（署名は MVP 対象外、spec §0 / DEV-415）、
+   submodule 配信ポリシー確定を行う。
 
-**Phase 4 検証**: クリーン Win11 VM での MSIX インストール → IME 選択 → 入力
-→ 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に署名済み
-MSIX が自動公開。
+**Phase 4 検証**: クリーン Win11 VM での MSI インストール → IME 選択 → 入力
+→ 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に未署名
+MSI が自動公開。
 
 ## Phase 5〜7 の依存関係と実行順
 
@@ -498,9 +499,9 @@ M8 完了 ─→ M24 ─┬─→ M25
 【設定・配信トラック】
 Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
 Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
-Phase 6 完了 ─→ M28 ─┬─→ M29 ─→ M32
-                     ├─→ M31
+Phase 6 完了 ─→ M28 ─┬─→ M31 ─→ M32
                      └─→ M33
+（M29 = スタンドアロン MSIX 署名は当面延期。M28 の後続だが M32 等の能動チェーンの前提からは外す。spec §0 / DEV-255）
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
 
@@ -873,9 +874,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **実装範囲**: `docs/sideload-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
   DL は共有 `HttpDownloader` に依存するため M32 へ送り、M28 は (c) 手動配置を
   operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
-- **受け入れ条件**:
-  - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
+- **受け入れ条件**（Store 提出パッケージは Partner Center 提出後に Microsoft が署名するため、
+  ローカル検証は**開発用自己署名テスト証明書**で行う。配布方針は spec §0）:
+  - ローカル検証: 自己署名テスト証明書で署名した MSIX を、証明書を信頼させたクリーン
+    Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
+  - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
 - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
   `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
   MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
@@ -934,7 +938,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
-- **前提**: M29 完了。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+- **前提**: M31（MVP MSI インストーラ）完了。WinGet は出荷アーティファクト（未署名 MSI）を
+  ラップし、自動更新・モデル DL は署名に依存しないため、延期した M29（スタンドアロン MSIX 署名）は
+  前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
   再配布可否。`gate:human-required`）の確定を追加前提とする — 配信元が
   GitHub 再ホスト / 上流 HF / 保留 のいずれになるかを律するため（§1.6.1
   ライセンス分岐）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。

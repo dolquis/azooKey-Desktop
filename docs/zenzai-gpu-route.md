@@ -138,7 +138,9 @@ ORT CUDA EP / TensorRT EP に切り替え可能にする。
   spec §1.6.2。
 - **CUDA（ルート A / R1 CUDA）**: `cudart64_*` / `cublas64_*` は CUDA Toolkit EULA
   Attachment A で再配布可。**optional add-on として同梱・再配布する**（NVIDIA 著作権
-  表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載）。
+  表示の保持＋条項 pass-down を `ThirdPartyNotices.txt` に記載）。再配布 DLL は
+  **アプリ専用ディレクトリに配置**し、共有 `PATH` / システムディレクトリへ入れない
+  （EULA のアプリ限定アクセス条件。詳細は spec §1.6.2）。
 - **Vulkan（R1 Vulkan）**: `ggml-vulkan` は llama.cpp（MIT）成果物。ローダ / ドライバは
   GPU ベンダ提供で同梱不要 → 固有の再配布義務は無い（最小リスク）。
 

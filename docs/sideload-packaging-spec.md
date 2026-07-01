@@ -401,9 +401,11 @@ default は (c) 手動配置**とし、(b) は **M32 の共有 `HttpDownloader` 
 初回パッケージング（M11/M12）の前提として前倒しする（roadmap 側で M32 の該当スコープを M11/M12 前へ移す）
 必要があり、これは roadmap 更新を伴う別判断とする。
 
-##### ライセンス分岐（DEV-202 連動。確定までは「配信元 保留」で設計）
+##### ライセンス分岐（DEV-202 連動。暫定確定＝配信元は上流 HF に固定。§1.6.2）
 
-再配布可否は DEV-202（`gate:human-required`、未確定）の結論に従う。ここで重要な
+再配布可否は DEV-202（`gate:human-required`）の結論に従う。**現時点は暫定確定
+（保守・CC-BY-SA、§1.6.2）であり、配信元は上流 HuggingFace に固定（再ホストしない）。
+GitHub Release への再ホスト最適化のみ著者確認後に解禁する。** ここで重要な
 のは、**取得*機構*（HttpDownloader + SHA256 検証 + 原子的配置）は結論に依存せず
 同一**で、分岐するのは **配信元 URL と同梱可否だけ**である点。プロジェクトの
 GitHub Release への再ホスト自体が再配布に当たるため、DEV-202 は (a) だけでなく
@@ -440,6 +442,7 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 - `ggml-cuda`（R1 CUDA, NVIDIA）は §1.6 のとおり base 非同梱の optional add-on。**この add-on に `cudart64_*.dll` / `cublas64_*.dll` を同梱・再配布する**。
 - 根拠: NVIDIA CUDA Toolkit EULA の Attachment A（redistributable 一覧）が CUDA Runtime（cudart）・cuBLAS（cublas）等の再配布を許可する。
 - 遵守条件: 配布物に **NVIDIA の著作権表示を保持**し、利用者へ **EULA と整合する条項を pass-down** する（`ThirdPartyNotices.txt` に NVIDIA CUDA Toolkit EULA の該当条項と著作権表示を記載）。
+- **配置制約（app-only）**: 再配布する DLL は**アプリ専用（private）ディレクトリに配置し、本アプリからのみアクセスされる**ようにする。CUDA Toolkit EULA は redistributable な SDK 部分を「アプリからのみアクセスされる」ことを条件とするため（§2.6 が cudart/cublas を redistributable と定める一方、§1.1.2 がアクセス主体をアプリに限定）、共有 `PATH` / システムディレクトリ（`System32` 等）へ設置して他アプリから参照可能にしない。DLL 探索は app-local ディレクトリに限定する（例: add-on の配置フォルダを `SetDllDirectory` / manifest で明示し、グローバル `PATH` へ注入しない）。
 - 版・ファイル名はビルドで固定し、`ThirdPartyNotices.txt` に列挙する。
 
 ##### Vulkan（最小リスク）

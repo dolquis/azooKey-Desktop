@@ -19,7 +19,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 
 - **MVP**: Windows 10/11 上で TSF 経由のローマ字入力 → かな漢字変換 → 確定までの
   最小フローが動作する IME。
-- **配布形態**: ユーザーごとインストールの MSIX または MSI。
+- **配布形態**: MVP は未署名 MSI（**per-machine・要昇格**。TIP 登録が HKLM `DllRegisterServer` のため）、MS Store は MSIX（ユーザースコープ・MS 再署名）。配布方針は `docs/sideload-packaging-spec.md` §0。
 - **コア方針**: TIP (in-proc COM DLL) はキー処理と UI のみ担当し、推論・学習は
   Named Pipe 経由で `inference-host` (per-user 常駐 EXE) に委譲する。
 
@@ -242,22 +242,21 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   する `%LOCALAPPDATA%\azooKey\` レイアウトに合わせる。先行して M37〜M39
   を完了しておくとパッケージング側の手戻りが減る。
 
-### M12: 配布署名と CI
+### M12: 配布リリースと CI
 
-- **目的**: 署名済みリリースを GitHub Release から提供。
+- **目的**: GitHub Release から MVP リリースを提供。MVP は **未署名 MSI**（配布方針は spec §0 / DEV-415）。
 - **変更対象**: `.github/workflows/`, `pkg/`
 - **実装範囲**:
   - Windows ランナーでのビルド + 単体テスト（windows-2022 + msvc-dev-cmd + Ninja、
     Debug / Release matrix を preset 経由で configure → build → CTest）
-  - コード署名（signtool、EV/OV 証明書手当ては別途）
-  - MSIX/MSI 生成（M11 で `pkg/` 構成決定後）
+  - MSI 生成（M11 で `pkg/` 構成決定後）。コード署名は MVP では行わない（M29 で延期、DEV-255）。
   - リリースタグ push → アーティファクト自動公開
 - **設計メモ**: M38（CI 品質ゲート拡張）で整備済みの Debug/Release matrix・
-  preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では署名・Release
-  公開ステップを足す。
+  preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では MSI 生成・Release
+  公開ステップを足す（署名は MVP 対象外、spec §0）。
 - **受け入れ条件**:
   - main への merge で CI が緑（テストが個別 exe 実行で全件 pass）
-  - タグ push で署名済み MSIX/MSI が Release に上がる
+  - タグ push で未署名 MSI が Draft Release に上がる
 
 ## 横断的な作業
 
@@ -350,7 +349,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - ~~設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。~~
   → **確定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は既存 C++/WinRT スタック
-  との親和性・Fluent/Mica 標準対応・MSIX 整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
+  との親和性・Fluent/Mica 標準対応・配布形態（MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
   縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイクは `gate:human-required`
   で残す。詳細は `docs/sideload-packaging-spec.md` §3.0。
 
@@ -362,7 +361,7 @@ v1.0 リリースに向けたリスクと対応:
 | CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
 | MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
 | 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | **WinUI 3（C++/WinRT）に確定（DEV-99 / `docs/sideload-packaging-spec.md` §3.0）**。残る確証は実機での配布サイズ・初回起動・IPC 行数の 1〜2 日スパイク（`gate:human-required`） |
-| 署名証明書の調達 (M12) | リリース日に直結 | Phase 4 着手前に EV/OV 証明書の手当てを並行 |
+| 署名証明書の調達 (M29) | MVP リリースには影響しない（配布方針転換、spec §0） | MVP は未署名 MSI（DEV-415）、MS Store は MS 再署名（DEV-416）で有料証明書不要。証明書はスタンドアロン MSIX サイドロード着手時のみ（経路 B 確定済み・延期、DEV-255） |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
 | 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。即時の `nlohmann-json` 全置換はせず段階対応（同 §6, §11.2） |
@@ -381,7 +380,7 @@ v1.0 リリースに向けたリスクと対応:
 
 ## v1.0 までの実行計画（Phase 1〜4）
 
-ロードマップの依存図とは別に、v1.0（MSIX 配布可能な最小 IME）リリースまでの
+ロードマップの依存図とは別に、v1.0（MSI で配布可能な最小 IME）リリースまでの
 実行順を 4 フェーズで管理する。各マイルストーンの進捗・状態の正典は **Linear**
 （project「azooKey Desktop / Windows IME MVP」）であり、本章は定義・受け入れ条件・依存のみを持つ。
 macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照）。
@@ -463,18 +462,19 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
    （DEV-99 / D-03、`docs/sideload-packaging-spec.md` §3.0）。残る確証は実機での
    配布サイズ・初回起動・IPC 連携行数の 1〜2 日スパイク（`gate:human-required`）。設定アプリは
    TIP/Host と別プロセス、IPC 経由で Host 設定（Zenzai ON/OFF、ユーザー辞書）を
-   変更。配布は MSIX（ユーザースコープ自動登録、アンインストールでの登録解除）。
+   変更。配布は未署名 MSI（MVP 既定。TIP 登録はインストーラのカスタムアクションで
+   HKLM `DllRegisterServer` を呼ぶため **per-machine・要昇格**。spec §0 / DEV-415。MSIX は MS Store 経由 = DEV-416）。
    **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
    避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。`ITfFnConfigure`
    からの起動は別プロセス EXE を非同期起動する方式（§3.5、正典は
    `docs/tsf-deep-integration-spec.md` §6）。
-4. **M12 CI 完成と署名配布** — `.github/workflows/windows.yml` の build/test に
-   加え、コード署名ステップ、タグ push 時の MSIX 自動 Release 公開、submodule
-   配信ポリシー確定を行う。
+4. **M12 CI 完成と配布** — `.github/workflows/windows.yml` の build/test に
+   加え、タグ push 時の未署名 MSI 自動 Release 公開（署名は MVP 対象外、spec §0 / DEV-415）、
+   submodule 配信ポリシー確定を行う。
 
-**Phase 4 検証**: クリーン Win11 VM での MSIX インストール → IME 選択 → 入力
-→ 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に署名済み
-MSIX が自動公開。
+**Phase 4 検証**: クリーン Win11 VM での MSI インストール → IME 選択 → 入力
+→ 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に未署名
+MSI が自動公開。
 
 ## Phase 5〜7 の依存関係と実行順
 
@@ -499,9 +499,11 @@ M8 完了 ─→ M24 ─┬─→ M25
 【設定・配信トラック】
 Phase 5 完了 ─→ M30（Phase 6 と並行可。M36-A の承認 UI 前提）
 Phase 5 完了 ─→ M34（Phase 5 直後へ前倒し推奨）
-Phase 6 完了 ─→ M28 ─┬─→ M29 ─→ M32
-                     ├─→ M31
-                     └─→ M33
+Phase 4（M11/M12 = MVP 未署名 MSI 構築・公開）─→ M32（WinGet + 自動更新 + 初回モデル取得）
+Phase 6 完了 ─→ M28（Store MSIX。並行準備。MVP 直接配布の前提ではない）
+Phase 6 完了 ─→ M31（MVP MSI の post-v1.0 拡張。Inno 代替 / LTSC 硬化）
+Phase 6 完了 ─→ M33
+（M29 = スタンドアロン MSIX 署名は当面延期。M28 の後続だが M32 等の能動チェーンの前提からは外す。spec §0 / DEV-255）
 M6 完了 ─→ M35（Phase 4 後に並行可能な独立トラック）
 M6 完了 ─→ M36-A ─→ M36-B（M32 完了も前提）
 
@@ -855,25 +857,33 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     しない。§4.3 の NPU 非必須方針と整合）。
 - **参照仕様**: `docs/copilot-pc-backend-spec.md` §8
 
-## Phase 7: サイドロード配信（M28〜M34）
+## Phase 7: 配布・パッケージング（M28〜M34）
 
-> Phase 6 完了後に着手。Microsoft Store 配信は対象外（サイドロード専念）。
-> **正典仕様**は `docs/sideload-packaging-spec.md`。
+> Phase 6 完了後に着手。**配布方針（2026-06 確定）**: MVP は未署名 MSI 直接配布（DEV-415）、
+> MSIX は Microsoft Store 経由で並行準備（MS 再署名のため自前署名不要、DEV-416）、有料署名を要する
+> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。**正典仕様**は `docs/sideload-packaging-spec.md` §0。
 > なお M30（設定アプリ）・M34（DPAPI 暗号化）は Phase 5 完了のみが前提で、
 > Phase 6 と並行・Phase 5 直後への前倒しが可能（依存関係の節を参照）。
 
-### M28: MSIX サイドロード
+### M28: MSIX パッケージング（MS Store 向け）
 
-- **目的**: MSIX パッケージで配布、ユーザースコープ登録 / アンインストール。
+- **目的**: MSIX パッケージを構成し、MS Store 配布（DEV-416）の基盤とする。Store は Microsoft が
+  再署名するため自前署名不要。MVP の直接配布は未署名 MSI（DEV-415、spec §4）であり、本マイルストーンは
+  Store チャネル準備として位置づける（配布方針は spec §0）。
 - **前提**: Phase 6 完了。
 - **変更対象**: `pkg/msix/AppxManifest.xml`（新規）、`pkg/msix/Package.wapproj`
   （新規）、`pkg/msix/Assets/*.png`（新規）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §1（ただし §1.6.1 (b) 初回起動時
   DL は共有 `HttpDownloader` に依存するため M32 へ送り、M28 は (c) 手動配置を
   operative default として出荷する。§1.6.1「マイルストーン順序の制約」）。
-- **受け入れ条件**:
-  - クリーン Win10 22H2 / Win11 23H2 VM で `Add-AppxPackage` 成功
+- **受け入れ条件**（Store 提出パッケージは Partner Center 提出後に Microsoft が署名するため、
+  ローカル検証は**開発用自己署名テスト証明書**で行う。配布方針は spec §0）:
+  - ローカル検証: 自己署名テスト証明書で署名した MSIX を、証明書を信頼させたクリーン VM で
+    `Add-AppxPackage` 成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）。**対象 OS は
+    §1.0 で確定する TIP 配布経路に従う**（Option A = external-location は Win10 2004/build 19041+ / Win11、
+    Option B/C = `com4` により build 20348+ = Win11 21H2+。Win10 22H2 client(19045) は B/C では対象外。spec §1.1）
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
+  - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
 - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
   `-dev` 接尾辞（`scripts/register-dev.ps1` / `unregister-dev.ps1`）で経路を分離する。
   MSIX 登録経路と開発用 `regsvr32` 経路を取り違えると登録・解除事故につながる
@@ -881,9 +891,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   詳細は `docs/sideload-packaging-spec.md` §1.1.1。
 - **参照仕様**: `docs/sideload-packaging-spec.md` §1
 
-### M29: EV/OV コード署名 CI
+### M29: EV/OV コード署名 CI（当面延期）
 
-- **目的**: GitHub Actions で署名済み MSIX を自動生成。
+- **位置づけ**: 自前コード署名はスタンドアロン MSIX サイドロード専用であり、配布方針転換
+  （spec §0）により **当面延期**（DEV-255）。MVP の未署名 MSI（DEV-415）・MS Store の MSIX
+  （MS 再署名、DEV-416）はいずれも本マイルストーンを必要としない。
+- **目的**: GitHub Actions で署名済み MSIX を自動生成（延期チャネル着手時）。
 - **前提**: M28 完了 + EV/OV 証明書手当て済み。
 - **変更対象**: `.github/workflows/release.yml`（新規）、GitHub Secrets 設定。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §2。
@@ -914,10 +927,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **参照仕様**: `docs/sideload-packaging-spec.md` §3、`docs/rich-features-spec.md`
   X-2-6, X-2-7, X-3-6
 
-### M31: WiX インストーラ
+### M31: WiX MSI インストーラ拡張（post-v1.0）
 
-- **目的**: MSIX 不可環境（LTSC 等）向けの代替インストーラ。
-- **前提**: M28 完了。
+- **目的**: MVP の未署名 WiX MSI **本体は M11/M12（Phase 4 リリースゲート）で構築・公開する**
+  （spec §0 / §4 / DEV-415）。本マイルストーンは v1.0 後の拡張に絞る（Inno Setup 代替、
+  LTSC / AppX 無効環境の硬化、インストール UX 拡充）。MVP 配布経路のブロッカーではない。
+- **前提**: M12 完了（Phase 4 で MVP MSI を公開済み）。
 - **変更対象**: `pkg/wix/Product.wxs`（新規）、`pkg/inno/setup.iss`（オプション）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §4。
 - **受け入れ条件**:
@@ -928,7 +943,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `winget install dolquis.azooKey` で導入できる + アプリ内自動更新 +
   v1.0 既定のモデル初回取得（§1.6.1 (b) 初回起動時オンデマンド DL）。
-- **前提**: M29 完了。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
+- **前提**: M12 完了（Phase 4 で MVP 未署名 MSI を公開済み）。WinGet は出荷アーティファクト
+  （未署名 MSI）をラップし、自動更新・モデル DL は署名に依存しないため、延期した M29
+  （スタンドアロン MSIX 署名）は前提としない（spec §0 / DEV-255）。**(b) 初回モデル DL の有効化に限り**、DEV-202（zenz GGUF
   再配布可否。`gate:human-required`）の確定を追加前提とする — 配信元が
   GitHub 再ホスト / 上流 HF / 保留 のいずれになるかを律するため（§1.6.1
   ライセンス分岐）。WinGet（§5）/ 自動更新（§6）は DEV-202 非依存で先行可。
@@ -944,7 +961,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （初回起動時オンデマンド DL。同 §1.6.1 の取得方式・ピン・autoselect 規律に従う）。
 - **受け入れ条件**:
   - winget-pkgs に PR が merge され `winget install` で導入可能
-  - 起動時 + 24h 周期で新版検出、ユーザー承認で MSIX 適用
+  - 起動時 + 24h 周期で新版検出、ユーザー承認で MSI 適用（`msiexec /i /qn /norestart`、
+    要再起動時は通知。spec §6.3）
   - **DEV-202 確定（配信元決定）かつ `expected.json` ピン投入済みのとき**: 既定
     設定下（§1.6.1 (b) の前提ガード成立 — `autoLoadOnHostStart=true` かつ
     非 `offline`）で初回起動時に ピンと一致する GGUF を DL → SHA256 検証 →
@@ -962,7 +980,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 ### M33: ETW / WER
 
 - **目的**: 本番環境の観測性とクラッシュ収集。
-- **前提**: M28 完了。
+- **前提**: Phase 6 完了（観測性はパッケージング非依存。Store MSIX の M28 には依存しない。spec §0）。
 - **変更対象**: `core/src/EtwLogger.cpp`（新規）、`inference-host/src/CrashHandler.cpp`
   （新規、`SetUnhandledExceptionFilter`）、`settings/mvp-settings.schema.json`
   （`privacy.crashReportConsent` subfield を先行導入。§3.6 / `privacy-and-secure-input-spec.md` §7）。
@@ -1858,7 +1876,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   キャンセル / Unicode / 絵文字 / Undo / Redo が壊れないことを半自動で
   検証する。
 - **前提**: M38（CI 品質ゲート拡張）完了。
-- **推奨実装時期**: Phase 4 ゲート前または直後。M28（MSIX サイドロード）
+- **推奨実装時期**: Phase 4 ゲート前または直後。M28（MSIX パッケージング）
   着手前に最低限のアプリ互換性ベースラインを確保する。
 - **変更対象**: `compat-test/`（新規ディレクトリ）、`.github/workflows/`
   （compat ジョブ追加、optional）。

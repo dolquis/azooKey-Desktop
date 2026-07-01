@@ -1,12 +1,38 @@
-# サイドロード配信 仕様（Phase 7）
+# 配布・パッケージング 仕様（Phase 7）
 
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。
 `plans/windows-port-roadmap.md` の Phase 7 の M28〜M34 が本書を参照する。
 
-**Microsoft Store 配信は対象外** とし、サイドロード（自己署名 + EV/OV 証明書
-配布）に専念する。
+## 0. 配布方針（v1.0 MVP 確定 / 2026-06）
 
-## 1. MSIX サイドロード（M28）
+配布チャネルと署名要否を次のとおり確定する（Linear DEV-415 / DEV-416 / DEV-255）。
+
+| チャネル | 形式 | 自前コード署名 | 位置づけ |
+|---|---|---|---|
+| **MVP 直接配布** | **MSI（WiX、未署名）** | 不要（任意） | v1.0 の既定。§4 が正典。GitHub Release で配布 |
+| **Microsoft Store** | **MSIX** | **不要**（Microsoft が再署名） | 並行準備。§1 を Store 用 Identity で構成（DEV-416） |
+| **スタンドアロン MSIX サイドロード** | MSIX | **必須**（有料 OV/EV） | **当面延期**。§2 の署名ルート（経路 B 確定済み）は本チャネル着手時に実施（DEV-255） |
+
+判断根拠:
+
+- MSIX は署名がインストールの前提条件だが、MSI/EXE は署名が任意である。未署名 MSI も
+  インストール可能で、SmartScreen 警告 + UAC「不明な発行元」は出るが reputation building で
+  許容する（出典: [Create an unsigned MSIX package](https://learn.microsoft.com/windows/msix/package/unsigned-package) /
+  [Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
+- Microsoft Store 提出 MSIX は Microsoft が再署名するため、開発者側の有料証明書が不要
+  （出典: [Publish your first Windows app](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app)）。
+- 有料コード署名証明書を要するのはスタンドアロン MSIX サイドロードのみ。MVP では不要のため延期する。
+- 先行実装（fkunn1326/azooKey-Windows = Inno Setup EXE、CorvusSKK = WiX/Inno EXE）も MSIX では
+  なく MSI/EXE インストーラで配布している。
+
+以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
+**§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
+
+## 1. MSIX パッケージング（MS Store 向け・M28）
+
+> **スコープ注記（§0 配布方針）**: 本節の MSIX は **MS Store 配布（DEV-416）の構成**として読む。
+> Store 提出パッケージは Microsoft が再署名するため §2 の自前署名は不要。有料署名を要する
+> スタンドアロン MSIX サイドロードは当面延期（DEV-255）。MVP の直接配布は §4（WiX/MSI、DEV-415）が正典。
 
 > **⚠️ OPEN ISSUE — M28 着手時に PoC 必須**: MSIX に TIP DLL を同梱する経路は、
 > Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
@@ -364,17 +390,16 @@ M45 のフル管理 UI（`docs/model-management-spec.md`）が乗る土台を、
 フォールバック**とし、(a) は採らない。(b) と (c) は同一の配置レイアウト（後述）に
 収束するため、Host / M45 から見た「モデルがそこに在る」状態は取得方式に依存しない。
 
-**マイルストーン順序の制約（M28 を M32 の DL 基盤に依存させない）**: (b) は共有
-ヘルパ `HttpDownloader`（M32 で切り出し、M36-B が再利用）に依存する。roadmap は
-**M28（§1 全体を実装）→ M29 → M32** の順で、M28 時点では `HttpDownloader` が未だ
-存在しない。したがって **M28 出荷時の operative default は (c) 手動配置**とし、(b)
-は **M32 の共有 `HttpDownloader` が揃った時点で既定化する fast-follow** として扱う
-（M28 で one-off の重複ダウンローダを書かない＝二重実装回避）。この (b) の実装は
-**roadmap M32 のスコープに計上**し（`plans/windows-port-roadmap.md` M32 / M28 実装
-範囲の注記）、宙に浮かせない。(b) を v1.0 ローンチ
-までに既定化したい場合は、ダウンローダ基盤の切り出しを M28 の前提として前倒しする
-（roadmap 側で M32 の該当スコープを M28 前へ移す）必要があり、これは roadmap 更新を
-伴う別判断とする。
+**マイルストーン順序の制約（初回パッケージングを M32 の DL 基盤に依存させない）**: (b) は共有
+ヘルパ `HttpDownloader`（M32 で切り出し、M36-B が再利用）に依存する。MVP 直接配布は
+**M11/M12（MVP MSI 構築・公開）→ M32** の順（延期した M29 は前提でない。§0 / roadmap 依存グラフ）で、初回
+パッケージング時点では `HttpDownloader` が未だ存在しない。したがって **初回出荷時の operative
+default は (c) 手動配置**とし、(b) は **M32 の共有 `HttpDownloader` が揃った時点で既定化する fast-follow** として扱う
+（初回パッケージングで one-off の重複ダウンローダを書かない＝二重実装回避）。この (b) の実装は
+**roadmap M32 のスコープに計上**し（`plans/windows-port-roadmap.md` M32 実装範囲の注記）、
+宙に浮かせない。(b) を v1.0 ローンチまでに既定化したい場合は、ダウンローダ基盤の切り出しを
+初回パッケージング（M11/M12）の前提として前倒しする（roadmap 側で M32 の該当スコープを M11/M12 前へ移す）
+必要があり、これは roadmap 更新を伴う別判断とする。
 
 ##### ライセンス分岐（DEV-202 連動。確定までは「配信元 保留」で設計）
 
@@ -513,6 +538,12 @@ app execution alias の利用を優先する。
 
 ## 2. EV/OV コード署名（M29）
 
+> **スコープ注記（§0 配布方針）**: 本節（自前コード署名）が必要なのは **スタンドアロン MSIX
+> サイドロード**のみであり、これは **当面延期**（DEV-255）。MVP の MSI 直接配布は未署名（§4 /
+> DEV-415）、MS Store の MSIX は Microsoft が再署名するため、いずれも本節の自前署名を要しない。
+> 本節は延期チャネル着手時の正典として残す。なお §2.2 の PFX 前提は CA/Browser Forum の
+> HSM 必須化（2023-06-01）で陳腐化しており、改訂を DEV-414 で追跡する。
+
 ### 2.0 署名経路の選定
 
 署名証明書の調達ルートは v1.0 / v1.x で 3 候補ある。Microsoft Learn の現行ガイ
@@ -525,11 +556,13 @@ app execution alias の利用を優先する。
 | B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
 | C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 既存 §2.3 経路 | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | EV のみ即時信頼 | PFX 漏えいリスク、CI でのキー回転が煩雑 |
 
-**v1.0 の判定**: 開発者の所在地・組織化状況に応じて A or B or C を選ぶ。日本の
-個人開発者で組織化していない場合は B（Azure Key Vault + AzureSignTool）が現実
-的。組織化済みで該当地域なら A を強く推奨。ルートの最終選定・証明書調達・申請手順は
-人間判断が必須のため、`gate:human-required` 課題
-（[Linear DEV-255](https://linear.app/dolquis/issue/DEV-255)）で確定する。
+**判定（DEV-255 で確定）**: 署名主体は日本の個人開発者であり、経路 A（Azure Artifact
+Signing）は地域制限で不可（個人 = 米/加のみ）。reputation building 許容のため EV（経路 C）は
+不採用。新規 OV は HSM 必須化で PFX を入手できないため、CI 署名を保てる **経路 B（Azure Key
+Vault + AzureSignTool）/ B'（CA クラウド署名: SSL.com eSigner / DigiCert KeyLocker 等）** を
+採用する。ただし本署名はスタンドアロン MSIX サイドロード専用であり、§0 のとおり当面延期する
+（MVP の MSI / MS Store の MSIX はいずれも自前署名不要）。証明書調達・申請手順は人間判断が
+必須のため、`gate:human-required` 課題（[Linear DEV-255](https://linear.app/dolquis/issue/DEV-255)）で扱う。
 
 ### 2.1 signtool 引数
 
@@ -758,9 +791,10 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 2. **Fluent Design 標準対応** — Mica / Acrylic backdrop（`Window.SystemBackdrop` に
    `MicaBackdrop` / `DesktopAcrylicBackdrop`）・Light/Dark・PerMonitorV2 DPI・
    アクセントカラーが追加実装なしで得られ、M26（Win11 ネイティブ体験）と整合する。
-3. **MSIX サイドロード整合** — v1.0 の配布形態（§1 MSIX サイドロード）と一致し、
-   設定アプリ EXE をパッケージ内同梱として配布できる（§1.1 の `comServer` は TIP の
-   in-proc サーバ宣言であり、設定アプリは通常の packaged EXE として同梱する）。
+3. **配布形態との整合** — v1.0 MVP の配布形態（§0 / §4 の未署名 MSI）に、設定アプリ
+   `azookey_settings.exe` を **self-contained 配置（§1.3・§4 の同梱必須注記）**でペイロード同梱できる。
+   MS Store 用 MSIX（§1）では packaged EXE として同梱する。いずれも WinUI 3 の unpackaged /
+   packaged 両対応（下記事実更新）で成立し、単一 UI スタックのまま両チャネルに載る。
 
 > **事実更新（Microsoft Learn, 2026-06 時点。旧記述の訂正）**
 > - WinUI 3 がサポートする言語は **C# と C++/WinRT のみ**（C++/CX は非推奨）。
@@ -768,8 +802,9 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 >   ただしこれは**設定アプリ（WinUI 3）単体の下限**であり、配布パッケージ全体の最小 OS では
 >   ない（下記）。
 > - **unpackaged（MSIX なし）配布もサポートされる**（Windows App SDK 1.0 以降）。旧記述
->   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。ただし本プロジェクトは
->   TIP の CLSID/Profile 登録と MSIX サイドロード配布の都合で **packaged（MSIX）を採用**する。
+>   「WinUI 3 デスクトップは MSIX 必須・unpackaged 不可」は**誤り**。本プロジェクトは §0 の
+>   とおり **MVP を未署名 MSI（設定アプリは unpackaged / self-contained 同梱）**で配布し、
+>   **MS Store 向けには packaged（MSIX）**を用いる。WinUI 3 は両形態に対応するため単一 UI スタックで両立する。
 > - **配布パッケージ全体の最小 OS は TIP の配布経路で決まり、設定アプリの 1809 より高い**:
 >   §1 の経路 A（external-location packaging）は **Win10 2004 / build 19041 以上**、経路 B
 >   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
@@ -808,7 +843,8 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 - 言語: C++/WinRT（TIP / Host と統一）
 - フレームワーク: WinUI 3（Windows App SDK 2.x。2026-06 時点の最新安定版は 2.2.0。版は固定せず実装時の最新安定版に追従）
-- 配布: MSIX 内同梱（別 EXE `azookey_settings.exe`）
+- 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、§1.3 / §4）。
+  MS Store 用 MSIX（§1）では packaged EXE として同梱（配布方針は §0）
 
 ### 3.2 ナビゲーション
 
@@ -1107,9 +1143,14 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 - Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
   §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 
-## 4. WiX / Inno Setup インストーラ（M31）
+## 4. WiX / MSI インストーラ（MVP 既定 / 旧 M31）
 
-MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向け。
+> **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が v1.0 MVP の既定配布形態**（未署名、DEV-415）。
+> 当初は MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向けの代替として位置づけていたが、
+> 配布方針転換により MVP の主経路へ格上げした。MSIX は §1（MS Store 用）に回す。MSI は署名が任意で、
+> 未署名でもインストール可能（SmartScreen 警告 + UAC「不明な発行元」は出る）。
+
+MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経路で対応する。
 
 > **設定アプリと WinUI 3 ランタイムの同梱（必須）**: TIP の `ITfFnConfigure`（§3.5）は
 > `azookey_settings.exe` を起動するため、本経路でも **設定アプリ本体と WinUI 3 ランタイムを
@@ -1204,6 +1245,10 @@ Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \
 
 ## 5. WinGet マニフェスト（M32）
 
+> **スコープ注記（§0 配布方針）**: WinGet が配布するのは **MVP の未署名 MSI**（DEV-415）。
+> Release に MSIX は含まれないため `InstallerType` は `msi`。MS Store 配布（DEV-416）は Store が
+> 更新を担うため、本節の WinGet / §6 自動更新は Store チャネルには適用しない。
+
 ### 5.1 構成
 
 `manifests/d/dolquis/azooKey/<version>/`（winget-pkgs リポジトリへの PR で配布）：
@@ -1219,15 +1264,13 @@ dolquis.azooKey.yaml
 ```yaml
 PackageIdentifier: dolquis.azooKey
 PackageVersion: 1.0.0
+InstallerType: msi
 Installers:
   - Architecture: x64
-    InstallerType: msix
-    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-x64.msix
+    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-x64.msi
     InstallerSha256: <SHA256>
-    SignatureSha256: <SignatureSHA256>
   - Architecture: arm64
-    InstallerType: msix
-    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-arm64.msix
+    InstallerUrl: https://github.com/dolquis/azooKey-Desktop/releases/download/v1.0.0/azooKey-1.0.0-arm64.msi
     InstallerSha256: <SHA256>
 ManifestType: installer
 ManifestVersion: 1.5.0
@@ -1250,7 +1293,7 @@ ManifestVersion: 1.5.0
 
 ### 5.2 リリースフロー
 
-1. GitHub Release で MSIX を公開
+1. GitHub Release で MSI を公開
 2. SHA256 を計算
 3. winget-pkgs リポジトリへ PR
 4. マージ後 `winget install dolquis.azooKey` で利用可能
@@ -1259,7 +1302,7 @@ ManifestVersion: 1.5.0
 
 ```powershell
 wingetcreate update --urls `
-  "https://github.com/dolquis/azooKey-Desktop/releases/download/v$ver/azooKey-$ver-x64.msix" `
+  "https://github.com/dolquis/azooKey-Desktop/releases/download/v$ver/azooKey-$ver-x64.msi" `
   --version $ver dolquis.azooKey
 ```
 
@@ -1274,7 +1317,7 @@ class UpdateChecker {
 public:
     struct Release {
         std::string version;
-        std::string url;        // MSIX ダウンロード URL
+        std::string url;        // MSI installer ダウンロード URL
         std::string sha256;
         std::string body;       // changelog
     };
@@ -1303,9 +1346,13 @@ User-Agent: azooKey/1.0.0 (Windows)
 
 1. 通知（トースト）「新しいバージョン v1.1.0 が利用可能」
 2. ユーザーが「インストール」をクリック
-3. MSIX を `%TEMP%` にダウンロード（`WinHttpReadData`）
+3. MSI を `%TEMP%` にダウンロード（`WinHttpReadData`）
 4. SHA256 検証
-5. `Add-AppxPackage -Path` で更新（既存パッケージは自動アンインストール）
+5. `msiexec /i <msi> /qn /norestart` で更新（同一 `UpgradeCode` により in-place アップグレード。要昇格）。
+   使用中の TIP DLL 置換で再起動要求が起き得るため、`/norestart` で自動再起動を抑止する
+   （[Standard Installer Command-Line Options](https://learn.microsoft.com/windows/win32/msi/standard-installer-command-line-options)）
+6. 終了コード `3010`（`ERROR_SUCCESS_REBOOT_REQUIRED`）の場合は、自動再起動せず「再起動が必要」を
+   ユーザーに通知して同意を得てから再起動する
 
 ### 6.4 WinSparkle 互換
 
@@ -1633,7 +1680,7 @@ bool LearningStore::Load() {
 2. バージョンタグを打つ (`git tag v1.0.0`)
 3. `git push --tags`
 4. `.github/workflows/release.yml` が自動実行
-5. Draft Release が作成される（MSIX 添付済み、署名済み）
+5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2、当面延期）
 6. 動作確認（クリーン VM でインストール → 入力 → 確定 → アンインストール）
 7. Draft → Publish
 8. winget-pkgs に PR（`wingetcreate update`）

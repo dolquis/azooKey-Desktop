@@ -3,15 +3,19 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <utility>
 
 #include "azookey/host/ZenzaiModelConverter.h"
+#include "azookey/learning/FileLock.h"
 
 namespace azookey::host {
 
 namespace {
 constexpr const char* kLearningSaveError = "failed to save learning store";
+constexpr const char* kUserDictionaryLoadError = "failed to load user dictionary";
+constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary";
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::seconds(2);
 
@@ -68,6 +72,11 @@ void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
   }
   candidates = std::move(deduped);
 }
+
+bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
+  std::error_code ec;
+  return std::filesystem::exists(dict.path(), ec) && !ec;
+}
 }  // namespace
 
 InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
@@ -106,6 +115,16 @@ bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
     return false;
   }
 
+  // Disk is the cross-process source of truth for user dictionary edits.
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path());
+  if (!file_lock) {
+    RecordUserDictionaryFailureLocked(kUserDictionaryLockError);
+    return false;
+  }
+  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+    RecordUserDictionaryFailureLocked(kUserDictionaryLoadError);
+    return false;
+  }
   const auto before = user_dict_->All();
   user_dict_->Add(word);
   if (user_dict_->Save()) {
@@ -113,7 +132,7 @@ bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
   }
 
   RestoreUserDictionaryLocked(before);
-  RecordUserDictionarySaveFailureLocked();
+  RecordUserDictionaryFailureLocked(kUserDictionarySaveError);
   return false;
 }
 
@@ -123,6 +142,15 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
     return false;
   }
 
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path());
+  if (!file_lock) {
+    RecordUserDictionaryFailureLocked(kUserDictionaryLockError);
+    return false;
+  }
+  if (UserDictionaryFileExists(*user_dict_) && !user_dict_->Load()) {
+    RecordUserDictionaryFailureLocked(kUserDictionaryLoadError);
+    return false;
+  }
   const auto before = user_dict_->All();
   if (!user_dict_->Remove(word, ruby)) {
     return false;
@@ -132,7 +160,7 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
   }
 
   RestoreUserDictionaryLocked(before);
-  RecordUserDictionarySaveFailureLocked();
+  RecordUserDictionaryFailureLocked(kUserDictionarySaveError);
   return false;
 }
 
@@ -479,9 +507,9 @@ void InferenceEngine::RecordLearningSaveFailureLocked() {
   std::cerr << "error: " << kLearningSaveError << std::endl;
 }
 
-void InferenceEngine::RecordUserDictionarySaveFailureLocked() {
-  last_error_ = kUserDictionarySaveError;
-  std::cerr << "error: " << kUserDictionarySaveError << std::endl;
+void InferenceEngine::RecordUserDictionaryFailureLocked(const char* error) {
+  last_error_ = error;
+  std::cerr << "error: " << error << std::endl;
 }
 
 void InferenceEngine::LearningFlushWorker() {

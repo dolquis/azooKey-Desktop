@@ -14,6 +14,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace azookey::host {
@@ -341,6 +342,12 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
 UserDictCliResult RunDirect(const UserDictCliOptions& options,
                             const UserDictCliRunOptions& run_options) {
   UserDictCliResult result;
+  auto file_lock = azookey::learning::AcquireExclusiveFileLockForPath(run_options.user_dict_path);
+  if (!file_lock) {
+    result.exit_code = 1;
+    result.error = "failed to lock user dictionary";
+    return result;
+  }
   azookey::learning::UserDictionary dict(run_options.user_dict_path);
   if (!dict.Load()) {
     result.exit_code = 1;

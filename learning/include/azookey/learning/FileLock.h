@@ -110,28 +110,53 @@ inline std::filesystem::path AbsoluteLexicalPath(const std::filesystem::path& pa
   return absolute.lexically_normal();
 }
 
-#ifdef _WIN32
-inline std::wstring MutexNameForPath(const std::filesystem::path& path) {
-  constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+inline std::uint64_t Fnv1a64Append(std::uint64_t hash, std::uint32_t code) {
   constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+  for (int shift = 0; shift < 32; shift += 8) {
+    hash ^= static_cast<unsigned char>((code >> shift) & 0xFFu);
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
+
+inline std::string HexString(std::uint64_t value) {
+  std::ostringstream oss;
+  oss << std::hex << value;
+  return oss.str();
+}
+
+inline std::uint64_t HashPathForLock(const std::filesystem::path& path) {
+  constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
   std::uint64_t hash = kFnvOffset;
+#ifdef _WIN32
   const auto normalized = AbsoluteLexicalPath(path).wstring();
   for (wchar_t ch : normalized) {
-    const auto code = static_cast<std::uint32_t>(std::towlower(ch));
-    for (int shift = 0; shift < 32; shift += 8) {
-      hash ^= static_cast<unsigned char>((code >> shift) & 0xFFu);
-      hash *= kFnvPrime;
-    }
+    hash = Fnv1a64Append(hash, static_cast<std::uint32_t>(std::towlower(ch)));
   }
+#else
+  const auto normalized = AbsoluteLexicalPath(path).string();
+  for (unsigned char ch : normalized) {
+    hash = Fnv1a64Append(hash, ch);
+  }
+#endif
+  return hash;
+}
+
+#ifdef _WIN32
+inline std::wstring MutexNameForPath(const std::filesystem::path& path) {
+  const auto hex = HexString(HashPathForLock(path));
   std::wostringstream oss;
-  oss << L"Local\\azookey-file-lock-" << std::hex << hash;
+  oss << L"Local\\azookey-file-lock-" << std::wstring(hex.begin(), hex.end());
   return oss.str();
 }
 #else
 inline std::filesystem::path LockFilePathFor(const std::filesystem::path& path) {
-  auto lock_path = AbsoluteLexicalPath(path);
-  lock_path += ".lock";
-  return lock_path;
+  std::error_code ec;
+  auto root = std::filesystem::temp_directory_path(ec);
+  if (ec) {
+    root = ".";
+  }
+  return root / ("azookey-file-lock-" + HexString(HashPathForLock(path)) + ".lock");
 }
 #endif
 
@@ -140,14 +165,6 @@ inline std::filesystem::path LockFilePathFor(const std::filesystem::path& path) 
 inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
     const std::filesystem::path& path,
     std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
-#ifndef _WIN32
-  std::error_code ec;
-  if (!path.parent_path().empty()) {
-    std::filesystem::create_directories(path.parent_path(), ec);
-    if (ec) return std::nullopt;
-  }
-#endif
-
 #ifdef _WIN32
   const auto name = detail::MutexNameForPath(path);
   HANDLE mutex = ::CreateMutexW(nullptr, FALSE, name.c_str());
@@ -168,6 +185,7 @@ inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
   return std::nullopt;
 #else
   const auto lock_path = detail::LockFilePathFor(path);
+  std::error_code ec;
   if (!lock_path.parent_path().empty()) {
     std::filesystem::create_directories(lock_path.parent_path(), ec);
     if (ec) return std::nullopt;

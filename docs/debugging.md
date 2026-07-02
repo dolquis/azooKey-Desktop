@@ -106,10 +106,17 @@ cmake --build --preset windows-debug --target azookey_check
 - **Full CTest が途中で止まる**: まず `build/agent-logs/*-test-*.log` と
   `build/<preset>/Testing/Temporary/LastTest.log*` を確認し、最後に開始された
   CTest case を特定する。
+  TSF/COM 境界の切り分けでは `ctest --test-dir build/windows-debug -N -V -L tsf-com`
+  で対象 test command を列挙し、`ctest --test-dir build/windows-debug --show-only=json-v1 -L tsf-com`
+  で `TIMEOUT` と `LABELS` を確認する。
   その case を該当 GoogleTest 実行ファイルの `--gtest_filter=<Suite.Test>` で単体実行する。
   さらに `cmake --build --preset <preset> --target <target> -- -n` で対象実行ファイルが
   stale でないか確認する。
   stale の場合は `azookey_check` または対象 target の再ビルド後に CTest をやり直す。
+  TSF/COM 系 test が timeout した場合は、残留した
+  `tsf_tip_display_attribute_tests.exe` / `tsf_tip_activate_uiless_tests.exe` /
+  `tsf_tip_com_smoke_tests.exe` を `Get-Process` で確認し、対象 repo の今回の test run 由来と
+  分かるプロセスだけを停止する。
   各 GoogleTest case には CTest `TIMEOUT` が設定されているため、停止は無限待ちではなく
   timeout failure として扱う。
 - **候補が反転する（古い候補が上書きされる）**: `ipc_pending_id_` の比較で

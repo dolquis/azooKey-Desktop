@@ -132,9 +132,22 @@ if(AZOOKEY_BUILD_TESTS)
     set(AZOOKEY_GTEST_TEST_TIMEOUT 60 CACHE STRING
         "Seconds to allow each discovered GoogleTest case to run")
     function(azookey_discover_tests target_name)
+      set(one_value_args LABEL TIMEOUT)
+      cmake_parse_arguments(AZOOKEY_TEST "" "${one_value_args}" "" ${ARGN})
+
+      set(azookey_test_timeout "${AZOOKEY_GTEST_TEST_TIMEOUT}")
+      if(AZOOKEY_TEST_TIMEOUT)
+        set(azookey_test_timeout "${AZOOKEY_TEST_TIMEOUT}")
+      endif()
+
+      set(azookey_test_properties TIMEOUT ${azookey_test_timeout})
+      if(AZOOKEY_TEST_LABEL)
+        list(APPEND azookey_test_properties LABELS ${AZOOKEY_TEST_LABEL})
+      endif()
+
       gtest_discover_tests(${target_name}
         DISCOVERY_TIMEOUT ${AZOOKEY_GTEST_DISCOVERY_TIMEOUT}
-        PROPERTIES TIMEOUT ${AZOOKEY_GTEST_TEST_TIMEOUT}
+        PROPERTIES ${azookey_test_properties}
       )
       set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS ${target_name})
     endfunction()

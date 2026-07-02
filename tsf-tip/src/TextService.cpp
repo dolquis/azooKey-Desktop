@@ -16,6 +16,7 @@
 namespace {
 
 constexpr const char* kTipVersion = "0.1.0";
+constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
 
 void DebugLog(const std::string& message) {
 #ifdef _DEBUG
@@ -1200,6 +1201,13 @@ void TextService::StopIpcWorker() {
   ipc_thread_.join();
 }
 
+std::string TextService::IpcPipeName() const {
+#ifdef AZOOKEY_TSF_TESTING
+  if (!ipc_pipe_name_for_test_.empty()) return ipc_pipe_name_for_test_;
+#endif
+  return ipc::DefaultPipeName();
+}
+
 // Interruptible backoff between reconnect attempts. Returns true when the
 // worker should stop (Deactivate set ipc_stop_); StopIpcWorker notifies
 // ipc_cv_ so this wakes promptly instead of sleeping out the full delay.
@@ -1209,7 +1217,7 @@ bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
   return ipc_stop_.load();
 }
 
-bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms) {
+bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id) {
   using namespace std::chrono;
 
   constexpr uint32_t kResponsePollMs = 50;
@@ -1225,7 +1233,16 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms) {
       wait_ms = static_cast<uint32_t>(remaining_ms);
     }
 
-    if (ipc_client_.ReceiveWithTimeout(wait_ms)) return true;
+    auto response = ipc_client_.ReceiveWithTimeout(wait_ms);
+    if (response) {
+      if (expected_request_id != 0 && response->request_id != expected_request_id) {
+        DebugLog("IPC: response for stale req_id=" + std::to_string(response->request_id) +
+                 " while waiting for req_id=" + std::to_string(expected_request_id) +
+                 ", discarding");
+        continue;
+      }
+      return true;
+    }
   }
 
   return false;
@@ -1284,7 +1301,7 @@ void TextService::RearmPendingQuery(uint64_t req_id) {
 void TextService::IpcWorkerThread() {
   using namespace azookey::ipc;
 
-  const auto pipe_name = DefaultPipeName();
+  const auto pipe_name = IpcPipeName();
   if (pipe_name.empty()) {
     DebugLog("IPC: default pipe name unavailable; current-user SID lookup failed");
     return;
@@ -1381,7 +1398,7 @@ void TextService::ServeConnection() {
       }
       if (item.expects_response) {
         constexpr uint32_t kFafResponseTimeoutMs = 3000;
-        if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs)) {
+        if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs, env.request_id)) {
           if (ipc_stop_.load()) return;
           if (!ipc_stop_.load())
             DebugLog("IPC: faf receive failed for type=" + TypeToString(item.type) +
@@ -1478,11 +1495,39 @@ void TextService::ServeConnection() {
     }
 
     // Poll in 50ms slices so cancels enqueued while the host processes the
-    // query can be forwarded without waiting for the full response.
+    // query can be forwarded without waiting for the full response. Normal
+    // live QueryCandidates has a request-level deadline; batch conversion can
+    // legitimately take longer and keeps the existing unbounded wait.
+    const auto query_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kQueryCandidatesFastTimeoutMs);
+    bool query_deadline_exceeded = false;
     std::optional<ipc::Envelope> qres;
     while (!ipc_stop_.load() && ipc_client_.IsConnected()) {
-      qres = ipc_client_.ReceiveWithTimeout(50);
-      if (qres) break;
+      uint32_t wait_ms = 50;
+      if (!is_batch) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= query_deadline) {
+          query_deadline_exceeded = true;
+          break;
+        }
+        const auto remaining_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(query_deadline - now).count();
+        if (remaining_ms > 0 && remaining_ms < static_cast<long long>(wait_ms)) {
+          wait_ms = static_cast<uint32_t>(remaining_ms);
+        }
+        if (wait_ms == 0) wait_ms = 1;
+      }
+
+      qres = ipc_client_.ReceiveWithTimeout(wait_ms);
+      if (qres) {
+        if (qres->request_id != req_id) {
+          DebugLog("IPC: response for stale req_id=" + std::to_string(qres->request_id) +
+                   " while waiting for req_id=" + std::to_string(req_id) + ", discarding");
+          qres.reset();
+          continue;
+        }
+        break;
+      }
       // Drain fire-and-forget items (Cancel) that arrived while we waited.
       std::vector<IpcSendItem> mid_faf;
       {
@@ -1513,7 +1558,29 @@ void TextService::ServeConnection() {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
     }
-    if (!qres) {
+    std::vector<CandidateField> response_candidates;
+    if (!qres && query_deadline_exceeded && !is_batch) {
+      ipc::Envelope cancel_env;
+      cancel_env.version = 1;
+      cancel_env.request_id = next_id++;
+      cancel_env.trace_id = "tip-query-timeout-cancel";
+      cancel_env.type = ipc::MessageType::Cancel;
+      cancel_env.payload_json = ipc::BuildCancel({req_id});
+      if (!ipc_client_.Send(cancel_env)) {
+        RearmPendingQuery(req_id);
+        if (!ipc_stop_.load())
+          DebugLog("IPC: QueryCandidates timeout cancel send failed; will retry after reconnect");
+        break;
+      }
+
+      CandidateField fallback;
+      fallback.surface = reading;
+      fallback.reading = reading;
+      fallback.source = "fallback";
+      response_candidates.push_back(std::move(fallback));
+      DebugLog("IPC: QueryCandidates req_id=" + std::to_string(req_id) +
+               " timed out; canceled and using fallback candidate");
+    } else if (!qres) {
       // Host died after the query was sent: re-arm so the reconnected loop
       // re-issues it (recover without retyping).
       RearmPendingQuery(req_id);
@@ -1532,8 +1599,7 @@ void TextService::ServeConnection() {
       continue;
     }
 
-    std::vector<CandidateField> response_candidates;
-    if (is_batch) {
+    if (qres && is_batch) {
       auto qpayload = ParseQueryBatchConversionResponse(qres->payload_json);
       if (!qpayload || qpayload->canceled) {
         ++next_id;
@@ -1556,7 +1622,7 @@ void TextService::ServeConnection() {
         fallback.source = "fallback";
         response_candidates.push_back(std::move(fallback));
       }
-    } else {
+    } else if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
         ++next_id;
@@ -1673,6 +1739,11 @@ void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField
   candidates_ = std::move(candidates);
 }
 
+std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
+  std::lock_guard<std::mutex> lk(candidates_mtx_);
+  return candidates_;
+}
+
 void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }
 
 std::optional<ipc::CommitObservationRequest>
@@ -1687,7 +1758,7 @@ TextService::last_queued_commit_observation_for_test() {
 }
 
 void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_romaji,
-                                                   bool auto_punctuation) {
+                                                    bool auto_punctuation) {
   batch_romaji_conversion_.store(enabled);
   batch_romaji_preview_romaji_.store(preview_romaji);
   batch_conversion_ai_cleanup_.store(false);
@@ -1718,6 +1789,14 @@ std::string TextService::pending_ipc_raw_romaji_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   return ipc_pending_raw_romaji_;
 }
+
+void TextService::set_ipc_pipe_name_for_test(std::string pipe_name) {
+  ipc_pipe_name_for_test_ = std::move(pipe_name);
+}
+
+void TextService::start_ipc_worker_for_test() { StartIpcWorker(); }
+
+void TextService::stop_ipc_worker_for_test() { StopIpcWorker(); }
 #endif
 
 bool TextService::BatchRomajiEnabled() const {

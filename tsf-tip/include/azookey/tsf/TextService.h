@@ -86,6 +86,7 @@ class TextService final : public ITfTextInputProcessorEx,
 #ifdef AZOOKEY_TSF_TESTING
   bool candidate_window_show_pending_for_test();
   void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
+  std::vector<ipc::CandidateField> cached_candidates_for_test();
   const std::vector<ipc::CandidateField>& shown_candidates_for_test() const {
     return shown_candidates_;
   }
@@ -104,6 +105,9 @@ class TextService final : public ITfTextInputProcessorEx,
   uint64_t pending_ipc_request_id_for_test();
   std::string pending_ipc_reading_for_test();
   std::string pending_ipc_raw_romaji_for_test();
+  void set_ipc_pipe_name_for_test(std::string pipe_name);
+  void start_ipc_worker_for_test();
+  void stop_ipc_worker_for_test();
 #endif
 
  private:
@@ -148,6 +152,9 @@ class TextService final : public ITfTextInputProcessorEx,
   std::condition_variable ipc_cv_;
   std::thread ipc_thread_;
   std::atomic<bool> ipc_stop_{false};
+#ifdef AZOOKEY_TSF_TESTING
+  std::string ipc_pipe_name_for_test_;
+#endif
   std::string ipc_pending_reading_;
   std::string ipc_pending_raw_romaji_;
   std::string ipc_pending_batch_mode_;
@@ -179,11 +186,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void StopIpcWorker();
   HRESULT AdviseTextServiceSinks();
   HRESULT UnadviseTextServiceSinks();
+  std::string IpcPipeName() const;
   void IpcWorkerThread();
   void ServeConnection();
   bool PerformHandshake();
   bool WaitForReconnectOrStop(uint32_t delay_ms);
-  bool WaitForIpcResponseOrStop(uint32_t timeout_ms);
+  bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id);
   void RearmPendingQuery(uint64_t req_id);
   void PostQueryCandidates(const std::string& reading);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);

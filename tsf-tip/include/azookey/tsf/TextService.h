@@ -27,6 +27,8 @@ bool ConsumeComBoundaryAllocationFailureForTest();
 void FailNextPendingCommitObservationForTest();
 void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
+bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
+                                  ipc::MessageType expected_type);
 }  // namespace testing
 #endif
 
@@ -191,7 +193,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void ServeConnection();
   bool PerformHandshake();
   bool WaitForReconnectOrStop(uint32_t delay_ms);
-  bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id);
+  bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
+                                ipc::MessageType expected_type);
   void RearmPendingQuery(uint64_t req_id);
   void PostQueryCandidates(const std::string& reading);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);

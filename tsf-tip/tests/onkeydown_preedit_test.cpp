@@ -752,6 +752,25 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchConvertingSpaceDoesNotResendRequest) {
   EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, IpcResponseMatchingRequiresExpectedType) {
+  azookey::ipc::Envelope response;
+  response.version = 1;
+  response.request_id = 4;
+  response.trace_id = "stale-query";
+  response.type = azookey::ipc::MessageType::QueryCandidates;
+
+  EXPECT_FALSE(azookey::tsf::testing::IsExpectedIpcResponseForTest(
+      response, 4, azookey::ipc::MessageType::CommitObservation));
+
+  response.type = azookey::ipc::MessageType::CommitObservation;
+  EXPECT_TRUE(azookey::tsf::testing::IsExpectedIpcResponseForTest(
+      response, 4, azookey::ipc::MessageType::CommitObservation));
+
+  response.request_id = 5;
+  EXPECT_FALSE(azookey::tsf::testing::IsExpectedIpcResponseForTest(
+      response, 4, azookey::ipc::MessageType::CommitObservation));
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallback) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-tip-qc-timeout-test-" + std::to_string(GetCurrentProcessId());

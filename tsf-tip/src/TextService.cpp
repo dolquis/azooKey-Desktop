@@ -73,6 +73,12 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
   return same;
 }
 
+bool IsExpectedIpcResponse(const azookey::ipc::Envelope& response, uint64_t expected_request_id,
+                           azookey::ipc::MessageType expected_type) {
+  return (expected_request_id == 0 || response.request_id == expected_request_id) &&
+         response.type == expected_type;
+}
+
 #ifdef AZOOKEY_TSF_TESTING
 std::atomic<int> g_com_boundary_allocation_failures{0};
 std::atomic<int> g_pending_commit_observation_failures{0};
@@ -123,6 +129,11 @@ bool ConsumePendingCommitObservationFailureForTest() {
     }
   }
   return false;
+}
+
+bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
+                                  ipc::MessageType expected_type) {
+  return IsExpectedIpcResponse(response, expected_request_id, expected_type);
 }
 
 }  // namespace testing
@@ -1217,7 +1228,8 @@ bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
   return ipc_stop_.load();
 }
 
-bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id) {
+bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
+                                           ipc::MessageType expected_type) {
   using namespace std::chrono;
 
   constexpr uint32_t kResponsePollMs = 50;
@@ -1235,10 +1247,16 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
 
     auto response = ipc_client_.ReceiveWithTimeout(wait_ms);
     if (response) {
-      if (expected_request_id != 0 && response->request_id != expected_request_id) {
-        DebugLog("IPC: response for stale req_id=" + std::to_string(response->request_id) +
-                 " while waiting for req_id=" + std::to_string(expected_request_id) +
-                 ", discarding");
+      if (!IsExpectedIpcResponse(*response, expected_request_id, expected_type)) {
+        if (expected_request_id != 0 && response->request_id != expected_request_id) {
+          DebugLog("IPC: response for stale req_id=" + std::to_string(response->request_id) +
+                   " while waiting for req_id=" + std::to_string(expected_request_id) +
+                   ", discarding");
+        } else {
+          DebugLog("IPC: response type=" + TypeToString(response->type) + " for req_id=" +
+                   std::to_string(response->request_id) + " while waiting for type=" +
+                   TypeToString(expected_type) + ", discarding");
+        }
         continue;
       }
       return true;
@@ -1398,7 +1416,7 @@ void TextService::ServeConnection() {
       }
       if (item.expects_response) {
         constexpr uint32_t kFafResponseTimeoutMs = 3000;
-        if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs, env.request_id)) {
+        if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs, env.request_id, item.type)) {
           if (ipc_stop_.load()) return;
           if (!ipc_stop_.load())
             DebugLog("IPC: faf receive failed for type=" + TypeToString(item.type) +
@@ -1520,9 +1538,15 @@ void TextService::ServeConnection() {
 
       qres = ipc_client_.ReceiveWithTimeout(wait_ms);
       if (qres) {
-        if (qres->request_id != req_id) {
-          DebugLog("IPC: response for stale req_id=" + std::to_string(qres->request_id) +
-                   " while waiting for req_id=" + std::to_string(req_id) + ", discarding");
+        if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
+          if (qres->request_id != req_id) {
+            DebugLog("IPC: response for stale req_id=" + std::to_string(qres->request_id) +
+                     " while waiting for req_id=" + std::to_string(req_id) + ", discarding");
+          } else {
+            DebugLog("IPC: response type=" + TypeToString(qres->type) + " for req_id=" +
+                     std::to_string(qres->request_id) + " while waiting for type=" +
+                     TypeToString(qenv.type) + ", discarding");
+          }
           qres.reset();
           continue;
         }

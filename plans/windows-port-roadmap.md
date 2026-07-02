@@ -284,7 +284,10 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 各テストは共通ヘルパ `azookey_discover_tests`（内部で `gtest_discover_tests` を呼び出し、
 `DISCOVERY_TIMEOUT` は既定 60 秒）により **ケース単位**（`SuiteName.TestName`）で CTest に
 登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに個別の CTest
-エントリへ展開される。現行 preset では `ctest --preset windows-debug` または
+エントリへ展開される。
+共通ヘルパはケース単位の `TIMEOUT` と `LABELS` も付与でき、TSF/COM 境界に触る
+テストは `tsf-com` label で診断用に抽出できる。
+現行 preset では `ctest --preset windows-debug` または
 `ctest --preset windows-release` で一括実行する。
 
 ### 現存テスト一覧

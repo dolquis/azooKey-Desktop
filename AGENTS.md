@@ -212,6 +212,9 @@ Reason:
   事前に確認する。停止に見える場合は、`build/agent-logs/*-test-*.log` と
   `build/windows-debug/Testing/Temporary/LastTest.log*` で最後に開始された case を確認し、
   該当 GoogleTest を `--gtest_filter=<Suite.Test>` で単体実行する。
+- TSF/COM 境界の timeout 調査では、`ctest --test-dir build/windows-debug -N -V -L tsf-com`
+  と `ctest --test-dir build/windows-debug --show-only=json-v1 -L tsf-com` で対象 command、
+  `TIMEOUT`、`LABELS` を確認してから単体再実行する。
 - Ninja / CMake の dry-run で対象 target が stale と分かった場合は、CTest の不具合と
   断定せず、対象 target または `azookey_check` を再ビルドしてから再検証する。
 - `.ninja_lock` は残留 `ninja` / `cmake` / `cl` / `link` / `ctest` プロセスの有無を

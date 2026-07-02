@@ -26,6 +26,9 @@ target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN
 
 if(AZOOKEY_BUILD_TESTS)
   function(add_tsf_tip_unit_test target_name test_source)
+    set(one_value_args LABEL TIMEOUT)
+    cmake_parse_arguments(TSF_TIP_TEST "" "${one_value_args}" "" ${ARGN})
+
     add_executable(${target_name}
       src/CandidateListUIElement.cpp
       src/CandidateUiCoordinator.cpp
@@ -52,7 +55,14 @@ if(AZOOKEY_BUILD_TESTS)
         user32
         gdi32
     )
-    azookey_discover_tests(${target_name})
+    set(tsf_tip_discover_args)
+    if(TSF_TIP_TEST_LABEL)
+      list(APPEND tsf_tip_discover_args LABEL ${TSF_TIP_TEST_LABEL})
+    endif()
+    if(TSF_TIP_TEST_TIMEOUT)
+      list(APPEND tsf_tip_discover_args TIMEOUT ${TSF_TIP_TEST_TIMEOUT})
+    endif()
+    azookey_discover_tests(${target_name} ${tsf_tip_discover_args})
   endfunction()
 
   add_executable(tsf_tip_com_smoke_tests
@@ -70,11 +80,15 @@ if(AZOOKEY_BUILD_TESTS)
             ole32 uuid advapi32
   )
   add_dependencies(tsf_tip_com_smoke_tests azookey_tsf_tip)
-  azookey_discover_tests(tsf_tip_com_smoke_tests)
+  azookey_discover_tests(tsf_tip_com_smoke_tests LABEL tsf-com TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
-  add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp)
-  add_tsf_tip_unit_test(tsf_tip_activate_uiless_tests tests/activate_uiless_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp
+    LABEL tsf-com
+    TIMEOUT 15)
+  add_tsf_tip_unit_test(tsf_tip_activate_uiless_tests tests/activate_uiless_test.cpp
+    LABEL tsf-com
+    TIMEOUT 15)
   add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
 endif()

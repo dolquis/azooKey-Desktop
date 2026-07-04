@@ -3,13 +3,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <future>
 #include <fstream>
 #include <iterator>
 #include <set>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "azookey/learning/FileLock.h"
 
 namespace {
 
@@ -98,6 +102,35 @@ TEST(AtomicFileTest, RapidSuccessiveWritesLeaveNoTempFiles) {
   EXPECT_EQ(CountTempFiles(root), 0u);
 
   std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, FileLockExcludesSamePathAcrossThreadsOnWindows) {
+#ifndef _WIN32
+  GTEST_SKIP() << "The production cross-process lock is a Windows named mutex.";
+#else
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_lock";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  const auto target = root / "user_dict.json";
+
+  auto first =
+      azookey::learning::AcquireExclusiveFileLockForPath(target, std::chrono::milliseconds(100));
+  ASSERT_TRUE(first.has_value());
+  EXPECT_TRUE(first->owns_lock());
+
+  auto blocked = std::async(std::launch::async, [&] {
+    return azookey::learning::AcquireExclusiveFileLockForPath(target, std::chrono::milliseconds(50))
+        .has_value();
+  });
+  EXPECT_FALSE(blocked.get());
+
+  first.reset();
+  auto second =
+      azookey::learning::AcquireExclusiveFileLockForPath(target, std::chrono::milliseconds(100));
+  EXPECT_TRUE(second.has_value());
+
+  std::filesystem::remove_all(root);
+#endif
 }
 
 }  // namespace

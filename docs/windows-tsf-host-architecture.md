@@ -92,6 +92,11 @@
 - M11 / M30 の設定アプリ完成後も、`userdict` サブコマンドは v1.x の診断・移行用
   CLI として併存させる。GUI が通常操作面になった後も、CI やサポート手順から再現できる
   低レベル操作面として削除しない。
+- `user_dict.json` の直接編集経路は、共有ファイル単位の排他ロック
+  (`learning/include/azookey/learning/FileLock.h`) を取得してから
+  read-modify-write を行う。Host の `AddUserWord` / `RemoveUserWord` も同じロック下で、
+  ディスク上の辞書ファイルが存在する場合は再読込してから更新し、Host メモリ上の stale な辞書で
+  CLI / Settings 側の変更を上書きしない。
 - 保存時は一時ファイルへ書き込んでから replace し、書き込み中クラッシュによる
   既存ファイル破損を避ける（`learning/src/AtomicFile.h`）。一時ファイルは
   `FlushFileBuffers` / `fsync` で flush 後、`MoveFileExW(MOVEFILE_REPLACE_EXISTING |
@@ -117,7 +122,7 @@
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
 - 破損した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
   `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。ファイル競合・
-  同時書き込みの排他は DEV-181 のプロセス間ロック方針と整合させる。
+  同時書き込みの排他は `FileLock.h` の共有ファイル単位ロック方針と整合させる。
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 

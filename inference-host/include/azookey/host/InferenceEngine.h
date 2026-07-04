@@ -110,7 +110,7 @@ class InferenceEngine {
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   bool FlushLearningStoreLocked();
   void RecordLearningSaveFailureLocked();
-  void RecordUserDictionarySaveFailureLocked();
+  void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
 
   std::unique_ptr<core::IConverter> fallback_converter_;

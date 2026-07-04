@@ -324,6 +324,74 @@ TEST(InferenceEngineTest, UserDictionaryInjection) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_reload_add.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_reload_add.json");
+  std::remove(lpath.c_str());
+  std::remove(udict_path.c_str());
+
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path);
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::UserWord external;
+  external.word = "External";
+  external.ruby = "external";
+  {
+    azookey::learning::UserDictionary writer(udict_path);
+    ASSERT_TRUE(writer.Load());
+    writer.Add(external);
+    ASSERT_TRUE(writer.Save());
+  }
+
+  azookey::learning::UserWord added;
+  added.word = "Added";
+  added.ruby = "added";
+  ASSERT_TRUE(engine->AddUserWord(added));
+
+  azookey::learning::UserDictionary loaded(udict_path);
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Lookup("external").size(), 1u);
+  EXPECT_EQ(loaded.Lookup("added").size(), 1u);
+
+  std::remove(udict_path.c_str());
+  std::remove(lpath.c_str());
+}
+
+TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
+  const std::string lpath = TempPath("azookey_host_engine_user_dict_reload_remove.tsv");
+  const std::string udict_path = TempPath("azookey_host_engine_user_dict_reload_remove.json");
+  std::remove(lpath.c_str());
+  std::remove(udict_path.c_str());
+
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+  azookey::learning::UserDictionary dict(udict_path);
+  ASSERT_TRUE(dict.Load());
+  engine->SetUserDictionary(&dict);
+
+  azookey::learning::UserWord external;
+  external.word = "External";
+  external.ruby = "external";
+  {
+    azookey::learning::UserDictionary writer(udict_path);
+    ASSERT_TRUE(writer.Load());
+    writer.Add(external);
+    ASSERT_TRUE(writer.Save());
+  }
+
+  ASSERT_TRUE(engine->RemoveUserWord("External", "external"));
+
+  azookey::learning::UserDictionary loaded(udict_path);
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_TRUE(loaded.Lookup("external").empty());
+
+  std::remove(udict_path.c_str());
+  std::remove(lpath.c_str());
+}
+
 TEST(InferenceEngineTest, CancelEarlyReturn) {
   const char* lpath = "azookey_host_engine_cancel.tsv";
   std::remove(lpath);

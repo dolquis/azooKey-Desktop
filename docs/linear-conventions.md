@@ -361,7 +361,7 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 
 共有コア §11 の週次 control tower audit チェックリストに加えて、本 repo では設計（`agent:claude-design`）/ 実装（`agent:codex-impl`）分業（§2 / §7.1）の spec-first 規律を次の項目で点検する:
 
-- [ ] `agent:codex-impl` の未着手フィーチャー（`kind:feature`）が、In Progress へ入る前に対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で当該サブ課題の難所（IPC payload / JSON schema・境界値・アルゴリズム・責務境界）を決定済みか。spec が未確定のまま実装着手していないか。
+- [ ] `agent:codex-impl` の未着手フィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` / `enhancement` も対象）が、In Progress へ入る前に対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で当該サブ課題の難所（IPC payload / JSON schema・境界値・アルゴリズム・責務境界）を決定済みか。spec が未確定のまま実装着手していないか。
 - [ ] 専用 `agent:claude-design` 課題を持たないフィーチャーでも、tracking / 比較レポート / roadmap 節 / `docs/*-spec.md` のいずれかで難所が上流確定され、実装課題からアンカー参照されているか。
 - [ ] 波（wave）分割されたフィーチャー（例 M62-A/B/C/D、モデルライフサイクル A〜D）で、先行波の spec だけが書かれ後続波が未確定のまま実装着手していないか（just-in-time spec が波ごとに守られているか）。
 

@@ -142,9 +142,10 @@ Linear の定期監査課題（`[Recurring] Linear control tower audit`）で次
 Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-required` の人間専任
 タスクは `agent:*` 免除）、`Migrated` の GitHub リンク欠落、人間検証作業の
 `gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落、
-`agent:codex-impl` フィーチャー（`kind:feature`）が対応する `docs/*-spec.md` 節（または
-roadmap の該当 M 節）で難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を
-確定する前に In Progress へ入っていないか（spec-first 分業の担保。詳細は
+`agent:codex-impl` フィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` /
+`enhancement` も対象）が対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で
+難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を確定する前に
+In Progress へ入っていないか（spec-first 分業の担保。詳細は
 `docs/linear-conventions.md` §13 Project Delta）。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。

@@ -147,7 +147,7 @@ TextService::~TextService() {
 }
 
 STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
-  if (!ppvObj) return E_INVALIDARG;
+  if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
   if (riid == IID_IUnknown || riid == IID_ITfTextInputProcessor ||
       riid == IID_ITfTextInputProcessorEx) {
@@ -1883,7 +1883,7 @@ EditSession::EditSession(TextService* service, ITfContext* context)
 }
 
 STDMETHODIMP EditSession::QueryInterface(REFIID riid, void** ppvObj) {
-  if (!ppvObj) return E_INVALIDARG;
+  if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
   if (riid == IID_IUnknown || riid == IID_ITfEditSession) {
     *ppvObj = static_cast<ITfEditSession*>(this);

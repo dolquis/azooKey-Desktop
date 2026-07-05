@@ -11,7 +11,7 @@ CandidateListUIElement::CandidateListUIElement(std::vector<std::wstring> items, 
     : items_(std::move(items)), selected_idx_(ClampSelection(selected_idx, items_.size())) {}
 
 STDMETHODIMP CandidateListUIElement::QueryInterface(REFIID riid, void** ppvObj) {
-  if (!ppvObj) return E_INVALIDARG;
+  if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
   if (riid == IID_IUnknown || riid == IID_ITfUIElement || riid == IID_ITfCandidateListUIElement) {
     *ppvObj = static_cast<ITfCandidateListUIElement*>(this);

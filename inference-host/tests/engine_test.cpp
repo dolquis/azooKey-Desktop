@@ -16,6 +16,7 @@
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
@@ -450,9 +451,16 @@ TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
-  EXPECT_TRUE(engine->LoadModel());
+  const auto result = engine->LoadModelWithResult();
+  EXPECT_TRUE(result.ok);
+  EXPECT_FALSE(result.error.has_value());
   EXPECT_FALSE(engine->model_loaded());
   EXPECT_FALSE(engine->last_error().has_value());
+  EXPECT_TRUE(engine->config().model_path.empty());
+
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().surface, "日本");
 
   std::remove(lpath);
 }
@@ -470,7 +478,8 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
 
   const auto result = engine->LoadModelWithResult(options);
   EXPECT_FALSE(result.ok);
-  EXPECT_TRUE(result.error.has_value());
+  ASSERT_TRUE(result.error.has_value());
+  EXPECT_NE(result.error->find("model file"), std::string::npos);
   EXPECT_EQ(result.error, engine->last_error());
   EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cuda);
   EXPECT_EQ(engine->config().model_path, options.path);
@@ -478,7 +487,54 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   EXPECT_EQ(engine->config().n_gpu_layers.value(), 35);
   EXPECT_FALSE(engine->model_loaded());
 
+  auto cands = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().surface, "日本");
+
   std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, ProbeZenzaiGgufModelRejectsMissingPath) {
+  const std::string model_path = TempPath("azookey_probe_missing_zenzai.gguf");
+  std::remove(model_path.c_str());
+
+  const auto result = azookey::host::ProbeZenzaiGgufModel(model_path);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.info.path, model_path);
+  EXPECT_NE(result.error.find("model file"), std::string::npos);
+  EXPECT_FALSE(result.runtime);
+}
+
+TEST(InferenceEngineTest, ProbeZenzaiGgufModelAcceptsMinimalHeader) {
+  const std::string model_path = TempPath("azookey_probe_minimal_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  const auto result = azookey::host::ProbeZenzaiGgufModel(model_path);
+  EXPECT_TRUE(result.ok);
+  EXPECT_EQ(result.info.path, model_path);
+  EXPECT_EQ(result.info.file_size_bytes, 8u);
+  EXPECT_EQ(result.info.gguf_version, 3u);
+  EXPECT_TRUE(result.error.empty());
+  EXPECT_FALSE(result.runtime);
+
+  std::remove(model_path.c_str());
+}
+
+TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {
+  const std::string model_path = TempPath("azookey_probe_unsupported_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path, 99);
+
+  const auto result = azookey::host::ProbeZenzaiGgufModel(model_path);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.info.path, model_path);
+  EXPECT_EQ(result.info.file_size_bytes, 8u);
+  EXPECT_EQ(result.info.gguf_version, 99u);
+  EXPECT_EQ(result.error, "unsupported GGUF version: 99");
+  EXPECT_FALSE(result.runtime);
+
+  std::remove(model_path.c_str());
 }
 
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
@@ -789,8 +845,12 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
 
   const auto result = engine->LoadModelWithResult(options);
   EXPECT_TRUE(result.ok);
-  EXPECT_TRUE(result.error.has_value());
+  ASSERT_TRUE(result.error.has_value());
+  EXPECT_NE(result.error->find("CUDA backend is not linked yet"), std::string::npos);
   EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cpu);
+  EXPECT_EQ(engine->config().model_path, model_path);
+  ASSERT_TRUE(engine->config().n_gpu_layers.has_value());
+  EXPECT_EQ(engine->config().n_gpu_layers.value(), 35);
   EXPECT_TRUE(engine->model_loaded());
   EXPECT_FALSE(engine->last_error().has_value());
 

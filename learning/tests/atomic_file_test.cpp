@@ -62,8 +62,8 @@ TEST(AtomicFileTest, OverwriteReplacesExistingContentAndLeavesNoTempFiles) {
   std::filesystem::remove_all(root);
 }
 
-TEST(AtomicFileTest, UnwritableTargetReturnsFalseAndLeavesNoTempFiles) {
-  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_unwritable";
+TEST(AtomicFileTest, BlockingNonDirectoryParentReturnsFalseAndPreservesFile) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_blocking_parent";
   std::filesystem::remove_all(root);
   ASSERT_TRUE(std::filesystem::create_directories(root));
   const auto blocking_parent = root / "not_a_directory";
@@ -77,18 +77,19 @@ TEST(AtomicFileTest, UnwritableTargetReturnsFalseAndLeavesNoTempFiles) {
   EXPECT_FALSE(azookey::learning::WriteTextFileAtomically(target.string(), "payload"));
 
   EXPECT_EQ(ReadAll(blocking_parent), "blocking file");
-  EXPECT_EQ(CountTempFiles(root), 0u);
 
   std::filesystem::remove_all(root);
 }
 
-TEST(AtomicFileTest, RenameFailureRemovesStagedTempFile) {
+TEST(AtomicFileTest, ExistingDirectoryTargetReturnsFalseAndLeavesNoTempFiles) {
   const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_rename_failure";
   std::filesystem::remove_all(root);
   ASSERT_TRUE(std::filesystem::create_directories(root));
   const auto target = root / "store.tsv";
   ASSERT_TRUE(std::filesystem::create_directories(target));
 
+  // The parent is writable, so this exercises the replacement failure path
+  // rather than failing early while creating the parent directory.
   EXPECT_FALSE(azookey::learning::WriteTextFileAtomically(target.string(), "payload"));
 
   EXPECT_TRUE(std::filesystem::is_directory(target));

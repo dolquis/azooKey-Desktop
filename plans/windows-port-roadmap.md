@@ -334,6 +334,9 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 8. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械テストで扱う（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
 9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
 10. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
+11. **Sanitizer（ASan/UBSan）nightly** — `core`/`ipc`/`learning`/`inference-host` を対象に、Linux subset は AddressSanitizer + UndefinedBehaviorSanitizer、Windows subset は MSVC AddressSanitizer で nightly 実行し、use-after-free・境界外・未定義動作を早期検出する（プリセット別の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典。M38 必須外・将来拡張）。
+12. **pre-commit 一式の CI ゲート** — 既存 pre-commit（clang-format / gitleaks / actionlint / settings schema / yamlfmt / taplo）を CI の独立ジョブとしても実行し、手元と CI の検査差分を無くす。ただし gitleaks フックは `--staged`（pre-commit モード・`pass_filenames: false`）で定義されており、`pre-commit run --all-files` でもステージ差分しか走査しない。クリーンな CI チェックアウトでは秘密検出が偽陰性になるため、CI の秘密走査はこのフックに依存させず、PR コミット範囲（`gitleaks git --log-opts=...`）または `gitleaks dir` による非ステージ走査を別ステップとして用意する（同 §4.3。schema 単独ゲートは DEV-392 で先行）。
+13. **開発環境 doctor（`scripts/doctor.ps1`）** — 開発者・AI エージェント環境の不足ツール/未初期化 dev shell/未取得依存を診断（同 §2.5。§12 の `azookey_diag.exe` とは別物）。
 
 ## リスクと不確実性
 
@@ -355,6 +358,13 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
   との親和性・Fluent/Mica 標準対応・配布形態（MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
   縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイクは `gate:human-required`
   で残す。詳細は `docs/sideload-packaging-spec.md` §3.0。
+- 推論 Worker プロセス分離（Broker/Worker, **MVP後**）: 現状の inference-host は
+  `Dispatcher`/`InferenceEngine`/`SettingsStore` を同一プロセスに同居させており、
+  モデル runtime（llama.cpp/ggml/将来 NPU）起因のクラッシュ blast radius が大きい。
+  Broker（設定・辞書・IPC 認証・Worker 監視）/ Worker（モデル runtime）へ分離する
+  方向を将来投資として定義する。v1.0 の必須範囲外。着手時は `request_id` を軸とした
+  Cancel/staleness/sequencing の E2E を最優先。詳細は
+  `docs/dev-infrastructure-spec.md` §8.6、設計スパイクは Linear で追跡。
 
 v1.0 リリースに向けたリスクと対応:
 

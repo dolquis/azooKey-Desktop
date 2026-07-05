@@ -123,6 +123,22 @@ compile_commands.json
 `.pdb` は Git 管理しないが CI artifact としては保存する（§4.4）。`.vscode/`
 はチーム共有設定の余地を残し、一括 ignore はしない。
 
+### 2.5 開発環境 doctor（`scripts/doctor.ps1`）
+
+開発者・AI エージェントの環境差分（不足ツール・未初期化の MSVC dev shell・
+未取得の依存など）を、ビルド失敗の原因調査より前に一覧化する診断スクリプトを
+`scripts/doctor.ps1` として定義する。検査対象は PowerShell 7 / git / gh /
+Visual Studio 2022 + MSVC dev shell / CMake / Ninja / Windows SDK / LLVM
+（clang-format / clang-tidy / clangd）/ pre-commit 系ツール / `.mcp.json`・
+`.codex/config.toml` などのエージェント設定 / CMakePresets・compile_commands の
+有無とする。人間向け表形式に加え `--json` 出力を持つ。
+
+これは**開発環境の診断であり、§12 の `azookey_diag.exe`（エンドユーザー向けの
+IME ランタイム診断・修復ウィザード）とは別物**である。両者を混同しないこと。
+本項はオンボーディング短縮・エージェント初動ミス削減を目的とする補助ツールで、
+M37 受け入れ条件には含めず、導入は Linear で追跡する（2026-07 開発基盤ツール
+導入 第2弾）。
+
 ### M37 受け入れ条件
 
 - `cmake --preset windows-debug` / `windows-release` の configure→build→test
@@ -215,6 +231,24 @@ configure / build / test の各ログと、Release ビルドの `.pdb` を artif
 `bench/azookey_bench` を CTest 登録し、CI で exit=0 と CPU `SimpleConverter`
 経路の p95 < 50ms を確認する。p50/p95 レイテンシの推移監視（夜間ベンチ回帰）
 は将来拡張とし、本マイルストーンでは smoke 実行までを範囲とする。
+
+### 4.6 Sanitizer プリセットと nightly（M38 範囲外・将来拡張）
+
+`HANDLE` / COM / Named Pipe / UTF-8↔UTF-16 / 自前 JSON パーサ / 非同期 I/O を
+扱う本実装では、通常の unit test では use-after-free・バッファ超過・未定義動作・
+境界外アクセスを見落としやすい。これを早期検出するため、次の sanitizer プリセット
+を定義する（本マイルストーン M38 の必須範囲には**含めない**。nightly / 手動
+dispatch から開始し、安定後に nightly required 化する）。
+
+| プリセット | 対象 | 内容 |
+|---|---|---|
+| `linux-asan-ubsan` | Linux ビルド可能サブセット | AddressSanitizer + UndefinedBehaviorSanitizer |
+| `windows-asan` | Windows サブセット | MSVC AddressSanitizer |
+
+対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc` / `learning` /
+`inference-host` から開始し、`tsf-tip`（COM/TSF 依存）は後続で拡張する。PR では
+optional / manual dispatch、nightly で必須実行という順で段階導入する。導入は
+Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
 
 ### M38 受け入れ条件
 
@@ -932,6 +966,23 @@ SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し�
 - 連続クラッシュ時は `SafeMode` に入り、次回起動時に通知する
 - 各処理の timeout が §8.5.2 の表通りに動作する
 
+### 8.6 推論 Worker プロセス分離（Broker/Worker, MVP後）
+
+現状の inference-host は TIP から見て out-of-proc だが、`Dispatcher` /
+`InferenceEngine` / `SettingsStore` / `UserDataPaths` を同一プロセス・同一
+ユニットに同居させている。この構成では、モデル runtime（llama.cpp / ggml /
+将来の NPU runtime / driver）起因のメモリ破損・例外が、設定・辞書・IPC 認証まで
+巻き込む blast radius を持つ。
+
+将来の堅牢化として、inference-host を **Broker（設定・辞書・学習・IPC 認証・
+Worker 監視/再起動）** と **Worker（モデル runtime のみ）** に分離し、モデル
+backend のクラッシュを「落としてよい側」へ封じ込める方向を定義する。これは
+v1.0 の必須範囲ではなく **MVP 後の投資**であり、着手時は §7 の相関 ID・§8 の
+再接続状態機械を土台に、`request_id` を軸とした Cancel / staleness / sequencing
+の E2E を最優先で担保する（分離後に取りこぼしが出やすい箇所のため）。設計スパイクは
+Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。`plans/windows-port-roadmap.md`
+の「リスクと不確実性」と相互参照する。
+
 ## 9. WIL 段階導入（M43）
 
 ### 9.1 方針
@@ -1013,7 +1064,27 @@ DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー
 
 CI への clang-tidy / CodeQL 追加は導入・調整コストが高い。本トラックでは
 `clang-format` チェックまでを必須とし、clang-tidy / CodeQL は将来の任意
-拡張とする（§4.3）。
+拡張とする（§4.3）。changed-lines clang-tidy（差分行のみの静的解析）は、
+既存負債で PR が止まるのを避けつつ新規コード品質を上げる中間策として、
+Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
+
+### 11.6 IPC payload の Protobuf 即時移行 — 不採用
+
+外部リサーチ提案（2026-07）は Named Pipe transport を維持したまま payload を
+versioned Protobuf へ移行する案を挙げる。しかし本プロジェクトの IPC は同一
+マシン内・単一実装・少数メッセージであり、schema 進化の恩恵よりも、コード生成
+ツールチェーン追加がオフラインビルド原則（§1）へ与える影響と移行コストが上回る。
+自前 JSON パーサを §6 の境界コーパス + 有界スモークで堅牢化する路線（§11.2 と整合）を
+主とし、Protobuf 化は将来判断とする。設定アプリ実装・fuzz 整備の後に再評価する。
+
+### 11.7 設定アプリの C#/.NET 9 化 — 不採用
+
+外部リサーチ提案（2026-07）は設定アプリを C#/.NET 9 + WinUI 3 にする案を挙げる。
+しかし設定アプリの UI フレームワークは **DEV-99 / D-03 で WinUI 3（C++/WinRT）に
+確定済み**（`plans/windows-port-roadmap.md`「リスクと不確実性」/
+`docs/sideload-packaging-spec.md` §3.0）であり、既存 C++/WinRT スタックとの親和性・
+配布形態整合を根拠とする。TIP/Host と別プロセスで IPC 連携する点は C# でも成立するが、
+確定済みの決定を覆すだけの決定的な差は現時点で無いため、C++/WinRT を維持する。
 
 ## 12. IME 診断・修復ウィザード（M44）
 

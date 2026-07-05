@@ -334,7 +334,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 8. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械テストで扱う（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
 9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
 10. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
-11. **Sanitizer（ASan/UBSan）nightly** — `core`/`ipc`/`learning`/`inference-host` を AddressSanitizer + UndefinedBehaviorSanitizer で nightly 実行し、use-after-free・境界外・未定義動作を早期検出する（`docs/dev-infrastructure-spec.md` §4.6。M38 必須外・将来拡張）。
+11. **Sanitizer（ASan/UBSan）nightly** — `core`/`ipc`/`learning`/`inference-host` を対象に、Linux subset は AddressSanitizer + UndefinedBehaviorSanitizer、Windows subset は MSVC AddressSanitizer で nightly 実行し、use-after-free・境界外・未定義動作を早期検出する（プリセット別の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典。M38 必須外・将来拡張）。
 12. **pre-commit 一式の CI ゲート** — 既存 pre-commit（clang-format / gitleaks / actionlint / settings schema / yamlfmt / taplo）を CI の独立ジョブとしても実行し、手元と CI の検査差分を無くす（同 §4.3。schema 単独ゲートは DEV-392 で先行）。
 13. **開発環境 doctor（`scripts/doctor.ps1`）** — 開発者・AI エージェント環境の不足ツール/未初期化 dev shell/未取得依存を診断（同 §2.5。§12 の `azookey_diag.exe` とは別物）。
 

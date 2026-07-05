@@ -5,7 +5,7 @@
 namespace azookey::tsf {
 
 STDMETHODIMP TextServiceFactory::QueryInterface(REFIID riid, void** ppvObj) {
-  if (!ppvObj) return E_INVALIDARG;
+  if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
   if (riid == IID_IUnknown || riid == IID_IClassFactory) {
     *ppvObj = static_cast<IClassFactory*>(this);

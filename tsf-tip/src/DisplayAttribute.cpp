@@ -22,7 +22,7 @@ namespace azookey::tsf {
 // --- InputDisplayAttributeInfo ---
 
 STDMETHODIMP InputDisplayAttributeInfo::QueryInterface(REFIID riid, void** ppvObj) {
-  if (!ppvObj) return E_INVALIDARG;
+  if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
   if (riid == IID_IUnknown || riid == IID_ITfDisplayAttributeInfo) {
     *ppvObj = static_cast<ITfDisplayAttributeInfo*>(this);
@@ -72,7 +72,7 @@ STDMETHODIMP InputDisplayAttributeInfo::Reset() { return S_OK; }
 // --- EnumDisplayAttributeInfo ---
 
 STDMETHODIMP EnumDisplayAttributeInfo::QueryInterface(REFIID riid, void** ppvObj) {
-  if (!ppvObj) return E_INVALIDARG;
+  if (!ppvObj) return E_POINTER;
   *ppvObj = nullptr;
   if (riid == IID_IUnknown || riid == IID_IEnumTfDisplayAttributeInfo) {
     *ppvObj = static_cast<IEnumTfDisplayAttributeInfo*>(this);

@@ -356,3 +356,13 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜4）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
 - DELTA_DOCS（この repo 固有で別途維持）: GitHub↔Linear Mapping, Decision Log, Agent Prompt Cards
+
+### 週次監査の repo 固有追加項目（spec-first 分業の担保）
+
+共有コア §11 の週次 control tower audit チェックリストに加えて、本 repo では設計（`agent:claude-design`）/ 実装（`agent:codex-impl`）分業（§2 / §7.1）の spec-first 規律を次の項目で点検する:
+
+- [ ] `agent:codex-impl` のフィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` / `enhancement` も対象）が、対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で当該サブ課題の難所（IPC payload / JSON schema・境界値・アルゴリズム・責務境界）を確定する前に In Progress 以降へ入っていないか（未着手の課題だけでなく、既に In Progress の課題も対象）。spec が未確定のまま実装着手していないか。
+- [ ] 専用 `agent:claude-design` 課題を持たないフィーチャーでも、tracking / 比較レポート / roadmap 節 / `docs/*-spec.md` のいずれかで難所が上流確定され、実装課題からアンカー参照されているか。
+- [ ] 波（wave）分割されたフィーチャー（例 M62-A/B/C/D、モデルライフサイクル A〜D）で、先行波の spec だけが書かれ後続波が未確定のまま実装着手していないか（just-in-time spec が波ごとに守られているか）。
+
+この点検は「難しい仕様を実装時に codex が雰囲気で決める」状態を構造的に防ぐためのもの。設計/実装分業は共有コア（§2 / §7.1）に属するため、本追加項目は origin（`dolquis/agent-ops`）での共有コア §11 への昇格候補とし、昇格までは本 Delta を暫定の正典とする。

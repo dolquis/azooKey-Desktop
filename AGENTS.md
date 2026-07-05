@@ -146,7 +146,7 @@ Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-requi
 `enhancement` も対象）が対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で
 難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を確定する前に
 In Progress へ入っていないか（spec-first 分業の担保。詳細は
-`docs/linear-conventions.md` §13 Project Delta）。加えて
+`docs/linear-conventions.md` §11 の Design / Implementation spec-first checks）。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。
 点検は Linear のルーティング衛生のみを対象とし、仕様・設計の正典は引き続き repo docs に置く。

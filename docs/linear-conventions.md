@@ -2,8 +2,8 @@
   SHARED CORE — Agent / Linear 運用規約（管制塔モデル）
   この「共有コア」は全リポジトリで同一内容をミラーする。
   個別 repo で直接編集しない。編集は origin（後述）で行い、各 repo へ伝播する。
-  version: 0.5-draft   updated: 2026-06-19
-  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。
+  version: 0.5-draft   updated: 2026-07-05
+  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。§11 に Design / Implementation spec-first checks・tracking の Codex 実行候補混入検出・設計未完のまま impl 実行許可の検出を追加(2026-07-05)。同 spec-first checks を移行期の旧カテゴリラベル(Feature / enhancement)と In Progress の課題にも適用(2026-07-05)。
   origin(編集の起点・単一正典): dolquis/agent-ops/linear-conventions.md（このファイル）
   各 repo の docs/linear-conventions.md は本ファイルのベンダリングコピー + §13 Delta。
   プロジェクト固有の差分は各 repo の「Project Delta」節（本ファイル末尾）に置く。
@@ -91,6 +91,7 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 
 ルール:
 - `area:` は複数選択可能にするため Linear label group にせずフラットなラベルとして運用する（例 `area:converter-core`）。`repo:` は実 GitHub repo 名をそのまま使い区切りを正規化しない。
+- **`area:docs` は repo 横断の共有 area**（ドキュメント・ガバナンス・規約の整合）。特定 repo の技術領域に属さない文書系 Issue に付与する。repo 固有の技術領域 area（例: azooKey `area:settings`（設定アプリ / schema）/ `area:build`（CMake・CTest・CI・コード署名・MSIX パッケージング））は各 repo の Delta / `AGENTS.md` で定義する。
 - **人間ゲートは `type:` ではなく `gate:human-required`（横断フラグ）で表す。** 例: 人間確認が必要なレビュー Issue は `type:review` + `gate:human-required`。旧 `type:human-gate` は本規約で廃止。移行期は旧ラベルが残る Issue があるため Phase 4 で `gate:human-required` へ付け替える（読むときは両対応）。
 - **変更カテゴリは `kind:*` を正典とする**（`feature` / `improvement` / `bug` / `docs`）。旧 `Feature` / `Improvement` / `Bug` / `enhancement` / `documentation` は Phase 4 まで移行互換として扱い、Phase 4 で物理退役（ラベル削除は設定画面で手動）する。`Migrated` は由来フラグとして存続。
 - **Phase 4 完了までの移行互換**: 旧 `repo_*` / 旧 `area_*` / 旧カテゴリラベルのみが付いた Issue も、Ready / Missing Metadata / 週次監査では欠落扱いしない。新規作成・更新時は repo の Delta または既存 `AGENTS.md` の現行ラベルを優先し、Phase 4 後に `repo:` / `area:` / `kind:*` へ収束する。
@@ -274,6 +275,7 @@ Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済
 - [ ] `agent:claude-*` と `gate:human-required` が同居した Issue（Design / Gate 分割漏れ。§7.1）
 - [ ] Done の設計 Issue（`agent:claude-*` 付き）に `gate:human-required` が残っている（分割後に除去すべき stale ラベル。人間ゲート Issue 自体が検証メモ付きで Done なのは正常）
 - [ ] 人間ゲート Issue が PR の auto-close 対象になっている（closing キーワードで参照されている）
+- [ ] `type:tracking` Issue が Codex 実行候補（`agent:codex-*` + Todo・delegate なし・非ブロック）として Candidate Queue（§10）に現れている（tracking は束ね専用で直接実装しない。§5 / §8。実行は子 implementation Issue へ降ろす）
 
 Codex safety checks:
 
@@ -285,6 +287,13 @@ Codex safety checks:
 - [ ] 人間ゲート Issue が人間確認なしで Done になっていない
 - [ ] Project description の Next AI Tasks に Done / Canceled の Issue が含まれない
 - [ ] ブロック中の Codex 候補が Ready として表示されていない
+- [ ] 依存する設計 Issue（`agent:claude-design` / `agent:claude-review`）が未完了（not Done）のまま、その下流 implementation Issue に Codex 実行許可（§2.1 の許可コメント / delegate）が出ていない（設計固定前の実装着手＝仕様の雰囲気決定を防ぐ。§2.1 / §3 / §7.1）
+
+Design / Implementation spec-first checks（設計 §2 / §7.1 の spec-first 分業の担保）:
+
+- [ ] `agent:codex-impl` のフィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` / `enhancement` も対象）が、対応する `docs/*-spec.md` 節（または roadmap の該当マイルストーン節）で当該サブ課題の難所（IPC payload / JSON schema・境界値・アルゴリズム・責務境界）を確定する前に In Progress 以降へ入っていないか（未着手の課題だけでなく、既に In Progress の課題も対象）。spec が未確定のまま実装着手していないか。
+- [ ] 専用 `agent:claude-design` 課題を持たないフィーチャーでも、tracking / 比較レポート / roadmap 節 / `docs/*-spec.md` のいずれかで難所が上流確定され、実装課題からアンカー参照されているか。
+- [ ] 波（wave）分割されたフィーチャーで、先行波の spec だけが書かれ後続波が未確定のまま実装着手していないか（just-in-time spec が波ごとに守られているか）。
 
 Rule: Linear のルーティングのみを点検する。GitHub docs が正典。
 
@@ -356,13 +365,3 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜4）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
 - DELTA_DOCS（この repo 固有で別途維持）: GitHub↔Linear Mapping, Decision Log, Agent Prompt Cards
-
-### 週次監査の repo 固有追加項目（spec-first 分業の担保）
-
-共有コア §11 の週次 control tower audit チェックリストに加えて、本 repo では設計（`agent:claude-design`）/ 実装（`agent:codex-impl`）分業（§2 / §7.1）の spec-first 規律を次の項目で点検する:
-
-- [ ] `agent:codex-impl` のフィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` / `enhancement` も対象）が、対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で当該サブ課題の難所（IPC payload / JSON schema・境界値・アルゴリズム・責務境界）を確定する前に In Progress 以降へ入っていないか（未着手の課題だけでなく、既に In Progress の課題も対象）。spec が未確定のまま実装着手していないか。
-- [ ] 専用 `agent:claude-design` 課題を持たないフィーチャーでも、tracking / 比較レポート / roadmap 節 / `docs/*-spec.md` のいずれかで難所が上流確定され、実装課題からアンカー参照されているか。
-- [ ] 波（wave）分割されたフィーチャー（例 M62-A/B/C/D、モデルライフサイクル A〜D）で、先行波の spec だけが書かれ後続波が未確定のまま実装着手していないか（just-in-time spec が波ごとに守られているか）。
-
-この点検は「難しい仕様を実装時に codex が雰囲気で決める」状態を構造的に防ぐためのもの。設計/実装分業は共有コア（§2 / §7.1）に属するため、本追加項目は origin（`dolquis/agent-ops`）での共有コア §11 への昇格候補とし、昇格までは本 Delta を暫定の正典とする。

@@ -84,11 +84,29 @@ TEST(ModelCatalogTest, UsesExplicitDefaultModelId) {
 TEST(ModelCatalogTest, RejectsUnsafeOrInvalidEntries) {
   EXPECT_FALSE(azookey::host::ParseModelCatalogJson(SingleModelCatalogJson("..\\evil.gguf")).ok);
   EXPECT_FALSE(azookey::host::ParseModelCatalogJson(SingleModelCatalogJson("../evil.gguf")).ok);
+  EXPECT_FALSE(azookey::host::ParseModelCatalogJson(SingleModelCatalogJson(".gguf")).ok);
+  EXPECT_FALSE(
+      azookey::host::ParseModelCatalogJson(SingleModelCatalogJson("other.txt\\u0000.gguf")).ok);
   EXPECT_FALSE(azookey::host::ParseModelCatalogJson(SingleModelCatalogJson("zenzai.txt")).ok);
   EXPECT_FALSE(azookey::host::ParseModelCatalogJson(R"({
     "schemaVersion": 1,
     "models": [
       { "id": "bad", "fileName": "bad.gguf", "sha256": "not-sha" }
+    ]
+  })")
+                   .ok);
+}
+
+TEST(ModelCatalogTest, RejectsEmptyDisplayName) {
+  EXPECT_FALSE(azookey::host::ParseModelCatalogJson(std::string(R"({
+    "schemaVersion": 1,
+    "models": [
+      {
+        "id": "empty-display",
+        "displayName": "",
+        "fileName": "empty-display.gguf",
+        "sha256": ")") + kSha256 + R"("
+      }
     ]
   })")
                    .ok);

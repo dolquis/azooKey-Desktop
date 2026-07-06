@@ -70,8 +70,8 @@ DEV-438 では、ダウンロード・検証・プリフェッチを行わず、
 | `schemaVersion` | const | 1 | catalog schema version |
 | `defaultModelId` | string | 先頭 `models[].id` | 既定モデル。指定時は `models[].id` と一致必須 |
 | `models[].id` | string | 必須 | モデル識別子。ASCII 英数字・`.`・`_`・`-` のみ |
-| `models[].displayName` | string | `id` | UI / ログ表示名 |
-| `models[].fileName` | string | 必須 | `zenzai\` 配下の GGUF ファイル名。絶対パス、サブディレクトリ、`..`、drive prefix は不可 |
+| `models[].displayName` | string | `id` | UI / ログ表示名。指定する場合は非空 |
+| `models[].fileName` | string | 必須 | `zenzai\` 配下の GGUF ファイル名。絶対パス、サブディレクトリ、control 文字、`..`、drive prefix は不可 |
 | `models[].sha256` | string | 必須 | 期待 SHA-256（64 hex）。DEV-438 では保持のみで、検証は後続 B が行う |
 | `models[].backendHint` | enum | `"llama.cpp"` | 現行 v1 は GGUF / llama.cpp のみ |
 

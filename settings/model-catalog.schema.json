@@ -34,8 +34,8 @@
     },
     "modelFileName": {
       "type": "string",
-      "pattern": "^(?!\\.\\.?$)[^\\\\/:]+\\.[Gg][Gg][Uu][Ff]$",
-      "description": "A GGUF file name only. Absolute paths, subdirectories, drive prefixes, and traversal segments are not allowed."
+      "pattern": "^(?!\\.\\.?$)[^\\u0000-\\u001F\\u007F\\\\/:]+\\.[Gg][Gg][Uu][Ff]$",
+      "description": "A GGUF file name only. Absolute paths, subdirectories, drive prefixes, control characters, and traversal segments are not allowed."
     },
     "model": {
       "type": "object",
@@ -46,7 +46,8 @@
           "$ref": "#/$defs/modelId"
         },
         "displayName": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "fileName": {
           "$ref": "#/$defs/modelFileName"

@@ -75,7 +75,7 @@ bool IsValidSha256(std::string_view value) {
 
 bool EndsWithGgufExtension(std::string_view value) {
   constexpr std::string_view kExtension = ".gguf";
-  if (value.size() < kExtension.size()) return false;
+  if (value.size() <= kExtension.size()) return false;
   const auto tail = value.substr(value.size() - kExtension.size());
   for (size_t i = 0; i < kExtension.size(); ++i) {
     if (std::tolower(static_cast<unsigned char>(tail[i])) != kExtension[i]) return false;
@@ -83,9 +83,15 @@ bool EndsWithGgufExtension(std::string_view value) {
   return true;
 }
 
+bool HasControlCharacter(std::string_view value) {
+  return std::any_of(value.begin(), value.end(),
+                     [](unsigned char ch) { return ch < 0x20 || ch == 0x7f; });
+}
+
 bool IsSafeModelFileName(std::string_view value) {
   if (value.empty() || value == "." || value == "..") return false;
   if (!EndsWithGgufExtension(value)) return false;
+  if (HasControlCharacter(value)) return false;
   return value.find('/') == std::string_view::npos && value.find('\\') == std::string_view::npos &&
          value.find(':') == std::string_view::npos;
 }
@@ -109,6 +115,10 @@ std::optional<ModelCatalogEntry> ParseModelEntry(const j::Object& object, std::s
 
   auto display_name = OptionalString(object, "displayName", entry.id, error);
   if (!display_name) return std::nullopt;
+  if (display_name->empty()) {
+    *error = "model catalog entry displayName must be non-empty when present";
+    return std::nullopt;
+  }
   entry.display_name = std::move(*display_name);
 
   auto file_name = RequiredString(object, "fileName", error);

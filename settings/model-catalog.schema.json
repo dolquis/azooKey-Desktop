@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://azookey.local/schemas/model-catalog.schema.json",
+  "title": "azooKey Zenzai model catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "models"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "Catalog schema version. Version 1 is the DEV-438 declarative GGUF catalog."
+    },
+    "defaultModelId": {
+      "$ref": "#/$defs/modelId",
+      "description": "Optional default model id. If omitted, the host resolver uses the first entry in models."
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/model"
+      }
+    }
+  },
+  "$defs": {
+    "modelId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "modelFileName": {
+      "type": "string",
+      "pattern": "^(?!\\.\\.?$)[^\\\\/:]+\\.[Gg][Gg][Uu][Ff]$",
+      "description": "A GGUF file name only. Absolute paths, subdirectories, drive prefixes, and traversal segments are not allowed."
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fileName", "sha256"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/modelId"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "fileName": {
+          "$ref": "#/$defs/modelFileName"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backendHint": {
+          "type": "string",
+          "default": "llama.cpp",
+          "enum": ["llama.cpp"]
+        }
+      }
+    }
+  }
+}

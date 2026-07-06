@@ -24,8 +24,8 @@ jobs:
       - name: Install check-jsonschema
         run: python -m pip install check-jsonschema==0.37.3
 
-      - name: Validate settings schema
-        run: check-jsonschema --check-metaschema settings/mvp-settings.schema.json
+      - name: Validate settings schemas
+        run: check-jsonschema --check-metaschema settings/mvp-settings.schema.json settings/model-catalog.schema.json
 
       - name: Validate default settings sample
         run: check-jsonschema --schemafile settings/mvp-settings.schema.json settings/default-settings.sample.json

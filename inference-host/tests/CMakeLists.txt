@@ -22,6 +22,12 @@ target_link_libraries(host_user_data_paths_tests
 )
 azookey_discover_tests(host_user_data_paths_tests)
 
+add_executable(host_model_catalog_tests model_catalog_test.cpp)
+target_link_libraries(host_model_catalog_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_model_catalog_tests)
+
 add_executable(host_userdict_cli_tests userdict_cli_test.cpp)
 target_link_libraries(host_userdict_cli_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings

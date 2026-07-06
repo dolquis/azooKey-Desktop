@@ -40,6 +40,46 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 %LOCALAPPDATA%\azooKey\models\
 ```
 
+### 3.1.1 宣言的モデルカタログ（DEV-438）
+
+DEV-438 では、ダウンロード・検証・プリフェッチを行わず、Zenzai GGUF の
+宣言的カタログとローカルパス解決だけを実装する。カタログ v1 の schema 正典は
+`settings/model-catalog.schema.json` とする。
+
+カタログは、`%LOCALAPPDATA%\azooKey\models\zenzai\` 配下に置かれる GGUF ファイルを
+次の形で宣言する:
+
+```json
+{
+  "schemaVersion": 1,
+  "defaultModelId": "zenzai-small-q4",
+  "models": [
+    {
+      "id": "zenzai-small-q4",
+      "displayName": "Zenzai small Q4",
+      "fileName": "zenzai-small-q4.gguf",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "backendHint": "llama.cpp"
+    }
+  ]
+}
+```
+
+| キー | 型 | 既定値 | 意味 |
+|---|---|---|---|
+| `schemaVersion` | const | 1 | catalog schema version |
+| `defaultModelId` | string | 先頭 `models[].id` | 既定モデル。指定時は `models[].id` と一致必須 |
+| `models[].id` | string | 必須 | モデル識別子。ASCII 英数字・`.`・`_`・`-` のみ |
+| `models[].displayName` | string | `id` | UI / ログ表示名。指定する場合は非空 |
+| `models[].fileName` | string | 必須 | `zenzai\` 配下の GGUF ファイル名。絶対パス、サブディレクトリ、control 文字、`..`、drive prefix は不可 |
+| `models[].sha256` | string | 必須 | 期待 SHA-256（64 hex）。DEV-438 では保持のみで、検証は後続 B が行う |
+| `models[].backendHint` | enum | `"llama.cpp"` | 現行 v1 は GGUF / llama.cpp のみ |
+
+resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
+（`modelsDir\zenzai`）と `fileName` を結合してローカルパスを返す。存在確認は
+`is_regular_file` で行い、未配置の場合も解決済みパスと `MissingLocalFile` を返す。
+このため単体テストは実 GGUF を配置せず、一時ファイルの有無だけで完結できる。
+
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
 
 - **R1（llama.cpp）**: 拡張子 `.gguf` ファイル。
@@ -378,7 +418,8 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 
 ## 9. テスト
 
-- unit: `ModelCatalog` の検出 / 検証 / 履歴更新
+- unit: `ModelCatalog` の宣言的 catalog parse / default 補完 / 不正 entry reject /
+  `zenzai\` パス resolver、および一覧検出 / 検証 / 履歴更新
 - integration: 不正 GGUF・サイズ不一致・metadata 欠落で fallback する
 - snapshot: `ListModels` / `BenchmarkModel` の JSON schema 固定
 - e2e（M50 と連携）: GUI 上でモデル切替 → 再起動 → 自動ロード

@@ -440,12 +440,12 @@ void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
     return;
   }
 
-  store_->Prune(config_.learning_max_records, config_.learning_min_weight, now_epoch_sec);
   ++unsaved_observations_;
   if (!first_unsaved_observation_epoch_sec_.has_value()) {
     first_unsaved_observation_epoch_sec_ = now_epoch_sec;
     first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
   }
+  last_unsaved_observation_epoch_sec_ = now_epoch_sec;
   learning_flush_cv_.notify_all();
 
   if (ShouldFlushLearningStoreLocked(now_epoch_sec)) {
@@ -477,8 +477,15 @@ bool InferenceEngine::FlushLearningStoreLocked() {
   if (!store_->dirty()) {
     unsaved_observations_ = 0;
     first_unsaved_observation_epoch_sec_.reset();
+    last_unsaved_observation_epoch_sec_.reset();
     first_unsaved_observation_steady_.reset();
     return true;
+  }
+  if (last_unsaved_observation_epoch_sec_.has_value() ||
+      first_unsaved_observation_epoch_sec_.has_value()) {
+    const uint64_t prune_epoch_sec = last_unsaved_observation_epoch_sec_.value_or(
+        first_unsaved_observation_epoch_sec_.value_or(0));
+    store_->Prune(config_.learning_max_records, config_.learning_min_weight, prune_epoch_sec);
   }
   if (!store_->Save()) {
     RecordLearningSaveFailureLocked();
@@ -487,6 +494,7 @@ bool InferenceEngine::FlushLearningStoreLocked() {
   }
   unsaved_observations_ = 0;
   first_unsaved_observation_epoch_sec_.reset();
+  last_unsaved_observation_epoch_sec_.reset();
   first_unsaved_observation_steady_.reset();
   return true;
 }

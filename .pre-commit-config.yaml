@@ -33,14 +33,15 @@ repos:
         files: '^\.github/workflows/.*\.(yml|yaml)$'
 
       - id: settings-json-schema-metaschema
-        name: settings JSON Schema metaschema
+        name: settings JSON Schema metaschemas
         entry: check-jsonschema
         args:
           - --check-metaschema
           - settings/mvp-settings.schema.json
+          - settings/model-catalog.schema.json
         language: system
         pass_filenames: false
-        files: '^settings/mvp-settings\.schema\.json$'
+        files: '^settings/(mvp-settings|model-catalog)\.schema\.json$'
 
       - id: settings-json-schema-sample
         name: settings sample JSON Schema

@@ -32,6 +32,72 @@ size_t CountTempFiles(const std::filesystem::path& dir) {
   return temp_files;
 }
 
+TEST(AtomicFileTest, SuccessfulWritePersistsContentAndLeavesNoTempFiles) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_success";
+  std::filesystem::remove_all(root);
+  ASSERT_TRUE(std::filesystem::create_directories(root));
+  const auto target = root / "store.tsv";
+
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target.string(), "reading\tsurface\n"));
+
+  ASSERT_TRUE(std::filesystem::exists(target));
+  EXPECT_EQ(ReadAll(target), "reading\tsurface\n");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, OverwriteReplacesExistingContentAndLeavesNoTempFiles) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_overwrite";
+  std::filesystem::remove_all(root);
+  ASSERT_TRUE(std::filesystem::create_directories(root));
+  const auto target = root / "store.tsv";
+
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target.string(), "old\n"));
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target.string(), "new\n"));
+
+  EXPECT_EQ(ReadAll(target), "new\n");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, BlockingNonDirectoryParentReturnsFalseAndPreservesFile) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_blocking_parent";
+  std::filesystem::remove_all(root);
+  ASSERT_TRUE(std::filesystem::create_directories(root));
+  const auto blocking_parent = root / "not_a_directory";
+  {
+    std::ofstream out(blocking_parent, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    out << "blocking file";
+  }
+  const auto target = blocking_parent / "store.tsv";
+
+  EXPECT_FALSE(azookey::learning::WriteTextFileAtomically(target.string(), "payload"));
+
+  EXPECT_EQ(ReadAll(blocking_parent), "blocking file");
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, ExistingDirectoryTargetReturnsFalseAndLeavesNoTempFiles) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_rename_failure";
+  std::filesystem::remove_all(root);
+  ASSERT_TRUE(std::filesystem::create_directories(root));
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(std::filesystem::create_directories(target));
+
+  // The parent is writable, so this exercises the replacement failure path
+  // rather than failing early while creating the parent directory.
+  EXPECT_FALSE(azookey::learning::WriteTextFileAtomically(target.string(), "payload"));
+
+  EXPECT_TRUE(std::filesystem::is_directory(target));
+  EXPECT_EQ(CountTempFiles(root), 0u);
+
+  std::filesystem::remove_all(root);
+}
+
 // Concurrent writers targeting the same path must each stage their own temp
 // file and atomically rename it in. If two writers shared a temp name (the
 // pre-fix behavior when their clock readings collided), they would truncate and

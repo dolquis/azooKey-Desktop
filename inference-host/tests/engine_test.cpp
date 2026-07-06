@@ -265,6 +265,35 @@ TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
   std::remove(path.c_str());
 }
 
+TEST(InferenceEngineTest, PrunesLearningStoreOnlyAtFlushBoundary) {
+  const std::string path = TempPath("azookey_host_engine_learning_prune_on_flush.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_max_records = 1;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("a", "first", kNowBase + 1);
+  engine->CommitObservation("b", "second", kNowBase + 2);
+  engine->CommitObservation("b", "second", kNowBase + 3);
+  EXPECT_EQ(store.size(), 2u);
+  EXPECT_FALSE(std::filesystem::exists(path));
+
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_EQ(store.size(), 1u);
+  EXPECT_EQ(store.Score("a", "first", kNowBase + 3), 0.0);
+  EXPECT_GT(store.Score("b", "second", kNowBase + 3), 0.0);
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
 TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
   const auto root =
       std::filesystem::temp_directory_path() / "azookey_host_engine_learning_save_failure";

@@ -5,8 +5,9 @@ cmake_minimum_required(VERSION 3.21)
 # format compatible with the cache. sccache/ccache cannot cache objects that
 # share a PDB (the MSVC /Zi default); embedding debug info in the object
 # (/Z7 via CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded) restores cache hits.
-# Opt out with -DAZOOKEY_USE_COMPILER_CACHE=OFF. CI does not ship sccache, so
-# this stays a no-op there (the Release PDB artifact is unaffected).
+# Opt out with -DAZOOKEY_USE_COMPILER_CACHE=OFF. Primarily benefits local dev
+# builds where sccache/ccache is on PATH; when neither is present (e.g. CI) this
+# stays a no-op and the Release PDB artifact is unaffected.
 option(AZOOKEY_USE_COMPILER_CACHE
        "Use sccache/ccache as the compiler launcher when found on PATH" ON)
 if(AZOOKEY_USE_COMPILER_CACHE AND NOT DEFINED CMAKE_CXX_COMPILER_LAUNCHER)

@@ -245,3 +245,87 @@ jobs:
 
       - name: Run tests via CTest
         run: ctest --preset linux-debug --no-tests=error
+
+  cpp-quality:
+    name: C++ quality (format/tidy)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          # Need the PR base commit so the changed-lines gate can diff against it.
+          fetch-depth: 0
+
+      - name: Install analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build clang-format-18 clang-tidy-18
+
+      # Required gate. Enforces .clang-format on newly added/changed lines only
+      # (dev-infra spec M37 acceptance: clang-format is zero-diff for new code).
+      # A whole-tree reformat + full-tree gate is tracked separately so this PR
+      # does not fail on pre-existing formatting debt (spec §2.3/§4.3).
+      - name: clang-format changed-lines gate
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            BASE="$PR_BASE"
+          else
+            BASE="$PUSH_BEFORE"
+          fi
+          # Fall back to the previous commit for new branches / force pushes where
+          # the reported base is absent or the zero SHA.
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1)"
+          fi
+          echo "Comparing changed lines against $BASE"
+          DIFF="$(git-clang-format-18 --binary clang-format-18 --diff \
+            --extensions cpp,cc,h,hpp "$BASE" -- \
+            core ipc learning inference-host tsf-tip bench)"
+          if [ "$DIFF" = "no modified files to format" ] || \
+             [ "$DIFF" = "clang-format did not modify any files" ]; then
+            echo "clang-format: changed lines are clean."
+            exit 0
+          fi
+          echo "clang-format found violations on changed lines:"
+          printf '%s\n' "$DIFF"
+          echo "::error::Run 'just format' (or clang-format) on your changes."
+          exit 1
+
+      # Advisory only (dev-infra spec §11.5: clang-tidy is an optional extension,
+      # not a required gate). Surfaces static-analysis findings on changed files
+      # without failing the build; never blocks a PR.
+      - name: clang-tidy changed files (advisory)
+        continue-on-error: true
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            BASE="$PR_BASE"
+          else
+            BASE="$PUSH_BEFORE"
+          fi
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1)"
+          fi
+          # Offline configure only to emit compile_commands.json (tests excluded;
+          # keeps the offline-build principle, spec §1). tsf-tip is Windows-only
+          # and absent from the Linux DB, so it is naturally skipped here.
+          cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=OFF >/dev/null
+          CHANGED="$(git diff --name-only --diff-filter=ACM "$BASE" HEAD \
+            | grep -E '^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$' || true)"
+          if [ -z "$CHANGED" ]; then
+            echo "clang-tidy: no changed C++ source files in the portable subset."
+            exit 0
+          fi
+          echo "Running clang-tidy on:"
+          printf '%s\n' "$CHANGED"
+          clang-tidy-18 -p build/linux-debug $CHANGED || true

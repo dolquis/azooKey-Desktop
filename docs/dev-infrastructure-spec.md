@@ -208,7 +208,12 @@ OFF のまま）。
 
 ### 4.3 追加チェック
 
-- `clang-format --dry-run --Werror`（§2.3 の全体整形 PR 後に有効化）
+- `clang-format` 変更行ゲート（`cpp-quality` ジョブ、`git-clang-format`）—
+  PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
+  --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の
+  既存行）では PR を止めない。全体整形 PR とツリー全体の
+  `clang-format --dry-run --Werror` 必須化は、既存差分が大きいため別作業として
+  分離する（§2.3）
 - Linux 補助ジョブ — `core` / `ipc` / `learning` / `inference-host` の
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
@@ -223,8 +228,10 @@ OFF のまま）。
   `language: system` でローカル導入済みモジュールを使い、CI は pinned
   module version を導入して同じ wrapper を呼ぶ
 
-clang-tidy / CodeQL はオプション扱いとし、本マイルストーンの必須範囲には
-含めない（導入コストが高く、段階導入とする）。
+clang-tidy / CodeQL は**必須ゲートには含めない**（導入コストが高く、段階導入と
+する）。ただし変更行 clang-tidy は `cpp-quality` ジョブで advisory（`continue-on-error`、
+非ブロッキング）として実行し、変更 C++ ソースの静的解析所見を可視化する。
+所見の有無で PR を止めない（§11.5）。CodeQL は将来拡張のまま据え置く。
 
 ### 4.4 artifact 整理
 
@@ -254,6 +261,22 @@ dispatch から開始し、安定後に nightly required 化する）。
 対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc` / `learning` /
 `inference-host` から開始し、`tsf-tip`（COM/TSF 依存）は後続で拡張する。PR では
 optional / manual dispatch、nightly で必須実行という順で段階導入する。導入は
+Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
+
+### 4.7 コンパイラキャッシュ（sccache）— CI 適用は保留
+
+ルート `CMakeLists.txt` は sccache/ccache を PATH 上で自動検出して compiler
+launcher に設定する（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）。ローカル開発では
+ローカルディスクキャッシュとして有効に機能する。
+
+CI への sccache 適用は**保留**する。GitHub Actions ランナーで
+`mozilla-actions/sccache-action`（sccache 0.16.0）の GHA キャッシュバックエンド
+（`SCCACHE_GHA_ENABLED`）を有効化すると、レガシー Actions Cache API
+（`_apis/artifactcache`）が HTTP 400 を返して sccache サーバ起動に失敗し、
+compiler launcher に設定された sccache が全コンパイルを失敗させてビルドが落ちる
+事象を確認した（2026-07）。コンパイラキャッシュはビルドを壊してはならないため、
+CI では sccache を配備しない。将来の適用は、GHA キャッシュ backend への依存を
+避ける方式（ローカル `SCCACHE_DIR` を `actions/cache` で永続化する等）で再評価し、
 Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
 
 ### M38 受け入れ条件
@@ -1068,11 +1091,13 @@ DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー
 
 ### 11.5 clang-tidy / CodeQL の必須化 — 見送り
 
-CI への clang-tidy / CodeQL 追加は導入・調整コストが高い。本トラックでは
-`clang-format` チェックまでを必須とし、clang-tidy / CodeQL は将来の任意
-拡張とする（§4.3）。changed-lines clang-tidy（差分行のみの静的解析）は、
-既存負債で PR が止まるのを避けつつ新規コード品質を上げる中間策として、
-Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
+CI への clang-tidy / CodeQL の**必須化**は導入・調整コストが高い。本トラックでは
+`clang-format`（変更行ゲート）までを必須とし、clang-tidy / CodeQL は必須ゲートに
+しない（§4.3）。changed-lines clang-tidy（差分行のみの静的解析）は、既存負債で
+PR が止まるのを避けつつ新規コード品質を上げる中間策として、`cpp-quality` ジョブに
+**advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
+（全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
+ツール導入 第2弾）。
 
 ### 11.6 IPC payload の Protobuf 即時移行 — 不採用
 

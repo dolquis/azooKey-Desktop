@@ -195,6 +195,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                         const std::string& trace_id, bool update_host_options);
   bool SendCancelOutOfBand(uint64_t target_request_id);
+  bool SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
+                           uint32_t handshake_timeout_ms);
   bool WaitForReconnectOrStop(uint32_t delay_ms);
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                 ipc::MessageType expected_type);

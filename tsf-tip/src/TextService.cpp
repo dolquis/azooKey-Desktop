@@ -19,6 +19,8 @@ constexpr const char* kTipVersion = "0.1.0";
 constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
 constexpr uint32_t kCancelConnectTimeoutMs = 200;
 constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
+constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
+constexpr uint32_t kTimeoutCancelHandshakeTimeoutMs = 10;
 
 void DebugLog(const std::string& message) {
 #ifdef _DEBUG
@@ -1318,18 +1320,23 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
 }
 
 bool TextService::SendCancelOutOfBand(uint64_t target_request_id) {
+  return SendCancelOutOfBand(target_request_id, kCancelConnectTimeoutMs, kCancelHandshakeTimeoutMs);
+}
+
+bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
+                                      uint32_t handshake_timeout_ms) {
   using namespace azookey::ipc;
 
   const auto pipe_name = IpcPipeName();
   if (pipe_name.empty()) return false;
 
   NamedPipeClient cancel_client;
-  if (!cancel_client.Connect(pipe_name, kCancelConnectTimeoutMs)) {
+  if (!cancel_client.Connect(pipe_name, connect_timeout_ms)) {
     DebugLog("IPC: out-of-band cancel connect failed for target req_id=" +
              std::to_string(target_request_id));
     return false;
   }
-  if (!PerformHandshake(cancel_client, kCancelHandshakeTimeoutMs, "tip-cancel-handshake",
+  if (!PerformHandshake(cancel_client, handshake_timeout_ms, "tip-cancel-handshake",
                         /*update_host_options=*/false)) {
     return false;
   }
@@ -1668,7 +1675,8 @@ void TextService::ServeConnection() {
       cancel_env.trace_id = "tip-query-timeout-cancel";
       cancel_env.type = ipc::MessageType::Cancel;
       cancel_env.payload_json = ipc::BuildCancel({req_id});
-      const bool sent_out_of_band = SendCancelOutOfBand(req_id);
+      const bool sent_out_of_band = SendCancelOutOfBand(req_id, kTimeoutCancelConnectTimeoutMs,
+                                                        kTimeoutCancelHandshakeTimeoutMs);
       if (!sent_out_of_band && !ipc_client_.Send(cancel_env)) {
         RearmPendingQuery(req_id);
         if (!ipc_stop_.load())

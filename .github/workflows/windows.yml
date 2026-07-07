@@ -30,6 +30,29 @@ jobs:
       - name: Validate default settings sample
         run: check-jsonschema --schemafile settings/mvp-settings.schema.json settings/default-settings.sample.json
 
+  powershell-quality:
+    name: PowerShell lint/test
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PowerShell quality modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          $pester = Get-Module -ListAvailable Pester |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+          if (-not $pester -or $pester.Version -lt [version]'5.0.0') {
+            Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+
+      - name: Run PSScriptAnalyzer and Pester
+        shell: pwsh
+        run: ./scripts/test-powershell-quality.ps1
+
   windows-build:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022

@@ -216,6 +216,12 @@ OFF のまま）。
 - settings JSON Schema — `check-jsonschema==0.37.3` で
   `settings/mvp-settings.schema.json` の meta-schema 妥当性と、
   `settings/default-settings.sample.json` の schema 適合性を確認する
+- PowerShell quality gate — `scripts/test-powershell-quality.ps1` から
+  `PSScriptAnalyzer` と `Pester` を実行し、`scripts/register-dev.ps1` /
+  `scripts/unregister-dev.ps1` / `compat-test/*.ps1` の静的解析と、実
+  HKLM 書き込みを伴わない分岐・引数構築テストを行う。pre-commit は
+  `language: system` でローカル導入済みモジュールを使い、CI は pinned
+  module version を導入して同じ wrapper を呼ぶ
 
 clang-tidy / CodeQL はオプション扱いとし、本マイルストーンの必須範囲には
 含めない（導入コストが高く、段階導入とする）。

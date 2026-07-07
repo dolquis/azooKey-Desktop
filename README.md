@@ -53,6 +53,7 @@ cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-debug
 ctest --preset windows-debug --output-on-failure
 ./build/windows-debug/bench/azookey_bench.exe
+./scripts/test-powershell-quality.ps1
 ```
 
 単体テストは GoogleTest を使う。`-DAZOOKEY_FETCH_GOOGLETEST=ON` は GoogleTest が
@@ -61,6 +62,8 @@ GoogleTest を導入済みなら省略可。フラグなし・未導入の場合
 してビルドは継続する（オフライン環境向け）。
 
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
+
+`scripts/test-powershell-quality.ps1` は `PSScriptAnalyzer` と `Pester` のローカル PowerShell モジュールを使い、開発用 TIP 登録スクリプトの静的解析と安全な分岐テストを実行します。実際の machine-wide 登録は行いません。
 
 ## TIP の登録 / 解除（Windows、管理者権限）
 

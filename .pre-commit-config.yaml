@@ -7,7 +7,8 @@
 #   pre-commit run --all-files # run across the whole tree (or: just lint)
 #
 # Tool sources: clang-format/LLVM, gitleaks/yamlfmt/taplo/actionlint via scoop,
-# check-jsonschema via pipx (`pipx install check-jsonschema==0.37.3`).
+# check-jsonschema via pipx (`pipx install check-jsonschema==0.37.3`),
+# PSScriptAnalyzer/Pester via PowerShell Gallery local modules.
 minimum_pre_commit_version: "3.0.0"
 repos:
   - repo: local
@@ -31,6 +32,13 @@ repos:
         entry: actionlint
         language: system
         files: '^\.github/workflows/.*\.(yml|yaml)$'
+
+      - id: powershell-quality
+        name: PowerShell lint/test (PSScriptAnalyzer + Pester)
+        entry: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-powershell-quality.ps1
+        language: system
+        pass_filenames: false
+        files: '^((scripts|compat-test)/.*\.ps1|PSScriptAnalyzerSettings\.psd1)$'
 
       - id: settings-json-schema-metaschema
         name: settings JSON Schema metaschemas

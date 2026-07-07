@@ -521,11 +521,13 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **将来のモデル DL UI（M45 後続 M）**: 本節の取得機構をそのまま UI 化し、上表の
   配信元分岐を引き継ぐ。
 
-#### 1.6.2 配布ライセンス結論（DEV-202・暫定確定）
+#### 1.6.2 配布ライセンス結論（DEV-202・v1.0 確定）
 
 DEV-202（`gate:human-required`）の調査結論を固定する。**本節は法的助言ではなく、
-一次情報の整理と当面の運用方針である**。最終確定には著者確認を要する（下記「再ホスト
-解禁の条件」。確認タスクの進捗・状態は Linear DEV-202 が正典で、本 spec には書かない）。
+一次情報の整理と運用方針である**。**v1.0 は下記の保守運用（CC-BY-SA-4.0 として扱い、
+上流 HuggingFace から取得・再ホストしない）で確定**する（DEV-202 は Done）。著者確認を
+要するのは「再ホスト解禁」の任意最適化のみで、その進捗・状態は Linear DEV-497 が正典
+（本 spec には書かない）。
 
 ##### モデル（zenz GGUF）
 
@@ -533,7 +535,7 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 |---|---|
 | ピン対象 | `Miwa-Keita/zenz-v3.2-small-gguf`（§1.6.1 の `expected.json` が正） |
 | HuggingFace タグ | `apache-2.0`（ただし README 空・ベース未記載） |
-| 矛盾兆候 | 直前の `zenz-v3.1-small-gguf` は `cc-by-sa-4.0`。v1/v2 のベース `ku-nlp/gpt2-small-japanese-char` も `cc-by-sa-4.0`。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性 |
+| 矛盾兆候 | zenz 一族（v1 / v2 / v2.5 / v3 / v3.1、safetensors 版含む）とベース `ku-nlp/gpt2-small-japanese-char` はすべて `cc-by-sa-4.0`（`zenz-v2.5-small` は `base_model: ku-nlp/gpt2-small-japanese-char` を明示。HF API 確認 2026-07）。apache-2.0 は一族で v3.2-small-gguf のみ。CC-BY-SA-4.0 は ShareAlike を持ち、Apache-2.0 は CC-BY-SA-4.0 の一方向互換リストに含まれない。v3.2 が同ベース由来なら apache タグは誤りの可能性（README 空・ベース未記載・照合できる safetensors 版なし） |
 | **当面の扱い（確定）** | **保守側に倒し CC-BY-SA-4.0 として設計**する。CC-BY-SA で成立する運用は Apache でも成立するため、どちらに確定しても手戻りが出ない |
 | 帰属・改変明示 | BY（帰属）は両ライセンス共通で必須。GGUF 量子化は「改変」に当たるため「量子化派生である」旨も明示（`ThirdPartyNotices.txt` / インストーラ NOTICE / 設定アプリ About。モデル名・著者 `Miwa-Keita`・出所 URL・ライセンス・量子化改変の 5 点） |
 | 配信 | 当面**再ホストせず**上流 HuggingFace から取得（§1.6.1 表）。CC-BY-SA-4.0 でも再配布自体は帰属＋SA＋改変明示で可能だが、著者確認までは再ホストしない運用でリスクを最小化する |
@@ -557,9 +559,9 @@ DEV-202（`gate:human-required`）の調査結論を固定する。**本節は�
 
 GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への移行は、**上流モデルの
 ライセンスが Apache-2.0 と確認できたときに限る**。確認が取れるまでは本節の保守運用
-（上流 HuggingFace 取得・帰属・量子化改変明示）を維持する。ライセンス確認タスクの起票・
-進捗・検証メモ・状態は **Linear DEV-202 が正典**（`gate:human-required`。本 spec には
-状態を書かない — `AGENTS.md`「README 編集ルール」「Linear 運用」）。
+（上流 HuggingFace 取得・帰属・量子化改変明示）を維持する。この著者確認・再ホスト解禁
+タスクの起票・進捗・検証メモ・状態は **Linear DEV-497 が正典**（`gate:human-required`。
+本 spec には状態を書かない — `AGENTS.md`「README 編集ルール」「Linear 運用」）。
 
 ### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
 

@@ -56,6 +56,14 @@ jobs:
   windows-build:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022
+    env:
+      # The root CMakeLists auto-detects sccache on PATH and wires it as the
+      # compiler launcher (flipping MSVC Debug info to /Z7 Embedded for cache
+      # compatibility). SCCACHE_GHA_ENABLED stores objects in the Actions cache.
+      SCCACHE_GHA_ENABLED: "true"
+      # Resilience: if the cache backend errors at runtime, fall back to direct
+      # compilation instead of failing the build (a cache must never break CI).
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +79,12 @@ jobs:
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
+
+      # v0.0.10 wires the current (v2) Actions cache service. Older tags (e.g.
+      # v0.0.6) only export the legacy ACTIONS_CACHE_URL (v1), which GitHub
+      # retired on 2025-04-15 — that returns HTTP 400 and fails sccache startup.
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache GoogleTest source
         uses: actions/cache@v4
@@ -93,6 +107,11 @@ jobs:
         run: |
           cmake --build --preset ${{ matrix.preset }} 2>&1 | Tee-Object -FilePath build-${{ matrix.config }}.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report sccache stats
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
 
       - name: Run tests via CTest
         id: run_tests
@@ -180,6 +199,9 @@ jobs:
   windows-llama-build:
     name: Windows llama.cpp compile
     runs-on: windows-2022
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -187,6 +209,9 @@ jobs:
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache fetched dependencies
         uses: actions/cache@v4
@@ -206,6 +231,11 @@ jobs:
           cmake --build build/windows-llama --target host_engine_tests --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Report sccache stats
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+
       - name: Upload llama.cpp build logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -219,6 +249,9 @@ jobs:
   linux-build:
     name: Linux Debug
     runs-on: ubuntu-24.04
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -228,6 +261,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache GoogleTest source
         uses: actions/cache@v4
@@ -242,6 +278,10 @@ jobs:
 
       - name: Build
         run: cmake --build --preset linux-debug
+
+      - name: Report sccache stats
+        if: always()
+        run: sccache --show-stats
 
       - name: Run tests via CTest
         run: ctest --preset linux-debug --no-tests=error

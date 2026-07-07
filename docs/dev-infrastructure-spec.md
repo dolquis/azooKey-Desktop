@@ -263,21 +263,29 @@ dispatch から開始し、安定後に nightly required 化する）。
 optional / manual dispatch、nightly で必須実行という順で段階導入する。導入は
 Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
 
-### 4.7 コンパイラキャッシュ（sccache）— CI 適用は保留
+### 4.7 コンパイラキャッシュ（sccache）
 
-ルート `CMakeLists.txt` は sccache/ccache を PATH 上で自動検出して compiler
-launcher に設定する（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）。ローカル開発では
-ローカルディスクキャッシュとして有効に機能する。
+CI のコンパイルジョブ（`windows-build` Debug/Release、`windows-llama-build`、
+`linux-build`）は `mozilla-actions/sccache-action` で sccache を導入し、GitHub
+Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェクトを run 間再利用
+する。ルート `CMakeLists.txt` が sccache を PATH 上で自動検出して compiler launcher
+に設定するため（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）、ワークフロー側の追加設定は
+不要。MSVC ではキャッシュ互換のため Debug / RelWithDebInfo のデバッグ情報を `/Z7`
+（Embedded）へ切り替える。この切り替えは Release を対象外とするため、Release の
+`.pdb` artifact（§4.4）は影響を受けない。各ジョブ末尾で `sccache --show-stats` で
+ヒット率を可視化する。
 
-CI への sccache 適用は**保留**する。GitHub Actions ランナーで
-`mozilla-actions/sccache-action`（sccache 0.16.0）の GHA キャッシュバックエンド
-（`SCCACHE_GHA_ENABLED`）を有効化すると、レガシー Actions Cache API
-（`_apis/artifactcache`）が HTTP 400 を返して sccache サーバ起動に失敗し、
-compiler launcher に設定された sccache が全コンパイルを失敗させてビルドが落ちる
-事象を確認した（2026-07）。コンパイラキャッシュはビルドを壊してはならないため、
-CI では sccache を配備しない。将来の適用は、GHA キャッシュ backend への依存を
-避ける方式（ローカル `SCCACHE_DIR` を `actions/cache` で永続化する等）で再評価し、
-Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
+**action のバージョンに注意（過去の失敗の教訓）。** 初回導入時に
+`sccache-action@v0.0.6` を pin したところ、全ビルドジョブが失敗した（2026-07）。
+このタグは旧 (v1) Actions Cache API 用の env（`ACTIONS_CACHE_URL`）しか渡さないが、
+GitHub は v1 を **2025-04-15 に完全停止**しており、廃止済みエンドポイントが HTTP 400
+（`Our services aren't available right now`）を返して sccache サーバ起動が失敗、
+compiler launcher に設定された sccache が全コンパイルを道連れにした。現行 sccache は
+v2 サービスの env（`ACTIONS_RESULTS_URL`）を要求するため、**action は v2 を繋ぐ
+`v0.0.9` 以降（本 repo は `v0.0.10`）を pin する**こと。あわせて
+`SCCACHE_IGNORE_SERVER_IO_ERROR=1` を設定し、実行時にキャッシュ backend が失敗しても
+ローカルコンパイルへ fallback してビルドを緑に保つ（キャッシュはビルドを壊しては
+ならない）。
 
 ### M38 受け入れ条件
 

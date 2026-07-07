@@ -56,11 +56,6 @@ jobs:
   windows-build:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022
-    env:
-      # Let the root CMakeLists auto-detect sccache on PATH (it flips MSVC Debug
-      # info to /Z7 Embedded for cache compatibility). Backed by the Actions
-      # cache so hits persist across runs.
-      SCCACHE_GHA_ENABLED: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -76,9 +71,6 @@ jobs:
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
 
       - name: Cache GoogleTest source
         uses: actions/cache@v4
@@ -101,11 +93,6 @@ jobs:
         run: |
           cmake --build --preset ${{ matrix.preset }} 2>&1 | Tee-Object -FilePath build-${{ matrix.config }}.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Report sccache stats
-        if: always()
-        shell: pwsh
-        run: sccache --show-stats
 
       - name: Run tests via CTest
         id: run_tests
@@ -193,8 +180,6 @@ jobs:
   windows-llama-build:
     name: Windows llama.cpp compile
     runs-on: windows-2022
-    env:
-      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -202,9 +187,6 @@ jobs:
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
 
       - name: Cache fetched dependencies
         uses: actions/cache@v4
@@ -224,11 +206,6 @@ jobs:
           cmake --build build/windows-llama --target host_engine_tests --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Report sccache stats
-        if: always()
-        shell: pwsh
-        run: sccache --show-stats
-
       - name: Upload llama.cpp build logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -242,8 +219,6 @@ jobs:
   linux-build:
     name: Linux Debug
     runs-on: ubuntu-24.04
-    env:
-      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -253,9 +228,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
 
       - name: Cache GoogleTest source
         uses: actions/cache@v4
@@ -270,10 +242,6 @@ jobs:
 
       - name: Build
         run: cmake --build --preset linux-debug
-
-      - name: Report sccache stats
-        if: always()
-        run: sccache --show-stats
 
       - name: Run tests via CTest
         run: ctest --preset linux-debug --no-tests=error

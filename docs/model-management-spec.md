@@ -402,7 +402,7 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 | `backendPreference` | enum | "auto" | `auto` / `cpu` / `cuda` / `vulkan` / `winml`。`vulkan`=R1 ggml-vulkan（ベンダ横断 GPU）。旧 `directml` / `npu` は受理するが `winml` に統合・**非推奨**（§5.1） |
 | `epPreference` | enum | "auto" | R2(`winml`) 時の EP 希望: `auto` / `npu` / `gpu` / `cpu`（`copilot-pc-backend-spec.md` §4.4） |
 | `nGpuLayers` | int | -1 | R1(llama.cpp) 専用。-1 = 全レイヤ GPU、0 = CPU only、正値 = 部分オフロード |
-| `autoLoadOnHostStart` | bool | true | Host 起動時に `selectedPath` を自動ロード |
+| `autoLoadOnHostStart` | bool | true | Host 起動時に `selectedPath` を background preload する。ロード完了までは SimpleConverter で継続 |
 | `fallbackToSimpleConverter` | bool | true | ロード失敗時に Simple へ落ちる |
 | `benchmarkOnModelChange` | bool | false | モデル変更時に自動ベンチ |
 | `benchmarkHistory` | array | [] | 直近 7 件のベンチ結果（自動回収） |
@@ -431,6 +431,7 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 - モデルロード失敗時も Host は落ちず、`SimpleConverter` fallback へ
   移行する
 - ベンチマーク結果が GUI に表示される
-- 選択モデルが Host 再起動後も自動ロードされる
+- 選択モデルが Host 再起動後も background preload され、ロード中 / 失敗時も
+  SimpleConverter fallback で入力を継続できる
 - `model.backendPreference` が root `backendPreference` より優先される
 - `--json` 出力（IPC）が stable schema として CI でテストされる

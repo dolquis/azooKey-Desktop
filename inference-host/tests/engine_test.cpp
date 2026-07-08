@@ -523,6 +523,64 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, StartModelPreloadKeepsFallbackResponsiveWhileLoadIsPending) {
+  using namespace std::chrono_literals;
+
+  const char* lpath = "azookey_host_engine_preload_pending.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  std::promise<void> probe_entered_promise;
+  auto probe_entered = probe_entered_promise.get_future();
+  std::promise<void> release_probe_promise;
+  auto release_probe = release_probe_promise.get_future();
+
+  azookey::host::ModelLoadOptions options;
+  options.path = "azookey_missing_preload_pending_zenzai.gguf";
+  options.backend = azookey::host::BackendKind::Cpu;
+  options.before_probe_for_tests = [&]() {
+    probe_entered_promise.set_value();
+    (void)release_probe.wait_for(1s);
+  };
+
+  EXPECT_TRUE(engine->StartModelPreload(options));
+  EXPECT_TRUE(engine->model_preload_in_progress());
+  const bool preload_entered = probe_entered.wait_for(1s) == std::future_status::ready;
+  EXPECT_TRUE(preload_entered);
+  const auto preload_health = engine->health_snapshot();
+  EXPECT_TRUE(preload_health.model_preload_in_progress);
+  EXPECT_FALSE(preload_health.model_loaded);
+  EXPECT_FALSE(preload_health.last_error.has_value());
+
+  auto next_config = engine->config();
+  next_config.learning_alpha = 0.42;
+  engine->ApplyConfig(next_config);
+
+  auto query_future = std::async(
+      std::launch::async, [&engine]() { return engine->QueryCandidates("にほん", "", kNowBase); });
+  EXPECT_EQ(query_future.wait_for(100ms), std::future_status::ready);
+  const auto cands = query_future.get();
+  ASSERT_FALSE(cands.empty());
+  EXPECT_EQ(cands.front().surface, "日本");
+
+  release_probe_promise.set_value();
+  engine->WaitForModelPreload();
+  EXPECT_FALSE(engine->model_preload_in_progress());
+  EXPECT_FALSE(engine->model_loaded());
+  EXPECT_DOUBLE_EQ(engine->config().learning_alpha, 0.42);
+  ASSERT_TRUE(engine->last_error().has_value());
+  EXPECT_NE(engine->last_error()->find("model file"), std::string::npos);
+  const auto failed_health = engine->health_snapshot();
+  EXPECT_FALSE(failed_health.model_preload_in_progress);
+  EXPECT_FALSE(failed_health.model_loaded);
+  EXPECT_EQ(failed_health.model_path, options.path);
+  ASSERT_TRUE(failed_health.last_error.has_value());
+  EXPECT_NE(failed_health.last_error->find("model file"), std::string::npos);
+
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, ProbeZenzaiGgufModelRejectsMissingPath) {
   const std::string model_path = TempPath("azookey_probe_missing_zenzai.gguf");
   std::remove(model_path.c_str());
@@ -818,10 +876,11 @@ TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
   ASSERT_EQ(nbest.size(), 2u);
   EXPECT_EQ(nbest.front().surface, "重複");
   EXPECT_EQ(nbest.front().source, azookey::core::CandidateSource::Model);
-  EXPECT_NE(std::find_if(nbest.begin(), nbest.end(), [](const auto& candidate) {
-              return candidate.surface == "別候補" &&
-                     candidate.source == azookey::core::CandidateSource::Model;
-            }),
+  EXPECT_NE(std::find_if(nbest.begin(), nbest.end(),
+                         [](const auto& candidate) {
+                           return candidate.surface == "別候補" &&
+                                  candidate.source == azookey::core::CandidateSource::Model;
+                         }),
             nbest.end());
   EXPECT_FALSE(engine->effective_last_error().has_value());
 

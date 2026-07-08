@@ -572,6 +572,7 @@ TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {
   ASSERT_TRUE(health_resp.has_value());
   auto health = ipc::ParseHealth(health_resp->payload_json);
   ASSERT_TRUE(health.has_value());
+  EXPECT_EQ(health->status, "degraded");
   EXPECT_EQ(health->backend, "cuda");
   EXPECT_FALSE(health->model_loaded);
   EXPECT_TRUE(health->last_error.has_value());

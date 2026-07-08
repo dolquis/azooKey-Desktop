@@ -50,8 +50,10 @@ ipc::CandidateField ToField(const core::Candidate& c) {
 
 const char* BackendName(BackendKind backend) {
   switch (backend) {
-    case BackendKind::Cuda: return "cuda";
-    case BackendKind::Cpu: return "cpu";
+    case BackendKind::Cuda:
+      return "cuda";
+    case BackendKind::Cpu:
+      return "cpu";
   }
   return "cpu";
 }
@@ -67,9 +69,7 @@ class RequestCompletionGuard {
   RequestCompletionGuard(RequestScheduler* scheduler, uint64_t request_id)
       : scheduler_(scheduler), request_id_(request_id) {}
 
-  ~RequestCompletionGuard() {
-    Complete();
-  }
+  ~RequestCompletionGuard() { Complete(); }
 
   void Complete() {
     if (active_) {
@@ -104,18 +104,31 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     return HandleUnauthenticated(req);
   }
   switch (req.type) {
-    case ipc::MessageType::Handshake: return HandleHandshake(req);
-    case ipc::MessageType::Ping: return HandlePing(req);
-    case ipc::MessageType::Health: return HandleHealth(req);
-    case ipc::MessageType::LoadModel: return HandleLoadModel(req);
-    case ipc::MessageType::QueryCandidates: return HandleQueryCandidates(req);
-    case ipc::MessageType::QueryBatchConversion: return HandleQueryBatchConversion(req);
-    case ipc::MessageType::Cancel: HandleCancel(req); return std::nullopt;
-    case ipc::MessageType::CommitObservation: return HandleCommitObservation(req);
-    case ipc::MessageType::AddUserWord: return HandleAddUserWord(req);
-    case ipc::MessageType::RemoveUserWord: return HandleRemoveUserWord(req);
-    case ipc::MessageType::UpdateConfig: return HandleUpdateConfig(req);
-    default: return std::nullopt;
+    case ipc::MessageType::Handshake:
+      return HandleHandshake(req);
+    case ipc::MessageType::Ping:
+      return HandlePing(req);
+    case ipc::MessageType::Health:
+      return HandleHealth(req);
+    case ipc::MessageType::LoadModel:
+      return HandleLoadModel(req);
+    case ipc::MessageType::QueryCandidates:
+      return HandleQueryCandidates(req);
+    case ipc::MessageType::QueryBatchConversion:
+      return HandleQueryBatchConversion(req);
+    case ipc::MessageType::Cancel:
+      HandleCancel(req);
+      return std::nullopt;
+    case ipc::MessageType::CommitObservation:
+      return HandleCommitObservation(req);
+    case ipc::MessageType::AddUserWord:
+      return HandleAddUserWord(req);
+    case ipc::MessageType::RemoveUserWord:
+      return HandleRemoveUserWord(req);
+    case ipc::MessageType::UpdateConfig:
+      return HandleUpdateConfig(req);
+    default:
+      return std::nullopt;
   }
 }
 
@@ -124,11 +137,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
   // waiting for a reply that would never come if we returned nullopt.
   switch (req.type) {
     case ipc::MessageType::AddUserWord: {
-      ipc::AddUserWordResponse r; r.ok = false;
+      ipc::AddUserWordResponse r;
+      r.ok = false;
       return MakeResponse(req, ipc::BuildAddUserWordResponse(r));
     }
     case ipc::MessageType::RemoveUserWord: {
-      ipc::RemoveUserWordResponse r; r.ok = false;
+      ipc::RemoveUserWordResponse r;
+      r.ok = false;
       return MakeResponse(req, ipc::BuildRemoveUserWordResponse(r));
     }
     case ipc::MessageType::UpdateConfig: {
@@ -138,15 +153,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       return MakeResponse(req, ipc::BuildUpdateConfigResponse(r));
     }
     case ipc::MessageType::CommitObservation: {
-      ipc::CommitObservationResponse r; r.ok = false;
+      ipc::CommitObservationResponse r;
+      r.ok = false;
       return MakeResponse(req, ipc::BuildCommitObservationResponse(r));
     }
     case ipc::MessageType::LoadModel: {
-      ipc::LoadModelResponse r; r.ok = false; r.error = "not authenticated";
+      ipc::LoadModelResponse r;
+      r.ok = false;
+      r.error = "not authenticated";
       return MakeResponse(req, ipc::BuildLoadModelResponse(r));
     }
     case ipc::MessageType::QueryCandidates: {
-      ipc::QueryCandidatesResponse r; r.partial = false;
+      ipc::QueryCandidatesResponse r;
+      r.partial = false;
       return MakeResponse(req, ipc::BuildQueryCandidatesResponse(r));
     }
     case ipc::MessageType::QueryBatchConversion: {
@@ -159,12 +178,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(r));
     }
     case ipc::MessageType::Ping: {
-      ipc::PingPayload p; p.nonce = 0; p.t_ms = 0;
+      ipc::PingPayload p;
+      p.nonce = 0;
+      p.t_ms = 0;
       return MakeResponse(req, ipc::BuildPing(p));
     }
     case ipc::MessageType::Health: {
       ipc::HealthPayload p;
-      p.status = "error"; p.backend = ""; p.model_loaded = false;
+      p.status = "error";
+      p.backend = "";
+      p.model_loaded = false;
       p.last_error = "not authenticated";
       return MakeResponse(req, ipc::BuildHealth(p));
     }
@@ -212,12 +235,13 @@ std::optional<ipc::Envelope> Dispatcher::HandlePing(const ipc::Envelope& req) {
 
 std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) {
   ipc::HealthPayload p;
-  p.backend = BackendName(engine_->backend());
-  p.model_loaded = engine_->model_loaded();
-  p.last_error = engine_->effective_last_error();
+  const auto engine_health = engine_->health_snapshot();
+  p.backend = BackendName(engine_health.backend);
+  p.model_loaded = engine_health.model_loaded;
+  p.last_error = engine_health.last_error;
   if (!p.last_error) {
     p.status = "ok";
-  } else if (p.model_loaded) {
+  } else if (p.model_loaded || !engine_health.model_path.empty()) {
     p.status = "degraded";
   } else {
     p.status = "error";

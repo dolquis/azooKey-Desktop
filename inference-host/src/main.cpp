@@ -257,10 +257,12 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
-  if ((settings_store.settings().model.auto_load_on_host_start || explicit_model_path) &&
-      !engine.LoadModel()) {
+  if (explicit_model_path && !engine.LoadModel()) {
     std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
               << " (falling back to SimpleConverter)" << std::endl;
+  } else if (settings_store.settings().model.auto_load_on_host_start) {
+    (void)engine.StartModelPreload(
+        azookey::host::ModelLoadOptions{config.model_path, config.backend, config.n_gpu_layers});
   }
 
   azookey::host::RequestScheduler scheduler;
@@ -287,10 +289,15 @@ int main(int argc, char** argv) {
   azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf,
                                              &settings_store);
 
+  const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
-            << (engine.backend() == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
+            << (startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
             << " learning=" << learning_path << " user_dict=" << user_dict_path
-            << " model_loaded=" << (engine.model_loaded() ? "true" : "false") << std::endl;
+            << " model_loaded=" << (startup_health.model_loaded ? "true" : "false");
+  if (startup_health.model_preload_in_progress) {
+    std::cerr << " model_preload=preloading";
+  }
+  std::cerr << std::endl;
 
   if (pipe_mode) {
     if (pipe_name.empty()) {

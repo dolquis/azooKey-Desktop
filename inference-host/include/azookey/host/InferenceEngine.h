@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -44,6 +45,8 @@ struct ModelLoadOptions {
   std::optional<int32_t> n_gpu_layers;
   // Test-only fixture switch for no-llama builds; production callers leave this false.
   bool mock_zenzai_candidates_for_tests{false};
+  // Test-only hook used to prove loading work runs outside state_mutex_.
+  std::function<void()> before_probe_for_tests;
 };
 
 struct ModelLoadResult {
@@ -51,10 +54,18 @@ struct ModelLoadResult {
   std::optional<std::string> error;
 };
 
+struct EngineHealthSnapshot {
+  BackendKind backend{BackendKind::Cpu};
+  bool model_loaded{false};
+  bool model_preload_in_progress{false};
+  std::string model_path;
+  std::optional<std::string> last_error;
+};
+
 class InferenceEngine {
  public:
-  InferenceEngine(std::unique_ptr<core::IConverter> converter,
-                  learning::LearningStore* store, EngineConfig config);
+  InferenceEngine(std::unique_ptr<core::IConverter> converter, learning::LearningStore* store,
+                  EngineConfig config);
   ~InferenceEngine();
 
   // External, non-owning. May be nullptr (no user dictionary).
@@ -66,37 +77,37 @@ class InferenceEngine {
   bool LoadModel(const ModelLoadOptions& options);
   ModelLoadResult LoadModelWithResult();
   ModelLoadResult LoadModelWithResult(const ModelLoadOptions& options);
+  bool StartModelPreload(ModelLoadOptions options);
+  void WaitForModelPreload();
 
   // QueryCandidates with optional cancel polling. Returns an empty vector
   // immediately when *cancel is observed true. cancel may be nullptr.
-  std::vector<core::Candidate> QueryCandidates(const std::string& kana,
-                                                const std::string& context,
-                                                uint64_t now_epoch_sec,
-                                                const std::atomic<bool>* cancel,
-                                                uint32_t max_candidates = 0,
-                                                bool live = false);
+  std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
+                                               uint64_t now_epoch_sec,
+                                               const std::atomic<bool>* cancel,
+                                               uint32_t max_candidates = 0, bool live = false);
 
   // Backwards-compatible overload without cancel support.
-  std::vector<core::Candidate> QueryCandidates(const std::string& kana,
-                                                const std::string& context,
-                                                uint64_t now_epoch_sec);
+  std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
+                                               uint64_t now_epoch_sec);
 
-  std::vector<core::Candidate> QueryPredictions(const std::string& kana, const std::string& context, uint64_t now_epoch_sec);
-  std::vector<core::Candidate> QueryCorrections(const std::string& kana,
-                                                const std::string& context,
+  std::vector<core::Candidate> QueryPredictions(const std::string& kana, const std::string& context,
+                                                uint64_t now_epoch_sec);
+  std::vector<core::Candidate> QueryCorrections(const std::string& kana, const std::string& context,
                                                 const std::string& rejected_surface,
                                                 uint64_t now_epoch_sec);
-  void CommitObservation(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec);
-  void CommitCorrection(const std::string& reading,
-                        const std::string& rejected_surface,
-                        const std::string& selected_surface,
-                        uint64_t now_epoch_sec);
+  void CommitObservation(const std::string& reading, const std::string& surface,
+                         uint64_t now_epoch_sec);
+  void CommitCorrection(const std::string& reading, const std::string& rejected_surface,
+                        const std::string& selected_surface, uint64_t now_epoch_sec);
   bool FlushLearningStore();
   void ApplyConfig(const EngineConfig& config);
 
   BackendKind backend() const;
   EngineConfig config() const;
+  EngineHealthSnapshot health_snapshot() const;
   bool model_loaded() const;
+  bool model_preload_in_progress() const;
   std::optional<std::string> last_error() const;
   std::optional<std::string> effective_last_error() const;
 
@@ -120,8 +131,11 @@ class InferenceEngine {
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
   mutable std::mutex state_mutex_;
+  std::mutex model_load_mutex_;
+  std::mutex model_preload_thread_mutex_;
   EngineConfig config_;
   bool model_loaded_{false};
+  bool model_preload_in_progress_{false};
   std::optional<std::string> last_error_;
   std::optional<std::string> model_runtime_error_;
   size_t unsaved_observations_{0};
@@ -130,6 +144,7 @@ class InferenceEngine {
   std::optional<std::chrono::steady_clock::time_point> first_unsaved_observation_steady_;
   std::condition_variable learning_flush_cv_;
   std::thread learning_flush_thread_;
+  std::thread model_preload_thread_;
   bool learning_flush_stop_{false};
 };
 

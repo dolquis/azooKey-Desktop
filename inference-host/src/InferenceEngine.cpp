@@ -73,6 +73,12 @@ void DedupMergedCandidates(std::vector<core::Candidate>& candidates) {
   candidates = std::move(deduped);
 }
 
+void ApplyModelConfigFields(EngineConfig& target, const EngineConfig& source) {
+  target.model_path = source.model_path;
+  target.backend = source.backend;
+  target.n_gpu_layers = source.n_gpu_layers;
+}
+
 bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
   std::error_code ec;
   return std::filesystem::exists(dict.path(), ec) && !ec;
@@ -92,6 +98,7 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
 }
 
 InferenceEngine::~InferenceEngine() {
+  WaitForModelPreload();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     learning_flush_stop_ = true;
@@ -184,6 +191,39 @@ bool InferenceEngine::LoadModel(const ModelLoadOptions& options) {
   return LoadModelWithResult(options).ok;
 }
 
+bool InferenceEngine::StartModelPreload(ModelLoadOptions options) {
+  if (options.path.empty()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> thread_lock(model_preload_thread_mutex_);
+  if (model_preload_thread_.joinable()) {
+    model_preload_thread_.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    model_preload_in_progress_ = true;
+  }
+  try {
+    model_preload_thread_ = std::thread([this, options = std::move(options)]() mutable {
+      (void)LoadModelWithResult(options);
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      model_preload_in_progress_ = false;
+    });
+  } catch (...) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    model_preload_in_progress_ = false;
+    throw;
+  }
+  return true;
+}
+
+void InferenceEngine::WaitForModelPreload() {
+  std::lock_guard<std::mutex> lock(model_preload_thread_mutex_);
+  if (model_preload_thread_.joinable()) {
+    model_preload_thread_.join();
+  }
+}
+
 ModelLoadResult InferenceEngine::LoadModelWithResult() {
   const auto current = config();
   return LoadModelWithResult(
@@ -191,17 +231,22 @@ ModelLoadResult InferenceEngine::LoadModelWithResult() {
 }
 
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  (void)FlushLearningStoreLocked();
+  std::lock_guard<std::mutex> load_lock(model_load_mutex_);
   ModelLoadResult result;
-  EngineConfig next_config = config_;
-  next_config.model_path = options.path;
-  next_config.backend = options.backend;
-  next_config.n_gpu_layers = options.n_gpu_layers;
+  EngineConfig next_config;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    (void)FlushLearningStoreLocked();
+    next_config = config_;
+    next_config.model_path = options.path;
+    next_config.backend = options.backend;
+    next_config.n_gpu_layers = options.n_gpu_layers;
+  }
 
   if (next_config.model_path.empty()) {
     // No model path means the MVP converter remains active as the fallback.
-    config_ = std::move(next_config);
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    ApplyModelConfigFields(config_, next_config);
     model_loaded_ = false;
     model_converter_.reset();
     active_converter_ = fallback_converter_.get();
@@ -211,11 +256,16 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     return result;
   }
 
+  if (options.before_probe_for_tests) {
+    options.before_probe_for_tests();
+  }
+
   auto probe = ProbeZenzaiGgufModel(next_config.model_path);
   if (!probe.ok) {
     result.error = probe.error;
+    std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
-      config_ = std::move(next_config);
+      ApplyModelConfigFields(config_, next_config);
       model_converter_.reset();
       active_converter_ = fallback_converter_.get();
       last_error_ = result.error;
@@ -235,8 +285,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
   if (!loaded.ok) {
     result.error = loaded.error;
+    std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
-      config_ = std::move(next_config);
+      ApplyModelConfigFields(config_, next_config);
       model_converter_.reset();
       active_converter_ = fallback_converter_.get();
       last_error_ = result.error;
@@ -246,7 +297,8 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   }
   auto next_converter =
       std::make_unique<ZenzaiModelConverter>(std::move(loaded), fallback_converter_.get());
-  config_ = std::move(next_config);
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  ApplyModelConfigFields(config_, next_config);
   model_converter_ = std::move(next_converter);
   active_converter_ = model_converter_.get();
   model_loaded_ = true;
@@ -277,9 +329,25 @@ EngineConfig InferenceEngine::config() const {
   return config_;
 }
 
+EngineHealthSnapshot InferenceEngine::health_snapshot() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  EngineHealthSnapshot snapshot;
+  snapshot.backend = config_.backend;
+  snapshot.model_loaded = model_loaded_;
+  snapshot.model_preload_in_progress = model_preload_in_progress_;
+  snapshot.model_path = config_.model_path;
+  snapshot.last_error = last_error_ ? last_error_ : model_runtime_error_;
+  return snapshot;
+}
+
 bool InferenceEngine::model_loaded() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
   return model_loaded_;
+}
+
+bool InferenceEngine::model_preload_in_progress() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return model_preload_in_progress_;
 }
 
 std::optional<std::string> InferenceEngine::last_error() const {
@@ -312,8 +380,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
                                                               const std::string& context,
                                                               uint64_t now_epoch_sec,
                                                               const std::atomic<bool>* cancel,
-                                                              uint32_t max_candidates,
-                                                              bool live) {
+                                                              uint32_t max_candidates, bool live) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -346,9 +413,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
       model_converter_ && active_converter_ == model_converter_.get();
   const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
   try {
-    converted =
-        active_converter_->Convert(kana, BuildContext(kana, context, cancel, conversion_deadline,
-                                                      max_candidates, live));
+    converted = active_converter_->Convert(
+        kana, BuildContext(kana, context, cancel, conversion_deadline, max_candidates, live));
     if (canceled()) return {};
     if (using_model_converter) {
       MirrorModelRuntimeErrorLocked();
@@ -499,8 +565,7 @@ bool InferenceEngine::FlushLearningStoreLocked() {
   return true;
 }
 
-void InferenceEngine::RestoreUserDictionaryLocked(
-    const std::vector<learning::UserWord>& entries) {
+void InferenceEngine::RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries) {
   if (!user_dict_) {
     return;
   }

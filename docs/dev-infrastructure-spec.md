@@ -623,6 +623,13 @@ backend 選択、query latency、error、exception summary、learning/user-dict
   MessageType で系統を区別する。`CommitObservation` の応答は**必ず受信・相関する**
   （読み飛ばすと次の受信が stale 応答を拾い pipe ストリームが desync するため、
   「応答なし」扱いにできるのは `Cancel` のみ）。
+- `Cancel` は primary 接続とは別の短命な control 接続から送ってよい。
+  この場合も control 接続は Handshake を完了してから `Cancel` を送る。
+  `Cancel` envelope の `request_id` は control 接続ローカルの wire id であり、キャンセル
+  対象は payload の `target_request_id` で指定する。
+  Host 側では全接続の `Dispatcher` が共有する `RequestScheduler` に
+  `target_request_id` が登録されるため、primary 接続で in-flight の `QueryCandidates`
+  にもキャンセルが届く。
 - Host の `RequestScheduler`（`inference-host/src/RequestScheduler.cpp`）は wire
   `request_id` を **発番しない**。TIP 由来の id をキーに cancellation / latest 追跡を
   行う側であり、`NextRequestId()` は wire ID の採番元ではない。

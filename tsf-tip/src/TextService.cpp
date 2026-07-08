@@ -17,6 +17,10 @@ namespace {
 
 constexpr const char* kTipVersion = "0.1.0";
 constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
+constexpr uint32_t kCancelConnectTimeoutMs = 200;
+constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
+constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
+constexpr uint32_t kTimeoutCancelHandshakeTimeoutMs = 10;
 
 void DebugLog(const std::string& message) {
 #ifdef _DEBUG
@@ -1253,9 +1257,9 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
                    " while waiting for req_id=" + std::to_string(expected_request_id) +
                    ", discarding");
         } else {
-          DebugLog("IPC: response type=" + TypeToString(response->type) + " for req_id=" +
-                   std::to_string(response->request_id) + " while waiting for type=" +
-                   TypeToString(expected_type) + ", discarding");
+          DebugLog("IPC: response type=" + TypeToString(response->type) +
+                   " for req_id=" + std::to_string(response->request_id) +
+                   " while waiting for type=" + TypeToString(expected_type) + ", discarding");
         }
         continue;
       }
@@ -1270,6 +1274,13 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
 // wait prevents a host that accepts the pipe but never replies from hanging the
 // reconnect loop. Returns false on send failure, timeout, or rejection.
 bool TextService::PerformHandshake() {
+  constexpr uint32_t kHandshakeTimeoutMs = 3000;
+  return PerformHandshake(ipc_client_, kHandshakeTimeoutMs, "tip-activate-handshake",
+                          /*update_host_options=*/true);
+}
+
+bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
+                                   const std::string& trace_id, bool update_host_options) {
   using namespace azookey::ipc;
 
   HandshakeRequest hs;
@@ -1282,28 +1293,65 @@ bool TextService::PerformHandshake() {
   Envelope henv;
   henv.version = 1;
   henv.request_id = 1;
-  henv.trace_id = "tip-activate-handshake";
+  henv.trace_id = trace_id;
   henv.type = MessageType::Handshake;
   henv.payload_json = BuildHandshakeRequest(hs);
 
-  if (!ipc_client_.Send(henv)) {
+  if (!client.Send(henv)) {
     DebugLog("IPC: handshake send failed");
     return false;
   }
-  constexpr uint32_t kHandshakeTimeoutMs = 3000;
-  auto hres = ipc_client_.ReceiveWithTimeout(kHandshakeTimeoutMs);
+  auto hres = client.ReceiveWithTimeout(timeout_ms);
   auto hpayload = hres ? ParseHandshakeResponse(hres->payload_json) : std::nullopt;
   if (!hpayload || !hpayload->accepted) {
     DebugLog("IPC: handshake rejected or no response");
     return false;
   }
-  batch_romaji_conversion_.store(hpayload->batch_romaji_conversion, std::memory_order_relaxed);
-  batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
-                                     std::memory_order_relaxed);
-  batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
-                                     std::memory_order_relaxed);
-  batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
-  DebugLog("IPC: connected to host " + hpayload->host_version);
+  if (update_host_options) {
+    batch_romaji_conversion_.store(hpayload->batch_romaji_conversion, std::memory_order_relaxed);
+    batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
+                                       std::memory_order_relaxed);
+    batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
+                                       std::memory_order_relaxed);
+    batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
+    DebugLog("IPC: connected to host " + hpayload->host_version);
+  }
+  return true;
+}
+
+bool TextService::SendCancelOutOfBand(uint64_t target_request_id) {
+  return SendCancelOutOfBand(target_request_id, kCancelConnectTimeoutMs, kCancelHandshakeTimeoutMs);
+}
+
+bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
+                                      uint32_t handshake_timeout_ms) {
+  using namespace azookey::ipc;
+
+  const auto pipe_name = IpcPipeName();
+  if (pipe_name.empty()) return false;
+
+  NamedPipeClient cancel_client;
+  if (!cancel_client.Connect(pipe_name, connect_timeout_ms)) {
+    DebugLog("IPC: out-of-band cancel connect failed for target req_id=" +
+             std::to_string(target_request_id));
+    return false;
+  }
+  if (!PerformHandshake(cancel_client, handshake_timeout_ms, "tip-cancel-handshake",
+                        /*update_host_options=*/false)) {
+    return false;
+  }
+
+  Envelope cancel_env;
+  cancel_env.version = 1;
+  cancel_env.request_id = 2;
+  cancel_env.trace_id = "tip-oob-cancel";
+  cancel_env.type = MessageType::Cancel;
+  cancel_env.payload_json = BuildCancel({target_request_id});
+  if (!cancel_client.Send(cancel_env)) {
+    DebugLog("IPC: out-of-band cancel send failed for target req_id=" +
+             std::to_string(target_request_id));
+    return false;
+  }
   return true;
 }
 
@@ -1361,7 +1409,8 @@ void TextService::IpcWorkerThread() {
 
 // Serve QueryCandidates / fire-and-forget traffic over an already-handshaken
 // connection. Returns when the pipe drops (so the caller reconnects) or when
-// Deactivate sets ipc_stop_. All M10 cancel / staleness handling is unchanged.
+// Deactivate sets ipc_stop_. Cancel can use a short-lived control connection so
+// an in-flight query on the primary pipe can be interrupted before it replies.
 void TextService::ServeConnection() {
   using namespace azookey::ipc;
 
@@ -1408,13 +1457,21 @@ void TextService::ServeConnection() {
       env.trace_id = "tip-faf";
       env.type = item.type;
       env.payload_json = item.payload_json;
-      if (!ipc_client_.Send(env)) {
+      bool sent_out_of_band = false;
+      if (item.type == MessageType::Cancel && item.cancel_target_id != 0) {
+        sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
+        if (!sent_out_of_band) {
+          DebugLog("IPC: out-of-band cancel failed for target req_id=" +
+                   std::to_string(item.cancel_target_id) + "; falling back to main pipe");
+        }
+      }
+      if (!sent_out_of_band && !ipc_client_.Send(env)) {
         if (!ipc_stop_.load())
           DebugLog("IPC: faf send failed for type=" + TypeToString(item.type) + "; reconnecting");
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
-      if (item.expects_response) {
+      if (!sent_out_of_band && item.expects_response) {
         constexpr uint32_t kFafResponseTimeoutMs = 3000;
         if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs, env.request_id, item.type)) {
           if (ipc_stop_.load()) return;
@@ -1478,6 +1535,7 @@ void TextService::ServeConnection() {
     // canceled requests).  Track that so we abandon the receive instead of
     // spinning until the pipe disconnects.
     bool cancel_inflight = false;
+    bool cancel_inflight_out_of_band = false;
 
     // Drain fire-and-forget items (Cancel) that were enqueued while we were
     // preparing/sending this query.  Only items that do NOT expect a response
@@ -1505,10 +1563,20 @@ void TextService::ServeConnection() {
         env.trace_id = "tip-faf";
         env.type = item.type;
         env.payload_json = item.payload_json;
-        if (!ipc_client_.Send(env))
+        bool sent_out_of_band = false;
+        if (item.type == MessageType::Cancel && item.cancel_target_id != 0) {
+          sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
+          if (!sent_out_of_band) {
+            DebugLog("IPC: post-qc out-of-band cancel failed for target req_id=" +
+                     std::to_string(item.cancel_target_id) + "; falling back to main pipe");
+          }
+        }
+        if (!sent_out_of_band && !ipc_client_.Send(env))
           DebugLog("IPC: post-qc cancel send failed for type=" + TypeToString(item.type));
-        if (item.type == MessageType::Cancel && item.cancel_target_id == req_id)
+        if (item.type == MessageType::Cancel && item.cancel_target_id == req_id) {
           cancel_inflight = true;
+          cancel_inflight_out_of_band = sent_out_of_band;
+        }
       }
     }
 
@@ -1520,7 +1588,7 @@ void TextService::ServeConnection() {
         std::chrono::steady_clock::now() + std::chrono::milliseconds(kQueryCandidatesFastTimeoutMs);
     bool query_deadline_exceeded = false;
     std::optional<ipc::Envelope> qres;
-    while (!ipc_stop_.load() && ipc_client_.IsConnected()) {
+    while (!cancel_inflight_out_of_band && !ipc_stop_.load() && ipc_client_.IsConnected()) {
       uint32_t wait_ms = 50;
       if (!is_batch) {
         const auto now = std::chrono::steady_clock::now();
@@ -1543,9 +1611,9 @@ void TextService::ServeConnection() {
             DebugLog("IPC: response for stale req_id=" + std::to_string(qres->request_id) +
                      " while waiting for req_id=" + std::to_string(req_id) + ", discarding");
           } else {
-            DebugLog("IPC: response type=" + TypeToString(qres->type) + " for req_id=" +
-                     std::to_string(qres->request_id) + " while waiting for type=" +
-                     TypeToString(qenv.type) + ", discarding");
+            DebugLog("IPC: response type=" + TypeToString(qres->type) +
+                     " for req_id=" + std::to_string(qres->request_id) +
+                     " while waiting for type=" + TypeToString(qenv.type) + ", discarding");
           }
           qres.reset();
           continue;
@@ -1572,17 +1640,34 @@ void TextService::ServeConnection() {
         env.trace_id = "tip-faf-mid";
         env.type = item.type;
         env.payload_json = item.payload_json;
-        if (!ipc_client_.Send(env))
+        bool sent_out_of_band = false;
+        if (item.type == ipc::MessageType::Cancel && item.cancel_target_id != 0) {
+          sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
+          if (!sent_out_of_band) {
+            DebugLog("IPC: mid-receive out-of-band cancel failed for target req_id=" +
+                     std::to_string(item.cancel_target_id) + "; falling back to main pipe");
+          }
+        }
+        if (!sent_out_of_band && !ipc_client_.Send(env))
           DebugLog("IPC: mid-receive cancel send failed for type=" + ipc::TypeToString(item.type));
-        if (item.type == ipc::MessageType::Cancel && item.cancel_target_id == req_id)
+        if (item.type == ipc::MessageType::Cancel && item.cancel_target_id == req_id) {
           cancel_inflight = true;
+          cancel_inflight_out_of_band = sent_out_of_band;
+        }
       }
+      if (cancel_inflight_out_of_band) break;
     }
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
     }
     std::vector<CandidateField> response_candidates;
+    if (cancel_inflight && cancel_inflight_out_of_band && !qres) {
+      DebugLog("IPC: in-flight req_id=" + std::to_string(req_id) +
+               " canceled out-of-band, abandoning query receive");
+      ++next_id;
+      continue;
+    }
     if (!qres && query_deadline_exceeded && !is_batch) {
       ipc::Envelope cancel_env;
       cancel_env.version = 1;
@@ -1590,11 +1675,15 @@ void TextService::ServeConnection() {
       cancel_env.trace_id = "tip-query-timeout-cancel";
       cancel_env.type = ipc::MessageType::Cancel;
       cancel_env.payload_json = ipc::BuildCancel({req_id});
-      if (!ipc_client_.Send(cancel_env)) {
+      const bool sent_out_of_band = SendCancelOutOfBand(req_id, kTimeoutCancelConnectTimeoutMs,
+                                                        kTimeoutCancelHandshakeTimeoutMs);
+      if (!sent_out_of_band && !ipc_client_.Send(cancel_env)) {
         RearmPendingQuery(req_id);
         if (!ipc_stop_.load())
           DebugLog("IPC: QueryCandidates timeout cancel send failed; will retry after reconnect");
         break;
+      } else if (!sent_out_of_band) {
+        DebugLog("IPC: QueryCandidates timeout out-of-band cancel failed; used main pipe");
       }
 
       CandidateField fallback;
@@ -1614,9 +1703,9 @@ void TextService::ServeConnection() {
     }
 
     if (cancel_inflight) {
-      // Even when cancel is sent, host processes one request at a time and
-      // still returns this query response before seeing Cancel. Consume and
-      // discard here to keep stream framing aligned for subsequent receives.
+      // If cancel fell back to the main pipe, the host can still return this
+      // query response before seeing Cancel. Consume and discard here to keep
+      // stream framing aligned for subsequent receives.
       DebugLog("IPC: in-flight req_id=" + std::to_string(req_id) +
                " canceled, consumed pending query reply");
       ++next_id;

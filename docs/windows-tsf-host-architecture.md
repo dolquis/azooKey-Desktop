@@ -21,6 +21,11 @@
     比較する staleness check。
 - 確定時は `shown_candidates_` をスナップショットし、in-flight `QueryCandidates`
   に `Cancel` を送ってから EditSession を要求する。
+  Cancel は同じ Named Pipe への短命な control 接続を Handshake 済みにして送る。
+  これにより、primary 接続が `QueryCandidates` 応答待ちで塞がっていても Host 側の
+  共有 `RequestScheduler` に `target_request_id` が届く。
+  control 接続が使えない場合は primary 接続への best-effort 送信に戻り、到着した古い
+  応答は staleness check で破棄する。
 - 確定時の EditSession は同期要求で実行し、`SetText` / `EndComposition` が完了した
   場合だけ preedit を clear して `CommitObservation` を送る。
 - EditSession が拒否または失敗したとき (`hr_session != S_OK`) は preedit と

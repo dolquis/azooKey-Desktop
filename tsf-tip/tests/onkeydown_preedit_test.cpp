@@ -845,6 +845,86 @@ TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallbac
   server.Stop();
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, InFlightQueryCancelReachesHostBeforeQueryReturns) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-inflight-cancel-test-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> saw_query{false};
+  std::atomic<bool> saw_cancel{false};
+  std::atomic<bool> allow_query_return{false};
+  std::atomic<bool> query_returned{false};
+  std::atomic<bool> cancel_before_query_returned{false};
+  std::atomic<uint64_t> query_request_id{0};
+  std::atomic<uint64_t> cancel_target_id{0};
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "test-host";
+          payload.protocol_version = 1;
+          payload.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+
+        if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+          saw_query.store(true);
+          query_request_id.store(req.request_id);
+          const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+          while (!allow_query_return.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+          query_returned.store(true);
+          azookey::ipc::QueryCandidatesResponse payload;
+          azookey::ipc::CandidateField candidate;
+          candidate.surface = "蚊";
+          candidate.reading = "か";
+          candidate.source = "test";
+          payload.candidates.push_back(std::move(candidate));
+          res.payload_json = azookey::ipc::BuildQueryCandidatesResponse(payload);
+          return res;
+        }
+
+        if (req.type == azookey::ipc::MessageType::Cancel) {
+          auto payload = azookey::ipc::ParseCancel(req.payload_json);
+          if (payload) cancel_target_id.store(payload->target_request_id);
+          cancel_before_query_returned.store(!query_returned.load());
+          saw_cancel.store(true);
+          allow_query_return.store(true);
+          return std::nullopt;
+        }
+
+        return std::nullopt;
+      });
+  ASSERT_TRUE(started);
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  h.service.start_ipc_worker_for_test();
+
+  ASSERT_TRUE(WaitUntil([&] { return saw_query.load(); }));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(WaitUntil([&] { return saw_cancel.load(); }));
+
+  EXPECT_EQ(cancel_target_id.load(), query_request_id.load());
+  EXPECT_TRUE(cancel_before_query_returned.load());
+
+  allow_query_return.store(true);
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, BatchRawRomajiPreviewCommitsKanaReadingAsIs) {
   TextServiceHarness h;
   FakeRange range;

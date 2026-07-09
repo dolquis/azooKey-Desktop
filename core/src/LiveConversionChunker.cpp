@@ -41,7 +41,7 @@ DecodeResult DecodeUtf8At(std::string_view text, size_t offset) {
     const auto b2 = static_cast<unsigned char>(text[offset + 2]);
     if (IsContinuation(b1) && IsContinuation(b2)) {
       const char32_t cp = ((b0 & 0x0f) << 12) | ((b1 & 0x3f) << 6) | (b2 & 0x3f);
-      if (cp >= 0x800) return DecodeResult{cp, 3};
+      if (cp >= 0x800 && (cp < 0xd800 || cp > 0xdfff)) return DecodeResult{cp, 3};
     }
   }
   if ((b0 & 0xf8) == 0xf0 && remaining >= 4) {
@@ -147,7 +147,7 @@ bool IsJapaneseForLiveConversion(char32_t code_point) {
   if (code_point >= 0x30a1 && code_point <= 0x30fa) return true;    // Katakana.
   if (code_point >= 0x30fd && code_point <= 0x30ff) return true;    // Katakana iteration marks.
   if (code_point >= 0x31f0 && code_point <= 0x31ff) return true;    // Katakana phonetic extensions.
-  if (code_point >= 0xff66 && code_point <= 0xff9d) return true;    // Halfwidth Katakana.
+  if (code_point >= 0xff66 && code_point <= 0xff9f) return true;    // Halfwidth Katakana.
   if (code_point >= 0x3400 && code_point <= 0x4dbf) return true;    // CJK extension A.
   if (code_point >= 0x4e00 && code_point <= 0x9fff) return true;    // CJK unified.
   if (code_point >= 0xf900 && code_point <= 0xfaff) return true;    // CJK compatibility.

@@ -34,6 +34,8 @@ TEST(LiveConversionChunkerTest, ClassifiesJapaneseCodePointsForLiveConversion) {
   EXPECT_TRUE(azookey::core::IsJapaneseForLiveConversion(U'日'));
   EXPECT_TRUE(azookey::core::IsJapaneseForLiveConversion(U'ー'));
   EXPECT_TRUE(azookey::core::IsJapaneseForLiveConversion(U'ｶ'));
+  EXPECT_TRUE(azookey::core::IsJapaneseForLiveConversion(U'ﾞ'));
+  EXPECT_TRUE(azookey::core::IsJapaneseForLiveConversion(U'ﾟ'));
   EXPECT_FALSE(azookey::core::IsJapaneseForLiveConversion(U'a'));
   EXPECT_FALSE(azookey::core::IsJapaneseForLiveConversion(U'1'));
   EXPECT_FALSE(azookey::core::IsJapaneseForLiveConversion(U'、'));
@@ -55,13 +57,26 @@ TEST(LiveConversionChunkerTest, GroupsJapaneseSpansAndVerbatimSpans) {
 }
 
 TEST(LiveConversionChunkerTest, TreatsKanaExtensionsAsJapaneseButKeepsPunctuationVerbatim) {
-  const auto chunks = azookey::core::GroupLiveConversionChunks("ｶﾀｶﾅコーヒー!?");
+  const auto chunks = azookey::core::GroupLiveConversionChunks("ｶﾞﾊﾟコーヒー!?");
 
-  EXPECT_EQ(ChunkTexts(chunks), (std::vector<std::string>{"ｶﾀｶﾅコーヒー", "!?"}));
+  EXPECT_EQ(ChunkTexts(chunks), (std::vector<std::string>{"ｶﾞﾊﾟコーヒー", "!?"}));
   EXPECT_EQ(ChunkKinds(chunks), (std::vector<LiveConversionChunkKind>{
                                     LiveConversionChunkKind::Convert,
                                     LiveConversionChunkKind::Verbatim,
                                 }));
+}
+
+TEST(LiveConversionChunkerTest, RejectsUtf8EncodedSurrogateAsByteGranularUnits) {
+  std::string previous{"\xed\xa0\x80", 3};
+  previous += 'a';
+  std::string current{"\xed\xa0", 2};
+  current += 'b';
+
+  const auto plan = azookey::core::ComputeLiveConversionChunkPlan(previous, current);
+
+  EXPECT_EQ(plan.unchanged_prefix_bytes, 2u);
+  EXPECT_EQ(plan.replace_old_begin_byte, 2u);
+  EXPECT_EQ(plan.replace_new_begin_byte, 2u);
 }
 
 TEST(LiveConversionChunkerTest, ComputesFreshPlan) {

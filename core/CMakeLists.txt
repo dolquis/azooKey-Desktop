@@ -1,4 +1,5 @@
 add_library(azookey_core STATIC
+  src/LiveConversionChunker.cpp
   src/NumberRewriter.cpp
   src/RomajiKanaConverter.cpp
   src/SimpleConverter.cpp

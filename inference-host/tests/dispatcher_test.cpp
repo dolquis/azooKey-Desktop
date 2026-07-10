@@ -982,3 +982,74 @@ TEST_F(DispatcherTest, CrossClientAuthIsolation) {
   ASSERT_TRUE(resp_a2.has_value());
   EXPECT_TRUE(ipc::ParseAddUserWordResponse(resp_a2->payload_json)->ok);
 }
+
+TEST_F(DispatcherTest, CrossClientCancelUsesHandshakeClientIdNamespace) {
+  azookey::host::Dispatcher primary_a(&engine, &scheduler, &user_dict, DefaultDispatcherConfig());
+  azookey::host::Dispatcher cancel_a(&engine, &scheduler, &user_dict, DefaultDispatcherConfig());
+  azookey::host::Dispatcher primary_b(&engine, &scheduler, &user_dict, DefaultDispatcherConfig());
+
+  auto handshake = [this](azookey::host::Dispatcher& connection, const std::string& client_id,
+                          uint64_t request_id) {
+    ipc::HandshakeRequest req;
+    req.tip_version = "0.1.0";
+    req.protocol_version = kProtocolVersion;
+    req.client_id = client_id;
+    auto response = connection.Dispatch(
+        MakeReq(request_id, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+    return response && ipc::ParseHandshakeResponse(response->payload_json)->accepted;
+  };
+
+  ASSERT_TRUE(handshake(primary_a, "client-a", 1));
+  ASSERT_TRUE(handshake(cancel_a, "client-a", 2));
+  ASSERT_TRUE(handshake(primary_b, "client-b", 3));
+
+  ipc::CancelPayload cancel;
+  cancel.target_request_id = 81;
+  EXPECT_FALSE(cancel_a.Dispatch(MakeReq(4, ipc::MessageType::Cancel, ipc::BuildCancel(cancel)))
+                   .has_value());
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "わたし";
+  const auto query_payload = ipc::BuildQueryCandidatesRequest(query);
+
+  auto response_b =
+      primary_b.Dispatch(MakeReq(81, ipc::MessageType::QueryCandidates, query_payload));
+  ASSERT_TRUE(response_b.has_value());
+
+  auto response_a =
+      primary_a.Dispatch(MakeReq(81, ipc::MessageType::QueryCandidates, query_payload));
+  EXPECT_FALSE(response_a.has_value());
+}
+
+TEST_F(DispatcherTest, RepeatedHandshakeDoesNotRetainClientStateAfterDisconnect) {
+  auto handshake = [this](azookey::host::Dispatcher& connection, uint64_t request_id) {
+    ipc::HandshakeRequest req;
+    req.tip_version = "0.1.0";
+    req.protocol_version = kProtocolVersion;
+    req.client_id = "client-a";
+    auto response = connection.Dispatch(
+        MakeReq(request_id, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+    return response && ipc::ParseHandshakeResponse(response->payload_json)->accepted;
+  };
+
+  {
+    azookey::host::Dispatcher connection(&engine, &scheduler, &user_dict,
+                                         DefaultDispatcherConfig());
+    ASSERT_TRUE(handshake(connection, 1));
+    ASSERT_TRUE(handshake(connection, 2));
+
+    ipc::CancelPayload cancel;
+    cancel.target_request_id = 81;
+    EXPECT_FALSE(connection.Dispatch(MakeReq(3, ipc::MessageType::Cancel, ipc::BuildCancel(cancel)))
+                     .has_value());
+  }
+
+  azookey::host::Dispatcher replacement(&engine, &scheduler, &user_dict, DefaultDispatcherConfig());
+  ASSERT_TRUE(handshake(replacement, 4));
+  ipc::QueryCandidatesRequest query;
+  query.reading = "わたし";
+  EXPECT_TRUE(replacement
+                  .Dispatch(MakeReq(81, ipc::MessageType::QueryCandidates,
+                                    ipc::BuildQueryCandidatesRequest(query)))
+                  .has_value());
+}

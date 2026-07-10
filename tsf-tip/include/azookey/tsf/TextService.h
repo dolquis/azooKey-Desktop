@@ -105,6 +105,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
   uint64_t pending_ipc_request_id_for_test();
+  const std::string& ipc_client_id_for_test() const { return ipc_client_id_; }
   std::string pending_ipc_reading_for_test();
   std::string pending_ipc_raw_romaji_for_test();
   void set_ipc_pipe_name_for_test(std::string pipe_name);
@@ -149,6 +150,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::optional<PendingCommitObservation> pending_commit_observation_;
 
   // IPC worker thread state.
+  std::string ipc_client_id_;
   ipc::NamedPipeClient ipc_client_;
   std::mutex ipc_mtx_;
   std::condition_variable ipc_cv_;

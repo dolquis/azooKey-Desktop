@@ -11,6 +11,7 @@ struct HandshakeRequest {
   std::string tip_version;
   int protocol_version{1};
   std::vector<std::string> capabilities;
+  std::string client_id;
   std::string handshake_token;
 };
 

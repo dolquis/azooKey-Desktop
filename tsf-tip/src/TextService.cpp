@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <optional>
@@ -21,6 +22,22 @@ constexpr uint32_t kCancelConnectTimeoutMs = 200;
 constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
 constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
 constexpr uint32_t kTimeoutCancelHandshakeTimeoutMs = 10;
+
+std::string CreateIpcClientId() {
+  GUID guid{};
+  if (FAILED(CoCreateGuid(&guid))) return {};
+
+  char buffer[37]{};
+  const int written = std::snprintf(
+      buffer, sizeof(buffer), "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+      static_cast<unsigned long>(guid.Data1), static_cast<unsigned int>(guid.Data2),
+      static_cast<unsigned int>(guid.Data3), static_cast<unsigned int>(guid.Data4[0]),
+      static_cast<unsigned int>(guid.Data4[1]), static_cast<unsigned int>(guid.Data4[2]),
+      static_cast<unsigned int>(guid.Data4[3]), static_cast<unsigned int>(guid.Data4[4]),
+      static_cast<unsigned int>(guid.Data4[5]), static_cast<unsigned int>(guid.Data4[6]),
+      static_cast<unsigned int>(guid.Data4[7]));
+  return written == 36 ? std::string(buffer, 36) : std::string();
+}
 
 void DebugLog(const std::string& message) {
 #ifdef _DEBUG
@@ -143,7 +160,11 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
 }  // namespace testing
 #endif
 
-TextService::TextService() = default;
+TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
+  if (ipc_client_id_.empty()) {
+    DebugLog("IPC: CoCreateGuid failed; using legacy client namespace");
+  }
+}
 
 TextService::~TextService() {
   StopIpcWorker();
@@ -1288,6 +1309,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   hs.protocol_version = 1;
   hs.capabilities = {"ping", "query_candidates", "query_batch_conversion", "commit_observation",
                      "cancel"};
+  hs.client_id = ipc_client_id_;
   hs.handshake_token = IpcHandshakeTokenFromEnv();
 
   Envelope henv;

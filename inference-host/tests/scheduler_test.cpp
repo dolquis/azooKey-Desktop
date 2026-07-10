@@ -7,12 +7,12 @@
 //
 // Platform-neutral.
 
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <thread>
 #include <unordered_set>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/host/RequestScheduler.h"
 
@@ -162,6 +162,43 @@ TEST(RequestSchedulerTest, CancelDoesNotAffectLatest) {
   // Canceling the latest must NOT clear "latest" flag.
   EXPECT_TRUE(s.IsLatest(42));
   EXPECT_TRUE(s.IsCanceled(42));
+}
+
+TEST(RequestSchedulerTest, ClientScopesIsolateCancellationAndLatestRequest) {
+  host::RequestScheduler s;
+
+  s.Cancel("client-a", 7);
+  EXPECT_TRUE(s.IsCanceled("client-a", 7));
+  EXPECT_FALSE(s.IsCanceled("client-b", 7));
+
+  auto canceled = s.TrackCancellation("client-a", 7);
+  auto active = s.TrackCancellation("client-b", 7);
+  EXPECT_TRUE(canceled->load());
+  EXPECT_FALSE(active->load());
+  s.CompleteRequest("client-a", 7);
+  s.CompleteRequest("client-b", 7);
+
+  s.MarkLatest("client-a", 10);
+  s.MarkLatest("client-b", 20);
+  EXPECT_TRUE(s.IsLatest("client-a", 10));
+  EXPECT_FALSE(s.IsLatest("client-a", 20));
+  EXPECT_TRUE(s.IsLatest("client-b", 20));
+}
+
+TEST(RequestSchedulerTest, LastClientConnectionReclaimsScopedState) {
+  host::RequestScheduler s;
+  s.RegisterClient("client-a");
+  s.RegisterClient("client-a");
+  s.MarkLatest("client-a", 10);
+  s.Cancel("client-a", 7);
+
+  s.UnregisterClient("client-a");
+  EXPECT_TRUE(s.IsCanceled("client-a", 7));
+  EXPECT_TRUE(s.IsLatest("client-a", 10));
+
+  s.UnregisterClient("client-a");
+  EXPECT_FALSE(s.IsCanceled("client-a", 7));
+  EXPECT_FALSE(s.IsLatest("client-a", 10));
 }
 
 TEST(RequestSchedulerTest, NextRequestIdThreadSafety) {

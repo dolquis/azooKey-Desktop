@@ -50,6 +50,7 @@ TEST(PayloadsTest, Handshake) {
   req.tip_version = "0.1.0";
   req.protocol_version = 1;
   req.capabilities = {"live_conversion", "cancel"};
+  req.client_id = "tip-client-123";
   req.handshake_token = "token-123";
   auto json = azookey::ipc::BuildHandshakeRequest(req);
   auto parsed = azookey::ipc::ParseHandshakeRequest(json);
@@ -57,7 +58,13 @@ TEST(PayloadsTest, Handshake) {
   EXPECT_EQ(parsed->tip_version, "0.1.0");
   ASSERT_EQ(parsed->capabilities.size(), 2u);
   EXPECT_EQ(parsed->capabilities[0], "live_conversion");
+  EXPECT_EQ(parsed->client_id, "tip-client-123");
   EXPECT_EQ(parsed->handshake_token, "token-123");
+
+  auto legacy = azookey::ipc::ParseHandshakeRequest(
+      R"({"tip_version":"0.1.0","protocol_version":1,"capabilities":[]})");
+  ASSERT_TRUE(legacy.has_value());
+  EXPECT_TRUE(legacy->client_id.empty());
 
   azookey::ipc::HandshakeResponse res;
   res.host_version = "0.1.0";

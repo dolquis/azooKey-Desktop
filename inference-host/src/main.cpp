@@ -17,6 +17,8 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#else
+#include <signal.h>
 #endif
 
 #include "azookey/core/SimpleConverter.h"
@@ -49,13 +51,17 @@ BOOL WINAPI HandleConsoleControl(DWORD control_type) {
     case CTRL_BREAK_EVENT:
     case CTRL_CLOSE_EVENT:
       g_console_stop_requested.store(true, std::memory_order_relaxed);
-      if (g_main_thread != nullptr) {
-        CancelSynchronousIo(g_main_thread);
-      }
-      if (control_type == CTRL_CLOSE_EVENT && g_shutdown_complete != nullptr) {
-        // Windows terminates the process after this handler returns. Keep the
-        // handler alive while main unwinds and InferenceEngine flushes learning.
-        WaitForSingleObject(g_shutdown_complete, 4500);
+      // StopRequested() may have just been checked before stdio enters a
+      // blocking read. Retry cancellation while main unwinds to close that
+      // race without performing persistence work in the control handler.
+      for (DWORD waited_ms = 0; waited_ms < 4500; waited_ms += 10) {
+        if (g_main_thread != nullptr) {
+          CancelSynchronousIo(g_main_thread);
+        }
+        if (g_shutdown_complete != nullptr &&
+            WaitForSingleObject(g_shutdown_complete, 10) == WAIT_OBJECT_0) {
+          break;
+        }
       }
       return TRUE;
     default:
@@ -103,6 +109,20 @@ bool StopRequested() {
   return g_console_stop_requested.load(std::memory_order_relaxed);
 #else
   return false;
+#endif
+}
+
+bool RegisterSignalHandlers() {
+#ifdef _WIN32
+  return std::signal(SIGINT, HandleSignal) != SIG_ERR &&
+         std::signal(SIGTERM, HandleSignal) != SIG_ERR;
+#else
+  struct sigaction action {};
+  action.sa_handler = HandleSignal;
+  sigemptyset(&action.sa_mask);
+  // Deliberately omit SA_RESTART so a blocked stdio read returns on shutdown.
+  action.sa_flags = 0;
+  return sigaction(SIGINT, &action, nullptr) == 0 && sigaction(SIGTERM, &action, nullptr) == 0;
 #endif
 }
 
@@ -373,8 +393,9 @@ int main(int argc, char** argv) {
   }
   std::cerr << std::endl;
 
-  std::signal(SIGINT, HandleSignal);
-  std::signal(SIGTERM, HandleSignal);
+  if (!RegisterSignalHandlers()) {
+    std::cerr << "warn: failed to register process shutdown signal handlers" << std::endl;
+  }
 #ifdef _WIN32
   if (!console_control.Register()) {
     std::cerr << "warn: failed to register Windows console shutdown handler" << std::endl;

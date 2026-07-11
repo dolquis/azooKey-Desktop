@@ -23,7 +23,10 @@
   に `Cancel` を送ってから EditSession を要求する。
   Cancel は同じ Named Pipe への短命な control 接続を Handshake 済みにして送る。
   これにより、primary 接続が `QueryCandidates` 応答待ちで塞がっていても Host 側の
-  共有 `RequestScheduler` に `target_request_id` が届く。
+  共有 `RequestScheduler` に `target_request_id` が届く。TIP インスタンスは primary / control
+  接続の Handshake に同じ `client_id` を付け、Host は `(client_id, request_id)` 単位で
+  Cancel 状態を管理する。Host は非空の `client_id` ごとに接続数を追跡し、最後の接続が閉じた
+  時点でその状態を破棄する。別アプリの TIP が同じ `request_id` を使っても相互にキャンセルしない。
   control 接続が使えない場合は primary 接続への best-effort 送信に戻り、到着した古い
   応答は staleness check で破棄する。
 - 確定時の EditSession は同期要求で実行し、`SetText` / `EndComposition` が完了した
@@ -40,9 +43,10 @@
 （および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下は現状の配線済み
 フィールドの要約。
 
-- ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, handshake_token?)` /
+- ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, client_id?, handshake_token?)` /
   応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded)`。
-  `handshake_token` 経由の per-connection 認証ゲートを持つ（後述）。
+  `client_id` は primary / control 接続間で Cancel 名前空間を共有するための TIP インスタンス ID、
+  `handshake_token` は per-connection 認証ゲートに使う（後述）。
 - ✅ `Ping` / `Health`
 - ✅ `LoadModel(path, backend, n_gpu_layers?)` / `LoadModelResponse(ok, error?)`。
   Host は `ProbeZenzaiGgufModel` で GGUF を実プローブし、成功時は `ZenzaiModelConverter`
@@ -71,6 +75,9 @@
   後続メッセージを拒否する。token 未設定（空）の場合は認証不要で全メッセージを受け付ける。
 - Handshake の成否は接続ごとの `authenticated_` 状態に反映され、未認証時は Health が
   `last_error="not authenticated"` を返す。
+- `client_id` を送る現行 TIP は RequestScheduler の Cancel / latest 状態を TIP インスタンス単位に
+  分離する。旧クライアントが `client_id` を省略した場合は空の legacy 名前空間として受理し、
+  protocol version 1 の後方互換を保つ。legacy 名前空間は接続終了時の個別破棄の対象外である。
 
 ## 学習
 

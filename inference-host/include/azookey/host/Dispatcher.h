@@ -35,6 +35,7 @@ class Dispatcher {
   Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
              learning::UserDictionary* user_dict, DispatcherConfig config = {},
              SettingsStore* settings_store = nullptr);
+  ~Dispatcher();
 
   std::optional<ipc::Envelope> Dispatch(const ipc::Envelope& request);
 
@@ -54,6 +55,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleRemoveUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleUpdateConfig(const ipc::Envelope& req);
   bool RequiresAuthenticatedSession() const;
+  void SetClientId(std::string client_id);
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;
@@ -61,6 +63,7 @@ class Dispatcher {
   SettingsStore* settings_store_;
   DispatcherConfig config_;
   bool authenticated_{false};
+  std::string client_id_;
 };
 
 }  // namespace azookey::host

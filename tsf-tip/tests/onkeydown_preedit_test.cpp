@@ -483,6 +483,15 @@ class TextServiceHarness {
 
 }  // namespace
 
+TEST(TsfTipOnKeyDownPreeditTest, TextServiceInstancesUseDistinctIpcClientIds) {
+  azookey::tsf::TextService first;
+  azookey::tsf::TextService second;
+
+  EXPECT_FALSE(first.ipc_client_id_for_test().empty());
+  EXPECT_FALSE(second.ipc_client_id_for_test().empty());
+  EXPECT_NE(first.ipc_client_id_for_test(), second.ipc_client_id_for_test());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, OnTestKeyDownAllocationFailureReturnsOutOfMemory) {
   TextServiceHarness h;
 

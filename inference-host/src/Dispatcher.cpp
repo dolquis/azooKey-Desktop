@@ -66,20 +66,21 @@ std::optional<BackendKind> ParseBackend(const std::string& backend) {
 
 class RequestCompletionGuard {
  public:
-  RequestCompletionGuard(RequestScheduler* scheduler, uint64_t request_id)
-      : scheduler_(scheduler), request_id_(request_id) {}
+  RequestCompletionGuard(RequestScheduler* scheduler, std::string client_id, uint64_t request_id)
+      : scheduler_(scheduler), client_id_(std::move(client_id)), request_id_(request_id) {}
 
   ~RequestCompletionGuard() { Complete(); }
 
   void Complete() {
     if (active_) {
-      scheduler_->CompleteRequest(request_id_);
+      scheduler_->CompleteRequest(client_id_, request_id_);
       active_ = false;
     }
   }
 
  private:
   RequestScheduler* scheduler_;
+  std::string client_id_;
   uint64_t request_id_;
   bool active_{true};
 };
@@ -98,6 +99,8 @@ Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
     config_.update_config_mutex = std::make_shared<std::mutex>();
   }
 }
+
+Dispatcher::~Dispatcher() { SetClientId({}); }
 
 std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
   if (req.type != ipc::MessageType::Handshake && RequiresAuthenticatedSession()) {
@@ -206,8 +209,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     const bool token_ok =
         config_.handshake_token.empty() || parsed->handshake_token == config_.handshake_token;
     res.accepted = version_ok && token_ok;
+    SetClientId(res.accepted ? std::move(parsed->client_id) : std::string());
   } else {
     res.accepted = false;
+    SetClientId({});
   }
   authenticated_ = res.accepted;
   res.model_loaded = engine_->model_loaded();
@@ -223,6 +228,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
 
 bool Dispatcher::RequiresAuthenticatedSession() const {
   return !config_.handshake_token.empty() && !authenticated_;
+}
+
+void Dispatcher::SetClientId(std::string client_id) {
+  if (client_id == client_id_) return;
+
+  if (!client_id_.empty()) {
+    scheduler_->UnregisterClient(client_id_);
+  }
+  client_id_ = std::move(client_id);
+  if (!client_id_.empty()) {
+    scheduler_->RegisterClient(client_id_);
+  }
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandlePing(const ipc::Envelope& req) {
@@ -281,9 +298,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     res.partial = false;
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
   }
-  auto cancel = scheduler_->TrackCancellation(req.request_id);
-  scheduler_->MarkLatest(req.request_id);
-  RequestCompletionGuard completion(scheduler_, req.request_id);
+  auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  scheduler_->MarkLatest(client_id_, req.request_id);
+  RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
   auto candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(),
                                              cancel.get(), parsed->max_candidates, parsed->live);
@@ -310,9 +327,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
   }
 
-  auto cancel = scheduler_->TrackCancellation(req.request_id);
-  scheduler_->MarkLatest(req.request_id);
-  RequestCompletionGuard completion(scheduler_, req.request_id);
+  auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  scheduler_->MarkLatest(client_id_, req.request_id);
+  RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
   auto candidates = engine_->QueryCandidates(parsed->reading, "", NowSec(), cancel.get(),
                                              parsed->max_candidates, false);
@@ -344,7 +361,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
 
 void Dispatcher::HandleCancel(const ipc::Envelope& req) {
   if (auto parsed = ipc::ParseCancel(req.payload_json)) {
-    scheduler_->Cancel(parsed->target_request_id);
+    scheduler_->Cancel(client_id_, parsed->target_request_id);
   }
 }
 

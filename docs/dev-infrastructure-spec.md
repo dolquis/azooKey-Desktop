@@ -341,6 +341,12 @@ follow-up を予定（既存ユーザーデータ migration を伴うため、�
 `MoveFileEx`（`MOVEFILE_REPLACE_EXISTING` + `MOVEFILE_WRITE_THROUGH`）で
 rename」で原子的に行い、書き込み中クラッシュによる破損を防ぐ。
 
+Host は SIGINT / SIGTERM と Windows の CTRL+C / CTRL+Break / コンソール終了を
+停止要求として処理し、`InferenceEngine` のデストラクタが未保存の学習観測を
+flush してから終了する。
+Windows のコンソール終了ハンドラは停止要求だけを通知し、通常の終了処理が
+完了するまで OS の制限時間内で待機する。
+
 ### 5.5 本マイルストーンの範囲と将来課題
 
 本マイルストーンの範囲は **保存先統一・ディレクトリ自動作成・原子的書き込み・

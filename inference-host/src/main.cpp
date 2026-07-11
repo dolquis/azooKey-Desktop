@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -16,6 +17,8 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#else
+#include <signal.h>
 #endif
 
 #include "azookey/core/SimpleConverter.h"
@@ -33,9 +36,95 @@
 namespace {
 
 constexpr const char* kHostVersion = "0.1.0";
-volatile std::sig_atomic_t g_stop_requested = 0;
+volatile std::sig_atomic_t g_signal_stop_requested = 0;
 
-void HandleSignal(int) { g_stop_requested = 1; }
+void HandleSignal(int) { g_signal_stop_requested = 1; }
+
+#ifdef _WIN32
+std::atomic<bool> g_console_stop_requested{false};
+HANDLE g_main_thread = nullptr;
+HANDLE g_shutdown_complete = nullptr;
+
+BOOL WINAPI HandleConsoleControl(DWORD control_type) {
+  switch (control_type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+    case CTRL_CLOSE_EVENT:
+      g_console_stop_requested.store(true, std::memory_order_relaxed);
+      // StopRequested() may have just been checked before stdio enters a
+      // blocking read. Retry cancellation while main unwinds to close that
+      // race without performing persistence work in the control handler.
+      for (DWORD waited_ms = 0; waited_ms < 4500; waited_ms += 10) {
+        if (g_main_thread != nullptr) {
+          CancelSynchronousIo(g_main_thread);
+        }
+        if (g_shutdown_complete != nullptr &&
+            WaitForSingleObject(g_shutdown_complete, 10) == WAIT_OBJECT_0) {
+          break;
+        }
+      }
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+class ConsoleControlRegistration {
+ public:
+  ConsoleControlRegistration() = default;
+  ConsoleControlRegistration(const ConsoleControlRegistration&) = delete;
+  ConsoleControlRegistration& operator=(const ConsoleControlRegistration&) = delete;
+
+  bool Register() {
+    g_shutdown_complete = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (g_shutdown_complete == nullptr) return false;
+
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                         &g_main_thread, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      return false;
+    }
+    registered_ = SetConsoleCtrlHandler(HandleConsoleControl, TRUE) != FALSE;
+    return registered_;
+  }
+
+  ~ConsoleControlRegistration() {
+    if (g_shutdown_complete != nullptr) {
+      SetEvent(g_shutdown_complete);
+    }
+    if (registered_) {
+      SetConsoleCtrlHandler(HandleConsoleControl, FALSE);
+    }
+    // These process-lifetime handles intentionally remain valid until all
+    // concurrently running console control handlers have returned.
+  }
+
+ private:
+  bool registered_ = false;
+};
+#endif
+
+bool StopRequested() {
+  if (g_signal_stop_requested != 0) return true;
+#ifdef _WIN32
+  return g_console_stop_requested.load(std::memory_order_relaxed);
+#else
+  return false;
+#endif
+}
+
+bool RegisterSignalHandlers() {
+#ifdef _WIN32
+  return std::signal(SIGINT, HandleSignal) != SIG_ERR &&
+         std::signal(SIGTERM, HandleSignal) != SIG_ERR;
+#else
+  struct sigaction action {};
+  action.sa_handler = HandleSignal;
+  sigemptyset(&action.sa_mask);
+  // Deliberately omit SA_RESTART so a blocked stdio read returns on shutdown.
+  action.sa_flags = 0;
+  return sigaction(SIGINT, &action, nullptr) == 0 && sigaction(SIGTERM, &action, nullptr) == 0;
+#endif
+}
 
 void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   const std::string backend = AZOOKEY_BACKEND_DEFAULT;
@@ -107,6 +196,11 @@ std::string GetEnvString(const char* name) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  // Construct before the engine so its destructor signals completion only
+  // after the engine destructor has flushed pending learning observations.
+  ConsoleControlRegistration console_control;
+#endif
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
   const auto default_backend = config.backend;
@@ -299,6 +393,15 @@ int main(int argc, char** argv) {
   }
   std::cerr << std::endl;
 
+  if (!RegisterSignalHandlers()) {
+    std::cerr << "warn: failed to register process shutdown signal handlers" << std::endl;
+  }
+#ifdef _WIN32
+  if (!console_control.Register()) {
+    std::cerr << "warn: failed to register Windows console shutdown handler" << std::endl;
+  }
+#endif
+
   if (pipe_mode) {
     if (pipe_name.empty()) {
       pipe_name = azookey::ipc::DefaultPipeName();
@@ -314,10 +417,8 @@ int main(int argc, char** argv) {
       return 2;
     }
 
-    std::signal(SIGINT, HandleSignal);
-    std::signal(SIGTERM, HandleSignal);
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
-    while (!g_stop_requested) {
+    while (!StopRequested()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     server.Stop();
@@ -325,7 +426,7 @@ int main(int argc, char** argv) {
   }
 
   std::string line;
-  while (std::getline(std::cin, line)) {
+  while (!StopRequested() && std::getline(std::cin, line)) {
     if (line.empty()) continue;
     auto env = azookey::ipc::Deserialize(line);
     if (!env) {

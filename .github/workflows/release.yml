@@ -36,6 +36,7 @@ jobs:
   release:
     name: Build, sign and draft release
     runs-on: windows-2022
+    timeout-minutes: 45
     # 未確定要素（M28 wapproj / 証明書ルート / Secrets）が揃うまで無効。
     # 人間が repository variable RELEASE_ENABLED=true を設定すると有効化される。
     if: ${{ vars.RELEASE_ENABLED == 'true' }}

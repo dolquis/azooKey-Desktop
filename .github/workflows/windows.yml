@@ -9,6 +9,13 @@ permissions:
   contents: read
   pull-requests: write
 
+# CI 高速化: 同一 PR / ブランチで新しい push が来たら進行中の run を畳む。
+# main への push は畳まない（各コミットのビルドを残す）ため PR イベント限定で
+# cancel-in-progress を有効化する。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   settings-schema:
     name: Settings JSON Schema
@@ -286,8 +293,12 @@ jobs:
       - name: Run tests via CTest
         run: ctest --preset linux-debug --no-tests=error
 
-  cpp-quality:
-    name: C++ quality (format/tidy)
+  # cpp-quality was a single sequential job (format then tidy). It is split into
+  # two independent jobs so the required format gate and the advisory tidy run
+  # concurrently — the required gate fails fast without waiting on the slower
+  # tidy configure step (dev-infra spec §4.3/§11.5).
+  cpp-format:
+    name: C++ format (changed-lines gate)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -296,11 +307,10 @@ jobs:
           # Need the PR base commit so the changed-lines gate can diff against it.
           fetch-depth: 0
 
-      - name: Install analysis tools
+      - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build clang-format-18 clang-tidy-18
+          sudo apt-get install -y --no-install-recommends clang-format-18
 
       # Required gate. Enforces .clang-format on newly added/changed lines only
       # (dev-infra spec M37 acceptance: clang-format is zero-diff for new code).
@@ -336,6 +346,22 @@ jobs:
           printf '%s\n' "$DIFF"
           echo "::error::Run 'just format' (or clang-format) on your changes."
           exit 1
+
+  cpp-tidy:
+    name: C++ tidy (advisory)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          # Need the PR base commit so the changed-files diff can target it.
+          fetch-depth: 0
+
+      - name: Install analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build clang-tidy-18
 
       # Advisory only (dev-infra spec §11.5: clang-tidy is an optional extension,
       # not a required gate). Surfaces static-analysis findings on changed files

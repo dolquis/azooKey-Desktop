@@ -208,7 +208,7 @@ OFF のまま）。
 
 ### 4.3 追加チェック
 
-- `clang-format` 変更行ゲート（`cpp-quality` ジョブ、`git-clang-format`）—
+- `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の
   既存行）では PR を止めない。全体整形 PR とツリー全体の
@@ -229,9 +229,13 @@ OFF のまま）。
   module version を導入して同じ wrapper を呼ぶ
 
 clang-tidy / CodeQL は**必須ゲートには含めない**（導入コストが高く、段階導入と
-する）。ただし変更行 clang-tidy は `cpp-quality` ジョブで advisory（`continue-on-error`、
+する）。ただし変更行 clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
 非ブロッキング）として実行し、変更 C++ ソースの静的解析所見を可視化する。
 所見の有無で PR を止めない（§11.5）。CodeQL は将来拡張のまま据え置く。
+なお `clang-format`（必須）と `clang-tidy`（advisory）は独立ジョブ
+（`cpp-format` / `cpp-tidy`）に分割し、GitHub Actions 上で並行実行して CI 全体の
+所要時間を短縮する。加えてワークフロー全体に `concurrency` グループを設定し、
+同一 PR で新しい push が来たら進行中の run を畳む（`main` への push は畳まない）。
 
 ### 4.4 artifact 整理
 
@@ -1115,7 +1119,7 @@ DPAPI 暗号化は既存マイルストーン M11 / M12 / M28〜M34 でカバー
 CI への clang-tidy / CodeQL の**必須化**は導入・調整コストが高い。本トラックでは
 `clang-format`（変更行ゲート）までを必須とし、clang-tidy / CodeQL は必須ゲートに
 しない（§4.3）。changed-lines clang-tidy（差分行のみの静的解析）は、既存負債で
-PR が止まるのを避けつつ新規コード品質を上げる中間策として、`cpp-quality` ジョブに
+PR が止まるのを避けつつ新規コード品質を上げる中間策として、`cpp-tidy` ジョブに
 **advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
 （全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
 ツール導入 第2弾）。

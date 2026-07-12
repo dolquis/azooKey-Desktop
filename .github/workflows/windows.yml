@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,6 +21,7 @@ jobs:
   settings-schema:
     name: Settings JSON Schema
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +42,7 @@ jobs:
   powershell-quality:
     name: PowerShell lint/test
     runs-on: windows-2022
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +66,7 @@ jobs:
   windows-build:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022
+    timeout-minutes: 45
     env:
       # The root CMakeLists auto-detects sccache on PATH and wires it as the
       # compiler launcher (flipping MSVC Debug info to /Z7 Embedded for cache
@@ -128,8 +132,16 @@ jobs:
           ctest --preset ${{ matrix.preset }} --no-tests=error 2>&1 | Tee-Object -FilePath test-report-${{ matrix.config }}.md
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # 失敗時のみ投稿する（dev-infra spec §4 の基盤定義は「失敗時 PR コメント +
+      # test_report artifact」。成功時はログ artifact で十分で、毎 push の成功
+      # コメントは PR を埋めるノイズになるため）。
       - name: Post diagnostic comment to PR
-        if: always() && github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          !github.event.pull_request.head.repo.fork &&
+          (steps.configure.outcome != 'success' ||
+           steps.build.outcome != 'success' ||
+           steps.run_tests.outcome != 'success')
         uses: actions/github-script@v7
         with:
           script: |
@@ -206,6 +218,7 @@ jobs:
   windows-llama-build:
     name: Windows llama.cpp compile
     runs-on: windows-2022
+    timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -256,6 +269,7 @@ jobs:
   linux-build:
     name: Linux Debug
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -300,6 +314,7 @@ jobs:
   cpp-format:
     name: C++ format (changed-lines gate)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -350,6 +365,7 @@ jobs:
   cpp-tidy:
     name: C++ tidy (advisory)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:

@@ -3,12 +3,34 @@ name: Build
 on:
   push:
     branches: [main]
+    # ドキュメント・計画・エージェント設定・legacy 参照資産だけの変更ではビルド系
+    # ジョブを起動しない。branch protection 未設定のためワークフローレベルの
+    # paths-ignore で足りる（required checks を導入する場合は changes + ci-gate 構成へ）。
+    # ワークフロー自身（.github/workflows/**）やコードは無視パターンに含めないため
+    # 変更時は通常どおり CI が走る。
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'plans/**'
+      - '.claude/**'
+      - '.codex/**'
+      - '.agents/**'
+      - 'legacy/**'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'plans/**'
+      - '.claude/**'
+      - '.codex/**'
+      - '.agents/**'
+      - 'legacy/**'
   workflow_dispatch:
 
+# 既定は最小権限。PR への診断コメント投稿に必要な pull-requests: write は、それを
+# 行う windows-build ジョブにのみ付与する（下記ジョブ単位 permissions）。
 permissions:
   contents: read
-  pull-requests: write
 
 # CI 高速化: 同一 PR / ブランチで新しい push が来たら進行中の run を畳む。
 # main への push は畳まない（各コミットのビルドを残す）ため PR イベント限定で
@@ -67,6 +89,11 @@ jobs:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022
     timeout-minutes: 45
+    # このジョブだけが PR へ診断コメントを投稿するため pull-requests: write を持つ。
+    # 他ジョブはワークフロー既定の contents: read のみ。
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       # The root CMakeLists auto-detects sccache on PATH and wires it as the
       # compiler launcher (flipping MSVC Debug info to /Z7 Embedded for cache

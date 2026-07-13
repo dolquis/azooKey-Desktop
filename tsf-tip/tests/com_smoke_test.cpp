@@ -2,9 +2,9 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
-
 #include <gtest/gtest.h>
 #include <msctf.h>
+#include <olectl.h>
 
 #include <string>
 
@@ -359,31 +359,102 @@ bool InprocServerKeyExists() {
   return true;
 }
 
-bool CategoryContainsTextService(REFGUID category) {
+HRESULT GetCategoryRegistrationState(REFGUID category, bool* registered) {
+  if (!registered) return E_POINTER;
+  *registered = false;
+
   ITfCategoryMgr* cat_mgr = nullptr;
-  if (FAILED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr))) ||
-      !cat_mgr) {
-    return false;
-  }
+  HRESULT hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr));
+  if (FAILED(hr)) return hr;
+  if (!cat_mgr) return E_NOINTERFACE;
 
   IEnumGUID* items = nullptr;
-  HRESULT hr = cat_mgr->EnumItemsInCategory(category, &items);
+  hr = cat_mgr->EnumItemsInCategory(category, &items);
   cat_mgr->Release();
-  if (FAILED(hr) || !items) return false;
+  if (FAILED(hr)) return hr;
+  if (!items) return E_NOINTERFACE;
 
-  bool found = false;
   GUID item{};
   ULONG fetched = 0;
-  while (items->Next(1, &item, &fetched) == S_OK && fetched == 1) {
+  while ((hr = items->Next(1, &item, &fetched)) == S_OK) {
+    if (fetched != 1) {
+      hr = E_FAIL;
+      break;
+    }
     if (IsEqualGUID(item, azookey::tsf::kTextServiceClsid)) {
-      found = true;
+      *registered = true;
       break;
     }
   }
   items->Release();
-  return found;
+  return hr == S_FALSE ? S_OK : hr;
 }
+
+#ifndef NDEBUG
+HRESULT GetProfileRegistrationState(bool* registered) {
+  if (!registered) return E_POINTER;
+  *registered = false;
+
+  ITfInputProcessorProfiles* profiles = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_ITfInputProcessorProfiles, reinterpret_cast<void**>(&profiles));
+  if (FAILED(hr)) return hr;
+  if (!profiles) return E_NOINTERFACE;
+
+  ITfInputProcessorProfileMgr* profile_mgr = nullptr;
+  hr = profiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
+                                reinterpret_cast<void**>(&profile_mgr));
+  profiles->Release();
+  if (FAILED(hr)) return hr;
+  if (!profile_mgr) return E_NOINTERFACE;
+
+  IEnumTfInputProcessorProfiles* items = nullptr;
+  hr = profile_mgr->EnumProfiles(0x0411, &items);
+  profile_mgr->Release();
+  if (FAILED(hr)) return hr;
+  if (!items) return E_NOINTERFACE;
+
+  TF_INPUTPROCESSORPROFILE profile{};
+  ULONG fetched = 0;
+  while ((hr = items->Next(1, &profile, &fetched)) == S_OK) {
+    if (fetched != 1) {
+      hr = E_FAIL;
+      break;
+    }
+    if (profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR &&
+        IsEqualGUID(profile.clsid, azookey::tsf::kTextServiceClsid) &&
+        IsEqualGUID(profile.guidProfile, azookey::tsf::kTextServiceProfileGuid)) {
+      *registered = true;
+      break;
+    }
+  }
+  items->Release();
+  return hr == S_FALSE ? S_OK : hr;
+}
+
+class ScopedForcedCategoryRegistrationFailure {
+ public:
+  ScopedForcedCategoryRegistrationFailure()
+      : active_(SetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", L"1") !=
+                FALSE) {}
+  ~ScopedForcedCategoryRegistrationFailure() {
+    if (active_) SetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", nullptr);
+  }
+
+  bool active() const { return active_; }
+
+  bool Clear() {
+    if (!active_) return true;
+    if (!SetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", nullptr)) return false;
+    active_ = false;
+    return true;
+  }
+
+ private:
+  bool active_{false};
+};
+#endif
 
 }  // namespace
 
@@ -427,6 +498,7 @@ class TsfTipRegistrationSmokeTest : public ::testing::Test {
 
 TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemovesIt) {
   ASSERT_EQ(register_(), S_OK);
+  ASSERT_EQ(register_(), S_OK) << "re-registering the same profile must be idempotent";
   EXPECT_TRUE(InprocServerKeyExists()) << "InprocServer32 not written under HKLM";
 
   ITfInputProcessorProfiles* profiles = nullptr;
@@ -449,8 +521,11 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
       << "TSF profile not registered (DEV-157 regression)";
   EXPECT_TRUE(IsEqualGUID(profile.catid, GUID_TFCAT_TIP_KEYBOARD))
       << "profile not registered under GUID_TFCAT_TIP_KEYBOARD";
-  EXPECT_TRUE(CategoryContainsTextService(GUID_TFCAT_TIPCAP_UIELEMENTENABLED))
-      << "UIElement-enabled category not registered";
+  bool category_registered = false;
+  ASSERT_EQ(GetCategoryRegistrationState(GUID_TFCAT_TIPCAP_UIELEMENTENABLED, &category_registered),
+            S_OK)
+      << "failed to query UIElement-enabled category";
+  EXPECT_TRUE(category_registered) << "UIElement-enabled category not registered";
 
   ASSERT_EQ(unregister_(), S_OK);
   TF_INPUTPROCESSORPROFILE removed{};
@@ -464,3 +539,29 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
   mgr->Release();
   profiles->Release();
 }
+
+#ifndef NDEBUG
+TEST_F(TsfTipRegistrationSmokeTest, FailedCategoryRegistrationRollsBackAndRetrySucceeds) {
+  ScopedForcedCategoryRegistrationFailure forced_failure;
+  ASSERT_TRUE(forced_failure.active()) << "failed to enable the debug-only failure hook";
+
+  EXPECT_EQ(register_(), SELFREG_E_CLASS);
+  EXPECT_FALSE(InprocServerKeyExists()) << "failed registration left InprocServer32 behind";
+  bool profile_registered = false;
+  ASSERT_EQ(GetProfileRegistrationState(&profile_registered), S_OK)
+      << "failed to enumerate TSF profiles after rollback";
+  EXPECT_FALSE(profile_registered) << "failed registration left the TSF profile behind";
+
+  bool category_registered = false;
+  ASSERT_EQ(GetCategoryRegistrationState(GUID_TFCAT_TIP_KEYBOARD, &category_registered), S_OK)
+      << "failed to enumerate the keyboard category after rollback";
+  EXPECT_FALSE(category_registered) << "failed registration left the first TSF category behind";
+
+  ASSERT_TRUE(forced_failure.Clear()) << "failed to disable the debug-only failure hook";
+  ASSERT_EQ(register_(), S_OK) << "registration retry required an explicit unregister";
+  EXPECT_TRUE(InprocServerKeyExists());
+  ASSERT_EQ(GetProfileRegistrationState(&profile_registered), S_OK)
+      << "failed to enumerate TSF profiles after retry";
+  EXPECT_TRUE(profile_registered);
+}
+#endif

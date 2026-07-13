@@ -424,12 +424,13 @@ pCatMgr->RegisterCategory(kTextServiceClsid,
 rollback guard を保持し、後続処理が失敗した場合は `DllUnregisterServer` 相当の
 best-effort cleanup で COM CLSID、TSF プロファイル、カテゴリを削除する。
 同じプロファイルを再登録する呼び出しは成功し、失敗後も明示的な unregister なしで
-再試行できなければならない。
+再試行できなければならない。再登録中に失敗した場合も、以前から存在した登録を復元せず、
+部分状態を残さない完全な未登録状態へ収束させる。
 
 検証は `tsf-tip/tests/com_smoke_test.cpp` の登録 round-trip smoke で行う。
 通常経路では再登録、`GetProfile`、解除を確認する。Debug ビルドでは
 `AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION` によってプロファイル登録後の失敗を注入し、
-残骸がないことと、そのまま再登録できることを確認する。
+最初のカテゴリを登録した後で失敗させ、残骸がないことと、そのまま再登録できることを確認する。
 対話的 TSF セッションを要するため、opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE`
 + 昇格時のみ実行で、CI（headless）では走らない。
 

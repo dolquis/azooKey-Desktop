@@ -359,56 +359,78 @@ bool InprocServerKeyExists() {
   return true;
 }
 
-bool CategoryContainsTextService(REFGUID category) {
+HRESULT GetCategoryRegistrationState(REFGUID category, bool* registered) {
+  if (!registered) return E_POINTER;
+  *registered = false;
+
   ITfCategoryMgr* cat_mgr = nullptr;
-  if (FAILED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr))) ||
-      !cat_mgr) {
-    return false;
-  }
+  HRESULT hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr));
+  if (FAILED(hr)) return hr;
+  if (!cat_mgr) return E_NOINTERFACE;
 
   IEnumGUID* items = nullptr;
-  HRESULT hr = cat_mgr->EnumItemsInCategory(category, &items);
+  hr = cat_mgr->EnumItemsInCategory(category, &items);
   cat_mgr->Release();
-  if (FAILED(hr) || !items) return false;
+  if (FAILED(hr)) return hr;
+  if (!items) return E_NOINTERFACE;
 
-  bool found = false;
   GUID item{};
   ULONG fetched = 0;
-  while (items->Next(1, &item, &fetched) == S_OK && fetched == 1) {
+  while ((hr = items->Next(1, &item, &fetched)) == S_OK) {
+    if (fetched != 1) {
+      hr = E_FAIL;
+      break;
+    }
     if (IsEqualGUID(item, azookey::tsf::kTextServiceClsid)) {
-      found = true;
+      *registered = true;
       break;
     }
   }
   items->Release();
-  return found;
+  return hr == S_FALSE ? S_OK : hr;
 }
 
 #ifndef NDEBUG
-bool ProfileIsRegistered() {
+HRESULT GetProfileRegistrationState(bool* registered) {
+  if (!registered) return E_POINTER;
+  *registered = false;
+
   ITfInputProcessorProfiles* profiles = nullptr;
-  if (FAILED(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_ITfInputProcessorProfiles,
-                              reinterpret_cast<void**>(&profiles))) ||
-      !profiles) {
-    return false;
-  }
+  HRESULT hr = CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_ITfInputProcessorProfiles, reinterpret_cast<void**>(&profiles));
+  if (FAILED(hr)) return hr;
+  if (!profiles) return E_NOINTERFACE;
 
   ITfInputProcessorProfileMgr* profile_mgr = nullptr;
-  HRESULT hr = profiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
-                                        reinterpret_cast<void**>(&profile_mgr));
-  if (SUCCEEDED(hr) && profile_mgr) {
-    TF_INPUTPROCESSORPROFILE profile{};
-    hr = profile_mgr->GetProfile(TF_PROFILETYPE_INPUTPROCESSOR, 0x0411,
-                                 azookey::tsf::kTextServiceClsid,
-                                 azookey::tsf::kTextServiceProfileGuid, nullptr, &profile);
-    profile_mgr->Release();
-  } else if (SUCCEEDED(hr)) {
-    hr = E_NOINTERFACE;
-  }
+  hr = profiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
+                                reinterpret_cast<void**>(&profile_mgr));
   profiles->Release();
-  return SUCCEEDED(hr);
+  if (FAILED(hr)) return hr;
+  if (!profile_mgr) return E_NOINTERFACE;
+
+  IEnumTfInputProcessorProfiles* items = nullptr;
+  hr = profile_mgr->EnumProfiles(0x0411, &items);
+  profile_mgr->Release();
+  if (FAILED(hr)) return hr;
+  if (!items) return E_NOINTERFACE;
+
+  TF_INPUTPROCESSORPROFILE profile{};
+  ULONG fetched = 0;
+  while ((hr = items->Next(1, &profile, &fetched)) == S_OK) {
+    if (fetched != 1) {
+      hr = E_FAIL;
+      break;
+    }
+    if (profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR &&
+        IsEqualGUID(profile.clsid, azookey::tsf::kTextServiceClsid) &&
+        IsEqualGUID(profile.guidProfile, azookey::tsf::kTextServiceProfileGuid)) {
+      *registered = true;
+      break;
+    }
+  }
+  items->Release();
+  return hr == S_FALSE ? S_OK : hr;
 }
 
 class ScopedForcedCategoryRegistrationFailure {
@@ -499,8 +521,11 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
       << "TSF profile not registered (DEV-157 regression)";
   EXPECT_TRUE(IsEqualGUID(profile.catid, GUID_TFCAT_TIP_KEYBOARD))
       << "profile not registered under GUID_TFCAT_TIP_KEYBOARD";
-  EXPECT_TRUE(CategoryContainsTextService(GUID_TFCAT_TIPCAP_UIELEMENTENABLED))
-      << "UIElement-enabled category not registered";
+  bool category_registered = false;
+  ASSERT_EQ(GetCategoryRegistrationState(GUID_TFCAT_TIPCAP_UIELEMENTENABLED, &category_registered),
+            S_OK)
+      << "failed to query UIElement-enabled category";
+  EXPECT_TRUE(category_registered) << "UIElement-enabled category not registered";
 
   ASSERT_EQ(unregister_(), S_OK);
   TF_INPUTPROCESSORPROFILE removed{};
@@ -522,13 +547,21 @@ TEST_F(TsfTipRegistrationSmokeTest, FailedCategoryRegistrationRollsBackAndRetryS
 
   EXPECT_EQ(register_(), SELFREG_E_CLASS);
   EXPECT_FALSE(InprocServerKeyExists()) << "failed registration left InprocServer32 behind";
-  EXPECT_FALSE(ProfileIsRegistered()) << "failed registration left the TSF profile behind";
-  EXPECT_FALSE(CategoryContainsTextService(GUID_TFCAT_TIPCAP_UIELEMENTENABLED))
-      << "failed registration left a TSF category behind";
+  bool profile_registered = false;
+  ASSERT_EQ(GetProfileRegistrationState(&profile_registered), S_OK)
+      << "failed to enumerate TSF profiles after rollback";
+  EXPECT_FALSE(profile_registered) << "failed registration left the TSF profile behind";
+
+  bool category_registered = false;
+  ASSERT_EQ(GetCategoryRegistrationState(GUID_TFCAT_TIP_KEYBOARD, &category_registered), S_OK)
+      << "failed to enumerate the keyboard category after rollback";
+  EXPECT_FALSE(category_registered) << "failed registration left the first TSF category behind";
 
   ASSERT_TRUE(forced_failure.Clear()) << "failed to disable the debug-only failure hook";
   ASSERT_EQ(register_(), S_OK) << "registration retry required an explicit unregister";
   EXPECT_TRUE(InprocServerKeyExists());
-  EXPECT_TRUE(ProfileIsRegistered());
+  ASSERT_EQ(GetProfileRegistrationState(&profile_registered), S_OK)
+      << "failed to enumerate TSF profiles after retry";
+  EXPECT_TRUE(profile_registered);
 }
 #endif

@@ -60,9 +60,11 @@ class ScopedComInit {
 };
 
 // DllRegisterServer mutates COM and TSF state in several independent steps.
-// Once the first write is attempted, any later failure must remove all state
-// created by this registration attempt so regsvr32 never reports failure while
-// leaving a partially usable profile behind.
+// Once the first write is attempted, any later failure converges to a fully
+// unregistered state so regsvr32 never reports failure while leaving a
+// partially usable profile behind. On a failed re-registration this also
+// removes registration that predated this call; the caller can then retry
+// without first invoking DllUnregisterServer.
 class RegistrationRollback {
  public:
   RegistrationRollback() = default;
@@ -168,7 +170,6 @@ extern "C" STDAPI DllRegisterServer() {
   //    UIELEMENTENABLED advertises that candidate UI is published through TSF
   //    (ITfUIElementMgr / ITfCandidateListUIElement) so UI-less hosts can activate
   //    and route candidate drawing through their app-side UIElement sink.
-  if (ForceCategoryRegistrationFailureForTesting()) return SELFREG_E_CLASS;
   ITfCategoryMgr* cat_mgr = nullptr;
   hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_ITfCategoryMgr,
                         reinterpret_cast<void**>(&cat_mgr));
@@ -179,6 +180,12 @@ extern "C" STDAPI DllRegisterServer() {
     hr = cat_mgr->RegisterCategory(azookey::tsf::kTextServiceClsid, category,
                                    azookey::tsf::kTextServiceClsid);
     if (FAILED(hr)) break;
+    // Leave one category registered before injecting the failure so the smoke
+    // test exercises cleanup of a genuinely partial category registration.
+    if (ForceCategoryRegistrationFailureForTesting()) {
+      hr = SELFREG_E_CLASS;
+      break;
+    }
   }
   cat_mgr->Release();
   if (FAILED(hr)) return SELFREG_E_CLASS;

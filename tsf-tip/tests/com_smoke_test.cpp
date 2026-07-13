@@ -2,9 +2,9 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
-
 #include <gtest/gtest.h>
 #include <msctf.h>
+#include <olectl.h>
 
 #include <string>
 
@@ -385,6 +385,55 @@ bool CategoryContainsTextService(REFGUID category) {
   return found;
 }
 
+#ifndef NDEBUG
+bool ProfileIsRegistered() {
+  ITfInputProcessorProfiles* profiles = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_ITfInputProcessorProfiles,
+                              reinterpret_cast<void**>(&profiles))) ||
+      !profiles) {
+    return false;
+  }
+
+  ITfInputProcessorProfileMgr* profile_mgr = nullptr;
+  HRESULT hr = profiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
+                                        reinterpret_cast<void**>(&profile_mgr));
+  if (SUCCEEDED(hr) && profile_mgr) {
+    TF_INPUTPROCESSORPROFILE profile{};
+    hr = profile_mgr->GetProfile(TF_PROFILETYPE_INPUTPROCESSOR, 0x0411,
+                                 azookey::tsf::kTextServiceClsid,
+                                 azookey::tsf::kTextServiceProfileGuid, nullptr, &profile);
+    profile_mgr->Release();
+  } else if (SUCCEEDED(hr)) {
+    hr = E_NOINTERFACE;
+  }
+  profiles->Release();
+  return SUCCEEDED(hr);
+}
+
+class ScopedForcedCategoryRegistrationFailure {
+ public:
+  ScopedForcedCategoryRegistrationFailure()
+      : active_(SetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", L"1") !=
+                FALSE) {}
+  ~ScopedForcedCategoryRegistrationFailure() {
+    if (active_) SetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", nullptr);
+  }
+
+  bool active() const { return active_; }
+
+  bool Clear() {
+    if (!active_) return true;
+    if (!SetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", nullptr)) return false;
+    active_ = false;
+    return true;
+  }
+
+ private:
+  bool active_{false};
+};
+#endif
+
 }  // namespace
 
 // Machine-wide registration round-trip. This mutates machine-wide TSF state and
@@ -427,6 +476,7 @@ class TsfTipRegistrationSmokeTest : public ::testing::Test {
 
 TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemovesIt) {
   ASSERT_EQ(register_(), S_OK);
+  ASSERT_EQ(register_(), S_OK) << "re-registering the same profile must be idempotent";
   EXPECT_TRUE(InprocServerKeyExists()) << "InprocServer32 not written under HKLM";
 
   ITfInputProcessorProfiles* profiles = nullptr;
@@ -464,3 +514,21 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
   mgr->Release();
   profiles->Release();
 }
+
+#ifndef NDEBUG
+TEST_F(TsfTipRegistrationSmokeTest, FailedCategoryRegistrationRollsBackAndRetrySucceeds) {
+  ScopedForcedCategoryRegistrationFailure forced_failure;
+  ASSERT_TRUE(forced_failure.active()) << "failed to enable the debug-only failure hook";
+
+  EXPECT_EQ(register_(), SELFREG_E_CLASS);
+  EXPECT_FALSE(InprocServerKeyExists()) << "failed registration left InprocServer32 behind";
+  EXPECT_FALSE(ProfileIsRegistered()) << "failed registration left the TSF profile behind";
+  EXPECT_FALSE(CategoryContainsTextService(GUID_TFCAT_TIPCAP_UIELEMENTENABLED))
+      << "failed registration left a TSF category behind";
+
+  ASSERT_TRUE(forced_failure.Clear()) << "failed to disable the debug-only failure hook";
+  ASSERT_EQ(register_(), S_OK) << "registration retry required an explicit unregister";
+  EXPECT_TRUE(InprocServerKeyExists());
+  EXPECT_TRUE(ProfileIsRegistered());
+}
+#endif

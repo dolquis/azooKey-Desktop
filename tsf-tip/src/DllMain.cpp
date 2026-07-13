@@ -31,7 +31,7 @@ extern "C" STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv) {
 
 extern "C" STDAPI DllCanUnloadNow() { return S_FALSE; }
 
-// Writes a REG_SZ value under HKCU.  Returns false on any failure.
+// Writes a REG_SZ value under the supplied registry root. Returns false on any failure.
 static bool RegSetSz(HKEY root, const wchar_t* subkey, const wchar_t* name,
                      const wchar_t* value) {
   HKEY hkey = nullptr;
@@ -59,6 +59,34 @@ class ScopedComInit {
   HRESULT hr_;
 };
 
+// DllRegisterServer mutates COM and TSF state in several independent steps.
+// Once the first write is attempted, any later failure must remove all state
+// created by this registration attempt so regsvr32 never reports failure while
+// leaving a partially usable profile behind.
+class RegistrationRollback {
+ public:
+  RegistrationRollback() = default;
+  ~RegistrationRollback() {
+    if (armed_) (void)DllUnregisterServer();
+  }
+
+  RegistrationRollback(const RegistrationRollback&) = delete;
+  RegistrationRollback& operator=(const RegistrationRollback&) = delete;
+
+  void Commit() { armed_ = false; }
+
+ private:
+  bool armed_{true};
+};
+
+static bool ForceCategoryRegistrationFailureForTesting() {
+#ifdef NDEBUG
+  return false;
+#else
+  return GetEnvironmentVariableW(L"AZOOKEY_TEST_FAIL_CATEGORY_REGISTRATION", nullptr, 0) > 0;
+#endif
+}
+
 extern "C" STDAPI DllRegisterServer() {
   if (!g_hmod) return E_UNEXPECTED;
 
@@ -78,6 +106,7 @@ extern "C" STDAPI DllRegisterServer() {
   //    requires elevation; scripts/register-dev.ps1 elevates before regsvr32.
   const std::wstring clsid_key = std::wstring(L"Software\\Classes\\CLSID\\") + clsid_str;
   const std::wstring inproc = clsid_key + L"\\InprocServer32";
+  RegistrationRollback rollback;
   if (!RegSetSz(HKEY_LOCAL_MACHINE, inproc.c_str(), nullptr, dll_path)) return SELFREG_E_CLASS;
   if (!RegSetSz(HKEY_LOCAL_MACHINE, inproc.c_str(), L"ThreadingModel", L"Apartment"))
     return SELFREG_E_CLASS;
@@ -139,6 +168,7 @@ extern "C" STDAPI DllRegisterServer() {
   //    UIELEMENTENABLED advertises that candidate UI is published through TSF
   //    (ITfUIElementMgr / ITfCandidateListUIElement) so UI-less hosts can activate
   //    and route candidate drawing through their app-side UIElement sink.
+  if (ForceCategoryRegistrationFailureForTesting()) return SELFREG_E_CLASS;
   ITfCategoryMgr* cat_mgr = nullptr;
   hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_ITfCategoryMgr,
                         reinterpret_cast<void**>(&cat_mgr));
@@ -153,6 +183,7 @@ extern "C" STDAPI DllRegisterServer() {
   cat_mgr->Release();
   if (FAILED(hr)) return SELFREG_E_CLASS;
 
+  rollback.Commit();
   return S_OK;
 }
 

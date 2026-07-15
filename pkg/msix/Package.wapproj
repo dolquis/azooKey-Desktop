@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows Application Packaging (WAP) project — Option A identity package（M28 PoC 草案 / DEV-101）.
+
+  ⚠️ これは VS-IDE 向けの「convenience」経路。canonical / tooling-independent なビルドは
+     pkg/msix/build-identity-package.ps1（MakeAppx /nv）を使う。DEV-267 / CI はそちらを推奨。
+
+  ⚠️ external-location（sparse）パッケージを wapproj で作るには VS 拡張
+     「Package with External Location」（WapProj-PackageWithExternalLocation）が必要。
+     拡張が無い素の wapproj は ProjectReference のバイナリを「同梱する」通常 MSIX になり、
+     Option A（外部配置）にならない。拡張導入後、外部ロケーションを有効化し、
+     アプリのバイナリを ProjectReference せず AppxManifest.xml の identity のみをパッケージ化する。
+     手順: https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps-visual-studio
+
+  ⚠️ PoC 草案・未検証: 実 VS / MSBuild + 拡張での復元・ビルドは未実施（当環境で検証不可）。
+     schema validation・実登録の緑化は DEV-267（gate:human-required）。
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == ''">
+    <Configuration>Release</Configuration>
+    <Platform>x64</Platform>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|arm64">
+      <Configuration>Release</Configuration>
+      <Platform>arm64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup>
+    <WapProjPath Condition="'$(WapProjPath)'==''">$(MSBuildExtensionsPath)\Microsoft\DesktopBridge\</WapProjPath>
+  </PropertyGroup>
+  <Import Project="$(WapProjPath)Microsoft.DesktopBridge.props" />
+  <PropertyGroup>
+    <!-- identity package のバージョン。AppxManifest.xml の <Identity Version> に揃える。 -->
+    <PackageVersion>1.0.0.0</PackageVersion>
+    <!-- x64 / arm64（identity は neutral だが WAP はプラットフォームを要求）。 -->
+    <AppxBundlePlatforms>x64|arm64</AppxBundlePlatforms>
+    <AppxBundle>Always</AppxBundle>
+    <!-- 署名は build-identity-package.ps1 / CI 側で行う想定（ここでは無効）。 -->
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <!-- 「Package with External Location」拡張が読む想定のフラグ（拡張導入後に有効化）。 -->
+    <EnablePackageWithExternalLocation>true</EnablePackageWithExternalLocation>
+  </PropertyGroup>
+  <ItemGroup>
+    <AppxManifest Include="AppxManifest.xml">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+  </ItemGroup>
+  <!--
+    Option A ではアプリのバイナリを <ProjectReference> しない（外部配置のため）。
+    通常の WAP なら inference-host / settings を ProjectReference で同梱するが、
+    ここでは identity のみをパッケージ化し、実行体は external location に置く。
+  -->
+  <Import Project="$(WapProjPath)Microsoft.DesktopBridge.targets" />
+</Project>

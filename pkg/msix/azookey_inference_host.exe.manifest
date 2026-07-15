@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Side-by-side (fusion) application manifest for azookey_inference_host.exe（M28 PoC 草案）.
+
+  identity package（pkg/msix/AppxManifest.xml）と実行体を結び付ける <msix> 要素。
+  external-location 登録後、この manifest を持つ exe が package identity 付きで動く
+  （Package.Current が解決される）。3 属性は identity package manifest と一致必須:
+    - packageName   == AppxManifest.xml <Identity Name>      = "dolquis.azooKey"
+    - publisher     == AppxManifest.xml <Identity Publisher> = "CN=dolquis"
+    - applicationId == AppxManifest.xml <Application Id>     = "azooKeyHost"
+  不一致は 0x80073D54（登録は成功するが runtime に identity 欠落）。
+  出典: https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps#add-identity-metadata-to-your-desktop-application-manifests
+
+  ⚠️ フォローアップ（本 PoC では未配線）: この manifest を inference-host のビルドに
+     埋め込む必要がある（MSVC は .exe.manifest をリンカ /MANIFESTINPUT で埋め込む、
+     または mt.exe で後付け）。inference-host/CMakeLists.txt への配線は M28 本体着手時。
+     Publisher は署名 cert 確定時に AppxManifest.xml と同時に差し替えること。
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0"
+                    name="dolquis.azooKey.InferenceHost"
+                    type="win32" />
+  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
+        publisher="CN=dolquis"
+        packageName="dolquis.azooKey"
+        applicationId="azooKeyHost" />
+</assembly>

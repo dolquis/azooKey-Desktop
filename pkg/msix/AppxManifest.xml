@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  azooKey-Desktop (Windows) — Option A identity package manifest（M28 PoC 草案）
+
+  DEV-101（D-05 M28: MSIX com4:ComServer と TIP CLSID/Profile 登録の整合 smoke）の
+  「配布経路 Option A（external-location packaging / sparse package）」の PoC 草案。
+  docs/sideload-packaging-spec.md §1.0 表の A 行 / §1.1（Option B 参考例）に対する
+  Option A 側の具体化であり、DEV-267（Human Gate: MSIX 登録整合 VM smoke 実機検証）が
+  compat-test/msix_install_uninstall.ps1 で Add/Remove-AppxPackage する対象パッケージ。
+
+  ⚠️ これは identity package（sparse package）である。従来の MSIX と異なり、
+     バイナリ（azookey_tsf_tip.dll / azookey_inference_host.exe 等）を「同梱しない」。
+     バイナリは外部の install location（§4 WiX/MSI が配置するディレクトリ）に置き、
+     TIP の COM 登録は従来どおり scripts/register-dev.ps1 の regsvr32 経由（machine-wide
+     HKLM InprocServer32）で行う。よって本 manifest には com4:Class / CLSID を書かない
+     （Option B/C との最大の違い。§1.0 で Option A が Win10 build 19045 でも動く理由）。
+
+  ⚠️ PoC 草案・未検証: pkg/msix/README.md の手順で MakeAppx.exe /nv によるパッケージ化と
+     自己署名 dev cert 署名、Add-AppxPackage -ExternalLocation 登録が必要。実 Windows
+     ビルド / 実機 VM での schema validation・登録検証は DEV-267（gate:human-required）。
+
+  出典（Microsoft Learn, 2026-07 時点）:
+    - Grant package identity by packaging with external location (manual):
+      https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps
+    - uap10:AllowExternalContent（Namespace .../uap/windows10/10, Min OS build 19041）:
+      https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap10-allowexternalcontent
+
+  §0 配布方針との関係: 本 PoC は DEV-267 のローカル VM smoke（Add/Remove-AppxPackage=
+  サイドロード）用であり、§0 の「MVP 直接配布 = MSI/WiX（§4 が正典）」「MS Store MSIX =
+  DEV-416」「スタンドアロン MSIX サイドロードは当面延期」を変更しない。identity package は
+  Store 提出物ではない（サイドロードで登録する軽量 identity のみ）。
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap uap10 rescap">
+
+  <!-- Name は compat-test/msix_install_uninstall.ps1 の既定 -PackageName と一致させる。
+       Publisher は自己署名 dev cert 用の暫定値。OV/EV 署名時は証明書 Subject DN と
+       完全一致させること（不一致は Add-AppxPackage 0x8007000B。spec §2.2）。
+       ProcessorArchitecture は identity package のため neutral（全 arch で登録可）。 -->
+  <Identity Name="dolquis.azooKey"
+            Publisher="CN=dolquis"
+            Version="1.0.0.0"
+            ProcessorArchitecture="neutral" />
+
+  <Properties>
+    <DisplayName>azooKey</DisplayName>
+    <PublisherDisplayName>dolquis</PublisherDisplayName>
+    <!-- Logo / VisualElements の画像は外部 install location 内の相対パスで解決される。
+         identity-only 用途では実解決不要（MakeAppx /nv がパス検証を bypass する）。 -->
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- Option A の要。外部ロケーションのコンテンツを参照可能にする（Win10 build 19041+）。 -->
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+
+  <Resources>
+    <Resource Language="ja-jp" />
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Dependencies>
+    <!-- MinVersion 10.0.19041.0: AllowExternalContent の下限（Win10 2004）。Option A は
+         com4:InProcessServer を使わないため build 20348 要件が無く、Win10 22H2（19045）で
+         動く（spec §1.5 受け入れ条件表 A 行の根拠）。 -->
+    <TargetDeviceFamily Name="Windows.Desktop"
+                        MinVersion="10.0.19041.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Capabilities>
+    <!-- Win32 互換のため runFullTrust と unvirtualizedResources を宣言（Learn 手順 6）。 -->
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+
+  <Applications>
+    <!-- identity を付与する実行体ごとに Application を宣言する。現状ビルドされるのは
+         inference-host のみ（azookey_settings.exe は M11/M30 で追加予定のため未宣言。
+         追加時に同形式の Application を足す）。
+         Executable は外部 install location 内の相対パス。TrustLevel=mediumIL /
+         RuntimeBehavior=win32App は Win32 互換の必須指定（Learn 手順 7.1）。
+         AppListEntry="none" で identity package をインストール済みアプリ一覧に出さない。
+         各 Application の Id は app 側 side-by-side manifest（.exe.manifest）の
+         <msix applicationId> と一致させること（pkg/msix/README.md「identity metadata」）。 -->
+    <Application Id="azooKeyHost"
+                 Executable="azookey_inference_host.exe"
+                 uap10:TrustLevel="mediumIL"
+                 uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements AppListEntry="none"
+                          DisplayName="azooKey"
+                          Description="azooKey 日本語入力（推論ホスト）"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+</Package>

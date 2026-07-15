@@ -240,7 +240,38 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   CTest `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
   MSIX パッケージング層を補完する）
 
+### 1.1.2 Option A の具体 PoC（`pkg/msix/`）
+
+§1.1 は Option B（通常 MSIX + `com4:InProcessServer`）の参考例だった。DEV-101 の M28 PoC
+として **Option A（external-location packaging / sparse package）の具体化**を `pkg/msix/`
+に置く（`pkg/msix/README.md` が正典手順）。
+
+* `pkg/msix/AppxManifest.xml` — identity package manifest。`uap10:AllowExternalContent=true`
+  （Namespace `.../uap/windows10/10`、Win10 build 19041+）、`ProcessorArchitecture="neutral"`、
+  `runFullTrust` + `unvirtualizedResources`、`Application` は `uap10:TrustLevel="mediumIL"` /
+  `uap10:RuntimeBehavior="win32App"` + `VisualElements AppListEntry="none"`。
+  **`com4:Class` / CLSID を書かない**のが Option B/C との最大の違い（TIP は外部配置 +
+  `regsvr32` 登録のため）。出典: [Grant package identity by packaging with external location](https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps)。
+* `pkg/msix/azookey_inference_host.exe.manifest` — app 側 side-by-side manifest。`<msix>`
+  要素の `packageName` / `publisher` / `applicationId` を identity manifest と一致させ、
+  exe を package identity へ紐付ける（exe への埋め込み配線は M28 本体で行うフォローアップ）。
+* `pkg/msix/build-identity-package.ps1` — MakeAppx `/nv` + 任意署名の canonical ビルド経路
+  （VS 拡張非依存）。`pkg/msix/Package.wapproj` は VS-IDE 向け convenience（要「Package with
+  External Location」拡張）。
+
+登録は `Add-AppxPackage -Path <pkg>.msix -ExternalLocation <install-dir>`。TIP DLL / 実行体は
+external location（§4 WiX/MSI の install ディレクトリ）に置き、COM 登録は
+`scripts/register-dev.ps1` の `regsvr32` 経路で行う。**本 PoC は Option A を具体化するが経路の
+最終確定ではない**（確定は DEV-267 の実機 smoke 結果を待つ）。identity package は MS Store
+提出物ではなくサイドロード登録専用で、§0 の配布方針（MVP=MSI/WiX §4、MS Store MSIX=DEV-416、
+スタンドアロン MSIX サイドロード延期）を変更しない。
+
 ### 1.2 Package.wapproj
+
+> **Option A では本項の「同梱物」は同梱しない**: 以下は Option B/C（バイナリ同梱の通常 MSIX）
+> 向けの記述。Option A（sparse / external-location）ではバイナリを MSIX に含めず external
+> location へ置くため、`pkg/msix/AppxManifest.xml`（identity のみ）+ `build-identity-package.ps1`
+> を使う（§1.1.2）。`pkg/msix/Package.wapproj` は Option A では identity のみをパッケージ化する。
 
 `pkg/msix/Package.wapproj`（新規、WAP プロジェクト）：
 

@@ -48,9 +48,23 @@
   レポート出力先。既定はカレントに compat-report-YYYYMMDD-HHMMSS/ を作る
   （compat-test/README.md の出力レイアウトに準拠）。
 
+.PARAMETER ExternalLocation
+  Option A（external-location / sparse identity package）の登録に必須の外部ロケーション。
+  実行体（azookey_inference_host.exe 等）が実際に置かれる install ディレクトリの絶対パス
+  （末尾に exe 名は付けない）。指定すると Add-AppxPackage -ExternalLocation で登録する。
+  Option A では未指定だと host に package identity が付かず smoke が無意味になるため
+  警告を出す。Option B/C（バイナリ同梱の通常 MSIX）では不要（未指定でよい）。
+  出典: https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps#register-the-identity-package-in-your-installer
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\msix_install_uninstall.ps1 `
     -MsixPath .\azooKey-1.0.0-x64.msix
+
+.EXAMPLE
+  # Option A（external-location）: 外部 install ディレクトリを紐付けて登録する
+  powershell -ExecutionPolicy Bypass -File .\msix_install_uninstall.ps1 `
+    -MsixPath .\out\azooKey-identity-1.0.0.0.msix `
+    -ExternalLocation "C:\Program Files\azooKey"
 
 .NOTES
   Windows 専用。Add-AppxPackage / Remove-AppxPackage を伴うため、クリーンな
@@ -71,6 +85,10 @@ param(
 
   # 日本語 LANGID 0x0411。spec §1 / DllMain.cpp の kJapaneseLangId と一致。
   [string]$LangId = "0x0411",
+
+  # Option A（external-location / sparse）の外部 install ディレクトリ絶対パス。
+  # 指定すると Add-AppxPackage -ExternalLocation で登録する（Option A 必須）。
+  [string]$ExternalLocation = "",
 
   [string]$ReportDir = ""
 )
@@ -209,7 +227,26 @@ try {
   # 取り逃さず、クリーン VM にパッケージを置き去りにしない（残骸検証の前提を保つ）。
   $before = @(Get-AppxPackage | ForEach-Object { $_.PackageFullName })
   try {
-    Add-AppxPackage -Path $MsixPath
+    if ($ExternalLocation) {
+      # Option A（external-location / sparse identity package）: 実行体は MSIX の外に
+      # 置かれるため、-ExternalLocation で install ディレクトリを紐付けないと host に
+      # package identity が付かず smoke が無意味になる。
+      if (-not (Test-Path $ExternalLocation)) {
+        Add-Check -Name "ExternalLocation が存在する" -Status "FAIL" `
+          -Detail "指定された外部 install ディレクトリが存在しない: $ExternalLocation"
+        throw "ExternalLocation not found: $ExternalLocation"
+      }
+      $absExternal = (Resolve-Path -LiteralPath $ExternalLocation).ProviderPath
+      Write-Step "external-location 登録: $absExternal"
+      Add-AppxPackage -Path $MsixPath -ExternalLocation $absExternal
+    } else {
+      # Option B/C（バイナリ同梱の通常 MSIX）: 外部ロケーション不要。
+      # ただし identity package（Option A）を -ExternalLocation 無しで登録すると
+      # host に identity が付かないため、Option A 検証では -ExternalLocation を渡すこと。
+      Add-Check -Name "ExternalLocation の指定" -Status "INFO" `
+        -Detail "-ExternalLocation 未指定。Option A（sparse identity package）を検証する場合は必須（未指定だと host に package identity が付かず smoke が無意味）。Option B/C なら不要。"
+      Add-AppxPackage -Path $MsixPath
+    }
     $added = @(Get-AppxPackage | Where-Object { $before -notcontains $_.PackageFullName })
     $addedFullNames = @($added | ForEach-Object { $_.PackageFullName })
     if ($addedFullNames.Count -gt 0) {
@@ -322,6 +359,7 @@ $summary = [ordered]@{
   issue       = "DEV-101"
   msixPath    = $MsixPath
   packageName = $PackageName
+  externalLocation = $ExternalLocation
   clsid       = $Clsid
   profileGuid = $ProfileGuid
   langId      = $LangId

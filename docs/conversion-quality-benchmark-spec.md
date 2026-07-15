@@ -220,8 +220,12 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 コードポイント列として同一かで判定する。これが `exact_match_rate`。
 `acceptable_match_rate` は `top1 ∈ {expected} ∪ acceptable[]` を素で判定する。
 
-**NFKC 評価**: `top1` と `expected`（および `acceptable[]`）に Unicode
-正規化形 **NFKC** を適用してから一致判定する。これが `nfkc_exact_match_rate`。
+**NFKC 評価**: `top1` と `expected` に Unicode 正規化形 **NFKC** を適用してから
+一致判定する。これが `nfkc_exact_match_rate`。**参照は `expected` のみ**とし、
+素の `exact_match_rate` と同じ対象に対して測る（`acceptable[]` は含めない）。
+これにより差分 `nfkc_exact_match_rate − exact_match_rate` が**純粋に正規化・
+全半角差だけ**を表し、許容表記ゆれ（`acceptable[]` で救うべきもの）が混ざらない。
+NFKC 版の acceptable 一致は v1 では定義しない（必要になれば別指標として追加）。
 NFKC は次を畳み込む:
 
 - 全角英数字 → 半角（`Ａ`→`A`、`１`→`1`）

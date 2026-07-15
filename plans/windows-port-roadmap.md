@@ -2098,6 +2098,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output
     result.json` で全指標を計算できる
+  - 出力 JSON の `summary` が Exact Match / CER（Wagner-Fischer）/ NFKC 二重評価
+    （`exact_match_rate` / `nfkc_exact_match_rate` / `cer` / `nfkc_cer`）を含み、
+    `--per-case` で per-case 内訳 JSONL が出力される（`summary.cer` は per-case の
+    micro 平均に一致）。CER 単体・Exact/NFKC 境界（全半角差）テストが CTest で通る
+    （spec §6.1.1 / §6.1.2 / §8.1 / §12。DEV-408 テスト方針）
   - `azookey_bench --eval bench/data/typo_eval.jsonl --output
     typo_result.json` で typo 指標が算出・schema 出力される（M52 時点では
     typo 補正は未実装＝M55 のため既定 `off`。補正有効モード `rank`/`aggressive`

@@ -6,6 +6,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -21,6 +22,7 @@
 #endif
 
 #if AZOOKEY_WITH_LLAMA_CPP
+#include <gguf.h>
 #include <llama.h>
 #endif
 
@@ -29,6 +31,11 @@ namespace azookey::host {
 namespace {
 
 constexpr std::array<char, 4> kGgufMagic{'G', 'G', 'U', 'F'};
+#if AZOOKEY_WITH_LLAMA_CPP
+constexpr std::string_view kGgufPreTokenizerKey = "tokenizer.ggml.pre";
+#endif
+constexpr std::string_view kZenzaiPreTokenizer = "gpt2-small-japanese-char";
+constexpr std::string_view kGpt2PreTokenizer = "gpt-2";
 constexpr double kZenzaiScoreFloor = 0.3;
 constexpr double kZenzaiScoreCeil = 1.4;
 constexpr size_t kMaxLeftContextCodepoints = 30;
@@ -55,6 +62,27 @@ uint32_t ReadLe32(const std::array<unsigned char, 4>& bytes) {
   return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
          (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
 }
+
+#if AZOOKEY_WITH_LLAMA_CPP
+std::optional<std::string> ReadGgufPreTokenizer(const std::string& path) {
+  const gguf_init_params params{
+      /* .no_alloc = */ true,
+      /* .ctx = */ nullptr,
+  };
+  std::unique_ptr<gguf_context, decltype(&gguf_free)> context(
+      gguf_init_from_file(path.c_str(), params), &gguf_free);
+  if (!context) {
+    return std::nullopt;
+  }
+
+  const auto key = gguf_find_key(context.get(), kGgufPreTokenizerKey.data());
+  if (key < 0 || gguf_get_kv_type(context.get(), key) != GGUF_TYPE_STRING) {
+    return std::nullopt;
+  }
+  const char* value = gguf_get_val_str(context.get(), key);
+  return value ? std::optional<std::string>(value) : std::nullopt;
+}
+#endif
 
 void AppendDebugTag(std::string& debug_info, const std::string& tag) {
   if (debug_info.empty()) {
@@ -626,6 +654,13 @@ ZenzaiLoadResult::~ZenzaiLoadResult() = default;
 ZenzaiLoadResult::ZenzaiLoadResult(ZenzaiLoadResult&&) noexcept = default;
 ZenzaiLoadResult& ZenzaiLoadResult::operator=(ZenzaiLoadResult&&) noexcept = default;
 
+std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer) {
+  if (pre_tokenizer == kZenzaiPreTokenizer) {
+    return kGpt2PreTokenizer;
+  }
+  return std::nullopt;
+}
+
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
   ZenzaiLoadResult result;
   result.info.path = path;
@@ -699,6 +734,19 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 
   auto model_params = llama_model_default_params();
   model_params.n_gpu_layers = options.n_gpu_layers;
+  std::array<llama_model_kv_override, 2> kv_overrides{};
+  const auto pre_tokenizer = ReadGgufPreTokenizer(path);
+  const auto pre_tokenizer_override =
+      pre_tokenizer ? ResolveZenzaiPreTokenizerOverride(*pre_tokenizer) : std::nullopt;
+  if (pre_tokenizer_override) {
+    auto& entry = kv_overrides.front();
+    std::snprintf(entry.key, sizeof(entry.key), "%.*s",
+                  static_cast<int>(kGgufPreTokenizerKey.size()), kGgufPreTokenizerKey.data());
+    entry.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
+    std::snprintf(entry.val_str, sizeof(entry.val_str), "%.*s",
+                  static_cast<int>(pre_tokenizer_override->size()), pre_tokenizer_override->data());
+    model_params.kv_overrides = kv_overrides.data();
+  }
   runtime->model = llama_model_load_from_file(path.c_str(), model_params);
   if (!runtime->model) {
     result.ok = false;

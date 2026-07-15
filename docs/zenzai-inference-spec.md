@@ -463,6 +463,11 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 
 ### 9.2 ライフサイクルと所有権
 
+- GGUF の `tokenizer.ggml.pre` が `gpt2-small-japanese-char` の場合、モデルロード時だけ
+  llama.cpp の KV override で `gpt-2` に置き換え、upstream llama.cpp の既知
+  pre-tokenizer 名としてロードする。その他の pre-tokenizer には override を適用しない。
+  この置換が想定するトークン化との同一性は、DEV-225 の実機ゲートで代表入力の token ID 列を
+  参照実装と比較して確認する。
 - llama.cpp の `llama_model` / `llama_context` ハンドルは M8-1（DEV-220）が保持。
   本 converter はそれを**非所有参照**で受け取り、推論ごとに `llama_decode` を回す。
 - C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
@@ -616,7 +621,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
-| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
+| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |
 
 ---

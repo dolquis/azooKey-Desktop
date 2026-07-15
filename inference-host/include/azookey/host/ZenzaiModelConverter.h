@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "azookey/core/IConverter.h"
@@ -41,6 +42,7 @@ struct ZenzaiLoadResult {
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
                                      const ZenzaiRuntimeOptions& options = {});
+std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer);
 
 class ZenzaiModelConverter final : public core::IConverter {
  public:

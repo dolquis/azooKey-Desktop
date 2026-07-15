@@ -624,6 +624,17 @@ TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {
   std::remove(model_path.c_str());
 }
 
+TEST(InferenceEngineTest, ResolvesOnlyZenzaiCustomPreTokenizerToUpstreamGpt2) {
+  const auto resolved =
+      azookey::host::ResolveZenzaiPreTokenizerOverride("gpt2-small-japanese-char");
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(*resolved, "gpt-2");
+
+  EXPECT_FALSE(azookey::host::ResolveZenzaiPreTokenizerOverride("gpt-2").has_value());
+  EXPECT_FALSE(azookey::host::ResolveZenzaiPreTokenizerOverride("default").has_value());
+  EXPECT_FALSE(azookey::host::ResolveZenzaiPreTokenizerOverride("").has_value());
+}
+
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

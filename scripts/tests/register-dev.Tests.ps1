@@ -99,9 +99,9 @@ Describe "development registration scripts" {
     }
 
     It "keeps the just registration recipes on the llama-enabled preset" {
-      Assert-Condition ($script:justfileText -match '(?m)^llama_preset := "windows-llama-debug"$') "justfile should define the llama-enabled registration preset."
-      Assert-Condition ($script:justfileText -match '(?m)^register preset=llama_preset:$') "just register should default to the llama-enabled build."
-      Assert-Condition ($script:justfileText -match '(?m)^unregister preset=llama_preset:$') "just unregister should default to the same llama-enabled build."
+      Assert-Condition ($script:justfileText -match '(?m)^llama_preset := "windows-llama-debug"\r?$') "justfile should define the llama-enabled registration preset."
+      Assert-Condition ($script:justfileText -match '(?m)^register preset=llama_preset:\r?$') "just register should default to the llama-enabled build."
+      Assert-Condition ($script:justfileText -match '(?m)^unregister preset=llama_preset:\r?$') "just unregister should default to the same llama-enabled build."
     }
 
     It "guards per-user HKCU setup from elevated reentry" {

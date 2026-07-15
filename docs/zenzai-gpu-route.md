@@ -45,6 +45,13 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
 - 実機ゲート用の `windows-llama-debug` preset は pin 済みの llama.cpp を取得する。
   `register-dev.ps1` の既定パスもこの preset を参照し、登録前に
   `azookey_zenzai_bench.exe` の `llama_cpp=1` を確認する。
+- 実モデルを使う開発登録では、GGUF を
+  `%LOCALAPPDATA%\azooKey\models\zenzai\` に配置したうえで、
+  `register-dev.ps1 -ModelPath <gguf>` を実行する。
+  ピン定義が未投入の間は任意の GGUF を自動選択しないため、配置だけでは
+  `model.selectedPath` は確定しない。
+  スクリプトは明示パスを現在セッションの Host と HKCU Run 登録の両方へ
+  `--model` として渡す。
 - `ZenzaiModelConverter` は GGUF magic/version を検証して
   `InferenceEngine::model_loaded()` / `Handshake` / `Health` に反映する。
 - llama.cpp 接続時は `llama_model_load_from_file` / `llama_init_from_model` で

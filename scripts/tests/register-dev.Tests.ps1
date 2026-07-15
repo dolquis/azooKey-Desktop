@@ -80,6 +80,7 @@ Describe "development registration scripts" {
     It "keeps explicit path parameters and elevated reentry separate" {
       Assert-Condition ($script:registerParameters -contains "TipDllPath") "register-dev.ps1 should expose TipDllPath."
       Assert-Condition ($script:registerParameters -contains "HostExePath") "register-dev.ps1 should expose HostExePath."
+      Assert-Condition ($script:registerParameters -contains "ModelPath") "register-dev.ps1 should expose an explicit Zenzai model path."
       Assert-Condition ($script:registerParameters -contains "AllowMockHost") "register-dev.ps1 should expose an explicit fallback-only override."
       Assert-Condition ($script:registerParameters -contains "ElevatedReentry") "register-dev.ps1 should expose ElevatedReentry."
     }
@@ -96,6 +97,15 @@ Describe "development registration scripts" {
       Assert-Condition ($script:register.Text -match [regex]::Escape('[Environment]::GetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", "Process")')) "register-dev.ps1 should preserve the configured Zenzai model path."
       Assert-Condition ($script:register.Text -match [regex]::Escape('[Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $null, "Process")')) "register-dev.ps1 should clear the Zenzai model path before probing linkage."
       Assert-Condition ($script:register.Text -match 'finally\s*\{[\s\S]*SetEnvironmentVariable\("AZOOKEY_ZENZAI_MODEL",\s*\$zenzaiModel,\s*"Process"\)') "register-dev.ps1 should restore the Zenzai model path after probing linkage."
+    }
+
+    It "passes an explicit GGUF model to both current-session and auto-start hosts" {
+      Assert-Condition ($script:register.Text -match 'Test-Path\s+-LiteralPath\s+\$ModelPath\s+-PathType\s+Leaf') "register-dev.ps1 should require ModelPath to be an existing file."
+      Assert-Condition ($script:register.Text -match 'GetExtension\(\$ModelPath\)\s+-ine\s+"\.gguf"') "register-dev.ps1 should reject non-GGUF model paths."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('$hostArguments += " --model `"$ModelPath`""')) "register-dev.ps1 should quote ModelPath in the host arguments."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('-Value "`"$HostExePath`" $hostArguments"')) "register-dev.ps1 should persist the model argument in the HKCU Run value."
+      Assert-Condition ($script:register.Text -match 'Start-Process\s+-FilePath\s+\$HostExePath\s+-ArgumentList\s+\$hostArguments') "register-dev.ps1 should pass the model argument to the current-session host."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('-ModelPath cannot be combined with -AllowMockHost')) "register-dev.ps1 should reject misleading real-model registration on a mock host."
     }
 
     It "keeps the just registration recipes on the llama-enabled preset" {

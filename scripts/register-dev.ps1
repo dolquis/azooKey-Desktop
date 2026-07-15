@@ -1,6 +1,8 @@
 param(
   [string]$TipDllPath = "",
   [string]$HostExePath = "",
+  # Per-user host argument only. Elevated reentry skips HKCU setup and host start.
+  [string]$ModelPath = "",
   [switch]$AllowMockHost,
   # Internal: set when the script relaunches itself elevated. The per-user
   # (HKCU) inference-host auto-start is written in the original user's process
@@ -73,9 +75,26 @@ if (-not $HostExePath) {
 
 $TipDllPath  = Resolve-DevPath $TipDllPath
 $HostExePath = Resolve-DevPath $HostExePath
+if ($ModelPath) {
+  $ModelPath = Resolve-DevPath $ModelPath
+  if (-not (Test-Path -LiteralPath $ModelPath -PathType Leaf)) {
+    throw "Zenzai model not found: $ModelPath"
+  }
+  if ([System.IO.Path]::GetExtension($ModelPath) -ine ".gguf") {
+    throw "Zenzai model must be a GGUF file: $ModelPath"
+  }
+  if ($AllowMockHost) {
+    throw "-ModelPath cannot be combined with -AllowMockHost because a mock host cannot produce real Zenzai candidates."
+  }
+}
 
 if (-not $ElevatedReentry) {
   Assert-LlamaEnabledHost -Path $HostExePath -AllowMock:$AllowMockHost
+}
+
+$hostArguments = "--pipe"
+if ($ModelPath) {
+  $hostArguments += " --model `"$ModelPath`""
 }
 
 # Per-user step (HKCU, no elevation needed): register the inference host for
@@ -87,7 +106,7 @@ if (-not $ElevatedReentry) {
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     try {
       New-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" `
-        -Value "`"$HostExePath`" --pipe" -PropertyType String -Force | Out-Null
+        -Value "`"$HostExePath`" $hostArguments" -PropertyType String -Force | Out-Null
       Write-Host "Inference host auto-start registered (current user): $HostExePath"
     } catch {
       Write-Warning "Could not register inference host auto-start: $_"
@@ -119,9 +138,12 @@ if (-not $ElevatedReentry) {
     }
     if ($hostServing) {
       Write-Host "Inference host already serving this user's pipe ($myPipe); not starting another."
+      if ($ModelPath) {
+        Write-Warning "The existing host is still using its previous model configuration. Stop it and rerun this script, or sign out and back in, before real-model verification."
+      }
     } else {
       try {
-        Start-Process -FilePath $HostExePath -ArgumentList "--pipe" -WindowStyle Hidden
+        Start-Process -FilePath $HostExePath -ArgumentList $hostArguments -WindowStyle Hidden
         Write-Host "Inference host started for current session: $HostExePath"
       } catch {
         Write-Warning "Could not start inference host for current session: $_"

@@ -103,6 +103,23 @@ if ($ModelPath) {
 # profile. Best-effort. Skipped on the elevated reentry.
 if (-not $ElevatedReentry) {
   if (Test-Path $HostExePath) {
+    # Probe the exact per-user pipe before changing the Run entry. If a model was
+    # requested, continuing with an already-running host would leave the current
+    # session on its previous model configuration while reporting registration
+    # success. Require the caller to stop that host and retry instead.
+    $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $myPipe = "azookey-$mySid"
+    $hostServing = $false
+    try {
+      $hostServing = [bool]([System.IO.Directory]::GetFiles("\\.\pipe\") |
+        Where-Object { [System.IO.Path]::GetFileName($_) -eq $myPipe })
+    } catch {
+      $hostServing = $false
+    }
+    if ($ModelPath -and $hostServing) {
+      throw "Inference host already serving this user's pipe ($myPipe). Stop it and rerun with -ModelPath so the current session uses the requested model."
+    }
+
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     try {
       New-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" `
@@ -120,27 +137,11 @@ if (-not $ElevatedReentry) {
     # interactive user — same rationale as the Run entry. Best-effort; uses the
     # same `--pipe` arguments so the in-session host matches the auto-start one.
     #
-    # Skip only when *this user's* pipe is already being served. The pipe name is
-    # per-user — DefaultPipeName() is \\.\pipe\azookey-<current user SID> — so a
-    # global process-name match would, on RDP / Fast User Switching, find another
-    # account's host (listening on a different pipe) and wrongly suppress starting
-    # one for the interactive user. Probe the exact per-user pipe instead. On
-    # enumeration failure, fall through and start (best-effort: a redundant start
-    # is preferable to leaving the just-registered TIP with no candidate server).
-    $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-    $myPipe = "azookey-$mySid"
-    $hostServing = $false
-    try {
-      $hostServing = [bool]([System.IO.Directory]::GetFiles("\\.\pipe\") |
-        Where-Object { [System.IO.Path]::GetFileName($_) -eq $myPipe })
-    } catch {
-      $hostServing = $false
-    }
+    # With no explicit model, an existing server for this user's pipe is already
+    # suitable. On enumeration failure, fall through and start (best-effort: a
+    # redundant start is preferable to leaving the TIP without a candidate host).
     if ($hostServing) {
       Write-Host "Inference host already serving this user's pipe ($myPipe); not starting another."
-      if ($ModelPath) {
-        Write-Warning "The existing host is still using its previous model configuration. Stop it and rerun this script, or sign out and back in, before real-model verification."
-      }
     } else {
       try {
         Start-Process -FilePath $HostExePath -ArgumentList $hostArguments -WindowStyle Hidden

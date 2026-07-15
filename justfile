@@ -10,6 +10,7 @@
 set windows-shell := ["pwsh", "-NoProfile", "-Command"]
 
 preset := "windows-debug"
+llama_preset := "windows-llama-debug"
 src_dirs := "core ipc learning inference-host tsf-tip bench"
 
 # List available recipes
@@ -54,9 +55,9 @@ lint:
     pre-commit run --all-files
 
 # Register the dev TIP (machine-wide; auto-elevates to admin)
-register preset=preset:
+register preset=llama_preset:
     ./scripts/register-dev.ps1 -TipDllPath ./build/{{preset}}/tsf-tip/azookey_tsf_tip.dll -HostExePath ./build/{{preset}}/inference-host/azookey_inference_host.exe
 
 # Unregister the dev TIP
-unregister preset=preset:
+unregister preset=llama_preset:
     ./scripts/unregister-dev.ps1 -TipDllPath ./build/{{preset}}/tsf-tip/azookey_tsf_tip.dll

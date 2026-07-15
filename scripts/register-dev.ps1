@@ -43,8 +43,14 @@ function Assert-LlamaEnabledHost {
     throw "llama.cpp preflight tool not found: $benchPath. Build the windows-llama-debug preset before registration."
   }
 
-  $output = & $benchPath 2>&1
-  $exitCode = $LASTEXITCODE
+  $zenzaiModel = [Environment]::GetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", "Process")
+  try {
+    [Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $null, "Process")
+    $output = & $benchPath 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    [Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $zenzaiModel, "Process")
+  }
   $outputText = ($output | Out-String).Trim()
   if ($exitCode -ne 0 -or $outputText -notmatch '(?:^|\s)llama_cpp=1(?:\s|$)') {
     throw "Inference host is not linked with llama.cpp. Build the windows-llama-debug preset, or use -AllowMockHost only for fallback-only TIP tests. Preflight output: $outputText"

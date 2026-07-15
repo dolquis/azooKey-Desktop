@@ -71,6 +71,8 @@ Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的に�
 cmake --preset windows-llama-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-llama-debug
 ./scripts/register-dev.ps1
+# 実 Zenzai モデルを使う場合
+./scripts/register-dev.ps1 -ModelPath "$env:LOCALAPPDATA\azooKey\models\zenzai\<model>.gguf"
 ./scripts/unregister-dev.ps1 -TipDllPath ./build/windows-llama-debug/tsf-tip/azookey_tsf_tip.dll
 ```
 
@@ -78,6 +80,8 @@ cmake --build --preset windows-llama-debug
 開発用成果物を生成します。通常の `windows-debug` は高速な no-egress mock テスト用です。
 `register-dev.ps1` は登録前に `llama_cpp=1` を確認し、mock ホストの誤登録を拒否します。
 fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指定できます。
+現時点では `models\zenzai\` へ GGUF を配置しただけではモデルを自動選択しません。
+実モデルの登録では `-ModelPath` に配置済み GGUF の絶対パスを指定してください。
 実モデルの検証手順は [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
 
 machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。

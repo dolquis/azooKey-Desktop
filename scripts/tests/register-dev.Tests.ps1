@@ -78,7 +78,16 @@ Describe "development registration scripts" {
     It "keeps explicit path parameters and elevated reentry separate" {
       Assert-Condition ($script:registerParameters -contains "TipDllPath") "register-dev.ps1 should expose TipDllPath."
       Assert-Condition ($script:registerParameters -contains "HostExePath") "register-dev.ps1 should expose HostExePath."
+      Assert-Condition ($script:registerParameters -contains "AllowMockHost") "register-dev.ps1 should expose an explicit fallback-only override."
       Assert-Condition ($script:registerParameters -contains "ElevatedReentry") "register-dev.ps1 should expose ElevatedReentry."
+    }
+
+    It "defaults to the llama-enabled build and rejects an accidental mock host" {
+      Assert-Condition ($script:register.Text -match [regex]::Escape('build\windows-llama-debug\tsf-tip\azookey_tsf_tip.dll')) "register-dev.ps1 should default to the llama-enabled TIP build."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('build\windows-llama-debug\inference-host\azookey_inference_host.exe')) "register-dev.ps1 should default to the llama-enabled host build."
+      Assert-Condition ($script:register.Text -match 'azookey_zenzai_bench\.exe') "register-dev.ps1 should probe the Zenzai bench compiled with the host."
+      Assert-Condition ($script:register.Text -match 'llama_cpp=1') "register-dev.ps1 should require a real llama.cpp runtime."
+      Assert-Condition ($script:register.Text -match 'Assert-LlamaEnabledHost\s+-Path\s+\$HostExePath') "register-dev.ps1 should run the llama.cpp preflight before registration."
     }
 
     It "guards per-user HKCU setup from elevated reentry" {

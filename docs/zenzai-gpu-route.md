@@ -42,6 +42,9 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
 - `AZOOKEY_LLAMA_CPP_SOURCE_DIR` または `AZOOKEY_FETCH_LLAMA_CPP=ON` で
   llama.cpp `llama` target を接続し、`azookey_host` に `AZOOKEY_WITH_LLAMA_CPP`
   を伝播する。未接続時は no-egress の mock runtime でビルド・テストを継続する。
+- 実機ゲート用の `windows-llama-debug` preset は pin 済みの llama.cpp を取得する。
+  `register-dev.ps1` の既定パスもこの preset を参照し、登録前に
+  `azookey_zenzai_bench.exe` の `llama_cpp=1` を確認する。
 - `ZenzaiModelConverter` は GGUF magic/version を検証して
   `InferenceEngine::model_loaded()` / `Handshake` / `Health` に反映する。
 - llama.cpp 接続時は `llama_model_load_from_file` / `llama_init_from_model` で
@@ -57,11 +60,14 @@ M8 では `BackendKind::Cpu` / `BackendKind::Cuda` だけを有効化する。
 
 - CPU fallback: `bench/azookey_bench.exe` が exit=0、p95 < 50ms。
   2026-05-20 Debug build baseline: p50=0.0179ms, p95=0.0249ms, p99=0.052ms。
-- Zenzai CPU: `bench/azookey_zenzai_bench.exe --model <gguf>`（または
+- Zenzai CPU: `bench/azookey_zenzai_bench.exe --model <gguf> --require-model
+  --require-zenzai`（または
   `AZOOKEY_ZENZAI_MODEL=<gguf>`）で `LoadModel` 成功、初回ロード時間、p50/p95/p99、
   `zenzai_candidates`、先頭候補の `debug_info`、`requested_backend`、
   `effective_backend`、`load_warning` を記録する。モデル未指定時は `status=skipped`
   で成功終了し、CTest では `--mock-zenzai` で no-egress smoke を行う。
+- fallback-only の TIP テストで no-llama ホストを登録する場合に限り、
+  `register-dev.ps1 -AllowMockHost` で preflight を明示的に迂回できる。
 - Zenzai CUDA: CUDA 未配線・初期化失敗時に CPU または `SimpleConverter` へフォールバック。
 
 ## 将来拡張

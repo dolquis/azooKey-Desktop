@@ -23,6 +23,15 @@
       }
     },
     {
+      "name": "windows-llama-debug",
+      "displayName": "Windows llama.cpp Debug",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/windows-llama-debug",
+      "cacheVariables": {
+        "AZOOKEY_FETCH_LLAMA_CPP": "ON"
+      }
+    },
+    {
       "name": "windows-release",
       "displayName": "Windows Release",
       "generator": "Ninja",
@@ -61,6 +70,10 @@
       "configurePreset": "windows-debug"
     },
     {
+      "name": "windows-llama-debug",
+      "configurePreset": "windows-llama-debug"
+    },
+    {
       "name": "windows-release",
       "configurePreset": "windows-release"
     },
@@ -73,6 +86,13 @@
     {
       "name": "windows-debug",
       "configurePreset": "windows-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-llama-debug",
+      "configurePreset": "windows-llama-debug",
       "output": {
         "outputOnFailure": true
       }

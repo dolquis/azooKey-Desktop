@@ -1,6 +1,7 @@
 param(
   [string]$TipDllPath = "",
   [string]$HostExePath = "",
+  [switch]$AllowMockHost,
   # Internal: set when the script relaunches itself elevated. The per-user
   # (HKCU) inference-host auto-start is written in the original user's process
   # *before* elevation, so the elevated reentry must skip it — otherwise, when a
@@ -20,20 +21,56 @@ function Resolve-DevPath {
   return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
 }
 
+function Assert-LlamaEnabledHost {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$Path,
+    [switch]$AllowMock
+  )
+
+  if ($AllowMock) {
+    Write-Warning "Skipping llama.cpp preflight because -AllowMockHost was specified. Zenzai candidates will use the fallback converter."
+    return
+  }
+
+  if (-not (Test-Path $Path)) {
+    throw "Inference host not found: $Path"
+  }
+
+  $buildDir = Split-Path -Parent (Split-Path -Parent $Path)
+  $benchPath = Join-Path $buildDir "bench\azookey_zenzai_bench.exe"
+  if (-not (Test-Path $benchPath)) {
+    throw "llama.cpp preflight tool not found: $benchPath. Build the windows-llama-debug preset before registration."
+  }
+
+  $output = & $benchPath 2>&1
+  $exitCode = $LASTEXITCODE
+  $outputText = ($output | Out-String).Trim()
+  if ($exitCode -ne 0 -or $outputText -notmatch '(?:^|\s)llama_cpp=1(?:\s|$)') {
+    throw "Inference host is not linked with llama.cpp. Build the windows-llama-debug preset, or use -AllowMockHost only for fallback-only TIP tests. Preflight output: $outputText"
+  }
+
+  Write-Host "llama.cpp host preflight passed: $benchPath"
+}
+
 # Resolve default paths relative to the script location, then make them absolute
 # *before* any elevation relaunch: the elevated process starts in a different
 # working directory, so relative paths would otherwise resolve incorrectly. Use
 # PowerShell's location resolver rather than .NET's process current directory:
 # Developer PowerShell sessions can leave those two out of sync after cd.
 if (-not $TipDllPath) {
-  $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-debug\tsf-tip\azookey_tsf_tip.dll"
+  $TipDllPath = Join-Path $PSScriptRoot "..\build\windows-llama-debug\tsf-tip\azookey_tsf_tip.dll"
 }
 if (-not $HostExePath) {
-  $HostExePath = Join-Path $PSScriptRoot "..\build\windows-debug\inference-host\azookey_inference_host.exe"
+  $HostExePath = Join-Path $PSScriptRoot "..\build\windows-llama-debug\inference-host\azookey_inference_host.exe"
 }
 
 $TipDllPath  = Resolve-DevPath $TipDllPath
 $HostExePath = Resolve-DevPath $HostExePath
+
+if (-not $ElevatedReentry) {
+  Assert-LlamaEnabledHost -Path $HostExePath -AllowMock:$AllowMockHost
+}
 
 # Per-user step (HKCU, no elevation needed): register the inference host for
 # auto-start in the *interactive* user's hive. Done in the original process so a

@@ -68,11 +68,21 @@ Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的に�
 ## TIP の登録 / 解除（Windows、管理者権限）
 
 ```powershell
-./scripts/register-dev.ps1 -TipDllPath ./build/windows-debug/tsf-tip/azookey_tsf_tip.dll -HostExePath ./build/windows-debug/inference-host/azookey_inference_host.exe
-./scripts/unregister-dev.ps1 -TipDllPath ./build/windows-debug/tsf-tip/azookey_tsf_tip.dll
+cmake --preset windows-llama-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --build --preset windows-llama-debug
+./scripts/register-dev.ps1
+./scripts/unregister-dev.ps1 -TipDllPath ./build/windows-llama-debug/tsf-tip/azookey_tsf_tip.dll
 ```
 
-machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。`-dev` 接尾辞は `regsvr32` 開発用経路であることを示します（MSIX 配布経路とは別。`docs/sideload-packaging-spec.md` §1.1.1）。
+`windows-llama-debug` は pin 済みの llama.cpp を取得し、実 Zenzai モデルを読み込める
+開発用成果物を生成します。通常の `windows-debug` は高速な no-egress mock テスト用です。
+`register-dev.ps1` は登録前に `llama_cpp=1` を確認し、mock ホストの誤登録を拒否します。
+fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指定できます。
+実モデルの検証手順は [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
+
+machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。
+`-dev` 接尾辞は `regsvr32` 開発用経路であることを示します（MSIX 配布経路とは別。
+`docs/sideload-packaging-spec.md` §1.1.1）。
 
 ## ロードマップ
 

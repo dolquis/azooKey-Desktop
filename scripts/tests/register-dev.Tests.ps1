@@ -3,6 +3,7 @@ Describe "development registration scripts" {
     $repoRoot = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot "..") "..")).Path
     $registerPath = Join-Path (Join-Path $repoRoot "scripts") "register-dev.ps1"
     $unregisterPath = Join-Path (Join-Path $repoRoot "scripts") "unregister-dev.ps1"
+    $justfilePath = Join-Path $repoRoot "justfile"
 
     function Assert-Condition {
       param(
@@ -70,6 +71,7 @@ Describe "development registration scripts" {
 
     $script:register = Get-ParsedScript -Path $registerPath
     $script:unregister = Get-ParsedScript -Path $unregisterPath
+    $script:justfileText = Get-Content -Raw $justfilePath
     $script:registerParameters = Get-ParameterName -Ast $script:register.Ast
     $script:unregisterParameters = Get-ParameterName -Ast $script:unregister.Ast
   }
@@ -78,7 +80,28 @@ Describe "development registration scripts" {
     It "keeps explicit path parameters and elevated reentry separate" {
       Assert-Condition ($script:registerParameters -contains "TipDllPath") "register-dev.ps1 should expose TipDllPath."
       Assert-Condition ($script:registerParameters -contains "HostExePath") "register-dev.ps1 should expose HostExePath."
+      Assert-Condition ($script:registerParameters -contains "AllowMockHost") "register-dev.ps1 should expose an explicit fallback-only override."
       Assert-Condition ($script:registerParameters -contains "ElevatedReentry") "register-dev.ps1 should expose ElevatedReentry."
+    }
+
+    It "defaults to the llama-enabled build and rejects an accidental mock host" {
+      Assert-Condition ($script:register.Text -match [regex]::Escape('build\windows-llama-debug\tsf-tip\azookey_tsf_tip.dll')) "register-dev.ps1 should default to the llama-enabled TIP build."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('build\windows-llama-debug\inference-host\azookey_inference_host.exe')) "register-dev.ps1 should default to the llama-enabled host build."
+      Assert-Condition ($script:register.Text -match 'azookey_zenzai_bench\.exe') "register-dev.ps1 should probe the Zenzai bench compiled with the host."
+      Assert-Condition ($script:register.Text -match 'llama_cpp=1') "register-dev.ps1 should require a real llama.cpp runtime."
+      Assert-Condition ($script:register.Text -match 'Assert-LlamaEnabledHost\s+-Path\s+\$HostExePath') "register-dev.ps1 should run the llama.cpp preflight before registration."
+    }
+
+    It "runs the llama.cpp linkage probe without loading the configured Zenzai model" {
+      Assert-Condition ($script:register.Text -match [regex]::Escape('[Environment]::GetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", "Process")')) "register-dev.ps1 should preserve the configured Zenzai model path."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('[Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $null, "Process")')) "register-dev.ps1 should clear the Zenzai model path before probing linkage."
+      Assert-Condition ($script:register.Text -match 'finally\s*\{[\s\S]*SetEnvironmentVariable\("AZOOKEY_ZENZAI_MODEL",\s*\$zenzaiModel,\s*"Process"\)') "register-dev.ps1 should restore the Zenzai model path after probing linkage."
+    }
+
+    It "keeps the just registration recipes on the llama-enabled preset" {
+      Assert-Condition ($script:justfileText -match '(?m)^llama_preset := "windows-llama-debug"\r?$') "justfile should define the llama-enabled registration preset."
+      Assert-Condition ($script:justfileText -match '(?m)^register preset=llama_preset:\r?$') "just register should default to the llama-enabled build."
+      Assert-Condition ($script:justfileText -match '(?m)^unregister preset=llama_preset:\r?$') "just unregister should default to the same llama-enabled build."
     }
 
     It "guards per-user HKCU setup from elevated reentry" {

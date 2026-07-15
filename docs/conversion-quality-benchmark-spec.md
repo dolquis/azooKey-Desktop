@@ -8,7 +8,10 @@
       `docs/user-learning-enhancement-spec.md`（M54）、
       `docs/typo-correction-learning-spec.md`（M55）
 作成日: 2026-05-27
+更新日: 2026-07-15（DEV-559: CER / NFKC 二重評価の厳密定義と per-case 出力 schema を確定）
 位置づけ: 変換品質トラックの最初に実装（M53〜M57 の前提）
+spec-first ゲート: 本仕様の §6.1.1 / §6.1.2 / §8.1 が確定するまで DEV-408
+（評価 CLI 実装）を In Progress にしない
 
 ## 1. 目的
 
@@ -189,8 +192,11 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 | `top3_accuracy` | 上位 3 候補のいずれかが一致した率 |
 | `top5_accuracy` | 上位 5 候補のいずれかが一致した率 |
 | `MRR` | Mean Reciprocal Rank（正解の順位の逆数の平均） |
-| `exact_match_rate` | 第一候補が `expected` と完全一致した率 |
-| `acceptable_match_rate` | 第一候補が `acceptable[]` のいずれかと一致した率 |
+| `exact_match_rate` | 第一候補が `expected` と**素（raw）完全一致**した率（§6.1.1）。合格基準・回帰ゲートの正典 |
+| `nfkc_exact_match_rate` | 第一候補が `expected` と **NFKC 正規化後に一致**した率（§6.1.1）。診断用（gate 非対象） |
+| `acceptable_match_rate` | 第一候補が `acceptable[]` のいずれかと素一致した率 |
+| `cer` | 第一候補 vs `expected` の **CER（Wagner-Fischer 編集距離／参照長、micro 平均）**（§6.1.2）。素評価 |
+| `nfkc_cer` | 第一候補 vs `expected` を NFKC 正規化後に測った CER（micro 平均）（§6.1.2）。診断用 |
 | `reading_fidelity_rate` | 候補の読みが入力読みと一致する率（M55 補正候補除く） |
 | `named_entity_recall_at_5` | category=named_entity の top5 率 |
 | `neologism_recall_at_5` | category=neologism の top5 率 |
@@ -201,6 +207,76 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 > （`docs/zenzai-inference-spec.md` §6.1）だが、**bench 採取時は `beam_width` /
 > `n_best` を 5 以上に上書き**して採取する（§8 config 例は 5）。4 のまま採ると
 > top5 が実質 top4 になり §9 合格基準と不整合になる。
+
+### 6.1.1 Exact Match と NFKC 二重評価（確定）
+
+**文字列比較の単位**: すべての一致判定・編集距離は **Unicode スカラー値
+（コードポイント）** を 1 文字として行う（karukan 参考実装 `ajimee_bench.rs`
+の Rust `char` イテレーションと一致）。UTF-8 バイト単位・書記素クラスタ単位では
+数えない。合成済み／結合文字列（濁点の合成・分解など）の差は §6.1.1 の NFKC 評価で
+吸収する（後述）。
+
+**素評価（raw）**: 正規化を一切かけず、第一候補 `top1` と `expected` を
+コードポイント列として同一かで判定する。これが `exact_match_rate`。
+`acceptable_match_rate` は `top1 ∈ {expected} ∪ acceptable[]` を素で判定する。
+
+**NFKC 評価**: `top1` と `expected`（および `acceptable[]`）に Unicode
+正規化形 **NFKC** を適用してから一致判定する。これが `nfkc_exact_match_rate`。
+NFKC は次を畳み込む:
+
+- 全角英数字 → 半角（`Ａ`→`A`、`１`→`1`）
+- 半角カタカナ → 全角カタカナ（`ｱ`→`ア`、半角濁点の合成）
+- 互換文字の正準化（`①`→`1`、`㍿`→`株式会社`、丸数字・組文字など）
+
+**二重評価の意味**: 両方を必ず出力する。差分
+`nfkc_exact_match_rate − exact_match_rate ≥ 0` は「変換自体は正しいが
+全半角・互換差だけで素一致から外れたケース」の割合を表す診断値であり、
+**変換品質の悪化と表記ゆれを切り分ける**ために用いる。
+
+**境界の扱い（全半角差・正規化前後）**:
+
+- **正典は素評価**。`exact_match_rate` / `top1_accuracy` / `cer`（素）を §9
+  合格基準・§14 回帰判定の正典系（primary）とする（ハード fail 条件は
+  `top1_accuracy`、`exact_match_rate` / `cer` は回帰監視系。§14.3）。全半角・
+  互換差はユーザーに見える実挙動差であり、gate で緩めない。
+- **NFKC 系（`nfkc_exact_match_rate` / `nfkc_cer`）は診断専用**（report-only）で
+  gate 対象にしない。§8 `summary` に併記する。
+- 全半角のどちらを正解とするかが**設計上妥当な揺れ**であるケースは、
+  `expected` を IME の正準出力形に固定したうえで、許容する表記を
+  `acceptable[]` に列挙して素評価で救う（NFKC で暗黙に緩めない）。これにより
+  「何が正解か」がデータ側で明示され、機械判定が恣意にならない。
+- NFKC 実装は固定する。正規化テーブル（Unicode データ版）を変えると
+  `nfkc_*` の値が動きうるため、正規化器を差し替えた場合は §8 出力 `version`
+  を +1 する（§14.1）。
+
+### 6.1.2 CER（Wagner-Fischer）（確定）
+
+**定義**: 第一候補 `top1` を仮説、`expected` を参照とし、両者の
+**Levenshtein 編集距離**（挿入・削除・置換のコスト各 1、一致 0、
+Wagner-Fischer の動的計画法で算出。転置は数えない＝Damerau ではない）を
+参照長で割る。文字単位はコードポイント（§6.1.1）。
+
+- **per-case CER** = `edit_distance(top1, expected) / len(expected)`。
+  `len` はコードポイント数。挿入過多で 1.0 を超えうる（クランプしない）。
+- **参照は `expected` のみ**。CER は単一参照への距離を測る指標のため
+  `acceptable[]` は使わない（複数参照では距離が定義できない）。
+- **空参照の扱い**: `len(expected) == 0` のとき、`top1` も空なら per-case CER = 0、
+  そうでなければ 1.0 とする（0 除算を避けるための規約）。評価データ側は
+  `expected` 非空を必須とし、空参照は原則発生させない。
+
+**集計（micro 平均を正典）**:
+
+- `cer`（summary）= `Σ edit_distance / Σ len(expected)`（全ケースの編集距離合計を
+  参照長合計で割る、micro 平均）。参照長で重み付けされ、コーパス CER の標準定義。
+- per-case CER の単純平均（macro 平均）は短いケースに過大な重みを与えるため
+  **正典にしない**。必要なら診断として per-case 内訳（§8.1）から算出できる。
+- **NFKC CER**（`nfkc_cer`）は `top1` と `expected` を NFKC 正規化してから
+  同じ micro 平均で算出する。素 CER 以下になるのが通常で、差は表記ゆれ由来の
+  文字誤りの割合を示す診断値。
+
+**決定性**: CER・NFKC はいずれも決定的な文字列演算であり浮動小数非決定性を
+持たない（§14.2 の精度系「再実行差 ≤ 0.2pp」は候補集合が同一なら CER も
+bit 一致する）。
 
 ### 6.2 打ち間違え補正指標
 
@@ -253,7 +329,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | オプション | 意味 |
 |---|---|
 | `--eval <jsonl>` | 評価ケースファイル |
-| `--output <json>` | 結果出力 |
+| `--output <json>` | 集計結果出力（§8） |
+| `--per-case <jsonl>` | per-case 内訳を JSONL で出力（§8.1、省略時は非出力）。回帰の原因ケース特定・baseline 差分の内訳確認に使う |
 | `--baseline <json>` | 比較 baseline |
 | `--backend <name>` | backend 強制 |
 | `--model <path>` | モデル強制 |
@@ -304,6 +381,12 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "top1_accuracy": 0.85,
     "top5_accuracy": 0.96,
     "MRR": 0.91,
+    "exact_match_rate": 0.82,
+    "nfkc_exact_match_rate": 0.85,
+    "acceptable_match_rate": 0.88,
+    "cer": 0.041,
+    "nfkc_cer": 0.032,
+    "reading_fidelity_rate": 0.99,
     "latency_p95_ms": 45.2,
     "memory_peak_mb": 1820
   },
@@ -311,16 +394,98 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "homophone": {
       "top1_accuracy": 0.78,
       "top5_accuracy": 0.94,
+      "exact_match_rate": 0.75,
+      "nfkc_exact_match_rate": 0.77,
+      "cer": 0.058,
+      "nfkc_cer": 0.049,
       "n": 250
     },
-    "named_entity": { ... }
+    "named_entity": { "...": "..." }
   },
   "diff_vs_baseline": {
-    "top1_accuracy": +0.03,
-    "homophone.top1_accuracy": +0.05
+    "top1_accuracy": 0.03,
+    "cer": -0.006,
+    "homophone.top1_accuracy": 0.05
   }
 }
 ```
+
+- `summary.cer` / `summary.nfkc_cer` は §6.1.2 の **micro 平均**。`by_category.<cat>.cer`
+  も当該カテゴリ内の micro 平均（`Σ edit_distance / Σ len(expected)`、主カテゴリ§11.2 で集計）。
+- `diff_vs_baseline` の符号は「値の増分」。精度系（`*_accuracy` / `*_match_rate`）は
+  **正が改善**、誤り系（`cer` / `nfkc_cer` / `*_rate` の typo_false_positive など）は
+  **負が改善**。回帰ゲート（§14.3）はこの向きを踏まえて判定する。
+
+### 8.1 per-case 内訳 schema（`--per-case <jsonl>`）
+
+集計値（§8）だけでは回帰の**原因ケース**を追えないため、`--per-case` 指定時に
+1 行 1 ケースの JSONL を出力する。baseline の per-case を保存しておけば、
+`diff_vs_baseline` で悪化した指標の内訳（どのケースが素→NFKC で救われたか、
+どのケースで CER が増えたか）を機械的に突き合わせられる。
+
+**通常変換ケース（§4.2 由来）の 1 行**:
+
+```json
+{
+  "id": "homophone_000001",
+  "category": "homophone",
+  "input": "こうしょうする",
+  "expected": "交渉する",
+  "top1": "交渉する",
+  "candidates": ["交渉する", "交渉します", "交章する", "高尚する", "公証する"],
+  "rank": 1,
+  "exact_match": true,
+  "nfkc_exact_match": true,
+  "acceptable_match": true,
+  "cer": 0.0,
+  "nfkc_cer": 0.0,
+  "reading_fidelity": true,
+  "latency_ms": 12.3
+}
+```
+
+**typo / typo_clean ケース（§4.3 由来）の 1 行**（`input` を持たず観測読みを持つ）:
+
+```json
+{
+  "id": "typo_adjacent_001",
+  "category": "typo",
+  "observed_reading": "こうじしょう",
+  "intended_reading": "こうしょう",
+  "expected": "交渉",
+  "top1": "交渉",
+  "candidates": ["交渉", "交渉する", "公証"],
+  "rank": 1,
+  "typo_type": "adjacent_key",
+  "exact_match": true,
+  "nfkc_exact_match": true,
+  "cer": 0.0,
+  "nfkc_cer": 0.0,
+  "typo_corrected": true,
+  "latency_ms": 15.1
+}
+```
+
+| フィールド | 内容 |
+|---|---|
+| `id` / `category` | ケース ID と主カテゴリ（`category[0]`、§11.2） |
+| `input` | 入力読み（通常変換ケースのみ） |
+| `observed_reading` / `intended_reading` / `typo_type` | typo 系ケースのみ（§4.3） |
+| `expected` | 期待第一候補（CER の参照、§6.1.2） |
+| `top1` | 実際の第一候補 |
+| `candidates` | 採取した top-k 候補（k = `config.n_best`）。表層のみ |
+| `rank` | 正解（`expected` or `acceptable[]`）の順位（1 始まり）。**圏外は 0** |
+| `exact_match` / `nfkc_exact_match` / `acceptable_match` | §6.1.1 の per-case 真偽 |
+| `cer` / `nfkc_cer` | §6.1.2 の per-case CER（1.0 超あり得る、クランプなし） |
+| `reading_fidelity` | 第一候補の読みが入力読みと一致（通常変換ケース） |
+| `typo_corrected` | typo 系で補正が発動したか（`--typo-mode off` では常に false） |
+| `latency_ms` | 当該ケースの計測 latency（`--iterations` 指定時は中央値） |
+
+- per-case JSONL は集計を持たない（集計は §8 の `--output` 側の正典）。
+  両者は同一 run で整合する（`summary.cer` は per-case `cer` の micro 平均に一致）。
+- per-case ファイルは大きくなる（v1 完全版で ≥1350 行）ため既定では出力しない。
+  baseline 用途では固定 config（§14.1）で採取したものを `bench/baselines/` 配下に
+  保存する。行順は入力 `*.jsonl` の出現順を保つ（diff 安定のため）。
 
 ## 9. 合格基準 v1
 
@@ -427,7 +592,13 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
   typo 補正は未実装＝M55 のため既定 `off` で走る。補正有効モード `rank` /
   `aggressive` での**実測値**検証は M55 受け入れで行う。§7「typo 評価のモード
   指定」参照）
-- 出力 JSON が §8 の stable schema に従う
+- 出力 JSON が §8 の stable schema に従い、`summary` に `exact_match_rate` /
+  `nfkc_exact_match_rate` / `cer` / `nfkc_cer`（§6.1.1 / §6.1.2）が含まれる
+- `--per-case` 指定時に §8.1 の per-case JSONL が出力され、`summary.cer` が
+  per-case `cer` の micro 平均と一致する
+- CER 単体テスト（既知ペアの編集距離）・Exact/NFKC 境界テスト（全半角差で
+  `exact_match=false` かつ `nfkc_exact_match=true` になること）が CTest で通る
+  （DEV-408 テスト方針）
 - baseline 比較レポート（diff_vs_baseline）が生成される
 - `--trace` フラグは M51 完了後の任意統合チェックとして扱う。M51
   未完了時は本フラグの存在を確認するのみで、出力 schema 検証は M51
@@ -577,7 +748,9 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - `version`（§8 出力 JSON の**指標スキーマ版**。指標計算ロジックや JSON 意味論
   を変えたら +1 する。同一の model/dataset/decode でも指標定義が変わると旧
   baseline との比較は無意味になるため、**`version` 変更時は baseline 再採取が
-  必須**）
+  必須**）。CER の集計法（micro/macro）・NFKC 正規化器（正規化テーブルの
+  Unicode データ版）を変えると `cer` / `nfkc_*` の意味が変わるため、これらの
+  変更も `version` +1 の対象とする（§6.1.1 / §6.1.2）
 
 `build_id` / `host_version` は**追跡用に記録するのみで互換キーに含めない**
 （commit ごとに変わるため。これらをキーにすると毎 PR で baseline が無効化され
@@ -609,3 +782,10 @@ baseline 採取・比較時に以下の**決定的入力（互換キー）**を�
 - 既定の fail 閾値: `top1_accuracy` が baseline 比 **−0.5pp 超**の悪化。
   flaky 誤検出を避けるため、悪化検出時は同一 config で 1 回再実行して確認した
   うえで fail を確定する（§14.2 が満たされていれば 2 回目は一致するはず）。
+- `exact_match_rate` / `cer`（いずれも素、§6.1.1）は**回帰監視系**として
+  `diff_vs_baseline` に必ず出し PR コメントに載せるが、v1 のハード fail 条件は
+  `top1_accuracy` のみとする（`top1_accuracy` が `expected`/`acceptable[]` を
+  救うため最も安定した gate になる）。`cer` の顕著な悪化（例 baseline 比 +0.5pp 超）は
+  レビュー注意喚起に留め、閾値による自動 fail 化は M53 以降でデータ規模が
+  揃ってから検討する。NFKC 系（`nfkc_*`）は診断専用で fail・監視いずれの
+  対象にもしない。

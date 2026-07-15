@@ -93,10 +93,29 @@ Write-Host "MakeAppx: $makeAppx"
 Write-Host "Manifest dir: $ManifestDir"
 Write-Host "Output: $OutMsix"
 
-# /nv: manifest 内の参照ファイルパス検証を bypass（identity package は外部コンテンツ参照のため必須）。
-# /o : 既存出力を上書き。
-& $makeAppx pack /o /d $ManifestDir /nv /p $OutMsix
-if ($LASTEXITCODE -ne 0) { throw "MakeAppx pack が失敗しました (exit $LASTEXITCODE)。" }
+# ---------------------------------------------------------------------------
+# clean staging から pack する（秘密鍵・不要ファイルの同梱防止）
+# ---------------------------------------------------------------------------
+# MakeAppx pack /d <dir> は <dir> の中身を「丸ごと」パッケージ化する。$ManifestDir
+# （pkg/msix）を直接指定すると、この .ps1 / Package.wapproj / README.md /
+# .exe.manifest、さらに README の dev-cert 手順で生成される azookey-dev.pfx（秘密鍵）や
+# out/ の .msix までもが .msix に同梱されてしまう（PFX 同梱は秘密鍵漏洩）。
+# よって manifest と（あれば）Assets のみをクリーンな一時ディレクトリへ集めてから pack する。
+$staging = Join-Path ([System.IO.Path]::GetTempPath()) ("azookey-msix-stage-" + [System.Guid]::NewGuid().ToString("N"))
+$null = New-Item -ItemType Directory -Path $staging -Force
+try {
+  Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $staging "AppxManifest.xml") -Force
+  $assetsDir = Join-Path $ManifestDir "Assets"
+  if (Test-Path $assetsDir) {
+    Copy-Item -LiteralPath $assetsDir -Destination (Join-Path $staging "Assets") -Recurse -Force
+  }
+  # /nv: manifest 内の参照ファイルパス検証を bypass（identity package は外部コンテンツ参照のため必須）。
+  # /o : 既存出力を上書き。
+  & $makeAppx pack /o /d $staging /nv /p $OutMsix
+  if ($LASTEXITCODE -ne 0) { throw "MakeAppx pack が失敗しました (exit $LASTEXITCODE)。" }
+} finally {
+  Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+}
 Write-Host "パッケージ生成: $OutMsix" -ForegroundColor Green
 
 if ($PfxPath) {

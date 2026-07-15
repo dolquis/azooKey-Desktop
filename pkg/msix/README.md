@@ -50,20 +50,29 @@ pwsh -File .\build-identity-package.ps1
 
 identity package は登録前に**信頼された証明書での署名が必須**。自己署名 dev cert の例:
 
+> **⚠️ 秘密鍵（.pfx）は `pkg/msix` の外に置く**: `build-identity-package.ps1` は clean staging
+> から pack するため `pkg/msix` 内の `.pfx` を .msix へ同梱しないが、二重の安全策として鍵は
+> パッケージ対象ツリー外（下記 `$certDir`）へ出力する。`pkg/msix/.gitignore` も `*.pfx` / `*.cer` /
+> `*.msix` / `out/` を無視する。
+
 ```powershell
+# 鍵はパッケージ対象ツリー外へ（例: リポジトリ外の一時ディレクトリ）。
+$certDir = Join-Path $env:TEMP "azooKey-dev-certs"
+New-Item -ItemType Directory -Path $certDir -Force | Out-Null
+
 # dev 証明書を作成（例）。Subject は AppxManifest.xml の <Identity Publisher> と一致必須。
 $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=dolquis" `
   -KeyUsage DigitalSignature -FriendlyName "azooKey dev" `
   -CertStoreLocation "Cert:\CurrentUser\My" `
   -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-# .pfx へエクスポートして署名
+# .pfx へエクスポートして署名（.pfx はツリー外）
 $pw = ConvertTo-SecureString -String "devpw" -Force -AsPlainText
-Export-PfxCertificate -Cert $cert -FilePath .\azooKey-dev.pfx -Password $pw | Out-Null
-pwsh -File .\build-identity-package.ps1 -PfxPath .\azooKey-dev.pfx -PfxPassword 'devpw'
+Export-PfxCertificate -Cert $cert -FilePath (Join-Path $certDir "azooKey-dev.pfx") -Password $pw | Out-Null
+pwsh -File .\build-identity-package.ps1 -PfxPath (Join-Path $certDir "azooKey-dev.pfx") -PfxPassword 'devpw'
 
 # 公開 .cer を TrustedPeople へ import（未実施だと 0x800B0109 / CERT_E_UNTRUSTEDROOT）
-Export-Certificate -Cert $cert -FilePath .\azooKey-dev.cer | Out-Null
-Import-Certificate -FilePath .\azooKey-dev.cer -CertStoreLocation Cert:\CurrentUser\TrustedPeople
+Export-Certificate -Cert $cert -FilePath (Join-Path $certDir "azooKey-dev.cer") | Out-Null
+Import-Certificate -FilePath (Join-Path $certDir "azooKey-dev.cer") -CertStoreLocation Cert:\CurrentUser\TrustedPeople
 ```
 
 本番は OV/EV 証明書 or Azure Trusted Signing（spec §2）。`Publisher` と cert Subject の
@@ -84,6 +93,15 @@ Add-AppxPackage -Path .\out\azooKey-identity-1.0.0.0.msix -ExternalLocation "C:\
 
 登録／解除の整合と残骸 0 は [`compat-test/msix_install_uninstall.ps1`](../../compat-test/msix_install_uninstall.ps1)
 で検証する（既定 `-PackageName dolquis.azooKey` は本 manifest の `Identity@Name` と一致）。
+**Option A（sparse）では `-ExternalLocation` が必須**（未指定だと host に package identity が
+付かず smoke が無意味）。external location は実行体の実 install ディレクトリの絶対パス:
+
+```powershell
+pwsh -File ..\..\compat-test\msix_install_uninstall.ps1 `
+  -MsixPath .\out\azooKey-identity-1.0.0.0.msix `
+  -ExternalLocation "C:\Program Files\azooKey"
+```
+
 COM 登録ラウンドトリップ自体は CTest `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest`
 が担い、本 PoC はその上の MSIX パッケージング層を補完する。
 

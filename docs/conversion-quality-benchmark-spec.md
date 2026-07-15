@@ -194,7 +194,7 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 | `MRR` | Mean Reciprocal Rank（正解の順位の逆数の平均） |
 | `exact_match_rate` | 第一候補が `expected` と**素（raw）完全一致**した率（§6.1.1）。合格基準・回帰ゲートの正典 |
 | `nfkc_exact_match_rate` | 第一候補が `expected` と **NFKC 正規化後に一致**した率（§6.1.1）。診断用（gate 非対象） |
-| `acceptable_match_rate` | 第一候補が `acceptable[]` のいずれかと素一致した率 |
+| `acceptable_match_rate` | 第一候補が**正準形 `expected` 以外の許容変種**（正解集合 `{expected} ∪ acceptable[]` から `expected` を除いた集合）に素一致した率（§6.1.1）。`top1_accuracy − exact_match_rate` に等しく、`top1_accuracy` の重複ではない診断用 |
 | `cer` | 第一候補 vs `expected` の **CER（Wagner-Fischer 編集距離／参照長、micro 平均）**（§6.1.2）。素評価 |
 | `nfkc_cer` | 第一候補 vs `expected` を NFKC 正規化後に測った CER（micro 平均）（§6.1.2）。診断用 |
 | `reading_fidelity_rate` | 候補の読みが入力読みと一致する率（M55 補正候補除く） |
@@ -218,7 +218,17 @@ typo メトリクスの分母にのみ採用し、その他のカテゴリ集計
 
 **素評価（raw）**: 正規化を一切かけず、第一候補 `top1` と `expected` を
 コードポイント列として同一かで判定する。これが `exact_match_rate`。
-`acceptable_match_rate` は `top1 ∈ {expected} ∪ acceptable[]` を素で判定する。
+
+**正解集合（accepted set）と `acceptable_match_rate` の区別**: 正解集合を
+`{expected} ∪ acceptable[]` と定める（§4.2。`acceptable[]` は慣例上 `expected`
+自身を含めて書いてよく、和集合で扱うため冪等）。`top1_accuracy` は
+`top1 ∈ 正解集合`（素）で判定する。これに対し `acceptable_match_rate` は
+`top1` が**正準形 `expected` 以外の許容変種**に一致した率、すなわち
+`top1 ∈ (正解集合 \ {expected})` とする。定義上
+`acceptable_match_rate = top1_accuracy − exact_match_rate`（3 者は
+`top1_accuracy ≥ exact_match_rate`、`acceptable_match_rate ≥ 0` を常に満たす）。
+これにより `acceptable_match_rate` は `top1_accuracy` の重複ではなく、
+「正準形の代わりに許容変種が第一候補になった割合」を測る診断値になる。
 
 **NFKC 評価**: `top1` と `expected` に Unicode 正規化形 **NFKC** を適用してから
 一致判定する。これが `nfkc_exact_match_rate`。**参照は `expected` のみ**とし、
@@ -387,7 +397,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
     "MRR": 0.91,
     "exact_match_rate": 0.82,
     "nfkc_exact_match_rate": 0.85,
-    "acceptable_match_rate": 0.88,
+    "acceptable_match_rate": 0.03,
     "cer": 0.041,
     "nfkc_cer": 0.032,
     "reading_fidelity_rate": 0.99,
@@ -416,9 +426,13 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 
 - `summary.cer` / `summary.nfkc_cer` は §6.1.2 の **micro 平均**。`by_category.<cat>.cer`
   も当該カテゴリ内の micro 平均（`Σ edit_distance / Σ len(expected)`、主カテゴリ§11.2 で集計）。
-- `diff_vs_baseline` の符号は「値の増分」。精度系（`*_accuracy` / `*_match_rate`）は
-  **正が改善**、誤り系（`cer` / `nfkc_cer` / `*_rate` の typo_false_positive など）は
-  **負が改善**。回帰ゲート（§14.3）はこの向きを踏まえて判定する。
+- `diff_vs_baseline` の符号は「値の増分」。精度系（`top1_accuracy` /
+  `exact_match_rate` など）は **正が改善**、誤り系（`cer` / `nfkc_cer` /
+  `typo_false_positive_rate` など）は**負が改善**。回帰ゲート（§14.3）はこの向きを
+  踏まえて判定する。`acceptable_match_rate`（正準形以外の許容変種率、§6.1.1）は
+  正負どちらが良いとは一概に言えない診断値のため gate 対象にしない。
+- 恒等式（§6.1.1）: `top1_accuracy = exact_match_rate + acceptable_match_rate`。
+  上例では 0.85 = 0.82 + 0.03。出力はこの整合を常に満たす。
 
 ### 8.1 per-case 内訳 schema（`--per-case <jsonl>`）
 
@@ -440,13 +454,18 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
   "rank": 1,
   "exact_match": true,
   "nfkc_exact_match": true,
-  "acceptable_match": true,
+  "acceptable_match": false,
   "cer": 0.0,
   "nfkc_cer": 0.0,
   "reading_fidelity": true,
   "latency_ms": 12.3
 }
 ```
+
+> 上例は `top1` が正準形 `expected` と一致した素 exact なので `exact_match: true`
+> かつ `acceptable_match: false`（許容変種一致ではない）。`top1` が `expected`
+> 以外の許容変種（例 `"交渉します"`）だったケースでは `exact_match: false` /
+> `acceptable_match: true` / `rank: 1` になる（§6.1.1 の恒等式に対応）。
 
 **typo / typo_clean ケース（§4.3 由来）の 1 行**（`input` を持たず観測読みを持つ）:
 
@@ -479,7 +498,8 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `top1` | 実際の第一候補 |
 | `candidates` | 採取した top-k 候補（k = `config.n_best`）。表層のみ |
 | `rank` | 正解（`expected` or `acceptable[]`）の順位（1 始まり）。**圏外は 0** |
-| `exact_match` / `nfkc_exact_match` / `acceptable_match` | §6.1.1 の per-case 真偽 |
+| `exact_match` / `nfkc_exact_match` | §6.1.1 の per-case 真偽（`top1` vs `expected` の素 / NFKC 一致） |
+| `acceptable_match` | `top1` が正準形 `expected` 以外の許容変種に一致（`top1 ∈ 正解集合 \ {expected}`、§6.1.1）。`exact_match` と排他で、両者が同時に true にならない |
 | `cer` / `nfkc_cer` | §6.1.2 の per-case CER（1.0 超あり得る、クランプなし） |
 | `reading_fidelity` | 第一候補の読みが入力読みと一致（通常変換ケース） |
 | `typo_corrected` | typo 系で補正が発動したか（`--typo-mode off` では常に false） |

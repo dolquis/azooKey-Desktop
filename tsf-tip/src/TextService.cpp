@@ -133,6 +133,8 @@ bool IsZeroRect(const RECT& rect) {
   return rect.left == 0 && rect.top == 0 && rect.right == 0 && rect.bottom == 0;
 }
 
+constexpr LONG kCursorFallbackCaretHeight = 16;
+
 CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect) {
   if (text_ext_rect && IsUsableTextExtent(*text_ext_rect)) {
     return {{text_ext_rect->left, text_ext_rect->bottom}, true};
@@ -148,7 +150,10 @@ CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect) {
   }
 
   POINT point{};
-  if (api.get_cursor_pos && api.get_cursor_pos(&point)) return {point, true};
+  if (api.get_cursor_pos && api.get_cursor_pos(&point)) {
+    point.y += kCursorFallbackCaretHeight;
+    return {point, true};
+  }
   return {};
 }
 
@@ -853,6 +858,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
 }
 STDMETHODIMP TextService::OnPushContext(ITfContext* pic) {
   UNREFERENCED_PARAMETER(pic);
+  ClearCandidateStateForLifecycle();
+  CancelPendingQueriesForLifecycle();
   return S_OK;
 }
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {

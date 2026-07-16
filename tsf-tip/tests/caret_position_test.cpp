@@ -99,7 +99,7 @@ TEST_F(CaretPositionTest, ZeroGuiCaretFallsBackToCursorPosition) {
 
   EXPECT_TRUE(anchor.valid);
   EXPECT_EQ(anchor.point.x, 321);
-  EXPECT_EQ(anchor.point.y, 654);
+  EXPECT_EQ(anchor.point.y, 670);
   EXPECT_EQ(g_gui_thread_info_calls, 1);
   EXPECT_EQ(g_client_to_screen_calls, 0);
   EXPECT_EQ(g_cursor_pos_calls, 1);
@@ -118,6 +118,18 @@ TEST_F(CaretPositionTest, FocusLossClearsCachedCaret) {
   service.set_caret_point_for_test({42, 84}, true);
 
   EXPECT_EQ(service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_FALSE(service.caret_point_valid_for_test());
+  const POINT point = service.caret_point_for_test();
+  EXPECT_EQ(point.x, 0);
+  EXPECT_EQ(point.y, 0);
+}
+
+TEST_F(CaretPositionTest, ContextPushClearsCachedCaret) {
+  azookey::tsf::TextService service;
+  service.set_caret_point_for_test({42, 84}, true);
+
+  EXPECT_EQ(service.OnPushContext(nullptr), S_OK);
 
   EXPECT_FALSE(service.caret_point_valid_for_test());
   const POINT point = service.caret_point_for_test();

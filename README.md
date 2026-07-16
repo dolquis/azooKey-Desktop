@@ -97,8 +97,11 @@ machine-wide 登録のため管理者権限が必要です（非管理者で実�
 
 ## ライセンス
 
-本体は MIT License（[`LICENSE`](./LICENSE)）。再配布する第三者資産の attribution は
-[`THIRD_PARTY_LICENSES`](./THIRD_PARTY_LICENSES)（規約は [`docs/licensing-policy.md`](./docs/licensing-policy.md)）に集約します。
+本体は MIT License（[`LICENSE`](./LICENSE)）。製品（Windows 実装ツリー）が再配布する
+第三者資産の attribution は [`THIRD_PARTY_LICENSES`](./THIRD_PARTY_LICENSES)（規約は
+[`docs/licensing-policy.md`](./docs/licensing-policy.md)）に集約します。リポジトリ同梱の
+エージェントツール（`.claude/` / `.agents/` 配下のベンダリングスキル等）は各ディレクトリ同梱の
+`NOTICE` / `LICENSE` を出典とし、上記集約のスコープ外です。
 
 ## コミュニティ
 

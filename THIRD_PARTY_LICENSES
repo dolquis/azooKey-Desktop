@@ -9,6 +9,11 @@
   `learning/` `settings/` `bench/` `scripts/` など）が再配布する資産。
 - 対象外: `legacy/`（未保守の macOS 実装・参照資産）。同ツリー配下の Hugging Face
   モデル submodule 等は本ファイルの管理対象外とする。
+- 対象外: リポジトリ同梱のエージェントツール（`.claude/skills/` `.agents/skills/` の
+  ベンダリングスキル等）。各ディレクトリ同梱の `NOTICE` / `LICENSE` を出典とする
+  （例: `.claude/skills/doc-coauthoring` は Apache-2.0 © Anthropic, PBC で in-place の
+  `NOTICE.md` / `LICENSE` を保持）。製品の再配布資産ではないため本ファイルには集約しないが、
+  既存の in-place 表記を出典とすることを明示する（バイパスしない）。
 
 ## 現状（同梱第三者データ）
 

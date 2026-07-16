@@ -8,6 +8,9 @@ target_link_libraries(azookey_zenzai_bench
   PRIVATE azookey_host azookey_project_options azookey_project_warnings
 )
 
+set(AZOOKEY_ZENZAI_TEST_MODEL "" CACHE FILEPATH
+    "Path to a real Zenzai GGUF used by the llama.cpp CTest smoke")
+
 if(AZOOKEY_BUILD_TESTS)
   set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS
     azookey_bench
@@ -15,7 +18,16 @@ if(AZOOKEY_BUILD_TESTS)
   )
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
-  if(NOT AZOOKEY_WITH_LLAMA_CPP)
+  if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
+    add_test(NAME azookey_zenzai_real_model_smoke
+             COMMAND azookey_zenzai_bench
+                     --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --iterations 1 --warmup 0 --require-model --require-zenzai)
+    set_tests_properties(azookey_zenzai_real_model_smoke PROPERTIES
+      LABELS "zenzai-real-model"
+      TIMEOUT 120
+    )
+  elseif(NOT AZOOKEY_WITH_LLAMA_CPP)
     add_test(NAME azookey_zenzai_bench_smoke
              COMMAND azookey_zenzai_bench --mock-zenzai --iterations 20 --warmup 2)
     set_tests_properties(azookey_zenzai_bench_smoke PROPERTIES

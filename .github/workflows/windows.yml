@@ -243,9 +243,9 @@ jobs:
           }
 
   windows-llama-build:
-    name: Windows llama.cpp compile
+    name: Windows llama.cpp real-model smoke
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
@@ -266,17 +266,61 @@ jobs:
           path: build/windows-llama/_deps
           key: llama-cpp-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
+      - name: Cache pinned Zenzai model
+        uses: actions/cache@v4
+        with:
+          path: build/model-cache
+          key: zenz-v3.2-small-gguf-c67e03e0-q5-k-m-29c223d4
+
+      - name: Download and verify pinned Zenzai model
+        shell: pwsh
+        run: |
+          $modelDir = Join-Path $PWD "build/model-cache"
+          $modelPath = Join-Path $modelDir "ggml-model-Q5_K_M.gguf"
+          $expectedSha = "29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673"
+          $modelUrl = "https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/resolve/c67e03e07d215c869f591b274c1631170d3e11fe/ggml-model-Q5_K_M.gguf"
+          New-Item -ItemType Directory -Force -Path $modelDir | Out-Null
+          if (Test-Path -LiteralPath $modelPath) {
+            $cachedSha = (Get-FileHash -LiteralPath $modelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($cachedSha -ne $expectedSha) {
+              Remove-Item -LiteralPath $modelPath -Force
+            }
+          }
+          if (-not (Test-Path -LiteralPath $modelPath)) {
+            curl.exe --fail --location --retry 3 --output $modelPath $modelUrl
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $actualSha = (Get-FileHash -LiteralPath $modelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha -ne $expectedSha) {
+            throw "Zenzai model SHA256 mismatch: expected $expectedSha, got $actualSha"
+          }
+          "AZOOKEY_REAL_MODEL=$modelPath" >> $env:GITHUB_ENV
+
       - name: Configure llama.cpp build
         shell: pwsh
         run: |
-          cmake -S . -B build/windows-llama -G Ninja -DCMAKE_BUILD_TYPE=Debug -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON 2>&1 | Tee-Object -FilePath configure-llama.log
+          $cmakeModelPath = $env:AZOOKEY_REAL_MODEL.Replace('\', '/')
+          cmake -S . -B build/windows-llama -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON "-DAZOOKEY_ZENZAI_TEST_MODEL=$cmakeModelPath" 2>&1 | Tee-Object -FilePath configure-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build host tests with llama.cpp
+      - name: Build host tests and Zenzai bench with llama.cpp
         shell: pwsh
         run: |
-          cmake --build build/windows-llama --target host_engine_tests --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
+          cmake --build build/windows-llama --target host_engine_tests azookey_zenzai_bench --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run pinned real-model smoke via CTest
+        shell: pwsh
+        run: |
+          ctest --test-dir build/windows-llama -L zenzai-real-model --verbose --no-tests=error 2>&1 | Tee-Object -FilePath test-llama.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testLog = Get-Content -Raw -LiteralPath test-llama.log
+          if ($testLog -notmatch 'model_loaded=1') {
+            throw "Real-model smoke did not report model_loaded=1"
+          }
+          if ($testLog -notmatch 'zenzai_candidates=[1-9][0-9]*') {
+            throw "Real-model smoke did not report any Zenzai candidates"
+          }
 
       - name: Report sccache stats
         if: always()
@@ -291,6 +335,7 @@ jobs:
           path: |
             configure-llama.log
             build-llama.log
+            test-llama.log
           if-no-files-found: ignore
 
   linux-build:

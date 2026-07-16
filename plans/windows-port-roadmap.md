@@ -313,6 +313,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_display_attribute_tests` | `display_attribute_test.cpp` | `ITfDisplayAttributeProvider`（`GetDisplayAttributeInfo`/`EnumDisplayAttributeInfo`）と `InputDisplayAttributeInfo`（GUID/説明/下線属性、`Next`/`Reset`/`Skip`/`Clone`、null 引数 reject） |
 | `tsf_tip_activate_uiless_tests` | `activate_uiless_test.cpp` | `ActivateEx` が `ITfThreadMgrEx::GetActiveFlags`（`dwFlags` ではなく）から UI-less 状態を導出する（spec §2.10） |
 | `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
+| `azookey_zenzai_real_model_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロード・推論し、`model_loaded=1` と `zenzai_candidates>0` を検証 |
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 

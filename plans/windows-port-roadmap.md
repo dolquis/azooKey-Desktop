@@ -1625,7 +1625,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 #### M62 横断依存・既知のテストギャップ
 
-- **横断依存**: `THIRD_PARTY_LICENSES` 集約ファイル新設（M62-C/D と M53 辞書強化の共通前提）。
+- **横断依存**: `THIRD_PARTY_LICENSES` 集約ファイル新設（M62-C/D と M53 辞書強化の共通前提。
+  集約表記の実体は ルート `THIRD_PARTY_LICENSES`、attribution 運用規約の正典は
+  `docs/licensing-policy.md`。Mozc 由来データ取り込み時はここへ追記する）。
   `docs/candidate-rewriter-spec.md`（IPC payload・データ形式・ライセンス・TIP/Host 責務境界・
   確定時の学習 reading 扱いの正典）新設。
 - **候補注釈の伝送（必須）**: リライタ候補は注釈（description）付きで表示するため、候補表示経路の

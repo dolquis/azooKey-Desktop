@@ -53,6 +53,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 役割 |
 |---|---|
 | [`debugging.md`](debugging.md) | ビルド・ベンチ・手動確認・ログ収集・CI・典型トラブル |
+| [`licensing-policy.md`](licensing-policy.md) | 第三者資産 attribution 規約（三層 attribution・データヘッダ・採用ワークフロー）の正典。集約表記の実体はルート [`THIRD_PARTY_LICENSES`](../THIRD_PARTY_LICENSES) |
 | Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔）。`AGENTS.md`「Linear 運用（管制塔）」参照 |
 
 ## Phase 一覧

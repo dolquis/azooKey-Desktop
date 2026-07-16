@@ -1,0 +1,72 @@
+# Third-Party Licenses / 第三者ライセンス集約
+
+本ファイルは azooKey-Desktop（Windows 版）が**再配布する第三者資産**の著作権表記と
+ライセンスを集約する正典である。運用規約（三層 attribution・データヘッダ・再生成注記・
+採用ワークフロー）は [`docs/licensing-policy.md`](docs/licensing-policy.md) を参照する。
+
+- 本体ライセンス: MIT License（[`LICENSE`](LICENSE)、Copyright (c) 2025 Miwa Keita）。
+- 対象範囲: 保守対象の Windows 実装ツリー（`core/` `ipc/` `tsf-tip/` `inference-host/`
+  `learning/` `settings/` `bench/` `scripts/` など）が再配布する資産。
+- 対象外: `legacy/`（未保守の macOS 実装・参照資産）。同ツリー配下の Hugging Face
+  モデル submodule 等は本ファイルの管理対象外とする。
+
+## 現状（同梱第三者データ）
+
+**保守対象の Windows ツリーには、再配布する第三者由来データを現時点で同梱していない。**
+記号（M62-C）/ 絵文字（M62-D）リライターや辞書強化（M53）で Mozc 由来データ・
+Unicode CLDR・SudachiDict 等を取り込む際に、本ファイルへ追記する（下記「追記の手順」）。
+
+## ビルド時・実行時依存（本リポジトリには未同梱／未ベンダリング）
+
+以下は `FetchContent` または `add_subdirectory` で外部取得する依存で、ソースツリーには
+含めない（= 本リポジトリでは再配布しない）。配布物（MSIX 等）へ同梱する段階の再配布
+attribution は [`docs/sideload-packaging-spec.md`](docs/sideload-packaging-spec.md)
+（Phase 7 / M28〜M34）で扱う。
+
+| 依存 | 用途 | ライセンス | 取得方法 |
+| -- | -- | -- | -- |
+| llama.cpp | Zenzai 推論（実モデル経路） | MIT | `AZOOKEY_FETCH_LLAMA_CPP` またはローカル source tree |
+| GoogleTest | 単体テストのみ（配布物には非同梱） | BSD-3-Clause | `AZOOKEY_FETCH_GOOGLETEST` |
+
+> zenz GGUF モデル本体の配布可否・CUDA ランタイム再配布条項は Linear `DEV-202` で別途確認する。
+
+## 追記の手順（第三者資産を同梱するとき）
+
+新たに第三者由来データ・コードを保守対象ツリーへ同梱する場合は、以下を必ず満たす。
+詳細な規約は [`docs/licensing-policy.md`](docs/licensing-policy.md)。
+
+1. 本ファイルに `## <資産名>` 節を追加し、由来元・バージョン / コミット・SPDX ライセンス
+   識別子・原著作権表記（全文が必要なライセンスは全文）・azooKey 側の格納パス・
+   再生成手順（派生データの場合）を記載する。
+2. 同梱ファイル先頭に attribution ヘッダ（由来元 + ライセンス + 本ファイルへの参照）を付す。
+3. 派生・再ポートしたデータには「原典 + 変換手順」の再生成注記を残す（逐語コピーしない）。
+
+### 追記テンプレート（記入例・現時点では未使用）
+
+```
+## <Asset Name>
+
+- Source: <upstream repo / dataset>（<version or commit>）
+- License: <SPDX-Identifier>
+- Copyright: <original copyright holder>
+- azooKey path: <path/in/this/repo>
+- Derived: <yes/no。yes の場合は再生成手順へのリンク>
+- Notes: <BSD-3 名前条項保持・CLDR 由来など特記事項>
+
+<必要なら原ライセンス全文をここに転記>
+```
+
+## 想定される追記先（前提整備・現時点では未同梱）
+
+M62-C/D・M53 で取り込む可能性がある資産と、取り込み時に必要な表記義務の目安。
+**実際に取り込む段階で正式に追記する。現時点ではいずれも同梱していない。**
+
+| 想定資産 | 用途（M） | ライセンス | 追記時の要点 |
+| -- | -- | -- | -- |
+| Mozc `symbol.tsv` 由来データ | 記号リライター（M62-C） | BSD-3-Clause © Google | 名前条項（3rd clause）保持・原典表記の全文転記 |
+| Mozc `emoji_data.tsv` 由来データ | 絵文字リライター（M62-D） | BSD-3-Clause © Google | 同上 |
+| Unicode CLDR 由来データ | 絵文字リライター（M62-D） | Unicode License v3 | CLDR データ条項・出典バージョン明記 |
+| SudachiDict（UniDic 内包） | 辞書強化（M53） | Apache-2.0（内包 UniDic は BSD-3-Clause） | `NOTICE` 継承・内包ライセンス連鎖の併記 |
+
+> 上表は**将来取り込みの計画**であり、現時点で該当データを再配布していないことを再掲する。
+> 定義・受け入れ条件の正典は `plans/windows-port-roadmap.md`（M62 / M53）、進捗・状態は Linear。

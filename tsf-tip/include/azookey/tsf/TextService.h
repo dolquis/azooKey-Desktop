@@ -21,6 +21,15 @@ namespace azookey::tsf {
 
 #ifdef AZOOKEY_TSF_TESTING
 namespace testing {
+using GetGuiThreadInfoFnForTest = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
+using ClientToScreenFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
+using GetCursorPosFnForTest = BOOL(WINAPI*)(LPPOINT);
+
+struct CaretAnchorForTest {
+  POINT point;
+  bool valid;
+};
+
 void FailNextComBoundaryAllocationForTest();
 void ClearComBoundaryAllocationFailureForTest();
 bool ConsumeComBoundaryAllocationFailureForTest();
@@ -29,6 +38,11 @@ void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type);
+void SetCaretWin32ApiForTest(GetGuiThreadInfoFnForTest get_gui_thread_info,
+                             ClientToScreenFnForTest client_to_screen,
+                             GetCursorPosFnForTest get_cursor_pos);
+void ClearCaretWin32ApiForTest();
+CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect);
 }  // namespace testing
 #endif
 
@@ -84,6 +98,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool committing_{false};
   std::string commit_surface_;
   POINT caret_pt_{0, 0};
+  bool caret_pt_valid_{false};
 
 #ifdef AZOOKEY_TSF_TESTING
   bool candidate_window_show_pending_for_test();
@@ -111,6 +126,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_ipc_pipe_name_for_test(std::string pipe_name);
   void start_ipc_worker_for_test();
   void stop_ipc_worker_for_test();
+  POINT caret_point_for_test() const { return caret_pt_; }
+  bool caret_point_valid_for_test() const { return caret_pt_valid_; }
+  void set_caret_point_for_test(POINT point, bool valid) {
+    caret_pt_ = point;
+    caret_pt_valid_ = valid;
+  }
 #endif
 
  private:
@@ -207,6 +228,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
+  POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;
   bool BatchRomajiEnabled() const;
   std::string BatchPreviewSurface() const;

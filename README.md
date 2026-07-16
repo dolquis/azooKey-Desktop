@@ -95,6 +95,15 @@ machine-wide 登録のため管理者権限が必要です（非管理者で実�
 機能ごとの仕様は [`docs/legacy-parity-spec.md`](./docs/legacy-parity-spec.md) 以下の
 `docs/*-spec.md` にまとまっています。
 
+## ライセンス
+
+本体は MIT License（[`LICENSE`](./LICENSE)）。製品（Windows 実装ツリー）が再配布する
+第三者資産の attribution は [`THIRD_PARTY_LICENSES`](./THIRD_PARTY_LICENSES)（規約は
+[`docs/licensing-policy.md`](./docs/licensing-policy.md)）に集約します。リポジトリ同梱の
+エージェントツールのうち第三者由来は [`.claude/skills/doc-coauthoring`](./.claude/skills/doc-coauthoring)
+（Apache-2.0 © Anthropic, PBC）のみで、同梱の `NOTICE` / `LICENSE` を出典とします（上記集約のスコープ外）。
+他のスキルは本プロジェクト自身のものです。
+
 ## コミュニティ
 
 azooKey の開発に参加したい方、使い方に質問がある方、要望や不具合報告がある方は、ぜひ [azooKey の Discord サーバ](https://discord.gg/dY9gHuyZN5) にご参加ください。

@@ -100,8 +100,9 @@ machine-wide 登録のため管理者権限が必要です（非管理者で実�
 本体は MIT License（[`LICENSE`](./LICENSE)）。製品（Windows 実装ツリー）が再配布する
 第三者資産の attribution は [`THIRD_PARTY_LICENSES`](./THIRD_PARTY_LICENSES)（規約は
 [`docs/licensing-policy.md`](./docs/licensing-policy.md)）に集約します。リポジトリ同梱の
-エージェントツール（`.claude/` / `.agents/` 配下のベンダリングスキル等）は各ディレクトリ同梱の
-`NOTICE` / `LICENSE` を出典とし、上記集約のスコープ外です。
+エージェントツールのうち第三者由来は [`.claude/skills/doc-coauthoring`](./.claude/skills/doc-coauthoring)
+（Apache-2.0 © Anthropic, PBC）のみで、同梱の `NOTICE` / `LICENSE` を出典とします（上記集約のスコープ外）。
+他のスキルは本プロジェクト自身のものです。
 
 ## コミュニティ
 

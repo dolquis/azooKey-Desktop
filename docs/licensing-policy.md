@@ -9,10 +9,13 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 - 対象: 保守対象の Windows 実装ツリー（`core/` `ipc/` `tsf-tip/` `inference-host/`
   `learning/` `settings/` `bench/` `scripts/` など）が**再配布**する資産。
 - 対象外: `legacy/`（未保守の macOS 実装・参照資産）。
-- 対象外: リポジトリ同梱のエージェントツール（`.claude/skills/` `.agents/skills/` の
-  ベンダリングスキル等）。製品の再配布資産ではないため集約しないが、各ディレクトリ同梱の
-  `NOTICE` / `LICENSE`（例: `.claude/skills/doc-coauthoring`、Apache-2.0 © Anthropic, PBC）を
-  出典として保持する（in-place 表記のバイパス禁止）。
+- 対象外: リポジトリ同梱のエージェントツール（`.claude/skills/` `.agents/skills/`）。
+  このうち**第三者（外部）由来は `.claude/skills/doc-coauthoring` のみ**で、同ディレクトリ
+  in-place の `NOTICE.md` / `LICENSE`（Apache-2.0 © Anthropic, PBC）を出典として保持する
+  （バイパス禁止）。他のスキル（`tsf-tip-development` `tsf-ipc-protocol` 等の repo ネイティブ、
+  および `japanese-tech-writing` `argument-gap-edit` `japanese-doc-workflow` 等 本組織
+  `dolquis/agent-ops` を origin とする共有スキルのベンダリングコピー）は本プロジェクト自身の
+  ものであり、第三者ライセンス義務を持たないため集約対象外とする。
 - ビルド時のみ取得しソースツリーへ含めない依存（`FetchContent` の llama.cpp /
   GoogleTest 等）は「未同梱」として `THIRD_PARTY_LICENSES` に区別して記載する。
   配布物（MSIX）への同梱段階の再配布 attribution は

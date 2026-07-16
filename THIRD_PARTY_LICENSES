@@ -9,11 +9,12 @@
   `learning/` `settings/` `bench/` `scripts/` など）が再配布する資産。
 - 対象外: `legacy/`（未保守の macOS 実装・参照資産）。同ツリー配下の Hugging Face
   モデル submodule 等は本ファイルの管理対象外とする。
-- 対象外: リポジトリ同梱のエージェントツール（`.claude/skills/` `.agents/skills/` の
-  ベンダリングスキル等）。各ディレクトリ同梱の `NOTICE` / `LICENSE` を出典とする
-  （例: `.claude/skills/doc-coauthoring` は Apache-2.0 © Anthropic, PBC で in-place の
-  `NOTICE.md` / `LICENSE` を保持）。製品の再配布資産ではないため本ファイルには集約しないが、
-  既存の in-place 表記を出典とすることを明示する（バイパスしない）。
+- 対象外: リポジトリ同梱のエージェントツール（`.claude/skills/` `.agents/skills/`）。
+  このうち第三者（外部）由来は `.claude/skills/doc-coauthoring` のみで、同ディレクトリ
+  in-place の `NOTICE.md` / `LICENSE`（Apache-2.0 © Anthropic, PBC）を出典として保持する
+  （バイパスしない）。他のスキルは本プロジェクト自身のもの（`tsf-*` 等の repo ネイティブ、
+  および `dolquis/agent-ops` を origin とする共有スキルのベンダリングコピー）で第三者ライセンス
+  義務を持たないため集約対象外。運用規約は `docs/licensing-policy.md`「適用範囲」を参照。
 
 ## 現状（同梱第三者データ）
 

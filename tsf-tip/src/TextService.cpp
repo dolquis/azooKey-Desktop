@@ -94,6 +94,69 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
   return same;
 }
 
+using GetGuiThreadInfoFn = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
+using ClientToScreenFn = BOOL(WINAPI*)(HWND, LPPOINT);
+using GetCursorPosFn = BOOL(WINAPI*)(LPPOINT);
+
+struct CaretWin32Api {
+  GetGuiThreadInfoFn get_gui_thread_info;
+  ClientToScreenFn client_to_screen;
+  GetCursorPosFn get_cursor_pos;
+};
+
+struct CaretAnchor {
+  POINT point{0, 0};
+  bool valid{false};
+};
+
+CaretWin32Api DefaultCaretWin32Api() {
+  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetCursorPos};
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+CaretWin32Api g_caret_win32_api = DefaultCaretWin32Api();
+#endif
+
+CaretWin32Api CurrentCaretWin32Api() {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_caret_win32_api;
+#else
+  return DefaultCaretWin32Api();
+#endif
+}
+
+bool IsUsableTextExtent(const RECT& rect) {
+  return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+bool IsZeroRect(const RECT& rect) {
+  return rect.left == 0 && rect.top == 0 && rect.right == 0 && rect.bottom == 0;
+}
+
+constexpr LONG kCursorFallbackCaretHeight = 16;
+
+CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect) {
+  if (text_ext_rect && IsUsableTextExtent(*text_ext_rect)) {
+    return {{text_ext_rect->left, text_ext_rect->bottom}, true};
+  }
+
+  const CaretWin32Api api = CurrentCaretWin32Api();
+  GUITHREADINFO thread_info{};
+  thread_info.cbSize = sizeof(thread_info);
+  if (api.get_gui_thread_info && api.client_to_screen && api.get_gui_thread_info(0, &thread_info) &&
+      thread_info.hwndCaret && !IsZeroRect(thread_info.rcCaret)) {
+    POINT point{thread_info.rcCaret.left, thread_info.rcCaret.bottom};
+    if (api.client_to_screen(thread_info.hwndCaret, &point)) return {point, true};
+  }
+
+  POINT point{};
+  if (api.get_cursor_pos && api.get_cursor_pos(&point)) {
+    point.y += kCursorFallbackCaretHeight;
+    return {point, true};
+  }
+  return {};
+}
+
 bool IsExpectedIpcResponse(const azookey::ipc::Envelope& response, uint64_t expected_request_id,
                            azookey::ipc::MessageType expected_type) {
   return (expected_request_id == 0 || response.request_id == expected_request_id) &&
@@ -155,6 +218,19 @@ bool ConsumePendingCommitObservationFailureForTest() {
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type) {
   return IsExpectedIpcResponse(response, expected_request_id, expected_type);
+}
+
+void SetCaretWin32ApiForTest(GetGuiThreadInfoFnForTest get_gui_thread_info,
+                             ClientToScreenFnForTest client_to_screen,
+                             GetCursorPosFnForTest get_cursor_pos) {
+  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_cursor_pos};
+}
+
+void ClearCaretWin32ApiForTest() { g_caret_win32_api = DefaultCaretWin32Api(); }
+
+CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect) {
+  const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect);
+  return {anchor.point, anchor.valid};
 }
 
 }  // namespace testing
@@ -468,8 +544,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (state.candidate_window_visible && !state.shown_candidates.empty()) {
         std::vector<std::wstring> items;
         for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
-        POINT pt = caret_pt_;
-        if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+        const POINT pt = CandidateAnchorPoint();
         candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
       }
     };
@@ -660,8 +735,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
               for (const auto& c : snapshot) items.push_back(Utf8ToWide(c.surface));
               if (!items.empty()) {
                 selected_candidate_idx_ = 0;
-                POINT pt = caret_pt_;
-                if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+                const POINT pt = CandidateAnchorPoint();
                 const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
                 if (FAILED(begin_hr)) return begin_hr;
               }
@@ -784,6 +858,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
 }
 STDMETHODIMP TextService::OnPushContext(ITfContext* pic) {
   UNREFERENCED_PARAMETER(pic);
+  ClearCandidateStateForLifecycle();
+  CancelPendingQueriesForLifecycle();
   return S_OK;
 }
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
@@ -901,6 +977,8 @@ void TextService::ClearCandidateStateForLifecycle() {
   candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
   shown_candidates_.clear();
+  caret_pt_ = {0, 0};
+  caret_pt_valid_ = false;
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidates_.clear();
@@ -1835,6 +1913,14 @@ void TextService::OnCandidatesReady(void* context) {
   static_cast<TextService*>(context)->ShowCandidateWindowFromCache();
 }
 
+POINT TextService::CandidateAnchorPoint() {
+  if (caret_pt_valid_) return caret_pt_;
+  const CaretAnchor anchor = ResolveCaretAnchor(nullptr);
+  caret_pt_ = anchor.point;
+  caret_pt_valid_ = anchor.valid;
+  return caret_pt_;
+}
+
 void TextService::ShowCandidateWindowFromCache() {
   if (CurrentPreeditSurface().empty() || candidate_ui_.IsShowing()) {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
@@ -1858,8 +1944,7 @@ void TextService::ShowCandidateWindowFromCache() {
 
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
-  POINT pt = caret_pt_;
-  if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);
+  const POINT pt = CandidateAnchorPoint();
   candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
 }
 
@@ -2165,17 +2250,19 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       return set_text_hr;
     }
 
-    // Cache the caret screen position for the candidate window anchor (M5).
+    // Cache the caret screen position for the candidate window anchor (M5/M19).
     {
+      const RECT* text_ext_rect = nullptr;
+      RECT rc{};
       ITfContextView* pView = nullptr;
       if (SUCCEEDED(context_->GetActiveView(&pView)) && pView) {
-        RECT rc{};
         BOOL clipped = FALSE;
-        if (SUCCEEDED(pView->GetTextExt(ec, pRange, &rc, &clipped))) {
-          service_->caret_pt_ = {rc.left, rc.bottom};
-        }
-        pView->Release();
+        if (pView->GetTextExt(ec, pRange, &rc, &clipped) == S_OK) text_ext_rect = &rc;
       }
+      if (pView) pView->Release();
+      const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect);
+      service_->caret_pt_ = anchor.point;
+      service_->caret_pt_valid_ = anchor.valid;
     }
 
     // Apply underline display attribute via GUID_PROP_ATTRIBUTE.

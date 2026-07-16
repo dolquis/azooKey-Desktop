@@ -92,6 +92,7 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 15)
   add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_caret_position_tests tests/caret_position_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_query_interface_contract_tests
     tests/query_interface_contract_test.cpp
     LABEL tsf-com

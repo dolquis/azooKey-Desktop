@@ -478,7 +478,8 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, HANDLE stop_event = nullptr) {
 
 bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, HANDLE stop_event = nullptr) {
   const auto json = Serialize(envelope);
-  const auto frame = EncodeLengthPrefixed(json);
+  if (!json) return false;
+  const auto frame = EncodeLengthPrefixed(*json);
   if (!frame) return false;
   return WriteBytes(pipe, frame->data(), frame->size(), stop_event);
 }

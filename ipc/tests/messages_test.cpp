@@ -15,7 +15,8 @@ TEST(MessagesTest, EnvelopeRoundTrip) {
   env.payload_json = "{\"reading\":\"にほん\",\"max_candidates\":7}";
 
   const auto json = azookey::ipc::Serialize(env);
-  auto decoded = azookey::ipc::Deserialize(json);
+  ASSERT_TRUE(json.has_value());
+  auto decoded = azookey::ipc::Deserialize(*json);
   ASSERT_TRUE(decoded.has_value());
   EXPECT_EQ(decoded->request_id, 42u);
   EXPECT_EQ(decoded->trace_id, "t1");
@@ -25,7 +26,8 @@ TEST(MessagesTest, EnvelopeRoundTrip) {
 
   // Re-serializing the decoded envelope must remain decodable.
   const auto rejson = azookey::ipc::Serialize(*decoded);
-  auto redecoded = azookey::ipc::Deserialize(rejson);
+  ASSERT_TRUE(rejson.has_value());
+  auto redecoded = azookey::ipc::Deserialize(*rejson);
   ASSERT_TRUE(redecoded.has_value());
   EXPECT_EQ(redecoded->payload_json, decoded->payload_json);
 }
@@ -38,9 +40,10 @@ TEST(MessagesTest, EnvelopeRoundTripPreservesFullUInt64RequestId) {
   env.payload_json = "{}";
 
   const auto serialized = azookey::ipc::Serialize(env);
-  EXPECT_NE(serialized.find("\"request_id\":18446744073709551615"), std::string::npos);
+  ASSERT_TRUE(serialized.has_value());
+  EXPECT_NE(serialized->find("\"request_id\":18446744073709551615"), std::string::npos);
 
-  auto decoded = azookey::ipc::Deserialize(serialized);
+  auto decoded = azookey::ipc::Deserialize(*serialized);
   ASSERT_TRUE(decoded.has_value());
   EXPECT_EQ(decoded->request_id, std::numeric_limits<uint64_t>::max());
 }
@@ -72,16 +75,55 @@ TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {
   env.type = azookey::ipc::MessageType::QueryCandidates;
   env.payload_json = "{}";
   const auto json = azookey::ipc::Serialize(env);
+  ASSERT_TRUE(json.has_value());
 
-  auto lp = azookey::ipc::EncodeLengthPrefixed(json);
+  auto lp = azookey::ipc::EncodeLengthPrefixed(*json);
   ASSERT_TRUE(lp.has_value());
   auto restored = azookey::ipc::DecodeLengthPrefixed(*lp);
   ASSERT_TRUE(restored.has_value());
-  EXPECT_EQ(*restored, json);
+  EXPECT_EQ(*restored, *json);
 }
 
 TEST(MessagesTest, MalformedInputRejected) {
   EXPECT_FALSE(azookey::ipc::Deserialize("not json").has_value());
+}
+
+TEST(MessagesTest, SerializeRejectsMalformedPayload) {
+  azookey::ipc::Envelope env;
+  env.request_id = 1;
+  env.type = azookey::ipc::MessageType::QueryCandidates;
+  env.payload_json = "{not valid json";
+  EXPECT_FALSE(azookey::ipc::Serialize(env).has_value());
+}
+
+TEST(MessagesTest, SerializeAcceptsEmptyPayload) {
+  azookey::ipc::Envelope env;
+  env.request_id = 1;
+  env.type = azookey::ipc::MessageType::Ping;
+  // Empty payload_json is valid and encodes as an empty object.
+  const auto json = azookey::ipc::Serialize(env);
+  ASSERT_TRUE(json.has_value());
+  EXPECT_NE(json->find("\"payload\":{}"), std::string::npos);
+}
+
+TEST(MessagesTest, DeserializeRejectsUnsupportedVersion) {
+  // A future breaking generation must be dropped, not misinterpreted.
+  const std::string future =
+      "{\"version\":2,\"request_id\":1,\"trace_id\":\"t\",\"type\":\"Ping\",\"payload\":{}}";
+  EXPECT_FALSE(azookey::ipc::Deserialize(future).has_value());
+
+  // A non-positive version is malformed.
+  const std::string zero =
+      "{\"version\":0,\"request_id\":1,\"trace_id\":\"t\",\"type\":\"Ping\",\"payload\":{}}";
+  EXPECT_FALSE(azookey::ipc::Deserialize(zero).has_value());
+}
+
+TEST(MessagesTest, DeserializeAcceptsSupportedVersion) {
+  const std::string current =
+      "{\"version\":1,\"request_id\":1,\"trace_id\":\"t\",\"type\":\"Ping\",\"payload\":{}}";
+  auto decoded = azookey::ipc::Deserialize(current);
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->version, azookey::ipc::kEnvelopeVersion);
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRejectsOversizedFrames) {

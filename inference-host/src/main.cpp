@@ -435,8 +435,12 @@ int main(int argc, char** argv) {
     }
     auto resp = stdio_dispatcher.Dispatch(*env);
     if (resp) {
-      std::cout << azookey::ipc::Serialize(*resp) << std::endl;
-      std::cout.flush();
+      if (auto serialized = azookey::ipc::Serialize(*resp)) {
+        std::cout << *serialized << std::endl;
+        std::cout.flush();
+      } else {
+        std::cerr << "warn: failed to serialize response envelope" << std::endl;
+      }
     }
   }
   return 0;

@@ -624,6 +624,35 @@ TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {
   std::remove(model_path.c_str());
 }
 
+#if AZOOKEY_WITH_LLAMA_CPP
+TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
+  const char* lpath = "azookey_host_engine_load_diagnostic.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_invalid_llama_model.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  const auto result = engine->LoadModelWithResult(options);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+
+  EXPECT_FALSE(result.ok);
+  ASSERT_TRUE(result.error.has_value());
+  EXPECT_NE(result.error->find("llama.cpp model load failed:"), std::string::npos);
+  EXPECT_GT(result.error->size(), std::string("llama.cpp model load failed:").size());
+  const auto health = engine->health_snapshot();
+  ASSERT_TRUE(health.last_error.has_value());
+  EXPECT_EQ(health.last_error, result.error);
+}
+#endif
+
 TEST(InferenceEngineTest, ResolvesOnlyZenzaiCustomPreTokenizerToUpstreamGpt2) {
   const auto resolved =
       azookey::host::ResolveZenzaiPreTokenizerOverride("gpt2-small-japanese-char");

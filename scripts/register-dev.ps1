@@ -120,6 +120,15 @@ if (-not $ElevatedReentry) {
       throw "Inference host already serving this user's pipe ($myPipe). Stop it and rerun with -ModelPath so the current session uses the requested model."
     }
 
+    $hostStderrLog = $null
+    try {
+      $hostLogDir = Join-Path (Join-Path $env:LOCALAPPDATA "azooKey") "logs"
+      $hostStderrLog = Join-Path $hostLogDir "inference-host-stderr.log"
+      New-Item -ItemType Directory -Path $hostLogDir -Force | Out-Null
+    } catch {
+      Write-Warning "Could not create inference host log directory: $_"
+    }
+
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     try {
       New-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" `
@@ -144,8 +153,19 @@ if (-not $ElevatedReentry) {
       Write-Host "Inference host already serving this user's pipe ($myPipe); not starting another."
     } else {
       try {
-        Start-Process -FilePath $HostExePath -ArgumentList $hostArguments -WindowStyle Hidden
+        $startParameters = @{
+          FilePath = $HostExePath
+          ArgumentList = $hostArguments
+          WindowStyle = "Hidden"
+        }
+        if ($hostStderrLog) {
+          $startParameters.RedirectStandardError = $hostStderrLog
+        }
+        Start-Process @startParameters
         Write-Host "Inference host started for current session: $HostExePath"
+        if ($hostStderrLog) {
+          Write-Host "Inference host stderr log: $hostStderrLog"
+        }
       } catch {
         Write-Warning "Could not start inference host for current session: $_"
       }

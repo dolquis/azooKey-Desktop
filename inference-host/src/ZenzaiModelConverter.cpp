@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -64,6 +65,78 @@ uint32_t ReadLe32(const std::array<unsigned char, 4>& bytes) {
 }
 
 #if AZOOKEY_WITH_LLAMA_CPP
+class LlamaLogCapture {
+ public:
+  LlamaLogCapture() : lock_(CaptureMutex()) {
+    std::call_once(LogCallbackOnce(), [] { llama_log_set(&CaptureLog, nullptr); });
+    ActiveCapture() = this;
+  }
+
+  ~LlamaLogCapture() { ActiveCapture() = nullptr; }
+
+  LlamaLogCapture(const LlamaLogCapture&) = delete;
+  LlamaLogCapture& operator=(const LlamaLogCapture&) = delete;
+
+  std::string error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    const auto first = error_.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+      return {};
+    }
+    const auto last = error_.find_last_not_of(" \t\r\n");
+    return error_.substr(first, last - first + 1);
+  }
+
+ private:
+  static constexpr size_t kMaxCapturedErrorBytes = 4096;
+
+  static std::mutex& CaptureMutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
+
+  static std::once_flag& LogCallbackOnce() {
+    static std::once_flag flag;
+    return flag;
+  }
+
+  static LlamaLogCapture*& ActiveCapture() {
+    thread_local LlamaLogCapture* capture = nullptr;
+    return capture;
+  }
+
+  static void CaptureLog(ggml_log_level level, const char* text, void*) {
+    if (!text) {
+      return;
+    }
+
+    std::fputs(text, stderr);
+
+    auto* capture = ActiveCapture();
+    if (!capture) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(capture->error_mutex_);
+    if (level == GGML_LOG_LEVEL_ERROR) {
+      capture->capturing_continuation_ = true;
+    } else if (level != GGML_LOG_LEVEL_CONT) {
+      capture->capturing_continuation_ = false;
+    }
+    if (level != GGML_LOG_LEVEL_ERROR &&
+        !(level == GGML_LOG_LEVEL_CONT && capture->capturing_continuation_)) {
+      return;
+    }
+
+    const size_t remaining = kMaxCapturedErrorBytes - capture->error_.size();
+    capture->error_.append(text, std::min(remaining, std::char_traits<char>::length(text)));
+  }
+
+  std::unique_lock<std::mutex> lock_;
+  mutable std::mutex error_mutex_;
+  std::string error_;
+  bool capturing_continuation_{false};
+};
+
 std::optional<std::string> ReadGgufPreTokenizer(const std::string& path) {
   const gguf_init_params params{
       /* .no_alloc = */ true,
@@ -731,6 +804,7 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 #if AZOOKEY_WITH_LLAMA_CPP
   (void)LlamaBackend();
   auto runtime = std::make_unique<ZenzaiModelRuntime>();
+  LlamaLogCapture log_capture;
 
   auto model_params = llama_model_default_params();
   model_params.n_gpu_layers = options.n_gpu_layers;
@@ -751,6 +825,10 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!runtime->model) {
     result.ok = false;
     result.error = "llama.cpp model load failed";
+    const auto detail = log_capture.error();
+    if (!detail.empty()) {
+      result.error += ": " + detail;
+    }
     return result;
   }
 
@@ -762,6 +840,10 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!runtime->context) {
     result.ok = false;
     result.error = "llama.cpp context creation failed";
+    const auto detail = log_capture.error();
+    if (!detail.empty()) {
+      result.error += ": " + detail;
+    }
     return result;
   }
 

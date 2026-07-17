@@ -47,7 +47,7 @@ MessageType TypeFromString(const std::string& value) {
   return MessageType::Unknown;
 }
 
-std::string Serialize(const Envelope& env) {
+std::optional<std::string> Serialize(const Envelope& env) {
   json::Object o;
   o.emplace("version", json::Value(env.version));
   o.emplace("request_id", json::Value(env.request_id));
@@ -57,13 +57,13 @@ std::string Serialize(const Envelope& env) {
     o.emplace("payload", json::Value(json::Object{}));
   } else {
     auto parsed = json::Parse(env.payload_json);
-    if (parsed) {
-      o.emplace("payload", std::move(*parsed));
-    } else {
-      // Fallback: store the raw payload as a string so the envelope is still
-      // well-formed JSON. Callers must avoid malformed payload_json values.
-      o.emplace("payload", json::Value(env.payload_json));
+    if (!parsed) {
+      // payload_json is expected to be valid JSON produced by a Build*() helper.
+      // A malformed value is a caller contract violation; fail the serialization
+      // rather than silently embedding the raw string as a JSON payload.
+      return std::nullopt;
     }
+    o.emplace("payload", std::move(*parsed));
   }
   return json::Stringify(json::Value(std::move(o)));
 }
@@ -73,6 +73,11 @@ std::optional<Envelope> Deserialize(const std::string& json_text) {
   if (!v || !v->IsObject()) return std::nullopt;
   Envelope env;
   if (auto x = v->GetInt("version")) env.version = static_cast<int>(*x);
+  // Gate the wire generation: reject anything below 1 (malformed) or above the
+  // generation this build understands (a future breaking change). Dropping the
+  // frame here matches the transport's existing "ignore unparseable frame"
+  // behavior instead of misinterpreting an incompatible envelope.
+  if (env.version < 1 || env.version > kEnvelopeVersion) return std::nullopt;
   auto request_id = v->GetUInt("request_id");
   auto type = v->GetString("type");
   auto trace_id = v->GetString("trace_id");

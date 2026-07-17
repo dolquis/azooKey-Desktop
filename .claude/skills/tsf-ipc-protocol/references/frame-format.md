@@ -53,6 +53,15 @@
 payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response` で
 扱う (`ipc/include/azookey/ipc/Payloads.h`)。
 
+- `Serialize` は `std::optional<std::string>` を返す。`payload_json` が空でなく
+  かつ有効な JSON でない場合は `std::nullopt`(シリアライズ失敗)を返し、生文字列を
+  黙って埋め込まない。`payload_json` は常に `Build*()` が生成した有効な JSON である
+  ことを前提とする。
+- `Deserialize` は `version` を検証する。対応世代 `kEnvelopeVersion`(現状 `1`)より
+  大きい世代(将来の breaking change)や `1` 未満(不正値)は `std::nullopt` を返して
+  フレームを破棄する。互換世代を誤解釈するより破棄する方針(transport の
+  「解釈不能フレームは無視」と同じ)。`version` フィールド欠落時は現行世代とみなす。
+
 ## メッセージ種別 (`ipc::MessageType`)
 
 `ipc/include/azookey/ipc/Messages.h` で定義。文字列変換は

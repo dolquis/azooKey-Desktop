@@ -50,6 +50,9 @@ class EnumDisplayAttributeInfo final : public IEnumTfDisplayAttributeInfo {
   STDMETHODIMP Clone(IEnumTfDisplayAttributeInfo** ppEnum) override;
 
  private:
+  // Number of attributes this enumerator yields (a single input underline).
+  static constexpr ULONG kAttributeCount = 1;
+
   LONG ref_count_{1};
   ULONG index_{0};
 };

@@ -26,15 +26,25 @@ enum class MessageType {
   Unknown,
 };
 
+// Current wire generation of the Envelope. Field additions are backward
+// compatible and do not bump this; only breaking changes (field removal or
+// type change) require a bump. Deserialize rejects envelopes outside the
+// supported range so a future breaking generation is dropped rather than
+// silently misinterpreted.
+constexpr int kEnvelopeVersion = 1;
+
 struct Envelope {
-  int version{1};
+  int version{kEnvelopeVersion};
   uint64_t request_id{};
   std::string trace_id;
   MessageType type{MessageType::Unknown};
   std::string payload_json;
 };
 
-std::string Serialize(const Envelope& env);
+// Returns std::nullopt when payload_json is non-empty but not valid JSON, so a
+// malformed payload surfaces as a serialization failure instead of being
+// silently embedded as a raw string.
+std::optional<std::string> Serialize(const Envelope& env);
 std::optional<Envelope> Deserialize(const std::string& json);
 
 std::string TypeToString(MessageType type);

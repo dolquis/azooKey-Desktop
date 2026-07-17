@@ -95,7 +95,12 @@ STDMETHODIMP EnumDisplayAttributeInfo::Next(ULONG ulCount, ITfDisplayAttributeIn
   if (!rgInfo) return E_INVALIDARG;
   ULONG fetched = 0;
   try {
-    while (fetched < ulCount && index_ == 0) {
+    // Bound emission by the remaining attribute count rather than `index_ == 0`.
+    // The `index_ == 0` guard only ever yields the element at position 0 and only
+    // while index_ is exactly 0, so a Skip(n>0) offset (or any future second
+    // attribute reached by successive Next calls) would be silently skipped.
+    // Gating on kAttributeCount keeps Next and Skip consistent.
+    while (fetched < ulCount && index_ < kAttributeCount) {
       auto* info = NewComBoundaryObject<InputDisplayAttributeInfo>();
       if (!info) {
         if (pcFetched) *pcFetched = fetched;

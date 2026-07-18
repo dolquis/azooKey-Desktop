@@ -41,11 +41,16 @@ option(AZOOKEY_FETCH_GOOGLETEST
        "Download GoogleTest via FetchContent when it is not found locally" OFF)
 option(AZOOKEY_FETCH_LLAMA_CPP
        "Download llama.cpp via FetchContent when no local source tree is provided" OFF)
+option(AZOOKEY_FETCH_WIL
+       "Download WIL via FetchContent for Windows RAII helpers" OFF)
 set(AZOOKEY_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
     "Path to an existing llama.cpp source tree to add_subdirectory")
 set(AZOOKEY_LLAMA_CPP_GIT_TAG
     "05f6ac6283a7859a03cd59405504262c85c4bf06" CACHE STRING
     "Pinned llama.cpp revision used when AZOOKEY_FETCH_LLAMA_CPP is ON")
+set(AZOOKEY_WIL_GIT_TAG
+    "b6ec76a2d9a609897f25a7fa0a0bdf4238e94e35" CACHE STRING
+    "Pinned WIL revision used when AZOOKEY_FETCH_WIL is ON")
 set(AZOOKEY_BACKEND "cpu" CACHE STRING "Default inference backend: cpu or cuda")
 set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda)
 
@@ -93,6 +98,19 @@ else()
   message(STATUS
     "llama.cpp target not available; Zenzai loader uses no-egress mock runtime. "
     "Set AZOOKEY_LLAMA_CPP_SOURCE_DIR or AZOOKEY_FETCH_LLAMA_CPP=ON for real loads.")
+endif()
+
+if(AZOOKEY_FETCH_WIL)
+  set(WIL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(WIL_BUILD_PACKAGING OFF CACHE BOOL "" FORCE)
+  include(FetchContent)
+  FetchContent_Declare(
+    wil
+    GIT_REPOSITORY https://github.com/microsoft/wil.git
+    GIT_TAG        ${AZOOKEY_WIL_GIT_TAG}
+    GIT_PROGRESS   TRUE
+  )
+  FetchContent_MakeAvailable(wil)
 endif()
 
 add_library(azookey_project_options INTERFACE)

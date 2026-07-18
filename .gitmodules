@@ -4,3 +4,6 @@
 [submodule "legacy/azooKeyMac/Resources/gguf"]
 	path = legacy/azooKeyMac/Resources/gguf
 	url = https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf
+[submodule "wil"]
+	path = third_party/wil
+	url = https://github.com/microsoft/wil.git

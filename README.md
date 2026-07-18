@@ -49,7 +49,8 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 ## ビルド & テスト
 
 ```powershell
-cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON
+git submodule update --init third_party/wil
+cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-debug
 ctest --preset windows-debug --output-on-failure
 ./build/windows-debug/bench/azookey_bench.exe
@@ -60,8 +61,10 @@ ctest --preset windows-debug --output-on-failure
 ローカルに見つからないときに `FetchContent` でダウンロードする。システムに
 GoogleTest を導入済みなら省略可。フラグなし・未導入の場合はテストのみスキップ
 してビルドは継続する（オフライン環境向け）。
-WIL は commit SHA に固定した header-only 依存で、Windows IPC をビルドするときは
-`-DAZOOKEY_FETCH_WIL=ON` を指定して取得する。既定値は no-egress のため `OFF` とする。
+WIL は commit SHA に固定した header-only submodule で、Windows IPC のビルド前に
+`git submodule update --init third_party/wil` で初期化する。CI など submodule を使わない
+環境では `-DAZOOKEY_FETCH_WIL=ON` で同じ revision を取得できる。既定値は no-egress の
+ため `OFF` とする。
 
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
 

@@ -45,6 +45,8 @@ option(AZOOKEY_FETCH_WIL
        "Download WIL via FetchContent for Windows RAII helpers" OFF)
 set(AZOOKEY_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
     "Path to an existing llama.cpp source tree to add_subdirectory")
+set(AZOOKEY_WIL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wil" CACHE PATH
+    "Path to an existing WIL source tree to add_subdirectory")
 set(AZOOKEY_LLAMA_CPP_GIT_TAG
     "05f6ac6283a7859a03cd59405504262c85c4bf06" CACHE STRING
     "Pinned llama.cpp revision used when AZOOKEY_FETCH_LLAMA_CPP is ON")
@@ -100,17 +102,28 @@ else()
     "Set AZOOKEY_LLAMA_CPP_SOURCE_DIR or AZOOKEY_FETCH_LLAMA_CPP=ON for real loads.")
 endif()
 
-if(AZOOKEY_FETCH_WIL)
+if(WIN32)
   set(WIL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(WIL_BUILD_PACKAGING OFF CACHE BOOL "" FORCE)
-  include(FetchContent)
-  FetchContent_Declare(
-    wil
-    GIT_REPOSITORY https://github.com/microsoft/wil.git
-    GIT_TAG        ${AZOOKEY_WIL_GIT_TAG}
-    GIT_PROGRESS   TRUE
-  )
-  FetchContent_MakeAvailable(wil)
+  if(EXISTS "${AZOOKEY_WIL_SOURCE_DIR}/CMakeLists.txt")
+    add_subdirectory("${AZOOKEY_WIL_SOURCE_DIR}"
+                     "${CMAKE_BINARY_DIR}/_deps/wil-build"
+                     EXCLUDE_FROM_ALL)
+  elseif(AZOOKEY_FETCH_WIL)
+    include(FetchContent)
+    FetchContent_Declare(
+      wil
+      GIT_REPOSITORY https://github.com/microsoft/wil.git
+      GIT_TAG        ${AZOOKEY_WIL_GIT_TAG}
+      GIT_PROGRESS   TRUE
+    )
+    FetchContent_MakeAvailable(wil)
+  else()
+    message(FATAL_ERROR
+      "WIL source not found at '${AZOOKEY_WIL_SOURCE_DIR}'. "
+      "Run 'git submodule update --init third_party/wil' or configure with "
+      "-DAZOOKEY_FETCH_WIL=ON.")
+  endif()
 endif()
 
 add_library(azookey_project_options INTERFACE)

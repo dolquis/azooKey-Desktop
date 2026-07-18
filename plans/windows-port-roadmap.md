@@ -901,6 +901,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `Add-AppxPackage` 成功（`compat-test/msix_install_uninstall.ps1`、残骸 0 smoke）。**対象 OS は
     §1.0 で確定する TIP 配布経路に従う**（Option A = external-location は Win10 2004/build 19041+ / Win11、
     Option B/C = `com4` により build 20348+ = Win11 21H2+。Win10 22H2 client(19045) は B/C では対象外。spec §1.1）
+  - clean install / uninstall に加え、**新旧バージョン間の update（上書き）と
+    失敗時 rollback** シナリオを `compat-test/msix_install_uninstall.ps1` で検証
+    （現状は clean install / uninstall の残骸チェックのみ。実機実行部分は
+    `gate:human-required`）
   - 言語バーから azooKey が選べ、アンインストールで CLSID が消える
   - Store 提出・審査・Store 署名後のインストール確認は DEV-416（Partner Center）で扱う
 - **設計メモ**: 開発用 `regsvr32` スクリプトは MSIX 登録方式と混同されないよう
@@ -1670,12 +1674,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     target 化と各 target への適用（`/W4` は段階導入）
   - `.clang-format`（Google ベース）追加。全体整形は独立 PR に分離
   - `.gitignore` に Windows/CMake エントリ追加
+  - 依存更新手順の文書化: pin 済み依存（llama.cpp のフル SHA / GoogleTest の
+    タグ等）の更新 cadence（四半期）、比較項目（モデルロード / 代表プロンプト /
+    レイテンシ / メモリ / ライセンス）、更新を独立 PR にする規約、pin SHA /
+    上流日付 / モデル互換性の記録先を `docs/dev-infrastructure-spec.md` に定義
+    （現状は pin ポリシーはあるが定期更新手順が未文書化。pin＝放置と区別する）
 - **受け入れ条件**:
   - `cmake --preset windows-debug` / `windows-release` の
     configure→build→test が成功する
   - 既存全 target が共通オプション/警告 target をリンクしてビルドできる
   - `.clang-format` がルートに存在し新規コードに差分が出ない
   - ビルド生成物が `git status` に現れない
+  - 依存更新手順が `docs/dev-infrastructure-spec.md` に記載され、次回の依存
+    更新 PR がそれに従える
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §2, §3
 
 ### M38: CI 品質ゲート拡張
@@ -1690,11 +1701,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `clang-format --dry-run --Werror`（全体整形 PR 後に有効化）
   - Linux 補助ジョブ（非 Windows 依存部分のみビルド・テスト）
   - bench smoke の CTest 実行、artifact 整理
+  - 供給網固定（リリースゲート。機能開発より優先しない）: CI で使用する
+    GitHub Actions を完全コミット SHA へ固定 + Renovate/Dependabot による
+    SHA 更新 PR、dependency review の PR 追加、Release 成果物への SBOM +
+    provenance 生成（現状は全 Action がタグ pin `@v4` 等で、Dependabot /
+    dependency review / SBOM いずれも未導入）
 - **受け入れ条件**:
   - Debug / Release 両構成が CI で緑
   - Linux 補助ジョブが非 Windows 部分のテストを実行する
   - bench smoke が CTest 経由で exit=0
   - PR コメントが config ごとの結果に対応する
+  - CI で使用する各 Action が完全コミット SHA で固定される
+  - Release 成果物に SBOM と provenance が付与される
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §4
 
 ### M39: ユーザーデータ永続化の堅牢化
@@ -1740,6 +1758,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     （per-user ファイル `%LOCALAPPDATA%\azooKey\config\ipc-token` 配布 +
     env 上書き）、client cleanup、overlapped accept と `Stop()` 時の
     pending accept cancel
+  - transport 読み書きの壁時計デッドライン: ヘッダ/本文読取・書込は
+    `stop_event` 待ちに加えソフト/ハードのタイムアウトを持ち、時間切れ時は
+    当該接続のみ切断して他クライアントへ波及させない（現状は回数制限
+    `kMaxTransientReadNoDataRetries` / `kMaxTransientWriteNoProgressRetries`
+    のみで壁時計デッドラインがなく、ヘッダ送信後に本文を止める peer が
+    Host のクライアントスレッドを切断まで占有し得る）。値は M41 の
+    タイムアウト規約（ソフト/ハード）と整合させる
+  - per-client 未完了要求の上限: `RequestScheduler` の per-client
+    cancel-state を上限（例 64）で固定し、超過時は最古の完了 or 接続拒否
+    （現状は接続インスタンス上限 32 のみで、per-client の未完了要求数に
+    ハード上限がない）
+  - プロトコル fixture: 固定 JSON / バイナリ fixture を `ipc/testdata/` に
+    置き、TIP 側デコードと Host 側デコードを同一データで検査。transport 層の
+    0-byte / truncated frame ケースを追加（現状は `DecodeLengthPrefixed` の
+    unit 検査のみで、transport 層専用の 0-byte / truncated テストがない）
 - **受け入れ条件**:
   - 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
   - malformed JSON・ランダムバイト列でクラッシュしない
@@ -1755,6 +1788,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する
   - 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する
   - Handshake トークンが per-user ファイルチャネルで配布される
+  - ヘッダ受信後に本文を送らない peer に対し、規定時間で当該接続のみ切断し
+    他クライアントの処理へ影響しない
+  - per-client 未完了要求が上限を超えて無制限に積み上がらない
+  - `ipc/testdata/` fixture が TIP / Host 双方のテストから参照され、
+    transport 層の truncated / 0-byte frame ケースが緑
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §6
 
 ### M41: 構造化ログと可観測性
@@ -1795,10 +1833,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - exponential backoff + jitter による再接続
   - ヘルス監視（`Health` メッセージ流用）
   - 無応答時の劣化モード（`SimpleConverter` 相当のローカルフォールバック）
+  - Host 世代 ID: Host 起動ごとにランダムな世代 ID（インスタンス UUID）を
+    発行し `HandshakeResponse` に載せる。TIP は世代変化を検知したら
+    pending / in-flight を破棄する（現状の handshake は `host_version` /
+    `protocol_version` のみで、Host 再起動をまたいだインスタンス切り替わりを
+    検知できない）。Handshaking→Ready 遷移に組み込む
 - **受け入れ条件**:
   - Host 停止 → 再起動で TIP が自動再接続する
   - Host 無応答時に TIP が劣化モードへ移行し入力が止まらない
   - 状態遷移がログに記録され、Host 復帰後に `Ready` へ復帰する
+  - Host 再起動をまたぐ再接続で世代変化を検知・記録し、旧世代宛の遅延応答を
+    破棄する
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §8
 
 ### M43: WIL 段階導入

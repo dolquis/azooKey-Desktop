@@ -104,11 +104,19 @@ Describe "development registration scripts" {
       Assert-Condition ($script:register.Text -match 'GetExtension\(\$ModelPath\)\s+-ine\s+"\.gguf"') "register-dev.ps1 should reject non-GGUF model paths."
       Assert-Condition ($script:register.Text -match [regex]::Escape('$hostArguments += " --model `"$ModelPath`""')) "register-dev.ps1 should quote ModelPath in the host arguments."
       Assert-Condition ($script:register.Text -match [regex]::Escape('-Value "`"$HostExePath`" $hostArguments"')) "register-dev.ps1 should persist the model argument in the HKCU Run value."
-      Assert-Condition ($script:register.Text -match 'Start-Process\s+-FilePath\s+\$HostExePath\s+-ArgumentList\s+\$hostArguments') "register-dev.ps1 should pass the model argument to the current-session host."
+      Assert-Condition ($script:register.Text -match 'FilePath\s*=\s*\$HostExePath') "register-dev.ps1 should pass the host path to the current-session launch parameters."
+      Assert-Condition ($script:register.Text -match 'ArgumentList\s*=\s*\$hostArguments') "register-dev.ps1 should pass the model argument to the current-session host."
       Assert-Condition ($script:register.Text -match [regex]::Escape('-ModelPath cannot be combined with -AllowMockHost')) "register-dev.ps1 should reject misleading real-model registration on a mock host."
       $existingHostGuardIndex = $script:register.Text.IndexOf('if ($ModelPath -and $hostServing)')
       $runRegistrationIndex = $script:register.Text.IndexOf('New-ItemProperty -Path $runKey')
       Assert-Condition ($existingHostGuardIndex -ge 0 -and $existingHostGuardIndex -lt $runRegistrationIndex) "register-dev.ps1 should reject an existing current-session host before changing the Run entry."
+    }
+
+    It "redirects hidden current-session host diagnostics to a per-user log" {
+      Assert-Condition ($script:register.Text -match 'Join-Path\s+\(Join-Path\s+\$env:LOCALAPPDATA\s+"azooKey"\)\s+"logs"') "register-dev.ps1 should use a per-user log directory."
+      Assert-Condition ($script:register.Text -match 'inference-host-stderr\.log') "register-dev.ps1 should name the inference host stderr log."
+      Assert-Condition ($script:register.Text -match 'RedirectStandardError\s*=\s*\$hostStderrLog') "register-dev.ps1 should redirect hidden host stderr."
+      Assert-Condition ($script:register.Text -match 'Start-Process\s+@startParameters') "register-dev.ps1 should launch the host with the diagnostic redirection parameters."
     }
 
     It "keeps the just registration recipes on the llama-enabled preset" {

@@ -34,6 +34,19 @@ if (-not $ElevatedReentry) {
   $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
   Remove-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" -ErrorAction SilentlyContinue
 
+  # Stop restart supervision for this user without terminating the currently
+  # running host. The host keeps its existing lifetime, matching historical
+  # unregister behavior, but will no longer be respawned after it exits.
+  $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+  $stopEventName = "Local\azooKeyInferenceHostSupervisorStop-$mySid"
+  try {
+    $stopEvent = [System.Threading.EventWaitHandle]::OpenExisting($stopEventName)
+    $stopEvent.Set() | Out-Null
+    $stopEvent.Dispose()
+  } catch [System.Threading.WaitHandleCannotBeOpenedException] {
+    Write-Verbose "No inference host supervisor is running for the current user."
+  }
+
   $clsidHkcu = "HKCU:\Software\Classes\CLSID\$clsid"
   if (Test-Path $clsidHkcu) {
     Remove-Item -Path $clsidHkcu -Recurse -Force -ErrorAction SilentlyContinue

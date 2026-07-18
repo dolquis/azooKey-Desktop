@@ -3,6 +3,8 @@ Describe "development registration scripts" {
     $repoRoot = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot "..") "..")).Path
     $registerPath = Join-Path (Join-Path $repoRoot "scripts") "register-dev.ps1"
     $unregisterPath = Join-Path (Join-Path $repoRoot "scripts") "unregister-dev.ps1"
+    $supervisorPath = Join-Path (Join-Path $repoRoot "scripts") "host-supervisor.ps1"
+    $qualityPath = Join-Path (Join-Path $repoRoot "scripts") "test-powershell-quality.ps1"
     $justfilePath = Join-Path $repoRoot "justfile"
 
     function Assert-Condition {
@@ -71,6 +73,9 @@ Describe "development registration scripts" {
 
     $script:register = Get-ParsedScript -Path $registerPath
     $script:unregister = Get-ParsedScript -Path $unregisterPath
+    $script:supervisor = Get-ParsedScript -Path $supervisorPath
+    $script:supervisorPath = $supervisorPath
+    $script:qualityText = Get-Content -Raw $qualityPath
     $script:justfileText = Get-Content -Raw $justfilePath
     $script:registerParameters = Get-ParameterName -Ast $script:register.Ast
     $script:unregisterParameters = Get-ParameterName -Ast $script:unregister.Ast
@@ -102,20 +107,22 @@ Describe "development registration scripts" {
     It "passes an explicit GGUF model to both current-session and auto-start hosts" {
       Assert-Condition ($script:register.Text -match 'Test-Path\s+-LiteralPath\s+\$ModelPath\s+-PathType\s+Leaf') "register-dev.ps1 should require ModelPath to be an existing file."
       Assert-Condition ($script:register.Text -match 'GetExtension\(\$ModelPath\)\s+-ine\s+"\.gguf"') "register-dev.ps1 should reject non-GGUF model paths."
-      Assert-Condition ($script:register.Text -match [regex]::Escape('$hostArguments += " --model `"$ModelPath`""')) "register-dev.ps1 should quote ModelPath in the host arguments."
-      Assert-Condition ($script:register.Text -match [regex]::Escape('-Value "`"$HostExePath`" $hostArguments"')) "register-dev.ps1 should persist the model argument in the HKCU Run value."
-      Assert-Condition ($script:register.Text -match 'FilePath\s*=\s*\$HostExePath') "register-dev.ps1 should pass the host path to the current-session launch parameters."
-      Assert-Condition ($script:register.Text -match 'ArgumentList\s*=\s*\$hostArguments') "register-dev.ps1 should pass the model argument to the current-session host."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('-Value "`"$powerShellExe`" $supervisorArguments"')) "register-dev.ps1 should persist the supervisor command in the HKCU Run value."
+      Assert-Condition ($script:register.Text -match 'FilePath\s*=\s*\$powerShellExe') "register-dev.ps1 should launch the supervisor with the current PowerShell executable."
+      Assert-Condition ($script:register.Text -match 'ArgumentList\s*=\s*\$supervisorArguments') "register-dev.ps1 should pass the model-bearing arguments to the current-session supervisor."
       Assert-Condition ($script:register.Text -match [regex]::Escape('-ModelPath cannot be combined with -AllowMockHost')) "register-dev.ps1 should reject misleading real-model registration on a mock host."
       $existingHostGuardIndex = $script:register.Text.IndexOf('if ($ModelPath -and $hostServing)')
       $runRegistrationIndex = $script:register.Text.IndexOf('New-ItemProperty -Path $runKey')
       Assert-Condition ($existingHostGuardIndex -ge 0 -and $existingHostGuardIndex -lt $runRegistrationIndex) "register-dev.ps1 should reject an existing current-session host before changing the Run entry."
     }
 
-    It "redirects hidden current-session host diagnostics to a per-user log" {
+    It "registers and starts a per-user supervisor with host diagnostics" {
       Assert-Condition ($script:register.Text -match 'Join-Path\s+\(Join-Path\s+\$env:LOCALAPPDATA\s+"azooKey"\)\s+"logs"') "register-dev.ps1 should use a per-user log directory."
       Assert-Condition ($script:register.Text -match 'inference-host-stderr\.log') "register-dev.ps1 should name the inference host stderr log."
-      Assert-Condition ($script:register.Text -match 'RedirectStandardError\s*=\s*\$hostStderrLog') "register-dev.ps1 should redirect hidden host stderr."
+      Assert-Condition ($script:register.Text -match 'host-supervisor\.ps1') "register-dev.ps1 should use the host supervisor."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('-ModelPath `"$ModelPath`"')) "register-dev.ps1 should forward an explicit model path to the supervisor."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('-PipeName `"$myPipe`"')) "register-dev.ps1 should supervise the exact current-user pipe."
+      Assert-Condition ($script:register.Text -match 'RedirectStandardError\s*=\s*\$supervisorStderrLog') "register-dev.ps1 should redirect hidden supervisor stderr."
       Assert-Condition ($script:register.Text -match 'Start-Process\s+@startParameters') "register-dev.ps1 should launch the host with the diagnostic redirection parameters."
     }
 
@@ -155,6 +162,7 @@ Describe "development registration scripts" {
     It "guards per-user HKCU cleanup from elevated reentry" {
       Assert-Condition ($script:unregister.Text -match 'if\s*\(\s*-not\s+\$ElevatedReentry\s*\)\s*\{') "unregister-dev.ps1 should guard HKCU cleanup with ElevatedReentry."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run')) "unregister-dev.ps1 should clean the HKCU Run key."
+      Assert-Condition ($script:unregister.Text -match 'azooKeyInferenceHostSupervisorStop-\$mySid') "unregister-dev.ps1 should signal the current-user supervisor to stop."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Classes\CLSID\$clsid')) "unregister-dev.ps1 should clean legacy HKCU CLSID entries."
     }
 
@@ -170,6 +178,44 @@ Describe "development registration scripts" {
       Assert-Condition ($commands -match '/u /s') "unregister-dev.ps1 should call regsvr32 unregister silently."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKLM:\Software\Microsoft\CTF\TIP\$clsid')) "unregister-dev.ps1 should clean HKLM CTF TIP leftovers."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKLM:\Software\WOW6432Node\Microsoft\CTF\TIP\$clsid')) "unregister-dev.ps1 should clean WOW6432Node CTF TIP leftovers."
+    }
+  }
+
+  Context "host-supervisor.ps1" {
+    It "is included in the canonical PowerShell quality gate" {
+      Assert-Condition ($script:qualityText -match 'Join-Path\s+\$PSScriptRoot\s+"host-supervisor\.ps1"') "test-powershell-quality.ps1 should lint the supervisor."
+    }
+
+    It "serializes supervision per user and uses a bounded restart backoff" {
+      Assert-Condition ($script:supervisor.Text -match 'Local\\azooKeyInferenceHostSupervisor-\$InstanceKey') "host-supervisor.ps1 should use a per-user named mutex."
+      Assert-Condition ($script:supervisor.Text -match 'Local\\azooKeyInferenceHostSupervisorStop-\$InstanceKey') "host-supervisor.ps1 should expose a per-user stop event."
+      Assert-Condition ($script:supervisor.Text -match '\[Math\]::Min\(\$restartDelayMs \* 2,\s*\$RestartDelayMaxMs\)') "host-supervisor.ps1 should bound exponential restart backoff."
+      Assert-Condition ($script:supervisor.Text -match 'Test-PerUserPipe\s+-Name\s+\$PipeName') "host-supervisor.ps1 should wait for an existing per-user pipe before launching."
+      Assert-Condition ($script:supervisor.Text -match '\$hostProcess\.Dispose\(\)') "host-supervisor.ps1 should release each child process handle."
+    }
+
+    It "restarts a failed host process" {
+      $childPath = Join-Path $TestDrive "fake-host.ps1"
+      $counterPath = Join-Path $TestDrive "launch-count.txt"
+      @'
+param([string]$CounterPath)
+Add-Content -LiteralPath $CounterPath -Value "launched"
+exit 3
+'@ | Set-Content -LiteralPath $childPath
+
+      $powerShellPath = (Get-Process -Id $PID).Path
+      $hostArguments = "-NoLogo -NoProfile -NonInteractive -File `"$childPath`" -CounterPath `"$counterPath`""
+      & $script:supervisorPath `
+        -HostExePath $powerShellPath `
+        -HostArguments $hostArguments `
+        -PipeName "azookey-supervisor-test-$([guid]::NewGuid().ToString('N'))" `
+        -InstanceKey "test-$([guid]::NewGuid().ToString('N'))" `
+        -RestartDelayMinMs 10 `
+        -RestartDelayMaxMs 20 `
+        -StableRunSeconds 1 `
+        -MaxLaunchCount 2
+
+      Assert-Condition ((Get-Content -LiteralPath $counterPath).Count -eq 2) "host-supervisor.ps1 should relaunch a failed host."
     }
   }
 }

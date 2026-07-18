@@ -12,6 +12,10 @@ target_link_libraries(azookey_ipc
 )
 
 if(WIN32)
+  if(TARGET WIL::WIL)
+    target_link_libraries(azookey_ipc PRIVATE WIL::WIL)
+  endif()
+
   # advapi32 is required by ConvertStringSecurityDescriptorToSecurityDescriptorW
   # used by the M1 Named Pipe DACL setup.
   target_link_libraries(azookey_ipc PUBLIC advapi32)

@@ -54,6 +54,10 @@ bench preset=preset:
 lint:
     pre-commit run --all-files
 
+# Diagnose required and optional developer tools. Pass --json or --fix-hints as needed.
+doctor *args:
+    @pwsh -NoProfile -File ./scripts/doctor.ps1 {{args}}
+
 # Register the dev TIP (machine-wide; auto-elevates to admin)
 register preset=llama_preset:
     ./scripts/register-dev.ps1 -TipDllPath ./build/{{preset}}/tsf-tip/azookey_tsf_tip.dll -HostExePath ./build/{{preset}}/inference-host/azookey_inference_host.exe

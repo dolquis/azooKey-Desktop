@@ -39,11 +39,10 @@ void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type);
-void SetCaretWin32ApiForTest(GetGuiThreadInfoFnForTest get_gui_thread_info,
-                             ClientToScreenFnForTest client_to_screen,
-                             GetCursorPosFnForTest get_cursor_pos,
-                             LogicalToPhysicalPointForPerMonitorDpiFnForTest
-                                 logical_to_physical_point);
+void SetCaretWin32ApiForTest(
+    GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
+    GetCursorPosFnForTest get_cursor_pos,
+    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point);
 void ClearCaretWin32ApiForTest();
 CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect,
                                              HWND text_extent_window = nullptr);

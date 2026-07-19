@@ -230,11 +230,10 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
   return IsExpectedIpcResponse(response, expected_request_id, expected_type);
 }
 
-void SetCaretWin32ApiForTest(GetGuiThreadInfoFnForTest get_gui_thread_info,
-                             ClientToScreenFnForTest client_to_screen,
-                             GetCursorPosFnForTest get_cursor_pos,
-                             LogicalToPhysicalPointForPerMonitorDpiFnForTest
-                                 logical_to_physical_point) {
+void SetCaretWin32ApiForTest(
+    GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
+    GetCursorPosFnForTest get_cursor_pos,
+    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point) {
   g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_cursor_pos,
                        logical_to_physical_point};
 }

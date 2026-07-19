@@ -231,6 +231,8 @@ Reason:
 されている。ビルド・CTest・bench 実行・TIP 登録の標準手順は `README.md` を
 参照する (重複記述はしない)。本セクションはエージェント固有の構成と運用ルール
 のみを扱う。再導入や横展開のための詳細手順書は `docs/handoff/` にある。
+環境起因の失敗を切り分ける初動では `just doctor --fix-hints` を使う。機械可読な
+結果が必要な場合は `just doctor --json` を使う。
 
 ### MCP サーバー (`.mcp.json` / `.codex/config.toml`)
 

@@ -11,6 +11,7 @@ $scriptAnalyzerSettings = Join-Path $repoRoot "PSScriptAnalyzerSettings.psd1"
 $pesterTests = Join-Path $PSScriptRoot "tests"
 
 $powerShellFiles = @(
+  Join-Path $PSScriptRoot "host-supervisor.ps1"
   Join-Path $PSScriptRoot "register-dev.ps1"
   Join-Path $PSScriptRoot "unregister-dev.ps1"
   Join-Path (Join-Path $repoRoot "compat-test") "msix_install_uninstall.ps1"

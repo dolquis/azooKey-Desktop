@@ -12,6 +12,21 @@
 - TIPはアプリ内で動くため、GPU初期化や巨大モデルロードを持つとアプリ巻き込みクラッシュの危険が高い。
 - Host分離で、推論クラッシュはHost側に閉じ込め、TIPは再接続できる。
 
+## Host の起動と再起動
+
+TIP は Host の起動と再起動を担当しない。
+TIP は任意のアプリプロセスへ読み込まれるため、プロセス生成を行うと、複数の TIP インスタンスによる起動競合やアプリ終了への巻き込みが起きる。
+TIP の IPC worker は per-user pipe へ無期限に再接続し、Host のプロセス管理は TIP の外側へ置く。
+
+開発登録では、`scripts/register-dev.ps1` が実行ユーザーの HKCU `Run` に `scripts/host-supervisor.ps1` を登録し、現在のセッションでも同じ supervisor を起動する。
+supervisor はユーザー SID ごとの mutex で単一化し、既存の per-user pipe が消えた後に Host を起動する。
+Host が終了した場合は、上限付きの指数バックオフで再起動する。
+`scripts/unregister-dev.ps1` は named event で supervisor を停止するが、実行中の Host は強制終了しない。
+
+HKCU `Run` はスクリプトを実行したユーザーだけを provision する。
+別の Windows アカウントで TIP を使う場合は、そのアカウントでも開発登録の per-user 手順を実行する必要がある。
+配布パッケージも各ユーザーのログオン時に supervisor を起動する経路を用意し、machine-wide の TIP 登録だけで Host が利用可能になるとは扱わない。
+
 ## TSF EditSessionルール
 
 - テキスト更新は必ず `RequestEditSession` を経由。

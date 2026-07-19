@@ -92,9 +92,9 @@ if (-not $ElevatedReentry) {
   Assert-LlamaEnabledHost -Path $HostExePath -AllowMock:$AllowMockHost
 }
 
-$hostArguments = "--pipe"
-if ($ModelPath) {
-  $hostArguments += " --model `"$ModelPath`""
+$supervisorScriptPath = Resolve-DevPath (Join-Path $PSScriptRoot "host-supervisor.ps1")
+if (-not (Test-Path -LiteralPath $supervisorScriptPath -PathType Leaf)) {
+  throw "Inference host supervisor not found: $supervisorScriptPath"
 }
 
 # Per-user step (HKCU, no elevation needed): register the inference host for
@@ -121,54 +121,68 @@ if (-not $ElevatedReentry) {
     }
 
     $hostStderrLog = $null
+    $supervisorStderrLog = $null
     try {
       $hostLogDir = Join-Path (Join-Path $env:LOCALAPPDATA "azooKey") "logs"
       $hostStderrLog = Join-Path $hostLogDir "inference-host-stderr.log"
+      $supervisorLogTimestamp = [DateTimeOffset]::UtcNow.ToString(
+        "yyyyMMddTHHmmssfffZ",
+        [Globalization.CultureInfo]::InvariantCulture)
+      $supervisorStderrLog = Join-Path $hostLogDir `
+        "inference-host-supervisor-stderr-$supervisorLogTimestamp-$PID.log"
       New-Item -ItemType Directory -Path $hostLogDir -Force | Out-Null
     } catch {
       Write-Warning "Could not create inference host log directory: $_"
     }
 
+    $powerShellExe = (Get-Process -Id $PID).Path
+    $supervisorArguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass " +
+      "-File `"$supervisorScriptPath`" -HostExePath `"$HostExePath`" " +
+      "-PipeName `"$myPipe`""
+    if ($ModelPath) {
+      $supervisorArguments += " -ModelPath `"$ModelPath`""
+    }
+    if ($hostStderrLog) {
+      $supervisorArguments += " -StderrLogPath `"$hostStderrLog`""
+    }
+
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     try {
       New-ItemProperty -Path $runKey -Name "azooKeyInferenceHost" `
-        -Value "`"$HostExePath`" $hostArguments" -PropertyType String -Force | Out-Null
-      Write-Host "Inference host auto-start registered (current user): $HostExePath"
+        -Value "`"$powerShellExe`" $supervisorArguments" -PropertyType String -Force | Out-Null
+      Write-Host "Inference host supervisor auto-start registered (current user): $supervisorScriptPath"
     } catch {
-      Write-Warning "Could not register inference host auto-start: $_"
+      Write-Warning "Could not register inference host supervisor auto-start: $_"
     }
 
-    # Start the host for the *current* session as well. The HKCU Run entry above
+    # Start the supervisor for the *current* session as well. The HKCU Run entry above
     # only takes effect at the next logon, so without this the first verification
     # right after registration sees a live TIP (preedit works) but no candidates
     # (Space returns nothing) because nothing is serving the per-user pipe yet.
     # Started here, in the original (non-elevated) process, so it runs as the
-    # interactive user — same rationale as the Run entry. Best-effort; uses the
-    # same `--pipe` arguments so the in-session host matches the auto-start one.
+    # interactive user — same rationale as the Run entry. The supervisor owns
+    # host restart responsibility and waits for an already-serving host before
+    # taking over, so registration never creates a duplicate pipe server.
     #
-    # With no explicit model, an existing server for this user's pipe is already
-    # suitable. On enumeration failure, fall through and start (best-effort: a
-    # redundant start is preferable to leaving the TIP without a candidate host).
-    if ($hostServing) {
-      Write-Host "Inference host already serving this user's pipe ($myPipe); not starting another."
-    } else {
-      try {
-        $startParameters = @{
-          FilePath = $HostExePath
-          ArgumentList = $hostArguments
-          WindowStyle = "Hidden"
-        }
-        if ($hostStderrLog) {
-          $startParameters.RedirectStandardError = $hostStderrLog
-        }
-        Start-Process @startParameters
-        Write-Host "Inference host started for current session: $HostExePath"
-        if ($hostStderrLog) {
-          Write-Host "Inference host stderr log: $hostStderrLog"
-        }
-      } catch {
-        Write-Warning "Could not start inference host for current session: $_"
+    try {
+      $startParameters = @{
+        FilePath = $powerShellExe
+        ArgumentList = $supervisorArguments
+        WindowStyle = "Hidden"
       }
+      if ($supervisorStderrLog) {
+        $startParameters.RedirectStandardError = $supervisorStderrLog
+      }
+      Start-Process @startParameters
+      Write-Host "Inference host supervisor started for current session: $supervisorScriptPath"
+      if ($hostServing) {
+        Write-Host "Inference host already serving this user's pipe ($myPipe); supervisor will take over after it exits."
+      }
+      if ($hostStderrLog) {
+        Write-Host "Inference host stderr log base (timestamped per launch): $hostStderrLog"
+      }
+    } catch {
+      Write-Warning "Could not start inference host supervisor for current session: $_"
     }
   } else {
     Write-Warning "Inference host not found, skipping auto-start registration: $HostExePath"

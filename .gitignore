@@ -38,3 +38,10 @@ DerivedData/
 !*.xcodeproj/xcshareddata/
 **/xcshareddata/WorkspaceSettings.xcsettings
 !*.xcworkspace/contents.xcworkspacedata
+
+# Local Windows diagnostic captures
+*.dmp
+*.mdmp
+*.etl
+*.pml
+diagnostics/captures/

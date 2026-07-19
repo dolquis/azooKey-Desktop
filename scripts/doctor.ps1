@@ -90,6 +90,82 @@ function Get-DoctorCommandCheck {
     -Version $version -Details $command.Source
 }
 
+function Get-DoctorApplicationCheck {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$Id,
+    [Parameter(Mandatory=$true)]
+    [string]$Name,
+    [Parameter(Mandatory=$true)]
+    [string[]]$CommandNames,
+    [string[]]$CandidatePaths = @(),
+    [Parameter(Mandatory=$true)]
+    [bool]$Required,
+    [Parameter(Mandatory=$true)]
+    [string]$Hint
+  )
+
+  foreach ($commandName in $CommandNames) {
+    $command = Get-Command -Name $commandName -CommandType Application -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if ($command) {
+      return Get-DoctorCheck -Id $Id -Name $Name -Status "ok" -Required $Required `
+        -Details $command.Source
+    }
+  }
+
+  foreach ($candidatePath in $CandidatePaths) {
+    if (-not [string]::IsNullOrWhiteSpace($candidatePath) -and
+        (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+      return Get-DoctorCheck -Id $Id -Name $Name -Status "ok" -Required $Required `
+        -Details $candidatePath
+    }
+  }
+
+  $status = if ($Required) { "error" } else { "warning" }
+  $commandList = $CommandNames -join ", "
+  return Get-DoctorCheck -Id $Id -Name $Name -Status $status -Required $Required `
+    -Details "No matching command was found on PATH or in known install locations: $commandList." `
+    -Hint $Hint
+}
+
+function Get-WinDbgCheck {
+  param(
+    [string[]]$CandidatePaths = @()
+  )
+
+  $hint = "Install WinDbg with: winget install Microsoft.WinDbg"
+  $pathCheck = Get-DoctorApplicationCheck -Id "tool.windbg" -Name "WinDbg" `
+    -CommandNames @("WinDbgX.exe", "windbg.exe") -CandidatePaths $CandidatePaths `
+    -Required $false -Hint $hint
+  if ($pathCheck.status -eq "ok") {
+    return $pathCheck
+  }
+
+  $getAppxPackage = Get-Command -Name "Get-AppxPackage" -CommandType Cmdlet `
+    -ErrorAction SilentlyContinue
+  if ($getAppxPackage) {
+    try {
+      $package = Get-AppxPackage -Name "Microsoft.WinDbg" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    } catch {
+      $package = $null
+    }
+
+    if ($package) {
+      $details = if ($package.PackageFullName) {
+        "Appx: $($package.PackageFullName)"
+      } else {
+        "Appx: Microsoft.WinDbg"
+      }
+      return Get-DoctorCheck -Id "tool.windbg" -Name "WinDbg" -Status "ok" `
+        -Required $false -Version $package.Version.ToString() -Details $details
+    }
+  }
+
+  return $pathCheck
+}
+
 function Get-DoctorPathCheck {
   param(
     [Parameter(Mandatory=$true)]
@@ -226,6 +302,27 @@ function Get-DoctorCheckSet {
   } else {
     ""
   }
+  $programFilesX86 = [Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::ProgramFilesX86
+  )
+  $windowsDirectory = [Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::Windows
+  )
+  $debuggerX64 = if ($programFilesX86) {
+    Join-Path $programFilesX86 "Windows Kits\10\Debuggers\x64"
+  } else {
+    ""
+  }
+  $wptRoot = if ($programFilesX86) {
+    Join-Path $programFilesX86 "Windows Kits\10\Windows Performance Toolkit"
+  } else {
+    ""
+  }
+  $system32 = if ($windowsDirectory) {
+    Join-Path $windowsDirectory "System32"
+  } else {
+    ""
+  }
 
   @(
     Get-DoctorCheck -Id "tool.pwsh" -Name "PowerShell 7" -Status $powerShellStatus `
@@ -255,6 +352,44 @@ function Get-DoctorCheckSet {
       -Hint "Install pre-commit: pipx install pre-commit"
     Get-DoctorCommandCheck -Id "tool.just" -Name "just" -CommandName "just.exe" `
       -Required $false -Hint "Install just: winget install Casey.Just"
+    Get-WinDbgCheck -CandidatePaths @(
+      $(if ($debuggerX64) { Join-Path $debuggerX64 "windbg.exe" })
+    )
+    Get-DoctorApplicationCheck -Id "tool.cdb" -Name "CDB" `
+      -CommandNames @("cdb.exe") -CandidatePaths @(
+        $(if ($debuggerX64) { Join-Path $debuggerX64 "cdb.exe" })
+      ) -Required $false `
+      -Hint "Install the Windows SDK Debugging Tools for Windows component."
+    Get-DoctorApplicationCheck -Id "tool.gflags" -Name "GFlags" `
+      -CommandNames @("gflags.exe") -CandidatePaths @(
+        $(if ($debuggerX64) { Join-Path $debuggerX64 "gflags.exe" })
+      ) -Required $false `
+      -Hint "Install the Windows SDK Debugging Tools for Windows component."
+    Get-DoctorApplicationCheck -Id "tool.wpr" -Name "Windows Performance Recorder" `
+      -CommandNames @("wpr.exe") -CandidatePaths @(
+        $(if ($system32) { Join-Path $system32 "wpr.exe" })
+        $(if ($wptRoot) { Join-Path $wptRoot "wpr.exe" })
+      ) -Required $false `
+      -Hint "Install the Windows Performance Toolkit from the Windows ADK."
+    Get-DoctorApplicationCheck -Id "tool.wpa" -Name "Windows Performance Analyzer" `
+      -CommandNames @("wpa.exe") -CandidatePaths @(
+        $(if ($wptRoot) { Join-Path $wptRoot "wpa.exe" })
+      ) -Required $false `
+      -Hint "Install the Windows Performance Toolkit from the Windows ADK."
+    Get-DoctorApplicationCheck -Id "tool.procdump" -Name "ProcDump" `
+      -CommandNames @("procdump64.exe", "procdump.exe") -Required $false `
+      -Hint "Install the Sysinternals Suite and add it to PATH."
+    Get-DoctorApplicationCheck -Id "tool.procmon" -Name "Process Monitor" `
+      -CommandNames @("procmon64.exe", "procmon.exe") -Required $false `
+      -Hint "Install the Sysinternals Suite and add it to PATH."
+    Get-DoctorApplicationCheck -Id "tool.appverifier" -Name "Application Verifier" `
+      -CommandNames @("appverif.exe") -CandidatePaths @(
+        $(if ($system32) { Join-Path $system32 "appverif.exe" })
+      ) -Required $false `
+      -Hint "Install Application Verifier from the Windows SDK."
+    Get-DoctorApplicationCheck -Id "tool.handle" -Name "Sysinternals Handle" `
+      -CommandNames @("handle64.exe", "handle.exe") -Required $false `
+      -Hint "Install the Sysinternals Suite and add it to PATH."
     Get-DoctorPathCheck -Id "file.mcp-config" -Name ".mcp.json" `
       -Path (Join-Path $RepoRoot ".mcp.json") -Required $false `
       -Hint "Restore the repository's .mcp.json agent configuration." -PathType Leaf

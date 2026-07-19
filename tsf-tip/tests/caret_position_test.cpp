@@ -9,12 +9,16 @@ namespace {
 int g_gui_thread_info_calls = 0;
 int g_client_to_screen_calls = 0;
 int g_cursor_pos_calls = 0;
+int g_logical_to_physical_calls = 0;
 RECT g_gui_caret_rect{};
 bool g_gui_thread_info_succeeds = false;
 bool g_client_to_screen_succeeds = false;
 bool g_cursor_pos_succeeds = false;
+bool g_logical_to_physical_succeeds = false;
 POINT g_screen_offset{};
 POINT g_cursor_point{};
+POINT g_physical_offset{};
+HWND g_expected_transform_window = nullptr;
 
 BOOL WINAPI FakeGetGuiThreadInfo(DWORD thread_id, PGUITHREADINFO info) {
   ++g_gui_thread_info_calls;
@@ -41,20 +45,34 @@ BOOL WINAPI FakeGetCursorPos(LPPOINT point) {
   return TRUE;
 }
 
+BOOL WINAPI FakeLogicalToPhysicalPointForPerMonitorDpi(HWND hwnd, LPPOINT point) {
+  ++g_logical_to_physical_calls;
+  EXPECT_EQ(hwnd, g_expected_transform_window);
+  if (!g_logical_to_physical_succeeds) return FALSE;
+  point->x += g_physical_offset.x;
+  point->y += g_physical_offset.y;
+  return TRUE;
+}
+
 class CaretPositionTest : public ::testing::Test {
  protected:
   void SetUp() override {
     g_gui_thread_info_calls = 0;
     g_client_to_screen_calls = 0;
     g_cursor_pos_calls = 0;
+    g_logical_to_physical_calls = 0;
     g_gui_caret_rect = {};
     g_gui_thread_info_succeeds = false;
     g_client_to_screen_succeeds = false;
     g_cursor_pos_succeeds = false;
+    g_logical_to_physical_succeeds = false;
     g_screen_offset = {};
     g_cursor_point = {};
+    g_physical_offset = {};
+    g_expected_transform_window = nullptr;
     azookey::tsf::testing::SetCaretWin32ApiForTest(&FakeGetGuiThreadInfo, &FakeClientToScreen,
-                                                   &FakeGetCursorPos);
+                                                   &FakeGetCursorPos,
+                                                   &FakeLogicalToPhysicalPointForPerMonitorDpi);
   }
 
   void TearDown() override { azookey::tsf::testing::ClearCaretWin32ApiForTest(); }
@@ -68,6 +86,41 @@ TEST_F(CaretPositionTest, UsesNonEmptyTextExtentWithoutFallback) {
   EXPECT_TRUE(anchor.valid);
   EXPECT_EQ(anchor.point.x, 10);
   EXPECT_EQ(anchor.point.y, 44);
+  EXPECT_EQ(g_gui_thread_info_calls, 0);
+  EXPECT_EQ(g_client_to_screen_calls, 0);
+  EXPECT_EQ(g_cursor_pos_calls, 0);
+  EXPECT_EQ(g_logical_to_physical_calls, 0);
+}
+
+TEST_F(CaretPositionTest, NormalizesTextExtentToPhysicalCoordinatesUsingDocumentWindow) {
+  const RECT text_extent{10, 20, 30, 44};
+  g_expected_transform_window = reinterpret_cast<HWND>(static_cast<uintptr_t>(2));
+  g_logical_to_physical_succeeds = true;
+  g_physical_offset = {5, 22};
+
+  const auto anchor =
+      azookey::tsf::testing::ResolveCaretAnchorForTest(&text_extent, g_expected_transform_window);
+
+  EXPECT_TRUE(anchor.valid);
+  EXPECT_EQ(anchor.point.x, 15);
+  EXPECT_EQ(anchor.point.y, 66);
+  EXPECT_EQ(g_logical_to_physical_calls, 1);
+  EXPECT_EQ(g_gui_thread_info_calls, 0);
+  EXPECT_EQ(g_client_to_screen_calls, 0);
+  EXPECT_EQ(g_cursor_pos_calls, 0);
+}
+
+TEST_F(CaretPositionTest, KeepsTextExtentWhenPhysicalCoordinateConversionFails) {
+  const RECT text_extent{10, 20, 30, 44};
+  g_expected_transform_window = reinterpret_cast<HWND>(static_cast<uintptr_t>(2));
+
+  const auto anchor =
+      azookey::tsf::testing::ResolveCaretAnchorForTest(&text_extent, g_expected_transform_window);
+
+  EXPECT_TRUE(anchor.valid);
+  EXPECT_EQ(anchor.point.x, 10);
+  EXPECT_EQ(anchor.point.y, 44);
+  EXPECT_EQ(g_logical_to_physical_calls, 1);
   EXPECT_EQ(g_gui_thread_info_calls, 0);
   EXPECT_EQ(g_client_to_screen_calls, 0);
   EXPECT_EQ(g_cursor_pos_calls, 0);

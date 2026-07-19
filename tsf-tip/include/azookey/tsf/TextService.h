@@ -24,6 +24,7 @@ namespace testing {
 using GetGuiThreadInfoFnForTest = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
 using GetCursorPosFnForTest = BOOL(WINAPI*)(LPPOINT);
+using LogicalToPhysicalPointForPerMonitorDpiFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
 
 struct CaretAnchorForTest {
   POINT point;
@@ -40,9 +41,12 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
                                   ipc::MessageType expected_type);
 void SetCaretWin32ApiForTest(GetGuiThreadInfoFnForTest get_gui_thread_info,
                              ClientToScreenFnForTest client_to_screen,
-                             GetCursorPosFnForTest get_cursor_pos);
+                             GetCursorPosFnForTest get_cursor_pos,
+                             LogicalToPhysicalPointForPerMonitorDpiFnForTest
+                                 logical_to_physical_point);
 void ClearCaretWin32ApiForTest();
-CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect);
+CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect,
+                                             HWND text_extent_window = nullptr);
 }  // namespace testing
 #endif
 

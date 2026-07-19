@@ -905,9 +905,18 @@ GetMonitorInfo(mon, &mi);
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 
-Phase 5 では `WS_POPUP` 生成時に `SetProcessDpiAwarenessContext(
-DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` のみ。
-`WM_DPICHANGED` ハンドリング・フォントスケーリングは Phase 6-B で。
+候補ウィンドウは `WS_POPUP` 生成時だけスレッドの DPI awareness context を
+`DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替え、生成後に元の context へ戻す。
+
+`ITfContextView::GetTextExt` から得た screen 座標は、`ITfContextView::GetWnd` の文書 HWND を
+`LogicalToPhysicalPointForPerMonitorDPI` に渡して物理 screen 座標へ正規化してからキャッシュする。
+これにより、DPI 非対応または system-DPI-aware のホストと PMv2 の候補ウィンドウで
+座標系を一致させる。
+文書 HWND がない windowless context、または変換 API が失敗した場合は、
+利用可能な `GetTextExt` 座標を保持する。
+
+候補ウィンドウは `WM_DPICHANGED` と表示先モニタの DPI に応じて、
+配置範囲、行高、余白、フォントを更新する。
 
 ## 10. テスト戦略
 

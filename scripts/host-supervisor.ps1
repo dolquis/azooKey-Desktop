@@ -35,6 +35,27 @@ function Test-PerUserPipe {
   }
 }
 
+function Get-LaunchLogPath {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$BasePath,
+    [Parameter(Mandatory=$true)]
+    [int]$LaunchAttempt
+  )
+
+  $directory = Split-Path -Parent $BasePath
+  $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BasePath)
+  $extension = [System.IO.Path]::GetExtension($BasePath)
+  $timestamp = [DateTimeOffset]::UtcNow.ToString(
+    "yyyyMMddTHHmmssfffZ",
+    [Globalization.CultureInfo]::InvariantCulture)
+  $fileName = "$baseName-$timestamp-$LaunchAttempt$extension"
+  if ($directory) {
+    return Join-Path $directory $fileName
+  }
+  return $fileName
+}
+
 if (-not (Test-Path -LiteralPath $HostExePath -PathType Leaf)) {
   throw "Inference host not found: $HostExePath"
 }
@@ -56,8 +77,8 @@ if (-not $InstanceKey) {
   $InstanceKey = $currentSid
 }
 
-$mutexName = "Local\azooKeyInferenceHostSupervisor-$InstanceKey"
-$stopEventName = "Local\azooKeyInferenceHostSupervisorStop-$InstanceKey"
+$mutexName = "Global\azooKeyInferenceHostSupervisor-$InstanceKey"
+$stopEventName = "Global\azooKeyInferenceHostSupervisorStop-$InstanceKey"
 $mutex = [System.Threading.Mutex]::new($false, $mutexName)
 $ownsMutex = $false
 $stopEvent = $null
@@ -81,6 +102,7 @@ try {
 
   $restartDelayMs = $RestartDelayMinMs
   $launchCount = 0
+  $launchAttemptCount = 0
 
   while (-not $stopEvent.WaitOne(0)) {
     # A host started before this supervisor may already own the per-user pipe.
@@ -99,11 +121,14 @@ try {
       WindowStyle = "Hidden"
     }
     if ($StderrLogPath) {
+      $launchAttemptCount++
       $logDirectory = Split-Path -Parent $StderrLogPath
       if ($logDirectory) {
         New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
       }
-      $startParameters.RedirectStandardError = $StderrLogPath
+      $startParameters.RedirectStandardError = Get-LaunchLogPath `
+        -BasePath $StderrLogPath `
+        -LaunchAttempt $launchAttemptCount
     }
 
     $startedAt = [DateTimeOffset]::UtcNow

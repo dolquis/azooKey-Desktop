@@ -162,7 +162,7 @@ Describe "development registration scripts" {
     It "guards per-user HKCU cleanup from elevated reentry" {
       Assert-Condition ($script:unregister.Text -match 'if\s*\(\s*-not\s+\$ElevatedReentry\s*\)\s*\{') "unregister-dev.ps1 should guard HKCU cleanup with ElevatedReentry."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run')) "unregister-dev.ps1 should clean the HKCU Run key."
-      Assert-Condition ($script:unregister.Text -match 'azooKeyInferenceHostSupervisorStop-\$mySid') "unregister-dev.ps1 should signal the current-user supervisor to stop."
+      Assert-Condition ($script:unregister.Text -match 'Global\\azooKeyInferenceHostSupervisorStop-\$mySid') "unregister-dev.ps1 should signal the current-user supervisor across sessions."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKCU:\Software\Classes\CLSID\$clsid')) "unregister-dev.ps1 should clean legacy HKCU CLSID entries."
     }
 
@@ -187,8 +187,8 @@ Describe "development registration scripts" {
     }
 
     It "serializes supervision per user and uses a bounded restart backoff" {
-      Assert-Condition ($script:supervisor.Text -match 'Local\\azooKeyInferenceHostSupervisor-\$InstanceKey') "host-supervisor.ps1 should use a per-user named mutex."
-      Assert-Condition ($script:supervisor.Text -match 'Local\\azooKeyInferenceHostSupervisorStop-\$InstanceKey') "host-supervisor.ps1 should expose a per-user stop event."
+      Assert-Condition ($script:supervisor.Text -match 'Global\\azooKeyInferenceHostSupervisor-\$InstanceKey') "host-supervisor.ps1 should use a cross-session per-user named mutex."
+      Assert-Condition ($script:supervisor.Text -match 'Global\\azooKeyInferenceHostSupervisorStop-\$InstanceKey') "host-supervisor.ps1 should expose a cross-session per-user stop event."
       Assert-Condition ($script:supervisor.Text -match '\[Math\]::Min\(\$restartDelayMs \* 2,\s*\$RestartDelayMaxMs\)') "host-supervisor.ps1 should bound exponential restart backoff."
       Assert-Condition ($script:supervisor.Text -match 'Test-PerUserPipe\s+-Name\s+\$PipeName') "host-supervisor.ps1 should wait for an existing per-user pipe before launching."
       Assert-Condition ($script:supervisor.Text -match '\$hostProcess\.Dispose\(\)') "host-supervisor.ps1 should release each child process handle."
@@ -197,9 +197,11 @@ Describe "development registration scripts" {
     It "restarts a failed host process" {
       $childPath = Join-Path $TestDrive "fake-host.ps1"
       $counterPath = Join-Path $TestDrive "launch-count.txt"
+      $stderrLogBase = Join-Path $TestDrive "host-stderr.log"
       @'
 param([string]$CounterPath)
 Add-Content -LiteralPath $CounterPath -Value "launched"
+[Console]::Error.WriteLine("simulated crash")
 exit 3
 '@ | Set-Content -LiteralPath $childPath
 
@@ -209,6 +211,7 @@ exit 3
         -HostExePath $powerShellPath `
         -HostArguments $hostArguments `
         -PipeName "azookey-supervisor-test-$([guid]::NewGuid().ToString('N'))" `
+        -StderrLogPath $stderrLogBase `
         -InstanceKey "test-$([guid]::NewGuid().ToString('N'))" `
         -RestartDelayMinMs 10 `
         -RestartDelayMaxMs 20 `
@@ -216,6 +219,11 @@ exit 3
         -MaxLaunchCount 2
 
       Assert-Condition ((Get-Content -LiteralPath $counterPath).Count -eq 2) "host-supervisor.ps1 should relaunch a failed host."
+      $stderrLogs = @(Get-ChildItem -LiteralPath $TestDrive -Filter "host-stderr-*.log")
+      Assert-Condition ($stderrLogs.Count -eq 2) "host-supervisor.ps1 should preserve stderr for each launch."
+      foreach ($stderrLog in $stderrLogs) {
+        Assert-Condition ((Get-Content -Raw -LiteralPath $stderrLog.FullName) -match "simulated crash") "Each launch log should contain the host stderr."
+      }
     }
   }
 }

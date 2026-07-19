@@ -125,7 +125,11 @@ if (-not $ElevatedReentry) {
     try {
       $hostLogDir = Join-Path (Join-Path $env:LOCALAPPDATA "azooKey") "logs"
       $hostStderrLog = Join-Path $hostLogDir "inference-host-stderr.log"
-      $supervisorStderrLog = Join-Path $hostLogDir "inference-host-supervisor-stderr.log"
+      $supervisorLogTimestamp = [DateTimeOffset]::UtcNow.ToString(
+        "yyyyMMddTHHmmssfffZ",
+        [Globalization.CultureInfo]::InvariantCulture)
+      $supervisorStderrLog = Join-Path $hostLogDir `
+        "inference-host-supervisor-stderr-$supervisorLogTimestamp-$PID.log"
       New-Item -ItemType Directory -Path $hostLogDir -Force | Out-Null
     } catch {
       Write-Warning "Could not create inference host log directory: $_"
@@ -175,7 +179,7 @@ if (-not $ElevatedReentry) {
         Write-Host "Inference host already serving this user's pipe ($myPipe); supervisor will take over after it exits."
       }
       if ($hostStderrLog) {
-        Write-Host "Inference host stderr log: $hostStderrLog"
+        Write-Host "Inference host stderr log base (timestamped per launch): $hostStderrLog"
       }
     } catch {
       Write-Warning "Could not start inference host supervisor for current session: $_"

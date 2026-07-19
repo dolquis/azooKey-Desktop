@@ -38,7 +38,7 @@ if (-not $ElevatedReentry) {
   # running host. The host keeps its existing lifetime, matching historical
   # unregister behavior, but will no longer be respawned after it exits.
   $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-  $stopEventName = "Local\azooKeyInferenceHostSupervisorStop-$mySid"
+  $stopEventName = "Global\azooKeyInferenceHostSupervisorStop-$mySid"
   try {
     $stopEvent = [System.Threading.EventWaitHandle]::OpenExisting($stopEventName)
     $stopEvent.Set() | Out-Null

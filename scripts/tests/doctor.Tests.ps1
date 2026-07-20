@@ -75,6 +75,10 @@ Describe "development environment doctor" {
     }
 
     It "detects the packaged WinDbg application" {
+      function Get-AppxPackage {
+        throw "The test stub must be mocked."
+      }
+
       Mock Get-DoctorApplicationCheck {
         Get-DoctorCheck -Id "tool.windbg" -Name "WinDbg" -Status "warning" `
           -Required $false -Hint "Install WinDbg."

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder
+  Version="1.0"
+  Author="azooKey Project"
+  Copyright="azooKey Project"
+  Company="azooKey Project">
+  <Profiles>
+    <SystemCollector
+      Id="SystemCollector_AzooKeyDiagnostics"
+      Name="azooKey Diagnostics">
+      <BufferSize Value="1024" />
+      <Buffers Value="20" />
+    </SystemCollector>
+
+    <SystemProvider Id="SystemProvider_AzooKeyDiagnostics">
+      <Keywords>
+        <Keyword Value="CSwitch" />
+        <Keyword Value="DiskIO" />
+        <Keyword Value="DiskIOInit" />
+        <Keyword Value="FileIO" />
+        <Keyword Value="FileIOInit" />
+        <Keyword Value="Loader" />
+        <Keyword Value="NetworkTrace" />
+        <Keyword Value="ProcessThread" />
+        <Keyword Value="Registry" />
+      </Keywords>
+    </SystemProvider>
+
+    <Profile
+      Id="AzooKeyDiagnostics.Verbose.File"
+      Name="AzooKeyDiagnostics"
+      Description="Process, file, registry, and network events for azooKey TIP and inference-host diagnostics."
+      LoggingMode="File"
+      DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="SystemCollector_AzooKeyDiagnostics">
+          <SystemProviderId Value="SystemProvider_AzooKeyDiagnostics" />
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+
+    <Profile
+      Id="AzooKeyDiagnostics.Light.File"
+      Name="AzooKeyDiagnostics"
+      Description="Lightweight process, file, registry, and network events for azooKey diagnostics."
+      Base="AzooKeyDiagnostics.Verbose.File"
+      LoggingMode="File"
+      DetailLevel="Light" />
+    <Profile
+      Id="AzooKeyDiagnostics.Verbose.Memory"
+      Name="AzooKeyDiagnostics"
+      Description="In-memory process, file, registry, and network events for azooKey diagnostics."
+      Base="AzooKeyDiagnostics.Verbose.File"
+      LoggingMode="Memory"
+      DetailLevel="Verbose" />
+    <Profile
+      Id="AzooKeyDiagnostics.Light.Memory"
+      Name="AzooKeyDiagnostics"
+      Description="Lightweight in-memory process, file, registry, and network events for azooKey diagnostics."
+      Base="AzooKeyDiagnostics.Verbose.File"
+      LoggingMode="Memory"
+      DetailLevel="Light" />
+  </Profiles>
+</WindowsPerformanceRecorder>

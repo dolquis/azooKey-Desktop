@@ -97,11 +97,13 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
 using GetGuiThreadInfoFn = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFn = BOOL(WINAPI*)(HWND, LPPOINT);
 using GetCursorPosFn = BOOL(WINAPI*)(LPPOINT);
+using LogicalToPhysicalPointForPerMonitorDpiFn = BOOL(WINAPI*)(HWND, LPPOINT);
 
 struct CaretWin32Api {
   GetGuiThreadInfoFn get_gui_thread_info;
   ClientToScreenFn client_to_screen;
   GetCursorPosFn get_cursor_pos;
+  LogicalToPhysicalPointForPerMonitorDpiFn logical_to_physical_point;
 };
 
 struct CaretAnchor {
@@ -110,7 +112,8 @@ struct CaretAnchor {
 };
 
 CaretWin32Api DefaultCaretWin32Api() {
-  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetCursorPos};
+  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetCursorPos,
+          &::LogicalToPhysicalPointForPerMonitorDPI};
 }
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -135,12 +138,19 @@ bool IsZeroRect(const RECT& rect) {
 
 constexpr LONG kCursorFallbackCaretHeight = 16;
 
-CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect) {
+CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect, HWND text_extent_window = nullptr) {
+  const CaretWin32Api api = CurrentCaretWin32Api();
   if (text_ext_rect && IsUsableTextExtent(*text_ext_rect)) {
-    return {{text_ext_rect->left, text_ext_rect->bottom}, true};
+    POINT point{text_ext_rect->left, text_ext_rect->bottom};
+    if (text_extent_window && api.logical_to_physical_point) {
+      POINT physical_point = point;
+      if (api.logical_to_physical_point(text_extent_window, &physical_point)) {
+        point = physical_point;
+      }
+    }
+    return {point, true};
   }
 
-  const CaretWin32Api api = CurrentCaretWin32Api();
   GUITHREADINFO thread_info{};
   thread_info.cbSize = sizeof(thread_info);
   if (api.get_gui_thread_info && api.client_to_screen && api.get_gui_thread_info(0, &thread_info) &&
@@ -220,16 +230,18 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
   return IsExpectedIpcResponse(response, expected_request_id, expected_type);
 }
 
-void SetCaretWin32ApiForTest(GetGuiThreadInfoFnForTest get_gui_thread_info,
-                             ClientToScreenFnForTest client_to_screen,
-                             GetCursorPosFnForTest get_cursor_pos) {
-  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_cursor_pos};
+void SetCaretWin32ApiForTest(
+    GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
+    GetCursorPosFnForTest get_cursor_pos,
+    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point) {
+  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_cursor_pos,
+                       logical_to_physical_point};
 }
 
 void ClearCaretWin32ApiForTest() { g_caret_win32_api = DefaultCaretWin32Api(); }
 
-CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect) {
-  const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect);
+CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect, HWND text_extent_window) {
+  const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect, text_extent_window);
   return {anchor.point, anchor.valid};
 }
 
@@ -2253,14 +2265,21 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     // Cache the caret screen position for the candidate window anchor (M5/M19).
     {
       const RECT* text_ext_rect = nullptr;
+      HWND text_extent_window = nullptr;
       RECT rc{};
       ITfContextView* pView = nullptr;
       if (SUCCEEDED(context_->GetActiveView(&pView)) && pView) {
         BOOL clipped = FALSE;
-        if (pView->GetTextExt(ec, pRange, &rc, &clipped) == S_OK) text_ext_rect = &rc;
+        if (pView->GetTextExt(ec, pRange, &rc, &clipped) == S_OK) {
+          text_ext_rect = &rc;
+          HWND view_window = nullptr;
+          if (SUCCEEDED(pView->GetWnd(&view_window))) {
+            text_extent_window = view_window;
+          }
+        }
       }
       if (pView) pView->Release();
-      const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect);
+      const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect, text_extent_window);
       service_->caret_pt_ = anchor.point;
       service_->caret_pt_valid_ = anchor.valid;
     }

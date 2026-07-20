@@ -117,9 +117,9 @@ cdb.exe -z $dump.FullName -c '!analyze -v; ~* kb; lm; q' |
 Hidden 起動の Host や window message hang ではない deadlock は、再現中の PID を指定して手動 dump を採取する。
 
 ```powershell
-$host = Get-Process azookey_inference_host -ErrorAction Stop |
+$hostProcess = Get-Process azookey_inference_host -ErrorAction Stop |
   Select-Object -First 1
-& $procDumpExe -accepteula -mp $host.Id $captureRoot
+& $procDumpExe -accepteula -mp $hostProcess.Id $captureRoot
 ```
 
 入力先アプリが UI message に応答しない場合は、次のように待機する。
@@ -147,8 +147,8 @@ WPR profile と Process Monitor を再現直前に開始し、再現直後に停
 Kernel provider を使う WPR profile の開始は、管理者 PowerShell で実行する。
 
 ```powershell
-$profile = Join-Path $PWD 'diagnostics\azookey-diagnostics.wprp'
-wpr.exe -start "${profile}!AzooKeyDiagnostics.Verbose" -filemode
+$wprProfile = Join-Path $PWD 'diagnostics\azookey-diagnostics.wprp'
+wpr.exe -start "${wprProfile}!AzooKeyDiagnostics.Verbose" -filemode
 
 $procmon = Start-Process -FilePath $procmonExe -PassThru -ArgumentList @(
   '-accepteula',

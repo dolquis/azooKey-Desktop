@@ -2272,7 +2272,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         BOOL clipped = FALSE;
         if (pView->GetTextExt(ec, pRange, &rc, &clipped) == S_OK) {
           text_ext_rect = &rc;
-          pView->GetWnd(&text_extent_window);
+          HWND view_window = nullptr;
+          if (SUCCEEDED(pView->GetWnd(&view_window))) {
+            text_extent_window = view_window;
+          }
         }
       }
       if (pView) pView->Release();

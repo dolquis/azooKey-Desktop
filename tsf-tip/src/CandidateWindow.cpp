@@ -145,11 +145,10 @@ bool CandidateWindow::Create() {
   if (!s_atom) return false;
 
   {
-    const ScopedThreadDpiAwarenessContext dpi_context(
-        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, nullptr,
-                            WS_POPUP | WS_BORDER, 0, 0, 200, metrics_.item_height, nullptr, nullptr,
-                            GetTipModuleHandle(), this);
+    const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName,
+                            nullptr, WS_POPUP | WS_BORDER, 0, 0, 200, metrics_.item_height, nullptr,
+                            nullptr, GetTipModuleHandle(), this);
   }
   if (hwnd_) {
     UpdateDpi(GetDpiForWindow(hwnd_));
@@ -171,8 +170,7 @@ void CandidateWindow::Destroy() {
 void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int selected_idx) {
   if (!hwnd_ || items.empty()) return;
 
-  const ScopedThreadDpiAwarenessContext dpi_context(
-      DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   items_ = items;
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
   HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);

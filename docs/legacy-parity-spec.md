@@ -888,7 +888,7 @@ public:
 
 1. `ITfContextView::GetTextExt(range, &rect, &clipped)` を使う
 2. `S_OK` でも `rect` が空の場合、`GetGUIThreadInfo` で `gti.rcCaret` を取得
-3. それも失敗（rcCaret が 0,0,0,0）の場合、`GetCursorPos` を `pt` として 1×16 の矩形を仮定
+3. それも失敗（rcCaret が 0,0,0,0）の場合、`GetPhysicalCursorPos` を `pt` として 1×16 の矩形を仮定
 
 (2) は Chromium / Electron アプリで必要。(3) は最終フォールバック。
 
@@ -915,6 +915,12 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 キャレット座標の取得から `SetWindowPos` まで物理 screen 座標系を一致させる。
 文書 HWND がない windowless context、または変換 API が失敗した場合は、
 利用可能な `GetTextExt` 座標を保持する。
+
+`GetGUIThreadInfo` の `rcCaret` は `hwndCaret` 基準の論理 client 座標として扱う。
+`ClientToScreen` で screen 座標へ変換した後、同じ `hwndCaret` を
+`LogicalToPhysicalPointForPerMonitorDPI` に渡して物理座標へ正規化する。
+変換 API が失敗した場合は、`ClientToScreen` で得た座標を保持する。
+最終フォールバックでは、参照 HWND を推測せず `GetPhysicalCursorPos` から物理 screen 座標を直接取得する。
 
 候補ウィンドウは `WM_DPICHANGED` と表示先モニタの DPI に応じて、
 配置範囲、行高、余白、フォントを更新する。

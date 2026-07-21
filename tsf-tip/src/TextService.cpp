@@ -96,13 +96,13 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
 
 using GetGuiThreadInfoFn = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFn = BOOL(WINAPI*)(HWND, LPPOINT);
-using GetCursorPosFn = BOOL(WINAPI*)(LPPOINT);
+using GetPhysicalCursorPosFn = BOOL(WINAPI*)(LPPOINT);
 using LogicalToPhysicalPointForPerMonitorDpiFn = BOOL(WINAPI*)(HWND, LPPOINT);
 
 struct CaretWin32Api {
   GetGuiThreadInfoFn get_gui_thread_info;
   ClientToScreenFn client_to_screen;
-  GetCursorPosFn get_cursor_pos;
+  GetPhysicalCursorPosFn get_physical_cursor_pos;
   LogicalToPhysicalPointForPerMonitorDpiFn logical_to_physical_point;
 };
 
@@ -112,7 +112,7 @@ struct CaretAnchor {
 };
 
 CaretWin32Api DefaultCaretWin32Api() {
-  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetCursorPos,
+  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetPhysicalCursorPos,
           &::LogicalToPhysicalPointForPerMonitorDPI};
 }
 
@@ -156,11 +156,19 @@ CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect, HWND text_extent_windo
   if (api.get_gui_thread_info && api.client_to_screen && api.get_gui_thread_info(0, &thread_info) &&
       thread_info.hwndCaret && !IsZeroRect(thread_info.rcCaret)) {
     POINT point{thread_info.rcCaret.left, thread_info.rcCaret.bottom};
-    if (api.client_to_screen(thread_info.hwndCaret, &point)) return {point, true};
+    if (api.client_to_screen(thread_info.hwndCaret, &point)) {
+      if (api.logical_to_physical_point) {
+        POINT physical_point = point;
+        if (api.logical_to_physical_point(thread_info.hwndCaret, &physical_point)) {
+          point = physical_point;
+        }
+      }
+      return {point, true};
+    }
   }
 
   POINT point{};
-  if (api.get_cursor_pos && api.get_cursor_pos(&point)) {
+  if (api.get_physical_cursor_pos && api.get_physical_cursor_pos(&point)) {
     point.y += kCursorFallbackCaretHeight;
     return {point, true};
   }
@@ -232,9 +240,9 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
 
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
-    GetCursorPosFnForTest get_cursor_pos,
+    GetPhysicalCursorPosFnForTest get_physical_cursor_pos,
     LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point) {
-  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_cursor_pos,
+  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_physical_cursor_pos,
                        logical_to_physical_point};
 }
 

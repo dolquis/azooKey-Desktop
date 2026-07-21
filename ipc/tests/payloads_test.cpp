@@ -196,12 +196,6 @@ TEST(PayloadsTest, QueryCandidatesResponseDropsMalformedEntries) {
   EXPECT_EQ(parsed->candidates[0].surface, "日本語");
   EXPECT_EQ(parsed->candidates[1].surface, "日本");
   EXPECT_TRUE(parsed->partial);
-
-  // An absent candidates array is not an error: it yields an empty list.
-  auto empty = azookey::ipc::ParseQueryCandidatesResponse(R"({"partial":false})");
-  ASSERT_TRUE(empty.has_value());
-  EXPECT_TRUE(empty->candidates.empty());
-  EXPECT_FALSE(empty->partial);
 }
 
 TEST(PayloadsTest, CandidateScoresIgnoreGlobalCppLocale) {

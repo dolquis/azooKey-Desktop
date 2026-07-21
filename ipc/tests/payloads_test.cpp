@@ -176,6 +176,34 @@ TEST(PayloadsTest, QueryCandidates) {
   EXPECT_EQ(parsed2->candidates[0].score, 1.0);
 }
 
+TEST(PayloadsTest, QueryCandidatesResponseDropsMalformedEntries) {
+  // A mix of valid and malformed candidate entries must parse successfully,
+  // preserving the valid entries in order while silently dropping the malformed
+  // ones (non-object, or missing the required surface/reading fields). A single
+  // bad entry from the host must not blank out the whole candidate list.
+  const std::string json =
+      R"({"candidates":[)"
+      R"({"surface":"日本語","reading":"にほんご","score":1.0,"source":"static-dict"},)"
+      R"({"surface":"欠落","score":0.5},)"   // missing reading -> dropped
+      R"("not-an-object",)"                  // non-object -> dropped
+      R"({"reading":"のみ","source":"x"},)"  // missing surface -> dropped
+      R"({"surface":"日本","reading":"にほん","score":0.7,"source":"fallback"})"
+      R"(],"partial":true})";
+
+  auto parsed = azookey::ipc::ParseQueryCandidatesResponse(json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_EQ(parsed->candidates.size(), 2u);
+  EXPECT_EQ(parsed->candidates[0].surface, "日本語");
+  EXPECT_EQ(parsed->candidates[1].surface, "日本");
+  EXPECT_TRUE(parsed->partial);
+
+  // An absent candidates array is not an error: it yields an empty list.
+  auto empty = azookey::ipc::ParseQueryCandidatesResponse(R"({"partial":false})");
+  ASSERT_TRUE(empty.has_value());
+  EXPECT_TRUE(empty->candidates.empty());
+  EXPECT_FALSE(empty->partial);
+}
+
 TEST(PayloadsTest, CandidateScoresIgnoreGlobalCppLocale) {
   ScopedGlobalLocale scoped(std::locale(std::locale::classic(), new CommaDecimalPunct));
 

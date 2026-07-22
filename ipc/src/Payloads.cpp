@@ -258,6 +258,12 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
   if (!v) return std::nullopt;
   QueryCandidatesResponse p;
   if (const auto* arr = v->GetArray("candidates")) {
+    // Skip malformed entries (non-object, or missing surface/reading) instead of
+    // failing the whole response. This lenient decode is the module-wide
+    // convention for arrays of optional elements (see BatchSegmentFromJson and
+    // the handshake capabilities list): a single bad candidate from the host
+    // must not blank out the remaining valid ones, which for an IME would drop
+    // the entire candidate list rather than one entry.
     for (const auto& e : *arr) {
       if (auto c = CandidateFromJson(e)) p.candidates.push_back(std::move(*c));
     }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey IPCプロトコル"
+  short_description: "TIP・Host間IPCの契約と回復処理を安全に扱います"
+  default_prompt: "Use $tsf-ipc-protocol to review this IPC contract change and select the required compatibility tests."

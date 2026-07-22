@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey TSF TIP開発"
+  short_description: "COM・TSF境界、候補UI、登録処理を安全に実装します"
+  default_prompt: "Use $tsf-tip-development to review this TSF/COM change and select the required validation."

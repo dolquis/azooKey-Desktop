@@ -1,5 +1,15 @@
 # IPC フレームフォーマット (TIP ⇔ Inference Host)
 
+## 目次
+
+- [トランスポート](#トランスポート)
+- [フレーミング](#フレーミング)
+- [Envelope](#envelope-構造-ipcenvelope)
+- [メッセージ種別](#メッセージ種別-ipcmessagetype)
+- [Handshake](#handshakeと接続認証)
+- [接続回復](#timeoutcancel接続回復)
+- [同期チェックリスト](#変更時の同期チェックリスト)
+
 ## トランスポート
 
 - Windows Named Pipe (`\\.\pipe\azookey-<sid>`)
@@ -36,18 +46,18 @@
   write 分割に依存してはならない。
 - 最大 payload サイズは 1MiB (`ipc::kMaxFrameSize`)。JSON パーサの最大入力長
   と同じ値に揃え、超過フレームは送受信時に拒否する。
-- バイトオーダーが LE な理由: Windows ネイティブが LE のため zero-copy で
-  処理できる。
+- little-endianはwire契約である。`EncodeLengthPrefixed`は4 byteを明示的に書き込み、
+  payloadを新しい`std::vector<uint8_t>`へコピーするため、zero-copyを前提にしない。
 
 ## Envelope 構造 (`ipc::Envelope`)
 
-| フィールド      | 型        | 意味                                                |
-|----------------|----------|-----------------------------------------------------|
-| `version`      | `int`    | プロトコル世代 (現状 `1`)                            |
-| `request_id`   | `uint64` | 呼び出し ID。レスポンスはこの ID をエコーバックする   |
-| `trace_id`     | `string` | 任意のトレース文字列 (ロギング / 追跡用)             |
-| `type`         | `enum`   | `MessageType` (下記)                                |
-| `payload_json` | `string` | type 毎の payload (UTF-8 JSON)                      |
+| C++フィールド | wire key | 型 | 契約 |
+|---|---|---|---|
+| `version` | `version` | `int` | プロトコル世代。serialize時は常に出力する。欠落時はv1、許容範囲は`1..kEnvelopeVersion` |
+| `request_id` | `request_id` | `uint64` | 必須。レスポンスは要求IDをエコーバックする |
+| `trace_id` | `trace_id` | `string` | 必須フィールド。ログ・追跡用で、空文字は許容する |
+| `type` | `type` | `string` | 必須。`MessageType`との変換には`TypeToString` / `TypeFromString`を使う |
+| `payload_json` | `payload` | JSON value | typeごとのpayload。欠落時は`{}`として復元する |
 
 `ipc::Serialize` / `ipc::Deserialize` は `Envelope` ⇔ JSON 文字列を変換する。
 payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response` で
@@ -61,52 +71,71 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
   大きい世代(将来の breaking change)や `1` 未満(不正値)は `std::nullopt` を返して
   フレームを破棄する。互換世代を誤解釈するより破棄する方針(transport の
   「解釈不能フレームは無視」と同じ)。`version` フィールド欠落時は現行世代とみなす。
+- `request_id`、`type`、`trace_id`のいずれかが欠落した場合も`std::nullopt`を返す。
+  未知のtype文字列は`MessageType::Unknown`へ変換されるが、dispatcherで処理可能とは限らない。
 
 ## メッセージ種別 (`ipc::MessageType`)
 
 `ipc/include/azookey/ipc/Messages.h` で定義。文字列変換は
 `TypeToString` / `TypeFromString` を経由する。
 
-| 種別                  | 役割                                                |
-|----------------------|-----------------------------------------------------|
-| `Handshake`           | 起動時のバージョン交渉 + capability 共有             |
-| `LoadModel`           | Inference Host へのモデル読込指示 (M8)              |
-| `QueryCandidates`     | 入力中文字列に対する変換候補要求                     |
-| `QueryPredictions`    | 予測変換要求                                          |
-| `QueryCorrections`    | typo 補正候補要求                                     |
-| `Cancel`              | in-flight な要求のキャンセル (M10)                  |
-| `CommitObservation`   | 確定操作の学習用フィードバック (M6)                  |
-| `CommitCorrection`    | 補正候補の確定通知                                    |
-| `AddUserWord`         | ユーザ辞書追加                                        |
-| `UpdateUserWord`      | ユーザ辞書更新                                        |
-| `RemoveUserWord`      | ユーザ辞書削除                                        |
-| `Ping` / `Health`     | 死活監視 / Inference Host 状態取得                  |
+次表は現行実装のスナップショットである。変更前に`Messages.*`、`Payloads.*`、
+`Dispatcher.cpp`を再確認する。
+
+| 種別 | 現在の配線 | 役割 |
+|---|---|---|
+| `Handshake` | codec + Host | version、capability、client ID、tokenの交換 |
+| `LoadModel` | codec + Host | モデル読込指示 |
+| `QueryCandidates` | codec + Host + TIP | 入力中readingの候補要求 |
+| `QueryBatchConversion` | codec + Host + TIP | batch romajiの一括変換要求 |
+| `QueryPredictions` | enumのみ | 将来の予測変換用予約 |
+| `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
+| `Cancel` | codec + Host + TIP | in-flight要求の取消。Hostはレスポンスを返さない |
+| `CommitObservation` | codec + Host + TIP | 確定操作の学習フィードバック |
+| `CommitCorrection` | enumのみ | 将来の補正確定通知用予約 |
+| `AddUserWord` | codec + Host | ユーザ辞書追加 |
+| `UpdateUserWord` | enumのみ | 将来のユーザ辞書更新用予約 |
+| `RemoveUserWord` | codec + Host | ユーザ辞書削除 |
+| `UpdateConfig` | Host + response codec | settings再読込。要求payloadは空オブジェクト |
+| `Ping` | codec + Host | 疎通確認 |
+| `Health` | codec + Host | Host状態取得 |
+| `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の
 struct (例: `HandshakeRequest`, `QueryCandidatesRequest`, `CandidateField`,
 `CommitObservationRequest`) を参照。
 
-`HandshakeRequest` は任意の `handshake_token` を持つ。Host 側に token が設定
-されている場合、protocol version と token の両方が一致したときだけ
-`HandshakeResponse.accepted=true` になる。pipe mode の Host は
+## Handshakeと接続認証
+
+`HandshakeRequest`は`tip_version`を必須とし、`protocol_version`省略時はv1、
+`capabilities`省略時は空配列として読む。`client_id`と`handshake_token`は任意である。
+Host側にtokenが設定されている場合、protocol versionとtokenの両方が一致したときだけ
+`HandshakeResponse.accepted=true`になる。pipe modeのHostは
 `AZOOKEY_IPC_HANDSHAKE_TOKEN` / `--handshake-token` を優先する。未指定時は
 per-user pipe ACL のみで動作し、token 検証は無効。手動で token を使う場合は
 Host / TIP の両プロセスに同じ `AZOOKEY_IPC_HANDSHAKE_TOKEN` を明示設定する。
 
-## 既知の制約
+TIPのprimary接続とCancel用control接続はそれぞれHandshakeを行う。同じTIPインスタンスは
+両接続に同じ非空`client_id`を送り、HostのCancel/latest状態を他プロセスと分離する。
 
-- `Receive()` はブロッキング、`ReceiveWithTimeout(timeout_ms)` は送信キューを
-  drain したい呼び出し側のためのノンブロッキング版。
+## timeout、Cancel、接続回復
+
+- `Receive()`はブロッキングである。
+- `ReceiveWithTimeout(timeout_ms)`は`PeekNamedPipe`を10ms間隔で確認する期限付きpollingであり、
+  即時returnを保証するnon-blocking APIではない。timeoutまたはpipe errorで`std::nullopt`を返す。
+- TIPのIPC workerはHost不在時に250msから最大3000msまで指数バックオフして再接続する。
+  接続断直前に取り出した最新候補要求は再度pendingへ戻し、Handshake後に再送する。
+- Cancelは応答待ちのprimary接続を塞がないよう、Handshake済みの短命control接続を優先する。
+  control接続が使えなければprimary接続へbest-effortでqueueする。
+- TIPのUI側は`request_id`でstale responseを破棄し、再接続前の古い結果を表示しない。
 
 ## 変更時の同期チェックリスト
 
-1. `MessageType` に新種別を追加した場合は `TypeToString` / `TypeFromString` を
-   両方更新する。
-2. `Payloads.h` に新規 struct を追加した場合は同じ場所に `Build*` / `Parse*` を
-   両方宣言し、`ipc/src/Payloads.cpp` に実装を追加する。
-3. TIP 側 (`tsf-tip/src/TextService.cpp` の IPC ワーカー
-   `IpcWorkerThread` / `PostIpcSend`) と Host 側
-   (`inference-host/src/Dispatcher.cpp`) のディスパッチを両方更新する。
-4. `ipc/tests/` にラウンドトリップテスト (`payloads_test.cpp` /
-   `messages_test.cpp` パターン) を追加する。
-5. プロトコル意味の変更は `Envelope.version` の bump を検討する。
+1. `MessageType`、`TypeToString`、`TypeFromString`を同期する。
+2. request/response struct、`Build*`、`Parse*`を同じ変更で追加し、必須・任意・既定値を固定する。
+3. `Dispatcher::Dispatch`とhandler、TIPまたはsettings側の送信経路を同期する。
+4. `messages_test.cpp`でEnvelope、version、type mapping、frame境界を検証する。
+5. `payloads_test.cpp`でcodecのround-trip、欠落、型違い、境界値を検証する。
+6. transport変更では`named_pipe_transport_test.cpp`、TIPフロー変更では
+   `tip_client_ipc_test.cpp`と関連`tsf-tip/tests/`を検証する。
+7. `docs/windows-tsf-host-architecture.md`と関連specの契約記述を同期する。

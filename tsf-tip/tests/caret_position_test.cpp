@@ -10,6 +10,7 @@ int g_gui_thread_info_calls = 0;
 int g_client_to_screen_calls = 0;
 int g_physical_cursor_pos_calls = 0;
 int g_logical_to_physical_calls = 0;
+int g_monitor_scale_percent_calls = 0;
 RECT g_gui_caret_rect{};
 bool g_gui_thread_info_succeeds = false;
 bool g_client_to_screen_succeeds = false;
@@ -19,6 +20,7 @@ POINT g_screen_offset{};
 POINT g_physical_cursor_point{};
 POINT g_physical_offset{};
 HWND g_expected_transform_window = nullptr;
+UINT g_monitor_scale_percent = 100;
 
 BOOL WINAPI FakeGetGuiThreadInfo(DWORD thread_id, PGUITHREADINFO info) {
   ++g_gui_thread_info_calls;
@@ -54,6 +56,13 @@ BOOL WINAPI FakeLogicalToPhysicalPointForPerMonitorDpi(HWND hwnd, LPPOINT point)
   return TRUE;
 }
 
+UINT FakeGetMonitorScalePercent(POINT screen_point) {
+  ++g_monitor_scale_percent_calls;
+  EXPECT_EQ(screen_point.x, g_physical_cursor_point.x);
+  EXPECT_EQ(screen_point.y, g_physical_cursor_point.y);
+  return g_monitor_scale_percent;
+}
+
 class CaretPositionTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -61,6 +70,7 @@ class CaretPositionTest : public ::testing::Test {
     g_client_to_screen_calls = 0;
     g_physical_cursor_pos_calls = 0;
     g_logical_to_physical_calls = 0;
+    g_monitor_scale_percent_calls = 0;
     g_gui_caret_rect = {};
     g_gui_thread_info_succeeds = false;
     g_client_to_screen_succeeds = false;
@@ -70,9 +80,10 @@ class CaretPositionTest : public ::testing::Test {
     g_physical_cursor_point = {};
     g_physical_offset = {};
     g_expected_transform_window = nullptr;
-    azookey::tsf::testing::SetCaretWin32ApiForTest(&FakeGetGuiThreadInfo, &FakeClientToScreen,
-                                                   &FakeGetPhysicalCursorPos,
-                                                   &FakeLogicalToPhysicalPointForPerMonitorDpi);
+    g_monitor_scale_percent = 100;
+    azookey::tsf::testing::SetCaretWin32ApiForTest(
+        &FakeGetGuiThreadInfo, &FakeClientToScreen, &FakeGetPhysicalCursorPos,
+        &FakeLogicalToPhysicalPointForPerMonitorDpi, &FakeGetMonitorScalePercent);
   }
 
   void TearDown() override { azookey::tsf::testing::ClearCaretWin32ApiForTest(); }
@@ -153,6 +164,7 @@ TEST_F(CaretPositionTest, KeepsGuiThreadScreenCoordinatesWhenPhysicalConversionF
   g_gui_caret_rect = {4, 5, 6, 25};
   g_screen_offset = {100, 200};
   g_expected_transform_window = reinterpret_cast<HWND>(static_cast<uintptr_t>(1));
+  g_logical_to_physical_succeeds = false;
 
   const auto anchor = azookey::tsf::testing::ResolveCaretAnchorForTest(nullptr);
 
@@ -165,19 +177,34 @@ TEST_F(CaretPositionTest, KeepsGuiThreadScreenCoordinatesWhenPhysicalConversionF
   EXPECT_EQ(g_logical_to_physical_calls, 1);
 }
 
-TEST_F(CaretPositionTest, ZeroGuiCaretFallsBackToPhysicalCursorPosition) {
+TEST_F(CaretPositionTest, ZeroGuiCaretFallsBackToScaledPhysicalCursorPosition) {
   g_gui_thread_info_succeeds = true;
   g_physical_cursor_pos_succeeds = true;
   g_physical_cursor_point = {321, 654};
+  g_monitor_scale_percent = 150;
+
+  const auto anchor = azookey::tsf::testing::ResolveCaretAnchorForTest(nullptr);
+
+  EXPECT_TRUE(anchor.valid);
+  EXPECT_EQ(anchor.point.x, 321);
+  EXPECT_EQ(anchor.point.y, 678);
+  EXPECT_EQ(g_gui_thread_info_calls, 1);
+  EXPECT_EQ(g_client_to_screen_calls, 0);
+  EXPECT_EQ(g_physical_cursor_pos_calls, 1);
+  EXPECT_EQ(g_monitor_scale_percent_calls, 1);
+}
+
+TEST_F(CaretPositionTest, PhysicalCursorUsesDefaultHeightWhenMonitorScaleIsUnavailable) {
+  g_physical_cursor_pos_succeeds = true;
+  g_physical_cursor_point = {321, 654};
+  g_monitor_scale_percent = 0;
 
   const auto anchor = azookey::tsf::testing::ResolveCaretAnchorForTest(nullptr);
 
   EXPECT_TRUE(anchor.valid);
   EXPECT_EQ(anchor.point.x, 321);
   EXPECT_EQ(anchor.point.y, 670);
-  EXPECT_EQ(g_gui_thread_info_calls, 1);
-  EXPECT_EQ(g_client_to_screen_calls, 0);
-  EXPECT_EQ(g_physical_cursor_pos_calls, 1);
+  EXPECT_EQ(g_monitor_scale_percent_calls, 1);
 }
 
 TEST_F(CaretPositionTest, AllFailuresReturnInvalidOrigin) {

@@ -25,6 +25,7 @@ using GetGuiThreadInfoFnForTest = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
 using GetPhysicalCursorPosFnForTest = BOOL(WINAPI*)(LPPOINT);
 using LogicalToPhysicalPointForPerMonitorDpiFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
+using GetMonitorScalePercentFnForTest = UINT (*)(POINT);
 
 struct CaretAnchorForTest {
   POINT point;
@@ -42,7 +43,8 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
     GetPhysicalCursorPosFnForTest get_physical_cursor_pos,
-    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point);
+    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point,
+    GetMonitorScalePercentFnForTest get_monitor_scale_percent);
 void ClearCaretWin32ApiForTest();
 CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect,
                                              HWND text_extent_window = nullptr);

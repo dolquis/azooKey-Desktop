@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey 学習データ安全性"
+  short_description: "学習データの永続化、プライバシー、検証先を安全に案内します"
+  default_prompt: "Use $azookey-learning-data-safety to review this learning-data change against the repository safety contracts."

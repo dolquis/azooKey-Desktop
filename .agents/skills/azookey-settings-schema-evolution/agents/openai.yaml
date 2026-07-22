@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey 設定スキーマ進化"
+  short_description: "設定スキーマの互換性、移行、既定値、CI検証を安全に案内します"
+  default_prompt: "Use $azookey-settings-schema-evolution to review this settings change for schema, runtime, migration, and CI consistency."

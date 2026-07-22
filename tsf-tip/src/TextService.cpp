@@ -1,5 +1,7 @@
 #include "azookey/tsf/TextService.h"
 
+#include <shellscalingapi.h>
+
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -96,14 +98,16 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
 
 using GetGuiThreadInfoFn = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFn = BOOL(WINAPI*)(HWND, LPPOINT);
-using GetCursorPosFn = BOOL(WINAPI*)(LPPOINT);
+using GetPhysicalCursorPosFn = BOOL(WINAPI*)(LPPOINT);
 using LogicalToPhysicalPointForPerMonitorDpiFn = BOOL(WINAPI*)(HWND, LPPOINT);
+using GetMonitorScalePercentFn = UINT (*)(POINT);
 
 struct CaretWin32Api {
   GetGuiThreadInfoFn get_gui_thread_info;
   ClientToScreenFn client_to_screen;
-  GetCursorPosFn get_cursor_pos;
+  GetPhysicalCursorPosFn get_physical_cursor_pos;
   LogicalToPhysicalPointForPerMonitorDpiFn logical_to_physical_point;
+  GetMonitorScalePercentFn get_monitor_scale_percent;
 };
 
 struct CaretAnchor {
@@ -111,9 +115,22 @@ struct CaretAnchor {
   bool valid{false};
 };
 
+constexpr UINT kDefaultMonitorScalePercent = 100;
+
+UINT GetMonitorScalePercent(POINT screen_point) {
+  const HMONITOR monitor = MonitorFromPoint(screen_point, MONITOR_DEFAULTTONEAREST);
+  if (!monitor) return kDefaultMonitorScalePercent;
+
+  DEVICE_SCALE_FACTOR scale_factor = SCALE_100_PERCENT;
+  if (FAILED(GetScaleFactorForMonitor(monitor, &scale_factor))) {
+    return kDefaultMonitorScalePercent;
+  }
+  return static_cast<UINT>(scale_factor);
+}
+
 CaretWin32Api DefaultCaretWin32Api() {
-  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetCursorPos,
-          &::LogicalToPhysicalPointForPerMonitorDPI};
+  return {&::GetGUIThreadInfo, &::ClientToScreen, &::GetPhysicalCursorPos,
+          &::LogicalToPhysicalPointForPerMonitorDPI, &GetMonitorScalePercent};
 }
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -156,12 +173,24 @@ CaretAnchor ResolveCaretAnchor(const RECT* text_ext_rect, HWND text_extent_windo
   if (api.get_gui_thread_info && api.client_to_screen && api.get_gui_thread_info(0, &thread_info) &&
       thread_info.hwndCaret && !IsZeroRect(thread_info.rcCaret)) {
     POINT point{thread_info.rcCaret.left, thread_info.rcCaret.bottom};
-    if (api.client_to_screen(thread_info.hwndCaret, &point)) return {point, true};
+    if (api.client_to_screen(thread_info.hwndCaret, &point)) {
+      if (api.logical_to_physical_point) {
+        POINT physical_point = point;
+        if (api.logical_to_physical_point(thread_info.hwndCaret, &physical_point)) {
+          point = physical_point;
+        }
+      }
+      return {point, true};
+    }
   }
 
   POINT point{};
-  if (api.get_cursor_pos && api.get_cursor_pos(&point)) {
-    point.y += kCursorFallbackCaretHeight;
+  if (api.get_physical_cursor_pos && api.get_physical_cursor_pos(&point)) {
+    const UINT scale_percent = api.get_monitor_scale_percent ? api.get_monitor_scale_percent(point)
+                                                             : kDefaultMonitorScalePercent;
+    point.y += scale_percent > 0
+                   ? MulDiv(kCursorFallbackCaretHeight, static_cast<int>(scale_percent), 100)
+                   : kCursorFallbackCaretHeight;
     return {point, true};
   }
   return {};
@@ -232,10 +261,11 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
 
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
-    GetCursorPosFnForTest get_cursor_pos,
-    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point) {
-  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_cursor_pos,
-                       logical_to_physical_point};
+    GetPhysicalCursorPosFnForTest get_physical_cursor_pos,
+    LogicalToPhysicalPointForPerMonitorDpiFnForTest logical_to_physical_point,
+    GetMonitorScalePercentFnForTest get_monitor_scale_percent) {
+  g_caret_win32_api = {get_gui_thread_info, client_to_screen, get_physical_cursor_pos,
+                       logical_to_physical_point, get_monitor_scale_percent};
 }
 
 void ClearCaretWin32ApiForTest() { g_caret_win32_api = DefaultCaretWin32Api(); }

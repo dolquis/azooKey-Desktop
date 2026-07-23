@@ -1,0 +1,112 @@
+name: Sanitizers
+
+on:
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-asan-ubsan:
+    name: Linux ASan + UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p build/linux-asan-ubsan
+          cmake --preset linux-asan-ubsan \
+            -DAZOOKEY_FETCH_GOOGLETEST=ON \
+            -DAZOOKEY_FETCH_LLAMA_CPP=OFF \
+            2>&1 | tee build/linux-asan-ubsan/configure.log
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build --preset linux-asan-ubsan --parallel 2 \
+            2>&1 | tee build/linux-asan-ubsan/build.log
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          ctest --preset linux-asan-ubsan --no-tests=error \
+            2>&1 | tee build/linux-asan-ubsan/ctest.log
+
+      - name: Upload sanitizer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-asan-ubsan-diagnostics
+          path: |
+            build/linux-asan-ubsan/*.log
+            build/linux-asan-ubsan/Testing/Temporary/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows-asan:
+    name: Windows ASan
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/windows-asan | Out-Null
+          cmake --preset windows-asan `
+            -DAZOOKEY_FETCH_GOOGLETEST=ON `
+            -DAZOOKEY_FETCH_WIL=ON `
+            -DAZOOKEY_FETCH_LLAMA_CPP=OFF `
+            *> build/windows-asan/configure.log
+          $exitCode = $LASTEXITCODE
+          Get-Content build/windows-asan/configure.log
+          exit $exitCode
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-asan --parallel 2 `
+            *> build/windows-asan/build.log
+          $exitCode = $LASTEXITCODE
+          Get-Content build/windows-asan/build.log
+          exit $exitCode
+
+      - name: Test
+        shell: pwsh
+        run: |
+          ctest --preset windows-asan --no-tests=error `
+            *> build/windows-asan/ctest.log
+          $exitCode = $LASTEXITCODE
+          Get-Content build/windows-asan/ctest.log
+          exit $exitCode
+
+      - name: Upload sanitizer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-asan-diagnostics
+          path: |
+            build/windows-asan/*.log
+            build/windows-asan/Testing/Temporary/*.log
+          if-no-files-found: ignore
+          retention-days: 14

@@ -37,6 +37,9 @@ endif()
 
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
+option(AZOOKEY_BUILD_TSF_TIP "Build the Windows TSF TIP and its tests" ON)
+option(AZOOKEY_ENABLE_ASAN "Enable AddressSanitizer for supported targets" OFF)
+option(AZOOKEY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for supported targets" OFF)
 option(AZOOKEY_FETCH_GOOGLETEST
        "Download GoogleTest via FetchContent when it is not found locally" OFF)
 option(AZOOKEY_FETCH_LLAMA_CPP
@@ -132,6 +135,52 @@ target_compile_options(azookey_project_options INTERFACE
   $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /permissive- /EHsc /Zc:__cplusplus /sdl>
 )
 
+if(AZOOKEY_ENABLE_ASAN)
+  if(MSVC)
+    # The default MSVC Debug flags include /RTC1, which cannot be combined
+    # with AddressSanitizer. Preserve the remaining Debug defaults.
+    string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    target_compile_options(azookey_project_options INTERFACE
+      /fsanitize=address)
+    target_link_options(azookey_project_options INTERFACE
+      /INCREMENTAL:NO)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(azookey_project_options INTERFACE
+      -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(azookey_project_options INTERFACE
+      -fsanitize=address)
+  else()
+    message(FATAL_ERROR
+      "AZOOKEY_ENABLE_ASAN is unsupported with ${CMAKE_CXX_COMPILER_ID}")
+  endif()
+endif()
+
+if(AZOOKEY_ENABLE_UBSAN)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(azookey_project_options INTERFACE
+      -fsanitize=undefined -fno-omit-frame-pointer)
+    target_link_options(azookey_project_options INTERFACE
+      -fsanitize=undefined)
+  else()
+    message(FATAL_ERROR
+      "AZOOKEY_ENABLE_UBSAN is unsupported with ${CMAKE_CXX_COMPILER_ID}")
+  endif()
+endif()
+
+if(AZOOKEY_ENABLE_ASAN AND MSVC)
+  if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "windows-asan currently supports x64 builds only")
+  endif()
+  get_filename_component(AZOOKEY_MSVC_COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  set(AZOOKEY_MSVC_ASAN_RUNTIME
+      "${AZOOKEY_MSVC_COMPILER_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+  if(NOT EXISTS "${AZOOKEY_MSVC_ASAN_RUNTIME}")
+    message(FATAL_ERROR
+      "MSVC ASan runtime not found next to the compiler: "
+      "${AZOOKEY_MSVC_ASAN_RUNTIME}")
+  endif()
+endif()
+
 add_library(azookey_project_warnings INTERFACE)
 target_compile_options(azookey_project_warnings INTERFACE
   $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -145,7 +194,13 @@ if(AZOOKEY_BUILD_TESTS)
   # (AZOOKEY_FETCH_GOOGLETEST) so that the default `cmake -S . -B build`
   # still succeeds in no-egress environments; tests are simply skipped with
   # a warning when GoogleTest is unavailable.
-  find_package(GTest QUIET)
+  if(AZOOKEY_ENABLE_ASAN AND MSVC AND AZOOKEY_FETCH_GOOGLETEST)
+    # A prebuilt GoogleTest may use non-ASan STL annotation settings. Force a
+    # source build so GoogleTest and its consumers use the same MSVC flags.
+    set(GTest_FOUND FALSE)
+  else()
+    find_package(GTest QUIET)
+  endif()
   if(NOT GTest_FOUND AND AZOOKEY_FETCH_GOOGLETEST)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
@@ -156,6 +211,19 @@ if(AZOOKEY_BUILD_TESTS)
       GIT_TAG        v1.17.0
     )
     FetchContent_MakeAvailable(googletest)
+  endif()
+
+  if(AZOOKEY_ENABLE_ASAN AND MSVC)
+    if(TARGET gtest AND TARGET gtest_main)
+      # MSVC's ASan-enabled STL changes iterator-annotation metadata. GoogleTest
+      # must use the same setting as its consumers or links fail with LNK2038.
+      target_compile_options(gtest PRIVATE /fsanitize=address)
+      target_compile_options(gtest_main PRIVATE /fsanitize=address)
+    elseif(TARGET GTest::gtest_main)
+      message(FATAL_ERROR
+        "windows-asan requires GoogleTest built from source with "
+        "-DAZOOKEY_FETCH_GOOGLETEST=ON; a non-ASan prebuilt package is incompatible.")
+    endif()
   endif()
 
   if(TARGET GTest::gtest_main)
@@ -178,6 +246,16 @@ if(AZOOKEY_BUILD_TESTS)
         list(APPEND azookey_test_properties LABELS ${AZOOKEY_TEST_LABEL})
       endif()
 
+      if(AZOOKEY_ENABLE_ASAN AND MSVC)
+        # Ninja's GoogleTest discovery runs the executable immediately after
+        # linking. Place the runtime during configure so parallel POST_BUILD
+        # discovery steps cannot race while copying the same DLL.
+        file(COPY_FILE
+          "${AZOOKEY_MSVC_ASAN_RUNTIME}"
+          "${CMAKE_CURRENT_BINARY_DIR}/clang_rt.asan_dynamic-x86_64.dll"
+          ONLY_IF_DIFFERENT)
+      endif()
+
       gtest_discover_tests(${target_name}
         DISCOVERY_TIMEOUT ${AZOOKEY_GTEST_DISCOVERY_TIMEOUT}
         PROPERTIES ${azookey_test_properties}
@@ -197,7 +275,7 @@ add_subdirectory(ipc)
 add_subdirectory(learning)
 add_subdirectory(inference-host)
 
-if(WIN32)
+if(WIN32 AND AZOOKEY_BUILD_TSF_TIP)
   add_subdirectory(tsf-tip)
 endif()
 

@@ -62,6 +62,30 @@
         "lhs": "${hostSystemName}",
         "rhs": "Linux"
       }
+    },
+    {
+      "name": "windows-asan",
+      "displayName": "Windows AddressSanitizer",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/windows-asan",
+      "cacheVariables": {
+        "AZOOKEY_BUILD_BENCH": "OFF",
+        "AZOOKEY_BUILD_TSF_TIP": "OFF",
+        "AZOOKEY_ENABLE_ASAN": "ON",
+        "AZOOKEY_USE_COMPILER_CACHE": "OFF"
+      }
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "displayName": "Linux AddressSanitizer + UndefinedBehaviorSanitizer",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-asan-ubsan",
+      "cacheVariables": {
+        "AZOOKEY_BUILD_BENCH": "OFF",
+        "AZOOKEY_ENABLE_ASAN": "ON",
+        "AZOOKEY_ENABLE_UBSAN": "ON",
+        "AZOOKEY_USE_COMPILER_CACHE": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -80,6 +104,14 @@
     {
       "name": "linux-debug",
       "configurePreset": "linux-debug"
+    },
+    {
+      "name": "windows-asan",
+      "configurePreset": "windows-asan"
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "configurePreset": "linux-asan-ubsan"
     }
   ],
   "testPresets": [
@@ -109,6 +141,27 @@
       "configurePreset": "linux-debug",
       "output": {
         "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-asan",
+      "configurePreset": "windows-asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1"
+      }
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "configurePreset": "linux-asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       }
     }
   ]

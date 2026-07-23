@@ -57,6 +57,8 @@ build / test の入口を統一する。最低限のプリセット:
 |---|---|---|---|
 | `windows-debug` | Ninja | Debug | 手元・CI Debug |
 | `windows-release` | Ninja | Release | 手元・CI Release |
+| `windows-asan` | Ninja | Debug | Windows ASan 手動・定期実行 |
+| `linux-asan-ubsan` | Ninja | Debug | Linux ASan + UBSan 手動・定期実行 |
 
 各 configure preset の `cacheVariables` は `AZOOKEY_BUILD_TESTS=ON`,
 `AZOOKEY_BUILD_BENCH=ON` を既定とする。`AZOOKEY_FETCH_GOOGLETEST` は
@@ -249,13 +251,14 @@ configure / build / test の各ログと、Release ビルドの `.pdb` を artif
 経路の p95 < 50ms を確認する。p50/p95 レイテンシの推移監視（夜間ベンチ回帰）
 は将来拡張とし、本マイルストーンでは smoke 実行までを範囲とする。
 
-### 4.6 Sanitizer プリセットと nightly（M38 範囲外・将来拡張）
+### 4.6 Sanitizer プリセットと定期実行（M38 範囲外）
 
 `HANDLE` / COM / Named Pipe / UTF-8↔UTF-16 / 自前 JSON パーサ / 非同期 I/O を
 扱う本実装では、通常の unit test では use-after-free・バッファ超過・未定義動作・
 境界外アクセスを見落としやすい。これを早期検出するため、次の sanitizer プリセット
-を定義する（本マイルストーン M38 の必須範囲には**含めない**。nightly / 手動
-dispatch から開始し、安定後に nightly required 化する）。
+を定義する（本マイルストーン M38 の必須範囲には**含めない**）。
+`.github/workflows/sanitizers.yml` の手動 dispatch と週次 schedule で実行し、
+通常の PR Build workflow からは分離する。安定後の required 化は別途判断する。
 
 | プリセット | 対象 | 内容 |
 |---|---|---|
@@ -264,8 +267,14 @@ dispatch から開始し、安定後に nightly required 化する）。
 
 対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc` / `learning` /
 `inference-host` から開始し、`tsf-tip`（COM/TSF 依存）は後続で拡張する。PR では
-optional / manual dispatch、nightly で必須実行という順で段階導入する。導入は
-Linear で追跡する（2026-07 開発基盤ツール導入 第2弾）。
+通常 Build のみを required とし、sanitizer は schedule / manual dispatch で
+段階導入する。各ジョブは configure / build / CTest のログと
+`Testing/Temporary` の診断ログを、成功・失敗にかかわらず artifact として 14 日間
+保持する。Windows preset は x64 のみを対象に `AZOOKEY_BUILD_TSF_TIP=OFF` とし、MSVC
+ASan と非互換な `/RTC1` と incremental link を sanitizer 設定内で無効化する。
+GoogleTest は同じ ASan オプションでソースからビルドし、テスト検出前に ASan runtime
+DLL を各実行ファイルのディレクトリへ配置する。Linux preset は leak detection と
+未定義動作検出を fail-fast で有効化する。
 
 ### 4.7 コンパイラキャッシュ（sccache）
 

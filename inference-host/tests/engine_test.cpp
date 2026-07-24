@@ -911,6 +911,7 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   ASSERT_FALSE(candidates.empty());
   EXPECT_EQ(candidates.front().surface, "日本語");
   EXPECT_EQ(candidates.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_NE(candidates.front().debug_info.find("utf8-prefix-trimmed"), std::string::npos);
   EXPECT_EQ(candidates.front().debug_info.find("zenzai-degraded"), std::string::npos);
   EXPECT_FALSE(engine->effective_last_error().has_value());
 

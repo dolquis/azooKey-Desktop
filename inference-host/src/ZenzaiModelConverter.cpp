@@ -944,6 +944,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
         skipped_reason = "invalid-utf8-surface";
         continue;
       }
+      const bool trimmed_incomplete_utf8_suffix = surface->size() != item.surface.size();
+      // Keep the full decoding-path cost. Dropping the partial token's logprob would
+      // overstate the probability of the prefix that is safe to display.
       const auto avg =
           item.token_count > 0 ? item.total_logprob / static_cast<double>(item.token_count) : 0.0;
       core::Candidate candidate;
@@ -953,6 +956,9 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
       candidate.source = core::CandidateSource::Model;
       candidate.debug_info =
           "zenzai;lp=" + FormatDouble(item.total_logprob) + ";avg=" + FormatDouble(avg);
+      if (trimmed_incomplete_utf8_suffix) {
+        AppendDebugTag(candidate.debug_info, "utf8-prefix-trimmed");
+      }
       candidates.push_back(std::move(candidate));
     }
   } catch (const std::exception& ex) {

@@ -47,6 +47,7 @@ struct GeneratedCandidate {
   std::string surface;
   double total_logprob{};
   int32_t token_count{};
+  bool allow_incomplete_utf8_suffix{};
 };
 
 size_t RequestedCandidateLimit(const core::ConversionContext& context) {
@@ -226,6 +227,53 @@ bool IsValidUtf8String(const std::string& input) {
   return true;
 }
 
+std::optional<size_t> CompleteUtf8PrefixLength(const std::string& input) {
+  for (size_t offset = 0; offset < input.size();) {
+    const size_t start = offset;
+    char32_t codepoint = 0;
+    if (DecodeNextUtf8(input, offset, codepoint)) {
+      continue;
+    }
+
+    const auto first = static_cast<unsigned char>(input[start]);
+    size_t width = 0;
+    if ((first & 0xE0) == 0xC0) {
+      width = 2;
+    } else if ((first & 0xF0) == 0xE0) {
+      width = 3;
+    } else if ((first & 0xF8) == 0xF0) {
+      width = 4;
+    }
+    if (width == 0 || start + width <= input.size()) {
+      return std::nullopt;
+    }
+    for (size_t i = start + 1; i < input.size(); ++i) {
+      if ((static_cast<unsigned char>(input[i]) & 0xC0) != 0x80) {
+        return std::nullopt;
+      }
+    }
+    return start;
+  }
+  return input.size();
+}
+
+std::optional<std::string> UsableGeneratedSurface(const GeneratedCandidate& candidate) {
+  if (candidate.surface.empty()) {
+    return std::nullopt;
+  }
+  if (IsValidUtf8String(candidate.surface)) {
+    return candidate.surface;
+  }
+  if (!candidate.allow_incomplete_utf8_suffix) {
+    return std::nullopt;
+  }
+  const auto prefix_length = CompleteUtf8PrefixLength(candidate.surface);
+  if (!prefix_length || *prefix_length == 0 || *prefix_length >= candidate.surface.size()) {
+    return std::nullopt;
+  }
+  return candidate.surface.substr(0, *prefix_length);
+}
+
 bool IsCanceled(const core::ConversionContext& context) {
   return context.cancel && context.cancel->load(std::memory_order_relaxed);
 }
@@ -374,14 +422,14 @@ size_t CountSaneUniqueGeneratedCandidates(const std::vector<GeneratedCandidate>&
   std::vector<std::string> seen_surfaces;
   seen_surfaces.reserve(candidates.size());
   for (const auto& candidate : candidates) {
-    if (candidate.surface.empty() || !IsValidUtf8String(candidate.surface)) {
+    const auto surface = UsableGeneratedSurface(candidate);
+    if (!surface) {
       continue;
     }
-    if (std::find(seen_surfaces.begin(), seen_surfaces.end(), candidate.surface) !=
-        seen_surfaces.end()) {
+    if (std::find(seen_surfaces.begin(), seen_surfaces.end(), *surface) != seen_surfaces.end()) {
       continue;
     }
-    seen_surfaces.push_back(candidate.surface);
+    seen_surfaces.push_back(*surface);
   }
   return seen_surfaces.size();
 }
@@ -539,9 +587,11 @@ void PruneBeams(std::vector<LlamaBeam>& beams, size_t max_beams) {
   }
 }
 
-void AppendCompletedBeam(std::vector<GeneratedCandidate>& generated, const LlamaBeam& beam) {
+void AppendCompletedBeam(std::vector<GeneratedCandidate>& generated, const LlamaBeam& beam,
+                         bool allow_incomplete_utf8_suffix = false) {
   if (!beam.surface.empty() && beam.output_tokens > 0) {
-    generated.push_back(GeneratedCandidate{beam.surface, beam.total_logprob, beam.output_tokens});
+    generated.push_back(GeneratedCandidate{beam.surface, beam.total_logprob, beam.output_tokens,
+                                           allow_incomplete_utf8_suffix});
   }
 }
 
@@ -622,7 +672,7 @@ struct ZenzaiModelRuntime {
           return {};
         }
         if (DeadlineExpired(conversion_context)) {
-          AppendCompletedBeam(generated, beam);
+          AppendCompletedBeam(generated, beam, true);
           continue;
         }
 
@@ -632,7 +682,7 @@ struct ZenzaiModelRuntime {
           if (IsCanceled(conversion_context)) {
             return {};
           }
-          AppendCompletedBeam(generated, beam);
+          AppendCompletedBeam(generated, beam, true);
           continue;
         }
 
@@ -673,7 +723,7 @@ struct ZenzaiModelRuntime {
 
     if (!completed_quota_reached) {
       for (const auto& beam : beams) {
-        AppendCompletedBeam(generated, beam);
+        AppendCompletedBeam(generated, beam, true);
       }
     }
     std::sort(generated.begin(), generated.end(), [](const auto& lhs, const auto& rhs) {
@@ -716,6 +766,13 @@ struct ZenzaiModelRuntime {
     }
     if (ToKatakana(kana) == "ムコウ") {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
+    }
+    if (ToKatakana(kana) == "チュウダン") {
+      return {
+          GeneratedCandidate{std::string("日本語") + std::string("\xE3\x81", 2), -0.42, 3, true}};
+    }
+    if (ToKatakana(kana) == "ナイブムコウ") {
+      return {GeneratedCandidate{std::string("日") + std::string("\xE3X", 2), -0.42, 2, true}};
     }
     return {};
   }
@@ -882,22 +939,26 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& ka
     }
     candidates.reserve(generated.size());
     for (const auto& item : generated) {
-      if (item.surface.empty()) {
-        continue;
-      }
-      if (!IsValidUtf8String(item.surface)) {
+      const auto surface = UsableGeneratedSurface(item);
+      if (!surface) {
         skipped_reason = "invalid-utf8-surface";
         continue;
       }
+      const bool trimmed_incomplete_utf8_suffix = surface->size() != item.surface.size();
+      // Keep the full decoding-path cost. Dropping the partial token's logprob would
+      // overstate the probability of the prefix that is safe to display.
       const auto avg =
           item.token_count > 0 ? item.total_logprob / static_cast<double>(item.token_count) : 0.0;
       core::Candidate candidate;
-      candidate.surface = item.surface;
+      candidate.surface = *surface;
       candidate.reading = kana;
       candidate.score = NormalizeLogprob(item.total_logprob, item.token_count);
       candidate.source = core::CandidateSource::Model;
       candidate.debug_info =
           "zenzai;lp=" + FormatDouble(item.total_logprob) + ";avg=" + FormatDouble(avg);
+      if (trimmed_incomplete_utf8_suffix) {
+        AppendDebugTag(candidate.debug_info, "utf8-prefix-trimmed");
+      }
       candidates.push_back(std::move(candidate));
     }
   } catch (const std::exception& ex) {

@@ -886,6 +886,45 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_zenzai_deadline_utf8.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_deadline_utf8_zenzai.gguf");
+  std::remove(model_path.c_str());
+  WriteMinimalGguf(model_path);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+  ASSERT_TRUE(engine->model_loaded());
+
+  auto candidates = engine->QueryCandidates("ちゅうだん", "", kNowBase);
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().surface, "日本語");
+  EXPECT_EQ(candidates.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_EQ(candidates.front().debug_info.find("zenzai-degraded"), std::string::npos);
+  EXPECT_FALSE(engine->effective_last_error().has_value());
+
+  auto invalid = engine->QueryCandidates("ないぶむこう", "", kNowBase + 1);
+  ASSERT_FALSE(invalid.empty());
+  EXPECT_EQ(invalid.front().surface, "ないぶむこう");
+  EXPECT_NE(invalid.front().debug_info.find("invalid-utf8-surface"), std::string::npos);
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
+
+  std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
 TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

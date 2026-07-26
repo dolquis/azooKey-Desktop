@@ -253,11 +253,28 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   **`com4:Class` / CLSID を書かない**のが Option B/C との最大の違い（TIP は外部配置 +
   `regsvr32` 登録のため）。出典: [Grant package identity by packaging with external location](https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps)。
 * `pkg/msix/azookey_inference_host.exe.manifest` — app 側 side-by-side manifest。`<msix>`
-  要素の `packageName` / `publisher` / `applicationId` を identity manifest と一致させ、
-  exe を package identity へ紐付ける（exe への埋め込み配線は M28 本体で行うフォローアップ）。
+  要素の `packageName` / `publisher` / `applicationId` を identity manifest の
+  `Identity@Name` / `Identity@Publisher` / `Application@Id` と一致させ、exe を package
+  identity へ紐付ける（不一致は登録自体は成功するが runtime で identity 欠落 = 0x80073D54）。
+  この manifest は `inference-host/CMakeLists.txt` が MSVC リンカの `/MANIFEST:EMBED` +
+  `/MANIFESTINPUT` で `azookey_inference_host.exe` へ埋め込む（CMake オプション
+  `AZOOKEY_EMBED_MSIX_IDENTITY`、既定 ON）。埋め込みが無いと `-ExternalLocation` 付きで
+  登録しても `Package.Current` が null になり、§1.5 の受け入れ条件を満たせない。identity
+  package 未登録の環境では `<msix>` 要素は無視されるため、開発ビルドの挙動は変わらない。
 * `pkg/msix/build-identity-package.ps1` — MakeAppx `/nv` + 任意署名の canonical ビルド経路
   （VS 拡張非依存）。`pkg/msix/Package.wapproj` は VS-IDE 向け convenience（要「Package with
   External Location」拡張）。
+
+上記のうち **実機 VM を要さない静的整合**は `scripts/tests/msix-identity-consistency.Tests.ps1`
+（Pester、CI の PowerShell lint/test ジョブ）が検証する。検証対象は (a) `<msix>` 3 属性と
+identity manifest の一致、(b) Option A の不変条件（`uap10:AllowExternalContent=true`、
+`runFullTrust` / `unvirtualizedResources`、`mediumIL` / `win32App`、`TargetDeviceFamily`
+`MinVersion` が Win10 22H2 = build 19045 を切らないこと、`com4` 宣言を持たないこと）、
+(c) `compat-test/msix_install_uninstall.ps1` の既定 `-PackageName` / `-Clsid` /
+`-ProfileGuid` / `-LangId` が `Identity@Name` および `kTextServiceClsid` /
+`kTextServiceProfileGuid` / `kJapaneseLangId` と一致すること、(d) 上記のビルド埋め込み配線が
+残っていること。`com4` 宣言を足す（= Option B/C へ移る）場合は本節と §1.0、smoke ハーネスの
+合否定義を同時に更新する必要があり、更新漏れは (b) が落として検出する。
 
 登録は `Add-AppxPackage -Path <pkg>.msix -ExternalLocation <install-dir>`。TIP DLL / 実行体は
 external location（§4 WiX/MSI の install ディレクトリ）に置き、COM 登録は
@@ -1743,6 +1760,7 @@ bool LearningStore::Load() {
 |---|---|---|
 | TIP 登録ラウンドトリップ | `tsf-tip/tests/com_smoke_test.cpp`（`TsfTipRegistrationSmokeTest`） | Windows 限定。`DllRegisterServer` 後に HKLM InprocServer32 + TSF プロファイルが存在し、`DllUnregisterServer` で消えるかを検証。env `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格 opt-in（CI 非実行） |
 | MSIX install/uninstall 残骸 | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。`Add-AppxPackage` → CLSID / TSF プロファイル登録の存在確認 → `Remove-AppxPackage` → 残骸 0 を半自動検証（DEV-101 / M28） |
+| MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
 | 署名検証 | `pkg/tests/signature_test.ps1` | signtool /verify で成功するか |
 | UpdateChecker | `inference-host/tests/update_checker_test.cpp` | GitHub API モック、バージョン比較 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |

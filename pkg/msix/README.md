@@ -31,7 +31,7 @@ identity package は **MS Store 提出物ではない**（サイドロード登�
 | ファイル | 役割 |
 |---|---|
 | `AppxManifest.xml` | identity package manifest（`uap10:AllowExternalContent=true`、`ProcessorArchitecture=neutral`、`runFullTrust` + `unvirtualizedResources`）。 |
-| `azookey_inference_host.exe.manifest` | app 側 side-by-side manifest。`<msix>` 要素で exe を package identity に紐付ける（**要ビルド埋め込み**、下記）。 |
+| `azookey_inference_host.exe.manifest` | app 側 side-by-side manifest。`<msix>` 要素で exe を package identity に紐付ける（ビルド時に埋め込み済み、下記）。 |
 | `build-identity-package.ps1` | MakeAppx `/nv` でパッケージ化＋任意署名する **canonical** ビルド経路（VS 拡張非依存）。 |
 | `Package.wapproj` | VS-IDE 向け convenience 経路（「Package with External Location」拡張が必要）。 |
 
@@ -65,10 +65,11 @@ $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=dolquis" `
   -KeyUsage DigitalSignature -FriendlyName "azooKey dev" `
   -CertStoreLocation "Cert:\CurrentUser\My" `
   -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-# .pfx へエクスポートして署名（.pfx はツリー外）
-$pw = ConvertTo-SecureString -String "devpw" -Force -AsPlainText
+# .pfx へエクスポートして署名（.pfx はツリー外）。パスワードは SecureString で扱い、
+# コマンド履歴やスクリプトに平文を残さない。
+$pw = Read-Host "pfx password" -AsSecureString
 Export-PfxCertificate -Cert $cert -FilePath (Join-Path $certDir "azooKey-dev.pfx") -Password $pw | Out-Null
-pwsh -File .\build-identity-package.ps1 -PfxPath (Join-Path $certDir "azooKey-dev.pfx") -PfxPassword 'devpw'
+pwsh -File .\build-identity-package.ps1 -PfxPath (Join-Path $certDir "azooKey-dev.pfx") -PfxPassword $pw
 
 # 公開 .cer を TrustedPeople へ import（未実施だと 0x800B0109 / CERT_E_UNTRUSTEDROOT）
 Export-Certificate -Cert $cert -FilePath (Join-Path $certDir "azooKey-dev.cer") | Out-Null
@@ -105,17 +106,29 @@ pwsh -File ..\..\compat-test\msix_install_uninstall.ps1 `
 COM 登録ラウンドトリップ自体は CTest `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest`
 が担い、本 PoC はその上の MSIX パッケージング層を補完する。
 
-## app 側 identity metadata（要ビルド埋め込み・フォローアップ）
+## app 側 identity metadata（ビルド埋め込み）
 
 `azookey_inference_host.exe.manifest` の `<msix>` 3 属性（`packageName` / `publisher` /
 `applicationId`）は `AppxManifest.xml` の `Identity@Name` / `Identity@Publisher` /
-`Application@Id` と一致必須（不一致は 0x80073D54）。この side-by-side manifest を
-**exe へ埋め込む**配線（MSVC リンカ `/MANIFESTINPUT` か `mt.exe`、`inference-host/CMakeLists.txt`）は
-M28 本体着手時のフォローアップ。署名 cert 確定時は両 manifest の `Publisher` を同時に差し替える。
+`Application@Id` と一致必須（不一致は `Add-AppxPackage` は成功するのに runtime で identity が
+欠落する 0x80073D54）。
+
+この side-by-side manifest は `inference-host/CMakeLists.txt` が MSVC リンカの
+`/MANIFEST:EMBED` + `/MANIFESTINPUT` で `azookey_inference_host.exe` へ埋め込む。埋め込みが
+無いと `-ExternalLocation` 付きで登録しても host に package identity が付かない
+（`Package.Current` が null）。identity package を登録していない環境では `<msix>` 要素は
+無視されるだけなので、通常の開発ビルドの挙動は変わらない。埋め込みを外すには CMake の
+`-DAZOOKEY_EMBED_MSIX_IDENTITY=OFF`。
+
+3 属性の整合・Option A の不変条件（`com4` 宣言を持たないこと等）・smoke ハーネスの既定値と
+`kTextServiceClsid` / `kTextServiceProfileGuid` の一致は、
+[`scripts/tests/msix-identity-consistency.Tests.ps1`](../../scripts/tests/msix-identity-consistency.Tests.ps1)
+が CI（PowerShell lint/test ジョブ）で検証する。実機 VM を要さない静的整合はここで落とす。
+署名 cert 確定時は両 manifest の `Publisher` を同時に差し替える。
 
 ## 既知の未確定・フォローアップ
 
 - `azookey_settings.exe` は未実装（M11/M30）。実装後に `AppxManifest.xml` へ同形式の
-  `Application` と対応する `.exe.manifest` を追加する。
+  `Application` と、対応する `.exe.manifest` + そのビルド埋め込みを追加する。
 - 経路確定（Option A/B/C）とハーネスの経路別アサーション強化は spec §1.0 / 雛形の TODO。
   本 PoC は Option A を具体化するが、最終確定は DEV-267 の実機 smoke 結果を待つ。

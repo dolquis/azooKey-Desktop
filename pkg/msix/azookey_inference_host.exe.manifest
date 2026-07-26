@@ -11,10 +11,11 @@
   不一致は 0x80073D54（登録は成功するが runtime に identity 欠落）。
   出典: https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps#add-identity-metadata-to-your-desktop-application-manifests
 
-  ⚠️ フォローアップ（本 PoC では未配線）: この manifest を inference-host のビルドに
-     埋め込む必要がある（MSVC は .exe.manifest をリンカ /MANIFESTINPUT で埋め込む、
-     または mt.exe で後付け）。inference-host/CMakeLists.txt への配線は M28 本体着手時。
-     Publisher は署名 cert 確定時に AppxManifest.xml と同時に差し替えること。
+  ビルドへの埋め込みは inference-host/CMakeLists.txt が行う（MSVC リンカの
+  /MANIFEST:EMBED + /MANIFESTINPUT。CMake オプション AZOOKEY_EMBED_MSIX_IDENTITY で
+  無効化可能）。上記 3 属性と AppxManifest.xml の整合は CI の
+  scripts/tests/msix-identity-consistency.Tests.ps1 が検証する。
+  Publisher は署名 cert 確定時に AppxManifest.xml と同時に差し替えること。
 -->
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0"

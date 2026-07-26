@@ -38,6 +38,13 @@ endif()
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 option(AZOOKEY_BUILD_TSF_TIP "Build the Windows TSF TIP and its tests" ON)
+# MSIX Option A（external-location / identity package, M28）では、実行体に
+# side-by-side manifest の <msix> 要素を埋め込まないと Add-AppxPackage
+# -ExternalLocation で登録しても runtime に package identity が付かない
+# （Package.Current が null）。埋め込みは inference-host/CMakeLists.txt が行う。
+# MSVC 以外のツールチェーン検証や、identity 無しの実行体が必要な場合は OFF。
+option(AZOOKEY_EMBED_MSIX_IDENTITY
+       "Embed pkg/msix/azookey_inference_host.exe.manifest into the host executable (MSVC)" ON)
 option(AZOOKEY_ENABLE_ASAN "Enable AddressSanitizer for supported targets" OFF)
 option(AZOOKEY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for supported targets" OFF)
 option(AZOOKEY_FETCH_GOOGLETEST

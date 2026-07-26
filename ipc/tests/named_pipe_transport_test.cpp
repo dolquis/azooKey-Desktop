@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -7,8 +9,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"

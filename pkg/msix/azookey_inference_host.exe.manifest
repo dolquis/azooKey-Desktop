@@ -11,9 +11,9 @@
   不一致は 0x80073D54（登録は成功するが runtime に identity 欠落）。
   出典: https://learn.microsoft.com/windows/apps/desktop/modernize/grant-identity-to-nonpackaged-apps#add-identity-metadata-to-your-desktop-application-manifests
 
-  ビルドへの埋め込みは inference-host/CMakeLists.txt が行う（MSVC リンカの
-  /MANIFEST:EMBED + /MANIFESTINPUT。CMake オプション AZOOKEY_EMBED_MSIX_IDENTITY で
-  無効化可能）。上記 3 属性と AppxManifest.xml の整合は CI の
+  ビルドへの埋め込みは inference-host/CMakeLists.txt が行う（.manifest ソースとして
+  追加し、MSVC ビルドで CMake が mt.exe 経由でマージ・埋め込みする。CMake オプション
+  AZOOKEY_EMBED_MSIX_IDENTITY で無効化可能）。上記 3 属性と AppxManifest.xml の整合は CI の
   scripts/tests/msix-identity-consistency.Tests.ps1 が検証する。
   Publisher は署名 cert 確定時に AppxManifest.xml と同時に差し替えること。
 -->

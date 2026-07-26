@@ -256,10 +256,13 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   要素の `packageName` / `publisher` / `applicationId` を identity manifest の
   `Identity@Name` / `Identity@Publisher` / `Application@Id` と一致させ、exe を package
   identity へ紐付ける（不一致は登録自体は成功するが runtime で identity 欠落 = 0x80073D54）。
-  この manifest は `inference-host/CMakeLists.txt` が MSVC リンカの `/MANIFEST:EMBED` +
-  `/MANIFESTINPUT` で `azookey_inference_host.exe` へ埋め込む（CMake オプション
-  `AZOOKEY_EMBED_MSIX_IDENTITY`、既定 ON）。埋め込みが無いと `-ExternalLocation` 付きで
-  登録しても `Package.Current` が null になり、§1.5 の受け入れ条件を満たせない。identity
+  この manifest は `inference-host/CMakeLists.txt` が `azookey_inference_host` の
+  `.manifest` ソースとして追加し、MSVC ビルドで CMake（`cmake -E vs_link_exe --manifests`）が
+  `mt.exe` へ渡してリンカ生成 manifest とマージ・埋め込みする（CMake オプション
+  `AZOOKEY_EMBED_MSIX_IDENTITY`、既定 ON）。リンカへ `/MANIFEST:EMBED` を直接渡す方法は
+  使えない（CMake が続けて呼ぶ `mt.exe` の入力が 0 になり `c10100a7` でビルドが落ちる）。
+  埋め込みが無いと `-ExternalLocation` 付きで登録しても `Package.Current` が null になり、
+  §1.5 の受け入れ条件を満たせない。identity
   package 未登録の環境では `<msix>` 要素は無視されるため、開発ビルドの挙動は変わらない。
 * `pkg/msix/build-identity-package.ps1` — MakeAppx `/nv` + 任意署名の canonical ビルド経路
   （VS 拡張非依存）。`pkg/msix/Package.wapproj` は VS-IDE 向け convenience（要「Package with

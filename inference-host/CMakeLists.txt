@@ -37,21 +37,20 @@ target_link_libraries(azookey_inference_host
 # 登録しても host に package identity が付かない（Package.Current が null。
 # docs/sideload-packaging-spec.md §1.1.2）。identity package を登録していない
 # 環境では本要素は無視されるだけなので、通常の開発ビルドにも影響しない。
-# /MANIFESTINPUT は /MANIFEST:EMBED を要求する（MSVC linker options）。
 # manifest の 3 属性と pkg/msix/AppxManifest.xml の整合は
 # scripts/tests/msix-identity-consistency.Tests.ps1 が CI で検証する。
 if(WIN32 AND MSVC AND AZOOKEY_EMBED_MSIX_IDENTITY)
   set(AZOOKEY_MSIX_APP_MANIFEST
       "${PROJECT_SOURCE_DIR}/pkg/msix/azookey_inference_host.exe.manifest")
   if(EXISTS "${AZOOKEY_MSIX_APP_MANIFEST}")
-    target_link_options(azookey_inference_host PRIVATE
-      "/MANIFEST:EMBED"
-      "/MANIFESTINPUT:${AZOOKEY_MSIX_APP_MANIFEST}"
-    )
-    # manifest だけを編集した場合も再リンクさせる（identity 値の差し替えが
-    # 実行体へ反映されないまま VM smoke に持ち込まれるのを防ぐ）。
-    set_property(TARGET azookey_inference_host APPEND
-                 PROPERTY LINK_DEPENDS "${AZOOKEY_MSIX_APP_MANIFEST}")
+    # .manifest 拡張子のソースは CMake が manifest として分類し、MSVC では
+    # `cmake -E vs_link_exe --manifests ...` 経由で mt.exe へ渡してリンカ生成
+    # manifest（UAC フラグメント等）とマージ・埋め込みする。リンク辺の依存にも
+    # 入るため、manifest だけを編集しても再リンクされる。
+    # リンカへ /MANIFEST:EMBED を直接渡してはいけない: リンカ自身が埋め込んで
+    # しまい、CMake が続けて呼ぶ mt.exe の入力が 0 になって
+    # 「mt : command line error c10100a7」でビルドが落ちる。
+    target_sources(azookey_inference_host PRIVATE "${AZOOKEY_MSIX_APP_MANIFEST}")
   else()
     message(WARNING
       "MSIX identity manifest not found: ${AZOOKEY_MSIX_APP_MANIFEST}. "

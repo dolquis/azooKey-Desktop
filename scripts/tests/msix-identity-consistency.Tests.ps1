@@ -236,13 +236,17 @@ Describe "MSIX identity package consistency (DEV-101 / M28)" {
     It "embeds the identity manifest into the host executable" {
       # 埋め込みが外れると Add-AppxPackage -ExternalLocation で登録しても
       # Package.Current が null になり、DEV-267 の VM smoke が無意味になる。
-      $script:hostCMakeText | Should -Match '/MANIFEST:EMBED'
-      $script:hostCMakeText | Should -Match '/MANIFESTINPUT:'
+      # .manifest ソースは CMake が mt.exe へ渡す（vs_link_exe --manifests）。
+      $script:hostCMakeText | Should -Match 'target_sources\(azookey_inference_host'
       $script:hostCMakeText | Should -Match 'pkg/msix/azookey_inference_host\.exe\.manifest'
     }
 
-    It "re-links when the manifest changes" {
-      $script:hostCMakeText | Should -Match 'LINK_DEPENDS'
+    It "does not hand the manifest to the linker directly" {
+      # /MANIFEST:EMBED を渡すとリンカが埋め込んでしまい、CMake が続けて呼ぶ
+      # mt.exe の入力が 0 になって c10100a7 でビルドが落ちる（実測）。
+      # コメント行（この挙動の説明そのものが /MANIFEST を含む）を除いて判定する。
+      $code = ($script:hostCMakeText -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+      $code | Should -Not -Match '/MANIFEST'
     }
 
     It "exposes the embedding as a documented option" {

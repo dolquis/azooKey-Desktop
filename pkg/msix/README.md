@@ -113,8 +113,9 @@ COM 登録ラウンドトリップ自体は CTest `tsf_tip_com_smoke_tests::TsfT
 `Application@Id` と一致必須（不一致は `Add-AppxPackage` は成功するのに runtime で identity が
 欠落する 0x80073D54）。
 
-この side-by-side manifest は `inference-host/CMakeLists.txt` が MSVC リンカの
-`/MANIFEST:EMBED` + `/MANIFESTINPUT` で `azookey_inference_host.exe` へ埋め込む。埋め込みが
+この side-by-side manifest は `inference-host/CMakeLists.txt` が `azookey_inference_host` の
+`.manifest` ソースとして追加し、MSVC ビルドで CMake が `mt.exe` 経由でリンカ生成 manifest と
+マージして `azookey_inference_host.exe` へ埋め込む。埋め込みが
 無いと `-ExternalLocation` 付きで登録しても host に package identity が付かない
 （`Package.Current` が null）。identity package を登録していない環境では `<msix>` 要素は
 無視されるだけなので、通常の開発ビルドの挙動は変わらない。埋め込みを外すには CMake の

@@ -5,8 +5,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cwchar>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -62,6 +64,17 @@ constexpr DWORD kPipeBufferSize = 64 * 1024;
 constexpr size_t kMaxTransientReadNoDataRetries = 100;
 constexpr size_t kMaxTransientWriteNoProgressRetries = 100;
 constexpr std::chrono::milliseconds kFailedAcceptBackoff(25);
+
+// Frame deadlines (docs/dev-infrastructure-spec.md §6.4.7). These bound the time
+// a *single frame already in flight* may take, which is a different layer from
+// the request-level timeouts of §8.5.2: a connection sitting idle between
+// requests is never charged against them. Reads get the tighter budget because
+// the peer has already announced the frame; writes get a looser one because a
+// momentarily unresponsive reader legitimately stalls a >64 KiB response once
+// the pipe buffer fills.
+constexpr std::chrono::milliseconds kFrameSoftDeadline(500);
+constexpr std::chrono::milliseconds kFrameReadHardDeadline(2000);
+constexpr std::chrono::milliseconds kFrameWriteHardDeadline(5000);
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) return {};
@@ -159,6 +172,110 @@ enum class ConnectWaitResult {
   Failed,
 };
 
+#ifndef NDEBUG
+std::optional<std::chrono::milliseconds> DeadlineOverrideForTesting(const wchar_t* name) {
+  constexpr DWORD kBufferChars = 16;
+  wchar_t buffer[kBufferChars]{};
+  const DWORD copied = GetEnvironmentVariableW(name, buffer, kBufferChars);
+  if (copied == 0 || copied >= kBufferChars) {
+    return std::nullopt;
+  }
+  wchar_t* end = nullptr;
+  const unsigned long value = std::wcstoul(buffer, &end, 10);
+  if (end == buffer || value == 0) {
+    return std::nullopt;
+  }
+  return std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(value));
+}
+#endif
+
+// Per-connection deadline budgets. Resolved once when a connection is accepted
+// rather than per frame: the env overrides exist only for tests, and reading
+// them on the I/O path would put a registry-backed lookup in the hot loop.
+struct FrameDeadlineConfig {
+  std::chrono::milliseconds soft{kFrameSoftDeadline};
+  std::chrono::milliseconds read_hard{kFrameReadHardDeadline};
+  std::chrono::milliseconds write_hard{kFrameWriteHardDeadline};
+
+  static FrameDeadlineConfig Load() {
+    FrameDeadlineConfig config;
+#ifndef NDEBUG
+    if (const auto soft = DeadlineOverrideForTesting(L"AZOOKEY_TEST_FRAME_SOFT_DEADLINE_MS")) {
+      config.soft = *soft;
+    }
+    if (const auto hard = DeadlineOverrideForTesting(L"AZOOKEY_TEST_FRAME_HARD_DEADLINE_MS")) {
+      config.read_hard = *hard;
+      config.write_hard = *hard;
+    }
+#endif
+    return config;
+  }
+};
+
+// Budget for one frame. Deliberately monotonic (steady_clock, not wall time) so
+// a system clock adjustment can neither cut a healthy connection short nor keep
+// a stalled one alive forever.
+//
+// A deadline starts once the frame is actually moving. The finest granularity
+// available is a completed ReadFile/WriteFile chunk, so "moving" means the first
+// chunk that transferred at least one byte -- pending overlapped I/O gives no
+// visibility below that. That is enough for the cases this guards against: a
+// peer that sends a header and then goes silent, one that sends a partial
+// header, and one that trickles a body, since the budget is absolute over the
+// whole frame rather than reset per chunk.
+class FrameDeadline {
+ public:
+  FrameDeadline(std::chrono::milliseconds soft, std::chrono::milliseconds hard, bool armed)
+      : soft_(soft), hard_(hard) {
+    if (armed) {
+      Arm();
+    }
+  }
+
+  void Arm() {
+    if (armed_) return;
+    armed_ = true;
+    start_ = std::chrono::steady_clock::now();
+  }
+
+  // INFINITE while unarmed: an idle connection may wait indefinitely for the
+  // peer's next request.
+  DWORD RemainingHardMs() const {
+    if (!armed_) return INFINITE;
+    const auto elapsed = Elapsed();
+    if (elapsed >= hard_) return 0;
+    return static_cast<DWORD>((hard_ - elapsed).count());
+  }
+
+  bool HardExpired() const { return armed_ && Elapsed() >= hard_; }
+  bool SoftExceeded() const { return armed_ && Elapsed() >= soft_; }
+
+ private:
+  std::chrono::milliseconds Elapsed() const {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                 start_);
+  }
+
+  std::chrono::milliseconds soft_;
+  std::chrono::milliseconds hard_;
+  bool armed_{false};
+  std::chrono::steady_clock::time_point start_{};
+};
+
+// Everything the framing helpers need about the connection they run on.
+// `stop_event == nullptr` selects the synchronous path used by NamedPipeClient,
+// whose handle is opened without FILE_FLAG_OVERLAPPED.
+struct TransportContext {
+  HANDLE stop_event{nullptr};
+  FrameDeadlineConfig deadlines;
+  std::atomic<uint64_t>* soft_deadline_counter{nullptr};
+};
+
+struct FrameIo {
+  HANDLE stop_event{nullptr};
+  FrameDeadline deadline;
+};
+
 HANDLE PrepareReusableOverlappedEvent() {
   thread_local wil::unique_event event;
   if (!event) {
@@ -173,32 +290,48 @@ HANDLE PrepareReusableOverlappedEvent() {
   return event.get();
 }
 
-PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop_event) {
+// Every path out of a pending overlapped operation must reach here first. The
+// OVERLAPPED lives on the caller's stack and the event is a thread-local reused
+// across operations, so returning while the kernel still owns them would let a
+// late completion write into a dead frame and signal the next operation's wait.
+void CancelAndDrainOverlapped(HANDLE pipe, OVERLAPPED& overlapped, DWORD& transferred) {
+  CancelIoEx(pipe, &overlapped);
+  GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
+}
+
+PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop_event,
+                                DWORD timeout_ms) {
   HANDLE handles[2] = {overlapped.hEvent, stop_event};
   const DWORD handle_count = stop_event ? 2 : 1;
-  const DWORD wait = WaitForMultipleObjects(handle_count, handles, FALSE, INFINITE);
+  const DWORD wait = WaitForMultipleObjects(handle_count, handles, FALSE, timeout_ms);
   if (wait == WAIT_OBJECT_0) {
     PipeIoResult result;
     result.ok = GetOverlappedResult(pipe, &overlapped, &result.transferred, FALSE);
     result.error = result.ok ? ERROR_SUCCESS : GetLastError();
     return result;
   }
-  if (handle_count == 2 && wait == WAIT_OBJECT_0 + 1) {
-    CancelIoEx(pipe, &overlapped);
-    PipeIoResult result;
-    result.stopped = true;
-    result.error = ERROR_OPERATION_ABORTED;
-    GetOverlappedResult(pipe, &overlapped, &result.transferred, TRUE);
-    return result;
-  }
 
   PipeIoResult result;
-  result.error = GetLastError();
+  if (handle_count == 2 && wait == WAIT_OBJECT_0 + 1) {
+    result.stopped = true;
+    result.error = ERROR_OPERATION_ABORTED;
+  } else if (wait == WAIT_TIMEOUT) {
+    result.timed_out = true;
+    result.error = ERROR_TIMEOUT;
+  } else {
+    // Capture the wait failure before CancelIoEx overwrites the thread error.
+    result.error = GetLastError();
+  }
+  // The drain can observe a completion that raced the deadline. The frame is
+  // abandoned regardless: once the budget is spent, one more chunk cannot make
+  // the frame whole, and a cancelled message-mode read leaves unread remainder
+  // in the pipe that no amount of resynchronisation recovers.
+  CancelAndDrainOverlapped(pipe, overlapped, result.transferred);
   return result;
 }
 
-PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, HANDLE stop_event) {
-  if (!stop_event) {
+PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, const FrameIo& io) {
+  if (!io.stop_event) {
     PipeIoResult result;
     result.ok = ReadFile(pipe, data, size, &result.transferred, nullptr);
     result.error = result.ok ? ERROR_SUCCESS : GetLastError();
@@ -218,19 +351,19 @@ PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, HANDLE stop_e
   result.ok = ReadFile(pipe, data, size, nullptr, &overlapped);
   result.error = result.ok ? ERROR_SUCCESS : GetLastError();
   if (!result.ok && result.error == ERROR_IO_PENDING) {
-    return FinishOverlappedIo(pipe, overlapped, stop_event);
+    return FinishOverlappedIo(pipe, overlapped, io.stop_event, io.deadline.RemainingHardMs());
   }
   CaptureImmediateOverlappedTransfer(pipe, overlapped, result);
   return result;
 }
 
-PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, HANDLE stop_event) {
+PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, const FrameIo& io) {
   if (ForceZeroBytePipeWriteForTesting()) {
     PipeIoResult result;
     result.ok = TRUE;
     return result;
   }
-  if (!stop_event) {
+  if (!io.stop_event) {
     PipeIoResult result;
     result.ok = WriteFile(pipe, data, size, &result.transferred, nullptr);
     result.error = result.ok ? ERROR_SUCCESS : GetLastError();
@@ -250,7 +383,7 @@ PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, HANDLE
   result.ok = WriteFile(pipe, data, size, nullptr, &overlapped);
   result.error = result.ok ? ERROR_SUCCESS : GetLastError();
   if (!result.ok && result.error == ERROR_IO_PENDING) {
-    return FinishOverlappedIo(pipe, overlapped, stop_event);
+    return FinishOverlappedIo(pipe, overlapped, io.stop_event, io.deadline.RemainingHardMs());
   }
   CaptureImmediateOverlappedTransfer(pipe, overlapped, result);
   return result;
@@ -364,15 +497,24 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
       kMaxPipeInstances, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
 }
 
-bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size, HANDLE stop_event = nullptr) {
+bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size, FrameIo& io) {
   size_t offset = 0;
   size_t transient_no_data_retries = 0;
   while (offset < size) {
+    // Chunks that complete synchronously never reach FinishOverlappedIo, and the
+    // retry paths below loop back here, so the budget is re-checked every pass.
+    if (io.deadline.HardExpired()) {
+      return false;
+    }
     const DWORD chunk =
         static_cast<DWORD>(std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    const auto result = ReadPipeChunk(pipe, data + offset, chunk, stop_event);
+    const auto result = ReadPipeChunk(pipe, data + offset, chunk, io);
+    if (result.transferred > 0) {
+      // The frame is in flight now; the rest of it is on the clock.
+      io.deadline.Arm();
+    }
     if (!result.ok) {
-      if (result.stopped) return false;
+      if (result.stopped || result.timed_out) return false;
       const auto err = result.error;
       if (err == ERROR_NO_DATA) {
         if (offset == 0 || ++transient_no_data_retries > kMaxTransientReadNoDataRetries) {
@@ -397,15 +539,18 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size, HANDLE stop_event = null
   return true;
 }
 
-bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size, HANDLE stop_event = nullptr) {
+bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size, FrameIo& io) {
   size_t offset = 0;
   size_t no_progress_retries = 0;
   while (offset < size) {
+    if (io.deadline.HardExpired()) {
+      return false;
+    }
     const DWORD chunk =
         static_cast<DWORD>(std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
-    const auto result = WritePipeChunk(pipe, data + offset, chunk, stop_event);
+    const auto result = WritePipeChunk(pipe, data + offset, chunk, io);
     if (!result.ok) {
-      if (result.stopped) return false;
+      if (result.stopped || result.timed_out) return false;
       const auto err = result.error;
       if (err == ERROR_PIPE_BUSY) {
         if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
@@ -431,9 +576,18 @@ bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size, HANDLE stop_event
   return true;
 }
 
-std::optional<Envelope> ReadEnvelope(HANDLE pipe, HANDLE stop_event = nullptr) {
+void NoteSoftDeadline(const TransportContext& ctx, const FrameDeadline& deadline) {
+  // Observation only: the frame is not dropped. M41 wires this to the
+  // structured log; until then it stays a counter so the threshold has an
+  // observable effect and can be regression-tested.
+  if (ctx.soft_deadline_counter && deadline.SoftExceeded()) {
+    ctx.soft_deadline_counter->fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+std::optional<Envelope> ReadFramedEnvelope(HANDLE pipe, FrameIo& io) {
   uint8_t header[4]{};
-  if (!ReadBytes(pipe, header, sizeof(header), stop_event)) {
+  if (!ReadBytes(pipe, header, sizeof(header), io)) {
     return std::nullopt;
   }
 
@@ -445,7 +599,7 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, HANDLE stop_event = nullptr) {
   }
 
   std::vector<uint8_t> payload(size);
-  if (!ReadBytes(pipe, payload.data(), payload.size(), stop_event)) {
+  if (!ReadBytes(pipe, payload.data(), payload.size(), io)) {
     return std::nullopt;
   }
 
@@ -453,12 +607,28 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, HANDLE stop_event = nullptr) {
   return Deserialize(json);
 }
 
-bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, HANDLE stop_event = nullptr) {
+std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx) {
+  // One budget spans header and body: it stays unarmed while the connection is
+  // idle and starts as soon as the peer sends the first byte of the header, so
+  // a peer that announces a frame and then goes silent is bounded.
+  FrameIo io{ctx.stop_event,
+             FrameDeadline(ctx.deadlines.soft, ctx.deadlines.read_hard, /*armed=*/false)};
+  auto envelope = ReadFramedEnvelope(pipe, io);
+  NoteSoftDeadline(ctx, io.deadline);
+  return envelope;
+}
+
+bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext& ctx) {
   const auto json = Serialize(envelope);
   if (!json) return false;
   const auto frame = EncodeLengthPrefixed(*json);
   if (!frame) return false;
-  return WriteBytes(pipe, frame->data(), frame->size(), stop_event);
+  // Sending has no idle phase, so the budget is armed from the first chunk.
+  FrameIo io{ctx.stop_event,
+             FrameDeadline(ctx.deadlines.soft, ctx.deadlines.write_hard, /*armed=*/true)};
+  const bool ok = WriteBytes(pipe, frame->data(), frame->size(), io);
+  NoteSoftDeadline(ctx, io.deadline);
+  return ok;
 }
 
 struct ClientState {
@@ -494,6 +664,8 @@ struct NamedPipeServer::Impl {
   std::thread accept_thread;
   std::condition_variable client_cv;
   std::size_t active_client_threads{0};
+
+  std::atomic<uint64_t> soft_deadline_exceeded{0};
 
   mutable std::mutex mutex;
   wil::unique_hfile listen_pipe;
@@ -603,6 +775,8 @@ struct NamedPipeServer::Impl {
   }
 
   void ClientLoop(std::shared_ptr<ClientState> client, MessageHandler conn_handler) {
+    const TransportContext ctx{stop_event.get(), FrameDeadlineConfig::Load(),
+                               &soft_deadline_exceeded};
     while (running.load()) {
       HANDLE pipe = INVALID_HANDLE_VALUE;
       {
@@ -611,7 +785,7 @@ struct NamedPipeServer::Impl {
         pipe = client->pipe.get();
       }
 
-      auto request = ReadEnvelope(pipe, stop_event.get());
+      auto request = ReadEnvelope(pipe, ctx);
       if (!request) break;
 
       std::optional<Envelope> response;
@@ -621,7 +795,7 @@ struct NamedPipeServer::Impl {
         break;
       }
 
-      if (response && !WriteEnvelope(pipe, *response, stop_event.get())) {
+      if (response && !WriteEnvelope(pipe, *response, ctx)) {
         break;
       }
     }
@@ -740,6 +914,10 @@ std::size_t NamedPipeServer::ActiveClientCountForTesting() const {
   return impl_->clients.size();
 }
 
+std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const {
+  return impl_->soft_deadline_exceeded.load(std::memory_order_relaxed);
+}
+
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
 NamedPipeClient::~NamedPipeClient() { Disconnect(); }
 
@@ -802,7 +980,7 @@ bool NamedPipeClient::Send(const Envelope& envelope) {
     pipe = impl_->pipe.get();
   }
 
-  if (!WriteEnvelope(pipe, envelope)) {
+  if (!WriteEnvelope(pipe, envelope, TransportContext{})) {
     Disconnect();
     return false;
   }
@@ -817,7 +995,7 @@ std::optional<Envelope> NamedPipeClient::Receive() {
     pipe = impl_->pipe.get();
   }
 
-  auto envelope = ReadEnvelope(pipe);
+  auto envelope = ReadEnvelope(pipe, TransportContext{});
   if (!envelope) {
     Disconnect();
   }
@@ -867,6 +1045,7 @@ bool NamedPipeServer::Start(const std::string&, ConnectionFactory) { return fals
 void NamedPipeServer::Stop() {}
 bool NamedPipeServer::IsRunning() const { return false; }
 std::size_t NamedPipeServer::ActiveClientCountForTesting() const { return 0; }
+std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const { return 0; }
 
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
 NamedPipeClient::~NamedPipeClient() = default;

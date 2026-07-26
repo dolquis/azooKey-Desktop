@@ -1,13 +1,14 @@
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -86,6 +87,68 @@ class ScopedEnvironmentVariable {
   std::wstring previous_;
   bool had_previous_{false};
 };
+
+#ifndef NDEBUG
+// Raw pipe access, so a test can send a frame header without the body that
+// NamedPipeClient would always append.
+class ScopedPipeHandle {
+ public:
+  explicit ScopedPipeHandle(HANDLE handle) : handle_(handle) {}
+  ~ScopedPipeHandle() { Close(); }
+
+  ScopedPipeHandle(const ScopedPipeHandle&) = delete;
+  ScopedPipeHandle& operator=(const ScopedPipeHandle&) = delete;
+
+  bool valid() const { return handle_ != INVALID_HANDLE_VALUE; }
+  HANDLE get() const { return handle_; }
+
+  void Close() {
+    if (valid()) {
+      CloseHandle(handle_);
+      handle_ = INVALID_HANDLE_VALUE;
+    }
+  }
+
+ private:
+  HANDLE handle_;
+};
+
+HANDLE OpenRawPipeClient(const std::string& pipe_name, int attempts = 200) {
+  const std::wstring wide(pipe_name.begin(), pipe_name.end());
+  for (int i = 0; i < attempts; ++i) {
+    HANDLE pipe = CreateFileW(wide.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                              0, nullptr);
+    if (pipe != INVALID_HANDLE_VALUE) {
+      return pipe;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return INVALID_HANDLE_VALUE;
+}
+
+azookey::ipc::Envelope MakePingEnvelope(uint64_t request_id, const std::string& trace_id) {
+  azookey::ipc::PingPayload ping;
+  ping.nonce = request_id;
+
+  azookey::ipc::Envelope env;
+  env.version = 1;
+  env.request_id = request_id;
+  env.trace_id = trace_id;
+  env.type = azookey::ipc::MessageType::Ping;
+  env.payload_json = azookey::ipc::BuildPing(ping);
+  return env;
+}
+
+azookey::ipc::Envelope EchoResponse(const azookey::ipc::Envelope& req) {
+  azookey::ipc::Envelope res;
+  res.version = req.version;
+  res.request_id = req.request_id;
+  res.trace_id = req.trace_id;
+  res.type = req.type;
+  res.payload_json = req.payload_json;
+  return res;
+}
+#endif  // !NDEBUG
 
 }  // namespace
 
@@ -562,6 +625,94 @@ TEST(NamedPipeTransportTest, ZeroByteResponseWriteRetryIsBounded) {
 
   EXPECT_TRUE(WaitForClientCount(server, 0, 250));
   client.Disconnect();
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, StalledFrameDeadlineDropsOnlyTheStalledClient) {
+  // Shortened so the test does not sit out the production budget. Kept at
+  // 500ms rather than tens of ms: the override is process-wide, so a value
+  // small enough to race a loaded CI runner would also trip the healthy
+  // client's own frames.
+  ScopedEnvironmentVariable frame_deadline(L"AZOOKEY_TEST_FRAME_HARD_DEADLINE_MS", L"500");
+
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-stall-test-" + std::to_string(GetCurrentProcessId());
+
+  azookey::ipc::NamedPipeServer server;
+  const bool started = server.Start(
+      pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        return EchoResponse(req);
+      });
+  ASSERT_TRUE(started);
+
+  // Announce a 16-byte body and then go silent, holding the connection open.
+  ScopedPipeHandle stalled(OpenRawPipeClient(pipe_name));
+  ASSERT_TRUE(stalled.valid());
+  const uint8_t header[4] = {16, 0, 0, 0};
+  DWORD written = 0;
+  ASSERT_TRUE(
+      WriteFile(stalled.get(), header, static_cast<DWORD>(sizeof(header)), &written, nullptr));
+  ASSERT_EQ(written, static_cast<DWORD>(sizeof(header)));
+  ASSERT_TRUE(WaitForClientCount(server, 1));
+
+  // A second client is served normally while the first one is stalled.
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+  ASSERT_TRUE(client.Send(MakePingEnvelope(7, "stall")));
+  const auto reply = client.ReceiveWithTimeout(2000);
+  ASSERT_TRUE(reply.has_value());
+  EXPECT_EQ(reply->request_id, 7u);
+
+  // The stalled connection is reaped on its own; the healthy one is untouched.
+  EXPECT_TRUE(WaitForClientCount(server, 1, 500));
+  EXPECT_TRUE(client.IsConnected());
+
+  client.Disconnect();
+  EXPECT_TRUE(WaitForClientCount(server, 0, 500));
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, SoftFrameDeadlineIsCountedWithoutDroppingTheFrame) {
+  ScopedEnvironmentVariable soft_deadline(L"AZOOKEY_TEST_FRAME_SOFT_DEADLINE_MS", L"1");
+  ScopedEnvironmentVariable hard_deadline(L"AZOOKEY_TEST_FRAME_HARD_DEADLINE_MS", L"10000");
+
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-soft-deadline-test-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> handler_entered{false};
+  azookey::ipc::NamedPipeServer server;
+  const bool started =
+      server.Start(pipe_name,
+                   [&handler_entered](
+                       const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+                     handler_entered.store(true);
+                     return EchoResponse(req);
+                   });
+  ASSERT_TRUE(started);
+
+  const auto json = azookey::ipc::Serialize(MakePingEnvelope(9, "soft-deadline"));
+  ASSERT_TRUE(json.has_value());
+  const auto frame = azookey::ipc::EncodeLengthPrefixed(*json);
+  ASSERT_TRUE(frame.has_value());
+  ASSERT_GT(frame->size(), 4u);
+
+  ScopedPipeHandle slow(OpenRawPipeClient(pipe_name));
+  ASSERT_TRUE(slow.valid());
+
+  // Header, a pause well past the soft threshold and well short of the hard
+  // one, then the body.
+  DWORD written = 0;
+  ASSERT_TRUE(WriteFile(slow.get(), frame->data(), 4, &written, nullptr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  ASSERT_TRUE(WriteFile(slow.get(), frame->data() + 4, static_cast<DWORD>(frame->size() - 4),
+                        &written, nullptr));
+
+  // Exceeding the soft deadline records the slowness but still delivers.
+  ASSERT_TRUE(WaitForFlag(handler_entered));
+  EXPECT_GE(server.SoftDeadlineExceededCount(), 1u);
+
+  slow.Close();
+  EXPECT_TRUE(WaitForClientCount(server, 0, 500));
   server.Stop();
 }
 #endif

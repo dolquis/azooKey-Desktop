@@ -11,7 +11,11 @@ struct PipeIoResult {
   BOOL ok{FALSE};
   DWORD error{ERROR_SUCCESS};
   DWORD transferred{0};
+  // Server stop was requested; the operation was cancelled and drained.
   bool stopped{false};
+  // The frame's wall-clock budget expired; the connection must be closed
+  // rather than resumed (see FrameDeadline in NamedPipeTransport.cpp).
+  bool timed_out{false};
 };
 
 struct ImmediateOverlappedResult {

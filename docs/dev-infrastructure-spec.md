@@ -544,6 +544,47 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   write 側も `ERROR_PIPE_BUSY` / zero-byte write を bounded retry に留め、
   読まない peer による client thread 滞留を防ぐため blocking flush に依存しない。
   64KiB を超えるフレームが pipe write 単位で分割されても往復できる。
+  ただし retry 回数の上限だけでは、pend したまま進まない I/O を縛れない。
+  時間の上限は §6.4.7 が担う
+- **6.4.7 フレームデッドライン** — retry 回数とは別に、**転送が始まった 1
+  フレーム**に monotonic な時間上限を課す。
+
+  **計時の開始点**: 接続が要求と要求の間で idle している間は計時しない
+  （TIP は打鍵の合間に分単位で idle し得るため、idle に上限を置くと正常な接続を
+  誤って切る）。最初の 1 chunk が 1 byte 以上を転送した時点で arm し、以降は
+  ヘッダと本文を通じた 1 つの絶対デッドラインとして働く。chunk より細かい粒度は
+  観測できない（pending I/O の内部進行は取得できない）が、絶対デッドラインで
+  あるため本文を細切れに送り続ける peer も縛れる。
+
+  **値**: ソフト 500ms。ハードは read 2000ms / write 5000ms。write を緩くするのは、
+  64KiB の pipe buffer が埋まった後は読まない peer が正当に write を止め得るため
+  （TIP がモーダルループ中・デバッガ attach 中など、悪意なしに起こる）。ローカル
+  Named Pipe の 1 MiB 転送は健全な peer なら ms オーダーであり、いずれも十分な余裕を持つ。
+
+  **ハード超過時**: 当該接続のみを切断する。部分データからの再開は行わない
+  （キャンセルした message-mode read の残りは pipe に残留し、フレーム同期を
+  回復する手段がないため）。他のクライアントには波及しない。
+
+  **ソフト超過時**: フレームは破棄せず、遅い接続として計上するだけに留める
+  （`NamedPipeServer::SoftDeadlineExceededCount()`）。M41 の構造化ログへ配線するまでの
+  暫定形であり、閾値に観測可能な効果を持たせて回帰テスト可能にすることが目的。
+
+  **§8.5.2 の timeout 表との関係**: 別レイヤであり、値を一致させない。
+  §8.5.2 は「要求を出してから応答が返るまで」（推論時間を含む）を縛る request
+  レイヤの規約で、本項は「動き始めた 1 フレームを転送し切る」ことだけを縛る
+  transport レイヤの規約である。推論に要した時間は本デッドラインに算入されない
+  （write の計時は handler が応答を返した後に始まる）。
+
+  **適用範囲**: server 側（overlapped ハンドル）に限る。`NamedPipeClient` は
+  `FILE_FLAG_OVERLAPPED` なしで開いた同期ハンドルを使うため、呼び出しの途中で
+  中断できず、デッドラインは chunk と chunk の間でしか効かない。client 側の
+  stall 耐性は別課題として扱う（`NamedPipeClient::ReceiveWithTimeout` は
+  `PeekNamedPipe` でヘッダを観測した時点で blocking read に入るため、本文が
+  来ない場合に名前が示す timeout 保証を満たさない）。
+
+  **残余リスク**: 何も送らない idle 接続を `kMaxPipeInstances`（32）本張って
+  枯渇させる DoS は本項では防げない。これは同一ユーザー権限のプロセスを前提と
+  するため §6.4.4 の脅威モデル上、主防御の対象外である。
 
 ### M40 受け入れ条件
 
@@ -672,6 +713,11 @@ M51 で全 11 phase を記録する。phase 体系は 1 つだけで、M41 用�
 変換候補問い合わせのタイムアウトを定義する（例: ソフト 150ms / ハード
 300ms）。ソフト超過はログに記録、ハード超過は当該リクエストを打ち切り
 劣化モード（§8.3）へ移行する。
+
+本節が定めるのは request レイヤ（要求送信から応答受信まで。推論時間を含む）の
+規約であり、transport レイヤのフレームデッドライン（§6.4.7）とは別物である。
+両者は独立に働き、値を一致させない。フレームデッドラインのソフト超過も本節と
+同じくログ記録に留める（配線は M41）。
 
 ### 7.6 プライバシー配慮（redaction ポリシー正典）
 
@@ -967,6 +1013,11 @@ M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
 
 timeout は request 送信または backend 処理開始からの wall-clock deadline として扱う。
 connected-but-silent Host でも、pipe 切断や blocking read の解除を待たない。
+
+本表は request レイヤの値であり、transport のフレームデッドライン（§6.4.7。
+read 2000ms / write 5000ms）とは別レイヤである。本表の値を変えても §6.4.7 は
+追従せず、逆も同様。フレームデッドラインには推論時間が算入されないため、
+Heavy inference 800ms や Model load 30s と比較して短いことは矛盾しない。
 
 timeout 時は Cancel を送信し、古い結果は staleness check（M10）で
 破棄する。`request_id` と `trace_id`（M51）で staleness を判定する。

@@ -31,6 +31,14 @@ namespace azookey::ipc {
 //   - Debug/test builds may add a restricted-token compatibility ACE; Release
 //     remains current-user-only and fails closed if SID-based DACL creation fails
 //   - One server can accept multiple clients (TIP + settings UI)
+//
+// Frame deadlines (Windows server side):
+//   - A connection waiting between requests is never on the clock, but once a
+//     frame starts arriving the rest of it must land within a monotonic budget.
+//     Expiry closes that one connection and leaves other clients untouched.
+//   - NamedPipeClient's handle is opened without FILE_FLAG_OVERLAPPED and so
+//     cannot be interrupted mid-call; deadlines there apply only between chunks
+//     (docs/dev-infrastructure-spec.md §6.4.7).
 
 class NamedPipeServer {
  public:
@@ -62,6 +70,11 @@ class NamedPipeServer {
 
   bool IsRunning() const;
   std::size_t ActiveClientCountForTesting() const;
+
+  // Number of frames on this server whose soft deadline was exceeded. Soft
+  // exceedance never drops a frame; it only marks a connection as slow. M41
+  // will surface this through the structured log.
+  std::uint64_t SoftDeadlineExceededCount() const;
 
  private:
   struct Impl;

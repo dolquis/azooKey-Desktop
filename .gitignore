@@ -8,6 +8,8 @@ xcuserdata/
 *.xcscmblueprint
 build/
 build_local/
+pkg/msi/bin/
+pkg/msi/obj/
 CMakeUserPresets.json
 out/
 install/

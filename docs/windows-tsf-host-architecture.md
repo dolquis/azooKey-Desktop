@@ -241,7 +241,7 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - `inference-host/src/CrashHandler.cpp` — `SetUnhandledExceptionFilter`
 - `learning/src/DpapiCrypto.cpp` — DPAPI ラッパ
 - `pkg/msix/AppxManifest.xml` — MSIX マニフェスト
-- `pkg/wix/Product.wxs` — WiX インストーラ
+- `pkg/msi/Package.wxs` — WiX インストーラ
 
 ### 長期
 

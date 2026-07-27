@@ -956,7 +956,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （spec §0 / §4 / DEV-415）。本マイルストーンは v1.0 後の拡張に絞る（Inno Setup 代替、
   LTSC / AppX 無効環境の硬化、インストール UX 拡充）。MVP 配布経路のブロッカーではない。
 - **前提**: M12 完了（Phase 4 で MVP MSI を公開済み）。
-- **変更対象**: `pkg/wix/Product.wxs`（新規）、`pkg/inno/setup.iss`（オプション）。
+- **変更対象**: `pkg/msi/Package.wxs`、`pkg/inno/setup.iss`（オプション）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §4。
 - **受け入れ条件**:
   - Win10 LTSC でインストール → IME 選択 → 入力 → 確定 → アンインストール

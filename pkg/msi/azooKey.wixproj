@@ -1,0 +1,34 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <TipDllPath Condition="'$(TipDllPath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\tsf-tip\azookey_tsf_tip.dll</TipDllPath>
+    <HostExePath Condition="'$(HostExePath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\inference-host\azookey_inference_host.exe</HostExePath>
+    <SettingsExePath Condition="'$(SettingsExePath)' == ''">__NOT_PROVIDED__</SettingsExePath>
+    <VCRuntimeDir Condition="'$(VCRuntimeDir)' == ''">__NOT_PROVIDED__</VCRuntimeDir>
+    <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
+    <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
+    <OutputName>azooKey-$(ProductVersion)-x64</OutputName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <DefineConstants>
+      ProductVersion=$(ProductVersion);
+      TipDllPath=$(TipDllPath);
+      HostExePath=$(HostExePath);
+      SettingsExePath=$(SettingsExePath);
+      VCRuntimeDir=$(VCRuntimeDir);
+      LicensePath=$(LicensePath);
+      ThirdPartyLicensesPath=$(ThirdPartyLicensesPath)
+    </DefineConstants>
+  </PropertyGroup>
+
+  <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
+    <Error Condition="!Exists('$(TipDllPath)')" Text="TIP DLL not found: $(TipDllPath)" />
+    <Error Condition="!Exists('$(HostExePath)')" Text="Inference host not found: $(HostExePath)" />
+    <Error Condition="!Exists('$(VCRuntimeDir)\msvcp140.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\msvcp140.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
+    <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
+    <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140_1.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140_1.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
+    <Error Condition="!Exists('$(LicensePath)')" Text="License file not found: $(LicensePath)" />
+    <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
+    <Error Condition="'$(SettingsExePath)' != '__NOT_PROVIDED__' and !Exists('$(SettingsExePath)')" Text="Settings executable not found: $(SettingsExePath)" />
+  </Target>
+</Project>

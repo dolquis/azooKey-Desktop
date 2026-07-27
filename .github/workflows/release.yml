@@ -1,170 +1,116 @@
-# Release / コード署名 CI（M29 / DEV-100 D-04）
+# 未署名 MSI リリース CI（M12 / DEV-415）
 #
-# 本ワークフローは「雛形（skeleton）」である。タグ push（v*）で MSIX をビルド →
-# 署名 → Draft Release に添付する経路を定義するが、以下が未確定のため既定で
-# 無効化している:
+# タグ push（v*）で x64 の未署名 MSI をビルドし、Draft Release に添付する。
+# MSI は per-machine 配置であり、TIP の machine-wide 登録に必要な昇格は
+# Windows Installer が処理する。
 #
-#   * MSIX パッケージング（`pkg/msix/Package.wapproj`）は M28 で PoC 確定（DEV-101）。
-#     現時点で wapproj は未作成。
-#   * 署名証明書の調達ルート（A: Azure Artifact Signing / B: Azure Key Vault +
-#     AzureSignTool / C: 伝統的 OV/EV cert）の最終選定は人間ゲート（DEV-100 子課題
-#     D-04-A, gate:human-required）。所在地・組織化状況で決まる。
-#   * 各ルートの Secrets（§2.2 / §2.2.A / §2.2.B）が repository に未設定。
+# スタンドアロン MSIX と自前コード署名は延期中（DEV-255）。MS Store 用 MSIX は
+# DEV-416 の別経路で扱い、この workflow へ署名ステップを混在させない。
 #
-# 設計の正典は docs/sideload-packaging-spec.md §2。本ファイルは同 §2.3 の写しを
-# 実行可能な形にしたものであり、内容を変える場合は spec を先に更新すること。
-#
-# 有効化手順（M28/M29 完了・証明書手当て済み後に人間が実施）:
-#   1. 採用する署名ルート（A/B/C）に対応する署名ステップのコメントを外す。
-#   2. 対応する Secrets を repository に登録する（§2.2 系の表を参照）。
-#   3. Repository variables に RELEASE_ENABLED=true を設定する。
-#
+# 設計の正典は docs/sideload-packaging-spec.md §4。
 # RELEASE_ENABLED が 'true' でない限り job 全体が skip され、誤発火しない。
-
 name: Release
-
 on:
   push:
     tags: ['v*']
-  # 雛形の手動 dry-run 用。RELEASE_ENABLED ガードで本体は skip される。
-  workflow_dispatch:
-
+  workflow_dispatch: # 未署名 MSI ビルドまでを手動 dry-run する。
 permissions:
-  contents: write  # Draft Release の作成・添付に必要
-
+  contents: write # Draft Release の作成・添付に必要
 jobs:
   release:
-    name: Build, sign and draft release
+    name: Build unsigned MSI and draft release
     runs-on: windows-2022
     timeout-minutes: 45
-    # 未確定要素（M28 wapproj / 証明書ルート / Secrets）が揃うまで無効。
-    # 人間が repository variable RELEASE_ENABLED=true を設定すると有効化される。
-    if: ${{ vars.RELEASE_ENABLED == 'true' }}
+    if: ${{ vars.RELEASE_ENABLED == 'true' }} # 人間が repository variable で有効化する。
     steps:
       - uses: actions/checkout@v4
         with:
           # legacy/ 配下の macOS モデル submodule は Windows パッケージングに不要。
           # 既存 windows.yml と同じく無効化する（取得の遅延・脆弱性を避ける）。
           submodules: false
-
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
-
       - name: Configure
         run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
-
       - name: Build
         run: cmake --build --preset windows-release --parallel 1
-
       - name: Test
         run: ctest --preset windows-release --no-tests=error
-
-      # 以降は実リリース専用（タグ push 時のみ）。workflow_dispatch による手動
-      # 起動は configure/build/test までの dry-run として通すため tag-ref で gate する
-      # （非タグ ref でリリース用タグ／Release が作られる事故を防ぐ。spec §2.3）。
-
-      # ----------------------------------------------------------------------
-      # 署名（pre-package）: spec §2.1 は TIP DLL / host / settings EXE と MSIX の
-      # 双方への署名を要求する。msbuild の後にバイナリへ署名すると MSIX には未署名
-      # コピーが残るため、バイナリ署名は必ず Build MSIX の前に置く（§2.1 / §2.3 の順序）。
-      # これは採用ルート A/B/C いずれでも必要で、ルートは署名ツールだけを変える
-      # （A/B は下記 post-package と同じ Azure ツール／資格情報をバイナリパスに適用、
-      #  C は signtool）。下記は C の signtool 例。A/B では同じ手順を Azure ツールに置換。
-      # ----------------------------------------------------------------------
-      # - name: Import certificate (route C)
-      #   if: github.ref_type == 'tag'
-      #   run: |
-      #     $bytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_PFX_BASE64 }}")
-      #     [IO.File]::WriteAllBytes("$env:TEMP\cert.pfx", $bytes)
-      #     $pwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_PFX_PASSWORD }}" -AsPlainText -Force
-      #     Import-PfxCertificate -FilePath $env:TEMP\cert.pfx -Password $pwd -CertStoreLocation Cert:\CurrentUser\My
-      # - name: Sign binaries (pre-package)
-      #   if: github.ref_type == 'tag'
-      #   run: |
-      #     # ルート C（signtool）の例。ルート A は azure/trusted-signing-action の
-      #     # files-folder にバイナリ出力先を指定、ルート B は AzureSignTool で同じ
-      #     # バイナリパスへ署名する。いずれも MSIX 化の前に実行する。
-      #     $tools = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64"
-      #     & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-      #         /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
-      #         build\windows-release\tsf-tip\azookey_tsf_tip.dll `
-      #         build\windows-release\inference-host\azookey_inference_host.exe `
-      #         build\windows-release\settings\azookey_settings.exe
-
-      # ----------------------------------------------------------------------
-      # MSIX パッケージング（M28 / DEV-101 確定後に有効化）
-      # `pkg/msix/Package.wapproj` は M28 PoC で経路 A/B/C を確定してから作成する。
-      # ルート C ではこの時点で署名済みバイナリが取り込まれる。
-      # ----------------------------------------------------------------------
-      - name: Build MSIX
-        if: github.ref_type == 'tag'
-        run: msbuild pkg\msix\Package.wapproj /p:Configuration=Release /p:Platform=x64
-
-      # ----------------------------------------------------------------------
-      # 署名（post-package）: MSIX パッケージへ署名する。D-04-A で確定した 1 ルート
-      # だけを有効化する（下記 A/B/C は相互排他）。
-      #
-      # ルート A: Azure Artifact Signing（旧 Trusted Signing）— spec §2.2.A
-      # ----------------------------------------------------------------------
-      # - name: Azure CLI login
-      #   if: github.ref_type == 'tag'
-      #   uses: azure/login@v2
-      #   with:
-      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
-      # - name: Sign MSIX with Azure Artifact Signing
-      #   if: github.ref_type == 'tag'
-      #   uses: azure/trusted-signing-action@v0
-      #   with:
-      #     azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-      #     azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-      #     azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-      #     endpoint: https://eus.codesigning.azure.net/
-      #     trusted-signing-account-name: <account>
-      #     certificate-profile-name: <profile>
-      #     files-folder: pkg\msix\AppPackages\Package_1.0.0_Test
-      #     files-folder-filter: msix
-      #     file-digest: SHA256
-      #     timestamp-rfc3161: http://timestamp.acs.microsoft.com
-
-      # ----------------------------------------------------------------------
-      # ルート B: Azure Key Vault + AzureSignTool（日本の個人開発者向け次善）— spec §2.2.B
-      # ----------------------------------------------------------------------
-      # - name: Install AzureSignTool
-      #   if: github.ref_type == 'tag'
-      #   run: dotnet tool install --global AzureSignTool
-      # - name: Sign MSIX with AzureSignTool
-      #   if: github.ref_type == 'tag'
-      #   run: |
-      #     AzureSignTool sign `
-      #       -kvu ${{ secrets.AZURE_KEY_VAULT_URL }} `
-      #       -kvt ${{ secrets.AZURE_KEY_VAULT_TENANT_ID }} `
-      #       -kvi ${{ secrets.AZURE_KEY_VAULT_CLIENT_ID }} `
-      #       -kvs ${{ secrets.AZURE_KEY_VAULT_CLIENT_SECRET }} `
-      #       -kvc ${{ secrets.AZURE_KEY_VAULT_CERT_NAME }} `
-      #       -tr http://timestamp.digicert.com `
-      #       -v pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
-
-      # ----------------------------------------------------------------------
-      # ルート C: 伝統的 OV/EV cert（PFX を GitHub Secrets）— spec §2.2 / §2.3
-      # EV の HSM 物理トークンは CI で使えない点に注意（spec §2.0 表）。
-      # バイナリは上の pre-package ステップで署名済み。ここでは MSIX のみ署名する。
-      # ----------------------------------------------------------------------
-      # - name: Sign MSIX (route C, post-package)
-      #   if: github.ref_type == 'tag'
-      #   run: |
-      #     $tools = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64"
-      #     & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-      #         /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
-      #         pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
-
-      - name: Verify signature
-        if: github.ref_type == 'tag'
+      - name: Resolve MSI version
+        id: msi-version
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          & signtool verify /pa /v pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
+          if ($env:REF_TYPE -eq "tag") {
+            $version = $env:REF_NAME.Substring(1)
+          } else {
+            $version = "0.0.0"
+          }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Release tag must use vMAJOR.MINOR.PATCH: $version"
+          }
 
+          $parts = @()
+          foreach ($field in $version.Split('.')) {
+            [uint32]$parsed = 0
+            if (-not [uint32]::TryParse($field, [ref]$parsed)) {
+              throw "MSI version field exceeds the supported integer range: $version"
+            }
+            $parts += $parsed
+          }
+          if ($parts[0] -gt 255 -or $parts[1] -gt 255 -or $parts[2] -gt 65535) {
+            throw "MSI version must satisfy MAJOR <= 255, MINOR <= 255, PATCH <= 65535: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Resolve app-local MSVC runtime
+        id: vc-runtime
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $installPath) {
+            throw "Visual Studio C++ tools were not found."
+          }
+
+          $redistRoot = Join-Path $installPath "VC\Redist\MSVC"
+          $versionDir = Get-ChildItem $redistRoot -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+          $crtDir = Get-ChildItem (Join-Path $versionDir.FullName "x64") -Directory |
+            Where-Object { $_.Name -match '^Microsoft\.VC\d+\.CRT$' } |
+            Select-Object -First 1
+          if (-not $crtDir) {
+            throw "The x64 MSVC runtime directory was not found under $redistRoot."
+          }
+
+          foreach ($name in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
+            if (-not (Test-Path (Join-Path $crtDir.FullName $name))) {
+              throw "Required MSVC runtime file is missing: $name"
+            }
+          }
+          "dir=$($crtDir.FullName)" >> $env:GITHUB_OUTPUT
+      - name: Build unsigned MSI
+        run: >-
+          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}"
+      - name: Verify MSI is unsigned
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem pkg\msi\bin\Release\*.msi -File -ErrorAction Stop
+          if ($msi.Count -ne 1) {
+            throw "Expected one MSI, found $($msi.Count)."
+          }
+          $signature = Get-AuthenticodeSignature -FilePath $msi.FullName
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+            throw "Expected an unsigned MSI, found signature status $($signature.Status)."
+          }
       - name: Upload Release asset (draft)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
+          files: pkg\msi\bin\Release\*.msi

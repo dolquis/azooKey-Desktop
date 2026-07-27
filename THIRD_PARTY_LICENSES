@@ -36,6 +36,16 @@ attribution は [`docs/sideload-packaging-spec.md`](docs/sideload-packaging-spec
 
 > zenz GGUF モデル本体の配布可否・CUDA ランタイム再配布条項は Linear `DEV-202` で別途確認する。
 
+## 配布物へ同梱する MSVC runtime
+
+- Source: Visual Studio の `VC\Redist\MSVC\<version>\x64\Microsoft.VC*.CRT`
+- License: Microsoft Software License Terms の Distributable Code
+- Copyright: Microsoft Corporation
+- azooKey path: リポジトリへはベンダリングせず、MSI ビルド時に
+  `msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` を app-local 配置する
+- Notes: ビルドに使用した Visual Studio の REDIST list に含まれる x64 ファイルだけを
+  使用する。配布可否は Visual Studio ライセンス条項に従う。
+
 ## 追記の手順（第三者資産を同梱するとき）
 
 新たに第三者由来データ・コードを保守対象ツリーへ同梱する場合は、以下を必ず満たす。

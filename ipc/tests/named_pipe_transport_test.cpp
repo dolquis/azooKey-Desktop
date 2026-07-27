@@ -17,6 +17,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include <sddl.h>
 
 #include "../src/NamedPipeTransportInternal.h"
 
@@ -184,6 +185,15 @@ TEST(NamedPipeTransportTest, ImmediateOverlappedMoreDataKeepsPartialByteCount) {
   EXPECT_EQ(result.transferred, 7u);
 }
 
+TEST(NamedPipeTransportTest, SecurityDescriptorUsesLogonSidAndScopedRights) {
+  const auto sddl = azookey::ipc::internal::BuildPipeSecuritySddl(L"S-1-5-5-123-456", false);
+  EXPECT_EQ(sddl, L"D:P(A;;0x12019f;;;S-1-5-5-123-456)");
+  EXPECT_EQ(sddl.find(L"GA"), std::wstring::npos);
+
+  const auto restricted = azookey::ipc::internal::BuildPipeSecuritySddl(L"S-1-5-5-123-456", true);
+  EXPECT_EQ(restricted, L"D:P(A;;0x12019f;;;S-1-5-5-123-456)(A;;0x12019f;;;WD)");
+}
+
 TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-ipc-test-" + std::to_string(GetCurrentProcessId());
@@ -330,6 +340,20 @@ TEST(NamedPipeTransportTest, StopReturnsWhileAcceptIsPending) {
   EXPECT_LT(elapsed, std::chrono::milliseconds(1000));
   EXPECT_FALSE(server.IsRunning());
   EXPECT_EQ(server.ActiveClientCountForTesting(), 0u);
+}
+
+TEST(NamedPipeTransportTest, SecondServerCannotClaimExistingPipeName) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-first-instance-test-" + std::to_string(GetCurrentProcessId());
+  auto handler = [](const azookey::ipc::Envelope&) -> std::optional<azookey::ipc::Envelope> {
+    return std::nullopt;
+  };
+
+  azookey::ipc::NamedPipeServer first;
+  azookey::ipc::NamedPipeServer second;
+  ASSERT_TRUE(first.Start(pipe_name, handler));
+  EXPECT_FALSE(second.Start(pipe_name, handler));
+  first.Stop();
 }
 
 TEST(NamedPipeTransportTest, MultipleClientsDisconnectAndAreCleanedUp) {
@@ -582,6 +606,60 @@ TEST(NamedPipeTransportTest, ClientDisconnectBeforeNextFrameCleansUp) {
 }
 
 #ifndef NDEBUG
+TEST(NamedPipeTransportTest, ClientLimitsPipeServerToIdentificationLevel) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-sqos-test-" + std::to_string(GetCurrentProcessId());
+  const std::wstring wide_pipe_name(pipe_name.begin(), pipe_name.end());
+  PSECURITY_DESCRIPTOR raw_descriptor = nullptr;
+  ASSERT_TRUE(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &raw_descriptor, nullptr));
+  SECURITY_ATTRIBUTES security_attributes{sizeof(SECURITY_ATTRIBUTES), raw_descriptor, FALSE};
+  ScopedPipeHandle server(CreateNamedPipeW(wide_pipe_name.c_str(),
+                                           PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                           PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1,
+                                           4096, 4096, 0, &security_attributes));
+  LocalFree(raw_descriptor);
+  ASSERT_TRUE(server.valid());
+  ScopedPipeHandle connected_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  ASSERT_TRUE(connected_event.valid());
+
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = connected_event.get();
+  const BOOL connected_immediately = ConnectNamedPipe(server.get(), &overlapped);
+  const DWORD connect_error = connected_immediately ? ERROR_SUCCESS : GetLastError();
+  ASSERT_TRUE(connected_immediately || connect_error == ERROR_IO_PENDING ||
+              connect_error == ERROR_PIPE_CONNECTED);
+
+  ScopedPipeHandle client(azookey::ipc::internal::OpenPipeClientHandle(wide_pipe_name));
+  ASSERT_TRUE(client.valid());
+  if (!connected_immediately && connect_error == ERROR_IO_PENDING) {
+    ASSERT_EQ(WaitForSingleObject(connected_event.get(), 2000), WAIT_OBJECT_0);
+    DWORD transferred = 0;
+    ASSERT_TRUE(GetOverlappedResult(server.get(), &overlapped, &transferred, FALSE));
+  }
+
+  SECURITY_IMPERSONATION_LEVEL level = SecurityAnonymous;
+  bool queried_level = false;
+  const bool impersonated = ImpersonateNamedPipeClient(server.get()) != FALSE;
+  if (impersonated) {
+    HANDLE raw_token = nullptr;
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &raw_token)) {
+      ScopedPipeHandle token(raw_token);
+      DWORD returned = 0;
+      queried_level = GetTokenInformation(token.get(), TokenImpersonationLevel, &level,
+                                          sizeof(level), &returned) != FALSE;
+    }
+  }
+  const bool reverted = !impersonated || RevertToSelf() != FALSE;
+
+  EXPECT_TRUE(impersonated);
+  EXPECT_TRUE(queried_level);
+  EXPECT_EQ(level, SecurityIdentification);
+  EXPECT_TRUE(reverted);
+  client.Close();
+  DisconnectNamedPipe(server.get());
+}
+
 TEST(NamedPipeTransportTest, ZeroByteResponseWriteRetryIsBounded) {
   ScopedEnvironmentVariable force_zero_write(
       L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE", nullptr);

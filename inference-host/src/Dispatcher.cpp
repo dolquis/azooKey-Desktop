@@ -1,7 +1,9 @@
 #include "azookey/host/Dispatcher.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <string_view>
 
 #include "azookey/ipc/Payloads.h"
 
@@ -62,6 +64,17 @@ std::optional<BackendKind> ParseBackend(const std::string& backend) {
   if (backend.empty() || backend == "cpu") return BackendKind::Cpu;
   if (backend == "cuda") return BackendKind::Cuda;
   return std::nullopt;
+}
+
+bool ConstantTimeEquals(std::string_view left, std::string_view right) {
+  const size_t compared_size = std::max(left.size(), right.size());
+  volatile size_t difference = left.size() ^ right.size();
+  for (size_t i = 0; i < compared_size; ++i) {
+    const auto left_byte = i < left.size() ? static_cast<unsigned char>(left[i]) : 0;
+    const auto right_byte = i < right.size() ? static_cast<unsigned char>(right[i]) : 0;
+    difference = difference | (left_byte ^ right_byte);
+  }
+  return difference == 0;
 }
 
 class RequestCompletionGuard {
@@ -206,8 +219,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.protocol_version = config_.protocol_version;
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
-    const bool token_ok =
-        config_.handshake_token.empty() || parsed->handshake_token == config_.handshake_token;
+    const bool token_ok = config_.handshake_token.empty() ||
+                          ConstantTimeEquals(parsed->handshake_token, config_.handshake_token);
     res.accepted = version_ok && token_ok;
     SetClientId(res.accepted ? std::move(parsed->client_id) : std::string());
   } else {

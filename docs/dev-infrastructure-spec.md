@@ -472,14 +472,26 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   名 / 既定セキュリティに落ちる。Debug/test ではこの fallback を許可し、
   Release/production では SID 取得失敗時に Host 起動を失敗させる
   （ビルド構成で分岐）。Debug/test の restricted-token 実行環境では current-user
-  SID ACE だけでは同一プロセス client の write open が拒否されるため、Release 以外に限り
-  restricted-token 互換 ACE を追加して transport tests を実行可能にする
+  の logon SID ACE だけでは同一プロセス client の write open が拒否されるため、
+  Release 以外に限り restricted-token 互換 ACE を追加して transport tests を
+  実行可能にする
 - **6.4.1a remote client rejection** — Named Pipe はローカル IME ↔ Host 専用
   であり、server 作成時に `PIPE_REJECT_REMOTE_CLIENTS` を指定して remote client
   接続を OS レベルで拒否する。これは DACL / per-user pipe 名の補助防御であり、
   本項は remote client 拒否に限る。**同一ユーザー内の別プロセスを秘密だけで
   区別する認証は不可能**であり（§6.4.4）、Handshake トークンは同一ユーザー
   なりすまし対策の認証ではなく多層防御として §6.4.4 で扱う
+- **6.4.1b logon 境界と pipe 名の占有** — DACL の許可先には user SID ではなく
+  logon SID を使い、同じ Windows アカウントの別ログオンセッションを拒否する。
+  許可権限は `GENERIC_ALL` ではなく、duplex pipe の read/write と属性操作、
+  複数 instance 作成に必要な個別権限へ限定する。`FILE_APPEND_DATA` と
+  `FILE_CREATE_PIPE_INSTANCE` は同じ値であり、現行の複数 instance server では
+  後者を除外できない。この残余権限に対して、最初の instance に
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` を指定し、先行プロセスが同名 pipe を作成済みなら
+  Host 起動を失敗させる。接続後は server と client の双方が OS の pipe peer PID
+  から user SID と logon SID の一致を確認し、不一致ならその接続を閉じる。
+  client は `SECURITY_IDENTIFICATION` を指定して pipe を開き、偽 server が
+  client のセキュリティコンテキストを impersonate できないようにする
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
   TIP と設定 UI などの同時接続を許容する有界な上限
   (`kMaxPipeInstances = 32`) を設ける
@@ -527,10 +539,13 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   環境変数 `AZOOKEY_IPC_HANDSHAKE_TOKEN` は開発・テスト用の上書き経路として残す。
   本チャネルは上記の defense-in-depth 価値に見合うものであり、認証の保証は与えない。
 
-  **トークン未設定時の縮退**: ファイルも環境変数も無い場合は per-user pipe ACL
+  **トークン未設定時の縮退**: ファイルも環境変数も無い場合は per-logon pipe ACL
   のみに依拠し、Host は warn ログを出す（現行 `inference-host/src/main.cpp` の
-  挙動）。Release では §6.4.1 の SID fail-closed により pipe 自体が current-user
-  に限定されるため、トークン未設定でも remote / 別ユーザーは到達しない
+  挙動）。Release では §6.4.1 の SID fail-closed により pipe 自体が current logon
+  に限定されるため、トークン未設定でも remote / 別ユーザー / 別 logon session は
+  到達しない。
+  トークンが設定されている場合の比較は、値の一致位置を処理時間へ反映しない
+  定数時間比較を使う。
 - **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
   見直し、切断検出時に解放する（長時間稼働でのリーク様の蓄積を防ぐ）
 - **6.4.6 length-prefix read/write hardening** — Named Pipe は

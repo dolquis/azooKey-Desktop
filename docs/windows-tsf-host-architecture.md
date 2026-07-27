@@ -85,6 +85,10 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 
 ### Handshake 認証ゲート
 
+- Windows transport は logon SID に限定した DACL、最初の pipe instance の排他取得、
+  接続後の peer process の user SID と logon SID の照合を行う。
+  TIP 側の pipe handle は `SecurityIdentification` に制限し、接続先 server が
+  TIP を impersonate できないようにする。
 - Host 設定 `handshake_token` が非空のとき、`Dispatcher::RequiresAuthenticatedSession`
   が有効化され、Handshake 成立（`protocol_version` 一致 + `handshake_token` 一致）まで
   後続メッセージを拒否する。token 未設定（空）の場合は認証不要で全メッセージを受け付ける。

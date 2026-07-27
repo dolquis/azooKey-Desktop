@@ -13,9 +13,7 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # RELEASE_ENABLED ガードを維持したまま手動実行を確認できる。
-
-  workflow_dispatch:
+  workflow_dispatch: # 未署名 MSI ビルドまでを手動 dry-run する。
 permissions:
   contents: write # Draft Release の作成・添付に必要
 jobs:
@@ -23,9 +21,7 @@ jobs:
     name: Build unsigned MSI and draft release
     runs-on: windows-2022
     timeout-minutes: 45
-    # 人間が repository variable RELEASE_ENABLED=true を設定すると有効化される。
-
-    if: ${{ vars.RELEASE_ENABLED == 'true' }}
+    if: ${{ vars.RELEASE_ENABLED == 'true' }} # 人間が repository variable で有効化する。
     steps:
       - uses: actions/checkout@v4
         with:

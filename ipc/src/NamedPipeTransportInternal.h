@@ -5,6 +5,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include <string>
+
 namespace azookey::ipc::internal {
 
 struct PipeIoResult {
@@ -31,6 +33,10 @@ ImmediateOverlappedResult QueryImmediateOverlappedTransfer(HANDLE pipe, OVERLAPP
 void CaptureImmediateOverlappedTransfer(
     HANDLE pipe, OVERLAPPED& overlapped, PipeIoResult& result,
     ImmediateOverlappedProbe probe = QueryImmediateOverlappedTransfer);
+
+std::wstring BuildPipeSecuritySddl(const std::wstring& logon_sid, bool restricted_token);
+
+HANDLE OpenPipeClientHandle(const std::wstring& pipe_name);
 
 }  // namespace azookey::ipc::internal
 

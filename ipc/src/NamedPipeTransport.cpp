@@ -33,6 +33,32 @@ namespace azookey::ipc {
 
 namespace internal {
 
+std::wstring BuildPipeSecuritySddl(const std::wstring& logon_sid, bool restricted_token) {
+  // FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE, expressed as
+  // individual file rights rather than GENERIC_ALL. FILE_APPEND_DATA shares
+  // FILE_CREATE_PIPE_INSTANCE's value and remains necessary for this
+  // multi-instance duplex server.
+  constexpr wchar_t kPipeAccessRights[] = L"0x12019f";
+  std::wstring sddl = L"D:P(A;;";
+  sddl += kPipeAccessRights;
+  sddl += L";;;";
+  sddl += logon_sid;
+  sddl += L")";
+  if (restricted_token) {
+    sddl += L"(A;;";
+    sddl += kPipeAccessRights;
+    sddl += L";;;WD)";
+  }
+  return sddl;
+}
+
+HANDLE OpenPipeClientHandle(const std::wstring& pipe_name) {
+  constexpr DWORD kClientAccess =
+      FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE;
+  return CreateFileW(pipe_name.c_str(), kClientAccess, 0, nullptr, OPEN_EXISTING,
+                     SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+}
+
 ImmediateOverlappedResult QueryImmediateOverlappedTransfer(HANDLE pipe, OVERLAPPED& overlapped) {
   DWORD transferred = 0;
   const BOOL completed = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
@@ -99,39 +125,115 @@ std::string WideToUtf8(const std::wstring& value) {
   return utf8;
 }
 
-std::wstring CurrentUserSidString() {
+bool ForceSidFailureForTesting() {
 #ifndef NDEBUG
   wchar_t forced[2]{};
-  if (GetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_SID_FAILURE", forced, 2) > 0) {
-    return {};
-  }
+  return GetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_SID_FAILURE", forced, 2) > 0;
+#else
+  return false;
 #endif
+}
 
-  HANDLE raw_token = nullptr;
-  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token)) {
-    return {};
-  }
-  wil::unique_handle token(raw_token);
-
+bool QueryTokenInformationBuffer(HANDLE token, TOKEN_INFORMATION_CLASS info_class,
+                                 std::vector<uint8_t>& buffer) {
   DWORD size = 0;
-  GetTokenInformation(token.get(), TokenUser, nullptr, 0, &size);
-  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+  if (GetTokenInformation(token, info_class, nullptr, 0, &size) ||
+      GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+    return false;
+  }
+  buffer.resize(size);
+  return GetTokenInformation(token, info_class, buffer.data(), size, &size) != FALSE;
+}
+
+std::wstring SidToString(PSID sid) {
+  if (!sid || !IsValidSid(sid)) {
     return {};
   }
-
-  std::vector<uint8_t> buffer(size);
-  if (!GetTokenInformation(token.get(), TokenUser, buffer.data(), size, &size)) {
-    return {};
-  }
-
-  auto* user = reinterpret_cast<TOKEN_USER*>(buffer.data());
   LPWSTR sid_text = nullptr;
-  if (!ConvertSidToStringSidW(user->User.Sid, &sid_text)) {
+  if (!ConvertSidToStringSidW(sid, &sid_text)) {
     return {};
   }
   std::wstring result(sid_text);
   LocalFree(sid_text);
   return result;
+}
+
+std::wstring TokenUserSidString(HANDLE token) {
+  std::vector<uint8_t> buffer;
+  if (!QueryTokenInformationBuffer(token, TokenUser, buffer)) {
+    return {};
+  }
+  auto* user = reinterpret_cast<TOKEN_USER*>(buffer.data());
+  return SidToString(user->User.Sid);
+}
+
+std::wstring TokenLogonSidString(HANDLE token) {
+  std::vector<uint8_t> buffer;
+  if (!QueryTokenInformationBuffer(token, TokenGroups, buffer)) {
+    return {};
+  }
+  auto* groups = reinterpret_cast<TOKEN_GROUPS*>(buffer.data());
+  for (DWORD i = 0; i < groups->GroupCount; ++i) {
+    const auto& group = groups->Groups[i];
+    if ((group.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID) {
+      return SidToString(group.Sid);
+    }
+  }
+  return {};
+}
+
+struct TokenIdentity {
+  std::wstring user_sid;
+  std::wstring logon_sid;
+
+  bool valid() const { return !user_sid.empty() && !logon_sid.empty(); }
+};
+
+TokenIdentity QueryTokenIdentity(HANDLE token) {
+  return {TokenUserSidString(token), TokenLogonSidString(token)};
+}
+
+TokenIdentity CurrentProcessIdentity() {
+  if (ForceSidFailureForTesting()) {
+    return {};
+  }
+  HANDLE raw_token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token)) {
+    return {};
+  }
+  wil::unique_handle token(raw_token);
+  return QueryTokenIdentity(token.get());
+}
+
+std::wstring CurrentUserSidString() { return CurrentProcessIdentity().user_sid; }
+
+bool ProcessMatchesCurrentLogon(ULONG process_id) {
+  const auto current = CurrentProcessIdentity();
+  if (!current.valid()) {
+    return false;
+  }
+
+  wil::unique_handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
+  if (!process) {
+    return false;
+  }
+  HANDLE raw_token = nullptr;
+  if (!OpenProcessToken(process.get(), TOKEN_QUERY, &raw_token)) {
+    return false;
+  }
+  wil::unique_handle token(raw_token);
+  const auto peer = QueryTokenIdentity(token.get());
+  return peer.valid() && peer.user_sid == current.user_sid && peer.logon_sid == current.logon_sid;
+}
+
+bool PipeClientMatchesCurrentLogon(HANDLE pipe) {
+  ULONG process_id = 0;
+  return GetNamedPipeClientProcessId(pipe, &process_id) && ProcessMatchesCurrentLogon(process_id);
+}
+
+bool PipeServerMatchesCurrentLogon(HANDLE pipe) {
+  ULONG process_id = 0;
+  return GetNamedPipeServerProcessId(pipe, &process_id) && ProcessMatchesCurrentLogon(process_id);
 }
 
 bool CurrentProcessTokenIsRestrictedForTesting() {
@@ -456,32 +558,32 @@ struct SecurityDescriptor {
   }
 };
 
-SecurityDescriptor BuildCurrentUserSecurityDescriptor() {
+SecurityDescriptor BuildCurrentLogonSecurityDescriptor() {
   SecurityDescriptor result;
-  const auto sid = CurrentUserSidString();
-  if (sid.empty()) return result;
+  const auto identity = CurrentProcessIdentity();
+  if (!identity.valid()) return result;
 
-  // Protected DACL: only the current user can connect to the per-user pipe.
-  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
+  // A logon SID narrows the pipe from "same account" to the current logon
+  // session. The rights exclude GENERIC_ALL and its ACL/owner mutation rights.
+  bool restricted_token = false;
 #ifndef NDEBUG
-  if (CurrentProcessTokenIsRestrictedForTesting()) {
-    // Restricted-token test runners require an ACE that also matches a
-    // restricting SID. Keep this out of Release, where the pipe fails closed.
-    sddl += L"(A;;GA;;;WD)";
-  }
+  // Restricted-token test runners require an ACE that also matches a
+  // restricting SID. Keep this out of Release, where the pipe fails closed.
+  restricted_token = CurrentProcessTokenIsRestrictedForTesting();
 #endif
-  ConvertStringSecurityDescriptorToSecurityDescriptorW(
-      sddl.c_str(), SDDL_REVISION_1, &result.descriptor, nullptr);
+  const auto sddl = internal::BuildPipeSecuritySddl(identity.logon_sid, restricted_token);
+  ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1,
+                                                       &result.descriptor, nullptr);
   return result;
 }
 
-HANDLE CreatePipeInstance(const std::string& pipe_name) {
+HANDLE CreatePipeInstance(const std::string& pipe_name, bool first_instance) {
   const auto wide_name = Utf8ToWide(pipe_name);
   if (wide_name.empty()) return INVALID_HANDLE_VALUE;
 
-  // Build per-user DACL. Debug/test builds may fall back to process-default
+  // Build per-logon DACL. Debug/test builds may fall back to process-default
   // security in restricted environments; Release fails closed.
-  auto security = BuildCurrentUserSecurityDescriptor();
+  auto security = BuildCurrentLogonSecurityDescriptor();
   if (!security.descriptor && !AllowsSidFallback()) {
     return INVALID_HANDLE_VALUE;
   }
@@ -491,8 +593,12 @@ HANDLE CreatePipeInstance(const std::string& pipe_name) {
   attrs.lpSecurityDescriptor = security.descriptor;  // nullptr = default security
   attrs.bInheritHandle = FALSE;
 
+  DWORD open_mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
+  if (first_instance) {
+    open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+  }
   return CreateNamedPipeW(
-      wide_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+      wide_name.c_str(), open_mode,
       PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
       kMaxPipeInstances, kPipeBufferSize, kPipeBufferSize, 0, &attrs);
 }
@@ -685,7 +791,11 @@ struct NamedPipeServer::Impl {
       }
 
       const auto connect_result = WaitForClientConnect(current, stop_event.get());
-      const bool connected = connect_result == ConnectWaitResult::Connected;
+      const bool connected =
+          connect_result == ConnectWaitResult::Connected && PipeClientMatchesCurrentLogon(current);
+      if (connect_result == ConnectWaitResult::Connected && !connected) {
+        DisconnectNamedPipe(current);
+      }
 
       wil::unique_hfile current_pipe;
       {
@@ -758,7 +868,7 @@ struct NamedPipeServer::Impl {
         }
       }
 
-      wil::unique_hfile next_pipe(CreatePipeInstance(pipe_name));
+      wil::unique_hfile next_pipe(CreatePipeInstance(pipe_name, false));
       if (!next_pipe) {
         running.store(false);
         break;
@@ -858,7 +968,7 @@ bool NamedPipeServer::Start(const std::string& pipe_name, ConnectionFactory fact
   }
   ResetEvent(impl_->stop_event.get());
 
-  wil::unique_hfile first_pipe(CreatePipeInstance(pipe_name));
+  wil::unique_hfile first_pipe(CreatePipeInstance(pipe_name, true));
   if (!first_pipe) {
     return false;
   }
@@ -930,9 +1040,11 @@ bool NamedPipeClient::Connect(const std::string& pipe_name, uint32_t timeout_ms)
 
   const auto start = std::chrono::steady_clock::now();
   while (true) {
-    wil::unique_hfile pipe(CreateFileW(wide_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                       OPEN_EXISTING, 0, nullptr));
+    wil::unique_hfile pipe(internal::OpenPipeClientHandle(wide_name));
     if (pipe) {
+      if (!PipeServerMatchesCurrentLogon(pipe.get())) {
+        return false;
+      }
       DWORD mode = PIPE_READMODE_MESSAGE;
       if (!SetNamedPipeHandleState(pipe.get(), &mode, nullptr, nullptr)) {
         return false;

@@ -26,10 +26,14 @@ namespace azookey::ipc {
 //     preserving blocking wait mode for connected message I/O.
 //
 // Security (Windows):
-//   - DACL is restricted to the current user's SID (RW only)
+//   - DACL is restricted to the current logon SID with scoped pipe rights
 //   - Remote pipe clients are rejected; the transport is local-machine only
+//   - The first server instance claims the name exclusively, and both ends
+//     verify that the peer process belongs to the same user and logon
+//   - Clients request SecurityIdentification so a squatting server cannot
+//     impersonate the hosting application process
 //   - Debug/test builds may add a restricted-token compatibility ACE; Release
-//     remains current-user-only and fails closed if SID-based DACL creation fails
+//     remains current-logon-only and fails closed if SID-based DACL creation fails
 //   - One server can accept multiple clients (TIP + settings UI)
 //
 // Frame deadlines (Windows server side):

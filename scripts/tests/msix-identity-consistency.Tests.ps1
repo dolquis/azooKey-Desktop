@@ -9,6 +9,7 @@
 Describe "MSIX identity package consistency (DEV-101 / M28)" {
   BeforeAll {
     $repoRoot = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot "..") "..")).Path
+    $script:repoRoot = $repoRoot
 
     $script:appxManifestPath = Join-Path (Join-Path $repoRoot "pkg") "msix/AppxManifest.xml"
     $script:appManifestPath = Join-Path (Join-Path $repoRoot "pkg") "msix/azookey_inference_host.exe.manifest"
@@ -233,25 +234,53 @@ Describe "MSIX identity package consistency (DEV-101 / M28)" {
   }
 
   Context "build wiring (inference-host/CMakeLists.txt)" {
-    It "embeds the identity manifest into the host executable" {
+    BeforeAll {
+      # コメント行は判定から外す。パスもフラグ名も解説コメントに書かれているため、
+      # 素の文字列一致だと「配線が外れてもコメントだけで PASS する」偽陰性になる。
+      $script:hostCMakeCode =
+        ($script:hostCMakeText -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+      $script:rootCMakeCode =
+        ($script:rootCMakeText -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+      # ガードされたブロック本体だけを取り出す（終端はインデント無しの endif()）。
+      $script:embedBlock = [regex]::Match(
+        $script:hostCMakeCode,
+        '(?sm)^if\(WIN32 AND MSVC AND AZOOKEY_EMBED_MSIX_IDENTITY\)(.*?)^endif\(\)').Groups[1].Value
+    }
+
+    It "guards the embedding with the option" {
+      # ブロックが取れない = ガード条件が変わったか配線ごと消えた。
+      $script:embedBlock | Should -Not -BeNullOrEmpty
+    }
+
+    It "adds the identity manifest as a source of the host target" {
       # 埋め込みが外れると Add-AppxPackage -ExternalLocation で登録しても
       # Package.Current が null になり、DEV-267 の VM smoke が無意味になる。
       # .manifest ソースは CMake が mt.exe へ渡す（vs_link_exe --manifests）。
-      $script:hostCMakeText | Should -Match 'target_sources\(azookey_inference_host'
-      $script:hostCMakeText | Should -Match 'pkg/msix/azookey_inference_host\.exe\.manifest'
+      # 変数定義と target_sources の結び付きを 1 単位で見る（別々の文字列一致だと
+      # target_sources の引数を差し替えても素通りする）。
+      $script:embedBlock | Should -Match 'set\(AZOOKEY_MSIX_APP_MANIFEST[\s\S]*?pkg/msix/azookey_inference_host\.exe\.manifest'
+      $script:embedBlock | Should -Match 'target_sources\(\s*azookey_inference_host\s+PRIVATE\s+"\$\{AZOOKEY_MSIX_APP_MANIFEST\}"\s*\)'
     }
 
     It "does not hand the manifest to the linker directly" {
       # /MANIFEST:EMBED を渡すとリンカが埋め込んでしまい、CMake が続けて呼ぶ
       # mt.exe の入力が 0 になって c10100a7 でビルドが落ちる（実測）。
-      # コメント行（この挙動の説明そのものが /MANIFEST を含む）を除いて判定する。
-      $code = ($script:hostCMakeText -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
-      $code | Should -Not -Match '/MANIFEST'
+      $script:hostCMakeCode | Should -Not -Match '/MANIFEST'
     }
 
-    It "exposes the embedding as a documented option" {
-      $script:rootCMakeText | Should -Match 'option\(AZOOKEY_EMBED_MSIX_IDENTITY'
-      $script:hostCMakeText | Should -Match 'AZOOKEY_EMBED_MSIX_IDENTITY'
+    It "defaults the embedding option to ON" {
+      # 既定を OFF にすると if ブロックが実行されず、他の静的チェックは全て通るのに
+      # exe から <msix> が消える。既定値まで含めて固定する。
+      $script:rootCMakeCode | Should -Match '(?s)option\(\s*AZOOKEY_EMBED_MSIX_IDENTITY\s+"[^"]*"\s+ON\s*\)'
+    }
+
+    It "verifies the built executable in CI" {
+      # 静的チェックはソースの記述しか見られない。実際に埋め込まれたかは
+      # 成果物の RT_MANIFEST を見る CI ステップが担保する。
+      $workflow = Get-Content -Raw -LiteralPath (
+        Join-Path $script:repoRoot ".github/workflows/windows.yml")
+      $workflow | Should -Match 'verify-msix-identity-embedding\.ps1'
+      $workflow | Should -Match 'MsixIdentity\s*=\s*''\$\{\{\s*steps\.verify_identity\.outcome\s*\}\}'''
     }
   }
 

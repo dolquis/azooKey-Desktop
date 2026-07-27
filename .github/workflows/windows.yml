@@ -149,6 +149,17 @@ jobs:
           cmake --build --preset ${{ matrix.preset }} 2>&1 | Tee-Object -FilePath build-${{ matrix.config }}.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # 成果物から RT_MANIFEST を取り出して <msix> identity を確認する（DEV-101 / M28）。
+      # CMake 配線の静的チェックだけでは「埋め込みが実際に効いているか」は分からず、
+      # 外れても症状は実機（Package.Current が null）でしか出ないため、ビルド直後に落とす。
+      - name: Verify MSIX identity embedding
+        id: verify_identity
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/verify-msix-identity-embedding.ps1 -ExePath build/${{ matrix.preset }}/inference-host/azookey_inference_host.exe
+
       - name: Report sccache stats
         if: always()
         shell: pwsh
@@ -231,12 +242,15 @@ jobs:
           $results = [ordered]@{
             Configure = '${{ steps.configure.outcome }}'
             Build = '${{ steps.build.outcome }}'
+            MsixIdentity = '${{ steps.verify_identity.outcome }}'
             Tests = '${{ steps.run_tests.outcome }}'
           }
           $failed = @()
           foreach ($entry in $results.GetEnumerator()) {
             Write-Host "$($entry.Key): $($entry.Value)"
-            if ($entry.Value -ne 'success') {
+            # MsixIdentity は Build 失敗時に skipped になる。その場合は Build 自体が
+            # 失敗として計上されるため、skipped を重ねて報告しない。
+            if ($entry.Value -ne 'success' -and $entry.Value -ne 'skipped') {
               $failed += $entry.Key
             }
           }

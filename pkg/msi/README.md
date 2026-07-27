@@ -47,6 +47,13 @@ MSI は実行ファイルを同梱し、スタートメニューへ `azooKey Set
 TIP DLL の `DllRegisterServer` に COM クラス、TSF プロファイル、カテゴリの登録を委譲します。
 アンインストール時はファイル削除前に `msiexec /z` を実行します。
 どちらの経路にも、後続処理が失敗した場合の rollback action を設定しています。
+64-bit TIP を確実に登録するため、カスタムアクションは
+`%SystemRoot%\System32\msiexec.exe`（WiX の `System64Folder`）を使用します。
+
+通常の Windows 11 では `%ProgramFiles%` から
+`ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）の読み取り・実行 ACL を継承するため、
+MSI は独自の ACL を追加しません。DEV-673 の実機ゲートでは、インストール先の継承 ACL と、
+Microsoft Store / Edge など AppContainer アプリでの日本語入力を確認します。
 
 GGUF モデルと CUDA ランタイムは base MSI に同梱しません。
 モデルは初回取得経路、CUDA は optional add-on で扱います。

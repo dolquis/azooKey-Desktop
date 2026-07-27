@@ -42,7 +42,7 @@
               KeyPath="yes" />
         </Component>
 
-        <Component Id="LicenseComponent">
+        <Component Id="LicenseComponent" Guid="ADA29AB6-2AFF-4C87-827F-9C154498BBEE">
           <File
               Id="LicenseFile"
               Source="$(LicensePath)"
@@ -50,7 +50,7 @@
               KeyPath="yes" />
         </Component>
 
-        <Component Id="ThirdPartyLicensesComponent">
+        <Component Id="ThirdPartyLicensesComponent" Guid="493F6E91-8201-471D-86BE-F32F17B86D3D">
           <File
               Id="ThirdPartyLicensesFile"
               Source="$(ThirdPartyLicensesPath)"
@@ -58,7 +58,7 @@
               KeyPath="yes" />
         </Component>
 
-        <?if $(SettingsExePath) != "__NOT_PROVIDED__" ?>
+        <?if "$(SettingsExePath)" != "__NOT_PROVIDED__" ?>
         <Component Id="SettingsComponent" Guid="4FF5479D-974F-4888-84F8-DA16C599F44D">
           <File
               Id="SettingsExe"
@@ -83,7 +83,7 @@
       <ComponentRef Id="VCRuntimeComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
-      <?if $(SettingsExePath) != "__NOT_PROVIDED__" ?>
+      <?if "$(SettingsExePath)" != "__NOT_PROVIDED__" ?>
       <ComponentRef Id="SettingsComponent" />
       <?endif?>
     </Feature>
@@ -97,35 +97,35 @@
     <CustomAction
         Id="RegisterTip"
         Directory="INSTALLFOLDER"
-        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
+        ExeCommand="&quot;[System64Folder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
         Execute="deferred"
         Impersonate="no"
         Return="check" />
     <CustomAction
-        Id="RollbackRegisterTip"
+        Id="RegisterTipOnUninstallRollback"
         Directory="INSTALLFOLDER"
-        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
+        ExeCommand="&quot;[System64Folder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
         Execute="rollback"
         Impersonate="no"
-        Return="check" />
+        Return="ignore" />
     <CustomAction
         Id="UnregisterTip"
         Directory="INSTALLFOLDER"
-        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
+        ExeCommand="&quot;[System64Folder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
         Execute="deferred"
         Impersonate="no"
         Return="check" />
     <CustomAction
-        Id="RollbackUnregisterTip"
+        Id="UnregisterTipOnInstallRollback"
         Directory="INSTALLFOLDER"
-        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
+        ExeCommand="&quot;[System64Folder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
         Execute="rollback"
         Impersonate="no"
-        Return="check" />
+        Return="ignore" />
 
     <InstallExecuteSequence>
       <Custom
-          Action="RollbackRegisterTip"
+          Action="RegisterTipOnUninstallRollback"
           Before="UnregisterTip"
           Condition="$TipComponent = 2" />
       <Custom
@@ -133,12 +133,12 @@
           Before="RemoveFiles"
           Condition="$TipComponent = 2" />
       <Custom
-          Action="RollbackUnregisterTip"
+          Action="UnregisterTipOnInstallRollback"
           After="InstallFiles"
           Condition="$TipComponent = 3" />
       <Custom
           Action="RegisterTip"
-          After="RollbackUnregisterTip"
+          After="UnregisterTipOnInstallRollback"
           Condition="$TipComponent = 3" />
     </InstallExecuteSequence>
   </Package>

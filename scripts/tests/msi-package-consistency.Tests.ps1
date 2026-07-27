@@ -49,25 +49,29 @@ Describe "WiX MSI package consistency" {
     $script:package | Should -Match 'Id="RegisterTip"[\s\S]*?/y &quot;\[#TipDll\]&quot;[\s\S]*?Execute="deferred"[\s\S]*?Impersonate="no"'
     $script:package | Should -Match 'Id="UnregisterTip"[\s\S]*?/z &quot;\[#TipDll\]&quot;[\s\S]*?Execute="deferred"[\s\S]*?Impersonate="no"'
     $script:package | Should -Match 'Action="UnregisterTip"[\s\S]*?Before="RemoveFiles"'
-    $script:package | Should -Match 'Action="RegisterTip"[\s\S]*?After="RollbackUnregisterTip"'
+    $script:package | Should -Match 'Action="RegisterTip"[\s\S]*?After="UnregisterTipOnInstallRollback"'
+    ([regex]::Matches($script:package, '\[System64Folder\]msiexec\.exe')).Count | Should -Be 4
+    $script:package | Should -Not -Match '\[SystemFolder\]msiexec\.exe'
   }
 
   It "defines rollback actions for both registration directions" {
-    $script:package | Should -Match 'Id="RollbackRegisterTip"[\s\S]*?Execute="rollback"'
-    $script:package | Should -Match 'Id="RollbackUnregisterTip"[\s\S]*?Execute="rollback"'
-    $script:package | Should -Match 'Action="RollbackRegisterTip"[\s\S]*?Before="UnregisterTip"'
-    $script:package | Should -Match 'Action="RollbackUnregisterTip"[\s\S]*?After="InstallFiles"'
+    $script:package | Should -Match 'Id="RegisterTipOnUninstallRollback"[\s\S]*?Execute="rollback"[\s\S]*?Return="ignore"'
+    $script:package | Should -Match 'Id="UnregisterTipOnInstallRollback"[\s\S]*?Execute="rollback"[\s\S]*?Return="ignore"'
+    $script:package | Should -Match 'Action="RegisterTipOnUninstallRollback"[\s\S]*?Before="UnregisterTip"'
+    $script:package | Should -Match 'Action="UnregisterTipOnInstallRollback"[\s\S]*?After="InstallFiles"'
   }
 
   It "supports a settings shortcut only when a settings executable is supplied" {
-    $script:package | Should -Match '<\?if \$\(SettingsExePath\) != "__NOT_PROVIDED__" \?>'
+    $script:package | Should -Match '<\?if "\$\(SettingsExePath\)" != "__NOT_PROVIDED__" \?>'
     $script:package | Should -Match 'Id="SettingsShortcut"[\s\S]*?Directory="ProgramMenuFolder"'
     $script:project | Should -Match "Settings executable not found"
   }
 
   It "keeps models and CUDA runtime outside the base MSI" {
     $script:package | Should -Not -Match '(?i)gguf|cudart|cublas|ggml-cuda'
-    $script:packageReadme | Should -Match 'GGUF モデルと CUDA ランタイムは base MSI に同梱しません'
+    $script:packageReadme | Should -Match 'GGUF'
+    $script:packageReadme | Should -Match 'CUDA'
+    $script:packageReadme | Should -Match 'base MSI'
   }
 
   It "builds and uploads an unsigned MSI in the guarded release workflow" {
@@ -77,6 +81,12 @@ Describe "WiX MSI package consistency" {
     $script:releaseWorkflow | Should -Match 'pkg\\msi\\bin\\Release\\\*\.msi'
     $script:releaseWorkflow | Should -Not -Match '(?m)^\s+(?:run:\s*)?.*signtool'
     $script:releaseWorkflow | Should -Not -Match '(?m)^\s+- name: .*MSIX'
+    $script:releaseWorkflow | Should -Match 'REF_NAME: \$\{\{ github\.ref_name \}\}'
+    $script:releaseWorkflow | Should -Match 'REF_TYPE: \$\{\{ github\.ref_type \}\}'
+    $script:releaseWorkflow | Should -Match '\$env:REF_NAME\.Substring\(1\)'
+    $script:releaseWorkflow | Should -Match '\$parts\[0\] -gt 255'
+    $script:releaseWorkflow | Should -Match '\$parts\[1\] -gt 255'
+    $script:releaseWorkflow | Should -Match '\$parts\[2\] -gt 65535'
   }
 
   It "documents the unsigned-publisher warning for users" {

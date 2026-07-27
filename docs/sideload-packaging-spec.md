@@ -617,13 +617,17 @@ GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への
 ### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
 
 **AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
-有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への RX 付与が
-要る。Option A（external-location / `regsvr32` 機械全体登録）や開発用
-`scripts/register-dev.ps1` 経路ではこれが既定で付かないため、
-`icacls <dll> /grant "*S-1-15-2-1:(RX)"` 相当を登録ステップに加える（x64 / x86 両 DLL、
-ビルド時・登録時）。先行実装 fkunn1326/azooKey-Windows はビルド時+インストール時に
-二重付与している。Option B/C（通常 MSIX）はパッケージ側で解決されるため不要。
-設計・実機検証は DEV-204、DEV-101（com4:ComServer ACL 制限）と連動。
+有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への RX が
+必要である。通常の Windows 11 では `%ProgramFiles%` がこの ACE を持つため、§4 の MSI は
+インストール先へ継承させ、独自の ACL を追加しない。実機ゲート DEV-673 では、継承 ACL と
+Microsoft Store / Edge など AppContainer アプリでの入力を確認する。
+
+一方、Option A（external-location / `regsvr32` 機械全体登録）や開発用
+`scripts/register-dev.ps1` で `%ProgramFiles%` 外に配置する場合は、配置先の ACL を確認し、
+必要なら `icacls <dll> /grant "*S-1-15-2-1:(RX)"` 相当を登録ステップに加える。
+先行実装 fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与している。
+Option B/C（通常 MSIX）はパッケージ側で解決されるため不要。
+設計・実機検証は DEV-204、DEV-101（com4:ComServer ACL 制限）と連動する。
 
 **常駐起動（参考）**: Host / launcher のログオン常駐を Run キーでなく **Task Scheduler
 （LogonTrigger + RunLevel=HighestAvailable）+ VBS 非表示起動**で実現し、アンインストール
@@ -776,75 +780,19 @@ service principal 経路の例を示す。
 
 ### 2.3 CI ステップ
 
-`.github/workflows/release.yml` を**雛形として作成済み**（DEV-100）。本ファイルが
-実装の正典であり、本節の YAML はその設計の写しである。雛形は以下の前提で**既定無効**:
+現行の `.github/workflows/release.yml` は、§4 の未署名 MSI をビルドする経路である。
+job 全体を repository variable `RELEASE_ENABLED == 'true'` でガードし、`v*` タグでは
+MSI を Draft Release に添付する。`workflow_dispatch` は同じガード下でビルド確認に使い、
+タグ以外では Release を作成しない。
 
-* job 全体を repository variable `RELEASE_ENABLED == 'true'` でガードし、誤発火を防ぐ。
-* MSIX ビルド（`pkg/msix/Package.wapproj`）は M28 PoC（DEV-101）確定後に作成する。
-* 署名ステップは経路 A/B/C（§2.0）の 3 ルートをコメントで併記し、採用ルートは
-  人間ゲート課題 D-04-A（`gate:human-required`）で確定してから 1 つだけ有効化する。
-* 各ルートの Secrets スキーマは §2.2 / §2.2.A / §2.2.B の表を正典とする。
-
-有効化手順（M28/M29 完了・証明書手当て済み後に人間が実施）は同ファイル冒頭コメントに記す。
-
-```yaml
-name: Release
-on:
-  push:
-    tags: ['v*']
-jobs:
-  build:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Configure
-        run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
-
-      - name: Build
-        run: cmake --build --preset windows-release
-
-      - name: Test
-        run: ctest --preset windows-release --no-tests=error
-
-      - name: Import certificate
-        run: |
-          $bytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_PFX_BASE64 }}")
-          [IO.File]::WriteAllBytes("$env:TEMP\cert.pfx", $bytes)
-          $pwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_PFX_PASSWORD }}" -AsPlainText -Force
-          Import-PfxCertificate -FilePath $env:TEMP\cert.pfx -Password $pwd -CertStoreLocation Cert:\CurrentUser\My
-
-      - name: Sign binaries
-        run: |
-          $tools = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64"
-          & "$tools\signtool.exe" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-              /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
-              build\tsf-tip\Release\azookey_tsf_tip.dll `
-              build\inference-host\Release\azookey_inference_host.exe
-
-      - name: Build MSIX
-        run: msbuild pkg\msix\Package.wapproj /p:Configuration=Release /p:Platform=x64
-
-      - name: Sign MSIX
-        run: |
-          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-              /sha1 ${{ secrets.WINDOWS_CERT_THUMBPRINT }} `
-              pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
-
-      - name: Upload Release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          files: pkg\msix\AppPackages\Package_1.0.0_Test\Package_1.0.0_x64.msix
-          draft: true
-```
+スタンドアロン MSIX と自前コード署名は DEV-255 で延期しており、この workflow へ
+署名処理を混在させない。Store 用 MSIX の CI は DEV-416 で別経路として設計する。
+署名経路を再開する場合は、§2.0 で経路を確定してから workflow と本節を同時に更新する。
 
 ### 2.4 ローカル署名検証手順
 
-CI で署名した MSIX を手元で確認する。Windows SDK の `signtool` で:
+署名経路を再開した場合は、CI で署名した MSIX を手元で確認する。
+Windows SDK の `signtool` で:
 
 ```powershell
 # 署名チェーンを検証（exit 0 で成功）
@@ -1247,12 +1195,14 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 
 MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経路で対応する。
 
-> **設定アプリと WinUI 3 ランタイムの同梱（必須）**: TIP の `ITfFnConfigure`（§3.5）は
-> `azookey_settings.exe` を起動するため、本経路でも **設定アプリ本体と WinUI 3 ランタイムを
-> ペイロードに含める**。MSIX フレームワーク依存が使えない LTSC 等では、設定アプリを
-> **self-contained 配置（§1.3）でビルドし、その出力フォルダ一式（ランタイム同梱）を配置する**
-> のが最も確実。self-contained を採らない場合は `WindowsAppRuntimeInstall.exe` をペイロードに
-> 含めてインストール時に実行する。TIP DLL / Host は WinUI 3 非依存（§1.3）。
+> **設定アプリと WinUI 3 ランタイムの同梱（target 実装後に必須）**:
+> 現行の CMake 構成には設定アプリ target がなく、TIP も `ITfFnConfigure`（§3.5）を
+> 実装していないため、MVP MSI は設定アプリを同梱しない。target と起動経路を実装した後は、
+> `azookey_settings.exe` と WinUI 3 ランタイムをペイロードに含める。
+> MSIX フレームワーク依存が使えない LTSC 等では、設定アプリを
+> **self-contained 配置（§1.3）でビルドし、その出力フォルダ一式を配置する**。
+> self-contained を採らない場合は `WindowsAppRuntimeInstall.exe` をペイロードに含めて
+> インストール時に実行する。TIP DLL / Host は WinUI 3 非依存（§1.3）。
 
 ### 4.1 WiX 構成
 
@@ -1286,13 +1236,13 @@ WiX Toolset は MSBuild SDK の 5.0.2 に固定し、x64 の per-machine MSI を
 
     <CustomAction Id="RegisterTip"
                   Directory="INSTALLFOLDER"
-                  ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
+                  ExeCommand="&quot;[System64Folder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
                   Execute="deferred"
                   Impersonate="no"
                   Return="check" />
     <CustomAction Id="UnregisterTip"
                   Directory="INSTALLFOLDER"
-                  ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
+                  ExeCommand="&quot;[System64Folder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
                   Execute="deferred"
                   Impersonate="no"
                   Return="check" />
@@ -1318,10 +1268,9 @@ base MSI には TIP、Inference Host、`LICENSE`、`THIRD_PARTY_LICENSES` に加
 TIP と Host と同じ `%ProgramFiles%\azooKey` へ配置する。これにより、
 VC++ Redistributable が未導入のクリーンな Windows 11 でも起動可能にする。
 GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base MSI へ含めない。
-設定アプリは `SettingsExePath` が指定された場合にだけ同梱し、スタートメニューへ
-`azooKey Settings` を追加する。
-現行の CMake 構成には設定アプリ target がないため、release workflow は同 property を
-指定しない。
+設定アプリ target の実装後は `SettingsExePath` を必須入力として同梱し、
+スタートメニューへ `azooKey Settings` を追加する。現行の CMake 構成には target がないため、
+release workflow は同 property を指定しない。この後続実装は Linear の DEV-674 で追跡する。
 
 ### 4.2 アンインストール時
 

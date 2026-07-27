@@ -13,7 +13,7 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # 雛形の手動 dry-run 用。RELEASE_ENABLED ガードで本体は skip される。
+  # RELEASE_ENABLED ガードを維持したまま手動実行を確認できる。
 
   workflow_dispatch:
 permissions:
@@ -43,14 +43,29 @@ jobs:
       - name: Resolve MSI version
         id: msi-version
         shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $version = "${{ github.ref_name }}".Substring(1)
+          if ($env:REF_TYPE -eq "tag") {
+            $version = $env:REF_NAME.Substring(1)
           } else {
             $version = "0.0.0"
           }
           if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
             throw "Release tag must use vMAJOR.MINOR.PATCH: $version"
+          }
+
+          $parts = @()
+          foreach ($field in $version.Split('.')) {
+            [uint32]$parsed = 0
+            if (-not [uint32]::TryParse($field, [ref]$parsed)) {
+              throw "MSI version field exceeds the supported integer range: $version"
+            }
+            $parts += $parsed
+          }
+          if ($parts[0] -gt 255 -or $parts[1] -gt 255 -or $parts[2] -gt 65535) {
+            throw "MSI version must satisfy MAJOR <= 255, MINOR <= 255, PATCH <= 65535: $version"
           }
           "version=$version" >> $env:GITHUB_OUTPUT
       - name: Resolve app-local MSVC runtime

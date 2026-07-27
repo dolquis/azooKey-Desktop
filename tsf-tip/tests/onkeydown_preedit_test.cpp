@@ -1146,6 +1146,86 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceUsesCachedCandidatesWithoutPending) {
   EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "蚊");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+
+  std::vector<azookey::ipc::CandidateField> late_candidates(2);
+  late_candidates[0].surface = "価";
+  late_candidates[1].surface = "課";
+  h.service.set_cached_candidates_for_test(std::move(late_candidates));
+
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press(VK_DOWN));
+  EXPECT_TRUE(h.Press(VK_RETURN));
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x79d1'));
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NumberSelectionCommitsCorrespondingCandidate) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+
+  std::vector<azookey::ipc::CandidateField> candidates(3);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  candidates[2].surface = "課";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('2'));
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x79d1'));
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, OutOfRangeSelectionCommitsPreeditAsIs) {
+  TextServiceHarness h;
+  FakeRange range;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+
+  std::vector<azookey::ipc::CandidateField> candidates(1);
+  candidates[0].surface = "蚊";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+
+  h.service.set_selected_candidate_index_for_test(4);
+  h.context.selection_range = &range;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(SUCCEEDED(h.service.commit_selected_for_test(&h.context)));
+
+  EXPECT_EQ(range.set_text_count, 1);
+  EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
+  EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, ReadingChangesClearPendingCandidateWindowShow) {
   TextServiceHarness h;
 

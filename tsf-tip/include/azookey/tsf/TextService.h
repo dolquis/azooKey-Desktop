@@ -112,6 +112,7 @@ class TextService final : public ITfTextInputProcessorEx,
   const std::vector<ipc::CandidateField>& shown_candidates_for_test() const {
     return shown_candidates_;
   }
+  void set_selected_candidate_index_for_test(int index) { selected_candidate_idx_ = index; }
   bool has_pending_commit_observation_for_test() const {
     return pending_commit_observation_.has_value();
   }

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="azooKey"
+      Manufacturer="dolquis"
+      Version="$(ProductVersion)"
+      Language="1041"
+      UpgradeCode="6A30BD56-AA6B-41E0-B786-26F9739303F4"
+      Scope="perMachine"
+      InstallerVersion="500"
+      Compressed="yes">
+    <SummaryInformation Description="azooKey Windows Japanese input method" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of azooKey is already installed." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="azooKey">
+        <Component Id="TipComponent" Guid="85A678CC-4D73-4C41-B2CF-E0E458AB4AE0">
+          <File
+              Id="TipDll"
+              Source="$(TipDllPath)"
+              Name="azookey_tsf_tip.dll"
+              KeyPath="yes" />
+        </Component>
+
+        <Component Id="HostComponent" Guid="086E7A58-AB71-4DEA-8F84-08B25B9A48B6">
+          <File
+              Id="HostExe"
+              Source="$(HostExePath)"
+              Name="azookey_inference_host.exe"
+              KeyPath="yes" />
+        </Component>
+
+        <Component Id="VCRuntimeComponent" Guid="A6B28239-BB59-4013-9BCA-6FE5E35B4A57">
+          <File Id="Msvcp140Dll" Source="$(VCRuntimeDir)\msvcp140.dll" />
+          <File Id="Vcruntime140Dll" Source="$(VCRuntimeDir)\vcruntime140.dll" />
+          <File
+              Id="Vcruntime140_1Dll"
+              Source="$(VCRuntimeDir)\vcruntime140_1.dll"
+              KeyPath="yes" />
+        </Component>
+
+        <Component Id="LicenseComponent">
+          <File
+              Id="LicenseFile"
+              Source="$(LicensePath)"
+              Name="LICENSE.txt"
+              KeyPath="yes" />
+        </Component>
+
+        <Component Id="ThirdPartyLicensesComponent">
+          <File
+              Id="ThirdPartyLicensesFile"
+              Source="$(ThirdPartyLicensesPath)"
+              Name="THIRD_PARTY_LICENSES.txt"
+              KeyPath="yes" />
+        </Component>
+
+        <?if $(SettingsExePath) != "__NOT_PROVIDED__" ?>
+        <Component Id="SettingsComponent" Guid="4FF5479D-974F-4888-84F8-DA16C599F44D">
+          <File
+              Id="SettingsExe"
+              Source="$(SettingsExePath)"
+              Name="azookey_settings.exe"
+              KeyPath="yes">
+            <Shortcut
+                Id="SettingsShortcut"
+                Directory="ProgramMenuFolder"
+                Name="azooKey Settings"
+                Description="Configure azooKey"
+                WorkingDirectory="INSTALLFOLDER" />
+          </File>
+        </Component>
+        <?endif?>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="azooKey" Level="1">
+      <ComponentRef Id="TipComponent" />
+      <ComponentRef Id="HostComponent" />
+      <ComponentRef Id="VCRuntimeComponent" />
+      <ComponentRef Id="LicenseComponent" />
+      <ComponentRef Id="ThirdPartyLicensesComponent" />
+      <?if $(SettingsExePath) != "__NOT_PROVIDED__" ?>
+      <ComponentRef Id="SettingsComponent" />
+      <?endif?>
+    </Feature>
+
+    <!--
+      DllRegisterServer also registers the TSF profile and categories, which
+      cannot be represented completely by MSI registry tables. Use the
+      installed DLL path so the COM InprocServer32 value never points at a
+      temporary custom-action extraction directory.
+    -->
+    <CustomAction
+        Id="RegisterTip"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
+        Execute="deferred"
+        Impersonate="no"
+        Return="check" />
+    <CustomAction
+        Id="RollbackRegisterTip"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
+        Execute="rollback"
+        Impersonate="no"
+        Return="check" />
+    <CustomAction
+        Id="UnregisterTip"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
+        Execute="deferred"
+        Impersonate="no"
+        Return="check" />
+    <CustomAction
+        Id="RollbackUnregisterTip"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
+        Execute="rollback"
+        Impersonate="no"
+        Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom
+          Action="RollbackRegisterTip"
+          Before="UnregisterTip"
+          Condition="$TipComponent = 2" />
+      <Custom
+          Action="UnregisterTip"
+          Before="RemoveFiles"
+          Condition="$TipComponent = 2" />
+      <Custom
+          Action="RollbackUnregisterTip"
+          After="InstallFiles"
+          Condition="$TipComponent = 3" />
+      <Custom
+          Action="RegisterTip"
+          After="RollbackUnregisterTip"
+          Condition="$TipComponent = 3" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

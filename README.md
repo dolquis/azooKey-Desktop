@@ -70,6 +70,18 @@ Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的に�
 
 `scripts/test-powershell-quality.ps1` は `PSScriptAnalyzer` と `Pester` のローカル PowerShell モジュールを使い、開発用 TIP 登録スクリプトの静的解析と安全な分岐テストを実行します。実際の machine-wide 登録は行いません。
 
+## 配布パッケージ
+
+MVP の直接配布には、x64 の per-machine **未署名 MSI** を使用します。
+MSI は TIP、Inference Host、および必要な MSVC runtime を同梱します。
+未署名のため、インストール時に Windows Defender SmartScreen の警告と
+UAC の「不明な発行元」が表示されます。
+配布物は本リポジトリの GitHub Releases から取得し、出所を確認してから実行してください。
+
+MSI のビルド手順と同梱範囲は [`pkg/msi/README.md`](./pkg/msi/README.md)、
+配布方針は [`docs/sideload-packaging-spec.md`](./docs/sideload-packaging-spec.md) §4 を
+参照してください。
+
 ## TIP の登録 / 解除（Windows、管理者権限）
 
 ```powershell

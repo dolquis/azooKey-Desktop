@@ -1256,38 +1256,43 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経
 
 ### 4.1 WiX 構成
 
-`pkg/wix/Product.wxs`（新規）：
+`pkg/msi/Package.wxs` と `pkg/msi/azooKey.wixproj` を正典とする。
+WiX Toolset は MSBuild SDK の 5.0.2 に固定し、x64 の per-machine MSI を生成する。
+配置先は `%ProgramFiles%\azooKey` とする。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="azooKey" Manufacturer="dolquis" Version="1.0.0" UpgradeCode="...">
-    <Feature Id="Main" Title="azooKey">
-      <ComponentGroupRef Id="Files" />
-      <ComponentRef Id="RegisterTip" />
-      <ComponentRef Id="SettingsApp" />
-    </Feature>
+  <Package Name="azooKey"
+           Manufacturer="dolquis"
+           Version="$(ProductVersion)"
+           UpgradeCode="..."
+           Scope="perMachine">
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="azooKey">
+        <Component Id="TipComponent" Guid="...">
+          <File Id="TipDll"
+                Source="$(TipDllPath)"
+                Name="azookey_tsf_tip.dll"
+                KeyPath="yes" />
+        </Component>
+        <Component Id="HostComponent" Guid="...">
+          <File Source="$(HostExePath)"
+                Name="azookey_inference_host.exe"
+                KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
 
-    <Component Id="RegisterTip" Directory="INSTALLFOLDER" Guid="...">
-      <File Source="$(var.TipDll)" />
-      <RegistryKey Root="HKCU"
-                   Key="Software\Classes\CLSID\{kTextServiceClsid}">
-        <RegistryValue Type="string" Value="azooKey TIP" />
-      </RegistryKey>
-      <!-- ... profile / category 登録 ... -->
-    </Component>
-
-    <!-- 設定アプリ本体 + WinUI 3 ランタイム。ITfFnConfigure(§3.5) の起動先。
-         self-contained 配置（§1.3）では azookey_settings 出力の WASDK ランタイム DLL 群も
-         同梱する（ComponentGroup へ harvest）。framework-dependent の場合は
-         WindowsAppRuntimeInstall.exe を実行する CustomAction を別途追加する。 -->
-    <Component Id="SettingsApp" Directory="INSTALLFOLDER" Guid="...">
-      <File Source="$(var.SettingsExe)" />
-    </Component>
-
-    <CustomAction Id="RegisterTipDll"
-                  BinaryRef="RegSvr"
-                  ExeCommand="/s [INSTALLFOLDER]azookey_tsf_tip.dll"
+    <CustomAction Id="RegisterTip"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /y &quot;[#TipDll]&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <CustomAction Id="UnregisterTip"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /z &quot;[#TipDll]&quot;"
                   Execute="deferred"
                   Impersonate="no"
                   Return="check" />
@@ -1295,13 +1300,33 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経
 </Wix>
 ```
 
-カスタムアクションで `regsvr32 /s azookey_tsf_tip.dll` を呼び、
-`DllRegisterServer` に処理を委譲する（M2 で実装済み）。
+ファイル配置後に `msiexec /y [#TipDll]` を実行し、インストール済み DLL の
+`DllRegisterServer` に COM クラス、TSF プロファイル、カテゴリの登録を委譲する。
+Binary table に格納した DLL を直接呼ぶ方式は採らない。
+`DllRegisterServer` が `GetModuleFileNameW` で自身のパスを登録するため、一時展開した
+custom-action DLL を呼ぶと `InprocServer32` が一時パスを指してしまうからである。
+
+登録と解除は、いずれも deferred、`Impersonate="no"`、`Return="check"` とする。
+インストール時は `InstallFiles` 後に登録し、失敗時は rollback action で解除する。
+アンインストール時は `RemoveFiles` 前に解除し、失敗時は rollback action で再登録する。
+Major Upgrade は `afterInstallInitialize` で旧版を先に削除し、旧版の解除後に新版を登録する。
+
+base MSI には TIP、Inference Host、`LICENSE`、`THIRD_PARTY_LICENSES` に加え、
+両バイナリが直接依存する
+`msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` を app-local で同梱する。
+これらはビルドに使用した MSVC toolset の x64 `Microsoft.VC*.CRT` から取得し、
+TIP と Host と同じ `%ProgramFiles%\azooKey` へ配置する。これにより、
+VC++ Redistributable が未導入のクリーンな Windows 11 でも起動可能にする。
+GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base MSI へ含めない。
+設定アプリは `SettingsExePath` が指定された場合にだけ同梱し、スタートメニューへ
+`azooKey Settings` を追加する。
+現行の CMake 構成には設定アプリ target がないため、release workflow は同 property を
+指定しない。
 
 ### 4.2 アンインストール時
 
-`regsvr32 /u /s azookey_tsf_tip.dll` で `DllUnregisterServer` を呼ぶ。
-WiX ScheduleService の `InstallFinalize` で実行。
+`RemoveFiles` の前に `msiexec /z [#TipDll]` で `DllUnregisterServer` を呼ぶ。
+TIP DLL を削除した後では解除できないため、この順序を変更しない。
 
 ### 4.3 Inno Setup（代替）
 

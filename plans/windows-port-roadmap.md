@@ -327,7 +327,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 後に HKLM の COM in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する round-trip テスト。再登録が成功することに加え、Debug ビルドではカテゴリ登録失敗を注入し、COM / TSF の部分登録が残らず明示的な unregister なしで再試行できることも確認する。`com_smoke_test.cpp` に実装済み。対話的 TSF セッションを要するため opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**（headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
 
 長期（Phase 4 / 配布前に必須）:
-5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID / TSF プロファイルキーが残らない smoke（`Add-AppxPackage` → 登録確認 → `Remove-AppxPackage` → 残骸 0）。配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。
+5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID / TSF プロファイルキーが残らない smoke（`Add-AppxPackage` → 登録確認 → `Remove-AppxPackage` → 残骸 0）。配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。宣言値の静的整合（identity manifest と app 側 `<msix>` 3 属性、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId`、Option A の不変条件、ビルド埋め込み配線）は `scripts/tests/msix-identity-consistency.Tests.ps1` に実装済みで CI で走る。残るギャップは実機 VM での登録・残骸 round-trip（`compat-test/msix_install_uninstall.ps1`、対話セッションとパッケージ登録権限を要するため CI では走らない）。
 6. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
 7. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 

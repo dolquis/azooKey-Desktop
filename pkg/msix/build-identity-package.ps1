@@ -29,15 +29,17 @@
   README.md「署名」参照）。
 
 .PARAMETER PfxPassword
-  .pfx のパスワード（PoC 簡便のため平文。CI では Key Vault 等を使う）。
+  .pfx のパスワード（SecureString）。コマンド履歴やスクリプトへの平文残留を避けるため
+  Read-Host -AsSecureString で渡す。CI では Key Vault 等の署名経路を使う（spec §2.2.A/B）。
 
 .EXAMPLE
   # 署名なしでパッケージだけ作る（schema/pack の確認用）
   pwsh -File .\build-identity-package.ps1
 
 .EXAMPLE
-  # dev cert で署名まで行う
-  pwsh -File .\build-identity-package.ps1 -PfxPath .\azooKey-dev.pfx -PfxPassword 'devpw'
+  # dev cert で署名まで行う（パスワードは対話入力）
+  pwsh -File .\build-identity-package.ps1 -PfxPath "$env:TEMP\azooKey-dev-certs\azooKey-dev.pfx" `
+    -PfxPassword (Read-Host "pfx password" -AsSecureString)
 
 .NOTES
   Windows 専用。MakeAppx.exe / SignTool.exe は Windows SDK（既定
@@ -48,7 +50,7 @@ param(
   [string]$ManifestDir = $PSScriptRoot,
   [string]$OutMsix = "",
   [string]$PfxPath = "",
-  [string]$PfxPassword = ""
+  [securestring]$PfxPassword = $null
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,9 +125,21 @@ if ($PfxPath) {
   $signTool = Find-SdkTool -Name "SignTool.exe"
   Write-Host "SignTool: $signTool"
   $signArgs = @("sign", "/fd", "SHA256", "/a", "/f", $PfxPath)
-  if ($PfxPassword) { $signArgs += @("/p", $PfxPassword) }
-  $signArgs += $OutMsix
-  & $signTool @signArgs
+  # SignTool はパスワードを /p でしか受け取れないため、ここでだけ平文へ戻す。
+  # 変数の寿命を最小化し、署名後に確実に破棄する（プロセス一覧には出るので、
+  # 本番署名は Key Vault / Trusted Signing 経路を使う。spec §2.2.A/B）。
+  $plainPassword = $null
+  try {
+    if ($PfxPassword) {
+      $plainPassword = [System.Net.NetworkCredential]::new("", $PfxPassword).Password
+      $signArgs += @("/p", $plainPassword)
+    }
+    $signArgs += $OutMsix
+    & $signTool @signArgs
+  } finally {
+    $plainPassword = $null
+    $signArgs = $null
+  }
   if ($LASTEXITCODE -ne 0) { throw "SignTool sign が失敗しました (exit $LASTEXITCODE)。" }
   Write-Host "署名完了: $OutMsix" -ForegroundColor Green
   Write-Host "自己署名 cert の場合、公開 .cer を Cert:\CurrentUser\TrustedPeople へ import してから登録すること（README.md 参照）。" -ForegroundColor Yellow

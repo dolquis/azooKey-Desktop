@@ -1,5 +1,8 @@
 param(
   [string]$TipDllPath = "",
+  # Leave the ALL APPLICATION PACKAGES (S-1-15-2-1) grant that register-dev.ps1
+  # added in place. Useful when another TIP build shares the same directory.
+  [switch]$SkipAppContainerAcl,
   # Internal: set when the script relaunches itself elevated. Per-user (HKCU)
   # cleanup runs in the original user's process *before* elevation, so the
   # elevated reentry skips it — otherwise a relaunch under a separate
@@ -9,6 +12,8 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+
+. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")
 
 function Resolve-DevPath {
   param(
@@ -62,6 +67,9 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
   Write-Host "Machine-wide unregistration requires elevation; relaunching as administrator..."
   $relaunchArgs = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" " +
                   "-TipDllPath `"$TipDllPath`" -ElevatedReentry"
+  if ($SkipAppContainerAcl) {
+    $relaunchArgs += " -SkipAppContainerAcl"
+  }
   Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $relaunchArgs
   return
 }
@@ -77,6 +85,19 @@ if (Test-Path $TipDllPath) {
   }
 } else {
   Write-Warning "TIP DLL not found, skipping regsvr32 /u: $TipDllPath"
+}
+
+# Mirror of the registration-time AppContainer grant (register-dev.ps1 /
+# docs/sideload-packaging-spec.md §1.7): take the explicit ALL APPLICATION
+# PACKAGES ACE back off the TIP DLL and its directory so unregistration leaves
+# no residue. Inherited ACEs and protected system paths are never touched, so an
+# MSI install under `%ProgramFiles%` keeps the ACL Windows gave it.
+if (-not $SkipAppContainerAcl) {
+  try {
+    Revoke-TipAppContainerAccess -TipDllPath $TipDllPath
+  } catch {
+    Write-Warning "Could not remove the AppContainer grant from the TIP DLL: $_"
+  }
 }
 
 # Belt-and-suspenders: remove leftover machine-wide registration directly.

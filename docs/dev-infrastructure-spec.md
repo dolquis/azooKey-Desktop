@@ -1584,7 +1584,7 @@ recorder スクリプトは各アプリの対象行（O-01〜O-09 のうち対�
 | Discord / Slack（Electron） | `contenteditable` で `GetTextExt` 精度が低い | best-effort。位置ずれ時はキャレット位置 fallback |
 | Word / Excel / Outlook | UI Automation TextPattern の信頼性が低い | recorder + §13.3.1 チェックリスト。Excel はセル編集と数式バーで context が切り替わる点に注意 |
 | Windows Terminal / PowerShell | conhost 系で TSF level 3 非対応の場面がある | level 1（最小 composition）で確定を優先、候補位置はキャレット概算 |
-| UWP / WinUI（Store apps） | AppContainer で TIP DLL の ACL 付与が必要 | `ALL APPLICATION PACKAGES`（S-1-15-2-1）RX 付与（DEV-204 で扱う）。本ハーネスは Windows Settings を `full`、その他 Store apps を `best-effort` とする |
+| UWP / WinUI（Store apps） | AppContainer で TIP DLL の ACL 付与が必要 | `ALL APPLICATION PACKAGES`（S-1-15-2-1）RX 付与（付与対象・タイミングは `docs/sideload-packaging-spec.md` §1.7 が正典。MSI は継承、開発用登録は `scripts/register-dev.ps1` が付与）。本ハーネスは Windows Settings を `full`、その他 Store apps を `best-effort` とする |
 
 ### 13.4 実装
 

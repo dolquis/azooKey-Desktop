@@ -4,6 +4,7 @@ Describe "development registration scripts" {
     $registerPath = Join-Path (Join-Path $repoRoot "scripts") "register-dev.ps1"
     $unregisterPath = Join-Path (Join-Path $repoRoot "scripts") "unregister-dev.ps1"
     $supervisorPath = Join-Path (Join-Path $repoRoot "scripts") "host-supervisor.ps1"
+    $aclPath = Join-Path (Join-Path $repoRoot "scripts") "AppContainerAcl.ps1"
     $qualityPath = Join-Path (Join-Path $repoRoot "scripts") "test-powershell-quality.ps1"
     $justfilePath = Join-Path $repoRoot "justfile"
 
@@ -74,6 +75,8 @@ Describe "development registration scripts" {
     $script:register = Get-ParsedScript -Path $registerPath
     $script:unregister = Get-ParsedScript -Path $unregisterPath
     $script:supervisor = Get-ParsedScript -Path $supervisorPath
+    $script:acl = Get-ParsedScript -Path $aclPath
+    $script:aclPath = $aclPath
     $script:supervisorPath = $supervisorPath
     $script:qualityText = Get-Content -Raw $qualityPath
     $script:justfileText = Get-Content -Raw $justfilePath
@@ -88,6 +91,17 @@ Describe "development registration scripts" {
       Assert-Condition ($script:registerParameters -contains "ModelPath") "register-dev.ps1 should expose an explicit Zenzai model path."
       Assert-Condition ($script:registerParameters -contains "AllowMockHost") "register-dev.ps1 should expose an explicit fallback-only override."
       Assert-Condition ($script:registerParameters -contains "ElevatedReentry") "register-dev.ps1 should expose ElevatedReentry."
+      Assert-Condition ($script:registerParameters -contains "SkipAppContainerAcl") "register-dev.ps1 should expose an explicit AppContainer ACL opt-out."
+    }
+
+    It "grants AppContainer access to the TIP DLL before registering it" {
+      Assert-Condition ($script:register.Text -match [regex]::Escape('. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")')) "register-dev.ps1 should share the AppContainer ACL helpers."
+      $grantIndex = $script:register.Text.IndexOf('Grant-TipAppContainerAccess -TipDllPath $TipDllPath')
+      $regsvrIndex = $script:register.Text.IndexOf('regsvr32.exe')
+      Assert-Condition ($grantIndex -ge 0) "register-dev.ps1 should grant AppContainer access to the TIP DLL."
+      Assert-Condition ($grantIndex -lt $regsvrIndex) "register-dev.ps1 should grant AppContainer access before regsvr32 advertises the profile."
+      Assert-Condition ($script:register.Text -match 'if\s*\(\s*\$SkipAppContainerAcl\s*\)\s*\{') "register-dev.ps1 should honor the AppContainer ACL opt-out."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('$relaunchArgs += " -SkipAppContainerAcl"')) "register-dev.ps1 should forward the AppContainer ACL opt-out to the elevated reentry."
     }
 
     It "defaults to the llama-enabled build and rejects an accidental mock host" {
@@ -157,6 +171,14 @@ Describe "development registration scripts" {
     It "keeps explicit path and elevated reentry parameters" {
       Assert-Condition ($script:unregisterParameters -contains "TipDllPath") "unregister-dev.ps1 should expose TipDllPath."
       Assert-Condition ($script:unregisterParameters -contains "ElevatedReentry") "unregister-dev.ps1 should expose ElevatedReentry."
+      Assert-Condition ($script:unregisterParameters -contains "SkipAppContainerAcl") "unregister-dev.ps1 should expose an explicit AppContainer ACL opt-out."
+    }
+
+    It "takes the AppContainer grant back off the TIP DLL" {
+      Assert-Condition ($script:unregister.Text -match [regex]::Escape('. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")')) "unregister-dev.ps1 should share the AppContainer ACL helpers."
+      Assert-Condition ($script:unregister.Text -match [regex]::Escape('Revoke-TipAppContainerAccess -TipDllPath $TipDllPath')) "unregister-dev.ps1 should revoke the AppContainer grant."
+      Assert-Condition ($script:unregister.Text -match 'if\s*\(\s*-not\s+\$SkipAppContainerAcl\s*\)\s*\{') "unregister-dev.ps1 should honor the AppContainer ACL opt-out."
+      Assert-Condition ($script:unregister.Text -match [regex]::Escape('$relaunchArgs += " -SkipAppContainerAcl"')) "unregister-dev.ps1 should forward the AppContainer ACL opt-out to the elevated reentry."
     }
 
     It "guards per-user HKCU cleanup from elevated reentry" {
@@ -178,6 +200,133 @@ Describe "development registration scripts" {
       Assert-Condition ($commands -match '/u /s') "unregister-dev.ps1 should call regsvr32 unregister silently."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKLM:\Software\Microsoft\CTF\TIP\$clsid')) "unregister-dev.ps1 should clean HKLM CTF TIP leftovers."
       Assert-Condition ($script:unregister.Text -match [regex]::Escape('HKLM:\Software\WOW6432Node\Microsoft\CTF\TIP\$clsid')) "unregister-dev.ps1 should clean WOW6432Node CTF TIP leftovers."
+    }
+  }
+
+  Context "AppContainerAcl.ps1" {
+    BeforeAll {
+      . $script:aclPath
+      $script:allApplicationPackages = "S-1-15-2-1"
+      $script:onWindows = ($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows
+      $script:readAndExecute = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute
+
+      function Get-AppContainerRule {
+        param(
+          [Parameter(Mandatory=$true)]
+          [string]$Path,
+          [switch]$IncludeInherited
+        )
+
+        return @((Get-Acl -LiteralPath $Path).GetAccessRules(
+            $true,
+            [bool]$IncludeInherited,
+            [Security.Principal.SecurityIdentifier]) |
+          Where-Object { $_.IdentityReference.Value -eq $script:allApplicationPackages })
+      }
+
+      function Initialize-AclSandbox {
+        $directory = Join-Path $TestDrive ([guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        return $directory
+      }
+    }
+
+    It "is included in the canonical PowerShell quality gate" {
+      Assert-Condition ($script:qualityText -match 'Join-Path\s+\$PSScriptRoot\s+"AppContainerAcl\.ps1"') "test-powershell-quality.ps1 should lint the AppContainer ACL helpers."
+    }
+
+    It "targets the well-known ALL APPLICATION PACKAGES SID with read+execute only" {
+      Assert-Condition ($script:acl.Text -match [regex]::Escape('SecurityIdentifier("S-1-15-2-1")')) "AppContainerAcl.ps1 should use the well-known ALL APPLICATION PACKAGES SID."
+      Assert-Condition ($script:acl.Text -match 'FileSystemRights\]::ReadAndExecute') "AppContainerAcl.ps1 should grant read+execute."
+      Assert-Condition ($script:acl.Text -notmatch 'FileSystemRights\]::(Write|Modify|FullControl)') "AppContainerAcl.ps1 should never grant write access to AppContainer apps."
+    }
+
+    It "grants read+execute idempotently and revokes it again" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      $dllPath = Join-Path (Initialize-AclSandbox) "azookey_tsf_tip.dll"
+      Set-Content -LiteralPath $dllPath -Value "stand-in for the TIP DLL"
+
+      Assert-Condition ((Grant-AppContainerReadExecute -Path $dllPath) -eq $true) "The first grant should rewrite the DACL."
+      Assert-Condition ((Grant-AppContainerReadExecute -Path $dllPath) -eq $false) "A repeated grant should report no change."
+
+      $rules = Get-AppContainerRule -Path $dllPath
+      Assert-Condition ($rules.Count -eq 1) "Exactly one explicit ALL APPLICATION PACKAGES ACE should remain."
+      Assert-Condition (([int]$rules[0].FileSystemRights -band [int]$script:readAndExecute) -eq [int]$script:readAndExecute) "The ACE should grant read+execute."
+      Assert-Condition (([int]$rules[0].FileSystemRights -band [int][System.Security.AccessControl.FileSystemRights]::Write) -eq 0) "The ACE should not grant write access."
+      Assert-Condition ($rules[0].AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) "The ACE should be an allow entry."
+
+      Assert-Condition ((Revoke-AppContainerReadExecute -Path $dllPath) -eq $true) "Revoke should remove the explicit ACE."
+      Assert-Condition ((Get-AppContainerRule -Path $dllPath).Count -eq 0) "No explicit ALL APPLICATION PACKAGES ACE should survive the revoke."
+      Assert-Condition ((Revoke-AppContainerReadExecute -Path $dllPath) -eq $false) "A repeated revoke should report no change."
+    }
+
+    It "makes the directory grant inheritable so a rebuilt DLL keeps access" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      $directory = Initialize-AclSandbox
+      Assert-Condition ((Grant-AppContainerReadExecute -Path $directory) -eq $true) "The directory grant should rewrite the DACL."
+
+      # The DLL is written *after* the grant, standing in for a rebuild that
+      # replaces the file: it must pick the ACE up by inheritance.
+      $dllPath = Join-Path $directory "azookey_tsf_tip.dll"
+      Set-Content -LiteralPath $dllPath -Value "rebuilt TIP DLL"
+
+      Assert-Condition ((Get-AppContainerRule -Path $dllPath -IncludeInherited).Count -ge 1) "A rebuilt DLL should inherit the AppContainer grant."
+      Assert-Condition ((Grant-AppContainerReadExecute -Path $dllPath) -eq $false) "An inherited grant should count as already effective."
+    }
+
+    It "round-trips the registration grant over the DLL and its directory" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      $directory = Initialize-AclSandbox
+      $dllPath = Join-Path $directory "azookey_tsf_tip.dll"
+      Set-Content -LiteralPath $dllPath -Value "stand-in for the TIP DLL"
+
+      # Asserted through the effective state rather than the ACE count: adding an
+      # inheritable ACE to the directory propagates to the existing DLL, so the
+      # DLL may end up covered by inheritance instead of an explicit entry.
+      Grant-TipAppContainerAccess -TipDllPath $dllPath
+      Assert-Condition ((Get-AppContainerRule -Path $directory).Count -eq 1) "Registration should grant the containing directory."
+      Assert-Condition ((Get-AppContainerAccessState -Acl (Get-Acl -LiteralPath $dllPath) -Rights $script:readAndExecute) -eq "Allowed") "Registration should leave the DLL readable by AppContainer apps."
+
+      Revoke-TipAppContainerAccess -TipDllPath $dllPath
+      Assert-Condition ((Get-AppContainerRule -Path $directory -IncludeInherited).Count -eq 0) "Unregistration should leave no grant on the directory."
+      Assert-Condition ((Get-AppContainerAccessState -Acl (Get-Acl -LiteralPath $dllPath) -Rights $script:readAndExecute) -eq "Missing") "Unregistration should leave no grant on the DLL."
+    }
+
+    It "never rewrites ACLs under protected system directories" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "the protected roots are Windows paths"
+      }
+
+      Assert-Condition (Test-ProtectedSystemPath -Path (Join-Path $env:ProgramFiles "azooKey\azookey_tsf_tip.dll")) "An MSI install location should be protected."
+      Assert-Condition (Test-ProtectedSystemPath -Path $env:SystemRoot) "%SystemRoot% should be protected."
+      Assert-Condition (-not (Test-ProtectedSystemPath -Path (Initialize-AclSandbox))) "A development build tree should not be protected."
+      # Asserted statically rather than by calling Revoke against a real system
+      # path: a regression here would rewrite %SystemRoot% on the test machine.
+      Assert-Condition ($script:acl.Text -match 'function Revoke-AppContainerReadExecute[\s\S]*?Test-ProtectedSystemPath[\s\S]*?Get-Acl') "Revoke-AppContainerReadExecute should refuse protected system paths before touching the DACL."
+    }
+
+    It "refuses to grant access to a missing path" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      $missing = Join-Path (Initialize-AclSandbox) "absent.dll"
+      $threw = $false
+      try {
+        Grant-AppContainerReadExecute -Path $missing | Out-Null
+      } catch {
+        $threw = $true
+      }
+      Assert-Condition $threw "Granting a missing path should throw instead of silently succeeding."
     }
   }
 

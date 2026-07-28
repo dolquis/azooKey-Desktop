@@ -617,17 +617,48 @@ GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への
 ### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
 
 **AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
-有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への RX が
-必要である。通常の Windows 11 では `%ProgramFiles%` がこの ACE を持つため、§4 の MSI は
-インストール先へ継承させ、独自の ACL を追加しない。実機ゲート DEV-673 では、継承 ACL と
-Microsoft Store / Edge など AppContainer アプリでの入力を確認する。
+有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への
+読み取り+実行 (RX) が必要である。AppContainer プロセスの実効アクセスは、ユーザー /
+グループ SID による判定と AppContainer SID（package SID・capability SID）による判定の
+積で決まる。対話ユーザーが読める DLL でも、DACL が AppContainer 側の principal を
+含まなければアクセスは成立しない（[Launch an AppContainer](https://learn.microsoft.com/windows/win32/secauthz/implementing-an-appcontainer#appcontainer-overview)）。
+ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードするため、この ACE が無いと
+当該アプリで日本語入力ができない。
 
-一方、Option A（external-location / `regsvr32` 機械全体登録）や開発用
-`scripts/register-dev.ps1` で `%ProgramFiles%` 外に配置する場合は、配置先の ACL を確認し、
-必要なら `icacls <dll> /grant "*S-1-15-2-1:(RX)"` 相当を登録ステップに加える。
-先行実装 fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与している。
-Option B/C（通常 MSIX）はパッケージ側で解決されるため不要。
-設計・実機検証は DEV-204、DEV-101（com4:ComServer ACL 制限）と連動する。
+#### 付与対象・タイミング・権限（DEV-204 確定）
+
+| 配布経路 | 付与主体 | 付与対象 | タイミング |
+|---|---|---|---|
+| §4 WiX/MSI（MVP 既定） | Windows（`%ProgramFiles%` からの継承） | インストール先配下 | インストール時。**MSI は独自 ACE を追加しない** |
+| 開発用 `regsvr32` 登録 | `scripts/register-dev.ps1` | 登録する TIP DLL と**その親ディレクトリ** | **登録時**（`regsvr32` 実行の直前） |
+| Option A（external-location MSIX） | external location の配置先に準ずる（上 2 行のいずれか） | 同上 | 同上 |
+| Option B/C（通常 MSIX） | パッケージ側で解決 | — | 不要 |
+
+* **権限は RX のみ**。AppContainer アプリへ書き込み権限を与えない。
+* **登録時のみに一本化し、ビルド時フック（post_build `icacls`）は持たない**。親ディレクトリへ
+  継承付き ACE を置くので、再ビルドで置き換わった TIP DLL が ACE を継承する。付与点が
+  登録スクリプト 1 箇所に閉じ、付与漏れの探索範囲が広がらない。先行実装
+  fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与するが、本リポジトリは
+  継承 ACE が再ビルドを吸収するため二重化しない。
+* **付与対象の DLL**: 本リポジトリのビルドは x64 のみである（`CMakePresets.json`）。したがって
+  現時点の対象は x64 TIP DLL 1 個。32 bit プロセス向けに x86 TIP DLL を追加する場合は、同じ
+  規則を当該 DLL にも適用する（`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
+* **解除**: `scripts/unregister-dev.ps1` は登録時に付与した**明示 ACE のみ**を除去する。継承 ACE と
+  `%ProgramFiles%` / `%SystemRoot%` 配下は対象外とし、MSI 導入先の ACL を壊さない。
+* **opt-out**: 両スクリプトの `-SkipAppContainerAcl`。ビルドツリーを AppContainer から到達可能に
+  したくないホスト向けで、指定時は UWP / Microsoft Store アプリで TIP がロードされない。
+* **実装と検証**: 共通ヘルパは `scripts/AppContainerAcl.ps1`。実機を要さない検証は
+  `scripts/tests/register-dev.Tests.ps1`（Pester、CI の PowerShell lint/test ジョブ）が担い、
+  付与 → 冪等 → 解除のラウンドトリップ、再ビルド相当の継承、書き込み権限を付与しないこと、
+  保護対象パスを書き換えないことを確認する。
+* **祖先ディレクトリの traverse は付与しない**。既定構成の Windows では bypass traverse
+  checking（`SeChangeNotifyPrivilege`）により最終要素の DACL だけが効くという前提を置く。
+  グループポリシーで同特権を外した環境ではビルドツリーの祖先に traverse が別途必要になる。
+  この前提は実機ゲートで確認する。
+
+実機検証は DEV-271（開発用登録経路でのサンドボックスアプリ入力成立）と DEV-673（MSI
+インストール先の継承 ACL）で行う。MSIX 側の制限は DEV-101（com4:ComServer ACL 制限）と
+連動する。
 
 **常駐起動（参考）**: Host / launcher のログオン常駐を Run キーでなく **Task Scheduler
 （LogonTrigger + RunLevel=HighestAvailable）+ VBS 非表示起動**で実現し、アンインストール

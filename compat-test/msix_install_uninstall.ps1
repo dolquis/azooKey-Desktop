@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-  MSIX install / uninstall residue smoke harness (DEV-101, M28).
+  MSIX install / update / rollback / uninstall smoke harness (DEV-101, DEV-586, M28).
 
 .DESCRIPTION
   クリーン Win11 23H2 / Win10 22H2 / Win Server 2022 VM 上で azooKey の MSIX
   パッケージを Add-AppxPackage → 言語プロファイル / CLSID 登録の存在確認 →
-  Remove-AppxPackage → 残骸 0 確認まで半自動でチェックする「雛形」スクリプト。
+  新版への update → 失敗する更新後の rollback → Remove-AppxPackage → 残骸 0
+  確認まで半自動でチェックする「雛形」スクリプト。
 
   本スクリプトは `docs/sideload-packaging-spec.md` §1（MSIX サイドロード）と
   同 §1.5（受け入れ条件）を検証対象とし、`plans/windows-port-roadmap.md`
@@ -31,7 +32,17 @@
     - `gate:human-required`: 実機 VM での緑化（スクショ / ログ）が Done の条件。
 
 .PARAMETER MsixPath
-  インストールする .msix / .msixbundle へのパス。
+  最初にインストールする旧版 .msix / .msixbundle へのパス。
+
+.PARAMETER UpdateMsixPath
+  update（上書き）シナリオでインストールする新版 .msix / .msixbundle へのパス。
+  FailedUpdateMsixPath と同時に指定する。新版は MsixPath と同じ package family で、
+  より大きい Version を持つ必要がある。
+
+.PARAMETER FailedUpdateMsixPath
+  rollback シナリオで Add-AppxPackage が失敗すると期待する .msix / .msixbundle
+  へのパス。UpdateMsixPath と同時に指定する。署名、依存関係、package 内容などを
+  意図的に壊した、同じ package family のより新しいテスト専用 package を使う。
 
 .PARAMETER PackageName
   Get-AppxPackage -Name に渡すパッケージ名（AppxManifest.xml の Identity@Name）。
@@ -66,6 +77,14 @@
     -MsixPath .\out\azooKey-identity-1.0.0.0.msix `
     -ExternalLocation "C:\Program Files\azooKey"
 
+.EXAMPLE
+  # update と失敗時 rollback: 旧版 → 新版 → 失敗する更新の順で検証する
+  powershell -ExecutionPolicy Bypass -File .\msix_install_uninstall.ps1 `
+    -MsixPath .\out\azooKey-identity-1.0.0.0.msix `
+    -UpdateMsixPath .\out\azooKey-identity-1.1.0.0.msix `
+    -FailedUpdateMsixPath .\out\azooKey-identity-1.2.0.0-invalid.msix `
+    -ExternalLocation "C:\Program Files\azooKey"
+
 .NOTES
   Windows 専用。Add-AppxPackage / Remove-AppxPackage を伴うため、クリーンな
   使い捨て VM（チェックポイント復元前提）で実行すること。
@@ -74,6 +93,10 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$MsixPath,
+
+  [string]$UpdateMsixPath = "",
+
+  [string]$FailedUpdateMsixPath = "",
 
   [string]$PackageName = "dolquis.azooKey",
 
@@ -132,6 +155,37 @@ function Add-Check {
   Write-Host ("  {0,-5} {1}" -f $Status, $Name) -ForegroundColor $color
   if ($Detail) { Write-Host ("        {0}" -f $Detail) -ForegroundColor DarkGray }
   Add-Content -Path $logPath -Value ("  {0,-5} {1} {2}" -f $Status, $Name, $Detail)
+}
+
+function Install-MsixPackage {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+    [string]$ResolvedExternalLocation = ""
+  )
+
+  if ($ResolvedExternalLocation) {
+    Add-AppxPackage -Path $Path -ExternalLocation $ResolvedExternalLocation
+  } else {
+    Add-AppxPackage -Path $Path
+  }
+}
+
+function Get-TargetPackage {
+  return Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue |
+    Sort-Object Version -Descending |
+    Select-Object -First 1
+}
+
+function Get-IntroducedPackage {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string[]]$BeforeFullNames
+  )
+
+  return @(Get-AppxPackage | Where-Object {
+      $BeforeFullNames -notcontains $_.PackageFullName
+    })
 }
 
 # ---------------------------------------------------------------------------
@@ -195,68 +249,94 @@ function Test-TsfLanguageProfileRegistered {
 # ---------------------------------------------------------------------------
 # 本体
 # ---------------------------------------------------------------------------
-Write-Step "MSIX install/uninstall smoke harness 開始 (DEV-101 / M28)"
+Write-Step "MSIX install/update/rollback/uninstall smoke harness 開始 (DEV-101 / DEV-586 / M28)"
 Write-Step "MsixPath=$MsixPath PackageName=$PackageName"
+Write-Step "UpdateMsixPath=$UpdateMsixPath FailedUpdateMsixPath=$FailedUpdateMsixPath"
 Write-Step "Clsid=$Clsid ProfileGuid=$ProfileGuid LangId=$LangId"
 Write-Step "ReportDir=$ReportDir"
 
-if (-not (Test-Path $MsixPath)) {
-  Add-Check -Name "MSIX ファイルが存在する" -Status "FAIL" -Detail "not found: $MsixPath"
-  throw "MSIX package not found: $MsixPath"
+$runLifecycleScenario = [bool]$UpdateMsixPath -or [bool]$FailedUpdateMsixPath
+if ($runLifecycleScenario -and (-not $UpdateMsixPath -or -not $FailedUpdateMsixPath)) {
+  Add-Check -Name "update/rollback package を一組で指定する" -Status "FAIL" `
+    -Detail "-UpdateMsixPath と -FailedUpdateMsixPath は同時に指定する"
+  throw "UpdateMsixPath and FailedUpdateMsixPath must be specified together."
 }
-Add-Check -Name "MSIX ファイルが存在する" -Status "PASS" -Detail $MsixPath
+
+$scenarioPaths = [ordered]@{ "旧版 MSIX" = $MsixPath }
+if ($runLifecycleScenario) {
+  $scenarioPaths["新版 MSIX"] = $UpdateMsixPath
+  $scenarioPaths["失敗用 MSIX"] = $FailedUpdateMsixPath
+}
+foreach ($entry in $scenarioPaths.GetEnumerator()) {
+  if (-not (Test-Path -LiteralPath $entry.Value)) {
+    Add-Check -Name "$($entry.Key) ファイルが存在する" -Status "FAIL" `
+      -Detail "not found: $($entry.Value)"
+    throw "MSIX package not found: $($entry.Value)"
+  }
+  Add-Check -Name "$($entry.Key) ファイルが存在する" -Status "PASS" -Detail $entry.Value
+}
+
+$resolvedExternalLocation = ""
+if ($ExternalLocation) {
+  if (-not (Test-Path -LiteralPath $ExternalLocation)) {
+    Add-Check -Name "ExternalLocation が存在する" -Status "FAIL" `
+      -Detail "指定された外部 install ディレクトリが存在しない: $ExternalLocation"
+    throw "ExternalLocation not found: $ExternalLocation"
+  }
+  $resolvedExternalLocation = (Resolve-Path -LiteralPath $ExternalLocation).ProviderPath
+  Add-Check -Name "ExternalLocation が存在する" -Status "PASS" `
+    -Detail $resolvedExternalLocation
+}
 
 # 事前状態: 同名パッケージが残っていないこと（クリーン VM 前提の確認）
 $pre = Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue
 if ($pre) {
-  Add-Check -Name "事前にパッケージが未インストール" -Status "INFO" `
-    -Detail "既存インストールを検出: $($pre.PackageFullName)。クリーン VM での実行を推奨。"
+  $preStatus = if ($runLifecycleScenario) { "FAIL" } else { "INFO" }
+  Add-Check -Name "事前にパッケージが未インストール" -Status $preStatus `
+    -Detail "既存インストールを検出: $($pre.PackageFullName)。クリーン VM で実行すること。"
+  if ($runLifecycleScenario) {
+    throw "Update/rollback scenarios require a clean VM without $PackageName installed."
+  }
 } else {
   Add-Check -Name "事前にパッケージが未インストール" -Status "PASS"
 }
 
 $installed = $false
-# Add 時に実際に追加されたパッケージの full name。-PackageName が stale でも
-# before/after 差分で確定し、finally で確実にクリーンアップするための真実源。
-$addedFullNames = @()
+# Add 前に存在した full name の集合。update で PackageFullName が変わっても、
+# この集合との差分からテストが導入した package を特定して後始末する。
+$beforeFullNames = @(Get-AppxPackage | ForEach-Object { $_.PackageFullName })
 try {
   # --- インストール ---
   Write-Step "Add-AppxPackage 実行"
   # 名前検索に頼らず、Add 前後のパッケージ集合差分で「実際に追加された」ものを
   # 特定する。-PackageName が AppxManifest の Identity@Name と食い違っても
   # 取り逃さず、クリーン VM にパッケージを置き去りにしない（残骸検証の前提を保つ）。
-  $before = @(Get-AppxPackage | ForEach-Object { $_.PackageFullName })
   try {
-    if ($ExternalLocation) {
+    if ($resolvedExternalLocation) {
       # Option A（external-location / sparse identity package）: 実行体は MSIX の外に
       # 置かれるため、-ExternalLocation で install ディレクトリを紐付けないと host に
       # package identity が付かず smoke が無意味になる。
-      if (-not (Test-Path $ExternalLocation)) {
-        Add-Check -Name "ExternalLocation が存在する" -Status "FAIL" `
-          -Detail "指定された外部 install ディレクトリが存在しない: $ExternalLocation"
-        throw "ExternalLocation not found: $ExternalLocation"
-      }
-      $absExternal = (Resolve-Path -LiteralPath $ExternalLocation).ProviderPath
-      Write-Step "external-location 登録: $absExternal"
-      Add-AppxPackage -Path $MsixPath -ExternalLocation $absExternal
+      Write-Step "external-location 登録: $resolvedExternalLocation"
     } else {
       # Option B/C（バイナリ同梱の通常 MSIX）: 外部ロケーション不要。
       # ただし identity package（Option A）を -ExternalLocation 無しで登録すると
       # host に identity が付かないため、Option A 検証では -ExternalLocation を渡すこと。
       Add-Check -Name "ExternalLocation の指定" -Status "INFO" `
         -Detail "-ExternalLocation 未指定。Option A（sparse identity package）を検証する場合は必須（未指定だと host に package identity が付かず smoke が無意味）。Option B/C なら不要。"
-      Add-AppxPackage -Path $MsixPath
     }
-    $added = @(Get-AppxPackage | Where-Object { $before -notcontains $_.PackageFullName })
-    $addedFullNames = @($added | ForEach-Object { $_.PackageFullName })
-    if ($addedFullNames.Count -gt 0) {
+    Install-MsixPackage -Path $MsixPath `
+      -ResolvedExternalLocation $resolvedExternalLocation
+    $introduced = Get-IntroducedPackage -BeforeFullNames $beforeFullNames
+    $introducedFullNames = @($introduced | ForEach-Object { $_.PackageFullName })
+    if ($introducedFullNames.Count -gt 0) {
       $installed = $true
-      Add-Check -Name "Add-AppxPackage 成功" -Status "PASS" -Detail ($addedFullNames -join ", ")
+      Add-Check -Name "Add-AppxPackage 成功" -Status "PASS" `
+        -Detail ($introducedFullNames -join ", ")
       # -PackageName が実 Identity と一致するかを交差確認（不一致だと name ベースの
       # 事前チェックが意味を持たないため明示的に FAIL で気付かせる）。
       if (-not (Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue)) {
         Add-Check -Name "PackageName が実 Identity と一致する" -Status "FAIL" `
-          -Detail "追加された $($addedFullNames -join ', ') が -PackageName '$PackageName' に一致しない。AppxManifest の Identity@Name に合わせること。"
+          -Detail "追加された $($introducedFullNames -join ', ') が -PackageName '$PackageName' に一致しない。AppxManifest の Identity@Name に合わせること。"
       }
     } else {
       Add-Check -Name "Add-AppxPackage 成功" -Status "FAIL" `
@@ -298,12 +378,93 @@ try {
       -Detail "UI 操作は windows-mcp / UI Automation で別途検証（本ハーネスは登録レベルのみ）。"
   }
 
+  # --- update（上書き）と失敗時 rollback ---
+  if ($installed -and $runLifecycleScenario) {
+    $baselinePackage = Get-TargetPackage
+    $updateSucceeded = $false
+    if (-not $baselinePackage) {
+      Add-Check -Name "update 前の package state を取得できる" -Status "FAIL" `
+        -Detail "-PackageName '$PackageName' に一致する旧版 package が見つからない"
+    } else {
+      $baselineVersion = [version]$baselinePackage.Version
+      $baselineFamilyName = $baselinePackage.PackageFamilyName
+      Write-Step "Add-AppxPackage update 実行: $baselineVersion -> $UpdateMsixPath"
+      try {
+        # Primary package の更新は同じ package family の新版を通常の AddSet で
+        # 追加する。Add-AppxPackage -Update は dependency package 用なので使わない。
+        Install-MsixPackage -Path $UpdateMsixPath `
+          -ResolvedExternalLocation $resolvedExternalLocation
+        $updatedPackage = Get-TargetPackage
+        if (
+          $updatedPackage -and
+          $updatedPackage.PackageFamilyName -eq $baselineFamilyName -and
+          [version]$updatedPackage.Version -gt $baselineVersion
+        ) {
+          $updateSucceeded = $true
+          Add-Check -Name "新版への update（上書き）が成功する" -Status "PASS" `
+            -Detail "$($baselinePackage.PackageFullName) -> $($updatedPackage.PackageFullName)"
+        } else {
+          $actual = if ($updatedPackage) {
+            "$($updatedPackage.PackageFullName) (family=$($updatedPackage.PackageFamilyName))"
+          } else {
+            "package not found"
+          }
+          Add-Check -Name "新版への update（上書き）が成功する" -Status "FAIL" `
+            -Detail "同じ package family のより新しい Version を確認できない: $actual"
+        }
+      } catch {
+        Add-Check -Name "新版への update（上書き）が成功する" -Status "FAIL" `
+          -Detail $_.Exception.Message
+      }
+    }
+
+    if ($updateSucceeded) {
+      $rollbackBaseline = Get-TargetPackage
+      $failedAsExpected = $false
+      Write-Step "失敗を期待する Add-AppxPackage update 実行: $FailedUpdateMsixPath"
+      try {
+        Install-MsixPackage -Path $FailedUpdateMsixPath `
+          -ResolvedExternalLocation $resolvedExternalLocation
+        Add-Check -Name "失敗用 update がエラーになる" -Status "FAIL" `
+          -Detail "Add-AppxPackage が成功した。失敗を再現するテスト package を指定すること。"
+      } catch {
+        $failedAsExpected = $true
+        Add-Check -Name "失敗用 update がエラーになる" -Status "PASS" `
+          -Detail $_.Exception.Message
+      }
+
+      $rollbackAfter = Get-TargetPackage
+      if (
+        $failedAsExpected -and
+        $rollbackAfter -and
+        $rollbackAfter.PackageFullName -eq $rollbackBaseline.PackageFullName -and
+        [version]$rollbackAfter.Version -eq [version]$rollbackBaseline.Version
+      ) {
+        Add-Check -Name "失敗した update 後も直前バージョンが保持される" -Status "PASS" `
+          -Detail $rollbackAfter.PackageFullName
+      } else {
+        $actual = if ($rollbackAfter) {
+          $rollbackAfter.PackageFullName
+        } else {
+          "package not found"
+        }
+        Add-Check -Name "失敗した update 後も直前バージョンが保持される" -Status "FAIL" `
+          -Detail "expected=$($rollbackBaseline.PackageFullName) actual=$actual"
+      }
+    } else {
+      Add-Check -Name "失敗した update 後も直前バージョンが保持される" -Status "SKIP" `
+        -Detail "新版への update が成功しなかったため rollback シナリオを実行できない"
+    }
+  }
+
   # --- アンインストール ---
   if ($installed) {
     Write-Step "Remove-AppxPackage 実行"
     try {
-      foreach ($fn in $addedFullNames) { Remove-AppxPackage -Package $fn }
-      $still = @(Get-AppxPackage | Where-Object { $addedFullNames -contains $_.PackageFullName })
+      $introduced = Get-IntroducedPackage -BeforeFullNames $beforeFullNames
+      $introducedFullNames = @($introduced | ForEach-Object { $_.PackageFullName })
+      foreach ($fn in $introducedFullNames) { Remove-AppxPackage -Package $fn }
+      $still = Get-IntroducedPackage -BeforeFullNames $beforeFullNames
       if ($still.Count -gt 0) {
         Add-Check -Name "Remove-AppxPackage 成功" -Status "FAIL" `
           -Detail "まだ残存: $(($still | ForEach-Object { $_.PackageFullName }) -join ', ')"
@@ -337,15 +498,18 @@ try {
   }
 } finally {
   # 後始末: アサーション失敗で抜けても、テストで入れたパッケージは必ず剥がす。
-  # 名前検索ではなく Add 時に確定した full name で剥がすので、-PackageName が
-  # stale でも置き去りにならない。
-  if ($installed -and $addedFullNames.Count -gt 0) {
+  # Add 前の集合との差分を使うため、update で PackageFullName が変わった場合や
+  # -PackageName が stale な場合も、現在残っているテスト package を剥がせる。
+  $remainingIntroduced = @(
+    Get-IntroducedPackage -BeforeFullNames $beforeFullNames
+  )
+  if ($remainingIntroduced.Count -gt 0) {
     Write-Step "クリーンアップ: 残存パッケージを Remove-AppxPackage"
-    foreach ($fn in $addedFullNames) {
+    foreach ($package in $remainingIntroduced) {
       try {
-        Remove-AppxPackage -Package $fn -ErrorAction SilentlyContinue
+        Remove-AppxPackage -Package $package.PackageFullName -ErrorAction SilentlyContinue
       } catch {
-        Write-Warning "クリーンアップに失敗 ($fn): $_"
+        Write-Warning "クリーンアップに失敗 ($($package.PackageFullName)): $_"
       }
     }
   }
@@ -357,7 +521,10 @@ try {
 $summary = [ordered]@{
   tool        = "msix_install_uninstall.ps1"
   issue       = "DEV-101"
+  relatedIssues = @("DEV-101", "DEV-586")
   msixPath    = $MsixPath
+  updateMsixPath = $UpdateMsixPath
+  failedUpdateMsixPath = $FailedUpdateMsixPath
   packageName = $PackageName
   externalLocation = $ExternalLocation
   clsid       = $Clsid

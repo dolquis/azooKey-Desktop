@@ -234,11 +234,19 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   DEV-101 でリネーム済み）。`regsvr32` 開発用経路であることを名前で明示する
 * MSIX 同梱の TIP は HKCU 自己登録ロジックを skip（上記 `IsRunningInMsixContext`
   で分岐）
-* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、`compat-test/msix_install_uninstall.ps1`
-  の smoke ハーネスで Add-AppxPackage → 登録確認 → Remove-AppxPackage → 残骸 0 を
-  確認する（実機 VM で実行する `gate:human-required`。COM 登録ラウンドトリップ自体は
-  CTest `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
-  MSIX パッケージング層を補完する）
+* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、
+  `compat-test/msix_install_uninstall.ps1` の smoke ハーネスを使う。
+  clean install / uninstall では Add-AppxPackage → 登録確認 → Remove-AppxPackage →
+  残骸 0 を確認する。
+  update / rollback では旧版を `-MsixPath`、新版を `-UpdateMsixPath`、失敗が期待される
+  同一 package family のより新しい package を `-FailedUpdateMsixPath` に指定する。
+  ハーネスは新版の Version 増加を確認した後、失敗する更新を実行し、直前の
+  `PackageFullName` と `Version` が保持されることを確認する。
+  update package 2 件は常に同時に指定し、片方だけのシナリオ実行を認めない。
+  実機 VM での実行は `gate:human-required` とする。
+  COM 登録ラウンドトリップ自体は CTest
+  `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
+  MSIX パッケージング層を補完する。
 
 ### 1.1.2 Option A の具体 PoC（`pkg/msix/`）
 

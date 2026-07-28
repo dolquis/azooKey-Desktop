@@ -41,8 +41,10 @@
 
 .PARAMETER FailedUpdateMsixPath
   rollback シナリオで Add-AppxPackage が失敗すると期待する .msix / .msixbundle
-  へのパス。UpdateMsixPath と同時に指定する。署名、依存関係、package 内容などを
-  意図的に壊した、同じ package family のより新しいテスト専用 package を使う。
+  へのパス。UpdateMsixPath と同時に指定する。package validation / staging は通るが、
+  依存関係不足や登録内容の不整合によって deployment 中に失敗する、同じ package
+  family のより新しいテスト専用 package を使う。署名不正など validation 前に
+  拒否される package では rollback 経路を検証できない。
 
 .PARAMETER PackageName
   Get-AppxPackage -Name に渡すパッケージ名（AppxManifest.xml の Identity@Name）。
@@ -82,7 +84,7 @@
   powershell -ExecutionPolicy Bypass -File .\msix_install_uninstall.ps1 `
     -MsixPath .\out\azooKey-identity-1.0.0.0.msix `
     -UpdateMsixPath .\out\azooKey-identity-1.1.0.0.msix `
-    -FailedUpdateMsixPath .\out\azooKey-identity-1.2.0.0-invalid.msix `
+    -FailedUpdateMsixPath .\out\azooKey-identity-1.2.0.0-deployment-failure.msix `
     -ExternalLocation "C:\Program Files\azooKey"
 
 .NOTES
@@ -130,6 +132,8 @@ $logPath = Join-Path $ReportDir "msix_install_uninstall.log"
 $jsonPath = Join-Path $ReportDir "report.json"
 
 $script:Results = [System.Collections.Generic.List[object]]::new()
+$script:IntroducedFullNames = [System.Collections.Generic.HashSet[string]]::new(
+  [StringComparer]::OrdinalIgnoreCase)
 
 function Write-Step {
   param([string]$Message)
@@ -157,6 +161,36 @@ function Add-Check {
   Add-Content -Path $logPath -Value ("  {0,-5} {1} {2}" -f $Status, $Name, $Detail)
 }
 
+function Write-Report {
+  $summary = [ordered]@{
+    tool        = "msix_install_uninstall.ps1"
+    issue       = "DEV-101"
+    relatedIssues = @("DEV-101", "DEV-586")
+    msixPath    = $MsixPath
+    updateMsixPath = $UpdateMsixPath
+    failedUpdateMsixPath = $FailedUpdateMsixPath
+    packageName = $PackageName
+    externalLocation = $ExternalLocation
+    clsid       = $Clsid
+    profileGuid = $ProfileGuid
+    langId      = $LangId
+    timestamp   = (Get-Date -Format "o")
+    results     = $script:Results
+  }
+  $summary | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonPath -Encoding UTF8
+}
+
+function Get-ErrorDetail {
+  param(
+    [Parameter(Mandatory = $true)]
+    [System.Management.Automation.ErrorRecord]$ErrorRecord
+  )
+
+  $hResultHex = "0x{0:X8}" -f ($ErrorRecord.Exception.HResult -band 0xFFFFFFFFL)
+  return "{0} (HRESULT={1}; FullyQualifiedErrorId={2})" -f `
+    $ErrorRecord.Exception.Message, $hResultHex, $ErrorRecord.FullyQualifiedErrorId
+}
+
 function Install-MsixPackage {
   param(
     [Parameter(Mandatory = $true)]
@@ -164,27 +198,40 @@ function Install-MsixPackage {
     [string]$ResolvedExternalLocation = ""
   )
 
-  if ($ResolvedExternalLocation) {
-    Add-AppxPackage -Path $Path -ExternalLocation $ResolvedExternalLocation
-  } else {
-    Add-AppxPackage -Path $Path
+  # 各 Add-AppxPackage の直前直後だけを比較し、このハーネスが導入した package
+  # だけを追跡する。実行全体の差分にすると、Store の自動更新など同時発生した
+  # 無関係な package まで後始末対象へ入るため、比較窓を Add ごとに閉じる。
+  $before = [System.Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase)
+  Get-AppxPackage | ForEach-Object {
+    $null = $before.Add($_.PackageFullName)
+  }
+
+  try {
+    if ($ResolvedExternalLocation) {
+      Add-AppxPackage -Path $Path -ExternalLocation $ResolvedExternalLocation
+    } else {
+      Add-AppxPackage -Path $Path
+    }
+  } finally {
+    # Add が途中で失敗しても、実際に導入された package は cleanup 対象に残す。
+    Get-AppxPackage |
+      Where-Object { -not $before.Contains($_.PackageFullName) } |
+      ForEach-Object {
+        $null = $script:IntroducedFullNames.Add($_.PackageFullName)
+      }
   }
 }
 
 function Get-TargetPackage {
   return Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue |
-    Sort-Object Version -Descending |
+    Sort-Object { [version]$_.Version } -Descending |
     Select-Object -First 1
 }
 
 function Get-IntroducedPackage {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string[]]$BeforeFullNames
-  )
-
   return @(Get-AppxPackage | Where-Object {
-      $BeforeFullNames -notcontains $_.PackageFullName
+      $script:IntroducedFullNames.Contains($_.PackageFullName)
     })
 }
 
@@ -255,6 +302,7 @@ Write-Step "UpdateMsixPath=$UpdateMsixPath FailedUpdateMsixPath=$FailedUpdateMsi
 Write-Step "Clsid=$Clsid ProfileGuid=$ProfileGuid LangId=$LangId"
 Write-Step "ReportDir=$ReportDir"
 
+try {
 $runLifecycleScenario = [bool]$UpdateMsixPath -or [bool]$FailedUpdateMsixPath
 if ($runLifecycleScenario -and (-not $UpdateMsixPath -or -not $FailedUpdateMsixPath)) {
   Add-Check -Name "update/rollback package を一組で指定する" -Status "FAIL" `
@@ -302,9 +350,6 @@ if ($pre) {
 }
 
 $installed = $false
-# Add 前に存在した full name の集合。update で PackageFullName が変わっても、
-# この集合との差分からテストが導入した package を特定して後始末する。
-$beforeFullNames = @(Get-AppxPackage | ForEach-Object { $_.PackageFullName })
 try {
   # --- インストール ---
   Write-Step "Add-AppxPackage 実行"
@@ -326,7 +371,7 @@ try {
     }
     Install-MsixPackage -Path $MsixPath `
       -ResolvedExternalLocation $resolvedExternalLocation
-    $introduced = Get-IntroducedPackage -BeforeFullNames $beforeFullNames
+    $introduced = Get-IntroducedPackage
     $introducedFullNames = @($introduced | ForEach-Object { $_.PackageFullName })
     if ($introducedFullNames.Count -gt 0) {
       $installed = $true
@@ -430,7 +475,7 @@ try {
       } catch {
         $failedAsExpected = $true
         Add-Check -Name "失敗用 update がエラーになる" -Status "PASS" `
-          -Detail $_.Exception.Message
+          -Detail (Get-ErrorDetail -ErrorRecord $_)
       }
 
       $rollbackAfter = Get-TargetPackage
@@ -452,6 +497,8 @@ try {
           -Detail "expected=$($rollbackBaseline.PackageFullName) actual=$actual"
       }
     } else {
+      Add-Check -Name "失敗用 update がエラーになる" -Status "SKIP" `
+        -Detail "新版への update が成功しなかったため rollback シナリオを実行できない"
       Add-Check -Name "失敗した update 後も直前バージョンが保持される" -Status "SKIP" `
         -Detail "新版への update が成功しなかったため rollback シナリオを実行できない"
     }
@@ -461,10 +508,10 @@ try {
   if ($installed) {
     Write-Step "Remove-AppxPackage 実行"
     try {
-      $introduced = Get-IntroducedPackage -BeforeFullNames $beforeFullNames
+      $introduced = Get-IntroducedPackage
       $introducedFullNames = @($introduced | ForEach-Object { $_.PackageFullName })
       foreach ($fn in $introducedFullNames) { Remove-AppxPackage -Package $fn }
-      $still = Get-IntroducedPackage -BeforeFullNames $beforeFullNames
+      $still = Get-IntroducedPackage
       if ($still.Count -gt 0) {
         Add-Check -Name "Remove-AppxPackage 成功" -Status "FAIL" `
           -Detail "まだ残存: $(($still | ForEach-Object { $_.PackageFullName }) -join ', ')"
@@ -498,11 +545,9 @@ try {
   }
 } finally {
   # 後始末: アサーション失敗で抜けても、テストで入れたパッケージは必ず剥がす。
-  # Add 前の集合との差分を使うため、update で PackageFullName が変わった場合や
-  # -PackageName が stale な場合も、現在残っているテスト package を剥がせる。
-  $remainingIntroduced = @(
-    Get-IntroducedPackage -BeforeFullNames $beforeFullNames
-  )
+  # 各 Add-AppxPackage の直前直後で記録した full name だけを対象にするため、
+  # update 後の新しい full name は拾いつつ、同時発生した無関係な追加は剥がさない。
+  $remainingIntroduced = @(Get-IntroducedPackage)
   if ($remainingIntroduced.Count -gt 0) {
     Write-Step "クリーンアップ: 残存パッケージを Remove-AppxPackage"
     foreach ($package in $remainingIntroduced) {
@@ -514,27 +559,14 @@ try {
     }
   }
 }
+} finally {
+  # 前提条件の検証で早期中断した場合も FAIL を機械可読な成果物へ残す。
+  Write-Report
+}
 
 # ---------------------------------------------------------------------------
 # レポート出力
 # ---------------------------------------------------------------------------
-$summary = [ordered]@{
-  tool        = "msix_install_uninstall.ps1"
-  issue       = "DEV-101"
-  relatedIssues = @("DEV-101", "DEV-586")
-  msixPath    = $MsixPath
-  updateMsixPath = $UpdateMsixPath
-  failedUpdateMsixPath = $FailedUpdateMsixPath
-  packageName = $PackageName
-  externalLocation = $ExternalLocation
-  clsid       = $Clsid
-  profileGuid = $ProfileGuid
-  langId      = $LangId
-  timestamp   = (Get-Date -Format "o")
-  results     = $script:Results
-}
-$summary | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonPath -Encoding UTF8
-
 $fail = ($script:Results | Where-Object { $_.status -eq "FAIL" }).Count
 $pass = ($script:Results | Where-Object { $_.status -eq "PASS" }).Count
 $skip = ($script:Results | Where-Object { $_.status -eq "SKIP" }).Count

@@ -4,6 +4,10 @@ param(
   # Per-user host argument only. Elevated reentry skips HKCU setup and host start.
   [string]$ModelPath = "",
   [switch]$AllowMockHost,
+  # Skip the ALL APPLICATION PACKAGES (S-1-15-2-1) grant on the TIP DLL. Only
+  # for hosts where the build tree must not be reachable from AppContainer
+  # apps; UWP / Microsoft Store apps cannot load the TIP without it.
+  [switch]$SkipAppContainerAcl,
   # Internal: set when the script relaunches itself elevated. The per-user
   # (HKCU) inference-host auto-start is written in the original user's process
   # *before* elevation, so the elevated reentry must skip it — otherwise, when a
@@ -13,6 +17,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")
 
 function Resolve-DevPath {
   param(
@@ -201,6 +207,9 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
   Write-Host "Machine-wide registration requires elevation; relaunching as administrator..."
   $relaunchArgs = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" " +
                   "-TipDllPath `"$TipDllPath`" -HostExePath `"$HostExePath`" -ElevatedReentry"
+  if ($SkipAppContainerAcl) {
+    $relaunchArgs += " -SkipAppContainerAcl"
+  }
   $elevatedProcess = Start-Process -FilePath "powershell.exe" -Verb RunAs `
     -ArgumentList $relaunchArgs -Wait -PassThru
   exit $elevatedProcess.ExitCode
@@ -208,6 +217,23 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 if (!(Test-Path $TipDllPath)) {
   throw "TIP DLL not found: $TipDllPath"
+}
+
+# AppContainer step, before regsvr32 so the DLL is reachable the moment TSF
+# advertises the profile. A development build tree lives under the user profile
+# and therefore carries no ALL APPLICATION PACKAGES ACE, so UWP / Microsoft
+# Store apps cannot load the TIP until it is granted (docs/sideload-packaging-
+# spec.md §1.7). Non-fatal: desktop apps work regardless, so a failure here
+# degrades AppContainer coverage rather than blocking registration.
+if ($SkipAppContainerAcl) {
+  Write-Warning "Skipping the ALL APPLICATION PACKAGES grant (-SkipAppContainerAcl). UWP / Microsoft Store apps will not be able to load this TIP DLL."
+} else {
+  try {
+    Grant-TipAppContainerAccess -TipDllPath $TipDllPath
+  } catch {
+    Write-Warning "Could not grant AppContainer access to the TIP DLL: $_"
+    Write-Warning "Continuing registration. Desktop apps will work; UWP / Microsoft Store apps will not."
+  }
 }
 
 Write-Host "Registering TIP DLL (machine-wide): $TipDllPath"

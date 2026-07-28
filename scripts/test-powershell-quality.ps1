@@ -11,6 +11,7 @@ $scriptAnalyzerSettings = Join-Path $repoRoot "PSScriptAnalyzerSettings.psd1"
 $pesterTests = Join-Path $PSScriptRoot "tests"
 
 $powerShellFiles = @(
+  Join-Path $PSScriptRoot "AppContainerAcl.ps1"
   Join-Path $PSScriptRoot "doctor.ps1"
   Join-Path $PSScriptRoot "host-supervisor.ps1"
   Join-Path $PSScriptRoot "register-dev.ps1"

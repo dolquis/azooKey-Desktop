@@ -101,6 +101,14 @@ fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指�
 実モデルの登録では `-ModelPath` に配置済み GGUF の絶対パスを指定してください。
 実モデルの検証手順は [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
 
+`register-dev.ps1` は登録時に、TIP DLL とその親ディレクトリへ
+`ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）の読み取り+実行を付与します。これが無いと
+Microsoft Store など AppContainer で動くアプリが TIP DLL をロードできません。
+`unregister-dev.ps1` は登録時に自分が付与した ACE のみを取り消し、登録前から存在した
+ACE や手動設定の ACE はそのまま残します。付与を避けたい場合は両スクリプトに
+`-SkipAppContainerAcl` を指定してください（設計は
+[`docs/sideload-packaging-spec.md`](./docs/sideload-packaging-spec.md) §1.7）。
+
 machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。
 `-dev` 接尾辞は `regsvr32` 開発用経路であることを示します（MSIX 配布経路とは別。
 `docs/sideload-packaging-spec.md` §1.1.1）。

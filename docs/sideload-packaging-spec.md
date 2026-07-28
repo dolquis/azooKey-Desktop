@@ -649,8 +649,10 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
 * **解除**: `scripts/unregister-dev.ps1` は**登録処理が実際に追加した ACE のみ**を除去する。
   登録と解除は別プロセスであり、DACL だけからは「手で置いた ACE」と自前の ACE を区別できない。
   そこで付与したパスを machine-wide 台帳（`HKLM\Software\azooKey\DevRegistration` の
-  `AppContainerAclGrants`）に記録し、解除は台帳にあるパスだけを対象とする。台帳は最後の
-  エントリと同時に削除する。除去は `RemoveAccessRuleSpecific` による完全一致
+  `AppContainerAclGrants`）に記録し、解除は台帳にあるパスだけを対象とする。台帳から
+  エントリを落とすのは、ACE を除去できたか、既に存在しないことを確認できた場合に限る。
+  DACL 書き込みが失敗したパスはエントリを残し、次回の解除で再試行する（消してしまうと
+  ACE が残ったまま追跡不能になるため）。台帳は最後のエントリと同時に削除する。除去は `RemoveAccessRuleSpecific` による完全一致
   （権限・継承フラグ・伝播フラグが一致する非継承 allow ACE）で行い、権限や継承が異なる
   手動設定の ACE には触れない。継承 ACE と `%ProgramFiles%` / `%SystemRoot%` 配下も対象外とし、
   MSI 導入先の ACL を壊さない。
@@ -663,7 +665,8 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
   `scripts/tests/register-dev.Tests.ps1`（Pester、CI の PowerShell lint/test ジョブ）が担い、
   付与 → 冪等 → 解除のラウンドトリップ、再ビルド相当の継承、非継承 ACE がある場合も継承 ACE を
   追加すること、登録前から存在した ACE が解除後も残ること、権限の異なる手動 ACE を消さないこと、
-  書き込み権限を付与しないこと、保護対象パスを書き換えないことを確認する。
+  解除失敗時に台帳エントリが残ること、書き込み権限を付与しないこと、保護対象パスを
+  書き換えないことを確認する。
 * **祖先ディレクトリの traverse は付与しない**。既定構成の Windows では bypass traverse
   checking（`SeChangeNotifyPrivilege`）により最終要素の DACL だけが効くという前提を置く。
   グループポリシーで同特権を外した環境ではビルドツリーの祖先に traverse が別途必要になる。

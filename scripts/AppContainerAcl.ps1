@@ -412,13 +412,17 @@ function Revoke-TipAppContainerAccess {
       continue
     }
 
-    $retired += (Get-NormalizedAclPath -Path $target)
     try {
       if (Revoke-AppContainerReadExecute -Path $target) {
         $changed += $target
       }
+      # Retired only on a clean outcome — the ACE was removed, or it is
+      # verifiably no longer there. A failure keeps the entry so the next
+      # unregistration retries instead of orphaning the ACE with no record of it.
+      $retired += (Get-NormalizedAclPath -Path $target)
     } catch {
       Write-Warning "Could not remove the AppContainer grant from $target`: $_"
+      Write-Warning "Keeping $target in the grant ledger so unregistration can retry."
     }
   }
 

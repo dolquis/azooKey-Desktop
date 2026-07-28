@@ -341,6 +341,38 @@ Describe "development registration scripts" {
       Assert-Condition (-not (Test-Path -LiteralPath $ledgerKey)) "An emptied ledger key should not be left behind."
     }
 
+    It "keeps the ledger entry when a revoke fails" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      $directory = Initialize-AclSandbox
+      $dllPath = Join-Path $directory "azookey_tsf_tip.dll"
+      Set-Content -LiteralPath $dllPath -Value "stand-in for the TIP DLL"
+      $ledgerKey = Initialize-TestLedgerKey
+
+      Grant-TipAppContainerAccess -TipDllPath $dllPath -LedgerKey $ledgerKey
+      $before = @(Get-AppContainerGrantLedger -LedgerKey $ledgerKey)
+      Assert-Condition ($before.Count -ge 1) "Registration should record what it granted."
+
+      # Shadow the per-path revoke so every attempt fails the way a locked or
+      # permission-denied DACL write would. Scoped to this It block.
+      function Revoke-AppContainerReadExecute {
+        param(
+          [Parameter(Mandatory=$true)]
+          [string]$Path
+        )
+
+        throw "simulated DACL write failure on $Path"
+      }
+
+      Revoke-TipAppContainerAccess -TipDllPath $dllPath -LedgerKey $ledgerKey -WarningAction SilentlyContinue
+
+      $after = @(Get-AppContainerGrantLedger -LedgerKey $ledgerKey)
+      Assert-Condition ($after.Count -eq $before.Count) "A failed revoke should keep the ledger entry so unregistration can retry."
+      Assert-Condition ((Get-AppContainerRule -Path $directory).Count -eq 1) "The ACE should still be present after a failed revoke."
+    }
+
     It "adds the inheritable ACE even when the directory already has a non-inheritable one" {
       if (-not $script:onWindows) {
         Set-ItResult -Skipped -Because "file ACLs are a Windows concept"

@@ -99,6 +99,11 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 「ka」「ki」等の入力で「か」「き」がアンダーライン付きで表示される
   - ESC で composition がクリアされる
   - Backspace で 1 文字戻る
+  - 代表アプリでの描画差が `compat-test/m3_display_attribute_checklist.md` の
+    合格条件を満たす（実機確認が要るため実走は人間ゲート）
+- **参照仕様**: `docs/tsf-deep-integration-spec.md` §5.6（M3 の単一属性と M23 の
+  複合属性の対応・fallback）、`compat-test/m3_display_attribute_checklist.md`
+  （アプリ互換チェックリスト）
 
 ### M4: モック候補生成（Host 経由）
 
@@ -333,7 +338,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
 8. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械テストで扱う（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
-9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。
+9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。M3 の DisplayAttribute / CompositionSink 部分は `compat-test/m3_display_attribute_checklist.md`（D-01〜D-10）で先行して定義済み。
 10. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
 11. **Sanitizer（ASan/UBSan）nightly** — `core`/`ipc`/`learning`/`inference-host` を対象に、Linux subset は AddressSanitizer + UndefinedBehaviorSanitizer、Windows subset は MSVC AddressSanitizer で nightly 実行し、use-after-free・境界外・未定義動作を早期検出する（プリセット別の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典。M38 必須外・将来拡張）。
 12. **pre-commit 一式の CI ゲート** — 既存 pre-commit（clang-format / gitleaks / actionlint / settings schema / yamlfmt / taplo）を CI の独立ジョブとしても実行し、手元と CI の検査差分を無くす。ただし gitleaks フックは `--staged`（pre-commit モード・`pass_filenames: false`）で定義されており、`pre-commit run --all-files` でもステージ差分しか走査しない。クリーンな CI チェックアウトでは秘密検出が偽陰性になるため、CI の秘密走査はこのフックに依存させず、PR コミット範囲（`gitleaks git --log-opts=...`）または `gitleaks dir` による非ステージ走査を別ステップとして用意する（同 §4.3。schema 単独ゲートは DEV-392 で先行）。

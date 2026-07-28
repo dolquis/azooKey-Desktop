@@ -88,10 +88,12 @@ if (Test-Path $TipDllPath) {
 }
 
 # Mirror of the registration-time AppContainer grant (register-dev.ps1 /
-# docs/sideload-packaging-spec.md §1.7): take the explicit ALL APPLICATION
-# PACKAGES ACE back off the TIP DLL and its directory so unregistration leaves
-# no residue. Inherited ACEs and protected system paths are never touched, so an
-# MSI install under `%ProgramFiles%` keeps the ACL Windows gave it.
+# docs/sideload-packaging-spec.md §1.7): take the ALL APPLICATION PACKAGES ACE
+# back off the TIP DLL and its directory so unregistration leaves no residue.
+# Only the paths the registration ledger records are touched, and only the exact
+# ACE a grant installs is removed — an ACE that predated registration, an
+# inherited one, or anything under a protected system path survives, so an MSI
+# install under `%ProgramFiles%` keeps the ACL Windows gave it.
 if (-not $SkipAppContainerAcl) {
   try {
     Revoke-TipAppContainerAccess -TipDllPath $TipDllPath

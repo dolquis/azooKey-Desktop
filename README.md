@@ -104,7 +104,8 @@ fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指�
 `register-dev.ps1` は登録時に、TIP DLL とその親ディレクトリへ
 `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）の読み取り+実行を付与します。これが無いと
 Microsoft Store など AppContainer で動くアプリが TIP DLL をロードできません。
-`unregister-dev.ps1` は同じ ACE を取り消します。付与を避けたい場合は両スクリプトに
+`unregister-dev.ps1` は登録時に自分が付与した ACE のみを取り消し、登録前から存在した
+ACE や手動設定の ACE はそのまま残します。付与を避けたい場合は両スクリプトに
 `-SkipAppContainerAcl` を指定してください（設計は
 [`docs/sideload-packaging-spec.md`](./docs/sideload-packaging-spec.md) §1.7）。
 

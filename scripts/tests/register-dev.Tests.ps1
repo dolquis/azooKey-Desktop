@@ -229,6 +229,40 @@ Describe "development registration scripts" {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
         return $directory
       }
+
+      # The grant ledger lives under HKLM in production. Tests point it at a
+      # throwaway HKCU key so they neither need elevation nor touch machine state.
+      function Initialize-TestLedgerKey {
+        return "HKCU:\Software\azooKey\Tests\$([guid]::NewGuid().ToString('N'))"
+      }
+
+      function Add-ExplicitAppContainerRule {
+        param(
+          [Parameter(Mandatory=$true)]
+          [string]$Path,
+          [Parameter(Mandatory=$true)]
+          [System.Security.AccessControl.FileSystemRights]$Rights,
+          [System.Security.AccessControl.InheritanceFlags]$Inheritance =
+            [System.Security.AccessControl.InheritanceFlags]::None
+        )
+
+        $acl = Get-Acl -LiteralPath $Path
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+          (New-Object Security.Principal.SecurityIdentifier($script:allApplicationPackages)),
+          $Rights,
+          $Inheritance,
+          [System.Security.AccessControl.PropagationFlags]::None,
+          [System.Security.AccessControl.AccessControlType]::Allow)))
+        Set-Acl -LiteralPath $Path -AclObject $acl
+      }
+    }
+
+    AfterAll {
+      $testRoot = "HKCU:\Software\azooKey\Tests"
+      if ((($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows) -and
+          (Test-Path -LiteralPath $testRoot)) {
+        Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
     }
 
     It "is included in the canonical PowerShell quality gate" {
@@ -239,6 +273,8 @@ Describe "development registration scripts" {
       Assert-Condition ($script:acl.Text -match [regex]::Escape('SecurityIdentifier("S-1-15-2-1")')) "AppContainerAcl.ps1 should use the well-known ALL APPLICATION PACKAGES SID."
       Assert-Condition ($script:acl.Text -match 'FileSystemRights\]::ReadAndExecute') "AppContainerAcl.ps1 should grant read+execute."
       Assert-Condition ($script:acl.Text -notmatch 'FileSystemRights\]::(Write|Modify|FullControl)') "AppContainerAcl.ps1 should never grant write access to AppContainer apps."
+      Assert-Condition ($script:acl.Text -match 'RemoveAccessRuleSpecific') "AppContainerAcl.ps1 should remove only the exact ACE a grant installs."
+      Assert-Condition ($script:acl.Text -match 'function Revoke-TipAppContainerAccess[\s\S]*?Get-AppContainerGrantLedger') "Revoke-TipAppContainerAccess should consult the grant ledger before touching any DACL."
     }
 
     It "grants read+execute idempotently and revokes it again" {
@@ -288,17 +324,86 @@ Describe "development registration scripts" {
       $directory = Initialize-AclSandbox
       $dllPath = Join-Path $directory "azookey_tsf_tip.dll"
       Set-Content -LiteralPath $dllPath -Value "stand-in for the TIP DLL"
+      $ledgerKey = Initialize-TestLedgerKey
 
       # Asserted through the effective state rather than the ACE count: adding an
       # inheritable ACE to the directory propagates to the existing DLL, so the
       # DLL may end up covered by inheritance instead of an explicit entry.
-      Grant-TipAppContainerAccess -TipDllPath $dllPath
+      Grant-TipAppContainerAccess -TipDllPath $dllPath -LedgerKey $ledgerKey
       Assert-Condition ((Get-AppContainerRule -Path $directory).Count -eq 1) "Registration should grant the containing directory."
       Assert-Condition ((Get-AppContainerAccessState -Acl (Get-Acl -LiteralPath $dllPath) -Rights $script:readAndExecute) -eq "Allowed") "Registration should leave the DLL readable by AppContainer apps."
+      Assert-Condition ((Get-AppContainerGrantLedger -LedgerKey $ledgerKey).Count -ge 1) "Registration should record what it granted."
 
-      Revoke-TipAppContainerAccess -TipDllPath $dllPath
+      Revoke-TipAppContainerAccess -TipDllPath $dllPath -LedgerKey $ledgerKey
       Assert-Condition ((Get-AppContainerRule -Path $directory -IncludeInherited).Count -eq 0) "Unregistration should leave no grant on the directory."
       Assert-Condition ((Get-AppContainerAccessState -Acl (Get-Acl -LiteralPath $dllPath) -Rights $script:readAndExecute) -eq "Missing") "Unregistration should leave no grant on the DLL."
+      Assert-Condition ((Get-AppContainerGrantLedger -LedgerKey $ledgerKey).Count -eq 0) "Unregistration should clear the ledger."
+      Assert-Condition (-not (Test-Path -LiteralPath $ledgerKey)) "An emptied ledger key should not be left behind."
+    }
+
+    It "adds the inheritable ACE even when the directory already has a non-inheritable one" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      # Effective read+execute on the directory says nothing about what a file
+      # created later inherits, so a non-inheritable ACE must not be mistaken for
+      # coverage — the next rebuild would otherwise lose access.
+      $directory = Initialize-AclSandbox
+      Add-ExplicitAppContainerRule -Path $directory -Rights $script:readAndExecute
+      Assert-Condition ((Get-AppContainerAccessState -Acl (Get-Acl -LiteralPath $directory) -Rights $script:readAndExecute) -eq "Allowed") "The directory should already be readable."
+
+      Assert-Condition ((Grant-AppContainerReadExecute -Path $directory) -eq $true) "A non-inheritable ACE should not count as coverage for future rebuilds."
+
+      $dllPath = Join-Path $directory "azookey_tsf_tip.dll"
+      Set-Content -LiteralPath $dllPath -Value "rebuilt TIP DLL"
+      Assert-Condition ((Get-AppContainerAccessState -Acl (Get-Acl -LiteralPath $dllPath) -Rights $script:readAndExecute) -eq "Allowed") "A DLL created after the grant should inherit the access."
+    }
+
+    It "keeps ACEs that predate registration" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      $directory = Initialize-AclSandbox
+      $dllPath = Join-Path $directory "azookey_tsf_tip.dll"
+      Set-Content -LiteralPath $dllPath -Value "stand-in for the TIP DLL"
+      $ledgerKey = Initialize-TestLedgerKey
+
+      # Both paths are covered before registration runs, so registration adds —
+      # and records — nothing. Unregistration must then leave both alone.
+      Add-ExplicitAppContainerRule -Path $directory -Rights $script:readAndExecute `
+        -Inheritance ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+          [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)
+      Add-ExplicitAppContainerRule -Path $dllPath -Rights $script:readAndExecute
+
+      Grant-TipAppContainerAccess -TipDllPath $dllPath -LedgerKey $ledgerKey
+      Assert-Condition ((Get-AppContainerGrantLedger -LedgerKey $ledgerKey).Count -eq 0) "A no-op registration should record nothing."
+
+      Revoke-TipAppContainerAccess -TipDllPath $dllPath -LedgerKey $ledgerKey
+      Assert-Condition ((Get-AppContainerRule -Path $directory).Count -eq 1) "A pre-existing directory ACE should survive unregistration."
+      Assert-Condition ((Get-AppContainerRule -Path $dllPath).Count -eq 1) "A pre-existing DLL ACE should survive unregistration."
+    }
+
+    It "removes only the exact ACE a grant installs" {
+      if (-not $script:onWindows) {
+        Set-ItResult -Skipped -Because "file ACLs are a Windows concept"
+      }
+
+      # A directory, so the granted ACE (ContainerInherit|ObjectInherit) and the
+      # hand-set one (no inheritance) stay distinct entries instead of being
+      # merged into a single ACE by AddAccessRule.
+      $directory = Initialize-AclSandbox
+      Assert-Condition ((Grant-AppContainerReadExecute -Path $directory) -eq $true) "The grant should install its ACE."
+      Add-ExplicitAppContainerRule -Path $directory `
+        -Rights ([System.Security.AccessControl.FileSystemRights]::Read)
+      Assert-Condition ((Get-AppContainerRule -Path $directory).Count -eq 2) "The hand-set ACE should be a separate entry."
+
+      Assert-Condition ((Revoke-AppContainerReadExecute -Path $directory) -eq $true) "Revoke should remove the granted ACE."
+      $survivors = Get-AppContainerRule -Path $directory
+      Assert-Condition ($survivors.Count -eq 1) "A hand-set ACE with other rights should survive the revoke."
+      Assert-Condition (([int]$survivors[0].FileSystemRights -band [int][System.Security.AccessControl.FileSystemRights]::ExecuteFile) -eq 0) "The surviving ACE should be the hand-set read-only one."
+      Assert-Condition ($survivors[0].InheritanceFlags -eq [System.Security.AccessControl.InheritanceFlags]::None) "The surviving ACE should keep its own inheritance flags."
     }
 
     It "never rewrites ACLs under protected system directories" {

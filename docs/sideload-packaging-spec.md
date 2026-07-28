@@ -643,14 +643,27 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
 * **付与対象の DLL**: 本リポジトリのビルドは x64 のみである（`CMakePresets.json`）。したがって
   現時点の対象は x64 TIP DLL 1 個。32 bit プロセス向けに x86 TIP DLL を追加する場合は、同じ
   規則を当該 DLL にも適用する（`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
-* **解除**: `scripts/unregister-dev.ps1` は登録時に付与した**明示 ACE のみ**を除去する。継承 ACE と
-  `%ProgramFiles%` / `%SystemRoot%` 配下は対象外とし、MSI 導入先の ACL を壊さない。
+* **既存 ACE の判定**: ディレクトリでは「実効 RX があるか」ではなく「`ObjectInherit` を持つ
+  allow ACE があるか」を見る。非継承の明示 ACE を「設定済み」と扱うと、再ビルドで作り直された
+  DLL が継承元を持たず AppContainer から読めなくなるため。
+* **解除**: `scripts/unregister-dev.ps1` は**登録処理が実際に追加した ACE のみ**を除去する。
+  登録と解除は別プロセスであり、DACL だけからは「手で置いた ACE」と自前の ACE を区別できない。
+  そこで付与したパスを machine-wide 台帳（`HKLM\Software\azooKey\DevRegistration` の
+  `AppContainerAclGrants`）に記録し、解除は台帳にあるパスだけを対象とする。台帳は最後の
+  エントリと同時に削除する。除去は `RemoveAccessRuleSpecific` による完全一致
+  （権限・継承フラグ・伝播フラグが一致する非継承 allow ACE）で行い、権限や継承が異なる
+  手動設定の ACE には触れない。継承 ACE と `%ProgramFiles%` / `%SystemRoot%` 配下も対象外とし、
+  MSI 導入先の ACL を壊さない。
+  なお、同一 SID・同一フラグの ACE は `AddAccessRule` の時点で 1 件へ統合されるため、
+  自前 ACE が後付けの広い権限へ吸収された場合は完全一致せず、解除は何もしない。
+  他者が広げた権限を削るより残す側に倒す判断である。
 * **opt-out**: 両スクリプトの `-SkipAppContainerAcl`。ビルドツリーを AppContainer から到達可能に
   したくないホスト向けで、指定時は UWP / Microsoft Store アプリで TIP がロードされない。
 * **実装と検証**: 共通ヘルパは `scripts/AppContainerAcl.ps1`。実機を要さない検証は
   `scripts/tests/register-dev.Tests.ps1`（Pester、CI の PowerShell lint/test ジョブ）が担い、
-  付与 → 冪等 → 解除のラウンドトリップ、再ビルド相当の継承、書き込み権限を付与しないこと、
-  保護対象パスを書き換えないことを確認する。
+  付与 → 冪等 → 解除のラウンドトリップ、再ビルド相当の継承、非継承 ACE がある場合も継承 ACE を
+  追加すること、登録前から存在した ACE が解除後も残ること、権限の異なる手動 ACE を消さないこと、
+  書き込み権限を付与しないこと、保護対象パスを書き換えないことを確認する。
 * **祖先ディレクトリの traverse は付与しない**。既定構成の Windows では bypass traverse
   checking（`SeChangeNotifyPrivilege`）により最終要素の DACL だけが効くという前提を置く。
   グループポリシーで同特権を外した環境ではビルドツリーの祖先に traverse が別途必要になる。

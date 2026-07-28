@@ -229,7 +229,12 @@ Describe "MSIX identity package consistency (DEV-101 / M28)" {
       # Option A では -ExternalLocation 無しの登録は host に identity を与えず
       # smoke が無意味になる（PR #214 の P2 指摘）。
       $smokeText = Get-Content -Raw -LiteralPath $script:smokePath
-      $smokeText | Should -Match 'Add-AppxPackage\s+-Path\s+\$MsixPath\s+-ExternalLocation\s+\$absExternal'
+      $smokeText | Should -Match (
+        'Add-AppxPackage\s+-Path\s+\$Path\s+-ExternalLocation\s+' +
+        '\$ResolvedExternalLocation')
+      $smokeText | Should -Match (
+        'Install-MsixPackage\s+-Path\s+\$MsixPath\s+`\s*' +
+        '-ResolvedExternalLocation\s+\$resolvedExternalLocation')
     }
   }
 

@@ -234,11 +234,23 @@ Registration](https://learn.microsoft.com/windows/win32/tsf/text-service-registr
   DEV-101 でリネーム済み）。`regsvr32` 開発用経路であることを名前で明示する
 * MSIX 同梱の TIP は HKCU 自己登録ロジックを skip（上記 `IsRunningInMsixContext`
   で分岐）
-* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、`compat-test/msix_install_uninstall.ps1`
-  の smoke ハーネスで Add-AppxPackage → 登録確認 → Remove-AppxPackage → 残骸 0 を
-  確認する（実機 VM で実行する `gate:human-required`。COM 登録ラウンドトリップ自体は
-  CTest `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
-  MSIX パッケージング層を補完する）
+* CI / ローカル開発で MSIX と `regsvr32` を併用する場合は、
+  `compat-test/msix_install_uninstall.ps1` の smoke ハーネスを使う。
+  clean install / uninstall では Add-AppxPackage → 登録確認 → Remove-AppxPackage →
+  残骸 0 を確認する。
+  update / rollback では旧版を `-MsixPath`、新版を `-UpdateMsixPath`、失敗が期待される
+  同一 package family のより新しい package を `-FailedUpdateMsixPath` に指定する。
+  失敗用 package は validation / staging を通過した後、依存 framework の不足や登録内容の
+  不整合によって deployment 中に失敗するものを使う。署名不正など validation 開始前に
+  拒否される package は rollback 経路を通らないため、この検証には使わない。
+  ハーネスは新版の Version 増加を確認した後、失敗する更新を実行し、直前の
+  `PackageFullName` と `Version` が保持されることを確認する。失敗時の HRESULT と
+  `FullyQualifiedErrorId` は `report.json` に記録し、実機検証で失敗段階を識別できるようにする。
+  update package 2 件は常に同時に指定し、片方だけのシナリオ実行を認めない。
+  実機 VM での実行は `gate:human-required` とする。
+  COM 登録ラウンドトリップ自体は CTest
+  `tsf_tip_com_smoke_tests::TsfTipRegistrationSmokeTest` が担い、本ハーネスは
+  MSIX パッケージング層を補完する。
 
 ### 1.1.2 Option A の具体 PoC（`pkg/msix/`）
 
@@ -1783,8 +1795,9 @@ bool LearningStore::Load() {
 | テスト | 場所 | 内容 |
 |---|---|---|
 | TIP 登録ラウンドトリップ | `tsf-tip/tests/com_smoke_test.cpp`（`TsfTipRegistrationSmokeTest`） | Windows 限定。`DllRegisterServer` 後に HKLM InprocServer32 + TSF プロファイルが存在し、`DllUnregisterServer` で消えるかを検証。env `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格 opt-in（CI 非実行） |
-| MSIX install/uninstall 残骸 | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。`Add-AppxPackage` → CLSID / TSF プロファイル登録の存在確認 → `Remove-AppxPackage` → 残骸 0 を半自動検証（DEV-101 / M28） |
+| MSIX install/update/rollback/uninstall | `compat-test/msix_install_uninstall.ps1` | Windows 限定・実機 VM（`gate:human-required`）。旧版 install → CLSID / TSF プロファイル登録の存在確認 → 新版 update → deployment 中に失敗する update 後の直前バージョン保持 → uninstall → 残骸 0 を半自動検証（DEV-101 / DEV-586 / M28） |
 | MSIX identity 宣言の整合 | `scripts/tests/msix-identity-consistency.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。identity manifest と app 側 `<msix>` 3 属性の一致、Option A の不変条件、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の一致、ビルド埋め込み配線を検証（§1.1.2） |
+| MSIX update / rollback ハーネス契約 | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1` | OS 非依存（CI の PowerShell lint/test ジョブ）。update package のペア指定、clean VM 前提、package family / Version 比較、失敗 update と rollback 判定の順序、Add ごとの導入 package 追跡、早期中断時の report 出力を AST で検証（§1.1.1） |
 | 署名検証 | `pkg/tests/signature_test.ps1` | signtool /verify で成功するか |
 | UpdateChecker | `inference-host/tests/update_checker_test.cpp` | GitHub API モック、バージョン比較 |
 | ETW provider | `core/tests/etw_logger_test.cpp` | Windows 限定。Register/Unregister + Write |

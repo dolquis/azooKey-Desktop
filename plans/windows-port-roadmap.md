@@ -1646,9 +1646,12 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で description を保持・表示し、
   (b) Host 側データ駆動リライタ（M62-C/D）は **`ipc::CandidateField` に description フィールドを
   追加**して伝送する。いずれも確定文字列には注釈を畳み込まない。正典は `docs/candidate-rewriter-spec.md`。
-- **既知のテストギャップ**: `core/tests/number_rewriter_test.cpp` 等の純粋関数テスト未作成
-  （karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植する。逐語コピーしない）。
-  記号/絵文字のデータ駆動リライトは再ポート出力に対する round-trip テストが必要。
+- **既知のテストギャップ**: 数字（M62-A）の core 純粋関数テストは `core/tests/number_rewriter_test.cpp`
+  にある（karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植したもの。逐語コピーしない）。
+  残るギャップは 3 つ。(a) TIP 配線側 — 候補ウィンドウ view-model が注釈を保持・表示すること、および
+  `numberRewriter=false` で候補・確定・学習の挙動が不変であることを TIP レベルで確認するテスト。
+  (b) 半角カタカナ・英字（M62-B）の core 純粋関数テスト（M60 統合分を含む）。
+  (c) 記号/絵文字（M62-C/D）のデータ駆動リライトに対する再ポート出力の round-trip テスト。
 - **リスク**: Mozc 由来データ（M62-C/D）の取り込みは BSD-3 / CLDR 表記義務を新規に背負う。
   数字（M62-A）はデータ非依存で最もリスクが低く、ここから着手する。
 

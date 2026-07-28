@@ -158,6 +158,21 @@ Describe "development registration scripts" {
       Assert-Condition ($script:register.Text -match "-ElevatedReentry") "register-dev.ps1 should set ElevatedReentry on relaunch."
     }
 
+    It "waits for elevated registration and propagates its exit code" {
+      $elevationBranch = @($script:register.Ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.IfStatementAst] -and
+          $node.Extent.Text -match 'Start-Process[\s\S]*-Verb\s+RunAs'
+      }, $true))
+      Assert-Condition ($elevationBranch.Count -eq 1) "register-dev.ps1 should have exactly one RunAs elevation branch."
+
+      $elevationText = $elevationBranch[0].Extent.Text
+      Assert-Condition ($elevationText -match 'Start-Process[\s\S]*-Wait[\s\S]*-PassThru') "register-dev.ps1 should wait for the elevated registration process."
+      Assert-Condition ($elevationText -notmatch '-NoExit') "register-dev.ps1 should let the elevated registration process exit."
+      Assert-Condition ($elevationText -match '\$elevatedProcess\s*=\s*Start-Process') "register-dev.ps1 should capture the elevated registration process."
+      Assert-Condition ($elevationText -match 'exit\s+\$elevatedProcess\.ExitCode') "register-dev.ps1 should propagate the elevated registration exit code."
+    }
+
     It "uses silent regsvr32 and fails on registration errors" {
       $commands = (Get-CommandText -Ast $script:register.Ast -CommandName "Start-Process") -join "`n"
       Assert-Condition ($commands -match 'regsvr32\.exe') "register-dev.ps1 should call regsvr32.exe."

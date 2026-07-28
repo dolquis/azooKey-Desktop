@@ -576,7 +576,8 @@ constexpr GUID kConvertedSegmentGuid   = { 0xBBC1..., ... };
 constexpr GUID kUnconvertedSegmentGuid = { 0xBBC2..., ... };
 ```
 
-`EnumDisplayAttributeInfo` で 3 新規エントリを返す。
+`EnumDisplayAttributeInfo` へ 3 エントリを追加する（M3 の入力属性と合わせて
+計 4 エントリ。M3 属性との対応は §5.6）。
 
 ### 5.3 Property 設定
 
@@ -606,6 +607,61 @@ Phase 6 で Zenzai が複数文節を返すようになったら、`Candidate.se
 
 - 「nihongo」入力 → Space で候補表示 → カーソル位置の文節が青背景
 - 矢印キー（Left/Right）で文節を移動できる（カーソル位置によって色が動く）
+
+### 5.6 M3 の単一 DisplayAttribute との対応関係
+
+M3（`plans/windows-port-roadmap.md` M3）では TIP が公開する表示属性は 1 つで、
+EditSession が composition 全体へ `GUID_PROP_ATTRIBUTE` を 1 回 `SetValue` する
+（`tsf-tip/src/TextService.cpp`、属性定義は `tsf-tip/src/DisplayAttribute.cpp`）。
+
+| 項目 | M3 の値 |
+|---|---|
+| GUID | `kInputAttributeGuid`（`tsf-tip/include/azookey/tsf/DisplayAttribute.h`） |
+| `bAttr` | `TF_ATTR_INPUT`（未変換） |
+| `lsStyle` / `fBoldLine` | `TF_LS_SOLID` / `FALSE` |
+| `crText` / `crBk` / `crLine` | いずれも `TF_CT_NONE`（アプリ既定の描画に委ねる） |
+| 適用単位 | composition 全体（文節を区別しない） |
+
+M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAttr` は
+[`TF_DA_ATTR_INFO`](https://learn.microsoft.com/windows/win32/api/msctf/ne-msctf-tf_da_attr_info)
+の定義（`TF_ATTR_TARGET_CONVERTED` = 選択された変換済み、`TF_ATTR_CONVERTED` =
+変換済み、`TF_ATTR_INPUT` = 未変換）に従って割り当てる。
+
+| M23 属性 | 用途 | `bAttr` | 描画（§5.1） | M3 での扱い |
+|---|---|---|---|---|
+| Focused | 注目文節 | `TF_ATTR_TARGET_CONVERTED` | 青背景 | 区別しない（全体が未変換扱い） |
+| Converted | 変換済み文節 | `TF_ATTR_CONVERTED` | 黒 + 実線下線 | 区別しない（同上） |
+| Unconverted | 未変換文節 | `TF_ATTR_INPUT` | グレー + 点線下線 | M3 の属性が担う（実線・色指定なし） |
+
+移行規則と fallback:
+
+- `kInputAttributeGuid` は M23 実装後も残し、**文節情報が使えないときの fallback
+  属性**として composition 全体に適用する。`EnumDisplayAttributeInfo` は M3 の 1
+  エントリ + M23 の 3 エントリ = 4 エントリを返す。
+- fallback を使う条件は、`Candidate.segments[]` が空（§5.4 の Phase 5 段階を含む）、
+  Host が劣化モードで文節情報を返せない、M23 が未有効のいずれか。
+- 文節ごとの `SetValue`（§5.3）に 1 つでも失敗したときは、composition 全体を
+  fallback 属性で塗り直し、色が文節間で不揃いなまま残らないようにする。
+
+アプリ差についての前提: 多くのアプリは provider が指定した色をそのまま使わず、
+`bAttr` を見て自前の配色で描く。したがって色指定は「無視されうる」前提で決め、
+文節の区別は `bAttr` の選択で担保する。M3 が色を `TF_CT_NONE` にしているのは
+この前提に沿った選択であり、M23 で色を足すときも `bAttr` だけで区別が付く
+組み合わせを崩さない。
+
+回帰テストは `tsf-tip/tests/display_attribute_test.cpp`（属性値の定義、
+enumerator の `Next` / `Skip` / `Clone` 境界、clone の属性コピー）が担う。
+M23 で属性数が 1 → 4 に増えるとき、`kAttributeCount` に依存する境界テストも
+同時に更新する。
+
+### 5.7 アプリ互換チェックリスト（M3・実機 Win11）
+
+`bAttr` の解釈と下線の描画はアプリ実装に依存するため、代表アプリでの実測が要る。
+**確認手順・対象アプリ・確認項目・合格条件（安定仕様）は
+`compat-test/m3_display_attribute_checklist.md`** に定める。実機 Win11 が必要な
+ため実走は DEV-365（`gate:human-required`）で行い、**アプリ別の実測結果（可変ログ）
+は docs ではなく DEV-365（Linear）に記録する**（`AGENTS.md` の状態 Linear 一本化方針）。
+M23 で属性が増えたときは、同チェックリストへ文節ごとの色分け項目を追加する。
 
 ## 6. ITfFnConfigure (M30 連動)
 
@@ -767,6 +823,7 @@ Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 | KeyMap 互換 | `tsf-tip/tests/keymap_msime_compat_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動 |
 | CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
 | Segment DisplayAttribute | `tsf-tip/tests/segment_attr_test.cpp` | Windows 限定。3 文節の attribute 設定 |
+| DisplayAttribute（M3 単一属性・§5.6） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。属性値の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること |
 
 ## 10. 参照
 

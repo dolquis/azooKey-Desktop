@@ -205,13 +205,14 @@ $principal = New-Object Security.Principal.WindowsPrincipal(
   [Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   Write-Host "Machine-wide registration requires elevation; relaunching as administrator..."
-  $relaunchArgs = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" " +
+  $relaunchArgs = "-ExecutionPolicy Bypass -File `"$PSCommandPath`" " +
                   "-TipDllPath `"$TipDllPath`" -HostExePath `"$HostExePath`" -ElevatedReentry"
   if ($SkipAppContainerAcl) {
     $relaunchArgs += " -SkipAppContainerAcl"
   }
-  Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $relaunchArgs
-  return
+  $elevatedProcess = Start-Process -FilePath "powershell.exe" -Verb RunAs `
+    -ArgumentList $relaunchArgs -Wait -PassThru
+  exit $elevatedProcess.ExitCode
 }
 
 if (!(Test-Path $TipDllPath)) {

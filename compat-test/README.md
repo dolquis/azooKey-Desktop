@@ -50,6 +50,14 @@ compat-report-YYYYMMDD-HHMMSS/
 
 テストケース一覧（C-001〜C-012）と CI 連携は §13.3 / §13.6 を参照。
 
+## 手動チェックリスト
+
+runner 実装前でも実機で確認できる手動チェックリストを同居させる。
+
+- [`m3_display_attribute_checklist.md`](m3_display_attribute_checklist.md) —
+  M3 の DisplayAttribute / CompositionSink のアプリ別描画差（D-01〜D-10）。
+  M50 のハーネス実装後は追加ケースとして取り込む。
+
 ## 観測性との整合
 
 ログ・成果物は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシーに

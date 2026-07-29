@@ -95,6 +95,8 @@ cmake --build --preset windows-llama-debug
 
 `windows-llama-debug` は pin 済みの llama.cpp を取得し、実 Zenzai モデルを読み込める
 開発用成果物を生成します。通常の `windows-debug` は高速な no-egress mock テスト用です。
+これらの Debug 成果物は Debug CRT に依存するため、Visual Studio 未導入のクリーンな Windows ではロードできません。
+実機検証には `docs/handoff/hyper-v-tip-verification.md` の `windows-release` VM 検証パッケージを使用してください。
 `register-dev.ps1` は登録前に `llama_cpp=1` を確認し、mock ホストの誤登録を拒否します。
 fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指定できます。
 現時点では `models\zenzai\` へ GGUF を配置しただけではモデルを自動選択しません。

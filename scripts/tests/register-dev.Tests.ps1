@@ -115,11 +115,57 @@ Describe "development registration scripts" {
     }
 
     It "warns when registration resolves to Debug CRT artifacts" {
-      Assert-Condition ($script:register.Text -match [regex]::Escape("function Write-DebugCrtWarning")) "register-dev.ps1 should define the Debug CRT warning check."
-      Assert-Condition ($script:register.Text -match '\[\^\\\\/\]\*debug') "register-dev.ps1 should recognize debug build directory names."
-      Assert-Condition ($script:register.Text -match 'Write-Warning[\s\S]{0,320}Debug CRT') "register-dev.ps1 should explain the clean-machine Debug CRT dependency."
-      Assert-Condition ($script:register.Text -match 'Write-DebugCrtWarning\s+-Paths\s+@\(\$TipDllPath,\s*\$HostExePath\)') "register-dev.ps1 should check both resolved registration artifacts."
-      Assert-Condition ($script:register.Text -match 'windows-release VM verification') "register-dev.ps1 should point clean-machine testing to the release package."
+      $warningFunction = $script:register.Ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+          $node.Name -eq "Write-DebugCrtWarning"
+      }, $true)
+      Assert-Condition ($null -ne $warningFunction) "register-dev.ps1 should define the Debug CRT warning check."
+      . ([scriptblock]::Create($warningFunction.Extent.Text))
+
+      $debugTip = "C:\repo\build\windows-llama-debug\tsf-tip\azookey_tsf_tip.dll"
+      $debugHost = "C:\repo\build\WINDOWS-DEBUG\inference-host\azookey_inference_host.exe"
+      $debugWarnings = @()
+      Write-DebugCrtWarning `
+        -Paths @($debugTip, $debugHost) `
+        -WarningVariable debugWarnings `
+        -WarningAction SilentlyContinue
+      Assert-Condition ($debugWarnings.Count -eq 1) "Debug TIP/Host paths should emit one warning."
+      Assert-Condition ($debugWarnings[0].Message.Contains($debugTip)) "The warning should identify the Debug TIP path."
+      Assert-Condition ($debugWarnings[0].Message.Contains($debugHost)) "The warning should identify the Debug host path."
+
+      $releaseWarnings = @()
+      Write-DebugCrtWarning `
+        -Paths @("C:\repo\build\windows-release\tsf-tip\azookey_tsf_tip.dll") `
+        -WarningVariable releaseWarnings `
+        -WarningAction SilentlyContinue
+      Assert-Condition ($releaseWarnings.Count -eq 0) "Release artifacts should not emit a Debug CRT warning."
+
+      $packagedWarnings = @()
+      Write-DebugCrtWarning `
+        -Paths @("C:\vm-verify\azookey_tsf_tip.dll") `
+        -WarningVariable packagedWarnings `
+        -WarningAction SilentlyContinue
+      Assert-Condition ($packagedWarnings.Count -eq 0) "A copied artifact without build metadata should not be guessed as Debug."
+
+      $asanBuild = Join-Path $TestDrive "build\windows-asan"
+      $asanHostDir = Join-Path $asanBuild "inference-host"
+      New-Item -ItemType Directory -Path $asanHostDir -Force | Out-Null
+      "CMAKE_BUILD_TYPE:STRING=Debug" |
+        Set-Content -LiteralPath (Join-Path $asanBuild "CMakeCache.txt") -Encoding UTF8
+      $asanWarnings = @()
+      Write-DebugCrtWarning `
+        -Paths @((Join-Path $asanHostDir "azookey_inference_host.exe")) `
+        -WarningVariable asanWarnings `
+        -WarningAction SilentlyContinue
+      Assert-Condition ($asanWarnings.Count -eq 1) "CMake Debug metadata should warn even when the build directory name omits debug."
+    }
+
+    It "warns before relaunching elevated in the original console" {
+      $warnIndex = $script:register.Text.IndexOf('Write-DebugCrtWarning -Paths')
+      $relaunchIndex = $script:register.Text.IndexOf('-Verb RunAs')
+      Assert-Condition ($warnIndex -ge 0 -and $warnIndex -lt $relaunchIndex) "register-dev.ps1 should warn about Debug CRT before relaunching elevated."
+      Assert-Condition ($script:register.Text -match 'if\s*\(\s*-not\s+\$ElevatedReentry\s*\)\s*\{\s*Write-DebugCrtWarning') "register-dev.ps1 should emit the warning only from the original non-elevated process."
     }
 
     It "runs the llama.cpp linkage probe without loading the configured Zenzai model" {

@@ -38,7 +38,17 @@ function Write-DebugCrtWarning {
   )
 
   $debugBuildPaths = @($Paths | Where-Object {
-    $_ -match '(?i)[\\/]build[\\/][^\\/]*debug[\\/]'
+    $buildDir = Split-Path -Parent (Split-Path -Parent $_)
+    $cachePath = Join-Path $buildDir "CMakeCache.txt"
+    if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
+      return Select-String `
+        -LiteralPath $cachePath `
+        -Pattern '^CMAKE_BUILD_TYPE:[^=]+=Debug$' `
+        -CaseSensitive:$false `
+        -Quiet
+    }
+
+    return $_ -match '(?i)[\\/]build[\\/][^\\/]*debug[\\/]'
   })
   if ($debugBuildPaths.Count -eq 0) {
     return

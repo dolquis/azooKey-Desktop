@@ -5,10 +5,13 @@ param(
   [string]$HostExePath = "",
   [string]$RuntimeInstallerPath = "",
   [string]$ModelPath = "",
+  [string]$BenchPath = "",
+  [string]$MockDictionaryPath = "",
   [switch]$CheckpointConfirmed
 )
 
 $ErrorActionPreference = "Stop"
+$script:VmVerifyTextServiceClsid = "{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}"
 
 function Get-VmVerifyBootstrapPath {
   param(
@@ -17,6 +20,34 @@ function Get-VmVerifyBootstrapPath {
   )
 
   return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
+function Get-VmVerifyManifestPayloadPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PackageRoot,
+    [Parameter(Mandatory = $true)]
+    [pscustomobject]$Manifest,
+    [Parameter(Mandatory = $true)]
+    [string]$Role
+  )
+
+  $payloadMatches = @($Manifest.files | Where-Object { $_.role -eq $Role })
+  if ($payloadMatches.Count -eq 0) {
+    return ""
+  }
+  if ($payloadMatches.Count -ne 1) {
+    throw "VM verification manifest contains multiple '$Role' payloads."
+  }
+
+  $root = (Resolve-Path -LiteralPath $PackageRoot).Path.TrimEnd("\")
+  $candidate = Get-VmVerifyBootstrapPath -Path (
+    Join-Path $root ([string]$payloadMatches[0].path).Replace("/", "\"))
+  $prefix = $root + [System.IO.Path]::DirectorySeparatorChar
+  if (-not $candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "VM verification manifest payload escapes the package root: $($payloadMatches[0].path)"
+  }
+  return $candidate
 }
 
 function Get-VmVerifyCheck {
@@ -57,11 +88,16 @@ function Install-VmVerifyVCRuntime {
     [string]$InstallerPath
   )
 
-  $process = Start-Process `
-    -FilePath $InstallerPath `
-    -ArgumentList "/install /quiet /norestart" `
-    -Wait `
-    -PassThru
+  $startParameters = @{
+    FilePath = $InstallerPath
+    ArgumentList = "/install /quiet /norestart"
+    Wait = $true
+    PassThru = $true
+  }
+  if (-not (Test-VmVerifyAdministrator)) {
+    $startParameters.Verb = "RunAs"
+  }
+  $process = Start-Process @startParameters
   if ($process.ExitCode -notin @(0, 1638, 3010)) {
     throw "VC++ Redistributable installer failed with exit code $($process.ExitCode)."
   }
@@ -110,8 +146,8 @@ function Test-VmVerifyRegistration {
     [string]$ExpectedTipDllPath
   )
 
-  $clsid = "{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}"
-  $registryPath = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\CLSID\$clsid\InprocServer32"
+  $registryPath = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\CLSID\" +
+    "$script:VmVerifyTextServiceClsid\InprocServer32"
   try {
     $registeredPath = (Get-Item -LiteralPath $registryPath -ErrorAction Stop).
       GetValue($null, "", "DoNotExpandEnvironmentNames")
@@ -152,7 +188,9 @@ function Invoke-VmVerifyRegistration {
     [string]$TipDll,
     [Parameter(Mandatory = $true)]
     [string]$HostExe,
-    [string]$Model = ""
+    [string]$Model = "",
+    [string]$Bench = "",
+    [string]$MockDictionary = ""
   )
 
   $parameters = @{
@@ -161,21 +199,28 @@ function Invoke-VmVerifyRegistration {
   }
   if ($Model) {
     $parameters.ModelPath = $Model
+    $parameters.BenchPath = $Bench
   } else {
     # windows-release intentionally uses the fallback converter unless a
     # llama.cpp-enabled preset and explicit GGUF model were packaged.
     $parameters.AllowMockHost = $true
   }
-
-  $previousInformationPreference = $InformationPreference
-  try {
-    # Keep --json stdout machine-readable even when register-dev.ps1 uses
-    # Write-Host, warnings, or verbose output internally.
-    $InformationPreference = "SilentlyContinue"
-    & $RegisterScriptPath @parameters *>&1 | Out-Null
-  } finally {
-    $InformationPreference = $previousInformationPreference
+  if ($MockDictionary) {
+    $parameters.MockDictionaryPath = $MockDictionary
   }
+
+  # Capture all streams so -Json stdout remains machine-readable, while still
+  # retaining enough context to diagnose non-zero registration exits.
+  $global:LASTEXITCODE = 0
+  $output = @(& $RegisterScriptPath @parameters *>&1)
+  $exitCode = $LASTEXITCODE
+  $outputText = (($output | ForEach-Object { "$_" }) |
+    Select-Object -Last 12) -join [Environment]::NewLine
+  if ($exitCode -ne 0) {
+    throw ("register-dev.ps1 failed with exit code $exitCode." +
+      $(if ($outputText) { " Output: $outputText" } else { "" }))
+  }
+  return $outputText
 }
 
 function Invoke-VmVerifyHostSupervisor {
@@ -184,23 +229,34 @@ function Invoke-VmVerifyHostSupervisor {
     [string]$SupervisorScriptPath,
     [Parameter(Mandatory = $true)]
     [string]$HostExe,
-    [string]$Model = ""
+    [Parameter(Mandatory = $true)]
+    [string]$PipeName,
+    [string]$Model = "",
+    [string]$MockDictionary = ""
   )
 
   $logDirectory = Join-Path (Join-Path $env:LOCALAPPDATA "azooKey") "logs"
   New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-  $logPath = Join-Path $logDirectory "inference-host-stderr.log"
-  $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass " +
+  $timestamp = [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmmss-fff")
+  $hostLogPath = Join-Path $logDirectory "inference-host-stderr.log"
+  $supervisorLogPath = Join-Path $logDirectory (
+    "inference-host-supervisor-stderr-$timestamp.log")
+  $powerShellExe = (Get-Process -Id $PID).Path
+  $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass " +
     "-File `"$SupervisorScriptPath`" -HostExePath `"$HostExe`" " +
-    "-StderrLogPath `"$logPath`""
+    "-PipeName `"$PipeName`" -StderrLogPath `"$hostLogPath`""
   if ($Model) {
     $arguments += " -ModelPath `"$Model`""
   }
+  if ($MockDictionary) {
+    $arguments += " -MockDictionaryPath `"$MockDictionary`""
+  }
 
   Start-Process `
-    -FilePath "powershell.exe" `
+    -FilePath $powerShellExe `
     -ArgumentList $arguments `
-    -WindowStyle Hidden | Out-Null
+    -WindowStyle Hidden `
+    -RedirectStandardError $supervisorLogPath | Out-Null
 }
 
 function Invoke-VmVerifyBootstrap {
@@ -211,6 +267,8 @@ function Invoke-VmVerifyBootstrap {
     [string]$HostExe = "",
     [string]$RuntimeInstaller = "",
     [string]$Model = "",
+    [string]$Bench = "",
+    [string]$MockDictionary = "",
     [switch]$HasCheckpoint
   )
 
@@ -228,11 +286,49 @@ function Invoke-VmVerifyBootstrap {
   $supervisorScript = Join-Path $root "host-supervisor.ps1"
   $manifestPath = Join-Path $root "manifest.json"
 
+  $package = [pscustomobject][ordered]@{
+    commit = ""
+    preset = ""
+    buildType = ""
+  }
+  $manifest = $null
+  if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $package.commit = [string]$manifest.commit
+    $package.preset = [string]$manifest.preset
+    $package.buildType = [string]$manifest.buildType
+  }
+
+  if ($manifest -and -not $Model) {
+    $Model = Get-VmVerifyManifestPayloadPath `
+      -PackageRoot $root `
+      -Manifest $manifest `
+      -Role "gguf-model"
+  }
+  if ($manifest -and -not $Bench) {
+    $Bench = Get-VmVerifyManifestPayloadPath `
+      -PackageRoot $root `
+      -Manifest $manifest `
+      -Role "llama-preflight"
+  }
+  if ($manifest -and -not $MockDictionary) {
+    $MockDictionary = Get-VmVerifyManifestPayloadPath `
+      -PackageRoot $root `
+      -Manifest $manifest `
+      -Role "mock-dictionary"
+  }
+
   $TipDll = Get-VmVerifyBootstrapPath -Path $TipDll
   $HostExe = Get-VmVerifyBootstrapPath -Path $HostExe
   $RuntimeInstaller = Get-VmVerifyBootstrapPath -Path $RuntimeInstaller
   if ($Model) {
     $Model = Get-VmVerifyBootstrapPath -Path $Model
+  }
+  if ($Bench) {
+    $Bench = Get-VmVerifyBootstrapPath -Path $Bench
+  }
+  if ($MockDictionary) {
+    $MockDictionary = Get-VmVerifyBootstrapPath -Path $MockDictionary
   }
 
   foreach ($requiredPath in @($TipDll, $HostExe, $registerScript, $supervisorScript)) {
@@ -243,20 +339,12 @@ function Invoke-VmVerifyBootstrap {
   if ($Model -and -not (Test-Path -LiteralPath $Model -PathType Leaf)) {
     throw "GGUF model not found: $Model"
   }
-  if (-not (Test-VmVerifyAdministrator)) {
-    throw "verify-bootstrap.ps1 must run from an administrator PowerShell session."
+  if ($Model -and -not (Test-Path -LiteralPath $Bench -PathType Leaf)) {
+    throw "llama.cpp preflight tool not found: $Bench"
   }
-
-  $package = [pscustomobject][ordered]@{
-    commit = ""
-    preset = ""
-    buildType = ""
-  }
-  if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    $package.commit = [string]$manifest.commit
-    $package.preset = [string]$manifest.preset
-    $package.buildType = [string]$manifest.buildType
+  if ($MockDictionary -and
+      -not (Test-Path -LiteralPath $MockDictionary -PathType Leaf)) {
+    throw "Mock dictionary not found: $MockDictionary"
   }
 
   $actions = [ordered]@{
@@ -303,14 +391,17 @@ function Invoke-VmVerifyBootstrap {
       -Message "The expected TIP DLL is already registered machine-wide."
   } else {
     try {
-      Invoke-VmVerifyRegistration `
+      $registrationOutput = Invoke-VmVerifyRegistration `
         -RegisterScriptPath $registerScript `
         -TipDll $TipDll `
         -HostExe $HostExe `
-        -Model $Model
+        -Model $Model `
+        -Bench $Bench `
+        -MockDictionary $MockDictionary
       $actions.tipRegistered = $true
       if (-not (Test-VmVerifyRegistration -ExpectedTipDllPath $TipDll)) {
-        throw "register-dev.ps1 completed, but the expected TIP registration was not found."
+        throw ("register-dev.ps1 completed, but the expected TIP registration was not found." +
+          $(if ($registrationOutput) { " Output: $registrationOutput" } else { "" }))
       }
       $checks += Get-VmVerifyCheck `
         -Id "tipRegistration" `
@@ -337,7 +428,9 @@ function Invoke-VmVerifyBootstrap {
         Invoke-VmVerifyHostSupervisor `
           -SupervisorScriptPath $supervisorScript `
           -HostExe $HostExe `
-          -Model $Model
+          -PipeName $pipeName `
+          -Model $Model `
+          -MockDictionary $MockDictionary
         $actions.hostSupervisorStarted = $true
       }
       if (-not (Wait-VmVerifyPipe -PipeName $pipeName -TimeoutSeconds 15)) {
@@ -420,6 +513,8 @@ if ($MyInvocation.InvocationName -ne ".") {
     -HostExe $HostExePath `
     -RuntimeInstaller $RuntimeInstallerPath `
     -Model $ModelPath `
+    -Bench $BenchPath `
+    -MockDictionary $MockDictionaryPath `
     -HasCheckpoint:$CheckpointConfirmed
 
   if ($Json) {

@@ -55,7 +55,11 @@ function Get-VmVerifyPresetConfiguration {
       CacheVariables = @{}
     }
 
-    foreach ($parentName in @($node.inherits)) {
+    $parents = @($node.inherits)
+    # CMake gives the first parent in an inherits array higher precedence.
+    # Apply parents in reverse order so earlier parents overwrite later ones.
+    for ($parentIndex = $parents.Count - 1; $parentIndex -ge 0; $parentIndex--) {
+      $parentName = $parents[$parentIndex]
       if (-not $parentName) {
         continue
       }
@@ -117,12 +121,23 @@ function Get-VmVerifyCacheValue {
 function Assert-VmVerifyBuildReady {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$BuildDirectory
+    [string]$BuildDirectory,
+    [switch]$IncludeBench,
+    [AllowNull()]
+    [pscustomobject]$CommandResult = $null
   )
 
-  $output = & cmake --build $BuildDirectory --target `
-    azookey_tsf_tip azookey_inference_host -- -n 2>&1
-  $exitCode = $LASTEXITCODE
+  if ($null -eq $CommandResult) {
+    $targets = @("azookey_tsf_tip", "azookey_inference_host")
+    if ($IncludeBench) {
+      $targets += "azookey_zenzai_bench"
+    }
+    $output = & cmake --build $BuildDirectory --target $targets -- -n 2>&1
+    $exitCode = $LASTEXITCODE
+  } else {
+    $output = $CommandResult.Output
+    $exitCode = [int]$CommandResult.ExitCode
+  }
   $outputText = ($output | Out-String).Trim()
   if ($exitCode -ne 0) {
     throw "Build freshness check failed for '$BuildDirectory' (exit $exitCode): $outputText"
@@ -136,11 +151,19 @@ function Assert-VmVerifyBuildReady {
 function Get-VmVerifyGitCommit {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$RepositoryRoot
+    [string]$RepositoryRoot,
+    [AllowNull()]
+    [pscustomobject]$CommandResult = $null
   )
 
-  $commit = (& git -C $RepositoryRoot rev-parse HEAD 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-fA-F]{40}$') {
+  if ($null -eq $CommandResult) {
+    $commit = (& git -C $RepositoryRoot rev-parse HEAD 2>&1 | Out-String).Trim()
+    $exitCode = $LASTEXITCODE
+  } else {
+    $commit = ($CommandResult.Output | Out-String).Trim()
+    $exitCode = [int]$CommandResult.ExitCode
+  }
+  if ($exitCode -ne 0 -or $commit -notmatch '^[0-9a-fA-F]{40}$') {
     throw "Unable to resolve the repository commit: $commit"
   }
   return $commit.ToLowerInvariant()
@@ -149,12 +172,20 @@ function Get-VmVerifyGitCommit {
 function Assert-VmVerifyWorktreeClean {
   param(
     [Parameter(Mandatory = $true)]
-    [string]$RepositoryRoot
+    [string]$RepositoryRoot,
+    [AllowNull()]
+    [pscustomobject]$CommandResult = $null
   )
 
-  $status = (& git -C $RepositoryRoot status --porcelain --untracked-files=all 2>&1 |
-    Out-String).Trim()
-  if ($LASTEXITCODE -ne 0) {
+  if ($null -eq $CommandResult) {
+    $status = (& git -C $RepositoryRoot status --porcelain --untracked-files=all 2>&1 |
+      Out-String).Trim()
+    $exitCode = $LASTEXITCODE
+  } else {
+    $status = ($CommandResult.Output | Out-String).Trim()
+    $exitCode = [int]$CommandResult.ExitCode
+  }
+  if ($exitCode -ne 0) {
     throw "Unable to inspect the repository worktree: $status"
   }
   if ($status) {
@@ -192,6 +223,49 @@ function Add-VmVerifyPayloadFile {
     role = $Role
     size = [int64]$item.Length
     sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+  }
+}
+
+function Compress-VmVerifyArchive {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$StagingDirectory,
+    [Parameter(Mandatory = $true)]
+    [string]$DestinationPath
+  )
+
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $fileStream = [System.IO.File]::Open(
+    $DestinationPath,
+    [System.IO.FileMode]::Create,
+    [System.IO.FileAccess]::ReadWrite,
+    [System.IO.FileShare]::None)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new(
+      $fileStream,
+      [System.IO.Compression.ZipArchiveMode]::Create,
+      $false)
+    try {
+      foreach ($file in Get-ChildItem -LiteralPath $StagingDirectory -File -Recurse) {
+        $entryName = $file.FullName.Substring($StagingDirectory.Length).
+          TrimStart("\").Replace("\", "/")
+        $compression = [System.IO.Compression.CompressionLevel]::Optimal
+        if ($file.Extension -ieq ".gguf") {
+          # GGUF is already dense and can exceed Compress-Archive's 2 GB limit.
+          $compression = [System.IO.Compression.CompressionLevel]::NoCompression
+        }
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+          $archive,
+          $file.FullName,
+          $entryName,
+          $compression) | Out-Null
+      }
+    } finally {
+      $archive.Dispose()
+    }
+  } finally {
+    $fileStream.Dispose()
   }
 }
 
@@ -242,12 +316,19 @@ function Export-VmVerifyPackage {
 
   $tipDll = Join-Path $configuration.BinaryDir "tsf-tip\azookey_tsf_tip.dll"
   $hostExe = Join-Path $configuration.BinaryDir "inference-host\azookey_inference_host.exe"
-  foreach ($artifact in @($tipDll, $hostExe)) {
+  $benchExe = Join-Path $configuration.BinaryDir "bench\azookey_zenzai_bench.exe"
+  $requiredArtifacts = @($tipDll, $hostExe)
+  if ($Model) {
+    $requiredArtifacts += $benchExe
+  }
+  foreach ($artifact in $requiredArtifacts) {
     if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
       throw "Required build artifact is missing for preset '$PresetName': $artifact"
     }
   }
-  Assert-VmVerifyBuildReady -BuildDirectory $configuration.BinaryDir
+  Assert-VmVerifyBuildReady `
+    -BuildDirectory $configuration.BinaryDir `
+    -IncludeBench:([bool]$Model)
 
   foreach ($optionalPath in @($MockDictionary, $Model, $RuntimeInstaller)) {
     if ($optionalPath -and -not (Test-Path -LiteralPath $optionalPath -PathType Leaf)) {
@@ -297,6 +378,11 @@ function Export-VmVerifyPackage {
         Archive = "models/$([System.IO.Path]::GetFileName($Model))"
         Role = "gguf-model"
       }
+      $payloads += @{
+        Source = $benchExe
+        Archive = "azookey_zenzai_bench.exe"
+        Role = "llama-preflight"
+      }
     }
     if ($RuntimeInstaller) {
       $payloads += @{
@@ -324,10 +410,14 @@ function Export-VmVerifyPackage {
       files = @($files | Sort-Object path)
     }
     $manifestJson = $manifest | ConvertTo-Json -Depth 6
-    $manifestJson | Set-Content -LiteralPath (Join-Path $staging "manifest.json") -Encoding UTF8
-    $manifestJson | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText(
+      (Join-Path $staging "manifest.json"),
+      $manifestJson,
+      $utf8WithoutBom)
+    [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8WithoutBom)
 
-    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
+    Compress-VmVerifyArchive -StagingDirectory $staging -DestinationPath $zipPath
 
     return [pscustomobject][ordered]@{
       ZipPath = $zipPath

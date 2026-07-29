@@ -3,6 +3,8 @@ param(
   [string]$HostExePath = "",
   # Per-user host argument only. Elevated reentry skips HKCU setup and host start.
   [string]$ModelPath = "",
+  [string]$BenchPath = "",
+  [string]$MockDictionaryPath = "",
   [switch]$AllowMockHost,
   # Skip the ALL APPLICATION PACKAGES (S-1-15-2-1) grant on the TIP DLL. Only
   # for hosts where the build tree must not be reachable from AppContainer
@@ -33,6 +35,7 @@ function Assert-LlamaEnabledHost {
   param(
     [Parameter(Mandatory=$true)]
     [string]$Path,
+    [string]$BenchPath = "",
     [switch]$AllowMock
   )
 
@@ -45,16 +48,18 @@ function Assert-LlamaEnabledHost {
     throw "Inference host not found: $Path"
   }
 
-  $buildDir = Split-Path -Parent (Split-Path -Parent $Path)
-  $benchPath = Join-Path $buildDir "bench\azookey_zenzai_bench.exe"
-  if (-not (Test-Path $benchPath)) {
-    throw "llama.cpp preflight tool not found: $benchPath. Build the windows-llama-debug preset before registration."
+  if (-not $BenchPath) {
+    $buildDir = Split-Path -Parent (Split-Path -Parent $Path)
+    $BenchPath = Join-Path $buildDir "bench\azookey_zenzai_bench.exe"
+  }
+  if (-not (Test-Path $BenchPath)) {
+    throw "llama.cpp preflight tool not found: $BenchPath. Build the windows-llama-debug preset before registration."
   }
 
   $zenzaiModel = [Environment]::GetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", "Process")
   try {
     [Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $null, "Process")
-    $output = & $benchPath 2>&1
+    $output = & $BenchPath 2>&1
     $exitCode = $LASTEXITCODE
   } finally {
     [Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $zenzaiModel, "Process")
@@ -64,7 +69,7 @@ function Assert-LlamaEnabledHost {
     throw "Inference host is not linked with llama.cpp. Build the windows-llama-debug preset, or use -AllowMockHost only for fallback-only TIP tests. Preflight output: $outputText"
   }
 
-  Write-Host "llama.cpp host preflight passed: $benchPath"
+  Write-Host "llama.cpp host preflight passed: $BenchPath"
 }
 
 # Resolve default paths relative to the script location, then make them absolute
@@ -93,9 +98,27 @@ if ($ModelPath) {
     throw "-ModelPath cannot be combined with -AllowMockHost because a mock host cannot produce real Zenzai candidates."
   }
 }
+if ($BenchPath) {
+  $BenchPath = Resolve-DevPath $BenchPath
+  if (-not (Test-Path -LiteralPath $BenchPath -PathType Leaf)) {
+    throw "llama.cpp preflight tool not found: $BenchPath"
+  }
+}
+if ($MockDictionaryPath) {
+  $MockDictionaryPath = Resolve-DevPath $MockDictionaryPath
+  if (-not (Test-Path -LiteralPath $MockDictionaryPath -PathType Leaf)) {
+    throw "Mock dictionary not found: $MockDictionaryPath"
+  }
+  if ([System.IO.Path]::GetExtension($MockDictionaryPath) -ine ".tsv") {
+    throw "Mock dictionary must be a TSV file: $MockDictionaryPath"
+  }
+}
 
 if (-not $ElevatedReentry) {
-  Assert-LlamaEnabledHost -Path $HostExePath -AllowMock:$AllowMockHost
+  Assert-LlamaEnabledHost `
+    -Path $HostExePath `
+    -BenchPath $BenchPath `
+    -AllowMock:$AllowMockHost
 }
 
 $supervisorScriptPath = Resolve-DevPath (Join-Path $PSScriptRoot "host-supervisor.ps1")
@@ -147,6 +170,9 @@ if (-not $ElevatedReentry) {
       "-PipeName `"$myPipe`""
     if ($ModelPath) {
       $supervisorArguments += " -ModelPath `"$ModelPath`""
+    }
+    if ($MockDictionaryPath) {
+      $supervisorArguments += " -MockDictionaryPath `"$MockDictionaryPath`""
     }
     if ($hostStderrLog) {
       $supervisorArguments += " -StderrLogPath `"$hostStderrLog`""

@@ -89,6 +89,8 @@ Describe "development registration scripts" {
       Assert-Condition ($script:registerParameters -contains "TipDllPath") "register-dev.ps1 should expose TipDllPath."
       Assert-Condition ($script:registerParameters -contains "HostExePath") "register-dev.ps1 should expose HostExePath."
       Assert-Condition ($script:registerParameters -contains "ModelPath") "register-dev.ps1 should expose an explicit Zenzai model path."
+      Assert-Condition ($script:registerParameters -contains "BenchPath") "register-dev.ps1 should accept a packaged llama.cpp preflight tool."
+      Assert-Condition ($script:registerParameters -contains "MockDictionaryPath") "register-dev.ps1 should accept a packaged mock dictionary."
       Assert-Condition ($script:registerParameters -contains "AllowMockHost") "register-dev.ps1 should expose an explicit fallback-only override."
       Assert-Condition ($script:registerParameters -contains "ElevatedReentry") "register-dev.ps1 should expose ElevatedReentry."
       Assert-Condition ($script:registerParameters -contains "SkipAppContainerAcl") "register-dev.ps1 should expose an explicit AppContainer ACL opt-out."
@@ -109,7 +111,7 @@ Describe "development registration scripts" {
       Assert-Condition ($script:register.Text -match [regex]::Escape('build\windows-llama-debug\inference-host\azookey_inference_host.exe')) "register-dev.ps1 should default to the llama-enabled host build."
       Assert-Condition ($script:register.Text -match 'azookey_zenzai_bench\.exe') "register-dev.ps1 should probe the Zenzai bench compiled with the host."
       Assert-Condition ($script:register.Text -match 'llama_cpp=1') "register-dev.ps1 should require a real llama.cpp runtime."
-      Assert-Condition ($script:register.Text -match 'Assert-LlamaEnabledHost\s+-Path\s+\$HostExePath') "register-dev.ps1 should run the llama.cpp preflight before registration."
+      Assert-Condition ($script:register.Text -match 'Assert-LlamaEnabledHost[\s\S]{0,160}-Path\s+\$HostExePath') "register-dev.ps1 should run the llama.cpp preflight before registration."
     }
 
     It "runs the llama.cpp linkage probe without loading the configured Zenzai model" {
@@ -128,6 +130,12 @@ Describe "development registration scripts" {
       $existingHostGuardIndex = $script:register.Text.IndexOf('if ($ModelPath -and $hostServing)')
       $runRegistrationIndex = $script:register.Text.IndexOf('New-ItemProperty -Path $runKey')
       Assert-Condition ($existingHostGuardIndex -ge 0 -and $existingHostGuardIndex -lt $runRegistrationIndex) "register-dev.ps1 should reject an existing current-session host before changing the Run entry."
+    }
+
+    It "passes an explicit mock dictionary to the per-user supervisor" {
+      Assert-Condition ($script:register.Text -match 'Test-Path\s+-LiteralPath\s+\$MockDictionaryPath\s+-PathType\s+Leaf') "register-dev.ps1 should require MockDictionaryPath to be an existing file."
+      Assert-Condition ($script:register.Text -match 'GetExtension\(\$MockDictionaryPath\)\s+-ine\s+"\.tsv"') "register-dev.ps1 should reject non-TSV mock dictionaries."
+      Assert-Condition ($script:register.Text -match [regex]::Escape('$supervisorArguments += " -MockDictionaryPath `"$MockDictionaryPath`""')) "register-dev.ps1 should pass the mock dictionary to the per-user supervisor."
     }
 
     It "registers and starts a per-user supervisor with host diagnostics" {

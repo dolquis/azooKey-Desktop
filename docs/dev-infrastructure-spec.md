@@ -156,6 +156,9 @@ manifest の commit が同梱スクリプトと文書も一意に指すよう、
 含む作業ツリーが clean であることも要求する。
 成果物の欠落、build type の不一致、別 checkout の CMake cache、stale target、
 未コミット変更のいずれかを検出した場合は、zip を生成せず非ゼロ終了する。
+出力先は worktree 外、または `.gitignore` 対象の `build/` 配下とする。
+それ以外の worktree 内へ出力すると、次回実行時の clean 判定が前回の成果物を
+未追跡ファイルとして検出する。
 
 zip のルートには次を置く。
 
@@ -173,6 +176,9 @@ zip のルートには次を置く。
 する実行時依存であるため、登録スクリプトと同じディレクトリへ置く。
 `-MockDictionaryPath` の TSV は `data/`、`-ModelPath` の GGUF は `models/` に
 追加する。
+GGUF を追加する場合は、同じ build directory の `azookey_zenzai_bench.exe` も
+zip ルートへ追加する。
+生成前の Ninja dry-run では bench target も鮮度確認の対象にする。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。
 
@@ -192,13 +198,20 @@ top-level field を持つ。
 
 `files` は `manifest.json` 自身を含めない。
 自己参照 hash を避け、同梱物だけを検証対象にするためである。
+manifest は BOM なし UTF-8 で書き出す。
+GGUF は再圧縮せず zip entry とし、2 GB を超える entry に対応できる
+`System.IO.Compression` を使用する。
 
-VM 側の `scripts/verify-bootstrap.ps1` は管理者 PowerShell で実行する。
+VM 側の `scripts/verify-bootstrap.ps1` は対話ユーザーの PowerShell で実行する。
 同梱された場合だけ VC++ Redistributable を導入し、期待する TIP DLL の
 machine-wide 登録、per-user host pipe、Microsoft Japanese IME の残存を確認する。
+VC++ Redistributable と machine-wide 登録だけを UAC で昇格し、HKCU の自動起動設定と
+per-user host は昇格前の対話ユーザーで構成する。
 登録済みの DLL と稼働中の pipe を検出した場合は再登録と supervisor 起動を省く。
+manifest の `gguf-model`、`llama-preflight`、`mock-dictionary` role は自動検出して
+登録と host 起動へ渡す。
 
-`--json` 出力の schema v1 は次の top-level field を持つ。
+`-Json` 出力の schema v1 は次の top-level field を持つ。
 
 | field | 型 | 内容 |
 |---|---|---|

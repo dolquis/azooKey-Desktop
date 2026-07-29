@@ -14,6 +14,7 @@ Describe "VM verification package automation" {
 
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\tsf-tip") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\inference-host") -Force | Out-Null
+      New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\bench") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "scripts") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "docs\handoff") -Force | Out-Null
 
@@ -24,6 +25,26 @@ Describe "VM verification package automation" {
             name = "windows-release"
             binaryDir = '${sourceDir}/build/windows-release'
             cacheVariables = @{ CMAKE_BUILD_TYPE = "Release" }
+          }
+          @{
+            name = "lower-priority-parent"
+            binaryDir = '${sourceDir}/build/lower-priority'
+            cacheVariables = @{
+              CMAKE_BUILD_TYPE = "Debug"
+              SHARED_VALUE = "lower"
+            }
+          }
+          @{
+            name = "higher-priority-parent"
+            binaryDir = '${sourceDir}/build/higher-priority'
+            cacheVariables = @{
+              CMAKE_BUILD_TYPE = "RelWithDebInfo"
+              SHARED_VALUE = "higher"
+            }
+          }
+          @{
+            name = "multi-parent"
+            inherits = @("higher-priority-parent", "lower-priority-parent")
           }
         )
       } | ConvertTo-Json -Depth 5 |
@@ -40,6 +61,8 @@ Describe "VM verification package automation" {
       if (-not $SkipHost) {
         "host" | Set-Content -LiteralPath (Join-Path $Root "build\windows-release\inference-host\azookey_inference_host.exe")
       }
+      "bench" | Set-Content -LiteralPath (
+        Join-Path $Root "build\windows-release\bench\azookey_zenzai_bench.exe")
       foreach ($scriptName in @(
           "register-dev.ps1",
           "unregister-dev.ps1",
@@ -75,6 +98,29 @@ Describe "VM verification package automation" {
       } | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $Root "manifest.json") -Encoding UTF8
     }
+
+    function Convert-TestGuidInitializer {
+      param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+      )
+
+      $initializer = [regex]::Match(
+        $Text,
+        "(?s)$([regex]::Escape($Name))\s*=\s*\{(?<body>.*?)\};")
+      if (-not $initializer.Success) {
+        throw "GUID initializer not found: $Name"
+      }
+      $parts = @([regex]::Matches($initializer.Groups["body"].Value, "0x([0-9a-fA-F]+)") |
+        ForEach-Object { [Convert]::ToUInt32($_.Groups[1].Value, 16) })
+      if ($parts.Count -ne 11) {
+        throw "Unexpected GUID initializer shape for $Name"
+      }
+      return ("{{{0:X8}-{1:X4}-{2:X4}-{3:X2}{4:X2}-{5:X2}{6:X2}{7:X2}{8:X2}{9:X2}{10:X2}}}" -f
+        $parts)
+    }
   }
 
   Context "make-vm-verify-package.ps1" {
@@ -82,12 +128,13 @@ Describe "VM verification package automation" {
       $script:testRepository = Join-Path $TestDrive "repository"
       $script:testOutput = Join-Path $TestDrive "output"
       Initialize-TestRepository -Root $script:testRepository
-      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
-      Mock Assert-VmVerifyWorktreeClean {}
-      Mock Assert-VmVerifyBuildReady {}
     }
 
     It "creates a zip and a schema v1 manifest with required payload hashes" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+
       $result = Export-VmVerifyPackage `
         -RepositoryRoot $script:testRepository `
         -PresetName "windows-release" `
@@ -114,8 +161,10 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath (Join-Path $expanded "manifest.json") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "AppContainerAcl.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "verify-bootstrap.ps1") | Should -BeTrue
-      Assert-MockCalled Assert-VmVerifyWorktreeClean -Times 1 -Exactly
-      Assert-MockCalled Assert-VmVerifyBuildReady -Times 1 -Exactly
+      $manifestBytes = [System.IO.File]::ReadAllBytes($result.ManifestPath)
+      [BitConverter]::ToString($manifestBytes[0..2]) | Should -Not -Be "EF-BB-BF"
+      Should -Invoke Assert-VmVerifyWorktreeClean -Times 1 -Exactly
+      Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly
     }
 
     It "rejects a missing release artifact" {
@@ -143,6 +192,73 @@ Describe "VM verification package automation" {
           -PresetName "windows-release" `
           -DestinationDirectory $script:testOutput
       } | Should -Throw "*Preset/build mismatch*"
+    }
+
+    It "uses the first parent as the highest-precedence inherited preset" {
+      $configuration = Get-VmVerifyPresetConfiguration `
+        -PresetsPath (Join-Path $script:testRepository "CMakePresets.json") `
+        -PresetName "multi-parent" `
+        -RepositoryRoot $script:testRepository
+
+      $configuration.BinaryDir | Should -Be (
+        Join-Path $script:testRepository "build\higher-priority")
+      $configuration.CacheVariables["CMAKE_BUILD_TYPE"] | Should -Be "RelWithDebInfo"
+      $configuration.CacheVariables["SHARED_VALUE"] | Should -Be "higher"
+    }
+
+    It "rejects dry-run output that still contains build work" {
+      {
+        Assert-VmVerifyBuildReady `
+          -BuildDirectory "C:\build" `
+          -CommandResult ([pscustomobject]@{
+              ExitCode = 0
+              Output = "[1/2] Building CXX object"
+            })
+      } | Should -Throw "*Build artifacts are stale*"
+    }
+
+    It "rejects a dirty worktree result" {
+      {
+        Assert-VmVerifyWorktreeClean `
+          -RepositoryRoot $script:testRepository `
+          -CommandResult ([pscustomobject]@{
+              ExitCode = 0
+              Output = "?? package-output\old.zip"
+            })
+      } | Should -Throw "*worktree is not clean*"
+    }
+
+    It "normalizes a validated 40-character commit to lowercase" {
+      Get-VmVerifyGitCommit `
+        -RepositoryRoot $script:testRepository `
+        -CommandResult ([pscustomobject]@{
+            ExitCode = 0
+            Output = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+          }) |
+        Should -Be "abcdef0123456789abcdef0123456789abcdef01"
+    }
+
+    It "packages the llama preflight bench beside an optional GGUF model" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      $model = Join-Path $TestDrive "model.gguf"
+      "model" | Set-Content -LiteralPath $model
+
+      $result = Export-VmVerifyPackage `
+        -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" `
+        -DestinationDirectory $script:testOutput `
+        -Model $model
+
+      @($result.Manifest.files | Where-Object { $_.role -eq "gguf-model" }).Count |
+        Should -Be 1
+      @($result.Manifest.files | Where-Object { $_.role -eq "llama-preflight" }).Count |
+        Should -Be 1
+      Should -Invoke Assert-VmVerifyBuildReady `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter { $IncludeBench }
     }
   }
 
@@ -184,8 +300,8 @@ Describe "VM verification package automation" {
 
       $first.overallStatus | Should -Be "pass"
       $second.overallStatus | Should -Be "pass"
-      Assert-MockCalled Invoke-VmVerifyRegistration -Times 1 -Exactly
-      Assert-MockCalled Invoke-VmVerifyHostSupervisor -Times 0 -Exactly
+      Should -Invoke Invoke-VmVerifyRegistration -Times 1 -Exactly
+      Should -Invoke Invoke-VmVerifyHostSupervisor -Times 0 -Exactly
     }
 
     It "starts one supervisor when registration exists but the host pipe is absent" {
@@ -194,8 +310,11 @@ Describe "VM verification package automation" {
       Invoke-VmVerifyBootstrap -PackageRoot $script:testPackageRoot -HasCheckpoint | Out-Null
       Invoke-VmVerifyBootstrap -PackageRoot $script:testPackageRoot -HasCheckpoint | Out-Null
 
-      Assert-MockCalled Invoke-VmVerifyRegistration -Times 0 -Exactly
-      Assert-MockCalled Invoke-VmVerifyHostSupervisor -Times 1 -Exactly
+      Should -Invoke Invoke-VmVerifyRegistration -Times 0 -Exactly
+      Should -Invoke Invoke-VmVerifyHostSupervisor `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter { $PipeName -match "^azookey-" }
     }
 
     It "returns the stable JSON schema and fixed check identifiers" {
@@ -227,7 +346,60 @@ Describe "VM verification package automation" {
         }).Count | Should -Be 0
     }
 
-    It "suppresses registration script streams so JSON output stays clean" {
+    It "keeps per-user registration in the interactive non-admin process" {
+      Mock Test-VmVerifyAdministrator { $false }
+
+      $result = Invoke-VmVerifyBootstrap `
+        -PackageRoot $script:testPackageRoot `
+        -HasCheckpoint
+
+      $result.overallStatus | Should -Be "pass"
+      Should -Invoke Invoke-VmVerifyRegistration -Times 1 -Exactly
+    }
+
+    It "auto-discovers model, bench, and mock dictionary payloads from the manifest" {
+      $modelDirectory = Join-Path $script:testPackageRoot "models"
+      $dataDirectory = Join-Path $script:testPackageRoot "data"
+      New-Item -ItemType Directory -Path $modelDirectory, $dataDirectory -Force | Out-Null
+      "model" | Set-Content -LiteralPath (Join-Path $modelDirectory "model.gguf")
+      "bench" | Set-Content -LiteralPath (
+        Join-Path $script:testPackageRoot "azookey_zenzai_bench.exe")
+      "kana`tword" | Set-Content -LiteralPath (Join-Path $dataDirectory "mock.tsv")
+      $manifestPath = Join-Path $script:testPackageRoot "manifest.json"
+      $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+      $manifest.files = @(
+        [pscustomobject]@{ path = "models/model.gguf"; role = "gguf-model" }
+        [pscustomobject]@{ path = "azookey_zenzai_bench.exe"; role = "llama-preflight" }
+        [pscustomobject]@{ path = "data/mock.tsv"; role = "mock-dictionary" }
+      )
+      $manifest | ConvertTo-Json -Depth 5 |
+        Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+      Invoke-VmVerifyBootstrap -PackageRoot $script:testPackageRoot -HasCheckpoint | Out-Null
+
+      Should -Invoke Invoke-VmVerifyRegistration `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter {
+          $Model -like "*model.gguf" -and
+          $Bench -like "*azookey_zenzai_bench.exe" -and
+          $MockDictionary -like "*mock.tsv"
+        }
+    }
+
+    It "keeps the registration CLSID aligned with the C++ source of truth" {
+      $header = Get-Content -Raw -LiteralPath (
+        Join-Path $repoRoot "tsf-tip\include\azookey\tsf\TextServiceFactory.h")
+      $expected = Convert-TestGuidInitializer `
+        -Text $header `
+        -Name "kTextServiceClsid"
+
+      $script:VmVerifyTextServiceClsid | Should -BeExactly $expected
+    }
+  }
+
+  Context "bootstrap command wrappers" {
+    It "captures registration script streams so JSON output stays clean" {
       $registerScript = Join-Path $TestDrive "noisy-register.ps1"
       @'
 param(
@@ -240,12 +412,46 @@ Write-Warning "warning output"
 Write-Output "pipeline output"
 '@ | Set-Content -LiteralPath $registerScript -Encoding UTF8
 
-      $output = @(Invoke-VmVerifyRegistration `
+      $output = Invoke-VmVerifyRegistration `
         -RegisterScriptPath $registerScript `
         -TipDll "C:\package\azookey_tsf_tip.dll" `
-        -HostExe "C:\package\azookey_inference_host.exe")
+        -HostExe "C:\package\azookey_inference_host.exe"
 
-      $output.Count | Should -Be 0
+      $output | Should -Match "host output"
+      $output | Should -Match "warning output"
+      $output | Should -Match "pipeline output"
+    }
+
+    It "reports registration exit codes with captured diagnostics" {
+      $registerScript = Join-Path $TestDrive "failing-register.ps1"
+      @'
+param(
+  [string]$TipDllPath,
+  [string]$HostExePath,
+  [switch]$AllowMockHost
+)
+Write-Output "diagnostic detail"
+exit 23
+'@ | Set-Content -LiteralPath $registerScript -Encoding UTF8
+
+      {
+        Invoke-VmVerifyRegistration `
+          -RegisterScriptPath $registerScript `
+          -TipDll "C:\package\azookey_tsf_tip.dll" `
+          -HostExe "C:\package\azookey_inference_host.exe"
+      } | Should -Throw "*exit code 23*diagnostic detail*"
+    }
+
+    It "elevates only a bundled VC runtime installer when needed" {
+      Mock Test-VmVerifyAdministrator { $false }
+      Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }
+
+      Install-VmVerifyVCRuntime -InstallerPath "C:\package\vc_redist.x64.exe"
+
+      Should -Invoke Start-Process `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter { $Verb -eq "RunAs" }
     }
   }
 }

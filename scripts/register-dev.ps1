@@ -31,6 +31,25 @@ function Resolve-DevPath {
   return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
 }
 
+function Write-DebugCrtWarning {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string[]]$Paths
+  )
+
+  $debugBuildPaths = @($Paths | Where-Object {
+    $_ -match '(?i)[\\/]build[\\/][^\\/]*debug[\\/]'
+  })
+  if ($debugBuildPaths.Count -eq 0) {
+    return
+  }
+
+  Write-Warning (
+    "Debug build artifacts require the non-redistributable Debug CRT and cannot load on a " +
+    "clean Windows machine without Visual Studio. Use the windows-release VM verification " +
+    "package for clean-machine testing. Debug artifacts: $($debugBuildPaths -join ', ')")
+}
+
 function Assert-LlamaEnabledHost {
   param(
     [Parameter(Mandatory=$true)]
@@ -115,6 +134,7 @@ if ($MockDictionaryPath) {
 }
 
 if (-not $ElevatedReentry) {
+  Write-DebugCrtWarning -Paths @($TipDllPath, $HostExePath)
   Assert-LlamaEnabledHost `
     -Path $HostExePath `
     -BenchPath $BenchPath `

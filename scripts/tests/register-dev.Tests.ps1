@@ -114,6 +114,14 @@ Describe "development registration scripts" {
       Assert-Condition ($script:register.Text -match 'Assert-LlamaEnabledHost[\s\S]{0,160}-Path\s+\$HostExePath') "register-dev.ps1 should run the llama.cpp preflight before registration."
     }
 
+    It "warns when registration resolves to Debug CRT artifacts" {
+      Assert-Condition ($script:register.Text -match [regex]::Escape("function Write-DebugCrtWarning")) "register-dev.ps1 should define the Debug CRT warning check."
+      Assert-Condition ($script:register.Text -match '\[\^\\\\/\]\*debug') "register-dev.ps1 should recognize debug build directory names."
+      Assert-Condition ($script:register.Text -match 'Write-Warning[\s\S]{0,320}Debug CRT') "register-dev.ps1 should explain the clean-machine Debug CRT dependency."
+      Assert-Condition ($script:register.Text -match 'Write-DebugCrtWarning\s+-Paths\s+@\(\$TipDllPath,\s*\$HostExePath\)') "register-dev.ps1 should check both resolved registration artifacts."
+      Assert-Condition ($script:register.Text -match 'windows-release VM verification') "register-dev.ps1 should point clean-machine testing to the release package."
+    }
+
     It "runs the llama.cpp linkage probe without loading the configured Zenzai model" {
       Assert-Condition ($script:register.Text -match [regex]::Escape('[Environment]::GetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", "Process")')) "register-dev.ps1 should preserve the configured Zenzai model path."
       Assert-Condition ($script:register.Text -match [regex]::Escape('[Environment]::SetEnvironmentVariable("AZOOKEY_ZENZAI_MODEL", $null, "Process")')) "register-dev.ps1 should clear the Zenzai model path before probing linkage."

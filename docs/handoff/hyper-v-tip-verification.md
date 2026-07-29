@@ -36,16 +36,30 @@ TIP は全プロセスにロードされる IME であり、machine-wide 登録�
 # リポジトリ直下
 cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-release
+
+# VC++ Redistributable を同梱する場合だけ、ローカルの installer を明示する。
+.\scripts\make-vm-verify-package.ps1 `
+  -Preset windows-release `
+  -OutputDirectory .\build\vm-verify-packages `
+  -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe
 ```
 
-VM へ渡す一式（`scripts/make-vm-verify-package`（任意）または手動で zip 化）:
+`make-vm-verify-package.ps1` は preset と CMake cache の build type を照合し、
+Ninja dry-run で対象バイナリが最新と確認できた場合だけ zip を生成する。
+成果物は `azookey-verify-<commit>-<preset>.zip` と同名の
+`.manifest.json` で、zip 内にも `manifest.json` が入る。
+出力先は worktree 外、または `.gitignore` 対象の `build/` 配下に置く。
+それ以外のリポジトリ内ディレクトリへ出力すると、次回の clean 判定で成果物が
+未追跡ファイルとして検出される。
 
-| ファイル | 取得元 |
-|---|---|
-| `azookey_tsf_tip.dll` | `build/windows-release/tsf-tip/` |
-| `azookey_inference_host.exe` | `build/windows-release/inference-host/` |
-| `register-dev.ps1` / `unregister-dev.ps1` | `scripts/` |
-| `vc_redist.x64.exe` | https://aka.ms/vs/17/release/vc_redist.x64.exe |
+`vc_redist.x64.exe` は自動取得しない。
+クリーンな VM へ持ち込む場合は、Microsoft の配布元から別途取得した installer を
+`-RuntimeInstallerPath` で明示する。
+mock dictionary は `-MockDictionaryPath`、GGUF は `-ModelPath` で追加できる。
+GGUF を指定する場合は llama.cpp 対応 preset をビルドしておく。
+生成スクリプトは同じ build directory の `azookey_zenzai_bench.exe` も収集し、
+VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動検出する。
+いずれもローカルファイルだけを収集し、ネットワークには接続しない。
 
 ## 手順
 
@@ -58,30 +72,39 @@ Checkpoint-VM -Name "<VM名>" -SnapshotName "pre-azookey-DEV-32"
 
 ### 2. VM へ転送（拡張セッション）
 
-VMConnect を拡張セッションで開き、上記一式を VM の `C:\azookey-verify\` にコピーする
+VMConnect を拡張セッションで開き、生成した zip を VM の
+`C:\azookey-verify\` にコピーして展開する
 （拡張セッションが使えなければホストのフォルダ共有経由でも可）。
 
-### 3. VC++ ランタイム導入（VM）
-
-```powershell
-C:\azookey-verify\vc_redist.x64.exe /install /quiet /norestart
-```
-
-### 4. 登録（VM・管理者 PowerShell）
+### 3. bootstrap と事前確認（VM・対話ユーザーの PowerShell）
 
 ```powershell
 cd C:\azookey-verify
-powershell -ExecutionPolicy Bypass -File .\register-dev.ps1 `
-  -TipDllPath .\azookey_tsf_tip.dll `
-  -HostExePath .\azookey_inference_host.exe
+powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
+  -CheckpointConfirmed
+
+# 機械可読な結果が必要な場合
+powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
+  -Json `
+  -CheckpointConfirmed
 ```
 
-- **`-TipDllPath` / `-HostExePath` の明示は必須**（スクリプト既定は `..\build\windows-debug\...` を指すため）。
-- `register-dev.ps1` の動作: 非昇格で host を HKCU `Run` に自動起動登録 + 現セッションで host 起動（per-user pipe `\\.\pipe\azookey-<SID>` を probe）→ 昇格して `regsvr32 /s`（`DllRegisterServer` = HKLM COM + TSF profile + keyboard/display-attribute/UI-element category 登録）。非管理者から実行すると UAC 自動昇格する。
-- 「TSF TIP registration complete (machine-wide).」が出れば成功。
-- host 稼働確認: `Get-Process azookey_inference_host`。出ない場合は `Start-Process .\azookey_inference_host.exe -ArgumentList "--pipe" -WindowStyle Hidden`。
+- bootstrap は同梱時だけ VC++ Redistributable を
+  `/install /quiet /norestart` で導入し、TIP 登録と per-user host pipe を確認する。
+- bootstrap 自体は対話ユーザーの通常 PowerShell で実行する。
+  VC++ Redistributable と machine-wide TIP 登録が必要な箇所だけ UAC で昇格するため、
+  HKCU の自動起動設定と per-user pipe は対話ユーザーに紐づく。
+- 期待する DLL が登録済みなら `register-dev.ps1` を再実行しない。
+  pipe が存在すれば supervisor も再起動しないため、同じ展開先で繰り返し実行できる。
+- manifest に mock dictionary または GGUF が含まれる場合は bootstrap が自動で host
+  引数へ渡す。別ファイルを使う場合だけ `-MockDictionaryPath` または `-ModelPath` を
+  明示する。
+- `overallStatus=fail` は実機検証へ進まない。
+  `warning` は checkpoint または DebugView の手動確認が残っている状態である。
+- `-CheckpointConfirmed` は checkpoint を作成するオプションではない。
+  ホスト側で取得済みと確認した事実だけを bootstrap へ渡す。
 
-### 5. 実機検証（★基本セッションに切替えて）
+### 4. 実機検証（★基本セッションに切替えて）
 
 VMConnect を基本セッションに切替（拡張セッションをオフ）。メモ帳で DEV-32 チェックリスト:
 
@@ -92,9 +115,9 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 5. **↑↓** 選択・**Enter/数字** で確定、確定テキストがアプリに入る（M5/M6）
 6. 候補が出れば IPC 往復成立（= Host 由来）。詳細ログは VM に DebugView を入れると `IPC: connected to host ...` 等が見える
 
-> ⚠️ **変換能力の前提（重要）**: 現状 Zenzai 推論は未実装（`ZenzaiModelConverter` は gguf を probe するのみで `SimpleConverter` へ委譲。DEV-190）。そのため **辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。一般のかな漢字変換を確認するには `--mock-dict <TSV>` で辞書を渡すか学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを確認済み（DEV-190。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi` で評価する）。Zenzai 推論本体は M8/M9 系で未完。
+> ⚠️ **変換能力の前提（重要）**: 現状 Zenzai 推論は未実装（`ZenzaiModelConverter` は gguf を probe するのみで `SimpleConverter` へ委譲。DEV-190）。そのため **辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。一般のかな漢字変換を確認するには、パッケージ生成時に `-MockDictionaryPath <TSV>` を指定するか学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを確認済み（DEV-190。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi` で評価する）。Zenzai 推論本体は M8/M9 系で未完。
 
-### 6. 記録と後始末
+### 5. 記録と後始末
 
 - **記録**: `winver` で OS ビルドを控え、手順・結果・スクショを **DEV-32 にコメント**（→ DEV-5 の human gate も同時クローズ可）。
 - **後始末（どちらか）**:

@@ -3,6 +3,7 @@ param(
   [string]$HostExePath,
   [string]$HostArguments = "",
   [string]$ModelPath = "",
+  [string]$MockDictionaryPath = "",
   [string]$PipeName = "",
   [string]$StderrLogPath = "",
   [ValidateRange(1, 60000)]
@@ -66,6 +67,9 @@ if (-not $HostArguments) {
   $HostArguments = "--pipe"
   if ($ModelPath) {
     $HostArguments += " --model `"$ModelPath`""
+  }
+  if ($MockDictionaryPath) {
+    $HostArguments += " --mock-dict `"$MockDictionaryPath`""
   }
 }
 

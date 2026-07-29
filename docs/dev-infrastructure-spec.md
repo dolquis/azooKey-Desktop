@@ -141,6 +141,94 @@ IME ランタイム診断・修復ウィザード）とは別物**である。�
 M37 受け入れ条件には含めず、導入は Linear で追跡する（2026-07 開発基盤ツール
 導入 第2弾）。
 
+### 2.6 実機検証パッケージ
+
+`scripts/make-vm-verify-package.ps1` は Hyper-V Win11 VM へ持ち込む実機検証用
+zip を生成する。
+入力は CMake configure preset と出力先で、preset の既定値は
+`windows-release` とする。
+
+スクリプトは `CMakePresets.json` の `binaryDir` と `CMAKE_BUILD_TYPE` を解決し、
+実 build directory の `CMakeCache.txt` と照合する。
+さらに `azookey_tsf_tip` と `azookey_inference_host` の Ninja dry-run が
+`no work to do` になることを確認する。
+manifest の commit が同梱スクリプトと文書も一意に指すよう、tracked/untracked を
+含む作業ツリーが clean であることも要求する。
+成果物の欠落、build type の不一致、別 checkout の CMake cache、stale target、
+未コミット変更のいずれかを検出した場合は、zip を生成せず非ゼロ終了する。
+出力先は worktree 外、または `.gitignore` 対象の `build/` 配下とする。
+それ以外の worktree 内へ出力すると、次回実行時の clean 判定が前回の成果物を
+未追跡ファイルとして検出する。
+
+zip のルートには次を置く。
+
+- `azookey_tsf_tip.dll`
+- `azookey_inference_host.exe`
+- `register-dev.ps1`
+- `unregister-dev.ps1`
+- `host-supervisor.ps1`
+- `AppContainerAcl.ps1`
+- `verify-bootstrap.ps1`
+- `dev32-verification-checklist.md`
+- `manifest.json`
+
+`AppContainerAcl.ps1` は `register-dev.ps1` と `unregister-dev.ps1` が dot-source
+する実行時依存であるため、登録スクリプトと同じディレクトリへ置く。
+`-MockDictionaryPath` の TSV は `data/`、`-ModelPath` の GGUF は `models/` に
+追加する。
+GGUF を追加する場合は、同じ build directory の `azookey_zenzai_bench.exe` も
+zip ルートへ追加する。
+生成前の Ninja dry-run では bench target も鮮度確認の対象にする。
+`vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
+生成スクリプトは依存ファイルをネットワークから取得しない。
+
+zip 名は `azookey-verify-<12桁 commit>-<preset>.zip` とする。
+同じ出力ディレクトリへ `<zip basename>.manifest.json` も書き出す。
+zip 内の `manifest.json` と外部 manifest の内容は同一で、schema v1 は次の
+top-level field を持つ。
+
+| field | 型 | 内容 |
+|---|---|---|
+| `schemaVersion` | integer | 固定値 `1` |
+| `commit` | string | 40 桁の Git commit |
+| `preset` | string | 入力した configure preset 名 |
+| `buildType` | string | preset と cache で一致した `CMAKE_BUILD_TYPE` |
+| `generatedAtUtc` | string | ISO 8601 UTC 生成時刻 |
+| `files` | array | 同梱ファイルの `path`、`role`、`size`、`sha256` |
+
+`files` は `manifest.json` 自身を含めない。
+自己参照 hash を避け、同梱物だけを検証対象にするためである。
+manifest は BOM なし UTF-8 で書き出す。
+GGUF は再圧縮せず zip entry とし、2 GB を超える entry に対応できる
+`System.IO.Compression` を使用する。
+
+VM 側の `scripts/verify-bootstrap.ps1` は対話ユーザーの PowerShell で実行する。
+同梱された場合だけ VC++ Redistributable を導入し、期待する TIP DLL の
+machine-wide 登録、per-user host pipe、Microsoft Japanese IME の残存を確認する。
+VC++ Redistributable と machine-wide 登録だけを UAC で昇格し、HKCU の自動起動設定と
+per-user host は昇格前の対話ユーザーで構成する。
+登録済みの DLL と稼働中の pipe を検出した場合は再登録と supervisor 起動を省く。
+manifest の `gguf-model`、`llama-preflight`、`mock-dictionary` role は自動検出して
+登録と host 起動へ渡す。
+
+`-Json` 出力の schema v1 は次の top-level field を持つ。
+
+| field | 型 | 内容 |
+|---|---|---|
+| `schemaVersion` | integer | 固定値 `1` |
+| `generatedAtUtc` | string | ISO 8601 UTC 実行時刻 |
+| `package` | object | manifest から読んだ `commit`、`preset`、`buildType` |
+| `overallStatus` | string | `pass`、`warning`、`fail` |
+| `actions` | object | runtime 導入、TIP 登録、supervisor 起動の実施有無 |
+| `checks` | array | 固定 ID の事前確認結果 |
+
+`checks[].status` は `pass`、`fail`、`manual_required`、
+`not_applicable` のいずれかとする。
+固定 ID は `vcRuntime`、`tipRegistration`、`inferenceHost`、
+`microsoftIme`、`vmCheckpoint`、`debugView` である。
+Hyper-V checkpoint の作成と DebugView の capture 設定は guest から自動化せず、
+人間の確認結果を表す。
+
 ### M37 受け入れ条件
 
 - `cmake --preset windows-debug` / `windows-release` の configure→build→test

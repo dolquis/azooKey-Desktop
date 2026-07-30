@@ -7,13 +7,16 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <new>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <utility>
 
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/logging/RuntimeLogger.h"
 #include "azookey/tsf/DisplayAttribute.h"
 
 namespace {
@@ -41,12 +44,18 @@ std::string CreateIpcClientId() {
   return written == 36 ? std::string(buffer, 36) : std::string();
 }
 
-void DebugLog(const std::string& message) {
+azookey::logging::RuntimeLogger& TipRuntimeLogger() {
+  static azookey::logging::RuntimeLogger logger(
+      azookey::logging::RuntimeLoggerOptionsFromEnvironment("tip"));
+  return logger;
+}
+
+void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
+                std::initializer_list<azookey::logging::RuntimeLogField> fields = {}) {
 #ifdef _DEBUG
-  OutputDebugStringA(("[azooKey TIP] " + message + "\n").c_str());
-#else
-  UNREFERENCED_PARAMETER(message);
+  OutputDebugStringA(("[azooKey TIP] " + std::string(event) + "\n").c_str());
 #endif
+  TipRuntimeLogger().Log(level, event, fields);
 }
 
 std::string IpcHandshakeTokenFromEnv() {
@@ -280,7 +289,7 @@ CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect, HWND tex
 
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
   if (ipc_client_id_.empty()) {
-    DebugLog("IPC: CoCreateGuid failed; using legacy client namespace");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_client_id_fallback");
   }
 }
 
@@ -352,7 +361,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
   HRESULT hr = AdviseTextServiceSinks();
   if (FAILED(hr)) {
-    DebugLog("ActivateEx: failed to advise TSF sinks");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "tsf_sink_advise_failed");
     UnadviseTextServiceSinks();
     thread_mgr_->Release();
     thread_mgr_ = nullptr;
@@ -426,7 +435,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
       source->Release();
     }
     if (FAILED(hr)) {
-      DebugLog("Deactivate: failed to unadvise thread manager sink");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "thread_manager_sink_unadvise_failed");
       result = hr;
     } else {
       thread_mgr_sink_cookie_ = TF_INVALID_COOKIE;
@@ -442,7 +451,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
       key_mgr->Release();
     }
     if (FAILED(hr)) {
-      DebugLog("Deactivate: failed to unadvise key event sink");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "key_event_sink_unadvise_failed");
       if (SUCCEEDED(result)) result = hr;
     } else {
       key_event_sink_advised_ = false;
@@ -1156,7 +1165,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
     preedit_kana_ = saved_preedit;
     committing_ = saved_committing;
     commit_surface_ = saved_commit_surface;
-    DebugLog("Lifecycle cleanup: edit session allocation failed");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error,
+               "lifecycle_cleanup_edit_session_allocation_failed");
     return false;
   }
   HRESULT hr_session = E_FAIL;
@@ -1171,7 +1181,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
     preedit_kana_ = saved_preedit;
     committing_ = saved_committing;
     commit_surface_ = saved_commit_surface;
-    DebugLog("Lifecycle cleanup: commit/end edit session was rejected or incomplete");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+               "lifecycle_cleanup_edit_session_incomplete");
   }
   return completed;
 }
@@ -1394,13 +1405,14 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
     if (response) {
       if (!IsExpectedIpcResponse(*response, expected_request_id, expected_type)) {
         if (expected_request_id != 0 && response->request_id != expected_request_id) {
-          DebugLog("IPC: response for stale req_id=" + std::to_string(response->request_id) +
-                   " while waiting for req_id=" + std::to_string(expected_request_id) +
-                   ", discarding");
+          RuntimeLog(
+              azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
+              {{"request_id", response->request_id}, {"expected_request_id", expected_request_id}});
         } else {
-          DebugLog("IPC: response type=" + TypeToString(response->type) +
-                   " for req_id=" + std::to_string(response->request_id) +
-                   " while waiting for type=" + TypeToString(expected_type) + ", discarding");
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_unexpected_response_type",
+                     {{"request_id", response->request_id},
+                      {"response_type", TypeToString(response->type)},
+                      {"expected_type", TypeToString(expected_type)}});
         }
         continue;
       }
@@ -1440,13 +1452,13 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   henv.payload_json = BuildHandshakeRequest(hs);
 
   if (!client.Send(henv)) {
-    DebugLog("IPC: handshake send failed");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_send_failed");
     return false;
   }
   auto hres = client.ReceiveWithTimeout(timeout_ms);
   auto hpayload = hres ? ParseHandshakeResponse(hres->payload_json) : std::nullopt;
   if (!hpayload || !hpayload->accepted) {
-    DebugLog("IPC: handshake rejected or no response");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_rejected");
     return false;
   }
   if (update_host_options) {
@@ -1456,7 +1468,8 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
                                        std::memory_order_relaxed);
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
-    DebugLog("IPC: connected to host " + hpayload->host_version);
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
+               {{"host_version", hpayload->host_version}});
   }
   return true;
 }
@@ -1474,8 +1487,8 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
 
   NamedPipeClient cancel_client;
   if (!cancel_client.Connect(pipe_name, connect_timeout_ms)) {
-    DebugLog("IPC: out-of-band cancel connect failed for target req_id=" +
-             std::to_string(target_request_id));
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_cancel_connect_failed",
+               {{"target_request_id", target_request_id}});
     return false;
   }
   if (!PerformHandshake(cancel_client, handshake_timeout_ms, "tip-cancel-handshake",
@@ -1490,8 +1503,8 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
   cancel_env.type = MessageType::Cancel;
   cancel_env.payload_json = BuildCancel({target_request_id});
   if (!cancel_client.Send(cancel_env)) {
-    DebugLog("IPC: out-of-band cancel send failed for target req_id=" +
-             std::to_string(target_request_id));
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_cancel_send_failed",
+               {{"target_request_id", target_request_id}});
     return false;
   }
   return true;
@@ -1511,7 +1524,7 @@ void TextService::IpcWorkerThread() {
 
   const auto pipe_name = IpcPipeName();
   if (pipe_name.empty()) {
-    DebugLog("IPC: default pipe name unavailable; current-user SID lookup failed");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "ipc_pipe_name_unavailable");
     return;
   }
   // Reconnect with exponential backoff so the worker survives a host that is
@@ -1546,7 +1559,7 @@ void TextService::IpcWorkerThread() {
     }
   }
 
-  DebugLog("IPC: worker exiting");
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_worker_stopped");
 }
 
 // Serve QueryCandidates / fire-and-forget traffic over an already-handshaken
@@ -1603,13 +1616,14 @@ void TextService::ServeConnection() {
       if (item.type == MessageType::Cancel && item.cancel_target_id != 0) {
         sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
         if (!sent_out_of_band) {
-          DebugLog("IPC: out-of-band cancel failed for target req_id=" +
-                   std::to_string(item.cancel_target_id) + "; falling back to main pipe");
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_cancel_fallback",
+                     {{"target_request_id", item.cancel_target_id}});
         }
       }
       if (!sent_out_of_band && !ipc_client_.Send(env)) {
         if (!ipc_stop_.load())
-          DebugLog("IPC: faf send failed for type=" + TypeToString(item.type) + "; reconnecting");
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_send_failed",
+                     {{"message_type", TypeToString(item.type)}});
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
@@ -1618,8 +1632,8 @@ void TextService::ServeConnection() {
         if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs, env.request_id, item.type)) {
           if (ipc_stop_.load()) return;
           if (!ipc_stop_.load())
-            DebugLog("IPC: faf receive failed for type=" + TypeToString(item.type) +
-                     "; reconnecting");
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_receive_failed",
+                       {{"message_type", TypeToString(item.type)}});
           if (has_qc) RearmPendingQuery(req_id);
           return;
         }
@@ -1668,7 +1682,8 @@ void TextService::ServeConnection() {
       // loop re-issues this reading without the user retyping.
       RearmPendingQuery(req_id);
       if (!ipc_stop_.load())
-        DebugLog("IPC: QueryCandidates send failed; will retry after reconnect");
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_send_failed",
+                   {{"request_id", req_id}});
       break;
     }
 
@@ -1709,12 +1724,13 @@ void TextService::ServeConnection() {
         if (item.type == MessageType::Cancel && item.cancel_target_id != 0) {
           sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
           if (!sent_out_of_band) {
-            DebugLog("IPC: post-qc out-of-band cancel failed for target req_id=" +
-                     std::to_string(item.cancel_target_id) + "; falling back to main pipe");
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_post_query_cancel_fallback",
+                       {{"target_request_id", item.cancel_target_id}});
           }
         }
         if (!sent_out_of_band && !ipc_client_.Send(env))
-          DebugLog("IPC: post-qc cancel send failed for type=" + TypeToString(item.type));
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_post_query_cancel_send_failed",
+                     {{"message_type", TypeToString(item.type)}});
         if (item.type == MessageType::Cancel && item.cancel_target_id == req_id) {
           cancel_inflight = true;
           cancel_inflight_out_of_band = sent_out_of_band;
@@ -1750,12 +1766,13 @@ void TextService::ServeConnection() {
       if (qres) {
         if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
           if (qres->request_id != req_id) {
-            DebugLog("IPC: response for stale req_id=" + std::to_string(qres->request_id) +
-                     " while waiting for req_id=" + std::to_string(req_id) + ", discarding");
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
+                       {{"request_id", qres->request_id}, {"expected_request_id", req_id}});
           } else {
-            DebugLog("IPC: response type=" + TypeToString(qres->type) +
-                     " for req_id=" + std::to_string(qres->request_id) +
-                     " while waiting for type=" + TypeToString(qenv.type) + ", discarding");
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_unexpected_response_type",
+                       {{"request_id", qres->request_id},
+                        {"response_type", TypeToString(qres->type)},
+                        {"expected_type", TypeToString(qenv.type)}});
           }
           qres.reset();
           continue;
@@ -1786,12 +1803,13 @@ void TextService::ServeConnection() {
         if (item.type == ipc::MessageType::Cancel && item.cancel_target_id != 0) {
           sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
           if (!sent_out_of_band) {
-            DebugLog("IPC: mid-receive out-of-band cancel failed for target req_id=" +
-                     std::to_string(item.cancel_target_id) + "; falling back to main pipe");
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_mid_receive_cancel_fallback",
+                       {{"target_request_id", item.cancel_target_id}});
           }
         }
         if (!sent_out_of_band && !ipc_client_.Send(env))
-          DebugLog("IPC: mid-receive cancel send failed for type=" + ipc::TypeToString(item.type));
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_mid_receive_cancel_send_failed",
+                     {{"message_type", ipc::TypeToString(item.type)}});
         if (item.type == ipc::MessageType::Cancel && item.cancel_target_id == req_id) {
           cancel_inflight = true;
           cancel_inflight_out_of_band = sent_out_of_band;
@@ -1805,8 +1823,8 @@ void TextService::ServeConnection() {
     }
     std::vector<CandidateField> response_candidates;
     if (cancel_inflight && cancel_inflight_out_of_band && !qres) {
-      DebugLog("IPC: in-flight req_id=" + std::to_string(req_id) +
-               " canceled out-of-band, abandoning query receive");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_query_cancelled_out_of_band",
+                 {{"request_id", req_id}, {"result", std::string("cancelled")}});
       ++next_id;
       continue;
     }
@@ -1822,10 +1840,12 @@ void TextService::ServeConnection() {
       if (!sent_out_of_band && !ipc_client_.Send(cancel_env)) {
         RearmPendingQuery(req_id);
         if (!ipc_stop_.load())
-          DebugLog("IPC: QueryCandidates timeout cancel send failed; will retry after reconnect");
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+                     "ipc_query_timeout_cancel_send_failed", {{"request_id", req_id}});
         break;
       } else if (!sent_out_of_band) {
-        DebugLog("IPC: QueryCandidates timeout out-of-band cancel failed; used main pipe");
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout_cancel_fallback",
+                   {{"request_id", req_id}});
       }
 
       CandidateField fallback;
@@ -1833,14 +1853,15 @@ void TextService::ServeConnection() {
       fallback.reading = reading;
       fallback.source = "fallback";
       response_candidates.push_back(std::move(fallback));
-      DebugLog("IPC: QueryCandidates req_id=" + std::to_string(req_id) +
-               " timed out; canceled and using fallback candidate");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
+                 {{"request_id", req_id}, {"result", std::string("cancelled")}});
     } else if (!qres) {
       // Host died after the query was sent: re-arm so the reconnected loop
       // re-issues it (recover without retyping).
       RearmPendingQuery(req_id);
       if (!ipc_stop_.load())
-        DebugLog("IPC: QueryCandidates receive failed; will retry after reconnect");
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_receive_failed",
+                   {{"request_id", req_id}});
       break;
     }
 
@@ -1848,8 +1869,8 @@ void TextService::ServeConnection() {
       // If cancel fell back to the main pipe, the host can still return this
       // query response before seeing Cancel. Consume and discard here to keep
       // stream framing aligned for subsequent receives.
-      DebugLog("IPC: in-flight req_id=" + std::to_string(req_id) +
-               " canceled, consumed pending query reply");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_cancelled_reply_discarded",
+                 {{"request_id", req_id}, {"result", std::string("cancelled")}});
       ++next_id;
       continue;
     }
@@ -1899,8 +1920,11 @@ void TextService::ServeConnection() {
 
     if (is_fresh) {
       if (!response_candidates.empty()) {
-        DebugLog("IPC: " + std::to_string(response_candidates.size()) + " candidates for [" +
-                 reading + "] top=" + response_candidates[0].surface);
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_candidates_received",
+                   {{"request_id", req_id},
+                    {"reading_length", static_cast<uint64_t>(reading.size())},
+                    {"candidate_count", static_cast<uint64_t>(response_candidates.size())},
+                    {"result", std::string("ok")}});
       }
       bool notify_ui = false;
       {
@@ -1916,7 +1940,8 @@ void TextService::ServeConnection() {
       }
       if (notify_ui) candidate_ui_.PostCandidatesReady();
     } else {
-      DebugLog("IPC: stale response for req_id=" + std::to_string(req_id) + ", discarding");
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
+                 {{"request_id", req_id}});
     }
 
     ++next_id;
@@ -2328,7 +2353,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           var.vt = VT_I4;
           var.lVal = static_cast<LONG>(atom);
           const HRESULT attr_hr = pProp->SetValue(ec, pRange, &var);
-          if (FAILED(attr_hr)) DebugLog("Preedit display attribute SetValue failed");
+          if (FAILED(attr_hr)) {
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+                       "preedit_display_attribute_set_failed");
+          }
         }
         pCatMgr->Release();
       }

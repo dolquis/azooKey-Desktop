@@ -69,17 +69,37 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 
 ## ログ収集
 
-現状:
+Release / Debug のどちらも、環境変数で明示的に有効化した場合だけ TIP / Host の
+構造化ログを出力する。既定ではファイルを作成しない。
 
-- TIP 側: `OutputDebugStringA`（DebugView または WinDbg で観測）。
-  - `[azooKey TIP] IPC: <msg>` フォーマット。
-- Host 側: stderr。`--pipe` 起動時は `named pipe listening: <name>` 表示後に
-  Dispatcher 経路を待ち受け。
+```powershell
+# 現在の PowerShell から起動する Host 用
+$env:AZOOKEY_LOG = '1'
+$env:AZOOKEY_LOG_LEVEL = 'info' # info / warn / error
 
-予定 (Phase 4 / M11):
+# TIP を読み込むアプリを含む、新しく起動するプロセス用
+[Environment]::SetEnvironmentVariable('AZOOKEY_LOG', '1', 'User')
+[Environment]::SetEnvironmentVariable('AZOOKEY_LOG_LEVEL', 'info', 'User')
+```
 
-- TIP/Host とも `%LOCALAPPDATA%\azooKey\logs\tip.log` / `host.log` に
-  JSON Lines 形式で出力。
+ユーザー環境変数を変更した後は、Host と検証対象アプリを終了して起動し直す。
+反映が不明な場合はサインアウトしてからサインインする。出力先は次の 2 ファイルで、
+各行は JSON オブジェクト 1 件からなる。
+
+- `%LOCALAPPDATA%\azooKey\logs\tip-YYYYMMDD.jsonl`
+- `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl`
+
+ログは 5 MiB でローテーションし、`.1` から `.3` まで 3 世代を保持する。
+Release ビルドでは入力本文、候補本文、`prompt`、`window_title` の生値を出力しない。
+取得後は環境変数を削除して、Host と検証対象アプリを再起動する。
+
+```powershell
+[Environment]::SetEnvironmentVariable('AZOOKEY_LOG', $null, 'User')
+[Environment]::SetEnvironmentVariable('AZOOKEY_LOG_LEVEL', $null, 'User')
+```
+
+Debug ビルドでは、TIP のイベント名を `OutputDebugStringA` でも出力するため、
+DebugView または WinDbg で同時に観測できる。Host の stderr も従来どおり残る。
 
 ## CI
 
@@ -120,11 +140,11 @@ cmake --build --preset windows-debug --target azookey_check
   各 GoogleTest case には CTest `TIMEOUT` が設定されているため、停止は無限待ちではなく
   timeout failure として扱う。
 - **候補が反転する（古い候補が上書きされる）**: `ipc_pending_id_` の比較で
-  staleness check しているはず（`tsf-tip/src/TextService.cpp:717`）。
-  DebugView で `IPC: stale response for req_id=N, discarding` が出るか確認。
+  staleness check しているはず。構造化ログの`event=ipc_stale_response`と
+  `request_id` / `expected_request_id`を確認する。
 - **確定時に空文字が入る**: `shown_candidates_` がスナップショットされる前に
   TSF EditSession が拒否（lock denial）された可能性。
-  DebugView で `[azooKey TIP]` のフォローログ確認。
+  構造化ログのlifecycle / edit sessionイベントを確認する。
 - **`DllRegisterServer` 失敗（`SELFREG_E_CLASS`）**: 多くは **非管理者実行**が原因。
   machine-wide 登録は HKLM と CTF\TIP プロファイルに書くため昇格が必須。管理者
   PowerShell（または自動昇格した `register-dev.ps1`）で再実行する。

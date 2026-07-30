@@ -28,7 +28,7 @@ TIP は全プロセスにロードされる IME であり、machine-wide 登録�
 - Release ビルド（`windows-release`）の依存は `VCRUNTIME140.dll` / `MSVCP140.dll` のみで、VC++ Redistributable (x64) で充足できる（配布形態に近い）。
 - CMake は CRT を明示設定しておらず既定の動的 `/MD`（Release）/ `/MDd`（Debug）。
 
-繰り返しコード修正→再検証する場合や、**ログを見ながら検証・デバッグする場合**は、代替として VM 内にビルド環境（VS2022 Build Tools + CMake + Ninja + git）を構築し VM 内で **Debug ビルド**する方式もある。TIP のログは Debug ビルドでのみ出力されるため、ログ目的の検証はこちらを使う。詳細は末尾の **付録: Debug ビルド + ログ取得方式** を参照。
+Release ビルドでも、`AZOOKEY_LOG=1` を設定すると TIP / Host の JSON Lines ログを取得できる。通常の一次調査ではこの方式を使い、VM 内への開発環境構築は不要である。デバッガ接続や修正後の再ビルドが必要な調査では、末尾の **付録: Debug ビルド + デバッガ方式** を使う。
 
 ## ホスト側の準備
 
@@ -113,7 +113,14 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 3. **Backspace** で1文字戻る / **ESC** で composition クリア（M3）
 4. `watashi`（組込辞書語）→ **Space** で「私」等の漢字候補（M4/M5）。※ `にほんご` 等の辞書外語は `--mock-dict` か学習が無いと漢字化されない（下記 ⚠️ 参照）
 5. **↑↓** 選択・**Enter/数字** で確定、確定テキストがアプリに入る（M5/M6）
-6. 候補が出れば IPC 往復成立（= Host 由来）。詳細ログは VM に DebugView を入れると `IPC: connected to host ...` 等が見える
+6. 候補が出れば IPC 往復成立（= Host 由来）。詳細ログが必要な場合は、検証前に次を実行してサインアウト／サインインし、Host と検証対象アプリを新しい環境で起動する
+   ```powershell
+   [Environment]::SetEnvironmentVariable('AZOOKEY_LOG', '1', 'User')
+   [Environment]::SetEnvironmentVariable('AZOOKEY_LOG_LEVEL', 'info', 'User')
+   ```
+   ログは `%LOCALAPPDATA%\azooKey\logs\tip-YYYYMMDD.jsonl` と
+   `host-YYYYMMDD.jsonl` に出力される。取得後は環境変数を削除し、Host と対象アプリを
+   再起動する。
 
 > ⚠️ **変換能力の前提（重要）**: 現状 Zenzai 推論は未実装（`ZenzaiModelConverter` は gguf を probe するのみで `SimpleConverter` へ委譲。DEV-190）。そのため **辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。一般のかな漢字変換を確認するには、パッケージ生成時に `-MockDictionaryPath <TSV>` を指定するか学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを確認済み（DEV-190。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi` で評価する）。Zenzai 推論本体は M8/M9 系で未完。
 
@@ -141,21 +148,22 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順5）。 |
 | 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp:1001` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
 
-## 付録: Debug ビルド + ログ取得方式（VM に開発環境がある場合）
+## 付録: Debug ビルド + デバッガ方式（VM に開発環境がある場合）
 
 VM に開発環境（VS2022・CMake・Ninja・Windows SDK・git）が揃っている場合は、リポジトリを取得して
-**Debug ビルド**を行い、ログを見ながら検証できる。**TIP のログ（`DebugLog`）は Debug ビルド
-（`_DEBUG`）でのみ `OutputDebugString` に出力され、Release では no-op**（`tsf-tip/src/TextService.cpp:17-23`）
-なので、ログ目的の検証はこの方式を使う。デバッガ接続・修正→再ビルドも回しやすく、DEV-173 等のバグ調査に適する。
+**Debug ビルド**を行い、デバッガ接続や修正後の再ビルドを VM 内で繰り返せる。
+Release の opt-in ファイルログで不足する場合に使う。
 
 ### ログの出力先
 
 | 対象 | 出力先 | ビルド依存 | 取得方法 |
 |---|---|---|---|
-| TIP（`tsf-tip`） | `OutputDebugStringA`（`[azooKey TIP] …`） | **Debug のみ**（Release は no-op） | DebugView でキャプチャ |
-| host（`inference-host`） | `std::cerr`（info/warn/error）+ `std::cout`（IPC 応答 JSON） | 常時 | コンソール起動 or `2> host.log` |
+| TIP / Host | `%LOCALAPPDATA%\azooKey\logs\*-YYYYMMDD.jsonl` | Release / Debug、`AZOOKEY_LOG=1` のときだけ | ファイルを回収 |
+| TIP（`tsf-tip`） | `OutputDebugStringA`（`[azooKey TIP] <event>`） | Debug のみ | DebugView でキャプチャ |
+| host（`inference-host`） | `std::cerr`（info/warn/error）+ `std::cout`（IPC 応答 JSON） | 常時 | コンソール起動 |
 
-TIP のログ例: `IPC: connected to host …` / `handshake …` / `QueryCandidates …` / `worker exiting`。
+TIP のイベント例: `ipc_connected` / `ipc_handshake_rejected` /
+`ipc_query_timeout` / `ipc_worker_stopped`。
 
 ### 手順
 
@@ -201,13 +209,14 @@ TIP のログ例: `IPC: connected to host …` / `handshake …` / `QueryCandida
 
 | | Debug + 開発環境 | Release + zip コピー |
 |---|---|---|
-| TIP ログ | 出る（DebugView） | no-op |
-| host ログ | stderr | stderr |
+| TIP / Host ファイルログ | opt-inで出る | opt-inで出る |
+| DebugView | TIPイベントが出る | 出ない |
+| host stderr | 出る | 出る |
 | デバッガ・再ビルド | 回しやすい | ホスト再ビルド要 |
 | 開発環境 | 必要 | 不要（Redist のみ） |
-| 向き | 検証 + デバッグ（DEV-173 等の調査） | 配布形態の動作確認・軽量 |
+| 向き | デバッガを使う調査 | 配布形態の動作確認と一次調査 |
 
-`OutputDebugString` はファイルに残らないため、永続ログは DebugView の Save + host の `2> host.log` で取得する。
+`OutputDebugString` はファイルに残らない。永続ログは `AZOOKEY_LOG=1` で取得する。
 
 ## 技術根拠（確認済み）
 

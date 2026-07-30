@@ -174,8 +174,8 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - COM 境界をまたぐ関数は**例外を外へ出さない**。失敗時は `HRESULT` で返却し、
   ログに詳細を書き込む。
 - 最低ログ要件: 起動／終了、例外、キーイベント要約、変換失敗理由。
-  出力先は `%LOCALAPPDATA%\azooKey\logs\`（現状は TIP=`OutputDebugStringA` /
-  Host=stderr、Phase 4 で JSON Lines ファイルログへ移行予定）。
+  `AZOOKEY_LOG=1` のときは `%LOCALAPPDATA%\azooKey\logs\` に JSON Lines で出力する。
+  Debug ビルドの TIP は `OutputDebugStringA`、Host は stderr の既存経路も維持する。
 
 ### 互換性優先の実装ルール
 

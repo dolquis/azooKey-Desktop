@@ -720,6 +720,34 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 TIP は `OutputDebugStringA`（DebugView）、Host は stderr 中心。遅延要因
 （TIP 側 / Pipe 側 / Host 側）の切り分けと、エラー分類の体系がない。
 
+#### 7.1.1 M41 v1 スコープ
+
+M41 v1 は、Release ビルドで障害の一次情報を採取するためのファイルロガーを
+TIP と Host に導入する。§7.2 以降が定める最終形のうち、相関 ID と phase
+計測は M51 へ残し、次の契約を実装する。
+
+- `AZOOKEY_LOG=1` のときだけ有効化する。未設定または `1` 以外では、
+  Debug / Release のどちらもファイルを作成しない。
+- `AZOOKEY_LOG_LEVEL` は `info`、`warn`、`error` のいずれかを受け付ける。
+  未設定または不正値では `info` を使う。
+- 出力先とファイル名は §5.2 の
+  `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl` と
+  `tip-YYYYMMDD.jsonl` とする。
+- 各行の必須フィールドは `ts`、`component`、`level`、`event` とする。
+  `request_id`、`result`、`error_code` など、既存の呼び出し位置で得られる
+  メタ情報は構造化フィールドとして追加してよい。
+- 現行ファイルが 5 MiB を超える前にローテーションし、同じ日付の
+  `.1` から `.3` まで 3 世代を保持する。`.1` が直前の世代である。
+- ディレクトリ作成、ローテーション、書き込みの失敗はロガー内で処理する。
+  ログ失敗を TIP / Host の終了、例外、入力経路の失敗へ波及させない。
+- Release ビルドの構造化フィールドはメタ情報に限定し、入力本文、候補本文、
+  prompt、`raw_keys`、window title の生値を API へ渡さない。ロガーも §7.6 の
+  本文系フィールド名を検出した場合は値を `***redacted***` に置換し、
+  `window_title` フィールドは出力しない。
+
+M41 v1 では `trace_id` の生成と伝播、phase 別計測、ETW provider、WER / local
+dump を実装しない。
+
 ### 7.2 構造化ログ（JSON Lines）
 
 TIP / Host とも JSON Lines 形式のログを出力する。出力先は §5.2 の
@@ -733,6 +761,7 @@ TIP / Host とも JSON Lines 形式のログを出力する。出力先は §5.2
 | `ts` | ISO 8601 タイムスタンプ |
 | `level` | `info` / `warn` / `error` |
 | `component` | `tip` / `host` / `ipc` |
+| `event` | 機械可読なイベント名 |
 | `request_id` | IPC リクエスト相関 ID（該当時。§7.3） |
 | `trace_id` | ユーザー 1 アクション相関 ID（該当時。§7.3 / §7.7.1） |
 | `phase` | 処理フェーズ。正典 enum は `core/include/azookey/logging/Phase.h`（§7.3 / §7.7.2） |
@@ -1327,7 +1356,8 @@ Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ラン
 
 v1 の診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
 `ipc-ping.json`、`environment.txt`、`crash-summary.txt` で構成する。Release
-ランタイムログと D-013 は M41 のログ実装後に追加する。
+ランタイムログ自体は §7.1.1 の opt-in で取得できるが、診断 ZIP への自動収集は
+follow-up とする。
 
 `--repair`、D-013〜D-015、設定アプリの診断タブは follow-up とする。
 したがって、§12.2.1 の `--repair` 列は最終形の修復対象を示し、v1 CLI では実行しない。

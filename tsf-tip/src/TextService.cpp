@@ -1412,7 +1412,7 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
       if (!IsExpectedIpcResponse(*response, expected_request_id, expected_type)) {
         if (expected_request_id != 0 && response->request_id != expected_request_id) {
           RuntimeLog(
-              azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
+              azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
               {{"request_id", response->request_id}, {"expected_request_id", expected_request_id}});
         } else {
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_unexpected_response_type",
@@ -1772,7 +1772,7 @@ void TextService::ServeConnection() {
       if (qres) {
         if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
           if (qres->request_id != req_id) {
-            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
                        {{"request_id", qres->request_id}, {"expected_request_id", req_id}});
           } else {
             RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_unexpected_response_type",
@@ -1946,7 +1946,7 @@ void TextService::ServeConnection() {
       }
       if (notify_ui) candidate_ui_.PostCandidatesReady();
     } else {
-      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
                  {{"request_id", req_id}});
     }
 

@@ -17,7 +17,6 @@
 namespace azookey::learning {
 
 namespace {
-constexpr char kEscapedTsvHeader[] = "# azookey-learning-tsv escaped=1";
 
 double DecayedWeight(const LearningRecord& rec, uint64_t now_epoch_sec) {
   const double elapsed_seconds =
@@ -210,7 +209,7 @@ bool LearningStore::Load() {
   bool escaped_fields = false;
   while (std::getline(ifs, line)) {
     ++line_number;
-    if (line_number == 1 && line == kEscapedTsvHeader) {
+    if (line_number == 1 && line == kLearningStoreEscapedTsvHeader) {
       escaped_fields = true;
       continue;
     }
@@ -242,7 +241,7 @@ bool LearningStore::Load() {
 bool LearningStore::Save() const {
   std::ostringstream out;
   out.imbue(std::locale::classic());
-  out << kEscapedTsvHeader << '\n';
+  out << kLearningStoreEscapedTsvHeader << '\n';
   std::vector<std::string> keys;
   keys.reserve(table_.size());
   for (const auto& [key, _] : table_) {

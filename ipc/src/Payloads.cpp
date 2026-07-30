@@ -202,24 +202,18 @@ std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& 
   const auto engine = v->GetString("engine");
   const auto backend = v->GetString("backend");
   const auto fallback_state = v->GetString("fallback_state");
-  const auto rss_mb = v->GetUInt("rss_mb");
-  const auto learning_entries = v->GetUInt("learning_entries");
-  const auto user_dict_entries = v->GetUInt("user_dict_entries");
-  if (!engine || !backend || !fallback_state || !rss_mb || !learning_entries ||
-      !user_dict_entries) {
-    return std::nullopt;
-  }
+  if (!engine || !backend || !fallback_state) return std::nullopt;
   QueryDiagnosticsPayload p;
   p.model_loaded = v->GetBool("model_loaded").value_or(false);
   p.loaded_model_path = v->GetString("loaded_model_path");
   p.engine = *engine;
   p.backend = *backend;
-  p.rss_mb = *rss_mb;
+  p.rss_mb = v->GetUInt("rss_mb").value_or(0);
   p.ep = v->GetString("ep");
   p.ep_state = v->GetString("ep_state");
   p.ep_last_error = v->GetString("ep_last_error");
-  p.learning_entries = *learning_entries;
-  p.user_dict_entries = *user_dict_entries;
+  p.learning_entries = v->GetUInt("learning_entries").value_or(0);
+  p.user_dict_entries = v->GetUInt("user_dict_entries").value_or(0);
   p.fallback_state = *fallback_state;
   p.last_error = v->GetString("last_error");
   return p;

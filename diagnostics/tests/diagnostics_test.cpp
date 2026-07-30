@@ -9,6 +9,8 @@
 #include <string>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/LearningStore.h"
+#include "azookey/learning/UserDictionary.h"
 
 namespace {
 
@@ -143,7 +145,7 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
       "name": "user_dictionary",
       "status": "ok",
       "message": "User dictionary is readable",
-      "details": {"entries": 3}
+      "details": {"entries": 3, "skipped_entries": 0}
     },
     {
       "id": "D-012",
@@ -164,7 +166,7 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   {
     std::ofstream output(settings_path);
     output << R"({"openAiApiKey":"sk-secret","promptPrefixByApp":{"app":"private prompt"},)"
-              R"("model":{"enabled":true,"selectedPath":"C:\\Users\\alice\\model.gguf"}})";
+              R"("model":{"enabled":true,"selectedPath":"C:/Users/alice/model.gguf"}})";
   }
   diag::ProbeResult result;
   result.settings_path = settings_path;
@@ -172,7 +174,7 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   result.report.checks.push_back(
       {"D-001", "tip_dll", diag::Status::Ok, "ok", R"({"token":"sk-diagnostic"})"});
   result.host_health_json =
-      R"({"last_error":"Bearer private-token at C:\\Users\\alice\\model.gguf"})";
+      R"({"last_error":"Bearer private-token at D:\\Users\\bob\\model.gguf"})";
   result.ipc_ping_json = R"({"status":"ok","rtt_ms":1})";
 
   const auto entries = diag::BuildCollectionEntries(result);
@@ -191,6 +193,7 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   EXPECT_EQ(combined.find("private-token"), std::string::npos);
   EXPECT_EQ(combined.find("private prompt"), std::string::npos);
   EXPECT_EQ(combined.find("alice"), std::string::npos);
+  EXPECT_EQ(combined.find("bob"), std::string::npos);
   EXPECT_NE(combined.find("***redacted***"), std::string::npos);
   EXPECT_NE(combined.find("%USERPROFILE%"), std::string::npos);
 
@@ -233,6 +236,10 @@ TEST(DiagnosticsTest, StoredZipContainsOnlyDeclaredMembers) {
                           std::istreambuf_iterator<char>());
   ASSERT_GE(bytes.size(), 4U);
   EXPECT_EQ(bytes.substr(0, 4), std::string("PK\x03\x04", 4));
+  ASSERT_GE(bytes.size(), 14U);
+  const auto dos_date = static_cast<uint16_t>(static_cast<unsigned char>(bytes[12])) |
+                        (static_cast<uint16_t>(static_cast<unsigned char>(bytes[13])) << 8);
+  EXPECT_NE(dos_date, 0);
   EXPECT_NE(bytes.find("diag.json"), std::string::npos);
   EXPECT_NE(bytes.find("environment.txt"), std::string::npos);
   EXPECT_NE(bytes.find("safe\n"), std::string::npos);
@@ -241,23 +248,67 @@ TEST(DiagnosticsTest, StoredZipContainsOnlyDeclaredMembers) {
   std::filesystem::remove(zip_path, ec);
 }
 
-TEST(DiagnosticsTest, QueryDiagnosticsPayloadRoundTrips) {
-  azookey::ipc::QueryDiagnosticsPayload payload;
-  payload.model_loaded = true;
-  payload.loaded_model_path = R"(C:\Models\model.gguf)";
-  payload.engine = "llama_cpp";
-  payload.backend = "cuda";
-  payload.rss_mb = 256;
-  payload.learning_entries = 10;
-  payload.user_dict_entries = 4;
-  payload.fallback_state = "healthy";
-  const auto parsed =
-      azookey::ipc::ParseQueryDiagnostics(azookey::ipc::BuildQueryDiagnostics(payload));
-  ASSERT_TRUE(parsed.has_value());
-  EXPECT_TRUE(parsed->model_loaded);
-  EXPECT_EQ(parsed->loaded_model_path, payload.loaded_model_path);
-  EXPECT_EQ(parsed->engine, "llama_cpp");
-  EXPECT_EQ(parsed->fallback_state, "healthy");
+TEST(DiagnosticsTest, FailedZipWriteRemovesTruncatedOutput) {
+  const auto zip_path = TempPath("azookey-diag-invalid.zip");
+  {
+    std::ofstream output(zip_path, std::ios::binary);
+    output << "previous";
+  }
+  std::string error;
+  EXPECT_FALSE(diag::WriteZip(zip_path, {{"../invalid", "data"}}, &error));
+  EXPECT_FALSE(std::filesystem::exists(zip_path));
+}
+
+TEST(DiagnosticsTest, ProbesFilesWrittenByRuntimeStores) {
+  const auto learning_path = TempPath("azookey-diag-learning.tsv");
+  const auto dictionary_path = TempPath("azookey-diag-user-dictionary.json");
+  std::error_code ec;
+  std::filesystem::remove(learning_path, ec);
+  std::filesystem::remove(dictionary_path, ec);
+
+  azookey::learning::LearningStore learning(learning_path.string());
+  learning.Observe("よみ", "表記", 0.8, 100);
+  ASSERT_TRUE(learning.Save());
+  uint64_t learning_entries = 0;
+  EXPECT_TRUE(diag::ProbeLearningStoreFile(learning_path, &learning_entries));
+  EXPECT_EQ(learning_entries, 1);
+
+  azookey::learning::UserDictionary dictionary(dictionary_path.string());
+  EXPECT_TRUE(dictionary.Add({"単語", "たんご", std::nullopt, std::nullopt, std::nullopt}));
+  ASSERT_TRUE(dictionary.Save());
+  uint64_t dictionary_entries = 0;
+  uint64_t skipped_entries = 0;
+  EXPECT_TRUE(
+      diag::ProbeUserDictionaryFile(dictionary_path, &dictionary_entries, &skipped_entries));
+  EXPECT_EQ(dictionary_entries, 1);
+  EXPECT_EQ(skipped_entries, 0);
+
+  std::filesystem::remove(learning_path, ec);
+  std::filesystem::remove(dictionary_path, ec);
+}
+
+TEST(DiagnosticsTest, UserDictionaryProbeMatchesRuntimeInvalidEntryTolerance) {
+  const auto dictionary_path = TempPath("azookey-diag-user-dictionary-skipped.json");
+  {
+    std::ofstream output(dictionary_path);
+    output << R"({"version":1,"entries":[{"word":"単語","ruby":"たんご"},{"word":42}]})";
+  }
+
+  uint64_t entries = 0;
+  uint64_t skipped_entries = 0;
+  EXPECT_TRUE(diag::ProbeUserDictionaryFile(dictionary_path, &entries, &skipped_entries));
+  EXPECT_EQ(entries, 1);
+  EXPECT_EQ(skipped_entries, 1);
+
+  std::error_code ec;
+  std::filesystem::remove(dictionary_path, ec);
+}
+
+TEST(DiagnosticsTest, EmbeddedSchemaAndDefaultSettingsStaySupported) {
+  const auto sample =
+      std::filesystem::path(AZOOKEY_TEST_SOURCE_DIR) / "settings/default-settings.sample.json";
+  EXPECT_TRUE(diag::EmbeddedSettingsSchemaUsesOnlySupportedKeywords());
+  EXPECT_TRUE(diag::ProbeSettingsFile(sample));
 }
 
 }  // namespace

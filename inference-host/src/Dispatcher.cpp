@@ -36,11 +36,9 @@ uint64_t NowSec() {
 
 uint64_t CurrentRssMb() {
 #ifdef _WIN32
-  PROCESS_MEMORY_COUNTERS_EX counters{};
+  PROCESS_MEMORY_COUNTERS counters{};
   counters.cb = sizeof(counters);
-  if (GetProcessMemoryInfo(GetCurrentProcess(),
-                           reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                           sizeof(counters))) {
+  if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) {
     return static_cast<uint64_t>(counters.WorkingSetSize / (1024ULL * 1024ULL));
   }
 #endif

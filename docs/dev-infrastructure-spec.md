@@ -1339,7 +1339,7 @@ v1 の診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`
 | D-001 | TIP DLL 存在 | 登録済み DLL パスが存在するか | 再登録を促す |
 | D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `scripts/register-dev.ps1` または MSIX 修復 |
 | D-003 | 言語プロファイル | 日本語 `0x0411` の Profile があるか | Profile 再登録 |
-| D-004 | Host 起動 | Host プロセスが存在するか | Host 起動 |
+| D-004 | Host 起動 | 現在のログオンセッションに Host プロセスが存在するか | Host 起動 |
 | D-005 | IPC Handshake | Named Pipe 接続 + Handshake 成功 | Host 再起動 |
 | D-006 | IPC Ping | Ping 往復 latency 測定 | pipe / firewall / Host 状態確認 |
 | D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
@@ -1455,6 +1455,10 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
 
 `status` は `ok` / `warning` / `error` の 3 値。`--json` はテスト可能な
 stable schema として固定する。
+診断の実行と JSON または ZIP の生成に成功した場合、`status` が `error` でも
+プロセスの exit code は `0` とする。
+引数の不正、probe の実行失敗、ZIP の生成失敗では exit code `2` を返す。
+自動化側は exit code ではなく、出力された `status` と `checks` で診断結果を判定する。
 
 ### 12.4 診断 ZIP 構成
 
@@ -1556,6 +1560,9 @@ Response:
       "last_error": str (optional)
     } }
 ```
+
+v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落を `0` として扱う。
+`engine`、`backend`、`fallback_state` は必須であり、欠落時は payload 全体を不正とする。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
 自由文字列の `last_error` / `ep_last_error` は失敗時にユーザーパスや backend /

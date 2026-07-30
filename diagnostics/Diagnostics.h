@@ -52,6 +52,7 @@ struct Snapshot {
   bool user_dict_valid{true};
   uint64_t learning_entries{};
   uint64_t user_dict_entries{};
+  uint64_t user_dict_skipped_entries{};
   std::optional<ipc::QueryDiagnosticsPayload> host_diagnostics;
 };
 
@@ -72,6 +73,12 @@ std::string SerializeReport(const Report& report);
 std::string StatusName(Status status);
 
 ProbeResult ProbeSystem();
+
+bool ProbeSettingsFile(const std::filesystem::path& path);
+bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries);
+bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
+                             uint64_t* skipped_entries);
+bool EmbeddedSettingsSchemaUsesOnlySupportedKeywords();
 
 std::string RedactSettingsJson(std::string_view json);
 std::string RedactFreeText(std::string text);

@@ -11,13 +11,14 @@
 namespace {
 
 enum class Command {
+  None,
   Help,
   Json,
   Collect,
 };
 
 struct Options {
-  Command command{Command::Help};
+  Command command{Command::None};
   std::filesystem::path output;
 };
 
@@ -49,16 +50,20 @@ bool ParseOptions(int argc, wchar_t** argv, Options* options, std::string* error
   for (int index = 1; index < argc; ++index) {
     const std::wstring argument = argv[index];
     if (argument == L"--help" || argument == L"-h") {
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, or --collect";
+        return false;
+      }
       options->command = Command::Help;
     } else if (argument == L"--json") {
-      if (options->command != Command::Help) {
-        *error = "choose exactly one of --json or --collect";
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, or --collect";
         return false;
       }
       options->command = Command::Json;
     } else if (argument == L"--collect") {
-      if (options->command != Command::Help) {
-        *error = "choose exactly one of --json or --collect";
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, or --collect";
         return false;
       }
       options->command = Command::Collect;
@@ -73,6 +78,7 @@ bool ParseOptions(int argc, wchar_t** argv, Options* options, std::string* error
       return false;
     }
   }
+  if (options->command == Command::None) options->command = Command::Help;
   if (options->command != Command::Collect && !options->output.empty()) {
     *error = "--output requires --collect";
     return false;
@@ -84,16 +90,20 @@ bool ParseOptions(int argc, char** argv, Options* options, std::string* error) {
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--help" || argument == "-h") {
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, or --collect";
+        return false;
+      }
       options->command = Command::Help;
     } else if (argument == "--json") {
-      if (options->command != Command::Help) {
-        *error = "choose exactly one of --json or --collect";
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, or --collect";
         return false;
       }
       options->command = Command::Json;
     } else if (argument == "--collect") {
-      if (options->command != Command::Help) {
-        *error = "choose exactly one of --json or --collect";
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, or --collect";
         return false;
       }
       options->command = Command::Collect;
@@ -108,6 +118,7 @@ bool ParseOptions(int argc, char** argv, Options* options, std::string* error) {
       return false;
     }
   }
+  if (options->command == Command::None) options->command = Command::Help;
   if (options->command != Command::Collect && !options->output.empty()) {
     *error = "--output requires --collect";
     return false;

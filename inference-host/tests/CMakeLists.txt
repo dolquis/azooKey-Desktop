@@ -18,7 +18,7 @@ azookey_discover_tests(host_scheduler_tests)
 
 add_executable(host_user_data_paths_tests user_data_paths_test.cpp)
 target_link_libraries(host_user_data_paths_tests
-  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+  PRIVATE azookey_host_paths GTest::gtest_main azookey_project_options azookey_project_warnings
 )
 azookey_discover_tests(host_user_data_paths_tests)
 

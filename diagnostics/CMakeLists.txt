@@ -1,3 +1,6 @@
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${PROJECT_SOURCE_DIR}/settings/mvp-settings.schema.json"
+)
 file(READ "${PROJECT_SOURCE_DIR}/settings/mvp-settings.schema.json"
      AZOOKEY_SETTINGS_SCHEMA_JSON)
 configure_file(
@@ -14,8 +17,12 @@ target_include_directories(azookey_diagnostics
     "${PROJECT_SOURCE_DIR}/tsf-tip/include"
 )
 target_link_libraries(azookey_diagnostics
-  PUBLIC azookey_host azookey_ipc azookey_project_options
-  PRIVATE azookey_project_warnings
+  PUBLIC azookey_ipc azookey_project_options
+  PRIVATE
+    azookey_core
+    azookey_host_paths
+    azookey_learning
+    azookey_project_warnings
 )
 
 if(WIN32)

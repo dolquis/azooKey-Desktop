@@ -3,9 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace azookey::learning {
+
+inline constexpr std::string_view kLearningStoreEscapedTsvHeader =
+    "# azookey-learning-tsv escaped=1";
 
 struct LearningRecord {
   double weight{};

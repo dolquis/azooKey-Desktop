@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -29,10 +30,12 @@
 #endif
 
 #include "SettingsSchema.h"
+#include "azookey/core/Redaction.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
+#include "azookey/learning/LearningStore.h"
 #include "azookey/tsf/TextServiceFactory.h"
 
 namespace azookey::diagnostics {
@@ -187,6 +190,26 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
   return true;
 }
 
+bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
+  if (!schema.IsObject()) return true;
+  constexpr std::array<std::string_view, 10> supported = {
+      "$schema", "additionalProperties", "default", "description", "enum", "items",
+      "minimum", "properties",           "title",   "type",
+  };
+  for (const auto& [key, value] : schema.AsObject()) {
+    if (std::find(supported.begin(), supported.end(), key) == supported.end()) return false;
+    if (key == "properties") {
+      if (!value.IsObject()) return false;
+      for (const auto& [_, child_schema] : value.AsObject()) {
+        if (!SchemaUsesOnlySupportedKeywords(child_schema)) return false;
+      }
+    } else if (key == "items" && !SchemaUsesOnlySupportedKeywords(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 struct SettingsProbe {
   bool valid{true};
   bool missing{true};
@@ -307,7 +330,7 @@ bool ValidateModel(const std::filesystem::path& path) {
 }
 
 bool ParseLearningRecord(std::string_view line) {
-  if (line.empty() || line == "# azookey-learning-v2 escaped-tsv") return true;
+  if (line.empty() || line == learning::kLearningStoreEscapedTsvHeader) return true;
   const auto first = line.find('\t');
   const auto second = first == std::string_view::npos ? first : line.find('\t', first + 1);
   if (first == std::string_view::npos || second == std::string_view::npos) return false;
@@ -338,13 +361,15 @@ bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries) {
   std::string line;
   while (std::getline(input, line)) {
     if (!ParseLearningRecord(line)) return false;
-    if (!line.empty() && line != "# azookey-learning-v2 escaped-tsv") ++*entries;
+    if (!line.empty() && line != learning::kLearningStoreEscapedTsvHeader) ++*entries;
   }
   return input.eof();
 }
 
-bool ProbeUserDictionary(const std::filesystem::path& path, uint64_t* entries) {
+bool ProbeUserDictionary(const std::filesystem::path& path, uint64_t* entries,
+                         uint64_t* skipped_entries) {
   *entries = 0;
+  *skipped_entries = 0;
   std::error_code ec;
   if (!std::filesystem::exists(path, ec)) return true;
   const auto text = ReadTextFile(path);
@@ -353,9 +378,12 @@ bool ProbeUserDictionary(const std::filesystem::path& path, uint64_t* entries) {
   const auto* words = value->GetArray("entries");
   if (!words) return false;
   for (const auto& word : *words) {
-    if (!word.IsObject() || !word.GetString("word") || !word.GetString("ruby")) return false;
+    if (!word.IsObject() || !word.GetString("word") || !word.GetString("ruby")) {
+      ++*skipped_entries;
+      continue;
+    }
+    ++*entries;
   }
-  *entries = static_cast<uint64_t>(words->size());
   return true;
 }
 
@@ -467,14 +495,23 @@ bool IsLanguageProfileRegistered() {
 bool IsHostRunning() {
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return false;
+  DWORD current_session = 0;
+  if (!ProcessIdToSessionId(GetCurrentProcessId(), &current_session)) {
+    CloseHandle(snapshot);
+    return false;
+  }
   PROCESSENTRY32W entry{};
   entry.dwSize = sizeof(entry);
   bool found = false;
   if (Process32FirstW(snapshot, &entry)) {
     do {
       if (_wcsicmp(entry.szExeFile, L"azookey_inference_host.exe") == 0) {
-        found = true;
-        break;
+        DWORD process_session = 0;
+        if (ProcessIdToSessionId(entry.th32ProcessID, &process_session) &&
+            process_session == current_session) {
+          found = true;
+          break;
+        }
       }
     } while (Process32NextW(snapshot, &entry));
   }
@@ -638,75 +675,6 @@ void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* pi
   }
 }
 
-std::string ReplaceCaseInsensitive(std::string text, const std::string& needle,
-                                   const std::string& replacement) {
-  if (needle.empty()) return text;
-  std::string lower_text = LowerAscii(text);
-  const std::string lower_needle = LowerAscii(needle);
-  size_t offset = 0;
-  while ((offset = lower_text.find(lower_needle, offset)) != std::string::npos) {
-    text.replace(offset, needle.size(), replacement);
-    lower_text.replace(offset, needle.size(), LowerAscii(replacement));
-    offset += replacement.size();
-  }
-  return text;
-}
-
-std::string EscapeJsonPath(std::string_view path) {
-  std::string escaped;
-  escaped.reserve(path.size() * 2);
-  for (const char ch : path) {
-    if (ch == '\\') escaped.push_back('\\');
-    escaped.push_back(ch);
-  }
-  return escaped;
-}
-
-std::string NormalizeWindowsUserProfile(std::string text) {
-  const std::array<std::string, 2> prefixes = {
-      R"(c:\users\)",
-      R"(c:\\users\\)",
-  };
-  for (const auto& prefix : prefixes) {
-    auto lower = LowerAscii(text);
-    size_t start = 0;
-    while ((start = lower.find(prefix, start)) != std::string::npos) {
-      const size_t user_start = start + prefix.size();
-      size_t user_end = user_start;
-      while (user_end < text.size() && text[user_end] != '\\' && text[user_end] != '/' &&
-             text[user_end] != '"' && !std::isspace(static_cast<unsigned char>(text[user_end]))) {
-        ++user_end;
-      }
-      if (user_end == user_start) {
-        start = user_start;
-        continue;
-      }
-      text.replace(start, user_end - start, "%USERPROFILE%");
-      lower = LowerAscii(text);
-      start += std::string_view("%USERPROFILE%").size();
-    }
-  }
-  return text;
-}
-
-std::string RedactTokenPrefix(std::string text, std::string_view prefix) {
-  const auto lower_prefix = LowerAscii(std::string(prefix));
-  auto lower = LowerAscii(text);
-  size_t start = 0;
-  while ((start = lower.find(lower_prefix, start)) != std::string::npos) {
-    size_t end = start + prefix.size();
-    while (end < text.size()) {
-      const unsigned char ch = static_cast<unsigned char>(text[end]);
-      if (std::isspace(ch) || ch == '"' || ch == '\'' || ch == ',' || ch == ';') break;
-      ++end;
-    }
-    text.replace(start, end - start, "***redacted***");
-    lower = LowerAscii(text);
-    start += 14;
-  }
-  return text;
-}
-
 uint32_t Crc32(std::string_view data) {
   uint32_t crc = 0xFFFFFFFFU;
   for (const unsigned char byte : data) {
@@ -730,7 +698,39 @@ void WriteU32(std::ostream& output, uint32_t value) {
   output.write(bytes, sizeof(bytes));
 }
 
+std::pair<uint16_t, uint16_t> CurrentDosDateTime() {
+  const std::time_t now = std::time(nullptr);
+  std::tm local{};
+#ifdef _WIN32
+  localtime_s(&local, &now);
+#else
+  localtime_r(&now, &local);
+#endif
+  const int year = std::clamp(local.tm_year + 1900, 1980, 2107);
+  const uint16_t date =
+      static_cast<uint16_t>(((year - 1980) << 9) | ((local.tm_mon + 1) << 5) | local.tm_mday);
+  const uint16_t time =
+      static_cast<uint16_t>((local.tm_hour << 11) | (local.tm_min << 5) | (local.tm_sec / 2));
+  return {time, date};
+}
+
 }  // namespace
+
+bool ProbeSettingsFile(const std::filesystem::path& path) { return ProbeSettings(path).valid; }
+
+bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries) {
+  return ProbeLearningStore(path, entries);
+}
+
+bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
+                             uint64_t* skipped_entries) {
+  return ProbeUserDictionary(path, entries, skipped_entries);
+}
+
+bool EmbeddedSettingsSchemaUsesOnlySupportedKeywords() {
+  const auto schema = j::Parse(kSettingsSchemaJson);
+  return schema && SchemaUsesOnlySupportedKeywords(*schema);
+}
 
 std::string StatusName(Status status) {
   switch (status) {
@@ -872,7 +872,8 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
            snapshot.user_dict_valid ? Status::Ok : Status::Error,
            snapshot.user_dict_valid ? "User dictionary is readable"
                                     : "User dictionary is unreadable or corrupt",
-           {{"entries", j::Value(snapshot.user_dict_entries)}});
+           {{"entries", j::Value(snapshot.user_dict_entries)},
+            {"skipped_entries", j::Value(snapshot.user_dict_skipped_entries)}});
 
   AddCheck(report, "D-012", "settings", snapshot.settings_valid ? Status::Ok : Status::Error,
            snapshot.settings_valid
@@ -928,8 +929,8 @@ ProbeResult ProbeSystem() {
     snapshot.selected_model_valid = snapshot.selected_model_exists && ValidateModel(model_path);
     snapshot.learning_store_valid =
         ProbeLearningStore(paths->learning_path, &snapshot.learning_entries);
-    snapshot.user_dict_valid =
-        ProbeUserDictionary(paths->user_dict_path, &snapshot.user_dict_entries);
+    snapshot.user_dict_valid = ProbeUserDictionary(
+        paths->user_dict_path, &snapshot.user_dict_entries, &snapshot.user_dict_skipped_entries);
   } else {
     snapshot.settings_valid = false;
     snapshot.settings_missing = false;
@@ -948,24 +949,7 @@ std::string RedactSettingsJson(std::string_view json) {
   return RedactFreeText(j::Stringify(RedactValue(*value)));
 }
 
-std::string RedactFreeText(std::string text) {
-  const std::array<std::pair<const char*, const char*>, 2> paths = {
-      std::pair{"LOCALAPPDATA", "%LOCALAPPDATA%"},
-      std::pair{"USERPROFILE", "%USERPROFILE%"},
-  };
-  for (const auto& [environment, replacement] : paths) {
-    const auto value = EnvironmentValue(environment);
-    if (!value.empty()) {
-      text = ReplaceCaseInsensitive(std::move(text), value, replacement);
-      text = ReplaceCaseInsensitive(std::move(text), EscapeJsonPath(value), replacement);
-    }
-  }
-  text = NormalizeWindowsUserProfile(std::move(text));
-  text = RedactTokenPrefix(std::move(text), "sk-");
-  text = RedactTokenPrefix(std::move(text), "dpapi:");
-  text = RedactTokenPrefix(std::move(text), "Bearer ");
-  return text;
-}
+std::string RedactFreeText(std::string text) { return core::RedactFreeText(std::move(text)); }
 
 std::vector<ArchiveEntry> BuildCollectionEntries(const ProbeResult& result) {
   std::vector<ArchiveEntry> entries;
@@ -997,6 +981,14 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
     if (error) *error = "failed to create output ZIP";
     return false;
   }
+  const auto fail = [&](std::string_view message) {
+    stream.close();
+    std::error_code ec;
+    std::filesystem::remove(output, ec);
+    if (error) *error = std::string(message);
+    return false;
+  };
+  const auto [dos_time, dos_date] = CurrentDosDateTime();
   std::vector<CentralEntry> central;
   central.reserve(entries.size());
   for (const auto& entry : entries) {
@@ -1004,21 +996,19 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
         entry.name.find('\\') != std::string::npos ||
         entry.name.size() > std::numeric_limits<uint16_t>::max() ||
         entry.content.size() > std::numeric_limits<uint32_t>::max()) {
-      if (error) *error = "invalid ZIP entry";
-      return false;
+      return fail("invalid ZIP entry");
     }
     const auto offset = stream.tellp();
     if (offset < 0 || static_cast<uint64_t>(offset) > std::numeric_limits<uint32_t>::max()) {
-      if (error) *error = "diagnostic ZIP is too large";
-      return false;
+      return fail("diagnostic ZIP is too large");
     }
     CentralEntry item{entry, Crc32(entry.content), static_cast<uint32_t>(offset)};
     WriteU32(stream, 0x04034B50);
     WriteU16(stream, 20);
     WriteU16(stream, 0x0800);
     WriteU16(stream, 0);
-    WriteU16(stream, 0);
-    WriteU16(stream, 0);
+    WriteU16(stream, dos_time);
+    WriteU16(stream, dos_date);
     WriteU32(stream, item.crc);
     WriteU32(stream, static_cast<uint32_t>(entry.content.size()));
     WriteU32(stream, static_cast<uint32_t>(entry.content.size()));
@@ -1031,8 +1021,7 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
   const auto central_offset_raw = stream.tellp();
   if (central_offset_raw < 0 ||
       static_cast<uint64_t>(central_offset_raw) > std::numeric_limits<uint32_t>::max()) {
-    if (error) *error = "diagnostic ZIP is too large";
-    return false;
+    return fail("diagnostic ZIP is too large");
   }
   const uint32_t central_offset = static_cast<uint32_t>(central_offset_raw);
   for (const auto& item : central) {
@@ -1041,8 +1030,8 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
     WriteU16(stream, 20);
     WriteU16(stream, 0x0800);
     WriteU16(stream, 0);
-    WriteU16(stream, 0);
-    WriteU16(stream, 0);
+    WriteU16(stream, dos_time);
+    WriteU16(stream, dos_date);
     WriteU32(stream, item.crc);
     WriteU32(stream, static_cast<uint32_t>(item.entry.content.size()));
     WriteU32(stream, static_cast<uint32_t>(item.entry.content.size()));
@@ -1059,8 +1048,7 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
   if (central_end_raw < 0 ||
       static_cast<uint64_t>(central_end_raw) > std::numeric_limits<uint32_t>::max() ||
       central.size() > std::numeric_limits<uint16_t>::max()) {
-    if (error) *error = "diagnostic ZIP is too large";
-    return false;
+    return fail("diagnostic ZIP is too large");
   }
   const uint32_t central_size = static_cast<uint32_t>(central_end_raw) - central_offset;
   WriteU32(stream, 0x06054B50);
@@ -1072,9 +1060,10 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
   WriteU32(stream, central_offset);
   WriteU16(stream, 0);
   if (!stream) {
-    if (error) *error = "failed while writing diagnostic ZIP";
-    return false;
+    return fail("failed while writing diagnostic ZIP");
   }
+  stream.close();
+  if (!stream) return fail("failed while writing diagnostic ZIP");
   return true;
 }
 

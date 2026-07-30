@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey 配布とリリース運用"
+  short_description: "MSI、MSIX、署名、VM検証とRelease CIを安全に案内します"
+  default_prompt: "Use $azookey-packaging-release-workflow to review this packaging or release change and choose the required validation path."

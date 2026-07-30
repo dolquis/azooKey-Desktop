@@ -1,21 +1,8 @@
 #include "azookey/host/UserDataPaths.h"
 
-#include <cstdlib>
-#include <string>
 #include <system_error>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#define WIN32_LEAN_AND_MEAN
-// clang-format off
-#include <Windows.h>
-#include <objbase.h>
-#include <KnownFolders.h>
-#include <ShlObj.h>
-// clang-format on
-#endif
+#include "azookey/core/PlatformPaths.h"
 
 namespace azookey::host {
 
@@ -36,24 +23,7 @@ bool CreateParentDirectoryIfNeeded(const std::filesystem::path& file_path) {
 }  // namespace
 
 std::optional<std::filesystem::path> GetPlatformLocalAppData() {
-#ifdef _WIN32
-  PWSTR path = nullptr;
-  const HRESULT hr = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path);
-  if (FAILED(hr) || path == nullptr) {
-    return std::nullopt;
-  }
-  std::filesystem::path result(path);
-  CoTaskMemFree(path);
-  return result;
-#else
-  if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-    return std::filesystem::path(xdg);
-  }
-  if (const char* home = std::getenv("HOME"); home && *home) {
-    return std::filesystem::path(home) / ".local" / "share";
-  }
-  return std::nullopt;
-#endif
+  return azookey::core::GetLocalAppDataDirectory();
 }
 
 std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inputs) {

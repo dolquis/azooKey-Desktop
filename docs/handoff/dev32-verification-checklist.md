@@ -14,7 +14,7 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 ## 事前確認（検証開始前）
 - ☐ `register-dev.ps1` が `TSF TIP registration complete (machine-wide).` を出力
 - ☐ host 稼働:`Get-Process azookey_inference_host`
-- ☐ host 稼働の確認は上の `Get-Process` で足りる（Release の Hidden 起動ではログ非表示）。**host をコンソール/Debug 起動した場合のみ** `named pipe listening: \\.\pipe\azookey-<SID>` をログで確認
+- ☐ host 稼働の確認は上の `Get-Process` で足りる。Release の Hidden 起動でも `AZOOKEY_LOG=1` ならファイルログを取得できる。**host をコンソール/Debug 起動した場合のみ** `named pipe listening: \\.\pipe\azookey-<SID>` を stderr で確認
 - ☐ DebugView 起動・**Capture Global Win32** ON・フィルタ `[azooKey TIP]`（Debug 時）
 - ☐ 標準 Microsoft IME が残っている（切替不能時の保険）
 - ☐ VM チェックポイント取得済み

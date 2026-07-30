@@ -3,12 +3,9 @@ add_library(azookey_host_paths STATIC
 )
 target_include_directories(azookey_host_paths PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_host_paths
-  PUBLIC azookey_project_options
+  PUBLIC azookey_core azookey_project_options
   PRIVATE azookey_project_warnings
 )
-if(WIN32)
-  target_link_libraries(azookey_host_paths PRIVATE ole32 shell32)
-endif()
 
 add_library(azookey_host STATIC
   src/Dispatcher.cpp

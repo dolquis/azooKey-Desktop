@@ -32,8 +32,13 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 namespace {
+
+azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
+  return azookey::logging::RuntimeLogSafeText(std::move(value));
+}
 
 constexpr const char* kHostVersion = "0.1.0";
 volatile std::sig_atomic_t g_signal_stop_requested = 0;
@@ -304,7 +309,10 @@ int main(int argc, char** argv) {
     return result.exit_code;
   }
 
+  azookey::logging::RuntimeLogger runtime_log(
+      azookey::logging::RuntimeLoggerOptionsFromEnvironment("host", user_paths->logs_dir));
   if (!azookey::host::EnsureUserDataDirectories(*user_paths)) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "user_data_directory_create_failed");
     std::cerr << "error: failed to create azooKey user data directories under "
               << user_paths->root_dir << std::endl;
     return 2;
@@ -330,6 +338,8 @@ int main(int argc, char** argv) {
     config.model_path = cli_model_path;
   }
   if (settings_result.status == azookey::host::SettingsLoadStatus::Invalid) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "settings_load_failed",
+                    {{"result", SafeLogText("error")}});
     std::cerr << "warn: invalid settings.json";
     if (settings_result.error) std::cerr << ": " << *settings_result.error;
     if (settings_result.quarantined_path) {
@@ -338,11 +348,26 @@ int main(int argc, char** argv) {
     std::cerr << std::endl;
   }
 
+  std::error_code learning_path_error;
+  const bool learning_file_existed =
+      std::filesystem::exists(user_paths->learning_path, learning_path_error) &&
+      !learning_path_error;
   azookey::learning::LearningStore store(learning_path);
-  store.Load();
+  const bool learning_loaded = store.Load();
+  const bool learning_load_failed = learning_file_existed && !learning_loaded;
+  runtime_log.Log(
+      learning_load_failed ? azookey::logging::RuntimeLogLevel::Warn
+                           : azookey::logging::RuntimeLogLevel::Info,
+      "learning_load",
+      {{"result",
+        SafeLogText(learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"))}});
 
   azookey::learning::UserDictionary user_dict(user_dict_path);
-  user_dict.Load();
+  const bool user_dict_loaded = user_dict.Load();
+  runtime_log.Log(user_dict_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                   : azookey::logging::RuntimeLogLevel::Warn,
+                  "user_dictionary_load",
+                  {{"result", SafeLogText(user_dict_loaded ? "ok" : "error")}});
 
   auto converter = std::make_unique<azookey::core::SimpleConverter>();
   if (!mock_dict_path.empty()) {
@@ -351,12 +376,22 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
-  if (explicit_model_path && !engine.LoadModel()) {
-    std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
-              << " (falling back to SimpleConverter)" << std::endl;
+  if (explicit_model_path) {
+    const bool model_loaded = engine.LoadModel();
+    runtime_log.Log(model_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                 : azookey::logging::RuntimeLogLevel::Error,
+                    "model_load", {{"result", SafeLogText(model_loaded ? "ok" : "error")}});
+    if (!model_loaded) {
+      std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
+                << " (falling back to SimpleConverter)" << std::endl;
+    }
   } else if (settings_store.settings().model.auto_load_on_host_start) {
-    (void)engine.StartModelPreload(
+    const bool preload_started = engine.StartModelPreload(
         azookey::host::ModelLoadOptions{config.model_path, config.backend, config.n_gpu_layers});
+    runtime_log.Log(preload_started ? azookey::logging::RuntimeLogLevel::Info
+                                    : azookey::logging::RuntimeLogLevel::Warn,
+                    "model_preload_start",
+                    {{"result", SafeLogText(preload_started ? "ok" : "error")}});
   }
 
   azookey::host::RequestScheduler scheduler;
@@ -377,6 +412,7 @@ int main(int argc, char** argv) {
   }
   if (pipe_mode) {
     if (handshake_token.empty()) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_missing");
       std::cerr << "warn: no IPC handshake token configured; relying on per-user pipe ACL"
                 << std::endl;
     }
@@ -397,12 +433,26 @@ int main(int argc, char** argv) {
     std::cerr << " model_preload=preloading";
   }
   std::cerr << std::endl;
+  runtime_log.Log(
+      azookey::logging::RuntimeLogLevel::Info, "backend_selected",
+      {{"backend",
+        SafeLogText(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")}});
+  runtime_log.Log(
+      azookey::logging::RuntimeLogLevel::Info, "host_started",
+      {{"backend",
+        SafeLogText(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")},
+       {"model_loaded", startup_health.model_loaded},
+       {"model_preload_in_progress", startup_health.model_preload_in_progress}});
 
   if (!RegisterSignalHandlers()) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
+                    "shutdown_signal_handler_register_failed");
     std::cerr << "warn: failed to register process shutdown signal handlers" << std::endl;
   }
 #ifdef _WIN32
   if (!console_control.Register()) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
+                    "console_shutdown_handler_register_failed");
     std::cerr << "warn: failed to register Windows console shutdown handler" << std::endl;
   }
 #endif
@@ -418,15 +468,21 @@ int main(int argc, char** argv) {
                                                                dconf, &settings_store);
           return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };
         })) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "pipe_listen_failed",
+                      {{"result", SafeLogText("error")}});
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
       return 2;
     }
 
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "pipe_listening",
+                    {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
     while (!StopRequested()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     server.Stop();
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
+                    {{"result", SafeLogText("ok")}});
     return 0;
   }
 
@@ -435,6 +491,8 @@ int main(int argc, char** argv) {
     if (line.empty()) continue;
     auto env = azookey::ipc::Deserialize(line);
     if (!env) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_parse_failed",
+                      {{"result", SafeLogText("error")}});
       std::cerr << "warn: failed to parse envelope" << std::endl;
       continue;
     }
@@ -444,9 +502,13 @@ int main(int argc, char** argv) {
         std::cout << *serialized << std::endl;
         std::cout.flush();
       } else {
+        runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_serialize_failed",
+                        {{"request_id", env->request_id}, {"result", SafeLogText("error")}});
         std::cerr << "warn: failed to serialize response envelope" << std::endl;
       }
     }
   }
+  runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
+                  {{"result", SafeLogText("ok")}});
   return 0;
 }

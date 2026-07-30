@@ -1,7 +1,9 @@
 add_library(azookey_core STATIC
   src/LiveConversionChunker.cpp
   src/NumberRewriter.cpp
+  src/PlatformPaths.cpp
   src/Redaction.cpp
+  src/RuntimeLogger.cpp
   src/RomajiKanaConverter.cpp
   src/SimpleConverter.cpp
 )
@@ -15,3 +17,6 @@ target_link_libraries(azookey_core
   PUBLIC azookey_project_options
   PRIVATE azookey_project_warnings
 )
+if(WIN32)
+  target_link_libraries(azookey_core PRIVATE ole32 shell32)
+endif()

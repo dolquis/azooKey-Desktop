@@ -1,3 +1,15 @@
+add_library(azookey_host_paths STATIC
+  src/UserDataPaths.cpp
+)
+target_include_directories(azookey_host_paths PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(azookey_host_paths
+  PUBLIC azookey_project_options
+  PRIVATE azookey_project_warnings
+)
+if(WIN32)
+  target_link_libraries(azookey_host_paths PRIVATE ole32 shell32)
+endif()
+
 add_library(azookey_host STATIC
   src/Dispatcher.cpp
   src/InferenceEngine.cpp
@@ -5,13 +17,17 @@ add_library(azookey_host STATIC
   src/RequestScheduler.cpp
   src/SettingsStore.cpp
   src/UserDictCli.cpp
-  src/UserDataPaths.cpp
   src/ZenzaiModelConverter.cpp
 )
 
 target_include_directories(azookey_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_host
-  PUBLIC azookey_core azookey_learning azookey_ipc azookey_project_options
+  PUBLIC
+    azookey_core
+    azookey_host_paths
+    azookey_learning
+    azookey_ipc
+    azookey_project_options
   PRIVATE azookey_project_warnings
 )
 target_compile_definitions(azookey_host PUBLIC AZOOKEY_BACKEND_DEFAULT="${AZOOKEY_BACKEND}")
@@ -23,7 +39,7 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(azookey_host PUBLIC ole32 shell32)
+  target_link_libraries(azookey_host PUBLIC ole32 psapi)
 endif()
 
 add_executable(azookey_inference_host src/main.cpp)

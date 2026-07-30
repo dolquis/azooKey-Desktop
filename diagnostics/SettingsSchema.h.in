@@ -1,0 +1,7 @@
+#pragma once
+
+namespace azookey::diagnostics {
+
+inline constexpr char kSettingsSchemaJson[] = R"AZOOKEY_SCHEMA(@AZOOKEY_SETTINGS_SCHEMA_JSON@)AZOOKEY_SCHEMA";
+
+}  // namespace azookey::diagnostics

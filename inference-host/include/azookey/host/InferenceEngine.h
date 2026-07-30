@@ -60,6 +60,8 @@ struct EngineHealthSnapshot {
   bool model_preload_in_progress{false};
   std::string model_path;
   std::optional<std::string> last_error;
+  size_t learning_entries{};
+  size_t user_dict_entries{};
 };
 
 class InferenceEngine {

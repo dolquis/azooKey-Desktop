@@ -343,8 +343,44 @@ TEST(PayloadsTest, UpdateConfigResponse) {
   EXPECT_EQ(*error_parsed->error, "invalid settings.json");
 }
 
+TEST(PayloadsTest, QueryDiagnosticsRoundTrips) {
+  azookey::ipc::QueryDiagnosticsPayload payload;
+  payload.model_loaded = true;
+  payload.loaded_model_path = R"(C:\Models\model.gguf)";
+  payload.engine = "llama_cpp";
+  payload.backend = "cuda";
+  payload.rss_mb = 256;
+  payload.learning_entries = 10;
+  payload.user_dict_entries = 4;
+  payload.fallback_state = "healthy";
+
+  const auto parsed =
+      azookey::ipc::ParseQueryDiagnostics(azookey::ipc::BuildQueryDiagnostics(payload));
+
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->model_loaded);
+  EXPECT_EQ(parsed->loaded_model_path, payload.loaded_model_path);
+  EXPECT_EQ(parsed->engine, "llama_cpp");
+  EXPECT_EQ(parsed->backend, "cuda");
+  EXPECT_EQ(parsed->rss_mb, 256);
+  EXPECT_EQ(parsed->learning_entries, 10);
+  EXPECT_EQ(parsed->user_dict_entries, 4);
+  EXPECT_EQ(parsed->fallback_state, "healthy");
+}
+
+TEST(PayloadsTest, QueryDiagnosticsDefaultsMissingCounters) {
+  const auto parsed = azookey::ipc::ParseQueryDiagnostics(
+      R"({"engine":"mock","backend":"cpu","fallback_state":"degraded_simple"})");
+
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->rss_mb, 0);
+  EXPECT_EQ(parsed->learning_entries, 0);
+  EXPECT_EQ(parsed->user_dict_entries, 0);
+}
+
 TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseHandshakeRequest("not json").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());
   EXPECT_FALSE(azookey::ipc::ParseCancel("{}").has_value());
+  EXPECT_FALSE(azookey::ipc::ParseQueryDiagnostics(R"({"engine":"mock"})").has_value());
 }

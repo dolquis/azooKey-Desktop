@@ -282,6 +282,10 @@ add_subdirectory(ipc)
 add_subdirectory(learning)
 add_subdirectory(inference-host)
 
+if(WIN32)
+  add_subdirectory(diagnostics)
+endif()
+
 if(WIN32 AND AZOOKEY_BUILD_TSF_TIP)
   add_subdirectory(tsf-tip)
 endif()

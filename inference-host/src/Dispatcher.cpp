@@ -5,6 +5,17 @@
 #include <chrono>
 #include <string_view>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// Psapi.h requires the Windows SDK types declared by Windows.h.
+// clang-format off
+#include <Windows.h>
+#include <Psapi.h>
+// clang-format on
+#endif
+
 #include "azookey/ipc/Payloads.h"
 
 namespace azookey::host {
@@ -21,6 +32,17 @@ uint64_t NowSec() {
   using namespace std::chrono;
   return static_cast<uint64_t>(
       duration_cast<seconds>(system_clock::now().time_since_epoch()).count());
+}
+
+uint64_t CurrentRssMb() {
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS counters{};
+  counters.cb = sizeof(counters);
+  if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) {
+    return static_cast<uint64_t>(counters.WorkingSetSize / (1024ULL * 1024ULL));
+  }
+#endif
+  return 0;
 }
 
 ipc::Envelope MakeResponse(const ipc::Envelope& req, std::string payload_json) {
@@ -126,6 +148,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandlePing(req);
     case ipc::MessageType::Health:
       return HandleHealth(req);
+    case ipc::MessageType::QueryDiagnostics:
+      return HandleQueryDiagnostics(req);
     case ipc::MessageType::LoadModel:
       return HandleLoadModel(req);
     case ipc::MessageType::QueryCandidates:
@@ -207,6 +231,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       p.last_error = "not authenticated";
       return MakeResponse(req, ipc::BuildHealth(p));
     }
+    case ipc::MessageType::QueryDiagnostics: {
+      ipc::QueryDiagnosticsPayload p;
+      p.engine = config_.runtime_tier;
+      p.backend = "";
+      p.fallback_state = "degraded_simple";
+      p.last_error = "not authenticated";
+      return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
+    }
     default:
       // Cancel and unknown types are fire-and-forget; no response needed.
       return std::nullopt;
@@ -277,6 +309,34 @@ std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) 
     p.status = "error";
   }
   return MakeResponse(req, ipc::BuildHealth(p));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envelope& req) {
+  const auto engine_health = engine_->health_snapshot();
+  ipc::QueryDiagnosticsPayload p;
+  const bool effective_model_loaded = engine_health.model_loaded && config_.runtime_tier != "mock";
+  p.model_loaded = effective_model_loaded;
+  if (effective_model_loaded && !engine_health.model_path.empty()) {
+    p.loaded_model_path = engine_health.model_path;
+  }
+  p.engine = config_.runtime_tier;
+  p.backend = BackendName(engine_health.backend);
+  p.rss_mb = CurrentRssMb();
+  p.learning_entries = static_cast<uint64_t>(engine_health.learning_entries);
+  p.user_dict_entries = static_cast<uint64_t>(engine_health.user_dict_entries);
+  p.last_error = engine_health.last_error;
+
+  const bool model_enabled = !settings_store_ || settings_store_->settings().model.enabled;
+  if (!model_enabled) {
+    p.fallback_state = "healthy";
+  } else if (!effective_model_loaded) {
+    p.fallback_state = "degraded_simple";
+  } else if (engine_health.last_error) {
+    p.fallback_state = "degraded_model";
+  } else {
+    p.fallback_state = "healthy";
+  }
+  return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& req) {

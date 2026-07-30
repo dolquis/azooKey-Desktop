@@ -179,6 +179,46 @@ std::optional<HealthPayload> ParseHealth(const std::string& json) {
   return p;
 }
 
+std::string BuildQueryDiagnostics(const QueryDiagnosticsPayload& p) {
+  j::Object o;
+  o.emplace("model_loaded", j::Value(p.model_loaded));
+  if (p.loaded_model_path) o.emplace("loaded_model_path", j::Value(*p.loaded_model_path));
+  o.emplace("engine", j::Value(p.engine));
+  o.emplace("backend", j::Value(p.backend));
+  o.emplace("rss_mb", j::Value(p.rss_mb));
+  if (p.ep) o.emplace("ep", j::Value(*p.ep));
+  if (p.ep_state) o.emplace("ep_state", j::Value(*p.ep_state));
+  if (p.ep_last_error) o.emplace("ep_last_error", j::Value(*p.ep_last_error));
+  o.emplace("learning_entries", j::Value(p.learning_entries));
+  o.emplace("user_dict_entries", j::Value(p.user_dict_entries));
+  o.emplace("fallback_state", j::Value(p.fallback_state));
+  if (p.last_error) o.emplace("last_error", j::Value(*p.last_error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  const auto engine = v->GetString("engine");
+  const auto backend = v->GetString("backend");
+  const auto fallback_state = v->GetString("fallback_state");
+  if (!engine || !backend || !fallback_state) return std::nullopt;
+  QueryDiagnosticsPayload p;
+  p.model_loaded = v->GetBool("model_loaded").value_or(false);
+  p.loaded_model_path = v->GetString("loaded_model_path");
+  p.engine = *engine;
+  p.backend = *backend;
+  p.rss_mb = v->GetUInt("rss_mb").value_or(0);
+  p.ep = v->GetString("ep");
+  p.ep_state = v->GetString("ep_state");
+  p.ep_last_error = v->GetString("ep_last_error");
+  p.learning_entries = v->GetUInt("learning_entries").value_or(0);
+  p.user_dict_entries = v->GetUInt("user_dict_entries").value_or(0);
+  p.fallback_state = *fallback_state;
+  p.last_error = v->GetString("last_error");
+  return p;
+}
+
 // -------- LoadModel --------
 
 std::string BuildLoadModelRequest(const LoadModelRequest& p) {

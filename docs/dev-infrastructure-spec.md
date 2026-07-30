@@ -1314,6 +1314,24 @@ azooKey が動作しない、候補が出ない、Zenzai が使われていな�
 開発者が短時間で切り分けられるようにする。IME は「入力できない」時点で
 UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に優先実装する。
 
+#### 12.1.1 M44 v1 スコープ
+
+M44 v1 は `azookey_diag.exe --json` と `azookey_diag.exe --collect` を提供し、
+D-001〜D-012 を診断する。Host が停止している場合もローカルで判定できる項目を
+継続し、12 項目すべてを stable schema の `checks` 配列へ出力する。
+
+Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ランタイム tier
+（R1 の `llama_cpp` / `mock`。R2 追加後は `winml`）を表し、`model_loaded` と
+`loaded_model_path` は実際にロードされたモデルだけを表す。設定済みパスの存在だけで
+モデルロード成功と判定してはならない。
+
+v1 の診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
+`ipc-ping.json`、`environment.txt`、`crash-summary.txt` で構成する。Release
+ランタイムログと D-013 は M41 のログ実装後に追加する。
+
+`--repair`、D-013〜D-015、設定アプリの診断タブは follow-up とする。
+したがって、§12.2.1 の `--repair` 列は最終形の修復対象を示し、v1 CLI では実行しない。
+
 ### 12.2 診断項目
 
 | ID | 項目 | チェック内容 | 失敗時の推奨修復 |
@@ -1321,7 +1339,7 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 | D-001 | TIP DLL 存在 | 登録済み DLL パスが存在するか | 再登録を促す |
 | D-002 | COM 登録 | CLSID / InprocServer32 / Profile GUID が正しいか | `scripts/register-dev.ps1` または MSIX 修復 |
 | D-003 | 言語プロファイル | 日本語 `0x0411` の Profile があるか | Profile 再登録 |
-| D-004 | Host 起動 | Host プロセスが存在するか | Host 起動 |
+| D-004 | Host 起動 | 現在のログオンセッションに Host プロセスが存在するか | Host 起動 |
 | D-005 | IPC Handshake | Named Pipe 接続 + Handshake 成功 | Host 再起動 |
 | D-006 | IPC Ping | Ping 往復 latency 測定 | pipe / firewall / Host 状態確認 |
 | D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
@@ -1402,7 +1420,8 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 
 ### 12.3 `azookey_diag.exe` CLI
 
-3 サブコマンドを持つ:
+最終形は 3 サブコマンドを持つ。M44 v1 は `--json` と `--collect` を実装し、
+`--repair` は follow-up とする。
 
 ```powershell
 azookey_diag.exe --json                                  # 全項目を JSON で出力
@@ -1436,6 +1455,10 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
 
 `status` は `ok` / `warning` / `error` の 3 値。`--json` はテスト可能な
 stable schema として固定する。
+診断の実行と JSON または ZIP の生成に成功した場合、`status` が `error` でも
+プロセスの exit code は `0` とする。
+引数の不正、probe の実行失敗、ZIP の生成失敗では exit code `2` を返す。
+自動化側は exit code ではなく、出力された `status` と `checks` で診断結果を判定する。
 
 ### 12.4 診断 ZIP 構成
 
@@ -1524,7 +1547,10 @@ Response:
   { "version": 1, "request_id": 1, "type": "QueryDiagnostics",
     "trace_id": "...",
     "payload": {
-      "model_loaded": bool, "engine": str, "backend": str, "rss_mb": int,
+      "model_loaded": bool,
+      "loaded_model_path": str (optional, model_loaded=true のときだけ存在),
+      "engine": "llama_cpp" | "mock" | "winml",
+      "backend": str, "rss_mb": int,
       "ep": str (optional, R2/winml 時の選択 EP 名),
       "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
       "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; §4.6),
@@ -1534,6 +1560,9 @@ Response:
       "last_error": str (optional)
     } }
 ```
+
+v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落を `0` として扱う。
+`engine`、`backend`、`fallback_state` は必須であり、欠落時は payload 全体を不正とする。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
 自由文字列の `last_error` / `ep_last_error` は失敗時にユーザーパスや backend /

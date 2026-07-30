@@ -9,8 +9,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <Windows.h>
 #include <Psapi.h>
+#include <Windows.h>
 #endif
 
 #include "azookey/ipc/Payloads.h"
@@ -313,8 +313,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHealth(const ipc::Envelope& req) 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envelope& req) {
   const auto engine_health = engine_->health_snapshot();
   ipc::QueryDiagnosticsPayload p;
-  const bool effective_model_loaded =
-      engine_health.model_loaded && config_.runtime_tier != "mock";
+  const bool effective_model_loaded = engine_health.model_loaded && config_.runtime_tier != "mock";
   p.model_loaded = effective_model_loaded;
   if (effective_model_loaded && !engine_health.model_path.empty()) {
     p.loaded_model_path = engine_health.model_path;

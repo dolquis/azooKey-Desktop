@@ -24,7 +24,8 @@ std::string TypeToString(MessageType type) {
     case MessageType::UpdateConfig: return "UpdateConfig";
     case MessageType::Ping: return "Ping";
     case MessageType::Health: return "Health";
-    case MessageType::QueryDiagnostics: return "QueryDiagnostics";
+    case MessageType::QueryDiagnostics:
+      return "QueryDiagnostics";
     default: return "Unknown";
   }
 }

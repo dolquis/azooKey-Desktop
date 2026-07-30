@@ -9,8 +9,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <Psapi.h>
+// Psapi.h requires the Windows SDK types declared by Windows.h.
+// clang-format off
 #include <Windows.h>
+#include <Psapi.h>
+// clang-format on
 #endif
 
 #include "azookey/ipc/Payloads.h"

@@ -90,6 +90,8 @@ $env:AZOOKEY_LOG_LEVEL = 'info' # info / warn / error
 - `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl`
 
 ログは 5 MiB でローテーションし、`.1` から `.3` まで 3 世代を保持する。
+UTC 日付単位で当日を含む直近 7 日分だけを保持し、それより古い日次ファイルと
+ローテーション世代は次回の書き込み時に削除する。
 Release ビルドでは入力本文、候補本文、`prompt`、`window_title` の生値を出力しない。
 取得後は環境変数を削除して、Host と検証対象アプリを再起動する。
 
@@ -98,8 +100,9 @@ Release ビルドでは入力本文、候補本文、`prompt`、`window_title` �
 [Environment]::SetEnvironmentVariable('AZOOKEY_LOG_LEVEL', $null, 'User')
 ```
 
-Debug ビルドでは、TIP のイベント名を `OutputDebugStringA` でも出力するため、
-DebugView または WinDbg で同時に観測できる。Host の stderr も従来どおり残る。
+Debug ビルドでは、TIP の構造化 JSON レコードを `OutputDebugStringA` でも出力するため、
+DebugView または WinDbg で同じフィールドと redact 済みの値を観測できる。
+Host の stderr も従来どおり残る。
 
 ## CI
 
@@ -140,7 +143,7 @@ cmake --build --preset windows-debug --target azookey_check
   各 GoogleTest case には CTest `TIMEOUT` が設定されているため、停止は無限待ちではなく
   timeout failure として扱う。
 - **候補が反転する（古い候補が上書きされる）**: `ipc_pending_id_` の比較で
-  staleness check しているはず。構造化ログの`event=ipc_stale_response`と
+  staleness check しているはず。構造化ログの`event=ipc_stale_query_result`と
   `request_id` / `expected_request_id`を確認する。
 - **確定時に空文字が入る**: `shown_candidates_` がスナップショットされる前に
   TSF EditSession が拒否（lock denial）された可能性。

@@ -738,12 +738,18 @@ TIP と Host に導入する。§7.2 以降が定める最終形のうち、相�
   メタ情報は構造化フィールドとして追加してよい。
 - 現行ファイルが 5 MiB を超える前にローテーションし、同じ日付の
   `.1` から `.3` まで 3 世代を保持する。`.1` が直前の世代である。
+- UTC 日付単位で当日を含む直近 7 日分を保持し、それより古い TIP / Host の
+  日次ファイルとローテーション世代は、各プロセスの初回書き込み時に削除する。
+- 複数プロセスから同じ component のファイルへ書く場合は名前付き mutex で直列化する。
+  待機は最大 200 ms とし、取得できなければ入力処理を妨げず、その行を破棄する。
 - ディレクトリ作成、ローテーション、書き込みの失敗はロガー内で処理する。
   ログ失敗を TIP / Host の終了、例外、入力経路の失敗へ波及させない。
 - Release ビルドの構造化フィールドはメタ情報に限定し、入力本文、候補本文、
   prompt、`raw_keys`、window title の生値を API へ渡さない。ロガーも §7.6 の
   本文系フィールド名を検出した場合は値を `***redacted***` に置換し、
   `window_title` フィールドは出力しない。
+- 文字列フィールドは `RuntimeLogSafeText` で明示的に opt-in した値だけを受け付ける。
+  本文を示しうるキーを部分一致で検出した場合は redact する。
 
 M41 v1 では `trace_id` の生成と伝播、phase 別計測、ETW provider、WER / local
 dump を実装しない。
@@ -753,6 +759,8 @@ dump を実装しない。
 TIP / Host とも JSON Lines 形式のログを出力する。出力先は §5.2 の
 `%LOCALAPPDATA%\azooKey\logs\host-YYYYMMDD.jsonl` /
 `tip-YYYYMMDD.jsonl`。
+Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
+`SHGetKnownFolderPath(FOLDERID_LocalAppData)` を共通利用する。
 
 各行に最低限含める必須フィールド:
 

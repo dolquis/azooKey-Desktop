@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -17,7 +18,13 @@ enum class RuntimeLogLevel {
   Error,
 };
 
-using RuntimeLogFieldValue = std::variant<int64_t, uint64_t, double, bool, std::string>;
+struct RuntimeLogSafeText {
+  explicit RuntimeLogSafeText(std::string text) : value(std::move(text)) {}
+
+  std::string value;
+};
+
+using RuntimeLogFieldValue = std::variant<int64_t, uint64_t, double, bool, RuntimeLogSafeText>;
 
 struct RuntimeLogField {
   std::string key;
@@ -39,6 +46,8 @@ struct RuntimeLoggerOptions {
   RuntimeLogLevel minimum_level{RuntimeLogLevel::Info};
   uintmax_t max_file_bytes{5 * 1024 * 1024};
   size_t max_generations{3};
+  size_t max_retention_days{7};
+  uint32_t mutex_wait_timeout_ms{200};
 };
 
 RuntimeLoggerOptions RuntimeLoggerOptionsFromEnvironment(
@@ -51,12 +60,15 @@ class RuntimeLogger {
   explicit RuntimeLogger(RuntimeLoggerOptions options);
 
   bool enabled() const noexcept { return options_.enabled; }
+  std::string FormatRecord(RuntimeLogLevel level, std::string_view event,
+                           std::initializer_list<RuntimeLogField> fields = {}) const noexcept;
   void Log(RuntimeLogLevel level, std::string_view event,
            std::initializer_list<RuntimeLogField> fields = {}) noexcept;
 
  private:
   RuntimeLoggerOptions options_;
   std::mutex mutex_;
+  bool retention_checked_{false};
 };
 
 }  // namespace azookey::logging

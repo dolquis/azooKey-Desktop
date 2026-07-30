@@ -36,6 +36,10 @@
 
 namespace {
 
+azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
+  return azookey::logging::RuntimeLogSafeText(std::move(value));
+}
+
 constexpr const char* kHostVersion = "0.1.0";
 volatile std::sig_atomic_t g_signal_stop_requested = 0;
 
@@ -118,7 +122,7 @@ bool RegisterSignalHandlers() {
   return std::signal(SIGINT, HandleSignal) != SIG_ERR &&
          std::signal(SIGTERM, HandleSignal) != SIG_ERR;
 #else
-  struct sigaction action{};
+  struct sigaction action {};
   action.sa_handler = HandleSignal;
   sigemptyset(&action.sa_mask);
   // Deliberately omit SA_RESTART so a blocked stdio read returns on shutdown.
@@ -335,7 +339,7 @@ int main(int argc, char** argv) {
   }
   if (settings_result.status == azookey::host::SettingsLoadStatus::Invalid) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "settings_load_failed",
-                    {{"result", std::string("error")}});
+                    {{"result", SafeLogText("error")}});
     std::cerr << "warn: invalid settings.json";
     if (settings_result.error) std::cerr << ": " << *settings_result.error;
     if (settings_result.quarantined_path) {
@@ -356,14 +360,14 @@ int main(int argc, char** argv) {
                            : azookey::logging::RuntimeLogLevel::Info,
       "learning_load",
       {{"result",
-        std::string(learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"))}});
+        SafeLogText(learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"))}});
 
   azookey::learning::UserDictionary user_dict(user_dict_path);
   const bool user_dict_loaded = user_dict.Load();
   runtime_log.Log(user_dict_loaded ? azookey::logging::RuntimeLogLevel::Info
                                    : azookey::logging::RuntimeLogLevel::Warn,
                   "user_dictionary_load",
-                  {{"result", std::string(user_dict_loaded ? "ok" : "error")}});
+                  {{"result", SafeLogText(user_dict_loaded ? "ok" : "error")}});
 
   auto converter = std::make_unique<azookey::core::SimpleConverter>();
   if (!mock_dict_path.empty()) {
@@ -376,7 +380,7 @@ int main(int argc, char** argv) {
     const bool model_loaded = engine.LoadModel();
     runtime_log.Log(model_loaded ? azookey::logging::RuntimeLogLevel::Info
                                  : azookey::logging::RuntimeLogLevel::Error,
-                    "model_load", {{"result", std::string(model_loaded ? "ok" : "error")}});
+                    "model_load", {{"result", SafeLogText(model_loaded ? "ok" : "error")}});
     if (!model_loaded) {
       std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
                 << " (falling back to SimpleConverter)" << std::endl;
@@ -387,7 +391,7 @@ int main(int argc, char** argv) {
     runtime_log.Log(preload_started ? azookey::logging::RuntimeLogLevel::Info
                                     : azookey::logging::RuntimeLogLevel::Warn,
                     "model_preload_start",
-                    {{"result", std::string(preload_started ? "ok" : "error")}});
+                    {{"result", SafeLogText(preload_started ? "ok" : "error")}});
   }
 
   azookey::host::RequestScheduler scheduler;
@@ -432,11 +436,11 @@ int main(int argc, char** argv) {
   runtime_log.Log(
       azookey::logging::RuntimeLogLevel::Info, "backend_selected",
       {{"backend",
-        std::string(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")}});
+        SafeLogText(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")}});
   runtime_log.Log(
       azookey::logging::RuntimeLogLevel::Info, "host_started",
       {{"backend",
-        std::string(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")},
+        SafeLogText(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")},
        {"model_loaded", startup_health.model_loaded},
        {"model_preload_in_progress", startup_health.model_preload_in_progress}});
 
@@ -465,20 +469,20 @@ int main(int argc, char** argv) {
           return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };
         })) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "pipe_listen_failed",
-                      {{"result", std::string("error")}});
+                      {{"result", SafeLogText("error")}});
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
       return 2;
     }
 
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "pipe_listening",
-                    {{"result", std::string("ok")}});
+                    {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
     while (!StopRequested()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     server.Stop();
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
-                    {{"result", std::string("ok")}});
+                    {{"result", SafeLogText("ok")}});
     return 0;
   }
 
@@ -488,7 +492,7 @@ int main(int argc, char** argv) {
     auto env = azookey::ipc::Deserialize(line);
     if (!env) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_parse_failed",
-                      {{"result", std::string("error")}});
+                      {{"result", SafeLogText("error")}});
       std::cerr << "warn: failed to parse envelope" << std::endl;
       continue;
     }
@@ -499,12 +503,12 @@ int main(int argc, char** argv) {
         std::cout.flush();
       } else {
         runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_serialize_failed",
-                        {{"request_id", env->request_id}, {"result", std::string("error")}});
+                        {{"request_id", env->request_id}, {"result", SafeLogText("error")}});
         std::cerr << "warn: failed to serialize response envelope" << std::endl;
       }
     }
   }
   runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
-                  {{"result", std::string("ok")}});
+                  {{"result", SafeLogText("ok")}});
   return 0;
 }

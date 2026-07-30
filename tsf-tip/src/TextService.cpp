@@ -50,12 +50,18 @@ azookey::logging::RuntimeLogger& TipRuntimeLogger() {
   return logger;
 }
 
+azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
+  return azookey::logging::RuntimeLogSafeText(std::move(value));
+}
+
 void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
                 std::initializer_list<azookey::logging::RuntimeLogField> fields = {}) {
+  auto& logger = TipRuntimeLogger();
 #ifdef _DEBUG
-  OutputDebugStringA(("[azooKey TIP] " + std::string(event) + "\n").c_str());
+  const auto record = logger.FormatRecord(level, event, fields);
+  if (!record.empty()) OutputDebugStringA(("[azooKey TIP] " + record + "\n").c_str());
 #endif
-  TipRuntimeLogger().Log(level, event, fields);
+  logger.Log(level, event, fields);
 }
 
 std::string IpcHandshakeTokenFromEnv() {
@@ -1406,13 +1412,13 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
       if (!IsExpectedIpcResponse(*response, expected_request_id, expected_type)) {
         if (expected_request_id != 0 && response->request_id != expected_request_id) {
           RuntimeLog(
-              azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
+              azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
               {{"request_id", response->request_id}, {"expected_request_id", expected_request_id}});
         } else {
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_unexpected_response_type",
                      {{"request_id", response->request_id},
-                      {"response_type", TypeToString(response->type)},
-                      {"expected_type", TypeToString(expected_type)}});
+                      {"response_type", SafeLogText(TypeToString(response->type))},
+                      {"expected_type", SafeLogText(TypeToString(expected_type))}});
         }
         continue;
       }
@@ -1469,7 +1475,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
                                        std::memory_order_relaxed);
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
-               {{"host_version", hpayload->host_version}});
+               {{"host_version", SafeLogText(hpayload->host_version)}});
   }
   return true;
 }
@@ -1623,7 +1629,7 @@ void TextService::ServeConnection() {
       if (!sent_out_of_band && !ipc_client_.Send(env)) {
         if (!ipc_stop_.load())
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_send_failed",
-                     {{"message_type", TypeToString(item.type)}});
+                     {{"message_type", SafeLogText(TypeToString(item.type))}});
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
@@ -1633,7 +1639,7 @@ void TextService::ServeConnection() {
           if (ipc_stop_.load()) return;
           if (!ipc_stop_.load())
             RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_receive_failed",
-                       {{"message_type", TypeToString(item.type)}});
+                       {{"message_type", SafeLogText(TypeToString(item.type))}});
           if (has_qc) RearmPendingQuery(req_id);
           return;
         }
@@ -1730,7 +1736,7 @@ void TextService::ServeConnection() {
         }
         if (!sent_out_of_band && !ipc_client_.Send(env))
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_post_query_cancel_send_failed",
-                     {{"message_type", TypeToString(item.type)}});
+                     {{"message_type", SafeLogText(TypeToString(item.type))}});
         if (item.type == MessageType::Cancel && item.cancel_target_id == req_id) {
           cancel_inflight = true;
           cancel_inflight_out_of_band = sent_out_of_band;
@@ -1766,13 +1772,13 @@ void TextService::ServeConnection() {
       if (qres) {
         if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
           if (qres->request_id != req_id) {
-            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
                        {{"request_id", qres->request_id}, {"expected_request_id", req_id}});
           } else {
             RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_unexpected_response_type",
                        {{"request_id", qres->request_id},
-                        {"response_type", TypeToString(qres->type)},
-                        {"expected_type", TypeToString(qenv.type)}});
+                        {"response_type", SafeLogText(TypeToString(qres->type))},
+                        {"expected_type", SafeLogText(TypeToString(qenv.type))}});
           }
           qres.reset();
           continue;
@@ -1809,7 +1815,7 @@ void TextService::ServeConnection() {
         }
         if (!sent_out_of_band && !ipc_client_.Send(env))
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_mid_receive_cancel_send_failed",
-                     {{"message_type", ipc::TypeToString(item.type)}});
+                     {{"message_type", SafeLogText(ipc::TypeToString(item.type))}});
         if (item.type == ipc::MessageType::Cancel && item.cancel_target_id == req_id) {
           cancel_inflight = true;
           cancel_inflight_out_of_band = sent_out_of_band;
@@ -1824,7 +1830,7 @@ void TextService::ServeConnection() {
     std::vector<CandidateField> response_candidates;
     if (cancel_inflight && cancel_inflight_out_of_band && !qres) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_query_cancelled_out_of_band",
-                 {{"request_id", req_id}, {"result", std::string("cancelled")}});
+                 {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
       ++next_id;
       continue;
     }
@@ -1854,7 +1860,7 @@ void TextService::ServeConnection() {
       fallback.source = "fallback";
       response_candidates.push_back(std::move(fallback));
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
-                 {{"request_id", req_id}, {"result", std::string("cancelled")}});
+                 {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
       // Host died after the query was sent: re-arm so the reconnected loop
       // re-issues it (recover without retyping).
@@ -1870,7 +1876,7 @@ void TextService::ServeConnection() {
       // query response before seeing Cancel. Consume and discard here to keep
       // stream framing aligned for subsequent receives.
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_cancelled_reply_discarded",
-                 {{"request_id", req_id}, {"result", std::string("cancelled")}});
+                 {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
       ++next_id;
       continue;
     }
@@ -1924,7 +1930,7 @@ void TextService::ServeConnection() {
                    {{"request_id", req_id},
                     {"reading_length", static_cast<uint64_t>(reading.size())},
                     {"candidate_count", static_cast<uint64_t>(response_candidates.size())},
-                    {"result", std::string("ok")}});
+                    {"result", SafeLogText("ok")}});
       }
       bool notify_ui = false;
       {

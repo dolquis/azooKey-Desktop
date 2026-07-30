@@ -14,6 +14,7 @@ Describe "VM verification package automation" {
 
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\tsf-tip") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\inference-host") -Force | Out-Null
+      New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\diagnostics") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "build\windows-release\bench") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "scripts") -Force | Out-Null
       New-Item -ItemType Directory -Path (Join-Path $Root "docs\handoff") -Force | Out-Null
@@ -61,6 +62,8 @@ Describe "VM verification package automation" {
       if (-not $SkipHost) {
         "host" | Set-Content -LiteralPath (Join-Path $Root "build\windows-release\inference-host\azookey_inference_host.exe")
       }
+      "diag" | Set-Content -LiteralPath (
+        Join-Path $Root "build\windows-release\diagnostics\azookey_diag.exe")
       "bench" | Set-Content -LiteralPath (
         Join-Path $Root "build\windows-release\bench\azookey_zenzai_bench.exe")
       foreach ($scriptName in @(
@@ -148,7 +151,7 @@ Describe "VM verification package automation" {
       $manifest.commit | Should -Be "0123456789abcdef0123456789abcdef01234567"
       $manifest.preset | Should -Be "windows-release"
       $manifest.buildType | Should -Be "Release"
-      @($manifest.files).Count | Should -Be 8
+      @($manifest.files).Count | Should -Be 9
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
         Should -Be 1
       foreach ($file in $manifest.files) {
@@ -161,6 +164,7 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath (Join-Path $expanded "manifest.json") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "AppContainerAcl.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "verify-bootstrap.ps1") | Should -BeTrue
+      Test-Path -LiteralPath (Join-Path $expanded "azookey_diag.exe") | Should -BeTrue
       $manifestBytes = [System.IO.File]::ReadAllBytes($result.ManifestPath)
       [BitConverter]::ToString($manifestBytes[0..2]) | Should -Not -Be "EF-BB-BF"
       Should -Invoke Assert-VmVerifyWorktreeClean -Times 1 -Exactly

@@ -23,6 +23,7 @@ enum class MessageType {
   UpdateConfig,
   Ping,
   Health,
+  QueryDiagnostics,
   Unknown,
 };
 

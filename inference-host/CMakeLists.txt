@@ -23,7 +23,7 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(azookey_host PUBLIC ole32 shell32)
+  target_link_libraries(azookey_host PUBLIC ole32 psapi shell32)
 endif()
 
 add_executable(azookey_inference_host src/main.cpp)

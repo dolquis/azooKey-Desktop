@@ -337,6 +337,8 @@ EngineHealthSnapshot InferenceEngine::health_snapshot() const {
   snapshot.model_preload_in_progress = model_preload_in_progress_;
   snapshot.model_path = config_.model_path;
   snapshot.last_error = last_error_ ? last_error_ : model_runtime_error_;
+  snapshot.learning_entries = store_ ? store_->size() : 0;
+  snapshot.user_dict_entries = user_dict_ ? user_dict_->Size() : 0;
   return snapshot;
 }
 

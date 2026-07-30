@@ -316,8 +316,9 @@ function Export-VmVerifyPackage {
 
   $tipDll = Join-Path $configuration.BinaryDir "tsf-tip\azookey_tsf_tip.dll"
   $hostExe = Join-Path $configuration.BinaryDir "inference-host\azookey_inference_host.exe"
+  $diagExe = Join-Path $configuration.BinaryDir "diagnostics\azookey_diag.exe"
   $benchExe = Join-Path $configuration.BinaryDir "bench\azookey_zenzai_bench.exe"
-  $requiredArtifacts = @($tipDll, $hostExe)
+  $requiredArtifacts = @($tipDll, $hostExe, $diagExe)
   if ($Model) {
     $requiredArtifacts += $benchExe
   }
@@ -358,6 +359,7 @@ function Export-VmVerifyPackage {
     $payloads = @(
       @{ Source = $tipDll; Archive = "azookey_tsf_tip.dll"; Role = "tip-dll" }
       @{ Source = $hostExe; Archive = "azookey_inference_host.exe"; Role = "inference-host" }
+      @{ Source = $diagExe; Archive = "azookey_diag.exe"; Role = "runtime-diagnostics" }
       @{ Source = (Join-Path $repository "scripts\register-dev.ps1"); Archive = "register-dev.ps1"; Role = "registration-script" }
       @{ Source = (Join-Path $repository "scripts\unregister-dev.ps1"); Archive = "unregister-dev.ps1"; Role = "unregistration-script" }
       @{ Source = (Join-Path $repository "scripts\host-supervisor.ps1"); Archive = "host-supervisor.ps1"; Role = "host-supervisor-script" }

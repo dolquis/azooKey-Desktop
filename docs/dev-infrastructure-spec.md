@@ -1314,6 +1314,24 @@ azooKey が動作しない、候補が出ない、Zenzai が使われていな�
 開発者が短時間で切り分けられるようにする。IME は「入力できない」時点で
 UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に優先実装する。
 
+#### 12.1.1 M44 v1 スコープ
+
+M44 v1 は `azookey_diag.exe --json` と `azookey_diag.exe --collect` を提供し、
+D-001〜D-012 を診断する。Host が停止している場合もローカルで判定できる項目を
+継続し、12 項目すべてを stable schema の `checks` 配列へ出力する。
+
+Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ランタイム tier
+（R1 の `llama_cpp` / `mock`。R2 追加後は `winml`）を表し、`model_loaded` と
+`loaded_model_path` は実際にロードされたモデルだけを表す。設定済みパスの存在だけで
+モデルロード成功と判定してはならない。
+
+v1 の診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
+`ipc-ping.json`、`environment.txt`、`crash-summary.txt` で構成する。Release
+ランタイムログと D-013 は M41 のログ実装後に追加する。
+
+`--repair`、D-013〜D-015、設定アプリの診断タブは follow-up とする。
+したがって、§12.2.1 の `--repair` 列は最終形の修復対象を示し、v1 CLI では実行しない。
+
 ### 12.2 診断項目
 
 | ID | 項目 | チェック内容 | 失敗時の推奨修復 |
@@ -1402,7 +1420,8 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 
 ### 12.3 `azookey_diag.exe` CLI
 
-3 サブコマンドを持つ:
+最終形は 3 サブコマンドを持つ。M44 v1 は `--json` と `--collect` を実装し、
+`--repair` は follow-up とする。
 
 ```powershell
 azookey_diag.exe --json                                  # 全項目を JSON で出力
@@ -1524,7 +1543,10 @@ Response:
   { "version": 1, "request_id": 1, "type": "QueryDiagnostics",
     "trace_id": "...",
     "payload": {
-      "model_loaded": bool, "engine": str, "backend": str, "rss_mb": int,
+      "model_loaded": bool,
+      "loaded_model_path": str (optional, model_loaded=true のときだけ存在),
+      "engine": "llama_cpp" | "mock" | "winml",
+      "backend": str, "rss_mb": int,
       "ep": str (optional, R2/winml 時の選択 EP 名),
       "ep_state": str (optional, "NotPresent"|"NotReady"|"Ready"|"Registered"|"Failed"),
       "ep_last_error": str (optional, EP 取得・登録失敗の HRESULT/診断文; §4.6),

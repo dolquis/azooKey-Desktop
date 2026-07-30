@@ -363,6 +363,11 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
+#if AZOOKEY_WITH_LLAMA_CPP
+  dconf.runtime_tier = "llama_cpp";
+#else
+  dconf.runtime_tier = "mock";
+#endif
   dconf.default_backend = default_backend;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;

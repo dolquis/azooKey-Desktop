@@ -624,6 +624,16 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
   EXPECT_EQ(health->backend, "cpu");
   EXPECT_TRUE(health->model_loaded);
 
+  auto diagnostics_resp =
+      dispatcher.Dispatch(MakeReq(691, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(diagnostics_resp.has_value());
+  auto diagnostics = ipc::ParseQueryDiagnostics(diagnostics_resp->payload_json);
+  ASSERT_TRUE(diagnostics.has_value());
+  EXPECT_EQ(diagnostics->engine, "mock");
+  EXPECT_FALSE(diagnostics->model_loaded);
+  EXPECT_FALSE(diagnostics->loaded_model_path.has_value());
+  EXPECT_EQ(diagnostics->fallback_state, "degraded_simple");
+
   ipc::HandshakeRequest hreq;
   hreq.tip_version = "0.1.0";
   hreq.protocol_version = kProtocolVersion;
@@ -791,6 +801,23 @@ TEST_F(DispatcherTest, Health) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->status, "ok");
   EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
+  auto env = MakeReq(701, ipc::MessageType::QueryDiagnostics, "{}");
+  auto resp = dispatcher.Dispatch(env);
+  ASSERT_TRUE(resp.has_value());
+  EXPECT_EQ(resp->type, ipc::MessageType::QueryDiagnostics);
+
+  auto parsed = ipc::ParseQueryDiagnostics(resp->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->engine, "mock");
+  EXPECT_FALSE(parsed->model_loaded);
+  EXPECT_FALSE(parsed->loaded_model_path.has_value());
+  EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
+  EXPECT_EQ(parsed->learning_entries, 0u);
+  EXPECT_EQ(parsed->user_dict_entries, 0u);
+  EXPECT_EQ(parsed->fallback_state, "degraded_simple");
 }
 
 TEST_F(DispatcherTest, UpdateConfigWithoutSettingsStoreReturnsError) {

@@ -20,6 +20,7 @@ struct DispatcherConfig {
   BackendKind default_backend{BackendKind::Cpu};
   std::optional<BackendKind> override_backend;
   std::optional<std::string> override_model_path;
+  std::string runtime_tier{"mock"};
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.
   std::shared_ptr<std::mutex> update_config_mutex{std::make_shared<std::mutex>()};
 };
@@ -46,6 +47,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleHandshake(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandlePing(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleHealth(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleQueryDiagnostics(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleLoadModel(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryCandidates(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryBatchConversion(const ipc::Envelope& req);

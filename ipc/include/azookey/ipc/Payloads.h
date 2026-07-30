@@ -39,6 +39,21 @@ struct HealthPayload {
   std::optional<std::string> last_error;
 };
 
+struct QueryDiagnosticsPayload {
+  bool model_loaded{false};
+  std::optional<std::string> loaded_model_path;
+  std::string engine;
+  std::string backend;
+  uint64_t rss_mb{};
+  std::optional<std::string> ep;
+  std::optional<std::string> ep_state;
+  std::optional<std::string> ep_last_error;
+  uint64_t learning_entries{};
+  uint64_t user_dict_entries{};
+  std::string fallback_state;
+  std::optional<std::string> last_error;
+};
+
 struct LoadModelRequest {
   std::string path;
   std::string backend;  // "cpu" | "cuda" | "directml"
@@ -137,6 +152,7 @@ std::string BuildHandshakeRequest(const HandshakeRequest& p);
 std::string BuildHandshakeResponse(const HandshakeResponse& p);
 std::string BuildPing(const PingPayload& p);
 std::string BuildHealth(const HealthPayload& p);
+std::string BuildQueryDiagnostics(const QueryDiagnosticsPayload& p);
 std::string BuildLoadModelRequest(const LoadModelRequest& p);
 std::string BuildLoadModelResponse(const LoadModelResponse& p);
 std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p);
@@ -157,6 +173,7 @@ std::optional<HandshakeRequest> ParseHandshakeRequest(const std::string& json);
 std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json);
 std::optional<PingPayload> ParsePing(const std::string& json);
 std::optional<HealthPayload> ParseHealth(const std::string& json);
+std::optional<QueryDiagnosticsPayload> ParseQueryDiagnostics(const std::string& json);
 std::optional<LoadModelRequest> ParseLoadModelRequest(const std::string& json);
 std::optional<LoadModelResponse> ParseLoadModelResponse(const std::string& json);
 std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::string& json);

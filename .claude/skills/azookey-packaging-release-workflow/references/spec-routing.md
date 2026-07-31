@@ -17,8 +17,8 @@
 |---|---|---|
 | WiX MSI の内容、custom action、VC runtime | `pkg/msi/Package.wxs`、`pkg/msi/azooKey.wixproj`、`pkg/msi/README.md` | `scripts/tests/msi-package-consistency.Tests.ps1`、README の MSI build 手順 |
 | MSIX identity と external location | `pkg/msix/AppxManifest.xml`、`pkg/msix/azookey_inference_host.exe.manifest`、`pkg/msix/build-identity-package.ps1` | `scripts/tests/msix-identity-consistency.Tests.ps1`、`scripts/verify-msix-identity-embedding.ps1` |
-| MSIX 更新、rollback、登録 lifecycle | `compat-test/msix_install_uninstall.ps1` | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1`、許可された VM smoke |
-| TIP 登録、解除、AppContainer ACL | `scripts/register-dev.ps1`、`scripts/unregister-dev.ps1`、`scripts/AppContainerAcl.ps1`、WiX custom action | `scripts/tests/register-dev.Tests.ps1`、`tsf-tip/tests/com_smoke_test.cpp` の opt-in smoke |
+| MSIX 更新、rollback、登録 lifecycle | `compat-test/msix_install_uninstall.ps1`（`compat-test/` は M50 のアプリ互換性テストハーネスと同居） | `scripts/tests/msix-lifecycle-scenarios.Tests.ps1`、許可された VM smoke |
+| TIP 登録、解除、AppContainer ACL | `docs/sideload-packaging-spec.md` §1.7、`scripts/register-dev.ps1`、`scripts/unregister-dev.ps1`、`scripts/AppContainerAcl.ps1`、WiX custom action | `scripts/tests/register-dev.Tests.ps1`、`tsf-tip/tests/com_smoke_test.cpp` の opt-in smoke |
 | VM 検証 package と bootstrap | `scripts/make-vm-verify-package.ps1`、`scripts/verify-bootstrap.ps1` | `scripts/tests/vm-verify-package.Tests.ps1`、`docs/handoff/hyper-v-tip-verification.md` |
 | Release artifact、version、publish | `.github/workflows/release.yml`、`THIRD_PARTY_LICENSES` | `scripts/test-powershell-quality.ps1`、release workflow の build / artifact checks |
 | package identity の runtime 利用 | `inference-host` の embedded manifest と package identity 判定、`tsf-tip` の登録分岐 | CodeGraph / Serena による参照確認、関連 C++ tests、Windows 実ビルド |

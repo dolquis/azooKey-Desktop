@@ -75,6 +75,7 @@ TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   EXPECT_EQ(markdown.find("nihongo"), std::string::npos);
   EXPECT_EQ(markdown.find("日本語"), std::string::npos);
   EXPECT_NE(json_text.find("redacted-detail"), std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(temp.path() / "logs"));
 }
 
 TEST(CompatReportWriterTest, RejectsNonEmptyOutputDirectory) {
@@ -83,14 +84,14 @@ TEST(CompatReportWriterTest, RejectsNonEmptyOutputDirectory) {
   EXPECT_FALSE(PrepareOutputDirectory(temp.path()));
 }
 
-TEST(ScreenshotCaptureTest, PrivacyOverlayRemovesEverySourcePixel) {
+TEST(ScreenshotCaptureTest, GeometryOverlayContainsNoSourcePixels) {
   constexpr int kWidth = 4;
   constexpr int kHeight = 3;
   constexpr int kStride = kWidth * 4;
   std::array<uint8_t, kStride * kHeight> pixels;
   pixels.fill(0x7f);
-  ApplyPrivacyOverlayForTest(pixels.data(), kWidth, kHeight, kStride, POINT{10, 20},
-                             {RECT{11, 21, 13, 23}});
+  RenderGeometryOverlay(pixels.data(), kWidth, kHeight, kStride, POINT{10, 20},
+                        {RECT{11, 21, 13, 23}});
 
   for (size_t offset = 0; offset < pixels.size(); offset += 4) {
     EXPECT_NE(pixels[offset + 0], 0x7f);

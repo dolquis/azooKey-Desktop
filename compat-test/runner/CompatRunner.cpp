@@ -148,9 +148,7 @@ HWND FindNewTargetWindow(const TargetConfig& target, const std::set<HWND>& exist
           data->preferred = window;
           return FALSE;
         }
-        DWORD image_process_id = 0;
-        GetWindowThreadProcessId(window, &image_process_id);
-        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, image_process_id);
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
         wchar_t image_path[32768]{};
         DWORD image_path_size = static_cast<DWORD>(std::size(image_path));
         const bool image_matches =
@@ -205,17 +203,12 @@ std::wstring QuoteArgument(std::wstring_view value) {
   return result;
 }
 
-bool SendKeyInputs(const std::vector<INPUT>& inputs) {
-  if (inputs.empty()) return true;
-  return SendInput(static_cast<UINT>(inputs.size()), const_cast<INPUT*>(inputs.data()),
-                   sizeof(INPUT)) == inputs.size();
-}
-
 std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
   const auto normalize = [](std::wstring value) {
     while (!value.empty() && (value.back() == L'\r' || value.back() == L'\n')) value.pop_back();
     return value;
   };
+  std::optional<std::wstring> empty_value;
   IUnknown* unknown = nullptr;
   if (SUCCEEDED(element->GetCurrentPattern(UIA_ValuePatternId, &unknown)) && unknown) {
     IUIAutomationValuePattern* value_pattern = nullptr;
@@ -227,7 +220,11 @@ std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
       if (value) SysFreeString(value);
       SafeRelease(value_pattern);
       SafeRelease(unknown);
-      if (SUCCEEDED(hr)) return normalize(std::move(result));
+      if (SUCCEEDED(hr)) {
+        result = normalize(std::move(result));
+        if (!result.empty()) return result;
+        empty_value = std::move(result);
+      }
     }
     SafeRelease(unknown);
   }
@@ -249,7 +246,7 @@ std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
     }
     SafeRelease(unknown);
   }
-  return std::nullopt;
+  return empty_value;
 }
 
 std::filesystem::path FailureDirectory(const std::filesystem::path& output, const CaseResult& result) {
@@ -358,15 +355,38 @@ bool AutomationSession::FindEditorElement() {
 }
 
 bool AutomationSession::FocusEditor() {
-  if (!window_ || !editor_) return false;
+  if (!window_ || !editor_) {
+    focus_lost_ = true;
+    return false;
+  }
   ShowWindow(window_, SW_RESTORE);
   SetForegroundWindow(window_);
   editor_->SetFocus();
   for (int attempt = 0; attempt < 20; ++attempt) {
-    if (GetForegroundWindow() == window_ || IsChild(window_, GetForegroundWindow())) return true;
+    if (IsTargetForeground()) {
+      focus_lost_ = false;
+      return true;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
+  focus_lost_ = true;
   return false;
+}
+
+bool AutomationSession::IsTargetForeground() const {
+  if (!window_ || !IsWindow(window_)) return false;
+  const HWND foreground = GetForegroundWindow();
+  return foreground == window_ || (foreground && IsChild(window_, foreground));
+}
+
+bool AutomationSession::SendKeyInputs(const std::vector<INPUT>& inputs) {
+  if (inputs.empty()) return true;
+  if (!IsTargetForeground()) {
+    focus_lost_ = true;
+    return false;
+  }
+  return SendInput(static_cast<UINT>(inputs.size()), const_cast<INPUT*>(inputs.data()),
+                   sizeof(INPUT)) == inputs.size();
 }
 
 bool AutomationSession::SendVirtualKey(WORD virtual_key) {
@@ -400,6 +420,22 @@ bool AutomationSession::SendAscii(const std::string& text) {
 bool AutomationSession::ClearEditor() {
   if (!FocusEditor()) return false;
   if (!SendVirtualKey(VK_ESCAPE)) return false;
+  IUnknown* unknown = nullptr;
+  if (SUCCEEDED(editor_->GetCurrentPattern(UIA_ValuePatternId, &unknown)) && unknown) {
+    IUIAutomationValuePattern* value_pattern = nullptr;
+    if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&value_pattern))) && value_pattern) {
+      BSTR empty = SysAllocString(L"");
+      const HRESULT hr = empty ? value_pattern->SetValue(empty) : E_OUTOFMEMORY;
+      if (empty) SysFreeString(empty);
+      SafeRelease(value_pattern);
+      SafeRelease(unknown);
+      if (SUCCEEDED(hr)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        return true;
+      }
+    }
+    SafeRelease(unknown);
+  }
   INPUT control_down{};
   control_down.type = INPUT_KEYBOARD;
   control_down.ki.wVk = VK_CONTROL;
@@ -473,21 +509,21 @@ bool AutomationSession::CaptureFailureArtifacts(
   if (!log.good()) return false;
   if (!window_) return true;
 
-  std::vector<RECT> redactions;
+  std::vector<RECT> highlight_rects;
   RECT target_rect{};
   if (GetWindowRect(window_, &target_rect)) {
-    redactions.push_back(target_rect);
+    highlight_rects.push_back(target_rect);
     log << "target_rect=" << target_rect.left << "," << target_rect.top << "," << target_rect.right
         << "," << target_rect.bottom << "\n";
   }
   if (const auto candidate = CandidateRect()) {
-    redactions.push_back(*candidate);
+    highlight_rects.push_back(*candidate);
     log << "candidate_rect=" << candidate->left << "," << candidate->top << "," << candidate->right
         << "," << candidate->bottom << "\n";
   }
   log.flush();
   const auto screenshot = result.failure_directory / "screenshot.png";
-  const bool captured = CaptureRedactedDesktopPng(screenshot, redactions);
+  const bool captured = WriteGeometryOverlayPng(screenshot, highlight_rects);
   if (captured) {
     std::error_code copy_ec;
     std::filesystem::copy_file(

@@ -22,7 +22,7 @@ CaseDefinition MakeC004CandidatePositionCase() {
         if (!session.ClearEditor() || !session.SendAscii("nihongo") ||
             !session.SendVirtualKey(VK_SPACE)) {
           result.status = ResultStatus::FailingSkip;
-          result.reason_code = "input-injection-failed";
+          result.reason_code = session.input_failure_reason();
           return result;
         }
         std::optional<RECT> candidate;

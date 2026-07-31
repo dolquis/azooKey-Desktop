@@ -11,10 +11,10 @@
 
 namespace azookey::compat_test {
 
-bool CaptureRedactedDesktopPng(const std::filesystem::path& path,
-                               const std::vector<RECT>& redaction_rects);
+bool WriteGeometryOverlayPng(const std::filesystem::path& path,
+                             const std::vector<RECT>& highlight_rects);
 
-void ApplyPrivacyOverlayForTest(uint8_t* bgra, int width, int height, int stride, POINT origin,
-                                const std::vector<RECT>& redaction_rects);
+void RenderGeometryOverlay(uint8_t* bgra, int width, int height, int stride, POINT origin,
+                           const std::vector<RECT>& highlight_rects);
 
 }  // namespace azookey::compat_test

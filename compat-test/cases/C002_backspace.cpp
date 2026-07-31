@@ -17,13 +17,13 @@ CaseDefinition MakeC002BackspaceCase() {
         }
         if (!session.ClearEditor() || !session.SendAscii("nihongo")) {
           result.status = ResultStatus::FailingSkip;
-          result.reason_code = "input-injection-failed";
+          result.reason_code = session.input_failure_reason();
           return result;
         }
         const auto before = session.ReadEditorText();
         if (!session.SendVirtualKey(VK_BACK)) {
           result.status = ResultStatus::FailingSkip;
-          result.reason_code = "input-injection-failed";
+          result.reason_code = session.input_failure_reason();
           return result;
         }
         const auto after = session.ReadEditorText();

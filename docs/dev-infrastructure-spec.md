@@ -1750,13 +1750,13 @@ compat-test/
 ├── CMakeLists.txt
 ├── runner/
 │   ├── CompatRunner.cpp        # UI Automation + SendInput
-│   ├── ScreenshotCapture.cpp   # GDI 経由のスクリーンショット
+│   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
 │   └── ReportWriter.cpp
 ├── cases/
 │   ├── C001_basic_input.cpp
 │   ├── C002_backspace.cpp
-│   ├── ...
-│   └── C010_host_kill.cpp
+│   ├── C003_escape.cpp
+│   └── C004_candidate_position.cpp
 └── targets/
     ├── notepad.json
     ├── edge.json
@@ -1777,10 +1777,12 @@ M50 ゲート対象（Notepad / VS Code / Edge）では前提条件**であり�
 自動ゲートから silent に除外しない）。手動確認（§13.3.1 相当）への振り替えは
 best-effort / 非ゲート対象に限る。
 
-本ディレクトリの雛形（README + `targets/notepad.json` サンプル）は
-`compat-test/` に置く。雛形はまだ CMake のビルド対象に組み込まず（トップ
-`CMakeLists.txt` は `add_subdirectory` を明示列挙する方式）、M50 実装時に
-runner / cases を追加して配線する。
+Phase 1 の runner / C-001〜C-004 / unit test はトップ `CMakeLists.txt` から
+`add_subdirectory(compat-test)` で Windows ビルドへ配線する。Notepad の target
+JSON は C-001〜C-012 を列挙し、未実装の C-005〜C-012 も
+`case-not-registered` の `failing-skip` としてレポートへ残す。Phase 1 の自動操作は
+トップレベル class が `Notepad` のウィンドウに限定し、
+`ApplicationFrameWindow` / `CoreWindow` 構成は対象外とする。
 
 ### 13.5 出力
 
@@ -1789,13 +1791,15 @@ compat-report-YYYYMMDD-HHMMSS/
 ├── report.md         # 人間向けサマリ
 ├── report.json       # CI artifact 用
 ├── screenshots/
-│   ├── notepad_C001_pass.png
-│   └── vscode_C004_fail.png
-├── logs/
-│   └── ...
+│   └── notepad_C-001_fail.png
 └── failures/
-    └── vscode_C004_fail/  # 失敗時の詳細スクショ + ログ
+    └── notepad_C-001_fail/
+        ├── failure.log    # 固定 reason code と矩形のみ
+        └── screenshot.png
 ```
+
+スクリーンショットは失敗時だけ生成する。デスクトップ画素は取得せず、空の画像に
+対象ウィンドウ・キャレット・候補ウィンドウの矩形だけを描画する。
 
 ### 13.6 CI 連携
 

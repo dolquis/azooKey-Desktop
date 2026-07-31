@@ -31,7 +31,7 @@ compat-test/
 ├── CMakeLists.txt              # runner / cases を配線する compat_test ターゲット
 ├── runner/
 │   ├── CompatRunner.cpp        # UI Automation + SendInput
-│   ├── ScreenshotCapture.cpp   # GDI 経由のスクリーンショット
+│   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
 │   └── ReportWriter.cpp
 ├── cases/
 │   ├── C001_basic_input.cpp
@@ -54,13 +54,17 @@ compat-report-YYYYMMDD-HHMMSS/
 ├── report.md         # 人間向けサマリ（PR コメント用）
 ├── report.json       # CI artifact 用
 ├── screenshots/
-├── logs/
+│   └── notepad_C-001_fail.png
 └── failures/
+    └── notepad_C-001_fail/
+        ├── failure.log
+        └── screenshot.png
 ```
 
 テストケース一覧（C-001〜C-012）と CI 連携は §13.3 / §13.6 を参照。
-Phase 1 では Notepad の C-001〜C-004 を実装する。終了コードは全件 pass が
-`0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2`。
+Phase 1 では Notepad の C-001〜C-004 を実装し、C-005〜C-012 も
+`case-not-registered` の `failing-skip` としてレポートへ残す。終了コードは
+全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2`。
 C-002〜C-004 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
 azooKey の基準動作を確認できた場合だけ実行する。
 
@@ -76,5 +80,5 @@ runner 実装前でも実機で確認できる手動チェックリストを同�
 
 ログ・成果物は `docs/dev-infrastructure-spec.md` §7.6 の redaction ポリシーに
 従う。レポートと失敗ログには固定の reason code だけを書き、観測した入力本文・
-候補本文は書かない。失敗スクリーンショットは元の画面ピクセルを全消去し、
-対象アプリと候補ウィンドウの矩形だけを安全な枠線で示す。
+候補本文は書かない。失敗スクリーンショットは元の画面ピクセルを取得せず、
+対象アプリと候補ウィンドウの矩形だけを空の画像へ安全な枠線で描く。

@@ -27,8 +27,8 @@ RECT IntersectWithImage(RECT rect, POINT origin, int width, int height) {
 
 }  // namespace
 
-void ApplyPrivacyOverlayForTest(uint8_t* bgra, int width, int height, int stride, POINT origin,
-                                const std::vector<RECT>& redaction_rects) {
+void RenderGeometryOverlay(uint8_t* bgra, int width, int height, int stride, POINT origin,
+                           const std::vector<RECT>& highlight_rects) {
   if (!bgra || width <= 0 || height <= 0 || stride < width * 4) return;
   for (int y = 0; y < height; ++y) {
     uint8_t* row = bgra + static_cast<size_t>(y) * stride;
@@ -54,30 +54,29 @@ void ApplyPrivacyOverlayForTest(uint8_t* bgra, int width, int height, int stride
       }
     }
   };
-  for (size_t index = 0; index < redaction_rects.size(); ++index) {
+  for (size_t index = 0; index < highlight_rects.size(); ++index) {
     if (index == 0) {
-      draw_border(redaction_rects[index], 0xff, 0x80, 0x00);
+      draw_border(highlight_rects[index], 0xff, 0x80, 0x00);
     } else {
-      draw_border(redaction_rects[index], 0x00, 0x80, 0xff);
+      draw_border(highlight_rects[index], 0x00, 0x80, 0xff);
     }
   }
 }
 
 /*
- * The saved image is a geometry-only overlay. Source desktop pixels are
- * overwritten so text outside the target rectangle cannot leak through the
- * context margin.
+ * The saved image is a geometry-only overlay. No desktop pixels are acquired;
+ * only the supplied rectangles are drawn into a blank buffer.
  */
-bool CaptureRedactedDesktopPng(const std::filesystem::path& path,
-                               const std::vector<RECT>& redaction_rects) {
-  if (redaction_rects.empty()) return false;
+bool WriteGeometryOverlayPng(const std::filesystem::path& path,
+                             const std::vector<RECT>& highlight_rects) {
+  if (highlight_rects.empty()) return false;
   const RECT virtual_screen{GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
                             GetSystemMetrics(SM_XVIRTUALSCREEN) +
                                 GetSystemMetrics(SM_CXVIRTUALSCREEN),
                             GetSystemMetrics(SM_YVIRTUALSCREEN) +
                                 GetSystemMetrics(SM_CYVIRTUALSCREEN)};
-  RECT capture = redaction_rects.front();
-  for (const RECT rect : redaction_rects) {
+  RECT capture = highlight_rects.front();
+  for (const RECT rect : highlight_rects) {
     capture.left = std::min(capture.left, rect.left);
     capture.top = std::min(capture.top, rect.top);
     capture.right = std::max(capture.right, rect.right);
@@ -96,37 +95,17 @@ bool CaptureRedactedDesktopPng(const std::filesystem::path& path,
   const uint64_t image_bytes = static_cast<uint64_t>(width) * height * 4;
   if (image_bytes > std::numeric_limits<UINT>::max()) return false;
 
-  HDC screen_dc = GetDC(nullptr);
-  HDC memory_dc = screen_dc ? CreateCompatibleDC(screen_dc) : nullptr;
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  info.bmiHeader.biWidth = width;
-  info.bmiHeader.biHeight = -height;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-  void* pixels = nullptr;
-  HBITMAP bitmap =
-      memory_dc ? CreateDIBSection(screen_dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0) : nullptr;
-  HGDIOBJ old_bitmap = bitmap ? SelectObject(memory_dc, bitmap) : nullptr;
-
-  bool ok = bitmap && pixels &&
-            BitBlt(memory_dc, 0, 0, width, height, screen_dc, left, top,
-                   SRCCOPY | CAPTUREBLT) != FALSE;
-  if (ok) {
-    ApplyPrivacyOverlayForTest(static_cast<uint8_t*>(pixels), width, height, width * 4,
-                               POINT{left, top}, redaction_rects);
-  }
+  std::vector<uint8_t> pixels(static_cast<size_t>(image_bytes), 0);
+  RenderGeometryOverlay(pixels.data(), width, height, width * 4, POINT{left, top},
+                        highlight_rects);
 
   IWICImagingFactory* factory = nullptr;
   IWICStream* stream = nullptr;
   IWICBitmapEncoder* encoder = nullptr;
   IWICBitmapFrameEncode* frame = nullptr;
   IPropertyBag2* properties = nullptr;
-  if (ok) {
-    ok = SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                    IID_PPV_ARGS(&factory)));
-  }
+  bool ok = SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                       IID_PPV_ARGS(&factory)));
   if (ok) ok = SUCCEEDED(factory->CreateStream(&stream));
   if (ok) ok = SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE));
   if (ok) ok = SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder));
@@ -138,8 +117,7 @@ bool CaptureRedactedDesktopPng(const std::filesystem::path& path,
   if (ok) ok = SUCCEEDED(frame->SetPixelFormat(&format)) && format == GUID_WICPixelFormat32bppBGRA;
   if (ok) {
     ok = SUCCEEDED(frame->WritePixels(static_cast<UINT>(height), static_cast<UINT>(width * 4),
-                                      static_cast<UINT>(image_bytes),
-                                      static_cast<BYTE*>(pixels)));
+                                      static_cast<UINT>(image_bytes), pixels.data()));
   }
   if (ok) ok = SUCCEEDED(frame->Commit());
   if (ok) ok = SUCCEEDED(encoder->Commit());
@@ -149,10 +127,6 @@ bool CaptureRedactedDesktopPng(const std::filesystem::path& path,
   SafeRelease(encoder);
   SafeRelease(stream);
   SafeRelease(factory);
-  if (old_bitmap) SelectObject(memory_dc, old_bitmap);
-  if (bitmap) DeleteObject(bitmap);
-  if (memory_dc) DeleteDC(memory_dc);
-  if (screen_dc) ReleaseDC(nullptr, screen_dc);
   return ok;
 }
 

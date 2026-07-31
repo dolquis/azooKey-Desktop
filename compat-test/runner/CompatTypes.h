@@ -62,6 +62,9 @@ class AutomationSession {
   bool ClearEditor();
   bool SendAscii(const std::string& text);
   bool SendVirtualKey(WORD virtual_key);
+  const char* input_failure_reason() const {
+    return focus_lost_ ? "focus-lost" : "input-injection-failed";
+  }
   std::optional<std::wstring> ReadEditorText();
   std::optional<RECT> CaretRect() const;
   std::optional<RECT> CandidateRect() const;
@@ -75,6 +78,8 @@ class AutomationSession {
 
  private:
   bool FindEditorElement();
+  bool IsTargetForeground() const;
+  bool SendKeyInputs(const std::vector<INPUT>& inputs);
   void CloseLaunchedWindow();
 
   TargetConfig target_;
@@ -84,6 +89,7 @@ class AutomationSession {
   IUIAutomationElement* editor_{nullptr};
   bool owns_window_{false};
   bool baseline_verified_{false};
+  bool focus_lost_{false};
   std::filesystem::path temporary_document_;
 };
 

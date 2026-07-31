@@ -16,7 +16,7 @@ CaseDefinition MakeC001BasicInputCase() {
         if (!session.ClearEditor() || !session.SendAscii("nihongo") ||
             !session.SendVirtualKey(VK_SPACE) || !session.SendVirtualKey(VK_RETURN)) {
           result.status = ResultStatus::FailingSkip;
-          result.reason_code = "input-injection-failed";
+          result.reason_code = session.input_failure_reason();
           return result;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(300));

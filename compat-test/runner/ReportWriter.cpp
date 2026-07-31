@@ -55,8 +55,6 @@ bool EnsureOutputSubdirectories(const std::filesystem::path& output_directory) {
   std::error_code ec;
   std::filesystem::create_directories(output_directory / "screenshots", ec);
   if (ec) return false;
-  std::filesystem::create_directories(output_directory / "logs", ec);
-  if (ec) return false;
   std::filesystem::create_directories(output_directory / "failures", ec);
   return !ec;
 }

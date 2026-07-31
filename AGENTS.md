@@ -273,6 +273,7 @@ macOS / Linux のメンテナがリポジトリを開いた場合、`powershell`
 - `azookey-learning-data-safety` … 学習データの永続化、プライバシー、破損復旧の変更手順。
 - `azookey-inference-model-workflow` … Zenzai / GGUF の runtime tier、fallback、実モデル検証手順。
 - `azookey-settings-schema-evolution` … 設定 schema、runtime 既定値、migration、CI の同期手順。
+- `azookey-packaging-release-workflow` … MSI、MSIX、署名、TIP 登録、VM 検証、Release CI の変更手順。
 - `japanese-tech-writing` … 日本語の技術文書・原稿の文章規範。`dolquis/agent-ops` を origin とする共有スキルのベンダリングコピーで、本 repo では本文を直接編集しない（改訂は origin 側で行い伝播する）。
 - `argument-gap-edit` … 論証のギャップ・割り込み・見せびらかしを検出して再配置する編集スキル。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
 - `japanese-doc-workflow` … 日本語ドキュメントの統合ワークフロー（上記の文章規範スキルと `doc-coauthoring` を束ねる）。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。

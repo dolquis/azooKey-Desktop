@@ -1,6 +1,11 @@
 #include "runner/CompatTypes.h"
 
+#include <Ole2.h>
 #include <UIAutomation.h>
+
+#ifdef GetObject
+#undef GetObject
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -417,6 +422,50 @@ bool AutomationSession::SendAscii(const std::string& text) {
   return true;
 }
 
+bool AutomationSession::SendUnicode(std::wstring_view text) {
+  if (!FocusEditor()) return false;
+  for (const wchar_t code_unit : text) {
+    INPUT down{};
+    down.type = INPUT_KEYBOARD;
+    down.ki.wScan = code_unit;
+    down.ki.dwFlags = KEYEVENTF_UNICODE;
+    INPUT up = down;
+    up.ki.dwFlags |= KEYEVENTF_KEYUP;
+    if (!SendKeyInputs({down, up})) return false;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  return true;
+}
+
+bool AutomationSession::SendModifiedKey(std::initializer_list<WORD> modifiers, WORD virtual_key) {
+  std::vector<INPUT> inputs;
+  inputs.reserve(modifiers.size() * 2 + 2);
+  for (const WORD modifier : modifiers) {
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = modifier;
+    inputs.push_back(input);
+  }
+  INPUT key_down{};
+  key_down.type = INPUT_KEYBOARD;
+  key_down.ki.wVk = virtual_key;
+  inputs.push_back(key_down);
+  INPUT key_up = key_down;
+  key_up.ki.dwFlags = KEYEVENTF_KEYUP;
+  inputs.push_back(key_up);
+  for (auto it = modifiers.end(); it != modifiers.begin();) {
+    --it;
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = *it;
+    input.ki.dwFlags = KEYEVENTF_KEYUP;
+    inputs.push_back(input);
+  }
+  const bool sent = SendKeyInputs(inputs);
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  return sent;
+}
+
 bool AutomationSession::ClearEditor() {
   if (!FocusEditor()) return false;
   if (!SendVirtualKey(VK_ESCAPE)) return false;
@@ -577,6 +626,12 @@ void PrintUsage() {
 
 int wmain(int argc, wchar_t** argv) {
   using namespace azookey::compat_test;
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
+                                    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+    std::cerr << "Per-monitor v2 DPI awareness is required\n";
+    return 70;
+  }
   std::filesystem::path target_path = AZOOKEY_COMPAT_DEFAULT_TARGET;
   std::filesystem::path output_path;
   for (int i = 1; i < argc; ++i) {
@@ -610,15 +665,27 @@ int wmain(int argc, wchar_t** argv) {
     return 70;
   }
 
-  const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const HRESULT com_result = OleInitialize(nullptr);
   if (FAILED(com_result)) {
     std::cerr << "COM initialization failed\n";
     return 70;
   }
 
   std::map<std::string, CaseDefinition> registered;
-  for (const auto& definition : {MakeC001BasicInputCase(), MakeC002BackspaceCase(),
-                                 MakeC003EscapeCase(), MakeC004CandidatePositionCase()}) {
+  for (const auto& definition : {
+           MakeC001BasicInputCase(),
+           MakeC002BackspaceCase(),
+           MakeC003EscapeCase(),
+           MakeC004CandidatePositionCase(),
+           MakeC005MonitorClampCase(),
+           MakeC006DpiScalingCase(),
+           MakeC007SurrogatePairCase(),
+           MakeC008UndoRedoCase(),
+           MakeC009FocusTransitionCase(),
+           MakeC010HostRecoveryCase(),
+           MakeC011ShortcutRoutingCase(),
+           MakeC012RomanizationCase(),
+       }) {
     registered.emplace(definition.id, definition);
   }
 
@@ -654,7 +721,7 @@ int wmain(int argc, wchar_t** argv) {
 
   const bool wrote_report = WriteReports(output_path, *target, results);
   const auto summary = SummarizeResults(results);
-  CoUninitialize();
+  OleUninitialize();
   if (!wrote_report) return 70;
   std::cout << "Report: " << (output_path / "report.md").string() << "\n";
   if (summary.failed > 0) return 1;

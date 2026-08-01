@@ -1,6 +1,5 @@
-#include <gtest/gtest.h>
-
 #include <Windows.h>
+#include <gtest/gtest.h>
 
 #ifdef GetObject
 #undef GetObject
@@ -9,10 +8,14 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 
 #include "azookey/ipc/Json.h"
+#include "runner/CaseSupport.h"
+#include "runner/ClipboardIsolation.h"
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
 
@@ -42,6 +45,32 @@ class TemporaryDirectory {
 
  private:
   std::filesystem::path path_;
+};
+
+class FakeClipboardAccess final : public ClipboardAccess {
+ public:
+  bool Backup() override {
+    calls.push_back("backup");
+    return backup_succeeds;
+  }
+  bool ReplaceWithDeterministicText(std::wstring_view text) override {
+    calls.push_back("replace");
+    replacement.assign(text);
+    return replacement_succeeds;
+  }
+  bool Restore() override {
+    calls.push_back("restore");
+    restored = restore_succeeds;
+    return restore_succeeds;
+  }
+
+  std::vector<std::string> calls;
+  std::wstring private_original{L"private clipboard contents"};
+  std::wstring replacement;
+  bool backup_succeeds{true};
+  bool replacement_succeeds{true};
+  bool restore_succeeds{true};
+  bool restored{false};
 };
 
 TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
@@ -99,6 +128,57 @@ TEST(ScreenshotCaptureTest, GeometryOverlayContainsNoSourcePixels) {
     EXPECT_NE(pixels[offset + 2], 0x7f);
     EXPECT_EQ(pixels[offset + 3], 0xff);
   }
+}
+
+TEST(CaseSupportTest, CandidateGeometryUsesPhysicalDpiScalingAndMonitorBounds) {
+  const RECT caret{100, 100, 102, 120};
+  const RECT candidate_at_150{190, 120, 310, 220};
+  const RECT monitor{0, 0, 400, 300};
+  EXPECT_TRUE(IsCandidateNearCaretAtDpi(candidate_at_150, caret, 144));
+  EXPECT_TRUE(IsRectWithinBounds(candidate_at_150, monitor));
+  EXPECT_FALSE(IsCandidateNearCaretAtDpi(candidate_at_150, caret, 96));
+  EXPECT_FALSE(IsRectWithinBounds(RECT{-1, 0, 10, 10}, monitor));
+}
+
+TEST(ClipboardIsolationTest, RestoresClipboardWhenActionFails) {
+  FakeClipboardAccess clipboard;
+  const auto status = RunWithClipboardIsolation(clipboard, L"deterministic", [] { return false; });
+  EXPECT_EQ(status, ClipboardIsolationStatus::ActionFailed);
+  EXPECT_TRUE(clipboard.restored);
+  EXPECT_EQ(clipboard.replacement, L"deterministic");
+  EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup", "replace", "restore"}));
+}
+
+TEST(ClipboardIsolationTest, RestoresClipboardWhenActionThrows) {
+  FakeClipboardAccess clipboard;
+  const auto status = RunWithClipboardIsolation(clipboard, L"deterministic", []() -> bool {
+    throw std::runtime_error("fixed test exception");
+  });
+  EXPECT_EQ(status, ClipboardIsolationStatus::ActionFailed);
+  EXPECT_TRUE(clipboard.restored);
+  EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup", "replace", "restore"}));
+}
+
+TEST(ClipboardIsolationTest, RestoreFailureCannotLeakOriginalIntoReports) {
+  FakeClipboardAccess clipboard;
+  clipboard.restore_succeeds = false;
+  EXPECT_EQ(RunWithClipboardIsolation(clipboard, L"deterministic", [] { return true; }),
+            ClipboardIsolationStatus::RestoreFailed);
+
+  TemporaryDirectory temp;
+  TargetConfig target;
+  target.id = "notepad";
+  target.display_name = "Notepad";
+  target.app_id = "notepad";
+  target.automation_level = "full";
+  std::vector<CaseResult> results{
+      {"C-011", ResultStatus::Fail, "clipboard-restore-failed", 1, {}},
+  };
+  ASSERT_TRUE(WriteReports(temp.path(), target, results));
+  const auto report = ReadFile(temp.path() / "report.json") + ReadFile(temp.path() / "report.md");
+  const std::string private_text(clipboard.private_original.begin(),
+                                 clipboard.private_original.end());
+  EXPECT_EQ(report.find(private_text), std::string::npos);
 }
 
 }  // namespace

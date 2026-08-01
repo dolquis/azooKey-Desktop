@@ -1787,6 +1787,19 @@ M50 ゲート対象（Notepad / VS Code / Edge）では前提条件**であり�
 自動ゲートから silent に除外しない）。手動確認（§13.3.1 相当）への振り替えは
 best-effort / 非ゲート対象に限る。
 
+退避時は `EmptyClipboard` より前に全formatを列挙し、遅延レンダリングを含む各handleを
+即時複製する。復元後は退避した全formatが存在し、比較可能な `HGLOBAL` データのsizeと
+hashが一致することを確認する。複製または一致確認ができない場合は復元成功として扱わない。
+
+C-007 の `KEYEVENTF_UNICODE` によるサロゲートペア注入はTSFを通らないため、対象アプリの
+UTF-16保持確認に限定する。保持できても `surrogate-pair-tip-path-unverified` の
+`failing-skip` とし、azooKey候補からの絵文字確定は `gate:human-required` の実機検証で
+補完する。
+
+C-010 はPowerShell supervisorが起動したHostだけを停止対象とし、再起動プロセスに加えて
+per-user named pipeへの接続を確認してから復帰と判定する。runnerはHostを代替起動しない。
+Notepad targetでは、再接続待ちを後続ケースへ波及させないためC-010を最後に実行する。
+
 runner / C-001〜C-012 / unit test はトップ `CMakeLists.txt` から
 `add_subdirectory(compat-test)` で Windows ビルドへ配線する。Notepad の自動操作は
 トップレベル class が `Notepad` のウィンドウに限定し、

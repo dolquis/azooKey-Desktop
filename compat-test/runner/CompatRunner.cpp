@@ -1,7 +1,7 @@
-#include "runner/CompatTypes.h"
-
 #include <Ole2.h>
 #include <UIAutomation.h>
+
+#include "runner/CompatTypes.h"
 
 #ifdef GetObject
 #undef GetObject
@@ -34,13 +34,12 @@ void SafeRelease(T*& value) {
 
 std::wstring Utf8ToWide(std::string_view text) {
   if (text.empty()) return {};
-  const int size =
-      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
-                          nullptr, 0);
+  const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                       static_cast<int>(text.size()), nullptr, 0);
   if (size <= 0) return {};
   std::wstring result(static_cast<size_t>(size), L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                      static_cast<int>(text.size()), result.data(), size);
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
+                      result.data(), size);
   return result;
 }
 
@@ -172,7 +171,8 @@ std::filesystem::path ResolveExecutable(const std::filesystem::path& configured)
   if (configured.has_parent_path()) return configured;
   if (_wcsicmp(configured.c_str(), L"notepad.exe") == 0) {
     wchar_t system_directory[MAX_PATH]{};
-    const UINT length = GetSystemDirectoryW(system_directory, static_cast<UINT>(std::size(system_directory)));
+    const UINT length =
+        GetSystemDirectoryW(system_directory, static_cast<UINT>(std::size(system_directory)));
     if (length > 0 && length < std::size(system_directory)) {
       return std::filesystem::path(system_directory) / configured;
     }
@@ -185,11 +185,12 @@ std::filesystem::path CreateTemporaryDocument() {
   const DWORD length = GetTempPathW(static_cast<DWORD>(std::size(temp_directory)), temp_directory);
   if (length == 0 || length >= std::size(temp_directory)) return {};
   for (uint32_t attempt = 0; attempt < 100; ++attempt) {
-    const auto path = std::filesystem::path(temp_directory) /
-                      (L"azookey-compat-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-                       std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(attempt) + L".txt");
-    HANDLE file =
-        CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    const auto path =
+        std::filesystem::path(temp_directory) /
+        (L"azookey-compat-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(attempt) + L".txt");
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                              FILE_ATTRIBUTE_TEMPORARY, nullptr);
     if (file != INVALID_HANDLE_VALUE) {
       CloseHandle(file);
       return path;
@@ -220,8 +221,8 @@ std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
     if (SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&value_pattern))) && value_pattern) {
       BSTR value = nullptr;
       const HRESULT hr = value_pattern->get_CurrentValue(&value);
-      std::wstring result = SUCCEEDED(hr) && value ? std::wstring(value, SysStringLen(value))
-                                                   : std::wstring{};
+      std::wstring result =
+          SUCCEEDED(hr) && value ? std::wstring(value, SysStringLen(value)) : std::wstring{};
       if (value) SysFreeString(value);
       SafeRelease(value_pattern);
       SafeRelease(unknown);
@@ -241,8 +242,8 @@ std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
       BSTR value = nullptr;
       HRESULT hr = text_pattern->get_DocumentRange(&range);
       if (SUCCEEDED(hr) && range) hr = range->GetText(-1, &value);
-      std::wstring result = SUCCEEDED(hr) && value ? std::wstring(value, SysStringLen(value))
-                                                   : std::wstring{};
+      std::wstring result =
+          SUCCEEDED(hr) && value ? std::wstring(value, SysStringLen(value)) : std::wstring{};
       if (value) SysFreeString(value);
       SafeRelease(range);
       SafeRelease(text_pattern);
@@ -254,7 +255,8 @@ std::optional<std::wstring> ReadElementText(IUIAutomationElement* element) {
   return empty_value;
 }
 
-std::filesystem::path FailureDirectory(const std::filesystem::path& output, const CaseResult& result) {
+std::filesystem::path FailureDirectory(const std::filesystem::path& output,
+                                       const CaseResult& result) {
   return output / "failures" /
          (result.id + "_" + (result.status == ResultStatus::Fail ? "fail" : "failing-skip"));
 }
@@ -293,8 +295,8 @@ bool AutomationSession::Start(std::string* reason_code) {
 
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
-  if (!CreateProcessW(nullptr, writable.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup,
-                      &process_info_)) {
+  if (!CreateProcessW(nullptr, writable.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                      &startup, &process_info_)) {
     if (reason_code) *reason_code = "target-launch-failed";
     return false;
   }
@@ -333,8 +335,8 @@ bool AutomationSession::FindEditorElement() {
     value.vt = VT_I4;
     value.lVal = control_type;
     IUIAutomationCondition* condition = nullptr;
-    if (SUCCEEDED(automation_->CreatePropertyCondition(UIA_ControlTypePropertyId, value,
-                                                       &condition)) &&
+    if (SUCCEEDED(
+            automation_->CreatePropertyCondition(UIA_ControlTypePropertyId, value, &condition)) &&
         condition) {
       root->FindFirst(TreeScope_Descendants, condition, &editor_);
       SafeRelease(condition);
@@ -348,7 +350,8 @@ bool AutomationSession::FindEditorElement() {
     value.bstrVal = SysAllocString(target_.edit_control_class.c_str());
     IUIAutomationCondition* condition = nullptr;
     if (value.bstrVal &&
-        SUCCEEDED(automation_->CreatePropertyCondition(UIA_ClassNamePropertyId, value, &condition)) &&
+        SUCCEEDED(
+            automation_->CreatePropertyCondition(UIA_ClassNamePropertyId, value, &condition)) &&
         condition) {
       root->FindFirst(TreeScope_Descendants, condition, &editor_);
       SafeRelease(condition);
@@ -424,6 +427,8 @@ bool AutomationSession::SendAscii(const std::string& text) {
 
 bool AutomationSession::SendUnicode(std::wstring_view text) {
   if (!FocusEditor()) return false;
+  std::vector<INPUT> inputs;
+  inputs.reserve(text.size() * 2);
   for (const wchar_t code_unit : text) {
     INPUT down{};
     down.type = INPUT_KEYBOARD;
@@ -431,8 +436,10 @@ bool AutomationSession::SendUnicode(std::wstring_view text) {
     down.ki.dwFlags = KEYEVENTF_UNICODE;
     INPUT up = down;
     up.ki.dwFlags |= KEYEVENTF_KEYUP;
-    if (!SendKeyInputs({down, up})) return false;
+    inputs.push_back(down);
+    inputs.push_back(up);
   }
+  if (!SendKeyInputs(inputs)) return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   return true;
 }
@@ -576,8 +583,9 @@ bool AutomationSession::CaptureFailureArtifacts(
   if (captured) {
     std::error_code copy_ec;
     std::filesystem::copy_file(
-        screenshot, output_directory / "screenshots" /
-                        (target_.id + "_" + result.id + "_" + ResultStatusName(result.status) + ".png"),
+        screenshot,
+        output_directory / "screenshots" /
+            (target_.id + "_" + result.id + "_" + ResultStatusName(result.status) + ".png"),
         std::filesystem::copy_options::overwrite_existing, copy_ec);
   }
   return captured;
@@ -605,8 +613,7 @@ void AutomationSession::CloseLaunchedWindow() {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   }
-  if (process_info_.hProcess &&
-      WaitForSingleObject(process_info_.hProcess, 500) == WAIT_TIMEOUT) {
+  if (process_info_.hProcess && WaitForSingleObject(process_info_.hProcess, 500) == WAIT_TIMEOUT) {
     TerminateProcess(process_info_.hProcess, 0);
     WaitForSingleObject(process_info_.hProcess, 1000);
   }
@@ -618,9 +625,7 @@ void AutomationSession::CloseLaunchedWindow() {
 
 namespace {
 
-void PrintUsage() {
-  std::cout << "compat_test [--target <target.json>] [--output <directory>]\n";
-}
+void PrintUsage() { std::cout << "compat_test [--target <target.json>] [--output <directory>]\n"; }
 
 }  // namespace
 
@@ -707,10 +712,10 @@ int wmain(int argc, wchar_t** argv) {
         result.status = ResultStatus::FailingSkip;
         result.reason_code = "case-not-registered";
       }
-      result.duration_ms = static_cast<uint64_t>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - started_at)
-              .count());
+      result.duration_ms =
+          static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started_at)
+                                    .count());
       if (result.status != ResultStatus::Pass) {
         result.failure_directory = FailureDirectory(output_path, result);
         session.CaptureFailureArtifacts(result, output_path);

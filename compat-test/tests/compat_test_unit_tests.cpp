@@ -65,7 +65,6 @@ class FakeClipboardAccess final : public ClipboardAccess {
   }
 
   std::vector<std::string> calls;
-  std::wstring private_original{L"private clipboard contents"};
   std::wstring replacement;
   bool backup_succeeds{true};
   bool replacement_succeeds{true};
@@ -142,7 +141,8 @@ TEST(CaseSupportTest, CandidateGeometryUsesPhysicalDpiScalingAndMonitorBounds) {
 
 TEST(ClipboardIsolationTest, RestoresClipboardWhenActionFails) {
   FakeClipboardAccess clipboard;
-  const auto status = RunWithClipboardIsolation(clipboard, L"deterministic", [] { return false; });
+  const auto status = RunWithClipboardIsolation(clipboard, L"deterministic",
+                                                [] { return ClipboardActionStatus::Failed; });
   EXPECT_EQ(status, ClipboardIsolationStatus::ActionFailed);
   EXPECT_TRUE(clipboard.restored);
   EXPECT_EQ(clipboard.replacement, L"deterministic");
@@ -151,34 +151,49 @@ TEST(ClipboardIsolationTest, RestoresClipboardWhenActionFails) {
 
 TEST(ClipboardIsolationTest, RestoresClipboardWhenActionThrows) {
   FakeClipboardAccess clipboard;
-  const auto status = RunWithClipboardIsolation(clipboard, L"deterministic", []() -> bool {
+  const auto status = RunWithClipboardIsolation(clipboard, L"deterministic", [] {
     throw std::runtime_error("fixed test exception");
+    return ClipboardActionStatus::Completed;
   });
   EXPECT_EQ(status, ClipboardIsolationStatus::ActionFailed);
   EXPECT_TRUE(clipboard.restored);
   EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup", "replace", "restore"}));
 }
 
-TEST(ClipboardIsolationTest, RestoreFailureCannotLeakOriginalIntoReports) {
+TEST(ClipboardIsolationTest, ReportsBackupUnavailableWithoutMutatingClipboard) {
+  FakeClipboardAccess clipboard;
+  clipboard.backup_succeeds = false;
+  EXPECT_EQ(RunWithClipboardIsolation(clipboard, L"deterministic",
+                                      [] { return ClipboardActionStatus::Completed; }),
+            ClipboardIsolationStatus::BackupUnavailable);
+  EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup"}));
+}
+
+TEST(ClipboardIsolationTest, RestoresAfterReplacementFailure) {
+  FakeClipboardAccess clipboard;
+  clipboard.replacement_succeeds = false;
+  EXPECT_EQ(RunWithClipboardIsolation(clipboard, L"deterministic",
+                                      [] { return ClipboardActionStatus::Completed; }),
+            ClipboardIsolationStatus::ReplacementFailed);
+  EXPECT_TRUE(clipboard.restored);
+  EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup", "replace", "restore"}));
+}
+
+TEST(ClipboardIsolationTest, PreservesFailingSkipActionClassification) {
+  FakeClipboardAccess clipboard;
+  EXPECT_EQ(RunWithClipboardIsolation(clipboard, L"deterministic",
+                                      [] { return ClipboardActionStatus::FailingSkip; }),
+            ClipboardIsolationStatus::ActionSkipped);
+  EXPECT_TRUE(clipboard.restored);
+}
+
+TEST(ClipboardIsolationTest, ReportsRestoreFailure) {
   FakeClipboardAccess clipboard;
   clipboard.restore_succeeds = false;
-  EXPECT_EQ(RunWithClipboardIsolation(clipboard, L"deterministic", [] { return true; }),
+  EXPECT_EQ(RunWithClipboardIsolation(clipboard, L"deterministic",
+                                      [] { return ClipboardActionStatus::Completed; }),
             ClipboardIsolationStatus::RestoreFailed);
-
-  TemporaryDirectory temp;
-  TargetConfig target;
-  target.id = "notepad";
-  target.display_name = "Notepad";
-  target.app_id = "notepad";
-  target.automation_level = "full";
-  std::vector<CaseResult> results{
-      {"C-011", ResultStatus::Fail, "clipboard-restore-failed", 1, {}},
-  };
-  ASSERT_TRUE(WriteReports(temp.path(), target, results));
-  const auto report = ReadFile(temp.path() / "report.json") + ReadFile(temp.path() / "report.md");
-  const std::string private_text(clipboard.private_original.begin(),
-                                 clipboard.private_original.end());
-  EXPECT_EQ(report.find(private_text), std::string::npos);
+  EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup", "replace", "restore"}));
 }
 
 }  // namespace

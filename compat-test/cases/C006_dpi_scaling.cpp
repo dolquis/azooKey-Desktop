@@ -51,6 +51,7 @@ CaseDefinition MakeC006DpiScalingCase() {
       [](AutomationSession& session) {
         CaseResult result;
         result.id = "C-006";
+        result.status = ResultStatus::FailingSkip;
         if (!session.baseline_verified()) {
           result.reason_code = "baseline-conversion-not-verified";
           return result;

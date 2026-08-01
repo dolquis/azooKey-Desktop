@@ -1,11 +1,12 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
-
-struct IDataObject;
+#include <vector>
 
 namespace azookey::compat_test {
 
@@ -21,13 +22,20 @@ enum class ClipboardIsolationStatus {
   Completed,
   BackupUnavailable,
   ReplacementFailed,
+  ActionSkipped,
   ActionFailed,
   RestoreFailed,
 };
 
-ClipboardIsolationStatus RunWithClipboardIsolation(ClipboardAccess& clipboard,
-                                                   std::wstring_view deterministic_text,
-                                                   const std::function<bool()>& action);
+enum class ClipboardActionStatus {
+  Completed,
+  FailingSkip,
+  Failed,
+};
+
+ClipboardIsolationStatus RunWithClipboardIsolation(
+    ClipboardAccess& clipboard, std::wstring_view deterministic_text,
+    const std::function<ClipboardActionStatus()>& action);
 
 class SystemClipboardAccess final : public ClipboardAccess {
  public:
@@ -39,7 +47,17 @@ class SystemClipboardAccess final : public ClipboardAccess {
   std::optional<std::wstring> ReadUnicodeText() const;
 
  private:
-  IDataObject* saved_{nullptr};
+  struct SnapshotEntry {
+    unsigned int format{};
+    void* data{};
+    std::size_t byte_size{};
+    std::uint64_t content_hash{};
+    bool has_fingerprint{false};
+  };
+
+  bool VerifyRestoredSnapshot() const;
+
+  std::vector<SnapshotEntry> saved_;
   bool backup_complete_{false};
   bool restored_{false};
 };

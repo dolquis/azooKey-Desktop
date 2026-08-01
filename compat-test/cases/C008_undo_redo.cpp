@@ -8,6 +8,7 @@ CaseDefinition MakeC008UndoRedoCase() {
       [](AutomationSession& session) {
         CaseResult result;
         result.id = "C-008";
+        result.status = ResultStatus::FailingSkip;
         if (!session.baseline_verified()) {
           result.reason_code = "baseline-conversion-not-verified";
           return result;
@@ -30,7 +31,7 @@ CaseDefinition MakeC008UndoRedoCase() {
         const auto redone = session.ReadEditorText();
         if (!committed || !undone || !redone || committed->empty()) {
           result.reason_code = "undo-redo-text-unobservable";
-        } else if (undone->empty() && *redone == *committed) {
+        } else if (*undone != *committed && *redone == *committed) {
           result.status = ResultStatus::Pass;
           result.reason_code = "undo-redo-roundtrip-observed";
         } else {

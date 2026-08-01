@@ -8,6 +8,7 @@ CaseDefinition MakeC007SurrogatePairCase() {
       [](AutomationSession& session) {
         CaseResult result;
         result.id = "C-007";
+        result.status = ResultStatus::FailingSkip;
         if (!session.baseline_verified()) {
           result.reason_code = "baseline-conversion-not-verified";
           return result;
@@ -21,8 +22,7 @@ CaseDefinition MakeC007SurrogatePairCase() {
         if (!text) {
           result.reason_code = "text-pattern-unavailable";
         } else if (text->find(kEmoji) != std::wstring::npos) {
-          result.status = ResultStatus::Pass;
-          result.reason_code = "surrogate-pair-observed";
+          result.reason_code = "surrogate-pair-tip-path-unverified";
         } else {
           result.status = ResultStatus::Fail;
           result.reason_code = "surrogate-pair-not-observed";

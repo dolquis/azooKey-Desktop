@@ -1,4 +1,6 @@
 add_library(azookey_compat_test_support STATIC
+  runner/CaseSupport.cpp
+  runner/ClipboardIsolation.cpp
   runner/ReportWriter.cpp
   runner/ScreenshotCapture.cpp
 )
@@ -16,6 +18,14 @@ add_executable(compat_test
   cases/C002_backspace.cpp
   cases/C003_escape.cpp
   cases/C004_candidate_position.cpp
+  cases/C005_monitor_clamp.cpp
+  cases/C006_dpi_scaling.cpp
+  cases/C007_surrogate_pair.cpp
+  cases/C008_undo_redo.cpp
+  cases/C009_focus_transition.cpp
+  cases/C010_host_recovery.cpp
+  cases/C011_shortcut_routing.cpp
+  cases/C012_romanization.cpp
 )
 target_link_libraries(compat_test
   PRIVATE

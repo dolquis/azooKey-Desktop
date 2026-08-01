@@ -17,12 +17,12 @@
   "cases": [
     "C-001", "C-002", "C-003", "C-004",
     "C-005", "C-006", "C-007", "C-008",
-    "C-009", "C-010", "C-011", "C-012"
+    "C-009", "C-011", "C-012", "C-010"
   ],
   "workarounds": {
     "require_new_window": true,
     "use_temporary_document": true,
     "redact_target_and_candidate_windows": true
   },
-  "notes": "Notepad は M50 gate の full automation target（docs/dev-infrastructure-spec.md §13）。既存ウィンドウは変更せず、runner が起動した新規ウィンドウだけを操作する。Phase 1 は class=Notepad のトップレベルウィンドウだけを対象とし、ApplicationFrameWindow/CoreWindow 構成は未対応。C-005〜C-012 は未登録の failing-skip として報告する。"
+  "notes": "Notepad は M50 gate の full automation target（docs/dev-infrastructure-spec.md §13）。既存ウィンドウは変更せず、runner が起動した新規ウィンドウだけを操作する。class=Notepad のトップレベルウィンドウだけを対象とし、ApplicationFrameWindow/CoreWindow 構成は未対応。C-001〜C-012 を登録し、C-010 は後続ケースへ再接続待ちを波及させないため最後に実行する。"
 }

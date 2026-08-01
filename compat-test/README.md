@@ -31,13 +31,23 @@ compat-test/
 ├── CMakeLists.txt              # runner / cases を配線する compat_test ターゲット
 ├── runner/
 │   ├── CompatRunner.cpp        # UI Automation + SendInput
+│   ├── CaseSupport.cpp         # 物理 screen 座標の共通判定
+│   ├── ClipboardIsolation.cpp  # C-011 の退避・固定データ置換・復元
 │   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
 │   └── ReportWriter.cpp
 ├── cases/
 │   ├── C001_basic_input.cpp
 │   ├── C002_backspace.cpp
 │   ├── C003_escape.cpp
-│   └── C004_candidate_position.cpp
+│   ├── C004_candidate_position.cpp
+│   ├── C005_monitor_clamp.cpp
+│   ├── C006_dpi_scaling.cpp
+│   ├── C007_surrogate_pair.cpp
+│   ├── C008_undo_redo.cpp
+│   ├── C009_focus_transition.cpp
+│   ├── C010_host_recovery.cpp
+│   ├── C011_shortcut_routing.cpp
+│   └── C012_romanization.cpp
 └── targets/
     ├── notepad.json
     ├── edge.json
@@ -62,11 +72,28 @@ compat-report-YYYYMMDD-HHMMSS/
 ```
 
 テストケース一覧（C-001〜C-012）と CI 連携は §13.3 / §13.6 を参照。
-Phase 1 では Notepad の C-001〜C-004 を実装し、C-005〜C-012 も
-`case-not-registered` の `failing-skip` としてレポートへ残す。終了コードは
+Notepad では C-001〜C-012 を実装する。環境条件を満たせず自動判定できないケースも
+silent skip せず `failing-skip` としてレポートへ残す。終了コードは
 全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2`。
-C-002〜C-004 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
+C-002〜C-010 と C-012 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
 azooKey の基準動作を確認できた場合だけ実行する。
+
+C-007 の自動操作は、サロゲートペアを一括した `SendInput` で注入し、対象アプリが
+UTF-16 のペアを壊さず保持することまで確認する。この入力は TSF を通らないため、
+azooKey の候補から絵文字を確定したことを表す pass にはせず、
+`surrogate-pair-tip-path-unverified` の `failing-skip` とする。TIP 経由の確認は
+`gate:human-required` の実機検証で補完する。
+
+C-011 はクリップボードの全 format を実行前に即時複製してから固定のテストデータへ
+置き換え、ショートカットの判定後に元の内容を復元する。復元後は複製時のformatと、
+比較可能な `HGLOBAL` データのsize、hashが一致することを確認する。退避できない環境は
+`failing-skip`、復元失敗は `fail` とし、元の内容をレポート、ログ、スクリーンショットへ
+出力しない。
+
+C-010 は正規の PowerShell supervisor が起動したHostだけを対象とし、再起動後の
+per-user named pipeへ接続できるまで復帰とは判定しない。runnerによる代替Host起動は
+行わず、再起動できない場合は `host-recovery-failed` とする。再接続待ちが他のケースへ
+波及しないよう、Notepad targetではC-010を最後に実行する。
 
 ## 手動チェックリスト
 

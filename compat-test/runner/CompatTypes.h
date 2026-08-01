@@ -12,8 +12,10 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct IUIAutomation;
@@ -61,7 +63,9 @@ class AutomationSession {
   bool FocusEditor();
   bool ClearEditor();
   bool SendAscii(const std::string& text);
+  bool SendUnicode(std::wstring_view text);
   bool SendVirtualKey(WORD virtual_key);
+  bool SendModifiedKey(std::initializer_list<WORD> modifiers, WORD virtual_key);
   const char* input_failure_reason() const {
     return focus_lost_ ? "focus-lost" : "input-injection-failed";
   }
@@ -102,6 +106,14 @@ CaseDefinition MakeC001BasicInputCase();
 CaseDefinition MakeC002BackspaceCase();
 CaseDefinition MakeC003EscapeCase();
 CaseDefinition MakeC004CandidatePositionCase();
+CaseDefinition MakeC005MonitorClampCase();
+CaseDefinition MakeC006DpiScalingCase();
+CaseDefinition MakeC007SurrogatePairCase();
+CaseDefinition MakeC008UndoRedoCase();
+CaseDefinition MakeC009FocusTransitionCase();
+CaseDefinition MakeC010HostRecoveryCase();
+CaseDefinition MakeC011ShortcutRoutingCase();
+CaseDefinition MakeC012RomanizationCase();
 
 const char* ResultStatusName(ResultStatus status);
 

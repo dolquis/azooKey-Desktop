@@ -1750,13 +1750,23 @@ compat-test/
 ├── CMakeLists.txt
 ├── runner/
 │   ├── CompatRunner.cpp        # UI Automation + SendInput
+│   ├── CaseSupport.cpp         # 物理 screen 座標の共通判定
+│   ├── ClipboardIsolation.cpp  # C-011 の退避・固定データ置換・復元
 │   ├── ScreenshotCapture.cpp   # 矩形だけを描く WIC PNG
 │   └── ReportWriter.cpp
 ├── cases/
 │   ├── C001_basic_input.cpp
 │   ├── C002_backspace.cpp
 │   ├── C003_escape.cpp
-│   └── C004_candidate_position.cpp
+│   ├── C004_candidate_position.cpp
+│   ├── C005_monitor_clamp.cpp
+│   ├── C006_dpi_scaling.cpp
+│   ├── C007_surrogate_pair.cpp
+│   ├── C008_undo_redo.cpp
+│   ├── C009_focus_transition.cpp
+│   ├── C010_host_recovery.cpp
+│   ├── C011_shortcut_routing.cpp
+│   └── C012_romanization.cpp
 └── targets/
     ├── notepad.json
     ├── edge.json
@@ -1777,10 +1787,21 @@ M50 ゲート対象（Notepad / VS Code / Edge）では前提条件**であり�
 自動ゲートから silent に除外しない）。手動確認（§13.3.1 相当）への振り替えは
 best-effort / 非ゲート対象に限る。
 
-Phase 1 の runner / C-001〜C-004 / unit test はトップ `CMakeLists.txt` から
-`add_subdirectory(compat-test)` で Windows ビルドへ配線する。Notepad の target
-JSON は C-001〜C-012 を列挙し、未実装の C-005〜C-012 も
-`case-not-registered` の `failing-skip` としてレポートへ残す。Phase 1 の自動操作は
+退避時は `EmptyClipboard` より前に全formatを列挙し、遅延レンダリングを含む各handleを
+即時複製する。復元後は退避した全formatが存在し、比較可能な `HGLOBAL` データのsizeと
+hashが一致することを確認する。複製または一致確認ができない場合は復元成功として扱わない。
+
+C-007 の `KEYEVENTF_UNICODE` によるサロゲートペア注入はTSFを通らないため、対象アプリの
+UTF-16保持確認に限定する。保持できても `surrogate-pair-tip-path-unverified` の
+`failing-skip` とし、azooKey候補からの絵文字確定は `gate:human-required` の実機検証で
+補完する。
+
+C-010 はPowerShell supervisorが起動したHostだけを停止対象とし、再起動プロセスに加えて
+per-user named pipeへの接続を確認してから復帰と判定する。runnerはHostを代替起動しない。
+Notepad targetでは、再接続待ちを後続ケースへ波及させないためC-010を最後に実行する。
+
+runner / C-001〜C-012 / unit test はトップ `CMakeLists.txt` から
+`add_subdirectory(compat-test)` で Windows ビルドへ配線する。Notepad の自動操作は
 トップレベル class が `Notepad` のウィンドウに限定し、
 `ApplicationFrameWindow` / `CoreWindow` 構成は対象外とする。
 

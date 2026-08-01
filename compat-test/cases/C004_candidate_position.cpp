@@ -1,10 +1,10 @@
-#include "runner/CompatTypes.h"
-
 #include <Windows.h>
 
 #include <chrono>
-#include <cmath>
 #include <thread>
+
+#include "runner/CaseSupport.h"
+#include "runner/CompatTypes.h"
 
 namespace azookey::compat_test {
 
@@ -41,13 +41,7 @@ CaseDefinition MakeC004CandidatePositionCase() {
           result.reason_code = "caret-rectangle-unavailable";
           return result;
         }
-        constexpr LONG kHorizontalTolerance = 64;
-        constexpr LONG kMaximumVerticalGap = 100;
-        const bool horizontally_near =
-            std::abs(candidate->left - caret->left) <= kHorizontalTolerance;
-        const bool below_caret = candidate->top >= caret->bottom - 4 &&
-                                 candidate->top - caret->bottom <= kMaximumVerticalGap;
-        if (horizontally_near && below_caret) {
+        if (IsCandidateNearCaretAtDpi(*candidate, *caret, GetDpiForWindow(session.window()))) {
           result.status = ResultStatus::Pass;
           result.reason_code = "candidate-near-caret";
         } else {

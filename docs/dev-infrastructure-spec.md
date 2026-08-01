@@ -1677,6 +1677,15 @@ M28（MSIX サイドロード）着手前にアプリ互換性のベースライ
 `recorder` = キーボード操作の記録・再生（Office は UI Automation の
 信頼性が低い）。
 
+M50 の自動ゲートは次の target 定義を使う。
+runner は target ごとに新規ウィンドウと一時文書を作り、既存の文書やタブを操作しない。
+
+| target | AppId | トップレベル window class | 優先する UI Automation control |
+|---|---|---|---|
+| Notepad | `Microsoft.WindowsNotepad_8wekyb3d8bbwe!App` | `Notepad` | Document |
+| Edge | `MSEdge` | `Chrome_WidgetWin_1` | Edit |
+| VS Code | `Microsoft.VisualStudioCode` | `Chrome_WidgetWin_1` | Document |
+
 ### 13.3 テストケース
 
 | ID | ケース | 期待動作 |
@@ -1801,9 +1810,12 @@ per-user named pipeへの接続を確認してから復帰と判定する。runn
 Notepad targetでは、再接続待ちを後続ケースへ波及させないためC-010を最後に実行する。
 
 runner / C-001〜C-012 / unit test はトップ `CMakeLists.txt` から
-`add_subdirectory(compat-test)` で Windows ビルドへ配線する。Notepad の自動操作は
-トップレベル class が `Notepad` のウィンドウに限定し、
-`ApplicationFrameWindow` / `CoreWindow` 構成は対象外とする。
+`add_subdirectory(compat-test)` で Windows ビルドへ配線する。
+Notepad は `Notepad`、Edge と VS Code は `Chrome_WidgetWin_1` の新規ウィンドウだけを
+操作する。
+Edge は外部通信を行わない一時 HTML の textarea、VS Code は拡張機能を無効にした
+一時テキストファイルを使う。
+3 target とも C-010 を最後に実行し、Host の再接続待ちを後続ケースへ波及させない。
 
 ### 13.5 出力
 
@@ -1821,28 +1833,29 @@ compat-report-YYYYMMDD-HHMMSS/
 
 スクリーンショットは失敗時だけ生成する。デスクトップ画素は取得せず、空の画像に
 対象ウィンドウ・キャレット・候補ウィンドウの矩形だけを描画する。
+`report.md` は target 固有の HTML コメント marker、全体結果、件数表、折りたたみ可能な
+case 詳細表を持ち、そのまま PR コメント本文として使える形式にする。
 
 ### 13.6 CI 連携
 
-GitHub Actions の Windows ジョブに optional な `compat` ステージを
-追加する（M50 完了時）:
+`.github/workflows/compat.yml` に optional な `compat` ジョブを置く。
+この workflow は `compat-test` ラベル付き PR の open / reopen / synchronize / labeled
+イベント、または手動 dispatch でだけ runner を起動する。
+通常の PR ではジョブが skip されるため、Windows runner 時間を消費しない。
 
 ```yaml
-- name: Run compat tests (optional)
-  if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'compat-test')
-  run: |
-    cmake --build --preset windows-release --target compat_test
-    .\build\windows-release\compat-test\compat_test.exe --output compat-report
-  continue-on-error: true
-- name: Upload compat report
-  uses: actions/upload-artifact@v4
-  with:
-    name: compat-report
-    path: compat-report-*/
+jobs:
+  compat:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'compat-test')
 ```
 
-CI で常時実行するとコストが高いため、`compat-test` ラベル付き PR
-または手動 dispatch でのみ実行する。
+ジョブは Release の `compat_test` を一度だけビルドし、Notepad、VS Code、Edge の
+3 target を順に実行する。
+各 target の非 0 終了を記録しても残りの target を続行し、`compat-report-*/` と
+`compat-summary.json` を 1 個の artifact としてアップロードする。
+実機条件を満たせない target は `failing-skip` を report に残す。
 
 ### M50 受け入れ条件
 

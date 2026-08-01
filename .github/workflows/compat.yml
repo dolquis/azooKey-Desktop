@@ -1,0 +1,75 @@
+name: Compatibility tests
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compat-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compat:
+    name: Notepad / VS Code / Edge
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'compat-test')
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/windows-release/_deps
+          key: compat-googletest-wil-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON
+
+      - name: Build compatibility runner
+        shell: pwsh
+        run: cmake --build --preset windows-release --target compat_test
+
+      - name: Run compatibility targets
+        id: run_compat
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $runner = 'build/windows-release/compat-test/compat_test.exe'
+          $results = foreach ($target in 'notepad', 'vscode', 'edge') {
+            $output = "compat-report-$target"
+            & $runner --target "compat-test/targets/$target.json" --output $output
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+              Write-Warning "$target compatibility run exited with $exitCode"
+            }
+            [ordered]@{ target = $target; exit_code = $exitCode }
+          }
+          $results | ConvertTo-Json | Set-Content -LiteralPath compat-summary.json -Encoding utf8
+          $failed = @($results | Where-Object { $_.exit_code -ne 0 })
+          if ($failed.Count -gt 0) {
+            exit 1
+          }
+
+      - name: Upload compatibility reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-report-${{ github.run_id }}
+          path: |
+            compat-report-*/
+            compat-summary.json
+          if-no-files-found: warn
+          retention-days: 7

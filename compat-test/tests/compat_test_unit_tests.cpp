@@ -10,8 +10,10 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "azookey/ipc/Json.h"
 #include "runner/CaseSupport.h"
@@ -103,7 +105,87 @@ TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   EXPECT_EQ(markdown.find("nihongo"), std::string::npos);
   EXPECT_EQ(markdown.find("日本語"), std::string::npos);
   EXPECT_NE(json_text.find("redacted-detail"), std::string::npos);
+  EXPECT_NE(markdown.find("<!-- azookey-compat-report:notepad -->"), std::string::npos);
+  EXPECT_NE(markdown.find("**Outcome: FAIL**"), std::string::npos);
+  EXPECT_NE(markdown.find("<summary>Case details</summary>"), std::string::npos);
   EXPECT_FALSE(std::filesystem::exists(temp.path() / "logs"));
+}
+
+TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
+  struct ExpectedTarget {
+    const char* id;
+    const char* app_id;
+    const char* window_class;
+    const char* editor_control_type;
+  };
+  constexpr std::array targets{
+      ExpectedTarget{"notepad", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "Notepad",
+                     "document"},
+      ExpectedTarget{"vscode", "Microsoft.VisualStudioCode", "Chrome_WidgetWin_1", "document"},
+      ExpectedTarget{"edge", "MSEdge", "Chrome_WidgetWin_1", "edit"},
+  };
+  const std::set<std::string> expected_cases{
+      "C-001", "C-002", "C-003", "C-004", "C-005", "C-006",
+      "C-007", "C-008", "C-009", "C-010", "C-011", "C-012",
+  };
+
+  for (const auto& expected : targets) {
+    SCOPED_TRACE(expected.id);
+    const auto path =
+        std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / (std::string(expected.id) + ".json");
+    const auto parsed = azookey::ipc::json::Parse(ReadFile(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_TRUE(parsed->IsObject());
+    EXPECT_EQ(parsed->GetString("id"), expected.id);
+    EXPECT_EQ(parsed->GetString("app_id"), expected.app_id);
+    EXPECT_EQ(parsed->GetString("automation_level"), "full");
+
+    const auto* window = parsed->GetObject("window");
+    ASSERT_NE(window, nullptr);
+    const azookey::ipc::json::Value window_value(*window);
+    EXPECT_EQ(window_value.GetString("class"), expected.window_class);
+    EXPECT_EQ(window_value.GetString("editor_control_type"), expected.editor_control_type);
+
+    const auto* cases = parsed->GetArray("cases");
+    ASSERT_NE(cases, nullptr);
+    std::set<std::string> actual_cases;
+    for (const auto& item : *cases) {
+      ASSERT_TRUE(item.IsString());
+      actual_cases.insert(item.AsString());
+    }
+    EXPECT_EQ(actual_cases, expected_cases);
+    ASSERT_FALSE(cases->empty());
+    EXPECT_EQ(cases->back().AsString(), "C-010");
+  }
+}
+
+TEST(TargetConfigFilesTest, EdgeAndVsCodeDeclareDocumentedWorkarounds) {
+  const auto load = [](std::string_view id) {
+    return azookey::ipc::json::Parse(
+        ReadFile(std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / (std::string(id) + ".json")));
+  };
+
+  const auto edge = load("edge");
+  ASSERT_TRUE(edge);
+  const auto* edge_workarounds = edge->GetObject("workarounds");
+  ASSERT_NE(edge_workarounds, nullptr);
+  const azookey::ipc::json::Value edge_value(*edge_workarounds);
+  EXPECT_EQ(edge_value.GetBool("prefer_get_text_ext"), true);
+  EXPECT_EQ(edge_value.GetString("display_attribute_fallback"), "ime-default-rendering");
+  const auto* edge_launch = edge->GetObject("launch");
+  ASSERT_NE(edge_launch, nullptr);
+  const azookey::ipc::json::Value edge_launch_value(*edge_launch);
+  const auto* edge_document = edge_launch_value.GetObject("temporary_document");
+  ASSERT_NE(edge_document, nullptr);
+  EXPECT_EQ(azookey::ipc::json::Value(*edge_document).GetBool("save_before_close"), false);
+
+  const auto vscode = load("vscode");
+  ASSERT_TRUE(vscode);
+  const auto* vscode_workarounds = vscode->GetObject("workarounds");
+  ASSERT_NE(vscode_workarounds, nullptr);
+  const azookey::ipc::json::Value vscode_value(*vscode_workarounds);
+  EXPECT_EQ(vscode_value.GetBool("prefer_ime_candidates_during_preedit"), true);
+  EXPECT_EQ(vscode_value.GetBool("ignore_electron_ime_event_order"), true);
 }
 
 TEST(CompatReportWriterTest, RejectsNonEmptyOutputDirectory) {

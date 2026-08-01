@@ -12,6 +12,7 @@
     "class": "Notepad",
     "class_fallbacks": [],
     "edit_control_class": "Edit",
+    "editor_control_type": "document",
     "candidate_window_class": "azooKeyCandidateWnd"
   },
   "cases": [

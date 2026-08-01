@@ -1,0 +1,39 @@
+{
+  "id": "edge",
+  "display_name": "Microsoft Edge",
+  "app_id": "MSEdge",
+  "category": "browser",
+  "automation_level": "full",
+  "launch": {
+    "executable": "msedge.exe",
+    "args": [
+      "--new-window",
+      "--inprivate",
+      "--no-first-run"
+    ],
+    "temporary_document": {
+      "extension": ".html",
+      "contents": "<!doctype html><meta charset=\"utf-8\"><title>azooKey compatibility test</title><textarea autofocus aria-label=\"azooKey compatibility editor\" style=\"width:80vw;height:70vh;font-size:20px\"></textarea>",
+      "save_before_close": false
+    }
+  },
+  "window": {
+    "class": "Chrome_WidgetWin_1",
+    "class_fallbacks": [],
+    "edit_control_class": "Chrome_RenderWidgetHostHWND",
+    "editor_control_type": "edit",
+    "candidate_window_class": "azooKeyCandidateWnd"
+  },
+  "cases": [
+    "C-001", "C-002", "C-003", "C-004",
+    "C-005", "C-006", "C-007", "C-008",
+    "C-009", "C-011", "C-012", "C-010"
+  ],
+  "workarounds": {
+    "require_new_window": true,
+    "prefer_get_text_ext": true,
+    "display_attribute_fallback": "ime-default-rendering",
+    "redact_target_and_candidate_windows": true
+  },
+  "notes": "Edge は M50 gate の full automation target。runner は外部通信を行わない一時 HTML を InPrivate の新規ウィンドウで開く。候補位置は ITfContextView::GetTextExt を優先し、display attribute が完全反映されない場合は IME 既定描画へフォールバックする。C-010 は最後に実行する。"
+}

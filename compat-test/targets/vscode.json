@@ -1,0 +1,39 @@
+{
+  "id": "vscode",
+  "display_name": "Visual Studio Code",
+  "app_id": "Microsoft.VisualStudioCode",
+  "category": "electron",
+  "automation_level": "full",
+  "launch": {
+    "executable": "Code.exe",
+    "args": [
+      "--new-window",
+      "--disable-extensions",
+      "--skip-release-notes",
+      "--skip-welcome"
+    ],
+    "temporary_document": {
+      "extension": ".txt",
+      "contents": ""
+    }
+  },
+  "window": {
+    "class": "Chrome_WidgetWin_1",
+    "class_fallbacks": [],
+    "edit_control_class": "Chrome_RenderWidgetHostHWND",
+    "editor_control_type": "document",
+    "candidate_window_class": "azooKeyCandidateWnd"
+  },
+  "cases": [
+    "C-001", "C-002", "C-003", "C-004",
+    "C-005", "C-006", "C-007", "C-008",
+    "C-009", "C-011", "C-012", "C-010"
+  ],
+  "workarounds": {
+    "require_new_window": true,
+    "prefer_ime_candidates_during_preedit": true,
+    "ignore_electron_ime_event_order": true,
+    "redact_target_and_candidate_windows": true
+  },
+  "notes": "VS Code は M50 gate の full automation target。runner は拡張機能を無効にした新規ウィンドウで一時テキストファイルを開く。Monaco の独自補完より IME 候補を優先し、Electron 側の IME イベント順序を判定条件にしない。C-010 は最後に実行する。"
+}

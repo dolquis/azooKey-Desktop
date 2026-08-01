@@ -32,6 +32,7 @@ target_link_libraries(compat_test
     azookey_compat_test_support
     azookey_project_options
     azookey_project_warnings
+    advapi32
     ole32
     user32
     uiautomationcore
@@ -51,6 +52,10 @@ if(AZOOKEY_BUILD_TESTS)
       GTest::gtest_main
       azookey_project_options
       azookey_project_warnings
+  )
+  target_compile_definitions(compat_test_unit_tests
+    PRIVATE
+      AZOOKEY_COMPAT_TARGETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/targets"
   )
   azookey_discover_tests(compat_test_unit_tests)
 endif()

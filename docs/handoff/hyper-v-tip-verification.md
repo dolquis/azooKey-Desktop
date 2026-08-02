@@ -5,6 +5,8 @@ azooKey TIP（`tsf-tip`）と inference-host を Hyper-V の Windows 11 VM 上�
 
 - 進捗・状態の正典は Linear（team `Dev` / Project `azooKey Desktop / Windows IME MVP`）。本 runbook は手順のみを扱い、達成状態は持たない。
 - ビルド/登録の標準手順は `README.md`、登録の責務境界は `docs/sideload-packaging-spec.md` を参照。
+- 検証サイクル全体の推奨構成と、エージェント（Claude Code / Codex）による VM 操作補助の評価は
+  [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) を参照。
 
 ## なぜ VM で検証するか
 

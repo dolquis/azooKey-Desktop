@@ -11,14 +11,27 @@
 ## ビルドと実行
 
 Windows プリセットで `compat_test` ターゲットをビルドし、対話セッションで
-実行する。runner は自分が起動した新規 Notepad ウィンドウだけを操作する。
+実行する。runner は target JSON に従って自分が起動した新規ウィンドウだけを操作する。
 `--output` が既存の非空ディレクトリを指す場合は、古い artifact の混在を避ける
 ため実行を拒否する。
 
 ```powershell
 cmake --build --preset windows-release --target compat_test
 .\build\windows-release\compat-test\compat_test.exe --output compat-report
+.\build\windows-release\compat-test\compat_test.exe `
+  --target .\compat-test\targets\vscode.json `
+  --output compat-report-vscode
+.\build\windows-release\compat-test\compat_test.exe `
+  --target .\compat-test\targets\edge.json `
+  --output compat-report-edge
 ```
+
+Notepad は空の一時テキストファイル、VS Code は拡張機能を無効にした新規ウィンドウと
+一時テキストファイル、Edge は InPrivate の新規ウィンドウと外部通信を行わない一時 HTML
+を使う。runner は App Paths も検索するため、`Code.exe` / `msedge.exe` が `PATH` に無い
+標準インストールにも対応する。
+Edge の textarea は UIA ControlType と `aria-label` 由来の Name の両方で特定し、
+同じ Edit control type を持つアドレスバーを対象から除外する。
 
 azooKey TIP の登録と選択は machine-wide 設定を含むため、runner は行わない。
 実行前に利用者が登録・選択を完了する。対話セッション、対象アプリ、UI Automation
@@ -51,7 +64,7 @@ compat-test/
 └── targets/
     ├── notepad.json
     ├── edge.json
-    └── ...
+    └── vscode.json
 ```
 
 各 `targets/*.json` は AppId / window class / 自動化レベル
@@ -72,7 +85,7 @@ compat-report-YYYYMMDD-HHMMSS/
 ```
 
 テストケース一覧（C-001〜C-012）と CI 連携は §13.3 / §13.6 を参照。
-Notepad では C-001〜C-012 を実装する。環境条件を満たせず自動判定できないケースも
+Notepad、VS Code、Edge では C-001〜C-012 を実行する。環境条件を満たせず自動判定できないケースも
 silent skip せず `failing-skip` としてレポートへ残す。終了コードは
 全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2`。
 C-002〜C-010 と C-012 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
@@ -93,7 +106,23 @@ C-011 はクリップボードの全 format を実行前に即時複製してか
 C-010 は正規の PowerShell supervisor が起動したHostだけを対象とし、再起動後の
 per-user named pipeへ接続できるまで復帰とは判定しない。runnerによる代替Host起動は
 行わず、再起動できない場合は `host-recovery-failed` とする。再接続待ちが他のケースへ
-波及しないよう、Notepad targetではC-010を最後に実行する。
+波及しないよう、3 targetともC-010を最後に実行する。
+
+## Optional CI
+
+`.github/workflows/compat.yml` は `compat-test` ラベル付き PR と手動 dispatch でだけ
+Notepad、VS Code、Edge を実行する。
+通常の PR ではジョブを skip する。
+各 target の `report.md` / `report.json` と失敗 artifact、実行ログ、全 target の終了コードを
+まとめた `compat-summary.json` は `compat-report-<run-id>-<run-attempt>` artifact に
+7 日間保存する。
+`report.md` は target 固有の marker と全体結果を含むため、そのまま PR コメントへ転記できる。
+
+GitHub-hosted runner は azooKey TIP を登録・選択しないため、target の非 0 終了はジョブを
+失敗させず、step summary と artifact に記録する。
+このジョブの成功は build、アプリ起動、report 収集経路の成功を表し、M50 の互換性 pass を
+表さない。
+M50 ゲートは azooKey TIP を登録・選択した対話環境のレポートで判定する。
 
 ## 手動チェックリスト
 

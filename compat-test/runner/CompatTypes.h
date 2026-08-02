@@ -46,9 +46,15 @@ struct TargetConfig {
   std::vector<std::wstring> arguments;
   std::vector<std::wstring> window_classes;
   std::wstring edit_control_class;
+  std::string editor_control_type{"document"};
+  std::wstring editor_name;
   std::wstring candidate_window_class;
   std::vector<std::string> cases;
   bool use_temporary_document{false};
+  bool save_temporary_document_before_close{true};
+  uint32_t close_grace_period_ms{1500};
+  std::wstring temporary_document_extension{L".txt"};
+  std::string temporary_document_contents;
 };
 
 class AutomationSession {
@@ -94,6 +100,7 @@ class AutomationSession {
   bool owns_window_{false};
   bool baseline_verified_{false};
   bool focus_lost_{false};
+  uint64_t editor_discovery_duration_ms_{0};
   std::filesystem::path temporary_document_;
 };
 

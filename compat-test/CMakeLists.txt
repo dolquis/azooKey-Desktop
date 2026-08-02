@@ -3,13 +3,14 @@ add_library(azookey_compat_test_support STATIC
   runner/ClipboardIsolation.cpp
   runner/ReportWriter.cpp
   runner/ScreenshotCapture.cpp
+  runner/TargetConfigLoader.cpp
 )
 target_include_directories(azookey_compat_test_support
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_link_libraries(azookey_compat_test_support
   PUBLIC azookey_ipc azookey_project_options
-  PRIVATE azookey_project_warnings ole32 windowscodecs
+  PRIVATE azookey_project_warnings advapi32 ole32 windowscodecs
 )
 
 add_executable(compat_test
@@ -51,6 +52,10 @@ if(AZOOKEY_BUILD_TESTS)
       GTest::gtest_main
       azookey_project_options
       azookey_project_warnings
+  )
+  target_compile_definitions(compat_test_unit_tests
+    PRIVATE
+      AZOOKEY_COMPAT_TARGETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/targets"
   )
   azookey_discover_tests(compat_test_unit_tests)
 endif()

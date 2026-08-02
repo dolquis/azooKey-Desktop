@@ -2,8 +2,8 @@
 
 #include <Windows.h>
 
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -12,6 +12,7 @@
 #include <system_error>
 
 #include "azookey/ipc/Json.h"
+#include "runner/TargetConfigLoader.h"
 
 namespace azookey::compat_test {
 namespace {
@@ -110,17 +111,25 @@ ReportSummary SummarizeResults(const std::vector<CaseResult>& results) {
 
 bool WriteReports(const std::filesystem::path& output_directory, const TargetConfig& target,
                   const std::vector<CaseResult>& results) {
+  if (!IsValidTargetId(target.id)) return false;
   if (!EnsureOutputSubdirectories(output_directory)) return false;
 
   const auto summary = SummarizeResults(results);
+  const char* outcome = summary.failed > 0            ? "FAIL"
+                        : summary.failing_skipped > 0 ? "FAILING SKIP"
+                                                      : "PASS";
   azookey::ipc::json::Array json_results;
   std::ostringstream markdown;
-  markdown << "# Compatibility test report\n\n"
-           << "- Target: `" << target.id << "`\n"
-           << "- Automation: `" << target.automation_level << "`\n"
-           << "- Pass: " << summary.passed << "\n"
-           << "- Fail: " << summary.failed << "\n"
-           << "- Failing skip: " << summary.failing_skipped << "\n\n"
+  markdown << "<!-- azookey-compat-report:" << target.id << " -->\n"
+           << "## Compatibility test (`" << target.id << "`)\n\n"
+           << "**Outcome: " << outcome << "**\n\n"
+           << "| Result | Count |\n"
+           << "|---|---:|\n"
+           << "| Pass | " << summary.passed << " |\n"
+           << "| Fail | " << summary.failed << " |\n"
+           << "| Failing skip | " << summary.failing_skipped << " |\n\n"
+           << "<details>\n"
+           << "<summary>Case details</summary>\n\n"
            << "| Case | Result | Reason | Duration (ms) | Artifact |\n"
            << "|---|---|---|---:|---|\n";
 
@@ -140,6 +149,7 @@ bool WriteReports(const std::filesystem::path& output_directory, const TargetCon
     if (!artifact.empty()) markdown << "`" << artifact << "`";
     markdown << " |\n";
   }
+  markdown << "\n</details>\n";
 
   azookey::ipc::json::Object json_summary;
   json_summary.emplace("pass", static_cast<uint64_t>(summary.passed));

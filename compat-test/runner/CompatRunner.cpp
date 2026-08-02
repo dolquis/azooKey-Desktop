@@ -8,18 +8,18 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cwchar>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
-#include <sstream>
 #include <thread>
 
-#include "azookey/ipc/Json.h"
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
+#include "runner/TargetConfigLoader.h"
 
 namespace azookey::compat_test {
 namespace {
@@ -30,80 +30,6 @@ void SafeRelease(T*& value) {
     value->Release();
     value = nullptr;
   }
-}
-
-std::wstring Utf8ToWide(std::string_view text) {
-  if (text.empty()) return {};
-  const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                                       static_cast<int>(text.size()), nullptr, 0);
-  if (size <= 0) return {};
-  std::wstring result(static_cast<size_t>(size), L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
-                      result.data(), size);
-  return result;
-}
-
-std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) return std::nullopt;
-  std::ostringstream contents;
-  contents << stream.rdbuf();
-  const auto parsed = azookey::ipc::json::Parse(contents.str());
-  if (!parsed || !parsed->IsObject()) return std::nullopt;
-
-  TargetConfig config;
-  const auto id = parsed->GetString("id");
-  const auto display_name = parsed->GetString("display_name");
-  const auto app_id = parsed->GetString("app_id");
-  const auto automation_level = parsed->GetString("automation_level");
-  const auto* launch = parsed->GetObject("launch");
-  const auto* window = parsed->GetObject("window");
-  const auto* cases = parsed->GetArray("cases");
-  if (!id || !display_name || !app_id || !automation_level || !launch || !window || !cases) {
-    return std::nullopt;
-  }
-  config.id = *id;
-  config.display_name = *display_name;
-  config.app_id = *app_id;
-  config.automation_level = *automation_level;
-
-  const auto executable = azookey::ipc::json::Value(*launch).GetString("executable");
-  const auto window_class = azookey::ipc::json::Value(*window).GetString("class");
-  const auto edit_class = azookey::ipc::json::Value(*window).GetString("edit_control_class");
-  const auto candidate_class =
-      azookey::ipc::json::Value(*window).GetString("candidate_window_class");
-  if (!executable || !window_class || !edit_class || !candidate_class) return std::nullopt;
-  config.executable = Utf8ToWide(*executable);
-  config.window_classes.push_back(Utf8ToWide(*window_class));
-  config.edit_control_class = Utf8ToWide(*edit_class);
-  config.candidate_window_class = Utf8ToWide(*candidate_class);
-
-  if (const auto* args = azookey::ipc::json::Value(*launch).GetArray("args")) {
-    for (const auto& arg : *args) {
-      if (!arg.IsString()) return std::nullopt;
-      config.arguments.push_back(Utf8ToWide(arg.AsString()));
-    }
-  }
-  if (const auto* fallbacks = azookey::ipc::json::Value(*window).GetArray("class_fallbacks")) {
-    for (const auto& item : *fallbacks) {
-      if (!item.IsString()) return std::nullopt;
-      config.window_classes.push_back(Utf8ToWide(item.AsString()));
-    }
-  }
-  for (const auto& item : *cases) {
-    if (!item.IsString()) return std::nullopt;
-    config.cases.push_back(item.AsString());
-  }
-  if (const auto* workarounds = parsed->GetObject("workarounds")) {
-    config.use_temporary_document =
-        azookey::ipc::json::Value(*workarounds).GetBool("use_temporary_document").value_or(false);
-  }
-  if (config.executable.empty() || config.window_classes.front().empty() ||
-      config.edit_control_class.empty() || config.candidate_window_class.empty() ||
-      config.cases.empty()) {
-    return std::nullopt;
-  }
-  return config;
 }
 
 bool IsConfiguredWindow(HWND window, const TargetConfig& target) {
@@ -165,38 +91,6 @@ HWND FindNewTargetWindow(const TargetConfig& target, const std::set<HWND>& exist
       },
       reinterpret_cast<LPARAM>(&data));
   return data.preferred ? data.preferred : data.fallback;
-}
-
-std::filesystem::path ResolveExecutable(const std::filesystem::path& configured) {
-  if (configured.has_parent_path()) return configured;
-  if (_wcsicmp(configured.c_str(), L"notepad.exe") == 0) {
-    wchar_t system_directory[MAX_PATH]{};
-    const UINT length =
-        GetSystemDirectoryW(system_directory, static_cast<UINT>(std::size(system_directory)));
-    if (length > 0 && length < std::size(system_directory)) {
-      return std::filesystem::path(system_directory) / configured;
-    }
-  }
-  return configured;
-}
-
-std::filesystem::path CreateTemporaryDocument() {
-  wchar_t temp_directory[MAX_PATH]{};
-  const DWORD length = GetTempPathW(static_cast<DWORD>(std::size(temp_directory)), temp_directory);
-  if (length == 0 || length >= std::size(temp_directory)) return {};
-  for (uint32_t attempt = 0; attempt < 100; ++attempt) {
-    const auto path =
-        std::filesystem::path(temp_directory) /
-        (L"azookey-compat-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-         std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(attempt) + L".txt");
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                              FILE_ATTRIBUTE_TEMPORARY, nullptr);
-    if (file != INVALID_HANDLE_VALUE) {
-      CloseHandle(file);
-      return path;
-    }
-  }
-  return {};
 }
 
 std::wstring QuoteArgument(std::wstring_view value) {
@@ -280,10 +174,12 @@ AutomationSession::~AutomationSession() {
 bool AutomationSession::Start(std::string* reason_code) {
   const auto existing = SnapshotTargetWindows(target_);
   const auto executable = ResolveExecutable(target_.executable);
-  std::wstring command = QuoteArgument(executable.wstring());
+  std::cout << "Executable resolution (" << target_.id
+            << "): " << ExecutableResolutionSourceName(executable.source) << "\n";
+  std::wstring command = QuoteArgument(executable.path.wstring());
   for (const auto& argument : target_.arguments) command += L" " + QuoteArgument(argument);
   if (target_.use_temporary_document) {
-    temporary_document_ = CreateTemporaryDocument();
+    temporary_document_ = CreateTemporaryDocument(target_);
     if (temporary_document_.empty()) {
       if (reason_code) *reason_code = "temporary-document-create-failed";
       return false;
@@ -315,7 +211,19 @@ bool AutomationSession::Start(std::string* reason_code) {
     if (reason_code) *reason_code = "uia-initialization-failed";
     return false;
   }
-  if (!FindEditorElement()) {
+  constexpr auto kEditorDiscoveryTimeout = std::chrono::seconds(15);
+  const auto editor_discovery_started = std::chrono::steady_clock::now();
+  const auto editor_discovery_deadline = editor_discovery_started + kEditorDiscoveryTimeout;
+  do {
+    if (FindEditorElement()) break;
+    if (std::chrono::steady_clock::now() >= editor_discovery_deadline) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  } while (!editor_);
+  editor_discovery_duration_ms_ =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - editor_discovery_started)
+                                .count());
+  if (!editor_) {
     if (reason_code) *reason_code = "editor-element-not-found";
     return false;
   }
@@ -329,21 +237,53 @@ bool AutomationSession::Start(std::string* reason_code) {
 bool AutomationSession::FindEditorElement() {
   IUIAutomationElement* root = nullptr;
   if (FAILED(automation_->ElementFromHandle(window_, &root)) || !root) return false;
-  for (const CONTROLTYPEID control_type : {UIA_DocumentControlTypeId, UIA_EditControlTypeId}) {
-    VARIANT value;
-    VariantInit(&value);
-    value.vt = VT_I4;
-    value.lVal = control_type;
-    IUIAutomationCondition* condition = nullptr;
-    if (SUCCEEDED(
-            automation_->CreatePropertyCondition(UIA_ControlTypePropertyId, value, &condition)) &&
-        condition) {
-      root->FindFirst(TreeScope_Descendants, condition, &editor_);
-      SafeRelease(condition);
+  const std::array<CONTROLTYPEID, 2> control_types =
+      target_.editor_control_type == "edit"
+          ? std::array<CONTROLTYPEID, 2>{UIA_EditControlTypeId, UIA_DocumentControlTypeId}
+          : std::array<CONTROLTYPEID, 2>{UIA_DocumentControlTypeId, UIA_EditControlTypeId};
+  for (const CONTROLTYPEID control_type : control_types) {
+    VARIANT type_value;
+    VariantInit(&type_value);
+    type_value.vt = VT_I4;
+    type_value.lVal = control_type;
+    IUIAutomationCondition* type_condition = nullptr;
+    if (FAILED(automation_->CreatePropertyCondition(UIA_ControlTypePropertyId, type_value,
+                                                    &type_condition)) ||
+        !type_condition) {
+      continue;
     }
+
+    IUIAutomationCondition* name_condition = nullptr;
+    IUIAutomationCondition* combined_condition = nullptr;
+    IUIAutomationCondition* search_condition = type_condition;
+    if (!target_.editor_name.empty()) {
+      VARIANT name_value;
+      VariantInit(&name_value);
+      name_value.vt = VT_BSTR;
+      name_value.bstrVal = SysAllocString(target_.editor_name.c_str());
+      const bool name_created = name_value.bstrVal &&
+                                SUCCEEDED(automation_->CreatePropertyCondition(
+                                    UIA_NamePropertyId, name_value, &name_condition)) &&
+                                name_condition;
+      VariantClear(&name_value);
+      if (!name_created ||
+          FAILED(automation_->CreateAndCondition(type_condition, name_condition,
+                                                 &combined_condition)) ||
+          !combined_condition) {
+        SafeRelease(name_condition);
+        SafeRelease(type_condition);
+        continue;
+      }
+      search_condition = combined_condition;
+    }
+
+    root->FindFirst(TreeScope_Descendants, search_condition, &editor_);
+    SafeRelease(combined_condition);
+    SafeRelease(name_condition);
+    SafeRelease(type_condition);
     if (editor_) break;
   }
-  if (!editor_ && !target_.edit_control_class.empty()) {
+  if (!editor_ && target_.editor_name.empty() && !target_.edit_control_class.empty()) {
     VARIANT value;
     VariantInit(&value);
     value.vt = VT_BSTR;
@@ -561,7 +501,8 @@ bool AutomationSession::CaptureFailureArtifacts(
   std::ofstream log(result.failure_directory / "failure.log", std::ios::binary | std::ios::trunc);
   log << "case=" << result.id << "\n"
       << "status=" << ResultStatusName(result.status) << "\n"
-      << "reason_code=" << result.reason_code << "\n";
+      << "reason_code=" << result.reason_code << "\n"
+      << "editor_discovery_duration_ms=" << editor_discovery_duration_ms_ << "\n";
   if (!log.good()) return false;
   if (!window_) return true;
 
@@ -592,8 +533,10 @@ bool AutomationSession::CaptureFailureArtifacts(
 }
 
 void AutomationSession::CloseLaunchedWindow() {
+  const auto close_deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(target_.close_grace_period_ms);
   if (owns_window_ && window_ && IsWindow(window_)) {
-    if (!temporary_document_.empty() && editor_) {
+    if (!temporary_document_.empty() && target_.save_temporary_document_before_close && editor_) {
       ClearEditor();
       INPUT control_down{};
       control_down.type = INPUT_KEYBOARD;
@@ -609,13 +552,22 @@ void AutomationSession::CloseLaunchedWindow() {
       std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
     PostMessageW(window_, WM_CLOSE, 0, 0);
-    for (int attempt = 0; attempt < 20 && IsWindow(window_); ++attempt) {
+    while (IsWindow(window_) && std::chrono::steady_clock::now() < close_deadline) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   }
-  if (process_info_.hProcess && WaitForSingleObject(process_info_.hProcess, 500) == WAIT_TIMEOUT) {
-    TerminateProcess(process_info_.hProcess, 0);
-    WaitForSingleObject(process_info_.hProcess, 1000);
+  if (process_info_.hProcess) {
+    const auto now = std::chrono::steady_clock::now();
+    const DWORD remaining_ms =
+        now < close_deadline
+            ? static_cast<DWORD>(
+                  std::chrono::duration_cast<std::chrono::milliseconds>(close_deadline - now)
+                      .count())
+            : 0;
+    if (WaitForSingleObject(process_info_.hProcess, remaining_ms) == WAIT_TIMEOUT) {
+      TerminateProcess(process_info_.hProcess, 0);
+      WaitForSingleObject(process_info_.hProcess, 1000);
+    }
   }
   window_ = nullptr;
   owns_window_ = false;

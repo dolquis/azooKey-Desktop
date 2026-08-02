@@ -10,14 +10,17 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "azookey/ipc/Json.h"
 #include "runner/CaseSupport.h"
 #include "runner/ClipboardIsolation.h"
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
+#include "runner/TargetConfigLoader.h"
 
 namespace azookey::compat_test {
 namespace {
@@ -25,6 +28,12 @@ namespace {
 std::string ReadFile(const std::filesystem::path& path) {
   std::ifstream stream(path, std::ios::binary);
   return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+void WriteFile(const std::filesystem::path& path, std::string_view contents) {
+  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+  stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  if (!stream) throw std::runtime_error("failed to write test file");
 }
 
 class TemporaryDirectory {
@@ -103,7 +112,181 @@ TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   EXPECT_EQ(markdown.find("nihongo"), std::string::npos);
   EXPECT_EQ(markdown.find("日本語"), std::string::npos);
   EXPECT_NE(json_text.find("redacted-detail"), std::string::npos);
+  EXPECT_NE(markdown.find("<!-- azookey-compat-report:notepad -->"), std::string::npos);
+  EXPECT_NE(markdown.find("**Outcome: FAIL**"), std::string::npos);
+  EXPECT_NE(markdown.find("<summary>Case details</summary>"), std::string::npos);
   EXPECT_FALSE(std::filesystem::exists(temp.path() / "logs"));
+}
+
+TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
+  struct ExpectedTarget {
+    const char* id;
+    const char* app_id;
+    const char* window_class;
+    const char* editor_control_type;
+    const char* editor_name;
+  };
+  constexpr std::array targets{
+      ExpectedTarget{"notepad", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "Notepad", "document",
+                     nullptr},
+      ExpectedTarget{"vscode", "Microsoft.VisualStudioCode", "Chrome_WidgetWin_1", "document",
+                     nullptr},
+      ExpectedTarget{"edge", "MSEdge", "Chrome_WidgetWin_1", "edit",
+                     "azooKey compatibility editor"},
+  };
+  const std::set<std::string> expected_cases{
+      "C-001", "C-002", "C-003", "C-004", "C-005", "C-006",
+      "C-007", "C-008", "C-009", "C-010", "C-011", "C-012",
+  };
+
+  for (const auto& expected : targets) {
+    SCOPED_TRACE(expected.id);
+    const auto path =
+        std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / (std::string(expected.id) + ".json");
+    const auto parsed = azookey::ipc::json::Parse(ReadFile(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_TRUE(parsed->IsObject());
+    EXPECT_EQ(parsed->GetString("id"), expected.id);
+    EXPECT_EQ(parsed->GetString("app_id"), expected.app_id);
+    EXPECT_EQ(parsed->GetString("automation_level"), "full");
+
+    const auto* window = parsed->GetObject("window");
+    ASSERT_NE(window, nullptr);
+    const azookey::ipc::json::Value window_value(*window);
+    EXPECT_EQ(window_value.GetString("class"), expected.window_class);
+    EXPECT_EQ(window_value.GetString("editor_control_type"), expected.editor_control_type);
+    if (expected.editor_name) {
+      EXPECT_EQ(window_value.GetString("editor_name"), expected.editor_name);
+    } else {
+      EXPECT_FALSE(window_value.GetString("editor_name").has_value());
+    }
+
+    const auto* cases = parsed->GetArray("cases");
+    ASSERT_NE(cases, nullptr);
+    std::set<std::string> actual_cases;
+    for (const auto& item : *cases) {
+      ASSERT_TRUE(item.IsString());
+      actual_cases.insert(item.AsString());
+    }
+    EXPECT_EQ(actual_cases, expected_cases);
+    ASSERT_FALSE(cases->empty());
+    EXPECT_EQ(cases->back().AsString(), "C-010");
+  }
+}
+
+TEST(TargetConfigFilesTest, EdgeAndVsCodeDeclareDocumentedWorkarounds) {
+  const auto load = [](std::string_view id) {
+    return azookey::ipc::json::Parse(
+        ReadFile(std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / (std::string(id) + ".json")));
+  };
+
+  const auto edge = load("edge");
+  ASSERT_TRUE(edge);
+  const auto* edge_workarounds = edge->GetObject("workarounds");
+  ASSERT_NE(edge_workarounds, nullptr);
+  const azookey::ipc::json::Value edge_value(*edge_workarounds);
+  EXPECT_EQ(edge_value.GetBool("prefer_get_text_ext"), true);
+  EXPECT_EQ(edge_value.GetString("display_attribute_fallback"), "ime-default-rendering");
+  const auto* edge_launch = edge->GetObject("launch");
+  ASSERT_NE(edge_launch, nullptr);
+  const azookey::ipc::json::Value edge_launch_value(*edge_launch);
+  const auto* edge_document = edge_launch_value.GetObject("temporary_document");
+  ASSERT_NE(edge_document, nullptr);
+  EXPECT_EQ(azookey::ipc::json::Value(*edge_document).GetBool("save_before_close"), false);
+
+  const auto vscode = load("vscode");
+  ASSERT_TRUE(vscode);
+  const auto* vscode_workarounds = vscode->GetObject("workarounds");
+  ASSERT_NE(vscode_workarounds, nullptr);
+  const azookey::ipc::json::Value vscode_value(*vscode_workarounds);
+  EXPECT_EQ(vscode_value.GetBool("prefer_ime_candidates_during_preedit"), true);
+  EXPECT_EQ(vscode_value.GetBool("ignore_electron_ime_event_order"), true);
+}
+
+TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePeriod) {
+  TemporaryDirectory temp;
+  const auto path = temp.path() / "target.json";
+  constexpr std::string_view kTargetJson = R"json({
+    "id": "test-target",
+    "display_name": "Test target",
+    "app_id": "Test.App",
+    "automation_level": "full",
+    "launch": {
+      "executable": "test.exe",
+      "close_grace_period_ms": 5000,
+      "temporary_document": {
+        "extension": ".html",
+        "contents": "<textarea aria-label=\"compat editor\"></textarea>"
+      }
+    },
+    "window": {
+      "class": "TestWindow",
+      "edit_control_class": "TestEditor",
+      "editor_control_type": "edit",
+      "editor_name": "compat editor",
+      "candidate_window_class": "CandidateWindow"
+    },
+    "cases": ["C-001"],
+    "workarounds": {"use_temporary_document": false}
+  })json";
+  WriteFile(path, kTargetJson);
+
+  const auto config = LoadTargetConfig(path);
+  ASSERT_TRUE(config);
+  EXPECT_EQ(config->id, "test-target");
+  EXPECT_EQ(config->editor_control_type, "edit");
+  EXPECT_EQ(config->editor_name, L"compat editor");
+  EXPECT_TRUE(config->use_temporary_document);
+  EXPECT_TRUE(config->save_temporary_document_before_close);
+  EXPECT_EQ(config->close_grace_period_ms, 5000u);
+
+  const auto document = CreateTemporaryDocument(*config);
+  ASSERT_FALSE(document.empty());
+  EXPECT_EQ(document.extension(), L".html");
+  EXPECT_EQ(ReadFile(document), "<textarea aria-label=\"compat editor\"></textarea>");
+  std::error_code ec;
+  std::filesystem::remove(document, ec);
+  EXPECT_FALSE(ec);
+
+  std::string invalid_id(kTargetJson);
+  invalid_id.replace(invalid_id.find("test-target"), 11, "test_target");
+  WriteFile(path, invalid_id);
+  EXPECT_FALSE(LoadTargetConfig(path));
+
+  std::string invalid_control_type(kTargetJson);
+  invalid_control_type.replace(invalid_control_type.find("\"edit\""), 6, "\"button\"");
+  WriteFile(path, invalid_control_type);
+  EXPECT_FALSE(LoadTargetConfig(path));
+
+  std::string invalid_extension(kTargetJson);
+  invalid_extension.replace(invalid_extension.find(".html"), 5, "html");
+  WriteFile(path, invalid_extension);
+  EXPECT_FALSE(LoadTargetConfig(path));
+}
+
+TEST(TargetConfigLoaderTest, ResolvesSearchPathAppPathsAndQuotedConfiguredPaths) {
+  const auto notepad = ResolveExecutable(L"notepad.exe");
+  EXPECT_EQ(notepad.source, ExecutableResolutionSource::SearchPath);
+  EXPECT_TRUE(std::filesystem::exists(notepad.path));
+
+  const auto edge = ResolveExecutable(L"msedge.exe");
+  EXPECT_NE(edge.source, ExecutableResolutionSource::Unresolved);
+  EXPECT_TRUE(std::filesystem::exists(edge.path));
+
+  TemporaryDirectory temp;
+  const auto configured_path = temp.path() / "quoted app.exe";
+  WriteFile(configured_path, "");
+  const auto quoted = std::filesystem::path(L"\"" + configured_path.wstring() + L"\"");
+  const auto configured = ResolveExecutable(quoted);
+  EXPECT_EQ(configured.source, ExecutableResolutionSource::ConfiguredPath);
+  EXPECT_EQ(configured.path, configured_path);
+}
+
+TEST(CompatReportWriterTest, RejectsInvalidTargetId) {
+  TemporaryDirectory temp;
+  TargetConfig target;
+  target.id = "vs_code";
+  EXPECT_FALSE(WriteReports(temp.path(), target, {}));
 }
 
 TEST(CompatReportWriterTest, RejectsNonEmptyOutputDirectory) {

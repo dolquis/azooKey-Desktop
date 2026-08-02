@@ -249,6 +249,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   ipc::HandshakeResponse res;
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
+  res.host_generation_id = config_.host_generation_id;
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||

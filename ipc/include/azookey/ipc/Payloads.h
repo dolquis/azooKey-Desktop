@@ -20,6 +20,7 @@ struct HandshakeResponse {
   int protocol_version{1};
   bool accepted{false};
   bool model_loaded{false};
+  std::string host_generation_id;
   bool batch_romaji_conversion{false};
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};

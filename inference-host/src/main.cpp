@@ -1,11 +1,14 @@
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -42,6 +45,27 @@ azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
 
 constexpr const char* kHostVersion = "0.1.0";
 volatile std::sig_atomic_t g_signal_stop_requested = 0;
+
+std::string CreateHostGenerationId() {
+  std::array<unsigned char, 16> bytes{};
+  std::random_device random;
+  for (auto& byte : bytes) {
+    byte = static_cast<unsigned char>(random());
+  }
+  bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0fU) | 0x40U);
+  bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3fU) | 0x80U);
+
+  char buffer[37]{};
+  const auto as_uint = [](unsigned char value) { return static_cast<unsigned int>(value); };
+  const int written =
+      std::snprintf(buffer, sizeof(buffer),
+                    "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                    as_uint(bytes[0]), as_uint(bytes[1]), as_uint(bytes[2]), as_uint(bytes[3]),
+                    as_uint(bytes[4]), as_uint(bytes[5]), as_uint(bytes[6]), as_uint(bytes[7]),
+                    as_uint(bytes[8]), as_uint(bytes[9]), as_uint(bytes[10]), as_uint(bytes[11]),
+                    as_uint(bytes[12]), as_uint(bytes[13]), as_uint(bytes[14]), as_uint(bytes[15]));
+  return written == 36 ? std::string(buffer, 36) : std::string();
+}
 
 void HandleSignal(int) { g_signal_stop_requested = 1; }
 
@@ -398,6 +422,12 @@ int main(int argc, char** argv) {
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
+  dconf.host_generation_id = CreateHostGenerationId();
+  if (dconf.host_generation_id.empty()) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
+                    "host_generation_id_generation_failed");
+    std::cerr << "warn: failed to generate the inference Host generation ID" << std::endl;
+  }
 #if AZOOKEY_WITH_LLAMA_CPP
   dconf.runtime_tier = "llama_cpp";
 #else

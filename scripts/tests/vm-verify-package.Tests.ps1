@@ -97,7 +97,17 @@ Describe "VM verification package automation" {
         preset = "windows-release"
         buildType = "Release"
         generatedAtUtc = "2026-07-29T00:00:00.0000000+00:00"
-        files = @()
+        files = @(
+          [ordered]@{
+            path = "azookey_inference_host.exe"
+            role = "inference-host"
+            size = (Get-Item -LiteralPath (
+                Join-Path $Root "azookey_inference_host.exe")).Length
+            sha256 = (Get-FileHash `
+                -LiteralPath (Join-Path $Root "azookey_inference_host.exe") `
+                -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+        )
       } | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $Root "manifest.json") -Encoding UTF8
     }
@@ -266,6 +276,27 @@ Describe "VM verification package automation" {
     }
   }
 
+  Context "serving host pipe ownership" {
+    It "resolves the process that owns the named pipe" {
+      Mock Get-VmVerifyNamedPipeServerProcessId { 4242 }
+      Mock Get-Process {
+        [pscustomobject]@{
+          Id = 4242
+          Path = "C:\package\azookey_inference_host.exe"
+        }
+      } -ParameterFilter { $Id -eq 4242 }
+
+      $process = Get-VmVerifyServingHostProcess -PipeName "azookey-test"
+
+      $process.Id | Should -Be 4242
+      $process.Path | Should -BeExactly "C:\package\azookey_inference_host.exe"
+      Should -Invoke Get-VmVerifyNamedPipeServerProcessId `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter { $PipeName -eq "azookey-test" }
+    }
+  }
+
   Context "verify-bootstrap.ps1" {
     BeforeEach {
       $script:testPackageRoot = Join-Path $TestDrive "package"
@@ -289,6 +320,15 @@ Describe "VM verification package automation" {
         $script:bootstrapState.Pipe = $true
       }
       Mock Wait-VmVerifyPipe { $script:bootstrapState.Pipe }
+      Mock Get-VmVerifyServingHostProcess {
+        [pscustomobject]@{
+          Id = 4242
+          Path = (Join-Path $script:testPackageRoot "azookey_inference_host.exe")
+        }
+      }
+      Mock Invoke-VmVerifyHostSupervisorShutdown {}
+      Mock Wait-VmVerifyHostSupervisorStopped { $true }
+      Mock Invoke-VmVerifyHostProcessTermination { $script:bootstrapState.Pipe = $false }
       Mock Install-VmVerifyVCRuntime {
         $script:bootstrapState.Runtime = $true
       }
@@ -338,6 +378,7 @@ Describe "VM verification package automation" {
         "vcRuntimeInstalled",
         "tipRegistered",
         "hostSupervisorStarted")
+      $json.hostBinary.status | Should -Be "reused"
       @($json.checks.id) | Should -Be @(
         "vcRuntime",
         "tipRegistration",
@@ -345,6 +386,8 @@ Describe "VM verification package automation" {
         "microsoftIme",
         "vmCheckpoint",
         "debugView")
+      @($json.checks | Where-Object { $_.id -eq "inferenceHost" }).Count |
+        Should -Be 1
       @($json.checks.status | Where-Object {
           $_ -notin @("pass", "fail", "manual_required", "not_applicable")
         }).Count | Should -Be 0
@@ -371,7 +414,9 @@ Describe "VM verification package automation" {
       "kana`tword" | Set-Content -LiteralPath (Join-Path $dataDirectory "mock.tsv")
       $manifestPath = Join-Path $script:testPackageRoot "manifest.json"
       $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+      $hostEntry = @($manifest.files | Where-Object { $_.role -eq "inference-host" })[0]
       $manifest.files = @(
+        $hostEntry
         [pscustomobject]@{ path = "models/model.gguf"; role = "gguf-model" }
         [pscustomobject]@{ path = "azookey_zenzai_bench.exe"; role = "llama-preflight" }
         [pscustomobject]@{ path = "data/mock.tsv"; role = "mock-dictionary" }
@@ -399,6 +444,147 @@ Describe "VM verification package automation" {
         -Name "kTextServiceClsid"
 
       $script:VmVerifyTextServiceClsid | Should -BeExactly $expected
+    }
+
+    It "compares the serving host path and hash with the bundled manifest" {
+      $script:bootstrapState.Pipe = $true
+      $script:servingHostPath = Join-Path $script:testPackageRoot "azookey_inference_host.exe"
+      Mock Get-VmVerifyServingHostProcess {
+        [pscustomobject]@{ Id = 4242; Path = $script:servingHostPath }
+      }
+      $manifest = Get-Content -Raw -LiteralPath (
+        Join-Path $script:testPackageRoot "manifest.json") | ConvertFrom-Json
+
+      $matched = Get-VmVerifyServingHostBinary `
+        -PipeName "azookey-test" `
+        -HostExe (Join-Path $script:testPackageRoot "azookey_inference_host.exe") `
+        -Manifest $manifest
+      $matched.status | Should -Be "matched"
+
+      $script:servingHostPath = Join-Path $TestDrive "stale-host.exe"
+      "stale" | Set-Content -LiteralPath $script:servingHostPath
+      Mock Get-VmVerifyServingHostProcess {
+        [pscustomobject]@{ Id = 4242; Path = $script:servingHostPath }
+      }
+      $mismatched = Get-VmVerifyServingHostBinary `
+        -PipeName "azookey-test" `
+        -HostExe (Join-Path $script:testPackageRoot "azookey_inference_host.exe") `
+        -Manifest $manifest
+      $mismatched.status | Should -Be "mismatched"
+
+      $script:servingHostPath = Join-Path $TestDrive "copied-host.exe"
+      Copy-Item `
+        -LiteralPath (Join-Path $script:testPackageRoot "azookey_inference_host.exe") `
+        -Destination $script:servingHostPath
+      $differentPath = Get-VmVerifyServingHostBinary `
+        -PipeName "azookey-test" `
+        -HostExe (Join-Path $script:testPackageRoot "azookey_inference_host.exe") `
+        -Manifest $manifest
+      $differentPath.runningSha256 | Should -Be $differentPath.expectedSha256
+      $differentPath.status | Should -Be "mismatched"
+    }
+
+    It "restarts a serving host when its hash differs from the bundled host" {
+      $script:bootstrapState.Registered = $true
+      $script:bootstrapState.Pipe = $true
+      $script:hostInspectionCount = 0
+      Mock Get-VmVerifyServingHostBinary {
+        $script:hostInspectionCount++
+        [pscustomobject][ordered]@{
+          status = $(if ($script:hostInspectionCount -eq 1) { "mismatched" } else { "matched" })
+          reason = "test inspection"
+          processId = 4242
+          runningPath = "C:\package\host.exe"
+          runningSha256 = $(if ($script:hostInspectionCount -eq 1) { "a" * 64 } else { "b" * 64 })
+          expectedPath = "C:\package\azookey_inference_host.exe"
+          expectedSha256 = ("b" * 64)
+        }
+      }
+      Mock Wait-VmVerifyPipe {
+        param($PipeName, $TimeoutSeconds = 15, $ExpectedPresent = $true)
+        $null = $PipeName
+        $null = $TimeoutSeconds
+        return $script:bootstrapState.Pipe -eq $ExpectedPresent
+      }
+
+      $result = Invoke-VmVerifyBootstrap `
+        -PackageRoot $script:testPackageRoot `
+        -HasCheckpoint
+
+      $result.overallStatus | Should -Be "pass"
+      $result.hostBinary.status | Should -Be "restarted"
+      $script:hostInspectionCount | Should -Be 2
+      @($result.checks | Where-Object { $_.id -eq "inferenceHost" }).Count |
+        Should -Be 1
+      Should -Invoke Invoke-VmVerifyHostSupervisorShutdown -Times 1 -Exactly
+      Should -Invoke Invoke-VmVerifyHostProcessTermination `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter { $ProcessId -eq 4242 }
+      Should -Invoke Invoke-VmVerifyHostSupervisor -Times 1 -Exactly
+    }
+
+    It "records an unverified serving host as a warning instead of silently reusing it" {
+      $script:bootstrapState.Registered = $true
+      $script:bootstrapState.Pipe = $true
+      Mock Get-VmVerifyServingHostBinary {
+        [pscustomobject][ordered]@{
+          status = "unverified"
+          reason = "process path unavailable"
+          processId = 0
+          runningPath = ""
+          runningSha256 = ""
+          expectedPath = "C:\package\azookey_inference_host.exe"
+          expectedSha256 = ("b" * 64)
+        }
+      }
+
+      $result = Invoke-VmVerifyBootstrap `
+        -PackageRoot $script:testPackageRoot `
+        -HasCheckpoint `
+        -WarningAction SilentlyContinue
+
+      $result.overallStatus | Should -Be "warning"
+      $result.hostBinary.status | Should -Be "unverified"
+      @($result.checks | Where-Object { $_.id -eq "inferenceHost" }).status |
+        Should -Be "manual_required"
+      Should -Invoke Invoke-VmVerifyHostProcessTermination -Times 0 -Exactly
+      Should -Invoke Invoke-VmVerifyHostSupervisor -Times 0 -Exactly
+    }
+
+    It "fails with one public inference host check when the pipe stops before final verification" {
+      $script:bootstrapState.Registered = $true
+      $script:bootstrapState.Pipe = $true
+      $script:pipeProbeCount = 0
+      Mock Test-VmVerifyPipe {
+        $script:pipeProbeCount++
+        return $script:pipeProbeCount -eq 1
+      }
+      Mock Get-VmVerifyServingHostBinary {
+        [pscustomobject][ordered]@{
+          status = "matched"
+          reason = "internal preflight status"
+          processId = 4242
+          runningPath = "C:\package\azookey_inference_host.exe"
+          runningSha256 = ("b" * 64)
+          expectedPath = "C:\package\azookey_inference_host.exe"
+          expectedSha256 = ("b" * 64)
+        }
+      }
+
+      $result = Invoke-VmVerifyBootstrap `
+        -PackageRoot $script:testPackageRoot `
+        -HasCheckpoint
+
+      $result.overallStatus | Should -Be "fail"
+      $result.hostBinary.status | Should -Be "unverified"
+      $result.hostBinary.status | Should -BeIn @(
+        "reused", "restarted", "started", "unverified", "not_applicable")
+      $inferenceHostChecks = @($result.checks | Where-Object {
+          $_.id -eq "inferenceHost"
+        })
+      $inferenceHostChecks.Count | Should -Be 1
+      $inferenceHostChecks[0].status | Should -Be "fail"
     }
   }
 

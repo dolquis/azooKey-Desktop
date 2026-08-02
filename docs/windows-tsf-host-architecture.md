@@ -34,6 +34,10 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - 古い `request_id` は破棄（ライブ変換での逆転防止）。
   - 実装: `TextService::IpcWorkerThread` で `ipc_pending_id_` と受信 `req_id` を
     比較する staleness check。
+  - Handshake の `host_generation_id` が既知の値から変化した場合は request ID を更新し、
+    旧 Host 世代の in-flight 応答を stale 化する。pending 要求と候補表示待機状態は維持して
+    新世代へ再送し、旧候補キャッシュだけを破棄する。Handshake と応答処理は同一 IPC worker
+    で直列化されるため、request ID の不一致が旧世代応答の実効的な破棄経路になる。
 - 確定時は `shown_candidates_` をスナップショットし、in-flight `QueryCandidates`
   に `Cancel` を送ってから EditSession を要求する。
   Cancel は同じ Named Pipe への短命な control 接続を Handshake 済みにして送る。
@@ -59,7 +63,9 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 フィールドの要約。
 
 - ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, client_id?, handshake_token?)` /
-  応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded)`。
+  応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded,
+  host_generation_id?)`。`host_generation_id` は Host 起動ごとに生成し、同一プロセスの
+  全接続で共有する UUID。省略する旧 Host は空文字として受理する。
   `client_id` は primary / control 接続間で Cancel 名前空間を共有するための TIP インスタンス ID、
   `handshake_token` は per-connection 認証ゲートに使う（後述）。
 - ✅ `Ping` / `Health`

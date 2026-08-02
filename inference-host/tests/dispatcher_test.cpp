@@ -56,6 +56,7 @@ azookey::host::DispatcherConfig DefaultDispatcherConfig() {
   azookey::host::DispatcherConfig config;
   config.host_version = "0.1.0";
   config.protocol_version = kProtocolVersion;
+  config.host_generation_id = "dispatcher-test-generation";
   return config;
 }
 
@@ -142,6 +143,7 @@ TEST_F(DispatcherTest, Handshake) {
   auto parsed = ipc::ParseHandshakeResponse(resp->payload_json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_TRUE(parsed->accepted);
+  EXPECT_EQ(parsed->host_generation_id, "dispatcher-test-generation");
 
   ipc::HandshakeRequest bad = req;
   bad.protocol_version = 999;

@@ -70,6 +70,7 @@ TEST(PayloadsTest, Handshake) {
   res.host_version = "0.1.0";
   res.accepted = true;
   res.model_loaded = false;
+  res.host_generation_id = "9c633fc2-6107-4c22-aa71-872135548eee";
   res.batch_romaji_conversion = true;
   res.batch_romaji_preview_style = "romaji";
   res.batch_conversion_mode = "neural";
@@ -79,10 +80,16 @@ TEST(PayloadsTest, Handshake) {
   ASSERT_TRUE(parsed2.has_value());
   EXPECT_TRUE(parsed2->accepted);
   EXPECT_FALSE(parsed2->model_loaded);
+  EXPECT_EQ(parsed2->host_generation_id, "9c633fc2-6107-4c22-aa71-872135548eee");
   EXPECT_TRUE(parsed2->batch_romaji_conversion);
   EXPECT_EQ(parsed2->batch_romaji_preview_style, "romaji");
   EXPECT_EQ(parsed2->batch_conversion_mode, "neural");
   EXPECT_TRUE(parsed2->batch_auto_punctuation);
+
+  auto legacy_response = azookey::ipc::ParseHandshakeResponse(
+      R"({"host_version":"0.1.0","protocol_version":1,"accepted":true})");
+  ASSERT_TRUE(legacy_response.has_value());
+  EXPECT_TRUE(legacy_response->host_generation_id.empty());
 }
 
 TEST(PayloadsTest, Ping) {

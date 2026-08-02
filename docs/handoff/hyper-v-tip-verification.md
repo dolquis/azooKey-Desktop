@@ -95,7 +95,13 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   VC++ Redistributable と machine-wide TIP 登録が必要な箇所だけ UAC で昇格するため、
   HKCU の自動起動設定と per-user pipe は対話ユーザーに紐づく。
 - 期待する DLL が登録済みなら `register-dev.ps1` を再実行しない。
-  pipe が存在すれば supervisor も再起動しないため、同じ展開先で繰り返し実行できる。
+  pipe が存在する場合は、serving 中 Host の実行ファイルパスと SHA-256 を
+  同梱 Host および `manifest.json` の `inference-host` と照合する。両方が一致すれば
+  既存 Host を再利用し、
+  不一致なら既存 supervisor と Host を停止して同梱 Host で再起動する。
+  `-Json` の `hostBinary.status` は `reused` / `restarted` / `started` /
+  `unverified` / `not_applicable` を返す。実行ファイルパスや hash を取得できない場合は
+  黙って再利用せず warning とし、`hostBinary.reason` に理由を記録する。
 - manifest に mock dictionary または GGUF が含まれる場合は bootstrap が自動で host
   引数へ渡す。別ファイルを使う場合だけ `-MockDictionaryPath` または `-ModelPath` を
   明示する。

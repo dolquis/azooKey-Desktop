@@ -106,6 +106,9 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("protocol_version", j::Value(p.protocol_version));
   o.emplace("accepted", j::Value(p.accepted));
   o.emplace("model_loaded", j::Value(p.model_loaded));
+  if (!p.host_generation_id.empty()) {
+    o.emplace("host_generation_id", j::Value(p.host_generation_id));
+  }
   o.emplace("batch_romaji_conversion", j::Value(p.batch_romaji_conversion));
   o.emplace("batch_romaji_preview_style", j::Value(p.batch_romaji_preview_style));
   o.emplace("batch_conversion_mode", j::Value(p.batch_conversion_mode));
@@ -123,6 +126,7 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.protocol_version = static_cast<int>(v->GetInt("protocol_version").value_or(1));
   p.accepted = v->GetBool("accepted").value_or(false);
   p.model_loaded = v->GetBool("model_loaded").value_or(false);
+  p.host_generation_id = v->GetString("host_generation_id").value_or(std::string());
   p.batch_romaji_conversion = v->GetBool("batch_romaji_conversion").value_or(false);
   p.batch_romaji_preview_style =
       v->GetString("batch_romaji_preview_style").value_or(std::string("kana"));

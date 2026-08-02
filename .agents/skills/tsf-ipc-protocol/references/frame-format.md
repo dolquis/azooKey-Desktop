@@ -118,6 +118,26 @@ Host / TIP の両プロセスに同じ `AZOOKEY_IPC_HANDSHAKE_TOKEN` を明示�
 TIPのprimary接続とCancel用control接続はそれぞれHandshakeを行う。同じTIPインスタンスは
 両接続に同じ非空`client_id`を送り、HostのCancel/latest状態を他プロセスと分離する。
 
+`HandshakeResponse` の wire payload は次のとおり。既存フィールドの意味は変更せず、
+`host_generation_id` は protocol v1 への省略可能な追加フィールドとして扱う。
+
+| wire key | 型 | 契約 |
+|---|---|---|
+| `host_version` | `string` | 必須。Host バイナリの版数 |
+| `protocol_version` | `int` | 省略時は v1 |
+| `accepted` | `bool` | 省略時は `false` |
+| `model_loaded` | `bool` | 省略時は `false` |
+| `host_generation_id` | `string` | 省略時は空文字。Host プロセス起動時に生成する UUID で、同一プロセスの全接続に共通 |
+| `batch_romaji_conversion` | `bool` | 省略時は `false` |
+| `batch_romaji_preview_style` | `string` | 省略時は `kana` |
+| `batch_conversion_mode` | `string` | 省略時は `neural` |
+| `batch_auto_punctuation` | `bool` | 省略時は `false` |
+
+TIP は初回の非空 `host_generation_id` を保存し、同じ値への再接続では pending 要求を
+維持する。既知の値から別の値（省略を含む）へ変わった場合は、Handshake 成立後に
+旧世代向けの pending / in-flight 要求と候補表示待機状態を破棄する。要求送信時の世代と
+応答反映時の世代が一致しない場合も、その応答を stale として破棄する。
+
 ## timeout、Cancel、接続回復
 
 - `Receive()`はブロッキングである。
@@ -128,6 +148,8 @@ TIPのprimary接続とCancel用control接続はそれぞれHandshakeを行う。
 - Cancelは応答待ちのprimary接続を塞がないよう、Handshake済みの短命control接続を優先する。
   control接続が使えなければprimary接続へbest-effortでqueueする。
 - TIPのUI側は`request_id`でstale responseを破棄し、再接続前の古い結果を表示しない。
+- TIPはHandshakeで得た`host_generation_id`も照合し、Host再起動前の世代に属する
+  pending / in-flight要求と遅延応答を破棄する。
 
 ## 変更時の同期チェックリスト
 

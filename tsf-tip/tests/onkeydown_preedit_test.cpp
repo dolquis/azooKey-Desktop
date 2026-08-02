@@ -780,6 +780,78 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcResponseMatchingRequiresExpectedType) {
       response, 4, azookey::ipc::MessageType::CommitObservation));
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeDropsQueryRearmedAfterDisconnect) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-host-generation-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<bool> first_query_received{false};
+  std::atomic<bool> replacement_handshake_received{false};
+  std::atomic<bool> replacement_query_received{false};
+
+  azookey::ipc::NamedPipeServer first_server;
+  ASSERT_TRUE(first_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "test-host";
+          payload.host_generation_id = "generation-a";
+          payload.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+          first_query_received.store(true);
+        }
+        return std::nullopt;
+      }));
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return first_query_received.load(); }));
+
+  first_server.Stop();
+
+  azookey::ipc::NamedPipeServer replacement_server;
+  ASSERT_TRUE(replacement_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          replacement_handshake_received.store(true);
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "test-host";
+          payload.host_generation_id = "generation-b";
+          payload.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+          replacement_query_received.store(true);
+        }
+        return std::nullopt;
+      }));
+
+  ASSERT_TRUE(WaitUntil([&] { return replacement_handshake_received.load(); }));
+  ASSERT_TRUE(WaitUntil([&] {
+    return replacement_query_received.load() || !h.service.has_pending_ipc_query_for_test();
+  }));
+  EXPECT_FALSE(replacement_query_received.load());
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+
+  h.service.stop_ipc_worker_for_test();
+  replacement_server.Stop();
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallback) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-tip-qc-timeout-test-" + std::to_string(GetCurrentProcessId());

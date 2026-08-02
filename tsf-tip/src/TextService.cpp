@@ -1468,6 +1468,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     return false;
   }
   if (update_host_options) {
+    ObserveHostGeneration(hpayload->host_generation_id);
     batch_romaji_conversion_.store(hpayload->batch_romaji_conversion, std::memory_order_relaxed);
     batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
                                        std::memory_order_relaxed);
@@ -1475,8 +1476,47 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
                                        std::memory_order_relaxed);
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
-               {{"host_version", SafeLogText(hpayload->host_version)}});
+               {{"host_version", SafeLogText(hpayload->host_version)},
+                {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
   }
+  return true;
+}
+
+bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
+  std::string previous_generation_id;
+  bool first_observation = false;
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    if (!ipc_has_known_host_generation_) {
+      if (host_generation_id.empty()) return false;
+      ipc_has_known_host_generation_ = true;
+      ipc_host_generation_id_ = host_generation_id;
+      first_observation = true;
+    } else if (ipc_host_generation_id_ != host_generation_id) {
+      previous_generation_id = ipc_host_generation_id_;
+      ipc_host_generation_id_ = host_generation_id;
+      ++ipc_pending_id_;
+      ipc_has_request_ = false;
+      ipc_inflight_id_ = 0;
+      changed = true;
+    }
+  }
+
+  if (first_observation) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_host_generation_observed",
+               {{"host_generation_id", SafeLogText(host_generation_id)}});
+  }
+  if (!changed) return false;
+
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    candidates_.clear();
+    candidate_window_show_pending_ = false;
+  }
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_host_generation_changed",
+             {{"previous_host_generation_id", SafeLogText(previous_generation_id)},
+              {"host_generation_id", SafeLogText(host_generation_id)}});
   return true;
 }
 
@@ -1584,6 +1624,7 @@ void TextService::ServeConnection() {
     uint64_t req_id = 0;
     bool has_qc = false;
     bool is_batch = false;
+    std::string request_host_generation_id;
     std::vector<IpcSendItem> to_send;
 
     {
@@ -1677,6 +1718,7 @@ void TextService::ServeConnection() {
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = req_id;
+      request_host_generation_id = ipc_host_generation_id_;
     }
 
     if (!ipc_client_.Send(qenv)) {
@@ -1921,7 +1963,8 @@ void TextService::ServeConnection() {
     bool is_fresh = false;
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
-      is_fresh = !ipc_has_request_ && (req_id == ipc_pending_id_);
+      is_fresh = !ipc_has_request_ && (req_id == ipc_pending_id_) &&
+                 (request_host_generation_id == ipc_host_generation_id_);
     }
 
     if (is_fresh) {

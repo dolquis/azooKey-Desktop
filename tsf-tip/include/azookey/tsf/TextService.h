@@ -195,6 +195,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // ID of the QueryCandidates currently sent but not yet received (0 = none).
   // Protected by ipc_mtx_; written by the worker thread, read by TIP thread.
   uint64_t ipc_inflight_id_{0};
+  std::string ipc_host_generation_id_;
+  bool ipc_has_known_host_generation_{false};
 
   // Fire-and-forget IPC send queue: CommitObservation, Cancel (M6, M10).
   // For Cancel items, cancel_target_id carries the target_request_id so the
@@ -229,6 +231,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool WaitForReconnectOrStop(uint32_t delay_ms);
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                 ipc::MessageType expected_type);
+  bool ObserveHostGeneration(const std::string& host_generation_id);
   void RearmPendingQuery(uint64_t req_id);
   void PostQueryCandidates(const std::string& reading);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);

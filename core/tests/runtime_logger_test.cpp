@@ -115,6 +115,10 @@ TEST(RuntimeLoggerTest, SchemaSnapshotIsStableJsonLine) {
 }
 
 TEST(RuntimeLoggerTest, SensitiveBodiesAreRedacted) {
+  EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("candidate"));
+  EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("preedit_text"));
+  EXPECT_FALSE(azookey::logging::IsSensitiveRuntimeLogField("request_id"));
+
   RuntimeLogRecord record{
       "2026-07-30T12:34:56.789Z",
       "tip",

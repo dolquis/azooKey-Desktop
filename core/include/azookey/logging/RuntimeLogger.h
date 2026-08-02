@@ -53,6 +53,7 @@ struct RuntimeLoggerOptions {
 RuntimeLoggerOptions RuntimeLoggerOptionsFromEnvironment(
     std::string component, std::filesystem::path logs_directory = {}) noexcept;
 
+bool IsSensitiveRuntimeLogField(std::string_view key);
 std::string SerializeRuntimeLogRecord(const RuntimeLogRecord& record);
 
 class RuntimeLogger {

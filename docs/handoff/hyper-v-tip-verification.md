@@ -143,7 +143,7 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 
 | 症状 | 原因・対処 |
 |---|---|
-| azooKey が言語一覧に出ない | `azookey_diag.exe --json` で D-001〜D-003 を確認する。`error` の場合は管理者 PowerShell で `azookey_diag.exe --repair` を実行する。`permission_denied` は非昇格で実行した状態、互換 DLL が見つからない場合は `register-dev.ps1 -TipDllPath <path>` または MSIX 修復が必要な状態を示す。 |
+| azooKey が言語一覧に出ない | `azookey_diag.exe --json` で D-001〜D-003 を確認する。`error` の場合は管理者 PowerShell で `azookey_diag.exe --repair` を実行する。`permission_denied` は非昇格で実行した状態、互換 DLL が見つからない場合は `register-dev.ps1 -TipDllPath <path>` または MSIX 修復が必要な状態を示す。`--repair` は AppContainer ACL を付与しないため、UWP または Microsoft Store アプリを検証する前に `register-dev.ps1 -TipDllPath <path>` を実行する。 |
 | preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（手順4）。 |
 | `logs/` が作成されない、または診断 ZIP にログがない | `azookey_diag.exe --json` で D-013 を確認する。`error` の場合は `azookey_diag.exe --repair` で `%LOCALAPPDATA%\azooKey\logs\` を作成し、再診断結果を確認する。 |
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順5）。 |

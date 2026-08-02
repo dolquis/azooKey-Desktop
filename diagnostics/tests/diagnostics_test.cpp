@@ -199,6 +199,10 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
            << '\n';
     output << "invalid private input body\n";
   }
+  {
+    std::ofstream output(logs_directory / "host-20260802.jsonl.1");
+    output << R"({"event":"rotated","surface":"private rotated surface"})" << '\n';
+  }
   const auto old_log = logs_directory / "tip-20260701.jsonl";
   {
     std::ofstream output(old_log);
@@ -209,9 +213,9 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
 
   const auto entries = diag::BuildCollectionEntries(result);
   const std::vector<std::string> expected_names = {
-      "diag.json",         "settings.redacted.json",   "host-health.json",
-      "ipc-ping.json",     "logs/host-20260802.jsonl", "environment.txt",
-      "crash-summary.txt",
+      "diag.json",       "settings.redacted.json",   "host-health.json",
+      "ipc-ping.json",   "logs/host-20260802.jsonl", "logs/host-20260802.jsonl.1",
+      "environment.txt", "crash-summary.txt",
   };
   ASSERT_EQ(entries.size(), expected_names.size());
   for (size_t index = 0; index < entries.size(); ++index) {
@@ -226,6 +230,7 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   EXPECT_EQ(combined.find("sk-runtime-secret"), std::string::npos);
   EXPECT_EQ(combined.find("private candidate body"), std::string::npos);
   EXPECT_EQ(combined.find("private reading body"), std::string::npos);
+  EXPECT_EQ(combined.find("private rotated surface"), std::string::npos);
   EXPECT_EQ(combined.find("private input body"), std::string::npos);
   EXPECT_EQ(combined.find("too_old_to_collect"), std::string::npos);
   EXPECT_EQ(combined.find("alice"), std::string::npos);
@@ -234,6 +239,67 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   EXPECT_NE(combined.find("%USERPROFILE%"), std::string::npos);
 
   std::filesystem::remove(settings_path, ec);
+  std::filesystem::remove_all(logs_directory, ec);
+}
+
+TEST(DiagnosticsTest, CollectionBoundsEachRuntimeLogAndReportsTruncation) {
+  const auto logs_directory = TempPath("azookey-diag-bounded-runtime-logs");
+  std::error_code ec;
+  std::filesystem::remove_all(logs_directory, ec);
+  ASSERT_TRUE(std::filesystem::create_directories(logs_directory));
+  {
+    std::ofstream output(logs_directory / "tip-20260802.jsonl.1");
+    for (int index = 0; index < 30000; ++index) {
+      output << R"({"event":"bulk","candidate":"private body","index":)" << index << "}\n";
+    }
+  }
+
+  diag::ProbeResult result;
+  result.logs_directory = logs_directory;
+  const auto entries = diag::BuildCollectionEntries(result);
+  const auto log = std::find_if(entries.begin(), entries.end(), [](const auto& entry) {
+    return entry.name == "logs/tip-20260802.jsonl.1";
+  });
+  const auto note = std::find_if(entries.begin(), entries.end(),
+                                 [](const auto& entry) { return entry.name == "logs/README.txt"; });
+  ASSERT_NE(log, entries.end());
+  ASSERT_NE(note, entries.end());
+  EXPECT_LE(log->content.size(), 1024U * 1024U);
+  EXPECT_EQ(log->content.find("private body"), std::string::npos);
+  EXPECT_NE(log->content.find(R"("index":29999)"), std::string::npos);
+  EXPECT_NE(note->content.find("Truncated files: 1"), std::string::npos);
+
+  std::filesystem::remove_all(logs_directory, ec);
+}
+
+TEST(DiagnosticsTest, CollectionBoundsTotalRuntimeLogBytes) {
+  const auto logs_directory = TempPath("azookey-diag-total-bounded-runtime-logs");
+  std::error_code ec;
+  std::filesystem::remove_all(logs_directory, ec);
+  ASSERT_TRUE(std::filesystem::create_directories(logs_directory));
+  const std::string padding(220, 'x');
+  for (int file_index = 1; file_index <= 9; ++file_index) {
+    const auto path = logs_directory / ("tip-2026080" + std::to_string(file_index) + ".jsonl.1");
+    std::ofstream output(path);
+    for (int line_index = 0; line_index < 6000; ++line_index) {
+      output << R"({"event":"bulk","detail":")" << padding << R"(","index":)" << line_index
+             << "}\n";
+    }
+  }
+
+  diag::ProbeResult result;
+  result.logs_directory = logs_directory;
+  const auto entries = diag::BuildCollectionEntries(result);
+  uintmax_t collected_log_bytes = 0;
+  const diag::ArchiveEntry* note = nullptr;
+  for (const auto& entry : entries) {
+    if (entry.name.rfind("logs/tip-", 0) == 0) collected_log_bytes += entry.content.size();
+    if (entry.name == "logs/README.txt") note = &entry;
+  }
+  EXPECT_LE(collected_log_bytes, 8U * 1024U * 1024U);
+  ASSERT_NE(note, nullptr);
+  EXPECT_NE(note->content.find("8388608 bytes total"), std::string::npos);
+
   std::filesystem::remove_all(logs_directory, ec);
 }
 
@@ -350,7 +416,15 @@ TEST(DiagnosticsTest, LogsProbeUsesRuntimeLoggerPathAndRepairCreatesDirectory) {
   EXPECT_FALSE(diag::ProbeLogsDirectory(logs_directory));
   std::string error;
   EXPECT_TRUE(diag::RepairLogsDirectory(logs_directory, &error)) << error;
+  const auto stale_probe = logs_directory / ".azookey-diag-write-probe-stale.tmp";
+  const auto fresh_probe = logs_directory / ".azookey-diag-write-probe-fresh.tmp";
+  std::ofstream(stale_probe) << "stale";
+  std::ofstream(fresh_probe) << "fresh";
+  std::filesystem::last_write_time(
+      stale_probe, std::filesystem::file_time_type::clock::now() - std::chrono::hours(48));
   EXPECT_TRUE(diag::ProbeLogsDirectory(logs_directory));
+  EXPECT_FALSE(std::filesystem::exists(stale_probe));
+  EXPECT_TRUE(std::filesystem::exists(fresh_probe));
   std::filesystem::remove_all(logs_directory, ec);
 }
 
@@ -397,6 +471,9 @@ TEST(DiagnosticsTest, RepairRunsRegistrationOnceAndRechecksEveryRepairableItem) 
   EXPECT_TRUE(diag::RepairReportSucceeded(repair));
   const auto json = j::Parse(diag::SerializeRepairReport(repair));
   ASSERT_TRUE(json.has_value());
+  EXPECT_EQ(json->GetBool("probe_failed"), false);
+  ASSERT_NE(json->GetArray("checks"), nullptr);
+  EXPECT_TRUE(json->GetString("status").has_value());
   ASSERT_NE(json->GetArray("repairs"), nullptr);
   EXPECT_EQ(json->GetArray("repairs")->size(), 4U);
 }
@@ -480,8 +557,50 @@ TEST(DiagnosticsTest, RepairReportsPostProbeFailureWithoutClaimingSuccess) {
   EXPECT_TRUE(repair.probe_failed);
   EXPECT_FALSE(diag::RepairReportSucceeded(repair));
   EXPECT_TRUE(std::all_of(repair.repairs.begin(), repair.repairs.end(), [](const auto& item) {
-    return item.status == diag::RepairStatus::Failed;
+    return item.status == diag::RepairStatus::NotNeeded && !item.after_status.has_value();
   }));
+  const auto json = j::Parse(diag::SerializeRepairReport(repair));
+  ASSERT_TRUE(json.has_value());
+  EXPECT_EQ(json->GetBool("probe_failed"), true);
+  const auto* repairs = json->GetArray("repairs");
+  ASSERT_NE(repairs, nullptr);
+  ASSERT_FALSE(repairs->empty());
+  const auto* after_status = repairs->front().Find("after_status");
+  ASSERT_NE(after_status, nullptr);
+  EXPECT_TRUE(after_status->IsNull());
+}
+
+TEST(DiagnosticsTest, RepairReportsRegistrationRegressionAfterRollback) {
+  diag::Snapshot before_snapshot;
+  before_snapshot.tip_path_registered = true;
+  before_snapshot.tip_path_exists = true;
+  before_snapshot.tip_bitness_matches = true;
+  before_snapshot.language_profile_registered = true;
+  before_snapshot.logs_directory_writable = true;
+  diag::ProbeResult before;
+  before.report = diag::EvaluateSnapshot(before_snapshot, 1);
+
+  diag::Snapshot after_snapshot;
+  after_snapshot.logs_directory_writable = true;
+  diag::ProbeResult after;
+  after.report = diag::EvaluateSnapshot(after_snapshot, 2);
+
+  int probes = 0;
+  diag::RepairHooks hooks;
+  hooks.probe_system = [&] { return probes++ == 0 ? before : after; };
+  hooks.repair_registration = [](const diag::ProbeResult&) {
+    return diag::RepairOperationResult{diag::RepairStatus::Failed, "regsvr32 failed"};
+  };
+  const auto repair = diag::RepairSystem(hooks);
+  ASSERT_EQ(repair.repairs.size(), 4U);
+  EXPECT_EQ(repair.repairs[0].status, diag::RepairStatus::Failed);
+  EXPECT_EQ(repair.repairs[0].before_status, diag::Status::Ok);
+  EXPECT_EQ(repair.repairs[0].after_status, diag::Status::Error);
+  EXPECT_NE(repair.repairs[0].message.find("regressed"), std::string::npos);
+  EXPECT_EQ(repair.repairs[1].status, diag::RepairStatus::Failed);
+  EXPECT_EQ(repair.repairs[2].status, diag::RepairStatus::Failed);
+  EXPECT_NE(repair.repairs[2].message.find("regressed"), std::string::npos);
+  EXPECT_EQ(repair.repairs[3].status, diag::RepairStatus::NotNeeded);
 }
 
 TEST(DiagnosticsTest, EmbeddedSchemaAndDefaultSettingsStaySupported) {

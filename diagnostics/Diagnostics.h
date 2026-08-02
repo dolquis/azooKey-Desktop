@@ -83,7 +83,7 @@ struct RepairResult {
   std::string id;
   RepairStatus status{RepairStatus::Failed};
   Status before_status{Status::Error};
-  Status after_status{Status::Error};
+  std::optional<Status> after_status;
   std::string message;
 };
 

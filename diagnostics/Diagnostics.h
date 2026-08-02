@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -53,14 +54,49 @@ struct Snapshot {
   uint64_t learning_entries{};
   uint64_t user_dict_entries{};
   uint64_t user_dict_skipped_entries{};
+  bool logs_directory_writable{false};
   std::optional<ipc::QueryDiagnosticsPayload> host_diagnostics;
 };
 
 struct ProbeResult {
   Report report;
   std::filesystem::path settings_path;
+  std::filesystem::path tip_path;
+  std::filesystem::path logs_directory;
   std::string host_health_json;
   std::string ipc_ping_json;
+};
+
+enum class RepairStatus {
+  Succeeded,
+  Failed,
+  NotNeeded,
+  PermissionDenied,
+};
+
+struct RepairOperationResult {
+  RepairStatus status{RepairStatus::Failed};
+  std::string message;
+};
+
+struct RepairResult {
+  std::string id;
+  RepairStatus status{RepairStatus::Failed};
+  Status before_status{Status::Error};
+  std::optional<Status> after_status;
+  std::string message;
+};
+
+struct RepairReport {
+  Report report;
+  std::vector<RepairResult> repairs;
+  bool probe_failed{false};
+};
+
+struct RepairHooks {
+  std::function<ProbeResult()> probe_system;
+  std::function<RepairOperationResult(const ProbeResult&)> repair_registration;
+  std::function<RepairOperationResult(const std::filesystem::path&)> repair_logs_directory;
 };
 
 struct ArchiveEntry {
@@ -73,12 +109,20 @@ std::string SerializeReport(const Report& report);
 std::string StatusName(Status status);
 
 ProbeResult ProbeSystem();
+RepairReport RepairSystem();
+RepairReport RepairSystem(const RepairHooks& hooks);
+std::string SerializeRepairReport(const RepairReport& report);
+std::string RepairStatusName(RepairStatus status);
+bool RepairReportSucceeded(const RepairReport& report);
 
 bool ProbeSettingsFile(const std::filesystem::path& path);
 bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries);
 bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
                              uint64_t* skipped_entries);
 bool EmbeddedSettingsSchemaUsesOnlySupportedKeywords();
+std::filesystem::path RuntimeLogsDirectory();
+bool ProbeLogsDirectory(const std::filesystem::path& path);
+bool RepairLogsDirectory(const std::filesystem::path& path, std::string* error);
 
 std::string RedactSettingsJson(std::string_view json);
 std::string RedactFreeText(std::string text);

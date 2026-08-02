@@ -53,17 +53,6 @@ std::string LowerAscii(std::string value) {
   return value;
 }
 
-bool IsSensitiveField(std::string_view key) {
-  const auto lower = LowerAscii(std::string(key));
-  constexpr std::array<std::string_view, 10> fragments = {
-      "reading", "surface", "candidate", "prompt", "raw_key",
-      "title",   "text",    "preedit",   "query",  "composition",
-  };
-  return std::any_of(fragments.begin(), fragments.end(), [&lower](std::string_view fragment) {
-    return lower.find(fragment) != std::string::npos;
-  });
-}
-
 bool IsReservedField(std::string_view key) {
   return key == "ts" || key == "component" || key == "level" || key == "event";
 }
@@ -179,7 +168,7 @@ std::string SerializeFieldValue(const RuntimeLogField& field) {
       [&field](const auto& value) -> std::string {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, RuntimeLogSafeText>) {
-          const std::string text = IsSensitiveField(field.key)
+          const std::string text = IsSensitiveRuntimeLogField(field.key)
                                        ? std::string(kRedacted)
                                        : azookey::core::RedactFreeText(value.value);
           return "\"" + EscapeJson(text) + "\"";
@@ -329,6 +318,17 @@ void AppendLine(const RuntimeLoggerOptions& options, const std::filesystem::path
 }
 
 }  // namespace
+
+bool IsSensitiveRuntimeLogField(std::string_view key) {
+  const auto lower = LowerAscii(std::string(key));
+  constexpr std::array<std::string_view, 10> fragments = {
+      "reading", "surface", "candidate", "prompt", "raw_key",
+      "title",   "text",    "preedit",   "query",  "composition",
+  };
+  return std::any_of(fragments.begin(), fragments.end(), [&lower](std::string_view fragment) {
+    return lower.find(fragment) != std::string::npos;
+  });
+}
 
 RuntimeLoggerOptions RuntimeLoggerOptionsFromEnvironment(
     std::string component, std::filesystem::path logs_directory) noexcept {

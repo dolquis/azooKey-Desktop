@@ -143,8 +143,9 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 
 | 症状 | 原因・対処 |
 |---|---|
-| azooKey が言語一覧に出ない | 管理者で登録したか。診断: `regsvr32 azookey_tsf_tip.dll`（`/s` 無し）。`0x8007007E`（モジュール無し）なら VC++ Redist 未導入（手順3）。 |
+| azooKey が言語一覧に出ない | `azookey_diag.exe --json` で D-001〜D-003 を確認する。`error` の場合は管理者 PowerShell で `azookey_diag.exe --repair` を実行する。`permission_denied` は非昇格で実行した状態、互換 DLL が見つからない場合は `register-dev.ps1 -TipDllPath <path>` または MSIX 修復が必要な状態を示す。`--repair` は AppContainer ACL を付与しないため、UWP または Microsoft Store アプリを検証する前に `register-dev.ps1 -TipDllPath <path>` を実行する。 |
 | preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（手順4）。 |
+| `logs/` が作成されない、または診断 ZIP にログがない | `azookey_diag.exe --json` で D-013 を確認する。`error` の場合は `azookey_diag.exe --repair` で `%LOCALAPPDATA%\azooKey\logs\` を作成し、再診断結果を確認する。 |
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順5）。 |
 | 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp:1001` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
 

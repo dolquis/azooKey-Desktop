@@ -72,14 +72,15 @@ VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V 
 ### 4.3 スパイクで確認する未確認点
 
 次の 4 点は文書と API 仕様から確定できないため、L1（§5）の導入前にスパイクで確認する。
+各項目は Linear に個別課題として起票済みで、実施結果と判断は各課題側に残す。
 
-- 管理者資格の PowerShell Direct セッションで `verify-bootstrap.ps1` の管理者判定が真になるか。
+- 管理者資格の PowerShell Direct セッションで `verify-bootstrap.ps1` の管理者判定が真になるか（DEV-730）。
   bootstrap は非管理者のとき `Start-Process -Verb RunAs`（UAC ダイアログ）で昇格するが、非対話セッションでは同意ダイアログを表示できない。
   判定が真ならこの分岐を踏まず、そのまま実行できる。
-- PowerShell Direct セッションで構成した per-user host pipe に、対話セッション側の TIP が接続できるか。
+- PowerShell Direct セッションで構成した per-user host pipe に、対話セッション側の TIP が接続できるか（DEV-731）。
   named pipe の名前空間はセッションをまたぐが、HKCU の自動起動設定が効くのは次回の対話ログオンからである。
-- windows-mcp の入力送出が VMConnect 基本セッションウィンドウへ届くか。
-- `Msvm_Keyboard` 注入時の候補ウィンドウ挙動を、スクリーンショットと画像読解だけで判定できるか。
+- windows-mcp の入力送出が VMConnect 基本セッションウィンドウへ届くか（DEV-732）。
+- `Msvm_Keyboard` 注入時の候補ウィンドウ挙動を、スクリーンショットと画像読解だけで判定できるか（DEV-733）。
 
 ### 4.4 Claude Code と Codex CLI の比較
 

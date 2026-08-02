@@ -12,6 +12,7 @@
       "--skip-release-notes",
       "--skip-welcome"
     ],
+    "close_grace_period_ms": 5000,
     "temporary_document": {
       "extension": ".txt",
       "contents": ""

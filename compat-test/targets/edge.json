@@ -11,6 +11,7 @@
       "--inprivate",
       "--no-first-run"
     ],
+    "close_grace_period_ms": 5000,
     "temporary_document": {
       "extension": ".html",
       "contents": "<!doctype html><meta charset=\"utf-8\"><title>azooKey compatibility test</title><textarea autofocus aria-label=\"azooKey compatibility editor\" style=\"width:80vw;height:70vh;font-size:20px\"></textarea>",
@@ -22,6 +23,7 @@
     "class_fallbacks": [],
     "edit_control_class": "Chrome_RenderWidgetHostHWND",
     "editor_control_type": "edit",
+    "editor_name": "azooKey compatibility editor",
     "candidate_window_class": "azooKeyCandidateWnd"
   },
   "cases": [
@@ -35,5 +37,5 @@
     "display_attribute_fallback": "ime-default-rendering",
     "redact_target_and_candidate_windows": true
   },
-  "notes": "Edge は M50 gate の full automation target。runner は外部通信を行わない一時 HTML を InPrivate の新規ウィンドウで開く。候補位置は ITfContextView::GetTextExt を優先し、display attribute が完全反映されない場合は IME 既定描画へフォールバックする。C-010 は最後に実行する。"
+  "notes": "Edge は M50 gate の full automation target。runner は外部通信を行わない一時 HTML を InPrivate の新規ウィンドウで開き、UIA Name と ControlType の両方で textarea を特定してアドレスバーを除外する。候補位置は ITfContextView::GetTextExt を優先し、display attribute が完全反映されない場合は IME 既定描画へフォールバックする。C-010 は最後に実行する。"
 }

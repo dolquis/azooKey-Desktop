@@ -30,6 +30,8 @@ Notepad は空の一時テキストファイル、VS Code は拡張機能を無�
 一時テキストファイル、Edge は InPrivate の新規ウィンドウと外部通信を行わない一時 HTML
 を使う。runner は App Paths も検索するため、`Code.exe` / `msedge.exe` が `PATH` に無い
 標準インストールにも対応する。
+Edge の textarea は UIA ControlType と `aria-label` 由来の Name の両方で特定し、
+同じ Edit control type を持つアドレスバーを対象から除外する。
 
 azooKey TIP の登録と選択は machine-wide 設定を含むため、runner は行わない。
 実行前に利用者が登録・選択を完了する。対話セッション、対象アプリ、UI Automation
@@ -111,9 +113,16 @@ per-user named pipeへ接続できるまで復帰とは判定しない。runner�
 `.github/workflows/compat.yml` は `compat-test` ラベル付き PR と手動 dispatch でだけ
 Notepad、VS Code、Edge を実行する。
 通常の PR ではジョブを skip する。
-各 target の `report.md` / `report.json` と失敗 artifact、全 target の終了コードをまとめた
-`compat-summary.json` は `compat-report-<run-id>` artifact に 7 日間保存する。
+各 target の `report.md` / `report.json` と失敗 artifact、実行ログ、全 target の終了コードを
+まとめた `compat-summary.json` は `compat-report-<run-id>-<run-attempt>` artifact に
+7 日間保存する。
 `report.md` は target 固有の marker と全体結果を含むため、そのまま PR コメントへ転記できる。
+
+GitHub-hosted runner は azooKey TIP を登録・選択しないため、target の非 0 終了はジョブを
+失敗させず、step summary と artifact に記録する。
+このジョブの成功は build、アプリ起動、report 収集経路の成功を表し、M50 の互換性 pass を
+表さない。
+M50 ゲートは azooKey TIP を登録・選択した対話環境のレポートで判定する。
 
 ## 手動チェックリスト
 

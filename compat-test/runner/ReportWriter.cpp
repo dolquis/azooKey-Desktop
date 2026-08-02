@@ -12,6 +12,7 @@
 #include <system_error>
 
 #include "azookey/ipc/Json.h"
+#include "runner/TargetConfigLoader.h"
 
 namespace azookey::compat_test {
 namespace {
@@ -110,17 +111,17 @@ ReportSummary SummarizeResults(const std::vector<CaseResult>& results) {
 
 bool WriteReports(const std::filesystem::path& output_directory, const TargetConfig& target,
                   const std::vector<CaseResult>& results) {
+  if (!IsValidTargetId(target.id)) return false;
   if (!EnsureOutputSubdirectories(output_directory)) return false;
 
   const auto summary = SummarizeResults(results);
-  const std::string safe_target_id = SafeReasonCode(target.id);
   const char* outcome = summary.failed > 0            ? "FAIL"
                         : summary.failing_skipped > 0 ? "FAILING SKIP"
                                                       : "PASS";
   azookey::ipc::json::Array json_results;
   std::ostringstream markdown;
-  markdown << "<!-- azookey-compat-report:" << safe_target_id << " -->\n"
-           << "## Compatibility test (`" << safe_target_id << "`)\n\n"
+  markdown << "<!-- azookey-compat-report:" << target.id << " -->\n"
+           << "## Compatibility test (`" << target.id << "`)\n\n"
            << "**Outcome: " << outcome << "**\n\n"
            << "| Result | Count |\n"
            << "|---|---:|\n"

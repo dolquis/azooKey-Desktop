@@ -1683,8 +1683,11 @@ runner は target ごとに新規ウィンドウと一時文書を作り、既�
 | target | AppId | トップレベル window class | 優先する UI Automation control |
 |---|---|---|---|
 | Notepad | `Microsoft.WindowsNotepad_8wekyb3d8bbwe!App` | `Notepad` | Document |
-| Edge | `MSEdge` | `Chrome_WidgetWin_1` | Edit |
+| Edge | `MSEdge` | `Chrome_WidgetWin_1` | Edit + Name `azooKey compatibility editor` |
 | VS Code | `Microsoft.VisualStudioCode` | `Chrome_WidgetWin_1` | Document |
+
+Edge は ControlType だけで Edit を探索するとアドレスバーへ一致し得るため、テスト HTML の
+`aria-label` が公開する UIA Name との AND 条件で textarea を特定する。
 
 ### 13.3 テストケース
 
@@ -1853,9 +1856,16 @@ jobs:
 
 ジョブは Release の `compat_test` を一度だけビルドし、Notepad、VS Code、Edge の
 3 target を順に実行する。
-各 target の非 0 終了を記録しても残りの target を続行し、`compat-report-*/` と
-`compat-summary.json` を 1 個の artifact としてアップロードする。
+各 target の非 0 終了を記録しても残りの target を続行し、`compat-report-*/`、
+`compat-run-*.log`、`compat-summary.json` を
+`compat-report-<run-id>-<run-attempt>` artifact としてアップロードする。
 実機条件を満たせない target は `failing-skip` を report に残す。
+
+GitHub-hosted runner では azooKey TIP を登録も選択もしない。
+このジョブは runner のビルド、対象アプリの起動、診断レポートの収集経路を確認するため、
+target の非 0 終了だけではジョブを失敗させない。
+ジョブが成功しても M50 の互換性テストが通ったことを意味せず、M50 ゲートは azooKey TIP を
+登録・選択した対話環境の `report.json` で判定する。
 
 ### M50 受け入れ条件
 

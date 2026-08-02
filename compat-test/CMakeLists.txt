@@ -3,13 +3,14 @@ add_library(azookey_compat_test_support STATIC
   runner/ClipboardIsolation.cpp
   runner/ReportWriter.cpp
   runner/ScreenshotCapture.cpp
+  runner/TargetConfigLoader.cpp
 )
 target_include_directories(azookey_compat_test_support
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_link_libraries(azookey_compat_test_support
   PUBLIC azookey_ipc azookey_project_options
-  PRIVATE azookey_project_warnings ole32 windowscodecs
+  PRIVATE azookey_project_warnings advapi32 ole32 windowscodecs
 )
 
 add_executable(compat_test
@@ -32,7 +33,6 @@ target_link_libraries(compat_test
     azookey_compat_test_support
     azookey_project_options
     azookey_project_warnings
-    advapi32
     ole32
     user32
     uiautomationcore

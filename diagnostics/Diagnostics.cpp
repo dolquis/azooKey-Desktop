@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -10,8 +11,10 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 
 #ifdef _WIN32
@@ -36,6 +39,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/logging/RuntimeLogger.h"
 #include "azookey/tsf/TextServiceFactory.h"
 
 namespace azookey::diagnostics {
@@ -48,6 +52,11 @@ constexpr uint32_t kHandshakeTimeoutMs = 3000;
 constexpr uint32_t kConnectTimeoutMs = 500;
 constexpr uint32_t kPingTimeoutMs = 500;
 constexpr uint32_t kDiagnosticsTimeoutMs = 1000;
+constexpr auto kLogCollectionAge = std::chrono::hours(24 * 7);
+constexpr auto kStaleLogProbeAge = std::chrono::hours(24);
+constexpr uintmax_t kMaxCollectedLogFileBytes = 1 * 1024 * 1024;
+constexpr uintmax_t kMaxCollectedLogBytes = 8 * 1024 * 1024;
+constexpr std::string_view kLogProbePrefix = ".azookey-diag-write-probe-";
 
 uint64_t NowMs() {
   using namespace std::chrono;
@@ -75,6 +84,17 @@ std::optional<std::string> ReadTextFile(const std::filesystem::path& path) {
   buffer << input.rdbuf();
   if (!input.good() && !input.eof()) return std::nullopt;
   return buffer.str();
+}
+
+const Check* FindCheck(const Report& report, std::string_view id) {
+  const auto found = std::find_if(report.checks.begin(), report.checks.end(),
+                                  [&](const Check& check) { return check.id == id; });
+  return found == report.checks.end() ? nullptr : &*found;
+}
+
+Status CheckStatus(const Report& report, std::string_view id) {
+  const auto* check = FindCheck(report, id);
+  return check ? check->status : Status::Error;
 }
 
 std::string LowerAscii(std::string value) {
@@ -117,6 +137,28 @@ j::Value RedactValue(const j::Value& value, std::string_view key = {}) {
     j::Array redacted;
     redacted.reserve(value.AsArray().size());
     for (const auto& child : value.AsArray()) redacted.emplace_back(RedactValue(child));
+    return j::Value(std::move(redacted));
+  }
+  return value;
+}
+
+j::Value RedactRuntimeLogValue(const j::Value& value, std::string_view key = {}) {
+  if (!key.empty() && (IsSensitiveKey(key) || logging::IsSensitiveRuntimeLogField(key))) {
+    return j::Value("***redacted***");
+  }
+  if (value.IsObject()) {
+    j::Object redacted;
+    for (const auto& [child_key, child] : value.AsObject()) {
+      redacted.emplace(child_key, RedactRuntimeLogValue(child, child_key));
+    }
+    return j::Value(std::move(redacted));
+  }
+  if (value.IsArray()) {
+    j::Array redacted;
+    redacted.reserve(value.AsArray().size());
+    for (const auto& child : value.AsArray()) {
+      redacted.emplace_back(RedactRuntimeLogValue(child));
+    }
     return j::Value(std::move(redacted));
   }
   return value;
@@ -578,9 +620,101 @@ std::string EnvironmentSummary() {
   if (!found_gpu) output << "gpu=unknown\n";
   return output.str();
 }
+
+bool IsProcessElevated() {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  TOKEN_ELEVATION elevation{};
+  DWORD size = 0;
+  const bool elevated =
+      GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size) &&
+      elevation.TokenIsElevated != 0;
+  CloseHandle(token);
+  return elevated;
+}
+
+std::filesystem::path CurrentExecutablePath() {
+  std::wstring buffer(32768, L'\0');
+  const DWORD length =
+      GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (length == 0 || length >= buffer.size()) return {};
+  buffer.resize(length);
+  return std::filesystem::path(std::move(buffer));
+}
+
+std::filesystem::path ResolveRepairTipPath(const ProbeResult& result) {
+  std::vector<std::filesystem::path> candidates;
+  if (!result.tip_path.empty()) candidates.push_back(result.tip_path);
+  const auto executable = CurrentExecutablePath();
+  if (!executable.empty()) {
+    candidates.push_back(executable.parent_path() / "azookey_tsf_tip.dll");
+    candidates.push_back(executable.parent_path().parent_path() / "tsf-tip" /
+                         "azookey_tsf_tip.dll");
+  }
+  for (const auto& candidate : candidates) {
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(candidate, ec) && !ec && IsCurrentBitnessDll(candidate)) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
+RepairOperationResult RepairRegistration(const ProbeResult& result) {
+  if (!IsProcessElevated()) {
+    return {RepairStatus::PermissionDenied,
+            "Machine-wide COM and TSF registration requires an elevated terminal. Re-run "
+            "azookey_diag.exe --repair as administrator, run scripts/register-dev.ps1, or repair "
+            "the installed MSIX package."};
+  }
+  const auto tip_path = ResolveRepairTipPath(result);
+  if (tip_path.empty()) {
+    return {RepairStatus::Failed,
+            "No compatible TIP DLL was found at the registered path or beside azookey_diag.exe. "
+            "Run scripts/register-dev.ps1 with -TipDllPath, or repair the installed MSIX package."};
+  }
+
+  wchar_t system_directory[MAX_PATH] = {};
+  const UINT length = GetSystemDirectoryW(system_directory, ARRAYSIZE(system_directory));
+  if (length == 0 || length >= ARRAYSIZE(system_directory)) {
+    return {RepairStatus::Failed, "Could not resolve the Windows system directory."};
+  }
+  const auto regsvr32 = std::filesystem::path(system_directory) / "regsvr32.exe";
+  std::wstring command = L"\"" + regsvr32.wstring() + L"\" /s \"" + tip_path.wstring() + L"\"";
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(regsvr32.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                      nullptr, nullptr, &startup, &process)) {
+    return {RepairStatus::Failed,
+            "Failed to start regsvr32.exe: Windows error " + std::to_string(GetLastError())};
+  }
+  CloseHandle(process.hThread);
+  const DWORD wait = WaitForSingleObject(process.hProcess, 60000);
+  DWORD exit_code = 1;
+  const bool exited = wait == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exit_code);
+  CloseHandle(process.hProcess);
+  if (!exited) {
+    return {RepairStatus::Failed,
+            "regsvr32.exe did not complete within 60 seconds; verify registration manually."};
+  }
+  if (exit_code != 0) {
+    return {RepairStatus::Failed,
+            "regsvr32.exe failed with exit code " + std::to_string(exit_code) +
+                "; registration rollback may have removed previously healthy COM or TSF entries. "
+                "Run scripts/register-dev.ps1 or repair the installed MSIX package."};
+  }
+  return {RepairStatus::Succeeded,
+          "Machine-wide COM and TSF registration was refreshed. AppContainer ACLs were not "
+          "changed; run scripts/register-dev.ps1 before testing UWP or Microsoft Store apps."};
+}
 #else
 bool IsHostRunning() { return false; }
 std::string EnvironmentSummary() { return "os=unsupported\n"; }
+
+RepairOperationResult RepairRegistration(const ProbeResult&) {
+  return {RepairStatus::Failed, "COM and TSF registration repair is only supported on Windows."};
+}
 #endif
 
 void ProbeRegistration(Snapshot& snapshot) {
@@ -714,6 +848,171 @@ std::pair<uint16_t, uint16_t> CurrentDosDateTime() {
   return {time, date};
 }
 
+bool IsRuntimeLogFile(const std::filesystem::path& path) {
+  const auto name = path.filename().string();
+  if (name.rfind("host-", 0) != 0 && name.rfind("tip-", 0) != 0) return false;
+  const auto marker = name.rfind(".jsonl");
+  if (marker == std::string::npos) return false;
+  const auto suffix = std::string_view(name).substr(marker + std::string_view(".jsonl").size());
+  if (suffix.empty()) return true;
+  if (suffix.front() != '.' || suffix.size() == 1) return false;
+  return std::all_of(suffix.begin() + 1, suffix.end(),
+                     [](unsigned char ch) { return std::isdigit(ch) != 0; });
+}
+
+std::string SanitizeRuntimeLog(std::string_view content) {
+  std::istringstream input{std::string(content)};
+  std::ostringstream output;
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto value = j::Parse(line);
+    if (!value || !value->IsObject()) continue;
+    output << RedactFreeText(j::Stringify(RedactRuntimeLogValue(*value))) << '\n';
+  }
+  return output.str();
+}
+
+struct RuntimeLogCandidate {
+  std::filesystem::path path;
+  std::filesystem::file_time_type modified;
+};
+
+struct TailReadResult {
+  std::string content;
+  bool truncated{false};
+};
+
+std::optional<TailReadResult> ReadFileTail(const std::filesystem::path& path, uintmax_t max_bytes) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return std::nullopt;
+  input.seekg(0, std::ios::end);
+  const auto end = input.tellg();
+  if (end < 0) return std::nullopt;
+  const auto size = static_cast<uintmax_t>(end);
+  const auto start = size > max_bytes ? size - max_bytes : 0;
+  input.seekg(static_cast<std::streamoff>(start), std::ios::beg);
+  if (!input) return std::nullopt;
+
+  std::string content(static_cast<size_t>(size - start), '\0');
+  input.read(content.data(), static_cast<std::streamsize>(content.size()));
+  content.resize(static_cast<size_t>(input.gcount()));
+  if (start != 0) {
+    const auto first_newline = content.find('\n');
+    if (first_newline == std::string::npos) {
+      content.clear();
+    } else {
+      content.erase(0, first_newline + 1);
+    }
+  }
+  return TailReadResult{std::move(content), start != 0};
+}
+
+std::string TakeTailLines(std::string content, size_t max_bytes) {
+  if (content.size() <= max_bytes) return content;
+  const auto first_newline = content.find('\n', content.size() - max_bytes);
+  if (first_newline == std::string::npos) return {};
+  return content.substr(first_newline + 1);
+}
+
+std::vector<ArchiveEntry> CollectRuntimeLogs(const std::filesystem::path& directory) {
+  std::vector<RuntimeLogCandidate> candidates;
+  if (directory.empty()) return {};
+  std::error_code ec;
+  std::filesystem::directory_iterator iterator(directory, ec);
+  const auto now = std::filesystem::file_time_type::clock::now();
+  for (const auto end = std::filesystem::directory_iterator(); !ec && iterator != end;
+       iterator.increment(ec)) {
+    const auto& entry = *iterator;
+    if (entry.is_symlink(ec) || ec || !entry.is_regular_file(ec) || ec ||
+        !IsRuntimeLogFile(entry.path())) {
+      ec.clear();
+      continue;
+    }
+    const auto modified = entry.last_write_time(ec);
+    if (ec) {
+      ec.clear();
+      continue;
+    }
+    if (modified <= now && now - modified > kLogCollectionAge) continue;
+    candidates.push_back({entry.path(), modified});
+  }
+  std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+    if (left.modified != right.modified) return left.modified > right.modified;
+    return left.path.filename() < right.path.filename();
+  });
+
+  std::vector<ArchiveEntry> entries;
+  uintmax_t collected_bytes = 0;
+  size_t truncated_files = 0;
+  size_t omitted_files = 0;
+  for (const auto& candidate : candidates) {
+    if (collected_bytes >= kMaxCollectedLogBytes) {
+      ++omitted_files;
+      continue;
+    }
+    const auto tail = ReadFileTail(candidate.path, kMaxCollectedLogFileBytes);
+    if (!tail) {
+      ++omitted_files;
+      continue;
+    }
+    auto content = SanitizeRuntimeLog(tail->content);
+    bool truncated = tail->truncated;
+    if (content.size() > kMaxCollectedLogFileBytes) {
+      content = TakeTailLines(std::move(content), static_cast<size_t>(kMaxCollectedLogFileBytes));
+      truncated = true;
+    }
+    const auto remaining = static_cast<size_t>(kMaxCollectedLogBytes - collected_bytes);
+    if (content.size() > remaining) {
+      content = TakeTailLines(std::move(content), remaining);
+      truncated = true;
+    }
+    if (content.empty()) {
+      if (truncated) ++truncated_files;
+      ++omitted_files;
+      continue;
+    }
+    collected_bytes += content.size();
+    if (truncated) ++truncated_files;
+    entries.push_back({"logs/" + candidate.path.filename().string(), std::move(content)});
+  }
+  std::sort(entries.begin(), entries.end(),
+            [](const auto& left, const auto& right) { return left.name < right.name; });
+  if (truncated_files != 0 || omitted_files != 0) {
+    std::ostringstream note;
+    note << "Runtime log collection is limited to the newest " << kMaxCollectedLogBytes
+         << " bytes total and " << kMaxCollectedLogFileBytes << " trailing bytes per file.\n"
+         << "Truncated files: " << truncated_files << "\n"
+         << "Omitted or unreadable files: " << omitted_files << "\n";
+    entries.push_back({"logs/README.txt", note.str()});
+  }
+  return entries;
+}
+
+void CleanupStaleLogProbeFiles(const std::filesystem::path& directory) {
+  std::error_code ec;
+  std::filesystem::directory_iterator iterator(directory, ec);
+  const auto now = std::filesystem::file_time_type::clock::now();
+  for (const auto end = std::filesystem::directory_iterator(); !ec && iterator != end;
+       iterator.increment(ec)) {
+    const auto& entry = *iterator;
+    const auto name = entry.path().filename().string();
+    if (name.rfind(kLogProbePrefix, 0) != 0 || entry.is_symlink(ec) || ec ||
+        !entry.is_regular_file(ec) || ec) {
+      ec.clear();
+      continue;
+    }
+    const auto modified = entry.last_write_time(ec);
+    if (ec) {
+      ec.clear();
+      continue;
+    }
+    if (modified <= now && now - modified > kStaleLogProbeAge) {
+      std::filesystem::remove(entry.path(), ec);
+      ec.clear();
+    }
+  }
+}
+
 }  // namespace
 
 bool ProbeSettingsFile(const std::filesystem::path& path) { return ProbeSettings(path).valid; }
@@ -732,6 +1031,55 @@ bool EmbeddedSettingsSchemaUsesOnlySupportedKeywords() {
   return schema && SchemaUsesOnlySupportedKeywords(*schema);
 }
 
+std::filesystem::path RuntimeLogsDirectory() {
+  return logging::RuntimeLoggerOptionsFromEnvironment("diagnostics").logs_directory;
+}
+
+bool ProbeLogsDirectory(const std::filesystem::path& path) {
+  if (path.empty()) return false;
+  std::error_code ec;
+  if (!std::filesystem::is_directory(path, ec) || ec) return false;
+  CleanupStaleLogProbeFiles(path);
+
+  static std::atomic<uint64_t> sequence{0};
+  std::filesystem::path probe_path;
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    probe_path = path / (std::string(kLogProbePrefix) + std::to_string(NowMs()) + "-" +
+                         std::to_string(sequence.fetch_add(1)) + ".tmp");
+    if (!std::filesystem::exists(probe_path, ec) && !ec) break;
+    probe_path.clear();
+    ec.clear();
+  }
+  if (probe_path.empty()) return false;
+
+  std::ofstream output(probe_path, std::ios::binary | std::ios::out | std::ios::trunc);
+  if (!output) return false;
+  output << "azookey_diag_write_probe\n";
+  output.close();
+  const bool wrote = output.good();
+  ec.clear();
+  const bool removed = std::filesystem::remove(probe_path, ec);
+  return wrote && removed && !ec;
+}
+
+bool RepairLogsDirectory(const std::filesystem::path& path, std::string* error) {
+  if (path.empty()) {
+    if (error) *error = "runtime logs directory could not be resolved";
+    return false;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(path, ec);
+  if (ec) {
+    if (error) *error = "failed to create runtime logs directory: " + ec.message();
+    return false;
+  }
+  if (!ProbeLogsDirectory(path)) {
+    if (error) *error = "runtime logs directory remains unwritable after creation";
+    return false;
+  }
+  return true;
+}
+
 std::string StatusName(Status status) {
   switch (status) {
     case Status::Ok:
@@ -742,6 +1090,20 @@ std::string StatusName(Status status) {
       return "error";
   }
   return "error";
+}
+
+std::string RepairStatusName(RepairStatus status) {
+  switch (status) {
+    case RepairStatus::Succeeded:
+      return "succeeded";
+    case RepairStatus::Failed:
+      return "failed";
+    case RepairStatus::NotNeeded:
+      return "not_needed";
+    case RepairStatus::PermissionDenied:
+      return "permission_denied";
+  }
+  return "failed";
 }
 
 Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
@@ -883,10 +1245,17 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
            {{"missing", j::Value(snapshot.settings_missing)},
             {"valid", j::Value(snapshot.settings_valid)}});
 
+  AddCheck(report, "D-013", "logs", snapshot.logs_directory_writable ? Status::Ok : Status::Error,
+           snapshot.logs_directory_writable ? "Runtime logs directory is writable"
+                                            : "Runtime logs directory is missing or not writable",
+           {{"writable", j::Value(snapshot.logs_directory_writable)}});
+
   return report;
 }
 
-std::string SerializeReport(const Report& report) {
+namespace {
+
+j::Object ReportJsonObject(const Report& report) {
   j::Array checks;
   checks.reserve(report.checks.size());
   for (const auto& check : report.checks) {
@@ -903,14 +1272,23 @@ std::string SerializeReport(const Report& report) {
   root.emplace("checks", j::Value(std::move(checks)));
   root.emplace("status", j::Value(StatusName(report.status)));
   root.emplace("timestamp_ms", j::Value(report.timestamp_ms));
-  return j::Stringify(j::Value(std::move(root)));
+  return root;
+}
+
+}  // namespace
+
+std::string SerializeReport(const Report& report) {
+  return j::Stringify(j::Value(ReportJsonObject(report)));
 }
 
 ProbeResult ProbeSystem() {
   ProbeResult result;
   Snapshot snapshot;
   ProbeRegistration(snapshot);
+  result.tip_path = snapshot.tip_path;
   snapshot.host_running = IsHostRunning();
+  result.logs_directory = RuntimeLogsDirectory();
+  snapshot.logs_directory_writable = ProbeLogsDirectory(result.logs_directory);
 
   host::UserDataPathInputs inputs;
   inputs.local_app_data = host::GetPlatformLocalAppData();
@@ -943,6 +1321,167 @@ ProbeResult ProbeSystem() {
   return result;
 }
 
+RepairReport RepairSystem(const RepairHooks& hooks) {
+  RepairReport repair_report;
+  ProbeResult before;
+  try {
+    if (!hooks.probe_system) throw std::runtime_error("probe hook is missing");
+    before = hooks.probe_system();
+  } catch (const std::exception& error) {
+    repair_report.probe_failed = true;
+    repair_report.report.status = Status::Error;
+    repair_report.report.timestamp_ms = NowMs();
+    for (const auto id : {"D-001", "D-002", "D-003", "D-013"}) {
+      repair_report.repairs.push_back(
+          {id, RepairStatus::Failed, Status::Error, std::nullopt,
+           "Initial diagnostic probe failed: " + std::string(error.what())});
+    }
+    return repair_report;
+  } catch (...) {
+    repair_report.probe_failed = true;
+    repair_report.report.status = Status::Error;
+    repair_report.report.timestamp_ms = NowMs();
+    for (const auto id : {"D-001", "D-002", "D-003", "D-013"}) {
+      repair_report.repairs.push_back({id, RepairStatus::Failed, Status::Error, std::nullopt,
+                                       "Initial diagnostic probe failed."});
+    }
+    return repair_report;
+  }
+
+  const bool registration_needed = CheckStatus(before.report, "D-001") != Status::Ok ||
+                                   CheckStatus(before.report, "D-002") != Status::Ok ||
+                                   CheckStatus(before.report, "D-003") != Status::Ok;
+  const bool logs_repair_needed = CheckStatus(before.report, "D-013") != Status::Ok;
+
+  RepairOperationResult registration{RepairStatus::NotNeeded,
+                                     "COM and TSF registration is already healthy."};
+  if (registration_needed) {
+    try {
+      registration =
+          hooks.repair_registration
+              ? hooks.repair_registration(before)
+              : RepairOperationResult{RepairStatus::Failed, "Registration repair hook is missing."};
+    } catch (const std::exception& error) {
+      registration = {RepairStatus::Failed,
+                      "Registration repair failed: " + std::string(error.what())};
+    } catch (...) {
+      registration = {RepairStatus::Failed, "Registration repair failed unexpectedly."};
+    }
+  }
+
+  RepairOperationResult logs{RepairStatus::NotNeeded,
+                             "Runtime logs directory is already writable."};
+  if (logs_repair_needed) {
+    try {
+      logs = hooks.repair_logs_directory
+                 ? hooks.repair_logs_directory(before.logs_directory)
+                 : RepairOperationResult{RepairStatus::Failed,
+                                         "Logs directory repair hook is missing."};
+    } catch (const std::exception& error) {
+      logs = {RepairStatus::Failed,
+              "Runtime logs directory repair failed: " + std::string(error.what())};
+    } catch (...) {
+      logs = {RepairStatus::Failed, "Runtime logs directory repair failed unexpectedly."};
+    }
+  }
+
+  ProbeResult after = before;
+  bool post_probe_failed = false;
+  try {
+    after = hooks.probe_system();
+  } catch (...) {
+    post_probe_failed = true;
+  }
+  repair_report.probe_failed = post_probe_failed;
+  repair_report.report = after.report;
+
+  const auto add_result = [&](std::string id, const RepairOperationResult& operation) {
+    const Status before_status = CheckStatus(before.report, id);
+    if (post_probe_failed) {
+      const bool not_needed = before_status == Status::Ok;
+      repair_report.repairs.push_back(
+          {std::move(id), not_needed ? RepairStatus::NotNeeded : RepairStatus::Failed,
+           before_status, std::nullopt,
+           not_needed ? "No repair was required before the post-repair probe failed."
+                      : "The post-repair diagnostic probe failed; repair could not be verified."});
+      return;
+    }
+    const Status after_status = CheckStatus(after.report, id);
+    if (before_status == Status::Ok) {
+      if (after_status == Status::Ok) {
+        repair_report.repairs.push_back({std::move(id), RepairStatus::NotNeeded, before_status,
+                                         after_status, "No repair was required."});
+      } else {
+        repair_report.repairs.push_back(
+            {std::move(id), RepairStatus::Failed, before_status, after_status,
+             operation.message + " A previously healthy registration check regressed; rerun "
+                                 "scripts/register-dev.ps1 or repair the installed MSIX package."});
+      }
+      return;
+    }
+    if (operation.status == RepairStatus::PermissionDenied) {
+      repair_report.repairs.push_back({std::move(id), RepairStatus::PermissionDenied, before_status,
+                                       after_status, operation.message});
+      return;
+    }
+    if (after_status == Status::Ok) {
+      repair_report.repairs.push_back(
+          {std::move(id), RepairStatus::Succeeded, before_status, after_status, operation.message});
+      return;
+    }
+    repair_report.repairs.push_back(
+        {std::move(id), RepairStatus::Failed, before_status, after_status, operation.message});
+  };
+
+  add_result("D-001", registration);
+  add_result("D-002", registration);
+  add_result("D-003", registration);
+  add_result("D-013", logs);
+  return repair_report;
+}
+
+RepairReport RepairSystem() {
+  RepairHooks hooks;
+  hooks.probe_system = [] { return ProbeSystem(); };
+  hooks.repair_registration = [](const ProbeResult& result) { return RepairRegistration(result); };
+  hooks.repair_logs_directory = [](const std::filesystem::path& path) {
+    std::string error;
+    if (!RepairLogsDirectory(path, &error)) {
+      return RepairOperationResult{RepairStatus::Failed, std::move(error)};
+    }
+    return RepairOperationResult{RepairStatus::Succeeded,
+                                 "Runtime logs directory was created and is writable."};
+  };
+  return RepairSystem(hooks);
+}
+
+std::string SerializeRepairReport(const RepairReport& report) {
+  j::Object root = ReportJsonObject(report.report);
+  root.emplace("probe_failed", j::Value(report.probe_failed));
+  j::Array repairs;
+  repairs.reserve(report.repairs.size());
+  for (const auto& repair : report.repairs) {
+    j::Object item;
+    item.emplace("after_status", repair.after_status ? j::Value(StatusName(*repair.after_status))
+                                                     : j::Value(j::Null{}));
+    item.emplace("before_status", j::Value(StatusName(repair.before_status)));
+    item.emplace("id", j::Value(repair.id));
+    item.emplace("message", j::Value(repair.message));
+    item.emplace("status", j::Value(RepairStatusName(repair.status)));
+    repairs.emplace_back(j::Value(std::move(item)));
+  }
+  root.emplace("repairs", j::Value(std::move(repairs)));
+  return j::Stringify(j::Value(std::move(root)));
+}
+
+bool RepairReportSucceeded(const RepairReport& report) {
+  return !report.probe_failed &&
+         std::none_of(report.repairs.begin(), report.repairs.end(), [](const RepairResult& repair) {
+           return repair.status == RepairStatus::Failed ||
+                  repair.status == RepairStatus::PermissionDenied;
+         });
+}
+
 std::string RedactSettingsJson(std::string_view json) {
   const auto value = j::Parse(json);
   if (!value) return "{}";
@@ -963,6 +1502,9 @@ std::vector<ArchiveEntry> BuildCollectionEntries(const ProbeResult& result) {
   entries.push_back({"ipc-ping.json", result.ipc_ping_json.empty()
                                           ? std::string("{\"available\":false}")
                                           : result.ipc_ping_json});
+  auto logs = CollectRuntimeLogs(result.logs_directory);
+  entries.insert(entries.end(), std::make_move_iterator(logs.begin()),
+                 std::make_move_iterator(logs.end()));
   entries.push_back({"environment.txt", EnvironmentSummary()});
   entries.push_back({"crash-summary.txt",
                      "Crash dump bodies are not included. No crash summary was collected.\n"});
@@ -972,7 +1514,8 @@ std::vector<ArchiveEntry> BuildCollectionEntries(const ProbeResult& result) {
 bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntry>& entries,
               std::string* error) {
   struct CentralEntry {
-    ArchiveEntry entry;
+    std::string name;
+    uint32_t size{};
     uint32_t crc{};
     uint32_t offset{};
   };
@@ -1002,7 +1545,8 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
     if (offset < 0 || static_cast<uint64_t>(offset) > std::numeric_limits<uint32_t>::max()) {
       return fail("diagnostic ZIP is too large");
     }
-    CentralEntry item{entry, Crc32(entry.content), static_cast<uint32_t>(offset)};
+    CentralEntry item{entry.name, static_cast<uint32_t>(entry.content.size()), Crc32(entry.content),
+                      static_cast<uint32_t>(offset)};
     WriteU32(stream, 0x04034B50);
     WriteU16(stream, 20);
     WriteU16(stream, 0x0800);
@@ -1010,8 +1554,8 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
     WriteU16(stream, dos_time);
     WriteU16(stream, dos_date);
     WriteU32(stream, item.crc);
-    WriteU32(stream, static_cast<uint32_t>(entry.content.size()));
-    WriteU32(stream, static_cast<uint32_t>(entry.content.size()));
+    WriteU32(stream, item.size);
+    WriteU32(stream, item.size);
     WriteU16(stream, static_cast<uint16_t>(entry.name.size()));
     WriteU16(stream, 0);
     stream.write(entry.name.data(), static_cast<std::streamsize>(entry.name.size()));
@@ -1033,16 +1577,16 @@ bool WriteZip(const std::filesystem::path& output, const std::vector<ArchiveEntr
     WriteU16(stream, dos_time);
     WriteU16(stream, dos_date);
     WriteU32(stream, item.crc);
-    WriteU32(stream, static_cast<uint32_t>(item.entry.content.size()));
-    WriteU32(stream, static_cast<uint32_t>(item.entry.content.size()));
-    WriteU16(stream, static_cast<uint16_t>(item.entry.name.size()));
+    WriteU32(stream, item.size);
+    WriteU32(stream, item.size);
+    WriteU16(stream, static_cast<uint16_t>(item.name.size()));
     WriteU16(stream, 0);
     WriteU16(stream, 0);
     WriteU16(stream, 0);
     WriteU16(stream, 0);
     WriteU32(stream, 0);
     WriteU32(stream, item.offset);
-    stream.write(item.entry.name.data(), static_cast<std::streamsize>(item.entry.name.size()));
+    stream.write(item.name.data(), static_cast<std::streamsize>(item.name.size()));
   }
   const auto central_end_raw = stream.tellp();
   if (central_end_raw < 0 ||

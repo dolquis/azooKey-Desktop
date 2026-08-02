@@ -1351,24 +1351,26 @@ azooKey が動作しない、候補が出ない、Zenzai が使われていな�
 開発者が短時間で切り分けられるようにする。IME は「入力できない」時点で
 UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に優先実装する。
 
-#### 12.1.1 M44 v1 スコープ
+#### 12.1.1 M44 実装スコープ
 
-M44 v1 は `azookey_diag.exe --json` と `azookey_diag.exe --collect` を提供し、
-D-001〜D-012 を診断する。Host が停止している場合もローカルで判定できる項目を
-継続し、12 項目すべてを stable schema の `checks` 配列へ出力する。
+M44 は `azookey_diag.exe --json`、`--repair`、`--collect` を提供し、
+D-001〜D-013 を診断する。
+Host が停止している場合もローカルで判定できる項目を継続し、13 項目すべてを
+stable schema の `checks` 配列へ出力する。
 
 Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ランタイム tier
 （R1 の `llama_cpp` / `mock`。R2 追加後は `winml`）を表し、`model_loaded` と
 `loaded_model_path` は実際にロードされたモデルだけを表す。設定済みパスの存在だけで
 モデルロード成功と判定してはならない。
 
-v1 の診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
+診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
 `ipc-ping.json`、`environment.txt`、`crash-summary.txt` で構成する。Release
-ランタイムログ自体は §7.1.1 の opt-in で取得できるが、診断 ZIP への自動収集は
-follow-up とする。
+ランタイムログが存在する場合は、直近 7 日の `host-*.jsonl` と `tip-*.jsonl` を
+ローテート世代（`.jsonl.N`）も含め、redaction 後に `logs/` へ収集する。
+収集は新しいファイルを優先し、1 ファイルあたり末尾 1 MiB、合計 8 MiB を上限とする。
+切り詰めまたは除外が発生した場合は `logs/README.txt` に件数と上限を記録する。
 
-`--repair`、D-013〜D-015、設定アプリの診断タブは follow-up とする。
-したがって、§12.2.1 の `--repair` 列は最終形の修復対象を示し、v1 CLI では実行しない。
+D-014、D-015、設定アプリの診断タブは follow-up とする。
 
 ### 12.2 診断項目
 
@@ -1389,6 +1391,11 @@ follow-up とする。
 | D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
 | D-014 | DPAPI | 暗号化データを復号できるか | 再認証 / 再入力を促す |
 | D-015 | app compatibility | 現在の前面アプリで TSF context が取得できるか | 互換性情報表示（M50 result） |
+
+D-013 は実効ログディレクトリ内に一時ファイルを作成して削除し、実際の書き込み可否を
+判定する。プロセス終了などで残った診断用一時ファイルは、次回診断時に 24 時間を
+超えていれば削除する。Host を一度も起動していない環境ではディレクトリが存在せず
+`error` になりうる。この場合の `--repair` はログディレクトリを作成して再診断する。
 
 D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre-commit は
 同 schema の meta-schema 妥当性と代表サンプルの適合性を静的に検証する（§4.3）。
@@ -1419,7 +1426,7 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
-| D-013 | logs ディレクトリ書き込み可 | — | 書き込み不可 | ✓ ディレクトリ作成 |
+| D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
 | D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | 前面アプリで TSF context 取得可**かつ §13.3.2 の既知の劣化 / workaround なし**（§13.2 の自動化レベルに関わらず、context が取れれば automation level では warning にしない） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
 
@@ -1458,8 +1465,7 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 
 ### 12.3 `azookey_diag.exe` CLI
 
-最終形は 3 サブコマンドを持つ。M44 v1 は `--json` と `--collect` を実装し、
-`--repair` は follow-up とする。
+CLI は 3 サブコマンドを持つ。
 
 ```powershell
 azookey_diag.exe --json                                  # 全項目を JSON で出力
@@ -1493,9 +1499,38 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
 
 `status` は `ok` / `warning` / `error` の 3 値。`--json` はテスト可能な
 stable schema として固定する。
+`--repair` は D-001、D-002、D-003、D-013 を修復した後に全項目を再診断し、
+同じ root object へ次の `repairs` 配列を追加する。
+
+```json
+{
+  "probe_failed": false,
+  "repairs": [
+    {
+      "id": "D-001",
+      "status": "succeeded | failed | not_needed | permission_denied",
+      "before_status": "ok | warning | error",
+      "after_status": "ok | warning | error | null",
+      "message": "string"
+    }
+  ]
+}
+```
+
+D-001〜D-003 の machine-wide COM / TSF 再登録は 1 回の操作にまとめる。
+非昇格プロセスでは UAC を自動起動せず、`permission_denied` と昇格して再実行する手順を返す。
+修復対象が `ok` の場合は操作せず `not_needed` を返す。
+post-probe を実行できない場合は `probe_failed=true` とし、`after_status` を `null` にする。
+修復前に `ok` だった項目は `not_needed` のまま保持し、修復を試みた項目は `failed` とする。
+D-001〜D-003 の直接修復は AppContainer ACL を変更しないため、UWP または Microsoft Store
+アプリで検証する場合は `scripts/register-dev.ps1` を実行して ACL を付与する。
+再登録が失敗すると DLL 側の rollback により修復前の登録も失われる場合がある。
+post-probe で状態悪化を検出した場合は `failed` とし、`scripts/register-dev.ps1` または
+MSIX 修復を案内する。
 診断の実行と JSON または ZIP の生成に成功した場合、`status` が `error` でも
 プロセスの exit code は `0` とする。
 引数の不正、probe の実行失敗、ZIP の生成失敗では exit code `2` を返す。
+`--repair` で `failed` または `permission_denied` が残った場合は exit code `3` を返す。
 自動化側は exit code ではなく、出力された `status` と `checks` で診断結果を判定する。
 
 ### 12.4 診断 ZIP 構成
@@ -1508,7 +1543,10 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 ├── ipc-ping.json
 ├── logs/
 │   ├── host-YYYYMMDD.jsonl   (直近 7 日)
-│   └── tip-YYYYMMDD.jsonl    (直近 7 日)
+│   ├── host-YYYYMMDD.jsonl.N (ローテート世代)
+│   ├── tip-YYYYMMDD.jsonl    (直近 7 日)
+│   ├── tip-YYYYMMDD.jsonl.N  (ローテート世代)
+│   └── README.txt            (切り詰めまたは除外時のみ)
 ├── environment.txt           (OS バージョン / CPU / RAM / GPU)
 └── crash-summary.txt         (WER ダンプの要約のみ、ダンプ本体は含めない)
 ```
@@ -1564,7 +1602,7 @@ ZIP メンバごとの redaction ルールを以下に固定する。本文系�
 | `settings.redacted.json` | API key 等の機密 field に加え、Magic Conversion prompt 系 field（`promptPrefixByApp` の各値、および移行後の `profilesByApp.*.promptPrefix`〔`profilesByApp` は process / window class をキーとする map。配列ではなく全エントリ値が対象〕）を `***redacted***` に置換。さらに path 系 field（`model.selectedPath` / `model.directory` / `customRomajiTablePath` 等の絶対パス）は `diag.json` / `host-health.json` と同じくユーザー名を含む生パス（`C:\Users\...`）を残さないよう `%LOCALAPPDATA%` 等の環境変数表記へ正規化する。§7.6 はログ本文の正典で settings の prompt / path field を対象に含めないため、診断 ZIP では本欄で明示的に処理し、§12.5 の「prompt を含めない」方針と整合させる |
 | `host-health.json` | §12.6 `QueryDiagnostics` payload。構造化 field（bool / enum / 数値）はそのまま保存するが、自由文字列の `last_error` / `ep_last_error` はパス正規化（`%LOCALAPPDATA%` 等）+ 本文 redaction を通してから保存し、生のユーザーパス・backend / API 診断文を残さない |
 | `ipc-ping.json` | RTT / 成否のみ |
-| `logs/*.jsonl` | §7.6 を適用済みのログを収集（Release 既定で本文なし）。Debug かつ `AZOOKEY_LOG_BODY=1` の本文入りログは収集時に再 redact する |
+| `logs/*.jsonl*` | §7.6 の共通 field 判定を用いてログとローテート世代を収集（Release 既定で本文なし）。Debug かつ `AZOOKEY_LOG_BODY=1` の本文入りログは収集時に再 redact する。新しいファイルから 1 ファイル末尾 1 MiB、合計 8 MiB まで収集し、切り詰めまたは除外は `logs/README.txt` に記録する |
 | `environment.txt` | OS バージョン / CPU / RAM / GPU のみ。ホスト名・ユーザー名・シリアル番号を含めない |
 | `crash-summary.txt` | WER ダンプの要約のみ。ダンプ本体・スタック上の文字列バッファを含めない |
 

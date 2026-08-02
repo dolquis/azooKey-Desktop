@@ -14,6 +14,7 @@ enum class Command {
   None,
   Help,
   Json,
+  Repair,
   Collect,
 };
 
@@ -25,8 +26,10 @@ struct Options {
 void PrintUsage() {
   std::cout << "Usage:\n"
             << "  azookey_diag.exe --json\n"
+            << "  azookey_diag.exe --repair\n"
             << "  azookey_diag.exe --collect [--output <zip-path>]\n\n"
-            << "--json emits the stable M44 v1 diagnostic schema.\n"
+            << "--json emits the stable diagnostic schema.\n"
+            << "--repair repairs D-001, D-002, D-003, and D-013, then emits JSON.\n"
             << "--collect writes a redacted diagnostic ZIP without input, candidate, "
                "dictionary, or learning bodies.\n";
 }
@@ -51,19 +54,25 @@ bool ParseOptions(int argc, wchar_t** argv, Options* options, std::string* error
     const std::wstring argument = argv[index];
     if (argument == L"--help" || argument == L"-h") {
       if (options->command != Command::None) {
-        *error = "choose exactly one of --help, --json, or --collect";
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
         return false;
       }
       options->command = Command::Help;
     } else if (argument == L"--json") {
       if (options->command != Command::None) {
-        *error = "choose exactly one of --help, --json, or --collect";
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
         return false;
       }
       options->command = Command::Json;
+    } else if (argument == L"--repair") {
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
+        return false;
+      }
+      options->command = Command::Repair;
     } else if (argument == L"--collect") {
       if (options->command != Command::None) {
-        *error = "choose exactly one of --help, --json, or --collect";
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
         return false;
       }
       options->command = Command::Collect;
@@ -91,19 +100,25 @@ bool ParseOptions(int argc, char** argv, Options* options, std::string* error) {
     const std::string argument = argv[index];
     if (argument == "--help" || argument == "-h") {
       if (options->command != Command::None) {
-        *error = "choose exactly one of --help, --json, or --collect";
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
         return false;
       }
       options->command = Command::Help;
     } else if (argument == "--json") {
       if (options->command != Command::None) {
-        *error = "choose exactly one of --help, --json, or --collect";
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
         return false;
       }
       options->command = Command::Json;
+    } else if (argument == "--repair") {
+      if (options->command != Command::None) {
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
+        return false;
+      }
+      options->command = Command::Repair;
     } else if (argument == "--collect") {
       if (options->command != Command::None) {
-        *error = "choose exactly one of --help, --json, or --collect";
+        *error = "choose exactly one of --help, --json, --repair, or --collect";
         return false;
       }
       options->command = Command::Collect;
@@ -131,6 +146,12 @@ int Run(const Options& options) {
   if (options.command == Command::Help) {
     PrintUsage();
     return 0;
+  }
+  if (options.command == Command::Repair) {
+    const auto report = azookey::diagnostics::RepairSystem();
+    std::cout << azookey::diagnostics::SerializeRepairReport(report) << '\n';
+    if (report.probe_failed) return 2;
+    return azookey::diagnostics::RepairReportSucceeded(report) ? 0 : 3;
   }
   auto result = azookey::diagnostics::ProbeSystem();
   if (options.command == Command::Json) {

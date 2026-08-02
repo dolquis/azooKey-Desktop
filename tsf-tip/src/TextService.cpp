@@ -1496,8 +1496,11 @@ bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
     } else if (ipc_host_generation_id_ != host_generation_id) {
       previous_generation_id = ipc_host_generation_id_;
       ipc_host_generation_id_ = host_generation_id;
+      // A pending reading remains valid for the replacement Host. Give it a
+      // new request id so any response from the previous generation is stale,
+      // but keep ipc_has_request_ set so the reading is reissued after the
+      // handshake completes.
       ++ipc_pending_id_;
-      ipc_has_request_ = false;
       ipc_inflight_id_ = 0;
       changed = true;
     }
@@ -1512,7 +1515,6 @@ bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     candidates_.clear();
-    candidate_window_show_pending_ = false;
   }
   RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_host_generation_changed",
              {{"previous_host_generation_id", SafeLogText(previous_generation_id)},
@@ -1624,7 +1626,6 @@ void TextService::ServeConnection() {
     uint64_t req_id = 0;
     bool has_qc = false;
     bool is_batch = false;
-    std::string request_host_generation_id;
     std::vector<IpcSendItem> to_send;
 
     {
@@ -1718,7 +1719,6 @@ void TextService::ServeConnection() {
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = req_id;
-      request_host_generation_id = ipc_host_generation_id_;
     }
 
     if (!ipc_client_.Send(qenv)) {
@@ -1963,8 +1963,7 @@ void TextService::ServeConnection() {
     bool is_fresh = false;
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
-      is_fresh = !ipc_has_request_ && (req_id == ipc_pending_id_) &&
-                 (request_host_generation_id == ipc_host_generation_id_);
+      is_fresh = !ipc_has_request_ && (req_id == ipc_pending_id_);
     }
 
     if (is_fresh) {
@@ -2100,6 +2099,8 @@ void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_r
   batch_conversion_ai_cleanup_.store(false);
   batch_auto_punctuation_.store(auto_punctuation);
 }
+
+bool TextService::batch_query_in_progress_for_test() const { return batch_query_in_progress_; }
 
 bool TextService::has_pending_ipc_query_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);

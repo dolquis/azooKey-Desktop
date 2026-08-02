@@ -135,8 +135,9 @@ TIPのprimary接続とCancel用control接続はそれぞれHandshakeを行う。
 
 TIP は初回の非空 `host_generation_id` を保存し、同じ値への再接続では pending 要求を
 維持する。既知の値から別の値（省略を含む）へ変わった場合は、Handshake 成立後に
-旧世代向けの pending / in-flight 要求と候補表示待機状態を破棄する。要求送信時の世代と
-応答反映時の世代が一致しない場合も、その応答を stale として破棄する。
+request ID を更新して旧世代の in-flight 応答を stale 化する。pending 要求と候補表示待機状態は
+維持して新世代へ新しい request ID で再送し、旧候補キャッシュだけを破棄する。Handshake と
+応答処理は同一 IPC worker で直列化され、request ID の不一致が旧世代応答の破棄を担う。
 
 ## timeout、Cancel、接続回復
 
@@ -148,8 +149,8 @@ TIP は初回の非空 `host_generation_id` を保存し、同じ値への再接
 - Cancelは応答待ちのprimary接続を塞がないよう、Handshake済みの短命control接続を優先する。
   control接続が使えなければprimary接続へbest-effortでqueueする。
 - TIPのUI側は`request_id`でstale responseを破棄し、再接続前の古い結果を表示しない。
-- TIPはHandshakeで得た`host_generation_id`も照合し、Host再起動前の世代に属する
-  pending / in-flight要求と遅延応答を破棄する。
+- TIPはHandshakeで得た`host_generation_id`の変化時にrequest IDを更新し、旧世代の
+  in-flight応答を破棄する。pending要求は新世代へ再送する。
 
 ## 変更時の同期チェックリスト
 

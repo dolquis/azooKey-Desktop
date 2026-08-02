@@ -13,6 +13,23 @@ param(
 $ErrorActionPreference = "Stop"
 $script:VmVerifyTextServiceClsid = "{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}"
 
+if (-not ("AzooKey.VmVerifyNativeMethods" -as [type])) {
+  Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace AzooKey {
+  public static class VmVerifyNativeMethods {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetNamedPipeServerProcessId(
+      SafePipeHandle pipe,
+      out uint serverProcessId);
+  }
+}
+'@
+}
+
 function Get-VmVerifyBootstrapPath {
   param(
     [Parameter(Mandatory = $true)]
@@ -141,24 +158,47 @@ function Wait-VmVerifyPipe {
   return $false
 }
 
-function Get-VmVerifyServingHostProcess {
-  $currentSessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
-  $hostProcesses = @(Get-Process `
-      -Name "azookey_inference_host" `
-      -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $currentSessionId })
-  if ($hostProcesses.Count -eq 0) {
-    throw "Could not find the inference host process serving the current session."
-  }
-  if ($hostProcesses.Count -ne 1) {
-    throw "Multiple inference host processes exist in the current session."
-  }
+function Get-VmVerifyNamedPipeServerProcessId {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PipeName,
+    [int]$ConnectTimeoutMs = 1000
+  )
 
-  $processPath = [string]$hostProcesses[0].Path
+  $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+    ".",
+    $PipeName,
+    [IO.Pipes.PipeDirection]::InOut,
+    [IO.Pipes.PipeOptions]::None)
+  try {
+    $pipe.Connect($ConnectTimeoutMs)
+    [uint32]$serverProcessId = 0
+    if (-not [AzooKey.VmVerifyNativeMethods]::GetNamedPipeServerProcessId(
+        $pipe.SafePipeHandle,
+        [ref]$serverProcessId)) {
+      $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      throw "GetNamedPipeServerProcessId failed with Win32 error $errorCode."
+    }
+    return [int]$serverProcessId
+  } finally {
+    $pipe.Dispose()
+  }
+}
+
+function Get-VmVerifyServingHostProcess {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PipeName
+  )
+
+  $serverProcessId = Get-VmVerifyNamedPipeServerProcessId -PipeName $PipeName
+  $hostProcess = Get-Process -Id $serverProcessId -ErrorAction Stop
+  $processPath = [string]$hostProcess.Path
   if (-not $processPath) {
-    throw "Could not read the serving inference host executable path."
+    throw "Could not read the executable path for pipe server process $serverProcessId."
   }
   return [pscustomobject][ordered]@{
-    Id = [int]$hostProcesses[0].Id
+    Id = [int]$hostProcess.Id
     Path = $processPath
   }
 }
@@ -205,7 +245,7 @@ function Get-VmVerifyServingHostBinary {
       return $result
     }
 
-    $hostProcess = Get-VmVerifyServingHostProcess
+    $hostProcess = Get-VmVerifyServingHostProcess -PipeName $PipeName
     $result.processId = [int]$hostProcess.Id
     $result.runningPath = [string]$hostProcess.Path
     $result.runningSha256 = (Get-FileHash `
@@ -549,7 +589,9 @@ function Invoke-VmVerifyBootstrap {
       -PipeName $pipeName `
       -HostExe $HostExe `
       -Manifest $manifest
-    foreach ($property in $preflightInspection.PSObject.Properties) {
+    foreach ($property in $preflightInspection.PSObject.Properties | Where-Object {
+        $_.Name -notin @("status", "reason")
+      }) {
       $hostBinary.$($property.Name) = $property.Value
     }
     if ($preflightInspection.status -eq "mismatched") {
@@ -626,77 +668,50 @@ function Invoke-VmVerifyBootstrap {
         throw "Inference host did not expose \\.\pipe\$pipeName within the timeout."
       }
     } catch {
+      $hostBinary.status = "unverified"
+      $hostBinary.reason = $_.Exception.Message
       $checks += Get-VmVerifyCheck `
         -Id "inferenceHost" `
         -Status "fail" `
         -Message $_.Exception.Message
     }
   } elseif (-not $hostWasServing) {
+    $hostBinary.status = "unverified"
+    $hostBinary.reason = "Inference host startup was skipped because TIP registration failed."
     $checks += Get-VmVerifyCheck `
       -Id "inferenceHost" `
       -Status "fail" `
-      -Message "Inference host startup was skipped because TIP registration failed."
+      -Message $hostBinary.reason
   }
 
-  if ((Test-VmVerifyPipe -PipeName $pipeName) -and
-      @($checks | Where-Object { $_.id -eq "inferenceHost" -and $_.status -eq "fail" }).Count -eq 0) {
+  $hasInferenceHostFailure = @($checks | Where-Object {
+      $_.id -eq "inferenceHost" -and $_.status -eq "fail"
+    }).Count -ne 0
+  if (-not $hasInferenceHostFailure -and -not (Test-VmVerifyPipe -PipeName $pipeName)) {
+    $hostBinary.status = "unverified"
+    $hostBinary.reason = "The inference host pipe stopped before final verification."
+    $checks += Get-VmVerifyCheck `
+      -Id "inferenceHost" `
+      -Status "fail" `
+      -Message $hostBinary.reason
+  } elseif (-not $hasInferenceHostFailure) {
     $inspection = Get-VmVerifyServingHostBinary `
       -PipeName $pipeName `
       -HostExe $HostExe `
       -Manifest $manifest
-    foreach ($property in $inspection.PSObject.Properties) {
+    foreach ($property in $inspection.PSObject.Properties | Where-Object {
+        $_.Name -notin @("status", "reason")
+      }) {
       $hostBinary.$($property.Name) = $property.Value
     }
 
     if ($inspection.status -eq "mismatched") {
-      try {
-        Invoke-VmVerifyHostSupervisorShutdown
-        if (-not (Wait-VmVerifyHostSupervisorStopped -TimeoutSeconds 5)) {
-          throw "The existing inference host supervisor did not stop within the timeout."
-        }
-        Invoke-VmVerifyHostProcessTermination -ProcessId $inspection.processId
-        if (-not (Wait-VmVerifyPipe `
-            -PipeName $pipeName `
-            -TimeoutSeconds 15 `
-            -ExpectedPresent:$false)) {
-          throw "The stale inference host pipe did not disappear within the timeout."
-        }
-        Invoke-VmVerifyHostSupervisor `
-          -SupervisorScriptPath $supervisorScript `
-          -HostExe $HostExe `
-          -PipeName $pipeName `
-          -Model $Model `
-          -MockDictionary $MockDictionary
-        $actions.hostSupervisorStarted = $true
-        $staleHostStopped = $true
-        if (-not (Wait-VmVerifyPipe -PipeName $pipeName -TimeoutSeconds 15)) {
-          throw "The bundled inference host did not expose \\.\pipe\$pipeName within the timeout."
-        }
-
-        $replacement = Get-VmVerifyServingHostBinary `
-          -PipeName $pipeName `
-          -HostExe $HostExe `
-          -Manifest $manifest
-        if ($replacement.status -ne "matched") {
-          throw "The replacement inference host could not be verified: $($replacement.reason)"
-        }
-        foreach ($property in $replacement.PSObject.Properties) {
-          $hostBinary.$($property.Name) = $property.Value
-        }
-        $hostBinary.status = "restarted"
-        $hostBinary.reason = "A stale host was stopped and replaced with the bundled inference host."
-        $checks += Get-VmVerifyCheck `
-          -Id "inferenceHost" `
-          -Status "pass" `
-          -Message "A stale inference host was replaced with the bundled binary on \\.\pipe\$pipeName."
-      } catch {
-        $hostBinary.status = "unverified"
-        $hostBinary.reason = $_.Exception.Message
-        $checks += Get-VmVerifyCheck `
-          -Id "inferenceHost" `
-          -Status "fail" `
-          -Message $_.Exception.Message
-      }
+      $hostBinary.status = "unverified"
+      $hostBinary.reason = "The serving host still differs from the bundled inference host after bootstrap."
+      $checks += Get-VmVerifyCheck `
+        -Id "inferenceHost" `
+        -Status "fail" `
+        -Message $hostBinary.reason
     } elseif ($inspection.status -eq "matched") {
       $hostBinary.status = $(if ($staleHostStopped) {
           "restarted"
@@ -718,6 +733,7 @@ function Invoke-VmVerifyBootstrap {
         -Message $hostBinary.reason
     } else {
       $hostBinary.status = "unverified"
+      $hostBinary.reason = $inspection.reason
       Write-Warning "The serving inference host could not be verified: $($inspection.reason)"
       $checks += Get-VmVerifyCheck `
         -Id "inferenceHost" `

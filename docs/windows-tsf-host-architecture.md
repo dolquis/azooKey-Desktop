@@ -34,9 +34,10 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - 古い `request_id` は破棄（ライブ変換での逆転防止）。
   - 実装: `TextService::IpcWorkerThread` で `ipc_pending_id_` と受信 `req_id` を
     比較する staleness check。
-  - Handshake の `host_generation_id` が既知の値から変化した場合も、旧 Host 世代向けの
-    pending / in-flight 要求と候補表示待機状態を破棄する。応答反映時は要求送信時の
-    Host 世代と現在の世代が一致することも freshness 条件に含める。
+  - Handshake の `host_generation_id` が既知の値から変化した場合は request ID を更新し、
+    旧 Host 世代の in-flight 応答を stale 化する。pending 要求と候補表示待機状態は維持して
+    新世代へ再送し、旧候補キャッシュだけを破棄する。Handshake と応答処理は同一 IPC worker
+    で直列化されるため、request ID の不一致が旧世代応答の実効的な破棄経路になる。
 - 確定時は `shown_candidates_` をスナップショットし、in-flight `QueryCandidates`
   に `Cancel` を送ってから EditSession を要求する。
   Cancel は同じ Named Pipe への短命な control 接続を Handshake 済みにして送る。

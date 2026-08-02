@@ -123,6 +123,7 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
   void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false,
                                          bool auto_punctuation = false);
+  bool batch_query_in_progress_for_test() const;
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
   uint64_t pending_ipc_request_id_for_test();

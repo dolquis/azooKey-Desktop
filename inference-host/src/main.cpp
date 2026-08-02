@@ -423,6 +423,11 @@ int main(int argc, char** argv) {
   dconf.host_version = kHostVersion;
   dconf.protocol_version = 1;
   dconf.host_generation_id = CreateHostGenerationId();
+  if (dconf.host_generation_id.empty()) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
+                    "host_generation_id_generation_failed");
+    std::cerr << "warn: failed to generate the inference Host generation ID" << std::endl;
+  }
 #if AZOOKEY_WITH_LLAMA_CPP
   dconf.runtime_tier = "llama_cpp";
 #else

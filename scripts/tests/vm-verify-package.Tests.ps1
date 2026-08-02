@@ -276,6 +276,27 @@ Describe "VM verification package automation" {
     }
   }
 
+  Context "serving host pipe ownership" {
+    It "resolves the process that owns the named pipe" {
+      Mock Get-VmVerifyNamedPipeServerProcessId { 4242 }
+      Mock Get-Process {
+        [pscustomobject]@{
+          Id = 4242
+          Path = "C:\package\azookey_inference_host.exe"
+        }
+      } -ParameterFilter { $Id -eq 4242 }
+
+      $process = Get-VmVerifyServingHostProcess -PipeName "azookey-test"
+
+      $process.Id | Should -Be 4242
+      $process.Path | Should -BeExactly "C:\package\azookey_inference_host.exe"
+      Should -Invoke Get-VmVerifyNamedPipeServerProcessId `
+        -Times 1 `
+        -Exactly `
+        -ParameterFilter { $PipeName -eq "azookey-test" }
+    }
+  }
+
   Context "verify-bootstrap.ps1" {
     BeforeEach {
       $script:testPackageRoot = Join-Path $TestDrive "package"
@@ -365,6 +386,8 @@ Describe "VM verification package automation" {
         "microsoftIme",
         "vmCheckpoint",
         "debugView")
+      @($json.checks | Where-Object { $_.id -eq "inferenceHost" }).Count |
+        Should -Be 1
       @($json.checks.status | Where-Object {
           $_ -notin @("pass", "fail", "manual_required", "not_applicable")
         }).Count | Should -Be 0
@@ -490,6 +513,9 @@ Describe "VM verification package automation" {
 
       $result.overallStatus | Should -Be "pass"
       $result.hostBinary.status | Should -Be "restarted"
+      $script:hostInspectionCount | Should -Be 2
+      @($result.checks | Where-Object { $_.id -eq "inferenceHost" }).Count |
+        Should -Be 1
       Should -Invoke Invoke-VmVerifyHostSupervisorShutdown -Times 1 -Exactly
       Should -Invoke Invoke-VmVerifyHostProcessTermination `
         -Times 1 `
@@ -524,6 +550,41 @@ Describe "VM verification package automation" {
         Should -Be "manual_required"
       Should -Invoke Invoke-VmVerifyHostProcessTermination -Times 0 -Exactly
       Should -Invoke Invoke-VmVerifyHostSupervisor -Times 0 -Exactly
+    }
+
+    It "fails with one public inference host check when the pipe stops before final verification" {
+      $script:bootstrapState.Registered = $true
+      $script:bootstrapState.Pipe = $true
+      $script:pipeProbeCount = 0
+      Mock Test-VmVerifyPipe {
+        $script:pipeProbeCount++
+        return $script:pipeProbeCount -eq 1
+      }
+      Mock Get-VmVerifyServingHostBinary {
+        [pscustomobject][ordered]@{
+          status = "matched"
+          reason = "internal preflight status"
+          processId = 4242
+          runningPath = "C:\package\azookey_inference_host.exe"
+          runningSha256 = ("b" * 64)
+          expectedPath = "C:\package\azookey_inference_host.exe"
+          expectedSha256 = ("b" * 64)
+        }
+      }
+
+      $result = Invoke-VmVerifyBootstrap `
+        -PackageRoot $script:testPackageRoot `
+        -HasCheckpoint
+
+      $result.overallStatus | Should -Be "fail"
+      $result.hostBinary.status | Should -Be "unverified"
+      $result.hostBinary.status | Should -BeIn @(
+        "reused", "restarted", "started", "unverified", "not_applicable")
+      $inferenceHostChecks = @($result.checks | Where-Object {
+          $_.id -eq "inferenceHost"
+        })
+      $inferenceHostChecks.Count | Should -Be 1
+      $inferenceHostChecks[0].status | Should -Be "fail"
     }
   }
 

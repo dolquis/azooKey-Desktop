@@ -1351,24 +1351,24 @@ azooKey が動作しない、候補が出ない、Zenzai が使われていな�
 開発者が短時間で切り分けられるようにする。IME は「入力できない」時点で
 UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に優先実装する。
 
-#### 12.1.1 M44 v1 スコープ
+#### 12.1.1 M44 実装スコープ
 
-M44 v1 は `azookey_diag.exe --json` と `azookey_diag.exe --collect` を提供し、
-D-001〜D-012 を診断する。Host が停止している場合もローカルで判定できる項目を
-継続し、12 項目すべてを stable schema の `checks` 配列へ出力する。
+M44 は `azookey_diag.exe --json`、`--repair`、`--collect` を提供し、
+D-001〜D-013 を診断する。
+Host が停止している場合もローカルで判定できる項目を継続し、13 項目すべてを
+stable schema の `checks` 配列へ出力する。
 
 Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ランタイム tier
 （R1 の `llama_cpp` / `mock`。R2 追加後は `winml`）を表し、`model_loaded` と
 `loaded_model_path` は実際にロードされたモデルだけを表す。設定済みパスの存在だけで
 モデルロード成功と判定してはならない。
 
-v1 の診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
+診断 ZIP は `diag.json`、`settings.redacted.json`、`host-health.json`、
 `ipc-ping.json`、`environment.txt`、`crash-summary.txt` で構成する。Release
-ランタイムログ自体は §7.1.1 の opt-in で取得できるが、診断 ZIP への自動収集は
-follow-up とする。
+ランタイムログが存在する場合は、直近 7 日の `host-*.jsonl` と `tip-*.jsonl` を
+redaction 後に `logs/` へ収集する。
 
-`--repair`、D-013〜D-015、設定アプリの診断タブは follow-up とする。
-したがって、§12.2.1 の `--repair` 列は最終形の修復対象を示し、v1 CLI では実行しない。
+D-014、D-015、設定アプリの診断タブは follow-up とする。
 
 ### 12.2 診断項目
 
@@ -1458,8 +1458,7 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 
 ### 12.3 `azookey_diag.exe` CLI
 
-最終形は 3 サブコマンドを持つ。M44 v1 は `--json` と `--collect` を実装し、
-`--repair` は follow-up とする。
+CLI は 3 サブコマンドを持つ。
 
 ```powershell
 azookey_diag.exe --json                                  # 全項目を JSON で出力
@@ -1493,9 +1492,30 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
 
 `status` は `ok` / `warning` / `error` の 3 値。`--json` はテスト可能な
 stable schema として固定する。
+`--repair` は D-001、D-002、D-003、D-013 を修復した後に全項目を再診断し、
+同じ root object へ次の `repairs` 配列を追加する。
+
+```json
+{
+  "repairs": [
+    {
+      "id": "D-001",
+      "status": "succeeded | failed | not_needed | permission_denied",
+      "before_status": "ok | warning | error",
+      "after_status": "ok | warning | error",
+      "message": "string"
+    }
+  ]
+}
+```
+
+D-001〜D-003 の machine-wide COM / TSF 再登録は 1 回の操作にまとめる。
+非昇格プロセスでは UAC を自動起動せず、`permission_denied` と昇格して再実行する手順を返す。
+修復対象が `ok` の場合は操作せず `not_needed` を返す。
 診断の実行と JSON または ZIP の生成に成功した場合、`status` が `error` でも
 プロセスの exit code は `0` とする。
 引数の不正、probe の実行失敗、ZIP の生成失敗では exit code `2` を返す。
+`--repair` で `failed` または `permission_denied` が残った場合は exit code `3` を返す。
 自動化側は exit code ではなく、出力された `status` と `checks` で診断結果を判定する。
 
 ### 12.4 診断 ZIP 構成

@@ -14,3 +14,9 @@ add_test(
   COMMAND $<TARGET_FILE:azookey_diag> --help --json
 )
 set_tests_properties(diagnostics_cli_rejects_help_with_json PROPERTIES WILL_FAIL TRUE)
+
+add_test(
+  NAME diagnostics_cli_rejects_repair_with_json
+  COMMAND $<TARGET_FILE:azookey_diag> --repair --json
+)
+set_tests_properties(diagnostics_cli_rejects_repair_with_json PROPERTIES WILL_FAIL TRUE)

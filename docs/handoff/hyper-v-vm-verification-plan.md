@@ -54,6 +54,15 @@ Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの推奨�
 VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V ホストの Windows 上（または `powershell.exe` を呼べる WSL 上）で起動した場合に限る。
 クラウド実行（Claude Code on the web など）はホストの Hyper-V に到達できないため、本節の対象外である。
 
+起動場所に加えて、Hyper-V cmdlet を実行できる権限が要る。
+エージェントのシェルは通常非昇格で起動されるため、実行ユーザーが `Hyper-V Administrators` グループに所属していない限り `Get-VM` はアクセス拒否になる（`Administrators` 所属でも、UAC が非昇格トークンから管理者権限を外すため）。
+解消は次のどちらかで行う。
+
+- **推奨**: 実行ユーザーを `Hyper-V Administrators` へ追加し、再ログオンする。
+  非昇格シェルのまま `Get-VM` や `Checkpoint-VM` が通るため、エージェントへ管理者コンソールを常時渡さずに済み、§6 の方針（破壊的 cmdlet を許可リストに入れない）とも整合する。
+- 代替: 管理者起動した PowerShell.MCP 共有コンソールを人間と共用する。
+  管理者権限が要る操作を人間の実行判断に寄せたい場合はこちらを選ぶ。
+
 ### 4.2 操作チャネル別の評価
 
 | チャネル | できること | 評価 | 制約 |
@@ -62,7 +71,7 @@ VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V 
 | PowerShell Direct（`Invoke-Command -VMName`、`New-PSSession -VMName` + `Copy-Item -ToSession/-FromSession`） | ネットワーク設定に依存しないゲスト内コマンド実行と双方向ファイル転送 | ◎ 実用 | ホストで管理者権限、ゲスト資格情報が要る。セッションは非対話（§4.3） |
 | `Copy-VMFile` | ホスト→ゲストの片方向ファイル転送 | ○ 代替 | Guest Service Interface が既定無効。PowerShell Direct の転送で足りる |
 | `Msvm_Keyboard` WMI（`TypeText`、`TypeKey`、`TypeScancodes`） | 仮想キーボードデバイスへの打鍵注入。基本セッションの物理打鍵と同じ入力経路を通る | △ 実験 | `TypeText` は ASCII 512 文字上限。観察手段（下記）とペアでないと判定できない |
-| VMConnect 基本セッション + windows-mcp | ホスト UI 越しの打鍵と、VM 画面のスクリーンショット取得。エージェントは画像を直接読める | △ 実験 | windows-mcp の入力が VMConnect ウィンドウへ期待どおり届くか未確認 |
+| VMConnect 基本セッション + ホスト UI 自動化（windows-mcp または computer-use MCP） | ホスト UI 越しの打鍵と、VM 画面のスクリーンショット取得。エージェントは画像を直接読める | △ 実験 | 入力が VMConnect ウィンドウへ期待どおり届くか未確認。windows-mcp が接続できない環境では、Claude Code の computer-use MCP が同経路の代替になる |
 | ゲスト内 `compat_test.exe` | C-001〜C-012 の UI Automation 自動実行と機械可読レポート | ◎ 実用 | 対話セッション必須。PowerShell Direct のセッションは対話セッションではないため、対話ユーザーのスケジュールタスク経由で起動する |
 
 結論として、補助は可能である。
@@ -73,6 +82,7 @@ VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V 
 
 次の 4 点は文書と API 仕様から確定できないため、L1（§5）の導入前にスパイクで確認する。
 各項目は Linear に個別課題として起票済みで、実施結果と判断は各課題側に残す。
+L1 の成立可否を決める DEV-730 と DEV-731 を先に実施し、層 2 の補助範囲を決める DEV-732 と DEV-733 はその後でよい。
 
 - 管理者資格の PowerShell Direct セッションで `verify-bootstrap.ps1` の管理者判定が真になるか（DEV-730）。
   bootstrap は非管理者のとき `Start-Process -Verb RunAs`（UAC ダイアログ）で昇格するが、非対話セッションでは同意ダイアログを表示できない。
@@ -80,6 +90,7 @@ VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V 
 - PowerShell Direct セッションで構成した per-user host pipe に、対話セッション側の TIP が接続できるか（DEV-731）。
   named pipe の名前空間はセッションをまたぐが、HKCU の自動起動設定が効くのは次回の対話ログオンからである。
 - windows-mcp の入力送出が VMConnect 基本セッションウィンドウへ届くか（DEV-732）。
+  ホスト UI 自動化の実装は windows-mcp に限らず、Claude Code の computer-use MCP でも同じ問いを検証できる。
 - `Msvm_Keyboard` 注入時の候補ウィンドウ挙動を、スクリーンショットと画像読解だけで判定できるか（DEV-733）。
 
 ### 4.4 Claude Code と Codex CLI の比較
@@ -111,9 +122,16 @@ VM 内の登録は checkpoint 復元で可逆なため委任の余地はある�
 導入は次の 3 レベルで段階化する。
 レベルは運用形態の定義であり、達成状態は Linear で追跡する。
 
+どのレベルでも、初回に次のホスト側セットアップを済ませる（人間の一回作業）。
+
+1. 実行ユーザーの `Hyper-V Administrators` への追加と再ログオン（§4.1）。
+2. §2 の構成での VM 作成と、ベースライン checkpoint の取得。
+3. ゲスト資格情報の準備（`Get-Credential` での対話取得、または SecretManagement。§6）。
+4. エージェント側 MCP（`powershell` / `windows-mcp`）の接続確認。環境起因の失敗は `just doctor --fix-hints` で切り分ける。
+
 - **L0 ホスト側支援**: 追加実装なしで今すぐ使える。層 1 のうちゲスト内実行を除く全部（パッケージ生成、checkpoint 管理、転送、回収、サマリ作成）と、層 2 のログ整理、起票支援。
 - **L1 ゲスト内自動検証**: §4.3 のスパイクを先に潰した上で、PowerShell Direct 経由の bootstrap 実行と、対話セッションのスケジュールタスク経由の `compat_test.exe` 実行を自動化する。
-- **L2 打鍵注入の実験**: `Msvm_Keyboard` または VMConnect + windows-mcp で A 系チェックの一部を半自動化する PoC。結果は参考情報にとどめ、人間ゲートを置き換えない。
+- **L2 打鍵注入の実験**: `Msvm_Keyboard` または VMConnect + ホスト UI 自動化（windows-mcp / computer-use MCP）で A 系チェックの一部を半自動化する PoC。結果は参考情報にとどめ、人間ゲートを置き換えない。
 
 ## 6. リスクと制約
 

@@ -240,6 +240,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void ShowCandidateWindowFromCache();
   POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;
+  std::string CurrentDisplayedPreeditSurface() const;
   bool BatchRomajiEnabled() const;
   std::string BatchPreviewSurface() const;
   std::string BatchReadingForConversion() const;

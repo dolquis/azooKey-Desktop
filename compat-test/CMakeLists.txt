@@ -4,6 +4,7 @@ add_library(azookey_compat_test_support STATIC
   runner/ReportWriter.cpp
   runner/ScreenshotCapture.cpp
   runner/TargetConfigLoader.cpp
+  runner/WindowOwnership.cpp
 )
 target_include_directories(azookey_compat_test_support
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"

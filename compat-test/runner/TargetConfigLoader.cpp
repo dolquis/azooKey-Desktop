@@ -149,8 +149,11 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
     config.cases.push_back(item.AsString());
   }
   if (const auto* workarounds = parsed->GetObject("workarounds")) {
+    const azookey::ipc::json::Value workaround_value(*workarounds);
     config.use_temporary_document =
-        azookey::ipc::json::Value(*workarounds).GetBool("use_temporary_document").value_or(false);
+        workaround_value.GetBool("use_temporary_document").value_or(false);
+    config.allow_reused_window_for_temporary_document =
+        workaround_value.GetBool("allow_reused_window_for_temporary_document").value_or(false);
   }
   if (const auto* temporary_document = launch_value.GetObject("temporary_document")) {
     const azookey::ipc::json::Value temporary_document_value(*temporary_document);
@@ -168,6 +171,9 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
   if (config.executable.empty() || config.window_classes.front().empty() ||
       config.edit_control_class.empty() || config.candidate_window_class.empty() ||
       config.cases.empty() ||
+      (config.allow_reused_window_for_temporary_document && !config.use_temporary_document) ||
+      (config.allow_reused_window_for_temporary_document &&
+       !config.save_temporary_document_before_close) ||
       (config.editor_control_type != "document" && config.editor_control_type != "edit")) {
     return std::nullopt;
   }

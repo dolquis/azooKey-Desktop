@@ -11,15 +11,18 @@
 #include <array>
 #include <chrono>
 #include <cwchar>
+#include <cwctype>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
 #include <thread>
+#include <vector>
 
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
 #include "runner/TargetConfigLoader.h"
+#include "runner/WindowOwnership.h"
 
 namespace azookey::compat_test {
 namespace {
@@ -57,40 +60,142 @@ std::set<HWND> SnapshotTargetWindows(const TargetConfig& target) {
   return windows;
 }
 
-HWND FindNewTargetWindow(const TargetConfig& target, const std::set<HWND>& existing,
-                         DWORD preferred_process_id) {
+bool TargetExecutableMatches(HWND window, const TargetConfig& target, DWORD launched_process_id) {
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(window, &process_id);
+  if (process_id == launched_process_id) return true;
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+  wchar_t image_path[32768]{};
+  DWORD image_path_size = static_cast<DWORD>(std::size(image_path));
+  const bool image_matches =
+      process && QueryFullProcessImageNameW(process, 0, image_path, &image_path_size) &&
+      _wcsicmp(std::filesystem::path(image_path).filename().c_str(),
+               std::filesystem::path(target.executable).filename().c_str()) == 0;
+  if (process) CloseHandle(process);
+  return image_matches;
+}
+
+bool ContainsCaseInsensitive(std::wstring_view text, std::wstring_view needle) {
+  if (needle.empty() || needle.size() > text.size()) return false;
+  return std::search(text.begin(), text.end(), needle.begin(), needle.end(),
+                     [](wchar_t left, wchar_t right) {
+                       return std::towlower(left) == std::towlower(right);
+                     }) != text.end();
+}
+
+bool TemporaryDocumentIsSelected(IUIAutomation* automation, HWND window,
+                                 const std::filesystem::path& temporary_document) {
+  if (!automation || temporary_document.empty()) return false;
+  const auto filename = temporary_document.filename().wstring();
+  const auto stem = temporary_document.stem().wstring();
+  const auto matches_document = [&](std::wstring_view name) {
+    return ContainsCaseInsensitive(name, filename) || ContainsCaseInsensitive(name, stem);
+  };
+
+  IUIAutomationElement* root = nullptr;
+  if (SUCCEEDED(automation->ElementFromHandle(window, &root)) && root) {
+    VARIANT type_value;
+    VariantInit(&type_value);
+    type_value.vt = VT_I4;
+    type_value.lVal = UIA_TabItemControlTypeId;
+    IUIAutomationCondition* condition = nullptr;
+    IUIAutomationElementArray* tabs = nullptr;
+    if (SUCCEEDED(automation->CreatePropertyCondition(UIA_ControlTypePropertyId, type_value,
+                                                      &condition)) &&
+        condition && SUCCEEDED(root->FindAll(TreeScope_Descendants, condition, &tabs)) && tabs) {
+      int length = 0;
+      tabs->get_Length(&length);
+      for (int index = 0; index < length; ++index) {
+        IUIAutomationElement* tab = nullptr;
+        if (FAILED(tabs->GetElement(index, &tab)) || !tab) continue;
+        BSTR name = nullptr;
+        tab->get_CurrentName(&name);
+        IUnknown* unknown = nullptr;
+        IUIAutomationSelectionItemPattern* selection = nullptr;
+        BOOL selected = FALSE;
+        const bool is_selected_document =
+            name && matches_document(std::wstring_view(name, SysStringLen(name))) &&
+            SUCCEEDED(tab->GetCurrentPattern(UIA_SelectionItemPatternId, &unknown)) && unknown &&
+            SUCCEEDED(unknown->QueryInterface(IID_PPV_ARGS(&selection))) && selection &&
+            SUCCEEDED(selection->get_CurrentIsSelected(&selected)) && selected;
+        if (name) SysFreeString(name);
+        SafeRelease(selection);
+        SafeRelease(unknown);
+        SafeRelease(tab);
+        if (is_selected_document) {
+          SafeRelease(tabs);
+          SafeRelease(condition);
+          SafeRelease(root);
+          return true;
+        }
+      }
+    }
+    SafeRelease(tabs);
+    SafeRelease(condition);
+    SafeRelease(root);
+  }
+
+  const int title_length = GetWindowTextLengthW(window);
+  if (title_length <= 0) return false;
+  std::vector<wchar_t> title(static_cast<size_t>(title_length) + 1);
+  if (GetWindowTextW(window, title.data(), static_cast<int>(title.size())) <= 0) return false;
+  return matches_document(title.data());
+}
+
+std::vector<TargetWindowObservation> ObserveTargetWindows(
+    const TargetConfig& target, const std::set<HWND>& existing, DWORD launched_process_id,
+    IUIAutomation* automation, const std::filesystem::path& temporary_document) {
   struct Data {
     const TargetConfig* target;
     const std::set<HWND>* existing;
-    DWORD preferred_process_id;
-    HWND preferred{nullptr};
-    HWND fallback{nullptr};
-  } data{&target, &existing, preferred_process_id};
+    DWORD launched_process_id;
+    IUIAutomation* automation;
+    const std::filesystem::path* temporary_document;
+    std::vector<TargetWindowObservation>* observations;
+  } data{&target, &existing, launched_process_id, automation, &temporary_document, nullptr};
+  std::vector<TargetWindowObservation> observations;
+  data.observations = &observations;
   EnumWindows(
       [](HWND window, LPARAM param) -> BOOL {
         auto* data = reinterpret_cast<Data*>(param);
-        if (!IsConfiguredWindow(window, *data->target) || data->existing->contains(window)) {
-          return TRUE;
-        }
+        if (!IsConfiguredWindow(window, *data->target)) return TRUE;
         DWORD process_id = 0;
         GetWindowThreadProcessId(window, &process_id);
-        if (process_id == data->preferred_process_id) {
-          data->preferred = window;
-          return FALSE;
-        }
-        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-        wchar_t image_path[32768]{};
-        DWORD image_path_size = static_cast<DWORD>(std::size(image_path));
-        const bool image_matches =
-            process && QueryFullProcessImageNameW(process, 0, image_path, &image_path_size) &&
-            _wcsicmp(std::filesystem::path(image_path).filename().c_str(),
-                     std::filesystem::path(data->target->executable).filename().c_str()) == 0;
-        if (process) CloseHandle(process);
-        if (image_matches && !data->fallback) data->fallback = window;
+        const bool existed_before = data->existing->contains(window);
+        data->observations->push_back(
+            {.window_id = reinterpret_cast<std::uintptr_t>(window),
+             .process_id = process_id,
+             .existed_before = existed_before,
+             .executable_matches =
+                 TargetExecutableMatches(window, *data->target, data->launched_process_id),
+             .temporary_document_selected =
+                 existed_before && data->target->allow_reused_window_for_temporary_document &&
+                 TemporaryDocumentIsSelected(data->automation, window, *data->temporary_document)});
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&data));
-  return data.preferred ? data.preferred : data.fallback;
+  return observations;
+}
+
+bool FindFirstVisibleDescendant(IUIAutomationElement* root, IUIAutomationCondition* condition,
+                                IUIAutomationElement** result) {
+  IUIAutomationElementArray* matches = nullptr;
+  if (FAILED(root->FindAll(TreeScope_Descendants, condition, &matches)) || !matches) return false;
+  int length = 0;
+  matches->get_Length(&length);
+  for (int index = 0; index < length; ++index) {
+    IUIAutomationElement* element = nullptr;
+    if (FAILED(matches->GetElement(index, &element)) || !element) continue;
+    BOOL offscreen = TRUE;
+    if (SUCCEEDED(element->get_CurrentIsOffscreen(&offscreen)) && !offscreen) {
+      *result = element;
+      SafeRelease(matches);
+      return true;
+    }
+    SafeRelease(element);
+  }
+  SafeRelease(matches);
+  return false;
 }
 
 std::wstring QuoteArgument(std::wstring_view value) {
@@ -196,19 +301,28 @@ bool AutomationSession::Start(std::string* reason_code) {
     if (reason_code) *reason_code = "target-launch-failed";
     return false;
   }
-  WaitForInputIdle(process_info_.hProcess, 5000);
-  for (int attempt = 0; attempt < 100 && !window_; ++attempt) {
-    window_ = FindNewTargetWindow(target_, existing, process_info_.dwProcessId);
-    if (!window_) std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-  if (!window_) {
-    if (reason_code) *reason_code = "new-target-window-not-found";
-    return false;
-  }
-  owns_window_ = true;
+  owns_launched_process_ = true;
   if (FAILED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
                               IID_PPV_ARGS(&automation_)))) {
     if (reason_code) *reason_code = "uia-initialization-failed";
+    return false;
+  }
+  WaitForInputIdle(process_info_.hProcess, 5000);
+  TargetSurfaceSelection selection;
+  for (int attempt = 0; attempt < 100 && !window_; ++attempt) {
+    const auto observations = ObserveTargetWindows(target_, existing, process_info_.dwProcessId,
+                                                   automation_, temporary_document_);
+    selection = SelectTargetSurface(observations, process_info_.dwProcessId,
+                                    target_.allow_reused_window_for_temporary_document);
+    if (selection.ownership != TargetSurfaceOwnership::None) {
+      window_ = reinterpret_cast<HWND>(selection.window_id);
+      owns_window_ = selection.ownership == TargetSurfaceOwnership::Window;
+      owns_document_tab_ = selection.ownership == TargetSurfaceOwnership::DocumentTab;
+    }
+    if (!window_) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (!window_) {
+    if (reason_code) *reason_code = TargetSurfaceFailureReason(selection.failure);
     return false;
   }
   constexpr auto kEditorDiscoveryTimeout = std::chrono::seconds(15);
@@ -277,7 +391,7 @@ bool AutomationSession::FindEditorElement() {
       search_condition = combined_condition;
     }
 
-    root->FindFirst(TreeScope_Descendants, search_condition, &editor_);
+    FindFirstVisibleDescendant(root, search_condition, &editor_);
     SafeRelease(combined_condition);
     SafeRelease(name_condition);
     SafeRelease(type_condition);
@@ -293,7 +407,7 @@ bool AutomationSession::FindEditorElement() {
         SUCCEEDED(
             automation_->CreatePropertyCondition(UIA_ClassNamePropertyId, value, &condition)) &&
         condition) {
-      root->FindFirst(TreeScope_Descendants, condition, &editor_);
+      FindFirstVisibleDescendant(root, condition, &editor_);
       SafeRelease(condition);
     }
     VariantClear(&value);
@@ -535,28 +649,41 @@ bool AutomationSession::CaptureFailureArtifacts(
 void AutomationSession::CloseLaunchedWindow() {
   const auto close_deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(target_.close_grace_period_ms);
-  if (owns_window_ && window_ && IsWindow(window_)) {
+  const bool has_owned_surface =
+      window_ && IsWindow(window_) && (owns_window_ || owns_document_tab_);
+  const bool reused_document_is_selected =
+      owns_document_tab_ && has_owned_surface &&
+      TemporaryDocumentIsSelected(automation_, window_, temporary_document_);
+  const bool may_cleanup_surface = owns_window_ || reused_document_is_selected;
+  bool temporary_document_saved = true;
+  if (has_owned_surface && may_cleanup_surface) {
     if (!temporary_document_.empty() && target_.save_temporary_document_before_close && editor_) {
-      ClearEditor();
-      INPUT control_down{};
-      control_down.type = INPUT_KEYBOARD;
-      control_down.ki.wVk = VK_CONTROL;
-      INPUT s_down{};
-      s_down.type = INPUT_KEYBOARD;
-      s_down.ki.wVk = 'S';
-      INPUT s_up = s_down;
-      s_up.ki.dwFlags = KEYEVENTF_KEYUP;
-      INPUT control_up = control_down;
-      control_up.ki.dwFlags = KEYEVENTF_KEYUP;
-      SendKeyInputs({control_down, s_down, s_up, control_up});
+      temporary_document_saved = ClearEditor() && SendModifiedKey({VK_CONTROL}, 'S');
       std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
-    PostMessageW(window_, WM_CLOSE, 0, 0);
-    while (IsWindow(window_) && std::chrono::steady_clock::now() < close_deadline) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    if (owns_window_) {
+      PostMessageW(window_, WM_CLOSE, 0, 0);
+      while (IsWindow(window_) && std::chrono::steady_clock::now() < close_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+    } else if (temporary_document_saved &&
+               TemporaryDocumentIsSelected(automation_, window_, temporary_document_) &&
+               FocusEditor()) {
+      SendModifiedKey({VK_CONTROL}, 'W');
+      while (IsWindow(window_) &&
+             TemporaryDocumentIsSelected(automation_, window_, temporary_document_) &&
+             std::chrono::steady_clock::now() < close_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
     }
   }
-  if (process_info_.hProcess) {
+  if (owns_document_tab_ && has_owned_surface &&
+      (!may_cleanup_surface || !temporary_document_saved)) {
+    std::cerr << "Skipped temporary document cleanup because ownership or save confirmation was "
+                 "unavailable\n";
+  }
+  if (owns_launched_process_ && process_info_.hProcess) {
     const auto now = std::chrono::steady_clock::now();
     const DWORD remaining_ms =
         now < close_deadline
@@ -571,6 +698,8 @@ void AutomationSession::CloseLaunchedWindow() {
   }
   window_ = nullptr;
   owns_window_ = false;
+  owns_document_tab_ = false;
+  owns_launched_process_ = false;
 }
 
 }  // namespace azookey::compat_test

@@ -21,6 +21,7 @@
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
 #include "runner/TargetConfigLoader.h"
+#include "runner/WindowOwnership.h"
 
 namespace azookey::compat_test {
 namespace {
@@ -203,6 +204,23 @@ TEST(TargetConfigFilesTest, EdgeAndVsCodeDeclareDocumentedWorkarounds) {
   EXPECT_EQ(vscode_value.GetBool("ignore_electron_ime_event_order"), true);
 }
 
+TEST(TargetConfigFilesTest, NotepadAllowsOnlyOwnedTemporaryDocumentInReusedWindow) {
+  const auto path = std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / "notepad.json";
+  const auto parsed = azookey::ipc::json::Parse(ReadFile(path));
+  ASSERT_TRUE(parsed);
+  const auto* workarounds = parsed->GetObject("workarounds");
+  ASSERT_NE(workarounds, nullptr);
+  const azookey::ipc::json::Value workaround_value(*workarounds);
+  EXPECT_EQ(workaround_value.GetBool("require_new_window"), false);
+  EXPECT_EQ(workaround_value.GetBool("use_temporary_document"), true);
+  EXPECT_EQ(workaround_value.GetBool("allow_reused_window_for_temporary_document"), true);
+
+  const auto config = LoadTargetConfig(path);
+  ASSERT_TRUE(config);
+  EXPECT_TRUE(config->use_temporary_document);
+  EXPECT_TRUE(config->allow_reused_window_for_temporary_document);
+}
+
 TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePeriod) {
   TemporaryDirectory temp;
   const auto path = temp.path() / "target.json";
@@ -227,7 +245,10 @@ TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePe
       "candidate_window_class": "CandidateWindow"
     },
     "cases": ["C-001"],
-    "workarounds": {"use_temporary_document": false}
+    "workarounds": {
+      "use_temporary_document": false,
+      "allow_reused_window_for_temporary_document": true
+    }
   })json";
   WriteFile(path, kTargetJson);
 
@@ -238,6 +259,7 @@ TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePe
   EXPECT_EQ(config->editor_name, L"compat editor");
   EXPECT_TRUE(config->use_temporary_document);
   EXPECT_TRUE(config->save_temporary_document_before_close);
+  EXPECT_TRUE(config->allow_reused_window_for_temporary_document);
   EXPECT_EQ(config->close_grace_period_ms, 5000u);
 
   const auto document = CreateTemporaryDocument(*config);
@@ -261,6 +283,20 @@ TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePe
   std::string invalid_extension(kTargetJson);
   invalid_extension.replace(invalid_extension.find(".html"), 5, "html");
   WriteFile(path, invalid_extension);
+  EXPECT_FALSE(LoadTargetConfig(path));
+
+  std::string reused_window_without_temporary_document(kTargetJson);
+  reused_window_without_temporary_document.replace(
+      reused_window_without_temporary_document.find("\"temporary_document\""), 20,
+      "\"ignored_document\"");
+  WriteFile(path, reused_window_without_temporary_document);
+  EXPECT_FALSE(LoadTargetConfig(path));
+
+  std::string reused_window_without_safe_save(kTargetJson);
+  const auto contents_key = reused_window_without_safe_save.find("\"contents\"");
+  ASSERT_NE(contents_key, std::string::npos);
+  reused_window_without_safe_save.insert(contents_key, "\"save_before_close\": false, ");
+  WriteFile(path, reused_window_without_safe_save);
   EXPECT_FALSE(LoadTargetConfig(path));
 }
 
@@ -377,6 +413,75 @@ TEST(ClipboardIsolationTest, ReportsRestoreFailure) {
                                       [] { return ClipboardActionStatus::Completed; }),
             ClipboardIsolationStatus::RestoreFailed);
   EXPECT_EQ(clipboard.calls, (std::vector<std::string>{"backup", "replace", "restore"}));
+}
+
+TEST(WindowOwnershipTest, SelectsNewWindowOwnedByLaunchedProcess) {
+  const std::array observations{
+      TargetWindowObservation{
+          .window_id = 1, .process_id = 42, .existed_before = false, .executable_matches = true},
+  };
+
+  const auto selection = SelectTargetSurface(observations, 42, true);
+
+  EXPECT_EQ(selection.window_id, 1u);
+  EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::Window);
+  EXPECT_EQ(selection.failure, TargetSurfaceFailure::None);
+  EXPECT_TRUE(selection.window_process_is_launched_process);
+}
+
+TEST(WindowOwnershipTest, SelectsNewWindowCreatedByExistingTargetProcess) {
+  const std::array observations{
+      TargetWindowObservation{
+          .window_id = 1, .process_id = 7, .existed_before = true, .executable_matches = true},
+      TargetWindowObservation{
+          .window_id = 2, .process_id = 7, .existed_before = false, .executable_matches = true},
+  };
+
+  const auto selection = SelectTargetSurface(observations, 42, true);
+
+  EXPECT_EQ(selection.window_id, 2u);
+  EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::Window);
+  EXPECT_EQ(selection.failure, TargetSurfaceFailure::None);
+  EXPECT_FALSE(selection.window_process_is_launched_process);
+}
+
+TEST(WindowOwnershipTest, SelectsTemporaryDocumentInReusedWindow) {
+  const std::array observations{
+      TargetWindowObservation{.window_id = 1,
+                              .process_id = 7,
+                              .existed_before = true,
+                              .executable_matches = true,
+                              .temporary_document_selected = true},
+  };
+
+  const auto selection = SelectTargetSurface(observations, 42, true);
+
+  EXPECT_EQ(selection.window_id, 1u);
+  EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::DocumentTab);
+  EXPECT_EQ(selection.failure, TargetSurfaceFailure::None);
+  EXPECT_FALSE(selection.window_process_is_launched_process);
+}
+
+TEST(WindowOwnershipTest, ReportsMissingWindowWhenTargetCreatesNoWindow) {
+  const auto selection = SelectTargetSurface(std::span<const TargetWindowObservation>{}, 42, true);
+
+  EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::None);
+  EXPECT_EQ(selection.failure, TargetSurfaceFailure::NewWindowNotFound);
+  EXPECT_STREQ(TargetSurfaceFailureReason(selection.failure), "new-target-window-not-found");
+}
+
+TEST(WindowOwnershipTest, RejectsReusedWindowWithoutDocumentOwnership) {
+  const std::array observations{
+      TargetWindowObservation{
+          .window_id = 1, .process_id = 7, .existed_before = true, .executable_matches = true},
+  };
+
+  const auto selection = SelectTargetSurface(observations, 42, true);
+
+  EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::None);
+  EXPECT_EQ(selection.failure, TargetSurfaceFailure::DocumentOwnershipNotEstablished);
+  EXPECT_STREQ(TargetSurfaceFailureReason(selection.failure),
+               "target-document-ownership-not-established");
 }
 
 }  // namespace

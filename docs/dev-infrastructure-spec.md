@@ -1868,8 +1868,35 @@ Notepad targetでは、再接続待ちを後続ケースへ波及させないた
 
 runner / C-001〜C-012 / unit test はトップ `CMakeLists.txt` から
 `add_subdirectory(compat-test)` で Windows ビルドへ配線する。
-Notepad は `Notepad`、Edge と VS Code は `Chrome_WidgetWin_1` の新規ウィンドウだけを
-操作する。
+
+runner は起動前後のトップレベルウィンドウを比較し、起動後に増えた対象 class の
+ウィンドウだけを runner 所有として扱う。
+この判定では、`CreateProcessW` が返した PID のウィンドウを優先し、対象 executable と
+同名の既存 process が新しいウィンドウを生成した場合も、その新規ウィンドウを選択する。
+runner 所有の新規ウィンドウは `WM_CLOSE` の対象にできるが、既存 process 自体は終了しない。
+
+Modern Notepad は設定に応じて、指定された一時 document を既存ウィンドウの新規 tab として
+開く場合がある。
+Notepad target は `use_temporary_document` と
+`allow_reused_window_for_temporary_document` を有効にし、UI Automation の選択中 `TabItem`
+または一意な一時ファイル名を含むアクティブウィンドウ title で今回の document を識別する。
+識別できた場合、runner が所有するのは一時 document の tab だけであり、既存ウィンドウと
+既存 process は所有しない。
+終了時は一時 document が選択中であることを再確認し、保存操作に成功した場合だけ
+`Ctrl+W` でその tab を閉じる。
+再利用を許可する target は `save_before_close` を無効にできない。
+所有権を再確認できない場合は既存ウィンドウを閉じず、一時 document の cleanup を中止する。
+
+runner が `TerminateProcess` の対象にできるのは、自身の `CreateProcessW` が返した process
+handle に限る。
+対象ウィンドウの PID が起動 PID と異なる場合、その対象 process を終了してはならない。
+対象 class のウィンドウが生成されなければ `new-target-window-not-found`、既存ウィンドウを
+検出しても一時 document の所有権を一意に証明できなければ
+`target-document-ownership-not-established` の `failing-skip` とする。
+回帰テストは「起動 process の新規ウィンドウ」「既存 process が生成した新規ウィンドウ」
+「既存ウィンドウ内の新規 tab」「ウィンドウ未生成」を区別する。
+
+Edge と VS Code は `Chrome_WidgetWin_1` の新規ウィンドウだけを操作する。
 Edge は外部通信を行わない一時 HTML の textarea、VS Code は拡張機能を無効にした
 一時テキストファイルを使う。
 3 target とも C-010 を最後に実行し、Host の再接続待ちを後続ケースへ波及させない。

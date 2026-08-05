@@ -242,8 +242,8 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
 #### 2.4.1 候補選択と preedit の表示
 
 候補表示中も、かな reading は変換要求と再編集に使う正典として保持する。
-一方、上下キーまたは Space で候補選択が変わったときは、選択中候補の `surface` を
-表示用 preedit として EditSession から composition range へ反映する。
+一方、候補ウィンドウを表示した時点と、上下キーまたは Space で候補選択が変わったときは、
+選択中候補の `surface` を表示用 preedit として EditSession から composition range へ反映する。
 Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
 
 Esc、追加入力、Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
@@ -535,6 +535,8 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 へ取り込む。
 `/` と Shift 付きの `<`、`>`、`?` は、その文字を preedit へ取り込む。
 未確定ローマ字が残っている場合は先にかなへ確定し、記号を同じ composition の末尾へ追加する。
+batch 変換の raw 入力には ASCII の `,` と `.` を保持するが、かな preview と raw romaji
+preview の表示では明示句読点として `、。` へ変換する。
 
 preedit がない場合、これらのキーはアプリへパススルーする。
 preedit に取り込んだ記号は通常の Backspace と同じ削除対象とし、アプリ本文と IME 内部に
@@ -542,6 +544,8 @@ preedit に取り込んだ記号は通常の Backspace と同じ削除対象と�
 
 `docs/dynamic-punctuation-spec.md` の自動句読点は、ユーザーが明示的に押したキーの
 字種と状態遷移を扱わないため、本節の契約とは別機能である。
+テンキーの `VK_DECIMAL` と `VK_DIVIDE` は本節の対象外とし、現段階では composition へ
+取り込まない。
 
 ## 4. IME On/Off 状態管理 (M21 と統合)
 

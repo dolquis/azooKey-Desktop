@@ -51,6 +51,31 @@ class KeyboardStateGuard {
   std::array<BYTE, 256> original_{};
 };
 
+bool CurrentKeyboardLayoutProduces(WPARAM virtual_key, bool shift, WCHAR expected) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return false;
+  for (const int key : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT}) {
+    keyboard_state[static_cast<size_t>(key)] = shift ? 0x80 : 0;
+  }
+
+  const HKL keyboard_layout = GetKeyboardLayout(0);
+  const UINT scan_code =
+      MapVirtualKeyExW(static_cast<UINT>(virtual_key), MAPVK_VK_TO_VSC, keyboard_layout);
+  std::array<WCHAR, 4> translated{};
+  constexpr UINT kDoNotChangeKeyboardState = 1u << 2;
+  const int translated_count = ToUnicodeEx(
+      static_cast<UINT>(virtual_key), scan_code, keyboard_state.data(), translated.data(),
+      static_cast<int>(translated.size()), kDoNotChangeKeyboardState, keyboard_layout);
+  return translated_count == 1 && translated[0] == expected;
+}
+
+bool SupportsDefaultOemPunctuationTestLayout() {
+  return CurrentKeyboardLayoutProduces(VK_OEM_COMMA, false, L',') &&
+         CurrentKeyboardLayoutProduces(VK_OEM_PERIOD, false, L'.') &&
+         CurrentKeyboardLayoutProduces(VK_OEM_2, false, L'/') &&
+         CurrentKeyboardLayoutProduces(VK_OEM_2, true, L'?');
+}
+
 template <typename Predicate>
 bool WaitUntil(Predicate predicate,
                std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
@@ -690,6 +715,9 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
 
 TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   TextServiceHarness h;
+  if (!SupportsDefaultOemPunctuationTestLayout()) {
+    GTEST_SKIP() << "requires an en-US or Japanese layout with , . / ? OEM mappings";
+  }
   h.keyboard_state.SetDown(VK_SHIFT, false);
   h.keyboard_state.SetDown(VK_LSHIFT, false);
   h.keyboard_state.SetDown(VK_RSHIFT, false);
@@ -743,6 +771,9 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchOemPunctuationKeepsAsciiRawAndBackspacesAtomically) {
   TextServiceHarness h;
+  if (!SupportsDefaultOemPunctuationTestLayout()) {
+    GTEST_SKIP() << "requires an en-US or Japanese layout with , . / ? OEM mappings";
+  }
   h.service.set_batch_romaji_options_for_test(true);
   h.keyboard_state.SetDown(VK_SHIFT, false);
   h.keyboard_state.SetDown(VK_LSHIFT, false);
@@ -1474,12 +1505,44 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresRe
   h.service.set_cached_candidates_for_test(std::move(candidates));
 
   EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(composition_range.last_text, L"蚊");
   EXPECT_TRUE(h.Press(VK_DOWN));
   EXPECT_EQ(composition_range.last_text, L"科");
   EXPECT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.Press(VK_ESCAPE));
   EXPECT_EQ(composition_range.last_text, L"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LateCandidatesUpdatePreeditWhenWindowFirstAppears) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange composition_range;
+  FakeRange selection_range;
+  composition_range.clone_range = &selection_range;
+  composition.AddRef();
+  composition.range_ = &composition_range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(composition_range.last_text, L"か");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+
+  EXPECT_EQ(composition_range.last_text, L"蚊");
   EXPECT_EQ(h.service.preedit_kana_, "か");
 
   h.service.composition_->Release();

@@ -106,7 +106,6 @@ struct OemCompositionSymbol {
 
 std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
   std::string surface;
-  surface.reserve(text.size());
   for (const char c : text) {
     switch (c) {
       case ',':
@@ -673,6 +672,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
         const POINT pt = CandidateAnchorPoint();
         candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
+      } else {
+        candidate_ui_.EndUI();
       }
     };
     auto request_preedit_update_or_restore_on_oom =
@@ -897,6 +898,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                 const POINT pt = CandidateAnchorPoint();
                 const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
                 if (FAILED(begin_hr)) return begin_hr;
+                const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+                if (FAILED(update_hr)) return update_hr;
               }
             }
           }
@@ -2179,7 +2182,17 @@ void TextService::ShowCandidateWindowFromCache() {
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
-  candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+  if (FAILED(begin_hr)) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_ui_begin_failed");
+    return;
+  }
+
+  const HRESULT update_hr = active_context_ ? RequestPreeditUpdate(active_context_) : E_UNEXPECTED;
+  if (FAILED(update_hr)) {
+    candidate_ui_.EndUI();
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_initial_preedit_update_failed");
+  }
 }
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -2537,7 +2550,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     // range used for the full-composition display attribute above.
     ITfRange* selection_range = nullptr;
     HRESULT selection_hr = pRange->Clone(&selection_range);
-    if (SUCCEEDED(selection_hr) && selection_range) {
+    if (SUCCEEDED(selection_hr) && !selection_range) selection_hr = E_UNEXPECTED;
+    if (SUCCEEDED(selection_hr)) {
       selection_hr = selection_range->Collapse(ec, TF_ANCHOR_END);
       if (SUCCEEDED(selection_hr)) {
         TF_SELECTION selection{};

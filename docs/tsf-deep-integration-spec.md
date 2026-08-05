@@ -239,6 +239,17 @@ UI 要素 ID 返却）。`pbShow` の値による分岐は次の通り（§2.6 �
   出す。§2.6・§2.8）。アプリは `ITfCandidateListUIElement::GetString` 等を QI 経由
   で呼んで候補を取得し、自身で描画する。
 
+#### 2.4.1 候補選択と preedit の表示
+
+候補表示中も、かな reading は変換要求と再編集に使う正典として保持する。
+一方、候補ウィンドウを表示した時点と、上下キーまたは Space で候補選択が変わったときは、
+選択中候補の `surface` を表示用 preedit として EditSession から composition range へ反映する。
+Enter と数字キーは、この表示中 `surface` と同じ候補を確定する。
+
+Esc、追加入力、Backspace で候補表示を閉じるときは、表示用 preedit を正典の reading
+へ戻してから次の編集を反映する。
+候補の `surface` を reading バッファへ書き戻してはならない。
+
 ### 2.5 受け入れ条件
 
 - Windows 11 / Office (TF_TMF_UIELEMENTENABLEDONLY) で TIP の自前ウィンドウが
@@ -516,6 +527,26 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 - 「あした」を選択して無変換キー → 「アシタ」→「ｱｼﾀ」→「ＡＳＨＩＴＡ」→「ASHITA」と巡回
 - 「あした」を選択して変換キー → 「明日」候補が出る
 
+### 3.5 composition 中の OEM 記号キー
+
+`VK_OEM_COMMA`、`VK_OEM_PERIOD`、`VK_OEM_2` は、現在の keyboard layout と modifier
+状態を使って文字へ変換する。
+変換結果が `,` または `.` のときは、既定の明示句読点 `、` または `。` として preedit
+へ取り込む。
+`/` と Shift 付きの `<`、`>`、`?` は、その文字を preedit へ取り込む。
+未確定ローマ字が残っている場合は先にかなへ確定し、記号を同じ composition の末尾へ追加する。
+batch 変換の raw 入力には ASCII の `,` と `.` を保持するが、かな preview と raw romaji
+preview の表示では明示句読点として `、。` へ変換する。
+
+preedit がない場合、これらのキーはアプリへパススルーする。
+preedit に取り込んだ記号は通常の Backspace と同じ削除対象とし、アプリ本文と IME 内部に
+編集対象を分裂させない。
+
+`docs/dynamic-punctuation-spec.md` の自動句読点は、ユーザーが明示的に押したキーの
+字種と状態遷移を扱わないため、本節の契約とは別機能である。
+テンキーの `VK_DECIMAL` と `VK_DIVIDE` は本節の対象外とし、現段階では composition へ
+取り込まない。
+
 ## 4. IME On/Off 状態管理 (M21 と統合)
 
 ### 4.1 ITfKeyboardOpenCloseCompartment 購読
@@ -621,6 +652,13 @@ EditSession が composition 全体へ `GUID_PROP_ATTRIBUTE` を 1 回 `SetValue`
 | `lsStyle` / `fBoldLine` | `TF_LS_SOLID` / `FALSE` |
 | `crText` / `crBk` / `crLine` | いずれも `TF_CT_NONE`（アプリ既定の描画に委ねる） |
 | 適用単位 | composition 全体（文節を区別しない） |
+
+通常の preedit 更新では、composition 全体へ `SetText` と `GUID_PROP_ATTRIBUTE` の
+`SetValue` を適用した後、その range を `Clone` する。
+clone した selection 用 range を `TF_ANCHOR_END` へ collapse し、`SetSelection` で
+キャレットを末尾へ移す。
+表示属性用 range 自体を collapse すると下線の適用範囲が失われるため、selection 用 range
+と共有しない。
 
 M23 の 3 属性（§5.1）と M3 の属性は次のように対応する。`bAttr` は
 [`TF_DA_ATTR_INFO`](https://learn.microsoft.com/windows/win32/api/msctf/ne-msctf-tf_da_attr_info)
@@ -822,6 +860,7 @@ Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 | Configure 起動 | `tsf-tip/tests/configure_test.cpp` | Windows 限定。Show が EXE を起動するか |
 | KeyMap 互換 | `tsf-tip/tests/keymap_msime_compat_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動 |
 | CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
+| Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | Segment DisplayAttribute | `tsf-tip/tests/segment_attr_test.cpp` | Windows 限定。3 文節の attribute 設定 |
 | DisplayAttribute（M3 単一属性・§5.6） | `tsf-tip/tests/display_attribute_test.cpp` | Windows 限定。属性値の定義と enumerator の Next / Skip / Reset / Clone。clone が位置と属性定義を複製すること |
 

@@ -2,6 +2,7 @@
 
 #include <shellscalingapi.h>
 
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -96,6 +97,71 @@ bool HasSystemModifierDown() {
   return IsVirtualKeyDown(VK_CONTROL) || IsVirtualKeyDown(VK_LCONTROL) ||
          IsVirtualKeyDown(VK_RCONTROL) || IsVirtualKeyDown(VK_MENU) || IsVirtualKeyDown(VK_LMENU) ||
          IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+}
+
+struct OemCompositionSymbol {
+  char raw;
+  std::string surface;
+};
+
+std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
+  std::string surface;
+  for (const char c : text) {
+    switch (c) {
+      case ',':
+        surface += "、";
+        break;
+      case '.':
+        surface += "。";
+        break;
+      default:
+        surface.push_back(c);
+        break;
+    }
+  }
+  return surface;
+}
+
+std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual_key,
+                                                                  LPARAM key_data) {
+  if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2) {
+    return std::nullopt;
+  }
+
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+
+  const HKL keyboard_layout = GetKeyboardLayout(0);
+  UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
+  if (scan_code == 0) {
+    scan_code = MapVirtualKeyExW(static_cast<UINT>(virtual_key), MAPVK_VK_TO_VSC, keyboard_layout);
+  }
+
+  std::array<WCHAR, 4> translated{};
+  constexpr UINT kDoNotChangeKeyboardState = 1u << 2;
+  const int translated_count = ToUnicodeEx(
+      static_cast<UINT>(virtual_key), scan_code, keyboard_state.data(), translated.data(),
+      static_cast<int>(translated.size()), kDoNotChangeKeyboardState, keyboard_layout);
+  if (translated_count != 1) return std::nullopt;
+
+  switch (translated[0]) {
+    case L',':
+    case L'、':
+      return OemCompositionSymbol{',', "、"};
+    case L'.':
+    case L'。':
+      return OemCompositionSymbol{'.', "。"};
+    case L'/':
+      return OemCompositionSymbol{'/', "/"};
+    case L'<':
+      return OemCompositionSymbol{'<', "<"};
+    case L'>':
+      return OemCompositionSymbol{'>', ">"};
+    case L'?':
+      return OemCompositionSymbol{'?', "?"};
+    default:
+      return std::nullopt;
+  }
 }
 
 bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
@@ -478,7 +544,6 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                         BOOL* eaten) {
   UNREFERENCED_PARAMETER(context);
-  UNREFERENCED_PARAMETER(lParam);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   try {
@@ -496,12 +561,17 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
+    const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
 
     if (wParam >= 'A' && wParam <= 'Z') {
       *eaten = TRUE;
     } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
       // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
       // composition が無いときは通常のハイフンとしてアプリへ通す。
+      *eaten = has_preedit ? TRUE : FALSE;
+    } else if (composition_symbol) {
+      // 明示句読点と slash は composition 中だけ取り込む。composition が無いときは
+      // アプリへパススルーし、通常の記号入力を横取りしない。
       *eaten = has_preedit ? TRUE : FALSE;
     } else if (wParam == VK_BACK) {
       *eaten = has_preedit ? TRUE : FALSE;
@@ -536,7 +606,6 @@ STDMETHODIMP TextService::OnTestKeyUp(ITfContext* context, WPARAM wParam, LPARAM
 
 STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                     BOOL* eaten) {
-  UNREFERENCED_PARAMETER(lParam);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   try {
@@ -603,6 +672,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
         const POINT pt = CandidateAnchorPoint();
         candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
+      } else {
+        candidate_ui_.EndUI();
       }
     };
     auto request_preedit_update_or_restore_on_oom =
@@ -616,6 +687,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     };
 
     const bool cand_visible = candidate_ui_.IsShowing();
+    const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
+    const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     if (wParam >= 'A' && wParam <= 'Z') {
       const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
@@ -668,6 +741,31 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         CancelPendingQueriesForLifecycle();
       } else {
         preedit_kana_ += romaji_.Feed('-');
+      }
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
+      if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
+      *eaten = TRUE;
+
+    } else if (composition_symbol && has_preedit) {
+      const auto rollback_state = capture_preedit_rollback_state();
+      if (cand_visible) {
+        candidate_ui_.EndUI();
+        selected_candidate_idx_ = 0;
+      }
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_.clear();
+        candidate_window_show_pending_ = false;
+      }
+      if (BatchRomajiEnabled()) {
+        batch_raw_romaji_.push_back(composition_symbol->raw);
+        RefreshBatchPreeditSurface();
+        batch_query_in_progress_ = false;
+        CancelPendingQueriesForLifecycle();
+      } else {
+        preedit_kana_ += romaji_.Flush();
+        preedit_kana_ += composition_symbol->surface;
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
@@ -727,9 +825,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (BatchRomajiEnabled() && !batch_raw_romaji_.empty()) {
         *eaten = TRUE;
         if (cand_visible) {
+          const auto rollback_state = capture_preedit_rollback_state();
           const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
           if (FAILED(move_hr)) return move_hr;
           selected_candidate_idx_ = candidate_ui_.GetSelected();
+          const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+          if (FAILED(update_hr)) return update_hr;
         } else if (batch_query_in_progress_) {
           // Batch conversion is already waiting for a response.  Eat repeated
           // Space presses without re-sending the same request.
@@ -771,6 +872,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
             if (FAILED(move_hr)) return move_hr;
             selected_candidate_idx_ = candidate_ui_.GetSelected();
+            const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+            if (FAILED(update_hr)) return update_hr;
           } else {
             // Snapshot the candidate list so commit always reflects what was
             // displayed, even if a late QueryCandidates response arrives later.
@@ -795,6 +898,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                 const POINT pt = CandidateAnchorPoint();
                 const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
                 if (FAILED(begin_hr)) return begin_hr;
+                const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+                if (FAILED(update_hr)) return update_hr;
               }
             }
           }
@@ -803,17 +908,23 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_UP) {
       if (cand_visible) {
+        const auto rollback_state = capture_preedit_rollback_state();
         const HRESULT move_hr = candidate_ui_.MoveSelection(-1);
         if (FAILED(move_hr)) return move_hr;
         selected_candidate_idx_ = candidate_ui_.GetSelected();
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
       }
 
     } else if (wParam == VK_DOWN) {
       if (cand_visible) {
+        const auto rollback_state = capture_preedit_rollback_state();
         const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
         if (FAILED(move_hr)) return move_hr;
         selected_candidate_idx_ = candidate_ui_.GetSelected();
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
       }
 
@@ -843,8 +954,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     } else if (wParam == VK_ESCAPE) {
       if (cand_visible) {
+        const auto rollback_state = capture_preedit_rollback_state();
         candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
+        const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+        if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
       } else if (BatchRomajiEnabled() && batch_query_in_progress_) {
         CancelPendingQueriesForLifecycle();
@@ -2023,6 +2137,14 @@ std::string TextService::CurrentPreeditSurface() const {
   return preedit_kana_ + romaji_.PreviewPending();
 }
 
+std::string TextService::CurrentDisplayedPreeditSurface() const {
+  if (candidate_ui_.IsShowing() && selected_candidate_idx_ >= 0 &&
+      selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
+    return shown_candidates_[static_cast<size_t>(selected_candidate_idx_)].surface;
+  }
+  return CurrentPreeditSurface();
+}
+
 void TextService::OnCandidatesReady(void* context) {
   if (!context) return;
   static_cast<TextService*>(context)->ShowCandidateWindowFromCache();
@@ -2060,7 +2182,17 @@ void TextService::ShowCandidateWindowFromCache() {
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
-  candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+  if (FAILED(begin_hr)) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_ui_begin_failed");
+    return;
+  }
+
+  const HRESULT update_hr = active_context_ ? RequestPreeditUpdate(active_context_) : E_UNEXPECTED;
+  if (FAILED(update_hr)) {
+    candidate_ui_.EndUI();
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_initial_preedit_update_failed");
+  }
 }
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -2142,13 +2274,14 @@ bool TextService::BatchRomajiEnabled() const {
 
 std::string TextService::BatchPreviewSurface() const {
   if (batch_romaji_preview_romaji_.load(std::memory_order_relaxed)) {
-    return batch_raw_romaji_;
+    return ApplyDefaultCompositionPunctuation(batch_raw_romaji_);
   }
-  return core::RomajiKanaConverter::Preview(batch_raw_romaji_);
+  return ApplyDefaultCompositionPunctuation(core::RomajiKanaConverter::Preview(batch_raw_romaji_));
 }
 
 std::string TextService::BatchReadingForConversion() const {
-  return core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_);
+  return ApplyDefaultCompositionPunctuation(
+      core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_));
 }
 
 void TextService::RefreshBatchPreeditSurface() { preedit_kana_ = BatchPreviewSurface(); }
@@ -2305,7 +2438,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     }
 
     // Normal preedit update.
-    const std::wstring kana = Utf8ToWide(service_->CurrentPreeditSurface());
+    const std::wstring kana = Utf8ToWide(service_->CurrentDisplayedPreeditSurface());
 
     if (kana.empty()) {
       if (service_->composition_) {
@@ -2411,6 +2544,26 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         pCatMgr->Release();
       }
       pProp->Release();
+    }
+
+    // Keep the document caret at the end of the preedit without collapsing the
+    // range used for the full-composition display attribute above.
+    ITfRange* selection_range = nullptr;
+    HRESULT selection_hr = pRange->Clone(&selection_range);
+    if (SUCCEEDED(selection_hr) && !selection_range) selection_hr = E_UNEXPECTED;
+    if (SUCCEEDED(selection_hr)) {
+      selection_hr = selection_range->Collapse(ec, TF_ANCHOR_END);
+      if (SUCCEEDED(selection_hr)) {
+        TF_SELECTION selection{};
+        selection.range = selection_range;
+        selection.style.ase = TF_AE_NONE;
+        selection.style.fInterimChar = FALSE;
+        selection_hr = context_->SetSelection(ec, 1, &selection);
+      }
+      selection_range->Release();
+    }
+    if (FAILED(selection_hr)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "preedit_selection_update_failed");
     }
 
     pRange->Release();

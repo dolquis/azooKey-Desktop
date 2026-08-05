@@ -51,6 +51,31 @@ class KeyboardStateGuard {
   std::array<BYTE, 256> original_{};
 };
 
+bool CurrentKeyboardLayoutProduces(WPARAM virtual_key, bool shift, WCHAR expected) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return false;
+  for (const int key : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT}) {
+    keyboard_state[static_cast<size_t>(key)] = shift ? 0x80 : 0;
+  }
+
+  const HKL keyboard_layout = GetKeyboardLayout(0);
+  const UINT scan_code =
+      MapVirtualKeyExW(static_cast<UINT>(virtual_key), MAPVK_VK_TO_VSC, keyboard_layout);
+  std::array<WCHAR, 4> translated{};
+  constexpr UINT kDoNotChangeKeyboardState = 1u << 2;
+  const int translated_count = ToUnicodeEx(
+      static_cast<UINT>(virtual_key), scan_code, keyboard_state.data(), translated.data(),
+      static_cast<int>(translated.size()), kDoNotChangeKeyboardState, keyboard_layout);
+  return translated_count == 1 && translated[0] == expected;
+}
+
+bool SupportsDefaultOemPunctuationTestLayout() {
+  return CurrentKeyboardLayoutProduces(VK_OEM_COMMA, false, L',') &&
+         CurrentKeyboardLayoutProduces(VK_OEM_PERIOD, false, L'.') &&
+         CurrentKeyboardLayoutProduces(VK_OEM_2, false, L'/') &&
+         CurrentKeyboardLayoutProduces(VK_OEM_2, true, L'?');
+}
+
 template <typename Predicate>
 bool WaitUntil(Predicate predicate,
                std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
@@ -179,9 +204,12 @@ class FakeRange final : public ITfRange {
 
   STDMETHODIMP Clone(ITfRange** clone) override {
     if (!clone) return E_POINTER;
-    *clone = static_cast<ITfRange*>(this);
-    AddRef();
-    return S_OK;
+    *clone = nullptr;
+    if (FAILED(clone_result)) return clone_result;
+    ITfRange* cloned_range = clone_range ? clone_range : static_cast<ITfRange*>(this);
+    cloned_range->AddRef();
+    *clone = cloned_range;
+    return clone_result;
   }
 
   STDMETHODIMP GetContext(ITfContext** context) override {
@@ -195,6 +223,8 @@ class FakeRange final : public ITfRange {
   TfAnchor last_anchor{TF_ANCHOR_START};
   HRESULT set_text_result{S_OK};
   HRESULT collapse_result{S_OK};
+  HRESULT clone_result{S_OK};
+  ITfRange* clone_range{nullptr};
 
  private:
   LONG ref_count_{1};
@@ -262,9 +292,11 @@ class NoopContext final : public ITfContext {
     return S_OK;
   }
 
-  STDMETHODIMP SetSelection(TfEditCookie, ULONG selection_count, const TF_SELECTION*) override {
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG selection_count,
+                            const TF_SELECTION* selection) override {
     ++set_selection_count;
     last_selection_count = selection_count;
+    last_selection_range = selection_count > 0 && selection ? selection[0].range : nullptr;
     return set_selection_result;
   }
 
@@ -341,6 +373,7 @@ class NoopContext final : public ITfContext {
   IUnknown* identity_unknown_{nullptr};
   int set_selection_count{0};
   ULONG last_selection_count{0};
+  ITfRange* last_selection_range{nullptr};
   HRESULT set_selection_result{S_OK};
 
  private:
@@ -678,6 +711,86 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_GE(h.context.request_count, 2);
   EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
+  TextServiceHarness h;
+  if (!SupportsDefaultOemPunctuationTestLayout()) {
+    GTEST_SKIP() << "requires an en-US or Japanese layout with , . / ? OEM mappings";
+  }
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  h.keyboard_state.SetDown(VK_LSHIFT, false);
+  h.keyboard_state.SetDown(VK_RSHIFT, false);
+
+  EXPECT_FALSE(h.TestPress(VK_OEM_COMMA));
+  EXPECT_FALSE(h.Press(VK_OEM_COMMA));
+  EXPECT_FALSE(h.TestPress(VK_OEM_PERIOD));
+  EXPECT_FALSE(h.Press(VK_OEM_PERIOD));
+  EXPECT_FALSE(h.TestPress(VK_OEM_2));
+  EXPECT_FALSE(h.Press(VK_OEM_2));
+
+  FakeComposition composition;
+  FakeRange range;
+  composition.AddRef();
+  composition.range_ = &range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.TestPress(VK_OEM_COMMA));
+  EXPECT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、");
+  EXPECT_EQ(range.last_text, L"ん、");
+
+  EXPECT_TRUE(h.TestPress(VK_OEM_PERIOD));
+  EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。");
+  EXPECT_EQ(range.last_text, L"ん、。");
+
+  EXPECT_TRUE(h.TestPress(VK_OEM_2));
+  EXPECT_TRUE(h.Press(VK_OEM_2));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。/");
+  EXPECT_EQ(range.last_text, L"ん、。/");
+
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。");
+  EXPECT_EQ(range.last_text, L"ん、。");
+
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(h.TestPress(VK_OEM_2));
+  EXPECT_TRUE(h.Press(VK_OEM_2));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。?");
+  EXPECT_EQ(range.last_text, L"ん、。?");
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+
+  if (h.service.composition_) {
+    h.service.composition_->Release();
+    h.service.composition_ = nullptr;
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BatchOemPunctuationKeepsAsciiRawAndBackspacesAtomically) {
+  TextServiceHarness h;
+  if (!SupportsDefaultOemPunctuationTestLayout()) {
+    GTEST_SKIP() << "requires an en-US or Japanese layout with , . / ? OEM mappings";
+  }
+  h.service.set_batch_romaji_options_for_test(true);
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  h.keyboard_state.SetDown(VK_LSHIFT, false);
+  h.keyboard_state.SetDown(VK_RSHIFT, false);
+
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('I'));
+  EXPECT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.service.preedit_kana_, "に、");
+
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "に");
+
+  EXPECT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "に、");
+  EXPECT_EQ(h.service.pending_ipc_raw_romaji_for_test(), "ni,");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchRomajiAccumulatesKanaPreviewWithoutQuerying) {
@@ -1142,6 +1255,32 @@ TEST(TsfTipOnKeyDownPreeditTest, PendingNIsShownInPreeditWithoutCommittingRomaji
   h.service.composition_ = nullptr;
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateMovesCaretWithASeparateRange) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange composition_range;
+  FakeRange selection_range;
+  composition_range.clone_range = &selection_range;
+  composition.AddRef();
+  composition.range_ = &composition_range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+
+  EXPECT_EQ(composition_range.last_text, L"か");
+  EXPECT_EQ(composition_range.collapse_count, 0);
+  EXPECT_EQ(selection_range.collapse_count, 2);
+  EXPECT_EQ(selection_range.last_anchor, TF_ANCHOR_END);
+  EXPECT_EQ(h.context.set_selection_count, 2);
+  EXPECT_EQ(h.context.last_selection_count, 1u);
+  EXPECT_EQ(h.context.last_selection_range, &selection_range);
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, BackspaceClearsPendingNPreeditPreview) {
   TextServiceHarness h;
   FakeComposition composition;
@@ -1343,6 +1482,71 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(range.last_text, std::wstring(1, L'\x79d1'));
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresReading) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange composition_range;
+  FakeRange selection_range;
+  composition_range.clone_range = &selection_range;
+  composition.AddRef();
+  composition.range_ = &composition_range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(composition_range.last_text, L"蚊");
+  EXPECT_TRUE(h.Press(VK_DOWN));
+  EXPECT_EQ(composition_range.last_text, L"科");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(composition_range.last_text, L"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LateCandidatesUpdatePreeditWhenWindowFirstAppears) {
+  TextServiceHarness h;
+  FakeComposition composition;
+  FakeRange composition_range;
+  FakeRange selection_range;
+  composition_range.clone_range = &selection_range;
+  composition.AddRef();
+  composition.range_ = &composition_range;
+  h.service.composition_ = &composition;
+  h.context.run_edit_session = true;
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  ASSERT_EQ(composition_range.last_text, L"か");
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  h.service.show_candidate_window_from_cache_for_test();
+
+  EXPECT_EQ(composition_range.last_text, L"蚊");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  h.service.composition_->Release();
+  h.service.composition_ = nullptr;
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberSelectionCommitsCorrespondingCandidate) {

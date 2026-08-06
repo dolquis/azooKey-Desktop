@@ -152,6 +152,7 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
     const azookey::ipc::json::Value workaround_value(*workarounds);
     config.use_temporary_document =
         workaround_value.GetBool("use_temporary_document").value_or(false);
+    config.require_new_window = workaround_value.GetBool("require_new_window").value_or(false);
     config.allow_reused_window_for_temporary_document =
         workaround_value.GetBool("allow_reused_window_for_temporary_document").value_or(false);
   }
@@ -171,9 +172,9 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
   if (config.executable.empty() || config.window_classes.front().empty() ||
       config.edit_control_class.empty() || config.candidate_window_class.empty() ||
       config.cases.empty() ||
-      (config.allow_reused_window_for_temporary_document && !config.use_temporary_document) ||
       (config.allow_reused_window_for_temporary_document &&
-       !config.save_temporary_document_before_close) ||
+       (config.require_new_window || !config.use_temporary_document ||
+        !config.save_temporary_document_before_close)) ||
       (config.editor_control_type != "document" && config.editor_control_type != "edit")) {
     return std::nullopt;
   }

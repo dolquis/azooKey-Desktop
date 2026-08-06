@@ -49,7 +49,11 @@ TargetSurfaceSelection SelectTargetSurface(std::span<const TargetWindowObservati
               .failure = TargetSurfaceFailure::None,
               .window_process_is_launched_process = first->process_id == launched_process_id};
     }
-    if (!observations.empty()) {
+    const bool has_matching_existing_window =
+        std::ranges::any_of(observations, [](const TargetWindowObservation& observation) {
+          return observation.existed_before && observation.executable_matches;
+        });
+    if (has_matching_existing_window) {
       return {.failure = TargetSurfaceFailure::DocumentOwnershipNotEstablished};
     }
   }

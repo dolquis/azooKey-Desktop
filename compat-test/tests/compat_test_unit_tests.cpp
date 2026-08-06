@@ -57,6 +57,41 @@ class TemporaryDirectory {
   std::filesystem::path path_;
 };
 
+constexpr std::string_view kTargetConfigJson = R"json({
+  "id": "test-target",
+  "display_name": "Test target",
+  "app_id": "Test.App",
+  "automation_level": "full",
+  "launch": {
+    "executable": "test.exe",
+    "close_grace_period_ms": 5000,
+    "temporary_document": {
+      "extension": ".html",
+      "contents": "<textarea aria-label=\"compat editor\"></textarea>"
+    }
+  },
+  "window": {
+    "class": "TestWindow",
+    "edit_control_class": "TestEditor",
+    "editor_control_type": "edit",
+    "editor_name": "compat editor",
+    "candidate_window_class": "CandidateWindow"
+  },
+  "cases": ["C-001"],
+  "workarounds": {
+    "require_new_window": false,
+    "use_temporary_document": false,
+    "allow_reused_window_for_temporary_document": true
+  }
+})json";
+
+std::optional<TargetConfig> LoadTargetConfigText(std::string_view contents) {
+  TemporaryDirectory temp;
+  const auto path = temp.path() / "target.json";
+  WriteFile(path, contents);
+  return LoadTargetConfig(path);
+}
+
 class FakeClipboardAccess final : public ClipboardAccess {
  public:
   bool Backup() override {
@@ -217,6 +252,7 @@ TEST(TargetConfigFilesTest, NotepadAllowsOnlyOwnedTemporaryDocumentInReusedWindo
 
   const auto config = LoadTargetConfig(path);
   ASSERT_TRUE(config);
+  EXPECT_FALSE(config->require_new_window);
   EXPECT_TRUE(config->use_temporary_document);
   EXPECT_TRUE(config->allow_reused_window_for_temporary_document);
 }
@@ -224,33 +260,7 @@ TEST(TargetConfigFilesTest, NotepadAllowsOnlyOwnedTemporaryDocumentInReusedWindo
 TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePeriod) {
   TemporaryDirectory temp;
   const auto path = temp.path() / "target.json";
-  constexpr std::string_view kTargetJson = R"json({
-    "id": "test-target",
-    "display_name": "Test target",
-    "app_id": "Test.App",
-    "automation_level": "full",
-    "launch": {
-      "executable": "test.exe",
-      "close_grace_period_ms": 5000,
-      "temporary_document": {
-        "extension": ".html",
-        "contents": "<textarea aria-label=\"compat editor\"></textarea>"
-      }
-    },
-    "window": {
-      "class": "TestWindow",
-      "edit_control_class": "TestEditor",
-      "editor_control_type": "edit",
-      "editor_name": "compat editor",
-      "candidate_window_class": "CandidateWindow"
-    },
-    "cases": ["C-001"],
-    "workarounds": {
-      "use_temporary_document": false,
-      "allow_reused_window_for_temporary_document": true
-    }
-  })json";
-  WriteFile(path, kTargetJson);
+  WriteFile(path, kTargetConfigJson);
 
   const auto config = LoadTargetConfig(path);
   ASSERT_TRUE(config);
@@ -259,6 +269,7 @@ TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePe
   EXPECT_EQ(config->editor_name, L"compat editor");
   EXPECT_TRUE(config->use_temporary_document);
   EXPECT_TRUE(config->save_temporary_document_before_close);
+  EXPECT_FALSE(config->require_new_window);
   EXPECT_TRUE(config->allow_reused_window_for_temporary_document);
   EXPECT_EQ(config->close_grace_period_ms, 5000u);
 
@@ -269,35 +280,48 @@ TEST(TargetConfigLoaderTest, LoadsTemporaryDocumentEditorIdentityAndCloseGracePe
   std::error_code ec;
   std::filesystem::remove(document, ec);
   EXPECT_FALSE(ec);
+}
 
-  std::string invalid_id(kTargetJson);
+TEST(TargetConfigLoaderTest, RejectsInvalidIdentifierControlTypeAndExtension) {
+  std::string invalid_id(kTargetConfigJson);
   invalid_id.replace(invalid_id.find("test-target"), 11, "test_target");
-  WriteFile(path, invalid_id);
-  EXPECT_FALSE(LoadTargetConfig(path));
+  EXPECT_FALSE(LoadTargetConfigText(invalid_id));
 
-  std::string invalid_control_type(kTargetJson);
+  std::string invalid_control_type(kTargetConfigJson);
   invalid_control_type.replace(invalid_control_type.find("\"edit\""), 6, "\"button\"");
-  WriteFile(path, invalid_control_type);
-  EXPECT_FALSE(LoadTargetConfig(path));
+  EXPECT_FALSE(LoadTargetConfigText(invalid_control_type));
 
-  std::string invalid_extension(kTargetJson);
+  std::string invalid_extension(kTargetConfigJson);
   invalid_extension.replace(invalid_extension.find(".html"), 5, "html");
-  WriteFile(path, invalid_extension);
-  EXPECT_FALSE(LoadTargetConfig(path));
+  EXPECT_FALSE(LoadTargetConfigText(invalid_extension));
+}
 
-  std::string reused_window_without_temporary_document(kTargetJson);
-  reused_window_without_temporary_document.replace(
-      reused_window_without_temporary_document.find("\"temporary_document\""), 20,
-      "\"ignored_document\"");
-  WriteFile(path, reused_window_without_temporary_document);
-  EXPECT_FALSE(LoadTargetConfig(path));
+TEST(TargetConfigLoaderTest, ReusedWindowRequiresTemporaryDocument) {
+  std::string reused_window_without_temporary_document(kTargetConfigJson);
+  constexpr std::string_view kTemporaryDocumentKey = "\"temporary_document\"";
+  const auto key_position = reused_window_without_temporary_document.find(kTemporaryDocumentKey);
+  ASSERT_NE(key_position, std::string::npos);
+  reused_window_without_temporary_document.replace(key_position, kTemporaryDocumentKey.size(),
+                                                   "\"ignored_document\"");
+  EXPECT_FALSE(LoadTargetConfigText(reused_window_without_temporary_document));
+}
 
-  std::string reused_window_without_safe_save(kTargetJson);
+TEST(TargetConfigLoaderTest, ReusedWindowRequiresSaveBeforeClose) {
+  std::string reused_window_without_safe_save(kTargetConfigJson);
   const auto contents_key = reused_window_without_safe_save.find("\"contents\"");
   ASSERT_NE(contents_key, std::string::npos);
   reused_window_without_safe_save.insert(contents_key, "\"save_before_close\": false, ");
-  WriteFile(path, reused_window_without_safe_save);
-  EXPECT_FALSE(LoadTargetConfig(path));
+  EXPECT_FALSE(LoadTargetConfigText(reused_window_without_safe_save));
+}
+
+TEST(TargetConfigLoaderTest, ReusedWindowConflictsWithNewWindowRequirement) {
+  std::string conflicting_requirements(kTargetConfigJson);
+  constexpr std::string_view kDisabledRequirement = "\"require_new_window\": false";
+  const auto require_new_window = conflicting_requirements.find(kDisabledRequirement);
+  ASSERT_NE(require_new_window, std::string::npos);
+  conflicting_requirements.replace(require_new_window, kDisabledRequirement.size(),
+                                   "\"require_new_window\": true");
+  EXPECT_FALSE(LoadTargetConfigText(conflicting_requirements));
 }
 
 TEST(TargetConfigLoaderTest, ResolvesSearchPathAppPathsAndQuotedConfiguredPaths) {
@@ -482,6 +506,18 @@ TEST(WindowOwnershipTest, RejectsReusedWindowWithoutDocumentOwnership) {
   EXPECT_EQ(selection.failure, TargetSurfaceFailure::DocumentOwnershipNotEstablished);
   EXPECT_STREQ(TargetSurfaceFailureReason(selection.failure),
                "target-document-ownership-not-established");
+}
+
+TEST(WindowOwnershipTest, ReportsMissingWindowWhenOnlyOtherExecutablesMatchWindowClass) {
+  const std::array observations{
+      TargetWindowObservation{
+          .window_id = 1, .process_id = 7, .existed_before = true, .executable_matches = false},
+  };
+
+  const auto selection = SelectTargetSurface(observations, 42, true);
+
+  EXPECT_EQ(selection.ownership, TargetSurfaceOwnership::None);
+  EXPECT_EQ(selection.failure, TargetSurfaceFailure::NewWindowNotFound);
 }
 
 }  // namespace

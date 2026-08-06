@@ -55,6 +55,8 @@ struct TargetConfig {
   uint32_t close_grace_period_ms{1500};
   std::wstring temporary_document_extension{L".txt"};
   std::string temporary_document_contents;
+  bool require_new_window{false};
+  bool allow_reused_window_for_temporary_document{false};
 };
 
 class AutomationSession {
@@ -98,6 +100,10 @@ class AutomationSession {
   IUIAutomation* automation_{nullptr};
   IUIAutomationElement* editor_{nullptr};
   bool owns_window_{false};
+  bool owns_document_tab_{false};
+  bool owns_launched_process_{false};
+  bool window_process_is_launched_process_{false};
+  bool remove_temporary_document_on_destroy_{true};
   bool baseline_verified_{false};
   bool focus_lost_{false};
   uint64_t editor_discovery_duration_ms_{0};

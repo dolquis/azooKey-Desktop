@@ -21,9 +21,10 @@
     "C-009", "C-011", "C-012", "C-010"
   ],
   "workarounds": {
-    "require_new_window": true,
+    "require_new_window": false,
     "use_temporary_document": true,
+    "allow_reused_window_for_temporary_document": true,
     "redact_target_and_candidate_windows": true
   },
-  "notes": "Notepad は M50 gate の full automation target（docs/dev-infrastructure-spec.md §13）。既存ウィンドウは変更せず、runner が起動した新規ウィンドウだけを操作する。class=Notepad のトップレベルウィンドウだけを対象とし、ApplicationFrameWindow/CoreWindow 構成は未対応。C-001〜C-012 を登録し、C-010 は後続ケースへ再接続待ちを波及させないため最後に実行する。"
+  "notes": "Notepad は M50 gate の full automation target（docs/dev-infrastructure-spec.md §13）。runner が起動した新規ウィンドウ、または一意な一時 document の選択状態を確認できた既存ウィンドウだけを操作する。再利用時は既存ウィンドウと process を終了せず、runner が作成した tab だけを閉じる。class=Notepad のトップレベルウィンドウだけを対象とし、ApplicationFrameWindow/CoreWindow 構成は未対応。C-001〜C-012 を登録し、C-010 は後続ケースへ再接続待ちを波及させないため最後に実行する。"
 }

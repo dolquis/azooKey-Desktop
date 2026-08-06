@@ -362,9 +362,12 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   なった論理バッチは**部分確定しない**。TIP は残る in-flight 全サブリクエスト ID へ
   control 接続から `Cancel` を送り、§7 の fallback 連鎖（`ai-cleanup` → `neural` →
   かな確定）で入力を失わずに確定可能にする。
-- **stale 応答の drain（必須）**: `ReceiveWithTimeout` はタイムアウト時に応答を消費
-  せず `nullopt` を返す（`ipc/src/NamedPipeTransport.cpp`）。host 側 `ClientLoop` は
-  ハンドラ完了後に最終 / canceled 応答を **primary 接続に必ず書き込む**ため、タイム
+- **stale 応答の drain（必須）**: `ReceiveWithTimeout` はフレーム到着待ちの
+  タイムアウト時に応答を消費せず `nullopt` を返す（`ipc/src/NamedPipeTransport.cpp`。
+  相の定義は `docs/dev-infrastructure-spec.md` §6.4.8。`T_sub` は同項の
+  request deadline として渡し、フレーム転送中に `T_sub` を超えた場合のみ接続を
+  切断するため、以下の drain は接続が維持されている場合の規約である）。host 側
+  `ClientLoop` はハンドラ完了後に最終 / canceled 応答を **primary 接続に必ず書き込む**ため、タイム
   アウト / キャンセルした各サブリクエストの応答は遅れて primary パイプに到着する。
   したがって TIP は、**fallback / 新しいバッチを同じ primary 接続へ送る前に**、次の
   いずれかで stale 応答を排除しなければならない:

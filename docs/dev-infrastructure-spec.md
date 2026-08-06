@@ -678,16 +678,43 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   transport レイヤの規約である。推論に要した時間は本デッドラインに算入されない
   （write の計時は handler が応答を返した後に始まる）。
 
-  **適用範囲**: server 側（overlapped ハンドル）に限る。`NamedPipeClient` は
-  `FILE_FLAG_OVERLAPPED` なしで開いた同期ハンドルを使うため、呼び出しの途中で
-  中断できず、デッドラインは chunk と chunk の間でしか効かない。client 側の
-  stall 耐性は別課題として扱う（`NamedPipeClient::ReceiveWithTimeout` は
-  `PeekNamedPipe` でヘッダを観測した時点で blocking read に入るため、本文が
-  来ない場合に名前が示す timeout 保証を満たさない）。
+  **適用範囲**: server 側と `NamedPipeClient` の双方に適用する。どちらも
+  `FILE_FLAG_OVERLAPPED` 付きのハンドルを使い、本項の計時規約（idle は計時せず、
+  最初の 1 byte で arm し、ハード超過で当該接続を切る）を共有する。client 側は
+  受信 API が引数でタイムアウトを取るため、その引数と本項のデッドラインの
+  役割分担を §6.4.8 で定める。
 
   **残余リスク**: 何も送らない idle 接続を `kMaxPipeInstances`（32）本張って
   枯渇させる DoS は本項では防げない。これは同一ユーザー権限のプロセスを前提と
   するため §6.4.4 の脅威モデル上、主防御の対象外である。
+- **6.4.8 client 受信の二相セマンティクス** — `NamedPipeClient::ReceiveWithTimeout(N)`
+  は性質の異なる 2 つの待ちを 1 回の呼び出しに含む。両方を同じ上限で縛ると、
+  健全な接続を切るか、無期限ブロックを許すかのどちらかになる。そこで相ごとに
+  上限を分ける。
+
+  **相 A（フレーム到着待ち）**: 引数 `N` はこの相だけを縛る。1 byte も到着
+  しないまま `N` を超えた場合は `nullopt` を返し、接続は維持し、pipe からは
+  何も取り出さない。呼び出し側は同じ応答を次の呼び出しで受け取れる。TIP は
+  50ms 程度のスライスでこの API を繰り返し呼ぶため（`tsf-tip/src/TextService.cpp`
+  の応答待ちループ）、相 A のタイムアウトは異常ではなく通常の制御フローである。
+  `docs/romaji-batch-conversion-spec.md` の stale 応答 drain も「タイムアウトは
+  応答を消費しない」というこの性質に依存する。
+
+  **相 B（フレーム転送中）**: 最初の 1 byte が到着した時点で相 B に入り、以降の
+  上限は `N` ではなく §6.4.7 の read ハードデッドラインになる。`N` で縛らない
+  のは、1 MiB までのフレーム（`kMaxFrameSize`）が 64KiB の chunk
+  （`kPipeBufferSize`）に分割されて届き得るためで、呼び出し側のスライス境界と
+  フレーム境界は一致しない。相 B を `N` で打ち切ると、大きい応答を正常に運んで
+  いる接続を切ることになる。
+
+  **相 B のハード超過**: §6.4.7 と同じく当該接続を切断して `nullopt` を返す
+  （以後 `IsConnected()` は false）。部分的に読み出したフレームからは同期を
+  回復できないため、接続を維持したままの再開はしない。結果として
+  `ReceiveWithTimeout(N)` 1 回の所要は概ね `N + read ハード` を上限に有界である。
+
+  **タイムアウトを取らない API**: `Receive()` は相 A を無期限に待ち（idle な
+  接続は正常）、相 B は §6.4.7 の read ハードデッドラインで縛る。`Send()` は
+  同項の write ハードデッドラインで縛る。
 
 ### M40 受け入れ条件
 
@@ -699,6 +726,9 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - 複数接続・切断テストが追加され緑
 - 切断済み client が解放される
 - 64KiB を超える length-prefix フレームが往復できる
+- ヘッダだけを送って沈黙する peer に対し、`NamedPipeClient` の受信が有界時間で
+  戻り、当該接続を切断する（§6.4.8。相 A のタイムアウトでは接続を維持し、
+  応答を消費しない）
 - 未配線 MessageType に明示エラー応答が返り、blocking client がハングしない。
   MessageType 列挙 ↔ `Payloads` codec の網羅整合が検査される（DEV-162）
 - 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する（DEV-163）

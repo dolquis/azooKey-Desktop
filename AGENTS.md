@@ -145,8 +145,11 @@ Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-requi
 `agent:codex-impl` フィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` /
 `enhancement` も対象）が対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で
 難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を確定する前に
-In Progress へ入っていないか（spec-first 分業の担保。詳細は
-`docs/linear-conventions.md` §13 Project Delta）。加えて
+In Progress へ入っていないか（spec-first 分業の担保）。spec-first の対象には、
+未定義だった既定値・状態遷移を確定する `kind:bug` も含める。さらに
+未完了のままアーカイブされた課題（アーカイブ衛生）と、
+前提の失効した保留（保留理由とした仕組みが別課題の着地で用意済みになっていないか）を点検する。
+以上の repo 固有項目の詳細は `docs/linear-conventions.md` §13 Project Delta。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。
 点検は Linear のルーティング衛生のみを対象とし、仕様・設計の正典は引き続き repo docs に置く。

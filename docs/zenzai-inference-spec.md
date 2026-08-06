@@ -636,7 +636,9 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
-| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
+| unit | pre-tokenizer override 写像（§9.2）: `gpt2-small-japanese-char` のときだけ `gpt-2` へ写像し、他の pre-tokenizer には適用しない |
+| unit | eos override 写像（§9.2）: 宣言された `eos_token_id` の piece が終端でない（開始トークンを指す）GGUF では語彙中の `</s>` の id へ解決し、**正しい eos を宣言する GGUF には override を適用しない**。id を定数で決め打ちしない（語彙から解決していることを、`</s>` の id が異なる語彙でも正しく解決できることで確認する） |
+| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→ **最上位候補が `日本語` に完全一致**する（**A5 解消**）。「`日本語` を含む」を合格条件にしてはならない — EOS override が欠けた状態の `日本語日本語日本語` が通過してしまうため（§9.2 / DEV-743）。あわせて `わたしはがくせいです` → `私は学生です`、および `top_debug_info` に `utf8-prefix-trimmed` が出ないことを確認する。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート / DEV-753 |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |
 
 ---

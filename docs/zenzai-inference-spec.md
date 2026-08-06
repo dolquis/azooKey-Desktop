@@ -138,7 +138,7 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 | `[PROF]` | U+EE03 | `<profile>`（任意） |
 | `[TOPIC]`/`[STYLE]`/`[SET]` | U+EE04 / U+EE05 / U+EE06 | 実験的（M8 非使用） |
 | `[RCTX]` | U+EE07 | v3.2 の `<right_context>`（M8 非使用） |
-| `[EOS]` | モデル EOS（`</s>` 相当） | 生成停止トークン |
+| `[EOS]` | モデル EOS（`</s>` 相当） | 生成停止トークン。GGUF の `tokenizer.ggml.eos_token_id` が `</s>` を指していない場合の扱いは §9.2 |
 
 **v3 フォーマット**（採用、`[PROF]` / `[CTX]` は任意）:
 
@@ -468,6 +468,21 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   pre-tokenizer 名としてロードする。その他の pre-tokenizer には override を適用しない。
   この置換が想定するトークン化との同一性は、DEV-225 の実機ゲートで代表入力の token ID 列を
   参照実装と比較して確認する。
+- GGUF が宣言する `tokenizer.ggml.eos_token_id` が、語彙上その id に対応する piece から見て
+  終端トークンでない場合（開始トークン `<s>` を指している等）、モデルロード時だけ KV override で
+  語彙中の終端トークン（`</s>`）の id へ置き換える。**id を定数で書かず語彙から解決する**。
+  eos が正しく宣言されている GGUF には override を適用しない。
+
+  pin モデル `Miwa-Keita/zenz-v3.2-small-gguf` は `eos_token_id = 2` を宣言するが、id 2 の
+  piece は `<s>`、モデルが実際に出す終端は id 3 の `</s>` である（bos / eos が語彙文字列に
+  対して 1 つずれており、本来は `bos=2` / `eos=3` / `pad=1`）。この状態では
+  `llama_vocab_is_eog` が実際の終端で真にならず、生成が §8 のトークン上限まで走って
+  終端後のゴミを surface へ積む。`にほんご` が `日本語日本語日本語` になる、
+  `わたしはがくせいです` が未変換のまま返る、といった症状はいずれもこれに由来する
+  （DEV-743 で原因確定、DEV-753 で実装）。
+- `bos_token_id` も同じずれを持つが、pin モデルは `tokenizer.ggml.add_bos_token = false` の
+  ため生成経路に影響しない。bos を override する場合はプロンプト契約（§3.2）への影響を
+  別途評価する。
 - llama.cpp の `llama_model` / `llama_context` ハンドルは M8-1（DEV-220）が保持。
   本 converter はそれを**非所有参照**で受け取り、推論ごとに `llama_decode` を回す。
 - C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装

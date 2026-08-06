@@ -676,7 +676,9 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   §8.5.2 は「要求を出してから応答が返るまで」（推論時間を含む）を縛る request
   レイヤの規約で、本項は「動き始めた 1 フレームを転送し切る」ことだけを縛る
   transport レイヤの規約である。推論に要した時間は本デッドラインに算入されない
-  （write の計時は handler が応答を返した後に始まる）。
+  （write の計時は handler が応答を返した後に始まる）。ただし**両者が同時に効く
+  場面（client の受信）では短いほうが勝つ**。本項のデッドラインが §8.5.2 の
+  wall-clock deadline を延長することはない（優先関係は §6.4.8）。
 
   **適用範囲**: server 側と `NamedPipeClient` の双方に適用する。どちらも
   `FILE_FLAG_OVERLAPPED` 付きのハンドルを使い、本項の計時規約（idle は計時せず、
@@ -687,30 +689,47 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   **残余リスク**: 何も送らない idle 接続を `kMaxPipeInstances`（32）本張って
   枯渇させる DoS は本項では防げない。これは同一ユーザー権限のプロセスを前提と
   するため §6.4.4 の脅威モデル上、主防御の対象外である。
-- **6.4.8 client 受信の二相セマンティクス** — `NamedPipeClient::ReceiveWithTimeout(N)`
-  は性質の異なる 2 つの待ちを 1 回の呼び出しに含む。両方を同じ上限で縛ると、
-  健全な接続を切るか、無期限ブロックを許すかのどちらかになる。そこで相ごとに
-  上限を分ける。
+- **6.4.8 client 受信の二相セマンティクスと deadline の優先関係** —
+  `NamedPipeClient` の受信は性質の異なる 2 つの待ちを 1 回の呼び出しに含む。
+  相ごとに上限を分けるが、**どちらの相も request レイヤ（§8.5.2）の
+  wall-clock deadline を超えて待ってはならない**。
 
-  **相 A（フレーム到着待ち）**: 引数 `N` はこの相だけを縛る。1 byte も到着
-  しないまま `N` を超えた場合は `nullopt` を返し、接続は維持し、pipe からは
-  何も取り出さない。呼び出し側は同じ応答を次の呼び出しで受け取れる。TIP は
-  50ms 程度のスライスでこの API を繰り返し呼ぶため（`tsf-tip/src/TextService.cpp`
-  の応答待ちループ）、相 A のタイムアウトは異常ではなく通常の制御フローである。
-  `docs/romaji-batch-conversion-spec.md` の stale 応答 drain も「タイムアウトは
-  応答を消費しない」というこの性質に依存する。
+  **スライスと request deadline は別物**: TIP の応答待ちループは
+  50ms 程度のスライスで受信 API を繰り返し呼びながら、その外側で
+  150ms（QueryCandidates fast）のような絶対 deadline を持つ
+  （`tsf-tip/src/TextService.cpp`）。スライス幅は Cancel 転送や停止確認を
+  差し挟むための刻みであって、要求 1 件の許容時間ではない。したがって
+  受信 API は **スライス幅と request の残デッドラインを別の引数として受け取る**
+  （1 引数形は「両者が等しい単発呼び出し」と定義する。実装形は DEV-744）。
+  呼び出し側が絶対 deadline を持たない場合は「なし」を渡せるものとし、その場合の
+  相 B は read ハードのみで縛る。§8.5.2 に値を持つ要求（Ping・QueryCandidates・
+  Live・Heavy）と M58-B の `T_sub` は、いずれも request deadline として渡す。
 
-  **相 B（フレーム転送中）**: 最初の 1 byte が到着した時点で相 B に入り、以降の
-  上限は `N` ではなく §6.4.7 の read ハードデッドラインになる。`N` で縛らない
-  のは、1 MiB までのフレーム（`kMaxFrameSize`）が 64KiB の chunk
-  （`kPipeBufferSize`）に分割されて届き得るためで、呼び出し側のスライス境界と
-  フレーム境界は一致しない。相 B を `N` で打ち切ると、大きい応答を正常に運んで
-  いる接続を切ることになる。
+  **相 A（フレーム到着待ち）**: 1 byte も届いていない間の待ち。上限はスライス幅。
+  超過時は `nullopt` を返し、接続は維持し、pipe からは何も取り出さない。
+  呼び出し側は同じ応答を次の呼び出しで受け取れる。相 A のタイムアウトは異常では
+  なく通常の制御フローであり、`docs/romaji-batch-conversion-spec.md` の
+  stale 応答 drain も「タイムアウトは応答を消費しない」というこの性質に依存する。
 
-  **相 B のハード超過**: §6.4.7 と同じく当該接続を切断して `nullopt` を返す
+  **相 B（フレーム転送中）**: 最初の 1 byte が到着した時点で相 B に入る。上限は
+  **`min(request の残デッドライン, §6.4.7 の read ハード)`**。スライス幅では
+  縛らない — 1 MiB までのフレーム（`kMaxFrameSize`）が 64KiB の chunk
+  （`kPipeBufferSize`）に分割されて届き得るため、スライス境界とフレーム境界は
+  一致せず、スライスで打ち切ると健全な応答を運んでいる接続を切ることになる。
+  一方 request の残デッドラインで縛るのは打ち切って正しい: その時刻を過ぎた
+  応答は §8.5.2 の契約上すでに失敗であり、呼び出し側は Cancel と fallback へ
+  進む。read ハードは「壊れた peer に対する上限」であって request deadline の
+  延長を許す根拠にはならない。
+
+  **相 B の超過**: §6.4.7 と同じく当該接続を切断して `nullopt` を返す
   （以後 `IsConnected()` は false）。部分的に読み出したフレームからは同期を
-  回復できないため、接続を維持したままの再開はしない。結果として
-  `ReceiveWithTimeout(N)` 1 回の所要は概ね `N + read ハード` を上限に有界である。
+  回復できないため、接続を維持したままの再開はしない。**したがって request
+  deadline 超過のうち、フレームが転送途中だった場合だけは接続断（→ M42 の
+  再接続 / 劣化モード）を伴う。** 送信が始まってもいない遅い Host は相 A で
+  タイムアウトするため接続は維持され、従来どおり stale drain で処理できる。
+
+  **有界性**: 受信 1 回の所要は `min(request の残デッドライン, read ハード)` を
+  上限に有界。request deadline を渡さない呼び出しでも read ハードで有界。
 
   **タイムアウトを取らない API**: `Receive()` は相 A を無期限に待ち（idle な
   接続は正常）、相 B は §6.4.7 の read ハードデッドラインで縛る。`Send()` は
@@ -726,9 +745,10 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - 複数接続・切断テストが追加され緑
 - 切断済み client が解放される
 - 64KiB を超える length-prefix フレームが往復できる
-- ヘッダだけを送って沈黙する peer に対し、`NamedPipeClient` の受信が有界時間で
-  戻り、当該接続を切断する（§6.4.8。相 A のタイムアウトでは接続を維持し、
-  応答を消費しない）
+- ヘッダだけを送って沈黙する peer に対し、`ReceiveWithTimeout(N)` が概ね N ms で
+  `nullopt` を返し、当該接続を切断する。request deadline を渡す呼び出しでは、
+  受信が `min(request の残デッドライン, read ハード)` を超えて戻らない（§6.4.8。
+  相 A のタイムアウトでは接続を維持し、応答を消費しない）
 - 未配線 MessageType に明示エラー応答が返り、blocking client がハングしない。
   MessageType 列挙 ↔ `Payloads` codec の網羅整合が検査される（DEV-162）
 - 数値の parse / stringify が locale 非依存（C ロケール固定）で round-trip する（DEV-163）
@@ -1204,6 +1224,9 @@ connected-but-silent Host でも、pipe 切断や blocking read の解除を待�
 read 2000ms / write 5000ms）とは別レイヤである。本表の値を変えても §6.4.7 は
 追従せず、逆も同様。フレームデッドラインには推論時間が算入されないため、
 Heavy inference 800ms や Model load 30s と比較して短いことは矛盾しない。
+値は独立だが**優先関係はある**: client の受信で両者が同時に効く場合、本表の
+deadline がフレームデッドラインより短ければ本表が勝つ（§6.4.8）。上記の
+「blocking read の解除を待たない」を transport 側が破らないための規約である。
 
 timeout 時は Cancel を送信し、古い結果は staleness check（M10）で
 破棄する。`request_id` と `trace_id`（M51）で staleness を判定する。

@@ -138,7 +138,7 @@ zenz は **入力カタカナ**（`input_katakana`）を期待する。よって
 | `[PROF]` | U+EE03 | `<profile>`（任意） |
 | `[TOPIC]`/`[STYLE]`/`[SET]` | U+EE04 / U+EE05 / U+EE06 | 実験的（M8 非使用） |
 | `[RCTX]` | U+EE07 | v3.2 の `<right_context>`（M8 非使用） |
-| `[EOS]` | モデル EOS（`</s>` 相当） | 生成停止トークン |
+| `[EOS]` | モデル EOS（`</s>` 相当） | 生成停止トークン。GGUF の `tokenizer.ggml.eos_token_id` が `</s>` を指していない場合の扱いは §9.2 |
 
 **v3 フォーマット**（採用、`[PROF]` / `[CTX]` は任意）:
 
@@ -468,6 +468,21 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   pre-tokenizer 名としてロードする。その他の pre-tokenizer には override を適用しない。
   この置換が想定するトークン化との同一性は、DEV-225 の実機ゲートで代表入力の token ID 列を
   参照実装と比較して確認する。
+- GGUF が宣言する `tokenizer.ggml.eos_token_id` が、語彙上その id に対応する piece から見て
+  終端トークンでない場合（開始トークン `<s>` を指している等）、モデルロード時だけ KV override で
+  語彙中の終端トークン（`</s>`）の id へ置き換える。**id を定数で書かず語彙から解決する**。
+  eos が正しく宣言されている GGUF には override を適用しない。
+
+  pin モデル `Miwa-Keita/zenz-v3.2-small-gguf` は `eos_token_id = 2` を宣言するが、id 2 の
+  piece は `<s>`、モデルが実際に出す終端は id 3 の `</s>` である（bos / eos が語彙文字列に
+  対して 1 つずれており、本来は `bos=2` / `eos=3` / `pad=1`）。この状態では
+  `llama_vocab_is_eog` が実際の終端で真にならず、生成が §8 のトークン上限まで走って
+  終端後のゴミを surface へ積む。`にほんご` が `日本語日本語日本語` になる、
+  `わたしはがくせいです` が未変換のまま返る、といった症状はいずれもこれに由来する
+  （DEV-743 で原因確定、DEV-753 で実装）。
+- `bos_token_id` も同じずれを持つが、pin モデルは `tokenizer.ggml.add_bos_token = false` の
+  ため生成経路に影響しない。bos を override する場合はプロンプト契約（§3.2）への影響を
+  別途評価する。
 - llama.cpp の `llama_model` / `llama_context` ハンドルは M8-1（DEV-220）が保持。
   本 converter はそれを**非所有参照**で受け取り、推論ごとに `llama_decode` を回す。
 - C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
@@ -621,7 +636,9 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
-| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→「日本語」を含む候補（**A5 解消**）。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート |
+| unit | pre-tokenizer override 写像（§9.2）: `gpt2-small-japanese-char` のときだけ `gpt-2` へ写像し、他の pre-tokenizer には適用しない |
+| unit | eos override 写像（§9.2）: 宣言された `eos_token_id` の piece が終端でない（開始トークンを指す）GGUF では語彙中の `</s>` の id へ解決し、**正しい eos を宣言する GGUF には override を適用しない**。id を定数で決め打ちしない（語彙から解決していることを、`</s>` の id が異なる語彙でも正しく解決できることで確認する） |
+| integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→ **最上位候補が `日本語` に完全一致**する（**A5 解消**）。「`日本語` を含む」を合格条件にしてはならない — EOS override が欠けた状態の `日本語日本語日本語` が通過してしまうため（§9.2 / DEV-743）。あわせて `わたしはがくせいです` → `私は学生です`、および `top_debug_info` に `utf8-prefix-trimmed` が出ないことを確認する。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート / DEV-753 |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |
 
 ---

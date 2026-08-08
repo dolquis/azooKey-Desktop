@@ -393,3 +393,36 @@ Delta として各 repo 個別に保持する文書（共有コアには入れ�
 - [ ] テストギャップ・CI ギャップを解消する Issue を Done にするとき、そのギャップを保留理由に挙げている Issue を逆参照して判定をやり直したか
 
 検証メモは書いた時点の前提を固定するが、その前提は他 Issue の着地で失効しうる。失効しても検証メモは自動更新されないため、保留が惰性で続く。DEV-543 は「CI に pin モデルの実ロードジョブが無い」ことを Done 保留の理由にしていたが、この前提は DEV-547（当該 CI ジョブの追加）の着地時点で失効していた。にもかかわらずメモは更新されず、9 日間 In Review に留まった。ギャップ解消側の Issue には必ず「そのギャップを理由に保留されている Issue」が存在するため、Done 遷移時の逆参照を規律として持つ。本項目も共有コア §11 への昇格候補とし、昇格までは本 Delta を暫定の正典とする。
+
+### 管制塔改善パイロット（暫定運用規則、2026-08-08〜）
+
+「Linear 開発モデル改善提案（2026-08-03）」のレビューで採用した規則を、本 repo と
+`dolquis/QC_Compass` の 2 repo で先行運用する。4 週間の検証後、実証された規則のみ
+共有コア 0.6 として origin（`dolquis/agent-ops`）へ昇格させる。昇格までは本 Delta を暫定の正典とする。
+
+1. **動的状態は Status Update へ** — Current focus / Next AI Tasks / Next checkpoint / Health は
+   Project description に書かず、週次の Project Status Update に記録する。description は静的な
+   運用契約（責務・Human Gate 分類・正典リンク・Stage map）のみを持つ。
+2. **Project Status の判定基準** — 非 tracking の Issue が実際に In Progress（または今週開始予定）の
+   ときのみ Project を In Progress とする。停止中は Planned へ戻し、最新 Status Update に停止理由と
+   再開条件を書く。
+3. **Milestone 運用** — active stage と next stage の Milestone を維持し、design / implementation Issue は
+   起票時に Milestone を設定する（Ready 条件に追加）。tracking の進捗計算は子 Issue で行う。
+   期限（target date / due date）は実際に判定・実行する日にだけ設定し、超過したまま放置しない
+   （再設定するか撤去し、理由を Status Update に書く）。
+4. **Cycle 規律** — `type:tracking` と、今週実行しない `gate:human-required` Issue は Cycle に入れない。
+5. **ラベル整合** — `type:tracking` に `agent:codex-*` を付けない（tracking の agent は
+   `claude-design` / `claude-review`、またはなし）。
+6. **merged + In Review の滞留監査** — 週次監査で「関連 PR がマージ済みなのに In Review のままの
+   非ゲート Issue」を列挙し、検証メモ記入 → Done 遷移で 24 時間以内に解消する。
+   自動 Done への変更は行わない（§7.1.3 の維持が前提）。
+7. **対応表の状態列廃止** — GitHub ↔ Linear Mapping 文書へ動的状態（Issue 状態・PR マージ状態・
+   Issue / PR 一覧）を手動転記しない。規約と例外の記録のみを置く。スナップショットが必要なら
+   Linear / GitHub API からの生成物とする（生成物を手編集しない）。
+8. **Maintenance exception** — Dependabot / 軽微な CI・docs 保守 / 緊急対応 / ユーザー明示の単発保守は
+   Linear Issue なしの PR を許可し、PR 本文に区分・理由・製品挙動への影響・後追い起票の要否を
+   記録する。製品挙動・仕様・Human Gate に影響する場合は後追いで起票する。
+
+週次監査の追加点検項目（監査 CLI 導入までは手動）: merged + In Review 24 時間超の非ゲート件数 /
+tracking + `agent:codex-*` 件数 / `agent:claude-*` + `gate:human-required` 同居件数 /
+description 内の期限切れ checkpoint・Done 済み Next task 件数。いずれも 0 を目標とする。

@@ -34,9 +34,13 @@ namespace {
 constexpr std::array<char, 4> kGgufMagic{'G', 'G', 'U', 'F'};
 #if AZOOKEY_WITH_LLAMA_CPP
 constexpr std::string_view kGgufPreTokenizerKey = "tokenizer.ggml.pre";
+constexpr std::string_view kGgufEosTokenIdKey = "tokenizer.ggml.eos_token_id";
+constexpr std::string_view kGgufTokensKey = "tokenizer.ggml.tokens";
 #endif
 constexpr std::string_view kZenzaiPreTokenizer = "gpt2-small-japanese-char";
 constexpr std::string_view kGpt2PreTokenizer = "gpt-2";
+constexpr std::string_view kBosTokenPiece = "<s>";
+constexpr std::string_view kEosTokenPiece = "</s>";
 constexpr double kZenzaiScoreFloor = 0.3;
 constexpr double kZenzaiScoreCeil = 1.4;
 constexpr size_t kMaxLeftContextCodepoints = 30;
@@ -138,7 +142,13 @@ class LlamaLogCapture {
   bool capturing_continuation_{false};
 };
 
-std::optional<std::string> ReadGgufPreTokenizer(const std::string& path) {
+struct GgufTokenizerMetadata {
+  std::optional<std::string> pre_tokenizer;
+  std::optional<uint32_t> eos_token_id;
+  std::vector<std::string> vocabulary;
+};
+
+std::optional<GgufTokenizerMetadata> ReadGgufTokenizerMetadata(const std::string& path) {
   const gguf_init_params params{
       /* .no_alloc = */ true,
       /* .ctx = */ nullptr,
@@ -149,12 +159,33 @@ std::optional<std::string> ReadGgufPreTokenizer(const std::string& path) {
     return std::nullopt;
   }
 
-  const auto key = gguf_find_key(context.get(), kGgufPreTokenizerKey.data());
-  if (key < 0 || gguf_get_kv_type(context.get(), key) != GGUF_TYPE_STRING) {
-    return std::nullopt;
+  GgufTokenizerMetadata metadata;
+  const auto pre_tokenizer_key = gguf_find_key(context.get(), kGgufPreTokenizerKey.data());
+  if (pre_tokenizer_key >= 0 &&
+      gguf_get_kv_type(context.get(), pre_tokenizer_key) == GGUF_TYPE_STRING) {
+    const char* value = gguf_get_val_str(context.get(), pre_tokenizer_key);
+    if (value) {
+      metadata.pre_tokenizer = value;
+    }
   }
-  const char* value = gguf_get_val_str(context.get(), key);
-  return value ? std::optional<std::string>(value) : std::nullopt;
+
+  const auto eos_token_id_key = gguf_find_key(context.get(), kGgufEosTokenIdKey.data());
+  if (eos_token_id_key >= 0 &&
+      gguf_get_kv_type(context.get(), eos_token_id_key) == GGUF_TYPE_UINT32) {
+    metadata.eos_token_id = gguf_get_val_u32(context.get(), eos_token_id_key);
+  }
+
+  const auto tokens_key = gguf_find_key(context.get(), kGgufTokensKey.data());
+  if (tokens_key >= 0 && gguf_get_kv_type(context.get(), tokens_key) == GGUF_TYPE_ARRAY &&
+      gguf_get_arr_type(context.get(), tokens_key) == GGUF_TYPE_STRING) {
+    const auto token_count = gguf_get_arr_n(context.get(), tokens_key);
+    metadata.vocabulary.reserve(token_count);
+    for (size_t i = 0; i < token_count; ++i) {
+      const char* token = gguf_get_arr_str(context.get(), tokens_key, i);
+      metadata.vocabulary.emplace_back(token ? token : "");
+    }
+  }
+  return metadata;
 }
 #endif
 
@@ -623,18 +654,14 @@ struct ZenzaiModelRuntime {
   llama_model* model{nullptr};
   llama_context* context{nullptr};
 
-  std::vector<GeneratedCandidate> Generate(const std::string& kana,
-                                           const core::ConversionContext& conversion_context) {
-    if (!model || !context) {
-      throw std::runtime_error("llama.cpp runtime is not ready");
+  std::vector<llama_token> TokenizePrompt(const std::string& kana,
+                                          const core::ConversionContext& conversion_context) const {
+    if (!model) {
+      throw std::runtime_error("llama.cpp model is not ready");
     }
-
     const auto* vocab = llama_model_get_vocab(model);
     if (!vocab) {
       throw std::runtime_error("llama.cpp vocab is not available");
-    }
-    if (IsCanceled(conversion_context)) {
-      return {};
     }
 
     const auto prompt = BuildZenzaiPrompt(kana, conversion_context);
@@ -653,6 +680,24 @@ struct ZenzaiModelRuntime {
       throw std::runtime_error("llama.cpp prompt tokenization failed");
     }
     prompt_tokens.resize(static_cast<size_t>(token_count));
+    return prompt_tokens;
+  }
+
+  std::vector<GeneratedCandidate> Generate(const std::string& kana,
+                                           const core::ConversionContext& conversion_context) {
+    if (!model || !context) {
+      throw std::runtime_error("llama.cpp runtime is not ready");
+    }
+
+    const auto* vocab = llama_model_get_vocab(model);
+    if (!vocab) {
+      throw std::runtime_error("llama.cpp vocab is not available");
+    }
+    if (IsCanceled(conversion_context)) {
+      return {};
+    }
+
+    auto prompt_tokens = TokenizePrompt(kana, conversion_context);
 
     const size_t candidate_limit = RequestedCandidateLimit(conversion_context);
     const int32_t vocab_size = llama_vocab_n_tokens(vocab);
@@ -791,6 +836,24 @@ std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_vi
   return std::nullopt;
 }
 
+std::optional<uint32_t> ResolveZenzaiEosTokenOverride(uint32_t declared_eos_token_id,
+                                                      const std::vector<std::string>& vocabulary) {
+  if (declared_eos_token_id >= vocabulary.size() ||
+      vocabulary[declared_eos_token_id] != kBosTokenPiece) {
+    return std::nullopt;
+  }
+
+  const auto eos = std::find(vocabulary.begin(), vocabulary.end(), kEosTokenPiece);
+  if (eos == vocabulary.end()) {
+    return std::nullopt;
+  }
+  const auto eos_token_id = static_cast<size_t>(std::distance(vocabulary.begin(), eos));
+  if (eos_token_id > std::numeric_limits<uint32_t>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<uint32_t>(eos_token_id);
+}
+
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
   ZenzaiLoadResult result;
   result.info.path = path;
@@ -865,17 +928,33 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 
   auto model_params = llama_model_default_params();
   model_params.n_gpu_layers = options.n_gpu_layers;
-  std::array<llama_model_kv_override, 2> kv_overrides{};
-  const auto pre_tokenizer = ReadGgufPreTokenizer(path);
+  std::array<llama_model_kv_override, 3> kv_overrides{};
+  size_t kv_override_count = 0;
+  const auto tokenizer_metadata = ReadGgufTokenizerMetadata(path);
+  const auto pre_tokenizer = tokenizer_metadata ? tokenizer_metadata->pre_tokenizer : std::nullopt;
   const auto pre_tokenizer_override =
       pre_tokenizer ? ResolveZenzaiPreTokenizerOverride(*pre_tokenizer) : std::nullopt;
   if (pre_tokenizer_override) {
-    auto& entry = kv_overrides.front();
+    auto& entry = kv_overrides[kv_override_count++];
     std::snprintf(entry.key, sizeof(entry.key), "%.*s",
                   static_cast<int>(kGgufPreTokenizerKey.size()), kGgufPreTokenizerKey.data());
     entry.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
     std::snprintf(entry.val_str, sizeof(entry.val_str), "%.*s",
                   static_cast<int>(pre_tokenizer_override->size()), pre_tokenizer_override->data());
+  }
+  const auto eos_token_override =
+      tokenizer_metadata && tokenizer_metadata->eos_token_id
+          ? ResolveZenzaiEosTokenOverride(*tokenizer_metadata->eos_token_id,
+                                          tokenizer_metadata->vocabulary)
+          : std::nullopt;
+  if (eos_token_override) {
+    auto& entry = kv_overrides[kv_override_count++];
+    std::snprintf(entry.key, sizeof(entry.key), "%.*s", static_cast<int>(kGgufEosTokenIdKey.size()),
+                  kGgufEosTokenIdKey.data());
+    entry.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
+    entry.val_i64 = *eos_token_override;
+  }
+  if (kv_override_count > 0) {
     model_params.kv_overrides = kv_overrides.data();
   }
   runtime->model = llama_model_load_from_file(path.c_str(), model_params);
@@ -919,6 +998,21 @@ ZenzaiModelConverter::ZenzaiModelConverter(ZenzaiLoadResult&& loaded, core::ICon
     : info_(std::move(loaded.info)), runtime_(std::move(loaded.runtime)), fallback_(fallback) {}
 
 ZenzaiModelConverter::~ZenzaiModelConverter() = default;
+
+std::vector<int32_t> ZenzaiModelConverter::TokenizePromptForValidation(
+    const std::string& kana, const core::ConversionContext& context) const {
+#if AZOOKEY_WITH_LLAMA_CPP
+  if (!runtime_) {
+    throw std::runtime_error("llama.cpp runtime is not ready");
+  }
+  const auto tokens = runtime_->TokenizePrompt(kana, context);
+  return {tokens.begin(), tokens.end()};
+#else
+  (void)kana;
+  (void)context;
+  throw std::runtime_error("prompt token validation requires llama.cpp");
+#endif
+}
 
 std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& kana,
                                                            const core::ConversionContext& context) {

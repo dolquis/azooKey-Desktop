@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -16,13 +17,18 @@
 #include <vector>
 
 #if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
 #include <process.h>
+#include <shellapi.h>
 #else
 #include <unistd.h>
 #endif
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/ZenzaiModelConverter.h"
 
 #ifndef AZOOKEY_WITH_LLAMA_CPP
 #define AZOOKEY_WITH_LLAMA_CPP 0
@@ -39,6 +45,7 @@ struct Options {
   bool require_model{false};
   bool mock_zenzai{false};
   bool require_zenzai{false};
+  std::optional<std::vector<int32_t>> expected_prompt_token_ids;
   std::optional<double> max_p95_ms;
   azookey::host::BackendKind backend{azookey::host::BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
@@ -49,6 +56,7 @@ void PrintUsage(const char* exe) {
             << " [--model PATH] [--input KANA] [--context TEXT] [--iterations N]"
                " [--warmup N] [--backend cpu|cuda] [--n-gpu-layers N]"
                " [--max-p95-ms N] [--require-model] [--require-zenzai]"
+               " [--expected-prompt-token-ids ID[,ID...]]"
                " [--mock-zenzai]\n"
             << "If --model is omitted, AZOOKEY_ZENZAI_MODEL is used when set; otherwise the "
                "bench reports status=skipped and exits 0 unless --require-model is present.\n";
@@ -69,6 +77,26 @@ std::string EnvOrEmpty(const char* name) {
   return value ? std::string(value) : std::string();
 #endif
 }
+
+#if defined(_WIN32)
+std::optional<std::string> WideToUtf8(const wchar_t* value) {
+  if (!value) {
+    return std::nullopt;
+  }
+  const int required =
+      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, nullptr, 0, nullptr, nullptr);
+  if (required <= 0) {
+    return std::nullopt;
+  }
+  std::string result(static_cast<size_t>(required), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, result.data(), required,
+                          nullptr, nullptr) != required) {
+    return std::nullopt;
+  }
+  result.pop_back();
+  return result;
+}
+#endif
 
 size_t ParseSize(const std::string& value, const char* name) {
   try {
@@ -98,6 +126,50 @@ int32_t ParseI32(const std::string& value, const char* name) {
   } catch (const std::exception& ex) {
     throw std::invalid_argument(std::string(name) + " must be an integer: " + ex.what());
   }
+}
+
+std::vector<int32_t> ParseTokenIds(const std::string& value, const char* name) {
+  if (value.empty()) {
+    throw std::invalid_argument(std::string(name) + " must not be empty");
+  }
+  std::vector<int32_t> token_ids;
+  size_t offset = 0;
+  while (offset <= value.size()) {
+    const auto separator = value.find(',', offset);
+    const auto token = value.substr(
+        offset, separator == std::string::npos ? std::string::npos : separator - offset);
+    if (token.empty()) {
+      throw std::invalid_argument(std::string(name) + " contains an empty token ID");
+    }
+    size_t parsed_length = 0;
+    long long parsed = 0;
+    try {
+      parsed = std::stoll(token, &parsed_length, 10);
+    } catch (const std::exception& ex) {
+      throw std::invalid_argument(std::string(name) + " must contain integers: " + ex.what());
+    }
+    if (parsed_length != token.size() || parsed < 0 ||
+        parsed > std::numeric_limits<int32_t>::max()) {
+      throw std::invalid_argument(std::string(name) + " contains an invalid token ID: " + token);
+    }
+    token_ids.push_back(static_cast<int32_t>(parsed));
+    if (separator == std::string::npos) {
+      break;
+    }
+    offset = separator + 1;
+  }
+  return token_ids;
+}
+
+std::string FormatTokenIds(const std::vector<int32_t>& token_ids) {
+  std::string result;
+  for (size_t i = 0; i < token_ids.size(); ++i) {
+    if (i > 0) {
+      result += ',';
+    }
+    result += std::to_string(token_ids[i]);
+  }
+  return result;
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -174,6 +246,10 @@ Options ParseOptions(int argc, char** argv) {
           ParseI32(RequireValue(argc, argv, i, "--n-gpu-layers"), "--n-gpu-layers");
     } else if (arg == "--max-p95-ms") {
       options.max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
+    } else if (arg == "--expected-prompt-token-ids") {
+      options.expected_prompt_token_ids =
+          ParseTokenIds(RequireValue(argc, argv, i, "--expected-prompt-token-ids"),
+                        "--expected-prompt-token-ids");
     } else if (arg == "--require-model") {
       options.require_model = true;
     } else if (arg == "--mock-zenzai") {
@@ -242,7 +318,7 @@ std::string BackendName(azookey::host::BackendKind backend) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int RunBench(int argc, char** argv) {
   Options options;
   try {
     options = ParseOptions(argc, argv);
@@ -264,6 +340,40 @@ int main(int argc, char** argv) {
     std::cout << "status=skipped reason=model-not-provided llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
               << " hint=set-AZOOKEY_ZENZAI_MODEL-or-pass---model" << std::endl;
     return options.require_model ? 1 : 0;
+  }
+
+  std::optional<std::vector<int32_t>> prompt_token_ids;
+  if (options.expected_prompt_token_ids) {
+#if AZOOKEY_WITH_LLAMA_CPP
+    auto validation_load = azookey::host::LoadZenzaiGgufModel(options.model_path);
+    if (!validation_load.ok) {
+      std::cerr << "status=prompt-token-validation-load-failed error=" << validation_load.error
+                << std::endl;
+      return 1;
+    }
+    azookey::core::SimpleConverter validation_fallback;
+    azookey::host::ZenzaiModelConverter validation_converter(std::move(validation_load),
+                                                             &validation_fallback);
+    azookey::core::ConversionContext validation_context;
+    validation_context.preceding_text = options.context;
+    try {
+      prompt_token_ids =
+          validation_converter.TokenizePromptForValidation(options.input, validation_context);
+    } catch (const std::exception& ex) {
+      std::cerr << "status=prompt-token-validation-failed error=" << ex.what() << std::endl;
+      return 1;
+    }
+    if (*prompt_token_ids != *options.expected_prompt_token_ids) {
+      std::cerr << "status=prompt-token-mismatch expected_prompt_token_ids="
+                << FormatTokenIds(*options.expected_prompt_token_ids)
+                << " actual_prompt_token_ids=" << FormatTokenIds(*prompt_token_ids) << std::endl;
+      return 1;
+    }
+#else
+    std::cerr << "status=prompt-token-validation-unavailable reason=llama-cpp-disabled"
+              << std::endl;
+    return 1;
+#endif
   }
 
   const auto learning_path = UniqueTempPath("azookey_zenzai_bench_learning", ".tsv");
@@ -336,6 +446,8 @@ int main(int argc, char** argv) {
             << " zenzai_candidates=" << zenzai_count << " top_surface=" << top_surface
             << " top_debug_info=" << top_debug
             << " effective_last_error=" << OptionalString(engine.effective_last_error())
+            << " prompt_token_ids="
+            << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids) : std::string("not-checked"))
             << std::endl;
 
   std::remove(learning_path.string().c_str());
@@ -352,4 +464,39 @@ int main(int argc, char** argv) {
     return 1;
   }
   return 0;
+}
+
+int main(int argc, char** argv) {
+#if defined(_WIN32)
+  (void)argv;
+  int wide_argc = 0;
+  wchar_t** wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+  if (!wide_argv || wide_argc != argc) {
+    if (wide_argv) LocalFree(wide_argv);
+    std::cerr << "failed to read Unicode command-line arguments" << std::endl;
+    return 2;
+  }
+
+  std::vector<std::string> utf8_args;
+  utf8_args.reserve(static_cast<size_t>(wide_argc));
+  for (int i = 0; i < wide_argc; ++i) {
+    auto converted = WideToUtf8(wide_argv[i]);
+    if (!converted) {
+      LocalFree(wide_argv);
+      std::cerr << "failed to convert command-line argument to UTF-8" << std::endl;
+      return 2;
+    }
+    utf8_args.push_back(std::move(*converted));
+  }
+  LocalFree(wide_argv);
+
+  std::vector<char*> utf8_argv;
+  utf8_argv.reserve(utf8_args.size());
+  for (auto& arg : utf8_args) {
+    utf8_argv.push_back(arg.data());
+  }
+  return RunBench(static_cast<int>(utf8_argv.size()), utf8_argv.data());
+#else
+  return RunBench(argc, argv);
+#endif
 }

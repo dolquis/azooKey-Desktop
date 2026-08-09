@@ -664,6 +664,20 @@ TEST(InferenceEngineTest, ResolvesOnlyZenzaiCustomPreTokenizerToUpstreamGpt2) {
   EXPECT_FALSE(azookey::host::ResolveZenzaiPreTokenizerOverride("").has_value());
 }
 
+TEST(InferenceEngineTest, ResolvesOnlyMisdeclaredZenzaiEosFromVocabulary) {
+  const std::vector<std::string> shifted_vocabulary{"[PAD]", "unused", "<s>", "unused-2", "</s>"};
+  const auto resolved = azookey::host::ResolveZenzaiEosTokenOverride(2, shifted_vocabulary);
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(*resolved, 4u);
+
+  EXPECT_FALSE(azookey::host::ResolveZenzaiEosTokenOverride(4, shifted_vocabulary).has_value());
+  EXPECT_FALSE(azookey::host::ResolveZenzaiEosTokenOverride(1, shifted_vocabulary).has_value());
+  EXPECT_FALSE(azookey::host::ResolveZenzaiEosTokenOverride(99, shifted_vocabulary).has_value());
+  EXPECT_FALSE(azookey::host::ResolveZenzaiEosTokenOverride(
+                   2, std::vector<std::string>{"[PAD]", "unused", "<s>"})
+                   .has_value());
+}
+
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

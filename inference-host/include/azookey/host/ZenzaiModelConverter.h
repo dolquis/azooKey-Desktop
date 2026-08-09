@@ -43,6 +43,8 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
                                      const ZenzaiRuntimeOptions& options = {});
 std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer);
+std::optional<uint32_t> ResolveZenzaiEosTokenOverride(uint32_t declared_eos_token_id,
+                                                      const std::vector<std::string>& vocabulary);
 
 class ZenzaiModelConverter final : public core::IConverter {
  public:
@@ -52,6 +54,8 @@ class ZenzaiModelConverter final : public core::IConverter {
   const ZenzaiModelInfo& info() const { return info_; }
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
+  std::vector<int32_t> TokenizePromptForValidation(const std::string& kana,
+                                                   const core::ConversionContext& context) const;
 
   std::vector<core::Candidate> Convert(const std::string& kana,
                                        const core::ConversionContext& context) override;

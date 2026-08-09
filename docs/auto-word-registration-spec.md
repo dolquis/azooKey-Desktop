@@ -565,7 +565,7 @@ private:
 `AutoWordStore` も layer として wrap する（後方互換）。
 
 物理層（読みの索引構造・直列化形式・マルチソースビルド）は §15 を正典とする。
-`IDictionaryLayer` の検索インターフェースと前方一致（`CommonPrefixSearch`）の契約、
+`IDictionaryLayer` の検索インターフェースと 2 方向の前方一致（common-prefix / predictive）の契約、
 静的層の `.azdic` アーティファクトと mutable 層の `std::map` の使い分けは §15.8 / §15.7。
 
 ### 14.8 設定スキーマ拡張
@@ -936,7 +936,17 @@ alias キーは同じ trie に載るため、正規化済みキーでの 1 回�
 エントリが保持する `reading`（§14.2）は正規化前の原表記であり、正規化は
 `normalized_reading` 側にだけ効く。表示・エクスポートは `reading` を使う。
 
-### 15.4 `CommonPrefixSearch` の契約
+### 15.4 検索 API の契約
+
+**探索の向きが逆な 2 つの検索を別 API に分ける。** 混同すると、同じモード名で静的層と
+mutable 層が別の結果を返すことになる。
+
+- **common-prefix 検索**: 登録キーが**入力の接頭辞**であるものを返す。入力
+  「とうきょうと」に対し「とう」「とうきょう」が返る。変換対象の読みを辞書語で切り出す
+  向きであり、完全一致（`ExactMatch`）はこの特殊形。
+- **predictive 検索**: 登録キーが**入力で始まる**ものを返す。入力「とう」に対し
+  「とうきょう」「とうきょうと」が返る。入力途中の読みを補完する向きであり、M15 予測候補
+  ウィンドウが要求するのはこちら。
 
 ```cpp
 namespace azookey::core {
@@ -948,15 +958,17 @@ struct PrefixMatch {
   uint32_t key_id;          // KEYS セクションの index（§15.5）
   uint32_t entry_ref_off;   // EIDX セクション内のオフセット（§15.5）
   uint32_t entry_count;     // このキーに紐づくエントリ数
-  MatchKind kind;
 };
 
 class DoubleArrayTrie {
  public:
-  // key の各接頭辞のうち、trie に登録されたキーと一致するものを返す。
-  // max_results == 0 は無制限。
+  // 登録キーのうち key の接頭辞であるものを返す。max_results == 0 は無制限。
   void CommonPrefixSearch(std::string_view key, size_t max_results,
                           std::vector<PrefixMatch>& out) const;
+
+  // 登録キーのうち key で始まるものを返す（key 自身を含む）。
+  void PredictiveSearch(std::string_view key, size_t max_results,
+                        std::vector<PrefixMatch>& out) const;
 
   // key 全体に一致する登録キーがあれば true。CommonPrefixSearch の
   // key_length == key.size() の項と同義。
@@ -966,30 +978,44 @@ class DoubleArrayTrie {
 }  // namespace azookey::core
 ```
 
-契約:
+共通の契約:
 
 - **入力**は §15.3 で正規化済みの UTF-8 バイト列とする。正規化は呼び出し側の責務であり、
   `core` が提供する `NormalizeReading()` を通すこと。未正規化の入力を渡した場合、
   結果が空になることはあっても未定義動作にはならない。
-- **出力順序**は `key_length` の昇順、同一長では `kind`（`Exact` → `Alias` →
-  `LongVowelRelaxed`）の順、さらに同じなら `key_id` の昇順とする。同じアーティファクトと
-  同じ入力に対して常に同じ列を返す（決定的）。
+- **出力順序**は `key_length` の昇順、同一長では `key_id` の昇順とする。同じ
+  アーティファクトと同じ入力に対して常に同じ列を返す（決定的）。`PrefixMatch` は
+  一致種別を持たない。同じキーに `Exact` と `Alias` のエントリが混在しうるため、
+  `MatchKind` はエントリ単位で `EIDX` が持つ（§15.5）。
 - **エントリの取り出し**は `EIDX[entry_ref_off .. entry_ref_off + entry_count)` が指す
   `ENTS` レコードを読む（§15.5）。`PrefixMatch` 自体はエントリの中身を持たない。
 - **UTF-8 境界**: マッチは必ず文字境界で終わる。ビルド時に登録するキーが文字境界で
   終わるため、バイト単位走査でもこの性質が保たれる。不正な UTF-8 を含む入力は、
   一致しなかったものとして扱い、例外を投げない。
 - **空入力**・欠落アーティファクトに対しては空の結果を返す。例外・アサートで落とさない。
-- **計算量**は入力長 `n`、返却件数 `m` に対して O(n + m)。`out` を再利用する
-  シグネチャのみを提供し、呼び出しごとの割り当てを避ける。
-- **`max_results` に達した場合**は短い接頭辞から順に埋めた時点で打ち切る。戻り値からは
-  打ち切りの有無を区別できないため、上限は用途ごとに十分な値を呼び出し側が与える（§15.8）。
+- **`max_results` に達した場合**は `key_length` の短いものから順に埋めた時点で打ち切る。
+  戻り値からは打ち切りの有無を区別できないため、上限は用途ごとに十分な値を呼び出し側が
+  与える（§15.8）。
+
+検索ごとに異なる点:
+
+| | `CommonPrefixSearch` | `PredictiveSearch` |
+|---|---|---|
+| 返すキー | 入力の接頭辞である登録キー | 入力で始まる登録キー |
+| 計算量 | 入力長 `n`、返却件数 `m` に対して O(n + m) | 入力長 `n`、返却件数 `m`、走査ノード数 `k` に対して O(n + k)。`k` は `max_results` で抑える |
+| 打ち切り | 実用上ほぼ起きない（`m ≤ n`） | 起きうる。M15 は候補窓の表示件数に見合う上限を与える |
+
+`PredictiveSearch` は入力に対応するノードまで遷移したあと、そのノードの部分木を
+たどって終端を集める。double-array では、ノード `s` の子は `check[base[s] + c] == s`
+を満たすバイト `c` として得られる。走査は `c` の昇順（深さ優先）で行い、これにより
+出力がキーのバイト辞書順になる。`max_results` に達した時点で走査を打ち切る。
 
 呼び出し側は次の 3 つを想定する。
 
 1. `DictionaryStore::Lookup`（§14.7）の完全一致経路。`ExactMatch` を使う。
-2. M15 予測候補ウィンドウへの前方一致供給。`CommonPrefixSearch` を使う。
-3. 将来のラティス分割（複合語の切り出し）。M53 の範囲外であり、契約だけを満たしておく。
+2. M15 予測候補ウィンドウへの補完供給。`PredictiveSearch` を使う。
+3. 将来のラティス分割（複合語の切り出し）。`CommonPrefixSearch` を使う。M53 の範囲外
+   であり、契約だけを満たしておく。
 
 ### 15.5 直列化フォーマット `.azdic` v1
 
@@ -1018,26 +1044,31 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 | type | 内容 |
 |---|---|
 | `TRIE` | double-array の base / check 配列。受理されたキーの値は `key_id`（u32） |
-| `KEYS` | キーレコード列（`key_count` 個、12 バイト固定）。下記 |
-| `EIDX` | u32 配列。`ENTS` の index を並べたもの。キーからエントリへの間接参照 |
+| `KEYS` | キーレコード列（`key_count` 個、8 バイト固定）。下記 |
+| `EIDX` | エントリ参照レコード列（8 バイト固定）。キーからエントリへの間接参照 |
 | `ENTS` | 固定長エントリレコード列（下表） |
 | `STRS` | 文字列プール（UTF-8 の連結。終端子なし） |
 | `META` | UTF-8 JSON。由来・ライセンス・ビルドレシピ（§15.6） |
 
 **キーからエントリへの対応**。trie は受理したキーに対して `key_id` だけを返す。
-`KEYS[key_id]` は 12 バイト固定で、`u32 entry_ref_off` / `u32 entry_count` /
-`u8 kind`（ビルド時に確定する `MatchKind`。`Exact` か `Alias`）/ `u8 reserved[3]` を持つ。
-実エントリは `EIDX[entry_ref_off .. entry_ref_off + entry_count)` が指す `ENTS` の
-レコードである。
+`KEYS[key_id]` は 8 バイト固定で `u32 entry_ref_off` / `u32 entry_count` を持ち、実エントリは
+`EIDX[entry_ref_off .. entry_ref_off + entry_count)` が指す `ENTS` のレコードである。
+`EIDX` の 1 要素も 8 バイト固定で、`u32 entry_index`（`ENTS` の index）/ `u8 kind`
+（`MatchKind`。ビルド時に確定するのは `Exact` か `Alias`）/ `u8 reserved[3]` を持つ。
 
 `EIDX` を挟むのは、alias キー（§15.3）がエントリの複製なしに同じ `ENTS` レコードを
 指せるようにするためである。`ENTS` は `(normalized_key, surface, source)` の昇順に
 並ぶため、1 つの alias キーに集まるエントリは連続しない場合がある。`EIDX` があれば
 任意の集合を 1 つの範囲として表現できる。ヘッダの `entry_count` は `ENTS` の
 レコード数（論理エントリ数）であり、キー展開による重複を含まない。`EIDX` 内の並びは
-`ENTS` index の昇順とする（決定的）。
+`entry_index` の昇順とする（決定的）。
 
-長音緩和の二次検索（§15.3）が返す一致は、`KEYS[key_id].kind` が何であっても
+**`kind` をキー単位ではなくエントリ単位で持つ**理由は、同じ正規化キーに一致種別の異なる
+エントリが集まるためである。「ば」を元キーとする語と、「ヴァ」から alias 展開されて「ば」に
+なった語は同じ終端（同じ `key_id`）に集まるが、前者は完全一致 +0.10、後者は alias 一致
++0.05 で採点する（§14.11）。キー単位の `kind` ではこの区別ができない。
+
+長音緩和の二次検索（§15.3）が返す一致は、`EIDX` の `kind` が何であっても
 `MatchKind::LongVowelRelaxed` として報告する。二次検索は緩い一致であり、
 `exact_reading_bonus`（§14.11）は最も弱い値を採るのが正しいためである。
 
@@ -1067,19 +1098,46 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 `source_priority` を層から引くのと二重に加算すると §14.11 の確定係数が崩れるためで、
 `priority_q` は debug probe 用の informational フィールドとして扱う。
 
-ロード時の検証と失敗時の挙動:
+検証は 3 段に分ける。**どの段でも、違反を検出したらクランプや切り詰めで続行せず拒否する。**
+範囲外のオフセットを有効範囲へ丸めると、別のエントリや別の文字列を正しい値として読んで
+しまい、破損を検出せずに誤った候補を出すことになる。
 
-- **起動時**は `magic` / `format_version` / `header_size` / セクションの offset と size が
-  ファイル長に収まることだけを検証する（O(1)）。全バイトの `content_hash` 検証は
-  起動レイテンシに乗せず、pack の DL 直後、`dictbuild --verify`、および設定
-  `dictionary.verifyOnLoad` が真のときに行う。
-- `format_version` が未知、`flags` に未知ビットが立っている、`magic` 不一致、範囲外の
-  offset のいずれかを検出した場合、**当該層のみを無効化**し、他層はそのまま動作を
-  続ける。無効化は §14.8 の missing-pack と同じ扱い（layer が空として振る舞う）とする。
-- 未知の `type` を持つセクションは無視する（前方互換）。逆に未知の `flags` ビットは
-  拒否する。セクション追加は既存リーダを壊さないが、フラグの新設は解釈の変更を伴うためである。
-- すべてのオフセット参照は検証済みのセクション範囲でクランプし、範囲外参照が
-  そのままメモリアクセスにならないようにする。
+**(1) 構造検証（ロード時に必ず実行、O(1)）**。以下をすべて満たさなければ拒否する。
+算術はすべて 64 bit で行い、加算前に残余を比較して overflow を避ける
+（`off > file_size || size > file_size - off` の形で判定し、`off + size` を作らない）。
+
+- `magic` 一致、`format_version` が既知、`header_size == 64`、`flags` に未知ビットが無い。
+- セクションテーブル全体（`64 + section_count × 24` バイト）がファイル長に収まる。
+- 必須セクション（`TRIE` / `KEYS` / `EIDX` / `ENTS` / `STRS` / `META`）がそれぞれ
+  **ちょうど 1 個**存在する。重複した `type` は拒否する。未知の `type` は無視してよい
+  （前方互換）が、重複判定の対象からは外さない。
+- 各セクションの `offset` が 8 の倍数で、`offset` と `size` がファイル長に収まり、
+  他のセクションおよびヘッダとセクションテーブルの領域と**重ならない**。
+- 固定長レコードのセクションは `size` がレコード長の倍数であり、件数がヘッダと一致する:
+  `KEYS.size == key_count × 8`、`EIDX.size % 8 == 0`、`ENTS.size == entry_count × 32`。
+- `TRIE` の `size` が double-array の要素長の倍数である。
+
+**(2) 参照検証（逆参照の時点、O(1)）**。内部参照は全件走査せず、実際に読む瞬間に検査する。
+違反を 1 件でも検出した層は、その場で無効化して以後は空を返す。検査項目は次のとおり。
+
+- trie が返す `key_id < key_count`。
+- `KEYS[key_id]` について `entry_ref_off ≤ EIDX.count` かつ
+  `entry_count ≤ EIDX.count − entry_ref_off`。
+- `EIDX[i].entry_index < entry_count`、`EIDX[i].kind` が既知の `MatchKind`。
+- `ENTS[j]` について `surface_off ≤ STRS.size` かつ `surface_len ≤ STRS.size − surface_off`。
+  `reading_off` / `reading_len` も同様。`pos_id < META.pos_table` の要素数、
+  `source` が既知の層識別子。
+
+全件を先に走査しないのは、`ENTS` が数十万件規模になり、ロード予算（§15.9 の 20 ms）を
+超えるためである。逆参照時の検査は分岐 2 つで済み、検索のレイテンシ予算には影響しない。
+
+**(3) 全体検証（明示的に要求されたときのみ、O(N)）**。`content_hash` の照合と、(2) の
+参照検証の全件走査を行う。実行するのは pack の DL 直後、`dictbuild --verify`、および設定
+`dictionary.verifyOnLoad` が真のときとする。
+
+いずれの段でも、検出した層**のみを無効化**し、他層はそのまま動作を続ける。無効化は
+§14.8 の missing-pack と同じ扱い（layer が空として振る舞う）とし、検出した検証条件を
+ログに残す。
 
 `.azdic` は §14.10 の pack 配布経路でもそのまま使う。pack 全体の SHA256 検証は
 ダウンローダ側（M36-B / M32 の `HttpDownloader` 基盤）の責務であり、`content_hash` は
@@ -1130,11 +1188,35 @@ frequency = clamp((8000 - cost) / 10000.0, 0.0, 1.0)
 SHA256 でピンした取得を使う。生の上流データは配布物に含めず、同梱するのは変換後の
 `.azdic` だけである（§14.10 の同梱判定はアーティファクトに対して適用する）。
 
-**帰属**は `META` セクションに持たせる。各アーティファクトは寄与した上流ごとに
-`{ source_id, spdx, upstream_url, upstream_revision, transform }` を保持し、
-`ThirdPartyNotices.txt` はこの `META` から生成する。`docs/licensing-policy.md` の三層
-attribution のうち、テキストファイルではファイルヘッダが担う層を、バイナリでは `META` が
-担う。三層目の再生成注記は `transform`（変換スクリプトの識別子）で満たす。
+**帰属**は `META` セクションに持たせる。各アーティファクトは寄与した上流ごとに次を保持し、
+`ThirdPartyNotices.txt` はこの `META` から生成する。
+
+| フィールド | 内容 |
+|---|---|
+| `source_id` | 上流の識別子（`sudachidict-core` など） |
+| `spdx` | SPDX 識別子。共通ライセンス本文の引き当てに使う |
+| `upstream_url` | 一次情報の URL |
+| `upstream_revision` | 取り込んだ版（タグ・コミット・リリース名） |
+| `transform` | 変換スクリプトの識別子（再生成注記） |
+| `copyright` | 上流固有の著作権表示（逐語） |
+| `notice_ids` | notice catalog のエントリ ID 配列。空配列は「付随 notice 無し」を意味する |
+
+SPDX 識別子だけでは `ThirdPartyNotices.txt` を作れない。共通ライセンス本文は引けても、
+上流固有の著作権表示、Apache-2.0 の `NOTICE`、SudachiDict LEGAL が列挙する内包データの
+帰属（§14.10）、GeoNames の CC-BY-4.0 クレジット文は復元できないためである。これらは
+リポジトリ内の **notice catalog**（`dictbuild/notices/<notice_id>.txt`、逐語のテキスト）に
+置き、`META` は `notice_ids` でそれを参照する。カタログ本文はリポジトリで版管理され、
+アーティファクトのビルドとは独立に差分がレビューできる。
+
+生成の失敗条件を次のとおり定める。`ThirdPartyNotices.txt` の生成は、`META` に
+`source_id` / `spdx` / `upstream_url` / `upstream_revision` / `copyright` のいずれかを欠く
+上流がある場合、`notice_ids` が参照する ID が catalog に存在しない場合、いずれもエラーで
+停止する（欠落を空欄として出力しない）。生成が失敗した状態のアーティファクトは配布物に
+入れられない（§14.10 の配布ガードで検出する）。
+
+`docs/licensing-policy.md` の三層 attribution のうち、テキストファイルではファイルヘッダが
+担う層を、バイナリでは `META` が担う。集約ファイル層は生成された `ThirdPartyNotices.txt` と
+ルート `THIRD_PARTY_LICENSES`、再生成注記層は `transform` が満たす。
 
 ### 15.7 mutable 層との併存
 
@@ -1146,12 +1228,15 @@ double-array は構築が全件走査であり、1 語の追加ごとに再構�
 即時反映・部分更新・quarantine つき atomic write という要件を持ち、`std::map` を基盤とする
 現行実装のほうが要件に合う。
 
-前方一致はデータ構造を変えずに供給する。`std::map` はキー昇順であるため、
-`lower_bound(prefix)` から走査し、キーが prefix で始まらなくなった時点で止めれば、
-O(log N + 一致数) で §15.8 の `LookupMode::CommonPrefix` を満たせる。`PrefixMatch`
-（§15.4）はアーティファクトのエントリプールを指す索引であり mutable 層には存在しないため、
-層の境界で交換するのは `DictionaryEntry` である（§15.8）。結果の並びは静的層と同じく
-読みの短いものから先に並べる。
+2 方向の検索（§15.4）はデータ構造を変えずに供給する。`std::map` はキー昇順であるため、
+**predictive 検索**は `lower_bound(input)` から走査し、キーが `input` で始まらなくなった
+時点で止めれば O(log N + 一致数) で得られる。**common-prefix 検索**は `input` の各接頭辞を
+短いものから順に `find` すれば、読みの文字数 `n` に対して O(n log N) で得られる。どちらも
+静的層と同じ意味論を返す（§15.8 の `LookupMode` は層の物理表現によらず同じ結果集合を指す）。
+
+`PrefixMatch`（§15.4）はアーティファクトのエントリプールを指す索引であり mutable 層には
+存在しないため、層の境界で交換するのは `DictionaryEntry` である（§15.8）。結果の並びは
+静的層と同じく読みの短いものから先に並べる。
 
 読みの正規化（§14.3）は mutable 層にも効かせる。各層はロードと挿入の時点で
 `normalized_reading` を算出してそれをキーにし、ユーザーが入力した原表記（`UserWord::ruby`）は
@@ -1168,7 +1253,11 @@ O(log N + 一致数) で §15.8 の `LookupMode::CommonPrefix` を満たせる�
 §14.7 の `IDictionaryLayer` に、物理表現を隠す検索インターフェースを置く。
 
 ```cpp
-enum class LookupMode { Exact, CommonPrefix };
+enum class LookupMode {
+  Exact,             // キーが入力と完全一致
+  CommonPrefix,      // キーが入力の接頭辞（変換対象の切り出し）
+  PredictivePrefix,  // キーが入力で始まる（入力途中の補完）
+};
 
 class IDictionaryLayer {
  public:
@@ -1181,10 +1270,12 @@ class IDictionaryLayer {
 };
 ```
 
-- `.azdic` を持つ静的層は §15.4 の trie を、mutable 層は §15.7 の `lower_bound` 走査を
-  使う。`DictionaryStore` からは区別しない。
-- `DictionaryStore::Lookup`（§14.7）は `LookupMode::Exact`、M15 の予測経路は
-  `LookupMode::CommonPrefix` を使う。
+- `.azdic` を持つ静的層は §15.4 の trie を、mutable 層は §15.7 の `std::map` 走査を
+  使う。`DictionaryStore` からは区別しない。同じ `LookupMode` に対し、どの層も同じ
+  意味論の結果集合を返す。
+- `DictionaryStore::Lookup`（§14.7）は `LookupMode::Exact`、M15 の予測候補ウィンドウは
+  `LookupMode::PredictivePrefix` を使う。`LookupMode::CommonPrefix` は将来のラティス
+  分割向けであり、M53 では呼び出し側を持たない。
 - `max_results` は層ごとに上限を掛ける。全層の結果は §14.12 の dedup を通したあと、
   §14.11 の `dictionary_score` の降順に並べる。
 - `IsAvailable()` が false の層は、`EnableLayer` で有効にされていても結果に寄与しない。
@@ -1199,6 +1290,7 @@ class IDictionaryLayer {
 | 常駐 RSS 増分（mmap 前提、trie イメージのページインのみ） | 40 MB 以下 |
 | 層 1 つのロード（mmap + ヘッダ検証） | 20 ms 以下 |
 | `CommonPrefixSearch` の p95（読み 16 文字以内、warm） | 0.2 ms 以下 |
+| `PredictiveSearch` の p95（読み 4 文字、`max_results` = 32、warm） | 0.5 ms 以下 |
 
 これらは設計上の予算であり、上流の実語彙数によって達成可能性が変わる。SudachiDict
 （core 版）を取り込む段階で実語彙数とアーティファクトサイズを実測し、超過する場合は
@@ -1215,9 +1307,12 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 | 種別 | 内容 |
 |---|---|
 | ゴールデン round-trip | 固定の小さな入力セットから `.azdic` を生成し、既知の `content_hash` と一致することを確認する。ビルドの再現性（§15.6）を回帰から守る |
-| 参照実装との一致 | ランダム生成した読みの集合について、`CommonPrefixSearch` の結果が `std::map` ベースの素朴な実装と順序込みで完全一致することを確認する |
+| 参照実装との一致 | ランダム生成した読みの集合について、`CommonPrefixSearch` と `PredictiveSearch` の結果が `std::map` ベースの素朴な実装と順序込みで完全一致することを確認する。両者が探索の向きを取り違えていないこと（入力「とう」に対し predictive は「とうきょう」を返し、common-prefix は返さない）を個別のケースで確認する |
+| 層をまたぐ意味論の一致 | 同じ語彙を静的層と mutable 層の双方に入れ、`LookupMode` ごとに両者が同じ結果集合を返すことを確認する（§15.8） |
 | 正規化と alias | §15.3 の各規則について、ビルド時展開されたキーとクエリ時の長音緩和が、期待する `MatchKind` を返すことを確認する。alias キーが `EIDX` 経由で元エントリと同じ `ENTS` レコードを指し、`entry_count`（ヘッダ）が重複を含まないことも確認する |
-| 破損耐性 | `magic` 破壊 / `format_version` 不一致 / 未知 `flags` ビット / セクション offset の範囲外 / ファイル末尾の切り詰め / `content_hash` 不一致 の各ケースで、当該層のみが無効化され、プロセスが落ちず他層が機能することを確認する |
+| 破損耐性（構造） | `magic` 破壊 / `format_version` 不一致 / 未知 `flags` ビット / 必須セクションの欠落と重複 / 8 バイト境界違反 / セクションの重なり / 固定長セクションの `size` がレコード長の倍数でない / ヘッダの件数と `size` の不一致 / `offset` と `size` の範囲外（overflow を誘う値を含む）/ ファイル末尾の切り詰め / `content_hash` 不一致 |
+| 破損耐性（内部参照） | `key_id ≥ key_count` / `entry_ref_off + entry_count > EIDX.count` / `EIDX[i].entry_index ≥ entry_count` / `EIDX[i].kind` が未知 / `surface_off + surface_len > STRS.size` / `reading_off + reading_len > STRS.size` / `pos_id` が `META.pos_table` の範囲外 / `source` が未知の層識別子 の各ケース |
+| 破損時の縮退 | 上記いずれのケースでも、当該層のみが無効化されて空を返し、値がクランプされて別のエントリや文字列として読まれないこと、プロセスが落ちず他層が機能することを確認する |
 | 後方互換 | 既存 `user_dict.json` / `auto_words.tsv` が層として読み込まれる（§14.13 の再掲） |
 | 帰属生成 | `META` から生成した `ThirdPartyNotices.txt` に、寄与した全上流の SPDX と帰属が含まれることを確認する |
 
@@ -1225,14 +1320,15 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 
 - `.azdic` v1 のリーダとビルダが往復し、同一入力から 2 回ビルドしたアーティファクトが
   バイト単位で一致する。
-- `CommonPrefixSearch` が §15.4 の契約（順序・UTF-8 境界・O(n + m)・非例外）を満たし、
-  参照実装との一致テストが緑である。
+- `CommonPrefixSearch` と `PredictiveSearch` が §15.4 の契約（探索の向き・順序・UTF-8 境界・
+  計算量・非例外）を満たし、参照実装との一致テストが緑である。静的層と mutable 層が同じ
+  `LookupMode` に対して同じ結果集合を返す。
 - 破損した `.azdic` を与えたとき、当該層だけが無効化され、他層の候補生成が継続する。
 - `user_dictionary` / `auto_words` / `app_specific_dictionary` が既存の永続化形式のまま
   層として読み込まれ、前方一致を返す（§15.7）。
 - 同梱アーティファクトの `META` が寄与した上流のライセンスと帰属を保持し、
   `ThirdPartyNotices.txt` に反映される（§14.10 / `docs/licensing-policy.md`）。
-- 同梱 `.azdic` の合計サイズと `CommonPrefixSearch` の p95 が §15.9 の予算に収まる。
+- 同梱 `.azdic` の合計サイズと各検索の p95 が §15.9 の予算に収まる。
   超過する場合は §15.9 の判断（絞り込みか実装差し替えか）を記録したうえで予算を改訂する。
 
 ### 15.12 実装着手時に確定する事項

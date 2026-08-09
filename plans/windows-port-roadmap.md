@@ -2213,6 +2213,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `learning/src/DictionaryImporter.cpp`（新規）、
   `inference-host/src/DictionaryCandidateProvider.cpp`（新規）、
   `learning/src/AutoWordStore.cpp`（M36-A から移行）、
+  `core/src/DoubleArrayTrie.cpp`（新規。物理層 trie と `.azdic` リーダ。spec §15.2/§15.4）、
+  `dictbuild/`（新規。オフライン辞書ビルダ。配布物には非同梱。spec §15.6）、
   `docs/auto-word-registration-spec.md`（改訂）。
 - **実装範囲**: `docs/auto-word-registration-spec.md` の M53 追補章。
   - 辞書階層: base / sudachi / neologd / named_entity / technical_terms /
@@ -2230,6 +2232,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     に 1 回適用。spec §14.5/§14.11）
   - 辞書更新パイプライン（bundled / neologism pack / technical pack /
     user / app-specific）
+  - 物理層（spec §15。DEV-412 と同時）: double-array trie と
+    `CommonPrefixSearch` 契約、`.azdic` v1 直列化形式、マルチソースビルド
+    （層内 dedup / cost→frequency 写像 / 再現性）、mutable 層の
+    `std::map` 併存
 - **受け入れ条件**:
   - M52 ベンチで named_entity_recall_at_5 が 90% 以上
   - M52 ベンチで neologism カテゴリの top5 が baseline 比で改善する
@@ -2245,9 +2251,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     **standalone NEologd 単体パック**の混入なしを
     MSIX 構築の配布ガードで CI チェック（SudachiDict 内包の NEologd 由来
     データは対象外。§14.10）
-- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14。
+  - 物理層の受け入れ条件（`.azdic` の往復とビルド再現性、
+    `CommonPrefixSearch` の契約適合、破損アーティファクトでの層単位無効化、
+    mutable 層の永続化形式維持、`META` 由来の帰属生成、サイズ / レイテンシ
+    予算）は spec §15.11
+- **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14 論理層。
   ライセンス & 配布判定 §14.9 / パッケージング §14.10 / スコア係数 §14.11 /
-  source tagging §14.12 / 受け入れ条件 §14.13）
+  source tagging §14.12 / 受け入れ条件 §14.13。§15 物理層: trie 選定 §15.2 /
+  正規化の適用点 §15.3 / `CommonPrefixSearch` 契約 §15.4 / `.azdic` 形式 §15.5 /
+  ビルドパイプライン §15.6 / mutable 層併存 §15.7 / 予算 §15.9 /
+  受け入れ条件 §15.11）
 
 ### M54: ユーザー学習強化
 

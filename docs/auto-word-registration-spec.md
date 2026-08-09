@@ -564,6 +564,10 @@ private:
 各 layer は `IDictionaryLayer` を実装。既存 `UserDictionary` /
 `AutoWordStore` も layer として wrap する（後方互換）。
 
+物理層（読みの索引構造・直列化形式・マルチソースビルド）は §15 を正典とする。
+`IDictionaryLayer` の検索インターフェースと前方一致（`CommonPrefixSearch`）の契約、
+静的層の `.azdic` アーティファクトと mutable 層の `std::map` の使い分けは §15.8 / §15.7。
+
 ### 14.8 設定スキーマ拡張
 
 `mvp-settings.schema.json` に追加:
@@ -578,6 +582,7 @@ private:
     "userDictionaryEnabled": true,
     "autoWordsEnabled": true,
     "appSpecificDictionaryEnabled": true,
+    "verifyOnLoad": false,
     "categoryBoosts": {
       "person_name": 1.1,
       "place_name": 1.1,
@@ -598,6 +603,10 @@ private:
 別 DL pack（§14.9 / §14.10）であり、pack が未ダウンロードの状態で `true` にしても
 当該 layer は無効（missing-pack）として扱う。bundled 層（`sudachi` / `named_entity` /
 `technical_terms`）の既定は `true`。
+
+`verifyOnLoad` の既定は **`false`**。真にすると、静的層アーティファクトのロード時に
+`.azdic` の全バイトハッシュ検証（§15.5）を行う。既定でオフなのは起動レイテンシに
+乗せないためであり、オフでもヘッダとセクション範囲の検証は常に行う。
 
 `categoryBoosts` は **boost-only** とし、各値は schema 上 **[1.0, 1.2] に検証
 （clamp）** する（1.0 未満による降格を禁止し、上限を `category_bonus` の宣言レンジ
@@ -671,7 +680,8 @@ M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
 
 - **pack 形式**: mecab-ipadic-NEologd を §14.2 のエントリ形式へ変換した
   コンパイル済み DictionaryStore 層アーティファクト（生 NEologd ソースではない。
-  ファイル名/マニフェストは `neologd_lexicon.*` 識別子）。
+  ファイル名/マニフェストは `neologd_lexicon.*` 識別子）。実体の形式は
+  §15.5 の `.azdic` v1 であり、同梱層と同一のリーダで読む。
 - **DL/検証**: M36-B / M32 が共有する `HttpDownloader`（§5-4）+ SHA256 検証
   基盤を**再利用**して `%LOCALAPPDATA%\azooKey\packs\` へ取得（既定無効・opt-in）。
 - **ローダ**: pack を `neologd_lexicon` 層としてロードする `DictionaryStore`
@@ -851,3 +861,362 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
   example（"TensorRT" = 1.32。M48 タグ boost は含まない）が単体テストで再現
   される。M48 タグ boost は app-profile-spec §7 が `final_score` に 1 回適用
   し、`dictionary_score` には二重適用しない
+
+## 15. M53 追補（DEV-412）: system 辞書の物理層
+
+§14 は辞書層の**論理設計**（層構成・エントリ意味・スコア・ライセンス判定）を定める。
+本章はその下にある**物理層**、すなわち読みの索引構造・ディスク上の直列化形式・
+複数上流からのビルド手順を定める。DEV-412（system 辞書 double-array trie 化 +
+マルチソースビルド）の実装はこの章を正典とする。
+
+### 15.1 スコープと責務境界
+
+| 対象 | 物理表現 | 本章の扱い |
+|---|---|---|
+| `base_lexicon` / `sudachi_lexicon` / `named_entity_lexicon` / `technical_terms_lexicon` | ビルド済み **`.azdic` アーティファクト**（double-array trie + エントリプール） | §15.2〜§15.6 |
+| `neologd_lexicon`（別 pack DL） | 同じ `.azdic` 形式 | §15.5（§14.10 の「コンパイル済み層アーティファクト」は本形式を指す） |
+| `user_dictionary` / `auto_words` / `app_specific_dictionary` | 既存の `std::map` + JSON / TSV を**維持** | §15.7 |
+
+責務の置き場所は次のとおり。
+
+- **`core/`**（`azookey_core`）: trie 構築・検索と `.azdic` の読み取り。辞書の意味論を
+  持たない汎用データ構造として置く。`learning` は `core` に依存するため（`learning/CMakeLists.txt`）、
+  この配置なら層の向きを崩さずに `DictionaryStore` から使える。
+- **`learning/`**: `DictionaryStore`（§14.7）と各 `IDictionaryLayer` 実装。層の有効化・
+  dedup・スコアは §14 の責務。
+- **`dictbuild/`**（新規のホストツール）: 上流データから `.azdic` を生成するオフライン
+  ビルダ。IME 実行時には存在しない。
+
+ランタイムは `.azdic` を**読むだけ**であり、書かない。書き込みが要る層は §15.7 の
+mutable 層に限る。
+
+### 15.2 trie 実装の選定
+
+**決定: `.azdic` 内の double-array trie は自前実装**（`core/src/DoubleArrayTrie.cpp`、
+構築側は `dictbuild` と共有）とし、第三者 trie ライブラリはベンダリングしない。
+
+| 候補 | 評価 |
+|---|---|
+| **自前 double-array**（採用） | 実行時は base / check 配列の走査のみで、追加の再配布義務が発生しない。構築側もキー整列済み入力に対する素直な配置で足りる |
+| darts-clone | MeCab 系で実績のある単一ヘッダ実装。ただし採用しても §15.5 のコンテナ（セクション構成・整合性検証・mmap 境界）は自作になり、削減できるのは trie 本体に限られる |
+| marisa-trie | LOUDS 系でサイズは有利だが、デュアルライセンス構成のため取り込み時にライセンス選択の判断が要る。サイズ予算（§15.9）が実測で超過した場合の再検討候補として記録する |
+| yada（karukan が使用） | Rust 実装であり移植不可。設計思想の参照にとどめる |
+
+外部 trie ライブラリを後から採用する場合は、コードもデータと同じく
+`docs/licensing-policy.md` の採用ワークフロー（ライセンス互換性の判定 → 三層 attribution →
+`THIRD_PARTY_LICENSES` 追記 → 配布ガード）に載せる。上流ライセンスは版によって
+変わり得るため、判定時に一次情報（各上流リポジトリの `COPYING` / `LICENSE`）を参照して
+確定させる。本節は候補の記録であり、ライセンス判定を先取りしない。
+
+### 15.3 キー空間と読み正規化の適用点
+
+trie のキーは §14.3 で正規化した `normalized_reading` の UTF-8 バイト列とする。
+§14.3 の各規則を、ビルド時とクエリ時のどちらで効かせるかを次のとおり確定する。
+
+| §14.3 の規則 | 適用点 | 理由 |
+|---|---|---|
+| カタカナ → ひらがな | **ビルド時**（キーを正規化） | 上流ごとの表記差をアーティファクト境界で吸収する |
+| 全角英数 → 半角英数 | **ビルド時** | 同上 |
+| ヴァ / バ、づ / ず、ぢ / じ の alias | **ビルド時にキーを展開** | クエリ時展開は入力長に対して指数的に候補キーが増え、順序の決定性も落ちる |
+| 長音「ー」の緩い一致 | **クエリ時**（「ー」を除去した二次検索） | 長音の位置は任意個所に現れ、ビルド時展開ではキー数が発散する |
+
+alias 展開の上限は 1 エントリあたり **8 キー**とする。超過するエントリは完全一致キーのみを
+登録し、ビルドログに警告を出す（無音で語彙を落とさない）。展開されたキーには
+`MatchKind::Alias` を、元のキーには `MatchKind::Exact` を持たせ、§14.11 の
+`exact_reading_bonus`（完全一致 +0.10 / alias 一致 +0.05 / 緩い長音一致 +0.02）を
+検索結果から一意に決められるようにする。
+
+クエリ側の評価順は §14.3 のとおり完全一致 → alias 一致 → 緩い長音一致とする。
+alias キーは同じ trie に載るため、正規化済みキーでの 1 回の検索が `MatchKind::Exact` と
+`MatchKind::Alias` の両方を返す。この検索が空を返したときに限り、長音を除去したキーで
+再検索し、その結果に `MatchKind::LongVowelRelaxed` を付ける。評価順は結果の並べ替えで
+表現し、上位の一致があっても下位の一致を捨てない（`exact_reading_bonus` の差として
+スコアに現れる）。
+
+エントリが保持する `reading`（§14.2）は正規化前の原表記であり、正規化は
+`normalized_reading` 側にだけ効く。表示・エクスポートは `reading` を使う。
+
+### 15.4 `CommonPrefixSearch` の契約
+
+```cpp
+namespace azookey::core {
+
+enum class MatchKind : uint8_t { Exact = 0, Alias = 1, LongVowelRelaxed = 2 };
+
+struct PrefixMatch {
+  uint32_t key_length;    // マッチしたキーのバイト長（UTF-8 の文字境界で終わる）
+  uint32_t entry_index;   // エントリプール先頭 index
+  uint32_t entry_count;   // 同一キーに紐づくエントリ数
+  MatchKind kind;
+};
+
+class DoubleArrayTrie {
+ public:
+  // key の各接頭辞のうち、trie に登録されたキーと一致するものを返す。
+  // max_results == 0 は無制限。
+  void CommonPrefixSearch(std::string_view key, size_t max_results,
+                          std::vector<PrefixMatch>& out) const;
+
+  // key 全体に一致する登録キーがあれば true。CommonPrefixSearch の
+  // key_length == key.size() の項と同義。
+  bool ExactMatch(std::string_view key, PrefixMatch& out) const;
+};
+
+}  // namespace azookey::core
+```
+
+契約:
+
+- **入力**は §15.3 で正規化済みの UTF-8 バイト列とする。正規化は呼び出し側の責務であり、
+  `core` が提供する `NormalizeReading()` を通すこと。未正規化の入力を渡した場合、
+  結果が空になることはあっても未定義動作にはならない。
+- **出力順序**は `key_length` の昇順、同一長では `entry_index` の昇順とする。同じ
+  アーティファクトと同じ入力に対して常に同じ列を返す（決定的）。
+- **UTF-8 境界**: マッチは必ず文字境界で終わる。ビルド時に登録するキーが文字境界で
+  終わるため、バイト単位走査でもこの性質が保たれる。不正な UTF-8 を含む入力は、
+  一致しなかったものとして扱い、例外を投げない。
+- **空入力**・欠落アーティファクトに対しては空の結果を返す。例外・アサートで落とさない。
+- **計算量**は入力長 `n`、返却件数 `m` に対して O(n + m)。`out` を再利用する
+  シグネチャのみを提供し、呼び出しごとの割り当てを避ける。
+- **`max_results` に達した場合**は短い接頭辞から順に埋めた時点で打ち切る。戻り値からは
+  打ち切りの有無を区別できないため、上限は用途ごとに十分な値を呼び出し側が与える（§15.8）。
+
+呼び出し側は次の 3 つを想定する。
+
+1. `DictionaryStore::Lookup`（§14.7）の完全一致経路。`ExactMatch` を使う。
+2. M15 予測候補ウィンドウへの前方一致供給。`CommonPrefixSearch` を使う。
+3. 将来のラティス分割（複合語の切り出し）。M53 の範囲外であり、契約だけを満たしておく。
+
+### 15.5 直列化フォーマット `.azdic` v1
+
+単一ファイル、リトルエンディアン固定、全セクション 8 バイト境界、メモリマップ可能とする。
+Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経路は `mmap` を使い、
+マップに失敗した場合は全読みにフォールバックする。
+
+ヘッダ（64 バイト固定）:
+
+| offset | size | field | 内容 |
+|---|---|---|---|
+| 0 | 8 | `magic` | `"AZDIC1\0\0"` |
+| 8 | 2 | `format_version` | u16。v1 は `1` |
+| 10 | 2 | `header_size` | u16 = 64 |
+| 12 | 4 | `flags` | u32。bit0 = alias キー展開済み（§15.3）。未定義ビットは 0 |
+| 16 | 4 | `layer_id` | u32。§14.1 の層識別子 |
+| 20 | 4 | `entry_count` | u32 |
+| 24 | 4 | `key_count` | u32 |
+| 28 | 4 | `section_count` | u32 |
+| 32 | 8 | `content_hash` | u64。先頭 `header_size` バイトを除く全バイト（セクションテーブルを含む）の FNV-1a 64 |
+| 40 | 24 | `reserved` | 0 埋め |
+
+セクションテーブルは offset 64 から `section_count` 個、1 エントリ 24 バイト
+（`u32 type` / `u32 reserved` / `u64 offset` / `u64 size`）。
+
+| type | 内容 |
+|---|---|
+| `TRIE` | double-array の base / check 配列 |
+| `ENTS` | 固定長エントリレコード列（下表） |
+| `STRS` | 文字列プール（UTF-8 の連結。終端子なし） |
+| `META` | UTF-8 JSON。由来・ライセンス・ビルドレシピ（§15.6） |
+
+エントリレコード（32 バイト固定）:
+
+| offset | size | field |
+|---|---|---|
+| 0 | 4 | `surface_off`（`STRS` 内オフセット） |
+| 4 | 4 | `surface_len` |
+| 8 | 4 | `reading_off`（正規化前の原表記） |
+| 12 | 4 | `reading_len` |
+| 16 | 2 | `pos_id`（`META.pos_table` の index） |
+| 18 | 2 | `category_mask`（§14.4 のカテゴリのビットマスク） |
+| 20 | 2 | `cost`（i16、mecab 互換） |
+| 22 | 2 | `frequency_q`（u16。`frequency × 65535` の量子化） |
+| 24 | 1 | `source`（層識別子） |
+| 25 | 1 | `priority_q`（u8。`priority × 255`） |
+| 26 | 6 | `reserved` |
+
+§14.2 の `created_at` / `updated_at` は `.azdic` に持たない。静的層は
+`obsolete_penalty` が常に 0（§14.11）で日付を必要とせず、日付を埋めるとビルドの
+再現性（§15.6）を壊すためである。アーティファクトの世代は日付ではなく、`META` が持つ
+上流リビジョンとビルダ版で識別する。
+
+`priority`（§14.2）は §14.11 のスコア式に現れない。v1 のビルダは層固定値
+（当該層の `source_priority`）を `priority_q` に書き込むが、**スコア計算には使わない**。
+`source_priority` を層から引くのと二重に加算すると §14.11 の確定係数が崩れるためで、
+`priority_q` は debug probe 用の informational フィールドとして扱う。
+
+ロード時の検証と失敗時の挙動:
+
+- **起動時**は `magic` / `format_version` / `header_size` / セクションの offset と size が
+  ファイル長に収まることだけを検証する（O(1)）。全バイトの `content_hash` 検証は
+  起動レイテンシに乗せず、pack の DL 直後、`dictbuild --verify`、および設定
+  `dictionary.verifyOnLoad` が真のときに行う。
+- `format_version` が未知、`flags` に未知ビットが立っている、`magic` 不一致、範囲外の
+  offset のいずれかを検出した場合、**当該層のみを無効化**し、他層はそのまま動作を
+  続ける。無効化は §14.8 の missing-pack と同じ扱い（layer が空として振る舞う）とする。
+- 未知の `type` を持つセクションは無視する（前方互換）。逆に未知の `flags` ビットは
+  拒否する。セクション追加は既存リーダを壊さないが、フラグの新設は解釈の変更を伴うためである。
+- すべてのオフセット参照は検証済みのセクション範囲でクランプし、範囲外参照が
+  そのままメモリアクセスにならないようにする。
+
+`.azdic` は §14.10 の pack 配布経路でもそのまま使う。pack 全体の SHA256 検証は
+ダウンローダ側（M36-B / M32 の `HttpDownloader` 基盤）の責務であり、`content_hash` は
+アーティファクト内部の自己整合性チェックとして独立に持つ。
+
+### 15.6 マルチソースビルドパイプライン
+
+`dictbuild` は次の段を順に通す。CMake からは既定 OFF のオプション
+（`AZOOKEY_BUILD_DICT_TOOLS`）で構築し、IME の配布物には含めない。
+
+1. **extract**: 上流データを中間 TSV（`*.lex.tsv`、UTF-8 / LF）へ変換する。上流ごとに
+   スクリプトが分かれる。中間 TSV の先頭には `docs/licensing-policy.md` の
+   ファイルヘッダ層として、由来元・ライセンス・`THIRD_PARTY_LICENSES` への参照を
+   コメント行で置く。
+2. **normalize**: §15.3 の規則で `normalized_reading` を作り、alias キーを展開する。
+3. **score**: `cost` と `frequency` を確定する（下記）。
+4. **merge**: 層内で重複を解決する（下記）。dedup は確定済みの `frequency` を見るため、
+   score より後に置く。
+5. **build**: キーを整列して double-array を構築し、`.azdic` を書き出す。
+6. **verify**: 書き出したアーティファクトを読み直し、全キーの `ExactMatch` が入力と
+   一致すること、`content_hash` が一致することを確認する。
+
+**層内 dedup**（ビルド時）は、§14.12 の層をまたぐ実行時 dedup とは別の規則を使う。
+キーは `(normalized_reading, surface)` とし、衝突したときは `frequency` が最大の
+エントリを残す。`category` は union、`cost` は最小値（強いほう）を採る。`frequency` が
+同点のときは入力ファイル名の昇順、次いで行番号の昇順で勝者を決める（決定的）。
+
+**`cost` と `frequency` の写像**。上流が mecab 系コストを持つ層（SudachiDict 等）は、
+上流 `cost` を `[-32768, 32767]` にクランプしてそのまま格納する。コストを持たない
+curated 層（`named_entity` / `technical_terms`）の既定は `5000` とする。
+`frequency` は層内統計に依存しない固定スケールで導く。
+
+```
+frequency = clamp((8000 - cost) / 10000.0, 0.0, 1.0)
+```
+
+`cost >= 8000` は 0.0、`cost <= -2000` は 1.0 に飽和する。層内の分布で正規化しないのは、
+上流の更新でスケールが動くとアーティファクトの再現性と §14.11 の worked example が
+崩れるためである。中間 TSV が `frequency` を明示している場合はその値を優先し、上式は
+適用しない（curated 層で人手の重み付けを効かせるため）。
+
+**再現性**。同じ入力と同じビルダ版からはバイト単位で同一の `.azdic` が出る。キーの整列は
+`(normalized_key, surface, source)` のバイト昇順、タイムスタンプ・絶対パス・並列実行順序は
+アーティファクトに入れない。CI は同一入力で 2 回ビルドし、`content_hash` の一致を確認する。
+
+**上流データの取得**は `AZOOKEY_DICT_SOURCE_DIR` で与えるローカルツリーを基本とし、CI では
+SHA256 でピンした取得を使う。生の上流データは配布物に含めず、同梱するのは変換後の
+`.azdic` だけである（§14.10 の同梱判定はアーティファクトに対して適用する）。
+
+**帰属**は `META` セクションに持たせる。各アーティファクトは寄与した上流ごとに
+`{ source_id, spdx, upstream_url, upstream_revision, transform }` を保持し、
+`ThirdPartyNotices.txt` はこの `META` から生成する。`docs/licensing-policy.md` の三層
+attribution のうち、テキストファイルではファイルヘッダが担う層を、バイナリでは `META` が
+担う。三層目の再生成注記は `transform`（変換スクリプトの識別子）で満たす。
+
+### 15.7 mutable 層との併存
+
+`user_dictionary`（M9）/ `auto_words`（M36-A）/ `app_specific_dictionary`（M48）は
+`.azdic` へ移さない。既存の `user_dict.json`（`UserDictionary` の version 1 スキーマ）と
+`auto_words.tsv` をそのまま使い、§14.13 の後方互換条件を維持する。
+
+double-array は構築が全件走査であり、1 語の追加ごとに再構築するには向かない。これらの層は
+即時反映・部分更新・quarantine つき atomic write という要件を持ち、`std::map` を基盤とする
+現行実装のほうが要件に合う。
+
+前方一致はデータ構造を変えずに供給する。`std::map` はキー昇順であるため、
+`lower_bound(prefix)` から走査し、キーが prefix で始まらなくなった時点で止めれば、
+O(log N + 一致数) で §15.8 の `LookupMode::CommonPrefix` を満たせる。`PrefixMatch`
+（§15.4）はアーティファクトのエントリプールを指す索引であり mutable 層には存在しないため、
+層の境界で交換するのは `DictionaryEntry` である（§15.8）。結果の並びは静的層と同じく
+読みの短いものから先に並べる。
+
+読みの正規化（§14.3）は mutable 層にも効かせる。各層はロードと挿入の時点で
+`normalized_reading` を算出してそれをキーにし、ユーザーが入力した原表記（`UserWord::ruby`）は
+レコード側に保持する。alias と長音緩和は、静的層のようにキーを展開せず、クエリ時に
+候補キーを生成して引く。層の規模が小さく、展開したキーを永続化すると既存の
+`user_dict.json` スキーマを変えることになるためである。
+
+想定規模はいずれの層も数千から数万件である。この範囲では走査の実測差が候補提示の
+レイテンシ予算（§15.9）に現れない。エントリ数が 10 万件を超えた層には警告ログを出し、
+物理表現の見直しを別課題として扱う。
+
+### 15.8 層インターフェースとロード失敗時の挙動
+
+§14.7 の `IDictionaryLayer` に、物理表現を隠す検索インターフェースを置く。
+
+```cpp
+enum class LookupMode { Exact, CommonPrefix };
+
+class IDictionaryLayer {
+ public:
+  virtual LayerId Id() const = 0;
+  // アーティファクト欠落・検証失敗・pack 未取得のとき false。
+  virtual bool IsAvailable() const = 0;
+  virtual void Lookup(std::string_view normalized_reading, LookupMode mode,
+                      size_t max_results,
+                      std::vector<DictionaryEntry>& out) const = 0;
+};
+```
+
+- `.azdic` を持つ静的層は §15.4 の trie を、mutable 層は §15.7 の `lower_bound` 走査を
+  使う。`DictionaryStore` からは区別しない。
+- `DictionaryStore::Lookup`（§14.7）は `LookupMode::Exact`、M15 の予測経路は
+  `LookupMode::CommonPrefix` を使う。
+- `max_results` は層ごとに上限を掛ける。全層の結果は §14.12 の dedup を通したあと、
+  §14.11 の `dictionary_score` の降順に並べる。
+- `IsAvailable()` が false の層は、`EnableLayer` で有効にされていても結果に寄与しない。
+  設定上は有効だがアーティファクトが無い状態（未 DL の pack、破損したアーティファクト）は、
+  §14.8 の missing-pack と同じユーザー可視挙動になる。
+
+### 15.9 サイズとレイテンシの予算
+
+| 項目 | 予算 |
+|---|---|
+| 同梱 `.azdic` 合計（MSIX 圧縮前） | 120 MB 以下 |
+| 常駐 RSS 増分（mmap 前提、trie イメージのページインのみ） | 40 MB 以下 |
+| 層 1 つのロード（mmap + ヘッダ検証） | 20 ms 以下 |
+| `CommonPrefixSearch` の p95（読み 16 文字以内、warm） | 0.2 ms 以下 |
+
+これらは設計上の予算であり、上流の実語彙数によって達成可能性が変わる。SudachiDict
+（core 版）を取り込む段階で実語彙数とアーティファクトサイズを実測し、超過する場合は
+`sudachi_lexicon` の絞り込み（品詞・頻度による足切り）か、§15.2 の LOUDS 系実装への
+切り替えのどちらを採るかを判断する。
+
+trie 単体の検索レイテンシとロード時間は `bench/` 配下のマイクロベンチで測る。
+`docs/conversion-quality-benchmark-spec.md` §6.3 の `latency_*` / `memory_peak_mb` は
+変換全体の指標であり、辞書層の寄与はその差分として観測する。M52 ベンチの指標定義に
+辞書層専用の項目は足さない。
+
+### 15.10 テスト計画
+
+| 種別 | 内容 |
+|---|---|
+| ゴールデン round-trip | 固定の小さな入力セットから `.azdic` を生成し、既知の `content_hash` と一致することを確認する。ビルドの再現性（§15.6）を回帰から守る |
+| 参照実装との一致 | ランダム生成した読みの集合について、`CommonPrefixSearch` の結果が `std::map` ベースの素朴な実装と順序込みで完全一致することを確認する |
+| 正規化と alias | §15.3 の各規則について、ビルド時展開されたキーとクエリ時の長音緩和が、期待する `MatchKind` を返すことを確認する |
+| 破損耐性 | `magic` 破壊 / `format_version` 不一致 / 未知 `flags` ビット / セクション offset の範囲外 / ファイル末尾の切り詰め / `content_hash` 不一致 の各ケースで、当該層のみが無効化され、プロセスが落ちず他層が機能することを確認する |
+| 後方互換 | 既存 `user_dict.json` / `auto_words.tsv` が層として読み込まれる（§14.13 の再掲） |
+| 帰属生成 | `META` から生成した `ThirdPartyNotices.txt` に、寄与した全上流の SPDX と帰属が含まれることを確認する |
+
+### 15.11 DEV-412 受け入れ条件
+
+- `.azdic` v1 のリーダとビルダが往復し、同一入力から 2 回ビルドしたアーティファクトが
+  バイト単位で一致する。
+- `CommonPrefixSearch` が §15.4 の契約（順序・UTF-8 境界・O(n + m)・非例外）を満たし、
+  参照実装との一致テストが緑である。
+- 破損した `.azdic` を与えたとき、当該層だけが無効化され、他層の候補生成が継続する。
+- `user_dictionary` / `auto_words` / `app_specific_dictionary` が既存の永続化形式のまま
+  層として読み込まれ、前方一致を返す（§15.7）。
+- 同梱アーティファクトの `META` が寄与した上流のライセンスと帰属を保持し、
+  `ThirdPartyNotices.txt` に反映される（§14.10 / `docs/licensing-policy.md`）。
+- 同梱 `.azdic` の合計サイズと `CommonPrefixSearch` の p95 が §15.9 の予算に収まる。
+  超過する場合は §15.9 の判断（絞り込みか実装差し替えか）を記録したうえで予算を改訂する。
+
+### 15.12 実装着手時に確定する事項
+
+本章で確定しないものを明示する。DEV-412 の実装で決め、決めた内容は本章へ反映する。
+
+- SudachiDict（core 版）の取得経路。CI でのピン付きダウンロードか、リリースビルド用の
+  事前生成アーティファクトかを、CI 実行時間と再現性の兼ね合いで決める。
+- `META.pos_table` の品詞体系。SudachiDict の品詞体系をそのまま持つか、§14.2 の `pos`
+  文字列へ写像した簡約体系にするか。
+- §15.9 の予算を超えた場合の `sudachi_lexicon` 足切り基準（品詞・頻度のしきい値）。

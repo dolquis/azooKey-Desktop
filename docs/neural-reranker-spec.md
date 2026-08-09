@@ -508,6 +508,11 @@ final_score =
   `QueryCorrections`（訂正候補）には適用しない。前者は読みが確定していないため
   §B2.1 のプロンプト（`[IN]<input_katakana>[OUT]`）が成立せず、後者は候補集合が
   小さくレイテンシに対する利得が薄い。両者への拡張は将来課題とする。
+- **`QueryCandidates` の中でも `live=true`（ライブ変換）は対象外**。ライブ変換は
+  打鍵ごとに走る最小レイテンシ経路で top-1 のみを使う
+  （`docs/zenzai-inference-spec.md` §6.1）ため、並べ替えの利得が無いまま
+  §B7 の予算（既定 20ms）を毎打鍵に上乗せすることになる。NllScorer は
+  **候補ウィンドウ要求（`live=false`）にのみ**適用する。
 
 ### B1.1 Track A（M56）との関係
 
@@ -761,15 +766,18 @@ Track B が単独で成立するための形式である。
 - 既存の deadline / cancel plumbing（`kModelConversionBudget`、
   `ConversionContext` の cancel、`docs/zenzai-inference-spec.md` §9.2.2）に載せる。
   NLL 用の別スレッド・別タイマーを作らない。
-- **all-or-nothing**（決定）: 予算超過または cancel を検出した時点で、その
-  リクエストの NLL 適用を**全面的に破棄**し、NLL 適用前の score のまま続行する。
-  部分適用はしない。
+- **all-or-nothing**（決定）: 予算超過を検出した時点で、そのリクエストの NLL 適用を
+  **全面的に破棄**し、NLL 適用前の score のまま続行する。部分適用はしない。
   - 理由: 部分適用では「先に評価された候補だけが減点される」ため、同じ入力でも
     実行時のゆらぎで順位が変わる。IME の決定性を優先する（Track A §7.2 が
     timeout に対して whole-request skip を選ぶのと同じ方針）。
   - 実装上は `Candidate::score` を直接書き換えず、bonus を別配列に貯め、
     **完走したときだけ**適用する。
 - cancel は prefix decode の前、各候補の decode の前後で確認する。
+- **cancel は失敗ではなく中断**（決定）: 現行 `QueryCandidates` は cancel 観測時に
+  候補列そのものを返さない（空を返す）。したがって cancel 時の NllScorer は
+  「fallback で順序を保つ」対象ですらなく、単に処理を放棄して cancel 経路へ抜ける。
+  §B8 の `reason` を記録せず、circuit breaker にも計上しない（下記）。
 
 ## B8. fallback と失敗理由
 
@@ -782,7 +790,8 @@ Track B が単独で成立するための形式である。
 | `model_not_loaded` | Zenzai 未ロード / active converter が Zenzai でない（degraded 中を含む） | なし |
 | `no_target` | 対象候補 0 件（no-op。失敗ではない） | なし |
 | `secure_mode` | M46 secure 中（§B10） | なし |
-| `budget_exceeded` | §B7 の予算超過 / cancel | **する** |
+| `budget_exceeded` | §B7 の予算超過 | **する** |
+| （cancel） | ユーザー操作による中断。`reason` を記録しない（§B7） | なし |
 | `infer_error` | decode 例外・logits 取得失敗・トークナイズ失敗 | **する** |
 | `invalid_score` | 全対象候補が非有限 NLL（§B2.4） | なし（入力起因） |
 | `circuit_open` | breaker 作動中 | なし |
@@ -798,6 +807,11 @@ Track B が単独で成立するための形式である。
   フラグである（Track A §7.2・M57 §5.4 と同じ runtime パターン）。
 - `model_not_loaded` と `no_target` は正常な非適用であり、失敗として記録しない
   （degraded / 短い候補列で breaker が無意味に開くのを防ぐ）。
+- **cancel を breaker に計上しない**。cancel の発生率はスコアラの健全性ではなく
+  ユーザーの打鍵速度に相関するため、速く打つユーザーが連続 cancel しただけで
+  breaker が開き、セッション中 NLL が黙って無効化されてしまう。予算超過
+  （`budget_exceeded`）は計上する — 遅いマシンで慢性的に予算を超えるなら無効化が
+  正しい応答であり、Track A が timeout を計上するのと同じ理由による。
 
 ## B9. 有効化フラグと既定 OFF 時の挙動不変
 
@@ -856,6 +870,7 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   超えない。
 - 対象外ソース（`UserDictionary` / `Model` / `Llm`）の score と順位が不変。
 - `nllTopK` を超えた候補の score と順位が不変。
+- `live=true` のリクエストで NllScorer が走らない（§B1）。
 - fallback: §B8 の各 `reason` で、候補列が NLL 未適用の結果と完全一致する。
 - all-or-nothing（§B7）: 途中で予算超過させたとき、部分的な減点が残らない。
 - circuit breaker: 連続 3 失敗で無効化され、モデル再ロードで復帰する。

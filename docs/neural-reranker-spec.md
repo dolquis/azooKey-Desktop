@@ -597,14 +597,36 @@ nll_per_char(s) = NLL_total(s) / max(1, C(s))
 
 ```
 1. KV をクリアし、P を decode する（prefix KV 確立、prefix_len トークン）
+1'. prefix 最終位置の logits を**スナップショットへ複製**する（§B3.1）
 2. 各候補 s について:
-   a. t_1 の logprob は「prefix 最終位置の logits」から読む
+   a. t_1 の logprob は 1'. のスナップショットから読む
    b. t_1 … t_{m-1} を decode し、t_2 … t_m の logprob を読む
    c. KV を prefix_len へロールバックする
 3. 予算 / cancel は 1.・2.a の前と 2.c の後で確認する（§B7）
 ```
 
-### B3.1 off-by-one 契約
+### B3.1 prefix logits のスナップショット契約
+
+**prefix 最終位置の logits は、prefix decode の直後に複製して全候補で再利用する。**
+
+`llama_get_logits*` が返すのは**直近の `llama_decode()` の出力**である。KV を
+`prefix_len` へロールバックしても logits バッファは巻き戻らないため、候補 1 の
+decode 後に読める「最終位置の logits」は prefix のものではなく**候補 1 の最終
+出力**である。スナップショットを取らずに §B3 の 2.a を実装すると、2 候補目以降の
+`t_1` の logprob が誤る（あるいは候補ごとに prefix を decode し直すことになり、
+本節の共有契約そのものが失われる）。
+
+- 複製するのは prefix 最終位置の logits 行（`vocab_size` 個）。候補ごとに `t_1` が
+  異なるため、特定トークンの値だけでは足りない。
+- log-softmax の分母（§B2.2 の最大値減算を含む正規化項）は**スナップショットから
+  1 回だけ算出**し、全候補で使い回す。
+- スナップショットの寿命は 1 リクエスト内。次リクエストでは prefix が変わるため
+  必ず取り直す。
+
+回帰テストで固定する（§B11）: 候補を 2 件以上与え、候補 2 の `t_1` の logprob が
+**prefix 由来**であること（候補 1 の出力由来になっていないこと）。
+
+### B3.2 off-by-one 契約
 
 **`t_i` の logprob は `t_1 … t_{i-1}` まで decode した位置の logits から読む。**
 したがって:
@@ -615,7 +637,7 @@ nll_per_char(s) = NLL_total(s) / max(1, C(s))
 
 この 1 ずれは実装で最も壊れやすい箇所であり、テストで固定する（§B11）。
 
-### B3.2 既存 `DecodeTokens` を流用しない
+### B3.3 既存 `DecodeTokens` を流用しない
 
 `inference-host/src/ZenzaiModelConverter.cpp` の `DecodeTokens` は
 NllScorer にそのまま使えない。理由は 2 つで、いずれも生成経路には正しい挙動である。
@@ -634,7 +656,7 @@ logits 出力を要求する batch を組む、の 2 点を満たす。
 > 既存コードが使う `llama_kv_self_*` 系はリネームが進行中の層であり、本書では
 > 関数名を確定させない（契約は「prefix 長より後ろの KV を落とす」ことのみ）。
 
-### B3.3 `llama_context` の共有とスレッド
+### B3.4 `llama_context` の共有とスレッド
 
 - 生成経路と**同一の `llama_context`** を使う。モデルを 2 つ常駐させない。
 - NllScorer は `InferenceEngine::QueryCandidates` が `state_mutex_` を保持した
@@ -671,8 +693,20 @@ logits 出力を要求する batch を組む、の 2 点を満たす。
 | 経路 | 内容 |
 |---|---|
 | `Candidate::debug_info` | 対象候補に `nll=<nll_per_char>;nlld=<bonus>` を追記（既存の `dup:` 併記と同じ流儀。表層・読みは含めない） |
-| `Health` | 失敗時に `model_runtime_error_` へ `nll-scorer:<reason>` をミラー（§B8） |
-| `QueryDiagnostics` | 直近リクエストの `reason` と対象候補数（実装時に既存 payload の範囲で表現する。新フィールドの要否は DEV-413 で判断） |
+| `Health` | **runtime 失敗のみ** `model_runtime_error_` へ `nll-scorer:<reason>` をミラーし、既存の `last_error` フィールドで運ばれる（§B8）。payload の形は変わらない |
+| 構造化ログ（`azookey::logging::RuntimeLogger`） | 全 `reason`（正常な `disabled` / `no_target` を含む）と対象候補数。適用時は `nll_applied=<件数>` |
+
+**`QueryDiagnostics` へは出さない（決定）。** 現行 `QueryDiagnosticsPayload`
+（`ipc/include/azookey/ipc/Payloads.h`）は `model_loaded` / `engine` / `backend` /
+`rss_mb` / EP 情報 / entry 数 / `fallback_state` / `last_error` のみを持ち、
+`reason`（正常系を含む）や対象候補数を表すフィールドが無い。ここに出す要件を残すと
+optional field 追加が必要になり、§B4.1 の「IPC を変更しない」と両立しない。
+
+正常系を含む `reason` の観測先は**構造化ログに一本化する**。これは Track A が
+fallback reason を構造化ログへ出し、M52 ベンチの `fallback_rate` 集計に使う設計
+（§7.2）と同じ流儀であり、IPC を触らずに `fallback_rate` 相当の集計ができる。
+`QueryDiagnostics` に載せたくなった場合は、後方互換な optional field 追加として
+**別課題で IPC 互換性を含めて設計する**（Track B の範囲外）。
 
 ### B4.3 モジュール境界
 
@@ -703,8 +737,28 @@ logits 出力を要求する batch を組む、の 2 点を満たす。
 
 - 上限 `nllTopK`（既定 **8**、範囲 1〜16）。適用直前の score 降順で上位から採る。
   候補あたり 1 回の decode が要るためコストは `K` に線形で、予算（§B7）は `K` で
-  決まる。上限からあふれた候補は score も順位も変えない。
+  決まる。
 - 対象が 0 件のときは何もしない（§B8 の `no_target`。失敗ではない）。
+
+### B5.1 選択集合の外に対する保証
+
+対象外ソースの候補と、`nllTopK` からあふれた候補について保証するのは
+**`score` と `debug_info` が不変であること**に限る。**相対順位の不変は保証しない。**
+
+最終順位は候補集合全体に対する score 降順の `stable_sort`（§B6.1）で決まるため、
+選択集合内の候補が減点されれば、選択集合外の候補が自分の score を変えないまま
+相対的に浮上しうる。例: `nllTopK=2` で対象 A=1.00 / B=0.95、選択集合外 C=0.94 の
+とき、B に -0.30 が適用されれば C は B を追い越す。これは全体ソートを持つ以上
+避けられず、**並べ替えという目的そのもの**でもある。
+
+ただし §B6.2 が減点のみであることから、次の一方向の性質は保証される:
+
+> **選択集合外の候補が、NLL 補正によって順位を下げることはない。** 補正は
+> 選択集合内の候補を下げるだけなので、集合外の候補の相対位置は同じか上がるかの
+> いずれかである。
+
+したがって `UserDictionary` 候補（§B5 で対象外）は、NLL によって順位を落とされない
+という保証を持つ。§B11 のテストもこの粒度で書く。
 
 ## B6. スコア合成（既存 `Reranker` との関係）
 
@@ -863,13 +917,18 @@ NLL の集約・正規化（§B2.2）と合成（§B6.2）、対象集合の選�
 decode 経路そのもの（§B3）は llama 有りビルドの test に置く。
 
 - `NLL_total` と `nll_per_char` の算出: 固定 logprob 表を与え、期待値と一致する。
-- **off-by-one**（§B3.1）: 位置ごとに異なる固定 logits を与え、`t_1` の logprob が
+- **off-by-one**（§B3.2）: 位置ごとに異なる固定 logits を与え、`t_1` の logprob が
   prefix 最終位置由来であることを検証する。1 ずれれば落ちるフィクスチャにする。
 - EOS を含めない（§B2.1）: 候補トークン列に EOS が混入していないこと。
 - 合成（§B6.2）: 最尤候補の bonus が 0、他が負、絶対値が `kNllSpan * nllWeight` を
   超えない。
-- 対象外ソース（`UserDictionary` / `Model` / `Llm`）の score と順位が不変。
-- `nllTopK` を超えた候補の score と順位が不変。
+- **prefix logits スナップショット**（§B3.1）: 候補を 2 件以上与え、候補 2 の
+  `t_1` の logprob が prefix 由来であること（候補 1 の出力由来だと落ちる
+  フィクスチャにする）。
+- 選択集合外の保証（§B5.1）: 対象外ソース（`UserDictionary` / `Model` / `Llm`）と
+  `nllTopK` からあふれた候補の **`score` と `debug_info` が不変**であること。
+  併せて、それらの候補が補正によって**順位を下げない**こと（減点のみの帰結）。
+  順位そのものの不変は検証しない（全体ソートを持つ以上成立しないため）。
 - `live=true` のリクエストで NllScorer が走らない（§B1）。
 - fallback: §B8 の各 `reason` で、候補列が NLL 未適用の結果と完全一致する。
 - all-or-nothing（§B7）: 途中で予算超過させたとき、部分的な減点が残らない。
@@ -887,17 +946,17 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
 **bench**
 
 - `bench/` に `K = nllTopK` での追加レイテンシを計測する case を足し、§B7 の予算内に
-  収まることを示す。prefix decode の再実行コスト（§B3.3）を内訳として分離する。
+  収まることを示す。prefix decode の再実行コスト（§B3.4）を内訳として分離する。
 
 ## B12. 未確定事項（DEV-413 実装時に確定する）
 
 - pin 中の llama.cpp における「位置ごとの logits を出す batch の組み方」と
-  「seq 単位の KV 削除 API」の正確な名前（§B3.2）。
+  「seq 単位の KV 削除 API」の正確な名前（§B3.3）。
 - `Convert` が KV を消すため NllScorer が prefix を必ず 1 回 decode し直す前提が、
   §B7 の予算（既定 20ms）に収まるか。収まらない場合は `Convert` と NllScorer で
   prefix decode を共有する最適化を別課題として起票する（本章の契約は変えずに
   実装内部で吸収できる範囲）。
 - `nllWeight` / `nllTopK` / `nllBudgetMs` の既定値校正。M52 ベンチ
   （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
-- `QueryDiagnostics` に NLL の `reason` / 対象候補数を出す際の payload 表現
-  （既存フィールドで足りるか、新フィールドが要るか。§B4.2）。
+- 構造化ログに出す `reason` / 対象候補数のフィールド名と粒度（§B4.2。ログ形式の
+  正典は `docs/dev-infrastructure-spec.md` §7 に従う）。

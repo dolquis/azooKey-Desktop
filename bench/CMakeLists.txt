@@ -19,12 +19,26 @@ if(AZOOKEY_BUILD_TESTS)
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
   if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
-    add_test(NAME azookey_zenzai_real_model_smoke
+    add_test(NAME azookey_zenzai_real_model_nihongo_smoke
              COMMAND azookey_zenzai_bench
                      --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --input "にほんご"
                      --iterations 1 --warmup 0 --require-model --require-zenzai)
-    set_tests_properties(azookey_zenzai_real_model_smoke PROPERTIES
+    set_tests_properties(azookey_zenzai_real_model_nihongo_smoke PROPERTIES
       LABELS "zenzai-real-model"
+      PASS_REGULAR_EXPRESSION "top_surface=日本語 "
+      FAIL_REGULAR_EXPRESSION "utf8-prefix-trimmed"
+      TIMEOUT 120
+    )
+    add_test(NAME azookey_zenzai_real_model_sentence_smoke
+             COMMAND azookey_zenzai_bench
+                     --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --input "わたしはがくせいです"
+                     --iterations 1 --warmup 0 --require-model --require-zenzai)
+    set_tests_properties(azookey_zenzai_real_model_sentence_smoke PROPERTIES
+      LABELS "zenzai-real-model"
+      PASS_REGULAR_EXPRESSION "top_surface=私は学生です "
+      FAIL_REGULAR_EXPRESSION "utf8-prefix-trimmed"
       TIMEOUT 120
     )
   elseif(NOT AZOOKEY_WITH_LLAMA_CPP)

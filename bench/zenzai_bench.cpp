@@ -16,7 +16,11 @@
 #include <vector>
 
 #if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
 #include <process.h>
+#include <shellapi.h>
 #else
 #include <unistd.h>
 #endif
@@ -69,6 +73,26 @@ std::string EnvOrEmpty(const char* name) {
   return value ? std::string(value) : std::string();
 #endif
 }
+
+#if defined(_WIN32)
+std::optional<std::string> WideToUtf8(const wchar_t* value) {
+  if (!value) {
+    return std::nullopt;
+  }
+  const int required =
+      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, nullptr, 0, nullptr, nullptr);
+  if (required <= 0) {
+    return std::nullopt;
+  }
+  std::string result(static_cast<size_t>(required), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, result.data(), required,
+                          nullptr, nullptr) != required) {
+    return std::nullopt;
+  }
+  result.pop_back();
+  return result;
+}
+#endif
 
 size_t ParseSize(const std::string& value, const char* name) {
   try {
@@ -242,7 +266,7 @@ std::string BackendName(azookey::host::BackendKind backend) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int RunBench(int argc, char** argv) {
   Options options;
   try {
     options = ParseOptions(argc, argv);
@@ -352,4 +376,39 @@ int main(int argc, char** argv) {
     return 1;
   }
   return 0;
+}
+
+int main(int argc, char** argv) {
+#if defined(_WIN32)
+  (void)argv;
+  int wide_argc = 0;
+  wchar_t** wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+  if (!wide_argv || wide_argc != argc) {
+    if (wide_argv) LocalFree(wide_argv);
+    std::cerr << "failed to read Unicode command-line arguments" << std::endl;
+    return 2;
+  }
+
+  std::vector<std::string> utf8_args;
+  utf8_args.reserve(static_cast<size_t>(wide_argc));
+  for (int i = 0; i < wide_argc; ++i) {
+    auto converted = WideToUtf8(wide_argv[i]);
+    if (!converted) {
+      LocalFree(wide_argv);
+      std::cerr << "failed to convert command-line argument to UTF-8" << std::endl;
+      return 2;
+    }
+    utf8_args.push_back(std::move(*converted));
+  }
+  LocalFree(wide_argv);
+
+  std::vector<char*> utf8_argv;
+  utf8_argv.reserve(utf8_args.size());
+  for (auto& arg : utf8_args) {
+    utf8_argv.push_back(arg.data());
+  }
+  return RunBench(static_cast<int>(utf8_argv.size()), utf8_argv.data());
+#else
+  return RunBench(argc, argv);
+#endif
 }

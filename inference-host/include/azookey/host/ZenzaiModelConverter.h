@@ -43,6 +43,8 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
                                      const ZenzaiRuntimeOptions& options = {});
 std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer);
+std::optional<uint32_t> ResolveZenzaiEosTokenOverride(uint32_t declared_eos_token_id,
+                                                      const std::vector<std::string>& vocabulary);
 
 class ZenzaiModelConverter final : public core::IConverter {
  public:

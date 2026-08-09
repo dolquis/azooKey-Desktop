@@ -344,6 +344,12 @@ jobs:
           if ($testLog -notmatch 'top_surface=私は学生です top_debug_info=') {
             throw "Real-model smoke did not convert わたしはがくせいです exactly to 私は学生です"
           }
+          if ($testLog -notmatch 'prompt_token_ids=172,120,202,444,677,259,796,172,120,203') {
+            throw "Real-model smoke token IDs did not match the pinned reference for にほんご"
+          }
+          if ($testLog -notmatch 'prompt_token_ids=172,120,202,628,327,330,623,643,299,492,280,406,271,172,120,203') {
+            throw "Real-model smoke token IDs did not match the pinned reference for わたしはがくせいです"
+          }
           if ($testLog -match 'utf8-prefix-trimmed') {
             throw "Real-model smoke observed utf8-prefix-trimmed after EOS handling"
           }

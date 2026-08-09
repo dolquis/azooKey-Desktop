@@ -654,18 +654,14 @@ struct ZenzaiModelRuntime {
   llama_model* model{nullptr};
   llama_context* context{nullptr};
 
-  std::vector<GeneratedCandidate> Generate(const std::string& kana,
-                                           const core::ConversionContext& conversion_context) {
-    if (!model || !context) {
-      throw std::runtime_error("llama.cpp runtime is not ready");
+  std::vector<llama_token> TokenizePrompt(const std::string& kana,
+                                          const core::ConversionContext& conversion_context) const {
+    if (!model) {
+      throw std::runtime_error("llama.cpp model is not ready");
     }
-
     const auto* vocab = llama_model_get_vocab(model);
     if (!vocab) {
       throw std::runtime_error("llama.cpp vocab is not available");
-    }
-    if (IsCanceled(conversion_context)) {
-      return {};
     }
 
     const auto prompt = BuildZenzaiPrompt(kana, conversion_context);
@@ -684,6 +680,24 @@ struct ZenzaiModelRuntime {
       throw std::runtime_error("llama.cpp prompt tokenization failed");
     }
     prompt_tokens.resize(static_cast<size_t>(token_count));
+    return prompt_tokens;
+  }
+
+  std::vector<GeneratedCandidate> Generate(const std::string& kana,
+                                           const core::ConversionContext& conversion_context) {
+    if (!model || !context) {
+      throw std::runtime_error("llama.cpp runtime is not ready");
+    }
+
+    const auto* vocab = llama_model_get_vocab(model);
+    if (!vocab) {
+      throw std::runtime_error("llama.cpp vocab is not available");
+    }
+    if (IsCanceled(conversion_context)) {
+      return {};
+    }
+
+    auto prompt_tokens = TokenizePrompt(kana, conversion_context);
 
     const size_t candidate_limit = RequestedCandidateLimit(conversion_context);
     const int32_t vocab_size = llama_vocab_n_tokens(vocab);
@@ -984,6 +998,21 @@ ZenzaiModelConverter::ZenzaiModelConverter(ZenzaiLoadResult&& loaded, core::ICon
     : info_(std::move(loaded.info)), runtime_(std::move(loaded.runtime)), fallback_(fallback) {}
 
 ZenzaiModelConverter::~ZenzaiModelConverter() = default;
+
+std::vector<int32_t> ZenzaiModelConverter::TokenizePromptForValidation(
+    const std::string& kana, const core::ConversionContext& context) const {
+#if AZOOKEY_WITH_LLAMA_CPP
+  if (!runtime_) {
+    throw std::runtime_error("llama.cpp runtime is not ready");
+  }
+  const auto tokens = runtime_->TokenizePrompt(kana, context);
+  return {tokens.begin(), tokens.end()};
+#else
+  (void)kana;
+  (void)context;
+  throw std::runtime_error("prompt token validation requires llama.cpp");
+#endif
+}
 
 std::vector<core::Candidate> ZenzaiModelConverter::Convert(const std::string& kana,
                                                            const core::ConversionContext& context) {

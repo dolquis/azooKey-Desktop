@@ -54,6 +54,8 @@ class ZenzaiModelConverter final : public core::IConverter {
   const ZenzaiModelInfo& info() const { return info_; }
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
+  std::vector<int32_t> TokenizePromptForValidation(const std::string& kana,
+                                                   const core::ConversionContext& context) const;
 
   std::vector<core::Candidate> Convert(const std::string& kana,
                                        const core::ConversionContext& context) override;

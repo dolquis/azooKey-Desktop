@@ -466,8 +466,12 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 - GGUF の `tokenizer.ggml.pre` が `gpt2-small-japanese-char` の場合、モデルロード時だけ
   llama.cpp の KV override で `gpt-2` に置き換え、upstream llama.cpp の既知
   pre-tokenizer 名としてロードする。その他の pre-tokenizer には override を適用しない。
-  この置換が想定するトークン化との同一性は、DEV-225 の実機ゲートで代表入力の token ID 列を
-  参照実装と比較して確認する。
+  この置換が想定するトークン化との同一性は、`ku-nlp/gpt2-small-japanese-char` revision
+  `f1623eb5e26cee239d8fc5a661c48482811b3dbb` の `AutoTokenizer`（`add_special_tokens=false`）を
+  参照実装として確認する。文脈なしの `[IN]ニホンゴ[OUT]` は
+  `172,120,202,444,677,259,796,172,120,203`、`[IN]ワタシハガクセイデス[OUT]` は
+  `172,120,202,628,327,330,623,643,299,492,280,406,271,172,120,203` と一致しなければならない。
+  real-model smoke と DEV-225 の実機ゲートは、この token ID 列を差分確認する。
 - GGUF が宣言する `tokenizer.ggml.eos_token_id` が、語彙上その id に対応する piece から見て
   終端トークンでない場合（開始トークン `<s>` を指している等）、モデルロード時だけ KV override で
   語彙中の終端トークン（`</s>`）の id へ置き換える。**id を定数で書かず語彙から解決する**。

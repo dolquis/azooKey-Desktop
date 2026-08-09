@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -27,6 +28,7 @@
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/ZenzaiModelConverter.h"
 
 #ifndef AZOOKEY_WITH_LLAMA_CPP
 #define AZOOKEY_WITH_LLAMA_CPP 0
@@ -43,6 +45,7 @@ struct Options {
   bool require_model{false};
   bool mock_zenzai{false};
   bool require_zenzai{false};
+  std::optional<std::vector<int32_t>> expected_prompt_token_ids;
   std::optional<double> max_p95_ms;
   azookey::host::BackendKind backend{azookey::host::BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
@@ -53,6 +56,7 @@ void PrintUsage(const char* exe) {
             << " [--model PATH] [--input KANA] [--context TEXT] [--iterations N]"
                " [--warmup N] [--backend cpu|cuda] [--n-gpu-layers N]"
                " [--max-p95-ms N] [--require-model] [--require-zenzai]"
+               " [--expected-prompt-token-ids ID[,ID...]]"
                " [--mock-zenzai]\n"
             << "If --model is omitted, AZOOKEY_ZENZAI_MODEL is used when set; otherwise the "
                "bench reports status=skipped and exits 0 unless --require-model is present.\n";
@@ -122,6 +126,50 @@ int32_t ParseI32(const std::string& value, const char* name) {
   } catch (const std::exception& ex) {
     throw std::invalid_argument(std::string(name) + " must be an integer: " + ex.what());
   }
+}
+
+std::vector<int32_t> ParseTokenIds(const std::string& value, const char* name) {
+  if (value.empty()) {
+    throw std::invalid_argument(std::string(name) + " must not be empty");
+  }
+  std::vector<int32_t> token_ids;
+  size_t offset = 0;
+  while (offset <= value.size()) {
+    const auto separator = value.find(',', offset);
+    const auto token = value.substr(
+        offset, separator == std::string::npos ? std::string::npos : separator - offset);
+    if (token.empty()) {
+      throw std::invalid_argument(std::string(name) + " contains an empty token ID");
+    }
+    size_t parsed_length = 0;
+    long long parsed = 0;
+    try {
+      parsed = std::stoll(token, &parsed_length, 10);
+    } catch (const std::exception& ex) {
+      throw std::invalid_argument(std::string(name) + " must contain integers: " + ex.what());
+    }
+    if (parsed_length != token.size() || parsed < 0 ||
+        parsed > std::numeric_limits<int32_t>::max()) {
+      throw std::invalid_argument(std::string(name) + " contains an invalid token ID: " + token);
+    }
+    token_ids.push_back(static_cast<int32_t>(parsed));
+    if (separator == std::string::npos) {
+      break;
+    }
+    offset = separator + 1;
+  }
+  return token_ids;
+}
+
+std::string FormatTokenIds(const std::vector<int32_t>& token_ids) {
+  std::string result;
+  for (size_t i = 0; i < token_ids.size(); ++i) {
+    if (i > 0) {
+      result += ',';
+    }
+    result += std::to_string(token_ids[i]);
+  }
+  return result;
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -198,6 +246,10 @@ Options ParseOptions(int argc, char** argv) {
           ParseI32(RequireValue(argc, argv, i, "--n-gpu-layers"), "--n-gpu-layers");
     } else if (arg == "--max-p95-ms") {
       options.max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
+    } else if (arg == "--expected-prompt-token-ids") {
+      options.expected_prompt_token_ids =
+          ParseTokenIds(RequireValue(argc, argv, i, "--expected-prompt-token-ids"),
+                        "--expected-prompt-token-ids");
     } else if (arg == "--require-model") {
       options.require_model = true;
     } else if (arg == "--mock-zenzai") {
@@ -290,6 +342,40 @@ int RunBench(int argc, char** argv) {
     return options.require_model ? 1 : 0;
   }
 
+  std::optional<std::vector<int32_t>> prompt_token_ids;
+  if (options.expected_prompt_token_ids) {
+#if AZOOKEY_WITH_LLAMA_CPP
+    auto validation_load = azookey::host::LoadZenzaiGgufModel(options.model_path);
+    if (!validation_load.ok) {
+      std::cerr << "status=prompt-token-validation-load-failed error=" << validation_load.error
+                << std::endl;
+      return 1;
+    }
+    azookey::core::SimpleConverter validation_fallback;
+    azookey::host::ZenzaiModelConverter validation_converter(std::move(validation_load),
+                                                             &validation_fallback);
+    azookey::core::ConversionContext validation_context;
+    validation_context.preceding_text = options.context;
+    try {
+      prompt_token_ids =
+          validation_converter.TokenizePromptForValidation(options.input, validation_context);
+    } catch (const std::exception& ex) {
+      std::cerr << "status=prompt-token-validation-failed error=" << ex.what() << std::endl;
+      return 1;
+    }
+    if (*prompt_token_ids != *options.expected_prompt_token_ids) {
+      std::cerr << "status=prompt-token-mismatch expected_prompt_token_ids="
+                << FormatTokenIds(*options.expected_prompt_token_ids)
+                << " actual_prompt_token_ids=" << FormatTokenIds(*prompt_token_ids) << std::endl;
+      return 1;
+    }
+#else
+    std::cerr << "status=prompt-token-validation-unavailable reason=llama-cpp-disabled"
+              << std::endl;
+    return 1;
+#endif
+  }
+
   const auto learning_path = UniqueTempPath("azookey_zenzai_bench_learning", ".tsv");
   std::remove(learning_path.string().c_str());
 
@@ -360,6 +446,8 @@ int RunBench(int argc, char** argv) {
             << " zenzai_candidates=" << zenzai_count << " top_surface=" << top_surface
             << " top_debug_info=" << top_debug
             << " effective_last_error=" << OptionalString(engine.effective_last_error())
+            << " prompt_token_ids="
+            << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids) : std::string("not-checked"))
             << std::endl;
 
   std::remove(learning_path.string().c_str());

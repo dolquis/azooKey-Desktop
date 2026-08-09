@@ -1,18 +1,37 @@
-# Tiny Neural Reranker 仕様
+# ニューラルリランカー仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M56（変換品質トラック）
+対応マイルストーン: M56（変換品質トラック）+ NllScorer トラック（DEV-413）
 関連: `plans/windows-port-roadmap.md` M52 / M53 / M54 / M55 / M57、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/dev-infrastructure-spec.md` §7.7（M51 trace）、
-      `docs/modernbert-ja-scoring-spec.md`（M57）
+      `docs/modernbert-ja-scoring-spec.md`（M57）、
+      `docs/zenzai-inference-spec.md`（Track B の推論基盤）
 作成日: 2026-05-27
-更新日: 2026-06-26（DEV-112: embedding 供給方針・特徴量の重み付け・学習データ
-        ラベリングプロトコル・timeout / fallback 閾値を確定）
+更新日: 2026-08-09（DEV-556: Track B〈NllScorer 型ニューラルリランク〉の NLL 定義・
+        コンテキスト再利用・責務境界・合成・fallback・有効化フラグを確定）
 位置づけ: 変換品質トラック（M53 / M54 / M55 のすべてが完了し、M52 ベンチで
 baseline 固定後）
 
-## 1. 目的
+## 0. 本書が扱う 2 トラック
+
+本書は「候補を並べ替える（生成しない）」層の正典であり、独立した 2 つの
+リランカートラックを収容する。両者は**別モデル・別実装・別スケジュール**であり、
+一方の完了を他方の前提にしない。
+
+| トラック | 章 | 対象 | スコア源 | 前提 |
+|---|---|---|---|---|
+| **Track A: Tiny Neural Reranker**（M56） | §1〜§14 | 全ソースの候補 | ONNX MLP + 手作り特徴量 | M52 + M53 + M54 + M55 |
+| **Track B: NllScorer 型ニューラルリランク**（DEV-413） | §B1〜§B12 | 辞書由来候補のみ | ロード済み Zenzai の系列 NLL | M8（Zenzai 配線）のみ |
+
+- 章番号は分離する。他ドキュメントからの既存参照（`neural-reranker-spec` §4 /
+  §7 / §9 等）はすべて Track A を指す。Track B は `§B<n>` で参照する。
+- 両トラックの接点は**スコア統合レイヤのみ**（§B6）。Track B は Track A の
+  `features_v1` 契約（§5.2）を変更しない。
+
+---
+
+## 1. 目的（Track A）
 
 Zenzai / 辞書 / ユーザー辞書 / 補正候補から得た**候補を、文脈と各種
 特徴量で並べ替える**。生成は行わず、候補選択に専念する。M52 ベンチで
@@ -462,3 +481,482 @@ final_score =
 - Mini Transformer 化
 - 個人 fine-tune（プライバシーを保ったまま）
 - M57 ModernBERT との 2 段 rerank（M57 が ambiguous 候補だけ精査）
+
+---
+
+# Track B: NllScorer 型ニューラルリランク
+
+対応課題: DEV-413（実装）/ DEV-556（本章の設計確定）
+参考実装（**設計思想のみ**。逐語移植しない）: karukan
+`karukan-engine/src/kanji/llamacpp.rs:713-805`（`NllScorer`。コンテキストを
+再利用して (reading, surface) ペアの文字あたり NLL を算出する）。本章の算出式・
+正規化・合成規則は azooKey 側で独自に定めたものであり、参考実装の写しではない。
+
+## B1. 目的とスコープ
+
+**目的**: すでにロード済みの Zenzai モデルを使い、**辞書由来候補**の並び順を
+系列尤度（NLL）で整える。生成は行わない。
+
+- **入力**: 1 リクエスト内で確定した (左文脈, 読み) と、マージ済み候補列。
+- **出力**: 対象候補への加算スコア（§B6）。候補の追加・削除・表層の書き換えは
+  行わない。
+- **前提**: M8（Zenzai 配線、`docs/zenzai-inference-spec.md`）のみ。M52 ベンチ・
+  M53〜M55 を前提にしない（Track A と独立に着手できる）。
+- **実装配置**: `inference-host/` 内で完結する。`ipc/` と `tsf-tip/` は変更しない
+  （§B4.4）。
+- **適用経路は `QueryCandidates` のみ**。`QueryPredictions`（次語予測）と
+  `QueryCorrections`（訂正候補）には適用しない。前者は読みが確定していないため
+  §B2.1 のプロンプト（`[IN]<input_katakana>[OUT]`）が成立せず、後者は候補集合が
+  小さくレイテンシに対する利得が薄い。両者への拡張は将来課題とする。
+- **`QueryCandidates` の中でも `live=true`（ライブ変換）は対象外**。ライブ変換は
+  打鍵ごとに走る最小レイテンシ経路で top-1 のみを使う
+  （`docs/zenzai-inference-spec.md` §6.1）ため、並べ替えの利得が無いまま
+  §B7 の予算（既定 20ms）を毎打鍵に上乗せすることになる。NllScorer は
+  **候補ウィンドウ要求（`live=false`）にのみ**適用する。
+
+### B1.1 Track A（M56）との関係
+
+- **排他ではない**。Track A は全ソース候補を手作り特徴量 + ONNX MLP で並べ替える層、
+  Track B は辞書由来候補だけを LLM 尤度で整える層で、評価対象も信号源も異なる。
+- 両方が有効な環境では、Track B の出力は Track A より**手前**に効く（§B6 の適用点）。
+- Track B の `nll_per_char` を Track A の特徴量（§4）や `final_score`（§9）へ
+  取り込むかは **M56 実装時の判断**とし、本章では決めない。取り込む場合も
+  `features_v1` の 12 次元契約（§5.2）は Track B からは変更しない。
+
+### B1.2 既存 Zenzai 生成との関係
+
+Zenzai が生成した候補（`CandidateSource::Model`）は生成時点で系列 logprob を持ち、
+`docs/zenzai-inference-spec.md` §6.5 で [0.3, 1.4] 帯へ写像済みである。これを
+NllScorer で再評価すると**同じ信号を二重に掛ける**ため、生成候補は対象外とする
+（§B5）。Track B が埋めるのは「Zenzai を通っていない辞書候補には尤度の情報が
+一切無い」という空白である。
+
+## B2. NLL の定義
+
+### B2.1 プロンプトと候補トークン列
+
+プロンプト `P` は `docs/zenzai-inference-spec.md` §3.2 の zenz-v3 フォーマットと
+**完全に同一**とする（別フォーマットを作らない）。
+
+```
+P = [CTX]<clean_left_context>[IN]<input_katakana>[OUT]
+```
+
+- 前処理（カタカナ化・左文脈 30 文字切り詰め）も同 §3.1 と同一。生成経路と
+  同じ `BuildZenzaiPrompt` を共有する。
+- 候補表層 `s` は `llama_tokenize` でトークン列 `t_1 … t_m` にする。
+  **BOS を付与しない**（BOS は `P` 側のみ。同 §5 の `add_bos_token` 契約に従う）。
+- **EOS をトークン列に含めない**（決定）。理由:
+  1. GGUF が宣言する `tokenizer.ggml.eos_token_id` は pin モデルでずれており、
+     `docs/zenzai-inference-spec.md` §9.2 の override 契約に依存する（DEV-743）。
+     EOS 項を NLL に入れると、
+     スコアが override の有無というモデルメタデータ都合に左右される。
+  2. EOS の logprob は「ここで文が終わる自然さ」を測る別の量であり、読みが同一で
+     表層長の異なる候補間で短い表層を系統的に有利にする。
+  3. 辞書候補は**完結した表層**として与えられ、終端の判断は不要。
+
+### B2.2 算出式
+
+`log p(t_i | …)` は、`t_1 … t_{i-1}` まで decode した位置の logits に
+log-softmax を掛けた値とする（数値安定化は生成経路の `CollectTokenChoices` と
+同じく最大値減算で行う。top-K への絞り込みは行わず、対象トークン id の値のみ使う）。
+
+```
+NLL_total(s) = - Σ_{i=1..m} log p(t_i | P, t_1 … t_{i-1})
+nll_per_char(s) = NLL_total(s) / max(1, C(s))
+```
+
+- `C(s)` = 表層 `s` の **UTF-8 コードポイント数**。
+- 累算は `double`。
+
+### B2.3 正規化単位をコードポイントとする理由（決定）
+
+分母に**トークン数ではなくコードポイント数**を採る。
+
+- トークン平均（`NLL_total / m`）は語彙依存が強い。同一読みの候補でも、語彙に
+  1 トークンとして載っている表層（例「日本語」）と複数トークンに割れる表層
+  （例「二本語」）でスケールが変わり、**語彙頻度バイアスがそのまま順位に乗る**。
+- コードポイント数は候補固有かつモデル非依存の量で、同一読みの候補集合では
+  ほぼ等長になる。したがって候補間比較は実質的に `NLL_total` の比較に近い意味を
+  保ちつつ、長さの異なる候補（送りがな違い等）でも破綻しない。
+- 書記素クラスタ単位（結合文字・異体字セレクタを 1 文字に畳む）には**しない**。
+  決定性と実装単純性を優先する。日本語表層では両者の差はほぼ生じず、差が問題に
+  なる表層が現れた時点で別課題として再検討する。
+
+### B2.4 非有限値の扱い
+
+`log p` に NaN / Inf が 1 つでも現れた候補は**スコア不能**として扱い、その候補
+だけを対象集合から外す（元の score と順位を保つ）。他候補の評価は継続する。
+全対象候補がスコア不能なら §B8 の `invalid_score` として何も適用しない。
+
+## B3. コンテキスト再利用（prefix KV 共有）
+
+1 リクエスト内で `P` は全候補に共通である。これを候補ごとに decode し直すと
+コストが候補数に比例して跳ね上がるため、**prefix の KV を 1 回だけ作って
+候補ごとにロールバックする**。
+
+```
+1. KV をクリアし、P を decode する（prefix KV 確立、prefix_len トークン）
+1'. prefix 最終位置の logits を**スナップショットへ複製**する（§B3.1）
+2. 各候補 s について:
+   a. t_1 の logprob は 1'. のスナップショットから読む
+   b. t_1 … t_{m-1} を decode し、t_2 … t_m の logprob を読む
+   c. KV を prefix_len へロールバックする
+3. 予算 / cancel は 1.・2.a の前と 2.c の後で確認する（§B7）
+```
+
+### B3.1 prefix logits のスナップショット契約
+
+**prefix 最終位置の logits は、prefix decode の直後に複製して全候補で再利用する。**
+
+`llama_get_logits*` が返すのは**直近の `llama_decode()` の出力**である。KV を
+`prefix_len` へロールバックしても logits バッファは巻き戻らないため、候補 1 の
+decode 後に読める「最終位置の logits」は prefix のものではなく**候補 1 の最終
+出力**である。スナップショットを取らずに §B3 の 2.a を実装すると、2 候補目以降の
+`t_1` の logprob が誤る（あるいは候補ごとに prefix を decode し直すことになり、
+本節の共有契約そのものが失われる）。
+
+- 複製するのは prefix 最終位置の logits 行（`vocab_size` 個）。候補ごとに `t_1` が
+  異なるため、特定トークンの値だけでは足りない。
+- log-softmax の分母（§B2.2 の最大値減算を含む正規化項）は**スナップショットから
+  1 回だけ算出**し、全候補で使い回す。
+- スナップショットの寿命は 1 リクエスト内。次リクエストでは prefix が変わるため
+  必ず取り直す。
+
+回帰テストで固定する（§B11）: 候補を 2 件以上与え、候補 2 の `t_1` の logprob が
+**prefix 由来**であること（候補 1 の出力由来になっていないこと）。
+
+### B3.2 off-by-one 契約
+
+**`t_i` の logprob は `t_1 … t_{i-1}` まで decode した位置の logits から読む。**
+したがって:
+
+- `t_1` の logprob の出所は**候補トークンではなく prefix の最終位置**である。
+- `t_m` 自身を decode する必要は無い（`t_m` の出力 logits は使わない）。
+  候補あたり実際に decode するのは `m-1` トークンである。
+
+この 1 ずれは実装で最も壊れやすい箇所であり、テストで固定する（§B11）。
+
+### B3.3 既存 `DecodeTokens` を流用しない
+
+`inference-host/src/ZenzaiModelConverter.cpp` の `DecodeTokens` は
+NllScorer にそのまま使えない。理由は 2 つで、いずれも生成経路には正しい挙動である。
+
+1. 先頭で `llama_kv_self_clear` を呼び、**毎回 KV を捨てる**。prefix 再利用と
+   両立しない。
+2. `llama_batch_get_one` で組んだ batch は**最終位置の logits しか出さない**。
+   NLL には位置ごとの logits が要る。
+
+NllScorer 専用の decode ヘルパを設け、(a) KV をクリアしない、(b) 位置ごとに
+logits 出力を要求する batch を組む、の 2 点を満たす。
+
+> **実装時に確認する API 名**: 位置ごとの logits 要求（`llama_batch` の
+> `logits[]` を立てる形）と seq 単位の KV 削除は、pin 中の llama.cpp
+> （`AZOOKEY_LLAMA_CPP_GIT_TAG` = `05f6ac6…`）のヘッダで名前を確認すること。
+> 既存コードが使う `llama_kv_self_*` 系はリネームが進行中の層であり、本書では
+> 関数名を確定させない（契約は「prefix 長より後ろの KV を落とす」ことのみ）。
+
+### B3.4 `llama_context` の共有とスレッド
+
+- 生成経路と**同一の `llama_context`** を使う。モデルを 2 つ常駐させない。
+- NllScorer は `InferenceEngine::QueryCandidates` が `state_mutex_` を保持した
+  区間の中、`Convert` の**完了後**に走る。したがって context への同時アクセスは
+  起きない。
+- `Convert` の beam decode が KV を触るため、NllScorer は prefix を必ず 1 回
+  decode し直す前提で予算を組む（§B12）。
+- NllScorer を別スレッドへ出さない（`llama_context` は共有できない）。
+
+## B4. 責務境界
+
+### B4.1 IPC 責務境界（決定: 新規メッセージ型を作らない）
+
+**Track B は IPC を一切変更しない。** 新しい `MessageType` を追加せず、
+`QueryCandidates` の request / response payload（`ipc/include/azookey/ipc/Payloads.h`）
+も変更しない。
+
+理由:
+
+- 候補集合は **TIP から送られてこない**。現行アーキテクチャでは
+  `InferenceEngine::QueryCandidates` が user_dict + converter の出力を Host 内部で
+  合成し（`docs/zenzai-inference-spec.md` §7.1）、TIP は読みと文脈を送るだけである。
+  「TIP からリランク要求として候補集合を送る」形は現行の責務分割に無い。
+- リランクは Zenzai の `llama_context` を要する。これは Host が単独で所有する資源で、
+  プロセス境界をまたがせる理由が無い。
+- 追加ラウンドトリップは、1 変換あたりのレイテンシ予算
+  （`docs/zenzai-inference-spec.md` §8）を理由なく食う。
+
+したがって NllScorer は `QueryCandidates` の内部フェーズであり、**TIP からは
+「候補の並びが変わる」以外に観測されない**。
+
+### B4.2 外部から観測できるもの
+
+| 経路 | 内容 |
+|---|---|
+| `Candidate::debug_info` | 対象候補に `nll=<nll_per_char>;nlld=<bonus>` を追記（既存の `dup:` 併記と同じ流儀。表層・読みは含めない） |
+| `Health` | **runtime 失敗のみ** `model_runtime_error_` へ `nll-scorer:<reason>` をミラーし、既存の `last_error` フィールドで運ばれる（§B8）。payload の形は変わらない |
+| 構造化ログ（`azookey::logging::RuntimeLogger`） | 全 `reason`（正常な `disabled` / `no_target` を含む）と対象候補数。適用時は `nll_applied=<件数>` |
+
+**`QueryDiagnostics` へは出さない（決定）。** 現行 `QueryDiagnosticsPayload`
+（`ipc/include/azookey/ipc/Payloads.h`）は `model_loaded` / `engine` / `backend` /
+`rss_mb` / EP 情報 / entry 数 / `fallback_state` / `last_error` のみを持ち、
+`reason`（正常系を含む）や対象候補数を表すフィールドが無い。ここに出す要件を残すと
+optional field 追加が必要になり、§B4.1 の「IPC を変更しない」と両立しない。
+
+正常系を含む `reason` の観測先は**構造化ログに一本化する**。これは Track A が
+fallback reason を構造化ログへ出し、M52 ベンチの `fallback_rate` 集計に使う設計
+（§7.2）と同じ流儀であり、IPC を触らずに `fallback_rate` 相当の集計ができる。
+`QueryDiagnostics` に載せたくなった場合は、後方互換な optional field 追加として
+**別課題で IPC 互換性を含めて設計する**（Track B の範囲外）。
+
+### B4.3 モジュール境界
+
+- `core::IConverter` は変更しない。NLL 評価は変換ではなく、全 converter が
+  持てるインターフェースではない。
+- NllScorer は `ZenzaiModelConverter` が公開する評価 API（`llama_context` を
+  持つ側のメンバ）として実装し、`InferenceEngine` は
+  `MirrorModelRuntimeErrorLocked` と同じく `dynamic_cast<ZenzaiModelConverter*>` で
+  到達する。Zenzai 以外が active な間は `model_not_loaded` で no-op になる。
+
+### B4.4 変更対象ファイル（DEV-413 の見込み）
+
+`inference-host/src/ZenzaiModelConverter.cpp`（NLL 評価 API・専用 decode ヘルパ）、
+`inference-host/include/azookey/host/ZenzaiModelConverter.h`、
+`inference-host/src/InferenceEngine.cpp`（適用点の挿入）、
+`inference-host/include/azookey/host/InferenceEngine.h`（`EngineConfig` へ設定追加）、
+`inference-host/tests/`、`settings/mvp-settings.schema.json`（§B9）。
+`ipc/` `tsf-tip/` `core/` `learning/` は**変更しない**。
+
+## B5. 対象候補集合
+
+| `CandidateSource` | 対象 | 理由 |
+|---|---|---|
+| `SystemDictionary` / `Heuristic` | **対象** | 尤度の情報を持たない辞書・ヒューリスティック候補。Track B が埋める空白 |
+| `UserDictionary` | 対象外 | ユーザーが登録した語の順位を LLM 尤度で動かさない（`docs/zenzai-inference-spec.md` §7.3 / §7.6 のソース優先と整合） |
+| `Model` | 対象外 | Zenzai 生成候補。生成時の系列 logprob と二重評価になる（§B1.2） |
+| `Llm` | 対象外 | M16 クラウド整文用の予約。性質が異なる |
+
+- 上限 `nllTopK`（既定 **8**、範囲 1〜16）。適用直前の score 降順で上位から採る。
+  候補あたり 1 回の decode が要るためコストは `K` に線形で、予算（§B7）は `K` で
+  決まる。
+- 対象が 0 件のときは何もしない（§B8 の `no_target`。失敗ではない）。
+
+### B5.1 選択集合の外に対する保証
+
+対象外ソースの候補と、`nllTopK` からあふれた候補について保証するのは
+**`score` と `debug_info` が不変であること**に限る。**相対順位の不変は保証しない。**
+
+最終順位は候補集合全体に対する score 降順の `stable_sort`（§B6.1）で決まるため、
+選択集合内の候補が減点されれば、選択集合外の候補が自分の score を変えないまま
+相対的に浮上しうる。例: `nllTopK=2` で対象 A=1.00 / B=0.95、選択集合外 C=0.94 の
+とき、B に -0.30 が適用されれば C は B を追い越す。これは全体ソートを持つ以上
+避けられず、**並べ替えという目的そのもの**でもある。
+
+ただし §B6.2 が減点のみであることから、次の一方向の性質は保証される:
+
+> **選択集合外の候補が、NLL 補正によって順位を下げることはない。** 補正は
+> 選択集合内の候補を下げるだけなので、集合外の候補の相対位置は同じか上がるかの
+> いずれかである。
+
+したがって `UserDictionary` 候補（§B5 で対象外）は、NLL によって順位を落とされない
+という保証を持つ。§B11 のテストもこの粒度で書く。
+
+## B6. スコア合成（既存 `Reranker` との関係）
+
+### B6.1 適用点
+
+```
+QueryCandidates:
+  user_dict lookup → converter Convert → merge → DedupMergedCandidates
+    → ★ NllScorer（本章）
+    → ApplyRerankerOrRaw（learning::Reranker: 学習加点 + score 降順 stable_sort）
+```
+
+`DedupMergedCandidates` の**後**、`ApplyRerankerOrRaw` の**前**に置く。
+
+この順序が DEV-413 の「既存 `Reranker` とは排他でなく補完」の具体化である。
+学習加点はユーザー個人の確定履歴という最も強い個別化信号であり、最後に載せて
+最終順位を支配できるようにする。NLL は辞書候補の**事前順位**を整えるだけの層で、
+学習された選好を上書きしない。
+
+`learning::Reranker::Apply` の実装（加算 → `stable_sort`）と最終順位規則
+（`docs/zenzai-inference-spec.md` §7.3）は**変更しない**。
+
+### B6.2 合成形（減点のみの相対補正）
+
+score を**置換せず加算項**として合成する。対象集合内の最尤候補を基準にする。
+
+```
+nll_min   = min over 対象候補 i of nll_per_char_i
+delta_i   = nll_min - nll_per_char_i                  // ≤ 0
+bonus_i   = max(delta_i, -kNllSpan) * nllWeight       // ≤ 0
+score_i  += bonus_i
+```
+
+- `kNllSpan` = **2.0**（nats/char。コード内定数）、`nllWeight` 既定 **0.15**。
+  したがって 1 候補あたりの補正幅は **[-0.30, 0]** に収まる。
+- **加点しない（減点のみ）**のは意図的である。最尤候補は 0 のまま据え置き、
+  劣る候補だけが尤度差に応じて下がる。これにより:
+  - 対象集合内の並びは「元の score − 尤度ギャップ」で決まり、目的である
+    辞書候補の並べ替えは達成される。
+  - `docs/zenzai-inference-spec.md` §7.2 の **score 帯を上向きに壊さない**。
+    辞書候補が user_dict 帯（1.5）や Zenzai 帯上限（1.4）を NLL 由来で
+    追い越すことが構造的に起こらない。
+  - 帯からの下方向のはみ出しは `kNllSpan * nllWeight`（既定 0.30）に上限が
+    あり、帯幅を超えて沈むことはない。
+- 同点時は `stable_sort` により従前の順序（挿入順）が保たれる。NLL は独自の
+  タイブレーク規則を導入しない。
+- `debug_info` へ `nll=` / `nlld=` を追記する（§B4.2）。
+
+### B6.3 Track A `final_score` との関係（インターフェース注記）
+
+Track A §9 の `final_score` へ NLL を載せる場合は、`normalize(nll_score)` の
+1 項として扱い、重みは M52 ベンチで校正する（§9 の他項と同じ扱い）。本章は
+Track A の重み表を変更しない。§B6.2 の加算合成は、Track A が未導入の環境で
+Track B が単独で成立するための形式である。
+
+## B7. 予算・キャンセル・打ち切り
+
+- リクエスト単位の予算 `nllBudgetMs`（既定 **20ms**、範囲 5〜60、範囲外は clamp）。
+- 既存の deadline / cancel plumbing（`kModelConversionBudget`、
+  `ConversionContext` の cancel、`docs/zenzai-inference-spec.md` §9.2.2）に載せる。
+  NLL 用の別スレッド・別タイマーを作らない。
+- **all-or-nothing**（決定）: 予算超過を検出した時点で、そのリクエストの NLL 適用を
+  **全面的に破棄**し、NLL 適用前の score のまま続行する。部分適用はしない。
+  - 理由: 部分適用では「先に評価された候補だけが減点される」ため、同じ入力でも
+    実行時のゆらぎで順位が変わる。IME の決定性を優先する（Track A §7.2 が
+    timeout に対して whole-request skip を選ぶのと同じ方針）。
+  - 実装上は `Candidate::score` を直接書き換えず、bonus を別配列に貯め、
+    **完走したときだけ**適用する。
+- cancel は prefix decode の前、各候補の decode の前後で確認する。
+- **cancel は失敗ではなく中断**（決定）: 現行 `QueryCandidates` は cancel 観測時に
+  候補列そのものを返さない（空を返す）。したがって cancel 時の NllScorer は
+  「fallback で順序を保つ」対象ですらなく、単に処理を放棄して cancel 経路へ抜ける。
+  §B8 の `reason` を記録せず、circuit breaker にも計上しない（下記）。
+
+## B8. fallback と失敗理由
+
+いずれの場合も**候補列は NLL 未適用のまま返し**、`learning::Reranker` は通常どおり
+走る。これが DEV-413 の「既存 `Reranker` のみへ縮退する経路」である。
+
+| `reason` | 条件 | breaker 計上 |
+|---|---|---|
+| `disabled` | `nllRerankEnabled=false`（既定） | なし |
+| `model_not_loaded` | Zenzai 未ロード / active converter が Zenzai でない（degraded 中を含む） | なし |
+| `no_target` | 対象候補 0 件（no-op。失敗ではない） | なし |
+| `secure_mode` | M46 secure 中（§B10） | なし |
+| `budget_exceeded` | §B7 の予算超過 | **する** |
+| （cancel） | ユーザー操作による中断。`reason` を記録しない（§B7） | なし |
+| `infer_error` | decode 例外・logits 取得失敗・トークナイズ失敗 | **する** |
+| `invalid_score` | 全対象候補が非有限 NLL（§B2.4） | なし（入力起因） |
+| `circuit_open` | breaker 作動中 | なし |
+
+- **例外を `QueryCandidates` の外へ出さない**。`ApplyRerankerOrRaw` と同じ流儀で
+  握り潰し、Zenzai 由来の失敗として `model_runtime_error_` に
+  `nll-scorer:<reason>` を記録する（汎用 `last_error_` には混ぜない。
+  `docs/zenzai-inference-spec.md` §9.2.1 と整合）。
+- **連続失敗の circuit breaker**: runtime 失敗（`budget_exceeded` / `infer_error`）が
+  連続 `nllFailureThreshold`（既定 **3**）回に達したらセッション内で NllScorer を
+  無効化し、以降は `circuit_open` で no-op にする。モデル再ロード / 設定変更 /
+  Host 再起動で再有効化する。ユーザー設定 `nllRerankEnabled` とは独立した内部
+  フラグである（Track A §7.2・M57 §5.4 と同じ runtime パターン）。
+- `model_not_loaded` と `no_target` は正常な非適用であり、失敗として記録しない
+  （degraded / 短い候補列で breaker が無意味に開くのを防ぐ）。
+- **cancel を breaker に計上しない**。cancel の発生率はスコアラの健全性ではなく
+  ユーザーの打鍵速度に相関するため、速く打つユーザーが連続 cancel しただけで
+  breaker が開き、セッション中 NLL が黙って無効化されてしまう。予算超過
+  （`budget_exceeded`）は計上する — 遅いマシンで慢性的に予算を超えるなら無効化が
+  正しい応答であり、Track A が timeout を計上するのと同じ理由による。
+
+## B9. 有効化フラグと既定 OFF 時の挙動不変
+
+`settings/mvp-settings.schema.json` の `reranker` ブロック（§8）へ追加する:
+
+```json
+{
+  "reranker": {
+    "nllRerankEnabled": false,
+    "nllTopK": 8,
+    "nllWeight": 0.15,
+    "nllBudgetMs": 20,
+    "nllFailureThreshold": 3
+  }
+}
+```
+
+- 既定は **OFF**（`nllRerankEnabled=false`）。
+- **既定 OFF のとき、prefix decode を含め Zenzai への追加呼び出しを一切行わない。**
+  候補列・score・`debug_info`・ログ出力・レイテンシは Track B 導入前と等価であること
+  （回帰テストで固定する。§B11）。
+- 範囲: `nllTopK` 1〜16、`nllWeight` 0.0〜1.0、`nllBudgetMs` 5〜60、
+  `nllFailureThreshold` 1〜10。範囲外は clamp（Track A §8 と同じ扱い）。
+- schema への正式登録は DEV-413 の実装時に行う（Track A §8 と同じ運用）。
+- 既定値（特に `nllWeight` / `nllTopK`）は M52 ベンチで校正する（§B12）。
+
+## B10. プライバシー
+
+- **M46 secure 中は NllScorer を実行しない**（`reason=secure_mode`）。
+  `docs/privacy-and-secure-input-spec.md` §5 は secure 中の候補生成を
+  「内蔵変換 + 既存辞書のみ」に限定しており、LLM を追加で走らせる本層はその契約に
+  反する。ユーザー設定 OFF の `disabled` とは区別して記録し、プライバシー監査で
+  識別できるようにする。M46（`PrivacyGate`）未実装の環境では判定手段が無いため
+  本条は適用されない。M46 完了後に Host 側 gate を参照する配線を入れる
+  （Track B の実装が M46 より先行しても、本条は M46 側の統合作業として扱う）。
+- NllScorer は**学習データを書かない**。`LearningStore` にも Track A の露出トレース
+  （§6.1）にも寄与しない。読み取り専用の評価層である。
+- ログに `reading` / `surface` を出さない。`debug_info` に載せるのは数値のみで、
+  redaction 方針（`docs/dev-infrastructure-spec.md` §7.6）に抵触しない。
+- 外部送信は無い（ローカルモデルのみ）。
+
+## B11. テスト契約
+
+**unit（決定的）**
+
+NLL の集約・正規化（§B2.2）と合成（§B6.2）、対象集合の選別（§B5）は
+**llama.cpp に依存しない純関数へ切り出す**。これらは `AZOOKEY_WITH_LLAMA_CPP=OFF`
+のビルドでも、固定 logprob 表を入力とする mock フィクスチャで検証できる。
+decode 経路そのもの（§B3）は llama 有りビルドの test に置く。
+
+- `NLL_total` と `nll_per_char` の算出: 固定 logprob 表を与え、期待値と一致する。
+- **off-by-one**（§B3.2）: 位置ごとに異なる固定 logits を与え、`t_1` の logprob が
+  prefix 最終位置由来であることを検証する。1 ずれれば落ちるフィクスチャにする。
+- EOS を含めない（§B2.1）: 候補トークン列に EOS が混入していないこと。
+- 合成（§B6.2）: 最尤候補の bonus が 0、他が負、絶対値が `kNllSpan * nllWeight` を
+  超えない。
+- **prefix logits スナップショット**（§B3.1）: 候補を 2 件以上与え、候補 2 の
+  `t_1` の logprob が prefix 由来であること（候補 1 の出力由来だと落ちる
+  フィクスチャにする）。
+- 選択集合外の保証（§B5.1）: 対象外ソース（`UserDictionary` / `Model` / `Llm`）と
+  `nllTopK` からあふれた候補の **`score` と `debug_info` が不変**であること。
+  併せて、それらの候補が補正によって**順位を下げない**こと（減点のみの帰結）。
+  順位そのものの不変は検証しない（全体ソートを持つ以上成立しないため）。
+- `live=true` のリクエストで NllScorer が走らない（§B1）。
+- fallback: §B8 の各 `reason` で、候補列が NLL 未適用の結果と完全一致する。
+- all-or-nothing（§B7）: 途中で予算超過させたとき、部分的な減点が残らない。
+- circuit breaker: 連続 3 失敗で無効化され、モデル再ロードで復帰する。
+- **既定 OFF の回帰ゲート**: `nllRerankEnabled=false` で候補列が Track B 導入前と
+  完全一致する（§B9）。
+
+**integration（real model。pin モデルを要する `gate:human-required` 相当）**
+
+- DEV-743 で締めた流儀に合わせ、合格条件は代表入力の **top candidate 完全一致**
+  とする（「含む」では壊れた出力が通過するため）。
+- 同音異義の代表ケース（左文脈あり / なし）で、NLL 適用前後の 1 位が期待どおりに
+  入れ替わること、および対象外ソースの順位が動かないこと。
+
+**bench**
+
+- `bench/` に `K = nllTopK` での追加レイテンシを計測する case を足し、§B7 の予算内に
+  収まることを示す。prefix decode の再実行コスト（§B3.4）を内訳として分離する。
+
+## B12. 未確定事項（DEV-413 実装時に確定する）
+
+- pin 中の llama.cpp における「位置ごとの logits を出す batch の組み方」と
+  「seq 単位の KV 削除 API」の正確な名前（§B3.3）。
+- `Convert` が KV を消すため NllScorer が prefix を必ず 1 回 decode し直す前提が、
+  §B7 の予算（既定 20ms）に収まるか。収まらない場合は `Convert` と NllScorer で
+  prefix decode を共有する最適化を別課題として起票する（本章の契約は変えずに
+  実装内部で吸収できる範囲）。
+- `nllWeight` / `nllTopK` / `nllBudgetMs` の既定値校正。M52 ベンチ
+  （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
+- 構造化ログに出す `reason` / 対象候補数のフィールド名と粒度（§B4.2。ログ形式の
+  正典は `docs/dev-infrastructure-spec.md` §7 に従う）。

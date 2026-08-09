@@ -2127,8 +2127,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > - `docs/auto-word-registration-spec.md`（M36-A/B 改訂 + M53 追補）
 > - `docs/user-learning-enhancement-spec.md`（M54）
 > - `docs/typo-correction-learning-spec.md`（M35 改訂 + M55 追補）
-> - `docs/neural-reranker-spec.md`（M56）
+> - `docs/neural-reranker-spec.md`（M56 = Track A。同書 Track B は M 番号を
+>   持たない NllScorer トラック）
 > - `docs/modernbert-ja-scoring-spec.md`（M57）
+>
+> `docs/neural-reranker-spec.md` は 2 トラックを収容する。Track A（§1〜§14）が
+> 本トラックの M56、Track B（§B1〜§B12）が **NllScorer 型ニューラルリランク**
+> （ロード済み Zenzai で辞書由来候補を NLL リランク。karukan 設計参照）である。
+> Track B は M8 のみを前提とし M52〜M55 に依存しないため、本トラックの M 番号を
+> 与えず独立したトラックとして扱う。既定 OFF で挙動不変（同書 §B9）。
 
 ### M52: 変換品質評価ベンチ
 
@@ -2414,7 +2421,9 @@ X-1-2（`TypingTempoTracker`）を挿入安定化に再利用する。
 
 変換品質トラック（M52〜M57）の各 spec は本ロードマップで定めた M 番号と
 1:1 対応する。M52 ベンチで baseline を固定し、M53〜M55 並行 → M56 → M57 の
-順で効果を測定しながら進める。
+順で効果を測定しながら進める。例外は `docs/neural-reranker-spec.md` Track B
+（NllScorer）で、M 番号を持たず本トラックの依存順にも乗らない独立トラックである
+（前提は M8 のみ。上記「変換品質トラック（M52〜M57）」冒頭を参照）。
 
 karukan（`togatoga/karukan`、MIT OR Apache-2.0、Linux/macOS 向け日本語 IME）は、azooKey が
 計画済みのいくつかのマイルストーンに対する**設計参照実装**として扱う。コードは逐語移植せず
@@ -2423,6 +2432,8 @@ EngineAction / 純粋関数。`docs/legacy-parity-spec.md` §1.1 が既に引用
 増分再チャンク・非日本語チャンク verbatim 通過）、M32 / M45（モデル DL・宣言的レジストリ・
 プリフェッチ・pre-tokenizer 上書き。ブロッカー: zenz GGUF 配布ライセンス DEV-202）、M52（Exact
 Match / CER 評価 CLI。評価データは品質ベンチ spec §13 準拠で自前作成）、M15 / M54（学習の
-reading-keyed 二層 + 前方一致予測）、M62（候補リライター層、上記）。詳細な比較・優先度・最小
+reading-keyed 二層 + 前方一致予測）、M62（候補リライター層、上記）、NllScorer 型ニューラル
+リランク（コンテキスト再利用で辞書由来候補を Zenzai の文字あたり NLL でリランク。M 番号を
+持たない独立トラックで、正典は `docs/neural-reranker-spec.md` Track B〈§B1〜§B12〉）。詳細な比較・優先度・最小
 導入案・テスト方針・ライセンス注記は調査レポート `plans/karukan-comparison-report.md`
 （特定時点のスナップショット）を参照する。

@@ -34,7 +34,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 7（M28〜M34）サイドロード配信 |
 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）ビルド再現性・CI・IPC/JSON 堅牢化・観測性・Host 可用性・診断ウィザード・復旧 UX・互換性テスト・レイテンシトレーサ |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
-| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | 追加機能 M36-A / M36-B（新語自動取得）+ 変換品質 M53（辞書層全体再設計） |
+| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | 追加機能 M36-A / M36-B（新語自動取得）+ 変換品質 M53（§14 辞書層全体再設計 / §15 物理層: double-array trie・`.azdic` 直列化・マルチソースビルド） |
 | [`model-management-spec.md`](model-management-spec.md) | プライバシー / モデル管理 / 学習データ UI トラック M45（Zenzai モデル管理 UI） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード） |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |

@@ -944,9 +944,10 @@ namespace azookey::core {
 enum class MatchKind : uint8_t { Exact = 0, Alias = 1, LongVowelRelaxed = 2 };
 
 struct PrefixMatch {
-  uint32_t key_length;    // マッチしたキーのバイト長（UTF-8 の文字境界で終わる）
-  uint32_t entry_index;   // エントリプール先頭 index
-  uint32_t entry_count;   // 同一キーに紐づくエントリ数
+  uint32_t key_length;      // マッチしたキーのバイト長（UTF-8 の文字境界で終わる）
+  uint32_t key_id;          // KEYS セクションの index（§15.5）
+  uint32_t entry_ref_off;   // EIDX セクション内のオフセット（§15.5）
+  uint32_t entry_count;     // このキーに紐づくエントリ数
   MatchKind kind;
 };
 
@@ -970,8 +971,11 @@ class DoubleArrayTrie {
 - **入力**は §15.3 で正規化済みの UTF-8 バイト列とする。正規化は呼び出し側の責務であり、
   `core` が提供する `NormalizeReading()` を通すこと。未正規化の入力を渡した場合、
   結果が空になることはあっても未定義動作にはならない。
-- **出力順序**は `key_length` の昇順、同一長では `entry_index` の昇順とする。同じ
-  アーティファクトと同じ入力に対して常に同じ列を返す（決定的）。
+- **出力順序**は `key_length` の昇順、同一長では `kind`（`Exact` → `Alias` →
+  `LongVowelRelaxed`）の順、さらに同じなら `key_id` の昇順とする。同じアーティファクトと
+  同じ入力に対して常に同じ列を返す（決定的）。
+- **エントリの取り出し**は `EIDX[entry_ref_off .. entry_ref_off + entry_count)` が指す
+  `ENTS` レコードを読む（§15.5）。`PrefixMatch` 自体はエントリの中身を持たない。
 - **UTF-8 境界**: マッチは必ず文字境界で終わる。ビルド時に登録するキーが文字境界で
   終わるため、バイト単位走査でもこの性質が保たれる。不正な UTF-8 を含む入力は、
   一致しなかったものとして扱い、例外を投げない。
@@ -1013,10 +1017,29 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 
 | type | 内容 |
 |---|---|
-| `TRIE` | double-array の base / check 配列 |
+| `TRIE` | double-array の base / check 配列。受理されたキーの値は `key_id`（u32） |
+| `KEYS` | キーレコード列（`key_count` 個、12 バイト固定）。下記 |
+| `EIDX` | u32 配列。`ENTS` の index を並べたもの。キーからエントリへの間接参照 |
 | `ENTS` | 固定長エントリレコード列（下表） |
 | `STRS` | 文字列プール（UTF-8 の連結。終端子なし） |
 | `META` | UTF-8 JSON。由来・ライセンス・ビルドレシピ（§15.6） |
+
+**キーからエントリへの対応**。trie は受理したキーに対して `key_id` だけを返す。
+`KEYS[key_id]` は 12 バイト固定で、`u32 entry_ref_off` / `u32 entry_count` /
+`u8 kind`（ビルド時に確定する `MatchKind`。`Exact` か `Alias`）/ `u8 reserved[3]` を持つ。
+実エントリは `EIDX[entry_ref_off .. entry_ref_off + entry_count)` が指す `ENTS` の
+レコードである。
+
+`EIDX` を挟むのは、alias キー（§15.3）がエントリの複製なしに同じ `ENTS` レコードを
+指せるようにするためである。`ENTS` は `(normalized_key, surface, source)` の昇順に
+並ぶため、1 つの alias キーに集まるエントリは連続しない場合がある。`EIDX` があれば
+任意の集合を 1 つの範囲として表現できる。ヘッダの `entry_count` は `ENTS` の
+レコード数（論理エントリ数）であり、キー展開による重複を含まない。`EIDX` 内の並びは
+`ENTS` index の昇順とする（決定的）。
+
+長音緩和の二次検索（§15.3）が返す一致は、`KEYS[key_id].kind` が何であっても
+`MatchKind::LongVowelRelaxed` として報告する。二次検索は緩い一致であり、
+`exact_reading_bonus`（§14.11）は最も弱い値を採るのが正しいためである。
 
 エントリレコード（32 バイト固定）:
 
@@ -1075,7 +1098,8 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 3. **score**: `cost` と `frequency` を確定する（下記）。
 4. **merge**: 層内で重複を解決する（下記）。dedup は確定済みの `frequency` を見るため、
    score より後に置く。
-5. **build**: キーを整列して double-array を構築し、`.azdic` を書き出す。
+5. **build**: `ENTS` を `(normalized_key, surface, source)` の昇順に確定させたうえで、
+   キーを整列して double-array を構築し、`KEYS` / `EIDX` を作って `.azdic` を書き出す。
 6. **verify**: 書き出したアーティファクトを読み直し、全キーの `ExactMatch` が入力と
    一致すること、`content_hash` が一致することを確認する。
 
@@ -1192,7 +1216,7 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 |---|---|
 | ゴールデン round-trip | 固定の小さな入力セットから `.azdic` を生成し、既知の `content_hash` と一致することを確認する。ビルドの再現性（§15.6）を回帰から守る |
 | 参照実装との一致 | ランダム生成した読みの集合について、`CommonPrefixSearch` の結果が `std::map` ベースの素朴な実装と順序込みで完全一致することを確認する |
-| 正規化と alias | §15.3 の各規則について、ビルド時展開されたキーとクエリ時の長音緩和が、期待する `MatchKind` を返すことを確認する |
+| 正規化と alias | §15.3 の各規則について、ビルド時展開されたキーとクエリ時の長音緩和が、期待する `MatchKind` を返すことを確認する。alias キーが `EIDX` 経由で元エントリと同じ `ENTS` レコードを指し、`entry_count`（ヘッダ）が重複を含まないことも確認する |
 | 破損耐性 | `magic` 破壊 / `format_version` 不一致 / 未知 `flags` ビット / セクション offset の範囲外 / ファイル末尾の切り詰め / `content_hash` 不一致 の各ケースで、当該層のみが無効化され、プロセスが落ちず他層が機能することを確認する |
 | 後方互換 | 既存 `user_dict.json` / `auto_words.tsv` が層として読み込まれる（§14.13 の再掲） |
 | 帰属生成 | `META` から生成した `ThirdPartyNotices.txt` に、寄与した全上流の SPDX と帰属が含まれることを確認する |

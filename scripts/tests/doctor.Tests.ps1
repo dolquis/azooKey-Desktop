@@ -120,6 +120,37 @@ Describe "development environment doctor" {
     }
   }
 
+  Context "clangd compilation database" {
+    It "reports the canonical clangd database" {
+      $testRepo = Join-Path $TestDrive "repo-with-clangd-db"
+      $buildRoot = Join-Path $testRepo "build"
+      $clangdBuild = Join-Path $buildRoot "clangd"
+      $null = New-Item -ItemType Directory -Path $clangdBuild -Force
+      $compileCommands = Join-Path $clangdBuild "compile_commands.json"
+      Set-Content -LiteralPath $compileCommands -Value "[]"
+
+      $check = Get-CompileCommandsCheck -RepoRoot $testRepo
+
+      $check.status | Should -Be "ok"
+      $check.details | Should -Be $compileCommands
+    }
+
+    It "does not accept a database from an unrelated build" {
+      $testRepo = Join-Path $TestDrive "repo-with-unrelated-db"
+      $buildRoot = Join-Path $testRepo "build"
+      $otherBuild = Join-Path $buildRoot "windows-debug"
+      $null = New-Item -ItemType Directory -Path $otherBuild -Force
+      Set-Content -LiteralPath (Join-Path $otherBuild "compile_commands.json") -Value "[]"
+
+      $check = Get-CompileCommandsCheck -RepoRoot $testRepo
+
+      $check.status | Should -Be "warning"
+      $expectedPath = Join-Path (Join-Path $buildRoot "clangd") "compile_commands.json"
+      $check.details | Should -Be "The clangd compilation database was not found at $expectedPath."
+      $check.hint | Should -Be "Run: cmake --preset windows-clangd"
+    }
+  }
+
   Context "report schema" {
     It "uses the worst check status and emits stable JSON fields" {
       $checks = @(

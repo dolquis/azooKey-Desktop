@@ -134,6 +134,8 @@ Visual Studio 2022 + MSVC dev shell / CMake / Ninja / Windows SDK / LLVM
 （clang-format / clang-tidy / clangd）/ pre-commit 系ツール / `.mcp.json`・
 `.codex/config.toml` などのエージェント設定 / CMakePresets・compile_commands の
 有無とする。人間向け表形式に加え `--json` 出力を持つ。
+compile_commands は `.clangd` が参照する `build/clangd/compile_commands.json` を検査し、
+別のビルドディレクトリにある DB を代用しない。
 
 これは**開発環境の診断であり、§12 の `azookey_diag.exe`（エンドユーザー向けの
 IME ランタイム診断・修復ウィザード）とは別物**である。両者を混同しないこと。

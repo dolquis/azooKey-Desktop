@@ -1,10 +1,7 @@
 # clangd configuration for azooKey-Desktop (Windows C++ / TSF TIP)
 #
 # Points clangd at the clang-cl compile database. Regenerate it with:
-#   cmake -S . -B build/clangd -G Ninja \
-#         -DCMAKE_CXX_COMPILER=clang-cl \
-#         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-#         -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF
+#   cmake --preset windows-clangd
 #
 # clang-cl is used (not cl.exe) so clangd resolves the MSVC/Windows SDK system
 # headers automatically without needing a --query-driver argument.

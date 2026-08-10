@@ -175,6 +175,7 @@ cmake --preset windows-clangd
 Serena は `--project-from-cwd` で起動ディレクトリ（worktree を含む）を自動アクティブ化する。
 このとき `.serena/project.yml` が無いと言語自動判定が `legacy/` の Swift 群（最多ファイル数）を
 拾って cpp を見落とすため、設定をコミットして固定する。
+この設定は Serena 1.7 以降の `language_servers` schema を前提とする。
 
 - `language_servers: [cpp, json, markdown, powershell]` … swift は `legacy/` 専用なので含めない
   （SourceKit は Windows で不安定。除外で起動高速化＋孤児プロセス回避）。

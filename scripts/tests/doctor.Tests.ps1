@@ -131,7 +131,9 @@ Describe "development environment doctor" {
 
       $check = Get-CompileCommandsCheck -RepoRoot $testRepo
 
+      $check.id | Should -Be "file.compile-commands"
       $check.status | Should -Be "ok"
+      $check.required | Should -BeFalse
       $check.details | Should -Be $compileCommands
     }
 
@@ -144,10 +146,26 @@ Describe "development environment doctor" {
 
       $check = Get-CompileCommandsCheck -RepoRoot $testRepo
 
+      $check.id | Should -Be "file.compile-commands"
       $check.status | Should -Be "warning"
+      $check.required | Should -BeFalse
       $expectedPath = Join-Path (Join-Path $buildRoot "clangd") "compile_commands.json"
       $check.details | Should -Be "The clangd compilation database was not found at $expectedPath."
       $check.hint | Should -Be "Run: cmake --preset windows-clangd"
+    }
+
+    It "keeps the doctor hint aligned with the clangd preset and configuration" {
+      $presets = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "CMakePresets.json") |
+        ConvertFrom-Json
+      $preset = @($presets.configurePresets | Where-Object name -eq "windows-clangd")
+      $clangdConfig = Get-Content -Raw -LiteralPath (Join-Path $repoRoot ".clangd")
+      $testRepo = Join-Path $TestDrive "repo-without-clangd-db"
+
+      $preset.Count | Should -Be 1
+      $preset[0].binaryDir | Should -Be '${sourceDir}/build/clangd'
+      $clangdConfig | Should -Match '(?m)^\s*CompilationDatabase:\s+build/clangd\s*$'
+      (Get-CompileCommandsCheck -RepoRoot $testRepo).hint |
+        Should -Be "Run: cmake --preset $($preset[0].name)"
     }
   }
 

@@ -23,7 +23,8 @@ endif()
 project(azooKeyDesktopWindowsMvp LANGUAGES CXX)
 
 # Emit compile_commands.json in the build dir for clang-tidy and editor tooling
-# (gitignored). Kept separate from the committed clang-cl DB used by clangd.
+# (gitignored). The committed .clangd points clangd at the separately generated
+# build/clangd database.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Guard on the option too: find_program() caches AZOOKEY_COMPILER_CACHE, so a

@@ -25,6 +25,7 @@
     {
       "name": "windows-clangd",
       "displayName": "Windows clangd Compilation Database",
+      "description": "Configure-only clang-cl DB for .clangd/Serena. TRY_COMPILE as STATIC_LIBRARY skips the link step so a linker is not required.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/clangd",
       "cacheVariables": {

@@ -273,21 +273,18 @@ function Get-CompileCommandsCheck {
   )
 
   $buildRoot = Join-Path $RepoRoot "build"
-  $compileCommands = if (Test-Path -LiteralPath $buildRoot -PathType Container) {
-    Get-ChildItem -LiteralPath $buildRoot -Filter "compile_commands.json" -File -Recurse `
-      -ErrorAction SilentlyContinue |
-      Select-Object -First 1
-  }
+  $clangdBuild = Join-Path $buildRoot "clangd"
+  $compileCommands = Join-Path $clangdBuild "compile_commands.json"
 
-  if ($compileCommands) {
+  if (Test-Path -LiteralPath $compileCommands -PathType Leaf) {
     return Get-DoctorCheck -Id "file.compile-commands" -Name "compile_commands.json" `
-      -Status "ok" -Required $false -Details $compileCommands.FullName
+      -Status "ok" -Required $false -Details $compileCommands
   }
 
   return Get-DoctorCheck -Id "file.compile-commands" -Name "compile_commands.json" `
     -Status "warning" -Required $false `
-    -Details "No generated compile_commands.json was found under build/." `
-    -Hint "Run: cmake --preset windows-debug"
+    -Details "The clangd compilation database was not found at $compileCommands." `
+    -Hint "Run: cmake --preset windows-clangd"
 }
 
 function Get-DoctorCheckSet {

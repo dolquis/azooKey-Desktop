@@ -56,6 +56,7 @@ build / test の入口を統一する。最低限のプリセット:
 | プリセット | generator | `CMAKE_BUILD_TYPE` | 用途 |
 |---|---|---|---|
 | `windows-debug` | Ninja | Debug | 手元・CI Debug |
+| `windows-clangd` | Ninja | Debug | clangd / Serena 用 compilation database 生成 |
 | `windows-release` | Ninja | Release | 手元・CI Release |
 | `windows-asan` | Ninja | Debug | Windows ASan 手動・定期実行 |
 | `linux-asan-ubsan` | Ninja | Debug | Linux ASan + UBSan 手動・定期実行 |
@@ -64,6 +65,11 @@ build / test の入口を統一する。最低限のプリセット:
 `AZOOKEY_BUILD_BENCH=ON` を既定とする。`AZOOKEY_FETCH_GOOGLETEST` は
 **プリセット既定で ON にしない**（オフラインビルド原則。CI ジョブ側で
 明示的に上書きする）。`binaryDir` は `${sourceDir}/build/<preset>`。
+
+`windows-clangd` は configure 専用の例外とする。
+コミット済みの `.clangd` が参照するパスに合わせて `binaryDir` を `build/clangd` とし、
+製品バイナリを生成しないため tests / bench を既定で OFF にする。
+`just tidy windows-clangd` も同じ `build/clangd` の compilation database を使う。
 
 `CMakeUserPresets.json` は各自のローカル設定用とし、`.gitignore` に追加する
 （§2.4）。
@@ -134,6 +140,8 @@ Visual Studio 2022 + MSVC dev shell / CMake / Ninja / Windows SDK / LLVM
 （clang-format / clang-tidy / clangd）/ pre-commit 系ツール / `.mcp.json`・
 `.codex/config.toml` などのエージェント設定 / CMakePresets・compile_commands の
 有無とする。人間向け表形式に加え `--json` 出力を持つ。
+compile_commands は `.clangd` が参照する `build/clangd/compile_commands.json` を検査し、
+別のビルドディレクトリにある DB を代用しない。
 
 これは**開発環境の診断であり、§12 の `azookey_diag.exe`（エンドユーザー向けの
 IME ランタイム診断・修復ウィザード）とは別物**である。両者を混同しないこと。

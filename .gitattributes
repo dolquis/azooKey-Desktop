@@ -6,3 +6,6 @@ bench/data/PROVENANCE.json text eol=lf
 # Shell scripts must stay LF so they run in the Linux cloud sandbox
 # (Claude Code on the web). See docs/handoff/claude-code-web-setup.md.
 *.sh text eol=lf
+
+# Serena rewrites its shared YAML configuration; keep round trips stable.
+.serena/*.yml text eol=lf

@@ -23,6 +23,27 @@
       }
     },
     {
+      "name": "windows-clangd",
+      "displayName": "Windows clangd Compilation Database",
+      "description": "Configure-only clang-cl DB for .clangd/Serena. TRY_COMPILE as STATIC_LIBRARY skips the link step so a linker is not required.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clangd",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY",
+        "AZOOKEY_BUILD_TESTS": "OFF",
+        "AZOOKEY_BUILD_BENCH": "OFF",
+        "AZOOKEY_USE_COMPILER_CACHE": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
       "name": "windows-llama-debug",
       "displayName": "Windows llama.cpp Debug",
       "inherits": "windows-debug",

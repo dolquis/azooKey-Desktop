@@ -155,13 +155,11 @@ clangd は `compile_commands.json`（compile database）が無いと include パ
 MSVC + Ninja だが、clangd 用には **clang-cl ベースの DB** を別ディレクトリに生成する。
 
 ```powershell
-cmake -S . -B build/clangd -G Ninja `
-  -DCMAKE_CXX_COMPILER=clang-cl `
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
-  -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF
+cmake --preset windows-clangd
 ```
 
 - 通常の MSVC ビルド（`build/windows-debug`）とは別の `build/clangd` に出して互いを汚さない。
+- `windows-clangd` は compilation database の生成専用であり、製品バイナリのビルドには使わない。
 - コンパイラを **clang-cl** にする理由：clangd が MSVC / Windows SDK のシステムヘッダを
   自動検出でき、`--query-driver` 引数が不要になる（`cl.exe` 版 DB だと query-driver が必要で、
   Serena 経由では clangd に渡しづらい）。要 LLVM（`clang-cl` / `clangd`）。
@@ -177,11 +175,12 @@ cmake -S . -B build/clangd -G Ninja `
 Serena は `--project-from-cwd` で起動ディレクトリ（worktree を含む）を自動アクティブ化する。
 このとき `.serena/project.yml` が無いと言語自動判定が `legacy/` の Swift 群（最多ファイル数）を
 拾って cpp を見落とすため、設定をコミットして固定する。
+この設定は Serena 1.7 以降の `language_servers` schema を前提とする。
 
-- `languages: [cpp, json, markdown, powershell]` … swift は `legacy/` 専用なので含めない
+- `language_servers: [cpp, json, markdown, powershell]` … swift は `legacy/` 専用なので含めない
   （SourceKit は Windows で不安定。除外で起動高速化＋孤児プロセス回避）。
 - `ignored_paths: [legacy, .claude/worktrees]` … 非保守の Swift ツリーと入れ子 worktree を除外。
-- `.serena/cache` と `project.local.yml` は `.serena/.gitignore` で無視（コミットしない）。
+- `.serena/cache`、`.serena/logs`、`project.local.yml` は `.serena/.gitignore` で無視（コミットしない）。
 
 > 検証：`get_diagnostics_for_file tsf-tip/src/TextService.cpp` が空（エラー無し）になり、
 > `tsf-tip/include/azookey/tsf/TextService.h` の `azookey/tsf/TextService` がメソッド付きで取得でき、

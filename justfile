@@ -42,9 +42,9 @@ format:
 format-check:
     $f = Get-ChildItem -Recurse -File -Include *.cpp,*.cc,*.h,*.hpp {{src_dirs}}; clang-format --dry-run --Werror @($f.FullName)
 
-# clang-tidy over the build's compile DB (run from an MSVC dev shell; build first)
+# clang-tidy over the build's compile DB (run from an MSVC dev shell; configure first)
 tidy preset=preset:
-    clang-tidy -p build/{{preset}} (Get-ChildItem -Recurse -File -Include *.cpp,*.cc {{src_dirs}} | ForEach-Object FullName)
+    $buildDir = if ("{{preset}}" -eq "windows-clangd") { "build/clangd" } else { "build/{{preset}}" }; clang-tidy -p $buildDir (Get-ChildItem -Recurse -File -Include *.cpp,*.cc {{src_dirs}} | ForEach-Object FullName)
 
 # Run the latency bench
 bench preset=preset:

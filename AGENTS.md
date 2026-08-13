@@ -148,7 +148,9 @@ Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-requi
 In Progress へ入っていないか（spec-first 分業の担保）。spec-first の対象には、
 未定義だった既定値・状態遷移を確定する `kind:bug` も含める。さらに
 未完了のままアーカイブされた課題（アーカイブ衛生）と、
-前提の失効した保留（保留理由とした仕組みが別課題の着地で用意済みになっていないか）を点検する。
+前提の失効した保留（保留理由とした仕組みが別課題の着地で用意済みになっていないか）、
+`agent:codex-impl` の実装課題に `gate:human-required` が同居していないか
+（実装と人間ゲートの分離。§7.1.1 に該当するなら分割する）を点検する。
 以上の repo 固有項目の詳細は `docs/linear-conventions.md` §13 Project Delta。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。

@@ -1556,7 +1556,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > （`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。**ロジック（アルゴリズム）と
 > データ（Mozc 由来）を分離**して扱い、karukan のコードは逐語コピーせず設計移植する。
 > M62-A（数字）→ M62-B（半角カタカナ/英字）→ M62-C（記号）→ M62-D（絵文字）の段階構成。
-> 既定 OFF・後方互換。正典仕様は新設予定の `docs/candidate-rewriter-spec.md`。
+> 既定 OFF・後方互換。正典仕様は `docs/candidate-rewriter-spec.md`。
 >
 > ライセンス方針: M62-A/B はアルゴリズムのみで Mozc 由来データに依存しない（最も安全）。
 > M62-C/D が Mozc 由来データ（`symbol.tsv` / `emoji_data.tsv`、BSD 3-Clause © Google）+
@@ -1586,7 +1586,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `20世紀` のような数字混在は素通し（リライトしない）
   - `numberRewriter=false` で候補・確定・学習の挙動が一切変わらない
   - `core` の純粋関数として全分岐を単体テストできる（TSF/IPC/モデル非起動）
-- **参照仕様**: `docs/candidate-rewriter-spec.md`（新設）
+- **参照仕様**: `docs/candidate-rewriter-spec.md` §1〜§5
 
 #### M62-B: 半角カタカナ・英字リライター
 
@@ -1629,9 +1629,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `core/`（EmojiRewriter ロジック・`:trigger` 曖昧検索スコアリング）、絵文字データ
   再ポート、`inference-host/`、`THIRD_PARTY_LICENSES`、`docs/candidate-rewriter-spec.md`。
 - **受け入れ条件**:
-  - かな読み引きと `:trigger` 曖昧検索が機能し、ランキングが妥当
-  - 既定 OFF で既存挙動不変。Mozc / CLDR 表記保持
-- **参照仕様**: `docs/candidate-rewriter-spec.md`
+  - かな読み引き（完全一致・末尾注入・上限 4 件）と `:trigger` 曖昧検索
+    （Exact / Prefix / Subsequence の 3 クラス）が仕様どおり働き、順序が決定的である
+    （`docs/candidate-rewriter-spec.md` §9 の期待値表で検証）
+  - `:trigger` モードの状態機械（同 §11）どおりに遷移し、確定文字列に `:` と検索語が残らない
+  - 候補窓が注釈を表示し、UI-less / 統合候補リストでは表層形のみへ劣化する（同 §10）
+  - 絵文字候補が学習ストアと `CommitObservation.shown` に載らない（同 §12）
+  - 既定 OFF で既存挙動不変。データ欠損時にフォールバックして既存候補が壊れない（同 §14）
+  - Mozc / CLDR 表記保持と porter の決定性（同 §15）
+- **参照仕様**: `docs/candidate-rewriter-spec.md` §6〜§17（範囲・データ形式・Host 配信境界と
+  IPC・検索とランキング・候補窓 UX・`:trigger` 状態機械・学習の扱い・設定・フォールバック・
+  ライセンス・テスト観点）
 
 #### M62 横断依存・既知のテストギャップ
 
@@ -1639,14 +1647,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   集約表記の実体は ルート `THIRD_PARTY_LICENSES`、attribution 運用規約の正典は
   `docs/licensing-policy.md`。Mozc 由来データ取り込み時はここへ追記する）。
   `docs/candidate-rewriter-spec.md`（IPC payload・データ形式・ライセンス・TIP/Host 責務境界・
-  確定時の学習 reading 扱いの正典）新設。
+  確定時の学習 reading 扱いの正典）。
 - **候補注釈の伝送（必須）**: リライタ候補は注釈（description）付きで表示するため、候補表示経路の
   拡張が前提。現状 `ipc::CandidateField`（`ipc/include/azookey/ipc/Payloads.h:52-57`）は
   `surface`/`reading`/`score`/`source` のみ、候補ウィンドウは `candidate.surface` のみで構築
   （`tsf-tip/src/TextService.cpp:1654-1655`）。よって (a) TIP ローカルリライタ（M62-A/B）は
   **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で description を保持・表示し、
   (b) Host 側データ駆動リライタ（M62-C/D）は **`ipc::CandidateField` に description フィールドを
-  追加**して伝送する。いずれも確定文字列には注釈を畳み込まない。正典は `docs/candidate-rewriter-spec.md`。
+  追加**して伝送する。いずれも確定文字列には注釈を畳み込まない。正典は
+  `docs/candidate-rewriter-spec.md`（M62-D 分の欄定義と互換性は同 §8.2、UI-less での劣化は同 §10.4）。
 - **既知のテストギャップ**: 数字（M62-A）の core 純粋関数テストは `core/tests/number_rewriter_test.cpp`
   にある（karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植したもの。逐語コピーしない）。
   残るギャップは 3 つ。(a) TIP 配線側 — 候補ウィンドウ view-model が注釈を保持・表示すること、および

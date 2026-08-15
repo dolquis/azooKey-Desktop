@@ -1,0 +1,18 @@
+<Window
+    x:Class="azookey_settings.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer>
+        <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
+            <TextBlock Text="azooKey Settings" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Text="設定画面の配布と起動経路を準備しました。設定項目は今後のマイルストーンで追加されます。"
+                       TextWrapping="Wrap" />
+            <InfoBar IsOpen="True" Severity="Informational" Title="起動コンテキスト">
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="LanguageText" />
+                    <TextBlock x:Name="ProfileText" TextWrapping="Wrap" />
+                </StackPanel>
+            </InfoBar>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

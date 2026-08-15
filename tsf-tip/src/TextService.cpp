@@ -19,6 +19,7 @@
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
 #include "azookey/tsf/DisplayAttribute.h"
+#include "azookey/tsf/SettingsLauncher.h"
 
 namespace {
 
@@ -384,6 +385,8 @@ STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
     *ppvObj = static_cast<ITfCompositionSink*>(this);
   } else if (riid == IID_ITfDisplayAttributeProvider) {
     *ppvObj = static_cast<ITfDisplayAttributeProvider*>(this);
+  } else if (riid == IID_ITfFnConfigure) {
+    *ppvObj = static_cast<ITfFnConfigure*>(this);
   } else {
     return E_NOINTERFACE;
   }
@@ -1097,6 +1100,18 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
     }
   }
   return E_INVALIDARG;
+}
+
+STDMETHODIMP TextService::GetDisplayName(BSTR* name) {
+  if (name == nullptr) {
+    return E_POINTER;
+  }
+  *name = SysAllocString(L"azooKey Settings");
+  return *name != nullptr ? S_OK : E_OUTOFMEMORY;
+}
+
+STDMETHODIMP TextService::Show(HWND parent, LANGID langid, REFGUID profile) {
+  return LaunchSettingsApplication(parent, langid, profile);
 }
 
 HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {

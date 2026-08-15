@@ -779,35 +779,26 @@ public:
 > 非同期方式**を採る（`WaitForSingleObject` で終了待ちしない）。設定値の反映はプロパティ
 > シートの OK/Apply ではなく `UpdateConfig` IPC（§3）で行う。多重起動を避けるため設定
 > アプリは single-instance とし、既存インスタンスがあれば前面化する
-> （`SEE_MASK_NOCLOSEPROCESS` で得たプロセスハンドルは前面化・監視用途に使い、
-> 終了待ちには使わない）。
+> （`SEE_MASK_NOCLOSEPROCESS` で得たプロセスハンドルは起動成功を確認した後すぐ閉じ、
+> 既存インスタンスの前面化は設定アプリ側の single-instance 処理に委ねる）。
 
 ### 6.3 Category 登録
 
-```cpp
-mgr->RegisterCategory(kTextServiceClsid,
-                      GUID_TFCAT_TIP_PROPERTY_UI_TEXT_SERVICE,
-                      kTextServiceClsid);
-```
+`ITfFnConfigure` の公開に追加の TSF category 登録は不要である。
+Windows は `ITfInputProcessorProfiles::Register` に登録された TextService の CLSID を
+`IID_ITfFnConfigure` と組み合わせて `CoCreateInstance` する。
+そのため、TextService の `QueryInterface` が `ITfFnConfigure` を返す契約をテストする。
+
+`GUID_TFCAT_TIP_PROPERTY_UI_TEXT_SERVICE` という識別子は Windows SDK の定義済み category に
+存在しないため、登録処理へ追加しない。
 
 ### 6.4 設定アプリのパス解決
 
-`tsf-tip/src/InstalledPath.cpp`（新規）：
-
-```cpp
-std::wstring GetInstalledExePath(const wchar_t* exe_name) {
-    // 1) TIP DLL と同じディレクトリを優先
-    HMODULE hm = GetModuleHandleW(L"azookey_tsf_tip.dll");
-    wchar_t buf[MAX_PATH];
-    GetModuleFileNameW(hm, buf, MAX_PATH);
-    PathRemoveFileSpecW(buf);
-    std::wstring p = std::wstring(buf) + L"\\" + exe_name;
-    if (PathFileExistsW(p.c_str())) return p;
-    // 2) %LOCALAPPDATA%\azooKey\
-    // 3) PATH
-    return std::wstring(exe_name);
-}
-```
+`tsf-tip/src/SettingsLauncher.cpp` は、ロード済み TIP DLL の絶対パスを基準に
+`azookey_settings.exe` を解決する。MSI は両者を同じ install root へ配置するため、
+ユーザー書き込み可能な `%LOCALAPPDATA%` や、呼び出し元プロセスの current directory を
+含み得る `PATH` へ fallback しない。隣接ファイルが存在しなければ
+`HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)` を返す。
 
 ## 7. ITfMouseSink (M23)
 

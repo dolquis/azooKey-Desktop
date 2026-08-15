@@ -24,6 +24,7 @@ cmake --preset windows-release `
   -DAZOOKEY_FETCH_WIL=ON `
   -DAZOOKEY_FETCH_LLAMA_CPP=ON
 cmake --build --preset windows-release
+cmake --build --preset windows-release --target azookey_settings
 dotnet build .\pkg\msi\azooKey.wixproj `
   --configuration Release `
   -p:ProductVersion=1.0.0 `
@@ -31,17 +32,21 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 ```
 
 出力は `pkg\msi\bin\Release\azooKey-1.0.0-x64.msi` です。
-別の成果物を使う場合は、`TipDllPath` と `HostExePath` を MSBuild property で指定します。
+別の成果物を使う場合は、`TipDllPath`、`HostExePath`、`SettingsPayloadDir`、
+`SettingsExePath` を MSBuild property で指定します。
 `VCRuntimeDir` には、使用した MSVC toolset の x64 `Microsoft.VC*.CRT`
 ディレクトリを指定します。MSI は `msvcp140.dll`、`vcruntime140.dll`、
 `vcruntime140_1.dll` を TIP と Inference Host と同じディレクトリへ配置します。
 本体の `LICENSE` と、同梱依存を記録した `THIRD_PARTY_LICENSES` も
 テキストファイルとして配置します。
 
-設定アプリの実行ファイルがある場合は `SettingsExePath` を指定します。
-MSI は実行ファイルを同梱し、スタートメニューへ `azooKey Settings` を追加します。
-現行のリリースビルドには設定アプリ target がないため、この property を省略した MSI には
-設定アプリとショートカットが入りません。
+`azookey_settings` target は、Windows App SDK を app-local に含む unpackaged の
+self-contained 設定アプリを `build\windows-release\settings-app\Release` へ生成します。
+MSI は `SettingsPayloadDir` 以下のランタイム一式を同梱し、`SettingsExePath` を
+スタートメニューの `azooKey Settings` ショートカットへ関連付けます。
+設定アプリのビルド成果物が欠けている場合、MSI ビルドは失敗します。
+Windows App SDK の多言語 DLL は MSI の `File.Language` 制限を超えて既知の
+`ICE03` を生じるため、WiX の検証では ICE 群のうち `ICE03` だけを抑制します。
 
 インストール時は、ファイル配置後に管理者権限で `msiexec /y` を実行し、
 TIP DLL の `DllRegisterServer` に COM クラス、TSF プロファイル、カテゴリの登録を委譲します。

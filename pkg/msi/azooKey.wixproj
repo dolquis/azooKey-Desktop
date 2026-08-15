@@ -4,16 +4,20 @@
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <TipDllPath Condition="'$(TipDllPath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\tsf-tip\azookey_tsf_tip.dll</TipDllPath>
     <HostExePath Condition="'$(HostExePath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\inference-host\azookey_inference_host.exe</HostExePath>
-    <SettingsExePath Condition="'$(SettingsExePath)' == ''">__NOT_PROVIDED__</SettingsExePath>
+    <SettingsPayloadDir Condition="'$(SettingsPayloadDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\settings-app\Release</SettingsPayloadDir>
+    <SettingsExePath Condition="'$(SettingsExePath)' == ''">$(SettingsPayloadDir)\azookey_settings.exe</SettingsExePath>
     <VCRuntimeDir Condition="'$(VCRuntimeDir)' == ''">__NOT_PROVIDED__</VCRuntimeDir>
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
     <OutputName>azooKey-$(ProductVersion)-x64</OutputName>
+    <!-- Windows App SDK multilingual binaries exceed the MSI File.Language limits. -->
+    <SuppressIces>ICE03</SuppressIces>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <DefineConstants>
       ProductVersion=$(ProductVersion);
       TipDllPath=$(TipDllPath);
       HostExePath=$(HostExePath);
+      SettingsPayloadDir=$(SettingsPayloadDir);
       SettingsExePath=$(SettingsExePath);
       VCRuntimeDir=$(VCRuntimeDir);
       LicensePath=$(LicensePath);
@@ -24,11 +28,12 @@
   <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
     <Error Condition="!Exists('$(TipDllPath)')" Text="TIP DLL not found: $(TipDllPath)" />
     <Error Condition="!Exists('$(HostExePath)')" Text="Inference host not found: $(HostExePath)" />
+    <Error Condition="!Exists('$(SettingsPayloadDir)')" Text="Settings payload directory not found: $(SettingsPayloadDir)" />
+    <Error Condition="!Exists('$(SettingsExePath)')" Text="Settings executable not found: $(SettingsExePath)" />
     <Error Condition="!Exists('$(VCRuntimeDir)\msvcp140.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\msvcp140.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
     <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
     <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140_1.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140_1.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
     <Error Condition="!Exists('$(LicensePath)')" Text="License file not found: $(LicensePath)" />
     <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
-    <Error Condition="'$(SettingsExePath)' != '__NOT_PROVIDED__' and !Exists('$(SettingsExePath)')" Text="Settings executable not found: $(SettingsExePath)" />
   </Target>
 </Project>

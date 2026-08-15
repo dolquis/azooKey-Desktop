@@ -5,10 +5,12 @@
 #include <gtest/gtest.h>
 #include <msctf.h>
 
+#include <string>
 #include <vector>
 
 #include "azookey/tsf/CandidateListUIElement.h"
 #include "azookey/tsf/DisplayAttribute.h"
+#include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextService.h"
 #include "azookey/tsf/TextServiceFactory.h"
 
@@ -25,6 +27,29 @@ void ExpectUnsupportedInterfaceClearsOutParam(T& object) {
   EXPECT_EQ(object.QueryInterface(IID_IDispatch, &out), E_NOINTERFACE);
   EXPECT_EQ(out, nullptr);
 }
+
+struct ShellExecuteCapture {
+  HWND parent = nullptr;
+  std::wstring executable;
+  std::wstring parameters;
+  std::wstring working_directory;
+  int show = 0;
+};
+
+ShellExecuteCapture g_shell_execute_capture;
+
+BOOL WINAPI CaptureShellExecute(SHELLEXECUTEINFOW* info) {
+  g_shell_execute_capture.parent = info->hwnd;
+  g_shell_execute_capture.executable = info->lpFile;
+  g_shell_execute_capture.parameters = info->lpParameters;
+  g_shell_execute_capture.working_directory = info->lpDirectory;
+  g_shell_execute_capture.show = info->nShow;
+  return TRUE;
+}
+
+struct SettingsLauncherReset {
+  ~SettingsLauncherReset() { azookey::tsf::testing::ClearSettingsLauncherForTest(); }
+};
 
 }  // namespace
 
@@ -58,4 +83,55 @@ TEST(TsfTipQueryInterfaceContractTest, UnsupportedInterfaceClearsOutParam) {
   ExpectUnsupportedInterfaceClearsOutParam(input_attribute);
   ExpectUnsupportedInterfaceClearsOutParam(attribute_enumerator);
   ExpectUnsupportedInterfaceClearsOutParam(candidates);
+}
+
+TEST(TsfTipQueryInterfaceContractTest, TextServiceExposesConfigureFunction) {
+  azookey::tsf::TextService service;
+  ITfFnConfigure* configure = nullptr;
+
+  ASSERT_EQ(service.QueryInterface(IID_ITfFnConfigure, reinterpret_cast<void**>(&configure)), S_OK);
+  ASSERT_NE(configure, nullptr);
+
+  IUnknown* service_identity = nullptr;
+  IUnknown* configure_identity = nullptr;
+  ASSERT_EQ(service.QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&service_identity)),
+            S_OK);
+  ASSERT_EQ(configure->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&configure_identity)),
+            S_OK);
+  EXPECT_EQ(service_identity, configure_identity);
+
+  BSTR display_name = nullptr;
+  EXPECT_EQ(configure->GetDisplayName(&display_name), S_OK);
+  ASSERT_NE(display_name, nullptr);
+  EXPECT_STREQ(display_name, L"azooKey Settings");
+  SysFreeString(display_name);
+
+  configure_identity->Release();
+  service_identity->Release();
+  configure->Release();
+}
+
+TEST(TsfTipQueryInterfaceContractTest, ConfigureShowLaunchesSettingsWithProfileContext) {
+  SettingsLauncherReset reset;
+  g_shell_execute_capture = {};
+  constexpr wchar_t kExecutable[] = L"C:\\Program Files\\azooKey\\azookey_settings.exe";
+  azookey::tsf::testing::SetSettingsLauncherForTest(kExecutable, CaptureShellExecute);
+
+  azookey::tsf::TextService service;
+  ITfFnConfigure* configure = nullptr;
+  ASSERT_EQ(service.QueryInterface(IID_ITfFnConfigure, reinterpret_cast<void**>(&configure)), S_OK);
+  ASSERT_NE(configure, nullptr);
+
+  const HWND parent = GetDesktopWindow();
+  constexpr GUID kProfile = {
+      0x8d80b94e, 0x75ba, 0x47d4, {0x90, 0xb9, 0x68, 0x97, 0x7a, 0x5a, 0x6e, 0x2b}};
+  EXPECT_EQ(configure->Show(parent, 0x0411, kProfile), S_OK);
+  EXPECT_EQ(g_shell_execute_capture.parent, parent);
+  EXPECT_EQ(g_shell_execute_capture.executable, kExecutable);
+  EXPECT_EQ(g_shell_execute_capture.parameters,
+            L"--langid 0x0411 --profile {8D80B94E-75BA-47D4-90B9-68977A5A6E2B}");
+  EXPECT_EQ(g_shell_execute_capture.working_directory, L"C:\\Program Files\\azooKey");
+  EXPECT_EQ(g_shell_execute_capture.show, SW_SHOWNORMAL);
+
+  configure->Release();
 }

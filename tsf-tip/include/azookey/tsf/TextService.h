@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <ctffunc.h>
 #include <msctf.h>
 
 #include <atomic>
@@ -57,7 +58,8 @@ class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfThreadMgrEventSink,
                           public ITfCompositionSink,
-                          public ITfDisplayAttributeProvider {
+                          public ITfDisplayAttributeProvider,
+                          public ITfFnConfigure {
  public:
   TextService();
   ~TextService();
@@ -88,6 +90,9 @@ class TextService final : public ITfTextInputProcessorEx,
 
   STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) override;
   STDMETHODIMP GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAttributeInfo** ppInfo) override;
+
+  STDMETHODIMP GetDisplayName(BSTR* name) override;
+  STDMETHODIMP Show(HWND parent, LANGID langid, REFGUID profile) override;
 
   HRESULT RequestPreeditUpdate(ITfContext* context, bool* request_accepted = nullptr);
 

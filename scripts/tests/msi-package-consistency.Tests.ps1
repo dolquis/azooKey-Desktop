@@ -5,12 +5,18 @@ Describe "WiX MSI package consistency" {
     $packagePath = Join-Path $repoRoot "pkg\msi\Package.wxs"
     $packageReadmePath = Join-Path $repoRoot "pkg\msi\README.md"
     $releaseWorkflowPath = Join-Path $repoRoot ".github\workflows\release.yml"
+    $settingsProjectPath = Join-Path $repoRoot "settings-app\azookey_settings.vcxproj"
+    $settingsCMakePath = Join-Path $repoRoot "settings-app\CMakeLists.txt"
+    $thirdPartyLicensesPath = Join-Path $repoRoot "THIRD_PARTY_LICENSES"
     $rootReadmePath = Join-Path $repoRoot "README.md"
 
     $script:project = Get-Content -Raw $projectPath
     $script:package = Get-Content -Raw $packagePath
     $script:packageReadme = Get-Content -Raw $packageReadmePath
     $script:releaseWorkflow = Get-Content -Raw $releaseWorkflowPath
+    $script:settingsProject = Get-Content -Raw $settingsProjectPath
+    $script:settingsCMake = Get-Content -Raw $settingsCMakePath
+    $script:thirdPartyLicenses = Get-Content -Raw $thirdPartyLicensesPath
     $script:rootReadme = Get-Content -Raw $rootReadmePath
   }
 
@@ -23,6 +29,8 @@ Describe "WiX MSI package consistency" {
   It "fails before packaging when required release payloads are absent" {
     $script:project | Should -Match "Condition=`"!Exists\('\$\(TipDllPath\)'\)`""
     $script:project | Should -Match "Condition=`"!Exists\('\$\(HostExePath\)'\)`""
+    $script:project | Should -Match "Condition=`"!Exists\('\$\(SettingsPayloadDir\)'\)`""
+    $script:project | Should -Match "Condition=`"!Exists\('\$\(SettingsExePath\)'\)`""
     $script:project | Should -Match "MSVC runtime not found"
     $script:project | Should -Match "Condition=`"!Exists\('\$\(LicensePath\)'\)`""
     $script:project | Should -Match "Third-party licenses file not found"
@@ -61,10 +69,38 @@ Describe "WiX MSI package consistency" {
     $script:package | Should -Match 'Action="UnregisterTipOnInstallRollback"[\s\S]*?After="InstallFiles"'
   }
 
-  It "supports a settings shortcut only when a settings executable is supplied" {
-    $script:package | Should -Match '<\?if "\$\(SettingsExePath\)" != "__NOT_PROVIDED__" \?>'
+  It "always installs the self-contained settings payload and shortcut" {
     $script:package | Should -Match 'Id="SettingsShortcut"[\s\S]*?Directory="ProgramMenuFolder"'
+    $script:package | Should -Match 'Id="SettingsShortcutComponent"[\s\S]*?Root="HKCU"[\s\S]*?KeyPath="yes"'
+    $script:project | Should -Match '<SuppressIces>ICE03</SuppressIces>'
+    $script:package | Should -Match '<Files Include="\$\(SettingsPayloadDir\)\\\*\*" Directory="INSTALLFOLDER">'
+    $script:package | Should -Match '<Exclude Files="\$\(SettingsExePath\)" />'
+    $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\obj\\\*\*" />'
+    $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.pdb" />'
     $script:project | Should -Match "Settings executable not found"
+    $script:releaseWorkflow | Should -Match 'Build self-contained settings app'
+    $script:releaseWorkflow | Should -Match '--target azookey_settings'
+    $script:releaseWorkflow | Should -Match '"-p:SettingsPayloadDir='
+    $script:releaseWorkflow | Should -Match '"-p:SettingsExePath='
+  }
+
+  It "records licenses for the redistributed settings runtime" {
+    $script:thirdPartyLicenses | Should -Match 'Microsoft Windows App SDK'
+    $script:thirdPartyLicenses | Should -Match 'Microsoft Windows C\+\+/WinRT'
+    $script:thirdPartyLicenses | Should -Match 'Microsoft WebView2 loader'
+  }
+
+  It "builds the unpackaged WinUI settings app as self-contained" {
+    $script:settingsProject | Should -Match '<UseWinUI>true</UseWinUI>'
+    $script:settingsProject | Should -Match '<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>'
+    $script:settingsProject | Should -Match '<AppxPackage>false</AppxPackage>'
+    $script:settingsProject | Should -Match '<WindowsPackageType>None</WindowsPackageType>'
+    $script:settingsProject | Should -Match '<TargetName>\$\(RootNamespace\)</TargetName>'
+    $script:settingsCMake | Should -Match 'add_custom_target\(azookey_settings'
+    $script:settingsProject | Should -Match '<PackageReference Include="Microsoft\.WindowsAppSDK\.Runtime" Version="2\.4\.0" />'
+    $script:settingsProject | Should -Match '<PackageReference Include="Microsoft\.WindowsAppSDK\.WinUI"'
+    $script:settingsProject | Should -Not -Match 'Microsoft\.WindowsAppSDK\.(AI|ML|Search|Widgets)'
+    $script:settingsCMake | Should -Match '/restore'
   }
 
   It "keeps models and CUDA runtime outside the base MSI" {

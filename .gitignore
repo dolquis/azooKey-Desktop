@@ -47,3 +47,8 @@ DerivedData/
 *.etl
 *.pml
 diagnostics/captures/
+
+# WinUI C++ generated and restored files
+settings-app/Generated Files/
+settings-app/obj/
+settings-app/packages/

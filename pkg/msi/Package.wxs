@@ -58,22 +58,30 @@
               KeyPath="yes" />
         </Component>
 
-        <?if "$(SettingsExePath)" != "__NOT_PROVIDED__" ?>
         <Component Id="SettingsComponent" Guid="4FF5479D-974F-4888-84F8-DA16C599F44D">
           <File
               Id="SettingsExe"
               Source="$(SettingsExePath)"
               Name="azookey_settings.exe"
-              KeyPath="yes">
-            <Shortcut
-                Id="SettingsShortcut"
-                Directory="ProgramMenuFolder"
-                Name="azooKey Settings"
-                Description="Configure azooKey"
-                WorkingDirectory="INSTALLFOLDER" />
-          </File>
+              KeyPath="yes" />
         </Component>
-        <?endif?>
+
+        <Component Id="SettingsShortcutComponent" Guid="88B0BBE2-FF00-4D67-A4C8-5FEA20CB6FAE">
+          <Shortcut
+              Id="SettingsShortcut"
+              Directory="ProgramMenuFolder"
+              Name="azooKey Settings"
+              Description="Configure azooKey"
+              Target="[INSTALLFOLDER]azookey_settings.exe"
+              WorkingDirectory="INSTALLFOLDER" />
+          <RegistryValue
+              Root="HKCU"
+              Key="Software\dolquis\azooKey"
+              Name="SettingsShortcutInstalled"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
 
@@ -83,9 +91,16 @@
       <ComponentRef Id="VCRuntimeComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
-      <?if "$(SettingsExePath)" != "__NOT_PROVIDED__" ?>
       <ComponentRef Id="SettingsComponent" />
-      <?endif?>
+      <ComponentRef Id="SettingsShortcutComponent" />
+      <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">
+        <Exclude Files="$(SettingsExePath)" />
+        <Exclude Files="$(SettingsPayloadDir)\obj\**" />
+        <Exclude Files="$(SettingsPayloadDir)\*.exp" />
+        <Exclude Files="$(SettingsPayloadDir)\*.lib" />
+        <Exclude Files="$(SettingsPayloadDir)\*.pdb" />
+        <Exclude Files="$(SettingsPayloadDir)\*.ilk" />
+      </Files>
     </Feature>
 
     <!--

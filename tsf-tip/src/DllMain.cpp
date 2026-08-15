@@ -13,6 +13,14 @@ static HMODULE g_hmod = nullptr;
 // Japanese (ja-JP) language id for the registered profile.
 static constexpr LANGID kJapaneseLangId = 0x0411;
 
+// Keep registration, rollback, and explicit unregistration on one shared list.
+static const GUID* const kTsfCategories[] = {
+    &GUID_TFCAT_TIP_KEYBOARD,
+    &GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+    &GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+    &GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+};
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
   UNREFERENCED_PARAMETER(reserved);
   if (reason == DLL_PROCESS_ATTACH) g_hmod = module;
@@ -170,14 +178,13 @@ extern "C" STDAPI DllRegisterServer() {
   //    UIELEMENTENABLED advertises that candidate UI is published through TSF
   //    (ITfUIElementMgr / ITfCandidateListUIElement) so UI-less hosts can activate
   //    and route candidate drawing through their app-side UIElement sink.
+  //    IMMERSIVESUPPORT declares that the TIP supports Windows apps.
   ITfCategoryMgr* cat_mgr = nullptr;
   hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_ITfCategoryMgr,
                         reinterpret_cast<void**>(&cat_mgr));
   if (FAILED(hr) || !cat_mgr) return SELFREG_E_CLASS;
-  static const GUID kCategories[] = {GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
-                                     GUID_TFCAT_TIPCAP_UIELEMENTENABLED};
-  for (const GUID& category : kCategories) {
-    hr = cat_mgr->RegisterCategory(azookey::tsf::kTextServiceClsid, category,
+  for (const GUID* category : kTsfCategories) {
+    hr = cat_mgr->RegisterCategory(azookey::tsf::kTextServiceClsid, *category,
                                    azookey::tsf::kTextServiceClsid);
     if (FAILED(hr)) break;
     // Leave one category registered before injecting the failure so the smoke
@@ -211,11 +218,8 @@ extern "C" STDAPI DllUnregisterServer() {
       if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
                                      IID_ITfCategoryMgr, reinterpret_cast<void**>(&cat_mgr))) &&
           cat_mgr) {
-        static const GUID kCategories[] = {GUID_TFCAT_TIP_KEYBOARD,
-                                           GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
-                                           GUID_TFCAT_TIPCAP_UIELEMENTENABLED};
-        for (const GUID& category : kCategories)
-          cat_mgr->UnregisterCategory(azookey::tsf::kTextServiceClsid, category,
+        for (const GUID* category : kTsfCategories)
+          cat_mgr->UnregisterCategory(azookey::tsf::kTextServiceClsid, *category,
                                       azookey::tsf::kTextServiceClsid);
         cat_mgr->Release();
       }

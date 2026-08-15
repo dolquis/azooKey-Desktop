@@ -93,7 +93,8 @@ COM interfaceそのものではないが、自前`CandidateWindow`と`ITfUIEleme
 - `DllRegisterServer` は machine-wide (HKLM) に COM クラスを登録し、
   `ITfInputProcessorProfileMgr::RegisterProfile` で TSF プロファイルを登録、
   `ITfCategoryMgr::RegisterCategory` で `GUID_TFCAT_TIP_KEYBOARD`、
-  `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER`、`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
+  `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER`、`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`、
+  `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT`
   を追加する（HKLM / CTF\TIP 書き込みのため管理者権限が必要）。
 - profile/category登録の途中失敗では`RegistrationRollback`がbest-effort cleanupを行い、
   部分登録を残さない。category追加時はrollback側の解除対象も同期する。

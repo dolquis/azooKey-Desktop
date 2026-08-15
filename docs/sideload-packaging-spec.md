@@ -626,7 +626,20 @@ GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への
 タスクの起票・進捗・検証メモ・状態は **Linear DEV-497 が正典**（`gate:human-required`。
 本 spec には状態を書かない — `AGENTS.md`「README 編集ルール」「Linear 運用」）。
 
-### 1.7 AppContainer DLL ACL と常駐起動（参考: 先行 Windows 実装）
+### 1.7 Windows アプリでの TIP ロード前提と常駐起動
+
+UWP / Microsoft Store / AppContainer 実行の Windows アプリで第三者 TIP をロードするには、
+次の条件をすべて満たす。
+
+1. TIP DLL と親ディレクトリを AppContainer から読み取り、実行できること（下記 ACL）。
+2. `DllRegisterServer` が `ITfCategoryMgr::RegisterCategory` で
+   `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` を登録していること（[Custom input method editor requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements)）。
+3. 第三者 IME がデジタル署名されていること（[Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors)）。
+
+配布パッケージの署名要否（§0 / §2）と TIP バイナリに対する第三者 IME の署名要件は
+別の境界である。Microsoft Store が提出 MSIX を再署名することだけを、TIP DLL の署名要件を
+満たした証拠として扱わない。署名経路は DEV-255、最終成果物での Windows アプリ実機確認は
+DEV-673 の Human Gate で検証する。
 
 **AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
 有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への

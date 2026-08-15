@@ -391,6 +391,13 @@ HRESULT GetCategoryRegistrationState(REFGUID category, bool* registered) {
   return hr == S_FALSE ? S_OK : hr;
 }
 
+const GUID* const kExpectedRegistrationCategories[] = {
+    &GUID_TFCAT_TIP_KEYBOARD,
+    &GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+    &GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+    &GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+};
+
 #ifndef NDEBUG
 HRESULT GetProfileRegistrationState(bool* registered) {
   if (!registered) return E_POINTER;
@@ -521,11 +528,12 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
       << "TSF profile not registered (DEV-157 regression)";
   EXPECT_TRUE(IsEqualGUID(profile.catid, GUID_TFCAT_TIP_KEYBOARD))
       << "profile not registered under GUID_TFCAT_TIP_KEYBOARD";
-  bool category_registered = false;
-  ASSERT_EQ(GetCategoryRegistrationState(GUID_TFCAT_TIPCAP_UIELEMENTENABLED, &category_registered),
-            S_OK)
-      << "failed to query UIElement-enabled category";
-  EXPECT_TRUE(category_registered) << "UIElement-enabled category not registered";
+  for (const GUID* category : kExpectedRegistrationCategories) {
+    bool category_registered = false;
+    ASSERT_EQ(GetCategoryRegistrationState(*category, &category_registered), S_OK)
+        << "failed to query a required TSF category";
+    EXPECT_TRUE(category_registered) << "required TSF category not registered";
+  }
 
   ASSERT_EQ(unregister_(), S_OK);
   TF_INPUTPROCESSORPROFILE removed{};
@@ -535,6 +543,12 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
             S_OK)
       << "TSF profile still present after DllUnregisterServer";
   EXPECT_FALSE(InprocServerKeyExists()) << "InprocServer32 not removed from HKLM";
+  for (const GUID* category : kExpectedRegistrationCategories) {
+    bool category_registered = true;
+    ASSERT_EQ(GetCategoryRegistrationState(*category, &category_registered), S_OK)
+        << "failed to query a required TSF category after unregister";
+    EXPECT_FALSE(category_registered) << "DllUnregisterServer left a TSF category behind";
+  }
 
   mgr->Release();
   profiles->Release();
@@ -552,10 +566,12 @@ TEST_F(TsfTipRegistrationSmokeTest, FailedCategoryRegistrationRollsBackAndRetryS
       << "failed to enumerate TSF profiles after rollback";
   EXPECT_FALSE(profile_registered) << "failed registration left the TSF profile behind";
 
-  bool category_registered = false;
-  ASSERT_EQ(GetCategoryRegistrationState(GUID_TFCAT_TIP_KEYBOARD, &category_registered), S_OK)
-      << "failed to enumerate the keyboard category after rollback";
-  EXPECT_FALSE(category_registered) << "failed registration left the first TSF category behind";
+  for (const GUID* category : kExpectedRegistrationCategories) {
+    bool category_registered = true;
+    ASSERT_EQ(GetCategoryRegistrationState(*category, &category_registered), S_OK)
+        << "failed to enumerate a required TSF category after rollback";
+    EXPECT_FALSE(category_registered) << "failed registration left a TSF category behind";
+  }
 
   ASSERT_TRUE(forced_failure.Clear()) << "failed to disable the debug-only failure hook";
   ASSERT_EQ(register_(), S_OK) << "registration retry required an explicit unregister";

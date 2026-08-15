@@ -58,7 +58,8 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 2. **登録方法は 2 通り**:
    - `regsvr32 build/windows-debug/tsf-tip/azookey_tsf_tip.dll`（**管理者権限が必要**）で
      `DllRegisterServer` が machine-wide COM 登録（HKLM）+ TSF プロファイル登録
-     （`RegisterProfile`）+ キーボード / DisplayAttribute / UIElement カテゴリ登録を行う。
+     （`RegisterProfile`）+ キーボード / DisplayAttribute / UIElement / Windows アプリ互換
+     カテゴリ登録を行う。
    - `scripts/register-dev.ps1` は上記 `regsvr32` 呼び出しに加えて Host EXE の
      Run キー登録（自動起動・HKCU）まで行う。非管理者で起動すると自動で UAC 昇格する。
      MSIX 化までは PS1 経由を推奨。

@@ -406,7 +406,7 @@ DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の�
   化」に縮小し、**契約自体（3-interface 雛形 + BeginUIElement 動線）は v1.0 で実装**
   する。
 
-### 2.9 カテゴリ登録要件（`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`）
+### 2.9 TSF capability カテゴリ登録要件
 
 [UILess Mode Overview「UIElement Supporting TIP」](https://learn.microsoft.com/windows/win32/tsf/uiless-mode-overview): 「UIElement
 をサポートする TIP は `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` でカテゴリ登録されねば
@@ -420,12 +420,27 @@ UIElement 公開実装（`ITfUIElementMgr` / `ITfCandidateListUIElement`）と�
 が TIP 自前ウィンドウを抑制した上で候補が TSF 経由で公開されず、候補が消える /
 選択不能になる。したがって本カテゴリ登録は M5 の最小 UIElement 公開実装に内包する。
 
+[Custom input method editor requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements)
+に従い、Windows アプリ互換性の宣言として
+`GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` も登録する。このカテゴリは UIElement 公開能力とは
+独立したロード前提であり、`DllUnregisterServer` と登録失敗 rollback でも解除する。
+
 **v1.0 で必要な追加（M5）**:
 
 ```cpp
 // DllRegisterServer 内、DISPLAYATTRIBUTEPROVIDER 登録に続けて:
 pCatMgr->RegisterCategory(kTextServiceClsid,
                           GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+                          kTextServiceClsid);
+```
+
+Windows アプリ互換宣言は M5 の UIElement 公開実装とは独立して登録する。次は責務境界を
+示す簡略例であり、実装では全必須カテゴリを共有リストから登録する。
+
+```cpp
+// UIElement 公開実装に依存しない Windows アプリ互換宣言:
+pCatMgr->RegisterCategory(kTextServiceClsid,
+                          GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
                           kTextServiceClsid);
 ```
 

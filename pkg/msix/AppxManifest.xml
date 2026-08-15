@@ -77,9 +77,10 @@
   </Capabilities>
 
   <Applications>
-    <!-- identity を付与する実行体ごとに Application を宣言する。現状ビルドされるのは
-         inference-host のみ（azookey_settings.exe は M11/M30 で追加予定のため未宣言。
-         追加時に同形式の Application を足す）。
+    <!-- identity を付与する実行体ごとに Application を宣言する。現行の external-location
+         identity package が identity を付与するのは inference-host のみ。設定アプリは
+         MSI に unpackaged / self-contained で同梱するため、ここでは宣言しない。
+         MSIX 版へ設定アプリを同梱するときに同形式の Application を足す。
          Executable は外部 install location 内の相対パス。TrustLevel=mediumIL /
          RuntimeBehavior=win32App は Win32 互換の必須指定（Learn 手順 7.1）。
          AppListEntry="none" で identity package をインストール済みアプリ一覧に出さない。

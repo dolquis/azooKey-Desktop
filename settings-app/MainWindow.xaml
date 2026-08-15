@@ -4,14 +4,35 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer>
         <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
-            <TextBlock Text="azooKey Settings" Style="{StaticResource TitleTextBlockStyle}" />
-            <TextBlock Text="設定画面の配布と起動経路を準備しました。設定項目は今後のマイルストーンで追加されます。"
+            <TextBlock x:Uid="PageTitle"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       AutomationProperties.AutomationId="PageTitle" />
+            <TextBlock x:Uid="PageDescription"
                        TextWrapping="Wrap" />
-            <InfoBar IsOpen="True" Severity="Informational" Title="起動コンテキスト">
-                <StackPanel Spacing="6">
-                    <TextBlock x:Name="LanguageText" />
-                    <TextBlock x:Name="ProfileText" TextWrapping="Wrap" />
-                </StackPanel>
+            <InfoBar x:Uid="LaunchContextInfoBar"
+                     IsOpen="True"
+                     Severity="Informational"
+                     AutomationProperties.AutomationId="LaunchContextInfoBar">
+                <Grid RowSpacing="8" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Uid="LanguageLabel" />
+                    <TextBlock x:Name="LanguageValueText"
+                               Grid.Column="1"
+                               AutomationProperties.AutomationId="LanguageValue" />
+                    <TextBlock x:Uid="ProfileLabel" Grid.Row="1" />
+                    <TextBlock x:Name="ProfileValueText"
+                               Grid.Row="1"
+                               Grid.Column="1"
+                               TextWrapping="Wrap"
+                               AutomationProperties.AutomationId="ProfileValue" />
+                </Grid>
             </InfoBar>
         </StackPanel>
     </ScrollViewer>

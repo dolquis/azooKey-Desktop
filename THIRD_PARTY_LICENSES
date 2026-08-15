@@ -87,6 +87,15 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Microsoft Windows SDK Build Tools（ビルド時のみ）
+
+- Source: `Microsoft.Windows.SDK.BuildTools` NuGet package 10.0.26100.8249
+- License: Microsoft Software License Terms
+- Copyright: Microsoft Corporation
+- azooKey path: `settings-app/azookey_settings.vcxproj` の restore / build toolchain
+- Notes: ビルド用ツールであり、`azookey_settings` の app-local payload や MSI へは同梱しない。
+  直接・推移依存の解決結果は `settings-app/packages.lock.json` を正典とする。
+
 ## Microsoft WebView2 loader
 
 - Source: `Microsoft.Web.WebView2` NuGet package 1.0.3719.77

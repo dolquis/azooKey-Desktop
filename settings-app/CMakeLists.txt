@@ -1,10 +1,21 @@
-find_program(AZOOKEY_MSBUILD_EXECUTABLE NAMES MSBuild.exe msbuild)
+find_program(AZOOKEY_MSBUILD_EXECUTABLE NAMES MSBuild.exe msbuild REQUIRED)
 
-if(NOT AZOOKEY_MSBUILD_EXECUTABLE)
-  message(WARNING
-    "MSBuild was not found; the azookey_settings target is unavailable. "
-    "Run CMake from a Visual Studio developer environment to build it.")
-  return()
+if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
+  add_executable(azookey_settings_launch_arguments_tests
+    LaunchArguments.cpp
+    tests/launch_arguments_test.cpp
+  )
+  target_include_directories(azookey_settings_launch_arguments_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(azookey_settings_launch_arguments_tests
+    PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(azookey_settings_launch_arguments_tests
+    PRIVATE
+      GTest::gtest_main
+      azookey_project_options
+      azookey_project_warnings
+  )
+  azookey_discover_tests(azookey_settings_launch_arguments_tests LABEL settings-app)
 endif()
 
 set(AZOOKEY_SETTINGS_CONFIGURATION "$<IF:$<CONFIG:Debug>,Debug,Release>")

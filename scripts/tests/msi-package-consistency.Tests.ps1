@@ -70,13 +70,17 @@ Describe "WiX MSI package consistency" {
   }
 
   It "always installs the self-contained settings payload and shortcut" {
-    $script:package | Should -Match 'Id="SettingsShortcut"[\s\S]*?Directory="ProgramMenuFolder"'
-    $script:package | Should -Match 'Id="SettingsShortcutComponent"[\s\S]*?Root="HKCU"[\s\S]*?KeyPath="yes"'
+    $script:package | Should -Match 'Id="SettingsShortcut"[\s\S]*?Directory="ProgramMenuFolder"[\s\S]*?Advertise="yes"'
+    $script:package | Should -Match 'Id="SettingsExe"[\s\S]*?KeyPath="yes"[\s\S]*?Id="SettingsShortcut"'
+    $script:package | Should -Not -Match 'Id="SettingsShortcutComponent"'
     $script:project | Should -Match '<SuppressIces>ICE03</SuppressIces>'
     $script:package | Should -Match '<Files Include="\$\(SettingsPayloadDir\)\\\*\*" Directory="INSTALLFOLDER">'
     $script:package | Should -Match '<Exclude Files="\$\(SettingsExePath\)" />'
     $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\obj\\\*\*" />'
+    $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.exp" />'
+    $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.lib" />'
     $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.pdb" />'
+    $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.ilk" />'
     $script:project | Should -Match "Settings executable not found"
     $script:releaseWorkflow | Should -Match 'Build self-contained settings app'
     $script:releaseWorkflow | Should -Match '--target azookey_settings'

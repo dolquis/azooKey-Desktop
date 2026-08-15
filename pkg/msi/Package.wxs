@@ -63,24 +63,15 @@
               Id="SettingsExe"
               Source="$(SettingsExePath)"
               Name="azookey_settings.exe"
-              KeyPath="yes" />
-        </Component>
-
-        <Component Id="SettingsShortcutComponent" Guid="88B0BBE2-FF00-4D67-A4C8-5FEA20CB6FAE">
-          <Shortcut
-              Id="SettingsShortcut"
-              Directory="ProgramMenuFolder"
-              Name="azooKey Settings"
-              Description="Configure azooKey"
-              Target="[INSTALLFOLDER]azookey_settings.exe"
-              WorkingDirectory="INSTALLFOLDER" />
-          <RegistryValue
-              Root="HKCU"
-              Key="Software\dolquis\azooKey"
-              Name="SettingsShortcutInstalled"
-              Type="integer"
-              Value="1"
-              KeyPath="yes" />
+              KeyPath="yes">
+            <Shortcut
+                Id="SettingsShortcut"
+                Directory="ProgramMenuFolder"
+                Name="azooKey Settings"
+                Description="Configure azooKey"
+                Advertise="yes"
+                WorkingDirectory="INSTALLFOLDER" />
+          </File>
         </Component>
       </Directory>
     </StandardDirectory>
@@ -92,7 +83,6 @@
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
       <ComponentRef Id="SettingsComponent" />
-      <ComponentRef Id="SettingsShortcutComponent" />
       <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">
         <Exclude Files="$(SettingsExePath)" />
         <Exclude Files="$(SettingsPayloadDir)\obj\**" />

@@ -725,51 +725,26 @@ Windows 設定の「言語と地域 → IME → オプション → 詳細設定
 
 ### 6.2 実装
 
-`tsf-tip/src/ConfigureFunction.h` / `.cpp`（新規）：
+`tsf-tip/src/TextService.h` / `.cpp` の `TextService` が `ITfFnConfigure` を直接実装する。
+`GetDisplayName` は `azooKey Settings` を返し、`Show` は `langid` と `profile` を
+`tsf-tip/src/SettingsLauncher.cpp::LaunchSettingsApplication` へ渡す。`TextService::QueryInterface`
+は `IID_ITfFnConfigure` に加え、その基底インターフェイスである `IID_ITfFunction` にも同一の
+COM identity を返す。
 
-```cpp
-class ConfigureFunction : public IUnknown, public ITfFnConfigure {
-public:
-    STDMETHODIMP GetDisplayName(BSTR* pbstrName) override {
-        *pbstrName = SysAllocString(L"azooKey 設定");
-        return S_OK;
-    }
-    STDMETHODIMP Show(HWND hwndParent, LANGID langid, REFGUID rguidProfile) override {
-        // 選択中の言語プロファイルを引数として設定アプリへ渡す
-        // （複数プロファイル時に既定ページではなく該当プロファイルを初期表示するため）
-        wchar_t profile[64] = {};
-        StringFromGUID2(rguidProfile, profile, ARRAYSIZE(profile));
-        wchar_t args[128] = {};
-        swprintf_s(args, L"--langid 0x%04X --profile %s", langid, profile);
-
-        // 設定アプリ EXE のフルパスを TIP インストールディレクトリ基準で解決（§6.4）。
-        // bare ファイル名のままだと ShellExecuteExW は呼び出し元プロセス（言語/IME 設定 UI）の
-        // カレントディレクトリ基準で探すため、インストール環境（MSIX/WiX）で起動失敗し得る。
-        std::wstring exe = GetInstalledExePath(L"azookey_settings.exe");
-
-        // 設定アプリ EXE を非同期起動（終了待ちしない。理由は下記注記）
-        SHELLEXECUTEINFOW sei{ sizeof(sei) };
-        sei.lpFile       = exe.c_str();
-        sei.lpParameters = args;
-        sei.hwnd         = hwndParent;
-        sei.nShow        = SW_SHOW;
-        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
-        ShellExecuteExW(&sei);
-        return S_OK;
-    }
-};
-```
+`LaunchSettingsApplication` は `--langid 0xNNNN --profile {GUID}` を生成し、§6.4 の固定パスを
+`ShellExecuteExW` で非同期起動する。起動 API が失敗した場合は `GetLastError()` を HRESULT へ
+変換し、エラー値が設定されていない場合も `E_FAIL` を返す。成功時に得た process handle は
+直ちに閉じる。
 
 > **重要: `kTextServiceClsid` の COM オブジェクトが `ITfFnConfigure` を QI で返すこと**:
 > 言語/IME 設定は `CoCreateInstance(kTextServiceClsid, IID_ITfFnConfigure)` でこの機能を取得する
 > （Microsoft Learn: ITfFnConfigure は「`ITfInputProcessorProfiles::Register` に渡した CLSID」+
 > `IID_ITfFnConfigure` で CoCreateInstance される）。したがって **`DllGetClassObject` / class
 > factory が `kTextServiceClsid` 用に生成する TextService オブジェクト自身が `ITfFnConfigure`
-> を実装し、`QueryInterface(IID_ITfFnConfigure)` で返す**必要がある。上記のように
-> `ConfigureFunction` を別クラスにする場合も、TextService の `QueryInterface` がそれを返すよう
-> 配線する。さもないとクラスとカテゴリ登録を足しても設定側が `E_NOINTERFACE` を受け取り、
-> 「詳細設定」が開かない。実務上は TextService が `ITfTextInputProcessorEx` と併せて
-> `ITfFnConfigure` を多重継承し `Show` を直接実装するのが簡潔。
+> を実装し、`QueryInterface(IID_ITfFnConfigure)` で返す**必要がある。別クラスへ分離する場合も
+> TextService の QI 経由で到達できなければならない。さもないと設定側が `E_NOINTERFACE` を
+> 受け取り、「詳細設定」が開かない。本実装は TextService が `ITfTextInputProcessorEx` と併せて
+> `ITfFnConfigure` を継承し、`Show` を直接実装する。
 
 > **`Show` を非同期にする理由（`docs/sideload-packaging-spec.md` §3.5 と整合）**:
 > `ITfFnConfigure::Show` の Remarks は「ダイアログを閉じるまで return しない」（短命な
@@ -782,12 +757,13 @@ public:
 > （`SEE_MASK_NOCLOSEPROCESS` で得たプロセスハンドルは起動成功を確認した後すぐ閉じ、
 > 既存インスタンスの前面化は設定アプリ側の single-instance 処理に委ねる）。
 
-### 6.3 Category 登録
+### 6.3 追加 category は不要
 
 `ITfFnConfigure` の公開に追加の TSF category 登録は不要である。
 Windows は `ITfInputProcessorProfiles::Register` に登録された TextService の CLSID を
 `IID_ITfFnConfigure` と組み合わせて `CoCreateInstance` する。
-そのため、TextService の `QueryInterface` が `ITfFnConfigure` を返す契約をテストする。
+そのため、TextService の `QueryInterface` が `ITfFnConfigure` と基底の `ITfFunction` を返す
+契約をテストする。
 
 `GUID_TFCAT_TIP_PROPERTY_UI_TEXT_SERVICE` という識別子は Windows SDK の定義済み category に
 存在しないため、登録処理へ追加しない。
@@ -798,7 +774,16 @@ Windows は `ITfInputProcessorProfiles::Register` に登録された TextService
 `azookey_settings.exe` を解決する。MSI は両者を同じ install root へ配置するため、
 ユーザー書き込み可能な `%LOCALAPPDATA%` や、呼び出し元プロセスの current directory を
 含み得る `PATH` へ fallback しない。隣接ファイルが存在しなければ
-`HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)` を返す。
+`HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)` を返す。モジュールパス取得やファイル属性の
+確認自体が失敗した場合は、その Windows error を HRESULT として保持し、アクセス拒否などを
+「ファイル不在」へ潰さない。
+
+### 6.5 起動ログ
+
+`TextService::Show` は起動に成功したとき `settings_launch`（Info）、失敗したとき
+`settings_launch_failed`（Warn）を TIP runtime log に記録する。両イベントは `hr` と `langid`
+を含む。これにより、`Show` が呼ばれていない状態と、パス解決またはプロセス起動に失敗した状態を
+ログ上で区別する。
 
 ## 7. ITfMouseSink (M23)
 

@@ -3,11 +3,13 @@
 #include <Objbase.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <new>
 #include <string>
 #include <system_error>
+#include <vector>
 #ifdef AZOOKEY_TSF_TESTING
 #include <utility>
 #endif
@@ -21,31 +23,53 @@ std::wstring g_test_executable;
 azookey::tsf::testing::ShellExecuteExFn g_test_shell_execute = nullptr;
 #endif
 
-std::wstring ResolveSettingsExecutable() {
+HRESULT ResolveSettingsExecutable(std::wstring* executable) {
 #ifdef AZOOKEY_TSF_TESTING
   if (!g_test_executable.empty()) {
-    return g_test_executable;
+    *executable = g_test_executable;
+    return S_OK;
   }
 #endif
 
-  std::array<wchar_t, 32768> buffer{};
   HMODULE module = nullptr;
-  if (GetModuleHandleExW(
+  if (!GetModuleHandleExW(
           GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
           reinterpret_cast<LPCWSTR>(&azookey::tsf::LaunchSettingsApplication), &module)) {
-    const DWORD length =
-        GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length > 0 && length < buffer.size()) {
-      const auto adjacent =
-          std::filesystem::path(buffer.data()).parent_path() / kSettingsExecutable;
-      std::error_code error;
-      if (std::filesystem::is_regular_file(adjacent, error)) {
-        return adjacent.wstring();
-      }
-    }
+    const DWORD error = GetLastError();
+    return error != ERROR_SUCCESS ? HRESULT_FROM_WIN32(error) : E_FAIL;
   }
 
-  return {};
+  std::vector<wchar_t> buffer(MAX_PATH);
+  for (;;) {
+    SetLastError(ERROR_SUCCESS);
+    const DWORD length =
+        GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0) {
+      const DWORD error = GetLastError();
+      return error != ERROR_SUCCESS ? HRESULT_FROM_WIN32(error) : E_FAIL;
+    }
+    if (length < buffer.size()) {
+      break;
+    }
+    if (buffer.size() >= 32768) {
+      return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    }
+    buffer.resize((std::min)(buffer.size() * 2, static_cast<size_t>(32768)));
+  }
+
+  const auto adjacent = std::filesystem::path(buffer.data()).parent_path() / kSettingsExecutable;
+  std::error_code error;
+  const bool is_regular_file = std::filesystem::is_regular_file(adjacent, error);
+  if (error) {
+    return error.value() != ERROR_SUCCESS ? HRESULT_FROM_WIN32(static_cast<DWORD>(error.value()))
+                                          : E_FAIL;
+  }
+  if (!is_regular_file) {
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+  }
+
+  *executable = adjacent.wstring();
+  return S_OK;
 }
 
 }  // namespace
@@ -54,19 +78,18 @@ namespace azookey::tsf {
 
 HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
   try {
-    const std::wstring executable = ResolveSettingsExecutable();
-    if (executable.empty()) {
-      return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-    }
+    std::wstring executable;
+    const HRESULT resolve_hr = ResolveSettingsExecutable(&executable);
+    if (FAILED(resolve_hr)) return resolve_hr;
 
     std::array<wchar_t, 40> profile_text{};
     if (StringFromGUID2(profile, profile_text.data(), static_cast<int>(profile_text.size())) == 0) {
-      return E_INVALIDARG;
+      return E_UNEXPECTED;
     }
 
     wchar_t langid_text[7]{};
     if (swprintf_s(langid_text, L"0x%04X", static_cast<unsigned int>(langid)) < 0) {
-      return E_INVALIDARG;
+      return E_UNEXPECTED;
     }
     const std::wstring parameters =
         L"--langid " + std::wstring(langid_text) + L" --profile " + profile_text.data();
@@ -75,7 +98,7 @@ HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
 
     SHELLEXECUTEINFOW execute_info{};
     execute_info.cbSize = sizeof(execute_info);
-    execute_info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    execute_info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_LOG_USAGE;
     execute_info.hwnd = parent;
     execute_info.lpVerb = L"open";
     execute_info.lpFile = executable.c_str();
@@ -90,7 +113,8 @@ HRESULT LaunchSettingsApplication(HWND parent, LANGID langid, REFGUID profile) {
     const auto shell_execute = ShellExecuteExW;
 #endif
     if (!shell_execute(&execute_info)) {
-      return HRESULT_FROM_WIN32(GetLastError());
+      const DWORD error = GetLastError();
+      return error != ERROR_SUCCESS ? HRESULT_FROM_WIN32(error) : E_FAIL;
     }
     if (execute_info.hProcess != nullptr) {
       CloseHandle(execute_info.hProcess);

@@ -10,7 +10,11 @@
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
     <OutputName>azooKey-$(ProductVersion)-x64</OutputName>
-    <!-- Windows App SDK multilingual binaries exceed the MSI File.Language limits. -->
+    <!--
+      Windows App SDK multilingual binaries exceed the MSI File.Language limits.
+      WiX applies ICE suppression at project validation scope, so keep the allowlist
+      limited to ICE03 and mirror the exact value in the consistency test.
+    -->
     <SuppressIces>ICE03</SuppressIces>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <DefineConstants>

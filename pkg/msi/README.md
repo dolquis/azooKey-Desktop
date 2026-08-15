@@ -33,7 +33,9 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 
 出力は `pkg\msi\bin\Release\azooKey-1.0.0-x64.msi` です。
 別の成果物を使う場合は、`TipDllPath`、`HostExePath`、`SettingsPayloadDir`、
-`SettingsExePath` を MSBuild property で指定します。
+`SettingsExePath` を MSBuild property で指定します。`SettingsExePath` の既定値は
+`$(SettingsPayloadDir)\azookey_settings.exe` なので、通常は `SettingsPayloadDir` だけを
+変更すれば足ります。
 `VCRuntimeDir` には、使用した MSVC toolset の x64 `Microsoft.VC*.CRT`
 ディレクトリを指定します。MSI は `msvcp140.dll`、`vcruntime140.dll`、
 `vcruntime140_1.dll` を TIP と Inference Host と同じディレクトリへ配置します。
@@ -42,8 +44,11 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 
 `azookey_settings` target は、Windows App SDK を app-local に含む unpackaged の
 self-contained 設定アプリを `build\windows-release\settings-app\Release` へ生成します。
-MSI は `SettingsPayloadDir` 以下のランタイム一式を同梱し、`SettingsExePath` を
-スタートメニューの `azooKey Settings` ショートカットへ関連付けます。
+`SettingsExePath` は同梱する実行ファイルの取得元パスです。MSI は
+`SettingsPayloadDir` 以下のランタイム一式を同梱し、実行ファイルを常に
+`INSTALLFOLDER\azookey_settings.exe` として配置します。スタートメニューの
+`azooKey Settings` ショートカットは `SettingsExe` の advertised shortcut としてこの
+固定パスを指し、per-machine ファイルを component KeyPath とします。
 設定アプリのビルド成果物が欠けている場合、MSI ビルドは失敗します。
 Windows App SDK の多言語 DLL は MSI の `File.Language` 制限を超えて既知の
 `ICE03` を生じるため、WiX の検証では ICE 群のうち `ICE03` だけを抑制します。

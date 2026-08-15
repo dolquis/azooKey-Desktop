@@ -221,8 +221,8 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - `tsf-tip/src/ReconversionFunction.cpp` — `ITfFnReconversion`
 - `tsf-tip/src/CandidateListUIElement.cpp` — UI-less Mode 用
 - `tsf-tip/src/PredictionListUIElement.cpp` — Suggestion UI 用
-- `tsf-tip/src/ConfigureFunction.cpp` — `ITfFnConfigure`
-- `tsf-tip/src/InstalledPath.cpp` — 設定アプリ EXE 解決
+- `tsf-tip/src/TextService.cpp` — `ITfFnConfigure` / `ITfFunction`
+- `tsf-tip/src/SettingsLauncher.cpp` — 設定アプリ EXE 解決・起動
 
 ### Phase 6-B（Copilot+ PC / NPU、`docs/copilot-pc-backend-spec.md`）
 

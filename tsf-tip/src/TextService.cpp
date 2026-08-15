@@ -385,7 +385,7 @@ STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
     *ppvObj = static_cast<ITfCompositionSink*>(this);
   } else if (riid == IID_ITfDisplayAttributeProvider) {
     *ppvObj = static_cast<ITfDisplayAttributeProvider*>(this);
-  } else if (riid == IID_ITfFnConfigure) {
+  } else if (riid == IID_ITfFnConfigure || riid == IID_ITfFunction) {
     *ppvObj = static_cast<ITfFnConfigure*>(this);
   } else {
     return E_NOINTERFACE;
@@ -1111,7 +1111,12 @@ STDMETHODIMP TextService::GetDisplayName(BSTR* name) {
 }
 
 STDMETHODIMP TextService::Show(HWND parent, LANGID langid, REFGUID profile) {
-  return LaunchSettingsApplication(parent, langid, profile);
+  const HRESULT hr = LaunchSettingsApplication(parent, langid, profile);
+  RuntimeLog(FAILED(hr) ? azookey::logging::RuntimeLogLevel::Warn
+                        : azookey::logging::RuntimeLogLevel::Info,
+             FAILED(hr) ? "settings_launch_failed" : "settings_launch",
+             {{"hr", static_cast<int64_t>(hr)}, {"langid", static_cast<uint64_t>(langid)}});
+  return hr;
 }
 
 HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {

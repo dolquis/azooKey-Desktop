@@ -663,14 +663,21 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 入力中常時、キャレット右側に予測候補（Word モード）を別 HWND で表示。
 - **前提**: M13 完了。
 - **変更対象**: `tsf-tip/src/PredictionWindow.cpp`（新規）、`ipc/src/Payloads.cpp`
-  （`QueryPredictions` Payload 本実装）、`inference-host/src/Dispatcher.cpp`。
+  （`QueryPredictions` Payload 本実装）、`inference-host/src/Dispatcher.cpp`、
+  `learning/src/LearningStore.cpp`（学習由来の予測供給を足す場合。
+  `docs/user-learning-enhancement-spec.md` §14）。
 - **実装範囲**: 仕様書 §3（配置アルゴリズム、キャッシュ、操作、設定）。
+  学習履歴を予測の供給源に足す場合は
+  `docs/user-learning-enhancement-spec.md` §14（reading-keyed 二層化・前方一致
+  lookup 契約・区分連結での供給・§14.6.1 の受理動作）を併せて実装範囲とする。
+  この供給は M15 本体の受け入れ条件には含めず、独立に着手できる。
 - **横断**: 仕様完了後に X-2-2/X-2-3（paragraph_context、ラベル付き候補）。
 - **受け入れ条件**:
   - キャレット右側 / 画面外なら左反転、上下反転で配置
   - Tab で第一候補受理、Esc で閉鎖
   - 1 秒キャッシュで連続呼び出し抑制
-- **参照仕様**: `docs/legacy-parity-spec.md` §3、`docs/rich-features-spec.md` X-2
+- **参照仕様**: `docs/legacy-parity-spec.md` §3、`docs/rich-features-spec.md` X-2、
+  `docs/user-learning-enhancement-spec.md` §14（学習由来の予測供給）
 
 ### M16: Magic Conversion / Replace Suggestion
 
@@ -2294,6 +2301,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `user_score` = log(1 + commit_count) × recency_score ×
     app_profile_weight × correction_penalty
   - 既存 TSV（M7 形式）からの自動マイグレーション戦略
+  - 索引構造（spec §14。M15 と共有。M54 本体と独立に着手可）: reading-keyed
+    二層化（`reading→surface` の `std::map` 二段）、前方一致 lookup の契約と
+    計算量要件、`learning.tsv` の形式を変えない決定、M15 予測窓への区分連結供給
 - **受け入れ条件**:
   - 同じ入力を複数回確定すると、次回以降候補順位が上がる
   - M52 ベンチで user_adapt カテゴリが学習前後で改善する

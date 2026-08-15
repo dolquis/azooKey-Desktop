@@ -1,12 +1,13 @@
 # ユーザー学習強化 仕様
 
 対象リポジトリ: dolquis/azooKey-Desktop
-対応マイルストーン: M54（変換品質トラック）
-関連: `plans/windows-port-roadmap.md` M7 / M34 / M48 / M52 / M53 / M55、
+対応マイルストーン: M54（変換品質トラック）、M15（§14 の予測供給）
+関連: `plans/windows-port-roadmap.md` M7 / M15 / M34 / M48 / M52 / M53 / M55、
       既存 `learning/src/LearningStore.cpp`、
       `docs/conversion-quality-benchmark-spec.md`（M52）、
       `docs/typo-correction-learning-spec.md`（M55）、
-      `docs/app-profile-spec.md`（M48）
+      `docs/app-profile-spec.md`（M48）、
+      `docs/legacy-parity-spec.md` §3（M15 予測候補ウィンドウ）
 作成日: 2026-05-27
 位置づけ: 変換品質トラック（M52 完了後、M53 / M55 と並行可能）
 
@@ -367,3 +368,241 @@ TSV 表記    = "0x%08x"                        // 例 0xabcd1234
 - 校正は係数の数値のみを動かし、本表の「不変条件」列と §6 の 4 因子構成
   （乗算合成・各因子の中立 1.0）は固定する。スキーマ（§3.2 の TSV 列）を
   変える校正結果が出た場合は M54 範囲外とし、別 M（§12）で扱う。
+
+## 14. 学習ストアの reading-keyed 二層化と前方一致予測（M15 供給）
+
+対応マイルストーン: M15（予測候補ウィンドウ）/ M54。
+
+M7 の `LearningStore` は `reading<TAB>surface` を 1 本の文字列キーへ連結し、
+`std::unordered_map` で保持する。
+このキー設計では読みの前方一致で履歴を引けない。
+ハッシュ表は順序を持たず、連結キーのどこまでが読みかも走査せずには判定できないためである。
+
+本節は索引を **reading-keyed 二層構造**（読みから表記への 2 段の写像）へ組み替え、
+読みの前方一致で過去の確定履歴を引く lookup と、M15 の予測候補ウィンドウへの供給契約を確定する。
+確定するのは索引構造と lookup 契約と供給契約であり、スコアの式（§5 / §6）と
+永続化の行スキーマ（§3.1 / §3.2）は変えない。
+§3〜§13 の M54 本体とは独立に着手できる。
+
+### 14.1 永続化形式を変更しない決定
+
+`learning.tsv` の行形式と `# azookey-learning-tsv escaped=1` ヘッダーを変えない。
+二層化はメモリ内の索引だけに適用し、ファイル形式のバージョンは上げず、移行処理も設けない。
+
+読みごとのブロックへ入れ子化しない理由は 2 つある。
+1 行 1 レコードという形は §3.1 の破損耐性を支えており、入れ子にすると 1 行の破損が
+同じ読みの全表記を巻き込む。
+また §3.2 の列追加（`commit_count` / `app_name` / `event_type` / `context_hash`）は
+同じ行スキーマ上の拡張であり、入れ子形式へ替えると M54 v1 の拡張と衝突する。
+
+したがって旧形式からの移行は、ヘッダー無し M7 TSV の読み込み規則（§3.1）が
+そのまま残るだけで、二層化に固有の移行処理は発生しない。
+
+**書き出し順**: `Save()` の出力順は、エスケープ後の読みと TAB と表記を連結した
+バイト列の昇順とする（現行実装と同じ）。
+二層構造から書き出す実装でも、この連結キーの昇順を再現する。
+読みと表記を独立に比較して並べると、制御文字を含む読みで現行と順序が入れ替わりうるため、
+比較対象は連結後のキーで固定する。
+
+**重複行**: 同一の `(reading, surface)` が複数行ある場合、先に現れた行を採用して
+後続を捨てる（現行 `Load()` の `emplace` と同じ先勝ち）。
+二層構造への組み替え後もこの規則を維持する。
+
+### 14.2 メモリ内データ構造
+
+```cpp
+// reading -> surface -> record
+std::map<std::string, std::map<std::string, LearningRecord>> table_;
+```
+
+キーはエスケープ前の生の文字列とする。
+エスケープは §3.1 のとおり入出力の境界だけで行い、索引のキーには持ち込まない。
+外側を順序付き `std::map` にするのは、前方一致の対象が `lower_bound(prefix)` から始まる
+連続した区間になるためである。
+内側も `std::map` とし、同一読みの表記列挙を決定的にする。
+1 つの読みが持つ表記は数個程度で、順序付きコンテナの定数倍は問題にならない。
+
+**double-array trie は採らない**。
+M53 の system 辞書はビルド時に構築して以後変更しない静的な索引である
+（`auto-word-registration-spec.md` §15.2）。
+学習ストアは確定のたびに `Observe` が走る mutable なストアであり、
+挿入のたびに再配置を伴う double-array は向かない。
+レコード数は `learning_max_records`（既定 10000、§3.1.1）で上限が付いており、
+`std::map` の探索コストで足りる。
+
+### 14.3 前方一致 lookup の契約
+
+```cpp
+struct PrefixMatch {
+  std::string reading;
+  std::string surface;
+  double score;   // §14.4 の減衰後スコア
+};
+
+struct PrefixLookupResult {
+  std::vector<PrefixMatch> matches;   // §14.5 の順序規則
+  size_t visited_readings{};          // 外側 map で訪問した読みの数（走査範囲の検証用）
+  size_t scanned_records{};           // 範囲内で見たレコード数（min_score 除外分を含む）
+};
+
+PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit,
+                                double min_score, uint64_t now_epoch_sec) const;
+```
+
+| 項目 | 規定 |
+|---|---|
+| 空の prefix | 常に空の結果を返す（全件走査を構造的に禁止する） |
+| 走査範囲 | `lower_bound(prefix)` から、読みが prefix で始まらない最初の要素の手前まで。範囲を出た時点で打ち切る |
+| バイト境界 | prefix はバイト列として比較する。UTF-8 の途中で切れた prefix もバイト前方一致としてヒットしうる |
+| 除外 | `score < min_score` のレコードを結果に含めない |
+| 上限 | `limit` 件。`limit == 0` は空を返す |
+| `visited_readings` | 外側 map で訪問した読みの数。`lower_bound` の結果から範囲外を検出して打ち切るまでの反復回数 |
+| `scanned_records` | 訪問した読みが持つレコードのうち、読みが prefix で始まるものの数（`min_score` で除外した分を含み、範囲外を含まない） |
+
+`min_score` の既定は `learning_min_weight`（0.05、§3.1.1）と同じ値とする。
+これにより `ObserveCorrection` で 0 まで落ちた負例と、
+`learning-data-management-spec.md` §4.2 の忘却で 0 化されたエントリは予測に現れない。
+
+**バイト境界の扱い**: 比較はバイト列で行うため、`あ`（`E3 81 82`）に対する `E3 81` のように
+文字の途中で切れた prefix も前方一致としてヒットする。
+lookup 側では UTF-8 の scalar 境界を検証せず、エラーにもしない。
+呼び出し側は composition の読み（常に文字単位で確定した文字列）を渡すため、
+実運用では文字の途中で切れた prefix は発生しない。
+バイト前方一致で一致することを契約とし、境界テストで固定する（§14.8）。
+
+**計算量**: 読みの種類数を R、prefix に一致する読みの数を P、
+prefix に一致するレコード数を K、`limit` を L とすると `O(log R + K + K log L)` とする。
+K に比例する走査だけを許し、R に比例する走査（karukan `learning.rs:84` の全読み走査）を禁じる。
+
+`visited_readings` は「実際に何件の読みを見たか」を数える。
+`lower_bound` から始めて範囲外の読みに達した時点で打ち切るなら
+`visited_readings ≤ P + 1`（打ち切り判定で範囲外の 1 件を見る場合がある）であり、
+先頭から全件を走査して一致だけを数える実装では R に近い値になる。
+一致したレコードだけを数える `scanned_records` は、走査の始点と打ち切りを区別できないため、
+全走査の検出には `visited_readings` を使う（§14.8 / §14.9）。
+
+### 14.4 スコア式の維持
+
+前方一致の順位付けには、既存 `LearningStore::Score()` が返す減衰後スコアをそのまま使う。
+
+```
+decayed_weight = weight * exp(-0.15 * days_since_last_update)
+```
+
+karukan の `recency * 10 + ln_1p(freq)` は採らない。
+確定回数だけを見る `ln_1p(freq)` では、`ObserveCorrection` が weight の減算で表す負例を
+表現できないためである。
+現行 `Reranker::Apply` は候補スコアへ減衰後 weight を加算する合成であり、
+式を替えると M52 の baseline も動く。
+
+M54 本体が入ると、減衰は §5 の `recency_score`（category 別 half_life）へ置き換わる。
+本節は減衰の式を二重に定義せず「ストアの `Score()` が返す値を使う」という形で契約するため、
+置き換え後の lookup は自動的に §5 に従う。
+なお現行の係数 0.15 は半減期に直すと約 4.6 日であり、§5 の既定 30 日とは一致しない。
+この差は §13 の校正対象であり、本節では M7 の現行値を維持する。
+
+### 14.5 順序規則
+
+`matches` の並びは次の順で決める。
+
+1. `score` の降順
+2. 同点なら読みの昇順（エスケープ前のバイト列比較）
+3. 同じ読みなら表記の昇順（同上）
+
+同点の解決を読みと表記で固定するのは、ハッシュ順に依存した不定な並びを残さないためである。
+`limit` による切り詰めは、この順序を確定させたあとに行う（`std::partial_sort` 相当）。
+
+### 14.6 M15 予測候補への供給
+
+供給点は `InferenceEngine::QueryPredictions` とする。
+学習由来の前方一致ヒットと、変換器の `PredictNext` 由来の予測候補は、
+スコアを合成せず**区分連結**で並べる。
+
+1. 学習由来ヒットを §14.5 の順序で並べ、先頭 `prediction_learning_max_entries` 件（既定 3）を取る。
+2. `PredictNext` の結果は現行どおり `ApplyRerankerOrRaw` を通す。
+3. 1 の並びの後ろに 2 の並びを連結する。
+4. 表記が重複する候補は先に現れた側を残す（学習由来が優先される）。
+5. 応答全体を予測窓の表示上限（`legacy-parity-spec.md` §3.2 の最大 5 件）で切り詰める。
+
+スコアを合成しないのは、学習 weight（`learning_alpha` の累積）と変換器のスコアが
+次元の異なる量で、共通の尺度へ載せるには校正定数がもう 1 つ必要になるためである。
+区分連結なら定数を増やさずに順序が決まる。
+学習枠へ上限を置くのは、予測窓が過去の確定履歴だけで埋まると新しい入力への追従が落ちるためである。
+表記で重複を落とすのは、次項のとおり学習由来と変換器由来で受理時の動作が違い、
+同じラベルが 2 つ並ぶと同じものを選んだつもりで違う結果になるためである。
+
+### 14.6.1 受理時の動作と完全一致の除外
+
+`legacy-parity-spec.md` §3.4 は予測候補の受理を「preedit に追記」と規定する。
+学習由来の候補は、この追記の対象を**読みの残り**とする。
+
+- 応答の `CandidateField.reading` には学習レコードの読み全体（例 `にほんご`）を、
+  `surface` には学習レコードの表記（例 `日本語`）を載せる。
+- 予測窓が表示するのは `surface` である。
+- 受理（Tab / Shift+Tab / クリック）では、`reading` から現在の composition の読みを取り除いた
+  残り（例 `ご`）を preedit へ追記する。`surface` は preedit へ入れない。
+- 受理後の preedit は学習レコードの読みと一致し、以後は通常の変換動線
+  （Space での候補選択、ライブ変換）に戻る。学習した表記は §6 のスコアで上位に来る。
+- TIP は受理の直前に `reading` が現在の composition の読みで始まることを確認し、
+  始まらない場合は当該候補を捨てる（M10 の staleness check をすり抜けた応答への保険）。
+
+`surface` を preedit へ追記しないのは、表記が読み全体に対応するためである。
+`にほん` の preedit へ `日本語` を追記すれば `にほん日本語` になる。
+
+**読みが prefix と完全一致するレコードは供給から除外する**。
+追記すべき残りが空で、受理しても preedit が変わらないためである。
+除外しても失われる機能はない。
+その読みで確定した表記は、Space による変換候補（`QueryCandidates`）で §6 のスコアにより
+上位へ来る経路が既にある。
+
+この規定は `legacy-parity-spec.md` §3.4 の受理動作を変えず、`CandidateField` にも欄を追加しない
+（`reading` は既存の欄である）。
+M15 payload に replacement や delete count を導入する必要もない。
+
+セーフ入力中の抑止は、M46 が TIP 側で `QueryPredictions` を送らないことで成立する
+（`privacy-and-secure-input-spec.md` §5）。
+本節では新しいゲートを設けない。
+
+### 14.7 既存 API と設定への影響
+
+- `Observe` / `ObserveCorrection` / `Score` / `Prune` / `Save` / `Load` のシグネチャと
+  意味を変えない。`LookupPrefix` を追加するだけとする。
+- `Prune` の `max_records` は現行どおり `(reading, surface)` の組の数を数える。
+  読みの種類数ではない。
+- `CandidateSource`（`core/include/azookey/core/Candidate.h`）へ `Learning` を末尾追加し、
+  `inference-host/src/Dispatcher.cpp` の `SourceToWire` で `"learning"` へ写す。
+  `CandidateField.source` は既存の文字列欄で、増えるのは欄ではなく値であるため
+  `kEnvelopeVersion` は上げない。未知の値を受け取った旧受信側は既定の分岐へ落とす。
+- `prediction_learning_max_entries`（既定 3）と `prediction_learning_min_score`
+  （既定は `learning_min_weight` と同値）は `EngineConfig`
+  （`inference-host/include/azookey/host/InferenceEngine.h`）へ置く。
+  `learning_max_records` などと同じく Host 内部の既定値であり、
+  `settings/mvp-settings.schema.json` には露出させない。
+
+### 14.8 テスト方針
+
+- 複数の読みがヒットする前方一致で、結果が §14.5 の順序（スコア降順、同点は読み昇順から表記昇順）で返る。
+- prefix の直後の 1 文字だけが異なる読みが結果に混ざらない。空 prefix で空が返る。
+- 10000 件を投入し prefix 一致が数件のとき、`visited_readings ≤ P + 1`（P = 一致した読みの数）に
+  収まる。先頭から全件を走査して一致だけを数える実装ではこの上限を超えるため、テストが落ちる。
+- 同じ入力で `scanned_records` が前方一致範囲のレコード数と等しい
+  （`min_score` で除外された分を含み、範囲外を含まない）。
+- `あ` の先頭 2 バイトのように文字の途中で切れた prefix で、当該読みがバイト前方一致でヒットする
+  （§14.3 のバイト境界の契約）。
+- ヘッダー無しの M7 TSV を読み込んで保存すると、現行実装と同じ並びのバイト列になる（形式不変の回帰）。
+- 同一の `(reading, surface)` を含む重複行で先勝ちになる。
+- `ObserveCorrection` で weight が 0 になったレコードが前方一致の結果に出ない。
+- 予測供給で、学習枠の上限と表記重複の先勝ちと表示上限の切り詰めが順に効く。
+- 読みが prefix と完全一致するレコードが供給に現れない（§14.6.1）。
+- 供給された候補は `surface` で表示され、受理すると `reading` から composition の読みを除いた
+  残りが preedit へ追記される。追記後の preedit が学習レコードの読みと一致する。
+- `reading` が現在の composition の読みで始まらない候補は受理時に捨てられる。
+
+### 14.9 受け入れ条件
+
+- 読みの前方一致で学習履歴を引け、結果が §14.5 の順序で返る。
+- 前方一致の走査が `lower_bound` の範囲に限られる（`visited_readings ≤ P + 1` で確認）。
+- `learning.tsv` の形式が変わらず、M7 形式のファイルをそのまま読み書きできる。
+- 予測候補ウィンドウへ学習由来の候補が §14.6 の区分連結で供給され、
+  受理が §14.6.1 の追記動作で成立する。
+- 減衰後スコアが `exp(-0.15 * days)` のまま維持されている。

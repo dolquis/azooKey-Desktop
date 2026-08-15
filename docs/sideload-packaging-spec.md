@@ -333,8 +333,10 @@ C++ ランタイム依存（`msvcp140.dll` 等）を MSIX に同梱：
 #### Windows App SDK ランタイム（設定アプリ = WinUI 3 の依存）
 
 設定アプリ `azookey_settings.exe` は WinUI 3（§3.0）のため **Windows App SDK ランタイム**に
-依存する。VCLibs だけではクリーン VM で起動しないため、次のいずれかで同梱する（ビルド側は
-`Microsoft.WindowsAppSDK` NuGet の `PackageReference` が必須。版は §3.1 の採用 WASDK に揃える）:
+依存する。VCLibs だけではクリーン VM で起動しないため、次のいずれかで同梱する。ビルド側は
+`settings-app/azookey_settings.vcxproj` に Windows App SDK の component packages を
+`PackageReference` で宣言する。採用 package と版の正典は同プロジェクトと
+`THIRD_PARTY_LICENSES` とし、本 spec へ重複記載しない。
 
 - **self-contained 配置（推奨・サイドロード向け）**:
   `<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>` を **設定アプリ本体の
@@ -928,8 +930,6 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 >   （通常 MSIX + `com4:InProcessServer`）は **build 20348 以上**（`MinVersion="10.0.20348.0"`、
 >   §1.1）。設定アプリの WinUI 3（1809+）はこのパッケージ下限に内包されるため、MSIX の
 >   `TargetDeviceFamily` には 1809 ではなく §1 の経路別下限を設定する。
-> - 現行安定版は **Windows App SDK 2.2.0（2026-06-09）**（バージョン系列は 2.x）。版は
->   固定せず実装時の最新安定版に追従する（§3.1）。
 
 #### フレームワーク比較
 
@@ -960,7 +960,9 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 ### 3.1 構成
 
 - 言語: C++/WinRT（TIP / Host と統一）
-- フレームワーク: WinUI 3（Windows App SDK 2.x。2026-06 時点の最新安定版は 2.2.0。版は固定せず実装時の最新安定版に追従）
+- フレームワーク: WinUI 3（採用 component packages と版は
+  `settings-app/azookey_settings.vcxproj` / `THIRD_PARTY_LICENSES` を正典とする。更新時は
+  self-contained 出力と MSI の回収結果を再検証する）
 - 配布: MVP は MSI にペイロード同梱（別 EXE `azookey_settings.exe`。self-contained 配置、§1.3 / §4）。
   MS Store 用 MSIX（§1）では packaged EXE として同梱（配布方針は §0）
 
@@ -1046,9 +1048,13 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
   する（設定値の反映はプロパティ シートの OK/Apply ではなく §3.3 の `UpdateConfig` IPC で
   行う）。WinUI 3 / Windows App SDK ランタイムを設定 UI ホストプロセスへ load しない利点も保つ。
 - **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
-  `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。
-- **正典実装**: 具体コード（`ConfigureFunction`・`ShellExecuteExW` による起動・カテゴリ登録
-  `GUID_TFCAT_TIP_PROPERTY_UI_TEXT_SERVICE`・インストールパス解決）は
+  `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。設定アプリは
+  `AppInstance::FindOrRegisterForKey` で単一インスタンスを登録し、後続起動は
+  `RedirectActivationToAsync` で新しい引数を既存インスタンスへ転送する。既存ウィンドウは転送後に
+  前面化し、ウィンドウタイトルによるプロセス間検索は行わない。受信側は LANGID を16進値、
+  profile を GUID として検証し、未指定と不正値を区別する。
+- **正典実装**: 具体コード（`ITfFnConfigure`・`ShellExecuteExW` による起動・
+  インストールパス解決）は
   `docs/tsf-deep-integration-spec.md` §6 を正典とする。本節は配布・プロセス境界の観点を補う。
 
 ### 3.6 設定スキーマの確定（キー一覧・永続化・拡張方針）
@@ -1270,10 +1276,9 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 
 MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経路で対応する。
 
-> **設定アプリと WinUI 3 ランタイムの同梱（target 実装後に必須）**:
-> 現行の CMake 構成には設定アプリ target がなく、TIP も `ITfFnConfigure`（§3.5）を
-> 実装していないため、MVP MSI は設定アプリを同梱しない。target と起動経路を実装した後は、
-> `azookey_settings.exe` と WinUI 3 ランタイムをペイロードに含める。
+> **設定アプリと WinUI 3 ランタイムの同梱**:
+> `azookey_settings` target は unpackaged の設定アプリを self-contained でビルドする。
+> MVP MSI は、その出力フォルダから `azookey_settings.exe` と WinUI 3 ランタイムを回収する。
 > MSIX フレームワーク依存が使えない LTSC 等では、設定アプリを
 > **self-contained 配置（§1.3）でビルドし、その出力フォルダ一式を配置する**。
 > self-contained を採らない場合は `WindowsAppRuntimeInstall.exe` をペイロードに含めて
@@ -1343,9 +1348,13 @@ base MSI には TIP、Inference Host、`LICENSE`、`THIRD_PARTY_LICENSES` に加
 TIP と Host と同じ `%ProgramFiles%\azooKey` へ配置する。これにより、
 VC++ Redistributable が未導入のクリーンな Windows 11 でも起動可能にする。
 GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base MSI へ含めない。
-設定アプリ target の実装後は `SettingsExePath` を必須入力として同梱し、
-スタートメニューへ `azooKey Settings` を追加する。現行の CMake 構成には target がないため、
-release workflow は同 property を指定しない。この後続実装は Linear の DEV-674 で追跡する。
+設定アプリは `SettingsPayloadDir` を必須入力として self-contained 出力一式を同梱する。
+`SettingsExePath` は実行ファイルの取得元パスであり、既定値は
+`$(SettingsPayloadDir)\azookey_settings.exe` とする。インストール後の名前は常に
+`INSTALLFOLDER\azookey_settings.exe` で、スタートメニューのショートカットはこの固定パスを
+指す。ショートカットは `SettingsExe` の advertised shortcut とし、per-machine のファイルを
+component KeyPath に保つ。release workflow は `azookey_settings` target をビルドしてから両
+property を MSI ビルドへ渡す。
 
 ### 4.2 アンインストール時
 

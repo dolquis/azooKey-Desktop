@@ -34,6 +34,8 @@ jobs:
         run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
       - name: Build
         run: cmake --build --preset windows-release --parallel 1
+      - name: Build self-contained settings app
+        run: cmake --build --preset windows-release --target azookey_settings --parallel 1
       - name: Test
         run: ctest --preset windows-release --no-tests=error
       - name: Resolve MSI version
@@ -96,7 +98,7 @@ jobs:
           "dir=$($crtDir.FullName)" >> $env:GITHUB_OUTPUT
       - name: Build unsigned MSI
         run: >-
-          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}"
+          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe"
       - name: Verify MSI is unsigned
         shell: pwsh
         run: |

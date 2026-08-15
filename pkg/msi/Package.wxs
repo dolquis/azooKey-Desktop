@@ -58,7 +58,6 @@
               KeyPath="yes" />
         </Component>
 
-        <?if "$(SettingsExePath)" != "__NOT_PROVIDED__" ?>
         <Component Id="SettingsComponent" Guid="4FF5479D-974F-4888-84F8-DA16C599F44D">
           <File
               Id="SettingsExe"
@@ -70,10 +69,10 @@
                 Directory="ProgramMenuFolder"
                 Name="azooKey Settings"
                 Description="Configure azooKey"
+                Advertise="yes"
                 WorkingDirectory="INSTALLFOLDER" />
           </File>
         </Component>
-        <?endif?>
       </Directory>
     </StandardDirectory>
 
@@ -83,9 +82,15 @@
       <ComponentRef Id="VCRuntimeComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
-      <?if "$(SettingsExePath)" != "__NOT_PROVIDED__" ?>
       <ComponentRef Id="SettingsComponent" />
-      <?endif?>
+      <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">
+        <Exclude Files="$(SettingsExePath)" />
+        <Exclude Files="$(SettingsPayloadDir)\obj\**" />
+        <Exclude Files="$(SettingsPayloadDir)\*.exp" />
+        <Exclude Files="$(SettingsPayloadDir)\*.lib" />
+        <Exclude Files="$(SettingsPayloadDir)\*.pdb" />
+        <Exclude Files="$(SettingsPayloadDir)\*.ilk" />
+      </Files>
     </Feature>
 
     <!--

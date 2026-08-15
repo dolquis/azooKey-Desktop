@@ -286,6 +286,7 @@ add_subdirectory(inference-host)
 if(WIN32)
   add_subdirectory(diagnostics)
   add_subdirectory(compat-test)
+  add_subdirectory(settings-app)
 endif()
 
 if(WIN32 AND AZOOKEY_BUILD_TSF_TIP)

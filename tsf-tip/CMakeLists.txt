@@ -5,6 +5,7 @@ add_library(azookey_tsf_tip SHARED
   src/DllMain.cpp
   src/DisplayAttribute.cpp
   src/exports.def
+  src/SettingsLauncher.cpp
   src/TextService.cpp
   src/TextServiceFactory.cpp
 )
@@ -21,6 +22,7 @@ target_link_libraries(azookey_tsf_tip
     uuid
     shlwapi
     shcore
+    shell32
 )
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
@@ -34,6 +36,7 @@ if(AZOOKEY_BUILD_TESTS)
       src/CandidateUiCoordinator.cpp
       src/CandidateWindow.cpp
       src/DisplayAttribute.cpp
+      src/SettingsLauncher.cpp
       src/TextService.cpp
       src/TextServiceFactory.cpp
       ${test_source}
@@ -53,6 +56,7 @@ if(AZOOKEY_BUILD_TESTS)
         uuid
         shlwapi
         shcore
+        shell32
         user32
         gdi32
     )

@@ -1,0 +1,39 @@
+<Window
+    x:Class="azookey_settings.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer>
+        <StackPanel Padding="32" Spacing="16" MaxWidth="720" HorizontalAlignment="Left">
+            <TextBlock x:Uid="PageTitle"
+                       Style="{StaticResource TitleTextBlockStyle}"
+                       AutomationProperties.AutomationId="PageTitle" />
+            <TextBlock x:Uid="PageDescription"
+                       TextWrapping="Wrap" />
+            <InfoBar x:Uid="LaunchContextInfoBar"
+                     IsOpen="True"
+                     Severity="Informational"
+                     AutomationProperties.AutomationId="LaunchContextInfoBar">
+                <Grid RowSpacing="8" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Uid="LanguageLabel" />
+                    <TextBlock x:Name="LanguageValueText"
+                               Grid.Column="1"
+                               AutomationProperties.AutomationId="LanguageValue" />
+                    <TextBlock x:Uid="ProfileLabel" Grid.Row="1" />
+                    <TextBlock x:Name="ProfileValueText"
+                               Grid.Row="1"
+                               Grid.Column="1"
+                               TextWrapping="Wrap"
+                               AutomationProperties.AutomationId="ProfileValue" />
+                </Grid>
+            </InfoBar>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

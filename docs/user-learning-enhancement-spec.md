@@ -441,7 +441,8 @@ struct PrefixMatch {
 
 struct PrefixLookupResult {
   std::vector<PrefixMatch> matches;   // §14.5 の順序規則
-  size_t scanned_records{};           // 走査したレコード数（計算量の検証用）
+  size_t visited_readings{};          // 外側 map で訪問した読みの数（走査範囲の検証用）
+  size_t scanned_records{};           // 範囲内で見たレコード数（min_score 除外分を含む）
 };
 
 PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit,
@@ -452,19 +453,33 @@ PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit,
 |---|---|
 | 空の prefix | 常に空の結果を返す（全件走査を構造的に禁止する） |
 | 走査範囲 | `lower_bound(prefix)` から、読みが prefix で始まらない最初の要素の手前まで。範囲を出た時点で打ち切る |
-| バイト境界 | prefix はバイト列として比較する。UTF-8 の途中で切れた prefix は一致 0 件になるだけで、エラーにしない |
+| バイト境界 | prefix はバイト列として比較する。UTF-8 の途中で切れた prefix もバイト前方一致としてヒットしうる |
 | 除外 | `score < min_score` のレコードを結果に含めない |
 | 上限 | `limit` 件。`limit == 0` は空を返す |
-| `scanned_records` | 読みが prefix で始まるレコードの走査数。範囲外のレコードを数に含めない |
+| `visited_readings` | 外側 map で訪問した読みの数。`lower_bound` の結果から範囲外を検出して打ち切るまでの反復回数 |
+| `scanned_records` | 訪問した読みが持つレコードのうち、読みが prefix で始まるものの数（`min_score` で除外した分を含み、範囲外を含まない） |
 
 `min_score` の既定は `learning_min_weight`（0.05、§3.1.1）と同じ値とする。
 これにより `ObserveCorrection` で 0 まで落ちた負例と、
 `learning-data-management-spec.md` §4.2 の忘却で 0 化されたエントリは予測に現れない。
 
-**計算量**: 読みの種類数を R、prefix に一致するレコード数を K、`limit` を L とすると
-`O(log R + K + K log L)` とする。
+**バイト境界の扱い**: 比較はバイト列で行うため、`あ`（`E3 81 82`）に対する `E3 81` のように
+文字の途中で切れた prefix も前方一致としてヒットする。
+lookup 側では UTF-8 の scalar 境界を検証せず、エラーにもしない。
+呼び出し側は composition の読み（常に文字単位で確定した文字列）を渡すため、
+実運用では文字の途中で切れた prefix は発生しない。
+バイト前方一致で一致することを契約とし、境界テストで固定する（§14.8）。
+
+**計算量**: 読みの種類数を R、prefix に一致する読みの数を P、
+prefix に一致するレコード数を K、`limit` を L とすると `O(log R + K + K log L)` とする。
 K に比例する走査だけを許し、R に比例する走査（karukan `learning.rs:84` の全読み走査）を禁じる。
-`scanned_records` を戻り値に含めるのは、この要件をテストから確認できるようにするためである（§14.8）。
+
+`visited_readings` は「実際に何件の読みを見たか」を数える。
+`lower_bound` から始めて範囲外の読みに達した時点で打ち切るなら
+`visited_readings ≤ P + 1`（打ち切り判定で範囲外の 1 件を見る場合がある）であり、
+先頭から全件を走査して一致だけを数える実装では R に近い値になる。
+一致したレコードだけを数える `scanned_records` は、走査の始点と打ち切りを区別できないため、
+全走査の検出には `visited_readings` を使う（§14.8 / §14.9）。
 
 ### 14.4 スコア式の維持
 
@@ -513,10 +528,36 @@ M54 本体が入ると、減衰は §5 の `recency_score`（category 別 half_l
 次元の異なる量で、共通の尺度へ載せるには校正定数がもう 1 つ必要になるためである。
 区分連結なら定数を増やさずに順序が決まる。
 学習枠へ上限を置くのは、予測窓が過去の確定履歴だけで埋まると新しい入力への追従が落ちるためである。
+表記で重複を落とすのは、次項のとおり学習由来と変換器由来で受理時の動作が違い、
+同じラベルが 2 つ並ぶと同じものを選んだつもりで違う結果になるためである。
 
-読みが prefix と完全一致するレコードも供給に含める。
-その読みで過去に確定した表記は最有力の予測であり、
-変換候補窓（`QueryCandidates`）は別経路のため二重表示にならない。
+### 14.6.1 受理時の動作と完全一致の除外
+
+`legacy-parity-spec.md` §3.4 は予測候補の受理を「preedit に追記」と規定する。
+学習由来の候補は、この追記の対象を**読みの残り**とする。
+
+- 応答の `CandidateField.reading` には学習レコードの読み全体（例 `にほんご`）を、
+  `surface` には学習レコードの表記（例 `日本語`）を載せる。
+- 予測窓が表示するのは `surface` である。
+- 受理（Tab / Shift+Tab / クリック）では、`reading` から現在の composition の読みを取り除いた
+  残り（例 `ご`）を preedit へ追記する。`surface` は preedit へ入れない。
+- 受理後の preedit は学習レコードの読みと一致し、以後は通常の変換動線
+  （Space での候補選択、ライブ変換）に戻る。学習した表記は §6 のスコアで上位に来る。
+- TIP は受理の直前に `reading` が現在の composition の読みで始まることを確認し、
+  始まらない場合は当該候補を捨てる（M10 の staleness check をすり抜けた応答への保険）。
+
+`surface` を preedit へ追記しないのは、表記が読み全体に対応するためである。
+`にほん` の preedit へ `日本語` を追記すれば `にほん日本語` になる。
+
+**読みが prefix と完全一致するレコードは供給から除外する**。
+追記すべき残りが空で、受理しても preedit が変わらないためである。
+除外しても失われる機能はない。
+その読みで確定した表記は、Space による変換候補（`QueryCandidates`）で §6 のスコアにより
+上位へ来る経路が既にある。
+
+この規定は `legacy-parity-spec.md` §3.4 の受理動作を変えず、`CandidateField` にも欄を追加しない
+（`reading` は既存の欄である）。
+M15 payload に replacement や delete count を導入する必要もない。
 
 セーフ入力中の抑止は、M46 が TIP 側で `QueryPredictions` を送らないことで成立する
 （`privacy-and-secure-input-spec.md` §5）。
@@ -542,17 +583,26 @@ M54 本体が入ると、減衰は §5 の `recency_score`（category 別 half_l
 
 - 複数の読みがヒットする前方一致で、結果が §14.5 の順序（スコア降順、同点は読み昇順から表記昇順）で返る。
 - prefix の直後の 1 文字だけが異なる読みが結果に混ざらない。空 prefix で空が返る。
-- 10000 件を投入し prefix 一致が数件のとき、`scanned_records` が前方一致範囲のレコード数と
-  等しい（`min_score` で除外された分を含み、範囲外を含まない。全件走査でない）。
+- 10000 件を投入し prefix 一致が数件のとき、`visited_readings ≤ P + 1`（P = 一致した読みの数）に
+  収まる。先頭から全件を走査して一致だけを数える実装ではこの上限を超えるため、テストが落ちる。
+- 同じ入力で `scanned_records` が前方一致範囲のレコード数と等しい
+  （`min_score` で除外された分を含み、範囲外を含まない）。
+- `あ` の先頭 2 バイトのように文字の途中で切れた prefix で、当該読みがバイト前方一致でヒットする
+  （§14.3 のバイト境界の契約）。
 - ヘッダー無しの M7 TSV を読み込んで保存すると、現行実装と同じ並びのバイト列になる（形式不変の回帰）。
 - 同一の `(reading, surface)` を含む重複行で先勝ちになる。
 - `ObserveCorrection` で weight が 0 になったレコードが前方一致の結果に出ない。
 - 予測供給で、学習枠の上限と表記重複の先勝ちと表示上限の切り詰めが順に効く。
+- 読みが prefix と完全一致するレコードが供給に現れない（§14.6.1）。
+- 供給された候補は `surface` で表示され、受理すると `reading` から composition の読みを除いた
+  残りが preedit へ追記される。追記後の preedit が学習レコードの読みと一致する。
+- `reading` が現在の composition の読みで始まらない候補は受理時に捨てられる。
 
 ### 14.9 受け入れ条件
 
 - 読みの前方一致で学習履歴を引け、結果が §14.5 の順序で返る。
-- 前方一致の走査量が一致レコード数に比例する（`scanned_records` で確認）。
+- 前方一致の走査が `lower_bound` の範囲に限られる（`visited_readings ≤ P + 1` で確認）。
 - `learning.tsv` の形式が変わらず、M7 形式のファイルをそのまま読み書きできる。
-- 予測候補ウィンドウへ学習由来の候補が §14.6 の区分連結で供給される。
+- 予測候補ウィンドウへ学習由来の候補が §14.6 の区分連結で供給され、
+  受理が §14.6.1 の追記動作で成立する。
 - 減衰後スコアが `exp(-0.15 * days)` のまま維持されている。

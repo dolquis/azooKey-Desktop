@@ -537,8 +537,7 @@ TEST_F(TsfTipRegistrationSmokeTest, RegisterPublishesProfileAndUnregisterRemoves
     bool category_registered = false;
     ASSERT_EQ(GetCategoryRegistrationState(*category.guid, &category_registered), S_OK)
         << "failed to query TSF category: " << category.name;
-    EXPECT_TRUE(category_registered)
-        << "required TSF category not registered: " << category.name;
+    EXPECT_TRUE(category_registered) << "required TSF category not registered: " << category.name;
   }
 
   ASSERT_EQ(unregister_(), S_OK);

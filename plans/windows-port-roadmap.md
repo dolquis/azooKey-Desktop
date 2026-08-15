@@ -134,7 +134,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - Host 候補リストをリアルタイムで差し替え
   - UI-less mode 最小契約（`CandidateUiCoordinator`・UI-less フラグ検出
     （`ITfThreadMgrEx::GetActiveFlags`）・`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`
-    登録・`BeginUIElement` 動線）。詳細は
+    登録（候補公開との一体登録制約はこのカテゴリのみに適用）・`BeginUIElement` 動線）。詳細は
     `docs/tsf-deep-integration-spec.md` §2.0・§2.8〜§2.11
 - **受け入れ条件**:
   - 「nihongo」入力 → Space で「日本語」等の候補が出る
@@ -358,7 +358,9 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
   v1.0（M5）で最小契約（UI-less フラグ検出（`GetActiveFlags`）・最小 UIElement 候補公開と
   それに伴う `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` カテゴリ登録・`CandidateUiCoordinator`）
   まで実装し、M21 で full 実装。カテゴリ登録は候補公開実装と必ず一体で行う（公開が
-  無いまま登録すると UI-less-only ホストで候補が消える）。詳細は
+  無いまま登録すると UI-less-only ホストで候補が消える）。この制約は
+  `GUID_TFCAT_TIPCAP_UIELEMENTENABLED` のみに適用し、Windows アプリ互換宣言の
+  `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` には適用しない。詳細は
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - ~~設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。~~
   → **確定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は既存 C++/WinRT スタック

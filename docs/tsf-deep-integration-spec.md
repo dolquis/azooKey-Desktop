@@ -432,6 +432,13 @@ UIElement 公開実装（`ITfUIElementMgr` / `ITfCandidateListUIElement`）と�
 pCatMgr->RegisterCategory(kTextServiceClsid,
                           GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
                           kTextServiceClsid);
+```
+
+Windows アプリ互換宣言は M5 の UIElement 公開実装とは独立して登録する。次は責務境界を
+示す簡略例であり、実装では全必須カテゴリを共有リストから登録する。
+
+```cpp
+// UIElement 公開実装に依存しない Windows アプリ互換宣言:
 pCatMgr->RegisterCategory(kTextServiceClsid,
                           GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
                           kTextServiceClsid);

@@ -636,6 +636,9 @@ UWP / Microsoft Store / AppContainer 実行の Windows アプリで第三者 TIP
    `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` を登録していること（[Custom input method editor requirements](https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements)）。
 3. 第三者 IME がデジタル署名されていること（[Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors)）。
 
+Microsoft Learn の署名要件は第三者 IME 全般を対象とする。本節ではその原文のスコープを
+明示した上で、Windows アプリでの TIP ロード前提として整理する。
+
 配布パッケージの署名要否（§0 / §2）と TIP バイナリに対する第三者 IME の署名要件は
 別の境界である。Microsoft Store が提出 MSIX を再署名することだけを、TIP DLL の署名要件を
 満たした証拠として扱わない。署名経路は DEV-255、最終成果物での Windows アプリ実機確認は

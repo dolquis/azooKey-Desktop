@@ -18,18 +18,33 @@ VM 構成、checkpoint 運用、bootstrap、TIP 登録の各手順は既存文�
 VM を起動する前に、2 種類の成果物をホストで作る。
 レーン 1 とレーン 2 は前提とする VM 状態が異なるため、片方だけでは両方を走らせられない。
 
-**MSI**：DEV-765 と DEV-673 が対象とする配布形態の成果物。
-再現性を保つため、既に実機検証済みの MSI と同一のものを使う。
-DEV-765 は `azooKey-0.0.0-b417dc846738-x64.msi`（commit `b417dc84`、SHA-256 `7c18bb64…78aabb`）で症状を観測している。
-別ビルドを使うと、観測済みの症状と切り分け結果が対応しなくなる。
+**MSI**：DEV-673 が対象とする配布形態の成果物。
+DEV-765 のスパイクで使った `b417dc84` の MSI は使わない。
+その MSI は互換カテゴリ登録（DEV-766 / PR #271）と設定アプリ同梱（DEV-674 / PR #272）のどちらも含まないため、既に修正済みの欠陥を再観測することになる。
+`260b665` 以降の main から MSI を作り、ファイル名と SHA-256 を検証メモへ記録する。
 
 **検証 zip**：レーン 2 の全ゲートが使う開発登録用の成果物。
 
+`AZOOKEY_FETCH_LLAMA_CPP` の既定は `OFF` で、`windows-release` preset もこれを ON にしない。
+llama.cpp を含まない Host に対して `-ModelPath` を渡すと、`register-dev.ps1` の preflight が `llama_cpp=1` を検出できずに登録を拒否する。
+レーン 2 は DEV-225 に到達する前に停止するため、configure で明示的に ON にする。
+
 ```powershell
-cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON
+cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
+```
 
+パッケージを作る前に、preflight が通る状態かをホストで確認する。
+
+```powershell
+.\build\windows-release\bench\azookey_zenzai_bench.exe
+```
+
+出力に `llama_cpp=1` が含まれない場合は、この時点で configure をやり直す。
+VM へ持ち込んでから登録で弾かれると、checkpoint 復元からやり直しになる。
+
+```powershell
 .\scripts\make-vm-verify-package.ps1 `
   -Preset windows-release `
   -OutputDirectory .\build\vm-verify-packages `
@@ -40,149 +55,91 @@ cmake --build --preset windows-release --target compat_test
 `-ModelPath` は必須である。
 DEV-225 の A5 判定は実 GGUF での推論結果を見るものであり、GGUF なしでは `SimpleConverter` の静的辞書しか動かず判定が成立しない。
 
+**compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連だけで、`compat_test.exe` と target JSON を含まない。
+DEV-716 は zip だけでは実行できないので、別に固めて持ち込む。
+
+```powershell
+$bundle = ".\build\vm-verify-packages\compat-bundle"
+New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+Copy-Item .\build\windows-release\compat-test\compat_test.exe $bundle
+Copy-Item .\compat-test\targets -Destination $bundle -Recurse -Force
+Compress-Archive -Path "$bundle\*" -DestinationPath "$bundle.zip" -Force
+```
+
+VM 側では `compat_test.exe` と `targets\` を同じディレクトリへ展開する。
+runner は `--target` に渡したパスから target JSON を読むため、両者の相対関係を崩さない。
+
 持ち込むもののうち、パッケージ生成が拾わないものを別途 VM へ入れる。
 
-- Sysinternals Suite（`procmon`、`handle`）：DEV-765 の段 3 と段 4 で使う
+- Sysinternals Suite（`procmon`、`handle`）：Store 入力が再検証で失敗した場合の境界確認に使う
 - 2 台目のモニター構成と 150% DPI 設定：DEV-716 の C-005 と C-006 が要求する
 - 絵文字を含むユーザー辞書エントリ、または絵文字を返す辞書：DEV-716 の C-007 を TIP 経路で確認するため
 
-## Part A：DEV-765 の切り分け階梯
+## Part A：Store 入力の再検証
 
-DEV-765 は「Microsoft Store の検索欄で preedit が開始しない」という症状を、4 つの判定のいずれかへ絞り込む spike である。
-症状が DEV-555 の予測（preedit は出るが候補が来ない）と食い違っているため、修正方針を決める前に失敗した境界を特定する。
+DEV-765 のスパイクは 2026-08-14 に実走済みで、判定は **1（DLL 未ロード）** に確定している。
+Microsoft Store の `WinStore.App.exe` に TIP DLL がロードされておらず、pipe や handshake には到達していなかった。
+TIP DLL の ACL は `ALL APPLICATION PACKAGES` と `ALL RESTRICTED APPLICATION PACKAGES` の RX を継承しており、ACL 不足ではなかった。
 
-課題本文が禁じているとおり、切り分けが終わるまで AppContainer 向けの ACE 追加、peer 検証の無効化、token の露出を行わない。
-先に緩和すると、どの境界が失敗していたのかを永久に確定できなくなる。
+ロード前ゲートとして 2 つの独立した要件違反が挙がっている。
 
-段を上から順に実行し、期待どおりでない段が見つかった時点で止めて、その段が指す判定を結論とする。
-各段は Notepad と Store の検索欄を同一ログオンセッションで対照して観測する。
-Notepad 側が期待どおりで Store 側だけが外れることを確認して初めて、その段が AppContainer 固有の境界だと言える。
+- 互換カテゴリ `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` の未登録（DEV-766）。PR #271 で登録済みになった。
+- TIP DLL が未署名であること。Microsoft の IME 要件は第三者 IME への署名を求めている。署名ルートは DEV-255 で未決のままである。
 
-### 段 0：観測条件の固定
+したがって本セッションで行うのは切り分けではなく、カテゴリ修正後の再検証である。
+切り分け階梯を再走しても、既に判定済みの結論を作り直すだけになる。
 
-クリーン checkpoint から復元し、インストールログを残した状態で MSI を入れる。
+### 手順
 
-```powershell
-msiexec /i C:\azookey-verify\azooKey-0.0.0-b417dc846738-x64.msi /L*V C:\azookey-verify\msi-install.log
-```
+`260b665` 以降の main から作った MSI をクリーン VM へ入れ、同一ログオンセッションで Notepad と Microsoft Store の検索欄を対照する。
+比較対象を同じセッションに揃えないと、プロファイル選択の取り違えと区別できない。
 
-インストール後、ログ取得を有効にしてからサインアウトとサインインを行う。
-TIP は各アプリのプロセス内で動くため、環境変数を設定した後に起動したプロセスにしかログ設定が効かない。
+まず、カテゴリが実際に登録されたことをインストール後に確認する。
 
 ```powershell
-[Environment]::SetEnvironmentVariable('AZOOKEY_LOG', '1', 'User')
-[Environment]::SetEnvironmentVariable('AZOOKEY_LOG_LEVEL', 'info', 'User')
+$clsid = '{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}'
+Get-ChildItem "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$clsid" -Recurse |
+  Select-Object -ExpandProperty Name
 ```
 
-`AZOOKEY_LOG_LEVEL` が解釈するのは `warn` と `error` だけで、それ以外の値は Info へ落ちる。
-`debug` を指定しても情報量は増えない。
+次に Notepad と Store の検索欄で `ni` を打鍵し、preedit の有無を記録する。
 
-### 段 1：TIP DLL 個別の ACL
+### 結果の扱い
 
-8/14 の検証では親ディレクトリの `ALL APPLICATION PACKAGES` RX を目視で確認したが、DLL 自身が継承しているかは未確認である。
-`%ProgramFiles%` は既定でこの ACE を持ち、MSI はそれを継承する前提で自前の ACL を持たない（`docs/sideload-packaging-spec.md` §4）。
-継承が実際に効いているかをファイル単位で確認する。
+**Store で preedit が出る場合**：カテゴリ欠落が原因だったことが実機で裏付けられる。
+DEV-673 の AppContainer 入力項目を Pass として記録する。
+DEV-555（pipe DACL の AppContainer capability ACE）は、preedit が出たうえで候補が来ないかどうかという別の問いなので、そこまで確認して結果を DEV-555 へ書く。
 
-```powershell
-icacls "$env:ProgramFiles\azooKey\azookey_tsf_tip.dll"
-Get-Acl "$env:ProgramFiles\azooKey\azookey_tsf_tip.dll" |
-  Select-Object -ExpandProperty Access |
-  Where-Object IdentityReference -like '*ALL APPLICATION PACKAGES*'
-```
+**Store で preedit が出ない場合**：未署名要件が独立に効いている可能性が残る。
+これは診断で解けない種類の残件で、署名済み成果物を用意するまで確定できない。
+署名は DEV-255 の人間判断待ちであり、本セッションで解消できないため、DEV-673 の当該項目は未達として記録して次へ進む。
 
-期待は、`S-1-15-2-1`（ALL APPLICATION PACKAGES）に対する ReadAndExecute の許可が継承 ACE として存在することである。
-deny ACE が重なっていないことも見る。
-Windows は deny を先に評価するため、部分的な deny でもロードを壊す。
-
-ACE が無い、または deny がある場合は **判定 1（DLL 未ロード：MSI ACL 経路）** で確定する。
-ACE がある場合も、それだけではロードの成功を意味しないため段 2 へ進む。
-
-### 段 2：入力欄をホストしているプロセスの特定
-
-Store の検索欄を実際にどのプロセスが持っているかを、記憶や推測ではなく実測で決める。
-プロセス名を先に決め打ちすると、以降の段の観測がすべて空振りする。
-
-UWP アプリのウィンドウは `ApplicationFrameHost.exe` がフレームを持ち、アプリ本体は別プロセスで動く。
-フォアグラウンドウィンドウのハンドルから引いたプロセスは、この構成ではフレーム側を指すことがある。
-TIP が読み込まれるのは入力欄を実際に持つ本体側なので、フレーム側の PID を対象にすると段 3 が誤った結論を出す。
-
-Store を起動した状態で、パッケージアプリのプロセスを列挙する。
-
-```powershell
-Get-Process |
-  Where-Object { $_.Path -like '*\WindowsApps\*' } |
-  Select-Object Id, ProcessName, Path
-```
-
-以降で使う `$handleExe` と `$procmonExe` は、診断プレイブック「ツールの準備」の解決方法で得る。
-Sysinternals の実行ファイル名は配布形式によって 64-bit suffix の有無が異なるため、パスを決め打ちしない。
-
-列挙した各プロセスについて、pipe ハンドルの有無を記録する。
-
-```powershell
-& $handleExe -a -p <PID> | Select-String 'pipe|azookey'
-```
-
-Store の検索欄をホストしているプロセスを一意に決められない場合は、候補として挙げた PID 群をそのまま記録し、段 3 を候補すべてに対して実行する。
-一つに絞れないこと自体は判定を妨げない。
-段 3 でどれにも DLL が読み込まれていなければ、結論は同じである。
-
-### 段 3：TIP DLL のロード有無
-
-`azookey_tsf_tip.dll` を読み込んでいるプロセスを一覧し、段 2 の候補と対照する。
-`tasklist /m` は DLL 側から引くため、段 2 で PID を一つに絞れていなくても結論を出せる。
+境界をもう一段だけ詰めるなら、DLL がロードされたかどうかまでを確認して止める。
 
 ```powershell
 tasklist /m azookey_tsf_tip.dll
 ```
 
-出力に段 2 で挙げた候補 PID が含まれるか、また Notepad が含まれるかを対照する。
-Notepad に読み込まれていることを確認して初めて、Store 側の不在が AppContainer 固有だと言える。
+Store のホストプロセスが一覧に現れず Notepad が現れるなら、失敗は依然としてロード前である。
+ACL の観測だけで結論を出さない。
+2026-08-14 の実走では ACL が正常でありながら DLL は未ロードだったため、ACL の状態は原因候補にはなっても判定の根拠にはならない。
 
-Store 側だけロードされていない場合は **判定 1（DLL 未ロード）** で確定する。
-段 1 で ACL が正常だったのにロードされていないなら、原因は ACL ではなく TSF 登録か AppContainer activation の側にある。
-その区別まで進めるときは、Process Monitor で対象プロセスの `azookey_tsf_tip.dll` に対する `CreateFile` の結果コードを見る。
-`ACCESS DENIED` なら ACL、`NAME NOT FOUND` なら登録パス、そもそも試行が無いなら TSF が TIP を候補に挙げていない。
+対象プロセスの package SID と integrity は、判定の前提となるので記録しておく。
 
 ```powershell
-& $procmonExe -accepteula -backingfile C:\azookey-verify\dev765.pml -quiet -minimized
-# Store の検索欄へ ni と打鍵してから
-& $procmonExe -terminate -quiet
+Get-Process |
+  Where-Object { $_.Path -like '*\WindowsApps\*' } |
+  Select-Object Id, ProcessName, Path
+whoami /groups            # 対象プロセス側で実行できる場合
+& $handleExe -a -p <PID> | Select-String 'pipe|azookey'
 ```
 
-### 段 4：TIP の活性化と composition 開始
+`$handleExe` と `$procmonExe` は、診断プレイブック「ツールの準備」の解決方法で得る。
+Sysinternals の実行ファイル名は配布形式によって 64-bit suffix の有無が異なるため、パスを決め打ちしない。
+package SID を対象プロセスの token から直接採れない場合は、Store アプリのパッケージ名（2026-08-14 の実走では `Microsoft.WindowsStore_…_8wekyb3d8bbwe`）とプロセス名を記録して代える。
 
-DLL がロードされている場合、TIP が活性化してキーイベントを受け取っているかを JSONL ログで見る。
-
-```powershell
-Get-Content "$env:LOCALAPPDATA\azooKey\logs\tip-$(Get-Date -Format yyyyMMdd).jsonl" -Tail 200
-```
-
-Store の検索欄へ打鍵した時刻の前後に、TIP のイベントが記録されているかを確認する。
-イベントがまったく無い場合は、DLL はロードされているが `ITfKeyEventSink` までキーが届いていない。
-イベントはあるが composition が始まっていない場合は、input scope による抑止か `ITfContext` 側の拒否を疑う。
-
-いずれも **判定 2（DLL ロード済み、preedit なし）** で確定する。
-判定 2 は DEV-555 の想定と異なる領域であり、修正の owner は TIP 側になる。
-
-### 段 5：IPC と handshake
-
-preedit が出ているのに候補が来ない場合だけ、この段に来る。
-これが DEV-555 が予測していた症状である。
-
-```powershell
-Get-Content "$env:LOCALAPPDATA\azooKey\logs\host-$(Get-Date -Format yyyyMMdd).jsonl" -Tail 200
-```
-
-TIP 側の `ipc_connected` と `ipc_handshake_rejected` の有無、Host 側に query が届いているかを突き合わせる。
-接続そのものが失敗しているなら pipe の DACL、接続後に拒否されているなら peer 検証か handshake token が原因である。
-**判定 3（preedit あり、候補なし）** で確定し、DEV-555 へ引き継ぐ。
-
-### 段が尽きた場合
-
-上の 5 段のいずれにも当てはまらない挙動なら、**判定 4** として再現条件と次に打つ最小の probe を記録する。
-根本原因を断定できないこと自体は失敗ではない。
-課題の完了条件は「最後に成功した境界と最初に失敗した境界を特定すること」である。
+診断が終わるまで AppContainer 向けの ACE 追加、peer 検証の無効化、token の露出を行わない。
+先に緩和すると、どの境界が失敗していたのかを確定できなくなる。
 
 ## Part B：VM 状態でレーンを分ける
 
@@ -192,11 +149,18 @@ TIP 側の `ipc_connected` と `ipc_handshake_rejected` の有無、Host 側に 
 ### レーン 1：クリーン VM に MSI を入れた状態
 
 MSI 配布形態そのものを対象とするゲートを置く。
-開発登録（`register-dev.ps1`）を先に走らせると、開発登録が付ける AppContainer ACL が MSI 側の継承 ACL と混ざり、DEV-765 の段 1 が観測不能になる。
+開発登録（`register-dev.ps1`）を先に走らせると、開発登録が付ける AppContainer ACL が MSI 側の継承 ACL と混ざり、ACL 由来かどうかの判別ができなくなる。
 このレーンでは開発登録を一切行わない。
 
-1. Part A（DEV-765）を実行する。
-2. DEV-765 の判定が出た結果、Store 以外の受け入れ条件が満たせるなら DEV-673 を再走する。判定 1 から 3 のいずれかで Store 入力が未成立のままなら、DEV-673 はその 1 項目を明示的に未達として記録し、残りの項目（インストール、IME 出現、打鍵から確定、アンインストールでの登録解除）だけ判定する。
+1. DEV-673 のチェックリストを頭から実施する。
+2. AppContainer 入力の項目に来たら Part A の再検証を行い、その結果を当該項目へ記録する。
+
+Store 入力が未成立のままでも、DEV-673 の残りの項目は判定できる。
+未署名要件（DEV-255）は本セッションで解消できないため、当該項目の未達は想定内の結果であり、他の項目の判定を止める理由にはしない。
+
+DEV-673 の課題本文は設定アプリ同梱（PR #272）より前に書かれている。
+`%ProgramFiles%\azooKey` の配置確認では、課題本文が挙げる TIP、Inference Host、MSVC runtime 3 DLL、ライセンスファイルに加えて、`azookey_settings.exe` と self-contained ランタイム、スタートメニューのショートカットが増えている。
+設定アプリ側の起動とアンインストールは DEV-767 で個別に検証済みなので、本ゲートでは配置物として存在することの確認にとどめ、差分があった事実を検証メモへ書く。
 
 レーン 1 が終わったら、必ずベースライン checkpoint へ復元する。
 MSI の machine-wide 登録を残したままレーン 2 の開発登録を重ねると、どちらの登録が効いているか判別できなくなる。
@@ -222,18 +186,31 @@ DEV-716 の実行例を示す。
 
 終了コードは、全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2` である。
 
-DEV-758 の第二の書き手には `userdict` CLI を使う。
-Host が稼働している状態で `--offline` を付けると、CLI が IPC を経由せず同じファイルを直接書くため、プロセス間ロックの効きを確認できる。
+DEV-758 は `user_dict.json` への同時更新を作る。
+`userdict` CLI は既定で稼働中の Host へ IPC 経由でコマンドを送り、`--offline` を付けるとファイルを直接書く。
+この 2 経路を別々の entry で重ねると、二つの書き手が同じファイルを read-modify-write する状況になる。
+
+単発の `--offline` を 1 回実行するだけでは足りない。
+書き込みが時間的に重ならないため、ロックが無くても通ってしまい、ロックの効きを確認したことにならない。
 
 ```powershell
-.\azookey_inference_host.exe userdict add --reading てすと --surface テスト --offline
-.\azookey_inference_host.exe userdict list --format json
+$exe = '.\azookey_inference_host.exe'
+$viaPipe = Start-Job { & $using:exe userdict add --reading ぱいぷ --surface パイプ }
+$viaFile = Start-Job { & $using:exe userdict add --reading ふぁいる --surface ファイル --offline }
+Wait-Job $viaPipe, $viaFile | Out-Null
+Receive-Job $viaPipe, $viaFile
+& $exe userdict list --format json
 ```
 
+判定は、`list` の出力に両方の entry が残っていることである。
+片方だけが残る場合は、後勝ちの上書きで編集が消失している。
+重なりを確実にするため、同じ操作を数回繰り返して毎回両方が残ることを見る。
+
 `settings.json` 側は事情が異なる。
-設定アプリは未実装であり（DEV-674 が実装対象として立っている）、`settings.json` を書く第二のプロセスが現時点で存在しない。
+設定アプリは MSI へ同梱されたが（DEV-674、PR #272）、現行の実装に設定を保存する UI は無く、`settings.json` を書く第二のプロセスは今も存在しない。
+保存機能を持つ実装課題は本書の作成時点で見当たらないため、未起票として扱う。
 このゲートで再現できるのは `user_dict.json` の同時更新までである。
-`settings.json` の同時更新は、テキストエディタからの手動書き込みを第二の書き手に代用するか、設定アプリ着地まで未実施として記録する。
+`settings.json` の同時更新は、テキストエディタからの手動書き込みを第二の書き手に代用するか、未実施として記録する。
 どちらを選んだかを検証メモに明記し、代用で済ませた範囲を曖昧にしない。
 
 ### このセッションの対象外
@@ -258,23 +235,25 @@ Linear への記録様式を揃えておく。
 - バックエンド: ☐ CPU (SimpleConverter) ☐ zenz GGUF (ファイル名)
 ```
 
-### DEV-765
+### Store 入力の再検証（DEV-673 の AppContainer 項目へ記録）
 
 ```md
-## 判定
-☐ 判定1 DLL未ロード ☐ 判定2 ロード済み・preeditなし ☐ 判定3 preeditあり・候補なし ☐ 判定4 上記以外
+## カテゴリ登録
+- `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` が登録済み: ☐ はい ☐ いいえ
+- MSI の commit / SHA-256:
 
-## 段ごとの観測
-- 段1 DLL個別ACL: ALL APPLICATION PACKAGES = ☐ 継承Allow ☐ 明示Allow ☐ Deny ☐ 無し
-- 段2 ホストプロセス: PID / プロセス名 / package SID:
-- 段3 DLLロード: Store = ☐ ロード済 ☐ 未ロード / Notepad = ☐ ロード済 ☐ 未ロード
-  - Procmon の CreateFile 結果コード（未ロード時のみ）:
-- 段4 TIPイベント: 打鍵時刻前後の tip-*.jsonl 記録の有無:
-- 段5 IPC: ipc_connected / handshake の結果（段5に到達した場合のみ）:
+## 同一セッション対照
+- Notepad: preedit ☐ 出る ☐ 出ない / DLL ロード ☐ 済 ☐ 未
+- Microsoft Store 検索欄: preedit ☐ 出る ☐ 出ない / DLL ロード ☐ 済 ☐ 未
+  - 対象プロセス名 / PID / パッケージ名:
 
-## 最後に成功した境界 / 最初に失敗した境界
+## 結論
+☐ カテゴリ修正で Store 入力が成立した
+☐ 依然として未成立（未署名要件 DEV-255 が残るため本セッションでは確定不可）
+☐ その他（観測内容を記載）
 
-## 修正対象の owner 領域と必要な spec 変更
+## preedit が出た場合のみ
+- 候補が返るか: ☐ 返る ☐ 返らない（→ DEV-555 へ記録）
 
 ## 診断中に緩和策を入れていないことの確認
 ☐ AppContainer ACE 追加なし ☐ peer 検証無効化なし ☐ token 露出なし
@@ -282,14 +261,29 @@ Linear への記録様式を揃えておく。
 
 ### DEV-673
 
+課題本文のチェック項目をすべて含める。
+項目を落とすと、実施しても Done 判定の証跡が残らない。
+
 ```md
-## 受け入れ条件ごとの結果
+## 検証手順ごとの結果
+- 未署名であること、SmartScreen / UAC の「不明な発行元」表示: ☐ 確認 ☐ 未確認
 - MSI インストール（クリーン Win11、VC++ Redist 未導入）: ☐ Pass ☐ Fail
-- IME がプロファイルに出現: ☐ Pass ☐ Fail
-- 打鍵から変換、確定: ☐ Pass ☐ Fail
-- AppContainer 入力（Microsoft Store 検索欄）: ☐ Pass ☐ Fail ☐ 未達（DEV-765 判定 __ を参照）
-- アンインストールで TIP 登録が解除: ☐ Pass ☐ Fail
-  - 確認: HKLM CLSID / CTF\TIP / インストール先ディレクトリの残骸
+- `%ProgramFiles%\azooKey` の配置物: ☐ TIP ☐ Inference Host ☐ MSVC runtime 3 DLL ☐ ライセンス
+  - 課題本文以後に増えた配置物: ☐ azookey_settings.exe ☐ self-contained ランタイム ☐ スタートメニュー ショートカット
+- 言語・入力設定に azooKey の IME プロファイルが出現: ☐ Pass ☐ Fail
+- メモ帳で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail
+- `azookey_tsf_tip.dll` が ALL APPLICATION PACKAGES (S-1-15-2-1) の RX を継承: ☐ Pass ☐ Fail
+- AppContainer アプリ（Microsoft Store / Edge）で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail ☐ 未達
+  - 未達の場合の理由: ☐ 未署名要件（DEV-255）待ち ☐ その他
+  - Store 入力の再検証結果は上のブロックを参照
+- サインアウト / 再起動後もプロファイルと入力が成立: ☐ Pass ☐ Fail ☐ 未実施
+- アンインストールで COM / TSF 登録と `%ProgramFiles%\azooKey` の配置物が残らない: ☐ Pass ☐ Fail
+  - 確認: HKLM CLSID / CTF\TIP（native / WOW6432Node）/ インストール先ディレクトリ
+
+## 記録
+- MSI の取得元 / バージョン / SHA-256:
+- `msiexec /L*V` ログの保存先:
+- Windows build / 使用アプリ / 再起動の有無:
 ```
 
 ### DEV-225
@@ -343,8 +337,11 @@ Linear への記録様式を揃えておく。
 - 手順と結果:
 
 ## DEV-758 同時更新
-- user_dict.json: Host 稼働中に `userdict add --offline` を実行し編集が消失しない: ☐ Pass ☐ Fail
-- settings.json: 第二の書き手 = ☐ テキストエディタで代用 ☐ 未実施（設定アプリ未実装 / DEV-674）
+- user_dict.json: pipe 経由 `userdict add` と `--offline` を重ねて実行し、両方の entry が残る: ☐ Pass ☐ Fail
+  - 試行回数 / 毎回両方が残ったか:
+  - `userdict list` の出力（entry 数のみ。読みと表層は記録しない）:
+- settings.json: 第二の書き手 = ☐ テキストエディタで代用 ☐ 未実施
+  - 設定アプリは同梱済みだが保存 UI が無く、保存機能の実装課題は未起票
 - 修正前の消失再現を試みたか: ☐ 試みた（結果: ____） ☐ 試みていない
 
 ## DEV-759 コンソール終了時の flush
@@ -358,8 +355,9 @@ Linear への記録様式を揃えておく。
 `verify-bootstrap.ps1 -Json` が `overallStatus=fail` を返した場合は、打鍵系のゲートへ進まない。
 前段の失敗を後段の判定に持ち込むと、どのゲートの結果も信用できなくなる。
 
-Part A で判定 1 から 3 のいずれかが確定した時点で、DEV-765 はそこで終える。
-残りの段を消化しても、修正 owner の特定という完了条件には何も足さない。
+Part A で Store 入力が依然として成立しない場合、境界確認は DLL のロード有無までで止める。
+未署名要件が独立に効いている可能性を、未署名の成果物だけで切り分けることはできない。
+それ以上の probe を重ねても、DEV-255 の署名ルートが決まるまで結論は変わらない。
 
 セッション終了時に次を行う。
 

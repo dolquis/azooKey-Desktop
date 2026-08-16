@@ -52,8 +52,10 @@ VM へ持ち込んでから登録で弾かれると、checkpoint 復元からや
   -ModelPath C:\path\to\zenz-v3.gguf
 ```
 
-`-ModelPath` は必須である。
-DEV-225 の A5 判定は実 GGUF での推論結果を見るものであり、GGUF なしでは `SimpleConverter` の静的辞書しか動かず判定が成立しない。
+`-ModelPath` は本セッションでは省略できない。
+スクリプト側は既定 `""` で省略を許し、モデルと bench を含まないパッケージを正常に生成するため、指定漏れはエラーにならない。
+一方 DEV-225 の A5 判定は実 GGUF での推論結果を見るものであり、GGUF なしでは `SimpleConverter` の静的辞書しか動かず判定が成立しない。
+上の preflight 確認と同じく、VM へ持ち込む前に指定したかどうかを見る。
 
 **compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連だけで、`compat_test.exe` と target JSON を含まない。
 DEV-716 は zip だけでは実行できないので、別に固めて持ち込む。
@@ -94,13 +96,28 @@ TIP DLL の ACL は `ALL APPLICATION PACKAGES` と `ALL RESTRICTED APPLICATION P
 `260b665` 以降の main から作った MSI をクリーン VM へ入れ、同一ログオンセッションで Notepad と Microsoft Store の検索欄を対照する。
 比較対象を同じセッションに揃えないと、プロファイル選択の取り違えと区別できない。
 
-まず、カテゴリが実際に登録されたことをインストール後に確認する。
+カテゴリ登録そのものは、ホスト側の COM smoke test が 4 カテゴリすべて（`GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` を含む）を検証している。
+MSI を作る前にこれを通しておき、VM 側で GUID を目視照合しない。
+`GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` の値は Microsoft のドキュメントにもリポジトリにも書かれておらず（`msctf.h` はシンボル宣言のみ）、レジストリに並ぶ GUID 文字列のどれが該当するかを実行者が判断できないためである。
+
+```powershell
+ctest --preset windows-release -L tsf-com
+```
+
+VM 側では、MSI が TIP 登録を行ったこと自体を確認する。
+native と `WOW6432Node` の両方を見るのは、`compat-test/msix_install_uninstall.ps1` の残骸判定と揃えるためである。
 
 ```powershell
 $clsid = '{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}'
-Get-ChildItem "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$clsid" -Recurse |
-  Select-Object -ExpandProperty Name
+foreach ($root in 'HKLM:\Software\Microsoft\CTF\TIP',
+                  'HKLM:\Software\WOW6432Node\Microsoft\CTF\TIP') {
+  $key = Join-Path $root $clsid
+  '{0}: {1}' -f $key, (Test-Path $key)
+}
 ```
+
+`Category` 配下の GUID 一覧は、証跡としてそのまま保存する。
+分類は行わず、判定はこの後の打鍵結果で行う。
 
 次に Notepad と Store の検索欄で `ni` を打鍵し、preedit の有無を記録する。
 
@@ -125,18 +142,28 @@ ACL の観測だけで結論を出さない。
 2026-08-14 の実走では ACL が正常でありながら DLL は未ロードだったため、ACL の状態は原因候補にはなっても判定の根拠にはならない。
 
 対象プロセスの package SID と integrity は、判定の前提となるので記録しておく。
+プロセスの列挙は非昇格でも `Path` 付きで取れる。
 
 ```powershell
 Get-Process |
   Where-Object { $_.Path -like '*\WindowsApps\*' } |
   Select-Object Id, ProcessName, Path
-whoami /groups            # 対象プロセス側で実行できる場合
+```
+
+package SID と integrity は、対象プロセスのトークンを外から読む必要がある。
+`whoami /groups` は自プロセスのトークンしか表示せず、Store のプロセス内で実行する手段が無いので使えない。
+Process Explorer の Security タブか、Process Monitor のプロセス詳細から採る。
+どちらも使えない場合は、パッケージ名（2026-08-14 の実走では `Microsoft.WindowsStore_…_8wekyb3d8bbwe`）とプロセス名を記録して代える。
+
+pipe ハンドルの有無を見る場合は、`handle` がカーネルドライバをロードするため**管理者 PowerShell** で実行する。
+非昇格のまま実行すると、ここで採取が失敗する。
+
+```powershell
 & $handleExe -a -p <PID> | Select-String 'pipe|azookey'
 ```
 
 `$handleExe` と `$procmonExe` は、診断プレイブック「ツールの準備」の解決方法で得る。
 Sysinternals の実行ファイル名は配布形式によって 64-bit suffix の有無が異なるため、パスを決め打ちしない。
-package SID を対象プロセスの token から直接採れない場合は、Store アプリのパッケージ名（2026-08-14 の実走では `Microsoft.WindowsStore_…_8wekyb3d8bbwe`）とプロセス名を記録して代える。
 
 診断が終わるまで AppContainer 向けの ACE 追加、peer 検証の無効化、token の露出を行わない。
 先に緩和すると、どの境界が失敗していたのかを確定できなくなる。
@@ -152,6 +179,11 @@ MSI 配布形態そのものを対象とするゲートを置く。
 開発登録（`register-dev.ps1`）を先に走らせると、開発登録が付ける AppContainer ACL が MSI 側の継承 ACL と混ざり、ACL 由来かどうかの判別ができなくなる。
 このレーンでは開発登録を一切行わない。
 
+開始状態は **vc_redist 未導入のクリーン checkpoint** とする。
+`hyper-v-vm-verification-plan.md` §2 のベースライン checkpoint は「クリーン + Redistributable + 設定」で vc_redist を導入済みであり、これとは別物である。
+DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がインストールできること（CRT の app-local 同梱が効いていること）を見るものなので、ベースライン checkpoint から始めると前提が崩れたまま Pass になり、証跡の意味が失われる。
+どちらの checkpoint を使ったかは、検証メモの環境ブロックの checkpoint 名で残す。
+
 1. DEV-673 のチェックリストを頭から実施する。
 2. AppContainer 入力の項目に来たら Part A の再検証を行い、その結果を当該項目へ記録する。
 
@@ -162,7 +194,7 @@ DEV-673 の課題本文は設定アプリ同梱（PR #272）より前に書か�
 `%ProgramFiles%\azooKey` の配置確認では、課題本文が挙げる TIP、Inference Host、MSVC runtime 3 DLL、ライセンスファイルに加えて、`azookey_settings.exe` と self-contained ランタイム、スタートメニューのショートカットが増えている。
 設定アプリ側の起動とアンインストールは DEV-767 で個別に検証済みなので、本ゲートでは配置物として存在することの確認にとどめ、差分があった事実を検証メモへ書く。
 
-レーン 1 が終わったら、必ずベースライン checkpoint へ復元する。
+レーン 1 が終わったら、レーン 2 の開始状態（plan §2 のベースライン checkpoint）へ復元する。
 MSI の machine-wide 登録を残したままレーン 2 の開発登録を重ねると、どちらの登録が効いているか判別できなくなる。
 
 ### レーン 2：開発登録と検証 zip を入れた状態
@@ -193,14 +225,21 @@ DEV-758 は `user_dict.json` への同時更新を作る。
 単発の `--offline` を 1 回実行するだけでは足りない。
 書き込みが時間的に重ならないため、ロックが無くても通ってしまい、ロックの効きを確認したことにならない。
 
+`Start-Job` へ相対パスを渡さない。
+Windows 11 の既定シェルである Windows PowerShell 5.1 は、子ランスペースを呼び出し元のカレントディレクトリではなくユーザーのホームで開始するため、`.\azookey_inference_host.exe` は解決に失敗する。
+両ジョブが即座に失敗しても `list` は何も変わらないので、「両方残った」と読み違える。
+
 ```powershell
-$exe = '.\azookey_inference_host.exe'
+$exe = (Resolve-Path .\azookey_inference_host.exe).Path
 $viaPipe = Start-Job { & $using:exe userdict add --reading ぱいぷ --surface パイプ }
 $viaFile = Start-Job { & $using:exe userdict add --reading ふぁいる --surface ファイル --offline }
 Wait-Job $viaPipe, $viaFile | Out-Null
 Receive-Job $viaPipe, $viaFile
 & $exe userdict list --format json
 ```
+
+`Receive-Job` の出力を必ず読み、両ジョブが実際にコマンドを実行したことを先に確かめる。
+これを飛ばすと、失敗を成功と取り違える。
 
 判定は、`list` の出力に両方の entry が残っていることである。
 片方だけが残る場合は、後勝ちの上書きで編集が消失している。
@@ -231,7 +270,8 @@ Linear への記録様式を揃えておく。
 - OS build (`winver`):
 - source: branch / commit:
 - 成果物: ☐ MSI (ファイル名 / SHA-256) ☐ 検証 zip (`manifest.json` の commit)
-- VM: Hyper-V / セッション種別 = 基本セッション / checkpoint 名:
+- VM: Hyper-V / セッション種別 = 基本セッション
+- 開始 checkpoint 名: ☐ vc_redist 未導入のクリーン（レーン 1） ☐ plan §2 のベースライン（レーン 2）/ 名前:
 - バックエンド: ☐ CPU (SimpleConverter) ☐ zenz GGUF (ファイル名)
 ```
 
@@ -311,7 +351,7 @@ Linear への記録様式を揃えておく。
 - C-005 を複数モニター構成で確認: ☐ Pass ☐ Fail
 - C-006 を 150% DPI モニターで確認: ☐ Pass ☐ Fail
 - C-010 で supervisor 稼働下の Host kill、DegradedSimple 継続、pipe 復帰: ☐ Pass ☐ Fail
-- C-011 前後で Notepad テキスト、CF_HDROP、delayed-rendering clipboard が保持: ☐ Pass ☐ Fail
+- runner 実行の前後でクリップボードが全 format 保持される（遅延レンダリングを含む）: ☐ Pass ☐ Fail
 - 実行前から開いていた Notepad を操作、終了しない: ☐ Pass ☐ Fail
 - 複数 tab のうち runner 作成 tab だけに入力し、既存 tab と未保存文書を変更しない: ☐ Pass ☐ Fail
 - failure artifact に入力本文と候補本文の画面ピクセルが残らない: ☐ Pass ☐ Fail

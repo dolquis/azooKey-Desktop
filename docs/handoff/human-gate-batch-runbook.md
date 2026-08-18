@@ -91,7 +91,15 @@ TIP DLL の ACL は `ALL APPLICATION PACKAGES` と `ALL RESTRICTED APPLICATION P
 ロード前ゲートとして 2 つの独立した要件違反が挙がっている。
 
 - 互換カテゴリ `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` の未登録（DEV-766）。PR #271 で登録済みになった。
-- TIP DLL が未署名であること。Microsoft の IME 要件は第三者 IME への署名を求めている。署名ルートを所有する課題は現在なく（DEV-255 は Canceled）、扱いの確定は DEV-783 で追跡している。
+- TIP DLL が未署名であること。Microsoft の IME 要件は第三者 IME への署名を求めている（[Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors#requirements-for-imes)）。
+
+> **スコープ更新（2026-08 / DEV-783）**: UWP / Microsoft Store / AppContainer アプリでの入力は
+> **MVP の対象外**と確定した（`docs/sideload-packaging-spec.md` §0.1）。MVP では署名を調達せず、
+> 入力対象を Win32 デスクトップアプリに限定する。
+> これにより **DEV-673 の AppContainer 入力項目は「未達」ではなく「スコープ外」**として扱う。
+>
+> 本 Part は必須ゲートではなくなった。実施するのは、カテゴリ修正の効果を確認したい場合と、
+> v1.0 以降の署名判断に使う証跡を採りたい場合に限る。時間が足りなければ Part B を優先してよい。
 
 したがって本セッションで行うのは切り分けではなく、カテゴリ修正後の再検証である。
 切り分け階梯を再走しても、既に判定済みの結論を作り直すだけになる。
@@ -129,13 +137,37 @@ foreach ($root in 'HKLM:\Software\Microsoft\CTF\TIP',
 ### 結果の扱い
 
 **Store で preedit が出る場合**：カテゴリ欠落が原因だったことが実機で裏付けられる。
-DEV-673 の AppContainer 入力項目を Pass として記録する。
+DEV-673 の「Microsoft Store / UWP 入力」項目を、スコープ外ではなく Pass として記録する。
 DEV-555（pipe DACL の AppContainer capability ACE）は、preedit が出たうえで候補が来ないかどうかという別の問いなので、そこまで確認して結果を DEV-555 へ書く。
 
-**Store で preedit が出ない場合**：未署名要件が独立に効いている可能性が残る。
+**Store で preedit が出ない場合**：署名要件が独立に効いている可能性が残る。
 これは診断で解けない種類の残件で、署名済み成果物を用意するまで確定できない。
-署名ルートは所有課題が不在で（DEV-255 は Canceled、確定は DEV-783）、本セッションでは解消できない。
-DEV-673 の当該項目は未達として記録し、DEV-783 を参照して次へ進む。
+DEV-673 の当該項目は **スコープ外**（§0.1 / DEV-783）として記録し、次へ進む。
+未達として記録しない。MVP の受け入れ条件ではないためである。
+
+このとき、v1.0 以降の署名判断に効く証跡を 2 つだけ採っておくと、後の判断が安くなる。
+署名を調達しても Code Integrity Guard により入力が成立しない可能性があり、それを先に否定できれば
+署名への投資判断が確実になるためである。
+
+第一に、対象プロセスの署名ポリシーを読む。
+`MicrosoftSignedOnly` または `StoreSignedOnly` が立っていれば、第三者証明書では解決しない。
+
+これは `GetProcessMitigationPolicy(ProcessSignaturePolicy)` が返す値だが、PowerShell から素で呼べないため Process Explorer で代替する。
+上の `Get-Process` で特定した Store のホストプロセスを選び、プロセスの Properties から Security タブを開いて Signature 系のポリシー表示を読む。
+値をスクリーンショットで残し、Notepad の同じ画面も対照として撮る。
+
+第二に、`CodeIntegrity - Operational` ログを Store へフォーカスした時刻で切って保存する。
+CIG 由来の user-mode DLL ブロックはイベント 3033 / 3065 に出る。
+
+```powershell
+Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 200 |
+  Where-Object { $_.Id -in 3033, 3065 } |
+  Select-Object TimeCreated, Id, Message
+```
+
+該当イベントが出ていれば原因は CIG 側であり、署名調達では解決しない。
+出ていなければ IME 署名要件そのものが効いている可能性が上がる。
+いずれの結果も DEV-783 へ記録する。
 
 境界をもう一段だけ詰めるなら、DLL がロードされたかどうかまでを確認して止める。
 
@@ -191,11 +223,11 @@ DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がイ
 どちらの checkpoint を使ったかは、検証メモの環境ブロックの checkpoint 名で残す。
 
 1. DEV-673 のチェックリストを頭から実施する。
-2. AppContainer 入力の項目に来たら Part A の再検証を行い、その結果を当該項目へ記録する。
+2. Microsoft Store / UWP 入力の項目は **スコープ外**として記録し、素通りする（§0.1 / DEV-783）。Part A を実施した場合のみ、その結果を併記する。
 
-Store 入力が未成立のままでも、DEV-673 の残りの項目は判定できる。
-未署名要件は本セッションで解消できないため、当該項目の未達は想定内の結果であり、他の項目の判定を止める理由にはしない。
-扱いの確定は DEV-783 が持つ。
+Store 入力の可否は DEV-673 の合否を左右しない。
+MVP が入力先として保証するのは Win32 デスクトップアプリであり、Store / UWP は v1.0 以降へ送ることが確定しているためである。
+Edge は AppContainer で動くが 2026-08-14 の実測で入力が成立しており、こちらは通常どおり Pass / Fail で判定する。
 
 DEV-673 の課題本文は設定アプリ同梱（PR #272）より前に書かれている。
 `%ProgramFiles%\azooKey` の配置確認では、課題本文が挙げる TIP、Inference Host、MSVC runtime 3 DLL、ライセンスファイルに加えて、`azookey_settings.exe` と self-contained ランタイム、スタートメニューのショートカットが増えている。
@@ -301,8 +333,13 @@ Linear への記録様式を揃えておく。
 
 ## 結論
 ☐ カテゴリ修正で Store 入力が成立した
-☐ 依然として未成立（未署名要件が残るため本セッションでは確定不可。DEV-783 参照）
+☐ 依然として未成立（署名要件が残る。MVP スコープ外のため確定不要。§0.1 / DEV-783 参照）
 ☐ その他（観測内容を記載）
+
+## 未成立だった場合の CIG 証跡（v1.0 以降の署名判断用。任意）
+- 対象プロセスの署名ポリシー: ☐ MicrosoftSignedOnly ☐ StoreSignedOnly ☐ どちらも未設定 ☐ 未取得
+- CodeIntegrity/Operational の 3033 / 3065: ☐ 該当あり ☐ 該当なし ☐ 未取得
+- 判定: ☐ CIG 由来（署名調達では解決しない）☐ IME 署名要件由来の可能性 ☐ 未確定
 
 ## preedit が出た場合のみ
 - 候補が返るか: ☐ 返る ☐ 返らない（→ DEV-555 へ記録）
@@ -325,9 +362,10 @@ Linear への記録様式を揃えておく。
 - 言語・入力設定に azooKey の IME プロファイルが出現: ☐ Pass ☐ Fail
 - メモ帳で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail
 - `azookey_tsf_tip.dll` が ALL APPLICATION PACKAGES (S-1-15-2-1) の RX を継承: ☐ Pass ☐ Fail
-- AppContainer アプリ（Microsoft Store / Edge）で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail ☐ 未達
-  - 未達の場合の理由: ☐ 未署名要件（DEV-783 で扱いを確定）☐ その他
-  - Store 入力の再検証結果は上のブロックを参照
+- Edge（AppContainer）で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail
+- Microsoft Store / UWP で打鍵 → 変換 → 確定: ☐ Pass ☐ **スコープ外**（既定。§0.1 / DEV-783）
+  - MVP の受け入れ条件ではない。未達として記録しない
+  - 再検証を実施した場合の結果は上のブロックを参照
 - サインアウト / 再起動後もプロファイルと入力が成立: ☐ Pass ☐ Fail ☐ 未実施
 - アンインストールで COM / TSF 登録と `%ProgramFiles%\azooKey` の配置物が残らない: ☐ Pass ☐ Fail
   - 確認: HKLM CLSID / CTF\TIP（native / WOW6432Node）/ インストール先ディレクトリ
@@ -427,9 +465,9 @@ Linear への記録様式を揃えておく。
 `verify-bootstrap.ps1 -Json` が `overallStatus=fail` を返した場合は、打鍵系のゲートへ進まない。
 前段の失敗を後段の判定に持ち込むと、どのゲートの結果も信用できなくなる。
 
-Part A で Store 入力が依然として成立しない場合、境界確認は DLL のロード有無までで止める。
-未署名要件が独立に効いている可能性を、未署名の成果物だけで切り分けることはできない。
-それ以上の probe を重ねても、DEV-783 で署名の扱いが決まるまで結論は変わらない。
+Part A で Store 入力が依然として成立しない場合、境界確認は DLL のロード有無と、Part A に挙げた CIG 証跡 2 点までで止める。
+署名要件が独立に効いている可能性を、未署名の成果物だけで切り分けることはできない。
+それ以上の probe を重ねても、署名済み成果物を用意するまで結論は変わらない。
 
 セッション終了時に次を行う。
 

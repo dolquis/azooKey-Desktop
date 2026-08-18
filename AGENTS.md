@@ -150,7 +150,10 @@ In Progress へ入っていないか（spec-first 分業の担保）。spec-firs
 未完了のままアーカイブされた課題（アーカイブ衛生）と、
 前提の失効した保留（保留理由とした仕組みが別課題の着地で用意済みになっていないか）、
 `agent:codex-impl` の実装課題に `gate:human-required` が同居していないか
-（実装と人間ゲートの分離。§7.1.1 に該当するなら分割する）を点検する。
+（実装と人間ゲートの分離。§7.1.1 に該当するなら分割する）、
+親課題の Done 遷移に巻き込まれた一括 Done（同一時間帯に複数が無記録で Done 化、
+「未完了のまま維持する」と明記した直後の Done 化、`startedAt` が null のまま
+Done になった `type:implementation` 課題）を点検する。
 以上の repo 固有項目の詳細は `docs/linear-conventions.md` §13 Project Delta。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。

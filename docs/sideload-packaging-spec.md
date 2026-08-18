@@ -992,7 +992,9 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 設定アプリは `%LOCALAPPDATA%\azooKey\config\settings.json` を更新した後、Host に
 payload 空の `UpdateConfig` メッセージを送信して再読込を促す。設定オブジェクトは
-IPC schema に二重定義しない。
+IPC schema に二重定義しない。`settings.json` を直接書くのは設定アプリだけで、Host は
+読み取り専用である（writer 責務の正典は
+`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 
 ```
 UpdateConfigRequest:
@@ -1221,7 +1223,9 @@ schema 自体は superset のまま変えない。
 
 - **「ユーザー辞書を編集」** → ユーザー辞書（M9、`user_dict.json`）の追加 / 削除を行う CLI / デバッグ
   probe を起動する（D-09 と接続。`AddUserWord` / `RemoveUserWord` 経路は roadmap M9）。v1.0 は専用 GUI を
-  作らず、最小の編集導線のみを提供する。フル辞書管理 GUI は v1.x（M30）。
+  作らず、最小の編集導線のみを提供する。フル辞書管理 GUI は v1.x（M30）。設定アプリは v1.0 / v1.x とも
+  `user_dict.json` を直接開かず、CLI probe または Host への IPC を経由する
+  （`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 - **「ログ出力先を開く」** → `%LOCALAPPDATA%\azooKey\logs\`（§3.4）を Explorer で開く。
 
 #### v1.0 / v1.x 境界表

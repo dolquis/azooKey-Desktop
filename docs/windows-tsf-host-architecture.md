@@ -163,6 +163,29 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 
+## 共有ユーザーデータの writer 責務
+
+`%LOCALAPPDATA%\azooKey\` 配下の共有ファイルは、直接書き込めるプロセスをファイルごとに固定する。
+`FileLock.h` の排他は、書き手全員がロックを取ることを前提にしているため、誰が writer になり得るかを決めていないと、取り忘れた側の上書きが last-writer-wins で通ってしまう。
+
+| ファイル | 直接書き込むプロセス | 読み取り | 排他 |
+|---|---|---|---|
+| `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` / `import` / `export`） | Host | `AcquireExclusiveFileLockForPath` + atomic replace |
+| `settings.json` | 設定アプリのみ | Host（`SettingsStore::Load` / `Reload`） | 書き手側で同ロック + atomic replace（DEV-794） |
+| `learning.tsv` | Host のみ | Host | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
+
+- 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
+  この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json` の直接 writer にはならない。
+- したがって `user_dict.json` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
+  プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
+- `settings.json` の writer は設定アプリだけで、Host は読み取り専用である（`SettingsStore` に保存 API を置かない）。
+  write-write の競合は起こらず、設定アプリの書き込みと Host の `Reload` が重なった場合は atomic replace により置換前後どちらかの完全な内容が読まれる。
+  保存 UI を M11 で実装するときに、`WriteTextFileAtomically` と `AcquireExclusiveFileLockForPath` の両方を通す（DEV-794）。
+- `learning.tsv` の writer は Host だけで、supervisor が per-user mutex で Host を単一化する（上記「Host の起動と再起動」）。
+  ファイル単位ロックを取らないため、同一ユーザーで Host を二重に起動した状態は writer が二つある状態であり、想定しない。
+- named mutex 名は正規化した絶対パスから導出する（`FileLock.h` の `MutexNameForPath`）。
+  二つの writer が排他されるのは同じ実パスを解決したときに限るため、`--user-dict` で別パスを与えた検証はロックの確認にならない。
+
 ## 実装ルール
 
 ### スレッドモデル

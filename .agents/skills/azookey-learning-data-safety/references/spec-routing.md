@@ -5,8 +5,8 @@
 | 変更領域 | 最初に読む仕様 | 主な実装 | 優先テスト |
 |---|---|---|---|
 | 学習データの保存、読込、破損復旧 | `docs/learning-data-management-spec.md`, `docs/user-learning-enhancement-spec.md` | `learning/src/LearningStore.cpp` | `learning_tests` |
-| atomic write と file lock | `docs/learning-data-management-spec.md` | `learning/src/AtomicFile.h`, `learning/include/azookey/learning/FileLock.h` | `atomic_file_tests` |
-| ユーザー辞書、import/export、CLI | `docs/learning-data-management-spec.md` | `learning/src/UserDictionary.cpp`, `inference-host/src/UserDictCli.cpp` | `user_dictionary_tests`, `host_userdict_cli_tests` |
+| atomic write と file lock | `docs/learning-data-management-spec.md`, `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」 | `learning/src/AtomicFile.h`, `learning/include/azookey/learning/FileLock.h` | `atomic_file_tests` |
+| ユーザー辞書、import/export、CLI | `docs/learning-data-management-spec.md`, `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」 | `learning/src/UserDictionary.cpp`, `inference-host/src/UserDictCli.cpp` | `user_dictionary_tests`, `host_userdict_cli_tests` |
 | reranker と候補順位への学習反映 | `docs/user-learning-enhancement-spec.md` | `learning/src/Reranker.cpp` | `reranker_tests` |
 | secure input、ログ、外部送信 | `docs/privacy-and-secure-input-spec.md` | `inference-host/src/InferenceEngine.cpp`, `inference-host/src/Dispatcher.cpp` | `host_engine_tests`, `host_dispatcher_tests` |
 | 自動単語学習 | `docs/auto-word-registration-spec.md` | CodeGraph で現在の入口を確認する | 関連する learning / host テスト |
@@ -24,6 +24,7 @@ Windows の実ビルドと CTest はリポジトリ指定の Windows Headless CM
 ## レビュー観点
 
 - 保存先がユーザー単位であり、repo 配下やパッケージ資産へ入らないか。
+- 共有ファイルの直接 writer を増やしていないか（`user_dict.json` は Host と `userdict` CLI、`settings.json` は設定アプリのみ）。
 - temp file、rename/replace、flush、lock の順序が失敗時にも一貫するか。
 - 破損、旧形式、部分書込みでデータを黙って失わないか。
 - import/export が入力検証、重複、サイズ上限、文字コード、途中失敗を扱うか。

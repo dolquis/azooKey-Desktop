@@ -93,10 +93,12 @@ TIP DLL の ACL は `ALL APPLICATION PACKAGES` と `ALL RESTRICTED APPLICATION P
 - 互換カテゴリ `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` の未登録（DEV-766）。PR #271 で登録済みになった。
 - TIP DLL が未署名であること。Microsoft の IME 要件は第三者 IME への署名を求めている（[Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors#requirements-for-imes)）。
 
-> **スコープ更新（2026-08 / DEV-783）**: UWP / Microsoft Store / AppContainer アプリでの入力は
-> **MVP の対象外**と確定した（`docs/sideload-packaging-spec.md` §0.1）。MVP では署名を調達せず、
-> 入力対象を Win32 デスクトップアプリに限定する。
-> これにより **DEV-673 の AppContainer 入力項目は「未達」ではなく「スコープ外」**として扱う。
+> **スコープ更新（2026-08 / DEV-783）**: **パッケージ化された UWP / Microsoft Store アプリ**での入力は
+> **MVP の対象外**と確定した（`docs/sideload-packaging-spec.md` §0.1）。MVP が入力先として保証するのは
+> Win32 デスクトップアプリに限る。除外の境界は AppContainer を使うかどうかではなく、パッケージ化された
+> UWP / Store アプリかどうかで引くため、**Edge は対象内**である。
+> なお署名は入力対象と独立した v1.0 のリリースゲートとして残り、MVP の未署名 MSI は評価配布に限定する。
+> これにより **DEV-673 の Store / UWP 入力項目は「未達」ではなく「スコープ外」**として扱う。
 >
 > 本 Part は必須ゲートではなくなった。実施するのは、カテゴリ修正の効果を確認したい場合と、
 > v1.0 以降の署名判断に使う証跡を採りたい場合に限る。時間が足りなければ Part B を優先してよい。
@@ -159,15 +161,46 @@ DEV-673 の当該項目は **スコープ外**（§0.1 / DEV-783）として記�
 第二に、`CodeIntegrity - Operational` ログを Store へフォーカスした時刻で切って保存する。
 CIG 由来の user-mode DLL ブロックはイベント 3033 / 3065 に出る。
 
+打鍵の直前に基準時刻を控え、それ以降だけを取る。直近 N 件から絞る取り方だと、打鍵と無関係な過去のイベントを拾う。
+
 ```powershell
-Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' -MaxEvents 200 |
-  Where-Object { $_.Id -in 3033, 3065 } |
-  Select-Object TimeCreated, Id, Message
+$since = Get-Date   # Store へフォーカスして打鍵する直前に実行する
+# … ここで Store の検索欄にフォーカスし、`ni` を打鍵する …
+
+Get-WinEvent -FilterHashtable @{
+  LogName   = 'Microsoft-Windows-CodeIntegrity/Operational'
+  Id        = 3033, 3065
+  StartTime = $since
+} -ErrorAction SilentlyContinue |
+  Select-Object TimeCreated, Id, ActivityId, Message |
+  Format-List
 ```
 
-該当イベントが出ていれば原因は CIG 側であり、署名調達では解決しない。
-出ていなければ IME 署名要件そのものが効いている可能性が上がる。
-いずれの結果も DEV-783 へ記録する。
+イベント ID が出たことだけを根拠に CIG と判定しない。
+3033 は失効した署名や App Control のブロックでも出る。3065 は user-mode の DLL 署名ポリシー違反全般を表す汎用イベントであり、どちらも CIG に固有ではない。
+
+CIG 由来と記録してよいのは、1 件のイベントで次の 3 つが揃った場合に限る。
+
+1. **時刻**が、控えた基準時刻の直後にあること。
+2. **プロセスパス**が、`Get-Process` で特定した Store のホストプロセスのパスと一致すること。
+3. **ブロックされたファイルパス**が `azookey_tsf_tip.dll` を指すこと。
+
+`Message` にプロセスパスやファイルパスが出ない場合は、同じ `ActivityId` を持つイベント（署名情報を載せる 3089 など）を併せて取り、対応関係を確かめる。
+
+```powershell
+Get-WinEvent -FilterHashtable @{
+  LogName   = 'Microsoft-Windows-CodeIntegrity/Operational'
+  StartTime = $since
+} -ErrorAction SilentlyContinue |
+  Where-Object { $_.ActivityId -eq '<相関させたい ActivityId>' } |
+  Select-Object TimeCreated, Id, Message |
+  Format-List
+```
+
+3 つが揃った場合にのみ、原因は CIG 側であり署名調達では解決しない、と記録する。
+1 つでも欠ける場合は **未確定**とし、CIG と断定しない。
+該当イベントが 1 件も出ない場合も未確定であり、IME 署名要件が効いていると結論づけない。
+いずれの結果も DEV-783 へ記録する。未確定としたときは、どの条件が欠けたかを併記する。
 
 境界をもう一段だけ詰めるなら、DLL がロードされたかどうかまでを確認して止める。
 
@@ -227,7 +260,8 @@ DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がイ
 
 Store 入力の可否は DEV-673 の合否を左右しない。
 MVP が入力先として保証するのは Win32 デスクトップアプリであり、Store / UWP は v1.0 以降へ送ることが確定しているためである。
-Edge は AppContainer で動くが 2026-08-14 の実測で入力が成立しており、こちらは通常どおり Pass / Fail で判定する。
+除外の境界は AppContainer を使うかどうかではなく、パッケージ化された UWP / Store アプリかどうかで引く（§0.1）。
+Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスであり対象内である。通常どおり Pass / Fail で判定する。
 
 DEV-673 の課題本文は設定アプリ同梱（PR #272）より前に書かれている。
 `%ProgramFiles%\azooKey` の配置確認では、課題本文が挙げる TIP、Inference Host、MSVC runtime 3 DLL、ライセンスファイルに加えて、`azookey_settings.exe` と self-contained ランタイム、スタートメニューのショートカットが増えている。
@@ -319,7 +353,7 @@ Linear への記録様式を揃えておく。
 - バックエンド: ☐ CPU (SimpleConverter) ☐ zenz GGUF (ファイル名)
 ```
 
-### Store 入力の再検証（DEV-673 の AppContainer 項目へ記録）
+### Store 入力の再検証（DEV-673 の Store / UWP 項目へ記録）
 
 ```md
 ## カテゴリ登録
@@ -339,7 +373,8 @@ Linear への記録様式を揃えておく。
 ## 未成立だった場合の CIG 証跡（v1.0 以降の署名判断用。任意）
 - 対象プロセスの署名ポリシー: ☐ MicrosoftSignedOnly ☐ StoreSignedOnly ☐ どちらも未設定 ☐ 未取得
 - CodeIntegrity/Operational の 3033 / 3065: ☐ 該当あり ☐ 該当なし ☐ 未取得
-- 判定: ☐ CIG 由来（署名調達では解決しない）☐ IME 署名要件由来の可能性 ☐ 未確定
+- 相関（該当ありの場合のみ）: ☐ 時刻が基準時刻の直後 ☐ プロセスパスが一致 ☐ ファイルパスが `azookey_tsf_tip.dll`
+- 判定: ☐ CIG 由来（上記 3 つがすべて揃った場合のみ。署名調達では解決しない）☐ 未確定（欠けた条件を記載）
 
 ## preedit が出た場合のみ
 - 候補が返るか: ☐ 返る ☐ 返らない（→ DEV-555 へ記録）
@@ -362,7 +397,7 @@ Linear への記録様式を揃えておく。
 - 言語・入力設定に azooKey の IME プロファイルが出現: ☐ Pass ☐ Fail
 - メモ帳で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail
 - `azookey_tsf_tip.dll` が ALL APPLICATION PACKAGES (S-1-15-2-1) の RX を継承: ☐ Pass ☐ Fail
-- Edge（AppContainer）で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail
+- Edge（Win32 プロセスが入力欄をホストするため対象内）で打鍵 → 変換 → 確定: ☐ Pass ☐ Fail
 - Microsoft Store / UWP で打鍵 → 変換 → 確定: ☐ Pass ☐ **スコープ外**（既定。§0.1 / DEV-783）
   - MVP の受け入れ条件ではない。未達として記録しない
   - 再検証を実施した場合の結果は上のブロックを参照

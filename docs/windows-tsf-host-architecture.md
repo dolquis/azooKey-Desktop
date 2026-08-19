@@ -163,6 +163,33 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 
+## 共有ユーザーデータの writer 責務
+
+`%LOCALAPPDATA%\azooKey\` 配下の共有ファイルは、直接書き込めるプロセスをファイルごとに固定する。
+`FileLock.h` の排他は、書き手全員がロックを取ることを前提にしているため、誰が writer になり得るかを決めていないと、取り忘れた側の上書きが last-writer-wins で通ってしまう。
+writer には内容を書き換える操作だけでなく、対象ファイルを rename / 削除する操作も含める。
+
+| ファイル | 直接書き込むプロセス | 読み取り | 排他 |
+|---|---|---|---|
+| `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`） | `AcquireExclusiveFileLockForPath` + atomic replace |
+| `settings.json` | 設定アプリ（保存。未実装、DEV-794）、Host（不正時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | 未確立（下記） |
+| `learning.tsv` | Host のみ | Host | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
+
+- 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
+  この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json` の直接 writer にはならない。
+- したがって `user_dict.json` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
+  プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
+- `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json` 自体は変更しない。`user_dict.json` に対する writer 操作は `--offline` の add / remove と `import` である。
+- `settings.json` を保存するのは設定アプリだけだが、Host も mutator である。`SettingsStore::Load` / `Reload` は読み取り失敗または JSON 不正時に `QuarantineInvalidFile` を呼び、`settings.json` を `.invalid*` へ rename する（`inference-host/src/SettingsStore.cpp`）。
+  Host が内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置くと、Host はその新しいファイルを quarantine し、保存した設定が消える。
+  したがって「設定アプリだけが書くので競合しない」とは扱わない。保存と load から quarantine までを同一パスのロック下で直列化するか、quarantine を rename しない設計へ変えるまで、この競合は残る（GitHub Issue #278。Linear 復旧後に課題化する）。
+- 設定アプリの保存経路が満たす契約は次の 2 点である。一時ファイルへ書いて flush してから原子的に置換し、途中経過を `settings.json` として残さないこと。`user_dict.json` と同じく、正規化した絶対パスから導出した named mutex で read-modify-write 全体を排他すること。
+  既存の `WriteTextFileAtomically` は `learning/src/AtomicFile.h` の private header であり、`settings-app/azookey_settings.vcxproj` は `azookey_learning` への ProjectReference も include path も持たない。helper を公開ヘッダーへ移すか設定アプリ側に同等の実装を置くかは DEV-794 の設計に含める（関数名ではなく上記の挙動が契約である）。
+- `learning.tsv` の writer は Host だけで、supervisor が per-user mutex で Host を単一化する（上記「Host の起動と再起動」）。
+  ファイル単位ロックを取らないため、同一ユーザーで Host を二重に起動した状態は writer が二つある状態であり、想定しない。
+- named mutex 名は正規化した絶対パスから導出する（`FileLock.h` の `MutexNameForPath`）。
+  二つの writer が排他されるのは同じ実パスを解決したときに限るため、`--user-dict` で別パスを与えた検証はロックの確認にならない。
+
 ## 実装ルール
 
 ### スレッドモデル

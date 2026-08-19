@@ -51,6 +51,11 @@
 
 ## 4. IPC
 
+設定アプリは学習データファイルを直接開かず、一覧、忘却、エクスポート、インポートを
+すべて Host への IPC として発行する（writer 責務の正典は
+`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+`user_dict.json` を含む本節の対象ストアはすべてこの経路に従う。
+
 `MessageType` enum 末尾に append（M40 互換性）。新規 type 名は
 `ListLearningEntries` / `ForgetLearningEntry` / `ExportLearningData` /
 `ImportLearningData`。エンベロープは `ipc/src/Messages.cpp` の既存

@@ -25,8 +25,48 @@
 - 先行実装（fkunn1326/azooKey-Windows = Inno Setup EXE、CorvusSKK = WiX/Inno EXE）も MSIX では
   なく MSI/EXE インストーラで配布している。
 
+上表の「自前コード署名」欄は**インストーラの署名要否**を示す。第三者 IME として TIP バイナリに
+求められる署名要件は別の境界であり、§0.1 で扱う。
+
 以降の §1（MSIX）・§2（署名）は上表に従って読むこと。**§1 は MS Store 用 MSIX の構成**、
 **§2 は延期されたスタンドアロン MSIX サイドロード向け**であり、MVP の直接配布は §4（WiX/MSI）が正典となる。
+
+### 0.1 MVP の入力対象スコープと署名ゲート（DEV-783 で確定 / 2026-08）
+
+MVP が入力先として保証するのは **Win32 デスクトップアプリに限る**。
+**パッケージ化された UWP / Microsoft Store アプリ**での入力は MVP の対象外とし、v1.0 以降へ送る。
+
+除外の境界は「AppContainer を使うか」ではなく「パッケージ化された UWP / Store アプリか」で引く。
+Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスであり、2026-08-14 の実機検証でも入力が成立している。
+したがって Edge は対象内とする。
+
+#### 署名は入力対象と独立した v1.0 リリースゲート
+
+第三者 IME へのデジタル署名要件は第三者 IME 全般を対象とし、Win32 向けの例外は文書化されていない。
+[Input Method Editors (IME)](https://learn.microsoft.com/windows/apps/develop/input/input-method-editors#requirements-for-imes) は要件を満たさない第三者 IME を "blocked from running" と定めており、この記述に配布形態や入力先による限定はない。
+
+2026-08-14 の実機検証では、未署名 MSI でも Notepad と Edge で打鍵から確定まで成立した。
+ただしこれは 1 環境で観測された挙動であり、**未署名の Win32 配布がサポートされることの根拠にはならない**。
+観測された動作と、文書化されたサポート条件は別のものである。
+
+したがって次の 2 点を分けて扱う。
+
+* **署名は入力対象にかかわらず v1.0 のリリースゲートとして残す。** Store / UWP を対象外にしたことは、署名義務を免除する理由にならない。署名ルートの選定は §2.0 が正典。
+* **MVP の未署名 MSI は評価配布に限定する。** 開発とゲート検証のための配布であり、一般利用者向けの正式リリースとしては扱わない。配布時は未署名であることと評価目的であることを明示する。
+
+#### Store / UWP を MVP 対象外とする理由
+
+署名を調達しても Store 入力が成立するとは限らないためである。
+
+プロセスが Code Integrity Guard を有効化している場合、`PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY` の `MicrosoftSignedOnly` または `StoreSignedOnly` により、Microsoft 署名でも Store 署名でもない DLL は memory manager が `STATUS_INVALID_IMAGE_HASH` を返して map 自体を拒否する（[Code integrity guard](https://learn.microsoft.com/defender-endpoint/exploit-protection-reference#code-integrity-guard)）。
+この経路が働いているなら、OV 証明書を取得しても Store 入力は成立しない。
+DEV-765 のスパイクは Store 検索欄での失敗段階を「DLL 未ロード」と判定したが、それが IME 署名要件によるものか CIG によるものかは未切り分けであり、切り分けは同課題の追加 probe に残っている。
+
+つまり Store 入力は、署名を調達しても解決しない可能性を抱えたままである。
+MVP の期間内に決着させる見込みが立たないため、入力対象から外して v1.0 以降のトラックへ送る。
+
+この決定により、DEV-673 の受け入れ条件からパッケージ化された UWP / Microsoft Store アプリでの入力成立を外す。
+TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確認（§1.7）は、将来の対応に備えた回帰防止として残す。
 
 ## 1. MSIX パッケージング（MS Store 向け・M28）
 
@@ -643,8 +683,13 @@ Microsoft Learn の署名要件は第三者 IME 全般を対象とする。本�
 
 配布パッケージの署名要否（§0 / §2）と TIP バイナリに対する第三者 IME の署名要件は
 別の境界である。Microsoft Store が提出 MSIX を再署名することだけを、TIP DLL の署名要件を
-満たした証拠として扱わない。署名経路は DEV-255、最終成果物での Windows アプリ実機確認は
-DEV-673 の Human Gate で検証する。
+満たした証拠として扱わない。
+
+> **MVP でのスコープ（§0.1 / DEV-783）**: **パッケージ化された UWP / Microsoft Store アプリ**での
+> 入力は MVP の対象外であり、要件 1・2 を扱う本節は v1.0 以降で当該対応に着手するときの前提整理として読む。
+> 要件 3（署名）はこのスコープ判断と独立しており、入力対象にかかわらず **v1.0 のリリースゲートとして残る**
+> （§0.1）。MVP の未署名 MSI は評価配布に限定する。署名ルートの選定は §2.0 が正典
+> （所有課題だった DEV-255 は Canceled、スコープ判断は DEV-783 で確定済み）。
 
 **AppContainer DLL ACL**: UWP / Microsoft Store / AppContainer 実行のアプリで TIP を
 有効化するには、TIP DLL に `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）への
@@ -702,8 +747,10 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
   グループポリシーで同特権を外した環境ではビルドツリーの祖先に traverse が別途必要になる。
   この前提は実機ゲートで確認する。
 
-実機検証は DEV-271（開発用登録経路でのサンドボックスアプリ入力成立）と DEV-673（MSI
-インストール先の継承 ACL）で行う。MSIX 側の制限は DEV-101（com4:ComServer ACL 制限）と
+実機検証は DEV-673（MSI インストール先の継承 ACL）で行う。DEV-271（開発用登録経路での
+サンドボックスアプリ入力成立）は DEV-673 に統合され Duplicate としてクローズ済み。
+パッケージ化された UWP / Store アプリでの入力成立そのものは §0.1 により MVP の受け入れ条件から
+外れており、DEV-673 で確認するのは継承 ACL までとなる。MSIX 側の制限は DEV-101（com4:ComServer ACL 制限）と
 連動する。
 
 **常駐起動（参考）**: Host / launcher のログオン常駐を Run キーでなく **Task Scheduler
@@ -714,11 +761,17 @@ app execution alias の利用を優先する。
 
 ## 2. EV/OV コード署名（M29）
 
-> **スコープ注記（§0 配布方針）**: 本節（自前コード署名）が必要なのは **スタンドアロン MSIX
-> サイドロード**のみであり、これは **当面延期**（DEV-255）。MVP の MSI 直接配布は未署名（§4 /
-> DEV-415）、MS Store の MSIX は Microsoft が再署名するため、いずれも本節の自前署名を要しない。
-> 本節は延期チャネル着手時の正典として残す。なお §2.2 の PFX 前提は CA/Browser Forum の
-> HSM 必須化（2023-06-01）で陳腐化しており、改訂を DEV-414 で追跡する。
+> **スコープ注記（§0 配布方針 / §0.1）**: 本節（自前コード署名）が要るのは 2 つの文脈である。
+> 1 つは**スタンドアロン MSIX サイドロード**で、これは §0 の配布方針により当面延期する。
+> もう 1 つは**第三者 IME としての TIP バイナリ署名**（§1.7 の要件 3）で、こちらは入力対象の
+> スコープと独立に **v1.0 のリリースゲート**として残る（§0.1 / DEV-783）。
+> MVP 期間の MSI 直接配布は未署名（§4 / DEV-415）だが、これは評価配布としての扱いであり、
+> 署名義務が免除されたことを意味しない。MS Store の MSIX は Microsoft が再署名するため、
+> Store チャネルに限れば本節の自前署名を要しない。
+>
+> 所有課題だった DEV-255 は Canceled であり、本節を再開するときは新規に課題を立てる。
+> なお §2.2 の PFX 前提は CA/Browser Forum の HSM 必須化（2023-06-01）で陳腐化しており、
+> 改訂を DEV-414 で追跡する。
 
 ### 2.0 署名経路の選定
 
@@ -736,9 +789,20 @@ app execution alias の利用を優先する。
 Signing）は地域制限で不可（個人 = 米/加のみ）。reputation building 許容のため EV（経路 C）は
 不採用。新規 OV は HSM 必須化で PFX を入手できないため、CI 署名を保てる **経路 B（Azure Key
 Vault + AzureSignTool）/ B'（CA クラウド署名: SSL.com eSigner / DigiCert KeyLocker 等）** を
-採用する。ただし本署名はスタンドアロン MSIX サイドロード専用であり、§0 のとおり当面延期する
-（MVP の MSI / MS Store の MSIX はいずれも自前署名不要）。証明書調達・申請手順は人間判断が
-必須のため、`gate:human-required` 課題（[Linear DEV-255](https://linear.app/dolquis/issue/DEV-255)）で扱う。
+採用する。ただし本署名はスタンドアロン MSIX サイドロードと Windows アプリ入力対応の 2 用途に
+限られ、§0 / §0.1 のとおりいずれも MVP の対象外である
+（MVP の MSI / MS Store の MSIX はいずれも自前署名不要）。
+
+上記の経路判定（2026-06 時点）は調達ルートの比較として有効だが、費用対効果の前提は
+2026-08 に更新されている。EV 証明書の「即時信頼」は 2024 年に廃止され、EV も OV と同じ
+reputation building になった（[Code signing options](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options)）。
+経路 C の EV を選ぶ理由は SmartScreen 対策としては残っていない。
+また §0.1 のとおり、署名を調達しても Code Integrity Guard により Store 入力が成立しない
+可能性がある。着手前にその切り分け（DEV-765）を済ませる。
+
+証明書調達・申請手順は所在地と組織化状況に依存する人間判断であり、再開時に
+`gate:human-required` 課題を新規に立てて扱う（従来の DEV-255 は Canceled、スコープ判断は
+[Linear DEV-783](https://linear.app/dolquis/issue/DEV-783) で確定済み）。
 
 ### 2.1 signtool 引数
 

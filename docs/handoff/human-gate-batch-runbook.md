@@ -257,12 +257,13 @@ Receive-Job $viaPipe, $viaFile
 片方だけが残る場合は、後勝ちの上書きで編集が消失している。
 重なりを確実にするため、同じ操作を数回繰り返して毎回両方が残ることを見る。
 
-`settings.json` 側は事情が異なる。
-DEV-790 の設計判断により、`settings.json` を直接書くのは設定アプリだけと定めた（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
-Host は `SettingsStore` で読むだけで書かないため、二つのプロセスが同じファイルを書く状況そのものが設計上生じない。
-したがって `settings.json` の同時更新はこのゲートの対象外であり、テキストエディタを第二の書き手に代用してもロックの確認にはならない。
-設定アプリ側の保存経路（atomic write と共有ファイルロック）は DEV-794 で実装し、その自動テストで担保する。
-このゲートで確認するのは `user_dict.json` の同時更新だけである。
+`settings.json` 側は、対象から外すのではなく実施を保留する。
+保存するのは設定アプリだけだが、Host も不正な `settings.json` を `.invalid*` へ rename するため mutator であり、読み取りから rename までの間に設定アプリが置いた正常なファイルを消しうる（GitHub Issue #278、`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+競合そのものは存在するので、「設定アプリのみが書くから安全」を理由にゲートを閉じない。
+一方で現行の設定アプリには保存 UI が無く、第二の書き手を実機で用意できない。
+テキストエディタで代用しても、その書き込みは共有ファイルロックを取らないため、ロックの効きを確認したことにはならない。
+したがって `settings.json` の同時更新は、保存経路（DEV-794）と quarantine の競合解消（Issue #278）が入るまで未実施として記録する。
+このセッションで確認できるのは `user_dict.json` の同時更新までである。
 
 ### このセッションの対象外
 
@@ -412,7 +413,7 @@ Linear への記録様式を揃えておく。
 - user_dict.json: pipe 経由 `userdict add` と `--offline` を重ねて実行し、両方の entry が残る: ☐ Pass ☐ Fail
   - 試行回数 / 毎回両方が残ったか:
   - `userdict list` の出力（entry 数のみ。読みと表層は記録しない）:
-- settings.json: 対象外（DEV-790 で writer を設定アプリ単独と確定。保存経路の実装とテストは DEV-794）
+- settings.json: ☐ 未実施（第二の書き手が無いため保留。前提は DEV-794 の保存経路と Issue #278 の quarantine 競合解消）
 - 修正前の消失再現を試みたか: ☐ 試みた（結果: ____） ☐ 試みていない
 
 ## DEV-759 コンソール終了時の flush

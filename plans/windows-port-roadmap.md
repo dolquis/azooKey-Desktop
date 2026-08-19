@@ -240,8 +240,9 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     スコープとする（M30 はこの最小層の上に UI を本格化する）。
   - 共有ユーザーデータの writer 責務は
     `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」を正典とする。
-    設定アプリは `settings.json` の唯一の writer として atomic write と共有ファイルロックを通し、
-    `user_dict.json` は直接開かず CLI probe または Host への IPC を経由する。
+    設定アプリの保存経路は atomic replace と共有ファイルロックの契約を満たし、`user_dict.json` は
+    直接開かず CLI probe または Host への IPC を経由する。Host 側の quarantine rename との
+    競合解消は保存 UI の前提となる。
   - MSIX または WiX ベースの MSI
   - ユーザースコープ自動登録、アンインストール時の自動解除
 - **受け入れ条件**:

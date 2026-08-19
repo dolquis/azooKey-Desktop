@@ -992,9 +992,9 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 
 設定アプリは `%LOCALAPPDATA%\azooKey\config\settings.json` を更新した後、Host に
 payload 空の `UpdateConfig` メッセージを送信して再読込を促す。設定オブジェクトは
-IPC schema に二重定義しない。`settings.json` を直接書くのは設定アプリだけで、Host は
-読み取り専用である（writer 責務の正典は
-`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+IPC schema に二重定義しない。`settings.json` を保存するのは設定アプリだけだが、Host も
+不正な `settings.json` を `.invalid*` へ rename するため mutator である（writer 責務と
+この競合の正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 
 ```
 UpdateConfigRequest:

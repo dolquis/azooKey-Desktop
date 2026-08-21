@@ -157,9 +157,10 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
   未指定キーを schema default にフォールバックして提供する。
 - `settings.json` はファイル正典とし、設定アプリからの IPC `UpdateConfig` は payload 空の
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
-- 破損した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
-  `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。ファイル競合・
-  同時書き込みの排他は `FileLock.h` の共有ファイル単位ロック方針と整合させる。
+- parse に失敗した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
+  `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。隔離の条件と、設定アプリの
+  保存との排他は下記「共有ユーザーデータの writer 責務」を正典とする（`FileLock.h` の共有ファイル
+  単位ロックで read から rename までを直列化する）。
 - 候補ウィンドウ位置更新（`update_pos` / `OnLayoutChange` 連動）の再入対策として、先行実装の
   「更新中は layout change を一定時間抑止する状態機械」を設計参照にできる（抑止値は環境依存）。
 
@@ -172,7 +173,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
 | `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`） | `AcquireExclusiveFileLockForPath` + atomic replace |
-| `settings.json` | 設定アプリ（保存。未実装、DEV-794）、Host（不正時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | 未確立（下記） |
+| `settings.json` | 設定アプリ（保存。未実装、DEV-794）、Host（parse 失敗時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（Host 側。下記） |
 | `learning.tsv` | Host のみ | Host | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
 
 - 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
@@ -180,9 +181,18 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - したがって `user_dict.json` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
 - `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json` 自体は変更しない。`user_dict.json` に対する writer 操作は `--offline` の add / remove と `import` である。
-- `settings.json` を保存するのは設定アプリだけだが、Host も mutator である。`SettingsStore::Load` / `Reload` は読み取り失敗または JSON 不正時に `QuarantineInvalidFile` を呼び、`settings.json` を `.invalid*` へ rename する（`inference-host/src/SettingsStore.cpp`）。
-  Host が内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置くと、Host はその新しいファイルを quarantine し、保存した設定が消える。
-  したがって「設定アプリだけが書くので競合しない」とは扱わない。保存と load から quarantine までを同一パスのロック下で直列化するか、quarantine を rename しない設計へ変えるまで、この競合は残る（DEV-806。GitHub Issue #278 はその mirror）。
+- `settings.json` を保存するのは設定アプリだけだが、Host も mutator である。`SettingsStore::Load` / `Reload` は JSON の parse に失敗したとき `settings.json` を `.invalid*` へ rename する（`inference-host/src/SettingsStore.cpp`）。
+  ロックを取らずに読むと、Host が破損した内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置いたとき、Host はその新しいファイルを quarantine し、保存した設定が消える。
+  したがって「設定アプリだけが書くので競合しない」とは扱わない。この競合は、保存と Host の read から quarantine までを同一の named mutex 下で直列化し、quarantine の条件を内容の不正だけに絞ることで解消する（DEV-806 で確定。実装は DEV-808、GitHub Issue #278 はその mirror）。契約は次の 4 点である。
+
+  1. **単一ロック区間** — Host は `settings.json` の存在確認・読み取り・parse・quarantine rename を、`AcquireExclusiveFileLockForPath`（`FileLock.h`）で取得した一つのロック保持区間の中で行う。設定アプリの保存が取るのと同じ named mutex（`MutexNameForPath` が正規化した絶対パスから導出）である。
+     読み取りと rename を別々のロック区間に分けたり、ロック外で読んでから再検証して rename する（double-check）形は採らない。ロック保持区間は数 KB の JSON の読み取りと parse で閉じるため、保存側が待たされる時間は問題にならない。
+  2. **quarantine は parse 失敗時だけ** — ファイルを開けなかった・読み取りに失敗したときは rename しない。
+     open の失敗は破損を意味しない（他プロセスの共有違反、ウイルス対策ソフトやバックアップによる一時的なロックでも起きる）。読み取り失敗で rename すると、破損していない `settings.json` を退避してしまう。
+  3. **ロックを取れなければ rename しない** — timeout までにロックを取得できなかったときは quarantine を行わない。ロックを持たない rename は禁止する。
+  4. **fallback の意味** — quarantine の有無によらず、`Load`（Host 起動時）は既定値で継続し、`Reload`（`UpdateConfig`）は error を返して現在の runtime 設定を維持する。「維持する」は `SettingsStore::settings()` の値を含む（`EngineConfig` だけではない）。
+- quarantine を廃して破損した `settings.json` をそのまま残す案は採らない。rename には、次回の保存で正常なファイルが復帰し、破損した内容は `.invalid*` として残り、ユーザーが手で消さなくてよいという利点がある。
+  残す案でも `azookey_diag` の D-012 は不正を検出できるが、破損したファイルが残る限り Host は既定値で動き続け、復帰には設定アプリの保存 UI（未実装）か手動削除が要る。上の 4 点は、この利点を保ったまま、正常なファイルを消す 2 つの経路（読み取り失敗での rename と、read から rename までの競合）だけを塞ぐ。
 - 設定アプリの保存経路が満たす契約は次の 2 点である。一時ファイルへ書いて flush してから原子的に置換し、途中経過を `settings.json` として残さないこと。`user_dict.json` と同じく、正規化した絶対パスから導出した named mutex で read-modify-write 全体を排他すること。
   既存の `WriteTextFileAtomically` は `learning/src/AtomicFile.h` の private header であり、`settings-app/azookey_settings.vcxproj` は `azookey_learning` への ProjectReference も include path も持たない。helper を公開ヘッダーへ移すか設定アプリ側に同等の実装を置くかは DEV-794 の設計に含める（関数名ではなく上記の挙動が契約である）。
 - `learning.tsv` の writer は Host だけで、supervisor が per-user mutex で Host を単一化する（上記「Host の起動と再起動」）。

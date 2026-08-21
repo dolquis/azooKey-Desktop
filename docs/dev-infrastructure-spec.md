@@ -455,6 +455,10 @@ Host は SIGINT / SIGTERM と Windows の CTRL+C / CTRL+Break / コンソール�
 flush してから終了する。
 Windows のコンソール終了ハンドラは停止要求だけを通知し、通常の終了処理が
 完了するまで OS の制限時間内で待機する。
+コンソールウィンドウの終了（`CTRL_CLOSE_EVENT`）は OS の制限時間が有限で
+ConPTY では更に短くなりうるため、この経路の最終 flush は best-effort である。
+保証する終了経路と失われうる最大量の正典は
+`docs/learning-data-management-spec.md` §11 に置く。
 
 ### 5.5 本マイルストーンの範囲と将来課題
 

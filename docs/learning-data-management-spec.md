@@ -25,6 +25,8 @@
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\auto_words.tsv` | M36-A | M34 で `.enc` |
 | `user_learning.db` | `%LOCALAPPDATA%\azooKey\data\user_learning.db`（将来 SQLite 化） | M54 | M34 で wrapper |
 
+プロセス終了時にこれらのデータが保存される範囲は §11 で定める。
+
 ## 3. UI（設定アプリ 学習データタブ）
 
 ```
@@ -340,3 +342,92 @@ configure offline ガードに違反しないことを CI で確認する。
 - 暗号化済みデータは他ユーザーで復号できない（DPAPI ユーザースコープ）
 - M55 typo / M36-A auto_words の学習データも対象に含む（実装済みなら）
 - M46 secure 中は export / import が blocking される
+
+## 11. プロセス終了時の flush 保証境界
+
+学習データは確定のたびに同期保存せず、未保存の観測が一定件数に達するか一定時間が経過した時点でまとめて書き出す（`docs/user-learning-enhancement-spec.md` §3.1.1）。
+そのため、プロセスが終了する瞬間には未保存の観測が残りうる。
+本節は、どの終了経路まで保存を保証するか、保証しない経路で最悪どれだけ失われるかを定める。
+本節の対象は Host が書く `learning.tsv` であり、`user_dict.json` のように操作のたびに保存するストアは含まない。
+
+### 11.1 終了経路の区分
+
+終了経路を次の 3 区分で扱う。
+
+- **保証**：未保存の観測を書き出してから終了する。失われる観測は 0 件。
+- **best-effort**：終了処理へ到達できれば書き出すが、OS が与える猶予に依存するため成立を約束しない。失われる量は §11.3 の上限に従う。
+- **対象外**：終了処理が走らない。失われる量は §11.3 の上限に従う。
+
+| 終了経路 | 区分 |
+|---|---|
+| `FlushLearningStore()` の明示呼び出し、モデルロード境界 | 保証 |
+| `SIGINT` / `SIGTERM`、`CTRL_C_EVENT` / `CTRL_BREAK_EVENT` | 保証 |
+| stdio モードで stdin が EOF になったときの正常終了 | 保証 |
+| pipe モードで停止要求を検出したあとの正常終了 | 保証 |
+| コンソールウィンドウの `×`（`CTRL_CLOSE_EVENT`） | best-effort |
+| ログオフとシステムシャットダウン（`CTRL_LOGOFF_EVENT` / `CTRL_SHUTDOWN_EVENT`、およびセッション終了に伴うプロセス終了） | 対象外 |
+| `TerminateProcess` 相当（タスクマネージャの強制終了、外部からの kill、クラッシュ） | 対象外 |
+
+`CTRL_CLOSE_EVENT` を保証に含めないのは、ハンドラへ与えられる猶予が有限で、しかも環境に依存するためである。
+ConPTY を使う Windows Terminal では classic `conhost.exe` より短くなりうる。
+Windows 11 build 22621 の実測では、classic `conhost.exe` の `×` で最終 flush が成立し、Windows Terminal の `×` では成立しなかった（DEV-791）。
+`SetConsoleCtrlHandler` によるハンドラ登録は DEV-178 で入っており、登録漏れではない。
+保証をこの経路の成立に賭けない。
+
+ログオフとシャットダウンを対象外に置くのは、現行の実装がこれらのイベントで停止処理を行わないためである。
+`inference-host/src/main.cpp` のコンソール制御ハンドラは `CTRL_C_EVENT` と `CTRL_BREAK_EVENT` と `CTRL_CLOSE_EVENT` だけを処理し、残りを既定ハンドラへ渡す。
+
+製品構成の終了も対象外に入る。
+`scripts/host-supervisor.ps1` は Host をウィンドウ非表示で起動し、停止要求を受けても稼働中の Host を落とさずに監督だけをやめる。
+Host はログオンセッションの終了とともに終了する。
+したがって製品構成で学習データを守るのは、終了時の書き出しではなく §11.3 の損失上限である。
+
+### 11.2 失う量を減らす手段
+
+現行の debounce では、静止した状態から 1 件だけ確定して即座に終了すると、その 1 件が丸ごと失われる。
+終了経路をどれだけ網羅しても対象外の経路は救えないため、保存の契機を前へ倒す。
+
+**burst 先頭の同期 flush** を導入する。
+
+- 契機：未保存の観測が 0 件の状態で新しい観測を受けたとき。
+- 条件：直近の保存成功から `learning_flush_interval_sec` 秒以上が経過していること。
+- 動作：その観測を含めて `Save()` を同期実行し、`CommitObservation` の応答を返す前に永続化を終える。
+- レート制限：直近の保存から `learning_flush_interval_sec` 秒未満なら即時保存せず、既存の件数契機と時間契機に委ねる。
+
+レート制限を置かないと、保存のたびに未保存件数が 0 へ戻るため次の 1 件が常に burst 先頭になり、確定ごとの同期保存に退化する。
+これは DEV-11 が性能上の理由で退けた形である。
+レート制限のもとでは追加の書き込みは 1 つの burst につき最大 1 回であり、時間契機が同じ burst に対して行う書き込みと同じ回数に収まる。
+
+判定には既存の `learning_flush_interval_sec` を使い、新しい設定キーを追加しない。
+経過時間の判定は直近の保存成功時刻を steady clock で保持して行う。
+起動直後は保存の実績が無いため、最初の観測を即時保存の対象とする。
+DEV-791 が再現させた「Host を起動し 1 件だけ確定して閉じる」操作は、この規定によって終了経路によらず保存される。
+
+`Save()` が失敗したときの扱いは変えない。
+dirty と未保存件数を保ったまま stderr へ error を出し、次の観測または明示 flush で再試行する（`docs/user-learning-enhancement-spec.md` §3.1.1）。
+即時保存の失敗を理由に `CommitObservation` を失敗させない。
+
+### 11.3 失われうる最大量
+
+`EngineConfig` の既定値は `learning_flush_every_n = 8` と `learning_flush_interval_sec = 5` である。
+どちらも `settings.json` には露出せず、ビルド時の既定値として持つ。
+
+この既定値のもとで、best-effort の経路と対象外の経路で失われうる観測は次の範囲に収まる。
+
+- 件数：直近の保存以降に受けた観測のうち最大 7 件（8 件目で件数契機の保存が走るため）。
+- 時間：未保存の観測列の先頭から最大 5 秒ぶん。
+- 静止状態から再開した最初の 1 件は、§11.2 の即時保存により失われない。
+
+ユーザーへ見せる表現としては「保存を保証しない終了では、直前 5 秒以内に連続して行った確定のうち最大 7 件ぶんの学習が失われうる」と書ける。
+
+### 11.4 DEV-791 が実装する範囲
+
+- §11.2 の burst 先頭の同期 flush を `InferenceEngine::NoteLearningMutationLocked` に実装する。設定キーは追加しない。
+- `CTRL_CLOSE_EVENT` の経路は現行のまま best-effort として維持する。ConPTY で最終 flush が成立しないことは、本節のもとでは欠陥ではない。原因切り分けのための診断ログ追加は任意とする。
+- `host_engine_tests` に次の 2 件を追加する。静止後の 1 件が明示 flush なしで永続化されること。`learning_flush_interval_sec` 未満の間隔で続く観測が即時保存を繰り返さないこと。
+
+### 11.5 実機検証との対応
+
+DEV-759（人間ゲート）の検証項目は本節の区分に従う。
+保証の経路は保持を必須とし、best-effort と対象外の経路は §11.3 の上限内であれば未達として記録しない。
+チェックリストの本体は `docs/handoff/human-gate-batch-runbook.md` に置く。

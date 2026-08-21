@@ -75,6 +75,15 @@ Interval flush は次の observation を待たずに background timer で実行�
 境界で呼ぶ。`Save()` 失敗時は Host stderr に error ログを出し、dirty と
 未保存件数を維持して次回 observation または明示 flush で再試行する。
 
+上記 2 つの契機に加えて、未保存 observation が 0 件の状態で新しい
+observation を受け、かつ直近の保存成功から `learning_flush_interval_sec`
+秒以上が経過している場合は、その observation を含めて同期 `Save()` を実行する
+（burst 先頭の同期 flush）。直近の保存から同秒数未満の場合は即時保存せず、
+件数契機と時間契機に委ねる。このレート制限により、追加の書き込みは 1 つの
+burst につき最大 1 回に収まり、確定ごとの同期保存にはならない。狙いは、
+保存を保証しない終了経路で失われる量を抑えることであり、区分と損失上限の正典は
+`docs/learning-data-management-spec.md` §11 に置く。
+
 ### 3.2 TSV スキーマ（拡張）
 
 ```

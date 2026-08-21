@@ -391,7 +391,7 @@ v1.0 リリースに向けたリスクと対応:
 | 署名証明書の調達 (M29) | MVP リリースには影響しない（配布方針転換、spec §0） | MVP は未署名 MSI（DEV-415）、MS Store は MS 再署名（DEV-416）で有料証明書不要。証明書はスタンドアロン MSIX サイドロード着手時のみ（経路 B 確定済み・延期、DEV-255） |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
-| 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。即時の `nlohmann-json` 全置換はせず段階対応（同 §6, §11.2） |
+| 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。外部ライブラリ移行は v1.0 の範囲では行わず自前パーサを維持する（同 §6.2, §11.2.1。再評価条件も同節） |
 | 学習永続化の書き込み増幅・無制限増大 | 確定時レイテンシ増加、SSD 書き込み増、学習 TSV 肥大化 | `LearningStore` は N 件/T 秒デバウンス、明示 flush、保存失敗ログ、上限件数 + weight 閾値 GC で抑制。burst 先頭の同期 flush は T 秒のレート制限を課し、追加書き込みを 1 burst あたり最大 1 回に抑える（`docs/learning-data-management-spec.md` §11.2） |
 | 品質 KPI 未設定 | 改善効果を定量評価できない | レイテンシ・復旧時間・CI 成功率・永続化破損率の目標値を設定（同 §10） |
 
@@ -506,7 +506,9 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
 
 **Phase 4 検証**: クリーン Win11 VM での MSI インストール → IME 選択 → 入力
 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に未署名
-MSI が自動公開。
+MSI が自動公開。入力対象は **Win32 デスクトップアプリかつ x64 プロセス**に限る
+（パッケージ化された UWP / Store アプリと 32 bit プロセスは v1.0 対象外。定義と
+既知の制限は `docs/sideload-packaging-spec.md` §0.1）。
 
 ## Phase 5〜7 の依存関係と実行順
 

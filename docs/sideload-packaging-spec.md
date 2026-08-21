@@ -40,6 +40,33 @@ MVP が入力先として保証するのは **Win32 デスクトップアプリ�
 Edge は renderer のサンドボックス化に AppContainer を使うが、入力欄をホストするのは Win32 プロセスであり、2026-08-14 の実機検証でも入力が成立している。
 したがって Edge は対象内とする。
 
+#### 32 bit (x86) プロセスを MVP 対象外とする理由（DEV-160 で確定 / 2026-08）
+
+入力対象にはもう一つ、対象プロセスの bitness という境界がある。
+Win32 か UWP かという上記の軸とは独立しており、MVP が保証するのは **Win32 デスクトップアプリであり、かつ x64 プロセス**である。
+32 bit (x86) プロセスでの入力は v1.0 の対象外とし、既知の制限として扱う。
+
+TSF と ctfmon は対象プロセスの bitness に一致する TIP をロードする。
+本リポジトリのビルドは x64 のみであり、`tsf-tip/src/DllMain.cpp` の `DllRegisterServer` が書くのも 64 bit ビューの `HKLM\Software\Classes\CLSID` と、そこから `ITfInputProcessorProfiles` が登録する `CTF\TIP` だけである。
+`scripts/register.ps1` が呼ぶのも 64 bit の `regsvr32` である。
+したがって 32 bit プロセスからは TIP が解決されず、azooKey を選べない。
+古い Office や一部のレガシーアプリ、組み込みアプリがこれに該当する。
+
+64 bit アプリ（Notepad、Chrome、VS Code、最新 Office、設定アプリ）は影響を受けない。
+DEV-32 の実機検証動線も 64 bit アプリで成立するため、この制限は v1.0 のリリースゲートを塞がない。
+`docs/handoff/dev32-verification-checklist.md` の B7 が 32 bit アプリを「既知(DEV-160)」として扱うのも、この境界に沿う。
+
+将来 32 bit 対応を入れる場合に必要になる作業は次のとおりである。
+
+* `tsf-tip/` に x86 ターゲットを追加し、x86 TIP DLL をビルドする
+* 32 bit の `regsvr32` から `DllRegisterServer` を呼び、レジストリの 32 bit ビュー（`WOW6432Node`）へ CLSID と `CTF\TIP` を登録する
+* §1.7 の `ALL APPLICATION PACKAGES` RX 付与規則を x86 DLL にも適用する（同節の付与対象は現時点で x64 TIP DLL 1 個を前提としている）
+* MSIX（§1）と WiX/MSI（§4）へ x86 成果物を同梱し、アンインストール時に 32 bit ビューの残骸も消えることを確認する
+
+再評価のトリガは 2 つある。
+実利用者から 32 bit プロセスでの入力要望が挙がること、または M27（ARM64 ビルド）で複数アーキテクチャのビルドと登録の経路が整備され、x86 追加の限界コストが下がることである。
+それまでは本節を既知の制限の正典とする。
+
 #### 署名は入力対象と独立した v1.0 リリースゲート
 
 第三者 IME へのデジタル署名要件は第三者 IME 全般を対象とし、Win32 向けの例外は文書化されていない。
@@ -716,8 +743,9 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
   fkunn1326/azooKey-Windows はビルド時とインストール時に二重付与するが、本リポジトリは
   継承 ACE が再ビルドを吸収するため二重化しない。
 * **付与対象の DLL**: 本リポジトリのビルドは x64 のみである（`CMakePresets.json`）。したがって
-  現時点の対象は x64 TIP DLL 1 個。32 bit プロセス向けに x86 TIP DLL を追加する場合は、同じ
-  規則を当該 DLL にも適用する（`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
+  現時点の対象は x64 TIP DLL 1 個。32 bit プロセスへの入力は §0.1 のとおり v1.0 の対象外であり、
+  将来 x86 TIP DLL を追加する場合は、同じ規則を当該 DLL にも適用する
+  （`-TipDllPath` を x86 成果物へ向けて登録スクリプトを再実行する）。
 * **既存 ACE の判定**: ディレクトリでは「実効 RX があるか」ではなく「`ObjectInherit` を持つ
   allow ACE があるか」を見る。非継承の明示 ACE を「設定済み」と扱うと、再ビルドで作り直された
   DLL が継承元を持たず AppContainer から読めなくなるため。

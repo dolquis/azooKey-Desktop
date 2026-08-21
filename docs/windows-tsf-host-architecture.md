@@ -182,7 +182,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json` 自体は変更しない。`user_dict.json` に対する writer 操作は `--offline` の add / remove と `import` である。
 - `settings.json` を保存するのは設定アプリだけだが、Host も mutator である。`SettingsStore::Load` / `Reload` は読み取り失敗または JSON 不正時に `QuarantineInvalidFile` を呼び、`settings.json` を `.invalid*` へ rename する（`inference-host/src/SettingsStore.cpp`）。
   Host が内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置くと、Host はその新しいファイルを quarantine し、保存した設定が消える。
-  したがって「設定アプリだけが書くので競合しない」とは扱わない。保存と load から quarantine までを同一パスのロック下で直列化するか、quarantine を rename しない設計へ変えるまで、この競合は残る（GitHub Issue #278。Linear 復旧後に課題化する）。
+  したがって「設定アプリだけが書くので競合しない」とは扱わない。保存と load から quarantine までを同一パスのロック下で直列化するか、quarantine を rename しない設計へ変えるまで、この競合は残る（DEV-806。GitHub Issue #278 はその mirror）。
 - 設定アプリの保存経路が満たす契約は次の 2 点である。一時ファイルへ書いて flush してから原子的に置換し、途中経過を `settings.json` として残さないこと。`user_dict.json` と同じく、正規化した絶対パスから導出した named mutex で read-modify-write 全体を排他すること。
   既存の `WriteTextFileAtomically` は `learning/src/AtomicFile.h` の private header であり、`settings-app/azookey_settings.vcxproj` は `azookey_learning` への ProjectReference も include path も持たない。helper を公開ヘッダーへ移すか設定アプリ側に同等の実装を置くかは DEV-794 の設計に含める（関数名ではなく上記の挙動が契約である）。
 - `learning.tsv` の writer は Host だけで、supervisor が per-user mutex で Host を単一化する（上記「Host の起動と再起動」）。

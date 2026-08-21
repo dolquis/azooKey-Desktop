@@ -588,6 +588,25 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   から user SID と logon SID の一致を確認し、不一致ならその接続を閉じる。
   client は `SECURITY_IDENTIFICATION` を指定して pipe を開き、偽 server が
   client のセキュリティコンテキストを impersonate できないようにする
+- **6.4.1c pipe DACL の対応アプリ範囲（AppContainer 非対応）** — pipe DACL
+  （`ipc/src/NamedPipeTransport.cpp`）には capability ACE
+  （`ALL APPLICATION PACKAGES` / パッケージ SID）を**意図的に含めない**。
+  AppContainer トークンは dual-principal であり、許可は user / logon SID と
+  Package / Capability SID の intersection で決まる。logon SID しか許可しない
+  現行 DACL では intersection が空になり、**AppContainer プロセスに in-proc
+  ロードされた TIP は pipe へ接続できない**（`ERROR_ACCESS_DENIED`）。preedit は
+  TIP 内ローカルで出るが、Host 経由の候補は来ない。
+  これは実装の欠落ではなく**スコープ判断**である。MVP が入力先として保証するのは
+  Win32 デスクトップアプリであり、パッケージ化された UWP / Microsoft Store アプリは
+  対象外と確定している（`docs/sideload-packaging-spec.md` §0.1 / DEV-783）。
+  除外の境界は AppContainer を使うかどうかではなくパッケージ化された UWP / Store
+  アプリかどうかで引くため、**Edge は対象内**である（renderer は AppContainer だが、
+  入力欄をホストするのは Win32 プロセス）。
+  capability ACE の設計と、それに伴う接続元の信頼境界の見直しは、Store / UWP 入力を
+  実装する v1.0 以降のトラックで扱う（DEV-555）。**MVP では追加しない。**
+  なお §6.4.4 の Handshake トークンも、格納先 `%LOCALAPPDATA%` を読めない
+  AppContainer プロセスを結果的に排除する。本項の DACL による排除とは独立した
+  別レイヤであり、どちらか一方を緩めても AppContainer 入力は成立しない
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
   TIP と設定 UI などの同時接続を許容する有界な上限
   (`kMaxPipeInstances = 32`) を設ける

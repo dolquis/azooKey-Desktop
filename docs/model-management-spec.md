@@ -97,6 +97,10 @@ DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGU
    再開する。
    `416 Range Not Satisfiable` では完成済み `.part` の SHA256 を先に確認し、不一致なら
    Range なしの GET を一度だけ再試行する。
+   呼び出し元は非ゼロの `max_bytes` を指定し、既存 `.part` と受信後の合計サイズが
+   この上限を超える場合は、次のチャンクをディスクへ書く前に取得を中断する。
+   `expected.json` の `size_bytes` が未設定の場合も、呼び出し元がポリシー上の上限を
+   指定し、無制限の取得を許可しない。
 3. 受信完了後に Windows CNG（BCrypt）で `.part` の SHA256 を計算する。
    期待値と一致した場合だけ、同じディレクトリ内で `MoveFileExW` の replace +
    write-through により確定パスへ昇格する。
@@ -106,7 +110,8 @@ DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGU
 
 本番 URL は HTTPS を用い、WinHTTP 既定の証明書検証を無効化しない。
 HTTP はループバックの自動テストに限って使用する。
-プロキシは WinHTTP の automatic proxy を使用し、resolve / connect / send / receive の
+本番 URL のプロキシは WinHTTP の automatic proxy を使用する。
+自動テスト用のループバック URL は proxy を経由せず、resolve / connect / send / receive の
 タイムアウトを呼び出しごとに設定する。
 
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
@@ -450,8 +455,8 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 - unit: `ModelCatalog` の宣言的 catalog parse / default 補完 / 不正 entry reject /
   `zenzai\` パス resolver、および一覧検出 / 検証 / 履歴更新
 - integration: ループバック HTTP モックで SHA256 不一致時に rename しないこと、
-  Range レジューム、Range 無視時の全量再取得、ネットワーク不通時の既存ファイル保持を
-  検証する
+  Range レジューム、Range 無視時と `416` 後の全量再取得、サイズ上限超過時の書き込み中断、
+  ネットワーク不通時の既存ファイル保持を検証する
 - integration: 不正 GGUF・サイズ不一致・metadata 欠落で fallback する
 - snapshot: `ListModels` / `BenchmarkModel` の JSON schema 固定
 - e2e（M50 と連携）: GUI 上でモデル切替 → 再起動 → 自動ロード

@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "azookey/host/HttpDownloader.h"
 
@@ -73,8 +74,8 @@ bool SendAll(SOCKET socket, std::string_view data) {
 
 class LocalHttpServer {
  public:
-  LocalHttpServer(std::string body, bool honor_range)
-      : body_(std::move(body)), honor_range_(honor_range) {
+  LocalHttpServer(std::string body, bool honor_range, size_t request_count = 1)
+      : body_(std::move(body)), honor_range_(honor_range), request_count_(request_count) {
     socket_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (socket_ == INVALID_SOCKET) return;
 
@@ -84,7 +85,7 @@ class LocalHttpServer {
     address.sin_port = 0;
     if (bind(socket_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) ==
             SOCKET_ERROR ||
-        listen(socket_, 1) == SOCKET_ERROR) {
+        listen(socket_, static_cast<int>(request_count_)) == SOCKET_ERROR) {
       closesocket(socket_);
       socket_ = INVALID_SOCKET;
       return;
@@ -97,7 +98,7 @@ class LocalHttpServer {
       return;
     }
     port_ = ntohs(address.sin_port);
-    worker_ = std::thread([this] { ServeOne(); });
+    worker_ = std::thread([this] { Serve(); });
   }
 
   ~LocalHttpServer() {
@@ -116,15 +117,21 @@ class LocalHttpServer {
   void Wait() {
     if (worker_.joinable()) worker_.join();
   }
-  std::string request() const {
+  std::string request(size_t index = 0) const {
     std::lock_guard lock(mutex_);
-    return request_;
+    return index < requests_.size() ? requests_[index] : std::string{};
   }
 
  private:
-  void ServeOne() {
+  void Serve() {
+    for (size_t index = 0; index < request_count_; ++index) {
+      if (!ServeOne()) break;
+    }
+  }
+
+  bool ServeOne() {
     const SOCKET client = accept(socket_, nullptr, nullptr);
-    if (client == INVALID_SOCKET) return;
+    if (client == INVALID_SOCKET) return false;
 
     std::string request;
     char buffer[1024];
@@ -135,7 +142,7 @@ class LocalHttpServer {
     }
     {
       std::lock_guard lock(mutex_);
-      request_ = request;
+      requests_.push_back(request);
     }
 
     size_t offset = 0;
@@ -175,15 +182,17 @@ class LocalHttpServer {
     SendAll(client, response);
     shutdown(client, SD_BOTH);
     closesocket(client);
+    return true;
   }
 
   std::string body_;
   bool honor_range_{false};
+  size_t request_count_{1};
   SOCKET socket_{INVALID_SOCKET};
   uint16_t port_{0};
   std::thread worker_;
   mutable std::mutex mutex_;
-  std::string request_;
+  std::vector<std::string> requests_;
 };
 
 void WriteFile(const std::filesystem::path& path, std::string_view contents) {
@@ -203,6 +212,7 @@ azookey::host::HttpDownloadRequest Request(std::wstring url,
   request.url = std::move(url);
   request.destination = destination;
   request.expected_sha256 = std::move(expected_sha256);
+  request.max_bytes = kFixture.size();
   request.connect_timeout_ms = 1000;
   request.send_timeout_ms = 1000;
   request.receive_timeout_ms = 1000;
@@ -286,6 +296,50 @@ TEST(HttpDownloaderTest, PromotesCompletePartAfterRangeNotSatisfiable) {
   EXPECT_EQ(ReadFile(destination), kFixture);
   EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
   EXPECT_NE(server.request().find("Range: bytes=21-"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, RestartsMismatchedCompletePartAfterRangeNotSatisfiable) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), true, 2);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  WriteFile(destination.wstring() + L".part", std::string(kFixture.size(), 'x'));
+
+  azookey::host::HttpDownloader downloader;
+  auto result =
+      downloader.Download(Request(server.url(), destination, std::string(kFixtureSha256)));
+
+  EXPECT_EQ(result.status, azookey::host::HttpDownloadStatus::Downloaded);
+  EXPECT_FALSE(result.resumed);
+  EXPECT_EQ(result.bytes_received, kFixture.size());
+  EXPECT_EQ(ReadFile(destination), kFixture);
+  EXPECT_FALSE(std::filesystem::exists(destination.wstring() + L".part"));
+  EXPECT_NE(server.request(0).find("Range: bytes=21-"), std::string::npos);
+  EXPECT_EQ(server.request(1).find("Range:"), std::string::npos);
+}
+
+TEST(HttpDownloaderTest, ResponseExceedingMaxBytesDoesNotGrowPartOrPromote) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  TempDirectory temp;
+  LocalHttpServer server(std::string(kFixture), true);
+  ASSERT_TRUE(server.ok());
+  const auto destination = temp.path() / "model.gguf";
+  constexpr std::string_view kExistingPart = "GGUF";
+  WriteFile(destination.wstring() + L".part", kExistingPart);
+  auto request = Request(server.url(), destination, std::string(kFixtureSha256));
+  request.max_bytes = 8;
+
+  azookey::host::HttpDownloader downloader;
+  auto result = downloader.Download(request);
+
+  EXPECT_EQ(result.status, azookey::host::HttpDownloadStatus::Failed);
+  ASSERT_TRUE(result.error.has_value());
+  EXPECT_NE(result.error->find("maximum size"), std::string::npos) << *result.error;
+  EXPECT_FALSE(std::filesystem::exists(destination));
+  EXPECT_EQ(ReadFile(destination.wstring() + L".part"), kExistingPart);
 }
 
 TEST(HttpDownloaderTest, ValidExistingFileNeedsNoNetwork) {

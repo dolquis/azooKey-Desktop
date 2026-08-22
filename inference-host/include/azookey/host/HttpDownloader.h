@@ -17,6 +17,7 @@ struct HttpDownloadRequest {
   std::wstring url;
   std::filesystem::path destination;
   std::string expected_sha256;
+  uint64_t max_bytes{0};
   uint32_t connect_timeout_ms{15'000};
   uint32_t send_timeout_ms{15'000};
   uint32_t receive_timeout_ms{30'000};

@@ -191,6 +191,7 @@ struct ParsedUrl {
   std::wstring path;
   INTERNET_PORT port{};
   bool secure{false};
+  bool loopback{false};
 };
 
 std::optional<ParsedUrl> ParseUrl(const std::wstring& url, std::string* error) {
@@ -217,9 +218,9 @@ std::optional<ParsedUrl> ParseUrl(const std::wstring& url, std::string* error) {
   std::wstring normalized_host = parsed.host;
   std::transform(normalized_host.begin(), normalized_host.end(), normalized_host.begin(),
                  [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
-  const bool loopback = normalized_host == L"localhost" || normalized_host == L"127.0.0.1" ||
-                        normalized_host == L"::1" || normalized_host == L"[::1]";
-  if (components.nScheme == INTERNET_SCHEME_HTTP && !loopback) {
+  parsed.loopback = normalized_host == L"localhost" || normalized_host == L"127.0.0.1" ||
+                    normalized_host == L"::1" || normalized_host == L"[::1]";
+  if (components.nScheme == INTERNET_SCHEME_HTTP && !parsed.loopback) {
     *error = "cleartext HTTP downloads are only allowed for loopback tests";
     return std::nullopt;
   }
@@ -299,8 +300,8 @@ UniqueFileHandle OpenPartFile(const std::filesystem::path& path, bool append, st
   return file;
 }
 
-bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t* bytes_received,
-                        std::string* error) {
+bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t initial_size, uint64_t max_bytes,
+                        uint64_t* bytes_received, std::string* error) {
   std::array<unsigned char, 65'536> buffer{};
   for (;;) {
     DWORD available = 0;
@@ -318,6 +319,11 @@ bool ReadResponseToFile(HINTERNET request, HANDLE file, uint64_t* bytes_received
       }
       if (read == 0) {
         *error = "HTTP response ended before the advertised data was read";
+        return false;
+      }
+      if (initial_size > max_bytes || *bytes_received > max_bytes - initial_size ||
+          read > max_bytes - initial_size - *bytes_received) {
+        *error = "HTTP response exceeds the configured maximum size";
         return false;
       }
       DWORD written = 0;
@@ -357,9 +363,10 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
   (void)request;
   return Failure("HTTP downloads are only supported on Windows");
 #else
-  if (request.url.empty() || request.destination.empty() ||
+  if (request.url.empty() || request.destination.empty() || request.max_bytes == 0 ||
       !IsValidSha256(request.expected_sha256)) {
-    return Failure("download request requires an HTTP URL, destination, and 64-character SHA256");
+    return Failure(
+        "download request requires an HTTP URL, destination, 64-character SHA256, and max_bytes");
   }
   const auto expected = LowerAscii(request.expected_sha256);
 
@@ -385,8 +392,10 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
   auto parsed = ParseUrl(request.url, &error);
   if (!parsed) return Failure(std::move(error));
 
-  UniqueInternetHandle session(WinHttpOpen(user_agent_.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+  const DWORD access_type =
+      parsed->loopback ? WINHTTP_ACCESS_TYPE_NO_PROXY : WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
+  UniqueInternetHandle session(WinHttpOpen(user_agent_.c_str(), access_type, WINHTTP_NO_PROXY_NAME,
+                                           WINHTTP_NO_PROXY_BYPASS, 0));
   if (!session) return Failure(WindowsError("opening WinHTTP session"));
   if (!WinHttpSetTimeouts(session.get(), static_cast<int>(request.connect_timeout_ms),
                           static_cast<int>(request.connect_timeout_ms),
@@ -402,6 +411,9 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
   for (int attempt = 0; attempt < 2; ++attempt) {
     auto part_size = RegularFileSize(part, &error);
     if (!part_size) return Failure(std::move(error));
+    if (*part_size > request.max_bytes) {
+      return Failure("partial download exceeds the configured maximum size");
+    }
     const uint64_t resume_offset = attempt == 0 ? *part_size : 0;
 
     UniqueInternetHandle http_request(WinHttpOpenRequest(
@@ -454,7 +466,9 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
     result.resumed = partial;
     auto file = OpenPartFile(part, partial, &error);
     if (!file) return Failure(std::move(error));
-    if (!ReadResponseToFile(http_request.get(), file.get(), &result.bytes_received, &error)) {
+    const uint64_t initial_size = partial ? resume_offset : 0;
+    if (!ReadResponseToFile(http_request.get(), file.get(), initial_size, request.max_bytes,
+                            &result.bytes_received, &error)) {
       return Failure(std::move(error));
     }
     file.reset();

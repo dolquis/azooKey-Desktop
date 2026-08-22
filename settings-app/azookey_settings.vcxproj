@@ -56,6 +56,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
     <AppxPriInitialPath />
+    <AzooKeyWilIncludeDir Condition="'$(AzooKeyWilIncludeDir)'==''">$(ProjectDir)..\third_party\wil\include</AzooKeyWilIncludeDir>
   </PropertyGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
@@ -67,7 +68,7 @@
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <WarningLevel>Level4</WarningLevel>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\ipc\include;$(ProjectDir)..\learning\include;$(ProjectDir)..\third_party\wil\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\ipc\include;$(ProjectDir)..\learning\include;$(AzooKeyWilIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /bigobj /utf-8 /permissive-</AdditionalOptions>
     </ClCompile>
     <Link>

@@ -41,6 +41,13 @@ endif()
 set(AZOOKEY_SETTINGS_CONFIGURATION "$<IF:$<CONFIG:Debug>,Debug,Release>")
 set(AZOOKEY_SETTINGS_OUTPUT_DIR
     "${CMAKE_BINARY_DIR}/settings-app/${AZOOKEY_SETTINGS_CONFIGURATION}/")
+if(EXISTS "${AZOOKEY_WIL_SOURCE_DIR}/include/wil/resource.h")
+  set(AZOOKEY_SETTINGS_WIL_INCLUDE_DIR "${AZOOKEY_WIL_SOURCE_DIR}/include")
+elseif(DEFINED wil_SOURCE_DIR AND EXISTS "${wil_SOURCE_DIR}/include/wil/resource.h")
+  set(AZOOKEY_SETTINGS_WIL_INCLUDE_DIR "${wil_SOURCE_DIR}/include")
+else()
+  message(FATAL_ERROR "Unable to resolve the WIL include directory for azookey_settings")
+endif()
 
 add_custom_target(azookey_settings
   COMMAND "${AZOOKEY_MSBUILD_EXECUTABLE}"
@@ -51,6 +58,7 @@ add_custom_target(azookey_settings
           /property:Platform=x64
           /property:OutDir=${AZOOKEY_SETTINGS_OUTPUT_DIR}
           /property:IntDir=${CMAKE_CURRENT_BINARY_DIR}/obj/${AZOOKEY_SETTINGS_CONFIGURATION}/
+          /property:AzooKeyWilIncludeDir=${AZOOKEY_SETTINGS_WIL_INCLUDE_DIR}
   BYPRODUCTS "${AZOOKEY_SETTINGS_OUTPUT_DIR}/azookey_settings.exe"
   USES_TERMINAL
   VERBATIM

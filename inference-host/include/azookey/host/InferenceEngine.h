@@ -144,6 +144,7 @@ class InferenceEngine {
   std::optional<uint64_t> first_unsaved_observation_epoch_sec_;
   std::optional<uint64_t> last_unsaved_observation_epoch_sec_;
   std::optional<std::chrono::steady_clock::time_point> first_unsaved_observation_steady_;
+  std::optional<std::chrono::steady_clock::time_point> last_successful_learning_save_steady_;
   std::condition_variable learning_flush_cv_;
   std::thread learning_flush_thread_;
   std::thread model_preload_thread_;

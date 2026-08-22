@@ -309,12 +309,12 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `ipc_tests` | `messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
 | `ipc_json_tests` | `json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
 | `ipc_payloads_tests` | `payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject |
-| `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持 |
-| `ipc_tip_client_tests` | `tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates |
+| `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持、accept churn 下での複数クライアント同時接続（`ConcurrentClientsConnectDuringAcceptChurn`） |
+| `ipc_tip_client_tests` | `tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
 | `learning_tests` | `learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
 | `reranker_tests` | `reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
 | `user_dictionary_tests` | `user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
-| `host_engine_tests` | `engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload |
+| `host_engine_tests` | `engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload、`LoadModel` の GGUF 実プローブ（最小ヘッダ受理・不正 GGUF reject・CPU backend ロード成功・path 空時の MVP fallback）、`--backend cuda` 指定時の CPU フォールバック |
 | `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ |
 | `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `host_user_data_paths_tests` | `user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
@@ -326,29 +326,61 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 
+#### CTest 以外の自動検査
+
+CTest に載らない検査は次のとおり。CTest の一覧と混在させず、実行系統ごとに分けて把握する。
+
+| 検査 | 実行系統 | 内容 |
+|---|---|---|
+| `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）と `windows-asan`（MSVC ASan）で `core`/`ipc`/`learning`/`inference-host` を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
+| `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
+| `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/dev-infrastructure-spec.md` §2.5。§12 の `azookey_diag.exe` とは別物） |
+
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
-> 解消済みのギャップは本リストに残さず `現存テスト一覧` 表に反映する（達成状態の正典は Linear）。
-> 以下は未解消の目標カバレッジの定義。
+> 解消済みのギャップは本リストに残さず `現存テスト一覧` 表（および `CTest 以外の自動検査` 表）に
+> 反映する（達成状態の正典は Linear）。以下は未解消の目標カバレッジの定義のみを並べる。
+> 一部だけ実装済みの項目は、実装済み部分を上記 2 表へ移し、本リストには残ギャップだけを書く。
 
 中期（Phase 3 / Zenzai 統合と並行）:
-1. **`InferenceEngine` バックエンドフォールバック** — `--backend cuda` 指定だが CUDA 初期化失敗時に `cpu` にフォールバックすることをテスト。
-2. **`InferenceEngine::LoadModel` モック** — gguf 未配置時に false を返し、配置時に true を返すモックバックエンド。
-3. **`NamedPipeServer` 同時接続耐性** — 単一クライアント前提だが、Host を別 process で起動 → クライアント再接続シナリオ（TIP再ロード時の挙動）。
-4. **`tsf-tip` レジストリ smoke** — `DllRegisterServer` 後に HKLM の COM in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する round-trip テスト。再登録が成功することに加え、Debug ビルドではカテゴリ登録失敗を注入し、COM / TSF の部分登録が残らず明示的な unregister なしで再試行できることも確認する。`com_smoke_test.cpp` に実装済み。対話的 TSF セッションを要するため opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**（headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
+1. **`tsf-tip` レジストリ round-trip の CI カバレッジ** — `DllRegisterServer` 後に HKLM の COM
+   in-proc 登録と TSF プロファイル（`ITfInputProcessorProfileMgr::GetProfile` が
+   `GUID_TFCAT_TIP_KEYBOARD` を返す）が存在し、`DllUnregisterServer` 後に消えることを検証する
+   round-trip。テスト本体は `com_smoke_test.cpp` に実装済みだが、対話的 TSF セッションを要するため
+   opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、**CI では走らない**
+   （headless ランナーは TSF セッションが無く `GetProfile` が登録直後のプロファイルを観測できない）。
+   残ギャップは、この round-trip を自動実行できる実行環境（対話セッションを持つ self-hosted ランナー
+   または VM ジョブ）の用意。
 
 長期（Phase 4 / 配布前に必須）:
-5. **MSIX manifest と `DllRegisterServer` の整合** — MSIX `comServer` 宣言が `kTextServiceClsid` と一致し、アンインストール時に CLSID / TSF プロファイルキーが残らない smoke（`Add-AppxPackage` → 登録確認 → `Remove-AppxPackage` → 残骸 0）。配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。宣言値の静的整合（identity manifest と app 側 `<msix>` 3 属性、smoke ハーネス既定値と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId`、Option A の不変条件、ビルド埋め込み配線）は `scripts/tests/msix-identity-consistency.Tests.ps1` に実装済みで CI で走る。残るギャップは実機 VM での登録・残骸 round-trip（`compat-test/msix_install_uninstall.ps1`、対話セッションとパッケージ登録権限を要するため CI では走らない）。
-6. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
-7. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
+2. **MSIX 登録・残骸 round-trip の実機検証** — `Add-AppxPackage` → 登録確認 → `Remove-AppxPackage`
+   → 残骸 0 を実機 VM で確認する（`compat-test/msix_install_uninstall.ps1`）。対話セッションと
+   パッケージ登録権限を要するため CI では走らない。宣言値の静的整合は
+   `scripts/tests/msix-identity-consistency.Tests.ps1` が CI でカバー済みのため、本項目の対象外。
+   配布経路（spec §1.0 Option A/B/C）により登録先が変わるため、経路別の合否定義は経路確定を前提とする。
+3. **`UpdateUserWord` payload** — enum のみで Payload 未実装。設定 UI で必要になった時点で
+   `BuildUpdateUserWordRequest`/`Parse...` を実装し、`payloads_test.cpp` と `dispatcher_test.cpp` に追加。
+4. **`QueryPredictions`/`QueryCorrections`/`CommitCorrection` payload** — `InferenceEngine` には
+   既に対応関数があるので、IPC 経由で叩けるよう Payload と Dispatcher ハンドラを追加。
 
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
-8. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械テストで扱う（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
-9. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認（手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。M3 の DisplayAttribute / CompositionSink 部分は `compat-test/m3_display_attribute_checklist.md`（D-01〜D-10）で先行して定義済み。
-10. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui のフェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
-11. **Sanitizer（ASan/UBSan）nightly** — `core`/`ipc`/`learning`/`inference-host` を対象に、Linux subset は AddressSanitizer + UndefinedBehaviorSanitizer、Windows subset は MSVC AddressSanitizer で nightly 実行し、use-after-free・境界外・未定義動作を早期検出する（プリセット別の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典。M38 必須外・将来拡張）。
-12. **pre-commit 一式の CI ゲート** — 既存 pre-commit（clang-format / gitleaks / actionlint / settings schema / yamlfmt / taplo）を CI の独立ジョブとしても実行し、手元と CI の検査差分を無くす。ただし gitleaks フックは `--staged`（pre-commit モード・`pass_filenames: false`）で定義されており、`pre-commit run --all-files` でもステージ差分しか走査しない。クリーンな CI チェックアウトでは秘密検出が偽陰性になるため、CI の秘密走査はこのフックに依存させず、PR コミット範囲（`gitleaks git --log-opts=...`）または `gitleaks dir` による非ステージ走査を別ステップとして用意する（同 §4.3。schema 単独ゲートは DEV-392 で先行）。
-13. **開発環境 doctor（`scripts/doctor.ps1`）** — 開発者・AI エージェント環境の不足ツール/未初期化 dev shell/未取得依存を診断（同 §2.5。§12 の `azookey_diag.exe` とは別物）。
+5. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、
+   TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械
+   テストで扱う。単純な再接続成立は `ClientReconnectsAfterHostRestart` がカバー済みで、残ギャップは
+   劣化モードの状態遷移そのもの（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
+6. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・
+   確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認
+   （手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。M3 の DisplayAttribute / CompositionSink
+   部分は `compat-test/m3_display_attribute_checklist.md`（D-01〜D-10）で先行して定義済み。
+7. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui の
+   フェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
+8. **pre-commit 一式の CI ゲート** — 既存 pre-commit（clang-format / gitleaks / actionlint /
+   settings schema / yamlfmt / taplo）を CI の独立ジョブとしても実行し、手元と CI の検査差分を無くす。
+   ただし gitleaks フックは `--staged`（pre-commit モード・`pass_filenames: false`）で定義されており、
+   `pre-commit run --all-files` でもステージ差分しか走査しない。クリーンな CI チェックアウトでは
+   秘密検出が偽陰性になるため、CI の秘密走査はこのフックに依存させず、PR コミット範囲
+   （`gitleaks git --log-opts=...`）または `gitleaks dir` による非ステージ走査を別ステップとして
+   用意する（同 §4.3。schema 単独ゲートは DEV-392 で先行）。
 
 ## リスクと不確実性
 

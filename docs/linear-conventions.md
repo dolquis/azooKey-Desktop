@@ -439,6 +439,34 @@ Todo へ差し戻し、経緯を当該 Issue へ記録した。
 
 以上 4 項目も共有コア §11 への昇格候補とし、昇格までは本 Delta を暫定の正典とする。
 
+### 週次監査の repo 固有追加項目（Linear の状態と main の実体の突合）
+
+共有コア §11 に加えて、本 repo では次を点検する:
+
+- [ ] **方向 A（Done だが成果物が main に無い）** 直近サイクルで Done へ遷移した `type:implementation` Issue について、本文の受け入れ条件が名指しするファイル / ジョブ / フラグが `origin/main` に実在するか。`startedAt` が null のまま Done になった Issue は重点対象とする（既存の一括誤 Done 検出と同じ signal を使い回せる）
+- [ ] **方向 B（成果物はあるが課題が開いたまま）** 未 Done の実装 Issue のうち、本文の「現象」が現行 `origin/main` で再現しないもの（対応するテストが存在する、当該コードが書き換わっているなど）がないか
+- [ ] 検出時の扱い: 方向 A は元 Issue を復帰させず**新規 Issue として再起票**し、元 Issue を related で参照する（Done の履歴を書き換えない）。方向 B は検証メモを添えて Done / Canceled へ遷移させる
+- [ ] 点検はサンプリングでよく、全 Done Issue の全数確認は求めない（監査コストが実装コストを超えないこと）
+
+既存の点検項目はいずれも Linear の中だけを見ており、Issue の記述と repo の実体が一致しているかを問わない。
+検証メモ欠落の検出（共有コア §11 および DEV-772）が見るのはメモの有無であって、メモが指す成果物の実在ではない。
+アーカイブ衛生と一括誤 Done 検出が見るのは status と遷移時刻であり、これも repo を参照しない。
+そのため、Done の記録が残ったまま成果物だけが存在しない状態は、どの項目にもかからずに残り続ける。
+
+方向 A は 2026-08-21 の洗い出しで 3 件見つかっており、単発の事故ではない。
+DEV-471（`CI: pre-commit 一式の独立品質ゲート（quality.yml）`、Priority High）は 2026-07-05 の作成から約 2 時間後に Done となり、`startedAt` は null のままだった。
+`.github/workflows/quality.yml` は存在せず、CI に pre-commit / gitleaks の実行も 1 件も無い。
+High 優先度の CI 秘密走査が約 1 か月半のあいだ誰にも所有されないまま放置され、DEV-827 として再起票して初めて追跡対象へ戻った。
+DEV-473（`bench: --json 出力と p95/p99 回帰検知`）は Done かつ archived だが `bench/live_bench.cpp` / `bench/zenzai_bench.cpp` に `--json` / `--output` が無く、DEV-829 として再起票した。
+このずれ自体は DEV-604 が 2026-07-20 の時点で本文に記録していたが、監査の定型点検に無いため tracking Issue の本文に留まっていた。
+DEV-469（`CI: sanitizer プリセット（ASan/UBSan）と nightly 実行`）も同様に Done / archived で成果物が無く、DEV-606 が follow-up として起票し直してから実装が入っている（PR #233）。
+
+方向 B は、既に直っている Issue が Todo に残って triage のたびに再評価コストを払う状態を指す。
+DEV-72（`LearningStore: reading に raw tab を含むと Save でフィールド境界が壊れる`）が実例で、`learning/src/LearningStore.cpp` の `EscapeTsvField` / `UnescapeTsvField` / `SplitKey` によりエスケープ済み形式が実装され、`learning/tests/learning_test.cpp` が reading への tab / backslash 混入の往復と旧形式からの移行まで検証している。
+方向 A ほど害は大きくないが、放置すると Todo が「着手すべき作業」の一覧として信用できなくなる。
+
+以上 2 方向も共有コア §11 への昇格候補とし、昇格までは本 Delta を暫定の正典とする。
+
 ### 管制塔改善パイロット（暫定運用規則、2026-08-08〜）
 
 「Linear 開発モデル改善提案（2026-08-03）」のレビューで採用した規則を、本 repo と

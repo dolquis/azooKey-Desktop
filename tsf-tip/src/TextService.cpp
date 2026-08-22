@@ -125,8 +125,7 @@ std::vector<azookey::tsf::CandidateViewItem> BuildCandidateViews(
   std::vector<azookey::tsf::CandidateViewItem> items;
   items.reserve(candidates.size());
   for (const auto& candidate : candidates) {
-    items.push_back(
-        {Utf8ToWide(candidate.field.surface), Utf8ToWide(candidate.description)});
+    items.push_back({Utf8ToWide(candidate.field.surface), Utf8ToWide(candidate.description)});
   }
   return items;
 }
@@ -2282,8 +2281,8 @@ void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField
 void TextService::set_rewritten_cached_candidates_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
-  candidates_ = BuildTipCandidates(
-      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed));
+  candidates_ = BuildTipCandidates(reading, std::move(candidates),
+                                   number_rewriter_.load(std::memory_order_relaxed));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
@@ -2297,8 +2296,8 @@ std::vector<ipc::CandidateField> TextService::shown_candidates_for_test() const 
 
 std::vector<CandidateViewItem> TextService::candidate_views_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) const {
-  return BuildCandidateViews(BuildTipCandidates(
-      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed)));
+  return BuildCandidateViews(BuildTipCandidates(reading, std::move(candidates),
+                                                number_rewriter_.load(std::memory_order_relaxed)));
 }
 
 void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }

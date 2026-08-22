@@ -202,8 +202,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
     ReleaseDC(hwnd_, hdc);
   }
 
-  surface_column_width_ =
-      std::min(max_surface_w, ScaleForDpi(kBaseMaxSurfaceWidth, dpi_));
+  surface_column_width_ = std::min(max_surface_w, ScaleForDpi(kBaseMaxSurfaceWidth, dpi_));
   const int column_gap = max_description_w > 0 ? ScaleForDpi(kBaseColumnGap, dpi_) : 0;
   int width = std::min(surface_column_width_ + column_gap + max_description_w +
                            metrics_.horizontal_padding * 2 + metrics_.extra_width,

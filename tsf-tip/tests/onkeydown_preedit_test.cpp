@@ -1494,20 +1494,18 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterIsOffByDefaultAndAddsAnnotatedCan
 
   h.service.set_number_rewriter_enabled_for_test(true);
   auto on_items = h.service.candidate_views_for_test("123", host_candidates);
-  const auto kanji = std::find_if(on_items.begin(), on_items.end(), [](const auto& item) {
-    return item.surface == L"百二十三";
-  });
+  const auto kanji = std::find_if(on_items.begin(), on_items.end(),
+                                  [](const auto& item) { return item.surface == L"百二十三"; });
   ASSERT_NE(kanji, on_items.end());
   EXPECT_EQ(kanji->description, L"漢数字");
-  EXPECT_EQ(std::count_if(on_items.begin(), on_items.end(), [](const auto& item) {
-              return item.surface == L"0x7b";
-            }),
+  EXPECT_EQ(std::count_if(on_items.begin(), on_items.end(),
+                          [](const auto& item) { return item.surface == L"0x7b"; }),
             1);
 
   const auto all_annotation_items = h.service.candidate_views_for_test("12", {});
   constexpr std::array<std::wstring_view, 8> expected_annotations = {
-      L"漢数字", L"大字", L"丸数字", L"ローマ数字（大文字）",
-      L"ローマ数字（小文字）", L"16進数", L"8進数", L"2進数"};
+      L"漢数字", L"大字",  L"丸数字", L"ローマ数字（大文字）", L"ローマ数字（小文字）",
+      L"16進数", L"8進数", L"2進数"};
   for (const auto expected : expected_annotations) {
     EXPECT_NE(std::find_if(all_annotation_items.begin(), all_annotation_items.end(),
                            [expected](const auto& item) { return item.description == expected; }),

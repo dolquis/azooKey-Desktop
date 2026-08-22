@@ -118,8 +118,8 @@ class TextService final : public ITfTextInputProcessorEx,
 #ifdef AZOOKEY_TSF_TESTING
   bool candidate_window_show_pending_for_test();
   void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
-  void set_rewritten_cached_candidates_for_test(
-      const std::string& reading, std::vector<ipc::CandidateField> candidates);
+  void set_rewritten_cached_candidates_for_test(const std::string& reading,
+                                                std::vector<ipc::CandidateField> candidates);
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
   std::vector<CandidateViewItem> candidate_views_for_test(

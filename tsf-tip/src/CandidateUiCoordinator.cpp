@@ -57,7 +57,8 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   selected_idx_ = ClampSelection(selected_idx);
   last_pt_ = pt;
 
-  auto* element = new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
+  auto* element =
+      new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
   if (!element) return E_OUTOFMEMORY;
   ui_element_ = element;
   ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });

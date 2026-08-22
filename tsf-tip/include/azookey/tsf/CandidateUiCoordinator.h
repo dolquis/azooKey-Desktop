@@ -29,8 +29,7 @@ class CandidateUiCoordinator {
   void SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn, void* context);
   void PostCandidatesReady();
 
-  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
-                  const std::vector<CandidateViewItem>& items,
+  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt, const std::vector<CandidateViewItem>& items,
                   int selected_idx);
   HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
   HRESULT EndUI();

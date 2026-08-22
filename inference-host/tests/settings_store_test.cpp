@@ -1,10 +1,25 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <string>
+#include <thread>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
 
 #include "azookey/host/SettingsStore.h"
+#include "azookey/learning/AtomicFile.h"
+#include "azookey/learning/FileLock.h"
 
 namespace {
 
@@ -151,5 +166,126 @@ TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
   EXPECT_FALSE(result.settings.live_conversion);
   EXPECT_TRUE(result.settings.prediction_enabled);
 
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, ReadFailureDoesNotQuarantineFile) {
+  const auto dir = TestDir("azookey_settings_read_failure");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"liveConversion":true})");
+
+#ifdef _WIN32
+  HANDLE exclusive = CreateFileW(path.wstring().c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(exclusive, INVALID_HANDLE_VALUE);
+#else
+  ASSERT_EQ(chmod(path.c_str(), 0), 0);
+#endif
+
+  azookey::host::SettingsStore store(path, std::chrono::milliseconds(20));
+  const auto result = store.Load();
+
+#ifdef _WIN32
+  CloseHandle(exclusive);
+#else
+  ASSERT_EQ(chmod(path.c_str(), S_IRUSR | S_IWUSR), 0);
+#endif
+
+  EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_FALSE(result.quarantined_path.has_value());
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".invalid"));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, LockTimeoutLeavesInvalidFileForLaterQuarantine) {
+  const auto dir = TestDir("azookey_settings_lock_timeout");
+  const auto path = dir / "settings.json";
+  WriteText(path, "{ invalid json");
+
+  std::promise<bool> acquired;
+  std::promise<void> release;
+  auto release_future = release.get_future().share();
+  std::thread holder([&] {
+    auto lock =
+        azookey::learning::AcquireExclusiveFileLockForPath(path, std::chrono::milliseconds(1000));
+    acquired.set_value(lock.has_value());
+    if (lock) release_future.wait();
+  });
+  const bool has_lock = acquired.get_future().get();
+  if (!has_lock) {
+    release.set_value();
+    holder.join();
+  }
+  ASSERT_TRUE(has_lock);
+
+  azookey::host::SettingsStore store(path, std::chrono::milliseconds(20));
+  const auto blocked_result = store.Load();
+  EXPECT_EQ(blocked_result.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_FALSE(blocked_result.quarantined_path.has_value());
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  release.set_value();
+  holder.join();
+
+  const auto retry_result = store.Load();
+  EXPECT_EQ(retry_result.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_TRUE(retry_result.quarantined_path.has_value());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, SharedLockSerializesAtomicWriterBeforeRead) {
+  const auto dir = TestDir("azookey_settings_serialized_writer");
+  const auto path = dir / "settings.json";
+  WriteText(path, "{ invalid json");
+
+  std::promise<bool> acquired;
+  bool write_succeeded = false;
+  std::thread writer([&] {
+    auto lock =
+        azookey::learning::AcquireExclusiveFileLockForPath(path, std::chrono::milliseconds(1000));
+    acquired.set_value(lock.has_value());
+    if (!lock) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    write_succeeded = azookey::learning::WriteTextFileAtomically(
+        path, R"({"liveConversion":true,"predictionEnabled":true})");
+  });
+  const bool has_lock = acquired.get_future().get();
+  if (!has_lock) writer.join();
+  ASSERT_TRUE(has_lock);
+
+  azookey::host::SettingsStore store(path, std::chrono::milliseconds(1000));
+  const auto result = store.Load();
+  writer.join();
+
+  EXPECT_TRUE(write_succeeded);
+  EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_TRUE(result.settings.live_conversion);
+  EXPECT_FALSE(result.quarantined_path.has_value());
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(path.string() + ".invalid"));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
+  const auto dir = TestDir("azookey_settings_reload_invalid");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"liveConversion":true,"logLevel":"debug"})");
+
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  ASSERT_TRUE(store.settings().live_conversion);
+  ASSERT_EQ(store.settings().log_level, "debug");
+
+  WriteText(path, "{ invalid json");
+  const auto result = store.Reload();
+
+  EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_TRUE(result.settings.live_conversion);
+  EXPECT_EQ(result.settings.log_level, "debug");
+  EXPECT_TRUE(store.settings().live_conversion);
+  EXPECT_EQ(store.settings().log_level, "debug");
+  EXPECT_EQ(store.last_result().settings.log_level, "debug");
   std::filesystem::remove_all(dir);
 }

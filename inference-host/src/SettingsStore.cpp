@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/FileLock.h"
 
 namespace azookey::host {
 
@@ -169,17 +170,41 @@ BackendKind BackendFromPreference(const std::string& preference, BackendKind fal
 }  // namespace
 
 SettingsStore::SettingsStore(std::filesystem::path settings_path)
-    : settings_path_(std::move(settings_path)) {
+    : SettingsStore(std::move(settings_path), std::chrono::milliseconds(5000)) {}
+
+SettingsStore::SettingsStore(std::filesystem::path settings_path,
+                             std::chrono::milliseconds file_lock_timeout)
+    : settings_path_(std::move(settings_path)), file_lock_timeout_(file_lock_timeout) {
   last_result_.settings = settings_;
 }
 
-SettingsLoadResult SettingsStore::Load() {
+SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
   RuntimeSettings defaults;
   SettingsLoadResult result;
   result.settings = defaults;
 
+  auto file_lock =
+      azookey::learning::AcquireExclusiveFileLockForPath(settings_path_, file_lock_timeout_);
+  const bool may_quarantine = file_lock.has_value();
+
+  const auto finish_invalid = [&]() -> SettingsLoadResult {
+    if (preserve_current_on_invalid) {
+      result.settings = settings_;
+    } else {
+      settings_ = result.settings;
+    }
+    last_result_ = result;
+    return last_result_;
+  };
+
   std::error_code ec;
-  if (!std::filesystem::exists(settings_path_, ec)) {
+  const bool exists = std::filesystem::exists(settings_path_, ec);
+  if (ec) {
+    result.status = SettingsLoadStatus::Invalid;
+    result.error = "failed to inspect settings.json: " + ec.message();
+    return finish_invalid();
+  }
+  if (!exists) {
     settings_ = result.settings;
     last_result_ = result;
     return last_result_;
@@ -190,20 +215,19 @@ SettingsLoadResult SettingsStore::Load() {
   if (!content) {
     result.status = SettingsLoadStatus::Invalid;
     result.error = read_error.value_or("failed to read settings.json");
-    result.quarantined_path = QuarantineInvalidFile(settings_path_, &result.error);
-    settings_ = result.settings;
-    last_result_ = result;
-    return last_result_;
+    return finish_invalid();
   }
 
   auto parsed = j::Parse(*content);
   if (!parsed || !parsed->IsObject()) {
     result.status = SettingsLoadStatus::Invalid;
     result.error = "invalid settings.json";
-    result.quarantined_path = QuarantineInvalidFile(settings_path_, &result.error);
-    settings_ = result.settings;
-    last_result_ = result;
-    return last_result_;
+    if (may_quarantine) {
+      result.quarantined_path = QuarantineInvalidFile(settings_path_, &result.error);
+    } else {
+      result.error = "invalid settings.json; file lock unavailable, so it was not quarantined";
+    }
+    return finish_invalid();
   }
 
   result.settings = ParseRuntimeSettings(parsed->AsObject());
@@ -213,7 +237,9 @@ SettingsLoadResult SettingsStore::Load() {
   return last_result_;
 }
 
-SettingsLoadResult SettingsStore::Reload() { return Load(); }
+SettingsLoadResult SettingsStore::Load() { return LoadImpl(false); }
+
+SettingsLoadResult SettingsStore::Reload() { return LoadImpl(true); }
 
 EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings) {

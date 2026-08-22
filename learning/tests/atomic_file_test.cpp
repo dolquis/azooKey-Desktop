@@ -1,18 +1,17 @@
-#include "AtomicFile.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <future>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/FileLock.h"
 
 namespace {

@@ -292,8 +292,10 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 ### 6.1 共通 WinHTTP 基盤（`inference-host` 内）
 
 次の関心を共通ヘルパとして切り出し、M16（API 呼び出し）と M32（モデル DL）が
-共有する。本書はこの**契約面**を固定する（具体ファイル名は実装 PR で確定。
-案: `inference-host/src/WinHttpSession.{h,cpp}`）。
+共有する。
+M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16 の POST 経路を
+追加するときは別の WinHTTP スタックを作らず、同じセッション初期化とポリシーを
+共通部へ抽出する。
 
 - WinHTTP セッション初期化（`WinHttpOpen`、User-Agent、HTTP/2 可否）。
 - **プロキシ解決**（システムプロキシ / WPAD / 明示設定の尊重）。
@@ -309,6 +311,11 @@ M16 の `mode` は legacy macOS の target-marker 辞書（`OpenAIClient.swift` 
 | chat/completions 呼び出し | **M16**（本書） | POST + JSON | Bearer 認証、`response_format`、（Phase 6）SSE ストリーミング |
 | モデル DL（GGUF 等） | **M32** | GET | `.part`→SHA256 検証→rename、レジューム、`expected.json` ピン照合 |
 
+- モデル DL は既存の確定ファイルが期待 SHA256 と一致する場合、ネットワーク I/O を
+  行わない。
+  `.part` のレジュームでは `206` の `Content-Range` 始点を検証し、Range を無視した
+  `200` は全量取得として `.part` を切り詰める。
+  HTTP 失敗または SHA256 不一致では既存の確定ファイルを置換しない。
 - M16 実装時に §6.1 の基盤を最小で導入し、M32 は同じ基盤上に GET + SHA256 経路を
   追加する（重複スタックを作らない）。
 - M32 を Phase 5 へ前倒ししない（Phase 5 を自己完結に保つ）。roadmap の M16 / M32 /

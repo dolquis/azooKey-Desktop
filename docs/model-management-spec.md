@@ -24,10 +24,9 @@ WinUI 3 設定アプリを土台に、ユーザーが以下を行えるように
 
 ## 2. 非目標
 
-- モデルのダウンロード機能（M45 範囲外。将来 M に分離）。v1.0 の最小取得経路
-  （初回起動時 DL + 手動配置フォールバック）は `docs/sideload-packaging-spec.md`
-  §1.6.1 が正典で、M45 はその配置レイアウト（`models\zenzai\`）と SHA256 値域を
-  再利用する
+- M45 の設定 UI からダウンロードを開始する機能。
+  v1.0 の最小取得経路（初回起動時 DL + 手動配置フォールバック）は
+  `docs/sideload-packaging-spec.md` §1.6.1 が正典であり、共通取得基盤は §3.1.2 に定める
 - モデルの自動更新機能（同上）
 - llama.cpp バインディング自体の改修（M8 / M24 の責務）
 - 推論精度評価（M52 変換品質評価ベンチの責務）
@@ -79,6 +78,36 @@ resolver は catalog を受け取り、`DefaultZenzaiModelDirectory(modelsDir)`
 （`modelsDir\zenzai`）と `fileName` を結合してローカルパスを返す。存在確認は
 `is_regular_file` で行い、未配置の場合も解決済みパスと `MissingLocalFile` を返す。
 このため単体テストは実 GGUF を配置せず、一時ファイルの有無だけで完結できる。
+
+### 3.1.2 GGUF 取得基盤（DEV-439）
+
+DEV-439 の `HttpDownloader` は、呼び出し元が指定した URL から GGUF を取得し、
+`%LOCALAPPDATA%\azooKey\models\zenzai\` 配下の確定パスへ配置する共通 GET 基盤である。
+カタログから URL を選ぶ処理、Host 起動時のプリフェッチ、`selectedPath` の更新は
+後続処理の責務とし、ダウンローダはネットワーク取得と整合検証だけを担当する。
+
+取得手順は次のとおり。
+
+1. 確定パスの既存ファイルが期待 SHA256 と一致する場合は、ネットワークへ接続せず
+   `AlreadyValid` を返す。
+2. `<file>.gguf.part` が存在する場合は、そのサイズを始点とする `Range: bytes=<size>-`
+   を送る。
+   `206 Partial Content` は `Content-Range` の始点が一致した場合だけ追記する。
+   サーバーが Range を無視して `200 OK` を返した場合は `.part` を切り詰め、応答全体で
+   再開する。
+   `416 Range Not Satisfiable` では完成済み `.part` の SHA256 を先に確認し、不一致なら
+   Range なしの GET を一度だけ再試行する。
+3. 受信完了後に Windows CNG（BCrypt）で `.part` の SHA256 を計算する。
+   期待値と一致した場合だけ、同じディレクトリ内で `MoveFileExW` の replace +
+   write-through により確定パスへ昇格する。
+4. HTTP 失敗、書き込み失敗、SHA256 不一致では確定パスを変更しない。
+   `.part` は次回レジューム用に残すため、ネットワーク不通時も既存の確定ファイルを
+   継続利用できる。
+
+本番 URL は HTTPS を用い、WinHTTP 既定の証明書検証を無効化しない。
+HTTP はループバックの自動テストに限って使用する。
+プロキシは WinHTTP の automatic proxy を使用し、resolve / connect / send / receive の
+タイムアウトを呼び出しごとに設定する。
 
 サブディレクトリは再帰的にスキャンする（1 階層のみ）。検出対象は 2 種:
 
@@ -420,6 +449,9 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 
 - unit: `ModelCatalog` の宣言的 catalog parse / default 補完 / 不正 entry reject /
   `zenzai\` パス resolver、および一覧検出 / 検証 / 履歴更新
+- integration: ループバック HTTP モックで SHA256 不一致時に rename しないこと、
+  Range レジューム、Range 無視時の全量再取得、ネットワーク不通時の既存ファイル保持を
+  検証する
 - integration: 不正 GGUF・サイズ不一致・metadata 欠落で fallback する
 - snapshot: `ListModels` / `BenchmarkModel` の JSON schema 固定
 - e2e（M50 と連携）: GUI 上でモデル切替 → 再起動 → 自動ロード

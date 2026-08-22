@@ -1541,7 +1541,7 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
       wait_ms = static_cast<uint32_t>(remaining_ms);
     }
 
-    auto response = ipc_client_.ReceiveWithTimeout(wait_ms);
+    auto response = ipc_client_.ReceiveWithTimeout(wait_ms, deadline);
     if (response) {
       if (!IsExpectedIpcResponse(*response, expected_request_id, expected_type)) {
         if (expected_request_id != 0 && response->request_id != expected_request_id) {
@@ -1926,6 +1926,9 @@ void TextService::ServeConnection() {
     // legitimately take longer and keeps the existing unbounded wait.
     const auto query_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(kQueryCandidatesFastTimeoutMs);
+    const std::optional<std::chrono::steady_clock::time_point> query_request_deadline =
+        is_batch ? std::nullopt
+                 : std::optional<std::chrono::steady_clock::time_point>(query_deadline);
     bool query_deadline_exceeded = false;
     std::optional<ipc::Envelope> qres;
     while (!cancel_inflight_out_of_band && !ipc_stop_.load() && ipc_client_.IsConnected()) {
@@ -1944,7 +1947,7 @@ void TextService::ServeConnection() {
         if (wait_ms == 0) wait_ms = 1;
       }
 
-      qres = ipc_client_.ReceiveWithTimeout(wait_ms);
+      qres = ipc_client_.ReceiveWithTimeout(wait_ms, query_request_deadline);
       if (qres) {
         if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
           if (qres->request_id != req_id) {

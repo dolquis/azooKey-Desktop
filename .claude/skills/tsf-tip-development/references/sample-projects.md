@@ -9,9 +9,13 @@
 - <https://github.com/chewing/windows-chewing-tsf>
   繁体字向け Chewing IME。**現行の既定ブランチ `main` は Rust 実装**
   （2026-08-14 時点の GitHub languages 内訳は Rust / C / RTF / Batchfile で C++ は 0 バイト）。
-  TIP 本体は `tip/src/text_service/` 配下（`key_event.rs`、`edit_session.rs`、
-  `ui_elements/candidate_list.rs`）、候補 UI は別プロセス host
-  （`crates/chewing_tip_host/src/ipc.rs`、`src/ui/window.rs`）に分離されている。
+  TIP 本体は `tip/src/text_service/` 配下（`key_event.rs`、`edit_session.rs`）、
+  候補ウィンドウの描画は別プロセス host（`crates/chewing_tip_host/src/ipc.rs`、
+  `crates/chewing_tip_host/src/ui/window.rs`）が持つ。UIElement は両側に同名で存在し、
+  TIP 側の `tip/src/text_service/ui_elements/candidate_list.rs` が TSF の
+  `ITfUIElement` を実装し、host 側の
+  `crates/chewing_tip_host/src/ui_elements/candidate_list.rs` が実際の描画を担う。
+  この二重化が TIP プロセスと描画プロセスの境界を示している。
   Rust から COM 境界をどう張るか、`ITfUIElement` と外部 host プロセスをどう分けるか、
   Per-Monitor DPI 変換をどう扱うかの参考に向く。`key_event.rs` には WPF アプリが
   scan code 0 を送る場合の補正（`MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)`）があり、

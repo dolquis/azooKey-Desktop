@@ -99,7 +99,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `UpdateConfig` | Host + response codec | settings再読込。要求payloadは空オブジェクト |
 | `Ping` | codec + Host | 疎通確認 |
 | `Health` | codec + Host | Host状態取得 |
-| `QueryDiagnostics` | codec + Host（送信クライアント未配線） | runtime tier、backend、RSS、学習・辞書件数、fallback stateの取得。要求payloadは空オブジェクト。production送信元（`azookey_diag.exe`）は未実装で、現状の呼び出し元はテストのみ |
+| `QueryDiagnostics` | codec + Host + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback stateの取得。要求payloadは空オブジェクト。送信元は`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）で、TIPからは送らない |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

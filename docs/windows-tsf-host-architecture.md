@@ -97,8 +97,10 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
   `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
   learning_entries, user_dict_entries, fallback_state, last_error?)`。
   `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` のいずれか。
-  codec と Host ハンドラは配線済みだが、送信側の production クライアント（`azookey_diag.exe`）は
-  未実装で、現状の呼び出し元は `dispatcher_test.cpp` / `payloads_test.cpp` のみ。
+  送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
+  `Diagnostics.cpp` の IPC プローブが Handshake → Ping に続けて `request_id=3` /
+  `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
+  して診断スナップショットへ格納する。TIP からは送らない。
 - ⚠️ enum のみ定義済み、Payload/Dispatcher 未実装:
   - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
   - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`
@@ -335,9 +337,17 @@ RemoveUserWord / UpdateConfig）に加え、以下を Phase 5〜6 で順次追�
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
 
-`UpdateConfig`（Settings → Host）は本表から外している。M11 最小（v1.0）相当の
-settings.json 再読込は既に配線済みで、M30 の拡張は payload の追加ではなく設定 UI 側の
-守備範囲だからである（`docs/sideload-packaging-spec.md` §3 + roadmap M11 / M30）。
+`UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
+M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、
+現行の要求 payload は空オブジェクトである。roadmap M30 は変更対象に `ipc/src/Payloads.cpp`
+を挙げて「M11 の最小 `UpdateConfig` を拡張」と定めており、payload 側の拡張が M30 に残る
+（`docs/sideload-packaging-spec.md` §3 + roadmap M11 / M30）。実装済みの範囲と M30 で残る
+範囲は次のとおり。
+
+| 区分 | 内容 |
+|---|---|
+| 実装済み（M11 相当） | 要求 payload 空オブジェクト、`SettingsStore::Reload()` による settings.json 再読込、engine config 適用とモデル再ロード、応答 `(ok, error?)` |
+| M30 に残る | 要求 payload の拡張（横断項目・バッチ訂正等をフル設定 UI から渡すためのフィールド追加）と、対応する `SettingsManager` 側の拡張 |
 
 Envelope に `push: bool` フラグを追加し、`server → client` 一方向通知に
 対応する（`docs/rich-features-spec.md` X-4-2）。

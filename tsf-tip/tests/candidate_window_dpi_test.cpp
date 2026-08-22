@@ -26,5 +26,19 @@ TEST(CandidateWindowDpiTest, ZeroDpiFallsBackToDefaultDpi) {
   ExpectMetrics(CandidateWindow::ComputeLayoutMetricsForTest(0), 24, 8, 400, 20, 60, 4);
 }
 
+TEST(CandidateWindowDpiTest, NoDescriptionKeepsLegacySingleColumnWidth) {
+  const auto layout = CandidateWindow::ComputeColumnLayoutForTest(380, 0, 96);
+  EXPECT_EQ(layout.surface_width, 0);
+  EXPECT_EQ(layout.column_gap, 0);
+  EXPECT_EQ(layout.content_width, 380);
+}
+
+TEST(CandidateWindowDpiTest, DescriptionEnablesClampedTwoColumnLayout) {
+  const auto layout = CandidateWindow::ComputeColumnLayoutForTest(380, 80, 96);
+  EXPECT_EQ(layout.surface_width, 220);
+  EXPECT_EQ(layout.column_gap, 12);
+  EXPECT_EQ(layout.content_width, 312);
+}
+
 }  // namespace
 }  // namespace azookey::tsf

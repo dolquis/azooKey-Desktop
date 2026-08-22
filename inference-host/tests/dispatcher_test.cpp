@@ -155,18 +155,15 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_FALSE(parsed2->accepted);
 }
 
-TEST_F(DispatcherTest, HandshakeIncludesBatchRomajiSettings) {
+TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
   const std::string settings_path = TempPath("azookey_dispatcher_batch_settings.json");
   std::remove(settings_path.c_str());
   {
     std::ofstream out(settings_path);
     ASSERT_TRUE(out.is_open());
-    out << "{"
-        << "\"batchRomajiConversion\":true,"
-        << "\"batchRomajiPreviewStyle\":\"romaji\","
-        << "\"batchConversionMode\":\"neural\","
-        << "\"batchAutoPunctuation\":true"
-        << "}";
+    out << "{" << "\"batchRomajiConversion\":true," << "\"batchRomajiPreviewStyle\":\"romaji\","
+        << "\"batchConversionMode\":\"neural\"," << "\"batchAutoPunctuation\":true,"
+        << "\"numberRewriter\":true" << "}";
   }
   azookey::host::SettingsStore settings_store(settings_path);
   settings_store.Load();
@@ -186,6 +183,7 @@ TEST_F(DispatcherTest, HandshakeIncludesBatchRomajiSettings) {
   EXPECT_EQ(parsed->batch_romaji_preview_style, "romaji");
   EXPECT_EQ(parsed->batch_conversion_mode, "neural");
   EXPECT_TRUE(parsed->batch_auto_punctuation);
+  EXPECT_TRUE(parsed->number_rewriter);
 
   std::remove(settings_path.c_str());
 }

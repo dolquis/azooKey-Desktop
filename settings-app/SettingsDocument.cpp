@@ -113,7 +113,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "predictionEnabled" || key == "includeContextInAITransform" ||
                key == "contextReselection" || key == "postCommitLint" ||
                key == "retroactiveRecompute" || key == "sentenceCompletion" ||
-               key == "batchRomajiConversion" || key == "batchAutoPunctuation") {
+               key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
+               key == "numberRewriter") {
       valid = value.IsBool();
     } else if (key == "logLevel") {
       valid = IsStringEnum(value, {"error", "warn", "info", "debug"});

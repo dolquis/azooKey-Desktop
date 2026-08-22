@@ -2,6 +2,7 @@
 
 #include <shellscalingapi.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -15,6 +16,7 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/NumberRewriter.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -92,12 +94,92 @@ std::wstring Utf8ToWide(const std::string& utf8) {
   return result;
 }
 
+std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
+    const std::string& reading, std::vector<azookey::ipc::CandidateField> candidates,
+    bool number_rewriter_enabled) {
+  std::vector<azookey::tsf::TipCandidate> result;
+  result.reserve(candidates.size() + 8);
+  for (auto& candidate : candidates) {
+    result.push_back({std::move(candidate), {}});
+  }
+
+  if (!number_rewriter_enabled) return result;
+  for (const auto& rewritten : azookey::core::ExpandNumberCandidates(reading)) {
+    const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& candidate) {
+      return candidate.field.surface == rewritten.surface;
+    });
+    if (duplicate) continue;
+
+    azookey::ipc::CandidateField candidate;
+    candidate.surface = rewritten.surface;
+    candidate.reading = rewritten.reading;
+    candidate.score = rewritten.score;
+    candidate.source = "heuristic";
+    result.push_back({std::move(candidate), rewritten.description});
+  }
+  return result;
+}
+
+std::vector<azookey::tsf::CandidateViewItem> BuildCandidateViews(
+    const std::vector<azookey::tsf::TipCandidate>& candidates) {
+  std::vector<azookey::tsf::CandidateViewItem> items;
+  items.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    items.push_back({Utf8ToWide(candidate.field.surface), Utf8ToWide(candidate.description)});
+  }
+  return items;
+}
+
+std::vector<azookey::ipc::CandidateField> CandidateFields(
+    const std::vector<azookey::tsf::TipCandidate>& candidates) {
+  std::vector<azookey::ipc::CandidateField> fields;
+  fields.reserve(candidates.size());
+  for (const auto& candidate : candidates) fields.push_back(candidate.field);
+  return fields;
+}
+
+std::vector<azookey::ipc::CandidateField> HostCandidateFields(
+    const std::vector<azookey::tsf::TipCandidate>& candidates) {
+  std::vector<azookey::ipc::CandidateField> fields;
+  fields.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    if (candidate.description.empty()) fields.push_back(candidate.field);
+  }
+  return fields;
+}
+
 bool IsVirtualKeyDown(int vk) { return (GetKeyState(vk) & 0x8000) != 0; }
 
 bool HasSystemModifierDown() {
   return IsVirtualKeyDown(VK_CONTROL) || IsVirtualKeyDown(VK_LCONTROL) ||
          IsVirtualKeyDown(VK_RCONTROL) || IsVirtualKeyDown(VK_MENU) || IsVirtualKeyDown(VK_LMENU) ||
          IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+}
+
+std::optional<char> TranslateAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_data) {
+  if (virtual_key >= VK_NUMPAD0 && virtual_key <= VK_NUMPAD9) {
+    return static_cast<char>('0' + (virtual_key - VK_NUMPAD0));
+  }
+  if (virtual_key < '0' || virtual_key > '9') return std::nullopt;
+
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+
+  const HKL keyboard_layout = GetKeyboardLayout(0);
+  UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
+  if (scan_code == 0) {
+    scan_code = MapVirtualKeyExW(static_cast<UINT>(virtual_key), MAPVK_VK_TO_VSC, keyboard_layout);
+  }
+
+  std::array<WCHAR, 4> translated{};
+  constexpr UINT kDoNotChangeKeyboardState = 1u << 2;
+  const int translated_count = ToUnicodeEx(
+      static_cast<UINT>(virtual_key), scan_code, keyboard_state.data(), translated.data(),
+      static_cast<int>(translated.size()), kDoNotChangeKeyboardState, keyboard_layout);
+  if (translated_count != 1 || translated[0] < L'0' || translated[0] > L'9') {
+    return std::nullopt;
+  }
+  return static_cast<char>(translated[0]);
 }
 
 struct OemCompositionSymbol {
@@ -565,8 +647,14 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
+    const auto decimal_digit = TranslateAsciiDecimalDigit(wParam, lParam);
 
-    if (wParam >= 'A' && wParam <= 'Z') {
+    if (wParam >= '1' && wParam <= '9' && cand_visible) {
+      *eaten = TRUE;
+    } else if (decimal_digit && !BatchRomajiEnabled() &&
+               number_rewriter_.load(std::memory_order_relaxed)) {
+      *eaten = TRUE;
+    } else if (wParam >= 'A' && wParam <= 'Z') {
       *eaten = TRUE;
     } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
       // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
@@ -586,8 +674,6 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
     } else if (wParam == VK_ESCAPE) {
       *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
-    } else if (wParam >= '1' && wParam <= '9') {
-      *eaten = cand_visible ? TRUE : FALSE;
     }
     return S_OK;
   } catch (const std::bad_alloc&) {
@@ -636,8 +722,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       core::RomajiKanaConverter romaji;
       bool candidate_window_visible{false};
       int selected_candidate_idx{0};
-      std::vector<ipc::CandidateField> shown_candidates;
-      std::vector<ipc::CandidateField> cached_candidates;
+      std::vector<TipCandidate> shown_candidates;
+      std::vector<TipCandidate> cached_candidates;
       bool candidate_window_show_pending{false};
       std::string batch_raw_romaji;
       bool batch_query_in_progress{false};
@@ -671,8 +757,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidate_window_show_pending_ = state.candidate_window_show_pending;
       }
       if (state.candidate_window_visible && !state.shown_candidates.empty()) {
-        std::vector<std::wstring> items;
-        for (const auto& c : state.shown_candidates) items.push_back(Utf8ToWide(c.surface));
+        const auto items = BuildCandidateViews(state.shown_candidates);
         const POINT pt = CandidateAnchorPoint();
         candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
       } else {
@@ -692,7 +777,36 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
-    if (wParam >= 'A' && wParam <= 'Z') {
+    const auto decimal_digit = TranslateAsciiDecimalDigit(wParam, lParam);
+    if (wParam >= '1' && wParam <= '9' && cand_visible) {
+      int idx = static_cast<int>(wParam - '1');
+      if (idx < candidate_ui_.GetCount()) {
+        selected_candidate_idx_ = idx;
+        const HRESULT commit_hr = CommitSelected(context);
+        if (FAILED(commit_hr)) return commit_hr;
+      }
+      *eaten = TRUE;
+
+    } else if (decimal_digit && !BatchRomajiEnabled() &&
+               number_rewriter_.load(std::memory_order_relaxed)) {
+      const auto rollback_state = capture_preedit_rollback_state();
+      if (cand_visible) {
+        candidate_ui_.EndUI();
+        selected_candidate_idx_ = 0;
+      }
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_.clear();
+        candidate_window_show_pending_ = false;
+      }
+      preedit_kana_ += romaji_.Flush();
+      preedit_kana_.push_back(*decimal_digit);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
+      PostQueryCandidates(CurrentPreeditSurface());
+      *eaten = TRUE;
+
+    } else if (wParam >= 'A' && wParam <= 'Z') {
       const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
       if (cand_visible) {
@@ -880,7 +994,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           } else {
             // Snapshot the candidate list so commit always reflects what was
             // displayed, even if a late QueryCandidates response arrives later.
-            std::vector<ipc::CandidateField> snapshot;
+            std::vector<TipCandidate> snapshot;
             bool wait_for_candidates = false;
             {
               std::lock_guard<std::mutex> lk(candidates_mtx_);
@@ -894,8 +1008,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
               }
             }
             if (!wait_for_candidates) {
-              std::vector<std::wstring> items;
-              for (const auto& c : snapshot) items.push_back(Utf8ToWide(c.surface));
+              const auto items = BuildCandidateViews(snapshot);
               if (!items.empty()) {
                 selected_candidate_idx_ = 0;
                 const POINT pt = CandidateAnchorPoint();
@@ -941,17 +1054,6 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
         const HRESULT commit_hr = CommitPreeditAsIs(context);
         if (FAILED(commit_hr)) return commit_hr;
-        *eaten = TRUE;
-      }
-
-    } else if (wParam >= '1' && wParam <= '9') {
-      if (cand_visible) {
-        int idx = static_cast<int>(wParam - '1');
-        if (idx < candidate_ui_.GetCount()) {
-          selected_candidate_idx_ = idx;
-          const HRESULT commit_hr = CommitSelected(context);
-          if (FAILED(commit_hr)) return commit_hr;
-        }
         *eaten = TRUE;
       }
 
@@ -1366,8 +1468,8 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
 
   // Use the snapshot taken when Space opened the window so that a late
   // QueryCandidates response cannot silently alter what gets committed.
-  ipc::CandidateField chosen;
-  std::vector<ipc::CandidateField> shown = shown_candidates_;
+  TipCandidate chosen;
+  std::vector<TipCandidate> shown = shown_candidates_;
   if (!shown_candidates_.empty() && selected_candidate_idx_ >= 0 &&
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
     chosen = shown_candidates_[selected_candidate_idx_];
@@ -1406,11 +1508,12 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     if (need_notify) ipc_cv_.notify_one();
   }
 
-  commit_surface_ = chosen.surface.empty() ? reading : chosen.surface;
+  commit_surface_ = chosen.field.surface.empty() ? reading : chosen.field.surface;
   committing_ = true;
   SetCommitContext(context);
-  if (!chosen.surface.empty() && !reading.empty()) {
-    pending_commit_observation_ = PendingCommitObservation{reading, chosen, shown};
+  if (!chosen.field.surface.empty() && !reading.empty() && chosen.description.empty()) {
+    pending_commit_observation_ =
+        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown)};
   } else {
     pending_commit_observation_.reset();
   }
@@ -1609,6 +1712,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
                                        std::memory_order_relaxed);
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
+    number_rewriter_.store(hpayload->number_rewriter, std::memory_order_relaxed);
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
                 {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
@@ -2092,6 +2196,10 @@ void TextService::ServeConnection() {
       response_candidates = std::move(qpayload->candidates);
     }
 
+    auto tip_candidates =
+        BuildTipCandidates(reading, std::move(response_candidates),
+                           !is_batch && number_rewriter_.load(std::memory_order_relaxed));
+
     // M10: discard stale responses.
     // Conditions for freshness:
     //   1. No newer QC is already queued (ipc_has_request_ false).
@@ -2104,17 +2212,17 @@ void TextService::ServeConnection() {
     }
 
     if (is_fresh) {
-      if (!response_candidates.empty()) {
+      if (!tip_candidates.empty()) {
         RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_candidates_received",
                    {{"request_id", req_id},
                     {"reading_length", static_cast<uint64_t>(reading.size())},
-                    {"candidate_count", static_cast<uint64_t>(response_candidates.size())},
+                    {"candidate_count", static_cast<uint64_t>(tip_candidates.size())},
                     {"result", SafeLogText("ok")}});
       }
       bool notify_ui = false;
       {
         std::lock_guard<std::mutex> lock(candidates_mtx_);
-        candidates_ = std::move(response_candidates);
+        candidates_ = std::move(tip_candidates);
         if (candidate_window_show_pending_) {
           if (candidates_.empty()) {
             candidate_window_show_pending_ = false;
@@ -2163,7 +2271,7 @@ std::string TextService::CurrentPreeditSurface() const {
 std::string TextService::CurrentDisplayedPreeditSurface() const {
   if (candidate_ui_.IsShowing() && selected_candidate_idx_ >= 0 &&
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
-    return shown_candidates_[static_cast<size_t>(selected_candidate_idx_)].surface;
+    return shown_candidates_[static_cast<size_t>(selected_candidate_idx_)].field.surface;
   }
   return CurrentPreeditSurface();
 }
@@ -2188,7 +2296,7 @@ void TextService::ShowCandidateWindowFromCache() {
     return;
   }
 
-  std::vector<ipc::CandidateField> snapshot;
+  std::vector<TipCandidate> snapshot;
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     if (!candidate_window_show_pending_) return;
@@ -2198,8 +2306,7 @@ void TextService::ShowCandidateWindowFromCache() {
     snapshot = shown_candidates_;
   }
 
-  std::vector<std::wstring> items;
-  for (const auto& candidate : snapshot) items.push_back(Utf8ToWide(candidate.surface));
+  const auto items = BuildCandidateViews(snapshot);
   if (items.empty()) return;
 
   batch_query_in_progress_ = false;
@@ -2226,12 +2333,29 @@ bool TextService::candidate_window_show_pending_for_test() {
 
 void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
-  candidates_ = std::move(candidates);
+  candidates_ = BuildTipCandidates({}, std::move(candidates), false);
+}
+
+void TextService::set_rewritten_cached_candidates_for_test(
+    const std::string& reading, std::vector<ipc::CandidateField> candidates) {
+  std::lock_guard<std::mutex> lk(candidates_mtx_);
+  candidates_ = BuildTipCandidates(reading, std::move(candidates),
+                                   number_rewriter_.load(std::memory_order_relaxed));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
-  return candidates_;
+  return CandidateFields(candidates_);
+}
+
+std::vector<ipc::CandidateField> TextService::shown_candidates_for_test() const {
+  return CandidateFields(shown_candidates_);
+}
+
+std::vector<CandidateViewItem> TextService::candidate_views_for_test(
+    const std::string& reading, std::vector<ipc::CandidateField> candidates) const {
+  return BuildCandidateViews(BuildTipCandidates(reading, std::move(candidates),
+                                                number_rewriter_.load(std::memory_order_relaxed)));
 }
 
 void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }

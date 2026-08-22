@@ -29,15 +29,19 @@ class CandidateUiCoordinator {
   void SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn, void* context);
   void PostCandidatesReady();
 
-  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt, const std::vector<std::wstring>& items,
+  HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt, const std::vector<CandidateViewItem>& items,
                   int selected_idx);
-  HRESULT UpdateUI(const std::vector<std::wstring>& items, int selected_idx);
+  HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
   HRESULT EndUI();
 
   bool IsShowing() const { return showing_; }
   HRESULT MoveSelection(int delta);
   int GetSelected() const { return selected_idx_; }
   int GetCount() const { return static_cast<int>(items_.size()); }
+
+#ifdef AZOOKEY_TSF_TESTING
+  const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
+#endif
 
  private:
   static constexpr DWORD kInvalidUiElementId = 0xFFFFFFFF;
@@ -53,7 +57,7 @@ class CandidateUiCoordinator {
   CandidateListUIElement* ui_element_{nullptr};
   ITfUIElementMgr* ui_element_mgr_{nullptr};
   DWORD ui_element_id_{kInvalidUiElementId};
-  std::vector<std::wstring> items_;
+  std::vector<CandidateViewItem> items_;
   POINT last_pt_{0, 0};
   int selected_idx_{-1};
   bool ui_less_mode_{false};

@@ -157,6 +157,11 @@
       "default": false,
       "description": "M58-C: batchConversionMode=ai-cleanup 時に句読点を自動挿入"
     },
+    "numberRewriter": {
+      "type": "boolean",
+      "default": false,
+      "description": "M62-A: true で純十進数字の候補へ漢数字、大字、丸数字、ローマ数字、16進数、8進数、2進数を注釈付きで追加"
+    },
     "autoUpdate": {
       "type": "object",
       "description": "Phase 7 (M32): 自動更新設定",

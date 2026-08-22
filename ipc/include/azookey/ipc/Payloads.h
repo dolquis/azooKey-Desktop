@@ -27,6 +27,7 @@ struct HandshakeResponse {
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};
   bool batch_auto_punctuation{false};
+  bool number_rewriter{false};
 };
 
 struct PingPayload {

@@ -9,6 +9,11 @@
 
 namespace azookey::tsf {
 
+struct CandidateViewItem {
+  std::wstring surface;
+  std::wstring description;
+};
+
 // Popup window that displays the IME candidate list.
 // Must be created and used on the same thread (no internal locking).
 class CandidateWindow {
@@ -25,7 +30,7 @@ class CandidateWindow {
 
   // Show at screen point 'pt' (bottom-left of the caret rect) with given items.
   // selected_idx is clamped to [0, items.size()).
-  void Show(POINT pt, const std::vector<std::wstring>& items, int selected_idx);
+  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx);
   void Hide();
   bool IsVisible() const;
 
@@ -57,7 +62,16 @@ class CandidateWindow {
     int extra_width;
   };
 
+  struct ColumnLayoutForTest {
+    int surface_width;
+    int column_gap;
+    int content_width;
+  };
+
   static LayoutMetricsForTest ComputeLayoutMetricsForTest(UINT dpi);
+  static ColumnLayoutForTest ComputeColumnLayoutForTest(int max_surface_width,
+                                                        int max_description_width, UINT dpi);
+  const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
 #endif
 
  private:
@@ -70,6 +84,12 @@ class CandidateWindow {
     int extra_width;
   };
 
+  struct ColumnLayout {
+    int surface_width;
+    int column_gap;
+    int content_width;
+  };
+
   static constexpr UINT kDefaultDpi = USER_DEFAULT_SCREEN_DPI;
   static constexpr int kBaseItemHeight = 24;
   static constexpr int kBaseHorzPad = 8;
@@ -77,6 +97,8 @@ class CandidateWindow {
   static constexpr int kBaseCaretGap = 20;
   static constexpr int kBaseMinTextWidth = 60;
   static constexpr int kBaseExtraWidth = 4;
+  static constexpr int kBaseMaxSurfaceWidth = 220;
+  static constexpr int kBaseColumnGap = 12;
   static constexpr UINT kCandidatesReadyMessage = WM_APP + 0x4b1;
 
   HWND hwnd_{nullptr};
@@ -84,7 +106,8 @@ class CandidateWindow {
   HFONT font_{nullptr};
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
-  std::vector<std::wstring> items_;
+  std::vector<CandidateViewItem> items_;
+  int surface_column_width_{0};
   int selected_idx_{0};
   OnClickFn on_click_;
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
@@ -92,6 +115,8 @@ class CandidateWindow {
 
   static int ScaleForDpi(int value, UINT dpi);
   static LayoutMetrics ComputeLayoutMetrics(UINT dpi);
+  static ColumnLayout ComputeColumnLayout(int max_surface_width, int max_description_width,
+                                          UINT dpi);
   static UINT DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd);
   static HFONT CreateMessageFont(UINT dpi);
   static ATOM RegisterWindowClass();

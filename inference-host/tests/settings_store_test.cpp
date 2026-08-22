@@ -48,6 +48,7 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Missing);
   EXPECT_EQ(result.settings.input_mode, "hiragana");
   EXPECT_FALSE(result.settings.live_conversion);
+  EXPECT_FALSE(result.settings.number_rewriter);
   EXPECT_TRUE(result.settings.prediction_enabled);
   EXPECT_EQ(result.settings.backend_preference, "auto");
   EXPECT_TRUE(result.settings.model.enabled);
@@ -61,6 +62,7 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "liveConversion": true,
+    "numberRewriter": true,
     "predictionEnabled": false,
     "backendPreference": "cuda",
     "model": {
@@ -75,6 +77,7 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
   EXPECT_EQ(result.settings.input_mode, "hiragana");
   EXPECT_TRUE(result.settings.live_conversion);
+  EXPECT_TRUE(result.settings.number_rewriter);
   EXPECT_FALSE(result.settings.prediction_enabled);
   EXPECT_EQ(result.settings.backend_preference, "cuda");
   EXPECT_EQ(result.settings.model.selected_path, "C:/models/zenz-v3.gguf");

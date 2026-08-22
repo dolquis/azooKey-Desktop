@@ -508,15 +508,22 @@ void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
     return;
   }
 
+  const bool starts_new_burst = unsaved_observations_ == 0;
+  const auto mutation_steady = std::chrono::steady_clock::now();
+  const bool burst_start_flush_due =
+      starts_new_burst && (!last_successful_learning_save_steady_.has_value() ||
+                           mutation_steady - *last_successful_learning_save_steady_ >=
+                               std::chrono::seconds(config_.learning_flush_interval_sec));
+
   ++unsaved_observations_;
   if (!first_unsaved_observation_epoch_sec_.has_value()) {
     first_unsaved_observation_epoch_sec_ = now_epoch_sec;
-    first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
+    first_unsaved_observation_steady_ = mutation_steady;
   }
   last_unsaved_observation_epoch_sec_ = now_epoch_sec;
   learning_flush_cv_.notify_all();
 
-  if (ShouldFlushLearningStoreLocked(now_epoch_sec)) {
+  if (burst_start_flush_due || ShouldFlushLearningStoreLocked(now_epoch_sec)) {
     (void)FlushLearningStoreLocked();
   }
 }
@@ -560,6 +567,7 @@ bool InferenceEngine::FlushLearningStoreLocked() {
     first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
     return false;
   }
+  last_successful_learning_save_steady_ = std::chrono::steady_clock::now();
   unsaved_observations_ = 0;
   first_unsaved_observation_epoch_sec_.reset();
   last_unsaved_observation_epoch_sec_.reset();

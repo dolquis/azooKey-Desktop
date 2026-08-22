@@ -183,11 +183,14 @@ TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
+  ASSERT_TRUE(std::filesystem::exists(path));
+  ASSERT_EQ(std::remove(path.c_str()), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 2);
+  engine->CommitObservation("reading", "surface", kNowBase + 3);
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_TRUE(store.dirty());
 
-  engine->CommitObservation("reading", "surface", kNowBase + 3);
+  engine->CommitObservation("reading", "surface", kNowBase + 4);
   EXPECT_TRUE(std::filesystem::exists(path));
   EXPECT_FALSE(store.dirty());
 
@@ -207,6 +210,9 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   cfg.learning_min_weight = 0.0;
   auto engine = MakeEngine(store, cfg);
 
+  engine->CommitObservation("initial", "saved", kNowBase + 1);
+  ASSERT_TRUE(std::filesystem::exists(path));
+  ASSERT_EQ(std::remove(path.c_str()), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 10);
   engine->CommitObservation("reading", "surface", kNowBase + 14);
   EXPECT_FALSE(std::filesystem::exists(path));
@@ -231,6 +237,9 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   cfg.learning_min_weight = 0.0;
   auto engine = MakeEngine(store, cfg);
 
+  engine->CommitObservation("initial", "saved", kNowBase + 1);
+  ASSERT_TRUE(std::filesystem::exists(path));
+  ASSERT_EQ(std::remove(path.c_str()), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 10);
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_TRUE(WaitForFileExists(path, std::chrono::milliseconds(2500)));
@@ -256,6 +265,9 @@ TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
+  ASSERT_TRUE(std::filesystem::exists(path));
+  ASSERT_EQ(std::remove(path.c_str()), 0);
+  engine->CommitObservation("pending", "observation", kNowBase + 2);
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_TRUE(std::filesystem::exists(path));
@@ -279,6 +291,8 @@ TEST(InferenceEngineTest, PrunesLearningStoreOnlyAtFlushBoundary) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("a", "first", kNowBase + 1);
+  ASSERT_TRUE(std::filesystem::exists(path));
+  ASSERT_EQ(std::remove(path.c_str()), 0);
   engine->CommitObservation("b", "second", kNowBase + 2);
   engine->CommitObservation("b", "second", kNowBase + 3);
   EXPECT_EQ(store.size(), 2u);
@@ -321,6 +335,54 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
 
   engine.reset();
   std::filesystem::remove_all(root);
+}
+
+TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicitFlush) {
+  const std::string path = TempPath("azookey_host_engine_learning_burst_start.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("reading", "surface", kNowBase + 1);
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(store.dirty());
+
+  azookey::learning::LearningStore loaded(path);
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 1), 0.0);
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+TEST(InferenceEngineTest, BurstStartFlushIsRateLimitedWithinInterval) {
+  const std::string path = TempPath("azookey_host_engine_learning_burst_rate_limit.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  engine->CommitObservation("first", "saved", kNowBase + 1);
+  ASSERT_TRUE(std::filesystem::exists(path));
+  ASSERT_EQ(std::remove(path.c_str()), 0);
+
+  engine->CommitObservation("second", "pending", kNowBase + 2);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(store.dirty());
+
+  engine.reset();
+  std::remove(path.c_str());
 }
 
 TEST(InferenceEngineTest, UserDictionaryInjection) {

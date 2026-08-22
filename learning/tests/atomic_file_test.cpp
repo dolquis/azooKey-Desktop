@@ -1,21 +1,22 @@
-#include "AtomicFile.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <future>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/FileLock.h"
 
 namespace {
+
+static_assert(requires { azookey::learning::WriteTextFileAtomically("a.json", "content"); });
 
 std::string ReadAll(const std::filesystem::path& path) {
   std::ifstream ifs(path, std::ios::binary);
@@ -122,10 +123,10 @@ TEST(AtomicFileTest, ConcurrentWritesToSamePathDoNotCorruptOrLeakTempFiles) {
   threads.reserve(kThreads);
   for (int i = 0; i < kThreads; ++i) {
     threads.emplace_back([&, i] {
-      ok[static_cast<size_t>(i)] =
-          azookey::learning::WriteTextFileAtomically(target.string(), contents[static_cast<size_t>(i)])
-              ? 1
-              : 0;
+      ok[static_cast<size_t>(i)] = azookey::learning::WriteTextFileAtomically(
+                                       target.string(), contents[static_cast<size_t>(i)])
+                                       ? 1
+                                       : 0;
     });
   }
   for (auto& t : threads) t.join();

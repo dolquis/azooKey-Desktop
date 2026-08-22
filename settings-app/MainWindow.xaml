@@ -9,6 +9,57 @@
                        AutomationProperties.AutomationId="PageTitle" />
             <TextBlock x:Uid="PageDescription"
                        TextWrapping="Wrap" />
+            <InfoBar x:Name="SettingsStatusInfoBar"
+                     IsOpen="False"
+                     IsClosable="True"
+                     AutomationProperties.AutomationId="SettingsStatusInfoBar" />
+            <TextBlock x:Uid="GeneralSectionTitle"
+                       Style="{StaticResource SubtitleTextBlockStyle}" />
+            <ToggleSwitch x:Name="ModelEnabledToggle"
+                          x:Uid="ModelEnabledToggle"
+                          AutomationProperties.AutomationId="ModelEnabledToggle" />
+            <StackPanel Spacing="4">
+                <TextBlock x:Uid="BackendPreferenceLabel" />
+                <ComboBox x:Name="BackendPreferenceCombo"
+                          HorizontalAlignment="Stretch"
+                          AutomationProperties.AutomationId="BackendPreferenceCombo">
+                    <ComboBoxItem x:Uid="BackendAuto" />
+                    <ComboBoxItem x:Uid="BackendCpu" />
+                    <ComboBoxItem x:Uid="BackendCuda" />
+                </ComboBox>
+                <TextBlock x:Name="UnsupportedBackendText"
+                           Visibility="Collapsed"
+                           TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+            <TextBox x:Name="ModelPathTextBox"
+                     x:Uid="ModelPathTextBox"
+                     AutomationProperties.AutomationId="ModelPathTextBox" />
+            <TextBlock x:Uid="AdvancedSectionTitle"
+                       Margin="0,8,0,0"
+                       Style="{StaticResource SubtitleTextBlockStyle}" />
+            <StackPanel Spacing="4">
+                <TextBlock x:Uid="LogLevelLabel" />
+                <ComboBox x:Name="LogLevelCombo"
+                          HorizontalAlignment="Stretch"
+                          AutomationProperties.AutomationId="LogLevelCombo">
+                    <ComboBoxItem Content="error" />
+                    <ComboBoxItem Content="warn" />
+                    <ComboBoxItem Content="info" />
+                    <ComboBoxItem Content="debug" />
+                </ComboBox>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Button x:Name="SaveButton"
+                        x:Uid="SaveButton"
+                        Click="SaveButton_Click"
+                        AutomationProperties.AutomationId="SaveButton" />
+                <ProgressRing x:Name="SaveProgressRing"
+                              Width="24"
+                              Height="24"
+                              IsActive="False"
+                              Visibility="Collapsed" />
+            </StackPanel>
             <InfoBar x:Uid="LaunchContextInfoBar"
                      IsOpen="True"
                      Severity="Informational"

@@ -89,7 +89,7 @@ std::optional<HandshakeRequest> ParseHandshakeRequest(const std::string& json) {
   auto pv = v->GetInt("protocol_version");
   if (!tip) return std::nullopt;
   p.tip_version = std::move(*tip);
-  p.protocol_version = static_cast<int>(pv.value_or(1));
+  p.protocol_version = static_cast<int>(pv.value_or(kHandshakeProtocolVersion));
   if (const auto* caps = v->GetArray("capabilities")) {
     for (const auto& e : *caps) {
       if (e.IsString()) p.capabilities.push_back(e.AsString());
@@ -123,7 +123,8 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   auto host = v->GetString("host_version");
   if (!host) return std::nullopt;
   p.host_version = std::move(*host);
-  p.protocol_version = static_cast<int>(v->GetInt("protocol_version").value_or(1));
+  p.protocol_version =
+      static_cast<int>(v->GetInt("protocol_version").value_or(kHandshakeProtocolVersion));
   p.accepted = v->GetBool("accepted").value_or(false);
   p.model_loaded = v->GetBool("model_loaded").value_or(false);
   p.host_generation_id = v->GetString("host_generation_id").value_or(std::string());

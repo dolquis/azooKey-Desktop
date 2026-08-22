@@ -7,9 +7,11 @@
 
 namespace azookey::ipc {
 
+inline constexpr int kHandshakeProtocolVersion = 1;
+
 struct HandshakeRequest {
   std::string tip_version;
-  int protocol_version{1};
+  int protocol_version{kHandshakeProtocolVersion};
   std::vector<std::string> capabilities;
   std::string client_id;
   std::string handshake_token;
@@ -17,7 +19,7 @@ struct HandshakeRequest {
 
 struct HandshakeResponse {
   std::string host_version;
-  int protocol_version{1};
+  int protocol_version{kHandshakeProtocolVersion};
   bool accepted{false};
   bool model_loaded{false};
   std::string host_generation_id;

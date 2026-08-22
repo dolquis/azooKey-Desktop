@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -70,6 +71,7 @@ struct SettingsLoadResult {
 class SettingsStore {
  public:
   explicit SettingsStore(std::filesystem::path settings_path);
+  SettingsStore(std::filesystem::path settings_path, std::chrono::milliseconds file_lock_timeout);
 
   const std::filesystem::path& path() const { return settings_path_; }
   const RuntimeSettings& settings() const { return settings_; }
@@ -79,7 +81,10 @@ class SettingsStore {
   SettingsLoadResult Reload();
 
  private:
+  SettingsLoadResult LoadImpl(bool preserve_current_on_invalid);
+
   std::filesystem::path settings_path_;
+  std::chrono::milliseconds file_lock_timeout_;
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
 };

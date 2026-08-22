@@ -138,7 +138,9 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
   LONG ref_count_{1};
 };
 
-std::vector<std::wstring> SampleItems() { return {L"日本語", L"にほんご", L"日本"}; }
+std::vector<azookey::tsf::CandidateViewItem> SampleItems() {
+  return {{L"日本語", L"第一候補"}, {L"にほんご", L""}, {L"日本", L"国名"}};
+}
 
 ITfCandidateListUIElement* QueryCandidateList(ITfUIElement* element) {
   ITfCandidateListUIElement* candidates = nullptr;
@@ -193,6 +195,9 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) 
   EXPECT_EQ(candidates->GetString(0, &text), S_OK);
   EXPECT_STREQ(text, L"日本語");
   SysFreeString(text);
+  ASSERT_EQ(coordinator.items_for_test().size(), 3u);
+  EXPECT_EQ(coordinator.items_for_test()[0].surface, L"日本語");
+  EXPECT_EQ(coordinator.items_for_test()[0].description, L"第一候補");
   candidates->Release();
 
   EXPECT_EQ(coordinator.EndUI(), S_OK);

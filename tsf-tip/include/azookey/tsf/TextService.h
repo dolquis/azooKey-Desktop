@@ -54,6 +54,11 @@ CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect,
 
 class EditSession;
 
+struct TipCandidate {
+  ipc::CandidateField field;
+  std::string description;
+};
+
 class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfThreadMgrEventSink,
@@ -113,9 +118,14 @@ class TextService final : public ITfTextInputProcessorEx,
 #ifdef AZOOKEY_TSF_TESTING
   bool candidate_window_show_pending_for_test();
   void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
+  void set_rewritten_cached_candidates_for_test(
+      const std::string& reading, std::vector<ipc::CandidateField> candidates);
   std::vector<ipc::CandidateField> cached_candidates_for_test();
-  const std::vector<ipc::CandidateField>& shown_candidates_for_test() const {
-    return shown_candidates_;
+  std::vector<ipc::CandidateField> shown_candidates_for_test() const;
+  std::vector<CandidateViewItem> candidate_views_for_test(
+      const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
+  void set_number_rewriter_enabled_for_test(bool enabled) {
+    number_rewriter_.store(enabled, std::memory_order_relaxed);
   }
   void set_selected_candidate_index_for_test(int index) { selected_candidate_idx_ = index; }
   bool has_pending_commit_observation_for_test() const {
@@ -163,6 +173,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
   std::atomic<bool> batch_auto_punctuation_{false};
+  std::atomic<bool> number_rewriter_{false};
 
   // Last context used for preedit updates; allows Deactivate to end composition.
   ITfContext* active_context_{nullptr};
@@ -174,7 +185,7 @@ class TextService final : public ITfTextInputProcessorEx,
   int selected_candidate_idx_{0};
   // Snapshot of candidates taken when the window was opened (used for commit
   // so that a late QueryCandidates response cannot change what is confirmed).
-  std::vector<ipc::CandidateField> shown_candidates_;
+  std::vector<TipCandidate> shown_candidates_;
   struct PendingCommitObservation {
     std::string reading;
     ipc::CandidateField chosen;
@@ -216,9 +227,10 @@ class TextService final : public ITfTextInputProcessorEx,
   };
   std::vector<IpcSendItem> ipc_send_queue_;  // protected by ipc_mtx_
 
-  // Latest candidates from Host (written by IPC thread, read by TIP thread).
+  // Latest Host candidates plus optional TIP-local rewrites (written by IPC
+  // thread, read by TIP thread).
   std::mutex candidates_mtx_;
-  std::vector<ipc::CandidateField> candidates_;
+  std::vector<TipCandidate> candidates_;
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
 
   void StartIpcWorker();

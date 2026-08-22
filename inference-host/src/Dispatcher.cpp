@@ -268,6 +268,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     res.batch_romaji_preview_style = settings.batch_romaji_preview_style;
     res.batch_conversion_mode = settings.batch_conversion_mode;
     res.batch_auto_punctuation = settings.batch_auto_punctuation;
+    res.number_rewriter = settings.number_rewriter;
   }
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
 }

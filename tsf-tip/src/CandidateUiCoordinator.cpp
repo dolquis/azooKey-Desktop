@@ -13,6 +13,13 @@ namespace {
 constexpr DWORD kAllInitialCandidateFlags = TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION |
                                             TF_CLUIE_PAGEINDEX | TF_CLUIE_CURRENTPAGE;
 
+std::vector<std::wstring> CandidateSurfaces(const std::vector<CandidateViewItem>& items) {
+  std::vector<std::wstring> surfaces;
+  surfaces.reserve(items.size());
+  for (const auto& item : items) surfaces.push_back(item.surface);
+  return surfaces;
+}
+
 }  // namespace
 
 CandidateUiCoordinator::~CandidateUiCoordinator() { Destroy(); }
@@ -39,7 +46,8 @@ void CandidateUiCoordinator::SetOnCandidatesReady(CandidateWindow::OnCandidatesR
 void CandidateUiCoordinator::PostCandidatesReady() { own_window_.PostCandidatesReady(); }
 
 HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
-                                        const std::vector<std::wstring>& items, int selected_idx) {
+                                        const std::vector<CandidateViewItem>& items,
+                                        int selected_idx) {
   if (items.empty()) return EndUI();
 
   const HRESULT end_hr = EndUI();
@@ -49,7 +57,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   selected_idx_ = ClampSelection(selected_idx);
   last_pt_ = pt;
 
-  auto* element = new (std::nothrow) CandidateListUIElement(items_, selected_idx_);
+  auto* element = new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
   if (!element) return E_OUTOFMEMORY;
   ui_element_ = element;
   ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });
@@ -82,7 +90,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   showing_ = true;
   OnPbShown(pb_show != FALSE);
   if (!tip_draws_) {
-    ui_element_->Update(items_, selected_idx_, kAllInitialCandidateFlags);
+    ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
     hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
     if (FAILED(hr)) {
       const HRESULT cleanup_hr = EndUI();
@@ -93,13 +101,15 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   return S_OK;
 }
 
-HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<std::wstring>& items, int selected_idx) {
+HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& items,
+                                         int selected_idx) {
   if (items.empty()) return EndUI();
   if (!showing_ || !ui_element_) return S_OK;
 
   items_ = items;
   selected_idx_ = ClampSelection(selected_idx);
-  ui_element_->Update(items_, selected_idx_, TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION);
+  ui_element_->Update(CandidateSurfaces(items_), selected_idx_,
+                      TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION);
   if (tip_draws_) {
     own_window_.Show(last_pt_, items_, selected_idx_);
     return S_OK;
@@ -168,7 +178,7 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
     tip_draws_ = false;
     own_window_.Hide();
     if (showing_ && ui_element_ && ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
-      ui_element_->Update(items_, selected_idx_, kAllInitialCandidateFlags);
+      ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
       const HRESULT update_hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
       UNREFERENCED_PARAMETER(update_hr);
     }

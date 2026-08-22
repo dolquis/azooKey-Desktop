@@ -57,6 +57,16 @@ M62-A の対象は、空でない ASCII 十進数字列である。
 
 表層形が入力文字列と同じ候補は追加しない。
 
+`settings/mvp-settings.schema.json` の `numberRewriter`（boolean、既定 `false`）が
+M62-A 全体の有効化を制御する。
+Host は runtime settings の値を Handshake 応答へ載せ、TIP は通常の変換候補を受信した後に
+数字候補をローカルで追加する。
+Handshake 応答に設定値がない旧 Host は `false` として扱う。
+
+TIP は Host 候補を先に保ち、その末尾へ数字候補を追加する。
+同じ表層形がすでに Host 候補または先行する数字候補にある場合は追加しない。
+一括変換、ライブ変換、予測候補の経路には数字候補を追加しない。
+
 同じ表層形が複数の分類から生成された場合は、先に生成した候補を残す。
 
 ## 4. 注釈

@@ -63,6 +63,7 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "liveConversion": true,
+    "numberRewriter": true,
     "aiBackend": "invalid-backend",
     "openAiModel": "local-test-model",
     "backendPreference": "cuda",
@@ -89,6 +90,8 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   ASSERT_TRUE(parsed && parsed->IsObject());
   const auto& root = parsed->AsObject();
   EXPECT_TRUE(root.contains("liveConversion"));
+  ASSERT_TRUE(root.contains("numberRewriter"));
+  EXPECT_TRUE(root.at("numberRewriter").AsBool());
   EXPECT_TRUE(root.contains("openAiModel"));
   EXPECT_FALSE(root.contains("aiBackend"));
   EXPECT_FALSE(root.contains("unknownRoot"));

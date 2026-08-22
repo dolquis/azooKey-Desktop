@@ -129,6 +129,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       object, "batchConversionMode", settings.batch_conversion_mode, {"neural", "ai-cleanup"});
   settings.batch_auto_punctuation =
       ReadBool(object, "batchAutoPunctuation", settings.batch_auto_punctuation);
+  settings.number_rewriter = ReadBool(object, "numberRewriter", settings.number_rewriter);
 
   if (const auto* model = ReadObject(object, "model")) {
     settings.model.enabled = ReadBool(*model, "enabled", settings.model.enabled);

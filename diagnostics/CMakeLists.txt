@@ -10,6 +10,9 @@ configure_file(
 )
 
 add_library(azookey_diagnostics STATIC Diagnostics.cpp)
+set_property(SOURCE Diagnostics.cpp APPEND PROPERTY OBJECT_DEPENDS
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/SettingsSchema.h"
+)
 target_include_directories(azookey_diagnostics
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
   PRIVATE

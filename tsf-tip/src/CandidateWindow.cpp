@@ -167,7 +167,8 @@ void CandidateWindow::Destroy() {
   }
 }
 
-void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int selected_idx) {
+void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items,
+                           int selected_idx) {
   if (!hwnd_ || items.empty()) return;
 
   const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -180,13 +181,20 @@ void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int
   HDC hdc = GetDC(hwnd_);
   HGDIOBJ old_font = nullptr;
   if (hdc && font_) old_font = SelectObject(hdc, font_);
-  int max_text_w = metrics_.min_text_width;
+  int max_surface_w = metrics_.min_text_width;
+  int max_description_w = 0;
   if (hdc) {
     for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
-      std::wstring label = std::to_wstring(i + 1) + L". " + items_[static_cast<size_t>(i)];
+      const auto& item = items_[static_cast<size_t>(i)];
+      std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
       SIZE sz{};
       GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
-      max_text_w = std::max(max_text_w, static_cast<int>(sz.cx));
+      max_surface_w = std::max(max_surface_w, static_cast<int>(sz.cx));
+      if (!item.description.empty()) {
+        GetTextExtentPoint32W(hdc, item.description.c_str(),
+                              static_cast<int>(item.description.size()), &sz);
+        max_description_w = std::max(max_description_w, static_cast<int>(sz.cx));
+      }
     }
   }
   if (hdc) {
@@ -194,7 +202,11 @@ void CandidateWindow::Show(POINT pt, const std::vector<std::wstring>& items, int
     ReleaseDC(hwnd_, hdc);
   }
 
-  int width = std::min(max_text_w + metrics_.horizontal_padding * 2 + metrics_.extra_width,
+  surface_column_width_ =
+      std::min(max_surface_w, ScaleForDpi(kBaseMaxSurfaceWidth, dpi_));
+  const int column_gap = max_description_w > 0 ? ScaleForDpi(kBaseColumnGap, dpi_) : 0;
+  int width = std::min(surface_column_width_ + column_gap + max_description_w +
+                           metrics_.horizontal_padding * 2 + metrics_.extra_width,
                        metrics_.max_width);
   int height = metrics_.item_height * static_cast<int>(items_.size());
 
@@ -283,11 +295,25 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           FillRect(hdc, &row_rc, reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_WINDOW + 1)));
           SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
         }
-        std::wstring label = std::to_wstring(i + 1) + L". " + items_[static_cast<size_t>(i)];
-        RECT text_rc = row_rc;
-        text_rc.left += metrics_.horizontal_padding;
-        DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &text_rc,
+        const auto& item = items_[static_cast<size_t>(i)];
+        std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
+        RECT surface_rc = row_rc;
+        surface_rc.left += metrics_.horizontal_padding;
+        surface_rc.right = std::min(surface_rc.right - metrics_.horizontal_padding,
+                                    surface_rc.left + surface_column_width_);
+        DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        if (!item.description.empty()) {
+          if (i != selected_idx_) SetTextColor(hdc, RGB(96, 96, 96));
+          RECT description_rc = row_rc;
+          description_rc.left = surface_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
+          description_rc.right -= metrics_.horizontal_padding;
+          if (description_rc.left < description_rc.right) {
+            DrawTextW(hdc, item.description.c_str(), static_cast<int>(item.description.size()),
+                      &description_rc,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+          }
+        }
       }
       if (old_font) SelectObject(hdc, old_font);
       EndPaint(hwnd, &ps);

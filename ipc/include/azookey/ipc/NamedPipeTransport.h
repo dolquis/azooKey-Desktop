@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -22,8 +23,8 @@ namespace azookey::ipc {
 //   - Each message is one Envelope serialized via ipc::Serialize
 //   - Framed with EncodeLengthPrefixed (4-byte little-endian length prefix)
 //   - Pipe is PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE on Windows.
-//     Server instances use FILE_FLAG_OVERLAPPED for cancelable accept while
-//     preserving blocking wait mode for connected message I/O.
+//     Server and client handles use FILE_FLAG_OVERLAPPED while preserving
+//     blocking wait mode for connected message I/O.
 //
 // Security (Windows):
 //   - DACL is restricted to the current logon SID with scoped pipe rights
@@ -36,13 +37,13 @@ namespace azookey::ipc {
 //     remains current-logon-only and fails closed if SID-based DACL creation fails
 //   - One server can accept multiple clients (TIP + settings UI)
 //
-// Frame deadlines (Windows server side):
+// Frame deadlines (Windows):
 //   - A connection waiting between requests is never on the clock, but once a
 //     frame starts arriving the rest of it must land within a monotonic budget.
 //     Expiry closes that one connection and leaves other clients untouched.
-//   - NamedPipeClient's handle is opened without FILE_FLAG_OVERLAPPED and so
-//     cannot be interrupted mid-call; deadlines there apply only between chunks
-//     (docs/dev-infrastructure-spec.md §6.4.7).
+//   - Server and client handles use overlapped I/O so pending reads and writes
+//     can be canceled at the hard deadline or when the connection is closed
+//     (docs/dev-infrastructure-spec.md §6.4.7 and §6.4.8).
 
 class NamedPipeServer {
  public:
@@ -102,11 +103,18 @@ class NamedPipeClient {
 
   bool Send(const Envelope& envelope);
   std::optional<Envelope> Receive();
-  // Poll for an inbound envelope for up to `timeout_ms` milliseconds.
-  // Returns std::nullopt on timeout (caller should retry) or on pipe error.
-  // Designed for use inside a loop so callers can drain the send queue between
-  // polls without blocking indefinitely while the host processes a long query.
+  // Wait up to `timeout_ms` for the complete frame. An idle timeout preserves
+  // the connection and unread response; a timeout after the frame starts drops
+  // the connection because the framing cannot be resumed safely.
   std::optional<Envelope> ReceiveWithTimeout(uint32_t timeout_ms);
+
+  // Poll phase A for `poll_timeout_ms`, then bound an in-progress frame by the
+  // earlier of `request_deadline` and the transport read hard deadline. Passing
+  // no request deadline is intended for batch waits that have no request-level
+  // wall-clock bound.
+  std::optional<Envelope> ReceiveWithTimeout(
+      uint32_t poll_timeout_ms,
+      std::optional<std::chrono::steady_clock::time_point> request_deadline);
 
  private:
   struct Impl;

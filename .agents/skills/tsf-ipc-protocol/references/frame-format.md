@@ -15,11 +15,10 @@
 - Windows Named Pipe (`\\.\pipe\azookey-<sid>`)
   - パイプ名は `ipc::DefaultPipeName()` が現在のプロセストークンの SID から
     導出する (`ipc/include/azookey/ipc/NamedPipeTransport.h`)。
-- Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT`。server は
-  生成時から `FILE_FLAG_OVERLAPPED` を付け、overlapped I/O でキャンセル可能な
-  accept を実現する(`PIPE_NOWAIT` は使わない)。接続後のメッセージ I/O は
-  ブロッキング(`PIPE_WAIT`)のまま扱う
-  (`ipc/src/NamedPipeTransport.cpp`)。
+- Pipe モード: `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT`。server と client の
+  ハンドルは `FILE_FLAG_OVERLAPPED` 付きで開き、accept と接続後の read / write を
+  deadline または接続 cancel event で解除できるようにする。`PIPE_WAIT` は維持し、
+  `PIPE_NOWAIT` は使わない (`ipc/src/NamedPipeTransport.cpp`)。
 - DACL: 現在のユーザ SID のみに RW 許可
   (`NamedPipeServer` Windows 実装で設定)。Debug/test の restricted-token 実行環境では
   Release 以外に限り互換 ACE を追加する。
@@ -141,9 +140,18 @@ request ID を更新して旧世代の in-flight 応答を stale 化する。pen
 
 ## timeout、Cancel、接続回復
 
-- `Receive()`はブロッキングである。
-- `ReceiveWithTimeout(timeout_ms)`は`PeekNamedPipe`を10ms間隔で確認する期限付きpollingであり、
-  即時returnを保証するnon-blocking APIではない。timeoutまたはpipe errorで`std::nullopt`を返す。
+- client の `Send()` とフレーム転送開始後の受信は overlapped I/O を使い、transport の
+  write / read ハードデッドラインで打ち切る。`Disconnect()` は接続 cancel event を通知し、
+  in-flight I/O が完了するまで I/O 側が pipe handle の共有所有権を保持する。
+- `Receive()` はフレーム到着前の相 A を無期限に待つが、最初の 1 byte を観測した後の相 B は
+  read ハードデッドラインで縛る。
+- `ReceiveWithTimeout(timeout_ms)` の引数は呼び出し全体の wall-clock 上限である。相 A の
+  timeout は pipe から何も読み出さず接続を維持し、相 B の timeout はフレーム同期を回復できない
+  ため接続を切断する。
+- request-aware overload は poll slice と request の絶対 deadline を別々に受ける。相 A は
+  slice ごとに未読のまま戻り、相 B は `min(request deadline, read hard deadline)` で縛る。
+  request deadline を持たない batch 待機は `std::nullopt` を渡し、相 B を read hard だけで
+  縛る。どちらの API も相 A は `PeekNamedPipe` の polling を使う。
 - TIPのIPC workerはHost不在時に250msから最大3000msまで指数バックオフして再接続する。
   接続断直前に取り出した最新候補要求は再度pendingへ戻し、Handshake後に再送する。
 - Cancelは応答待ちのprimary接続を塞がないよう、Handshake済みの短命control接続を優先する。

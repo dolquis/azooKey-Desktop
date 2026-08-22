@@ -127,6 +127,69 @@ HANDLE OpenRawPipeClient(const std::string& pipe_name, int attempts = 200) {
   return INVALID_HANDLE_VALUE;
 }
 
+HANDLE CreateRawPipeServer(const std::string& pipe_name, DWORD buffer_size = 4096) {
+  const std::wstring wide(pipe_name.begin(), pipe_name.end());
+  return CreateNamedPipeW(wide.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                          PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1, buffer_size,
+                          buffer_size, 0, nullptr);
+}
+
+bool ConnectRawPipeServer(HANDLE server, azookey::ipc::NamedPipeClient& client,
+                          const std::string& pipe_name) {
+  ScopedPipeHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event.valid()) return false;
+
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+  const BOOL connected_immediately = ConnectNamedPipe(server, &overlapped);
+  const DWORD connect_error = connected_immediately ? ERROR_SUCCESS : GetLastError();
+  if (!connected_immediately && connect_error != ERROR_IO_PENDING &&
+      connect_error != ERROR_PIPE_CONNECTED) {
+    return false;
+  }
+
+  if (!client.Connect(pipe_name, 2000)) {
+    if (connect_error == ERROR_IO_PENDING) {
+      CancelIoEx(server, &overlapped);
+      DWORD transferred = 0;
+      GetOverlappedResult(server, &overlapped, &transferred, TRUE);
+    }
+    return false;
+  }
+
+  if (connect_error == ERROR_IO_PENDING) {
+    if (WaitForSingleObject(event.get(), 2000) != WAIT_OBJECT_0) {
+      CancelIoEx(server, &overlapped);
+      DWORD transferred = 0;
+      GetOverlappedResult(server, &overlapped, &transferred, TRUE);
+      return false;
+    }
+    DWORD transferred = 0;
+    return GetOverlappedResult(server, &overlapped, &transferred, FALSE) != FALSE;
+  }
+  return true;
+}
+
+bool WriteRawPipe(HANDLE pipe, const uint8_t* data, DWORD size) {
+  ScopedPipeHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (!event.valid()) return false;
+
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event.get();
+  const BOOL completed = WriteFile(pipe, data, size, nullptr, &overlapped);
+  const DWORD error = completed ? ERROR_SUCCESS : GetLastError();
+  if (!completed && error != ERROR_IO_PENDING) return false;
+  if (!completed && WaitForSingleObject(event.get(), 2000) != WAIT_OBJECT_0) {
+    CancelIoEx(pipe, &overlapped);
+    DWORD transferred = 0;
+    GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
+    return false;
+  }
+  DWORD transferred = 0;
+  return GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) != FALSE &&
+         transferred == size;
+}
+
 azookey::ipc::Envelope MakePingEnvelope(uint64_t request_id, const std::string& trace_id) {
   azookey::ipc::PingPayload ping;
   ping.nonce = request_id;
@@ -148,6 +211,67 @@ azookey::ipc::Envelope EchoResponse(const azookey::ipc::Envelope& req) {
   res.type = req.type;
   res.payload_json = req.payload_json;
   return res;
+}
+
+struct DelayedFrameResult {
+  bool setup_ok{false};
+  bool writer_ok{false};
+  bool connected_after_receive{false};
+  std::optional<azookey::ipc::Envelope> response;
+};
+
+DelayedFrameResult ReceiveDelayedFrameAcrossPollSlice(const std::string& pipe_name,
+                                                      bool use_request_deadline) {
+  DelayedFrameResult result;
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  if (!server.valid()) return result;
+
+  azookey::ipc::NamedPipeClient client;
+  if (!ConnectRawPipeServer(server.get(), client, pipe_name)) return result;
+
+  auto response_envelope = MakePingEnvelope(700, "delayed-frame");
+  response_envelope.payload_json = "{\"blob\":\"" + std::string(128 * 1024, 'x') + "\"}";
+  const auto json = azookey::ipc::Serialize(response_envelope);
+  if (!json) return result;
+  const auto frame = azookey::ipc::EncodeLengthPrefixed(*json);
+  if (!frame || frame->size() <= 64 * 1024) return result;
+
+  std::atomic<bool> header_sent{false};
+  std::atomic<bool> writer_ok{true};
+  std::thread writer([&] {
+    if (!WriteRawPipe(server.get(), frame->data(), 4)) {
+      writer_ok.store(false);
+      return;
+    }
+    header_sent.store(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    constexpr DWORD kFirstBodyChunk = 64 * 1024;
+    if (!WriteRawPipe(server.get(), frame->data() + 4, kFirstBodyChunk)) {
+      writer_ok.store(false);
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto remaining = static_cast<DWORD>(frame->size() - 4 - kFirstBodyChunk);
+    if (!WriteRawPipe(server.get(), frame->data() + 4 + kFirstBodyChunk, remaining)) {
+      writer_ok.store(false);
+    }
+  });
+
+  const bool ready = WaitForFlag(header_sent);
+  if (ready) {
+    const std::optional<std::chrono::steady_clock::time_point> request_deadline =
+        use_request_deadline
+            ? std::optional<std::chrono::steady_clock::time_point>(
+                  std::chrono::steady_clock::now() + std::chrono::milliseconds(1500))
+            : std::nullopt;
+    result.response = client.ReceiveWithTimeout(50, request_deadline);
+    result.connected_after_receive = client.IsConnected();
+  }
+  client.Disconnect();
+  writer.join();
+  result.setup_ok = ready;
+  result.writer_ok = writer_ok.load();
+  return result;
 }
 #endif  // !NDEBUG
 
@@ -660,6 +784,159 @@ TEST(NamedPipeTransportTest, ClientLimitsPipeServerToIdentificationLevel) {
   DisconnectNamedPipe(server.get());
 }
 
+TEST(NamedPipeTransportTest, ClientHeaderOnlyFrameHonorsWholeCallTimeoutAndDisconnects) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-header-timeout-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectRawPipeServer(server.get(), client, pipe_name));
+
+  const uint8_t header[4] = {16, 0, 0, 0};
+  ASSERT_TRUE(WriteRawPipe(server.get(), header, static_cast<DWORD>(sizeof(header))));
+
+  const auto start = std::chrono::steady_clock::now();
+  const auto response = client.ReceiveWithTimeout(150);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_FALSE(response.has_value());
+  EXPECT_GE(elapsed, std::chrono::milliseconds(100));
+  EXPECT_LT(elapsed, std::chrono::milliseconds(1000));
+  EXPECT_FALSE(client.IsConnected());
+}
+
+TEST(NamedPipeTransportTest, ClientIdleTimeoutPreservesUnreadResponseAndConnection) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-idle-timeout-" + std::to_string(GetCurrentProcessId());
+
+  std::atomic<bool> handler_entered{false};
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name,
+                           [&handler_entered](const azookey::ipc::Envelope& request)
+                               -> std::optional<azookey::ipc::Envelope> {
+                             handler_entered.store(true);
+                             std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                             return EchoResponse(request);
+                           }));
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(client.Connect(pipe_name, 2000));
+  ASSERT_TRUE(client.Send(MakePingEnvelope(701, "idle-timeout")));
+  ASSERT_TRUE(WaitForFlag(handler_entered));
+
+  EXPECT_FALSE(client.ReceiveWithTimeout(50).has_value());
+  EXPECT_TRUE(client.IsConnected());
+
+  const auto response = client.ReceiveWithTimeout(1000);
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->request_id, 701u);
+  EXPECT_TRUE(client.IsConnected());
+
+  client.Disconnect();
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, RequestAwareReceiveCompletesFrameAcrossPollSlices) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-request-deadline-" + std::to_string(GetCurrentProcessId());
+  const auto result = ReceiveDelayedFrameAcrossPollSlice(pipe_name, true);
+
+  ASSERT_TRUE(result.setup_ok);
+  EXPECT_TRUE(result.writer_ok);
+  ASSERT_TRUE(result.response.has_value());
+  EXPECT_EQ(result.response->request_id, 700u);
+  EXPECT_TRUE(result.connected_after_receive);
+}
+
+TEST(NamedPipeTransportTest, BatchReceiveWithoutRequestDeadlineIgnoresPollSliceInPhaseB) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-batch-deadline-" + std::to_string(GetCurrentProcessId());
+  const auto result = ReceiveDelayedFrameAcrossPollSlice(pipe_name, false);
+
+  ASSERT_TRUE(result.setup_ok);
+  EXPECT_TRUE(result.writer_ok);
+  ASSERT_TRUE(result.response.has_value());
+  EXPECT_EQ(result.response->request_id, 700u);
+  EXPECT_TRUE(result.connected_after_receive);
+}
+
+TEST(NamedPipeTransportTest, RequestDeadlineCutsOffPartialFrameBeforeTransportHardDeadline) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-request-cutoff-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectRawPipeServer(server.get(), client, pipe_name));
+  const uint8_t header[4] = {16, 0, 0, 0};
+  ASSERT_TRUE(WriteRawPipe(server.get(), header, static_cast<DWORD>(sizeof(header))));
+
+  const auto start = std::chrono::steady_clock::now();
+  const auto request_deadline = start + std::chrono::milliseconds(175);
+  const auto response = client.ReceiveWithTimeout(50, request_deadline);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_FALSE(response.has_value());
+  EXPECT_GE(elapsed, std::chrono::milliseconds(100));
+  EXPECT_LT(elapsed, std::chrono::milliseconds(1000));
+  EXPECT_FALSE(client.IsConnected());
+}
+
+TEST(NamedPipeTransportTest, DisconnectCancelsInFlightClientReceive) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-disconnect-cancel-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectRawPipeServer(server.get(), client, pipe_name));
+
+  std::atomic<bool> receive_started{false};
+  std::optional<azookey::ipc::Envelope> response;
+  std::thread receiver([&] {
+    receive_started.store(true);
+    response = client.Receive();
+  });
+  const bool started = WaitForFlag(receive_started);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  const auto disconnect_start = std::chrono::steady_clock::now();
+  client.Disconnect();
+  receiver.join();
+  const auto disconnect_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - disconnect_start);
+
+  ASSERT_TRUE(started);
+  EXPECT_FALSE(response.has_value());
+  EXPECT_LT(disconnect_elapsed, std::chrono::milliseconds(500));
+  EXPECT_FALSE(client.IsConnected());
+}
+
+TEST(NamedPipeTransportTest, ClientWriteHardDeadlineCancelsUnreadLargeFrame) {
+  ScopedEnvironmentVariable hard_deadline(L"AZOOKEY_TEST_FRAME_HARD_DEADLINE_MS", L"300");
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-client-write-deadline-" + std::to_string(GetCurrentProcessId());
+  ScopedPipeHandle server(CreateRawPipeServer(pipe_name));
+  ASSERT_TRUE(server.valid());
+
+  azookey::ipc::NamedPipeClient client;
+  ASSERT_TRUE(ConnectRawPipeServer(server.get(), client, pipe_name));
+  auto request = MakePingEnvelope(702, "write-deadline");
+  request.payload_json = "{\"blob\":\"" + std::string(512 * 1024, 'x') + "\"}";
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_FALSE(client.Send(request));
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_GE(elapsed, std::chrono::milliseconds(200));
+  EXPECT_LT(elapsed, std::chrono::milliseconds(1500));
+  EXPECT_FALSE(client.IsConnected());
+}
+
 TEST(NamedPipeTransportTest, ZeroByteResponseWriteRetryIsBounded) {
   ScopedEnvironmentVariable force_zero_write(
       L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE", nullptr);
@@ -668,21 +945,21 @@ TEST(NamedPipeTransportTest, ZeroByteResponseWriteRetryIsBounded) {
 
   std::atomic<bool> handler_entered{false};
   azookey::ipc::NamedPipeServer server;
-  const bool started = server.Start(
-      pipe_name,
-      [&handler_entered](
-          const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
-        handler_entered.store(true);
-        SetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE", L"1");
+  const bool started =
+      server.Start(pipe_name,
+                   [&handler_entered](
+                       const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+                     handler_entered.store(true);
+                     SetEnvironmentVariableW(L"AZOOKEY_TEST_FORCE_ZERO_BYTE_PIPE_WRITE", L"1");
 
-        azookey::ipc::Envelope res;
-        res.version = req.version;
-        res.request_id = req.request_id;
-        res.trace_id = req.trace_id;
-        res.type = req.type;
-        res.payload_json = req.payload_json;
-        return res;
-      });
+                     azookey::ipc::Envelope res;
+                     res.version = req.version;
+                     res.request_id = req.request_id;
+                     res.trace_id = req.trace_id;
+                     res.type = req.type;
+                     res.payload_json = req.payload_json;
+                     return res;
+                   });
   ASSERT_TRUE(started);
 
   azookey::ipc::NamedPipeClient client;

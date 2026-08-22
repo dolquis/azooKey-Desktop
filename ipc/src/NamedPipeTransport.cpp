@@ -56,7 +56,8 @@ HANDLE OpenPipeClientHandle(const std::wstring& pipe_name) {
   constexpr DWORD kClientAccess =
       FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE;
   return CreateFileW(pipe_name.c_str(), kClientAccess, 0, nullptr, OPEN_EXISTING,
-                     SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+                     FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                     nullptr);
 }
 
 ImmediateOverlappedResult QueryImmediateOverlappedTransfer(HANDLE pipe, OVERLAPPED& overlapped) {
@@ -327,8 +328,10 @@ struct FrameDeadlineConfig {
 // whole frame rather than reset per chunk.
 class FrameDeadline {
  public:
-  FrameDeadline(std::chrono::milliseconds soft, std::chrono::milliseconds hard, bool armed)
-      : soft_(soft), hard_(hard) {
+  FrameDeadline(
+      std::chrono::milliseconds soft, std::chrono::milliseconds hard, bool armed,
+      std::optional<std::chrono::steady_clock::time_point> absolute_hard_deadline = std::nullopt)
+      : soft_(soft), hard_(hard), absolute_hard_deadline_(absolute_hard_deadline) {
     if (armed) {
       Arm();
     }
@@ -338,18 +341,26 @@ class FrameDeadline {
     if (armed_) return;
     armed_ = true;
     start_ = std::chrono::steady_clock::now();
+    effective_hard_deadline_ = start_ + hard_;
+    if (absolute_hard_deadline_ && *absolute_hard_deadline_ < effective_hard_deadline_) {
+      effective_hard_deadline_ = *absolute_hard_deadline_;
+    }
   }
 
   // INFINITE while unarmed: an idle connection may wait indefinitely for the
   // peer's next request.
   DWORD RemainingHardMs() const {
     if (!armed_) return INFINITE;
-    const auto elapsed = Elapsed();
-    if (elapsed >= hard_) return 0;
-    return static_cast<DWORD>((hard_ - elapsed).count());
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= effective_hard_deadline_) return 0;
+    return static_cast<DWORD>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(effective_hard_deadline_ - now)
+            .count());
   }
 
-  bool HardExpired() const { return armed_ && Elapsed() >= hard_; }
+  bool HardExpired() const {
+    return armed_ && std::chrono::steady_clock::now() >= effective_hard_deadline_;
+  }
   bool SoftExceeded() const { return armed_ && Elapsed() >= soft_; }
 
  private:
@@ -360,21 +371,25 @@ class FrameDeadline {
 
   std::chrono::milliseconds soft_;
   std::chrono::milliseconds hard_;
+  std::optional<std::chrono::steady_clock::time_point> absolute_hard_deadline_;
   bool armed_{false};
   std::chrono::steady_clock::time_point start_{};
+  std::chrono::steady_clock::time_point effective_hard_deadline_{};
 };
 
 // Everything the framing helpers need about the connection they run on.
-// `stop_event == nullptr` selects the synchronous path used by NamedPipeClient,
-// whose handle is opened without FILE_FLAG_OVERLAPPED.
 struct TransportContext {
-  HANDLE stop_event{nullptr};
+  HANDLE cancel_event{nullptr};
+  bool overlapped{false};
+  bool read_frame_started{false};
   FrameDeadlineConfig deadlines;
+  std::optional<std::chrono::steady_clock::time_point> read_hard_deadline;
   std::atomic<uint64_t>* soft_deadline_counter{nullptr};
 };
 
 struct FrameIo {
-  HANDLE stop_event{nullptr};
+  HANDLE cancel_event{nullptr};
+  bool overlapped{false};
   FrameDeadline deadline;
 };
 
@@ -401,10 +416,10 @@ void CancelAndDrainOverlapped(HANDLE pipe, OVERLAPPED& overlapped, DWORD& transf
   GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
 }
 
-PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop_event,
+PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE cancel_event,
                                 DWORD timeout_ms) {
-  HANDLE handles[2] = {overlapped.hEvent, stop_event};
-  const DWORD handle_count = stop_event ? 2 : 1;
+  HANDLE handles[2] = {overlapped.hEvent, cancel_event};
+  const DWORD handle_count = cancel_event ? 2 : 1;
   const DWORD wait = WaitForMultipleObjects(handle_count, handles, FALSE, timeout_ms);
   if (wait == WAIT_OBJECT_0) {
     PipeIoResult result;
@@ -433,7 +448,13 @@ PipeIoResult FinishOverlappedIo(HANDLE pipe, OVERLAPPED& overlapped, HANDLE stop
 }
 
 PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, const FrameIo& io) {
-  if (!io.stop_event) {
+  if (io.cancel_event && WaitForSingleObject(io.cancel_event, 0) == WAIT_OBJECT_0) {
+    PipeIoResult result;
+    result.stopped = true;
+    result.error = ERROR_OPERATION_ABORTED;
+    return result;
+  }
+  if (!io.overlapped) {
     PipeIoResult result;
     result.ok = ReadFile(pipe, data, size, &result.transferred, nullptr);
     result.error = result.ok ? ERROR_SUCCESS : GetLastError();
@@ -453,7 +474,7 @@ PipeIoResult ReadPipeChunk(HANDLE pipe, uint8_t* data, DWORD size, const FrameIo
   result.ok = ReadFile(pipe, data, size, nullptr, &overlapped);
   result.error = result.ok ? ERROR_SUCCESS : GetLastError();
   if (!result.ok && result.error == ERROR_IO_PENDING) {
-    return FinishOverlappedIo(pipe, overlapped, io.stop_event, io.deadline.RemainingHardMs());
+    return FinishOverlappedIo(pipe, overlapped, io.cancel_event, io.deadline.RemainingHardMs());
   }
   CaptureImmediateOverlappedTransfer(pipe, overlapped, result);
   return result;
@@ -465,7 +486,13 @@ PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, const 
     result.ok = TRUE;
     return result;
   }
-  if (!io.stop_event) {
+  if (io.cancel_event && WaitForSingleObject(io.cancel_event, 0) == WAIT_OBJECT_0) {
+    PipeIoResult result;
+    result.stopped = true;
+    result.error = ERROR_OPERATION_ABORTED;
+    return result;
+  }
+  if (!io.overlapped) {
     PipeIoResult result;
     result.ok = WriteFile(pipe, data, size, &result.transferred, nullptr);
     result.error = result.ok ? ERROR_SUCCESS : GetLastError();
@@ -485,7 +512,7 @@ PipeIoResult WritePipeChunk(HANDLE pipe, const uint8_t* data, DWORD size, const 
   result.ok = WriteFile(pipe, data, size, nullptr, &overlapped);
   result.error = result.ok ? ERROR_SUCCESS : GetLastError();
   if (!result.ok && result.error == ERROR_IO_PENDING) {
-    return FinishOverlappedIo(pipe, overlapped, io.stop_event, io.deadline.RemainingHardMs());
+    return FinishOverlappedIo(pipe, overlapped, io.cancel_event, io.deadline.RemainingHardMs());
   }
   CaptureImmediateOverlappedTransfer(pipe, overlapped, result);
   return result;
@@ -717,8 +744,9 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx) {
   // One budget spans header and body: it stays unarmed while the connection is
   // idle and starts as soon as the peer sends the first byte of the header, so
   // a peer that announces a frame and then goes silent is bounded.
-  FrameIo io{ctx.stop_event,
-             FrameDeadline(ctx.deadlines.soft, ctx.deadlines.read_hard, /*armed=*/false)};
+  FrameIo io{ctx.cancel_event, ctx.overlapped,
+             FrameDeadline(ctx.deadlines.soft, ctx.deadlines.read_hard, ctx.read_frame_started,
+                           ctx.read_hard_deadline)};
   auto envelope = ReadFramedEnvelope(pipe, io);
   NoteSoftDeadline(ctx, io.deadline);
   return envelope;
@@ -730,7 +758,7 @@ bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext
   const auto frame = EncodeLengthPrefixed(*json);
   if (!frame) return false;
   // Sending has no idle phase, so the budget is armed from the first chunk.
-  FrameIo io{ctx.stop_event,
+  FrameIo io{ctx.cancel_event, ctx.overlapped,
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.write_hard, /*armed=*/true)};
   const bool ok = WriteBytes(pipe, frame->data(), frame->size(), io);
   NoteSoftDeadline(ctx, io.deadline);
@@ -744,6 +772,75 @@ struct ClientState {
   wil::unique_hfile pipe;
   bool closed{false};
 };
+
+struct ClientConnection {
+  ClientConnection(wil::unique_hfile handle, wil::unique_event cancel,
+                   FrameDeadlineConfig frame_deadlines)
+      : pipe(std::move(handle)), cancel_event(std::move(cancel)), deadlines(frame_deadlines) {}
+
+  wil::unique_hfile pipe;
+  wil::unique_event cancel_event;
+  FrameDeadlineConfig deadlines;
+};
+
+enum class ClientReceiveStatus {
+  Received,
+  IdleTimeout,
+  Failed,
+};
+
+struct ClientReceiveResult {
+  ClientReceiveStatus status{ClientReceiveStatus::Failed};
+  std::optional<Envelope> envelope;
+};
+
+ClientReceiveResult ReceiveClientEnvelope(
+    const std::shared_ptr<ClientConnection>& connection,
+    std::optional<std::chrono::steady_clock::time_point> phase_a_deadline,
+    std::optional<std::chrono::steady_clock::time_point> request_deadline) {
+  while (true) {
+    if (WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
+      return {ClientReceiveStatus::Failed, std::nullopt};
+    }
+
+    DWORD available = 0;
+    if (!PeekNamedPipe(connection->pipe.get(), nullptr, 0, nullptr, &available, nullptr)) {
+      return {ClientReceiveStatus::Failed, std::nullopt};
+    }
+    if (available > 0) {
+      TransportContext ctx;
+      ctx.cancel_event = connection->cancel_event.get();
+      ctx.overlapped = true;
+      ctx.read_frame_started = true;
+      ctx.deadlines = connection->deadlines;
+      ctx.read_hard_deadline = request_deadline;
+      auto envelope = ReadEnvelope(connection->pipe.get(), ctx);
+      if (!envelope || WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
+        return {ClientReceiveStatus::Failed, std::nullopt};
+      }
+      return {ClientReceiveStatus::Received, std::move(envelope)};
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (phase_a_deadline && now >= *phase_a_deadline) {
+      return {ClientReceiveStatus::IdleTimeout, std::nullopt};
+    }
+
+    DWORD wait_ms = 10;
+    if (phase_a_deadline) {
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(*phase_a_deadline - now).count();
+      if (remaining <= 0) {
+        continue;
+      }
+      wait_ms = static_cast<DWORD>(std::min<long long>(wait_ms, remaining));
+    }
+    const DWORD wait = WaitForSingleObject(connection->cancel_event.get(), wait_ms);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_FAILED) {
+      return {ClientReceiveStatus::Failed, std::nullopt};
+    }
+  }
+}
 
 void CloseClientPipe(const std::shared_ptr<ClientState>& client) {
   std::lock_guard<std::mutex> lock(client->mutex);
@@ -860,9 +957,8 @@ struct NamedPipeServer::Impl {
 
       {
         std::unique_lock<std::mutex> lock(mutex);
-        client_cv.wait(lock, [this] {
-          return !running.load() || clients.size() < kMaxPipeInstances;
-        });
+        client_cv.wait(lock,
+                       [this] { return !running.load() || clients.size() < kMaxPipeInstances; });
         if (!running.load()) {
           break;
         }
@@ -885,8 +981,11 @@ struct NamedPipeServer::Impl {
   }
 
   void ClientLoop(std::shared_ptr<ClientState> client, MessageHandler conn_handler) {
-    const TransportContext ctx{stop_event.get(), FrameDeadlineConfig::Load(),
-                               &soft_deadline_exceeded};
+    TransportContext ctx;
+    ctx.cancel_event = stop_event.get();
+    ctx.overlapped = true;
+    ctx.deadlines = FrameDeadlineConfig::Load();
+    ctx.soft_deadline_counter = &soft_deadline_exceeded;
     while (running.load()) {
       HANDLE pipe = INVALID_HANDLE_VALUE;
       {
@@ -932,9 +1031,31 @@ struct NamedPipeServer::Impl {
 };
 
 struct NamedPipeClient::Impl {
-  std::mutex mutex;
-  wil::unique_hfile pipe;
-  bool connected{false};
+  std::shared_ptr<ClientConnection> CurrentConnection() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return connection;
+  }
+
+  void DisconnectConnection(const std::shared_ptr<ClientConnection>& expected = nullptr) {
+    std::shared_ptr<ClientConnection> disconnected;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (expected) {
+        disconnected = expected;
+        if (connection == expected) {
+          connection.reset();
+        }
+      } else {
+        disconnected = std::move(connection);
+      }
+    }
+    if (disconnected && disconnected->cancel_event) {
+      SetEvent(disconnected->cancel_event.get());
+    }
+  }
+
+  mutable std::mutex mutex;
+  std::shared_ptr<ClientConnection> connection;
 };
 
 NamedPipeServer::NamedPipeServer() : impl_(std::make_unique<Impl>()) {}
@@ -1049,9 +1170,16 @@ bool NamedPipeClient::Connect(const std::string& pipe_name, uint32_t timeout_ms)
       if (!SetNamedPipeHandleState(pipe.get(), &mode, nullptr, nullptr)) {
         return false;
       }
-      std::lock_guard<std::mutex> lock(impl_->mutex);
-      impl_->pipe = std::move(pipe);
-      impl_->connected = true;
+      wil::unique_event cancel_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+      if (!cancel_event) {
+        return false;
+      }
+      auto connection = std::make_shared<ClientConnection>(std::move(pipe), std::move(cancel_event),
+                                                           FrameDeadlineConfig::Load());
+      {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->connection = std::move(connection);
+      }
       return true;
     }
 
@@ -1073,68 +1201,67 @@ bool NamedPipeClient::Connect(const std::string& pipe_name, uint32_t timeout_ms)
   }
 }
 
-void NamedPipeClient::Disconnect() {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
-  impl_->pipe.reset();
-  impl_->connected = false;
-}
+void NamedPipeClient::Disconnect() { impl_->DisconnectConnection(); }
 
-bool NamedPipeClient::IsConnected() const {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->connected;
-}
+bool NamedPipeClient::IsConnected() const { return impl_->CurrentConnection() != nullptr; }
 
 bool NamedPipeClient::Send(const Envelope& envelope) {
-  HANDLE pipe = INVALID_HANDLE_VALUE;
-  {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->connected) return false;
-    pipe = impl_->pipe.get();
-  }
+  const auto connection = impl_->CurrentConnection();
+  if (!connection) return false;
 
-  if (!WriteEnvelope(pipe, envelope, TransportContext{})) {
-    Disconnect();
+  TransportContext ctx;
+  ctx.cancel_event = connection->cancel_event.get();
+  ctx.overlapped = true;
+  ctx.deadlines = connection->deadlines;
+  if (!WriteEnvelope(connection->pipe.get(), envelope, ctx)) {
+    impl_->DisconnectConnection(connection);
+    return false;
+  }
+  if (WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
     return false;
   }
   return true;
 }
 
 std::optional<Envelope> NamedPipeClient::Receive() {
-  HANDLE pipe = INVALID_HANDLE_VALUE;
-  {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->connected) return std::nullopt;
-    pipe = impl_->pipe.get();
-  }
+  const auto connection = impl_->CurrentConnection();
+  if (!connection) return std::nullopt;
 
-  auto envelope = ReadEnvelope(pipe, TransportContext{});
-  if (!envelope) {
-    Disconnect();
+  auto result = ReceiveClientEnvelope(connection, std::nullopt, std::nullopt);
+  if (result.status != ClientReceiveStatus::Received) {
+    impl_->DisconnectConnection(connection);
+    return std::nullopt;
   }
-  return envelope;
+  return std::move(result.envelope);
 }
 
 std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(uint32_t timeout_ms) {
-  const auto deadline =
+  const auto request_deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (std::chrono::steady_clock::now() < deadline) {
-    HANDLE pipe = INVALID_HANDLE_VALUE;
-    {
-      std::lock_guard<std::mutex> lock(impl_->mutex);
-      if (!impl_->connected) return std::nullopt;
-      pipe = impl_->pipe.get();
-    }
-    DWORD avail = 0;
-    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &avail, nullptr)) {
-      Disconnect();
-      return std::nullopt;
-    }
-    if (avail > 0) {
-      return Receive();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  return ReceiveWithTimeout(timeout_ms, request_deadline);
+}
+
+std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(
+    uint32_t poll_timeout_ms,
+    std::optional<std::chrono::steady_clock::time_point> request_deadline) {
+  const auto connection = impl_->CurrentConnection();
+  if (!connection) return std::nullopt;
+
+  auto phase_a_deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(poll_timeout_ms);
+  if (request_deadline && *request_deadline < phase_a_deadline) {
+    phase_a_deadline = *request_deadline;
   }
-  return std::nullopt;
+
+  auto result = ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline);
+  if (result.status == ClientReceiveStatus::Failed) {
+    impl_->DisconnectConnection(connection);
+    return std::nullopt;
+  }
+  if (result.status == ClientReceiveStatus::IdleTimeout) {
+    return std::nullopt;
+  }
+  return std::move(result.envelope);
 }
 
 std::string DefaultPipeName() {
@@ -1167,10 +1294,12 @@ bool NamedPipeClient::IsConnected() const { return false; }
 bool NamedPipeClient::Send(const Envelope&) { return false; }
 std::optional<Envelope> NamedPipeClient::Receive() { return std::nullopt; }
 std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(uint32_t) { return std::nullopt; }
-
-std::string DefaultPipeName() {
-  return "/tmp/azookey-namedpipe-unsupported";
+std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(
+    uint32_t, std::optional<std::chrono::steady_clock::time_point>) {
+  return std::nullopt;
 }
+
+std::string DefaultPipeName() { return "/tmp/azookey-namedpipe-unsupported"; }
 
 #endif
 

@@ -28,6 +28,14 @@ target_link_libraries(host_model_catalog_tests
 )
 azookey_discover_tests(host_model_catalog_tests)
 
+if(WIN32)
+  add_executable(host_http_downloader_tests http_downloader_test.cpp)
+  target_link_libraries(host_http_downloader_tests
+    PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings ws2_32
+  )
+  azookey_discover_tests(host_http_downloader_tests)
+endif()
+
 add_executable(host_userdict_cli_tests userdict_cli_test.cpp)
 target_link_libraries(host_userdict_cli_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings

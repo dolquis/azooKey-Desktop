@@ -559,6 +559,10 @@ CUDA ランタイムの同梱可否（DEV-202 で併せて確認）は本経路�
 - **取得の原子性**: DL は `<file>.gguf.part` へ書き、SHA256 検証通過後に最終名へ
   rename する（`learning/src/AtomicFile.h` と同じ temp→rename 規律）。検証前の
   ファイルをロード対象に入れない。
+- **中断と再試行**: `.part` があれば Range GET で続きから再開する。
+  サーバーが Range を無視した場合は `.part` を切り詰めて全量取得へ戻す。
+  ネットワーク失敗または SHA256 不一致では既存の最終名を変更せず、手動配置済みの
+  モデルを継続利用できる状態に保つ。
 - **初回取得後の `selectedPath` コミット（必須）**: Host は起動時に既定
   ディレクトリを自動スキャン**しない** —
   `inference-host/src/SettingsStore.cpp::ApplyRuntimeSettingsToEngineConfig` は

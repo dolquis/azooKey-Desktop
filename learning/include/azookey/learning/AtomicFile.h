@@ -113,8 +113,4 @@ inline bool WriteTextFileAtomically(const std::filesystem::path& target,
 #endif
 }
 
-inline bool WriteTextFileAtomically(const std::string& path, const std::string& content) {
-  return WriteTextFileAtomically(std::filesystem::path(path), content);
-}
-
 }  // namespace azookey::learning

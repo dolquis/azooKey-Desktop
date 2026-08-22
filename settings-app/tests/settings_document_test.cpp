@@ -209,8 +209,32 @@ TEST(SettingsDocumentTest, InvalidDocumentCanBeRecoveredByAtomicSave) {
 
   ASSERT_TRUE(result.ok);
   EXPECT_FALSE(result.warnings.empty());
+  ASSERT_TRUE(result.quarantined_path.has_value());
+  EXPECT_EQ(*result.quarantined_path, std::filesystem::path(path.string() + ".invalid"));
+  EXPECT_EQ(ReadText(*result.quarantined_path), "{ invalid json");
   const auto parsed = azookey::ipc::json::Parse(ReadText(path));
   ASSERT_TRUE(parsed && parsed->IsObject());
   EXPECT_FALSE(parsed->AsObject().at("model").AsObject().at("enabled").AsBool());
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, InvalidDocumentIsNotOverwrittenWhenQuarantineSuffixesAreExhausted) {
+  const auto dir = TestDir("azookey_settings_document_invalid_suffixes");
+  const auto path = dir / "settings.json";
+  const std::string invalid = "{ invalid json";
+  WriteText(path, invalid);
+  for (int i = 0; i < 100; ++i) {
+    auto candidate = path;
+    candidate += (i == 0) ? ".invalid" : ".invalid." + std::to_string(i);
+    WriteText(candidate, "reserved");
+  }
+
+  azookey::settings::EditableSettings settings;
+  settings.model_enabled = false;
+  const auto result = azookey::settings::SaveSettingsDocument(path, settings);
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.quarantined_path.has_value());
+  EXPECT_EQ(ReadText(path), invalid);
   std::filesystem::remove_all(dir);
 }

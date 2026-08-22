@@ -35,6 +35,7 @@ struct SettingsSaveResult {
   bool ok{false};
   std::optional<std::string> error;
   std::vector<std::string> warnings;
+  std::optional<std::filesystem::path> quarantined_path;
 };
 
 std::optional<std::filesystem::path> DefaultSettingsPath();

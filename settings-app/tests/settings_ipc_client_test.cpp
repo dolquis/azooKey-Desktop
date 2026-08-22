@@ -7,7 +7,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 
 #include "SettingsIpcClient.h"
@@ -41,6 +43,7 @@ TEST(SettingsIpcClientTest, HandshakesThenSendsEmptyUpdateConfigPayload) {
       if (request.type == azookey::ipc::MessageType::Handshake) {
         const auto parsed = azookey::ipc::ParseHandshakeRequest(request.payload_json);
         authenticated = parsed && parsed->tip_version == "settings-app" &&
+                        parsed->protocol_version == azookey::ipc::kHandshakeProtocolVersion &&
                         parsed->capabilities == std::vector<std::string>{"settings"};
         azookey::ipc::HandshakeResponse response;
         response.host_version = "test";

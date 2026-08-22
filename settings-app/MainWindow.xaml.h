@@ -17,6 +17,8 @@ struct MainWindow : MainWindowT<MainWindow> {
 
  private:
   winrt::fire_and_forget LoadSettingsAsync();
+  Windows::Foundation::IAsyncAction LoadSettingsCoreAsync();
+  Windows::Foundation::IAsyncAction SaveSettingsCoreAsync();
   void ApplySettingsToControls(const azookey::settings::SettingsDocumentResult& result);
   void ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                   const winrt::hstring& title, const winrt::hstring& message);

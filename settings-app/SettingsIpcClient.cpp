@@ -61,7 +61,7 @@ SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) 
 
   azookey::ipc::HandshakeRequest handshake;
   handshake.tip_version = "settings-app";
-  handshake.protocol_version = azookey::ipc::kEnvelopeVersion;
+  handshake.protocol_version = azookey::ipc::kHandshakeProtocolVersion;
   handshake.capabilities = {"settings"};
   handshake.client_id = "settings-app";
   handshake.handshake_token = options.handshake_token;

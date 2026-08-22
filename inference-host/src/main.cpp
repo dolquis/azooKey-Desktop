@@ -421,7 +421,7 @@ int main(int argc, char** argv) {
   azookey::host::RequestScheduler scheduler;
   azookey::host::DispatcherConfig dconf;
   dconf.host_version = kHostVersion;
-  dconf.protocol_version = 1;
+  dconf.protocol_version = azookey::ipc::kHandshakeProtocolVersion;
   dconf.host_generation_id = CreateHostGenerationId();
   if (dconf.host_generation_id.empty()) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,

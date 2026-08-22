@@ -52,7 +52,16 @@
   <data name="SavedHostWarningTitle" xml:space="preserve"><value>保存しましたが、Host へ反映できませんでした</value></data>
   <data name="SaveSucceededTitle" xml:space="preserve"><value>設定を保存しました</value></data>
   <data name="SaveSucceededMessage" xml:space="preserve"><value>起動中の Host へ設定を反映しました。</value></data>
+  <data name="SaveWarningTitle" xml:space="preserve"><value>設定を保存しました（確認事項あり）</value></data>
   <data name="LocalAppDataUnavailable" xml:space="preserve"><value>LOCALAPPDATA を取得できません。</value></data>
+  <data name="SettingsBusyMessage" xml:space="preserve"><value>設定ファイルをほかの処理が使用しています。しばらく待ってから再試行してください。</value></data>
+  <data name="SettingsInvalidMessage" xml:space="preserve"><value>設定ファイルの形式が正しくありません。保存すると、元のファイルを .invalid* に退避してから有効な設定を作成します。</value></data>
+  <data name="SettingsReadFailedMessage" xml:space="preserve"><value>設定ファイルを読み取れませんでした。既存のファイルは変更していません。</value></data>
+  <data name="SaveFailedMessage" xml:space="preserve"><value>設定ファイルを保存できませんでした。既存のファイルは変更していません。</value></data>
+  <data name="SaveFailedAfterQuarantineMessage" xml:space="preserve"><value>設定ファイルを保存できませんでした。破損していた元のファイルは .invalid* に退避されています。</value></data>
+  <data name="InvalidFileQuarantinedMessage" xml:space="preserve"><value>破損していた元の設定ファイルを .invalid* に退避しました。</value></data>
+  <data name="InvalidEntriesRemovedMessage" xml:space="preserve"><value>未知または無効な設定項目を除去しました。</value></data>
+  <data name="HostUpdateFailedMessage" xml:space="preserve"><value>設定は保存しましたが、起動中の Host へ反映できませんでした。</value></data>
   <data name="InvalidEntriesSkipped" xml:space="preserve"><value>未知または無効な設定値を既定値として表示します。保存時には無効な項目を除去します。</value></data>
   <data name="UnsupportedBackendPrefix" xml:space="preserve"><value>このバージョンの UI では選択できない有効値を保持しています: </value></data>
   <data name="InvalidModelPath" xml:space="preserve"><value>モデルファイルには、実在する .gguf ファイルの絶対パスを指定してください。</value></data>

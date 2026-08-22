@@ -173,7 +173,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
 | `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`） | `AcquireExclusiveFileLockForPath` + atomic replace |
-| `settings.json` | 設定アプリ（保存）、Host（parse 失敗時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（Host 側。下記） |
+| `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.tsv` | Host のみ | Host | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
 
 - 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
@@ -181,20 +181,22 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - したがって `user_dict.json` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
 - `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json` 自体は変更しない。`user_dict.json` に対する writer 操作は `--offline` の add / remove と `import` である。
-- `settings.json` を保存するのは設定アプリだけだが、Host も mutator である。`SettingsStore::Load` / `Reload` は JSON の parse に失敗したとき `settings.json` を `.invalid*` へ rename する（`inference-host/src/SettingsStore.cpp`）。
+- `settings.json` を保存するのは設定アプリだけだが、設定アプリと Host はどちらも mutator である。
+  設定アプリは保存前の read-modify-write で JSON の parse に失敗したとき、Host は `SettingsStore::Load` / `Reload` で parse に失敗したときに、`settings.json` を `.invalid*` へ rename する。
   ロックを取らずに読むと、Host が破損した内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置いたとき、Host はその新しいファイルを quarantine し、保存した設定が消える。
   したがって「設定アプリだけが書くので競合しない」とは扱わない。この競合は、保存と Host の read から quarantine までを同一の named mutex 下で直列化し、quarantine の条件を内容の不正だけに絞ることで解消する（DEV-806 で確定。実装は DEV-808、GitHub Issue #278 はその mirror）。契約は次の 4 点である。
 
   1. **単一ロック区間** — Host は `settings.json` の存在確認・読み取り・parse・quarantine rename を、`AcquireExclusiveFileLockForPath`（`FileLock.h`）で取得した一つのロック保持区間の中で行う。設定アプリの保存が取るのと同じ named mutex（`MutexNameForPath` が正規化した絶対パスから導出）である。
      読み取りと rename を別々のロック区間に分けたり、ロック外で読んでから再検証して rename する（double-check）形は採らない。ロック保持区間は数 KB の JSON の読み取りと parse で閉じるため、保存側が待たされる時間は問題にならない。
-  2. **quarantine は parse 失敗時だけ** — ファイルを開けなかった・読み取りに失敗したときは rename しない。
+  2. **quarantine は parse 失敗時だけ** — 設定アプリと Host は、ファイルを開けなかったときや読み取りに失敗したときは rename しない。
      open の失敗は破損を意味しない（他プロセスの共有違反、ウイルス対策ソフトやバックアップによる一時的なロックでも起きる）。読み取り失敗で rename すると、破損していない `settings.json` を退避してしまう。
   3. **ロックを取れなければ rename しない** — timeout までにロックを取得できなかったときは quarantine を行わない。ロックを持たない rename は禁止する。
   4. **fallback の意味** — quarantine の有無によらず、`Load`（Host 起動時）は既定値で継続し、`Reload`（`UpdateConfig`）は error を返して現在の runtime 設定を維持する。「維持する」は `SettingsStore::settings()` の値を含む（`EngineConfig` だけではない）。
 - quarantine を廃して破損した `settings.json` をそのまま残す案は採らない。rename には、次回の保存で正常なファイルが復帰し、破損した内容は `.invalid*` として残り、ユーザーが手で消さなくてよいという利点がある。
   残す案でも `azookey_diag` の D-012 は不正を検出できるが、破損したファイルが残る限り Host は既定値で動き続け、復帰には設定アプリでの保存か手動削除が要る。上の 4 点は、この利点を保ったまま、正常なファイルを消す 2 つの経路（読み取り失敗での rename と、read から rename までの競合）だけを塞ぐ。
-- 設定アプリの保存経路が満たす契約は次の 2 点である。一時ファイルへ書いて flush してから原子的に置換し、途中経過を `settings.json` として残さないこと。`user_dict.json` と同じく、正規化した絶対パスから導出した named mutex で read-modify-write 全体を排他すること。
+- 設定アプリの保存経路が満たす契約は次の 3 点である。一時ファイルへ書いて flush してから原子的に置換し、途中経過を `settings.json` として残さないこと。`user_dict.json` と同じく、正規化した絶対パスから導出した named mutex で read-modify-write 全体を排他すること。
   `WriteTextFileAtomically` は `learning/include/azookey/learning/AtomicFile.h` の公開 header とし、設定アプリと Host 側コンポーネントが同じ atomic replace 実装を使う。設定アプリは公開 include path を参照し、`settings.json` の実パスに対する共有ロックを取得してから helper を呼ぶ。
+  保存前の parse に失敗した場合は、同じロック区間内で破損ファイルを `.invalid*` へ退避してから新しい設定を書き、退避したことを設定 UI に警告として表示する。退避に失敗した場合は保存せず、元のファイルを残す。
 - `learning.tsv` の writer は Host だけで、supervisor が per-user mutex で Host を単一化する（上記「Host の起動と再起動」）。
   ファイル単位ロックを取らないため、同一ユーザーで Host を二重に起動した状態は writer が二つある状態であり、想定しない。
 - named mutex 名は正規化した絶対パスから導出する（`FileLock.h` の `MutexNameForPath`）。

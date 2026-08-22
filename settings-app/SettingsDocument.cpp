@@ -12,7 +12,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 #endif
 
@@ -167,6 +169,25 @@ std::optional<std::string> ReadTextFile(const std::filesystem::path& path, std::
   return buffer.str();
 }
 
+std::optional<std::filesystem::path> QuarantineInvalidFile(const std::filesystem::path& path,
+                                                           std::optional<std::string>* error) {
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) return std::nullopt;
+
+  for (int i = 0; i < 100; ++i) {
+    auto candidate = path;
+    candidate += (i == 0) ? ".invalid" : ".invalid." + std::to_string(i);
+    if (std::filesystem::exists(candidate, ec)) continue;
+
+    std::filesystem::rename(path, candidate, ec);
+    if (!ec) return candidate;
+    if (error) *error = "failed to quarantine invalid settings.json: " + ec.message();
+    return std::nullopt;
+  }
+  if (error) *error = "failed to quarantine invalid settings.json: no available suffix";
+  return std::nullopt;
+}
+
 j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentStatus* status,
                           std::optional<std::string>* error, std::vector<std::string>* warnings) {
   std::error_code ec;
@@ -191,7 +212,6 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
   if (!parsed || !parsed->IsObject()) {
     *status = SettingsDocumentStatus::Invalid;
     *error = "invalid settings.json";
-    warnings->push_back("invalid settings.json was replaced with schema defaults on save");
     return {};
   }
   *status = SettingsDocumentStatus::Loaded;
@@ -282,6 +302,11 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   if (read_status == SettingsDocumentStatus::ReadError) {
     result.error = read_error.value_or("failed to read settings.json");
     return result;
+  }
+  if (read_status == SettingsDocumentStatus::Invalid) {
+    result.quarantined_path = QuarantineInvalidFile(path, &result.error);
+    if (!result.quarantined_path) return result;
+    result.warnings.push_back("invalid settings.json was quarantined before save");
   }
 
   j::Object model;

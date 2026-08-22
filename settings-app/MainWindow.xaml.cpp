@@ -39,6 +39,26 @@ DispatcherQueueAwaiter ResumeForeground(
   return {dispatcher};
 }
 
+winrt::hstring LoadProblemMessage(
+    const azookey::settings::SettingsDocumentResult& result,
+    winrt::Microsoft::Windows::ApplicationModel::Resources::ResourceLoader const& resources) {
+  switch (result.status) {
+    case azookey::settings::SettingsDocumentStatus::LockUnavailable:
+      return resources.GetString(L"SettingsBusyMessage");
+    case azookey::settings::SettingsDocumentStatus::Invalid:
+      return resources.GetString(L"SettingsInvalidMessage");
+    case azookey::settings::SettingsDocumentStatus::ReadError:
+      return resources.GetString(L"SettingsReadFailedMessage");
+    default:
+      return resources.GetString(L"InvalidEntriesSkipped");
+  }
+}
+
+void AppendMessage(winrt::hstring* message, const winrt::hstring& addition) {
+  if (!message->empty()) *message = *message + L"\n";
+  *message = *message + addition;
+}
+
 winrt::hstring StatusText(
     azookey::settings::LaunchArgumentStatus status,
     winrt::Microsoft::Windows::ApplicationModel::Resources::ResourceLoader const& resources) {
@@ -65,6 +85,14 @@ MainWindow::MainWindow() {
 }
 
 winrt::fire_and_forget MainWindow::LoadSettingsAsync() {
+  try {
+    co_await LoadSettingsCoreAsync();
+  } catch (...) {
+    co_return;
+  }
+}
+
+Windows::Foundation::IAsyncAction MainWindow::LoadSettingsCoreAsync() {
   const auto lifetime = get_strong();
   if (!settings_path_) {
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
@@ -109,8 +137,7 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
 
   if (result.error || !result.warnings.empty()) {
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-    const auto message = result.error ? winrt::to_hstring(*result.error)
-                                      : resources.GetString(L"InvalidEntriesSkipped");
+    const auto message = LoadProblemMessage(result, resources);
     const auto severity =
         result.status == azookey::settings::SettingsDocumentStatus::LockUnavailable ||
                 result.status == azookey::settings::SettingsDocumentStatus::ReadError
@@ -130,6 +157,14 @@ void MainWindow::ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity sever
 
 winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspectable const&,
                                                     Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  try {
+    co_await SaveSettingsCoreAsync();
+  } catch (...) {
+    co_return;
+  }
+}
+
+Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   const auto lifetime = get_strong();
   if (!settings_path_) {
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
@@ -191,13 +226,25 @@ winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspec
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;
   if (!save_result.ok) {
-    ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
-               final_resources.GetString(L"SaveFailedTitle"),
-               winrt::to_hstring(save_result.error.value_or("failed to save settings.json")));
-  } else if (!ipc_result.ok) {
-    ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Warning,
-               final_resources.GetString(L"SavedHostWarningTitle"),
-               winrt::to_hstring(ipc_result.error.value_or("UpdateConfig failed")));
+    ShowStatus(
+        Microsoft::UI::Xaml::Controls::InfoBarSeverity::Error,
+        final_resources.GetString(L"SaveFailedTitle"),
+        final_resources.GetString(save_result.quarantined_path ? L"SaveFailedAfterQuarantineMessage"
+                                                               : L"SaveFailedMessage"));
+  } else if (!ipc_result.ok || !save_result.warnings.empty()) {
+    winrt::hstring message;
+    if (save_result.quarantined_path) {
+      AppendMessage(&message, final_resources.GetString(L"InvalidFileQuarantinedMessage"));
+    } else if (!save_result.warnings.empty()) {
+      AppendMessage(&message, final_resources.GetString(L"InvalidEntriesRemovedMessage"));
+    }
+    if (!ipc_result.ok) {
+      AppendMessage(&message, final_resources.GetString(L"HostUpdateFailedMessage"));
+    }
+    ShowStatus(
+        Microsoft::UI::Xaml::Controls::InfoBarSeverity::Warning,
+        final_resources.GetString(!ipc_result.ok ? L"SavedHostWarningTitle" : L"SaveWarningTitle"),
+        message);
   } else {
     ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Success,
                final_resources.GetString(L"SaveSucceededTitle"),

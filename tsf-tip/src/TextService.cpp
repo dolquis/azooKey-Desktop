@@ -1578,7 +1578,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
 
   HandshakeRequest hs;
   hs.tip_version = kTipVersion;
-  hs.protocol_version = 1;
+  hs.protocol_version = kHandshakeProtocolVersion;
   hs.capabilities = {"ping", "query_candidates", "query_batch_conversion", "commit_observation",
                      "cancel"};
   hs.client_id = ipc_client_id_;

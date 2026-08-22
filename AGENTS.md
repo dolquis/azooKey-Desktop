@@ -154,6 +154,12 @@ In Progress へ入っていないか（spec-first 分業の担保）。spec-firs
 親課題の Done 遷移に巻き込まれた一括 Done（同一時間帯に複数が無記録で Done 化、
 「未完了のまま維持する」と明記した直後の Done 化、`startedAt` が null のまま
 Done になった `type:implementation` 課題）を点検する。
+さらに、Linear の状態と main の実体の突合を双方向で行う。
+直近サイクルで Done へ遷移した `type:implementation` 課題について、本文の受け入れ条件が
+名指しするファイル / ジョブ / フラグが main に実在するか（方向 A）と、未 Done の実装課題のうち
+本文の「現象」が現行 main で再現しなくなっているもの（方向 B）を点検する。
+方向 A は元課題を復帰させず新規課題として再起票し、方向 B は検証メモを添えて閉じる。
+点検はサンプリングでよく、全数確認は求めない。
 以上の repo 固有項目の詳細は `docs/linear-conventions.md` §13 Project Delta。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。

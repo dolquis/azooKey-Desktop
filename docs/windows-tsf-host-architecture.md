@@ -79,11 +79,28 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live)` /
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
   応答前に `max_candidates` で件数を切り詰める。
+- ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates)` /
+  応答 `(segments[], full_surface, partial, canceled)`。各 segment は
+  `(reading, candidates[])`。`QueryCandidates` と同じく `RequestScheduler` で
+  cancel / latest を追跡し、キャンセル時は `canceled=true` と空の segments を返す。
+  現状の segments は 1 要素（文節分割は未実装）で、`full_surface` は先頭候補の surface。
 - ✅ `Cancel(target_request_id)`
 - ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms)`
 - ✅ `AddUserWord` / `RemoveUserWord` — `InferenceEngine` の状態ロック下で
   `UserDictionary` を更新し、永続化に成功した場合だけ `ok=true` を返す。
   永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。
+- ✅ `UpdateConfig` — 要求 payload は空オブジェクト（設定内容は wire に載せない。Host が
+  `SettingsStore::Reload()` で settings.json を読み直す） / 応答 `(ok, error?)`。
+  再読込は `update_config_mutex` で直列化し、runtime settings を engine config へ適用してから
+  モデルを再ロードする。settings.json が invalid な場合は engine を触らず `ok=false` を返す。
+- ✅ `QueryDiagnostics` — 要求 payload は空オブジェクト / 応答
+  `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
+  learning_entries, user_dict_entries, fallback_state, last_error?)`。
+  `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` のいずれか。
+  送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
+  `Diagnostics.cpp` の IPC プローブが Handshake → Ping に続けて `request_id=3` /
+  `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
+  して診断スナップショットへ格納する。TIP からは送らない。
 - ⚠️ enum のみ定義済み、Payload/Dispatcher 未実装:
   - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
   - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`
@@ -294,12 +311,16 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 ## 新規 IPC メッセージ
 
-既存の配線済み 9 種（Handshake / Ping / Health / LoadModel / QueryCandidates /
-Cancel / CommitObservation / AddUserWord / RemoveUserWord）に加え、以下を
-Phase 5〜6 で順次追加する。
+既存の配線済み 12 種（Handshake / Ping / Health / QueryDiagnostics / LoadModel /
+QueryCandidates / QueryBatchConversion / Cancel / CommitObservation / AddUserWord /
+RemoveUserWord / UpdateConfig）に加え、以下を Phase 5〜6 で順次追加する。
 
-> 注: `MessageType` enum は 13 の named 型 + `Unknown` sentinel = 14 entries。
-> このうち Payload/Dispatcher まで配線済みは上記 9 種。新メッセージ型を enum に
+> 注: `MessageType` enum は 16 の named 型 + `Unknown` sentinel = 17 entries
+> （`ipc/include/azookey/ipc/Messages.h` が正典）。このうち Payload/Dispatcher まで
+> 配線済みは上記 12 種で、残る 4 種（`QueryPredictions` / `QueryCorrections` /
+> `CommitCorrection` / `UpdateUserWord`）は enum のみ。配線済み判定は
+> `Messages.h`・`Payloads.h`/`.cpp`・`Dispatcher.cpp` の 3 点を突き合わせて行い、
+> enum に存在するだけの型を「利用可能」とみなさない。新メッセージ型を enum に
 > 追加する際は **`Unknown` sentinel の前に挿入**すること（末尾の `Unknown` の
 > 後ろに追加しない）。
 
@@ -312,10 +333,21 @@ Phase 5〜6 で順次追加する。
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
 | `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
 | `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20) | tsf-deep §1 |
-| `UpdateConfig` / `Response` | Settings → Host | **M11 最小（v1.0） / M30 拡張** | sideload §3 + roadmap M11 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |
+
+`UpdateConfig`（Settings → Host）は「新規追加」ではないため本表から外しているが、
+M30 で完了するわけではない。M11 最小（v1.0）相当の settings.json 再読込は既に配線済みで、
+現行の要求 payload は空オブジェクトである。roadmap M30 は変更対象に `ipc/src/Payloads.cpp`
+を挙げて「M11 の最小 `UpdateConfig` を拡張」と定めており、payload 側の拡張が M30 に残る
+（`docs/sideload-packaging-spec.md` §3 + roadmap M11 / M30）。実装済みの範囲と M30 で残る
+範囲は次のとおり。
+
+| 区分 | 内容 |
+|---|---|
+| 実装済み（M11 相当） | 要求 payload 空オブジェクト、`SettingsStore::Reload()` による settings.json 再読込、engine config 適用とモデル再ロード、応答 `(ok, error?)` |
+| M30 に残る | 要求 payload の拡張（横断項目・バッチ訂正等をフル設定 UI から渡すためのフィールド追加）と、対応する `SettingsManager` 側の拡張 |
 
 Envelope に `push: bool` フラグを追加し、`server → client` 一方向通知に
 対応する（`docs/rich-features-spec.md` X-4-2）。

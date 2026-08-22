@@ -62,7 +62,15 @@ class CandidateWindow {
     int extra_width;
   };
 
+  struct ColumnLayoutForTest {
+    int surface_width;
+    int column_gap;
+    int content_width;
+  };
+
   static LayoutMetricsForTest ComputeLayoutMetricsForTest(UINT dpi);
+  static ColumnLayoutForTest ComputeColumnLayoutForTest(int max_surface_width,
+                                                        int max_description_width, UINT dpi);
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
 #endif
 
@@ -74,6 +82,12 @@ class CandidateWindow {
     int caret_gap;
     int min_text_width;
     int extra_width;
+  };
+
+  struct ColumnLayout {
+    int surface_width;
+    int column_gap;
+    int content_width;
   };
 
   static constexpr UINT kDefaultDpi = USER_DEFAULT_SCREEN_DPI;
@@ -101,6 +115,8 @@ class CandidateWindow {
 
   static int ScaleForDpi(int value, UINT dpi);
   static LayoutMetrics ComputeLayoutMetrics(UINT dpi);
+  static ColumnLayout ComputeColumnLayout(int max_surface_width, int max_description_width,
+                                          UINT dpi);
   static UINT DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd);
   static HFONT CreateMessageFont(UINT dpi);
   static ATOM RegisterWindowClass();

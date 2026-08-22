@@ -67,6 +67,19 @@ CandidateWindow::LayoutMetrics CandidateWindow::ComputeLayoutMetrics(UINT dpi) {
 }
 
 // static
+CandidateWindow::ColumnLayout CandidateWindow::ComputeColumnLayout(int max_surface_width,
+                                                                   int max_description_width,
+                                                                   UINT dpi) {
+  const bool has_description = max_description_width > 0;
+  const int surface_width =
+      has_description ? std::min(max_surface_width, ScaleForDpi(kBaseMaxSurfaceWidth, dpi)) : 0;
+  const int column_gap = has_description ? ScaleForDpi(kBaseColumnGap, dpi) : 0;
+  const int content_width =
+      (has_description ? surface_width : max_surface_width) + column_gap + max_description_width;
+  return {surface_width, column_gap, content_width};
+}
+
+// static
 UINT CandidateWindow::DpiForMonitor(HMONITOR monitor, HWND fallback_hwnd) {
   UINT dpi_x = 0;
   UINT dpi_y = 0;
@@ -87,6 +100,13 @@ CandidateWindow::LayoutMetricsForTest CandidateWindow::ComputeLayoutMetricsForTe
   const LayoutMetrics metrics = ComputeLayoutMetrics(dpi);
   return {metrics.item_height, metrics.horizontal_padding, metrics.max_width,
           metrics.caret_gap,   metrics.min_text_width,     metrics.extra_width};
+}
+
+// static
+CandidateWindow::ColumnLayoutForTest CandidateWindow::ComputeColumnLayoutForTest(
+    int max_surface_width, int max_description_width, UINT dpi) {
+  const ColumnLayout layout = ComputeColumnLayout(max_surface_width, max_description_width, dpi);
+  return {layout.surface_width, layout.column_gap, layout.content_width};
 }
 #endif
 
@@ -202,11 +222,11 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
     ReleaseDC(hwnd_, hdc);
   }
 
-  surface_column_width_ = std::min(max_surface_w, ScaleForDpi(kBaseMaxSurfaceWidth, dpi_));
-  const int column_gap = max_description_w > 0 ? ScaleForDpi(kBaseColumnGap, dpi_) : 0;
-  int width = std::min(surface_column_width_ + column_gap + max_description_w +
-                           metrics_.horizontal_padding * 2 + metrics_.extra_width,
-                       metrics_.max_width);
+  const ColumnLayout columns = ComputeColumnLayout(max_surface_w, max_description_w, dpi_);
+  surface_column_width_ = columns.surface_width;
+  int width =
+      std::min(columns.content_width + metrics_.horizontal_padding * 2 + metrics_.extra_width,
+               metrics_.max_width);
   int height = metrics_.item_height * static_cast<int>(items_.size());
 
   // Keep window on-screen: flip above caret if it would overflow below.
@@ -298,12 +318,14 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
         RECT surface_rc = row_rc;
         surface_rc.left += metrics_.horizontal_padding;
-        surface_rc.right = std::min(surface_rc.right - metrics_.horizontal_padding,
-                                    surface_rc.left + surface_column_width_);
+        surface_rc.right = surface_column_width_ > 0
+                               ? std::min(surface_rc.right - metrics_.horizontal_padding,
+                                          surface_rc.left + surface_column_width_)
+                               : surface_rc.right - metrics_.horizontal_padding;
         DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (!item.description.empty()) {
-          if (i != selected_idx_) SetTextColor(hdc, RGB(96, 96, 96));
+          if (i != selected_idx_) SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
           RECT description_rc = row_rc;
           description_rc.left = surface_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
           description_rc.right -= metrics_.horizontal_padding;

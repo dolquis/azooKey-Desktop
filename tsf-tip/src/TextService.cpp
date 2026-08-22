@@ -138,12 +138,48 @@ std::vector<azookey::ipc::CandidateField> CandidateFields(
   return fields;
 }
 
+std::vector<azookey::ipc::CandidateField> HostCandidateFields(
+    const std::vector<azookey::tsf::TipCandidate>& candidates) {
+  std::vector<azookey::ipc::CandidateField> fields;
+  fields.reserve(candidates.size());
+  for (const auto& candidate : candidates) {
+    if (candidate.description.empty()) fields.push_back(candidate.field);
+  }
+  return fields;
+}
+
 bool IsVirtualKeyDown(int vk) { return (GetKeyState(vk) & 0x8000) != 0; }
 
 bool HasSystemModifierDown() {
   return IsVirtualKeyDown(VK_CONTROL) || IsVirtualKeyDown(VK_LCONTROL) ||
          IsVirtualKeyDown(VK_RCONTROL) || IsVirtualKeyDown(VK_MENU) || IsVirtualKeyDown(VK_LMENU) ||
          IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+}
+
+std::optional<char> TranslateAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_data) {
+  if (virtual_key >= VK_NUMPAD0 && virtual_key <= VK_NUMPAD9) {
+    return static_cast<char>('0' + (virtual_key - VK_NUMPAD0));
+  }
+  if (virtual_key < '0' || virtual_key > '9') return std::nullopt;
+
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+
+  const HKL keyboard_layout = GetKeyboardLayout(0);
+  UINT scan_code = static_cast<UINT>((static_cast<ULONG_PTR>(key_data) >> 16) & 0xff);
+  if (scan_code == 0) {
+    scan_code = MapVirtualKeyExW(static_cast<UINT>(virtual_key), MAPVK_VK_TO_VSC, keyboard_layout);
+  }
+
+  std::array<WCHAR, 4> translated{};
+  constexpr UINT kDoNotChangeKeyboardState = 1u << 2;
+  const int translated_count = ToUnicodeEx(
+      static_cast<UINT>(virtual_key), scan_code, keyboard_state.data(), translated.data(),
+      static_cast<int>(translated.size()), kDoNotChangeKeyboardState, keyboard_layout);
+  if (translated_count != 1 || translated[0] < L'0' || translated[0] > L'9') {
+    return std::nullopt;
+  }
+  return static_cast<char>(translated[0]);
 }
 
 struct OemCompositionSymbol {
@@ -611,8 +647,14 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
+    const auto decimal_digit = TranslateAsciiDecimalDigit(wParam, lParam);
 
-    if (wParam >= 'A' && wParam <= 'Z') {
+    if (wParam >= '1' && wParam <= '9' && cand_visible) {
+      *eaten = TRUE;
+    } else if (decimal_digit && !BatchRomajiEnabled() &&
+               number_rewriter_.load(std::memory_order_relaxed)) {
+      *eaten = TRUE;
+    } else if (wParam >= 'A' && wParam <= 'Z') {
       *eaten = TRUE;
     } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
       // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
@@ -632,8 +674,6 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
     } else if (wParam == VK_ESCAPE) {
       *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
-    } else if (wParam >= '1' && wParam <= '9') {
-      *eaten = cand_visible ? TRUE : FALSE;
     }
     return S_OK;
   } catch (const std::bad_alloc&) {
@@ -737,7 +777,36 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
-    if (wParam >= 'A' && wParam <= 'Z') {
+    const auto decimal_digit = TranslateAsciiDecimalDigit(wParam, lParam);
+    if (wParam >= '1' && wParam <= '9' && cand_visible) {
+      int idx = static_cast<int>(wParam - '1');
+      if (idx < candidate_ui_.GetCount()) {
+        selected_candidate_idx_ = idx;
+        const HRESULT commit_hr = CommitSelected(context);
+        if (FAILED(commit_hr)) return commit_hr;
+      }
+      *eaten = TRUE;
+
+    } else if (decimal_digit && !BatchRomajiEnabled() &&
+               number_rewriter_.load(std::memory_order_relaxed)) {
+      const auto rollback_state = capture_preedit_rollback_state();
+      if (cand_visible) {
+        candidate_ui_.EndUI();
+        selected_candidate_idx_ = 0;
+      }
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_.clear();
+        candidate_window_show_pending_ = false;
+      }
+      preedit_kana_ += romaji_.Flush();
+      preedit_kana_.push_back(*decimal_digit);
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
+      PostQueryCandidates(CurrentPreeditSurface());
+      *eaten = TRUE;
+
+    } else if (wParam >= 'A' && wParam <= 'Z') {
       const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
       if (cand_visible) {
@@ -985,17 +1054,6 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
         const HRESULT commit_hr = CommitPreeditAsIs(context);
         if (FAILED(commit_hr)) return commit_hr;
-        *eaten = TRUE;
-      }
-
-    } else if (wParam >= '1' && wParam <= '9') {
-      if (cand_visible) {
-        int idx = static_cast<int>(wParam - '1');
-        if (idx < candidate_ui_.GetCount()) {
-          selected_candidate_idx_ = idx;
-          const HRESULT commit_hr = CommitSelected(context);
-          if (FAILED(commit_hr)) return commit_hr;
-        }
         *eaten = TRUE;
       }
 
@@ -1453,9 +1511,9 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   commit_surface_ = chosen.field.surface.empty() ? reading : chosen.field.surface;
   committing_ = true;
   SetCommitContext(context);
-  if (!chosen.field.surface.empty() && !reading.empty()) {
+  if (!chosen.field.surface.empty() && !reading.empty() && chosen.description.empty()) {
     pending_commit_observation_ =
-        PendingCommitObservation{reading, chosen.field, CandidateFields(shown)};
+        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown)};
   } else {
     pending_commit_observation_.reset();
   }

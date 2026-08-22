@@ -1517,6 +1517,58 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterIsOffByDefaultAndAddsAnnotatedCan
   EXPECT_EQ(mixed_items.size(), host_candidates.size());
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDigitKeysBuildNumericPreedit) {
+  if (!CurrentKeyboardLayoutProduces('1', false, L'1') ||
+      !CurrentKeyboardLayoutProduces('2', false, L'2') ||
+      !CurrentKeyboardLayoutProduces('3', false, L'3')) {
+    GTEST_SKIP() << "requires a keyboard layout where unshifted digit keys produce ASCII digits";
+  }
+
+  TextServiceHarness h;
+  h.service.set_number_rewriter_enabled_for_test(true);
+
+  for (const WPARAM key : {'1', '2', '3'}) {
+    EXPECT_TRUE(h.TestPress(key));
+    EXPECT_TRUE(h.Press(key));
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "123");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "123");
+
+  h.service.set_rewritten_cached_candidates_for_test(h.service.preedit_kana_, {});
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  const auto shown = h.service.shown_candidates_for_test();
+  EXPECT_NE(std::find_if(shown.begin(), shown.end(),
+                         [](const auto& candidate) { return candidate.surface == "百二十三"; }),
+            shown.end());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterNumpadDigitsBuildNumericPreedit) {
+  TextServiceHarness h;
+  h.service.set_number_rewriter_enabled_for_test(true);
+
+  for (const WPARAM key : {VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3}) {
+    EXPECT_TRUE(h.TestPress(key));
+    EXPECT_TRUE(h.Press(key));
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "123");
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "123");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDoesNotEatShiftedNonDigit) {
+  if (!CurrentKeyboardLayoutProduces('1', true, L'!')) {
+    GTEST_SKIP() << "requires a keyboard layout where Shift+1 produces a non-digit";
+  }
+
+  TextServiceHarness h;
+  h.service.set_number_rewriter_enabled_for_test(true);
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.keyboard_state.SetDown(VK_LSHIFT, true);
+
+  EXPECT_FALSE(h.TestPress('1'));
+  EXPECT_FALSE(h.Press('1'));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterCommitsSurfaceWithoutAnnotation) {
   TextServiceHarness h;
   h.service.preedit_kana_ = "123";
@@ -1540,6 +1592,31 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterCommitsSurfaceWithoutAnnotation) 
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
   EXPECT_EQ(attachment.composition_range.last_text, L"百二十三");
   EXPECT_EQ(attachment.composition_range.last_text.find(L"漢数字"), std::wstring::npos);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesTipLocalRewriteCandidates) {
+  TextServiceHarness h;
+  h.service.preedit_kana_ = "123";
+  h.service.set_number_rewriter_enabled_for_test(true);
+
+  std::vector<azookey::ipc::CandidateField> host_candidates(1);
+  host_candidates[0].surface = "123";
+  host_candidates[0].reading = "123";
+  host_candidates[0].source = "test";
+  h.service.set_rewritten_cached_candidates_for_test("123", std::move(host_candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_selected_candidate_index_for_test(0);
+
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->chosen.surface, "123");
+  ASSERT_EQ(observation->shown.size(), 1u);
+  EXPECT_EQ(observation->shown[0].surface, "123");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {

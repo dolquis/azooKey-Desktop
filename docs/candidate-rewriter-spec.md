@@ -63,6 +63,12 @@ Host は runtime settings の値を Handshake 応答へ載せ、TIP は通常の
 数字候補をローカルで追加する。
 Handshake 応答に設定値がない旧 Host は `false` として扱う。
 
+`numberRewriter == true` かつ一括変換ではないとき、TIP は ASCII 数字を生成する主キーと
+テンキーを composition へ取り込み、通常の候補要求へ読みとして渡す。
+Shift などによって数字以外を生成する主キーは取り込まない。
+候補窓が開いているときの `1` から `9` は、従来どおり候補の直接選択を優先する。
+`numberRewriter == false` のとき、数字キーは従来どおりアプリへ渡す。
+
 TIP は Host 候補を先に保ち、その末尾へ数字候補を追加する。
 同じ表層形がすでに Host 候補または先行する数字候補にある場合は追加しない。
 一括変換、ライブ変換、予測候補の経路には数字候補を追加しない。
@@ -370,6 +376,9 @@ struct CandidateViewItem {
 
 注釈は表示専用である。確定、学習観測、`ITfCandidateListUIElement` のいずれにも注釈を
 連結しない。
+
+TIP ローカル候補を選んだ確定では `CommitObservation` を送らない。
+Host 候補を選んだ確定でも、TIP ローカル候補は `shown` から除外してから観測を送る。
 
 ### 10.2 かな読み引きの候補列と確定動線
 

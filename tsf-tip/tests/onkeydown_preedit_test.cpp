@@ -514,6 +514,31 @@ class TextServiceHarness {
   azookey::tsf::TextService service;
 };
 
+class FakeCompositionAttachment {
+ public:
+  explicit FakeCompositionAttachment(TextServiceHarness& harness) : harness_(harness) {
+    composition_range.clone_range = &selection_range;
+    composition.AddRef();
+    composition.range_ = &composition_range;
+    harness_.service.composition_ = &composition;
+    harness_.context.run_edit_session = true;
+  }
+
+  ~FakeCompositionAttachment() {
+    if (harness_.service.composition_ == &composition) {
+      harness_.service.composition_ = nullptr;
+      composition.Release();
+    }
+  }
+
+  FakeComposition composition;
+  FakeRange composition_range;
+  FakeRange selection_range;
+
+ private:
+  TextServiceHarness& harness_;
+};
+
 }  // namespace
 
 TEST(TsfTipOnKeyDownPreeditTest, TextServiceInstancesUseDistinctIpcClientIds) {
@@ -1454,7 +1479,7 @@ TEST(TsfTipOnKeyDownPreeditTest, SpaceUsesCachedCandidatesWithoutPending) {
 
 TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
   TextServiceHarness h;
-  FakeRange range;
+  FakeCompositionAttachment attachment(h);
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -1473,27 +1498,21 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {
   late_candidates[1].surface = "課";
   h.service.set_cached_candidates_for_test(std::move(late_candidates));
 
-  h.context.selection_range = &range;
-  h.context.run_edit_session = true;
-
   EXPECT_TRUE(h.Press(VK_DOWN));
+  const std::wstring displayed_surface = attachment.composition_range.last_text;
+  EXPECT_EQ(displayed_surface, L"科");
+  const int set_text_count_before = attachment.composition_range.set_text_count;
   EXPECT_TRUE(h.Press(VK_RETURN));
 
-  EXPECT_EQ(range.set_text_count, 1);
-  EXPECT_EQ(range.last_text, std::wstring(1, L'\x79d1'));
+  EXPECT_EQ(attachment.composition_range.set_text_count, set_text_count_before + 1);
+  EXPECT_EQ(attachment.composition_range.last_text, displayed_surface);
+  EXPECT_EQ(attachment.composition.end_count, 1);
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresReading) {
   TextServiceHarness h;
-  FakeComposition composition;
-  FakeRange composition_range;
-  FakeRange selection_range;
-  composition_range.clone_range = &selection_range;
-  composition.AddRef();
-  composition.range_ = &composition_range;
-  h.service.composition_ = &composition;
-  h.context.run_edit_session = true;
+  FakeCompositionAttachment attachment(h);
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -1505,33 +1524,71 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresRe
   h.service.set_cached_candidates_for_test(std::move(candidates));
 
   EXPECT_TRUE(h.Press(VK_SPACE));
-  EXPECT_EQ(composition_range.last_text, L"蚊");
+  EXPECT_EQ(attachment.composition_range.last_text, L"蚊");
   EXPECT_TRUE(h.Press(VK_DOWN));
-  EXPECT_EQ(composition_range.last_text, L"科");
+  EXPECT_EQ(attachment.composition_range.last_text, L"科");
   EXPECT_EQ(h.service.preedit_kana_, "か");
 
   EXPECT_TRUE(h.Press(VK_ESCAPE));
-  EXPECT_EQ(composition_range.last_text, L"か");
+  EXPECT_EQ(attachment.composition_range.last_text, L"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, TypingAfterCandidateSelectionRestoresReadingBeforeAppending) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "か");
 
-  h.service.composition_->Release();
-  h.service.composition_ = nullptr;
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_DOWN));
+  EXPECT_EQ(attachment.composition_range.last_text, L"科");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"かあ");
+  EXPECT_EQ(h.service.preedit_kana_, "かあ");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BackspaceAfterCandidateSelectionEditsReading) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, "かな");
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "仮名";
+  candidates[1].surface = "加奈";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_DOWN));
+  EXPECT_EQ(attachment.composition_range.last_text, L"加奈");
+  EXPECT_EQ(h.service.preedit_kana_, "かな");
+
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(attachment.composition_range.last_text, L"か");
+  EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, LateCandidatesUpdatePreeditWhenWindowFirstAppears) {
   TextServiceHarness h;
-  FakeComposition composition;
-  FakeRange composition_range;
-  FakeRange selection_range;
-  composition_range.clone_range = &selection_range;
-  composition.AddRef();
-  composition.range_ = &composition_range;
-  h.service.composition_ = &composition;
-  h.context.run_edit_session = true;
+  FakeCompositionAttachment attachment(h);
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
-  ASSERT_EQ(composition_range.last_text, L"か");
+  ASSERT_EQ(attachment.composition_range.last_text, L"か");
 
   EXPECT_TRUE(h.Press(VK_SPACE));
   ASSERT_TRUE(h.service.candidate_window_show_pending_for_test());
@@ -1542,16 +1599,13 @@ TEST(TsfTipOnKeyDownPreeditTest, LateCandidatesUpdatePreeditWhenWindowFirstAppea
   h.service.set_cached_candidates_for_test(std::move(candidates));
   h.service.show_candidate_window_from_cache_for_test();
 
-  EXPECT_EQ(composition_range.last_text, L"蚊");
+  EXPECT_EQ(attachment.composition_range.last_text, L"蚊");
   EXPECT_EQ(h.service.preedit_kana_, "か");
-
-  h.service.composition_->Release();
-  h.service.composition_ = nullptr;
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberSelectionCommitsCorrespondingCandidate) {
   TextServiceHarness h;
-  FakeRange range;
+  FakeCompositionAttachment attachment(h);
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
@@ -1563,13 +1617,17 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberSelectionCommitsCorrespondingCandidate) {
   h.service.set_cached_candidates_for_test(std::move(candidates));
 
   EXPECT_TRUE(h.Press(VK_SPACE));
-  h.context.selection_range = &range;
-  h.context.run_edit_session = true;
+  EXPECT_TRUE(h.Press(VK_DOWN));
+  const std::wstring highlighted_surface = attachment.composition_range.last_text;
+  EXPECT_EQ(highlighted_surface, L"科");
+  const int set_text_count_before = attachment.composition_range.set_text_count;
 
-  EXPECT_TRUE(h.Press('2'));
+  EXPECT_TRUE(h.Press('3'));
 
-  EXPECT_EQ(range.set_text_count, 1);
-  EXPECT_EQ(range.last_text, std::wstring(1, L'\x79d1'));
+  EXPECT_EQ(attachment.composition_range.set_text_count, set_text_count_before + 1);
+  EXPECT_EQ(attachment.composition_range.last_text, L"課");
+  EXPECT_NE(attachment.composition_range.last_text, highlighted_surface);
+  EXPECT_EQ(attachment.composition.end_count, 1);
   EXPECT_TRUE(h.service.shown_candidates_for_test().empty());
 }
 

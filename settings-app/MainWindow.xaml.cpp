@@ -11,15 +11,33 @@
 #include "MainWindow.g.cpp"
 #endif
 
-#include <wil/cppwinrt_helpers.h>
-
 #include <algorithm>
 #include <array>
+#include <coroutine>
 #include <cwctype>
 #include <filesystem>
 #include <string>
 
 namespace {
+
+struct DispatcherQueueAwaiter {
+  winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher;
+
+  bool await_ready() const noexcept { return false; }
+
+  void await_suspend(std::coroutine_handle<> continuation) const {
+    if (!dispatcher.TryEnqueue([continuation]() noexcept { continuation.resume(); })) {
+      throw winrt::hresult_error(E_ABORT, L"The UI dispatcher is shutting down.");
+    }
+  }
+
+  void await_resume() const noexcept {}
+};
+
+DispatcherQueueAwaiter ResumeForeground(
+    winrt::Microsoft::UI::Dispatching::DispatcherQueue const& dispatcher) {
+  return {dispatcher};
+}
 
 winrt::hstring StatusText(
     azookey::settings::LaunchArgumentStatus status,
@@ -61,7 +79,7 @@ winrt::fire_and_forget MainWindow::LoadSettingsAsync() {
   const auto dispatcher = DispatcherQueue();
   co_await winrt::resume_background();
   const auto result = azookey::settings::LoadSettingsDocument(path);
-  co_await wil::resume_foreground(dispatcher);
+  co_await ResumeForeground(dispatcher);
   ApplySettingsToControls(result);
 }
 
@@ -166,7 +184,7 @@ winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspec
     ipc_result = azookey::settings::NotifyHostOfSettingsChange(
         azookey::settings::DefaultSettingsIpcOptions());
   }
-  co_await wil::resume_foreground(dispatcher);
+  co_await ResumeForeground(dispatcher);
 
   SaveButton().IsEnabled(true);
   SaveProgressRing().IsActive(false);

@@ -183,27 +183,97 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
   先に判定する（§4.3 の前提課題）。出典:
   [Run LLMs and other generative models（ONNX Runtime GenAI / Windows ML）](https://learn.microsoft.com/windows/ai/new-windows-ml/run-genai-onnx-models)、
   [Use any ONNX LLM in the AI Dev Gallery（変換対応モデル列挙）](https://learn.microsoft.com/windows/ai/ai-dev-gallery/tutorial-onnx)。
-- 実機計測（NVIDIA GPU / Snapdragon X Elite / Intel Core Ultra）は人手が必要なため
-  `gate:human-required` の子課題に分離する。
+- 実機計測は `gate:human-required` の DEV-194 で扱う。
+  Snapdragon X Elite / Intel Core Ultra の NPU 計測は、R2 artifact を作成できた場合にだけ
+  同じ入力セットで実行する。
 
-### 4.3 結論（M24 暫定方針）
+#### 4.2.1 R1 CPU 実モデル baseline
 
-M8 bench と zenz-v3 ONNX 変換可否スパイクの結果で最終確定する前提で、現時点の設計
-決定を以下に固定する。
+DEV-194 では、次の固定条件で R1 CPU を計測した。
 
-1. **v1.0 ベースライン = R1（llama.cpp, CPU 既定 + CUDA optional）**。GGUF 資産を無変換で
-   使え、M8 で実装済み。Copilot+ PC でも当面は zenz-v3 を R1 CPU で動かす（小型モデル
-   のため CPU でも省電力許容）。
-2. **M24 の Copilot+ NPU 経路 = R2（Windows ML）に振る**。ベンダ別 SDK を同梱せず、
-   Windows ML の自動 EP 配信・自動選択・NPU→GPU→CPU フォールバックに委ねる（ただし
-   first-run の EP 取得・登録は §4.6 のとおりアプリ側で明示実行が必要）。
-3. **R2 は zenz-v3 → ONNX Runtime GenAI 変換の成否に依存する後続トラック（v1.0 後）**。
-   変換可否スパイクを R2 着手の前提課題とし、不可なら R2 を保留して R1 CPU を Copilot+
-   の既定に据える。**NPU 必須化はしない**（入力が止まらないことを最優先）。
-4. **不採用 / 集約**: 単体 DirectML backend（旧 A）は不採用。ベンダ横断 GPU は
-   R1=ggml-vulkan。DirectML 由来のアクセラレーションは R2（Windows ML）に一本化。
-5. Win11 24H2 (build 26100) 未満では R2 の NPU / HW EP が使えないため、OS バージョン
-   判定で R1 CPU にフォールバックする。
+- リポジトリ: commit `6abce8d2595a05c4358dacf459b691b3cc946d04`
+- OS / CPU: Windows build 26200.9168 / Intel Core i7-12700KF / x64 / NPU なし
+- build: `windows-release`、`llama_cpp=1`、`requested_backend=cpu`、
+  `effective_backend=cpu`
+- model: `Miwa-Keita/zenz-v3.2-small-gguf` の `ggml-model-Q5_K_M.gguf`、
+  73,871,936 bytes（70.45MiB）、SHA-256
+  `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`
+- 各入力を別プロセスで実行し、warm-up 3 回、計測 20 回とした。
+
+入力セットは次の 20 件である。
+
+```text
+こんにちは / にほんご / きょうはいいてんきです / わたしはがくせいです
+よろしくおねがいします / ありがとうございます / きょうのかいぎ / めーるをかく
+あしたのよてい / とうきょうえき / おーぷんえーあい / ぷろぐらみんぐ
+へんかんこうほ / にほんごにゅうりょく / このぶんしょうをへんかん
+しゅうまつのてんき / でんしゃにのる / しごとをはじめる
+せっていをひらく / ぱそこんをさいきどうする
+```
+
+| 指標 | 結果 |
+|---|---|
+| 初回 `LoadModel` | 中央値 22.80ms |
+| 入力別 p50 | 中央値 501.38ms、範囲 196.02–810.19ms |
+| p50 < 30ms | 0 / 20 入力 |
+| `にほんご` 50 回 | p50 197.03ms / p95 210.73ms / p99 215.37ms |
+| peak RSS | 122.52MiB（`にほんご`、warm-up 3 回 + 計測 50 回の代表値） |
+| 実推論 | 20 / 20 入力で exit 0、`zenzai_candidates=4` |
+
+ロード時間は 3 秒ゲートを満たしたが、推論 p50 は全入力で 30ms ゲートを超えた。
+また、モデル単体が 50MB を超えるため、R1 の配布サイズは R2 の比較ゲートを満たさない。
+ただし、この結果は R1 CPU baseline であり、R2 の性能を推定する根拠にはしない。
+R1 CPU の性能予算超過は DEV-853 で追跡する。
+
+#### 4.2.2 zenz-v3 の R2 変換可否
+
+2026-08-23 時点の ONNX Runtime GenAI model builder を、配布対象の
+`Miwa-Keita/zenz-v3.2-small-gguf` に適用する経路はない。
+
+1. 配布モデルは GPT-2 architecture の Q5_K_M GGUF であり、公開リポジトリにあるモデル
+   本体は 73.9MB の当該ファイルだけである。
+2. model builder の対応 architecture 一覧に GPT-2 はなく、`builder.py` に
+   `GPT2LMHeadModel` の分岐もない。
+   通常の変換要求は未対応モデルとして `NotImplementedError` になる。
+3. model builder が入力として受け付ける GGUF は float16 / float32 に限られるため、
+   Q5_K_M を変換元にはできない。
+4. ONNX Runtime GenAI runtime 自体は `gpt2` model type を認識する。
+   これは適合する ONNX graph と `genai_config.json` を実行できるという意味であり、
+   model builder が zenz-v3 を出力できることは意味しない。
+
+したがって、現行 model builder をそのまま使う手動変換は不可と判定する。
+GPT-2 builder の新規実装、または別 exporter で作った ONNX graph と手書き
+`genai_config.json` を検証する作業は、新しい推論 backend の実装に当たるため本スパイクの
+範囲外とする。
+変換済み artifact がないため、R2 の精度劣化、RSS、実効配布サイズ、QNN / OpenVINO NPU
+レイテンシは計測できない。
+
+根拠:
+
+- [ONNX Runtime GenAI Model Builder: Current Support / GGUF Model](https://github.com/microsoft/onnxruntime-genai/blob/main/src/python/py/models/README.md)
+- [model builder の architecture 分岐](https://github.com/microsoft/onnxruntime-genai/blob/main/src/python/py/models/builder.py)
+- [runtime の model type 判定](https://github.com/microsoft/onnxruntime-genai/blob/main/src/models/model_type.h)
+- [Miwa-Keita/zenz-v3.2-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/tree/main)
+
+### 4.3 結論（M24 実証結果の反映）
+
+1. **v1.0 ベースライン = R1（llama.cpp / CPU）**とする。
+   配布中の GGUF を無変換で使え、実モデルでロードと候補生成を確認できた。
+2. **R2（Windows ML）は保留**する。
+   現行 model builder には GPT-2 変換経路がなく、配布中の Q5_K_M GGUF も変換入力の
+   条件を満たさないため、zenz-v3 の R2 artifact を作れない。
+3. R2 artifact がない状態では Snapdragon X Elite / Intel Core Ultra の NPU bench を
+   実行しない。
+   これは Windows ML や各 NPU の非対応を示す結果ではなく、前段のモデル変換が成立しない
+   ためである。
+4. Copilot+ PC でも R1 CPU を既定とし、**NPU を必須化しない**。
+   将来 GPT-2 builder または別の検証済み ONNX 変換経路が用意された場合にだけ、同じ
+   20 入力と §4.2 のメトリクスで R2 を再評価する。
+5. 単体 DirectML backend（旧 A）は採らない。
+   ベンダ横断 GPU を追加する場合は R1=ggml-vulkan、DirectML 由来の実行は
+   R2=Windows ML に集約する。
+6. Win11 24H2 (build 26100) 未満では、将来 R2 を有効化する場合も OS 判定で R1 CPU に
+   フォールバックする。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装が R1（llama.cpp）を
 > **CPU / CUDA / Vulkan の 3 プリビルド**で実働実証済み（Vulkan(ggml-vulkan) を含む）。

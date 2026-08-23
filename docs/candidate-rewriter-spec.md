@@ -657,6 +657,10 @@ M62-B の「純かな候補」は、読みが純かなであることを指す�
 処理は `core/` の純粋関数として書き、TSF と IPC とモデルに依存しない。M62-A と同じ形であり、
 TIP ローカルで無 IPC である。
 
+「TIP ローカルで無 IPC」は候補生成についての性質である。`katakanaRewriter` の値そのものは
+§18.7 の Handshake 経路で Host から TIP へ届く。設定の伝播まで無 IPC と読むと、core の関数と
+schema だけを足して設定が常に実質 OFF のままになる。
+
 M62-A は `IRewriter` と `RewriterChain` の抽象を導入していない（`core/` にあるのは
 `NumberRewriter` 単体である）。M62-B も同じ粒度の関数を 1 つ追加する形で実装し、
 リライターの抽象化は M62-C でデータ駆動のリライターが加わるまで行わない。
@@ -752,6 +756,11 @@ Host は runtime settings の値を Handshake 応答へ載せ、TIP は通常の
 カタカナ候補をローカルで追加する。Handshake 応答に設定値がない旧 Host は `false` として
 扱う（§3 の `numberRewriter` と同じ）。
 
+キーの追加は schema だけでは完結しない。`settings/default-settings.sample.json` と
+settings-app の許可キーを schema と同期し、Host の runtime settings、Handshake payload、
+TIP の保持値まで `numberRewriter` と同じ経路を通す。変更対象の一覧は
+`plans/windows-port-roadmap.md` M62-B にある。
+
 ### 18.8 英字分と M60 の境界
 
 M62-B の英字分（幅と大小のバリアント）は本書で定めない。M60
@@ -764,6 +773,9 @@ M60 は生ローマ字バッファを素材に英単語候補を注入する経�
 M60 側で確定した内容は同書 §3（素材の一覧）と §4.3（候補内の固定順）にある。半角の小文字、
 半角の大文字、全角の小文字、全角の大文字の 4 バリアントは、同書の
 `inlineEnglishCaseVariants` と `fullWidthEnglishCandidate` の組み合わせで生成する。
+
+同書 §3 は、これらを生ローマ字そのものではなく `lower(r)` を基準に生成すると定める。生ローマ字は
+Shift 併用打鍵を保持するため、`Apple` と打った場合に小文字形が出ず 4 形が崩れるのを防ぐ。
 
 `katakanaRewriter` は英字に作用しない。
 

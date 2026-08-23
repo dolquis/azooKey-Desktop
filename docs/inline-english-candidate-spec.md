@@ -58,24 +58,35 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 
 ## 3. 候補生成の素材
 
-`apple` を例に、生成しうる英単語候補:
+大小と幅のバリアントは、生ローマ字 `r` そのものではなく `lower(r)` を基準に生成する。
+
+`r` は Shift 併用打鍵を保持する（§4.2 の `s_case` がこれをシグナルに使う）。`r` を基準にすると
+`Apple` と打ったときに小文字形が 1 つも出ず、下表の 4 形（半角小文字、半角全大文字、全角小文字、
+全角全大文字）が成立しない。`lower(r)` を基準にすれば、打鍵の大小によらず同じ 6 形が出る。
+
+`apple`、`Apple`、`APPLE` のいずれを打鍵した場合も、生成しうる英単語候補は次のとおりである。
 
 | 種別 | 例 | 生成条件 |
 |---|---|---|
-| 生ローマ字そのもの | `apple` | 常時（決定的ベースライン） |
-| 先頭大文字 | `Apple` | `inlineEnglishCaseVariants` ON |
-| 全大文字 | `APPLE` | `inlineEnglishCaseVariants` ON |
-| 全角ローマ字 | `ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON（legacy `fullWidthRomanCandidate` 相当） |
+| 半角小文字 | `apple` | 常時（決定的ベースライン。`lower(r)`） |
+| 半角先頭大文字 | `Apple` | `inlineEnglishCaseVariants` ON |
+| 半角全大文字 | `APPLE` | `inlineEnglishCaseVariants` ON |
+| 全角小文字 | `ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON（legacy `fullWidthRomanCandidate` 相当） |
 | 全角先頭大文字 | `Ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON かつ `inlineEnglishCaseVariants` ON |
 | 全角全大文字 | `ＡＰＰＬＥ` | `fullWidthEnglishCandidate` ON かつ `inlineEnglishCaseVariants` ON |
-| 辞書一致語 | `apple`（辞書ヒットで上位化） | `inlineEnglishDictionary` ON（品質レイヤ） |
+| 生ローマ字そのもの | `aPPle` | `r` が上の 6 形のいずれとも表層形が一致しないとき |
+| 辞書一致語 | `iPhone` | `inlineEnglishDictionary` ON（品質レイヤ） |
+
+`aPPle` のような打鍵は上の 6 形のどれとも一致しないため、打った文字列そのものを選べるように
+`r` を候補へ加える。`apple` や `APPLE` のように 6 形のいずれかと一致する打鍵では、重複除去
+（§4.3）によってこの行は現れない。
 
 全候補に `CandidateTag::English`（X-2-3）を付与し、候補 UI で `[英]` バッジを出せる
 ようにする。
 
 M62-B（`docs/candidate-rewriter-spec.md` §18）が挙げる英字の 4 バリアント（半角の小文字、
-半角の大文字、全角の小文字、全角の大文字）は、この表の 生ローマ字、全大文字、全角ローマ字、
-全角全大文字 の 4 行に対応する。先頭大文字と全角先頭大文字は、それに加えて本書が持つ形である。
+半角の大文字、全角の小文字、全角の大文字）は、上表の 半角小文字、半角全大文字、全角小文字、
+全角全大文字 の 4 行に対応する。先頭大文字の 2 行は、それに加えて本書が持つ形である。
 
 M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字候補生成を置かない。同じ打鍵に対して
 2 つの経路が候補を注入すると、順序と重複除去をどちらが決めるかが定まらないためである。M62-B が
@@ -119,11 +130,12 @@ english_intent = 0.40*s_dict + 0.25*s_nonkana + 0.15*s_cluster
 if !inlineEnglishCandidates:           英単語候補なし
 if len(r) < inlineEnglishMinLength:     英単語候補なし（既定 2）
 else:
-    生ローマ字そのもの候補は常に生成可（順位は §4.3）
-    先頭大文字 / 全大文字バリアントは inlineEnglishCaseVariants ON 時
-    全角ローマ字は fullWidthEnglishCandidate ON 時
+    半角小文字 lower(r) 候補は常に生成可（順位は §4.3）
+    半角の先頭大文字 / 全大文字は inlineEnglishCaseVariants ON 時
+    全角小文字は fullWidthEnglishCandidate ON 時
     全角の先頭大文字 / 全大文字は fullWidthEnglishCandidate と inlineEnglishCaseVariants が共に ON 時
-    辞書一致語（surface 差し替え・score 上乗せ）は inlineEnglishDictionary ON 時
+    生ローマ字 r そのものは、上のどの形とも表層形が一致しないとき（例: aPPle）
+    辞書一致語（追加候補・score 上乗せ）は inlineEnglishDictionary ON 時
 ```
 
 辞書非搭載（`inlineEnglishDictionary=false`）でも `s_dict=0` のまま他シグナルで
@@ -145,11 +157,18 @@ else:
 候補内の英語形の並び（固定順）:
 
 ```text
-生ローマ字そのもの → 先頭大文字 → 全大文字 → 全角ローマ字 → 全角先頭大文字 → 全角全大文字
-（辞書一致語があれば「生ローマ字そのもの」位置の surface を辞書 surface に差し替え）
-（全角の大小 2 件は fullWidthEnglishCandidate と inlineEnglishCaseVariants の双方が ON の
- ときだけ生成する。半角 3 件をすべて出してから全角 3 件を出す）
+（辞書一致語があればその surface を先頭に置く）
+（生ローマ字 r が下の 6 形のいずれとも一致しなければ、次に r 自体を置く）
+半角小文字 → 半角先頭大文字 → 半角全大文字 → 全角小文字 → 全角先頭大文字 → 全角全大文字
+（全角の 3 件は fullWidthEnglishCandidate ON 時。うち大小 2 件は inlineEnglishCaseVariants も
+ ON のときだけ生成する。半角側をすべて出してから全角側を出す）
+（重複除去は表層形で行い、この固定順で先に現れたものを残す）
 ```
+
+辞書一致語は `lower(r)` 由来の 6 形を差し替えず、別の候補として先頭へ置く。辞書 surface が
+`iPhone` のような独自の大小を持つとき、差し替えにすると小文字形が候補から消え、§3 の 4 形の
+契約が崩れるためである。辞書 surface が 6 形のいずれかと一致する場合は、重複除去でこの行が
+消え、順位の上乗せ（`s_dict`）だけが残る。
 
 エッジ:
 
@@ -643,9 +662,16 @@ CommitObservationRequest{
 ## 8. テスト計画
 
 - **候補生成** (`core/tests` or host テスト): 大文字化バリアント生成（`apple` →
-  `Apple` / `APPLE`）、全角ローマ字生成（`ａｐｐｌｅ` と、大小バリアント併用時の
+  `Apple` / `APPLE`）、全角バリアント生成（`ａｐｐｌｅ` と、大小バリアント併用時の
   `Ａｐｐｌｅ` / `ＡＰＰＬＥ`）、最小長ゲーティング、英語意図ヒューリスティック
   （`xyz` 等の非日本語ローマ字判定）。
+- **大文字打鍵での 6 形の成立** (同上): `Apple` / `APPLE` / `aPPle` の打鍵でも
+  `lower(r)` 基準で §3 の 6 形が出ること（`apple` が必ず含まれること）。`aPPle` では
+  生ローマ字そのものの行が加わり、`apple` / `APPLE` では重複除去で消えること。
+  §4.3 の固定順で先に現れた表層形が残ること。
+- **辞書一致語との共存** (同上): 辞書 surface（`iPhone` 等）が先頭に付き、`lower(r)` 由来の
+  6 形が消えないこと。辞書 surface が 6 形のいずれかと一致する場合は重複せず順位上乗せだけが
+  効くこと。
 - **順位** (host テスト): 弱シグナル時に英単語候補が日本語上位候補より下に来ること、
   自動選択されないこと、強シグナル時のみ上位化されること。
 - **辞書 TSV** (`core/tests` or host テスト): TSV パース（surface/frequency/flags）、

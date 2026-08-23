@@ -134,6 +134,26 @@ std::string SerializeBenchmarkResult(const BenchmarkResult& result) {
   root.emplace("bench", Value(result.bench));
   root.emplace("commit", Value(result.commit));
   root.emplace("config", Value(result.config));
+  if (result.decode_phases) {
+    const auto serialize_phase = [](const DecodePhaseMetrics& phase) {
+      Object phase_latency;
+      phase_latency.emplace("max", Value(phase.latency.max_ms));
+      phase_latency.emplace("p50", Value(phase.latency.p50_ms));
+      phase_latency.emplace("p95", Value(phase.latency.p95_ms));
+      phase_latency.emplace("p99", Value(phase.latency.p99_ms));
+
+      Object serialized;
+      serialized.emplace("invocations", Value(static_cast<uint64_t>(phase.invocations)));
+      serialized.emplace("latencyMs", Value(std::move(phase_latency)));
+      serialized.emplace("tokens", Value(phase.tokens));
+      return serialized;
+    };
+
+    Object phases;
+    phases.emplace("beam", Value(serialize_phase(result.decode_phases->beam)));
+    phases.emplace("prompt", Value(serialize_phase(result.decode_phases->prompt)));
+    root.emplace("decodePhases", Value(std::move(phases)));
+  }
   root.emplace("iterations", Value(static_cast<uint64_t>(result.iterations)));
   root.emplace("latencyMs", Value(std::move(latency)));
   root.emplace("schemaVersion", Value(kBenchmarkSchemaVersion));

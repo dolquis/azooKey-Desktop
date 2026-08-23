@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -58,6 +59,14 @@ struct ZenzaiKvOverride {
   int64_t int_value{};
 };
 
+struct ZenzaiDecodeStats {
+  double prompt_decode_ms{};
+  double beam_decode_ms{};
+  uint64_t prompt_tokens{};
+  uint64_t beam_tokens{};
+  size_t beam_decode_invocations{};
+};
+
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
                                      const ZenzaiRuntimeOptions& options = {});
@@ -76,6 +85,7 @@ class ZenzaiModelConverter final : public core::IConverter {
   const ZenzaiModelInfo& info() const { return info_; }
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
+  std::optional<ZenzaiDecodeStats> last_decode_stats() const;
   std::vector<int32_t> TokenizePromptForValidation(const std::string& kana,
                                                    const core::ConversionContext& context) const;
 

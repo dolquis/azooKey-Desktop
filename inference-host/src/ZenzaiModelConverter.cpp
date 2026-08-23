@@ -560,11 +560,13 @@ class LlamaDecodeAbortScope {
 };
 
 bool DecodeTokens(llama_context* context, std::vector<llama_token>& tokens,
-                  LlamaDecodeControl& control, const char* error_message) {
+                  LlamaDecodeControl& control, const char* error_message, bool clear_cache = true) {
   if (tokens.empty()) {
     return true;
   }
-  llama_kv_self_clear(context);
+  if (clear_cache) {
+    llama_kv_self_clear(context);
+  }
   const auto context_batch = std::max<uint32_t>(1, llama_n_batch(context));
   const int32_t chunk_limit =
       std::max<int32_t>(1, std::min<int32_t>(32, static_cast<int32_t>(context_batch)));
@@ -620,17 +622,12 @@ void AppendCompletedBeam(std::vector<GeneratedCandidate>& generated, const Llama
   }
 }
 
-std::vector<llama_token> PromptWithBeamTokens(const std::vector<llama_token>& prompt_tokens,
-                                              const LlamaBeam& beam) {
-  std::vector<llama_token> tokens = prompt_tokens;
-  tokens.insert(tokens.end(), beam.tokens.begin(), beam.tokens.end());
-  return tokens;
-}
 #endif
 
 }  // namespace
 
 struct ZenzaiModelRuntime {
+  std::optional<ZenzaiDecodeStats> last_decode_stats;
 #if AZOOKEY_WITH_LLAMA_CPP
   ~ZenzaiModelRuntime() {
     if (context) {
@@ -679,6 +676,7 @@ struct ZenzaiModelRuntime {
 
   std::vector<GeneratedCandidate> Generate(const std::string& kana,
                                            const core::ConversionContext& conversion_context) {
+    last_decode_stats.reset();
     if (!model || !context) {
       throw std::runtime_error("llama.cpp runtime is not ready");
     }
@@ -703,10 +701,23 @@ struct ZenzaiModelRuntime {
     std::vector<LlamaBeam> beams(1);
     bool completed_quota_reached = false;
 
+    last_decode_stats = ZenzaiDecodeStats{};
+    auto& decode_stats = *last_decode_stats;
+    decode_stats.prompt_tokens = static_cast<uint64_t>(prompt_tokens.size());
+    const auto prompt_decode_start = std::chrono::steady_clock::now();
+    const bool prompt_decoded =
+        DecodeTokens(context, prompt_tokens, decode_control, "llama.cpp prompt decode failed");
+    decode_stats.prompt_decode_ms = std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() - prompt_decode_start)
+                                        .count();
+    if (!prompt_decoded) {
+      return {};
+    }
+
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
       std::vector<LlamaBeam> next_beams;
       next_beams.reserve(candidate_limit * candidate_limit);
-      for (const auto& beam : beams) {
+      for (auto& beam : beams) {
         if (IsCanceled(conversion_context)) {
           return {};
         }
@@ -715,9 +726,19 @@ struct ZenzaiModelRuntime {
           continue;
         }
 
-        auto decoded_tokens = PromptWithBeamTokens(prompt_tokens, beam);
-        if (!DecodeTokens(context, decoded_tokens, decode_control,
-                          "llama.cpp beam decode failed")) {
+        const auto beam_decode_start = std::chrono::steady_clock::now();
+        const auto prompt_size = static_cast<llama_pos>(prompt_tokens.size());
+        if (!llama_kv_self_seq_rm(context, 0, prompt_size, -1)) {
+          throw std::runtime_error("llama.cpp beam KV suffix reset failed");
+        }
+        const bool beam_decoded = DecodeTokens(context, beam.tokens, decode_control,
+                                               "llama.cpp beam decode failed", false);
+        decode_stats.beam_decode_ms += std::chrono::duration<double, std::milli>(
+                                           std::chrono::steady_clock::now() - beam_decode_start)
+                                           .count();
+        decode_stats.beam_tokens += static_cast<uint64_t>(beam.tokens.size());
+        ++decode_stats.beam_decode_invocations;
+        if (!beam_decoded) {
           if (IsCanceled(conversion_context)) {
             return {};
           }
@@ -777,6 +798,7 @@ struct ZenzaiModelRuntime {
 
   std::vector<GeneratedCandidate> Generate(const std::string& kana,
                                            const core::ConversionContext& conversion_context) {
+    last_decode_stats.reset();
     if (IsCanceled(conversion_context)) {
       return {};
     }
@@ -1018,6 +1040,10 @@ ZenzaiModelConverter::ZenzaiModelConverter(ZenzaiLoadResult&& loaded, core::ICon
     : info_(std::move(loaded.info)), runtime_(std::move(loaded.runtime)), fallback_(fallback) {}
 
 ZenzaiModelConverter::~ZenzaiModelConverter() = default;
+
+std::optional<ZenzaiDecodeStats> ZenzaiModelConverter::last_decode_stats() const {
+  return runtime_ ? runtime_->last_decode_stats : std::nullopt;
+}
 
 std::vector<int32_t> ZenzaiModelConverter::TokenizePromptForValidation(
     const std::string& kana, const core::ConversionContext& context) const {

@@ -412,6 +412,13 @@ int RunBench(int argc, char** argv) {
 
   std::vector<double> lat_ms;
   lat_ms.reserve(options.iterations);
+  std::vector<double> prompt_decode_ms;
+  prompt_decode_ms.reserve(options.iterations);
+  std::vector<double> beam_decode_ms;
+  beam_decode_ms.reserve(options.iterations);
+  uint64_t prompt_decode_tokens = 0;
+  uint64_t beam_decode_tokens = 0;
+  size_t beam_decode_invocations = 0;
   std::vector<azookey::core::Candidate> last_candidates;
   for (size_t i = 0; i < options.iterations; ++i) {
     const auto t0 = std::chrono::steady_clock::now();
@@ -419,6 +426,13 @@ int RunBench(int argc, char** argv) {
         engine.QueryCandidates(options.input, options.context, NowEpochSec(), nullptr, 0, false);
     const auto t1 = std::chrono::steady_clock::now();
     lat_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    if (const auto stats = engine.last_zenzai_decode_stats()) {
+      prompt_decode_ms.push_back(stats->prompt_decode_ms);
+      beam_decode_ms.push_back(stats->beam_decode_ms);
+      prompt_decode_tokens += stats->prompt_tokens;
+      beam_decode_tokens += stats->beam_tokens;
+      beam_decode_invocations += stats->beam_decode_invocations;
+    }
   }
 
   std::sort(lat_ms.begin(), lat_ms.end());
@@ -447,6 +461,17 @@ int RunBench(int argc, char** argv) {
   result.threshold_passed = !options.max_p95_ms || p95 < *options.max_p95_ms;
   result.baseline = azookey::bench::CompareBaseline(options.baseline_path, result.bench,
                                                     result.config, result.latency);
+  if (!prompt_decode_ms.empty()) {
+    std::sort(prompt_decode_ms.begin(), prompt_decode_ms.end());
+    std::sort(beam_decode_ms.begin(), beam_decode_ms.end());
+    const auto latency_metrics = [](const std::vector<double>& samples) {
+      return azookey::bench::LatencyMetrics{Percentile(samples, 50.0), Percentile(samples, 95.0),
+                                            Percentile(samples, 99.0), samples.back()};
+    };
+    result.decode_phases = azookey::bench::DecodePhaseBreakdown{
+        {prompt_decode_ms.size(), prompt_decode_tokens, latency_metrics(prompt_decode_ms)},
+        {beam_decode_invocations, beam_decode_tokens, latency_metrics(beam_decode_ms)}};
+  }
   const auto json = azookey::bench::SerializeBenchmarkResult(result);
 
   if (!options.output_path.empty()) {
@@ -477,8 +502,16 @@ int RunBench(int argc, char** argv) {
               << " top_debug_info=" << top_debug
               << " effective_last_error=" << OptionalString(engine.effective_last_error())
               << " prompt_token_ids="
-              << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids) : std::string("not-checked"))
-              << std::endl;
+              << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids)
+                                   : std::string("not-checked"));
+    if (result.decode_phases) {
+      std::cout << " prompt_decode_p50_ms=" << result.decode_phases->prompt.latency.p50_ms
+                << " prompt_decode_tokens=" << result.decode_phases->prompt.tokens
+                << " beam_decode_p50_ms=" << result.decode_phases->beam.latency.p50_ms
+                << " beam_decode_tokens=" << result.decode_phases->beam.tokens
+                << " beam_decode_invocations=" << result.decode_phases->beam.invocations;
+    }
+    std::cout << std::endl;
   }
   if (const auto warning = azookey::bench::RegressionWarning(result)) {
     std::cerr << *warning << std::endl;

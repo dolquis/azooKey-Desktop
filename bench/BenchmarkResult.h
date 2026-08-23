@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -29,6 +30,17 @@ struct BaselineComparison {
   std::string reason{"baseline not provided"};
 };
 
+struct DecodePhaseMetrics {
+  size_t invocations{0};
+  uint64_t tokens{0};
+  LatencyMetrics latency;
+};
+
+struct DecodePhaseBreakdown {
+  DecodePhaseMetrics prompt;
+  DecodePhaseMetrics beam;
+};
+
 struct BenchmarkResult {
   std::string bench;
   std::string commit;
@@ -38,6 +50,7 @@ struct BenchmarkResult {
   std::optional<double> max_p95_ms;
   bool threshold_passed{true};
   BaselineComparison baseline;
+  std::optional<DecodePhaseBreakdown> decode_phases;
 };
 
 BaselineComparison CompareBaseline(const std::filesystem::path& path, const std::string& bench,

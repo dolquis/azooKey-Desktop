@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/UserDictionary.h"
@@ -112,6 +113,7 @@ class InferenceEngine {
   bool model_preload_in_progress() const;
   std::optional<std::string> last_error() const;
   std::optional<std::string> effective_last_error() const;
+  std::optional<ZenzaiDecodeStats> last_zenzai_decode_stats() const;
 
  private:
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);

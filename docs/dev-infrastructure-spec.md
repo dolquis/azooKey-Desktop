@@ -376,6 +376,14 @@ schema v1 のトップレベル契約は次のとおりとする。
 | `latencyMs` | object | millisecond 単位の `p50`、`p95`、`p99`、`max` |
 | `threshold` | object | `maxP95Ms`（未指定時は `null`）と `passed` |
 | `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
+| `decodePhases` | object（任意） | `azookey_zenzai_bench` の実モデル推論で取得した `prompt` と `beam` の decode 内訳 |
+
+`decodePhases.prompt` と `decodePhases.beam` は、それぞれ `invocations`、`tokens`、
+`latencyMs` を持つ。
+`invocations` と `tokens` は全計測 iteration の合計である。
+`latencyMs` は iteration ごとの phase 合計時間から求めた `p50`、`p95`、`p99`、`max` とする。
+llama.cpp 無効構成の mock runtime と `azookey_bench` は phase 内訳を取得できないため、
+`decodePhases` を出力しない。
 
 baseline 比較は schema version、bench 名、build config が一致し、比較元の p95/p99 が
 有限の正数である場合だけ行う。

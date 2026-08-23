@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/ZenzaiDecodeStats.h"
 
 namespace azookey::host {
 
@@ -76,6 +77,7 @@ class ZenzaiModelConverter final : public core::IConverter {
   const ZenzaiModelInfo& info() const { return info_; }
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
+  std::optional<ZenzaiDecodeStats> last_decode_stats() const;
   std::vector<int32_t> TokenizePromptForValidation(const std::string& kana,
                                                    const core::ConversionContext& context) const;
 

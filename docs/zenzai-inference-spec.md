@@ -506,7 +506,13 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 - C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
-- KV キャッシュはプロンプトの共通接頭辞（文脈）でビーム間共有可（最適化、任意）。
+- CPU の llama.cpp 経路は、変換ごとにプロンプトを 1 回だけ decode する。
+  各 beam の評価前に sequence 0 のプロンプト以降を削除し、beam 固有の生成 token だけを
+  decode する。KV キャッシュ全体の clear は次の変換のプロンプト開始時に限る。
+- `azookey_zenzai_bench` は、プロンプトと beam の decode 時間、decode token 数、
+  beam 評価回数を schema v1 の `decodePhases` と text 出力へ記録する。
+  統計は正常完了した変換だけを対象とし、中断または例外で終わった変換の途中経過は公開しない。
+  phase 時間は性能原因の切り分けに使い、候補の機能検証や全体レイテンシの代替にはしない。
 
 ### 9.2.1 Host 可観測なエラーシンク（degraded → Health）
 

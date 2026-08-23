@@ -365,6 +365,15 @@ std::optional<std::string> InferenceEngine::effective_last_error() const {
   return model_runtime_error_;
 }
 
+std::optional<ZenzaiDecodeStats> InferenceEngine::last_zenzai_decode_stats() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(model_converter_.get());
+  if (!zenzai || active_converter_ != zenzai) {
+    return std::nullopt;
+  }
+  return zenzai->last_decode_stats();
+}
+
 void InferenceEngine::MirrorModelRuntimeErrorLocked() {
   auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(model_converter_.get());
   if (zenzai && active_converter_ == zenzai) {

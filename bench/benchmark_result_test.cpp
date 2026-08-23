@@ -45,9 +45,12 @@ TEST(BenchmarkResultTest, SerializesStableZenzaiBenchSchemaSnapshot) {
   auto result = SampleResult("azookey_zenzai_bench");
   result.iterations = 50;
   result.max_p95_ms.reset();
+  result.decode_phases =
+      DecodePhaseBreakdown{{50, 600, LatencyMetrics{10.0, 11.0, 12.0, 13.0}},
+                           {50, 300, 150, LatencyMetrics{20.0, 21.0, 22.0, 23.0}}};
   EXPECT_EQ(
       SerializeBenchmarkResult(result),
-      R"({"baseline":{"commit":null,"minimumChangeMs":0.05,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_zenzai_bench","commit":"0123456789abcdef","config":"Release","iterations":50,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":null,"passed":true}})");
+      R"({"baseline":{"commit":null,"minimumChangeMs":0.05,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_zenzai_bench","commit":"0123456789abcdef","config":"Release","decodePhases":{"beam":{"evaluations":150,"latencyMs":{"max":23,"p50":20,"p95":21,"p99":22},"samples":50,"tokens":300},"prompt":{"latencyMs":{"max":13,"p50":10,"p95":11,"p99":12},"samples":50,"tokens":600}},"iterations":50,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":null,"passed":true}})");
 }
 
 TEST(BenchmarkResultTest, ComparesMatchingBaselineAndWarnsAboveTenPercent) {

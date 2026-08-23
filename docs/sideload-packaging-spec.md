@@ -471,6 +471,7 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 
 推論バックエンドの選定は `docs/copilot-pc-backend-spec.md` §4 が正典。配布形態の
 決定のみを以下に固定する（同 §4.5 から参照）。
+R2 向けの行は R2 再開時に適用し、R2 保留中は R1 向け構成だけを配布する。
 
 | 構成要素 | 配布形態 | 理由 |
 |---|---|---|
@@ -479,10 +480,10 @@ OS ターゲットは §1.0 で選定する経路に依存する。同 PoC で 1
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
-| zenz-v3 ONNX 変換モデル（R2, 変換スパイク成功時） | **optional モデルパッケージ**（同 §1.2 同様に非同梱・DL） | 変換可否が未確定・対象環境限定 |
+| zenz-v3 ONNX 変換モデル（R2） | **R2 保留中は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL） | 現行 builder では変換不可。将来、検証済み変換経路を確立した場合に再評価 |
 
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
-フォールバックする（同 §4.3-5）。モデル本体（GGUF / ONNX）はいずれも MSIX に同梱せず
+フォールバックする（同 §4.3 項6）。モデル本体（GGUF / 将来の ONNX）はいずれも MSIX に同梱せず
 初回起動時 DL とする方針で §1.2 と一貫させる。
 
 #### 1.6.1 v1.0 における Zenzai GGUF の最小取得経路（M8 / M28）

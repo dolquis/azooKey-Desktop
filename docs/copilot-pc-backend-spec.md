@@ -165,7 +165,7 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
 （生成物 `azookey_zenzai_bench`）で行う。R2（Windows ML）比較スパイクでは、
 この CLI と同じ入力セット・出力メトリクスに揃えて横断計測する。
 
-- 同一プロンプト「こんにちは」「日本語」「今日は良い天気です」等 20 件を各経路で実行。
+- 同一プロンプト「こんにちは」「にほんご」「きょうはいいてんきです」等 20 件を各経路で実行。
 - R1 メトリクス: 初回 `LoadModel` 時間 / P50・P95・P99 推論レイテンシ /
   `zenzai_candidates` / 先頭候補 `debug_info` / `requested_backend` /
   `effective_backend` / `load_warning`。実行は
@@ -176,16 +176,16 @@ R1 llama.cpp / CPU の実測は `bench/zenzai_bench.cpp`
   2. 実効配布サイズ < 50MB（EP 非バンドル前提で R2 が有利）
   3. 初回 LoadModel 時間 < 3 秒
   4. ARM64 / NPU 可用性
-- **前提スパイク（R2 のブロッカー）**: R2 は zenz-v3 を **ONNX Runtime GenAI 形式へ
+- **R2 変換可否の判定**: R2 は zenz-v3 を **ONNX Runtime GenAI 形式へ
   変換できること**が前提。Foundry Toolkit の変換は Preview かつ対応モデルが限定列挙
   （Phi / Qwen / Llama-3.2-1B / DeepSeek-distill）で、**zenz-v3（独自小型 JP モデル）は
-  turn-key 変換対象外**。ORT GenAI model builder による手動変換の可否を別スパイクで
-  先に判定する（§4.3 の前提課題）。出典:
+  turn-key 変換対象外**。ORT GenAI model builder による手動変換の可否は §4.2.2 で
+  判定済みであり、現行 builder では変換できない。出典:
   [Run LLMs and other generative models（ONNX Runtime GenAI / Windows ML）](https://learn.microsoft.com/windows/ai/new-windows-ml/run-genai-onnx-models)、
   [Use any ONNX LLM in the AI Dev Gallery（変換対応モデル列挙）](https://learn.microsoft.com/windows/ai/ai-dev-gallery/tutorial-onnx)。
-- 実機計測は `gate:human-required` の DEV-194 で扱う。
-  Snapdragon X Elite / Intel Core Ultra の NPU 計測は、R2 artifact を作成できた場合にだけ
-  同じ入力セットで実行する。
+- `gate:human-required` の DEV-194 の検証範囲のうち、R1 CPU の実機計測は完了した。
+  Snapdragon X Elite / Intel Core Ultra の NPU 計測は、R2 artifact がないため未実行である。
+  将来 R2 artifact を作成できた場合にだけ、同じ入力セットで実行する。
 
 #### 4.2.1 R1 CPU 実モデル baseline
 
@@ -250,10 +250,10 @@ GPT-2 builder の新規実装、または別 exporter で作った ONNX graph �
 
 根拠:
 
-- [ONNX Runtime GenAI Model Builder: Current Support / GGUF Model](https://github.com/microsoft/onnxruntime-genai/blob/main/src/python/py/models/README.md)
-- [model builder の architecture 分岐](https://github.com/microsoft/onnxruntime-genai/blob/main/src/python/py/models/builder.py)
-- [runtime の model type 判定](https://github.com/microsoft/onnxruntime-genai/blob/main/src/models/model_type.h)
-- [Miwa-Keita/zenz-v3.2-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/tree/main)
+- [ONNX Runtime GenAI Model Builder: Current Support / GGUF Model](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/python/py/models/README.md)
+- [model builder の architecture 分岐](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/python/py/models/builder.py)
+- [runtime の model type 判定](https://github.com/microsoft/onnxruntime-genai/blob/a0c04eb1313b886c963e415bbd974748cb89a4eb/src/models/model_type.h)
+- [Miwa-Keita/zenz-v3.2-small-gguf](https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/tree/c67e03e07d215c869f591b274c1631170d3e11fe)
 
 ### 4.3 結論（M24 実証結果の反映）
 
@@ -274,6 +274,9 @@ GPT-2 builder の新規実装、または別 exporter で作った ONNX graph �
    R2=Windows ML に集約する。
 6. Win11 24H2 (build 26100) 未満では、将来 R2 を有効化する場合も OS 判定で R1 CPU に
    フォールバックする。
+
+§4.4〜§4.6 は、R2 再開時に適用する設計として保持する。
+R2 の保留中は R1 CPU 経路だけを有効にする。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装が R1（llama.cpp）を
 > **CPU / CUDA / Vulkan の 3 プリビルド**で実働実証済み（Vulkan(ggml-vulkan) を含む）。

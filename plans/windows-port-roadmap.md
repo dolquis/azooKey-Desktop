@@ -1448,7 +1448,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `learning/`（English チャネル or source タグでの区別）、
   `settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/inline-english-candidate-spec.md` §3〜§8。
-  - 候補生成（生ローマ字そのもの + 大文字化バリアント + 任意で全角ローマ字・辞書一致語）
+  - 候補生成（生ローマ字そのもの + 大文字化バリアント + 任意で全角ローマ字〔大小を含む。
+    M62-B の英字分をここへ統合。spec §3〕・辞書一致語）
   - ゲーティング（最小長・英語意図ヒューリスティック・辞書ヒット）と順位（日本語上位候補を
     奪わない／自動選択しない）
   - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）
@@ -1643,13 +1644,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   統合**し、独立実装にしない。
 - **前提**: M62-A 完了。英字部分は M60（`docs/inline-english-candidate-spec.md`）に統合。
   いずれも決定的・Mozc データ非依存で TIP ローカル可。
-- **変更対象**: `core/`（HalfKatakana / Alphabet リライター）、M60 設計への統合、
-  `settings/mvp-settings.schema.json`、`core/tests/`。
+- **変更対象**: `core/`（カタカナリライター。全角カタカナと半角カタカナの写像を自前定義。
+  M62-A と同じ TIP ローカル・無 IPC の純粋関数で、リライターの抽象化は行わない）、
+  `settings/mvp-settings.schema.json`（`katakanaRewriter`、既定 OFF）、`core/tests/`。
+  英字分は `core/` に置かず M60 の候補注入経路へ統合する。
 - **受け入れ条件**:
   - 純かな候補に全/半角カタカナ候補が注釈付きで出る。漢字混在（`愛してる`）はリライトしない
   - 英字の幅・大小バリアントが M60 の候補注入経路に統合され二重実装しない
   - 既定 OFF で既存挙動不変
-- **参照仕様**: `docs/candidate-rewriter-spec.md` / `docs/inline-english-candidate-spec.md`
+- **参照仕様**: `docs/candidate-rewriter-spec.md` §18（カタカナ分。純かな判定の境界、
+  半角写像と縮退規則、設定キー、既定 OFF の不変条件）と
+  `docs/inline-english-candidate-spec.md` §3 / §4.3（英字分の素材と固定順）
 
 #### M62-C: 記号リライター（Mozc 由来データ）
 

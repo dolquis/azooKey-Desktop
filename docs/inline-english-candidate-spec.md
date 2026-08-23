@@ -66,10 +66,20 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 | 先頭大文字 | `Apple` | `inlineEnglishCaseVariants` ON |
 | 全大文字 | `APPLE` | `inlineEnglishCaseVariants` ON |
 | 全角ローマ字 | `ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON（legacy `fullWidthRomanCandidate` 相当） |
+| 全角先頭大文字 | `Ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON かつ `inlineEnglishCaseVariants` ON |
+| 全角全大文字 | `ＡＰＰＬＥ` | `fullWidthEnglishCandidate` ON かつ `inlineEnglishCaseVariants` ON |
 | 辞書一致語 | `apple`（辞書ヒットで上位化） | `inlineEnglishDictionary` ON（品質レイヤ） |
 
 全候補に `CandidateTag::English`（X-2-3）を付与し、候補 UI で `[英]` バッジを出せる
 ようにする。
+
+M62-B（`docs/candidate-rewriter-spec.md` §18）が挙げる英字の 4 バリアント（半角の小文字、
+半角の大文字、全角の小文字、全角の大文字）は、この表の 生ローマ字、全大文字、全角ローマ字、
+全角全大文字 の 4 行に対応する。先頭大文字と全角先頭大文字は、それに加えて本書が持つ形である。
+
+M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字候補生成を置かない。同じ打鍵に対して
+2 つの経路が候補を注入すると、順序と重複除去をどちらが決めるかが定まらないためである。M62-B が
+受け持つのはカタカナ分だけである。
 
 ## 4. 注入・ランキング・ゲーティング
 
@@ -112,6 +122,7 @@ else:
     生ローマ字そのもの候補は常に生成可（順位は §4.3）
     先頭大文字 / 全大文字バリアントは inlineEnglishCaseVariants ON 時
     全角ローマ字は fullWidthEnglishCandidate ON 時
+    全角の先頭大文字 / 全大文字は fullWidthEnglishCandidate と inlineEnglishCaseVariants が共に ON 時
     辞書一致語（surface 差し替え・score 上乗せ）は inlineEnglishDictionary ON 時
 ```
 
@@ -134,8 +145,10 @@ else:
 候補内の英語形の並び（固定順）:
 
 ```text
-生ローマ字そのもの → 先頭大文字 → 全大文字 → 全角ローマ字
+生ローマ字そのもの → 先頭大文字 → 全大文字 → 全角ローマ字 → 全角先頭大文字 → 全角全大文字
 （辞書一致語があれば「生ローマ字そのもの」位置の surface を辞書 surface に差し替え）
+（全角の大小 2 件は fullWidthEnglishCandidate と inlineEnglishCaseVariants の双方が ON の
+ ときだけ生成する。半角 3 件をすべて出してから全角 3 件を出す）
 ```
 
 エッジ:
@@ -630,7 +643,8 @@ CommitObservationRequest{
 ## 8. テスト計画
 
 - **候補生成** (`core/tests` or host テスト): 大文字化バリアント生成（`apple` →
-  `Apple` / `APPLE`）、全角ローマ字生成、最小長ゲーティング、英語意図ヒューリスティック
+  `Apple` / `APPLE`）、全角ローマ字生成（`ａｐｐｌｅ` と、大小バリアント併用時の
+  `Ａｐｐｌｅ` / `ＡＰＰＬＥ`）、最小長ゲーティング、英語意図ヒューリスティック
   （`xyz` 等の非日本語ローマ字判定）。
 - **順位** (host テスト): 弱シグナル時に英単語候補が日本語上位候補より下に来ること、
   自動選択されないこと、強シグナル時のみ上位化されること。

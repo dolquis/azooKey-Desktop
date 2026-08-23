@@ -344,8 +344,50 @@ configure / build / test の各ログと、Release ビルドの `.pdb` を artif
 ### 4.5 bench smoke と回帰監視
 
 `bench/azookey_bench` を CTest 登録し、CI で exit=0 と CPU `SimpleConverter`
-経路の p95 < 50ms を確認する。p50/p95 レイテンシの推移監視（夜間ベンチ回帰）
-は将来拡張とし、本マイルストーンでは smoke 実行までを範囲とする。
+経路の p95 < 50ms を確認する。
+`azookey_zenzai_bench` は llama.cpp 無効構成の mock smoke と、pin 済み実モデルを使う
+llama.cpp 構成の smoke を CTest へ登録する。
+
+両 bench は既存の人間向け text 出力を既定とし、次の共通オプションを追加する。
+
+| option | 動作 |
+|---|---|
+| `--json` | 人間向けログを混ぜず、schema v1 の JSON だけを stdout へ出力する |
+| `--output <path>` | stdout の既定形式を変えず、schema v1 の JSON を指定ファイルへ書き込む |
+| `--baseline <path>` | 同じ bench と build config の schema v1 結果を読み、p95 と p99 を比較する |
+
+`--output` の open または write に失敗した場合は、対象パスを含むエラーを stderr へ出し、
+exit code `2` で終了する。
+`--max-p95-ms` の閾値超過は従来どおり exit code `1` とし、baseline warning は exit code を
+変更しない。
+
+schema v1 のトップレベル契約は次のとおりとする。
+
+| field | 型 | 内容 |
+|---|---|---|
+| `schemaVersion` | integer | 固定値 `1` |
+| `bench` | string | `azookey_bench` または `azookey_zenzai_bench` |
+| `commit` | string | configure 時の 40 桁 Git commit。取得不能時は `unknown` |
+| `config` | string | CMake build config（`Debug` または `Release`）。取得不能時は `unknown` |
+| `iterations` | integer | 計測回数 |
+| `latencyMs` | object | millisecond 単位の `p50`、`p95`、`p99`、`max` |
+| `threshold` | object | `maxP95Ms`（未指定時は `null`）と `passed` |
+| `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、warning 判定と理由 |
+
+baseline 比較は schema version、bench 名、build config が一致し、比較元の p95/p99 が
+有限の正数である場合だけ行う。
+`--baseline` 未指定時は `baseline.status=not_provided` とする。
+比較不能な場合は `baseline.status` を `unavailable` または `incompatible` とし、
+`baseline.warning=false` を維持する。
+比較可能な場合は `baseline.status=compared` とし、p95 または p99 が比較元から 10% を
+超えて悪化したときに `baseline.warning=true` とする。
+
+`.github/workflows/benchmarks.yml` は main push、日次 schedule、手動実行で Linux Release の
+両 bench を実行する。
+workflow は直前の成功 run から `benchmark-results` artifact を取得できる場合だけ baseline
+比較を行い、悪化を GitHub Actions warning として表示する。
+今回の結果は両 bench の JSON を含む `benchmark-results` artifact として 90 日保持する。
+初回実行、artifact 期限切れ、download 失敗は regression と判定しない。
 
 ### 4.6 Sanitizer プリセットと定期実行（M38 範囲外）
 

@@ -26,12 +26,21 @@
 #include <unistd.h>
 #endif
 
+#include "BenchmarkResult.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 
 #ifndef AZOOKEY_WITH_LLAMA_CPP
 #define AZOOKEY_WITH_LLAMA_CPP 0
+#endif
+
+#ifndef AZOOKEY_BENCH_COMMIT
+#define AZOOKEY_BENCH_COMMIT "unknown"
+#endif
+
+#ifndef AZOOKEY_BENCH_CONFIG
+#define AZOOKEY_BENCH_CONFIG "unknown"
 #endif
 
 namespace {
@@ -45,6 +54,9 @@ struct Options {
   bool require_model{false};
   bool mock_zenzai{false};
   bool require_zenzai{false};
+  bool json_output{false};
+  std::filesystem::path output_path;
+  std::filesystem::path baseline_path;
   std::optional<std::vector<int32_t>> expected_prompt_token_ids;
   std::optional<double> max_p95_ms;
   azookey::host::BackendKind backend{azookey::host::BackendKind::Cpu};
@@ -56,10 +68,12 @@ void PrintUsage(const char* exe) {
             << " [--model PATH] [--input KANA] [--context TEXT] [--iterations N]"
                " [--warmup N] [--backend cpu|cuda] [--n-gpu-layers N]"
                " [--max-p95-ms N] [--require-model] [--require-zenzai]"
+               " [--json] [--output PATH] [--baseline PATH]"
                " [--expected-prompt-token-ids ID[,ID...]]"
                " [--mock-zenzai]\n"
             << "If --model is omitted, AZOOKEY_ZENZAI_MODEL is used when set; otherwise the "
-               "bench reports status=skipped and exits 0 unless --require-model is present.\n";
+               "bench reports status=skipped and exits 0 unless --require-model is present. "
+               "--json selects JSON stdout; --output writes the same JSON schema to a file.\n";
 }
 
 std::string EnvOrEmpty(const char* name) {
@@ -76,6 +90,15 @@ std::string EnvOrEmpty(const char* name) {
   const char* value = std::getenv(name);
   return value ? std::string(value) : std::string();
 #endif
+}
+
+std::filesystem::path Utf8Path(const std::string& value) {
+  std::u8string utf8;
+  utf8.reserve(value.size());
+  for (const char ch : value) {
+    utf8.push_back(static_cast<char8_t>(static_cast<unsigned char>(ch)));
+  }
+  return std::filesystem::path(utf8);
 }
 
 #if defined(_WIN32)
@@ -246,6 +269,12 @@ Options ParseOptions(int argc, char** argv) {
           ParseI32(RequireValue(argc, argv, i, "--n-gpu-layers"), "--n-gpu-layers");
     } else if (arg == "--max-p95-ms") {
       options.max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
+    } else if (arg == "--json") {
+      options.json_output = true;
+    } else if (arg == "--output") {
+      options.output_path = Utf8Path(RequireValue(argc, argv, i, "--output"));
+    } else if (arg == "--baseline") {
+      options.baseline_path = Utf8Path(RequireValue(argc, argv, i, "--baseline"));
     } else if (arg == "--expected-prompt-token-ids") {
       options.expected_prompt_token_ids =
           ParseTokenIds(RequireValue(argc, argv, i, "--expected-prompt-token-ids"),
@@ -337,8 +366,9 @@ int RunBench(int argc, char** argv) {
   }
 
   if (options.model_path.empty()) {
-    std::cout << "status=skipped reason=model-not-provided llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
-              << " hint=set-AZOOKEY_ZENZAI_MODEL-or-pass---model" << std::endl;
+    auto& stream = options.json_output ? std::cerr : std::cout;
+    stream << "status=skipped reason=model-not-provided llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
+           << " hint=set-AZOOKEY_ZENZAI_MODEL-or-pass---model" << std::endl;
     return options.require_model ? 1 : 0;
   }
 
@@ -434,21 +464,52 @@ int RunBench(int argc, char** argv) {
                                                          ? std::optional<std::string>()
                                                          : last_candidates.front().debug_info);
 
-  std::cout << std::fixed << std::setprecision(4) << "status=ok"
-            << " llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
-            << " mock_zenzai=" << (load_options.mock_zenzai_candidates_for_tests ? 1 : 0)
-            << " requested_backend=" << BackendName(options.backend)
-            << " effective_backend=" << BackendName(engine.backend())
-            << " load_warning=" << OptionalString(load_result.error)
-            << " model_loaded=" << (engine.model_loaded() ? 1 : 0) << " load_ms=" << load_ms
-            << " p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99
-            << " iterations=" << options.iterations << " candidates=" << last_candidates.size()
-            << " zenzai_candidates=" << zenzai_count << " top_surface=" << top_surface
-            << " top_debug_info=" << top_debug
-            << " effective_last_error=" << OptionalString(engine.effective_last_error())
-            << " prompt_token_ids="
-            << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids) : std::string("not-checked"))
-            << std::endl;
+  azookey::bench::BenchmarkResult result;
+  result.bench = "azookey_zenzai_bench";
+  result.commit = AZOOKEY_BENCH_COMMIT;
+  result.config = AZOOKEY_BENCH_CONFIG;
+  result.iterations = options.iterations;
+  result.latency = {p50, p95, p99, lat_ms.back()};
+  result.max_p95_ms = options.max_p95_ms;
+  result.threshold_passed = !options.max_p95_ms || p95 < *options.max_p95_ms;
+  result.baseline = azookey::bench::CompareBaseline(options.baseline_path, result.bench,
+                                                    result.config, result.latency);
+  const auto json = azookey::bench::SerializeBenchmarkResult(result);
+
+  if (!options.output_path.empty()) {
+    std::string error;
+    if (!azookey::bench::WriteBenchmarkResult(options.output_path, json, &error)) {
+      std::remove(learning_path.string().c_str());
+      if (mock_model_path) {
+        std::remove(mock_model_path->string().c_str());
+      }
+      std::cerr << error << std::endl;
+      return 2;
+    }
+  }
+
+  if (options.json_output) {
+    std::cout << json << std::endl;
+  } else {
+    std::cout << std::fixed << std::setprecision(4) << "status=ok"
+              << " llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
+              << " mock_zenzai=" << (load_options.mock_zenzai_candidates_for_tests ? 1 : 0)
+              << " requested_backend=" << BackendName(options.backend)
+              << " effective_backend=" << BackendName(engine.backend())
+              << " load_warning=" << OptionalString(load_result.error)
+              << " model_loaded=" << (engine.model_loaded() ? 1 : 0) << " load_ms=" << load_ms
+              << " p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99
+              << " iterations=" << options.iterations << " candidates=" << last_candidates.size()
+              << " zenzai_candidates=" << zenzai_count << " top_surface=" << top_surface
+              << " top_debug_info=" << top_debug
+              << " effective_last_error=" << OptionalString(engine.effective_last_error())
+              << " prompt_token_ids="
+              << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids) : std::string("not-checked"))
+              << std::endl;
+  }
+  if (const auto warning = azookey::bench::RegressionWarning(result)) {
+    std::cerr << *warning << std::endl;
+  }
 
   std::remove(learning_path.string().c_str());
   if (mock_model_path) {
@@ -459,7 +520,7 @@ int RunBench(int argc, char** argv) {
     std::cerr << "zenzai candidate was required but not observed" << std::endl;
     return 1;
   }
-  if (options.max_p95_ms && p95 >= *options.max_p95_ms) {
+  if (!result.threshold_passed) {
     std::cerr << "p95 exceeded threshold" << std::endl;
     return 1;
   }

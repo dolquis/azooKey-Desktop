@@ -9,7 +9,7 @@
       `docs/model-management-spec.md`（M45 モデル配置）
 作成日: 2026-06-15
 位置づけ: M8 Zenzai 実推論（DEV-219、特に M8-2 = DEV-221）の **設計前提**。
-          「どの実行系か」（backend 選定 = DEV-98 / DEV-194、Done）に対し、
+          「どの実行系か」（backend 方針 = DEV-98、実証 = DEV-194）に対し、
           本書は「**どう推論して候補を作るか**」（推論コントラクト）を確定する。
 
 > **正典範囲**: 本書は Zenzai 推論の入出力コントラクト（プロンプト整形・制約・
@@ -29,9 +29,10 @@
 （`SimpleConverter`）へ素通しで、**実推論が一切無い**こと
 （現状コードは候補に `zenzai-gguf-loaded;fallback-converter` を付与するのみ）。
 
-backend 選定（DEV-98 / DEV-194）は「llama.cpp C-API + CPU、CUDA は optional」を
-確定したが、その上で **GGUF をどう叩いて候補列を作るか** を定義した spec が
-存在しない。本書がそれを埋める。
+backend 方針（DEV-98）は「llama.cpp C-API + CPU」を確定し、DEV-194 はその実機性能と
+Windows ML 用 model への変換可否を検証する。
+その上で **GGUF をどう叩いて候補列を作るか** を定義した spec が存在しない。
+本書がそれを埋める。
 
 ### 1.2 本書が確定する 6 項目
 

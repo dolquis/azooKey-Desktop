@@ -740,6 +740,72 @@ TEST(InferenceEngineTest, ResolvesOnlyMisdeclaredZenzaiEosFromVocabulary) {
                    .has_value());
 }
 
+TEST(InferenceEngineTest, BuildsPreTokenizerKvOverrideForZenzaiGguf) {
+  azookey::host::ZenzaiTokenizerMetadata metadata;
+  metadata.pre_tokenizer = "gpt2-small-japanese-char";
+
+  const auto overrides = azookey::host::BuildZenzaiKvOverrides(metadata);
+
+  ASSERT_EQ(overrides.size(), 1u);
+  EXPECT_EQ(overrides[0].key, "tokenizer.ggml.pre");
+  EXPECT_EQ(overrides[0].type, azookey::host::ZenzaiKvOverride::Type::String);
+  EXPECT_EQ(overrides[0].string_value, "gpt-2");
+}
+
+TEST(InferenceEngineTest, BuildsNoPreTokenizerKvOverrideForOtherGguf) {
+  azookey::host::ZenzaiTokenizerMetadata known_pre_tokenizer;
+  known_pre_tokenizer.pre_tokenizer = "gpt-2";
+  EXPECT_TRUE(azookey::host::BuildZenzaiKvOverrides(known_pre_tokenizer).empty());
+
+  azookey::host::ZenzaiTokenizerMetadata unrelated_pre_tokenizer;
+  unrelated_pre_tokenizer.pre_tokenizer = "llama-bpe";
+  EXPECT_TRUE(azookey::host::BuildZenzaiKvOverrides(unrelated_pre_tokenizer).empty());
+
+  // A GGUF that declares no pre-tokenizer at all is loaded as-is.
+  EXPECT_TRUE(
+      azookey::host::BuildZenzaiKvOverrides(azookey::host::ZenzaiTokenizerMetadata{}).empty());
+}
+
+TEST(InferenceEngineTest, BuildsPreTokenizerAndEosKvOverridesInLoadOrder) {
+  azookey::host::ZenzaiTokenizerMetadata metadata;
+  metadata.pre_tokenizer = "gpt2-small-japanese-char";
+  metadata.eos_token_id = 2;
+  metadata.vocabulary = {"[PAD]", "unused", "<s>", "unused-2", "</s>"};
+
+  const auto overrides = azookey::host::BuildZenzaiKvOverrides(metadata);
+
+  ASSERT_EQ(overrides.size(), 2u);
+  EXPECT_EQ(overrides[0].key, "tokenizer.ggml.pre");
+  EXPECT_EQ(overrides[0].type, azookey::host::ZenzaiKvOverride::Type::String);
+  EXPECT_EQ(overrides[0].string_value, "gpt-2");
+  EXPECT_EQ(overrides[1].key, "tokenizer.ggml.eos_token_id");
+  EXPECT_EQ(overrides[1].type, azookey::host::ZenzaiKvOverride::Type::Int);
+  EXPECT_EQ(overrides[1].int_value, 4);
+}
+
+TEST(InferenceEngineTest, BuildsOnlyEosKvOverrideWhenPreTokenizerIsUpstream) {
+  azookey::host::ZenzaiTokenizerMetadata metadata;
+  metadata.pre_tokenizer = "gpt-2";
+  metadata.eos_token_id = 2;
+  metadata.vocabulary = {"[PAD]", "unused", "<s>", "unused-2", "</s>"};
+
+  const auto overrides = azookey::host::BuildZenzaiKvOverrides(metadata);
+
+  ASSERT_EQ(overrides.size(), 1u);
+  EXPECT_EQ(overrides[0].key, "tokenizer.ggml.eos_token_id");
+  EXPECT_EQ(overrides[0].type, azookey::host::ZenzaiKvOverride::Type::Int);
+  EXPECT_EQ(overrides[0].int_value, 4);
+}
+
+TEST(InferenceEngineTest, BuildsNoKvOverrideWhenEosIsDeclaredCorrectly) {
+  azookey::host::ZenzaiTokenizerMetadata metadata;
+  metadata.pre_tokenizer = "gpt-2";
+  metadata.eos_token_id = 4;
+  metadata.vocabulary = {"[PAD]", "unused", "<s>", "unused-2", "</s>"};
+
+  EXPECT_TRUE(azookey::host::BuildZenzaiKvOverrides(metadata).empty());
+}
+
 TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

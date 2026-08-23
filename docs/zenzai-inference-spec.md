@@ -477,6 +477,19 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   終端トークンでない場合（開始トークン `<s>` を指している等）、モデルロード時だけ KV override で
   語彙中の終端トークン（`</s>`）の id へ置き換える。**id を定数で書かず語彙から解決する**。
   eos が正しく宣言されている GGUF には override を適用しない。
+- 上記 2 つの override をどう立てるかの判断は、llama.cpp の型に依存しない純ロジック
+  （`BuildZenzaiKvOverrides`）に置き、GGUF メタデータから override 一覧（キー・型・値）を
+  決める。llama.cpp 境界側はその一覧を `llama_model_kv_override` 配列へ写すだけとし、
+  配列末尾には llama.cpp が終端とみなす空キーのエントリを必ず残す。
+
+  この分離で llama.cpp 無効ビルドの unit が検証できるのは、**override 記述子
+  （どのキーに・どの型で・どの値を立てるか）を決める判断まで**である。記述子を
+  `llama_model_kv_override` の `tag` / `val_str` / `val_i64` へ写す境界変換そのものは
+  llama.cpp 有効ブロック内に残るため unit の対象外で、**実モデル smoke
+  （`zenzai-real-model`）が担保する**。pin モデルの pre-tokenizer は
+  `gpt2-small-japanese-char`・eos は誤宣言済みで両 override が実際に立つため、
+  境界変換が誤った tag / 値を書けば smoke の変換出力が一致しなくなる。
+  unit の合格だけを DEV-441 の受け入れ証拠として扱わない。
 
   pin モデル `Miwa-Keita/zenz-v3.2-small-gguf` は `eos_token_id = 2` を宣言するが、id 2 の
   piece は `<s>`、モデルが実際に出す終端は id 3 の `</s>` である（bos / eos が語彙文字列に
@@ -642,6 +655,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | unit | pre-tokenizer override 写像（§9.2）: `gpt2-small-japanese-char` のときだけ `gpt-2` へ写像し、他の pre-tokenizer には適用しない |
+| unit | KV override **記述子の判断**（§9.2）: GGUF の tokenizer メタデータから override 記述子（キー・型・値）の一覧を決める純ロジックを、llama.cpp 無効ビルドで検証する。`gpt2-small-japanese-char` では `tokenizer.ggml.pre` の文字列記述子が 1 件だけ立ち、上流 pre-tokenizer・pre-tokenizer 宣言なしでは立たない。pre-tokenizer と eos の両方が該当する GGUF では pre-tokenizer → eos の順に 2 件並ぶ（llama.cpp へ渡す順序を固定する）。**記述子を `llama_model_kv_override` へ写す境界変換は本 unit の対象外**（同 §9.2。実モデル smoke が担保する） |
 | unit | eos override 写像（§9.2）: 宣言された `eos_token_id` の piece が終端でない（開始トークンを指す）GGUF では語彙中の `</s>` の id へ解決し、**正しい eos を宣言する GGUF には override を適用しない**。id を定数で決め打ちしない（語彙から解決していることを、`</s>` の id が異なる語彙でも正しく解決できることで確認する） |
 | integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→ **最上位候補が `日本語` に完全一致**する（**A5 解消**）。「`日本語` を含む」を合格条件にしてはならない — EOS override が欠けた状態の `日本語日本語日本語` が通過してしまうため（§9.2 / DEV-743）。あわせて `わたしはがくせいです` → `私は学生です`、および `top_debug_info` に `utf8-prefix-trimmed` が出ないことを確認する。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート / DEV-753 |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |

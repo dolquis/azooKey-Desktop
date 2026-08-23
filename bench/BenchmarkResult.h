@@ -9,6 +9,7 @@ namespace azookey::bench {
 
 inline constexpr int kBenchmarkSchemaVersion = 1;
 inline constexpr double kDefaultRegressionWarningPercent = 10.0;
+inline constexpr double kDefaultRegressionMinimumChangeMs = 0.05;
 
 struct LatencyMetrics {
   double p50_ms{0.0};
@@ -23,6 +24,7 @@ struct BaselineComparison {
   std::optional<double> p95_change_percent;
   std::optional<double> p99_change_percent;
   double warning_percent{kDefaultRegressionWarningPercent};
+  double minimum_change_ms{kDefaultRegressionMinimumChangeMs};
   bool warning{false};
   std::string reason{"baseline not provided"};
 };

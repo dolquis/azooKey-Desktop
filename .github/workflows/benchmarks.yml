@@ -31,14 +31,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p benchmark-baseline
-          run_id="$(gh run list \
+          if ! run_id="$(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow benchmarks.yml \
             --branch main \
             --status success \
             --limit 1 \
             --json databaseId \
-            --jq '.[0].databaseId // empty')"
+            --jq '.[0].databaseId // empty')"; then
+            echo "::warning title=Benchmark baseline unavailable::Failed to list prior benchmark runs; current results will not be classified as regressions."
+            exit 0
+          fi
           if [[ -z "$run_id" ]]; then
             echo "No successful benchmark baseline is available yet."
             exit 0
@@ -50,6 +53,7 @@ jobs:
             echo "::warning title=Benchmark baseline unavailable::Failed to download run $run_id; current results will not be classified as regressions."
           fi
       - name: Run Release benchmarks
+        id: run_benchmarks
         shell: bash
         run: |
           set -euo pipefail
@@ -62,7 +66,8 @@ jobs:
           if [[ -f benchmark-baseline/azookey_bench.json ]]; then
             live_args+=(--baseline benchmark-baseline/azookey_bench.json)
           fi
-          build/benchmark/bench/azookey_bench "${live_args[@]}"
+          live_status=0
+          build/benchmark/bench/azookey_bench "${live_args[@]}" || live_status=$?
 
           zenzai_args=(
             --mock-zenzai
@@ -73,8 +78,13 @@ jobs:
           if [[ -f benchmark-baseline/azookey_zenzai_bench.json ]]; then
             zenzai_args+=(--baseline benchmark-baseline/azookey_zenzai_bench.json)
           fi
-          build/benchmark/bench/azookey_zenzai_bench "${zenzai_args[@]}"
+          zenzai_status=0
+          build/benchmark/bench/azookey_zenzai_bench "${zenzai_args[@]}" || zenzai_status=$?
+
+          echo "live_status=$live_status" >> "$GITHUB_OUTPUT"
+          echo "zenzai_status=$zenzai_status" >> "$GITHUB_OUTPUT"
       - name: Publish regression warnings
+        if: always()
         shell: python {0}
         run: |
           import json
@@ -96,9 +106,21 @@ jobs:
                       f"({baseline['status']}: {baseline['reason']})"
                   )
       - name: Upload benchmark history artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
           path: benchmark-results/*.json
           if-no-files-found: error
           retention-days: 90
+      - name: Enforce benchmark exit codes
+        if: always()
+        shell: bash
+        env:
+          LIVE_STATUS: ${{ steps.run_benchmarks.outputs.live_status }}
+          ZENZAI_STATUS: ${{ steps.run_benchmarks.outputs.zenzai_status }}
+        run: |
+          if [[ "$LIVE_STATUS" != "0" || "$ZENZAI_STATUS" != "0" ]]; then
+            echo "Benchmark command failed: live=$LIVE_STATUS zenzai=$ZENZAI_STATUS"
+            exit 1
+          fi

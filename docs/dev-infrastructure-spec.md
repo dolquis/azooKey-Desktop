@@ -358,6 +358,9 @@ llama.cpp 構成の smoke を CTest へ登録する。
 
 `--output` の open または write に失敗した場合は、対象パスを含むエラーを stderr へ出し、
 exit code `2` で終了する。
+`azookey_zenzai_bench` で model が未指定のまま `--json` または `--output` を要求した場合も、
+結果を生成できないことを stderr へ明示し、exit code `2` で終了する。
+出力要求がない従来の text 実行は、引き続き `status=skipped` と exit code `0` を維持する。
 `--max-p95-ms` の閾値超過は従来どおり exit code `1` とし、baseline warning は exit code を
 変更しない。
 
@@ -367,27 +370,35 @@ schema v1 のトップレベル契約は次のとおりとする。
 |---|---|---|
 | `schemaVersion` | integer | 固定値 `1` |
 | `bench` | string | `azookey_bench` または `azookey_zenzai_bench` |
-| `commit` | string | configure 時の 40 桁 Git commit。取得不能時は `unknown` |
+| `commit` | string | 計測対象の 40 桁 Git commit。ローカル build は build 時に HEAD を生成ヘッダーへ反映し、CI は configure 引数で SHA を固定する。取得不能時は `unknown` |
 | `config` | string | CMake build config（`Debug` または `Release`）。取得不能時は `unknown` |
 | `iterations` | integer | 計測回数 |
 | `latencyMs` | object | millisecond 単位の `p50`、`p95`、`p99`、`max` |
 | `threshold` | object | `maxP95Ms`（未指定時は `null`）と `passed` |
-| `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、warning 判定と理由 |
+| `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
 
 baseline 比較は schema version、bench 名、build config が一致し、比較元の p95/p99 が
 有限の正数である場合だけ行う。
 `--baseline` 未指定時は `baseline.status=not_provided` とする。
 比較不能な場合は `baseline.status` を `unavailable` または `incompatible` とし、
 `baseline.warning=false` を維持する。
-比較可能な場合は `baseline.status=compared` とし、p95 または p99 が比較元から 10% を
-超えて悪化したときに `baseline.warning=true` とする。
+比較可能な場合は `baseline.status=compared` とする。
+p95 または p99 が比較元から 10% を超えて悪化し、かつ絶対差が 0.05ms を超えたときに
+`baseline.warning=true` とする。
+`baseline.minimumChangeMs` はこの絶対ノイズ床を表し、短時間処理の timer / scheduler 揺らぎを
+性能回帰として扱わないために用いる。
+CTest は mock runtime と llama.cpp 実モデルの両構成で JSON schema を smoke 検証し、
+model 未指定の出力要求がファイルを生成せず失敗することも確認する。
 
 `.github/workflows/benchmarks.yml` は main push、日次 schedule、手動実行で Linux Release の
 両 bench を実行する。
 workflow は直前の成功 run から `benchmark-results` artifact を取得できる場合だけ baseline
 比較を行い、悪化を GitHub Actions warning として表示する。
 今回の結果は両 bench の JSON を含む `benchmark-results` artifact として 90 日保持する。
-初回実行、artifact 期限切れ、download 失敗は regression と判定しない。
+bench が閾値超過などで非ゼロ終了した場合も、生成済みの JSON を先に artifact として保存し、
+その後で job を失敗させる。
+初回実行、artifact 期限切れ、run 一覧取得または download の失敗は regression と判定せず、
+当該 run の計測を継続する。
 
 ### 4.6 Sanitizer プリセットと定期実行（M38 範囲外）
 

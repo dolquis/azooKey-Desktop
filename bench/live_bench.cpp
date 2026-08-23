@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkCommandLine.h"
+#include "BenchmarkCommit.h"
 #include "BenchmarkResult.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
@@ -53,6 +55,21 @@ std::string RequireValue(int argc, char** argv, int& index, const char* option) 
 }  // namespace
 
 int main(int argc, char** argv) {
+  std::vector<std::string> utf8_args;
+  try {
+    utf8_args = azookey::bench::Utf8CommandLineArguments(argc, argv);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << std::endl;
+    return 2;
+  }
+  std::vector<char*> utf8_argv;
+  utf8_argv.reserve(utf8_args.size());
+  for (auto& arg : utf8_args) {
+    utf8_argv.push_back(arg.data());
+  }
+  argc = static_cast<int>(utf8_argv.size());
+  argv = utf8_argv.data();
+
   std::optional<double> max_p95_ms;
   bool json_output = false;
   std::filesystem::path output_path;
@@ -69,9 +86,9 @@ int main(int argc, char** argv) {
       } else if (arg == "--json") {
         json_output = true;
       } else if (arg == "--output") {
-        output_path = RequireValue(argc, argv, i, "--output");
+        output_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--output"));
       } else if (arg == "--baseline") {
-        baseline_path = RequireValue(argc, argv, i, "--baseline");
+        baseline_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--baseline"));
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }

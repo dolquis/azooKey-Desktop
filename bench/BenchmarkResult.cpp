@@ -98,10 +98,13 @@ BaselineComparison CompareBaseline(const std::filesystem::path& path, const std:
   comparison.commit = *baseline_commit;
   comparison.p95_change_percent = *p95_change;
   comparison.p99_change_percent = *p99_change;
+  const double p95_change_ms = current.p95_ms - *p95;
+  const double p99_change_ms = current.p99_ms - *p99;
   comparison.warning =
-      *p95_change > comparison.warning_percent || *p99_change > comparison.warning_percent;
+      (*p95_change > comparison.warning_percent && p95_change_ms > comparison.minimum_change_ms) ||
+      (*p99_change > comparison.warning_percent && p99_change_ms > comparison.minimum_change_ms);
   comparison.reason = comparison.warning ? "p95 or p99 regression exceeds warning threshold"
-                                         : "within regression warning threshold";
+                                         : "within regression warning threshold or noise floor";
   return comparison;
 }
 
@@ -118,6 +121,7 @@ std::string SerializeBenchmarkResult(const BenchmarkResult& result) {
 
   Object baseline;
   baseline.emplace("commit", OptionalString(result.baseline.commit));
+  baseline.emplace("minimumChangeMs", Value(result.baseline.minimum_change_ms));
   baseline.emplace("p95ChangePercent", OptionalNumber(result.baseline.p95_change_percent));
   baseline.emplace("p99ChangePercent", OptionalNumber(result.baseline.p99_change_percent));
   baseline.emplace("reason", Value(result.baseline.reason));
@@ -162,7 +166,8 @@ std::optional<std::string> RegressionWarning(const BenchmarkResult& result) {
   message << "benchmark regression warning: p95=" << *result.baseline.p95_change_percent
           << "% p99=" << *result.baseline.p99_change_percent
           << "% baseline=" << result.baseline.commit.value_or("unknown")
-          << " threshold=" << result.baseline.warning_percent << '%';
+          << " threshold=" << result.baseline.warning_percent
+          << "% minimum_change_ms=" << result.baseline.minimum_change_ms;
   return message.str();
 }
 

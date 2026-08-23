@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "BenchmarkCommandLine.h"
 #include "BenchmarkResult.h"
 
 namespace azookey::bench {
@@ -37,7 +38,7 @@ BenchmarkResult SampleResult(std::string bench = "azookey_bench") {
 TEST(BenchmarkResultTest, SerializesStableAzookeyBenchSchemaSnapshot) {
   EXPECT_EQ(
       SerializeBenchmarkResult(SampleResult()),
-      R"({"baseline":{"commit":null,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_bench","commit":"0123456789abcdef","config":"Release","iterations":200,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":5,"passed":true}})");
+      R"({"baseline":{"commit":null,"minimumChangeMs":0.05,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_bench","commit":"0123456789abcdef","config":"Release","iterations":200,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":5,"passed":true}})");
 }
 
 TEST(BenchmarkResultTest, SerializesStableZenzaiBenchSchemaSnapshot) {
@@ -46,7 +47,7 @@ TEST(BenchmarkResultTest, SerializesStableZenzaiBenchSchemaSnapshot) {
   result.max_p95_ms.reset();
   EXPECT_EQ(
       SerializeBenchmarkResult(result),
-      R"({"baseline":{"commit":null,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_zenzai_bench","commit":"0123456789abcdef","config":"Release","iterations":50,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":null,"passed":true}})");
+      R"({"baseline":{"commit":null,"minimumChangeMs":0.05,"p95ChangePercent":null,"p99ChangePercent":null,"reason":"baseline not provided","status":"not_provided","warning":false,"warningPercent":10},"bench":"azookey_zenzai_bench","commit":"0123456789abcdef","config":"Release","iterations":50,"latencyMs":{"max":4,"p50":1,"p95":2,"p99":3},"schemaVersion":1,"threshold":{"maxP95Ms":null,"passed":true}})");
 }
 
 TEST(BenchmarkResultTest, ComparesMatchingBaselineAndWarnsAboveTenPercent) {
@@ -63,6 +64,25 @@ TEST(BenchmarkResultTest, ComparesMatchingBaselineAndWarnsAboveTenPercent) {
   EXPECT_NEAR(*comparison.p95_change_percent, 15.0, 0.0001);
   EXPECT_NEAR(*comparison.p99_change_percent, 6.6666667, 0.0001);
   EXPECT_TRUE(comparison.warning);
+}
+
+TEST(BenchmarkResultTest, IgnoresLargePercentageChangesBelowAbsoluteNoiseFloor) {
+  auto baseline = SampleResult();
+  baseline.latency = LatencyMetrics{0.001, 0.0016, 0.0045, 0.005};
+  const auto path = UniqueTempPath("-small-baseline.json");
+  ASSERT_TRUE(WriteBenchmarkResult(path, SerializeBenchmarkResult(baseline), nullptr));
+
+  const auto comparison = CompareBaseline(path, "azookey_bench", "Release",
+                                          LatencyMetrics{0.0015, 0.0021, 0.0087, 0.01});
+  std::filesystem::remove(path);
+
+  EXPECT_EQ(comparison.status, "compared");
+  ASSERT_TRUE(comparison.p95_change_percent.has_value());
+  ASSERT_TRUE(comparison.p99_change_percent.has_value());
+  EXPECT_GT(*comparison.p95_change_percent, comparison.warning_percent);
+  EXPECT_GT(*comparison.p99_change_percent, comparison.warning_percent);
+  EXPECT_FALSE(comparison.warning);
+  EXPECT_EQ(comparison.reason, "within regression warning threshold or noise floor");
 }
 
 TEST(BenchmarkResultTest, MissingOrIncompatibleBaselineIsNotARegression) {
@@ -88,6 +108,15 @@ TEST(BenchmarkResultTest, OutputDirectoryIsReportedAsWriteFailure) {
   EXPECT_NE(error.find("failed to open benchmark JSON output"), std::string::npos);
 }
 
+TEST(BenchmarkResultTest, WritesUtf8OutputPath) {
+  const auto path = UniqueTempPath("-") / Utf8Path("計測結果.json");
+  ASSERT_TRUE(std::filesystem::create_directory(path.parent_path()));
+  std::string error;
+  EXPECT_TRUE(WriteBenchmarkResult(path, "{}", &error)) << error;
+  EXPECT_TRUE(std::filesystem::exists(path));
+  std::filesystem::remove_all(path.parent_path());
+}
+
 TEST(BenchmarkResultTest, FormatsRegressionWarningWithoutChangingThresholdState) {
   auto result = SampleResult();
   result.baseline.status = "compared";
@@ -98,7 +127,7 @@ TEST(BenchmarkResultTest, FormatsRegressionWarningWithoutChangingThresholdState)
 
   EXPECT_EQ(RegressionWarning(result),
             "benchmark regression warning: p95=12.5% p99=20% baseline=baseline-commit "
-            "threshold=10%");
+            "threshold=10% minimum_change_ms=0.05");
   EXPECT_TRUE(result.threshold_passed);
 }
 

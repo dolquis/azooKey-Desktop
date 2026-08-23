@@ -17,15 +17,13 @@
 #include <vector>
 
 #if defined(_WIN32)
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
 #include <process.h>
-#include <shellapi.h>
 #else
 #include <unistd.h>
 #endif
 
+#include "BenchmarkCommandLine.h"
+#include "BenchmarkCommit.h"
 #include "BenchmarkResult.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
@@ -91,35 +89,6 @@ std::string EnvOrEmpty(const char* name) {
   return value ? std::string(value) : std::string();
 #endif
 }
-
-std::filesystem::path Utf8Path(const std::string& value) {
-  std::u8string utf8;
-  utf8.reserve(value.size());
-  for (const char ch : value) {
-    utf8.push_back(static_cast<char8_t>(static_cast<unsigned char>(ch)));
-  }
-  return std::filesystem::path(utf8);
-}
-
-#if defined(_WIN32)
-std::optional<std::string> WideToUtf8(const wchar_t* value) {
-  if (!value) {
-    return std::nullopt;
-  }
-  const int required =
-      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, nullptr, 0, nullptr, nullptr);
-  if (required <= 0) {
-    return std::nullopt;
-  }
-  std::string result(static_cast<size_t>(required), '\0');
-  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, result.data(), required,
-                          nullptr, nullptr) != required) {
-    return std::nullopt;
-  }
-  result.pop_back();
-  return result;
-}
-#endif
 
 size_t ParseSize(const std::string& value, const char* name) {
   try {
@@ -272,9 +241,9 @@ Options ParseOptions(int argc, char** argv) {
     } else if (arg == "--json") {
       options.json_output = true;
     } else if (arg == "--output") {
-      options.output_path = Utf8Path(RequireValue(argc, argv, i, "--output"));
+      options.output_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--output"));
     } else if (arg == "--baseline") {
-      options.baseline_path = Utf8Path(RequireValue(argc, argv, i, "--baseline"));
+      options.baseline_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--baseline"));
     } else if (arg == "--expected-prompt-token-ids") {
       options.expected_prompt_token_ids =
           ParseTokenIds(RequireValue(argc, argv, i, "--expected-prompt-token-ids"),
@@ -366,6 +335,10 @@ int RunBench(int argc, char** argv) {
   }
 
   if (options.model_path.empty()) {
+    if (options.json_output || !options.output_path.empty()) {
+      std::cerr << "benchmark result unavailable: model not provided" << std::endl;
+      return 2;
+    }
     auto& stream = options.json_output ? std::cerr : std::cout;
     stream << "status=skipped reason=model-not-provided llama_cpp=" << AZOOKEY_WITH_LLAMA_CPP
            << " hint=set-AZOOKEY_ZENZAI_MODEL-or-pass---model" << std::endl;
@@ -528,36 +501,17 @@ int RunBench(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-#if defined(_WIN32)
-  (void)argv;
-  int wide_argc = 0;
-  wchar_t** wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
-  if (!wide_argv || wide_argc != argc) {
-    if (wide_argv) LocalFree(wide_argv);
-    std::cerr << "failed to read Unicode command-line arguments" << std::endl;
+  std::vector<std::string> utf8_args;
+  try {
+    utf8_args = azookey::bench::Utf8CommandLineArguments(argc, argv);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << std::endl;
     return 2;
   }
-
-  std::vector<std::string> utf8_args;
-  utf8_args.reserve(static_cast<size_t>(wide_argc));
-  for (int i = 0; i < wide_argc; ++i) {
-    auto converted = WideToUtf8(wide_argv[i]);
-    if (!converted) {
-      LocalFree(wide_argv);
-      std::cerr << "failed to convert command-line argument to UTF-8" << std::endl;
-      return 2;
-    }
-    utf8_args.push_back(std::move(*converted));
-  }
-  LocalFree(wide_argv);
-
   std::vector<char*> utf8_argv;
   utf8_argv.reserve(utf8_args.size());
   for (auto& arg : utf8_args) {
     utf8_argv.push_back(arg.data());
   }
   return RunBench(static_cast<int>(utf8_argv.size()), utf8_argv.data());
-#else
-  return RunBench(argc, argv);
-#endif
 }

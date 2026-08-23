@@ -1,41 +1,44 @@
 set(AZOOKEY_BENCH_GIT_COMMIT "" CACHE STRING
-    "Git commit recorded in benchmark JSON; defaults to HEAD at configure time")
-if(NOT AZOOKEY_BENCH_GIT_COMMIT)
-  execute_process(
-    COMMAND git rev-parse HEAD
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    RESULT_VARIABLE AZOOKEY_BENCH_GIT_RESULT
-    OUTPUT_VARIABLE AZOOKEY_BENCH_GIT_COMMIT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-  )
-  if(NOT AZOOKEY_BENCH_GIT_RESULT EQUAL 0 OR NOT AZOOKEY_BENCH_GIT_COMMIT)
-    set(AZOOKEY_BENCH_GIT_COMMIT "unknown")
-  endif()
-endif()
+    "Git commit recorded in benchmark JSON; defaults to HEAD at build time")
+set(AZOOKEY_BENCH_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(AZOOKEY_BENCH_COMMIT_HEADER "${AZOOKEY_BENCH_GENERATED_DIR}/BenchmarkCommit.h")
+add_custom_target(azookey_benchmark_commit_header
+  COMMAND "${CMAKE_COMMAND}"
+          "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+          "-DOUTPUT_FILE=${AZOOKEY_BENCH_COMMIT_HEADER}"
+          "-DAZOOKEY_BENCH_GIT_COMMIT_OVERRIDE=${AZOOKEY_BENCH_GIT_COMMIT}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateBenchmarkCommit.cmake"
+  BYPRODUCTS "${AZOOKEY_BENCH_COMMIT_HEADER}"
+  VERBATIM
+)
 
-add_library(azookey_benchmark_result BenchmarkResult.cpp)
+add_library(azookey_benchmark_result BenchmarkCommandLine.cpp BenchmarkResult.cpp)
 target_include_directories(azookey_benchmark_result PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(azookey_benchmark_result
   PUBLIC azookey_ipc
   PRIVATE azookey_project_options azookey_project_warnings
 )
+if(WIN32)
+  target_link_libraries(azookey_benchmark_result PRIVATE shell32)
+endif()
 
 add_executable(azookey_bench live_bench.cpp)
+add_dependencies(azookey_bench azookey_benchmark_commit_header)
+target_include_directories(azookey_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_bench
   PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
 )
 target_compile_definitions(azookey_bench PRIVATE
-  AZOOKEY_BENCH_COMMIT="${AZOOKEY_BENCH_GIT_COMMIT}"
   AZOOKEY_BENCH_CONFIG="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,unknown>"
 )
 
 add_executable(azookey_zenzai_bench zenzai_bench.cpp)
+add_dependencies(azookey_zenzai_bench azookey_benchmark_commit_header)
+target_include_directories(azookey_zenzai_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_zenzai_bench
   PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
 )
 target_compile_definitions(azookey_zenzai_bench PRIVATE
-  AZOOKEY_BENCH_COMMIT="${AZOOKEY_BENCH_GIT_COMMIT}"
   AZOOKEY_BENCH_CONFIG="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,unknown>"
 )
 
@@ -64,6 +67,15 @@ if(AZOOKEY_BUILD_TESTS)
     FAIL_REGULAR_EXPRESSION "p50_ms="
     TIMEOUT 10
   )
+  add_test(NAME azookey_zenzai_bench_missing_model_output
+           COMMAND "${CMAKE_COMMAND}"
+                   "-DBENCH_EXE=$<TARGET_FILE:azookey_zenzai_bench>"
+                   "-DOUTPUT_PATH=${CMAKE_CURRENT_BINARY_DIR}/missing-model-result.json"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertMissingModelOutput.cmake")
+  set_tests_properties(azookey_zenzai_bench_missing_model_output PROPERTIES
+    TIMEOUT 10
+    ENVIRONMENT "AZOOKEY_ZENZAI_MODEL="
+  )
   if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
     add_test(NAME azookey_zenzai_real_model_nihongo_smoke
              COMMAND azookey_zenzai_bench
@@ -87,6 +99,18 @@ if(AZOOKEY_BUILD_TESTS)
       LABELS "zenzai-real-model"
       PASS_REGULAR_EXPRESSION "zenzai_candidates=[1-9][0-9]* top_surface=私は学生です "
       FAIL_REGULAR_EXPRESSION "utf8-prefix-trimmed"
+      TIMEOUT 120
+    )
+    add_test(NAME azookey_zenzai_real_model_json_smoke
+             COMMAND azookey_zenzai_bench
+                     --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --input "にほんご"
+                     --iterations 1 --warmup 0 --require-model --require-zenzai --json)
+    set_tests_properties(azookey_zenzai_real_model_json_smoke PROPERTIES
+      LABELS "zenzai-real-model"
+      PASS_REGULAR_EXPRESSION
+        "\"bench\":\"azookey_zenzai_bench\".*\"schemaVersion\":1.*\"passed\":true"
+      FAIL_REGULAR_EXPRESSION "status=ok"
       TIMEOUT 120
     )
   elseif(NOT AZOOKEY_WITH_LLAMA_CPP)

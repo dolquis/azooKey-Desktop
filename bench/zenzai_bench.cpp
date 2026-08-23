@@ -418,7 +418,7 @@ int RunBench(int argc, char** argv) {
   beam_decode_ms.reserve(options.iterations);
   uint64_t prompt_decode_tokens = 0;
   uint64_t beam_decode_tokens = 0;
-  size_t beam_decode_invocations = 0;
+  size_t beam_decode_evaluations = 0;
   std::vector<azookey::core::Candidate> last_candidates;
   for (size_t i = 0; i < options.iterations; ++i) {
     const auto t0 = std::chrono::steady_clock::now();
@@ -431,7 +431,7 @@ int RunBench(int argc, char** argv) {
       beam_decode_ms.push_back(stats->beam_decode_ms);
       prompt_decode_tokens += stats->prompt_tokens;
       beam_decode_tokens += stats->beam_tokens;
-      beam_decode_invocations += stats->beam_decode_invocations;
+      beam_decode_evaluations += stats->beam_decode_evaluations;
     }
   }
 
@@ -470,7 +470,8 @@ int RunBench(int argc, char** argv) {
     };
     result.decode_phases = azookey::bench::DecodePhaseBreakdown{
         {prompt_decode_ms.size(), prompt_decode_tokens, latency_metrics(prompt_decode_ms)},
-        {beam_decode_invocations, beam_decode_tokens, latency_metrics(beam_decode_ms)}};
+        {beam_decode_ms.size(), beam_decode_tokens, beam_decode_evaluations,
+         latency_metrics(beam_decode_ms)}};
   }
   const auto json = azookey::bench::SerializeBenchmarkResult(result);
 
@@ -509,7 +510,7 @@ int RunBench(int argc, char** argv) {
                 << " prompt_decode_tokens=" << result.decode_phases->prompt.tokens
                 << " beam_decode_p50_ms=" << result.decode_phases->beam.latency.p50_ms
                 << " beam_decode_tokens=" << result.decode_phases->beam.tokens
-                << " beam_decode_invocations=" << result.decode_phases->beam.invocations;
+                << " beam_decode_evaluations=" << result.decode_phases->beam.evaluations;
     }
     std::cout << std::endl;
   }

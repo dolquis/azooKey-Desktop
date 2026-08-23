@@ -559,13 +559,10 @@ class LlamaDecodeAbortScope {
   llama_context* context_;
 };
 
-bool DecodeTokens(llama_context* context, std::vector<llama_token>& tokens,
-                  LlamaDecodeControl& control, const char* error_message, bool clear_cache = true) {
+bool DecodeTokens(llama_context* context, const std::vector<llama_token>& tokens,
+                  LlamaDecodeControl& control, const char* error_message) {
   if (tokens.empty()) {
     return true;
-  }
-  if (clear_cache) {
-    llama_kv_self_clear(context);
   }
   const auto context_batch = std::max<uint32_t>(1, llama_n_batch(context));
   const int32_t chunk_limit =
@@ -577,7 +574,9 @@ bool DecodeTokens(llama_context* context, std::vector<llama_token>& tokens,
     const auto remaining = tokens.size() - offset;
     const int32_t chunk_size =
         static_cast<int32_t>(std::min<size_t>(remaining, static_cast<size_t>(chunk_limit)));
-    auto batch = llama_batch_get_one(tokens.data() + offset, chunk_size);
+    // llama_batch_get_one stores this pointer but llama_decode only reads token IDs.
+    auto* chunk_tokens = const_cast<llama_token*>(tokens.data() + offset);
+    auto batch = llama_batch_get_one(chunk_tokens, chunk_size);
     const int32_t result = llama_decode(context, batch);
     if (result == 2 || control.ShouldAbort()) {
       return false;
@@ -701,9 +700,9 @@ struct ZenzaiModelRuntime {
     std::vector<LlamaBeam> beams(1);
     bool completed_quota_reached = false;
 
-    last_decode_stats = ZenzaiDecodeStats{};
-    auto& decode_stats = *last_decode_stats;
+    ZenzaiDecodeStats decode_stats;
     decode_stats.prompt_tokens = static_cast<uint64_t>(prompt_tokens.size());
+    llama_kv_self_clear(context);
     const auto prompt_decode_start = std::chrono::steady_clock::now();
     const bool prompt_decoded =
         DecodeTokens(context, prompt_tokens, decode_control, "llama.cpp prompt decode failed");
@@ -713,11 +712,12 @@ struct ZenzaiModelRuntime {
     if (!prompt_decoded) {
       return {};
     }
+    const auto prompt_size = static_cast<llama_pos>(prompt_tokens.size());
 
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
       std::vector<LlamaBeam> next_beams;
       next_beams.reserve(candidate_limit * candidate_limit);
-      for (auto& beam : beams) {
+      for (const auto& beam : beams) {
         if (IsCanceled(conversion_context)) {
           return {};
         }
@@ -727,17 +727,16 @@ struct ZenzaiModelRuntime {
         }
 
         const auto beam_decode_start = std::chrono::steady_clock::now();
-        const auto prompt_size = static_cast<llama_pos>(prompt_tokens.size());
         if (!llama_kv_self_seq_rm(context, 0, prompt_size, -1)) {
           throw std::runtime_error("llama.cpp beam KV suffix reset failed");
         }
-        const bool beam_decoded = DecodeTokens(context, beam.tokens, decode_control,
-                                               "llama.cpp beam decode failed", false);
+        const bool beam_decoded =
+            DecodeTokens(context, beam.tokens, decode_control, "llama.cpp beam decode failed");
         decode_stats.beam_decode_ms += std::chrono::duration<double, std::milli>(
                                            std::chrono::steady_clock::now() - beam_decode_start)
                                            .count();
         decode_stats.beam_tokens += static_cast<uint64_t>(beam.tokens.size());
-        ++decode_stats.beam_decode_invocations;
+        ++decode_stats.beam_decode_evaluations;
         if (!beam_decoded) {
           if (IsCanceled(conversion_context)) {
             return {};
@@ -791,6 +790,7 @@ struct ZenzaiModelRuntime {
              BeamRankScore(rhs.total_logprob, rhs.token_count);
     });
 
+    last_decode_stats = decode_stats;
     return generated;
   }
 #else

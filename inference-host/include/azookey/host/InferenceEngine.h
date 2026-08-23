@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
-#include "azookey/host/ZenzaiModelConverter.h"
+#include "azookey/host/ZenzaiDecodeStats.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/UserDictionary.h"

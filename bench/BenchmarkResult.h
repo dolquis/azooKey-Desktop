@@ -31,14 +31,21 @@ struct BaselineComparison {
 };
 
 struct DecodePhaseMetrics {
-  size_t invocations{0};
+  size_t samples{0};
   uint64_t tokens{0};
+  LatencyMetrics latency;
+};
+
+struct BeamDecodePhaseMetrics {
+  size_t samples{0};
+  uint64_t tokens{0};
+  size_t evaluations{0};
   LatencyMetrics latency;
 };
 
 struct DecodePhaseBreakdown {
   DecodePhaseMetrics prompt;
-  DecodePhaseMetrics beam;
+  BeamDecodePhaseMetrics beam;
 };
 
 struct BenchmarkResult {

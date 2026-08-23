@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -9,6 +8,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/ZenzaiDecodeStats.h"
 
 namespace azookey::host {
 
@@ -57,14 +57,6 @@ struct ZenzaiKvOverride {
   Type type{Type::String};
   std::string string_value;
   int64_t int_value{};
-};
-
-struct ZenzaiDecodeStats {
-  double prompt_decode_ms{};
-  double beam_decode_ms{};
-  uint64_t prompt_tokens{};
-  uint64_t beam_tokens{};
-  size_t beam_decode_invocations{};
 };
 
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);

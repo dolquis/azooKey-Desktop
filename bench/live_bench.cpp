@@ -8,15 +8,27 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkCommandLine.h"
+#include "BenchmarkCommit.h"
+#include "BenchmarkResult.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+
+#ifndef AZOOKEY_BENCH_COMMIT
+#define AZOOKEY_BENCH_COMMIT "unknown"
+#endif
+
+#ifndef AZOOKEY_BENCH_CONFIG
+#define AZOOKEY_BENCH_CONFIG "unknown"
+#endif
 
 namespace {
 
 void PrintUsage(const char* exe) {
-  std::cerr << "Usage: " << exe << " [--max-p95-ms N]\n"
+  std::cerr << "Usage: " << exe << " [--max-p95-ms N] [--json] [--output PATH] [--baseline PATH]\n"
             << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
-               "failure gate.\n";
+               "failure gate. --json selects JSON stdout; --output writes the same JSON "
+               "schema to a file.\n";
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -43,7 +55,25 @@ std::string RequireValue(int argc, char** argv, int& index, const char* option) 
 }  // namespace
 
 int main(int argc, char** argv) {
+  std::vector<std::string> utf8_args;
+  try {
+    utf8_args = azookey::bench::Utf8CommandLineArguments(argc, argv);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << std::endl;
+    return 2;
+  }
+  std::vector<char*> utf8_argv;
+  utf8_argv.reserve(utf8_args.size());
+  for (auto& arg : utf8_args) {
+    utf8_argv.push_back(arg.data());
+  }
+  argc = static_cast<int>(utf8_argv.size());
+  argv = utf8_argv.data();
+
   std::optional<double> max_p95_ms;
+  bool json_output = false;
+  std::filesystem::path output_path;
+  std::filesystem::path baseline_path;
   try {
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -53,6 +83,12 @@ int main(int argc, char** argv) {
       }
       if (arg == "--max-p95-ms") {
         max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
+      } else if (arg == "--json") {
+        json_output = true;
+      } else if (arg == "--output") {
+        output_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--output"));
+      } else if (arg == "--baseline") {
+        baseline_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--baseline"));
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }
@@ -86,23 +122,52 @@ int main(int argc, char** argv) {
 
   std::sort(lat_ms.begin(), lat_ms.end());
   auto pct = [&](double p) {
-    size_t idx = static_cast<size_t>((p / 100.0) * (lat_ms.size() - 1));
+    const size_t idx = static_cast<size_t>((p / 100.0) * static_cast<double>(lat_ms.size() - 1));
     return lat_ms[idx];
   };
 
   const double p50 = pct(50);
   const double p95 = pct(95);
   const double p99 = pct(99);
-  std::cout << "p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99;
-  if (max_p95_ms) {
-    std::cout << " max_p95_ms=" << *max_p95_ms;
-  } else {
-    std::cout << " max_p95_ms=none";
+
+  azookey::bench::BenchmarkResult result;
+  result.bench = "azookey_bench";
+  result.commit = AZOOKEY_BENCH_COMMIT;
+  result.config = AZOOKEY_BENCH_CONFIG;
+  result.iterations = lat_ms.size();
+  result.latency = {p50, p95, p99, lat_ms.back()};
+  result.max_p95_ms = max_p95_ms;
+  result.threshold_passed = !max_p95_ms || p95 < *max_p95_ms;
+  result.baseline =
+      azookey::bench::CompareBaseline(baseline_path, result.bench, result.config, result.latency);
+  const auto json = azookey::bench::SerializeBenchmarkResult(result);
+
+  if (!output_path.empty()) {
+    std::string error;
+    if (!azookey::bench::WriteBenchmarkResult(output_path, json, &error)) {
+      std::remove(learning_path.string().c_str());
+      std::cerr << error << std::endl;
+      return 2;
+    }
   }
-  std::cout << std::endl;
+
+  if (json_output) {
+    std::cout << json << std::endl;
+  } else {
+    std::cout << "p50_ms=" << p50 << " p95_ms=" << p95 << " p99_ms=" << p99;
+    if (max_p95_ms) {
+      std::cout << " max_p95_ms=" << *max_p95_ms;
+    } else {
+      std::cout << " max_p95_ms=none";
+    }
+    std::cout << std::endl;
+  }
+  if (const auto warning = azookey::bench::RegressionWarning(result)) {
+    std::cerr << *warning << std::endl;
+  }
 
   std::remove(learning_path.string().c_str());
-  if (max_p95_ms && p95 >= *max_p95_ms) {
+  if (!result.threshold_passed) {
     std::cerr << "p95 exceeded threshold" << std::endl;
     return 1;
   }

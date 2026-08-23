@@ -32,9 +32,9 @@ namespace azookey::host {
 namespace {
 
 constexpr std::array<char, 4> kGgufMagic{'G', 'G', 'U', 'F'};
-#if AZOOKEY_WITH_LLAMA_CPP
 constexpr std::string_view kGgufPreTokenizerKey = "tokenizer.ggml.pre";
 constexpr std::string_view kGgufEosTokenIdKey = "tokenizer.ggml.eos_token_id";
+#if AZOOKEY_WITH_LLAMA_CPP
 constexpr std::string_view kGgufTokensKey = "tokenizer.ggml.tokens";
 #endif
 constexpr std::string_view kZenzaiPreTokenizer = "gpt2-small-japanese-char";
@@ -142,13 +142,7 @@ class LlamaLogCapture {
   bool capturing_continuation_{false};
 };
 
-struct GgufTokenizerMetadata {
-  std::optional<std::string> pre_tokenizer;
-  std::optional<uint32_t> eos_token_id;
-  std::vector<std::string> vocabulary;
-};
-
-std::optional<GgufTokenizerMetadata> ReadGgufTokenizerMetadata(const std::string& path) {
+std::optional<ZenzaiTokenizerMetadata> ReadGgufTokenizerMetadata(const std::string& path) {
   const gguf_init_params params{
       /* .no_alloc = */ true,
       /* .ctx = */ nullptr,
@@ -159,7 +153,7 @@ std::optional<GgufTokenizerMetadata> ReadGgufTokenizerMetadata(const std::string
     return std::nullopt;
   }
 
-  GgufTokenizerMetadata metadata;
+  ZenzaiTokenizerMetadata metadata;
   const auto pre_tokenizer_key = gguf_find_key(context.get(), kGgufPreTokenizerKey.data());
   if (pre_tokenizer_key >= 0 &&
       gguf_get_kv_type(context.get(), pre_tokenizer_key) == GGUF_TYPE_STRING) {
@@ -854,6 +848,35 @@ std::optional<uint32_t> ResolveZenzaiEosTokenOverride(uint32_t declared_eos_toke
   return static_cast<uint32_t>(eos_token_id);
 }
 
+std::vector<ZenzaiKvOverride> BuildZenzaiKvOverrides(const ZenzaiTokenizerMetadata& metadata) {
+  std::vector<ZenzaiKvOverride> overrides;
+
+  const auto pre_tokenizer_override =
+      metadata.pre_tokenizer ? ResolveZenzaiPreTokenizerOverride(*metadata.pre_tokenizer)
+                             : std::nullopt;
+  if (pre_tokenizer_override) {
+    ZenzaiKvOverride entry;
+    entry.key = kGgufPreTokenizerKey;
+    entry.type = ZenzaiKvOverride::Type::String;
+    entry.string_value = *pre_tokenizer_override;
+    overrides.push_back(std::move(entry));
+  }
+
+  const auto eos_token_override =
+      metadata.eos_token_id
+          ? ResolveZenzaiEosTokenOverride(*metadata.eos_token_id, metadata.vocabulary)
+          : std::nullopt;
+  if (eos_token_override) {
+    ZenzaiKvOverride entry;
+    entry.key = kGgufEosTokenIdKey;
+    entry.type = ZenzaiKvOverride::Type::Int;
+    entry.int_value = *eos_token_override;
+    overrides.push_back(std::move(entry));
+  }
+
+  return overrides;
+}
+
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
   ZenzaiLoadResult result;
   result.info.path = path;
@@ -928,33 +951,30 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 
   auto model_params = llama_model_default_params();
   model_params.n_gpu_layers = options.n_gpu_layers;
-  std::array<llama_model_kv_override, 3> kv_overrides{};
-  size_t kv_override_count = 0;
   const auto tokenizer_metadata = ReadGgufTokenizerMetadata(path);
-  const auto pre_tokenizer = tokenizer_metadata ? tokenizer_metadata->pre_tokenizer : std::nullopt;
-  const auto pre_tokenizer_override =
-      pre_tokenizer ? ResolveZenzaiPreTokenizerOverride(*pre_tokenizer) : std::nullopt;
-  if (pre_tokenizer_override) {
-    auto& entry = kv_overrides[kv_override_count++];
-    std::snprintf(entry.key, sizeof(entry.key), "%.*s",
-                  static_cast<int>(kGgufPreTokenizerKey.size()), kGgufPreTokenizerKey.data());
-    entry.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
-    std::snprintf(entry.val_str, sizeof(entry.val_str), "%.*s",
-                  static_cast<int>(pre_tokenizer_override->size()), pre_tokenizer_override->data());
+  const auto described_overrides = tokenizer_metadata ? BuildZenzaiKvOverrides(*tokenizer_metadata)
+                                                      : std::vector<ZenzaiKvOverride>{};
+  // llama.cpp reads the array until it hits an entry with an empty key, so keep a zeroed tail.
+  std::vector<llama_model_kv_override> kv_overrides(described_overrides.size() + 1);
+  for (size_t i = 0; i < described_overrides.size(); ++i) {
+    const auto& described = described_overrides[i];
+    auto& entry = kv_overrides[i];
+    std::snprintf(entry.key, sizeof(entry.key), "%.*s", static_cast<int>(described.key.size()),
+                  described.key.data());
+    switch (described.type) {
+      case ZenzaiKvOverride::Type::String:
+        entry.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
+        std::snprintf(entry.val_str, sizeof(entry.val_str), "%.*s",
+                      static_cast<int>(described.string_value.size()),
+                      described.string_value.data());
+        break;
+      case ZenzaiKvOverride::Type::Int:
+        entry.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
+        entry.val_i64 = described.int_value;
+        break;
+    }
   }
-  const auto eos_token_override =
-      tokenizer_metadata && tokenizer_metadata->eos_token_id
-          ? ResolveZenzaiEosTokenOverride(*tokenizer_metadata->eos_token_id,
-                                          tokenizer_metadata->vocabulary)
-          : std::nullopt;
-  if (eos_token_override) {
-    auto& entry = kv_overrides[kv_override_count++];
-    std::snprintf(entry.key, sizeof(entry.key), "%.*s", static_cast<int>(kGgufEosTokenIdKey.size()),
-                  kGgufEosTokenIdKey.data());
-    entry.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
-    entry.val_i64 = *eos_token_override;
-  }
-  if (kv_override_count > 0) {
+  if (!described_overrides.empty()) {
     model_params.kv_overrides = kv_overrides.data();
   }
   runtime->model = llama_model_load_from_file(path.c_str(), model_params);

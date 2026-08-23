@@ -39,12 +39,34 @@ struct ZenzaiLoadResult {
   std::unique_ptr<ZenzaiModelRuntime> runtime;
 };
 
+// Tokenizer-related GGUF metadata that the loader may need to override at load time.
+// Populated from the GGUF key-value store in llama.cpp builds; declared unconditionally so the
+// override policy can be exercised without llama.cpp.
+struct ZenzaiTokenizerMetadata {
+  std::optional<std::string> pre_tokenizer;
+  std::optional<uint32_t> eos_token_id;
+  std::vector<std::string> vocabulary;
+};
+
+// One llama.cpp `kv_overrides` entry, described without depending on llama.h.
+struct ZenzaiKvOverride {
+  enum class Type { String, Int };
+
+  std::string key;
+  Type type{Type::String};
+  std::string string_value;
+  int64_t int_value{};
+};
+
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
                                      const ZenzaiRuntimeOptions& options = {});
 std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer);
 std::optional<uint32_t> ResolveZenzaiEosTokenOverride(uint32_t declared_eos_token_id,
                                                       const std::vector<std::string>& vocabulary);
+// Decides which GGUF KV entries the Zenzai loader overrides for `metadata`, in the order they are
+// handed to llama.cpp. Returns an empty vector when the GGUF needs no override.
+std::vector<ZenzaiKvOverride> BuildZenzaiKvOverrides(const ZenzaiTokenizerMetadata& metadata);
 
 class ZenzaiModelConverter final : public core::IConverter {
  public:

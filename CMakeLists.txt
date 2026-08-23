@@ -36,6 +36,25 @@ if(AZOOKEY_USE_COMPILER_CACHE AND AZOOKEY_COMPILER_CACHE)
   message(STATUS "Compiler cache enabled: ${AZOOKEY_COMPILER_CACHE}")
 endif()
 
+# CMake detects MSVC's /showIncludes prefix in English, while cl.exe follows
+# the host UI language during normal Ninja builds. Keep the compiler output in
+# English so Ninja records header dependencies instead of silently storing an
+# empty dependency set on non-English Windows hosts. Preserve any existing
+# launcher (for example sccache) after the environment wrapper.
+if(MSVC)
+  foreach(_azookey_lang IN ITEMS C CXX)
+    set(_azookey_existing_launcher
+        "${CMAKE_${_azookey_lang}_COMPILER_LAUNCHER}")
+    set(CMAKE_${_azookey_lang}_COMPILER_LAUNCHER
+        "${CMAKE_COMMAND};-E;env;VSLANG=1033")
+    if(_azookey_existing_launcher)
+      list(APPEND CMAKE_${_azookey_lang}_COMPILER_LAUNCHER
+           ${_azookey_existing_launcher})
+    endif()
+  endforeach()
+  unset(_azookey_existing_launcher)
+endif()
+
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 option(AZOOKEY_BUILD_TSF_TIP "Build the Windows TSF TIP and its tests" ON)

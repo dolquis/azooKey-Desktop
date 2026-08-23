@@ -1448,7 +1448,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `learning/`（English チャネル or source タグでの区別）、
   `settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/inline-english-candidate-spec.md` §3〜§8。
-  - 候補生成（生ローマ字そのもの + 大文字化バリアント + 任意で全角ローマ字・辞書一致語）
+  - 候補生成（生ローマ字そのもの + 大文字化バリアント + 任意で全角ローマ字〔大小を含む。
+    M62-B の英字分をここへ統合。spec §3〕・辞書一致語）
   - ゲーティング（最小長・英語意図ヒューリスティック・辞書ヒット）と順位（日本語上位候補を
     奪わない／自動選択しない）
   - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）
@@ -1643,13 +1644,29 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   統合**し、独立実装にしない。
 - **前提**: M62-A 完了。英字部分は M60（`docs/inline-english-candidate-spec.md`）に統合。
   いずれも決定的・Mozc データ非依存で TIP ローカル可。
-- **変更対象**: `core/`（HalfKatakana / Alphabet リライター）、M60 設計への統合、
-  `settings/mvp-settings.schema.json`、`core/tests/`。
+- **変更対象**: `core/`（カタカナリライター。全角カタカナと半角カタカナの写像を自前定義。
+  リライターの抽象化は行わない）、`core/tests/`。加えて `katakanaRewriter` を TIP まで
+  届ける設定伝播経路一式を、`numberRewriter`（M62-A）と同じ範囲で変更する:
+  `settings/mvp-settings.schema.json` と `settings/default-settings.sample.json`（既定 OFF）、
+  `inference-host/`（`SettingsStore` の `RuntimeSettings` と parser、`Dispatcher` の
+  Handshake 応答への載せ替え）、`ipc/`（`HandshakeResponse` payload の欄追加と codec）、
+  `tsf-tip/`（`TextService` の保持と候補注入）、`settings-app/SettingsDocument.cpp`
+  （許可キー）、および各層の focused test（`ipc/tests/payloads_test.cpp`、
+  `inference-host/tests/settings_store_test.cpp`・`dispatcher_test.cpp`、`tsf-tip/tests/`）。
+  「TIP ローカル・無 IPC」は**候補生成**についての性質であり、設定の伝播は Handshake 経路を
+  通る（`docs/candidate-rewriter-spec.md` §18.7）。ここを分けないと、core テストだけ通って
+  設定が常に実質 OFF の実装を受け入れてしまう。
+  英字分は `core/` に置かず M60 の候補注入経路へ統合する。
 - **受け入れ条件**:
   - 純かな候補に全/半角カタカナ候補が注釈付きで出る。漢字混在（`愛してる`）はリライトしない
+  - `katakanaRewriter=true` が settings.json から Host の `RuntimeSettings`、Handshake 応答、
+    TIP の保持値まで伝播し、候補注入が実際に有効になる（各層の focused test で確認）
+  - `settings/default-settings.sample.json` と settings-app の許可キーが schema と同期する
   - 英字の幅・大小バリアントが M60 の候補注入経路に統合され二重実装しない
   - 既定 OFF で既存挙動不変
-- **参照仕様**: `docs/candidate-rewriter-spec.md` / `docs/inline-english-candidate-spec.md`
+- **参照仕様**: `docs/candidate-rewriter-spec.md` §18（カタカナ分。純かな判定の境界、
+  半角写像と縮退規則、設定キー、既定 OFF の不変条件）と
+  `docs/inline-english-candidate-spec.md` §3 / §4.3（英字分の素材と固定順）
 
 #### M62-C: 記号リライター（Mozc 由来データ）
 

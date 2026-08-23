@@ -384,6 +384,13 @@ Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェ
 `.pdb` artifact（§4.4）は影響を受けない。各ジョブ末尾で `sccache --show-stats` で
 ヒット率を可視化する。
 
+Windows の Ninja build では、ルート `CMakeLists.txt` が compiler launcher の先頭に
+`cmake -E env VSLANG=1033` を追加する。
+CMake が生成する英語の `/showIncludes` prefix と MSVC の出力言語を一致させ、Ninja が
+header dependency を記録できるようにするためである。
+この環境指定は compiler cache の有効・無効にかかわらず適用し、sccache などの既存
+launcher は環境指定の後段へ保持する。
+
 **action のバージョンに注意（過去の失敗の教訓）。** 初回導入時に
 `sccache-action@v0.0.6` を pin したところ、全ビルドジョブが失敗した（2026-07）。
 このタグは旧 (v1) Actions Cache API 用の env（`ACTIONS_CACHE_URL`）しか渡さないが、

@@ -326,6 +326,13 @@ OFF のまま）。
   `language: system` でローカル導入済みモジュールを使い、CI は pinned
   module version を導入して同じ wrapper を呼ぶ
 
+`settings-schema`、`powershell-quality`、`cpp-tidy` は、先行する `changes` ジョブが
+対象ファイルの変更を検出した場合だけ起動する。
+`settings-schema` は `settings/`、`powershell-quality` は PowerShell の script / module /
+manifest、`cpp-tidy` は portable subset の C++ source を対象とする。
+手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
+三つの専門ジョブをすべて起動する。
+
 clang-tidy / CodeQL は**必須ゲートには含めない**（導入コストが高く、段階導入と
 する）。ただし変更行 clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
 非ブロッキング）として実行し、変更 C++ ソースの静的解析所見を可視化する。
@@ -339,7 +346,7 @@ clang-tidy / CodeQL は**必須ゲートには含めない**（導入コスト�
 
 configure / build / test の各ログと、Release ビルドの `.pdb` を artifact
 として保存する。PR diagnostic コメントはマトリクスの config ごとの結果を
-反映する。
+反映する。`.pdb` artifact の保持期間は 14 日間とする。
 
 ### 4.5 bench smoke と回帰監視
 

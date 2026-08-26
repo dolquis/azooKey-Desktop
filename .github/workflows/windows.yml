@@ -40,8 +40,100 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Detect specialized job changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      settings_schema: ${{ steps.filter.outputs.settings_schema }}
+      powershell_quality: ${{ steps.filter.outputs.powershell_quality }}
+      cpp_tidy: ${{ steps.filter.outputs.cpp_tidy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: filter
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          settings_schema=false
+          powershell_quality=false
+          cpp_tidy=false
+          run_all=false
+
+          case "$EVENT" in
+            workflow_dispatch)
+              run_all=true
+              ;;
+            pull_request)
+              BASE="$PR_BASE"
+              ;;
+            push)
+              BASE="$PUSH_BEFORE"
+              ;;
+            *)
+              echo "::warning::Unknown event '$EVENT'; running all specialized jobs."
+              run_all=true
+              ;;
+          esac
+
+          if [ "$run_all" = false ]; then
+            if [ -z "${BASE:-}" ] ||
+               [[ "$BASE" =~ ^0+$ ]] ||
+               ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+              echo "::warning::Changed-file base unavailable; running all specialized jobs."
+              run_all=true
+            fi
+          fi
+
+          if [ "$run_all" = true ]; then
+            settings_schema=true
+            powershell_quality=true
+            cpp_tidy=true
+          else
+            echo "Classifying files changed since $BASE:"
+            while IFS= read -r path; do
+              printf '  %s\n' "$path"
+
+              case "$path" in
+                .github/workflows/windows.yml)
+                  settings_schema=true
+                  powershell_quality=true
+                  cpp_tidy=true
+                  ;;
+                settings/*)
+                  settings_schema=true
+                  ;;
+              esac
+
+              case "$path" in
+                *.ps1|*.psm1|*.psd1)
+                  powershell_quality=true
+                  ;;
+              esac
+
+              if [ -f "$path" ] &&
+                 [[ "$path" =~ ^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$ ]]; then
+                cpp_tidy=true
+              fi
+            done < <(git diff --name-only "$BASE" HEAD)
+          fi
+
+          {
+            echo "settings_schema=$settings_schema"
+            echo "powershell_quality=$powershell_quality"
+            echo "cpp_tidy=$cpp_tidy"
+          } | tee -a "$GITHUB_OUTPUT"
   settings-schema:
     name: Settings JSON Schema
+    needs: changes
+    if: needs.changes.outputs.settings_schema == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -63,6 +155,8 @@ jobs:
 
   powershell-quality:
     name: PowerShell lint/test
+    needs: changes
+    if: needs.changes.outputs.powershell_quality == 'true'
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
@@ -238,6 +332,7 @@ jobs:
           name: windows-release-pdb
           path: build/${{ matrix.preset }}/**/*.pdb
           if-no-files-found: ignore
+          retention-days: 14
 
       - name: Fail if configure, build, or tests failed
         if: always()
@@ -472,6 +567,8 @@ jobs:
 
   cpp-tidy:
     name: C++ tidy (advisory)
+    needs: changes
+    if: needs.changes.outputs.cpp_tidy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -510,12 +607,12 @@ jobs:
           # keeps the offline-build principle, spec §1). tsf-tip is Windows-only
           # and absent from the Linux DB, so it is naturally skipped here.
           cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=OFF >/dev/null
-          CHANGED="$(git diff --name-only --diff-filter=ACM "$BASE" HEAD \
-            | grep -E '^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$' || true)"
-          if [ -z "$CHANGED" ]; then
+          mapfile -t CHANGED < <(git diff --name-only --diff-filter=ACM "$BASE" HEAD \
+            | grep -E '^(core|ipc|learning|inference-host|bench)/.*\.(cpp|cc)$' || true)
+          if [ "${#CHANGED[@]}" -eq 0 ]; then
             echo "clang-tidy: no changed C++ source files in the portable subset."
             exit 0
           fi
           echo "Running clang-tidy on:"
-          printf '%s\n' "$CHANGED"
-          clang-tidy-18 -p build/linux-debug $CHANGED || true
+          printf '%s\n' "${CHANGED[@]}"
+          clang-tidy-18 -p build/linux-debug "${CHANGED[@]}" || true

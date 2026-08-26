@@ -83,6 +83,7 @@ jobs:
               ;;
           esac
 
+          # Avoid false-negative skips when the event comparison commit is unavailable.
           if [ "$run_all" = false ]; then
             if [ -z "${BASE:-}" ] ||
                [[ "$BASE" =~ ^0+$ ]] ||

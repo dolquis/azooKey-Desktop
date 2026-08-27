@@ -91,7 +91,7 @@
       "binaryDir": "${sourceDir}/build/windows-asan",
       "cacheVariables": {
         "AZOOKEY_BUILD_BENCH": "OFF",
-        "AZOOKEY_BUILD_TSF_TIP": "OFF",
+        "AZOOKEY_BUILD_TSF_TIP": "ON",
         "AZOOKEY_ENABLE_ASAN": "ON",
         "AZOOKEY_USE_COMPILER_CACHE": "OFF"
       }

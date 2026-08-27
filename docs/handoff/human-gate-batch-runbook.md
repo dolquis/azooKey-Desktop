@@ -339,6 +339,43 @@ Receive-Job $viaPipe, $viaFile
 read から quarantine までと atomic save の直列化は、自動テスト `SettingsStoreTest.SharedLockSerializesAtomicWriterBeforeRead` の結果も併記する。
 実機確認と自動テストの両方を記録し、どちらか一方だけで同時更新ゲートを閉じない。
 
+### レーン 3：Application Verifier を掛けた状態
+
+DEV-905（実ホストへ in-proc ロードした TIP のヒープ、ハンドル、ロックの検証）を置く。
+このレーンは最後に走らせる。
+Application Verifier は対象イメージの設定を registry（Image File Execution Options）へ書くため、有効なままでは以降のどのゲートも汚染された環境で走ることになる。
+
+`windows-asan` の網が届くのは azooKey 側が生成するプロセスに限られ、実ホストアプリのプロセスへ in-proc ロードした状態は恒久的に対象外である（`docs/dev-infrastructure-spec.md` §4.6.1）。
+このレーンはその範囲だけを埋める。
+
+開始状態はレーン 2 と同じでよい。
+レーン 2 の打鍵を終えた状態から続けて実施する。
+
+対象は `notepad.exe` に限定する。
+`compat-test` が Win32 TSF ホストの基準として使っており、TIP の動線が最も素直に出るためである。
+Edge と VS Code へは掛けない。
+
+有効化から解除までを `try` / `finally` で囲み、途中で打鍵が失敗しても解除が走るようにする。
+`appverif.exe` は管理者権限を要求する。
+
+```powershell
+$target = 'notepad.exe'
+try {
+  appverif.exe -enable Heaps Handles Locks -for $target
+  # notepad を起動し、azooKey へ切り替えて A1〜A8 の打鍵を行う。
+  # 停止したら debugger を接続し、verifier の停止コードと stack を採取する。
+} finally {
+  appverif.exe -disable '*' -for $target
+}
+appverif.exe -query '*' -for $target
+```
+
+`-query` の出力に設定が残っていないことを確認するまで、このレーンを終えない。
+`finally` を置いても、PowerShell 自体が途中で落ちれば解除は走らない。
+
+Application Verifier の停止はブレークであり、debugger を接続していないと対象プロセスがそのまま終了して情報が残らない。
+検出があった場合は停止コードと stack を DEV-905 のコメントへ記録し、file:line と再現手順を添えて別課題を起こす。
+
 ### このセッションの対象外
 
 DEV-194（推論バックエンド実機ベンチと ONNX Runtime GenAI 変換可否スパイク）は、TIP の実機動線ではなくホスト側のベンチと変換検証である。
@@ -558,6 +595,7 @@ Part A で Store 入力が依然として成立しない場合、境界確認は
 - 新規に検出した問題を Linear へ起票する。ラベルは `repo:*` と `area:*` を必須とし、実機確認を要する人間専任タスクには `agent:*` の代わりに `gate:human-required` を付ける
 - `AZOOKEY_LOG` と `AZOOKEY_LOG_LEVEL` を削除する
 - Process Monitor と WPR の採取プロセスが残っていないことを確認する
+- レーン 3 を実施した場合、`appverif.exe -query '*' -for notepad.exe` の出力に設定が残っていないことを確認する
 - ベースライン checkpoint へ復元する
 
 dump、ETL、PML、ログには変換中の本文と候補が含まれうる。

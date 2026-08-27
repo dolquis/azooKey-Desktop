@@ -424,18 +424,50 @@ bench が閾値超過などで非ゼロ終了した場合も、生成済みの J
 | プリセット | 対象 | 内容 |
 |---|---|---|
 | `linux-asan-ubsan` | Linux ビルド可能サブセット | AddressSanitizer + UndefinedBehaviorSanitizer |
-| `windows-asan` | Windows サブセット | MSVC AddressSanitizer |
+| `windows-asan` | Windows でビルドできる全コンポーネント（`tsf-tip` を含む） | MSVC AddressSanitizer |
 
-対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc` / `learning` /
-`inference-host` から開始し、`tsf-tip`（COM/TSF 依存）は後続で拡張する。PR では
-通常 Build のみを required とし、sanitizer は schedule / manual dispatch で
+Linux preset の対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc` / `learning` /
+`inference-host` である（`tsf-tip` は Windows 専用のため Linux では構成できない）。
+Windows preset はこれに `tsf-tip` を加えた全体を対象とする（適用範囲は §4.6.1）。PR
+では通常 Build のみを required とし、sanitizer は schedule / manual dispatch で
 段階導入する。各ジョブは configure / build / CTest のログと
 `Testing/Temporary` の診断ログを、成功・失敗にかかわらず artifact として 14 日間
-保持する。Windows preset は x64 のみを対象に `AZOOKEY_BUILD_TSF_TIP=OFF` とし、MSVC
-ASan と非互換な `/RTC1` と incremental link を sanitizer 設定内で無効化する。
+保持する。Windows preset は x64 のみを対象とし、MSVC ASan と非互換な `/RTC1` と
+incremental link を sanitizer 設定内で無効化する。
 GoogleTest は同じ ASan オプションでソースからビルドし、テスト検出前に ASan runtime
 DLL を各実行ファイルのディレクトリへ配置する。Linux preset は leak detection と
 未定義動作検出を fail-fast で有効化する。
+
+#### 4.6.1 `tsf-tip` に対する ASan の適用範囲
+
+`tsf-tip` は MSVC ASan の対象に含める（`AZOOKEY_BUILD_TSF_TIP=ON`）。
+検査が届くのは次の 2 形態であり、どちらもプロセスを azooKey 側が生成するため、ASan
+runtime（`clang_rt.asan_dynamic-x86_64.dll`）の探索経路を保証できる。
+
+- `tsf-tip/tests/` の単体テスト実行ファイル。`add_tsf_tip_unit_test` が TIP の実装
+  ソースをテスト実行ファイルへ直接取り込むため、DLL のロードを経ずに TIP のロジック
+  が ASan 計装下で動く。
+- `tsf_tip_com_smoke_tests`。ASan 計装済みの `azookey_tsf_tip.dll` を、同じく ASan
+  計装済みのテスト実行ファイルへ `LoadLibraryW` で in-proc ロードする。実 DLL の
+  `DllGetClassObject` から `TextService` の生成と解放までが検査対象になる。
+
+**azooKey が制御しないホストアプリケーションのプロセスは、ASan の対象にしない。**
+ASan を有効にした DLL は ASan runtime の解決を要求するが、ロード側プロセスの探索
+経路をこちらから保証できない。加えて配布する成果物は非 ASan ビルドであり、実ホスト
+上に載るバイナリが ASan 計装済みになることはない。これは段階導入の途中経過ではなく
+恒久的な境界であり、この範囲は §4.6.2 の手段で埋める。
+
+#### 4.6.2 実ホストプロセスでの実行時検証
+
+実ホストアプリケーションへ in-proc ロードした状態のヒープ、ハンドル、ロックの検証
+には Application Verifier を用いる。有効化と解除の手順は
+`docs/handoff/windows-diagnostics-playbook.md` が正典である。
+
+これを CI や `compat-test` の定常実行へ組み込むことはしない。同 playbook は一般利用
+中のアプリや第三者プロセスへ verifier、page heap、debugger を設定しないと定めており、
+`compat-test` が駆動するのは Notepad / Edge / VS Code だからである。実施は使い捨て
+VM 上の人間ゲートセッションに限り、対象アプリと解除手順は
+`docs/handoff/human-gate-batch-runbook.md` に置く。
 
 ### 4.7 コンパイラキャッシュ（sccache）
 

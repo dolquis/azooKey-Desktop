@@ -60,7 +60,7 @@ jobs:
   windows-asan:
     name: Windows ASan
     runs-on: windows-2022
-    timeout-minutes: 75
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:

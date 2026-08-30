@@ -11,10 +11,12 @@
 #include <utility>
 #include <vector>
 
+#include "IpcTestData.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
+#include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/LearningStore.h"
@@ -60,6 +62,24 @@ void ExpectAcceptedHandshake(azookey::ipc::NamedPipeClient& client) {
 }
 
 }  // namespace
+
+TEST(TipClientIpcTest, SharedEnvelopeFixtureDecodesOnTipSide) {
+  const auto fixture = azookey::ipc::test::ReadTextFixture("ping-envelope.json");
+  const auto frame = azookey::ipc::EncodeLengthPrefixed(fixture);
+  ASSERT_TRUE(frame.has_value());
+
+  const auto decoded_frame = azookey::ipc::DecodeLengthPrefixed(*frame);
+  ASSERT_TRUE(decoded_frame.has_value());
+  const auto envelope = azookey::ipc::Deserialize(*decoded_frame);
+  ASSERT_TRUE(envelope.has_value());
+  EXPECT_EQ(envelope->request_id, 42u);
+  EXPECT_EQ(envelope->trace_id, "shared-fixture");
+  EXPECT_EQ(envelope->type, azookey::ipc::MessageType::Ping);
+
+  const auto ping = azookey::ipc::ParsePing(envelope->payload_json);
+  ASSERT_TRUE(ping.has_value());
+  EXPECT_EQ(ping->nonce, 4242u);
+}
 
 TEST(TipClientIpcTest, ActivationFlowAndQueryRoundTrip) {
   const std::string pipe_name =

@@ -58,6 +58,7 @@ endif()
 option(AZOOKEY_BUILD_TESTS "Build unit tests" ON)
 option(AZOOKEY_BUILD_BENCH "Build bench tools" ON)
 option(AZOOKEY_BUILD_TSF_TIP "Build the Windows TSF TIP and its tests" ON)
+option(AZOOKEY_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
 # MSIX Option A（external-location / identity package, M28）では、実行体に
 # side-by-side manifest の <msix> 要素を埋め込まないと Add-AppxPackage
 # -ExternalLocation で登録しても runtime に package identity が付かない
@@ -67,6 +68,11 @@ option(AZOOKEY_EMBED_MSIX_IDENTITY
        "Embed pkg/msix/azookey_inference_host.exe.manifest into the host executable (MSVC)" ON)
 option(AZOOKEY_ENABLE_ASAN "Enable AddressSanitizer for supported targets" OFF)
 option(AZOOKEY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for supported targets" OFF)
+
+if(AZOOKEY_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  message(FATAL_ERROR
+    "AZOOKEY_BUILD_FUZZERS requires a Clang toolchain with libFuzzer support")
+endif()
 option(AZOOKEY_FETCH_GOOGLETEST
        "Download GoogleTest via FetchContent when it is not found locally" OFF)
 option(AZOOKEY_FETCH_LLAMA_CPP

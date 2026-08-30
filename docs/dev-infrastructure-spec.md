@@ -430,7 +430,7 @@ bench が閾値超過などで非ゼロ終了した場合も、生成済みの J
 
 | プリセット | 対象 | 内容 |
 |---|---|---|
-| `linux-asan-ubsan` | Linux ビルド可能サブセット | AddressSanitizer + UndefinedBehaviorSanitizer |
+| `linux-asan-ubsan` | Linux ビルド可能サブセット | Clang AddressSanitizer + UndefinedBehaviorSanitizer + `ipc_json_fuzzer` |
 | `windows-asan` | Windows でビルドできる全コンポーネント（`tsf-tip` を含む） | MSVC AddressSanitizer |
 
 Linux preset の対象は §4.3 の Linux 補助ジョブと同じ `core` / `ipc` / `learning` /
@@ -442,8 +442,10 @@ Windows preset はこれに `tsf-tip` を加えた全体を対象とする（適
 保持する。Windows preset は x64 のみを対象とし、MSVC ASan と非互換な `/RTC1` と
 incremental link を sanitizer 設定内で無効化する。
 GoogleTest は同じ ASan オプションでソースからビルドし、テスト検出前に ASan runtime
-DLL を各実行ファイルのディレクトリへ配置する。Linux preset は leak detection と
-未定義動作検出を fail-fast で有効化する。
+DLL を各実行ファイルのディレクトリへ配置する。Linux preset は Clang を使い、leak
+detection と未定義動作検出を fail-fast で有効化する。CTest の後に `ipc/testdata/` を
+seed corpus として `ipc_json_fuzzer` を 60 秒実行し、クラッシュ検体を診断 artifact に
+含める。この実行は週次 schedule と手動 dispatch に限り、PR の required check にはしない。
 
 #### 4.6.1 `tsf-tip` に対する ASan の適用範囲
 
@@ -649,9 +651,18 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 `ipc/tests/` に境界・malformed テストを置く。JSON パーサ単体の境界は
 `json_test.cpp` の `JsonTest` スイートで扱い、Envelope と length-prefix framing は
 `messages_test.cpp` に置く。v1.0 の堅牢性バーは「**決定的な境界コーパス** + **有界な擬似乱数
-スモーク**」で満たす。libFuzzer ベースの継続 fuzz ハーネスはオフラインビルド
-原則（§1）・MSVC 主体の CI と相性が悪いため**任意の将来拡張**とし、必須には
-しない。
+スモーク**」で満たす。
+
+探索的検証には `ipc_json_fuzzer` を使う。`AZOOKEY_BUILD_FUZZERS` は既定 `OFF` とし、
+Clang と libFuzzer を利用できる構成でのみ有効化する。ハーネスは任意バイト列を
+`ipc::json::Parse` へ渡し、`linux-asan-ubsan` の週次 schedule と手動 dispatch で
+`ipc/testdata/` を seed corpus として 60 秒実行する。通常のオフラインビルド、MSVC
+ビルド、PR の required check には含めない。
+
+クラッシュ検体は sanitizer workflow の artifact に保存する。検体を再現して最小化した後、
+JSON parser の入力なら `ipc/tests/json_test.cpp`、Envelope または frame の入力なら
+`ipc/tests/messages_test.cpp` へ決定的な回帰ケースとして追加する。回帰テストが単独で失敗し、
+修正後に通ることを確認してから、同じ検体を seed corpus に残すかを判断する。
 
 - 深すぎるネスト・最大長超過を拒否する（`kMaxJsonNestDepth + 1` /
   `kMaxJsonInputBytes + 1`）

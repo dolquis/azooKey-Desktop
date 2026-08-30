@@ -89,7 +89,6 @@ class ScopedEnvironmentVariable {
   bool had_previous_{false};
 };
 
-#ifndef NDEBUG
 // Raw pipe access, so a test can send a frame header without the body that
 // NamedPipeClient would always append.
 class ScopedPipeHandle {
@@ -127,6 +126,12 @@ HANDLE OpenRawPipeClient(const std::string& pipe_name, int attempts = 200) {
   return INVALID_HANDLE_VALUE;
 }
 
+bool WriteRawPipeSync(HANDLE pipe, const uint8_t* data, DWORD size) {
+  DWORD written = 0;
+  return WriteFile(pipe, data, size, &written, nullptr) && written == size;
+}
+
+#ifndef NDEBUG
 HANDLE CreateRawPipeServer(const std::string& pipe_name, DWORD buffer_size = 4096) {
   const std::wstring wide(pipe_name.begin(), pipe_name.end());
   return CreateNamedPipeW(wide.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
@@ -656,6 +661,72 @@ TEST(NamedPipeTransportTest, LargeFrameRoundTripExceedsPipeBuffer) {
 
   client.Disconnect();
   server.Stop();
+}
+
+TEST(NamedPipeTransportTest, ServerAcceptsMaximumLengthFrame) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-ipc-max-frame-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<bool> handler_entered{false};
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name,
+      [&handler_entered](const azookey::ipc::Envelope&) -> std::optional<azookey::ipc::Envelope> {
+        handler_entered.store(true);
+        return std::nullopt;
+      }));
+
+  ScopedPipeHandle client(OpenRawPipeClient(pipe_name));
+  ASSERT_TRUE(client.valid());
+  ASSERT_TRUE(WaitForClientCount(server, 1));
+  const std::string prefix =
+      "{\"version\":1,\"request_id\":1,\"trace_id\":\"max\",\"type\":\"Ping\",\"payload\":{"
+      "\"padding\":\"";
+  const std::string suffix = "\"}}";
+  ASSERT_LT(prefix.size() + suffix.size(), azookey::ipc::kMaxFrameSize);
+  const std::string json =
+      prefix + std::string(azookey::ipc::kMaxFrameSize - prefix.size() - suffix.size(), 'x') +
+      suffix;
+  ASSERT_EQ(json.size(), azookey::ipc::kMaxFrameSize);
+  const auto frame = azookey::ipc::EncodeLengthPrefixed(json);
+  ASSERT_TRUE(frame.has_value());
+  ASSERT_TRUE(WriteRawPipeSync(client.get(), frame->data(), static_cast<DWORD>(frame->size())));
+
+  EXPECT_TRUE(WaitForFlag(handler_entered));
+  client.Close();
+  server.Stop();
+}
+
+TEST(NamedPipeTransportTest, ServerRejectsZeroLengthAndOversizedFrames) {
+  const auto rejects_header = [](const std::string& pipe_name, uint32_t frame_size) {
+    std::atomic<bool> handler_entered{false};
+    azookey::ipc::NamedPipeServer server;
+    EXPECT_TRUE(server.Start(
+        pipe_name,
+        [&handler_entered](const azookey::ipc::Envelope&) -> std::optional<azookey::ipc::Envelope> {
+          handler_entered.store(true);
+          return std::nullopt;
+        }));
+
+    ScopedPipeHandle client(OpenRawPipeClient(pipe_name));
+    EXPECT_TRUE(client.valid());
+    EXPECT_TRUE(WaitForClientCount(server, 1));
+    const uint8_t header[4] = {
+        static_cast<uint8_t>(frame_size & 0xFF),
+        static_cast<uint8_t>((frame_size >> 8) & 0xFF),
+        static_cast<uint8_t>((frame_size >> 16) & 0xFF),
+        static_cast<uint8_t>((frame_size >> 24) & 0xFF),
+    };
+    EXPECT_TRUE(WriteRawPipeSync(client.get(), header, static_cast<DWORD>(sizeof(header))));
+    EXPECT_TRUE(WaitForClientCount(server, 0));
+    EXPECT_FALSE(handler_entered.load());
+    client.Close();
+    server.Stop();
+  };
+
+  const auto pid = std::to_string(GetCurrentProcessId());
+  rejects_header("\\\\.\\pipe\\azookey-ipc-zero-frame-test-" + pid, 0);
+  rejects_header("\\\\.\\pipe\\azookey-ipc-oversized-frame-test-" + pid,
+                 static_cast<uint32_t>(azookey::ipc::kMaxFrameSize + 1));
 }
 
 TEST(NamedPipeTransportTest, ClientDisconnectDuringResponseWriteCleansUp) {

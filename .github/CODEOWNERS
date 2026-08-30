@@ -1,0 +1,23 @@
+# Default owner for the repository and current Windows implementation.
+* @dolquis
+
+# Current Windows implementation.
+/tsf-tip/ @dolquis
+/inference-host/ @dolquis
+/core/ @dolquis
+/ipc/ @dolquis
+/learning/ @dolquis
+/settings/ @dolquis
+/settings-app/ @dolquis
+/pkg/ @dolquis
+/compat-test/ @dolquis
+/bench/ @dolquis
+/scripts/ @dolquis
+
+# Specifications, plans, and repository governance.
+/docs/ @dolquis
+/plans/ @dolquis
+/.github/ @dolquis
+
+# Preserved macOS reference asset. Changes require prior user approval.
+/legacy/ @dolquis

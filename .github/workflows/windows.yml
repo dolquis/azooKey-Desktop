@@ -332,6 +332,153 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Cache pinned BinSkim package
+        if: matrix.config == 'Release' && steps.build.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/binskim-cache
+          key: binskim-4.4.9.11-win-x64-69678989cbc273b5
+
+      # Advisory binary inspection (DEV-877). BinSkim has no rule for the PE
+      # DependentLoadFlags field, so dumpbin verifies that DEV-876 invariant.
+      - name: Analyze Release binary hardening (advisory)
+        id: binary_hardening
+        if: matrix.config == 'Release' && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '4.4.9.11'
+          $expectedHash = '69678989CBC273B5B50FCF98FB0FD978E1E35A3F844ACB24254B31F0CE90C447'
+          $cacheRoot = Join-Path $env:RUNNER_TEMP 'binskim-cache'
+          $package = Join-Path $cacheRoot "Microsoft.CodeAnalysis.BinSkim.$version.nupkg"
+          $toolRoot = Join-Path $env:RUNNER_TEMP "binskim-$version"
+          $binskim = Join-Path $toolRoot 'tools/net9.0/win-x64/BinSkim.exe'
+          $outputRoot = Join-Path $PWD 'binary-hardening'
+          $sarifPath = Join-Path $outputRoot 'binskim.sarif'
+          $reportPath = Join-Path $outputRoot 'summary.md'
+          $report = [System.Collections.Generic.List[string]]::new()
+          $failed = $false
+
+          New-Item -ItemType Directory -Force -Path $cacheRoot, $outputRoot | Out-Null
+          $report.Add('## Release binary hardening (advisory)')
+          $report.Add('')
+          $report.Add("BinSkim version: $version")
+          $report.Add('')
+
+          try {
+            if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
+              $uri = "https://api.nuget.org/v3-flatcontainer/microsoft.codeanalysis.binskim/$version/microsoft.codeanalysis.binskim.$version.nupkg"
+              Invoke-WebRequest -Uri $uri -OutFile $package
+            }
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash
+            if ($actualHash -ne $expectedHash) {
+              throw "BinSkim package SHA-256 mismatch: expected $expectedHash, got $actualHash"
+            }
+            if (-not (Test-Path -LiteralPath $binskim -PathType Leaf)) {
+              [System.IO.Compression.ZipFile]::ExtractToDirectory($package, $toolRoot, $true)
+            }
+
+            $targets = @(
+              [pscustomobject]@{
+                Name = 'azookey_tsf_tip.dll'
+                Path = 'build/${{ matrix.preset }}/tsf-tip/azookey_tsf_tip.dll'
+                RequireDev876Mitigations = $true
+              },
+              [pscustomobject]@{
+                Name = 'azookey_inference_host.exe'
+                Path = 'build/${{ matrix.preset }}/inference-host/azookey_inference_host.exe'
+                RequireDev876Mitigations = $true
+              },
+              [pscustomobject]@{
+                Name = 'azookey_settings.exe'
+                Path = 'build/${{ matrix.preset }}/settings-app/Release/azookey_settings.exe'
+                RequireDev876Mitigations = $false
+              }
+            )
+            foreach ($target in $targets) {
+              if (-not (Test-Path -LiteralPath $target.Path -PathType Leaf)) {
+                throw "Release analysis target is missing: $($target.Path)"
+              }
+            }
+
+            $targetPaths = @($targets | ForEach-Object { $_.Path })
+            & $binskim analyze @targetPaths `
+              --output $sarifPath `
+              --config .github/binskim.config.xml `
+              --ignorePdbLoadError true `
+              --kind 'Fail;Pass;Review;Open;NotApplicable;Informational' `
+              --level 'Error;Warning;Note' `
+              --log 'ForceOverwrite;PrettyPrint' `
+              --disable-telemetry true `
+              --quiet true
+            if ($LASTEXITCODE -ne 0) {
+              throw "BinSkim failed with exit code $LASTEXITCODE"
+            }
+
+            $sarif = Get-Content -Raw -LiteralPath $sarifPath | ConvertFrom-Json -Depth 100
+            $results = @($sarif.runs | ForEach-Object { $_.results })
+            $signingResults = @($results | Where-Object { $_.ruleId -eq 'BA2022' })
+            if ($signingResults.Count -ne 0) {
+              throw 'BA2022 signing results were not suppressed by the committed policy'
+            }
+
+            $report.Add('| Binary | BinSkim BA2008 | dumpbin CFG | Dependent load flag |')
+            $report.Add('| --- | --- | --- | --- |')
+            foreach ($target in $targets) {
+              $result = @($results | Where-Object {
+                  $_.ruleId -eq 'BA2008' -and
+                  $_.locations[0].physicalLocation.artifactLocation.uri.EndsWith(
+                    $target.Name, [System.StringComparison]::OrdinalIgnoreCase)
+                } | Select-Object -First 1)
+              $cfgStatus = if ($result.Count -eq 0) {
+                'missing'
+              } elseif ($result[0].kind -eq 'pass') {
+                'pass'
+              } else {
+                "finding ($($result[0].level))"
+              }
+
+              $dumpPath = Join-Path $outputRoot "dumpbin-$($target.Name).txt"
+              $dumpOutput = @(& dumpbin /headers /loadconfig $target.Path 2>&1)
+              $dumpExit = $LASTEXITCODE
+              $dumpOutput | Set-Content -LiteralPath $dumpPath -Encoding utf8
+              if ($dumpExit -ne 0) {
+                throw "dumpbin failed for $($target.Name) with exit code $dumpExit"
+              }
+              $dumpText = $dumpOutput -join [Environment]::NewLine
+              $hasCfg = $dumpText -match '(?m)^\s*Control Flow Guard\s*$'
+              $hasDependentLoadFlag = $dumpText -match '(?mi)^\s*0800 Dependent Load Flag\s*$'
+              $dependentStatus = if ($target.RequireDev876Mitigations) {
+                if ($hasDependentLoadFlag) { '0800' } else { 'missing' }
+              } else {
+                'reported only'
+              }
+              $report.Add("| $($target.Name) | $cfgStatus | $hasCfg | $dependentStatus |")
+
+              if ($target.RequireDev876Mitigations -and
+                  ($cfgStatus -ne 'pass' -or -not $hasCfg -or -not $hasDependentLoadFlag)) {
+                $failed = $true
+              }
+            }
+            $report.Add('')
+            $report.Add('`BA2022.SignSecurely` is disabled because signing occurs after CI packaging.')
+            if ($failed) {
+              throw 'One or more DEV-876 binary-hardening invariants were not observed'
+            }
+          } catch {
+            $failed = $true
+            $report.Add('')
+            $report.Add("Analysis error: $($_.Exception.Message)")
+            Write-Error $_ -ErrorAction Continue
+          } finally {
+            $report | Set-Content -LiteralPath $reportPath -Encoding utf8
+            $report | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          }
+
+          if ($failed) { exit 1 }
+
       # 成果物から RT_MANIFEST を取り出して <msix> identity を確認する（DEV-101 / M28）。
       # CMake 配線の静的チェックだけでは「埋め込みが実際に効いているか」は分からず、
       # 外れても症状は実機（Package.Current が null）でしか出ないため、ビルド直後に落とす。
@@ -417,6 +564,15 @@ jobs:
           name: windows-release-pdb
           path: build/${{ matrix.preset }}/**/*.pdb
           if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Release binary hardening report
+        if: always() && matrix.config == 'Release'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-release-binary-hardening
+          path: binary-hardening/
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Fail if configure, build, or tests failed

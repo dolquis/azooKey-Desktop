@@ -508,6 +508,13 @@ OFF のまま）。
 - dependency review — PR で追加・更新された依存だけを対象にし、既知の脆弱性が
   High または Critical の場合は必須チェックを失敗させる。結果は job summary に残し、
   PR コメントは投稿しないため `pull-requests: write` 権限を付与しない
+- BinSkim binary hardening analysis — Windows Release の
+  `azookey_tsf_tip.dll`、`azookey_inference_host.exe`、`azookey_settings.exe` を
+  固定版 BinSkim で検査し、Pass を含む SARIF、`dumpbin /loadconfig`、要約を artifact と
+  job summary に残す。TIP / Host は BinSkim `BA2008` の CFG Pass と
+  `Dependent Load Flag 0800` を確認する。BinSkim には `DependentLoadFlags` のルールが
+  ないため、後者は `dumpbin` で機械判定する。署名は CI packaging 後に行うため
+  `BA2022.SignSecurely` だけを設定ファイルで無効化し、他のルールは既定のまま維持する
 - GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ
   固定し、対応するリリースタグを行末コメントに残す。Dependabot の
   `github-actions` ecosystem を週次実行し、更新をまとめた PR で SHA を追従する
@@ -537,11 +544,15 @@ clang-tidy / CodeQL は**必須ゲートには含めない**（導入コスト�
 所要時間を短縮する。加えてワークフロー全体に `concurrency` グループを設定し、
 同一 PR で新しい push が来たら進行中の run を畳む（`main` への push は畳まない）。
 
+BinSkim も既存所見を可視化する段階では **advisory**（`continue-on-error`、
+非ブロッキング）とし、所見や解析基盤の一時障害で PR を止めない。必須ゲート化は
+`azookey_settings.exe` を含む所見の整理と運用実績を得てから別途判断する（§11.5）。
+
 ### 4.4 artifact 整理
 
-configure / build / test の各ログと、Release ビルドの `.pdb` を artifact
-として保存する。PR diagnostic コメントはマトリクスの config ごとの結果を
-反映する。`.pdb` artifact の保持期間は 14 日間とする。
+configure / build / test の各ログ、Release ビルドの `.pdb`、Release binary hardening の
+SARIF・`dumpbin` 出力・要約を artifact として保存する。PR diagnostic コメントは
+マトリクスの config ごとの結果を反映する。Release 用 artifact の保持期間は 14 日間とする。
 
 ### 4.5 bench smoke と回帰監視
 
@@ -1804,6 +1815,11 @@ PR が止まるのを避けつつ新規コード品質を上げる中間策と�
 **advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
 （全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
 ツール導入 第2弾）。
+
+同じ段階導入方針を Release バイナリの BinSkim にも適用する。現時点では
+`continue-on-error` の advisory とし、SARIF・job summary・artifact に所見を残す。
+未署名に由来する `BA2022` だけを抑止し、他のルール結果を隠さない。必須ゲート化は
+所見の基準線を整理し、ツール取得と解析の安定性を確認した後の将来判断とする。
 
 ### 11.6 IPC payload の Protobuf 即時移行 — 不採用
 

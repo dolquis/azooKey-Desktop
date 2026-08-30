@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Properties>
+  <!-- Signing is performed after CI packaging. Keep all other BinSkim rules at
+       their built-in defaults so the advisory report retains useful findings. -->
+  <Properties Key="BA2022.SignSecurely.Options">
+    <Property Key="RuleEnabled" Value="Disabled" Type="Driver.RuleEnabledState" />
+  </Properties>
+</Properties>

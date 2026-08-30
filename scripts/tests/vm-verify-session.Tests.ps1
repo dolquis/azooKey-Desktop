@@ -121,6 +121,103 @@ Describe "VM verification session automation" {
     }
   }
 
+  Context "Guest Service Interface lookup" {
+    BeforeEach {
+      # Hyper-V モジュールが無いホスト（CI ランナー等）でも Mock を張れるよう
+      # スタブを定義してから差し替える。実機がある環境でも同じ経路を通す。
+      function Get-VMIntegrationService {
+        # CmdletBinding が無いと -ErrorAction 等の共通パラメータを受け取れず、
+        # 実装側の呼び出しがパラメータ束縛で落ちる。
+        [CmdletBinding()]
+        param([string]$VMName)
+        throw "Get-VMIntegrationService must be mocked in tests (VMName=$VMName)."
+      }
+      Mock Get-VMIntegrationService {
+        @(
+          [pscustomobject]@{
+            Name = "ハートビート"
+            Enabled = $true
+            Id = "Microsoft:6482F90F-339A-4998-B4F8-9AAC9CF7A580\84EAAE65-2F2E-45F5-9BB5-0E857DC8EB47"
+          }
+          [pscustomobject]@{
+            Name = "ゲスト サービス インターフェイス"
+            Enabled = $true
+            Id = "Microsoft:6482F90F-339A-4998-B4F8-9AAC9CF7A580\6C09BB55-D683-4DA0-8931-C9BF705F6480"
+          }
+          [pscustomobject]@{
+            Name = "VSS"
+            Enabled = $true
+            Id = "Microsoft:6482F90F-339A-4998-B4F8-9AAC9CF7A580\5CED1297-4598-4915-A5FC-AD21BB4D02A4"
+          }
+        )
+      }
+    }
+
+    It "finds the service on a localized host, where the display name is not English" {
+      $service = Get-VmVerifySessionGuestServiceInterface -VMName "azooKey-VM"
+
+      $service | Should -Not -BeNullOrEmpty
+      $service.Name | Should -Be "ゲスト サービス インターフェイス"
+      $service.Enabled | Should -BeTrue
+    }
+
+    It "accepts a localized host in -Prepare instead of stopping the transfer" {
+      $root = Join-Path $TestDrive "guest-service-localized"
+      Initialize-TestPackage -Root $root | Out-Null
+      Mock Get-VmVerifySessionVM { [pscustomobject]@{ Name = "azooKey-VM"; State = "Running" } }
+      Mock Get-VmVerifySessionCheckpoint { $null }
+      Mock Invoke-VmVerifySessionCheckpoint {}
+      Mock Invoke-VmVerifySessionFileCopy {}
+      Mock Write-Host {}
+
+      { Invoke-VmVerifySessionPrepare -RepositoryRoot $root -VMName "azooKey-VM" `
+          -GuestDestination "C:\azookey-verify" } | Should -Not -Throw
+
+      Should -Invoke Invoke-VmVerifySessionFileCopy -Times 1 -Exactly
+    }
+
+    It "reports not-enabled when the component is present but disabled" {
+      Mock Get-VMIntegrationService {
+        @([pscustomobject]@{
+            Name = "ゲスト サービス インターフェイス"
+            Enabled = $false
+            Id = "Microsoft:6482F90F-339A-4998-B4F8-9AAC9CF7A580\6C09BB55-D683-4DA0-8931-C9BF705F6480"
+          })
+      }
+
+      { Assert-VmVerifySessionGuestService -VMName "azooKey-VM" } |
+        Should -Throw -ExpectedMessage "*NOT transferred*"
+    }
+
+    It "reports not-enabled when the component is absent entirely" {
+      Mock Get-VMIntegrationService {
+        @([pscustomobject]@{
+            Name = "ハートビート"
+            Enabled = $true
+            Id = "Microsoft:6482F90F-339A-4998-B4F8-9AAC9CF7A580\84EAAE65-2F2E-45F5-9BB5-0E857DC8EB47"
+          })
+      }
+
+      { Assert-VmVerifySessionGuestService -VMName "azooKey-VM" } |
+        Should -Throw -ExpectedMessage "*NOT transferred*"
+    }
+
+    It "does not tell the operator to enable the service by its English display name" {
+      Mock Get-VMIntegrationService { @() }
+
+      $message = $null
+      try {
+        Assert-VmVerifySessionGuestService -VMName "azooKey-VM"
+      } catch {
+        $message = $_.Exception.Message
+      }
+
+      $message | Should -Not -BeNullOrEmpty
+      $message | Should -Not -Match "-Name 'Guest Service Interface'"
+      $message | Should -Match "6C09BB55-D683-4DA0-8931-C9BF705F6480"
+    }
+  }
+
   Context "-Prepare" {
     BeforeEach {
       Mock Get-VmVerifySessionVM { [pscustomobject]@{ Name = "azooKey-VM"; State = "Running" } }

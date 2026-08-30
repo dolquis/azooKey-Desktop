@@ -122,13 +122,18 @@ function Get-VmVerifySessionVM {
   return Get-VM -Name $VMName -ErrorAction Stop
 }
 
+# Guest Service Interface の component ID。表示名（Name）はホストの言語で
+# ローカライズされ、日本語 Windows では「ゲスト サービス インターフェイス」に
+# なる。表示名で引くと該当環境で必ず取り違えるため、言語非依存の ID で選ぶ。
 function Get-VmVerifySessionGuestServiceInterface {
   param(
     [Parameter(Mandatory = $true)]
     [string]$VMName
   )
 
-  return Get-VMIntegrationService -VMName $VMName -Name "Guest Service Interface" -ErrorAction Stop
+  return Get-VMIntegrationService -VMName $VMName -ErrorAction Stop |
+    Where-Object { $_.Id -like "*6C09BB55-D683-4DA0-8931-C9BF705F6480" } |
+    Select-Object -First 1
 }
 
 function Get-VmVerifySessionCheckpoint {
@@ -220,10 +225,14 @@ function Assert-VmVerifySessionGuestService {
     return
   }
 
+  # 有効化コマンドも表示名で書かない。ローカライズされたホストでは同じ理由で
+  # 失敗し、案内どおりに実行しても解決しないため。
   throw (@(
     "Guest Service Interface is not enabled on '$VMName', so Copy-VMFile cannot transfer the package."
-    "Enable it on the host and retry:"
-    "  Enable-VMIntegrationService -VMName '$VMName' -Name 'Guest Service Interface'"
+    "Enable it on the host and retry (the display name is localized, so select by component ID):"
+    "  Get-VMIntegrationService -VMName '$VMName' |"
+    "    Where-Object { `$_.Id -like '*6C09BB55-D683-4DA0-8931-C9BF705F6480' } |"
+    "    Enable-VMIntegrationService"
     "If the guest does not support it, copy the archive manually instead:"
     "  - open VMConnect in an enhanced session and copy the zip into the guest, or"
     "  - share a host folder with the guest and copy it from there."

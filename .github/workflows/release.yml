@@ -20,7 +20,7 @@ on:
   workflow_dispatch: # 未署名 MSI ビルドまでを手動 dry-run する。
 permissions:
   contents: write # Draft Release の作成・添付に必要
-  id-token: write # actions/attest-* が OIDC トークンで署名するのに必要
+  id-token: write # actions/attest が OIDC トークンで署名するのに必要
   attestations: write # attestation をリポジトリへ書き込むのに必要
 jobs:
   release:
@@ -132,14 +132,19 @@ jobs:
           upload-release-assets: false
       # attestation はリポジトリに残る公開記録なので、実際に配布するタグ push で
       # だけ作る。dry-run で作ると未配布ビルドの証明が残り、誤解を生む。
+      #
+      # actions/attest-build-provenance と actions/attest-sbom は v4 で
+      # actions/attest の wrapper になり、新規実装は actions/attest を使うよう
+      # 案内されている。sbom-path も predicate も渡さなければ SLSA build
+      # provenance、sbom-path を渡せば SBOM attestation になる。
       - name: Attest build provenance
         if: github.ref_type == 'tag'
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest@v4
         with:
           subject-path: ${{ steps.msi-artifact.outputs.path }}
       - name: Attest SBOM
         if: github.ref_type == 'tag'
-        uses: actions/attest-sbom@v4
+        uses: actions/attest@v4
         with:
           subject-path: ${{ steps.msi-artifact.outputs.path }}
           sbom-path: ${{ github.workspace }}\azooKey.spdx.json

@@ -1504,11 +1504,14 @@ Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \
 
 | 生成物 | 手段 | 添付先 |
 |---|---|---|
-| SBOM（SPDX JSON） | `anchore/sbom-action`（syft） | Draft Release の資産 `azooKey.spdx.json` + SBOM attestation |
-| build provenance | `actions/attest-build-provenance` | GitHub の attestation ストア |
+| SBOM（SPDX JSON） | `anchore/sbom-action`（syft）で生成し `actions/attest` の `sbom-path` で署名 | Draft Release の資産 `azooKey.spdx.json` + SBOM attestation |
+| build provenance | `actions/attest`（`sbom-path` も predicate も渡さない既定モード） | GitHub の attestation ストア |
 
 利用者は `gh attestation verify <msi> --repo dolquis/azooKey-Desktop` で、その MSI が
 本リポジトリの `release.yml` から生成されたことを検証できる。
+
+`actions/attest-build-provenance` と `actions/attest-sbom` は v4 で `actions/attest` の
+wrapper になっており、新規実装は `actions/attest` を使う。本 workflow もそれに従う。
 
 #### この SBOM が保証する範囲
 

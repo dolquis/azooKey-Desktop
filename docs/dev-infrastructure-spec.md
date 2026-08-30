@@ -507,7 +507,10 @@ OFF のまま）。
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ
 - dependency review — PR で追加・更新された依存だけを対象にし、既知の脆弱性が
   High または Critical の場合は必須チェックを失敗させる。結果は job summary に残し、
-  PR コメントは投稿しないため `pull-requests: write` 権限を付与しない
+  PR コメントは投稿しないため `pull-requests: write` 権限を付与しない。GitHub の
+  Dependency Graph と repository variable `DEPENDENCY_REVIEW_ENABLED=true` の有効化は
+  Human Gate とする。未完了の間は job summary に前提不足を警告し、全 PR を失敗させない。
+  有効化後は High / Critical の検出を必須ゲートとして扱う
 - BinSkim binary hardening analysis — Windows Release の
   `azookey_tsf_tip.dll`、`azookey_inference_host.exe`、`azookey_settings.exe` を
   固定版 BinSkim で検査し、Pass を含む SARIF、`dumpbin /loadconfig`、要約を artifact と

@@ -261,7 +261,24 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # actions/dependency-review-action fails before analysis when the
+      # repository Dependency Graph is disabled. Enabling that repository
+      # setting is a Human Gate; keep the rollout visible without making every
+      # PR red until the gate is completed.
+      - name: Report dependency review prerequisite
+        if: vars.DEPENDENCY_REVIEW_ENABLED != 'true'
+        shell: bash
+        run: |
+          echo "::warning::Dependency review is pending repository Dependency Graph enablement."
+          {
+            echo "## Dependency review pending"
+            echo ""
+            echo "Enable Dependency Graph and set the repository variable"
+            echo "\`DEPENDENCY_REVIEW_ENABLED=true\` to activate the High/Critical gate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Review dependency changes
+        if: vars.DEPENDENCY_REVIEW_ENABLED == 'true'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: high

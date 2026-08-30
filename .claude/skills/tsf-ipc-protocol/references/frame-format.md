@@ -170,6 +170,7 @@ request ID を更新して旧世代の in-flight 応答を stale 化する。pen
 3. `Dispatcher::Dispatch`とhandler、TIPまたはsettings側の送信経路を同期する。
 4. `messages_test.cpp`でEnvelope、version、type mapping、frame境界を検証する。
 5. `payloads_test.cpp`でcodecのround-trip、欠落、型違い、境界値を検証する。
-6. transport変更では`named_pipe_transport_test.cpp`、TIPフロー変更では
+6. `ipc/testdata/`の共有fixtureをTIP側とHost側のテストから読み、双方のdecode契約を同期する。
+7. transport変更では`named_pipe_transport_test.cpp`、TIPフロー変更では
    `tip_client_ipc_test.cpp`と関連`tsf-tip/tests/`を検証する。
-7. `docs/windows-tsf-host-architecture.md`と関連specの契約記述を同期する。
+8. `docs/windows-tsf-host-architecture.md`と関連specの契約記述を同期する。

@@ -23,6 +23,10 @@ target_link_libraries(ipc_named_pipe_transport_tests
 azookey_discover_tests(ipc_named_pipe_transport_tests)
 
 add_executable(ipc_tip_client_tests tip_client_ipc_test.cpp)
+target_include_directories(ipc_tip_client_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(ipc_tip_client_tests PRIVATE
+  AZOOKEY_IPC_TESTDATA_DIR="${PROJECT_SOURCE_DIR}/ipc/testdata"
+)
 target_link_libraries(ipc_tip_client_tests
   PRIVATE azookey_ipc azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

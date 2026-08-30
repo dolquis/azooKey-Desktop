@@ -22,6 +22,12 @@ jobs:
         with:
           submodules: false
 
+      - name: Install libFuzzer runtime
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes libclang-rt-18-dev
+
       - name: Configure
         shell: bash
         run: |
@@ -46,6 +52,24 @@ jobs:
           ctest --preset linux-asan-ubsan --no-tests=error \
             2>&1 | tee build/linux-asan-ubsan/ctest.log
 
+      - name: Fuzz IPC JSON parser
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -o pipefail
+          mkdir -p build/linux-asan-ubsan/fuzz-artifacts
+          mkdir -p build/linux-asan-ubsan/fuzz-corpus
+          cp -a ipc/testdata/. build/linux-asan-ubsan/fuzz-corpus/
+          build/linux-asan-ubsan/ipc/ipc_json_fuzzer build/linux-asan-ubsan/fuzz-corpus \
+            -max_total_time=60 \
+            -timeout=5 \
+            -max_len=1048577 \
+            -print_final_stats=1 \
+            -artifact_prefix=build/linux-asan-ubsan/fuzz-artifacts/ \
+            2>&1 | tee build/linux-asan-ubsan/ipc-json-fuzzer.log
+
       - name: Upload sanitizer diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,6 +78,7 @@ jobs:
           path: |
             build/linux-asan-ubsan/*.log
             build/linux-asan-ubsan/Testing/Temporary/*.log
+            build/linux-asan-ubsan/fuzz-artifacts/**
           if-no-files-found: ignore
           retention-days: 14
 

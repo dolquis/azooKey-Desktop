@@ -12,6 +12,7 @@
 #include <system_error>
 #include <vector>
 
+#include "IpcTestData.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
@@ -296,6 +297,23 @@ TEST_F(DispatcherTest, Ping) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->nonce, 0xCAFEBABEu);
   EXPECT_GT(parsed->t_ms, 0u);
+}
+
+TEST_F(DispatcherTest, SharedEnvelopeFixtureDecodesOnHostSide) {
+  const auto fixture = azookey::ipc::test::ReadTextFixture("ping-envelope.json");
+  const auto request = ipc::Deserialize(fixture);
+  ASSERT_TRUE(request.has_value());
+
+  const auto response = dispatcher.Dispatch(*request);
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->request_id, 42u);
+  EXPECT_EQ(response->trace_id, "shared-fixture");
+  EXPECT_EQ(response->type, ipc::MessageType::Ping);
+
+  const auto payload = ipc::ParsePing(response->payload_json);
+  ASSERT_TRUE(payload.has_value());
+  EXPECT_EQ(payload->nonce, 4242u);
+  EXPECT_GT(payload->t_ms, 0u);
 }
 
 TEST_F(DispatcherTest, QueryCandidates) {

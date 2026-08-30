@@ -102,7 +102,9 @@
       "inherits": "linux-debug",
       "binaryDir": "${sourceDir}/build/linux-asan-ubsan",
       "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-18",
         "AZOOKEY_BUILD_BENCH": "OFF",
+        "AZOOKEY_BUILD_FUZZERS": "ON",
         "AZOOKEY_ENABLE_ASAN": "ON",
         "AZOOKEY_ENABLE_UBSAN": "ON",
         "AZOOKEY_USE_COMPILER_CACHE": "OFF"

@@ -5,6 +5,10 @@ target_link_libraries(host_engine_tests
 azookey_discover_tests(host_engine_tests)
 
 add_executable(host_dispatcher_tests dispatcher_test.cpp)
+target_include_directories(host_dispatcher_tests PRIVATE ${PROJECT_SOURCE_DIR}/ipc/tests)
+target_compile_definitions(host_dispatcher_tests PRIVATE
+  AZOOKEY_IPC_TESTDATA_DIR="${PROJECT_SOURCE_DIR}/ipc/testdata"
+)
 target_link_libraries(host_dispatcher_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

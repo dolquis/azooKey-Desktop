@@ -65,20 +65,44 @@ VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動
 
 ## 手順
 
-### 1. チェックポイント（検証前スナップショット）
+### 1. チェックポイントと VM への転送（ホスト側・1 コマンド）
 
 ```powershell
-# ホスト側
-Checkpoint-VM -Name "<VM名>" -SnapshotName "pre-azookey-DEV-32"
+# ホスト側。VM は起動しておく。
+.\scripts\vm-verify-session.ps1 -Prepare -VMName "<VM名>"
 ```
 
-### 2. VM へ転送（拡張セッション）
+チェックポイント取得と zip の転送を通しで行い、転送先の guest パスを出力する。
 
-VMConnect を拡張セッションで開き、生成した zip を VM の
-`C:\azookey-verify\` にコピーして展開する
-（拡張セッションが使えなければホストのフォルダ共有経由でも可）。
+* **チェックポイント名は自動で決まる**。パッケージの `manifest.json` にある commit と
+  preset から `pre-azookey-<preset>-<commit12>` を生成するため、同じパッケージで
+  取り直しても同じ名前を指し、別コミットの検証と取り違えない。名前を明示したい場合は
+  `-CheckpointName` を渡す。
+* パッケージは既定で `build\vm-verify-packages` の最新を選ぶ。明示するなら `-PackagePath`。
+* 転送先は既定で `C:\azookey-verify`。変えるなら `-GuestDestination`。
+* **同名のチェックポイントが既にある場合は停止する**。前回の検証で VM が汚れている
+  可能性があり、その状態を「検証前」として保存すると基準を失うため。`-Restore` で
+  戻すか、`Remove-VMSnapshot` で消してからやり直す。
+
+転送は `Copy-VMFile` を使うため、VM 側で **Guest Service Interface** が有効である必要が
+ある。無効な場合はスクリプトが有効化コマンドと代替経路を案内して**非ゼロ終了する**
+（黙って転送をスキップしない）。
+
+### 2. 転送できない場合の代替経路
+
+Guest Service Interface が使えない VM では、手順 1 が停止する。その場合は zip を手で
+持ち込む。
+
+* VMConnect を拡張セッションで開き、生成した zip を VM の `C:\azookey-verify\` へコピーする
+* または、ホストのフォルダ共有経由でコピーする
+
+いずれの場合も、チェックポイントが取得済みかを
+`Get-VMSnapshot -VMName "<VM名>"` で確認する。取得されていなければ手で取る。
 
 ### 3. bootstrap と事前確認（VM・対話ユーザーの PowerShell）
+
+転送した zip を guest 側で展開してから実行する。手順 1 の出力も、この後の入力検証を
+**基本セッション**で行うことを再掲する（切り替えは対話操作のため自動化しない）。
 
 ```powershell
 cd C:\azookey-verify
@@ -139,8 +163,11 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 - **後始末（どちらか）**:
   - クリーンに戻す（推奨）: チェックポイントに復元
     ```powershell
-    Restore-VMSnapshot -VMName "<VM名>" -Name "pre-azookey-DEV-32" -Confirm:$false
+    # ホスト側。手順 1 と同じ規則でチェックポイント名を解決する。
+    .\scripts\vm-verify-session.ps1 -Restore -VMName "<VM名>"
     ```
+    対象のチェックポイントが存在しない場合は、名前を表示して非ゼロ終了する。
+    別名で取った場合は `-CheckpointName` を渡す。
   - スクリプトで解除:
     ```powershell
     Stop-Process -Name azookey_inference_host -Force -ErrorAction SilentlyContinue

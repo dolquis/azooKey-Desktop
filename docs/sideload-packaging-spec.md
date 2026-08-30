@@ -803,8 +803,8 @@ app execution alias の利用を優先する。
 > Store チャネルに限れば本節の自前署名を要しない。
 >
 > 所有課題だった DEV-255 は Canceled であり、本節を再開するときは新規に課題を立てる。
-> なお §2.2 の PFX 前提は CA/Browser Forum の HSM 必須化（2023-06-01）で陳腐化しており、
-> 改訂を DEV-414 で追跡する。
+> 署名鍵の保管要件は CA/Browser Forum の HSM 必須化（2023-06-01 施行）によって変わっており、
+> 新規取得の証明書では PFX を入手できない。既定の署名経路は §2.2 を参照する。
 
 ### 2.0 署名経路の選定
 
@@ -816,7 +816,7 @@ app execution alias の利用を優先する。
 |---|---|---|---|---|---|
 | A. **Azure Artifact Signing** | 推奨 | ≈$10/月 | ◎（GitHub Actions / Azure DevOps） | reputation building（OV と同等） | 組織: 米/カナダ/EU/英国のみ。個人: 米/カナダのみ |
 | B. **Azure Key Vault + [AzureSignTool](https://learn.microsoft.com/windows/msix/desktop/cicd-keyvault)** | 個人向け次善 | Key Vault 料金 + OV cert | ◎ | reputation building | コミュニティ製 .NET ツール（[vcsjones/AzureSignTool](https://github.com/vcsjones/AzureSignTool)） |
-| C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 既存 §2.3 経路 | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | EV のみ即時信頼 | PFX 漏えいリスク、CI でのキー回転が煩雑 |
+| C. **伝統的 OV/EV cert + PFX を GitHub Secrets** | 旧証明書のみ | OV: 数万円/年 / EV: 10 万円超/年 + HSM | △（EV の HSM 物理トークンは不可） | reputation building（EV の即時信頼は 2024 年に廃止） | **新規取得では PFX 不可**（2023-06-01 の HSM 必須化）。2023-06-01 以前に発行され PFX を保持している証明書に限り成立する。PFX 漏えいリスク、CI でのキー回転が煩雑 |
 
 **判定（DEV-255 で確定）**: 署名主体は日本の個人開発者であり、経路 A（Azure Artifact
 Signing）は地域制限で不可（個人 = 米/加のみ）。reputation building 許容のため EV（経路 C）は
@@ -863,13 +863,37 @@ signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
 
 ### 2.2 証明書管理
 
-EV/OV 証明書（PFX）を GitHub Secrets に格納：
+**新規取得の証明書では PFX 経路を採らない。** CA/Browser Forum の Code Signing
+Baseline Requirements 改定（**2023-06-01 施行**）により、新規発行されるコード署名
+証明書は OV / EV を問わず FIPS 140-2 Level 2 / Common Criteria EAL4+ 相当の HSM 上
+での鍵生成・非エクスポータブル保管が必須となった。結果として、**秘密鍵を PFX
+ファイルとしてエクスポートできない**（[SSL.com](https://www.ssl.com/article/code-signing-key-storage-requirements-will-change-on-june-1-2023/) /
+[DigiCert](https://knowledge.digicert.com/general-information/new-private-key-storage-requirement-for-standard-code-signing-certificates-november-2022)）。
+
+したがって新規取得時の既定は次のいずれかとする。
+
+1. **§2.2.B Azure Key Vault + AzureSignTool** — §2.0 の判定で採用した経路 B。
+   Key Vault の HSM に鍵を置いたまま CI から署名する。
+2. **CA クラウド署名（経路 B'）** — SSL.com eSigner / DigiCert KeyLocker /
+   Sectigo cloud signing 等。CA 側の HSM に鍵を置いたまま CI から署名する。
+
+§2.2.A（Azure Artifact Signing）は Windows が既定で信頼する点で最も強いが、
+個人契約は米国・カナダに限られ、日本の個人開発者は利用できない（§2.0）。
+
+#### legacy: PFX を GitHub Secrets に格納する経路
+
+**2023-06-01 以前に発行され、手元に PFX を保持している証明書に限り**成立する。
+新規取得ではこの経路を選べないため、新規メンテナはここから始めないこと。
 
 | Secret 名 | 内容 |
 |---|---|
 | `WINDOWS_PFX_BASE64` | PFX ファイルを base64 エンコードしたもの |
 | `WINDOWS_PFX_PASSWORD` | PFX のパスワード |
 | `WINDOWS_CERT_THUMBPRINT` | 証明書のフィンガープリント |
+
+現行の `.github/workflows/release.yml` は未署名 MSI をビルドする経路であり、PFX
+import ステップを持たない（§2.3）。署名を再開する場合も、この legacy 経路を CI へ
+復活させない。
 
 #### Publisher と証明書 Subject の整合（必須）
 
@@ -888,6 +912,12 @@ CN だけでなく `O=` / `OU=` / `L=` / `S=` / `C=` 等のすべての RDN が�
 * RDN の順序とスペース・カンマの形式まで完全一致。`Get-PfxCertificate` /
   `signtool /pa /v` で Subject 表記を必ず確認してから manifest 側へ貼る
 * CI で署名失敗時は AppxPackagingOM operational log の Event ID 150 を確認
+* **個人名義の OV では CN が法的氏名になる。** 個人開発者が OV を取得すると
+  Subject CN は本人確認で用いた法的氏名で発行され、ハンドル名にはならない。
+  §1.1 manifest 例の `Publisher="CN=dolquis"` はそのままでは通らないため、証明書
+  取得後に `Identity@Publisher` を実際の Subject DN 全文へ差し替える。ハンドル名を
+  残せるのは `DisplayName` / `PublisherDisplayName` の側であり、完全一致が要求
+  されるのは `Identity@Publisher` と証明書 Subject DN だけである。
 
 ### 2.2.A Azure Artifact Signing 経路（推奨）
 

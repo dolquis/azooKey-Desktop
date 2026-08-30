@@ -332,7 +332,7 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
 
 | 検査 | 実行系統 | 内容 |
 |---|---|---|
-| `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）と `windows-asan`（MSVC ASan）で `core`/`ipc`/`learning`/`inference-host` を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
+| `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）で `core`/`ipc`/`learning`/`inference-host` を、`windows-asan`（MSVC ASan）でこれに `tsf-tip` を加えた全体を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
 | `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
 | `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/dev-infrastructure-spec.md` §2.5。§12 の `azookey_diag.exe` とは別物） |
 

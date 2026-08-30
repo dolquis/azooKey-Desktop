@@ -165,7 +165,20 @@ endif()
 add_library(azookey_project_options INTERFACE)
 target_compile_features(azookey_project_options INTERFACE cxx_std_20)
 target_compile_options(azookey_project_options INTERFACE
-  $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /permissive- /EHsc /Zc:__cplusplus /sdl>
+  $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /permissive- /EHsc /Zc:__cplusplus /sdl /guard:cf /Qspectre>
+)
+
+# Link-time mitigations are limited to the two native shipping binaries.
+# /guard:cf lives in azookey_project_options so project static-library objects
+# are instrumented before they are linked into these final images.
+add_library(azookey_binary_hardening INTERFACE)
+target_link_options(azookey_binary_hardening INTERFACE
+  $<$<CXX_COMPILER_ID:MSVC>:/GUARD:CF /DYNAMICBASE /NXCOMPAT>
+  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>>:/HIGHENTROPYVA /CETCOMPAT>
+  # MSVC ASan imports its runtime from beside the executable. Restricting
+  # static imports to System32 would prevent the instrumented image from
+  # loading, so keep this mitigation on every non-ASan shipping build.
+  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<NOT:$<BOOL:${AZOOKEY_ENABLE_ASAN}>>>:/DEPENDENTLOADFLAG:0x800>
 )
 
 if(AZOOKEY_ENABLE_ASAN)

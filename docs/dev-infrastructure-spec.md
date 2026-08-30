@@ -87,10 +87,23 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 オプションを一元管理する。
 
 - `azookey_project_options` — C++ 標準（`cxx_std_20`）と MSVC ハードニング
-  系オプション（`/utf-8` `/permissive-` `/EHsc` `/Zc:__cplusplus` `/sdl`）。
-  各実体 target が `PUBLIC` でリンク。
+  系オプション（`/utf-8` `/permissive-` `/EHsc` `/Zc:__cplusplus` `/sdl`
+  `/guard:cf` `/Qspectre`）。各実体 target が `PUBLIC` でリンクし、最終バイナリへ
+  入る project 管理下の static library object にも CFG instrumentation を適用する。
 - `azookey_project_warnings` — 警告レベル（MSVC `/W4`、非 MSVC
   `-Wall -Wextra -Wpedantic`）。各実体 target が `PRIVATE` でリンク。
+- `azookey_binary_hardening` — `azookey_tsf_tip.dll` と
+  `azookey_inference_host.exe` だけが `PRIVATE` でリンクする。MSVC linker に
+  `/GUARD:CF` `/DYNAMICBASE` `/NXCOMPAT` を渡し、x64 では加えて
+  `/HIGHENTROPYVA` `/CETCOMPAT` を渡す。通常ビルドでは
+  `/DEPENDENTLOADFLAG:0x800` により静的 import の探索を System32 に限定する。
+  MSVC ASan は runtime DLL を実行体の隣へ配置するため、ASan 構成だけは
+  `/DEPENDENTLOADFLAG:0x800` を除外し、他の mitigation は維持する。
+
+`/Qspectre` は 2026-08-31 に MSVC Release の `azookey_bench` を各 30 回交互実行して
+採用した。p95 中央値は 0.0018 ms から 0.0023 ms（+0.0005 ms）、p99 中央値は
+0.0037 ms から 0.00405 ms（+0.00035 ms）であり、§4.5 の絶対ノイズ下限 0.05 ms を
+下回った。
 
 `/W4` は既存コードで警告が大量に出る場合、target 単位で段階導入する
 （新規モジュールから適用し、既存は警告解消とセットで切替）。TSF DLL / Host

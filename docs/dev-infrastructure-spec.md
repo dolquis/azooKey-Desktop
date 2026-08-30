@@ -237,6 +237,87 @@ manifest の `gguf-model`、`llama-preflight`、`mock-dictionary` role は自動
 Hyper-V checkpoint の作成と DebugView の capture 設定は guest から自動化せず、
 人間の確認結果を表す。
 
+### 2.7 ビルド時間の内訳（実測）
+
+本節は M37 の受け入れ条件ではなく、ビルド時間短縮策の当てどころを決めるための計測
+記録である。短縮策としては §4.7 の sccache のみが入っており、コンパイル 1 回あたりの
+コストがどこに出ているかは未計測だった。
+
+#### 測定条件
+
+| 項目 | 値 |
+|---|---|
+| コンパイラ | clang-cl（LLVM 23.1.0、`/clang:-ftime-trace`） |
+| 構成 | Debug、Ninja、`-j 4` |
+| 対象 | 本体ターゲットのみ（`AZOOKEY_BUILD_TESTS=OFF` / `AZOOKEY_BUILD_BENCH=OFF`）、55 TU |
+| キャッシュ | `AZOOKEY_USE_COMPILER_CACHE=OFF`（実コンパイルを測るため） |
+
+再現手順は、MSVC 環境を初期化したうえで次を実行し、生成される TU ごとの
+`*.cpp.json` を集計する。
+
+```powershell
+cmake -S . -B build/timetrace -G Ninja -DCMAKE_BUILD_TYPE=Debug `
+  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
+  "-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /clang:-ftime-trace" `
+  -DAZOOKEY_USE_COMPILER_CACHE=OFF -DAZOOKEY_BUILD_TESTS=OFF `
+  -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_WIL=ON
+cmake --build build/timetrace
+```
+
+`CMAKE_CXX_FLAGS` を指定すると CMake の MSVC 既定フラグを上書きするため、
+`/DWIN32 /D_WINDOWS /GR /EHsc` を明示的に含める。省くと例外が無効化され
+`cannot use 'try' with exceptions disabled` でビルドが落ちる。
+
+集計には clang が出力する `Total Source`（`.cpp` の直接 include をルートとする解析
+時間。TU あたり 0〜15 件）と `Total InstantiateFunction` / `Total InstantiateClass` を
+使う。個別の `Source` イベントは `-ftime-trace-granularity` の既定 500us で出力から
+落ちるため、`Total` 側を読む。55 TU すべてで `Total Source` が `Total Frontend` を
+超えないこと（最大比 0.990）を確認済みで、入れ子の二重計上は起きていない。
+
+#### 上位 10 TU
+
+| TU | total (ms) | frontend | backend | ヘッダ展開 | テンプレート実体化 | ヘッダ% | テンプレート% |
+|---|---|---|---|---|---|---|---|
+| `NamedPipeTransport.cpp` | 5315 | 5128 | 112 | 4479 | 533 | 84.3% | 10.0% |
+| `Diagnostics.cpp` | 2711 | 2213 | 310 | 1236 | 630 | 45.6% | 23.2% |
+| `TextService.cpp` | 2360 | 2140 | 138 | 1651 | 530 | 69.9% | 22.5% |
+| `main.cpp` | 1961 | 1702 | 155 | 1255 | 516 | 64.0% | 26.3% |
+| `CompatRunner.cpp` | 1960 | 1710 | 158 | 1310 | 496 | 66.8% | 25.3% |
+| `ReportWriter.cpp` | 1812 | 1540 | 164 | 1377 | 446 | 76.0% | 24.6% |
+| `Dispatcher.cpp` | 1811 | 1700 | 66 | 1170 | 424 | 64.6% | 23.4% |
+| `UserDictCli.cpp` | 1790 | 1517 | 153 | 1299 | 474 | 72.5% | 26.5% |
+| `C011_shortcut_routing.cpp` | 1763 | 1676 | 44 | 1494 | 462 | 84.8% | 26.2% |
+| `TargetConfigLoader.cpp` | 1756 | 1577 | 102 | 1375 | 445 | 78.3% | 25.3% |
+
+TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-clock とは異なる）。
+上位 10 TU が総和の 31.3% を占める。
+
+#### 全体の内訳と読み取り
+
+ビルド全体（55 TU）では **frontend 91.2% / ヘッダ展開 76.4% / テンプレート実体化 22.2%**。
+
+* **コストはヘッダ展開に偏っている。** backend（最適化・コード生成）は 1 割に満たず、
+  frontend の中でもヘッダの解析が支配的である。`NamedPipeTransport.cpp` は単一 TU で
+  最も重く、その 84.3% がヘッダ展開である。
+* したがって**当てどころは PCH** である。PCH はまさにヘッダ展開の繰り返しを削る手段で、
+  この分布と一致する。
+* **unity build は副次的**と判断する。unity build が効くのは TU 数に比例する固定費で
+  あり、本ビルドの支配項ではない。無名 namespace / マクロ衝突の保守コストに見合う
+  効果は、この内訳からは見込みにくい。
+* 重量 TU は `tsf-tip` に限らない。`ipc` / `diagnostics` / `compat-test` にも同程度の
+  ヘッダ展開コストが出ており、PCH の適用対象を `tsf-tip` と `settings-app` に限定する
+  前提は、実測では支持されない。
+
+#### この計測が示さないこと
+
+* **絶対値を MSVC へ一般化できない。** 実際の CI と開発ループが使うのは `cl.exe` で
+  あり、本計測は clang-cl のもの。内訳の傾向（ヘッダ展開が支配的）は構造的なもので
+  移りやすいが、短縮幅の見積もりには使えない。
+* **PCH の採否はこの計測だけでは決まらない。** §4.7 の sccache と PCH は相互作用し、
+  MSVC の PCH（`/Yc` `/Yu`）を挟むとキャッシュのヒット率が落ちて正味で悪化しうる。
+  採否は「PCH 有無 × sccache hit/miss」の 4 条件を MSVC で実測して決める（別課題）。
+* テスト・bench ターゲットと `settings-app` は対象外。Debug 構成のみ。
+
 ### M37 受け入れ条件
 
 - `cmake --preset windows-debug` / `windows-release` の configure→build→test

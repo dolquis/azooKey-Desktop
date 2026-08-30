@@ -495,6 +495,9 @@ OFF のまま）。
 - dependency review — PR で追加・更新された依存だけを対象にし、既知の脆弱性が
   High または Critical の場合は必須チェックを失敗させる。結果は job summary に残し、
   PR コメントは投稿しないため `pull-requests: write` 権限を付与しない
+- GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ
+  固定し、対応するリリースタグを行末コメントに残す。Dependabot の
+  `github-actions` ecosystem を週次実行し、更新をまとめた PR で SHA を追従する
 - settings JSON Schema — `check-jsonschema==0.37.3` で
   `settings/mvp-settings.schema.json` の meta-schema 妥当性と、
   `settings/default-settings.sample.json` の schema 適合性を確認する

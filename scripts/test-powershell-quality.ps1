@@ -18,6 +18,7 @@ $powerShellFiles = @(
   Join-Path $PSScriptRoot "register-dev.ps1"
   Join-Path $PSScriptRoot "unregister-dev.ps1"
   Join-Path $PSScriptRoot "verify-bootstrap.ps1"
+  Join-Path $PSScriptRoot "vm-verify-session.ps1"
   Join-Path (Join-Path $repoRoot "compat-test") "msix_install_uninstall.ps1"
   Join-Path (Join-Path $repoRoot "pkg") "msix/build-identity-package.ps1"
   Join-Path $PSScriptRoot "verify-msix-identity-embedding.ps1"

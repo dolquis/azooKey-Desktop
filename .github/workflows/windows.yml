@@ -255,6 +255,18 @@ jobs:
             settings-json-schema-metaschema,settings-json-schema-sample
         run: pre-commit run --all-files --show-diff-on-failure
 
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
   windows-build:
     name: Windows ${{ matrix.config }}
     runs-on: windows-2022

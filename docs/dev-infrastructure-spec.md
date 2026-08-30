@@ -492,6 +492,9 @@ OFF のまま）。
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ
+- dependency review — PR で追加・更新された依存だけを対象にし、既知の脆弱性が
+  High または Critical の場合は必須チェックを失敗させる。結果は job summary に残し、
+  PR コメントは投稿しないため `pull-requests: write` 権限を付与しない
 - settings JSON Schema — `check-jsonschema==0.37.3` で
   `settings/mvp-settings.schema.json` の meta-schema 妥当性と、
   `settings/default-settings.sample.json` の schema 適合性を確認する

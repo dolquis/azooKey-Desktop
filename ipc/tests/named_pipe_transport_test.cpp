@@ -89,7 +89,6 @@ class ScopedEnvironmentVariable {
   bool had_previous_{false};
 };
 
-#ifndef NDEBUG
 // Raw pipe access, so a test can send a frame header without the body that
 // NamedPipeClient would always append.
 class ScopedPipeHandle {
@@ -127,6 +126,12 @@ HANDLE OpenRawPipeClient(const std::string& pipe_name, int attempts = 200) {
   return INVALID_HANDLE_VALUE;
 }
 
+bool WriteRawPipeSync(HANDLE pipe, const uint8_t* data, DWORD size) {
+  DWORD written = 0;
+  return WriteFile(pipe, data, size, &written, nullptr) && written == size;
+}
+
+#ifndef NDEBUG
 HANDLE CreateRawPipeServer(const std::string& pipe_name, DWORD buffer_size = 4096) {
   const std::wstring wide(pipe_name.begin(), pipe_name.end());
   return CreateNamedPipeW(wide.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
@@ -188,11 +193,6 @@ bool WriteRawPipe(HANDLE pipe, const uint8_t* data, DWORD size) {
   DWORD transferred = 0;
   return GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) != FALSE &&
          transferred == size;
-}
-
-bool WriteRawPipeSync(HANDLE pipe, const uint8_t* data, DWORD size) {
-  DWORD written = 0;
-  return WriteFile(pipe, data, size, &written, nullptr) && written == size;
 }
 
 azookey::ipc::Envelope MakePingEnvelope(uint64_t request_id, const std::string& trace_id) {

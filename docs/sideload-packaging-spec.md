@@ -1528,6 +1528,40 @@ Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \
 ユーザースコープ（`{localappdata}`、`PrivilegesRequired=lowest`）で
 管理者権限なしインストール。
 
+### 4.4 SBOM と build provenance（M38 供給網固定）
+
+`release.yml` はタグ push 時に、MSI へ次の 2 つを付与する。
+
+| 生成物 | 手段 | 添付先 |
+|---|---|---|
+| SBOM（SPDX JSON） | `anchore/sbom-action`（syft）で生成し `actions/attest` の `sbom-path` で署名 | Draft Release の資産 `azooKey.spdx.json` + SBOM attestation |
+| build provenance | `actions/attest`（`sbom-path` も predicate も渡さない既定モード） | GitHub の attestation ストア |
+
+利用者は `gh attestation verify <msi> --repo dolquis/azooKey-Desktop` で、その MSI が
+本リポジトリの `release.yml` から生成されたことを検証できる。
+
+`actions/attest-build-provenance` と `actions/attest-sbom` は v4 で `actions/attest` の
+wrapper になっており、新規実装は `actions/attest` を使う。本 workflow もそれに従う。
+
+#### この SBOM が保証する範囲
+
+**syft は MSI から C++ の依存関係を復元しない。** 本プロジェクトの依存は
+`FetchContent`（llama.cpp / WIL / GoogleTest）と Windows SDK / MSVC runtime であり、
+いずれも syft が持つ検出器（npm / NuGet / pip / cargo 等）の対象外である。したがって
+生成される SBOM は、**成果物そのものの同定（ファイル名・ダイジェスト・形式）**を担保する
+ものであって、構成コンポーネントの網羅リストではない。
+
+同梱・依存する第三者資産を列挙する正典は、引き続きルート `THIRD_PARTY_LICENSES`
+（運用規約は `docs/licensing-policy.md`）である。SBOM をもって attribution の確認を
+代替しない。SBOM へ C++ 依存を実際に列挙させる拡張は別課題として扱う。
+
+#### attestation を dry-run で作らない理由
+
+attestation はリポジトリに残る公開記録である。`workflow_dispatch` によるビルド確認
+（§2.3）で attestation を作ると、配布していないビルドに対する証明が残り、検証者に
+誤解を与える。このため attest ステップは `github.ref_type == 'tag'` で限定する。
+SBOM 生成自体は dry-run でも実行し、ステップの破損を早期に検出する。
+
 ## 5. WinGet マニフェスト（M32）
 
 > **スコープ注記（§0 配布方針）**: WinGet が配布するのは **MVP の未署名 MSI**（DEV-415）。
@@ -1968,9 +2002,10 @@ bool LearningStore::Load() {
 3. `git push --tags`
 4. `.github/workflows/release.yml` が自動実行
 5. Draft Release が作成される（MVP: 未署名 MSI 添付。配布方針は §0。MS Store 配布は Partner Center 経由で別手順 = DEV-416。スタンドアロン MSIX 署名は §2、当面延期）
-6. 動作確認（クリーン VM でインストール → 入力 → 確定 → アンインストール）
-7. Draft → Publish
-8. winget-pkgs に PR（`wingetcreate update`）
+6. SBOM（`azooKey.spdx.json`）が Release 資産に添付され、`gh attestation verify <msi> --repo dolquis/azooKey-Desktop` が成功することを確認（§4.4）
+7. 動作確認（クリーン VM でインストール → 入力 → 確定 → アンインストール）
+8. Draft → Publish
+9. winget-pkgs に PR（`wingetcreate update`）
 
 ## 12. 参照
 

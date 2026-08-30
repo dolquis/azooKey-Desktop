@@ -7,6 +7,10 @@
 # スタンドアロン MSIX と自前コード署名は延期中（DEV-255）。MS Store 用 MSIX は
 # DEV-416 の別経路で扱い、この workflow へ署名ステップを混在させない。
 #
+# タグ push では成果物へ SBOM（SPDX）と build provenance の attestation を付与する
+# （M38 供給網固定 / DEV-585）。attestation はリポジトリに残る公開記録のため、
+# workflow_dispatch の dry-run では生成しない。
+#
 # 設計の正典は docs/sideload-packaging-spec.md §4。
 # RELEASE_ENABLED が 'true' でない限り job 全体が skip され、誤発火しない。
 name: Release
@@ -16,6 +20,8 @@ on:
   workflow_dispatch: # 未署名 MSI ビルドまでを手動 dry-run する。
 permissions:
   contents: write # Draft Release の作成・添付に必要
+  id-token: write # actions/attest が OIDC トークンで署名するのに必要
+  attestations: write # attestation をリポジトリへ書き込むのに必要
 jobs:
   release:
     name: Build unsigned MSI and draft release
@@ -100,6 +106,7 @@ jobs:
         run: >-
           dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe"
       - name: Verify MSI is unsigned
+        id: msi-artifact
         shell: pwsh
         run: |
           $msi = Get-ChildItem pkg\msi\bin\Release\*.msi -File -ErrorAction Stop
@@ -110,9 +117,42 @@ jobs:
           if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
             throw "Expected an unsigned MSI, found signature status $($signature.Status)."
           }
+          "path=$($msi.FullName)" >> $env:GITHUB_OUTPUT
+      # syft は MSI から C++ の依存関係を復元できない。この SBOM が担保するのは
+      # 成果物そのものの同定であり、FetchContent 取得の llama.cpp / WIL 等を列挙
+      # する正典は引き続き THIRD_PARTY_LICENSES である（docs/licensing-policy.md）。
+      # dry-run でも生成し、ステップ自体の破損を早期に検出する。
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.24.2
+        with:
+          file: ${{ steps.msi-artifact.outputs.path }}
+          format: spdx-json
+          output-file: ${{ github.workspace }}\azooKey.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      # attestation はリポジトリに残る公開記録なので、実際に配布するタグ push で
+      # だけ作る。dry-run で作ると未配布ビルドの証明が残り、誤解を生む。
+      #
+      # actions/attest-build-provenance と actions/attest-sbom は v4 で
+      # actions/attest の wrapper になり、新規実装は actions/attest を使うよう
+      # 案内されている。sbom-path も predicate も渡さなければ SLSA build
+      # provenance、sbom-path を渡せば SBOM attestation になる。
+      - name: Attest build provenance
+        if: github.ref_type == 'tag'
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.msi-artifact.outputs.path }}
+      - name: Attest SBOM
+        if: github.ref_type == 'tag'
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.msi-artifact.outputs.path }}
+          sbom-path: ${{ github.workspace }}\azooKey.spdx.json
       - name: Upload Release asset (draft)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: pkg\msi\bin\Release\*.msi
+          files: |
+            pkg\msi\bin\Release\*.msi
+            azooKey.spdx.json

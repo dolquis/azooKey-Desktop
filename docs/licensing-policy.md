@@ -61,5 +61,12 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 | attribution 運用規約（本書） | `docs/licensing-policy.md` |
 | 評価データ（`bench/data/`）のライセンス宣言 | `docs/conversion-quality-benchmark-spec.md` §13 / §14（CC0 / PD / authored 限定） |
 | 配布物への同梱・再配布 attribution | `docs/sideload-packaging-spec.md`（Phase 7） |
+| Release 成果物の SBOM / provenance | `docs/sideload-packaging-spec.md` §4.4（**attribution の正典ではない**。下記注記） |
 | M62-C/D・M53 の定義・受け入れ条件 | `plans/windows-port-roadmap.md` |
 | 状態・進捗・課題トラッキング | Linear（team `Dev`） |
+
+> **SBOM は attribution の代替ではない。** Release 成果物には SBOM（SPDX）が添付される
+> （`docs/sideload-packaging-spec.md` §4.4）が、生成に用いる syft は C++ の
+> `FetchContent` 依存を検出しないため、SBOM は構成コンポーネントの網羅リストにならない。
+> 第三者資産の列挙とライセンス表記の正典は、本表のとおりルート `THIRD_PARTY_LICENSES`
+> のままである。SBOM が空に近いことをもって「同梱第三者資産が無い」と判断しない。

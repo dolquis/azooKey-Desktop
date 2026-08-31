@@ -96,6 +96,18 @@
       }
     },
     {
+      "name": "linux-coverage",
+      "displayName": "Linux LLVM Coverage",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-coverage",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-18",
+        "AZOOKEY_BUILD_BENCH": "OFF",
+        "AZOOKEY_ENABLE_COVERAGE": "ON",
+        "AZOOKEY_USE_COMPILER_CACHE": "OFF"
+      }
+    },
+    {
       "name": "windows-asan",
       "displayName": "Windows AddressSanitizer",
       "inherits": "windows-debug",
@@ -144,6 +156,10 @@
       "configurePreset": "linux-debug"
     },
     {
+      "name": "linux-coverage",
+      "configurePreset": "linux-coverage"
+    },
+    {
       "name": "windows-asan",
       "configurePreset": "windows-asan"
     },
@@ -177,6 +193,13 @@
     {
       "name": "linux-debug",
       "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-coverage",
+      "configurePreset": "linux-coverage",
       "output": {
         "outputOnFailure": true
       }

@@ -735,6 +735,108 @@ jobs:
       - name: Run tests via CTest
         run: ctest --preset linux-debug --no-tests=error
 
+  linux-coverage:
+    name: Linux coverage (informational)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Verify LLVM coverage tools
+        run: |
+          clang++-18 --version
+          llvm-profdata-18 --version
+          llvm-cov-18 --version
+
+      - name: Cache GoogleTest source
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/linux-coverage/_deps
+          key: googletest-v1.17.0-${{ runner.os }}-Coverage
+          restore-keys: |
+            googletest-v1.17.0-${{ runner.os }}-Coverage-
+
+      - name: Configure coverage build
+        run: cmake --preset linux-coverage -DAZOOKEY_FETCH_GOOGLETEST=ON
+
+      - name: Build coverage targets
+        run: cmake --build --preset linux-coverage
+
+      - name: Run tests with coverage instrumentation
+        env:
+          LLVM_PROFILE_FILE: ${{ github.workspace }}/build/linux-coverage/profiles/%p-%m.profraw
+        run: |
+          mkdir -p build/linux-coverage/profiles
+          ctest --preset linux-coverage --no-tests=error
+
+      - name: Generate LLVM coverage reports
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          profile_dir="build/linux-coverage/profiles"
+          report_dir="build/linux-coverage/coverage"
+          mkdir -p "$report_dir"
+
+          shopt -s nullglob
+          profiles=("$profile_dir"/*.profraw)
+          if (( ${#profiles[@]} == 0 )); then
+            echo "No LLVM raw profiles were produced" >&2
+            exit 1
+          fi
+          llvm-profdata-18 merge -sparse "${profiles[@]}" -o "$report_dir/coverage.profdata"
+
+          mapfile -t objects < <(
+            ctest --test-dir build/linux-coverage --show-only=json-v1 |
+              jq -r '.tests[].command[0]' |
+              sort -u
+          )
+          if (( ${#objects[@]} == 0 )); then
+            echo "CTest did not report any instrumented test executables" >&2
+            exit 1
+          fi
+
+          primary_object="${objects[0]}"
+          object_args=()
+          for object in "${objects[@]:1}"; do
+            object_args+=(-object "$object")
+          done
+          common_args=(
+            -instr-profile "$report_dir/coverage.profdata"
+            -ignore-filename-regex '.*/(tests|third_party|build)/.*'
+          )
+
+          llvm-cov-18 report "$primary_object" "${object_args[@]}" "${common_args[@]}" |
+            tee "$report_dir/summary.txt"
+          llvm-cov-18 show "$primary_object" "${object_args[@]}" "${common_args[@]}" \
+            -format=html -show-branches=count -output-dir="$report_dir/html"
+          llvm-cov-18 export "$primary_object" "${object_args[@]}" "${common_args[@]}" \
+            -format=lcov > "$report_dir/coverage.lcov"
+          llvm-cov-18 export "$primary_object" "${object_args[@]}" "${common_args[@]}" \
+            -summary-only > "$report_dir/summary.json"
+
+          {
+            echo "## LLVM coverage (informational)"
+            echo '```text'
+            cat "$report_dir/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload LLVM coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-llvm-coverage
+          path: build/linux-coverage/coverage
+          if-no-files-found: error
+          retention-days: 14
+
   linux-no-tests:
     name: Linux build without tests
     runs-on: ubuntu-24.04

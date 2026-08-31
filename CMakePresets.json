@@ -210,6 +210,7 @@
     },
     {
       "name": "linux-coverage",
+      "inherits": "parallel-tests",
       "configurePreset": "linux-coverage",
       "output": {
         "outputOnFailure": true

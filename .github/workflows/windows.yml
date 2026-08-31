@@ -761,7 +761,7 @@ jobs:
           path: build/linux-coverage/_deps
           key: googletest-v1.17.0-${{ runner.os }}-Coverage
           restore-keys: |
-            googletest-v1.17.0-${{ runner.os }}-Coverage-
+            googletest-v1.17.0-${{ runner.os }}-
 
       - name: Configure coverage build
         run: cmake --preset linux-coverage -DAZOOKEY_FETCH_GOOGLETEST=ON

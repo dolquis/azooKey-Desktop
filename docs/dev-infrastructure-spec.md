@@ -510,8 +510,9 @@ OFF のまま）。
   （`core` / `ipc` / `learning` / `inference-host`）の行・分岐カバレッジを測る。
   tests / `third_party` / `build` は集計から除外し、HTML・LCOV・JSON summary を
   `linux-llvm-coverage` artifact として 14 日保持する。初期段階では数値を可視化する
-  だけで、目標値を下回ってもジョブを失敗させない。Windows 専用コードと
-  Cobertura は Phase 2 の OpenCppCoverage 導入時に追加する
+  だけで、目標値を下回ってもジョブを失敗させない。一方、profile が生成されない、
+  またはレポート生成に失敗するなど計測基盤が壊れた場合はジョブを失敗させる。
+  Windows 専用コードと Cobertura は Phase 2 の OpenCppCoverage 導入時に追加する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
   移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を

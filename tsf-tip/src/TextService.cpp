@@ -442,6 +442,11 @@ bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expect
   return IsExpectedIpcResponse(response, expected_request_id, expected_type);
 }
 
+std::optional<WCHAR> TranslateOemCompositionCharacterUsingWin32ForTest(WPARAM virtual_key,
+                                                                       LPARAM key_data) {
+  return TranslateOemCompositionCharacter(virtual_key, key_data);
+}
+
 void SetTranslateOemCompositionCharacterForTest(
     TranslateOemCompositionCharacterFnForTest translate_character) {
   g_translate_oem_composition_character =

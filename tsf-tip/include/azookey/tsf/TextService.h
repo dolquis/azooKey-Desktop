@@ -42,6 +42,8 @@ void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type);
+std::optional<WCHAR> TranslateOemCompositionCharacterUsingWin32ForTest(WPARAM virtual_key,
+                                                                       LPARAM key_data);
 void SetTranslateOemCompositionCharacterForTest(
     TranslateOemCompositionCharacterFnForTest translate_character);
 void ClearTranslateOemCompositionCharacterForTest();

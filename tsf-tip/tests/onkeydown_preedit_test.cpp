@@ -72,16 +72,16 @@ bool CurrentKeyboardLayoutProduces(WPARAM virtual_key, bool shift, WCHAR expecte
 }
 
 std::optional<WCHAR> TranslateDefaultOemCompositionCharacterForTest(WPARAM virtual_key, LPARAM) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  const bool shift_down = (keyboard_state[VK_SHIFT] & 0x80) != 0;
   switch (virtual_key) {
     case VK_OEM_COMMA:
-      return L',';
+      return shift_down ? L'<' : L',';
     case VK_OEM_PERIOD:
-      return L'.';
-    case VK_OEM_2: {
-      std::array<BYTE, 256> keyboard_state{};
-      if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
-      return (keyboard_state[VK_SHIFT] & 0x80) != 0 ? L'?' : L'/';
-    }
+      return shift_down ? L'>' : L'.';
+    case VK_OEM_2:
+      return shift_down ? L'?' : L'/';
     default:
       return std::nullopt;
   }
@@ -761,6 +761,20 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, OemCompositionTranslationUsesCurrentKeyboardLayoutWhenSupported) {
+  KeyboardStateGuard keyboard_state;
+  keyboard_state.SetDown(VK_SHIFT, false);
+  keyboard_state.SetDown(VK_LSHIFT, false);
+  keyboard_state.SetDown(VK_RSHIFT, false);
+  if (!CurrentKeyboardLayoutProduces(VK_OEM_COMMA, false, L',')) {
+    GTEST_SKIP() << "requires a keyboard layout where unshifted VK_OEM_COMMA produces ','";
+  }
+
+  EXPECT_EQ(
+      azookey::tsf::testing::TranslateOemCompositionCharacterUsingWin32ForTest(VK_OEM_COMMA, 0),
+      std::optional<WCHAR>(L','));
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   TextServiceHarness h;
   OemCompositionTranslationGuard oem_translation;
@@ -807,6 +821,16 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   EXPECT_TRUE(h.Press(VK_OEM_2));
   EXPECT_EQ(h.service.preedit_kana_, "ん、。?");
   EXPECT_EQ(range.last_text, L"ん、。?");
+
+  EXPECT_TRUE(h.TestPress(VK_OEM_COMMA));
+  EXPECT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。?<");
+  EXPECT_EQ(range.last_text, L"ん、。?<");
+
+  EXPECT_TRUE(h.TestPress(VK_OEM_PERIOD));
+  EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "ん、。?<>");
+  EXPECT_EQ(range.last_text, L"ん、。?<>");
   h.keyboard_state.SetDown(VK_SHIFT, false);
 
   if (h.service.composition_) {

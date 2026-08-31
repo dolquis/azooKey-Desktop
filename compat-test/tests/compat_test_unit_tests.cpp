@@ -117,6 +117,20 @@ class FakeClipboardAccess final : public ClipboardAccess {
   bool restored{false};
 };
 
+TEST(C002BackspaceObservationTest, AcceptsExpectedEqualLengthRomajiReversion) {
+  constexpr std::wstring_view before = L"にほんご";
+  constexpr std::wstring_view after = L"にほんg";
+  static_assert(before.size() == after.size());
+
+  EXPECT_TRUE(IsExpectedC002BackspaceTransition(before, after));
+}
+
+TEST(C002BackspaceObservationTest, RejectsUnchangedShortenedAndUnexpectedTransitions) {
+  EXPECT_FALSE(IsExpectedC002BackspaceTransition(L"にほんご", L"にほんご"));
+  EXPECT_FALSE(IsExpectedC002BackspaceTransition(L"にほんご", L"にほん"));
+  EXPECT_FALSE(IsExpectedC002BackspaceTransition(L"にほんご", L"にほんk"));
+}
+
 TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   TemporaryDirectory temp;
   TargetConfig target;

@@ -1,6 +1,7 @@
-#include "runner/CompatTypes.h"
-
 #include <Windows.h>
+
+#include "runner/CaseSupport.h"
+#include "runner/CompatTypes.h"
 
 namespace azookey::compat_test {
 
@@ -30,12 +31,12 @@ CaseDefinition MakeC002BackspaceCase() {
         if (!before || !after || before->empty()) {
           result.status = ResultStatus::FailingSkip;
           result.reason_code = "preedit-text-unobservable";
-        } else if (before->size() == after->size() + 1) {
+        } else if (IsExpectedC002BackspaceTransition(*before, *after)) {
           result.status = ResultStatus::Pass;
-          result.reason_code = "preedit-shortened";
+          result.reason_code = "preedit-reverted-to-romaji";
         } else {
           result.status = ResultStatus::Fail;
-          result.reason_code = "preedit-not-shortened";
+          result.reason_code = "unexpected-backspace-transition";
         }
         return result;
       },

@@ -19,4 +19,10 @@ bool IsCandidateNearCaretAtDpi(const RECT& candidate, const RECT& caret, UINT dp
          candidate.top - caret.bottom <= maximum_vertical_gap;
 }
 
+bool IsExpectedC002BackspaceTransition(std::wstring_view before, std::wstring_view after) {
+  return before == C002BackspaceScenario::kBefore && before != after &&
+         (after == C002BackspaceScenario::kExpectedAfter[0] ||
+          after == C002BackspaceScenario::kExpectedAfter[1]);
+}
+
 }  // namespace azookey::compat_test

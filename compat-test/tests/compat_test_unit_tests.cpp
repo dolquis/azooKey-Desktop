@@ -117,6 +117,20 @@ class FakeClipboardAccess final : public ClipboardAccess {
   bool restored{false};
 };
 
+TEST(C002BackspaceObservationTest, AcceptsExpectedTransitionsForBothBatchModes) {
+  EXPECT_TRUE(IsExpectedC002BackspaceTransition(C002BackspaceScenario::kBefore,
+                                                C002BackspaceScenario::kExpectedAfter[0]));
+  EXPECT_TRUE(IsExpectedC002BackspaceTransition(C002BackspaceScenario::kBefore,
+                                                C002BackspaceScenario::kExpectedAfter[1]));
+}
+
+TEST(C002BackspaceObservationTest, RejectsUnchangedShortenedAndUnexpectedTransitions) {
+  EXPECT_FALSE(IsExpectedC002BackspaceTransition(C002BackspaceScenario::kBefore,
+                                                 C002BackspaceScenario::kBefore));
+  EXPECT_FALSE(IsExpectedC002BackspaceTransition(C002BackspaceScenario::kBefore, L"にほ"));
+  EXPECT_FALSE(IsExpectedC002BackspaceTransition(C002BackspaceScenario::kBefore, L"にほんk"));
+}
+
 TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   TemporaryDirectory temp;
   TargetConfig target;

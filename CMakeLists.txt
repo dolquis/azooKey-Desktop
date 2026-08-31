@@ -290,6 +290,8 @@ if(AZOOKEY_BUILD_TESTS)
         "Seconds to wait while CMake enumerates GoogleTest cases")
     set(AZOOKEY_GTEST_TEST_TIMEOUT 60 CACHE STRING
         "Seconds to allow each discovered GoogleTest case to run")
+    set(AZOOKEY_CTEST_PARALLEL_JOBS 4 CACHE STRING
+        "Number of CTest cases to run concurrently")
     function(azookey_discover_tests target_name)
       set(one_value_args LABEL RESOURCE_LOCK TIMEOUT)
       cmake_parse_arguments(AZOOKEY_TEST "" "${one_value_args}" "" ${ARGN})
@@ -363,7 +365,7 @@ if(AZOOKEY_BUILD_TESTS)
     add_custom_target(azookey_check
       COMMAND ${CMAKE_CTEST_COMMAND}
               --test-dir "${CMAKE_BINARY_DIR}"
-              --parallel 4
+              --parallel "${AZOOKEY_CTEST_PARALLEL_JOBS}"
               --output-on-failure
               --no-tests=error
       USES_TERMINAL

@@ -29,7 +29,7 @@ build preset=preset:
 
 # Run the unit tests via CTest
 test preset=preset:
-    ctest --preset {{preset}} --parallel 4 --output-on-failure
+    ctest --preset {{preset}} --output-on-failure
 
 # configure -> build -> test
 ci preset=preset: (configure preset) (build preset) (test preset)

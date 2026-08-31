@@ -725,11 +725,14 @@ v2 サービスの env（`ACTIONS_RESULTS_URL`）を要求するため、**actio
 
 ### 4.8 CTest の並列実行
 
-通常の CTest は 4 ケースを上限に並列実行する。
-`CMakePresets.json` の test preset、`just test`、`azookey_check` は同じ並列度を使い、
-CI も test preset を通じてこの設定を引き継ぐ。
+通常の Debug / Release CTest は 4 ケースを上限に並列実行する。
+`CMakePresets.json` の通常 test preset を並列度の正典とし、`just test` と CI は
+test preset の設定をそのまま引き継ぐ。
+`azookey_check` は `AZOOKEY_CTEST_PARALLEL_JOBS`（既定値 4）を使う。
 固定値にするのは、ローカルと CI の論理プロセッサ数が異なっても同じ負荷条件で
 テストできるようにするためである。
+ASan / UBSan preset はメモリ負荷を実測していないため、当面は並列設定を継承せず
+直列で実行する。
 
 共有状態を使うテストだけは `RESOURCE_LOCK` で相互排他にする。
 RuntimeLogger のテストは component 名で決まる OS mutex を共有するため、

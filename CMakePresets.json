@@ -194,7 +194,6 @@
     },
     {
       "name": "windows-asan",
-      "inherits": "parallel-tests",
       "configurePreset": "windows-asan",
       "output": {
         "outputOnFailure": true
@@ -205,7 +204,6 @@
     },
     {
       "name": "linux-asan-ubsan",
-      "inherits": "parallel-tests",
       "configurePreset": "linux-asan-ubsan",
       "output": {
         "outputOnFailure": true

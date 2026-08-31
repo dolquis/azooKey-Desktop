@@ -170,7 +170,15 @@
   ],
   "testPresets": [
     {
+      "name": "parallel-tests",
+      "hidden": true,
+      "execution": {
+        "jobs": 4
+      }
+    },
+    {
       "name": "windows-debug",
+      "inherits": "parallel-tests",
       "configurePreset": "windows-debug",
       "output": {
         "outputOnFailure": true
@@ -178,6 +186,7 @@
     },
     {
       "name": "windows-llama-debug",
+      "inherits": "parallel-tests",
       "configurePreset": "windows-llama-debug",
       "output": {
         "outputOnFailure": true
@@ -185,6 +194,7 @@
     },
     {
       "name": "windows-release",
+      "inherits": "parallel-tests",
       "configurePreset": "windows-release",
       "output": {
         "outputOnFailure": true
@@ -192,6 +202,7 @@
     },
     {
       "name": "linux-debug",
+      "inherits": "parallel-tests",
       "configurePreset": "linux-debug",
       "output": {
         "outputOnFailure": true

@@ -723,6 +723,26 @@ v2 サービスの env（`ACTIONS_RESULTS_URL`）を要求するため、**actio
 ローカルコンパイルへ fallback してビルドを緑に保つ（キャッシュはビルドを壊しては
 ならない）。
 
+### 4.8 CTest の並列実行
+
+通常の Debug / Release CTest は 4 ケースを上限に並列実行する。
+`CMakePresets.json` の通常 test preset を並列度の正典とし、`just test` と CI は
+test preset の設定をそのまま引き継ぐ。
+`azookey_check` は `AZOOKEY_CTEST_PARALLEL_JOBS`（既定値 4）を使う。
+固定値にするのは、ローカルと CI の論理プロセッサ数が異なっても同じ負荷条件で
+テストできるようにするためである。
+ASan / UBSan preset はメモリ負荷を実測していないため、当面は並列設定を継承せず
+直列で実行する。
+
+共有状態を使うテストだけは `RESOURCE_LOCK` で相互排他にする。
+RuntimeLogger のテストは component 名で決まる OS mutex を共有するため、
+`azookey-runtime-log` を使う。
+TSF/COM registration smoke は登録状態を変更するため、
+`azookey-tsf-com-registration` を使う。
+ケースごとに一意な一時パスや PID 付き Named Pipe を使うテストは直列化しない。
+並列実行で timeout が生じてもケース単位の `TIMEOUT` は緩和せず、共有状態の有無と
+並列度を先に見直す。
+
 ### M38 受け入れ条件
 
 - Debug / Release 両構成が CI で緑

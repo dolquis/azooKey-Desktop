@@ -96,39 +96,51 @@ if(NOT AZOOKEY_BACKEND STREQUAL "cpu" AND NOT AZOOKEY_BACKEND STREQUAL "cuda")
   message(FATAL_ERROR "AZOOKEY_BACKEND must be either 'cpu' or 'cuda'")
 endif()
 
+function(azookey_add_llama_cpp)
+  # llama.cpp and ggml do not link azookey_project_options. Scope the MSVC
+  # hardening flags to their subdirectory so every third-party object that is
+  # linked into the host receives CFG and Spectre instrumentation as well.
+  if(MSVC)
+    string(APPEND CMAKE_C_FLAGS " /guard:cf /Qspectre")
+    string(APPEND CMAKE_CXX_FLAGS " /guard:cf /Qspectre")
+  endif()
+
+  if(AZOOKEY_LLAMA_CPP_SOURCE_DIR)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+    set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${AZOOKEY_LLAMA_CPP_SOURCE_DIR}"
+                     "${CMAKE_BINARY_DIR}/_deps/llama.cpp-build"
+                     EXCLUDE_FROM_ALL)
+  elseif(AZOOKEY_FETCH_LLAMA_CPP)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+    set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+    include(FetchContent)
+    FetchContent_Declare(
+      llama_cpp
+      GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+      GIT_TAG        ${AZOOKEY_LLAMA_CPP_GIT_TAG}
+      GIT_PROGRESS   TRUE
+    )
+    FetchContent_MakeAvailable(llama_cpp)
+  endif()
+endfunction()
+
 set(AZOOKEY_WITH_LLAMA_CPP OFF)
-if(AZOOKEY_LLAMA_CPP_SOURCE_DIR)
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-  set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
-  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-  add_subdirectory("${AZOOKEY_LLAMA_CPP_SOURCE_DIR}"
-                   "${CMAKE_BINARY_DIR}/_deps/llama.cpp-build"
-                   EXCLUDE_FROM_ALL)
-elseif(AZOOKEY_FETCH_LLAMA_CPP)
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-  set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
-  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-  include(FetchContent)
-  FetchContent_Declare(
-    llama_cpp
-    GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-    GIT_TAG        ${AZOOKEY_LLAMA_CPP_GIT_TAG}
-    GIT_PROGRESS   TRUE
-  )
-  FetchContent_MakeAvailable(llama_cpp)
-endif()
+azookey_add_llama_cpp()
 
 if(TARGET llama)
   set(AZOOKEY_WITH_LLAMA_CPP ON)
@@ -175,10 +187,10 @@ add_library(azookey_binary_hardening INTERFACE)
 target_link_options(azookey_binary_hardening INTERFACE
   $<$<CXX_COMPILER_ID:MSVC>:/GUARD:CF /DYNAMICBASE /NXCOMPAT>
   $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>>:/HIGHENTROPYVA /CETCOMPAT>
-  # MSVC ASan imports its runtime from beside the executable. Restricting
-  # static imports to System32 would prevent the instrumented image from
-  # loading, so keep this mitigation on every non-ASan shipping build.
-  $<$<AND:$<CXX_COMPILER_ID:MSVC>,$<NOT:$<BOOL:${AZOOKEY_ENABLE_ASAN}>>>:/DEPENDENTLOADFLAG:0x800>
+  # Search only the module directory, application directory, and System32.
+  # The first two preserve the MSI app-local CRT contract for both the TIP DLL
+  # and host executable while excluding the current directory and PATH.
+  $<$<CXX_COMPILER_ID:MSVC>:/DEPENDENTLOADFLAG:0xB00>
 )
 
 if(AZOOKEY_ENABLE_ASAN)

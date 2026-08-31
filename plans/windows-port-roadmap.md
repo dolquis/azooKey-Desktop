@@ -333,7 +333,7 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
 | 検査 | 実行系統 | 内容 |
 |---|---|---|
 | `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）で `core`/`ipc`/`learning`/`inference-host` を、`windows-asan`（MSVC ASan）でこれに `tsf-tip` を加えた全体を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
-| `.github/workflows/windows.yml` の `quality` / `linux-no-tests` | GitHub Actions（PR / `main` push / 手動 dispatch） | pre-commit の actionlint / taplo（yamlfmt の既存 baseline は DEV-913）、PR commit range または作業ツリーの非ステージ gitleaks 走査、`AZOOKEY_BUILD_TESTS=OFF` + bench 無効の Linux build を独立ジョブで検証（`docs/dev-infrastructure-spec.md` §4.3） |
+| `.github/workflows/secret-scan.yml` / `.github/workflows/windows.yml` の `quality` / `linux-no-tests` / `windows-no-tests` | GitHub Actions（PR / `main` push / 手動 dispatch） | path 除外なしの secret scan で PR commit range または作業ツリーを gitleaks 走査。pre-commit の actionlint / taplo（yamlfmt の既存 baseline は DEV-913）、`AZOOKEY_BUILD_TESTS=OFF` + bench 無効の Linux / Windows build を独立ジョブで検証（`docs/dev-infrastructure-spec.md` §4.3） |
 | `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
 | `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/dev-infrastructure-spec.md` §2.5。§12 の `azookey_diag.exe` とは別物） |
 

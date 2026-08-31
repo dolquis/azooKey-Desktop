@@ -90,15 +90,18 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
   系オプション（`/utf-8` `/permissive-` `/EHsc` `/Zc:__cplusplus` `/sdl`
   `/guard:cf` `/Qspectre`）。各実体 target が `PUBLIC` でリンクし、最終バイナリへ
   入る project 管理下の static library object にも CFG instrumentation を適用する。
+  llama.cpp / ggml はこの target を参照しないため、Windows MSVC で取り込む
+  subdirectory の `CMAKE_C_FLAGS` / `CMAKE_CXX_FLAGS` に同じ `/guard:cf` `/Qspectre` を
+  スコープ限定で追加し、Host へ入る third-party object も計装する。
 - `azookey_project_warnings` — 警告レベル（MSVC `/W4`、非 MSVC
   `-Wall -Wextra -Wpedantic`）。各実体 target が `PRIVATE` でリンク。
 - `azookey_binary_hardening` — `azookey_tsf_tip.dll` と
   `azookey_inference_host.exe` だけが `PRIVATE` でリンクする。MSVC linker に
   `/GUARD:CF` `/DYNAMICBASE` `/NXCOMPAT` を渡し、x64 では加えて
-  `/HIGHENTROPYVA` `/CETCOMPAT` を渡す。通常ビルドでは
-  `/DEPENDENTLOADFLAG:0x800` により静的 import の探索を System32 に限定する。
-  MSVC ASan は runtime DLL を実行体の隣へ配置するため、ASan 構成だけは
-  `/DEPENDENTLOADFLAG:0x800` を除外し、他の mitigation は維持する。
+  `/HIGHENTROPYVA` `/CETCOMPAT` を渡す。`/DEPENDENTLOADFLAG:0xB00` により静的 import の
+  探索を DLL load directory、application directory、System32 に限定する。これは current
+  directory と `PATH` を除外しつつ、MSI が TIP / Host と同じ `INSTALLFOLDER` に配置する
+  app-local VC runtime、および MSVC ASan の隣接 runtime DLL を解決できる構成である。
 
 `/Qspectre` は 2026-08-31 に MSVC Release の `azookey_bench` を各 30 回交互実行して
 採用した。p95 中央値は 0.0018 ms から 0.0023 ms（+0.0005 ms）、p99 中央値は
@@ -504,7 +507,9 @@ OFF のまま）。
 - Linux 補助ジョブ — `core` / `ipc` / `learning` / `inference-host` の
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
-- `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ
+- `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
+  移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
+  含む非テスト target を `windows-no-tests` preset で継続検証する
 - dependency review — PR で追加・更新された依存だけを対象にし、既知の脆弱性が
   High または Critical の場合は必須チェックを失敗させる。結果は job summary に残し、
   PR コメントは投稿しないため `pull-requests: write` 権限を付与しない。GitHub の
@@ -515,7 +520,7 @@ OFF のまま）。
   `azookey_tsf_tip.dll`、`azookey_inference_host.exe`、`azookey_settings.exe` を
   固定版 BinSkim で検査し、Pass を含む SARIF、`dumpbin /loadconfig`、要約を artifact と
   job summary に残す。TIP / Host は BinSkim `BA2008` の CFG Pass と
-  `Dependent Load Flag 0800` を確認する。BinSkim には `DependentLoadFlags` のルールが
+  `Dependent Load Flag 0B00` を確認する。BinSkim には `DependentLoadFlags` のルールが
   ないため、後者は `dumpbin` で機械判定する。署名は CI packaging 後に行うため
   `BA2022.SignSecurely` だけを設定ファイルで無効化し、他のルールは既定のまま維持する
 - GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ

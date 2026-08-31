@@ -22,6 +22,7 @@ namespace azookey::tsf {
 
 #ifdef AZOOKEY_TSF_TESTING
 namespace testing {
+using TranslateOemCompositionCharacterFnForTest = std::optional<WCHAR> (*)(WPARAM, LPARAM);
 using GetGuiThreadInfoFnForTest = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
 using GetPhysicalCursorPosFnForTest = BOOL(WINAPI*)(LPPOINT);
@@ -41,6 +42,11 @@ void ClearPendingCommitObservationFailureForTest();
 bool ConsumePendingCommitObservationFailureForTest();
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type);
+std::optional<WCHAR> TranslateOemCompositionCharacterUsingWin32ForTest(WPARAM virtual_key,
+                                                                       LPARAM key_data);
+void SetTranslateOemCompositionCharacterForTest(
+    TranslateOemCompositionCharacterFnForTest translate_character);
+void ClearTranslateOemCompositionCharacterForTest();
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
     GetPhysicalCursorPosFnForTest get_physical_cursor_pos,

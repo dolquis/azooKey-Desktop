@@ -506,6 +506,13 @@ OFF のまま）。
   分離する（§2.3）
 - Linux 補助ジョブ — `core` / `ipc` / `learning` / `inference-host` の
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
+- Linux coverage ジョブ — Clang 18 の source-based coverage で portable subset
+  （`core` / `ipc` / `learning` / `inference-host`）の行・分岐カバレッジを測る。
+  tests / `third_party` / `build` は集計から除外し、HTML・LCOV・JSON summary を
+  `linux-llvm-coverage` artifact として 14 日保持する。初期段階では数値を可視化する
+  だけで、目標値を下回ってもジョブを失敗させない。一方、profile が生成されない、
+  またはレポート生成に失敗するなど計測基盤が壊れた場合はジョブを失敗させる。
+  Windows 専用コードと Cobertura は Phase 2 の OpenCppCoverage 導入時に追加する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
   移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
@@ -559,7 +566,8 @@ BinSkim も既存所見を可視化する段階では **advisory**（`continue-o
 ### 4.4 artifact 整理
 
 configure / build / test の各ログ、Release ビルドの `.pdb`、Release binary hardening の
-SARIF・`dumpbin` 出力・要約を artifact として保存する。PR diagnostic コメントは
+SARIF・`dumpbin` 出力・要約、Linux coverage の HTML・LCOV・JSON summary を
+artifact として保存する。PR diagnostic コメントは
 マトリクスの config ごとの結果を反映する。Release 用 artifact の保持期間は 14 日間とする。
 
 ### 4.5 bench smoke と回帰監視
@@ -1765,7 +1773,14 @@ WIL は header-only のため、vcpkg ではなく submodule または `FetchCon
 | 候補表示レイテンシ | p50 < 80ms / p95 < 180ms | §4.5, §7.3 |
 | Host 異常停止時の復旧時間 | 中央値 3 秒以内 | §8.3 |
 | CI 成功率 | main 連続 14 日で > 95% | §4 |
+| Portable C++ 行カバレッジ | 80%（初期段階は informational） | §4.3 |
 | 学習永続化の破損率 | 0%（クラッシュ注入テストで確認） | §5.4 |
+
+Portable C++ 行カバレッジは Linux coverage ジョブの `summary.txt` と `summary.json` で
+継続観測する。
+80% は目標値であり、初期段階では PR の合否条件にしない。
+Windows 専用コードを含む全体値は OpenCppCoverage 導入後に別系列として扱い、
+portable subset の履歴へ混在させない。
 
 ## 11. 不採用とした提案
 

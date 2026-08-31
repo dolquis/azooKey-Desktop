@@ -68,6 +68,8 @@ option(AZOOKEY_EMBED_MSIX_IDENTITY
        "Embed pkg/msix/azookey_inference_host.exe.manifest into the host executable (MSVC)" ON)
 option(AZOOKEY_ENABLE_ASAN "Enable AddressSanitizer for supported targets" OFF)
 option(AZOOKEY_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for supported targets" OFF)
+option(AZOOKEY_ENABLE_COVERAGE
+       "Enable Clang source-based coverage instrumentation for supported targets" OFF)
 
 if(AZOOKEY_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   message(FATAL_ERROR
@@ -222,6 +224,18 @@ if(AZOOKEY_ENABLE_UBSAN)
   else()
     message(FATAL_ERROR
       "AZOOKEY_ENABLE_UBSAN is unsupported with ${CMAKE_CXX_COMPILER_ID}")
+  endif()
+endif()
+
+if(AZOOKEY_ENABLE_COVERAGE)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(azookey_project_options INTERFACE
+      -fprofile-instr-generate -fcoverage-mapping)
+    target_link_options(azookey_project_options INTERFACE
+      -fprofile-instr-generate)
+  else()
+    message(FATAL_ERROR
+      "AZOOKEY_ENABLE_COVERAGE requires a Clang toolchain")
   endif()
 endif()
 

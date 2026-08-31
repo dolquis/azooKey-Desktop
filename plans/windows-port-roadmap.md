@@ -333,6 +333,7 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
 | 検査 | 実行系統 | 内容 |
 |---|---|---|
 | `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）で `core`/`ipc`/`learning`/`inference-host` を、`windows-asan`（MSVC ASan）でこれに `tsf-tip` を加えた全体を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
+| `.github/workflows/secret-scan.yml` / `.github/workflows/windows.yml` の `quality` / `linux-no-tests` / `windows-no-tests` | GitHub Actions（PR / `main` push / 手動 dispatch） | path 除外なしの secret scan で PR commit range または作業ツリーを gitleaks 走査。pre-commit の actionlint / taplo（yamlfmt の既存 baseline は DEV-913）、`AZOOKEY_BUILD_TESTS=OFF` + bench 無効の Linux / Windows build を独立ジョブで検証（`docs/dev-infrastructure-spec.md` §4.3） |
 | `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
 | `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/dev-infrastructure-spec.md` §2.5。§12 の `azookey_diag.exe` とは別物） |
 
@@ -374,14 +375,6 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
    部分は `compat-test/m3_display_attribute_checklist.md`（D-01〜D-10）で先行して定義済み。
 7. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui の
    フェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
-8. **pre-commit 一式の CI ゲート** — 既存 pre-commit（clang-format / gitleaks / actionlint /
-   settings schema / yamlfmt / taplo）を CI の独立ジョブとしても実行し、手元と CI の検査差分を無くす。
-   ただし gitleaks フックは `--staged`（pre-commit モード・`pass_filenames: false`）で定義されており、
-   `pre-commit run --all-files` でもステージ差分しか走査しない。クリーンな CI チェックアウトでは
-   秘密検出が偽陰性になるため、CI の秘密走査はこのフックに依存させず、PR コミット範囲
-   （`gitleaks git --log-opts=...`）または `gitleaks dir` による非ステージ走査を別ステップとして
-   用意する（同 §4.3。schema 単独ゲートは DEV-392 で先行）。
-
 ## リスクと不確実性
 
 未決の設計判断:

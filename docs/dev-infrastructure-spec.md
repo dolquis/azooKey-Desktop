@@ -87,10 +87,26 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 オプションを一元管理する。
 
 - `azookey_project_options` — C++ 標準（`cxx_std_20`）と MSVC ハードニング
-  系オプション（`/utf-8` `/permissive-` `/EHsc` `/Zc:__cplusplus` `/sdl`）。
-  各実体 target が `PUBLIC` でリンク。
+  系オプション（`/utf-8` `/permissive-` `/EHsc` `/Zc:__cplusplus` `/sdl`
+  `/guard:cf` `/Qspectre`）。各実体 target が `PUBLIC` でリンクし、最終バイナリへ
+  入る project 管理下の static library object にも CFG instrumentation を適用する。
+  llama.cpp / ggml はこの target を参照しないため、Windows MSVC で取り込む
+  subdirectory の `CMAKE_C_FLAGS` / `CMAKE_CXX_FLAGS` に同じ `/guard:cf` `/Qspectre` を
+  スコープ限定で追加し、Host へ入る third-party object も計装する。
 - `azookey_project_warnings` — 警告レベル（MSVC `/W4`、非 MSVC
   `-Wall -Wextra -Wpedantic`）。各実体 target が `PRIVATE` でリンク。
+- `azookey_binary_hardening` — `azookey_tsf_tip.dll` と
+  `azookey_inference_host.exe` だけが `PRIVATE` でリンクする。MSVC linker に
+  `/GUARD:CF` `/DYNAMICBASE` `/NXCOMPAT` を渡し、x64 では加えて
+  `/HIGHENTROPYVA` `/CETCOMPAT` を渡す。`/DEPENDENTLOADFLAG:0xB00` により静的 import の
+  探索を DLL load directory、application directory、System32 に限定する。これは current
+  directory と `PATH` を除外しつつ、MSI が TIP / Host と同じ `INSTALLFOLDER` に配置する
+  app-local VC runtime、および MSVC ASan の隣接 runtime DLL を解決できる構成である。
+
+`/Qspectre` は 2026-08-31 に MSVC Release の `azookey_bench` を各 30 回交互実行して
+採用した。p95 中央値は 0.0018 ms から 0.0023 ms（+0.0005 ms）、p99 中央値は
+0.0037 ms から 0.00405 ms（+0.00035 ms）であり、§4.5 の絶対ノイズ下限 0.05 ms を
+下回った。
 
 `/W4` は既存コードで警告が大量に出る場合、target 単位で段階導入する
 （新規モジュールから適用し、既存は警告解消とセットで切替）。TSF DLL / Host
@@ -491,7 +507,25 @@ OFF のまま）。
 - Linux 補助ジョブ — `core` / `ipc` / `learning` / `inference-host` の
   非 Windows 依存部分のみをビルド・テストし、移植性回帰を早期検出する
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
-- `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ
+- `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
+  移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
+  含む非テスト target を `windows-no-tests` preset で継続検証する
+- dependency review — PR で追加・更新された依存だけを対象にし、既知の脆弱性が
+  High または Critical の場合は必須チェックを失敗させる。結果は job summary に残し、
+  PR コメントは投稿しないため `pull-requests: write` 権限を付与しない。GitHub の
+  Dependency Graph と repository variable `DEPENDENCY_REVIEW_ENABLED=true` の有効化は
+  Human Gate とする。未完了の間は job summary に前提不足を警告し、全 PR を失敗させない。
+  有効化後は High / Critical の検出を必須ゲートとして扱う
+- BinSkim binary hardening analysis — Windows Release の
+  `azookey_tsf_tip.dll`、`azookey_inference_host.exe`、`azookey_settings.exe` を
+  固定版 BinSkim で検査し、Pass を含む SARIF、`dumpbin /loadconfig`、要約を artifact と
+  job summary に残す。TIP / Host は BinSkim `BA2008` の CFG Pass と
+  `Dependent Load Flag 0B00` を確認する。BinSkim には `DependentLoadFlags` のルールが
+  ないため、後者は `dumpbin` で機械判定する。署名は CI packaging 後に行うため
+  `BA2022.SignSecurely` だけを設定ファイルで無効化し、他のルールは既定のまま維持する
+- GitHub Actions supply-chain pin — 外部 Action の `uses:` はフル 40 桁 commit SHA へ
+  固定し、対応するリリースタグを行末コメントに残す。Dependabot の
+  `github-actions` ecosystem を週次実行し、更新をまとめた PR で SHA を追従する
 - settings JSON Schema — `check-jsonschema==0.37.3` で
   `settings/mvp-settings.schema.json` の meta-schema 妥当性と、
   `settings/default-settings.sample.json` の schema 適合性を確認する
@@ -518,11 +552,15 @@ clang-tidy / CodeQL は**必須ゲートには含めない**（導入コスト�
 所要時間を短縮する。加えてワークフロー全体に `concurrency` グループを設定し、
 同一 PR で新しい push が来たら進行中の run を畳む（`main` への push は畳まない）。
 
+BinSkim も既存所見を可視化する段階では **advisory**（`continue-on-error`、
+非ブロッキング）とし、所見や解析基盤の一時障害で PR を止めない。必須ゲート化は
+`azookey_settings.exe` を含む所見の整理と運用実績を得てから別途判断する（§11.5）。
+
 ### 4.4 artifact 整理
 
-configure / build / test の各ログと、Release ビルドの `.pdb` を artifact
-として保存する。PR diagnostic コメントはマトリクスの config ごとの結果を
-反映する。`.pdb` artifact の保持期間は 14 日間とする。
+configure / build / test の各ログ、Release ビルドの `.pdb`、Release binary hardening の
+SARIF・`dumpbin` 出力・要約を artifact として保存する。PR diagnostic コメントは
+マトリクスの config ごとの結果を反映する。Release 用 artifact の保持期間は 14 日間とする。
 
 ### 4.5 bench smoke と回帰監視
 
@@ -1785,6 +1823,11 @@ PR が止まるのを避けつつ新規コード品質を上げる中間策と�
 **advisory（非ブロッキング）**で導入済み。所見の可視化に留め、必須ゲート化・全体化
 （全ソースへの拡大、CodeQL 追加）は将来判断とし Linear で追跡する（2026-07 開発基盤
 ツール導入 第2弾）。
+
+同じ段階導入方針を Release バイナリの BinSkim にも適用する。現時点では
+`continue-on-error` の advisory とし、SARIF・job summary・artifact に所見を残す。
+未署名に由来する `BA2022` だけを抑止し、他のルール結果を隠さない。必須ゲート化は
+所見の基準線を整理し、ツール取得と解析の安定性を確認した後の将来判断とする。
 
 ### 11.6 IPC payload の Protobuf 即時移行 — 不採用
 

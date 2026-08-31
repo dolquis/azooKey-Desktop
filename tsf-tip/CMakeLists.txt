@@ -15,6 +15,7 @@ target_link_libraries(azookey_tsf_tip
   PRIVATE
     azookey_core
     azookey_ipc
+    azookey_binary_hardening
     azookey_project_options
     azookey_project_warnings
     ole32

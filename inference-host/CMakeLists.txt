@@ -42,7 +42,11 @@ endif()
 
 add_executable(azookey_inference_host src/main.cpp)
 target_link_libraries(azookey_inference_host
-  PRIVATE azookey_host azookey_project_options azookey_project_warnings
+  PRIVATE
+    azookey_host
+    azookey_binary_hardening
+    azookey_project_options
+    azookey_project_warnings
 )
 
 # --- MSIX package identity（Option A / M28・DEV-101）--------------------------

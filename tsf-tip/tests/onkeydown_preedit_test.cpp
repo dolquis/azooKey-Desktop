@@ -71,12 +71,33 @@ bool CurrentKeyboardLayoutProduces(WPARAM virtual_key, bool shift, WCHAR expecte
   return translated_count == 1 && translated[0] == expected;
 }
 
-bool SupportsDefaultOemPunctuationTestLayout() {
-  return CurrentKeyboardLayoutProduces(VK_OEM_COMMA, false, L',') &&
-         CurrentKeyboardLayoutProduces(VK_OEM_PERIOD, false, L'.') &&
-         CurrentKeyboardLayoutProduces(VK_OEM_2, false, L'/') &&
-         CurrentKeyboardLayoutProduces(VK_OEM_2, true, L'?');
+std::optional<WCHAR> TranslateDefaultOemCompositionCharacterForTest(WPARAM virtual_key, LPARAM) {
+  switch (virtual_key) {
+    case VK_OEM_COMMA:
+      return L',';
+    case VK_OEM_PERIOD:
+      return L'.';
+    case VK_OEM_2: {
+      std::array<BYTE, 256> keyboard_state{};
+      if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+      return (keyboard_state[VK_SHIFT] & 0x80) != 0 ? L'?' : L'/';
+    }
+    default:
+      return std::nullopt;
+  }
 }
+
+class OemCompositionTranslationGuard {
+ public:
+  OemCompositionTranslationGuard() {
+    azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+        &TranslateDefaultOemCompositionCharacterForTest);
+  }
+
+  ~OemCompositionTranslationGuard() {
+    azookey::tsf::testing::ClearTranslateOemCompositionCharacterForTest();
+  }
+};
 
 template <typename Predicate>
 bool WaitUntil(Predicate predicate,
@@ -742,9 +763,7 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
 
 TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   TextServiceHarness h;
-  if (!SupportsDefaultOemPunctuationTestLayout()) {
-    GTEST_SKIP() << "requires an en-US or Japanese layout with , . / ? OEM mappings";
-  }
+  OemCompositionTranslationGuard oem_translation;
   h.keyboard_state.SetDown(VK_SHIFT, false);
   h.keyboard_state.SetDown(VK_LSHIFT, false);
   h.keyboard_state.SetDown(VK_RSHIFT, false);
@@ -798,9 +817,7 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchOemPunctuationKeepsAsciiRawAndBackspacesAtomically) {
   TextServiceHarness h;
-  if (!SupportsDefaultOemPunctuationTestLayout()) {
-    GTEST_SKIP() << "requires an en-US or Japanese layout with , . / ? OEM mappings";
-  }
+  OemCompositionTranslationGuard oem_translation;
   h.service.set_batch_romaji_options_for_test(true);
   h.keyboard_state.SetDown(VK_SHIFT, false);
   h.keyboard_state.SetDown(VK_LSHIFT, false);

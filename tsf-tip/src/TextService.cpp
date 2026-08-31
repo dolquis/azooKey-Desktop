@@ -205,8 +205,7 @@ std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
   return surface;
 }
 
-std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual_key,
-                                                                  LPARAM key_data) {
+std::optional<WCHAR> TranslateOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
   if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2) {
     return std::nullopt;
   }
@@ -226,8 +225,28 @@ std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual
       static_cast<UINT>(virtual_key), scan_code, keyboard_state.data(), translated.data(),
       static_cast<int>(translated.size()), kDoNotChangeKeyboardState, keyboard_layout);
   if (translated_count != 1) return std::nullopt;
+  return translated[0];
+}
 
-  switch (translated[0]) {
+#ifdef AZOOKEY_TSF_TESTING
+azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest
+    g_translate_oem_composition_character = &TranslateOemCompositionCharacter;
+#endif
+
+std::optional<WCHAR> CurrentOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_translate_oem_composition_character(virtual_key, key_data);
+#else
+  return TranslateOemCompositionCharacter(virtual_key, key_data);
+#endif
+}
+
+std::optional<OemCompositionSymbol> TranslateOemCompositionSymbol(WPARAM virtual_key,
+                                                                  LPARAM key_data) {
+  const auto translated = CurrentOemCompositionCharacter(virtual_key, key_data);
+  if (!translated) return std::nullopt;
+
+  switch (*translated) {
     case L',':
     case L'、':
       return OemCompositionSymbol{',', "、"};
@@ -421,6 +440,16 @@ bool ConsumePendingCommitObservationFailureForTest() {
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type) {
   return IsExpectedIpcResponse(response, expected_request_id, expected_type);
+}
+
+void SetTranslateOemCompositionCharacterForTest(
+    TranslateOemCompositionCharacterFnForTest translate_character) {
+  g_translate_oem_composition_character =
+      translate_character ? translate_character : &TranslateOemCompositionCharacter;
+}
+
+void ClearTranslateOemCompositionCharacterForTest() {
+  g_translate_oem_composition_character = &TranslateOemCompositionCharacter;
 }
 
 void SetCaretWin32ApiForTest(

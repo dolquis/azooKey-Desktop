@@ -613,8 +613,10 @@ schema v1 のトップレベル契約は次のとおりとする。
 `tokens` は全標本の decode token 数の合計である。
 `latencyMs` は iteration ごとの phase 合計時間から求めた `p50`、`p95`、`p99`、`max` とする。
 `decodePhases.beam.evaluations` は全標本の beam 評価回数の合計であり、`samples` とは母数が
-異なる。step 0 の空 token beam も評価に含むが、この評価は `llama_decode` を呼ばないため、
-`latencyMs` を `evaluations` で割って 1 decode あたりの時間を求めてはならない。
+異なる。beam 評価は `llama_decode` 呼び出しと 1 対 1 に対応しない（step 0 の空 token beam は
+decode を呼ばず、複数 beam の評価が 1 回の decode にまとまる構成もある。
+`zenzai-inference-spec` §9.2.3）。したがって `latencyMs` を `evaluations` で割って
+1 decode あたりの時間を求めてはならない。
 llama.cpp 無効構成の mock runtime と `azookey_bench` は phase 内訳を取得できないため、
 `decodePhases` を出力しない。
 

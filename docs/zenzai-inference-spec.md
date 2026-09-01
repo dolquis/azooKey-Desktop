@@ -591,8 +591,8 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
 - CPU の llama.cpp 経路は、変換ごとにプロンプトを 1 回だけ decode する。
-  各 beam の評価前に sequence 0 のプロンプト以降を削除し、beam 固有の生成 token だけを
-  decode する。KV キャッシュ全体の clear は次の変換のプロンプト開始時に限る。
+  beam ごとの KV キャッシュの扱い（sequence 割り当て、prune 時の付け替え、中断時の状態）は
+  **§9.2.3** が規定する。KV キャッシュ全体の clear は次の変換のプロンプト開始時に限る。
 - `azookey_zenzai_bench` は、プロンプトと beam の decode 時間、decode token 数、
   beam 評価回数を schema v1 の `decodePhases` と text 出力へ記録する。
   統計は正常完了した変換だけを対象とし、中断または例外で終わった変換の途中経過は公開しない。
@@ -681,6 +681,170 @@ cancel を受け取らないため、長い Zenzai decode は途中中断でき�
    stale work を bound できる（hard mid-decode cancel の完全対応は M10 / DEV-106 と協調）。
 3. これにより long decode が `state_mutex_` を保持して後続クエリを待たせる時間を、§8 の
    p95 予算で上限化する。
+
+### 9.2.3 beam 探索のマルチシーケンス契約（DEV-857 が実装）
+
+現行実装は step ごとに beam の生成 token 列を先頭から decode し直す。本節は、beam ごとに
+KV キャッシュの sequence を分け、1 step を 1 回の `llama_decode` にまとめる方式の契約を定める。
+§9.2 の「beam ごとに生成 token を再 decode する」記述を置き換えるのは本節である。
+
+**DEV-857 本文のスケッチとの差分**: 本契約は sequence を 1 本多く取り、`seq_id` 0 を prompt
+専用に固定する。DEV-857 本文は `n_seq_max = kMaxModelCandidates` として `seq_id` 0 を beam 0 と
+共用するスケッチを載せているが、それでは DEV-859 の接頭辞キャッシュと同じ sequence を奪い合う
+（§9.2.3.6）。実装は本節の割り当てに従う。
+
+#### 9.2.3.1 sequence の役割と不変条件
+
+記号を次のように置く。
+
+- **B**：この変換の beam 幅。`RequestedCandidateLimit` が返す値（上限 `kMaxModelCandidates` = 4、
+  live 変換は 1）。B は同時に「beam あたりの展開 top-k」でもあり、この兼用は変えない。
+- **P**：この変換の prompt token 数。
+- **prompt sequence**：`seq_id` 0。現在の変換の prompt token だけを位置 0 から連続して保持する。
+  生成 token を入れない。
+- **working sequence**：`seq_id` 1 〜 `kMaxModelCandidates`。live beam が 1 本ずつ占有する。
+  生成 token はここにだけ入る。
+
+beam index と `seq_id` の対応は固定しない。対応は step ごとに §9.2.3.3 の規則で決まるため、
+実装は beam 側に「現在占有している working sequence」を持たせる。`llama_context` は
+`n_seq_max = kMaxModelCandidates + 1`（= 5）で作る。B が 1 の変換でも context は作り直さない。
+
+各 step の開始時点で次が成り立つ（**不変条件**）。
+
+1. live beam は全て同じ生成 token 数 n を持つ。各 step が全 live beam にちょうど 1 token を
+   足すためである。
+2. beam i の working sequence は、prompt の P 位置と、その beam の生成 token のうち先頭 n-1 個を
+   保持する。最新の 1 token は未 decode である。
+3. 相異なる live beam は相異なる working sequence を占有する。
+4. `seq_id` 0 は prompt の P 位置だけを保持する。
+
+n = 0（prompt decode 直後）だけは例外で、live beam は根 1 本、working sequence をまだ持たず、
+最初の token の logits は prompt decode の最終位置から読む。
+
+#### 9.2.3.2 1 step の手続き
+
+1. cancel と deadline を判定する（§9.2.3.5）。
+2. 各 live beam の未 decode token を 1 つの batch へ詰める。beam i のエントリは、token が
+   その beam の最新生成 token、位置が P + n - 1（不変条件 1 より全 beam で同じ値）、
+   `seq_id` が beam i の working sequence、logits 出力ありである。この batch を
+   1 回の decode で処理する。n = 0 の step は decode を行わない。
+3. beam ごとの logits を batch 内 index で読む。
+4. 各 beam を top-B へ展開する。EOS の子は確定候補へ送り、それ以外を次 step の beam 候補にする
+   （§6.2 と現行の展開規則を変えない）。
+5. `PruneBeams` で次 step の beam を B 本へ絞る。
+6. 生存 beam へ working sequence を割り当て直す（§9.2.3.3）。
+7. n を 1 増やす。
+
+#### 9.2.3.3 prune 時の seq 付け替え
+
+付け替えの正しさは次の性質に依る。**付け替えの時点で、同じ親を持つ子 beam の KV は完全に
+一致する**。子を区別する token はまだ decode されていないからである（不変条件 2）。したがって
+親の常駐範囲を丸ごと複製すれば、子の KV として正しい。
+
+割り当ては 3 段階で行う。
+
+1. **保持**：prune 後の生存 beam を順に見て、その親の working sequence をまだ誰も引き継いで
+   いなければ、その sequence をそのまま引き継ぐ。
+2. **解放**：生存 beam を 1 本も持たない親の working sequence を削除する。
+3. **複製**：残りの生存 beam へ空いている working sequence を割り当て、複製元の常駐範囲全体を
+   seq 単位でコピーする。複製元は親の working sequence であり、n = 0 の step では
+   `seq_id` 0 である（根は working sequence を持たないため）。
+
+段階の順序には次の根拠がある。
+
+- 解放を複製より先に行う。seq コピーは複製先の内容を消さないため、token の残る sequence を
+  複製先にすると 2 本の token 列が 1 つの sequence に混ざる。
+- 解放が複製元を消すことはない。生存 beam を持たない親は複製元にならないためである。
+- 数は必ず足りる。生存 beam を S 本、段階 1 で引き継がれた親を R 本とすると、複製が要るのは
+  S - R 本、空いている working sequence は `kMaxModelCandidates` - R 本以上であり、
+  S ≤ B ≤ `kMaxModelCandidates` である。
+
+複製範囲は位置の算術で書かず、「複製元 sequence の常駐範囲全体」とする。n = 0 の step では
+複製元が `seq_id` 0、範囲は prompt の P 位置である。n ≥ 1 の step では複製元が親の working
+sequence、範囲は decode 済みの P + n 位置である。
+
+割り当ては決定的に行う。生存 beam は prune 後の順序（rank 降順）で処理し、空いている working
+sequence は `seq_id` の昇順で取る。
+
+#### 9.2.3.4 live 変換（B = 1）
+
+live 変換は本方式の縮退であり、別契約にしない。B = 1 では live beam が常に 1 本で、prune で
+親が入れ替わらないため、§9.2.3.3 は最初の step で 1 回複製するだけになり、以後の step は
+working sequence へ 1 token を足す純増分 decode になる。step ごとの seq 削除は発生しない。
+
+B = 1 でも `seq_id` 0 を prompt 専用に保つ。DEV-859 の接頭辞キャッシュが最も効くのは
+キー入力ごとに走る live 経路であり、ここで `seq_id` 0 に生成 token を混ぜると再利用できる
+接頭辞が残らない。
+
+#### 9.2.3.5 cancel / deadline と KV の状態
+
+分類は変えない。cancel は空を返して fallback しない。deadline 超過はその時点の live beam を
+best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で変わるのは観測の粒度と、
+中断後に KV へ残る状態の扱いである。
+
+- 観測点は step 境界（§9.2.3.2 の手順 1）と decode 中の abort callback の 2 つで、現行と同じ。
+  1 step が 1 decode になるため、cancel 観測から停止までの上限は 1 バッチ decode になる。
+- deadline 超過時、live beam は全て同じ長さであり（不変条件 1）、その全てが best-so-far
+  として候補化される。UTF-8 の不完全な接尾を許容する扱いも現行のままとする。beam ごとに
+  中断していた現行実装と、契約として出る候補集合は変わらない。
+- 中断された decode が KV へ反映されたかを問い合わせる手段は無い。abort された decode が
+  触れた sequence の内容は不定として扱い、次の変換で再利用しない。
+- `Generate` は開始時に working sequence を全て消去する。前の変換が cancel、deadline、例外の
+  どれで終わっていても、この消去で状態が確定する。
+- KV キャッシュ全体を clear する経路（現行の `Generate` 冒頭、`neural-reranker-spec` §B3 の
+  NllScorer など）は、`seq_id` 0 の常駐記録も無効化する（§9.2.3.6）。
+
+#### 9.2.3.6 DEV-859（変換をまたぐ prompt 接頭辞 KV キャッシュ）との境界
+
+`seq_id` 0 の所有権と無効化条件は本節が規定する。DEV-859 が規定するのは「常駐する接頭辞を
+どこまで再利用し、どこから decode し直すか」の差分計算だけである。本節が課す制約は次の 3 つ。
+
+- beam 探索は `seq_id` 0 を読む（複製元にする）だけで、`seq_id` 0 に token を足さず、
+  `seq_id` 0 から token を削らない。
+- 常駐接頭辞を再利用する consumer が存在するとき、その consumer は `seq_id` 0 の常駐 token 列
+  （または一致判定に足る識別子と長さ）を自分で記録する。KV 側に問い合わせる手段は無い。
+- prompt decode が中断で完了しなかったとき、および KV キャッシュ全体を clear したときは、
+  その記録を無効（常駐長 0）とする。
+
+DEV-857 の実装時点では常駐接頭辞の再利用者が存在しない。DEV-857 は `Generate` 冒頭の KV 全体
+clear を現行のまま残してよく、常駐長の記録を先に作る必要はない。
+
+#### 9.2.3.7 context のサイズと実装時に確認する項目
+
+本方式は、全 sequence が 1 つのセル集合を共有し、seq コピーがセルの所属追加で済む KV キャッシュ
+構成を前提とする。pin 済み llama.cpp でこの前提が成り立たず seq コピーが実体コピーになる場合、
+本方式の利点は消える。その構成では本節を採らず、beam ごとに生成 token を再 decode する
+DEV-857 以前の方式を維持する。
+
+位置予算は、どの working sequence も P + `max_new` 位置を保持できることを条件とする
+（`max_new` は §8 の `MaxNewTokensForReading`、上限 64）。`n_ctx` が sequence 間で分割される
+構成では `n_ctx ≥ n_seq_max × (P の最大値 + max_new)`、共有される構成では
+`n_ctx ≥ P の最大値 + n_seq_max × max_new` を満たす値へ引き上げる。P の最大値はプロンプト契約
+（§3.2、左文脈 30 コードポイント）と受理する読み長から見積もる。予算を超える入力では KV を
+溢れさせず degrade する（§7.4）。
+
+関数名は本書で確定しない（`neural-reranker-spec` §B3.3 と同じ方針）。実装時に pin 済み
+llama.cpp のヘッダで次を確認する。
+
+- seq 単位のコピー操作の名前と、複製先が空であることを要求するかどうか
+- セル共有型（unified）の KV キャッシュが既定か、明示指定が要るか
+- 並列 sequence 数の上限定数が 5 以上か
+- `n_ctx` が sequence 間で分割されるか共有されるか
+
+#### 9.2.3.8 本契約が変更しないもの
+
+`BeamRankScore` と prune 規則、EOS 判定、UTF-8 の不完全な接尾の扱い、cancel と deadline の
+分類、degrade の分類（§7.4）、§6.5 の dedup と logprob 正規化、`RequestedCandidateLimit` に
+おける beam 幅と top-k の兼用。本節が置き換えるのは KV キャッシュの持ち方だけである。
+
+数値の同一性は保証しない。batch の構成が変わると logits がビット単位で一致する保証は無い。
+合否の判定は real-model smoke の厳密一致（§9.2 の token ID 列、`top_surface`）であり、
+一致しない場合に ranking を調整して合わせにいかない。
+
+計測側では `decodePhases.beam.evaluations` の定義（beam 評価回数）を変えない。本方式では
+1 step の全 beam 評価が 1 回の decode に対応するため、evaluations は decode 呼び出し回数と
+一致しない。beam phase の短縮は `decodePhases.beam.tokens` と `latencyMs` に現れる
+（`dev-infrastructure-spec` の `decodePhases` 定義を参照）。
 
 ### 9.3 設定項目（`EngineConfig` / settings.json）
 

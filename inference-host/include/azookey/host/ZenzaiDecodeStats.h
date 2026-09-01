@@ -9,8 +9,10 @@ struct ZenzaiDecodeStats {
   double prompt_decode_ms{};
   double beam_decode_ms{};
   uint64_t prompt_tokens{};
+  uint64_t prompt_reused_tokens{};
   uint64_t beam_tokens{};
   size_t beam_decode_evaluations{};
+  bool deadline_exceeded{};
 };
 
 }  // namespace azookey::host

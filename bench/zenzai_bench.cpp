@@ -14,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -46,6 +47,8 @@ namespace {
 struct Options {
   std::string model_path;
   std::string input = "にほんご";
+  std::vector<std::string> sequence_inputs;
+  std::vector<std::string> sequence_contexts;
   std::string context;
   size_t iterations{50};
   size_t warmup{3};
@@ -59,12 +62,15 @@ struct Options {
   std::optional<double> max_p95_ms;
   azookey::host::BackendKind backend{azookey::host::BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
+  std::optional<int32_t> n_threads;
+  std::optional<size_t> cancel_probe_delay_ms;
 };
 
 void PrintUsage(const char* exe) {
   std::cerr << "Usage: " << exe
-            << " [--model PATH] [--input KANA] [--context TEXT] [--iterations N]"
-               " [--warmup N] [--backend cpu|cuda] [--n-gpu-layers N]"
+            << " [--model PATH] [--input KANA] [--sequence-input KANA]"
+               " [--context TEXT] [--sequence-context TEXT] [--cancel-probe-ms N] [--iterations N]"
+               " [--warmup N] [--backend cpu|cuda] [--n-gpu-layers N] [--threads N]"
                " [--max-p95-ms N] [--require-model] [--require-zenzai]"
                " [--json] [--output PATH] [--baseline PATH]"
                " [--expected-prompt-token-ids ID[,ID...]]"
@@ -164,6 +170,17 @@ std::string FormatTokenIds(const std::vector<int32_t>& token_ids) {
   return result;
 }
 
+std::string FormatBoolSamples(const std::vector<bool>& samples) {
+  std::string result;
+  for (size_t i = 0; i < samples.size(); ++i) {
+    if (i > 0) {
+      result += ',';
+    }
+    result += samples[i] ? '1' : '0';
+  }
+  return result;
+}
+
 double ParseDouble(const std::string& value, const char* name) {
   try {
     size_t idx = 0;
@@ -218,8 +235,15 @@ Options ParseOptions(int argc, char** argv) {
       model_path_from_cli = true;
     } else if (arg == "--input") {
       options.input = RequireValue(argc, argv, i, "--input");
+    } else if (arg == "--sequence-input") {
+      options.sequence_inputs.push_back(RequireValue(argc, argv, i, "--sequence-input"));
     } else if (arg == "--context") {
       options.context = RequireValue(argc, argv, i, "--context");
+    } else if (arg == "--sequence-context") {
+      options.sequence_contexts.push_back(RequireValue(argc, argv, i, "--sequence-context"));
+    } else if (arg == "--cancel-probe-ms") {
+      options.cancel_probe_delay_ms =
+          ParseSize(RequireValue(argc, argv, i, "--cancel-probe-ms"), "--cancel-probe-ms");
     } else if (arg == "--iterations") {
       options.iterations = ParseSize(RequireValue(argc, argv, i, "--iterations"), "--iterations");
     } else if (arg == "--warmup") {
@@ -236,6 +260,11 @@ Options ParseOptions(int argc, char** argv) {
     } else if (arg == "--n-gpu-layers") {
       options.n_gpu_layers =
           ParseI32(RequireValue(argc, argv, i, "--n-gpu-layers"), "--n-gpu-layers");
+    } else if (arg == "--threads") {
+      options.n_threads = ParseI32(RequireValue(argc, argv, i, "--threads"), "--threads");
+      if (*options.n_threads <= 0) {
+        throw std::invalid_argument("--threads must be greater than 0");
+      }
     } else if (arg == "--max-p95-ms") {
       options.max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
     } else if (arg == "--json") {
@@ -264,6 +293,10 @@ Options ParseOptions(int argc, char** argv) {
   }
   if (options.iterations == 0) {
     throw std::invalid_argument("--iterations must be greater than 0");
+  }
+  if (!options.sequence_contexts.empty() &&
+      options.sequence_contexts.size() != options.sequence_inputs.size()) {
+    throw std::invalid_argument("--sequence-context count must match --sequence-input count");
   }
   return options;
 }
@@ -390,6 +423,7 @@ int RunBench(int argc, char** argv) {
   load_options.path = options.model_path;
   load_options.backend = options.backend;
   load_options.n_gpu_layers = options.n_gpu_layers;
+  load_options.n_threads = options.n_threads;
   load_options.mock_zenzai_candidates_for_tests = options.mock_zenzai && !AZOOKEY_WITH_LLAMA_CPP;
 
   const auto load_start = std::chrono::steady_clock::now();
@@ -406,8 +440,29 @@ int RunBench(int argc, char** argv) {
     return 1;
   }
 
+  if (options.cancel_probe_delay_ms) {
+    std::atomic<bool> cancel{false};
+    std::jthread cancel_thread([&cancel, delay_ms = *options.cancel_probe_delay_ms] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+      cancel.store(true, std::memory_order_relaxed);
+    });
+    const auto canceled =
+        engine.QueryCandidates(options.input, options.context, NowEpochSec(), &cancel, 0, false);
+    cancel_thread.join();
+    if (!cancel.load(std::memory_order_relaxed) || !canceled.empty()) {
+      std::cerr << "status=cancel-probe-failed" << std::endl;
+      return 1;
+    }
+  }
+
   for (size_t i = 0; i < options.warmup; ++i) {
-    (void)engine.QueryCandidates(options.input, options.context, NowEpochSec(), nullptr, 0, false);
+    const auto& input = options.sequence_inputs.empty()
+                            ? options.input
+                            : options.sequence_inputs[i % options.sequence_inputs.size()];
+    const auto& context = options.sequence_contexts.empty()
+                              ? options.context
+                              : options.sequence_contexts[i % options.sequence_contexts.size()];
+    (void)engine.QueryCandidates(input, context, NowEpochSec(), nullptr, 0, false);
   }
 
   std::vector<double> lat_ms;
@@ -417,22 +472,36 @@ int RunBench(int argc, char** argv) {
   std::vector<double> beam_decode_ms;
   beam_decode_ms.reserve(options.iterations);
   uint64_t prompt_decode_tokens = 0;
+  uint64_t prompt_reused_tokens = 0;
   uint64_t beam_decode_tokens = 0;
   size_t beam_decode_evaluations = 0;
+  std::vector<bool> deadline_cutoff_samples;
+  deadline_cutoff_samples.reserve(options.iterations);
+  size_t deadline_cutoff_count = 0;
   std::vector<azookey::core::Candidate> last_candidates;
   for (size_t i = 0; i < options.iterations; ++i) {
+    const auto& input = options.sequence_inputs.empty()
+                            ? options.input
+                            : options.sequence_inputs[i % options.sequence_inputs.size()];
+    const auto& context = options.sequence_contexts.empty()
+                              ? options.context
+                              : options.sequence_contexts[i % options.sequence_contexts.size()];
     const auto t0 = std::chrono::steady_clock::now();
-    last_candidates =
-        engine.QueryCandidates(options.input, options.context, NowEpochSec(), nullptr, 0, false);
+    last_candidates = engine.QueryCandidates(input, context, NowEpochSec(), nullptr, 0, false);
     const auto t1 = std::chrono::steady_clock::now();
     lat_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    bool deadline_exceeded = false;
     if (const auto stats = engine.last_zenzai_decode_stats()) {
       prompt_decode_ms.push_back(stats->prompt_decode_ms);
       beam_decode_ms.push_back(stats->beam_decode_ms);
       prompt_decode_tokens += stats->prompt_tokens;
+      prompt_reused_tokens += stats->prompt_reused_tokens;
       beam_decode_tokens += stats->beam_tokens;
       beam_decode_evaluations += stats->beam_decode_evaluations;
+      deadline_exceeded = stats->deadline_exceeded;
     }
+    deadline_cutoff_samples.push_back(deadline_exceeded);
+    deadline_cutoff_count += deadline_exceeded ? 1u : 0u;
   }
 
   std::sort(lat_ms.begin(), lat_ms.end());
@@ -461,6 +530,10 @@ int RunBench(int argc, char** argv) {
   result.threshold_passed = !options.max_p95_ms || p95 < *options.max_p95_ms;
   result.baseline = azookey::bench::CompareBaseline(options.baseline_path, result.bench,
                                                     result.config, result.latency);
+  result.deadline_cutoffs = azookey::bench::DeadlineCutoffMetrics{
+      deadline_cutoff_samples, deadline_cutoff_count,
+      static_cast<double>(deadline_cutoff_count) /
+          static_cast<double>(deadline_cutoff_samples.size())};
   if (!prompt_decode_ms.empty()) {
     std::sort(prompt_decode_ms.begin(), prompt_decode_ms.end());
     std::sort(beam_decode_ms.begin(), beam_decode_ms.end());
@@ -469,7 +542,8 @@ int RunBench(int argc, char** argv) {
                                             Percentile(samples, 99.0), samples.back()};
     };
     result.decode_phases = azookey::bench::DecodePhaseBreakdown{
-        {prompt_decode_ms.size(), prompt_decode_tokens, latency_metrics(prompt_decode_ms)},
+        {prompt_decode_ms.size(), prompt_decode_tokens, prompt_reused_tokens,
+         latency_metrics(prompt_decode_ms)},
         {beam_decode_ms.size(), beam_decode_tokens, beam_decode_evaluations,
          latency_metrics(beam_decode_ms)}};
   }
@@ -502,12 +576,15 @@ int RunBench(int argc, char** argv) {
               << " zenzai_candidates=" << zenzai_count << " top_surface=" << top_surface
               << " top_debug_info=" << top_debug
               << " effective_last_error=" << OptionalString(engine.effective_last_error())
-              << " prompt_token_ids="
+              << " deadline_cutoff_samples=" << FormatBoolSamples(deadline_cutoff_samples)
+              << " deadline_cutoff_count=" << deadline_cutoff_count
+              << " deadline_cutoff_rate=" << result.deadline_cutoffs->rate << " prompt_token_ids="
               << (prompt_token_ids ? FormatTokenIds(*prompt_token_ids)
                                    : std::string("not-checked"));
     if (result.decode_phases) {
       std::cout << " prompt_decode_p50_ms=" << result.decode_phases->prompt.latency.p50_ms
                 << " prompt_decode_tokens=" << result.decode_phases->prompt.tokens
+                << " prompt_reused_tokens=" << result.decode_phases->prompt.reused_tokens
                 << " beam_decode_p50_ms=" << result.decode_phases->beam.latency.p50_ms
                 << " beam_decode_tokens=" << result.decode_phases->beam.tokens
                 << " beam_decode_evaluations=" << result.decode_phases->beam.evaluations;

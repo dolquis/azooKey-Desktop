@@ -446,6 +446,20 @@ reranker でソートするのみで**クロスソース dedup をしない**た
   `copilot-pc-backend-spec` §4.2.1.1 の 20 入力中央値）は参考値であり、本表の
   評価には用いない。分位点目標は読み長の帯ごとに適用する。
 
+#### 8.1.1 CPU スレッド数
+
+- llama.cpp の `n_threads` と `n_threads_batch` は同じ値を明示設定する。
+  既定値は実行環境の hardware concurrency を 1 以上 8 以下にクランプした値とする。
+  これは P コア数程度の並列度を上限 8 で近似し、IME 常駐中の過剰な CPU 占有を避ける
+  ためである。hardware concurrency を取得できない場合は 1 とする。
+- 上限および計測機での既定値 8 は Intel Core i7-12700KF（P8 + E4）と Q5_K_M モデルを使った
+  `にほんご` 50 回の Release 計測で決めた。2、4、6、8 threads の順に p50 は
+  129.41ms、80.57ms、73.05ms、62.13ms、p95 は 149.98ms、90.03ms、79.02ms、
+  68.65ms だった。8 threads は prompt と beam の双方で最短であり、600ms deadline の
+  打ち切りも発生しなかった。
+- スレッド数のユーザー設定は本仕様に含めない。設定 UI から変更可能にする場合は、
+  settings schema と runtime 既定値の移行を別課題で定義する。
+
 ### 8.2 ハード予算（実行時 deadline）
 
 | 指標 | 値 | 根拠 |
@@ -590,11 +604,24 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 - C 文字列の所有権・解放規約に注意（`docs/zenzai-gpu-route.md` の先行実装
   「`strdup` 戻り値未解放＝リーク」反面教師。C-API 直結のため FFI 文字列リークは無いが、
   `llama_token_to_piece` バッファの寿命管理を明示する）。
-- CPU の llama.cpp 経路は、変換ごとにプロンプトを 1 回だけ decode する。
-  beam ごとの KV キャッシュの扱い（sequence 割り当て、prune 時の付け替え、中断時の状態）は
-  **§9.2.3** が規定する。KV キャッシュ全体の clear は次の変換のプロンプト開始時に限る。
+- CPU の llama.cpp 経路は、prompt sequence 0 を変換間で保持する。新しい prompt token 列と
+  直前の正常完了時に記録した token 列の共通接頭辞長を `p` とし、sequence 0 の `p` 以降を
+  削除して suffix だけを decode する。共通接頭辞が無い場合は sequence 0 を全削除して
+  prompt 全体を decode する。今回の prompt 全体が接頭辞に含まれる場合も、現在の prompt 末尾の
+  logits を得るため最終 token だけは削除して再 decode する。beam ごとの KV キャッシュの扱い
+  （sequence 割り当て、prune 時の付け替え、中断時の状態）は **§9.2.3** が規定し、beam は
+  sequence 0 を変更しない。
+- prompt 接頭辞キャッシュは、次のいずれかで無効化して sequence 0 を全削除する。
+  - 前回の `Generate` が例外または cancel で終了した場合。
+  - 前回の prompt decode が deadline または decode error で完了しなかった場合。
+  - モデル再ロードで `llama_context` が再生成された場合。この境界では runtime 自体を破棄する。
+  - tokenizer override または prompt template の変更により、記録した token 列を現 runtime の
+    prompt と比較できない場合。
+  preceding text、学習情報、ユーザー辞書など prompt 内容の変更は、新旧 token 列の比較で
+  suffix 差分または共通接頭辞 0 として扱う。deadline で best-so-far を返す正常完了は
+  sequence 0 を変更しないため、キャッシュを維持する。
 - `azookey_zenzai_bench` は、プロンプトと beam の decode 時間、decode token 数、
-  beam 評価回数を schema v1 の `decodePhases` と text 出力へ記録する。
+  prompt の再利用 token 数、beam 評価回数を schema v1 の `decodePhases` と text 出力へ記録する。
   統計は正常完了した変換だけを対象とし、中断または例外で終わった変換の途中経過は公開しない。
   phase 時間は性能原因の切り分けに使い、候補の機能検証や全体レイテンシの代替にはしない。
 

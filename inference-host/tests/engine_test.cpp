@@ -134,6 +134,41 @@ class BlockingConverter final : public azookey::core::IConverter {
   bool released_{false};
 };
 
+class DeadlineCapturingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    saw_deadline_ = context.deadline.has_value();
+    if (context.deadline) {
+      remaining_budget_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+          *context.deadline - std::chrono::steady_clock::now());
+    }
+    return {azookey::core::Candidate{kana, kana, 1.0, azookey::core::CandidateSource::Model,
+                                     "deadline-best-so-far"}};
+  }
+
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+  bool saw_deadline() const { return saw_deadline_; }
+  std::chrono::milliseconds remaining_budget() const { return remaining_budget_; }
+
+ private:
+  bool saw_deadline_{false};
+  std::chrono::milliseconds remaining_budget_{};
+};
+
 class ThrowingLearningStore final : public azookey::learning::LearningStore {
  public:
   ThrowingLearningStore()
@@ -1056,6 +1091,9 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   EXPECT_NE(candidates.front().debug_info.find("utf8-prefix-trimmed"), std::string::npos);
   EXPECT_EQ(candidates.front().debug_info.find("zenzai-degraded"), std::string::npos);
   EXPECT_FALSE(engine->effective_last_error().has_value());
+  const auto decode_stats = engine->last_zenzai_decode_stats();
+  ASSERT_TRUE(decode_stats.has_value());
+  EXPECT_TRUE(decode_stats->deadline_exceeded);
 
   auto invalid = engine->QueryCandidates("ないぶむこう", "", kNowBase + 1);
   ASSERT_FALSE(invalid.empty());
@@ -1065,6 +1103,68 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
 
   std::remove(model_path.c_str());
+  std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, RecommendsAvailableZenzaiThreadsCappedAtEight) {
+  EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(0), 1);
+  EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(2), 2);
+  EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(6), 6);
+  EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(8), 8);
+  EXPECT_EQ(azookey::host::RecommendedZenzaiThreadCount(20), 8);
+}
+
+TEST(InferenceEngineTest, FindsCommonPromptTokenPrefix) {
+  EXPECT_EQ(azookey::host::CommonPrefixLength({}, {}), 0u);
+  EXPECT_EQ(azookey::host::CommonPrefixLength({1, 2, 3}, {1, 2, 4}), 2u);
+  EXPECT_EQ(azookey::host::CommonPrefixLength({1, 2}, {1, 2, 3}), 2u);
+  EXPECT_EQ(azookey::host::CommonPrefixLength({1, 2, 3}, {1}), 1u);
+  EXPECT_EQ(azookey::host::CommonPrefixLength({1}, {2}), 0u);
+}
+
+TEST(InferenceEngineTest, PlansInitialBeamSequencesFromPromptRoot) {
+  const auto plan = azookey::host::PlanBeamSequenceAssignments({0, 0, 0, 0}, {});
+
+  EXPECT_EQ(plan.assignments, (std::vector<int32_t>{1, 2, 3, 4}));
+  EXPECT_TRUE(plan.releases.empty());
+  EXPECT_EQ(plan.copies,
+            (std::vector<azookey::host::BeamSequenceCopy>{{0, 1}, {0, 2}, {0, 3}, {0, 4}}));
+}
+
+TEST(InferenceEngineTest, PlansBeamSequenceRetentionReleaseAndCopiesDeterministically) {
+  const auto plan = azookey::host::PlanBeamSequenceAssignments({1, 1, 2, 2}, {1, 2, 3, 4});
+
+  EXPECT_EQ(plan.assignments, (std::vector<int32_t>{1, 3, 2, 4}));
+  EXPECT_EQ(plan.releases, (std::vector<int32_t>{3, 4}));
+  EXPECT_EQ(plan.copies, (std::vector<azookey::host::BeamSequenceCopy>{{1, 3}, {2, 4}}));
+}
+
+TEST(InferenceEngineTest, PlansPrunedBeamSequencesWithoutUnnecessaryCopies) {
+  const auto plan = azookey::host::PlanBeamSequenceAssignments({2, 1}, {1, 2, 3, 4});
+
+  EXPECT_EQ(plan.assignments, (std::vector<int32_t>{2, 1}));
+  EXPECT_EQ(plan.releases, (std::vector<int32_t>{3, 4}));
+  EXPECT_TRUE(plan.copies.empty());
+}
+
+TEST(InferenceEngineTest, ModelConversionDeadlineUsesSixHundredMillisecondBudget) {
+  const char* lpath = "azookey_host_engine_model_budget.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+
+  auto converter = std::make_unique<DeadlineCapturingConverter>();
+  auto* converter_ptr = converter.get();
+  azookey::host::EngineConfig config;
+  azookey::host::InferenceEngine engine(std::move(converter), &store, config);
+
+  const auto candidates = engine.QueryCandidates("にほんご", "", kNowBase);
+
+  ASSERT_FALSE(candidates.empty());
+  EXPECT_EQ(candidates.front().source, azookey::core::CandidateSource::Model);
+  EXPECT_TRUE(converter_ptr->saw_deadline());
+  EXPECT_LE(converter_ptr->remaining_budget(), std::chrono::milliseconds(600));
+  EXPECT_GE(converter_ptr->remaining_budget(), std::chrono::milliseconds(500));
+
   std::remove(lpath);
 }
 

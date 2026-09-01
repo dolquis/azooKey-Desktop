@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -20,9 +21,29 @@ struct ZenzaiModelInfo {
 
 struct ZenzaiRuntimeOptions {
   int32_t n_gpu_layers{};
+  std::optional<int32_t> n_threads;
   // Test-only fixture switch for no-llama builds; production callers leave this false.
   bool mock_candidates_for_tests{false};
 };
+
+int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads);
+size_t CommonPrefixLength(const std::vector<int32_t>& lhs, const std::vector<int32_t>& rhs);
+
+struct BeamSequenceCopy {
+  int32_t source_sequence{};
+  int32_t destination_sequence{};
+  bool operator==(const BeamSequenceCopy&) const = default;
+};
+
+struct BeamSequencePlan {
+  std::vector<int32_t> assignments;
+  std::vector<int32_t> releases;
+  std::vector<BeamSequenceCopy> copies;
+};
+
+BeamSequencePlan PlanBeamSequenceAssignments(const std::vector<int32_t>& parent_sequences,
+                                             const std::vector<int32_t>& active_sequences,
+                                             int32_t max_working_sequences = 4);
 
 struct ZenzaiModelRuntime;
 

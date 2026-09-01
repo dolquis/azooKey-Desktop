@@ -605,10 +605,16 @@ schema v1 のトップレベル契約は次のとおりとする。
 | `latencyMs` | object | millisecond 単位の `p50`、`p95`、`p99`、`max` |
 | `threshold` | object | `maxP95Ms`（未指定時は `null`）と `passed` |
 | `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
+| `deadlineCutoffs` | object（任意） | `azookey_zenzai_bench` の各 iteration が deadline で打ち切られたかを表す `samples`、打ち切り回数 `count`、打ち切り率 `rate` |
 | `decodePhases` | object（任意） | `azookey_zenzai_bench` の実モデル推論で取得した `prompt` と `beam` の decode 内訳 |
 
+`deadlineCutoffs.samples` は計測 iteration ごとの boolean 配列で、deadline により
+best-so-far で正常完了した iteration を `true` とする。
+`count` は `true` の数、`rate` は `count` を `samples` の要素数で割った値である。
+
 `decodePhases.prompt` と `decodePhases.beam` は、それぞれ `samples`、`tokens`、
-`latencyMs` を持つ。
+`latencyMs` を持つ。`decodePhases.prompt` は、変換間の prompt 接頭辞キャッシュから
+再利用した token 数の全標本合計 `reusedTokens` も持つ。
 `samples` は phase 時間の標本数で、正常完了した計測 iteration 数と一致する。
 `tokens` は全標本の decode token 数の合計である。
 `latencyMs` は iteration ごとの phase 合計時間から求めた `p50`、`p95`、`p99`、`max` とする。

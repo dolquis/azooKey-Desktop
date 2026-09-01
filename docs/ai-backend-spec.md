@@ -18,7 +18,8 @@
 
 > 本書は `inference-host/src/AiBackend.cpp`（新規・未実装）の契約を、実装着手前に
 > 確定するための正典仕様である。実装と差異が出た場合は本書を先に更新する。
-> 進捗・状態の正典は Linear（DEV-346 ほか）であり、本書は状態を持たない。
+> 進捗・状態の正典は Linear（M16 tracking 課題 DEV-938。本書の契約確定は DEV-346）
+> であり、本書は状態を持たない。
 
 ---
 
@@ -530,4 +531,5 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 - `response_format` 非対応の OpenAI 互換実装に対する互換性マトリクス。
 - 実 API 結合テストの CI 組み込み（鍵管理・コスト）。
 
-これらは Linear で起票・追跡する（本書は状態を持たない）。
+これらの追跡先は Linear の M16 tracking 課題（DEV-938）である。着手時に確定する
+論点として同課題が保持する（本書は状態を持たない）。

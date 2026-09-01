@@ -5,8 +5,7 @@ param(
   [string]$OutputDirectory = "",
   [string]$MockDictionaryPath = "",
   [string]$ModelPath = "",
-  [string]$RuntimeInstallerPath = "",
-  [switch]$IncludeSettingsApp
+  [string]$RuntimeInstallerPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -227,52 +226,6 @@ function Add-VmVerifyPayloadFile {
   }
 }
 
-# 設定アプリの publish 出力は単一ファイルではなくディレクトリなので、
-# Add-VmVerifyPayloadFile ではなく本関数で丸ごと取り込む。
-# 除外パターンは pkg/msi/Package.wxs の SettingsPayloadDir harvest と同一に保つ。
-# 片方だけを変更すると、MSI と検証パッケージで同梱物が食い違う。
-function Add-VmVerifyPayloadDirectory {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$SourceDirectory,
-    [Parameter(Mandatory = $true)]
-    [string]$ArchivePrefix,
-    [Parameter(Mandatory = $true)]
-    [string]$Role,
-    [Parameter(Mandatory = $true)]
-    [string]$StagingDirectory
-  )
-
-  if (-not (Test-Path -LiteralPath $SourceDirectory -PathType Container)) {
-    throw "Required VM verification payload is missing ($Role): $SourceDirectory"
-  }
-
-  # 区切り文字は両方を受ける。テストが非 Windows でも同じ判定を通せるようにするためで、
-  # Windows 上の実行結果は従来と変わらない。
-  $separators = [char[]]@("\", "/")
-  $root = (Resolve-Path -LiteralPath $SourceDirectory).Path.TrimEnd($separators)
-  $excludedExtensions = @(".exp", ".lib", ".pdb", ".ilk")
-  $entries = @()
-  foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse) {
-    $relative = $file.FullName.Substring($root.Length).TrimStart($separators)
-    $segments = $relative.Split($separators)
-    if ($segments[0] -ieq "obj") {
-      continue
-    }
-    if ($excludedExtensions -contains $file.Extension.ToLowerInvariant()) {
-      continue
-    }
-
-    $entries += Add-VmVerifyPayloadFile `
-      -SourcePath $file.FullName `
-      -ArchivePath ("$ArchivePrefix/" + ($relative -replace "\\", "/")) `
-      -Role $Role `
-      -StagingDirectory $StagingDirectory
-  }
-
-  return $entries
-}
-
 function Compress-VmVerifyArchive {
   param(
     [Parameter(Mandatory = $true)]
@@ -326,8 +279,7 @@ function Export-VmVerifyPackage {
     [string]$DestinationDirectory,
     [string]$MockDictionary = "",
     [string]$Model = "",
-    [string]$RuntimeInstaller = "",
-    [switch]$SettingsApp
+    [string]$RuntimeInstaller = ""
   )
 
   $repository = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -375,21 +327,6 @@ function Export-VmVerifyPackage {
       throw "Required build artifact is missing for preset '$PresetName': $artifact"
     }
   }
-  # settings-app/CMakeLists.txt の AZOOKEY_SETTINGS_OUTPUT_DIR と同じ規則で解決する。
-  # azookey_settings は ALL に含まれない custom target なので、既定のビルドでは出力が無い。
-  # そのため取り込みは -IncludeSettingsApp による明示指定に限る。
-  $settingsConfiguration = if ($actualBuildType -ieq "Debug") { "Debug" } else { "Release" }
-  $settingsDirectory = Join-Path `
-    $configuration.BinaryDir `
-    "settings-app\$settingsConfiguration"
-  if ($SettingsApp) {
-    $settingsExe = Join-Path $settingsDirectory "azookey_settings.exe"
-    if (-not (Test-Path -LiteralPath $settingsExe -PathType Leaf)) {
-      throw ("Required VM verification payload is missing (settings-app): $settingsExe. " +
-        "Build it with: cmake --build --preset $PresetName --target azookey_settings")
-    }
-  }
-
   Assert-VmVerifyBuildReady `
     -BuildDirectory $configuration.BinaryDir `
     -IncludeBench:([bool]$Model)
@@ -466,14 +403,6 @@ function Export-VmVerifyPackage {
         -StagingDirectory $staging
     }
 
-    if ($SettingsApp) {
-      $files += Add-VmVerifyPayloadDirectory `
-        -SourceDirectory $settingsDirectory `
-        -ArchivePrefix "settings-app" `
-        -Role "settings-app" `
-        -StagingDirectory $staging
-    }
-
     $manifest = [ordered]@{
       schemaVersion = 1
       commit = $commit
@@ -516,8 +445,7 @@ if ($MyInvocation.InvocationName -ne ".") {
     -DestinationDirectory $OutputDirectory `
     -MockDictionary $MockDictionaryPath `
     -Model $ModelPath `
-    -RuntimeInstaller $RuntimeInstallerPath `
-    -SettingsApp:$IncludeSettingsApp
+    -RuntimeInstaller $RuntimeInstallerPath
 
   Write-Output "VM verification package: $($result.ZipPath)"
   Write-Output "Manifest: $($result.ManifestPath)"

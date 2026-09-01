@@ -34,11 +34,7 @@ llama.cpp を含まない Host に対して `-ModelPath` を渡すと、`registe
 cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
-cmake --build --preset windows-release --target azookey_settings
 ```
-
-`azookey_settings` は `ALL` に含まれない custom target なので、明示しないとビルドされない。
-DEV-758 の `settings.json` 側は設定アプリから保存する経路を見るものであり、この target が要る。
 
 パッケージを作る前に、preflight が通る状態かをホストで確認する。
 
@@ -54,21 +50,15 @@ VM へ持ち込んでから登録で弾かれると、checkpoint 復元からや
   -Preset windows-release `
   -OutputDirectory .\build\vm-verify-packages `
   -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe `
-  -ModelPath C:\path\to\zenz-v3.gguf `
-  -IncludeSettingsApp
+  -ModelPath C:\path\to\zenz-v3.gguf
 ```
-
-`-IncludeSettingsApp` も本セッションでは省略できない。
-このスイッチが無いと設定アプリは payload に入らず、DEV-758 の `settings.json` 側を VM で実行できない。
-`-ModelPath` と違い、target 未ビルドのまま指定した場合は payload 不足として停止するため、
-上の `azookey_settings` ビルドを先に済ませておく。
 
 `-ModelPath` は本セッションでは省略できない。
 スクリプト側は既定 `""` で省略を許し、モデルと bench を含まないパッケージを正常に生成するため、指定漏れはエラーにならない。
 一方 DEV-225 の A5 判定は実 GGUF での推論結果を見るものであり、GGUF なしでは `SimpleConverter` の静的辞書しか動かず判定が成立しない。
 上の preflight 確認と同じく、VM へ持ち込む前に指定したかどうかを見る。
 
-**compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連と、`-IncludeSettingsApp` を付けた場合の設定アプリであり、`compat_test.exe` と target JSON を含まない。
+**compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連だけで、`compat_test.exe` と target JSON を含まない。
 DEV-716 は zip だけでは実行できないので、別に固めて持ち込む。
 
 ```powershell
@@ -320,7 +310,10 @@ Host を kill する検証を先に走らせると、以降のゲートが供給
 
 DEV-847 と DEV-153 は対象アプリが重なる。
 Notepad、Edge、VS Code をこの順に開き、各アプリで DEV-847 の G1〜G3 と DEV-153 の計測を続けて行うと、アプリの切り替えが 1 巡で済む。
-DEV-365（DisplayAttribute の描画差の目視）も同じ 3 アプリを対象とするため、実施する場合はこの巡回に相乗りさせる。
+DEV-365（DisplayAttribute の描画差の目視）はこの巡回に相乗りさせない。
+DEV-365 は 2026-08-04 のスコープ縮小で Notepad / VS Code / Edge を対象から外しており、残る対象は
+WordPad / Chrome / Firefox / Discord / Slack / Word / Excel / Outlook / Windows ターミナルである。
+除外済みの 3 アプリだけで証跡を採っても DEV-365 は閉じられない。
 記録は課題ごとに分けて残す。巡回でまとめて採っても、検証メモは DEV-847 と DEV-153 に別々に書く。
 
 DEV-676 の項目 3（別ユーザー provisioning）は、VM に第 2 のローカルユーザーが要る。
@@ -380,12 +373,10 @@ Receive-Job $viaPipe, $viaFile
 片方だけが残る場合は、後勝ちの上書きで編集が消失している。
 重なりを確実にするため、同じ操作を数回繰り返して毎回両方が残ることを見る。
 
-`settings.json` 側は、DEV-794 の保存経路と DEV-808 の quarantine 側排他を含む同一ビルドで実施する。
-保存するのは設定アプリだけだが、Host も parse に失敗した `settings.json` を `.invalid*` へ rename するため mutator である（排他の設計は DEV-806 で確定。GitHub Issue #278 は DEV-808 の mirror。`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
-設定アプリで保存し、Host への `UpdateConfig` が成功して、保存後の `settings.json` が `.invalid*` へ移されずに残ることを確認する。
-テキストエディタによる書き換えは共有ファイルロックを取らないため、ロックの実機確認には使わない。
-read から quarantine までと atomic save の直列化は、自動テスト `SettingsStoreTest.SharedLockSerializesAtomicWriterBeforeRead` の結果も併記する。
-実機確認と自動テストの両方を記録し、どちらか一方だけで同時更新ゲートを閉じない。
+`settings.json` は DEV-758 の対象ではない。
+`settings.json` を書くのは設定アプリだけで、Host は `SettingsStore` で読むだけなので、二つのプロセスが同じファイルを書く状況が設計上生じない（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+設定アプリ側の保存経路（atomic write と共有ファイルロック）は DEV-794 が扱う。
+本ゲートで確認するのは `user_dict.json` の二 writer だけであり、設定アプリを VM へ持ち込む必要もない。
 
 ### レーン 3：Application Verifier を掛けた状態
 
@@ -631,8 +622,6 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - user_dict.json: pipe 経由 `userdict add` と `--offline` を重ねて実行し、両方の entry が残る: ☐ Pass ☐ Fail
   - 試行回数 / 毎回両方が残ったか:
   - `userdict list` の出力（entry 数のみ。読みと表層は記録しない）:
-- settings.json: 設定アプリで保存後、Host の `UpdateConfig` が成功し、保存ファイルが残る: ☐ Pass ☐ Fail
-  - `SettingsStoreTest.SharedLockSerializesAtomicWriterBeforeRead`: ☐ Pass ☐ Fail（commit / log: ____）
 - 修正前の消失再現を試みたか: ☐ 試みた（結果: ____） ☐ 試みていない
 
 ## DEV-759 コンソール終了時の flush

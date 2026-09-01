@@ -23,6 +23,7 @@ namespace azookey::tsf {
 #ifdef AZOOKEY_TSF_TESTING
 namespace testing {
 using TranslateOemCompositionCharacterFnForTest = std::optional<WCHAR> (*)(WPARAM, LPARAM);
+using TranslateAsciiDecimalDigitFnForTest = std::optional<char> (*)(WPARAM, LPARAM);
 using GetGuiThreadInfoFnForTest = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFnForTest = BOOL(WINAPI*)(HWND, LPPOINT);
 using GetPhysicalCursorPosFnForTest = BOOL(WINAPI*)(LPPOINT);
@@ -47,6 +48,10 @@ std::optional<WCHAR> TranslateOemCompositionCharacterUsingWin32ForTest(WPARAM vi
 void SetTranslateOemCompositionCharacterForTest(
     TranslateOemCompositionCharacterFnForTest translate_character);
 void ClearTranslateOemCompositionCharacterForTest();
+std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
+                                                                LPARAM key_data);
+void SetTranslateAsciiDecimalDigitForTest(TranslateAsciiDecimalDigitFnForTest translate_digit);
+void ClearTranslateAsciiDecimalDigitForTest();
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
     GetPhysicalCursorPosFnForTest get_physical_cursor_pos,
@@ -142,6 +147,9 @@ class TextService final : public ITfTextInputProcessorEx,
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
+  HRESULT request_commit_edit_session_for_test(ITfContext* context) {
+    return RequestCommitEditSession(context);
+  }
   void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false,
                                          bool auto_punctuation = false);
   bool batch_query_in_progress_for_test() const;

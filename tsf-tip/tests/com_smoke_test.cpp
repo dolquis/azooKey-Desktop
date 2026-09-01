@@ -50,6 +50,8 @@ class MockThreadMgr final : public ITfThreadMgr,
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
+  LONG ref_count_for_test() const { return ref_count_; }
+
   STDMETHODIMP Activate(TfClientId* ptid) override {
     if (!ptid) return E_POINTER;
     *ptid = client_id;
@@ -105,6 +107,7 @@ class MockThreadMgr final : public ITfThreadMgr,
                                   BOOL fForeground) override {
     if (!pSink) return E_POINTER;
     key_advise_count++;
+    if (FAILED(key_advise_result)) return key_advise_result;
     key_advised = true;
     advised_client_id = tid;
     advised_foreground = fForeground;
@@ -216,6 +219,7 @@ class MockThreadMgr final : public ITfThreadMgr,
     if (!punk || !pdwCookie) return E_POINTER;
     if (riid != IID_ITfThreadMgrEventSink) return E_NOINTERFACE;
     source_advise_count++;
+    if (FAILED(source_advise_result)) return source_advise_result;
     source_advised = true;
     thread_sink_ = punk;
     thread_sink_->AddRef();
@@ -246,6 +250,8 @@ class MockThreadMgr final : public ITfThreadMgr,
   BOOL advised_foreground{FALSE};
   DWORD sink_cookie{42};
   DWORD unadvised_cookie{TF_INVALID_COOKIE};
+  HRESULT key_advise_result{S_OK};
+  HRESULT source_advise_result{S_OK};
 
  private:
   LONG ref_count_{1};
@@ -253,53 +259,56 @@ class MockThreadMgr final : public ITfThreadMgr,
   IUnknown* thread_sink_{nullptr};
 };
 
+template <typename Interface>
+Interface* CreateTextServiceInstance(REFIID iid) {
+  HMODULE module = LoadLibraryW(WIDEN_LITERAL(AZOOKEY_TSF_TIP_DLL_PATH));
+  if (!module) {
+    ADD_FAILURE() << "LoadLibraryW failed";
+    return nullptr;
+  }
+
+  auto* proc = reinterpret_cast<DllGetClassObjectFn>(GetProcAddress(module, "DllGetClassObject"));
+  if (!proc) {
+    ADD_FAILURE() << "DllGetClassObject export not found";
+    return nullptr;
+  }
+
+  IClassFactory* factory = nullptr;
+  HRESULT hr =
+      proc(azookey::tsf::kTextServiceClsid, IID_IClassFactory, reinterpret_cast<void**>(&factory));
+  if (FAILED(hr) || !factory) {
+    if (factory) factory->Release();
+    ADD_FAILURE() << "DllGetClassObject failed: " << hr;
+    return nullptr;
+  }
+
+  Interface* service = nullptr;
+  hr = factory->CreateInstance(nullptr, iid, reinterpret_cast<void**>(&service));
+  factory->Release();
+  if (FAILED(hr) || !service) {
+    if (service) service->Release();
+    ADD_FAILURE() << "CreateInstance failed: " << hr;
+    return nullptr;
+  }
+  return service;
+}
+
 }  // namespace
 
 TEST(TsfTipComSmokeTest, DllGetClassObjectCreatesInstance) {
-  HMODULE module = LoadLibraryW(WIDEN_LITERAL(AZOOKEY_TSF_TIP_DLL_PATH));
-  ASSERT_NE(module, nullptr) << "LoadLibraryW failed";
-
-  auto* proc = reinterpret_cast<DllGetClassObjectFn>(
-      GetProcAddress(module, "DllGetClassObject"));
-  ASSERT_NE(proc, nullptr) << "DllGetClassObject export not found";
-
-  IClassFactory* factory = nullptr;
-  HRESULT hr = proc(azookey::tsf::kTextServiceClsid, IID_IClassFactory,
-                    reinterpret_cast<void**>(&factory));
-  ASSERT_TRUE(SUCCEEDED(hr) && factory != nullptr) << "DllGetClassObject failed";
-
-  IUnknown* service = nullptr;
-  hr = factory->CreateInstance(nullptr, IID_IUnknown,
-                               reinterpret_cast<void**>(&service));
-  factory->Release();
-  ASSERT_TRUE(SUCCEEDED(hr) && service != nullptr)
-      << "CreateInstance(IID_IUnknown) failed";
+  IUnknown* service = CreateTextServiceInstance<IUnknown>(IID_IUnknown);
+  ASSERT_NE(service, nullptr);
 
   service->Release();
 }
 
 TEST(TsfTipComSmokeTest, ActivateExAdvisesAndDeactivateUnadvisesSinks) {
-  HMODULE module = LoadLibraryW(WIDEN_LITERAL(AZOOKEY_TSF_TIP_DLL_PATH));
-  ASSERT_NE(module, nullptr) << "LoadLibraryW failed";
-
-  auto* proc = reinterpret_cast<DllGetClassObjectFn>(
-      GetProcAddress(module, "DllGetClassObject"));
-  ASSERT_NE(proc, nullptr) << "DllGetClassObject export not found";
-
-  IClassFactory* factory = nullptr;
-  HRESULT hr = proc(azookey::tsf::kTextServiceClsid, IID_IClassFactory,
-                    reinterpret_cast<void**>(&factory));
-  ASSERT_TRUE(SUCCEEDED(hr) && factory != nullptr) << "DllGetClassObject failed";
-
-  ITfTextInputProcessorEx* service = nullptr;
-  hr = factory->CreateInstance(nullptr, IID_ITfTextInputProcessorEx,
-                               reinterpret_cast<void**>(&service));
-  factory->Release();
-  ASSERT_TRUE(SUCCEEDED(hr) && service != nullptr)
-      << "CreateInstance(IID_ITfTextInputProcessorEx) failed";
+  ITfTextInputProcessorEx* service =
+      CreateTextServiceInstance<ITfTextInputProcessorEx>(IID_ITfTextInputProcessorEx);
+  ASSERT_NE(service, nullptr);
 
   MockThreadMgr thread_mgr;
-  hr = service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0);
+  HRESULT hr = service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0);
   ASSERT_TRUE(SUCCEEDED(hr)) << "ActivateEx failed";
   EXPECT_TRUE(thread_mgr.key_advised);
   EXPECT_TRUE(thread_mgr.source_advised);
@@ -317,6 +326,51 @@ TEST(TsfTipComSmokeTest, ActivateExAdvisesAndDeactivateUnadvisesSinks) {
   EXPECT_EQ(thread_mgr.unadvised_client_id, thread_mgr.client_id);
   EXPECT_EQ(thread_mgr.unadvised_cookie, thread_mgr.sink_cookie);
 
+  service->Release();
+}
+
+TEST(TsfTipComSmokeTest, ActivateExRollsBackKeySinkWhenThreadSinkAdviseFails) {
+  ITfTextInputProcessorEx* service =
+      CreateTextServiceInstance<ITfTextInputProcessorEx>(IID_ITfTextInputProcessorEx);
+  ASSERT_NE(service, nullptr);
+  MockThreadMgr thread_mgr;
+  thread_mgr.source_advise_result = E_FAIL;
+
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), E_FAIL);
+  EXPECT_FALSE(thread_mgr.key_advised);
+  EXPECT_FALSE(thread_mgr.source_advised);
+  EXPECT_EQ(thread_mgr.key_advise_count, 1);
+  EXPECT_EQ(thread_mgr.key_unadvise_count, 1);
+  EXPECT_EQ(thread_mgr.unadvised_client_id, thread_mgr.client_id);
+  EXPECT_EQ(thread_mgr.source_advise_count, 1);
+  EXPECT_EQ(thread_mgr.source_unadvise_count, 0);
+  EXPECT_EQ(thread_mgr.ref_count_for_test(), 1);
+
+  thread_mgr.source_advise_result = S_OK;
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), S_OK);
+  EXPECT_EQ(service->Deactivate(), S_OK);
+  service->Release();
+}
+
+TEST(TsfTipComSmokeTest, ActivateExClearsStateWhenKeySinkAdviseFails) {
+  ITfTextInputProcessorEx* service =
+      CreateTextServiceInstance<ITfTextInputProcessorEx>(IID_ITfTextInputProcessorEx);
+  ASSERT_NE(service, nullptr);
+  MockThreadMgr thread_mgr;
+  thread_mgr.key_advise_result = E_FAIL;
+
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), E_FAIL);
+  EXPECT_FALSE(thread_mgr.key_advised);
+  EXPECT_FALSE(thread_mgr.source_advised);
+  EXPECT_EQ(thread_mgr.key_advise_count, 1);
+  EXPECT_EQ(thread_mgr.key_unadvise_count, 0);
+  EXPECT_EQ(thread_mgr.source_advise_count, 0);
+  EXPECT_EQ(thread_mgr.source_unadvise_count, 0);
+  EXPECT_EQ(thread_mgr.ref_count_for_test(), 1);
+
+  thread_mgr.key_advise_result = S_OK;
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), S_OK);
+  EXPECT_EQ(service->Deactivate(), S_OK);
   service->Release();
 }
 

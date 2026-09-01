@@ -146,8 +146,6 @@ Linear の定期監査課題（`[Recurring] Linear control tower audit`）で次
 Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-required` の人間専任
 タスクは `agent:*` 免除）、`Migrated` の GitHub リンク欠落、人間検証作業の
 `gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落、
-In Review なのに open PR が無い課題（Merged / Todo への再分類）、Merged の 2 週間超滞留
-（検証メモ債務）、人間ゲート・`type:tracking` 課題の In Review / Merged 混入、
 `agent:codex-impl` フィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` /
 `enhancement` も対象）が対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で
 難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を確定する前に
@@ -166,6 +164,8 @@ Done になった `type:implementation` 課題）を点検する。
 本文の「現象」が現行 main で再現しなくなっているもの（方向 B）を点検する。
 方向 A は元課題を復帰させず新規課題として再起票し、方向 B は検証メモを添えて閉じる。
 点検はサンプリングでよく、全数確認は求めない。
+レーン衛生・記録の鮮度・期日の機械判定は origin（`dolquis/agent-ops`）の
+`scripts/linear-audit.py` が正典で、監査の最初に実行する（`docs/linear-conventions.md` §11）。
 以上の repo 固有項目の詳細は `docs/linear-conventions.md` §13 Project Delta。加えて
 Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
 `docs/linear-conventions.md` §11）も点検する。

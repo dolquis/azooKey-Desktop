@@ -327,18 +327,7 @@ Codex safety checks:
 - [ ] ブロック中の Codex 候補が Ready として表示されていない
 - [ ] 依存する設計 Issue（`agent:claude-design` / `agent:claude-review`）が未完了（not Done）のまま、その下流 implementation Issue に Codex 実行許可（§2.1 の許可コメント / delegate）が出ていない（設計固定前の実装着手＝仕様の雰囲気決定を防ぐ。§2.1 / §3 / §7.1）
 
-機械判定項目（状態と記録の整合。スクリプト化対象）:
-
-監査セッションはまずこの群を一括で判定し、人力は判断が要る他の項目に充てる。**スクリプト（`scripts/`）を実装したら本群は §11 から降ろし、スクリプトを正典とする**（インシデントごとに項目を足し続けると、規約自身が無効化機構のない手書きキャッシュになるため。DEV-928）。判定の起点は Merged 状態の整備完了後とする（DEV-924）。
-
-- [ ] In Review なのに open PR が無い Issue（マージ済みなら Merged、未着手なら Todo へ再分類。§3.1）
-- [ ] Merged のまま 2 週間以上滞留している Issue（検証メモ債務。§7.1.3-4 のフロー化が機能していない兆候）
-- [ ] `gate:human-required` の人間専任 Issue が In Review / Merged に置かれている（Todo で待機させる。§3.1）
-- [ ] `type:tracking` Issue が In Review / Merged に置かれている（子完了まで In Progress を維持する。§3.1）
-- [ ] Next AI Tasks に Done / Canceled の Issue が混入している（tracking Issue・Project description の両方。§7.2 の遷移時記録原則が守られていない兆候）
-- [ ] description の記述と mention 先 Issue の実状態が矛盾している（「In Review」と書いてあるが実際は Done、など。ヒューリスティックなので過検出前提で、ヒットは人が判定する）
-- [ ] description に残る「進捗（YYYY-MM-DD 時点）」見出しの日付が 14 日を超えている（§7.2 でコメントへ移すまでの移行期に限る。日付つき完了記録は対象外）
-- [ ] `Next checkpoint` の期日が過ぎている（§12）
+機械判定項目（レーン衛生・記録の鮮度・期日）は **origin の `scripts/linear-audit.py` が正典**として持つ。監査セッションはまずこれを実行し、`CONFIRMED` を処置してから、人力を上下の判断が要る項目に充てる。`REVIEW` はヒューリスティック（description の文言と実状態の突合）で過検出を前提とするため、採否は人が決める。規約側に項目を列挙し直さない（インシデントごとに足し続けると、規約自身が無効化機構のない手書きキャッシュになる）。
 
 Design / Implementation spec-first checks（設計 §2 / §7.1 の spec-first 分業の担保）:
 

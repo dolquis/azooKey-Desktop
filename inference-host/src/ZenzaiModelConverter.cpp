@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #ifndef AZOOKEY_WITH_LLAMA_CPP
@@ -594,7 +595,46 @@ struct LlamaBeam {
   std::string surface;
   double total_logprob{};
   int32_t output_tokens{};
+  int32_t sequence_id{};
+  int32_t parent_sequence_id{};
 };
+
+bool DecodeBeamStep(llama_context* context, const std::vector<LlamaBeam>& beams, llama_pos position,
+                    LlamaDecodeControl& control) {
+  if (beams.empty()) {
+    return true;
+  }
+
+  struct BatchGuard {
+    llama_batch batch;
+    ~BatchGuard() { llama_batch_free(batch); }
+  } batch_guard{llama_batch_init(static_cast<int32_t>(beams.size()), 0, 1)};
+  auto& batch = batch_guard.batch;
+  if (!batch.token || !batch.pos || !batch.n_seq_id || !batch.seq_id || !batch.logits) {
+    throw std::bad_alloc();
+  }
+  batch.n_tokens = static_cast<int32_t>(beams.size());
+  for (int32_t i = 0; i < batch.n_tokens; ++i) {
+    const auto& beam = beams[static_cast<size_t>(i)];
+    batch.token[i] = beam.tokens.back();
+    batch.pos[i] = position;
+    batch.n_seq_id[i] = 1;
+    batch.seq_id[i][0] = beam.sequence_id;
+    batch.logits[i] = 1;
+  }
+
+  if (control.ShouldAbort()) {
+    return false;
+  }
+  const int32_t result = llama_decode(context, batch);
+  if (result == 2 || control.ShouldAbort()) {
+    return false;
+  }
+  if (result != 0) {
+    throw std::runtime_error("llama.cpp beam batch decode failed");
+  }
+  return true;
+}
 
 double BeamRankScore(double total_logprob, int32_t output_tokens) {
   if (output_tokens <= 0) {
@@ -643,6 +683,14 @@ struct ZenzaiModelRuntime {
 
   llama_model* model{nullptr};
   llama_context* context{nullptr};
+  std::vector<llama_token> cached_prompt_tokens;
+
+  void InvalidatePromptCache() {
+    cached_prompt_tokens.clear();
+    if (context) {
+      llama_kv_self_clear(context);
+    }
+  }
 
   std::vector<llama_token> TokenizePrompt(const std::string& kana,
                                           const core::ConversionContext& conversion_context) const {
@@ -680,6 +728,16 @@ struct ZenzaiModelRuntime {
       throw std::runtime_error("llama.cpp runtime is not ready");
     }
 
+    struct PromptCacheGuard {
+      ZenzaiModelRuntime* runtime;
+      bool preserve{false};
+      ~PromptCacheGuard() {
+        if (!preserve) {
+          runtime->InvalidatePromptCache();
+        }
+      }
+    } prompt_cache_guard{this};
+
     const auto* vocab = llama_model_get_vocab(model);
     if (!vocab) {
       throw std::runtime_error("llama.cpp vocab is not available");
@@ -701,51 +759,84 @@ struct ZenzaiModelRuntime {
     bool completed_quota_reached = false;
 
     ZenzaiDecodeStats decode_stats;
-    decode_stats.prompt_tokens = static_cast<uint64_t>(prompt_tokens.size());
-    llama_kv_self_clear(context);
+    constexpr int32_t kMaxWorkingSequences = 4;
+    for (int32_t sequence = 1; sequence <= kMaxWorkingSequences; ++sequence) {
+      (void)llama_kv_self_seq_rm(context, sequence, -1, -1);
+    }
+    size_t retained_prompt_tokens = 0;
+    if (!cached_prompt_tokens.empty()) {
+      retained_prompt_tokens = CommonPrefixLength(cached_prompt_tokens, prompt_tokens);
+      // llama.cpp does not retain logits for an arbitrary cached prefix. Re-decode at least the
+      // final prompt token so step zero observes logits for the current prompt.
+      retained_prompt_tokens =
+          std::min(retained_prompt_tokens, prompt_tokens.empty() ? 0u : prompt_tokens.size() - 1);
+      if (!llama_kv_self_seq_rm(context, 0, static_cast<llama_pos>(retained_prompt_tokens), -1)) {
+        throw std::runtime_error("llama.cpp prompt KV suffix reset failed");
+      }
+    } else {
+      llama_kv_self_clear(context);
+    }
+    std::vector<llama_token> prompt_suffix(prompt_tokens.begin() + retained_prompt_tokens,
+                                           prompt_tokens.end());
+    decode_stats.prompt_tokens = static_cast<uint64_t>(prompt_suffix.size());
+    decode_stats.prompt_reused_tokens = static_cast<uint64_t>(retained_prompt_tokens);
     const auto prompt_decode_start = std::chrono::steady_clock::now();
     const bool prompt_decoded =
-        DecodeTokens(context, prompt_tokens, decode_control, "llama.cpp prompt decode failed");
+        DecodeTokens(context, prompt_suffix, decode_control, "llama.cpp prompt decode failed");
     decode_stats.prompt_decode_ms = std::chrono::duration<double, std::milli>(
                                         std::chrono::steady_clock::now() - prompt_decode_start)
                                         .count();
     if (!prompt_decoded) {
+      if (DeadlineExpired(conversion_context)) {
+        decode_stats.deadline_exceeded = true;
+        last_decode_stats = decode_stats;
+      }
       return {};
     }
+    cached_prompt_tokens = prompt_tokens;
     const auto prompt_size = static_cast<llama_pos>(prompt_tokens.size());
 
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
-      std::vector<LlamaBeam> next_beams;
-      next_beams.reserve(candidate_limit * candidate_limit);
-      for (const auto& beam : beams) {
-        if (IsCanceled(conversion_context)) {
-          return {};
-        }
-        if (DeadlineExpired(conversion_context)) {
+      if (IsCanceled(conversion_context)) {
+        return {};
+      }
+      if (DeadlineExpired(conversion_context)) {
+        decode_stats.deadline_exceeded = true;
+        for (const auto& beam : beams) {
           AppendCompletedBeam(generated, beam, true);
-          continue;
         }
+        beams.clear();
+        break;
+      }
 
+      if (step > 0) {
         const auto beam_decode_start = std::chrono::steady_clock::now();
-        if (!llama_kv_self_seq_rm(context, 0, prompt_size, -1)) {
-          throw std::runtime_error("llama.cpp beam KV suffix reset failed");
-        }
         const bool beam_decoded =
-            DecodeTokens(context, beam.tokens, decode_control, "llama.cpp beam decode failed");
+            DecodeBeamStep(context, beams, prompt_size + step - 1, decode_control);
         decode_stats.beam_decode_ms += std::chrono::duration<double, std::milli>(
                                            std::chrono::steady_clock::now() - beam_decode_start)
                                            .count();
-        decode_stats.beam_tokens += static_cast<uint64_t>(beam.tokens.size());
+        decode_stats.beam_tokens += static_cast<uint64_t>(beams.size());
         ++decode_stats.beam_decode_evaluations;
         if (!beam_decoded) {
           if (IsCanceled(conversion_context)) {
             return {};
           }
-          AppendCompletedBeam(generated, beam, true);
-          continue;
+          decode_stats.deadline_exceeded = true;
+          for (const auto& beam : beams) {
+            AppendCompletedBeam(generated, beam, true);
+          }
+          beams.clear();
+          break;
         }
+      }
 
-        float* logits = llama_get_logits_ith(context, -1);
+      std::vector<LlamaBeam> next_beams;
+      next_beams.reserve(candidate_limit * candidate_limit);
+      for (size_t beam_index = 0; beam_index < beams.size(); ++beam_index) {
+        const auto& beam = beams[beam_index];
+        float* logits =
+            llama_get_logits_ith(context, step == 0 ? -1 : static_cast<int32_t>(beam_index));
         if (!logits) {
           throw std::runtime_error("llama.cpp logits are not available");
         }
@@ -762,6 +853,7 @@ struct ZenzaiModelRuntime {
           }
 
           auto next = beam;
+          next.parent_sequence_id = beam.sequence_id;
           next.tokens.push_back(choice.token);
           next.surface += TokenPiece(vocab, choice.token);
           next.total_logprob += choice.logprob;
@@ -773,6 +865,29 @@ struct ZenzaiModelRuntime {
       }
 
       PruneBeams(next_beams, candidate_limit);
+      std::vector<int32_t> parent_sequences;
+      parent_sequences.reserve(next_beams.size());
+      for (const auto& beam : next_beams) {
+        parent_sequences.push_back(beam.parent_sequence_id);
+      }
+      std::vector<int32_t> active_sequences;
+      active_sequences.reserve(beams.size());
+      for (const auto& beam : beams) {
+        if (beam.sequence_id > 0) {
+          active_sequences.push_back(beam.sequence_id);
+        }
+      }
+      const auto sequence_plan =
+          PlanBeamSequenceAssignments(parent_sequences, active_sequences, kMaxWorkingSequences);
+      for (const int32_t sequence : sequence_plan.releases) {
+        (void)llama_kv_self_seq_rm(context, sequence, -1, -1);
+      }
+      for (const auto& copy : sequence_plan.copies) {
+        llama_kv_self_seq_cp(context, copy.source_sequence, copy.destination_sequence, -1, -1);
+      }
+      for (size_t i = 0; i < next_beams.size(); ++i) {
+        next_beams[i].sequence_id = sequence_plan.assignments[i];
+      }
       beams = std::move(next_beams);
       if (CountSaneUniqueGeneratedCandidates(generated) >= candidate_limit) {
         completed_quota_reached = true;
@@ -791,6 +906,7 @@ struct ZenzaiModelRuntime {
     });
 
     last_decode_stats = decode_stats;
+    prompt_cache_guard.preserve = true;
     return generated;
   }
 #else
@@ -829,6 +945,9 @@ struct ZenzaiModelRuntime {
       return {GeneratedCandidate{std::string("\xE3\x81", 2), -0.42, 1}};
     }
     if (ToKatakana(kana) == "チュウダン") {
+      ZenzaiDecodeStats decode_stats;
+      decode_stats.deadline_exceeded = true;
+      last_decode_stats = decode_stats;
       return {
           GeneratedCandidate{std::string("日本語") + std::string("\xE3\x81", 2), -0.42, 3, true}};
     }
@@ -844,6 +963,70 @@ ZenzaiLoadResult::ZenzaiLoadResult() = default;
 ZenzaiLoadResult::~ZenzaiLoadResult() = default;
 ZenzaiLoadResult::ZenzaiLoadResult(ZenzaiLoadResult&&) noexcept = default;
 ZenzaiLoadResult& ZenzaiLoadResult::operator=(ZenzaiLoadResult&&) noexcept = default;
+
+int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads) {
+  constexpr uint32_t kMaximumThreads = 8;
+  return static_cast<int32_t>(std::clamp(hardware_threads, 1u, kMaximumThreads));
+}
+
+size_t CommonPrefixLength(const std::vector<int32_t>& lhs, const std::vector<int32_t>& rhs) {
+  const auto mismatch = std::mismatch(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
+  return static_cast<size_t>(std::distance(lhs.begin(), mismatch.first));
+}
+
+BeamSequencePlan PlanBeamSequenceAssignments(const std::vector<int32_t>& parent_sequences,
+                                             const std::vector<int32_t>& active_sequences,
+                                             int32_t max_working_sequences) {
+  if (max_working_sequences <= 0 ||
+      parent_sequences.size() > static_cast<size_t>(max_working_sequences)) {
+    throw std::invalid_argument("invalid beam sequence capacity");
+  }
+
+  std::vector<bool> active(static_cast<size_t>(max_working_sequences) + 1, false);
+  for (const int32_t sequence : active_sequences) {
+    if (sequence <= 0 || sequence > max_working_sequences || active[sequence]) {
+      throw std::invalid_argument("invalid active beam sequence");
+    }
+    active[sequence] = true;
+  }
+
+  BeamSequencePlan plan;
+  plan.assignments.assign(parent_sequences.size(), 0);
+  std::vector<bool> retained(static_cast<size_t>(max_working_sequences) + 1, false);
+  for (size_t i = 0; i < parent_sequences.size(); ++i) {
+    const int32_t parent = parent_sequences[i];
+    if (parent < 0 || parent > max_working_sequences || (parent > 0 && !active[parent])) {
+      throw std::invalid_argument("invalid parent beam sequence");
+    }
+    if (parent > 0 && !retained[parent]) {
+      plan.assignments[i] = parent;
+      retained[parent] = true;
+    }
+  }
+
+  for (int32_t sequence = 1; sequence <= max_working_sequences; ++sequence) {
+    if (active[sequence] && !retained[sequence]) {
+      plan.releases.push_back(sequence);
+    }
+  }
+
+  int32_t next_free = 1;
+  for (size_t i = 0; i < plan.assignments.size(); ++i) {
+    if (plan.assignments[i] != 0) {
+      continue;
+    }
+    while (next_free <= max_working_sequences && retained[next_free]) {
+      ++next_free;
+    }
+    if (next_free > max_working_sequences) {
+      throw std::logic_error("beam sequence planner exhausted capacity");
+    }
+    plan.assignments[i] = next_free;
+    retained[next_free] = true;
+    plan.copies.push_back(BeamSequenceCopy{parent_sequences[i], next_free});
+  }
+  return plan;
+}
 
 std::optional<std::string_view> ResolveZenzaiPreTokenizerOverride(std::string_view pre_tokenizer) {
   if (pre_tokenizer == kZenzaiPreTokenizer) {
@@ -1014,6 +1197,11 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   context_params.n_ctx = 512;
   context_params.n_batch = context_params.n_ctx;
   context_params.n_ubatch = context_params.n_ctx;
+  context_params.n_seq_max = 5;  // prompt sequence 0 plus working beam sequences 1..4
+  const auto n_threads =
+      options.n_threads.value_or(RecommendedZenzaiThreadCount(std::thread::hardware_concurrency()));
+  context_params.n_threads = n_threads;
+  context_params.n_threads_batch = n_threads;
   runtime->context = llama_init_from_model(runtime->model, context_params);
   if (!runtime->context) {
     result.ok = false;

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace azookey::bench {
 
@@ -33,6 +34,7 @@ struct BaselineComparison {
 struct DecodePhaseMetrics {
   size_t samples{0};
   uint64_t tokens{0};
+  uint64_t reused_tokens{0};
   LatencyMetrics latency;
 };
 
@@ -48,6 +50,12 @@ struct DecodePhaseBreakdown {
   BeamDecodePhaseMetrics beam;
 };
 
+struct DeadlineCutoffMetrics {
+  std::vector<bool> samples;
+  size_t count{0};
+  double rate{0.0};
+};
+
 struct BenchmarkResult {
   std::string bench;
   std::string commit;
@@ -58,6 +66,7 @@ struct BenchmarkResult {
   bool threshold_passed{true};
   BaselineComparison baseline;
   std::optional<DecodePhaseBreakdown> decode_phases;
+  std::optional<DeadlineCutoffMetrics> deadline_cutoffs;
 };
 
 BaselineComparison CompareBaseline(const std::filesystem::path& path, const std::string& bench,

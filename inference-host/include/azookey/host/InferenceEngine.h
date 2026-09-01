@@ -44,6 +44,8 @@ struct ModelLoadOptions {
   std::string path;
   BackendKind backend{BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
+  // Optional benchmark/diagnostic override. Production callers use the runtime default.
+  std::optional<int32_t> n_threads;
   // Test-only fixture switch for no-llama builds; production callers leave this false.
   bool mock_zenzai_candidates_for_tests{false};
   // Test-only hook used to prove loading work runs outside state_mutex_.

@@ -17,7 +17,7 @@ constexpr const char* kLearningSaveError = "failed to save learning store";
 constexpr const char* kUserDictionaryLoadError = "failed to load user dictionary";
 constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary";
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
-constexpr auto kModelConversionBudget = std::chrono::seconds(2);
+constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 
 core::ConversionContext BuildContext(
     const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
@@ -281,6 +281,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   ZenzaiRuntimeOptions runtime_options;
   runtime_options.n_gpu_layers =
       next_config.backend == BackendKind::Cuda ? options.n_gpu_layers.value_or(0) : 0;
+  runtime_options.n_threads = options.n_threads;
   runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
   auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
   if (!loaded.ok) {

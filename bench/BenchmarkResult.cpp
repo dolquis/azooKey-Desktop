@@ -11,6 +11,7 @@ namespace azookey::bench {
 
 namespace {
 
+using azookey::ipc::json::Array;
 using azookey::ipc::json::Null;
 using azookey::ipc::json::Object;
 using azookey::ipc::json::Value;
@@ -134,6 +135,18 @@ std::string SerializeBenchmarkResult(const BenchmarkResult& result) {
   root.emplace("bench", Value(result.bench));
   root.emplace("commit", Value(result.commit));
   root.emplace("config", Value(result.config));
+  if (result.deadline_cutoffs) {
+    Array samples;
+    samples.reserve(result.deadline_cutoffs->samples.size());
+    for (const bool cutoff : result.deadline_cutoffs->samples) {
+      samples.emplace_back(cutoff);
+    }
+    Object cutoffs;
+    cutoffs.emplace("count", Value(static_cast<uint64_t>(result.deadline_cutoffs->count)));
+    cutoffs.emplace("rate", Value(result.deadline_cutoffs->rate));
+    cutoffs.emplace("samples", Value(std::move(samples)));
+    root.emplace("deadlineCutoffs", Value(std::move(cutoffs)));
+  }
   if (result.decode_phases) {
     const auto serialize_latency = [](const LatencyMetrics& latency) {
       Object phase_latency;
@@ -147,14 +160,16 @@ std::string SerializeBenchmarkResult(const BenchmarkResult& result) {
     const auto serialize_phase = [&serialize_latency](const DecodePhaseMetrics& phase) {
       Object serialized;
       serialized.emplace("latencyMs", Value(serialize_latency(phase.latency)));
+      serialized.emplace("reusedTokens", Value(phase.reused_tokens));
       serialized.emplace("samples", Value(static_cast<uint64_t>(phase.samples)));
       serialized.emplace("tokens", Value(phase.tokens));
       return serialized;
     };
 
     Object beam = serialize_phase(DecodePhaseMetrics{result.decode_phases->beam.samples,
-                                                     result.decode_phases->beam.tokens,
+                                                     result.decode_phases->beam.tokens, 0,
                                                      result.decode_phases->beam.latency});
+    beam.erase("reusedTokens");
     beam.emplace("evaluations",
                  Value(static_cast<uint64_t>(result.decode_phases->beam.evaluations)));
 

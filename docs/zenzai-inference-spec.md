@@ -406,17 +406,41 @@ reranker でソートするのみで**クロスソース dedup をしない**た
 
 ## 8. 性能予算（スコープ #6）
 
+**読み長の数え方**: 本節で「読み N 文字」とは、読み `kana` の Unicode コードポイント
+数を指す。拗音・促音（ゃゅょっ）と長音符（ー）はそれぞれ 1 文字として数える。
+`max_new_tokens` の算出（`MaxNewTokensForReading`）と同じ数え方である。
+
 | 指標 | 目標 | 根拠 / 計測 |
 |---|---|---|
 | CPU fallback（SimpleConverter）p95 | < 50ms | 既存ゲート（`zenzai-gpu-route` §計測ゲート、roadmap §テスト） |
-| Zenzai CPU 1 変換 p50 | ≤ 150ms（small/Q5_K_M, 短文） | M8-3（DEV-222）で実測・更新 |
-| Zenzai CPU 1 変換 p95 | ≤ 300ms（short reading ≤ 8 文字） | 同上。超過時は §6.4 打ち切り |
+| Zenzai CPU 1 変換 p50（読み ≤ 8 文字） | ≤ 150ms（small/Q5_K_M） | `copilot-pc-backend-spec` §4.2.1.1 の実測 |
+| Zenzai CPU 1 変換 p95（読み ≤ 8 文字） | ≤ 300ms | 同上。超過時は §6.4 打ち切り |
+| Zenzai CPU 1 変換 ハード予算（読み > 8 文字） | 600ms（p50 / p95 の品質目標は置かない） | IPC Heavy inference 800ms（`dev-infrastructure-spec` §8.5.2）より下に余裕を取る設計値 |
 | `max_new_tokens` | reading 文字数 × 2 + 8（既定上限 64） | 表層は読みより長くならない前提 + 余白 |
-| 初回ロード時間 | 計測のみ（ゲート無し、M8-3 で baseline） | mmap ロード（`copilot-pc-backend-spec` §5） |
+| 初回ロード時間 | 計測のみ（ゲート無し） | mmap ロード（`copilot-pc-backend-spec` §5） |
 
 - レイテンシ予算超過時は §6.4 の通り最良ビームを返し、IME を止めない。
-- 上記の Zenzai 実測値は **M8-3（DEV-222）が `bench/` で計測し本表を更新**する。
-  本書記載は設計時の目標であり、計測結果が正典化されたら置換する。
+- **読み ≤ 8 文字**には p50 / p95 の品質目標を課す。この帯が変換の大半を占め、
+  体感速度を決めるためである。
+- **読み > 8 文字**には p50 / p95 の品質目標を置かず、1 変換あたりのハード予算
+  600ms のみを課す。読み長に対する所要時間の増加率を裏付ける入力別計測がまだ
+  無く、根拠のない分位点目標を置かないためである。600ms は
+  `dev-infrastructure-spec` §8.5.2 の Heavy inference 800ms（超過で
+  `Healthy` → `DegradedSimple`）より下に余裕を取った設計値であり、読み長別の
+  分布が実測で正典化された時点で見直す。
+- **ハード予算の経路**: 本予算は `ConversionContext.deadline`（`core/IConverter.h`）
+  として `InferenceEngine` が 1 変換ごとに設定し、`ZenzaiModelConverter` の beam
+  ループが検査して §6.4 の best-so-far 打ち切りを駆動する。engine 側の予算値が
+  IPC の Heavy inference deadline を上回ると、打ち切りが効く前に Host 無応答と
+  判定されるため、**本表の値は §8.5.2 の 800ms を下回らなければならない**。
+- **混在集合の扱い**: 読み長の異なる入力を混ぜた集合の中央値（例
+  `copilot-pc-backend-spec` §4.2.1.1 の 20 入力中央値）は参考値であり、本表の
+  予算に対する評価には用いない。予算は読み長の帯ごとに適用する。
+- **CPU 最適化の停止条件**: llama.cpp CPU 経路の追加最適化（DEV-857 / DEV-858 /
+  DEV-859 の系統）は、**本表のいずれかの予算を満たさない計測が正典化されている
+  間に限り継続対象**とする。全帯が予算内に収まった後の追加短縮は、本予算を根拠
+  とせず独立に優先度を判断する。`copilot-pc-backend-spec` §4.2 の 30ms
+  相対ゲートは、R2 artifact が存在しない間は継続判断の根拠にしない。
 
 ---
 

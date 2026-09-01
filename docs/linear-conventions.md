@@ -3,7 +3,7 @@
   この「共有コア」は全リポジトリで同一内容をミラーする。
   個別 repo で直接編集しない。編集は origin（後述）で行い、各 repo へ伝播する。
   version: 0.7-draft   updated: 2026-09-01
-  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。§11 に Design / Implementation spec-first checks・tracking の Codex 実行候補混入検出・設計未完のまま impl 実行許可の検出を追加(2026-07-05)。同 spec-first checks を移行期の旧カテゴリラベル(Feature / enhancement)と In Progress の課題にも適用(2026-07-05)。§3/§7.1.3/§10/§11 に In Review の意味分割(Merged 状態の新設・PR マージ遷移先の変更・人間ゲートの Todo 待機・tracking の In Progress 維持・検証メモのフロー化)を追加(2026-08-31・DEV-923)。§7.2 記録の鮮度(導出可能な現在を description に書かない・状態依存の例外を Next AI Tasks に限定・遷移時記録原則)を新設し、§5/§7/§7.1.3/§11/§12 をこれに合わせて改訂(2026-09-01・DEV-927)。
+  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。§11 に Design / Implementation spec-first checks・tracking の Codex 実行候補混入検出・設計未完のまま impl 実行許可の検出を追加(2026-07-05)。同 spec-first checks を移行期の旧カテゴリラベル(Feature / enhancement)と In Progress の課題にも適用(2026-07-05)。§3/§7.1.3/§10/§11 に In Review の意味分割(Merged 状態の新設・PR マージ遷移先の変更・人間ゲートの Todo 待機・tracking の In Progress 維持・検証メモのフロー化)を追加(2026-08-31・DEV-923)。§7.2 記録の鮮度(導出可能な現在を description に書かない・状態依存の例外を Next AI Tasks に限定・遷移時記録原則)を新設し、§5/§7/§7.1.3/§11/§12 をこれに合わせて改訂(2026-09-01・DEV-927)。§7.2 の状態依存記録を description から日付つき追記型の器(Project Status Update / Status snapshot コメント)へ移し、§12 を description 4 節 + Status Update 3 節の 2 器構成に改訂(2026-09-01・DEV-929)。
   origin(編集の起点・単一正典): dolquis/agent-ops/linear-conventions.md（このファイル）
   各 repo の docs/linear-conventions.md は本ファイルのベンダリングコピー + §13 Delta。
   プロジェクト固有の差分は各 repo の「Project Delta」節（本ファイル末尾）に置く。
@@ -135,7 +135,7 @@ Issue タイプ（`type:`）:
 - `implementation` — 1 PR で完了可能な実装・修正・テスト追加。
 - `review` — 設計レビュー・PR レビュー・整合性確認。
 
-Tracking Issue または Project description 上部には、`## Next AI Tasks` 見出しで最大 3 件を書く（Project description ではこの見出しを含む §12 の 5 H2 形式に従う）。Next AI Tasks は description に書いてよい唯一の状態依存記述であり、遷移時の更新義務が伴う（§7.2）。
+次に AI へ渡す Issue の並び（最大 3 件）は description に書かない。Project は Project Status Update に、tracking Issue は `Status snapshot YYYY-MM-DD` 見出しのコメントに置く。いずれも日付つきの追記型で古さを測れる器である（§7.2 / §12）。
 
 ---
 
@@ -175,7 +175,6 @@ Codex Cloud を実行した場合は、追加で **Codex Run Record** を残す:
 ### Done
 - 作業結果が記録されている。
 - 検証結果が記録されている（スキップ時は理由）。
-- 親 tracking Issue と所属 Project の `## Next AI Tasks` から本 Issue を外し、次に渡す Issue へ差し替えてある（§7.2 遷移時記録原則）。
 - GitHub 正典に対するドキュメント影響を確認済み。
 - 可能なら関連 PR / GitHub Issue がリンクされている。
 - 必要な follow-up Issue が作成/リンクされている。
@@ -233,17 +232,18 @@ tracking Issue の進捗欄と Project description は、子 Issue の状態を�
 | -- | -- | -- |
 | 構造と意図 | 分解の意図、spec アンカー、正典の所在、依存の理由 | 書いてよい（腐らない） |
 | 日付つき完了記録 | 「Done（PR #89、2026-08-31）」 | 書いてよい（過去の事実） |
-| Next AI Tasks | 次に AI へ渡す Issue の並び（最大 3 件） | 書いてよい。**唯一の状態依存例外**で、下記の更新義務が伴う |
+| 状態依存の記録 | Current focus、Next AI Tasks、Health | description に書かず、**日付つき追記型の器**へ置く（下記） |
 | 導出可能な現在 | 状態名（`In Review` / `Merged` 等）、「着手可」「〜待ち」「残 N 件」 | 書かない |
 | 状態スナップショット | 「進捗（YYYY-MM-DD 時点）」節 | description に置かず、`Status snapshot YYYY-MM-DD` 見出しのコメントへ積む |
 
 「導出可能な現在」は上の語彙の列挙ではなく、**Linear を引けば分かる記述すべて**を指す（列挙は例示）。コメントは日付を持つ過去ログとして読まれるため腐らない。description が腐るのは「現在」を名乗るからである。
 
-**遷移時記録原則**: 記録を更新するのは「気づいた人」ではなく**状態を変えた者**とし、同じセッション内で行う。
+**器で担保する**: 状態依存の記録をゼロにはできない。次に何を渡すかは Linear から導出できないからである。消せない以上、鮮度は規律ではなく**器**に持たせる。Project Status Update と Issue コメントは日付つきの追記型で、最終更新からの経過日数を API が返す。つまり古さを機械判定できる。description は上書き型で日付を持たないため、古さを測れない。測れない面に「毎回更新する」という規律を課しても守られなかった（実測: `Next checkpoint` の 63 日超過、Project の Next AI Tasks への Done / Canceled 混入 27 件）。
 
-- Done / Canceled へ遷移させたときは、親 tracking と Project の Next AI Tasks を更新する（**義務**。§7 Done チェックリスト）。Done の Issue が残ると次のエージェントを誤ルーティングするため。
-- 新規起票で上位 3 件の並びが変わると判断したときも更新する（ベストエフォート。載せ漏れは候補が 1 つ見えないだけで害が小さい）。
-- 義務は完璧である必要はない。取りこぼしは週次監査（§11）が拾う二層構成とする。
+- Project の状態依存記録 → **Project Status Update**（書式と周期は §12）。
+- tracking Issue の状態依存記録 → **`Status snapshot YYYY-MM-DD` 見出しのコメント**。
+
+**遷移時記録原則**: 器が日付を持つぶん、個々の遷移を追いかけて直す義務は課さない。読者は日付を見て古さを判断できるためである。義務は**周期内に 1 本、全節そろったエントリを積むこと**に置く（§12）。節を欠いたエントリを積むと「最新を読めば足りる」が崩れ、読者が履歴を遡ることになる。周期の逸脱は週次監査（§11）が機械判定で拾う。
 
 **到達性**: 現在を description から外すぶん、状態は Linear を引いて得る。作業開始時に対象 Issue の子・blocked-by と §10 のキューを取得してから動く。
 
@@ -339,23 +339,20 @@ Rule: Linear のルーティングのみを点検する。GitHub docs が正典�
 
 ---
 
-## 12. Project description テンプレート
+## 12. Project の記録（description と Status Update）
 
-各プロジェクト description は次の 5 つの独立した H2 セクションで構成する（順序もこの通り）:
+Project の記録は 2 つの器に分ける。**腐らないものを description に、状態依存を Status Update に置く**（§7.2）。
+
+### description（上書き型・日付なし）
+
+次の 4 つの H2 だけを置く（順序もこの通り）。状態は書かない。
 
 ```md
-## Current control policy
+## Operating contract
 
 Lead: <name>
-Current focus: <いま何を優先するかの意図を一文で。状態名・残件数・「〜待ち」は書かない（§7.2）>
 Codex safety: `agent:codex-*` は候補ラベルのみ。Claude は Codex へ delegate / assign / mention しない（実行は人間 lead のみ）。
-Next checkpoint: <YYYY-MM-DD>。<その日に判定する内容>
-
-## Next AI Tasks
-
-1. <DEV-xx> <内容>
-2. <DEV-xx> <内容>
-3. <DEV-xx> <内容>   （最大3件）
+Current focus / Next AI Tasks / Next checkpoint / Health は最新の Project Status Update を参照する（§7.2）。
 
 ## Human Gate
 
@@ -370,9 +367,29 @@ Next checkpoint: <YYYY-MM-DD>。<その日に判定する内容>
 <ステージ名と定義だけを置く。達成状態・残件・進行中の Issue は書かない（正典は repo の roadmap。§1 / §7.2）>
 ```
 
-見出しは上記 5 つ（`## Current control policy` / `## Next AI Tasks` / `## Human Gate` / `## Canonical docs` / `## Stage map`）に統一する。単一ブロック化したり `Next AI Task` 等へ表記を揺らさない。
+Operating contract の最終行は Status Update への**ポインタ**である。参照先の構造を指すだけで状態を含まないため腐らない。
 
-description に書ける内容は §7.2 が定める。状態依存の記述は `Next AI Tasks` だけに許し、鮮度は `Next checkpoint` の期日で担保する。
+### Status Update（追記型・日付つき）
+
+**14 日に 1 本以上**積む。各エントリは次の 3 節をすべて持たせる。1 節でも欠けると「最新を読めば足りる」が崩れ、読者が履歴を遡ることになる。
+
+```md
+## Current focus
+
+<いま何を優先するかと、その理由。1〜3 文>
+
+## Next AI Tasks
+
+1. DEV-xx <内容>
+2. DEV-xx <内容>
+3. DEV-xx <内容>   （最大 3 件・すべて not Done）
+
+## Next checkpoint
+
+<YYYY-MM-DD>。<その日に判定する内容>
+```
+
+Health は Linear の health フィールドで設定し、本文に重ねて書かない。
 
 ### マイルストーン命名
 - 1 プロジェクト内では 1 つのトークン体系に統一する（`Stage N` / `P N` / `MVP-N` のいずれか）。

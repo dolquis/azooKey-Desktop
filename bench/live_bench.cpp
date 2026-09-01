@@ -11,6 +11,7 @@
 #include "BenchmarkCommandLine.h"
 #include "BenchmarkCommit.h"
 #include "BenchmarkResult.h"
+#include "ConversionQuality.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 
@@ -26,9 +27,13 @@ namespace {
 
 void PrintUsage(const char* exe) {
   std::cerr << "Usage: " << exe << " [--max-p95-ms N] [--json] [--output PATH] [--baseline PATH]\n"
+            << "       " << exe
+            << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
+               " [--backend cpu|cuda] [--model PATH] [--category NAME]"
+               " [--iterations N] [--typo-mode off] [--trace]\n"
             << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
                "failure gate. --json selects JSON stdout; --output writes the same JSON "
-               "schema to a file.\n";
+               "schema to a file. --eval selects the conversion-quality evaluator.\n";
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -50,6 +55,17 @@ std::string RequireValue(int argc, char** argv, int& index, const char* option) 
   }
   ++index;
   return argv[index];
+}
+
+size_t ParseSize(const std::string& value, const char* name) {
+  try {
+    size_t index = 0;
+    const auto parsed = std::stoull(value, &index);
+    if (index != value.size() || parsed == 0) throw std::invalid_argument("invalid value");
+    return static_cast<size_t>(parsed);
+  } catch (const std::exception& ex) {
+    throw std::invalid_argument(std::string(name) + " must be a positive integer: " + ex.what());
+  }
 }
 
 }  // namespace
@@ -74,6 +90,7 @@ int main(int argc, char** argv) {
   bool json_output = false;
   std::filesystem::path output_path;
   std::filesystem::path baseline_path;
+  azookey::bench::ConversionQualityOptions quality_options;
   try {
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -89,9 +106,39 @@ int main(int argc, char** argv) {
         output_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--output"));
       } else if (arg == "--baseline") {
         baseline_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--baseline"));
+      } else if (arg == "--eval") {
+        quality_options.eval_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--eval"));
+      } else if (arg == "--per-case") {
+        quality_options.per_case_path =
+            azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--per-case"));
+      } else if (arg == "--backend") {
+        quality_options.backend = RequireValue(argc, argv, i, "--backend");
+        if (quality_options.backend != "cpu" && quality_options.backend != "cuda") {
+          throw std::invalid_argument("--backend must be cpu or cuda");
+        }
+      } else if (arg == "--model") {
+        quality_options.model = RequireValue(argc, argv, i, "--model");
+      } else if (arg == "--category") {
+        quality_options.category = RequireValue(argc, argv, i, "--category");
+      } else if (arg == "--iterations") {
+        quality_options.iterations =
+            ParseSize(RequireValue(argc, argv, i, "--iterations"), "--iterations");
+      } else if (arg == "--typo-mode") {
+        quality_options.typo_mode = RequireValue(argc, argv, i, "--typo-mode");
+      } else if (arg == "--trace") {
+        quality_options.trace = true;
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }
+    }
+    if (quality_options.eval_path.empty() &&
+        (!quality_options.per_case_path.empty() || !quality_options.model.empty() ||
+         quality_options.backend != "cpu" || quality_options.category != "all" ||
+         quality_options.typo_mode != "off" || quality_options.trace)) {
+      throw std::invalid_argument("conversion-quality options require --eval");
+    }
+    if (!quality_options.eval_path.empty() && max_p95_ms) {
+      throw std::invalid_argument("--max-p95-ms cannot be combined with --eval");
     }
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << std::endl;
@@ -103,8 +150,39 @@ int main(int argc, char** argv) {
   std::remove(learning_path.string().c_str());
 
   azookey::learning::LearningStore store(learning_path.string());
+  azookey::host::EngineConfig engine_config;
+  engine_config.backend = quality_options.backend == "cuda" ? azookey::host::BackendKind::Cuda
+                                                            : azookey::host::BackendKind::Cpu;
+  engine_config.model_path = quality_options.model;
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
-                                        {});
+                                        engine_config);
+  if (!quality_options.model.empty() && !engine.LoadModel()) {
+    std::remove(learning_path.string().c_str());
+    std::cerr << "failed to load evaluation model" << std::endl;
+    return 2;
+  }
+
+  if (!quality_options.eval_path.empty()) {
+    quality_options.output_path = output_path;
+    quality_options.baseline_path = baseline_path;
+    quality_options.build_id = AZOOKEY_BENCH_COMMIT;
+    std::string error;
+    const bool ok = azookey::bench::RunConversionQualityEvaluation(
+        quality_options,
+        [&engine](const std::string& input, const std::string& context) {
+          const auto now = static_cast<uint64_t>(
+              std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+          return engine.QueryCandidates(input, context, now, nullptr, 5, false);
+        },
+        &error);
+    std::remove(learning_path.string().c_str());
+    if (!ok) {
+      std::cerr << error << std::endl;
+      return 2;
+    }
+    return 0;
+  }
+
   engine.LoadModel();
 
   const std::vector<std::string> inputs = {"わたし", "にほん", "とうきょう", "かなへんかん",

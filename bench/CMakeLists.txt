@@ -22,11 +22,22 @@ if(WIN32)
   target_link_libraries(azookey_benchmark_result PRIVATE shell32)
 endif()
 
+add_library(azookey_conversion_quality STATIC ConversionQuality.cpp)
+target_include_directories(azookey_conversion_quality PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(azookey_conversion_quality
+  PUBLIC azookey_core
+  PRIVATE azookey_ipc azookey_project_options azookey_project_warnings
+)
+if(WIN32)
+  target_link_libraries(azookey_conversion_quality PRIVATE bcrypt psapi)
+endif()
+
 add_executable(azookey_bench live_bench.cpp)
 add_dependencies(azookey_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_bench
-  PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
+  PRIVATE azookey_benchmark_result azookey_conversion_quality azookey_host
+          azookey_project_options azookey_project_warnings
 )
 target_compile_definitions(azookey_bench PRIVATE
   AZOOKEY_BENCH_CONFIG="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,unknown>"
@@ -53,6 +64,13 @@ if(AZOOKEY_BUILD_TESTS)
   )
   azookey_discover_tests(benchmark_result_tests)
 
+  add_executable(conversion_quality_tests conversion_quality_test.cpp)
+  target_link_libraries(conversion_quality_tests
+    PRIVATE azookey_conversion_quality GTest::gtest_main
+            azookey_project_options azookey_project_warnings
+  )
+  azookey_discover_tests(conversion_quality_tests)
+
   set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS
     azookey_bench
     azookey_zenzai_bench
@@ -67,6 +85,14 @@ if(AZOOKEY_BUILD_TESTS)
     FAIL_REGULAR_EXPRESSION "p50_ms="
     TIMEOUT 10
   )
+  add_test(NAME azookey_conversion_quality_smoke
+           COMMAND "${CMAKE_COMMAND}"
+                   "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
+                   "-DEVAL_DATA=${CMAKE_CURRENT_SOURCE_DIR}/testdata/conversion_quality_smoke.jsonl"
+                   "-DOUTPUT_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-smoke.json"
+                   "-DPER_CASE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-smoke.jsonl"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertConversionQualityOutput.cmake")
+  set_tests_properties(azookey_conversion_quality_smoke PROPERTIES TIMEOUT 10)
   add_test(NAME azookey_zenzai_bench_missing_model_output
            COMMAND "${CMAKE_COMMAND}"
                    "-DBENCH_EXE=$<TARGET_FILE:azookey_zenzai_bench>"

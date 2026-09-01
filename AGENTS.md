@@ -57,8 +57,8 @@ gh pr create \
 レビュー・監査・セルフレビューで検出した問題は、以下の方針で必ず追跡・修正する。
 
 - **当該セッション内で修正しない問題は、必ず Linear（team `Dev` / 該当 Project）に
-  起票する。** 以後の修正は Linear 課題を起点に行い、PR 提出で In Review に、レビュー合格・
-  マージ・検証メモ記載後に Done に遷移させる（状態遷移は「Linear 運用（管制塔）」の
+  起票する。** 以後の修正は Linear 課題を起点に行い、PR 提出で In Review に、マージで
+  Merged に、検証メモ記載後に Done に遷移させる（状態遷移は「Linear 運用（管制塔）」の
   状態ライフサイクルに従う）。GitHub Issues は mirror であり、Linear 課題には対応する
   GitHub Issue / PR リンクを必須付与する。
 - 課題本文には最低限、次を記載する: 該当 file:line / 現象 / 影響 / 推奨修正 /
@@ -120,11 +120,15 @@ gh pr create \
 | Backlog | 未 triage | 起票直後 | 起票者 |
 | Todo | triage 済・着手可（Priority 確定） | triage | Claude / 人間 |
 | In Progress | 実装中 | ブランチ作成・着手 | Codex |
-| In Review | Draft PR 提出済み | PR 作成 | Codex / Claude |
-| Done | レビュー合格 + マージ + **検証メモ記載** | 人間マージ後 | Claude |
+| In Review | Draft PR 提出済み（open PR あり） | PR 作成 | Codex / Claude |
+| Merged | PR マージ済み・検証メモ待ち | PR マージ（連携の自動遷移） | GitHub 連携 / Claude |
+| Done | レビュー合格 + マージ + **検証メモ記載** | 検証メモ記載後の明示遷移 | Claude |
 | Canceled / Duplicate | 中止 / 重複 | 随時 | Claude |
 
 - Done への遷移時は、どのテスト / 実機確認で確認したかの検証メモを Linear にコメントする。
+- 人間ゲート課題（`gate:human-required` の人間専任 Issue）は PR を持たないため In Review /
+  Merged に置かず、Todo のまま人間の着手を待つ。`type:tracking` は子完了まで In Progress を
+  維持する（`docs/linear-conventions.md` §3.1）。
 - 役割分担: Claude = 設計・レビュー（triage・起票・Priority・依存・status → Done）、
   Codex = 実装（`agent:codex-impl` 課題の着手 → 実装 → Draft PR）、人間 = 舵取り
   （Priority / Cycle 決定・マージ）。
@@ -132,8 +136,8 @@ gh pr create \
 ### GitHub との対応
 
 - ブランチ命名は Linear の自動命名に合わせ **`dolquis/dev-<番号>-<slug>`** とする。
-- PR 本文に対応課題（`DEV-<番号>` / GitHub ミラーは `Fixes #<番号>`）を記載し、Linear と相互リンクする。ただし **`gate:human-required` / 検証メモ待ちの Issue では `Fixes #` を使わず `Refs #<番号>` 等の非クローズ参照にする**（GitHub Issue クローズ → Linear 同期で Done 化し In Review を迂回するため。§7.1.3）。
-- PR オープン → 該当 Linear 課題を In Review。**PR マージは In Review までで止め（自動 Done にしない）**、Done は検証メモ記載後に Claude / 人間が明示遷移する（`docs/linear-conventions.md` §7.1.3）。
+- PR 本文に対応課題（`DEV-<番号>` / GitHub ミラーは `Fixes #<番号>`）を記載し、Linear と相互リンクする。ただし **`gate:human-required` / 検証メモ待ちの Issue では `Fixes #` を使わず `Refs #<番号>` 等の非クローズ参照にする**（GitHub Issue クローズ → Linear 同期で Done 化し Merged を迂回するため。§7.1.3）。
+- PR オープン → 該当 Linear 課題を In Review。**PR マージで Merged へ遷移させ（自動 Done にしない。Merged 状態が未整備の間は In Review で代用）**、Done は検証メモ記載後に Claude / 人間が明示遷移する（`docs/linear-conventions.md` §7.1.3）。
 - `agent:claude-design` / `claude-review` と `gate:human-required` が両方絡む課題は、設計 Issue と人間ゲート Issue（`Human Gate: …`）に分離する（分離テストと規格は `docs/linear-conventions.md` §7.1）。
 
 ### 週次 control tower audit
@@ -142,6 +146,8 @@ Linear の定期監査課題（`[Recurring] Linear control tower audit`）で次
 Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-required` の人間専任
 タスクは `agent:*` 免除）、`Migrated` の GitHub リンク欠落、人間検証作業の
 `gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落、
+In Review なのに open PR が無い課題（Merged / Todo への再分類）、Merged の 2 週間超滞留
+（検証メモ債務）、人間ゲート・`type:tracking` 課題の In Review / Merged 混入、
 `agent:codex-impl` フィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` /
 `enhancement` も対象）が対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で
 難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を確定する前に

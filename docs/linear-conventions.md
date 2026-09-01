@@ -2,8 +2,8 @@
   SHARED CORE — Agent / Linear 運用規約（管制塔モデル）
   この「共有コア」は全リポジトリで同一内容をミラーする。
   個別 repo で直接編集しない。編集は origin（後述）で行い、各 repo へ伝播する。
-  version: 0.5-draft   updated: 2026-07-05
-  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。§11 に Design / Implementation spec-first checks・tracking の Codex 実行候補混入検出・設計未完のまま impl 実行許可の検出を追加(2026-07-05)。同 spec-first checks を移行期の旧カテゴリラベル(Feature / enhancement)と In Progress の課題にも適用(2026-07-05)。
+  version: 0.6-draft   updated: 2026-08-31
+  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。§11 に Design / Implementation spec-first checks・tracking の Codex 実行候補混入検出・設計未完のまま impl 実行許可の検出を追加(2026-07-05)。同 spec-first checks を移行期の旧カテゴリラベル(Feature / enhancement)と In Progress の課題にも適用(2026-07-05)。§3/§7.1.3/§10/§11 に In Review の意味分割(Merged 状態の新設・PR マージ遷移先の変更・人間ゲートの Todo 待機・tracking の In Progress 維持・検証メモのフロー化)を追加(2026-08-31・DEV-923)。
   origin(編集の起点・単一正典): dolquis/agent-ops/linear-conventions.md（このファイル）
   各 repo の docs/linear-conventions.md は本ファイルのベンダリングコピー + §13 Delta。
   プロジェクト固有の差分は各 repo の「Project Delta」節（本ファイル末尾）に置く。
@@ -70,8 +70,18 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 1. **Backlog / Todo** — 未整理または未着手
 2. **Design** — Claude Code で仕様整理・実装方針作成
 3. **Implement** — Codex で実装
-4. **Review** — Claude Code または Codex で差分レビュー
-5. **Done** — repo 固有の完了条件を満たし、作業結果・検証・PR・ドキュメント影響確認が記録済み
+4. **Review** — Claude Code または Codex で差分レビュー（Linear の In Review。open な PR がある）
+5. **Merged** — PR マージ済み・検証メモ待ち（Done 判定前の滞留を可視化する）
+6. **Done** — repo 固有の完了条件を満たし、作業結果・検証・PR・ドキュメント影響確認が記録済み
+
+### 3.1 状態に意味を重ねない
+
+In Review が「PR レビュー待ち」「マージ済み検証メモ待ち」「人間ゲート待ち」を兼ねると、キューの内訳が Linear 単体では分からず、監査のたびに GitHub の open PR 実態と突合することになる（2026-08-31 監査では In Review 18 件のうち open PR を持つ課題は 1 件だった。DEV-923）。次のように使い分ける。
+
+- **In Review** は open な PR（Draft 含む）を持つ課題だけに使う。open PR が無い課題を In Review に置かない。
+- **Merged** は PR がマージ済みで、検証メモの記載と Done への明示遷移（§7.1.3）が済んでいない課題に使う。
+- **人間ゲート課題**（`gate:human-required` の人間専任 Issue）は PR を持たないため In Review / Merged に置かず、Todo のまま人間の着手を待つ。キューは §10 の Needs Human Verification ビューが担う（started 系の状態に置くと、着手できないまま cycle 集計に乗り続ける）。
+- **`type:tracking`** は子 Issue の進行中は In Progress を維持する。子 PR のマージは束ねの完了ではないため、In Review / Merged に置かない。
 
 ---
 
@@ -203,11 +213,12 @@ Done は「Linear 上で運用的に完了」を意味し、GitHub docs のリ�
 
 事故の根本原因は、Linear–GitHub 連携が PR マージ / ブランチ名連動で Issue を Done 化し、人間ゲートを飛び越える点にある。次の多層で防ぐ:
 
-1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく In Review** にする。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは In Review で止まり、人間ゲートの取りこぼしが構造的に起きない（この設定変更は人間 lead が Linear 側で行う）。
-2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。 GitHub ミラー Issue も同様に、人間ゲート / 検証メモ待ちの Issue では `Fixes #<N>`（マージで GitHub Issue をクローズ → Linear 同期で Done 化し In Review を迂回する）を避け、`Refs #<N>` 等の非クローズ参照にする。
+1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく Merged** にする（Merged 状態が未整備の間は In Review で代用し、週次監査で再分類する）。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは Merged で止まり、人間ゲートの取りこぼしが構造的に起きない。マージ済みの課題がレビュー待ちの課題と混ざらないため、In Review は「open PR あり」を保ち続ける（§3.1。この設定変更は人間 lead が Linear 側で行う）。
+2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。 GitHub ミラー Issue も同様に、人間ゲート / 検証メモ待ちの Issue では `Fixes #<N>`（マージで GitHub Issue をクローズ → Linear 同期で Done 化し Merged を迂回する）を避け、`Refs #<N>` 等の非クローズ参照にする。
 3. **分割の徹底**: §7.1.1 に該当する Issue は分割し、auto-close が人間ゲート Issue に当たらないようにする。
+4. **検証メモのフロー化**: PR のマージを検知したセッション（マージを実行した人間から引き継いだエージェント・PR 監視エージェント・直後に該当 repo で作業するセッション）は、その場で検証メモ（確認したテスト名・CI ジョブ名を含む）を Issue にコメントし、`gate:human-required` が無ければ Done へ明示遷移する。検証メモを週次監査でまとめて書く運用は Merged の滞留を生む（DEV-662 で 18 件、DEV-925 で 11 件が一括処理になった）ため、監査での記入は取りこぼしの回収に限る。
 
-本節の遷移規約（PR マージ→In Review、Done は明示遷移）は、各 repo の `AGENTS.md` / `docs/GITHUB_LINEAR_MAPPING.md` / `docs/WORKFLOW.md` 等のライフサイクル要約より**優先**する。要約側が「PR マージ→Done」と記す場合は本節に読み替え、可能なら要約側も更新する。
+本節の遷移規約（PR マージ→Merged、Done は明示遷移）は、各 repo の `AGENTS.md` / `docs/GITHUB_LINEAR_MAPPING.md` / `docs/WORKFLOW.md` 等のライフサイクル要約より**優先**する。要約側が「PR マージ→Done」と記す場合は本節に読み替え、可能なら要約側も更新する。
 
 ---
 
@@ -249,7 +260,8 @@ GitHub docs remain canonical.
 - **Codex Review Candidate Queue**: `agent:codex-pr-review` + Todo/In Review + delegate なし（候補。実行はしない）
 - **Delegated to Codex**: delegate = Codex（暴発・実行中・実行済みの監査用。Candidate と必ず分離する）
 - **Needs Human Verification**: `gate:human-required`（+ not Done。旧 `type:human-gate` も読む）
-- **In Review**: status In Review（PR・設計・実行結果のレビュー待ち）
+- **In Review**: status In Review（open PR のレビュー・マージ待ち。open PR の無い課題が現れたら §11 で再分類する）
+- **Merged / Needs Verification Memo**: status Merged（マージ済み・検証メモ待ち。滞留は検証メモ債務として §11 で点検する）
 - **Missing Metadata**: repo / area / agent ラベル欠落、または Migrated Issue の GitHub リンク欠落（移行期の旧 repo/area ラベルと `gate:human-required` / 旧 `type:human-gate` 人間専任タスクの `agent:*` 免除を考慮）
 
 Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済み・実行）は絶対に混ぜない。`delegate = Codex` が見えたら必ずレビュー対象にする。
@@ -272,6 +284,10 @@ Codex Candidate（`agent:codex-*` 候補）と Delegated to Codex（delegate 済
 - [ ] Tracking Issue で子が未リンク
 - [ ] 実行順序を表さなくなったブロッカー
 - [ ] Done なのに検証ノート欠落
+- [ ] In Review なのに open PR が無い Issue（マージ済みなら Merged、未着手なら Todo へ再分類。§3.1）
+- [ ] Merged のまま 2 週間以上滞留している Issue（検証メモ債務。§7.1.3-4 のフロー化が機能していない兆候）
+- [ ] `gate:human-required` の人間専任 Issue が In Review / Merged に置かれている（Todo で待機させる。§3.1）
+- [ ] `type:tracking` Issue が In Review / Merged に置かれている（子完了まで In Progress を維持する。§3.1）
 - [ ] `agent:claude-*` と `gate:human-required` が同居した Issue（Design / Gate 分割漏れ。§7.1）
 - [ ] Done の設計 Issue（`agent:claude-*` 付き）に `gate:human-required` が残っている（分割後に除去すべき stale ラベル。人間ゲート Issue 自体が検証メモ付きで Done なのは正常）
 - [ ] 人間ゲート Issue が PR の auto-close 対象になっている（closing キーワードで参照されている）

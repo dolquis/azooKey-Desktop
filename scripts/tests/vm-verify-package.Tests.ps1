@@ -6,7 +6,7 @@ Describe "VM verification package automation" {
 
     # settings-app/CMakeLists.txt の AZOOKEY_SETTINGS_OUTPUT_DIR を模した publish 出力。
     # 除外されるべき中間生成物と、保持されるべき入れ子ランタイムの双方を含める。
-    function New-SettingsAppPayload {
+    function Initialize-SettingsAppPayload {
       param(
         [Parameter(Mandatory = $true)]
         [string]$Root,
@@ -209,7 +209,7 @@ Describe "VM verification package automation" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}
       Mock Assert-VmVerifyBuildReady {}
-      New-SettingsAppPayload -Root $script:testRepository
+      Initialize-SettingsAppPayload -Root $script:testRepository
 
       $result = Export-VmVerifyPackage `
         -RepositoryRoot $script:testRepository `
@@ -224,7 +224,7 @@ Describe "VM verification package automation" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}
       Mock Assert-VmVerifyBuildReady {}
-      New-SettingsAppPayload -Root $script:testRepository
+      Initialize-SettingsAppPayload -Root $script:testRepository
 
       $result = Export-VmVerifyPackage `
         -RepositoryRoot $script:testRepository `

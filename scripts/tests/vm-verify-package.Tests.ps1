@@ -4,6 +4,30 @@ Describe "VM verification package automation" {
     . (Join-Path $repoRoot "scripts\make-vm-verify-package.ps1")
     . (Join-Path $repoRoot "scripts\verify-bootstrap.ps1")
 
+    # settings-app/CMakeLists.txt の AZOOKEY_SETTINGS_OUTPUT_DIR を模した publish 出力。
+    # 除外されるべき中間生成物と、保持されるべき入れ子ランタイムの双方を含める。
+    function New-SettingsAppPayload {
+      param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [string]$Configuration = "Release"
+      )
+
+      $payloadRoot = Join-Path $Root "build\windows-release\settings-app\$Configuration"
+      $nativeDirectory = Join-Path $payloadRoot "runtimes\win-x64\native"
+      $objDirectory = Join-Path $payloadRoot "obj"
+      New-Item -ItemType Directory -Path $nativeDirectory, $objDirectory -Force | Out-Null
+
+      "settings" | Set-Content -LiteralPath (Join-Path $payloadRoot "azookey_settings.exe")
+      "managed" | Set-Content -LiteralPath (Join-Path $payloadRoot "azookey_settings.dll")
+      "native" | Set-Content -LiteralPath (Join-Path $nativeDirectory "runtime.dll")
+      "symbols" | Set-Content -LiteralPath (Join-Path $payloadRoot "azookey_settings.pdb")
+      "import" | Set-Content -LiteralPath (Join-Path $payloadRoot "azookey_settings.lib")
+      "exports" | Set-Content -LiteralPath (Join-Path $payloadRoot "azookey_settings.exp")
+      "incremental" | Set-Content -LiteralPath (Join-Path $payloadRoot "azookey_settings.ilk")
+      "intermediate" | Set-Content -LiteralPath (Join-Path $objDirectory "intermediate.txt")
+    }
+
     function Initialize-TestRepository {
       param(
         [Parameter(Mandatory = $true)]
@@ -179,6 +203,81 @@ Describe "VM verification package automation" {
       [BitConverter]::ToString($manifestBytes[0..2]) | Should -Not -Be "EF-BB-BF"
       Should -Invoke Assert-VmVerifyWorktreeClean -Times 1 -Exactly
       Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly
+    }
+
+    It "omits the settings app unless it is requested" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      New-SettingsAppPayload -Root $script:testRepository
+
+      $result = Export-VmVerifyPackage `
+        -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" `
+        -DestinationDirectory $script:testOutput
+
+      $manifest = Get-Content -Raw -LiteralPath $result.ManifestPath | ConvertFrom-Json
+      @($manifest.files | Where-Object { $_.role -eq "settings-app" }).Count | Should -Be 0
+    }
+
+    It "bundles the settings app payload and drops the MSI-excluded build outputs" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      New-SettingsAppPayload -Root $script:testRepository
+
+      $result = Export-VmVerifyPackage `
+        -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" `
+        -DestinationDirectory $script:testOutput `
+        -SettingsApp
+
+      $manifest = Get-Content -Raw -LiteralPath $result.ManifestPath | ConvertFrom-Json
+      $settingsFiles = @($manifest.files | Where-Object { $_.role -eq "settings-app" })
+      $settingsPaths = @($settingsFiles | ForEach-Object { $_.path })
+
+      $settingsPaths | Should -Contain "settings-app/azookey_settings.exe"
+      $settingsPaths | Should -Contain "settings-app/azookey_settings.dll"
+      $settingsPaths | Should -Contain "settings-app/runtimes/win-x64/native/runtime.dll"
+      # pkg/msi/Package.wxs の harvest 除外と揃っていること。
+      $settingsPaths | Should -Not -Contain "settings-app/azookey_settings.pdb"
+      $settingsPaths | Should -Not -Contain "settings-app/azookey_settings.lib"
+      $settingsPaths | Should -Not -Contain "settings-app/azookey_settings.exp"
+      $settingsPaths | Should -Not -Contain "settings-app/azookey_settings.ilk"
+      $settingsPaths | Should -Not -Contain "settings-app/obj/intermediate.txt"
+      foreach ($file in $settingsFiles) {
+        $file.sha256 | Should -Match "^[0-9a-f]{64}$"
+      }
+
+      # zip の entry 名は OS の区切り文字に依存しないので、展開せず直接照合する。
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      $archive = [System.IO.Compression.ZipFile]::OpenRead($result.ZipPath)
+      try {
+        $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.TrimStart("/") })
+      } finally {
+        $archive.Dispose()
+      }
+      $entryNames | Should -Contain "settings-app/azookey_settings.exe"
+      $entryNames | Should -Contain "settings-app/runtimes/win-x64/native/runtime.dll"
+      $entryNames | Should -Not -Contain "settings-app/azookey_settings.pdb"
+    }
+
+    It "rejects a requested settings app that has not been built" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      # Initialize-TestRepository は -Force で再作成するため、同じ TestDrive 配下では
+      # 先行 It が置いた settings-app 出力が残る。専用の root で未ビルド状態を作る。
+      $unbuilt = Join-Path $TestDrive "repository-without-settings-app"
+      Initialize-TestRepository -Root $unbuilt
+
+      {
+        Export-VmVerifyPackage `
+          -RepositoryRoot $unbuilt `
+          -PresetName "windows-release" `
+          -DestinationDirectory $script:testOutput `
+          -SettingsApp
+      } | Should -Throw "*Required VM verification payload is missing (settings-app)*"
     }
 
     It "rejects a missing release artifact" {

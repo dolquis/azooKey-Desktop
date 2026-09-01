@@ -34,7 +34,11 @@ llama.cpp を含まない Host に対して `-ModelPath` を渡すと、`registe
 cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
+cmake --build --preset windows-release --target azookey_settings
 ```
+
+`azookey_settings` は `ALL` に含まれない custom target なので、明示しないとビルドされない。
+DEV-758 の `settings.json` 側は設定アプリから保存する経路を見るものであり、この target が要る。
 
 パッケージを作る前に、preflight が通る状態かをホストで確認する。
 
@@ -50,15 +54,21 @@ VM へ持ち込んでから登録で弾かれると、checkpoint 復元からや
   -Preset windows-release `
   -OutputDirectory .\build\vm-verify-packages `
   -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe `
-  -ModelPath C:\path\to\zenz-v3.gguf
+  -ModelPath C:\path\to\zenz-v3.gguf `
+  -IncludeSettingsApp
 ```
+
+`-IncludeSettingsApp` も本セッションでは省略できない。
+このスイッチが無いと設定アプリは payload に入らず、DEV-758 の `settings.json` 側を VM で実行できない。
+`-ModelPath` と違い、target 未ビルドのまま指定した場合は payload 不足として停止するため、
+上の `azookey_settings` ビルドを先に済ませておく。
 
 `-ModelPath` は本セッションでは省略できない。
 スクリプト側は既定 `""` で省略を許し、モデルと bench を含まないパッケージを正常に生成するため、指定漏れはエラーにならない。
 一方 DEV-225 の A5 判定は実 GGUF での推論結果を見るものであり、GGUF なしでは `SimpleConverter` の静的辞書しか動かず判定が成立しない。
 上の preflight 確認と同じく、VM へ持ち込む前に指定したかどうかを見る。
 
-**compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連だけで、`compat_test.exe` と target JSON を含まない。
+**compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連と、`-IncludeSettingsApp` を付けた場合の設定アプリであり、`compat_test.exe` と target JSON を含まない。
 DEV-716 は zip だけでは実行できないので、別に固めて持ち込む。
 
 ```powershell
@@ -77,7 +87,9 @@ runner は `--target` に渡したパスから target JSON を読むため、両
 - Sysinternals Suite（`procmon`、`handle`）：Store 入力が再検証で失敗した場合の境界確認に使う
 - ゲスト側の 150% DPI 設定：DEV-716 の C-006 が要求する。ゲスト OS のスケーリング設定なので基本セッションのままで足りる
 - 絵文字を含むユーザー辞書エントリ、または絵文字を返す辞書：DEV-716 の C-007 を TIP 経路で確認するため
-- DEV-153 の対象アプリ（Chrome、VS Code、Windows ターミナル、Office 365 Word）：未導入のアプリは測れないため、事前に入れるか対象外として記録する
+- DEV-153 の対象アプリ（Chrome、VS Code、Windows ターミナル、Office 365 Word）：未導入のアプリは測れないため、事前に入れるか対象外として記録する。VS Code は DEV-847 の対象でもある
+- 第 2 のローカルユーザーアカウント：DEV-676 の項目 3（別ユーザー provisioning）が要求する
+- デバッガ（WinDbg など）：DEV-905 で Application Verifier が停止したとき、接続していないと停止コードと stack が残らない
 
 マルチディスプレイ構成は用意しない。
 IME の打鍵検証は基本セッション必須であり（`hyper-v-tip-verification.md` の安全装置）、基本セッションは単一ディスプレイしか持てない。
@@ -104,8 +116,16 @@ TIP DLL の ACL は `ALL APPLICATION PACKAGES` と `ALL RESTRICTED APPLICATION P
 > 本 Part は必須ゲートではなくなった。実施するのは、カテゴリ修正の効果を確認したい場合と、
 > v1.0 以降の署名判断に使う証跡を採りたい場合に限る。時間が足りなければ Part B を優先してよい。
 
-したがって本セッションで行うのは切り分けではなく、カテゴリ修正後の再検証である。
-切り分け階梯を再走しても、既に判定済みの結論を作り直すだけになる。
+カテゴリ修正後の再検証は 2026-08-17 に実走済みで、結果は DEV-673 のコメントにある。
+`4c9e7ff` を含む MSI（`9aa885f2a3d8`）で、Store の検索欄に `nihongo` を打鍵すると下線付きの preedit
+「にほんご」が表示され、Enter で確定できた。
+ただし Store 自身の検索候補フライアウトが前面に出るため、azooKey の候補 UI が出ていたかどうかは
+個別に視認できていない。
+つまり成立が確認できたのは preedit と確定までであり、候補 UI の描画は未確認のまま残っている。
+
+したがって本 Part を再実施する意味があるのは、この未確認部分を詰めたい場合に限る。
+Store 入力は MVP のスコープ外なので、詰めなくても DEV-673 の判定は変わらない。
+以下の手順は、それでも確認したい場合と、v1.0 以降の署名判断に使う証跡を採りたい場合のために残す。
 
 ### 手順
 
@@ -140,8 +160,13 @@ foreach ($root in 'HKLM:\Software\Microsoft\CTF\TIP',
 
 ### 結果の扱い
 
+2026-08-17 の実走はこのうち「preedit が出る場合」へ分岐した。
+再実施しても同じ分岐に入るなら、残る作業は候補 UI の視認と DEV-555 の確認だけになる。
+以下の 2 分岐は、その確認手順と、回帰していた場合の扱いとして残す。
+
 **Store で preedit が出る場合**：カテゴリ欠落が原因だったことが実機で裏付けられる。
 DEV-673 の「Microsoft Store / UWP 入力」項目を、スコープ外ではなく Pass として記録する。
+Store の検索候補フライアウトが前面に出ると azooKey の候補 UI が隠れるため、フライアウトを Esc で閉じてから Space を押し、候補 UI の描画を確認する。
 DEV-555（pipe DACL の AppContainer capability ACE）は、preedit が出たうえで候補が来ないかどうかという別の問いなので、そこまで確認して結果を DEV-555 へ書く。
 
 **Store で preedit が出ない場合**：署名要件が独立に効いている可能性が残る。
@@ -287,10 +312,19 @@ Host を kill する検証を先に走らせると、以降のゲートが供給
 
 1. **DEV-225**（Zenzai 漢字変換）。GGUF が要る唯一のゲートであり、判定基準が最も厳しいので、環境が最も素直な段階で走らせる。
 2. **DEV-757**（ローマ字一括変換）。打鍵のみで、状態を壊さない。
-3. **DEV-153**（UI-less / `pbShow` のアプリ別実測）。打鍵と観察のみだが対象アプリが多く、未導入のアプリがあると測れない。結果は docs ではなく課題コメントへ記録する。
-4. **DEV-716**（Notepad C-001〜C-012、C-005 を除く）。`compat_test.exe` の自動実行と、runner が証明できない TIP 経路の手動確認を行う。C-010 が Host kill を含むため、レーン 2 の打鍵系はここまでで終える。
-5. **DEV-676**（supervisor 復帰）。項目 2 は DEV-716 の C-010 実走結果を参照して記録し、再打鍵しない。残る項目 1（ログオン自動起動）と項目 3（別ユーザー provisioning）と項目 4（unregister が監督のみ停止）を実施する。項目 1 はログオフとログオンを挟むため、打鍵系の後に置く。
-6. **DEV-758**（同時更新での編集消失）と **DEV-759**（コンソール終了時の flush）。どちらも Host のプロセス寿命を操作するため最後に置く。
+3. **DEV-847**（候補選択 preedit・明示句読点・preedit キャレットの 3 挙動）。打鍵のみで、状態を壊さない。G1〜G3 を Notepad、Edge、VS Code の順に確認する。
+4. **DEV-153**（UI-less / `pbShow` のアプリ別実測）。打鍵と観察のみだが対象アプリが多く、未導入のアプリがあると測れない。結果は docs ではなく課題コメントへ記録する。
+5. **DEV-716**（Notepad C-001〜C-012、C-005 を除く）。`compat_test.exe` の自動実行と、runner が証明できない TIP 経路の手動確認を行う。C-010 が Host kill を含むため、レーン 2 の打鍵系はここまでで終える。
+6. **DEV-676**（supervisor 復帰）。項目 2 は DEV-716 の C-010 実走結果を参照して記録し、再打鍵しない。残る項目 1（ログオン自動起動）と項目 3（別ユーザー provisioning）と項目 4（unregister が監督のみ停止）を実施する。項目 1 はログオフとログオンを挟むため、打鍵系の後に置く。
+7. **DEV-758**（同時更新での編集消失）と **DEV-759**（コンソール終了時の flush）。どちらも Host のプロセス寿命を操作するため最後に置く。
+
+DEV-847 と DEV-153 は対象アプリが重なる。
+Notepad、Edge、VS Code をこの順に開き、各アプリで DEV-847 の G1〜G3 と DEV-153 の計測を続けて行うと、アプリの切り替えが 1 巡で済む。
+DEV-365（DisplayAttribute の描画差の目視）も同じ 3 アプリを対象とするため、実施する場合はこの巡回に相乗りさせる。
+記録は課題ごとに分けて残す。巡回でまとめて採っても、検証メモは DEV-847 と DEV-153 に別々に書く。
+
+DEV-676 の項目 3（別ユーザー provisioning）は、VM に第 2 のローカルユーザーが要る。
+セッション前に作っていない場合、この項目だけ実施できない。
 
 DEV-716 の実行例を示す。
 `--output` が既存の非空ディレクトリを指すと runner は実行を拒否するので、実行ごとに出力先を変える。
@@ -300,6 +334,20 @@ DEV-716 の実行例を示す。
 ```
 
 終了コードは、全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2` である。
+
+C-007（サロゲートペアの確定）は、2026-08-17 の実走で `failing-skip` として残った。
+azooKey の候補から絵文字を確定する前提機能が絵文字リライター（DEV-403）待ちだったためである。
+その後に着地したユーザー辞書の writer 経路（DEV-181 / DEV-790）を使えば、リライターを待たずに
+同じ確定経路を作れる見込みがある。
+`UserDictionary` の登録内容は `SimpleConverter` の候補生成へ渡っており、surface に文字種の制限は無い。
+
+```powershell
+$exe = (Resolve-Path .\azookey_inference_host.exe).Path
+& $exe userdict add --reading えもじ --surface 😀
+```
+
+登録したエントリを打鍵して候補から確定し、アプリ側の文字列でサロゲートペアが壊れないことを見る。
+候補に出ないか確定で壊れる場合は、従来どおり DEV-403 待ちとして記録する。
 
 C-005（マルチディスプレイ端の候補クランプ）は本セッションの対象外で、DEV-782 が扱う。
 基本セッションでは構成を作れないため `failing-skip` として残るが、runner は環境条件を満たせないケースを silent skip せず記録するので、誤って Pass にはならない。
@@ -498,6 +546,29 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - （caret）確定後キャレットが末尾: ☐ Pass ☐ Fail
 ```
 
+### DEV-847
+
+アプリごとに G1〜G3 を記録する。
+一部のアプリしか実施できなかった場合は、未実施のアプリを明記する。
+
+```md
+## アプリ別の結果（Notepad / Edge / VS Code）
+各行: ☐ Pass ☐ Fail ☐ 未実施
+
+- G1 候補選択と preedit の追従（↑↓ ごとの surface 切り替え、Enter と数字キーの確定一致、Esc / 追加入力 / Backspace での reading 復帰）
+  - Notepad: / Edge: / VS Code:
+- G2 明示句読点と `/`（preedit への `、` `。` 挿入、未変換強制確定が起きない、`/` 後の Backspace 整合、preedit 無しでのパススルー）
+  - Notepad: / Edge: / VS Code:
+  - 起票時は Notepad / Edge で発生し VS Code では再現しなかった。アプリ差が解消したか:
+- G3 preedit 更新中のキャレット（追加入力ごとの末尾追従、Backspace 後の末尾移動、下線範囲の維持、確定後の末尾配置）
+  - Notepad: / Edge: / VS Code:
+
+## 未実施のアプリと理由
+
+## 検出した不整合
+- 再現条件を別 Issue へ切り出し、対応する実装課題へリンクした: ☐ 済 ☐ 該当なし
+```
+
 ### DEV-153
 
 ```md
@@ -527,7 +598,8 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - C-005 は対象外（DEV-782）。failing-skip として残ることを確認: ☐ 確認
 
 ## runner が証明できない項目
-- C-007 を azooKey の候補から絵文字確定してサロゲートペアが壊れない: ☐ Pass ☐ Fail
+- C-007 を azooKey の候補から絵文字確定してサロゲートペアが壊れない: ☐ Pass ☐ Fail ☐ DEV-403 待ち
+  - 確認経路: ☐ ユーザー辞書へ絵文字 surface を登録 ☐ その他（記載）
 - C-006 を 150% DPI で確認: ☐ Pass ☐ Fail
 - C-010 で supervisor 稼働下の Host kill、DegradedSimple 継続、pipe 復帰: ☐ Pass ☐ Fail
 - runner 実行の前後でクリップボードが全 format 保持される（遅延レンダリングを含む）: ☐ Pass ☐ Fail

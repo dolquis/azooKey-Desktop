@@ -25,6 +25,11 @@
 
 namespace {
 
+constexpr size_t kCurrentZenzaiBeamWidth = 4;
+constexpr size_t kCurrentZenzaiMaxNewTokens = 64;
+constexpr size_t kCurrentZenzaiContextBatchSize = 512;
+constexpr size_t kCurrentZenzaiPromptTemplateVersion = 1;
+
 void PrintUsage(const char* exe) {
   std::cerr << "Usage: " << exe << " [--max-p95-ms N] [--json] [--output PATH] [--baseline PATH]\n"
             << "       " << exe
@@ -131,6 +136,9 @@ int main(int argc, char** argv) {
         throw std::invalid_argument("unknown option: " + arg);
       }
     }
+    if (quality_options.typo_mode != "off") {
+      throw std::invalid_argument("--typo-mode supports only off until M55");
+    }
     if (quality_options.eval_path.empty() &&
         (!quality_options.per_case_path.empty() || !quality_options.model.empty() ||
          quality_options.backend != "cpu" || quality_options.category != "all" ||
@@ -139,6 +147,9 @@ int main(int argc, char** argv) {
     }
     if (!quality_options.eval_path.empty() && max_p95_ms) {
       throw std::invalid_argument("--max-p95-ms cannot be combined with --eval");
+    }
+    if (!quality_options.eval_path.empty() && json_output) {
+      throw std::invalid_argument("--json cannot be combined with --eval");
     }
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << std::endl;
@@ -166,13 +177,25 @@ int main(int argc, char** argv) {
     quality_options.output_path = output_path;
     quality_options.baseline_path = baseline_path;
     quality_options.build_id = AZOOKEY_BENCH_COMMIT;
+    if (!quality_options.model.empty()) {
+      quality_options.decode = "beam";
+      quality_options.beam_width = kCurrentZenzaiBeamWidth;
+      quality_options.max_new_tokens = kCurrentZenzaiMaxNewTokens;
+      quality_options.prompt_template_version = kCurrentZenzaiPromptTemplateVersion;
+      // llama.cpp's effective thread count is not exposed by the converter yet (DEV-858).
+      // Zero records that the compatibility value is unknown instead of reporting a false default.
+      quality_options.thread_count = 0;
+      quality_options.batch_size = kCurrentZenzaiContextBatchSize;
+    }
     std::string error;
     const bool ok = azookey::bench::RunConversionQualityEvaluation(
         quality_options,
         [&engine](const std::string& input, const std::string& context) {
           const auto now = static_cast<uint64_t>(
               std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
-          return engine.QueryCandidates(input, context, now, nullptr, 5, false);
+          return engine.QueryCandidates(
+              input, context, now, nullptr,
+              static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit), false);
         },
         &error);
     std::remove(learning_path.string().c_str());

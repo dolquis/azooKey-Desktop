@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -209,31 +210,37 @@ double Percentile95(std::vector<double> values) {
   return values[index];
 }
 
-void Add(Aggregate* aggregate, const EvaluatedCase& result) {
-  ++aggregate->count;
-  if (result.rank == 1) ++aggregate->top1;
-  if (result.rank > 0 && result.rank <= 3) ++aggregate->top3;
-  if (result.rank > 0 && result.rank <= 5) ++aggregate->top5;
-  if (result.rank > 0) aggregate->reciprocal_rank_sum += 1.0 / result.rank;
-  aggregate->exact += result.match.exact_match ? 1 : 0;
-  aggregate->nfkc_exact += result.match.nfkc_exact_match ? 1 : 0;
-  aggregate->acceptable += result.match.acceptable_match ? 1 : 0;
-  aggregate->edit_distance += result.match.edit_distance;
-  aggregate->reference_length += result.match.reference_length;
-  aggregate->nfkc_edit_distance += result.match.nfkc_edit_distance;
-  aggregate->nfkc_reference_length += result.match.nfkc_reference_length;
-  aggregate->latencies.push_back(result.latency_ms);
+void Add(Aggregate* aggregate, const EvaluatedCase& result, bool include_primary_metrics,
+         std::string_view typo_mode) {
+  if (include_primary_metrics) {
+    ++aggregate->count;
+    if (result.rank == 1) ++aggregate->top1;
+    if (result.rank > 0 && result.rank <= 3) ++aggregate->top3;
+    if (result.rank > 0 && result.rank <= kConversionQualityCandidateLimit) ++aggregate->top5;
+    if (result.rank > 0) aggregate->reciprocal_rank_sum += 1.0 / result.rank;
+    aggregate->exact += result.match.exact_match ? 1 : 0;
+    aggregate->nfkc_exact += result.match.nfkc_exact_match ? 1 : 0;
+    aggregate->acceptable += result.match.acceptable_match ? 1 : 0;
+    aggregate->edit_distance += result.match.edit_distance;
+    aggregate->reference_length += result.match.reference_length;
+    aggregate->nfkc_edit_distance += result.match.nfkc_edit_distance;
+    aggregate->nfkc_reference_length += result.match.nfkc_reference_length;
+    aggregate->latencies.push_back(result.latency_ms);
+  }
   if (!result.source.typo) {
-    ++aggregate->reading_count;
-    aggregate->reading_fidelity += result.reading_fidelity ? 1 : 0;
+    if (include_primary_metrics) {
+      ++aggregate->reading_count;
+      aggregate->reading_fidelity += result.reading_fidelity ? 1 : 0;
+    }
   } else if (result.source.typo_type) {
     ++aggregate->typo_count;
     aggregate->typo_top1 += result.rank == 1 ? 1 : 0;
-    aggregate->typo_top5 += result.rank > 0 && result.rank <= 5 ? 1 : 0;
+    aggregate->typo_top5 +=
+        result.rank > 0 && result.rank <= kConversionQualityCandidateLimit ? 1 : 0;
   } else {
     ++aggregate->clean_count;
     aggregate->clean_false_positive += result.typo_corrected ? 1 : 0;
-    aggregate->clean_overcorrection += result.typo_corrected && result.rank == 0 ? 1 : 0;
+    aggregate->clean_overcorrection += typo_mode == "aggressive" && result.rank == 0 ? 1 : 0;
   }
 }
 
@@ -327,7 +334,8 @@ std::string Hex(const std::vector<unsigned char>& bytes) {
   return output;
 }
 
-std::string Sha256File(const std::filesystem::path& path) {
+std::string Sha256File(const std::filesystem::path& path, std::string_view prefix,
+                       bool normalize_crlf) {
 #if defined(_WIN32)
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
@@ -358,14 +366,49 @@ std::string Sha256File(const std::filesystem::path& path) {
     cleanup();
     throw std::runtime_error("failed to calculate SHA-256");
   }
-  std::array<unsigned char, 64 * 1024> buffer{};
-  while (input) {
-    input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count > 0 && BCryptHashData(hash, buffer.data(), static_cast<ULONG>(count), 0) < 0) {
+  const auto update = [&](const unsigned char* bytes, size_t size) {
+    if (size == 0) return;
+    if (size > std::numeric_limits<ULONG>::max() ||
+        BCryptHashData(hash, const_cast<PUCHAR>(bytes), static_cast<ULONG>(size), 0) < 0) {
       cleanup();
       throw std::runtime_error("failed to calculate SHA-256");
     }
+  };
+  update(reinterpret_cast<const unsigned char*>(prefix.data()), prefix.size());
+  std::array<unsigned char, 64 * 1024> buffer{};
+  bool pending_cr = false;
+  while (input) {
+    input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count <= 0) continue;
+    if (!normalize_crlf) {
+      update(buffer.data(), static_cast<size_t>(count));
+      continue;
+    }
+    std::vector<unsigned char> normalized;
+    normalized.reserve(static_cast<size_t>(count) + 1);
+    for (std::streamsize index = 0; index < count; ++index) {
+      const auto byte = buffer[static_cast<size_t>(index)];
+      if (pending_cr) {
+        if (byte == '\n') {
+          normalized.push_back('\n');
+          pending_cr = false;
+          continue;
+        }
+        normalized.push_back('\r');
+        pending_cr = false;
+      }
+      if (byte == '\r') {
+        pending_cr = true;
+      } else {
+        normalized.push_back(byte);
+      }
+    }
+    update(normalized.data(), normalized.size());
+  }
+  if (pending_cr) {
+    constexpr unsigned char carriage_return = '\r';
+    update(&carriage_return, 1);
   }
   if (!input.eof() || BCryptFinishHash(hash, digest.data(), hash_size, 0) < 0) {
     cleanup();
@@ -375,9 +418,13 @@ std::string Sha256File(const std::filesystem::path& path) {
   return Hex(digest);
 #else
   (void)path;
+  (void)prefix;
+  (void)normalize_crlf;
   throw std::runtime_error("conversion-quality SHA-256 is only available on Windows");
 #endif
 }
+
+std::string Sha256File(const std::filesystem::path& path) { return Sha256File(path, {}, false); }
 
 double PeakMemoryMb() {
 #if defined(_WIN32)
@@ -390,12 +437,52 @@ double PeakMemoryMb() {
 #endif
 }
 
-j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& summary,
-                       const j::Object& categories) {
+j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& config,
+                       const j::Object& summary, const j::Object& categories) {
   j::Object diff;
   if (path.empty()) return diff;
   const auto parsed = j::Parse(ReadFile(path));
   if (!parsed || !parsed->IsObject()) throw std::runtime_error("invalid baseline JSON");
+  const auto* baseline_version = parsed->Find("version");
+  if (!baseline_version || !baseline_version->IsNumber() || baseline_version->AsNumber() != 1.0) {
+    throw std::runtime_error("baseline is incompatible: version");
+  }
+  const auto* baseline_config = parsed->GetObject("config");
+  if (!baseline_config) throw std::runtime_error("baseline is incompatible: config");
+  const auto compatible_value = [](const j::Value& current, const j::Value& baseline) {
+    if (current.IsNull() && baseline.IsNull()) return true;
+    if (current.IsBool() && baseline.IsBool()) return current.AsBool() == baseline.AsBool();
+    if (current.IsNumber() && baseline.IsNumber()) {
+      return current.AsNumber() == baseline.AsNumber();
+    }
+    if (current.IsString() && baseline.IsString()) {
+      return current.AsString() == baseline.AsString();
+    }
+    return false;
+  };
+  constexpr std::array compatible_keys = {
+      "model_sha256",
+      "backend",
+      "decode",
+      "beam_width",
+      "n_best",
+      "max_new_tokens",
+      "prompt_template_version",
+      "thread_count",
+      "batch_size",
+      "typo_correction_mode",
+      "learning_state",
+      "category_filter",
+      "eval_dataset_sha256",
+  };
+  for (const auto* key : compatible_keys) {
+    const auto current = config.find(key);
+    const auto baseline = baseline_config->find(key);
+    if (current == config.end() || baseline == baseline_config->end() ||
+        !compatible_value(current->second, baseline->second)) {
+      throw std::runtime_error(std::string("baseline is incompatible: ") + key);
+    }
+  }
   const auto* baseline_summary = parsed->GetObject("summary");
   if (!baseline_summary) throw std::runtime_error("baseline is missing summary");
   const auto add_diff = [&](const std::string& key, const j::Object& current,
@@ -439,6 +526,31 @@ size_t AcceptedRank(const std::vector<core::Candidate>& candidates, const Evalua
 }
 
 }  // namespace
+
+std::string EvaluationDatasetSha256(const std::filesystem::path& path) {
+  const auto absolute = std::filesystem::absolute(path).lexically_normal();
+  auto data_root = absolute.parent_path();
+  while (!data_root.empty() &&
+         !(data_root.filename() == "data" && data_root.parent_path().filename() == "bench")) {
+    const auto parent = data_root.parent_path();
+    if (parent == data_root) {
+      data_root.clear();
+      break;
+    }
+    data_root = parent;
+  }
+  if (data_root.empty()) {
+    throw std::invalid_argument("evaluation data must be located under bench/data");
+  }
+  const auto relative = absolute.lexically_relative(data_root);
+  if (relative.empty() || relative.is_absolute() || *relative.begin() == "..") {
+    throw std::invalid_argument("failed to derive evaluation data path relative to bench/data");
+  }
+  const auto relative_utf8 = relative.generic_u8string();
+  std::string prefix(reinterpret_cast<const char*>(relative_utf8.data()), relative_utf8.size());
+  prefix.push_back('\0');
+  return Sha256File(absolute, prefix, true);
+}
 
 std::vector<char32_t> DecodeUtf8CodePoints(const std::string& text) {
   std::vector<char32_t> output;
@@ -566,6 +678,9 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     if (options.output_path.empty())
       throw std::invalid_argument("--output is required with --eval");
     if (options.iterations == 0) throw std::invalid_argument("--iterations must be greater than 0");
+    if (options.n_best == 0 || options.n_best > kConversionQualityCandidateLimit) {
+      throw std::invalid_argument("n_best must be between 1 and 5");
+    }
     if (options.typo_mode != "off") {
       throw std::invalid_argument("--typo-mode supports only off until M55");
     }
@@ -586,7 +701,7 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
         latencies.push_back(std::chrono::duration<double, std::milli>(end - start).count());
         if (iteration + 1 == options.iterations) candidates = std::move(current);
       }
-      if (candidates.size() > 5) candidates.resize(5);
+      if (candidates.size() > options.n_best) candidates.resize(options.n_best);
       std::sort(latencies.begin(), latencies.end());
       EvaluatedCase result;
       result.source = std::move(item);
@@ -598,8 +713,11 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
           !result.candidates.empty() && result.candidates.front().reading == result.source.input;
       result.typo_corrected = false;
       result.latency_ms = latencies[latencies.size() / 2];
-      Add(&summary, result);
-      Add(&by_category[result.source.categories.front()], result);
+      const bool typo_clean = result.source.typo && !result.source.typo_type.has_value();
+      Add(&summary, result, !typo_clean, options.typo_mode);
+      if (!typo_clean) {
+        Add(&by_category[result.source.categories.front()], result, true, options.typo_mode);
+      }
       evaluated.push_back(std::move(result));
     }
 
@@ -613,31 +731,31 @@ bool RunConversionQualityEvaluation(const ConversionQualityOptions& options,
     }
     j::Object config;
     config.emplace("backend", j::Value(options.backend));
-    config.emplace("batch_size", j::Value(1));
-    config.emplace("beam_width", j::Value(5));
+    config.emplace("batch_size", j::Value(options.batch_size));
+    config.emplace("beam_width", j::Value(options.beam_width));
     config.emplace("build_id", j::Value(options.build_id));
     config.emplace("category_filter", j::Value(options.category));
-    config.emplace("decode", j::Value("beam"));
-    config.emplace("eval_dataset_sha256", j::Value(Sha256File(options.eval_path)));
-    config.emplace("host_version", j::Value("0.1.0"));
-    config.emplace("learning_state", j::Value("empty"));
-    config.emplace("max_new_tokens", j::Value(64));
+    config.emplace("decode", j::Value(options.decode));
+    config.emplace("eval_dataset_sha256", j::Value(EvaluationDatasetSha256(options.eval_path)));
+    config.emplace("host_version", j::Value(options.host_version));
+    config.emplace("learning_state", j::Value(options.learning_state));
+    config.emplace("max_new_tokens", j::Value(options.max_new_tokens));
     config.emplace(
         "model",
         j::Value(options.model.empty() ? "fallback"
                                        : std::filesystem::path(options.model).filename().string()));
     config.emplace("model_sha256",
                    j::Value(options.model.empty() ? "" : Sha256File(options.model)));
-    config.emplace("n_best", j::Value(5));
-    config.emplace("prompt_template_version", j::Value(1));
-    config.emplace("thread_count", j::Value(1));
+    config.emplace("n_best", j::Value(options.n_best));
+    config.emplace("prompt_template_version", j::Value(options.prompt_template_version));
+    config.emplace("thread_count", j::Value(options.thread_count));
     config.emplace("typo_correction_mode", j::Value(options.typo_mode));
 
     j::Object root;
     root.emplace("by_category", j::Value(categories_json));
+    root.emplace("diff_vs_baseline", j::Value(BaselineDiff(options.baseline_path, config,
+                                                           summary_json, categories_json)));
     root.emplace("config", j::Value(std::move(config)));
-    root.emplace("diff_vs_baseline",
-                 j::Value(BaselineDiff(options.baseline_path, summary_json, categories_json)));
     root.emplace("summary", j::Value(std::move(summary_json)));
     root.emplace("timestamp", j::Value(Iso8601Now()));
     root.emplace("version", j::Value(1));

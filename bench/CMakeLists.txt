@@ -85,14 +85,18 @@ if(AZOOKEY_BUILD_TESTS)
     FAIL_REGULAR_EXPRESSION "p50_ms="
     TIMEOUT 10
   )
-  add_test(NAME azookey_conversion_quality_smoke
-           COMMAND "${CMAKE_COMMAND}"
-                   "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
-                   "-DEVAL_DATA=${CMAKE_CURRENT_SOURCE_DIR}/testdata/conversion_quality_smoke.jsonl"
-                   "-DOUTPUT_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-smoke.json"
-                   "-DPER_CASE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-smoke.jsonl"
-                   -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertConversionQualityOutput.cmake")
-  set_tests_properties(azookey_conversion_quality_smoke PROPERTIES TIMEOUT 10)
+  if(WIN32)
+    add_test(NAME azookey_conversion_quality_smoke
+             COMMAND "${CMAKE_COMMAND}"
+                     "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
+                     "-DEVAL_DATA=${CMAKE_CURRENT_SOURCE_DIR}/data/conversion_quality_smoke.jsonl"
+                     "-DOUTPUT_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-smoke.json"
+                     "-DPER_CASE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-smoke.jsonl"
+                     "-DBASELINE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-baseline.json"
+                     "-DINCOMPATIBLE_BASELINE_PATH=${CMAKE_CURRENT_BINARY_DIR}/conversion-quality-incompatible-baseline.json"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertConversionQualityOutput.cmake")
+    set_tests_properties(azookey_conversion_quality_smoke PROPERTIES TIMEOUT 10)
+  endif()
   add_test(NAME azookey_zenzai_bench_missing_model_output
            COMMAND "${CMAKE_COMMAND}"
                    "-DBENCH_EXE=$<TARGET_FILE:azookey_zenzai_bench>"

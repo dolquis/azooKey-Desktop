@@ -213,7 +213,7 @@ Done は「Linear 上で運用的に完了」を意味し、GitHub docs のリ�
 
 事故の根本原因は、Linear–GitHub 連携が PR マージ / ブランチ名連動で Issue を Done 化し、人間ゲートを飛び越える点にある。次の多層で防ぐ:
 
-1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく Merged** にする（Merged 状態が未整備の間は In Review で代用し、週次監査で再分類する）。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは Merged で止まり、人間ゲートの取りこぼしが構造的に起きない。マージ済みの課題がレビュー待ちの課題と混ざらないため、In Review は「open PR あり」を保ち続ける（§3.1。この設定変更は人間 lead が Linear 側で行う）。
+1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく Merged** にする（`Merged` は team `Dev` に作成済み。2026-09-01・DEV-924）。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは Merged で止まり、人間ゲートの取りこぼしが構造的に起きない。マージ済みの課題がレビュー待ちの課題と混ざらないため、In Review は「open PR あり」を保ち続ける（§3.1。この設定変更は人間 lead が Linear 側で行う）。
 2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。 GitHub ミラー Issue も同様に、人間ゲート / 検証メモ待ちの Issue では `Fixes #<N>`（マージで GitHub Issue をクローズ → Linear 同期で Done 化し Merged を迂回する）を避け、`Refs #<N>` 等の非クローズ参照にする。
 3. **分割の徹底**: §7.1.1 に該当する Issue は分割し、auto-close が人間ゲート Issue に当たらないようにする。
 4. **検証メモのフロー化**（§7.2 遷移時記録原則の適用例）: PR のマージを検知したセッション（マージを実行した人間から引き継いだエージェント・PR 監視エージェント・直後に該当 repo で作業するセッション）は、その場で検証メモ（確認したテスト名・CI ジョブ名を含む）を Issue にコメントし、`gate:human-required` が無ければ Done へ明示遷移する。遷移時にやることは §7 Done チェックリストに集約してある。検証メモを週次監査でまとめて書く運用は Merged の滞留を生む（DEV-662 で 18 件、DEV-925 で 11 件が一括処理になった）ため、監査での記入は取りこぼしの回収に限る。

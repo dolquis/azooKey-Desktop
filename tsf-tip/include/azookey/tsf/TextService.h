@@ -17,6 +17,9 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#ifdef _DEBUG
+#include "azookey/tsf/DebugThreadAffinity.h"
+#endif
 
 namespace azookey::tsf {
 
@@ -173,6 +176,10 @@ class TextService final : public ITfTextInputProcessorEx,
  private:
   friend class EditSession;
 
+#ifdef _DEBUG
+  DebugThreadAffinity ui_thread_affinity_;
+  DebugThreadAffinity ipc_thread_affinity_;
+#endif
   LONG ref_count_{1};
   ITfThreadMgr* thread_mgr_{nullptr};
   TfClientId client_id_{TF_CLIENTID_NULL};

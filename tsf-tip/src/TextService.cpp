@@ -182,6 +182,19 @@ std::optional<char> TranslateAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_da
   return static_cast<char>(translated[0]);
 }
 
+#ifdef AZOOKEY_TSF_TESTING
+azookey::tsf::testing::TranslateAsciiDecimalDigitFnForTest g_translate_ascii_decimal_digit =
+    &TranslateAsciiDecimalDigit;
+#endif
+
+std::optional<char> CurrentAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_data) {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_translate_ascii_decimal_digit(virtual_key, key_data);
+#else
+  return TranslateAsciiDecimalDigit(virtual_key, key_data);
+#endif
+}
+
 struct OemCompositionSymbol {
   char raw;
   std::string surface;
@@ -457,6 +470,19 @@ void ClearTranslateOemCompositionCharacterForTest() {
   g_translate_oem_composition_character = &TranslateOemCompositionCharacter;
 }
 
+std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
+                                                                LPARAM key_data) {
+  return TranslateAsciiDecimalDigit(virtual_key, key_data);
+}
+
+void SetTranslateAsciiDecimalDigitForTest(TranslateAsciiDecimalDigitFnForTest translate_digit) {
+  g_translate_ascii_decimal_digit = translate_digit ? translate_digit : &TranslateAsciiDecimalDigit;
+}
+
+void ClearTranslateAsciiDecimalDigitForTest() {
+  g_translate_ascii_decimal_digit = &TranslateAsciiDecimalDigit;
+}
+
 void SetCaretWin32ApiForTest(
     GetGuiThreadInfoFnForTest get_gui_thread_info, ClientToScreenFnForTest client_to_screen,
     GetPhysicalCursorPosFnForTest get_physical_cursor_pos,
@@ -681,7 +707,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
-    const auto decimal_digit = TranslateAsciiDecimalDigit(wParam, lParam);
+    const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
 
     if (wParam >= '1' && wParam <= '9' && cand_visible) {
       *eaten = TRUE;
@@ -811,7 +837,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
-    const auto decimal_digit = TranslateAsciiDecimalDigit(wParam, lParam);
+    const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
     if (wParam >= '1' && wParam <= '9' && cand_visible) {
       int idx = static_cast<int>(wParam - '1');
       if (idx < candidate_ui_.GetCount()) {
@@ -1271,9 +1297,10 @@ HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_acc
   edit->Release();
   if (request_accepted) *request_accepted = SUCCEEDED(hr);
   // For synchronous sessions TSF writes DoEditSession's result into hr_session
-  // while returning S_OK from RequestEditSession itself.  Return hr_session so
-  // callers see real failures.  For async sessions hr_session stays S_OK
-  // (initialized value), so this is always safe to return.
+  // while returning S_OK from RequestEditSession itself. Return hr_session so
+  // callers see real failures. An established asynchronous session reports
+  // TF_S_ASYNC in hr_session; it is a success HRESULT and remains safe for
+  // callers that use SUCCEEDED/FAILED rather than comparing with S_OK.
   return SUCCEEDED(hr) ? hr_session : hr;
 }
 

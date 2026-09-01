@@ -50,6 +50,8 @@ class MockThreadMgr final : public ITfThreadMgr,
     return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
   }
 
+  LONG ref_count_for_test() const { return ref_count_; }
+
   STDMETHODIMP Activate(TfClientId* ptid) override {
     if (!ptid) return E_POINTER;
     *ptid = client_id;
@@ -105,6 +107,7 @@ class MockThreadMgr final : public ITfThreadMgr,
                                   BOOL fForeground) override {
     if (!pSink) return E_POINTER;
     key_advise_count++;
+    if (FAILED(key_advise_result)) return key_advise_result;
     key_advised = true;
     advised_client_id = tid;
     advised_foreground = fForeground;
@@ -216,6 +219,7 @@ class MockThreadMgr final : public ITfThreadMgr,
     if (!punk || !pdwCookie) return E_POINTER;
     if (riid != IID_ITfThreadMgrEventSink) return E_NOINTERFACE;
     source_advise_count++;
+    if (FAILED(source_advise_result)) return source_advise_result;
     source_advised = true;
     thread_sink_ = punk;
     thread_sink_->AddRef();
@@ -246,12 +250,35 @@ class MockThreadMgr final : public ITfThreadMgr,
   BOOL advised_foreground{FALSE};
   DWORD sink_cookie{42};
   DWORD unadvised_cookie{TF_INVALID_COOKIE};
+  HRESULT key_advise_result{S_OK};
+  HRESULT source_advise_result{S_OK};
 
  private:
   LONG ref_count_{1};
   ITfKeyEventSink* key_sink_{nullptr};
   IUnknown* thread_sink_{nullptr};
 };
+
+ITfTextInputProcessorEx* CreateTextServiceInstanceForRollbackTest() {
+  HMODULE module = LoadLibraryW(WIDEN_LITERAL(AZOOKEY_TSF_TIP_DLL_PATH));
+  if (!module) return nullptr;
+
+  auto* proc = reinterpret_cast<DllGetClassObjectFn>(GetProcAddress(module, "DllGetClassObject"));
+  if (!proc) return nullptr;
+
+  IClassFactory* factory = nullptr;
+  if (FAILED(proc(azookey::tsf::kTextServiceClsid, IID_IClassFactory,
+                  reinterpret_cast<void**>(&factory))) ||
+      !factory) {
+    return nullptr;
+  }
+
+  ITfTextInputProcessorEx* service = nullptr;
+  const HRESULT hr = factory->CreateInstance(nullptr, IID_ITfTextInputProcessorEx,
+                                             reinterpret_cast<void**>(&service));
+  factory->Release();
+  return SUCCEEDED(hr) ? service : nullptr;
+}
 
 }  // namespace
 
@@ -317,6 +344,48 @@ TEST(TsfTipComSmokeTest, ActivateExAdvisesAndDeactivateUnadvisesSinks) {
   EXPECT_EQ(thread_mgr.unadvised_client_id, thread_mgr.client_id);
   EXPECT_EQ(thread_mgr.unadvised_cookie, thread_mgr.sink_cookie);
 
+  service->Release();
+}
+
+TEST(TsfTipComSmokeTest, ActivateExRollsBackKeySinkWhenThreadSinkAdviseFails) {
+  ITfTextInputProcessorEx* service = CreateTextServiceInstanceForRollbackTest();
+  ASSERT_NE(service, nullptr);
+  MockThreadMgr thread_mgr;
+  thread_mgr.source_advise_result = E_FAIL;
+
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), E_FAIL);
+  EXPECT_FALSE(thread_mgr.key_advised);
+  EXPECT_FALSE(thread_mgr.source_advised);
+  EXPECT_EQ(thread_mgr.key_advise_count, 1);
+  EXPECT_EQ(thread_mgr.key_unadvise_count, 1);
+  EXPECT_EQ(thread_mgr.source_advise_count, 1);
+  EXPECT_EQ(thread_mgr.source_unadvise_count, 0);
+  EXPECT_EQ(thread_mgr.ref_count_for_test(), 1);
+
+  thread_mgr.source_advise_result = S_OK;
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), S_OK);
+  EXPECT_EQ(service->Deactivate(), S_OK);
+  service->Release();
+}
+
+TEST(TsfTipComSmokeTest, ActivateExClearsStateWhenKeySinkAdviseFails) {
+  ITfTextInputProcessorEx* service = CreateTextServiceInstanceForRollbackTest();
+  ASSERT_NE(service, nullptr);
+  MockThreadMgr thread_mgr;
+  thread_mgr.key_advise_result = E_FAIL;
+
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), E_FAIL);
+  EXPECT_FALSE(thread_mgr.key_advised);
+  EXPECT_FALSE(thread_mgr.source_advised);
+  EXPECT_EQ(thread_mgr.key_advise_count, 1);
+  EXPECT_EQ(thread_mgr.key_unadvise_count, 0);
+  EXPECT_EQ(thread_mgr.source_advise_count, 0);
+  EXPECT_EQ(thread_mgr.source_unadvise_count, 0);
+  EXPECT_EQ(thread_mgr.ref_count_for_test(), 1);
+
+  thread_mgr.key_advise_result = S_OK;
+  EXPECT_EQ(service->ActivateEx(&thread_mgr, thread_mgr.client_id, 0), S_OK);
+  EXPECT_EQ(service->Deactivate(), S_OK);
   service->Release();
 }
 

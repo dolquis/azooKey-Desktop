@@ -99,6 +99,50 @@ class OemCompositionTranslationGuard {
   }
 };
 
+std::optional<char> TranslateDefaultAsciiDecimalDigitForTest(WPARAM virtual_key, LPARAM) {
+  if (virtual_key >= VK_NUMPAD0 && virtual_key <= VK_NUMPAD9) {
+    return static_cast<char>('0' + (virtual_key - VK_NUMPAD0));
+  }
+  if (virtual_key < '0' || virtual_key > '9') return std::nullopt;
+
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  const bool shift_down = (keyboard_state[VK_SHIFT] & 0x80) != 0 ||
+                          (keyboard_state[VK_LSHIFT] & 0x80) != 0 ||
+                          (keyboard_state[VK_RSHIFT] & 0x80) != 0;
+  return shift_down ? std::nullopt : std::optional<char>(static_cast<char>(virtual_key));
+}
+
+class AsciiDecimalDigitTranslationGuard {
+ public:
+  AsciiDecimalDigitTranslationGuard() {
+    azookey::tsf::testing::SetTranslateAsciiDecimalDigitForTest(
+        &TranslateDefaultAsciiDecimalDigitForTest);
+  }
+
+  ~AsciiDecimalDigitTranslationGuard() {
+    azookey::tsf::testing::ClearTranslateAsciiDecimalDigitForTest();
+  }
+};
+
+BOOL WINAPI FakePhysicalCursorPosition(POINT* point) {
+  if (!point) return FALSE;
+  *point = {321, 654};
+  return TRUE;
+}
+
+UINT FakeMonitorScalePercent(POINT) { return 100; }
+
+class CaretFallbackGuard {
+ public:
+  CaretFallbackGuard() {
+    azookey::tsf::testing::SetCaretWin32ApiForTest(nullptr, nullptr, &FakePhysicalCursorPosition,
+                                                   nullptr, &FakeMonitorScalePercent);
+  }
+
+  ~CaretFallbackGuard() { azookey::tsf::testing::ClearCaretWin32ApiForTest(); }
+};
+
 template <typename Predicate>
 bool WaitUntil(Predicate predicate,
                std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
@@ -253,6 +297,65 @@ class FakeRange final : public ITfRange {
   LONG ref_count_{1};
 };
 
+class FakeContextView final : public ITfContextView {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
+    if (!ppvObject) return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfContextView) {
+      *ppvObject = static_cast<ITfContextView*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_count_));
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&ref_count_));
+  }
+
+  STDMETHODIMP GetRangeFromPoint(TfEditCookie, const POINT*, DWORD, ITfRange** range) override {
+    if (range) *range = nullptr;
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetTextExt(TfEditCookie ec, ITfRange* range, RECT* rect, BOOL* clipped) override {
+    ++get_text_ext_count;
+    last_edit_cookie = ec;
+    last_range = range;
+    if (rect) *rect = text_ext;
+    if (clipped) *clipped = text_clipped;
+    return get_text_ext_result;
+  }
+
+  STDMETHODIMP GetScreenExt(RECT* rect) override {
+    if (rect) *rect = {};
+    return E_NOTIMPL;
+  }
+
+  STDMETHODIMP GetWnd(HWND* window) override {
+    if (!window) return E_POINTER;
+    *window = text_window;
+    return get_wnd_result;
+  }
+
+  RECT text_ext{};
+  BOOL text_clipped{FALSE};
+  HRESULT get_text_ext_result{S_OK};
+  HRESULT get_wnd_result{E_FAIL};
+  HWND text_window{nullptr};
+  int get_text_ext_count{0};
+  TfEditCookie last_edit_cookie{0};
+  ITfRange* last_range{nullptr};
+
+ private:
+  LONG ref_count_{1};
+};
+
 class NoopContext final : public ITfContext {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
@@ -334,8 +437,13 @@ class NoopContext final : public ITfContext {
   }
 
   STDMETHODIMP GetActiveView(ITfContextView** view) override {
-    if (view) *view = nullptr;
-    return E_NOTIMPL;
+    if (!view) return E_POINTER;
+    *view = nullptr;
+    if (FAILED(get_active_view_result)) return get_active_view_result;
+    if (!active_view) return E_NOTIMPL;
+    active_view->AddRef();
+    *view = active_view;
+    return S_OK;
   }
 
   STDMETHODIMP EnumViews(IEnumTfContextViews** enum_views) override {
@@ -392,6 +500,8 @@ class NoopContext final : public ITfContext {
   bool run_edit_session{false};
   TfEditCookie edit_cookie{1};
   ITfRange* selection_range{nullptr};
+  ITfContextView* active_view{nullptr};
+  HRESULT get_active_view_result{S_OK};
   ITfDocumentMgr* document_mgr_{nullptr};
   IUnknown* identity_unknown_{nullptr};
   int set_selection_count{0};
@@ -1336,17 +1446,110 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditUpdateMovesCaretWithASeparateRange) {
 
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_TRUE(h.Press('A'));
+
+  EXPECT_EQ(composition_range.last_text, L"かな");
+  EXPECT_TRUE(h.TestPress(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_BACK));
 
   EXPECT_EQ(composition_range.last_text, L"か");
   EXPECT_EQ(composition_range.collapse_count, 0);
-  EXPECT_EQ(selection_range.collapse_count, 2);
+  EXPECT_EQ(selection_range.collapse_count, 5);
   EXPECT_EQ(selection_range.last_anchor, TF_ANCHOR_END);
-  EXPECT_EQ(h.context.set_selection_count, 2);
+  EXPECT_EQ(h.context.set_selection_count, 5);
   EXPECT_EQ(h.context.last_selection_count, 1u);
   EXPECT_EQ(h.context.last_selection_range, &selection_range);
 
   h.service.composition_->Release();
   h.service.composition_ = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditCaretUsesGetTextExtContractMatrix) {
+  struct TestCase {
+    const char* name;
+    HRESULT get_text_ext_result;
+    RECT text_ext;
+    BOOL clipped;
+    POINT expected_point;
+  };
+  const TestCase cases[] = {
+      {"valid", S_OK, {10, 20, 30, 44}, FALSE, {10, 44}},
+      {"clipped", S_OK, {11, 21, 31, 45}, TRUE, {11, 45}},
+      {"zero", S_OK, {}, FALSE, {321, 670}},
+      {"no-layout", TS_E_NOLAYOUT, {10, 20, 30, 44}, FALSE, {321, 670}},
+      {"no-lock", TF_E_NOLOCK, {10, 20, 30, 44}, FALSE, {321, 670}},
+      {"failure", E_FAIL, {10, 20, 30, 44}, FALSE, {321, 670}},
+  };
+
+  CaretFallbackGuard caret_fallback;
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    TextServiceHarness h;
+    FakeComposition composition;
+    FakeRange composition_range;
+    FakeRange selection_range;
+    FakeContextView context_view;
+    composition_range.clone_range = &selection_range;
+    composition.AddRef();
+    composition.range_ = &composition_range;
+    h.service.composition_ = &composition;
+    h.context.run_edit_session = true;
+    h.context.active_view = &context_view;
+    context_view.get_text_ext_result = test_case.get_text_ext_result;
+    context_view.text_ext = test_case.text_ext;
+    context_view.text_clipped = test_case.clipped;
+
+    EXPECT_TRUE(h.Press('K'));
+
+    EXPECT_EQ(context_view.get_text_ext_count, 1);
+    EXPECT_EQ(context_view.last_edit_cookie, h.context.edit_cookie);
+    EXPECT_EQ(context_view.last_range, &composition_range);
+    EXPECT_EQ(h.service.caret_point_valid_for_test(), true);
+    EXPECT_EQ(h.service.caret_point_for_test().x, test_case.expected_point.x);
+    EXPECT_EQ(h.service.caret_point_for_test().y, test_case.expected_point.y);
+
+    h.service.composition_->Release();
+    h.service.composition_ = nullptr;
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, RequestPreeditUpdateKeepsOuterAndSessionResultsIndependent) {
+  struct TestCase {
+    const char* name;
+    HRESULT request_result;
+    HRESULT session_result;
+    HRESULT expected_result;
+    bool expected_accepted;
+  };
+  const TestCase cases[] = {
+      {"async", S_OK, TF_S_ASYNC, TF_S_ASYNC, true},
+      {"read-only", S_OK, TS_E_READONLY, TS_E_READONLY, true},
+      {"outer-failure", TF_E_LOCKED, TF_S_ASYNC, TF_E_LOCKED, false},
+  };
+
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    TextServiceHarness h;
+    h.context.request_result = test_case.request_result;
+    h.context.request_session_result = test_case.session_result;
+    bool accepted = !test_case.expected_accepted;
+
+    EXPECT_EQ(h.service.RequestPreeditUpdate(&h.context, &accepted), test_case.expected_result);
+    EXPECT_EQ(accepted, test_case.expected_accepted);
+    EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, RequestCommitEditSessionPropagatesRejectedSessionResults) {
+  for (const HRESULT session_result : {TS_E_READONLY, TF_E_SYNCHRONOUS}) {
+    SCOPED_TRACE(session_result);
+    TextServiceHarness h;
+    h.context.request_session_result = session_result;
+
+    EXPECT_EQ(h.service.request_commit_edit_session_for_test(&h.context), session_result);
+    EXPECT_EQ(h.context.last_flags, TF_ES_SYNC | TF_ES_READWRITE);
+  }
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BackspaceClearsPendingNPreeditPreview) {
@@ -1559,13 +1762,8 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterIsOffByDefaultAndAddsAnnotatedCan
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDigitKeysBuildNumericPreedit) {
-  if (!CurrentKeyboardLayoutProduces('1', false, L'1') ||
-      !CurrentKeyboardLayoutProduces('2', false, L'2') ||
-      !CurrentKeyboardLayoutProduces('3', false, L'3')) {
-    GTEST_SKIP() << "requires a keyboard layout where unshifted digit keys produce ASCII digits";
-  }
-
   TextServiceHarness h;
+  AsciiDecimalDigitTranslationGuard digit_translation;
   h.service.set_number_rewriter_enabled_for_test(true);
 
   for (const WPARAM key : {'1', '2', '3'}) {
@@ -1596,11 +1794,8 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterNumpadDigitsBuildNumericPreedit) 
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDoesNotEatShiftedNonDigit) {
-  if (!CurrentKeyboardLayoutProduces('1', true, L'!')) {
-    GTEST_SKIP() << "requires a keyboard layout where Shift+1 produces a non-digit";
-  }
-
   TextServiceHarness h;
+  AsciiDecimalDigitTranslationGuard digit_translation;
   h.service.set_number_rewriter_enabled_for_test(true);
   h.keyboard_state.SetDown(VK_SHIFT, true);
   h.keyboard_state.SetDown(VK_LSHIFT, true);
@@ -1608,6 +1803,25 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDoesNotEatShiftedNonDigit) {
   EXPECT_FALSE(h.TestPress('1'));
   EXPECT_FALSE(h.Press('1'));
   EXPECT_TRUE(h.service.preedit_kana_.empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, Win32DigitTranslationMatchesCompatibleKeyboardLayout) {
+  if (!CurrentKeyboardLayoutProduces('1', false, L'1') ||
+      !CurrentKeyboardLayoutProduces('1', true, L'!')) {
+    GTEST_SKIP() << "requires a keyboard layout where 1 and Shift+1 produce 1 and !";
+  }
+
+  TextServiceHarness h;
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  h.keyboard_state.SetDown(VK_LSHIFT, false);
+  h.keyboard_state.SetDown(VK_RSHIFT, false);
+  EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
+            std::optional<char>('1'));
+
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  h.keyboard_state.SetDown(VK_LSHIFT, true);
+  EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
+            std::nullopt);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterCommitsSurfaceWithoutAnnotation) {

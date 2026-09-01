@@ -125,7 +125,7 @@ gh pr create \
 | Done | レビュー合格 + マージ + **検証メモ記載** | 検証メモ記載後の明示遷移 | Claude |
 | Canceled / Duplicate | 中止 / 重複 | 随時 | Claude |
 
-- Done への遷移時は、どのテスト / 実機確認で確認したかの検証メモを Linear にコメントする。
+- Done への遷移時は、どのテスト / 実機確認で確認したかの検証メモを Linear にコメントし、親 tracking と Project の `## Next AI Tasks` から当該課題を外す（記録の鮮度。`docs/linear-conventions.md` §7.2）。description には Linear の状態から導出できる記述（状態名・残件数・「〜待ち」）を書かない。
 - 人間ゲート課題（`gate:human-required` の人間専任 Issue）は PR を持たないため In Review /
   Merged に置かず、Todo のまま人間の着手を待つ。`type:tracking` は子完了まで In Progress を
   維持する（`docs/linear-conventions.md` §3.1）。

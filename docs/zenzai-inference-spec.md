@@ -766,6 +766,13 @@ sequence、範囲は decode 済みの P + n 位置である。
 割り当ては決定的に行う。生存 beam は prune 後の順序（rank 降順）で処理し、空いている working
 sequence は `seq_id` の昇順で取る。
 
+割り当ての判断は llama.cpp の型に依存しない純ロジックに置く（§9.2 の `BuildZenzaiKvOverrides`
+と同じ分離）。入力は「生存 beam ごとの親の `seq_id`（n = 0 では親を持たない）」と「現在
+使用中の `seq_id` 集合」、出力は削除する `seq_id` の一覧と、複製の (複製元, 複製先) の一覧、
+生存 beam ごとの新しい `seq_id` である。llama.cpp 境界側はこの一覧を順に適用するだけとし、
+llama.cpp 無効ビルドの unit で割り当てそのものを検証できるようにする。一覧を実際の
+seq 操作へ写す境界は unit の対象外であり、real-model smoke が担保する。
+
 #### 9.2.3.4 live 変換（B = 1）
 
 live 変換は本方式の縮退であり、別契約にしない。B = 1 では live beam が常に 1 本で、prune で
@@ -907,6 +914,7 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | unit | CUDA→CPU フォールバック（§9.2.1）: LoadModel 成功・`last_error()` 空・`Health=ok`（既存 `LoadModelCudaFallsBackToCpuForNow` を回帰させない）。backend 警告は `model_runtime_error_` に立てない |
 | unit | Health status 3 値（§9.2.1）: `effective_last_error` 空→`ok` / 設定あり＋`model_loaded`→`degraded` / 設定あり＋`!model_loaded`（GGUF 欠落・不正の hard load 失敗）→`error`（degraded に格下げしない） |
 | unit | キャンセル/deadline（§9.2.2）: decode 中の cancel で即中断・**`{}` 返却（`DegradeToFallback` を経由せず stale な SimpleConverter 候補を出さない）**、deadline 超過は別扱いで best-so-far を返す。long decode が後続クエリを §8 予算超で待たせない |
+| unit | beam の seq 付け替え（§9.2.3.3）: 親の `seq_id` と使用中集合から、削除一覧・複製一覧・新しい割り当てを決める純ロジックを llama.cpp 無効ビルドで検証する。親を引き継ぐ生存 beam は複製を要求しない、生存 beam を持たない親の `seq_id` は削除一覧に入りかつ複製元にならない、削除は複製より前に並ぶ、複製先が使用中の `seq_id` にならない、割り当てが `kMaxModelCandidates` 本を超えない、同じ入力に対して同じ割り当てを返す（決定性）。一覧を実際の seq 操作へ写す境界は本 unit の対象外（real-model smoke が担保する） |
 | unit | source = `Model`、`debug_info` に `lp=`/`avg=` 痕跡 |
 | unit | pre-tokenizer override 写像（§9.2）: `gpt2-small-japanese-char` のときだけ `gpt-2` へ写像し、他の pre-tokenizer には適用しない |
 | unit | KV override **記述子の判断**（§9.2）: GGUF の tokenizer メタデータから override 記述子（キー・型・値）の一覧を決める純ロジックを、llama.cpp 無効ビルドで検証する。`gpt2-small-japanese-char` では `tokenizer.ggml.pre` の文字列記述子が 1 件だけ立ち、上流 pre-tokenizer・pre-tokenizer 宣言なしでは立たない。pre-tokenizer と eos の両方が該当する GGUF では pre-tokenizer → eos の順に 2 件並ぶ（llama.cpp へ渡す順序を固定する）。**記述子を `llama_model_kv_override` へ写す境界変換は本 unit の対象外**（同 §9.2。実モデル smoke が担保する） |

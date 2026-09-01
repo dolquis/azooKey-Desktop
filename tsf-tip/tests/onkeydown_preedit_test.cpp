@@ -133,14 +133,37 @@ BOOL WINAPI FakePhysicalCursorPosition(POINT* point) {
 
 UINT FakeMonitorScalePercent(POINT) { return 100; }
 
+thread_local HWND g_last_logical_to_physical_window = nullptr;
+thread_local int g_logical_to_physical_count = 0;
+
+BOOL WINAPI FakeLogicalToPhysicalPoint(HWND window, POINT* point) {
+  if (!point) return FALSE;
+  g_last_logical_to_physical_window = window;
+  ++g_logical_to_physical_count;
+  point->x += 100;
+  point->y += 200;
+  return TRUE;
+}
+
 class CaretFallbackGuard {
  public:
   CaretFallbackGuard() {
+    ResetLogicalToPhysicalCalls();
     azookey::tsf::testing::SetCaretWin32ApiForTest(nullptr, nullptr, &FakePhysicalCursorPosition,
-                                                   nullptr, &FakeMonitorScalePercent);
+                                                   &FakeLogicalToPhysicalPoint,
+                                                   &FakeMonitorScalePercent);
   }
 
   ~CaretFallbackGuard() { azookey::tsf::testing::ClearCaretWin32ApiForTest(); }
+
+  void ResetLogicalToPhysicalCalls() {
+    g_last_logical_to_physical_window = nullptr;
+    g_logical_to_physical_count = 0;
+  }
+
+  HWND last_logical_to_physical_window() const { return g_last_logical_to_physical_window; }
+
+  int logical_to_physical_count() const { return g_logical_to_physical_count; }
 };
 
 template <typename Predicate>
@@ -339,6 +362,7 @@ class FakeContextView final : public ITfContextView {
 
   STDMETHODIMP GetWnd(HWND* window) override {
     if (!window) return E_POINTER;
+    ++get_wnd_count;
     *window = text_window;
     return get_wnd_result;
   }
@@ -349,6 +373,7 @@ class FakeContextView final : public ITfContextView {
   HRESULT get_wnd_result{E_FAIL};
   HWND text_window{nullptr};
   int get_text_ext_count{0};
+  int get_wnd_count{0};
   TfEditCookie last_edit_cookie{0};
   ITfRange* last_range{nullptr};
 
@@ -1472,45 +1497,47 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditCaretUsesGetTextExtContractMatrix) {
     RECT text_ext;
     BOOL clipped;
     POINT expected_point;
+    bool expect_view_transform;
   };
   const TestCase cases[] = {
-      {"valid", S_OK, {10, 20, 30, 44}, FALSE, {10, 44}},
-      {"clipped", S_OK, {11, 21, 31, 45}, TRUE, {11, 45}},
-      {"zero", S_OK, {}, FALSE, {321, 670}},
-      {"no-layout", TS_E_NOLAYOUT, {10, 20, 30, 44}, FALSE, {321, 670}},
-      {"no-lock", TF_E_NOLOCK, {10, 20, 30, 44}, FALSE, {321, 670}},
-      {"failure", E_FAIL, {10, 20, 30, 44}, FALSE, {321, 670}},
+      {"valid", S_OK, {10, 20, 30, 44}, FALSE, {110, 244}, true},
+      // Current policy: a clipped but non-empty TSF extent remains a usable anchor.
+      {"clipped", S_OK, {11, 21, 31, 45}, TRUE, {111, 245}, true},
+      {"zero", S_OK, {}, FALSE, {321, 670}, false},
+      {"no-layout", TS_E_NOLAYOUT, {10, 20, 30, 44}, FALSE, {321, 670}, false},
+      {"no-lock", TF_E_NOLOCK, {10, 20, 30, 44}, FALSE, {321, 670}, false},
+      {"failure", E_FAIL, {10, 20, 30, 44}, FALSE, {321, 670}, false},
   };
 
   CaretFallbackGuard caret_fallback;
+  const HWND view_window = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(0x1234));
   for (const auto& test_case : cases) {
     SCOPED_TRACE(test_case.name);
-    TextServiceHarness h;
-    FakeComposition composition;
-    FakeRange composition_range;
-    FakeRange selection_range;
+    caret_fallback.ResetLogicalToPhysicalCalls();
     FakeContextView context_view;
-    composition_range.clone_range = &selection_range;
-    composition.AddRef();
-    composition.range_ = &composition_range;
-    h.service.composition_ = &composition;
-    h.context.run_edit_session = true;
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
     h.context.active_view = &context_view;
     context_view.get_text_ext_result = test_case.get_text_ext_result;
     context_view.text_ext = test_case.text_ext;
     context_view.text_clipped = test_case.clipped;
+    context_view.get_wnd_result = S_OK;
+    context_view.text_window = view_window;
 
     EXPECT_TRUE(h.Press('K'));
 
     EXPECT_EQ(context_view.get_text_ext_count, 1);
+    EXPECT_EQ(context_view.get_wnd_count, test_case.get_text_ext_result == S_OK ? 1 : 0);
     EXPECT_EQ(context_view.last_edit_cookie, h.context.edit_cookie);
-    EXPECT_EQ(context_view.last_range, &composition_range);
+    EXPECT_EQ(context_view.last_range, &attachment.composition_range);
+    EXPECT_EQ(caret_fallback.logical_to_physical_count(), test_case.expect_view_transform ? 1 : 0);
+    EXPECT_EQ(caret_fallback.last_logical_to_physical_window(),
+              test_case.expect_view_transform ? view_window : nullptr);
     EXPECT_EQ(h.service.caret_point_valid_for_test(), true);
     EXPECT_EQ(h.service.caret_point_for_test().x, test_case.expected_point.x);
     EXPECT_EQ(h.service.caret_point_for_test().y, test_case.expected_point.y);
 
-    h.service.composition_->Release();
-    h.service.composition_ = nullptr;
+    h.context.active_view = nullptr;
   }
 }
 
@@ -1806,20 +1833,20 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDoesNotEatShiftedNonDigit) {
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, Win32DigitTranslationMatchesCompatibleKeyboardLayout) {
+  KeyboardStateGuard keyboard_state;
+  keyboard_state.SetDown(VK_SHIFT, false);
+  keyboard_state.SetDown(VK_LSHIFT, false);
+  keyboard_state.SetDown(VK_RSHIFT, false);
   if (!CurrentKeyboardLayoutProduces('1', false, L'1') ||
       !CurrentKeyboardLayoutProduces('1', true, L'!')) {
     GTEST_SKIP() << "requires a keyboard layout where 1 and Shift+1 produce 1 and !";
   }
 
-  TextServiceHarness h;
-  h.keyboard_state.SetDown(VK_SHIFT, false);
-  h.keyboard_state.SetDown(VK_LSHIFT, false);
-  h.keyboard_state.SetDown(VK_RSHIFT, false);
   EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
             std::optional<char>('1'));
 
-  h.keyboard_state.SetDown(VK_SHIFT, true);
-  h.keyboard_state.SetDown(VK_LSHIFT, true);
+  keyboard_state.SetDown(VK_SHIFT, true);
+  keyboard_state.SetDown(VK_LSHIFT, true);
   EXPECT_EQ(azookey::tsf::testing::TranslateAsciiDecimalDigitUsingWin32ForTest('1', 0),
             std::nullopt);
 }

@@ -1326,17 +1326,21 @@ schema 自体は superset のまま変えない。
 - **v1.0 の 2 値が持つ意味**: `auto` は Host 起動時の既定バックエンド（ビルド時 `AZOOKEY_BACKEND`
   または `--backend`）に従い、`cpu` は CPU に固定する（解決順は `model-management-spec.md` §5.2、
   `auto` のときに root `backendPreference` へ委ねる挙動を含む）。CPU 推論のみを含む v1.0 配布ビルドでは
-  どちらも R1 CPU に解決するが、保存される意図は異なる。`auto` はアクセラレーション付きビルドを
-  配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。M11 の目的「デバイス選択」はこの
-  2 値で満たし、UI にはアクセラレーションの有無を誤解させないため「v1.0 の配布ビルドは CPU 推論のみを
-  含む」という静的な補足文を添える。
+  どちらも R1 CPU に解決するが、保存される意図は異なる。`auto` はアクセラレータを選ぶ経路が配線された
+  ビルドを配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。ここでいう配線とは、配布ビルドの
+  既定 backend をそのアクセラレータへ切り替えるか、`model-management-spec.md` §5.1 の auto 推奨ロジックを
+  実装して実行時に選ばせるかのいずれかである。`auto` はこの既定に委ねるだけで自ら列挙・選択しないため、
+  アクセラレータをリンクしただけでは追随しない。M11 の目的「デバイス選択」はこの 2 値で満たし、
+  UI にはアクセラレーションの有無を誤解させないため「v1.0 の配布ビルドは CPU 推論のみを含む」という
+  静的な補足文を添える。
 - **`vulkan` の UI 露出条件を R1 側へ切り離す**: `vulkan`（R1 ggml-vulkan）の UI 露出は、これまで
   v1.x（M24）としていたが、M24 は R2 / Windows ML のマイルストーンであり `docs/copilot-pc-backend-spec.md`
   §4.3 のとおり R2 は保留中である。R1 に属する `vulkan` を保留中の R2 に従属させないため、**露出条件を
-  「ggml-vulkan ビルドを配布に含めた時点」へ改める**（R1 側の条件であり、M24 の進捗に依存しない）。
-  現行の CMake は `AZOOKEY_BACKEND` が `cpu` / `cuda` のみで ggml-vulkan ビルドを持たず、§1.6 の base MSIX も
-  GPU ランタイムを含まないため、**v1.0 UI には出さない**。ビルドを用意しないまま選択肢だけ
-  先に出すと、`cuda` と同じ実効のない選択を作ることになる。ggml-vulkan ビルドの追加は DEV-944 で追う。
+  「ggml-vulkan ビルドを配布に含め、かつ実行時にそれを選ぶ経路が配線された時点」へ改める**（R1 側の
+  条件であり、M24 の進捗に依存しない）。**リンクだけでは足りない**。上記のとおり `auto` は既定 backend に
+  委ねるだけなので、配線がなければ `vulkan` を選んでも `auto` との差が生まれず、`cuda` と同じ実効のない
+  選択になる。現行の CMake は `AZOOKEY_BACKEND` が `cpu` / `cuda` のみで ggml-vulkan ビルドを持たず、
+  §1.6 の base MSIX も GPU ランタイムを含まないため、**v1.0 UI には出さない**。ビルドと配線は DEV-944 で追う。
 - **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
   `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に
   限る。v1.0 UI から `cuda` を外すことで UI 由来の実効のない選択は消え、残るのは `settings.json` 直書きの
@@ -1399,7 +1403,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
 |---|---|---|
 | `model.enabled` | ◯（一般） | — |
-| `model.backendPreference` | ◯（一般、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布時（DEV-944） / `cuda` = CUDA リンク済みビルド配布時 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
+| `model.backendPreference` | ◯（一般、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布 + 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
 | `model.selectedPath` | ◯（一般） | — |
 | `logLevel` | ◯（詳細） | — |
 | `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |

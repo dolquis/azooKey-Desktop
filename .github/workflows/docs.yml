@@ -1,0 +1,40 @@
+name: Docs lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - 'plans/**'
+      - '.claude/**'
+      - '.agents/**'
+      - 'scripts/docs-lint.py'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - 'plans/**'
+      - '.claude/**'
+      - '.agents/**'
+      - 'scripts/docs-lint.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-lint:
+    name: docs-lint (warning-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      - name: Run docs-lint
+        run: python3 scripts/docs-lint.py

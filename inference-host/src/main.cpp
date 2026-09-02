@@ -28,6 +28,7 @@
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/HostArgs.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/LookupCli.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/UserDataPaths.h"
@@ -254,6 +255,7 @@ int main(int argc, char** argv) {
   auto pipe_name = std::move(parsed_args.args.pipe_name);
   auto handshake_token = std::move(parsed_args.args.handshake_token);
   auto userdict_args = std::move(parsed_args.args.userdict_args);
+  auto lookup_args = std::move(parsed_args.args.lookup_args);
 
   azookey::host::UserDataPathInputs path_inputs;
   path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
@@ -267,6 +269,26 @@ int main(int argc, char** argv) {
 
   const std::string learning_path = user_paths->learning_path.string();
   const std::string user_dict_path = user_paths->user_dict_path.string();
+
+  if (lookup_args) {
+    std::string parse_error;
+    auto cli_options = azookey::host::ParseLookupCliArgs(*lookup_args, &parse_error);
+    if (!cli_options) {
+      std::cerr << "error: " << parse_error << std::endl;
+      return 2;
+    }
+    azookey::host::LookupCliRunOptions run_options;
+    run_options.learning_path = user_paths->learning_path;
+    run_options.user_dict_path = user_paths->user_dict_path;
+    auto result = azookey::host::RunLookupCli(*cli_options, run_options);
+    for (const auto& line : result.output_lines) {
+      std::cout << line << std::endl;
+    }
+    if (!result.error.empty()) {
+      std::cerr << "error: " << result.error << std::endl;
+    }
+    return result.exit_code;
+  }
 
   if (userdict_args) {
     if (!EnsureFileParentDirectory(user_paths->user_dict_path)) {

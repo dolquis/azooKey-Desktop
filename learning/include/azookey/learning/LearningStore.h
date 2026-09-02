@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace azookey::learning {
 
@@ -14,6 +15,12 @@ inline constexpr std::string_view kLearningStoreEscapedTsvHeader =
 struct LearningRecord {
   double weight{};
   uint64_t last_updated_epoch_sec{};
+};
+
+struct LearningEntry {
+  std::string reading;
+  std::string surface;
+  LearningRecord record;
 };
 
 class LearningStore {
@@ -26,6 +33,7 @@ class LearningStore {
   void Reset();
   bool dirty() const;
   size_t size() const;
+  std::vector<LearningEntry> All() const;
 
   void Observe(const std::string& reading, const std::string& surface, double alpha, uint64_t now_epoch_sec);
   void ObserveCorrection(const std::string& reading,

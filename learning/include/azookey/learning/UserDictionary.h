@@ -39,6 +39,9 @@ class UserDictionary {
   // possible, returns false.
   bool Load();
 
+  // Load without quarantining or otherwise changing a malformed source file.
+  bool LoadReadOnly();
+
   // Persist current state to disk. Returns false if the file cannot be opened
   // or a malformed prior file could not be quarantined.
   bool Save() const;
@@ -67,6 +70,8 @@ class UserDictionary {
   const std::string& path() const { return path_; }
 
  private:
+  bool LoadImpl(bool quarantine_corrupt_file);
+
   std::string path_;
   std::map<std::string, std::vector<UserWord>> by_ruby_;
   bool save_blocked_by_corrupt_load_{false};

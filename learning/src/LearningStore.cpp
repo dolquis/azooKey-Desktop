@@ -276,6 +276,24 @@ bool LearningStore::dirty() const { return dirty_; }
 
 size_t LearningStore::size() const { return table_.size(); }
 
+std::vector<LearningEntry> LearningStore::All() const {
+  std::vector<LearningEntry> entries;
+  entries.reserve(table_.size());
+  for (const auto& [key, record] : table_) {
+    LearningEntry entry;
+    if (!SplitKey(key, entry.reading, entry.surface)) {
+      continue;
+    }
+    entry.record = record;
+    entries.push_back(std::move(entry));
+  }
+  std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
+    if (lhs.reading != rhs.reading) return lhs.reading < rhs.reading;
+    return lhs.surface < rhs.surface;
+  });
+  return entries;
+}
+
 void LearningStore::Observe(const std::string& reading, const std::string& surface, double alpha,
                             uint64_t now_epoch_sec) {
   auto& rec = table_[Key(reading, surface)];

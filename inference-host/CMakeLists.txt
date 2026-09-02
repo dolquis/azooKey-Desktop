@@ -12,6 +12,7 @@ add_library(azookey_host STATIC
   src/HostArgs.cpp
   src/HttpDownloader.cpp
   src/InferenceEngine.cpp
+  src/LookupCli.cpp
   src/ModelCatalog.cpp
   src/RequestScheduler.cpp
   src/SettingsStore.cpp

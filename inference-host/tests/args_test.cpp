@@ -85,6 +85,15 @@ TEST(HostArgsTest, UserDictConsumesRemainingArguments) {
   EXPECT_EQ(*parsed.args.userdict_args, (std::vector<std::string>{"add", "--reading", "a"}));
 }
 
+TEST(HostArgsTest, LookupConsumesRemainingArguments) {
+  const auto parsed =
+      Parse({"--learning", "learning.tsv", "lookup", "--mode", "prefix", "--query", "a"});
+  ASSERT_TRUE(parsed);
+  ASSERT_TRUE(parsed.args.lookup_args.has_value());
+  EXPECT_EQ(*parsed.args.lookup_args,
+            (std::vector<std::string>{"--mode", "prefix", "--query", "a"}));
+}
+
 TEST(HostArgsTest, RejectsMissingValuesAndUnknownArguments) {
   for (const char* option : {"--backend", "--model", "--learning", "--user-dict", "--mock-dict",
                              "--pipe-name", "--handshake-token"}) {

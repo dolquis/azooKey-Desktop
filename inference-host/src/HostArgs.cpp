@@ -31,6 +31,10 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
       args.userdict_args.emplace(argv.begin() + static_cast<std::ptrdiff_t>(i + 1), argv.end());
       break;
     }
+    if (arg == "lookup") {
+      args.lookup_args.emplace(argv.begin() + static_cast<std::ptrdiff_t>(i + 1), argv.end());
+      break;
+    }
     if (arg == "--cuda") {
       args.config.backend = BackendKind::Cuda;
       args.explicit_backend = true;

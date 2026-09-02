@@ -20,6 +20,8 @@ struct CandidateUiBeginObservation {
   HRESULT result{E_FAIL};
   DWORD ui_element_id{0xFFFFFFFF};
   bool ui_less{false};
+  bool ui_element_mgr_available{false};
+  bool pb_show_available{false};
   bool pb_show{false};
   bool tip_draws{false};
 };
@@ -66,7 +68,8 @@ class CandidateUiCoordinator {
   void OnElementShow(bool show);
   void ReleaseUiElement();
   void ReleaseUiElementMgr();
-  void NotifyBeginObserver(HRESULT result, BOOL pb_show, DWORD ui_element_id) const noexcept;
+  void NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available, bool pb_show_available,
+                           BOOL pb_show, DWORD ui_element_id) const noexcept;
   int ClampSelection(int selected_idx) const;
 
 #ifdef _DEBUG

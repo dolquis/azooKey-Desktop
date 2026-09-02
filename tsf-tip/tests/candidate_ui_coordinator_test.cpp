@@ -158,9 +158,16 @@ ITfCandidateListUIElement* QueryCandidateList(ITfUIElement* element) {
   return candidates;
 }
 
+struct BeginObservationCapture {
+  int count{0};
+  std::optional<azookey::tsf::CandidateUiBeginObservation> observation;
+};
+
 void CaptureBeginObservation(const azookey::tsf::CandidateUiBeginObservation& observation,
                              void* context) noexcept {
-  *static_cast<std::optional<azookey::tsf::CandidateUiBeginObservation>*>(context) = observation;
+  auto& capture = *static_cast<BeginObservationCapture*>(context);
+  ++capture.count;
+  capture.observation = observation;
 }
 
 }  // namespace
@@ -194,18 +201,21 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) 
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;
   azookey::tsf::CandidateUiCoordinator coordinator;
-  std::optional<azookey::tsf::CandidateUiBeginObservation> observation;
-  coordinator.SetBeginObserver(&CaptureBeginObservation, &observation);
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 1), S_OK);
 
-  ASSERT_TRUE(observation.has_value());
-  EXPECT_EQ(observation->result, S_OK);
-  EXPECT_FALSE(observation->ui_less);
-  EXPECT_FALSE(observation->pb_show);
-  EXPECT_FALSE(observation->tip_draws);
-  EXPECT_EQ(observation->ui_element_id, thread_mgr.ui_element_id);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, S_OK);
+  EXPECT_FALSE(capture.observation->ui_less);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_TRUE(capture.observation->pb_show_available);
+  EXPECT_FALSE(capture.observation->pb_show);
+  EXPECT_FALSE(capture.observation->tip_draws);
+  EXPECT_EQ(capture.observation->ui_element_id, thread_mgr.ui_element_id);
   EXPECT_TRUE(coordinator.IsShowing());
   EXPECT_EQ(thread_mgr.begin_count, 1);
   EXPECT_EQ(thread_mgr.update_count, 1);
@@ -241,15 +251,18 @@ TEST(TsfTipCandidateUiCoordinatorTest, BeginUiElementFailureReportsHresult) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_hr = E_FAIL;
   azookey::tsf::CandidateUiCoordinator coordinator;
-  std::optional<azookey::tsf::CandidateUiBeginObservation> observation;
-  coordinator.SetBeginObserver(&CaptureBeginObservation, &observation);
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_FAIL);
 
-  ASSERT_TRUE(observation.has_value());
-  EXPECT_EQ(observation->result, E_FAIL);
-  EXPECT_FALSE(observation->ui_less);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, E_FAIL);
+  EXPECT_FALSE(capture.observation->ui_less);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_FALSE(capture.observation->pb_show_available);
   EXPECT_FALSE(coordinator.IsShowing());
 }
 
@@ -258,9 +271,18 @@ TEST(TsfTipCandidateUiCoordinatorTest, InitialAppDrawnUpdateFailureEndsUiElement
   thread_mgr.begin_pb_show = FALSE;
   thread_mgr.update_hr = E_FAIL;
   azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_FAIL);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, E_FAIL);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_TRUE(capture.observation->pb_show_available);
+  EXPECT_FALSE(capture.observation->pb_show);
+  EXPECT_EQ(capture.observation->ui_element_id, thread_mgr.ui_element_id);
   EXPECT_FALSE(coordinator.IsShowing());
   EXPECT_EQ(thread_mgr.begin_count, 1);
   EXPECT_EQ(thread_mgr.update_count, 1);
@@ -273,10 +295,41 @@ TEST(TsfTipCandidateUiCoordinatorTest, UiLessModeRequiresUiElementManager) {
   thread_mgr.expose_ui_element_mgr = false;
   azookey::tsf::CandidateUiCoordinator coordinator;
   coordinator.SetUiLessMode(true);
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_NOINTERFACE);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, E_NOINTERFACE);
+  EXPECT_TRUE(capture.observation->ui_less);
+  EXPECT_FALSE(capture.observation->ui_element_mgr_available);
+  EXPECT_FALSE(capture.observation->pb_show_available);
   EXPECT_FALSE(coordinator.IsShowing());
+  EXPECT_EQ(thread_mgr.begin_count, 0);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, MissingUiElementManagerReportsTipWindowFallback) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
+
+  POINT pt{10, 20};
+  EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), S_OK);
+
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, S_OK);
+  EXPECT_FALSE(capture.observation->ui_less);
+  EXPECT_FALSE(capture.observation->ui_element_mgr_available);
+  EXPECT_FALSE(capture.observation->pb_show_available);
+  EXPECT_FALSE(capture.observation->pb_show);
+  EXPECT_TRUE(capture.observation->tip_draws);
+  EXPECT_EQ(capture.observation->ui_element_id, 0xFFFFFFFF);
+  EXPECT_TRUE(coordinator.IsShowing());
   EXPECT_EQ(thread_mgr.begin_count, 0);
 }
 
@@ -284,14 +337,17 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowTrueUsesTipUiWithoutUpdateNotificat
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = TRUE;
   azookey::tsf::CandidateUiCoordinator coordinator;
-  std::optional<azookey::tsf::CandidateUiBeginObservation> observation;
-  coordinator.SetBeginObserver(&CaptureBeginObservation, &observation);
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), S_OK);
-  ASSERT_TRUE(observation.has_value());
-  EXPECT_TRUE(observation->pb_show);
-  EXPECT_TRUE(observation->tip_draws);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_TRUE(capture.observation->pb_show_available);
+  EXPECT_TRUE(capture.observation->pb_show);
+  EXPECT_TRUE(capture.observation->tip_draws);
   EXPECT_EQ(thread_mgr.begin_count, 1);
   EXPECT_EQ(thread_mgr.update_count, 0);
 

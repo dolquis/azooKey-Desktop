@@ -75,12 +75,19 @@ void LogCandidateUiBegin(const azookey::tsf::CandidateUiBeginObservation& observ
     if (FAILED(observation.result)) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "candidate_ui_begin_failed",
                  {{"ui_less", observation.ui_less},
+                  {"ui_element_mgr_available", observation.ui_element_mgr_available},
+                  {"pb_show_available", observation.pb_show_available},
+                  {"pb_show", observation.pb_show},
+                  {"tip_draws", observation.tip_draws},
+                  {"ui_element_id", static_cast<uint64_t>(observation.ui_element_id)},
                   {"process_id", process_id},
                   {"hresult", static_cast<int64_t>(observation.result)}});
       return;
     }
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "candidate_ui_begin",
                {{"ui_less", observation.ui_less},
+                {"ui_element_mgr_available", observation.ui_element_mgr_available},
+                {"pb_show_available", observation.pb_show_available},
                 {"pb_show", observation.pb_show},
                 {"tip_draws", observation.tip_draws},
                 {"ui_element_id", static_cast<uint64_t>(observation.ui_element_id)},
@@ -2441,10 +2448,7 @@ void TextService::ShowCandidateWindowFromCache() {
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
   const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
-  if (FAILED(begin_hr)) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_ui_begin_failed");
-    return;
-  }
+  if (FAILED(begin_hr)) return;
 
   const HRESULT update_hr = active_context_ ? RequestPreeditUpdate(active_context_) : E_UNEXPECTED;
   if (FAILED(update_hr)) {

@@ -75,7 +75,10 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   if (items.empty()) return EndUI();
 
   const HRESULT end_hr = EndUI();
-  if (FAILED(end_hr)) return end_hr;
+  if (FAILED(end_hr)) {
+    NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
+    return end_hr;
+  }
 
   items_ = items;
   selected_idx_ = ClampSelection(selected_idx);
@@ -83,7 +86,11 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
 
   auto* element =
       new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
-  if (!element) return E_OUTOFMEMORY;
+  if (!element) {
+    NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
+                        kInvalidUiElementId);
+    return E_OUTOFMEMORY;
+  }
   ui_element_ = element;
   ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });
 
@@ -93,10 +100,13 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       ReleaseUiElement();
       items_.clear();
       selected_idx_ = -1;
-      return FAILED(hr) ? hr : E_NOINTERFACE;
+      const HRESULT result = FAILED(hr) ? hr : E_NOINTERFACE;
+      NotifyBeginObserver(result, false, false, FALSE, kInvalidUiElementId);
+      return result;
     }
     showing_ = true;
     OnPbShown(true);
+    NotifyBeginObserver(S_OK, false, false, FALSE, kInvalidUiElementId);
     return S_OK;
   }
 
@@ -105,7 +115,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   hr = ui_element_mgr_->BeginUIElement(static_cast<ITfUIElement*>(ui_element_), &pb_show,
                                        &ui_element_id);
   if (FAILED(hr)) {
-    NotifyBeginObserver(hr, FALSE, kInvalidUiElementId);
+    NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
     ReleaseUiElement();
     items_.clear();
     selected_idx_ = -1;
@@ -115,16 +125,17 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   ui_element_id_ = ui_element_id;
   showing_ = true;
   OnPbShown(pb_show != FALSE);
-  NotifyBeginObserver(hr, pb_show, ui_element_id_);
   if (!tip_draws_) {
     ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
     hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
     if (FAILED(hr)) {
       const HRESULT cleanup_hr = EndUI();
       UNREFERENCED_PARAMETER(cleanup_hr);
+      NotifyBeginObserver(hr, true, true, pb_show, ui_element_id);
       return hr;
     }
   }
+  NotifyBeginObserver(S_OK, true, true, pb_show, ui_element_id);
   return S_OK;
 }
 
@@ -234,14 +245,17 @@ void CandidateUiCoordinator::ReleaseUiElementMgr() {
   }
 }
 
-void CandidateUiCoordinator::NotifyBeginObserver(HRESULT result, BOOL pb_show,
+void CandidateUiCoordinator::NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available,
+                                                 bool pb_show_available, BOOL pb_show,
                                                  DWORD ui_element_id) const noexcept {
   if (!begin_observer_) return;
   CandidateUiBeginObservation observation;
   observation.result = result;
   observation.ui_element_id = ui_element_id;
   observation.ui_less = ui_less_mode_;
-  observation.pb_show = SUCCEEDED(result) && pb_show != FALSE;
+  observation.ui_element_mgr_available = ui_element_mgr_available;
+  observation.pb_show_available = pb_show_available;
+  observation.pb_show = pb_show_available && pb_show != FALSE;
   observation.tip_draws = SUCCEEDED(result) && tip_draws_;
   begin_observer_(observation, begin_observer_context_);
 }

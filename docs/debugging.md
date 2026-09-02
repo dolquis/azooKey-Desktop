@@ -110,16 +110,22 @@ Host の stderr も従来どおり残る。
 アプリ互換確認では、前述のユーザー環境変数を設定してから検証対象アプリを新しく起動し、
 候補一覧を一度表示する。
 `tip-YYYYMMDD.jsonl` の `candidate_ui_begin` レコードには、`process_id`、`ui_less`、
-`pb_show`、`tip_draws`、`ui_element_id` が記録される。
-`pb_show=false` はアプリ側描画、`pb_show=true` は TIP 側描画を示す。
+`ui_element_mgr_available`、`pb_show_available`、`pb_show`、`tip_draws`、
+`ui_element_id` が記録される。
+`pb_show_available=true` の場合、`pb_show=false` はアプリ側描画、
+`pb_show=true` は TIP 側描画を示す。
+`ui_element_mgr_available=false` の場合は `pb_show` と `ui_element_id` が未取得であり、
+`tip_draws=true` なら自前ウィンドウへフォールバックしている。
 候補文字列と入力本文は記録されない。
 
-`BeginUIElement` が失敗した場合は、`candidate_ui_begin_failed` レコードの `hresult` を確認する。
+候補 UI の開始に失敗した場合は、試行ごとに 1 行出力される
+`candidate_ui_begin_failed` レコードの `hresult` を確認する。
 検証メモには、対象アプリ名、`process_id`、取得日時、`ui_less`、`pb_show`、`tip_draws`、
-`ui_element_id` または `hresult` を転記する。
+`ui_element_mgr_available`、`pb_show_available`、`ui_element_id` または `hresult` を転記する。
 
 ```powershell
-Get-Content "$env:LOCALAPPDATA\azooKey\logs\tip-$(Get-Date -Format yyyyMMdd).jsonl" |
+$utcDate = [DateTime]::UtcNow.ToString('yyyyMMdd')
+Get-Content "$env:LOCALAPPDATA\azooKey\logs\tip-$utcDate.jsonl" |
   ConvertFrom-Json |
   Where-Object event -Like 'candidate_ui_begin*'
 ```

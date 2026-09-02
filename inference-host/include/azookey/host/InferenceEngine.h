@@ -30,6 +30,9 @@ struct EngineConfig {
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
   std::optional<int32_t> n_gpu_layers;
+  std::optional<int32_t> inference_threads;
+  uint32_t max_candidates{0};
+  uint32_t max_context_length{30};
   bool enable_live_conversion{true};
   double learning_alpha{0.8};
   size_t learning_flush_every_n{8};

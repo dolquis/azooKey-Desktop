@@ -134,6 +134,7 @@ TIPのprimary接続とCancel用control接続はそれぞれHandshakeを行う。
 | `batch_conversion_mode` | `string` | 省略時は `neural` |
 | `batch_auto_punctuation` | `bool` | 省略時は `false` |
 | `number_rewriter` | `bool` | 省略時は `false` |
+| `katakana_rewriter` | `bool` | 省略時は `false` |
 
 TIP は初回の非空 `host_generation_id` を保存し、同じ値への再接続では pending 要求を
 維持する。既知の値から別の値（省略を含む）へ変わった場合は、Handshake 成立後に

@@ -141,6 +141,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_number_rewriter_enabled_for_test(bool enabled) {
     number_rewriter_.store(enabled, std::memory_order_relaxed);
   }
+  void set_katakana_rewriter_enabled_for_test(bool enabled) {
+    katakana_rewriter_.store(enabled, std::memory_order_relaxed);
+  }
   void set_selected_candidate_index_for_test(int index) { selected_candidate_idx_ = index; }
   bool has_pending_commit_observation_for_test() const {
     return pending_commit_observation_.has_value();
@@ -195,6 +198,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
   std::atomic<bool> batch_auto_punctuation_{false};
   std::atomic<bool> number_rewriter_{false};
+  std::atomic<bool> katakana_rewriter_{false};
 
   // Last context used for preedit updates; allows Deactivate to end composition.
   ITfContext* active_context_{nullptr};

@@ -76,6 +76,7 @@ TEST(PayloadsTest, Handshake) {
   res.batch_conversion_mode = "neural";
   res.batch_auto_punctuation = true;
   res.number_rewriter = true;
+  res.katakana_rewriter = true;
   auto json2 = azookey::ipc::BuildHandshakeResponse(res);
   auto parsed2 = azookey::ipc::ParseHandshakeResponse(json2);
   ASSERT_TRUE(parsed2.has_value());
@@ -87,12 +88,14 @@ TEST(PayloadsTest, Handshake) {
   EXPECT_EQ(parsed2->batch_conversion_mode, "neural");
   EXPECT_TRUE(parsed2->batch_auto_punctuation);
   EXPECT_TRUE(parsed2->number_rewriter);
+  EXPECT_TRUE(parsed2->katakana_rewriter);
 
   auto legacy_response = azookey::ipc::ParseHandshakeResponse(
       R"({"host_version":"0.1.0","protocol_version":1,"accepted":true})");
   ASSERT_TRUE(legacy_response.has_value());
   EXPECT_TRUE(legacy_response->host_generation_id.empty());
   EXPECT_FALSE(legacy_response->number_rewriter);
+  EXPECT_FALSE(legacy_response->katakana_rewriter);
 }
 
 TEST(PayloadsTest, Ping) {

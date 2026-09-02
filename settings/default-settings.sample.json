@@ -29,12 +29,16 @@
     "benchmarkHistory": []
   },
   "powerProfile": "auto",
+  "inferenceThreads": 0,
+  "maxCandidates": 9,
+  "maxContextLength": 10,
   "promptPrefixByApp": {},
   "batchRomajiConversion": false,
   "batchRomajiPreviewStyle": "kana",
   "batchConversionMode": "neural",
   "batchAutoPunctuation": false,
   "numberRewriter": false,
+  "katakanaRewriter": false,
   "autoUpdate": {
     "enabled": true,
     "channel": "stable",

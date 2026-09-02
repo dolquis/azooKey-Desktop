@@ -169,6 +169,33 @@ class DeadlineCapturingConverter final : public azookey::core::IConverter {
   std::chrono::milliseconds remaining_budget_{};
 };
 
+class ContextCapturingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    last_context = context;
+    return {{"候補1", kana, 4.0, azookey::core::CandidateSource::Model, "capture-1"},
+            {"候補2", kana, 3.0, azookey::core::CandidateSource::Model, "capture-2"},
+            {"候補3", kana, 2.0, azookey::core::CandidateSource::Model, "capture-3"}};
+  }
+
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+  azookey::core::ConversionContext last_context;
+};
+
 class ThrowingLearningStore final : public azookey::learning::LearningStore {
  public:
   ThrowingLearningStore()
@@ -203,6 +230,36 @@ TEST(InferenceEngineTest, QueryWithLearningBoost) {
 
   engine.reset();
   std::remove(path);
+}
+
+TEST(InferenceEngineTest, QueryAppliesConfiguredCandidateAndUnicodeContextLimits) {
+  auto converter = std::make_unique<ContextCapturingConverter>();
+  auto* capture = converter.get();
+  azookey::host::EngineConfig config;
+  config.max_candidates = 2;
+  config.max_context_length = 3;
+  azookey::host::InferenceEngine engine(std::move(converter), nullptr, config);
+
+  const auto candidates = engine.QueryCandidates("かな", "prefix日本語", kNowBase);
+
+  EXPECT_EQ(capture->last_context.preceding_text, "日本語");
+  EXPECT_EQ(capture->last_context.max_candidates, 2u);
+  ASSERT_EQ(candidates.size(), 2u);
+  EXPECT_EQ(candidates[0].surface, "候補1");
+  EXPECT_EQ(candidates[1].surface, "候補2");
+}
+
+TEST(InferenceEngineTest, RequestCandidateLimitCannotExceedConfiguredLimit) {
+  auto converter = std::make_unique<ContextCapturingConverter>();
+  auto* capture = converter.get();
+  azookey::host::EngineConfig config;
+  config.max_candidates = 2;
+  azookey::host::InferenceEngine engine(std::move(converter), nullptr, config);
+
+  const auto candidates = engine.QueryCandidates("かな", "", kNowBase, nullptr, 10);
+
+  EXPECT_EQ(capture->last_context.max_candidates, 2u);
+  EXPECT_EQ(candidates.size(), 2u);
 }
 
 TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
@@ -595,7 +652,9 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   const char* lpath = "azookey_host_engine_load_missing.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
-  auto engine = MakeEngine(store);
+  azookey::host::EngineConfig config;
+  config.inference_threads = 6;
+  auto engine = MakeEngine(store, config);
 
   azookey::host::ModelLoadOptions options;
   options.path = "azookey_missing_zenzai_model.gguf";
@@ -611,6 +670,7 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   EXPECT_EQ(engine->config().model_path, options.path);
   ASSERT_TRUE(engine->config().n_gpu_layers.has_value());
   EXPECT_EQ(engine->config().n_gpu_layers.value(), 35);
+  EXPECT_EQ(engine->config().inference_threads, 6);
   EXPECT_FALSE(engine->model_loaded());
 
   auto cands = engine->QueryCandidates("にほん", "", kNowBase);

@@ -164,7 +164,7 @@ TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
     ASSERT_TRUE(out.is_open());
     out << "{" << "\"batchRomajiConversion\":true," << "\"batchRomajiPreviewStyle\":\"romaji\","
         << "\"batchConversionMode\":\"neural\"," << "\"batchAutoPunctuation\":true,"
-        << "\"numberRewriter\":true" << "}";
+        << "\"numberRewriter\":true," << "\"katakanaRewriter\":true" << "}";
   }
   azookey::host::SettingsStore settings_store(settings_path);
   settings_store.Load();
@@ -185,6 +185,7 @@ TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
   EXPECT_EQ(parsed->batch_conversion_mode, "neural");
   EXPECT_TRUE(parsed->batch_auto_punctuation);
   EXPECT_TRUE(parsed->number_rewriter);
+  EXPECT_TRUE(parsed->katakana_rewriter);
 
   std::remove(settings_path.c_str());
 }

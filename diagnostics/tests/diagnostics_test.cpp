@@ -610,4 +610,26 @@ TEST(DiagnosticsTest, EmbeddedSchemaAndDefaultSettingsStaySupported) {
   EXPECT_TRUE(diag::ProbeSettingsFile(sample));
 }
 
+TEST(DiagnosticsTest, EmbeddedSettingsSchemaRejectsUnknownAndOutOfRangeInferenceSettings) {
+  const auto path = TempPath("azookey_diagnostics_inference_settings.json");
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << R"({"unknownInferenceSetting":1})";
+  }
+  EXPECT_FALSE(diag::ProbeSettingsFile(path));
+
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << R"({"inferenceThreads":9,"maxCandidates":33,"maxContextLength":31})";
+  }
+  EXPECT_FALSE(diag::ProbeSettingsFile(path));
+
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << R"({"inferenceThreads":8,"maxCandidates":32,"maxContextLength":30})";
+  }
+  EXPECT_TRUE(diag::ProbeSettingsFile(path));
+  std::filesystem::remove(path);
+}
+
 }  // namespace

@@ -19,6 +19,20 @@ constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 
+std::string TakeLastUtf8Codepoints(const std::string& text, uint32_t max_codepoints) {
+  if (max_codepoints == 0 || text.empty()) return {};
+  size_t start = text.size();
+  uint32_t count = 0;
+  while (start > 0 && count < max_codepoints) {
+    --start;
+    while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) {
+      --start;
+    }
+    ++count;
+  }
+  return text.substr(start);
+}
+
 core::ConversionContext BuildContext(
     const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
     std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
@@ -77,6 +91,7 @@ void ApplyModelConfigFields(EngineConfig& target, const EngineConfig& source) {
   target.model_path = source.model_path;
   target.backend = source.backend;
   target.n_gpu_layers = source.n_gpu_layers;
+  target.inference_threads = source.inference_threads;
 }
 
 bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
@@ -226,8 +241,8 @@ void InferenceEngine::WaitForModelPreload() {
 
 ModelLoadResult InferenceEngine::LoadModelWithResult() {
   const auto current = config();
-  return LoadModelWithResult(
-      ModelLoadOptions{current.model_path, current.backend, current.n_gpu_layers});
+  return LoadModelWithResult(ModelLoadOptions{current.model_path, current.backend,
+                                              current.n_gpu_layers, current.inference_threads});
 }
 
 ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& options) {
@@ -241,6 +256,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     next_config.model_path = options.path;
     next_config.backend = options.backend;
     next_config.n_gpu_layers = options.n_gpu_layers;
+    if (options.n_threads) {
+      next_config.inference_threads = options.n_threads;
+    }
   }
 
   if (next_config.model_path.empty()) {
@@ -281,7 +299,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   ZenzaiRuntimeOptions runtime_options;
   runtime_options.n_gpu_layers =
       next_config.backend == BackendKind::Cuda ? options.n_gpu_layers.value_or(0) : 0;
-  runtime_options.n_threads = options.n_threads;
+  runtime_options.n_threads = next_config.inference_threads;
   runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
   auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
   if (!loaded.ok) {
@@ -312,6 +330,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
 void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   config_.enable_live_conversion = config.enable_live_conversion;
+  config_.inference_threads = config.inference_threads;
+  config_.max_candidates = config.max_candidates;
+  config_.max_context_length = config.max_context_length;
   config_.learning_alpha = config.learning_alpha;
   config_.learning_flush_every_n = config.learning_flush_every_n;
   config_.learning_flush_interval_sec = config.learning_flush_interval_sec;
@@ -424,9 +445,15 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   const bool using_model_converter =
       model_converter_ && active_converter_ == model_converter_.get();
   const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+  const uint32_t effective_max_candidates = config_.max_candidates == 0 ? max_candidates
+                                            : max_candidates == 0
+                                                ? config_.max_candidates
+                                                : std::min(max_candidates, config_.max_candidates);
+  const auto limited_context = TakeLastUtf8Codepoints(context, config_.max_context_length);
   try {
     converted = active_converter_->Convert(
-        kana, BuildContext(kana, context, cancel, conversion_deadline, max_candidates, live));
+        kana, BuildContext(kana, limited_context, cancel, conversion_deadline,
+                           effective_max_candidates, live));
     if (canceled()) return {};
     if (using_model_converter) {
       MirrorModelRuntimeErrorLocked();
@@ -437,14 +464,18 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     }
     if (canceled()) return {};
     model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
-    converted = fallback_converter_->Convert(kana, BuildContext(kana, context));
+    converted = fallback_converter_->Convert(
+        kana,
+        BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates, live));
   } catch (...) {
     if (!using_model_converter || !fallback_converter_) {
       throw;
     }
     if (canceled()) return {};
     model_runtime_error_ = "zenzai-convert-exception:unknown";
-    converted = fallback_converter_->Convert(kana, BuildContext(kana, context));
+    converted = fallback_converter_->Convert(
+        kana,
+        BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates, live));
   }
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
@@ -452,14 +483,19 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
-  return ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
+  auto result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
+  if (effective_max_candidates > 0 && result.size() > effective_max_candidates) {
+    result.resize(effective_max_candidates);
+  }
+  return result;
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
                                                                const std::string& context,
                                                                uint64_t now_epoch_sec) {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  auto candidates = active_converter_->PredictNext(kana, BuildContext(kana, context));
+  auto candidates = active_converter_->PredictNext(
+      kana, BuildContext(kana, TakeLastUtf8Codepoints(context, config_.max_context_length)));
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
@@ -468,7 +504,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
                                                                const std::string& rejected_surface,
                                                                uint64_t now_epoch_sec) {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  auto conversion_context = BuildContext(kana, context);
+  auto conversion_context =
+      BuildContext(kana, TakeLastUtf8Codepoints(context, config_.max_context_length));
   conversion_context.rejected_surfaces.push_back(rejected_surface);
   core::CorrectionHint hint;
   hint.rejected_surface = rejected_surface;

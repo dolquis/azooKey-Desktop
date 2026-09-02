@@ -1788,6 +1788,34 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterIsOffByDefaultAndAddsAnnotatedCan
   EXPECT_EQ(mixed_items.size(), host_candidates.size());
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, KatakanaRewriterIsOffByDefaultAndAddsAnnotatedCandidatesWhenOn) {
+  TextServiceHarness h;
+  std::vector<azookey::ipc::CandidateField> host_candidates(1);
+  host_candidates[0].surface = "林檎";
+  host_candidates[0].reading = "あっぷる";
+
+  auto off_items = h.service.candidate_views_for_test("あっぷる", host_candidates);
+  ASSERT_EQ(off_items.size(), 1u);
+
+  h.service.set_katakana_rewriter_enabled_for_test(true);
+  auto on_items = h.service.candidate_views_for_test("あっぷる", host_candidates);
+  ASSERT_EQ(on_items.size(), 3u);
+  EXPECT_EQ(on_items[0].surface, L"林檎");
+  EXPECT_EQ(on_items[1].surface, L"アップル");
+  EXPECT_EQ(on_items[1].description, L"全角カタカナ");
+  EXPECT_EQ(on_items[2].surface, L"ｱｯﾌﾟﾙ");
+  EXPECT_EQ(on_items[2].description, L"半角カタカナ");
+
+  host_candidates.push_back({"アップル", "あっぷる", 0.0, "test"});
+  on_items = h.service.candidate_views_for_test("あっぷる", host_candidates);
+  EXPECT_EQ(std::count_if(on_items.begin(), on_items.end(),
+                          [](const auto& item) { return item.surface == L"アップル"; }),
+            1);
+
+  const auto mixed_items = h.service.candidate_views_for_test("漢じ", host_candidates);
+  EXPECT_EQ(mixed_items.size(), host_candidates.size());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDigitKeysBuildNumericPreedit) {
   TextServiceHarness h;
   AsciiDecimalDigitTranslationGuard digit_translation;

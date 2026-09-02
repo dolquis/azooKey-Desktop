@@ -269,6 +269,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     res.batch_conversion_mode = settings.batch_conversion_mode;
     res.batch_auto_punctuation = settings.batch_auto_punctuation;
     res.number_rewriter = settings.number_rewriter;
+    res.katakana_rewriter = settings.katakana_rewriter;
   }
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
 }
@@ -507,7 +508,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   }
   engine_->ApplyConfig(next_config);
   const auto model_result = engine_->LoadModelWithResult(
-      ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers});
+      ModelLoadOptions{next_config.model_path, next_config.backend, next_config.n_gpu_layers,
+                       next_config.inference_threads});
 
   res.ok = model_result.ok;
   if (load_result.error) {

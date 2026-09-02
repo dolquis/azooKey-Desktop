@@ -18,6 +18,7 @@ constexpr const char* kUserDictionaryLoadError = "failed to load user dictionary
 constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary";
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
+constexpr size_t kPredictionDisplayLimit = 5;
 
 std::string TakeLastUtf8Codepoints(const std::string& text, uint32_t max_codepoints) {
   if (max_codepoints == 0 || text.empty()) return {};
@@ -338,6 +339,8 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.learning_flush_interval_sec = config.learning_flush_interval_sec;
   config_.learning_max_records = config.learning_max_records;
   config_.learning_min_weight = config.learning_min_weight;
+  config_.prediction_learning_max_entries = config.prediction_learning_max_entries;
+  config_.prediction_learning_min_score = config.prediction_learning_min_score;
   config_.user_word_default_score = config.user_word_default_score;
 }
 
@@ -531,7 +534,37 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
         kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length)));
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
+  candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
+
+  std::vector<core::Candidate> merged;
+  merged.reserve(kPredictionDisplayLimit);
+  if (store_ && config_.prediction_learning_max_entries > 0) {
+    const size_t learning_limit =
+        std::min(config_.prediction_learning_max_entries, kPredictionDisplayLimit);
+    const auto lookup = store_->LookupPrefix(kana, learning_limit,
+                                             config_.prediction_learning_min_score, now_epoch_sec);
+    for (const auto& match : lookup.matches) {
+      if (match.reading == kana) continue;
+      const bool duplicate = std::any_of(merged.begin(), merged.end(), [&](const auto& item) {
+        return item.surface == match.surface;
+      });
+      if (!duplicate) {
+        merged.push_back({match.surface, match.reading, match.score,
+                          core::CandidateSource::Learning, "learning-prefix"});
+      }
+      if (merged.size() == kPredictionDisplayLimit) break;
+    }
+  }
+  for (auto& candidate : candidates) {
+    const bool duplicate = std::any_of(merged.begin(), merged.end(), [&](const auto& item) {
+      return item.surface == candidate.surface;
+    });
+    if (!duplicate) {
+      merged.push_back(std::move(candidate));
+    }
+    if (merged.size() == kPredictionDisplayLimit) break;
+  }
+  return merged;
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string& kana,

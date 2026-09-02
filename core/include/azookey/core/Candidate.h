@@ -10,6 +10,7 @@ enum class CandidateSource {
   Model,
   Llm,
   Heuristic,
+  Learning,
 };
 
 struct Candidate {

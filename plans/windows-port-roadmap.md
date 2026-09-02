@@ -195,6 +195,12 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - Zenzai GGUF（上流 `Miwa-Keita/zenz-v3.2-small-gguf`）配置時に `LoadModel` 成功
   - 未配置時も Host が落ちず、固定テーブル候補が動く
   - GPU/CPU 切替が設定で効く
+- **受け入れ条件の前提に関する注記**: 「GPU/CPU 切替が設定で効く」は CUDA backend の実リンクを
+  前提としていたが、その実リンク（DEV-223）は中止され、`cuda` 要求は
+  `docs/copilot-pc-backend-spec.md` §4.4 のとおり成功 LoadModel のまま CPU へ降格する。
+  実リンク済みビルドを配布するまで、この条件を満たす GPU 経路は存在しない。v1.0 設定 UI は
+  この状況に合わせてデバイス選択を `auto` / `cpu` の 2 値へ再確定した
+  （`docs/sideload-packaging-spec.md` §3.7、DEV-854）。
 
 ### M9: ユーザー辞書
 
@@ -230,7 +236,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **変更対象**: 新規 `settings-app/`（WinUI 3 / C++/WinRT に確定、§3.0）、`pkg/` 配下 (新規)
 - **実装範囲**:
   - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
-    `model.enabled`/`model.backendPreference`〔`auto`/`cpu`/`cuda` 縮小〕/`model.selectedPath`/`logLevel`
+    `model.enabled`/`model.backendPreference`〔`auto`/`cpu` 縮小〕/`model.selectedPath`/`logLevel`
     と「ユーザー辞書を編集」「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
     `docs/sideload-packaging-spec.md` §3.7 を正典とする
   - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:
@@ -1668,15 +1674,33 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M62-A 完了 + **`THIRD_PARTY_LICENSES` 集約ファイル新設**（Mozc BSD-3 表記保持）。
   データ駆動かつ大きくなりうるため、かな読み引きは **inference-host 側**（別プロセス）で
   `QueryCandidates` 応答に混ぜ、in-proc TIP に大データを抱えない。variant chain（小データ）は
-  TIP ローカル可。
-- **変更対象**: `core/`（SymbolRewriter ロジック）、記号データの再ポート（Mozc 原典準拠で
-  azooKey 形式へ。逐語コピーせず）、`inference-host/`（読み引き経路）、`THIRD_PARTY_LICENSES`、
-  `docs/candidate-rewriter-spec.md`。
+  TIP ローカル可。chain の入口は読みではなく**候補の表層形**とする（M61 により記号キーは
+  composition が空のときアプリへ渡り、記号だけからなる読みが発生しないため。
+  `docs/candidate-rewriter-spec.md` §19.1）。
+- **変更対象**: `core/`（読み引きの索引・順序付けと chain 表 `SymbolChainTable.cpp`。chain 表は
+  Mozc 由来データから生成せず自前に書く。§19.4 / §19.11）、記号データの再ポート
+  （`scripts/symbol_porter.py`。Mozc 原典準拠で azooKey 形式へ。逐語コピーせず）、
+  `inference-host/`（読み引き経路と 2 つの末尾の件数上限。§19.5）、`ipc/`（`CandidateField`
+  の `description` 欄と `source == "symbol"`。M62-D の §8.2 と共用）、`tsf-tip/`（chain の展開・
+  注釈表示・学習観測からの除外）、`THIRD_PARTY_LICENSES`、`docs/candidate-rewriter-spec.md`。
+  加えて `symbolRewriter` / `symbolDataPath` を TIP まで届ける設定伝播経路一式を、
+  `numberRewriter`（M62-A）・`katakanaRewriter`（M62-B）と同じ範囲で変更する:
+  `settings/mvp-settings.schema.json` と `settings/default-settings.sample.json`（既定 OFF）、
+  `inference-host/`（`SettingsStore` の `RuntimeSettings` と parser、`Dispatcher` の Handshake
+  応答への載せ替え）、`ipc/`（`HandshakeResponse` payload の欄追加と codec）、`tsf-tip/`
+  （保持と chain 展開の分岐）、`settings-app/SettingsDocument.cpp`（許可キー）、および各層の
+  focused test。chain は TIP ローカルで動くため、設定が Host 側だけに届いた状態では機能が
+  半分しか働かない（§19.8）。
 - **受け入れ条件**:
   - `「`→`『【〔（` の関連候補、`かぎかっこ`→`「」` の読み引きが出る
-  - データ欠損時にフォールバックして既存候補が壊れない
+  - `symbolRewriter=true` が settings.json から Host の `RuntimeSettings`、Handshake 応答、
+    TIP の保持値まで伝播し、chain の展開が実際に有効になる（各層の focused test で確認）
+  - データ欠損時にフォールバックして既存候補が壊れない。記号 TSV が無くても chain は働く
+  - `emojiRewriter` と同時に有効でも変換候補の表示件数が変わらない（§19.5 の適用順）
   - Mozc 由来データの BSD-3 表記が `THIRD_PARTY_LICENSES` とデータヘッダに保持される
-- **参照仕様**: `docs/candidate-rewriter-spec.md`
+- **参照仕様**: `docs/candidate-rewriter-spec.md` §19（責務境界・TSV 列定義と再ポート・
+  読み引き・variant chain・件数上限・注釈・学習の扱い・設定キー・M61 との境界・
+  フォールバック・ライセンス・テスト観点）
 
 #### M62-D: 絵文字リライター（Mozc + CLDR 由来データ）
 

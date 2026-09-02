@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <thread>
 #include <unordered_set>
@@ -153,6 +154,49 @@ TEST(RequestSchedulerTest, LatestSingleId) {
   s.MarkLatest(3);
   EXPECT_TRUE(s.IsLatest(3));
   EXPECT_FALSE(s.IsLatest(9));
+}
+
+TEST(RequestSchedulerTest, TenRapidRequestsExposeOnlyNewestResponse) {
+  host::RequestScheduler s;
+  std::vector<std::shared_ptr<std::atomic<bool>>> active_requests;
+
+  for (uint64_t request_id = 1; request_id <= 10; ++request_id) {
+    active_requests.push_back(s.TrackCancellation(request_id));
+    s.MarkLatest(request_id);
+  }
+
+  size_t latest_response_count = 0;
+  for (uint64_t request_id = 1; request_id <= 10; ++request_id) {
+    if (s.IsLatest(request_id)) ++latest_response_count;
+    s.CompleteRequest(request_id);
+  }
+  EXPECT_EQ(latest_response_count, 1u);
+  EXPECT_TRUE(s.IsLatest(10));
+}
+
+TEST(RequestSchedulerTest, MarkLatestAndIsLatestThreadSafetySmoke) {
+  host::RequestScheduler s;
+  std::atomic<bool> start{false};
+
+  std::thread writer([&] {
+    while (!start.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    for (uint64_t request_id = 1; request_id <= 10'000; ++request_id) {
+      s.MarkLatest(request_id);
+    }
+  });
+  std::thread reader([&] {
+    start.store(true, std::memory_order_release);
+    for (uint64_t request_id = 1; request_id <= 10'000; ++request_id) {
+      (void)s.IsLatest(request_id);
+    }
+  });
+
+  writer.join();
+  reader.join();
+  s.MarkLatest(10'001);
+  EXPECT_TRUE(s.IsLatest(10'001));
 }
 
 TEST(RequestSchedulerTest, CancelDoesNotAffectLatest) {

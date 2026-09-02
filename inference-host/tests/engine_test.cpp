@@ -1497,7 +1497,7 @@ TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   std::remove(lpath);
 }
 
-TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
+TEST(InferenceEngineTest, QueryCandidatesKeepsHealthAndModelSwapResponsive) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
                     "loads require a full model fixture.";
@@ -1505,7 +1505,7 @@ TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
 
   using namespace std::chrono_literals;
 
-  const char* lpath = "azookey_host_engine_query_load_serialized.tsv";
+  const char* lpath = "azookey_host_engine_query_load_responsive.tsv";
   std::remove(lpath);
   azookey::learning::LearningStore store(lpath);
 
@@ -1514,7 +1514,7 @@ TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
   azookey::host::EngineConfig cfg;
   azookey::host::InferenceEngine engine(std::move(converter), &store, cfg);
 
-  const std::string model_path = TempPath("azookey_query_load_serialized.gguf");
+  const std::string model_path = TempPath("azookey_query_load_responsive.gguf");
   std::remove(model_path.c_str());
   WriteMinimalGguf(model_path);
 
@@ -1524,6 +1524,13 @@ TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
 
   const bool query_entered = blocking_converter->WaitUntilEntered(1s);
   EXPECT_TRUE(query_entered);
+
+  auto health_future = std::async(std::launch::async, [&]() { return engine.health_snapshot(); });
+  const bool health_ready = health_future.wait_for(100ms) == std::future_status::ready;
+  EXPECT_TRUE(health_ready) << "Health must not wait for a long converter call";
+  if (health_ready) {
+    EXPECT_FALSE(health_future.get().model_loaded);
+  }
 
   std::promise<void> load_started_promise;
   auto load_started = load_started_promise.get_future();
@@ -1536,9 +1543,8 @@ TEST(InferenceEngineTest, QueryCandidatesSerializesConcurrentLoadModel) {
 
   const bool load_started_ready = load_started.wait_for(1s) == std::future_status::ready;
   EXPECT_TRUE(load_started_ready);
-  if (query_entered && load_started_ready) {
-    EXPECT_EQ(load_future.wait_for(50ms), std::future_status::timeout);
-  }
+  const bool load_ready = load_future.wait_for(1s) == std::future_status::ready;
+  EXPECT_TRUE(load_ready) << "Model replacement must not wait for the old converter call";
 
   blocking_converter->Release();
   query_thread.join();

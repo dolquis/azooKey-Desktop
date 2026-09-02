@@ -17,6 +17,7 @@
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
+#include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/LearningStore.h"
@@ -423,6 +424,22 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
   EXPECT_FALSE(throwing_scheduler.IsCanceled(31));
 
   std::remove(throwing_path);
+}
+
+TEST_F(DispatcherTest, AuthenticatedUnsupportedMessagesReturnExplicitTypedErrors) {
+  for (const auto type : {ipc::MessageType::QueryPredictions, ipc::MessageType::QueryCorrections,
+                          ipc::MessageType::CommitCorrection, ipc::MessageType::UpdateUserWord,
+                          ipc::MessageType::Unknown}) {
+    const auto response = dispatcher.Dispatch(MakeReq(32, type, "{}"));
+    ASSERT_TRUE(response.has_value()) << ipc::TypeToString(type);
+    EXPECT_EQ(response->type, type);
+    EXPECT_EQ(response->request_id, 32u);
+
+    const auto payload = ipc::json::Parse(response->payload_json);
+    ASSERT_TRUE(payload.has_value());
+    EXPECT_EQ(payload->GetBool("ok"), false);
+    EXPECT_EQ(payload->GetString("error"), "unsupported_message_type");
+  }
 }
 
 TEST_F(DispatcherTest, CancelMessageNoReply) {

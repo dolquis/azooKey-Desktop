@@ -27,6 +27,16 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 別の Windows アカウントで TIP を使う場合は、そのアカウントでも開発登録の per-user 手順を実行する必要がある。
 配布パッケージも各ユーザーのログオン時に supervisor を起動する経路を用意し、machine-wide の TIP 登録だけで Host が利用可能になるとは扱わない。
 
+### Host CLI 引数
+
+Host の起動引数は `ParseHostArgs` が一括して解析する。
+`--backend` は `cpu` または `cuda` だけを受け付け、不正値を exit code 2 の起動エラーにする。
+値を取る option が末尾にある場合と未知の引数も exit code 2 とし、暗黙の既定値へ戻さない。
+`--pipe` は省略可能な次トークンを pipe 名として扱うが、`--` で始まるトークンは別 option として残す。
+`--pipe-name` は値を必須とする。
+`--model`、`--learning`、`--user-dict`、`--mock-dict`、`--handshake-token` も値を必須とする。
+`userdict` より後ろのトークンは user dictionary CLI へそのまま渡す。
+
 ## TSF EditSessionルール
 
 - テキスト更新は必ず `RequestEditSession` を経由。
@@ -105,6 +115,9 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
   - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
   - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`
     関数があるため、Payload と Dispatcher ハンドラを追加すれば配線可能。
+  - 認証済み Dispatcher がこれらの型または `Unknown` を受け取った場合は、request の型と
+    相関 ID を保った `{"ok":false,"error":"unsupported_message_type"}` 応答を返す。
+    無応答は fire-and-forget の `Cancel` に限る。
 
 ### Handshake 認証ゲート
 
@@ -238,6 +251,11 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
   戻して反映する（実装: `IpcWorkerThread`）。
 - `AddRef`/`Release`/`QueryInterface` を厳格実装する。COM ポインタは
   `wil::com_ptr` または `Microsoft::WRL::ComPtr` を用いる。
+- Host の `InferenceEngine` は `state_mutex_` の保持中に active converter の
+  `shared_ptr` と設定値をスナップショットし、変換中は `state_mutex_` を解放する。
+  このため Health と軽量 accessor、およびモデル差し替えは長時間変換を待たない。
+  converter の mutable decode state は専用 mutex で直列化し、モデル差し替え後も
+  実行中の旧 converter は `shared_ptr` によって変換終了まで生存する。
 
 ### 例外・障害耐性
 

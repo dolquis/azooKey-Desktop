@@ -930,10 +930,11 @@ JSON parser の入力なら `ipc/tests/json_test.cpp`、Envelope または frame
 `CommitCorrection` / `UpdateUserWord`。`docs/windows-tsf-host-architecture.md` の
 ⚠️ 項）を受信した際、Dispatcher は黙って無視せず**明示的なエラー応答**を返す。
 応答待ちの blocking client をハングさせないため、既存ワイヤ形式の envelope に
-「未対応 type」を表すエラー payload（例: `{"ok":false,"error":"unsupported_message_type"}`）
-を載せて返す。`Cancel` など fire-and-forget の type のみ無応答を許す。現状の
-Dispatcher は `default:` で `nullopt` を返し client をハングさせ得るため要修正
-（残課題、Linear DEV-162）。併せて MessageType 列挙 ↔ `Payloads` codec の網羅
+「未対応 type」を表す `{"ok":false,"error":"unsupported_message_type"}` を載せ、
+request の `type`、`request_id`、`trace_id` を応答 envelope に維持する。
+`Cancel` など fire-and-forget の type のみ無応答を許す。
+認証済み Dispatcher の未配線 type と `Unknown` はこの応答へ統一する（DEV-266）。
+併せて MessageType 列挙 ↔ `Payloads` codec の網羅
 整合をテスト / CI で検査し、列挙追加時の codec 取りこぼしを防ぐ。
 
 ### 6.4 Named Pipe セキュリティ強化

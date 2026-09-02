@@ -436,6 +436,11 @@ bool IsExpectedIpcResponse(const azookey::ipc::Envelope& response, uint64_t expe
          response.type == expected_type;
 }
 
+bool IsFreshQueryResult(bool has_newer_request, uint64_t pending_request_id,
+                        uint64_t response_request_id) {
+  return !has_newer_request && response_request_id == pending_request_id;
+}
+
 #ifdef AZOOKEY_TSF_TESTING
 std::atomic<int> g_com_boundary_allocation_failures{0};
 std::atomic<int> g_pending_commit_observation_failures{0};
@@ -501,6 +506,11 @@ bool ConsumePendingCommitObservationFailureForTest() {
 bool IsExpectedIpcResponseForTest(const ipc::Envelope& response, uint64_t expected_request_id,
                                   ipc::MessageType expected_type) {
   return IsExpectedIpcResponse(response, expected_request_id, expected_type);
+}
+
+bool IsFreshQueryResultForTest(bool has_newer_request, uint64_t pending_request_id,
+                               uint64_t response_request_id) {
+  return IsFreshQueryResult(has_newer_request, pending_request_id, response_request_id);
 }
 
 std::optional<WCHAR> TranslateOemCompositionCharacterUsingWin32ForTest(WPARAM virtual_key,
@@ -2355,7 +2365,7 @@ void TextService::ServeConnection() {
     bool is_fresh = false;
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
-      is_fresh = !ipc_has_request_ && (req_id == ipc_pending_id_);
+      is_fresh = IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id);
     }
 
     if (is_fresh) {
@@ -2515,6 +2525,14 @@ TextService::last_queued_commit_observation_for_test() {
     }
   }
   return std::nullopt;
+}
+
+std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  std::vector<ipc::MessageType> types;
+  types.reserve(ipc_send_queue_.size());
+  for (const auto& item : ipc_send_queue_) types.push_back(item.type);
+  return types;
 }
 
 void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_romaji,

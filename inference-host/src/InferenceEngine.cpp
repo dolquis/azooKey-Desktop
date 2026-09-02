@@ -103,7 +103,7 @@ bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
 InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
                                  learning::LearningStore* store, EngineConfig config)
     : fallback_converter_(std::move(converter)),
-      active_converter_(fallback_converter_.get()),
+      active_converter_(fallback_converter_),
       store_(store),
       reranker_(store),
       config_(std::move(config)) {
@@ -267,7 +267,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     ApplyModelConfigFields(config_, next_config);
     model_loaded_ = false;
     model_converter_.reset();
-    active_converter_ = fallback_converter_.get();
+    active_converter_ = fallback_converter_;
     last_error_.reset();
     model_runtime_error_.reset();
     result.ok = true;
@@ -285,7 +285,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     if (!model_loaded_) {
       ApplyModelConfigFields(config_, next_config);
       model_converter_.reset();
-      active_converter_ = fallback_converter_.get();
+      active_converter_ = fallback_converter_;
       last_error_ = result.error;
       model_runtime_error_.reset();
     }
@@ -308,18 +308,18 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     if (!model_loaded_) {
       ApplyModelConfigFields(config_, next_config);
       model_converter_.reset();
-      active_converter_ = fallback_converter_.get();
+      active_converter_ = fallback_converter_;
       last_error_ = result.error;
       model_runtime_error_.reset();
     }
     return result;
   }
   auto next_converter =
-      std::make_unique<ZenzaiModelConverter>(std::move(loaded), fallback_converter_.get());
+      std::make_shared<ZenzaiModelConverter>(std::move(loaded), fallback_converter_.get());
   std::lock_guard<std::mutex> lock(state_mutex_);
   ApplyModelConfigFields(config_, next_config);
   model_converter_ = std::move(next_converter);
-  active_converter_ = model_converter_.get();
+  active_converter_ = model_converter_;
   model_loaded_ = true;
   last_error_.reset();
   model_runtime_error_.reset();
@@ -388,17 +388,22 @@ std::optional<std::string> InferenceEngine::effective_last_error() const {
 }
 
 std::optional<ZenzaiDecodeStats> InferenceEngine::last_zenzai_decode_stats() const {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(model_converter_.get());
-  if (!zenzai || active_converter_ != zenzai) {
-    return std::nullopt;
+  std::shared_ptr<core::IConverter> converter;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!model_converter_ || active_converter_ != model_converter_) return std::nullopt;
+    converter = model_converter_;
   }
+  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+  const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(converter.get());
+  if (!zenzai) return std::nullopt;
   return zenzai->last_decode_stats();
 }
 
-void InferenceEngine::MirrorModelRuntimeErrorLocked() {
-  auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(model_converter_.get());
-  if (zenzai && active_converter_ == zenzai) {
+void InferenceEngine::MirrorModelRuntimeErrorLocked(
+    const std::shared_ptr<core::IConverter>& converter) {
+  auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
+  if (zenzai && active_converter_ == converter) {
     model_runtime_error_ = zenzai->last_error();
   }
 }
@@ -418,64 +423,79 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
-  // Keep converter calls under state_mutex_: LoadModelWithResult can replace
-  // model_converter_ and active_converter_ under the same mutex.
-  std::lock_guard<std::mutex> lock(state_mutex_);
-
-  if (canceled()) return {};
-
+  std::shared_ptr<core::IConverter> converter;
+  std::shared_ptr<core::IConverter> fallback_converter;
+  EngineConfig config;
+  bool using_model_converter = false;
   std::vector<core::Candidate> merged;
-  if (user_dict_) {
-    auto words = user_dict_->Lookup(kana);
-    merged.reserve(words.size());
-    for (const auto& w : words) {
-      core::Candidate c;
-      c.surface = w.word;
-      c.reading = w.ruby;
-      c.score = w.value.value_or(config_.user_word_default_score);
-      c.source = core::CandidateSource::UserDictionary;
-      c.debug_info = "user-dict";
-      merged.push_back(std::move(c));
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    converter = active_converter_;
+    fallback_converter = fallback_converter_;
+    config = config_;
+    using_model_converter = model_converter_ && converter == model_converter_;
+    if (user_dict_) {
+      auto words = user_dict_->Lookup(kana);
+      merged.reserve(words.size());
+      for (const auto& w : words) {
+        core::Candidate c;
+        c.surface = w.word;
+        c.reading = w.ruby;
+        c.score = w.value.value_or(config.user_word_default_score);
+        c.source = core::CandidateSource::UserDictionary;
+        c.debug_info = "user-dict";
+        merged.push_back(std::move(c));
+      }
     }
   }
 
   if (canceled()) return {};
 
   std::vector<core::Candidate> converted;
-  const bool using_model_converter =
-      model_converter_ && active_converter_ == model_converter_.get();
   const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
-  const uint32_t effective_max_candidates = config_.max_candidates == 0 ? max_candidates
+  const uint32_t effective_max_candidates = config.max_candidates == 0 ? max_candidates
                                             : max_candidates == 0
-                                                ? config_.max_candidates
-                                                : std::min(max_candidates, config_.max_candidates);
-  const auto limited_context = TakeLastUtf8Codepoints(context, config_.max_context_length);
-  try {
-    converted = active_converter_->Convert(
-        kana, BuildContext(kana, limited_context, cancel, conversion_deadline,
-                           effective_max_candidates, live));
-    if (canceled()) return {};
-    if (using_model_converter) {
-      MirrorModelRuntimeErrorLocked();
+                                                ? config.max_candidates
+                                                : std::min(max_candidates, config.max_candidates);
+  const auto limited_context = TakeLastUtf8Codepoints(context, config.max_context_length);
+  {
+    // IConverter implementations own mutable decode state. Serialize calls to
+    // that state without holding state_mutex_, so Health and model swaps remain responsive.
+    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    try {
+      converted =
+          converter->Convert(kana, BuildContext(kana, limited_context, cancel, conversion_deadline,
+                                                effective_max_candidates, live));
+      if (canceled()) return {};
+      if (using_model_converter) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        MirrorModelRuntimeErrorLocked(converter);
+      }
+    } catch (const std::exception& ex) {
+      if (!using_model_converter || !fallback_converter) throw;
+      if (canceled()) return {};
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (active_converter_ == converter) {
+          model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
+        }
+      }
+      converted = fallback_converter->Convert(
+          kana, BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates,
+                             live));
+    } catch (...) {
+      if (!using_model_converter || !fallback_converter) throw;
+      if (canceled()) return {};
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (active_converter_ == converter) {
+          model_runtime_error_ = "zenzai-convert-exception:unknown";
+        }
+      }
+      converted = fallback_converter->Convert(
+          kana, BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates,
+                             live));
     }
-  } catch (const std::exception& ex) {
-    if (!using_model_converter || !fallback_converter_) {
-      throw;
-    }
-    if (canceled()) return {};
-    model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
-    converted = fallback_converter_->Convert(
-        kana,
-        BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates, live));
-  } catch (...) {
-    if (!using_model_converter || !fallback_converter_) {
-      throw;
-    }
-    if (canceled()) return {};
-    model_runtime_error_ = "zenzai-convert-exception:unknown";
-    converted = fallback_converter_->Convert(
-        kana,
-        BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates, live));
   }
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
@@ -483,7 +503,11 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 
   if (canceled()) return {};
 
-  auto result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
+  std::vector<core::Candidate> result;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
+  }
   if (effective_max_candidates > 0 && result.size() > effective_max_candidates) {
     result.resize(effective_max_candidates);
   }
@@ -493,9 +517,20 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
                                                                const std::string& context,
                                                                uint64_t now_epoch_sec) {
+  std::shared_ptr<core::IConverter> converter;
+  uint32_t max_context_length = 0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    converter = active_converter_;
+    max_context_length = config_.max_context_length;
+  }
+  std::vector<core::Candidate> candidates;
+  {
+    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    candidates = converter->PredictNext(
+        kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length)));
+  }
   std::lock_guard<std::mutex> lock(state_mutex_);
-  auto candidates = active_converter_->PredictNext(
-      kana, BuildContext(kana, TakeLastUtf8Codepoints(context, config_.max_context_length)));
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
@@ -503,25 +538,40 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
                                                                const std::string& context,
                                                                const std::string& rejected_surface,
                                                                uint64_t now_epoch_sec) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  auto conversion_context =
-      BuildContext(kana, TakeLastUtf8Codepoints(context, config_.max_context_length));
+  std::shared_ptr<core::IConverter> converter;
+  uint32_t max_context_length = 0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    converter = active_converter_;
+    max_context_length = config_.max_context_length;
+  }
+  auto conversion_context = BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length));
   conversion_context.rejected_surfaces.push_back(rejected_surface);
   core::CorrectionHint hint;
   hint.rejected_surface = rejected_surface;
   hint.intent = "user_rejection";
-  auto candidates = active_converter_->Correct(kana, hint, conversion_context);
+  std::vector<core::Candidate> candidates;
+  {
+    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    candidates = converter->Correct(kana, hint, conversion_context);
+  }
+  std::lock_guard<std::mutex> lock(state_mutex_);
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
 void InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
                                         uint64_t now_epoch_sec) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  if (store_) {
-    store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
-    NoteLearningMutationLocked(now_epoch_sec);
+  std::shared_ptr<core::IConverter> converter;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (store_) {
+      store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
+      NoteLearningMutationLocked(now_epoch_sec);
+    }
+    converter = active_converter_;
   }
-  active_converter_->Commit(
+  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+  converter->Commit(
       core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
       core::ConversionContext{});
 }
@@ -530,19 +580,23 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
                                        const std::string& rejected_surface,
                                        const std::string& selected_surface,
                                        uint64_t now_epoch_sec) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  if (store_) {
-    store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha,
-                              now_epoch_sec);
-    NoteLearningMutationLocked(now_epoch_sec);
+  std::shared_ptr<core::IConverter> converter;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (store_) {
+      store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha,
+                                now_epoch_sec);
+      NoteLearningMutationLocked(now_epoch_sec);
+    }
+    converter = active_converter_;
   }
 
   core::ConversionContext context;
   context.rejected_surfaces.push_back(rejected_surface);
-  active_converter_->Commit(
-      core::Candidate{selected_surface, reading, 1.0, core::CandidateSource::UserDictionary,
-                      "correction-commit"},
-      context);
+  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+  converter->Commit(core::Candidate{selected_surface, reading, 1.0,
+                                    core::CandidateSource::UserDictionary, "correction-commit"},
+                    context);
 }
 
 bool InferenceEngine::FlushLearningStore() {

@@ -1311,7 +1311,7 @@ schema 自体は superset のまま変えない。
 | キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
 |---|---|---|---|---|
 | `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 一般 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` は下記「デバイス選択の enum 縮小（DEV-854 再確定）」の条件で解禁する |
+| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 一般 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` の解禁条件は下記「v1.0 / v1.x 境界表」に置く（判断の根拠は「デバイス選択の enum 縮小（DEV-854 再確定）」） |
 | `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 
@@ -1335,7 +1335,7 @@ schema 自体は superset のまま変えない。
   §4.3 のとおり R2 は保留中である。R1 に属する `vulkan` を保留中の R2 に従属させないため、**露出条件を
   「ggml-vulkan ビルドを配布に含めた時点」へ改める**（R1 側の条件であり、M24 の進捗に依存しない）。
   現行の CMake は `AZOOKEY_BACKEND` が `cpu` / `cuda` のみで ggml-vulkan ビルドを持たず、§1.6 の base MSIX も
-  llama.cpp CPU ランタイムだけを同梱するため、**v1.0 UI には出さない**。ビルドを用意しないまま選択肢だけ
+  GPU ランタイムを含まないため、**v1.0 UI には出さない**。ビルドを用意しないまま選択肢だけ
   先に出すと、`cuda` と同じ実効のない選択を作ることになる。ggml-vulkan ビルドの追加は DEV-944 で追う。
 - **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
   `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に

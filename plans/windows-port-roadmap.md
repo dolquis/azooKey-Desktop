@@ -200,7 +200,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   `docs/copilot-pc-backend-spec.md` §4.4 のとおり成功 LoadModel のまま CPU へ降格する。
   実リンク済みビルドを配布するまで、この条件を満たす GPU 経路は存在しない。v1.0 設定 UI は
   この状況に合わせてデバイス選択を `auto` / `cpu` の 2 値へ再確定した
-  （`docs/sideload-packaging-spec.md` §3.7、DEV-854）。条件文そのものの改訂可否は人間の判断に委ねる。
+  （`docs/sideload-packaging-spec.md` §3.7、DEV-854）。
 
 ### M9: ユーザー辞書
 

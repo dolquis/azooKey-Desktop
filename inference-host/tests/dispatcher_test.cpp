@@ -164,8 +164,8 @@ TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
     ASSERT_TRUE(out.is_open());
     out << "{" << "\"batchRomajiConversion\":true," << "\"batchRomajiPreviewStyle\":\"romaji\","
         << "\"batchConversionMode\":\"neural\"," << "\"batchAutoPunctuation\":true,"
-        << "\"numberRewriter\":true," << "\"katakanaRewriter\":true,"
-        << "\"maxCandidates\":17" << "}";
+        << "\"numberRewriter\":true," << "\"katakanaRewriter\":true," << "\"maxCandidates\":17"
+        << "}";
   }
   azookey::host::SettingsStore settings_store(settings_path);
   settings_store.Load();

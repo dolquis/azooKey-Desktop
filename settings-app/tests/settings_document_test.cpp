@@ -64,6 +64,10 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   WriteText(path, R"({
     "liveConversion": true,
     "numberRewriter": true,
+    "katakanaRewriter": true,
+    "inferenceThreads": 6,
+    "maxCandidates": 12,
+    "maxContextLength": 20,
     "aiBackend": "invalid-backend",
     "openAiModel": "local-test-model",
     "backendPreference": "cuda",
@@ -92,6 +96,10 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_TRUE(root.contains("liveConversion"));
   ASSERT_TRUE(root.contains("numberRewriter"));
   EXPECT_TRUE(root.at("numberRewriter").AsBool());
+  EXPECT_TRUE(root.at("katakanaRewriter").AsBool());
+  EXPECT_EQ(root.at("inferenceThreads").AsNumber(), 6.0);
+  EXPECT_EQ(root.at("maxCandidates").AsNumber(), 12.0);
+  EXPECT_EQ(root.at("maxContextLength").AsNumber(), 20.0);
   EXPECT_TRUE(root.contains("openAiModel"));
   EXPECT_FALSE(root.contains("aiBackend"));
   EXPECT_FALSE(root.contains("unknownRoot"));

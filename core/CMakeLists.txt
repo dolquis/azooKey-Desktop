@@ -1,4 +1,5 @@
 add_library(azookey_core STATIC
+  src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp
   src/NumberRewriter.cpp
   src/PlatformPaths.cpp

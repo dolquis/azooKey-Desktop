@@ -54,11 +54,15 @@ struct RuntimeSettings {
   std::string ep_preference{"auto"};
   RuntimeModelSettings model;
   std::string power_profile{"auto"};
+  int32_t inference_threads{0};
+  int32_t max_candidates{9};
+  int32_t max_context_length{10};
   bool batch_romaji_conversion{false};
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};
   bool batch_auto_punctuation{false};
   bool number_rewriter{false};
+  bool katakana_rewriter{false};
   RuntimeAutoUpdateSettings auto_update;
 };
 

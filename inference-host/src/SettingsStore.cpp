@@ -1,6 +1,9 @@
 #include "azookey/host/SettingsStore.h"
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -42,7 +45,19 @@ bool ReadBool(const j::Object& object, const char* key, bool fallback) {
 int32_t ReadInt32(const j::Object& object, const char* key, int32_t fallback) {
   auto it = object.find(key);
   if (it == object.end() || !it->second.IsNumber()) return fallback;
-  return static_cast<int32_t>(it->second.AsNumber());
+  const double value = it->second.AsNumber();
+  if (!std::isfinite(value) || std::floor(value) != value ||
+      value < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+      value > static_cast<double>(std::numeric_limits<int32_t>::max())) {
+    return fallback;
+  }
+  return static_cast<int32_t>(value);
+}
+
+int32_t ReadRangedInt32(const j::Object& object, const char* key, int32_t fallback, int32_t minimum,
+                        int32_t maximum) {
+  const int32_t value = ReadInt32(object, key, fallback);
+  return value < minimum || value > maximum ? fallback : value;
 }
 
 const j::Object* ReadObject(const j::Object& object, const char* key) {
@@ -121,6 +136,12 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadEnum(object, "epPreference", settings.ep_preference, {"auto", "npu", "gpu", "cpu"});
   settings.power_profile = ReadEnum(object, "powerProfile", settings.power_profile,
                                     {"auto", "performance", "battery_saver"});
+  settings.inference_threads =
+      ReadRangedInt32(object, "inferenceThreads", settings.inference_threads, 0, 8);
+  settings.max_candidates =
+      ReadRangedInt32(object, "maxCandidates", settings.max_candidates, 1, 32);
+  settings.max_context_length =
+      ReadRangedInt32(object, "maxContextLength", settings.max_context_length, 0, 30);
   settings.batch_romaji_conversion =
       ReadBool(object, "batchRomajiConversion", settings.batch_romaji_conversion);
   settings.batch_romaji_preview_style = ReadEnum(
@@ -130,6 +151,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.batch_auto_punctuation =
       ReadBool(object, "batchAutoPunctuation", settings.batch_auto_punctuation);
   settings.number_rewriter = ReadBool(object, "numberRewriter", settings.number_rewriter);
+  settings.katakana_rewriter = ReadBool(object, "katakanaRewriter", settings.katakana_rewriter);
 
   if (const auto* model = ReadObject(object, "model")) {
     settings.model.enabled = ReadBool(*model, "enabled", settings.model.enabled);
@@ -251,6 +273,16 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings,
                                                 BackendKind auto_backend) {
   config.enable_live_conversion = settings.live_conversion;
+  // Until host-side AC/battery detection is implemented, auto uses a stable
+  // four-thread fallback. Always materialize a concrete value so model reloads
+  // preserve the runtime setting instead of falling back to llama.cpp defaults.
+  const int32_t profile_threads = settings.power_profile == "performance"     ? 8
+                                  : settings.power_profile == "battery_saver" ? 2
+                                                                              : 4;
+  config.inference_threads =
+      settings.inference_threads > 0 ? settings.inference_threads : profile_threads;
+  config.max_candidates = static_cast<uint32_t>(settings.max_candidates);
+  config.max_context_length = static_cast<uint32_t>(settings.max_context_length);
 
   std::string backend_preference = settings.backend_preference;
   if (settings.model.backend_preference != "auto") {

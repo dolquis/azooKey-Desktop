@@ -411,8 +411,8 @@ int main(int argc, char** argv) {
                 << " (falling back to SimpleConverter)" << std::endl;
     }
   } else if (settings_store.settings().model.auto_load_on_host_start) {
-    const bool preload_started = engine.StartModelPreload(
-        azookey::host::ModelLoadOptions{config.model_path, config.backend, config.n_gpu_layers});
+    const bool preload_started = engine.StartModelPreload(azookey::host::ModelLoadOptions{
+        config.model_path, config.backend, config.n_gpu_layers, config.inference_threads});
     runtime_log.Log(preload_started ? azookey::logging::RuntimeLogLevel::Info
                                     : azookey::logging::RuntimeLogLevel::Warn,
                     "model_preload_start",

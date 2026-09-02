@@ -1,4 +1,5 @@
 add_executable(core_tests
+  katakana_rewriter_test.cpp
   live_conversion_chunker_test.cpp
   number_rewriter_test.cpp
   redaction_test.cpp

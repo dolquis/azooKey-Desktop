@@ -16,6 +16,7 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
@@ -125,26 +126,34 @@ std::wstring Utf8ToWide(const std::string& utf8) {
 
 std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
     const std::string& reading, std::vector<azookey::ipc::CandidateField> candidates,
-    bool number_rewriter_enabled) {
+    bool number_rewriter_enabled, bool katakana_rewriter_enabled) {
   std::vector<azookey::tsf::TipCandidate> result;
   result.reserve(candidates.size() + 8);
   for (auto& candidate : candidates) {
     result.push_back({std::move(candidate), {}});
   }
 
-  if (!number_rewriter_enabled) return result;
-  for (const auto& rewritten : azookey::core::ExpandNumberCandidates(reading)) {
-    const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& candidate) {
-      return candidate.field.surface == rewritten.surface;
-    });
-    if (duplicate) continue;
+  auto append_rewritten = [&](const std::vector<azookey::core::Candidate>& rewritten) {
+    for (const auto& item : rewritten) {
+      const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& candidate) {
+        return candidate.field.surface == item.surface;
+      });
+      if (duplicate) continue;
 
-    azookey::ipc::CandidateField candidate;
-    candidate.surface = rewritten.surface;
-    candidate.reading = rewritten.reading;
-    candidate.score = rewritten.score;
-    candidate.source = "heuristic";
-    result.push_back({std::move(candidate), rewritten.description});
+      azookey::ipc::CandidateField candidate;
+      candidate.surface = item.surface;
+      candidate.reading = item.reading;
+      candidate.score = item.score;
+      candidate.source = "heuristic";
+      result.push_back({std::move(candidate), item.description});
+    }
+  };
+
+  if (number_rewriter_enabled) {
+    append_rewritten(azookey::core::ExpandNumberCandidates(reading));
+  }
+  if (katakana_rewriter_enabled) {
+    append_rewritten(azookey::core::ExpandKatakanaCandidates(reading));
   }
   return result;
 }
@@ -1842,6 +1851,8 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
                                        std::memory_order_relaxed);
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
     number_rewriter_.store(hpayload->number_rewriter, std::memory_order_relaxed);
+    katakana_rewriter_.store(hpayload->katakana_rewriter, std::memory_order_relaxed);
+    max_candidates_.store(hpayload->max_candidates, std::memory_order_relaxed);
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
                 {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
@@ -2072,7 +2083,7 @@ void TextService::ServeConnection() {
       qreq.raw_romaji = raw_romaji;
       qreq.mode = batch_mode.empty() ? "neural" : batch_mode;
       qreq.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
-      qreq.max_candidates = 9;
+      qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
       qenv.trace_id = "tip-batch-query";
       qenv.type = MessageType::QueryBatchConversion;
       qenv.payload_json = BuildQueryBatchConversionRequest(qreq);
@@ -2080,7 +2091,7 @@ void TextService::ServeConnection() {
       QueryCandidatesRequest qreq;
       qreq.reading = reading;
       qreq.left_context = "";
-      qreq.max_candidates = 9;
+      qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
       qreq.live = true;
       qenv.trace_id = "tip-key-query";
       qenv.type = MessageType::QueryCandidates;
@@ -2333,7 +2344,8 @@ void TextService::ServeConnection() {
 
     auto tip_candidates =
         BuildTipCandidates(reading, std::move(response_candidates),
-                           !is_batch && number_rewriter_.load(std::memory_order_relaxed));
+                           !is_batch && number_rewriter_.load(std::memory_order_relaxed),
+                           !is_batch && katakana_rewriter_.load(std::memory_order_relaxed));
 
     // M10: discard stale responses.
     // Conditions for freshness:
@@ -2465,14 +2477,15 @@ bool TextService::candidate_window_show_pending_for_test() {
 
 void TextService::set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
-  candidates_ = BuildTipCandidates({}, std::move(candidates), false);
+  candidates_ = BuildTipCandidates({}, std::move(candidates), false, false);
 }
 
 void TextService::set_rewritten_cached_candidates_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) {
   std::lock_guard<std::mutex> lk(candidates_mtx_);
   candidates_ = BuildTipCandidates(reading, std::move(candidates),
-                                   number_rewriter_.load(std::memory_order_relaxed));
+                                   number_rewriter_.load(std::memory_order_relaxed),
+                                   katakana_rewriter_.load(std::memory_order_relaxed));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
@@ -2486,8 +2499,9 @@ std::vector<ipc::CandidateField> TextService::shown_candidates_for_test() const 
 
 std::vector<CandidateViewItem> TextService::candidate_views_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) const {
-  return BuildCandidateViews(BuildTipCandidates(reading, std::move(candidates),
-                                                number_rewriter_.load(std::memory_order_relaxed)));
+  return BuildCandidateViews(BuildTipCandidates(
+      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed),
+      katakana_rewriter_.load(std::memory_order_relaxed)));
 }
 
 void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }

@@ -203,6 +203,9 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
     if (const auto minimum = schema.GetNumber("minimum"); minimum && value.AsNumber() < *minimum) {
       return false;
     }
+    if (const auto maximum = schema.GetNumber("maximum"); maximum && value.AsNumber() > *maximum) {
+      return false;
+    }
   }
   if (value.IsObject()) {
     const auto* properties = schema.GetObject("properties");
@@ -234,8 +237,8 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
 
 bool SchemaUsesOnlySupportedKeywords(const j::Value& schema) {
   if (!schema.IsObject()) return true;
-  constexpr std::array<std::string_view, 10> supported = {
-      "$schema", "additionalProperties", "default", "description", "enum", "items",
+  constexpr std::array<std::string_view, 11> supported = {
+      "$schema", "additionalProperties", "default", "description", "enum", "items", "maximum",
       "minimum", "properties",           "title",   "type",
   };
   for (const auto& [key, value] : schema.AsObject()) {

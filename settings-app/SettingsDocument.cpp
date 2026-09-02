@@ -35,12 +35,13 @@ bool IsStringEnum(const j::Value& value, std::initializer_list<std::string_view>
   return false;
 }
 
-bool IsInteger(const j::Value& value, std::optional<double> minimum = std::nullopt) {
+bool IsInteger(const j::Value& value, std::optional<double> minimum = std::nullopt,
+               std::optional<double> maximum = std::nullopt) {
   if (!value.IsNumber() || !std::isfinite(value.AsNumber()) ||
       std::floor(value.AsNumber()) != value.AsNumber()) {
     return false;
   }
-  return !minimum || value.AsNumber() >= *minimum;
+  return (!minimum || value.AsNumber() >= *minimum) && (!maximum || value.AsNumber() <= *maximum);
 }
 
 j::Object SanitizeModel(const j::Object& input, std::vector<std::string>* warnings) {
@@ -114,7 +115,7 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "contextReselection" || key == "postCommitLint" ||
                key == "retroactiveRecompute" || key == "sentenceCompletion" ||
                key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
-               key == "numberRewriter") {
+               key == "numberRewriter" || key == "katakanaRewriter") {
       valid = value.IsBool();
     } else if (key == "logLevel") {
       valid = IsStringEnum(value, {"error", "warn", "info", "debug"});
@@ -131,6 +132,12 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsStringEnum(value, {"auto", "npu", "gpu", "cpu"});
     } else if (key == "powerProfile") {
       valid = IsStringEnum(value, {"auto", "performance", "battery_saver"});
+    } else if (key == "inferenceThreads") {
+      valid = IsInteger(value, 0.0, 8.0);
+    } else if (key == "maxCandidates") {
+      valid = IsInteger(value, 1.0, 32.0);
+    } else if (key == "maxContextLength") {
+      valid = IsInteger(value, 0.0, 30.0);
     } else if (key == "batchRomajiPreviewStyle") {
       valid = IsStringEnum(value, {"kana", "romaji"});
     } else if (key == "batchConversionMode") {

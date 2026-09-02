@@ -49,6 +49,10 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.settings.input_mode, "hiragana");
   EXPECT_FALSE(result.settings.live_conversion);
   EXPECT_FALSE(result.settings.number_rewriter);
+  EXPECT_FALSE(result.settings.katakana_rewriter);
+  EXPECT_EQ(result.settings.inference_threads, 0);
+  EXPECT_EQ(result.settings.max_candidates, 9);
+  EXPECT_EQ(result.settings.max_context_length, 10);
   EXPECT_TRUE(result.settings.prediction_enabled);
   EXPECT_EQ(result.settings.backend_preference, "auto");
   EXPECT_TRUE(result.settings.model.enabled);
@@ -63,6 +67,10 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   WriteText(path, R"({
     "liveConversion": true,
     "numberRewriter": true,
+    "katakanaRewriter": true,
+    "inferenceThreads": 6,
+    "maxCandidates": 12,
+    "maxContextLength": 20,
     "predictionEnabled": false,
     "backendPreference": "cuda",
     "model": {
@@ -78,6 +86,10 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_EQ(result.settings.input_mode, "hiragana");
   EXPECT_TRUE(result.settings.live_conversion);
   EXPECT_TRUE(result.settings.number_rewriter);
+  EXPECT_TRUE(result.settings.katakana_rewriter);
+  EXPECT_EQ(result.settings.inference_threads, 6);
+  EXPECT_EQ(result.settings.max_candidates, 12);
+  EXPECT_EQ(result.settings.max_context_length, 20);
   EXPECT_FALSE(result.settings.prediction_enabled);
   EXPECT_EQ(result.settings.backend_preference, "cuda");
   EXPECT_EQ(result.settings.model.selected_path, "C:/models/zenz-v3.gguf");
@@ -91,6 +103,10 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_EQ(config.model_path, "C:/models/zenz-v3.gguf");
   ASSERT_TRUE(config.n_gpu_layers.has_value());
   EXPECT_EQ(*config.n_gpu_layers, 12);
+  ASSERT_TRUE(config.inference_threads.has_value());
+  EXPECT_EQ(*config.inference_threads, 6);
+  EXPECT_EQ(config.max_candidates, 12u);
+  EXPECT_EQ(config.max_context_length, 20u);
 
   std::filesystem::remove_all(dir);
 }
@@ -151,6 +167,51 @@ TEST(SettingsStoreTest, AutoBackendCanUseExplicitDefaultBackend) {
   auto explicit_default = azookey::host::ApplyRuntimeSettingsToEngineConfig(
       config, settings, azookey::host::BackendKind::Cpu);
   EXPECT_EQ(explicit_default.backend, azookey::host::BackendKind::Cpu);
+}
+
+TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeValues) {
+  const auto dir = TestDir("azookey_settings_inference_numeric");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "inferenceThreads": -5,
+    "maxCandidates": 100,
+    "maxContextLength": -1
+  })");
+
+  azookey::host::SettingsStore store(path);
+  auto result = store.Load();
+  EXPECT_EQ(result.settings.inference_threads, 0);
+  EXPECT_EQ(result.settings.max_candidates, 9);
+  EXPECT_EQ(result.settings.max_context_length, 10);
+
+  WriteText(path, R"({
+    "inferenceThreads": "8",
+    "maxCandidates": 3.5,
+    "maxContextLength": false
+  })");
+  result = store.Reload();
+  EXPECT_EQ(result.settings.inference_threads, 0);
+  EXPECT_EQ(result.settings.max_candidates, 9);
+  EXPECT_EQ(result.settings.max_context_length, 10);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
+  azookey::host::RuntimeSettings settings;
+  azookey::host::EngineConfig config;
+
+  settings.power_profile = "auto";
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+  EXPECT_EQ(config.inference_threads, 4);
+
+  settings.power_profile = "performance";
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+  EXPECT_EQ(config.inference_threads, 8);
+
+  settings.power_profile = "battery_saver";
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+  EXPECT_EQ(config.inference_threads, 2);
 }
 
 TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {

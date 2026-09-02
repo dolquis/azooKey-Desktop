@@ -129,6 +129,27 @@
       "default": "auto",
       "description": "Phase 6-B (M25): 電源プロファイル。auto は AC/バッテリ自動判定"
     },
+    "inferenceThreads": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8,
+      "default": 0,
+      "description": "DEV-406: 推論スレッド数。0 は powerProfile に従う。電源状態の自動判定を実装するまでは auto=4 の暫定値を使い、performance=8、battery_saver=2 とする"
+    },
+    "maxCandidates": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32,
+      "default": 9,
+      "description": "DEV-406: 1 回の変換で返す候補数の上限"
+    },
+    "maxContextLength": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30,
+      "default": 10,
+      "description": "DEV-406: 推論へ渡す左文脈の Unicode コードポイント数。0 は左文脈を渡さない"
+    },
     "promptPrefixByApp": {
       "type": "object",
       "default": {},
@@ -161,6 +182,11 @@
       "type": "boolean",
       "default": false,
       "description": "M62-A: true で純十進数字の候補へ漢数字、大字、丸数字、ローマ数字、16進数、8進数、2進数を注釈付きで追加"
+    },
+    "katakanaRewriter": {
+      "type": "boolean",
+      "default": false,
+      "description": "M62-B: true で純ひらがなの候補へ全角カタカナと半角カタカナを注釈付きで追加"
     },
     "autoUpdate": {
       "type": "object",

@@ -782,18 +782,16 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 ```
 %LOCALAPPDATA%\azooKey\
   config\   settings.json
-  data\     learning.tsv / user_dict.json
+  data\     learning.tsv / user_dict.json / typo_corrections.tsv（M35）/
+            auto_words.tsv（M36-A）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
-  typo_corrections.tsv   ← M35（root 直下）
-  auto_words.tsv         ← M36-A（root 直下）
 ```
 
-注: `typo_corrections.tsv`（M35）と `auto_words.tsv`（M36-A）は歴史的経緯
-により root 直下に配置されている。将来の独立 M で `data\` 配下へ統合する
-follow-up を予定（既存ユーザーデータ migration を伴うため、本 spec の M39
-範囲では維持する）。M49 backup（`docs/learning-data-management-spec.md` §2）
-の対象範囲は本レイアウトを正典とし、root 直下の TSV も含む。
+注: `typo_corrections.tsv`（M35）と `auto_words.tsv`（M36-A）は
+`learning.tsv` / `user_dict.json` と同じ `data\` 配下に置く（`UserDataPaths`
+の `data_dir` 規約に合わせる）。M49 backup（`docs/learning-data-management-spec.md`
+§2）の対象範囲は本レイアウトを正典とする。
 
 `%LOCALAPPDATA%` は `SHGetKnownFolderPath(FOLDERID_LocalAppData, ...)` で
 取得する（WIL 導入後は `wil::unique_cotaskmem_string` で受ける）。必要な
@@ -1104,51 +1102,52 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   一方、`kMaxPipeInstances` の一定数を Handshake 済み接続に予約する案は採らない。
   未 Handshake 枠が埋まれば正規 TIP の新規接続も同じように阻まれ、枯渇の窓が狭まるだけで
   塞がらないためである。
-- **6.4.8 client 受信の二相セマンティクスと deadline の優先関係** —
-  `NamedPipeClient` の受信は性質の異なる 2 つの待ちを 1 回の呼び出しに含む。
-  相ごとに上限を分けるが、**どちらの相も request レイヤ（§8.5.2）の
-  wall-clock deadline を超えて待ってはならない**。
+#### 6.4.8 client 受信の二相セマンティクスと deadline の優先関係
 
-  **スライスと request deadline は別物**: TIP の応答待ちループは
-  50ms 程度のスライスで受信 API を繰り返し呼びながら、その外側で
-  150ms（QueryCandidates fast）のような絶対 deadline を持つ
-  （`tsf-tip/src/TextService.cpp`）。スライス幅は Cancel 転送や停止確認を
-  差し挟むための刻みであって、要求 1 件の許容時間ではない。したがって
-  受信 API は **スライス幅と request の残デッドラインを別の引数として受け取る**
-  （1 引数形は「両者が等しい単発呼び出し」と定義する。実装形は DEV-744）。
-  呼び出し側が絶対 deadline を持たない場合は「なし」を渡せるものとし、その場合の
-  相 B は read ハードのみで縛る。§8.5.2 に値を持つ要求（Ping・QueryCandidates・
-  Live・Heavy）と M58-B の `T_sub` は、いずれも request deadline として渡す。
+`NamedPipeClient` の受信は性質の異なる 2 つの待ちを 1 回の呼び出しに含む。
+相ごとに上限を分けるが、**どちらの相も request レイヤ（§8.5.2）の
+wall-clock deadline を超えて待ってはならない**。
 
-  **相 A（フレーム到着待ち）**: 1 byte も届いていない間の待ち。上限はスライス幅。
-  超過時は `nullopt` を返し、接続は維持し、pipe からは何も取り出さない。
-  呼び出し側は同じ応答を次の呼び出しで受け取れる。相 A のタイムアウトは異常では
-  なく通常の制御フローであり、`docs/romaji-batch-conversion-spec.md` の
-  stale 応答 drain も「タイムアウトは応答を消費しない」というこの性質に依存する。
+**スライスと request deadline は別物**: TIP の応答待ちループは
+50ms 程度のスライスで受信 API を繰り返し呼びながら、その外側で
+150ms（QueryCandidates fast）のような絶対 deadline を持つ
+（`tsf-tip/src/TextService.cpp`）。スライス幅は Cancel 転送や停止確認を
+差し挟むための刻みであって、要求 1 件の許容時間ではない。したがって
+受信 API は **スライス幅と request の残デッドラインを別の引数として受け取る**
+（1 引数形は「両者が等しい単発呼び出し」と定義する。実装形は DEV-744）。
+呼び出し側が絶対 deadline を持たない場合は「なし」を渡せるものとし、その場合の
+相 B は read ハードのみで縛る。§8.5.2 に値を持つ要求（Ping・QueryCandidates・
+Live・Heavy）と M58-B の `T_sub` は、いずれも request deadline として渡す。
 
-  **相 B（フレーム転送中）**: 最初の 1 byte が到着した時点で相 B に入る。上限は
-  **`min(request の残デッドライン, §6.4.7 の read ハード)`**。スライス幅では
-  縛らない — 1 MiB までのフレーム（`kMaxFrameSize`）が 64KiB の chunk
-  （`kPipeBufferSize`）に分割されて届き得るため、スライス境界とフレーム境界は
-  一致せず、スライスで打ち切ると健全な応答を運んでいる接続を切ることになる。
-  一方 request の残デッドラインで縛るのは打ち切って正しい: その時刻を過ぎた
-  応答は §8.5.2 の契約上すでに失敗であり、呼び出し側は Cancel と fallback へ
-  進む。read ハードは「壊れた peer に対する上限」であって request deadline の
-  延長を許す根拠にはならない。
+**相 A（フレーム到着待ち）**: 1 byte も届いていない間の待ち。上限はスライス幅。
+超過時は `nullopt` を返し、接続は維持し、pipe からは何も取り出さない。
+呼び出し側は同じ応答を次の呼び出しで受け取れる。相 A のタイムアウトは異常では
+なく通常の制御フローであり、`docs/romaji-batch-conversion-spec.md` の
+stale 応答 drain も「タイムアウトは応答を消費しない」というこの性質に依存する。
 
-  **相 B の超過**: §6.4.7 と同じく当該接続を切断して `nullopt` を返す
-  （以後 `IsConnected()` は false）。部分的に読み出したフレームからは同期を
-  回復できないため、接続を維持したままの再開はしない。**したがって request
-  deadline 超過のうち、フレームが転送途中だった場合だけは接続断（→ M42 の
-  再接続 / 劣化モード）を伴う。** 送信が始まってもいない遅い Host は相 A で
-  タイムアウトするため接続は維持され、従来どおり stale drain で処理できる。
+**相 B（フレーム転送中）**: 最初の 1 byte が到着した時点で相 B に入る。上限は
+**`min(request の残デッドライン, §6.4.7 の read ハード)`**。スライス幅では
+縛らない — 1 MiB までのフレーム（`kMaxFrameSize`）が 64KiB の chunk
+（`kPipeBufferSize`）に分割されて届き得るため、スライス境界とフレーム境界は
+一致せず、スライスで打ち切ると健全な応答を運んでいる接続を切ることになる。
+一方 request の残デッドラインで縛るのは打ち切って正しい: その時刻を過ぎた
+応答は §8.5.2 の契約上すでに失敗であり、呼び出し側は Cancel と fallback へ
+進む。read ハードは「壊れた peer に対する上限」であって request deadline の
+延長を許す根拠にはならない。
 
-  **有界性**: 受信 1 回の所要は `min(request の残デッドライン, read ハード)` を
-  上限に有界。request deadline を渡さない呼び出しでも read ハードで有界。
+**相 B の超過**: §6.4.7 と同じく当該接続を切断して `nullopt` を返す
+（以後 `IsConnected()` は false）。部分的に読み出したフレームからは同期を
+回復できないため、接続を維持したままの再開はしない。**したがって request
+deadline 超過のうち、フレームが転送途中だった場合だけは接続断（→ M42 の
+再接続 / 劣化モード）を伴う。** 送信が始まってもいない遅い Host は相 A で
+タイムアウトするため接続は維持され、従来どおり stale drain で処理できる。
 
-  **タイムアウトを取らない API**: `Receive()` は相 A を無期限に待ち（idle な
-  接続は正常）、相 B は §6.4.7 の read ハードデッドラインで縛る。`Send()` は
-  同項の write ハードデッドラインで縛る。
+**有界性**: 受信 1 回の所要は `min(request の残デッドライン, read ハード)` を
+上限に有界。request deadline を渡さない呼び出しでも read ハードで有界。
+
+**タイムアウトを取らない API**: `Receive()` は相 A を無期限に待ち（idle な
+接続は正常）、相 B は §6.4.7 の read ハードデッドラインで縛る。`Send()` は
+同項の write ハードデッドラインで縛る。
 
 ### M40 受け入れ条件
 

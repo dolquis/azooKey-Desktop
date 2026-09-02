@@ -21,8 +21,8 @@
 |---|---|---|---|
 | `learning.tsv` | `%LOCALAPPDATA%\azooKey\data\learning.tsv` | M7 | M34 で `.enc` |
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
-| `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
-| `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\auto_words.tsv` | M36-A | M34 で `.enc` |
+| `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
+| `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
 | `user_learning.db` | `%LOCALAPPDATA%\azooKey\data\user_learning.db`（将来 SQLite 化） | M54 | M34 で wrapper |
 
 プロセス終了時にこれらのデータが保存される範囲は §11 で定める。

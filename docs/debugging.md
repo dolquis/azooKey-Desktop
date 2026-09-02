@@ -62,7 +62,8 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
      カテゴリ登録を行う。
    - `scripts/register-dev.ps1` は上記 `regsvr32` 呼び出しに加えて Host EXE の
      Run キー登録（自動起動・HKCU）まで行う。非管理者で起動すると自動で UAC 昇格する。
-     MSIX 化までは PS1 経由を推奨。
+     開発時の登録は PS1 経由を推奨（MSI の `DllRegisterServer` カスタムアクション、
+     MSIX Option A（`pkg/msix/README.md`）のいずれも同じ `regsvr32` 経路を使う）。
 3. Notepad でローマ字入力しプレエディット表示を確認（アンダーライン付き）。
 4. Space で候補、↑↓ で選択、Enter or 1〜9 で確定、Esc でキャンセル。
 5. 候補確定後、同じ reading を再変換し、確定済み候補が上位に来る（学習効果）。
@@ -150,8 +151,9 @@ cmake --build --preset windows-debug --target azookey_check
 ## 典型トラブル
 
 - **TIP は動くが候補が遅延**: Host 未起動 / 名前付きパイプ接続失敗を疑う。
-  TIP は Activate 後 5 秒間（250ms slice）リトライする。
-  Host stderr に `named pipe listening: \\.\pipe\azookey-host` が出ているか確認。
+  TIP は 250ms から 3000ms までの指数バックオフで再接続を試み続け、Deactivate まで諦めない
+  （DEV-168）。Host stderr に `named pipe listening: \\.\pipe\azookey-<SID>`
+  （SID 解決に失敗した場合は Debug ビルドに限り `azookey-default`）が出ているか確認。
 - **Full CTest が途中で止まる**: まず `build/agent-logs/*-test-*.log` と
   `build/<preset>/Testing/Temporary/LastTest.log*` を確認し、最後に開始された
   CTest case を特定する。

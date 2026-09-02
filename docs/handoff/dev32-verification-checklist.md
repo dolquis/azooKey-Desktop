@@ -9,7 +9,11 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 - ビルド構成: ☐ Debug（ログ取得可） ☐ Release / commit:
 - バックエンド: ☐ CPU(SimpleConverter) ☐ gguf / 辞書: ☐ `--mock-dict` 使用 ☐ なし
 
-> ⚠️ **変換能力の前提**: 現状 Zenzai 推論は未実装（DEV-190）。`--mock-dict <TSV>` を使わない限り、**辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。A5 を「Pass」で評価したい場合は、辞書内語または `--mock-dict` を用意すること。
+> ⚠️ **変換能力の前提**: Host は `--model <GGUF>` 指定時のみ llama.cpp 経由の実推論を行う。
+> `--model` 未指定かつ `--mock-dict <TSV>` を使わない場合、**辞書外の語は漢字に変換されない**
+> （SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。A5 を「Pass」で
+> 評価したい場合は、辞書内語、`--mock-dict`、または実 GGUF モデルの `--model` 指定のいずれかを
+> 用意すること。
 
 ## 事前確認（検証開始前）
 - ☐ `register-dev.ps1` が `TSF TIP registration complete (machine-wide).` を出力
@@ -40,8 +44,8 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 **A5. 候補変換（M4/M5）** — `watashi`（組込辞書語）→ Space で「私」等の漢字候補が出る
 ☐ PASS ☐ FAIL — 備考:（`watashi`/`nihon`/`toukyou` は組込辞書で必ず変換される。ここでの Fail は IPC/flush/候補 UI 等の **新規リグレッション**）
 
-**A5-opt. 辞書外語の変換（任意・DEV-190 確認用。結果サマリのコア 8 にはカウントしない）** — `nihongo`（辞書外語）→ Space。`--mock-dict`/学習が無ければ漢字化されない（Zenzai 未実装）
-☐ 既知(DEV-190: 漢字が出ない) ☐ PASS（`--mock-dict`/学習時に漢字化）— 備考:
+**A5-opt. 辞書外語の変換（任意。結果サマリのコア 8 にはカウントしない）** — `nihongo`（辞書外語）→ Space。`--mock-dict`/学習/実 GGUF モデル（`--model`）のいずれも無ければ漢字化されない
+☐ 既知(GGUF 未指定: 漢字が出ない) ☐ PASS（`--mock-dict`/学習/`--model`使用時に漢字化）— 備考:
 
 **A6. 候補選択（M5）** — ↑↓ で選択移動、preedit 更新
 ☐ PASS ☐ FAIL — 備考:

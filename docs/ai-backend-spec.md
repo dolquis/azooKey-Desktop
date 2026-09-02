@@ -204,10 +204,11 @@ TransformSelectedTextResponse:
 ### 4.2 M58-C: `QueryBatchConversion`（`romaji-batch-conversion-spec.md` §6 が正典）
 
 M58-C は本書では**新規定義しない**。`ai-cleanup` 経路は既存の `QueryBatchConversion`
-（`reading` / `raw_romaji` / `mode="ai-cleanup"` / `auto_punctuation` / `left_context`）を
-使い、Host の `Dispatcher` が `mode=="ai-cleanup"` のとき payload を
-`AiTransformRequest`（`task=Cleanup`、`text=reading`、`raw_romaji`、`auto_punctuation`、
-`left_context`）へ正規化して `AiBackend::Transform` を呼ぶ。`romaji-batch-conversion-spec.md`
+（`reading` / `raw_romaji` / `mode="ai-cleanup"` / `auto_punctuation`）を使い、Host の
+`Dispatcher` が `mode=="ai-cleanup"` のとき payload を `AiTransformRequest`（`task=Cleanup`、
+`text=reading`、`raw_romaji`、`auto_punctuation`）へ正規化して `AiBackend::Transform` を
+呼ぶ（`left_context` は `QueryBatchConversionRequest` に未実装。M58-C で直近確定文が
+必要になった場合に両 spec で同時に追加する）。`romaji-batch-conversion-spec.md`
 §6.1 の必須フィールド（`mode=ai-cleanup` のとき `raw_romaji` 必須）と本書 §3.2 の
 `AiTransformRequest` を相互に一致させる。`QueryBatchConversion` の `max_candidates`
 （文節あたり候補数）は Cleanup task では使わず、Host 正規化時に `max_results=1` 固定とする
@@ -300,7 +301,7 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 
 - WinHTTP セッション初期化（`WinHttpOpen`、User-Agent、HTTP/2 可否）。
 - **プロキシ解決**（システムプロキシ / WPAD / 明示設定の尊重）。
-- **TLS**（既定の証明書検証を無効化しない。`security.md` 準拠）。
+- **TLS**（既定の証明書検証を無効化しない）。
 - **タイムアウト設定**（resolve / connect / send / receive。§7.1）。
 - キャンセル（`trace_id` / `request_id` 連動。`romaji-batch-conversion-spec.md` §6.3 の
   キャンセル契約と整合）。
@@ -431,7 +432,8 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 - **暫定（M34 前）**: M16 着手時点では平文保存を許容する。README で平文保存を注意喚起
   する（roadmap M34）。`AiBackend` は読み取り時に prefix を見て平文/復号を分岐するため、
   M34 投入後も設定値の移行のみで `AiBackend` の変更を要しない。
-- キーをログ・エラーメッセージ・クラッシュダンプに出さない（§7.2、`security.md`）。
+- キーをログ・エラーメッセージ・クラッシュダンプに出さない
+  （redaction ポリシーの正典は `docs/dev-infrastructure-spec.md` §7.6）。
 
 ---
 

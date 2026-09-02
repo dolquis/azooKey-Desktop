@@ -949,28 +949,6 @@ Zenzai score 帯（§6.5）に personalization 加点を**後段で**足せる�
 | integration（モデル有・任意/手動） | 上流 `Miwa-Keita/zenz-v3.2-small-gguf` の Zenzai GGUF 配置時、**host 入力 `にほんご`（かな）**→ **最上位候補が `日本語` に完全一致**する（**A5 解消**）。「`日本語` を含む」を合格条件にしてはならない — EOS override が欠けた状態の `日本語日本語日本語` が通過してしまうため（§9.2 / DEV-743）。あわせて `わたしはがくせいです` → `私は学生です`、および `top_debug_info` に `utf8-prefix-trimmed` が出ないことを確認する。代表入力について、override 適用後の token ID 列が `gpt2-small-japanese-char` の参照実装と一致することも差分確認する。romaji `nihongo` は TIP のキーストローク→かな経路（RomajiKanaConverter）の e2e 表現であり、host/converter テスト入力には使わない（§3.1）。DEV-221 受け入れ条件 / DEV-225 実機ゲート / DEV-753 |
 | 順位 | user_dict 候補が Zenzai 候補より上（帯設計 §7.3）。学習加点で逆転し得ることの確認 |
 
----
-
-## 11. 受け入れ条件（DEV-228）
-
-- §1.2 の 6 項目が本 spec で確定し、DEV-221 が**追加の設計判断なしに**着手できる
-  （プロンプト例 §3.2、擬似コード §9.1、候補合成規則 §7、score 写像 §6.5 が揃う）。
-- 既存 spec と相互参照: `docs/zenzai-gpu-route.md`（本書へのリンク追加）、
-  `docs/copilot-pc-backend-spec.md` §4、`docs/neural-reranker-spec.md` §9。
-- `docs/README.md` 索引に本書を追加（Phase 3 / M8）。
-
----
-
-## 12. Documentation impact
-
-- [ ] Roadmap updated
-- [X] Spec docs updated（新規 `docs/zenzai-inference-spec.md`、`docs/zenzai-gpu-route.md` と
-  `docs/README.md` に相互参照を追加）
-- [X] README update not needed
-- [ ] No documentation impact
-
-Reason: Zenzai 推論コントラクトを新規 spec として確定する設計タスク。マイルストーン
-定義（roadmap M8）・受け入れ条件（定義）は不変のため roadmap は更新しない。設定キーは既存
-`model.*` 名前空間（§9.3）に載せ、`settings/mvp-settings.schema.json` の拡張（`model` への
-推論整形キー追加）は `area:settings` / M11 / DEV-203 のスコープとして本 PR では変更しない。
-状態・進捗は Linear（DEV-228）が正典。
+受け入れ条件の定義は `plans/windows-port-roadmap.md`（M8）を正典とする。設定キーは
+既存 `model.*` 名前空間（§9.3）に載せ、`settings/mvp-settings.schema.json` の拡張は
+`area:settings` / M11 のスコープとする。

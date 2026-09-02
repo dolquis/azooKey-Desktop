@@ -32,7 +32,7 @@ GUID 実値は M14 着手時に `uuidgen` で確定し、本書に追記する�
 
 #### EnumDisplayAttributeInfo 拡張
 
-`tsf-tip/src/DisplayAttributeProvider.cpp`（M3 で実装済）の enumerator に
+`tsf-tip/src/DisplayAttribute.cpp`（M3 が実装する enumerator）に
 4 新規エントリを追加。`ITfDisplayAttributeInfo::GetAttributeInfo` の返却内容：
 
 | GUID | TF_DA_COLOR_TYPE | rgb | TF_DA_LINESTYLE | bAttr |

@@ -166,10 +166,11 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
 {
   "reading": "全文かな",        // 必ず蓄積した全文かな（生ローマ字は入れない）
   "raw_romaji": "nihongo...",   // 生ローマ字。mode=ai-cleanup では必須 / neural では任意
-  "left_context": "",            // 直近確定文（任意）
   "mode": "neural",             // "neural" | "ai-cleanup"
   "auto_punctuation": false,     // ai-cleanup 時の句読点自動挿入（batchAutoPunctuation を伝搬）
   "max_candidates": 5            // 文節あたり候補数
+  // `ipc::QueryBatchConversionRequest` は "left_context" を持たない。M58-C（AI 整文）で
+  // 直近確定文を渡す必要が生じた場合は、payload revision とともに追加する
 }
 ```
 
@@ -191,13 +192,14 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
 {
   "segments": [                  // 文節構造（M58-B で複数、M58-A は単一でも可）
     {
-      "surface": "日本語",
       "reading": "にほんご",
       "candidates": [ { "surface": "...", "reading": "...", "score": 0.0 } ]
+      // segment 自体の "surface" は持たない。文節の表層形は candidates[0].surface
     }
   ],
   "full_surface": "日本語を入力する", // 全文の最良連結（Preedit 即時表示用）
-  "partial": false               // チャンク逐次変換途中は true
+  "partial": false,              // チャンク逐次変換途中は true
+  "canceled": false               // §6.3.2 の out-of-band Cancel で打ち切られた場合 true
 }
 ```
 

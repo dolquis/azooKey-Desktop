@@ -48,7 +48,7 @@ Win32 か UWP かという上記の軸とは独立しており、MVP が保証�
 
 TSF と ctfmon は対象プロセスの bitness に一致する TIP をロードする。
 本リポジトリのビルドは x64 のみであり、`tsf-tip/src/DllMain.cpp` の `DllRegisterServer` が書くのも 64 bit ビューの `HKLM\Software\Classes\CLSID` と、そこから `ITfInputProcessorProfiles` が登録する `CTF\TIP` だけである。
-`scripts/register.ps1` が呼ぶのも 64 bit の `regsvr32` である。
+`scripts/register-dev.ps1` が呼ぶのも 64 bit の `regsvr32` である。
 したがって 32 bit プロセスからは TIP が解決されず、azooKey を選べない。
 古い Office や一部のレガシーアプリ、組み込みアプリがこれに該当する。
 
@@ -217,7 +217,7 @@ TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確�
 ```
 
 `Class Id` と `Profile GUID` は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid`
-/ `kProfileGuid` と一致させる。
+/ `kTextServiceProfileGuid` と一致させる。
 
 > **署名 cert を入れたら `Publisher` を必ず差し替える**: 上記 `Publisher="CN=dolquis"`
 > は自己署名 dev cert 用の暫定値である。OV/EV cert で署名する場合、`Identity@Publisher`

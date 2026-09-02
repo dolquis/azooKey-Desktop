@@ -32,3 +32,12 @@
 - 横断確認: `cmake --build --preset windows-debug --target azookey_check`
 
 Windows の実ビルドと CTest は Windows Headless CMake Build 手順に従う。ログにはモデルのローカル絶対パスやユーザー入力を必要以上に残さない。
+
+## 実装後に失効する spec 記述の削除
+
+Zenzai ロード・推論の実装が進むと、`docs/zenzai-inference-spec.md` や
+`docs/model-management-spec.md` の「現状 X は未実装」「Y は fallback のみ」
+「Z への委譲のみで実推論を行わない」といった記述が実体と食い違う。実装 PR では
+対応する spec を grep し、実装した挙動と矛盾する現況記述を削除するか、
+「M-N が定める」という定義文に書き換えてから Documentation impact を記載する
+（詳細は `azookey-doc-governance` スキル）。

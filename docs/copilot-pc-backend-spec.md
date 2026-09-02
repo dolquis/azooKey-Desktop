@@ -817,7 +817,7 @@ public:
 | BackendSelector | `inference-host/tests/backend_selector_test.cpp` | DXCore 列挙のモック、優先順位、AC/バッテリ切替 |
 | MmapModelLoader | `inference-host/tests/mmap_loader_test.cpp` | ロード成功、ファイル不在エラー、サイズ取得 |
 | Power Status | `inference-host/tests/power_status_test.cpp` | `WM_POWERBROADCAST` で BackendSelector が呼ばれる |
-| DPI changed | `tsf-tip/tests/dpi_test.cpp` | Windows 限定。フォント再計算が呼ばれるか |
+| DPI changed | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。フォント再計算が呼ばれるか |
 | ARM64 build | CI matrix | ビルド成功 + テスト pass |
 
 ## 10. 参照

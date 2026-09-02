@@ -17,7 +17,8 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
    tsf-tip/         …… Text Services Framework TIP（in-proc DLL）
         │
         ▼  (ipc/: JSON + length-prefix Named Pipe)
-   inference-host/  …… 推論ホストプロセス（CPU、将来的に CUDA バックエンド）
+   inference-host/  …… 推論ホストプロセス（CPU。GPU/NPU バックエンドの経路決定は
+                        `docs/zenzai-gpu-route.md`）
         │
         ▼
    core/            …… OS 非依存のかな漢字変換コア
@@ -27,15 +28,20 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 ## リポジトリ構成
 
 - `tsf-tip/` — TSF Text Service DLL
-- `inference-host/` — 推論ホスト（CPU/CUDA）
+- `inference-host/` — 推論ホスト（CPU。GPU/NPU は検討中）
 - `core/` — OS 非依存の変換コア
 - `ipc/` — JSON + length-prefix IPC 定義
 - `learning/` — 学習・再ランキング
-- `bench/` — レイテンシ計測 CLI
-- `scripts/` — TIP 登録/解除 PowerShell スクリプト
-- `docs/` — 設計メモ・機能仕様・デバッグ手順
 - `settings/` — MVP 設定スキーマ
+- `settings-app/` — WinUI 3 設定アプリ
+- `bench/` — レイテンシ計測 CLI
+- `compat-test/` — アプリ互換性テストハーネス
+- `diagnostics/` — 登録・pipe・ログの診断ツール
+- `scripts/` — TIP 登録/解除・診断・VM 検証パッケージ生成の PowerShell / Python スクリプト
+- `pkg/` — MSI・MSIX パッケージング
+- `docs/` — 設計メモ・機能仕様・デバッグ手順（[`docs/README.md`](./docs/README.md) が索引）
 - `plans/` — ロードマップ・設計プラン
+- `third_party/` — header-only submodule（WIL）
 - `legacy/` — 旧 macOS 実装（参照用、未保守）
 
 ## ビルド要件
@@ -69,6 +75,11 @@ WIL は commit SHA に固定した header-only submodule で、Windows IPC の�
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
 
 `scripts/test-powershell-quality.ps1` は `PSScriptAnalyzer` と `Pester` のローカル PowerShell モジュールを使い、開発用 TIP 登録スクリプトの静的解析と安全な分岐テストを実行します。実際の machine-wide 登録は行いません。
+
+テスト・bench 実行ファイルを先にビルドしてから CTest を走らせる `azookey_check` target
+（`cmake --build --preset windows-debug --target azookey_check`）を使うと、古い実行ファイルへ
+`ctest` だけを実行する事故を避けられます。上記一式は `just ci` でも実行できます
+（[`justfile`](./justfile)）。
 
 ## 配布パッケージ
 
@@ -119,8 +130,7 @@ machine-wide 登録のため管理者権限が必要です（非管理者で実�
 
 開発計画・マイルストーン定義・v1.0 までの実行計画は
 [`plans/windows-port-roadmap.md`](./plans/windows-port-roadmap.md) を参照してください。
-機能ごとの仕様は [`docs/legacy-parity-spec.md`](./docs/legacy-parity-spec.md) 以下の
-`docs/*-spec.md` にまとまっています。
+機能ごとの仕様は [`docs/README.md`](./docs/README.md) の索引から辿れます。
 
 ## ライセンス
 

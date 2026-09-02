@@ -861,7 +861,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   注目文節を移動。
 - **前提**: M20 完了。
 - **変更対象**: `tsf-tip/src/DllMain.cpp`（3 新規 GUID）、
-  `tsf-tip/src/DisplayAttributeProvider.cpp`、`tsf-tip/src/TextService.cpp`
+  `tsf-tip/src/DisplayAttribute.cpp`、`tsf-tip/src/TextService.cpp`
   （文節ごとに `SetValue`、`ITfMouseSink` 接続）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §5、§7。
 - **受け入れ条件**:
@@ -1001,11 +1001,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   依存しない）。M36-A の承認 UI（`confirm` モード）が M30 に依存するため、
   早期着手が望ましい。M11 の最小設定 UI と UI フレームワーク（WinUI 3）を
   揃えること。
-- **変更対象**: `settings-app/`（M11 で導入した設定アプリを本格化）、
+- **変更対象**: `settings-app/`（M11 の設定アプリを本格化）、
   `ipc/src/Payloads.cpp`（M11 の最小 `UpdateConfig` を拡張）、
-  `inference-host/src/SettingsManager.cpp`（M11 の SettingsStore 最小実装を拡張）。
-  ※ 最小 IPC / 設定ストア（`UpdateConfig` / settings.json 読込・反映）は M11 で導入済み。
-  M30 はその上に UI とフル機能（横断項目・バッチ訂正等）を載せる。
+  `inference-host/src/SettingsStore.cpp`（M11 の最小実装を拡張）。
+  ※ M30 は M11 が導入する最小 IPC / 設定ストア（`UpdateConfig` /
+  settings.json 読込・反映）の上に、UI とフル機能（横断項目・バッチ訂正等）を載せる。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §3。
 - **横断**: X-3-6（バッチ訂正ビュー）、X-2-6（promptPrefixByApp UI）、
   X-2-7（Persona 表示）を本マイルストーンで設定アプリ内に集約。
@@ -1610,18 +1610,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 > 確定済み候補（または読み）から、数字の各種表記（漢数字・大字・ローマ数字・丸数字・
 > 16/8/2 進数）、記号の関連候補、半角/全角カタカナ、英字の大小・全半角、絵文字を
-> **自動派生して候補列へ注入する**追加機能。現状 `core/` `tsf-tip/` `inference-host/` に
-> 該当機能は存在しない（真のギャップ。`docs/rich-features-spec.md` は richness X-1〜X-3 を
-> 定めるが、数字/記号/絵文字の異表記展開リライターは未定義）。参考実装は karukan
-> （`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。**ロジック（アルゴリズム）と
-> データ（Mozc 由来）を分離**して扱い、karukan のコードは逐語コピーせず設計移植する。
-> M62-A（数字）→ M62-B（半角カタカナ/英字）→ M62-C（記号）→ M62-D（絵文字）の段階構成。
-> 既定 OFF・後方互換。正典仕様は `docs/candidate-rewriter-spec.md`。
+> **自動派生して候補列へ注入する**追加機能。`docs/rich-features-spec.md` は richness X-1〜X-3
+> を定めるが、数字/記号/絵文字の異表記展開リライターは同 spec の範囲外（`docs/candidate-rewriter-spec.md`
+> が正典）。参考実装は karukan（`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。
+> **ロジック（アルゴリズム）とデータ（Mozc 由来）を分離**して扱い、karukan のコードは
+> 逐語コピーせず設計移植する。M62-A（数字）→ M62-B（半角カタカナ/英字）→ M62-C（記号）→
+> M62-D（絵文字）の段階構成。既定 OFF・後方互換。M62-A は `core/src/NumberRewriter.cpp`
+> として実装済み、M62-B/C/D は未実装。
 >
 > ライセンス方針: M62-A/B はアルゴリズムのみで Mozc 由来データに依存しない（最も安全）。
 > M62-C/D が Mozc 由来データ（`symbol.tsv` / `emoji_data.tsv`、BSD 3-Clause © Google）+
-> Unicode CLDR を使う場合、各データの著作権表記保持と `THIRD_PARTY_LICENSES` 集約ファイルの
-> 新設が前提（横断依存。azooKey には現状この集約ファイルが不在）。
+> Unicode CLDR を使う場合、各データの著作権表記保持とルート `THIRD_PARTY_LICENSES`
+> （集約ファイルは既存。運用規約は `docs/licensing-policy.md`）への追記が前提（横断依存）。
 
 #### M62-A: 数字リライター（コア・最小）
 
@@ -1633,9 +1633,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `core/include/azookey/core/NumberRewriter.h`・`core/src/NumberRewriter.cpp`（新規。
   漢数字/大字/ローマ/丸数字テーブルを自前定義。Mozc 由来データ非依存）、
   `core/include/azookey/core/Candidate.h`（候補注釈 description フィールド追加）、
-  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup、および**注釈表示のための候補ウィンドウ
-  view-model 拡張**。現状 `TextService.cpp:1654-1655` は `candidate.surface` のみで候補ウィンドウを
-  構築するため、TIP ローカルの注釈付き候補型を導入し surface とは別に description を保持・表示する。
+  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup。TIP ローカルの注釈付き候補型と、
+  surface とは別に description を保持・表示する候補ウィンドウ view-model 拡張は実装済み。
   確定文字列には注釈を畳み込まない。詳細は下記「M62 横断依存」の候補注釈伝送を参照）、
   `settings/mvp-settings.schema.json`（`numberRewriter`、既定 OFF）、
   `core/tests/number_rewriter_test.cpp`（新規）。
@@ -1683,7 +1682,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: 記号の関連候補チェーン（`「`→`『【〔（`）と、かな読み→記号（`かぎかっこ`→`「」`）を
   生成する。データは Mozc `symbol.tsv` 由来。
-- **前提**: M62-A 完了 + **`THIRD_PARTY_LICENSES` 集約ファイル新設**（Mozc BSD-3 表記保持）。
+- **前提**: M62-A 完了 + ルート `THIRD_PARTY_LICENSES` への追記（Mozc BSD-3 表記保持）。
   データ駆動かつ大きくなりうるため、かな読み引きは **inference-host 側**（別プロセス）で
   `QueryCandidates` 応答に混ぜ、in-proc TIP に大データを抱えない。variant chain（小データ）は
   TIP ローカル可。chain の入口は読みではなく**候補の表層形**とする（M61 により記号キーは
@@ -1737,19 +1736,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 #### M62 横断依存・既知のテストギャップ
 
-- **横断依存**: `THIRD_PARTY_LICENSES` 集約ファイル新設（M62-C/D と M53 辞書強化の共通前提。
-  集約表記の実体は ルート `THIRD_PARTY_LICENSES`、attribution 運用規約の正典は
-  `docs/licensing-policy.md`。Mozc 由来データ取り込み時はここへ追記する）。
+- **横断依存**: ルート `THIRD_PARTY_LICENSES`（M62-C/D と M53 辞書強化の共通の追記先。
+  attribution 運用規約の正典は `docs/licensing-policy.md`。Mozc 由来データ取り込み時は
+  ここへ追記する）。
   `docs/candidate-rewriter-spec.md`（IPC payload・データ形式・ライセンス・TIP/Host 責務境界・
   確定時の学習 reading 扱いの正典）。
-- **候補注釈の伝送（必須）**: リライタ候補は注釈（description）付きで表示するため、候補表示経路の
-  拡張が前提。現状 `ipc::CandidateField`（`ipc/include/azookey/ipc/Payloads.h:52-57`）は
-  `surface`/`reading`/`score`/`source` のみ、候補ウィンドウは `candidate.surface` のみで構築
-  （`tsf-tip/src/TextService.cpp:1654-1655`）。よって (a) TIP ローカルリライタ（M62-A/B）は
-  **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で description を保持・表示し、
-  (b) Host 側データ駆動リライタ（M62-C/D）は **`ipc::CandidateField` に description フィールドを
-  追加**して伝送する。いずれも確定文字列には注釈を畳み込まない。正典は
-  `docs/candidate-rewriter-spec.md`（M62-D 分の欄定義と互換性は同 §8.2、UI-less での劣化は同 §10.4）。
+- **候補注釈の伝送**: リライタ候補は注釈（description）付きで表示する。(a) TIP ローカル
+  リライタ（M62-A/B）は **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で
+  description を保持・表示する経路が M62-A（`core::Candidate.description` /
+  `tsf-tip/src/TextService.cpp`）で実装済み。(b) Host 側データ駆動リライタ（M62-C/D）は
+  未対応で、`ipc::CandidateField`（`surface`/`reading`/`score`/`source` のみ）に
+  description フィールドを追加して伝送する必要がある。いずれも確定文字列には
+  注釈を畳み込まない。正典は `docs/candidate-rewriter-spec.md`（M62-D 分の欄定義と
+  互換性は同 §8.2、UI-less での劣化は同 §10.4）。
 - **既知のテストギャップ**: 数字（M62-A）の core 純粋関数テストは `core/tests/number_rewriter_test.cpp`
   にある（karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植したもの。逐語コピーしない）。
   残るギャップは 3 つ。(a) TIP 配線側 — 候補ウィンドウ view-model が注釈を保持・表示すること、および
@@ -1790,7 +1789,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     タグ等）の更新 cadence（四半期）、比較項目（モデルロード / 代表プロンプト /
     レイテンシ / メモリ / ライセンス）、更新を独立 PR にする規約、pin SHA /
     上流日付 / モデル互換性の記録先を `docs/dev-infrastructure-spec.md` に定義
-    （現状は pin ポリシーはあるが定期更新手順が未文書化。pin＝放置と区別する）
+    （pin ポリシーと定期更新手順は同 spec §3.4 が正典。pin＝放置と区別する）
 - **受け入れ条件**:
   - `cmake --preset windows-debug` / `windows-release` の
     configure→build→test が成功する
@@ -1814,10 +1813,10 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - Linux 補助ジョブ（非 Windows 依存部分のみビルド・テスト）
   - bench smoke の CTest 実行、artifact 整理
   - 供給網固定（リリースゲート。機能開発より優先しない）: CI で使用する
-    GitHub Actions を完全コミット SHA へ固定 + Renovate/Dependabot による
-    SHA 更新 PR、dependency review の PR 追加、Release 成果物への SBOM +
-    provenance 生成（現状は全 Action がタグ pin `@v4` 等で、Dependabot /
-    dependency review / SBOM いずれも未導入）
+    GitHub Actions を完全コミット SHA へ固定 + Dependabot による SHA 更新 PR
+    （`.github/dependabot.yml`）、dependency review の PR 追加
+    （`windows.yml` の `dependency-review` job）、Release 成果物への SBOM +
+    provenance 生成（`release.yml` の `actions/attest`）
 - **受け入れ条件**:
   - Debug / Release 両構成が CI で緑
   - Linux 補助ジョブが非 Windows 部分のテストを実行する
@@ -1947,9 +1946,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 無応答時の劣化モード（`SimpleConverter` 相当のローカルフォールバック）
   - Host 世代 ID: Host 起動ごとにランダムな世代 ID（インスタンス UUID）を
     発行し `HandshakeResponse` に載せる。TIP は世代変化を検知したら
-    pending / in-flight を破棄する（現状の handshake は `host_version` /
-    `protocol_version` のみで、Host 再起動をまたいだインスタンス切り替わりを
-    検知できない）。Handshaking→Ready 遷移に組み込む
+    pending / in-flight を破棄する（`host_generation_id` の生成・伝播・
+    `TextService::ObserveHostGeneration` による検知と破棄は実装済み。
+    本項は Handshaking→Ready 遷移全体への組み込みを完了させる）
 - **受け入れ条件**:
   - Host 停止 → 再起動で TIP が自動再接続する
   - Host 無応答時に TIP が劣化モードへ移行し入力が止まらない
@@ -2221,8 +2220,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 ## 変換品質トラック（M52〜M57）
 
-> Phase 5〜7 と独立した新トラック。改善提案
-> `azookey_windows_ime_improvement_spec.md` の §5〜§10 を取り込み、変換品質
+> Phase 5〜7 と独立した新トラック。改善提案 <!-- lint:allow section -->
+> `azookey_windows_ime_improvement_spec.md`（本リポジトリ外の企画文書、§5〜§10）を取り込み、変換品質
 > （top-k 精度 / 同音異義語選択 / 固有名詞 recall / 打ち間違え補正 /
 > latency）を数値で計測しながら段階改善する。
 >

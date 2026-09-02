@@ -30,3 +30,12 @@ Windows の実ビルドと CTest はリポジトリ指定の Windows Headless CM
 - import/export が入力検証、重複、サイズ上限、文字コード、途中失敗を扱うか。
 - secure input の情報が学習、候補履歴、テレメトリ、ログへ残らないか。
 - migration が再実行可能で、旧版からのロールフォワードと失敗時回復を説明できるか。
+
+## 実装後に失効する spec 記述の削除
+
+`typo_corrections.tsv` / `auto_words.tsv` のようにファイル配置や実装状況が
+`docs/learning-data-management-spec.md`、`docs/auto-word-registration-spec.md`、
+`docs/typo-correction-learning-spec.md` の複数箇所に書かれている領域は、実装や
+配置を変えたら全箇所を同時に直す（`data\` 配下か root 直下かのような食い違いは
+過去に実際に発生した）。「現状は未実装」「暫定的に」の類も実装 PR で削除する
+（詳細は `azookey-doc-governance` スキル）。

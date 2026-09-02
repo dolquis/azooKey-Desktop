@@ -259,10 +259,12 @@ std::vector<Candidate> ExpandKatakanaCandidates(const std::string& reading) {
     if (!DecodeNextUtf8(reading, &offset, &codepoint)) return {};
     if (codepoint == U'ー') {
       AppendUtf8(&fullwidth, codepoint);
-      halfwidth += HalfwidthKatakana(codepoint);
+      if (halfwidth_supported) halfwidth += HalfwidthKatakana(codepoint);
       continue;
     }
-    if (codepoint < U'ぁ' || codepoint > U'ゖ' || codepoint == U'ゝ' || codepoint == U'ゞ') {
+    // Iteration marks and combining dakuten are above U+3096, so this range
+    // check also excludes them as required by spec §18.2.
+    if (codepoint < U'ぁ' || codepoint > U'ゖ') {
       return {};
     }
     has_hiragana = true;

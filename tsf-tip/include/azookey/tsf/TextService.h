@@ -199,6 +199,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> batch_auto_punctuation_{false};
   std::atomic<bool> number_rewriter_{false};
   std::atomic<bool> katakana_rewriter_{false};
+  std::atomic<uint32_t> max_candidates_{9};
 
   // Last context used for preedit updates; allows Deactivate to end composition.
   ITfContext* active_context_{nullptr};

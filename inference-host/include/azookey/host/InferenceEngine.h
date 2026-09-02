@@ -31,8 +31,8 @@ struct EngineConfig {
   std::string model_path;
   std::optional<int32_t> n_gpu_layers;
   std::optional<int32_t> inference_threads;
-  uint32_t max_candidates{0};
-  uint32_t max_context_length{30};
+  uint32_t max_candidates{9};
+  uint32_t max_context_length{10};
   bool enable_live_conversion{true};
   double learning_alpha{0.8};
   size_t learning_flush_every_n{8};
@@ -47,7 +47,7 @@ struct ModelLoadOptions {
   std::string path;
   BackendKind backend{BackendKind::Cpu};
   std::optional<int32_t> n_gpu_layers;
-  // Optional benchmark/diagnostic override. Production callers use the runtime default.
+  // Optional per-load override. Production callers pass the configured runtime value.
   std::optional<int32_t> n_threads;
   // Test-only fixture switch for no-llama builds; production callers leave this false.
   bool mock_zenzai_candidates_for_tests{false};

@@ -51,8 +51,10 @@ TEST(KatakanaRewriterTest, SupportsTheFullHiraganaRangeForFullWidthConversion) {
 }
 
 TEST(KatakanaRewriterTest, RejectsAnythingOutsidePurePrecomposedHiraganaAndLongMark) {
+  // U+304B + U+3099: spec §18.2 excludes decomposed dakuten. Precomposed U+304C is accepted.
+  constexpr const char* kDecomposedGa = "\xE3\x81\x8B\xE3\x82\x99";
   for (const std::string reading :
-       {"", "ー", "愛してる", "カタカナ", "abc", "あ い", "あ。", "が", "ゝ", "ゞ"}) {
+       {"", "ー", "愛してる", "カタカナ", "abc", "あ い", "あ。", kDecomposedGa, "ゝ", "ゞ"}) {
     EXPECT_TRUE(azookey::core::ExpandKatakanaCandidates(reading).empty()) << reading;
   }
 }

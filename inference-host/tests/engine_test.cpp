@@ -262,6 +262,18 @@ TEST(InferenceEngineTest, RequestCandidateLimitCannotExceedConfiguredLimit) {
   EXPECT_EQ(candidates.size(), 2u);
 }
 
+TEST(InferenceEngineTest, ConfiguredCandidateLimitCanExceedLegacyTipLimit) {
+  auto converter = std::make_unique<ContextCapturingConverter>();
+  auto* capture = converter.get();
+  azookey::host::EngineConfig config;
+  config.max_candidates = 12;
+  azookey::host::InferenceEngine engine(std::move(converter), nullptr, config);
+
+  (void)engine.QueryCandidates("かな", "", kNowBase, nullptr, 20);
+
+  EXPECT_EQ(capture->last_context.max_candidates, 12u);
+}
+
 TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_count.tsv");
   std::remove(path.c_str());

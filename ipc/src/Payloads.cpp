@@ -115,6 +115,7 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("batch_auto_punctuation", j::Value(p.batch_auto_punctuation));
   o.emplace("number_rewriter", j::Value(p.number_rewriter));
   o.emplace("katakana_rewriter", j::Value(p.katakana_rewriter));
+  o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -137,6 +138,10 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.batch_auto_punctuation = v->GetBool("batch_auto_punctuation").value_or(false);
   p.number_rewriter = v->GetBool("number_rewriter").value_or(false);
   p.katakana_rewriter = v->GetBool("katakana_rewriter").value_or(false);
+  if (const auto max_candidates = v->GetUInt("max_candidates");
+      max_candidates && *max_candidates >= 1 && *max_candidates <= 32) {
+    p.max_candidates = static_cast<uint32_t>(*max_candidates);
+  }
   return p;
 }
 

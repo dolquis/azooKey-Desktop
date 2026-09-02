@@ -175,10 +175,13 @@ HKCU `Run` はスクリプトを実行したユーザーだけを provision す�
 - `settings.json` はファイル正典とし、設定アプリからの IPC `UpdateConfig` は payload 空の
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
 - 推論チューニング値は `inferenceThreads`、`maxCandidates`、`maxContextLength` を使う。
-  `inferenceThreads` は 0 から 8 で、0 の場合は `powerProfile` に従い `auto=4`、
+  `inferenceThreads` は 0 から 8 で、0 の場合は `powerProfile` に従う。
+  Host による AC またはバッテリ状態の自動判定を実装するまでは、`auto=4` を暫定値とし、
   `performance=8`、`battery_saver=2` とする。
   `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 10 とする。
   `maxContextLength` の単位は Unicode コードポイント数であり、0 の場合は左文脈を推論へ渡さない。
+  現在の TIP は候補要求へ左文脈を送らないため、左文脈の送信経路を実装するまでは
+  `maxContextLength` を変更しても変換結果に影響しない。
 - parse に失敗した `settings.json` は `.invalid` suffix へ隔離する。起動時は default 設定で継続し、
   `UpdateConfig` 再読込時は error を返して現在の runtime 設定を維持する。隔離の条件と、設定アプリの
   保存との排他は下記「共有ユーザーデータの writer 責務」を正典とする（`FileLock.h` の共有ファイル

@@ -44,6 +44,7 @@ constexpr std::string_view kBosTokenPiece = "<s>";
 constexpr std::string_view kEosTokenPiece = "</s>";
 constexpr double kZenzaiScoreFloor = 0.3;
 constexpr double kZenzaiScoreCeil = 1.4;
+// Keep aligned with settings/mvp-settings.schema.json maxContextLength.maximum.
 constexpr size_t kMaxLeftContextCodepoints = 30;
 constexpr int32_t kMaxNewTokens = 64;
 constexpr size_t kMaxModelCandidates = 4;

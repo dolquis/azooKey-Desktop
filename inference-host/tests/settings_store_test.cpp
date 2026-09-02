@@ -169,7 +169,7 @@ TEST(SettingsStoreTest, AutoBackendCanUseExplicitDefaultBackend) {
   EXPECT_EQ(explicit_default.backend, azookey::host::BackendKind::Cpu);
 }
 
-TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndClampRange) {
+TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeValues) {
   const auto dir = TestDir("azookey_settings_inference_numeric");
   const auto path = dir / "settings.json";
   WriteText(path, R"({
@@ -181,8 +181,8 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndClampRange) {
   azookey::host::SettingsStore store(path);
   auto result = store.Load();
   EXPECT_EQ(result.settings.inference_threads, 0);
-  EXPECT_EQ(result.settings.max_candidates, 32);
-  EXPECT_EQ(result.settings.max_context_length, 0);
+  EXPECT_EQ(result.settings.max_candidates, 9);
+  EXPECT_EQ(result.settings.max_context_length, 10);
 
   WriteText(path, R"({
     "inferenceThreads": "8",

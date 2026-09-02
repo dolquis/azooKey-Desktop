@@ -270,6 +270,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     res.batch_auto_punctuation = settings.batch_auto_punctuation;
     res.number_rewriter = settings.number_rewriter;
     res.katakana_rewriter = settings.katakana_rewriter;
+    res.max_candidates = static_cast<uint32_t>(settings.max_candidates);
   }
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
 }

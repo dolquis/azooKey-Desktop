@@ -1104,6 +1104,7 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
   std::atomic<bool> replacement_query_received{false};
   std::atomic<uint64_t> first_request_id{0};
   std::atomic<uint64_t> replacement_request_id{0};
+  std::atomic<uint32_t> first_max_candidates{0};
 
   azookey::ipc::NamedPipeServer first_server;
   ASSERT_TRUE(first_server.Start(
@@ -1118,10 +1119,14 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
           payload.host_version = "test-host";
           payload.host_generation_id = "generation-a";
           payload.accepted = true;
+          payload.max_candidates = 17;
           res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
           return res;
         }
         if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+          if (const auto payload = azookey::ipc::ParseQueryCandidatesRequest(req.payload_json)) {
+            first_max_candidates.store(payload->max_candidates);
+          }
           first_request_id.store(req.request_id);
           first_query_received.store(true);
         }
@@ -1134,6 +1139,7 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
   ASSERT_TRUE(h.Press('A'));
   h.service.start_ipc_worker_for_test();
   ASSERT_TRUE(WaitUntil([&] { return first_query_received.load(); }));
+  EXPECT_EQ(first_max_candidates.load(), 17u);
   ASSERT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.candidate_window_show_pending_for_test());
 
@@ -1186,6 +1192,7 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesBatchQueryAndUnbloc
   std::atomic<bool> replacement_query_received{false};
   std::atomic<uint64_t> first_request_id{0};
   std::atomic<uint64_t> replacement_request_id{0};
+  std::atomic<uint32_t> first_max_candidates{0};
 
   azookey::ipc::NamedPipeServer first_server;
   ASSERT_TRUE(first_server.Start(
@@ -1202,10 +1209,15 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesBatchQueryAndUnbloc
           payload.host_generation_id = "generation-a";
           payload.accepted = true;
           payload.batch_romaji_conversion = true;
+          payload.max_candidates = 23;
           res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
           return res;
         }
         if (req.type == azookey::ipc::MessageType::QueryBatchConversion) {
+          if (const auto payload =
+                  azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json)) {
+            first_max_candidates.store(payload->max_candidates);
+          }
           first_request_id.store(req.request_id);
           first_query_received.store(true);
         }
@@ -1222,6 +1234,7 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesBatchQueryAndUnbloc
   ASSERT_TRUE(h.Press(VK_SPACE));
   EXPECT_TRUE(h.service.batch_query_in_progress_for_test());
   ASSERT_TRUE(WaitUntil([&] { return first_query_received.load(); }));
+  EXPECT_EQ(first_max_candidates.load(), 23u);
 
   first_server.Stop();
 
@@ -1906,7 +1919,7 @@ TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterCommitsSurfaceWithoutAnnotation) 
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }
 
-TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesTipLocalRewriteCandidates) {
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesNumberRewriteCandidates) {
   TextServiceHarness h;
   h.service.preedit_kana_ = "123";
   h.service.set_number_rewriter_enabled_for_test(true);
@@ -1927,6 +1940,29 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesTipLocalRewriteCandida
   EXPECT_EQ(observation->chosen.surface, "123");
   ASSERT_EQ(observation->shown.size(), 1u);
   EXPECT_EQ(observation->shown[0].surface, "123");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesKatakanaRewriteCandidates) {
+  TextServiceHarness h;
+  h.service.preedit_kana_ = "かな";
+  h.service.set_katakana_rewriter_enabled_for_test(true);
+
+  std::vector<azookey::ipc::CandidateField> host_candidates(1);
+  host_candidates[0].surface = "仮名";
+  host_candidates[0].reading = "かな";
+  host_candidates[0].source = "test";
+  h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_selected_candidate_index_for_test(0);
+
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->chosen.surface, "仮名");
+  ASSERT_EQ(observation->shown.size(), 1u);
+  EXPECT_EQ(observation->shown[0].surface, "仮名");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionCommitsFrozenCandidateSnapshot) {

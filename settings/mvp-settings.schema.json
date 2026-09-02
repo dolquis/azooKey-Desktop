@@ -134,7 +134,7 @@
       "minimum": 0,
       "maximum": 8,
       "default": 0,
-      "description": "DEV-406: 推論スレッド数。0 は powerProfile に従い、auto=4、performance=8、battery_saver=2"
+      "description": "DEV-406: 推論スレッド数。0 は powerProfile に従う。電源状態の自動判定を実装するまでは auto=4 の暫定値を使い、performance=8、battery_saver=2 とする"
     },
     "maxCandidates": {
       "type": "integer",

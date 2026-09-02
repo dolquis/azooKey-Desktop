@@ -54,9 +54,10 @@ int32_t ReadInt32(const j::Object& object, const char* key, int32_t fallback) {
   return static_cast<int32_t>(value);
 }
 
-int32_t ReadClampedInt32(const j::Object& object, const char* key, int32_t fallback,
-                         int32_t minimum, int32_t maximum) {
-  return std::clamp(ReadInt32(object, key, fallback), minimum, maximum);
+int32_t ReadRangedInt32(const j::Object& object, const char* key, int32_t fallback, int32_t minimum,
+                        int32_t maximum) {
+  const int32_t value = ReadInt32(object, key, fallback);
+  return value < minimum || value > maximum ? fallback : value;
 }
 
 const j::Object* ReadObject(const j::Object& object, const char* key) {
@@ -136,11 +137,11 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.power_profile = ReadEnum(object, "powerProfile", settings.power_profile,
                                     {"auto", "performance", "battery_saver"});
   settings.inference_threads =
-      ReadClampedInt32(object, "inferenceThreads", settings.inference_threads, 0, 8);
+      ReadRangedInt32(object, "inferenceThreads", settings.inference_threads, 0, 8);
   settings.max_candidates =
-      ReadClampedInt32(object, "maxCandidates", settings.max_candidates, 1, 32);
+      ReadRangedInt32(object, "maxCandidates", settings.max_candidates, 1, 32);
   settings.max_context_length =
-      ReadClampedInt32(object, "maxContextLength", settings.max_context_length, 0, 30);
+      ReadRangedInt32(object, "maxContextLength", settings.max_context_length, 0, 30);
   settings.batch_romaji_conversion =
       ReadBool(object, "batchRomajiConversion", settings.batch_romaji_conversion);
   settings.batch_romaji_preview_style = ReadEnum(
@@ -272,6 +273,9 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings,
                                                 BackendKind auto_backend) {
   config.enable_live_conversion = settings.live_conversion;
+  // Until host-side AC/battery detection is implemented, auto uses a stable
+  // four-thread fallback. Always materialize a concrete value so model reloads
+  // preserve the runtime setting instead of falling back to llama.cpp defaults.
   const int32_t profile_threads = settings.power_profile == "performance"     ? 8
                                   : settings.power_profile == "battery_saver" ? 2
                                                                               : 4;

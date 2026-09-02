@@ -1852,6 +1852,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
     number_rewriter_.store(hpayload->number_rewriter, std::memory_order_relaxed);
     katakana_rewriter_.store(hpayload->katakana_rewriter, std::memory_order_relaxed);
+    max_candidates_.store(hpayload->max_candidates, std::memory_order_relaxed);
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
                 {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
@@ -2082,7 +2083,7 @@ void TextService::ServeConnection() {
       qreq.raw_romaji = raw_romaji;
       qreq.mode = batch_mode.empty() ? "neural" : batch_mode;
       qreq.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
-      qreq.max_candidates = 9;
+      qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
       qenv.trace_id = "tip-batch-query";
       qenv.type = MessageType::QueryBatchConversion;
       qenv.payload_json = BuildQueryBatchConversionRequest(qreq);
@@ -2090,7 +2091,7 @@ void TextService::ServeConnection() {
       QueryCandidatesRequest qreq;
       qreq.reading = reading;
       qreq.left_context = "";
-      qreq.max_candidates = 9;
+      qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
       qreq.live = true;
       qenv.trace_id = "tip-key-query";
       qenv.type = MessageType::QueryCandidates;

@@ -1,16 +1,14 @@
+#include <gtest/gtest.h>
+
 #include <string>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/core/KatakanaRewriter.h"
 
 namespace {
 
-void ExpectCandidate(const azookey::core::Candidate& candidate,
-                     const std::string& reading,
-                     const std::string& surface,
-                     const std::string& description,
+void ExpectCandidate(const azookey::core::Candidate& candidate, const std::string& reading,
+                     const std::string& surface, const std::string& description,
                      const std::string& debug_tag) {
   EXPECT_EQ(candidate.reading, reading);
   EXPECT_EQ(candidate.surface, surface);
@@ -53,8 +51,8 @@ TEST(KatakanaRewriterTest, SupportsTheFullHiraganaRangeForFullWidthConversion) {
 }
 
 TEST(KatakanaRewriterTest, RejectsAnythingOutsidePurePrecomposedHiraganaAndLongMark) {
-  for (const std::string reading : {"", "ー", "愛してる", "カタカナ", "abc", "あ い",
-                                    "あ。", "が", "ゝ", "ゞ"}) {
+  for (const std::string reading :
+       {"", "ー", "愛してる", "カタカナ", "abc", "あ い", "あ。", "が", "ゝ", "ゞ"}) {
     EXPECT_TRUE(azookey::core::ExpandKatakanaCandidates(reading).empty()) << reading;
   }
 }

@@ -169,8 +169,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   "mode": "neural",             // "neural" | "ai-cleanup"
   "auto_punctuation": false,     // ai-cleanup 時の句読点自動挿入（batchAutoPunctuation を伝搬）
   "max_candidates": 5            // 文節あたり候補数
-  // "left_context" は未実装。M58-C（AI 整文）で直近確定文を渡す必要が生じた場合に追加する
-  // （`ipc::QueryBatchConversionRequest` には現状フィールドが無い）
+  // `ipc::QueryBatchConversionRequest` は "left_context" を持たない。M58-C（AI 整文）で
+  // 直近確定文を渡す必要が生じた場合は、payload revision とともに追加する
 }
 ```
 

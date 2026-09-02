@@ -37,6 +37,16 @@ STATUS_WORD_EXEMPT_FILES = {
 # 拡張子を持たないが README/docs/plans と同格の統治対象として扱うファイル。
 EXTRA_TEXT_FILES = ["THIRD_PARTY_LICENSES"]
 
+# AGENTS.md「エージェントツール構成」が明示する意図的な非対称スキル
+# （Claude 専用スキルで .agents/skills/ には置かない）。
+MIRROR_ALLOWED_ASYMMETRIC = {"doc-coauthoring"}
+
+
+def _posix(path: str) -> str:
+    """リポジトリ相対パスを常に `/` 区切りへ統一する（Windows では os.sep が `\\`）。"""
+    return path.replace(os.sep, "/")
+
+
 STATUS_WORDS = [
     "現状", "現時点", "実装済み", "未実装", "対応済み", "着手済み", "着手前",
     "暫定", "当面", "現行", "未定", "未確定", "未検証", "残作業", "残課題",
@@ -86,7 +96,7 @@ def iter_md_files(root: str) -> list[str]:
         dirnames[:] = [d for d in dirnames if not any((rel_dir + d + "/").startswith(p) for p in EXCLUDE_DIR_PREFIXES)]
         for fn in filenames:
             if fn.endswith(".md"):
-                out.append(os.path.normpath(os.path.join(rel_dir, fn)))
+                out.append(_posix(os.path.normpath(os.path.join(rel_dir, fn))))
     return sorted(out)
 
 
@@ -149,12 +159,22 @@ def check_sections(root: str, files: list[str], result: LintResult) -> None:
                 sec_norm = sec if sec.startswith(("X", "B")) else sec.replace("-", ".")
                 candidates = [
                     target,
-                    os.path.normpath(os.path.join(os.path.dirname(f), target)),
-                    os.path.normpath(os.path.join("docs", os.path.basename(target))),
+                    _posix(os.path.normpath(os.path.join(os.path.dirname(f), target))),
+                    _posix(os.path.normpath(os.path.join("docs", os.path.basename(target)))),
                 ]
                 matched = next((c for c in candidates if c in heads), None)
                 if matched is None:
-                    continue  # 対象ファイル自体を読んでいない = 対象外
+                    # heads に無い = 走査対象の .md として見つからなかった。legacy/ や
+                    # docs/archive/ 配下など実在するが対象外のファイルは黙って除外するが、
+                    # docs/ や plans/ を指しながら実ファイルが一つも無い場合は typo の
+                    # 可能性が高いため missing target として報告する。
+                    if "section" in allow_categories_for_line(lines, i):
+                        continue
+                    on_disk = any(os.path.exists(os.path.join(root, c)) for c in candidates)
+                    in_scope = any(c.startswith(("docs/", "plans/")) for c in candidates)
+                    if not on_disk and in_scope:
+                        result.add("section", f, i + 1, f"§ 参照先ファイルが存在しない: {target}")
+                    continue
                 if sec_norm not in heads[matched]:
                     if "section" in allow_categories_for_line(lines, i):
                         continue
@@ -177,7 +197,7 @@ def check_index(root: str, result: LintResult) -> None:
             continue
         for fn in sorted(os.listdir(d)):
             if fn.endswith(".md"):
-                targets.append(os.path.normpath(os.path.join(base, fn)))
+                targets.append(_posix(os.path.normpath(os.path.join(base, fn))))
     for t in targets:
         if t in ("docs/README.md",):
             continue
@@ -191,7 +211,16 @@ def check_mirror(root: str, result: LintResult) -> None:
     agents_dir = os.path.join(root, ".agents/skills")
     if not (os.path.isdir(claude_dir) and os.path.isdir(agents_dir)):
         return
-    shared = sorted(set(os.listdir(claude_dir)) & set(os.listdir(agents_dir)))
+    claude_names = set(os.listdir(claude_dir))
+    agents_names = set(os.listdir(agents_dir))
+    for name in sorted(claude_names ^ agents_names):
+        if name in MIRROR_ALLOWED_ASYMMETRIC:
+            continue
+        if name in claude_names:
+            result.add("mirror", f".claude/skills/{name}", 1, ".agents 側にスキルディレクトリが存在しない")
+        else:
+            result.add("mirror", f".agents/skills/{name}", 1, ".claude 側にスキルディレクトリが存在しない")
+    shared = sorted(claude_names & agents_names)
     for name in shared:
         for rel in ("SKILL.md",):
             cp = os.path.join(claude_dir, name, rel)

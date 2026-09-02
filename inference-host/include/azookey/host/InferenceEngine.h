@@ -125,7 +125,7 @@ class InferenceEngine {
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec);
-  void MirrorModelRuntimeErrorLocked();
+  void MirrorModelRuntimeErrorLocked(const std::shared_ptr<core::IConverter>& converter);
   void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   bool FlushLearningStoreLocked();
@@ -133,13 +133,14 @@ class InferenceEngine {
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
 
-  std::unique_ptr<core::IConverter> fallback_converter_;
-  std::unique_ptr<core::IConverter> model_converter_;
-  core::IConverter* active_converter_{nullptr};
+  std::shared_ptr<core::IConverter> fallback_converter_;
+  std::shared_ptr<core::IConverter> model_converter_;
+  std::shared_ptr<core::IConverter> active_converter_;
   learning::LearningStore* store_;
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
   mutable std::mutex state_mutex_;
+  mutable std::mutex converter_call_mutex_;
   std::mutex model_load_mutex_;
   std::mutex model_preload_thread_mutex_;
   EngineConfig config_;

@@ -222,11 +222,23 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **前提**: M5
 - **変更対象**: `tsf-tip/`, `inference-host/`
 - **実装範囲**:
-  - `Cancel(request_id)` 送信と Host 側の早期中断（`InferenceEngine` が `atomic<bool>* cancel` をポーリング）
-  - TIP 側で最新 `request_id` のみ EditSession を要求するガード（staleness check で候補逆転を防止）
-  - 確定時（CommitSelected / CommitPreeditAsIs）に `Cancel` を送り、未処理 QueryCandidates を Host に通知
+  - `Cancel(request_id)` 送信と Host 側の早期中断。`InferenceEngine` は変換前後、
+    Zenzai は生成トークンごと、および `llama_decode` の abort callback で
+    `atomic<bool>* cancel` を確認する
+  - TIP 側で最新 `request_id` のみ候補キャッシュと EditSession 通知へ進めるガード
+    （staleness check で候補逆転を防止）
+  - `CommitSelected` は queued / in-flight `QueryCandidates` の `Cancel` を先にキューへ入れ、
+    request ID を無効化してから同期 EditSession を要求する。確定に成功した場合だけ
+    `CommitObservation` を後続送信する
+  - `CommitPreeditAsIs` も queued / in-flight `QueryCandidates` の `Cancel` と request ID の
+    無効化を同期 EditSession より先に行う
+  - Host は request の追跡開始直後に RAII cleanup を設定し、変換の return と例外の
+    どちらでも active cancellation state を回収する
 - **受け入れ条件**:
-  - 単体テスト: 連続 5 リクエストのうち最新のみが UI 反映される（staleness check）
+  - 単体テスト: 200ms 内に 10 リクエストが発行される条件を模擬し、最新応答だけが
+    UI 反映対象になる（wall clock には依存しない）
+  - `MarkLatest` / `IsLatest` の並行テストを ThreadSanitizer 付きで実行し、race を検出しない
+  - 確定時の Cancel、stale 応答破棄、例外時 cleanup の回帰テストが緑
   - 手動: 早打ちしても候補が逆転しない
 
 ### M11: 設定 UI とパッケージング

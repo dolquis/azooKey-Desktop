@@ -94,6 +94,7 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp
     LABEL tsf-com
     TIMEOUT 15)

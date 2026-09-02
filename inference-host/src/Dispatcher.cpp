@@ -168,7 +168,9 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     case ipc::MessageType::UpdateConfig:
       return HandleUpdateConfig(req);
     default:
-      return std::nullopt;
+      // Preserve the request type in the response envelope so future clients can
+      // correlate the protocol error without waiting for a timeout.
+      return MakeResponse(req, R"({"ok":false,"error":"unsupported_message_type"})");
   }
 }
 

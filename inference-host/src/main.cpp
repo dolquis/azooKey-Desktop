@@ -26,6 +26,7 @@
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
+#include "azookey/host/HostArgs.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
@@ -234,62 +235,25 @@ int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
   const auto default_backend = config.backend;
-  std::optional<std::filesystem::path> explicit_learning_path;
-  std::optional<std::filesystem::path> explicit_user_dict_path;
-  std::string mock_dict_path;
-  bool explicit_backend = false;
-  bool explicit_model_path = false;
-  bool pipe_mode = false;
-  std::string pipe_name;
-  std::string handshake_token = GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN");
-  std::optional<std::vector<std::string>> userdict_args;
-
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    if (arg == "userdict") {
-      userdict_args.emplace();
-      for (int j = i + 1; j < argc; ++j) {
-        userdict_args->push_back(argv[j]);
-      }
-      break;
-    } else if (arg == "--cuda") {
-      config.backend = azookey::host::BackendKind::Cuda;
-      explicit_backend = true;
-    } else if (arg == "--cpu") {
-      config.backend = azookey::host::BackendKind::Cpu;
-      explicit_backend = true;
-    } else if (arg == "--backend" && i + 1 < argc) {
-      const std::string value = argv[++i];
-      if (value == "cuda") {
-        config.backend = azookey::host::BackendKind::Cuda;
-        explicit_backend = true;
-      } else if (value == "cpu") {
-        config.backend = azookey::host::BackendKind::Cpu;
-        explicit_backend = true;
-      }
-    } else if (arg == "--model" && i + 1 < argc) {
-      config.model_path = argv[++i];
-      explicit_model_path = true;
-    } else if (arg == "--learning" && i + 1 < argc) {
-      explicit_learning_path = argv[++i];
-    } else if (arg == "--user-dict" && i + 1 < argc) {
-      explicit_user_dict_path = argv[++i];
-    } else if (arg == "--mock-dict" && i + 1 < argc) {
-      mock_dict_path = argv[++i];
-    } else if (arg == "--pipe") {
-      pipe_mode = true;
-      if (i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0) {
-        pipe_name = argv[++i];
-      }
-    } else if (arg == "--pipe-name" && i + 1 < argc) {
-      pipe_mode = true;
-      pipe_name = argv[++i];
-    } else if (arg == "--handshake-token" && i + 1 < argc) {
-      handshake_token = argv[++i];
-    } else if (arg == "--stdio") {
-      pipe_mode = false;
-    }
+  std::vector<std::string> raw_args;
+  raw_args.reserve(argc > 1 ? static_cast<size_t>(argc - 1) : 0);
+  for (int i = 1; i < argc; ++i) raw_args.emplace_back(argv[i]);
+  auto parsed_args = azookey::host::ParseHostArgs(raw_args, std::move(config),
+                                                  GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN"));
+  if (!parsed_args) {
+    std::cerr << "error: " << *parsed_args.error << std::endl;
+    return 2;
   }
+  config = std::move(parsed_args.args.config);
+  auto explicit_learning_path = std::move(parsed_args.args.explicit_learning_path);
+  auto explicit_user_dict_path = std::move(parsed_args.args.explicit_user_dict_path);
+  auto mock_dict_path = std::move(parsed_args.args.mock_dict_path);
+  const bool explicit_backend = parsed_args.args.explicit_backend;
+  const bool explicit_model_path = parsed_args.args.explicit_model_path;
+  const bool pipe_mode = parsed_args.args.pipe_mode;
+  auto pipe_name = std::move(parsed_args.args.pipe_name);
+  auto handshake_token = std::move(parsed_args.args.handshake_token);
+  auto userdict_args = std::move(parsed_args.args.userdict_args);
 
   azookey::host::UserDataPathInputs path_inputs;
   path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();

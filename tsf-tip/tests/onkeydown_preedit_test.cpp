@@ -1942,6 +1942,44 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesNumberRewriteCandidate
   EXPECT_EQ(observation->shown[0].surface, "123");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedQueuesCancelBeforeCommitObservation) {
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+
+  std::vector<azookey::ipc::CandidateField> host_candidates(1);
+  host_candidates[0].surface = "蚊";
+  host_candidates[0].reading = "か";
+  host_candidates[0].source = "test";
+  h.service.set_rewritten_cached_candidates_for_test("か", std::move(host_candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_selected_candidate_index_for_test(0);
+
+  FakeCompositionAttachment attachment(h);
+  ASSERT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+
+  const auto types = h.service.queued_ipc_types_for_test();
+  ASSERT_EQ(types.size(), 2u);
+  EXPECT_EQ(types[0], azookey::ipc::MessageType::Cancel);
+  EXPECT_EQ(types[1], azookey::ipc::MessageType::CommitObservation);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsQueuesCancelWithoutObservation) {
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+
+  const auto types = h.service.queued_ipc_types_for_test();
+  ASSERT_EQ(types.size(), 1u);
+  EXPECT_EQ(types[0], azookey::ipc::MessageType::Cancel);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, CommitObservationExcludesKatakanaRewriteCandidates) {
   TextServiceHarness h;
   h.service.preedit_kana_ = "かな";

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
@@ -32,7 +33,7 @@ struct UserWord {
 // Optional fields (cid, mid, value) are omitted from JSON when absent.
 class UserDictionary {
  public:
-  explicit UserDictionary(std::string path);
+  explicit UserDictionary(std::filesystem::path path);
 
   // Load entries from disk. Missing file -> empty dictionary, returns true.
   // Malformed file -> dictionary becomes empty, file is quarantined when
@@ -67,12 +68,12 @@ class UserDictionary {
   size_t Size() const;
   void Clear();
 
-  const std::string& path() const { return path_; }
+  const std::filesystem::path& path() const { return path_; }
 
  private:
   bool LoadImpl(bool quarantine_corrupt_file);
 
-  std::string path_;
+  std::filesystem::path path_;
   std::map<std::string, std::vector<UserWord>> by_ruby_;
   bool save_blocked_by_corrupt_load_{false};
 };

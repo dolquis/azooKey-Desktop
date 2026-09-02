@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <string_view>
@@ -37,7 +38,7 @@ struct PrefixLookupResult {
 
 class LearningStore {
  public:
-  explicit LearningStore(std::string path);
+  explicit LearningStore(std::filesystem::path path);
   virtual ~LearningStore() = default;
 
   bool Load();
@@ -58,7 +59,7 @@ class LearningStore {
                        uint64_t now_epoch_sec) const;
 
  private:
-  std::string path_;
+  std::filesystem::path path_;
   std::map<std::string, std::map<std::string, LearningRecord>> table_;
   mutable bool dirty_{false};
 };

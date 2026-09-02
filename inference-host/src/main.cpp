@@ -267,9 +267,6 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const std::string learning_path = user_paths->learning_path.string();
-  const std::string user_dict_path = user_paths->user_dict_path.string();
-
   if (lookup_args) {
     std::string parse_error;
     auto cli_options = azookey::host::ParseLookupCliArgs(*lookup_args, &parse_error);
@@ -307,7 +304,7 @@ int main(int argc, char** argv) {
       return 2;
     }
     azookey::host::UserDictCliRunOptions run_options;
-    run_options.user_dict_path = user_dict_path;
+    run_options.user_dict_path = user_paths->user_dict_path;
     run_options.pipe_name = pipe_name.empty() ? azookey::ipc::DefaultPipeName() : pipe_name;
     run_options.handshake_token = handshake_token;
     auto result = azookey::host::RunUserDictCli(*cli_options, run_options);
@@ -363,7 +360,7 @@ int main(int argc, char** argv) {
   const bool learning_file_existed =
       std::filesystem::exists(user_paths->learning_path, learning_path_error) &&
       !learning_path_error;
-  azookey::learning::LearningStore store(learning_path);
+  azookey::learning::LearningStore store(user_paths->learning_path);
   const bool learning_loaded = store.Load();
   const bool learning_load_failed = learning_file_existed && !learning_loaded;
   runtime_log.Log(
@@ -373,7 +370,7 @@ int main(int argc, char** argv) {
       {{"result",
         SafeLogText(learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"))}});
 
-  azookey::learning::UserDictionary user_dict(user_dict_path);
+  azookey::learning::UserDictionary user_dict(user_paths->user_dict_path);
   const bool user_dict_loaded = user_dict.Load();
   runtime_log.Log(user_dict_loaded ? azookey::logging::RuntimeLogLevel::Info
                                    : azookey::logging::RuntimeLogLevel::Warn,

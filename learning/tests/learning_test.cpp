@@ -409,3 +409,31 @@ TEST(LearningStoreTest, LookupPrefixExcludesCorrectionRecordAtZeroWeight) {
   EXPECT_EQ(result.matches.front().surface, "selected");
   EXPECT_EQ(result.scanned_records, 2u);
 }
+
+#ifdef _WIN32
+TEST(LearningStoreTest, NonAsciiWindowsPathRoundTripsWithoutNarrowing) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  const auto root = std::filesystem::temp_directory_path() / L"azookey_非ASCII_学習";
+  const auto path = root / L"履歴.tsv";
+  std::filesystem::remove_all(root);
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほんご", "日本語", 2.0, kNow);
+  ASSERT_TRUE(store.Save());
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  azookey::learning::LearningStore loaded(path);
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_DOUBLE_EQ(loaded.Score("にほんご", "日本語", kNow), 2.0);
+
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output);
+    output << "malformed row";
+  }
+  azookey::learning::LearningStore malformed(path);
+  EXPECT_TRUE(malformed.Load());
+
+  std::filesystem::remove_all(root);
+}
+#endif

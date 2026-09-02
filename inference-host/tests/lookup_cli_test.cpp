@@ -31,13 +31,13 @@ TestPaths PreparePaths(const char* name) {
 }
 
 void SeedStores(const TestPaths& paths) {
-  azookey::learning::UserDictionary dictionary(paths.user_dict.string());
+  azookey::learning::UserDictionary dictionary(paths.user_dict);
   dictionary.Add({"日本", "にほん", 1285, 501, -5.0});
   dictionary.Add({"日本語", "にほんご", std::nullopt, std::nullopt, -4.0});
   dictionary.Add({"食べる", "たべる", std::nullopt, std::nullopt, std::nullopt});
   ASSERT_TRUE(dictionary.Save());
 
-  azookey::learning::LearningStore learning(paths.learning.string());
+  azookey::learning::LearningStore learning(paths.learning);
   learning.Observe("にほん", "二本", 1.5, 100);
   learning.Observe("にほんばし", "日本橋", 2.5, 200);
   learning.Observe("たべる", "食べる", 3.5, 300);
@@ -211,3 +211,23 @@ TEST(LookupCliTest, MalformedUserDictionaryIsNotQuarantinedOrChanged) {
   EXPECT_EQ(corrupt_files, 0u);
   std::filesystem::remove_all(paths.root);
 }
+
+#ifdef _WIN32
+TEST(LookupCliTest, ReadsStoresFromNonAsciiWindowsPaths) {
+  TestPaths paths;
+  paths.root = std::filesystem::temp_directory_path() / L"azookey_非ASCII_検索";
+  paths.learning = paths.root / L"学習.tsv";
+  paths.user_dict = paths.root / L"ユーザー辞書.json";
+  std::filesystem::remove_all(paths.root);
+  std::filesystem::create_directories(paths.root);
+  SeedStores(paths);
+
+  const auto options = Parse({"--mode", "exact", "--query", "にほん"});
+  ASSERT_TRUE(options);
+  const auto result = RunLookup(*options, paths);
+  EXPECT_EQ(result.exit_code, 0);
+  EXPECT_EQ(result.output_lines.size(), 2u);
+
+  std::filesystem::remove_all(paths.root);
+}
+#endif

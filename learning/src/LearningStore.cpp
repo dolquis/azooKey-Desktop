@@ -85,8 +85,11 @@ std::string UnescapeTsvField(const std::string& value) {
   return unescaped;
 }
 
-void LogMalformedLine(const std::string& path, size_t line_number) {
-  std::cerr << "LearningStore: skipped malformed record in " << path << ":" << line_number << '\n';
+void LogMalformedLine(const std::filesystem::path& path, size_t line_number) {
+  const auto utf8_path = path.u8string();
+  const std::string display_path(reinterpret_cast<const char*>(utf8_path.data()), utf8_path.size());
+  std::cerr << "LearningStore: skipped malformed record in " << display_path << ":" << line_number
+            << '\n';
 }
 
 bool IsAsciiWhitespace(char ch) {
@@ -185,7 +188,7 @@ std::string SerializedKey(const std::string& reading, const std::string& surface
 }
 }  // namespace
 
-LearningStore::LearningStore(std::string path) : path_(std::move(path)) {}
+LearningStore::LearningStore(std::filesystem::path path) : path_(std::move(path)) {}
 
 bool LearningStore::Load() {
   table_.clear();

@@ -23,7 +23,7 @@ std::filesystem::path TestPath(const char* name) {
 
 azookey::host::UserDictCliRunOptions DirectRunOptions(const std::filesystem::path& path) {
   azookey::host::UserDictCliRunOptions options;
-  options.user_dict_path = path.string();
+  options.user_dict_path = path;
   options.prefer_pipe = false;
   return options;
 }
@@ -116,6 +116,26 @@ TEST(UserDictCliTest, DirectAddListRemoveRoundTrip) {
 
   std::filesystem::remove_all(path.parent_path());
 }
+
+#ifdef _WIN32
+TEST(UserDictCliTest, DirectModePreservesNonAsciiWindowsPath) {
+  const auto root = std::filesystem::temp_directory_path() / L"azookey_非ASCII_CLI";
+  const auto path = root / L"ユーザー辞書.json";
+  std::filesystem::remove_all(root);
+
+  const auto add = Parse({"add", "--reading", "にほんご", "--surface", "日本語"});
+  ASSERT_TRUE(add);
+  const auto result = azookey::host::RunUserDictCli(*add, DirectRunOptions(path));
+  ASSERT_EQ(result.exit_code, 0);
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  azookey::learning::UserDictionary loaded(path);
+  ASSERT_TRUE(loaded.Load());
+  ASSERT_EQ(loaded.Lookup("にほんご").size(), 1u);
+
+  std::filesystem::remove_all(root);
+}
+#endif
 
 TEST(UserDictCliTest, DirectDryRunDoesNotMutate) {
   const auto path = TestPath("azookey_userdict_cli_dryrun");

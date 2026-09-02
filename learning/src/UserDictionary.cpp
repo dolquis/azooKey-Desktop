@@ -40,8 +40,7 @@ std::optional<UserWord> WordFromJson(const j::Value& v) {
   return w;
 }
 
-bool QuarantineCorruptFile(const std::string& path) {
-  const std::filesystem::path source(path);
+bool QuarantineCorruptFile(const std::filesystem::path& source) {
   if (!std::filesystem::exists(source)) return true;
 
   const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
@@ -61,7 +60,7 @@ bool QuarantineCorruptFile(const std::string& path) {
 
 }  // namespace
 
-UserDictionary::UserDictionary(std::string path) : path_(std::move(path)) {}
+UserDictionary::UserDictionary(std::filesystem::path path) : path_(std::move(path)) {}
 
 bool UserDictionary::Load() { return LoadImpl(true); }
 

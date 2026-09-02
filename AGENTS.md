@@ -51,6 +51,9 @@ gh pr create \
   セキュリティリスクなど影響度の高い欠陥）が混入していないかを点検し、
   検出した場合は push 前に必ず修正する。
 - セルフレビューで問題が見つかった場合は、push前に修正する。
+- `README.md` / `docs/` / `plans/` / `.claude/skills/` / `.agents/skills/` を変更した場合は
+  `python3 scripts/docs-lint.py` を実行し、新たに増えた warning が正当か確認する
+  （詳細は `azookey-doc-governance` スキル）。
 
 ## レビュー指摘事項の追跡・修正方針
 
@@ -214,6 +217,22 @@ Codex safety checks（無許可の Codex delegate / mention、放置された de
 - 上記の判断結果は PR 本文の「Documentation impact」欄に必ず記載し、更新しなかった
   場合はその理由も書く。
 
+### 状態語・実体参照・正典重複の禁止
+
+以下は README / `docs/` / `plans/` 全般に適用する（詳細と語彙リストは
+`azookey-doc-governance` スキル参照）。
+
+- 「現状」「実装済み」「未実装」「暫定」「完了後」等の状態語を書かない。状態は
+  Linear が正典。書きたくなったら定義文（「X は M-N が実装する」等）に言い換える。
+- コード参照に行番号・実測件数（CTest 件数など）を書かない。ファイル名・関数名までに
+  留める。行番号はリファクタで即座に陳腐化する。
+- ある文書が別の文書を「正典」と宣言したら、参照される側にも「本節は X から参照される」
+  の 1 行を置く（双方向宣言）。片方向の宣言は参照先の変更に追随しない。
+- 一回限りの引き継ぎ文書は DoD 達成後に `docs/archive/` へ移す。継続的に使う実機検証・
+  診断手順は `docs/handoff/` に残し、`docs/README.md`「運用」表に索引する。対応する
+  spec がある場合はそこから正典として参照させる（該当する spec を持たない汎用手順は
+  `docs/README.md` の索引のみでよい）。
+
 ### PR 本文テンプレート: Documentation impact
 
 PR 本文には次のチェック項目を含め、該当するものにチェックを入れる。
@@ -225,6 +244,9 @@ PR 本文には次のチェック項目を含め、該当するものにチェ�
 - [ ] Spec docs updated
 - [ ] README update not needed
 - [ ] No documentation impact
+- [ ] docs/README.md index updated (new/renamed docs, moved to archive)
+- [ ] docs-lint run (`python3 scripts/docs-lint.py`); new warnings reviewed
+- [ ] Stale spec text removed (status words, superseded "現状" notes made true by this change)
 
 Reason:
 ```
@@ -251,7 +273,9 @@ Reason:
 本リポジトリには Claude Code と Codex CLI 双方のための共有設定がコミット
 されている。ビルド・CTest・bench 実行・TIP 登録の標準手順は `README.md` を
 参照する (重複記述はしない)。本セクションはエージェント固有の構成と運用ルール
-のみを扱う。再導入や横展開のための詳細手順書は `docs/handoff/` にある。
+のみを扱う。TIP 登録・実機検証の恒常的な runbook は `docs/README.md`「運用」に
+索引がある `docs/handoff/` 配下（一部は対応する `docs/*-spec.md` が正典として参照）。
+完了済みのセットアップ作業記録・再導入テンプレートは `docs/archive/` にある。
 環境起因の失敗を切り分ける初動では `just doctor --fix-hints` を使う。機械可読な
 結果が必要な場合は `just doctor --json` を使う。
 
@@ -295,6 +319,7 @@ macOS / Linux のメンテナがリポジトリを開いた場合、`powershell`
 - `azookey-inference-model-workflow` … Zenzai / GGUF の runtime tier、fallback、実モデル検証手順。
 - `azookey-settings-schema-evolution` … 設定 schema、runtime 既定値、migration、CI の同期手順。
 - `azookey-packaging-release-workflow` … MSI、MSIX、署名、TIP 登録、VM 検証、Release CI の変更手順。
+- `azookey-doc-governance` … README / AGENTS.md / CLAUDE.md / docs/ / plans/ を変更するときの正典分離・状態語禁止・実体照合・索引更新の手順。`scripts/docs-lint.py` の使い方も含む。
 - `japanese-tech-writing` … 日本語の技術文書・原稿の文章規範。`dolquis/agent-ops` を origin とする共有スキルのベンダリングコピーで、本 repo では本文を直接編集しない（改訂は origin 側で行い伝播する）。
 - `argument-gap-edit` … 論証のギャップ・割り込み・見せびらかしを検出して再配置する編集スキル。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
 - `japanese-doc-workflow` … 日本語ドキュメントの統合ワークフロー（上記の文章規範スキルと `doc-coauthoring` を束ねる）。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
@@ -314,6 +339,8 @@ Claude Code 固有の `allowed-tools:` などのフロントマターは各ハ�
 - `uv` (`uvx` コマンド) のインストール — `windows-mcp` の起動に必要
 - `clangd.exe` — `clangd-lsp` プラグイン用 (VS C++ ワークロードまたは LLVM
   公式インストーラ経由)
+- `just`（[just.systems](https://just.systems)）— 任意。`justfile` の configure/build/test/
+  doctor 等のレシピをまとめて呼べる（無くても README の cmake/ctest コマンドで代替可）
 - WSL から Claude Code を使う場合は `powershell.exe` 経由で Windows 側を駆動
 
 ## 日本語技術文書の執筆・推敲

@@ -17,5 +17,8 @@
 - [ ] Spec docs updated
 - [ ] README update not needed
 - [ ] No documentation impact
+- [ ] docs/README.md index updated (new/renamed docs, moved to archive)
+- [ ] docs-lint run (`python3 scripts/docs-lint.py`); new warnings reviewed
+- [ ] Stale spec text removed (status words, superseded "現状" notes made true by this change)
 
 Reason:

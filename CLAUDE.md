@@ -6,7 +6,7 @@
 
 ## アドバイザー（Fable）への相談
 
-本節は Claude Code 専用（Advisor は Claude Code 固有機能のため）。判断を誤るとコストの大きい局面では、Advisor 機能でアドバイザー（Fable）に相談してから進める。助言は批判的に検討し、最終判断は自分で行う。前提としてアドバイザーを Fable に設定しておくこと（`settings.json` の `advisorModel: "fable"`、または `/advisor fable`）。未設定の環境では本節は無視してよい。
+本節は Claude Code 専用（Advisor は Claude Code 固有機能のため）。判断を誤るとコストの大きい局面では、Advisor 機能でアドバイザー（Fable）に相談してから進める。助言は批判的に検討し、最終判断は自分で行う。アドバイザーは `.claude/settings.json` の `advisorModel: "fable"` でリポジトリ設定済み。この設定が無い環境（フォーク先等）では本節は無視してよい。
 
 相談する場面の例:
 

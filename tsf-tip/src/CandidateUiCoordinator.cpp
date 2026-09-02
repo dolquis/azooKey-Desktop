@@ -8,6 +8,14 @@
 
 namespace azookey::tsf {
 
+#ifdef _DEBUG
+#define AZOOKEY_ASSERT_CANDIDATE_UI_THREAD() ui_thread_affinity_.BindOrAssertCurrentThread()
+#define AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD() ui_thread_affinity_.AssertCurrentThreadIfBound()
+#else
+#define AZOOKEY_ASSERT_CANDIDATE_UI_THREAD() ((void)0)
+#define AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD() ((void)0)
+#endif
+
 namespace {
 
 constexpr DWORD kAllInitialCandidateFlags = TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION |
@@ -24,23 +32,38 @@ std::vector<std::wstring> CandidateSurfaces(const std::vector<CandidateViewItem>
 
 CandidateUiCoordinator::~CandidateUiCoordinator() { Destroy(); }
 
-bool CandidateUiCoordinator::Create() { return own_window_.Create(); }
+bool CandidateUiCoordinator::Create() {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
+  return own_window_.Create();
+}
 
 void CandidateUiCoordinator::Destroy() {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   EndUI();
   own_window_.Destroy();
   ReleaseUiElementMgr();
 }
 
-void CandidateUiCoordinator::SetUiLessMode(bool ui_less) { ui_less_mode_ = ui_less; }
+void CandidateUiCoordinator::SetUiLessMode(bool ui_less) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  ui_less_mode_ = ui_less;
+}
 
 void CandidateUiCoordinator::SetOnClick(CandidateWindow::OnClickFn fn) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
   own_window_.SetOnClick(std::move(fn));
 }
 
 void CandidateUiCoordinator::SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn,
                                                   void* context) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
   own_window_.SetOnCandidatesReady(fn, context);
+}
+
+void CandidateUiCoordinator::SetBeginObserver(CandidateUiBeginObserver observer, void* context) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  begin_observer_ = observer;
+  begin_observer_context_ = context;
 }
 
 void CandidateUiCoordinator::PostCandidatesReady() { own_window_.PostCandidatesReady(); }
@@ -48,10 +71,14 @@ void CandidateUiCoordinator::PostCandidatesReady() { own_window_.PostCandidatesR
 HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
                                         const std::vector<CandidateViewItem>& items,
                                         int selected_idx) {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   if (items.empty()) return EndUI();
 
   const HRESULT end_hr = EndUI();
-  if (FAILED(end_hr)) return end_hr;
+  if (FAILED(end_hr)) {
+    NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
+    return end_hr;
+  }
 
   items_ = items;
   selected_idx_ = ClampSelection(selected_idx);
@@ -59,7 +86,11 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
 
   auto* element =
       new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
-  if (!element) return E_OUTOFMEMORY;
+  if (!element) {
+    NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
+                        kInvalidUiElementId);
+    return E_OUTOFMEMORY;
+  }
   ui_element_ = element;
   ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });
 
@@ -69,10 +100,13 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       ReleaseUiElement();
       items_.clear();
       selected_idx_ = -1;
-      return FAILED(hr) ? hr : E_NOINTERFACE;
+      const HRESULT result = FAILED(hr) ? hr : E_NOINTERFACE;
+      NotifyBeginObserver(result, false, false, FALSE, kInvalidUiElementId);
+      return result;
     }
     showing_ = true;
     OnPbShown(true);
+    NotifyBeginObserver(S_OK, false, false, FALSE, kInvalidUiElementId);
     return S_OK;
   }
 
@@ -81,6 +115,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   hr = ui_element_mgr_->BeginUIElement(static_cast<ITfUIElement*>(ui_element_), &pb_show,
                                        &ui_element_id);
   if (FAILED(hr)) {
+    NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
     ReleaseUiElement();
     items_.clear();
     selected_idx_ = -1;
@@ -96,14 +131,17 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     if (FAILED(hr)) {
       const HRESULT cleanup_hr = EndUI();
       UNREFERENCED_PARAMETER(cleanup_hr);
+      NotifyBeginObserver(hr, true, true, pb_show, ui_element_id);
       return hr;
     }
   }
+  NotifyBeginObserver(S_OK, true, true, pb_show, ui_element_id);
   return S_OK;
 }
 
 HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& items,
                                          int selected_idx) {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   if (items.empty()) return EndUI();
   if (!showing_ || !ui_element_) return S_OK;
 
@@ -122,6 +160,7 @@ HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& i
 }
 
 HRESULT CandidateUiCoordinator::EndUI() {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   HRESULT result = S_OK;
   own_window_.Hide();
   if (showing_ && ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
@@ -137,6 +176,7 @@ HRESULT CandidateUiCoordinator::EndUI() {
 }
 
 HRESULT CandidateUiCoordinator::MoveSelection(int delta) {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   if (items_.empty()) return S_OK;
   const int count = static_cast<int>(items_.size());
   selected_idx_ = internal::WrapCandidateSelectionIndex(selected_idx_, delta, count);
@@ -175,6 +215,7 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
 }
 
 void CandidateUiCoordinator::OnElementShow(bool show) {
+  AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   if (!show) {
     tip_draws_ = false;
     own_window_.Hide();
@@ -204,9 +245,27 @@ void CandidateUiCoordinator::ReleaseUiElementMgr() {
   }
 }
 
+void CandidateUiCoordinator::NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available,
+                                                 bool pb_show_available, BOOL pb_show,
+                                                 DWORD ui_element_id) const noexcept {
+  if (!begin_observer_) return;
+  CandidateUiBeginObservation observation;
+  observation.result = result;
+  observation.ui_element_id = ui_element_id;
+  observation.ui_less = ui_less_mode_;
+  observation.ui_element_mgr_available = ui_element_mgr_available;
+  observation.pb_show_available = pb_show_available;
+  observation.pb_show = pb_show_available && pb_show != FALSE;
+  observation.tip_draws = SUCCEEDED(result) && tip_draws_;
+  begin_observer_(observation, begin_observer_context_);
+}
+
 int CandidateUiCoordinator::ClampSelection(int selected_idx) const {
   if (items_.empty()) return -1;
   return std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
 }
 
 }  // namespace azookey::tsf
+
+#undef AZOOKEY_ASSERT_CANDIDATE_UI_THREAD
+#undef AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD

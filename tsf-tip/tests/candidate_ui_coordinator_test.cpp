@@ -9,11 +9,17 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <limits>
+#include <optional>
+#include <thread>
 #include <vector>
 
 #include "../src/CandidateSelection.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#ifdef _DEBUG
+#include "azookey/tsf/DebugThreadAffinity.h"
+#endif
 
 namespace {
 
@@ -152,7 +158,33 @@ ITfCandidateListUIElement* QueryCandidateList(ITfUIElement* element) {
   return candidates;
 }
 
+struct BeginObservationCapture {
+  int count{0};
+  std::optional<azookey::tsf::CandidateUiBeginObservation> observation;
+};
+
+void CaptureBeginObservation(const azookey::tsf::CandidateUiBeginObservation& observation,
+                             void* context) noexcept {
+  auto& capture = *static_cast<BeginObservationCapture*>(context);
+  ++capture.count;
+  capture.observation = observation;
+}
+
 }  // namespace
+
+#ifdef _DEBUG
+TEST(TsfTipDebugThreadAffinityTest, DistinguishesTheBoundThread) {
+  azookey::tsf::DebugThreadAffinity affinity;
+  affinity.BindToCurrentThread();
+  EXPECT_TRUE(affinity.IsCurrentThread());
+  affinity.AssertCurrentThread();
+
+  std::atomic<bool> other_thread_matches{true};
+  std::thread other([&] { other_thread_matches.store(affinity.IsCurrentThread()); });
+  other.join();
+  EXPECT_FALSE(other_thread_matches.load());
+}
+#endif
 
 TEST(TsfTipCandidateSelectionTest, WrapSelectionHandlesLargeDeltasWithoutOverflow) {
   using azookey::tsf::internal::WrapCandidateSelectionIndex;
@@ -169,10 +201,21 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) 
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;
   azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 1), S_OK);
 
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, S_OK);
+  EXPECT_FALSE(capture.observation->ui_less);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_TRUE(capture.observation->pb_show_available);
+  EXPECT_FALSE(capture.observation->pb_show);
+  EXPECT_FALSE(capture.observation->tip_draws);
+  EXPECT_EQ(capture.observation->ui_element_id, thread_mgr.ui_element_id);
   EXPECT_TRUE(coordinator.IsShowing());
   EXPECT_EQ(thread_mgr.begin_count, 1);
   EXPECT_EQ(thread_mgr.update_count, 1);
@@ -204,14 +247,42 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) 
   EXPECT_EQ(thread_mgr.end_count, 1);
 }
 
+TEST(TsfTipCandidateUiCoordinatorTest, BeginUiElementFailureReportsHresult) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_hr = E_FAIL;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
+
+  POINT pt{10, 20};
+  EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_FAIL);
+
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, E_FAIL);
+  EXPECT_FALSE(capture.observation->ui_less);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_FALSE(capture.observation->pb_show_available);
+  EXPECT_FALSE(coordinator.IsShowing());
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, InitialAppDrawnUpdateFailureEndsUiElement) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;
   thread_mgr.update_hr = E_FAIL;
   azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_FAIL);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, E_FAIL);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_TRUE(capture.observation->pb_show_available);
+  EXPECT_FALSE(capture.observation->pb_show);
+  EXPECT_EQ(capture.observation->ui_element_id, thread_mgr.ui_element_id);
   EXPECT_FALSE(coordinator.IsShowing());
   EXPECT_EQ(thread_mgr.begin_count, 1);
   EXPECT_EQ(thread_mgr.update_count, 1);
@@ -224,10 +295,41 @@ TEST(TsfTipCandidateUiCoordinatorTest, UiLessModeRequiresUiElementManager) {
   thread_mgr.expose_ui_element_mgr = false;
   azookey::tsf::CandidateUiCoordinator coordinator;
   coordinator.SetUiLessMode(true);
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_NOINTERFACE);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, E_NOINTERFACE);
+  EXPECT_TRUE(capture.observation->ui_less);
+  EXPECT_FALSE(capture.observation->ui_element_mgr_available);
+  EXPECT_FALSE(capture.observation->pb_show_available);
   EXPECT_FALSE(coordinator.IsShowing());
+  EXPECT_EQ(thread_mgr.begin_count, 0);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, MissingUiElementManagerReportsTipWindowFallback) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
+
+  POINT pt{10, 20};
+  EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), S_OK);
+
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_EQ(capture.observation->result, S_OK);
+  EXPECT_FALSE(capture.observation->ui_less);
+  EXPECT_FALSE(capture.observation->ui_element_mgr_available);
+  EXPECT_FALSE(capture.observation->pb_show_available);
+  EXPECT_FALSE(capture.observation->pb_show);
+  EXPECT_TRUE(capture.observation->tip_draws);
+  EXPECT_EQ(capture.observation->ui_element_id, 0xFFFFFFFF);
+  EXPECT_TRUE(coordinator.IsShowing());
   EXPECT_EQ(thread_mgr.begin_count, 0);
 }
 
@@ -235,9 +337,17 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowTrueUsesTipUiWithoutUpdateNotificat
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = TRUE;
   azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
 
   POINT pt{10, 20};
   ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), S_OK);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.count, 1);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
+  EXPECT_TRUE(capture.observation->pb_show_available);
+  EXPECT_TRUE(capture.observation->pb_show);
+  EXPECT_TRUE(capture.observation->tip_draws);
   EXPECT_EQ(thread_mgr.begin_count, 1);
   EXPECT_EQ(thread_mgr.update_count, 0);
 

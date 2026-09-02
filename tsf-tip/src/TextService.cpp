@@ -68,6 +68,35 @@ void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
   logger.Log(level, event, fields);
 }
 
+void LogCandidateUiBegin(const azookey::tsf::CandidateUiBeginObservation& observation,
+                         void*) noexcept {
+  try {
+    const auto process_id = static_cast<uint64_t>(GetCurrentProcessId());
+    if (FAILED(observation.result)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "candidate_ui_begin_failed",
+                 {{"ui_less", observation.ui_less},
+                  {"ui_element_mgr_available", observation.ui_element_mgr_available},
+                  {"pb_show_available", observation.pb_show_available},
+                  {"pb_show", observation.pb_show},
+                  {"tip_draws", observation.tip_draws},
+                  {"ui_element_id", static_cast<uint64_t>(observation.ui_element_id)},
+                  {"process_id", process_id},
+                  {"hresult", static_cast<int64_t>(observation.result)}});
+      return;
+    }
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "candidate_ui_begin",
+               {{"ui_less", observation.ui_less},
+                {"ui_element_mgr_available", observation.ui_element_mgr_available},
+                {"pb_show_available", observation.pb_show_available},
+                {"pb_show", observation.pb_show},
+                {"tip_draws", observation.tip_draws},
+                {"ui_element_id", static_cast<uint64_t>(observation.ui_element_id)},
+                {"process_id", process_id}});
+  } catch (...) {
+    // Candidate UI routing must not fail because best-effort diagnostics failed.
+  }
+}
+
 std::string IpcHandshakeTokenFromEnv() {
 #if defined(_MSC_VER)
   char* value = nullptr;
@@ -417,6 +446,16 @@ T* NewComBoundaryObject(Args&&... args) {
 
 namespace azookey::tsf {
 
+#ifdef _DEBUG
+#define AZOOKEY_ASSERT_UI_THREAD() ui_thread_affinity_.BindOrAssertCurrentThread()
+#define AZOOKEY_BIND_IPC_THREAD() ipc_thread_affinity_.BindToCurrentThread()
+#define AZOOKEY_ASSERT_IPC_THREAD() ipc_thread_affinity_.AssertCurrentThread()
+#else
+#define AZOOKEY_ASSERT_UI_THREAD() ((void)0)
+#define AZOOKEY_BIND_IPC_THREAD() ((void)0)
+#define AZOOKEY_ASSERT_IPC_THREAD() ((void)0)
+#endif
+
 #ifdef AZOOKEY_TSF_TESTING
 namespace testing {
 
@@ -503,12 +542,14 @@ CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect, HWND tex
 #endif
 
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
+  candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
   if (ipc_client_id_.empty()) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_client_id_fallback");
   }
 }
 
 TextService::~TextService() {
+  AZOOKEY_ASSERT_UI_THREAD();
   StopIpcWorker();
   ClearCommitContext();
 }
@@ -546,10 +587,12 @@ STDMETHODIMP_(ULONG) TextService::Release() {
 }
 
 STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) {
+  AZOOKEY_ASSERT_UI_THREAD();
   return ActivateEx(ptim, tid, 0);
 }
 
 STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
+  AZOOKEY_ASSERT_UI_THREAD();
   // dwFlags does not officially enumerate the UIElement bit, so UI-less state
   // is taken from ITfThreadMgrEx::GetActiveFlags instead (spec §2.10).
   UNREFERENCED_PARAMETER(dwFlags);
@@ -598,6 +641,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 }
 
 STDMETHODIMP TextService::Deactivate() {
+  AZOOKEY_ASSERT_UI_THREAD();
   HRESULT result = UnadviseTextServiceSinks();
 
   StopIpcWorker();
@@ -619,6 +663,7 @@ STDMETHODIMP TextService::Deactivate() {
 }
 
 HRESULT TextService::AdviseTextServiceSinks() {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!thread_mgr_) return E_UNEXPECTED;
 
   ITfKeystrokeMgr* key_mgr = nullptr;
@@ -642,6 +687,7 @@ HRESULT TextService::AdviseTextServiceSinks() {
 }
 
 HRESULT TextService::UnadviseTextServiceSinks() {
+  AZOOKEY_ASSERT_UI_THREAD();
   HRESULT result = S_OK;
 
   if (thread_mgr_ && thread_mgr_sink_cookie_ != TF_INVALID_COOKIE) {
@@ -679,6 +725,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
 }
 
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!foreground) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -688,6 +735,7 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
 
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                         BOOL* eaten) {
+  AZOOKEY_ASSERT_UI_THREAD();
   UNREFERENCED_PARAMETER(context);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
@@ -745,6 +793,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
 STDMETHODIMP TextService::OnTestKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                       BOOL* eaten) {
+  AZOOKEY_ASSERT_UI_THREAD();
   UNREFERENCED_PARAMETER(context);
   UNREFERENCED_PARAMETER(wParam);
   UNREFERENCED_PARAMETER(lParam);
@@ -755,6 +804,7 @@ STDMETHODIMP TextService::OnTestKeyUp(ITfContext* context, WPARAM wParam, LPARAM
 
 STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                     BOOL* eaten) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   try {
@@ -1158,6 +1208,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 }
 
 STDMETHODIMP TextService::OnKeyUp(ITfContext* context, WPARAM wParam, LPARAM lParam, BOOL* eaten) {
+  AZOOKEY_ASSERT_UI_THREAD();
   UNREFERENCED_PARAMETER(context);
   UNREFERENCED_PARAMETER(wParam);
   UNREFERENCED_PARAMETER(lParam);
@@ -1167,6 +1218,7 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* context, WPARAM wParam, LPARAM lPa
 }
 
 STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOOL* eaten) {
+  AZOOKEY_ASSERT_UI_THREAD();
   UNREFERENCED_PARAMETER(context);
   UNREFERENCED_PARAMETER(rguid);
   if (!eaten) return E_INVALIDARG;
@@ -1175,10 +1227,12 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* context, REFGUID rguid, BOO
 }
 
 STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) {
+  AZOOKEY_ASSERT_UI_THREAD();
   UNREFERENCED_PARAMETER(pdim);
   return S_OK;
 }
 STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
@@ -1186,6 +1240,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
   return S_OK;
 }
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -1193,12 +1248,14 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   return S_OK;
 }
 STDMETHODIMP TextService::OnPushContext(ITfContext* pic) {
+  AZOOKEY_ASSERT_UI_THREAD();
   UNREFERENCED_PARAMETER(pic);
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
   return S_OK;
 }
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
     CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -1208,6 +1265,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
 
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
                                                   ITfComposition* pComposition) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (composition_ == pComposition) {
     composition_->Release();
     composition_ = nullptr;
@@ -1231,6 +1289,7 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
 }
 
 STDMETHODIMP TextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!ppEnum) return E_INVALIDARG;
   *ppEnum = nullptr;
   try {
@@ -1247,6 +1306,7 @@ STDMETHODIMP TextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo**
 
 STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
                                                   ITfDisplayAttributeInfo** ppInfo) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!ppInfo) return E_INVALIDARG;
   *ppInfo = nullptr;
   if (IsEqualGUID(guidInfo, kInputAttributeGuid)) {
@@ -1265,6 +1325,7 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
 }
 
 STDMETHODIMP TextService::GetDisplayName(BSTR* name) {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (name == nullptr) {
     return E_POINTER;
   }
@@ -1273,6 +1334,7 @@ STDMETHODIMP TextService::GetDisplayName(BSTR* name) {
 }
 
 STDMETHODIMP TextService::Show(HWND parent, LANGID langid, REFGUID profile) {
+  AZOOKEY_ASSERT_UI_THREAD();
   const HRESULT hr = LaunchSettingsApplication(parent, langid, profile);
   RuntimeLog(FAILED(hr) ? azookey::logging::RuntimeLogLevel::Warn
                         : azookey::logging::RuntimeLogLevel::Info,
@@ -1657,11 +1719,13 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
 // --- IPC worker (M4 + M6 + M10) ---
 
 void TextService::StartIpcWorker() {
+  AZOOKEY_ASSERT_UI_THREAD();
   ipc_stop_.store(false);
   ipc_thread_ = std::thread(&TextService::IpcWorkerThread, this);
 }
 
 void TextService::StopIpcWorker() {
+  AZOOKEY_ASSERT_UI_THREAD();
   if (!ipc_thread_.joinable()) return;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -1683,6 +1747,7 @@ std::string TextService::IpcPipeName() const {
 // worker should stop (Deactivate set ipc_stop_); StopIpcWorker notifies
 // ipc_cv_ so this wakes promptly instead of sleeping out the full delay.
 bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   std::unique_lock<std::mutex> lock(ipc_mtx_);
   ipc_cv_.wait_for(lock, std::chrono::milliseconds(delay_ms), [this] { return ipc_stop_.load(); });
   return ipc_stop_.load();
@@ -1690,6 +1755,7 @@ bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
 
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                            ipc::MessageType expected_type) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   using namespace std::chrono;
 
   constexpr uint32_t kResponsePollMs = 50;
@@ -1731,6 +1797,7 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
 // wait prevents a host that accepts the pipe but never replies from hanging the
 // reconnect loop. Returns false on send failure, timeout, or rejection.
 bool TextService::PerformHandshake() {
+  AZOOKEY_ASSERT_IPC_THREAD();
   constexpr uint32_t kHandshakeTimeoutMs = 3000;
   return PerformHandshake(ipc_client_, kHandshakeTimeoutMs, "tip-activate-handshake",
                           /*update_host_options=*/true);
@@ -1738,6 +1805,7 @@ bool TextService::PerformHandshake() {
 
 bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                                    const std::string& trace_id, bool update_host_options) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
   HandshakeRequest hs;
@@ -1782,6 +1850,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
 }
 
 bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   std::string previous_generation_id;
   bool first_observation = false;
   bool changed = false;
@@ -1822,11 +1891,13 @@ bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
 }
 
 bool TextService::SendCancelOutOfBand(uint64_t target_request_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   return SendCancelOutOfBand(target_request_id, kCancelConnectTimeoutMs, kCancelHandshakeTimeoutMs);
 }
 
 bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
                                       uint32_t handshake_timeout_ms) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
   const auto pipe_name = IpcPipeName();
@@ -1862,11 +1933,13 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
 // the user retyping. Skipped when a newer request or a commit already
 // superseded it (ipc_pending_id_ has moved on).
 void TextService::RearmPendingQuery(uint64_t req_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   if (ipc_pending_id_ == req_id) ipc_has_request_ = true;
 }
 
 void TextService::IpcWorkerThread() {
+  AZOOKEY_BIND_IPC_THREAD();
   using namespace azookey::ipc;
 
   const auto pipe_name = IpcPipeName();
@@ -1914,6 +1987,7 @@ void TextService::IpcWorkerThread() {
 // Deactivate sets ipc_stop_. Cancel can use a short-lived control connection so
 // an in-flight query on the primary pipe can be interrupted before it replies.
 void TextService::ServeConnection() {
+  AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
   uint64_t next_id = 2;
@@ -2374,10 +2448,7 @@ void TextService::ShowCandidateWindowFromCache() {
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
   const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
-  if (FAILED(begin_hr)) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_ui_begin_failed");
-    return;
-  }
+  if (FAILED(begin_hr)) return;
 
   const HRESULT update_hr = active_context_ ? RequestPreeditUpdate(active_context_) : E_UNEXPECTED;
   if (FAILED(update_hr)) {
@@ -2784,3 +2855,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 }
 
 }  // namespace azookey::tsf
+
+#undef AZOOKEY_ASSERT_UI_THREAD
+#undef AZOOKEY_BIND_IPC_THREAD
+#undef AZOOKEY_ASSERT_IPC_THREAD

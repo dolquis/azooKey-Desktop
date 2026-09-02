@@ -309,6 +309,11 @@ GPT-2 builder の新規実装、または別 exporter で作った ONNX graph �
 §4.4〜§4.6 は、R2 再開時に適用する設計として保持する。
 R2 の保留中は R1 CPU 経路だけを有効にする。
 
+v1.0 設定 UI のデバイス選択は、この結論に合わせて `auto` / `cpu` の 2 値へ縮小する
+（`docs/sideload-packaging-spec.md` §3.7 が正典）。`cuda` は §4.4 の降格が続くあいだ UI に出さず、
+`vulkan` の露出条件は M24 ではなく ggml-vulkan ビルドの配布（DEV-944）とする。
+`vulkan` は R1 に属するため、保留中の R2 のマイルストーンに従属させない。
+
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装が R1（llama.cpp）を
 > **CPU / CUDA / Vulkan の 3 プリビルド**で実働実証済み（Vulkan(ggml-vulkan) を含む）。
 > R1 を v1.0 ベースラインとする本方針の外部裏付け。バックエンド可否の **一次フィルタ**

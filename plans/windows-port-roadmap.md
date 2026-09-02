@@ -195,6 +195,12 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - Zenzai GGUF（上流 `Miwa-Keita/zenz-v3.2-small-gguf`）配置時に `LoadModel` 成功
   - 未配置時も Host が落ちず、固定テーブル候補が動く
   - GPU/CPU 切替が設定で効く
+- **受け入れ条件の前提に関する注記**: 「GPU/CPU 切替が設定で効く」は CUDA backend の実リンクを
+  前提としていたが、その実リンク（DEV-223）は中止され、`cuda` 要求は
+  `docs/copilot-pc-backend-spec.md` §4.4 のとおり成功 LoadModel のまま CPU へ降格する。
+  実リンク済みビルドを配布するまで、この条件を満たす GPU 経路は存在しない。v1.0 設定 UI は
+  この状況に合わせてデバイス選択を `auto` / `cpu` の 2 値へ再確定した
+  （`docs/sideload-packaging-spec.md` §3.7、DEV-854）。条件文そのものの改訂可否は人間の判断に委ねる。
 
 ### M9: ユーザー辞書
 
@@ -230,7 +236,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **変更対象**: 新規 `settings-app/`（WinUI 3 / C++/WinRT に確定、§3.0）、`pkg/` 配下 (新規)
 - **実装範囲**:
   - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
-    `model.enabled`/`model.backendPreference`〔`auto`/`cpu`/`cuda` 縮小〕/`model.selectedPath`/`logLevel`
+    `model.enabled`/`model.backendPreference`〔`auto`/`cpu` 縮小〕/`model.selectedPath`/`logLevel`
     と「ユーザー辞書を編集」「ログ出力先を開く」ボタン）および v1.0 / v1.x 境界は
     `docs/sideload-packaging-spec.md` §3.7 を正典とする
   - 設定の永続化・反映に必要な**最小 IPC / 設定ストアを本マイルストーンで導入**:

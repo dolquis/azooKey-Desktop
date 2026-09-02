@@ -1113,7 +1113,10 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 > で**未対応バックエンドを disable + 理由 Tooltip 表示**する能力検出 UX を採れる（先行実装の
 > `check_capability` 相当）。一次フィルタ扱いとし、実 EP 選択は `docs/copilot-pc-backend-spec.md`
 > §3-§4 に委ねる。`backendPreference` は自分側 schema が `cpu/cuda/vulkan/winml/directml/npu`
-> を持ち、参考側（cpu/cuda/vulkan）より広い。詳細は DEV-120 のコメント参照。
+> を持ち、参考側（cpu/cuda/vulkan）より広い。詳細は DEV-120 のコメント参照。**この能力検出は、当該
+> バックエンドをリンクしたビルドを配布してから導入する**（DEV-854 再確定）。DLL 存在判定が答えるのは
+> 機器側の可否であって、ビルドが当該バックエンドを含むかではないため、未リンクのバックエンドを
+> DLL 判定で出し分けると実効のない選択肢を有効化してしまう。v1.0 UI の縮小と露出条件は §3.7 を正典とする。
 
 ### 3.3 Host との IPC
 
@@ -1232,7 +1235,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `postCommitLint` | bool（実験） | `false` | 詳細 | rich X-3-3 | 即時 | `rich-features-spec.md` X-3-3 |
 | `retroactiveRecompute` | bool（実験） | `false` | 詳細 | rich X-1-3 | 即時 | `rich-features-spec.md` X-1-3 |
 | `sentenceCompletion` | bool（実験） | `false` | 詳細 | rich X-2-1 | 即時 | `rich-features-spec.md` X-2-1 |
-| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 は `auto`/`cpu`/`cuda` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
+| `backendPreference` | enum `auto`/`cpu`/`cuda`/`vulkan`/`winml`/`directml`/`npu` | `auto` | 詳細※ | M24（device 選択 UI は `model.backendPreference` にバインド〔下記※〕。v1.0 UI は `auto`/`cpu` に縮小、§3.7） | モデル再ロード | `copilot-pc-backend-spec.md` §4 |
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
@@ -1308,15 +1311,41 @@ schema 自体は superset のまま変えない。
 | キー | v1.0 UI の型 / 値域 | UI ペイン | 裏づけ M | 備考 |
 |---|---|---|---|---|
 | `model.enabled` | bool（「Zenzai を使う」トグル） | 一般 | M8 | false で SimpleConverter 固定（`model-management-spec.md` §7） |
-| `model.backendPreference` | enum **`auto` / `cpu` / `cuda` に縮小** | 一般 | M8 | 完全 enum（`vulkan`/`winml`/`directml`/`npu`）と `epPreference` は v1.x（M24）。M8 受け入れ条件「GPU/CPU 切替が設定で効く」に対応 |
+| `model.backendPreference` | enum **`auto` / `cpu` に縮小** | 一般 | M8 | `auto` は Host 起動時の既定バックエンド（`AZOOKEY_BACKEND` / `--backend`）に従い、`cpu` は CPU に固定する。`cuda` を含む残り enum と `epPreference` は下記「デバイス選択の enum 縮小（DEV-854 再確定）」の条件で解禁する |
 | `model.selectedPath` | string（モデルの絶対パス。**空＝モデル未選択**） | 一般 | M8 | 空は「ピン既定へ自動解決」ではない。Host は `selectedPath` をそのまま `autoLoadOnHostStart` でロードし、空なら何もロードせず SimpleConverter（M8 受け入れ「未配置時も落ちない」）。下記「probe-then-commit」を参照 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | 詳細 | M2〜 | 診断用。ログ詳細度のみ（ETW プロバイダ GUID は設定キーではない、§3.6） |
 
-- **デバイス選択の enum 縮小**: v1.0 の推論経路は M8 の CPU / CUDA のみ（`AZOOKEY_BACKEND` および
-  `LoadModel` 経路）。よって v1.0 UI は `model.backendPreference` を `auto` / `cpu` / `cuda` の 3 値だけ
-  描画する。schema 正典（§3.6）は完全 enum を保持し、v1.x（M24）で `vulkan` / `winml` 等と `epPreference`
-  を UI に追加する。`settings.json` に v1.x 値（例 `winml`）が直書きされていても v1.0 の Host は schema 上
-  受理し、選択肢として描画しないだけで破棄はしない（能力検出による disable + Tooltip は §3.2 参考実装注を参照）。
+- **デバイス選択の enum 縮小（DEV-854 再確定）**: v1.0 UI は `model.backendPreference` を
+  `auto` / `cpu` の 2 値だけ描画する。**`cuda` は v1.0 UI に出さない**。CUDA backend の実リンク
+  （DEV-223）は中止され、`cuda` 要求は `docs/copilot-pc-backend-spec.md` §4.4 のとおり成功 LoadModel の
+  まま CPU へ降格するため、選択肢として出すと実効のない選択になる。ランタイム DLL の存在判定による
+  disable + Tooltip（§3.2 参考実装注）はここでは採らない。DLL 判定が答えるのは「この機器に CUDA
+  ランタイムがあるか」であって、実際の制約は「配布ビルドが CUDA をリンクしていないか」だからである。
+  CUDA ランタイムを備えた NVIDIA 機ではむしろ選択肢が有効化され、実効のない選択がそのまま残る。
+  能力検出は CUDA リンク済みビルドを配布してから導入する。
+- **v1.0 の 2 値が持つ意味**: `auto` は Host 起動時の既定バックエンド（ビルド時 `AZOOKEY_BACKEND`
+  または `--backend`）に従い、`cpu` は CPU に固定する（解決順は `model-management-spec.md` §5.2、
+  `auto` のときに root `backendPreference` へ委ねる挙動を含む）。CPU 推論のみを含む v1.0 配布ビルドでは
+  どちらも R1 CPU に解決するが、保存される意図は異なる。`auto` はアクセラレーション付きビルドを
+  配布したときにそれへ追随し、`cpu` は追随せず CPU に留まる。M11 の目的「デバイス選択」はこの
+  2 値で満たし、UI にはアクセラレーションの有無を誤解させないため「v1.0 の配布ビルドは CPU 推論のみを
+  含む」という静的な補足文を添える。
+- **`vulkan` の UI 露出条件を R1 側へ切り離す**: `vulkan`（R1 ggml-vulkan）の UI 露出は、これまで
+  v1.x（M24）としていたが、M24 は R2 / Windows ML のマイルストーンであり `docs/copilot-pc-backend-spec.md`
+  §4.3 のとおり R2 は保留中である。R1 に属する `vulkan` を保留中の R2 に従属させないため、**露出条件を
+  「ggml-vulkan ビルドを配布に含めた時点」へ改める**（R1 側の条件であり、M24 の進捗に依存しない）。
+  現行の CMake は `AZOOKEY_BACKEND` が `cpu` / `cuda` のみで ggml-vulkan ビルドを持たず、§1.6 の base MSIX も
+  llama.cpp CPU ランタイムだけを同梱するため、**v1.0 UI には出さない**。ビルドを用意しないまま選択肢だけ
+  先に出すと、`cuda` と同じ実効のない選択を作ることになる。ggml-vulkan ビルドの追加は DEV-944 で追う。
+- **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
+  `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に
+  限る。v1.0 UI から `cuda` を外すことで UI 由来の実効のない選択は消え、残るのは `settings.json` 直書きの
+  `cuda` だけになる。この値は下記の「UI が描画しない schema 有効値」と同じ扱いとし、UI は選択なしの状態で
+  現在値と「現在の配布ビルドでは CPU 実行へ降格する」旨を表示し、保存時にその値を温存する。
+- **UI が描画しない schema 有効値の扱い**: `settings.json` に v1.0 UI が出さない schema 有効値
+  （`cuda` / `vulkan` / `winml` / `directml` / `npu`）が直書きされていても、Host は schema 上受理し、
+  UI は選択肢として描画しないだけで破棄しない。schema 正典（§3.6）は完全 enum を保持する
+  （enum 縮小は §3.6 拡張方針で破壊的変更に当たるため、UI 露出だけを変え schema には手を入れない）。
 - **`model.*` の UI 露出を M11 へ前倒し**: §3.6 の「導入」列は `model` を M45 と記すが、これは**フル
   モデル管理 UI**（`epPreference` / `nGpuLayers` / `benchmark*` / `autoLoadOnHostStart` / `fallbackToSimpleConverter`
   等の全フィールド）の導入時期である。v1.0 はそのうち `enabled` / `backendPreference`（縮小）/ `selectedPath`
@@ -1346,6 +1375,11 @@ schema 自体は superset のまま変えない。
   常に現在の UI 選択で上書きする）。これにより `model.backendPreference` が単一の実効ソースになる。この root
   `backendPreference` 削除は後述 write-back 規則の例外（保持対象外）とする。`epPreference` は v1.0 UI が露出せず
   device 選択にも従属しないため、root / `model.epPreference` とも温存する（直書き intent を壊さない。v1.x で管理）。
+  **`model.backendPreference` が v1.0 UI の描画しない schema 有効値（`cuda` 等）のときは上書き対象から外し、
+  その値を温存する**（DEV-854 再確定）。このとき UI はデバイス選択を未選択の状態にし、現在値と降格の注記を
+  表示する。上書きは UI が選択を持つときの規律であり、UI が選べない値をその 2 値へ丸めると直書き intent を
+  壊すためである。root `backendPreference` の削除はこの場合も行い、実効ソースを `model.backendPreference` に
+  一本化する規律は変えない。
 
 #### v1.0（M11）の UI アクション（設定キーではないボタン）
 
@@ -1365,7 +1399,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
 |---|---|---|
 | `model.enabled` | ◯（一般） | — |
-| `model.backendPreference` | ◯（一般、`auto`/`cpu`/`cuda` のみ） | 残り enum（`vulkan`/`winml`/`directml`/`npu`）= M24 |
+| `model.backendPreference` | ◯（一般、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布時（DEV-944） / `cuda` = CUDA リンク済みビルド配布時 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
 | `model.selectedPath` | ◯（一般） | — |
 | `logLevel` | ◯（詳細） | — |
 | `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |

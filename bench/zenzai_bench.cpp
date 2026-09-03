@@ -415,7 +415,7 @@ int RunBench(int argc, char** argv) {
   const auto learning_path = UniqueTempPath("azookey_zenzai_bench_learning", ".tsv");
   std::remove(learning_path.string().c_str());
 
-  azookey::learning::LearningStore store(learning_path.string());
+  azookey::learning::LearningStore store(learning_path);
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         {});
 

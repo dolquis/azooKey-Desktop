@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
   const auto learning_path = std::filesystem::temp_directory_path() / "azookey_bench_learning.tsv";
   std::remove(learning_path.string().c_str());
 
-  azookey::learning::LearningStore store(learning_path.string());
+  azookey::learning::LearningStore store(learning_path);
   azookey::host::EngineConfig engine_config;
   engine_config.backend = quality_options.backend == "cuda" ? azookey::host::BackendKind::Cuda
                                                             : azookey::host::BackendKind::Cpu;

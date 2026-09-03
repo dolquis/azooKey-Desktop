@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -34,7 +35,7 @@ struct UserDictCliOptions {
 };
 
 struct UserDictCliRunOptions {
-  std::string user_dict_path;
+  std::filesystem::path user_dict_path;
   std::string pipe_name;
   std::string handshake_token;
   bool prefer_pipe{true};

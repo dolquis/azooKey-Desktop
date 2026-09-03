@@ -184,3 +184,40 @@ TEST(UserDictionaryTest, SaveCreatesParentAndLeavesNoTempFile) {
 
   std::filesystem::remove_all(root);
 }
+
+#ifdef _WIN32
+TEST(UserDictionaryTest, NonAsciiWindowsPathRoundTripsAndQuarantines) {
+  const auto root = std::filesystem::temp_directory_path() / L"azookey_非ASCII_辞書";
+  const auto path = root / L"ユーザー辞書.json";
+  std::filesystem::remove_all(root);
+
+  azookey::learning::UserDictionary dictionary(path);
+  dictionary.Add({"日本語", "にほんご", 1285, 501, -5.0});
+  ASSERT_TRUE(dictionary.Save());
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  azookey::learning::UserDictionary loaded(path);
+  ASSERT_TRUE(loaded.Load());
+  const auto entries = loaded.Lookup("にほんご");
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries.front().word, "日本語");
+
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output);
+    output << "not valid json";
+  }
+  azookey::learning::UserDictionary malformed(path);
+  EXPECT_FALSE(malformed.Load());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  size_t corrupt_files = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(root)) {
+    if (entry.path().filename().wstring().find(L".corrupt.") != std::wstring::npos) {
+      ++corrupt_files;
+    }
+  }
+  EXPECT_EQ(corrupt_files, 1u);
+
+  std::filesystem::remove_all(root);
+}
+#endif

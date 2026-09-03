@@ -383,7 +383,7 @@ if(AZOOKEY_BUILD_TESTS)
               --output-on-failure
               --no-tests=error
       USES_TERMINAL
-      COMMENT "Build test executables and run CTest")
-    add_dependencies(azookey_check ${AZOOKEY_CHECK_DEPENDS})
+      COMMENT "Build the host and test executables, then run CTest")
+    add_dependencies(azookey_check ${AZOOKEY_CHECK_DEPENDS} azookey_inference_host)
   endif()
 endif()

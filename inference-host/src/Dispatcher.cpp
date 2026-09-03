@@ -60,6 +60,7 @@ const char* SourceToWire(core::CandidateSource source) {
   if (source == core::CandidateSource::UserDictionary) return "user_dict";
   if (source == core::CandidateSource::Model) return "model";
   if (source == core::CandidateSource::Llm) return "llm";
+  if (source == core::CandidateSource::Learning) return "learning";
   return "heuristic";
 }
 

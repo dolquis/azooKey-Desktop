@@ -85,8 +85,11 @@ std::string UnescapeTsvField(const std::string& value) {
   return unescaped;
 }
 
-void LogMalformedLine(const std::string& path, size_t line_number) {
-  std::cerr << "LearningStore: skipped malformed record in " << path << ":" << line_number << '\n';
+void LogMalformedLine(const std::filesystem::path& path, size_t line_number) {
+  const auto utf8_path = path.u8string();
+  const std::string display_path(reinterpret_cast<const char*>(utf8_path.data()), utf8_path.size());
+  std::cerr << "LearningStore: skipped malformed record in " << display_path << ":" << line_number
+            << '\n';
 }
 
 bool IsAsciiWhitespace(char ch) {
@@ -180,22 +183,12 @@ bool ParseRecordValues(std::string_view value, LearningRecord& rec) {
   return true;
 }
 
-bool SplitKey(const std::string& key, std::string& reading, std::string& surface) {
-  const auto tab = key.find('\t');
-  if (tab == std::string::npos) {
-    return false;
-  }
-  reading = UnescapeTsvField(key.substr(0, tab));
-  surface = UnescapeTsvField(key.substr(tab + 1));
-  return true;
+std::string SerializedKey(const std::string& reading, const std::string& surface) {
+  return EscapeTsvField(reading) + "\t" + EscapeTsvField(surface);
 }
 }  // namespace
 
-LearningStore::LearningStore(std::string path) : path_(std::move(path)) {}
-
-std::string LearningStore::Key(const std::string& reading, const std::string& surface) const {
-  return EscapeTsvField(reading) + "\t" + EscapeTsvField(surface);
-}
+LearningStore::LearningStore(std::filesystem::path path) : path_(std::move(path)) {}
 
 bool LearningStore::Load() {
   table_.clear();
@@ -233,7 +226,7 @@ bool LearningStore::Load() {
       reading = UnescapeTsvField(reading);
       surface = UnescapeTsvField(surface);
     }
-    table_.emplace(Key(reading, surface), rec);
+    table_[reading].emplace(surface, rec);
   }
   return true;
 }
@@ -242,21 +235,17 @@ bool LearningStore::Save() const {
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kLearningStoreEscapedTsvHeader << '\n';
-  std::vector<std::string> keys;
-  keys.reserve(table_.size());
-  for (const auto& [key, _] : table_) {
-    keys.push_back(key);
-  }
-  std::sort(keys.begin(), keys.end());
-  for (const auto& key : keys) {
-    const auto& rec = table_.at(key);
-    std::string reading;
-    std::string surface;
-    if (!SplitKey(key, reading, surface)) {
-      continue;
+  std::vector<std::pair<std::string, const LearningRecord*>> rows;
+  rows.reserve(size());
+  for (const auto& [reading, surfaces] : table_) {
+    for (const auto& [surface, record] : surfaces) {
+      rows.emplace_back(SerializedKey(reading, surface), &record);
     }
-    out << EscapeTsvField(reading) << '\t' << EscapeTsvField(surface) << '\t' << rec.weight << ' '
-        << rec.last_updated_epoch_sec << '\n';
+  }
+  std::sort(rows.begin(), rows.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+  for (const auto& [key, record] : rows) {
+    out << key << '\t' << record->weight << ' ' << record->last_updated_epoch_sec << '\n';
   }
   const bool saved = WriteTextFileAtomically(path_, out.str());
   if (saved) {
@@ -274,11 +263,62 @@ void LearningStore::Reset() {
 
 bool LearningStore::dirty() const { return dirty_; }
 
-size_t LearningStore::size() const { return table_.size(); }
+size_t LearningStore::size() const {
+  size_t count = 0;
+  for (const auto& [_, surfaces] : table_) {
+    count += surfaces.size();
+  }
+  return count;
+}
+
+std::vector<LearningEntry> LearningStore::All() const {
+  std::vector<LearningEntry> entries;
+  entries.reserve(size());
+  for (const auto& [reading, surfaces] : table_) {
+    for (const auto& [surface, record] : surfaces) {
+      entries.push_back(LearningEntry{reading, surface, record});
+    }
+  }
+  return entries;
+}
+
+PrefixLookupResult LearningStore::LookupPrefix(const std::string& reading_prefix, size_t limit,
+                                               double min_score, uint64_t now_epoch_sec) const {
+  PrefixLookupResult result;
+  if (reading_prefix.empty() || limit == 0) {
+    return result;
+  }
+
+  for (auto it = table_.lower_bound(reading_prefix); it != table_.end(); ++it) {
+    ++result.visited_readings;
+    const auto& reading = it->first;
+    if (reading.compare(0, reading_prefix.size(), reading_prefix) != 0) {
+      break;
+    }
+    for (const auto& [surface, record] : it->second) {
+      ++result.scanned_records;
+      const double score = DecayedWeight(record, now_epoch_sec);
+      if (score >= min_score) {
+        result.matches.push_back(PrefixMatch{reading, surface, score});
+      }
+    }
+  }
+
+  const auto better_match = [](const PrefixMatch& lhs, const PrefixMatch& rhs) {
+    if (lhs.score != rhs.score) return lhs.score > rhs.score;
+    if (lhs.reading != rhs.reading) return lhs.reading < rhs.reading;
+    return lhs.surface < rhs.surface;
+  };
+  const size_t kept = std::min(limit, result.matches.size());
+  std::partial_sort(result.matches.begin(), result.matches.begin() + kept, result.matches.end(),
+                    better_match);
+  result.matches.resize(kept);
+  return result;
+}
 
 void LearningStore::Observe(const std::string& reading, const std::string& surface, double alpha,
                             uint64_t now_epoch_sec) {
-  auto& rec = table_[Key(reading, surface)];
+  auto& rec = table_[reading][surface];
   rec.weight += alpha;
   rec.last_updated_epoch_sec = now_epoch_sec;
   dirty_ = true;
@@ -290,7 +330,7 @@ void LearningStore::ObserveCorrection(const std::string& reading,
                                       uint64_t now_epoch_sec) {
   Observe(reading, selected_surface, alpha, now_epoch_sec);
 
-  auto& rejected = table_[Key(reading, rejected_surface)];
+  auto& rejected = table_[reading][rejected_surface];
   rejected.weight = std::max(0.0, rejected.weight - alpha);
   rejected.last_updated_epoch_sec = now_epoch_sec;
   dirty_ = true;
@@ -299,32 +339,54 @@ void LearningStore::ObserveCorrection(const std::string& reading,
 void LearningStore::Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec) {
   bool changed = false;
   if (min_weight > 0.0) {
-    for (auto it = table_.begin(); it != table_.end();) {
-      if (DecayedWeight(it->second, now_epoch_sec) < min_weight) {
-        it = table_.erase(it);
-        changed = true;
+    for (auto reading_it = table_.begin(); reading_it != table_.end();) {
+      for (auto surface_it = reading_it->second.begin(); surface_it != reading_it->second.end();) {
+        if (DecayedWeight(surface_it->second, now_epoch_sec) < min_weight) {
+          surface_it = reading_it->second.erase(surface_it);
+          changed = true;
+        } else {
+          ++surface_it;
+        }
+      }
+      if (reading_it->second.empty()) {
+        reading_it = table_.erase(reading_it);
       } else {
-        ++it;
+        ++reading_it;
       }
     }
   }
 
-  if (max_records > 0 && table_.size() > max_records) {
-    std::vector<std::pair<std::string, double>> ranked;
-    ranked.reserve(table_.size());
-    for (const auto& [key, rec] : table_) {
-      ranked.emplace_back(key, DecayedWeight(rec, now_epoch_sec));
+  const size_t record_count = size();
+  if (max_records > 0 && record_count > max_records) {
+    struct RankedRecord {
+      std::string reading;
+      std::string surface;
+      std::string serialized_key;
+      double score;
+    };
+    std::vector<RankedRecord> ranked;
+    ranked.reserve(record_count);
+    for (const auto& [reading, surfaces] : table_) {
+      for (const auto& [surface, record] : surfaces) {
+        ranked.push_back({reading, surface, SerializedKey(reading, surface),
+                          DecayedWeight(record, now_epoch_sec)});
+      }
     }
     std::sort(ranked.begin(), ranked.end(), [](const auto& lhs, const auto& rhs) {
-      if (lhs.second == rhs.second) {
-        return lhs.first < rhs.first;
+      if (lhs.score == rhs.score) {
+        return lhs.serialized_key < rhs.serialized_key;
       }
-      return lhs.second < rhs.second;
+      return lhs.score < rhs.score;
     });
 
-    const size_t remove_count = table_.size() - max_records;
+    const size_t remove_count = record_count - max_records;
     for (size_t i = 0; i < remove_count; ++i) {
-      table_.erase(ranked[i].first);
+      auto reading_it = table_.find(ranked[i].reading);
+      if (reading_it == table_.end()) continue;
+      reading_it->second.erase(ranked[i].surface);
+      if (reading_it->second.empty()) {
+        table_.erase(reading_it);
+      }
     }
     changed = remove_count > 0;
   }
@@ -336,11 +398,15 @@ void LearningStore::Prune(size_t max_records, double min_weight, uint64_t now_ep
 
 double LearningStore::Score(const std::string& reading, const std::string& surface,
                             uint64_t now_epoch_sec) const {
-  const auto it = table_.find(Key(reading, surface));
-  if (it == table_.end()) {
+  const auto reading_it = table_.find(reading);
+  if (reading_it == table_.end()) {
     return 0.0;
   }
-  return DecayedWeight(it->second, now_epoch_sec);
+  const auto surface_it = reading_it->second.find(surface);
+  if (surface_it == reading_it->second.end()) {
+    return 0.0;
+  }
+  return DecayedWeight(surface_it->second, now_epoch_sec);
 }
 
 }  // namespace azookey::learning

@@ -28,6 +28,7 @@
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/HostArgs.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/LookupCli.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/UserDataPaths.h"
@@ -43,6 +44,11 @@ namespace {
 
 azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
   return azookey::logging::RuntimeLogSafeText(std::move(value));
+}
+
+std::string PathToUtf8(const std::filesystem::path& path) {
+  const auto utf8 = path.u8string();
+  return std::string(utf8.begin(), utf8.end());
 }
 
 constexpr const char* kHostVersion = "0.1.0";
@@ -254,6 +260,7 @@ int main(int argc, char** argv) {
   auto pipe_name = std::move(parsed_args.args.pipe_name);
   auto handshake_token = std::move(parsed_args.args.handshake_token);
   auto userdict_args = std::move(parsed_args.args.userdict_args);
+  auto lookup_args = std::move(parsed_args.args.lookup_args);
 
   azookey::host::UserDataPathInputs path_inputs;
   path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
@@ -265,8 +272,25 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const std::string learning_path = user_paths->learning_path.string();
-  const std::string user_dict_path = user_paths->user_dict_path.string();
+  if (lookup_args) {
+    std::string parse_error;
+    auto cli_options = azookey::host::ParseLookupCliArgs(*lookup_args, &parse_error);
+    if (!cli_options) {
+      std::cerr << "error: " << parse_error << std::endl;
+      return 2;
+    }
+    azookey::host::LookupCliRunOptions run_options;
+    run_options.learning_path = user_paths->learning_path;
+    run_options.user_dict_path = user_paths->user_dict_path;
+    auto result = azookey::host::RunLookupCli(*cli_options, run_options);
+    for (const auto& line : result.output_lines) {
+      std::cout << line << std::endl;
+    }
+    if (!result.error.empty()) {
+      std::cerr << "error: " << result.error << std::endl;
+    }
+    return result.exit_code;
+  }
 
   if (userdict_args) {
     if (!EnsureFileParentDirectory(user_paths->user_dict_path)) {
@@ -285,7 +309,7 @@ int main(int argc, char** argv) {
       return 2;
     }
     azookey::host::UserDictCliRunOptions run_options;
-    run_options.user_dict_path = user_dict_path;
+    run_options.user_dict_path = user_paths->user_dict_path;
     run_options.pipe_name = pipe_name.empty() ? azookey::ipc::DefaultPipeName() : pipe_name;
     run_options.handshake_token = handshake_token;
     auto result = azookey::host::RunUserDictCli(*cli_options, run_options);
@@ -341,7 +365,7 @@ int main(int argc, char** argv) {
   const bool learning_file_existed =
       std::filesystem::exists(user_paths->learning_path, learning_path_error) &&
       !learning_path_error;
-  azookey::learning::LearningStore store(learning_path);
+  azookey::learning::LearningStore store(user_paths->learning_path);
   const bool learning_loaded = store.Load();
   const bool learning_load_failed = learning_file_existed && !learning_loaded;
   runtime_log.Log(
@@ -351,7 +375,7 @@ int main(int argc, char** argv) {
       {{"result",
         SafeLogText(learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"))}});
 
-  azookey::learning::UserDictionary user_dict(user_dict_path);
+  azookey::learning::UserDictionary user_dict(user_paths->user_dict_path);
   const bool user_dict_loaded = user_dict.Load();
   runtime_log.Log(user_dict_loaded ? azookey::logging::RuntimeLogLevel::Info
                                    : azookey::logging::RuntimeLogLevel::Warn,
@@ -422,7 +446,8 @@ int main(int argc, char** argv) {
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
             << (startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
-            << " learning=" << learning_path << " user_dict=" << user_dict_path
+            << " learning=" << PathToUtf8(user_paths->learning_path)
+            << " user_dict=" << PathToUtf8(user_paths->user_dict_path)
             << " model_loaded=" << (startup_health.model_loaded ? "true" : "false");
   if (startup_health.model_preload_in_progress) {
     std::cerr << " model_preload=preloading";

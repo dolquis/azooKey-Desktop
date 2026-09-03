@@ -196,6 +196,34 @@ class ContextCapturingConverter final : public azookey::core::IConverter {
   azookey::core::ConversionContext last_context;
 };
 
+class PredictionConverter final : public azookey::core::IConverter {
+ public:
+  explicit PredictionConverter(std::vector<azookey::core::Candidate> predictions)
+      : predictions_(std::move(predictions)) {}
+
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return predictions_;
+  }
+
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+ private:
+  std::vector<azookey::core::Candidate> predictions_;
+};
+
 class ThrowingLearningStore final : public azookey::learning::LearningStore {
  public:
   ThrowingLearningStore()
@@ -638,6 +666,70 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
   EXPECT_NE(corrections.front().surface, "日本");
   ASSERT_TRUE(engine->last_error().has_value());
   EXPECT_NE(engine->last_error()->find("reranker failed"), std::string::npos);
+}
+
+TEST(InferenceEngineTest, PredictionsPrependLearningDeduplicateAndCapDisplayCount) {
+  const auto path = TempPath("azookey_host_prediction_learning.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほんご", "日本語", 5.0, kNowBase);
+  store.Observe("にほんじん", "日本人", 4.0, kNowBase);
+  store.Observe("にほんしゅ", "日本酒", 3.0, kNowBase);
+  store.Observe("にほんしょ", "日本書", 2.0, kNowBase);
+
+  std::vector<azookey::core::Candidate> converter_predictions = {
+      {"日本語", "にほんご", 100.0, azookey::core::CandidateSource::Model, "duplicate"},
+      {"モデル1", "もでる1", 4.0, azookey::core::CandidateSource::Model, "model-1"},
+      {"モデル2", "もでる2", 3.0, azookey::core::CandidateSource::Model, "model-2"},
+      {"モデル3", "もでる3", 2.0, azookey::core::CandidateSource::Model, "model-3"},
+  };
+  azookey::host::EngineConfig config;
+  config.prediction_learning_max_entries = 3;
+  auto engine = std::make_unique<azookey::host::InferenceEngine>(
+      std::make_unique<PredictionConverter>(std::move(converter_predictions)), &store, config);
+
+  const auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
+  ASSERT_EQ(predictions.size(), 5u);
+  EXPECT_EQ(predictions[0].surface, "日本語");
+  EXPECT_EQ(predictions[1].surface, "日本人");
+  EXPECT_EQ(predictions[2].surface, "日本酒");
+  EXPECT_EQ(predictions[3].surface, "モデル1");
+  EXPECT_EQ(predictions[4].surface, "モデル2");
+  EXPECT_EQ(predictions[0].reading, "にほんご");
+  EXPECT_EQ(predictions[0].source, azookey::core::CandidateSource::Learning);
+  EXPECT_EQ(std::count_if(predictions.begin(), predictions.end(),
+                          [](const auto& candidate) { return candidate.surface == "日本語"; }),
+            1);
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+TEST(InferenceEngineTest, PredictionsExcludeExactReadingAndApplyUpdatedLearningConfig) {
+  const auto path = TempPath("azookey_host_prediction_exact.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほん", "完全一致", 10.0, kNowBase);
+  store.Observe("にほんご", "日本語", 1.0, kNowBase);
+  store.Observe("にほんじん", "日本人", 0.5, kNowBase);
+
+  azookey::host::EngineConfig config;
+  config.prediction_learning_max_entries = 3;
+  auto engine = std::make_unique<azookey::host::InferenceEngine>(
+      std::make_unique<PredictionConverter>(std::vector<azookey::core::Candidate>{}), &store,
+      config);
+
+  azookey::host::EngineConfig updated = config;
+  updated.prediction_learning_max_entries = 2;
+  updated.prediction_learning_min_score = 0.75;
+  engine->ApplyConfig(updated);
+  const auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
+  ASSERT_EQ(predictions.size(), 1u);
+  EXPECT_EQ(predictions.front().surface, "日本語");
+  EXPECT_EQ(predictions.front().reading, "にほんご");
+
+  engine.reset();
+  std::remove(path.c_str());
 }
 
 TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {

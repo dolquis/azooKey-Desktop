@@ -20,6 +20,7 @@ struct HostArgs {
   std::string pipe_name;
   std::string handshake_token;
   std::optional<std::vector<std::string>> userdict_args;
+  std::optional<std::vector<std::string>> lookup_args;
 };
 
 struct HostArgsParseResult {

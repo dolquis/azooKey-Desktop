@@ -35,7 +35,8 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
 `--pipe` は省略可能な次トークンを pipe 名として扱うが、`--` で始まるトークンは別 option として残す。
 `--pipe-name` は値を必須とする。
 `--model`、`--learning`、`--user-dict`、`--mock-dict`、`--handshake-token` も値を必須とする。
-`userdict` より後ろのトークンは user dictionary CLI へそのまま渡す。
+`userdict` より後ろのトークンは user dictionary CLI へ、`lookup` より後ろのトークンは
+読み取り専用 lookup CLI へそのまま渡す。
 
 ## TSF EditSessionルール
 
@@ -159,6 +160,29 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
 - M11 / M30 の設定アプリ完成後も、`userdict` サブコマンドは v1.x の診断・移行用
   CLI として併存させる。GUI が通常操作面になった後も、CI やサポート手順から再現できる
   低レベル操作面として削除しない。
+- 辞書と学習履歴の診断には、Host を起動しない読み取り専用 CLI を使う。
+  構文は `azookey_inference_host.exe [--learning <path>] [--user-dict <path>] lookup`
+  `--mode <exact|prefix|surface> --query <text> [--format <json|tsv>]` とする。
+  `exact` と `prefix` は reading を、`surface` は表層形を比較する。
+  比較は UTF-8 バイト列の完全一致または前方一致とし、正規化しない。
+  `--query` は空文字列を許可しない。
+  CLI 引数の文字列は UTF-8 バイト列を前提とする。
+  Windows の narrow argv から UTF-8 へ変換する境界はこの CLI の契約外とし、
+  Unicode argv 経路は DEV-962、実機検証は DEV-963 で追跡する。
+  JSON は一致ごとに `op`、`ok`、`mode`、`query`、`source`、`reading`、`surface` と
+  source 固有の値を 1 オブジェクトずつ出力する。
+  JSON オブジェクトのキー順は規定しない。
+  `user_dict` は存在する `cid`、`mid`、`weight` を、`learning` は `weight` と
+  `last_updated_epoch_sec` を source 固有の値として出力する。
+  該当なしの場合は `count: 0` の JSON を 1 行出力し、TSV では何も出力しない。
+  TSV の列は `source`、`reading`、`surface`、`cid`、`mid`、`weight`、
+  `last_updated_epoch_sec` の順とする。
+  結果は reading、surface、source の昇順で固定する。
+  この CLI はディレクトリ作成、legacy file migration、quarantine、保存を行わない。
+  `user_dict.json` の読み取りは `AcquireExclusiveFileLockForPath` の保持中に行い、
+  ロックを取得できない場合は exit code 1 とする。
+  どちらかの入力ファイルを読み込めない場合は部分結果を返さず、exit code 1 とする。
+  したがって破損ファイルの調査でも入力ファイルを変更しない。
 - `user_dict.json` の直接編集経路は、共有ファイル単位の排他ロック
   (`learning/include/azookey/learning/FileLock.h`) を取得してから
   read-modify-write を行う。Host の `AddUserWord` / `RemoveUserWord` も同じロック下で、
@@ -210,9 +234,9 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
-| `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`） | `AcquireExclusiveFileLockForPath` + atomic replace |
+| `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
-| `learning.tsv` | Host のみ | Host | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
+| `learning.tsv` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
 
 - 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
   この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json` の直接 writer にはならない。

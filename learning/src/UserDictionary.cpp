@@ -40,8 +40,7 @@ std::optional<UserWord> WordFromJson(const j::Value& v) {
   return w;
 }
 
-bool QuarantineCorruptFile(const std::string& path) {
-  const std::filesystem::path source(path);
+bool QuarantineCorruptFile(const std::filesystem::path& source) {
   if (!std::filesystem::exists(source)) return true;
 
   const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
@@ -61,9 +60,13 @@ bool QuarantineCorruptFile(const std::string& path) {
 
 }  // namespace
 
-UserDictionary::UserDictionary(std::string path) : path_(std::move(path)) {}
+UserDictionary::UserDictionary(std::filesystem::path path) : path_(std::move(path)) {}
 
-bool UserDictionary::Load() {
+bool UserDictionary::Load() { return LoadImpl(true); }
+
+bool UserDictionary::LoadReadOnly() { return LoadImpl(false); }
+
+bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
   by_ruby_.clear();
   save_blocked_by_corrupt_load_ = false;
   std::ifstream ifs(path_);
@@ -75,12 +78,12 @@ bool UserDictionary::Load() {
   ifs.close();
   auto v = j::Parse(oss.str());
   if (!v || !v->IsObject()) {
-    save_blocked_by_corrupt_load_ = !QuarantineCorruptFile(path_);
+    save_blocked_by_corrupt_load_ = !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
     return false;
   }
   const auto* entries = v->GetArray("entries");
   if (!entries) {
-    save_blocked_by_corrupt_load_ = !QuarantineCorruptFile(path_);
+    save_blocked_by_corrupt_load_ = !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
     return false;
   }
   for (const auto& e : *entries) {

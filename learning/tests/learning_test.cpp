@@ -322,3 +322,118 @@ TEST(LearningStoreTest, PruneDropsLowScoresAndCapsRecordCount) {
 
   std::remove(path.c_str());
 }
+
+TEST(LearningStoreTest, LookupPrefixSortsAndCountsOnlyTheMatchingRange) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  azookey::learning::LearningStore store("unused.tsv");
+  store.Observe("aa", "low", 1.0, kNow);
+  store.Observe("ab", "surface-b", 2.0, kNow);
+  store.Observe("ab", "surface-a", 2.0, kNow);
+  store.Observe("ac", "surface-c", 2.0, kNow);
+  store.Observe("b", "outside", 10.0, kNow);
+
+  const auto result = store.LookupPrefix("a", /*limit=*/3, /*min_score=*/1.5, kNow);
+  ASSERT_EQ(result.matches.size(), 3u);
+  EXPECT_EQ(result.matches[0].reading, "ab");
+  EXPECT_EQ(result.matches[0].surface, "surface-a");
+  EXPECT_EQ(result.matches[1].reading, "ab");
+  EXPECT_EQ(result.matches[1].surface, "surface-b");
+  EXPECT_EQ(result.matches[2].reading, "ac");
+  EXPECT_EQ(result.matches[2].surface, "surface-c");
+  EXPECT_EQ(result.visited_readings, 4u);
+  EXPECT_EQ(result.scanned_records, 4u);
+}
+
+TEST(LearningStoreTest, LookupPrefixAvoidsFullScanAndSupportsPartialUtf8Bytes) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  azookey::learning::LearningStore store("unused.tsv");
+  for (size_t i = 0; i < 9'996; ++i) {
+    store.Observe("bulk-" + std::to_string(i), "surface", 1.0, kNow);
+  }
+  store.Observe("target-1", "high", 2.0, kNow);
+  store.Observe("target-1", "filtered", 0.0, kNow);
+  store.Observe("target-2", "high", 2.0, kNow);
+  store.Observe("targetX", "outside", 2.0, kNow);
+
+  const auto bounded = store.LookupPrefix("target-", /*limit=*/10, /*min_score=*/0.05, kNow);
+  EXPECT_LE(bounded.visited_readings, 3u);
+  EXPECT_EQ(bounded.scanned_records, 3u);
+  ASSERT_EQ(bounded.matches.size(), 2u);
+
+  EXPECT_TRUE(store.LookupPrefix("", /*limit=*/10, /*min_score=*/0.0, kNow).matches.empty());
+  EXPECT_TRUE(store.LookupPrefix("target-", /*limit=*/0, /*min_score=*/0.0, kNow).matches.empty());
+
+  store.Observe("あさ", "朝", 3.0, kNow);
+  std::string partial_utf8 = "あ";
+  partial_utf8.resize(2);
+  const auto partial = store.LookupPrefix(partial_utf8, /*limit=*/5, /*min_score=*/0.05, kNow);
+  ASSERT_EQ(partial.matches.size(), 1u);
+  EXPECT_EQ(partial.matches.front().reading, "あさ");
+}
+
+TEST(LearningStoreTest, LegacyRowsRemainFirstWinsAndSaveInSerializedKeyOrder) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  const auto path = std::filesystem::temp_directory_path() / "azookey_learning_legacy_order.tsv";
+  {
+    std::ofstream out(path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    out << "b\tB\t2 2000000000\n"
+           "a\tA\t1 2000000000\n"
+           "a\tA\t9 2000000000\n";
+  }
+
+  azookey::learning::LearningStore store(path.string());
+  ASSERT_TRUE(store.Load());
+  EXPECT_EQ(store.size(), 2u);
+  EXPECT_DOUBLE_EQ(store.Score("a", "A", kNow), 1.0);
+  ASSERT_TRUE(store.Save());
+
+  std::ifstream in(path, std::ios::binary);
+  const std::string saved((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(saved,
+            "# azookey-learning-tsv escaped=1\n"
+            "a\tA\t1 2000000000\n"
+            "b\tB\t2 2000000000\n");
+  in.close();
+  std::filesystem::remove(path);
+}
+
+TEST(LearningStoreTest, LookupPrefixExcludesCorrectionRecordAtZeroWeight) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  azookey::learning::LearningStore store("unused.tsv");
+  store.Observe("reading-long", "rejected", 1.0, kNow);
+  store.ObserveCorrection("reading-long", "rejected", "selected", 1.0, kNow);
+
+  const auto result = store.LookupPrefix("reading", /*limit=*/10, /*min_score=*/0.05, kNow);
+  ASSERT_EQ(result.matches.size(), 1u);
+  EXPECT_EQ(result.matches.front().surface, "selected");
+  EXPECT_EQ(result.scanned_records, 2u);
+}
+
+#ifdef _WIN32
+TEST(LearningStoreTest, NonAsciiWindowsPathRoundTripsWithoutNarrowing) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  const auto root = std::filesystem::temp_directory_path() / L"azookey_非ASCII_学習";
+  const auto path = root / L"履歴.tsv";
+  std::filesystem::remove_all(root);
+
+  azookey::learning::LearningStore store(path);
+  store.Observe("にほんご", "日本語", 2.0, kNow);
+  ASSERT_TRUE(store.Save());
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  azookey::learning::LearningStore loaded(path);
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_DOUBLE_EQ(loaded.Score("にほんご", "日本語", kNow), 2.0);
+
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output);
+    output << "malformed row";
+  }
+  azookey::learning::LearningStore malformed(path);
+  EXPECT_TRUE(malformed.Load());
+
+  std::filesystem::remove_all(root);
+}
+#endif

@@ -2,9 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
-#include <unordered_map>
+#include <vector>
 
 namespace azookey::learning {
 
@@ -16,9 +18,27 @@ struct LearningRecord {
   uint64_t last_updated_epoch_sec{};
 };
 
+struct LearningEntry {
+  std::string reading;
+  std::string surface;
+  LearningRecord record;
+};
+
+struct PrefixMatch {
+  std::string reading;
+  std::string surface;
+  double score{};
+};
+
+struct PrefixLookupResult {
+  std::vector<PrefixMatch> matches;
+  size_t visited_readings{};
+  size_t scanned_records{};
+};
+
 class LearningStore {
  public:
-  explicit LearningStore(std::string path);
+  explicit LearningStore(std::filesystem::path path);
   virtual ~LearningStore() = default;
 
   bool Load();
@@ -26,21 +46,21 @@ class LearningStore {
   void Reset();
   bool dirty() const;
   size_t size() const;
+  std::vector<LearningEntry> All() const;
+  PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit, double min_score,
+                                  uint64_t now_epoch_sec) const;
 
-  void Observe(const std::string& reading, const std::string& surface, double alpha, uint64_t now_epoch_sec);
-  void ObserveCorrection(const std::string& reading,
-                         const std::string& rejected_surface,
-                         const std::string& selected_surface,
-                         double alpha,
-                         uint64_t now_epoch_sec);
+  void Observe(const std::string& reading, const std::string& surface, double alpha,
+               uint64_t now_epoch_sec);
+  void ObserveCorrection(const std::string& reading, const std::string& rejected_surface,
+                         const std::string& selected_surface, double alpha, uint64_t now_epoch_sec);
   void Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec);
-  virtual double Score(const std::string& reading, const std::string& surface, uint64_t now_epoch_sec) const;
+  virtual double Score(const std::string& reading, const std::string& surface,
+                       uint64_t now_epoch_sec) const;
 
  private:
-  std::string Key(const std::string& reading, const std::string& surface) const;
-
-  std::string path_;
-  std::unordered_map<std::string, LearningRecord> table_;
+  std::filesystem::path path_;
+  std::map<std::string, std::map<std::string, LearningRecord>> table_;
   mutable bool dirty_{false};
 };
 

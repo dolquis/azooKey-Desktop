@@ -10,6 +10,7 @@
 #include <sstream>
 #include <utility>
 
+#include "azookey/host/CliText.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -65,15 +66,6 @@ bool ReadOptionValue(const std::vector<std::string>& args, size_t* index, const 
   }
   *value = args[++(*index)];
   return true;
-}
-
-std::string SanitizeTsvCell(std::string value) {
-  for (char& c : value) {
-    if (c == '\t' || c == '\r' || c == '\n') {
-      c = ' ';
-    }
-  }
-  return value;
 }
 
 j::Object BaseOperationJson(const char* op, bool ok) {
@@ -132,9 +124,8 @@ std::string ListEntryTsvLine(const learning::UserWord& word) {
   return oss.str();
 }
 
-std::string BulkOperationJsonLine(const char* op, bool ok, const std::string& path,
-                                  size_t affected, size_t skipped, bool dry_run,
-                                  const std::string& error = {}) {
+std::string BulkOperationJsonLine(const char* op, bool ok, const std::string& path, size_t affected,
+                                  size_t skipped, bool dry_run, const std::string& error = {}) {
   auto object = BaseOperationJson(op, ok);
   object.emplace("path", j::Value(path));
   object.emplace(op == std::string("import") ? "imported" : "exported",
@@ -379,8 +370,8 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     if (!input.is_open()) {
       result.exit_code = 1;
       result.error = "failed to open import TSV";
-      result.output_lines.push_back(
-          BulkOperationJsonLine("import", false, options.path, 0, 0, options.dry_run, result.error));
+      result.output_lines.push_back(BulkOperationJsonLine("import", false, options.path, 0, 0,
+                                                          options.dry_run, result.error));
       return result;
     }
 
@@ -408,9 +399,9 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
       result.exit_code = 1;
       result.error = "failed to save user dictionary";
     }
-    result.output_lines.push_back(BulkOperationJsonLine(
-        "import", result.exit_code == 0, options.path, imported, skipped, options.dry_run,
-        result.error));
+    result.output_lines.push_back(BulkOperationJsonLine("import", result.exit_code == 0,
+                                                        options.path, imported, skipped,
+                                                        options.dry_run, result.error));
     return result;
   }
 
@@ -425,9 +416,9 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
         result.error = "failed to save export JSON";
       }
     }
-    result.output_lines.push_back(BulkOperationJsonLine(
-        "export", result.exit_code == 0, options.path, entries.size(), 0, options.dry_run,
-        result.error));
+    result.output_lines.push_back(BulkOperationJsonLine("export", result.exit_code == 0,
+                                                        options.path, entries.size(), 0,
+                                                        options.dry_run, result.error));
     return result;
   }
 

@@ -43,7 +43,7 @@
 
 - リポジトリ内ファイルを変更したら、利用可能な場合は、最終報告、stage、commit、push、PR 作成または更新の前に `pre-pr-self-review` を使う。
 - Skill の利用可否にかかわらず、レビュー範囲は通常 `origin/main` との merge-base から作業ツリーまでとし、未追跡ファイルも確認する。既存 PR やユーザーが別 base を指定した場合はそれに従う。
-- push または PR 更新前に全差分を内容まで確認し、debug 用コード、生成物、secret の混入と必要な build / test / lint の結果を点検する。変更起因または変更範囲内の P1 / P2 相当の問題は修正して再検証する。
+- push または PR 更新前に全差分を内容まで確認し、debug 用コード、生成物、secret の混入と必要な build / test / lint の結果を点検する。
 - 変更起因または変更範囲内の問題は修正して検証を再実行する。無関係な既存問題は勝手に直さず、必要なら Linear へ記録する。
 - 実行できなかった検証、失敗、既存失敗は、理由と影響範囲を最終報告と PR 本文に記載する。
 - 新規 PR は利用可能な場合は `create-draft-pr` を使う。使えない場合も同じ head の既存 PR、base / head の repository と branch、compare 範囲を確認し、`gh pr create` では `--repo dolquis/<repository-name> --base main --head <branch-name> --draft` を明示する。
@@ -58,7 +58,7 @@
 
 ## Windows ビルドと実機操作
 
-- Windows CMake / Ninja / MSVC の実ビルドと実テストは、README の preset と利用可能な Windows ホスト実行経路を使う。ハーネス固有の権限指定と診断手順は `docs/handoff/agent-tooling-setup.md` を参照する。
+- Windows CMake / Ninja / MSVC の実ビルドと実テストは、README の preset と利用可能な Windows ホスト実行経路を使う。
 - Full CTest は `cmake --build --preset windows-debug --target azookey_check` を優先する。詳細と停止時の切り分けは `README.md` と `docs/debugging.md` を参照する。
 - `.ninja_lock` は関連する `ninja`、`cmake`、`cl`、`link`、`ctest` のプロセスを確認するまで削除しない。
 - TIP の machine-wide 登録はユーザーが管理者 PowerShell で完了する。エージェント単独で Human Gate を完了扱いにしない。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the repository AGENTS.md byte budget."""
+"""Enforce the AGENTS.md byte budget defined by docs/dev-infrastructure-spec.md §4.3."""
 
 from __future__ import annotations
 

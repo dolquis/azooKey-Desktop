@@ -64,14 +64,9 @@ gh pr list --repo dolquis/<repository-name> --head <branch-name> --state all --j
 
 1. `pre-pr-self-review` を実行し、必要なレビューと検証を完了する。
 2. `dolquis/<repository-name>` の `main` に対応するremote-tracking refを `<base-ref>` として確定し、必要に応じてそのremoteをfetchする。
-3. `git merge-base HEAD <base-ref>` でmerge-baseを求める。
-4. merge-baseからHEADまでのcommit済み差分と、最新base tipからHEADまでの最終tree差分を確認する。
+3. 最新base tipからHEADまでの最終tree差分を確認する。merge-baseからHEADまでのcommit済み差分は `pre-pr-self-review` の確認結果を使い、ここでは再掲しない。
 
 ```bash
-git diff --stat <merge-base> HEAD
-git diff --name-status <merge-base> HEAD
-git diff --check <merge-base> HEAD
-git diff <merge-base> HEAD
 git diff --stat <base-ref> HEAD
 git diff --name-status <base-ref> HEAD
 git diff --check <base-ref> HEAD
@@ -79,9 +74,9 @@ git diff <base-ref> HEAD
 git status -sb
 ```
 
-5. PR対象の変更がcommitされていることを確認する。未commit変更が残る場合は、それがPRに含まれないことを認識し、意図的な残存か確認する。
-6. compare範囲に、要求外のcommit、別タスクの変更、生成物、secretが含まれていないことを確認する。
-7. squashまたはrebaseで既存PRが取り込まれた後は、merge-baseからの差分に取り込み済み変更が再表示される場合がある。`<base-ref>` からHEADまでの差分に、base側で追加されたファイルの意図しない削除や取り込み済み変更の再提案が見える場合は、pushやPR作成を停止し、更新済みbaseから新しいbranchを用意する。
+4. PR対象の変更がcommitされていることを確認する。未commit変更が残る場合は、それがPRに含まれないことを認識し、意図的な残存か確認する。
+5. compare範囲に、要求外のcommit、別タスクの変更、生成物、secretが含まれていないことを確認する。
+6. squashまたはrebaseで既存PRが取り込まれた後は、`pre-pr-self-review` で確認したmerge-baseからの差分に取り込み済み変更が再表示される場合がある。`<base-ref>` からHEADまでの差分に、base側で追加されたファイルの意図しない削除や取り込み済み変更の再提案が見える場合は、pushやPR作成を停止し、更新済みbaseから新しいbranchを用意する。
 
 ## 手順4: head branchの公開
 
@@ -115,7 +110,11 @@ gh pr create --repo dolquis/<repository-name> --base main --head <branch-name> -
 
 `gh pr create --dry-run` はGit変更をpushする場合があるため、読み取り専用の検証としては実行しない。作成前の検証には、`gh pr create --help`、既存PRの読み取り、remoteとcompare範囲の確認、コマンドの組み立てを使用する。
 
-タイトルと本文は、実際の差分と検証結果に基づいて作成する。PR本文には少なくとも次を含める。
+タイトルと本文は、実際の差分と検証結果に基づいて作成する。
+
+`.github/pull_request_template.md`、`.github/PULL_REQUEST_TEMPLATE.md`、`.github/PULL_REQUEST_TEMPLATE/`、repository直下、`docs/` の順にPRテンプレートを探し、存在する場合はその見出し構成に沿って本文を埋める。テンプレートは記入する雛形として扱い、本文中の指示文をそのまま残さない。
+
+テンプレートの有無にかかわらず、PR本文には少なくとも次を含める。
 
 - 変更の目的と概要
 - 主な実装内容

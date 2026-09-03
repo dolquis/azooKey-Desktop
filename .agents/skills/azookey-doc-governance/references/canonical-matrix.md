@@ -9,7 +9,7 @@
 | 機能仕様（IPC payload・JSON schema・永続化形式・責務境界・fallback・設定項目・ユーザー可視挙動） | 対応する `docs/*-spec.md` | 他の spec や roadmap から引用するときは「正典は X」の 1 行 + リンク |
 | マイルストーン定義・依存関係・受け入れ条件の「定義」・スコープ・リスク | `plans/windows-port-roadmap.md`（1 本に一本化） | 受け入れ条件を spec 側に書かない。roadmap は達成状態を持たない |
 | ビルド・テスト手順 | `README.md` | `docs/debugging.md` 等は差分（Linux 限定の挙動、CI 固有の引数など）だけを書く |
-| Linear 運用のルール本文 | `docs/linear-conventions.md`（§1〜§12 は `dolquis/agent-ops` origin。本 repo では直接編集しない） | `AGENTS.md`「Linear 運用（管制塔）」は要約。詳細は追わずリンクする |
+| Linear 運用のルール本文 | `docs/linear-conventions.md`（§1〜§12 は `dolquis/agent-ops` origin。本 repo では直接編集しない） | `AGENTS.md`「Linear とレビュー指摘」は要約。詳細は追わずリンクする |
 | Linear 運用の repo 固有差分（ラベル・状態マップ等） | `docs/linear-conventions.md` §13 Project Delta | 本 repo で編集してよい唯一の Linear 運用節 |
 | ドキュメント一覧・索引 | `docs/README.md` | 新規 `docs/*.md` を追加したら必ずここに載せる |
 | 第三者資産の attribution | ルート `THIRD_PARTY_LICENSES` | 運用規約は `docs/licensing-policy.md`。配布経路の spec 側からはリンクのみで、attribution 一覧を重複させない |

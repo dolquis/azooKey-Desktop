@@ -500,7 +500,8 @@ OFF のまま）。
 
 - Agent 指示予算 — root `AGENTS.md` の UTF-8 byte size は 12 KiB を目標、
   16 KiB を上限とする。目標超過は GitHub Actions annotation で可視化し、
-  上限超過は非 0 終了で PR を停止する。機械利用時の `--json` は単一行を保つ
+  上限超過は非 0 終了で PR を停止する。機械利用時の `--json` は単一行を保つ。
+  実装は `scripts/check_agent_instruction_size.py`（本節を正典とする）。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の

@@ -1,14 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <initializer_list>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "azookey/host/LookupCli.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
@@ -69,8 +73,43 @@ TEST(LookupCliTest, RejectsMissingAndInvalidArguments) {
   EXPECT_FALSE(Parse({"--mode", "exact"}, &error));
   EXPECT_EQ(error, "--query is required");
 
+  EXPECT_FALSE(Parse({"--mode", "exact", "--query", ""}, &error));
+  EXPECT_EQ(error, "--query must not be empty");
+
   EXPECT_FALSE(Parse({"--mode", "surface", "--query", "x", "--format", "xml"}, &error));
   EXPECT_EQ(error, "invalid --format value: xml");
+}
+
+TEST(LookupCliTest, FailsWhenUserDictionaryLockIsUnavailable) {
+  const auto paths = PreparePaths("azookey_lookup_cli_lock_unavailable");
+  const auto options = Parse({"--mode", "exact", "--query", "x"});
+  ASSERT_TRUE(options);
+
+  std::promise<bool> acquired;
+  std::promise<void> release;
+  auto release_future = release.get_future().share();
+  std::thread holder([&] {
+    auto lock = azookey::learning::AcquireExclusiveFileLockForPath(paths.user_dict,
+                                                                   std::chrono::milliseconds(1000));
+    acquired.set_value(lock.has_value());
+    if (lock) release_future.wait();
+  });
+
+  const bool has_lock = acquired.get_future().get();
+  if (!has_lock) {
+    holder.join();
+    GTEST_SKIP() << "failed to acquire fixture lock";
+  }
+
+  azookey::host::LookupCliRunOptions run_options{paths.learning, paths.user_dict};
+  run_options.user_dict_lock_timeout = std::chrono::milliseconds(0);
+  const auto result = azookey::host::RunLookupCli(*options, run_options);
+
+  release.set_value();
+  holder.join();
+  EXPECT_EQ(result.exit_code, 1);
+  EXPECT_EQ(result.error, "failed to lock user dictionary");
+  std::filesystem::remove_all(paths.root);
 }
 
 TEST(LookupCliTest, ExactReadingFindsUserDictionaryAndLearningEntries) {
@@ -198,6 +237,7 @@ TEST(LookupCliTest, MalformedUserDictionaryIsNotQuarantinedOrChanged) {
   const auto result = RunLookup(*options, paths);
   EXPECT_EQ(result.exit_code, 1);
   EXPECT_EQ(result.error, "failed to load user dictionary");
+  EXPECT_TRUE(result.output_lines.empty());
   EXPECT_TRUE(std::filesystem::exists(paths.user_dict));
   std::ifstream input(paths.user_dict, std::ios::binary);
   EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()),

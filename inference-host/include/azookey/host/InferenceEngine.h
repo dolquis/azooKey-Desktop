@@ -39,6 +39,8 @@ struct EngineConfig {
   uint64_t learning_flush_interval_sec{5};
   size_t learning_max_records{10000};
   double learning_min_weight{0.05};
+  // Internal prediction policy from user-learning-enhancement-spec.md section 14.6.
+  // These values are runtime configuration, not persisted settings keys.
   size_t prediction_learning_max_entries{3};
   double prediction_learning_min_score{0.05};
   // Default score for user-dictionary entries that lack an explicit value.

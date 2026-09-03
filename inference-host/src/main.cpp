@@ -46,6 +46,11 @@ azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
   return azookey::logging::RuntimeLogSafeText(std::move(value));
 }
 
+std::string PathToUtf8(const std::filesystem::path& path) {
+  const auto utf8 = path.u8string();
+  return std::string(utf8.begin(), utf8.end());
+}
+
 constexpr const char* kHostVersion = "0.1.0";
 volatile std::sig_atomic_t g_signal_stop_requested = 0;
 
@@ -441,7 +446,8 @@ int main(int argc, char** argv) {
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
             << (startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
-            << " learning=" << learning_path << " user_dict=" << user_dict_path
+            << " learning=" << PathToUtf8(user_paths->learning_path)
+            << " user_dict=" << PathToUtf8(user_paths->user_dict_path)
             << " model_loaded=" << (startup_health.model_loaded ? "true" : "false");
   if (startup_health.model_preload_in_progress) {
     std::cerr << " model_preload=preloading";

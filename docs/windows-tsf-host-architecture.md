@@ -166,8 +166,12 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
   `exact` と `prefix` は reading を、`surface` は表層形を比較する。
   比較は UTF-8 バイト列の完全一致または前方一致とし、正規化しない。
   `--query` は空文字列を許可しない。
+  CLI 引数の文字列は UTF-8 バイト列を前提とする。
+  Windows の narrow argv から UTF-8 へ変換する境界はこの CLI の契約外とし、
+  Unicode argv 経路は DEV-962、実機検証は DEV-963 で追跡する。
   JSON は一致ごとに `op`、`ok`、`mode`、`query`、`source`、`reading`、`surface` と
   source 固有の値を 1 オブジェクトずつ出力する。
+  JSON オブジェクトのキー順は規定しない。
   `user_dict` は存在する `cid`、`mid`、`weight` を、`learning` は `weight` と
   `last_updated_epoch_sec` を source 固有の値として出力する。
   該当なしの場合は `count: 0` の JSON を 1 行出力し、TSV では何も出力しない。
@@ -175,6 +179,9 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
   `last_updated_epoch_sec` の順とする。
   結果は reading、surface、source の昇順で固定する。
   この CLI はディレクトリ作成、legacy file migration、quarantine、保存を行わない。
+  `user_dict.json` の読み取りは `AcquireExclusiveFileLockForPath` の保持中に行い、
+  ロックを取得できない場合は exit code 1 とする。
+  どちらかの入力ファイルを読み込めない場合は部分結果を返さず、exit code 1 とする。
   したがって破損ファイルの調査でも入力ファイルを変更しない。
 - `user_dict.json` の直接編集経路は、共有ファイル単位の排他ロック
   (`learning/include/azookey/learning/FileLock.h`) を取得してから

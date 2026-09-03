@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -27,6 +28,7 @@ struct LookupCliOptions {
 struct LookupCliRunOptions {
   std::filesystem::path learning_path;
   std::filesystem::path user_dict_path;
+  std::chrono::milliseconds user_dict_lock_timeout{5000};
 };
 
 struct LookupCliResult {

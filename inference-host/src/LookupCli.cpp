@@ -11,7 +11,9 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/host/CliText.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
@@ -76,13 +78,6 @@ bool Matches(const LookupCliOptions& options, const std::string& reading,
       return surface == options.query;
   }
   return false;
-}
-
-std::string SanitizeTsvCell(std::string value) {
-  for (char& ch : value) {
-    if (ch == '\t' || ch == '\r' || ch == '\n') ch = ' ';
-  }
-  return value;
 }
 
 std::string JsonLine(const LookupCliOptions& options, const LookupMatch& match) {
@@ -180,8 +175,12 @@ std::optional<LookupCliOptions> ParseLookupCliArgs(const std::vector<std::string
     SetError(error, "--mode is required");
     return std::nullopt;
   }
-  if (!has_query || options.query.empty()) {
+  if (!has_query) {
     SetError(error, "--query is required");
+    return std::nullopt;
+  }
+  if (options.query.empty()) {
+    SetError(error, "--query must not be empty");
     return std::nullopt;
   }
   return options;
@@ -192,23 +191,33 @@ LookupCliResult RunLookupCli(const LookupCliOptions& options,
   LookupCliResult result;
   std::vector<LookupMatch> matches;
 
-  bool user_dict_exists = false;
-  if (!PathExists(run_options.user_dict_path, &user_dict_exists)) {
-    result.exit_code = 1;
-    result.error = "failed to inspect user dictionary path";
-    return result;
-  }
-  if (user_dict_exists) {
-    learning::UserDictionary dictionary(run_options.user_dict_path);
-    if (!dictionary.LoadReadOnly()) {
+  {
+    auto user_dict_lock = learning::AcquireExclusiveFileLockForPath(
+        run_options.user_dict_path, run_options.user_dict_lock_timeout);
+    if (!user_dict_lock) {
       result.exit_code = 1;
-      result.error = "failed to load user dictionary";
+      result.error = "failed to lock user dictionary";
       return result;
     }
-    for (const auto& word : dictionary.All()) {
-      if (!Matches(options, word.ruby, word.word)) continue;
-      matches.push_back({LookupSource::UserDictionary, word.ruby, word.word, word.cid, word.mid,
-                         word.value, std::nullopt});
+
+    bool user_dict_exists = false;
+    if (!PathExists(run_options.user_dict_path, &user_dict_exists)) {
+      result.exit_code = 1;
+      result.error = "failed to inspect user dictionary path";
+      return result;
+    }
+    if (user_dict_exists) {
+      learning::UserDictionary dictionary(run_options.user_dict_path);
+      if (!dictionary.LoadReadOnly()) {
+        result.exit_code = 1;
+        result.error = "failed to load user dictionary";
+        return result;
+      }
+      for (const auto& word : dictionary.All()) {
+        if (!Matches(options, word.ruby, word.word)) continue;
+        matches.push_back({LookupSource::UserDictionary, word.ruby, word.word, word.cid, word.mid,
+                           word.value, std::nullopt});
+      }
     }
   }
 

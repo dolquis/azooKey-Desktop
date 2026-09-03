@@ -29,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXCLUDE_DIR_PREFIXES = ("legacy/", "build/", "third_party/", ".git/", "docs/archive/")
 
 # このファイル自体は運用ドキュメントであり、状態遷移そのものが主題のため
-# status-word 検査から除外する（AGENTS.md「Linear 運用」節が正典として指定）。
+# status-word 検査から除外する（AGENTS.md「対象と正典」が正典として指定）。
 STATUS_WORD_EXEMPT_FILES = {
     "docs/linear-conventions.md",
 }
@@ -37,7 +37,7 @@ STATUS_WORD_EXEMPT_FILES = {
 # 拡張子を持たないが README/docs/plans と同格の統治対象として扱うファイル。
 EXTRA_TEXT_FILES = ["THIRD_PARTY_LICENSES"]
 
-# AGENTS.md「エージェントツール構成」が明示する意図的な非対称スキル
+# AGENTS.md「Skill の配置」が明示する意図的な非対称スキル
 # （Claude 専用スキルで .agents/skills/ には置かない）。
 MIRROR_ALLOWED_ASYMMETRIC = {"doc-coauthoring"}
 

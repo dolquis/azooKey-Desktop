@@ -22,7 +22,7 @@ approval_policy = "on-request"
 # ─────────────────────────────────────────────
 
 [sandbox_workspace_write]
-# MCP HTTP (context7 等) と GoogleTest FetchContent のためにネットワーク許可
+# GoogleTest FetchContent などのためにネットワーク許可
 network_access = true
 
 # ─────────────────────────────────────────────
@@ -38,15 +38,10 @@ sandbox_private_desktop = true
 # MCP サーバー定義 (共有)
 # ─────────────────────────────────────────────
 
-# Context7: TSF/COM/Win32 API のドキュメントを最新で参照 (全 OS で動作)
-[mcp_servers.context7]
-url = "https://mcp.context7.com/mcp"
-startup_timeout_sec = 15
-
 # PowerShell.MCP: scripts/register-dev.ps1 等の管理者コマンドを安全に提示
 # command は Get-MCPProxyPath が返す PowerShell.MCP.Proxy.exe の絶対パスを
 # 環境変数 POWERSHELL_MCP_PROXY に設定して参照する (Windows 専用)。
-# 詳細は AGENTS.md のエージェントツール構成セクションを参照。
+# 詳細は docs/handoff/agent-tooling-setup.md を参照。
 [mcp_servers.powershell]
 command = "${POWERSHELL_MCP_PROXY}"
 startup_timeout_sec = 30

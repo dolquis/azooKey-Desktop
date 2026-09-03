@@ -498,6 +498,10 @@ OFF のまま）。
 
 ### 4.3 追加チェック
 
+- Agent 指示予算 — root `AGENTS.md` の UTF-8 byte size は 12 KiB を目標、
+  16 KiB を上限とする。目標超過は GitHub Actions annotation で可視化し、
+  上限超過は非 0 終了で PR を停止する。機械利用時の `--json` は単一行を保つ。
+  実装は `scripts/check_agent_instruction_size.py`（本節を正典とする）。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の
@@ -855,7 +859,7 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 ### 6.2 JSON パーサ強化要件
 
 `ipc/src/Json.cpp` は次の防御を備える。各上限値は**本節（spec）を正典**とする
-（AGENTS.md 正典マトリクス: IPC payload / JSON schema / 挙動の決定は
+（AGENTS.md「対象と正典」: IPC payload / JSON schema / 挙動の決定は
 `docs/*-spec.md`）。`ipc/include/azookey/ipc/Limits.h` の定数は本節の値に
 一致させ、齟齬が出た場合は spec を正として Limits.h を修正する。コード側の
 上限変更は wire contract と受け入れ条件に影響するため、spec 更新（レビュー）と

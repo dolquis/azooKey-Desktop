@@ -10,6 +10,8 @@ on:
       - '.claude/**'
       - '.agents/**'
       - 'scripts/docs-lint.py'
+      - 'scripts/check_agent_instruction_size.py'
+      - 'scripts/tests/test_agent_instruction_size.py'
   pull_request:
     paths:
       - '**/*.md'
@@ -18,6 +20,8 @@ on:
       - '.claude/**'
       - '.agents/**'
       - 'scripts/docs-lint.py'
+      - 'scripts/check_agent_instruction_size.py'
+      - 'scripts/tests/test_agent_instruction_size.py'
 
 permissions:
   contents: read
@@ -28,7 +32,7 @@ concurrency:
 
 jobs:
   docs-lint:
-    name: docs-lint (warning-only)
+    name: docs-lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -38,3 +42,9 @@ jobs:
 
       - name: Run docs-lint
         run: python3 scripts/docs-lint.py
+
+      - name: Test AGENTS.md size checker
+        run: python3 scripts/tests/test_agent_instruction_size.py
+
+      - name: Enforce AGENTS.md byte budget
+        run: python3 scripts/check_agent_instruction_size.py

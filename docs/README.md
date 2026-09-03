@@ -5,7 +5,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 > **状態・進捗・優先度・課題トラッキングの正典は Linear**（team `Dev` / project
 > 「azooKey Desktop / Windows IME MVP」）。repo docs は仕様・構造・定義の正典であり、状態は持たない。
-> 運用は `AGENTS.md`「Linear 運用（管制塔）」を参照。
+> 運用規約は [`linear-conventions.md`](linear-conventions.md) を参照。
 
 ## 計画ドキュメント（`plans/`）
 
@@ -57,7 +57,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`debugging.md`](debugging.md) | ビルド・ベンチ・手動確認・ログ収集・CI・典型トラブル |
 | [`licensing-policy.md`](licensing-policy.md) | 第三者資産 attribution 規約（三層 attribution・データヘッダ・採用ワークフロー）の正典。集約表記の実体はルート [`THIRD_PARTY_LICENSES`](../THIRD_PARTY_LICENSES) |
-| [`linear-conventions.md`](linear-conventions.md) | Linear 運用（管制塔）の正典。ラベル規約・状態ライフサイクル・週次監査・repo 固有 Delta（§13）。`AGENTS.md`「Linear 運用（管制塔）」はこの要約 |
+| [`linear-conventions.md`](linear-conventions.md) | Linear 運用（管制塔）の正典。ラベル規約・状態ライフサイクル・週次監査・repo 固有 Delta（§13）。`AGENTS.md` は常時必要な要点だけを要約 |
 | Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔） |
 
 ### 恒常 runbook（`docs/handoff/`）
@@ -72,7 +72,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順 |
 | [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | Hyper-V VM 検証環境そのものの構築・スパイク計画 |
 | [`handoff/dev32-verification-checklist.md`](handoff/dev32-verification-checklist.md) | VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する汎用チェックリスト |
-| [`handoff/claude-code-web-setup.md`](handoff/claude-code-web-setup.md) | Claude Code on the web のセットアップ手順。`AGENTS.md`「エージェントツール構成」から参照 |
+| [`handoff/claude-code-web-setup.md`](handoff/claude-code-web-setup.md) | Claude Code on the web のセットアップ手順 |
+| [`handoff/agent-tooling-setup.md`](handoff/agent-tooling-setup.md) | Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順 |
 
 ## Phase 一覧
 

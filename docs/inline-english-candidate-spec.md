@@ -3,8 +3,8 @@
 本書は azooKey-Desktop Windows 版の「ローマ字入力中インライン英単語候補（Inline
 English Candidate in Romaji Input）」機能を定める。`plans/windows-port-roadmap.md` の
 M60 が本書を参照する。本書は機能仕様（IPC payload・設定項目・ユーザー可視挙動）の
-正典であり、進捗・状態は持たない（状態の正典は Linear。`AGENTS.md`「Linear 運用
-（管制塔）」参照）。
+正典であり、進捗・状態は持たない（状態の正典は Linear。
+運用規約は `docs/linear-conventions.md` を参照）。
 
 関連 spec:
 

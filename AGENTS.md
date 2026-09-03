@@ -1,375 +1,70 @@
-# AIエージェント向け GitHub作業・PR作成ルール
-
-このリポジトリで作業するAIエージェントは、以下のルールを必ず守ること。
-本ファイルがエージェント規約の正典であり、`CLAUDE.md` は本ファイルを参照する。
-
-## 最重要方針
-
-- PRは必ずDraft PRとして作成する。
-- フォーク元リポジトリにPRを出さない。
-- 通常作業のPR作成先は、必ず `dolquis/<repository-name>` にする。
-- `gh pr create` を使う場合は、必ず `--repo dolquis/<repository-name>` を明示する。
-- `main` ブランチへ直接pushしない。
-- フォーク元リポジトリへPRを出す必要がある場合は、作成前に必ずユーザーへ確認する。
-- base repository / base branch / head repository / compare branch を確認せずにPRを作成してはいけない。
-
-## 現行対象と legacy の扱い
-
-- 現行の開発対象は **Windows 版 azooKey-Desktop** である。保守対象は `tsf-tip/`
-  `inference-host/` `core/` `ipc/` `learning/` `settings/` などの Windows 実装。
-- `legacy/` 配下の macOS / Swift 実装は保全された参照資産であり、保守対象ではない。
-- `legacy/` の挙動を、そのまま Windows 版の正解として扱ってはいけない。参考にする場合も
-  Windows 版としての仕様判断は別途行う。
-- 仕様判断は `docs/*-spec.md`、開発順序・マイルストーン定義は
-  `plans/windows-port-roadmap.md` を正典とする。進捗・状態・優先度の正典は Linear
-  （「Linear 運用（管制塔）」参照）。`legacy/` と Windows 仕様が食い違う場合は後者を優先する。
-- `legacy/` を変更対象に含める必要がある場合は、作業前に必ずユーザーへ確認する。
-
-## 通常のPR作成コマンド
-
-通常作業では、必ず以下の形式でDraft PRを作成する。
-
-```bash
-gh pr create \
-  --repo dolquis/<repository-name> \
-  --base main \
-  --head <branch-name> \
-  --draft
-```
-
-## セルフレビュー方針
-
-変更をpushしてPRを作成する前に、必ずセルフレビューを実施すること。
-
-- `git diff` で全変更内容を最初から最後まで確認する。
-- 変更が依頼内容を満たしているか、意図しない変更や無関係なファイルが
-  含まれていないかを点検する。
-- デバッグ用コード・コメントアウト・一時ファイルなど不要な残骸を削除する。
-- 機密情報（鍵・トークン・認証情報など）が含まれていないか確認する。
-- 可能な場合はビルド・テスト・Lintを実行し、結果が通ることを確認する。
-- バグや P1・P2 レベルの問題（クラッシュ・データ破損・機能不全・
-  セキュリティリスクなど影響度の高い欠陥）が混入していないかを点検し、
-  検出した場合は push 前に必ず修正する。
-- セルフレビューで問題が見つかった場合は、push前に修正する。
-- `README.md` / `docs/` / `plans/` / `.claude/skills/` / `.agents/skills/` を変更した場合は
-  `python3 scripts/docs-lint.py` を実行し、新たに増えた warning が正当か確認する
-  （詳細は `azookey-doc-governance` スキル）。
-
-## レビュー指摘事項の追跡・修正方針
-
-レビュー・監査・セルフレビューで検出した問題は、以下の方針で必ず追跡・修正する。
-
-- **当該セッション内で修正しない問題は、必ず Linear（team `Dev` / 該当 Project）に
-  起票する。** 以後の修正は Linear 課題を起点に行い、PR 提出で In Review に、マージで
-  Merged に、検証メモ記載後に Done に遷移させる（状態遷移は「Linear 運用（管制塔）」の
-  状態ライフサイクルに従う）。GitHub Issues は mirror であり、Linear 課題には対応する
-  GitHub Issue / PR リンクを必須付与する。
-- 課題本文には最低限、次を記載する: 該当 file:line / 現象 / 影響 / 推奨修正 /
-  関連 Linear milestone (あれば)。重要度は Linear の **Priority**（Urgent・High・Medium・Low）で
-  表し、`repo:*` / `area:*` / `agent:*` ラベルを付与する。
-- 既存ロードマップ (`plans/windows-port-roadmap.md`) に該当節（「既知のテストギャップ」
-  「リスク」、対応する M 番号など）があれば相互参照する。進捗・状態は roadmap に書かず Linear に置く。
-- 問題一覧を README や `docs/`・roadmap に「TODO」「進捗」「状態」セクションとして
-  書かない (時系列で陳腐化するため。トラッカーは Linear に一本化する)。
-- セルフレビューで検出した P1・P2 は push 前に修正する。修正しないものは
-  本方針に従って Linear 課題化し、放置しない。
-- 例外: Linear が利用できない場合に限り、暫定的に該当 PR / GitHub Issue 本文に記載し、
-  復旧後に Linear へ移す。
-- 詳細な運用（正典マトリクス・ラベル・状態ライフサイクル・週次監査）は
-  「Linear 運用（管制塔）」を参照。
-
-## Linear 運用（管制塔）
-
-開発の進捗・状態・優先度・トリアージは Linear で管理する（「管制塔」）。GitHub は
-コード・PR・ドキュメントのホストであり、課題トラッキングの正典は Linear に置く。
-
-### 正典マトリクス
-
-| 情報種別 | 正典 |
-|---|---|
-| 状態・進捗・優先度・担当・サイクル | **Linear** |
-| 課題トラッキング（バグ・タスクの起票/状態/優先度） | **Linear**（GitHub Issues は mirror） |
-| 機能仕様（IPC payload・JSON schema・永続化形式・責務境界・fallback・設定項目・ユーザー可視挙動） | `docs/*-spec.md` |
-| マイルストーン定義・依存関係・受け入れ条件の「定義」・スコープ・リスク | `plans/windows-port-roadmap.md`（達成状態は持たない） |
-| コード・ビルド/テスト手順 | リポジトリ（`README.md`） |
-
-進捗表・状態表を README / `docs/` / roadmap / Issue / PR 本文に作らない（陳腐化するため）。
-状態は Linear のみが持つ。受け入れ条件は「定義」を roadmap、「達成状態」を Linear に置く。
-
-### ワークスペース構成
-
-- ワークスペース `dolquis` / team `Dev`（key `DEV`）。
-- リポジトリごとに Project を分ける（`azooKey Desktop / Windows IME MVP` と
-  `Shift Alarm / Calender_Aralrm` を分離済み）。複数リポジトリを 1 Project に混在させない。
-
-### ラベル規約（起票時に必須付与）
-
-- `repo:*` … リポジトリ識別（例 `repo:azooKey-Desktop`）。
-- `area:*` … 技術領域（例 `area:tsf-tip` `area:ipc` `area:learning` `area:inference-host`
-  `area:converter-core` `area:settings`（設定アプリ / schema）`area:build`（CMake / CTest /
-  CI / コード署名 / MSIX）`area:docs`（ドキュメント・ガバナンス、repo 横断共有））。
-- `agent:*` … 担当エージェント（`agent:claude-design` `agent:claude-review`
-  `agent:codex-impl` `agent:codex-pr-review`）。ただし `gate:human-required` を付与した
-  人間専任タスク（実機検証など）は AI 担当が存在しないため `agent:*` を免除する。
-- `gate:human-required` … 完了前に人間の検証が必須な作業（実機確認・署名値設定など）。
-  本ラベルを付与した課題は `agent:*` を省略してよい（上記 `agent:*` 参照）。
-- `Migrated` … GitHub から移行した課題（対応する GitHub Issue リンクを必須付与）。
-- **Codex 実行ポリシー** … `agent:codex-*` は候補（ルーティング）ラベルであり Codex 実行許可ではない。Codex Cloud の起動（assign / delegate / mention）は人間の明示許可があるときのみで、Claude は行わない。正典は `docs/linear-conventions.md` §2.1 Codex Execution Policy。
-
-### 状態ライフサイクル
-
-| status | 意味 | 遷移トリガ | 操作者 |
-|---|---|---|---|
-| Backlog | 未 triage | 起票直後 | 起票者 |
-| Todo | triage 済・着手可（Priority 確定） | triage | Claude / 人間 |
-| In Progress | 実装中 | ブランチ作成・着手 | Codex |
-| In Review | Draft PR 提出済み（open PR あり） | PR 作成 | Codex / Claude |
-| Merged | PR マージ済み・検証メモ待ち | PR マージ（連携の自動遷移） | GitHub 連携 / Claude |
-| Done | レビュー合格 + マージ + **検証メモ記載** | 検証メモ記載後の明示遷移 | Claude |
-| Canceled / Duplicate | 中止 / 重複 | 随時 | Claude |
-
-- Done への遷移時は、どのテスト / 実機確認で確認したかの検証メモを Linear にコメントする。
-- 記録の鮮度: description には Linear の状態から導出できる記述（状態名・残件数・「〜待ち」）を書かない。状態依存の記録（Current focus / Next AI Tasks / Next checkpoint）は日付つきの器へ置く。Project は **Project Status Update**（14 日に 1 本以上、3 節そろえる）に置く。tracking Issue は `Status snapshot YYYY-MM-DD` 見出しのコメントに置く（`docs/linear-conventions.md` §7.2 / §12）。
-- 人間ゲート課題（`gate:human-required` の人間専任 Issue）は PR を持たないため In Review /
-  Merged に置かず、Todo のまま人間の着手を待つ。`type:tracking` は子完了まで In Progress を
-  維持する（`docs/linear-conventions.md` §3.1）。
-- 役割分担: Claude = 設計・レビュー（triage・起票・Priority・依存・status → Done）、
-  Codex = 実装（`agent:codex-impl` 課題の着手 → 実装 → Draft PR）、人間 = 舵取り
-  （Priority / Cycle 決定・マージ）。
-
-### GitHub との対応
-
-- ブランチ命名は Linear の自動命名に合わせ **`dolquis/dev-<番号>-<slug>`** とする。
-- PR 本文に対応課題（`DEV-<番号>` / GitHub ミラーは `Fixes #<番号>`）を記載し、Linear と相互リンクする。ただし **`gate:human-required` / 検証メモ待ちの Issue では `Fixes #` を使わず `Refs #<番号>` 等の非クローズ参照にする**（GitHub Issue クローズ → Linear 同期で Done 化し Merged を迂回するため。§7.1.3）。
-- PR オープン → 該当 Linear 課題を In Review。**PR マージで Merged へ遷移させ（自動 Done にしない）**、Done は検証メモ記載後に Claude / 人間が明示遷移する（`docs/linear-conventions.md` §7.1.3）。
-- `agent:claude-design` / `claude-review` と `gate:human-required` が両方絡む課題は、設計 Issue と人間ゲート Issue（`Human Gate: …`）に分離する（分離テストと規格は `docs/linear-conventions.md` §7.1）。
-
-### 週次 control tower audit
-
-Linear の定期監査課題（`[Recurring] Linear control tower audit`）で次を点検する:
-Project / `repo:*` / `area:*` / `agent:*` ラベルの欠落（`gate:human-required` の人間専任
-タスクは `agent:*` 免除）、`Migrated` の GitHub リンク欠落、人間検証作業の
-`gate:human-required` 欠落、Tracking 課題の子未リンク、Done の検証メモ欠落、
-`agent:codex-impl` フィーチャー（`kind:feature`。Phase 4 完了までは旧 `Feature` /
-`enhancement` も対象）が対応する `docs/*-spec.md` 節（または roadmap の該当 M 節）で
-難所（payload / schema・境界値・アルゴリズム・IPC 責務境界）を確定する前に
-In Progress へ入っていないか（spec-first 分業の担保）。spec-first の対象には、
-未定義だった既定値・状態遷移を確定する `kind:bug` も含める。さらに
-未完了のままアーカイブされた課題（アーカイブ衛生）と、
-前提の失効した保留（保留理由とした仕組みが別課題の着地で用意済みになっていないか）、
-`agent:codex-impl` の実装課題に `gate:human-required` が同居していないか
-（実装と人間ゲートの分離。§7.1.1 に該当するなら分割する）、
-親課題の Done 遷移に巻き込まれた一括 Done（同一時間帯に複数が無記録で Done 化、
-「未完了のまま維持する」と明記した直後の Done 化、`startedAt` が null のまま
-Done になった `type:implementation` 課題）を点検する。
-さらに、Linear の状態と main の実体の突合を双方向で行う。
-直近サイクルで Done へ遷移した `type:implementation` 課題について、本文の受け入れ条件が
-名指しするファイル / ジョブ / フラグが main に実在するか（方向 A）と、未 Done の実装課題のうち
-本文の「現象」が現行 main で再現しなくなっているもの（方向 B）を点検する。
-方向 A は元課題を復帰させず新規課題として再起票し、方向 B は検証メモを添えて閉じる。
-点検はサンプリングでよく、全数確認は求めない。
-レーン衛生・記録の鮮度・期日の機械判定は origin（`dolquis/agent-ops`）の
-`scripts/linear-audit.py` が正典で、監査の最初に実行する（`docs/linear-conventions.md` §11）。
-以上の repo 固有項目の詳細は `docs/linear-conventions.md` §13 Project Delta。加えて
-Codex safety checks（無許可の Codex delegate / mention、放置された delegate 済み課題など。
-`docs/linear-conventions.md` §11）も点検する。
-点検は Linear のルーティング衛生のみを対象とし、仕様・設計の正典は引き続き repo docs に置く。
-
-## README 編集ルール
-
-`README.md` はフォーク元 (ensan-hcl/azooKey) のオリジナル版に近い、
-簡潔な紹介ドキュメントとして保つ。以下を厳守すること：
-
-- 詳細な実装プラン・進捗状況・マイルストーン履歴を README に書かない。
-  - 実装プラン・マイルストーン定義 → `plans/windows-port-roadmap.md`
-    （開発計画は本ファイル 1 本に一本化）
-  - 進捗・状態・優先度 → Linear（「Linear 運用（管制塔）」参照）
-  - 機能ごとの仕様・ロジック → `docs/*-spec.md`
-- README に新セクションを足す前に、その内容が `plans/` か `docs/` に
-  収まらないかを必ず先に検討する。
-- 「## 状態」「## 進捗」「## TODO」のような時系列で陳腐化するセクションを
-  README に追加しない。進捗・状態は Linear に置き、README にも roadmap にも書かない。
-- ロードマップへのリンクは README に置いてよいが、ロードマップの中身を
-  README にコピーしない（リンクのみ、要約は 1〜2 行まで）。
-- 開発計画・マイルストーン定義の正典は `plans/windows-port-roadmap.md`、進捗・状態の正典は
-  Linear に一本化する。README へ転記せず、リンクと 1〜2 行の短い案内に留める。
-- 進捗表・状態表を README / `docs/` / Issue / PR 本文に重複作成しない。
-  トラッカー（進捗・課題）は Linear に一本化する。
-- 例外的に README を肥大化させる必要があるときは、ユーザーに事前確認する。
-
-## 実装変更とドキュメント更新の同期
-
-コードを変更したら、影響範囲に応じて roadmap / docs / Issue / PR 本文を同時に更新する。
-既存記述が不正確になる場合、ドキュメント更新は任意ではなく必須とする。
-
-- **roadmap (`plans/windows-port-roadmap.md`)**: マイルストーン定義・受け入れ条件（定義）・
-  依存関係・既知のテストギャップ・リスクの内容が変わる場合に更新する。進捗・完了状態・残作業は
-  roadmap に書かず Linear に置く（roadmap は状態を持たない）。README へ転記しない。
-- **仕様ドキュメント (`docs/*-spec.md`)**: IPC payload・JSON schema・永続化形式・
-  TIP / Host / learning / settings 間の責務境界・fallback・ログ・設定項目・
-  ユーザーから見える挙動が変わる場合に、対応する spec を更新する。
-- **Issue / PR 本文**: 追跡中の問題や受け入れ条件に影響する場合は該当 Issue / PR を更新する
-  （Issue 起票・追跡の詳細は「レビュー指摘事項の追跡・修正方針」に従う）。
-- typo・コメントのみ・挙動を変えない小規模リファクタリング・テスト内部の整理など、
-  ドキュメント記述に影響しない変更では roadmap / docs の更新は不要でよい。
-- README は原則として更新先にしない。更新する場合も簡潔な案内・リンク追加に留める
-  （「README 編集ルール」参照）。
-- 上記の判断結果は PR 本文の「Documentation impact」欄に必ず記載し、更新しなかった
-  場合はその理由も書く。
-
-### 状態語・実体参照・正典重複の禁止
-
-以下は README / `docs/` / `plans/` 全般に適用する（詳細と語彙リストは
-`azookey-doc-governance` スキル参照）。
-
-- 「現状」「実装済み」「未実装」「暫定」「完了後」等の状態語を書かない。状態は
-  Linear が正典。書きたくなったら定義文（「X は M-N が実装する」等）に言い換える。
-- コード参照に行番号・実測件数（CTest 件数など）を書かない。ファイル名・関数名までに
-  留める。行番号はリファクタで即座に陳腐化する。
-- ある文書が別の文書を「正典」と宣言したら、参照される側にも「本節は X から参照される」
-  の 1 行を置く（双方向宣言）。片方向の宣言は参照先の変更に追随しない。
-- 一回限りの引き継ぎ文書は DoD 達成後に `docs/archive/` へ移す。継続的に使う実機検証・
-  診断手順は `docs/handoff/` に残し、`docs/README.md`「運用」表に索引する。対応する
-  spec がある場合はそこから正典として参照させる（該当する spec を持たない汎用手順は
-  `docs/README.md` の索引のみでよい）。
-
-### PR 本文テンプレート: Documentation impact
-
-PR 本文には次のチェック項目を含め、該当するものにチェックを入れる。
-
-```md
-## Documentation impact
-
-- [ ] Roadmap updated
-- [ ] Spec docs updated
-- [ ] README update not needed
-- [ ] No documentation impact
-- [ ] docs/README.md index updated (new/renamed docs, moved to archive)
-- [ ] docs-lint run (`python3 scripts/docs-lint.py`); new warnings reviewed
-- [ ] Stale spec text removed (status words, superseded "現状" notes made true by this change)
-
-Reason:
-```
-
-## Windows CMake / CTest 運用
-
-- Full CTest を確認するときは、可能なら `cmake --build --preset windows-debug --target azookey_check`
-  を使う。`azookey_check` はテスト実行ファイルと bench 実行ファイルを先にビルドしてから
-  CTest を実行するため、古い実行ファイルに対して `ctest` だけを走らせる事故を避けやすい。
-- `ctest --preset windows-debug` を単独で実行する場合は、対象 target が最新であることを
-  事前に確認する。停止に見える場合は、`build/agent-logs/*-test-*.log` と
-  `build/windows-debug/Testing/Temporary/LastTest.log*` で最後に開始された case を確認し、
-  該当 GoogleTest を `--gtest_filter=<Suite.Test>` で単体実行する。
-- TSF/COM 境界の timeout 調査では、`ctest --test-dir build/windows-debug -N -V -L tsf-com`
-  と `ctest --test-dir build/windows-debug --show-only=json-v1 -L tsf-com` で対象 command、
-  `TIMEOUT`、`LABELS` を確認してから単体再実行する。
-- Ninja / CMake の dry-run で対象 target が stale と分かった場合は、CTest の不具合と
-  断定せず、対象 target または `azookey_check` を再ビルドしてから再検証する。
-- `.ninja_lock` は残留 `ninja` / `cmake` / `cl` / `link` / `ctest` プロセスの有無を
-  確認するまで削除しない。
-
-## エージェントツール構成 (.claude/ .codex/ .agents/)
-
-本リポジトリには Claude Code と Codex CLI 双方のための共有設定がコミット
-されている。ビルド・CTest・bench 実行・TIP 登録の標準手順は `README.md` を
-参照する (重複記述はしない)。本セクションはエージェント固有の構成と運用ルール
-のみを扱う。TIP 登録・実機検証の恒常的な runbook は `docs/README.md`「運用」に
-索引がある `docs/handoff/` 配下（一部は対応する `docs/*-spec.md` が正典として参照）。
-完了済みのセットアップ作業記録・再導入テンプレートは `docs/archive/` にある。
-環境起因の失敗を切り分ける初動では `just doctor --fix-hints` を使う。機械可読な
-結果が必要な場合は `just doctor --json` を使う。
-
-### MCP サーバー (`.mcp.json` / `.codex/config.toml`)
-
-- `context7` … TSF / COM / Win32 API の公式ドキュメント参照 (全 OS で動作)。
-- `powershell` … PowerShell.MCP。`scripts/register-dev.ps1` 等の machine-wide (HKLM)
-  登録コマンドを共有コンソール経由で提示する用途。**実行はユーザが管理者 PowerShell で
-  完了させること**（`register-dev.ps1` は machine-wide 登録のため管理者権限が必要。非管理者で
-  起動した場合は自動で UAC 昇格する）。エージェントが単独で TIP 登録を完了させてはならない。
-- `windows-mcp` … UI Automation で TIP の実アプリ動作を検証 (Windows 専用)。
-
-`powershell` MCP の `command` には環境変数 `POWERSHELL_MCP_PROXY` を参照させて
-いる。Windows 開発者は `Install-PSResource PowerShell.MCP` 後に以下を一度実行
-して PowerShell.MCP の Proxy パスを永続化すること:
-
-```powershell
-[Environment]::SetEnvironmentVariable(
-  'POWERSHELL_MCP_PROXY', (Get-MCPProxyPath), 'User')
-```
-
-macOS / Linux のメンテナがリポジトリを開いた場合、`powershell` /
-`windows-mcp` は起動失敗するが想定動作 (`context7` のみ全 OS で動く)。
-
-### Claude Code 公式マーケットプラグイン (`.claude/settings.json`)
-
-`enabledPlugins` で以下を有効化している (公式マーケット `claude-plugins-official`
-は自動的に利用可能):
-
-- `clangd-lsp` … `core/` `tsf-tip/` 等で補完・型診断 (ホスト側に
-  `clangd.exe` のインストールが必要)。
-- `github` … `gh` 経由の PR 作業をエージェントから可能にする。
-- `commit-commands` … 規約に沿ったコミットメッセージ生成。
-- `pr-review-toolkit` … PR レビュー補助。
-
-### カスタムスキル (`.claude/skills/` `.agents/skills/`)
-
-- `tsf-tip-development` … TSF TIP 実装の中核ルールと参照リソース。
-- `tsf-ipc-protocol` … TIP ⇔ Inference Host の独自 IPC プロトコル仕様。
-- `azookey-learning-data-safety` … 学習データの永続化、プライバシー、破損復旧の変更手順。
-- `azookey-inference-model-workflow` … Zenzai / GGUF の runtime tier、fallback、実モデル検証手順。
-- `azookey-settings-schema-evolution` … 設定 schema、runtime 既定値、migration、CI の同期手順。
-- `azookey-packaging-release-workflow` … MSI、MSIX、署名、TIP 登録、VM 検証、Release CI の変更手順。
-- `azookey-doc-governance` … README / AGENTS.md / CLAUDE.md / docs/ / plans/ を変更するときの正典分離・状態語禁止・実体照合・索引更新の手順。`scripts/docs-lint.py` の使い方も含む。
-- `japanese-tech-writing` … 日本語の技術文書・原稿の文章規範。`dolquis/agent-ops` を origin とする共有スキルのベンダリングコピーで、本 repo では本文を直接編集しない（改訂は origin 側で行い伝播する）。
-- `argument-gap-edit` … 論証のギャップ・割り込み・見せびらかしを検出して再配置する編集スキル。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
-- `japanese-doc-workflow` … 日本語ドキュメントの統合ワークフロー（上記の文章規範スキルと `doc-coauthoring` を束ねる）。`dolquis/agent-ops` origin の共有スキル（ベンダリングコピー）。
-- `doc-coauthoring` … 文書共同執筆の構造化ワークフロー。第三者スキル（Apache-2.0、© Anthropic、`github.com/anthropics/skills`）のベンダリングコピー。出典は同スキル直下の `NOTICE.md`、ライセンス全文は同 `LICENSE`（Apache-2.0）を参照。**Claude 専用**で `.claude/skills/` のみに置く（サブエージェント検証・Claude 固有の編集ツールを前提とするため、Codex の `.agents/skills/` には置かない）。
-
-Claude Code は `.claude/skills/`、Codex CLI は `.agents/skills/` を読む。
-**両ツリーは同一の skill 群と同一の実質ガイダンス（SKILL.md 本文・`references/` 配下）を
-維持する。** 片方の本文または参照を変更したら、もう片方も同時に更新する。ただし
-Claude Code 固有の `allowed-tools:` などのフロントマターは各ハーネス向けに差異が
-あってよく、ミラー対象外とする（将来的に symlink 統合の余地あり）。例外として、
-**Claude 専用スキル（`doc-coauthoring` など）は `.claude/skills/` のみに置き**、Codex 非対応の
-ツールやサブエージェントを前提とするため `.agents/skills/` には置かない（ミラー対象外）。
-
-### 動作要件 (各メンテナのホスト側に必要)
-
-- PowerShell 7+ と PowerShell.MCP (`Install-PSResource PowerShell.MCP`)
-- `uv` (`uvx` コマンド) のインストール — `windows-mcp` の起動に必要
-- `clangd.exe` — `clangd-lsp` プラグイン用 (VS C++ ワークロードまたは LLVM
-  公式インストーラ経由)
-- `just`（[just.systems](https://just.systems)）— 任意。`justfile` の configure/build/test/
-  doctor 等のレシピをまとめて呼べる（無くても README の cmake/ctest コマンドで代替可）
-- WSL から Claude Code を使う場合は `powershell.exe` 経由で Windows 側を駆動
-
-## 日本語技術文書の執筆・推敲
-
-日本語の技術文書、README、設計書、ADR、仕様書、解説記事、書籍原稿を作成・修正・レビューするときは、必要に応じて `japanese-doc-workflow` スキルを入口に使う。
-
-特に次の場合は、このワークフローを優先する。
-
-- 日本語の説明文、設計文書、README、ADR、仕様書を新規作成する。
-- 既存の日本語ドキュメントを読みやすく、論理的に直す。
-- 文章の論理の飛躍、段落構成、冗長さ、LLM っぽい表現を点検する。
-- README、API docs、ADR、CHANGELOG、Contributing Guide など、定型構造を持つ文書を書く。
-
-使い分けの目安:
-
-- 日本語技術文書としての文体、冗長さ、見出し、表現を整えるときは `japanese-tech-writing` を使う。
-- 段落間の論理の飛躍や議論の無理筋を直すときは `argument-gap-edit` を使う。
-- 新規文書の共同設計やアウトライン作成には `doc-coauthoring` を使う（**Claude Code のみ**。Codex CLI では `japanese-doc-workflow` の手順に従い、この工程は省略する）。
-- 迷った場合は `japanese-doc-workflow` を入口にする（上記スキルを束ねる）。
-
-使わない条件:
-
-- コードだけの変更。
-- 短いコメント、コミットメッセージ、軽い箇条書きだけの作成。
-- 日本語技術文書ではない創作、雑談、翻訳。
-- ユーザーが明示的に「スキルを使わない」「軽く答えて」と言った場合。
-
-作業時の注意:
-
-- 既存文書を編集するときは、事実関係や用語、既存の文体を勝手に変えない。
-- 根拠のない断定、架空の引用、未確認の仕様説明を追加しない。
-- 大きく書き換える前に、必要なら「レビューのみ」「差分修正」「全面リライト」のどれを行うか確認する。
+# AGENTS.md instructions
+
+原則として日本語で回答してください。
+
+## 最優先の安全規則
+
+- ユーザーの未コミット変更を勝手に戻さない。同じファイルで交差する場合は差分を確認し、最小限の編集にする。
+- 作業開始時、進捗確認時、PR 前に `git status -sb` を確認する。進捗確認では `git fetch origin` 後に `main` と `origin/main` を比較し、作業中ブランチは不用意に切り替えない。
+- secret、credential、token、`.env`、ローカル設定、生成物、Context-Mode の DB / cache、CodeGraph の index を編集、index、commit しない。
+- `main` へ直接 push しない。新規 PR は Draft とし、通常は `dolquis/<repository-name>` の `main` 向けに作成する。base / head の repository と branch、compare 範囲を確認し、同じ head の PR を重複作成しない。
+- フォーク元や upstream への PR、`legacy/` の変更は、実行前にユーザーへ確認する。
+- 実機確認、管理者権限、署名などの Human Gate を CI の成功で代替しない。
+
+## 対象と正典
+
+- 開発対象は Windows 版 azooKey-Desktop。主な保守領域は `tsf-tip/`、`inference-host/`、`core/`、`ipc/`、`learning/`、`settings/`。
+- `legacy/` は macOS / Swift の参照資産であり、Windows 版の仕様判断には `docs/*-spec.md` を優先する。
+- 状態、進捗、優先度、担当、サイクル、課題追跡の正典は Linear（workspace `dolquis` / team `Dev`）。GitHub Issues は mirror とする。
+- 機能仕様の正典は対応する `docs/*-spec.md`、マイルストーン定義、依存関係、受け入れ条件の定義、リスクは `plans/windows-port-roadmap.md`、ビルドとテストの標準手順は `README.md` とする。
+- Linear のラベル、状態遷移、GitHub 連携、週次監査は `docs/linear-conventions.md` を参照する。repo 固有差分は同文書の Project Delta に置く。
+
+## 調査と実装
+
+- 不明点が結果を大きく変える場合は確認する。軽微な判断は既存実装、仕様、リポジトリの慣習に従う。
+- 非自明な変更では、編集前にスコープ、予定ファイル、検証方法、主なリスクを短く整理する。
+- 最小差分を基本とし、無関係なリファクタリング、整形、rename、メタデータ更新を混ぜない。
+- 小さな単一ファイル修正や文字列検索には Read / Edit / `rg` を使う。範囲が広い場合は利用可能な調査ツールを選び、大量の検索結果、diff、log をそのまま会話へ流さない。
+- `.codegraph/` があり CodeGraph が利用可能なら、構造、呼び出し関係、影響範囲、関連テストの候補出しに使う。対象シンボルが既知なら Serena で宣言、実装、参照を確認し、開始前に active project と languages を確認する。
+- Context-Mode が利用可能なら、長い文書、検索結果、diff、build / test / CI log の整理に使う。要約だけで完了を判断せず、重要箇所は実ファイル、最新 diff、関連テストで確認する。
+- 公開 API、schema、永続化、認証、権限、安全設計、データ削除、課金、通知、外部連携では、構造と参照元と関連文書を確認してから変更する。
+- GitHub 操作は各ハーネスで利用可能な GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
+
+## ドキュメント
+
+- README、AGENTS、CLAUDE、`docs/`、`plans/` を変更するときは `azookey-doc-governance` を使う。
+- コード変更で仕様、責務境界、fallback、ログ、設定、ユーザー可視挙動が変わる場合は対応する spec を更新する。マイルストーン定義やリスクが変わる場合は roadmap を更新する。
+- 状態や進捗を README、docs、roadmap、PR 本文へ複製しない。状態語、行番号付きコード参照、変動するテスト件数を恒常文書へ書かない。
+- 新規または rename した文書は `docs/README.md` に索引する。恒常 runbook は `docs/handoff/`、一回限りの記録は完了基準を満たしたら `docs/archive/` に置く。
+- PR 本文の Documentation impact は `.github/PULL_REQUEST_TEMPLATE.md` を使う。docs または Skill 変更時は `python3 scripts/docs-lint.py` を実行し、新規 warning を確認する。
+- 日本語の技術文書を新規作成または大きく推敲するときは `japanese-doc-workflow` を入口にする。
+
+## セルフレビューと PR
+
+- リポジトリ内ファイルを変更したら、利用可能な場合は、最終報告、stage、commit、push、PR 作成または更新の前に `pre-pr-self-review` を使う。
+- Skill の利用可否にかかわらず、レビュー範囲は通常 `origin/main` との merge-base から作業ツリーまでとし、未追跡ファイルも確認する。既存 PR やユーザーが別 base を指定した場合はそれに従う。
+- push または PR 更新前に全差分を内容まで確認し、debug 用コード、生成物、secret の混入と必要な build / test / lint の結果を点検する。
+- 変更起因または変更範囲内の問題は修正して検証を再実行する。無関係な既存問題は勝手に直さず、必要なら Linear へ記録する。
+- 実行できなかった検証、失敗、既存失敗は、理由と影響範囲を最終報告と PR 本文に記載する。
+- 新規 PR は利用可能な場合は `create-draft-pr` を使う。使えない場合も同じ head の既存 PR、base / head の repository と branch、compare 範囲を確認し、`gh pr create` では `--repo dolquis/<repository-name> --base main --head <branch-name> --draft` を明示する。
+- 通常のマージ方法はノーマルマージとする。Ready 状態の既存 PR を無理に Draft へ戻さない。
+
+## Linear とレビュー指摘
+
+- 当該作業で修正しないレビューまたは監査の問題は、Linear の該当 Project に起票し、file / symbol、現象、影響、推奨修正、Priority、`repo:*`、`area:*`、担当 `agent:*` を記録する。人間専任課題では `gate:human-required` を付け、`agent:*` を省略できる。
+- ブランチ名は `dolquis/dev-<番号>-<slug>` とする。Draft PR 作成時に Linear を In Review、マージ時に Merged とし、検証メモを記載してから Done にする。
+- PR 本文から対応する DEV 課題と GitHub mirror を相互参照する。Human Gate や検証メモ待ちの課題には `Fixes` を使わない。
+- Codex Cloud の assign、delegate、mention は、人間の明示許可なしに行わない。
+
+## Windows ビルドと実機操作
+
+- Windows CMake / Ninja / MSVC の実ビルドと実テストは、README の preset と利用可能な Windows ホスト実行経路を使う。
+- Full CTest は `cmake --build --preset windows-debug --target azookey_check` を優先する。詳細と停止時の切り分けは `README.md` と `docs/debugging.md` を参照する。
+- `.ninja_lock` は関連する `ninja`、`cmake`、`cl`、`link`、`ctest` のプロセスを確認するまで削除しない。
+- TIP の machine-wide 登録はユーザーが管理者 PowerShell で完了する。エージェント単独で Human Gate を完了扱いにしない。
+- エージェント用 MCP、プラグイン、ホスト前提、doctor の手順は `docs/handoff/agent-tooling-setup.md` を参照する。
+
+## Skill の配置
+
+- Claude Code は `.claude/skills/`、Codex は `.agents/skills/` を読む。共有 Skill は `dolquis/agent-ops` を正典とし、product repo では直接改訂せずベンダリングする。
+- 両ツリーは本文と `references/` を同期し、ハーネス固有 frontmatter だけ差異を許す。`doc-coauthoring` などの Claude 専用 Skill は `.claude/skills/` のみに置く。

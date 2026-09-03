@@ -698,7 +698,7 @@ GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への
 ライセンスが Apache-2.0 と確認できたときに限る**。確認が取れるまでは本節の保守運用
 （上流 HuggingFace 取得・帰属・量子化改変明示）を維持する。この著者確認・再ホスト解禁
 タスクの起票・進捗・検証メモ・状態は **Linear DEV-497 が正典**（`gate:human-required`。
-本 spec には状態を書かない — `AGENTS.md`「README 編集ルール」「Linear 運用」）。
+本 spec には状態を書かない。運用規約は `docs/linear-conventions.md` を参照する）。
 
 ### 1.7 Windows アプリでの TIP ロード前提と常駐起動
 

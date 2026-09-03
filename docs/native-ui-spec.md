@@ -274,10 +274,10 @@ device->Commit();
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| Theme 切替 | `tsf-tip/tests/theme_test.cpp` | Windows 限定。WM_SETTINGCHANGE で色テーブル切替 |
-| DPI scaling | `tsf-tip/tests/dpi_test.cpp` | 96/144/192 DPI でフォントサイズ計算 |
-| High contrast | `tsf-tip/tests/high_contrast_test.cpp` | Windows 限定。HCF_HIGHCONTRASTON 検出 |
-| 描画 smoke | `tsf-tip/tests/render_smoke_test.cpp` | Windows 限定。DComp + D2D + DirectWrite で 1 フレーム描画 |
+| Theme 切替 | `tsf-tip/tests/theme_test.cpp`（新規） | Windows 限定。WM_SETTINGCHANGE で色テーブル切替 |
+| DPI scaling | `tsf-tip/tests/candidate_window_dpi_test.cpp`（既存） | 96/144/192 DPI でフォントサイズ計算 |
+| High contrast | `tsf-tip/tests/high_contrast_test.cpp`（新規） | Windows 限定。HCF_HIGHCONTRASTON 検出 |
+| 描画 smoke | `tsf-tip/tests/render_smoke_test.cpp`（新規） | Windows 限定。DComp + D2D + DirectWrite で 1 フレーム描画 |
 
 CI では `windows-2022` ランナーで実行。アーティファクトとしてスクリーンショットを
 `bench/` で出力（Phase 6-C 完了時の見栄え確認用）。

@@ -98,8 +98,8 @@ host に送る。検出トリガは 2 種。
 
 - 永続化: TSV `wrong_reading\tcorrect_reading\tcount last_updated_epoch`
   （`LearningStore` の `weight epoch` 区切り規約に合わせる）。
-- 既定パス: `%LOCALAPPDATA%\azooKey\typo_corrections.tsv`
-  （host CLI `--typo-store` で上書き可）。
+- 既定パス: `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv`
+  （`learning.tsv` / `user_dict.json` と同じ `data\` 配下。host CLI `--typo-store` で上書き可）。
 - API:
   - `bool Observe(wrong, correct, now_epoch_sec)`
     — §6 のフィルタを満たすペアのみ count++。範囲外は記録せず false。

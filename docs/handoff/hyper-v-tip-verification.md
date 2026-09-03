@@ -155,7 +155,16 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
    `host-YYYYMMDD.jsonl` に出力される。取得後は環境変数を削除し、Host と対象アプリを
    再起動する。
 
-> ⚠️ **変換能力の前提（重要）**: 現状 Zenzai 推論は未実装（`ZenzaiModelConverter` は gguf を probe するのみで `SimpleConverter` へ委譲。DEV-190）。そのため **辞書外の語は漢字に変換されない**（SimpleConverter の静的辞書＝わたし/にほん/とうきょう 等＋学習語のみ）。一般のかな漢字変換を確認するには、パッケージ生成時に `-MockDictionaryPath <TSV>` を指定するか学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを確認済み（DEV-190。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi` で評価する）。Zenzai 推論本体は M8/M9 系で未完。
+> ⚠️ **変換能力の前提（重要）**: `ZenzaiModelConverter` は実 GGUF モデルを読み込んだ場合
+> （`make-vm-verify-package.ps1 -ModelPath` 指定時）は llama.cpp 経由の実推論を行うが、
+> GGUF 未指定時は `SimpleConverter` の静的辞書へフォールバックする
+> （わたし/にほん/とうきょう 等＋学習語のみ）。**`-ModelPath` を指定せずに生成した検証
+> パッケージでは、辞書外の語は漢字に変換されない。** 一般のかな漢字変換を確認するには、
+> パッケージ生成時に `-ModelPath <GGUF>` または `-MockDictionaryPath <TSV>` を指定するか
+> 学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを
+> 確認済み（この回の検証パッケージが `-ModelPath` 未指定で GGUF フォールバック経路
+> だったため。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi`
+> で評価する）。実 GGUF モデルの検証は `docs/zenzai-gpu-route.md` を参照。
 
 ### 5. 記録と後始末
 

@@ -11,7 +11,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 | 正典範囲 |
 |---|---|---|
-| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **唯一の開発計画ドキュメント。M0〜M62 の定義・受け入れ条件（定義）・依存関係・Phase 1〜7・開発基盤トラック・プライバシー / モデル管理 / 学習データ UI トラック・変換品質トラック・v1.0 実行計画・テスト体系の正典。進捗・状態・優先度は持たず Linear を正典とする** |
+| [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **開発計画の正典。M0〜M62 の定義・受け入れ条件（定義）・依存関係・Phase 1〜7・開発基盤トラック・プライバシー / モデル管理 / 学習データ UI トラック・変換品質トラック・v1.0 実行計画・テスト体系の正典。進捗・状態・優先度は持たず Linear を正典とする** |
+| [`plans/karukan-comparison-report.md`](../plans/karukan-comparison-report.md) | 参考実装 karukan との比較レポート（特定時点のスナップショット。更新しない） | 正典ではない参考資料。開発計画は roadmap 1 本に一本化されており、本書はそれを補う調査記録 |
 
 ## アーキテクチャ・設計
 
@@ -26,7 +27,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 対応フェーズ／マイルストーン |
 |---|---|
 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
-| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）レガシー parity 復元 |
+| [`ai-backend-spec.md`](ai-backend-spec.md) | `AiBackend` 契約（M16 テキスト整形 / M58-C AI 整文 / X-3-3 post-commit lint の 3 消費者が共有する OpenAI 互換 API 呼び出し・fallback 連鎖・secure ゲート連携の正典） |
+| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）レガシー parity 復元。§12 は M5（UI-less / `pbShow` アプリ互換）の実機チェック手順を含む |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）。M48 と統合 |
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド |
@@ -35,10 +37,10 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | 開発基盤・品質強化トラック（M37〜M43 + M44/M47/M50/M51）ビルド再現性・CI・IPC/JSON 堅牢化・観測性・Host 可用性・診断ウィザード・復旧 UX・互換性テスト・レイテンシトレーサ |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
 | [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | 追加機能 M36-A / M36-B（新語自動取得）+ 変換品質 M53（§14 辞書層全体再設計 / §15 物理層: double-array trie・`.azdic` 直列化・マルチソースビルド） |
-| [`model-management-spec.md`](model-management-spec.md) | プライバシー / モデル管理 / 学習データ UI トラック M45（Zenzai モデル管理 UI） |
+| [`model-management-spec.md`](model-management-spec.md) | プライバシー / モデル管理 / 学習データ UI トラック M45（Zenzai モデル管理 UI）。§3.1.1 宣言的モデルカタログ・§3.1.2 GGUF 取得基盤を含む |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード） |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
-| [`learning-data-management-spec.md`](learning-data-management-spec.md) | 同トラック M49（学習データ可視化・バックアップ） |
+| [`learning-data-management-spec.md`](learning-data-management-spec.md) | 同トラック M49（学習データ可視化・バックアップ）。§11 はプロセス終了時の flush 保証境界を定める |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
 | [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | 同トラック M54（ユーザー学習強化）+ §14（学習ストアの reading-keyed 二層化・前方一致 lookup 契約・M15 予測候補への供給） |
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | 同トラック M56（Track A: Tiny Neural Reranker）+ NllScorer トラック（Track B §B1〜§B12: ロード済み Zenzai で辞書由来候補を NLL リランク。M 番号なし・既定 OFF） |
@@ -47,7 +49,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入） |
 | [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | 追加機能 M61（自動カッコペアリング：開きカッコ自動補完 + カーソル内側配置・スキップ・空ペア削除。M61-A コア / M61-B 外部化・アプリ互換） |
-| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | 追加機能 M62（候補リライター層：§1〜§5 M62-A 数字リライターと共通方針・注釈・ライセンス境界 / §6〜§17 M62-D 絵文字リライターのデータ形式・Host 配信境界と IPC・検索とランキング・候補窓 UX・`:trigger` 状態機械・確定時の学習の扱い / §18 M62-B カタカナリライターの純かな判定・半角写像と縮退・設定キー・既定 OFF の不変条件。M62-B の英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典） |
+| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | 追加機能 M62（候補リライター層：§1〜§5 M62-A 数字リライターと共通方針・注釈・ライセンス境界 / §6〜§17 M62-D 絵文字リライターのデータ形式・Host 配信境界と IPC・検索とランキング・候補窓 UX・`:trigger` 状態機械・確定時の学習の扱い / §18 M62-B カタカナリライターの純かな判定・半角写像と縮退・設定キー・既定 OFF の不変条件 / §19 M62-C 記号リライター（かな読み引きと variant chain の 2 経路・責務境界）。M62-B の英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典） |
 
 ## 運用
 
@@ -55,7 +57,22 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`debugging.md`](debugging.md) | ビルド・ベンチ・手動確認・ログ収集・CI・典型トラブル |
 | [`licensing-policy.md`](licensing-policy.md) | 第三者資産 attribution 規約（三層 attribution・データヘッダ・採用ワークフロー）の正典。集約表記の実体はルート [`THIRD_PARTY_LICENSES`](../THIRD_PARTY_LICENSES) |
-| Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔）。`AGENTS.md`「Linear 運用（管制塔）」参照 |
+| [`linear-conventions.md`](linear-conventions.md) | Linear 運用（管制塔）の正典。ラベル規約・状態ライフサイクル・週次監査・repo 固有 Delta（§13）。`AGENTS.md`「Linear 運用（管制塔）」はこの要約 |
+| Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔） |
+
+### 恒常 runbook（`docs/handoff/`）
+
+一回限りの引き継ぎ作業記録は完了後に [`docs/archive/`](archive/) へ移す（本表には載せない）。
+以下は継続的に使う実機検証・診断手順(一部は対応する spec が正典として参照する)。
+
+| ドキュメント | 役割 |
+|---|---|
+| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | 診断ウィザード（`azookey_diag.exe`、`dev-infrastructure-spec.md` §12）の runbook。Application Verifier 手順は同 spec §4.6.2 がこれを正典として参照 |
+| [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証をまとめて消化する手順。`dev-infrastructure-spec.md`・`learning-data-management-spec.md`・`windows-tsf-host-architecture.md` の各 Human Gate から参照される |
+| [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順 |
+| [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | Hyper-V VM 検証環境そのものの構築・スパイク計画 |
+| [`handoff/dev32-verification-checklist.md`](handoff/dev32-verification-checklist.md) | VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する汎用チェックリスト |
+| [`handoff/claude-code-web-setup.md`](handoff/claude-code-web-setup.md) | Claude Code on the web のセットアップ手順。`AGENTS.md`「エージェントツール構成」から参照 |
 
 ## Phase 一覧
 

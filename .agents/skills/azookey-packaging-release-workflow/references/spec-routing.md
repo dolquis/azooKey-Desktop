@@ -33,3 +33,12 @@
 
 段階 1〜4 が成功しても段階 5 の実機結果を推測しない。
 PoC、CI の静的検証、人間ゲートの状態を分けて記録する。
+
+## 実装後に失効する spec 記述の削除
+
+`pkg/msi/README.md`・`pkg/msix/README.md` は他コンポーネント（`settings-app/` 等）の
+実装状況を「未実装」と書きがちで、対象が実装された後もそのまま残りやすい。
+配布物に同梱する第三者依存（llama.cpp、WIL 等の静的リンク）を追加・変更したら、
+ルート `THIRD_PARTY_LICENSES` への attribution 追記を実装 PR に含める（配布 spec 側に
+「正典は THIRD_PARTY_LICENSES」への一方向参照だけを残し、一覧を重複させない。
+詳細は `azookey-doc-governance` スキル）。

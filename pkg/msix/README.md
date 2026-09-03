@@ -1,4 +1,4 @@
-# MSIX Option A identity package（M28 PoC）
+# MSIX Option A identity package（M28）
 
 DEV-101（D-05 M28: MSIX `com4:ComServer` と TIP CLSID/Profile 登録の整合 smoke）の
 **配布経路 Option A（external-location packaging / sparse package）**の PoC 一式。
@@ -7,8 +7,8 @@ DEV-101（D-05 M28: MSIX `com4:ComServer` と TIP CLSID/Profile 登録の整合 
 （特に §1.0 経路 3 候補・§1.1 Option B 参考例・§1.5 受け入れ条件）。状態・進捗の正典は
 Linear（DEV-101 / 実機検証は DEV-267）。
 
-> **⚠️ PoC 草案・未検証**: 本ディレクトリのファイルは実 Windows ビルド / 実機 VM で
-> schema validation・登録検証していない。緑化は **DEV-267（`gate:human-required`）** の担当。
+> **⚠️ 実機検証は human gate**: 実 Windows ビルド / 実機 VM での schema validation・登録検証は
+> `gate:human-required` の Linear 課題（実機検証は DEV-267）が担当する。
 
 ## Option A とは（なぜ sparse か）
 
@@ -127,9 +127,14 @@ COM 登録ラウンドトリップ自体は CTest `tsf_tip_com_smoke_tests::TsfT
 が CI（PowerShell lint/test ジョブ）で検証する。実機 VM を要さない静的整合はここで落とす。
 署名 cert 確定時は両 manifest の `Publisher` を同時に差し替える。
 
-## 既知の未確定・フォローアップ
+## MSIX への設定アプリ同梱（範囲外）
 
-- `azookey_settings.exe` は未実装（M11/M30）。実装後に `AppxManifest.xml` へ同形式の
-  `Application` と、対応する `.exe.manifest` + そのビルド埋め込みを追加する。
-- 経路確定（Option A/B/C）とハーネスの経路別アサーション強化は spec §1.0 / 雛形の TODO。
-  本 PoC は Option A を具体化するが、最終確定は DEV-267 の実機 smoke 結果を待つ。
+`azookey_settings.exe` は `settings-app/`（[`pkg/msi/README.md`](../msi/README.md) 参照）が
+ビルドし MSI が配布するが、本 identity package の `AppxManifest.xml` にはまだ
+`Application` エントリを持たない（`azooKeyHost` の 1 エントリのみ。
+`pkg/msix/AppxManifest.xml` の `Applications` 要素を参照）。
+MSIX 経由で設定アプリへも identity を与える場合は、`azookey_inference_host.exe.manifest`
+と同形式の `.exe.manifest` を作成し、`AppxManifest.xml` へ同形式の `Application` を追加する。
+
+経路（Option A/B/C）の選定は [`docs/sideload-packaging-spec.md`](../../docs/sideload-packaging-spec.md)
+§1.0 が正典。ハーネスの経路別アサーション強化は同 spec の TODO。

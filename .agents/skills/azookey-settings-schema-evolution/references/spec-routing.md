@@ -37,3 +37,10 @@ CI と再現条件を合わせる場合は `check-jsonschema==0.37.3` を使う�
 - 横断確認: `cmake --build --preset windows-debug --target azookey_check`
 
 Windows の実ビルドと CTest は Windows Headless CMake Build 手順に従う。schema 検証成功だけで runtime への適用成功を代替しない。
+
+## 実装後に失効する spec 記述の削除
+
+spec-first で定義した設定キー（schema 未登録）を実装して schema へ追加したら、
+対応する spec の「未登録」「実装時に追加」という記述を削除するか過去形に変える。
+逆に、schema に既にあるキーを spec 側が「新設する」と書いているのも実体との
+食い違いなので、実装 PR のついでに直す（詳細は `azookey-doc-governance` スキル）。

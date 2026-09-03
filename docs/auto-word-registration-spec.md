@@ -69,8 +69,9 @@ surface	reading	source	state	count	first_seen_epoch	last_seen_epoch	score
 ```
 
 - `source`: `mining` | `trending`、`state`: `pending` | `confirmed` | `rejected`
-- 既定パス: `%LOCALAPPDATA%\azooKey\auto_words.tsv`
-  （host CLI `--auto-word-store` で上書き）
+- 既定パス: `%LOCALAPPDATA%\azooKey\data\auto_words.tsv`
+  （`learning.tsv` / `user_dict.json` と同じ `data\` 配下。host CLI `--auto-word-store` で上書き。
+  §14.10 の非配布データ配置と一致させる）
 - パース失敗行はスキップ。ファイル無しは空ストアで成功扱い（`UserDictionary::Load`
   の挙動に合わせる）。
 

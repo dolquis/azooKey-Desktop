@@ -217,7 +217,9 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
 | `[` U+005B | `]` U+005D | 半角角括弧 |
 | `{` U+007B | `}` U+007D | 半角波括弧 |
 
-**対称デリミタ（既定 OFF。`open == close`。`bracketSymmetricQuotePairing` で有効化）**
+#### 4.1.1 対称デリミタ
+
+既定 OFF。`open == close`。`bracketSymmetricQuotePairing` で有効化する。
 
 | char | 備考 |
 |---|---|

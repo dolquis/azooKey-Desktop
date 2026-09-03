@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey ドキュメントガバナンス"
+  short_description: "状態語混入・実体との乖離・正典重複・索引漏れを検出し防止します"
+  default_prompt: "Use $azookey-doc-governance to review this docs/plans/README change against the repository's canonical-doc and status-language rules."

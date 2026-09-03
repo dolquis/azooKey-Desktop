@@ -16,25 +16,88 @@
   および `dolquis/agent-ops` を origin とする共有スキルのベンダリングコピー）で第三者ライセンス
   義務を持たないため集約対象外。運用規約は `docs/licensing-policy.md`「適用範囲」を参照。
 
-## 現状（同梱第三者データ）
+## 同梱第三者データ
 
-**保守対象の Windows ツリーには、再配布する第三者由来データを現時点で同梱していない。**
+保守対象の Windows ツリーは、再配布する第三者由来データを同梱していない。
 記号（M62-C）/ 絵文字（M62-D）リライターや辞書強化（M53）で Mozc 由来データ・
 Unicode CLDR・SudachiDict 等を取り込む際に、本ファイルへ追記する（下記「追記の手順」）。
 
-## ビルド時・実行時依存（本リポジトリには未同梱／未ベンダリング）
+## ビルド時のみの依存（配布物には同梱しない）
 
-以下は `FetchContent` または `add_subdirectory` で外部取得する依存で、ソースツリーには
-含めない（= 本リポジトリでは再配布しない）。配布物（MSIX 等）へ同梱する段階の再配布
-attribution は [`docs/sideload-packaging-spec.md`](docs/sideload-packaging-spec.md)
-（Phase 7 / M28〜M34）で扱う。
+以下は `FetchContent` で取得する依存のうち、単体テスト専用で配布物（MSI/MSIX）に
+含まれないもの。ソースツリーにも含めない（= 本リポジトリでは再配布しない）。
 
 | 依存 | 用途 | ライセンス | 取得方法 |
 | -- | -- | -- | -- |
-| llama.cpp | Zenzai 推論（実モデル経路） | MIT | `AZOOKEY_FETCH_LLAMA_CPP` またはローカル source tree |
 | GoogleTest | 単体テストのみ（配布物には非同梱） | BSD-3-Clause | `AZOOKEY_FETCH_GOOGLETEST` |
 
-> zenz GGUF モデル本体の配布可否・CUDA ランタイム再配布条項は Linear `DEV-202` で別途確認する。
+## 配布物へ同梱する llama.cpp / ggml
+
+- Source: `https://github.com/ggml-org/llama.cpp.git`（`AZOOKEY_LLAMA_CPP_GIT_TAG` で pin。
+  `AZOOKEY_FETCH_LLAMA_CPP=ON` または `AZOOKEY_LLAMA_CPP_SOURCE_DIR` でビルドに取り込む）
+- License: MIT License
+- Copyright: Copyright (c) 2023-2024 The ggml authors
+- azooKey path: リポジトリへはベンダリングせず、`windows-release` プリセットで
+  `BUILD_SHARED_LIBS=OFF` として静的リンクし、`azookey_inference_host.exe` へ組み込む
+  （実モデル対応の Zenzai 推論経路）。MSI（[`pkg/msi/README.md`](pkg/msi/README.md)）が
+  この実行ファイルを配布する
+- Notes: MVP の no-egress mock ビルド（`windows-debug` 既定）では取り込まれず、この
+  attribution は `windows-release` / `windows-llama-debug` 等 llama.cpp を組み込む
+  ビルド構成にのみ適用される
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## 配布物へ同梱する WIL（Windows Implementation Libraries）
+
+- Source: `third_party/wil`（`https://github.com/microsoft/wil.git` を commit SHA 固定の
+  submodule として参照。header-only）
+- License: MIT License
+- Copyright: Copyright (c) Microsoft Corporation. All rights reserved.
+- azooKey path: リポジトリへはベンダリングせず submodule 参照。header-only のため
+  ソース自体は配布物に含まれないが、WIL のマクロ・インライン関数を使用する
+  `ipc/` のコンパイル成果物が `azookey_tsf_tip.dll` / `azookey_inference_host.exe` に
+  リンクされる
+- Notes: header-only ライブラリの attribution 要否は要確認（人間レビューで最終判断する）。
+  義務の有無が確定するまでは、疑わしきは記載する方針で本節を維持する
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+> zenz GGUF モデル本体の配布可否・CUDA ランタイム再配布条項は
+> [`docs/sideload-packaging-spec.md`](docs/sideload-packaging-spec.md) §1.6.2 を正典とする。
 
 ## 配布物へ同梱する MSVC runtime
 

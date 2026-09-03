@@ -1,5 +1,9 @@
 # Claude Code 引き継ぎ：`.claude/` セットアップ（ハイブリッド版）
 
+> **アーカイブ済み**: 本書が指示する DoD（完了基準）はすべて達成済みで、
+> `.claude/` セットアップは完了している。以後の更新は不要。他リポジトリへ
+> 同種のセットアップを横展開する際のテンプレートとして保全する。
+
 > このファイルは、`dolquis/azooKey-Desktop`（Windows版 IME、C++ / CMake / TSF）に
 > Claude Code 用の共有設定を導入するための、Claude Code への作業指示書です。
 >

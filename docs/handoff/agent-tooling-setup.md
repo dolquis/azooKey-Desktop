@@ -7,7 +7,7 @@
 
 - Claude Code の repo MCP は `.mcp.json`、プラグインは `.claude/settings.json` が定義する。
 - Codex の repo 固有 sandbox と MCP は `.codex/config.toml` が定義する。
-- Context7 は各開発者が Claude Code と Codex のユーザー連携で有効にする。repo 設定には重複登録しない。
+- Context7 は各開発者が Claude Code と Codex のユーザー連携で有効にする。repo 設定には重複登録しない。Context7 が利用できない場合、Microsoft API は Microsoft Learn の公式リファレンスを優先する。
 - Skill の配置とミラー規則は `AGENTS.md`「Skill の配置」に従う。
 
 設定ファイル自体がサーバー名、引数、プラグイン一覧の正典である。
@@ -16,18 +16,21 @@
 ## ホスト側の前提
 
 - PowerShell 7+
-- PowerShell.MCP
-- `uv` と `uvx`
-- `clangd.exe`
+- PowerShell.MCP（machine-wide 操作を共有コンソールへ提示するため）
+- `uv` と `uvx`（`windows-mcp` の起動に必要）
+- `clangd.exe`（Claude Code の `clangd-lsp` プラグインに必要）
 - Windows CMake / Ninja / MSVC を使う Visual Studio C++ toolchain
 - 任意の補助コマンドとして `just`
 
-PowerShell.MCP は `Get-MCPProxyPath` が返す proxy の絶対パスを、ユーザー環境変数 `POWERSHELL_MCP_PROXY` に設定する。
+PowerShell.MCP は PowerShell 7 で次のように導入し、`Get-MCPProxyPath` が返す proxy の絶対パスをユーザー環境変数 `POWERSHELL_MCP_PROXY` に設定する。
 
 ```powershell
+Install-PSResource PowerShell.MCP
 [Environment]::SetEnvironmentVariable(
   'POWERSHELL_MCP_PROXY', (Get-MCPProxyPath), 'User')
 ```
+
+WSL から Claude Code を使う場合、Windows CMake / Ninja / MSVC と PowerShell.MCP は `powershell.exe` 経由で Windows 側を駆動する。Codex で Windows Headless CMake Build が利用可能な場合はその手順を使い、実 build / test はホスト実行に必要な権限で起動する。どちらも README の preset と受け入れ条件を変更しない。
 
 Windows 以外のホストでは PowerShell.MCP と Windows UI Automation を前提にせず、該当する実機確認を Human Gate として引き継ぐ。
 

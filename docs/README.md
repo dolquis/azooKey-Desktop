@@ -49,7 +49,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入） |
 | [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | 追加機能 M61（自動カッコペアリング：開きカッコ自動補完 + カーソル内側配置・スキップ・空ペア削除。M61-A コア / M61-B 外部化・アプリ互換） |
-| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | 追加機能 M62（数字、絵文字、カタカナ、記号の候補リライター層）。英字候補は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
+| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | 追加機能 M62（候補リライター層：§1〜§5 M62-A 数字リライターと共通方針・注釈・ライセンス境界 / §6〜§17 M62-D 絵文字リライターのデータ形式・Host 配信境界と IPC・検索とランキング・候補窓 UX・`:trigger` 状態機械・確定時の学習の扱い / §18 M62-B カタカナリライターの純かな判定・半角写像と縮退・設定キー・既定 OFF の不変条件 / §19 M62-C 記号リライター（かな読み引きと variant chain の 2 経路・責務境界）。M62-B の英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典） |
 
 ## 運用
 

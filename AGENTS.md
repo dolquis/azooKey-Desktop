@@ -28,24 +28,25 @@
 - `.codegraph/` があり CodeGraph が利用可能なら、構造、呼び出し関係、影響範囲、関連テストの候補出しに使う。対象シンボルが既知なら Serena で宣言、実装、参照を確認し、開始前に active project と languages を確認する。
 - Context-Mode が利用可能なら、長い文書、検索結果、diff、build / test / CI log の整理に使う。要約だけで完了を判断せず、重要箇所は実ファイル、最新 diff、関連テストで確認する。
 - 公開 API、schema、永続化、認証、権限、安全設計、データ削除、課金、通知、外部連携では、構造と参照元と関連文書を確認してから変更する。
-- GitHub 操作は Codex GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
+- GitHub 操作は各ハーネスで利用可能な GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
 
 ## ドキュメント
 
-- README、AGENTS、CLAUDE、`docs/`、`plans/` を変更するときは `$azookey-doc-governance` を使う。
+- README、AGENTS、CLAUDE、`docs/`、`plans/` を変更するときは `azookey-doc-governance` を使う。
 - コード変更で仕様、責務境界、fallback、ログ、設定、ユーザー可視挙動が変わる場合は対応する spec を更新する。マイルストーン定義やリスクが変わる場合は roadmap を更新する。
 - 状態や進捗を README、docs、roadmap、PR 本文へ複製しない。状態語、行番号付きコード参照、変動するテスト件数を恒常文書へ書かない。
 - 新規または rename した文書は `docs/README.md` に索引する。恒常 runbook は `docs/handoff/`、一回限りの記録は完了基準を満たしたら `docs/archive/` に置く。
-- PR 本文の Documentation impact は `.github/PULL_REQUEST_TEMPLATE.md` を使う。docs 変更時は `python3 scripts/docs-lint.py` を実行し、新規 warning を確認する。
-- 日本語の技術文書を新規作成または大きく推敲するときは `$japanese-doc-workflow` を入口にする。
+- PR 本文の Documentation impact は `.github/PULL_REQUEST_TEMPLATE.md` を使う。docs または Skill 変更時は `python3 scripts/docs-lint.py` を実行し、新規 warning を確認する。
+- 日本語の技術文書を新規作成または大きく推敲するときは `japanese-doc-workflow` を入口にする。
 
 ## セルフレビューと PR
 
-- リポジトリ内ファイルを変更したら、最終報告、stage、commit、push、PR 作成または更新の前に `$pre-pr-self-review` を使う。
-- レビュー範囲は通常 `origin/main` との merge-base から作業ツリーまで。既存 PR やユーザーが別 base を指定した場合はそれに従う。
+- リポジトリ内ファイルを変更したら、利用可能な場合は、最終報告、stage、commit、push、PR 作成または更新の前に `pre-pr-self-review` を使う。
+- Skill の利用可否にかかわらず、レビュー範囲は通常 `origin/main` との merge-base から作業ツリーまでとし、未追跡ファイルも確認する。既存 PR やユーザーが別 base を指定した場合はそれに従う。
+- push または PR 更新前に全差分を内容まで確認し、debug 用コード、生成物、secret の混入と必要な build / test / lint の結果を点検する。変更起因または変更範囲内の P1 / P2 相当の問題は修正して再検証する。
 - 変更起因または変更範囲内の問題は修正して検証を再実行する。無関係な既存問題は勝手に直さず、必要なら Linear へ記録する。
 - 実行できなかった検証、失敗、既存失敗は、理由と影響範囲を最終報告と PR 本文に記載する。
-- 新規 PR は `$create-draft-pr` を使う。`gh pr create` を使う場合は `--repo dolquis/<repository-name> --base main --head <branch-name> --draft` を明示する。
+- 新規 PR は利用可能な場合は `create-draft-pr` を使う。使えない場合も同じ head の既存 PR、base / head の repository と branch、compare 範囲を確認し、`gh pr create` では `--repo dolquis/<repository-name> --base main --head <branch-name> --draft` を明示する。
 - 通常のマージ方法はノーマルマージとする。Ready 状態の既存 PR を無理に Draft へ戻さない。
 
 ## Linear とレビュー指摘
@@ -57,10 +58,9 @@
 
 ## Windows ビルドと実機操作
 
-- Windows CMake / Ninja / MSVC の実ビルドと実テストには Windows Headless CMake Build を使い、実 Ninja build / test は `sandbox_permissions=require_escalated` で実行する。
+- Windows CMake / Ninja / MSVC の実ビルドと実テストは、README の preset と利用可能な Windows ホスト実行経路を使う。ハーネス固有の権限指定と診断手順は `docs/handoff/agent-tooling-setup.md` を参照する。
 - Full CTest は `cmake --build --preset windows-debug --target azookey_check` を優先する。詳細と停止時の切り分けは `README.md` と `docs/debugging.md` を参照する。
 - `.ninja_lock` は関連する `ninja`、`cmake`、`cl`、`link`、`ctest` のプロセスを確認するまで削除しない。
-- `CreateProcessAsUserW failed: 5` は、同じ最小 probe を適切な elevated 経路で再試行してからツール不在と判断する。
 - TIP の machine-wide 登録はユーザーが管理者 PowerShell で完了する。エージェント単独で Human Gate を完了扱いにしない。
 - エージェント用 MCP、プラグイン、ホスト前提、doctor の手順は `docs/handoff/agent-tooling-setup.md` を参照する。
 

@@ -24,6 +24,25 @@ def default_agents_path() -> Path:
     return Path(__file__).resolve().parents[1] / "AGENTS.md"
 
 
+def github_escape(value: object, *, property_value: bool = False) -> str:
+    escaped = str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if property_value:
+        escaped = escaped.replace(":", "%3A").replace(",", "%2C")
+    return escaped
+
+
+def warning_annotation(path: Path, size: int, target: int, maximum: int) -> str:
+    try:
+        annotation_path = path.resolve().relative_to(Path.cwd().resolve())
+    except ValueError:
+        annotation_path = path
+    location = github_escape(annotation_path, property_value=True)
+    message = github_escape(
+        f"AGENTS.md is {size} bytes; target is {target} bytes and maximum is {maximum} bytes"
+    )
+    return f"::warning file={location},title=Agent instruction budget::{message}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("path", nargs="?", type=Path, default=default_agents_path())
@@ -55,6 +74,8 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
     else:
         print("instruction-size: " + " ".join(f"{key}={value}" for key, value in result.items()))
+        if status == "warning":
+            print(warning_annotation(args.path, size, args.target, args.maximum))
     return 1 if status == "error" else 0
 
 

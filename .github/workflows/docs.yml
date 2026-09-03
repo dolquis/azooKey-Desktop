@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   docs-lint:
-    name: docs-lint (warning-only)
+    name: docs-lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -4,7 +4,7 @@
 Conversion）」機能を定める。`plans/windows-port-roadmap.md` の M58（M58-A /
 M58-B / M58-C）が本書を参照する。本書は機能仕様（InputState・IPC payload・
 設定項目・ユーザー可視挙動）の正典であり、進捗・状態は持たない（状態の正典は
-Linear。`AGENTS.md`「Linear 運用（管制塔）」参照）。
+Linear。運用規約は `docs/linear-conventions.md` を参照）。
 
 関連 spec:
 

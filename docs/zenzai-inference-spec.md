@@ -60,7 +60,7 @@ Windows ML 用 model への変換可否を検証する。
 
 Windows 版の仕様判断は §3 以降で別途行う。本章は **根拠**として upstream の
 事実を記録する（`legacy/` は保全資産であり、そのまま正解として扱わない —
-`AGENTS.md`「現行対象と legacy の扱い」）。
+`AGENTS.md`「対象と正典」）。
 
 ### 2.1 呼び出し方（legacy）
 

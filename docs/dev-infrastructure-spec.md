@@ -855,7 +855,7 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 ### 6.2 JSON パーサ強化要件
 
 `ipc/src/Json.cpp` は次の防御を備える。各上限値は**本節（spec）を正典**とする
-（AGENTS.md 正典マトリクス: IPC payload / JSON schema / 挙動の決定は
+（AGENTS.md「対象と正典」: IPC payload / JSON schema / 挙動の決定は
 `docs/*-spec.md`）。`ipc/include/azookey/ipc/Limits.h` の定数は本節の値に
 一致させ、齟齬が出た場合は spec を正として Limits.h を修正する。コード側の
 上限変更は wire contract と受け入れ条件に影響するため、spec 更新（レビュー）と

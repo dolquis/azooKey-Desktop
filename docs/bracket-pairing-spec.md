@@ -3,7 +3,7 @@
 本書は azooKey-Desktop Windows 版の「自動カッコペアリング（Bracket Auto-Pairing）」
 機能を定める。`plans/windows-port-roadmap.md` の M61 が本書を参照する。本書は機能
 仕様（InputState・ClientAction・TSF 操作・設定項目・ユーザー可視挙動）の正典であり、
-進捗・状態は持たない（状態の正典は Linear。`AGENTS.md`「Linear 運用（管制塔）」参照）。
+進捗・状態は持たない（状態の正典は Linear。運用規約は `docs/linear-conventions.md` を参照）。
 
 関連 spec:
 

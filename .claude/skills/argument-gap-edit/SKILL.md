@@ -1,6 +1,6 @@
 ---
 name: argument-gap-edit
-description: 書籍原稿や技術文書で、無理筋な議論、段落間のギャップ、理論や引用の見せびらかし、段落単位の割り込みを検出し、論理単位ごとに再配置・削除・橋渡しする編集を行う。
+description: 技術文書や書籍原稿の論理飛躍、段落の割り込み、根拠にならない引用を検出し、段落を再配置・削除・接続する。
 allowed-tools: Read, Edit, Grep, Glob
 ---
 
@@ -10,8 +10,9 @@ allowed-tools: Read, Edit, Grep, Glob
 
 ## 併用する規範
 
-作業前に `../japanese-tech-writing/SKILL.md` を読む。
-特に「段落と論証の構成」「論証の厳密さ」「冗長の排除」に従う。
+作業前に `../japanese-tech-writing/SKILL.md` と、同 Skill の
+`references/argument-structure.md` を読む。冗長さや語り口も同時に直す場合だけ
+`references/style-and-concision.md` を追加で読む。
 
 ## 検出する問題
 

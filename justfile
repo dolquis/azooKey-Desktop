@@ -36,15 +36,15 @@ ci preset=preset: (configure preset) (build preset) (test preset)
 
 # Format all C/C++ sources in place (skips legacy/)
 format:
-    Get-ChildItem -Recurse -File -Include *.cpp,*.cc,*.h,*.hpp {{src_dirs}} | ForEach-Object { clang-format -i $_.FullName }
+    $sourceDirs = "{{src_dirs}}" -split ' '; Get-ChildItem -Path $sourceDirs -Recurse -File -Include *.cpp,*.cc,*.h,*.hpp | ForEach-Object { clang-format -i $_.FullName }
 
 # Verify formatting without writing (CI parity)
 format-check:
-    $f = Get-ChildItem -Recurse -File -Include *.cpp,*.cc,*.h,*.hpp {{src_dirs}}; clang-format --dry-run --Werror @($f.FullName)
+    $sourceDirs = "{{src_dirs}}" -split ' '; $f = Get-ChildItem -Path $sourceDirs -Recurse -File -Include *.cpp,*.cc,*.h,*.hpp; clang-format --dry-run --Werror @($f.FullName)
 
 # clang-tidy over the build's compile DB (run from an MSVC dev shell; configure first)
 tidy preset=preset:
-    $buildDir = if ("{{preset}}" -eq "windows-clangd") { "build/clangd" } else { "build/{{preset}}" }; clang-tidy -p $buildDir (Get-ChildItem -Recurse -File -Include *.cpp,*.cc {{src_dirs}} | ForEach-Object FullName)
+    $sourceDirs = "{{src_dirs}}" -split ' '; $buildDir = if ("{{preset}}" -eq "windows-clangd") { "build/clangd" } else { "build/{{preset}}" }; clang-tidy -p $buildDir (Get-ChildItem -Path $sourceDirs -Recurse -File -Include *.cpp,*.cc | ForEach-Object FullName)
 
 # Run the latency bench
 bench preset=preset:

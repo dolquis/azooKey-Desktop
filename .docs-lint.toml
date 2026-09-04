@@ -1,0 +1,12 @@
+# docs-lint の repo 固有設定。既定値は scripts/docs-lint.py にあり、
+# ここには差分だけを置く。設定項目の説明は
+# .claude/skills/doc-governance/references/docs-lint.md を参照。
+
+[scan]
+# 拡張子を持たないが README / docs / plans と同格の統治対象。
+extra_text_files = ["THIRD_PARTY_LICENSES"]
+
+[mirror]
+# Claude Code のみが読む Skill。`.agents/skills/` に置かないのは意図的である
+# （AGENTS.md「Skill の配置」）。
+claude_only = ["doc-coauthoring"]

@@ -23,7 +23,7 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 そのまま確定する。
 
 これは azooKey 本家 `ConvertRequestOptions.englishCandidateInRoman2KanaInput`
-（`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift:179`、macOS 版では
+（`legacy/Core/Sources/Core/InputUtils/SegmentsManager.swift`、macOS 版では
 `false` で無効）に相当する機能の Windows 版実装である。Windows 版は Swift の
 `KanaKanjiConverterModule` を使わず独自 C++ core + Zenzai 構成のため、同等機能を
 再実装する。

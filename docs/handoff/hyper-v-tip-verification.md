@@ -192,7 +192,7 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 | preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（手順4）。 |
 | `logs/` が作成されない、または診断 ZIP にログがない | `azookey_diag.exe --json` で D-013 を確認する。`error` の場合は `azookey_diag.exe --repair` で `%LOCALAPPDATA%\azooKey\logs\` を作成し、再診断結果を確認する。 |
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順5）。 |
-| 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp:1001` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
+| 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
 
 ## 付録: Debug ビルド + デバッガ方式（VM に開発環境がある場合）
 
@@ -267,5 +267,5 @@ TIP のイベント例: `ipc_connected` / `ipc_handshake_rejected` /
 ## 技術根拠（確認済み）
 
 - Release 成果物の実依存（`dumpbin /dependents`）: `VCRUNTIME140.dll`, `MSVCP140.dll`, `api-ms-win-crt-*`, `ole32`, `KERNEL32`, `USER32`。Debug CRT（`*d.dll`）依存なし。
-- `windows-release` ビルド・`ctest`（157件中 156 passed / 1 skipped = 登録 smoke は管理者要）はホストで緑を確認済み。
+- `windows-release` ビルド・`ctest`（登録 smoke は管理者権限が要るため skip）はホストで緑を確認済み。
 - TIP CLSID: `{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}`。

@@ -481,7 +481,7 @@ lookup 側では UTF-8 の scalar 境界を検証せず、エラーにもしな�
 
 **計算量**: 読みの種類数を R、prefix に一致する読みの数を P、
 prefix に一致するレコード数を K、`limit` を L とすると `O(log R + K + K log L)` とする。
-K に比例する走査だけを許し、R に比例する走査（karukan `learning.rs:84` の全読み走査）を禁じる。
+K に比例する走査だけを許し、R に比例する走査（karukan `learning.rs` の全読み走査）を禁じる。
 
 `visited_readings` は「実際に何件の読みを見たか」を数える。
 `lower_bound` から始めて範囲外の読みに達した時点で打ち切るなら

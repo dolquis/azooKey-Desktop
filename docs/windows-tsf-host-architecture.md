@@ -67,11 +67,13 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
   commit を再試行し、成功・再拒否のどちらでもそのキーを消費して stale preedit や
   確定直後のテキストと新規入力が混ざらないようにする。
 
-## IPCメッセージ（実装済み = ✅）
+## IPC メッセージ
 
 各メッセージの payload フィールドの正典スキーマは `ipc/include/azookey/ipc/Payloads.h`
-（および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下は現状の配線済み
-フィールドの要約。
+（および `ipc/src/Payloads.cpp` の serialize/deserialize）を参照。以下は配線済み
+フィールドの要約であり、`✅` は Payload と Dispatcher まで配線してあること、`⚠️` は
+enum だけを定義してあることを示す。配線の正典は `ipc/` の実装であり、作業の状態は
+Linear が持つ。
 
 - ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, client_id?, handshake_token?)` /
   応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded,

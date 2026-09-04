@@ -1157,8 +1157,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - VS Code（`code.exe`）で技術語タグの候補順位が上がる
   - Outlook（`outlook.exe`）で polite タグの候補順位が上がる
-  - secure 指定アプリで学習・外部 AI が停止する（M46 と整合）
+  - secure 指定アプリ（`profile.privacyMode=secure`）で学習・外部 AI が停止する
+    （M46 と整合）
   - アプリ切替後 1 秒以内にプロファイルが反映される
+  - 既存 `promptPrefixByApp` 値が新 `profilesByApp[].promptPrefix` として読み込まれる
+    （後方互換）
 - **参照仕様**: `docs/app-profile-spec.md`
 
 ### M58: ローマ字一括変換（Batch Romaji Conversion）
@@ -1965,7 +1968,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - invalid GGUF は「ロード不可」として明示される
   - ロード失敗時も Host が落ちず `SimpleConverter` fallback へ移行する
   - ベンチマーク結果（p50 / p95 / load_ms / rss_mb / vram_mb）が表示される
-  - 選択モデルが Host 再起動後も自動ロードされる
+  - 選択モデルが Host 再起動後も background preload され、ロード中・失敗時も
+    `SimpleConverter` fallback で入力を継続できる
+  - `model.backendPreference` が root `backendPreference` より優先される
+  - `ListModels` / `BenchmarkModel` の `--json` 出力が stable schema として CI で
+    テストされる
 - **参照仕様**: `docs/model-management-spec.md`
 
 ### M46: プライバシー / セーフ入力モード
@@ -1993,8 +2000,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **受け入れ条件**:
   - `secureApps` 指定アプリで `LearningStore::Observe` が呼ばれない
   - secure 中は OpenAI API 呼び出しが発生しない
-  - 構造化ログに入力本文が残らない（Debug ビルドでもデフォルト無効）
+  - 構造化ログに入力本文が残らない（Release / Debug 双方。Debug ビルドでも
+    デフォルト無効）
   - secure アプリから通常アプリへ復帰すると元のモードに戻る
+  - `showSecureIndicator=true` のとき候補ウィンドウに secure インジケータが表示される
+  - M48 完了後の follow-up: `profile.privacyMode=secure` のプロファイル検出で当該アプリが
+    自動 secure 扱いになる（M48 未完了時は M46 単独の `secureApps` リストで判定し、
+    本条件は M48 統合時に検証する）
 - **参照仕様**: `docs/privacy-and-secure-input-spec.md`
 
 ### M49: 学習データ可視化・バックアップ
@@ -2022,6 +2034,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     ユーザーへの移行は本受け入れ範囲外。クロス環境復元は §5.2 の
     明示的平文エクスポートを使う）
   - 暗号化済みデータは他ユーザーで復号できない
+  - M55 typo / M36-A auto_words の学習データも対象に含む（各 M 完了後）
+  - M46 secure 中は export / import が blocking される
 - **参照仕様**: `docs/learning-data-management-spec.md`
 
 ## 変換品質トラック（M52〜M57）
@@ -2161,6 +2175,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     **standalone NEologd 単体パック**の混入なしを
     MSIX 構築の配布ガードで CI チェック（SudachiDict 内包の NEologd 由来
     データは対象外。§14.10）
+  - 既存 M36-A `auto_words.tsv` が `auto_words` layer として、既存 M9
+    `user_dict.json` が `user_dictionary` layer として読み込まれる（後方互換）
+  - 任意の layer を ON / OFF できる
+  - `app_specific_dictionary` layer のデータ構造と読み込み経路が確立される
+    （boost 適用の確認は M48 完了後の follow-up。M48 未完了時は layer を空として扱う）
+  - GeoNames 由来データを同梱する場合、設定アプリのライセンス画面に CC-BY-4.0 の
+    帰属が表示される
+  - `dictionary_score` の確定係数（spec §14.11）が実装の既定値と一致し、worked example
+    が単体テストで再現される（M48 タグ boost は `final_score` へ 1 回だけ適用し、
+    `dictionary_score` へ二重適用しない）
   - 物理層の受け入れ条件（`.azdic` の往復とビルド再現性、
     検索 API の契約適合、破損アーティファクトでの層単位無効化、
     mutable 層の永続化形式維持、`META` 由来の帰属生成、サイズ / レイテンシ
@@ -2244,6 +2268,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - M52 ベンチ（`--typo-mode aggressive`）で typo_overcorrection_rate が
     0.5% 未満
   - M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
+  - M46 secure 中は補正・学習が一切発生しない
+  - v1 互換: `mode = off` / `suggest` の挙動が v1 と等価で、v1 の `auto_replace` が
+    v2 の `aggressive` として読み替えられる
 - **参照仕様**: `docs/typo-correction-learning-spec.md` M55 追補
 
 ### M56: Tiny Neural Reranker

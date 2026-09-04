@@ -500,15 +500,9 @@ Response:
 
 ## 11. M46 受け入れ条件
 
-- `secureApps` 指定アプリで `LearningStore::Observe` が一切呼ばれない
-- secure 中は OpenAI API 呼び出しが発生しない
-- 構造化ログに入力本文が残らない（Release / Debug 双方）
-- 通常アプリに戻ると元のモードに復帰する
-- 候補ウィンドウに secure インジケータが表示される（`showSecureIndicator
-  = true` 時）
-- M48 完了後の follow-up: `profile.privacyMode = secure` のプロファイル
-  検出で当該アプリが自動 secure 扱いになる（M48 未完了時は M46 単独の
-  `secureApps` リストで判定し、本受け入れ条件は M48 統合時に検証する）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M46 節とする。本書は secure 判定・PrivacyGate の責務境界・ログ redaction・設定キーを
+定義し、受け入れ条件を複製しない。
 
 ## 12. 将来拡張
 

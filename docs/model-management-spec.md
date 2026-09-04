@@ -463,12 +463,6 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 
 ## 10. M45 受け入れ条件
 
-- `%LOCALAPPDATA%\azooKey\models\` 内の GGUF が一覧表示される
-- invalid GGUF はロード不可として表示される
-- モデルロード失敗時も Host は落ちず、`SimpleConverter` fallback へ
-  移行する
-- ベンチマーク結果が GUI に表示される
-- 選択モデルが Host 再起動後も background preload され、ロード中 / 失敗時も
-  SimpleConverter fallback で入力を継続できる
-- `model.backendPreference` が root `backendPreference` より優先される
-- `--json` 出力（IPC）が stable schema として CI でテストされる
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M45 節とする。本書はモデル検出・IPC・backend 自動選択・UI・設定スキーマを定義し、
+受け入れ条件を複製しない。

@@ -170,6 +170,10 @@ cmake --build --preset windows-debug --target azookey_check
   分かるプロセスだけを停止する。
   各 GoogleTest case には CTest `TIMEOUT` が設定されているため、停止は無限待ちではなく
   timeout failure として扱う。
+- **`.ninja_lock` が残る**: 関連する `ninja`、`cmake`、`cl`、`link`、`ctest` の
+  プロセスを確認し、対象 repo の実行が残っていないと判断するまで削除しない。
+- **`CreateProcessAsUserW failed: 5`**: PowerShell や対象ツールが存在しないと断定する前に、
+  同じ最小 probe を適切な Windows ホスト実行経路で再確認する。
 - **候補が反転する（古い候補が上書きされる）**: `ipc_pending_id_` の比較で
   staleness check しているはず。構造化ログの`event=ipc_stale_query_result`と
   `request_id` / `expected_request_id`を確認する。

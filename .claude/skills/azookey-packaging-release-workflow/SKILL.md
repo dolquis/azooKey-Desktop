@@ -11,7 +11,7 @@ description: azooKey Desktop の MSI、WiX、MSIX、AppxManifest、external-loca
 
 1. `references/spec-routing.md` を読み、対象を MVP 直接配布 MSI、Microsoft Store MSIX、スタンドアロン MSIX サイドロードのいずれかに分類する。
 2. 対象チャネルの正典、実装、既存テストを確認し、未検証 PoC と canonical 経路を区別する。
-3. C++ の package identity、TIP 登録、AppContainer 境界へ影響する場合は、`.codegraph/` があり CodeGraph が利用可能なら経路を確認する。Serena が利用可能なら active project と languages を確認してから対象シンボルと参照元を確認し、利用できない場合は `rg` と実ファイルで同じ範囲を確認する。
+3. C++ の package identity、TIP 登録、AppContainer 境界へ影響する場合は、`.codegraph/` があり CodeGraph が利用可能なら経路を確認する。Serena が利用可能なら active project と languages を確認してから対象シンボルと参照元を確認する。利用できない場合は `rg` と実ファイルで同じ範囲を確認する。
 4. Context-Mode が利用可能なら、XML、PowerShell、workflow、長い diff やログを整理する。利用できない場合は必要な範囲を絞って確認する。
 5. 変更に最も近い静的整合テストと PowerShell 品質検証を実行し、必要な場合だけ MSI / MSIX 生成、署名、VM smoke へ検証を広げる。
 6. Windows CMake / Ninja / MSVC の実ビルドは Windows Headless CMake Build 手順に従う。

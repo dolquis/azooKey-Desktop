@@ -7,6 +7,13 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 > 「azooKey Desktop / Windows IME MVP」）。repo docs は仕様・構造・定義の正典であり、状態は持たない。
 > 運用規約は [`linear-conventions.md`](linear-conventions.md) を参照。
 
+## エージェント規約
+
+| ドキュメント | 適用範囲 |
+|---|---|
+| [`docs/AGENTS.md`](AGENTS.md) | `docs/` の正典、索引、lint 規約 |
+| [`plans/AGENTS.md`](../plans/AGENTS.md) | `plans/` の roadmap と調査資料の規約 |
+
 ## 計画ドキュメント（`plans/`）
 
 | ドキュメント | 役割 | 正典範囲 |
@@ -28,36 +35,36 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`zenzai-inference-spec.md`](zenzai-inference-spec.md) | Phase 3（M8）Zenzai 推論コントラクト（プロンプト・制約デコード・n-best・多ソース候補統合・性能予算） |
 | [`ai-backend-spec.md`](ai-backend-spec.md) | M16 / M58-C / X-3-3 が共有する `AiBackend` 契約 |
-| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity と M5 実機確認 |
+| [`legacy-parity-spec.md`](legacy-parity-spec.md) | Phase 5（M13〜M19）のレガシー parity。§12 は M5 の UI-less / `pbShow` 実機確認 |
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）。M48 と統合 |
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド |
 | [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI |
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 7（M28〜M34）サイドロード配信 |
-| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M51 のビルド、CI、IPC、診断基盤 |
+| [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M51 のビルド、CI、IPC、診断基盤。§12 は診断ウィザード |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |
-| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計 |
-| [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI とモデル取得基盤 |
+| [`auto-word-registration-spec.md`](auto-word-registration-spec.md) | M36 新語自動取得と M53 辞書層再設計（§14 論理層、§15 物理層） |
+| [`model-management-spec.md`](model-management-spec.md) | M45 Zenzai モデル管理 UI（§3.1.1 カタログ、§3.1.2 GGUF 取得） |
 | [`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) | 同トラック M46（プライバシー / セーフ入力モード） |
 | [`app-profile-spec.md`](app-profile-spec.md) | 追加機能 M48（アプリ別入力プロファイル） |
-| [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化、バックアップ、flush 保証境界 |
+| [`learning-data-management-spec.md`](learning-data-management-spec.md) | M49 学習データ可視化とバックアップ。§11 は終了時の flush 保証境界 |
 | [`conversion-quality-benchmark-spec.md`](conversion-quality-benchmark-spec.md) | 変換品質トラック M52（評価ベンチ） |
-| [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化と reading-keyed lookup 契約 |
+| [`user-learning-enhancement-spec.md`](user-learning-enhancement-spec.md) | M54 ユーザー学習強化。§14 は reading-keyed lookup と M15 予測候補への供給 |
 | [`neural-reranker-spec.md`](neural-reranker-spec.md) | M56 Tiny Neural Reranker と NllScorer 契約 |
 | [`modernbert-ja-scoring-spec.md`](modernbert-ja-scoring-spec.md) | 同トラック M57（ModernBERT-Ja 候補スコアリング） |
 | [`romaji-batch-conversion-spec.md`](romaji-batch-conversion-spec.md) | 追加機能 M58（ローマ字一括変換：M58-A コア / M58-B 長文・文節再変換 / M58-C AI 整文） |
 | [`dynamic-punctuation-spec.md`](dynamic-punctuation-spec.md) | 追加機能 M59（動的自動句読点：ライブ変換中の句読点動的挿入・削除） |
 | [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) | 追加機能 M60（ローマ字入力中インライン英単語候補：1 語単位の候補注入） |
-| [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | M61 自動カッコペアリングとアプリ互換 |
-| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62 数字・カタカナ・記号・絵文字リライターの共通契約 |
+| [`bracket-pairing-spec.md`](bracket-pairing-spec.md) | M61-A 自動カッコペアリングと M61-B 外部化・アプリ互換 |
+| [`candidate-rewriter-spec.md`](candidate-rewriter-spec.md) | M62-A 数字（§1〜5）、M62-D 絵文字（§6〜17）、M62-B カタカナ（§18）、M62-C 記号（§19）。英字分は [`inline-english-candidate-spec.md`](inline-english-candidate-spec.md) が正典 |
 
 ## 運用
 
 | ドキュメント | 役割 |
 |---|---|
 | [`debugging.md`](debugging.md) | ビルド・ベンチ・手動確認・ログ収集・CI・典型トラブル |
-| [`licensing-policy.md`](licensing-policy.md) | 第三者資産 attribution と採用手順の正典 |
-| [`linear-conventions.md`](linear-conventions.md) | Linear のラベル、状態遷移、監査、Project Delta の正典 |
+| [`licensing-policy.md`](licensing-policy.md) | 第三者資産 attribution と採用手順の正典。集約表記は [`THIRD_PARTY_LICENSES`](../THIRD_PARTY_LICENSES) |
+| [`linear-conventions.md`](linear-conventions.md) | Linear のラベル、状態遷移、監査、Project Delta（§13）の正典 |
 | Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔） |
 
 ### 恒常 runbook（`docs/handoff/`）
@@ -67,7 +74,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 | ドキュメント | 役割 |
 |---|---|
-| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | 診断ウィザードと Application Verifier の runbook |
+| [`handoff/windows-diagnostics-playbook.md`](handoff/windows-diagnostics-playbook.md) | `dev-infrastructure-spec.md` §12 の診断ウィザードと §4.6.2 の Application Verifier runbook |
 | [`handoff/human-gate-batch-runbook.md`](handoff/human-gate-batch-runbook.md) | `gate:human-required` の実機検証をまとめる runbook |
 | [`handoff/hyper-v-tip-verification.md`](handoff/hyper-v-tip-verification.md) | Hyper-V VM 上での TIP 登録・入力確認の実機検証手順 |
 | [`handoff/hyper-v-vm-verification-plan.md`](handoff/hyper-v-vm-verification-plan.md) | Hyper-V VM 検証環境そのものの構築・スパイク計画 |

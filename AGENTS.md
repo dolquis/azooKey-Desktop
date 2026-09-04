@@ -16,8 +16,9 @@
 - 開発対象は Windows 版 azooKey-Desktop。主な保守領域は `tsf-tip/`、`inference-host/`、`core/`、`ipc/`、`learning/`、`settings/`。
 - `legacy/` は macOS / Swift の参照資産であり、Windows 版の仕様判断には `docs/*-spec.md` を優先する。
 - 状態、進捗、優先度、担当、サイクル、課題追跡の正典は Linear（workspace `dolquis` / team `Dev`）。GitHub Issues は mirror とする。
-- 機能仕様の正典は対応する `docs/*-spec.md`、マイルストーン定義、依存関係、受け入れ条件の定義、リスクは `plans/windows-port-roadmap.md`、ビルドとテストの標準手順は `README.md` とする。
+- 機能仕様の正典は対応する `docs/*-spec.md`、マイルストーン定義、依存関係、受け入れ条件の定義、リスクは `plans/windows-port-roadmap.md`、ビルドとテストの標準手順は `README.md`、停止時の切り分けは `docs/debugging.md` とする。
 - Linear のラベル、状態遷移、GitHub 連携、週次監査は `docs/linear-conventions.md` を参照する。repo 固有差分は同文書の Project Delta に置く。
+- ルートの README、AGENTS、CLAUDE を変更するときは `azookey-doc-governance` を使う。`docs/` と `plans/` では各ディレクトリの `AGENTS.md` に従う。
 
 ## 調査と実装
 
@@ -27,18 +28,8 @@
 - 小さな単一ファイル修正や文字列検索には Read / Edit / `rg` を使う。範囲が広い場合は利用可能な調査ツールを選び、大量の検索結果、diff、log をそのまま会話へ流さない。
 - `.codegraph/` があり CodeGraph が利用可能なら、構造、呼び出し関係、影響範囲、関連テストの候補出しに使う。対象シンボルが既知なら Serena で宣言、実装、参照を確認し、開始前に active project と languages を確認する。
 - Context-Mode が利用可能なら、長い文書、検索結果、diff、build / test / CI log の整理に使う。要約だけで完了を判断せず、重要箇所は実ファイル、最新 diff、関連テストで確認する。
-- roadmap や spec は対象 ID・見出しを `rg` で特定し、必要な節から読む。全体監査が必要な場合を除き、一律に全文を読み込まない。
 - 公開 API、schema、永続化、認証、権限、安全設計、データ削除、課金、通知、外部連携では、構造と参照元と関連文書を確認してから変更する。
 - GitHub 操作は各ハーネスで利用可能な GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
-
-## ドキュメント
-
-- README、AGENTS、CLAUDE、`docs/`、`plans/` を変更するときは `azookey-doc-governance` を使う。
-- コード変更で仕様、責務境界、fallback、ログ、設定、ユーザー可視挙動が変わる場合は対応する spec を更新する。マイルストーン定義やリスクが変わる場合は roadmap を更新する。
-- 状態や進捗を README、docs、roadmap、PR 本文へ複製しない。状態語、行番号付きコード参照、変動するテスト件数を恒常文書へ書かない。
-- 新規または rename した文書は `docs/README.md` に索引する。恒常 runbook は `docs/handoff/`、一回限りの記録は完了基準を満たしたら `docs/archive/` に置く。
-- PR 本文の Documentation impact は `.github/PULL_REQUEST_TEMPLATE.md` を使う。docs または Skill 変更時は `python3 scripts/docs-lint.py` を実行し、新規 warning を確認する。
-- 日本語の技術文書を新規作成または大きく推敲するときは `japanese-doc-workflow` を入口にする。
 
 ## セルフレビューと PR
 
@@ -56,14 +47,6 @@
 - ブランチ名は `dolquis/dev-<番号>-<slug>` とする。Draft PR 作成時に Linear を In Review、マージ時に Merged とし、検証メモを記載してから Done にする。
 - PR 本文から対応する DEV 課題と GitHub mirror を相互参照する。Human Gate や検証メモ待ちの課題には `Fixes` を使わない。
 - Codex Cloud の assign、delegate、mention は、人間の明示許可なしに行わない。
-
-## Windows ビルドと実機操作
-
-- Windows CMake / Ninja / MSVC の実ビルドと実テストは、README の preset と利用可能な Windows ホスト実行経路を使う。
-- Full CTest は `cmake --build --preset windows-debug --target azookey_check` を優先する。詳細と停止時の切り分けは `README.md` と `docs/debugging.md` を参照する。
-- `.ninja_lock` は関連する `ninja`、`cmake`、`cl`、`link`、`ctest` のプロセスを確認するまで削除しない。
-- TIP の machine-wide 登録はユーザーが管理者 PowerShell で完了する。エージェント単独で Human Gate を完了扱いにしない。
-- エージェント用 MCP、プラグイン、ホスト前提、doctor の手順は `docs/handoff/agent-tooling-setup.md` を参照する。
 
 ## Skill の配置
 

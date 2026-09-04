@@ -1203,64 +1203,29 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
 - **前提**: M58-A 完了、M20（再変換）、**M51 の UUIDv7 `trace_id` 生成・伝播**。
-  out-of-band Cancel のクロスクライアント分離（spec §6.3.2）は host キャンセルレジストリ /
-  TIP 応答相関を `(trace_id, request_id)` でキーするが、これは `trace_id` が実際に
-  グローバル一意（UUIDv7）であることを前提とする。現行 TIP は envelope に**定数
-  `trace_id`**（`tsf-tip/src/TextService.cpp` の `"tip-key-query"` / `"tip-faf"` 等）を
-  載せており、UUIDv7 採番は M51 のスコープ（§7.7.1 / 本書 M51）であるため、これが無いと
-  複数 TIP インスタンスが同一の定数 `trace_id` を共有し `request_id` も衝突しうるため、
-  `(trace_id, request_id)` でも一意にならずクロスクライアント誤キャンセルが再発する。
-  M51 本体のうち本 M58-B が依存するのは **`trace_id` の UUIDv7 生成・伝播の部分のみ**で
-  あり、レイテンシトレーサ / viewer CLI には依存しない。**M58-B を M51 本体より先行
-  させる場合**は、out-of-band cancel 対象 envelope（batch query / cancel）に限り UUIDv7
-  `trace_id` を採番する処理を M58-B スコープに含め、M51 の生成セマンティクス（1 論理操作
-  = 1 `trace_id`、§7.7.1）と一致させること（後の M51 全体実装と矛盾しない）。spec §6.3.2。
-- **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・
-  共有キャンセルレジストリへの協調キャンセルチェック）、`ipc/`（segments 構造・
-  `HandshakeResponse.capabilities`・共有 `CancellationRegistry`）、
-  `tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI・Cancel 専用 control 接続）。
-  out-of-band Cancel は **control 接続 + 共有キャンセルレジストリ + チャンク境界での
-  協調キャンセル**で実現し（spec §6.3.2 で確定）、`NamedPipeTransport` の多重応答改造は
-  不要（spec §6.3.5）。
-- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。
-  - アウトオブバンドな Cancel 経路（**確定: Cancel 専用 control 接続 + 既存
-    `RequestScheduler` を `(trace_id, request_id)` キーへ一般化した共有レジストリ +
-    チャンク境界協調キャンセル**。新規並行構造は作らず `TrackCancellation` /
-    `IsCanceled` / `CompleteRequest` / prune を踏襲し、全終端パスで `CompleteRequest`
-    してエントリをリークさせない。spec §6.3.2）。同期 ClientLoop +
-    単一接続では遅い変換中に Cancel が処理されないため必須。host は `HandshakeResponse.
-    capabilities` に `"oob_cancel"` を広告し、TIP は対応 host にのみ依存（非対応 host は
-    best-effort Cancel + 結果破棄に fallback）。host 認証は接続単位のため、control 接続は
-    primary と同じ `handshake_token` で Handshake 後に Cancel を送る（token 保護構成で
-    Cancel が無言で捨てられるのを防ぐ。spec §6.3.2）
-  - TIP 側事前分割（フレーム上限 `kMaxFrameSize` = 1 MB 超の蓄積を文境界で複数リクエストへ。
-    文境界が無い場合はバイト安全ハード分割でフォールバック）
-  - host 側チャンク分割（フレーム上限内リクエストを zenz コンテキスト長で文境界分割）→
-    逐次変換 → 結合。文境界が無くコンテキスト超の場合はバイト/トークン安全ハード分割で
-    フォールバック
-  - `segments[]` 返却と Selecting 中の ←/→ 文節移動・Space/数字での候補切替
-  - multi-segment commit payload `CommitSegmentsObservation`（新 `MessageType`。文節列を
-    1 メッセージで原子的に確定・学習。`HandshakeResponse` に host 側 `capabilities` を追加して
-    `commit_segments` を広告、TIP は応答に含まれるときだけ送り未対応 host へは単発
-    `CommitObservation` フォールバック）。M59 / M60 と共有（spec §6.4）
-  - 進捗フィードバックは**サブリクエスト粒度**（各サブリクエスト完了ごとに Preedit を
-    漸進更新し**確定不可**、全サブリクエストの最終応答 `partial:false` が揃って初めて
-    `Selecting`（確定可能）へ遷移）。request 内 `partial:true` ストリーミングは下記の
-    将来拡張のみで使い、M58-B 既定経路では使わない（spec §6.3.5）
-  - 複数サブリクエストを 1 論理バッチとして集約（全サブリクエストの最終応答受信で
-    Selecting、`full_surface`/`segments` は送信順に連結）、`Cancel` は control 接続から
-    各 in-flight サブリクエスト ID へ個別送信。タイムアウト / エラー時は部分確定せず
-    全 in-flight を Cancel して fallback 連鎖へ。host キャンセルレジストリと TIP 応答相関は
-    `(trace_id, request_id)` でキーする（`request_id` 単独はインスタンスごと採番で衝突し、
-    別クライアントを誤キャンセルするため。`trace_id` は全 envelope 必須の UUIDv7 で、その
-    生成は M51 前提。上記 M58-B 前提節参照）。
-    タイムアウト / キャンセル済みの stale 応答は fallback / 新バッチ送信前に drain・破棄
-    （または primary 再接続）して古い segments の誤結合を防ぐ（spec §6.3.2・§6.3.3）
-  - 既定の正しさ経路は現行トランスポートの 1 リクエスト 1 応答契約に従い、host 内部
-    チャンク分割で `partial:false` を 1 つ返す（進捗はサブリクエスト粒度）
-  - request 内 `partial:true` 逐次表示（同一 `request_id` への複数応答ストリーミング、
-    `NamedPipeTransport` の多重応答対応）は **M58-B では採用しない（spec §6.3.5 で確定。
-    将来の任意拡張）**。`Response.partial` は予約フィールドとして既定 `false`
+  out-of-band Cancel はキャンセルレジストリと応答相関を `(trace_id, request_id)` で
+  キーするため、`trace_id` がグローバル一意であることに依存する。依存の根拠と、
+  M51 本体より先行させる場合に M58-B スコープへ含める採番範囲は
+  `docs/romaji-batch-conversion-spec.md` §6.3.2 を正典とする（依存するのは M51 のうち
+  `trace_id` の UUIDv7 生成・伝播のみで、レイテンシトレーサ / viewer CLI には依存しない）。
+- **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・協調
+  キャンセル）、`ipc/`（segments 構造・`HandshakeResponse.capabilities`・共有
+  `CancellationRegistry`）、`tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI・
+  Cancel 専用 control 接続）。
+- **実装範囲**: `docs/romaji-batch-conversion-spec.md` §6.2・§6.3・§7。設計判断
+  （out-of-band Cancel 方式、ストリーミング拡張の採否）は同 spec で確定済み。
+  - out-of-band Cancel 経路: Cancel 専用 control 接続 + 共有キャンセルレジストリ +
+    チャンク境界での協調キャンセル。host は `capabilities` に `"oob_cancel"` を広告し、
+    非対応 host へは best-effort Cancel + 結果破棄へ fallback（§6.3.2）
+  - TIP 側事前分割（フレーム上限超の蓄積を文境界で複数リクエストへ）と host 側チャンク
+    分割（コンテキスト長での文境界分割 → 逐次変換 → 結合）（§6.3.4・§7）
+  - 複数サブリクエストの 1 論理バッチ集約、タイムアウト / エラー時の全 in-flight Cancel、
+    stale 応答の drain・破棄（§6.3.3）
+  - `segments[]` 返却と Selecting 中の文節移動・候補切替（§6.2）
+  - multi-segment commit payload `CommitSegmentsObservation`（M59 / M60 と共有。
+    `capabilities` 広告と単発 `CommitObservation` フォールバック）（§6.4）
+  - 進捗フィードバックはサブリクエスト粒度。request 内 `partial:true` ストリーミングは
+    M58-B では採用せず、`Response.partial` は予約フィールドとして既定 `false`（§6.3.5）
 - **受け入れ条件**:
   - フレーム上限内の長文が host 側チャンク分割で変換される
   - 既定経路（単一 `partial:false`／論理バッチ）: 論理バッチの全（サブ）リクエストの

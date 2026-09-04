@@ -1572,7 +1572,7 @@ Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \
 
 | 生成物 | 手段 | 添付先 |
 |---|---|---|
-| SBOM（SPDX JSON） | `anchore/sbom-action`（syft）で生成し `actions/attest` の `sbom-path` で署名 | Draft Release の資産 `azooKey.spdx.json` + SBOM attestation |
+| SBOM（SPDX JSON） | syft の出力を `scripts/complete-release-sbom.py` で補完し `actions/attest` の `sbom-path` で署名 | Draft Release の資産 `azooKey.spdx.json` + SBOM attestation |
 | build provenance | `actions/attest`（`sbom-path` も predicate も渡さない既定モード） | GitHub の attestation ストア |
 
 利用者は `gh attestation verify <msi> --repo dolquis/azooKey-Desktop` で、その MSI が
@@ -1583,15 +1583,33 @@ wrapper になっており、新規実装は `actions/attest` を使う。本 wo
 
 #### この SBOM が保証する範囲
 
-**syft は MSI から C++ の依存関係を復元しない。** 本プロジェクトの依存は
-`FetchContent`（llama.cpp / WIL / GoogleTest）と Windows SDK / MSVC runtime であり、
-いずれも syft が持つ検出器（npm / NuGet / pip / cargo 等）の対象外である。したがって
-生成される SBOM は、**成果物そのものの同定（ファイル名・ダイジェスト・形式）**を担保する
-ものであって、構成コンポーネントの網羅リストではない。
+syft が `documentDescribes` または `DESCRIBES` で示す MSI package を再利用し、
+`versionInfo` に Release の MSI バージョン、`checksums` に実ファイルの SHA256 を設定する。
+root が曖昧、別のファイル名、またはハッシュが不一致の場合は生成を拒否する。
+次の各依存は同じ MSI package から `DEPENDS_ON` で参照する。
+これは canonical Release ビルドの依存宣言であり、
+バイナリ内部の全コンポーネントを自動検出した結果ではない。
+
+- llama.cpp / WIL: `CMakeLists.txt` のフル SHA と、それを参照する `FetchContent_Declare`
+  を読み、CMake cache と取得した Git checkout の HEAD・追跡ファイルの変更有無を照合する。
+  改行の比較は checkout の Git 属性に従い、stage 済み・未 stage の両方を HEAD と比較する。
+- MSVC runtime: MSI へ渡す 3 DLL それぞれの数値ファイルバージョンと SHA256 を記録する。
+  runner の Visual Studio 更新に追随するため、固定バージョンを別の台帳へ転記せず、
+  そのビルドで選択したファイルをハッシュで同定する。
+- Windows App SDK、C++/WinRT、WebView2 loader: `settings-app/packages.lock.json`
+  の解決バージョンと NuGet package の SHA512 を使う。restore による lock の変更は拒否する。
+
+依存と SPDX ライセンス識別子の対応は `THIRD_PARTY_LICENSES` の `sbom` 注記から生成する。
+NuGet lock の未分類依存、対応する attribution の欠落、pin や CRT ハッシュの不一致は
+生成エラーとする。CI は正常系と不一致時の拒否を回帰テストする。`LicenseRef` の本文は
+同ファイルの attribution 節であり、Microsoft のライセンス条項そのものを置き換えない。
+
+GoogleTest はテスト専用、Windows SDK BuildTools はビルド専用として配布依存から除外し、
+理由を SPDX annotation に残す。GGUF モデルと CUDA runtime も基本 MSI には同梱しない。
 
 同梱・依存する第三者資産を列挙する正典は、引き続きルート `THIRD_PARTY_LICENSES`
 （運用規約は `docs/licensing-policy.md`）である。SBOM をもって attribution の確認を
-代替しない。SBOM へ C++ 依存を実際に列挙させる拡張は別課題として扱う。
+代替しない。本節は `docs/licensing-policy.md` の SBOM 案内から参照される。
 
 #### attestation を dry-run で作らない理由
 

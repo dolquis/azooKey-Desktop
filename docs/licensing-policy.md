@@ -66,7 +66,8 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 | 状態・進捗・課題トラッキング | Linear（team `Dev`） |
 
 > **SBOM は attribution の代替ではない。** Release 成果物には SBOM（SPDX）が添付される
-> （`docs/sideload-packaging-spec.md` §4.4）が、生成に用いる syft は C++ の
-> `FetchContent` 依存を検出しないため、SBOM は構成コンポーネントの網羅リストにならない。
+> （`docs/sideload-packaging-spec.md` §4.4）。syft の出力に、CMake の pin、NuGet lock、
+> 同梱 MSVC runtime のバージョンとハッシュを使ってビルド依存を補完する。
 > 第三者資産の列挙とライセンス表記の正典は、本表のとおりルート `THIRD_PARTY_LICENSES`
-> のままである。SBOM が空に近いことをもって「同梱第三者資産が無い」と判断しない。
+> のままであり、SBOM の依存・ライセンス対応も同ファイルの `sbom` 注記から生成する。
+> ビルド入力の宣言はバイナリの網羅解析ではない。再配布条件の確認も別途必要となる。

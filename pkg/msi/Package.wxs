@@ -85,7 +85,9 @@
       <ComponentRef Id="SettingsComponent" />
       <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">
         <Exclude Files="$(SettingsExePath)" />
+        <?ifdef SettingsObjDirExists ?>
         <Exclude Files="$(SettingsPayloadDir)\obj\**" />
+        <?endif ?>
         <Exclude Files="$(SettingsPayloadDir)\*.exp" />
         <Exclude Files="$(SettingsPayloadDir)\*.lib" />
         <Exclude Files="$(SettingsPayloadDir)\*.pdb" />

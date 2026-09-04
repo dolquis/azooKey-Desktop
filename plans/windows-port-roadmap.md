@@ -1321,45 +1321,22 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   リッチ化と前後して実装すると効率がよい。
 - **推奨実装時期**: M14（ライブ変換）完了直後、X-1 リッチ化と並行する独立トラック。
   設定 UI（M30）完成までは host CLI / 環境変数で実効値を受ける。
-- **変更対象**: `inference-host/src/PunctuationInserter.cpp`（新規・決定的挿入レイヤ）、
-  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`（ライブ変換要求
-  〔現状 `QueryCandidatesRequest.live`〕の `auto_punctuation` / `punctuation_style` 処理、
-  `segments[].auto_punctuation` 返却、`CommitSegmentsObservation` ハンドラ）、
-  `ipc/src/Messages.cpp`・`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・応答 segments の
-  自動句読点マーカ・`CommitSegmentsObservation` 追加。spec §6.4／M58-B と共有）、
-  `core/include/azookey/core/InputState.h` / 状態機械（Backspace 削除単位から自動句読点を
-  除外）、`core/include/azookey/core/SegmentPos.h`（新規・`pos` 列挙）、
-  `core/src/PunctuationRules.cpp`（新規・TSV ルールパーサ／マージ／ホットリロード）、
+- **変更対象**: `inference-host/`（`PunctuationInserter` 新規、`Dispatcher` /
+  `InferenceEngine` の `auto_punctuation` / `punctuation_style` 処理と segments 返却）、
+  `ipc/`（`QueryCandidates` 拡張・自動句読点マーカ・`CommitSegmentsObservation`。M58-B と共有）、
+  `core/`（`InputState` の Backspace 削除単位、`SegmentPos` 新規、`PunctuationRules` 新規）、
   `tsf-tip/src/TextService.cpp`（Preedit 描画・Backspace 単位・確定時の学習分離）、
   `settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/dynamic-punctuation-spec.md` §3〜§9。
-  - host 側 `PunctuationInserter`（決定的な節境界・文末ヒューリスティック挿入）
-  - ライブ変換経路（M14）への統合。`liveConversion=true` のときのみ動作
-  - full-preedit 再計算による挿入・削除・再配置（明示的削除ロジックを持たない）
-  - 安定化（`dynamicPunctuationStability` = `onPause` でタイピング中は挿入せず idle で挿入。
-    `TypingTempoTracker` を再利用）
-  - 読み↔surface 非対称の扱い: Backspace はかな単位を削除し自動句読点を数えない／
-    確定時に自動句読点スパンを分離して学習を汚染しない／文中キャレット編集は M20 統合へ送る
-  - 確定は M58-B と共有の `CommitSegmentsObservation`（spec §6.4）で行い、自動句読点文節を
-    `is_auto_punctuation=true` として送って学習対象外にする（capability 非対応 host は単発
-    `CommitObservation` フォールバック）。M58-B 未着手時は単発フォールバック経路で先行可能
-  - 字種切替（`dynamicPunctuationStyle` = `ja` / `fullwidth_latin`）
-  - 品詞フィールド `segments[].pos` / `head_pos`（`core` の `SegmentPos` 列挙。任意・後方互換。
-    曖昧性ガード〔「が」格/接続、「て・で」補助用言〕を品詞駆動化。pos 無しは表層フォールバック。spec §7.2.1）。
-    host が辞書 cid/mid（rcid/lcid → 品詞名 → `SegmentPos`）から導出（数値直書きせず cid→品詞名表経由。spec §7.2.2）。
-    mid → `SegmentSemantic`（人名/地名/組織/日付…）を補助判定に（固有名詞連鎖・日付の読点抑制。spec §7.2.3）。
-    cid/mid 表は辞書アセット同梱 `id.def` / mid 定義から M8 ロード時に密配列化、欠落時は全 `Unknown` へ縮退（spec §7.2.4）
-  - 句読点ルールの TSV 外部化（`punctuation-rules.tsv`: kind/match/base_score/guard。組み込み既定を
-    `(kind,match)` で上書き・追加、`base_score=0` で無効化。字種は TSV に書かず `dynamicPunctuationStyle`
-    由来。M17 ホットリロード基盤再利用。spec §4.1.4）。guard はミニ言語（EBNF・`;` AND・`=`/`!=`・
-    Unknown 評価バイアス・未知トークン行スキップ。spec §4.1.5）
-  - 安定化（`onPause` は idle タイマー `dynamicPunctuationIdleMs` で `IdleTimeout` 駆動の
-    再評価が必須。最後の打鍵後にライブ変換要求を post し句読点を挿入。spec §4.3.1）。timing は
-    TIP がリクエストの `auto_punctuation` に符号化（打鍵中=false 抑制／idle・commit=true 挿入。
-    host は typing/idle を知らず `true` のときだけ挿入。spec §7.1.1）
-  - 設定キー 6 種（`dynamicPunctuation` / `dynamicPunctuationStyle` /
-    `dynamicPunctuationStability` / `dynamicPunctuationIdleMs` / `segmentBoundaryConfidence` /
-    `punctuationRulesPath`）
+  - 決定的な節境界・文末挿入レイヤと、ライブ変換経路（M14）への統合。
+    `liveConversion=true` のときのみ動作（§3・§4.1〜§4.2）
+  - full-preedit 再計算による挿入・削除・再配置と `onPause` 安定化（§4.3）
+  - 読み↔surface 非対称の扱い（Backspace 削除単位・確定時の学習分離）（§5）
+  - 字種切替と `CommitSegmentsObservation` による確定（§6・§7.4）。M58-B 未着手時は
+    単発 `CommitObservation` フォールバック経路で先行できる
+  - 品詞フィールド `segments[].pos` / `head_pos` の導出と曖昧性ガードの品詞駆動化（§7.2）
+  - 句読点ルールの TSV 外部化と guard ミニ言語（§4.1.4・§4.1.5）
+  - 設定キー 6 種（§8）
 - **受け入れ条件**:
   - `liveConversion=true` + `dynamicPunctuation=true` で、文を打つと節境界・文末に
     句読点が現れ、続けて打つと文節構造の変化に応じて句読点が再配置・削除される
@@ -1391,35 +1368,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   前倒し可能。Zenzai・TSF 深耕・パッケージングに依存しない小規模機能。設定 UI（M30）
   完成までは host CLI / 環境変数で実効値を受ける。
 - **変更対象**: `tsf-tip/src/TextService.cpp`（生ローマ字バッファ保持の共有・候補注入経路・
-  英単語確定時の reading=生ローマ字での Observe）、`ipc/src/Payloads.cpp`
-  （`QueryCandidates` に `raw_romaji` / `english_candidates`、候補 `tag` 付与）、
-  `inference-host/src/EnglishCandidateProvider.cpp`（新規・生成/ゲーティング/順位）、
-  `inference-host/src/EnglishDictionary.cpp`（新規・TSV パース / `.bin` コンパイル・mmap・
-  ルックアップ。spec §4.4・§4.5）、
-  `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`、
-  `learning/`（English チャネル or source タグでの区別）、
+  英単語確定時の Observe）、`ipc/src/Payloads.cpp`（`QueryCandidates` 拡張・候補 `tag`）、
+  `inference-host/`（`EnglishCandidateProvider` / `EnglishDictionary` 新規、`Dispatcher` /
+  `InferenceEngine` 配線）、`learning/`（English チャネルの区別）、
   `settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/inline-english-candidate-spec.md` §3〜§8。
-  - 候補生成（生ローマ字そのもの + 大文字化バリアント + 任意で全角ローマ字〔大小を含む。
-    M62-B の英字分をここへ統合。spec §3〕・辞書一致語）
-  - ゲーティング（最小長・英語意図ヒューリスティック・辞書ヒット）と順位（日本語上位候補を
-    奪わない／自動選択しない）
-  - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）
-  - 確定時 reading=生ローマ字での学習（かな漢字学習と混線させない）
-  - 英単語辞書フォーマット（TSV: `surface`/`frequency`/`flags`。`spec` §4.4）と
-    ルックアップ（lower キー・頻度降順・`flags` で大文字化優先）。ベースラインは辞書なしで動作
-  - 辞書バイナリ形式（コンパイル済み `.bin`: ヘッダ + ソート済みレコード配列 + string pool。
-    LE 固定・二分探索・mmap。TSV をソース、`.bin` をキャッシュ。**TSV 不在のバンドル `.bin` 単体
-    ロードも正規ケース**、破損時は TSV があればフォールバック・無ければ辞書無効。spec §4.5）
-  - 辞書の差分更新（overlay `english-words.delta.bin`: **末尾追記可能な自己完結フレーム列**
-    〔文字列インライン・別 string pool 無し〕、upsert/delete tombstone を到着順 append-only、
-    ルックアップはメモリ内ソート索引〔後勝ち〕、base+overlay マージ参照、周期コンパクションで
-    原子置換。M36 自動取得語の注入経路。spec §4.6）
-  - overlay の同時実行（プロセス内 `shared_mutex` + プロセス間 `LockFileEx`、`op_count` 最後更新の
-    クラッシュ安全 append、rename 原子置換、reader の `generation` 追従・lock-free 読み。spec §4.7）
-  - 設定キー 7 種（`inlineEnglishCandidates` / `inlineEnglishCaseVariants` /
-    `fullWidthEnglishCandidate` / `inlineEnglishMinLength` / `inlineEnglishDictionary` /
-    `inlineEnglishPromoteThreshold` / `inlineEnglishDictionaryPath`）
+  - 候補生成（生ローマ字・大文字化バリアント・全角ローマ字〔M62-B の英字分を統合〕・
+    辞書一致語）（§3）
+  - ゲーティングと順位（日本語上位候補を奪わない／自動選択しない）（§4.1〜§4.3）
+  - `QueryCandidates` 拡張（`raw_romaji` / `english_candidates` / 候補 `tag=English`）（§6）
+  - 確定時 reading=生ローマ字での学習（かな漢字学習と混線させない）（§5）
+  - 英単語辞書の TSV フォーマット・コンパイル済み `.bin`・差分 overlay・同時実行制御
+    （§4.4〜§4.7）。ベースラインは辞書なしで動作する
+  - 設定キー 7 種（§7）
 - **受け入れ条件**:
   - `inlineEnglishCandidates=true` で、Japanese モードのまま `apple` を打つと候補列に
     `apple` / `Apple` が現れ、選択すると英数モード切替なしで英単語が確定する
@@ -1453,42 +1414,23 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   パッケージングに依存しない小規模・無 IPC 機能。設定 UI（M30）完成までは
   `%LOCALAPPDATA%\azooKey\config\settings.json` を TIP がローカル読み（手編集 / 環境変数で補う。
   host CLI 経由にしない。§6.1）。
-- **変更対象**: `core/include/azookey/core/InputState.h` / 状態機械（開き・閉じカッコ
-  codepoint の分類と新 ClientAction `insertBracketPair` / `skipOverClosing` /
-  `deleteBracketPair`、純粋 core 用 `EditContextHint`〔隣接文字を TIP から渡す。§3.1.1〕。
-  新 `UserAction` enum 値は追加しない）、
-  `core/src/UserActionMap.cpp` / `tsf-tip/src/TextService.cpp::OnKeyDown` 内テーブル
-  （ブラケット/記号を生む VK〔`VK_OEM_4`/`VK_OEM_6` 等・JIS の `「」` キー〕を
-  `Input`/`InputAlnum` へ写し、入力モード/`ToUnicode` から codepoint を解決して載せる
-  VK→UserAction 表の拡張。新 enum 値なし・純粋追加。§3.1）、
-  `core/src/BracketTable.cpp`（新規・組み込み対応表）、
-  `tsf-tip/src/TextService.cpp`（`OnTestKeyDown` / `OnKeyDown` のカッコ・Backspace 分岐、
-  隣接文字の同期読取→`EditContextHint` 構築→純粋 core 呼び出し、`ApplyClientAction` の
-  カーソル内側配置・空ペア削除〔空ペア確認時のみ Backspace を eaten、それ以外はアプリへ
-  パススルー。§5.3〕、**TIP ローカル設定読み取り**〔`config\settings.json` を in-proc で読む +
-  `ReadDirectoryChangesW` ホットリロード。Host 非依存。§6.1〕）、
+- **変更対象**: `core/`（`InputState` へ新 `ClientAction` 3 種と `EditContextHint`、
+  `UserActionMap` のブラケット VK 拡張〔新 `UserAction` enum 値は追加しない〕、
+  `BracketTable` 新規）、`tsf-tip/src/TextService.cpp`（`OnTestKeyDown` / `OnKeyDown` の
+  カッコ・Backspace 分岐、隣接文字の同期読取、カーソル内側配置、TIP ローカル設定読み取り）、
   `settings/mvp-settings.schema.json`（設定キー 5 種）。
 - **実装範囲**: `docs/bracket-pairing-spec.md` §3〜§6・§8。
-  - VK→UserAction 表の拡張: ブラケット/記号 VK を `Input`/`InputAlnum` へ写し codepoint を
-    入力モード/`ToUnicode` から解決（M13 §1.4 は A〜Z のみのため OEM キー追加が必須。§3.1）
-  - 純粋 core の維持: 隣接文字は TIP が §5.3 で読んで `EditContextHint` に詰め、
-    `HandleEvent(event, hint)` へ渡す。core は文書を直接見ず hint から分岐（テスト可能。§3.1.1）
-  - TIP ローカル設定読み取り: `bracketPairing` ほか M61 設定を TIP が正典
-    `%LOCALAPPDATA%\azooKey\config\settings.json` から in-proc で読み、Host 非依存で `OnKeyDown`
-    判定に使う（設定 UI / host が書くのと同一ファイル。host 側 SettingsStore 経由にしない。§6.1）
-  - Backspace は**空ペア確認時のみ** TIP が eaten して `deleteBracketPair`、それ以外はアプリへ
-    パススルーし通常削除の挙動を変えない（§5.3・§4.3）
-  - 組み込みカッコ対応表（全角 + 半角の非対称ペア。対称デリミタ・`<>` は既定除外）
-  - immediate トリガ（既定）の対挿入とカーソル内側配置（§5.2）。`composition` トリガは
-    設定で選択可能にする（§4.0.1）。**範囲選択中の開きカッコは（M61-A は wrap OFF 固定のため）
-    開きカッコ 1 文字で選択を置換するリテラル挿入とし、ペア化・カーソル内側化しない**（§3.3・§4.8）
-  - 閉じカッコのスキップ（カーソル右 1 文字読取で飛び越え判定。§4.2）
-  - 空ペアの Backspace 一括削除（カーソル左右読取で判定。§4.3）
-  - 英数モード（`alnum_half` / `alnum_full`）でのペアリング（§4.4）
-  - 隣接文字の同期読取 EditSession と、拒否時のリテラル挿入 / 通常 Backspace
-    フォールバック（§4.8・§5.3）。`OnTestKeyDown` の eaten 宣言（アプリ素通し防止）
-  - 設定キー 5 種（`bracketPairing` / `bracketPairingTrigger` / `bracketSkipOverClosing` /
-    `bracketBackspaceDeletesPair` / `bracketPairingInAlnumMode`）
+  - VK→UserAction 表をブラケット / 記号 VK へ拡張し、入力モードから codepoint を解決（§3.1）
+  - 純粋 core の維持: 隣接文字は TIP が読んで `EditContextHint` で渡す（§3.1.1・§5.3）
+  - TIP ローカル設定読み取り（正典 `config\settings.json` を in-proc 読み + ホット
+    リロード。Host 非依存）（§6.1）
+  - 組み込みカッコ対応表と、immediate トリガの対挿入・カーソル内側配置（§4.1・§5.2）。
+    `composition` トリガは設定で選択可能（§4.0.1）
+  - 閉じカッコのスキップと空ペアの Backspace 一括削除（§4.2・§4.3）。Backspace は空ペア
+    確認時のみ eaten し、それ以外はアプリへパススルーする（§5.3）
+  - 英数モードでのペアリング（§4.4）と、読取拒否時のリテラル挿入 / 通常 Backspace
+    フォールバック（§4.8）
+  - 設定キー 5 種（§6）
 - **受け入れ条件**:
   - `bracketPairing=true` で、`「` を打つと `「」` が入りカーソルが内側に来る。続けて
     入力するとカッコ内に入る（immediate、Enter 不要）
@@ -1517,26 +1459,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M61-A 完了。per-app 制御は M48（アプリ別入力プロファイル）に統合する
   （`docs/app-profile-spec.md`）。M48 未完了時は本機能専用の最小リスト設定で先行可能。
 - **変更対象**: `core/src/BracketTable.cpp`（TSV パース / マージ / ホットリロード。M17
-  基盤再利用）、`tsf-tip/src/TextService.cpp`（前面アプリ判定 = `promptPrefixByApp` 基盤
-  再利用・選択囲み・対称デリミタの語境界判定）、M48 プロファイル連携 +
-  `docs/app-profile-spec.md` 更新（`profilesByApp` プロファイル〔`additionalProperties:false`〕へ
-  `bracketPairing`〔`auto`/`on`/`off`、既定 `auto`〕フィールドを追加。spec §4.5.0）、
-  `settings/mvp-settings.schema.json`（設定キー 4 種）。
+  基盤再利用）、`tsf-tip/src/TextService.cpp`（前面アプリ判定・選択囲み・対称デリミタの
+  語境界判定）、`docs/app-profile-spec.md` §4.1（M48 プロファイルへ `bracketPairing`
+  フィールドを追加）、`settings/mvp-settings.schema.json`（設定キー 5 種）。
 - **実装範囲**: `docs/bracket-pairing-spec.md` §4.1.1・§4.5・§4.5.0・§4.5.1・§4.9。
-  - カッコ対応表（**カッコ対専用**）の TSV 外部化（`bracket-pairs.tsv`: `open`/`close`/`flags`。
-    組み込み既定を `open` キーで上書き・追加、`off` で無効化。M17 ホットリロード基盤再利用。
-    **アプリ名〔プロセス名〕はこの TSV に書かない**。spec §4.5.1）
-  - per-app 有効範囲（`bracketPairingAppPolicy` = denylist（既定）/ allowlist。アプリリストは
-    プロセス名配列 `bracketPairingApps`（**カッコ対 TSV とは別スキーマ**）+ 組み込み既定 denylist
-    シード〔VS Code / Visual Studio / JetBrains 系等〕。M48 プロファイルがあれば優先。spec §4.5.0）
-  - M48 プロファイルスキーマ拡張（`profilesByApp` 各プロファイルへ `bracketPairing` enum
-    `auto`/`on`/`off` を追加。`additionalProperties:false` のため明示追加が必須。`docs/app-profile-spec.md`
-    §4.1 を更新。spec §4.5.0）。**マスタートグル `bracketPairing` が最優先**で、false なら
-    プロファイル `on` でも有効化しない（評価順: マスター → per-app。§4.5.0）
-  - 対称デリミタ（`"` `'` `` ` ``）の語境界判定付きペアリング（`bracketSymmetricQuotePairing`、既定 OFF）
-  - 範囲選択中の開きカッコで選択を囲む（`bracketWrapSelection`、既定 OFF）
-  - 設定キー 5 種（`bracketSymmetricQuotePairing` / `bracketWrapSelection` /
-    `bracketPairingAppPolicy` / `bracketPairingApps` / `bracketPairsPath`）
+  - カッコ対応表（カッコ対専用）の TSV 外部化。アプリ名は TSV に書かない（§4.5.1）
+  - per-app 有効範囲（denylist 既定 / allowlist、組み込み denylist シード）。M48
+    プロファイルがあれば優先し、マスタートグル `bracketPairing` が最優先（§4.5.0）
+  - M48 プロファイルスキーマへ `bracketPairing`（`auto`/`on`/`off`）を追加（§4.5.0）
+  - 対称デリミタの語境界判定付きペアリングと、範囲選択の囲み（既定 OFF）（§4.9）
+  - 設定キー 5 種（§6）
 - **受け入れ条件**:
   - `bracket-pairs.tsv` でカッコ対の追加・上書き・`off` 無効化ができ、保存で次の入力から
     反映される（ホットリロード）。不正行は warning でスキップ
@@ -1556,8 +1488,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 > が正典）。参考実装は karukan（`karukan-engine/src/rewriter/`、MIT OR Apache-2.0）。
 > **ロジック（アルゴリズム）とデータ（Mozc 由来）を分離**して扱い、karukan のコードは
 > 逐語コピーせず設計移植する。M62-A（数字）→ M62-B（半角カタカナ/英字）→ M62-C（記号）→
-> M62-D（絵文字）の段階構成。既定 OFF・後方互換。M62-A は `core/src/NumberRewriter.cpp`
-> として実装済み、M62-B/C/D は未実装。
+> M62-D（絵文字）の段階構成。既定 OFF・後方互換。
 >
 > ライセンス方針: M62-A/B はアルゴリズムのみで Mozc 由来データに依存しない（最も安全）。
 > M62-C/D が Mozc 由来データ（`symbol.tsv` / `emoji_data.tsv`、BSD 3-Clause © Google）+
@@ -1571,14 +1502,13 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （「漢数字」「大字」「16進数」等）を付けて候補列へ注入する。
 - **前提**: M5/M6（候補 UI・確定）と M13（InputState / ClientAction）完了。辞書・推論・IPC に
   依存しない決定的処理で、M61 と同じ **TIP ローカル・無 IPC・Host 非依存**モデルに乗る。
-- **変更対象**: `core/include/azookey/core/NumberRewriter.h`・`core/src/NumberRewriter.cpp`（新規。
-  漢数字/大字/ローマ/丸数字テーブルを自前定義。Mozc 由来データ非依存）、
-  `core/include/azookey/core/Candidate.h`（候補注釈 description フィールド追加）、
-  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup。TIP ローカルの注釈付き候補型と、
-  surface とは別に description を保持・表示する候補ウィンドウ view-model 拡張は実装済み。
-  確定文字列には注釈を畳み込まない。詳細は下記「M62 横断依存」の候補注釈伝送を参照）、
-  `settings/mvp-settings.schema.json`（`numberRewriter`、既定 OFF）、
-  `core/tests/number_rewriter_test.cpp`（新規）。
+- **変更対象**: `core/`（`NumberRewriter`、および候補注釈 description フィールド）、
+  `tsf-tip/src/TextService.cpp`（候補列への注入・dedup・注釈付き候補の view-model）、
+  `settings/mvp-settings.schema.json`（`numberRewriter`、既定 OFF）、`core/tests/`。
+- **実装範囲**: `docs/candidate-rewriter-spec.md` §1〜§5。
+  - 漢数字 / 大字 / ローマ数字 / 丸数字 / 16・8・2 進数の異表記生成と範囲外スキップ（§3）
+  - 和文注釈の付与と、確定文字列へ注釈を畳み込まない候補表示（§4）
+  - 変換テーブルは自前定義とし Mozc 由来データに依存しない（§5）
 - **受け入れ条件**:
   - `numberRewriter=true` で `123` の変換候補に `百二十三`/`壱百弐拾参`/`0x7b`/`0b1111011`
     等が注釈付きで出る（丸数字・ローマ数字は範囲内の入力のみ。例: `12`→`⑫`/`ⅻ`）
@@ -1595,19 +1525,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   統合**し、独立実装にしない。
 - **前提**: M62-A 完了。英字部分は M60（`docs/inline-english-candidate-spec.md`）に統合。
   いずれも決定的・Mozc データ非依存で TIP ローカル可。
-- **変更対象**: `core/`（カタカナリライター。全角カタカナと半角カタカナの写像を自前定義。
-  リライターの抽象化は行わない）、`core/tests/`。加えて `katakanaRewriter` を TIP まで
-  届ける設定伝播経路一式を、`numberRewriter`（M62-A）と同じ範囲で変更する:
-  `settings/mvp-settings.schema.json` と `settings/default-settings.sample.json`（既定 OFF）、
-  `inference-host/`（`SettingsStore` の `RuntimeSettings` と parser、`Dispatcher` の
-  Handshake 応答への載せ替え）、`ipc/`（`HandshakeResponse` payload の欄追加と codec）、
-  `tsf-tip/`（`TextService` の保持と候補注入）、`settings-app/SettingsDocument.cpp`
-  （許可キー）、および各層の focused test（`ipc/tests/payloads_test.cpp`、
-  `inference-host/tests/settings_store_test.cpp`・`dispatcher_test.cpp`、`tsf-tip/tests/`）。
-  「TIP ローカル・無 IPC」は**候補生成**についての性質であり、設定の伝播は Handshake 経路を
-  通る（`docs/candidate-rewriter-spec.md` §18.7）。ここを分けないと、core テストだけ通って
-  設定が常に実質 OFF の実装を受け入れてしまう。
+- **変更対象**: `core/` と `core/tests/`（カタカナリライター。写像は自前定義。リライターの
+  抽象化は行わない）。加えて `katakanaRewriter` の設定伝播経路一式を `numberRewriter`
+  （M62-A）と同じ範囲で変更する: `settings/`（schema と sample、既定 OFF）、
+  `inference-host/`（`SettingsStore` / `Dispatcher`）、`ipc/`（`HandshakeResponse`）、
+  `tsf-tip/`、`settings-app/SettingsDocument.cpp`（許可キー）と各層の focused test。
   英字分は `core/` に置かず M60 の候補注入経路へ統合する。
+- **実装範囲**: `docs/candidate-rewriter-spec.md` §18、`docs/inline-english-candidate-spec.md`
+  §3・§4.3。
+  - 純かな判定の境界、全角 / 半角カタカナ写像と縮退規則（§18.1〜§18.4）
+  - 設定伝播は Handshake 経路を通る（「TIP ローカル・無 IPC」は候補生成についての性質で
+    あり、設定は Host 経由で届く。§18.7）。ここを分けないと core テストだけ通って設定が
+    常に実質 OFF の実装を受け入れてしまう
+  - 英字の幅・大小バリアントは M60 の候補注入経路へ統合し二重実装しない
 - **受け入れ条件**:
   - 純かな候補に全/半角カタカナ候補が注釈付きで出る。漢字混在（`愛してる`）はリライトしない
   - `katakanaRewriter=true` が settings.json から Host の `RuntimeSettings`、Handshake 応答、
@@ -1629,20 +1559,18 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   TIP ローカル可。chain の入口は読みではなく**候補の表層形**とする（M61 により記号キーは
   composition が空のときアプリへ渡り、記号だけからなる読みが発生しないため。
   `docs/candidate-rewriter-spec.md` §19.1）。
-- **変更対象**: `core/`（読み引きの索引・順序付けと chain 表 `SymbolChainTable.cpp`。chain 表は
-  Mozc 由来データから生成せず自前に書く。§19.4 / §19.11）、記号データの再ポート
-  （`scripts/symbol_porter.py`。Mozc 原典準拠で azooKey 形式へ。逐語コピーせず）、
-  `inference-host/`（読み引き経路と 2 つの末尾の件数上限。§19.5）、`ipc/`（`CandidateField`
-  の `description` 欄と `source == "symbol"`。M62-D の §8.2 と共用）、`tsf-tip/`（chain の展開・
-  注釈表示・学習観測からの除外）、`THIRD_PARTY_LICENSES`、`docs/candidate-rewriter-spec.md`。
-  加えて `symbolRewriter` / `symbolDataPath` を TIP まで届ける設定伝播経路一式を、
-  `numberRewriter`（M62-A）・`katakanaRewriter`（M62-B）と同じ範囲で変更する:
-  `settings/mvp-settings.schema.json` と `settings/default-settings.sample.json`（既定 OFF）、
-  `inference-host/`（`SettingsStore` の `RuntimeSettings` と parser、`Dispatcher` の Handshake
-  応答への載せ替え）、`ipc/`（`HandshakeResponse` payload の欄追加と codec）、`tsf-tip/`
-  （保持と chain 展開の分岐）、`settings-app/SettingsDocument.cpp`（許可キー）、および各層の
-  focused test。chain は TIP ローカルで動くため、設定が Host 側だけに届いた状態では機能が
-  半分しか働かない（§19.8）。
+- **変更対象**: `core/`（読み引きの索引・順序付けと chain 表）、記号データの再ポート
+  （`scripts/symbol_porter.py`）、`inference-host/`（読み引き経路と件数上限）、
+  `ipc/`（`CandidateField.description` と `source == "symbol"`。M62-D と共用）、
+  `tsf-tip/`（chain 展開・注釈表示・学習観測からの除外）、`THIRD_PARTY_LICENSES`、
+  `docs/candidate-rewriter-spec.md`。加えて `symbolRewriter` / `symbolDataPath` の設定
+  伝播経路一式を M62-A / M62-B と同じ範囲で変更する（§19.8）。
+- **実装範囲**: `docs/candidate-rewriter-spec.md` §19。
+  - 責務境界: かな読み引きは inference-host 側、variant chain は TIP ローカル（§19.1）
+  - chain の入口は読みではなく候補の表層形とする（M61 により記号だけからなる読みが
+    発生しないため。§19.1）
+  - chain 表は Mozc 由来データから生成せず自前に書く（§19.4・§19.11）
+  - TSV 列定義と再ポート規則、件数上限、注釈、学習の扱い、設定キー、フォールバック（§19.2〜§19.10）
 - **受け入れ条件**:
   - `「`→`『【〔（` の関連候補、`かぎかっこ`→`「」` の読み引きが出る
   - `symbolRewriter=true` が settings.json から Host の `RuntimeSettings`、Handshake 応答、
@@ -1661,7 +1589,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: M62-C 完了 + `THIRD_PARTY_LICENSES` に Mozc BSD-3 + CLDR 表記。大規模データ
   （数万行）のため Host 側配信が前提。候補窓 UX（注釈・確定動線）は M5/M14/M15 に合わせ再設計。
 - **変更対象**: `core/`（EmojiRewriter ロジック・`:trigger` 曖昧検索スコアリング）、絵文字データ
-  再ポート、`inference-host/`、`THIRD_PARTY_LICENSES`、`docs/candidate-rewriter-spec.md`。
+  再ポート、`inference-host/`、`ipc/`、`tsf-tip/`、`THIRD_PARTY_LICENSES`、
+  `docs/candidate-rewriter-spec.md`。
+- **実装範囲**: `docs/candidate-rewriter-spec.md` §6〜§17（範囲・データ形式・Host 配信境界と
+  IPC・検索とランキング・候補窓 UX・`:trigger` 状態機械・学習の扱い・設定・フォールバック・
+  ライセンス・テスト観点）。
 - **受け入れ条件**:
   - かな読み引き（完全一致・末尾注入・上限 4 件）と `:trigger` 曖昧検索
     （Exact / Prefix / Subsequence の 3 クラス）が仕様どおり働き、順序が決定的である
@@ -1682,20 +1614,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   ここへ追記する）。
   `docs/candidate-rewriter-spec.md`（IPC payload・データ形式・ライセンス・TIP/Host 責務境界・
   確定時の学習 reading 扱いの正典）。
-- **候補注釈の伝送**: リライタ候補は注釈（description）付きで表示する。(a) TIP ローカル
-  リライタ（M62-A/B）は **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で
-  description を保持・表示する経路が M62-A（`core::Candidate.description` /
-  `tsf-tip/src/TextService.cpp`）で実装済み。(b) Host 側データ駆動リライタ（M62-C/D）は
-  未対応で、`ipc::CandidateField`（`surface`/`reading`/`score`/`source` のみ）に
-  description フィールドを追加して伝送する必要がある。いずれも確定文字列には
-  注釈を畳み込まない。正典は `docs/candidate-rewriter-spec.md`（M62-D 分の欄定義と
-  互換性は同 §8.2、UI-less での劣化は同 §10.4）。
-- **既知のテストギャップ**: 数字（M62-A）の core 純粋関数テストは `core/tests/number_rewriter_test.cpp`
-  にある（karukan の `rewriter/number.rs` 等のテストを**期待値表として**移植したもの。逐語コピーしない）。
-  残るギャップは 3 つ。(a) TIP 配線側 — 候補ウィンドウ view-model が注釈を保持・表示すること、および
-  `numberRewriter=false` で候補・確定・学習の挙動が不変であることを TIP レベルで確認するテスト。
-  (b) 半角カタカナ・英字（M62-B）の core 純粋関数テスト（M60 統合分を含む）。
-  (c) 記号/絵文字（M62-C/D）のデータ駆動リライトに対する再ポート出力の round-trip テスト。
+- **候補注釈の伝送**: リライタ候補は注釈（description）付きで表示し、確定文字列には
+  畳み込まない。TIP ローカルリライタ（M62-A/B）は TIP 内の注釈付き候補型と候補ウィンドウ
+  view-model で description を保持する。Host 側データ駆動リライタ（M62-C/D）は
+  `ipc::CandidateField` に description 欄を追加して伝送する。正典は
+  `docs/candidate-rewriter-spec.md`（欄定義と互換性は §8.2、UI-less での劣化は §10.4）。
+- **テスト範囲**: (a) 各リライターの core 純粋関数テスト（karukan のテストは期待値表として
+  移植し、逐語コピーしない）。(b) TIP 配線側 — 候補ウィンドウ view-model が注釈を保持・表示し、
+  リライタ設定が false のとき候補・確定・学習の挙動が不変であること。
+  (c) 記号 / 絵文字（M62-C/D）の再ポート出力に対する round-trip テスト。
 - **リスク**: Mozc 由来データ（M62-C/D）の取り込みは BSD-3 / CLDR 表記義務を新規に背負う。
   数字（M62-A）はデータ非依存で最もリスクが低く、ここから着手する。
 
@@ -1796,35 +1723,20 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: なし（独立トラック。Phase 3/4 と並行可能）。
 - **変更対象**: `ipc/src/Json.cpp`、`ipc/src/Payloads.cpp`、
   `ipc/src/NamedPipeTransport.cpp`、`ipc/tests/`。
-- **実装範囲**: `docs/dev-infrastructure-spec.md` §6。
-  - JSON: ネスト深度上限（64）・最大入力長（1 MiB）・サロゲートペア結合・
-    不正 UTF-8/制御文字拒否・末尾ゴミ拒否・巨大数の安全な拒否。数値 codec の
-    correctness（locale 非依存 / uint64 全域の双方向 round-trip /
-    非 plain 数値形の桁あふれ拒否）
-  - malformed/fuzz テスト追加（決定的境界コーパス + 有界擬似乱数スモーク。
-    libFuzzer は任意拡張）
-  - 未配線 MessageType への明示エラー応答 + 列挙↔codec 整合検査
-    （client ハング防止）
-  - Named Pipe: Release で SID 取得失敗時 fail-closed、接続インスタンス
-    上限（32）、最大フレームサイズ 1 MiB 固定、Handshake トークン
-    （per-user ファイル `%LOCALAPPDATA%\azooKey\config\ipc-token` 配布 +
-    env 上書き）、client cleanup、overlapped accept と `Stop()` 時の
-    pending accept cancel
-  - transport 読み書きの壁時計デッドライン: ヘッダ/本文読取・書込は
-    `stop_event` 待ちに加えソフト/ハードのタイムアウトを持ち、時間切れ時は
-    当該接続のみ切断して他クライアントへ波及させない（現状は回数制限
-    `kMaxTransientReadNoDataRetries` / `kMaxTransientWriteNoProgressRetries`
-    のみで壁時計デッドラインがなく、ヘッダ送信後に本文を止める peer が
-    Host のクライアントスレッドを切断まで占有し得る）。値は M41 の
-    タイムアウト規約（ソフト/ハード）と整合させる
-  - per-client 未完了要求の上限: `RequestScheduler` の per-client
-    cancel-state を上限（例 64）で固定し、超過時は最古の完了 or 接続拒否
-    （現状は接続インスタンス上限 32 のみで、per-client の未完了要求数に
-    ハード上限がない）
-  - プロトコル fixture: 固定 JSON / バイナリ fixture を `ipc/testdata/` に
-    置き、TIP 側デコードと Host 側デコードを同一データで検査。transport 層の
-    0-byte / truncated frame ケースを追加（現状は `DecodeLengthPrefixed` の
-    unit 検査のみで、transport 層専用の 0-byte / truncated テストがない）
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §6。上限値・タイムアウト値は同節が正典。
+  - JSON パーサの入力境界（ネスト深度・最大入力長・サロゲートペア結合・不正 UTF-8 /
+    制御文字 / 末尾ゴミ / 巨大数の拒否）と数値 codec の correctness（§6.2）
+  - malformed / fuzz テスト（決定的境界コーパス + 有界擬似乱数スモーク。libFuzzer は任意拡張）
+  - 未配線 MessageType への明示エラー応答と、列挙↔codec 整合検査（client ハング防止）
+  - Named Pipe の fail-closed SID 取得・接続インスタンス上限・最大フレームサイズ・
+    Handshake トークン配布・client cleanup・pending accept cancel（§6.4）
+  - transport 読み書きの壁時計デッドライン（§6.4.7・§6.4.8）。現状は回数制限のみで
+    デッドラインがなく、ヘッダ送信後に本文を止める peer がクライアントスレッドを占有し得る
+  - per-client 未完了要求の上限（`RequestScheduler` の per-client cancel-state を上限
+    〔例 64〕で固定し、超過時は最古の完了 or 接続拒否）。接続インスタンス上限だけでは
+    per-client の未完了要求数に歯止めがない
+  - プロトコル fixture: 固定 JSON / バイナリ fixture を `ipc/testdata/` に置き、TIP 側と
+    Host 側のデコードを同一データで検査。transport 層の 0-byte / truncated frame ケースを追加
 - **受け入れ条件**:
   - 既存 `ipc_payloads_tests` / `ipc_named_pipe_transport_tests` が緑
   - malformed JSON・ランダムバイト列でクラッシュしない
@@ -1969,20 +1881,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   および SafeMode 入り時の TIP 内通知バナー）。`settings-app/` への
   SafeMode 通知タイル統合は M30 完了後の follow-up とし、M47 v1 は
   TIP 単体で完結させる（M30 を M47 の前提にはしない）。
-- **実装範囲**: `docs/dev-infrastructure-spec.md` §8 拡張。
-  - 状態機械 5 種（`Healthy` / `DegradedSimple` / `DegradedModel` /
-    `Recovering` / `SafeMode`）
-  - 各処理の timeout: Ping 500ms / QueryCandidates fast 150ms /
-    QueryLiveConversion 80ms / Heavy 800ms / Model load 30s
-  - Host process / pipe 接続が生きていても有効応答が返らない
-    connected-but-silent 状態を timeout として扱い、pipe 切断を待たず
-    `DegradedSimple` へ遷移する
+- **実装範囲**: `docs/dev-infrastructure-spec.md` §8 拡張。状態機械 5 種・各処理の
+  timeout 値・UI 文言は同節が正典。
+  - 状態機械と遷移条件の実装（§8.5）
+  - Host process / pipe 接続が生きていても有効応答が返らない connected-but-silent
+    状態を timeout として扱い、pipe 切断を待たず `DegradedSimple` へ遷移する
   - timeout 時の Cancel + staleness check による古い結果破棄
-  - Cancel / deadline を Host Dispatcher から converter / reranker /
-    backend 推論処理まで伝播し、応答抑止だけに依存しない
-  - 連続クラッシュ N 回で `SafeMode` 突入、次回起動時にユーザー通知
-  - UI: `⚠️ Zenzai が応答しないため、簡易変換で継続しています [詳細]
-    [再試行]` を候補ウィンドウ下部の控えめインジケータで表示
+  - Cancel / deadline を Host Dispatcher から converter / reranker / backend 推論処理まで
+    伝播し、応答抑止だけに依存しない
+  - 連続クラッシュ N 回での `SafeMode` 突入と、次回起動時のユーザー通知
+  - 候補ウィンドウ下部の控えめな劣化インジケータ（§8.7）
 - **受け入れ条件**:
   - Host を手動 kill しても入力中のアプリが固まらない
   - Host が接続済みのまま `QueryCandidates` に応答しない場合でも、
@@ -2078,23 +1986,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （`ListModels` / `BenchmarkModel` 追加）、
   `inference-host/src/ModelCatalog.cpp`（新規）、
   `settings/mvp-settings.schema.json`（`model.*` ブロック追加）。
-- **実装範囲**: `docs/model-management-spec.md`。
-  - `%LOCALAPPDATA%\azooKey\models\` のスキャン。R1=`.gguf` ファイル
-    （GGUF magic / version / metadata 検証、quantization 推定）と
-    R2=ORT GenAI モデルディレクトリ（`genai_config.json` をパースし、その
-    config が参照する ONNX の presence 検証。ファイル名はハードコードしない、
-    §3.3）の両方式を検出する（§3.1）。zenz-v3 変換 ONNX の
-    optional パッケージはここで discovery される
-  - `ListModels`（`format` = `gguf` / `onnx_genai` を含む）/ `BenchmarkModel` IPC
-  - backend 自動選択は M24 決定（`docs/copilot-pc-backend-spec.md` §4.3 / §4.5、
-    R1=llama.cpp / R2=Windows ML）に委譲する。旧 `NPU > DirectML > CUDA > CPU`
-    順は使わない。ONNX モデルがあり対応 HW なら §4.6 の EP 取得・登録を試みて
-    R2（`winml`）、不可なら R1（`cuda` / `vulkan` / `cpu`）。バッテリ時は
-    §4.5 / §4.6 に従い NPU device のみ（device-level フィルタ）。ベンチ履歴は
-    同順位内のタイブレーカーとしてのみ p95 最良を採用
-  - 既存 `backendPreference` との後方互換（`model.backendPreference` >
-    root `backendPreference` > `auto`）。`directml` / `npu` は deprecated で
-    内部的に `winml`（EP 自動選択）へ集約、ベンダ横断 GPU は `vulkan`
+- **実装範囲**: `docs/model-management-spec.md` §3〜§7。
+  - モデルディレクトリのスキャンと形式別検証（R1=GGUF ファイル、R2=ORT GenAI モデル
+    ディレクトリ。ファイル名はハードコードせず `genai_config.json` の参照を辿る）（§3.1・§3.3）
+  - `ListModels` / `BenchmarkModel` IPC（§4）
+  - backend 自動選択は M24 の決定（`docs/copilot-pc-backend-spec.md` §4.3・§4.5・§4.6）に
+    委譲する。旧 `NPU > DirectML > CUDA > CPU` 順は使わない。ベンチ履歴は同順位内の
+    タイブレーカーとしてのみ用いる（§5.1）
+  - 既存 `backendPreference` との後方互換と deprecated 値の集約（§5.2）
+  - 設定アプリ Model タブの操作・状態表示（§6）と `model.*` 設定スキーマ（§7）
 - **受け入れ条件**:
   - モデル一覧が GUI に表示される
   - invalid GGUF は「ロード不可」として明示される
@@ -2317,20 +2217,17 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   拡張、SQLite 化は M54-B 以降の別 M に分離）、
   `inference-host/src/UserLearningScorer.cpp`（新規）、
   `docs/user-learning-enhancement-spec.md`（新規）。
-- **実装範囲**: `docs/user-learning-enhancement-spec.md`。M54 v1 は TSV
-  拡張で完結させ、SQLite 分割テーブル（committed_candidates /
-  correction_events / app_profiles）は spec §3.3 に将来案として残すのみ。
-  - TSV スキーマ拡張: `reading\tsurface\tweight\tlast_updated_epoch_sec\tcommit_count\tapp_name\tevent_type\tcontext_hash`（`last_updated_epoch_sec` は epoch 秒、ミリ秒ではない。`LearningStore.cpp` の単位と一致）
-  - 学習イベント 7 種: 候補確定 / 即 Backspace / 再変換 / ユーザー辞書登録 /
-    アプリ別確定 / typo 採用 / typo 拒否（typo 系は M55 完了後）
-  - 時間減衰: half_life = 一般 30 日 / 固有名詞 90 日 / 技術語 120 日 /
-    一時話題 14 日 / typo 60 日
-  - `user_score` = log(1 + commit_count) × recency_score ×
-    app_profile_weight × correction_penalty
-  - 既存 TSV（M7 形式）からの自動マイグレーション戦略
-  - 索引構造（spec §14。M15 と共有。M54 本体と独立に着手可）: reading-keyed
-    二層化（`reading→surface` の `std::map` 二段）、前方一致 lookup の契約と
-    計算量要件、`learning.tsv` の形式を変えない決定、M15 予測窓への区分連結供給
+- **実装範囲**: `docs/user-learning-enhancement-spec.md` §3〜§9・§14。TSV スキーマ・
+  half_life 値・`user_score` の式は同 spec が正典。M54 v1 は TSV 拡張で完結させ、
+  SQLite 分割テーブルは同 §3.3 に将来案として残すのみ。
+  - TSV スキーマ拡張と、既存 M7 形式からの自動マイグレーション（§3.1・§3.2）
+  - 学習イベント 7 種（候補確定 / 即 Backspace / 再変換 / ユーザー辞書登録 /
+    アプリ別確定 / typo 採用 / typo 拒否。typo 系は M55 完了後）（§4）
+  - category 別 half_life による時間減衰と `user_score` の乗算合成（§5・§6）
+  - `UserLearningScorer` の組み込み（§7）と `context_hash` のプライバシー境界（§8）
+  - 索引構造（§14。M15 と共有し、M54 本体と独立に着手できる）: reading-keyed 二層化、
+    前方一致 lookup の契約と計算量要件、`learning.tsv` の形式を変えない決定、
+    M15 予測窓への区分連結供給
 - **受け入れ条件**:
   - 同じ入力を複数回確定すると、次回以降候補順位が上がる
   - M52 ベンチで user_adapt カテゴリが学習前後で改善する
@@ -2400,22 +2297,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `models/tiny_reranker.onnx`（新規アセット）、
   `inference-host/src/Dispatcher.cpp`（rerank フェーズに統合）、
   `docs/neural-reranker-spec.md`（新規）。
-- **実装範囲**: `docs/neural-reranker-spec.md`。
-  - 特徴量（v1 = embedding を除く 12 種）: zenzai_score / dictionary_score /
-    user_frequency / recency_score / typo_confidence / app_profile_score /
-    candidate_length / segment_count / is_named_entity / is_user_dict /
-    is_neologism / is_typo_corrected。
-    left_context_embedding / reading_embedding / candidate_embedding は
-    **v2 以降**（embedding 導入時）の追加特徴で v1 には含めない
-    （spec §4 / §4.1 / §5.2 の `features_v1`=12 次元固定と整合）
-  - モデル: v1 = MLP reranker、v2 候補 = Mini Transformer
-  - 学習データ: 正例 = 確定候補、負例 = 表示されたが選ばれなかった候補、
-    強い負例 = 訂正イベント
-  - ONNX Runtime CPU 優先、timeout 10〜20ms、failure 時は reranker なしで
-    返す fallback
-  - **embedding 供給方針は `docs/neural-reranker-spec.md` §4.1 で決定済み**
-    （v1 = 手作り特徴量のみ / Option C、v2 以降 = 独立小型 encoder / Option A の
-    段階導入。M57 ModernBERT 共用 / Option B は不採用）。同 §4.1 を正典とする
+- **実装範囲**: `docs/neural-reranker-spec.md` §3〜§9（Track A）。特徴量の次元・
+  モデル構造・timeout 値は同 spec が正典。
+  - `features_v1`（embedding を含まない 12 次元固定）の算出と組み立て（§4・§5.2）
+  - v1 = ONNX MLP reranker。v2 候補の Mini Transformer は §10 の段階導入に従う
+  - 学習データ収集とラベリング（正例 = 確定候補 / 負例 = 表示されたが選ばれなかった候補 /
+    強い負例 = 訂正イベント）（§6）
+  - ONNX Runtime CPU 優先の推論と、timeout / 失敗時に reranker なしで返す fallback（§7）
+  - embedding 供給方針は §4.1 の決定（v1 = 手作り特徴量のみ、v2 以降 = 独立小型 encoder。
+    M57 ModernBERT 共用は不採用）に従う
 - **受け入れ条件**:
   - M52 ベンチで top1 が baseline 比 +3% 以上
   - p95 latency 悪化が +10ms 以内

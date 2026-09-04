@@ -63,11 +63,12 @@ repos:
         files: '^settings/(mvp-settings\.schema\.json|default-settings\.sample\.json)$'
 
       - id: yamlfmt
-        name: yamlfmt
+        name: yamlfmt (repository-owned YAML)
         entry: yamlfmt
+        args: [-no_global_conf]
         language: system
-        types: [yaml]
-        exclude: '^legacy/'
+        types: [text]
+        files: '^(\.yamlfmt|\.github/(FUNDING|dependabot)\.ya?ml|\.github/workflows/.*\.ya?ml|\.pre-commit-config\.yaml)$'
 
       - id: taplo
         name: taplo fmt (TOML)

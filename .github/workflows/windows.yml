@@ -204,21 +204,18 @@ jobs:
           bin_dir="$RUNNER_TEMP/azookey-quality/bin"
           mkdir -p "$bin_dir"
           GOBIN="$bin_dir" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          GOBIN="$bin_dir" go install github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0
           cargo install taplo-cli --version 0.10.0 --locked \
             --root "$RUNNER_TEMP/azookey-quality/taplo"
           echo "$bin_dir" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/azookey-quality/taplo/bin" >> "$GITHUB_PATH"
 
       # These hooks have dedicated CI jobs (including the non-staged scan in
-      # secret-scan.yml), so pre-commit only owns actionlint/taplo here.
-      # yamlfmt remains
-      # skipped until the existing whole-tree formatting baseline is resolved
-      # by DEV-913. This avoids unrelated rewrites while still exercising the
-      # repository's pre-commit entrypoint against every tracked file.
+      # secret-scan.yml), so pre-commit owns actionlint/yamlfmt/taplo here.
       - name: Run pre-commit CI-owned hooks
         env:
           SKIP: >-
-            clang-format,gitleaks,powershell-quality,yamlfmt,
+            clang-format,gitleaks,powershell-quality,
             settings-json-schema-metaschema,settings-json-schema-sample
         run: pre-commit run --all-files --show-diff-on-failure
 

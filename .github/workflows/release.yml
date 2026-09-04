@@ -96,11 +96,19 @@ jobs:
             throw "The x64 MSVC runtime directory was not found under $redistRoot."
           }
 
-          foreach ($name in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
-            if (-not (Test-Path (Join-Path $crtDir.FullName $name))) {
+          $runtimeInfo = foreach ($name in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
+            $path = Join-Path $crtDir.FullName $name
+            if (-not (Test-Path $path)) {
               throw "Required MSVC runtime file is missing: $name"
             }
+            $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+            @{
+              name = $name
+              version = "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart).$($info.FilePrivatePart)"
+              sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
           }
+          ConvertTo-Json -InputObject @($runtimeInfo) | Set-Content -Encoding utf8 runtime-info.json
           "dir=$($crtDir.FullName)" >> $env:GITHUB_OUTPUT
       - name: Build unsigned MSI
         run: >-
@@ -118,18 +126,28 @@ jobs:
             throw "Expected an unsigned MSI, found signature status $($signature.Status)."
           }
           "path=$($msi.FullName)" >> $env:GITHUB_OUTPUT
-      # syft は MSI から C++ の依存関係を復元できない。この SBOM が担保するのは
-      # 成果物そのものの同定であり、FetchContent 取得の llama.cpp / WIL 等を列挙
-      # する正典は引き続き THIRD_PARTY_LICENSES である（docs/licensing-policy.md）。
-      # dry-run でも生成し、ステップ自体の破損を早期に検出する。
+      # syft の検出結果を保持し、CMake / NuGet / 同梱 CRT のビルド入力で補完する。
+      # dry-run でも両ステップを実行する。attribution の正典は THIRD_PARTY_LICENSES。
       - name: Generate SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: ${{ steps.msi-artifact.outputs.path }}
           format: spdx-json
-          output-file: ${{ github.workspace }}\azooKey.spdx.json
+          output-file: ${{ github.workspace }}\azooKey.syft.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - name: Complete SBOM with release dependencies
+        shell: pwsh
+        env:
+          MSI_PATH: ${{ steps.msi-artifact.outputs.path }}
+          VC_RUNTIME_DIR: ${{ steps.vc-runtime.outputs.dir }}
+        run: |
+          git diff --exit-code -- settings-app/packages.lock.json
+          if ($LASTEXITCODE -ne 0) { throw "Release restore changed the NuGet lock." }
+          python scripts/complete-release-sbom.py `
+            --input azooKey.syft.spdx.json --output azooKey.spdx.json `
+            --build-dir build/windows-release --runtime-info runtime-info.json `
+            --runtime-dir "$env:VC_RUNTIME_DIR" --msi "$env:MSI_PATH"
       # attestation はリポジトリに残る公開記録なので、実際に配布するタグ push で
       # だけ作る。dry-run で作ると未配布ビルドの証明が残り、誤解を生む。
       #

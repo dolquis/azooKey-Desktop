@@ -33,6 +33,8 @@ Unicode CLDR・SudachiDict 等を取り込む際に、本ファイルへ追記�
 
 ## 配布物へ同梱する llama.cpp / ggml
 
+<!-- sbom: {"source":"cmake:AZOOKEY_LLAMA_CPP_GIT_TAG","name":"llama.cpp","license":"MIT"} -->
+
 - Source: `https://github.com/ggml-org/llama.cpp.git`（`AZOOKEY_LLAMA_CPP_GIT_TAG` で pin。
   `AZOOKEY_FETCH_LLAMA_CPP=ON` または `AZOOKEY_LLAMA_CPP_SOURCE_DIR` でビルドに取り込む）
 - License: MIT License
@@ -66,6 +68,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## 配布物へ同梱する WIL（Windows Implementation Libraries）
+
+<!-- sbom: {"source":"cmake:AZOOKEY_WIL_GIT_TAG","name":"WIL","license":"MIT"} -->
 
 - Source: `third_party/wil`（`https://github.com/microsoft/wil.git` を commit SHA 固定の
   submodule として参照。header-only）
@@ -101,6 +105,8 @@ SOFTWARE.
 
 ## 配布物へ同梱する MSVC runtime
 
+<!-- sbom: {"source":"runtime","name":"MSVC runtime","license":"LicenseRef-MSVC-runtime"} -->
+
 - Source: Visual Studio の `VC\Redist\MSVC\<version>\x64\Microsoft.VC*.CRT`
 - License: Microsoft Software License Terms の Distributable Code
 - Copyright: Microsoft Corporation
@@ -110,6 +116,8 @@ SOFTWARE.
   使用する。配布可否は Visual Studio ライセンス条項に従う。
 
 ## 配布物へ同梱する Windows App SDK
+
+<!-- sbom: {"source":"nuget:Microsoft.WindowsAppSDK.","name":"Windows App SDK","license":"LicenseRef-Windows-App-SDK"} -->
 
 - Source: NuGet の `Microsoft.WindowsAppSDK.DWrite` 2.1.0、
   `Microsoft.WindowsAppSDK.Runtime` 2.4.0、`Microsoft.WindowsAppSDK.WinUI` 2.3.6、
@@ -124,6 +132,8 @@ SOFTWARE.
   同ライセンスの Distributable Code 条項に従って再配布する。
 
 ## Microsoft Windows C++/WinRT
+
+<!-- sbom: {"source":"nuget:Microsoft.Windows.CppWinRT","name":"C++/WinRT","license":"MIT"} -->
 
 - Source: `Microsoft.Windows.CppWinRT` NuGet package 3.0.260715.1
 - License: MIT License
@@ -160,6 +170,8 @@ SOFTWARE.
   直接・推移依存の解決結果は `settings-app/packages.lock.json` を正典とする。
 
 ## Microsoft WebView2 loader
+
+<!-- sbom: {"source":"nuget:Microsoft.Web.WebView2","name":"WebView2 loader","license":"BSD-3-Clause"} -->
 
 - Source: `Microsoft.Web.WebView2` NuGet package 1.0.3719.77
 - License: BSD-3-Clause

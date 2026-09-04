@@ -12,7 +12,9 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 適用範囲 |
 |---|---|
 | [`docs/AGENTS.md`](AGENTS.md) | `docs/` の正典、索引、lint 規約 |
+| [`docs/CLAUDE.md`](CLAUDE.md) | `docs/AGENTS.md` を Claude Code へ届ける import 専用 |
 | [`plans/AGENTS.md`](../plans/AGENTS.md) | `plans/` の roadmap と調査資料の規約 |
+| [`plans/CLAUDE.md`](../plans/CLAUDE.md) | `plans/AGENTS.md` を Claude Code へ届ける import 専用 |
 
 ## 計画ドキュメント（`plans/`）
 

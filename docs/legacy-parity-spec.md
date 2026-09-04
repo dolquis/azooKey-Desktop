@@ -387,10 +387,10 @@ enum 設計・純粋性契約・受け入れ条件の質を底上げすること
 「azooKey 独自に再設計が必要な境界」を正典として固定する。
 
 karukan 側の参照点（`plans/karukan-comparison-report.md §9`・DEV-400 記載。**外部リポジトリ
-のため file:line は M13 実装着手時に現物で確認する**）: `karukan-im/src/core/state.rs:10-30`
-（`InputState`＝状態が値）、`karukan-im/src/core/engine/types.rs:11-25`（`EngineAction`
-＝6 種の抽象出力アクション）、`karukan-im/src/core/engine/mod.rs:482-486`（状態でディスパッチ）、
-`karukan-macos/.../KarukanInputController.swift:4-9`（薄いフロントエンドの到達点）。
+のため、実際の位置は M13 実装着手時に現物で確認する**）: `karukan-im/src/core/state.rs`
+（`InputState`＝状態が値）、`karukan-im/src/core/engine/types.rs`（`EngineAction`
+＝6 種の抽象出力アクション）、`karukan-im/src/core/engine/mod.rs`（`Engine` が状態でディスパッチ）、
+`karukan-macos/.../KarukanInputController.swift`（薄いフロントエンドの到達点）。
 
 #### 1.6.1 三段分離の対応（karukan の到達点 ↔ azooKey M13 の設計）
 
@@ -408,7 +408,7 @@ karukan が「状態を単一の OS 非依存クレートに内包し、抽象�
 （`engine/mod.rs`）。したがって azooKey の §1.5.1 純粋関数境界（値状態＋副作用なしの `HandleEvent`）は
 **karukan が実証済みの性質ではなく azooKey 独自の設計選択**である。この純粋境界を karukan の既成
 事実と誤認して API・テスト設計の根拠にしないこと（karukan から借りるのは「OS 非依存層に状態と
-アクション出力を閉じる構造」であって、関数の純粋性ではない）。現状 azooKey は `tsf-tip/src/TextService.cpp:307-640`
+アクション出力を閉じる構造」であって、関数の純粋性ではない）。現状 azooKey は `tsf-tip/src/TextService.cpp`
 の `OnTestKeyDown` / `OnKeyDown` に VK 別 if/else と暗黙フラグ（`preedit_kana_` /
 `candidate_ui_.IsShowing()` / `committing_` の組合せ）で状態が集中し、純粋状態機械層が未実装
 であることを裏取りした（本レビュー時点の現物確認）。
@@ -468,7 +468,7 @@ azooKey が自分で決める設計判断である。karukan の欠けとして�
   `showCandidateWindow(list, selected_index)` を再発行して反映する、(b) `CandidateWindow` の
   ハイライトのみ更新する `updateCandidateSelection(index)` を**最適化として**追加し窓の作り直しを
   避ける、(c) `HandleResult.next` の選択 index を TIP が読んで反映する契約に一本化する。レガシー
-  Swift `ClientAction`（`legacy/.../Actions/ClientAction.swift:25-27`）は
+  Swift `ClientAction`（`legacy/.../Actions/ClientAction.swift`）は
   `selectNextCandidate` 系を持つが、これは Swift 実装の選択であって C++ 側の必須要件ではない。
   推奨は (b)（TSF では窓の再構築コストが実測課題になり得るため）だが、決定は M13 実装 PR に委ねる。
 - **候補ページング・スクロールの反映方式（azooKey 設計判断）**: 候補数が窓の表示件数を超えるときの

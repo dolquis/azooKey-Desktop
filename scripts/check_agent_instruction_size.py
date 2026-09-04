@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Enforce the AGENTS.md byte budget defined by docs/dev-infrastructure-spec.md §4.3."""
+"""Enforce the root AGENTS.md byte budget (target 12 KiB, maximum 16 KiB).
+
+agent-ops is the origin of this checker. Each product repo vendors it into
+scripts/check_agent_instruction_size.py via scripts/vendor-docs-governance.sh and
+runs it from the same CI job as docs-lint. Edit it here and re-vendor; a repo-side
+edit is a silent fork, which vendor-docs-governance.sh --check reports.
+
+Exit status: 0 for ok or warning (target exceeded, GitHub annotation emitted),
+1 when the maximum is exceeded, 2 when the file cannot be read.
+"""
 
 from __future__ import annotations
 

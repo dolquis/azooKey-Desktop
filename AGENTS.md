@@ -52,3 +52,4 @@
 
 - Claude Code は `.claude/skills/`、Codex は `.agents/skills/` を読む。共有 Skill は `dolquis/agent-ops` を正典とし、product repo では直接改訂せずベンダリングする。
 - 両ツリーは本文と `references/` を同期し、ハーネス固有 frontmatter だけ差異を許す。`doc-coauthoring` などの Claude 専用 Skill は `.claude/skills/` のみに置く。
+- ベンダリングした共有 Skill の本文・`references/` と、`scripts/docs-lint.py`、`scripts/check_agent_instruction_size.py`、そのテストをこの repo で編集しない。repo 側の編集は silent fork になる。変更は origin で行い配布し直す。`.docs-lint.toml` と `.docs-lint-baseline.json` はこの repo が持つ。

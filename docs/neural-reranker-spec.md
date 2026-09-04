@@ -488,7 +488,7 @@ final_score =
 
 対応課題: DEV-413（実装）/ DEV-556（本章の設計確定）
 参考実装（**設計思想のみ**。逐語移植しない）: karukan
-`karukan-engine/src/kanji/llamacpp.rs:713-805`（`NllScorer`。コンテキストを
+`karukan-engine/src/kanji/llamacpp.rs`（`NllScorer`。コンテキストを
 再利用して (reading, surface) ペアの文字あたり NLL を算出する）。本章の算出式・
 正規化・合成規則は azooKey 側で独自に定めたものであり、参考実装の写しではない。
 

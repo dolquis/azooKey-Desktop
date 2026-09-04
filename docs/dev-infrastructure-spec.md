@@ -501,7 +501,10 @@ OFF のまま）。
 - Agent 指示予算 — root `AGENTS.md` の UTF-8 byte size は 12 KiB を目標、
   16 KiB を上限とする。目標超過は GitHub Actions annotation で可視化し、
   上限超過は非 0 終了で PR を停止する。機械利用時の `--json` は単一行を保つ。
-  実装は `scripts/check_agent_instruction_size.py`（本節を正典とする）。
+  実装は `scripts/check_agent_instruction_size.py`。`dolquis/agent-ops` から
+  ベンダリングしたコピーであり、閾値・終了コード・出力形式の正典は origin にある。
+  この repo では編集せず、変更は origin で行って配布し直す。本節は azooKey が
+  この検査を CI のどのジョブで走らせるかを定義する。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の
@@ -773,7 +776,7 @@ TSF/COM registration smoke は登録状態を変更するため、
 
 ## 5. ユーザーデータ永続化の堅牢化（M39）
 
-### 5.1 現状の問題
+### 5.1 解決する問題
 
 M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの既定パスを相対パス
 （`azookey_learning.tsv` / `azookey_user_dict.json`）で持つため、Host の
@@ -1184,7 +1187,7 @@ deadline 超過のうち、フレームが転送途中だった場合だけは�
 
 ## 7. 構造化ログと可観測性（M41）
 
-### 7.1 現状
+### 7.1 解決する問題
 
 TIP は `OutputDebugStringA`（DebugView）、Host は stderr 中心。遅延要因
 （TIP 側 / Pipe 側 / Host 側）の切り分けと、エラー分類の体系がない。
@@ -1498,7 +1501,7 @@ trace は以下のいずれかで明示有効化する:
 
 ## 8. Host 可用性・再接続（M42）
 
-### 8.1 現状の問題
+### 8.1 解決する問題
 
 Host が停止した際の TIP 側再接続戦略が限定的で、入力中に候補更新が停止する
 恐れがある。常駐方法（Run キー）だけではアップデート時・クラッシュ時の復旧

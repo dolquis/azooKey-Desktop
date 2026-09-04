@@ -12,6 +12,8 @@ on:
       - 'scripts/docs-lint.py'
       - 'scripts/check_agent_instruction_size.py'
       - 'scripts/tests/test_agent_instruction_size.py'
+      - '.docs-lint.toml'
+      - '.docs-lint-baseline.json'
   pull_request:
     paths:
       - '**/*.md'
@@ -22,6 +24,8 @@ on:
       - 'scripts/docs-lint.py'
       - 'scripts/check_agent_instruction_size.py'
       - 'scripts/tests/test_agent_instruction_size.py'
+      - '.docs-lint.toml'
+      - '.docs-lint-baseline.json'
 
 permissions:
   contents: read
@@ -40,9 +44,15 @@ jobs:
         with:
           submodules: false
 
-      - name: Run docs-lint
-        run: python3 scripts/docs-lint.py
+      # docs-lint（dolquis/agent-ops origin のベンダリングコピー）。判定はベースライン
+      # 比較で、既存の findings は .docs-lint-baseline.json で凍結し、増加だけを止める。
+      # ファイル単位・カテゴリ単位で件数が増えたら非 0 終了する。DECISIVE は全ファイル
+      # 0 件で凍結してあるため、1 件でも出れば増加として落ちる。
+      - name: docs-lint (baseline ratchet)
+        run: python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json
 
+      # AGENTS.md の予算検査（同じく origin のベンダリングコピー）。目標 12 KiB 超過は
+      # annotation で可視化し、上限 16 KiB 超過は非 0 終了で PR を止める。
       - name: Test AGENTS.md size checker
         run: python3 scripts/tests/test_agent_instruction_size.py
 

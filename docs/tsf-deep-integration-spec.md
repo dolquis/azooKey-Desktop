@@ -460,7 +460,7 @@ best-effort cleanup で COM CLSID、TSF プロファイル、カテゴリを削�
 対話的 TSF セッションを要するため、opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE`
 + 昇格時のみ実行で、CI（headless）では走らない。
 
-### 2.10 `ActivateEx` の最小実装と現状ギャップ
+### 2.10 `ActivateEx` の最小実装と契約ギャップ
 
 **実装済み（DEV-157 / DEV-154）**: `TextService::ActivateEx` は `ITfThreadMgrEx` を
 QI して `GetActiveFlags` を呼び、`TF_TMF_UIELEMENTENABLEDONLY` の有無を

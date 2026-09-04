@@ -89,18 +89,18 @@ In Review が「PR レビュー待ち」「マージ済み検証メモ待ち」�
 
 Linear は cycle の終了時に未完了 Issue を次の cycle へ自動で繰り越す。入れた分は消えず、残った分がそのまま次の scope になるため、Cycle を「やりたいこと置き場」として使うと scope は単調に増え、burndown は平坦なままになる（Cycle 8 は scope 96 件・completed 0 件で終わった）。Cycle には **その週に状態が動く見込みのあるものだけ**を入れる。
 
-数値（件数・Project 数・持ち越し回数）は人間 lead が決める。ここに書くのは監査時点の実測から起こした初期値で、cycle の実績で調整する。
+数値（件数・Project 数・持ち越し回数）は人間 lead が決め、cycle の実績で見直す。
 
-1. **投入は commitment として決める**。その週に状態が動く見込みのあるものだけを入れる。初期値は 20 件。
+1. **投入は commitment として決める**。その週に状態が動く見込みのあるものだけを入れる。上限は 20 件。
 2. **同時 In Progress は 8 件まで**（`type:tracking` と `gate:human-required` を除く）。上限に達したら、新規着手より In Review / Merged の解消を先に行う。
 3. **`type:tracking` を Cycle に入れない**。束ね Issue は 1 週間で閉じないため、scope と burndown の両方を歪める。追跡は Project とラベルで行い、Cycle には子の implementation Issue を入れる。
 4. **外部要因で止まっているものは Cycle から外す**。第三者の返答、他者のリリース、ベンダーの回答を待つ Issue は、こちらの帯域を消費しないまま未完了として積み上がる。
 5. **人間ゲートは、その週に人間が処理すると決めたものだけ入れる**。`gate:human-required` は AI 側から動かせないため、入れっぱなしにすると滞留の芯になる。
 6. **`[Recurring] ... control tower audit`（§11）を Cycle に入れない**。週次トリガで回し、scope に数えない。
-7. **同時に進める Project は 4 つまで**。残りは Cycle の外に置き、Project の Status Update に止めている理由と再開条件を書く（§12）。
+7. **同時に進める Project は 3 つまで**。残りは Cycle の外に置き、Project の Status Update に止めている理由と再開条件を書く（§12）。
 8. **PR がマージされたら In Progress に留めない**。マージ → Merged（Merged state を持たない間は In Review）→ 検証メモ記載 → Done（§7.1.3）。`Part of` / `Refs` のような closing キーワードでない参照ではこの遷移が自動で起きないため、手で動かす。検出は `scripts/linear-audit.py`（§11）が持つ。
 9. **止めるときにアーカイブを使わない**。アーカイブした Issue は通常ビュー・Cycle・Project の集計から消えるため、状態の正典が Linear であるという前提が崩れる。取り下げは `Canceled`、続けるが今は動かさないものは Backlog へ戻し、いずれも理由をコメントに書く（team に停止用の状態を設けるならそれを使う）。未完了のままアーカイブされた Issue の検出は `scripts/linear-audit.py` が持つ。
-10. **N cycle 続けて持ち越された Issue は Cycle から外す**。初期値は 2 cycle。外すのは取り下げではなく triage への差し戻しで、Project・Priority・ラベルは保持したまま Backlog / Todo に置く。繰り越し以外の出口が無いと、Cycle は commitment ではなく堆積物になる。
+10. **2 cycle 続けて持ち越された Issue は Cycle から外す**。外すのは取り下げではなく triage への差し戻しで、Project・Priority・ラベルは保持したまま Backlog / Todo に置く。繰り越し以外の出口が無いと、Cycle は commitment ではなく堆積物になる。
 11. **同じ所見が 2 回続けて出たら扱いを変える**。ラベル・メタデータ級は監査セッションがその場で直して記録する。構造・方針級は人間へ通知し、通知しないまま次回へ持ち越さない。監査が同じ指摘を書き足すだけの装置になると、検出はできても処置されない状態が固定する。
 
 Cycle から外した Issue は Project・Priority・ラベルを保持するため、Backlog / Todo からいつでも再投入できる。外すことと取り下げることを混同しない。

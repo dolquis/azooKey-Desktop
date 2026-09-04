@@ -492,7 +492,7 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
 |---|---|---|---|
 | Phase 1 | TIP 基盤完成 | M1〜M4 | 実機 IME でローマ字を打鍵し、Host から候補を取得して候補ウィンドウへ表示する。実機動作は M2 のキーイベント sink 配線（Issue #33）に依存 |
 | Phase 2 | 候補選択と確定動線 | M5 / M6 / M10 | 候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機確認は M2（Issue #33）に依存 |
-| Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み（3〜5 週） | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md` と `docs/debugging.md` |
+| Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み（3〜5 週） | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md`（GGUF 配置と `-ModelPath` 登録）、`docs/debugging.md`（ビルド・手動確認・ユーザー辞書 CLI）、`docs/zenzai-gpu-route.md`（Zenzai ベンチと計測ゲート） |
 | Phase 4 | 配布可能化 — v1.0 リリースゲート（4〜6 週） | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
 
 ## Phase 5〜7 の依存関係と実行順

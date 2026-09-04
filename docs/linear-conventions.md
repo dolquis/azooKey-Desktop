@@ -2,8 +2,10 @@
   SHARED CORE — Agent / Linear 運用規約（管制塔モデル）
   この「共有コア」は全リポジトリで同一内容をミラーする。
   個別 repo で直接編集しない。編集は origin（後述）で行い、各 repo へ伝播する。
-  version: 0.7-draft   updated: 2026-09-01
-  status: 規約確定・origin = dolquis/agent-ops に確定。repo 新設/配置・ラベル移行(Phase 4)は未実施。§2.1 Codex Execution Policy を追加(2026-06-07)。§7.1 Design / Gate Split と PR マージ→In Review 設定を追加(2026-06-19)。§11 に Design / Implementation spec-first checks・tracking の Codex 実行候補混入検出・設計未完のまま impl 実行許可の検出を追加(2026-07-05)。同 spec-first checks を移行期の旧カテゴリラベル(Feature / enhancement)と In Progress の課題にも適用(2026-07-05)。§3/§7.1.3/§10/§11 に In Review の意味分割(Merged 状態の新設・PR マージ遷移先の変更・人間ゲートの Todo 待機・tracking の In Progress 維持・検証メモのフロー化)を追加(2026-08-31・DEV-923)。§7.2 記録の鮮度(導出可能な現在を description に書かない・状態依存の例外を Next AI Tasks に限定・遷移時記録原則)を新設し、§5/§7/§7.1.3/§11/§12 をこれに合わせて改訂(2026-09-01・DEV-927)。§7.2 の状態依存記録を description から日付つき追記型の器(Project Status Update / Status snapshot コメント)へ移し、§12 を description 4 節 + Status Update 3 節の 2 器構成に改訂(2026-09-01・DEV-929)。
+  version: 0.9   updated: 2026-09-04
+  改訂履歴は origin の git log を正典とし、本ヘッダには追記しない。
+  上書き型で日付を持たない器へ履歴を手書きすると、§7.2 が禁じている
+  手書きキャッシュそのものになるためである。
   origin(編集の起点・単一正典): dolquis/agent-ops/linear-conventions.md（このファイル）
   各 repo の docs/linear-conventions.md は本ファイルのベンダリングコピー + §13 Delta。
   プロジェクト固有の差分は各 repo の「Project Delta」節（本ファイル末尾）に置く。
@@ -213,10 +215,10 @@ Done は「Linear 上で運用的に完了」を意味し、GitHub docs のリ�
 
 事故の根本原因は、Linear–GitHub 連携が PR マージ / ブランチ名連動で Issue を Done 化し、人間ゲートを飛び越える点にある。次の多層で防ぐ:
 
-1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく Merged** にする（`Merged` は team `Dev` に作成済み。2026-09-01・DEV-924）。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは Merged で止まり、人間ゲートの取りこぼしが構造的に起きない。マージ済みの課題がレビュー待ちの課題と混ざらないため、In Review は「open PR あり」を保ち続ける（§3.1。この設定変更は人間 lead が Linear 側で行う）。
-2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。 GitHub ミラー Issue も同様に、人間ゲート / 検証メモ待ちの Issue では `Fixes #<N>`（マージで GitHub Issue をクローズ → Linear 同期で Done 化し Merged を迂回する）を避け、`Refs #<N>` 等の非クローズ参照にする。
+1. **連携設定（採用）**: チームの GitHub 連携で「PR マージ時の遷移先」を **Done ではなく Merged** にする（`Merged` は team `Dev` に作成済み。2026-09-01・DEV-924）。最終 Done は必ず人間 / Claude の明示操作とする。これにより設計 PR のマージは Merged で止まり、人間ゲートの取りこぼしが構造的に起きない。マージ済みの課題がレビュー待ちの課題と混ざらないため、In Review は「open PR あり」を保ち続ける（§3.1。この設定変更は人間 lead が Linear 側で行う）。**ただし自動遷移が働くのはクローズ系リンク（`Fixes` / `Closes` / `Resolves`）で参照した課題に限る。** 非クローズ参照の課題は連携が動かさないため、-4 の手動処置が唯一の経路になる（2026-09-01 に PR 10 本をマージした際、`Part of` で参照された DEV-928 / DEV-929 が In Progress のまま残った）。
+2. **closing キーワードの使い分け**: 設計 PR は設計 Issue のみを `Fixes DEV-<design>` で閉じる。人間ゲート Issue は closing キーワードで参照せず `Ref DEV-<gate>` / `Part of DEV-<gate>` のみとし、PR リンクは attachment で手動付与する。 GitHub ミラー Issue も同様に、人間ゲート / 検証メモ待ちの Issue では `Fixes #<N>`（マージで GitHub Issue をクローズ → Linear 同期で Done 化し Merged を迂回する）を避け、`Refs #<N>` 等の非クローズ参照にする。 この書き分けの副作用として、`Part of` / `Refs` で参照した課題は merge 自動遷移も止まる。自動 Done を防ぐのと引き換えに Merged への遷移も自動では起きないため、-4 で手動処置する。
 3. **分割の徹底**: §7.1.1 に該当する Issue は分割し、auto-close が人間ゲート Issue に当たらないようにする。
-4. **検証メモのフロー化**（§7.2 遷移時記録原則の適用例）: PR のマージを検知したセッション（マージを実行した人間から引き継いだエージェント・PR 監視エージェント・直後に該当 repo で作業するセッション）は、その場で検証メモ（確認したテスト名・CI ジョブ名を含む）を Issue にコメントし、`gate:human-required` が無ければ Done へ明示遷移する。遷移時にやることは §7 Done チェックリストに集約してある。検証メモを週次監査でまとめて書く運用は Merged の滞留を生む（DEV-662 で 18 件、DEV-925 で 11 件が一括処理になった）ため、監査での記入は取りこぼしの回収に限る。
+4. **検証メモのフロー化**（§7.2 遷移時記録原則の適用例）: PR のマージを検知したセッション（マージを実行した人間から引き継いだエージェント・PR 監視エージェント・直後に該当 repo で作業するセッション）は、その場で検証メモ（確認したテスト名・CI ジョブ名を含む）を Issue にコメントし、`gate:human-required` が無ければ Done へ明示遷移する。**非クローズ参照の課題では Merged への遷移そのものも手動で行う**（-2 のとおり連携は動かさない）。自動遷移を前提にしない。遷移時にやることは §7 Done チェックリストに集約してある。検証メモを週次監査でまとめて書く運用は Merged の滞留を生む（DEV-662 で 18 件、DEV-925 で 11 件が一括処理になった）ため、監査での記入は取りこぼしの回収に限る。
 
 本節の遷移規約（PR マージ→Merged、Done は明示遷移）は、各 repo の `AGENTS.md` / `docs/GITHUB_LINEAR_MAPPING.md` / `docs/WORKFLOW.md` 等のライフサイクル要約より**優先**する。要約側が「PR マージ→Done」と記す場合は本節に読み替え、可能なら要約側も更新する。
 

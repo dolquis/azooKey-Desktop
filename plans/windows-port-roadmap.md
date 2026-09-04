@@ -178,7 +178,11 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **目的**: `inference-host` が gguf モデルを optional にロードでき、
   CPU/CUDA 切替が configure 可能。
 - **前提**: M4
-- **変更対象**: `inference-host/`
+- **変更対象**: `inference-host/`（`InferenceEngine::LoadModel` 本実装、
+  `ZenzaiModelConverter` の GGUF ロード境界と llama.cpp 接続点、モデル状態の保持・解放 API）、
+  `core/include/azookey/core/IConverter.h`（Zenzai 実装が嵌まることの確認）、
+  `bench/`、`CMakeLists.txt`（`AZOOKEY_BACKEND`）、`inference-host/tests/`、
+  `docs/zenzai-gpu-route.md`（実装結果と整合させる）
 - **実装範囲**:
   - `LoadModel(path, options)` の実装（空 path は `SimpleConverter` fallback、
     GGUF path は `ZenzaiModelConverter` で magic/version 検証 → `model_loaded`）
@@ -191,6 +195,16 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   として `SimpleConverter` と差し替える方式で吸収する。第三者レビューが
   提案した別系統の `IModelRuntime` 抽象は `IConverter` と二重抽象になるため
   新設しない（`docs/dev-infrastructure-spec.md` §11.3）。
+  `InferenceEngine` の reranker・user_dict 経由パイプラインと
+  `ipc/src/Payloads.cpp` の `LoadModelRequest`/`LoadModelResponse`（`--backend cuda|cpu`
+  をリクエストで指定する設計）は既存実装をそのまま再利用する。
+- **決定記録（2026-05-20）**:
+  - llama.cpp バインディング選定: 初期実装は llama.cpp C API + CPU backend から
+    開始し、CUDA は optional backend として追加する。DirectML / NPU は M24 まで
+    予約値扱い。判断理由と計測ゲートは `docs/zenzai-gpu-route.md`。
+  - `LoadModel` 境界: `LoadModelRequest(path, backend, n_gpu_layers)` を
+    `InferenceEngine::LoadModel` に渡し、`model_loaded` / `last_error` を
+    `Handshake` / `Health` で観測できる状態とする。
 - **受け入れ条件**:
   - Zenzai GGUF（上流 `Miwa-Keita/zenz-v3.2-small-gguf`）配置時に `LoadModel` 成功
   - 未配置時も Host が落ちず、固定テーブル候補が動く
@@ -213,8 +227,13 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
   - 永続化フォーマット定義（`UserDictionary`: JSON `{version, entries: [{word, ruby, cid, mid, value}]}`）
   - `InferenceEngine::QueryCandidates` が `user_dict_->Lookup` を最優先で返す統合
   - 設定 UI（M11）または暫定 CLI/デバッグ UI から呼べる経路
+- **決定記録（2026-05-20）**: 本格設定 UI を待たず、`inference-host` の IPC 経由で
+  `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug probe を先に用意する。
+  設定アプリ統合は M11 へ送る。
 - **受け入れ条件**:
   - 設定 UI（M11 で繋ぐ）から語を追加し、即座に候補に出る
+- **検証手順**: ユーザー辞書 CLI のラウンドトリップ（`userdict add` / `list` /
+  `import` / `export` / `remove`）は `docs/debugging.md`「ユーザー辞書 CLI ラウンドトリップ」。
 
 ### M10: Cancel とライブ変換同期
 
@@ -245,7 +264,14 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: ユーザーが Zenzai ON/OFF、辞書管理、デバイス選択を行える
   最小設定アプリと、配布可能なインストーラ。
-- **変更対象**: 新規 `settings-app/`（WinUI 3 / C++/WinRT に確定、§3.0）、`pkg/` 配下 (新規)
+- **前提**: M6
+- **変更対象**: 新規 `settings-app/`、`pkg/` 配下（新規）
+- **UI フレームワーク決定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は
+  既存 C++/WinRT スタックとの親和性・Fluent / Mica 標準対応・配布形態
+  （MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は
+  代替案へ縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイク（1〜2 日）は
+  `gate:human-required` として残る。詳細は `docs/sideload-packaging-spec.md` §3.0。
+  本ロードマップ内で WinUI 3 採用に言及する箇所（リスク章・M30）は本節を参照する。
 - **実装範囲**:
   - 設定アプリ (TIP/Host とは別プロセス)。v1.0 設定 UI の最小機能セット（露出キー
     `model.enabled`/`model.backendPreference`〔`auto`/`cpu` 縮小〕/`model.selectedPath`/`logLevel`
@@ -261,14 +287,20 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     設定アプリの保存経路は atomic replace と共有ファイルロックの契約を満たし、`user_dict.json` は
     直接開かず CLI probe または Host への IPC を経由する。Host 側の quarantine rename との
     競合解消は保存 UI の前提となる。
-  - MSIX または WiX ベースの MSI
-  - ユーザースコープ自動登録、アンインストール時の自動解除
+  - 配布は未署名 WiX MSI（MVP 既定、`docs/sideload-packaging-spec.md` §0 / DEV-415）。
+    MSIX は MS Store 経由の別チャネル（M28 / DEV-416）
+  - TIP 登録はインストーラのカスタムアクションで HKLM `DllRegisterServer` を呼ぶ
+    **per-machine・要昇格**の経路とし、アンインストール時に自動解除する
+  - `ITfFnConfigure` からの設定アプリ起動は別プロセス EXE の非同期起動
+    （`docs/sideload-packaging-spec.md` §3.5、正典は `docs/tsf-deep-integration-spec.md` §6）
 - **受け入れ条件**:
   - クリーンな Win11 VM でインストール → IME 選択 → 入力 → 確定が動く
   - アンインストールでレジストリ・ファイルが残らない
 - **設計メモ**: 設定 UI が読み書きするユーザーデータの保存先は M39 で確定
   する `%LOCALAPPDATA%\azooKey\` レイアウトに合わせる。先行して M37〜M39
-  を完了しておくとパッケージング側の手戻りが減る。
+  を完了しておくとパッケージング側の手戻りが減る。M30（WinUI 3 設定アプリ）とは
+  UI フレームワークを揃え、後続の作り直しを避ける。
+- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§3・§4
 
 ### M12: 配布リリースと CI
 
@@ -279,12 +311,14 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
     Debug / Release matrix を preset 経由で configure → build → CTest）
   - MSI 生成（M11 で `pkg/` 構成決定後）。コード署名は MVP では行わない（M29 で延期、DEV-255）。
   - リリースタグ push → アーティファクト自動公開
+  - submodule 配信ポリシーの確定
 - **設計メモ**: M38（CI 品質ゲート拡張）で整備済みの Debug/Release matrix・
   preset 利用・Linux 補助ジョブ・bench smoke を前提に、M12 では MSI 生成・Release
   公開ステップを足す（署名は MVP 対象外、spec §0）。
 - **受け入れ条件**:
   - main への merge で CI が緑（テストが個別 exe 実行で全件 pass）
   - タグ push で未署名 MSI が Draft Release に上がる
+- **参照仕様**: `docs/sideload-packaging-spec.md` §0・§4
 
 ## 横断的な作業
 
@@ -411,10 +445,8 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
   `GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT` には適用しない。詳細は
   `docs/tsf-deep-integration-spec.md` §2.8〜§2.11。
 - ~~設定アプリ（M11）の UI フレームワーク（WinUI 3 / WPF / Tauri）は別途検討。~~
-  → **確定（DEV-99 / D-03）**: **WinUI 3（C++/WinRT）**。根拠は既存 C++/WinRT スタック
-  との親和性・Fluent/Mica 標準対応・配布形態（MSI self-contained / Store MSIX 両対応）整合の 3 点。WPF（.NET 9+）/ Tauri は代替案へ
-  縮退。実機での配布サイズ・初回起動・IPC 連携行数の確証スパイクは `gate:human-required`
-  で残す。詳細は `docs/sideload-packaging-spec.md` §3.0。
+  → **確定（DEV-99 / D-03）**: WinUI 3（C++/WinRT）。根拠・代替案・残る
+  `gate:human-required` スパイクは M11「UI フレームワーク決定」を正典とする。
 - 推論 Worker プロセス分離（Broker/Worker, **MVP後**）: 現状の inference-host は
   `Dispatcher`/`InferenceEngine`/`SettingsStore` を同一プロセスに同居させており、
   モデル runtime（llama.cpp/ggml/将来 NPU）起因のクラッシュ blast radius が大きい。
@@ -430,7 +462,7 @@ v1.0 リリースに向けたリスクと対応:
 | llama.cpp バインディング選定 (M8) | 配布サイズ・初回起動時間に直結 | Phase 3 着手スパイクで確定 (`docs/zenzai-gpu-route.md` 更新)、`bench/` で計測 |
 | CUDA SDK の配布制約 | MSIX のサイズ膨張・GPU なし PC でのフォールバック品質 | バックエンドは optional payload、CPU を default に、ggml-cuda は別 MSIX オプションパッケージで検討 |
 | MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
-| 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | **WinUI 3（C++/WinRT）に確定（DEV-99 / `docs/sideload-packaging-spec.md` §3.0）**。残る確証は実機での配布サイズ・初回起動・IPC 行数の 1〜2 日スパイク（`gate:human-required`） |
+| 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | WinUI 3（C++/WinRT）に確定（DEV-99）。決定内容と残るスパイクは M11「UI フレームワーク決定」 |
 | 署名証明書の調達 (M29) | MVP リリースには影響しない（配布方針転換、spec §0） | MVP は未署名 MSI（DEV-415）、MS Store は MS 再署名（DEV-416）で有料証明書不要。証明書はスタンドアロン MSIX サイドロード着手時のみ（経路 B 確定済み・延期、DEV-255） |
 | Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
@@ -450,108 +482,18 @@ v1.0 リリースに向けたリスクと対応:
 
 ## v1.0 までの実行計画（Phase 1〜4）
 
-ロードマップの依存図とは別に、v1.0（MSI で配布可能な最小 IME）リリースまでの
-実行順を 4 フェーズで管理する。各マイルストーンの進捗・状態の正典は **Linear**
-（project「azooKey Desktop / Windows IME MVP」）であり、本章は定義・受け入れ条件・依存のみを持つ。
+ロードマップの依存図とは別に、v1.0（未署名 MSI で配布できる最小 IME）リリースまでの
+実行順を 4 フェーズで管理する。本章は Phase と対象マイルストーン・検証ゲートの索引で
+あり、目的・変更対象・実装範囲・受け入れ条件の定義は各 M 節が持つ。各マイルストーンの
+進捗・状態の正典は **Linear**（project「azooKey Desktop / Windows IME MVP」）。
 macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照）。
 
-### Phase 1: TIP 基盤完成（M1〜M4）
-
-実機 IME としてローマ字を打鍵し、Host から候補を取得して候補ウィンドウに
-表示するまでの動線。**実機 IME 動作は M2 のキーイベント sink 配線（Issue #33）に依存する**。
-
-### Phase 2: 候補選択と確定動線（M5/M6/M10）
-
-候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機での
-動作確認は M2（Issue #33）に依存する。
-
-### Phase 3: 実 Zenzai と辞書 UI のつなぎ込み（M8/M9、3〜5 週）
-
-1. **M8 Zenzai 統合** — `inference-host/src/InferenceEngine.cpp::LoadModel`
-   の本実装。初期境界として GGUF magic/version 検証と `ZenzaiModelConverter`
-   差し替えを行う。続いて llama.cpp の C-API バインディングを接続し、CMake オプションで
-   `AZOOKEY_BACKEND=cpu|cuda` を切替。配布サイズと初回起動時間を `bench/` で
-   計測。モデル未配置時は `SimpleConverter` フォールバックを維持。
-   `docs/zenzai-gpu-route.md` を実装と整合させる。
-2. **M9 ユーザー辞書ランタイム反映** — `AddUserWord`/`RemoveUserWord`
-   （Host 側完成済み）を TIP もしくは設定 UI から呼べる経路を作る。
-   本フェーズではコマンドラインまたはデバッグ UI で十分。
-
-**Phase 3 着手前の確定事項（2026-05-20 決定の記録）**:
-- llama.cpp バインディング選定（2026-05-20 決定）: M8 の初期実装は
-  llama.cpp C API + CPU backend から開始し、CUDA は optional backend として
-  追加する方針。DirectML / NPU は M24 まで予約値扱い。判断理由と計測ゲートは
-  `docs/zenzai-gpu-route.md` を参照。
-- `LoadModel` 境界（2026-05-20 決定）: `LoadModelRequest(path, backend,
-  n_gpu_layers)` を `InferenceEngine::LoadModel` に渡し、`model_loaded` /
-  `last_error` を `Handshake` / `Health` で観測できる状態とする設計。
-- M9 最小操作面（2026-05-20 決定）: 本格設定 UI を待たず、`inference-host`
-  の IPC 経由で `AddUserWord` / `RemoveUserWord` を呼ぶ小 CLI または debug
-  probe を先に用意する方針。設定アプリ統合は M11 に送る。
-
-**Phase 3 で触るファイル**:
-- `inference-host/src/InferenceEngine.cpp` — `LoadModel` の本実装、Zenzai converter 配線
-- `inference-host/src/ZenzaiModelConverter.cpp` — GGUF ロード境界、llama.cpp 接続点
-- `inference-host/include/azookey/host/InferenceEngine.h` — モデル状態の保持・解放 API
-- `core/include/azookey/core/IConverter.h` — Zenzai 実装が嵌まることを確認
-- `bench/` — Zenzai ロード時間・推論レイテンシを計測
-- `CMakeLists.txt` — `AZOOKEY_BACKEND=cpu|cuda` オプション
-- `docs/zenzai-gpu-route.md` — 実装結果と整合
-- `inference-host/tests/` — Zenzai converter のモック実装でテスト追加
-
-**Phase 3 で再利用すべき既存実装**:
-- `core/include/azookey/core/IConverter.h` — Zenzai は `IConverter` 実装として
-  `SimpleConverter` と差し替え可能
-- `inference-host/src/InferenceEngine.cpp` の reranker・user_dict 経由
-  パイプライン — Zenzai 出力にもそのまま適用可能
-- `ipc/src/Payloads.cpp` の `LoadModelRequest/Response` — 既に `--backend
-  cuda|cpu` をリクエストで指定する設計
-
-**Phase 3 検証**:
-1. ビルド: `cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON && cmake --build --preset windows-debug`
-2. ユニットテスト: `ctest --preset windows-debug --output-on-failure` で全テスト緑
-3. ユーザー辞書 round-trip:
-   1. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict add --reading azookey --surface azooKey --offline`
-   2. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict list --format tsv`
-      で追加語を確認
-   3. `reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight` 形式の TSV を用意し、
-      `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict import <temp>\import.tsv`
-      で `imported` / `skipped` 件数と重複語の後勝ち置換を確認
-   4. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict export <temp>\export\user_dict.json`
-      で `{ "version": 1, "entries": [...] }` 形式の JSON が書き出されることを確認
-   5. 同じ `--user-dict` で Host/TIP を起動し、`azookey` の `QueryCandidates` で
-      ユーザー辞書候補が最優先に出ることを確認
-   6. `azookey_inference_host.exe --user-dict <temp>\user_dict.json userdict remove --reading azookey --surface azooKey --offline`
-   7. `list --format tsv` で削除済みを確認
-4. Windows 実機（Win11 VM 推奨）: `scripts/register-dev.ps1` で TIP DLL 登録 →
-   `azookey_inference_host.exe --pipe --backend cpu` 起動 → gguf を
-   `%LOCALAPPDATA%\azooKey\models\` に配置し `LoadModel` 成功 → gguf 削除時は
-   `SimpleConverter` フォールバック → メモ帳で `nihongo` 入力で Zenzai 候補
-5. GPU 経路: `--backend cuda` 起動で失敗時は CPU フォールバック
-6. ベンチ: `./build/windows-release/bench/azookey_bench.exe` の p50/p95 が許容内
-7. `unregister-dev.ps1` でクリーン解除確認
-
-### Phase 4: 配布可能化 — v1.0 リリースゲート（M11/M12、4〜6 週）
-
-3. **M11 設定 UI とインストーラ** — フレームワークは **WinUI 3（C++/WinRT）に確定**
-   （DEV-99 / D-03、`docs/sideload-packaging-spec.md` §3.0）。残る確証は実機での
-   配布サイズ・初回起動・IPC 連携行数の 1〜2 日スパイク（`gate:human-required`）。設定アプリは
-   TIP/Host と別プロセス、IPC 経由で Host 設定（Zenzai ON/OFF、ユーザー辞書）を
-   変更。配布は未署名 MSI（MVP 既定。TIP 登録はインストーラのカスタムアクションで
-   HKLM `DllRegisterServer` を呼ぶため **per-machine・要昇格**。spec §0 / DEV-415。MSIX は MS Store 経由 = DEV-416）。
-   **M30（WinUI 3 設定アプリ）と UI フレームワークを揃え、後続の作り直しを
-   避ける**（M30 は M11 の設定 UI を WinUI 3 で本格化する位置づけ）。`ITfFnConfigure`
-   からの起動は別プロセス EXE を非同期起動する方式（§3.5、正典は
-   `docs/tsf-deep-integration-spec.md` §6）。
-4. **M12 CI 完成と配布** — `.github/workflows/windows.yml` の build/test に
-   加え、タグ push 時の未署名 MSI 自動 Release 公開（署名は MVP 対象外、spec §0 / DEV-415）、
-   submodule 配信ポリシー確定を行う。
-
-**Phase 4 検証**: クリーン Win11 VM での MSI インストール → IME 選択 → 入力
-→ 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push 時に未署名
-MSI が自動公開。入力対象は **Win32 デスクトップアプリかつ x64 プロセス**に限る
-（パッケージ化された UWP / Store アプリと 32 bit プロセスは v1.0 対象外。定義と
-既知の制限は `docs/sideload-packaging-spec.md` §0.1）。
+| Phase | スコープ | 対象 M | 検証ゲート |
+|---|---|---|---|
+| Phase 1 | TIP 基盤完成 | M1〜M4 | 実機 IME でローマ字を打鍵し、Host から候補を取得して候補ウィンドウへ表示する。実機動作は M2 のキーイベント sink 配線（Issue #33）に依存 |
+| Phase 2 | 候補選択と確定動線 | M5 / M6 / M10 | 候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機確認は M2（Issue #33）に依存 |
+| Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md` と `docs/debugging.md` |
+| Phase 4 | 配布可能化 — v1.0 リリースゲート | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
 
 ## Phase 5〜7 の依存関係と実行順
 
@@ -999,8 +941,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **前提**: Phase 5 完了（設定キーが確定）。
 - **推奨実装時期**: Phase 5 完了後、Phase 6 と並行で着手可能（M28/M29 に
   依存しない）。M36-A の承認 UI（`confirm` モード）が M30 に依存するため、
-  早期着手が望ましい。M11 の最小設定 UI と UI フレームワーク（WinUI 3）を
-  揃えること。
+  早期着手が望ましい。UI フレームワークは M11「UI フレームワーク決定」に揃える。
 - **変更対象**: `settings-app/`（M11 の設定アプリを本格化）、
   `ipc/src/Payloads.cpp`（M11 の最小 `UpdateConfig` を拡張）、
   `inference-host/src/SettingsStore.cpp`（M11 の最小実装を拡張）。

@@ -10,7 +10,7 @@ description: azooKey Desktop の inference-host、Zenzai、GGUF、llama.cpp、Mo
 ## 手順
 
 1. `references/spec-routing.md` を読み、対象機能の正典と必要な runtime tier を決める。
-2. CodeGraph でモデル発見から推論応答までの経路を確認し、Serena で対象シンボルと参照元を確認する。
+2. `.codegraph/` があり CodeGraph が利用可能ならモデル発見から推論応答までの経路を確認する。Serena が利用可能なら active project と languages を確認してから対象シンボルと参照元を確認する。利用できない場合は `rg` と実ファイルで同じ範囲を確認する。
 3. load、health、handshake、degraded mode、fallback の既存契約を列挙する。
 4. 変更に最も近い host テストを実行し、必要なら実モデルラベル、bench、`azookey_check` へ広げる。
 5. モデル形式、catalog schema、fallback、設定項目、ユーザー可視挙動が変わる場合は対応する仕様文書も更新する。

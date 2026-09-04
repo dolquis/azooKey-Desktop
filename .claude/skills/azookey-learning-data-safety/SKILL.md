@@ -11,7 +11,7 @@ description: azooKey Desktop の学習データ、ユーザー辞書、reranker�
 
 1. `references/spec-routing.md` を読み、変更対象に対応する仕様、実装、テストを特定する。
 2. 入力、メモリ、永続化、import/export、ログ、削除、migration のどこを通るかを列挙する。
-3. CodeGraph で関連モジュールと呼び出し経路を広く確認し、Serena で対象シンボルと参照元を確認する。
+3. `.codegraph/` があり CodeGraph が利用可能なら関連モジュールと呼び出し経路を確認する。Serena が利用可能なら active project と languages を確認してから対象シンボルと参照元を確認する。利用できない場合は `rg` と実ファイルで同じ範囲を確認する。
 4. 既存の atomic write、file lock、quarantine、fallback の契約を保つ最小差分にする。
 5. 対象テストを先に実行し、必要に応じて `azookey_check` まで広げる。
 6. 永続化形式、ユーザー可視挙動、責務境界が変わる場合は対応する仕様文書を同じ変更で更新する。

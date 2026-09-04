@@ -11,7 +11,7 @@ description: azooKey Desktop の設定キー追加、変更、削除、JSON Sche
 
 1. `references/spec-routing.md` で対象が MVP settings か model catalog かを判定する。
 2. key owner、型、既定値、範囲、欠落時、unknown key、invalid value、旧 `schemaVersion` の挙動を決める。
-3. CodeGraph で読込先と適用先を確認し、Serena で parser、設定構造体、参照元を確認する。
+3. `.codegraph/` があり CodeGraph が利用可能なら読込先と適用先を確認する。Serena が利用可能なら active project と languages を確認してから parser、設定構造体、参照元を確認する。利用できない場合は `rg` と実ファイルで同じ範囲を確認する。
 4. schema、runtime default、parse/apply、sample、UI、仕様文書、CI を必要な範囲で同時に更新する。
 5. metaschema、sample validation、focused test を実行し、必要なら `azookey_check` へ広げる。
 

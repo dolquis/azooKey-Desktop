@@ -29,6 +29,11 @@
     </DefineConstants>
   </PropertyGroup>
 
+  <!-- WiX 5 requires the directory prefix of an exclusion to exist. -->
+  <PropertyGroup Condition="Exists('$(SettingsPayloadDir)\obj')">
+    <DefineConstants>$(DefineConstants);SettingsObjDirExists=1</DefineConstants>
+  </PropertyGroup>
+
   <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
     <Error Condition="!Exists('$(TipDllPath)')" Text="TIP DLL not found: $(TipDllPath)" />
     <Error Condition="!Exists('$(HostExePath)')" Text="Inference host not found: $(HostExePath)" />

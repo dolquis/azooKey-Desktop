@@ -78,7 +78,12 @@ def cmake_pin(root, build_dir, key):
     cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
     if not re.search(r"(?m)^" + key + ":STRING=" + pin + r"$", cache):
         raise ValueError(f"CMake cache differs from canonical pin: {key}")
-    dependency = {"AZOOKEY_LLAMA_CPP_GIT_TAG": "llama_cpp", "AZOOKEY_WIL_GIT_TAG": "wil"}[key]
+    declarations = re.findall(r"FetchContent_Declare\(\s*([\w-]+)\s+([^)]*)\)", cmake, re.I)
+    dependencies = {name.lower() for name, body in declarations
+                    if re.search(r"GIT_TAG\s+\$\{" + re.escape(key) + r"\}", body)}
+    if len(dependencies) != 1:
+        raise ValueError(f"Expected one FetchContent declaration using {key}")
+    dependency = dependencies.pop()
     source = build_dir / "_deps" / (dependency + "-src")
     # Reject local-source overrides: they take precedence over FetchContent.
     for variable in (key.replace("GIT_TAG", "SOURCE_DIR"), "FETCHCONTENT_SOURCE_DIR_" + dependency.upper()):
@@ -87,14 +92,48 @@ def cmake_pin(root, build_dir, key):
             if Path(value[1]).resolve() != source.resolve():
                 raise ValueError(f"Unsupported local source override: {variable}")
     # Verify the fetched checkout too: a cache variable alone is not build evidence.
-    actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    dirty = subprocess.check_output(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"], text=True)
+    if not (source / ".git").exists():
+        raise ValueError(f"Missing FetchContent checkout: {source}; canonical release build required")
+    try:
+        actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True, stderr=subprocess.PIPE).strip()
+        # Use the checkout's Git attributes / CRLF normalization, and compare both
+        # staged and unstaged tracked changes. Do not override clone-time settings.
+        dirty = subprocess.check_output(["git", "-C", str(source), "diff", "--name-only", "HEAD", "--"], text=True, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(f"Cannot inspect FetchContent checkout: {source}") from error
     if actual != pin or dirty:
         raise ValueError(f"Fetched source differs from pin: {dependency}")
     return pin
 
 
-def complete(document, root, build_dir, runtime_info, runtime_dir, msi):
+def msi_root(document, msi, version):
+    """Reuse the single MSI package described by Syft; reject ambiguous input."""
+    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
+        raise ValueError("Expected release version MAJOR.MINOR.PATCH")
+    if any(int(part) > limit for part, limit in zip(version.split("."), (255, 255, 65535))):
+        raise ValueError("Release version exceeds MSI limits")
+    described = set(document.get("documentDescribes", []))
+    described.update(r["relatedSpdxElement"] for r in document.get("relationships", [])
+                     if r["spdxElementId"] == document["SPDXID"] and r["relationshipType"] == "DESCRIBES")
+    roots = [p for p in document.get("packages", []) if p["SPDXID"] in described]
+    if len(described) != 1 or len(roots) != 1:
+        raise ValueError("Expected one described MSI package in Syft output")
+    package = roots[0]
+    # Accept portable filenames and Windows/POSIX source paths from Syft.
+    if package["name"].replace("\\", "/").rsplit("/", 1)[-1] != msi.name:
+        raise ValueError("Syft root does not describe the supplied MSI")
+    digest = sha256(msi)
+    checksums = package.setdefault("checksums", [])
+    for checksum in checksums:
+        if checksum["algorithm"] == "SHA256" and checksum["checksumValue"].lower() != digest:
+            raise ValueError("Syft MSI checksum differs from supplied artifact")
+    if not any(c["algorithm"] == "SHA256" for c in checksums):
+        checksums.append({"algorithm": "SHA256", "checksumValue": digest})
+    package["versionInfo"] = version
+    return package["SPDXID"]
+
+
+def complete(document, root, build_dir, runtime_info, runtime_dir, msi, version):
     if document.get("spdxVersion") != "SPDX-2.3":
         raise ValueError("Expected a Syft SPDX-2.3 document")
     result = copy.deepcopy(document)
@@ -118,10 +157,7 @@ def complete(document, root, build_dir, runtime_info, runtime_dir, msi):
         packages.append(package)
         return identifier
 
-    msi_digest = sha256(msi)
-    root_id = add(msi.name, msi_digest, "NOASSERTION", "Unsigned MSI; versionInfo is its SHA256.",
-                  checksums=[{"algorithm": "SHA256", "checksumValue": msi_digest}])
-    relationships.append({"spdxElementId": result["SPDXID"], "relationshipType": "DESCRIBES", "relatedSpdxElement": root_id})
+    root_id = msi_root(result, msi, version)
     locked = nuget_packages(root)
     covered = set()
     runtime = read_json(runtime_info)
@@ -164,7 +200,7 @@ def complete(document, root, build_dir, runtime_info, runtime_dir, msi):
         else:
             raise ValueError(f"Unknown SBOM source: {source}")
         if not entries:
-            raise ValueError(f"Attribution selector matches no dependency: {selector}")
+            raise ValueError(f"Attribution selector matches no dependency: {item['source']}")
         for name, version, download, checksums in entries:
             identifier = add(name, version, license_id, item["attribution"], download, checksums)
             relationships.append({"spdxElementId": root_id, "relationshipType": "DEPENDS_ON", "relatedSpdxElement": identifier})
@@ -185,8 +221,12 @@ def main():
     for flag in ("input", "output", "build-dir", "runtime-info", "runtime-dir", "msi"):
         parser.add_argument("--" + flag, required=True, type=Path)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--version", required=True)
     args = parser.parse_args()
-    result = complete(read_json(args.input), args.root, args.build_dir, args.runtime_info, args.runtime_dir, args.msi)
+    try:
+        result = complete(read_json(args.input), args.root, args.build_dir, args.runtime_info, args.runtime_dir, args.msi, args.version)
+    except (ValueError, OSError) as error:
+        parser.exit(1, f"Release SBOM error: {error}\n")
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Completed release SBOM: {len(result['packages'])} packages")
 

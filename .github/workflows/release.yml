@@ -136,18 +136,22 @@ jobs:
           output-file: ${{ github.workspace }}\azooKey.syft.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
       - name: Complete SBOM with release dependencies
         shell: pwsh
         env:
           MSI_PATH: ${{ steps.msi-artifact.outputs.path }}
           VC_RUNTIME_DIR: ${{ steps.vc-runtime.outputs.dir }}
+          MSI_VERSION: ${{ steps.msi-version.outputs.version }}
         run: |
           git diff --exit-code -- settings-app/packages.lock.json
           if ($LASTEXITCODE -ne 0) { throw "Release restore changed the NuGet lock." }
           python scripts/complete-release-sbom.py `
             --input azooKey.syft.spdx.json --output azooKey.spdx.json `
             --build-dir build/windows-release --runtime-info runtime-info.json `
-            --runtime-dir "$env:VC_RUNTIME_DIR" --msi "$env:MSI_PATH"
+            --runtime-dir "$env:VC_RUNTIME_DIR" --msi "$env:MSI_PATH" --version "$env:MSI_VERSION"
       # attestation はリポジトリに残る公開記録なので、実際に配布するタグ push で
       # だけ作る。dry-run で作ると未配布ビルドの証明が残り、誤解を生む。
       #

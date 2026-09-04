@@ -1583,12 +1583,16 @@ wrapper になっており、新規実装は `actions/attest` を使う。本 wo
 
 #### この SBOM が保証する範囲
 
-syft の検出結果に、MSI の SHA256 と次のビルド入力を追加する。各依存は MSI package
-から `DEPENDS_ON` で参照する。これは canonical Release ビルドの依存宣言であり、
+syft が `documentDescribes` または `DESCRIBES` で示す MSI package を再利用し、
+`versionInfo` に Release の MSI バージョン、`checksums` に実ファイルの SHA256 を設定する。
+root が曖昧、別のファイル名、またはハッシュが不一致の場合は生成を拒否する。
+次の各依存は同じ MSI package から `DEPENDS_ON` で参照する。
+これは canonical Release ビルドの依存宣言であり、
 バイナリ内部の全コンポーネントを自動検出した結果ではない。
 
-- llama.cpp / WIL: `CMakeLists.txt` のフル SHA を読み、CMake cache と取得した Git
-  checkout の HEAD・追跡ファイルの変更有無を照合する。
+- llama.cpp / WIL: `CMakeLists.txt` のフル SHA と、それを参照する `FetchContent_Declare`
+  を読み、CMake cache と取得した Git checkout の HEAD・追跡ファイルの変更有無を照合する。
+  改行の比較は checkout の Git 属性に従い、stage 済み・未 stage の両方を HEAD と比較する。
 - MSVC runtime: MSI へ渡す 3 DLL それぞれの数値ファイルバージョンと SHA256 を記録する。
   runner の Visual Studio 更新に追随するため、固定バージョンを別の台帳へ転記せず、
   そのビルドで選択したファイルをハッシュで同定する。

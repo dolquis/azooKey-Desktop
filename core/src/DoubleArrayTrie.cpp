@@ -192,7 +192,7 @@ struct DoubleArrayTrie::Impl {
     }
 #else
     file = open(path.c_str(), O_RDONLY);
-    struct stat info{};
+    struct stat info {};
     if (file >= 0 && fstat(file, &info) == 0 && info.st_size > 0 &&
         static_cast<uint64_t>(info.st_size) <= SIZE_MAX) {
       size = static_cast<size_t>(info.st_size);

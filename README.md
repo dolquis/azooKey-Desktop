@@ -58,10 +58,18 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 git submodule update --init third_party/wil
 cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
 cmake --build --preset windows-debug
-ctest --preset windows-debug --output-on-failure
+cmake --build --preset windows-debug --target azookey_check
 ./build/windows-debug/bench/azookey_bench.exe
 ./scripts/test-powershell-quality.ps1
 ```
+
+`azookey_check` はテスト実行ファイルと bench 実行ファイルを先にビルドしてから
+CTest を起動する target で、古い実行ファイルへ `ctest` だけを実行する事故を避けられます。
+依存はテスト・bench・Host 実行ファイルに限るため、TIP DLL を含む全体ビルドは前行の
+`cmake --build --preset windows-debug` で行います。
+ビルド済みの成果物に対してテストだけを再実行するときは
+`ctest --preset windows-debug --no-tests=error` を使います（テストが 1 件も登録されて
+いない場合に失敗します。`--output-on-failure` は preset の既定値です）。
 
 単体テストは GoogleTest を使う。`-DAZOOKEY_FETCH_GOOGLETEST=ON` は GoogleTest が
 ローカルに見つからないときに `FetchContent` でダウンロードする。システムに
@@ -76,10 +84,9 @@ Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的に�
 
 `scripts/test-powershell-quality.ps1` は `PSScriptAnalyzer` と `Pester` のローカル PowerShell モジュールを使い、開発用 TIP 登録スクリプトの静的解析と安全な分岐テストを実行します。実際の machine-wide 登録は行いません。
 
-テスト・bench 実行ファイルを先にビルドしてから CTest を走らせる `azookey_check` target
-（`cmake --build --preset windows-debug --target azookey_check`）を使うと、古い実行ファイルへ
-`ctest` だけを実行する事故を避けられます。上記一式は `just ci` でも実行できます
-（[`justfile`](./justfile)）。
+Release / Linux preset での実行と CI 再現手順の差分は
+[`docs/debugging.md`](./docs/debugging.md) を参照してください。
+同等の流れは `just ci` でも実行できます（[`justfile`](./justfile)）。
 
 ## 配布パッケージ
 
@@ -99,33 +106,33 @@ MSI のビルド手順と同梱範囲は [`pkg/msi/README.md`](./pkg/msi/README.
 cmake --preset windows-llama-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON
 cmake --build --preset windows-llama-debug
 ./scripts/register-dev.ps1
-# 実 Zenzai モデルを使う場合
+# 実 Zenzai モデルを使う場合（GGUF の絶対パスを指定する）
 ./scripts/register-dev.ps1 -ModelPath "$env:LOCALAPPDATA\azooKey\models\zenzai\<model>.gguf"
 ./scripts/unregister-dev.ps1 -TipDllPath ./build/windows-llama-debug/tsf-tip/azookey_tsf_tip.dll
 ```
 
-`windows-llama-debug` は pin 済みの llama.cpp を取得し、実 Zenzai モデルを読み込める
-開発用成果物を生成します。通常の `windows-debug` は高速な no-egress mock テスト用です。
-これらの Debug 成果物は Debug CRT に依存するため、Visual Studio 未導入のクリーンな Windows ではロードできません。
-実機検証には `docs/handoff/hyper-v-tip-verification.md` の `windows-release` VM 検証パッケージを使用してください。
-`register-dev.ps1` は登録前に `llama_cpp=1` を確認し、mock ホストの誤登録を拒否します。
-fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指定できます。
-現時点では `models\zenzai\` へ GGUF を配置しただけではモデルを自動選択しません。
-実モデルの登録では `-ModelPath` に配置済み GGUF の絶対パスを指定してください。
-実モデルの計測ゲートとバックエンド経路の決定は
-[`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
-
-`register-dev.ps1` は登録時に、TIP DLL とその親ディレクトリへ
-`ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）の読み取り+実行を付与します。これが無いと
-Microsoft Store など AppContainer で動くアプリが TIP DLL をロードできません。
-`unregister-dev.ps1` は登録時に自分が付与した ACE のみを取り消し、登録前から存在した
-ACE や手動設定の ACE はそのまま残します。付与を避けたい場合は両スクリプトに
-`-SkipAppContainerAcl` を指定してください（設計は
-[`docs/sideload-packaging-spec.md`](./docs/sideload-packaging-spec.md) §1.7）。
-
 machine-wide 登録のため管理者権限が必要です（非管理者で実行すると自動で UAC 昇格します）。
 `-dev` 接尾辞は `regsvr32` 開発用経路であることを示します（MSIX 配布経路とは別。
-`docs/sideload-packaging-spec.md` §1.1.1）。
+[`docs/sideload-packaging-spec.md`](./docs/sideload-packaging-spec.md) §1.1.1）。
+`regsvr32` 直接実行と `register-dev.ps1` が行う処理の違いは
+[`docs/debugging.md`](./docs/debugging.md)、登録時に付与する AppContainer 向け ACL
+（`ALL APPLICATION PACKAGES` の RX）と opt-out の `-SkipAppContainerAcl` は
+`docs/sideload-packaging-spec.md` §1.7 を参照してください。
+
+`windows-llama-debug` は pin 済みの llama.cpp を取得し、実 Zenzai モデルを読み込める
+開発用成果物を生成します。`windows-debug` は高速な no-egress mock テスト用です。
+これらの Debug 成果物は Debug CRT に依存するため、Visual Studio 未導入のクリーンな Windows ではロードできません。
+実機検証には
+[`docs/handoff/hyper-v-tip-verification.md`](./docs/handoff/hyper-v-tip-verification.md) の
+`windows-release` VM 検証パッケージを使用してください。
+
+読み込むモデルは `settings.json` の `model.selectedPath`
+（[`docs/model-management-spec.md`](./docs/model-management-spec.md) §7）または
+`register-dev.ps1 -ModelPath` に渡した絶対パスで決まり、`models\zenzai\` 配下の走査に
+よる自動選択は行いません。`register-dev.ps1` は登録前に `llama_cpp=1` を確認し、
+mock ホストの誤登録を拒否します。`-AllowMockHost` は fallback-only の TIP テスト専用で
+`-ModelPath` とは併用できません。実モデルの計測ゲートとバックエンド経路の決定は
+[`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
 
 ## ロードマップ
 

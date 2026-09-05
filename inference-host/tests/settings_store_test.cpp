@@ -139,6 +139,25 @@ TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsStoreTest, VulkanPreferenceAndAutoResolveAgainstBuildDefault) {
+  azookey::host::RuntimeSettings settings;
+  azookey::host::EngineConfig config;
+  settings.model.backend_preference = "vulkan";
+  auto resolved = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      config, settings, azookey::host::BackendKind::Cpu);
+  EXPECT_EQ(resolved.backend, azookey::host::BackendKind::Vulkan);
+
+  settings.model.backend_preference = "auto";
+  resolved = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings,
+                                                               azookey::host::BackendKind::Vulkan);
+  EXPECT_EQ(resolved.backend, azookey::host::BackendKind::Vulkan);
+
+  settings.model.backend_preference = "cpu";
+  resolved = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings,
+                                                               azookey::host::BackendKind::Vulkan);
+  EXPECT_EQ(resolved.backend, azookey::host::BackendKind::Cpu);
+}
+
 TEST(SettingsStoreTest, EmptySelectedPathClearsExistingModelPath) {
   azookey::host::RuntimeSettings settings;
   settings.model.enabled = true;

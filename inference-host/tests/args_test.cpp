@@ -33,6 +33,11 @@ TEST(HostArgsTest, ParsesBackendAliasesAndExplicitValues) {
   auto cpu_value = Parse({"--backend", "cpu"});
   ASSERT_TRUE(cpu_value);
   EXPECT_EQ(cpu_value.args.config.backend, azookey::host::BackendKind::Cpu);
+
+  auto vulkan_value = Parse({"--backend", "vulkan"});
+  ASSERT_TRUE(vulkan_value);
+  EXPECT_EQ(vulkan_value.args.config.backend, azookey::host::BackendKind::Vulkan);
+  EXPECT_TRUE(vulkan_value.args.explicit_backend);
 }
 
 TEST(HostArgsTest, RejectsUnsupportedBackend) {

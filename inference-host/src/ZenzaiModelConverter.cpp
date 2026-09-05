@@ -24,6 +24,7 @@
 #endif
 
 #if AZOOKEY_WITH_LLAMA_CPP
+#include <ggml-backend.h>
 #include <gguf.h>
 #include <llama.h>
 #endif
@@ -1158,7 +1159,18 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   LlamaLogCapture log_capture;
 
   auto model_params = llama_model_default_params();
-  model_params.n_gpu_layers = options.n_gpu_layers;
+  std::array<ggml_backend_dev_t, 2> devices{};
+  if (options.use_vulkan) {
+    const auto registry = ggml_backend_reg_by_name("Vulkan");
+    if (!registry || ggml_backend_reg_dev_count(registry) == 0) {
+      result.ok = false;
+      result.error = "Vulkan backend has no available device";
+      return result;
+    }
+    devices[0] = ggml_backend_reg_dev_get(registry, 0);
+  }
+  model_params.devices = devices.data();
+  model_params.n_gpu_layers = options.use_vulkan ? options.n_gpu_layers : 0;
   const auto tokenizer_metadata = ReadGgufTokenizerMetadata(path);
   const auto described_overrides = tokenizer_metadata ? BuildZenzaiKvOverrides(*tokenizer_metadata)
                                                       : std::vector<ZenzaiKvOverride>{};
@@ -1197,6 +1209,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   }
 
   auto context_params = llama_context_default_params();
+  context_params.offload_kqv = options.use_vulkan;
+  context_params.op_offload = options.use_vulkan;
   context_params.n_ctx = 512;
   context_params.n_batch = context_params.n_ctx;
   context_params.n_ubatch = context_params.n_ctx;
@@ -1219,6 +1233,11 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
 
   result.runtime = std::move(runtime);
 #else
+  if (options.use_vulkan) {
+    result.ok = false;
+    result.error = "Vulkan backend requires a llama.cpp build with ggml-vulkan";
+    return result;
+  }
   auto runtime = std::make_unique<ZenzaiModelRuntime>();
   runtime->mock_candidates_for_tests = options.mock_candidates_for_tests;
   result.runtime = std::move(runtime);

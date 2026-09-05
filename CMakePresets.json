@@ -69,6 +69,18 @@
       }
     },
     {
+      "name": "windows-vulkan-release",
+      "displayName": "Windows Vulkan Release",
+      "description": "Short build path leaves room for the nested ggml-vulkan shader compiler on Windows.",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build/vk",
+      "cacheVariables": {
+        "AZOOKEY_FETCH_LLAMA_CPP": "ON",
+        "AZOOKEY_FETCH_GOOGLETEST": "ON",
+        "AZOOKEY_BACKEND": "vulkan"
+      }
+    },
+    {
       "name": "windows-no-tests",
       "displayName": "Windows without tests",
       "inherits": "windows-release",
@@ -136,6 +148,10 @@
   ],
   "buildPresets": [
     {
+      "name": "windows-vulkan-release",
+      "configurePreset": "windows-vulkan-release"
+    },
+    {
       "name": "windows-debug",
       "configurePreset": "windows-debug"
     },
@@ -169,6 +185,11 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "windows-vulkan-release",
+      "configurePreset": "windows-vulkan-release",
+      "output": { "outputOnFailure": true }
+    },
     {
       "name": "parallel-tests",
       "hidden": true,

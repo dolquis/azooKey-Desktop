@@ -1290,8 +1290,9 @@ schema 自体は superset のまま変えない。
   「ggml-vulkan ビルドを配布に含め、かつ実行時にそれを選ぶ経路が配線された時点」へ改める**（R1 側の
   条件であり、M24 の進捗に依存しない）。**リンクだけでは足りない**。上記のとおり `auto` は既定 backend に
   委ねるだけなので、配線がなければ `vulkan` を選んでも `auto` との差が生まれず、`cuda` と同じ実効のない
-  選択になる。現行の CMake は `AZOOKEY_BACKEND` が `cpu` / `cuda` のみで ggml-vulkan ビルドを持たず、
-  §1.6 の base MSIX も GPU ランタイムを含まないため、**v1.0 UI には出さない**。ビルドと配線は DEV-944 で追う。
+  選択になる。Vulkan ビルドは `windows-vulkan-release` preset で既定 backend を Vulkan にする。
+  配布物への組み込みと §1.6 の配布条件は DEV-1001 で扱う。その条件を満たしてから別途 UI の
+  選択肢を追加し、それまでは **v1.0 UI には出さない**。
 - **降格の可視化**: Host 側の Health 判定は §4.4 / `docs/zenzai-inference-spec.md` §9.2.1 のまま変えない。
   `cuda` 降格はモデルをロードでき変換も動くため `Health=ok` であり、degraded は実エラーで降格した場合に
   限る。v1.0 UI から `cuda` を外すことで UI 由来の実効のない選択は消え、残るのは `settings.json` 直書きの

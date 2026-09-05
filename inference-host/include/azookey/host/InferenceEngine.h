@@ -25,7 +25,20 @@ namespace azookey::host {
 enum class BackendKind {
   Cpu,
   Cuda,
+  Vulkan,
 };
+
+constexpr const char* BackendName(BackendKind backend) {
+  switch (backend) {
+    case BackendKind::Cpu:
+      return "cpu";
+    case BackendKind::Cuda:
+      return "cuda";
+    case BackendKind::Vulkan:
+      return "vulkan";
+  }
+  return "cpu";
+}
 
 struct EngineConfig {
   BackendKind backend{BackendKind::Cpu};

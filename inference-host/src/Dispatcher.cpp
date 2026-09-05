@@ -73,19 +73,10 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   return f;
 }
 
-const char* BackendName(BackendKind backend) {
-  switch (backend) {
-    case BackendKind::Cuda:
-      return "cuda";
-    case BackendKind::Cpu:
-      return "cpu";
-  }
-  return "cpu";
-}
-
 std::optional<BackendKind> ParseBackend(const std::string& backend) {
   if (backend.empty() || backend == "cpu") return BackendKind::Cpu;
   if (backend == "cuda") return BackendKind::Cuda;
+  if (backend == "vulkan") return BackendKind::Vulkan;
   return std::nullopt;
 }
 

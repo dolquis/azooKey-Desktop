@@ -38,7 +38,7 @@ Unicode CLDR・SudachiDict 等を取り込む際に、本ファイルへ追記�
 - Source: `https://github.com/ggml-org/llama.cpp.git`（`AZOOKEY_LLAMA_CPP_GIT_TAG` で pin。
   `AZOOKEY_FETCH_LLAMA_CPP=ON` または `AZOOKEY_LLAMA_CPP_SOURCE_DIR` でビルドに取り込む）
 - License: MIT License
-- Copyright: Copyright (c) 2023-2024 The ggml authors
+- Copyright: Copyright (c) 2023-2026 The ggml authors
 - azooKey path: リポジトリへはベンダリングせず、`windows-release` プリセットで
   `BUILD_SHARED_LIBS=OFF` として静的リンクし、`azookey_inference_host.exe` へ組み込む
   （実モデル対応の Zenzai 推論経路）。MSI（[`pkg/msi/README.md`](pkg/msi/README.md)）が

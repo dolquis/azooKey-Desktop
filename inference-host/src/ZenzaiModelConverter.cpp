@@ -689,7 +689,7 @@ struct ZenzaiModelRuntime {
   void InvalidatePromptCache() {
     cached_prompt_tokens.clear();
     if (context) {
-      llama_kv_self_clear(context);
+      llama_memory_clear(llama_get_memory(context), false);
     }
   }
 
@@ -762,7 +762,7 @@ struct ZenzaiModelRuntime {
     ZenzaiDecodeStats decode_stats;
     constexpr int32_t kMaxWorkingSequences = 4;
     for (int32_t sequence = 1; sequence <= kMaxWorkingSequences; ++sequence) {
-      (void)llama_kv_self_seq_rm(context, sequence, -1, -1);
+      (void)llama_memory_seq_rm(llama_get_memory(context), sequence, -1, -1);
     }
     size_t retained_prompt_tokens = 0;
     if (!cached_prompt_tokens.empty()) {
@@ -771,11 +771,12 @@ struct ZenzaiModelRuntime {
       // final prompt token so step zero observes logits for the current prompt.
       retained_prompt_tokens =
           std::min(retained_prompt_tokens, prompt_tokens.empty() ? 0u : prompt_tokens.size() - 1);
-      if (!llama_kv_self_seq_rm(context, 0, static_cast<llama_pos>(retained_prompt_tokens), -1)) {
+      if (!llama_memory_seq_rm(llama_get_memory(context), 0,
+                               static_cast<llama_pos>(retained_prompt_tokens), -1)) {
         throw std::runtime_error("llama.cpp prompt KV suffix reset failed");
       }
     } else {
-      llama_kv_self_clear(context);
+      llama_memory_clear(llama_get_memory(context), false);
     }
     std::vector<llama_token> prompt_suffix(prompt_tokens.begin() + retained_prompt_tokens,
                                            prompt_tokens.end());
@@ -881,10 +882,11 @@ struct ZenzaiModelRuntime {
       const auto sequence_plan =
           PlanBeamSequenceAssignments(parent_sequences, active_sequences, kMaxWorkingSequences);
       for (const int32_t sequence : sequence_plan.releases) {
-        (void)llama_kv_self_seq_rm(context, sequence, -1, -1);
+        (void)llama_memory_seq_rm(llama_get_memory(context), sequence, -1, -1);
       }
       for (const auto& copy : sequence_plan.copies) {
-        llama_kv_self_seq_cp(context, copy.source_sequence, copy.destination_sequence, -1, -1);
+        llama_memory_seq_cp(llama_get_memory(context), copy.source_sequence,
+                            copy.destination_sequence, -1, -1);
       }
       for (size_t i = 0; i < next_beams.size(); ++i) {
         next_beams[i].sequence_id = sequence_plan.assignments[i];
@@ -1198,7 +1200,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   context_params.n_ctx = 512;
   context_params.n_batch = context_params.n_ctx;
   context_params.n_ubatch = context_params.n_ctx;
-  context_params.n_seq_max = 5;  // prompt sequence 0 plus working beam sequences 1..4
+  context_params.n_seq_max = 5;      // prompt sequence 0 plus working beam sequences 1..4
+  context_params.kv_unified = true;  // beam sequences share the decoded prompt prefix
   const auto n_threads =
       options.n_threads.value_or(RecommendedZenzaiThreadCount(std::thread::hardware_concurrency()));
   context_params.n_threads = n_threads;

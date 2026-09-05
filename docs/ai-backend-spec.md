@@ -403,9 +403,11 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 
 `AiBackend` は host 側にあるため、ここで参照する `PrivacyGate` は
 `privacy-and-secure-input-spec.md` §5.1.1 の **host 側インスタンス（二次ゲート）**
-である。前面アプリ由来の secure 判定は TIP 側が行い、host はリクエスト単位で
-受け取る privacy フラグと設定・M48 プロファイル通知から解決する。フラグが未知の
-ときは同 §5.1.1 のとおり fail-closed（外部送信を行わない側）へ倒す。
+である。前面アプリ由来の secure 判定は TIP 側が行い、host 側インスタンスは設定
+`privacy.mode` と M48 プロファイル通知（および per-request フラグを持つ経路では
+その値）から解決する。`TransformSelectedText` は privacy フラグを持たないため、
+secure 中に TIP が Magic Conversion を発火させないことと、本入口ガードの
+2 層で担保する（同 §5.1.1）。
 
 - **入口ガード（必須）**: `AiBackend::Transform` の先頭で `PrivacyGate` を問い合わせ、
   - `AiCandidateAllowed()==false` → 実効 backend を `None`、`error_class=BlockedBySecure`

@@ -282,10 +282,20 @@ learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸�
   `secure`、`ObserveTypo` の `secure` / `learning_allowed`、handshake
   `capabilities` の `"secure_flag"`）の定義は
   `docs/typo-correction-learning-spec.md` §12.13 を正典とし、本書では再定義しない。
-- **host が二次ゲートを持つ理由**: TIP は信頼するが単一障害点にしない。TIP が
-  privacy 非対応（`"secure_flag"` 非広告）または経路の欠落でフラグが未知のとき、
-  host は §2 fail closed に従い該当軸を抑止する（解決規約は
-  `docs/typo-correction-learning-spec.md` §12.12.2 の host 二次ゲート項）。
+- **host が二次ゲートを持つ理由**: TIP は信頼するが単一障害点にしない。
+  **per-request フラグを定義してあるメッセージ**（`QueryCandidates` /
+  `ObserveTypo`。`docs/typo-correction-learning-spec.md` §12.13）では、TIP が
+  privacy 非対応（`"secure_flag"` 非広告）でフラグが未知のとき、host は §2
+  fail closed に従い該当軸を抑止する（解決規約は同 §12.12.2 の host 二次ゲート項）。
+- **フラグを持たないメッセージの扱い**: `CommitObservation` /
+  `QueryPredictions` / `TransformSelectedText` は privacy フラグを payload に
+  持たない。これらの secure 由来の抑止は §5 表のとおり **TIP が送らないこと**で
+  担保し、host 側インスタンスは設定 `privacy.mode`（§7）と M48 プロファイル通知から
+  解決する。フラグ不在をもって既定で抑止側へ倒すことはしない（学習・予測を
+  恒常的に止めてしまうため）。M46 がこれらへリクエスト単位の privacy フィールドを
+  導入する場合は、`docs/typo-correction-learning-spec.md` §12.13 の「M46 が同等の
+  リクエスト単位 privacy フィールドを別途定義する場合は M46 のフィールドへ寄せる」
+  規約に従い、本書 §5.1.1 と同 §12.13 を同一 PR で更新する。
 - **多層防御としての重複**: §5 冒頭の抑止表が TIP 側と host 側の双方に実装
   ポイントを持つのはこの二段構成によるもので、片側だけの実装では契約を満たさない。
 

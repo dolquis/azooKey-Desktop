@@ -987,8 +987,10 @@ class DoubleArrayTrie {
 
 `PredictiveSearch` は入力に対応するノードまで遷移したあと、そのノードの部分木を
 たどって終端を集める。double-array では、ノード `s` の子は `check[base[s] + c] == s`
-を満たすバイト `c` として得られる。走査は `c` の昇順（深さ優先）で行い、これにより
-出力がキーのバイト辞書順になる。`max_results` に達した時点で走査を打ち切る。
+を満たすバイト `c` として得られる。走査は幅優先とし、同じ深さでは親の辞書順と
+`c` の昇順を保つ。これにより、上記の短いキー優先という契約を満たす。
+`key_id` はキーの UTF-8 バイト辞書順に割り当て、同じ深さの終端もその順に返す。
+`max_results` に達した時点で走査を打ち切る。文字境界は走査中にも検証する。
 
 呼び出し側は次の 3 つを想定する。
 
@@ -1029,6 +1031,17 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 | `ENTS` | 固定長エントリレコード列（下表） |
 | `STRS` | 文字列プール（UTF-8 の連結。終端子なし） |
 | `META` | UTF-8 JSON。由来・ライセンス・ビルドレシピ（§15.6） |
+
+`TRIE` の 1 ノードは 16 バイト固定の `u32 base` / `u32 check` /
+`u32 key_id` / `u32 depth` とする。root は index 0、`check = 0`、
+`depth = 0`。未使用ノードの `check` と非終端の `key_id` は `0xffffffff` とする。
+`depth` は root からのバイト数であり、遷移先では親の値より必ず 1 大きい。
+これを参照時に検証し、破損した循環参照による走査の継続を防ぐ。
+`LayerId` は §14.1 の列挙順に 0〜7 を割り当てる。`.azdic` の対象は静的層の 0〜4 とする。
+`category_mask` の bit 0〜9 は §14.4 の表の順に対応する。
+
+ロード時の処理量を制限するため、セクション数は最大 64、`META` は最大 1 MiB、
+`pos_table` は非空で最大 65536 要素とする。これらの上限を超える入力は拒否する。
 
 **キーからエントリへの対応**。trie は受理したキーに対して `key_id` だけを返す。
 `KEYS[key_id]` は 8 バイト固定で `u32 entry_ref_off` / `u32 entry_count` を持ち、実エントリは
@@ -1112,7 +1125,9 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 超えるためである。逆参照時の検査は分岐 2 つで済み、検索のレイテンシ予算には影響しない。
 
 **(3) 全体検証（明示的に要求されたときのみ、O(N)）**。`content_hash` の照合と、(2) の
-参照検証の全件走査を行う。実行するのは pack の DL 直後、`dictbuild --verify`、および設定
+参照検証の全件走査、復元キーの `key_id` 順が UTF-8 バイト辞書順であることの検査を行う。
+C++ と `dictbuild --verify` の両方で検査し、検索時の順序検査は防御的措置として残す。
+実行するのは pack の DL 直後、`dictbuild --verify`、および設定
 `dictionary.verifyOnLoad` が真のときとする。
 
 いずれの段でも、検出した層**のみを無効化**し、他層はそのまま動作を続ける。無効化は
@@ -1220,9 +1235,10 @@ double-array は構築が全件走査であり、1 語の追加ごとに再構�
 
 読みの正規化（§14.3）は mutable 層にも効かせる。各層はロードと挿入の時点で
 `normalized_reading` を算出してそれをキーにし、ユーザーが入力した原表記（`UserWord::ruby`）は
-レコード側に保持する。alias と長音緩和は、静的層のようにキーを展開せず、クエリ時に
-候補キーを生成して引く。層の規模が小さく、展開したキーを永続化すると既存の
-`user_dict.json` スキーマを変えることになるためである。
+レコード側に保持する。alias はメモリ内の索引にだけ §15.3 と同じ上限で展開し、
+長音緩和はクエリ時に行う。alias 索引を永続化しないため、既存の
+`user_dict.json` スキーマを維持できる。静的層と同じ展開規則を使い、特に
+predictive 検索で、まだ入力していない部分の alias によって結果集合が変わることを防ぐ。
 
 想定規模はいずれの層も数千から数万件である。この範囲では走査の実測差が候補提示の
 レイテンシ予算（§15.9）に現れない。エントリ数が 10 万件を超えた層には警告ログを出し、
@@ -1311,6 +1327,61 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 
 - SudachiDict（core 版）の取得経路。CI でのピン付きダウンロードか、リリースビルド用の
   事前生成アーティファクトかを、CI 実行時間と再現性の兼ね合いで決める。
-- `META.pos_table` の品詞体系。SudachiDict の品詞体系をそのまま持つか、§14.2 の `pos`
-  文字列へ写像した簡約体系にするか。
+- 上流の品詞体系から中間 TSV の `pos` への抽出規則。ビルダは §15.13 のとおり
+  中間 TSV の品詞名をそのまま `META.pos_table` に保持する。
 - §15.9 の予算を超えた場合の `sudachi_lexicon` 足切り基準（品詞・頻度のしきい値）。
+
+### 15.13 ビルダと Host の接続契約
+
+`dictbuild/dictbuild.py` はローカルの中間 TSV を複数受け取り、層ごとに `.azdic` と
+帰属テキストを出力する。Python 3.10 以降を使う。CMake の `AZOOKEY_BUILD_DICT_TOOLS`
+はビルダの案内 target を有効にする。ビルダとテスト用入力を IME に同梱しない。
+
+中間 TSV のヘッダ列は `surface` / `reading` / `pos` / `cost` / `frequency` /
+`category` / `source_id` とする。`category` は §14.4 の識別子のカンマ区切りである。
+`cost` と `frequency` の空欄は §15.6 の既定規則に従う。先頭コメントには
+`SPDX-License-Identifier:` と `THIRD_PARTY_LICENSES` への参照を含める。
+入力ファイルの basename は互いに異なるものとし、重複解決順に絶対パスを使わない。
+
+`--metadata` の JSON は §15.6 の上流情報を `sources` 配列で指定する。
+各 TSV の `source_id` と `sources` は寄与元の集合として一致させる。
+`pos_table` は入力の `pos` 文字列を辞書順に並べて生成し、元の品詞名を保存する。
+`--catalog` は共通ライセンス本文 `<spdx>.txt` と付随 notice のディレクトリを指定する。
+帰属欠落、本文欠落、不正な頻度、未知のカテゴリはビルドエラーとする。
+
+```powershell
+python dictbuild/dictbuild.py source-a.lex.tsv source-b.lex.tsv `
+  --metadata sources.json --layer technical_terms_lexicon --catalog notices `
+  --output technical_terms_lexicon.azdic --notices ThirdPartyNotices.txt
+python dictbuild/dictbuild.py --verify technical_terms_lexicon.azdic
+```
+
+Windows Host は実行ファイルの隣の `dict` ディレクトリから、静的層名をファイル名に
+した `.azdic` を探索する。`neologd_lexicon` は §14.10 の別 pack 経路に限定し、
+この自動探索に含めない。欠落・破損した層は空として扱う。
+ユーザー辞書の JSON 読み書きは `UserDictionary` が所有し、予測用の索引は
+メモリ内 revision の変更時に更新する。M9 の明示的なユーザー辞書スコアは維持する。
+
+Host の辞書予測は入力と完全一致する検索キーを除外する。プロバイダの `limit` は
+スコア降順の返却件数上限で、0 は空を返す。内部の `max_results` は層ごとの検索キー数
+上限であり、同じキーの全レコードを比較するコストは残る。返却上限により後段の
+reranker へ渡す辞書候補は既定で32件以下となる。
+
+予測欄は最大5件とし、学習予測を最大3件、変換器の文脈つき予測を最大2件、
+辞書予測を最大2件の順に空き枠へ採用する。残る空き枠には変換器の残りを入れる。
+表層形は重複排除し、変換器に異なる候補が2件あれば辞書スコアにかかわらず2件を確保する。
+変換器と辞書はそれぞれ reranker を適用し、層間スコアの大小で予約枠を変更しない。
+
+`UserWord::value` は有限の実数をそのまま最終辞書スコアに使う。未指定時は現在の
+`user_word_default_score` を使い、`frequency` の `[0,1]` へ圧縮しない。
+索引内の頻度は層の重複統合用に保持し、明示スコアへの層加点や alias 加点は行わない。
+`Candidate::reading` は完全一致検索では入力の読み（長音緩和前）、予測・共通接頭辞検索では
+レコードの原表記とする。正規化形は検索と重複統合のために使う。
+
+`IsAvailable` は有効設定や件数によらず、静的層のロード成功または mutable 層の初期化済み
+状態を表す。空の mutable 層も初期化後は利用可能とする。層 ID 不一致は
+`layer id mismatch` として診断を保持し、自動探索ログには `error` を含める。
+探索対象の列挙とロードは共通コードで検証し、実行ファイルの位置解決は Windows で検証する。
+
+META の JSON 読み取りは独立した `azookey_json` ターゲットを core と ipc から利用する。
+既存の include パスと名前空間は維持するが、core は Named Pipe / Envelope 実装へ依存しない。

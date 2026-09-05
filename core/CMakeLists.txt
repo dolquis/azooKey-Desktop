@@ -1,4 +1,5 @@
 add_library(azookey_core STATIC
+  src/DoubleArrayTrie.cpp
   src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp
   src/NumberRewriter.cpp
@@ -16,7 +17,7 @@ target_include_directories(azookey_core
 
 target_link_libraries(azookey_core
   PUBLIC azookey_project_options
-  PRIVATE azookey_project_warnings
+  PRIVATE azookey_project_warnings azookey_json
 )
 if(WIN32)
   target_link_libraries(azookey_core PRIVATE ole32 shell32)

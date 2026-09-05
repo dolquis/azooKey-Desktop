@@ -7,6 +7,7 @@
 #include <iostream>
 #include <utility>
 
+#include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/learning/FileLock.h"
 
@@ -130,6 +131,43 @@ InferenceEngine::~InferenceEngine() {
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
+  RefreshDictionaryLocked();
+}
+
+void InferenceEngine::RefreshDictionaryLocked() {
+  if (indexed_user_dict_ == user_dict_ &&
+      (!user_dict_ || indexed_user_revision_ == user_dict_->revision()))
+    return;
+  dictionaries_.SetUserWords(user_dict_ ? user_dict_->All() : std::vector<learning::UserWord>{});
+  indexed_user_dict_ = user_dict_;
+  indexed_user_revision_ = user_dict_ ? user_dict_->revision() : 0;
+}
+
+bool InferenceEngine::LoadDictionaryLayer(learning::LayerId layer,
+                                          const std::filesystem::path& path, bool verify) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return dictionaries_.LoadStatic(layer, path, verify);
+}
+
+std::vector<InferenceEngine::DictionaryLoadResult> InferenceEngine::LoadBundledDictionaryLayers(
+    const std::filesystem::path& directory) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  std::vector<DictionaryLoadResult> results;
+  for (const auto& [layer, name] :
+       {std::pair{learning::LayerId::Base, "base_lexicon.azdic"},
+        std::pair{learning::LayerId::Sudachi, "sudachi_lexicon.azdic"},
+        std::pair{learning::LayerId::NamedEntity, "named_entity_lexicon.azdic"},
+        std::pair{learning::LayerId::TechnicalTerms, "technical_terms_lexicon.azdic"}}) {
+    const bool loaded = dictionaries_.LoadStatic(layer, directory / name);
+    results.push_back({name, loaded, dictionaries_.LayerError(layer)});
+  }
+  return results;
+}
+
+void InferenceEngine::EnableDictionaryLayer(learning::LayerId layer, bool enabled) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  dictionaries_.EnableLayer(layer, enabled);
+  if (layer == learning::LayerId::User) user_dictionary_enabled_ = enabled;
 }
 
 bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
@@ -437,9 +475,13 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     fallback_converter = fallback_converter_;
     config = config_;
     using_model_converter = model_converter_ && converter == model_converter_;
-    if (user_dict_) {
+    // Preserve M9's explicit user word score while static layers use M53 scoring.
+    RefreshDictionaryLocked();
+    merged = DictionaryCandidates(dictionaries_, kana, learning::LookupMode::Exact, now_epoch_sec,
+                                  32, false);
+    if (user_dict_ && user_dictionary_enabled_) {
       auto words = user_dict_->Lookup(kana);
-      merged.reserve(words.size());
+      merged.reserve(merged.size() + words.size());
       for (const auto& w : words) {
         core::Candidate c;
         c.surface = w.word;
@@ -534,13 +576,19 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
         kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length)));
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
+  RefreshDictionaryLocked();
+  auto dictionary_predictions =
+      DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
+                           now_epoch_sec, 32, true, config_.user_word_default_score);
+  dictionary_predictions =
+      ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec);
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 
   std::vector<core::Candidate> merged;
   merged.reserve(kPredictionDisplayLimit);
   if (store_ && config_.prediction_learning_max_entries > 0) {
     const size_t learning_limit =
-        std::min(config_.prediction_learning_max_entries, kPredictionDisplayLimit);
+        std::min(config_.prediction_learning_max_entries, kPredictionDisplayLimit - 2);
     const auto lookup = store_->LookupPrefix(kana, learning_limit,
                                              config_.prediction_learning_min_score, now_epoch_sec);
     for (const auto& match : lookup.matches) {
@@ -555,15 +603,24 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
       if (merged.size() == kPredictionDisplayLimit) break;
     }
   }
-  for (auto& candidate : candidates) {
-    const bool duplicate = std::any_of(merged.begin(), merged.end(), [&](const auto& item) {
-      return item.surface == candidate.surface;
-    });
-    if (!duplicate) {
-      merged.push_back(std::move(candidate));
+  auto append = [&](std::vector<core::Candidate>& source, size_t limit) {
+    size_t added = 0;
+    for (auto& candidate : source) {
+      if (merged.size() == kPredictionDisplayLimit || added == limit) break;
+      if (candidate.surface.empty()) continue;
+      const bool duplicate = std::any_of(merged.begin(), merged.end(), [&](const auto& item) {
+        return item.surface == candidate.surface;
+      });
+      if (!duplicate) {
+        merged.push_back(std::move(candidate));
+        candidate.surface.clear();
+        ++added;
+      }
     }
-    if (merged.size() == kPredictionDisplayLimit) break;
-  }
+  };
+  append(candidates, 2);
+  append(dictionary_predictions, 2);
+  append(candidates, kPredictionDisplayLimit);
   return merged;
 }
 

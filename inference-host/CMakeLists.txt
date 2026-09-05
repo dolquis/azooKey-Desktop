@@ -8,6 +8,7 @@ target_link_libraries(azookey_host_paths
 )
 
 add_library(azookey_host STATIC
+  src/DictionaryCandidateProvider.cpp
   src/Dispatcher.cpp
   src/HostArgs.cpp
   src/HttpDownloader.cpp

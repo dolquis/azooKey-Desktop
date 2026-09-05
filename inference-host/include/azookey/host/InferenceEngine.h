@@ -15,6 +15,7 @@
 
 #include "azookey/core/IConverter.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
+#include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/UserDictionary.h"
@@ -82,6 +83,16 @@ class InferenceEngine {
 
   // External, non-owning. May be nullptr (no user dictionary).
   void SetUserDictionary(learning::UserDictionary* dict);
+  struct DictionaryLoadResult {
+    std::string name;
+    bool loaded;
+    std::string error;
+  };
+  std::vector<DictionaryLoadResult> LoadBundledDictionaryLayers(
+      const std::filesystem::path& directory);
+  bool LoadDictionaryLayer(learning::LayerId layer, const std::filesystem::path& path,
+                           bool verify = false);
+  void EnableDictionaryLayer(learning::LayerId layer, bool enabled);
   bool AddUserWord(const learning::UserWord& word);
   bool RemoveUserWord(const std::string& word, const std::string& ruby);
 
@@ -136,6 +147,7 @@ class InferenceEngine {
   void RecordLearningSaveFailureLocked();
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
+  void RefreshDictionaryLocked();
 
   std::shared_ptr<core::IConverter> fallback_converter_;
   std::shared_ptr<core::IConverter> model_converter_;
@@ -143,6 +155,10 @@ class InferenceEngine {
   learning::LearningStore* store_;
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
+  learning::DictionaryStore dictionaries_;
+  const learning::UserDictionary* indexed_user_dict_{nullptr};
+  uint64_t indexed_user_revision_{};
+  bool user_dictionary_enabled_{true};
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
   std::mutex model_load_mutex_;

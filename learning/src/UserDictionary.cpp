@@ -67,6 +67,7 @@ bool UserDictionary::Load() { return LoadImpl(true); }
 bool UserDictionary::LoadReadOnly() { return LoadImpl(false); }
 
 bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
+  ++revision_;
   by_ruby_.clear();
   save_blocked_by_corrupt_load_ = false;
   std::ifstream ifs(path_);
@@ -111,6 +112,7 @@ bool UserDictionary::Save() const {
 }
 
 bool UserDictionary::Add(const UserWord& w) {
+  ++revision_;
   auto& bucket = by_ruby_[w.ruby];
   auto it = std::find_if(bucket.begin(), bucket.end(),
                          [&](const UserWord& x) { return x.word == w.word; });
@@ -130,6 +132,7 @@ bool UserDictionary::Remove(const std::string& word, const std::string& ruby) {
       std::find_if(bucket.begin(), bucket.end(), [&](const UserWord& x) { return x.word == word; });
   if (it == bucket.end()) return false;
   bucket.erase(it);
+  ++revision_;
   if (bucket.empty()) by_ruby_.erase(bit);
   return true;
 }
@@ -161,6 +164,9 @@ size_t UserDictionary::Size() const {
   return n;
 }
 
-void UserDictionary::Clear() { by_ruby_.clear(); }
+void UserDictionary::Clear() {
+  by_ruby_.clear();
+  ++revision_;
+}
 
 }  // namespace azookey::learning

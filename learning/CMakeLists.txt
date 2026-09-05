@@ -1,4 +1,5 @@
 add_library(azookey_learning STATIC
+  src/DictionaryStore.cpp
   src/LearningStore.cpp
   src/Reranker.cpp
   src/UserDictionary.cpp

@@ -139,32 +139,23 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 
 ### 4. 実機検証（★基本セッションに切替えて）
 
-VMConnect を基本セッションに切替（拡張セッションをオフ）。メモ帳で DEV-32 チェックリスト:
+VMConnect を基本セッションに切替（拡張セッションをオフ）。メモ帳で打鍵する。
 
-1. **Win+Space** で **azooKey** を選択できる（DEV-157 修正で言語一覧に出る）
-2. `ka` → 「か」がアンダーライン付き **preedit**（M3）
-3. **Backspace** で1文字戻る / **ESC** で composition クリア（M3）
-4. `watashi`（組込辞書語）→ **Space** で「私」等の漢字候補（M4/M5）。※ `にほんご` 等の辞書外語は `--mock-dict` か学習が無いと漢字化されない（下記 ⚠️ 参照）
-5. **↑↓** 選択・**Enter/数字** で確定、確定テキストがアプリに入る（M5/M6）
-6. 候補が出れば IPC 往復成立（= Host 由来）。詳細ログが必要な場合は、検証前に次を実行してサインアウト／サインインし、Host と検証対象アプリを新しい環境で起動する
-   ```powershell
-   [Environment]::SetEnvironmentVariable('AZOOKEY_LOG', '1', 'User')
-   [Environment]::SetEnvironmentVariable('AZOOKEY_LOG_LEVEL', 'info', 'User')
-   ```
-   ログは `%LOCALAPPDATA%\azooKey\logs\tip-YYYYMMDD.jsonl` と
-   `host-YYYYMMDD.jsonl` に出力される。取得後は環境変数を削除し、Host と対象アプリを
-   再起動する。
+確認項目そのものは [`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
+の A（コア動線 A1〜A8）と B（拡張・回帰確認 B1〜B7）が正典であり、本書には再掲しない。
+チェックリストを開いて上から実施し、記入したものを DEV-32 へコメントする。
 
-> ⚠️ **変換能力の前提（重要）**: `ZenzaiModelConverter` は実 GGUF モデルを読み込んだ場合
-> （`make-vm-verify-package.ps1 -ModelPath` 指定時）は llama.cpp 経由の実推論を行うが、
-> GGUF 未指定時は `SimpleConverter` の静的辞書へフォールバックする
-> （わたし/にほん/とうきょう 等＋学習語のみ）。**`-ModelPath` を指定せずに生成した検証
-> パッケージでは、辞書外の語は漢字に変換されない。** 一般のかな漢字変換を確認するには、
-> パッケージ生成時に `-ModelPath <GGUF>` または `-MockDictionaryPath <TSV>` を指定するか
-> 学習済み語を使う。実機検証 DEV-32 でも「にほんご」（辞書外語）が漢字化されないことを
-> 確認済み（この回の検証パッケージが `-ModelPath` 未指定で GGUF フォールバック経路
-> だったため。チェックリストでは任意の A5-opt で確認し、コア A5 は組込辞書語 `watashi`
-> で評価する）。実 GGUF モデルの検証は `docs/zenzai-gpu-route.md` を参照。
+詳細ログが必要な場合は、検証前に `AZOOKEY_LOG` と `AZOOKEY_LOG_LEVEL` を設定してから
+Host と検証対象アプリを起動し直す。環境変数の設定、出力先、ローテーション、取得後の
+削除手順は [`../debugging.md`](../debugging.md)「ログ収集」を参照する。
+
+> ⚠️ **変換能力の前提**: 検証パッケージを `make-vm-verify-package.ps1` の
+> `-ModelPath <GGUF>` も `-MockDictionaryPath <TSV>` も指定せずに生成すると、bootstrap が
+> host へ渡す辞書もモデルも無く、`ZenzaiModelConverter` は `SimpleConverter` の静的辞書
+> （わたし / にほん / とうきょう 等＋学習語）へフォールバックする。この状態では**辞書外の
+> 語が漢字に変換されない**。判定の扱いは dev32-verification-checklist.md の同じ注記
+> （コア A5 は組込辞書語、辞書外語は任意の A5-opt）に従う。実 GGUF モデルでの検証は
+> `docs/zenzai-gpu-route.md` を参照。
 
 ### 5. 記録と後始末
 
@@ -189,9 +180,9 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 | 症状 | 原因・対処 |
 |---|---|
 | azooKey が言語一覧に出ない | `azookey_diag.exe --json` で D-001〜D-003 を確認する。`error` の場合は管理者 PowerShell で `azookey_diag.exe --repair` を実行する。`permission_denied` は非昇格で実行した状態、互換 DLL が見つからない場合は `register-dev.ps1 -TipDllPath <path>` または MSIX 修復が必要な状態を示す。`--repair` は AppContainer ACL を付与しないため、UWP または Microsoft Store アプリを検証する前に `register-dev.ps1 -TipDllPath <path>` を実行する。 |
-| preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（手順4）。 |
+| preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（付録の手順 3）。 |
 | `logs/` が作成されない、または診断 ZIP にログがない | `azookey_diag.exe --json` で D-013 を確認する。`error` の場合は `azookey_diag.exe --repair` で `%LOCALAPPDATA%\azooKey\logs\` を作成し、再診断結果を確認する。 |
-| 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順5）。 |
+| 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順 4）。 |
 | 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
 
 ## 付録: Debug ビルド + デバッガ方式（VM に開発環境がある場合）
@@ -202,11 +193,10 @@ Release の opt-in ファイルログで不足する場合に使う。
 
 ### ログの出力先
 
-| 対象 | 出力先 | ビルド依存 | 取得方法 |
-|---|---|---|---|
-| TIP / Host | `%LOCALAPPDATA%\azooKey\logs\*-YYYYMMDD.jsonl` | Release / Debug、`AZOOKEY_LOG=1` のときだけ | ファイルを回収 |
-| TIP（`tsf-tip`） | `OutputDebugStringA`（`[azooKey TIP] <event>`） | Debug のみ | DebugView でキャプチャ |
-| host（`inference-host`） | `std::cerr`（info/warn/error）+ `std::cout`（IPC 応答 JSON） | 常時 | コンソール起動 |
+TIP / Host の出力先、環境変数、Debug ビルドでの `OutputDebugStringA` 併用、Host の
+stderr は [`../debugging.md`](../debugging.md)「ログ収集」が正典。本方式で増えるのは、
+host をコンソールで起動して stderr をその場で読めることと、DebugView で TIP の
+イベントを流し見できることの 2 点である。
 
 TIP のイベント例: `ipc_connected` / `ipc_handshake_rejected` /
 `ipc_query_timeout` / `ipc_worker_stopped`。

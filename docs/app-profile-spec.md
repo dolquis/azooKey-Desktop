@@ -252,6 +252,9 @@ window_class → default）に限り、下記の **グローバル floor** を�
   **グローバル floor** に戻す。グローバルが `offline` / `private` / `secure` の場合はその
   floor を維持する）
 
+通知先は `docs/privacy-and-secure-input-spec.md` §5.1.1 の **host 側インスタンス**
+である（プロファイル解決は `AppProfileResolver` が host 側で行うため）。
+
 `inherit` の場合は通知せず、グローバル設定（`settings.privacyMode` 等）を
 そのまま使う。`PrivacyGate` 側は同一ユーザーアクション内で複数通知を受けた場合、
 各軸で最も厳しい制約を採り（`secure` > `private` / `offline` > `normal`。`private` と

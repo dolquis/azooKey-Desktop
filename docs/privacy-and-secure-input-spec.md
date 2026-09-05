@@ -205,7 +205,8 @@ M48 `AppProfileResolver` lookup）が小文字で比較できるようにする�
 
 ### 5.1 PrivacyGate 実装
 
-`inference-host/src/PrivacyGate.cpp`（新規）として以下を実装する:
+`inference-host/src/PrivacyGate.cpp`（新規）として以下を実装する。TIP 側も同一の
+クエリ契約を持つインスタンスを保持し、両者の分界は §5.1.1 で定義する:
 
 ```cpp
 class PrivacyGate {
@@ -213,6 +214,7 @@ public:
   enum class Mode { Normal, Private, Secure, Offline, Custom };
 
   Mode CurrentMode() const;
+  bool IsSecure() const;             // CurrentMode() == Mode::Secure と同値
 
   // 動作可否クエリ
   bool LearningAllowed() const;
@@ -232,6 +234,12 @@ public:
 許可されない処理は早期 return + ログ記録（`result = "blocked"`）と
 する。
 
+**`IsSecure()`**: `CurrentMode() == Mode::Secure` を返す述語であり、独立した
+第 6 のモードではない。`docs/dev-infrastructure-spec.md` §7.6 の `IsSecure()` と
+`docs/learning-data-management-spec.md` の `CurrentMode() == Mode::Secure` は同一条件を指す。
+secure が他のモードより優先される点は §2 / §5.2 解決順 1 のとおりで、`IsSecure()` が
+true の間は §5 冒頭の抑止表が per-axis 設定より優先する。
+
 **AI 軸の 2 クエリ**: `AiCandidateAllowed()` は AI ベースの候補生成（ローカル zenzai
 変換・外部 LLM のいずれも）が許可されるかを表し、`ExternalAiAllowed()` はそのうち
 **外部 LLM** のみを表す。不変条件: `ExternalAiAllowed() ⇒ AiCandidateAllowed()`（外部が
@@ -247,6 +255,39 @@ learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸�
 **§5.2** で定義する。DEV-121（PR #145）で暫定的に置いた「`privacy.mode = custom` → `private`
 相当」の fallback は、§5.2 の per-axis 既定（未指定軸は private 相当の安全側）に置換される。
 軸を 1 つも指定しない `custom` は従来どおり private 相当に解決するため、移行は後方互換である。
+
+#### 5.1.1 判定主体と二段ゲート
+
+本節は `docs/typo-correction-learning-spec.md` §12.12.2 / §12.13、
+`docs/ai-backend-spec.md` §8、`docs/app-profile-spec.md` §5 から正典として
+参照される。
+
+`PrivacyGate` は TIP と host の両プロセスに同一クエリ契約のインスタンスを持つ。
+**前面アプリに由来する privacy 状態（自動 secure 判定 §4）の判定主体は TIP 側**
+とする。前面ウィンドウを解決できるのは TIP だけであり（§4.2 の
+`ForegroundAppDetector` は TIP の STA スレッドで動く）、host は自プロセスから
+前面アプリを解決しない。
+
+| レイヤ | mode の解決元 | 役割 |
+|---|---|---|
+| TIP 側インスタンス | `ForegroundAppDetector`（§4.2）+ 設定 `privacy.*`（§7） | 一次ゲート。§5 表のうち `tsf-tip/` の抑止を行い、判定値を IPC に載せる |
+| host 側インスタンス | 設定 `privacy.*` + リクエスト単位で TIP から受け取る privacy フラグ + M48 プロファイル通知（`docs/app-profile-spec.md` §5） | 二次ゲート（fail-closed）。§5 表のうち `inference-host/` の抑止と `AiBackend` 入口ガード（`docs/ai-backend-spec.md` §8）を行う |
+
+- **モード遷移 API の所在**: `EnterSecureFor()` / `ExitSecure()` は前面アプリの
+  検出結果を反映する経路であり、**TIP 側インスタンスのみ**が呼ぶ。host 側
+  インスタンスはこれらを自発的に呼ばず、設定・リクエスト単位のフラグ・
+  プロファイル通知から解決する。`SetExplicitMode()` はユーザーが明示した
+  モードの反映であり、両インスタンスが設定 `privacy.mode`（§7）経由で同じ値を見る。
+- **wire 表現の正典**: TIP が host へ渡す privacy フラグ（`QueryCandidates` の
+  `secure`、`ObserveTypo` の `secure` / `learning_allowed`、handshake
+  `capabilities` の `"secure_flag"`）の定義は
+  `docs/typo-correction-learning-spec.md` §12.13 を正典とし、本書では再定義しない。
+- **host が二次ゲートを持つ理由**: TIP は信頼するが単一障害点にしない。TIP が
+  privacy 非対応（`"secure_flag"` 非広告）または経路の欠落でフラグが未知のとき、
+  host は §2 fail closed に従い該当軸を抑止する（解決規約は
+  `docs/typo-correction-learning-spec.md` §12.12.2 の host 二次ゲート項）。
+- **多層防御としての重複**: §5 冒頭の抑止表が TIP 側と host 側の双方に実装
+  ポイントを持つのはこの二段構成によるもので、片側だけの実装では契約を満たさない。
 
 ### 5.2 `custom` モードの per-axis 解決
 

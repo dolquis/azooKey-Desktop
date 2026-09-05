@@ -401,6 +401,12 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 `privacy-and-secure-input-spec.md` §5 が正典。本書は `AiBackend` 入口での
 **強制ガード**を契約として固定する。
 
+`AiBackend` は host 側にあるため、ここで参照する `PrivacyGate` は
+`privacy-and-secure-input-spec.md` §5.1.1 の **host 側インスタンス（二次ゲート）**
+である。前面アプリ由来の secure 判定は TIP 側が行い、host はリクエスト単位で
+受け取る privacy フラグと設定・M48 プロファイル通知から解決する。フラグが未知の
+ときは同 §5.1.1 のとおり fail-closed（外部送信を行わない側）へ倒す。
+
 - **入口ガード（必須）**: `AiBackend::Transform` の先頭で `PrivacyGate` を問い合わせ、
   - `AiCandidateAllowed()==false` → 実効 backend を `None`、`error_class=BlockedBySecure`
     で早期 return（ローカル zenzai も動かさない）。
@@ -410,7 +416,8 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
     ポイントを `inference-host/src/AiBackend.cpp` と明記しており、本契約はそれを満たす。
 - **多層防御**: TIP 側でも secure 中は Magic Conversion を無効化する（同 §5 表、
   `TextService.cpp::OnDoubleTap`）。Host 側入口ガードは TIP 側抑止に依存せず**独立に**
-  保証する（呼び出し経路の取りこぼし・将来の新消費者に対する安全側）。
+  保証する（呼び出し経路の取りこぼし・将来の新消費者に対する安全側）。この二重化は
+  同 §5.1.1 の二段ゲートの一部であり、TIP 側抑止だけでは本契約を満たさない。
 - **不変条件**: `ExternalAiAllowed() ⇒ AiCandidateAllowed()`（同 §5.1）。`secure` では
   両方 false。`private` / `offline` は AI 候補可・外部不可（ローカルのみ）。
 - **ログ**: secure 中は `reading` / `surface` / 本文を redact（同 §5、

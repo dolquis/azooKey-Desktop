@@ -393,7 +393,7 @@ M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
 ```json
 {
   "reranker": {
-    "tinyNeuralEnabled": true,
+    "tinyNeuralEnabled": false,
     "tinyNeuralModelPath": "",
     "tinyNeuralTimeoutMs": 15,
     "tinyNeuralFailureThreshold": 3,
@@ -403,6 +403,12 @@ M47 `Recovering` / `DegradedModel` 状態と整合（Host は落ちない）。
 }
 ```
 
+- `tinyNeuralEnabled`: 既定は **OFF**。Track B の `nllRerankEnabled`（§B9）と同じく、
+  リランク層は §12 の受け入れ条件（M52 ベンチで top1 +3% 以上 / p95 悪化 +10ms 以内）を
+  満たしたことを確認したうえで、既定 ON への切替を別途判断する。**既定 OFF のとき
+  ONNX セッションを生成せず**、候補列・`final_score`・`debug_info`・レイテンシは Track A
+  導入前と等価であること（§11 の回帰対象）。ユーザー設定 OFF による非適用は
+  `reason=disabled` で記録する（§7.2）。
 - `tinyNeuralTimeoutMs`: 範囲 10〜20（§7.2）。範囲外は clamp。
 - `tinyNeuralFailureThreshold`: §7.2 の circuit breaker 閾値（既定 3）。
 - `modernbertEnabled` / `modernbertTimeoutMs` は M57 が使う（本 spec では枠のみ
@@ -449,6 +455,8 @@ final_score =
 ## 11. テスト
 
 - unit: 特徴量抽出（NaN / 欠損値）
+- unit: 既定 OFF（`tinyNeuralEnabled=false`）で ONNX セッションを生成せず、候補列・
+  `final_score` が Track A 導入前と等価（§8）
 - unit: ONNX load 失敗時の fallback
 - unit: timeout 時の fallback
 - unit: 連続失敗で circuit breaker が開き、再ロードで閉じる（§7.2）

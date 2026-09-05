@@ -701,11 +701,13 @@ intended_pattern  = 対応する canonical 形（Romaji Variant 正規化後、�
 
 secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評価する fail-closed**
 とし、TIP（検出）と host（蓄積・適用）の二段で遮断する。M46 `PrivacyGate` の
-判定主体は前面フォーカスを見られる TIP 側である。
+判定主体と二段ゲートの分界は `docs/privacy-and-secure-input-spec.md` §5.1.1 を
+正典とし（前面アプリ由来の判定は TIP 側、host は fail-closed の二次ゲート）、
+本節はそれを M55 の経路へ適用する。
 
 1. **TIP（検出・送信ゲート、一次）**: `ObserveTypo` の発火条件（§4-1 / §4-2）
-   を満たしても、その時点の M46 `PrivacyGate` が **`IsSecure()` を返す、または
-   `LearningAllowed()` が false** なら `pre_correction_reading_` のスナップ
+   を満たしても、その時点の M46 `PrivacyGate` が **`IsSecure()` を true、または
+   `LearningAllowed()` を false で返す**なら `pre_correction_reading_` のスナップ
    ショットを取らず、`ObserveTypo` も `raw_keys` 送信も行わない。`ObserveTypo`
    は純粋な学習イベントのため、`private` / `custom`（`learning` OFF）モードの
    ように `IsSecure()=false` でも `LearningAllowed()=false` の状態
@@ -793,8 +795,8 @@ optional フィールドを追加（エンベロープ schema 自体は変更し
 > 扱う（既定 `--secure-unknown=deny`）。privacy は後方互換より優先する。
 
 - `secure`（bool）は TIP 側 M46 `PrivacyGate::IsSecure()`
-  （`docs/privacy-and-secure-input-spec.md` §5）の IPC 表出であり、host 二次
-  ゲート（§12.12.2-4）が参照する secure シグナルである。`QueryCandidates`
+  （`docs/privacy-and-secure-input-spec.md` §5.1 / §5.1.1）の IPC 表出であり、
+  host 二次ゲート（§12.12.2-4）が参照する secure シグナルである。`QueryCandidates`
   （適用ゲート用）と `ObserveTypo`（蓄積ゲート用、per-event）の両方に載せる。
   **現行 `QueryCandidatesRequest` / `ObserveTypoRequest` には secure 相当
   フィールドが無いため、本フィールドは M55 が追加する。** M46 が同等の

@@ -389,6 +389,19 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config);
   engine.SetUserDictionary(&user_dict);
+#ifdef _WIN32
+  // Discover only installer-controlled static layers, never the current directory.
+  const auto dictionary_directory = GetExeDirectory() / "dict";
+  for (const auto& [layer, name] : {
+           std::pair{azookey::learning::LayerId::Base, "base_lexicon.azdic"},
+           std::pair{azookey::learning::LayerId::Sudachi, "sudachi_lexicon.azdic"},
+           std::pair{azookey::learning::LayerId::NamedEntity, "named_entity_lexicon.azdic"},
+           std::pair{azookey::learning::LayerId::TechnicalTerms, "technical_terms_lexicon.azdic"}}) {
+    const bool loaded = engine.LoadDictionaryLayer(layer, dictionary_directory / name);
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "static_dictionary_load",
+                    {{"layer", SafeLogText(name)}, {"result", SafeLogText(loaded ? "ok" : "unavailable")}});
+  }
+#endif
   if (explicit_model_path) {
     const bool model_loaded = engine.LoadModel();
     runtime_log.Log(model_loaded ? azookey::logging::RuntimeLogLevel::Info

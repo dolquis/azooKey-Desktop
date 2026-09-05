@@ -7,6 +7,7 @@
 #include <iostream>
 #include <utility>
 
+#include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/learning/FileLock.h"
 
@@ -130,6 +131,27 @@ InferenceEngine::~InferenceEngine() {
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
+  RefreshDictionaryLocked();
+}
+
+void InferenceEngine::RefreshDictionaryLocked() {
+  if (indexed_user_dict_ == user_dict_ &&
+      (!user_dict_ || indexed_user_revision_ == user_dict_->revision())) return;
+  dictionaries_.SetUserWords(user_dict_ ? user_dict_->All() : std::vector<learning::UserWord>{});
+  indexed_user_dict_ = user_dict_;
+  indexed_user_revision_ = user_dict_ ? user_dict_->revision() : 0;
+}
+
+bool InferenceEngine::LoadDictionaryLayer(learning::LayerId layer,
+                                         const std::filesystem::path& path, bool verify) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return dictionaries_.LoadStatic(layer, path, verify);
+}
+
+void InferenceEngine::EnableDictionaryLayer(learning::LayerId layer, bool enabled) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  dictionaries_.EnableLayer(layer, enabled);
+  if (layer == learning::LayerId::User) user_dictionary_enabled_ = enabled;
 }
 
 bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
@@ -437,7 +459,11 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     fallback_converter = fallback_converter_;
     config = config_;
     using_model_converter = model_converter_ && converter == model_converter_;
-    if (user_dict_) {
+    // Preserve M9's explicit user word score while static layers use M53 scoring.
+    RefreshDictionaryLocked();
+    merged = DictionaryCandidates(dictionaries_, kana, learning::LookupMode::Exact,
+                                  now_epoch_sec, 32, false);
+    if (user_dict_ && user_dictionary_enabled_) {
       auto words = user_dict_->Lookup(kana);
       merged.reserve(words.size());
       for (const auto& w : words) {
@@ -534,6 +560,10 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
         kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length)));
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
+  RefreshDictionaryLocked();
+  auto dictionary_predictions = DictionaryCandidates(dictionaries_, kana,
+      learning::LookupMode::PredictivePrefix, now_epoch_sec, 32);
+  candidates.insert(candidates.begin(), dictionary_predictions.begin(), dictionary_predictions.end());
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 
   std::vector<core::Candidate> merged;

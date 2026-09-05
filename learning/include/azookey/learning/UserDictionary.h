@@ -66,6 +66,7 @@ class UserDictionary {
   std::vector<UserWord> All() const;
 
   size_t Size() const;
+  uint64_t revision() const noexcept { return revision_; }
   void Clear();
 
   const std::filesystem::path& path() const { return path_; }
@@ -76,6 +77,7 @@ class UserDictionary {
   std::filesystem::path path_;
   std::map<std::string, std::vector<UserWord>> by_ruby_;
   bool save_blocked_by_corrupt_load_{false};
+  uint64_t revision_{};
 };
 
 }  // namespace azookey::learning

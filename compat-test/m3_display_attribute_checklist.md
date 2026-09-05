@@ -66,6 +66,12 @@ Windows Terminal は変わらない）。
 「任意」は時間の許す範囲で確認する。未実施でも §7 の記録テンプレートには 9 本すべての
 行を残し、未実施の欄を `-` で埋めて報告する（行ごと落とすと「確認済み」と読まれるため）。
 
+WordPad は Windows 11 24H2 と Windows Server 2025 で OS から削除されている
+（[Features and functionality removed in Windows client](https://learn.microsoft.com/windows/whats-new/removed-features)）。
+検証 VM の build に WordPad が無い場合は、全欄を `N/A` として build を併記し、Win32 /
+RichEdit 系の確認は自動化済み Notepad の C-001〜C-012 に委ねる。
+アプリが存在しないことを不合格としない。
+
 ## 4. 確認項目
 
 | ID | 項目 | 操作 | 期待 |
@@ -81,9 +87,12 @@ Windows Terminal は変わらない）。
 | D-09 | 高 DPI 全画面 / モニタ跨ぎ | 全画面表示、および DPI の異なるモニタへウィンドウを移動して D-01〜D-02 を再走 | 移動後も下線が出て、位置がずれない |
 | D-10 | 他 IME との比較 | 同じ操作を MS-IME で行い見比べる | 下線の有無・太さ・色に目立つ差がない。差があれば症状を記録する |
 
-D-08 / D-09 の対象は WordPad / Chrome / Discord の 3 本で、この 3 本では実施が必須
+D-08 / D-09 の対象は Chrome / Firefox / Discord の 3 本で、この 3 本では実施が必須
 （省略は不合格。§5）。他のアプリでは `N/A` としてよい。DPI 追従はアプリ固有では
-なく TSF とアプリのレイアウト側の問題として現れるため、系統の異なる 3 本で足りる。
+なく TSF とアプリのレイアウト側の問題として現れるため、矩形取得の経路が異なる 3 本で
+足りる（Chromium の `GetTextExt`、Gecko の best-effort、Electron の `contenteditable`）。
+この 3 本はいずれも OS の build に依存せず導入でき、§6 が D-09 の差異を挙げている
+系統をすべて含む。
 自動化済みの 3 アプリでは 150% DPI を C-006 が見るが、200% と D-09（全画面 /
 モニタ跨ぎ）は自動化されていないため、上の 3 本の目視で押さえる。
 
@@ -98,7 +107,7 @@ D-08 / D-09 の対象は WordPad / Chrome / Discord の 3 本で、この 3 本�
 | D-01 / D-04 / D-05 / D-06 / D-07 | pass 必須 | 必須アプリすべてで期待どおりである |
 | D-03 | pass 必須 | 文字が読めなくなる（前景色と背景色が同化する、選択範囲と区別できない）事象が 1 件もない |
 | D-02 | follow-up 必須 | 必須アプリすべてで下線が出るのが合格。出ないアプリがあれば、対象アプリと症状を DEV-365 に列挙して follow-up Issue を起票・リンクする（§6 の既知差異により Chromium 系と conhost 系では不一致が出うるため即 fail としない） |
-| D-08 / D-09 | follow-up 必須 | 対象の WordPad / Chrome / Discord すべてで実施し、下線の追従が崩れた場合は対象アプリ・スケール・モニタ構成と症状を DEV-365 に記録して follow-up Issue を起票・リンクする。実施自体を省略した場合は不合格 |
+| D-08 / D-09 | follow-up 必須 | 対象の Chrome / Firefox / Discord すべてで実施し、下線の追従が崩れた場合は対象アプリ・スケール・モニタ構成と症状を DEV-365 に記録して follow-up Issue を起票・リンクする。実施自体を省略した場合は不合格 |
 | D-10 | 記録のみ | 合否に含めない。差分は所見として記録する |
 
 これらに加えて、確定後に下線が残る、未確定文字列が二重に表示される、
@@ -153,7 +162,7 @@ follow-up 必須の項目は、**起票した Issue を DEV-365 にリンクす�
 | Excel | | | | | | | | | | |
 | Outlook | | | | | | | | | | |
 
-D-08 / D-09 は WordPad / Chrome / Discord のみ必須で、他アプリでは `N/A` でよい。
+D-08 / D-09 は Chrome / Firefox / Discord のみ必須で、他アプリでは `N/A` でよい。
 自動化済みの Notepad / Edge / VS Code は本テンプレートに行を置かない（§3）。
 
 ### 不一致の所見

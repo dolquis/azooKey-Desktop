@@ -58,9 +58,11 @@ Health の扱いは同 §4.4 を正典とする。
   `ModelLoadResult.error` の警告として返す。CPU ロード自体が成功した場合、`Health` は
   ok を保つ。
 
-実モデルを使う開発登録の手順（`windows-llama-debug` preset、`register-dev.ps1`
-の `-ModelPath` / `-AllowMockHost`、GGUF の配置先）は `README.md` を正典とする。
-GGUF を配置しただけではモデルを自動選択せず、`model.selectedPath` は確定しない。
+実モデルを使う開発登録の手順（`windows-llama-debug` preset、`register-dev.ps1` の
+`-ModelPath`、GGUF の配置先）は `README.md` を正典とする。GGUF を配置しただけでは
+モデルを自動選択せず、`model.selectedPath` は確定しない。`-AllowMockHost` は
+fallback-only の TIP テスト専用で llama.cpp preflight を迂回する経路であり、
+`-ModelPath` とは併用できない（`scripts/register-dev.ps1` が併用を拒否する）。
 
 ## 計測ゲート
 

@@ -20,6 +20,8 @@ M50 のアプリ互換性テストハーネス（`docs/dev-infrastructure-spec.m
 C-001〜C-012 は入力動線全体の回帰を見る。本チェックリストの D-01〜D-10 は
 DisplayAttribute の描画と `ITfCompositionSink` の終了経路だけに絞った補完で、
 M50 のハーネス実装後は同ハーネスの追加ケースとして取り込む。
+C-001〜C-012 で自動化済みの Notepad / Edge / VS Code は、本チェックリストの
+手動実走の対象から外す（§3）。
 
 属性の定義と M23（複合 DisplayAttribute）との対応関係は
 `docs/tsf-deep-integration-spec.md` §5.6 が正典。
@@ -37,23 +39,31 @@ M50 のハーネス実装後は同ハーネスの追加ケースとして取り�
 
 ## 3. 対象アプリ
 
-| アプリ | 区分 | TSF 実装系統 | §13.2 自動化レベル | 必須 |
+| アプリ | 区分 | TSF 実装系統 | §13.2 自動化レベル | 本チェックリストでの扱い |
 |---|---|---|---|---|
-| Notepad | 標準 | Win32 / RichEdit 系 | full | ✔ |
-| WordPad | 標準 | Win32 RichEdit | best-effort | |
-| Edge | ブラウザ | Chromium | full | ✔ |
-| Chrome | ブラウザ | Chromium | full | |
-| Firefox | ブラウザ | Gecko 独自 TSF | best-effort | ✔ |
-| VS Code | Electron | Chromium + Monaco | full | ✔ |
-| Discord | Electron | Chromium `contenteditable` | best-effort | |
-| Slack | Electron | Chromium `contenteditable` | best-effort | |
-| Word | Office | Office 独自 | recorder | ✔ |
-| Excel | Office | Office 独自（セル / 数式バー） | recorder | |
-| Outlook | Office | Office 独自 | recorder | |
-| Windows Terminal | ターミナル | conhost / TSF level 差あり | full | ✔ |
+| Notepad | 標準 | Win32 / RichEdit 系 | full | 対象外（自動化済み） |
+| WordPad | 標準 | Win32 RichEdit | best-effort | 必須 |
+| Edge | ブラウザ | Chromium | full | 対象外（自動化済み） |
+| Chrome | ブラウザ | Chromium | full | 必須 |
+| Firefox | ブラウザ | Gecko 独自 TSF | best-effort | 必須 |
+| VS Code | Electron | Chromium + Monaco | full | 対象外（自動化済み） |
+| Discord | Electron | Chromium `contenteditable` | best-effort | 必須 |
+| Slack | Electron | Chromium `contenteditable` | best-effort | 任意 |
+| Word | Office | Office 独自 | recorder | 必須 |
+| Excel | Office | Office 独自（セル / 数式バー） | recorder | 任意 |
+| Outlook | Office | Office 独自 | recorder | 任意 |
+| Windows Terminal | ターミナル | conhost / TSF level 差あり | full | 必須 |
 
-「必須」列は TSF 実装系統ごとの代表 1 本で、実走時に必ず埋める対象。
-残りは時間の許す範囲で確認する。未実施でも §7 の記録テンプレートには 12 本すべての
+「対象外（自動化済み）」の 3 アプリは、M50 ハーネスの C-001〜C-012
+（`compat-test/targets/*.json`）が同じ動線を自動で回す。結果は DEV-716（Notepad の実機
+互換性検証）と、DEV-684 で配線した optional compat CI ステージから得る。
+この 3 アプリだけで証跡を採っても DEV-365 の実走は成立しない。
+
+「必須」は TSF 実装系統ごとの代表 1 本で、実走時に必ず埋める対象。
+自動化済みアプリを外したことに伴い、代表は Win32 / RichEdit 系が WordPad、Chromium が
+Chrome、Electron が Discord となる（Gecko の Firefox、Office の Word、conhost 系の
+Windows Terminal は変わらない）。
+「任意」は時間の許す範囲で確認する。未実施でも §7 の記録テンプレートには 9 本すべての
 行を残し、未実施の欄を `-` で埋めて報告する（行ごと落とすと「確認済み」と読まれるため）。
 
 ## 4. 確認項目
@@ -71,9 +81,11 @@ M50 のハーネス実装後は同ハーネスの追加ケースとして取り�
 | D-09 | 高 DPI 全画面 / モニタ跨ぎ | 全画面表示、および DPI の異なるモニタへウィンドウを移動して D-01〜D-02 を再走 | 移動後も下線が出て、位置がずれない |
 | D-10 | 他 IME との比較 | 同じ操作を MS-IME で行い見比べる | 下線の有無・太さ・色に目立つ差がない。差があれば症状を記録する |
 
-D-08 / D-09 の対象は Notepad / Edge / VS Code の 3 本で、この 3 本では実施が必須
+D-08 / D-09 の対象は WordPad / Chrome / Discord の 3 本で、この 3 本では実施が必須
 （省略は不合格。§5）。他のアプリでは `N/A` としてよい。DPI 追従はアプリ固有では
 なく TSF とアプリのレイアウト側の問題として現れるため、系統の異なる 3 本で足りる。
+自動化済みの 3 アプリでは 150% DPI を C-006 が見るが、200% と D-09（全画面 /
+モニタ跨ぎ）は自動化されていないため、上の 3 本の目視で押さえる。
 
 ## 5. 合格条件
 
@@ -86,7 +98,7 @@ D-08 / D-09 の対象は Notepad / Edge / VS Code の 3 本で、この 3 本で
 | D-01 / D-04 / D-05 / D-06 / D-07 | pass 必須 | 必須アプリすべてで期待どおりである |
 | D-03 | pass 必須 | 文字が読めなくなる（前景色と背景色が同化する、選択範囲と区別できない）事象が 1 件もない |
 | D-02 | follow-up 必須 | 必須アプリすべてで下線が出るのが合格。出ないアプリがあれば、対象アプリと症状を DEV-365 に列挙して follow-up Issue を起票・リンクする（§6 の既知差異により Chromium 系と conhost 系では不一致が出うるため即 fail としない） |
-| D-08 / D-09 | follow-up 必須 | 対象の Notepad / Edge / VS Code すべてで実施し、下線の追従が崩れた場合は対象アプリ・スケール・モニタ構成と症状を DEV-365 に記録して follow-up Issue を起票・リンクする。実施自体を省略した場合は不合格 |
+| D-08 / D-09 | follow-up 必須 | 対象の WordPad / Chrome / Discord すべてで実施し、下線の追従が崩れた場合は対象アプリ・スケール・モニタ構成と症状を DEV-365 に記録して follow-up Issue を起票・リンクする。実施自体を省略した場合は不合格 |
 | D-10 | 記録のみ | 合否に含めない。差分は所見として記録する |
 
 これらに加えて、確定後に下線が残る、未確定文字列が二重に表示される、
@@ -103,9 +115,8 @@ follow-up 必須の項目は、**起票した Issue を DEV-365 にリンクす�
 
 | アプリ / 種別 | 効いてくる項目 | 内容 |
 |---|---|---|
-| Edge / Chrome（Chromium） | D-02 / D-03 | display attribute が完全には反映されず、下線が IME 既定描画になる場合がある |
+| Chrome（Chromium） | D-02 / D-03 | display attribute が完全には反映されず、下線が IME 既定描画になる場合がある |
 | Firefox | D-02 / D-09 | TSF サポートが best-effort。属性の反映と矩形取得に差が出る |
-| VS Code（Monaco） | D-01 / D-07 | 未確定中に Monaco 独自の補完が出て、composition の見た目が競合する |
 | Discord / Slack | D-01 / D-09 | `contenteditable` で未確定文字列の位置精度が低い |
 | Word / Excel / Outlook | D-02 / D-03 | アプリ側が独自に未確定文字列を描く。Excel はセル編集と数式バーで context が切り替わる |
 | Windows Terminal | D-02 | conhost 系で TSF level が下がる場面があり、下線が出ないことがある |
@@ -127,10 +138,10 @@ follow-up 必須の項目は、**起票した Issue を DEV-365 にリンクす�
 
 | アプリ | D-01 | D-02 | D-03 | D-04 | D-05 | D-06 | D-07 | D-08 | D-09 | D-10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Notepad | | | | | | | | | | |
-| Edge | | | | | | | | | | |
+| WordPad | | | | | | | | | | |
+| Chrome | | | | | | | | | | |
 | Firefox | | | | | | | | | | |
-| VS Code | | | | | | | | | | |
+| Discord | | | | | | | | | | |
 | Word | | | | | | | | | | |
 | Windows Terminal | | | | | | | | | | |
 
@@ -138,14 +149,12 @@ follow-up 必須の項目は、**起票した Issue を DEV-365 にリンクす�
 
 | アプリ | D-01 | D-02 | D-03 | D-04 | D-05 | D-06 | D-07 | D-08 | D-09 | D-10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| WordPad | | | | | | | | | | |
-| Chrome | | | | | | | | | | |
-| Discord | | | | | | | | | | |
 | Slack | | | | | | | | | | |
 | Excel | | | | | | | | | | |
 | Outlook | | | | | | | | | | |
 
-D-08 / D-09 は Notepad / Edge / VS Code のみ必須で、他アプリでは `N/A` でよい。
+D-08 / D-09 は WordPad / Chrome / Discord のみ必須で、他アプリでは `N/A` でよい。
+自動化済みの Notepad / Edge / VS Code は本テンプレートに行を置かない（§3）。
 
 ### 不一致の所見
 

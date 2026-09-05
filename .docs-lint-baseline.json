@@ -1,7 +1,6 @@
 {
   "status": {
     "CLAUDE.md": 1,
-    "README.md": 1,
     "THIRD_PARTY_LICENSES": 4,
     "docs/ai-backend-spec.md": 11,
     "docs/auto-word-registration-spec.md": 3,
@@ -11,11 +10,10 @@
     "docs/copilot-pc-backend-spec.md": 3,
     "docs/dev-infrastructure-spec.md": 10,
     "docs/dynamic-punctuation-spec.md": 6,
-    "docs/handoff/human-gate-batch-runbook.md": 2,
+    "docs/handoff/human-gate-batch-runbook.md": 1,
     "docs/handoff/windows-diagnostics-playbook.md": 1,
     "docs/inline-english-candidate-spec.md": 1,
-    "docs/learning-data-management-spec.md": 1,
-    "docs/legacy-parity-spec.md": 10,
+    "docs/legacy-parity-spec.md": 6,
     "docs/model-management-spec.md": 1,
     "docs/modernbert-ja-scoring-spec.md": 1,
     "docs/neural-reranker-spec.md": 3,
@@ -27,8 +25,8 @@
     "docs/typo-correction-learning-spec.md": 1,
     "docs/user-learning-enhancement-spec.md": 2,
     "docs/windows-tsf-host-architecture.md": 7,
-    "docs/zenzai-gpu-route.md": 4,
+    "docs/zenzai-gpu-route.md": 1,
     "docs/zenzai-inference-spec.md": 6,
-    "plans/windows-port-roadmap.md": 36
+    "plans/windows-port-roadmap.md": 30
   }
 }

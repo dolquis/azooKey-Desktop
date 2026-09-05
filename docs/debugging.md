@@ -2,20 +2,8 @@
 
 ## Build
 
-Windows (推奨):
-
-```powershell
-cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
-cmake --build --preset windows-debug
-ctest --preset windows-debug --no-tests=error
-```
-
-ローカルで全テストを一括確認する場合は、`azookey_check` target を使う。
-この target はテスト実行ファイルと bench 実行ファイルを先にビルドしてから CTest を起動するため、古い実行ファイルに対して `ctest` だけを実行する事故を避けやすい。
-
-```powershell
-cmake --build --preset windows-debug --target azookey_check
-```
+ビルドとテストの標準手順の正典は [`README.md`](../README.md)（`windows-debug` preset と
+`azookey_check` target）。ここでは README との差分だけを扱う。
 
 Release 構成:
 

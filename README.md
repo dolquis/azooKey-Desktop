@@ -112,7 +112,8 @@ cmake --build --preset windows-llama-debug
 fallback-only の TIP テストに限り、明示的に `-AllowMockHost` を指定できます。
 現時点では `models\zenzai\` へ GGUF を配置しただけではモデルを自動選択しません。
 実モデルの登録では `-ModelPath` に配置済み GGUF の絶対パスを指定してください。
-実モデルの検証手順は [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
+実モデルの計測ゲートとバックエンド経路の決定は
+[`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
 
 `register-dev.ps1` は登録時に、TIP DLL とその親ディレクトリへ
 `ALL APPLICATION PACKAGES`（SID `S-1-15-2-1`）の読み取り+実行を付与します。これが無いと

@@ -299,9 +299,11 @@ Host を kill する検証を先に走らせると、以降のゲートが供給
 DEV-847 と DEV-153 は対象アプリが重なる。
 Notepad、Edge、VS Code をこの順に開き、各アプリで DEV-847 の G1〜G3 と DEV-153 の計測を続けて行うと、アプリの切り替えが 1 巡で済む。
 DEV-365（DisplayAttribute の描画差の目視）はこの巡回に相乗りさせない。
-巡回で開く Notepad / Edge / VS Code は DEV-365 の対象アプリから外れており、この 3 本だけで
-証跡を採っても DEV-365 は閉じられない。
-対象アプリは `compat-test/m3_display_attribute_checklist.md` §3 が正典である。
+対象アプリと、自動化済みアプリで省略してよい項目は
+`compat-test/m3_display_attribute_checklist.md` §3 と §3.1 が正典である。
+巡回で開く Notepad / Edge / VS Code は C-001〜C-012 が入力動線を自動で見るが、下線と配色
+（D-02 / D-03）は自動側が判定しないため、DEV-365 側の目視が要る。
+巡回で得た打鍵の証跡だけで DEV-365 は閉じられない。
 記録は課題ごとに分けて残す。巡回でまとめて採っても、検証メモは DEV-847 と DEV-153 に別々に書く。
 
 DEV-676 の項目 3（別ユーザー provisioning）は、VM に第 2 のローカルユーザーが要る。

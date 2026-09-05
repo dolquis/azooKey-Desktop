@@ -136,14 +136,15 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
 
 void InferenceEngine::RefreshDictionaryLocked() {
   if (indexed_user_dict_ == user_dict_ &&
-      (!user_dict_ || indexed_user_revision_ == user_dict_->revision())) return;
+      (!user_dict_ || indexed_user_revision_ == user_dict_->revision()))
+    return;
   dictionaries_.SetUserWords(user_dict_ ? user_dict_->All() : std::vector<learning::UserWord>{});
   indexed_user_dict_ = user_dict_;
   indexed_user_revision_ = user_dict_ ? user_dict_->revision() : 0;
 }
 
 bool InferenceEngine::LoadDictionaryLayer(learning::LayerId layer,
-                                         const std::filesystem::path& path, bool verify) {
+                                          const std::filesystem::path& path, bool verify) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   return dictionaries_.LoadStatic(layer, path, verify);
 }
@@ -461,8 +462,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     using_model_converter = model_converter_ && converter == model_converter_;
     // Preserve M9's explicit user word score while static layers use M53 scoring.
     RefreshDictionaryLocked();
-    merged = DictionaryCandidates(dictionaries_, kana, learning::LookupMode::Exact,
-                                  now_epoch_sec, 32, false);
+    merged = DictionaryCandidates(dictionaries_, kana, learning::LookupMode::Exact, now_epoch_sec,
+                                  32, false);
     if (user_dict_ && user_dictionary_enabled_) {
       auto words = user_dict_->Lookup(kana);
       merged.reserve(words.size());
@@ -561,9 +562,10 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
   RefreshDictionaryLocked();
-  auto dictionary_predictions = DictionaryCandidates(dictionaries_, kana,
-      learning::LookupMode::PredictivePrefix, now_epoch_sec, 32);
-  candidates.insert(candidates.begin(), dictionary_predictions.begin(), dictionary_predictions.end());
+  auto dictionary_predictions = DictionaryCandidates(
+      dictionaries_, kana, learning::LookupMode::PredictivePrefix, now_epoch_sec, 32);
+  candidates.insert(candidates.begin(), dictionary_predictions.begin(),
+                    dictionary_predictions.end());
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 
   std::vector<core::Candidate> merged;

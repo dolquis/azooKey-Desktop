@@ -84,7 +84,7 @@ class InferenceEngine {
   // External, non-owning. May be nullptr (no user dictionary).
   void SetUserDictionary(learning::UserDictionary* dict);
   bool LoadDictionaryLayer(learning::LayerId layer, const std::filesystem::path& path,
-                            bool verify = false);
+                           bool verify = false);
   void EnableDictionaryLayer(learning::LayerId layer, bool enabled);
   bool AddUserWord(const learning::UserWord& word);
   bool RemoveUserWord(const std::string& word, const std::string& ruby);

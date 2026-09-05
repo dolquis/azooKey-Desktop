@@ -766,6 +766,58 @@ TSF/COM registration smoke は登録状態を変更するため、
 並列実行で timeout が生じてもケース単位の `TIMEOUT` は緩和せず、共有状態の有無と
 並列度を先に見直す。
 
+### 4.9 ブランチ保護と必須チェック
+
+`main` は GitHub の branch ruleset で保護する。`AGENTS.md` が運用ルールとして定める
+「`main` へ直接 push しない」「PR は Draft から始める」のうち、前者を設定として担保する。
+
+ruleset の対象は既定ブランチ（`main`）とし、bypass list は置かない。適用する規則は次のとおり。
+
+| 規則 | 設定 |
+|---|---|
+| Restrict deletions | 有効 |
+| Block force pushes | 有効 |
+| Require a pull request before merging | 有効。required approvals は 0 |
+| Require status checks to pass | 有効。`Require branches to be up to date` は無効 |
+| Require linear history | 無効 |
+| Require signed commits | 無効 |
+
+required approvals を 0 とするのは、単独オーナーが自分の PR を承認できないためである。
+1 以上にすると全 PR が merge 不能になる。したがって本 ruleset が強制するのは「PR を経由すること」
+までであり、人間の承認そのものは強制しない。
+
+`Require branches to be up to date` を無効とするのは、Windows ビルドが 45 分を要し、
+`main` へ merge するたびに全 PR の再実行が発生するためである。
+
+`Require linear history` を無効とするのは、`AGENTS.md` が通常のマージ方法をノーマルマージと
+定めているためである。
+
+`Require signed commits` を無効とするのは、有効化するとローカルおよびエージェント経由の push に
+GPG / SSH 署名の設定が必要になるためである。GitHub の web merge が生成するコミットは GitHub の鍵で
+署名され Verified として扱われるので、web merge 経由の履歴について署名の欠落は生じない。
+
+#### required checks の選定基準
+
+**required とするジョブは、ワークフローの `paths` / `paths-ignore` によらず、すべての PR で
+必ず check run を生成するものに限る。** 発火しないワークフローのジョブは check run 自体が
+生成されず、required に指定した PR は待機状態のまま merge できなくなる。`if:` で skip された
+ジョブは skipped として報告されるため、この問題は起きない。
+
+この基準を満たす required checks は次のとおり。
+
+| check 名 | ワークフロー |
+|---|---|
+| `Secret scan` | `.github/workflows/secret-scan.yml` |
+
+`.github/workflows/windows.yml` はワークフローレベルの `paths-ignore` で docs 変更を除外するため、
+その配下のジョブ（`Windows Debug` / `Windows Release` / `Pre-commit` / `C++ format (changed-lines gate)` /
+`Dependency review`）はこの基準を満たさない。同ファイル冒頭のコメントが定めるとおり、
+required checks へ加えるには `paths-ignore` を `changes` ジョブの出力による条件分岐へ移し、
+`if: always()` で全 `needs` の結果を集約する終端ジョブを設ける必要がある（DEV-1000）。
+`.github/workflows/docs.yml` と `.github/workflows/sbom.yml` も `paths` で絞られるため対象外とする。
+`.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する
+対話ジョブであり、required にしても判定に寄与しない。
+
 ### M38 受け入れ条件
 
 - Debug / Release 両構成が CI で緑

@@ -87,7 +87,7 @@ In Review が「PR レビュー待ち」「マージ済み検証メモ待ち」�
 
 ### 3.2 Cycle は commitment（scope の上限と、外す条件）
 
-Linear は cycle の終了時に未完了 Issue を次の cycle へ自動で繰り越す。入れた分は消えず、残った分がそのまま次の scope になるため、Cycle を「やりたいこと置き場」として使うと scope は単調に増え、burndown は平坦なままになる（Cycle 8 は scope 96 件・completed 0 件で終わった）。Cycle には **その週に状態が動く見込みのあるものだけ**を入れる。
+Linear は cycle の終了時に未完了 Issue を次の cycle へ自動で繰り越す。入れた分は消えず、残った分がそのまま次の scope になるため、Cycle を「やりたいこと置き場」として使うと scope は単調に増え、burndown は平坦なままになる（2026-07-27 監査では Cycle 8 が scope 96 件・completed 0 件で終わっていた。DEV-666）。Cycle には **その週に状態が動く見込みのあるものだけ**を入れる。
 
 数値（件数・Project 数・持ち越し回数）は人間 lead が決め、cycle の実績で見直す。
 

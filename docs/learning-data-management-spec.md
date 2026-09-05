@@ -333,15 +333,10 @@ configure offline ガードに違反しないことを CI で確認する。
 
 ## 10. M49 受け入れ条件
 
-- 学習データを UI から検索できる
-- 個別忘却が次回候補順位に反映される
-- 同一 Windows ユーザー / 同一マシン上で export → import の round-trip
-  が件数一致で復元できる（DPAPI ユーザースコープの制約により他マシン /
-  他ユーザーへの移行は本受け入れ範囲外。クロス環境復元が必要な場合は
-  §5.2 の明示的な平文エクスポートを使う）
-- 暗号化済みデータは他ユーザーで復号できない（DPAPI ユーザースコープ）
-- M55 typo / M36-A auto_words の学習データも対象に含む（実装済みなら）
-- M46 secure 中は export / import が blocking される
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M49 節とする。本書は可視化・忘却・export / import の形式と DPAPI ユーザースコープの
+制約を定義し、受け入れ条件を複製しない。クロス環境復元が必要な場合は §5.2 の明示的な
+平文エクスポートを使う。
 
 ## 11. プロセス終了時の flush 保証境界
 

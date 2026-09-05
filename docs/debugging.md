@@ -69,6 +69,36 @@ CTest に登録され、p95 が 50ms 以上なら失敗する。
 5. 候補確定後、同じ reading を再変換し、確定済み候補が上位に来る（学習効果）。
 6. Chrome / VSCode / Office でも基本操作確認。
 
+### ユーザー辞書 CLI ラウンドトリップ
+
+`inference-host` の `userdict` サブコマンドで、ユーザー辞書の追加・一覧・
+インポート・エクスポート・削除を Host / TIP なしで確認できる（M9 の検証手順。
+永続化フォーマットと import の重複解決は
+[`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md)）。
+
+```powershell
+$exe = 'build\windows-debug\inference-host\azookey_inference_host.exe'
+$dict = "$env:TEMP\user_dict.json"
+
+# 追加 → 一覧
+& $exe --user-dict $dict userdict add --reading azookey --surface azooKey --offline
+& $exe --user-dict $dict userdict list --format tsv
+
+# TSV インポート（`reading<TAB>surface<TAB>cid<TAB>mid<TAB>weight`）
+& $exe --user-dict $dict userdict import "$env:TEMP\import.tsv"
+
+# エクスポート（`{ "version": 1, "entries": [...] }` 形式の JSON）
+& $exe --user-dict $dict userdict export "$env:TEMP\export\user_dict.json"
+
+# 削除 → 一覧で消えたことを確認
+& $exe --user-dict $dict userdict remove --reading azookey --surface azooKey --offline
+& $exe --user-dict $dict userdict list --format tsv
+```
+
+`import` は `imported` / `skipped` の件数を報告し、重複する読み・表層は後勝ちで
+置換する。同じ `--user-dict` で Host を起動して `QueryCandidates` を投げると、
+ユーザー辞書の語が最優先で返る。
+
 ## ログ収集
 
 Release / Debug のどちらも、環境変数で明示的に有効化した場合だけ TIP / Host の

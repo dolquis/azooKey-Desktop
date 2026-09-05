@@ -365,13 +365,9 @@ Dispatcher は IPC ハンドラの先頭で `Resolve` を呼び、その結果�
 
 ## 11. M48 受け入れ条件
 
-- VS Code（`code.exe`）で技術語タグの候補順位が上がる
-- Outlook（`outlook.exe`）で polite タグの候補順位が上がる
-- secure 指定アプリ（`profile.privacyMode = secure`）で学習・外部 AI が
-  停止する（M46 と整合）
-- アプリ切替後 1 秒以内にプロファイルが反映される
-- 既存 `promptPrefixByApp` 値が新 `profilesByApp[].promptPrefix` として
-  読み込まれる（後方互換）
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M48 節とする。本書はプロファイル解決・スキーマ・スコア適用・後方互換の写像を定義し、
+受け入れ条件を複製しない。
 
 ## 12. 将来拡張（M48 範囲外）
 

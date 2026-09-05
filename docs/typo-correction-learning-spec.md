@@ -881,17 +881,13 @@ warning を CHANGELOG に記載）。M48 §6 の `promptPrefixByApp` と同じ
 
 ### 12.15 M55 受け入れ条件
 
-typo 補正指標は補正有効モードで採取する（`conversion-quality-benchmark-spec.md`
-§7・§14。`--typo-mode off` での値は受け入れに用いない。baseline はモード別管理）。
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M55 節とする。本書は補正の判定式・定数・スキーマ・v1 からの読み替え規則を定義し、
+受け入れ条件を複製しない。
 
-- M52 ベンチ（`--typo-mode rank`）で `typo_correction_top5_accuracy` が 85% 以上
-- M52 ベンチ（`--typo-mode rank`）で `typo_false_positive_rate` が 1% 未満
-- M52 ベンチ（`--typo-mode aggressive`）で `typo_overcorrection_rate` が 0.5% 未満
-- M35 の既存 `typo_corrections.tsv` から自動マイグレートできる
-- M46 secure 中は補正・学習が一切発生しない
-- v1 互換: `mode = off / suggest` の挙動が v1 と等価
-- v1 の `mode = auto_replace` が v2 の `aggressive` として読み替え
-  られる
+**実装上の留意点**: typo 補正指標は補正有効モードで採取する
+（`conversion-quality-benchmark-spec.md` §7・§14）。`--typo-mode off` での値は受け入れにも
+§12.16 の校正にも用いない。baseline はモード別に管理する。
 
 ### 12.16 補正定数と M52 校正の対応
 
@@ -915,9 +911,9 @@ typo 補正指標は補正有効モードで採取する（`conversion-quality-b
 | `minConfidenceForRanking`（§12.14） | 0.70 | `< minConfidenceForTopCandidate` | FP 率（rank） |
 | `minConfidenceForTopCandidate`（§12.14） | 0.90 | `> minConfidenceForRanking` | overcorrection 率（aggressive） |
 
-- **受け入れ判定（§12.15）の指標と閾値**: `typo_correction_top5_accuracy`
-  ≥ 85%（rank）/ `typo_false_positive_rate` < 1%（rank）/
-  `typo_overcorrection_rate` < 0.5%（aggressive）。
+- **受け入れ判定に用いる指標**: `typo_correction_top5_accuracy`（rank）/
+  `typo_false_positive_rate`（rank）/ `typo_overcorrection_rate`（aggressive）。
+  閾値は roadmap M55 の受け入れ条件を正典とする（§12.15）。
 - 校正は係数の数値のみを動かし、本表の不変条件・式の形・モード別の rank cap
   （§12.11）は固定する。SQLite/TSV スキーマ（§12.8）を変える結果が出た場合は
   M55 範囲外とし別 M で扱う。

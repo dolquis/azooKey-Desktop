@@ -826,42 +826,19 @@ app-profile-spec §7 が 1 回適用し `dictionary_score` には入れない。
 
 ### 14.13 M53 受け入れ条件
 
-- M52 ベンチで `named_entity_recall_at_5` が 90% 以上
-- M52 ベンチで `neologism` カテゴリの top5 が、**M53 v1 で同梱される
-  `sudachi_lexicon`（core 版。NEologd 由来データを Apache-2.0 で内包）+
-  `base_lexicon`** の範囲で baseline 比改善。**NEologd 本体（`neologd_lexicon`）は
-  同梱しない**ため v1 のベンチ対象外（§14.9）。`neologd_lexicon`（別 DL
-  pack）有効時の追加新語改善は **neologd pack follow-up（§14.10。M36-B とは
-  別作業）完了時のみ**、当該 pack を有効化した構成で評価する（follow-up
-  チェック。`plans/windows-port-roadmap.md` M53 entry と整合）。本項は §14.10
-  の配布ガード（standalone NEologd
-  単体パック非同梱。SudachiDict 内包の NEologd 由来データは対象外）と
-  矛盾しない（v1 ベンチは同梱の sudachi/base を測る）
-- 既存 M36-A `auto_words.tsv` が DictionaryStore の auto_words layer
-  として読み込まれる（後方互換）
-- 既存 M9 `user_dict.json` が user_dictionary layer として読み込まれる
-- 任意の layer を ON / OFF できる
-- `app_specific_dictionary` layer のデータ構造と読み込み経路は M53 で
-  確立する（実際の boost 適用は M48 完了後の統合検証で確認）。M48 未完了時
-  は layer を空（無効）として扱い、本受け入れ条件は M48 完了後の follow-up
-  チェックとする
-- 配布 MSIX に同梱する辞書（`base` / `sudachi`(core) / `named_entity` /
-  `technical_terms`）が全て再配布可ライセンス（**Apache-2.0 / BSD-3-Clause /
-  CC0 / CC-BY-4.0 / 権利主張なし（パブリックドメイン相当。例: 日本郵便 郵便
-  番号データ）**）であり、§14.10 の `ThirdPartyNotices.txt` に列挙・帰属
-  表示される（§14.9。BSD-3-Clause は SudachiDict が内包する UniDic 由来、
-  権利主張なしは `named_entity` の郵便データ由来）
-- `neologd_lexicon`（standalone mecab-ipadic-NEologd パック）は MSIX 非同梱
-  （別 pack DL・SHA256 検証・既定無効。取り込みは §14.10 の neologd pack
-  follow-up 経路。M36-B とは別作業）。MSIX 構築の配布ガードで
-  **NEologd 単体パック**の混入なしが CI で緑（SudachiDict 内包の NEologd 由来
-  データは対象外。§14.10）
-- GeoNames 由来データを同梱する場合、設定アプリのライセンス画面に CC-BY-4.0
-  の帰属が表示される（§14.10）
-- `dictionary_score` の確定係数（§14.11）が実装の既定値と一致し、worked
-  example（"TensorRT" = 1.32。M48 タグ boost は含まない）が単体テストで再現
-  される。M48 タグ boost は app-profile-spec §7 が `final_score` に 1 回適用
-  し、`dictionary_score` には二重適用しない
+受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
+の M53 節とする。本書は辞書層の構成・同梱判定・スコア係数・帰属表示を定義し、受け入れ条件を
+複製しない。物理層（`.azdic`）の受け入れ条件は §15.11 が定義し、roadmap M53 から参照される。
+
+**実装上の留意点**:
+
+- M53 v1 のベンチ対象は同梱の `sudachi_lexicon`（core 版。NEologd 由来データを Apache-2.0
+  で内包）+ `base_lexicon` の範囲に限る。`neologd_lexicon`（別 DL pack）有効時の追加改善は
+  §14.10 の neologd pack follow-up（M36-B とは別作業）完了時に、当該 pack を有効化した
+  構成で評価する。
+- §14.10 の配布ガードが除外するのは **standalone NEologd 単体パック**であり、SudachiDict が
+  内包する NEologd 由来データは対象外。
+- `app_specific_dictionary` layer は M48 未完了時に空（無効）として扱う。
 
 ## 15. M53 追補（DEV-412）: system 辞書の物理層
 
@@ -1321,18 +1298,12 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 
 ### 15.11 DEV-412 受け入れ条件
 
-- `.azdic` v1 のリーダとビルダが往復し、同一入力から 2 回ビルドしたアーティファクトが
-  バイト単位で一致する。
-- `CommonPrefixSearch` と `PredictiveSearch` が §15.4 の契約（探索の向き・順序・UTF-8 境界・
-  計算量・非例外）を満たし、参照実装との一致テストが緑である。静的層と mutable 層が同じ
-  `LookupMode` に対して同じ結果集合を返す。
-- 破損した `.azdic` を与えたとき、当該層だけが無効化され、他層の候補生成が継続する。
-- `user_dictionary` / `auto_words` / `app_specific_dictionary` が既存の永続化形式のまま
-  層として読み込まれ、前方一致を返す（§15.7）。
-- 同梱アーティファクトの `META` が寄与した上流のライセンスと帰属を保持し、
-  `ThirdPartyNotices.txt` に反映される（§14.10 / `docs/licensing-policy.md`）。
-- 同梱 `.azdic` の合計サイズと各検索の p95 が §15.9 の予算に収まる。
-  超過する場合は §15.9 の判断（絞り込みか実装差し替えか）を記録したうえで予算を改訂する。
+物理層（`.azdic`）の受け入れ条件の定義も、論理層と同じく
+[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) の M53 節を正典とする
+（§14.13 と同じ扱い）。本章 §15.2〜§15.10 は判定の根拠となる形式・契約・予算を定義し、
+受け入れ条件を複製しない。roadmap M53 の物理層項目は、往復とビルド再現性は §15.2〜§15.3、
+検索 API の契約は §15.4、層単位の無効化と既存永続化形式の維持は §15.5〜§15.7、
+`META` 由来の帰属は §14.10、サイズとレイテンシ予算は §15.9 を参照する。
 
 ### 15.12 実装着手時に確定する事項
 

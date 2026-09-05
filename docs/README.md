@@ -86,19 +86,9 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 
 ## Phase 一覧
 
-`plans/windows-port-roadmap.md` の Phase は通し連番（Phase 1〜7）+ 追加機能 +
-独立トラックで構成される。
-
-| Phase | スコープ | M 範囲 |
-|---|---|---|
-| Phase 1 | TIP 基盤完成 | M1〜M4 |
-| Phase 2 | 候補選択と確定動線 | M5/M6/M10 |
-| Phase 3 | 実 Zenzai と辞書 UI | M8/M9 |
-| Phase 4 | 配布可能化 v1.0 | M11/M12 |
-| Phase 5 | レガシー parity 復元 | M13〜M19 |
-| Phase 6 | Windows ネイティブ深耕 | M20〜M27 |
-| Phase 7 | サイドロード配信 | M28〜M34 |
-| 追加機能 | 差別化機能（Phase 連番とは独立） | M35 / M36-A・M36-B / M48 / M58 / M59 / M60 / M61 / M62 |
-| 開発基盤 | ビルド再現性・CI・IPC 堅牢化・観測性・可用性・診断・復旧 UX・互換性テスト・trace（Phase 連番とは独立） | M37〜M43 + M44/M47/M50/M51 |
-| プライバシー / モデル管理 / 学習データ UI | Phase 5/6/7 の既存 M に依存する付加機能 | M45 / M46 / M49 |
-| 変換品質 | 評価ベンチ・辞書・学習強化・打ち間違え統合・Tiny Reranker・ModernBERT スコアリング（Phase 連番とは独立） | M52〜M57 |
+Phase の構成（Phase 1〜7 + 追加機能 + 開発基盤 + プライバシー / モデル管理 /
+学習データ UI + 変換品質）と、各 Phase が対象とするマイルストーン番号は
+[`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) を正典とする。
+v1.0 までの Phase 1〜4 は同ファイル「v1.0 までの実行計画（Phase 1〜4）」の索引表、
+Phase 5 以降は各 Phase 章の見出しが対象 M 範囲を示す。本 README は Phase 表を
+複製しない（roadmap 側の更新に追随できなくなるため）。

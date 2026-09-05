@@ -442,7 +442,7 @@ aux テキスト用 `ClientAction` を 1 つ足しただけで、M62 リライ�
     の変更は**不要**（M62-A を膨らませない）。
   - **Host 側データ駆動リライタ（M62-C 記号 / M62-D 絵文字）**: このときに限り `ipc::CandidateField`
     に `description` フィールドを append-only 追加して伝送する。
-- **(A2) aux / ステータステキスト表示アクションの欠落（確度: 中・M62 とは別チャネル）**: karukan の
+- **(A2) aux / ステータステキスト表示アクションの欠落（M62 とは別チャネル）**: karukan の
   `EngineAction::UpdateAuxText` / `HideAuxText`（`engine/types.rs`）は、reading やモード表示など
   **候補に紐づかない補助 / ステータステキスト**のためのチャネルで、(A1) の候補ごとの説明とは別物。
   azooKey の §1.3 には対応する aux テキストアクションが無い。azooKey は reading を preedit、
@@ -920,9 +920,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | Unicode 入力 | `core/tests/unicode_input_test.cpp` | 範囲チェック、サロゲートペア生成 |
 | 候補ウィンドウのレイアウトと DPI 換算 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算 |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3） |
-
-§3.2 の予測候補ウィンドウ配置（M15）は、新規ファイルを作らず
-`candidate_window_dpi_test.cpp` に追加する。
+| 予測候補ウィンドウ配置（§3.2） | M15 実装 PR で `tsf-tip/tests/` に追加 | Windows 限定。モニタ矩形と配置候補の切替 |
 
 ## 11. 参照
 

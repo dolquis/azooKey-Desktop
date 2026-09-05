@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,10 +36,14 @@ struct DictionaryEntry {
   bool confirmed{true};
   uint64_t last_used{};
   double score{};
+  bool use_user_word_score{};
+  std::optional<double> user_word_score;
 };
 struct LookupContext {
   LookupMode mode{LookupMode::Exact};
   size_t max_results{32};
+  bool exclude_exact_key{};
+  double user_word_default_score{1.5};
   uint64_t now_epoch_sec{};
   uint16_t excluded_layers{};
   // Category ids follow auto-word-registration-spec section 14.4.
@@ -53,6 +58,7 @@ class DictionaryStore {
   void ReplaceMutable(LayerId layer, std::vector<DictionaryEntry> entries);
   void SetUserWords(const std::vector<UserWord>& words);
   void EnableLayer(LayerId layer, bool enabled);
+  // Successfully loaded/initialized, independently of enabled state or entry count.
   bool IsAvailable(LayerId layer) const;
   std::string LayerError(LayerId layer) const;
   static double LayerPriority(LayerId layer, bool confirmed = true);
@@ -64,6 +70,8 @@ class DictionaryStore {
                   std::vector<DictionaryEntry>& out) const;
   std::array<std::unique_ptr<core::DoubleArrayTrie>, 5> static_;
   std::array<Index, 3> mutable_;
+  std::array<bool, 3> mutable_available_{};
+  std::array<std::string, 5> static_errors_;
   std::array<bool, 8> enabled_{{true, true, false, true, true, true, true, true}};
 };
 }  // namespace azookey::learning

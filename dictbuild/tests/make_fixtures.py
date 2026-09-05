@@ -28,6 +28,7 @@ def generate(directory: Path) -> None:
     ]
     # Many prefixes and Unicode keys allow an independent map-based reference.
     rows += [f"word{i}\tき{i:04d}\t名詞\t5000\t0.3\tgeneral\tfixture" for i in range(200)]
+    rows += [f"high{i}\tよ{i}\t名詞\t0\t1.0\ttechnical\tfixture" for i in range(8)]
     tsv.write_text("# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic fixture\n"
                    "surface\treading\tpos\tcost\tfrequency\tcategory\tsource_id\n" +
                    "\n".join(rows) + "\n", encoding="utf-8", newline="\n")
@@ -35,6 +36,10 @@ def generate(directory: Path) -> None:
     repeated, _ = dictbuild.build([tsv], metadata, 4, directory)
     assert image == repeated
     (directory / "valid.azdic").write_bytes(image)
+    bundled = directory / "bundled"
+    bundled.mkdir(exist_ok=True)
+    (bundled / "base_lexicon.azdic").write_bytes(image)  # Deliberately wrong layer.
+    (bundled / "technical_terms_lexicon.azdic").write_bytes(image)
     (directory / "ThirdPartyNotices.txt").write_text(notices, encoding="utf-8")
     sections = {}
     for i in range(6):
@@ -56,6 +61,19 @@ def generate(directory: Path) -> None:
         broken[offset:offset + len(replacement)] = replacement
         if name != "hash":
             struct.pack_into("<Q", broken, 32, dictbuild.fnv(broken[64:]))
+        (directory / f"{name}.azdic").write_bytes(broken)
+    # Swap terminal ids and their references together: only global key order is invalid.
+    for name, other in (("key_order_same_depth", 2), ("key_order_other_depth", 1)):
+        broken = bytearray(image)
+        trie_off, trie_size = sections[b"TRIE"]
+        for off in range(trie_off, trie_off + trie_size, 16):
+            key_id = struct.unpack_from("<I", broken, off + 8)[0]
+            if key_id in (0, other):
+                struct.pack_into("<I", broken, off + 8, other if key_id == 0 else 0)
+        key_off = sections[b"KEYS"][0]
+        a, b = key_off, key_off + other * 8
+        broken[a:a + 8], broken[b:b + 8] = broken[b:b + 8], broken[a:a + 8]
+        struct.pack_into("<Q", broken, 32, dictbuild.fnv(broken[64:]))
         (directory / f"{name}.azdic").write_bytes(broken)
     (directory / "truncated.azdic").write_bytes(image[:63])
     (directory / "ready").write_text("ready", encoding="utf-8")

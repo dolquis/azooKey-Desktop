@@ -7,6 +7,7 @@
 
 #include "azookey/core/DoubleArrayTrie.h"
 #include "azookey/core/SimpleConverter.h"
+#include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/learning/DictionaryStore.h"
 
@@ -38,12 +39,15 @@ TEST(DictionaryTrie, SearchDirectionsAndShortestFirstLimit) {
 }
 
 TEST(DictionaryTrie, RejectsCorruptionIncludingValidHashBadReferences) {
-  for (const char* name : {"magic", "version", "flags", "duplicate", "unaligned", "overflow",
-                           "hash", "entry", "kind", "string", "pos", "source", "truncated"}) {
+  for (const char* name :
+       {"magic", "version", "flags", "duplicate", "unaligned", "overflow", "hash", "entry", "kind",
+        "string", "pos", "source", "truncated", "key_order_same_depth", "key_order_other_depth"}) {
     SCOPED_TRACE(name);
     core::DoubleArrayTrie trie;
     const auto path = Fixture((std::string(name) + ".azdic").c_str());
     EXPECT_FALSE(trie.Load(path, true));
+    if (std::string_view(name).starts_with("key_order"))
+      EXPECT_EQ(trie.Error(), "invalid key order");
     EXPECT_FALSE(trie.IsAvailable());
     core::PrefixMatch match;
     EXPECT_FALSE(trie.ExactMatch("とう", match));
@@ -168,5 +172,113 @@ TEST(DictionaryHost, SuppliesConversionAndPredictionAndTracksUserMutations) {
   result = engine.QueryPredictions("ゆに", "", 0);
   EXPECT_FALSE(std::any_of(result.begin(), result.end(),
                            [](const auto& e) { return e.surface == "unique"; }));
+}
+TEST(DictionaryStore, AvailabilityAndLoadDiagnostics) {
+  learning::DictionaryStore store;
+  EXPECT_FALSE(store.IsAvailable(learning::LayerId::User));
+  store.SetUserWords({});
+  EXPECT_TRUE(store.IsAvailable(learning::LayerId::User));
+  store.EnableLayer(learning::LayerId::User, false);
+  EXPECT_TRUE(store.IsAvailable(learning::LayerId::User));
+  EXPECT_FALSE(store.LoadStatic(learning::LayerId::Base, Fixture("valid.azdic")));
+  EXPECT_FALSE(store.IsAvailable(learning::LayerId::Base));
+  EXPECT_EQ(store.LayerError(learning::LayerId::Base), "layer id mismatch");
+  EXPECT_FALSE(store.LoadStatic(learning::LayerId::Base, Fixture("magic.azdic")));
+  EXPECT_NE(store.LayerError(learning::LayerId::Base), "layer id mismatch");
+  EXPECT_FALSE(store.LayerError(learning::LayerId::Base).empty());
+}
+
+TEST(DictionaryHost, CapsEntriesPreservesScoresAndReadingContract) {
+  learning::DictionaryStore store;
+  std::vector<learning::UserWord> words;
+  for (int i = 0; i < 80; ++i) {
+    learning::UserWord word{"user" + std::to_string(i), "ヨミ"};
+    word.value = i - 40.0;
+    words.push_back(word);
+  }
+  store.SetUserWords(words);
+  const auto predicted =
+      host::DictionaryCandidates(store, "よ", learning::LookupMode::PredictivePrefix, 0, 32);
+  ASSERT_EQ(predicted.size(), 32U);
+  EXPECT_EQ(predicted.front().score, 39.0);
+  EXPECT_EQ(predicted.back().score, 8.0);
+  EXPECT_EQ(predicted.front().reading, "ヨミ");
+  EXPECT_TRUE(
+      host::DictionaryCandidates(store, "よみ", learning::LookupMode::PredictivePrefix, 0).empty());
+  EXPECT_TRUE(host::DictionaryCandidates(store, "よ", learning::LookupMode::PredictivePrefix, 0, 0)
+                  .empty());
+  learning::UserWord negative{"negative", "ネガ"};
+  negative.value = -5.0;
+  store.SetUserWords({negative, {"default", "デフォルト"}});
+  const auto negative_result =
+      host::DictionaryCandidates(store, "ね", learning::LookupMode::PredictivePrefix, 0);
+  ASSERT_EQ(negative_result.size(), 1U);
+  EXPECT_EQ(negative_result[0].score, -5.0);
+  const auto default_result = host::DictionaryCandidates(
+      store, "で", learning::LookupMode::PredictivePrefix, 0, 32, true, 2.5);
+  ASSERT_EQ(default_result.size(), 1U);
+  EXPECT_EQ(default_result[0].score, 2.5);
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("valid.azdic")));
+  const auto relaxed = host::DictionaryCandidates(store, "かーと", learning::LookupMode::Exact, 0);
+  ASSERT_EQ(relaxed.size(), 1U);
+  EXPECT_EQ(relaxed[0].reading, "かーと");
+  const auto extensions =
+      host::DictionaryCandidates(store, "とう", learning::LookupMode::PredictivePrefix, 0, 1);
+  ASSERT_EQ(extensions.size(), 1U);
+  EXPECT_NE(extensions[0].surface, "都");
+}
+
+class PredictingConverter : public core::IConverter {
+ public:
+  std::vector<core::Candidate> Convert(const std::string&,
+                                       const core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<core::Candidate> PredictNext(const std::string&,
+                                           const core::ConversionContext&) override {
+    return {{"model1", "よみ1", 1.0, core::CandidateSource::Model},
+            {"model2", "よみ2", .9, core::CandidateSource::Model},
+            {"model3", "よみ3", .8, core::CandidateSource::Model}};
+  }
+  std::vector<core::Candidate> Correct(const std::string&, const core::CorrectionHint&,
+                                       const core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const core::Candidate&, const core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+
+TEST(DictionaryHost, ReservesConverterPredictionsWithLiveReranker) {
+  learning::LearningStore store(Fixture("unused-learning.tsv"));
+  host::InferenceEngine engine(std::make_unique<PredictingConverter>(), &store, {});
+  ASSERT_TRUE(
+      engine.LoadDictionaryLayer(learning::LayerId::TechnicalTerms, Fixture("valid.azdic")));
+  auto result = engine.QueryPredictions("よ", "context", 0);
+  ASSERT_EQ(result.size(), 5U);
+  EXPECT_EQ(std::count_if(result.begin(), result.end(),
+                          [](const auto& e) { return e.source == core::CandidateSource::Model; }),
+            3);
+  EXPECT_EQ(std::count_if(result.begin(), result.end(),
+                          [](const auto& e) { return e.debug_info == "dictionary"; }),
+            2);
+  for (int i = 0; i < 3; ++i)
+    store.Observe("よが" + std::to_string(i), "learned" + std::to_string(i), 5.0, 0);
+  result = engine.QueryPredictions("よ", "context", 0);
+  ASSERT_EQ(result.size(), 5U);
+  EXPECT_EQ(std::count_if(result.begin(), result.end(),
+                          [](const auto& e) { return e.source == core::CandidateSource::Model; }),
+            2);
+}
+
+TEST(DictionaryHost, BundledDiscoveryReportsErrorsAndContinues) {
+  host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
+  const auto results = engine.LoadBundledDictionaryLayers(Fixture("bundled"));
+  ASSERT_EQ(results.size(), 4U);
+  EXPECT_FALSE(results[0].loaded);
+  EXPECT_EQ(results[0].error, "layer id mismatch");
+  EXPECT_FALSE(results[1].loaded);
+  EXPECT_FALSE(results[1].error.empty());
+  EXPECT_TRUE(results[3].loaded);
+  EXPECT_TRUE(results[3].error.empty());
 }
 }  // namespace

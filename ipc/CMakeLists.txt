@@ -1,5 +1,8 @@
+add_library(azookey_json STATIC src/Json.cpp)
+target_include_directories(azookey_json PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(azookey_json PUBLIC azookey_project_options PRIVATE azookey_project_warnings)
+
 add_library(azookey_ipc STATIC
-  src/Json.cpp
   src/Messages.cpp
   src/NamedPipeTransport.cpp
   src/Payloads.cpp
@@ -7,7 +10,7 @@ add_library(azookey_ipc STATIC
 
 target_include_directories(azookey_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_ipc
-  PUBLIC azookey_project_options
+  PUBLIC azookey_project_options azookey_json
   PRIVATE azookey_project_warnings
 )
 

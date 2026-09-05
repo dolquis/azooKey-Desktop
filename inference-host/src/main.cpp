@@ -392,15 +392,11 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
   // Discover only installer-controlled static layers, never the current directory.
   const auto dictionary_directory = GetExeDirectory() / "dict";
-  for (const auto& [layer, name] :
-       {std::pair{azookey::learning::LayerId::Base, "base_lexicon.azdic"},
-        std::pair{azookey::learning::LayerId::Sudachi, "sudachi_lexicon.azdic"},
-        std::pair{azookey::learning::LayerId::NamedEntity, "named_entity_lexicon.azdic"},
-        std::pair{azookey::learning::LayerId::TechnicalTerms, "technical_terms_lexicon.azdic"}}) {
-    const bool loaded = engine.LoadDictionaryLayer(layer, dictionary_directory / name);
-    runtime_log.Log(
-        azookey::logging::RuntimeLogLevel::Info, "static_dictionary_load",
-        {{"layer", SafeLogText(name)}, {"result", SafeLogText(loaded ? "ok" : "unavailable")}});
+  for (const auto& result : engine.LoadBundledDictionaryLayers(dictionary_directory)) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "static_dictionary_load",
+                    {{"layer", SafeLogText(result.name)},
+                     {"result", SafeLogText(result.loaded ? "ok" : "unavailable")},
+                     {"error", SafeLogText(result.error)}});
   }
 #endif
   if (explicit_model_path) {

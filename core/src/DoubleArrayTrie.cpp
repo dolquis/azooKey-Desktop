@@ -490,6 +490,7 @@ bool DoubleArrayTrie::Verify() const noexcept {
     for (size_t i = 64; i < impl_->size; ++i) hash = (hash ^ impl_->data[i]) * 1099511628211ULL;
     if (hash != Read(impl_->data + 32, 8)) return impl_->Fail("content hash mismatch");
     std::vector<bool> seen(impl_->keys, false);
+    std::vector<std::string> key_texts(impl_->keys);
     for (size_t i = 1; i < impl_->trie.size / 16; ++i) {
       const auto node = static_cast<uint32_t>(i), parent = impl_->Node(node, 4);
       if (parent == kNone) continue;
@@ -513,6 +514,7 @@ bool DoubleArrayTrie::Verify() const noexcept {
         }
         std::reverse(key.begin(), key.end());
         if (!IsValidUtf8(key)) return impl_->Fail("invalid trie key encoding");
+        key_texts[match.key_id] = key;
         std::vector<StaticDictionaryEntry> entries;
         if (!ReadEntries(match, entries)) return false;
         for (const auto& entry : entries) {
@@ -529,6 +531,12 @@ bool DoubleArrayTrie::Verify() const noexcept {
     }
     if (std::find(seen.begin(), seen.end(), false) != seen.end())
       return impl_->Fail("unreachable key");
+    for (size_t i = 1; i < key_texts.size(); ++i) {
+      if (!std::lexicographical_compare(key_texts[i - 1].begin(), key_texts[i - 1].end(),
+                                        key_texts[i].begin(), key_texts[i].end(),
+                                        [](unsigned char a, unsigned char b) { return a < b; }))
+        return impl_->Fail("invalid key order");
+    }
     for (uint32_t i = 0; i < impl_->entries; ++i) {
       StaticDictionaryEntry entry;
       if (!impl_->Record(i, entry)) return false;

@@ -83,6 +83,13 @@ class InferenceEngine {
 
   // External, non-owning. May be nullptr (no user dictionary).
   void SetUserDictionary(learning::UserDictionary* dict);
+  struct DictionaryLoadResult {
+    std::string name;
+    bool loaded;
+    std::string error;
+  };
+  std::vector<DictionaryLoadResult> LoadBundledDictionaryLayers(
+      const std::filesystem::path& directory);
   bool LoadDictionaryLayer(learning::LayerId layer, const std::filesystem::path& path,
                            bool verify = false);
   void EnableDictionaryLayer(learning::LayerId layer, bool enabled);

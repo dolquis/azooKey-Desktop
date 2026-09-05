@@ -268,6 +268,9 @@ def verify(image: bytes) -> None:
             normalize(key_texts[key])
     if len(seen) != key_count:
         raise ValueError("unreachable keys")
+    if any(key_texts[i - 1].encode("utf-8") >= key_texts[i].encode("utf-8")
+           for i in range(1, key_count)):
+        raise ValueError("invalid key order")
     for offset, length in keys:
         if not length or offset > len(refs) or length > len(refs) - offset:
             raise ValueError("invalid key references")

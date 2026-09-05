@@ -19,6 +19,9 @@ class BuilderTests(unittest.TestCase):
                     continue
                 with self.subTest(name=broken.name), self.assertRaises(ValueError):
                     dictbuild.verify(broken.read_bytes())
+            for broken in path.glob("key_order*.azdic"):
+                with self.subTest(name=broken.name), self.assertRaisesRegex(ValueError, "invalid key order"):
+                    dictbuild.verify(broken.read_bytes())
 
     def test_normalization_aliases_and_limit(self):
         self.assertEqual(dictbuild.normalize("カタカナＡ１"), "かたかなA1")

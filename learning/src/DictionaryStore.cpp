@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
 
 namespace azookey::learning {
 namespace {
 size_t IndexOf(LayerId layer) { return static_cast<size_t>(layer); }
 double Score(const DictionaryEntry& entry, const LookupContext& ctx) {
+  if (entry.source == LayerId::User && entry.use_user_word_score)
+    return entry.user_word_score.value_or(ctx.user_word_default_score);
   double boost = 1.0;
   for (uint16_t category = 0; category < 10; ++category) {
     if (!(entry.category_mask & (1U << category))) continue;
@@ -44,10 +47,12 @@ double DictionaryStore::LayerPriority(LayerId layer, bool confirmed) {
 bool DictionaryStore::LoadStatic(LayerId layer, const std::filesystem::path& path, bool verify) {
   const auto index = IndexOf(layer);
   if (index >= static_.size()) return false;
+  static_errors_[index].clear();
   auto trie = std::make_unique<core::DoubleArrayTrie>();
   const bool loaded = trie->Load(path, verify);
   if (loaded && trie->LayerId() != index) {
     static_[index].reset();
+    static_errors_[index] = "layer id mismatch";
     return false;
   }
   static_[index] = std::move(trie);
@@ -58,10 +63,12 @@ void DictionaryStore::EnableLayer(LayerId layer, bool enabled) {
 }
 bool DictionaryStore::IsAvailable(LayerId layer) const {
   const auto i = IndexOf(layer);
-  return i < static_.size() ? static_[i] && static_[i]->IsAvailable() : i < enabled_.size();
+  return i < static_.size() ? static_[i] && static_[i]->IsAvailable()
+                            : i < enabled_.size() && mutable_available_[i - 5];
 }
 std::string DictionaryStore::LayerError(LayerId layer) const {
   const auto i = IndexOf(layer);
+  if (i < static_errors_.size() && !static_errors_[i].empty()) return static_errors_[i];
   return i < static_.size() && static_[i] ? std::string(static_[i]->Error()) : std::string{};
 }
 void DictionaryStore::ReplaceMutable(LayerId layer, std::vector<DictionaryEntry> entries) {
@@ -82,15 +89,19 @@ void DictionaryStore::ReplaceMutable(LayerId layer, std::vector<DictionaryEntry>
     }
   }
   mutable_[i - 5] = std::move(next);
+  mutable_available_[i - 5] = true;
 }
 void DictionaryStore::SetUserWords(const std::vector<UserWord>& words) {
   std::vector<DictionaryEntry> entries;
   entries.reserve(words.size());
   for (const auto& word : words) {
+    if (word.value && !std::isfinite(*word.value)) continue;
     DictionaryEntry entry;
     entry.surface = word.word;
     entry.reading = word.ruby;
     entry.frequency = .4;
+    entry.use_user_word_score = true;
+    entry.user_word_score = word.value;
     entries.push_back(std::move(entry));
   }
   ReplaceMutable(LayerId::User, std::move(entries));
@@ -109,7 +120,16 @@ void DictionaryStore::QueryLayer(size_t layer, std::string_view key, const Looku
     } else if (ctx.mode == LookupMode::CommonPrefix)
       trie->CommonPrefixSearch(key, ctx.max_results, matches);
     else
-      trie->PredictiveSearch(key, ctx.max_results, matches);
+      trie->PredictiveSearch(key,
+                             ctx.exclude_exact_key && ctx.max_results &&
+                                     ctx.max_results < std::numeric_limits<size_t>::max()
+                                 ? ctx.max_results + 1
+                                 : ctx.max_results,
+                             matches);
+    if (ctx.mode == LookupMode::PredictivePrefix && ctx.exclude_exact_key) {
+      std::erase_if(matches, [&](const auto& match) { return match.key_length == key.size(); });
+      if (ctx.max_results && matches.size() > ctx.max_results) matches.resize(ctx.max_results);
+    }
     for (const auto& match : matches) {
       std::vector<core::StaticDictionaryEntry> entries;
       if (!trie->ReadEntries(match, entries)) {
@@ -143,7 +163,7 @@ void DictionaryStore::QueryLayer(size_t layer, std::string_view key, const Looku
     } else {
       for (auto it = index.lower_bound(std::string(key));
            it != index.end() && it->first.starts_with(key); ++it)
-        matches.push_back(it);
+        if (!ctx.exclude_exact_key || it->first != key) matches.push_back(it);
     }
     std::sort(matches.begin(), matches.end(), [](auto a, auto b) {
       return std::tuple(a->first.size(), a->first) < std::tuple(b->first.size(), b->first);
@@ -192,6 +212,7 @@ std::vector<DictionaryEntry> DictionaryStore::Lookup(std::string_view reading,
   for (auto& [key_pair, entry] : merged) {
     (void)key_pair;
     entry.score = Score(entry, ctx);
+    if (!std::isfinite(entry.score)) continue;
     result.push_back(std::move(entry));
   }
   std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {

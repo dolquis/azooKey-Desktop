@@ -117,6 +117,7 @@ if(AZOOKEY_BUILD_TESTS)
       LABELS "zenzai-real-model"
       PASS_REGULAR_EXPRESSION "zenzai_candidates=[1-9][0-9]* top_surface=日本語 "
       FAIL_REGULAR_EXPRESSION "utf8-prefix-trimmed"
+      RUN_SERIAL TRUE
       TIMEOUT 120
     )
     add_test(NAME azookey_zenzai_real_model_sentence_smoke
@@ -129,6 +130,7 @@ if(AZOOKEY_BUILD_TESTS)
       LABELS "zenzai-real-model"
       PASS_REGULAR_EXPRESSION "zenzai_candidates=[1-9][0-9]* top_surface=私は学生です "
       FAIL_REGULAR_EXPRESSION "utf8-prefix-trimmed"
+      RUN_SERIAL TRUE
       TIMEOUT 120
     )
     add_test(NAME azookey_zenzai_real_model_json_smoke
@@ -141,6 +143,7 @@ if(AZOOKEY_BUILD_TESTS)
       PASS_REGULAR_EXPRESSION
         "\"bench\":\"azookey_zenzai_bench\".*\"schemaVersion\":1.*\"passed\":true"
       FAIL_REGULAR_EXPRESSION "status=ok"
+      RUN_SERIAL TRUE
       TIMEOUT 120
     )
   elseif(NOT AZOOKEY_WITH_LLAMA_CPP)

@@ -154,8 +154,8 @@ Host と検証対象アプリを起動し直す。環境変数の設定、出力
 > host へ渡す辞書もモデルも無く、`ZenzaiModelConverter` は `SimpleConverter` の静的辞書
 > （わたし / にほん / とうきょう 等＋学習語）へフォールバックする。この状態では**辞書外の
 > 語が漢字に変換されない**。判定の扱いは dev32-verification-checklist.md の同じ注記
-> （コア A5 は組込辞書語、辞書外語は任意の A5-opt）に従う。実 GGUF モデルでの検証は
-> `docs/zenzai-gpu-route.md` を参照。
+> （コア A5 は組込辞書語、辞書外語は任意の A5-opt）に従う。実 GGUF モデルの登録手順は
+> `README.md`、計測ゲートは `docs/zenzai-gpu-route.md`「計測ゲート」を参照。
 
 ### 5. 記録と後始末
 

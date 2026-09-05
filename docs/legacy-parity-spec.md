@@ -4,8 +4,9 @@
 復元する際の **正典仕様** である。`plans/windows-port-roadmap.md` の Phase 5
 （M13〜M19）が本書を参照する。
 
-実装着手前にこの仕様を読み、レガシー実装と差異がある場合は本書を更新してから
-コードに反映すること。実装後に挙動が変わった場合も本書を先に更新する。
+Windows 版としての仕様判断は本書が正典であり、`legacy/` は参照資産である
+（`AGENTS.md`「対象と正典」）。legacy との差異が生じた場合は、legacy に合わせるのでは
+なく本書へ Windows 版の結論を書いて確定する。実装で挙動が変わる場合も本書を先に更新する。
 
 ## 1. 入力パイプライン (M13)
 
@@ -324,9 +325,9 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
 
 #### 1.5.4 非回帰移行戦略（M3〜M10 の挙動保存）
 
-現行 `tsf-tip/src/TextService.cpp::OnKeyDown` は、状態を約 19 個のメンバ変数に分散させた
-inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替えは以下の戦略で、挙動回帰なし
-（roadmap M13 受け入れ条件）を担保する。
+M13 の載せ替え対象は、`tsf-tip/src/TextService.cpp::OnKeyDown` が M3〜M10 の挙動を
+メンバ変数へ分散させた inline 分岐で表している範囲である。状態機械への載せ替えは以下の
+戦略で、挙動回帰なし（roadmap M13 受け入れ条件）を担保する。
 
 - **特性化テスト先行（strangler 移行）**: リファクタ前に、現行 OnKeyDown の M3〜M10 挙動を
   状態遷移として `core/tests/input_state_test.cpp` に固定する。既存
@@ -375,19 +376,17 @@ inline 分岐で M3〜M10 を実装済みである。状態機械への載せ替
   `EditContextHint` 注入で文書なしに網羅）、(3) `keymap_test.cpp` が VK 表（第 1 層）の全
   エントリを検証。
 
-### 1.6 karukan-im 設計参照レビュー（M13 / DEV-400）
+### 1.6 karukan-im 設計参照（M13）
 
-本節は、参考実装 `togatoga/karukan`（Rust / Linux + macOS）の状態機械層 `karukan-im` を
-**M13 の設計レビュー資産**として併置した結果を確定する（Linear DEV-400、親 DEV-397。分析の
-スナップショットは `plans/karukan-comparison-report.md` 候補 1 / §5-1）。目的は §1.1〜§1.5 の
-enum 設計・純粋性契約・受け入れ条件の質を底上げすることであり、**コード移植ではない**
-（新規スコープ増加ゼロ）。karukan は読み取り専用の参考実装で、コードは逐語移植せず設計思想
-のみ参照する。§1.1 が既に karukan の三段分離（物理キー→意味／状態機械／副作用）を M13 の
-設計根拠として引用済みである点を前提に、本節は「突き合わせで判明した azooKey 側の欠け」と
-「azooKey 独自に再設計が必要な境界」を正典として固定する。
+本節は、参考実装 `togatoga/karukan`（Rust / Linux + macOS）の状態機械層 `karukan-im` と
+§1.1〜§1.5 を突き合わせた結論を確定する。分析のスナップショットは
+`plans/karukan-comparison-report.md` 候補 1 / §5-1 にある。karukan は読み取り専用の参考実装で、
+コードは逐語移植せず設計思想のみ参照する（**コード移植ではない**）。本節が正典として固定する
+のは「突き合わせで判明した azooKey 側の欠け」と「azooKey 独自に再設計が必要な境界」であり、
+レビューの経緯は本書に置かない。
 
-karukan 側の参照点（`plans/karukan-comparison-report.md §9`・DEV-400 記載。**外部リポジトリ
-のため、実際の位置は M13 実装着手時に現物で確認する**）: `karukan-im/src/core/state.rs`
+karukan 側の参照点（`plans/karukan-comparison-report.md §9`。**外部リポジトリの
+ため、実際の位置は M13 実装着手時に現物で確認する**）: `karukan-im/src/core/state.rs`
 （`InputState`＝状態が値）、`karukan-im/src/core/engine/types.rs`（`EngineAction`
 ＝6 種の抽象出力アクション）、`karukan-im/src/core/engine/mod.rs`（`Engine` が状態でディスパッチ）、
 `karukan-macos/.../KarukanInputController.swift`（薄いフロントエンドの到達点）。
@@ -408,16 +407,16 @@ karukan が「状態を単一の OS 非依存クレートに内包し、抽象�
 （`engine/mod.rs`）。したがって azooKey の §1.5.1 純粋関数境界（値状態＋副作用なしの `HandleEvent`）は
 **karukan が実証済みの性質ではなく azooKey 独自の設計選択**である。この純粋境界を karukan の既成
 事実と誤認して API・テスト設計の根拠にしないこと（karukan から借りるのは「OS 非依存層に状態と
-アクション出力を閉じる構造」であって、関数の純粋性ではない）。現状 azooKey は `tsf-tip/src/TextService.cpp`
+アクション出力を閉じる構造」であって、関数の純粋性ではない）。azooKey 側の出発点は、`tsf-tip/src/TextService.cpp`
 の `OnTestKeyDown` / `OnKeyDown` に VK 別 if/else と暗黙フラグ（`preedit_kana_` /
-`candidate_ui_.IsShowing()` / `committing_` の組合せ）で状態が集中し、純粋状態機械層が未実装
-であることを裏取りした（本レビュー時点の現物確認）。
+`candidate_ui_.IsShowing()` / `committing_` の組合せ）で状態が集中している構造であり、
+M13 はここから純粋状態機械層を切り出す（§1.5.4）。
 
 #### 1.6.2 `EngineAction` ↔ `ClientAction` 突き合わせ（真の欠け / 設計オプションの区別）
 
 karukan の抽象出力（`EngineAction` 6 種: `UpdatePreedit` / `ShowCandidates` / `HideCandidates` /
-`Commit` / `UpdateAuxText` / `HideAuxText`。以下は PR #180 Codex レビューで karukan `types.rs` /
-`conversion.rs` に照合済み）と azooKey の §1.3 `ClientAction→TSF` 表を突き合わせた。§1.3 は現状 10 行
+`Commit` / `UpdateAuxText` / `HideAuxText`。karukan `types.rs` / `conversion.rs`
+に照合したもの）と azooKey の §1.3 `ClientAction→TSF` 表を突き合わせた。§1.3 は現状 10 行
 （`appendToMarkedText` / `replaceMarkedText` / `commitMarkedText` / `cancelMarkedText` /
 `showCandidateWindow` / `hideCandidateWindow` / `showPredictionWindow` / `hidePredictionWindow` /
 `replaceSelectedText` / `playBeep`）である。突き合わせの結論を、**(A) karukan にも対応アクションが
@@ -426,35 +425,29 @@ karukan の抽象出力（`EngineAction` 6 種: `UpdatePreedit` / `ShowCandidate
 「karukan の欠け」と誤って正典化しないため）。追加はいずれも append-only 方針（§1.5.2）に従い、
 最終決定は M13 実装 PR で行う（本節は enum を確定変更しない）。
 
-**(A) 真の欠け — 2 つの別チャネルに分離**: karukan は「候補ごとの説明」と「aux / ステータス
-テキスト」を**別チャネル**で扱う。azooKey の欠けも 2 つに分離して確定する。両者を混同すると、
+**(A) 2 つの別チャネルに分離**: karukan は「候補ごとの説明」と「aux / ステータス
+テキスト」を**別チャネル**で扱う。azooKey も 2 つに分離して確定する。両者を混同すると、
 aux テキスト用 `ClientAction` を 1 つ足しただけで、M62 リライターが実際に必要とする候補説明
 データ経路（候補データ構造・ビューモデル）が未拡張のまま残るため、明確に分ける。
 
-- **(A1) 候補注釈（per-candidate description）データの欠落（確度: 高・M62 の直接前提）**:
-  karukan は `karukan-im/src/core/candidate.rs` の `Candidate.description` として**候補ごと**の
-  右側コメントを運ぶ。一方 azooKey の `core::Candidate`
-  （`core/include/azookey/core/Candidate.h`）は `surface` / `reading` / `score` / `source` /
-  `debug_info` のみで、**ユーザー可視の候補説明フィールドを持たない**。これは **M62 候補リライター**
-  （`plans/karukan-comparison-report.md` 候補 2・5、数字/記号リライターが
-  `Candidate{surface, description}` を返す設計）が載る前提と直接衝突する **データ / ビューモデルの
-  欠け**である。§1.3 に `ClientAction` を 1 つ足すだけでは満たせない。
-  → **推奨（伝送経路は M62 のローカル / Host 分割に従う。正典は
-  `plans/windows-port-roadmap.md` M62 横断依存 §「候補注釈の伝送」＋ 新設予定
-  `docs/candidate-rewriter-spec.md`）**: **IPC 拡張を一律の前提にしない**。
+- **(A1) 候補注釈（per-candidate description）データ経路**: karukan は
+  `karukan-im/src/core/candidate.rs` の `Candidate.description` として**候補ごと**の右側コメントを
+  運ぶ。azooKey も `core::Candidate`（`core/include/azookey/core/Candidate.h`）に `description` を
+  持ち、候補ウィンドウがこれを描画する。**M62 候補リライター**が載る前提はこの**データ /
+  ビューモデル**であって、§1.3 に `ClientAction` を 1 つ足すことでは満たせない。
+  伝送経路は M62 のローカル / Host 分割に従い、**IPC 拡張を一律の前提にしない**
+  （正典は `docs/candidate-rewriter-spec.md`）。
   - **TIP ローカルリライタ（M62-A 数字 / M62-B 半角カナ・英字。無 IPC・Host 非依存）**: description は
-    **TIP 内の注釈付き候補型 + 候補ウィンドウ view-model** で保持・表示する。`ipc::CandidateField`
+    **`core::Candidate` + 候補ウィンドウ view-model** で保持・表示する。`ipc::CandidateField`
     の変更は**不要**（M62-A を膨らませない）。
   - **Host 側データ駆動リライタ（M62-C 記号 / M62-D 絵文字）**: このときに限り `ipc::CandidateField`
     に `description` フィールドを append-only 追加して伝送する。
-  M13 の設計時点では `core::Candidate` に `description`（注釈）を append-only 追加できる余地を予約する
-  に留め（M13 本体では未使用）、IPC ペイロード拡張は Host 側リライタ（M62-C/D）着手時に行う。
-- **(A2) aux / ステータステキスト表示アクションの欠落（確度: 中・M62 とは別チャネル）**: karukan の
+- **(A2) aux / ステータステキスト表示アクションの欠落（M62 とは別チャネル）**: karukan の
   `EngineAction::UpdateAuxText` / `HideAuxText`（`engine/types.rs`）は、reading やモード表示など
   **候補に紐づかない補助 / ステータステキスト**のためのチャネルで、(A1) の候補ごとの説明とは別物。
-  azooKey の §1.3 には対応する aux テキストアクションが無い。ただし azooKey は reading を preedit、
-  モードを別 UI で扱うため、これが実機能上の欠けかは M13 で要判断（`UpdateAuxText` 相当を導入する
-  なら §1.3 に `showAuxText(s)` / `hideAuxText` を append-only 追加）。**(A1) とは独立**に扱い、
+  azooKey の §1.3 には対応する aux テキストアクションが無い。azooKey は reading を preedit、
+  モードを別 UI で扱うため、このチャネルを持たないこと自体は設計として成立する。導入する場合は
+  §1.3 に `showAuxText(s)` / `hideAuxText` を append-only 追加する。**(A1) とは独立**に扱い、
   aux テキストアクションの追加で (A1) を満たしたと誤認しないこと。
 
 **(B) 設計オプション（karukan 由来の欠けではない）**: 以下は karukan にも専用アクションが無く、
@@ -540,18 +533,6 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 - **preedit 自前 String 保持 + 毎キー UpdatePreedit**（§1.6.3-3 参照）。
 - **XKB keysym キー抽象 / 一方向モードトグル**（§1.6.3-1 参照）。VK / MS-IME 互換が正典。
 - **同期変換前提の状態表**（§1.6.3-2 参照）。IPC 非同期・staleness 契約が正典。
-
-以上より、DEV-400 の設計レビューは §1.1〜§1.5 を破壊せず、(1) §1.6.2 で karukan 由来の**真の欠け**を
-2 チャネルに分離して確定した — (A1) 候補注釈（per-candidate `description`）データの欠け（M62 の
-直接前提。本体は `core::Candidate` + 候補ビューモデルの拡張で、§1.3 の `ClientAction` 追加だけでは
-満たせない。伝送経路は M62 のローカル / Host 分割に従い、TIP ローカルリライタ M62-A/B は TIP 内
-view-model のみ・無 IPC、`ipc::CandidateField` への `description` 追加は Host 側 M62-C/D 着手時に限る。
-正典は `plans/windows-port-roadmap.md` M62 横断依存）と、(A2) aux/ステータステキストアクションの欠け
-（`UpdateAuxText` 相当・候補注釈とは別チャネル・M13 で要否判断）。候補選択更新・候補ページングは
-karukan 由来の欠けではなく azooKey 側の**設計オプション**として区別した（karukan は
-`ShowCandidates` 再発行で反映し専用アクションを持たない）。(2) azooKey 独自再設計 3 点を境界として
-固定し、(3) M13 の `input_state_test.cpp` 様式雛形を提示した。これらは M13 実装 PR の受け入れ条件
-（§1.5.4 等価性ゲート）へ反映する。
 
 ## 2. ライブ変換 (M14)
 
@@ -937,7 +918,9 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | カスタムローマ字 TSV | `core/tests/custom_romaji_test.cpp` | パース、重複、コメント、不正行 |
 | LearningStore::Forget | `learning/tests/learning_test.cpp` | Forget 後の Score=0、ForgetMostRecent |
 | Unicode 入力 | `core/tests/unicode_input_test.cpp` | 範囲チェック、サロゲートペア生成 |
-| 配置アルゴリズム | `tsf-tip/tests/window_positioning_test.cpp` | Windows 限定。モニタ矩形 vs 配置 |
+| 候補ウィンドウのレイアウトと DPI 換算 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算 |
+| キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3） |
+| 予測候補ウィンドウ配置（§3.2） | M15 実装 PR で `tsf-tip/tests/` に追加 | Windows 限定。モニタ矩形と配置候補の切替 |
 
 ## 11. 参照
 

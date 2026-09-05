@@ -129,8 +129,9 @@ machine-wide 登録のため管理者権限が必要です（非管理者で実�
 読み込むモデルは `settings.json` の `model.selectedPath`
 （[`docs/model-management-spec.md`](./docs/model-management-spec.md) §7）または
 `register-dev.ps1 -ModelPath` に渡した絶対パスで決まり、`models\zenzai\` 配下の走査に
-よる自動選択は行いません。登録前の `llama_cpp=1` 確認、mock ホストを許可する
-`-AllowMockHost`、実モデルの検証手順は
+よる自動選択は行いません。`register-dev.ps1` は登録前に `llama_cpp=1` を確認し、
+mock ホストの誤登録を拒否します。`-AllowMockHost` は fallback-only の TIP テスト専用で
+`-ModelPath` とは併用できません。実モデルの計測ゲートとバックエンド経路の決定は
 [`docs/zenzai-gpu-route.md`](./docs/zenzai-gpu-route.md) を参照してください。
 
 ## ロードマップ

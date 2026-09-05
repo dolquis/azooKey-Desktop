@@ -3,6 +3,33 @@
 本書は azooKey-Desktop Windows 版の配布形態と署名・更新・観測仕様を定める。
 `plans/windows-port-roadmap.md` の Phase 7 の M28〜M34 が本書を参照する。
 
+## 読み方
+
+本書は配布チャネルごとに節が分かれる。全文を順に読む必要はない。
+
+- **MVP（未署名 MSI）の実装者**: §0 で対象チャネルを確認し、§4（WiX / MSI）→ §3（設定アプリ）
+  の順に読む。
+- **Microsoft Store 提出**: §1（MSIX）。TIP 配布経路の 3 候補は §1.0、Option A の PoC 具体は
+  §1.1.2（経路はいずれも M28 の PoC で確定する）。
+- **コード署名**: §2。
+- **リリース後の運用（更新・観測・学習データ保護）**: §6〜§9。
+
+| 節 | 内容 |
+|---|---|
+| §0 | 配布方針（チャネルと署名要否の確定） |
+| §1 | MSIX パッケージング（MS Store 向け） |
+| §2 | EV/OV コード署名 |
+| §3 | 設定アプリ |
+| §4 | WiX / MSI インストーラ（MVP 既定） |
+| §5 | WinGet マニフェスト |
+| §6 | 自動更新 |
+| §7 | ETW |
+| §8 | WER |
+| §9 | DPAPI 学習データ暗号化 |
+| §10 | テスト |
+| §11 | リリース手順チェックリスト |
+| §12 | 参照 |
+
 ## 0. 配布方針（v1.0 MVP 確定 / 2026-06）
 
 配布チャネルと署名要否を次のとおり確定する（Linear DEV-415 / DEV-416 / DEV-255）。
@@ -105,7 +132,7 @@ TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確�
 > Microsoft 公式仕様の現状で**機能制限あり**の領域である。`com4:InProcessServer`
 > は「外部位置（external location / sparse package）向け」と明記されており、
 > 通常の `.msix` では install location ACL により **外部クライアント（ctfmon
-> 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 例は
+> 等）が TIP DLL を読み込めない**（[com4:Extension Examples](https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-com4-extension#examples)）。本書 §1.1 の `com4:InProcessServer` 構成は
 > 暫定参考であり、M28 着手前に下表のいずれかへ確定する必要がある。Linear
 > [DEV-101](https://linear.app/dolquis/issue/DEV-101) で追跡。
 
@@ -121,108 +148,37 @@ TIP DLL が `ALL APPLICATION PACKAGES` の RX を継承していることの確�
 > 使う選択肢もある。MSIX 不可環境（LTSC 等）向けには結局 §4 を持つので、
 > v1.0 は §4 / WiX で確定 + §1 は M28 PoC へ送る選択もあり得る。
 
-### 1.1 AppxManifest.xml（Option B の参考例。M28 PoC で要確定）
+### 1.1 AppxManifest.xml（Option B の参考例）
 
-> 以下は Option B（通常 MSIX + `com4:InProcessServer`）の schema-valid な
-> 雛形である。**この XML 単体ではアクティベーションが成立しない可能性**を
-> 上記 §1.0 で示したため、M28 着手時に Option A への切替を含めた PoC で
-> 確定すること。schema validation の観点では以下 4 点を満たす:
->
-> * `com4:Extension` / `com4:InProcessServer` は **Win10 build 20348+** を要求
->   するので、`MinVersion="10.0.20348.0"` まで引き上げる
-> * `IgnorableNamespaces` に `com4` を追加
-> * `com4:Class` の `Virtualization` は **必須属性**（`enabled` or `disabled`）
-> * `com4:InProcessServerDll` は **必須**（`Path` + `ProcessorArchitecture`）
+Option B（通常 MSIX + `com4:InProcessServer`）を採る場合の manifest 要件を、schema
+validation の観点でまとめる。**この構成だけではアクティベーションが成立しない可能性**を
+§1.0 で示したため、M28 着手時に Option A への切替を含めた PoC で確定する。Option A の
+具体（`pkg/msix/AppxManifest.xml` が現物）は §1.1.2 にある。本項は manifest 全文を持たない。
 
-`pkg/msix/AppxManifest.xml`（新規）：
+- `com4:Extension` / `com4:InProcessServer` は **Win10 build 20348+** を要求するので、
+  `TargetDeviceFamily@MinVersion` を `10.0.20348.0` まで引き上げる。Win10 22H2
+  （build 19045）では schema validation で reject される。
+- `IgnorableNamespaces` に `com4` を追加する（namespace は
+  `http://schemas.microsoft.com/appx/manifest/com/windows10/4`）。
+- `com4:Class` の `Virtualization` は**必須属性**である（`enabled` / `disabled`。classic COM
+  互換のため `disabled`）。`com4:Class` に `Path` 属性は無く、DLL パスは
+  `com4:InProcessServerDll`（`Path` + `ProcessorArchitecture` とも必須）で与える。
+- `com4:Class` の `ThreadingModel` の許容値は `Both` / `STA` / `MTA` / `MainSTA` / `Neutral`
+  である（`Apartment` はクラシックレジストリ値で MSIX schema では invalid）。TIP は TSF の
+  standard STA で動作する。
+- `Application` は `runFullTrust` + `EntryPoint="Windows.FullTrustApplication"` とし、Host の
+  起動は `uap3:AppExecutionAlias` で与える。
+- TSF Profile 登録は MSIX manifest では扱わない（`windows.inputMethod` は `uap3:Extension` の
+  許容 Category に存在しない）。runtime に `ITfInputProcessorProfiles::Register` を呼ぶ。
+  詳細は本節下記「TSF Profile 登録のライフサイクル」を参照。
 
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<Package
-    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
-    xmlns:com4="http://schemas.microsoft.com/appx/manifest/com/windows10/4"
-    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-    IgnorableNamespaces="uap uap3 com4 rescap">
+`com4:Class@Id`（CLSID）と Profile GUID は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid` /
+`kTextServiceProfileGuid` と一致させる。
 
-  <Identity Name="dolquis.azooKey"
-            Publisher="CN=dolquis"
-            Version="1.0.0.0"
-            ProcessorArchitecture="x64" />
-
-  <Properties>
-    <DisplayName>azooKey</DisplayName>
-    <PublisherDisplayName>dolquis</PublisherDisplayName>
-    <Logo>Assets\StoreLogo.png</Logo>
-  </Properties>
-
-  <Dependencies>
-    <!-- com4:Extension / com4:InProcessServer は Windows 10 build 20348 以上を
-         要求するため MinVersion を引き上げる。Win10 22H2 (build 19045) では
-         schema validation で reject される。 -->
-    <TargetDeviceFamily Name="Windows.Desktop"
-                       MinVersion="10.0.20348.0"
-                       MaxVersionTested="10.0.22631.0" />
-  </Dependencies>
-
-  <Applications>
-    <Application Id="azooKey" Executable="azookey_inference_host.exe"
-                 EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="azooKey"
-                          Description="azooKey 日本語入力"
-                          BackgroundColor="transparent"
-                          Square150x150Logo="Assets\Square150x150Logo.png"
-                          Square44x44Logo="Assets\Square44x44Logo.png" />
-      <Extensions>
-        <!-- 起動時に Host を立ち上げ -->
-        <uap3:Extension Category="windows.appExecutionAlias">
-          <uap3:AppExecutionAlias>
-            <uap3:ExecutionAlias Alias="azookey-host.exe" />
-          </uap3:AppExecutionAlias>
-        </uap3:Extension>
-
-        <!-- TIP の COM 登録（Option B 参考例。§1.0 の制限を再確認のこと）。 -->
-        <com4:Extension Category="windows.comServer">
-          <com4:ComServer>
-            <com4:InProcessServer>
-              <!-- `com4:Class` には Path 属性が無い。DLL パスは
-                   `com4:InProcessServerDll` 子要素で明示する（Path +
-                   ProcessorArchitecture とも必須）。 -->
-              <com4:InProcessServerDll Path="azookey_tsf_tip.dll"
-                                       ProcessorArchitecture="x64" />
-              <!-- ThreadingModel の許容値は Both / STA / MTA / MainSTA / Neutral
-                   ("Apartment" はクラシックレジストリ値で MSIX schema では invalid)。
-                   TIP は TSF の standard STA で動作する。Virtualization は
-                   `com4:Class` で必須属性、classic COM 互換のため "disabled"。 -->
-              <com4:Class Id="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
-                          ThreadingModel="STA"
-                          Virtualization="disabled" />
-            </com4:InProcessServer>
-          </com4:ComServer>
-        </com4:Extension>
-
-        <!-- TSF Profile 登録は MSIX manifest では扱わない（windows.inputMethod
-             は uap3:Extension の許容 Category に存在しない）。runtime に
-             `ITfInputProcessorProfiles::Register` を呼ぶ。詳細は本節下記
-             「TSF Profile 登録のライフサイクル」を参照。 -->
-      </Extensions>
-    </Application>
-  </Applications>
-
-  <Capabilities>
-    <rescap:Capability Name="runFullTrust" />
-  </Capabilities>
-</Package>
-```
-
-`Class Id` と `Profile GUID` は `tsf-tip/src/DllMain.cpp` の `kTextServiceClsid`
-/ `kTextServiceProfileGuid` と一致させる。
-
-> **署名 cert を入れたら `Publisher` を必ず差し替える**: 上記 `Publisher="CN=dolquis"`
-> は自己署名 dev cert 用の暫定値である。OV/EV cert で署名する場合、`Identity@Publisher`
-> は署名証明書の Subject DN 全体と完全一致しないと `Add-AppxPackage` が `0x8007000B`
-> で失敗する。具体手順は §2.2「Publisher と証明書 Subject の整合（必須）」を参照。
+> **署名 cert を入れたら `Publisher` を必ず差し替える**: dev cert 用の暫定値
+> （`Publisher="CN=dolquis"`）のままだと、OV/EV cert で署名した場合に
+> `Identity@Publisher` が署名証明書の Subject DN と一致せず `Add-AppxPackage` が
+> `0x8007000B` で失敗する。具体手順は §2.2「Publisher と証明書 Subject の整合（必須）」を参照。
 
 #### MSIX `comServer` の AAP（Activate As Package）挙動と既知制限
 
@@ -1172,14 +1128,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 - **呼び出し元**: `Show` は **Windows の言語/IME 設定（Text Services コントロールパネル
   相当）が TIP の CLSID を `CoCreateInstance` したプロセス上**で同期的に呼ばれ、
   `hwndParent` はその設定 UI のウィンドウである（入力先のメモ帳・ブラウザ等ではない）。
-- **方式（非同期起動）**: 設定 UI は WinUI 3 の独立した**長命**プロセス
-  （`azookey_settings.exe`）であり、`Show` を設定アプリ終了までブロックすると呼び出し元
-  （言語/IME 設定 UI）をその間フリーズさせる。よって **`Show` は設定アプリを起動
-  （既存インスタンスがあれば前面化、single-instance）したうえで `S_OK` を即時返す**。
-  `ITfFnConfigure::Show` の Remarks「ダイアログを閉じるまで return しない」は短命なモーダル
-  プロパティ シートを想定した記述であり、別プロセスの設定アプリを採る本実装では非同期起動と
-  する（設定値の反映はプロパティ シートの OK/Apply ではなく §3.3 の `UpdateConfig` IPC で
-  行う）。WinUI 3 / Windows App SDK ランタイムを設定 UI ホストプロセスへ load しない利点も保つ。
+- **方式（非同期起動）**: `Show` は設定アプリを起動して `S_OK` を即時返す。理由と
+  single-instance の扱いは `docs/tsf-deep-integration-spec.md` §6.2 が正典。設定値の反映は
+  §3.3 の `UpdateConfig` IPC で行う。
 - **引数受け渡し**: `langid` / `rguidProfile` は起動コマンドライン引数として
   `azookey_settings.exe` に渡し、該当言語プロファイルの設定ページを初期表示する。設定アプリは
   `AppInstance::FindOrRegisterForKey` で単一インスタンスを登録し、後続起動は
@@ -1533,38 +1484,16 @@ TIP DLL を削除した後では解除できないため、この順序を変更
 
 ### 4.3 Inno Setup（代替）
 
-WiX に習熟がない場合 Inno Setup でも可。`pkg/inno/setup.iss`：
+WiX に習熟がない場合は Inno Setup でも代替できる。MVP の正典は §4.1 の WiX 構成であり、
+Inno Setup 版の成果物はリポジトリに持たない。代替を採る場合も次の条件は WiX 版と揃える。
 
-```pascal
-[Setup]
-AppName=azooKey
-AppVersion=1.0.0
-DefaultDirName={localappdata}\azooKey
-DisableDirPage=yes
-PrivilegesRequired=lowest
-
-[Files]
-Source: "build\tsf-tip\Release\azookey_tsf_tip.dll"; DestDir: "{app}"
-Source: "build\inference-host\Release\azookey_inference_host.exe"; DestDir: "{app}"
-; 設定アプリ本体 + WinUI 3 ランタイム（self-contained 出力一式を recurse で同梱）
-Source: "build\settings-app\Release\*"; DestDir: "{app}"; Flags: recursesubdirs
-; framework-dependent の場合のみ: ランタイムインストーラを同梱して [Run] で実行
-; Source: "redist\WindowsAppRuntimeInstall.exe"; DestDir: "{tmp}"
-
-[Run]
-Filename: "regsvr32"; Parameters: "/s ""{app}\azookey_tsf_tip.dll"""; \
-    Flags: runhidden waituntilterminated
-; framework-dependent の場合のみ: WinUI 3 ランタイムをインストール（self-contained 時は不要）
-; Filename: "{tmp}\WindowsAppRuntimeInstall.exe"; Parameters: "--quiet"; \
-;     Flags: runhidden waituntilterminated
-
-[UninstallRun]
-Filename: "regsvr32"; Parameters: "/u /s ""{app}\azookey_tsf_tip.dll"""; \
-    Flags: runhidden waituntilterminated
-```
-
-ユーザースコープ（`{localappdata}`、`PrivilegesRequired=lowest`）で
-管理者権限なしインストール。
+- ユーザースコープでインストールする（`DefaultDirName={localappdata}\azooKey`、
+  `PrivilegesRequired=lowest`）。管理者権限を要求しない。
+- TIP DLL の登録・解除は `[Run]` / `[UninstallRun]` から `regsvr32`（`/s`、解除は `/u /s`）を
+  `waituntilterminated` で呼ぶ。
+- 設定アプリの WinUI 3 ランタイムの扱いは §1.3 と同じ判断に従う。self-contained 出力なら
+  一式を同梱し、framework-dependent なら `WindowsAppRuntimeInstall.exe` を同梱して
+  インストール時に実行する。
 
 ### 4.4 SBOM と build provenance（M38 供給網固定）
 

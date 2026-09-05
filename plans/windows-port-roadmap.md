@@ -1964,7 +1964,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 既存 `backendPreference` との後方互換と deprecated 値の集約（§5.2）
   - 設定アプリ Model タブの操作・状態表示（§6）と `model.*` 設定スキーマ（§7）
 - **受け入れ条件**:
-  - モデル一覧が GUI に表示される
+  - `%LOCALAPPDATA%\azooKey\models\` を discovery した結果としてモデル一覧が GUI に
+    表示され、同ディレクトリ内の GGUF が列挙される
   - invalid GGUF は「ロード不可」として明示される
   - ロード失敗時も Host が落ちず `SimpleConverter` fallback へ移行する
   - ベンチマーク結果（p50 / p95 / load_ms / rss_mb / vram_mb）が表示される
@@ -2185,10 +2186,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `dictionary_score` の確定係数（spec §14.11）が実装の既定値と一致し、worked example
     が単体テストで再現される（M48 タグ boost は `final_score` へ 1 回だけ適用し、
     `dictionary_score` へ二重適用しない）
-  - 物理層の受け入れ条件（`.azdic` の往復とビルド再現性、
-    検索 API の契約適合、破損アーティファクトでの層単位無効化、
-    mutable 層の永続化形式維持、`META` 由来の帰属生成、サイズ / レイテンシ
-    予算）は spec §15.11
+  - 物理層（`.azdic`。DEV-412）:
+    - `.azdic` v1 のリーダとビルダが往復し、同一入力から 2 回ビルドしたアーティファクトが
+      バイト単位で一致する
+    - `CommonPrefixSearch` / `PredictiveSearch` が spec §15.4 の契約（探索の向き・順序・
+      UTF-8 境界・計算量・非例外）を満たし、参照実装との一致テストが緑である。静的層と
+      mutable 層が同じ `LookupMode` に対して同じ結果集合を返す
+    - 破損した `.azdic` を与えたとき、当該層だけが無効化され、他層の候補生成が継続する
+    - `user_dictionary` / `auto_words` / `app_specific_dictionary` が既存の永続化形式の
+      まま層として読み込まれ、前方一致を返す（spec §15.7）
+    - 同梱アーティファクトの `META` が寄与した上流のライセンスと帰属を保持し、
+      `ThirdPartyNotices.txt` に反映される（spec §14.10、`docs/licensing-policy.md`）
+    - 同梱 `.azdic` の合計サイズと各検索の p95 が spec §15.9 の予算に収まる。超過する
+      場合は同 §15.9 の判断（絞り込みか実装差し替えか）を記録したうえで予算を改訂する
 - **参照仕様**: `docs/auto-word-registration-spec.md` M53 追補（§14 論理層。
   ライセンス & 配布判定 §14.9 / パッケージング §14.10 / スコア係数 §14.11 /
   source tagging §14.12 / 受け入れ条件 §14.13。§15 物理層: trie 選定 §15.2 /

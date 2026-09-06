@@ -52,6 +52,16 @@ target_link_libraries(azookey_inference_host
     azookey_project_warnings
 )
 
+if(AZOOKEY_ENABLE_ASAN AND MSVC AND AZOOKEY_BUILD_TESTS)
+  # host_cli_unicode_argv launches this executable from its own directory, so it
+  # needs the ASan runtime beside it just like azookey_discover_tests places one
+  # beside each test executable.
+  file(COPY_FILE
+    "${AZOOKEY_MSVC_ASAN_RUNTIME}"
+    "${CMAKE_CURRENT_BINARY_DIR}/clang_rt.asan_dynamic-x86_64.dll"
+    ONLY_IF_DIFFERENT)
+endif()
+
 # --- MSIX package identity（Option A / M28・DEV-101）--------------------------
 # pkg/msix/azookey_inference_host.exe.manifest の <msix> 要素を実行体へ埋め込む。
 # 埋め込みが無いと Add-AppxPackage -ExternalLocation で identity package を

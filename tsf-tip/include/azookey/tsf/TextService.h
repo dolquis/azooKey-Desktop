@@ -246,7 +246,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
 
-  // Fire-and-forget IPC send queue: CommitObservation, Cancel (M6, M10).
+  // Out-of-band IPC send queue drained ahead of the pending query: Cancel is
+  // fire-and-forget, CommitObservation awaits an ACK (M6, M10).
   // For Cancel items, cancel_target_id carries the target_request_id so the
   // worker can detect a cancel that targets the currently in-flight query and
   // abandon its receive (the host returns no response for canceled requests).

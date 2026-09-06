@@ -1249,7 +1249,11 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
       }));
 
   h.service.start_ipc_worker_for_test();
-  ASSERT_TRUE(WaitUntil([&] { return first_commit_received.load(); }));
+  // A queued Cancel is drained first and can spend its own connect/handshake
+  // timeouts before the observation reaches the pipe, so allow more than the
+  // default wait.
+  ASSERT_TRUE(
+      WaitUntil([&] { return first_commit_received.load(); }, std::chrono::milliseconds(5000)));
   first_server.Stop();
 
   // Second host on the same per-user pipe must see the observation again.

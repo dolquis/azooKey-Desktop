@@ -487,4 +487,4 @@ Host 側 ring の深さは TIP 側キュー長の上限以上とする。TIP が
 - `ipc_payloads_tests`：`observation_id` の round-trip と、フィールドを持たない payload が空文字で parse されること。
 - `host_engine_tests`：同じ `observation_id` の二度目が学習ストアへ反映されないこと。空の `observation_id` が毎回適用されること。ring 深さを超えた ID が再び適用されること。
 - `host_dispatcher_tests`：再送に `ok=true` を返し、かつ学習ストアを二重に更新しないこと。
-- `tsf_tip_tests`：応答を返さずに落ちた Host の後、再接続先の Host が同じ `observation_id` を受け取ること。
+- `tsf_tip_onkeydown_preedit_tests`：応答を返さずに落ちた Host の後、再接続先の Host が同じ `observation_id` を受け取ること。

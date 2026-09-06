@@ -45,6 +45,58 @@ TEST_F(LocalSettingsTest, LoadsSharedFileWithoutHostAndStopsIdempotently) {
   reader.Stop();
 }
 
+TEST_F(LocalSettingsTest, ReloadsTableCreationOverrideDisableAndDeletion) {
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  const auto table = root / L"bracket-pairs.tsv";
+  const auto expect_close = [&](char32_t close) {
+    return reader.WaitForSnapshotForTest([&](const auto& settings) {
+      const auto pair = azookey::core::LookupBracketPair(U'(', settings.Table());
+      return close ? pair && pair->close == close : !pair;
+    });
+  };
+  {
+    std::ofstream stream(table);
+    stream << "(\t}\ninvalid\n";
+  }
+  ASSERT_TRUE(expect_close(U'}'));
+  {
+    std::ofstream stream(table);
+    stream << "(\t)\toff\n";
+  }
+  ASSERT_TRUE(expect_close(0));
+  std::filesystem::remove(table);
+  ASSERT_TRUE(expect_close(U')'));
+}
+
+TEST_F(LocalSettingsTest, ChangesWatchToCustomUnicodeDirectoryAndKeepsOldSnapshotImmutable) {
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  const auto previous = reader.Snapshot();
+  const auto custom = root / L"別設定" / L"pairs.tsv";
+  std::filesystem::create_directories(custom.parent_path());
+  {
+    std::ofstream stream(custom);
+    stream << "(\t}\n";
+  }
+  Write(R"({"bracketPairing":true,"bracketPairsPath":"別設定/pairs.tsv"})");
+  const auto expect_close = [&](char32_t close) {
+    return reader.WaitForSnapshotForTest([&](const auto& settings) {
+      const auto pair = azookey::core::LookupBracketPair(U'(', settings.Table());
+      return pair && pair->close == close;
+    });
+  };
+  ASSERT_TRUE(expect_close(U'}'));
+  {
+    std::ofstream stream(custom);
+    stream << "(\t]\n";
+  }
+  ASSERT_TRUE(expect_close(U']'));
+  EXPECT_EQ(azookey::core::LookupBracketPair(U'(', previous.Table())->close, U')');
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(expect_close(U')'));
+}
+
 TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {
   ASSERT_TRUE(reader.Start(path));
   EXPECT_FALSE(reader.Snapshot().pairing.enabled);

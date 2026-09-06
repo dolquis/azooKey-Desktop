@@ -3,6 +3,11 @@
   "title": "azooKey Windows TSF MVP settings",
   "type": "object",
   "properties": {
+    "bracketPairsPath": {
+      "type": "string",
+      "default": "",
+      "description": "M61-B: カッコ対 TSV。空なら LOCALAPPDATA/azooKey/bracket-pairs.tsv。相対パスは azooKey データディレクトリ基準"
+    },
     "bracketPairing": {
       "type": "boolean",
       "default": false,

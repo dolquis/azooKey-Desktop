@@ -5,7 +5,104 @@
 #include <string>
 #include <system_error>
 
+#include "azookey/logging/RuntimeLogger.h"
+
 namespace azookey::tsf {
+namespace {
+// File operations stay on activation/the watcher, never a keystroke callback.
+std::string ReadBounded(const std::filesystem::path& path) {
+  constexpr size_t kLimit = 1024 * 1024;
+  std::string contents(kLimit + 1, '\0');
+  const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                  OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return {};
+  DWORD count = 0;
+  const BOOL read =
+      ReadFile(file, contents.data(), static_cast<DWORD>(contents.size()), &count, nullptr);
+  CloseHandle(file);
+  if (!read || count > kLimit) return {};
+  contents.resize(count);
+  return contents;
+}
+
+class DirectoryWatch final {
+ public:
+  ~DirectoryWatch() { Close(); }
+  bool Open(const std::filesystem::path& path) {
+    Close();
+    auto ancestor = path.parent_path().parent_path();
+    std::error_code error;
+    while (!ancestor.empty() && !std::filesystem::is_directory(ancestor, error)) {
+      const auto parent = ancestor.parent_path();
+      if (parent == ancestor) break;
+      ancestor = parent;
+      error.clear();
+    }
+    relative_ = path.lexically_relative(ancestor).native();
+    directory_ =
+        CreateFileW(ancestor.c_str(), FILE_LIST_DIRECTORY,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+    if (directory_ == INVALID_HANDLE_VALUE) return false;
+    operation_.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    return operation_.hEvent && Arm();
+  }
+  HANDLE Event() const { return pending_ ? operation_.hEvent : nullptr; }
+  bool Consume() {
+    DWORD transferred = 0;
+    const BOOL success = GetOverlappedResult(directory_, &operation_, &transferred, FALSE);
+    pending_ = false;
+    bool relevant = !success || transferred == 0;
+    size_t offset = 0;
+    while (!relevant && offset + offsetof(FILE_NOTIFY_INFORMATION, FileName) <= transferred) {
+      const auto* change =
+          reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(buffer_.data() + offset);
+      const auto length = change->FileNameLength / sizeof(WCHAR);
+      if (offset + offsetof(FILE_NOTIFY_INFORMATION, FileName) + change->FileNameLength >
+          transferred)
+        break;
+      if (length <= relative_.size() &&
+          CompareStringOrdinal(change->FileName, static_cast<int>(length), relative_.data(),
+                               static_cast<int>(length), TRUE) == CSTR_EQUAL &&
+          (length == relative_.size() || relative_[length] == L'\\'))
+        relevant = true;
+      if (!change->NextEntryOffset) break;
+      offset += change->NextEntryOffset;
+    }
+    Arm();  // Keep notifications armed while parsing a changed file.
+    return relevant;
+  }
+
+ private:
+  bool Arm() {
+    ResetEvent(operation_.hEvent);
+    pending_ =
+        ReadDirectoryChangesW(directory_, buffer_.data(), static_cast<DWORD>(buffer_.size()), TRUE,
+                              FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+                                  FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE,
+                              nullptr, &operation_, nullptr) != FALSE;
+    return pending_;
+  }
+  void Close() {
+    if (pending_) {
+      CancelIoEx(directory_, &operation_);
+      DWORD transferred = 0;
+      GetOverlappedResult(directory_, &operation_, &transferred, TRUE);
+    }
+    if (directory_ != INVALID_HANDLE_VALUE) CloseHandle(directory_);
+    if (operation_.hEvent) CloseHandle(operation_.hEvent);
+    directory_ = INVALID_HANDLE_VALUE;
+    operation_ = {};
+    pending_ = false;
+  }
+  HANDLE directory_{INVALID_HANDLE_VALUE};
+  OVERLAPPED operation_{};
+  alignas(DWORD) std::array<BYTE, 16384> buffer_{};
+  std::wstring relative_;
+  bool pending_{false};
+};
+}  // namespace
 
 TipLocalSettings::~TipLocalSettings() { Stop(); }
 
@@ -13,23 +110,7 @@ bool TipLocalSettings::Start(const std::filesystem::path& settings_path) noexcep
   Stop();
   try {
     path_ = std::filesystem::absolute(settings_path).lexically_normal();
-    // Watch an existing ancestor so a later config directory/file creation is
-    // noticed too. Do not create or write user configuration from the TIP.
-    auto ancestor = path_.parent_path().parent_path();
-    std::error_code ec;
-    while (!ancestor.empty() && !std::filesystem::is_directory(ancestor, ec)) {
-      const auto parent = ancestor.parent_path();
-      if (parent == ancestor) break;
-      ancestor = parent;
-      ec.clear();
-    }
-    relative_path_ = path_.lexically_relative(ancestor).native();
     Reload();
-    directory_ =
-        CreateFileW(ancestor.c_str(), FILE_LIST_DIRECTORY,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
-    if (directory_ == INVALID_HANDLE_VALUE) return false;
     stop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     ready_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!stop_ || !ready_) {
@@ -37,8 +118,6 @@ bool TipLocalSettings::Start(const std::filesystem::path& settings_path) noexcep
       return false;
     }
     worker_ = std::thread([this] { Watch(); });
-    // Start returns only after the first watch is armed. Reload in Watch closes
-    // the race between the initial read and notification registration.
     WaitForSingleObject(ready_, INFINITE);
     return watch_started_.load();
   } catch (...) {
@@ -50,13 +129,13 @@ bool TipLocalSettings::Start(const std::filesystem::path& settings_path) noexcep
 void TipLocalSettings::Stop() noexcept {
   if (stop_) SetEvent(stop_);
   if (worker_.joinable()) worker_.join();
-  if (directory_ != INVALID_HANDLE_VALUE) CloseHandle(directory_);
   if (stop_) CloseHandle(stop_);
   if (ready_) CloseHandle(ready_);
-  directory_ = INVALID_HANDLE_VALUE;
   stop_ = nullptr;
   ready_ = nullptr;
   watch_started_.store(false);
+  const std::lock_guard<std::mutex> lock(mutex_);
+  settings_ = {};
 }
 
 core::BracketSettings TipLocalSettings::Snapshot() const {
@@ -67,89 +146,62 @@ core::BracketSettings TipLocalSettings::Snapshot() const {
 void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   try {
-    // Bound reads even when the file grows while being read. JSON contains
-    // unrelated settings too, so never log its contents or parser input.
-    constexpr size_t kMaxSettingsBytes = 1024 * 1024;
-    std::string contents(kMaxSettingsBytes + 1, '\0');
-    const HANDLE file = CreateFileW(path_.c_str(), GENERIC_READ,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                    OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    if (file != INVALID_HANDLE_VALUE) {
-      DWORD count = 0;
-      const BOOL read =
-          ReadFile(file, contents.data(), static_cast<DWORD>(contents.size()), &count, nullptr);
-      CloseHandle(file);
-      if (read && count <= kMaxSettingsBytes) {
-        contents.resize(count);
-        next = core::ParseBracketSettings(contents);
-      }
+    next = core::ParseBracketSettings(ReadBounded(path_));
+    const auto default_path = path_.parent_path().parent_path() / L"bracket-pairs.tsv";
+    auto custom =
+        std::filesystem::path(std::u8string(next.pairs_path.begin(), next.pairs_path.end()));
+    // Relative paths resolve against the azooKey data directory, not an app's cwd.
+    table_path_ = (custom.empty()         ? default_path
+                   : custom.is_absolute() ? custom
+                                          : default_path.parent_path() / custom)
+                      .lexically_normal();
+    auto parsed = core::ParseBracketTable(ReadBounded(table_path_));
+    if (!parsed.invalid_lines.empty()) {
+      static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("tip"));
+      logger.Log(logging::RuntimeLogLevel::Warn, "bracket_table_invalid_rows",
+                 {{"count", static_cast<uint64_t>(parsed.invalid_lines.size())},
+                  {"first_line", static_cast<uint64_t>(parsed.invalid_lines.front())}});
     }
+    next.table = std::make_shared<const core::BracketTable>(std::move(parsed.table));
   } catch (...) {
-    // Missing, invalid, or unreadable settings always use schema defaults.
+    next = {};  // No contents/paths in diagnostics, no writes to user configuration.
   }
   {
     const std::lock_guard<std::mutex> lock(mutex_);
-    settings_ = next;
+    settings_ = std::move(next);
   }
   changed_.notify_all();
 }
 
 void TipLocalSettings::Watch() noexcept {
-  HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  if (!event) {
+  try {
+    DirectoryWatch config, table;
+    if (!config.Open(path_)) {
+      SetEvent(ready_);
+      return;
+    }
+    Reload();
+    auto watched_table = table_path_;
+    table.Open(watched_table);
+    Reload();  // Close the read/registration race for both files.
+    watch_started_.store(true);
     SetEvent(ready_);
-    return;
-  }
-  alignas(DWORD) std::array<BYTE, 16384> buffer{};
-  OVERLAPPED operation{};
-  operation.hEvent = event;
-  bool initial = true;
-  for (;;) {
-    ResetEvent(event);
-    if (!ReadDirectoryChangesW(directory_, buffer.data(), static_cast<DWORD>(buffer.size()), TRUE,
-                               FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
-                                   FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE,
-                               nullptr, &operation, nullptr)) {
-      SetEvent(ready_);
-      break;
-    }
-    if (initial) {
-      watch_started_.store(true);
+    for (;;) {
+      const HANDLE handles[]{stop_, config.Event(), table.Event()};
+      if (!handles[1]) break;
+      const DWORD wait = WaitForMultipleObjects(handles[2] ? 3 : 2, handles, FALSE, INFINITE);
+      if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2) break;
+      if (!(wait == WAIT_OBJECT_0 + 1 ? config.Consume() : table.Consume())) continue;
       Reload();
-      initial = false;
-      SetEvent(ready_);
+      if (watched_table != table_path_ || !table.Event()) {
+        watched_table = table_path_;
+        table.Open(watched_table);
+        Reload();
+      }
     }
-    const HANDLE handles[]{stop_, event};
-    const DWORD wait = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
-    DWORD transferred = 0;
-    if (wait != WAIT_OBJECT_0 + 1) {
-      CancelIoEx(directory_, &operation);
-      GetOverlappedResult(directory_, &operation, &transferred, TRUE);
-      break;
-    }
-    if (!GetOverlappedResult(directory_, &operation, &transferred, FALSE)) break;
-    bool relevant = transferred == 0;
-    size_t offset = 0;
-    while (!relevant && offset + offsetof(FILE_NOTIFY_INFORMATION, FileName) <= transferred) {
-      const auto* change = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(buffer.data() + offset);
-      const size_t length = change->FileNameLength / sizeof(WCHAR);
-      if (offset + offsetof(FILE_NOTIFY_INFORMATION, FileName) + change->FileNameLength >
-          transferred)
-        break;
-      if (length <= relative_path_.size() &&
-          CompareStringOrdinal(change->FileName, static_cast<int>(length), relative_path_.data(),
-                               static_cast<int>(length), TRUE) == CSTR_EQUAL &&
-          (length == relative_path_.size() || relative_path_[length] == L'\\'))
-        relevant = true;
-      if (!change->NextEntryOffset) break;
-      offset += change->NextEntryOffset;
-    }
-    // Re-read after relevant notifications, including buffer overflow (zero bytes).
-    // ReadDirectoryChangesW retains subsequent changes on the directory handle
-    // until the next request, including edits during this bounded read.
-    if (relevant) Reload();
+  } catch (...) {
+    SetEvent(ready_);
   }
-  CloseHandle(event);
 }
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -158,10 +210,15 @@ void TipLocalSettings::SetForTest(const core::BracketSettings& settings) {
   settings_ = settings;
 }
 
-bool TipLocalSettings::WaitForEnabledForTest(bool enabled) {
+bool TipLocalSettings::WaitForSnapshotForTest(
+    const std::function<bool(const core::BracketSettings&)>& predicate) {
   std::unique_lock<std::mutex> lock(mutex_);
-  return changed_.wait_for(lock, std::chrono::seconds(5),
-                           [&] { return settings_.pairing.enabled == enabled; });
+  return changed_.wait_for(lock, std::chrono::seconds(5), [&] { return predicate(settings_); });
+}
+
+bool TipLocalSettings::WaitForEnabledForTest(bool enabled) {
+  return WaitForSnapshotForTest(
+      [&](const auto& settings) { return settings.pairing.enabled == enabled; });
 }
 #endif
 

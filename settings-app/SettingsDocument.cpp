@@ -138,14 +138,18 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "contextReselection" || key == "postCommitLint" ||
                key == "retroactiveRecompute" || key == "sentenceCompletion" ||
                key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
-               key == "numberRewriter" || key == "katakanaRewriter") {
+               key == "numberRewriter" || key == "katakanaRewriter" || key == "bracketPairing" ||
+               key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
+               key == "bracketPairingInAlnumMode") {
       valid = value.IsBool();
+    } else if (key == "bracketPairingTrigger") {
+      valid = IsStringEnum(value, {"immediate", "composition"});
     } else if (key == "logLevel") {
       valid = IsStringEnum(value, {"error", "warn", "info", "debug"});
     } else if (key == "inputStyle") {
       valid = IsStringEnum(value, {"default", "custom"});
     } else if (key == "customRomajiTablePath" || key == "openAiApiKey" ||
-               key == "openAiApiEndpoint" || key == "openAiModel") {
+               key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath") {
       valid = value.IsString();
     } else if (key == "aiBackend") {
       valid = IsStringEnum(value, {"none", "openai", "local-zenzai"});

@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -24,6 +25,7 @@ class TipLocalSettings final {
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
   bool WaitForEnabledForTest(bool enabled);
+  bool WaitForSnapshotForTest(const std::function<bool(const core::BracketSettings&)>& predicate);
 #endif
 
  private:
@@ -33,9 +35,8 @@ class TipLocalSettings final {
   std::condition_variable changed_;
   core::BracketSettings settings_;
   std::filesystem::path path_;
-  std::wstring relative_path_;
+  std::filesystem::path table_path_;
   std::atomic<bool> watch_started_{false};
-  HANDLE directory_{INVALID_HANDLE_VALUE};
   HANDLE stop_{nullptr};
   HANDLE ready_{nullptr};
   std::thread worker_;

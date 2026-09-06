@@ -18,6 +18,7 @@ BracketSettings ParseBracketSettings(std::string_view json) {
     settings.trigger = BracketPairingTrigger::Composition;
   }
   const auto mode = root->GetString("inputMode");
+  settings.pairs_path = root->GetString("bracketPairsPath").value_or("");
   if (mode == "alnum_half") settings.input_mode = BracketInputMode::AlnumHalf;
   if (mode == "alnum_full") settings.input_mode = BracketInputMode::AlnumFull;
   return settings;

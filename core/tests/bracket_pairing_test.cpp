@@ -12,6 +12,37 @@ BracketPairingOptions Enabled() {
   return options;
 }
 
+TEST(BracketTableTest, MergesOverridesAdditionsAndDisablesByOpeningCharacter) {
+  const auto result = ParseBracketTable("\xef\xbb\xbf# pairs\r\n(\t}\r\n<\t>\n[\t]\toff\n");
+  EXPECT_TRUE(result.invalid_lines.empty());
+  EXPECT_EQ(LookupBracketPair(U'(', result.table)->close, U'}');
+  EXPECT_EQ(LookupBracketPair(U'<', result.table)->close, U'>');
+  EXPECT_FALSE(LookupBracketPair(U'[', result.table));
+  EXPECT_FALSE(LookupClosingBracket(U')', result.table));
+  EXPECT_TRUE(LookupBracketPair(U'「', result.table));
+  EXPECT_EQ(EvaluateBracketInput(U'<', false, {{}, {}, true}, Enabled(), result.table).close, U'>');
+  EXPECT_EQ(EvaluateBracketBackspace(false, {U'(', U'}', true}, Enabled(), result.table).type,
+            BracketPairingActionType::kDeletePair);
+}
+
+TEST(BracketTableTest, SkipsInvalidRowsWithoutDiscardingValidOverrides) {
+  const auto result = ParseBracketTable(
+      "bad\nxx\t)\n(\t\xff\n(\t)\tunknown\n"
+      "(\t)\t\textra\n😀\t)\n \t)\n(\t}\n(\t]\n");
+  EXPECT_EQ(result.invalid_lines, (std::vector<size_t>{1, 2, 3, 4, 5, 6, 7}));
+  EXPECT_EQ(LookupBracketPair(U'(', result.table)->close, U']');
+  EXPECT_EQ(ParseBracketTable("").table.pairs, BuiltinBracketTable().pairs);
+}
+
+TEST(BracketTableTest, SymmetricDefinitionsRemainDisabledWithoutOptIn) {
+  const auto result = ParseBracketTable("\"\t\"\n");
+  ASSERT_TRUE(LookupBracketPair(U'"', result.table));
+  EXPECT_EQ(EvaluateBracketInput(U'"', false, {{}, {}, true}, Enabled(), result.table).type,
+            BracketPairingActionType::kPassThrough);
+  EXPECT_EQ(EvaluateBracketBackspace(false, {U'"', U'"', true}, Enabled(), result.table).type,
+            BracketPairingActionType::kPassThrough);
+}
+
 TEST(BracketPairingTest, InsertsEveryBuiltInPairAtCollapsedCaret) {
   const std::u32string opens = U"（「『【〔［｛〈《“‘([{", closes = U"）」』】〕］｝〉》”’)]}";
   ASSERT_EQ(opens.size(), closes.size());

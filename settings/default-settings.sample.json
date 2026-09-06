@@ -1,6 +1,7 @@
 {
   "inputMode": "hiragana",
   "bracketPairing": false,
+  "bracketPairsPath": "",
   "bracketPairingTrigger": "immediate",
   "bracketSkipOverClosing": true,
   "bracketBackspaceDeletesPair": true,

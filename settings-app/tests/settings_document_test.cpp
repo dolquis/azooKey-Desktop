@@ -129,6 +129,29 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfiguration) {
+  const auto dir = TestDir("azookey_settings_brackets");
+  const auto path = dir / "settings.json";
+  const std::string json = R"({"bracketPairing":true,"bracketPairingTrigger":"composition",
+      "bracketSkipOverClosing":false,"bracketBackspaceDeletesPair":false,
+      "bracketPairingInAlnumMode":false,"bracketPairsPath":"pairs.tsv"})";
+  WriteText(path, json);
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok);
+  EXPECT_TRUE(saved.warnings.empty());
+  const auto actual = azookey::ipc::json::Parse(ReadText(path));
+  const auto expected = azookey::ipc::json::Parse(json);
+  ASSERT_TRUE(actual && expected);
+  for (const auto& [key, value] : expected->AsObject()) {
+    ASSERT_TRUE(actual->AsObject().contains(key)) << key;
+    EXPECT_EQ(azookey::ipc::json::Stringify(actual->AsObject().at(key)),
+              azookey::ipc::json::Stringify(value))
+        << key;
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, UnsupportedValidBackendIsPreservedUntilUserSelectsOne) {
   const auto dir = TestDir("azookey_settings_document_hidden_backend");
   const auto path = dir / "settings.json";

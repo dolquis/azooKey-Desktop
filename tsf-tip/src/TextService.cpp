@@ -846,7 +846,9 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   const auto raw = CurrentBracketCharacter(key, key_data);
   const char32_t codepoint = raw ? BracketCodepoint(*raw, settings.input_mode) : 0;
   const bool bracket =
-      enabled && (core::LookupBracketPair(codepoint) || core::LookupClosingBracket(codepoint));
+      enabled &&
+      core::EvaluateBracketInput(codepoint, alnum, {}, settings.pairing, settings.Table()).type !=
+          core::BracketPairingActionType::kPassThrough;
   const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
   const bool candidates_visible = candidate_ui_.IsShowing();
   if (bracket && BatchRomajiEnabled() && has_preedit) {
@@ -883,7 +885,12 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
       if (FAILED(commit) || committing_) return FAILED(commit) ? commit : E_FAIL;
     }
     const auto hint = BracketEditSession::ReadHint(context, client_id_);
-    const auto action = core::EvaluateBracketInput(codepoint, alnum, hint, settings.pairing);
+    const auto action =
+        core::EvaluateBracketInput(codepoint, alnum, hint, settings.pairing, settings.Table());
+    if (action.type == core::BracketPairingActionType::kPassThrough) {
+      handled = false;
+      return S_OK;
+    }
     bool applied = false;
     const HRESULT result =
         BracketEditSession::Apply(*this, context, client_id_, action, settings.trigger, applied);
@@ -902,7 +909,8 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   }
   if (enabled && key == VK_BACK && !has_preedit && !candidates_visible) {
     const auto hint = BracketEditSession::ReadHint(context, client_id_);
-    const auto action = core::EvaluateBracketBackspace(alnum, hint, settings.pairing);
+    const auto action =
+        core::EvaluateBracketBackspace(alnum, hint, settings.pairing, settings.Table());
     if (action.type == core::BracketPairingActionType::kDeletePair) {
       handled = true;
       if (test_only) {

@@ -10,8 +10,9 @@
 1. **重み形式は GGUF / ggml 系**とする。
 2. **推論エンジンは R1（llama.cpp C-API 直結）**を採る。GGUF を無変換でロードでき、
    `core::IConverter` 差し替えで `SimpleConverter` フォールバックを維持できる。
-3. **既定アクセラレータは CPU** とする。`AZOOKEY_BACKEND` は `cpu`（既定）と `cuda` を
-   取り、CUDA は CMake オプションによる optional 経路である。
+3. **既定アクセラレータは CPU** とする。`AZOOKEY_BACKEND` は `cpu`（既定）、`cuda`、
+   `vulkan` を取る。Vulkan 構成は ggml-vulkan をリンクし、Host の既定値も Vulkan とする。
+   CUDA 指定は CPU fallback の警告を返す予約経路とする。
 4. **DirectML 単体 backend は採らない**。ベンダ横断 GPU は R1 = ggml-vulkan、DirectML
    由来の実行は R2 = Windows ML に集約する。
 
@@ -27,26 +28,28 @@ Health の扱いは同 §4.4 を正典とする。
   `https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf`）を
   `legacy/azooKeyMac/Resources/gguf/` にマウントして供給する。
 - 依存は `AzooKeyKanaKanjiConverter` だが、呼び出し側の重み形式は GGUF である。
-- CUDA / Windows ML / NPU の選定は
+- Vulkan / CUDA / Windows ML / NPU の選定は
   `InferenceEngine::LoadModel(path, backend, n_gpu_layers)` の境界より内側に閉じるため、
   エンジンを差し替えても TIP 側の契約は変わらない。
 
 ## フォールバック
 
-- CUDA 初期化失敗・GPU なしの場合は同一 Host API で CPU 実行する。
+- Vulkan 初期化・モデルロード失敗時は同一 Host API で CPU ロードを一度だけ再試行する。
+  両方のロードに失敗した場合は、Vulkan と CPU の両方の失敗理由を保持する。
 - TIP はバックエンド差を意識せず、IPC レスポンスのみで処理する。
 - 終端は常に R1 CPU（GGUF）であり、入力をブロックしない。段位表は
   `docs/copilot-pc-backend-spec.md` §4.5。
 
 ## 実装構成
 
-- `AZOOKEY_BACKEND=cpu|cuda` を CMake cache option として持つ。`BackendKind` は
-  `{ Cpu, Cuda }` であり、`--backend directml` は unsupported として拒否する。
+- `AZOOKEY_BACKEND=cpu|cuda|vulkan` を CMake cache option として持つ。`BackendKind` は
+  `{ Cpu, Cuda, Vulkan }` であり、`--backend directml` は unsupported として拒否する。
   `directml` は IPC payload と設定スキーマの予約文字列として残すが、enum 値には
   しない（enum 拡張ポリシーの正典は `docs/copilot-pc-backend-spec.md` §4.4）。
 - `AZOOKEY_LLAMA_CPP_SOURCE_DIR` または `AZOOKEY_FETCH_LLAMA_CPP=ON` で llama.cpp
   `llama` target を接続し、`azookey_host` に `AZOOKEY_WITH_LLAMA_CPP` を伝播する。
-  未接続時は no-egress の mock runtime でビルド・テストを継続する。
+  CPU 構成の未接続時は no-egress の mock runtime でビルド・テストを継続する。
+  Vulkan 構成は実 llama target を必須とし、`windows-vulkan-release` preset でビルドする。
 - `ZenzaiModelConverter` は GGUF magic / version を検証して
   `InferenceEngine::model_loaded()` / `Handshake` / `Health` に反映する。
 - llama.cpp 接続時は `llama_model_load_from_file` / `llama_init_from_model` で GGUF を
@@ -57,6 +60,8 @@ Health の扱いは同 §4.4 を正典とする。
 - CUDA 指定時は valid GGUF を CPU fallback としてロードし、降格理由は
   `ModelLoadResult.error` の警告として返す。CPU ロード自体が成功した場合、`Health` は
   ok を保つ。
+- Vulkan から CPU への降格では、CPU ロード成功後も失敗理由を保持し、`Health` を
+  degraded とする。配布への組み込みと UI 露出条件は DEV-1001 で扱う。
 
 実モデルを使う開発登録の手順（`windows-llama-debug` preset、`register-dev.ps1` の
 `-ModelPath`、GGUF の配置先）は `README.md` を正典とする。GGUF を配置しただけでは
@@ -71,6 +76,7 @@ fallback-only の TIP テスト専用で llama.cpp preflight を迂回する経�
 | CPU fallback | `bench/azookey_bench.exe` | exit=0、p95 < 50ms |
 | Zenzai CPU | `bench/azookey_zenzai_bench.exe --model <gguf> --require-model --require-zenzai`（または `AZOOKEY_ZENZAI_MODEL=<gguf>`） | `LoadModel` 成功 |
 | Zenzai CUDA | 同上（`--backend cuda`） | 初期化失敗時に CPU または `SimpleConverter` へ降格 |
+| Zenzai Vulkan | 同上（`--backend vulkan`） | GPU offload、失敗時の CPU 再試行と Health degraded を確認 |
 
 記録するメトリクスの一覧は `docs/copilot-pc-backend-spec.md` §4.2 を正典とする。
 モデル未指定時は `status=skipped` で成功終了し、CTest では `--mock-zenzai` で

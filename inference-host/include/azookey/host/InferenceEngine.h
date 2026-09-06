@@ -71,6 +71,8 @@ struct ModelLoadOptions {
   bool mock_zenzai_candidates_for_tests{false};
   // Test-only hook used to prove loading work runs outside state_mutex_.
   std::function<void()> before_probe_for_tests;
+  // Test-only fault injection at each backend load attempt.
+  std::function<void(BackendKind)> before_load_for_tests;
 };
 
 struct ModelLoadResult {

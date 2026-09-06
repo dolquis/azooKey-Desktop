@@ -342,10 +342,17 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
   const auto load = [&]() {
     try {
+      if (options.before_load_for_tests) {
+        options.before_load_for_tests(next_config.backend);
+      }
       return LoadZenzaiGgufModel(next_config.model_path, runtime_options);
     } catch (const std::exception& ex) {
       ZenzaiLoadResult failed;
       failed.error = std::string("model initialization failed: ") + ex.what();
+      return failed;
+    } catch (...) {
+      ZenzaiLoadResult failed;
+      failed.error = "model initialization failed: unknown exception";
       return failed;
     }
   };
@@ -360,7 +367,8 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     result.error = backend_error;
   }
   if (!loaded.ok) {
-    result.error = loaded.error;
+    result.error =
+        backend_error ? *backend_error + "; CPU fallback failed: " + loaded.error : loaded.error;
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
       ApplyModelConfigFields(config_, next_config);

@@ -28,7 +28,7 @@ struct BackendInfo {
 > 初期スケッチであり、最終的な enum 拡張は §4.4 のポリシーに従う。DirectML が
 > sustained engineering となったため、NPU / DirectML 系アクセラレーションは個別
 > enum 値ではなく **`WinML` エンジン値（具体 EP は Windows ML が自動選択）**で表現し、
-> `DirectML` / `NPU` を独立値として実装しない。現行コードの enum は `{ Cpu, Cuda }`
+> `DirectML` / `NPU` を独立値として実装しない。R1 の enum は `{ Cpu, Cuda, Vulkan }`
 > （llama.cpp）であり、拡張は後方互換の追記のみで行う。
 
 ## 2. 自動選択優先度
@@ -311,7 +311,8 @@ R2 の保留中は R1 CPU 経路だけを有効にする。
 
 v1.0 設定 UI のデバイス選択は、この結論に合わせて `auto` / `cpu` の 2 値へ縮小する
 （`docs/sideload-packaging-spec.md` §3.7 が正典）。`cuda` は §4.4 の降格が続くあいだ UI に出さず、
-`vulkan` の露出条件は M24 ではなく ggml-vulkan ビルドの配布（DEV-944）とする。
+`vulkan` の露出条件は M24 ではなく、実行時選択経路の配線（DEV-944）と
+ggml-vulkan ビルドの配布・起動保証（DEV-1001）とする。
 `vulkan` は R1 に属するため、保留中の R2 のマイルストーンに従属させない。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 先行 Windows 実装が R1（llama.cpp）を

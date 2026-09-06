@@ -1355,7 +1355,7 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | キー | v1.0 UI | v1.x で UI 化（暫定: schema 直書き / probe） |
 |---|---|---|
 | `model.enabled` | ◯（一般） | — |
-| `model.backendPreference` | ◯（一般、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布 + 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
+| `model.backendPreference` | ◯（一般、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
 | `model.selectedPath` | ◯（一般） | — |
 | `logLevel` | ◯（詳細） | — |
 | `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |

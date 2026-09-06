@@ -6,6 +6,8 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -248,13 +250,20 @@ class TextService final : public ITfTextInputProcessorEx,
   // For Cancel items, cancel_target_id carries the target_request_id so the
   // worker can detect a cancel that targets the currently in-flight query and
   // abandon its receive (the host returns no response for canceled requests).
+  // attempts counts the transport attempts an ACK-awaiting item has already
+  // survived, so a resend loop that never gets an ACK gives up instead of
+  // starving QueryCandidates (DEV-554).
   struct IpcSendItem {
     ipc::MessageType type;
     std::string payload_json;
     bool expects_response{false};
     uint64_t cancel_target_id{0};
+    uint32_t attempts{0};
   };
   std::vector<IpcSendItem> ipc_send_queue_;  // protected by ipc_mtx_
+  // Monotonic counter behind the CommitObservation idempotency key. Written on
+  // the TIP thread, never read by the IPC worker, so an atomic suffices.
+  std::atomic<uint64_t> commit_observation_seq_{0};
 
   // Latest Host candidates plus optional TIP-local rewrites (written by IPC
   // thread, read by TIP thread).
@@ -280,6 +289,8 @@ class TextService final : public ITfTextInputProcessorEx,
                                 ipc::MessageType expected_type);
   bool ObserveHostGeneration(const std::string& host_generation_id);
   void RearmPendingQuery(uint64_t req_id);
+  void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
+  std::string NextCommitObservationId();
   void PostQueryCandidates(const std::string& reading);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);
   static void OnCandidatesReady(void* context);

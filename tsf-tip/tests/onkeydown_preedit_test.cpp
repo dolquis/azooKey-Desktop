@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1182,6 +1183,121 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
 
   h.service.stop_ipc_worker_for_test();
   replacement_server.Stop();
+}
+
+// DEV-554: a host that dies before ACKing a CommitObservation used to lose that
+// commit's learning telemetry, because the worker dropped the ACK-awaiting item
+// when it left the connection loop. The item must survive the reconnect and be
+// resent with the same observation_id so the host can dedupe it.
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-commit-observation-resend-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::mutex observed_mtx;
+  std::string first_observation_id;
+  std::string second_observation_id;
+  std::atomic<bool> first_commit_received{false};
+  std::atomic<bool> second_commit_received{false};
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_FALSE(h.service.ipc_client_id_for_test().empty());
+
+  // Queue the observation before any worker runs, so the send queue holds
+  // exactly the commit traffic this test cares about.
+  h.service.preedit_kana_ = "かな";
+  std::vector<azookey::ipc::CandidateField> host_candidates(1);
+  host_candidates[0].surface = "仮名";
+  host_candidates[0].reading = "かな";
+  host_candidates[0].source = "test";
+  h.service.set_rewritten_cached_candidates_for_test("かな", std::move(host_candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_selected_candidate_index_for_test(0);
+  {
+    FakeCompositionAttachment attachment(h);
+    ASSERT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  }
+  const auto queued = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(queued.has_value());
+  ASSERT_FALSE(queued->observation_id.empty());
+
+  // First host: accepts the handshake, receives the observation, then dies
+  // without replying (kill-before-ACK).
+  azookey::ipc::NamedPipeServer first_server;
+  ASSERT_TRUE(first_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "test-host";
+          payload.host_generation_id = "generation-a";
+          payload.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::CommitObservation) {
+          if (const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json)) {
+            std::lock_guard<std::mutex> lock(observed_mtx);
+            first_observation_id = payload->observation_id;
+          }
+          first_commit_received.store(true);
+        }
+        return std::nullopt;
+      }));
+
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return first_commit_received.load(); }));
+  first_server.Stop();
+
+  // Second host on the same per-user pipe must see the observation again.
+  azookey::ipc::NamedPipeServer second_server;
+  ASSERT_TRUE(second_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.host_version = "test-host";
+          payload.host_generation_id = "generation-b";
+          payload.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::CommitObservation) {
+          if (const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json)) {
+            std::lock_guard<std::mutex> lock(observed_mtx);
+            second_observation_id = payload->observation_id;
+          }
+          second_commit_received.store(true);
+          azookey::ipc::CommitObservationResponse ack;
+          ack.ok = true;
+          res.payload_json = azookey::ipc::BuildCommitObservationResponse(ack);
+          return res;
+        }
+        return std::nullopt;
+      }));
+
+  // The worker waits up to 3s for the missing ACK before it gives up on the
+  // dead connection, then reconnects with backoff.
+  ASSERT_TRUE(
+      WaitUntil([&] { return second_commit_received.load(); }, std::chrono::milliseconds(20000)));
+
+  {
+    std::lock_guard<std::mutex> lock(observed_mtx);
+    EXPECT_EQ(first_observation_id, queued->observation_id);
+    // The same key on both connections is what lets the host apply the commit
+    // exactly once across the restart.
+    EXPECT_EQ(second_observation_id, queued->observation_id);
+  }
+
+  h.service.stop_ipc_worker_for_test();
+  second_server.Stop();
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesBatchQueryAndUnblocksSpace) {

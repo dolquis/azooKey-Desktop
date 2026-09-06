@@ -331,6 +331,83 @@ TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   std::remove(path.c_str());
 }
 
+// DEV-554: a CommitObservation resent after a pipe drop carries the same
+// observation_id, so the Host must apply it exactly once.
+TEST(InferenceEngineTest, CommitObservationIgnoresRepeatedObservationId) {
+  const std::string path = TempPath("azookey_host_engine_observation_id_dedupe.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
+  const double after_first = store.Score("にほん", "二本", kNowBase + 1);
+
+  EXPECT_FALSE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
+  EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", kNowBase + 1), after_first);
+
+  // A different id is a different commit and must still be counted.
+  EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:2"));
+  EXPECT_GT(store.Score("にほん", "二本", kNowBase + 1), after_first);
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+// A TIP that predates DEV-554 sends no observation_id. Those observations carry
+// no dedupe information, so every one of them must still be applied.
+TEST(InferenceEngineTest, CommitObservationWithoutObservationIdIsNeverDeduped) {
+  const std::string path = TempPath("azookey_host_engine_observation_id_absent.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, ""));
+  const double after_first = store.Score("にほん", "二本", kNowBase + 1);
+  EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, ""));
+  EXPECT_GT(store.Score("にほん", "二本", kNowBase + 1), after_first);
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+// The dedupe ring is bounded, so an id evicted by newer traffic is applied
+// again. The bound is what keeps a long-lived Host from growing without limit.
+TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
+  const std::string path = TempPath("azookey_host_engine_observation_id_evict.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100000;
+  cfg.learning_flush_interval_sec = 100000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  ASSERT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
+  // 256 distinct ids (the ring depth) push "tip-a:1" out of the ring.
+  for (int i = 0; i < 256; ++i) {
+    ASSERT_TRUE(engine->CommitObservation("かな", "仮名", kNowBase + 1,
+                                          "tip-a:evict-" + std::to_string(i)));
+  }
+  EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
 TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_interval.tsv");
   std::remove(path.c_str());

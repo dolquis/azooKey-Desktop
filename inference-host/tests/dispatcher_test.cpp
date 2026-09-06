@@ -467,6 +467,36 @@ TEST_F(DispatcherTest, CommitObservation) {
   EXPECT_TRUE(parsed->ok);
 }
 
+// DEV-554: a resend after a pipe drop repeats the observation_id. The Dispatcher
+// must answer ok=true (so the TIP stops retrying) without counting the commit
+// twice in the learning store.
+TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCounting) {
+  ipc::CommitObservationRequest c;
+  c.reading = "にほん";
+  c.chosen = {"二本", "にほん", 0.4, "fallback"};
+  c.timestamp_ms = 1700000000000ULL;
+  c.observation_id = "tip-1:9";
+  const auto payload = ipc::BuildCommitObservationRequest(c);
+
+  auto first = dispatcher.Dispatch(MakeReq(51, ipc::MessageType::CommitObservation, payload));
+  ASSERT_TRUE(first.has_value());
+  const auto first_parsed = ipc::ParseCommitObservationResponse(first->payload_json);
+  ASSERT_TRUE(first_parsed.has_value());
+  EXPECT_TRUE(first_parsed->ok);
+  const size_t entries_after_first = store.size();
+  const double score_after_first = store.Score("にほん", "二本", 1700000000ULL);
+
+  // The envelope request_id differs because the TIP restarts its per-connection
+  // numbering after a reconnect; only observation_id identifies the commit.
+  auto resend = dispatcher.Dispatch(MakeReq(2, ipc::MessageType::CommitObservation, payload));
+  ASSERT_TRUE(resend.has_value());
+  const auto resend_parsed = ipc::ParseCommitObservationResponse(resend->payload_json);
+  ASSERT_TRUE(resend_parsed.has_value());
+  EXPECT_TRUE(resend_parsed->ok);
+  EXPECT_EQ(store.size(), entries_after_first);
+  EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1700000000ULL), score_after_first);
+}
+
 TEST_F(DispatcherTest, AddRemoveUserWord) {
   ipc::AddUserWordRequest add;
   add.word = "azooKey";

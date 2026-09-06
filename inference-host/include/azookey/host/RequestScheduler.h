@@ -12,6 +12,7 @@ namespace azookey::host {
 
 class RequestScheduler {
  public:
+  static constexpr std::size_t kMaxPendingRequestsPerClient = 64;
   uint64_t NextRequestId();
   // Empty client_id is the protocol-v1 legacy namespace. Non-empty ids isolate
   // primary/control connections belonging to one TIP from other TIP instances.
@@ -21,6 +22,8 @@ class RequestScheduler {
   void Cancel(const std::string& client_id, uint64_t request_id);
   bool IsCanceled(uint64_t request_id) const;
   bool IsCanceled(const std::string& client_id, uint64_t request_id) const;
+  // Returns nullptr when the client's pending-request or cancellation-state
+  // limit is reached. Rejected requests must not call CompleteRequest.
   std::shared_ptr<std::atomic<bool>> TrackCancellation(uint64_t request_id);
   std::shared_ptr<std::atomic<bool>> TrackCancellation(const std::string& client_id,
                                                        uint64_t request_id);
@@ -40,6 +43,7 @@ class RequestScheduler {
   struct ClientState {
     uint64_t latest{};
     std::size_t active_connections{0};
+    std::size_t pending_requests{0};
     std::unordered_map<uint64_t, CancelState> cancel_states;
   };
 

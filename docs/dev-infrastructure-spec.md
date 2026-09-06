@@ -1045,6 +1045,17 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
   TIP と設定 UI などの同時接続を許容する有界な上限
   (`kMaxPipeInstances = 32`) を設ける
+- **6.4.2a クライアントごとの未完了要求上限** — `RequestScheduler` は
+  `client_id` ごとに未完了要求とキャンセル状態をそれぞれ最大64件まで保持する
+  （`kMaxPendingRequestsPerClient`）。同一IDの並行要求も未完了件数に加算する。
+  空の `client_id` は protocol-v1 の共有名前空間として同じ上限を適用する。
+  上限到達時の新規要求は推論を開始せず、`QueryCandidates` は空候補、
+  `QueryBatchConversion` は `canceled=true` で応答する。拒否した要求は
+  latest ID と既存要求の完了状態を変更しない。
+  状態数が上限に達した場合、到着要求より古い非実行中の Cancel を回収してから
+  受付を判定する。保持済みIDへの Cancel は常に反映し、状態数が上限に達した
+  ときの未知IDへの先行 Cancel は保持しない。要求完了と最終接続の切断で
+  対応する状態を回収する。
 - **6.4.3 最大フレームサイズ = 1 MiB** — `kMaxFrameSize`（`= kMaxJsonInputBytes`、
   `Limits.h`）。4-byte little-endian length-prefix の値が 0 または本上限超過の
   フレームは `ReadEnvelope` / `DecodeLengthPrefixed` が拒否する。候補問い合わせ

@@ -19,6 +19,59 @@
 
 namespace host = azookey::host;
 
+TEST(RequestSchedulerTest, PendingLimitRejectsFloodAndRecoversAfterCompletion) {
+  host::RequestScheduler s;
+  constexpr auto limit = host::RequestScheduler::kMaxPendingRequestsPerClient;
+  for (uint64_t id = 1; id <= limit; ++id) {
+    ASSERT_NE(s.TrackCancellation("client-a", id), nullptr);
+  }
+  for (uint64_t id = limit + 1; id <= limit + 10000; ++id) {
+    EXPECT_EQ(s.TrackCancellation("client-a", id), nullptr);
+    s.Cancel("client-a", id);
+    EXPECT_FALSE(s.IsCanceled("client-a", id));
+  }
+  // Another client has its own budget, and live cancellation still works.
+  EXPECT_NE(s.TrackCancellation("client-b", 1), nullptr);
+  s.Cancel("client-a", 1);
+  EXPECT_TRUE(s.IsCanceled("client-a", 1));
+  s.CompleteRequest("client-a", 1);
+  EXPECT_NE(s.TrackCancellation("client-a", limit + 1), nullptr);
+  EXPECT_EQ(s.TrackCancellation("client-a", limit + 2), nullptr);
+}
+
+TEST(RequestSchedulerTest, DuplicateRequestIdsCannotBypassPendingLimit) {
+  host::RequestScheduler s;
+  constexpr auto limit = host::RequestScheduler::kMaxPendingRequestsPerClient;
+  for (std::size_t i = 0; i < limit; ++i) {
+    ASSERT_NE(s.TrackCancellation(1), nullptr);
+  }
+  EXPECT_EQ(s.TrackCancellation(1), nullptr);
+  EXPECT_EQ(s.TrackCancellation(2), nullptr);
+  s.CompleteRequest(1);
+  EXPECT_NE(s.TrackCancellation(2), nullptr);
+  s.Cancel(1);
+  EXPECT_TRUE(s.IsCanceled(1));
+}
+
+TEST(RequestSchedulerTest, PreCancelFloodIsBoundedAndNewerRequestReclaimsSpace) {
+  host::RequestScheduler s;
+  constexpr auto limit = host::RequestScheduler::kMaxPendingRequestsPerClient;
+  std::size_t retained = 0;
+  for (uint64_t id = 1; id <= 10000; ++id) {
+    s.Cancel(id);
+    if (s.IsCanceled(id)) ++retained;
+  }
+  EXPECT_EQ(retained, limit);
+  auto canceled = s.TrackCancellation(1);
+  ASSERT_NE(canceled, nullptr);
+  EXPECT_TRUE(canceled->load());
+  // Only inactive older entries can be reclaimed; an active flag survives.
+  EXPECT_NE(s.TrackCancellation(10001), nullptr);
+  EXPECT_TRUE(s.IsCanceled(1));
+  s.CompleteRequest(1);
+  EXPECT_FALSE(s.IsCanceled(1));
+}
+
 TEST(RequestSchedulerTest, NextRequestIdMonotonic) {
   host::RequestScheduler s;
   EXPECT_EQ(s.NextRequestId(), 1u);

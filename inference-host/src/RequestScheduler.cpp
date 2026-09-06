@@ -33,6 +33,9 @@ void RequestScheduler::Cancel(const std::string& client_id, uint64_t request_id)
   auto& cancel_states = client_states_[client_id].cancel_states;
   auto it = cancel_states.find(request_id);
   if (it == cancel_states.end()) {
+    // Unknown pre-cancels are best effort at capacity. Existing live flags
+    // remain reachable even under a flood of unrelated Cancel messages.
+    if (cancel_states.size() >= kMaxPendingRequestsPerClient) return;
     it = cancel_states
              .emplace(request_id, CancelState{std::make_shared<std::atomic<bool>>(false), 0})
              .first;
@@ -60,11 +63,22 @@ std::shared_ptr<std::atomic<bool>> RequestScheduler::TrackCancellation(uint64_t 
 std::shared_ptr<std::atomic<bool>> RequestScheduler::TrackCancellation(const std::string& client_id,
                                                                        uint64_t request_id) {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto& state = client_states_[client_id].cancel_states[request_id];
+  auto& client = client_states_[client_id];
+  if (client.pending_requests >= kMaxPendingRequestsPerClient) return nullptr;
+  auto it = client.cancel_states.find(request_id);
+  if (it == client.cancel_states.end()) {
+    if (client.cancel_states.size() >= kMaxPendingRequestsPerClient) {
+      PruneInactiveBeforeLocked(client, request_id);
+    }
+    if (client.cancel_states.size() >= kMaxPendingRequestsPerClient) return nullptr;
+    it = client.cancel_states.emplace(request_id, CancelState{}).first;
+  }
+  auto& state = it->second;
   if (!state.flag) {
     state.flag = std::make_shared<std::atomic<bool>>(false);
   }
   ++state.active_count;
+  ++client.pending_requests;
   return state.flag;
 }
 
@@ -85,6 +99,7 @@ void RequestScheduler::CompleteRequest(const std::string& client_id, uint64_t re
   }
   if (it->second.active_count > 0) {
     --it->second.active_count;
+    --client->second.pending_requests;
   }
   if (it->second.active_count == 0) {
     cancel_states.erase(it);

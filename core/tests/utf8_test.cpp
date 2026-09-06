@@ -63,6 +63,22 @@ TEST(Utf8Test, EndOrOutOfRangeLeavesOutputsUnchanged) {
   }
 }
 
+TEST(Utf8Test, AppendsScalarBoundariesAndRoundTripsThroughDecoder) {
+  const std::vector<char32_t> codepoints{0,      0x7f,   0x80,   0x7ff,   0x800,
+                                         0xd7ff, 0xe000, 0xffff, 0x10000, 0x10ffff};
+  std::string encoded;
+  for (const auto codepoint : codepoints) {
+    azookey::core::AppendUtf8(encoded, codepoint);
+  }
+  size_t offset = 0;
+  for (const auto expected : codepoints) {
+    char32_t actual = 0;
+    ASSERT_TRUE(azookey::core::DecodeNextUtf8(encoded, offset, actual));
+    EXPECT_EQ(actual, expected);
+  }
+  EXPECT_EQ(offset, encoded.size());
+}
+
 TEST(Utf8Test, SuffixPreservesCodepointBoundaries) {
   const std::string text = "A\xc2\xa2\xe3\x81\x82\xf0\x9f\x98\x80";
   const std::vector<std::string> expected{"",

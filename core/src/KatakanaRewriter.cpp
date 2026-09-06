@@ -10,19 +10,6 @@
 namespace azookey::core {
 namespace {
 
-void AppendUtf8(std::string* output, char32_t codepoint) {
-  if (codepoint <= 0x7f) {
-    output->push_back(static_cast<char>(codepoint));
-  } else if (codepoint <= 0x7ff) {
-    output->push_back(static_cast<char>(0xc0 | ((codepoint >> 6) & 0x1f)));
-    output->push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  } else {
-    output->push_back(static_cast<char>(0xe0 | ((codepoint >> 12) & 0x0f)));
-    output->push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-    output->push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  }
-}
-
 std::string_view HalfwidthKatakana(char32_t codepoint) {
   switch (codepoint) {
     case U'ァ':
@@ -221,7 +208,7 @@ std::vector<Candidate> ExpandKatakanaCandidates(const std::string& reading) {
     char32_t codepoint = 0;
     if (!DecodeNextUtf8(reading, offset, codepoint)) return {};
     if (codepoint == U'ー') {
-      AppendUtf8(&fullwidth, codepoint);
+      AppendUtf8(fullwidth, codepoint);
       if (halfwidth_supported) halfwidth += HalfwidthKatakana(codepoint);
       continue;
     }
@@ -232,7 +219,7 @@ std::vector<Candidate> ExpandKatakanaCandidates(const std::string& reading) {
     }
     has_hiragana = true;
     const char32_t katakana = codepoint + 0x60;
-    AppendUtf8(&fullwidth, katakana);
+    AppendUtf8(fullwidth, katakana);
     const auto mapped = HalfwidthKatakana(katakana);
     if (mapped.empty()) {
       halfwidth_supported = false;

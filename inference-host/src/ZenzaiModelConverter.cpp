@@ -196,7 +196,9 @@ void AppendDebugTag(std::string& debug_info, const std::string& tag) {
   debug_info += ";" + tag;
 }
 
+using core::AppendUtf8;
 using core::DecodeNextUtf8;
+using core::TakeLastUtf8Codepoints;
 
 bool IsValidUtf8String(const std::string& input) {
   for (size_t offset = 0; offset < input.size();) {
@@ -263,24 +265,6 @@ bool DeadlineExpired(const core::ConversionContext& context) {
   return context.deadline && std::chrono::steady_clock::now() >= *context.deadline;
 }
 
-void AppendUtf8(std::string& output, char32_t codepoint) {
-  if (codepoint <= 0x7F) {
-    output.push_back(static_cast<char>(codepoint));
-  } else if (codepoint <= 0x7FF) {
-    output.push_back(static_cast<char>(0xC0 | ((codepoint >> 6) & 0x1F)));
-    output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-  } else if (codepoint <= 0xFFFF) {
-    output.push_back(static_cast<char>(0xE0 | ((codepoint >> 12) & 0x0F)));
-    output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-    output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-  } else {
-    output.push_back(static_cast<char>(0xF0 | ((codepoint >> 18) & 0x07)));
-    output.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
-    output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-    output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-  }
-}
-
 std::string Utf8(char32_t codepoint) {
   std::string output;
   AppendUtf8(output, codepoint);
@@ -311,20 +295,6 @@ size_t CountUtf8Codepoints(const std::string& input) {
   return count;
 }
 
-std::string TakeLastCodepoints(const std::string& input, size_t max_codepoints) {
-  std::vector<size_t> starts;
-  starts.reserve(input.size());
-  for (size_t offset = 0; offset < input.size();) {
-    starts.push_back(offset);
-    char32_t ignored = 0;
-    DecodeNextUtf8(input, offset, ignored);
-  }
-  if (starts.size() <= max_codepoints) {
-    return input;
-  }
-  return input.substr(starts[starts.size() - max_codepoints]);
-}
-
 std::string CleanLeftContext(const std::string& preceding_text) {
   const auto last_break = preceding_text.find_last_of("\r\n");
   std::string context =
@@ -332,7 +302,7 @@ std::string CleanLeftContext(const std::string& preceding_text) {
   while (!context.empty() && std::isspace(static_cast<unsigned char>(context.front())) != 0) {
     context.erase(context.begin());
   }
-  return TakeLastCodepoints(context, kMaxLeftContextCodepoints);
+  return TakeLastUtf8Codepoints(context, kMaxLeftContextCodepoints);
 }
 
 std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,

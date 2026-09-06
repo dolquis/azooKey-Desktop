@@ -39,6 +39,24 @@ bool DecodeNextUtf8(std::string_view input, size_t& offset, char32_t& codepoint)
   return true;
 }
 
+void AppendUtf8(std::string& output, char32_t codepoint) {
+  if (codepoint <= 0x7f) {
+    output.push_back(static_cast<char>(codepoint));
+  } else if (codepoint <= 0x7ff) {
+    output.push_back(static_cast<char>(0xc0 | ((codepoint >> 6) & 0x1f)));
+    output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  } else if (codepoint <= 0xffff) {
+    output.push_back(static_cast<char>(0xe0 | ((codepoint >> 12) & 0x0f)));
+    output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+    output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  } else {
+    output.push_back(static_cast<char>(0xf0 | ((codepoint >> 18) & 0x07)));
+    output.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
+    output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+    output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  }
+}
+
 std::string TakeLastUtf8Codepoints(std::string_view input, size_t max_codepoints) {
   size_t start = input.size();
   for (size_t count = 0; start > 0 && count < max_codepoints; ++count) {

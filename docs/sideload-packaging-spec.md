@@ -682,6 +682,14 @@ ggml のバックエンドレジストリは Vulkan を有効にしたビルド�
 どちらの preset もビルドツリーへは `azookey_inference_host.exe` を出力するので、2 つの実行体が
 同じインストール先に並ぶ add-on 側のファイル名は、パッケージ生成時に確定させる。
 
+**MSIX 経路での package identity**: external-location MSIX（§1.1.2）は `Application@Executable` に
+宣言した実行体へ identity を与える。`pkg/msix/AppxManifest.xml` が持つ `Application` は base の
+Host 1 つなので、この経路で add-on を配る場合は **add-on の実行体にも `Application` 宣言と、
+`Application@Id` に一致する app 側 side-by-side manifest（`<msix>` の 3 属性）、および両者の
+静的整合検証を用意する**。用意しなければ add-on 側の Host は `-ExternalLocation` 付きで登録しても
+`Package.Current` が null になり、§1.5 の受け入れ条件を満たさない。MVP 既定の MSI 経路（§4）は
+package identity を使わないため、この要求は MSIX 経路にだけ掛かる。
+
 add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
 add-on の導入有無で変わらない。Vulkan loader と GPU ドライバーは同梱せず、GPU ベンダーの
 ドライバーが提供するものを使う（§1.6.2）。
@@ -717,9 +725,10 @@ Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-ar
 
 ##### ライセンス表示と SBOM
 
-- Vulkan 版 Host は llama.cpp（MIT）の成果物に加え、Vulkan-Headers / Vulkan-Hpp /
-  SPIRV-Headers（いずれも Apache-2.0）をビルド時に使う。attribution の正典はルートの
-  `THIRD_PARTY_LICENSES`。
+- Vulkan 版 Host は llama.cpp の成果物に加え、Vulkan-Headers / Vulkan-Hpp / SPIRV-Headers を
+  ビルド時に使う。ライセンスは依存ごとに異なるため、SPDX 識別子と帰属文の正典はルートの
+  `THIRD_PARTY_LICENSES` とし、本節では列挙しない。add-on を生成する変更で、各依存の実際の
+  ライセンスに沿った節を同ファイルへ追加する。
 - Vulkan loader とドライバーを再配布しないため、CUDA add-on（§1.6.2）のような再配布条項の
   pass-down は生じない。
 - add-on は独立した配布物なので、SBOM と build provenance（§4.4）を add-on 成果物に対しても

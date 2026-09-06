@@ -39,6 +39,24 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
 `userdict` より後ろのトークンは user dictionary CLI へ、`lookup` より後ろのトークンは
 読み取り専用 lookup CLI へそのまま渡す。
 
+CLI 引数の文字列は UTF-8 バイト列とする。Windows の entry point は wide argv（`wmain`）で受け、
+引数ごとに UTF-16 から UTF-8 へ変換する。対を成さない surrogate のように UTF-8 へ変換できない
+引数は exit code 2 で拒否し、置換文字で代用しない。narrow `main` の argv は process の
+active code page で符号化されるため、CLI の入力経路として使わない。この契約は `userdict` と
+`lookup` へ渡すトークンにも同じく及ぶ。
+
+`--learning`、`--user-dict`、`--mock-dict`、`userdict import`、`userdict export` の明示パスは、
+この UTF-8 バイト列から `azookey::core::Utf8Path` で `std::filesystem::path` を構築する。
+narrow の `std::filesystem::path` コンストラクタは Windows で active code page として復号する
+ため、CLI 由来のパスには使わない。path を文字列へ戻す表示と JSON 出力は
+`azookey::core::PathToUtf8` を使う。model 読み込み経路（`--model` と settings の
+`model.selected_path`）は本節の契約の対象外とする。
+
+application manifest の `activeCodePage="UTF-8"` は、この契約の実現手段として採らない。
+manifest の埋め込みは MSVC かつ identity package 有効時に限られ、採用すると build 構成によって
+CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は build 構成に依存しない。
+本節が定義するのは CLI 引数と path の文字コードであり、console の表示文字コードは対象外とする。
+
 ## TSF EditSessionルール
 
 - テキスト更新は必ず `RequestEditSession` を経由。
@@ -169,9 +187,7 @@ Linear が持つ。
   `exact` と `prefix` は reading を、`surface` は表層形を比較する。
   比較は UTF-8 バイト列の完全一致または前方一致とし、正規化しない。
   `--query` は空文字列を許可しない。
-  CLI 引数の文字列は UTF-8 バイト列を前提とする。
-  Windows の narrow argv から UTF-8 へ変換する境界はこの CLI の契約外とし、
-  Unicode argv 経路は DEV-962、実機検証は DEV-963 で追跡する。
+  CLI 引数の文字コードは「Host CLI 引数」節の契約に従う。
   JSON は一致ごとに `op`、`ok`、`mode`、`query`、`source`、`reading`、`surface` と
   source 固有の値を 1 オブジェクトずつ出力する。
   JSON オブジェクトのキー順は規定しない。

@@ -15,7 +15,7 @@ add_custom_target(azookey_benchmark_commit_header
 add_library(azookey_benchmark_result BenchmarkCommandLine.cpp BenchmarkResult.cpp)
 target_include_directories(azookey_benchmark_result PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(azookey_benchmark_result
-  PUBLIC azookey_ipc
+  PUBLIC azookey_core azookey_ipc
   PRIVATE azookey_project_options azookey_project_warnings
 )
 if(WIN32)

@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <utility>
 
+#include "azookey/core/PlatformPaths.h"
+
 namespace azookey::host {
 namespace {
 
@@ -69,13 +71,15 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
     if (arg == "--learning") {
       std::string value;
       if (!TakeValue(argv, i, arg, value, result.error)) return result;
-      args.explicit_learning_path = std::move(value);
+      // CLI strings are UTF-8; Utf8Path keeps that encoding across the path
+      // boundary instead of letting Windows decode it as the active code page.
+      args.explicit_learning_path = azookey::core::Utf8Path(value);
       continue;
     }
     if (arg == "--user-dict") {
       std::string value;
       if (!TakeValue(argv, i, arg, value, result.error)) return result;
-      args.explicit_user_dict_path = std::move(value);
+      args.explicit_user_dict_path = azookey::core::Utf8Path(value);
       continue;
     }
     if (arg == "--mock-dict") {

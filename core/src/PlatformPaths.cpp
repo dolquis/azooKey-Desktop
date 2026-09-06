@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <memory>
+#include <string>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -16,6 +17,20 @@
 #endif
 
 namespace azookey::core {
+
+std::filesystem::path Utf8Path(std::string_view value) {
+  std::u8string utf8;
+  utf8.reserve(value.size());
+  for (const char ch : value) {
+    utf8.push_back(static_cast<char8_t>(static_cast<unsigned char>(ch)));
+  }
+  return std::filesystem::path(utf8);
+}
+
+std::string PathToUtf8(const std::filesystem::path& path) {
+  const auto utf8 = path.u8string();
+  return std::string(utf8.begin(), utf8.end());
+}
 
 std::optional<std::filesystem::path> GetLocalAppDataDirectory() noexcept {
   try {

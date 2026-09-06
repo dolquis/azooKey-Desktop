@@ -6,6 +6,8 @@
 #include <sstream>
 #include <string>
 
+#include "azookey/core/PlatformPaths.h"
+
 namespace azookey::core {
 
 namespace {
@@ -91,7 +93,9 @@ SimpleConverter::SimpleConverter() {
 }
 
 bool SimpleConverter::LoadFromTsv(const std::string& path) {
-  std::ifstream f(path);
+  // Dictionary paths carry UTF-8 bytes (--mock-dict comes straight from argv),
+  // so they must not be decoded as the Windows active code page.
+  std::ifstream f(Utf8Path(path));
   if (!f.is_open()) return false;
   std::string line;
   bool any = false;
@@ -124,7 +128,7 @@ bool SimpleConverter::LoadFromTsv(const std::string& path) {
 }
 
 bool SimpleConverter::LoadBigramFromTsv(const std::string& path) {
-  std::ifstream f(path);
+  std::ifstream f(Utf8Path(path));
   if (!f.is_open()) return false;
   std::string line;
   bool any = false;

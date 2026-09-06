@@ -1,4 +1,5 @@
 add_library(azookey_tsf_tip SHARED
+  src/BracketEditSession.cpp
   src/CandidateListUIElement.cpp
   src/CandidateUiCoordinator.cpp
   src/CandidateWindow.cpp
@@ -7,6 +8,7 @@ add_library(azookey_tsf_tip SHARED
   src/exports.def
   src/SettingsLauncher.cpp
   src/TextService.cpp
+  src/TipLocalSettings.cpp
   src/TextServiceFactory.cpp
 )
 
@@ -33,12 +35,14 @@ if(AZOOKEY_BUILD_TESTS)
     cmake_parse_arguments(TSF_TIP_TEST "" "${one_value_args}" "" ${ARGN})
 
     add_executable(${target_name}
+      src/BracketEditSession.cpp
       src/CandidateListUIElement.cpp
       src/CandidateUiCoordinator.cpp
       src/CandidateWindow.cpp
       src/DisplayAttribute.cpp
       src/SettingsLauncher.cpp
       src/TextService.cpp
+      src/TipLocalSettings.cpp
       src/TextServiceFactory.cpp
       ${test_source}
     )
@@ -94,6 +98,13 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
+  add_executable(tsf_tip_local_settings_tests src/TipLocalSettings.cpp tests/local_settings_test.cpp)
+  target_include_directories(tsf_tip_local_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_definitions(tsf_tip_local_settings_tests PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN AZOOKEY_TSF_TESTING)
+  target_link_libraries(tsf_tip_local_settings_tests PRIVATE
+    azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(tsf_tip_local_settings_tests TIMEOUT 30)
   add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp
     LABEL tsf-com

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "azookey/core/BracketPairing.h"
+#include "azookey/core/BracketSettings.h"
 
 namespace {
 using namespace azookey::core;
@@ -92,5 +93,36 @@ TEST(BracketPairingTest, QuotesAnglesAndOrdinaryCharactersAreExcluded) {
     EXPECT_EQ(EvaluateBracketInput(cp, false, {{}, {}, true}, Enabled()).type,
               BracketPairingActionType::kPassThrough);
   }
+}
+
+TEST(BracketSettingsTest, MissingInvalidAndUnrelatedFieldsKeepDefaults) {
+  for (const auto json : {"", "{", "[]", "null", "{}", R"({"unrelated":true})",
+                          R"({"bracketPairing":"true","bracketPairingTrigger":false})"}) {
+    const auto settings = ParseBracketSettings(json);
+    EXPECT_FALSE(settings.pairing.enabled);
+    EXPECT_TRUE(settings.pairing.skip_over_closing);
+    EXPECT_TRUE(settings.pairing.backspace_deletes_pair);
+    EXPECT_TRUE(settings.pairing.enabled_in_alnum_mode);
+    EXPECT_EQ(settings.trigger, BracketPairingTrigger::Immediate);
+  }
+}
+
+TEST(BracketSettingsTest, ReadsEveryTipOwnedKeyFromSharedDocument) {
+  const auto settings = ParseBracketSettings(R"({
+    "inputMode":"alnum_full", "bracketPairing":true,
+    "bracketPairingTrigger":"composition", "bracketSkipOverClosing":false,
+    "bracketBackspaceDeletesPair":false, "bracketPairingInAlnumMode":false,
+    "aiBackend":"none"
+  })");
+  EXPECT_TRUE(settings.pairing.enabled);
+  EXPECT_FALSE(settings.pairing.skip_over_closing);
+  EXPECT_FALSE(settings.pairing.backspace_deletes_pair);
+  EXPECT_FALSE(settings.pairing.enabled_in_alnum_mode);
+  EXPECT_EQ(settings.trigger, BracketPairingTrigger::Composition);
+  EXPECT_EQ(settings.input_mode, BracketInputMode::AlnumFull);
+  EXPECT_EQ(ParseBracketSettings(R"({"inputMode":"alnum_half"})").input_mode,
+            BracketInputMode::AlnumHalf);
+  EXPECT_EQ(ParseBracketSettings(R"({"inputMode":"invalid"})").input_mode,
+            BracketInputMode::Hiragana);
 }
 }  // namespace

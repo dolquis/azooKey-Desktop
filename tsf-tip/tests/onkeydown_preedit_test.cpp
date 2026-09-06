@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -179,7 +180,7 @@ bool WaitUntil(Predicate predicate,
   return predicate();
 }
 
-class FakeRange final : public ITfRange {
+class FakeRange : public ITfRange {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
     if (!ppvObject) return E_POINTER;
@@ -383,7 +384,7 @@ class FakeContextView final : public ITfContextView {
   LONG ref_count_{1};
 };
 
-class NoopContext final : public ITfContext {
+class NoopContext : public ITfContext {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
     if (!ppvObject) return E_POINTER;
@@ -602,7 +603,7 @@ class FakeDocumentMgr final : public ITfDocumentMgr {
   LONG ref_count_{1};
 };
 
-class FakeComposition final : public ITfComposition {
+class FakeComposition : public ITfComposition {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** ppvObject) override {
     if (!ppvObject) return E_POINTER;
@@ -700,6 +701,378 @@ class FakeCompositionAttachment {
 };
 
 }  // namespace
+
+namespace {
+struct BracketDocument {
+  std::wstring text;
+  LONG start{0};
+  LONG end{0};
+  int writes{0};
+  bool fail_read{false};
+  bool fail_write{false};
+  bool short_shift{false};
+};
+
+class DocumentRange final : public FakeRange {
+ public:
+  DocumentRange(std::shared_ptr<BracketDocument> doc, LONG first, LONG last)
+      : document(std::move(doc)), start(first), end(last) {}
+  STDMETHODIMP_(ULONG) AddRef() override { return ++references_; }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG remaining = --references_;
+    if (!remaining) delete this;
+    return remaining;
+  }
+  STDMETHODIMP GetText(TfEditCookie, DWORD, WCHAR* text, ULONG capacity, ULONG* count) override {
+    *count = 0;
+    if (document->fail_read) return E_FAIL;
+    *count = std::min(capacity, static_cast<ULONG>(end - start));
+    std::copy_n(document->text.data() + start, *count, text);
+    return S_OK;
+  }
+  STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
+    if (document->fail_write) return E_FAIL;
+    ++document->writes;
+    document->text.replace(static_cast<size_t>(start), static_cast<size_t>(end - start), text,
+                           static_cast<size_t>(length));
+    end = start + length;
+    return S_OK;
+  }
+  STDMETHODIMP IsEmpty(TfEditCookie, BOOL* empty) override {
+    *empty = start == end;
+    return S_OK;
+  }
+  STDMETHODIMP Collapse(TfEditCookie, TfAnchor anchor) override {
+    if (anchor == TF_ANCHOR_START)
+      end = start;
+    else
+      start = end;
+    return S_OK;
+  }
+  STDMETHODIMP ShiftStart(TfEditCookie, LONG amount, LONG* shifted, const TF_HALTCOND*) override {
+    const LONG next = document->short_shift ? start
+                                            : std::clamp(start + amount, 0L,
+                                                         static_cast<LONG>(document->text.size()));
+    *shifted = next - start;
+    start = next;
+    end = std::max(start, end);
+    return S_OK;
+  }
+  STDMETHODIMP ShiftEnd(TfEditCookie, LONG amount, LONG* shifted, const TF_HALTCOND*) override {
+    const LONG next = document->short_shift
+                          ? end
+                          : std::clamp(end + amount, 0L, static_cast<LONG>(document->text.size()));
+    *shifted = next - end;
+    end = next;
+    start = std::min(start, end);
+    return S_OK;
+  }
+  STDMETHODIMP Clone(ITfRange** copy) override {
+    *copy = new DocumentRange(document, start, end);
+    return S_OK;
+  }
+  std::shared_ptr<BracketDocument> document;
+  LONG start;
+  LONG end;
+
+ private:
+  ULONG references_{1};
+};
+
+class DocumentComposition final : public FakeComposition {
+ public:
+  DocumentComposition(ITfRange* range, ITfCompositionSink* sink) : sink_(sink) {
+    range_ = range;
+    range_->AddRef();
+    sink_->AddRef();
+  }
+  ~DocumentComposition() {
+    range_->Release();
+    sink_->Release();
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++references_; }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG remaining = --references_;
+    if (!remaining) delete this;
+    return remaining;
+  }
+  STDMETHODIMP EndComposition(TfEditCookie cookie) override {
+    if (FAILED(end_result)) return end_result;
+    return sink_->OnCompositionTerminated(cookie, this);
+  }
+
+ private:
+  ITfCompositionSink* sink_;
+  ULONG references_{1};
+};
+
+class DocumentContext final : public NoopContext, public ITfContextComposition {
+ public:
+  STDMETHODIMP QueryInterface(REFIID iid, void** object) override {
+    if (!object) return E_POINTER;
+    if (iid == IID_ITfContextComposition) {
+      *object = static_cast<ITfContextComposition*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return NoopContext::QueryInterface(iid, object);
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return NoopContext::AddRef(); }
+  STDMETHODIMP_(ULONG) Release() override { return NoopContext::Release(); }
+  STDMETHODIMP RequestEditSession(TfClientId id, ITfEditSession* session, DWORD flags,
+                                  HRESULT* result) override {
+    if ((flags & TF_ES_READWRITE) == TF_ES_READ && reject_read) {
+      *result = TF_E_SYNCHRONOUS;
+      return S_OK;
+    }
+    if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && reject_write) {
+      *result = TS_E_READONLY;
+      return S_OK;
+    }
+    run_edit_session = !skip_callback;
+    return NoopContext::RequestEditSession(id, session, flags, result);
+  }
+  STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG, TF_SELECTION* selection,
+                            ULONG* fetched) override {
+    selection->range = new DocumentRange(document, document->start, document->end);
+    selection->style = {};
+    *fetched = 1;
+    return S_OK;
+  }
+  STDMETHODIMP SetSelection(TfEditCookie, ULONG, const TF_SELECTION* selection) override {
+    if (FAILED(set_selection_result)) return set_selection_result;
+    const auto* range = static_cast<const DocumentRange*>(selection->range);
+    document->start = range->start;
+    document->end = range->end;
+    return S_OK;
+  }
+  STDMETHODIMP StartComposition(TfEditCookie, ITfRange* range, ITfCompositionSink* sink,
+                                ITfComposition** composition) override {
+    *composition = new DocumentComposition(range, sink);
+    return S_OK;
+  }
+  STDMETHODIMP EnumCompositions(IEnumITfCompositionView**) override { return E_NOTIMPL; }
+  STDMETHODIMP FindComposition(TfEditCookie, ITfRange*, IEnumITfCompositionView**) override {
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP TakeOwnership(TfEditCookie, ITfCompositionView*, ITfCompositionSink*,
+                             ITfComposition**) override {
+    return E_NOTIMPL;
+  }
+  std::shared_ptr<BracketDocument> document = std::make_shared<BracketDocument>();
+  bool reject_read{false};
+  bool reject_write{false};
+  bool skip_callback{false};
+};
+
+std::optional<WCHAR> TranslateBracketForTest(WPARAM key, LPARAM) {
+  switch (key) {
+    case VK_OEM_4:
+      return L'[';
+    case VK_OEM_6:
+      return L']';
+    case VK_OEM_7:
+      return L'"';
+    default:
+      return std::nullopt;
+  }
+}
+
+class BracketHarness {
+ public:
+  BracketHarness() {
+    settings.pairing.enabled = true;
+    service.set_bracket_settings_for_test(settings);
+    azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateBracketForTest);
+  }
+  ~BracketHarness() {
+    service.Deactivate();
+    azookey::tsf::testing::ClearTranslateBracketCharacterForTest();
+  }
+  void Set(const std::wstring& text, LONG caret, LONG end = -1) {
+    context.document->text = text;
+    context.document->start = caret;
+    context.document->end = end < 0 ? caret : end;
+  }
+  BOOL Press(WPARAM key, bool test = false, bool expect_success = true) {
+    BOOL eaten = FALSE;
+    const HRESULT hr = test ? service.OnTestKeyDown(&context, key, 0, &eaten)
+                            : service.OnKeyDown(&context, key, 0, &eaten);
+    if (expect_success) EXPECT_TRUE(SUCCEEDED(hr)) << std::hex << hr;
+    return eaten;
+  }
+  void ApplySettings() { service.set_bracket_settings_for_test(settings); }
+  KeyboardStateGuard keyboard;
+  DocumentContext context;
+  azookey::tsf::TextService service;
+  azookey::core::BracketSettings settings;
+};
+}  // namespace
+
+TEST(TsfTipBracketTest, ImmediateInsertsSinglePairAndTypingPreservesClosingBracket) {
+  BracketHarness h;
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「」");
+  EXPECT_EQ(h.context.document->start, 1);
+  EXPECT_EQ(h.context.document->end, 1);
+  EXPECT_EQ(h.context.document->writes, 1);
+  EXPECT_TRUE(h.service.queued_ipc_types_for_test().empty());
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"「あ」");
+}
+
+TEST(TsfTipBracketTest, SkipAndEmptyPairDeletionUseCurrentDocument) {
+  BracketHarness h;
+  h.Set(L"「あ」", 2);
+  EXPECT_TRUE(h.Press(VK_OEM_6));
+  EXPECT_EQ(h.context.document->text, L"「あ」");
+  EXPECT_EQ(h.context.document->start, 3);
+  EXPECT_EQ(h.context.document->writes, 0);
+  h.Set(L"「」", 1);
+  EXPECT_TRUE(h.Press(VK_BACK, true));
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.context.document->start, 0);
+  EXPECT_EQ(h.context.document->end, 0);
+  EXPECT_EQ(h.context.document->writes, 1);
+  h.Set(L"「あ」", 2);
+  EXPECT_FALSE(h.Press(VK_BACK, true));
+  EXPECT_FALSE(h.Press(VK_BACK));
+}
+
+TEST(TsfTipBracketTest, ReadRejectionFallsBackToLiteralAndPassesBackspace) {
+  BracketHarness h;
+  h.context.reject_read = true;
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「");
+  h.Set(L"「」", 1);
+  EXPECT_FALSE(h.Press(VK_BACK, true));
+  EXPECT_FALSE(h.Press(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_OEM_6));
+  EXPECT_EQ(h.context.document->text, L"「」」");
+}
+
+TEST(TsfTipBracketTest, SelectionIsReplacedWithLiteralAndChangedHintCannotDelete) {
+  BracketHarness h;
+  h.Set(L"abc", 0, 3);
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「");
+  h.Set(L"「」", 1);
+  EXPECT_TRUE(h.Press(VK_BACK, true));
+  h.Set(L"「あ」", 2);
+  EXPECT_FALSE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"「あ」");
+}
+
+TEST(TsfTipBracketTest, CompositionConfirmsInsideOrCancelsWithoutIpc) {
+  for (const bool cancel : {false, true}) {
+    BracketHarness h;
+    h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+    h.ApplySettings();
+    EXPECT_TRUE(h.Press(VK_OEM_4));
+    EXPECT_TRUE(h.service.bracket_composition_for_test());
+    EXPECT_NE(h.service.composition_, nullptr);
+    EXPECT_EQ(h.context.document->text, L"「」");
+    EXPECT_EQ(h.context.document->start, 1);
+    EXPECT_EQ(h.context.document->end, 1);
+    EXPECT_TRUE(h.Press(cancel ? VK_ESCAPE : VK_RETURN, true));
+    EXPECT_TRUE(h.Press(cancel ? VK_ESCAPE : VK_RETURN));
+    EXPECT_EQ(h.context.document->text, cancel ? L"" : L"「」");
+    EXPECT_EQ(h.context.document->start, cancel ? 0 : 1);
+    EXPECT_EQ(h.context.document->end, h.context.document->start);
+    EXPECT_FALSE(h.service.bracket_composition_for_test());
+    EXPECT_EQ(h.service.composition_, nullptr);
+    EXPECT_TRUE(h.service.queued_ipc_types_for_test().empty());
+    EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  }
+}
+
+TEST(TsfTipBracketTest, AlnumModesAndMasterOffRespectSettings) {
+  BracketHarness h;
+  h.settings.input_mode = azookey::core::BracketInputMode::AlnumHalf;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"[]");
+  EXPECT_FALSE(h.Press('A', true));
+  EXPECT_FALSE(h.Press('A'));
+  h.Set(L"", 0);
+  h.settings.input_mode = azookey::core::BracketInputMode::AlnumFull;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"［］");
+  h.settings.pairing.enabled_in_alnum_mode = false;
+  h.ApplySettings();
+  EXPECT_FALSE(h.Press(VK_OEM_4, true));
+  EXPECT_FALSE(h.Press(VK_OEM_4));
+  h.settings.pairing.enabled = false;
+  h.ApplySettings();
+  EXPECT_FALSE(h.Press(VK_OEM_4, true));
+  EXPECT_FALSE(h.Press(VK_OEM_4));
+}
+
+TEST(TsfTipBracketTest, PreeditCommitsBeforePairAndCompositionPairsNest) {
+  BracketHarness h;
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"あ「」");
+  EXPECT_EQ(h.context.document->start, 2);
+  h.Set(L"", 0);
+  h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「「」」");
+  EXPECT_EQ(h.context.document->start, 2);
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->start, 2);
+}
+
+TEST(TsfTipBracketTest, BatchAccumulationKeepsLiteralBracketsAndNoAutomaticPair) {
+  BracketHarness h;
+  h.service.set_batch_romaji_options_for_test(true, false, false);
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"あ[");
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+}
+
+TEST(TsfTipBracketTest, SettingsReloadDoesNotDiscardPendingPairAndFocusLossCommitsIt) {
+  BracketHarness h;
+  h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  h.settings.pairing.enabled = false;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.context.document->text, L"");
+  h.settings.pairing.enabled = true;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_TRUE(SUCCEEDED(h.service.OnSetFocus(FALSE)));
+  EXPECT_EQ(h.context.document->text, L"「」");
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_TRUE(h.service.queued_ipc_types_for_test().empty());
+}
+
+TEST(TsfTipBracketTest, RejectedWritesAndMissingCallbacksDoNotClaimInsertion) {
+  BracketHarness h;
+  h.context.reject_write = true;
+  EXPECT_FALSE(h.Press(VK_OEM_4, false, false));
+  EXPECT_EQ(h.context.document->text, L"");
+  h.context.reject_write = false;
+  h.context.skip_callback = true;
+  EXPECT_FALSE(h.Press(VK_OEM_4, false, false));
+  EXPECT_EQ(h.context.document->text, L"");
+  h.context.skip_callback = false;
+  h.context.set_selection_result = E_FAIL;
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「」");
+  EXPECT_EQ(h.context.document->writes, 1);
+}
 
 TEST(TsfTipOnKeyDownPreeditTest, TextServiceInstancesUseDistinctIpcClientIds) {
   azookey::tsf::TextService first;

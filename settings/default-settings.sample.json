@@ -1,5 +1,10 @@
 {
   "inputMode": "hiragana",
+  "bracketPairing": false,
+  "bracketPairingTrigger": "immediate",
+  "bracketSkipOverClosing": true,
+  "bracketBackspaceDeletesPair": true,
+  "bracketPairingInAlnumMode": true,
   "liveConversion": false,
   "llmMagicConversion": false,
   "logLevel": "info",

@@ -493,11 +493,10 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
 
 ## 6. 設定スキーマ
 
-実装時に `settings/mvp-settings.schema.json` へ以下を追加する
-（`additionalProperties:false` を維持。`description` に対応 M を記載する既存流儀に
-合わせる）。本書（spec）が設定キーの正典であり、実ファイルへの追加は M61 実装時に
-行う（本セッションは設計確定のみでスキーマファイルは変更しない。`docs/dynamic-punctuation-spec.md`
-§8 と同方針）。
+本書が M61 設定キーの正典であり、`settings/mvp-settings.schema.json` と
+`settings/default-settings.sample.json` は対応する M61-A / M61-B の型・既定値を共有する。
+スキーマの `additionalProperties:false` を維持し、`description` に対応 M を記載する。
+M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の読込成功に依存しない。
 
 | キー | 型 | 既定 | M | 説明 |
 |---|---|---|---|---|
@@ -524,10 +523,15 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
   正典パス。`config\` サブディレクトリ配下。schema = `settings/mvp-settings.schema.json`）を
   **TIP プロセス内で読み取る**（IPC を介さない）。設定 UI / host が書き込むのと**同一ファイル**を
   TIP が読むため、Host-offline でも `bracketPairing` が確実に反映される。読み取りは TIP 有効化時
-  （`ActivateEx`）に 1 回、以後は M17 の `ReadDirectoryChangesW` 監視基盤を再利用してホット
-  リロードする（変更検出で新規入力から実効値を差し替え。進行中の composition は触らない）。
+  （`ActivateEx`）に行い、`TipLocalSettings` が `ReadDirectoryChangesW` でホットリロードする。
+  監視スレッドは TSF / COM オブジェクトを操作せず、打鍵側へ値のスナップショットを渡す。
+  変更検出で新規入力から実効値を差し替え、進行中のカッコ composition は確定・取消まで保持する。
 - ファイルが無い / パース不能なら **schema 既定値**（`bracketPairing=false` 等）にフォールバック
   する（後方互換・既定 OFF）。これにより Host 未起動・切断時でも本機能の ON/OFF を確定できる。
+  読込は最大 1 MiB とし、読取不能・上限超過も同じ既定値へ戻す。監視は設定ディレクトリの
+  作成と設定ファイルの置換・削除を検出し、読取ハンドルは削除共有を許可して置換を妨げない。
+  `Deactivate` は監視 I/O をキャンセルして終了を待ち、ハンドルを解放する。TIP は設定を作成・
+  書換え・隔離せず、設定本文をログへ出さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
   TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定 UI / 既存経路）。
 - 設定 UI（M30）完成までは、この settings.json を手編集 / 環境変数で補う（host CLI 経由には

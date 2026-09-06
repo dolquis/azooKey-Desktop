@@ -3,6 +3,32 @@
   "title": "azooKey Windows TSF MVP settings",
   "type": "object",
   "properties": {
+    "bracketPairing": {
+      "type": "boolean",
+      "default": false,
+      "description": "M61-A: 自動カッコペアリングのマスタースイッチ。TIP ローカルで判定"
+    },
+    "bracketPairingTrigger": {
+      "type": "string",
+      "enum": ["immediate", "composition"],
+      "default": "immediate",
+      "description": "M61-A: 即時挿入またはカッコ対の preedit 表示"
+    },
+    "bracketSkipOverClosing": {
+      "type": "boolean",
+      "default": true,
+      "description": "M61-A: 同じ閉じカッコが直後にあるとき飛び越える"
+    },
+    "bracketBackspaceDeletesPair": {
+      "type": "boolean",
+      "default": true,
+      "description": "M61-A: 空のカッコ対を Backspace で一括削除"
+    },
+    "bracketPairingInAlnumMode": {
+      "type": "boolean",
+      "default": true,
+      "description": "M61-A: 英数モードでも自動カッコペアリングを適用"
+    },
     "inputMode": {
       "type": "string",
       "enum": ["hiragana", "alnum_half", "alnum_full"],

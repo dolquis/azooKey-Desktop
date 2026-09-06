@@ -56,6 +56,15 @@ struct DeadlineCutoffMetrics {
   double rate{0.0};
 };
 
+struct IpcPhaseBreakdown {
+  size_t samples{0};
+  size_t payload_bytes{0};
+  LatencyMetrics serialize;
+  LatencyMetrics framing;
+  LatencyMetrics deserialize;
+  std::optional<LatencyMetrics> pipe_round_trip;
+};
+
 struct BenchmarkResult {
   std::string bench;
   std::string commit;
@@ -67,6 +76,7 @@ struct BenchmarkResult {
   BaselineComparison baseline;
   std::optional<DecodePhaseBreakdown> decode_phases;
   std::optional<DeadlineCutoffMetrics> deadline_cutoffs;
+  std::optional<IpcPhaseBreakdown> ipc_phases;
 };
 
 BaselineComparison CompareBaseline(const std::filesystem::path& path, const std::string& bench,

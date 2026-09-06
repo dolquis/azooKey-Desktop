@@ -614,6 +614,17 @@ schema v1 のトップレベル契約は次のとおりとする。
 | `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
 | `deadlineCutoffs` | object（任意） | `azookey_zenzai_bench` の各 iteration が deadline で打ち切られたかを表す `samples`、打ち切り回数 `count`、打ち切り率 `rate` |
 | `decodePhases` | object（任意） | `azookey_zenzai_bench` の実モデル推論で取得した `prompt` と `beam` の decode 内訳 |
+| `ipcPhases` | object（任意） | `azookey_bench --ipc` の codec と試験用 pipe 往復の計測 |
+
+`azookey_bench --ipc` は固定の10候補 payload を使い、20回の warmup 後に200回計測する。
+`ipcPhases` は `samples`、`payloadBytes` と、`serializeMs`、`framingMs`、
+`deserializeMs`、`pipeRoundTripMs` の各 `p50` / `p95` / `p99` / `max` を持つ。
+framing は length-prefix の encode と decode の合計、pipe 往復は Windows の
+同一プロセス内 echo server に対する Send / Receive の合計で、両端の codec を含む。
+接続確立、payload の Build / 型別 Parse、推論はこれらの計測に含めない。
+非 Windows では `pipeRoundTripMs=null` とし、ゼロ時間として扱わない。
+既定の `latencyMs` と baseline 比較は推論時間のままとし、IPC 時間を加算しない。
+`--ipc` は `--eval` と併用せず、pipe の作成・通信失敗時は非ゼロ終了する。
 
 `deadlineCutoffs.samples` は計測 iteration ごとの boolean 配列で、deadline により
 best-so-far で正常完了した iteration を `true` とする。
@@ -910,6 +921,13 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 本仕様は**提案 B を主**とする。即時の全置換はしない（理由は §11）。自前
 パーサを残したまま境界堅牢性を上げる。外部ライブラリへの移行は v1.0 の範囲では
 行わないことを §11.2.1 で確定した。再評価の条件も同節が正典とする。
+
+Envelope の送信は payload の JSON を検証してから連結し、受信は文書全体を
+検証した parser が特定した最初のトップレベル `payload` の範囲をコピーする。
+payload の再文字列化は行わず、キー順序・空白・数値・escape の表記を保持する。
+型別 payload の Parse は引き続き行う。文字列の同一性を JSON の意味的同一性の
+判定に使わない。欠落 payload の `{}`、重複キーの先勝ち、深度・入力長・不正値の
+拒否規則は維持する。性能の確認には §4.5 の IPC 計測を使う。
 
 ### 6.2 JSON パーサ強化要件
 

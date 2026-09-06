@@ -1,11 +1,13 @@
+#include "azookey/ipc/Messages.h"
+
+#include <gtest/gtest.h>
+
 #include <limits>
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
-
+#include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
-#include "azookey/ipc/Messages.h"
 
 TEST(MessagesTest, EnvelopeRoundTrip) {
   azookey::ipc::Envelope env;
@@ -86,6 +88,45 @@ TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {
 
 TEST(MessagesTest, MalformedInputRejected) {
   EXPECT_FALSE(azookey::ipc::Deserialize("not json").has_value());
+}
+
+TEST(MessagesTest, PayloadSpellingAndEscapedEnvelopeFieldsSurviveRoundTrip) {
+  for (const std::string payload :
+       {R"({ "z": [1e2,18446744073709551615], "a":"\u3042" })",
+        R"([true,null,{"payload":"nested"}])", R"("a\"b")", "null", "false", "1.25e2"}) {
+    azookey::ipc::Envelope env;
+    env.request_id = 5;
+    env.trace_id = "quote\"slash\\\n";
+    env.payload_json = payload;
+    auto encoded = azookey::ipc::Serialize(env);
+    ASSERT_TRUE(encoded.has_value());
+    auto decoded = azookey::ipc::Deserialize(*encoded);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded->payload_json, payload);
+    EXPECT_EQ(decoded->trace_id, env.trace_id);
+  }
+}
+
+TEST(MessagesTest, RawPayloadUsesFirstDecodedTopLevelKeyAndOwnsItsBytes) {
+  auto decoded = azookey::ipc::Deserialize(
+      R"({"nested":{"payload":9},"paylo\u0061d": { "x": 1 },"payload":2,"request_id":1,"trace_id":"","type":"Ping"})");
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded->payload_json, R"({ "x": 1 })");
+  EXPECT_FALSE(azookey::ipc::Deserialize(
+                   R"({"payload":{},"request_id":1,"trace_id":"","type":"Ping"} trailing)")
+                   .has_value());
+}
+
+TEST(MessagesTest, SplicedPayloadCannotInjectEnvelopeFields) {
+  azookey::ipc::Envelope env;
+  for (const std::string payload : {R"({},"request_id":99)", "{} {}", "[1,]", "1e9999"}) {
+    env.payload_json = payload;
+    EXPECT_FALSE(azookey::ipc::Serialize(env).has_value());
+  }
+  std::string_view raw = "old";
+  EXPECT_FALSE(azookey::ipc::json::ParseWithRawMember(R"({"payload":{} garbage})", "payload", raw)
+                   .has_value());
+  EXPECT_TRUE(raw.empty());
 }
 
 TEST(MessagesTest, SerializeRejectsMalformedPayload) {

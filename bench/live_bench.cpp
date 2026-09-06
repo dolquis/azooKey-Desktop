@@ -12,6 +12,7 @@
 #include "BenchmarkCommit.h"
 #include "BenchmarkResult.h"
 #include "ConversionQuality.h"
+#include "IpcBenchmark.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 
@@ -31,14 +32,16 @@ constexpr size_t kCurrentZenzaiContextBatchSize = 512;
 constexpr size_t kCurrentZenzaiPromptTemplateVersion = 1;
 
 void PrintUsage(const char* exe) {
-  std::cerr << "Usage: " << exe << " [--max-p95-ms N] [--json] [--output PATH] [--baseline PATH]\n"
+  std::cerr << "Usage: " << exe
+            << " [--max-p95-ms N] [--ipc] [--json] [--output PATH] [--baseline PATH]\n"
             << "       " << exe
             << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
                " [--backend cpu|cuda] [--model PATH] [--category NAME]"
                " [--iterations N] [--typo-mode off] [--trace]\n"
             << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
                "failure gate. --json selects JSON stdout; --output writes the same JSON "
-               "schema to a file. --eval selects the conversion-quality evaluator.\n";
+               "schema to a file. --ipc adds codec and Windows pipe echo timings. "
+               "--eval selects the conversion-quality evaluator.\n";
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -93,6 +96,7 @@ int main(int argc, char** argv) {
 
   std::optional<double> max_p95_ms;
   bool json_output = false;
+  bool ipc_benchmark = false;
   std::filesystem::path output_path;
   std::filesystem::path baseline_path;
   azookey::bench::ConversionQualityOptions quality_options;
@@ -107,6 +111,8 @@ int main(int argc, char** argv) {
         max_p95_ms = ParseDouble(RequireValue(argc, argv, i, "--max-p95-ms"), "--max-p95-ms");
       } else if (arg == "--json") {
         json_output = true;
+      } else if (arg == "--ipc") {
+        ipc_benchmark = true;
       } else if (arg == "--output") {
         output_path = azookey::bench::Utf8Path(RequireValue(argc, argv, i, "--output"));
       } else if (arg == "--baseline") {
@@ -148,8 +154,8 @@ int main(int argc, char** argv) {
     if (!quality_options.eval_path.empty() && max_p95_ms) {
       throw std::invalid_argument("--max-p95-ms cannot be combined with --eval");
     }
-    if (!quality_options.eval_path.empty() && json_output) {
-      throw std::invalid_argument("--json cannot be combined with --eval");
+    if (!quality_options.eval_path.empty() && (json_output || ipc_benchmark)) {
+      throw std::invalid_argument("--json and --ipc cannot be combined with --eval");
     }
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << std::endl;
@@ -241,6 +247,15 @@ int main(int argc, char** argv) {
   result.threshold_passed = !max_p95_ms || p95 < *max_p95_ms;
   result.baseline =
       azookey::bench::CompareBaseline(baseline_path, result.bench, result.config, result.latency);
+  if (ipc_benchmark) {
+    try {
+      result.ipc_phases = azookey::bench::RunIpcBenchmark();
+    } catch (const std::exception& ex) {
+      std::remove(learning_path.string().c_str());
+      std::cerr << ex.what() << std::endl;
+      return 2;
+    }
+  }
   const auto json = azookey::bench::SerializeBenchmarkResult(result);
 
   if (!output_path.empty()) {
@@ -262,6 +277,20 @@ int main(int argc, char** argv) {
       std::cout << " max_p95_ms=none";
     }
     std::cout << std::endl;
+    if (result.ipc_phases) {
+      const auto print_phase = [](const char* name, const azookey::bench::LatencyMetrics& m) {
+        std::cout << name << " p50_ms=" << m.p50_ms << " p95_ms=" << m.p95_ms
+                  << " p99_ms=" << m.p99_ms << " max_ms=" << m.max_ms << '\n';
+      };
+      print_phase("ipc_serialize", result.ipc_phases->serialize);
+      print_phase("ipc_framing", result.ipc_phases->framing);
+      print_phase("ipc_deserialize", result.ipc_phases->deserialize);
+      if (result.ipc_phases->pipe_round_trip) {
+        print_phase("ipc_pipe_round_trip", *result.ipc_phases->pipe_round_trip);
+      } else {
+        std::cout << "ipc_pipe_round_trip=unavailable (Windows only)\n";
+      }
+    }
   }
   if (const auto warning = azookey::bench::RegressionWarning(result)) {
     std::cerr << *warning << std::endl;

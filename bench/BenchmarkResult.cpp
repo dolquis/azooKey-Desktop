@@ -179,6 +179,24 @@ std::string SerializeBenchmarkResult(const BenchmarkResult& result) {
     root.emplace("decodePhases", Value(std::move(phases)));
   }
   root.emplace("iterations", Value(static_cast<uint64_t>(result.iterations)));
+  if (result.ipc_phases) {
+    const auto metrics = [](const LatencyMetrics& m) {
+      return Value(Object{{"max", Value(m.max_ms)},
+                          {"p50", Value(m.p50_ms)},
+                          {"p95", Value(m.p95_ms)},
+                          {"p99", Value(m.p99_ms)}});
+    };
+    const auto& ipc = *result.ipc_phases;
+    Object phases;
+    phases.emplace("samples", Value(static_cast<uint64_t>(ipc.samples)));
+    phases.emplace("payloadBytes", Value(static_cast<uint64_t>(ipc.payload_bytes)));
+    phases.emplace("serializeMs", metrics(ipc.serialize));
+    phases.emplace("framingMs", metrics(ipc.framing));
+    phases.emplace("deserializeMs", metrics(ipc.deserialize));
+    phases.emplace("pipeRoundTripMs",
+                   ipc.pipe_round_trip ? metrics(*ipc.pipe_round_trip) : Value());
+    root.emplace("ipcPhases", Value(std::move(phases)));
+  }
   root.emplace("latencyMs", Value(std::move(latency)));
   root.emplace("schemaVersion", Value(kBenchmarkSchemaVersion));
   root.emplace("threshold", Value(std::move(threshold)));

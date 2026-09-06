@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
@@ -469,6 +470,55 @@ TEST(UserDictCliTest, DirectImportExportRoundTrip) {
   auto exported_matches = exported.Lookup("azookey");
   ASSERT_EQ(exported_matches.size(), 1u);
   EXPECT_EQ(exported_matches.front().word, "azooKey");
+
+  std::filesystem::remove_all(root);
+}
+
+TEST(UserDictCliTest, DirectImportExportKeepsNonAsciiPathsAsUtf8) {
+  // UTF-8 bytes for 日本語辞書, 取込.tsv and 書出.json, written as escapes so the
+  // fixture pins the bytes the CLI receives from argv.
+  constexpr const char* kDirName = "azookey_userdict_cli_\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
+  constexpr const char* kImportName = "\xe5\x8f\x96\xe8\xbe\xbc.tsv";
+  constexpr const char* kExportName = "\xe6\x9b\xb8\xe5\x87\xba.json";
+
+  const auto root = std::filesystem::temp_directory_path() / azookey::core::Utf8Path(kDirName);
+  const auto dict_path = root / azookey::core::Utf8Path("user_dict.json");
+  const auto import_path = root / azookey::core::Utf8Path(kImportName);
+  const auto export_path = root / azookey::core::Utf8Path(kExportName);
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream tsv(import_path);
+    ASSERT_TRUE(tsv.is_open());
+    tsv << "\xe3\x81\xab\xe3\x81\xbb\xe3\x82\x93\xe3\x81\x94\t\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e"
+           "\t\t\t\n";
+  }
+
+  // The CLI receives UTF-8 argv, so the fixture must not go through
+  // path::string(), which encodes with the active code page on Windows.
+  std::vector<std::string> import_args = {"import", azookey::core::PathToUtf8(import_path)};
+  std::string error;
+  auto import_options = azookey::host::ParseUserDictCliArgs(import_args, &error);
+  ASSERT_TRUE(import_options.has_value()) << error;
+  auto import_result = azookey::host::RunUserDictCli(*import_options, DirectRunOptions(dict_path));
+  ASSERT_EQ(import_result.exit_code, 0) << import_result.error;
+  auto import_json = azookey::ipc::json::Parse(import_result.output_lines.front());
+  ASSERT_TRUE(import_json.has_value());
+  EXPECT_EQ(import_json->GetUInt("imported"), 1u);
+  EXPECT_EQ(import_json->GetString("path"), azookey::core::PathToUtf8(import_path));
+
+  std::vector<std::string> export_args = {"export", azookey::core::PathToUtf8(export_path)};
+  auto export_options = azookey::host::ParseUserDictCliArgs(export_args, &error);
+  ASSERT_TRUE(export_options.has_value()) << error;
+  auto export_result = azookey::host::RunUserDictCli(*export_options, DirectRunOptions(dict_path));
+  ASSERT_EQ(export_result.exit_code, 0) << export_result.error;
+  EXPECT_TRUE(std::filesystem::exists(export_path));
+
+  azookey::learning::UserDictionary exported(export_path);
+  ASSERT_TRUE(exported.Load());
+  auto matches = exported.Lookup("\xe3\x81\xab\xe3\x81\xbb\xe3\x82\x93\xe3\x81\x94");
+  ASSERT_EQ(matches.size(), 1u);
+  EXPECT_EQ(matches.front().word, "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e");
 
   std::filesystem::remove_all(root);
 }

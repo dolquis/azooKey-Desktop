@@ -10,6 +10,7 @@
 #include <sstream>
 #include <utility>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/host/CliText.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
@@ -366,7 +367,10 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
   }
 
   if (options.command == UserDictCliCommand::Import) {
-    std::ifstream input(options.path);
+    // options.path holds UTF-8 bytes so it can be echoed back in the JSON
+    // report; Utf8Path is what turns it into a path without going through the
+    // Windows active code page.
+    std::ifstream input(azookey::core::Utf8Path(options.path));
     if (!input.is_open()) {
       result.exit_code = 1;
       result.error = "failed to open import TSV";
@@ -409,7 +413,7 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     auto entries = dict.All();
     SortEntries(&entries);
     if (!options.dry_run) {
-      azookey::learning::UserDictionary exported(options.path);
+      azookey::learning::UserDictionary exported(azookey::core::Utf8Path(options.path));
       exported.ReplaceAll(entries);
       if (!exported.Save()) {
         result.exit_code = 1;

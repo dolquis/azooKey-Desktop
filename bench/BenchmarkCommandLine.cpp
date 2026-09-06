@@ -3,6 +3,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "azookey/core/CommandLine.h"
+#include "azookey/core/PlatformPaths.h"
+
 #if defined(_WIN32)
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -12,18 +15,13 @@
 
 namespace azookey::bench {
 
-std::filesystem::path Utf8Path(std::string_view value) {
-  std::u8string utf8;
-  utf8.reserve(value.size());
-  for (const char ch : value) {
-    utf8.push_back(static_cast<char8_t>(static_cast<unsigned char>(ch)));
-  }
-  return std::filesystem::path(utf8);
-}
+std::filesystem::path Utf8Path(std::string_view value) { return core::Utf8Path(value); }
 
 std::vector<std::string> Utf8CommandLineArguments(int argc, char** argv) {
 #if defined(_WIN32)
   (void)argv;
+  // The benchmarks keep a narrow `main`, so the wide argv has to be recovered
+  // from the raw command line before core's UTF-8 conversion can run.
   int wide_argc = 0;
   wchar_t** wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
   if (!wide_argv || wide_argc != argc) {
@@ -31,36 +29,21 @@ std::vector<std::string> Utf8CommandLineArguments(int argc, char** argv) {
     throw std::runtime_error("failed to read Unicode command-line arguments");
   }
 
-  std::vector<std::string> arguments;
-  arguments.reserve(static_cast<size_t>(wide_argc));
-  for (int i = 0; i < wide_argc; ++i) {
-    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1,
-                                             nullptr, 0, nullptr, nullptr);
-    if (required <= 0) {
-      LocalFree(wide_argv);
-      throw std::runtime_error("failed to convert command-line argument to UTF-8");
-    }
-    std::string converted(static_cast<size_t>(required), '\0');
-    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1, converted.data(),
-                            required, nullptr, nullptr) != required) {
-      LocalFree(wide_argv);
-      throw std::runtime_error("failed to convert command-line argument to UTF-8");
-    }
-    converted.pop_back();
-    arguments.push_back(std::move(converted));
-  }
+  std::string error;
+  auto arguments = core::Utf8CommandLineArguments(wide_argc, wide_argv, &error);
   LocalFree(wide_argv);
-  return arguments;
-#else
-  std::vector<std::string> arguments;
-  arguments.reserve(static_cast<size_t>(argc));
-  for (int i = 0; i < argc; ++i) {
-    if (!argv[i]) {
-      throw std::runtime_error("failed to read command-line arguments");
-    }
-    arguments.emplace_back(argv[i]);
+  if (!arguments) {
+    throw std::runtime_error(error.empty() ? "failed to convert command-line argument to UTF-8"
+                                           : error);
   }
-  return arguments;
+  return std::move(*arguments);
+#else
+  std::string error;
+  auto arguments = core::Utf8CommandLineArguments(argc, argv, &error);
+  if (!arguments) {
+    throw std::runtime_error(error.empty() ? "failed to read command-line arguments" : error);
+  }
+  return std::move(*arguments);
 #endif
 }
 

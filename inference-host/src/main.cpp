@@ -24,6 +24,8 @@
 #include <signal.h>
 #endif
 
+#include "azookey/core/CommandLine.h"
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/HostArgs.h"
@@ -44,11 +46,6 @@ namespace {
 
 azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
   return azookey::logging::RuntimeLogSafeText(std::move(value));
-}
-
-std::string PathToUtf8(const std::filesystem::path& path) {
-  const auto utf8 = path.u8string();
-  return std::string(utf8.begin(), utf8.end());
 }
 
 constexpr const char* kHostVersion = "0.1.0";
@@ -234,7 +231,15 @@ std::string GetEnvString(const char* name) {
 
 }  // namespace
 
+#ifdef _WIN32
+// Windows uses the wide entry point: narrow `main` argv is encoded in the
+// process active code page, so a non-ASCII --query or path would already be
+// damaged before any parsing. docs/windows-tsf-host-architecture.md defines the
+// resulting UTF-8 contract for CLI strings and paths.
+int wmain(int argc, wchar_t** argv) {
+#else
 int main(int argc, char** argv) {
+#endif
 #ifdef _WIN32
   // Construct before the engine so its destructor signals completion only
   // after the engine destructor has flushed pending learning observations.
@@ -243,9 +248,17 @@ int main(int argc, char** argv) {
   azookey::host::EngineConfig config;
   ApplyDefaultBackend(config);
   const auto default_backend = config.backend;
+  std::string args_error;
+  auto command_line = azookey::core::Utf8CommandLineArguments(argc, argv, &args_error);
+  if (!command_line) {
+    std::cerr << "error: " << args_error << std::endl;
+    return 2;
+  }
+  // argv[0] is the program name, which no option parser consumes.
   std::vector<std::string> raw_args;
-  raw_args.reserve(argc > 1 ? static_cast<size_t>(argc - 1) : 0);
-  for (int i = 1; i < argc; ++i) raw_args.emplace_back(argv[i]);
+  if (!command_line->empty()) {
+    raw_args.assign(command_line->begin() + 1, command_line->end());
+  }
   auto parsed_args = azookey::host::ParseHostArgs(raw_args, std::move(config),
                                                   GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN"));
   if (!parsed_args) {
@@ -458,8 +471,8 @@ int main(int argc, char** argv) {
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
             << azookey::host::BackendName(startup_health.backend)
-            << " learning=" << PathToUtf8(user_paths->learning_path)
-            << " user_dict=" << PathToUtf8(user_paths->user_dict_path)
+            << " learning=" << azookey::core::PathToUtf8(user_paths->learning_path)
+            << " user_dict=" << azookey::core::PathToUtf8(user_paths->user_dict_path)
             << " model_loaded=" << (startup_health.model_loaded ? "true" : "false");
   if (startup_health.model_preload_in_progress) {
     std::cerr << " model_preload=preloading";

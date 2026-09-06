@@ -1,4 +1,5 @@
 add_library(azookey_core STATIC
+  src/CommandLine.cpp
   src/DoubleArrayTrie.cpp
   src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/host/HostArgs.h"
 
 namespace {
@@ -110,4 +111,20 @@ TEST(HostArgsTest, RejectsMissingValuesAndUnknownArguments) {
   const auto unknown = Parse({"--unknown"});
   ASSERT_FALSE(unknown);
   EXPECT_EQ(unknown.error, "unknown argument: --unknown");
+}
+
+TEST(HostArgsTest, KeepsNonAsciiExplicitPathsAsUtf8) {
+  // UTF-8 bytes for 日本語/学習.tsv and 日本語/辞書.json, written as escapes so
+  // the expectation does not depend on how this file's literals are encoded.
+  constexpr const char* kLearning =
+      "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e/\xe5\xad\xa6\xe7\xbf\x92.tsv";
+  constexpr const char* kUserDict =
+      "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e/\xe8\xbe\x9e\xe6\x9b\xb8.json";
+
+  const auto parsed = Parse({"--learning", kLearning, "--user-dict", kUserDict});
+  ASSERT_TRUE(parsed);
+  ASSERT_TRUE(parsed.args.explicit_learning_path.has_value());
+  ASSERT_TRUE(parsed.args.explicit_user_dict_path.has_value());
+  EXPECT_EQ(azookey::core::PathToUtf8(*parsed.args.explicit_learning_path), kLearning);
+  EXPECT_EQ(azookey::core::PathToUtf8(*parsed.args.explicit_user_dict_path), kUserDict);
 }

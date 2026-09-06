@@ -439,7 +439,10 @@ void Dispatcher::HandleCancel(const ipc::Envelope& req) {
 std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Envelope& req) {
   ipc::CommitObservationResponse res;
   if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json)) {
-    engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec());
+    // A duplicate resend is answered ok=true: the observation is already
+    // recorded, so the TIP must stop retrying it (DEV-554).
+    engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),
+                               parsed->observation_id);
     res.ok = true;
   } else {
     res.ok = false;

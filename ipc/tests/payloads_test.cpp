@@ -306,6 +306,33 @@ TEST(PayloadsTest, CommitObservation) {
   EXPECT_EQ(parsed->timestamp_ms, 1700000000123ULL);
 }
 
+// DEV-554: observation_id round-trips, and a payload from a TIP that predates
+// the field still parses (dedupe simply does not apply to it).
+TEST(PayloadsTest, CommitObservationCarriesObservationId) {
+  azookey::ipc::CommitObservationRequest req;
+  req.reading = "にほんご";
+  req.chosen = {"日本語", "にほんご", 1.0, "user"};
+  req.left_context = "";
+  req.timestamp_ms = 1700000000123ULL;
+  req.observation_id = "3F2504E0-4F89-11D3-9A0C-0305E82C3301:7";
+
+  const auto json = azookey::ipc::BuildCommitObservationRequest(req);
+  const auto parsed = azookey::ipc::ParseCommitObservationRequest(json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->observation_id, "3F2504E0-4F89-11D3-9A0C-0305E82C3301:7");
+}
+
+TEST(PayloadsTest, CommitObservationWithoutObservationIdParsesAsEmpty) {
+  const std::string legacy_json =
+      R"({"reading":"にほんご","chosen":{"surface":"日本語","reading":"にほんご",)"
+      R"("score":1.0,"source":"user"},"shown":[],"left_context":"","timestamp_ms":1700000000123})";
+
+  const auto parsed = azookey::ipc::ParseCommitObservationRequest(legacy_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->reading, "にほんご");
+  EXPECT_TRUE(parsed->observation_id.empty());
+}
+
 TEST(PayloadsTest, CommitObservationPreservesLargeTimestamp) {
   azookey::ipc::CommitObservationRequest req;
   req.reading = "にほんご";

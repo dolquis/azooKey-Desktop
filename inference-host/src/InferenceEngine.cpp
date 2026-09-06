@@ -10,6 +10,7 @@
 #include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/learning/FileLock.h"
 
 namespace azookey::host {
@@ -21,6 +22,14 @@ constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 constexpr size_t kPredictionDisplayLimit = 5;
+// Depth of the applied-observation ring (DEV-554). One engine is shared by every
+// connection, so the ring has to cover the resend backlogs of all TIP instances
+// at once, not just one: after a Host restart several TIPs replay in parallel,
+// and a ring sized for a single backlog would evict one TIP's applied id before
+// that TIP resends it, which is exactly the double-count the id exists to
+// prevent. Derive it from the transport's own limits so the two stay in step.
+constexpr size_t kMaxTrackedObservationIds =
+    static_cast<size_t>(ipc::kMaxPipeInstances) * ipc::kMaxQueuedCommitObservations;
 
 using core::TakeLastUtf8Codepoints;
 
@@ -664,11 +673,15 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
-void InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
-                                        uint64_t now_epoch_sec) {
+bool InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
+                                        uint64_t now_epoch_sec, const std::string& observation_id) {
   std::shared_ptr<core::IConverter> converter;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    // A resend after a pipe drop must not re-apply an observation the Host
+    // already recorded, so the dedupe check gates both the learning store and
+    // the converter's own commit history.
+    if (!NoteObservationIdLocked(observation_id)) return false;
     if (store_) {
       store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
       NoteLearningMutationLocked(now_epoch_sec);
@@ -679,6 +692,20 @@ void InferenceEngine::CommitObservation(const std::string& reading, const std::s
   converter->Commit(
       core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
       core::ConversionContext{});
+  return true;
+}
+
+// Returns false when observation_id was already applied. An empty id carries no
+// dedupe information (legacy TIP), so it is always treated as new.
+bool InferenceEngine::NoteObservationIdLocked(const std::string& observation_id) {
+  if (observation_id.empty()) return true;
+  if (!applied_observation_id_set_.insert(observation_id).second) return false;
+  applied_observation_ids_.push_back(observation_id);
+  while (applied_observation_ids_.size() > kMaxTrackedObservationIds) {
+    applied_observation_id_set_.erase(applied_observation_ids_.front());
+    applied_observation_ids_.pop_front();
+  }
+  return true;
 }
 
 void InferenceEngine::CommitCorrection(const std::string& reading,

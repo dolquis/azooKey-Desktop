@@ -409,6 +409,7 @@ std::string BuildCommitObservationRequest(const CommitObservationRequest& p) {
   o.emplace("shown", j::Value(std::move(shown)));
   o.emplace("left_context", j::Value(p.left_context));
   o.emplace("timestamp_ms", j::Value(p.timestamp_ms));
+  o.emplace("observation_id", j::Value(p.observation_id));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -431,6 +432,8 @@ std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std:
   }
   p.left_context = v->GetString("left_context").value_or(std::string());
   p.timestamp_ms = v->GetUInt("timestamp_ms").value_or(0);
+  // Absent for TIPs that predate DEV-554: parse as empty (no dedupe).
+  p.observation_id = v->GetString("observation_id").value_or(std::string());
   return p;
 }
 

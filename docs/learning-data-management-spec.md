@@ -426,3 +426,73 @@ dirty と未保存件数を保ったまま stderr へ error を出し、次の�
 DEV-759（人間ゲート）の検証項目は本節の区分に従う。
 保証の経路は保持を必須とし、best-effort と対象外の経路は §11.3 の上限内であれば未達として記録しない。
 チェックリストの本体は `docs/handoff/human-gate-batch-runbook.md` に置く。
+
+## 12. CommitObservation の配送保証
+
+本節は `docs/windows-tsf-host-architecture.md` の IPC メッセージ一覧から `CommitObservation` の
+配送保証と冪等化の正典として参照される。
+
+§11 は Host の中で観測が永続化されるまでの境界を定める。
+本節はその手前、TIP から Host へ観測が届くまでの境界を定める。
+
+### 12.1 配送保証の水準
+
+`CommitObservation` の配送保証は **at-least-once** とする。
+TIP は応答を待つ送信としてこれを扱い、応答を受け取れなかった観測を再送する。
+Host は同じ観測を二度適用しないための冪等化を持つ。
+
+exactly-once は採らない。
+送信済みで応答を受け取れなかった観測について、TIP は Host が適用したかどうかを知る手段を持たない。
+その状態で再送しない設計は確定 1 件ぶんの学習をまるごと失い、再送する設計は最悪でも重みの二重計上に留まる。
+学習は頻度と時間減衰による重み付けであり、1 件の二重計上は候補順序を大きく動かさない。
+
+### 12.2 冪等化キー
+
+`CommitObservationRequest` は `observation_id` を持つ。
+定義は `ipc/include/azookey/ipc/Payloads.h` にある。
+
+- TIP は確定ごとに 1 つの `observation_id` を生成し、その観測を再送する間は同じ値を使う。
+- 値は TIP インスタンス ID（Handshake の `client_id` と同じ値）で名前空間を切り、インスタンス内の連番を続ける。同一 Host に複数の TIP インスタンスが接続しても衝突しない。
+- Envelope の `request_id` は冪等化キーに使わない。TIP は接続ごとに `request_id` を振り直すため、再接続をまたいで同じ観測を指せない。
+- TIP インスタンス ID を生成できなかった場合、TIP は `observation_id` を空にする。衝突しうるキーを送るより、冪等化を諦めるほうが安全である。
+
+`observation_id` を持たない payload は、本フィールド以前の TIP からの要求として空文字で受理する。
+空の `observation_id` は冪等化の対象にせず、Host はそのまま適用する。
+
+### 12.3 Host 側の冪等化
+
+Host は適用済みの `observation_id` を上限つきの ring で保持し、既に適用した ID の要求を学習ストアにも converter にも渡さない。
+重複と判定した要求にも `ok=true` を返す。TIP に再送をやめさせるのが目的であり、失敗として返すと再送が続く。
+
+ring は永続化しない。
+`Save()` の後、応答を返す前に Host が落ちた場合、再接続後の再送は新しい観測として適用され、その 1 件が二重計上される。
+この窓を塞ぐには適用済み ID を学習データと同じ原子性で永続化する必要があり、§12.1 の判断のもとでは割に合わない。
+
+### 12.4 TIP 側の再送
+
+TIP は送信に失敗した観測と、送信したが応答を受け取れなかった観測を、確定の順序を保ったまま送信キューへ戻し、再接続後の接続で再送する。
+応答を待たない `Cancel` は戻さない。切断とともに消えた `request_id` を指しているためである。
+
+再送には 2 つの上限を置く。
+
+- **キュー長の上限**：Host の停止が続いても TIP のメモリが際限なく伸びないようにする。上限を超えたぶんは古い側から捨てる。
+- **1 件あたりの試行回数の上限**：Host が必ず失敗させる観測が 1 件あっても、`QueryCandidates` が飢えないようにする。送信キューは各周回で候補要求より先に処理されるため、この上限が無いと再送ループが変換そのものを止める。
+
+キュー長の上限は、送信キューを伸ばすすべての経路で適用する。
+Host が到達不能な間、worker は接続の再試行と backoff を繰り返すだけで送信キューを処理する経路へ入らない。
+再送のときだけ切り詰める実装では、上限が守るべき停止区間においてキューが伸び続けるため、上限を置いた意味が無くなる。
+
+いずれの上限も、上限に達して観測を捨てたことを runtime log の warn に残す。
+試行回数の上限は `tsf-tip/src/TextService.cpp` の定数として持ち、設定キーには露出しない。
+
+キュー長の上限は `ipc/include/azookey/ipc/Limits.h` に置き、Host と共有する。
+Host 側 ring の深さは、この上限に transport が同時に受け付ける接続数の上限を掛けた値とする。
+`InferenceEngine` は全接続で共有される単一インスタンスであり、Host 再起動後は複数の TIP インスタンスが同時に backlog を再送する。
+ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用済み ID がその TIP の再送より先に他の TIP の再送で追い出され、`observation_id` が防ぐはずの二重計上が起きる。
+
+### 12.5 テスト
+
+- `ipc_payloads_tests`：`observation_id` の round-trip と、フィールドを持たない payload が空文字で parse されること。
+- `host_engine_tests`：同じ `observation_id` の二度目が学習ストアへ反映されないこと。空の `observation_id` が毎回適用されること。ring 深さを超えた ID が再び適用されること。他の TIP インスタンスが backlog を再送しきっても適用済み ID が追い出されないこと。
+- `host_dispatcher_tests`：再送に `ok=true` を返し、かつ学習ストアを二重に更新しないこと。
+- `tsf_tip_onkeydown_preedit_tests`：応答を返さずに落ちた Host の後、再接続先の Host が同じ `observation_id` を受け取ること。worker が動いていない間の enqueue でキュー長の上限が守られ、古い側から捨てられること。

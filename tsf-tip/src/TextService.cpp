@@ -7,9 +7,11 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
+#include <iterator>
 #include <new>
 #include <optional>
 #include <string_view>
@@ -18,6 +20,7 @@
 
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -32,6 +35,13 @@ constexpr uint32_t kCancelConnectTimeoutMs = 200;
 constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
 constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
 constexpr uint32_t kTimeoutCancelHandshakeTimeoutMs = 10;
+
+// Attempt cap on the CommitObservation resend backlog (DEV-554). It keeps one
+// observation the host always rejects from starving QueryCandidates, which is
+// drained after this queue on every worker iteration. The companion queue-length
+// cap is ipc::kMaxQueuedCommitObservations, shared with the host so it can size
+// its dedupe ring to cover what the connected TIPs can still resend.
+constexpr uint32_t kMaxCommitObservationSendAttempts = 3;
 
 std::string CreateIpcClientId() {
   GUID guid{};
@@ -1439,6 +1449,7 @@ void TextService::CancelPendingQueriesForLifecycle() {
     need_notify = true;
   }
   ++ipc_pending_id_;
+  TrimIpcSendQueueLocked();
   if (need_notify) ipc_cv_.notify_one();
 }
 
@@ -1647,6 +1658,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       need_notify = true;
     }
     ++ipc_pending_id_;
+    TrimIpcSendQueueLocked();
     if (need_notify) ipc_cv_.notify_one();
   }
 
@@ -1715,6 +1727,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
       need_notify = true;
     }
     ++ipc_pending_id_;
+    TrimIpcSendQueueLocked();
     if (need_notify) ipc_cv_.notify_one();
   }
 
@@ -2045,9 +2058,11 @@ void TextService::ServeConnection() {
 
     // Drain fire-and-forget queue (CommitObservation, Cancel) first. A send or
     // response failure here means the pipe dropped (e.g. the host restarted):
-    // re-arm any query pulled this iteration and return so the outer loop
-    // reconnects, instead of looping back to the wait on a dead connection.
-    for (auto& item : to_send) {
+    // requeue the ACK-awaiting items this iteration did not confirm, re-arm any
+    // query pulled this iteration and return so the outer loop reconnects,
+    // instead of looping back to the wait on a dead connection.
+    for (size_t i = 0; i < to_send.size(); ++i) {
+      auto& item = to_send[i];
       Envelope env;
       env.version = 1;
       env.request_id = next_id++;
@@ -2063,9 +2078,11 @@ void TextService::ServeConnection() {
         }
       }
       if (!sent_out_of_band && !ipc_client_.Send(env)) {
-        if (!ipc_stop_.load())
+        if (!ipc_stop_.load()) {
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_send_failed",
                      {{"message_type", SafeLogText(TypeToString(item.type))}});
+          RequeueUnackedSendItems(to_send, i);
+        }
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
@@ -2073,9 +2090,12 @@ void TextService::ServeConnection() {
         constexpr uint32_t kFafResponseTimeoutMs = 3000;
         if (!WaitForIpcResponseOrStop(kFafResponseTimeoutMs, env.request_id, item.type)) {
           if (ipc_stop_.load()) return;
-          if (!ipc_stop_.load())
-            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_receive_failed",
-                       {{"message_type", SafeLogText(TypeToString(item.type))}});
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_receive_failed",
+                     {{"message_type", SafeLogText(TypeToString(item.type))}});
+          // The host may or may not have applied this item before the pipe
+          // dropped, so the resend is at-least-once; observation_id lets the
+          // host discard the duplicate (DEV-554).
+          RequeueUnackedSendItems(to_send, i);
           if (has_qc) RearmPendingQuery(req_id);
           return;
         }
@@ -2527,6 +2547,17 @@ TextService::last_queued_commit_observation_for_test() {
   return std::nullopt;
 }
 
+std::optional<ipc::CommitObservationRequest>
+TextService::first_queued_commit_observation_for_test() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  for (const auto& item : ipc_send_queue_) {
+    if (item.type == ipc::MessageType::CommitObservation) {
+      return ipc::ParseCommitObservationRequest(item.payload_json);
+    }
+  }
+  return std::nullopt;
+}
+
 std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   std::vector<ipc::MessageType> types;
@@ -2615,6 +2646,7 @@ void TextService::PostCommitObservation(const std::string& reading,
   req.shown = shown;
   req.left_context = "";
   req.timestamp_ms = now_ms;
+  req.observation_id = NextCommitObservationId();
 
   PostIpcSend(ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(req), true);
 }
@@ -2623,13 +2655,71 @@ void TextService::PostCancel(uint64_t target_request_id) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back(
       {ipc::MessageType::Cancel, ipc::BuildCancel({target_request_id}), false, target_request_id});
+  TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
 }
 
 void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool expects_response) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0});
+  TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
+}
+
+// Idempotency key for one commit's learning telemetry (DEV-554). The TIP
+// instance UUID scopes the counter so ids stay unique across TIP instances that
+// talk to the same host. When the UUID could not be created the key is left
+// empty, which tells the host to apply the observation without dedupe rather
+// than to trust a key that could collide with another instance's.
+std::string TextService::NextCommitObservationId() {
+  if (ipc_client_id_.empty()) return {};
+  const uint64_t seq = commit_observation_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
+  return ipc_client_id_ + ":" + std::to_string(seq);
+}
+
+// Put the ACK-awaiting items from `items[from_index..]` back at the front of the
+// send queue, oldest first, so the reconnected connection retries them instead
+// of losing the commits they carry. Cancel items are not requeued: they target
+// request IDs that died with the connection. Only items[from_index] is charged
+// an attempt: it is the one this connection actually tried, and the rest never
+// reached the pipe.
+void TextService::RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index) {
+  std::vector<IpcSendItem> retry;
+  size_t exhausted = 0;
+  for (size_t i = from_index; i < items.size(); ++i) {
+    if (!items[i].expects_response) continue;
+    if (i == from_index && ++items[i].attempts >= kMaxCommitObservationSendAttempts) {
+      ++exhausted;
+      continue;
+    }
+    retry.push_back(std::move(items[i]));
+  }
+  if (exhausted > 0) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_item_attempts_exhausted",
+               {{"dropped", static_cast<uint64_t>(exhausted)}});
+  }
+  if (retry.empty()) return;
+
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  ipc_send_queue_.insert(ipc_send_queue_.begin(), std::make_move_iterator(retry.begin()),
+                         std::make_move_iterator(retry.end()));
+  TrimIpcSendQueueLocked();
+  ipc_cv_.notify_one();
+}
+
+// Hold the send queue to its bound. Callers must hold ipc_mtx_. Every path that
+// grows the queue trims it: while the host is unreachable the worker never
+// re-enters ServeConnection, so trimming only on requeue would leave the queue
+// unbounded during exactly the outage the bound exists for. The oldest items go
+// first, because the newest commits are the ones the user is most likely to type
+// again.
+void TextService::TrimIpcSendQueueLocked() {
+  if (ipc_send_queue_.size() <= ipc::kMaxQueuedCommitObservations) return;
+  const size_t overflow = ipc_send_queue_.size() - ipc::kMaxQueuedCommitObservations;
+  ipc_send_queue_.erase(ipc_send_queue_.begin(),
+                        ipc_send_queue_.begin() + static_cast<std::ptrdiff_t>(overflow));
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_backlog_trimmed",
+             {{"dropped", static_cast<uint64_t>(overflow)}});
 }
 
 // --- EditSession ---

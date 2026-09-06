@@ -5,12 +5,14 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "azookey/core/IConverter.h"
@@ -134,8 +136,12 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCorrections(const std::string& kana, const std::string& context,
                                                 const std::string& rejected_surface,
                                                 uint64_t now_epoch_sec);
-  void CommitObservation(const std::string& reading, const std::string& surface,
-                         uint64_t now_epoch_sec);
+  // observation_id is the TIP-side idempotency key (DEV-554). A non-empty id
+  // that was already applied is ignored so a resend after a pipe drop does not
+  // count the same commit twice; an empty id disables dedupe (legacy TIP).
+  // Returns false when the observation was dropped as a duplicate.
+  bool CommitObservation(const std::string& reading, const std::string& surface,
+                         uint64_t now_epoch_sec, const std::string& observation_id = {});
   void CommitCorrection(const std::string& reading, const std::string& rejected_surface,
                         const std::string& selected_surface, uint64_t now_epoch_sec);
   bool FlushLearningStore();
@@ -152,6 +158,7 @@ class InferenceEngine {
 
  private:
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
+  bool NoteObservationIdLocked(const std::string& observation_id);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec);
@@ -188,6 +195,13 @@ class InferenceEngine {
   std::optional<uint64_t> last_unsaved_observation_epoch_sec_;
   std::optional<std::chrono::steady_clock::time_point> first_unsaved_observation_steady_;
   std::optional<std::chrono::steady_clock::time_point> last_successful_learning_save_steady_;
+  // Bounded ring of recently applied observation ids (DEV-554). Depth covers the
+  // resend backlogs of every TIP instance the transport admits at once, so an id
+  // is never evicted while its own TIP can still retry it. Not persisted: a Host that crashes after
+  // Save() but before the ACK sees the resend as new, which double-counts one commit's weight (see
+  // docs/learning-data-management-spec.md, at-least-once section).
+  std::deque<std::string> applied_observation_ids_;
+  std::unordered_set<std::string> applied_observation_id_set_;
   std::condition_variable learning_flush_cv_;
   std::thread learning_flush_thread_;
   std::thread model_preload_thread_;

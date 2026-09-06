@@ -117,7 +117,12 @@ Linear が持つ。
   cancel / latest を追跡し、キャンセル時は `canceled=true` と空の segments を返す。
   現状の segments は 1 要素（文節分割は未実装）で、`full_surface` は先頭候補の surface。
 - ✅ `Cancel(target_request_id)`
-- ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms)`
+- ✅ `CommitObservation(reading, chosen, shown, left_context, timestamp_ms, observation_id)` /
+  応答 `CommitObservationResponse(ok)`。配送保証は at-least-once で、TIP は応答を受け取れ
+  なかった観測を確定の順序を保ったまま再接続後に再送し、Host は `observation_id` で重複を
+  捨てる。`observation_id` を省略する旧 TIP は空文字として受理し、冪等化の対象外とする。
+  キーの生成規則、両側の上限、失われうる範囲は `docs/learning-data-management-spec.md` §12
+  が正典。
 - ✅ `AddUserWord` / `RemoveUserWord` — `InferenceEngine` の状態ロック下で
   `UserDictionary` を更新し、永続化に成功した場合だけ `ok=true` を返す。
   永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。

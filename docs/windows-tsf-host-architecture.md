@@ -50,12 +50,12 @@ active code page で符号化されるため、CLI の入力経路として使�
 narrow の `std::filesystem::path` コンストラクタは Windows で active code page として復号する
 ため、CLI 由来のパスには使わない。path を文字列へ戻す表示と JSON 出力は
 `azookey::core::PathToUtf8` を使う。model 読み込み経路（`--model` と settings の
-`model.selected_path`）の文字コードは DEV-1011 で扱う。
+`model.selected_path`）は本節の契約の対象外とする。
 
 application manifest の `activeCodePage="UTF-8"` は、この契約の実現手段として採らない。
 manifest の埋め込みは MSVC かつ identity package 有効時に限られ、採用すると build 構成によって
 CLI の文字コードが変わる。wide argv と明示的な UTF-8 変換は build 構成に依存しない。
-console 表示の文字コードは DEV-963 の実機検証で扱う。
+本節が定義するのは CLI 引数と path の文字コードであり、console の表示文字コードは対象外とする。
 
 ## TSF EditSessionルール
 

@@ -72,6 +72,8 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
     "openAiModel": "local-test-model",
     "backendPreference": "cuda",
     "unknownRoot": 1,
+    "reranker": {"nllRerankEnabled": true, "nllTopK": 8, "nllWeight": 0.15,
+                 "nllBudgetMs": 20, "nllFailureThreshold": 3, "unknown": true},
     "promptPrefixByApp": {"Code.exe": "code", "bad": false},
     "model": {
       "enabled": true,
@@ -103,6 +105,14 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_TRUE(root.contains("openAiModel"));
   EXPECT_FALSE(root.contains("aiBackend"));
   EXPECT_FALSE(root.contains("unknownRoot"));
+  ASSERT_TRUE(root.contains("reranker"));
+  const auto& reranker = root.at("reranker").AsObject();
+  EXPECT_EQ(reranker.size(), 5u);
+  EXPECT_TRUE(reranker.at("nllRerankEnabled").AsBool());
+  EXPECT_EQ(reranker.at("nllTopK").AsNumber(), 8);
+  EXPECT_EQ(reranker.at("nllWeight").AsNumber(), 0.15);
+  EXPECT_EQ(reranker.at("nllBudgetMs").AsNumber(), 20);
+  EXPECT_EQ(reranker.at("nllFailureThreshold").AsNumber(), 3);
   EXPECT_FALSE(root.contains("backendPreference"));
   ASSERT_TRUE(root.contains("promptPrefixByApp"));
   EXPECT_EQ(root.at("promptPrefixByApp").AsObject().size(), 1u);

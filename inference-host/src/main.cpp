@@ -154,7 +154,7 @@ bool RegisterSignalHandlers() {
   return std::signal(SIGINT, HandleSignal) != SIG_ERR &&
          std::signal(SIGTERM, HandleSignal) != SIG_ERR;
 #else
-  struct sigaction action {};
+  struct sigaction action{};
   action.sa_handler = HandleSignal;
   sigemptyset(&action.sa_mask);
   // Deliberately omit SA_RESTART so a blocked stdio read returns on shutdown.
@@ -389,7 +389,7 @@ int main(int argc, char** argv) {
     converter->LoadFromTsv(mock_dict_path);
   }
 
-  azookey::host::InferenceEngine engine(std::move(converter), &store, config);
+  azookey::host::InferenceEngine engine(std::move(converter), &store, config, &runtime_log);
   engine.SetUserDictionary(&user_dict);
 #ifdef _WIN32
   // Discover only installer-controlled static layers, never the current directory.

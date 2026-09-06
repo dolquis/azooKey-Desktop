@@ -1141,6 +1141,22 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   ASSERT_TRUE(engine->effective_last_error().has_value());
   EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
 
+  auto nll_config = engine->config();
+  nll_config.nll.enabled = true;
+  engine->ApplyConfig(nll_config);
+  const auto nll_degraded = engine->QueryCandidates("にほん", "", kNowBase);
+  ASSERT_EQ(nll_degraded.size(), degraded.size());
+  for (size_t i = 0; i < degraded.size(); ++i) {
+    EXPECT_EQ(nll_degraded[i].surface, degraded[i].surface);
+    EXPECT_EQ(nll_degraded[i].score, degraded[i].score);
+    EXPECT_EQ(nll_degraded[i].debug_info, degraded[i].debug_info);
+  }
+  // NLL must not replace the conversion failure with its own inference error.
+  ASSERT_TRUE(engine->effective_last_error().has_value());
+  EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+  nll_config.nll.enabled = false;
+  engine->ApplyConfig(nll_config);
+
   auto recovered = engine->QueryCandidates("にほんご", "", kNowBase);
   ASSERT_FALSE(recovered.empty());
   EXPECT_EQ(recovered.front().surface, "日本語");

@@ -648,30 +648,27 @@ decode 後に読める「最終位置の logits」は prefix のものではな�
 ### B3.3 既存 `DecodeTokens` を流用しない
 
 `inference-host/src/ZenzaiModelConverter.cpp` の `DecodeTokens` は
-NllScorer にそのまま使えない。理由は 2 つで、いずれも生成経路には正しい挙動である。
-
-1. 先頭で `llama_kv_self_clear` を呼び、**毎回 KV を捨てる**。prefix 再利用と
-   両立しない。
-2. `llama_batch_get_one` で組んだ batch は**最終位置の logits しか出さない**。
-   NLL には位置ごとの logits が要る。
+NllScorer にそのまま使えない。`llama_batch_get_one` で組んだ batch は
+**最終位置の logits しか出さない**ためである。NLL には位置ごとの logits が要る。
 
 NllScorer 専用の decode ヘルパを設け、(a) KV をクリアしない、(b) 位置ごとに
 logits 出力を要求する batch を組む、の 2 点を満たす。
 
-> **実装時に確認する API 名**: 位置ごとの logits 要求（`llama_batch` の
-> `logits[]` を立てる形）と seq 単位の KV 削除は、pin 中の llama.cpp
-> （`AZOOKEY_LLAMA_CPP_GIT_TAG` = `05f6ac6…`）のヘッダで名前を確認すること。
-> 既存コードが使う `llama_kv_self_*` 系はリネームが進行中の層であり、本書では
-> 関数名を確定させない（契約は「prefix 長より後ろの KV を落とす」ことのみ）。
+`llama_batch_init` で batch を確保し、`pos` と `seq_id` を明示する。
+候補の位置ごとに `logits[]` を立て、`llama_get_logits_ith` で対応する行を読む。
+候補間では `llama_memory_seq_rm(llama_get_memory(context), 0, prefix_len, -1)` で
+prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
+`AZOOKEY_LLAMA_CPP_GIT_TAG` とする。
 
 ### B3.4 `llama_context` の共有とスレッド
 
 - 生成経路と**同一の `llama_context`** を使う。モデルを 2 つ常駐させない。
-- NllScorer は `InferenceEngine::QueryCandidates` が `state_mutex_` を保持した
-  区間の中、`Convert` の**完了後**に走る。したがって context への同時アクセスは
-  起きない。
+- NllScorer は `Convert` の**完了後**、`converter_call_mutex_` を保持して走る。
+  decode 中は `state_mutex_` を保持せず、Health とモデル交換の応答性を保つ。
 - `Convert` の beam decode が KV を触るため、NllScorer は prefix を必ず 1 回
   decode し直す前提で予算を組む（§B12）。
+- 評価の前後に生成用 prefix キャッシュを無効化する。途中の失敗や cancel でも
+  KV を消去し、次の生成が古いキャッシュを参照しないようにする。
 - NllScorer を別スレッドへ出さない（`llama_context` は共有できない）。
 
 ## B4. 責務境界
@@ -702,7 +699,7 @@ logits 出力を要求する batch を組む、の 2 点を満たす。
 |---|---|
 | `Candidate::debug_info` | 対象候補に `nll=<nll_per_char>;nlld=<bonus>` を追記（既存の `dup:` 併記と同じ流儀。表層・読みは含めない） |
 | `Health` | **runtime 失敗のみ** `model_runtime_error_` へ `nll-scorer:<reason>` をミラーし、既存の `last_error` フィールドで運ばれる（§B8）。payload の形は変わらない |
-| 構造化ログ（`azookey::logging::RuntimeLogger`） | 全 `reason`（正常な `disabled` / `no_target` を含む）と対象候補数。適用時は `nll_applied=<件数>` |
+| 構造化ログ（`azookey::logging::RuntimeLogger`） | `nll_rerank` イベントの `reason`、`nll_targets`、`nll_applied`、`prefix_ms`、`elapsed_ms`。適用時は `reason=applied`。既定 OFF・live・cancel では出力しない（§B9） |
 
 **`QueryDiagnostics` へは出さない（決定）。** 現行 `QueryDiagnosticsPayload`
 （`ipc/include/azookey/ipc/Payloads.h`）は `model_loaded` / `engine` / `backend` /
@@ -725,13 +722,16 @@ fallback reason を構造化ログへ出し、M52 ベンチの `fallback_rate` �
   `MirrorModelRuntimeErrorLocked` と同じく `dynamic_cast<ZenzaiModelConverter*>` で
   到達する。Zenzai 以外が active な間は `model_not_loaded` で no-op になる。
 
-### B4.4 変更対象ファイル（DEV-413 の見込み）
+### B4.4 実装配置
 
 `inference-host/src/ZenzaiModelConverter.cpp`（NLL 評価 API・専用 decode ヘルパ）、
 `inference-host/include/azookey/host/ZenzaiModelConverter.h`、
 `inference-host/src/InferenceEngine.cpp`（適用点の挿入）、
 `inference-host/include/azookey/host/InferenceEngine.h`（`EngineConfig` へ設定追加）、
 `inference-host/tests/`、`settings/mvp-settings.schema.json`（§B9）。
+NLL の数値計算・候補選別・予算制御は `NllScorer.h` / `NllScorer.cpp` に置く。
+`SettingsStore` は設定を Host へ適用し、`settings-app/SettingsDocument.cpp` は
+設定画面の保存時に有効な `reranker` キーを保持する。評価ベンチは `bench/nll_bench.cpp` とする。
 `ipc/` `tsf-tip/` `core/` `learning/` は**変更しない**。
 
 ## B5. 対象候補集合
@@ -877,7 +877,7 @@ Track B が単独で成立するための形式である。
 
 ## B9. 有効化フラグと既定 OFF 時の挙動不変
 
-`settings/mvp-settings.schema.json` の `reranker` ブロック（§8）へ追加する:
+`settings/mvp-settings.schema.json` の `reranker` ブロックで次を定義する:
 
 ```json
 {
@@ -897,7 +897,8 @@ Track B が単独で成立するための形式である。
   （回帰テストで固定する。§B11）。
 - 範囲: `nllTopK` 1〜16、`nllWeight` 0.0〜1.0、`nllBudgetMs` 5〜60、
   `nllFailureThreshold` 1〜10。範囲外は clamp（Track A §8 と同じ扱い）。
-- schema への正式登録は DEV-413 の実装時に行う（Track A §8 と同じ運用）。
+- `SettingsStore` から `EngineConfig::nll` へ適用する。欠落・型不正は既定値を使う。
+  専用 UI は設けず、設定ファイルで有効化する。
 - 既定値（特に `nllWeight` / `nllTopK`）は M52 ベンチで校正する（§B12）。
 
 ## B10. プライバシー
@@ -949,22 +950,25 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
 - DEV-743 で締めた流儀に合わせ、合格条件は代表入力の **top candidate 完全一致**
   とする（「含む」では壊れた出力が通過するため）。
 - 同音異義の代表ケース（左文脈あり / なし）で、NLL 適用前後の 1 位が期待どおりに
-  入れ替わること、および対象外ソースの順位が動かないこと。
+  入れ替わること、および対象外ソースの score・debug_info が不変で順位が下がらないこと。
 
 **bench**
 
 - `bench/` に `K = nllTopK` での追加レイテンシを計測する case を足し、§B7 の予算内に
   収まることを示す。prefix decode の再実行コスト（§B3.4）を内訳として分離する。
+- `azookey_nll_bench --model <GGUF> --iterations 10 --top-k 8 --threads 8` は
+  固定の「こうせい」候補集合で生成後の追加評価を測る。warm-up は 2 回とし、
+  prefix 平均と全評価 p95、既定予算への適合を出す。評価順序を逆転させた NLL の
+  一致も検証する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
+  計測は 10 秒の診断用 deadline を使い、通常要求の 20ms 予算とは区別する。
 
-## B12. 未確定事項（DEV-413 実装時に確定する）
+## B12. 校正と性能検証（追跡先: DEV-1012）
 
-- pin 中の llama.cpp における「位置ごとの logits を出す batch の組み方」と
-  「seq 単位の KV 削除 API」の正確な名前（§B3.3）。
-- `Convert` が KV を消すため NllScorer が prefix を必ず 1 回 decode し直す前提が、
+- NllScorer が prefix を必ず 1 回 decode し直す前提が、
   §B7 の予算（既定 20ms）に収まるか。収まらない場合は `Convert` と NllScorer で
   prefix decode を共有する最適化を別課題として起票する（本章の契約は変えずに
   実装内部で吸収できる範囲）。
 - `nllWeight` / `nllTopK` / `nllBudgetMs` の既定値校正。M52 ベンチ
   （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
-- 構造化ログに出す `reason` / 対象候補数のフィールド名と粒度（§B4.2。ログ形式の
-  正典は `docs/dev-infrastructure-spec.md` §7 に従う）。
+- 構造化ログのフィールドは §B4.2、ログ形式の正典は
+  `docs/dev-infrastructure-spec.md` §7 に従う。

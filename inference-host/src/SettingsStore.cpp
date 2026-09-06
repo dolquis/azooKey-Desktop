@@ -68,6 +68,16 @@ int32_t ReadRangedInt32(const j::Object& object, const char* key, int32_t fallba
   return value < minimum || value > maximum ? fallback : value;
 }
 
+int32_t ReadClampedInt32(const j::Object& object, const char* key, int32_t fallback,
+                         int32_t minimum, int32_t maximum) {
+  const auto item = object.find(key);
+  if (item == object.end() || !item->second.IsNumber()) return fallback;
+  const double value = item->second.AsNumber();
+  if (!std::isfinite(value) || std::floor(value) != value) return fallback;
+  return static_cast<int32_t>(
+      std::clamp(value, static_cast<double>(minimum), static_cast<double>(maximum)));
+}
+
 const j::Object* ReadObject(const j::Object& object, const char* key) {
   auto it = object.find(key);
   if (it == object.end() || !it->second.IsObject()) return nullptr;
@@ -110,6 +120,18 @@ std::optional<std::filesystem::path> QuarantineInvalidFile(const std::filesystem
 
 RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   RuntimeSettings settings;
+  if (const auto* reranker = ReadObject(object, "reranker")) {
+    settings.nll.enabled = ReadBool(*reranker, "nllRerankEnabled", settings.nll.enabled);
+    settings.nll.top_k = ReadClampedInt32(*reranker, "nllTopK", settings.nll.top_k, 1, 16);
+    settings.nll.budget_ms =
+        ReadClampedInt32(*reranker, "nllBudgetMs", settings.nll.budget_ms, 5, 60);
+    settings.nll.failure_threshold =
+        ReadClampedInt32(*reranker, "nllFailureThreshold", settings.nll.failure_threshold, 1, 10);
+    const auto weight = reranker->find("nllWeight");
+    if (weight != reranker->end() && weight->second.IsNumber())
+      settings.nll.weight = weight->second.AsNumber();
+    settings.nll = ClampNllConfig(settings.nll);
+  }
   settings.input_mode =
       ReadEnum(object, "inputMode", settings.input_mode, {"hiragana", "alnum_half", "alnum_full"});
   settings.live_conversion = ReadBool(object, "liveConversion", settings.live_conversion);
@@ -295,6 +317,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
     EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
     const InferenceThreadEnvironmentProvider& provider) {
   config.enable_live_conversion = settings.live_conversion;
+  config.nll = ClampNllConfig(settings.nll);
   if (settings.inference_threads > 0) {
     config.inference_threads = settings.inference_threads;
   } else {

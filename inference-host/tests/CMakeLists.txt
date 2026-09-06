@@ -1,4 +1,4 @@
-add_executable(host_engine_tests engine_test.cpp)
+add_executable(host_engine_tests engine_test.cpp nll_scorer_test.cpp)
 target_link_libraries(host_engine_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

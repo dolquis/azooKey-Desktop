@@ -50,6 +50,7 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_FALSE(result.settings.live_conversion);
   EXPECT_FALSE(result.settings.number_rewriter);
   EXPECT_FALSE(result.settings.katakana_rewriter);
+  EXPECT_EQ(result.settings.nll, azookey::host::NllConfig{});
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
   EXPECT_EQ(result.settings.max_context_length, 10);
@@ -58,6 +59,26 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_TRUE(result.settings.model.enabled);
   EXPECT_TRUE(result.settings.model.auto_load_on_host_start);
 
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
+  const auto dir = TestDir("azookey_settings_nll");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"reranker":{"nllRerankEnabled":true,"nllTopK":1e30,
+      "nllWeight":-2,"nllBudgetMs":1,"nllFailureThreshold":100}})");
+  azookey::host::SettingsStore store(path);
+  const auto result = store.Load();
+  ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, result.settings);
+  EXPECT_TRUE(config.nll.enabled);
+  EXPECT_EQ(config.nll.top_k, 16);
+  EXPECT_EQ(config.nll.weight, 0.0);
+  EXPECT_EQ(config.nll.budget_ms, 5);
+  EXPECT_EQ(config.nll.failure_threshold, 10);
+  WriteText(path, R"({"reranker":{"nllRerankEnabled":"true","nllTopK":1.5,
+      "nllWeight":"bad","nllBudgetMs":null,"nllFailureThreshold":false}})");
+  EXPECT_EQ(store.Reload().settings.nll, azookey::host::NllConfig{});
   std::filesystem::remove_all(dir);
 }
 

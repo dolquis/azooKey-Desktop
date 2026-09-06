@@ -740,8 +740,10 @@ endif()
 
 - **ARM64 の add-on は作らない**（CUDA add-on は x64 限定）。ARM64 のアクセラレーションは
   R2（Windows ML / QNN EP、非バンドル）に一本化し、MSIX を肥大させない。
-- これにより配布パッケージ構成は **base MSIX（x64 / ARM64 の 2 アーキ）+ x64 専用 CUDA
-  optional add-on** に収束する。アーキ別に別 payload を後決めする必要はない（後戻り回避）。
+- これにより配布パッケージ構成は **base MSIX（x64 / ARM64 の 2 アーキ）+ x64 専用の
+  optional add-on（CUDA / Vulkan）** に収束する。各 add-on の構成は
+  `docs/sideload-packaging-spec.md` §1.6 と §1.6.3 が正典。アーキ別に別 payload を
+  後決めする必要はない（後戻り回避）。
 - リリース CI（`.github/workflows/release.yml`）は現状 **x64 専用**で、`cmake --preset
   windows-release`（x64）を configure/build し、署名・verify・upload 対象を
   `Package_1.0.0_x64.msix` に**ハードコード**している。winget マニフェスト

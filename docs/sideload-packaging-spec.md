@@ -679,6 +679,9 @@ ggml のバックエンドレジストリは Vulkan を有効にしたビルド�
 | `azookey_inference_host.exe` | base（§4 の MSI） | `windows-release` preset（`AZOOKEY_BACKEND=cpu`） | 無し |
 | `azookey_inference_host_vulkan.exe` | Vulkan add-on | `windows-vulkan-release` preset（`AZOOKEY_BACKEND=vulkan`） | 有り（暗黙インポート） |
 
+どちらの preset もビルドツリーへは `azookey_inference_host.exe` を出力するので、2 つの実行体が
+同じインストール先に並ぶ add-on 側のファイル名は、パッケージ生成時に確定させる。
+
 add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
 add-on の導入有無で変わらない。Vulkan loader と GPU ドライバーは同梱せず、GPU ベンダーの
 ドライバーが提供するものを使う（§1.6.2）。

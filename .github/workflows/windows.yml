@@ -708,8 +708,8 @@ jobs:
   #
   # windows-vulkan-release preset は GitHub runner に Vulkan SDK が無いため通常の
   # ビルドジョブでは構成できず、固定 llama.cpp と ggml-vulkan のビルド破綻を
-  # 検出できない。このジョブは Vulkan SDK を copy-only で導入し、Host 実行体の
-  # コンパイルとリンクだけを確認する。
+  # 検出できない。このジョブは Vulkan SDK を --root 指定でランナー作業領域へ導入し、
+  # Host 実行体のコンパイルとリンクだけを確認する。
   #
   # 対象外（別段階）: GPU 実行、実 GGUF のロード、loader 不在環境での起動保証、
   # インストール検証。runner に Vulkan ドライバーは無く、実行結果は取れない。
@@ -746,7 +746,7 @@ jobs:
           key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ env.VULKAN_SDK_SHA256 }}
 
       # LunarG の配布物を SHA256 で照合してから実行する（M38 供給網固定と同じ規律）。
-      # --root を指定した copy-only インストールで、システム統合も昇格も伴わない。
+      # --root でランナー作業領域へ入れるサイレントインストールで、昇格を伴わない。
       - name: Install Vulkan SDK
         shell: pwsh
         run: |

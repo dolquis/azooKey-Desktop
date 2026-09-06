@@ -16,6 +16,7 @@
 
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/SettingsStore.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
@@ -782,6 +783,36 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   EXPECT_EQ(cands.front().surface, "日本");
 
   std::remove(lpath);
+}
+
+TEST(InferenceEngineTest, ResolvedPowerProfileThreadsSurviveRuntimeAndModelReloads) {
+  using namespace azookey::host;
+  azookey::learning::LearningStore store(TempPath("azookey_power_profile_reload.tsv"));
+  auto engine = MakeEngine(store);
+  RuntimeSettings settings;
+  int queries = 0;
+  PowerSource source = PowerSource::Ac;
+  const auto provider = [&] {
+    ++queries;
+    return InferenceThreadEnvironment{source, 6};
+  };
+  for (const auto next_source : {PowerSource::Ac, PowerSource::Battery, PowerSource::Unknown}) {
+    source = next_source;
+    const int32_t expected = source == PowerSource::Ac ? 6 : source == PowerSource::Battery ? 2 : 4;
+    const auto next =
+        ApplyRuntimeSettingsToEngineConfig(engine->config(), settings, BackendKind::Cpu, provider);
+    engine->ApplyConfig(next);
+    EXPECT_EQ(engine->config().inference_threads, expected);
+    const int queries_before_reload = queries;
+    source = PowerSource::Battery;
+    ASSERT_TRUE(engine->LoadModelWithResult().ok);
+    EXPECT_EQ(engine->config().inference_threads, expected);
+    ModelLoadOptions options;
+    ASSERT_TRUE(engine->LoadModelWithResult(options).ok);
+    EXPECT_EQ(engine->config().inference_threads, expected);
+    EXPECT_EQ(queries, queries_before_reload);
+  }
+  EXPECT_EQ(queries, 3);
 }
 
 TEST(InferenceEngineTest, StartModelPreloadKeepsFallbackResponsiveWhileLoadIsPending) {

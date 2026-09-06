@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -94,10 +95,21 @@ class SettingsStore {
   SettingsLoadResult last_result_;
 };
 
+enum class PowerSource { Unknown, Ac, Battery };
+
+struct InferenceThreadEnvironment {
+  PowerSource power_source{PowerSource::Unknown};
+  unsigned int hardware_concurrency{0};
+};
+
+// Sampled when runtime settings are applied; model reloads reuse the resolved value.
+InferenceThreadEnvironment QueryInferenceThreadEnvironment();
+using InferenceThreadEnvironmentProvider = std::function<InferenceThreadEnvironment()>;
+
 EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings);
-EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
-                                                const RuntimeSettings& settings,
-                                                BackendKind auto_backend);
+EngineConfig ApplyRuntimeSettingsToEngineConfig(
+    EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
+    const InferenceThreadEnvironmentProvider& provider = QueryInferenceThreadEnvironment);
 
 }  // namespace azookey::host

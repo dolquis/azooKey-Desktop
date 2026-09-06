@@ -7,6 +7,7 @@
 #include <iostream>
 #include <utility>
 
+#include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/learning/FileLock.h"
@@ -21,19 +22,7 @@ constexpr const char* kUserDictionarySaveError = "failed to save user dictionary
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 constexpr size_t kPredictionDisplayLimit = 5;
 
-std::string TakeLastUtf8Codepoints(const std::string& text, uint32_t max_codepoints) {
-  if (max_codepoints == 0 || text.empty()) return {};
-  size_t start = text.size();
-  uint32_t count = 0;
-  while (start > 0 && count < max_codepoints) {
-    --start;
-    while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) {
-      --start;
-    }
-    ++count;
-  }
-  return text.substr(start);
-}
+using core::TakeLastUtf8Codepoints;
 
 core::ConversionContext BuildContext(
     const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,

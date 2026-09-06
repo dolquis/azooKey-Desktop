@@ -217,20 +217,69 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
 }
 
 TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
-  azookey::host::RuntimeSettings settings;
-  azookey::host::EngineConfig config;
+  using namespace azookey::host;
+  for (const auto source : {PowerSource::Ac, PowerSource::Battery, PowerSource::Unknown}) {
+    for (const unsigned int cpus : {0u, 1u, 2u, 3u, 4u, 7u, 8u, 16u}) {
+      for (const std::string profile : {"auto", "performance", "battery_saver"}) {
+        SCOPED_TRACE(profile + ": cpus=" + std::to_string(cpus));
+        RuntimeSettings settings;
+        settings.power_profile = profile;
+        const auto provider = [=] { return InferenceThreadEnvironment{source, cpus}; };
+        const auto config =
+            ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, provider);
+        const unsigned int target = profile == "performance"         ? 8u
+                                    : profile == "battery_saver"     ? 2u
+                                    : source == PowerSource::Ac      ? 8u
+                                    : source == PowerSource::Battery ? 2u
+                                                                     : 4u;
+        const auto expected = cpus == 0 ? 1u : cpus < target ? cpus : target;
+        EXPECT_EQ(config.inference_threads, static_cast<int32_t>(expected));
+      }
+    }
+  }
+}
 
-  settings.power_profile = "auto";
-  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
-  EXPECT_EQ(config.inference_threads, 4);
+TEST(SettingsStoreTest, ExplicitInferenceThreadsOverrideEnvironmentWithoutQueryingIt) {
+  using namespace azookey::host;
+  for (const std::string profile : {"auto", "performance", "battery_saver"}) {
+    for (int32_t threads = 1; threads <= 8; ++threads) {
+      RuntimeSettings settings;
+      settings.power_profile = profile;
+      settings.inference_threads = threads;
+      const auto config = ApplyRuntimeSettingsToEngineConfig({}, settings, BackendKind::Cpu, [] {
+        ADD_FAILURE() << "explicit thread count must not query the environment";
+        return InferenceThreadEnvironment{PowerSource::Battery, 1};
+      });
+      EXPECT_EQ(config.inference_threads, threads);
+    }
+  }
+}
 
-  settings.power_profile = "performance";
-  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
-  EXPECT_EQ(config.inference_threads, 8);
-
-  settings.power_profile = "battery_saver";
-  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings);
+TEST(SettingsStoreTest, ReloadResamplesPowerSourceAndHonorsNewExplicitThreads) {
+  using namespace azookey::host;
+  const auto dir = TestDir("azookey_settings_power_reload");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"powerProfile":"auto","inferenceThreads":0})");
+  SettingsStore store(path);
+  PowerSource source = PowerSource::Ac;
+  const auto provider = [&] { return InferenceThreadEnvironment{source, 6}; };
+  const auto loaded = store.Load();
+  ASSERT_EQ(loaded.status, SettingsLoadStatus::Loaded);
+  auto config = ApplyRuntimeSettingsToEngineConfig({}, loaded.settings, BackendKind::Cpu, provider);
+  EXPECT_EQ(config.inference_threads, 6);
+  source = PowerSource::Battery;
+  const auto reloaded = store.Reload();
+  ASSERT_EQ(reloaded.status, SettingsLoadStatus::Loaded);
+  config =
+      ApplyRuntimeSettingsToEngineConfig(config, reloaded.settings, BackendKind::Cpu, provider);
   EXPECT_EQ(config.inference_threads, 2);
+  WriteText(path, R"({"powerProfile":"battery_saver","inferenceThreads":8})");
+  const auto explicit_settings = store.Reload();
+  ASSERT_EQ(explicit_settings.status, SettingsLoadStatus::Loaded);
+  config = ApplyRuntimeSettingsToEngineConfig(config, explicit_settings.settings, BackendKind::Cpu,
+                                              provider);
+  EXPECT_EQ(config.inference_threads, 8);
+  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {

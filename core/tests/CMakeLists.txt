@@ -5,6 +5,7 @@ add_executable(core_tests
   redaction_test.cpp
   romaji_kana_converter_test.cpp
   simple_converter_test.cpp
+  utf8_test.cpp
 )
 
 target_link_libraries(core_tests

@@ -58,3 +58,11 @@ TEST(KatakanaRewriterTest, RejectsAnythingOutsidePurePrecomposedHiraganaAndLongM
     EXPECT_TRUE(azookey::core::ExpandKatakanaCandidates(reading).empty()) << reading;
   }
 }
+
+TEST(KatakanaRewriterTest, RejectsInvalidUtf8AfterValidHiragana) {
+  for (const std::string invalid :
+       {"\x80", "\xc2", "\xe3\x81", "\xf0\x9f\x98", "\xc0\x80", "\xe0\x80\x80", "\xf0\x80\x80\x80",
+        "\xed\xa0\x80", "\xf4\x90\x80\x80"}) {
+    EXPECT_TRUE(azookey::core::ExpandKatakanaCandidates("あ" + invalid).empty());
+  }
+}

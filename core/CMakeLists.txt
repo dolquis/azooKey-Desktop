@@ -8,6 +8,7 @@ add_library(azookey_core STATIC
   src/RuntimeLogger.cpp
   src/RomajiKanaConverter.cpp
   src/SimpleConverter.cpp
+  src/Utf8.cpp
 )
 
 target_include_directories(azookey_core

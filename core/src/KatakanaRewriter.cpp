@@ -5,47 +5,10 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/Utf8.h"
+
 namespace azookey::core {
 namespace {
-
-bool DecodeNextUtf8(std::string_view input, size_t* offset, char32_t* codepoint) {
-  const size_t start = *offset;
-  if (start >= input.size()) return false;
-  const auto first = static_cast<unsigned char>(input[start]);
-  if (first < 0x80) {
-    *codepoint = first;
-    *offset = start + 1;
-    return true;
-  }
-
-  size_t width = 0;
-  char32_t value = 0;
-  if ((first & 0xe0) == 0xc0) {
-    width = 2;
-    value = first & 0x1f;
-  } else if ((first & 0xf0) == 0xe0) {
-    width = 3;
-    value = first & 0x0f;
-  } else if ((first & 0xf8) == 0xf0) {
-    width = 4;
-    value = first & 0x07;
-  } else {
-    return false;
-  }
-  if (start + width > input.size()) return false;
-  for (size_t index = 1; index < width; ++index) {
-    const auto byte = static_cast<unsigned char>(input[start + index]);
-    if ((byte & 0xc0) != 0x80) return false;
-    value = (value << 6) | (byte & 0x3f);
-  }
-  if ((width == 2 && value < 0x80) || (width == 3 && value < 0x800) ||
-      (width == 4 && value < 0x10000) || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) {
-    return false;
-  }
-  *offset = start + width;
-  *codepoint = value;
-  return true;
-}
 
 void AppendUtf8(std::string* output, char32_t codepoint) {
   if (codepoint <= 0x7f) {
@@ -256,7 +219,7 @@ std::vector<Candidate> ExpandKatakanaCandidates(const std::string& reading) {
   bool halfwidth_supported = true;
   for (size_t offset = 0; offset < reading.size();) {
     char32_t codepoint = 0;
-    if (!DecodeNextUtf8(reading, &offset, &codepoint)) return {};
+    if (!DecodeNextUtf8(reading, offset, codepoint)) return {};
     if (codepoint == U'ー') {
       AppendUtf8(&fullwidth, codepoint);
       if (halfwidth_supported) halfwidth += HalfwidthKatakana(codepoint);

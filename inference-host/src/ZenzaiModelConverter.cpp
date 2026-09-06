@@ -19,6 +19,8 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/Utf8.h"
+
 #ifndef AZOOKEY_WITH_LLAMA_CPP
 #define AZOOKEY_WITH_LLAMA_CPP 0
 #endif
@@ -194,56 +196,7 @@ void AppendDebugTag(std::string& debug_info, const std::string& tag) {
   debug_info += ";" + tag;
 }
 
-bool DecodeNextUtf8(const std::string& input, size_t& offset, char32_t& codepoint) {
-  const size_t start = offset;
-  const auto first = static_cast<unsigned char>(input[offset]);
-  if (first < 0x80) {
-    codepoint = first;
-    ++offset;
-    return true;
-  }
-
-  int width = 0;
-  char32_t value = 0;
-  if ((first & 0xE0) == 0xC0) {
-    width = 2;
-    value = first & 0x1F;
-  } else if ((first & 0xF0) == 0xE0) {
-    width = 3;
-    value = first & 0x0F;
-  } else if ((first & 0xF8) == 0xF0) {
-    width = 4;
-    value = first & 0x07;
-  } else {
-    codepoint = first;
-    ++offset;
-    return false;
-  }
-
-  if (offset + static_cast<size_t>(width) > input.size()) {
-    codepoint = first;
-    offset = start + 1;
-    return false;
-  }
-  for (int i = 1; i < width; ++i) {
-    const auto byte = static_cast<unsigned char>(input[offset + static_cast<size_t>(i)]);
-    if ((byte & 0xC0) != 0x80) {
-      codepoint = first;
-      offset = start + 1;
-      return false;
-    }
-    value = (value << 6) | (byte & 0x3F);
-  }
-  if ((width == 2 && value < 0x80) || (width == 3 && value < 0x800) ||
-      (width == 4 && value < 0x10000) || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
-    codepoint = first;
-    offset = start + 1;
-    return false;
-  }
-  offset += static_cast<size_t>(width);
-  codepoint = value;
-  return true;
-}
+using core::DecodeNextUtf8;
 
 bool IsValidUtf8String(const std::string& input) {
   for (size_t offset = 0; offset < input.size();) {

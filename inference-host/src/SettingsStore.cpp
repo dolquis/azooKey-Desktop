@@ -6,7 +6,15 @@
 #include <limits>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/FileLock.h"
@@ -265,23 +273,46 @@ SettingsLoadResult SettingsStore::Load() { return LoadImpl(false); }
 
 SettingsLoadResult SettingsStore::Reload() { return LoadImpl(true); }
 
+InferenceThreadEnvironment QueryInferenceThreadEnvironment() {
+  InferenceThreadEnvironment environment;
+  environment.hardware_concurrency = std::thread::hardware_concurrency();
+#ifdef _WIN32
+  SYSTEM_POWER_STATUS status{};
+  if (GetSystemPowerStatus(&status)) {
+    if (status.ACLineStatus == 1) environment.power_source = PowerSource::Ac;
+    if (status.ACLineStatus == 0) environment.power_source = PowerSource::Battery;
+  }
+#endif
+  return environment;
+}
+
 EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
                                                 const RuntimeSettings& settings) {
   return ApplyRuntimeSettingsToEngineConfig(config, settings, config.backend);
 }
 
-EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
-                                                const RuntimeSettings& settings,
-                                                BackendKind auto_backend) {
+EngineConfig ApplyRuntimeSettingsToEngineConfig(
+    EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
+    const InferenceThreadEnvironmentProvider& provider) {
   config.enable_live_conversion = settings.live_conversion;
-  // Until host-side AC/battery detection is implemented, auto uses a stable
-  // four-thread fallback. Always materialize a concrete value so model reloads
-  // preserve the runtime setting instead of falling back to llama.cpp defaults.
-  const int32_t profile_threads = settings.power_profile == "performance"     ? 8
-                                  : settings.power_profile == "battery_saver" ? 2
-                                                                              : 4;
-  config.inference_threads =
-      settings.inference_threads > 0 ? settings.inference_threads : profile_threads;
+  if (settings.inference_threads > 0) {
+    config.inference_threads = settings.inference_threads;
+  } else {
+    const auto environment = provider();
+    unsigned int profile_threads = 4;
+    if (settings.power_profile == "performance") {
+      profile_threads = 8;
+    } else if (settings.power_profile == "battery_saver") {
+      profile_threads = 2;
+    } else if (environment.power_source == PowerSource::Ac) {
+      profile_threads = 8;
+    } else if (environment.power_source == PowerSource::Battery) {
+      profile_threads = 2;
+    }
+    // Keep a concrete positive value for runtime application and model reloads.
+    config.inference_threads = static_cast<int32_t>(
+        std::min(profile_threads, std::max(1u, environment.hardware_concurrency)));
+  }
   config.max_candidates = static_cast<uint32_t>(settings.max_candidates);
   config.max_context_length = static_cast<uint32_t>(settings.max_context_length);
 

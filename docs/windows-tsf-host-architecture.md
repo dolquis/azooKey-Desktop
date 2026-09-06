@@ -215,8 +215,11 @@ Linear が持つ。
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
 - 推論チューニング値は `inferenceThreads`、`maxCandidates`、`maxContextLength` を使う。
   `inferenceThreads` は 0 から 8 で、0 の場合は `powerProfile` に従う。
-  Host による AC またはバッテリ状態の自動判定を実装するまでは、`auto=4` を暫定値とし、
-  `performance=8`、`battery_saver=2` とする。
+  `auto` は Windows の電源状態から AC 時 8、バッテリ時 2、取得失敗・不明時 4 を基準とする。
+  `performance` は 8、`battery_saver` は 2 を基準とする。
+  自動導出値は `std::thread::hardware_concurrency()` で上限化し、並列度が 0 の場合は 1 とする。
+  `inferenceThreads=1..8` の明示指定は電源状態・並列度より優先する。
+  電源状態は起動時と設定再読込時に取得し、決定した実効値をモデル再ロードでも使う。
   `maxCandidates` は 1 から 32 で既定値 9、`maxContextLength` は 0 から 30 で既定値 10 とする。
   `maxContextLength` の単位は Unicode コードポイント数であり、0 の場合は左文脈を推論へ渡さない。
   現在の TIP は候補要求へ左文脈を送らないため、左文脈の送信経路を実装するまでは

@@ -51,28 +51,25 @@ MessageType TypeFromString(const std::string& value) {
 }
 
 std::optional<std::string> Serialize(const Envelope& env) {
-  json::Object o;
-  o.emplace("version", json::Value(env.version));
-  o.emplace("request_id", json::Value(env.request_id));
-  o.emplace("trace_id", json::Value(env.trace_id));
-  o.emplace("type", json::Value(TypeToString(env.type)));
-  if (env.payload_json.empty()) {
-    o.emplace("payload", json::Value(json::Object{}));
-  } else {
-    auto parsed = json::Parse(env.payload_json);
-    if (!parsed) {
-      // payload_json is expected to be valid JSON produced by a Build*() helper.
-      // A malformed value is a caller contract violation; fail the serialization
-      // rather than silently embedding the raw string as a JSON payload.
-      return std::nullopt;
-    }
-    o.emplace("payload", std::move(*parsed));
+  if (!env.payload_json.empty() && !json::Parse(env.payload_json)) {
+    return std::nullopt;
   }
-  return json::Stringify(json::Value(std::move(o)));
+  // Validate before splicing. Payloads keep their original spelling, avoiding
+  // a second recursive stringify and an intermediate envelope object tree.
+  std::string out;
+  out.reserve(env.payload_json.size() + env.trace_id.size() + 128);
+  out += "{\"payload\":";
+  out += env.payload_json.empty() ? "{}" : env.payload_json;
+  out += ",\"request_id\":" + std::to_string(env.request_id);
+  out += ",\"trace_id\":\"" + json::EscapeString(env.trace_id);
+  out += "\",\"type\":\"" + TypeToString(env.type);
+  out += "\",\"version\":" + std::to_string(env.version) + "}";
+  return out;
 }
 
 std::optional<Envelope> Deserialize(const std::string& json_text) {
-  auto v = json::Parse(json_text);
+  std::string_view raw_payload;
+  auto v = json::ParseWithRawMember(json_text, "payload", raw_payload);
   if (!v || !v->IsObject()) return std::nullopt;
   Envelope env;
   if (auto x = v->GetInt("version")) env.version = static_cast<int>(*x);
@@ -88,8 +85,8 @@ std::optional<Envelope> Deserialize(const std::string& json_text) {
   env.request_id = *request_id;
   env.type = TypeFromString(*type);
   env.trace_id = std::move(*trace_id);
-  if (const auto* p = v->Find("payload")) {
-    env.payload_json = json::Stringify(*p);
+  if (!raw_payload.empty()) {
+    env.payload_json = std::string(raw_payload);
   } else {
     env.payload_json = "{}";
   }

@@ -61,6 +61,10 @@ struct Value {
 };
 
 std::optional<Value> Parse(std::string_view text);
+// Also captures the first top-level member's original JSON spelling. The view
+// borrows text, is empty if absent, and is cleared on any parse failure.
+std::optional<Value> ParseWithRawMember(std::string_view text, std::string_view member,
+                                        std::string_view& raw_member);
 std::string EscapeString(std::string_view s);
 std::string Stringify(const Value& v);
 

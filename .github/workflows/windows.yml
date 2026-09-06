@@ -657,7 +657,7 @@ jobs:
       - name: Build host tests and Zenzai bench with llama.cpp
         shell: pwsh
         run: |
-          cmake --build build/windows-llama --target host_engine_tests azookey_zenzai_bench --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
+          cmake --build build/windows-llama --target host_engine_tests azookey_zenzai_bench azookey_nll_bench --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run pinned real-model smoke via CTest

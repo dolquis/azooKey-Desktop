@@ -48,6 +48,7 @@ jobs:
       settings_schema: ${{ steps.filter.outputs.settings_schema }}
       powershell_quality: ${{ steps.filter.outputs.powershell_quality }}
       cpp_tidy: ${{ steps.filter.outputs.cpp_tidy }}
+      vulkan_compile: ${{ steps.filter.outputs.vulkan_compile }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -65,6 +66,7 @@ jobs:
           settings_schema=false
           powershell_quality=false
           cpp_tidy=false
+          vulkan_compile=false
           run_all=false
 
           case "$EVENT" in
@@ -97,6 +99,7 @@ jobs:
             settings_schema=true
             powershell_quality=true
             cpp_tidy=true
+            vulkan_compile=true
           else
             echo "Classifying files changed since $BASE:"
             while IFS= read -r path; do
@@ -107,9 +110,18 @@ jobs:
                   settings_schema=true
                   powershell_quality=true
                   cpp_tidy=true
+                  vulkan_compile=true
                   ;;
                 settings/*)
                   settings_schema=true
+                  ;;
+              esac
+
+              # ggml-vulkan のビルド回帰は、llama.cpp のピンとバックエンド分岐を
+              # 持つビルド定義と、Vulkan 経路を持つ Host のソースからしか起きない。
+              case "$path" in
+                CMakeLists.txt|CMakePresets.json|inference-host/*)
+                  vulkan_compile=true
                   ;;
               esac
 
@@ -130,6 +142,7 @@ jobs:
             echo "settings_schema=$settings_schema"
             echo "powershell_quality=$powershell_quality"
             echo "cpp_tidy=$cpp_tidy"
+            echo "vulkan_compile=$vulkan_compile"
           } | tee -a "$GITHUB_OUTPUT"
   settings-schema:
     name: Settings JSON Schema
@@ -689,6 +702,144 @@ jobs:
             configure-llama.log
             build-llama.log
             test-llama.log
+          if-no-files-found: ignore
+
+  # GPU 不要の Vulkan コンパイル・リンク回帰ガード（DEV-1001 / PR #351 レビュー要件）。
+  #
+  # windows-vulkan-release preset は GitHub runner に Vulkan SDK が無いため通常の
+  # ビルドジョブでは構成できず、固定 llama.cpp と ggml-vulkan のビルド破綻を
+  # 検出できない。このジョブは Vulkan SDK を --root 指定でランナー作業領域へ導入し、
+  # Host 実行体のコンパイルとリンクだけを確認する。
+  #
+  # 対象外（別段階）: GPU 実行、実 GGUF のロード、loader 不在環境での起動保証、
+  # インストール検証。runner に Vulkan ドライバーは無く、実行結果は取れない。
+  # 起動保証の定義は docs/sideload-packaging-spec.md §1.6.3、実機確認は Human Gate。
+  windows-vulkan-compile:
+    name: Windows Vulkan compile/link only
+    needs: changes
+    if: needs.changes.outputs.vulkan_compile == 'true'
+    runs-on: windows-2022
+    # ggml-vulkan は SPIR-V シェーダー生成とコンパイルで通常の Host ビルドより
+    # 長い。llama.cpp ジョブと同じ --parallel 1 を使うためさらに余裕を持たせる。
+    timeout-minutes: 90
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      # DEV-944 の実ビルド検証と同じ SDK 版に固定する。
+      VULKAN_SDK_VERSION: "1.4.357.0"
+      VULKAN_SDK_SHA256: "81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Cache Vulkan SDK installer
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}\vulkan-sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ env.VULKAN_SDK_SHA256 }}
+
+      # LunarG の配布物を SHA256 で照合してから実行する（M38 供給網固定と同じ規律）。
+      # --root でランナー作業領域へ入れるサイレントインストールで、昇格を伴わない。
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cacheDir = Join-Path $env:RUNNER_TEMP 'vulkan-sdk'
+          $installer = Join-Path $cacheDir "vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+          if (Test-Path -LiteralPath $installer) {
+            $cachedSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($cachedSha -ne $env:VULKAN_SDK_SHA256) {
+              Remove-Item -LiteralPath $installer -Force
+            }
+          }
+          if (-not (Test-Path -LiteralPath $installer)) {
+            $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+            curl.exe --fail --location --retry 3 --output $installer $url
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $actualSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha -ne $env:VULKAN_SDK_SHA256) {
+            throw "Vulkan SDK installer SHA256 mismatch: expected $env:VULKAN_SDK_SHA256, got $actualSha"
+          }
+
+          # インストーラーは GUI サブシステムの実行体なので、& 演算子では終了を
+          # 待たないことがある。Start-Process -Wait で完了と exit code を確定させる。
+          $root = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_SDK_VERSION"
+          $arguments = @('--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
+          $install = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+          if ($install.ExitCode -ne 0) { throw "Vulkan SDK install failed with exit code $($install.ExitCode)" }
+          # ggml-vulkan は glslc と SPIRV-Headers の CMake config を SDK から引く。
+          foreach ($required in "Bin\glslc.exe", "Include\vulkan\vulkan.h", "Lib\vulkan-1.lib") {
+            $path = Join-Path $root $required
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Vulkan SDK is missing a required component: $required"
+            }
+          }
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          Join-Path $root 'Bin' >> $env:GITHUB_PATH
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/vk/_deps
+          key: llama-cpp-vulkan-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      # preset の binaryDir が build/vk と短いのは、ggml-vulkan のシェーダー生成が
+      # 深いパスで MAX_PATH に触れるのを避けるためである（CMakePresets.json 参照）。
+      # テストとベンチは CPU 側のジョブが網羅するので、ここでは Host 実行体だけを
+      # 構成してビルド時間を配布回帰の検出に振り向ける。
+      - name: Configure Vulkan build
+        shell: pwsh
+        run: |
+          cmake --preset windows-vulkan-release -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=OFF -DAZOOKEY_FETCH_GOOGLETEST=OFF 2>&1 | Tee-Object -FilePath configure-vulkan.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build inference host with ggml-vulkan
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-vulkan-release --target azookey_inference_host --parallel 1 2>&1 | Tee-Object -FilePath build-vulkan.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 配布形態の前提を CI で固定する。Vulkan 版 Host は vulkan-1.dll を暗黙
+      # インポートするため、loader が無い環境では起動しない。これが
+      # docs/sideload-packaging-spec.md §1.6.3 が CPU 版 Host を base に残し
+      # add-on 側で実行体を選ばせる理由であり、インポートが消えた場合は配布形態を
+      # 再確定する必要がある。
+      - name: Verify the Vulkan host links the loader implicitly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'build\vk\inference-host\azookey_inference_host.exe'
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Vulkan host executable was not produced: $exe"
+          }
+          $dependents = & dumpbin /nologo /dependents $exe | Out-String
+          $dependents
+          if ($dependents -notmatch '(?im)^\s*vulkan-1\.dll\s*$') {
+            throw "azookey_inference_host.exe no longer imports vulkan-1.dll; revisit the add-on layout in docs/sideload-packaging-spec.md 1.6.3"
+          }
+
+      - name: Report sccache stats
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+
+      - name: Upload Vulkan build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-vulkan-compile-logs
+          path: |
+            configure-vulkan.log
+            build-vulkan.log
           if-no-files-found: ignore
 
   linux-build:

@@ -26,11 +26,12 @@ Host が終了した場合は、上限付きの指数バックオフで再起動
 HKCU `Run` はスクリプトを実行したユーザーだけを provision する。
 別の Windows アカウントで TIP を使う場合は、そのアカウントでも開発登録の per-user 手順を実行する必要がある。
 配布パッケージも各ユーザーのログオン時に supervisor を起動する経路を用意し、machine-wide の TIP 登録だけで Host が利用可能になるとは扱わない。
+CPU 版と Vulkan 版のどちらの Host 実行体を起動するかの選択規則は、`docs/sideload-packaging-spec.md` §1.6.3 が正典である。
 
 ### Host CLI 引数
 
 Host の起動引数は `ParseHostArgs` が一括して解析する。
-`--backend` は `cpu` または `cuda` だけを受け付け、不正値を exit code 2 の起動エラーにする。
+`--backend` は `cpu`、`cuda`、`vulkan` だけを受け付け、不正値を exit code 2 の起動エラーにする。
 値を取る option が末尾にある場合と未知の引数も exit code 2 とし、暗黙の既定値へ戻さない。
 `--pipe` は省略可能な次トークンを pipe 名として扱うが、`--` で始まるトークンは別 option として残す。
 `--pipe-name` は値を必須とする。

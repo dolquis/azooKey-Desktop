@@ -436,6 +436,7 @@ R2 向けの行は R2 再開時に適用し、R2 保留中は R1 向け構成だ
 | Windows ML bootstrap（R2 用 ORT GenAI WinML） | **base MSIX に同梱（薄い）** | EP 本体は含めない |
 | Windows ML EP（QNN / OpenVINO / VitisAI / NvTensorRtRtx 等） | **非バンドル（Windows Update 配信）** | Microsoft 推奨。MSIX 肥大回避・自動更新 |
 | ggml-cuda（R1 CUDA, NVIDIA） | **optional add-on / 別パッケージ**（base に含めない。cudart/cublas を同梱・再配布） | CUDA ランタイムが大きく NVIDIA 環境限定。再配布は CUDA Toolkit EULA Attachment A 準拠（著作権表示保持＋条項 pass-down。§1.6.2） |
+| ggml-vulkan（R1 Vulkan, ベンダ横断 GPU） | **optional add-on / 別パッケージ**（base に含めない。Vulkan loader / ドライバーは同梱しない。構成と起動する Host の決定は §1.6.3） | Vulkan 版 Host は Vulkan loader を暗黙インポートし、loader が無い環境では起動しない。base に混ぜると base の起動条件が上がる。loader とドライバーは GPU ベンダーが提供する（§1.6.2） |
 | zenz-v3 ONNX 変換モデル（R2） | **R2 保留中は配布対象外**。再開時は optional モデルパッケージ（同 §1.2 同様に非同梱・DL） | 現行 builder では変換不可。将来、検証済み変換経路を確立した場合に再評価 |
 
 NPU / HW EP は Win11 24H2 (build 26100)+ を要するため、未満環境は R1 CPU に
@@ -655,6 +656,82 @@ GitHub Release 等への再ホスト（§1.6.1 表「再配布可」行）への
 （上流 HuggingFace 取得・帰属・量子化改変明示）を維持する。この著者確認・再ホスト解禁
 タスクの起票・進捗・検証メモ・状態は **Linear DEV-497 が正典**（`gate:human-required`。
 本 spec には状態を書かない。運用規約は `docs/linear-conventions.md` を参照する）。
+
+#### 1.6.3 Vulkan add-on の構成と起動する Host の決定（R1）
+
+§1.6 の `ggml-vulkan` 行を具体化し、配布形態と「どの Host 実行体が起動するか」の決定規則を
+定義する。ライセンス上の扱いは §1.6.2 の Vulkan 節、backend 選択の意味論は
+`docs/copilot-pc-backend-spec.md` §4 が正典。
+
+##### 2 実行体構成を採る理由
+
+`AZOOKEY_BACKEND=vulkan` でビルドした Host は、ggml-vulkan がインポートライブラリ経由で
+Vulkan loader（`vulkan-1.dll`）を参照するため、**loader が無い環境ではプロセスが起動しない**。
+ggml のバックエンドレジストリは Vulkan を有効にしたビルドでは初期化時に Vulkan バックエンドを
+登録するので、この要求は明示 `cpu` 起動やモデル初期化の CPU 降格
+（`docs/copilot-pc-backend-spec.md` §4.5）にも及ぶ。つまり **Vulkan 版 Host 単体では、loader
+不在環境で CPU 経路も成立しない**。
+
+したがって配布は次の 2 実行体構成とする。
+
+| 実行体 | 配布物 | ビルド | Vulkan loader への依存 |
+|---|---|---|---|
+| `azookey_inference_host.exe` | base（§4 の MSI） | `windows-release` preset（`AZOOKEY_BACKEND=cpu`） | 無し |
+| `azookey_inference_host_vulkan.exe` | Vulkan add-on | `windows-vulkan-release` preset（`AZOOKEY_BACKEND=vulkan`） | 有り（暗黙インポート） |
+
+add-on は実行体を 1 つ追加するだけで base の Host を置き換えないため、base の起動条件は
+add-on の導入有無で変わらない。Vulkan loader と GPU ドライバーは同梱せず、GPU ベンダーの
+ドライバーが提供するものを使う（§1.6.2）。
+
+##### 起動する Host の決定
+
+Host のプロセス管理は TIP の外側にある（`docs/windows-tsf-host-architecture.md`「Host の起動と
+再起動」）。どちらの実行体を起動するかは、その Host 起動経路が次の順で決定する。
+
+1. Vulkan add-on が導入済みで、`vulkan-1.dll` をロードできること。
+2. Vulkan 版 Host の probe 起動が成功し、Vulkan デバイスを 1 つ以上列挙できること。
+3. 1 と 2 の両方が成立する場合に限り Vulkan 版 Host を起動し、それ以外は base の CPU 版 Host を
+   起動する。
+
+1 を先に判定するのは、loader が無い状態で Vulkan 版 Host を起動するとプロセス生成そのものが
+失敗し、失敗理由が Host 側のログに残らないためである。2 は loader はあるがドライバーが無い、
+または非対応の環境を Host 起動前に CPU 版へ寄せる。probe は Host 起動ごとに評価し、前回の
+判定結果を持ち越さない。
+
+起動経路は、選んだ実行体と判定理由を診断可能な形で記録する。実際に動いている Host が
+どちらかを、Health の backend 値（`docs/copilot-pc-backend-spec.md` §4.4）だけでなく起動側からも
+特定できるようにする。
+
+##### backend 解決との関係
+
+`model.backendPreference` の解決は Host 内で完結する（§3.7、`docs/model-management-spec.md` §5.1）。
+本節が決めるのは起動する実行体であり、実行体ごとの解決は次になる。
+
+| 起動した実行体 | `auto` | 明示 `cpu` | Vulkan 初期化失敗時 |
+|---|---|---|---|
+| Vulkan 版 Host | Vulkan | CPU | CPU へ降格し Health を `degraded` にする（`docs/copilot-pc-backend-spec.md` §4.4 / §4.5） |
+| CPU 版 Host | CPU | CPU | — |
+
+##### ライセンス表示と SBOM
+
+- Vulkan 版 Host は llama.cpp（MIT）の成果物に加え、Vulkan-Headers / Vulkan-Hpp /
+  SPIRV-Headers（いずれも Apache-2.0）をビルド時に使う。attribution の正典はルートの
+  `THIRD_PARTY_LICENSES`。
+- Vulkan loader とドライバーを再配布しないため、CUDA add-on（§1.6.2）のような再配布条項の
+  pass-down は生じない。
+- add-on は独立した配布物なので、SBOM と build provenance（§4.4）を add-on 成果物に対しても
+  生成し、base の SBOM に Vulkan 版 Host の依存を混ぜない。
+
+##### 検証の段階
+
+| 段階 | 対象 | 実施場所 |
+|---|---|---|
+| compile / link | 固定 llama.cpp と ggml-vulkan のビルド、`vulkan-1.dll` 暗黙インポートの維持 | CI（GPU 不要。Vulkan SDK を導入する Windows ジョブ） |
+| GPU 実行 | 実 GGUF のロードと推論、`auto` の Vulkan 解決、明示 `cpu` | Vulkan 対応 GPU のある実機 |
+| 起動保証 | loader 不在、ドライバー不在・非対応、GPU 初期化失敗での CPU 経路 | GPU ドライバーの無い clean 環境（Human Gate） |
+| インストール | add-on の導入・削除と base との共存 | 実機インストール（Human Gate） |
+
+CI の compile / link 成功を、GPU 実行・起動保証・インストールの成功として読み替えない。
 
 ### 1.7 Windows アプリでの TIP ロード前提と常駐起動
 

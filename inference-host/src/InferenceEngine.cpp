@@ -101,12 +101,14 @@ bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
 }  // namespace
 
 InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
-                                 learning::LearningStore* store, EngineConfig config)
+                                 learning::LearningStore* store, EngineConfig config,
+                                 logging::RuntimeLogger* runtime_logger)
     : fallback_converter_(std::move(converter)),
       active_converter_(fallback_converter_),
       store_(store),
       reranker_(store),
-      config_(std::move(config)) {
+      config_(std::move(config)),
+      runtime_logger_(runtime_logger) {
   if (store_) {
     learning_flush_thread_ = std::thread(&InferenceEngine::LearningFlushWorker, this);
   }
@@ -392,6 +394,8 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
 
 void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  config_.nll = ClampNllConfig(config.nll);
+  ++nll_config_revision_;
   config_.enable_live_conversion = config.enable_live_conversion;
   config_.inference_threads = config.inference_threads;
   config_.max_candidates = config.max_candidates;
@@ -491,6 +495,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   std::shared_ptr<core::IConverter> converter;
   std::shared_ptr<core::IConverter> fallback_converter;
   EngineConfig config;
+  uint64_t nll_revision{};
   bool using_model_converter = false;
   std::vector<core::Candidate> merged;
   {
@@ -498,6 +503,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     converter = active_converter_;
     fallback_converter = fallback_converter_;
     config = config_;
+    nll_revision = nll_config_revision_;
     using_model_converter = model_converter_ && converter == model_converter_;
     // Preserve M9's explicit user word score while static layers use M53 scoring.
     RefreshDictionaryLocked();
@@ -521,16 +527,17 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   if (canceled()) return {};
 
   std::vector<core::Candidate> converted;
+  bool convert_failed = false;
   const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
   const uint32_t effective_max_candidates = config.max_candidates == 0 ? max_candidates
                                             : max_candidates == 0
                                                 ? config.max_candidates
                                                 : std::min(max_candidates, config.max_candidates);
   const auto limited_context = TakeLastUtf8Codepoints(context, config.max_context_length);
+  std::unique_lock<std::mutex> converter_lock(converter_call_mutex_);
   {
     // IConverter implementations own mutable decode state. Serialize calls to
     // that state without holding state_mutex_, so Health and model swaps remain responsive.
-    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
     try {
       converted =
           converter->Convert(kana, BuildContext(kana, limited_context, cancel, conversion_deadline,
@@ -541,6 +548,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
         MirrorModelRuntimeErrorLocked(converter);
       }
     } catch (const std::exception& ex) {
+      convert_failed = true;
       if (!using_model_converter || !fallback_converter) throw;
       if (canceled()) return {};
       {
@@ -553,6 +561,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
           kana, BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates,
                              live));
     } catch (...) {
+      convert_failed = true;
       if (!using_model_converter || !fallback_converter) throw;
       if (canceled()) return {};
       {
@@ -566,11 +575,47 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
                              live));
     }
   }
+  // Enabled NLL retains ownership through merge so another request cannot replace
+  // the conversion's runtime error or KV state before its scoring step.
+  if (!config.nll.enabled || live) converter_lock.unlock();
   merged.insert(merged.end(), std::make_move_iterator(converted.begin()),
                 std::make_move_iterator(converted.end()));
   DedupMergedCandidates(merged);
 
   if (canceled()) return {};
+
+  // The disabled/live path has no evaluation, allocation or additional logging.
+  if (config.nll.enabled && !live) {
+    NllOutcome outcome;
+    auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
+    if (!convert_failed && zenzai && zenzai->runtime_loaded() && !zenzai->last_error()) {
+      outcome = zenzai->RerankNll(kana, merged,
+                                  BuildContext(kana, limited_context, cancel, conversion_deadline,
+                                               effective_max_candidates, live),
+                                  config.nll, nll_revision);
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      MirrorModelRuntimeErrorLocked(converter);
+    } else {
+      outcome.reason = "model_not_loaded";
+      outcome.targets = std::min<size_t>(
+          static_cast<size_t>(ClampNllConfig(config.nll).top_k),
+          static_cast<size_t>(
+              std::count_if(merged.begin(), merged.end(), [](const auto& candidate) {
+                return candidate.source == core::CandidateSource::SystemDictionary ||
+                       candidate.source == core::CandidateSource::Heuristic;
+              })));
+    }
+    converter_lock.unlock();
+    if (canceled()) return {};
+    if (runtime_logger_ && !outcome.reason.empty()) {
+      runtime_logger_->Log(logging::RuntimeLogLevel::Info, "nll_rerank",
+                           {{"reason", logging::RuntimeLogSafeText(outcome.reason)},
+                            {"nll_targets", static_cast<uint64_t>(outcome.targets)},
+                            {"nll_applied", static_cast<uint64_t>(outcome.applied)},
+                            {"prefix_ms", outcome.prefix_ms},
+                            {"elapsed_ms", outcome.elapsed_ms}});
+    }
+  }
 
   std::vector<core::Candidate> result;
   {

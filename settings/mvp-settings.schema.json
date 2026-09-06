@@ -188,6 +188,18 @@
       "default": false,
       "description": "M62-B: true で純ひらがなの候補へ全角カタカナと半角カタカナを注釈付きで追加"
     },
+    "reranker": {
+      "type": "object",
+      "description": "Track B NLL reranking; docs/neural-reranker-spec.md section B9",
+      "properties": {
+        "nllRerankEnabled": { "type": "boolean", "default": false },
+        "nllTopK": { "type": "integer", "default": 8, "minimum": 1, "maximum": 16 },
+        "nllWeight": { "type": "number", "default": 0.15, "minimum": 0, "maximum": 1 },
+        "nllBudgetMs": { "type": "integer", "default": 20, "minimum": 5, "maximum": 60 },
+        "nllFailureThreshold": { "type": "integer", "default": 3, "minimum": 1, "maximum": 10 }
+      },
+      "additionalProperties": false
+    },
     "autoUpdate": {
       "type": "object",
       "description": "Phase 7 (M32): 自動更新設定",

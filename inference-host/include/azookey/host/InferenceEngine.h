@@ -16,11 +16,13 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/NllScorer.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 namespace azookey::host {
 
@@ -43,6 +45,7 @@ constexpr const char* BackendName(BackendKind backend) {
 }
 
 struct EngineConfig {
+  NllConfig nll;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
   std::optional<int32_t> n_gpu_layers;
@@ -95,7 +98,7 @@ struct EngineHealthSnapshot {
 class InferenceEngine {
  public:
   InferenceEngine(std::unique_ptr<core::IConverter> converter, learning::LearningStore* store,
-                  EngineConfig config);
+                  EngineConfig config, logging::RuntimeLogger* runtime_logger = nullptr);
   ~InferenceEngine();
 
   // External, non-owning. May be nullptr (no user dictionary).
@@ -186,6 +189,8 @@ class InferenceEngine {
   std::mutex model_load_mutex_;
   std::mutex model_preload_thread_mutex_;
   EngineConfig config_;
+  uint64_t nll_config_revision_{};
+  logging::RuntimeLogger* runtime_logger_;  // Non-owning; must outlive the engine.
   bool model_loaded_{false};
   bool model_preload_in_progress_{false};
   std::optional<std::string> last_error_;

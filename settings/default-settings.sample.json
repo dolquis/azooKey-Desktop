@@ -39,6 +39,13 @@
   "batchAutoPunctuation": false,
   "numberRewriter": false,
   "katakanaRewriter": false,
+  "reranker": {
+    "nllRerankEnabled": false,
+    "nllTopK": 8,
+    "nllWeight": 0.15,
+    "nllBudgetMs": 20,
+    "nllFailureThreshold": 3
+  },
   "autoUpdate": {
     "enabled": true,
     "channel": "stable",

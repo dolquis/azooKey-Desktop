@@ -44,6 +44,10 @@ target_compile_definitions(azookey_bench PRIVATE
 )
 
 add_executable(azookey_zenzai_bench zenzai_bench.cpp)
+add_executable(azookey_nll_bench nll_bench.cpp)
+target_link_libraries(azookey_nll_bench
+  PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
+)
 add_dependencies(azookey_zenzai_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_zenzai_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_zenzai_bench
@@ -74,6 +78,7 @@ if(AZOOKEY_BUILD_TESTS)
   set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS
     azookey_bench
     azookey_zenzai_bench
+    azookey_nll_bench
   )
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
@@ -107,6 +112,14 @@ if(AZOOKEY_BUILD_TESTS)
     ENVIRONMENT "AZOOKEY_ZENZAI_MODEL="
   )
   if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
+    add_test(NAME azookey_nll_real_model_context
+             COMMAND azookey_nll_bench --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --iterations 1 --context "原稿の誤字を" --expect-top "校正")
+    add_test(NAME azookey_nll_real_model_no_context
+             COMMAND azookey_nll_bench --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
+                     --iterations 1 --expect-top "構成")
+    set_tests_properties(azookey_nll_real_model_context azookey_nll_real_model_no_context
+      PROPERTIES LABELS "zenzai-real-model" RUN_SERIAL TRUE TIMEOUT 120)
     add_test(NAME azookey_zenzai_real_model_nihongo_smoke
              COMMAND azookey_zenzai_bench
                      --model "${AZOOKEY_ZENZAI_TEST_MODEL}"

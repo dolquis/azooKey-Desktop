@@ -35,6 +35,7 @@ struct RuntimeAutoUpdateSettings {
 };
 
 struct RuntimeSettings {
+  NllConfig nll;
   std::string input_mode{"hiragana"};
   bool live_conversion{false};
   bool llm_magic_conversion{false};

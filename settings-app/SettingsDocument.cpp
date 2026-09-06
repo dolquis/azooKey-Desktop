@@ -72,6 +72,29 @@ j::Object SanitizeModel(const j::Object& input, std::vector<std::string>* warnin
   return output;
 }
 
+j::Object SanitizeReranker(const j::Object& input, std::vector<std::string>* warnings) {
+  j::Object output;
+  for (const auto& [key, value] : input) {
+    bool valid = false;
+    if (key == "nllRerankEnabled")
+      valid = value.IsBool();
+    else if (key == "nllTopK")
+      valid = IsInteger(value, 1, 16);
+    else if (key == "nllBudgetMs")
+      valid = IsInteger(value, 5, 60);
+    else if (key == "nllFailureThreshold")
+      valid = IsInteger(value, 1, 10);
+    else if (key == "nllWeight")
+      valid = value.IsNumber() && std::isfinite(value.AsNumber()) && value.AsNumber() >= 0 &&
+              value.AsNumber() <= 1;
+    if (valid)
+      output.emplace(key, value);
+    else
+      warnings->push_back("reranker." + key + " was removed because it is unknown or invalid");
+  }
+  return output;
+}
+
 j::Object SanitizeAutoUpdate(const j::Object& input, std::vector<std::string>* warnings) {
   j::Object output;
   for (const auto& [key, value] : input) {
@@ -144,6 +167,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsStringEnum(value, {"neural", "ai-cleanup"});
     } else if (key == "model" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeModel(value.AsObject(), warnings)));
+      continue;
+    } else if (key == "reranker" && value.IsObject()) {
+      output.emplace(key, j::Value(SanitizeReranker(value.AsObject(), warnings)));
       continue;
     } else if (key == "autoUpdate" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeAutoUpdate(value.AsObject(), warnings)));

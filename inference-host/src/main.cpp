@@ -402,7 +402,7 @@ int main(int argc, char** argv) {
     converter->LoadFromTsv(mock_dict_path);
   }
 
-  azookey::host::InferenceEngine engine(std::move(converter), &store, config);
+  azookey::host::InferenceEngine engine(std::move(converter), &store, config, &runtime_log);
   engine.SetUserDictionary(&user_dict);
 #ifdef _WIN32
   // Discover only installer-controlled static layers, never the current directory.

@@ -610,6 +610,106 @@ struct ZenzaiModelRuntime {
   llama_context* context{nullptr};
   std::vector<llama_token> cached_prompt_tokens;
 
+  NllEvaluation ScoreNll(const std::string& kana, std::span<const std::string> surfaces,
+                         const core::ConversionContext& conversion_context) {
+    if (!model || !context) throw std::runtime_error("nll runtime unavailable");
+    InvalidatePromptCache();
+    struct CacheGuard {
+      ZenzaiModelRuntime* runtime;
+      ~CacheGuard() { runtime->InvalidatePromptCache(); }
+    } cache_guard{this};
+    LlamaDecodeControl control{&conversion_context};
+    LlamaDecodeAbortScope abort_scope(context, &control);
+    struct Decoder final : NllDecoder {
+      ZenzaiModelRuntime& runtime;
+      const std::string& kana;
+      const core::ConversionContext& input;
+      LlamaDecodeControl& control;
+      llama_pos prefix_length{};
+
+      Decoder(ZenzaiModelRuntime& r, const std::string& k, const core::ConversionContext& c,
+              LlamaDecodeControl& abort)
+          : runtime(r), kana(k), input(c), control(abort) {}
+
+      std::vector<int32_t> TokenizeSurface(std::string_view surface) override {
+        if (surface.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
+          throw std::runtime_error("nll surface too long");
+        const auto* vocab = llama_model_get_vocab(runtime.model);
+        // No BOS/EOS and no interpretation of user surface as special prompt tokens.
+        const auto length = static_cast<int32_t>(surface.size());
+        const int32_t required =
+            llama_tokenize(vocab, surface.data(), length, nullptr, 0, false, false);
+        if (required >= 0 || required == std::numeric_limits<int32_t>::min())
+          throw std::runtime_error("nll surface tokenization failed");
+        if (static_cast<uint32_t>(-required) + static_cast<uint32_t>(prefix_length) >
+            llama_n_ctx(runtime.context))
+          throw std::runtime_error("nll context capacity exceeded");
+        std::vector<int32_t> tokens(static_cast<size_t>(-required));
+        const auto count =
+            llama_tokenize(vocab, surface.data(), length, tokens.data(), -required, false, false);
+        if (count != -required) throw std::runtime_error("nll surface tokenization failed");
+        for (const auto token : tokens) {
+          if (llama_vocab_is_eog(vocab, token)) throw std::runtime_error("nll unexpected EOS");
+        }
+        return tokens;
+      }
+
+      std::vector<std::vector<float>> Decode(std::span<const int32_t> tokens, llama_pos position,
+                                             bool all_logits) {
+        std::vector<std::vector<float>> rows;
+        const auto vocab_size = llama_vocab_n_tokens(llama_model_get_vocab(runtime.model));
+        if (vocab_size <= 0) throw std::runtime_error("nll vocabulary unavailable");
+        const auto capacity =
+            std::max<uint32_t>(1, std::min<uint32_t>(32, llama_n_batch(runtime.context)));
+        auto batch = llama_batch_init(static_cast<int32_t>(capacity), 0, 1);
+        struct BatchGuard {
+          llama_batch& batch;
+          ~BatchGuard() { llama_batch_free(batch); }
+        } guard{batch};
+        for (size_t offset = 0; offset < tokens.size();) {
+          if (control.ShouldAbort()) throw std::runtime_error("nll aborted");
+          batch.n_tokens = static_cast<int32_t>(std::min<size_t>(capacity, tokens.size() - offset));
+          for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            const auto index = offset + static_cast<size_t>(i);
+            batch.token[i] = tokens[index];
+            batch.pos[i] = position + static_cast<llama_pos>(index);
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = all_logits || index + 1 == tokens.size();
+          }
+          if (llama_decode(runtime.context, batch) != 0 || control.ShouldAbort())
+            throw std::runtime_error("nll decode failed");
+          for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            if (!batch.logits[i]) continue;
+            const auto* logits = llama_get_logits_ith(runtime.context, i);
+            if (!logits) throw std::runtime_error("nll logits unavailable");
+            rows.emplace_back(logits, logits + vocab_size);
+          }
+          offset += static_cast<size_t>(batch.n_tokens);
+        }
+        return rows;
+      }
+
+      std::vector<float> DecodePrefix() override {
+        const auto tokens = runtime.TokenizePrompt(kana, input);
+        if (tokens.size() >= llama_n_ctx(runtime.context))
+          throw std::runtime_error("nll prefix exceeds context capacity");
+        prefix_length = static_cast<llama_pos>(tokens.size());
+        auto rows = Decode(tokens, 0, false);
+        if (rows.size() != 1) throw std::runtime_error("nll prefix logits unavailable");
+        return std::move(rows.front());
+      }
+      std::vector<std::vector<float>> DecodeSuffix(std::span<const int32_t> tokens) override {
+        return Decode(tokens, prefix_length, true);
+      }
+      void Rollback() override {
+        if (!llama_memory_seq_rm(llama_get_memory(runtime.context), 0, prefix_length, -1))
+          throw std::runtime_error("nll KV rollback failed");
+      }
+    } decoder{*this, kana, conversion_context, control};
+    return EvaluateNll(decoder, surfaces, conversion_context);
+  }
+
   void InvalidatePromptCache() {
     cached_prompt_tokens.clear();
     if (context) {
@@ -1174,6 +1274,35 @@ ZenzaiModelConverter::ZenzaiModelConverter(ZenzaiLoadResult&& loaded, core::ICon
     : info_(std::move(loaded.info)), runtime_(std::move(loaded.runtime)), fallback_(fallback) {}
 
 ZenzaiModelConverter::~ZenzaiModelConverter() = default;
+
+NllOutcome ZenzaiModelConverter::RerankNll(const std::string& kana,
+                                           std::vector<core::Candidate>& candidates,
+                                           const core::ConversionContext& context, NllConfig config,
+                                           uint64_t config_revision) {
+  if (!AZOOKEY_WITH_LLAMA_CPP || !runtime_) return NllOutcome{"model_not_loaded"};
+  auto result = RerankWithNll(candidates, config, nll_circuit_, config_revision, context,
+                              [&](std::span<const std::string> surfaces,
+                                  const core::ConversionContext& bounded) -> NllEvaluation {
+                                return EvaluateNllForValidation(kana, surfaces, bounded);
+                              });
+  if (result.reason == "budget_exceeded" || result.reason == "infer_error")
+    last_error_ = "nll-scorer:" + result.reason;
+  return result;
+}
+
+NllEvaluation ZenzaiModelConverter::EvaluateNllForValidation(
+    const std::string& kana, std::span<const std::string> surfaces,
+    const core::ConversionContext& context) {
+  if (!runtime_) throw std::runtime_error("nll runtime unavailable");
+#if AZOOKEY_WITH_LLAMA_CPP
+  return runtime_->ScoreNll(kana, surfaces, context);
+#else
+  (void)kana;
+  (void)surfaces;
+  (void)context;
+  throw std::runtime_error("nll requires llama.cpp");
+#endif
+}
 
 std::optional<ZenzaiDecodeStats> ZenzaiModelConverter::last_decode_stats() const {
   return runtime_ ? runtime_->last_decode_stats : std::nullopt;

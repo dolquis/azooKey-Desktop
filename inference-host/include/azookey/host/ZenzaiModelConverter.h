@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/NllScorer.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
 
 namespace azookey::host {
@@ -101,6 +102,12 @@ class ZenzaiModelConverter final : public core::IConverter {
   bool runtime_loaded() const { return runtime_ != nullptr; }
   std::optional<std::string> last_error() const { return last_error_; }
   std::optional<ZenzaiDecodeStats> last_decode_stats() const;
+  NllOutcome RerankNll(const std::string& kana, std::vector<core::Candidate>& candidates,
+                       const core::ConversionContext& context, NllConfig config,
+                       uint64_t config_revision = 0);
+  NllEvaluation EvaluateNllForValidation(const std::string& kana,
+                                         std::span<const std::string> surfaces,
+                                         const core::ConversionContext& context);
   std::vector<int32_t> TokenizePromptForValidation(const std::string& kana,
                                                    const core::ConversionContext& context) const;
 
@@ -124,6 +131,7 @@ class ZenzaiModelConverter final : public core::IConverter {
   std::unique_ptr<ZenzaiModelRuntime> runtime_;
   core::IConverter* fallback_;
   std::optional<std::string> last_error_;
+  NllCircuit nll_circuit_;
 };
 
 }  // namespace azookey::host

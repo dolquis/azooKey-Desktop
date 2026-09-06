@@ -15,6 +15,7 @@ add_library(azookey_host STATIC
   src/InferenceEngine.cpp
   src/LookupCli.cpp
   src/ModelCatalog.cpp
+  src/NllScorer.cpp
   src/RequestScheduler.cpp
   src/SettingsStore.cpp
   src/UserDictCli.cpp

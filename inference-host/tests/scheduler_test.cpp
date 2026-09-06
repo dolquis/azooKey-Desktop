@@ -79,6 +79,44 @@ TEST(RequestSchedulerTest, NextRequestIdMonotonic) {
   EXPECT_EQ(s.NextRequestId(), 3u);
 }
 
+TEST(RequestSchedulerTest, FuturePreCancelFloodDoesNotBlockLowerRequestIds) {
+  for (const std::string client_id : {"", "client-a"}) {
+    host::RequestScheduler s;
+    constexpr auto limit = host::RequestScheduler::kMaxPendingRequestsPerClient;
+    for (uint64_t id = 1000000; id < 1000000 + limit; ++id) {
+      s.Cancel(client_id, id);
+    }
+    auto request = s.TrackCancellation(client_id, 7);
+    ASSERT_NE(request, nullptr);
+    EXPECT_FALSE(request->load());
+    for (uint64_t id = 8; id < 7 + limit; ++id) {
+      ASSERT_NE(s.TrackCancellation(client_id, id), nullptr);
+    }
+    EXPECT_EQ(s.TrackCancellation(client_id, 7 + limit), nullptr);
+    s.CompleteRequest(client_id, 7);
+    EXPECT_NE(s.TrackCancellation(client_id, 7 + limit), nullptr);
+  }
+}
+
+TEST(RequestSchedulerTest, CapacityPruningPreservesActiveAndMatchingFutureCancels) {
+  host::RequestScheduler s;
+  constexpr auto limit = host::RequestScheduler::kMaxPendingRequestsPerClient;
+  auto active = s.TrackCancellation(1000000);
+  ASSERT_NE(active, nullptr);
+  for (uint64_t id = 1000001; id < 1000000 + limit; ++id) s.Cancel(id);
+  auto matching = s.TrackCancellation(1000001);
+  ASSERT_NE(matching, nullptr);
+  EXPECT_TRUE(matching->load());
+  ASSERT_NE(s.TrackCancellation(7), nullptr);
+  s.Cancel(1000000);
+  EXPECT_TRUE(active->load());
+  EXPECT_TRUE(s.IsCanceled(1000001));
+  s.CompleteRequest(1000000);
+  s.CompleteRequest(1000001);
+  EXPECT_FALSE(s.IsCanceled(1000000));
+  EXPECT_FALSE(s.IsCanceled(1000001));
+}
+
 TEST(RequestSchedulerTest, CancelMultiple) {
   host::RequestScheduler s;
   EXPECT_FALSE(s.IsCanceled(1));

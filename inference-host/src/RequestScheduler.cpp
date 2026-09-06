@@ -1,5 +1,7 @@
 #include "azookey/host/RequestScheduler.h"
 
+#include <limits>
+
 namespace azookey::host {
 
 uint64_t RequestScheduler::NextRequestId() { return ++request_id_; }
@@ -68,7 +70,9 @@ std::shared_ptr<std::atomic<bool>> RequestScheduler::TrackCancellation(const std
   auto it = client.cancel_states.find(request_id);
   if (it == client.cancel_states.end()) {
     if (client.cancel_states.size() >= kMaxPendingRequestsPerClient) {
-      PruneInactiveBeforeLocked(client, request_id);
+      // Future pre-cancels must not permanently block lower request IDs,
+      // including the legacy namespace that survives connection teardown.
+      PruneInactiveBeforeLocked(client, std::numeric_limits<uint64_t>::max());
     }
     if (client.cancel_states.size() >= kMaxPendingRequestsPerClient) return nullptr;
     it = client.cancel_states.emplace(request_id, CancelState{}).first;

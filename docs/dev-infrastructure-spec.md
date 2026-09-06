@@ -1052,8 +1052,9 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   上限到達時の新規要求は推論を開始せず、`QueryCandidates` は空候補、
   `QueryBatchConversion` は `canceled=true` で応答する。拒否した要求は
   latest ID と既存要求の完了状態を変更しない。
-  状態数が上限に達した場合、到着要求より古い非実行中の Cancel を回収してから
-  受付を判定する。保持済みIDへの Cancel は常に反映し、状態数が上限に達した
+  状態数が上限に達し到着要求のIDが未登録なら、IDの大小にかかわらず非実行中の
+  Cancel を回収してから受付を判定する。追跡中の要求と到着要求に一致する
+  先行 Cancel は維持する。保持済みIDへの Cancel は常に反映し、状態数が上限に達した
   ときの未知IDへの先行 Cancel は保持しない。要求完了と最終接続の切断で
   対応する状態を回収する。
 - **6.4.3 最大フレームサイズ = 1 MiB** — `kMaxFrameSize`（`= kMaxJsonInputBytes`、

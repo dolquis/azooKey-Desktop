@@ -190,6 +190,25 @@ TEST(NllScorerTest, TimeoutAfterEvaluationDiscardsAllScoresAndOpensCircuit) {
   EXPECT_EQ(calls, 5);
 }
 
+TEST(NllScorerTest, TimeoutAfterScorePreparationDiscardsCandidateChanges) {
+  auto candidates = Candidates();
+  const auto before = candidates;
+  NllCircuit circuit;
+  int clock_calls = 0;
+  const auto result = RerankWithNll(
+      candidates, NllConfig{true, 2}, circuit, 0, {},
+      [](auto, const auto&) { return NllEvaluation{{5.0, 1.0}}; },
+      [&] {
+        // start, pre-evaluation, post-evaluation, then post-application.
+        return std::chrono::steady_clock::time_point{} +
+               std::chrono::milliseconds(++clock_calls >= 4 ? 21 : 0);
+      });
+  EXPECT_EQ(result.reason, "budget_exceeded");
+  EXPECT_EQ(result.applied, 0u);
+  EXPECT_EQ(circuit.failures, 1);
+  ExpectUnchanged(candidates, before);
+}
+
 TEST(NllScorerTest, CancellationAndInvalidScoresDoNotCountAsRuntimeFailures) {
   auto candidates = Candidates();
   const auto before = candidates;

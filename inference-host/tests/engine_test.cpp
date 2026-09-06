@@ -1162,6 +1162,35 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   EXPECT_EQ(recovered.front().surface, "日本語");
   EXPECT_FALSE(engine->effective_last_error().has_value());
 
+  // A mock runtime is loaded in the no-llama build, but cannot score NLL.
+  // Repeated NLL requests must neither contaminate health nor change candidates.
+  azookey::host::ZenzaiRuntimeOptions runtime_options;
+  runtime_options.mock_candidates_for_tests = true;
+  auto loaded = azookey::host::LoadZenzaiGgufModel(model_path, runtime_options);
+  ASSERT_TRUE(loaded.ok);
+  azookey::host::ZenzaiModelConverter scorer(std::move(loaded), nullptr);
+  ASSERT_TRUE(scorer.runtime_loaded());
+  std::vector<azookey::core::Candidate> targets(1);
+  targets.front().surface = "日本語";
+  targets.front().source = azookey::core::CandidateSource::SystemDictionary;
+  targets.front().score = 1.0;
+  nll_config.nll.enabled = true;
+  engine->ApplyConfig(nll_config);
+  for (int request = 0; request < 4; ++request) {
+    EXPECT_EQ(scorer.RerankNll("にほんご", targets, {}, nll_config.nll).reason, "model_not_loaded");
+    EXPECT_FALSE(scorer.last_error().has_value());
+    EXPECT_DOUBLE_EQ(targets.front().score, 1.0);
+    EXPECT_TRUE(targets.front().debug_info.empty());
+    const auto unchanged = engine->QueryCandidates("にほんご", "", kNowBase);
+    ASSERT_EQ(unchanged.size(), recovered.size());
+    for (size_t i = 0; i < recovered.size(); ++i) {
+      EXPECT_EQ(unchanged[i].surface, recovered[i].surface);
+      EXPECT_EQ(unchanged[i].score, recovered[i].score);
+      EXPECT_EQ(unchanged[i].debug_info, recovered[i].debug_info);
+    }
+    EXPECT_FALSE(engine->effective_last_error().has_value());
+  }
+
   std::remove(model_path.c_str());
   std::remove(lpath);
 }

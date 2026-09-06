@@ -518,6 +518,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   if (canceled()) return {};
 
   std::vector<core::Candidate> converted;
+  bool convert_failed = false;
   const auto conversion_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
   const uint32_t effective_max_candidates = config.max_candidates == 0 ? max_candidates
                                             : max_candidates == 0
@@ -538,6 +539,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
         MirrorModelRuntimeErrorLocked(converter);
       }
     } catch (const std::exception& ex) {
+      convert_failed = true;
       if (!using_model_converter || !fallback_converter) throw;
       if (canceled()) return {};
       {
@@ -550,6 +552,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
           kana, BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates,
                              live));
     } catch (...) {
+      convert_failed = true;
       if (!using_model_converter || !fallback_converter) throw;
       if (canceled()) return {};
       {
@@ -576,7 +579,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
   if (config.nll.enabled && !live) {
     NllOutcome outcome;
     auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
-    if (zenzai && zenzai->runtime_loaded() && !zenzai->last_error()) {
+    if (!convert_failed && zenzai && zenzai->runtime_loaded() && !zenzai->last_error()) {
       outcome = zenzai->RerankNll(kana, merged,
                                   BuildContext(kana, limited_context, cancel, conversion_deadline,
                                                effective_max_candidates, live),

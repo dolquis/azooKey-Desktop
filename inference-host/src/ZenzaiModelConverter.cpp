@@ -1279,7 +1279,7 @@ NllOutcome ZenzaiModelConverter::RerankNll(const std::string& kana,
                                            std::vector<core::Candidate>& candidates,
                                            const core::ConversionContext& context, NllConfig config,
                                            uint64_t config_revision) {
-  if (!runtime_) return NllOutcome{"model_not_loaded"};
+  if (!AZOOKEY_WITH_LLAMA_CPP || !runtime_) return NllOutcome{"model_not_loaded"};
   auto result = RerankWithNll(candidates, config, nll_circuit_, config_revision, context,
                               [&](std::span<const std::string> surfaces,
                                   const core::ConversionContext& bounded) -> NllEvaluation {

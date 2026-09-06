@@ -20,6 +20,7 @@ struct NllConfig {
 NllConfig ClampNllConfig(NllConfig config);
 double NllPerCharacter(std::span<const double> logprobs, std::string_view surface);
 std::vector<size_t> SelectNllCandidates(const std::vector<core::Candidate>& candidates, int top_k);
+// Updates in place; RerankWithNll owns the copy used for all-or-nothing application.
 size_t ApplyNllScores(std::vector<core::Candidate>& candidates, std::span<const size_t> indices,
                       std::span<const double> scores, double weight);
 

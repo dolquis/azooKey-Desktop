@@ -88,13 +88,11 @@ size_t ApplyNllScores(std::vector<core::Candidate>& candidates, std::span<const 
   for (const double value : scores)
     if (std::isfinite(value)) minimum = std::min(minimum, value);
   if (!std::isfinite(minimum)) return 0;
-  // Prepare all string allocations before committing any changes.
-  auto updated = candidates;
   size_t applied = 0;
   for (size_t i = 0; i < indices.size(); ++i) {
     if (!std::isfinite(scores[i])) continue;
     const double delta = std::max(minimum - scores[i], -2.0) * weight;
-    auto& candidate = updated.at(indices[i]);
+    auto& candidate = candidates.at(indices[i]);
     std::ostringstream tag;
     tag.imbue(std::locale::classic());
     tag << std::fixed << std::setprecision(6) << "nll=" << scores[i] << ";nlld=" << delta;
@@ -103,7 +101,6 @@ size_t ApplyNllScores(std::vector<core::Candidate>& candidates, std::span<const 
     candidate.score += delta;
     ++applied;
   }
-  candidates.swap(updated);
   return applied;
 }
 

@@ -1397,6 +1397,74 @@ TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
   std::remove(lpath);
 }
 
+TEST(InferenceEngineTest, VulkanFailureFallsBackToCpuAndRetainsHealthError) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture only exercises the mock control path.";
+  }
+  const char* learning_path = "azookey_host_engine_vulkan_fallback.tsv";
+  std::remove(learning_path);
+  azookey::learning::LearningStore store(learning_path);
+  auto engine = MakeEngine(store);
+  const auto model_path = TempPath("azookey_vulkan_fallback.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Vulkan;
+  const auto result = engine->LoadModelWithResult(options);
+  ASSERT_TRUE(result.ok);
+  ASSERT_TRUE(result.error);
+  EXPECT_NE(result.error->find("Vulkan"), std::string::npos);
+  EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cpu);
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_EQ(engine->health_snapshot().last_error, result.error);
+
+  // A later successful explicit CPU load recovers Health.
+  options.backend = azookey::host::BackendKind::Cpu;
+  EXPECT_TRUE(engine->LoadModelWithResult(options).ok);
+  EXPECT_FALSE(engine->health_snapshot().last_error);
+  std::remove(model_path.c_str());
+  std::remove(learning_path);
+}
+
+TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsRetainBothErrors) {
+  const char* learning_path = "azookey_host_engine_both_backends_fail.tsv";
+  std::remove(learning_path);
+  azookey::learning::LearningStore store(learning_path);
+  const auto model_path = TempPath("azookey_both_backends_fail.gguf");
+  WriteMinimalGguf(model_path);
+  for (const bool unknown_exception : {false, true}) {
+    auto engine = MakeEngine(store);
+    azookey::host::ModelLoadOptions options;
+    options.path = model_path;
+    options.backend = azookey::host::BackendKind::Vulkan;
+    std::vector<azookey::host::BackendKind> attempts;
+    options.before_load_for_tests = [&](azookey::host::BackendKind backend) {
+      attempts.push_back(backend);
+      if (backend == azookey::host::BackendKind::Vulkan) {
+        if (unknown_exception) {
+          throw 42;
+        }
+        throw std::runtime_error("Vulkan test failure");
+      }
+      throw std::runtime_error("CPU test failure");
+    };
+    const auto result = engine->LoadModelWithResult(options);
+    EXPECT_FALSE(result.ok);
+    ASSERT_TRUE(result.error);
+    EXPECT_NE(result.error->find(unknown_exception ? "unknown exception" : "Vulkan test failure"),
+              std::string::npos);
+    EXPECT_NE(result.error->find("CPU fallback failed"), std::string::npos);
+    EXPECT_NE(result.error->find("CPU test failure"), std::string::npos);
+    EXPECT_EQ(attempts, (std::vector<azookey::host::BackendKind>{azookey::host::BackendKind::Vulkan,
+                                                                 azookey::host::BackendKind::Cpu}));
+    EXPECT_FALSE(engine->model_loaded());
+    EXPECT_EQ(engine->backend(), azookey::host::BackendKind::Cpu);
+    EXPECT_EQ(engine->health_snapshot().last_error, result.error);
+  }
+  std::remove(model_path.c_str());
+  std::remove(learning_path);
+}
+
 TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "

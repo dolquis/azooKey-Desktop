@@ -50,6 +50,8 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
       if (!TakeValue(argv, i, arg, value, result.error)) return result;
       if (value == "cuda") {
         args.config.backend = BackendKind::Cuda;
+      } else if (value == "vulkan") {
+        args.config.backend = BackendKind::Vulkan;
       } else if (value == "cpu") {
         args.config.backend = BackendKind::Cpu;
       } else {

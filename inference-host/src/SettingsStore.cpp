@@ -183,8 +183,9 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
 
 BackendKind BackendFromPreference(const std::string& preference, BackendKind fallback) {
   if (preference == "cuda") return BackendKind::Cuda;
-  if (preference == "cpu" || preference == "vulkan" || preference == "winml" ||
-      preference == "directml" || preference == "npu") {
+  if (preference == "vulkan") return BackendKind::Vulkan;
+  if (preference == "cpu" || preference == "winml" || preference == "directml" ||
+      preference == "npu") {
     return BackendKind::Cpu;
   }
   return fallback;

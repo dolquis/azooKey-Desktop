@@ -92,14 +92,21 @@ set(AZOOKEY_LLAMA_CPP_GIT_TAG
 set(AZOOKEY_WIL_GIT_TAG
     "b6ec76a2d9a609897f25a7fa0a0bdf4238e94e35" CACHE STRING
     "Pinned WIL revision used when AZOOKEY_FETCH_WIL is ON")
-set(AZOOKEY_BACKEND "cpu" CACHE STRING "Default inference backend: cpu or cuda")
-set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda)
+set(AZOOKEY_BACKEND "cpu" CACHE STRING "Default inference backend: cpu, cuda or vulkan")
+set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda vulkan)
 
-if(NOT AZOOKEY_BACKEND STREQUAL "cpu" AND NOT AZOOKEY_BACKEND STREQUAL "cuda")
-  message(FATAL_ERROR "AZOOKEY_BACKEND must be either 'cpu' or 'cuda'")
+if(NOT AZOOKEY_BACKEND MATCHES "^(cpu|cuda|vulkan)$")
+  message(FATAL_ERROR "AZOOKEY_BACKEND must be 'cpu', 'cuda' or 'vulkan'")
 endif()
 
 function(azookey_add_llama_cpp)
+  # Keep the CPU backend available for explicit CPU requests and GPU failures.
+  set(GGML_CPU ON CACHE BOOL "" FORCE)
+  if(AZOOKEY_BACKEND STREQUAL "vulkan")
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+  else()
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+  endif()
   # llama.cpp and ggml do not link azookey_project_options. Scope the MSVC
   # hardening flags to their subdirectory so every third-party object that is
   # linked into the host receives CFG and Spectre instrumentation as well.
@@ -150,6 +157,9 @@ azookey_add_llama_cpp()
 if(TARGET llama)
   set(AZOOKEY_WITH_LLAMA_CPP ON)
 else()
+  if(AZOOKEY_BACKEND STREQUAL "vulkan")
+    message(FATAL_ERROR "Vulkan requires AZOOKEY_LLAMA_CPP_SOURCE_DIR or AZOOKEY_FETCH_LLAMA_CPP=ON")
+  endif()
   message(STATUS
     "llama.cpp target not available; Zenzai loader uses no-egress mock runtime. "
     "Set AZOOKEY_LLAMA_CPP_SOURCE_DIR or AZOOKEY_FETCH_LLAMA_CPP=ON for real loads.")

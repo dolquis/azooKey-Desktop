@@ -167,6 +167,8 @@ void ApplyDefaultBackend(azookey::host::EngineConfig& config) {
   const std::string backend = AZOOKEY_BACKEND_DEFAULT;
   if (backend == "cuda") {
     config.backend = azookey::host::BackendKind::Cuda;
+  } else if (backend == "vulkan") {
+    config.backend = azookey::host::BackendKind::Vulkan;
   } else {
     config.backend = azookey::host::BackendKind::Cpu;
   }
@@ -455,7 +457,7 @@ int main(int argc, char** argv) {
 
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
-            << (startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")
+            << azookey::host::BackendName(startup_health.backend)
             << " learning=" << PathToUtf8(user_paths->learning_path)
             << " user_dict=" << PathToUtf8(user_paths->user_dict_path)
             << " model_loaded=" << (startup_health.model_loaded ? "true" : "false");
@@ -463,16 +465,12 @@ int main(int argc, char** argv) {
     std::cerr << " model_preload=preloading";
   }
   std::cerr << std::endl;
-  runtime_log.Log(
-      azookey::logging::RuntimeLogLevel::Info, "backend_selected",
-      {{"backend",
-        SafeLogText(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")}});
-  runtime_log.Log(
-      azookey::logging::RuntimeLogLevel::Info, "host_started",
-      {{"backend",
-        SafeLogText(startup_health.backend == azookey::host::BackendKind::Cuda ? "cuda" : "cpu")},
-       {"model_loaded", startup_health.model_loaded},
-       {"model_preload_in_progress", startup_health.model_preload_in_progress}});
+  runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "backend_selected",
+                  {{"backend", SafeLogText(azookey::host::BackendName(startup_health.backend))}});
+  runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_started",
+                  {{"backend", SafeLogText(azookey::host::BackendName(startup_health.backend))},
+                   {"model_loaded", startup_health.model_loaded},
+                   {"model_preload_in_progress", startup_health.model_preload_in_progress}});
 
   if (!RegisterSignalHandlers()) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,

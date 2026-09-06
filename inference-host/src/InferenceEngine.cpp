@@ -336,13 +336,39 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     result.error = "CUDA backend is not linked yet; loaded GGUF with CPU fallback";
   }
   ZenzaiRuntimeOptions runtime_options;
-  runtime_options.n_gpu_layers =
-      next_config.backend == BackendKind::Cuda ? options.n_gpu_layers.value_or(0) : 0;
+  runtime_options.use_vulkan = next_config.backend == BackendKind::Vulkan;
+  runtime_options.n_gpu_layers = runtime_options.use_vulkan ? options.n_gpu_layers.value_or(-1) : 0;
   runtime_options.n_threads = next_config.inference_threads;
   runtime_options.mock_candidates_for_tests = options.mock_zenzai_candidates_for_tests;
-  auto loaded = LoadZenzaiGgufModel(next_config.model_path, runtime_options);
+  const auto load = [&]() {
+    try {
+      if (options.before_load_for_tests) {
+        options.before_load_for_tests(next_config.backend);
+      }
+      return LoadZenzaiGgufModel(next_config.model_path, runtime_options);
+    } catch (const std::exception& ex) {
+      ZenzaiLoadResult failed;
+      failed.error = std::string("model initialization failed: ") + ex.what();
+      return failed;
+    } catch (...) {
+      ZenzaiLoadResult failed;
+      failed.error = "model initialization failed: unknown exception";
+      return failed;
+    }
+  };
+  auto loaded = load();
+  std::optional<std::string> backend_error;
+  if (!loaded.ok && runtime_options.use_vulkan) {
+    backend_error = "Vulkan initialization failed; using CPU fallback: " + loaded.error;
+    next_config.backend = BackendKind::Cpu;
+    runtime_options.use_vulkan = false;
+    runtime_options.n_gpu_layers = 0;
+    loaded = load();
+    result.error = backend_error;
+  }
   if (!loaded.ok) {
-    result.error = loaded.error;
+    result.error =
+        backend_error ? *backend_error + "; CPU fallback failed: " + loaded.error : loaded.error;
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
       ApplyModelConfigFields(config_, next_config);
@@ -360,7 +386,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   model_converter_ = std::move(next_converter);
   active_converter_ = model_converter_;
   model_loaded_ = true;
-  last_error_.reset();
+  last_error_ = backend_error;
   model_runtime_error_.reset();
   result.ok = true;
   return result;

@@ -70,7 +70,7 @@ void PrintUsage(const char* exe) {
   std::cerr << "Usage: " << exe
             << " [--model PATH] [--input KANA] [--sequence-input KANA]"
                " [--context TEXT] [--sequence-context TEXT] [--cancel-probe-ms N] [--iterations N]"
-               " [--warmup N] [--backend cpu|cuda] [--n-gpu-layers N] [--threads N]"
+               " [--warmup N] [--backend cpu|cuda|vulkan] [--n-gpu-layers N] [--threads N]"
                " [--max-p95-ms N] [--require-model] [--require-zenzai]"
                " [--json] [--output PATH] [--baseline PATH]"
                " [--expected-prompt-token-ids ID[,ID...]]"
@@ -254,8 +254,10 @@ Options ParseOptions(int argc, char** argv) {
         options.backend = azookey::host::BackendKind::Cpu;
       } else if (backend == "cuda") {
         options.backend = azookey::host::BackendKind::Cuda;
+      } else if (backend == "vulkan") {
+        options.backend = azookey::host::BackendKind::Vulkan;
       } else {
-        throw std::invalid_argument("--backend must be cpu or cuda");
+        throw std::invalid_argument("--backend must be cpu, cuda or vulkan");
       }
     } else if (arg == "--n-gpu-layers") {
       options.n_gpu_layers =
@@ -335,16 +337,6 @@ bool HasZenzaiTag(const azookey::core::Candidate& candidate) {
 
 std::string OptionalString(const std::optional<std::string>& value) {
   return value ? *value : std::string("none");
-}
-
-std::string BackendName(azookey::host::BackendKind backend) {
-  switch (backend) {
-    case azookey::host::BackendKind::Cpu:
-      return "cpu";
-    case azookey::host::BackendKind::Cuda:
-      return "cuda";
-  }
-  return "unknown";
 }
 
 }  // namespace

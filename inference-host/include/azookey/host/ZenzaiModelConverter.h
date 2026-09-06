@@ -24,6 +24,8 @@ struct ZenzaiRuntimeOptions {
   std::optional<int32_t> n_threads;
   // Test-only fixture switch for no-llama builds; production callers leave this false.
   bool mock_candidates_for_tests{false};
+  // Select only the Vulkan registry's device; CPU loads pass an empty device list.
+  bool use_vulkan{false};
 };
 
 int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads);

@@ -25,7 +25,20 @@ namespace azookey::host {
 enum class BackendKind {
   Cpu,
   Cuda,
+  Vulkan,
 };
+
+constexpr const char* BackendName(BackendKind backend) {
+  switch (backend) {
+    case BackendKind::Cpu:
+      return "cpu";
+    case BackendKind::Cuda:
+      return "cuda";
+    case BackendKind::Vulkan:
+      return "vulkan";
+  }
+  return "cpu";
+}
 
 struct EngineConfig {
   BackendKind backend{BackendKind::Cpu};
@@ -58,6 +71,8 @@ struct ModelLoadOptions {
   bool mock_zenzai_candidates_for_tests{false};
   // Test-only hook used to prove loading work runs outside state_mutex_.
   std::function<void()> before_probe_for_tests;
+  // Test-only fault injection at each backend load attempt.
+  std::function<void(BackendKind)> before_load_for_tests;
 };
 
 struct ModelLoadResult {

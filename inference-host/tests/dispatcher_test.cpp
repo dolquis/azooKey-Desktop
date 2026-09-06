@@ -616,6 +616,33 @@ TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {
   EXPECT_TRUE(health->last_error.has_value());
 }
 
+TEST_F(DispatcherTest, LoadModelVulkanFallbackReportsDegradedCpu) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture only exercises the mock control path.";
+  }
+  const auto model_path = TempPath("azookey_dispatcher_vulkan_fallback.gguf");
+  WriteMinimalGguf(model_path);
+  ipc::LoadModelRequest req;
+  req.path = model_path;
+  req.backend = "vulkan";
+  auto response = dispatcher.Dispatch(
+      MakeReq(65, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(req)));
+  ASSERT_TRUE(response);
+  auto loaded = ipc::ParseLoadModelResponse(response->payload_json);
+  ASSERT_TRUE(loaded);
+  EXPECT_TRUE(loaded->ok);
+  EXPECT_TRUE(loaded->error);
+  auto health_response = dispatcher.Dispatch(MakeReq(66, ipc::MessageType::Health, "{}"));
+  ASSERT_TRUE(health_response);
+  auto health = ipc::ParseHealth(health_response->payload_json);
+  ASSERT_TRUE(health);
+  EXPECT_EQ(health->backend, "cpu");
+  EXPECT_EQ(health->status, "degraded");
+  EXPECT_TRUE(health->model_loaded);
+  EXPECT_EQ(health->last_error, loaded->error);
+  std::remove(model_path.c_str());
+}
+
 TEST_F(DispatcherTest, LoadModelRejectsUnsupportedBackend) {
   ipc::LoadModelRequest req;
   req.path = "zenzai.gguf";

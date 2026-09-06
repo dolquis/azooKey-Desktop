@@ -32,7 +32,7 @@ if(WIN32)
   target_link_libraries(azookey_conversion_quality PRIVATE bcrypt psapi)
 endif()
 
-add_executable(azookey_bench live_bench.cpp)
+add_executable(azookey_bench live_bench.cpp IpcBenchmark.cpp)
 add_dependencies(azookey_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_bench
@@ -89,6 +89,11 @@ if(AZOOKEY_BUILD_TESTS)
       "\"bench\":\"azookey_bench\".*\"schemaVersion\":1.*\"passed\":true"
     FAIL_REGULAR_EXPRESSION "p50_ms="
     TIMEOUT 10
+  )
+  add_test(NAME azookey_bench_ipc_smoke COMMAND azookey_bench --ipc --json)
+  set_tests_properties(azookey_bench_ipc_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"ipcPhases\":.*\"samples\":200.*\"serializeMs\":"
+    TIMEOUT 30
   )
   if(WIN32)
     add_test(NAME azookey_conversion_quality_smoke

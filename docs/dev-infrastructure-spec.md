@@ -614,6 +614,17 @@ schema v1 のトップレベル契約は次のとおりとする。
 | `baseline` | object | 比較状態、比較元 commit、p95/p99 変化率、`warningPercent`、`minimumChangeMs`、warning 判定と理由 |
 | `deadlineCutoffs` | object（任意） | `azookey_zenzai_bench` の各 iteration が deadline で打ち切られたかを表す `samples`、打ち切り回数 `count`、打ち切り率 `rate` |
 | `decodePhases` | object（任意） | `azookey_zenzai_bench` の実モデル推論で取得した `prompt` と `beam` の decode 内訳 |
+| `ipcPhases` | object（任意） | `azookey_bench --ipc` の codec と試験用 pipe 往復の計測 |
+
+`azookey_bench --ipc` は固定の10候補 payload を使い、20回の warmup 後に200回計測する。
+`ipcPhases` は `samples`、`payloadBytes` と、`serializeMs`、`framingMs`、
+`deserializeMs`、`pipeRoundTripMs` の各 `p50` / `p95` / `p99` / `max` を持つ。
+framing は length-prefix の encode と decode の合計、pipe 往復は Windows の
+同一プロセス内 echo server に対する Send / Receive の合計で、両端の codec を含む。
+接続確立、payload の Build / 型別 Parse、推論はこれらの計測に含めない。
+非 Windows では `pipeRoundTripMs=null` とし、ゼロ時間として扱わない。
+既定の `latencyMs` と baseline 比較は推論時間のままとし、IPC 時間を加算しない。
+`--ipc` は `--eval` と併用せず、pipe の作成・通信失敗時は非ゼロ終了する。
 
 `deadlineCutoffs.samples` は計測 iteration ごとの boolean 配列で、deadline により
 best-so-far で正常完了した iteration を `true` とする。
@@ -911,6 +922,13 @@ ConPTY では更に短くなりうるため、この経路の最終 flush は be
 パーサを残したまま境界堅牢性を上げる。外部ライブラリへの移行は v1.0 の範囲では
 行わないことを §11.2.1 で確定した。再評価の条件も同節が正典とする。
 
+Envelope の送信は payload の JSON を検証してから連結し、受信は文書全体を
+検証した parser が特定した最初のトップレベル `payload` の範囲をコピーする。
+payload の再文字列化は行わず、キー順序・空白・数値・escape の表記を保持する。
+型別 payload の Parse は引き続き行う。文字列の同一性を JSON の意味的同一性の
+判定に使わない。欠落 payload の `{}`、重複キーの先勝ち、深度・入力長・不正値の
+拒否規則は維持する。性能の確認には §4.5 の IPC 計測を使う。
+
 ### 6.2 JSON パーサ強化要件
 
 `ipc/src/Json.cpp` は次の防御を備える。各上限値は**本節（spec）を正典**とする
@@ -1045,6 +1063,18 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
 - **6.4.2 接続インスタンス上限** — `PIPE_UNLIMITED_INSTANCES` を使わず、
   TIP と設定 UI などの同時接続を許容する有界な上限
   (`kMaxPipeInstances = 32`) を設ける
+- **6.4.2a クライアントごとの未完了要求上限** — `RequestScheduler` は
+  `client_id` ごとに未完了要求とキャンセル状態をそれぞれ最大64件まで保持する
+  （`kMaxPendingRequestsPerClient`）。同一IDの並行要求も未完了件数に加算する。
+  空の `client_id` は protocol-v1 の共有名前空間として同じ上限を適用する。
+  上限到達時の新規要求は推論を開始せず、`QueryCandidates` は空候補、
+  `QueryBatchConversion` は `canceled=true` で応答する。拒否した要求は
+  latest ID と既存要求の完了状態を変更しない。
+  状態数が上限に達し到着要求のIDが未登録なら、IDの大小にかかわらず非実行中の
+  Cancel を回収してから受付を判定する。追跡中の要求と到着要求に一致する
+  先行 Cancel は維持する。保持済みIDへの Cancel は常に反映し、状態数が上限に達した
+  ときの未知IDへの先行 Cancel は保持しない。要求完了と最終接続の切断で
+  対応する状態を回収する。
 - **6.4.3 最大フレームサイズ = 1 MiB** — `kMaxFrameSize`（`= kMaxJsonInputBytes`、
   `Limits.h`）。4-byte little-endian length-prefix の値が 0 または本上限超過の
   フレームは `ReadEnvelope` / `DecodeLengthPrefixed` が拒否する。候補問い合わせ

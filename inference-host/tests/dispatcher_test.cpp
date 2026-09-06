@@ -132,6 +132,36 @@ class DispatcherTest : public ::testing::Test {
   azookey::host::Dispatcher dispatcher;
 };
 
+TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingRequests) {
+  constexpr auto limit = azookey::host::RequestScheduler::kMaxPendingRequestsPerClient;
+  for (uint64_t id = 1; id <= limit; ++id) {
+    ASSERT_NE(scheduler.TrackCancellation(id), nullptr);
+  }
+  scheduler.MarkLatest(1);
+  ipc::QueryCandidatesRequest query;
+  query.reading = "test";
+  auto response = dispatcher.Dispatch(
+      MakeReq(1, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
+  ASSERT_TRUE(response.has_value());
+  auto parsed = ipc::ParseQueryCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_TRUE(parsed->candidates.empty());
+  EXPECT_EQ(scheduler.TrackCancellation(limit + 1), nullptr);
+
+  ipc::QueryBatchConversionRequest batch;
+  batch.reading = "test";
+  response = dispatcher.Dispatch(MakeReq(limit + 1, ipc::MessageType::QueryBatchConversion,
+                                         ipc::BuildQueryBatchConversionRequest(batch)));
+  ASSERT_TRUE(response.has_value());
+  auto parsed_batch = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed_batch.has_value());
+  EXPECT_TRUE(parsed_batch->canceled);
+  EXPECT_TRUE(scheduler.IsLatest(1));
+  EXPECT_EQ(scheduler.TrackCancellation(limit + 1), nullptr);
+  scheduler.CompleteRequest(1);
+  EXPECT_NE(scheduler.TrackCancellation(limit + 1), nullptr);
+}
+
 TEST_F(DispatcherTest, Handshake) {
   ipc::HandshakeRequest req;
   req.tip_version = "0.1.0";

@@ -173,6 +173,8 @@ std::string StringifyNumber(const Number& number) {
 class Parser {
  public:
   explicit Parser(std::string_view text) : text_(text), pos_(0) {}
+  Parser(std::string_view text, std::string_view member, std::string_view& raw_member)
+      : text_(text), pos_(0), member_(member), raw_member_(&raw_member) {}
 
   std::optional<Value> ParseDocument() {
     if (text_.size() > kMaxJsonInputBytes) return std::nullopt;
@@ -230,8 +232,13 @@ class Parser {
       SkipWhitespace();
       if (pos_ >= text_.size() || text_[pos_] != ':') return std::nullopt;
       ++pos_;
+      SkipWhitespace();
+      const auto value_start = pos_;
       auto val = ParseValue(depth);
       if (!val) return std::nullopt;
+      if (raw_member_ && depth == 1 && *key == member_ && raw_member_->empty()) {
+        *raw_member_ = text_.substr(value_start, pos_ - value_start);
+      }
       obj.emplace(std::move(*key), std::move(*val));
       SkipWhitespace();
       if (pos_ >= text_.size()) return std::nullopt;
@@ -399,6 +406,8 @@ class Parser {
 
   std::string_view text_;
   size_t pos_;
+  std::string_view member_;
+  std::string_view* raw_member_{nullptr};
 };
 
 }  // namespace
@@ -491,6 +500,15 @@ const Object* Value::GetObject(std::string_view key) const {
 std::optional<Value> Parse(std::string_view text) {
   Parser p(text);
   return p.ParseDocument();
+}
+
+std::optional<Value> ParseWithRawMember(std::string_view text, std::string_view member,
+                                        std::string_view& raw_member) {
+  raw_member = {};
+  Parser p(text, member, raw_member);
+  auto result = p.ParseDocument();
+  if (!result) raw_member = {};
+  return result;
 }
 
 std::string EscapeString(std::string_view s) {

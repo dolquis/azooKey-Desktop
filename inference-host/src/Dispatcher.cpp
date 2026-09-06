@@ -370,6 +370,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
   }
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  if (!cancel) {
+    return MakeResponse(req, ipc::BuildQueryCandidatesResponse(ipc::QueryCandidatesResponse{}));
+  }
   scheduler_->MarkLatest(client_id_, req.request_id);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
@@ -399,6 +402,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   }
 
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  if (!cancel) {
+    ipc::QueryBatchConversionResponse res;
+    res.canceled = true;
+    return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
+  }
   scheduler_->MarkLatest(client_id_, req.request_id);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 

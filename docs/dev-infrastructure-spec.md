@@ -1758,7 +1758,7 @@ SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し�
 #### 8.5.5 適応モデル切替の再解釈（DEV-411 で確定 / 2026-08）
 
 karukan は `max_latency_ms` を超えたら main（90M）から light（26M）へ切り替える適応
-モデル切替を持つ（`plans/karukan-comparison-report.md` §6）。azooKey はこれを
+モデル切替を持つ（`docs/karukan-comparison-report.md` §6）。azooKey はこれを
 **取り込まない**。2 モデル常駐を前提とする設計であり、単一 Zenzai モデル構成と衝突する
 ためである。ParallelBeam も同じ理由で採らない。
 

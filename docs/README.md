@@ -13,7 +13,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`docs/AGENTS.md`](AGENTS.md) | `docs/` の正典、索引、lint 規約 |
 | [`docs/CLAUDE.md`](CLAUDE.md) | `docs/AGENTS.md` を Claude Code へ届ける import 専用 |
-| [`plans/AGENTS.md`](../plans/AGENTS.md) | `plans/` の roadmap と調査資料の規約 |
+| [`plans/AGENTS.md`](../plans/AGENTS.md) | `plans/` の roadmap の規約 |
 | [`plans/CLAUDE.md`](../plans/CLAUDE.md) | `plans/AGENTS.md` を Claude Code へ届ける import 専用 |
 
 ## 計画ドキュメント（`plans/`）
@@ -21,7 +21,6 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 役割 | 正典範囲 |
 |---|---|---|
 | [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md) | 開発計画・マイルストーンロードマップ | **マイルストーン定義、依存関係、受け入れ条件、リスクの正典。進捗と状態は Linear を参照** |
-| [`plans/karukan-comparison-report.md`](../plans/karukan-comparison-report.md) | karukan 比較レポート | 更新しない参考スナップショット。開発計画は roadmap を参照 |
 
 ## アーキテクチャ・設計
 
@@ -29,6 +28,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 |---|---|
 | [`windows-tsf-host-architecture.md`](windows-tsf-host-architecture.md) | TSF TIP + Inference Host 分離設計、IPC メッセージ、実装ルール（スレッドモデル・例外耐性・互換性）の正典 |
 | [`windows-port-asset-audit.md`](windows-port-asset-audit.md) | M0 以前の初回調査。現行設計の正典ではない参考資料。参照先 macOS ソースは `legacy/` に保全 |
+| [`karukan-comparison-report.md`](karukan-comparison-report.md) | karukan（`togatoga/karukan`）との比較調査。更新しない参考スナップショットであり正典ではない。開発計画は roadmap、取り込み状態は Linear を参照 |
 | [`zenzai-gpu-route.md`](zenzai-gpu-route.md) | Zenzai 推論形式の特定と GPU 化ルート決定 |
 
 ## 機能仕様（`*-spec.md`）

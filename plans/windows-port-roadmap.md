@@ -2394,5 +2394,5 @@ Match / CER 評価 CLI。評価データは品質ベンチ spec §13 準拠で�
 reading-keyed 二層 + 前方一致予測）、M62（候補リライター層、上記）、NllScorer 型ニューラル
 リランク（コンテキスト再利用で辞書由来候補を Zenzai の文字あたり NLL でリランク。M 番号を
 持たない独立トラックで、正典は `docs/neural-reranker-spec.md` Track B〈§B1〜§B12〉）。詳細な比較・優先度・最小
-導入案・テスト方針・ライセンス注記は調査レポート `plans/karukan-comparison-report.md`
+導入案・テスト方針・ライセンス注記は調査レポート `docs/karukan-comparison-report.md`
 （特定時点のスナップショット）を参照する。

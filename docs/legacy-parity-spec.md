@@ -380,12 +380,12 @@ M13 の載せ替え対象は、`tsf-tip/src/TextService.cpp::OnKeyDown` が M3�
 
 本節は、参考実装 `togatoga/karukan`（Rust / Linux + macOS）の状態機械層 `karukan-im` と
 §1.1〜§1.5 を突き合わせた結論を確定する。分析のスナップショットは
-`plans/karukan-comparison-report.md` 候補 1 / §5-1 にある。karukan は読み取り専用の参考実装で、
+`docs/karukan-comparison-report.md` 候補 1 / §5-1 にある。karukan は読み取り専用の参考実装で、
 コードは逐語移植せず設計思想のみ参照する（**コード移植ではない**）。本節が正典として固定する
 のは「突き合わせで判明した azooKey 側の欠け」と「azooKey 独自に再設計が必要な境界」であり、
 レビューの経緯は本書に置かない。
 
-karukan 側の参照点（`plans/karukan-comparison-report.md §9`。**外部リポジトリの
+karukan 側の参照点（`docs/karukan-comparison-report.md §9`。**外部リポジトリの
 ため、実際の位置は M13 実装着手時に現物で確認する**）: `karukan-im/src/core/state.rs`
 （`InputState`＝状態が値）、`karukan-im/src/core/engine/types.rs`（`EngineAction`
 ＝6 種の抽象出力アクション）、`karukan-im/src/core/engine/mod.rs`（`Engine` が状態でディスパッチ）、
@@ -501,7 +501,7 @@ karukan は参考になるが、以下 3 点は **karukan に対応概念が無�
    `ITfComposition` / `ITfRange::SetText` 経由で編集する。§1.3 の `ClientAction→TSF` 対応表と
    `ApplyClientAction`（EditSession キューイング）が azooKey の翻訳層であり、毎キーの preedit
    自前保持・高頻度 `UpdatePreedit` は**取り込まない**（再描画・ちらつき要因。
-   `plans/karukan-comparison-report.md §6`）。
+   `docs/karukan-comparison-report.md §6`）。
 
 #### 1.6.4 テスト様式の雛形（karukan tests → `input_state_test.cpp`）
 
@@ -524,7 +524,7 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 
 #### 1.6.5 取り込まない範囲（明示）
 
-`plans/karukan-comparison-report.md §6`（取り込まない方がよいもの）のうち、M13（状態機械）に
+`docs/karukan-comparison-report.md §6`（取り込まない方がよいもの）のうち、M13（状態機械）に
 関わる範囲を本節でも明示的に除外する。
 
 - **プロセス結合トポロジ**: karukan の macOS 子プロセス spawn / fcitx5 in-proc FFI は取り込まない。

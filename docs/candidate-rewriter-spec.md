@@ -634,17 +634,17 @@ M62-D の受け入れ条件（`plans/windows-port-roadmap.md` M62-D）に対応�
 ## 17. 参照
 
 - `plans/windows-port-roadmap.md` M62（マイルストーン定義と受け入れ条件）。
-- `plans/karukan-comparison-report.md` 候補 5（設計思想の参照元）。karukan の
+- `docs/karukan-comparison-report.md` 候補 5（設計思想の参照元）。karukan の
   `karukan-engine/src/rewriter/emoji.rs` と `karukan-engine/data/emoji.yml` は本設計時点で
   リポジトリを参照できていないため、本書は同レポートの記述と Mozc / CLDR の原典仕様から
   組み立てている。実装時に原典へ当たって差異が出た場合は本書を改訂する。
 - Mozc `emoji_data.tsv`（BSD-3-Clause、© Google）と Unicode CLDR の絵文字注釈（原典）。
-- `plans/karukan-comparison-report.md` 付録 C（M62-B の参照元）。karukan の
+- `docs/karukan-comparison-report.md` 付録 C（M62-B の参照元）。karukan の
   `karukan-engine/src/rewriter/half_katakana.rs` と `rewriter/alphabet.rs` も本設計時点で
   リポジトリを参照できていないため、§18 は同レポートの記述と Unicode の半角カタカナ
   （U+FF61 から U+FF9F）の定義から組み立てている。
 - `docs/inline-english-candidate-spec.md`（M62-B の英字分。§18.8 の境界）。
-- `plans/karukan-comparison-report.md` 候補 5（M62-C の参照元）。karukan の
+- `docs/karukan-comparison-report.md` 候補 5（M62-C の参照元）。karukan の
   `karukan-engine/src/rewriter/symbol.rs` と `karukan-engine/data/symbols.yml` は本設計時点で
   リポジトリを参照できていないため、§19 は同レポートの記述と Mozc `symbol.tsv` の原典から
   組み立てている。原典の列構成（POS / 記号 / 読み / 説明 / 追加説明 / カテゴリ / メモ /

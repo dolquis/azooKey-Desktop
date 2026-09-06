@@ -153,7 +153,12 @@ class TextService final : public ITfTextInputProcessorEx,
     return pending_commit_observation_.has_value();
   }
   std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
+  std::optional<ipc::CommitObservationRequest> first_queued_commit_observation_for_test();
   std::vector<ipc::MessageType> queued_ipc_types_for_test();
+  void post_commit_observation_for_test(const std::string& reading,
+                                        const ipc::CandidateField& chosen) {
+    PostCommitObservation(reading, chosen, {});
+  }
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
@@ -291,6 +296,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ObserveHostGeneration(const std::string& host_generation_id);
   void RearmPendingQuery(uint64_t req_id);
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
+  void TrimIpcSendQueueLocked();
   std::string NextCommitObservationId();
   void PostQueryCandidates(const std::string& reading);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);

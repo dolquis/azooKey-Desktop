@@ -478,13 +478,21 @@ TIP は送信に失敗した観測と、送信したが応答を受け取れな�
 - **キュー長の上限**：Host の停止が続いても TIP のメモリが際限なく伸びないようにする。上限を超えたぶんは古い側から捨てる。
 - **1 件あたりの試行回数の上限**：Host が必ず失敗させる観測が 1 件あっても、`QueryCandidates` が飢えないようにする。送信キューは各周回で候補要求より先に処理されるため、この上限が無いと再送ループが変換そのものを止める。
 
+キュー長の上限は、送信キューを伸ばすすべての経路で適用する。
+Host が到達不能な間、worker は接続の再試行と backoff を繰り返すだけで送信キューを処理する経路へ入らない。
+再送のときだけ切り詰める実装では、上限が守るべき停止区間においてキューが伸び続けるため、上限を置いた意味が無くなる。
+
 いずれの上限も、上限に達して観測を捨てたことを runtime log の warn に残す。
-上限値は `tsf-tip/src/TextService.cpp` の定数として持ち、設定キーには露出しない。
-Host 側 ring の深さは TIP 側キュー長の上限以上とする。TIP がまだ再送しうる観測をすべて冪等化の対象に含めるためである。
+試行回数の上限は `tsf-tip/src/TextService.cpp` の定数として持ち、設定キーには露出しない。
+
+キュー長の上限は `ipc/include/azookey/ipc/Limits.h` に置き、Host と共有する。
+Host 側 ring の深さは、この上限に transport が同時に受け付ける接続数の上限を掛けた値とする。
+`InferenceEngine` は全接続で共有される単一インスタンスであり、Host 再起動後は複数の TIP インスタンスが同時に backlog を再送する。
+ring を 1 インスタンスぶんの上限で切ると、ある TIP の適用済み ID がその TIP の再送より先に他の TIP の再送で追い出され、`observation_id` が防ぐはずの二重計上が起きる。
 
 ### 12.5 テスト
 
 - `ipc_payloads_tests`：`observation_id` の round-trip と、フィールドを持たない payload が空文字で parse されること。
-- `host_engine_tests`：同じ `observation_id` の二度目が学習ストアへ反映されないこと。空の `observation_id` が毎回適用されること。ring 深さを超えた ID が再び適用されること。
+- `host_engine_tests`：同じ `observation_id` の二度目が学習ストアへ反映されないこと。空の `observation_id` が毎回適用されること。ring 深さを超えた ID が再び適用されること。他の TIP インスタンスが backlog を再送しきっても適用済み ID が追い出されないこと。
 - `host_dispatcher_tests`：再送に `ok=true` を返し、かつ学習ストアを二重に更新しないこと。
-- `tsf_tip_onkeydown_preedit_tests`：応答を返さずに落ちた Host の後、再接続先の Host が同じ `observation_id` を受け取ること。
+- `tsf_tip_onkeydown_preedit_tests`：応答を返さずに落ちた Host の後、再接続先の Host が同じ `observation_id` を受け取ること。worker が動いていない間の enqueue でキュー長の上限が守られ、古い側から捨てられること。

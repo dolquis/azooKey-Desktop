@@ -18,6 +18,7 @@
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/ZenzaiModelConverter.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
@@ -397,12 +398,47 @@ TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
   auto engine = MakeEngine(store, cfg);
 
   ASSERT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
-  // 256 distinct ids (the ring depth) push "tip-a:1" out of the ring.
-  for (int i = 0; i < 256; ++i) {
+  // The ring covers every connected TIP's resend backlog at once; that many
+  // distinct ids push "tip-a:1" out of it.
+  const size_t ring_depth = static_cast<size_t>(azookey::ipc::kMaxPipeInstances) *
+                            azookey::ipc::kMaxQueuedCommitObservations;
+  for (size_t i = 0; i < ring_depth; ++i) {
     ASSERT_TRUE(engine->CommitObservation("かな", "仮名", kNowBase + 1,
                                           "tip-a:evict-" + std::to_string(i)));
   }
   EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
+
+  engine.reset();
+  std::remove(path.c_str());
+}
+
+// DEV-554: one engine serves every connection, so a second TIP replaying its own
+// backlog after a Host restart must not evict the first TIP's applied ids before
+// that TIP gets to resend them.
+TEST(InferenceEngineTest, CommitObservationDedupeSurvivesAnotherTipsFullBacklog) {
+  const std::string path = TempPath("azookey_host_engine_observation_id_multi_tip.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore store(path);
+
+  azookey::host::EngineConfig cfg;
+  cfg.learning_alpha = 0.8;
+  cfg.learning_flush_every_n = 100000;
+  cfg.learning_flush_interval_sec = 100000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+
+  ASSERT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
+
+  // Every other TIP the transport admits replays a full backlog.
+  for (uint32_t tip = 1; tip < azookey::ipc::kMaxPipeInstances; ++tip) {
+    for (size_t i = 0; i < azookey::ipc::kMaxQueuedCommitObservations; ++i) {
+      ASSERT_TRUE(engine->CommitObservation(
+          "かな", "仮名", kNowBase + 1, "tip-" + std::to_string(tip) + ":" + std::to_string(i)));
+    }
+  }
+
+  // tip-a:1 is still covered, so its own resend is discarded as a duplicate.
+  EXPECT_FALSE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
 
   engine.reset();
   std::remove(path.c_str());

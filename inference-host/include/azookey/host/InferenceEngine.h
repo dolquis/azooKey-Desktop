@@ -195,11 +195,11 @@ class InferenceEngine {
   std::optional<uint64_t> last_unsaved_observation_epoch_sec_;
   std::optional<std::chrono::steady_clock::time_point> first_unsaved_observation_steady_;
   std::optional<std::chrono::steady_clock::time_point> last_successful_learning_save_steady_;
-  // Bounded ring of recently applied observation ids (DEV-554). Depth exceeds
-  // the TIP-side resend backlog cap so every item the TIP can still retry is
-  // covered. Not persisted: a Host that crashes after Save() but before the ACK
-  // sees the resend as new, which double-counts one commit's weight
-  // (see docs/learning-data-management-spec.md, at-least-once section).
+  // Bounded ring of recently applied observation ids (DEV-554). Depth covers the
+  // resend backlogs of every TIP instance the transport admits at once, so an id
+  // is never evicted while its own TIP can still retry it. Not persisted: a Host that crashes after
+  // Save() but before the ACK sees the resend as new, which double-counts one commit's weight (see
+  // docs/learning-data-management-spec.md, at-least-once section).
   std::deque<std::string> applied_observation_ids_;
   std::unordered_set<std::string> applied_observation_id_set_;
   std::condition_variable learning_flush_cv_;

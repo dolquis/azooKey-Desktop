@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/ipc/Limits.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
@@ -1183,6 +1184,38 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
 
   h.service.stop_ipc_worker_for_test();
   replacement_server.Stop();
+}
+
+// DEV-554: the send-queue bound has to hold while the host is unreachable, which
+// is when the worker never reaches the code that drains the queue. Enqueueing
+// past the cap must therefore drop the oldest observations right away.
+TEST(TsfTipOnKeyDownPreeditTest, CommitObservationQueueIsBoundedWhileHostIsUnreachable) {
+  TextServiceHarness h;
+  ASSERT_FALSE(h.service.ipc_client_id_for_test().empty());
+
+  // No IPC worker is started, so nothing ever drains the queue: this is the
+  // long-outage shape, where the worker sits in the reconnect backoff.
+  const size_t over_cap = azookey::ipc::kMaxQueuedCommitObservations + 8;
+  for (size_t i = 0; i < over_cap; ++i) {
+    azookey::ipc::CandidateField chosen;
+    chosen.surface = "仮名" + std::to_string(i);
+    chosen.reading = "かな";
+    chosen.source = "test";
+    h.service.post_commit_observation_for_test("かな", chosen);
+  }
+
+  EXPECT_EQ(h.service.queued_ipc_types_for_test().size(),
+            azookey::ipc::kMaxQueuedCommitObservations);
+
+  // The oldest are the ones dropped, so the newest commit is still queued and
+  // the surviving head is the first observation past the overflow.
+  const auto newest = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(newest.has_value());
+  EXPECT_EQ(newest->chosen.surface, "仮名" + std::to_string(over_cap - 1));
+  const auto oldest = h.service.first_queued_commit_observation_for_test();
+  ASSERT_TRUE(oldest.has_value());
+  EXPECT_EQ(oldest->chosen.surface,
+            "仮名" + std::to_string(over_cap - azookey::ipc::kMaxQueuedCommitObservations));
 }
 
 // DEV-554: a host that dies before ACKing a CommitObservation used to lose that

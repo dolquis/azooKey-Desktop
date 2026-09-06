@@ -10,6 +10,7 @@
 #include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/learning/FileLock.h"
 
 namespace azookey::host {
@@ -21,10 +22,14 @@ constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 constexpr size_t kPredictionDisplayLimit = 5;
-// Depth of the applied-observation ring (DEV-554). Must stay at or above the
-// TIP-side resend backlog cap (kMaxQueuedCommitObservations in
-// tsf-tip/src/TextService.cpp) so every retryable resend can still be deduped.
-constexpr size_t kMaxTrackedObservationIds = 256;
+// Depth of the applied-observation ring (DEV-554). One engine is shared by every
+// connection, so the ring has to cover the resend backlogs of all TIP instances
+// at once, not just one: after a Host restart several TIPs replay in parallel,
+// and a ring sized for a single backlog would evict one TIP's applied id before
+// that TIP resends it, which is exactly the double-count the id exists to
+// prevent. Derive it from the transport's own limits so the two stay in step.
+constexpr size_t kMaxTrackedObservationIds =
+    static_cast<size_t>(ipc::kMaxPipeInstances) * ipc::kMaxQueuedCommitObservations;
 
 using core::TakeLastUtf8Codepoints;
 

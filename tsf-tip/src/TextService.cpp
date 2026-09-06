@@ -20,6 +20,7 @@
 
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -35,13 +36,11 @@ constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
 constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
 constexpr uint32_t kTimeoutCancelHandshakeTimeoutMs = 10;
 
-// Bounds on the CommitObservation resend backlog (DEV-554). The queue cap keeps
-// a long host outage from growing the TIP's memory without limit; the attempt
-// cap keeps one observation the host always rejects from starving
-// QueryCandidates, which is drained after this queue on every worker iteration.
-// The host-side dedupe ring (kMaxTrackedObservationIds in
-// inference-host/src/InferenceEngine.cpp) is sized at or above the queue cap.
-constexpr size_t kMaxQueuedCommitObservations = 64;
+// Attempt cap on the CommitObservation resend backlog (DEV-554). It keeps one
+// observation the host always rejects from starving QueryCandidates, which is
+// drained after this queue on every worker iteration. The companion queue-length
+// cap is ipc::kMaxQueuedCommitObservations, shared with the host so it can size
+// its dedupe ring to cover what the connected TIPs can still resend.
 constexpr uint32_t kMaxCommitObservationSendAttempts = 3;
 
 std::string CreateIpcClientId() {
@@ -1450,6 +1449,7 @@ void TextService::CancelPendingQueriesForLifecycle() {
     need_notify = true;
   }
   ++ipc_pending_id_;
+  TrimIpcSendQueueLocked();
   if (need_notify) ipc_cv_.notify_one();
 }
 
@@ -1658,6 +1658,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       need_notify = true;
     }
     ++ipc_pending_id_;
+    TrimIpcSendQueueLocked();
     if (need_notify) ipc_cv_.notify_one();
   }
 
@@ -1726,6 +1727,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
       need_notify = true;
     }
     ++ipc_pending_id_;
+    TrimIpcSendQueueLocked();
     if (need_notify) ipc_cv_.notify_one();
   }
 
@@ -2545,6 +2547,17 @@ TextService::last_queued_commit_observation_for_test() {
   return std::nullopt;
 }
 
+std::optional<ipc::CommitObservationRequest>
+TextService::first_queued_commit_observation_for_test() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  for (const auto& item : ipc_send_queue_) {
+    if (item.type == ipc::MessageType::CommitObservation) {
+      return ipc::ParseCommitObservationRequest(item.payload_json);
+    }
+  }
+  return std::nullopt;
+}
+
 std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   std::vector<ipc::MessageType> types;
@@ -2642,12 +2655,14 @@ void TextService::PostCancel(uint64_t target_request_id) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back(
       {ipc::MessageType::Cancel, ipc::BuildCancel({target_request_id}), false, target_request_id});
+  TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
 }
 
 void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool expects_response) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0});
+  TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
 }
 
@@ -2688,16 +2703,23 @@ void TextService::RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.insert(ipc_send_queue_.begin(), std::make_move_iterator(retry.begin()),
                          std::make_move_iterator(retry.end()));
-  if (ipc_send_queue_.size() > kMaxQueuedCommitObservations) {
-    const size_t overflow = ipc_send_queue_.size() - kMaxQueuedCommitObservations;
-    // Drop the oldest first: the newest commits are the ones the user is most
-    // likely to type again, so they are the ones worth keeping.
-    ipc_send_queue_.erase(ipc_send_queue_.begin(),
-                          ipc_send_queue_.begin() + static_cast<std::ptrdiff_t>(overflow));
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_backlog_trimmed",
-               {{"dropped", static_cast<uint64_t>(overflow)}});
-  }
+  TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
+}
+
+// Hold the send queue to its bound. Callers must hold ipc_mtx_. Every path that
+// grows the queue trims it: while the host is unreachable the worker never
+// re-enters ServeConnection, so trimming only on requeue would leave the queue
+// unbounded during exactly the outage the bound exists for. The oldest items go
+// first, because the newest commits are the ones the user is most likely to type
+// again.
+void TextService::TrimIpcSendQueueLocked() {
+  if (ipc_send_queue_.size() <= ipc::kMaxQueuedCommitObservations) return;
+  const size_t overflow = ipc_send_queue_.size() - ipc::kMaxQueuedCommitObservations;
+  ipc_send_queue_.erase(ipc_send_queue_.begin(),
+                        ipc_send_queue_.begin() + static_cast<std::ptrdiff_t>(overflow));
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_queue_backlog_trimmed",
+             {{"dropped", static_cast<uint64_t>(overflow)}});
 }
 
 // --- EditSession ---

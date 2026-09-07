@@ -26,6 +26,12 @@ Describe "WiX MSI package consistency" {
     $script:project | Should -Match '<TreatWarningsAsErrors>true</TreatWarningsAsErrors>'
   }
 
+  It "rejects pre-1903 installations while allowing existing-product maintenance" {
+    $script:package | Should -Match 'Name="CurrentBuildNumber" Type="raw" Bitness="always64"'
+    $script:package | Should -Match 'Condition="Installed OR \(WINDOWSBUILDNUMBER &gt;= 18362\)"'
+    $script:rootReadme | Should -Match 'build 18362'
+  }
+
   It "fails before packaging when required release payloads are absent" {
     $script:project | Should -Match "Condition=`"!Exists\('\$\(TipDllPath\)'\)`""
     $script:project | Should -Match "Condition=`"!Exists\('\$\(HostExePath\)'\)`""

@@ -958,6 +958,14 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
 HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                                     bool test_only, bool& handled) {
   handled = false;
+  // The existing directory watcher publishes settings without I/O on the key thread.
+  if (const auto options = local_settings_.RewriterSnapshot()) {
+    symbol_rewriter_.store(options->symbol, std::memory_order_relaxed);
+    emoji_rewriter_.store(options->emoji, std::memory_order_relaxed);
+    emoji_trigger_search_.store(options->trigger, std::memory_order_relaxed);
+    emoji_max_candidates_.store(options->maximum, std::memory_order_relaxed);
+    emoji_trigger_min_query_length_.store(options->minimum, std::memory_order_relaxed);
+  }
   const bool enabled = emoji_rewriter_.load(std::memory_order_relaxed) &&
                        emoji_trigger_search_.load(std::memory_order_relaxed) &&
                        local_settings_.Snapshot().input_mode == core::BracketInputMode::Hiragana;
@@ -1449,7 +1457,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             if (symbol_rewriter_.load(std::memory_order_relaxed) ||
                 emoji_rewriter_.load(std::memory_order_relaxed)) {
               {
-                std::lock_guard<std::mutex> lk(candidates_mtx_);
+                std::scoped_lock lk(candidates_mtx_, ipc_mtx_);
+                if (candidate_window_show_pending_ && !ipc_pending_live_ &&
+                    !ipc_pending_is_batch_ && ipc_pending_emoji_trigger_.empty() &&
+                    ipc_pending_reading_ == CurrentPreeditSurface())
+                  return S_OK;
                 candidates_.clear();
                 shown_candidates_.clear();
                 candidate_window_show_pending_ = true;
@@ -2466,9 +2478,6 @@ void TextService::ServeConnection() {
       qreq.emoji_trigger = emoji_trigger;
       if (!emoji_trigger.empty()) {
         qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
-      } else if (!live) {
-        if (symbol_rewriter_.load(std::memory_order_relaxed)) qreq.max_candidates += 4;
-        if (emoji_rewriter_.load(std::memory_order_relaxed)) qreq.max_candidates += 4;
       }
       qenv.trace_id = "tip-key-query";
       qenv.type = MessageType::QueryCandidates;

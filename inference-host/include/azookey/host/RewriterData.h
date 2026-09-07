@@ -25,6 +25,7 @@ class RewriterData {
   struct Slot {
     std::mutex mutex;
     bool attempted{false};
+    std::filesystem::path path;
     std::shared_ptr<const core::RewriterIndex> index;
   };
   Slot symbol_;

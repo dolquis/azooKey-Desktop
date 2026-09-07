@@ -37,6 +37,18 @@ TEST(RewriterIndex, ReadingIsExactRankedAndCappedAtFour) {
   EXPECT_TRUE(index.SearchTrigger("a", 12).empty());
 }
 
+TEST(RewriterIndex, AcceptsWindowsBomAndCrlfWithoutChangingSurface) {
+  RewriterIndex index(CandidateSource::Symbol);
+  ASSERT_EQ(index.Parse("\xef\xbb\xbf"
+                        "☀\tたいよう\t太陽\t1\r\n"),
+            0u);
+  ASSERT_EQ(index.LookupReading("たいよう").size(), 1u);
+  EXPECT_EQ(index.LookupReading("たいよう")[0].surface, "☀");
+  EXPECT_EQ(index.Parse("\xef\xbb\xbf"
+                        "# comment\r\n☀\tたいよう\t太陽\t1\r\n"),
+            0u);
+}
+
 TEST(RewriterIndex, TriggerRankingChoosesBestAliasBeforeTruncation) {
   RewriterIndex index(CandidateSource::Emoji);
   ASSERT_EQ(index.Parse("😄\tわらい\tsmile|smiley\t笑顔\t1\n"

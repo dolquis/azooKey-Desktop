@@ -2,16 +2,44 @@
 
 #include <ShellScalingApi.h>
 #include <dwrite_2.h>
+#include <icu.h>
 #include <wrl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <map>
 #include <string>
 
 #include "CandidateSelection.h"
 
 namespace azookey::tsf {
+
+struct EmojiDrawingCache {
+  Microsoft::WRL::ComPtr<IDWriteFactory2> factory;
+  Microsoft::WRL::ComPtr<IDWriteGdiInterop> interop;
+  Microsoft::WRL::ComPtr<IDWriteBitmapRenderTarget> target;
+  Microsoft::WRL::ComPtr<IDWriteRenderingParams> params;
+  Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
+  std::map<std::wstring, Microsoft::WRL::ComPtr<IDWriteTextLayout>> layouts;
+  float font_size{};
+};
+
+bool CandidateWindow::NeedsColorEmoji(const std::wstring& text) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    UChar32 cp = text[i];
+    if (cp >= 0xd800 && cp <= 0xdbff) {
+      if (i + 1 >= text.size() || text[i + 1] < 0xdc00 || text[i + 1] > 0xdfff) continue;
+      cp = 0x10000 + ((cp - 0xd800) << 10) + (text[++i] - 0xdc00);
+    }
+    if (i + 1 < text.size() && text[i + 1] == 0xfe0e) continue;
+    if (u_hasBinaryProperty(cp, UCHAR_EMOJI_PRESENTATION) ||
+        (i + 1 < text.size() && text[i + 1] == 0xfe0f && u_hasBinaryProperty(cp, UCHAR_EMOJI)))
+      return true;
+  }
+  return false;
+}
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -82,48 +110,69 @@ class ColorGlyphRenderer final
   COLORREF color_;
 };
 
-bool DrawColorEmoji(HDC hdc, HFONT font, const std::wstring& text, const RECT& rect) {
-  const auto width = rect.right - rect.left;
-  const auto height = rect.bottom - rect.top;
-  if (width <= 0 || height <= 0) return false;
-  ComPtr<IDWriteFactory2> factory;
-  if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, __uuidof(IDWriteFactory2),
-                                 reinterpret_cast<IUnknown**>(factory.GetAddressOf()))))
-    return false;
-  ComPtr<IDWriteGdiInterop> interop;
-  ComPtr<IDWriteBitmapRenderTarget> target;
-  if (FAILED(factory->GetGdiInterop(&interop)) ||
-      FAILED(interop->CreateBitmapRenderTarget(hdc, static_cast<UINT32>(width),
-                                               static_cast<UINT32>(height), &target)))
-    return false;
-  target->SetPixelsPerDip(1.0f);
-  const auto memory_dc = target->GetMemoryDC();
-  if (!BitBlt(memory_dc, 0, 0, width, height, hdc, rect.left, rect.top, SRCCOPY)) return false;
+ComPtr<IDWriteTextLayout> EmojiLayout(EmojiDrawingCache& cache, HFONT font,
+                                      const std::wstring& text, float width, float height) {
+  if (!cache.factory) {
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory2),
+                                   reinterpret_cast<IUnknown**>(cache.factory.GetAddressOf()))))
+      return {};
+  }
+  if (!cache.interop && FAILED(cache.factory->GetGdiInterop(&cache.interop))) return {};
+  if (!cache.params && FAILED(cache.factory->CreateRenderingParams(&cache.params))) return {};
   LOGFONTW logfont{};
   const float size = font && GetObjectW(font, sizeof(logfont), &logfont)
                          ? static_cast<float>(std::abs(logfont.lfHeight))
                          : 16.0f;
-  ComPtr<IDWriteTextFormat> format;
-  if (FAILED(factory->CreateTextFormat(L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-                                       DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size,
-                                       L"ja-JP", &format)))
-    return false;
-  format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-  format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-  ComPtr<IDWriteInlineObject> ellipsis;
-  if (SUCCEEDED(factory->CreateEllipsisTrimmingSign(format.Get(), &ellipsis))) {
-    const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-    format->SetTrimming(&trimming, ellipsis.Get());
+  // GDI font and layout dimensions are physical pixels; pixelsPerDip=1 deliberately
+  // makes one layout unit one pixel, including when the message font is DPI-scaled.
+  if (!cache.format || cache.font_size != size) {
+    cache.format.Reset();
+    cache.layouts.clear();
+    cache.font_size = size;
+    if (FAILED(cache.factory->CreateTextFormat(
+            L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, size, L"ja-JP", &cache.format)))
+      return {};
+    cache.format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    cache.format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(cache.factory->CreateEllipsisTrimmingSign(cache.format.Get(), &ellipsis))) {
+      const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+      cache.format->SetTrimming(&trimming, ellipsis.Get());
+    }
   }
-  ComPtr<IDWriteTextLayout> layout;
-  if (FAILED(factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), format.Get(),
-                                       static_cast<float>(width), static_cast<float>(height),
-                                       &layout)))
-    return false;
-  ComPtr<IDWriteRenderingParams> params;
-  if (FAILED(factory->CreateRenderingParams(&params))) return false;
-  const auto renderer = Microsoft::WRL::Make<ColorGlyphRenderer>(factory.Get(), target.Get(),
-                                                                 params.Get(), GetTextColor(hdc));
+  auto& layout = cache.layouts[text];
+  if (!layout &&
+      FAILED(cache.factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()),
+                                             cache.format.Get(), width, height, &layout)))
+    return {};
+  layout->SetMaxWidth(width);
+  layout->SetMaxHeight(height);
+  return layout;
+}
+
+bool DrawColorEmoji(EmojiDrawingCache& cache, HDC hdc, HFONT font, const std::wstring& text,
+                    const RECT& rect) {
+  const auto width = rect.right - rect.left;
+  const auto height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) return false;
+  const auto layout =
+      EmojiLayout(cache, font, text, static_cast<float>(width), static_cast<float>(height));
+  if (!layout) return false;
+  if (!cache.target) {
+    if (FAILED(cache.interop->CreateBitmapRenderTarget(hdc, width, height, &cache.target)))
+      return false;
+    cache.target->SetPixelsPerDip(1.0f);
+  } else {
+    SIZE size{};
+    if (FAILED(cache.target->GetSize(&size))) return false;
+    if ((size.cx != width || size.cy != height) && FAILED(cache.target->Resize(width, height)))
+      return false;
+  }
+  const auto memory_dc = cache.target->GetMemoryDC();
+  if (!BitBlt(memory_dc, 0, 0, width, height, hdc, rect.left, rect.top, SRCCOPY)) return false;
+  const auto renderer = Microsoft::WRL::Make<ColorGlyphRenderer>(
+      cache.factory.Get(), cache.target.Get(), cache.params.Get(), GetTextColor(hdc));
   if (!renderer || FAILED(layout->Draw(nullptr, renderer.Get(), 0, 0))) return false;
   return BitBlt(hdc, rect.left, rect.top, width, height, memory_dc, 0, 0, SRCCOPY) != FALSE;
 }
@@ -310,6 +359,8 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
 
   const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   items_ = items;
+  if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
+  emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
   HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
   UpdateDpi(DpiForMonitor(mon, hwnd_));
@@ -326,6 +377,16 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
       std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
       SIZE sz{};
       GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
+      if (NeedsColorEmoji(item.surface)) {
+        const auto layout = EmojiLayout(*emoji_cache_, font_, item.surface, 100000.0f,
+                                        static_cast<float>(metrics_.item_height));
+        DWRITE_TEXT_METRICS measured{};
+        if (layout && SUCCEEDED(layout->GetMetrics(&measured))) {
+          const auto prefix = std::to_wstring(i + 1) + L". ";
+          GetTextExtentPoint32W(hdc, prefix.data(), static_cast<int>(prefix.size()), &sz);
+          sz.cx += static_cast<LONG>(std::ceil(measured.widthIncludingTrailingWhitespace));
+        }
+      }
       max_surface_w = std::max(max_surface_w, static_cast<int>(sz.cx));
       if (!item.description.empty()) {
         GetTextExtentPoint32W(hdc, item.description.c_str(),
@@ -439,12 +500,22 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                                ? std::min(surface_rc.right - metrics_.horizontal_padding,
                                           surface_rc.left + surface_column_width_)
                                : surface_rc.right - metrics_.horizontal_padding;
-        const bool has_emoji =
-            std::any_of(item.surface.begin(), item.surface.end(), [](wchar_t ch) {
-              return (ch >= 0xd800 && ch <= 0xdbff) || ch == 0xfe0f ||
-                     (ch >= 0x2600 && ch <= 0x27ff);
-            });
-        if (!has_emoji || !DrawColorEmoji(hdc, font_, label, surface_rc))
+        bool color_drawn = false;
+        if (NeedsColorEmoji(item.surface) && emoji_cache_) {
+          const auto prefix = std::to_wstring(i + 1) + L". ";
+          SIZE prefix_size{};
+          GetTextExtentPoint32W(hdc, prefix.data(), static_cast<int>(prefix.size()), &prefix_size);
+          RECT emoji_rect = surface_rc;
+          emoji_rect.left += prefix_size.cx;
+          color_drawn = DrawColorEmoji(*emoji_cache_, hdc, font_, item.surface, emoji_rect);
+          if (color_drawn) {
+            RECT prefix_rect = surface_rc;
+            prefix_rect.right = emoji_rect.left;
+            DrawTextW(hdc, prefix.data(), static_cast<int>(prefix.size()), &prefix_rect,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+          }
+        }
+        if (!color_drawn)
           DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (!item.description.empty()) {

@@ -60,12 +60,14 @@ int Match(std::string_view query, std::string_view key) {
 }  // namespace
 
 size_t RewriterIndex::Parse(std::string_view tsv) {
+  if (tsv.starts_with("\xef\xbb\xbf")) tsv.remove_prefix(3);
   entries_.clear();
   readings_.clear();
   size_t invalid = 0;
   std::set<std::string_view> surfaces;
   const bool emoji = source_ == CandidateSource::Emoji;
-  for (const auto line : Split(tsv, '\n')) {
+  for (auto line : Split(tsv, '\n')) {
+    if (line.ends_with('\r')) line.remove_suffix(1);
     if (line.empty() || line.starts_with('#')) continue;
     const auto columns = Split(line, '\t');
     if (columns.size() != (emoji ? 5u : 4u)) {

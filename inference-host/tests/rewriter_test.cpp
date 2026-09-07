@@ -90,17 +90,67 @@ TEST_F(RewriterHostTest, DispatcherMergesOnlyManualQueriesAndPreservesOrdinaryCo
   const auto off = Query(dispatcher, "かぎかっこ", {}, 2);
   config.rewriters.symbol_enabled = config.rewriters.emoji_enabled = true;
   engine.ApplyConfig(config);
-  const auto on = Query(dispatcher, "かぎかっこ", {}, 10);
+  const auto on = Query(dispatcher, "かぎかっこ", {}, 2);
   ASSERT_EQ(on.candidates.size(), off.candidates.size() + 2);
   for (size_t i = 0; i < off.candidates.size(); ++i)
     EXPECT_EQ(on.candidates[i].surface, off.candidates[i].surface);
   EXPECT_EQ(on.candidates[on.candidates.size() - 2].source, "symbol");
   EXPECT_EQ(on.candidates.back().source, "emoji");
   EXPECT_EQ(on.candidates.back().description, "笑顔");
+  const auto no_match_on = Query(dispatcher, "かな", {}, 9);
+  config.rewriters.symbol_enabled = config.rewriters.emoji_enabled = false;
+  engine.ApplyConfig(config);
+  const auto no_match_off = Query(dispatcher, "かな", {}, 9);
+  ASSERT_EQ(no_match_on.candidates.size(), no_match_off.candidates.size());
+  EXPECT_EQ(Query(dispatcher, "かぎかっこ", {}, 2).candidates.size(), off.candidates.size());
   const auto live = Query(dispatcher, "かぎかっこ", {}, 2, true);
   for (const auto& candidate : live.candidates) {
     EXPECT_NE(candidate.source, "symbol");
     EXPECT_NE(candidate.source, "emoji");
+  }
+}
+
+TEST_F(RewriterHostTest, PathChangeRecoversFailureAndPreservesReadersOfPreviousIndex) {
+  RewriterData data;
+  config.rewriters.emoji_enabled = true;
+  EXPECT_FALSE(data.Get(true, config.rewriters, nullptr));
+  config.rewriters.emoji_path = dir / "fixed.tsv";
+  WriteData();
+  const auto first = data.Get(true, config.rewriters, nullptr);
+  ASSERT_TRUE(first);
+  config.rewriters.emoji_path = dir / "replacement.tsv";
+  std::ofstream(config.rewriters.emoji_path) << "X\t\tx\treplacement\t1\n";
+  const auto second = data.Get(true, config.rewriters, nullptr);
+  ASSERT_TRUE(second);
+  EXPECT_EQ(second->SearchTrigger("x", 1)[0].surface, "X");
+  EXPECT_EQ(first->SearchTrigger("smile", 1)[0].surface, "😄");
+  config.rewriters.emoji_enabled = false;
+  EXPECT_FALSE(data.Get(true, config.rewriters, nullptr));
+  config.rewriters.emoji_enabled = true;
+  EXPECT_EQ(data.Get(true, config.rewriters, nullptr), second);
+}
+
+TEST_F(RewriterHostTest, NineOrdinaryCandidatesSurviveBothConfigurationDirections) {
+  WriteData();
+  const auto dictionary = dir / "ordinary.tsv";
+  {
+    std::ofstream out(dictionary);
+    for (int i = 0; i < 20; ++i) out << "かな\tword" << i << "\t" << 30 - i << "\n";
+  }
+  auto converter = std::make_unique<core::SimpleConverter>();
+  ASSERT_TRUE(converter->LoadFromTsv(dictionary.string()));
+  InferenceEngine engine(std::move(converter), nullptr, config);
+  RequestScheduler scheduler;
+  Dispatcher dispatcher(&engine, &scheduler, nullptr);
+  for (const bool enabled : {false, true, false, true}) {
+    config.rewriters.symbol_enabled = config.rewriters.emoji_enabled = enabled;
+    engine.ApplyConfig(config);
+    const auto result = Query(dispatcher, "かな", {}, 9);
+    ASSERT_EQ(result.candidates.size(), 9u);
+    for (const auto& candidate : result.candidates) {
+      EXPECT_NE(candidate.source, "symbol");
+      EXPECT_NE(candidate.source, "emoji");
+    }
   }
 }
 
@@ -115,7 +165,10 @@ TEST_F(RewriterHostTest, TriggerHasNoReadingAndRejectsMixedRequests) {
   EXPECT_EQ(result.candidates[0].surface, "😄");
   EXPECT_TRUE(result.candidates[0].reading.empty());
   EXPECT_FALSE(result.partial);
-  EXPECT_TRUE(Query(dispatcher, "わらい", "smile").candidates.empty());
+  const auto invalid = Query(dispatcher, "わらい", "smile");
+  EXPECT_TRUE(invalid.candidates.empty());
+  EXPECT_FALSE(invalid.ok);
+  ASSERT_TRUE(invalid.error);
   config.rewriters.emoji_enabled = false;
   engine.ApplyConfig(config);
   EXPECT_TRUE(Query(dispatcher, {}, "smile").candidates.empty());

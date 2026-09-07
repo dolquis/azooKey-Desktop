@@ -22,6 +22,13 @@ TEST(CandidateWindowDpiTest, LayoutMetricsScaleFromDefaultDpi) {
   ExpectMetrics(CandidateWindow::ComputeLayoutMetricsForTest(192), 48, 16, 800, 40, 120, 8);
 }
 
+TEST(CandidateWindowDpiTest, EmojiDetectionDoesNotReclassifyKanjiOrTextSymbols) {
+  for (const auto* text : {L"𠮟", L"𩸽", L"★☆♪✓✂☀", L"😄︎", L"abc"})
+    EXPECT_FALSE(CandidateWindow::NeedsColorEmoji(text));
+  for (const auto* text : {L"😄", L"☀️", L"👩‍💻", L"🇯🇵", L"1️⃣"})
+    EXPECT_TRUE(CandidateWindow::NeedsColorEmoji(text));
+}
+
 TEST(CandidateWindowDpiTest, ZeroDpiFallsBackToDefaultDpi) {
   ExpectMetrics(CandidateWindow::ComputeLayoutMetricsForTest(0), 24, 8, 400, 20, 60, 4);
 }

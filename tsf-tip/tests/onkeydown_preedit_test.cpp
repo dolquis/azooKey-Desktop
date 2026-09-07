@@ -1043,6 +1043,19 @@ TEST(TsfTipEmojiTest, LocalSymbolChainFollowsExistingCandidates) {
   EXPECT_EQ(views[2].surface, L"【");
 }
 
+TEST(TsfTipEmojiTest, RepeatedSpaceKeepsTheOutstandingManualRequest) {
+  TextServiceHarness h;
+  h.service.set_symbol_rewriter_for_test(true);
+  h.service.preedit_kana_ = "かぎかっこ";
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const auto request = h.service.pending_ipc_request_id_for_test();
+  for (int i = 0; i < 30; ++i) ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.pending_ipc_request_id_for_test(), request);
+  h.service.preedit_kana_ = "べつ";
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_GT(h.service.pending_ipc_request_id_for_test(), request);
+}
+
 TEST(TsfTipBracketTest, AppPolicySuppressesBothKeyCallbacksAndReevaluatesSettings) {
   BracketHarness h;
   h.service.set_foreground_app_for_test({"CODE.EXE", "Chrome_WidgetWin_1", true});

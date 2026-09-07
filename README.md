@@ -46,7 +46,7 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 
 ## ビルド要件
 
-- Windows 10/11
+- Windows 10 version 1903（build 18362）以降 / Windows 11（OS 付属 ICU が必要）
 - Visual Studio 2022（C++ デスクトップ開発ワークロード）
 - CMake ≥ 3.21
 - Ninja
@@ -81,6 +81,8 @@ WIL は commit SHA に固定した header-only submodule で、Windows IPC の�
 ため `OFF` とする。
 
 Linux/macOS 上では `tsf-tip` は `if(WIN32)` ガードにより自動的にスキップされるため、`core/`, `ipc/`, `learning/`, `inference-host/`, `bench/` の単体検証は他 OS でも可能です。
+
+Windows 以外のビルドには ICU の開発パッケージも必要です。Ubuntu では `sudo apt-get install libicu-dev` で導入します。
 
 `scripts/test-powershell-quality.ps1` は `PSScriptAnalyzer` と `Pester` のローカル PowerShell モジュールを使い、開発用 TIP 登録スクリプトの静的解析と安全な分岐テストを実行します。実際の machine-wide 登録は行いません。
 

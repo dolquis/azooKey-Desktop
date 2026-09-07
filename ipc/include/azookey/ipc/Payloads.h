@@ -95,6 +95,8 @@ struct QueryCandidatesRequest {
 struct QueryCandidatesResponse {
   std::vector<CandidateField> candidates;
   bool partial{false};
+  bool ok{true};
+  std::optional<std::string> error;
 };
 
 struct BatchConversionSegment {

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <iostream>
 #include <string_view>
 
 #ifdef _WIN32
@@ -390,7 +389,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   std::vector<core::Candidate> candidates;
   if (!parsed->emoji_trigger.empty()) {
     if (!parsed->reading.empty()) {
-      std::cerr << "[host] invalid mixed reading and emoji trigger request\n";
+      static std::atomic_flag warned = ATOMIC_FLAG_INIT;
+      if (!warned.test_and_set()) {
+        static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
+        logger.Log(logging::RuntimeLogLevel::Warn, "invalid_mixed_emoji_query");
+      }
+      ipc::QueryCandidatesResponse invalid;
+      invalid.ok = false;
+      invalid.error = "reading and emoji_trigger are mutually exclusive";
+      completion.Complete();
+      return MakeResponse(req, ipc::BuildQueryCandidatesResponse(invalid));
     } else if (!parsed->live) {
       candidates =
           engine_->QueryRewriters(rewriters, {}, parsed->emoji_trigger, {}, parsed->max_candidates);
@@ -399,13 +407,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     const uint32_t reserve =
         parsed->live ? 0
                      : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
-    const auto ordinary_limit = parsed->max_candidates > reserve ? parsed->max_candidates - reserve
-                                                                 : parsed->max_candidates;
+    const auto ordinary_limit = parsed->max_candidates;
+    const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
     candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(),
                                           cancel.get(), ordinary_limit, parsed->live);
     if (!parsed->live && (rewriters.symbol_enabled || rewriters.emoji_enabled))
       candidates = engine_->QueryRewriters(rewriters, parsed->reading, {}, std::move(candidates),
-                                           parsed->max_candidates);
+                                           merged_limit);
   }
 
   const bool canceled = cancel->load(std::memory_order_acquire);
@@ -416,7 +424,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   ipc::QueryCandidatesResponse res;
   for (auto& c : candidates) res.candidates.push_back(ToField(c));
-  if (parsed->max_candidates > 0 && res.candidates.size() > parsed->max_candidates) {
+  if (!parsed->emoji_trigger.empty() && parsed->max_candidates > 0 &&
+      res.candidates.size() > parsed->max_candidates) {
     res.candidates.resize(parsed->max_candidates);
   }
   res.partial = false;

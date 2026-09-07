@@ -319,6 +319,8 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
 
 std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p) {
   j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  if (p.error) o.emplace("error", j::Value(*p.error));
   j::Array arr;
   for (const auto& c : p.candidates) arr.push_back(CandidateToJson(c));
   o.emplace("candidates", j::Value(std::move(arr)));
@@ -330,6 +332,8 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
   auto v = ParseObject(json);
   if (!v) return std::nullopt;
   QueryCandidatesResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  p.error = v->GetString("error");
   if (const auto* arr = v->GetArray("candidates")) {
     // Skip malformed entries (non-object, or missing surface/reading) instead of
     // failing the whole response. This lenient decode is the module-wide

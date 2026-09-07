@@ -459,3 +459,19 @@ TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseCancel("{}").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryDiagnostics(R"({"engine":"mock"})").has_value());
 }
+
+TEST(PayloadsTest, QueryErrorIsOptionalAndRoundTrips) {
+  const auto old =
+      azookey::ipc::ParseQueryCandidatesResponse(R"({"candidates":[],"partial":false})");
+  ASSERT_TRUE(old);
+  EXPECT_TRUE(old->ok);
+  EXPECT_FALSE(old->error);
+  azookey::ipc::QueryCandidatesResponse error;
+  error.ok = false;
+  error.error = "invalid query";
+  const auto parsed =
+      azookey::ipc::ParseQueryCandidatesResponse(azookey::ipc::BuildQueryCandidatesResponse(error));
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, error.error);
+}

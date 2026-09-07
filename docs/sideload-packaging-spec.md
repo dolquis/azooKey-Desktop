@@ -1480,6 +1480,11 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 
 ## 4. WiX / MSI インストーラ（MVP 既定 / 旧 M31）
 
+MSI の最小 OS は Windows 10 version 1903（build 18362）とする。
+Host が静的リンクする [OS 付属 ICU](https://learn.microsoft.com/en-us/windows/win32/intl/international-components-for-unicode--icu-)
+の下限に合わせ、MSI はレジストリの `CurrentBuildNumber` を検査して旧 OS への新規インストールを拒否する。
+既存インストールの削除はこの条件で妨げない。リライターが既定 OFF でも ICU のロード要件は変わらない。
+
 > **スコープ注記（§0 配布方針）**: 本節の **WiX MSI が v1.0 MVP の既定配布形態**（未署名、DEV-415）。
 > 当初は MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）向けの代替として位置づけていたが、
 > 配布方針転換により MVP の主経路へ格上げした。MSIX は §1（MS Store 用）に回す。MSI は署名が任意で、

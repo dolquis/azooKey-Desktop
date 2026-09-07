@@ -1,7 +1,6 @@
 #include "azookey/host/RewriterData.h"
 
 #include <fstream>
-#include <iostream>
 #include <iterator>
 
 #ifdef _WIN32
@@ -35,10 +34,12 @@ std::shared_ptr<const core::RewriterIndex> RewriterData::Get(bool emoji,
   if (!(emoji ? config.emoji_enabled : config.symbol_enabled)) return {};
   auto& slot = emoji ? emoji_ : symbol_;
   std::lock_guard lock(slot.mutex);
-  if (slot.attempted) return slot.index;
-  slot.attempted = true;
   const auto configured = emoji ? config.emoji_path : config.symbol_path;
-  const auto path = configured.empty() ? DataPath(emoji) : configured;
+  const auto path = (configured.empty() ? DataPath(emoji) : configured).lexically_normal();
+  if (slot.attempted && slot.path == path) return slot.index;
+  slot.path = path;
+  slot.attempted = true;
+  slot.index.reset();
   std::ifstream stream(path, std::ios::binary);
   size_t invalid = 0;
   if (stream) {
@@ -57,8 +58,6 @@ std::shared_ptr<const core::RewriterIndex> RewriterData::Get(bool emoji,
       logger->Log(logging::RuntimeLogLevel::Warn, event,
                   {{"loaded", static_cast<bool>(slot.index)},
                    {"invalid_rows", static_cast<uint64_t>(invalid)}});
-    std::cerr << "[host] " << event << ": loaded=" << static_cast<bool>(slot.index)
-              << " invalid_rows=" << invalid << '\n';
   }
   return slot.index;
 }

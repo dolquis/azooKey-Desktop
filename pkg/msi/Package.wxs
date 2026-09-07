@@ -11,6 +11,13 @@
       Compressed="yes">
     <SummaryInformation Description="azooKey Windows Japanese input method" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="WINDOWSBUILDNUMBER" Secure="yes">
+      <RegistrySearch Id="WindowsBuildSearch" Root="HKLM"
+          Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+          Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR (WINDOWSBUILDNUMBER &gt;= 18362)"
+        Message="azooKey requires Windows 10 version 1903 (build 18362) or later." />
     <MajorUpgrade
         Schedule="afterInstallInitialize"
         DowngradeErrorMessage="A newer version of azooKey is already installed." />

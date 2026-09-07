@@ -188,6 +188,9 @@ TSF への翻訳は §5。実装は既存 `tsf-tip/src/TextService.cpp::ApplyCli
   キャレットは `open` と `close` の間（`ITfRange` の内側境界）に置く。
 - ライブ変換（M14）/ 候補窓は使わない（固定対のため候補を問い合わせない）。確定操作で
   `EndComposition` し、カーソルを内側に残す（§5.2）。
+- 矢印・Home/End・Delete 等をアプリへ渡す場合は、`OnTestKeyDown` 内で composition を確定して
+  `FALSE` を返す。アプリが元のキーを処理した後にキャレットを戻さない。確定ロックが拒否された
+  場合は composition を保持してそのキーを消費し、次のキーで再試行する。
 - 確定前に Esc → composition 破棄（カッコは挿入されない）。確定前に別の開きカッコ →
   現対を確定してから新対を挿入（ネスト。§4.1.2）。
 - この方式は当初ユーザー記述「`「` → `」` → Enter」に対応するが、既定は immediate と
@@ -332,22 +335,29 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
   - `denylist`: **組み込み既定 denylist（定数シード）∪ `bracketPairingApps`** に載るアプリで
     本機能を無効化、その他で有効。
   - `allowlist`: `bracketPairingApps` に載るアプリでのみ有効（組み込みシードは無視）。
-- **M48 アプリ別入力プロファイル（`docs/app-profile-spec.md`）**: M48 完了後は per-app の
-  有効/無効をプロファイルが持ち、**`bracketPairingApps` 設定より優先**する。ただし M48 の
-  `profilesByApp` 各プロファイルは `additionalProperties: false`（同 spec §4）で、現状
-  カッコペアリング用フィールドが無い。よって **M61-B は M48 プロファイルスキーマ（同 §4.1）へ
-  専用フィールドを追加する**（`docs/app-profile-spec.md` の更新を M61-B の作業に含める）:
-  - 追加フィールド: `bracketPairing`（enum `auto` / `on` / `off`、既定 `auto`）。`auto` =
+- **M48 アプリ別入力プロファイル（`docs/app-profile-spec.md`）**: 共通 resolver で解決した
+  有効/無効が **`bracketPairingApps` 設定より優先**する。`profilesByApp` の schema と
+  validator は M48 の共通基盤を使い、TIP の設定読み込み時に不変スナップショットを作る。
+  - フィールド: `bracketPairing`（enum `auto` / `on` / `off`、既定 `auto`）。`auto` =
     グローバル設定（`bracketPairing` + `bracketPairingApps`/`bracketPairingAppPolicy`）に従う、
     `on`/`off` = 当該アプリで明示的に有効/無効（resolver は §4 の優先順位
     `profilesByApp[process]` → `[window_class]` → `["default"]` で解決）。
-  - M48 未実装の間は本フィールドが無いため、`bracketPairingApps` 設定が単独の per-app 源になる
-    （後方互換）。M48 実装と同時に本フィールドを追加し、`auto` 既定で従来挙動を保つ。
+  - 未指定は下位プロファイルを継承する。明示した `auto` は下位の `on` / `off` を解除して
+    リスト判定に戻す。全レイヤで未指定なら従来挙動を保つ。不正な型・enum は未指定として扱う。
 
 組み込み既定 denylist（`denylist` ポリシー時のシード。定数。実機・フィードバックで調整）:
 `Code.exe`（VS Code）/ `devenv.exe`（Visual Studio）/ `idea64.exe`・`pycharm64.exe` 等
 JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既定で働くため。`allowlist`
 ポリシーではこのシードを使わず `bracketPairingApps` のみを許可集合とする。
+
+TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセスの実行ファイル名を取得する。
+シェルの `ApplicationFrameHost.exe` や他プロセスのオーバーレイを入力先として扱わない。
+ウィンドウクラスは同じスレッドのフォーカス HWND から、自プロセスが所有する root HWND を
+優先して取得する。root が別プロセスならフォーカス HWND を使い、取得不能ならクラスは空とする。
+プロセス名の比較は Windows の序数比較で大小文字を無視し、ウィンドウタイトルは取得・記録・送信しない。
+プロセス名の取得に失敗した場合は、default プロファイルが `on` でもペアリングを抑制する。
+設定スナップショットは判定ごとに参照するため、denylist / allowlist とプロファイルの変更は
+読み込み完了後の次のキーから反映される。キー処理中のファイル I/O や Host 通信は行わない。
 
 #### 4.5.1 カッコ対応表の外部化（TSV、M61-B）
 
@@ -364,6 +374,13 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
 - マージ規則: 組み込み既定を常にロードし、TSV 行は `open` キーで上書き・新規追加、
   `off` フラグで無効化（M59 §4.1.4 と同方針）。
 - ファイル無しなら組み込み既定のみで動作（後方互換）。不正行は warning ログでスキップ。
+- `bracketPairsPath` が空なら既定パスを使い、相対パスは azooKey データディレクトリを
+  基準に解決する。UTF-8 の各列は BMP の表示文字 1 文字に限る。空行と `#` で始まる行は
+  読み飛ばし、未知のフラグ、余分な列、制御文字、不正 UTF-8 は行単位で除外する。
+  同じ `open` の有効行が複数ある場合は後の行を採用する。
+  warning は不正行の件数と最初の行番号を記録し、本文とパスは記録しない。
+  TIP は設定と TSV をそれぞれ最大 1 MiB まで読み、解析した表を不変のスナップショットとして
+  公開する。削除時は組み込み表へ戻し、パス設定の変更時は監視先も切り替える。
 - ファイルが無くても**コア（M61-A）は組み込み既定の対応表で完全動作**する。TSV 外部化と
   per-app プロファイル統合は M61-B。
 
@@ -389,6 +406,10 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
   （`BatchAccumulating`）は、カッコもローマ字バッファに**リテラル蓄積**し、ペアリングは
   **抑制**する（一括変換のバッファ正典性を保つため）。一括確定後の `Idle` ではペアリングが
   通常どおり働く。これにより蓄積中にカッコ対が割り込んでバッファ意味論を崩さない。
+  蓄積時の判定・保存は全角化前の生の入力文字を使い、`alnum_full` でも ASCII の `[` 等を保持する。
+  一括確定時に既存バッファのカッコを遡ってペア化せず、確定後の新しい打鍵から通常判定に戻る。
+- **通常の英字入力**: `inputMode` は本機能ではカッコ字形とペアリング可否にだけ使う。
+  カッコ以外のローマ字変換をマスター設定やアプリリストの判定で切り替えない。
 - **再変換（M20）**: 自動挿入されたカッコは読みを持たない確定済みリテラルであり、
   再変換時は文節境界 / リテラルとして扱い読みへ逆変換しない（`docs/dynamic-punctuation-spec.md`
   §5 のカッコ版。詳細は M20 統合時に `docs/tsf-deep-integration-spec.md` 側で確定）。
@@ -402,7 +423,9 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
   サロゲート片が来ても、比較対象が BMP カッコ文字なので一致せず、安全に通常挙動へ落ちる。
 - **読み取り EditSession 失敗時のフォールバック。** スキップ / 削除判定のための同期読取
   EditSession（§5.3）が拒否される、または `GetSelection` が失敗するときは、判定を諦め
-  **リテラル挿入 / 通常 Backspace**にフォールバックする（入力を絶対に失わない）。
+  **リテラル挿入 / 通常 Backspace**にフォールバックする。すでにキーを引き受けた後の
+  書込拒否・再検証失敗では、キーを消費して文書を保持し、不正な部分編集やキーの再送を避ける。
+  preedit の確定が未完了なら確定内容を保持し、次のキーで既存の確定リトライ経路へ進む。
 - **範囲選択中。** §4.2 / §4.3 は collapsed カーソル前提。範囲選択中の Backspace は通常
   削除。範囲選択中の開きカッコは、`bracketWrapSelection`（M61-B）が ON なら囲み（§ 下記）、
   OFF なら選択置換のリテラル挿入（アプリ既定）。
@@ -411,11 +434,20 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
 
 `bracketWrapSelection == true`（M61-B、既定 OFF）かつ範囲選択中に開きカッコを打鍵すると、
 選択範囲を `open`…`close` で囲む（例: 選択 `あ` + `「` → `「あ」`、カーソルは閉じカッコの
-後ろ or 選択を維持。実装時に確定）。`GetSelection` で範囲テキストを取得し、`open`+選択+
+後ろに置く）。`GetSelection` で範囲テキストを取得し、`open`+選択+
 `close` を 1 回の `SetText` で置換する。**コア（M61-A）には含めない**（ユーザー選択スコープ
-外）。本節は将来挙動の定義であり、既定 OFF。
+外）。既定 OFF。囲みは即時に確定し、`bracketPairingTrigger` の composition は使わない。
+選択の読取は書込ロック内で最大 65,536 UTF-16 code unit までとする。読取失敗や上限超過では
+部分的な囲みを書かず、同じ書込ロック内で選択を開きカッコ 1 文字に置換する通常のリテラル入力へ戻す。
+`OnTestKeyDown` と `OnKeyDown` はキーを消費する回答を維持する。キャレット設定だけが失敗した場合は、
+挿入済みテキストを再送しない。
 
 ## 5. TSF 操作（ClientAction → TSF 翻訳）
+
+カッコ判定の実装入口は `core::EvaluateBracketInput` / `EvaluateBracketBackspace` とする。
+`TextService::HandleBracketKey` が `EditContextHint` と設定スナップショットを渡し、返された
+`BracketPairingAction` を `BracketEditSession` が以下の TSF 操作へ翻訳する。core は文書を
+直接参照せず、通常のローマ字入力・候補確定は既存 `TextService` の経路で処理する。
 
 `docs/legacy-parity-spec.md` §1.3 の表に以下を追加する。実装は既存の commit 経路
 （`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`、現状
@@ -493,11 +525,10 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
 
 ## 6. 設定スキーマ
 
-実装時に `settings/mvp-settings.schema.json` へ以下を追加する
-（`additionalProperties:false` を維持。`description` に対応 M を記載する既存流儀に
-合わせる）。本書（spec）が設定キーの正典であり、実ファイルへの追加は M61 実装時に
-行う（本セッションは設計確定のみでスキーマファイルは変更しない。`docs/dynamic-punctuation-spec.md`
-§8 と同方針）。
+本書が M61 設定キーの正典であり、`settings/mvp-settings.schema.json` と
+`settings/default-settings.sample.json` は対応する M61-A / M61-B の型・既定値を共有する。
+スキーマの `additionalProperties:false` を維持し、`description` に対応 M を記載する。
+M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の読込成功に依存しない。
 
 | キー | 型 | 既定 | M | 説明 |
 |---|---|---|---|---|
@@ -524,10 +555,18 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
   正典パス。`config\` サブディレクトリ配下。schema = `settings/mvp-settings.schema.json`）を
   **TIP プロセス内で読み取る**（IPC を介さない）。設定 UI / host が書き込むのと**同一ファイル**を
   TIP が読むため、Host-offline でも `bracketPairing` が確実に反映される。読み取りは TIP 有効化時
-  （`ActivateEx`）に 1 回、以後は M17 の `ReadDirectoryChangesW` 監視基盤を再利用してホット
-  リロードする（変更検出で新規入力から実効値を差し替え。進行中の composition は触らない）。
+  （`ActivateEx`）に行い、`TipLocalSettings` が `ReadDirectoryChangesW` でホットリロードする。
+  監視スレッドは TSF / COM オブジェクトを操作せず、打鍵側へ値のスナップショットを渡す。
+  有効化時に同期読取するのは初期スナップショット 1 回とし、監視登録後の再読込は worker で行う。
+  変更検出で新規入力から実効値を差し替え、進行中のカッコ composition は確定・取消まで保持する。
 - ファイルが無い / パース不能なら **schema 既定値**（`bracketPairing=false` 等）にフォールバック
   する（後方互換・既定 OFF）。これにより Host 未起動・切断時でも本機能の ON/OFF を確定できる。
+  読込は最大 1 MiB とし、読取不能・上限超過も同じ既定値へ戻す。監視は設定ディレクトリの
+  作成と設定ファイルの置換・削除を検出し、読取ハンドルは削除共有を許可して置換を妨げない。
+  設定・TSV それぞれの直近の既存親ディレクトリを非再帰で監視する。親が未作成なら次の
+  子ディレクトリの作成を検出して監視を付け替え、LocalAppData やドライブ全体を再帰監視しない。
+  `Deactivate` は監視 I/O をキャンセルして終了を待ち、ハンドルを解放する。TIP は設定を作成・
+  書換え・隔離せず、設定本文をログへ出さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
   TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定 UI / 既存経路）。
 - 設定 UI（M30）完成までは、この settings.json を手編集 / 環境変数で補う（host CLI 経由には

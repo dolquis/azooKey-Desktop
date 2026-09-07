@@ -285,6 +285,8 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
   }
 
   result.settings = ParseRuntimeSettings(parsed->AsObject());
+  result.settings.app_profiles = std::make_shared<const core::AppProfileResolver>(
+      core::AppProfileResolver::FromSettings(*parsed, &result.profile_warnings));
   result.status = SettingsLoadStatus::Loaded;
   settings_ = result.settings;
   last_result_ = result;

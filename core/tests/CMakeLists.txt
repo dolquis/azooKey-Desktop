@@ -1,4 +1,6 @@
 add_executable(core_tests
+  app_profile_resolver_test.cpp
+  bracket_pairing_test.cpp
   command_line_test.cpp
   katakana_rewriter_test.cpp
   live_conversion_chunker_test.cpp

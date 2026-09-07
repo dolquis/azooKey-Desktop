@@ -38,6 +38,31 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 
 }  // namespace
 
+TEST(SettingsStoreTest, LoadsCommonProfilesAndReloadKeepsPreviousSnapshotImmutable) {
+  const auto dir = TestDir("azookey_settings_profiles");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"predictionEnabled":false,"profilesByApp":{
+    "default":{"learningEnabled":false},"code.exe":{"style":"technical","bad":true}}})");
+  azookey::host::SettingsStore store(path);
+  const auto loaded = store.Load();
+  ASSERT_EQ(loaded.status, azookey::host::SettingsLoadStatus::Loaded);
+  ASSERT_FALSE(loaded.profile_warnings.empty());
+  const azookey::core::ForegroundApp app{"CODE.EXE", "", true};
+  const azookey::ipc::json::Value first(loaded.settings.AppProfiles().Resolve(app));
+  EXPECT_EQ(first.GetString("style"), "technical");
+  EXPECT_EQ(first.GetBool("predictionEnabled"), false);
+  EXPECT_EQ(first.GetBool("learningEnabled"), false);
+  WriteText(path, R"({"profilesByApp":{"code.exe":{"style":"polite"}}})");
+  const auto reloaded = store.Reload();
+  EXPECT_EQ(
+      azookey::ipc::json::Value(reloaded.settings.AppProfiles().Resolve(app)).GetString("style"),
+      "polite");
+  EXPECT_EQ(
+      azookey::ipc::json::Value(loaded.settings.AppProfiles().Resolve(app)).GetString("style"),
+      "technical");
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   const auto dir = TestDir("azookey_settings_missing");
   const auto path = dir / "settings.json";

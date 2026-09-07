@@ -1,4 +1,8 @@
 add_library(azookey_core STATIC
+  src/AppProfileResolver.cpp
+  src/BracketPairing.cpp
+  src/BracketSettings.cpp
+  src/BracketTable.cpp
   src/CommandLine.cpp
   src/DoubleArrayTrie.cpp
   src/KatakanaRewriter.cpp
@@ -18,8 +22,8 @@ target_include_directories(azookey_core
 )
 
 target_link_libraries(azookey_core
-  PUBLIC azookey_project_options
-  PRIVATE azookey_project_warnings azookey_json
+  PUBLIC azookey_project_options azookey_json
+  PRIVATE azookey_project_warnings
 )
 if(WIN32)
   target_link_libraries(azookey_core PRIVATE ole32 shell32)

@@ -16,6 +16,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#ifdef GetObject
+#undef GetObject
+#endif
 #endif
 
 #include "SettingsDocument.h"
@@ -44,6 +47,33 @@ std::string ReadText(const std::filesystem::path& path) {
 }
 
 }  // namespace
+
+TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValues) {
+  const auto dir = TestDir("azookey_settings_profile_writeback");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"profilesByApp":{"Code.exe":{
+    "profileName":"Code","predictionEnabled":false,"sentenceCompletion":true,
+    "learningEnabled":false,"aiBackend":"auto","promptPrefix":"","style":"technical",
+    "preferTechnicalTerms":true,"candidateTagBoosts":{"Technical":100},"privacyMode":"secure",
+    "bracketPairing":"on","invalid":false},"Bad":false}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok);
+  EXPECT_FALSE(saved.warnings.empty());
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed);
+  const auto* profiles = parsed->GetObject("profilesByApp");
+  ASSERT_NE(profiles, nullptr);
+  ASSERT_EQ(profiles->size(), 1u);
+  const auto& profile = profiles->at("Code.exe");
+  EXPECT_EQ(profile.AsObject().size(), 11u);
+  EXPECT_EQ(profile.GetString("bracketPairing"), "on");
+  EXPECT_EQ(profile.GetString("privacyMode"), "secure");
+  EXPECT_EQ(profile.GetString("promptPrefix"), "");
+  EXPECT_EQ(profile.GetString("aiBackend"), "auto");
+  EXPECT_EQ(profile.GetObject("candidateTagBoosts")->at("Technical").AsNumber(), 3);
+  std::filesystem::remove_all(dir);
+}
 
 TEST(SettingsDocumentTest, MissingFileUsesM11Defaults) {
   const auto dir = TestDir("azookey_settings_document_missing");
@@ -126,6 +156,31 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   EXPECT_FALSE(model.contains("unknownModel"));
   EXPECT_EQ(root.at("logLevel").AsString(), "debug");
   EXPECT_FALSE(saved.warnings.empty());
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfiguration) {
+  const auto dir = TestDir("azookey_settings_brackets");
+  const auto path = dir / "settings.json";
+  const std::string json = R"({"bracketPairing":true,"bracketPairingTrigger":"composition",
+      "bracketSkipOverClosing":false,"bracketBackspaceDeletesPair":false,
+      "bracketPairingInAlnumMode":false,"bracketPairsPath":"pairs.tsv",
+      "bracketPairingAppPolicy":"allowlist","bracketPairingApps":["Code.exe"],
+      "bracketSymmetricQuotePairing":true,"bracketWrapSelection":true})";
+  WriteText(path, json);
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok);
+  EXPECT_TRUE(saved.warnings.empty());
+  const auto actual = azookey::ipc::json::Parse(ReadText(path));
+  const auto expected = azookey::ipc::json::Parse(json);
+  ASSERT_TRUE(actual && expected);
+  for (const auto& [key, value] : expected->AsObject()) {
+    ASSERT_TRUE(actual->AsObject().contains(key)) << key;
+    EXPECT_EQ(azookey::ipc::json::Stringify(actual->AsObject().at(key)),
+              azookey::ipc::json::Stringify(value))
+        << key;
+  }
   std::filesystem::remove_all(dir);
 }
 

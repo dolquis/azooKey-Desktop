@@ -30,6 +30,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
   target_link_libraries(azookey_settings_persistence_tests
     PRIVATE
       azookey_learning
+      azookey_core
       azookey_ipc
       GTest::gtest_main
       azookey_project_options

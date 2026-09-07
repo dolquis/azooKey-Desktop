@@ -143,7 +143,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "contextReselection" || key == "postCommitLint" ||
                key == "retroactiveRecompute" || key == "sentenceCompletion" ||
                key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
-               key == "numberRewriter" || key == "katakanaRewriter" || key == "bracketPairing" ||
+               key == "numberRewriter" || key == "katakanaRewriter" || key == "symbolRewriter" ||
+               key == "emojiRewriter" || key == "emojiTriggerSearch" || key == "bracketPairing" ||
                key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
                key == "bracketPairingInAlnumMode" || key == "bracketSymmetricQuotePairing" ||
                key == "bracketWrapSelection") {
@@ -160,7 +161,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     } else if (key == "inputStyle") {
       valid = IsStringEnum(value, {"default", "custom"});
     } else if (key == "customRomajiTablePath" || key == "openAiApiKey" ||
-               key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath") {
+               key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath" ||
+               key == "symbolDataPath" || key == "emojiDataPath") {
       valid = value.IsString();
     } else if (key == "aiBackend") {
       valid = IsStringEnum(value, {"none", "openai", "local-zenzai"});
@@ -174,6 +176,10 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsInteger(value, 0.0, 8.0);
     } else if (key == "maxCandidates") {
       valid = IsInteger(value, 1.0, 32.0);
+    } else if (key == "emojiMaxCandidates") {
+      valid = IsInteger(value, 1.0, 50.0);
+    } else if (key == "emojiTriggerMinQueryLength") {
+      valid = IsInteger(value, 1.0, 8.0);
     } else if (key == "maxContextLength") {
       valid = IsInteger(value, 0.0, 30.0);
     } else if (key == "batchRomajiPreviewStyle") {

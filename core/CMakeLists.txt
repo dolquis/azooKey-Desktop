@@ -10,9 +10,13 @@ add_library(azookey_core STATIC
   src/NumberRewriter.cpp
   src/PlatformPaths.cpp
   src/Redaction.cpp
+  src/RewriterIndex.cpp
+  src/RewriterNormalization.cpp
   src/RuntimeLogger.cpp
   src/RomajiKanaConverter.cpp
   src/SimpleConverter.cpp
+  src/SymbolChainTable.cpp
+  src/SymbolRewriter.cpp
   src/Utf8.cpp
 )
 
@@ -26,5 +30,8 @@ target_link_libraries(azookey_core
   PRIVATE azookey_project_warnings
 )
 if(WIN32)
-  target_link_libraries(azookey_core PRIVATE ole32 shell32)
+  target_link_libraries(azookey_core PRIVATE ole32 shell32 icu)
+else()
+  find_package(ICU REQUIRED COMPONENTS uc)
+  target_link_libraries(azookey_core PRIVATE ICU::uc)
 endif()

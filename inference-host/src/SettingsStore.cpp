@@ -9,6 +9,8 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/PlatformPaths.h"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -182,6 +184,16 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadBool(object, "batchAutoPunctuation", settings.batch_auto_punctuation);
   settings.number_rewriter = ReadBool(object, "numberRewriter", settings.number_rewriter);
   settings.katakana_rewriter = ReadBool(object, "katakanaRewriter", settings.katakana_rewriter);
+  settings.symbol_rewriter = ReadBool(object, "symbolRewriter", settings.symbol_rewriter);
+  settings.symbol_data_path = ReadString(object, "symbolDataPath", settings.symbol_data_path);
+  settings.emoji_rewriter = ReadBool(object, "emojiRewriter", settings.emoji_rewriter);
+  settings.emoji_trigger_search =
+      ReadBool(object, "emojiTriggerSearch", settings.emoji_trigger_search);
+  settings.emoji_max_candidates =
+      ReadClampedInt32(object, "emojiMaxCandidates", settings.emoji_max_candidates, 1, 50);
+  settings.emoji_trigger_min_query_length = ReadClampedInt32(
+      object, "emojiTriggerMinQueryLength", settings.emoji_trigger_min_query_length, 1, 8);
+  settings.emoji_data_path = ReadString(object, "emojiDataPath", settings.emoji_data_path);
 
   if (const auto* model = ReadObject(object, "model")) {
     settings.model.enabled = ReadBool(*model, "enabled", settings.model.enabled);
@@ -319,6 +331,11 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
     EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
     const InferenceThreadEnvironmentProvider& provider) {
   config.enable_live_conversion = settings.live_conversion;
+  config.rewriters.symbol_enabled = settings.symbol_rewriter;
+  config.rewriters.emoji_enabled = settings.emoji_rewriter;
+  config.rewriters.trigger_enabled = settings.emoji_trigger_search;
+  config.rewriters.symbol_path = core::Utf8Path(settings.symbol_data_path);
+  config.rewriters.emoji_path = core::Utf8Path(settings.emoji_data_path);
   config.nll = ClampNllConfig(settings.nll);
   if (settings.inference_threads > 0) {
     config.inference_threads = settings.inference_threads;

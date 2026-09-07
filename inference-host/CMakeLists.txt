@@ -17,6 +17,7 @@ add_library(azookey_host STATIC
   src/ModelCatalog.cpp
   src/NllScorer.cpp
   src/RequestScheduler.cpp
+  src/RewriterData.cpp
   src/SettingsStore.cpp
   src/UserDictCli.cpp
   src/ZenzaiModelConverter.cpp
@@ -45,6 +46,14 @@ if(WIN32)
 endif()
 
 add_executable(azookey_inference_host src/main.cpp)
+set_property(TARGET azookey_inference_host APPEND PROPERTY LINK_DEPENDS
+  "${PROJECT_SOURCE_DIR}/data/symbol.tsv" "${PROJECT_SOURCE_DIR}/data/emoji.tsv")
+add_custom_command(TARGET azookey_inference_host POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:azookey_inference_host>/data"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${PROJECT_SOURCE_DIR}/data/symbol.tsv" "${PROJECT_SOURCE_DIR}/data/emoji.tsv"
+    "$<TARGET_FILE_DIR:azookey_inference_host>/data"
+)
 target_link_libraries(azookey_inference_host
   PRIVATE
     azookey_host

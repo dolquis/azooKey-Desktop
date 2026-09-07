@@ -30,6 +30,11 @@ struct HandshakeResponse {
   bool number_rewriter{false};
   bool katakana_rewriter{false};
   uint32_t max_candidates{9};
+  bool symbol_rewriter{false};
+  bool emoji_rewriter{false};
+  bool emoji_trigger_search{true};
+  uint32_t emoji_max_candidates{12};
+  uint32_t emoji_trigger_min_query_length{1};
 };
 
 struct PingPayload {
@@ -76,6 +81,7 @@ struct CandidateField {
   std::string reading;
   double score{};
   std::string source;
+  std::string description;
 };
 
 struct QueryCandidatesRequest {
@@ -83,11 +89,14 @@ struct QueryCandidatesRequest {
   std::string left_context;
   uint32_t max_candidates{10};
   bool live{false};
+  std::string emoji_trigger;
 };
 
 struct QueryCandidatesResponse {
   std::vector<CandidateField> candidates;
   bool partial{false};
+  bool ok{true};
+  std::optional<std::string> error;
 };
 
 struct BatchConversionSegment {

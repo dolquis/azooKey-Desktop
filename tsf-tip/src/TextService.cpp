@@ -21,6 +21,7 @@
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -139,11 +140,13 @@ std::wstring Utf8ToWide(const std::string& utf8) {
 
 std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
     const std::string& reading, std::vector<azookey::ipc::CandidateField> candidates,
-    bool number_rewriter_enabled, bool katakana_rewriter_enabled) {
+    bool number_rewriter_enabled, bool katakana_rewriter_enabled,
+    bool symbol_rewriter_enabled = false) {
   std::vector<azookey::tsf::TipCandidate> result;
   result.reserve(candidates.size() + 8);
   for (auto& candidate : candidates) {
-    result.push_back({std::move(candidate), {}});
+    auto description = candidate.description;
+    result.push_back({std::move(candidate), std::move(description), false});
   }
 
   auto append_rewritten = [&](const std::vector<azookey::core::Candidate>& rewritten) {
@@ -157,8 +160,9 @@ std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
       candidate.surface = item.surface;
       candidate.reading = item.reading;
       candidate.score = item.score;
-      candidate.source = "heuristic";
-      result.push_back({std::move(candidate), item.description});
+      candidate.source =
+          item.source == azookey::core::CandidateSource::Symbol ? "symbol" : "heuristic";
+      result.push_back({std::move(candidate), item.description, true});
     }
   };
 
@@ -167,6 +171,18 @@ std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
   }
   if (katakana_rewriter_enabled) {
     append_rewritten(azookey::core::ExpandKatakanaCandidates(reading));
+  }
+  if (symbol_rewriter_enabled) {
+    std::vector<azookey::core::Candidate> seeds;
+    for (const auto& item : result) {
+      azookey::core::Candidate seed;
+      seed.surface = item.field.surface;
+      seeds.push_back(std::move(seed));
+    }
+    const auto original_size = seeds.size();
+    azookey::core::AppendSymbolChain(seeds, reading);
+    seeds.erase(seeds.begin(), seeds.begin() + static_cast<std::ptrdiff_t>(original_size));
+    append_rewritten(seeds);
   }
   return result;
 }
@@ -194,7 +210,8 @@ std::vector<azookey::ipc::CandidateField> HostCandidateFields(
   std::vector<azookey::ipc::CandidateField> fields;
   fields.reserve(candidates.size());
   for (const auto& candidate : candidates) {
-    if (candidate.description.empty()) fields.push_back(candidate.field);
+    if (!candidate.local && candidate.field.source != "symbol" && candidate.field.source != "emoji")
+      fields.push_back(candidate.field);
   }
   return fields;
 }
@@ -938,6 +955,93 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   return S_OK;
 }
 
+HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
+                                    bool test_only, bool& handled) {
+  handled = false;
+  // The existing directory watcher publishes settings without I/O on the key thread.
+  if (const auto options = local_settings_.RewriterSnapshot()) {
+    symbol_rewriter_.store(options->symbol, std::memory_order_relaxed);
+    emoji_rewriter_.store(options->emoji, std::memory_order_relaxed);
+    emoji_trigger_search_.store(options->trigger, std::memory_order_relaxed);
+    emoji_max_candidates_.store(options->maximum, std::memory_order_relaxed);
+    emoji_trigger_min_query_length_.store(options->minimum, std::memory_order_relaxed);
+  }
+  const bool enabled = emoji_rewriter_.load(std::memory_order_relaxed) &&
+                       emoji_trigger_search_.load(std::memory_order_relaxed) &&
+                       local_settings_.Snapshot().input_mode == core::BracketInputMode::Hiragana;
+  if (!enabled && emoji_mode_ == EmojiMode::Inactive) return S_OK;
+  const auto character = CurrentBracketCharacter(key, key_data);
+  const bool colon = character && *character == L':';
+  const bool entering = emoji_mode_ == EmojiMode::Inactive && enabled && colon &&
+                        CurrentPreeditSurface().empty() && !composition_ && !bracket_composition_;
+  if (!entering && emoji_mode_ == EmojiMode::Inactive) return S_OK;
+  if (!enabled && !test_only) {
+    emoji_mode_ = EmojiMode::Inactive;
+    CancelPendingQueriesForLifecycle();
+    ClearCandidateStateForLifecycle();
+    return S_OK;
+  }
+  const bool query_character =
+      character &&
+      ((*character >= L'A' && *character <= L'Z') || (*character >= L'a' && *character <= L'z') ||
+       (*character >= L'0' && *character <= L'9') || *character == L'_' || *character == L'+' ||
+       *character == L'-');
+  const bool listing = emoji_mode_ == EmojiMode::Listing && candidate_ui_.IsShowing();
+  if (entering || query_character || colon || key == VK_BACK || key == VK_ESCAPE ||
+      key == VK_RETURN || (listing && (key == VK_UP || key == VK_DOWN || key == VK_SPACE))) {
+    handled = true;
+    *eaten = TRUE;
+  }
+  if (test_only) return S_OK;
+  if (listing && (key == VK_RETURN || colon)) return CommitSelected(context);
+  if (listing && (key == VK_UP || key == VK_DOWN || key == VK_SPACE)) {
+    const auto hr = candidate_ui_.MoveSelection(key == VK_UP ? -1 : 1);
+    if (SUCCEEDED(hr)) selected_candidate_idx_ = candidate_ui_.GetSelected();
+    return hr;
+  }
+  if (key == VK_ESCAPE) {
+    CancelPendingQueriesForLifecycle();
+    ClearCandidateStateForLifecycle();
+    emoji_mode_ = listing ? EmojiMode::Collecting : EmojiMode::Inactive;
+    return S_OK;
+  }
+  if (key == VK_RETURN) return CommitPreeditAsIs(context);
+  if (!entering && !query_character && key != VK_BACK && !colon) {
+    // Leave the literal query in composition and process this key normally.
+    emoji_mode_ = EmojiMode::Inactive;
+    CancelPendingQueriesForLifecycle();
+    ClearCandidateStateForLifecycle();
+    return S_OK;
+  }
+  const auto previous = preedit_kana_;
+  const auto previous_mode = emoji_mode_;
+  if (entering)
+    preedit_kana_ = ":";
+  else if (key == VK_BACK) {
+    if (!preedit_kana_.empty()) preedit_kana_.pop_back();  // query is ASCII only
+  } else
+    preedit_kana_.push_back(static_cast<char>(*character));
+  emoji_mode_ =
+      preedit_kana_.empty() || (!entering && colon) ? EmojiMode::Inactive : EmojiMode::Collecting;
+  const auto hr = RequestPreeditUpdate(context);
+  if (FAILED(hr)) {
+    preedit_kana_ = previous;
+    emoji_mode_ = previous_mode;
+    return hr;
+  }
+  CancelPendingQueriesForLifecycle();
+  ClearCandidateStateForLifecycle();
+  if (emoji_mode_ != EmojiMode::Inactive && preedit_kana_.size() > 1 &&
+      preedit_kana_.size() - 1 >= emoji_trigger_min_query_length_.load(std::memory_order_relaxed)) {
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      candidate_window_show_pending_ = true;
+    }
+    PostQueryCandidates({}, false, preedit_kana_.substr(1));
+  }
+  return S_OK;
+}
+
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                         BOOL* eaten) {
   AZOOKEY_ASSERT_UI_THREAD();
@@ -958,6 +1062,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       return S_OK;
     }
 
+    bool emoji_handled = false;
+    const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, true, emoji_handled);
+    if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
     bool bracket_handled = false;
     const HRESULT bracket_hr =
         HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled);
@@ -1058,6 +1165,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
 
+    bool emoji_handled = false;
+    const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
+    if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
     bool bracket_handled = false;
     const HRESULT bracket_hr =
         HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
@@ -1344,6 +1454,21 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           } else {
             // Snapshot the candidate list so commit always reflects what was
             // displayed, even if a late QueryCandidates response arrives later.
+            if (symbol_rewriter_.load(std::memory_order_relaxed) ||
+                emoji_rewriter_.load(std::memory_order_relaxed)) {
+              {
+                std::scoped_lock lk(candidates_mtx_, ipc_mtx_);
+                if (candidate_window_show_pending_ && !ipc_pending_live_ &&
+                    !ipc_pending_is_batch_ && ipc_pending_emoji_trigger_.empty() &&
+                    ipc_pending_reading_ == CurrentPreeditSurface())
+                  return S_OK;
+                candidates_.clear();
+                shown_candidates_.clear();
+                candidate_window_show_pending_ = true;
+              }
+              PostQueryCandidates(CurrentPreeditSurface(), false);
+              return S_OK;
+            }
             std::vector<TipCandidate> snapshot;
             bool wait_for_candidates = false;
             {
@@ -1881,7 +2006,8 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   commit_surface_ = chosen.field.surface.empty() ? reading : chosen.field.surface;
   committing_ = true;
   SetCommitContext(context);
-  if (!chosen.field.surface.empty() && !reading.empty() && chosen.description.empty()) {
+  if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
+      chosen.field.source != "symbol" && chosen.field.source != "emoji") {
     pending_commit_observation_ =
         PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown)};
   } else {
@@ -2091,6 +2217,12 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     batch_auto_punctuation_.store(hpayload->batch_auto_punctuation, std::memory_order_relaxed);
     number_rewriter_.store(hpayload->number_rewriter, std::memory_order_relaxed);
     katakana_rewriter_.store(hpayload->katakana_rewriter, std::memory_order_relaxed);
+    symbol_rewriter_.store(hpayload->symbol_rewriter, std::memory_order_relaxed);
+    emoji_rewriter_.store(hpayload->emoji_rewriter, std::memory_order_relaxed);
+    emoji_trigger_search_.store(hpayload->emoji_trigger_search, std::memory_order_relaxed);
+    emoji_max_candidates_.store(hpayload->emoji_max_candidates, std::memory_order_relaxed);
+    emoji_trigger_min_query_length_.store(hpayload->emoji_trigger_min_query_length,
+                                          std::memory_order_relaxed);
     max_candidates_.store(hpayload->max_candidates, std::memory_order_relaxed);
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
@@ -2249,6 +2381,8 @@ void TextService::ServeConnection() {
     uint64_t req_id = 0;
     bool has_qc = false;
     bool is_batch = false;
+    bool live = true;
+    std::string emoji_trigger;
     std::vector<IpcSendItem> to_send;
 
     {
@@ -2267,6 +2401,8 @@ void TextService::ServeConnection() {
         batch_mode = ipc_pending_batch_mode_;
         req_id = ipc_pending_id_;
         is_batch = ipc_pending_is_batch_;
+        live = ipc_pending_live_;
+        emoji_trigger = ipc_pending_emoji_trigger_;
         ipc_has_request_ = false;
         has_qc = true;
       }
@@ -2318,7 +2454,7 @@ void TextService::ServeConnection() {
       }
     }
 
-    if (!has_qc || reading.empty()) continue;
+    if (!has_qc || (reading.empty() && emoji_trigger.empty())) continue;
 
     Envelope qenv;
     qenv.version = 1;
@@ -2338,7 +2474,11 @@ void TextService::ServeConnection() {
       qreq.reading = reading;
       qreq.left_context = "";
       qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
-      qreq.live = true;
+      qreq.live = live;
+      qreq.emoji_trigger = emoji_trigger;
+      if (!emoji_trigger.empty()) {
+        qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
+      }
       qenv.trace_id = "tip-key-query";
       qenv.type = MessageType::QueryCandidates;
       qenv.payload_json = BuildQueryCandidatesRequest(qreq);
@@ -2533,7 +2673,7 @@ void TextService::ServeConnection() {
       fallback.surface = reading;
       fallback.reading = reading;
       fallback.source = "fallback";
-      response_candidates.push_back(std::move(fallback));
+      if (emoji_trigger.empty()) response_candidates.push_back(std::move(fallback));
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
@@ -2591,7 +2731,9 @@ void TextService::ServeConnection() {
     auto tip_candidates =
         BuildTipCandidates(reading, std::move(response_candidates),
                            !is_batch && number_rewriter_.load(std::memory_order_relaxed),
-                           !is_batch && katakana_rewriter_.load(std::memory_order_relaxed));
+                           !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
+                           !is_batch && !live && emoji_trigger.empty() &&
+                               symbol_rewriter_.load(std::memory_order_relaxed));
 
     // M10: discard stale responses.
     // Conditions for freshness:
@@ -2614,7 +2756,11 @@ void TextService::ServeConnection() {
       }
       bool notify_ui = false;
       {
-        std::lock_guard<std::mutex> lock(candidates_mtx_);
+        std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+        if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id)) {
+          ++next_id;
+          continue;
+        }
         candidates_ = std::move(tip_candidates);
         if (candidate_window_show_pending_) {
           if (candidates_.empty()) {
@@ -2634,9 +2780,12 @@ void TextService::ServeConnection() {
   }
 }
 
-void TextService::PostQueryCandidates(const std::string& reading) {
+void TextService::PostQueryCandidates(const std::string& reading, bool live,
+                                      const std::string& emoji_trigger) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_reading_ = reading;
+  ipc_pending_live_ = live;
+  ipc_pending_emoji_trigger_ = emoji_trigger;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
   ipc_pending_is_batch_ = false;
@@ -2648,6 +2797,7 @@ void TextService::PostQueryCandidates(const std::string& reading) {
 void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_reading_ = reading;
+  ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_batch_mode_ =
       batch_conversion_ai_cleanup_.load(std::memory_order_relaxed) ? "ai-cleanup" : "neural";
@@ -2662,6 +2812,7 @@ std::string TextService::CurrentPreeditSurface() const {
 }
 
 std::string TextService::CurrentDisplayedPreeditSurface() const {
+  if (emoji_mode_ != EmojiMode::Inactive) return CurrentPreeditSurface();
   if (candidate_ui_.IsShowing() && selected_candidate_idx_ >= 0 &&
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
     return shown_candidates_[static_cast<size_t>(selected_candidate_idx_)].field.surface;
@@ -2707,6 +2858,7 @@ void TextService::ShowCandidateWindowFromCache() {
   const POINT pt = CandidateAnchorPoint();
   const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
   if (FAILED(begin_hr)) return;
+  if (emoji_mode_ == EmojiMode::Collecting) emoji_mode_ = EmojiMode::Listing;
 
   const HRESULT update_hr = active_context_ ? RequestPreeditUpdate(active_context_) : E_UNEXPECTED;
   if (FAILED(update_hr)) {
@@ -2731,7 +2883,8 @@ void TextService::set_rewritten_cached_candidates_for_test(
   std::lock_guard<std::mutex> lk(candidates_mtx_);
   candidates_ = BuildTipCandidates(reading, std::move(candidates),
                                    number_rewriter_.load(std::memory_order_relaxed),
-                                   katakana_rewriter_.load(std::memory_order_relaxed));
+                                   katakana_rewriter_.load(std::memory_order_relaxed),
+                                   symbol_rewriter_.load(std::memory_order_relaxed));
 }
 
 std::vector<ipc::CandidateField> TextService::cached_candidates_for_test() {
@@ -2745,9 +2898,10 @@ std::vector<ipc::CandidateField> TextService::shown_candidates_for_test() const 
 
 std::vector<CandidateViewItem> TextService::candidate_views_for_test(
     const std::string& reading, std::vector<ipc::CandidateField> candidates) const {
-  return BuildCandidateViews(BuildTipCandidates(
-      reading, std::move(candidates), number_rewriter_.load(std::memory_order_relaxed),
-      katakana_rewriter_.load(std::memory_order_relaxed)));
+  return BuildCandidateViews(BuildTipCandidates(reading, std::move(candidates),
+                                                number_rewriter_.load(std::memory_order_relaxed),
+                                                katakana_rewriter_.load(std::memory_order_relaxed),
+                                                symbol_rewriter_.load(std::memory_order_relaxed)));
 }
 
 void TextService::show_candidate_window_from_cache_for_test() { ShowCandidateWindowFromCache(); }
@@ -2845,6 +2999,7 @@ std::string TextService::BatchReadingForConversion() const {
 void TextService::RefreshBatchPreeditSurface() { preedit_kana_ = BatchPreviewSurface(); }
 
 void TextService::ClearBatchState() {
+  emoji_mode_ = EmojiMode::Inactive;
   batch_raw_romaji_.clear();
   batch_query_in_progress_ = false;
 }

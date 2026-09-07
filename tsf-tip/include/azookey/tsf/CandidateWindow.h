@@ -3,11 +3,13 @@
 #include <Windows.h>
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace azookey::tsf {
+struct EmojiDrawingCache;
 
 struct CandidateViewItem {
   std::wstring surface;
@@ -33,6 +35,7 @@ class CandidateWindow {
   void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx);
   void Hide();
   bool IsVisible() const;
+  static bool NeedsColorEmoji(const std::wstring& text);
 
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
   void MoveSelection(int delta);
@@ -104,6 +107,7 @@ class CandidateWindow {
   HWND hwnd_{nullptr};
   UINT dpi_{kDefaultDpi};
   HFONT font_{nullptr};
+  std::unique_ptr<EmojiDrawingCache> emoji_cache_;
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<CandidateViewItem> items_;

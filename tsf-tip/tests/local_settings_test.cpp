@@ -47,6 +47,25 @@ TEST_F(LocalSettingsTest, LoadsSharedFileWithoutHostAndStopsIdempotently) {
   reader.Stop();
 }
 
+TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  ASSERT_TRUE(reader.RewriterSnapshot());
+  EXPECT_FALSE(reader.RewriterSnapshot()->emoji);
+  Write(R"({"emojiRewriter":true,"symbolRewriter":true,"emojiMaxCandidates":23,
+            "emojiTriggerMinQueryLength":3})");
+  ASSERT_TRUE(reader.WaitForRewritersForTest([](const auto& options) {
+    return options.emoji && options.symbol && options.trigger && options.maximum == 23 &&
+           options.minimum == 3;
+  }));
+  Write(R"({"emojiRewriter":false,"symbolRewriter":false,"emojiTriggerSearch":false,
+            "emojiMaxCandidates":99,"emojiTriggerMinQueryLength":0})");
+  ASSERT_TRUE(reader.WaitForRewritersForTest([](const auto& options) {
+    return !options.emoji && !options.symbol && !options.trigger && options.maximum == 50 &&
+           options.minimum == 1;
+  }));
+}
+
 TEST_F(LocalSettingsTest, ReloadsCommonProfilesAndPreservesPreviousSnapshot) {
   Write(R"({"bracketPairing":true,"profilesByApp":{"code.exe":{"bracketPairing":"on"}}})");
   ASSERT_TRUE(reader.Start(path));

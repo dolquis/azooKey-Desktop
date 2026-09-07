@@ -1,10 +1,12 @@
 #include "azookey/tsf/TipLocalSettings.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <string>
 #include <system_error>
 
+#include "azookey/ipc/Json.h"
 #include "azookey/logging/RuntimeLogger.h"
 
 namespace azookey::tsf {
@@ -159,6 +161,7 @@ void TipLocalSettings::Stop() noexcept {
   watch_started_.store(false);
   const std::lock_guard<std::mutex> lock(mutex_);
   settings_ = {};
+  rewriters_.reset();
 }
 
 core::BracketSettings TipLocalSettings::Snapshot() const {
@@ -166,10 +169,26 @@ core::BracketSettings TipLocalSettings::Snapshot() const {
   return settings_;
 }
 
+std::optional<TipRewriterSettings> TipLocalSettings::RewriterSnapshot() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return rewriters_;
+}
+
 void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
+  TipRewriterSettings rewriters;
   try {
-    next = core::ParseBracketSettings(ReadBounded(path_));
+    const auto contents = ReadBounded(path_);
+    next = core::ParseBracketSettings(contents);
+    if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
+      rewriters.symbol = json->GetBool("symbolRewriter").value_or(false);
+      rewriters.emoji = json->GetBool("emojiRewriter").value_or(false);
+      rewriters.trigger = json->GetBool("emojiTriggerSearch").value_or(true);
+      rewriters.maximum = static_cast<uint32_t>(
+          std::clamp<int64_t>(json->GetInt("emojiMaxCandidates").value_or(12), 1, 50));
+      rewriters.minimum = static_cast<uint32_t>(
+          std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
+    }
     const auto default_path = path_.parent_path().parent_path() / L"bracket-pairs.tsv";
     auto custom =
         std::filesystem::path(std::u8string(next.pairs_path.begin(), next.pairs_path.end()));
@@ -192,6 +211,7 @@ void TipLocalSettings::Reload() noexcept {
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     settings_ = std::move(next);
+    rewriters_ = rewriters;
   }
   changed_.notify_all();
 }
@@ -256,6 +276,13 @@ bool TipLocalSettings::WaitForSnapshotForTest(
 bool TipLocalSettings::WaitForEnabledForTest(bool enabled) {
   return WaitForSnapshotForTest(
       [&](const auto& settings) { return settings.pairing.enabled == enabled; });
+}
+
+bool TipLocalSettings::WaitForRewritersForTest(
+    const std::function<bool(const TipRewriterSettings&)>& predicate) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return changed_.wait_for(lock, std::chrono::seconds(5),
+                           [&] { return rewriters_ && predicate(*rewriters_); });
 }
 #endif
 

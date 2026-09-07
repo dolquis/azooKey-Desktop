@@ -1,16 +1,182 @@
 #include "azookey/tsf/CandidateWindow.h"
 
 #include <ShellScalingApi.h>
+#include <dwrite_2.h>
+#include <icu.h>
+#include <wrl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
+#include <map>
 #include <string>
 
 #include "CandidateSelection.h"
 
 namespace azookey::tsf {
 
+struct EmojiDrawingCache {
+  Microsoft::WRL::ComPtr<IDWriteFactory2> factory;
+  Microsoft::WRL::ComPtr<IDWriteGdiInterop> interop;
+  Microsoft::WRL::ComPtr<IDWriteBitmapRenderTarget> target;
+  Microsoft::WRL::ComPtr<IDWriteRenderingParams> params;
+  Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
+  std::map<std::wstring, Microsoft::WRL::ComPtr<IDWriteTextLayout>> layouts;
+  float font_size{};
+};
+
+bool CandidateWindow::NeedsColorEmoji(const std::wstring& text) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    UChar32 cp = text[i];
+    if (cp >= 0xd800 && cp <= 0xdbff) {
+      if (i + 1 >= text.size() || text[i + 1] < 0xdc00 || text[i + 1] > 0xdfff) continue;
+      cp = 0x10000 + ((cp - 0xd800) << 10) + (text[++i] - 0xdc00);
+    }
+    if (i + 1 < text.size() && text[i + 1] == 0xfe0e) continue;
+    if (u_hasBinaryProperty(cp, UCHAR_EMOJI_PRESENTATION) ||
+        (i + 1 < text.size() && text[i + 1] == 0xfe0f && u_hasBinaryProperty(cp, UCHAR_EMOJI)))
+      return true;
+  }
+  return false;
+}
+
 namespace {
+using Microsoft::WRL::ComPtr;
+
+class ColorGlyphRenderer final
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IDWriteTextRenderer> {
+ public:
+  ColorGlyphRenderer(IDWriteFactory2* factory, IDWriteBitmapRenderTarget* target,
+                     IDWriteRenderingParams* params, COLORREF color)
+      : factory_(factory), target_(target), params_(params), color_(color) {}
+  IFACEMETHODIMP IsPixelSnappingDisabled(void*, BOOL* value) override {
+    if (!value) return E_POINTER;
+    *value = FALSE;
+    return S_OK;
+  }
+  IFACEMETHODIMP GetCurrentTransform(void*, DWRITE_MATRIX* value) override {
+    return target_->GetCurrentTransform(value);
+  }
+  IFACEMETHODIMP GetPixelsPerDip(void*, FLOAT* value) override {
+    if (!value) return E_POINTER;
+    *value = target_->GetPixelsPerDip();
+    return S_OK;
+  }
+  IFACEMETHODIMP DrawGlyphRun(void*, FLOAT x, FLOAT y, DWRITE_MEASURING_MODE mode,
+                              const DWRITE_GLYPH_RUN* run,
+                              const DWRITE_GLYPH_RUN_DESCRIPTION* description, IUnknown*) override {
+    ComPtr<IDWriteColorGlyphRunEnumerator> layers;
+    const auto hr =
+        factory_->TranslateColorGlyphRun(x, y, run, description, mode, nullptr, 0, &layers);
+    if (hr == DWRITE_E_NOCOLOR)
+      return target_->DrawGlyphRun(x, y, mode, run, params_.Get(), color_, nullptr);
+    if (FAILED(hr)) return hr;
+    BOOL more = FALSE;
+    for (;;) {
+      const auto next = layers->MoveNext(&more);
+      if (FAILED(next)) return next;
+      if (!more) return S_OK;
+      const DWRITE_COLOR_GLYPH_RUN* layer = nullptr;
+      const auto current = layers->GetCurrentRun(&layer);
+      if (FAILED(current)) return current;
+      const auto channel = [](float value) { return static_cast<BYTE>(value * 255.0f + 0.5f); };
+      const auto color = layer->paletteIndex == 0xffff
+                             ? color_
+                             : RGB(channel(layer->runColor.r), channel(layer->runColor.g),
+                                   channel(layer->runColor.b));
+      const auto draw = target_->DrawGlyphRun(layer->baselineOriginX, layer->baselineOriginY, mode,
+                                              &layer->glyphRun, params_.Get(), color, nullptr);
+      if (FAILED(draw)) return draw;
+    }
+  }
+  IFACEMETHODIMP DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override {
+    return S_OK;  // Candidate layouts never request decoration.
+  }
+  IFACEMETHODIMP DrawStrikethrough(void*, FLOAT, FLOAT, const DWRITE_STRIKETHROUGH*,
+                                   IUnknown*) override {
+    return S_OK;
+  }
+  IFACEMETHODIMP DrawInlineObject(void* context, FLOAT x, FLOAT y, IDWriteInlineObject* object,
+                                  BOOL sideways, BOOL rtl, IUnknown* effect) override {
+    return object->Draw(context, this, x, y, sideways, rtl, effect);
+  }
+
+ private:
+  ComPtr<IDWriteFactory2> factory_;
+  ComPtr<IDWriteBitmapRenderTarget> target_;
+  ComPtr<IDWriteRenderingParams> params_;
+  COLORREF color_;
+};
+
+ComPtr<IDWriteTextLayout> EmojiLayout(EmojiDrawingCache& cache, HFONT font,
+                                      const std::wstring& text, float width, float height) {
+  if (!cache.factory) {
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory2),
+                                   reinterpret_cast<IUnknown**>(cache.factory.GetAddressOf()))))
+      return {};
+  }
+  if (!cache.interop && FAILED(cache.factory->GetGdiInterop(&cache.interop))) return {};
+  if (!cache.params && FAILED(cache.factory->CreateRenderingParams(&cache.params))) return {};
+  LOGFONTW logfont{};
+  const float size = font && GetObjectW(font, sizeof(logfont), &logfont)
+                         ? static_cast<float>(std::abs(logfont.lfHeight))
+                         : 16.0f;
+  // GDI font and layout dimensions are physical pixels; pixelsPerDip=1 deliberately
+  // makes one layout unit one pixel, including when the message font is DPI-scaled.
+  if (!cache.format || cache.font_size != size) {
+    cache.format.Reset();
+    cache.layouts.clear();
+    cache.font_size = size;
+    if (FAILED(cache.factory->CreateTextFormat(
+            L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, size, L"ja-JP", &cache.format)))
+      return {};
+    cache.format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    cache.format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(cache.factory->CreateEllipsisTrimmingSign(cache.format.Get(), &ellipsis))) {
+      const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+      cache.format->SetTrimming(&trimming, ellipsis.Get());
+    }
+  }
+  auto& layout = cache.layouts[text];
+  if (!layout &&
+      FAILED(cache.factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()),
+                                             cache.format.Get(), width, height, &layout)))
+    return {};
+  layout->SetMaxWidth(width);
+  layout->SetMaxHeight(height);
+  return layout;
+}
+
+bool DrawColorEmoji(EmojiDrawingCache& cache, HDC hdc, HFONT font, const std::wstring& text,
+                    const RECT& rect) {
+  const auto width = rect.right - rect.left;
+  const auto height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) return false;
+  const auto layout =
+      EmojiLayout(cache, font, text, static_cast<float>(width), static_cast<float>(height));
+  if (!layout) return false;
+  if (!cache.target) {
+    if (FAILED(cache.interop->CreateBitmapRenderTarget(hdc, width, height, &cache.target)))
+      return false;
+    cache.target->SetPixelsPerDip(1.0f);
+  } else {
+    SIZE size{};
+    if (FAILED(cache.target->GetSize(&size))) return false;
+    if ((size.cx != width || size.cy != height) && FAILED(cache.target->Resize(width, height)))
+      return false;
+  }
+  const auto memory_dc = cache.target->GetMemoryDC();
+  if (!BitBlt(memory_dc, 0, 0, width, height, hdc, rect.left, rect.top, SRCCOPY)) return false;
+  const auto renderer = Microsoft::WRL::Make<ColorGlyphRenderer>(
+      cache.factory.Get(), cache.target.Get(), cache.params.Get(), GetTextColor(hdc));
+  if (!renderer || FAILED(layout->Draw(nullptr, renderer.Get(), 0, 0))) return false;
+  return BitBlt(hdc, rect.left, rect.top, width, height, memory_dc, 0, 0, SRCCOPY) != FALSE;
+}
+
 constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
 constexpr wchar_t kFallbackFontFace[] = L"Yu Gothic UI";
 
@@ -193,6 +359,8 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
 
   const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   items_ = items;
+  if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
+  emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
   HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
   UpdateDpi(DpiForMonitor(mon, hwnd_));
@@ -209,6 +377,16 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
       std::wstring label = std::to_wstring(i + 1) + L". " + item.surface;
       SIZE sz{};
       GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &sz);
+      if (NeedsColorEmoji(item.surface)) {
+        const auto layout = EmojiLayout(*emoji_cache_, font_, item.surface, 100000.0f,
+                                        static_cast<float>(metrics_.item_height));
+        DWRITE_TEXT_METRICS measured{};
+        if (layout && SUCCEEDED(layout->GetMetrics(&measured))) {
+          const auto prefix = std::to_wstring(i + 1) + L". ";
+          GetTextExtentPoint32W(hdc, prefix.data(), static_cast<int>(prefix.size()), &sz);
+          sz.cx += static_cast<LONG>(std::ceil(measured.widthIncludingTrailingWhitespace));
+        }
+      }
       max_surface_w = std::max(max_surface_w, static_cast<int>(sz.cx));
       if (!item.description.empty()) {
         GetTextExtentPoint32W(hdc, item.description.c_str(),
@@ -322,8 +500,24 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                                ? std::min(surface_rc.right - metrics_.horizontal_padding,
                                           surface_rc.left + surface_column_width_)
                                : surface_rc.right - metrics_.horizontal_padding;
-        DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        bool color_drawn = false;
+        if (NeedsColorEmoji(item.surface) && emoji_cache_) {
+          const auto prefix = std::to_wstring(i + 1) + L". ";
+          SIZE prefix_size{};
+          GetTextExtentPoint32W(hdc, prefix.data(), static_cast<int>(prefix.size()), &prefix_size);
+          RECT emoji_rect = surface_rc;
+          emoji_rect.left += prefix_size.cx;
+          color_drawn = DrawColorEmoji(*emoji_cache_, hdc, font_, item.surface, emoji_rect);
+          if (color_drawn) {
+            RECT prefix_rect = surface_rc;
+            prefix_rect.right = emoji_rect.left;
+            DrawTextW(hdc, prefix.data(), static_cast<int>(prefix.size()), &prefix_rect,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+          }
+        }
+        if (!color_drawn)
+          DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (!item.description.empty()) {
           if (i != selected_idx_) SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
           RECT description_rc = row_rc;

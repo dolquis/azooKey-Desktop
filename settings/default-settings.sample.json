@@ -50,6 +50,13 @@
   "batchAutoPunctuation": false,
   "numberRewriter": false,
   "katakanaRewriter": false,
+  "symbolRewriter": false,
+  "symbolDataPath": "",
+  "emojiRewriter": false,
+  "emojiTriggerSearch": true,
+  "emojiMaxCandidates": 12,
+  "emojiTriggerMinQueryLength": 1,
+  "emojiDataPath": "",
   "reranker": {
     "nllRerankEnabled": false,
     "nllTopK": 8,

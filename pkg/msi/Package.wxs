@@ -11,12 +11,27 @@
       Compressed="yes">
     <SummaryInformation Description="azooKey Windows Japanese input method" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="WINDOWSBUILDNUMBER" Secure="yes">
+      <RegistrySearch Id="WindowsBuildSearch" Root="HKLM"
+          Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+          Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR (WINDOWSBUILDNUMBER &gt;= 18362)"
+        Message="azooKey requires Windows 10 version 1903 (build 18362) or later." />
     <MajorUpgrade
         Schedule="afterInstallInitialize"
         DowngradeErrorMessage="A newer version of azooKey is already installed." />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="azooKey">
+        <Directory Id="RewriterDataFolder" Name="data">
+          <Component Id="SymbolDataComponent" Guid="*">
+            <File Id="SymbolDataFile" Source="$(RewriterDataDir)\symbol.tsv" KeyPath="yes" />
+          </Component>
+          <Component Id="EmojiDataComponent" Guid="*">
+            <File Id="EmojiDataFile" Source="$(RewriterDataDir)\emoji.tsv" KeyPath="yes" />
+          </Component>
+        </Directory>
         <Component Id="TipComponent" Guid="85A678CC-4D73-4C41-B2CF-E0E458AB4AE0">
           <File
               Id="TipDll"
@@ -79,6 +94,8 @@
     <Feature Id="MainFeature" Title="azooKey" Level="1">
       <ComponentRef Id="TipComponent" />
       <ComponentRef Id="HostComponent" />
+      <ComponentRef Id="SymbolDataComponent" />
+      <ComponentRef Id="EmojiDataComponent" />
       <ComponentRef Id="VCRuntimeComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />

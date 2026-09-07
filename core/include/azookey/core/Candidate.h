@@ -11,6 +11,8 @@ enum class CandidateSource {
   Llm,
   Heuristic,
   Learning,
+  Symbol,
+  Emoji,
 };
 
 struct Candidate {

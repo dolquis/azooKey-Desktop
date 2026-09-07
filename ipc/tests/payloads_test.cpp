@@ -8,6 +8,33 @@
 
 #include "azookey/ipc/Json.h"
 
+TEST(RewriterPayload, OptionalFieldsRoundTripAndOldPeersDefaultOff) {
+  using namespace azookey::ipc;
+  HandshakeResponse handshake;
+  handshake.host_version = "test";
+  handshake.symbol_rewriter = handshake.emoji_rewriter = true;
+  handshake.emoji_max_candidates = 50;
+  const auto parsed = ParseHandshakeResponse(BuildHandshakeResponse(handshake));
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->symbol_rewriter);
+  EXPECT_TRUE(parsed->emoji_rewriter);
+  EXPECT_EQ(parsed->emoji_max_candidates, 50u);
+  const auto old = ParseHandshakeResponse(R"({"host_version":"old"})");
+  ASSERT_TRUE(old);
+  EXPECT_FALSE(old->symbol_rewriter);
+  EXPECT_FALSE(old->emoji_rewriter);
+  QueryCandidatesRequest query;
+  query.emoji_trigger = "smile";
+  EXPECT_EQ(ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(query))->emoji_trigger,
+            "smile");
+  QueryCandidatesResponse response;
+  response.candidates.push_back({"😄", "", 0, "emoji", "笑顔"});
+  const auto result = ParseQueryCandidatesResponse(BuildQueryCandidatesResponse(response));
+  ASSERT_TRUE(result);
+  ASSERT_EQ(result->candidates.size(), 1u);
+  EXPECT_EQ(result->candidates[0].description, "笑顔");
+}
+
 namespace {
 
 class CommaDecimalPunct : public std::numpunct<char> {
@@ -431,4 +458,20 @@ TEST(PayloadsTest, MalformedRejection) {
   EXPECT_FALSE(azookey::ipc::ParseQueryCandidatesRequest("{}").has_value());
   EXPECT_FALSE(azookey::ipc::ParseCancel("{}").has_value());
   EXPECT_FALSE(azookey::ipc::ParseQueryDiagnostics(R"({"engine":"mock"})").has_value());
+}
+
+TEST(PayloadsTest, QueryErrorIsOptionalAndRoundTrips) {
+  const auto old =
+      azookey::ipc::ParseQueryCandidatesResponse(R"({"candidates":[],"partial":false})");
+  ASSERT_TRUE(old);
+  EXPECT_TRUE(old->ok);
+  EXPECT_FALSE(old->error);
+  azookey::ipc::QueryCandidatesResponse error;
+  error.ok = false;
+  error.error = "invalid query";
+  const auto parsed =
+      azookey::ipc::ParseQueryCandidatesResponse(azookey::ipc::BuildQueryCandidatesResponse(error));
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->ok);
+  EXPECT_EQ(parsed->error, error.error);
 }

@@ -27,6 +27,7 @@ target_link_libraries(azookey_tsf_tip
     shlwapi
     shcore
     shell32
+    dwrite
 )
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
@@ -66,6 +67,7 @@ if(AZOOKEY_BUILD_TESTS)
         shell32
         user32
         gdi32
+        dwrite
     )
     set(tsf_tip_discover_args)
     if(TSF_TIP_TEST_LABEL)

@@ -2,9 +2,11 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 #include "azookey/tsf/TipLocalSettings.h"
 
@@ -120,6 +122,51 @@ TEST_F(LocalSettingsTest, ChangesWatchToCustomUnicodeDirectoryAndKeepsOldSnapsho
   EXPECT_EQ(azookey::core::LookupBracketPair(U'(', previous.Table())->close, U')');
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(expect_close(U')'));
+}
+
+TEST_F(LocalSettingsTest, WatchesOnlyNearestParentsForDefaultAndAbsoluteTablePaths) {
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  auto directories = reader.WatchDirectoriesForTest();
+  EXPECT_EQ(directories[0], path.parent_path());
+  EXPECT_EQ(directories[1], root);
+  reader.Stop();
+  const auto custom = root / L"custom" / L"pairs.tsv";
+  std::filesystem::create_directories(custom.parent_path());
+  const auto utf8 = custom.generic_u8string();
+  Write("{\"bracketPairsPath\":\"" + std::string(utf8.begin(), utf8.end()) + "\"}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(reader.WatchDirectoriesForTest()[1], custom.parent_path());
+}
+
+TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotifications) {
+  const auto nested = root / L"unrelated" / L"cache";
+  std::filesystem::create_directories(nested);
+  const auto file = nested / L"data.bin";
+  {
+    std::ofstream stream(file);
+    stream << "initial";
+  }
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.Start(path));
+  const auto before = reader.WatchNotificationsForTest();
+  {
+    std::ofstream stream(file);
+    stream << "changed cache contents";
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  EXPECT_EQ(reader.WatchNotificationsForTest(), before);
+}
+
+TEST_F(LocalSettingsTest, RebindsFromMissingAncestorsWithoutRecursivelyWatchingTheirSiblings) {
+  path = root / L"missing" / L"azooKey" / L"config" / L"settings.json";
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(reader.WatchDirectoriesForTest()[0], root);
+  EXPECT_EQ(reader.WatchDirectoriesForTest()[1], root);
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  Write(R"({"bracketPairing":false})");
+  ASSERT_TRUE(reader.WaitForEnabledForTest(false));
 }
 
 TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {

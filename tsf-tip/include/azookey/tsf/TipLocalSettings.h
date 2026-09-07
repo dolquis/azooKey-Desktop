@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -26,6 +27,11 @@ class TipLocalSettings final {
   void SetForTest(const core::BracketSettings& settings);
   bool WaitForEnabledForTest(bool enabled);
   bool WaitForSnapshotForTest(const std::function<bool(const core::BracketSettings&)>& predicate);
+  std::array<std::filesystem::path, 2> WatchDirectoriesForTest() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return watch_directories_;
+  }
+  unsigned WatchNotificationsForTest() const { return watch_notifications_.load(); }
 #endif
 
  private:
@@ -40,6 +46,10 @@ class TipLocalSettings final {
   HANDLE stop_{nullptr};
   HANDLE ready_{nullptr};
   std::thread worker_;
+#ifdef AZOOKEY_TSF_TESTING
+  std::array<std::filesystem::path, 2> watch_directories_;
+  std::atomic<unsigned> watch_notifications_{0};
+#endif
 };
 
 }  // namespace azookey::tsf

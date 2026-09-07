@@ -155,26 +155,33 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
           core::EvaluateBracketInput(action.open, false, fresh, settings.pairing, settings.Table());
     }
     if (action.type == ActionType::kWrapSelection && fresh.selection_collapsed != false)
-      return S_FALSE;
+      action.type = ActionType::kInsertLiteral;
     ComPtr<ITfRange> range;
     HRESULT hr = Selection(context, cookie, range);
     if (FAILED(hr)) return hr;
     if (action.type == ActionType::kWrapSelection) {
+      const auto literal = [&]() {
+        const WCHAR character = static_cast<WCHAR>(action.open);
+        const HRESULT write = range->SetText(cookie, 0, &character, 1);
+        if (FAILED(write)) return write;
+        applied = true;
+        return PlaceCaret(context, cookie, range.Get(), false);
+      };
       ComPtr<ITfRange> reader;
       hr = range->Clone(&reader);
-      if (FAILED(hr) || !reader) return FAILED(hr) ? hr : E_FAIL;
+      if (FAILED(hr) || !reader) return literal();
       std::wstring text(1, static_cast<WCHAR>(action.open));
       std::array<WCHAR, 4096> buffer{};
       for (;;) {
         BOOL empty = FALSE;
         hr = reader->IsEmpty(cookie, &empty);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) return literal();
         if (empty) break;
         ULONG count = 0;
         hr = reader->GetText(cookie, TF_TF_MOVESTART, buffer.data(),
                              static_cast<ULONG>(buffer.size()), &count);
-        if (FAILED(hr)) return hr;
-        if (!count || count > buffer.size() || text.size() + count > 65537) return S_FALSE;
+        if (FAILED(hr)) return literal();
+        if (!count || count > buffer.size() || text.size() + count > 65537) return literal();
         text.append(buffer.data(), count);
       }
       text.push_back(static_cast<WCHAR>(action.close));

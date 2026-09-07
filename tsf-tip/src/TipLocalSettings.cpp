@@ -12,16 +12,27 @@ namespace {
 // File operations stay on activation/the watcher, never a keystroke callback.
 std::string ReadBounded(const std::filesystem::path& path) {
   constexpr size_t kLimit = 1024 * 1024;
-  std::string contents(kLimit + 1, '\0');
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                                   OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
   if (file == INVALID_HANDLE_VALUE) return {};
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || size.QuadPart > kLimit) {
+    CloseHandle(file);
+    return {};
+  }
+  std::string contents;
+  try {
+    contents.resize(static_cast<size_t>(size.QuadPart) + 1);
+  } catch (...) {
+    CloseHandle(file);
+    throw;
+  }
   DWORD count = 0;
   const BOOL read =
       ReadFile(file, contents.data(), static_cast<DWORD>(contents.size()), &count, nullptr);
   CloseHandle(file);
-  if (!read || count > kLimit) return {};
+  if (!read || count > static_cast<size_t>(size.QuadPart)) return {};
   contents.resize(count);
   return contents;
 }
@@ -31,7 +42,7 @@ class DirectoryWatch final {
   ~DirectoryWatch() { Close(); }
   bool Open(const std::filesystem::path& path) {
     Close();
-    auto ancestor = path.parent_path().parent_path();
+    auto ancestor = path.parent_path();
     std::error_code error;
     while (!ancestor.empty() && !std::filesystem::is_directory(ancestor, error)) {
       const auto parent = ancestor.parent_path();
@@ -39,7 +50,10 @@ class DirectoryWatch final {
       ancestor = parent;
       error.clear();
     }
-    relative_ = path.lexically_relative(ancestor).native();
+    directory_path_ = ancestor;
+    // If parents are missing, watch only the next component's creation.
+    // Never subscribe recursively to LocalAppData or an entire drive.
+    relative_ = (*path.lexically_relative(ancestor).begin()).native();
     directory_ =
         CreateFileW(ancestor.c_str(), FILE_LIST_DIRECTORY,
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -49,6 +63,7 @@ class DirectoryWatch final {
     return operation_.hEvent && Arm();
   }
   HANDLE Event() const { return pending_ ? operation_.hEvent : nullptr; }
+  const std::filesystem::path& Directory() const { return directory_path_; }
   bool Consume() {
     DWORD transferred = 0;
     const BOOL success = GetOverlappedResult(directory_, &operation_, &transferred, FALSE);
@@ -78,7 +93,7 @@ class DirectoryWatch final {
   bool Arm() {
     ResetEvent(operation_.hEvent);
     pending_ =
-        ReadDirectoryChangesW(directory_, buffer_.data(), static_cast<DWORD>(buffer_.size()), TRUE,
+        ReadDirectoryChangesW(directory_, buffer_.data(), static_cast<DWORD>(buffer_.size()), FALSE,
                               FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
                                   FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE,
                               nullptr, &operation_, nullptr) != FALSE;
@@ -100,6 +115,7 @@ class DirectoryWatch final {
   OVERLAPPED operation_{};
   alignas(DWORD) std::array<BYTE, 16384> buffer_{};
   std::wstring relative_;
+  std::filesystem::path directory_path_;
   bool pending_{false};
 };
 }  // namespace
@@ -180,24 +196,38 @@ void TipLocalSettings::Watch() noexcept {
       SetEvent(ready_);
       return;
     }
-    Reload();
     auto watched_table = table_path_;
     table.Open(watched_table);
-    Reload();  // Close the read/registration race for both files.
     watch_started_.store(true);
+#ifdef AZOOKEY_TSF_TESTING
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      watch_directories_ = {config.Directory(), table.Directory()};
+    }
+#endif
+    // Activation already loaded one snapshot. Further reads close registration
+    // races on the worker without blocking ActivateEx on three full reads.
     SetEvent(ready_);
+    Reload();
     for (;;) {
-      const HANDLE handles[]{stop_, config.Event(), table.Event()};
-      if (!handles[1]) break;
-      const DWORD wait = WaitForMultipleObjects(handles[2] ? 3 : 2, handles, FALSE, INFINITE);
-      if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2) break;
-      if (!(wait == WAIT_OBJECT_0 + 1 ? config.Consume() : table.Consume())) continue;
-      Reload();
       if (watched_table != table_path_ || !table.Event()) {
         watched_table = table_path_;
         table.Open(watched_table);
         Reload();
       }
+      const HANDLE handles[]{stop_, config.Event(), table.Event()};
+      if (!handles[1]) break;
+      const DWORD wait = WaitForMultipleObjects(handles[2] ? 3 : 2, handles, FALSE, INFINITE);
+      if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2) break;
+#ifdef AZOOKEY_TSF_TESTING
+      ++watch_notifications_;
+#endif
+      if (!(wait == WAIT_OBJECT_0 + 1 ? config.Consume() : table.Consume())) continue;
+      // Rebind after a missing parent was created or a watched directory was
+      // deleted/recreated. Read after arming to close the replacement race.
+      config.Open(path_);
+      table.Open(watched_table);
+      Reload();
     }
   } catch (...) {
     SetEvent(ready_);

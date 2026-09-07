@@ -26,40 +26,33 @@ core::ForegroundApp ForegroundAppDetector::Get() {
 #ifdef AZOOKEY_TSF_TESTING
   if (test_app_) return *test_app_;
 #endif
-  const HWND window = GetForegroundWindow();
+  // An in-process TIP identifies the app receiving these keys, not a shell
+  // frame or unrelated overlay that happens to own the foreground window.
+  if (cached_.process_name.empty()) {
+    std::array<WCHAR, 32768> path{};
+    const DWORD count = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (!count || count >= path.size()) return {};
+    const std::wstring_view full(path.data(), count);
+    const auto slash = full.find_last_of(L"\\/");
+    cached_.process_name = Utf8(full.substr(slash == std::wstring_view::npos ? 0 : slash + 1));
+  }
+  cached_.window_class.clear();
+  HWND window = GetFocus();
   DWORD pid = 0;
   if (window) GetWindowThreadProcessId(window, &pid);
-  const auto now = GetTickCount64();
-  if (window == window_ && pid == process_id_ && now < expires_) return cached_;
-  cached_ = {};
-  window_ = window;
-  process_id_ = pid;
-  expires_ = now + 500;
-  if (!window || !pid) return cached_;
-  std::array<WCHAR, 32768> path{};
-  const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!process) return cached_;
-  DWORD count = static_cast<DWORD>(path.size());
-  const BOOL queried = QueryFullProcessImageNameW(process, 0, path.data(), &count);
-  CloseHandle(process);
-  if (!queried || !count) return cached_;
-  std::wstring_view full(path.data(), count);
-  const auto slash = full.find_last_of(L"\\/");
-  auto name = full.substr(slash == std::wstring_view::npos ? 0 : slash + 1);
-  cached_.process_name = Utf8(name);
+  if (pid != GetCurrentProcessId()) window = nullptr;
+  if (window) {
+    const HWND root = GetAncestor(window, GA_ROOT);
+    DWORD root_pid = 0;
+    if (root) GetWindowThreadProcessId(root, &root_pid);
+    if (root_pid == GetCurrentProcessId()) window = root;
+  }
   std::array<WCHAR, 256> window_class{};
   const int class_length =
-      GetClassNameW(window, window_class.data(), static_cast<int>(window_class.size()));
+      window ? GetClassNameW(window, window_class.data(), static_cast<int>(window_class.size()))
+             : 0;
   if (class_length > 0)
     cached_.window_class = Utf8({window_class.data(), static_cast<size_t>(class_length)});
-  // A focus switch during process querying invalidates this observation.
-  DWORD current_pid = 0;
-  if (GetForegroundWindow() == window) GetWindowThreadProcessId(window, &current_pid);
-  if (current_pid != pid) {
-    Invalidate();
-    cached_ = {};
-    return cached_;
-  }
   cached_.resolved = !cached_.process_name.empty();
   return cached_;
 }

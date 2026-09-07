@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -832,6 +833,11 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
       return S_OK;
     }
     run_edit_session = !skip_callback;
+    if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && before_write) {
+      auto callback = std::move(before_write);
+      before_write = {};
+      callback();
+    }
     return NoopContext::RequestEditSession(id, session, flags, result);
   }
   STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG, TF_SELECTION* selection,
@@ -865,6 +871,7 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   bool reject_read{false};
   bool reject_write{false};
   bool skip_callback{false};
+  std::function<void()> before_write;
 };
 
 std::optional<WCHAR> TranslateBracketForTest(WPARAM key, LPARAM) {
@@ -950,6 +957,93 @@ TEST(TsfTipBracketTest, CommonProfileOverridesSeedAndDisablingStopsBothKeyCallba
   EXPECT_EQ(h.context.document->text, L"「」");
 }
 
+TEST(TsfTipBracketTest, AppIdentityIsTheInputProcessEvenWithoutItsForegroundWindow) {
+  azookey::tsf::ForegroundAppDetector detector;
+  const auto app = detector.Get();
+  ASSERT_TRUE(app.resolved);
+  EXPECT_EQ(app.process_name, "tsf_tip_onkeydown_preedit_tests.exe");
+  detector.Invalidate();
+  EXPECT_EQ(detector.Get().process_name, app.process_name);
+}
+
+TEST(TsfTipBracketTest, CommitLockRejectionConsumesKeyAndPreservesPendingPreedit) {
+  BracketHarness h;
+  ASSERT_TRUE(h.Press('A'));
+  h.context.reject_write = true;
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_TRUE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"あ");
+  h.context.reject_write = false;
+  EXPECT_TRUE(h.Press(VK_RETURN, true));
+  EXPECT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"あ");
+}
+
+TEST(TsfTipBracketTest, NavigationFinalizesCompositionBeforeReturningOriginalKeyToApp) {
+  for (const WPARAM key : {VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_DELETE}) {
+    BracketHarness h;
+    h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+    h.ApplySettings();
+    ASSERT_TRUE(h.Press(VK_OEM_4));
+    EXPECT_FALSE(h.Press(key, true));
+    EXPECT_FALSE(h.service.bracket_composition_for_test());
+    EXPECT_FALSE(h.Press(key));
+    EXPECT_EQ(h.context.document->text, L"「」");
+  }
+}
+
+TEST(TsfTipBracketTest, WriteLockRevalidationDoesNotRetractClaimsOrDeleteChangedText) {
+  BracketHarness h;
+  h.Set(L"「」", 1);
+  EXPECT_TRUE(h.Press(VK_BACK, true));
+  h.context.before_write = [&] { h.Set(L"「あ」", 2); };
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"「あ」");
+  EXPECT_EQ(h.context.document->writes, 0);
+  h.settings.pairing.wrap_selection = true;
+  h.ApplySettings();
+  h.Set(L"abc", 0, 3);
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  h.context.before_write = [&] { h.Set(L"abc", 3); };
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"abc「");
+}
+
+TEST(TsfTipBracketTest, NavigationLockRejectionKeepsCompositionAndKeyClaimForRetry) {
+  BracketHarness h;
+  h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+  h.ApplySettings();
+  ASSERT_TRUE(h.Press(VK_OEM_4));
+  h.context.reject_write = true;
+  EXPECT_TRUE(h.Press(VK_LEFT, true));
+  EXPECT_TRUE(h.Press(VK_LEFT));
+  EXPECT_TRUE(h.service.bracket_composition_for_test());
+  h.context.reject_write = false;
+  EXPECT_FALSE(h.Press(VK_LEFT, true));
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  EXPECT_FALSE(h.Press(VK_LEFT));
+}
+
+TEST(TsfTipBracketTest, OrdinaryLettersDoNotDependOnBracketMasterAppOrAlnumMode) {
+  for (const bool enabled : {false, true}) {
+    for (const auto mode :
+         {azookey::core::BracketInputMode::AlnumHalf, azookey::core::BracketInputMode::AlnumFull}) {
+      for (const auto* app : {"notepad.exe", "Code.exe"}) {
+        BracketHarness h;
+        h.settings.input_mode = mode;
+        h.settings.pairing.enabled = enabled;
+        h.service.set_foreground_app_for_test({app, "", true});
+        h.ApplySettings();
+        EXPECT_TRUE(h.Press('A', true));
+        EXPECT_TRUE(h.Press('A'));
+        EXPECT_EQ(h.context.document->text, L"あ");
+      }
+    }
+  }
+}
+
 TEST(TsfTipBracketTest, WindowsAppNamesCompareUnicodeWithoutLocaleDependence) {
   EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("ÉDITEUR.exe", "éditeur.EXE"));
   EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("日本語.exe", "日本語.EXE"));
@@ -993,23 +1087,25 @@ TEST(TsfTipBracketTest, WrapSelectionWritesOncePreservesUnicodeAndPlacesCaretAft
   EXPECT_TRUE(h.service.queued_ipc_types_for_test().empty());
 }
 
-TEST(TsfTipBracketTest, WrapSelectionDoesNotWritePartialTextWhenReadFailsOrLimitIsExceeded) {
+TEST(TsfTipBracketTest, WrapSelectionFallsBackToLiteralWithoutRetractingKeyClaim) {
   BracketHarness h;
   h.settings.pairing.wrap_selection = true;
   h.ApplySettings();
   h.Set(L"selected", 0, 8);
   h.context.document->fail_read = true;
-  EXPECT_FALSE(h.Press(VK_OEM_4, false, false));
-  EXPECT_EQ(h.context.document->text, L"selected");
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「");
   h.context.document->fail_read = false;
   h.Set(std::wstring(65537, L'a'), 0, 65537);
-  EXPECT_FALSE(h.Press(VK_OEM_4));
-  EXPECT_EQ(h.context.document->text.size(), 65537u);
-  EXPECT_EQ(h.context.document->writes, 0);
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「");
+  EXPECT_EQ(h.context.document->writes, 2);
   h.Set(std::wstring(65536, L'a'), 0, 65536);
   EXPECT_TRUE(h.Press(VK_OEM_4));
   EXPECT_EQ(h.context.document->text.size(), 65538u);
-  EXPECT_EQ(h.context.document->writes, 1);
+  EXPECT_EQ(h.context.document->writes, 3);
 }
 
 TEST(TsfTipBracketTest, PendingPairFinishesInItsOwningContextAfterFocusMoves) {
@@ -1085,7 +1181,7 @@ TEST(TsfTipBracketTest, SelectionIsReplacedWithLiteralAndChangedHintCannotDelete
   h.Set(L"「」", 1);
   EXPECT_TRUE(h.Press(VK_BACK, true));
   h.Set(L"「あ」", 2);
-  EXPECT_FALSE(h.Press(VK_BACK));
+  EXPECT_TRUE(h.Press(VK_BACK));
   EXPECT_EQ(h.context.document->text, L"「あ」");
 }
 
@@ -1118,8 +1214,6 @@ TEST(TsfTipBracketTest, AlnumModesAndMasterOffRespectSettings) {
   h.ApplySettings();
   EXPECT_TRUE(h.Press(VK_OEM_4));
   EXPECT_EQ(h.context.document->text, L"[]");
-  EXPECT_FALSE(h.Press('A', true));
-  EXPECT_FALSE(h.Press('A'));
   h.Set(L"", 0);
   h.settings.input_mode = azookey::core::BracketInputMode::AlnumFull;
   h.ApplySettings();
@@ -1153,13 +1247,24 @@ TEST(TsfTipBracketTest, PreeditCommitsBeforePairAndCompositionPairsNest) {
 }
 
 TEST(TsfTipBracketTest, BatchAccumulationKeepsLiteralBracketsAndNoAutomaticPair) {
-  BracketHarness h;
-  h.service.set_batch_romaji_options_for_test(true, false, false);
-  EXPECT_TRUE(h.Press('A'));
-  EXPECT_TRUE(h.Press(VK_OEM_4, true));
-  EXPECT_TRUE(h.Press(VK_OEM_4));
-  EXPECT_EQ(h.context.document->text, L"あ[");
-  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  for (const auto mode :
+       {azookey::core::BracketInputMode::Hiragana, azookey::core::BracketInputMode::AlnumFull}) {
+    BracketHarness h;
+    h.settings.input_mode = mode;
+    h.ApplySettings();
+    h.service.set_batch_romaji_options_for_test(true, false, false);
+    EXPECT_TRUE(h.Press('A'));
+    EXPECT_TRUE(h.Press(VK_OEM_4, true));
+    EXPECT_TRUE(h.Press(VK_OEM_4));
+    EXPECT_EQ(h.context.document->text, L"あ[");
+    EXPECT_FALSE(h.service.bracket_composition_for_test());
+    EXPECT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, L"あ[");
+    EXPECT_TRUE(h.Press(VK_OEM_4, true));
+    EXPECT_TRUE(h.Press(VK_OEM_4));
+    EXPECT_EQ(h.context.document->text,
+              mode == azookey::core::BracketInputMode::Hiragana ? L"あ[「」" : L"あ[［］");
+  }
 }
 
 TEST(TsfTipBracketTest, SettingsReloadDoesNotDiscardPendingPairAndFocusLossCommitsIt) {
@@ -1181,14 +1286,16 @@ TEST(TsfTipBracketTest, SettingsReloadDoesNotDiscardPendingPairAndFocusLossCommi
   EXPECT_TRUE(h.service.queued_ipc_types_for_test().empty());
 }
 
-TEST(TsfTipBracketTest, RejectedWritesAndMissingCallbacksDoNotClaimInsertion) {
+TEST(TsfTipBracketTest, RejectedWritesKeepKeyClaimWithoutClaimingDocumentInsertion) {
   BracketHarness h;
   h.context.reject_write = true;
-  EXPECT_FALSE(h.Press(VK_OEM_4, false, false));
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
   EXPECT_EQ(h.context.document->text, L"");
   h.context.reject_write = false;
   h.context.skip_callback = true;
-  EXPECT_FALSE(h.Press(VK_OEM_4, false, false));
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
   EXPECT_EQ(h.context.document->text, L"");
   h.context.skip_callback = false;
   h.context.set_selection_result = E_FAIL;

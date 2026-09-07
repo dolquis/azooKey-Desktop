@@ -822,21 +822,24 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
                                       bool test_only, bool& handled) {
   handled = false;
   if (bracket_composition_) {
-    if (test_only) {
+    if (test_only && (key == VK_ESCAPE || key == VK_RETURN)) {
       *eaten = TRUE;
       handled = true;
       return S_OK;
     }
-    const HRESULT finish = BracketEditSession::Finish(*this, context, client_id_, key == VK_ESCAPE);
-    if (FAILED(finish) && bracket_composition_) {
-      *eaten = TRUE;
-      handled = true;
-      return finish;
-    }
-    if (key == VK_ESCAPE || key == VK_RETURN) {
-      *eaten = TRUE;
-      handled = true;
-      return S_OK;
+    if (!test_only) {
+      const HRESULT finish =
+          BracketEditSession::Finish(*this, context, client_id_, key == VK_ESCAPE);
+      if (FAILED(finish) && bracket_composition_) {
+        *eaten = TRUE;
+        handled = true;
+        return S_OK;
+      }
+      if (key == VK_ESCAPE || key == VK_RETURN) {
+        *eaten = TRUE;
+        handled = true;
+        return S_OK;
+      }
     }
   }
   const auto settings = local_settings_.Snapshot();
@@ -853,8 +856,12 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
           core::BracketPairingActionType::kPassThrough;
   const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
   const bool candidates_visible = candidate_ui_.IsShowing();
-  if (bracket && BatchRomajiEnabled() && has_preedit) {
+  // Batch accumulation owns raw romaji, including the raw bracket spelling.
+  if (enabled && raw && BatchRomajiEnabled() && has_preedit &&
+      core::EvaluateBracketInput(*raw, false, {}, settings.pairing, settings.Table()).type !=
+          core::BracketPairingActionType::kPassThrough) {
     handled = true;
+    *eaten = TRUE;
     if (test_only) {
       *eaten = TRUE;
       return S_OK;
@@ -877,6 +884,7 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   }
   if (bracket) {
     handled = true;
+    *eaten = TRUE;
     if (test_only) {
       *eaten = TRUE;
       return S_OK;
@@ -884,15 +892,13 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
     if (has_preedit || candidates_visible) {
       const HRESULT commit =
           candidates_visible ? CommitSelected(context) : CommitPreeditAsIs(context);
-      if (FAILED(commit) || committing_) return FAILED(commit) ? commit : E_FAIL;
+      // Match the existing pending-commit path: consume this key, preserve the
+      // commit, and let the next key retry without mixing in another edit.
+      if (FAILED(commit) || committing_) return commit == E_OUTOFMEMORY ? commit : S_OK;
     }
     const auto hint = BracketEditSession::ReadHint(context, client_id_);
     const auto action =
         core::EvaluateBracketInput(codepoint, alnum, hint, settings.pairing, settings.Table());
-    if (action.type == core::BracketPairingActionType::kPassThrough) {
-      handled = false;
-      return S_OK;
-    }
     bool applied = false;
     const HRESULT result =
         BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
@@ -907,7 +913,8 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
         RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "bracket_caret_failed");
       return S_OK;
     }
-    return result;
+    if (FAILED(result)) RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "bracket_edit_failed");
+    return result == E_OUTOFMEMORY ? result : S_OK;
   }
   if (enabled && key == VK_BACK && !has_preedit && !candidates_visible) {
     const auto hint = BracketEditSession::ReadHint(context, client_id_);
@@ -922,13 +929,12 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
       bool applied = false;
       const HRESULT result =
           BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
-      *eaten = applied ? TRUE : FALSE;
-      return applied ? S_OK : result;
+      // A failed revalidation must not delete newly changed text, or retract
+      // the key claim already made by OnTestKeyDown.
+      *eaten = TRUE;
+      return result == E_OUTOFMEMORY ? result : S_OK;
     }
   }
-  // In an explicitly selected alnum mode, leave ordinary input to the app.
-  // The master-OFF path above preserves all pre-existing TIP behavior.
-  if (alnum && !has_preedit && !candidates_visible) handled = true;
   return S_OK;
 }
 
@@ -938,6 +944,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   UNREFERENCED_PARAMETER(context);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  bracket_test_context_ = nullptr;
   try {
 #ifdef AZOOKEY_TSF_TESTING
     if (testing::ConsumeComBoundaryAllocationFailureForTest()) {
@@ -954,7 +961,13 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     bool bracket_handled = false;
     const HRESULT bracket_hr =
         HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled);
-    if (FAILED(bracket_hr) || bracket_handled) return bracket_hr;
+    if (FAILED(bracket_hr) || bracket_handled) {
+      if (*eaten) {
+        bracket_test_context_ = context;
+        bracket_test_key_ = wParam;
+      }
+      return bracket_hr;
+    }
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
@@ -987,6 +1000,17 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     } else if (wParam == VK_ESCAPE) {
       *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
     }
+    if (bracket_composition_ && !*eaten) {
+      // Unclaimed navigation keys may never reach OnKeyDown. Finalize here
+      // before allowing the original key through, without moving the caret
+      // again after the app handles it.
+      BracketEditSession::Finish(*this, context, client_id_, false);
+      if (bracket_composition_) {
+        *eaten = TRUE;
+        bracket_test_context_ = context;
+        bracket_test_key_ = wParam;
+      }
+    }
     return S_OK;
   } catch (const std::bad_alloc&) {
     return E_OUTOFMEMORY;
@@ -1011,6 +1035,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  const bool bracket_claimed =
+      bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
+  bracket_test_context_ = nullptr;
   try {
     if (HasSystemModifierDown()) return S_OK;
 
@@ -1034,6 +1061,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     bool bracket_handled = false;
     const HRESULT bracket_hr =
         HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
+    if (bracket_claimed && !*eaten) {
+      *eaten = TRUE;
+      return bracket_hr == E_OUTOFMEMORY ? bracket_hr : S_OK;
+    }
     if (FAILED(bracket_hr) || bracket_handled) return bracket_hr;
 
     struct PreeditRollbackState {
@@ -1666,6 +1697,7 @@ void TextService::PostPendingCommitObservation() {
 }
 
 void TextService::ClearTextStateForLifecycle() {
+  bracket_test_context_ = nullptr;
   bracket_composition_ = false;
   preedit_kana_.clear();
   romaji_.Reset();

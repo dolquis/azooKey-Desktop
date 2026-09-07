@@ -203,6 +203,9 @@ class TextService final : public ITfTextInputProcessorEx,
   TipLocalSettings local_settings_;
   ForegroundAppDetector foreground_app_;
   bool bracket_composition_{false};
+  // Borrowed identity only, never dereferenced; cleared at the next key or cleanup.
+  ITfContext* bracket_test_context_{nullptr};
+  WPARAM bracket_test_key_{};
   HRESULT HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                            bool test_only, bool& handled);
 

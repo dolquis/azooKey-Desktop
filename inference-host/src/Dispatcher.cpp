@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iostream>
 #include <string_view>
 
 #ifdef _WIN32
@@ -61,6 +62,8 @@ const char* SourceToWire(core::CandidateSource source) {
   if (source == core::CandidateSource::Model) return "model";
   if (source == core::CandidateSource::Llm) return "llm";
   if (source == core::CandidateSource::Learning) return "learning";
+  if (source == core::CandidateSource::Symbol) return "symbol";
+  if (source == core::CandidateSource::Emoji) return "emoji";
   return "heuristic";
 }
 
@@ -70,6 +73,7 @@ ipc::CandidateField ToField(const core::Candidate& c) {
   f.reading = c.reading;
   f.score = c.score;
   f.source = SourceToWire(c.source);
+  f.description = c.description;
   return f;
 }
 
@@ -264,6 +268,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     res.batch_auto_punctuation = settings.batch_auto_punctuation;
     res.number_rewriter = settings.number_rewriter;
     res.katakana_rewriter = settings.katakana_rewriter;
+    res.symbol_rewriter = settings.symbol_rewriter;
+    res.emoji_rewriter = settings.emoji_rewriter;
+    res.emoji_trigger_search = settings.emoji_trigger_search;
+    res.emoji_max_candidates = static_cast<uint32_t>(settings.emoji_max_candidates);
+    res.emoji_trigger_min_query_length =
+        static_cast<uint32_t>(settings.emoji_trigger_min_query_length);
     res.max_candidates = static_cast<uint32_t>(settings.max_candidates);
   }
   return MakeResponse(req, ipc::BuildHandshakeResponse(res));
@@ -376,8 +386,27 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   scheduler_->MarkLatest(client_id_, req.request_id);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
-  auto candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(),
-                                             cancel.get(), parsed->max_candidates, parsed->live);
+  const auto rewriters = engine_->config().rewriters;
+  std::vector<core::Candidate> candidates;
+  if (!parsed->emoji_trigger.empty()) {
+    if (!parsed->reading.empty()) {
+      std::cerr << "[host] invalid mixed reading and emoji trigger request\n";
+    } else if (!parsed->live) {
+      candidates =
+          engine_->QueryRewriters(rewriters, {}, parsed->emoji_trigger, {}, parsed->max_candidates);
+    }
+  } else {
+    const uint32_t reserve =
+        parsed->live ? 0
+                     : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
+    const auto ordinary_limit = parsed->max_candidates > reserve ? parsed->max_candidates - reserve
+                                                                 : parsed->max_candidates;
+    candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(),
+                                          cancel.get(), ordinary_limit, parsed->live);
+    if (!parsed->live && (rewriters.symbol_enabled || rewriters.emoji_enabled))
+      candidates = engine_->QueryRewriters(rewriters, parsed->reading, {}, std::move(candidates),
+                                           parsed->max_candidates);
+  }
 
   const bool canceled = cancel->load(std::memory_order_acquire);
   completion.Complete();

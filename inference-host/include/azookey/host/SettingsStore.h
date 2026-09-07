@@ -73,6 +73,13 @@ struct RuntimeSettings {
   bool batch_auto_punctuation{false};
   bool number_rewriter{false};
   bool katakana_rewriter{false};
+  bool symbol_rewriter{false};
+  std::string symbol_data_path;
+  bool emoji_rewriter{false};
+  bool emoji_trigger_search{true};
+  int32_t emoji_max_candidates{12};
+  int32_t emoji_trigger_min_query_length{1};
+  std::string emoji_data_path;
   RuntimeAutoUpdateSettings auto_update;
 };
 

@@ -9,6 +9,7 @@
     <VCRuntimeDir Condition="'$(VCRuntimeDir)' == ''">__NOT_PROVIDED__</VCRuntimeDir>
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
+    <RewriterDataDir Condition="'$(RewriterDataDir)' == ''">$(MSBuildThisFileDirectory)..\..\data</RewriterDataDir>
     <OutputName>azooKey-$(ProductVersion)-x64</OutputName>
     <!--
       Windows App SDK multilingual binaries exceed the MSI File.Language limits.
@@ -25,7 +26,8 @@
       SettingsExePath=$(SettingsExePath);
       VCRuntimeDir=$(VCRuntimeDir);
       LicensePath=$(LicensePath);
-      ThirdPartyLicensesPath=$(ThirdPartyLicensesPath)
+      ThirdPartyLicensesPath=$(ThirdPartyLicensesPath);
+      RewriterDataDir=$(RewriterDataDir)
     </DefineConstants>
   </PropertyGroup>
 
@@ -44,5 +46,7 @@
     <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140_1.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140_1.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
     <Error Condition="!Exists('$(LicensePath)')" Text="License file not found: $(LicensePath)" />
     <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
+    <Error Condition="!Exists('$(RewriterDataDir)\symbol.tsv')" Text="Symbol data not found" />
+    <Error Condition="!Exists('$(RewriterDataDir)\emoji.tsv')" Text="Emoji data not found" />
   </Target>
 </Project>

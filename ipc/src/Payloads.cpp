@@ -1,5 +1,7 @@
 #include "azookey/ipc/Payloads.h"
 
+#include <algorithm>
+
 #include "azookey/ipc/Json.h"
 
 namespace azookey::ipc {
@@ -14,6 +16,7 @@ j::Value CandidateToJson(const CandidateField& c) {
   o.emplace("reading", j::Value(c.reading));
   o.emplace("score", j::Value(c.score));
   o.emplace("source", j::Value(c.source));
+  if (!c.description.empty()) o.emplace("description", j::Value(c.description));
   return j::Value(std::move(o));
 }
 
@@ -29,6 +32,7 @@ std::optional<CandidateField> CandidateFromJson(const j::Value& v) {
   c.reading = std::move(*reading);
   c.score = score.value_or(0.0);
   c.source = source.value_or(std::string());
+  c.description = v.GetString("description").value_or(std::string());
   return c;
 }
 
@@ -115,6 +119,12 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("batch_auto_punctuation", j::Value(p.batch_auto_punctuation));
   o.emplace("number_rewriter", j::Value(p.number_rewriter));
   o.emplace("katakana_rewriter", j::Value(p.katakana_rewriter));
+  o.emplace("symbol_rewriter", j::Value(p.symbol_rewriter));
+  o.emplace("emoji_rewriter", j::Value(p.emoji_rewriter));
+  o.emplace("emoji_trigger_search", j::Value(p.emoji_trigger_search));
+  o.emplace("emoji_max_candidates", j::Value(static_cast<uint64_t>(p.emoji_max_candidates)));
+  o.emplace("emoji_trigger_min_query_length",
+            j::Value(static_cast<uint64_t>(p.emoji_trigger_min_query_length)));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   return j::Stringify(j::Value(std::move(o)));
 }
@@ -138,6 +148,13 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.batch_auto_punctuation = v->GetBool("batch_auto_punctuation").value_or(false);
   p.number_rewriter = v->GetBool("number_rewriter").value_or(false);
   p.katakana_rewriter = v->GetBool("katakana_rewriter").value_or(false);
+  p.symbol_rewriter = v->GetBool("symbol_rewriter").value_or(false);
+  p.emoji_rewriter = v->GetBool("emoji_rewriter").value_or(false);
+  p.emoji_trigger_search = v->GetBool("emoji_trigger_search").value_or(true);
+  p.emoji_max_candidates = static_cast<uint32_t>(
+      std::clamp<int64_t>(v->GetInt("emoji_max_candidates").value_or(12), 1, 50));
+  p.emoji_trigger_min_query_length = static_cast<uint32_t>(
+      std::clamp<int64_t>(v->GetInt("emoji_trigger_min_query_length").value_or(1), 1, 8));
   if (const auto max_candidates = v->GetUInt("max_candidates");
       max_candidates && *max_candidates >= 1 && *max_candidates <= 32) {
     p.max_candidates = static_cast<uint32_t>(*max_candidates);
@@ -282,6 +299,7 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   o.emplace("left_context", j::Value(p.left_context));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   o.emplace("live", j::Value(p.live));
+  if (!p.emoji_trigger.empty()) o.emplace("emoji_trigger", j::Value(p.emoji_trigger));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -295,6 +313,7 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.left_context = v->GetString("left_context").value_or(std::string());
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
   p.live = v->GetBool("live").value_or(false);
+  p.emoji_trigger = v->GetString("emoji_trigger").value_or(std::string());
   return p;
 }
 

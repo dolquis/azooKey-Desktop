@@ -6,8 +6,10 @@ add_executable(core_tests
   live_conversion_chunker_test.cpp
   number_rewriter_test.cpp
   redaction_test.cpp
+  rewriter_index_test.cpp
   romaji_kana_converter_test.cpp
   simple_converter_test.cpp
+  symbol_rewriter_test.cpp
   utf8_test.cpp
 )
 

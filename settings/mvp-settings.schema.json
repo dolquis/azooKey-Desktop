@@ -256,6 +256,34 @@
       "default": false,
       "description": "M62-B: true で純ひらがなの候補へ全角カタカナと半角カタカナを注釈付きで追加"
     },
+    "symbolRewriter": {
+      "type": "boolean", "default": false,
+      "description": "M62-C: 記号のかな読み引きと関連候補の展開"
+    },
+    "symbolDataPath": {
+      "type": "string", "default": "",
+      "description": "記号 TSV のパス。空文字列は Host と同階層の data/symbol.tsv"
+    },
+    "emojiRewriter": {
+      "type": "boolean", "default": false,
+      "description": "M62-D: 絵文字のかな読み引きと trigger 検索"
+    },
+    "emojiTriggerSearch": {
+      "type": "boolean", "default": true,
+      "description": "絵文字リライター有効時に :trigger 検索を使用"
+    },
+    "emojiMaxCandidates": {
+      "type": "integer", "minimum": 1, "maximum": 50, "default": 12,
+      "description": "trigger 検索の候補数上限"
+    },
+    "emojiTriggerMinQueryLength": {
+      "type": "integer", "minimum": 1, "maximum": 8, "default": 1,
+      "description": "trigger 検索を始める最小文字数"
+    },
+    "emojiDataPath": {
+      "type": "string", "default": "",
+      "description": "絵文字 TSV のパス。空文字列は Host と同階層の data/emoji.tsv"
+    },
     "reranker": {
       "type": "object",
       "description": "Track B NLL reranking; docs/neural-reranker-spec.md section B9",

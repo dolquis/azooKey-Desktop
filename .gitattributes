@@ -9,3 +9,6 @@ bench/data/PROVENANCE.json text eol=lf
 
 # Serena rewrites its shared YAML configuration; keep round trips stable.
 .serena/*.yml text eol=lf
+
+# Rewriter TSV grammar and deterministic porter output require LF on Windows too.
+data/*.tsv text eol=lf

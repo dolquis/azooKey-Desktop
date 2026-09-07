@@ -1,9 +1,12 @@
 #include "azookey/tsf/CandidateWindow.h"
 
 #include <ShellScalingApi.h>
+#include <dwrite_2.h>
+#include <wrl.h>
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <string>
 
 #include "CandidateSelection.h"
@@ -11,6 +14,120 @@
 namespace azookey::tsf {
 
 namespace {
+using Microsoft::WRL::ComPtr;
+
+class ColorGlyphRenderer final
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IDWriteTextRenderer> {
+ public:
+  ColorGlyphRenderer(IDWriteFactory2* factory, IDWriteBitmapRenderTarget* target,
+                     IDWriteRenderingParams* params, COLORREF color)
+      : factory_(factory), target_(target), params_(params), color_(color) {}
+  IFACEMETHODIMP IsPixelSnappingDisabled(void*, BOOL* value) override {
+    if (!value) return E_POINTER;
+    *value = FALSE;
+    return S_OK;
+  }
+  IFACEMETHODIMP GetCurrentTransform(void*, DWRITE_MATRIX* value) override {
+    return target_->GetCurrentTransform(value);
+  }
+  IFACEMETHODIMP GetPixelsPerDip(void*, FLOAT* value) override {
+    if (!value) return E_POINTER;
+    *value = target_->GetPixelsPerDip();
+    return S_OK;
+  }
+  IFACEMETHODIMP DrawGlyphRun(void*, FLOAT x, FLOAT y, DWRITE_MEASURING_MODE mode,
+                              const DWRITE_GLYPH_RUN* run,
+                              const DWRITE_GLYPH_RUN_DESCRIPTION* description, IUnknown*) override {
+    ComPtr<IDWriteColorGlyphRunEnumerator> layers;
+    const auto hr =
+        factory_->TranslateColorGlyphRun(x, y, run, description, mode, nullptr, 0, &layers);
+    if (hr == DWRITE_E_NOCOLOR)
+      return target_->DrawGlyphRun(x, y, mode, run, params_.Get(), color_, nullptr);
+    if (FAILED(hr)) return hr;
+    BOOL more = FALSE;
+    for (;;) {
+      const auto next = layers->MoveNext(&more);
+      if (FAILED(next)) return next;
+      if (!more) return S_OK;
+      const DWRITE_COLOR_GLYPH_RUN* layer = nullptr;
+      const auto current = layers->GetCurrentRun(&layer);
+      if (FAILED(current)) return current;
+      const auto channel = [](float value) { return static_cast<BYTE>(value * 255.0f + 0.5f); };
+      const auto color = layer->paletteIndex == 0xffff
+                             ? color_
+                             : RGB(channel(layer->runColor.r), channel(layer->runColor.g),
+                                   channel(layer->runColor.b));
+      const auto draw = target_->DrawGlyphRun(layer->baselineOriginX, layer->baselineOriginY, mode,
+                                              &layer->glyphRun, params_.Get(), color, nullptr);
+      if (FAILED(draw)) return draw;
+    }
+  }
+  IFACEMETHODIMP DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override {
+    return S_OK;  // Candidate layouts never request decoration.
+  }
+  IFACEMETHODIMP DrawStrikethrough(void*, FLOAT, FLOAT, const DWRITE_STRIKETHROUGH*,
+                                   IUnknown*) override {
+    return S_OK;
+  }
+  IFACEMETHODIMP DrawInlineObject(void* context, FLOAT x, FLOAT y, IDWriteInlineObject* object,
+                                  BOOL sideways, BOOL rtl, IUnknown* effect) override {
+    return object->Draw(context, this, x, y, sideways, rtl, effect);
+  }
+
+ private:
+  ComPtr<IDWriteFactory2> factory_;
+  ComPtr<IDWriteBitmapRenderTarget> target_;
+  ComPtr<IDWriteRenderingParams> params_;
+  COLORREF color_;
+};
+
+bool DrawColorEmoji(HDC hdc, HFONT font, const std::wstring& text, const RECT& rect) {
+  const auto width = rect.right - rect.left;
+  const auto height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) return false;
+  ComPtr<IDWriteFactory2> factory;
+  if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, __uuidof(IDWriteFactory2),
+                                 reinterpret_cast<IUnknown**>(factory.GetAddressOf()))))
+    return false;
+  ComPtr<IDWriteGdiInterop> interop;
+  ComPtr<IDWriteBitmapRenderTarget> target;
+  if (FAILED(factory->GetGdiInterop(&interop)) ||
+      FAILED(interop->CreateBitmapRenderTarget(hdc, static_cast<UINT32>(width),
+                                               static_cast<UINT32>(height), &target)))
+    return false;
+  target->SetPixelsPerDip(1.0f);
+  const auto memory_dc = target->GetMemoryDC();
+  if (!BitBlt(memory_dc, 0, 0, width, height, hdc, rect.left, rect.top, SRCCOPY)) return false;
+  LOGFONTW logfont{};
+  const float size = font && GetObjectW(font, sizeof(logfont), &logfont)
+                         ? static_cast<float>(std::abs(logfont.lfHeight))
+                         : 16.0f;
+  ComPtr<IDWriteTextFormat> format;
+  if (FAILED(factory->CreateTextFormat(L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+                                       DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size,
+                                       L"ja-JP", &format)))
+    return false;
+  format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+  format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+  ComPtr<IDWriteInlineObject> ellipsis;
+  if (SUCCEEDED(factory->CreateEllipsisTrimmingSign(format.Get(), &ellipsis))) {
+    const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+    format->SetTrimming(&trimming, ellipsis.Get());
+  }
+  ComPtr<IDWriteTextLayout> layout;
+  if (FAILED(factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), format.Get(),
+                                       static_cast<float>(width), static_cast<float>(height),
+                                       &layout)))
+    return false;
+  ComPtr<IDWriteRenderingParams> params;
+  if (FAILED(factory->CreateRenderingParams(&params))) return false;
+  const auto renderer = Microsoft::WRL::Make<ColorGlyphRenderer>(factory.Get(), target.Get(),
+                                                                 params.Get(), GetTextColor(hdc));
+  if (!renderer || FAILED(layout->Draw(nullptr, renderer.Get(), 0, 0))) return false;
+  return BitBlt(hdc, rect.left, rect.top, width, height, memory_dc, 0, 0, SRCCOPY) != FALSE;
+}
+
 constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
 constexpr wchar_t kFallbackFontFace[] = L"Yu Gothic UI";
 
@@ -322,8 +439,14 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                                ? std::min(surface_rc.right - metrics_.horizontal_padding,
                                           surface_rc.left + surface_column_width_)
                                : surface_rc.right - metrics_.horizontal_padding;
-        DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        const bool has_emoji =
+            std::any_of(item.surface.begin(), item.surface.end(), [](wchar_t ch) {
+              return (ch >= 0xd800 && ch <= 0xdbff) || ch == 0xfe0f ||
+                     (ch >= 0x2600 && ch <= 0x27ff);
+            });
+        if (!has_emoji || !DrawColorEmoji(hdc, font_, label, surface_rc))
+          DrawTextW(hdc, label.c_str(), static_cast<int>(label.size()), &surface_rc,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         if (!item.description.empty()) {
           if (i != selected_idx_) SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
           RECT description_rc = row_rc;

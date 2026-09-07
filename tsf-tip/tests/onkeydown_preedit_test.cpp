@@ -887,6 +887,32 @@ std::optional<WCHAR> TranslateBracketForTest(WPARAM key, LPARAM) {
   }
 }
 
+std::optional<WCHAR> TranslateEmojiForTest(WPARAM key, LPARAM) {
+  if (key == VK_OEM_1) return L':';
+  if (key >= 'A' && key <= 'Z') return static_cast<WCHAR>(key + ('a' - 'A'));
+  if (key >= '0' && key <= '9') return static_cast<WCHAR>(key);
+  if (key == VK_OEM_PLUS) return L'+';
+  if (key == VK_OEM_MINUS) return L'-';
+  return std::nullopt;
+}
+
+class EmojiHarness : public TextServiceHarness {
+ public:
+  EmojiHarness() {
+    service.set_emoji_rewriter_for_test(true);
+    azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateEmojiForTest);
+  }
+  ~EmojiHarness() { azookey::tsf::testing::ClearTranslateBracketCharacterForTest(); }
+  void List() {
+    azookey::ipc::CandidateField candidate;
+    candidate.surface = "😄";
+    candidate.source = "emoji";
+    candidate.description = "笑顔";
+    service.set_cached_candidates_for_test({candidate});
+    service.show_candidate_window_from_cache_for_test();
+  }
+};
+
 class BracketHarness {
  public:
   BracketHarness() {
@@ -918,6 +944,104 @@ class BracketHarness {
   azookey::core::BracketSettings settings;
 };
 }  // namespace
+
+TEST(TsfTipEmojiTest, QueryIsLiteralAndTestKeyDoesNotMutate) {
+  EmojiHarness h;
+  EXPECT_TRUE(h.TestPress(VK_OEM_1));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  for (auto key : {'S', 'M', 'I', 'L', 'E'}) ASSERT_TRUE(h.Press(key));
+  EXPECT_EQ(h.service.preedit_kana_, ":smile");
+  EXPECT_EQ(h.service.pending_emoji_trigger_for_test(), "smile");
+  EXPECT_TRUE(h.service.pending_ipc_reading_for_test().empty());
+  h.List();
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(h.service.preedit_kana_, ":smile2");
+  EXPECT_EQ(h.service.pending_emoji_trigger_for_test(), "smile2");
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, ":smile");
+}
+
+TEST(TsfTipEmojiTest, ListingEscapeKeepsQueryAndSecondEscapeCancelsRequest) {
+  EmojiHarness h;
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  ASSERT_TRUE(h.Press('S'));
+  h.List();
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, ":s");
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  ASSERT_TRUE(h.Press('M'));
+  EXPECT_EQ(h.service.pending_emoji_trigger_for_test(), "sm");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, ":sm");
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+}
+
+TEST(TsfTipEmojiTest, CommitUsesOnlySurfaceAndNeverLearns) {
+  for (const auto key : {VK_RETURN, VK_OEM_1}) {
+    EmojiHarness h;
+    ASSERT_TRUE(h.Press(VK_OEM_1));
+    ASSERT_TRUE(h.Press('S'));
+    h.List();
+    FakeCompositionAttachment attachment(h);
+    ASSERT_TRUE(h.Press(key));
+    EXPECT_EQ(attachment.composition_range.last_text, L"😄");
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+  }
+}
+
+TEST(TsfTipEmojiTest, MinimumLengthAndDisabledTriggerAreRespected) {
+  EmojiHarness h;
+  h.service.set_emoji_rewriter_for_test(true, true, 2);
+  ASSERT_TRUE(h.Press(VK_OEM_1));
+  ASSERT_TRUE(h.Press('S'));
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  ASSERT_TRUE(h.Press('M'));
+  EXPECT_TRUE(h.service.has_pending_ipc_query_for_test());
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_TRUE(h.service.preedit_kana_.empty());
+  h.service.set_emoji_rewriter_for_test(true, false);
+  EXPECT_FALSE(h.TestPress(VK_OEM_1));
+}
+
+TEST(TsfTipEmojiTest, AnnotatedOrdinaryCandidateLearnsButRewriterTailsDoNot) {
+  TextServiceHarness h;
+  h.service.preedit_kana_ = "かお";
+  std::vector<azookey::ipc::CandidateField> candidates(3);
+  candidates[0].surface = "顔";
+  candidates[0].reading = "かお";
+  candidates[0].source = "dictionary";
+  candidates[0].description = "通常候補の注釈";
+  candidates[1].surface = "😄";
+  candidates[1].source = "emoji";
+  candidates[2].surface = "☺";
+  candidates[2].source = "symbol";
+  h.service.set_cached_candidates_for_test(candidates);
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "顔");
+  ASSERT_EQ(observation->shown.size(), 1u);
+  EXPECT_EQ(observation->shown[0].surface, "顔");
+}
+
+TEST(TsfTipEmojiTest, LocalSymbolChainFollowsExistingCandidates) {
+  TextServiceHarness h;
+  h.service.set_symbol_rewriter_for_test(true);
+  azookey::ipc::CandidateField seed;
+  seed.surface = "「";
+  const auto views = h.service.candidate_views_for_test("かっこ", {seed});
+  ASSERT_EQ(views.size(), 9u);
+  EXPECT_EQ(views[0].surface, L"「");
+  EXPECT_EQ(views[1].surface, L"『");
+  EXPECT_EQ(views[2].surface, L"【");
+}
 
 TEST(TsfTipBracketTest, AppPolicySuppressesBothKeyCallbacksAndReevaluatesSettings) {
   BracketHarness h;

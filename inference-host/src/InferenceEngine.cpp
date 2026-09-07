@@ -7,6 +7,7 @@
 #include <iostream>
 #include <utility>
 
+#include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
@@ -394,6 +395,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
 
 void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  config_.rewriters = config.rewriters;
   config_.nll = ClampNllConfig(config.nll);
   ++nll_config_revision_;
   config_.enable_live_conversion = config.enable_live_conversion;
@@ -418,6 +420,25 @@ BackendKind InferenceEngine::backend() const {
 EngineConfig InferenceEngine::config() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
   return config_;
+}
+
+std::vector<core::Candidate> InferenceEngine::QueryRewriters(const RewriterConfig& config,
+                                                             const std::string& reading,
+                                                             const std::string& trigger,
+                                                             std::vector<core::Candidate> ordinary,
+                                                             size_t max_candidates) {
+  if (!trigger.empty()) {
+    if (!reading.empty() || !config.emoji_enabled || !config.trigger_enabled) return {};
+    const auto index = rewriter_data_.Get(true, config, runtime_logger_);
+    return index ? index->SearchTrigger(trigger, max_candidates) : std::vector<core::Candidate>{};
+  }
+  std::vector<core::Candidate> symbols, emoji;
+  if (const auto index = rewriter_data_.Get(false, config, runtime_logger_))
+    symbols = index->LookupReading(reading);
+  if (const auto index = rewriter_data_.Get(true, config, runtime_logger_))
+    emoji = index->LookupReading(reading);
+  return core::MergeRewriterCandidates(std::move(ordinary), std::move(symbols), std::move(emoji),
+                                       max_candidates);
 }
 
 EngineHealthSnapshot InferenceEngine::health_snapshot() const {

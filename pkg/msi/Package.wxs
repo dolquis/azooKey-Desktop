@@ -17,6 +17,14 @@
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="azooKey">
+        <Directory Id="RewriterDataFolder" Name="data">
+          <Component Id="SymbolDataComponent" Guid="*">
+            <File Id="SymbolDataFile" Source="$(RewriterDataDir)\symbol.tsv" KeyPath="yes" />
+          </Component>
+          <Component Id="EmojiDataComponent" Guid="*">
+            <File Id="EmojiDataFile" Source="$(RewriterDataDir)\emoji.tsv" KeyPath="yes" />
+          </Component>
+        </Directory>
         <Component Id="TipComponent" Guid="85A678CC-4D73-4C41-B2CF-E0E458AB4AE0">
           <File
               Id="TipDll"
@@ -79,6 +87,8 @@
     <Feature Id="MainFeature" Title="azooKey" Level="1">
       <ComponentRef Id="TipComponent" />
       <ComponentRef Id="HostComponent" />
+      <ComponentRef Id="SymbolDataComponent" />
+      <ComponentRef Id="EmojiDataComponent" />
       <ComponentRef Id="VCRuntimeComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />

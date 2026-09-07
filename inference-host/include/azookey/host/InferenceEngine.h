@@ -17,6 +17,7 @@
 
 #include "azookey/core/IConverter.h"
 #include "azookey/host/NllScorer.h"
+#include "azookey/host/RewriterData.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/LearningStore.h"
@@ -45,6 +46,7 @@ constexpr const char* BackendName(BackendKind backend) {
 }
 
 struct EngineConfig {
+  RewriterConfig rewriters;
   NllConfig nll;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
@@ -149,6 +151,12 @@ class InferenceEngine {
                         const std::string& selected_surface, uint64_t now_epoch_sec);
   bool FlushLearningStore();
   void ApplyConfig(const EngineConfig& config);
+  // Uses only the data-index lock, never the model conversion lock.
+  std::vector<core::Candidate> QueryRewriters(const RewriterConfig& config,
+                                              const std::string& reading,
+                                              const std::string& trigger,
+                                              std::vector<core::Candidate> ordinary,
+                                              size_t max_candidates);
 
   BackendKind backend() const;
   EngineConfig config() const;
@@ -160,6 +168,7 @@ class InferenceEngine {
   std::optional<ZenzaiDecodeStats> last_zenzai_decode_stats() const;
 
  private:
+  RewriterData rewriter_data_;
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
   bool NoteObservationIdLocked(const std::string& observation_id);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,

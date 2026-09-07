@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes libclang-rt-18-dev
+          sudo apt-get install --no-install-recommends --yes libclang-rt-18-dev libicu-dev
 
       - name: Configure
         shell: bash

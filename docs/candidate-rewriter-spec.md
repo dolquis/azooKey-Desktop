@@ -269,6 +269,10 @@ porter の出力を実行時の関数へもう一度通しても変わらない�
 2. カタカナ（U+30A1〜U+30F6）をひらがな（U+3041〜U+3096）へ写す。
 3. 空白文字を除去する。
 
+実行時の NFKC は ICU を使う。Windows では OS 付属の ICU、Windows 以外の検証ビルドでは
+システムの ICU 開発パッケージをリンクする。porter は Python の `unicodedata` を使い、
+同梱 TSV の全キーを実行時にも検証して正規化の差異を検出する。
+
 長音記号（`ー`）と濁点半濁点は保つ。`らーめん` と `らめん` を同一視すると、無関係な読みに
 絵文字が付く。
 
@@ -305,7 +309,8 @@ porter の出力を実行時の関数へもう一度通しても変わらない�
 
 検索語が 32 文字を超えるときは索引を引かず、空の候補列を返す。
 
-編集距離による補正は行わない。`:smle` は `:smile` に一致しない。補正を入れると、一致クラスの
+編集距離による補正は行わない。`:smle` は Subsequence として `smile` に一致するが、文字順が
+異なる `:smlie` は一致しない。補正を入れると、一致クラスの
 優先順位と補正コストを混ぜた順序になり、§16 の期待値表が保てなくなる。
 
 候補数上限は `emojiMaxCandidates`（既定 12）とする。既存の `QueryCandidatesRequest.max_candidates`
@@ -574,6 +579,11 @@ Esc は段階的に効く。候補窓が開いているとき（`Listing`）は�
 
 再ポートは `scripts/emoji_porter.py` が行う。原典から本形式への変換手順をスクリプトとして
 残すことが、`docs/licensing-policy.md` の再生成注記の要件を満たす。
+
+固定した原典の取得と再生成は `python scripts/emoji_porter.py --fetch --output data/emoji.tsv`、
+記号は `python scripts/symbol_porter.py --fetch --output data/symbol.tsv` で行う。
+原典のリビジョンと Emoji バージョン上限はスクリプトと出力ヘッダに記録する。
+`😄` の `わらい` と `smile` は受け入れ例を安定させる製品側の別名として付与する。
 
 porter は決定的でなければならない。固定した原典バージョンからは、常に同一バイトの
 `emoji.tsv` が出る。出力行は `emoji` のコードポイント列で昇順に整列し、多値フィールド内の

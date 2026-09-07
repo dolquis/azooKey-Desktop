@@ -7,6 +7,8 @@
 #include <string>
 #include <thread>
 
+#include "azookey/core/PlatformPaths.h"
+
 #ifndef _WIN32
 #include <sys/stat.h>
 #else
@@ -114,6 +116,13 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
     "liveConversion": true,
     "numberRewriter": true,
     "katakanaRewriter": true,
+    "symbolRewriter": true,
+    "emojiRewriter": true,
+    "emojiTriggerSearch": false,
+    "emojiMaxCandidates": 99,
+    "emojiTriggerMinQueryLength": 0,
+    "symbolDataPath": "C:/data/記号.tsv",
+    "emojiDataPath": "C:/data/絵文字.tsv",
     "inferenceThreads": 6,
     "maxCandidates": 12,
     "maxContextLength": 20,
@@ -133,6 +142,11 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_TRUE(result.settings.live_conversion);
   EXPECT_TRUE(result.settings.number_rewriter);
   EXPECT_TRUE(result.settings.katakana_rewriter);
+  EXPECT_TRUE(result.settings.symbol_rewriter);
+  EXPECT_TRUE(result.settings.emoji_rewriter);
+  EXPECT_FALSE(result.settings.emoji_trigger_search);
+  EXPECT_EQ(result.settings.emoji_max_candidates, 50);
+  EXPECT_EQ(result.settings.emoji_trigger_min_query_length, 1);
   EXPECT_EQ(result.settings.inference_threads, 6);
   EXPECT_EQ(result.settings.max_candidates, 12);
   EXPECT_EQ(result.settings.max_context_length, 20);
@@ -145,6 +159,11 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   azookey::host::EngineConfig config;
   config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, result.settings);
   EXPECT_TRUE(config.enable_live_conversion);
+  EXPECT_TRUE(config.rewriters.symbol_enabled);
+  EXPECT_TRUE(config.rewriters.emoji_enabled);
+  EXPECT_FALSE(config.rewriters.trigger_enabled);
+  EXPECT_EQ(config.rewriters.symbol_path, azookey::core::Utf8Path("C:/data/記号.tsv"));
+  EXPECT_EQ(config.rewriters.emoji_path, azookey::core::Utf8Path("C:/data/絵文字.tsv"));
   EXPECT_EQ(config.backend, azookey::host::BackendKind::Cuda);
   EXPECT_EQ(config.model_path, "C:/models/zenz-v3.gguf");
   ASSERT_TRUE(config.n_gpu_layers.has_value());

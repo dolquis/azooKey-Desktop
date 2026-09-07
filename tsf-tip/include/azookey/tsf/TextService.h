@@ -79,6 +79,7 @@ class EditSession;
 struct TipCandidate {
   ipc::CandidateField field;
   std::string description;
+  bool local{false};
 };
 
 class TextService final : public ITfTextInputProcessorEx,
@@ -160,6 +161,16 @@ class TextService final : public ITfTextInputProcessorEx,
     katakana_rewriter_.store(enabled, std::memory_order_relaxed);
   }
   void set_selected_candidate_index_for_test(int index) { selected_candidate_idx_ = index; }
+  void set_symbol_rewriter_for_test(bool enabled) { symbol_rewriter_.store(enabled); }
+  void set_emoji_rewriter_for_test(bool enabled, bool trigger = true, uint32_t minimum = 1) {
+    emoji_rewriter_.store(enabled);
+    emoji_trigger_search_.store(trigger);
+    emoji_trigger_min_query_length_.store(minimum);
+  }
+  std::string pending_emoji_trigger_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_pending_emoji_trigger_;
+  }
   bool has_pending_commit_observation_for_test() const {
     return pending_commit_observation_.has_value();
   }
@@ -229,6 +240,13 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> batch_auto_punctuation_{false};
   std::atomic<bool> number_rewriter_{false};
   std::atomic<bool> katakana_rewriter_{false};
+  std::atomic<bool> symbol_rewriter_{false};
+  std::atomic<bool> emoji_rewriter_{false};
+  std::atomic<bool> emoji_trigger_search_{true};
+  std::atomic<uint32_t> emoji_max_candidates_{12};
+  std::atomic<uint32_t> emoji_trigger_min_query_length_{1};
+  enum class EmojiMode { Inactive, Collecting, Listing };
+  EmojiMode emoji_mode_{EmojiMode::Inactive};  // UI apartment only.
   std::atomic<uint32_t> max_candidates_{9};
 
   // Last context used for preedit updates; allows Deactivate to end composition.
@@ -265,6 +283,8 @@ class TextService final : public ITfTextInputProcessorEx,
   uint64_t ipc_pending_id_{0};
   bool ipc_has_request_{false};
   bool ipc_pending_is_batch_{false};
+  bool ipc_pending_live_{true};
+  std::string ipc_pending_emoji_trigger_;
   // ID of the QueryCandidates currently sent but not yet received (0 = none).
   // Protected by ipc_mtx_; written by the worker thread, read by TIP thread.
   uint64_t ipc_inflight_id_{0};
@@ -318,7 +338,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();
   std::string NextCommitObservationId();
-  void PostQueryCandidates(const std::string& reading);
+  void PostQueryCandidates(const std::string& reading, bool live = true,
+                           const std::string& emoji_trigger = {});
+  HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
+                         bool test_only, bool& handled);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();

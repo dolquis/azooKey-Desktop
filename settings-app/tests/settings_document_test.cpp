@@ -95,6 +95,13 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
     "liveConversion": true,
     "numberRewriter": true,
     "katakanaRewriter": true,
+    "symbolRewriter": true,
+    "emojiRewriter": true,
+    "emojiTriggerSearch": false,
+    "emojiMaxCandidates": 23,
+    "emojiTriggerMinQueryLength": 2,
+    "symbolDataPath": "C:/data/symbol.tsv",
+    "emojiDataPath": "C:/data/emoji.tsv",
     "inferenceThreads": 6,
     "maxCandidates": 12,
     "maxContextLength": 20,
@@ -129,6 +136,13 @@ TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   ASSERT_TRUE(root.contains("numberRewriter"));
   EXPECT_TRUE(root.at("numberRewriter").AsBool());
   EXPECT_TRUE(root.at("katakanaRewriter").AsBool());
+  EXPECT_TRUE(root.at("symbolRewriter").AsBool());
+  EXPECT_TRUE(root.at("emojiRewriter").AsBool());
+  EXPECT_FALSE(root.at("emojiTriggerSearch").AsBool());
+  EXPECT_EQ(root.at("emojiMaxCandidates").AsNumber(), 23.0);
+  EXPECT_EQ(root.at("emojiTriggerMinQueryLength").AsNumber(), 2.0);
+  EXPECT_EQ(root.at("symbolDataPath").AsString(), "C:/data/symbol.tsv");
+  EXPECT_EQ(root.at("emojiDataPath").AsString(), "C:/data/emoji.tsv");
   EXPECT_EQ(root.at("inferenceThreads").AsNumber(), 6.0);
   EXPECT_EQ(root.at("maxCandidates").AsNumber(), 12.0);
   EXPECT_EQ(root.at("maxContextLength").AsNumber(), 20.0);

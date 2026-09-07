@@ -60,7 +60,14 @@ class DirectoryWatch final {
                     FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
     if (directory_ == INVALID_HANDLE_VALUE) return false;
     operation_.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    return operation_.hEvent && Arm();
+    if (!operation_.hEvent || !Arm()) return false;
+    // A missing child may have appeared between choosing the ancestor and
+    // arming its watch. Its creation notification is then already lost, so
+    // descend now; subsequent creations are covered by the armed watch.
+    if (ancestor != path.parent_path() &&
+        std::filesystem::is_directory(ancestor / relative_, error))
+      return Open(path);
+    return true;
   }
   HANDLE Event() const { return pending_ ? operation_.hEvent : nullptr; }
   const std::filesystem::path& Directory() const { return directory_path_; }

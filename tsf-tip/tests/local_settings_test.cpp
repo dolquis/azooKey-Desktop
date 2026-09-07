@@ -159,14 +159,19 @@ TEST_F(LocalSettingsTest, NestedUnrelatedFileWritesDoNotProduceWatchNotification
 }
 
 TEST_F(LocalSettingsTest, RebindsFromMissingAncestorsWithoutRecursivelyWatchingTheirSiblings) {
-  path = root / L"missing" / L"azooKey" / L"config" / L"settings.json";
-  ASSERT_TRUE(reader.Start(path));
-  EXPECT_EQ(reader.WatchDirectoriesForTest()[0], root);
-  EXPECT_EQ(reader.WatchDirectoriesForTest()[1], root);
-  Write(R"({"bracketPairing":true})");
-  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
-  Write(R"({"bracketPairing":false})");
-  ASSERT_TRUE(reader.WaitForEnabledForTest(false));
+  for (int iteration = 0; iteration < 20; ++iteration) {
+    SCOPED_TRACE(iteration);
+    path = root / (L"missing" + std::to_wstring(iteration)) / L"azooKey" / L"config" /
+           L"settings.json";
+    ASSERT_TRUE(reader.Start(path));
+    EXPECT_EQ(reader.WatchDirectoriesForTest()[0], root);
+    EXPECT_EQ(reader.WatchDirectoriesForTest()[1], root);
+    Write(R"({"bracketPairing":true})");
+    ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+    Write(R"({"bracketPairing":false})");
+    ASSERT_TRUE(reader.WaitForEnabledForTest(false));
+    reader.Stop();
+  }
 }
 
 TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {

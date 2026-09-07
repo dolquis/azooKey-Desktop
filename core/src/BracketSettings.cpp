@@ -37,15 +37,6 @@ BracketSettings ParseBracketSettings(std::string_view json) {
   return settings;
 }
 
-bool EqualAsciiAppName(std::string_view left, std::string_view right) {
-  const auto lower = [](unsigned char ch) {
-    return ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch;
-  };
-  return left.size() == right.size() &&
-         std::equal(left.begin(), left.end(), right.begin(),
-                    [&](unsigned char a, unsigned char b) { return lower(a) == lower(b); });
-}
-
 bool BracketPairingEnabledForApp(const BracketSettings& settings, const ForegroundApp& app,
                                  AppNameEqual equal) {
   if (!settings.pairing.enabled || !app.resolved || app.process_name.empty()) return false;

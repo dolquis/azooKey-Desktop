@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/BracketPairing.h"
 
 namespace azookey::core {
@@ -11,19 +12,10 @@ namespace azookey::core {
 enum class BracketPairingTrigger { Immediate, Composition };
 enum class BracketInputMode { Hiragana, AlnumHalf, AlnumFull };
 
-struct ForegroundApp {
-  std::string process_name;
-  std::string window_class;
-  bool resolved{false};
-};
-
 struct BracketAppPolicy {
   bool allowlist{false};
   std::vector<std::string> apps;
 };
-
-using AppNameEqual = bool (*)(std::string_view, std::string_view);
-bool EqualAsciiAppName(std::string_view left, std::string_view right);
 
 struct BracketSettings {
   BracketPairingOptions pairing;

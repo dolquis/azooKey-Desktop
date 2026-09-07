@@ -61,10 +61,10 @@ fail-closed（解決不能を secure 扱い）は M46 §4.3 が担当し、プ�
 
 ## 4. 設定スキーマ
 
-`settings/mvp-settings.schema.json` の既定 `additionalProperties: false`
-制約下で、新規 top-level key `profilesByApp` を追加する。schema 追加と
-Host 側の読み書き実装は同一 PR でまとめ、schema 不在のまま
-`profilesByApp` を書き込む不整合状態を作らない。
+`settings/mvp-settings.schema.json` の top-level key `profilesByApp` に保存する。
+各プロファイルは `additionalProperties: false` とし、Host の `SettingsStore` と
+設定アプリの `SettingsDocument` は共通 validator を使って読み取り・保存する。
+未指定フィールドに schema の default を保存時点で補わず、解決時に下位層を継承する。
 
 設定例（実際に書き込まれる JSON 値）:
 
@@ -265,9 +265,9 @@ window_class → default）に限り、下記の **グローバル floor** を�
 既存設定キー `promptPrefixByApp` は値 `{"<process>": "<prefix>"}` の
 map（M30 横断テーマ X-2-6）で、key は大文字小文字混在の実プロセス名
 （例: `Code.exe`, `OUTLOOK.EXE`）で書かれている既存ユーザー設定がある。
-M48 の resolver は `profilesByApp[process_name.lower()]` で lookup する
-ため、legacy 側も **読み込み時に key を `lower()` 正規化**して同じ規約に
-揃える。M48 では以下の移行戦略をとる:
+M48 の resolver は、プロセス名と legacy 側のキーを大文字小文字を区別せず比較する。
+Windows では Unicode ordinal 比較を使い、設定ファイルの元のキー表記は保持する。
+以下の `process.lower()` はこの照合規約を表す。M48 では以下の移行戦略をとる:
 
 1. `profilesByApp[process.lower()].promptPrefix` が**存在すれば**（明示的な空文字 `""`
    を含む）それを使う。`""` は「レガシー prefix をクリアする」上書き値であり、レガシーへ
@@ -276,17 +276,17 @@ M48 の resolver は `profilesByApp[process_name.lower()]` で lookup する
    `promptPrefix` キーが無い）場合のみ `promptPrefixByApp[process.lower()]` を読む（§5
    overlay と同じく「未指定 field のみ下位層を継承」。空 `""` は未指定ではない）。このため
    設定ローダは `promptPrefix` の**キー有無を保持**し、既定 `""` を overlay / legacy 解決前に
-   先食いで適用しない（読み込み時に大文字混在キーは `lower()` 正規化済み）
+   先食いで適用しない（大文字混在キーも同じ照合規約で扱う）
 3. 設定アプリでの編集は `profilesByApp` 側に書く（`promptPrefixByApp`
    は read-only legacy 扱い）
 4. M48 リリース後 3 マイナーバージョンで `promptPrefixByApp` 削除予定
    （deprecation warning を CHANGELOG に記載）
 
-`SettingsManager` で読み込み時に統合し、内部表現は `profilesByApp`
-ベースに統一する。lower 化で衝突した既存キー（例: `Code.exe` と `code.exe` の
+共通 resolver の読み込み・解決処理に統合する。照合で衝突した既存キー（例: `Code.exe` と `code.exe` の
 両方）は、**JSON のキー列挙順に依存しない決定的規則**として、衝突元キーを Unicode
-コードポイント順で昇順ソートし**末尾（最大）を採用**、warning を `azookey_diag.exe`
-に記録する（map 反復順による非決定を避けるための明示規則）。
+コードポイント順で昇順ソートし**末尾（最大）を採用**する。
+共通 validator は警告を返し、Host の `SettingsLoadResult.profile_warnings` と
+設定アプリの保存結果で参照できる。`azookey_diag.exe` への表示接続は M48 の診断統合で行う。
 
 ## 7. 候補タグ Boost
 
@@ -330,32 +330,37 @@ candidate.final_score *= boost
 
 ## 9. AppProfileResolver
 
-`inference-host/src/AppProfileResolver.cpp`（新規）として実装する:
+共通の選択処理は `core/src/AppProfileResolver.cpp` に置く。Host は
+`RuntimeSettings::AppProfiles()` で不変の resolver を参照し、TIP も同じ resolver を使う。
+単一フィールドの解決も、全フィールドと同じ overlay 処理を通す。
 
 ```cpp
-struct ResolvedProfile {
-  std::string profile_name;
-  bool prediction_enabled;
-  bool sentence_completion;
-  bool learning_enabled;
-  std::string ai_backend;
-  std::string prompt_prefix;
-  std::string style;
-  bool prefer_technical_terms;
-  std::map<std::string, double> candidate_tag_boosts;
-  PrivacyMode privacy_mode;
-};
-
 class AppProfileResolver {
 public:
-  ResolvedProfile Resolve(const AppContext& app);
-private:
-  void LoadFromSettings(const Settings& s);
+  static AppProfileResolver FromSettings(const json::Value& settings,
+                                        std::vector<std::string>* warnings = nullptr);
+  json::Object Resolve(const ForegroundApp& app, AppNameEqual equal = EqualAppName) const;
+  std::optional<json::Value> ResolveField(std::string_view field, const ForegroundApp& app,
+                                        AppNameEqual equal = EqualAppName) const;
 };
 ```
 
-Dispatcher は IPC ハンドラの先頭で `Resolve` を呼び、その結果に基づいて
-候補生成 / rerank / external AI を切り替える。
+Dispatcher への適用では、IPC ハンドラの先頭で `Resolve` を呼び、
+PrivacyGate の許可範囲内で候補生成 / rerank / external AI を切り替える。
+この消費側の統合は共通基盤とは別に実装する。
+
+### 9.1 共通基盤と機能への適用境界
+
+resolver は設定フィールドを選ぶ純粋な処理であり、TSF 操作、IPC、ファイル I/O、
+PrivacyGate の通知を行わない。`privacyMode` はプロファイルからの要求値であり、
+グローバル floor 適用後の許可判定ではない。消費側は §4.2 / §5 の PrivacyGate 制約を
+満たしてから候補・学習・AI に適用する。共通基盤だけでは、これらの実動作は切り替わらない。
+カッコ設定の適用境界は `bracket-pairing-spec.md` §4.5.0 とする。
+
+不正なプロファイル・未知フィールド・型や enum の不正は除外して下位層を継承し、
+タグ倍率は読み込み時にも `[1.0, 3.0]` に制限する。未知のタグ名は保存時に保持し、
+スコア適用時に既知タグだけを参照する。検証警告にアプリ名や設定値を含めない。
+設定アプリでモデル設定を保存しても、プロファイルの有効フィールドと明示的な空文字を保持する。
 
 ## 10. テスト
 

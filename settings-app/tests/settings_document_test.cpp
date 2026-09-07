@@ -16,6 +16,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#ifdef GetObject
+#undef GetObject
+#endif
 #endif
 
 #include "SettingsDocument.h"
@@ -44,6 +47,32 @@ std::string ReadText(const std::filesystem::path& path) {
 }
 
 }  // namespace
+
+TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValues) {
+  const auto dir = TestDir("azookey_settings_profile_writeback");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"profilesByApp":{"Code.exe":{
+    "profileName":"Code","predictionEnabled":false,"sentenceCompletion":true,
+    "learningEnabled":false,"aiBackend":"auto","promptPrefix":"","style":"technical",
+    "preferTechnicalTerms":true,"candidateTagBoosts":{"Technical":100},"privacyMode":"secure",
+    "invalid":false},"Bad":false}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok);
+  EXPECT_FALSE(saved.warnings.empty());
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed);
+  const auto* profiles = parsed->GetObject("profilesByApp");
+  ASSERT_NE(profiles, nullptr);
+  ASSERT_EQ(profiles->size(), 1u);
+  const auto& profile = profiles->at("Code.exe");
+  EXPECT_EQ(profile.AsObject().size(), 10u);
+  EXPECT_EQ(profile.GetString("privacyMode"), "secure");
+  EXPECT_EQ(profile.GetString("promptPrefix"), "");
+  EXPECT_EQ(profile.GetString("aiBackend"), "auto");
+  EXPECT_EQ(profile.GetObject("candidateTagBoosts")->at("Technical").AsNumber(), 3);
+  std::filesystem::remove_all(dir);
+}
 
 TEST(SettingsDocumentTest, MissingFileUsesM11Defaults) {
   const auto dir = TestDir("azookey_settings_document_missing");

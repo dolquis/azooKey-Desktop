@@ -1,6 +1,5 @@
 #include "azookey/tsf/ForegroundAppDetector.h"
 
-#include <algorithm>
 #include <array>
 
 namespace azookey::tsf {
@@ -17,27 +16,10 @@ std::string Utf8(std::wstring_view text) {
   return result;
 }
 
-std::wstring Wide(std::string_view text) {
-  if (text.empty() || text.size() > 32768) return {};
-  const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                                        static_cast<int>(text.size()), nullptr, 0);
-  if (!count) return {};
-  std::wstring result(count, L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
-                      result.data(), count);
-  return result;
-}
 }  // namespace
 
 bool WindowsAppNameEqual(std::string_view left, std::string_view right) {
-  const auto ascii = [](std::string_view name) {
-    return std::all_of(name.begin(), name.end(), [](unsigned char ch) { return ch < 128; });
-  };
-  if (ascii(left) && ascii(right)) return core::EqualAsciiAppName(left, right);
-  const auto a = Wide(left), b = Wide(right);
-  return !a.empty() && !b.empty() &&
-         CompareStringOrdinal(a.data(), static_cast<int>(a.size()), b.data(),
-                              static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+  return core::EqualAppName(left, right);
 }
 
 core::ForegroundApp ForegroundAppDetector::Get() {

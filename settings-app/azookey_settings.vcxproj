@@ -68,7 +68,7 @@
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <WarningLevel>Level4</WarningLevel>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\ipc\include;$(ProjectDir)..\learning\include;$(AzooKeyWilIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\core\include;$(ProjectDir)..\ipc\include;$(ProjectDir)..\learning\include;$(AzooKeyWilIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /bigobj /utf-8 /permissive-</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -108,6 +108,7 @@
     <ClCompile Include="LaunchArguments.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\core\src\AppProfileResolver.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="SettingsIpcClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\ipc\src\Json.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\ipc\src\Messages.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

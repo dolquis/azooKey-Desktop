@@ -4,9 +4,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "azookey/core/AppProfileResolver.h"
 #include "azookey/host/InferenceEngine.h"
 
 namespace azookey::host {
@@ -35,6 +38,11 @@ struct RuntimeAutoUpdateSettings {
 };
 
 struct RuntimeSettings {
+  std::shared_ptr<const core::AppProfileResolver> app_profiles;
+  const core::AppProfileResolver& AppProfiles() const {
+    static const auto defaults = core::AppProfileResolver::FromSettings(ipc::json::Value{});
+    return app_profiles ? *app_profiles : defaults;
+  }
   NllConfig nll;
   std::string input_mode{"hiragana"};
   bool live_conversion{false};
@@ -73,6 +81,7 @@ struct SettingsLoadResult {
   SettingsLoadStatus status{SettingsLoadStatus::Missing};
   std::optional<std::string> error;
   std::optional<std::filesystem::path> quarantined_path;
+  std::vector<std::string> profile_warnings;
 };
 
 class SettingsStore {

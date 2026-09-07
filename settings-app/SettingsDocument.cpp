@@ -17,8 +17,12 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#ifdef GetObject
+#undef GetObject
+#endif
 #endif
 
+#include "azookey/core/AppProfileResolver.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/FileLock.h"
@@ -187,6 +191,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       continue;
     } else if (key == "promptPrefixByApp" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeStringMap(value.AsObject(), warnings)));
+      continue;
+    } else if (key == "profilesByApp" && value.IsObject()) {
+      output.emplace(key, j::Value(azookey::core::SanitizeAppProfiles(value.AsObject(), warnings)));
       continue;
     }
 

@@ -3,6 +3,30 @@
   "title": "azooKey Windows TSF MVP settings",
   "type": "object",
   "properties": {
+    "profilesByApp": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profileName": {"type": "string", "default": ""},
+          "predictionEnabled": {"type": "boolean", "default": true},
+          "sentenceCompletion": {"type": "boolean", "default": false},
+          "learningEnabled": {"type": "boolean", "default": true},
+          "aiBackend": {"type": "string", "enum": ["auto", "local-zenzai", "openai", "none"], "default": "auto"},
+          "promptPrefix": {"type": "string", "default": ""},
+          "style": {"type": "string", "enum": ["auto", "polite", "casual", "technical"], "default": "auto"},
+          "preferTechnicalTerms": {"type": "boolean", "default": false},
+          "candidateTagBoosts": {
+            "type": "object",
+            "default": {},
+            "additionalProperties": {"type": "number", "minimum": 1.0, "maximum": 3.0}
+          },
+          "privacyMode": {"type": "string", "enum": ["inherit", "normal", "private", "secure"], "default": "inherit"}
+        }
+      }
+    },
     "bracketSymmetricQuotePairing": {"type": "boolean", "default": false},
     "bracketWrapSelection": {"type": "boolean", "default": false},
     "bracketPairingAppPolicy": {

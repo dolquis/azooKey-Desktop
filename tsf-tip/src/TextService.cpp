@@ -20,10 +20,13 @@
 
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
+#include "azookey/core/PlatformPaths.h"
+#include "azookey/core/Utf8.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
+#include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/SettingsLauncher.h"
 
@@ -266,11 +269,8 @@ std::string ApplyDefaultCompositionPunctuation(const std::string& text) {
   return surface;
 }
 
-std::optional<WCHAR> TranslateOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
-  if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2) {
-    return std::nullopt;
-  }
-
+std::optional<WCHAR> TranslateKeyboardCharacter(WPARAM virtual_key, LPARAM key_data) {
+  if (virtual_key > 255) return std::nullopt;
   std::array<BYTE, 256> keyboard_state{};
   if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
 
@@ -289,10 +289,50 @@ std::optional<WCHAR> TranslateOemCompositionCharacter(WPARAM virtual_key, LPARAM
   return translated[0];
 }
 
+std::optional<WCHAR> TranslateOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
+  if (virtual_key != VK_OEM_COMMA && virtual_key != VK_OEM_PERIOD && virtual_key != VK_OEM_2) {
+    return std::nullopt;
+  }
+  return TranslateKeyboardCharacter(virtual_key, key_data);
+}
+
 #ifdef AZOOKEY_TSF_TESTING
 azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest
     g_translate_oem_composition_character = &TranslateOemCompositionCharacter;
+azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest g_translate_bracket_character =
+    &TranslateKeyboardCharacter;
 #endif
+
+std::optional<WCHAR> CurrentBracketCharacter(WPARAM key, LPARAM key_data) {
+#ifdef AZOOKEY_TSF_TESTING
+  return g_translate_bracket_character(key, key_data);
+#else
+  return TranslateKeyboardCharacter(key, key_data);
+#endif
+}
+
+char32_t BracketCodepoint(WCHAR raw, azookey::core::BracketInputMode mode) {
+  if (mode == azookey::core::BracketInputMode::AlnumHalf) return raw;
+  if (mode == azookey::core::BracketInputMode::AlnumFull) {
+    return raw >= L'!' && raw <= L'~' ? static_cast<char32_t>(raw + 0xfee0) : raw;
+  }
+  switch (raw) {
+    case L'[':
+      return U'「';
+    case L']':
+      return U'」';
+    case L'(':
+      return U'（';
+    case L')':
+      return U'）';
+    case L'{':
+      return U'｛';
+    case L'}':
+      return U'｝';
+    default:
+      return raw;
+  }
+}
 
 std::optional<WCHAR> CurrentOemCompositionCharacter(WPARAM virtual_key, LPARAM key_data) {
 #ifdef AZOOKEY_TSF_TESTING
@@ -538,6 +578,14 @@ void ClearTranslateOemCompositionCharacterForTest() {
   g_translate_oem_composition_character = &TranslateOemCompositionCharacter;
 }
 
+void SetTranslateBracketCharacterForTest(TranslateOemCompositionCharacterFnForTest translate) {
+  g_translate_bracket_character = translate;
+}
+
+void ClearTranslateBracketCharacterForTest() {
+  g_translate_bracket_character = &TranslateKeyboardCharacter;
+}
+
 std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
                                                                 LPARAM key_data) {
   return TranslateAsciiDecimalDigit(virtual_key, key_data);
@@ -666,11 +714,19 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
 
   StartIpcWorker();
+  try {
+    if (const auto local = core::GetLocalAppDataDirectory()) {
+      local_settings_.Start(*local / "azooKey" / "config" / "settings.json");
+    }
+  } catch (...) {
+    // Local settings are optional; allocation/path failures leave defaults.
+  }
   return S_OK;
 }
 
 STDMETHODIMP TextService::Deactivate() {
   AZOOKEY_ASSERT_UI_THREAD();
+  local_settings_.Stop();
   HRESULT result = UnadviseTextServiceSinks();
 
   StopIpcWorker();
@@ -762,6 +818,120 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
   return S_OK;
 }
 
+HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
+                                      bool test_only, bool& handled) {
+  handled = false;
+  if (bracket_composition_) {
+    if (test_only) {
+      *eaten = TRUE;
+      handled = true;
+      return S_OK;
+    }
+    const HRESULT finish = BracketEditSession::Finish(*this, context, client_id_, key == VK_ESCAPE);
+    if (FAILED(finish) && bracket_composition_) {
+      *eaten = TRUE;
+      handled = true;
+      return finish;
+    }
+    if (key == VK_ESCAPE || key == VK_RETURN) {
+      *eaten = TRUE;
+      handled = true;
+      return S_OK;
+    }
+  }
+  const auto settings = local_settings_.Snapshot();
+  const bool alnum = settings.input_mode != core::BracketInputMode::Hiragana;
+  if (!settings.pairing.enabled) return S_OK;
+  if (!core::BracketPairingEnabledForApp(settings, foreground_app_.Get(), WindowsAppNameEqual))
+    return S_OK;
+  const bool enabled = !alnum || settings.pairing.enabled_in_alnum_mode;
+  const auto raw = CurrentBracketCharacter(key, key_data);
+  const char32_t codepoint = raw ? BracketCodepoint(*raw, settings.input_mode) : 0;
+  const bool bracket =
+      enabled &&
+      core::EvaluateBracketInput(codepoint, alnum, {}, settings.pairing, settings.Table()).type !=
+          core::BracketPairingActionType::kPassThrough;
+  const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
+  const bool candidates_visible = candidate_ui_.IsShowing();
+  if (bracket && BatchRomajiEnabled() && has_preedit) {
+    handled = true;
+    if (test_only) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+    const auto saved_raw = batch_raw_romaji_;
+    const auto saved_preedit = preedit_kana_;
+    core::AppendUtf8(batch_raw_romaji_, *raw);
+    RefreshBatchPreeditSurface();
+    const HRESULT update = RequestPreeditUpdate(context);
+    if (FAILED(update)) {
+      batch_raw_romaji_ = saved_raw;
+      preedit_kana_ = saved_preedit;
+      return update;
+    }
+    batch_query_in_progress_ = false;
+    ClearCandidateStateForLifecycle();
+    CancelPendingQueriesForLifecycle();
+    *eaten = TRUE;
+    return S_OK;
+  }
+  if (bracket) {
+    handled = true;
+    if (test_only) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+    if (has_preedit || candidates_visible) {
+      const HRESULT commit =
+          candidates_visible ? CommitSelected(context) : CommitPreeditAsIs(context);
+      if (FAILED(commit) || committing_) return FAILED(commit) ? commit : E_FAIL;
+    }
+    const auto hint = BracketEditSession::ReadHint(context, client_id_);
+    const auto action =
+        core::EvaluateBracketInput(codepoint, alnum, hint, settings.pairing, settings.Table());
+    if (action.type == core::BracketPairingActionType::kPassThrough) {
+      handled = false;
+      return S_OK;
+    }
+    bool applied = false;
+    const HRESULT result =
+        BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
+    if (applied) {
+      if (active_context_ != context) {
+        if (active_context_) active_context_->Release();
+        active_context_ = context;
+        active_context_->AddRef();
+      }
+      *eaten = TRUE;
+      if (FAILED(result))
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "bracket_caret_failed");
+      return S_OK;
+    }
+    return result;
+  }
+  if (enabled && key == VK_BACK && !has_preedit && !candidates_visible) {
+    const auto hint = BracketEditSession::ReadHint(context, client_id_);
+    const auto action =
+        core::EvaluateBracketBackspace(alnum, hint, settings.pairing, settings.Table());
+    if (action.type == core::BracketPairingActionType::kDeletePair) {
+      handled = true;
+      if (test_only) {
+        *eaten = TRUE;
+        return S_OK;
+      }
+      bool applied = false;
+      const HRESULT result =
+          BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
+      *eaten = applied ? TRUE : FALSE;
+      return applied ? S_OK : result;
+    }
+  }
+  // In an explicitly selected alnum mode, leave ordinary input to the app.
+  // The master-OFF path above preserves all pre-existing TIP behavior.
+  if (alnum && !has_preedit && !candidates_visible) handled = true;
+  return S_OK;
+}
+
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                         BOOL* eaten) {
   AZOOKEY_ASSERT_UI_THREAD();
@@ -780,6 +950,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = TRUE;
       return S_OK;
     }
+
+    bool bracket_handled = false;
+    const HRESULT bracket_hr =
+        HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled);
+    if (FAILED(bracket_hr) || bracket_handled) return bracket_hr;
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
@@ -855,6 +1030,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         return S_OK;
       }
     }
+
+    bool bracket_handled = false;
+    const HRESULT bracket_hr =
+        HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
+    if (FAILED(bracket_hr) || bracket_handled) return bracket_hr;
 
     struct PreeditRollbackState {
       std::string preedit;
@@ -1486,6 +1666,7 @@ void TextService::PostPendingCommitObservation() {
 }
 
 void TextService::ClearTextStateForLifecycle() {
+  bracket_composition_ = false;
   preedit_kana_.clear();
   romaji_.Reset();
   ClearBatchState();
@@ -1521,6 +1702,9 @@ bool TextService::ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr
 }
 
 bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
+  if (bracket_composition_) {
+    return SUCCEEDED(BracketEditSession::Finish(*this, context, client_id_, false));
+  }
   std::string pending_surface;
   if (committing_) {
     pending_surface = commit_surface_;
@@ -2758,6 +2942,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       throw std::bad_alloc();
     }
 #endif
+    // A queued normal-preedit callback must not rewrite the fixed bracket pair.
+    if (service_->bracket_composition_) return S_OK;
+
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {
       const std::string pending_commit_surface = service_->commit_surface_;

@@ -19,6 +19,8 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#include "azookey/tsf/ForegroundAppDetector.h"
+#include "azookey/tsf/TipLocalSettings.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
 #endif
@@ -55,6 +57,8 @@ std::optional<WCHAR> TranslateOemCompositionCharacterUsingWin32ForTest(WPARAM vi
 void SetTranslateOemCompositionCharacterForTest(
     TranslateOemCompositionCharacterFnForTest translate_character);
 void ClearTranslateOemCompositionCharacterForTest();
+void SetTranslateBracketCharacterForTest(TranslateOemCompositionCharacterFnForTest translate);
+void ClearTranslateBracketCharacterForTest();
 std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
                                                                 LPARAM key_data);
 void SetTranslateAsciiDecimalDigitForTest(TranslateAsciiDecimalDigitFnForTest translate_digit);
@@ -135,6 +139,13 @@ class TextService final : public ITfTextInputProcessorEx,
 
 #ifdef AZOOKEY_TSF_TESTING
   bool candidate_window_show_pending_for_test();
+  void set_bracket_settings_for_test(const core::BracketSettings& settings) {
+    local_settings_.SetForTest(settings);
+  }
+  bool bracket_composition_for_test() const { return bracket_composition_; }
+  void set_foreground_app_for_test(core::ForegroundApp app) {
+    foreground_app_.SetForTest(std::move(app));
+  }
   void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
   void set_rewritten_cached_candidates_for_test(const std::string& reading,
                                                 std::vector<ipc::CandidateField> candidates);
@@ -188,6 +199,12 @@ class TextService final : public ITfTextInputProcessorEx,
 
  private:
   friend class EditSession;
+  friend class BracketEditSession;
+  TipLocalSettings local_settings_;
+  ForegroundAppDetector foreground_app_;
+  bool bracket_composition_{false};
+  HRESULT HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
+                           bool test_only, bool& handled);
 
 #ifdef _DEBUG
   DebugThreadAffinity ui_thread_affinity_;

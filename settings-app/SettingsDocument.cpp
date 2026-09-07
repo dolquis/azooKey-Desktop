@@ -1,5 +1,6 @@
 #include "SettingsDocument.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -138,14 +139,24 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "contextReselection" || key == "postCommitLint" ||
                key == "retroactiveRecompute" || key == "sentenceCompletion" ||
                key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
-               key == "numberRewriter" || key == "katakanaRewriter") {
+               key == "numberRewriter" || key == "katakanaRewriter" || key == "bracketPairing" ||
+               key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
+               key == "bracketPairingInAlnumMode" || key == "bracketSymmetricQuotePairing" ||
+               key == "bracketWrapSelection") {
       valid = value.IsBool();
+    } else if (key == "bracketPairingTrigger") {
+      valid = IsStringEnum(value, {"immediate", "composition"});
+    } else if (key == "bracketPairingAppPolicy") {
+      valid = IsStringEnum(value, {"denylist", "allowlist"});
+    } else if (key == "bracketPairingApps") {
+      valid = value.IsArray() && std::all_of(value.AsArray().begin(), value.AsArray().end(),
+                                             [](const auto& item) { return item.IsString(); });
     } else if (key == "logLevel") {
       valid = IsStringEnum(value, {"error", "warn", "info", "debug"});
     } else if (key == "inputStyle") {
       valid = IsStringEnum(value, {"default", "custom"});
     } else if (key == "customRomajiTablePath" || key == "openAiApiKey" ||
-               key == "openAiApiEndpoint" || key == "openAiModel") {
+               key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath") {
       valid = value.IsString();
     } else if (key == "aiBackend") {
       valid = IsStringEnum(value, {"none", "openai", "local-zenzai"});

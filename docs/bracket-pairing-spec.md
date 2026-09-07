@@ -349,6 +349,12 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
 JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既定で働くため。`allowlist`
 ポリシーではこのシードを使わず `bracketPairingApps` のみを許可集合とする。
 
+TIP の `ForegroundAppDetector` は前面 HWND と PID をキー処理ごとに確認し、名前の取得結果を
+最大 500 ms キャッシュする。前面 HWND / PID が変われば即座に取り直す。プロセス名の比較は
+Windows の序数比較で大小文字を無視し、ウィンドウタイトルは取得・記録・送信しない。
+プロセス名の取得に失敗した場合はペアリングを抑制する。設定スナップショットは判定ごとに
+参照するため、denylist / allowlist の変更は次のキーから反映される。
+
 #### 4.5.1 カッコ対応表の外部化（TSV、M61-B）
 
 §4.1 の**カッコ対応表**（アプリリストではない。アプリリストは §4.5.0）は組み込み既定として
@@ -364,6 +370,13 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
 - マージ規則: 組み込み既定を常にロードし、TSV 行は `open` キーで上書き・新規追加、
   `off` フラグで無効化（M59 §4.1.4 と同方針）。
 - ファイル無しなら組み込み既定のみで動作（後方互換）。不正行は warning ログでスキップ。
+- `bracketPairsPath` が空なら既定パスを使い、相対パスは azooKey データディレクトリを
+  基準に解決する。UTF-8 の各列は BMP の表示文字 1 文字に限る。空行と `#` で始まる行は
+  読み飛ばし、未知のフラグ、余分な列、制御文字、不正 UTF-8 は行単位で除外する。
+  同じ `open` の有効行が複数ある場合は後の行を採用する。
+  warning は不正行の件数と最初の行番号を記録し、本文とパスは記録しない。
+  TIP は設定と TSV をそれぞれ最大 1 MiB まで読み、解析した表を不変のスナップショットとして
+  公開する。削除時は組み込み表へ戻し、パス設定の変更時は監視先も切り替える。
 - ファイルが無くても**コア（M61-A）は組み込み既定の対応表で完全動作**する。TSV 外部化と
   per-app プロファイル統合は M61-B。
 
@@ -411,11 +424,19 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
 
 `bracketWrapSelection == true`（M61-B、既定 OFF）かつ範囲選択中に開きカッコを打鍵すると、
 選択範囲を `open`…`close` で囲む（例: 選択 `あ` + `「` → `「あ」`、カーソルは閉じカッコの
-後ろ or 選択を維持。実装時に確定）。`GetSelection` で範囲テキストを取得し、`open`+選択+
+後ろに置く）。`GetSelection` で範囲テキストを取得し、`open`+選択+
 `close` を 1 回の `SetText` で置換する。**コア（M61-A）には含めない**（ユーザー選択スコープ
-外）。本節は将来挙動の定義であり、既定 OFF。
+外）。既定 OFF。囲みは即時に確定し、`bracketPairingTrigger` の composition は使わない。
+選択の読取は書込ロック内で最大 65,536 UTF-16 code unit までとする。読取失敗や上限超過では
+部分的な囲みを書かず、キーをアプリへ返す。キャレット設定だけが失敗した場合は、
+挿入済みテキストを再送しない。
 
 ## 5. TSF 操作（ClientAction → TSF 翻訳）
+
+カッコ判定の実装入口は `core::EvaluateBracketInput` / `EvaluateBracketBackspace` とする。
+`TextService::HandleBracketKey` が `EditContextHint` と設定スナップショットを渡し、返された
+`BracketPairingAction` を `BracketEditSession` が以下の TSF 操作へ翻訳する。core は文書を
+直接参照せず、通常のローマ字入力・候補確定は既存 `TextService` の経路で処理する。
 
 `docs/legacy-parity-spec.md` §1.3 の表に以下を追加する。実装は既存の commit 経路
 （`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`、現状
@@ -493,11 +514,10 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
 
 ## 6. 設定スキーマ
 
-実装時に `settings/mvp-settings.schema.json` へ以下を追加する
-（`additionalProperties:false` を維持。`description` に対応 M を記載する既存流儀に
-合わせる）。本書（spec）が設定キーの正典であり、実ファイルへの追加は M61 実装時に
-行う（本セッションは設計確定のみでスキーマファイルは変更しない。`docs/dynamic-punctuation-spec.md`
-§8 と同方針）。
+本書が M61 設定キーの正典であり、`settings/mvp-settings.schema.json` と
+`settings/default-settings.sample.json` は対応する M61-A / M61-B の型・既定値を共有する。
+スキーマの `additionalProperties:false` を維持し、`description` に対応 M を記載する。
+M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の読込成功に依存しない。
 
 | キー | 型 | 既定 | M | 説明 |
 |---|---|---|---|---|
@@ -524,10 +544,15 @@ EditSession（または同一 RW セッション）で適用する。同期セ�
   正典パス。`config\` サブディレクトリ配下。schema = `settings/mvp-settings.schema.json`）を
   **TIP プロセス内で読み取る**（IPC を介さない）。設定 UI / host が書き込むのと**同一ファイル**を
   TIP が読むため、Host-offline でも `bracketPairing` が確実に反映される。読み取りは TIP 有効化時
-  （`ActivateEx`）に 1 回、以後は M17 の `ReadDirectoryChangesW` 監視基盤を再利用してホット
-  リロードする（変更検出で新規入力から実効値を差し替え。進行中の composition は触らない）。
+  （`ActivateEx`）に行い、`TipLocalSettings` が `ReadDirectoryChangesW` でホットリロードする。
+  監視スレッドは TSF / COM オブジェクトを操作せず、打鍵側へ値のスナップショットを渡す。
+  変更検出で新規入力から実効値を差し替え、進行中のカッコ composition は確定・取消まで保持する。
 - ファイルが無い / パース不能なら **schema 既定値**（`bracketPairing=false` 等）にフォールバック
   する（後方互換・既定 OFF）。これにより Host 未起動・切断時でも本機能の ON/OFF を確定できる。
+  読込は最大 1 MiB とし、読取不能・上限超過も同じ既定値へ戻す。監視は設定ディレクトリの
+  作成と設定ファイルの置換・削除を検出し、読取ハンドルは削除共有を許可して置換を妨げない。
+  `Deactivate` は監視 I/O をキャンセルして終了を待ち、ハンドルを解放する。TIP は設定を作成・
+  書換え・隔離せず、設定本文をログへ出さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
   TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定 UI / 既存経路）。
 - 設定 UI（M30）完成までは、この settings.json を手編集 / 環境変数で補う（host CLI 経由には

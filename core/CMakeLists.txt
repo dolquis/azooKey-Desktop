@@ -1,4 +1,7 @@
 add_library(azookey_core STATIC
+  src/BracketPairing.cpp
+  src/BracketSettings.cpp
+  src/BracketTable.cpp
   src/CommandLine.cpp
   src/DoubleArrayTrie.cpp
   src/KatakanaRewriter.cpp

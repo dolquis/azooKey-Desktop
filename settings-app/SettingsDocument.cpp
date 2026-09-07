@@ -1,5 +1,6 @@
 #include "SettingsDocument.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -144,6 +145,11 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = value.IsBool();
     } else if (key == "bracketPairingTrigger") {
       valid = IsStringEnum(value, {"immediate", "composition"});
+    } else if (key == "bracketPairingAppPolicy") {
+      valid = IsStringEnum(value, {"denylist", "allowlist"});
+    } else if (key == "bracketPairingApps") {
+      valid = value.IsArray() && std::all_of(value.AsArray().begin(), value.AsArray().end(),
+                                             [](const auto& item) { return item.IsString(); });
     } else if (key == "logLevel") {
       valid = IsStringEnum(value, {"error", "warn", "info", "debug"});
     } else if (key == "inputStyle") {

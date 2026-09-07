@@ -19,6 +19,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
@@ -142,6 +143,9 @@ class TextService final : public ITfTextInputProcessorEx,
     local_settings_.SetForTest(settings);
   }
   bool bracket_composition_for_test() const { return bracket_composition_; }
+  void set_foreground_app_for_test(core::ForegroundApp app) {
+    foreground_app_.SetForTest(std::move(app));
+  }
   void set_cached_candidates_for_test(std::vector<ipc::CandidateField> candidates);
   void set_rewritten_cached_candidates_for_test(const std::string& reading,
                                                 std::vector<ipc::CandidateField> candidates);
@@ -197,6 +201,7 @@ class TextService final : public ITfTextInputProcessorEx,
   friend class EditSession;
   friend class BracketEditSession;
   TipLocalSettings local_settings_;
+  ForegroundAppDetector foreground_app_;
   bool bracket_composition_{false};
   HRESULT HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                            bool test_only, bool& handled);

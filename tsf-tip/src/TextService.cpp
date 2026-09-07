@@ -842,6 +842,8 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
   const auto settings = local_settings_.Snapshot();
   const bool alnum = settings.input_mode != core::BracketInputMode::Hiragana;
   if (!settings.pairing.enabled) return S_OK;
+  if (!core::BracketPairingEnabledForApp(settings, foreground_app_.Get(), WindowsAppNameEqual))
+    return S_OK;
   const bool enabled = !alnum || settings.pairing.enabled_in_alnum_mode;
   const auto raw = CurrentBracketCharacter(key, key_data);
   const char32_t codepoint = raw ? BracketCodepoint(*raw, settings.input_mode) : 0;

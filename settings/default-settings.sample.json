@@ -2,6 +2,8 @@
   "inputMode": "hiragana",
   "bracketPairing": false,
   "bracketPairsPath": "",
+  "bracketPairingAppPolicy": "denylist",
+  "bracketPairingApps": [],
   "bracketPairingTrigger": "immediate",
   "bracketSkipOverClosing": true,
   "bracketBackspaceDeletesPair": true,

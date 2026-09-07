@@ -43,6 +43,24 @@ TEST(BracketTableTest, SymmetricDefinitionsRemainDisabledWithoutOptIn) {
             BracketPairingActionType::kPassThrough);
 }
 
+TEST(BracketAppPolicyTest, DenylistUnionsSeedsWhileAllowlistUsesOnlyExplicitNames) {
+  auto settings =
+      ParseBracketSettings(R"({"bracketPairing":true,"bracketPairingApps":["custom.exe",42]})");
+  for (const auto* name : {"CODE.EXE", "devenv.exe", "idea64.exe", "pycharm64.exe", "CUSTOM.exe"})
+    EXPECT_FALSE(BracketPairingEnabledForApp(settings, {name, "", true}));
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"notepad.exe", "", true}));
+  settings = ParseBracketSettings(R"({"bracketPairing":true,"bracketPairingAppPolicy":"allowlist",
+      "bracketPairingApps":["Code.exe"]})");
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"code.EXE", "", true}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"notepad.exe", "", true}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {}));
+  settings.pairing.enabled = false;
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"code.exe", "", true}));
+  settings =
+      ParseBracketSettings(R"({"bracketPairing":true,"bracketPairingAppPolicy":"allowlist"})");
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"notepad.exe", "", true}));
+}
+
 TEST(BracketPairingTest, InsertsEveryBuiltInPairAtCollapsedCaret) {
   const std::u32string opens = U"（「『【〔［｛〈《“‘([{", closes = U"）」』】〕］｝〉》”’)]}";
   ASSERT_EQ(opens.size(), closes.size());

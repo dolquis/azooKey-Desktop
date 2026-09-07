@@ -5,6 +5,7 @@ add_library(azookey_tsf_tip SHARED
   src/CandidateWindow.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
+  src/ForegroundAppDetector.cpp
   src/exports.def
   src/SettingsLauncher.cpp
   src/TextService.cpp
@@ -40,6 +41,7 @@ if(AZOOKEY_BUILD_TESTS)
       src/CandidateUiCoordinator.cpp
       src/CandidateWindow.cpp
       src/DisplayAttribute.cpp
+      src/ForegroundAppDetector.cpp
       src/SettingsLauncher.cpp
       src/TextService.cpp
       src/TipLocalSettings.cpp

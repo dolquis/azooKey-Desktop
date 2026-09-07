@@ -882,6 +882,7 @@ class BracketHarness {
  public:
   BracketHarness() {
     settings.pairing.enabled = true;
+    service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
     service.set_bracket_settings_for_test(settings);
     azookey::tsf::testing::SetTranslateBracketCharacterForTest(&TranslateBracketForTest);
   }
@@ -908,6 +909,34 @@ class BracketHarness {
   azookey::core::BracketSettings settings;
 };
 }  // namespace
+
+TEST(TsfTipBracketTest, AppPolicySuppressesBothKeyCallbacksAndReevaluatesSettings) {
+  BracketHarness h;
+  h.service.set_foreground_app_for_test({"CODE.EXE", "Chrome_WidgetWin_1", true});
+  h.Press(VK_OEM_4, true);
+  h.Press(VK_OEM_4);
+  EXPECT_EQ(h.context.document->text.find(L"「」"), std::wstring::npos);
+  h.Press(VK_ESCAPE);
+  h.Set(L"", 0);
+  h.settings = azookey::core::ParseBracketSettings(R"({"bracketPairing":true,
+      "bracketPairingAppPolicy":"allowlist","bracketPairingApps":["code.exe"]})");
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「」");
+  h.Set(L"「」", 1);
+  h.service.set_foreground_app_for_test({});
+  EXPECT_FALSE(h.Press(VK_BACK, true));
+  EXPECT_FALSE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"「」");
+}
+
+TEST(TsfTipBracketTest, WindowsAppNamesCompareUnicodeWithoutLocaleDependence) {
+  EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("ÉDITEUR.exe", "éditeur.EXE"));
+  EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("日本語.exe", "日本語.EXE"));
+  EXPECT_FALSE(azookey::tsf::WindowsAppNameEqual("Code.exe", "OtherCode.exe"));
+  EXPECT_FALSE(azookey::tsf::WindowsAppNameEqual("\xff.exe", "\xff.EXE"));
+}
 
 TEST(TsfTipBracketTest, ImmediateInsertsSinglePairAndTypingPreservesClosingBracket) {
   BracketHarness h;

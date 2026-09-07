@@ -4,10 +4,12 @@ param(
   [Alias("json")]
   [switch]$AsJson,
   [Alias("fix-hints")]
-  [switch]$FixHints
+  [switch]$FixHints,
+  [switch]$Clangd
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "clangd-database.ps1")
 
 function Get-DoctorCheck {
   param(
@@ -484,11 +486,20 @@ function Show-DoctorReport {
 function Invoke-DoctorMain {
   param(
     [switch]$OutputJson,
-    [switch]$IncludeFixHints
+    [switch]$IncludeFixHints,
+    [switch]$CheckClangd
   )
 
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-  $checks = @(Get-DoctorCheckSet -RepoRoot $repoRoot)
+  if ($CheckClangd) {
+    $validation = Test-ClangdDatabase -RepoRoot $repoRoot
+    $state = if ($validation.ok) { "ok" } else { "error" }
+    $checks = @(Get-DoctorCheck -Id "file.compile-commands" -Name "clangd database" `
+      -Status $state -Required $true -Details $validation.details `
+      -Hint "Run: pwsh -NoProfile -File scripts/prepare-clangd.ps1")
+  } else {
+    $checks = @(Get-DoctorCheckSet -RepoRoot $repoRoot)
+  }
   $report = Get-DoctorReport -RepoRoot $repoRoot -Checks $checks
 
   if ($OutputJson) {
@@ -503,5 +514,5 @@ function Invoke-DoctorMain {
 }
 
 if ($MyInvocation.InvocationName -ne ".") {
-  Invoke-DoctorMain -OutputJson:$AsJson -IncludeFixHints:$FixHints
+  Invoke-DoctorMain -OutputJson:$AsJson -IncludeFixHints:$FixHints -CheckClangd:$Clangd
 }

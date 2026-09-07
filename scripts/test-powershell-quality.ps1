@@ -13,6 +13,8 @@ $pesterTests = Join-Path $PSScriptRoot "tests"
 $powerShellFiles = @(
   Join-Path $PSScriptRoot "AppContainerAcl.ps1"
   Join-Path $PSScriptRoot "doctor.ps1"
+  Join-Path $PSScriptRoot "clangd-database.ps1"
+  Join-Path $PSScriptRoot "prepare-clangd.ps1"
   Join-Path $PSScriptRoot "host-supervisor.ps1"
   Join-Path $PSScriptRoot "make-vm-verify-package.ps1"
   Join-Path $PSScriptRoot "register-dev.ps1"

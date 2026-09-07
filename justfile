@@ -23,6 +23,14 @@ default:
 configure preset=preset fetch="OFF":
     cmake --preset {{preset}} -DAZOOKEY_FETCH_GOOGLETEST={{fetch}}
 
+# Prepare per-checkout C++ analysis after clone, worktree creation or build cleanup.
+prepare-clangd:
+    pwsh -NoProfile -File scripts/prepare-clangd.ps1
+
+# Strict read-only analysis check; exits nonzero for a missing/stale/invalid DB.
+check-clangd:
+    pwsh -NoProfile -File scripts/doctor.ps1 -Clangd -FixHints
+
 # Build (configure first if needed)
 build preset=preset:
     cmake --build --preset {{preset}}

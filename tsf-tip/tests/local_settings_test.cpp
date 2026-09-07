@@ -45,6 +45,31 @@ TEST_F(LocalSettingsTest, LoadsSharedFileWithoutHostAndStopsIdempotently) {
   reader.Stop();
 }
 
+TEST_F(LocalSettingsTest, ReloadsCommonProfilesAndPreservesPreviousSnapshot) {
+  Write(R"({"bracketPairing":true,"profilesByApp":{"code.exe":{"bracketPairing":"on"}}})");
+  ASSERT_TRUE(reader.Start(path));
+  const auto previous = reader.Snapshot();
+  const azookey::core::ForegroundApp app{"CODE.EXE", "Editor", true};
+  ASSERT_TRUE(azookey::core::BracketPairingEnabledForApp(previous, app));
+  Write(R"({"bracketPairing":true,"profilesByApp":{"code.exe":{"bracketPairing":"off"}}})");
+  ASSERT_TRUE(reader.WaitForSnapshotForTest([&](const auto& settings) {
+    return settings.pairing.enabled && settings.profiles &&
+           settings.profiles->ResolveField("bracketPairing", app)->AsString() == "off" &&
+           !azookey::core::BracketPairingEnabledForApp(settings, app);
+  }));
+  EXPECT_TRUE(azookey::core::BracketPairingEnabledForApp(previous, app));
+  Write(R"({"bracketPairing":true,"profilesByApp":{"default":{"bracketPairing":"on"}}})");
+  ASSERT_TRUE(reader.WaitForSnapshotForTest([&](const auto& settings) {
+    return azookey::core::BracketPairingEnabledForApp(settings, app);
+  }));
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.WaitForSnapshotForTest([&](const auto& settings) {
+    return settings.pairing.enabled && settings.profiles &&
+           settings.profiles->ResolveField("bracketPairing", app)->AsString() == "auto" &&
+           !azookey::core::BracketPairingEnabledForApp(settings, app);
+  }));
+}
+
 TEST_F(LocalSettingsTest, ReloadsTableCreationOverrideDisableAndDeletion) {
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.Start(path));

@@ -39,6 +39,8 @@ std::optional<j::Value> Validate(std::string_view key, const j::Value& value) {
     if (Enum(value, {"auto", "polite", "casual", "technical"})) return value;
   } else if (key == "privacyMode") {
     if (Enum(value, {"inherit", "normal", "private", "secure"})) return value;
+  } else if (key == "bracketPairing") {
+    if (Enum(value, {"auto", "on", "off"})) return value;
   }
   return {};
 }
@@ -150,8 +152,12 @@ AppProfileResolver AppProfileResolver::FromSettings(const j::Value& settings,
                        {"style", "auto"},
                        {"preferTechnicalTerms", false},
                        {"candidateTagBoosts", j::Object{}},
-                       {"privacyMode", "inherit"}};
+                       {"privacyMode", "inherit"},
+                       {"bracketPairing", "auto"}};
   for (auto& [key, value] : resolver.globals_) {
+    // The root bracketPairing boolean is a separate master switch. Only
+    // profiles may carry the enum, even when a hand-edited root is malformed.
+    if (key == "bracketPairing") continue;
     if (const auto* field = settings.Find(key)) {
       if (const auto valid = Validate(key, *field)) value = *valid;
     }

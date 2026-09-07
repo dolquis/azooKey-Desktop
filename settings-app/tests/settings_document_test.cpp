@@ -55,7 +55,7 @@ TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValu
     "profileName":"Code","predictionEnabled":false,"sentenceCompletion":true,
     "learningEnabled":false,"aiBackend":"auto","promptPrefix":"","style":"technical",
     "preferTechnicalTerms":true,"candidateTagBoosts":{"Technical":100},"privacyMode":"secure",
-    "invalid":false},"Bad":false}})");
+    "bracketPairing":"on","invalid":false},"Bad":false}})");
   const auto loaded = azookey::settings::LoadSettingsDocument(path);
   const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
   ASSERT_TRUE(saved.ok);
@@ -66,7 +66,8 @@ TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValu
   ASSERT_NE(profiles, nullptr);
   ASSERT_EQ(profiles->size(), 1u);
   const auto& profile = profiles->at("Code.exe");
-  EXPECT_EQ(profile.AsObject().size(), 10u);
+  EXPECT_EQ(profile.AsObject().size(), 11u);
+  EXPECT_EQ(profile.GetString("bracketPairing"), "on");
   EXPECT_EQ(profile.GetString("privacyMode"), "secure");
   EXPECT_EQ(profile.GetString("promptPrefix"), "");
   EXPECT_EQ(profile.GetString("aiBackend"), "auto");

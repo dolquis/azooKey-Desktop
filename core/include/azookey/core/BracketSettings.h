@@ -24,6 +24,7 @@ struct BracketSettings {
   std::string pairs_path;
   std::shared_ptr<const BracketTable> table;
   std::shared_ptr<const BracketAppPolicy> app_policy;
+  std::shared_ptr<const AppProfileResolver> profiles;
 
   const BracketTable& Table() const { return table ? *table : BuiltinBracketTable(); }
 };
@@ -32,6 +33,6 @@ struct BracketSettings {
 // host connection, or mutation of the shared settings file is performed here.
 BracketSettings ParseBracketSettings(std::string_view json);
 bool BracketPairingEnabledForApp(const BracketSettings& settings, const ForegroundApp& app,
-                                 AppNameEqual equal = EqualAsciiAppName);
+                                 AppNameEqual equal = EqualAppName);
 
 }  // namespace azookey::core

@@ -332,17 +332,15 @@ composition 中の Backspace は従来どおり（ローマ字 pending を戻す
   - `denylist`: **組み込み既定 denylist（定数シード）∪ `bracketPairingApps`** に載るアプリで
     本機能を無効化、その他で有効。
   - `allowlist`: `bracketPairingApps` に載るアプリでのみ有効（組み込みシードは無視）。
-- **M48 アプリ別入力プロファイル（`docs/app-profile-spec.md`）**: M48 完了後は per-app の
-  有効/無効をプロファイルが持ち、**`bracketPairingApps` 設定より優先**する。ただし M48 の
-  `profilesByApp` 各プロファイルは `additionalProperties: false`（同 spec §4）で、現状
-  カッコペアリング用フィールドが無い。よって **M61-B は M48 プロファイルスキーマ（同 §4.1）へ
-  専用フィールドを追加する**（`docs/app-profile-spec.md` の更新を M61-B の作業に含める）:
-  - 追加フィールド: `bracketPairing`（enum `auto` / `on` / `off`、既定 `auto`）。`auto` =
+- **M48 アプリ別入力プロファイル（`docs/app-profile-spec.md`）**: 共通 resolver で解決した
+  有効/無効が **`bracketPairingApps` 設定より優先**する。`profilesByApp` の schema と
+  validator は M48 の共通基盤を使い、TIP の設定読み込み時に不変スナップショットを作る。
+  - フィールド: `bracketPairing`（enum `auto` / `on` / `off`、既定 `auto`）。`auto` =
     グローバル設定（`bracketPairing` + `bracketPairingApps`/`bracketPairingAppPolicy`）に従う、
     `on`/`off` = 当該アプリで明示的に有効/無効（resolver は §4 の優先順位
     `profilesByApp[process]` → `[window_class]` → `["default"]` で解決）。
-  - M48 未実装の間は本フィールドが無いため、`bracketPairingApps` 設定が単独の per-app 源になる
-    （後方互換）。M48 実装と同時に本フィールドを追加し、`auto` 既定で従来挙動を保つ。
+  - 未指定は下位プロファイルを継承する。明示した `auto` は下位の `on` / `off` を解除して
+    リスト判定に戻す。全レイヤで未指定なら従来挙動を保つ。不正な型・enum は未指定として扱う。
 
 組み込み既定 denylist（`denylist` ポリシー時のシード。定数。実機・フィードバックで調整）:
 `Code.exe`（VS Code）/ `devenv.exe`（Visual Studio）/ `idea64.exe`・`pycharm64.exe` 等
@@ -352,8 +350,9 @@ JetBrains 系 / `sublime_text.exe`。これらはアプリ側自動ペアが既�
 TIP の `ForegroundAppDetector` は前面 HWND と PID をキー処理ごとに確認し、名前の取得結果を
 最大 500 ms キャッシュする。前面 HWND / PID が変われば即座に取り直す。プロセス名の比較は
 Windows の序数比較で大小文字を無視し、ウィンドウタイトルは取得・記録・送信しない。
-プロセス名の取得に失敗した場合はペアリングを抑制する。設定スナップショットは判定ごとに
-参照するため、denylist / allowlist の変更は次のキーから反映される。
+プロセス名の取得に失敗した場合は、default プロファイルが `on` でもペアリングを抑制する。
+設定スナップショットは判定ごとに参照するため、denylist / allowlist とプロファイルの変更は
+読み込み完了後の次のキーから反映される。キー処理中のファイル I/O や Host 通信は行わない。
 
 #### 4.5.1 カッコ対応表の外部化（TSV、M61-B）
 

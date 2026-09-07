@@ -10,6 +10,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "bracketPairing": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto"},
           "profileName": {"type": "string", "default": ""},
           "predictionEnabled": {"type": "boolean", "default": true},
           "sentenceCompletion": {"type": "boolean", "default": false},

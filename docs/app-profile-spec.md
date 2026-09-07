@@ -146,6 +146,11 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
           "type": "string",
           "enum": ["inherit", "normal", "private", "secure"],
           "default": "inherit"
+        },
+        "bracketPairing": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "default": "auto"
         }
       }
     },
@@ -168,6 +173,11 @@ schema fragment（`properties.profilesByApp` への追加）。プロファイ�
 | `preferTechnicalTerms` | bool | false | 技術語辞書を boost |
 | `candidateTagBoosts` | map | {} | 候補タグ名 → 倍率（M52 ベンチで定義する候補タグ `Technical` / `Polite` / `English` 等。M53 の辞書エントリ category（`person_name` 等）に作用する `dictionary.categoryBoosts` とは **別 namespace**。詳細は `docs/auto-word-registration-spec.md` §14.5 を参照） |
 | `privacyMode` | enum | "inherit" | `inherit` / `normal` / `private` / `secure` |
+| `bracketPairing` | enum | "auto" | `auto` / `on` / `off`。`auto` はグローバルのアプリリスト判定に従い、`on` / `off` はそれを上書きする。root の boolean マスターが false の場合と前面アプリ解決失敗時は常に無効 |
+
+`bracketPairing` の未指定は下位プロファイルの値を継承する。上位で明示した `auto` は
+下位の `on` / `off` を解除し、`bracketPairingApps` / `bracketPairingAppPolicy` の判定に戻す。
+TIP は共通 resolver の不変スナップショットからこのフィールドを解決し、Host への接続なしで適用する。
 
 ### 4.2 フィールド制約と backend 優先順位（確定）
 

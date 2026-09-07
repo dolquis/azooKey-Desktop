@@ -61,6 +61,57 @@ TEST(BracketAppPolicyTest, DenylistUnionsSeedsWhileAllowlistUsesOnlyExplicitName
   EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"notepad.exe", "", true}));
 }
 
+TEST(BracketAppPolicyTest, ProfileFieldsOverlayProcessWindowAndDefaultBeforeLists) {
+  const auto settings = ParseBracketSettings(R"({"bracketPairing":true,
+    "bracketPairingApps":["blocked.exe"],"profilesByApp":{
+      "default":{"bracketPairing":"off"},"Editor":{"bracketPairing":"on"},
+      "code.exe":{"style":"technical"},"blocked.exe":{"bracketPairing":"on"},
+      "notepad.exe":{"bracketPairing":"off"}}})");
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"CODE.EXE", "Editor", true}));
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"blocked.exe", "", true}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"notepad.exe", "Editor", true}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"other.exe", "", true}));
+}
+
+TEST(BracketAppPolicyTest, ExplicitAutoResetsLowerProfileToExistingPolicy) {
+  auto settings = ParseBracketSettings(R"({"bracketPairing":true,"profilesByApp":{
+    "default":{"bracketPairing":"on"},"code.exe":{"bracketPairing":"auto"},
+    "other.exe":{"bracketPairing":"auto"}}})");
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"code.exe", "", true}));
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"other.exe", "", true}));
+  settings = ParseBracketSettings(R"({"bracketPairing":true,
+    "bracketPairingAppPolicy":"allowlist","bracketPairingApps":["code.exe"],
+    "profilesByApp":{"default":{"bracketPairing":"off"},
+      "code.exe":{"bracketPairing":"auto"},"other.exe":{"bracketPairing":"auto"},
+      "forced.exe":{"bracketPairing":"on"}}})");
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"code.exe", "", true}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"other.exe", "", true}));
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"forced.exe", "", true}));
+}
+
+TEST(BracketAppPolicyTest, MasterAndUnresolvedAppCannotBeOverriddenByProfiles) {
+  auto settings = ParseBracketSettings(R"({"bracketPairing":false,
+    "profilesByApp":{"default":{"bracketPairing":"on"},"code.exe":{"bracketPairing":"on"}}})");
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"code.exe", "", true}));
+  settings.pairing.enabled = true;
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"code.exe", "Editor", false}));
+  EXPECT_FALSE(BracketPairingEnabledForApp(settings, {"", "Editor", true}));
+}
+
+TEST(BracketAppPolicyTest, InvalidProfileEnumInheritsAndRootBooleanStaysSeparate) {
+  const auto settings = ParseBracketSettings(R"({"bracketPairing":true,"profilesByApp":{
+    "default":{"bracketPairing":"on"},"code.exe":{"bracketPairing":false},
+    "devenv.exe":{"bracketPairing":"invalid"}}})");
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"code.exe", "", true}));
+  EXPECT_TRUE(BracketPairingEnabledForApp(settings, {"devenv.exe", "", true}));
+  const auto malformed = ParseBracketSettings(R"({"bracketPairing":"on"})");
+  EXPECT_FALSE(malformed.pairing.enabled);
+  ASSERT_TRUE(malformed.profiles);
+  EXPECT_EQ(malformed.profiles->ResolveField("bracketPairing", {"code.exe", "", true})->AsString(),
+            "auto");
+}
+
 TEST(BracketPairingTest, InsertsEveryBuiltInPairAtCollapsedCaret) {
   const std::u32string opens = U"（「『【〔［｛〈《“‘([{", closes = U"）」』】〕］｝〉》”’)]}";
   ASSERT_EQ(opens.size(), closes.size());

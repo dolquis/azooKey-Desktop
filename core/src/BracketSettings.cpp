@@ -34,12 +34,21 @@ BracketSettings ParseBracketSettings(std::string_view json) {
     }
   }
   settings.app_policy = std::move(policy);
+  settings.profiles =
+      std::make_shared<const AppProfileResolver>(AppProfileResolver::FromSettings(*root));
   return settings;
 }
 
 bool BracketPairingEnabledForApp(const BracketSettings& settings, const ForegroundApp& app,
                                  AppNameEqual equal) {
   if (!settings.pairing.enabled || !app.resolved || app.process_name.empty()) return false;
+  if (settings.profiles) {
+    const auto field = settings.profiles->ResolveField("bracketPairing", app, equal);
+    if (field && field->IsString()) {
+      if (field->AsString() == "on") return true;
+      if (field->AsString() == "off") return false;
+    }
+  }
   bool listed = false;
   if (settings.app_policy) {
     for (const auto& name : settings.app_policy->apps) {

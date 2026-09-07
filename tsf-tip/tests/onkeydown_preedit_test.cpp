@@ -933,6 +933,23 @@ TEST(TsfTipBracketTest, AppPolicySuppressesBothKeyCallbacksAndReevaluatesSetting
   EXPECT_EQ(h.context.document->text, L"「」");
 }
 
+TEST(TsfTipBracketTest, CommonProfileOverridesSeedAndDisablingStopsBothKeyCallbacks) {
+  BracketHarness h;
+  h.service.set_foreground_app_for_test({"CODE.EXE", "Editor", true});
+  h.settings = azookey::core::ParseBracketSettings(R"({"bracketPairing":true,
+    "profilesByApp":{"Editor":{"bracketPairing":"on"},"code.exe":{"style":"technical"}}})");
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"「」");
+  h.settings = azookey::core::ParseBracketSettings(R"({"bracketPairing":true,
+    "profilesByApp":{"Editor":{"bracketPairing":"on"},"code.exe":{"bracketPairing":"off"}}})");
+  h.ApplySettings();
+  EXPECT_FALSE(h.Press(VK_BACK, true));
+  EXPECT_FALSE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"「」");
+}
+
 TEST(TsfTipBracketTest, WindowsAppNamesCompareUnicodeWithoutLocaleDependence) {
   EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("ÉDITEUR.exe", "éditeur.EXE"));
   EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("日本語.exe", "日本語.EXE"));

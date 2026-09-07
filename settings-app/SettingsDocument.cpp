@@ -141,7 +141,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
                key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
                key == "numberRewriter" || key == "katakanaRewriter" || key == "bracketPairing" ||
                key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
-               key == "bracketPairingInAlnumMode") {
+               key == "bracketPairingInAlnumMode" || key == "bracketSymmetricQuotePairing" ||
+               key == "bracketWrapSelection") {
       valid = value.IsBool();
     } else if (key == "bracketPairingTrigger") {
       valid = IsStringEnum(value, {"immediate", "composition"});

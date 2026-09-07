@@ -137,6 +137,38 @@ TEST(BracketPairingTest, AlnumOptionControlsInsertionSkippingAndDeletion) {
             BracketPairingActionType::kInsertPair);
 }
 
+TEST(BracketPairingTest, SymmetricQuotesUseBoundariesSkipAndIndependentWrapOptIn) {
+  auto options = Enabled();
+  options.symmetric_quote_pairing = true;
+  for (const auto cp : {U'"', U'\'', U'`'}) {
+    for (const auto before : {char32_t{}, U' ', U'\t', U'\u3000', U'('}) {
+      EditContextHint hint{{}, {}, true};
+      if (before) hint.char_before = before;
+      EXPECT_EQ(EvaluateBracketInput(cp, false, hint, options).type,
+                BracketPairingActionType::kInsertPair);
+    }
+    EXPECT_EQ(EvaluateBracketInput(cp, false, {U'a', {}, true}, options).type,
+              BracketPairingActionType::kInsertLiteral);
+    EXPECT_EQ(EvaluateBracketInput(cp, false, {U'a', cp, true}, options).type,
+              BracketPairingActionType::kSkipClosing);
+    EXPECT_EQ(EvaluateBracketInput(cp, false, {}, options).type,
+              BracketPairingActionType::kInsertLiteral);
+    EXPECT_EQ(EvaluateBracketBackspace(false, {cp, cp, true}, options).type,
+              BracketPairingActionType::kDeletePair);
+  }
+  options.skip_over_closing = false;
+  EXPECT_EQ(EvaluateBracketInput(U'"', false, {U'a', U'"', true}, options).type,
+            BracketPairingActionType::kInsertLiteral);
+  options.wrap_selection = true;
+  EXPECT_EQ(EvaluateBracketInput(U'「', false, {{}, {}, false}, options).type,
+            BracketPairingActionType::kWrapSelection);
+  EXPECT_EQ(EvaluateBracketInput(U'"', false, {{}, {}, false}, options).type,
+            BracketPairingActionType::kWrapSelection);
+  const auto disabled_quote = ParseBracketTable("\"\t\"\toff\n");
+  EXPECT_EQ(EvaluateBracketInput(U'"', false, {{}, {}, true}, options, disabled_quote.table).type,
+            BracketPairingActionType::kPassThrough);
+}
+
 TEST(BracketPairingTest, QuotesAnglesAndOrdinaryCharactersAreExcluded) {
   for (char32_t cp : U"\"'`<>あa。") {
     EXPECT_EQ(EvaluateBracketInput(cp, false, {{}, {}, true}, Enabled()).type,

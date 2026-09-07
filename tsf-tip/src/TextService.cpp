@@ -895,7 +895,7 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
     }
     bool applied = false;
     const HRESULT result =
-        BracketEditSession::Apply(*this, context, client_id_, action, settings.trigger, applied);
+        BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
     if (applied) {
       if (active_context_ != context) {
         if (active_context_) active_context_->Release();
@@ -921,7 +921,7 @@ HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM ke
       }
       bool applied = false;
       const HRESULT result =
-          BracketEditSession::Apply(*this, context, client_id_, action, settings.trigger, applied);
+          BracketEditSession::Apply(*this, context, client_id_, action, settings, applied);
       *eaten = applied ? TRUE : FALSE;
       return applied ? S_OK : result;
     }

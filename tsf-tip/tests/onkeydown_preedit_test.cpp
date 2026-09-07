@@ -723,11 +723,13 @@ class DocumentRange final : public FakeRange {
     if (!remaining) delete this;
     return remaining;
   }
-  STDMETHODIMP GetText(TfEditCookie, DWORD, WCHAR* text, ULONG capacity, ULONG* count) override {
+  STDMETHODIMP GetText(TfEditCookie, DWORD flags, WCHAR* text, ULONG capacity,
+                       ULONG* count) override {
     *count = 0;
     if (document->fail_read) return E_FAIL;
     *count = std::min(capacity, static_cast<ULONG>(end - start));
     std::copy_n(document->text.data() + start, *count, text);
+    if (flags & TF_TF_MOVESTART) start += static_cast<LONG>(*count);
     return S_OK;
   }
   STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
@@ -936,6 +938,81 @@ TEST(TsfTipBracketTest, WindowsAppNamesCompareUnicodeWithoutLocaleDependence) {
   EXPECT_TRUE(azookey::tsf::WindowsAppNameEqual("日本語.exe", "日本語.EXE"));
   EXPECT_FALSE(azookey::tsf::WindowsAppNameEqual("Code.exe", "OtherCode.exe"));
   EXPECT_FALSE(azookey::tsf::WindowsAppNameEqual("\xff.exe", "\xff.EXE"));
+}
+
+TEST(TsfTipBracketTest, SymmetricQuotePairsSkipsAndInsertsWithinWords) {
+  BracketHarness h;
+  h.settings.pairing.symmetric_quote_pairing = true;
+  h.ApplySettings();
+  EXPECT_TRUE(h.Press(VK_OEM_7, true));
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.context.document->text, L"\"\"");
+  EXPECT_EQ(h.context.document->start, 1);
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.context.document->text, L"\"\"");
+  EXPECT_EQ(h.context.document->start, 2);
+  h.Set(L"word", 4);
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.context.document->text, L"word\"");
+  h.Set(L"", 0);
+  h.context.reject_read = true;
+  EXPECT_TRUE(h.Press(VK_OEM_7));
+  EXPECT_EQ(h.context.document->text, L"\"");
+}
+
+TEST(TsfTipBracketTest, WrapSelectionWritesOncePreservesUnicodeAndPlacesCaretAfterClosing) {
+  BracketHarness h;
+  h.settings.pairing.wrap_selection = true;
+  h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+  h.ApplySettings();
+  h.Set(L"xあ😀y", 1, 4);
+  EXPECT_TRUE(h.Press(VK_OEM_4, true));
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text, L"x「あ😀」y");
+  EXPECT_EQ(h.context.document->writes, 1);
+  EXPECT_EQ(h.context.document->start, 6);
+  EXPECT_EQ(h.context.document->end, 6);
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  EXPECT_TRUE(h.service.queued_ipc_types_for_test().empty());
+}
+
+TEST(TsfTipBracketTest, WrapSelectionDoesNotWritePartialTextWhenReadFailsOrLimitIsExceeded) {
+  BracketHarness h;
+  h.settings.pairing.wrap_selection = true;
+  h.ApplySettings();
+  h.Set(L"selected", 0, 8);
+  h.context.document->fail_read = true;
+  EXPECT_FALSE(h.Press(VK_OEM_4, false, false));
+  EXPECT_EQ(h.context.document->text, L"selected");
+  h.context.document->fail_read = false;
+  h.Set(std::wstring(65537, L'a'), 0, 65537);
+  EXPECT_FALSE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text.size(), 65537u);
+  EXPECT_EQ(h.context.document->writes, 0);
+  h.Set(std::wstring(65536, L'a'), 0, 65536);
+  EXPECT_TRUE(h.Press(VK_OEM_4));
+  EXPECT_EQ(h.context.document->text.size(), 65538u);
+  EXPECT_EQ(h.context.document->writes, 1);
+}
+
+TEST(TsfTipBracketTest, PendingPairFinishesInItsOwningContextAfterFocusMoves) {
+  BracketHarness h;
+  h.settings.trigger = azookey::core::BracketPairingTrigger::Composition;
+  h.ApplySettings();
+  ASSERT_TRUE(h.Press(VK_OEM_4));
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_TRUE(h.service.bracket_composition_for_test());
+  h.context.reject_write = false;
+  DocumentContext next;
+  next.document->text = L"another document";
+  BOOL eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&next, VK_RETURN, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_FALSE(h.service.bracket_composition_for_test());
+  EXPECT_EQ(h.context.document->start, 1);
+  EXPECT_EQ(next.document->start, 0);
+  EXPECT_EQ(next.document->text, L"another document");
 }
 
 TEST(TsfTipBracketTest, ImmediateInsertsSinglePairAndTypingPreservesClosingBracket) {

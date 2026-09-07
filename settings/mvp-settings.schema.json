@@ -3,6 +3,8 @@
   "title": "azooKey Windows TSF MVP settings",
   "type": "object",
   "properties": {
+    "bracketSymmetricQuotePairing": {"type": "boolean", "default": false},
+    "bracketWrapSelection": {"type": "boolean", "default": false},
     "bracketPairingAppPolicy": {
       "type": "string",
       "enum": ["denylist", "allowlist"],

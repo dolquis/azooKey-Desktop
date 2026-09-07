@@ -36,6 +36,7 @@ BracketTableParseResult ParseBracketTable(std::string_view tsv);
 enum class BracketPairingActionType {
   kPassThrough,
   kInsertPair,
+  kWrapSelection,
   kInsertLiteral,
   kSkipClosing,
   kDeletePair,
@@ -52,6 +53,8 @@ struct BracketPairingOptions {
   bool skip_over_closing{true};
   bool backspace_deletes_pair{true};
   bool enabled_in_alnum_mode{true};
+  bool symmetric_quote_pairing{false};
+  bool wrap_selection{false};
 };
 
 std::optional<BracketPair> LookupBracketPair(char32_t codepoint,

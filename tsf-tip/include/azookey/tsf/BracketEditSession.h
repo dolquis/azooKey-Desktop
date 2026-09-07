@@ -12,7 +12,7 @@ class BracketEditSession {
  public:
   static core::EditContextHint ReadHint(ITfContext* context, TfClientId client_id);
   static HRESULT Apply(TextService& service, ITfContext* context, TfClientId client_id,
-                       core::BracketPairingAction action, core::BracketPairingTrigger trigger,
+                       core::BracketPairingAction action, const core::BracketSettings& settings,
                        bool& applied);
   static HRESULT Finish(TextService& service, ITfContext* context, TfClientId client_id,
                         bool cancel);

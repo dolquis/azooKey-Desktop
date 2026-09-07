@@ -135,7 +135,8 @@ TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfigurat
   const std::string json = R"({"bracketPairing":true,"bracketPairingTrigger":"composition",
       "bracketSkipOverClosing":false,"bracketBackspaceDeletesPair":false,
       "bracketPairingInAlnumMode":false,"bracketPairsPath":"pairs.tsv",
-      "bracketPairingAppPolicy":"allowlist","bracketPairingApps":["Code.exe"]})";
+      "bracketPairingAppPolicy":"allowlist","bracketPairingApps":["Code.exe"],
+      "bracketSymmetricQuotePairing":true,"bracketWrapSelection":true})";
   WriteText(path, json);
   const auto loaded = azookey::settings::LoadSettingsDocument(path);
   const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);

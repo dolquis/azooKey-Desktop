@@ -2,6 +2,7 @@
 
 #include <wrl/client.h>
 
+#include <array>
 #include <functional>
 #include <new>
 #include <utility>
@@ -131,7 +132,7 @@ core::EditContextHint BracketEditSession::ReadHint(ITfContext* context, TfClient
 
 HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfClientId client_id,
                                   core::BracketPairingAction action,
-                                  core::BracketPairingTrigger trigger, bool& applied) {
+                                  const core::BracketSettings& settings, bool& applied) {
   applied = false;
   return RunSync(context, client_id, TF_ES_READWRITE, [&](TfEditCookie cookie) {
     // Revalidate under the write lock: OnTestKeyDown and even the preceding
@@ -149,9 +150,39 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
     if (action.type == ActionType::kInsertPair && fresh.selection_collapsed != true) {
       action.type = ActionType::kInsertLiteral;
     }
+    if (action.type == ActionType::kInsertPair && action.open == action.close) {
+      action =
+          core::EvaluateBracketInput(action.open, false, fresh, settings.pairing, settings.Table());
+    }
+    if (action.type == ActionType::kWrapSelection && fresh.selection_collapsed != false)
+      return S_FALSE;
     ComPtr<ITfRange> range;
     HRESULT hr = Selection(context, cookie, range);
     if (FAILED(hr)) return hr;
+    if (action.type == ActionType::kWrapSelection) {
+      ComPtr<ITfRange> reader;
+      hr = range->Clone(&reader);
+      if (FAILED(hr) || !reader) return FAILED(hr) ? hr : E_FAIL;
+      std::wstring text(1, static_cast<WCHAR>(action.open));
+      std::array<WCHAR, 4096> buffer{};
+      for (;;) {
+        BOOL empty = FALSE;
+        hr = reader->IsEmpty(cookie, &empty);
+        if (FAILED(hr)) return hr;
+        if (empty) break;
+        ULONG count = 0;
+        hr = reader->GetText(cookie, TF_TF_MOVESTART, buffer.data(),
+                             static_cast<ULONG>(buffer.size()), &count);
+        if (FAILED(hr)) return hr;
+        if (!count || count > buffer.size() || text.size() + count > 65537) return S_FALSE;
+        text.append(buffer.data(), count);
+      }
+      text.push_back(static_cast<WCHAR>(action.close));
+      hr = range->SetText(cookie, 0, text.data(), static_cast<LONG>(text.size()));
+      if (FAILED(hr)) return hr;
+      applied = true;
+      return PlaceCaret(context, cookie, range.Get(), false);
+    }
     LONG shifted = 0;
     if (action.type == ActionType::kSkipClosing) {
       hr = range->ShiftEnd(cookie, 1, &shifted, nullptr);
@@ -174,7 +205,7 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
     if (!pair && action.type != ActionType::kInsertLiteral) return S_FALSE;
     const WCHAR text[]{static_cast<WCHAR>(action.open), static_cast<WCHAR>(action.close)};
     ComPtr<ITfComposition> composition;
-    if (pair && trigger == core::BracketPairingTrigger::Composition) {
+    if (pair && settings.trigger == core::BracketPairingTrigger::Composition) {
       ComPtr<ITfContextComposition> context_composition;
       hr = context->QueryInterface(IID_PPV_ARGS(&context_composition));
       if (FAILED(hr)) return hr;
@@ -203,6 +234,10 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
 HRESULT BracketEditSession::Finish(TextService& service, ITfContext* context, TfClientId client_id,
                                    bool cancel) {
   if (!service.bracket_composition_ || !service.composition_) return S_OK;
+  // A lifecycle cleanup may have been refused before focus moved. Finish the
+  // composition under its owning context, never using a new document's cookie.
+  ComPtr<ITfContext> owner = service.active_context_ ? service.active_context_ : context;
+  context = owner.Get();
   return RunSync(context, client_id, TF_ES_READWRITE, [&](TfEditCookie cookie) {
     ComPtr<ITfComposition> composition = service.composition_;
     ComPtr<ITfRange> range;

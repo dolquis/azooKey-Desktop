@@ -424,11 +424,19 @@ Windows の序数比較で大小文字を無視し、ウィンドウタイトル
 
 `bracketWrapSelection == true`（M61-B、既定 OFF）かつ範囲選択中に開きカッコを打鍵すると、
 選択範囲を `open`…`close` で囲む（例: 選択 `あ` + `「` → `「あ」`、カーソルは閉じカッコの
-後ろ or 選択を維持。実装時に確定）。`GetSelection` で範囲テキストを取得し、`open`+選択+
+後ろに置く）。`GetSelection` で範囲テキストを取得し、`open`+選択+
 `close` を 1 回の `SetText` で置換する。**コア（M61-A）には含めない**（ユーザー選択スコープ
-外）。本節は将来挙動の定義であり、既定 OFF。
+外）。既定 OFF。囲みは即時に確定し、`bracketPairingTrigger` の composition は使わない。
+選択の読取は書込ロック内で最大 65,536 UTF-16 code unit までとする。読取失敗や上限超過では
+部分的な囲みを書かず、キーをアプリへ返す。キャレット設定だけが失敗した場合は、
+挿入済みテキストを再送しない。
 
 ## 5. TSF 操作（ClientAction → TSF 翻訳）
+
+カッコ判定の実装入口は `core::EvaluateBracketInput` / `EvaluateBracketBackspace` とする。
+`TextService::HandleBracketKey` が `EditContextHint` と設定スナップショットを渡し、返された
+`BracketPairingAction` を `BracketEditSession` が以下の TSF 操作へ翻訳する。core は文書を
+直接参照せず、通常のローマ字入力・候補確定は既存 `TextService` の経路で処理する。
 
 `docs/legacy-parity-spec.md` §1.3 の表に以下を追加する。実装は既存の commit 経路
 （`tsf-tip/src/TextService.cpp` の `EditSession::DoEditSession`、現状

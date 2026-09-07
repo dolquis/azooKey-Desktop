@@ -5,7 +5,7 @@
 
 namespace azookey::core {
 namespace {
-constexpr std::array<BracketPair, 14> kBracketPairs{{
+constexpr std::array<BracketPair, 17> kBracketPairs{{
     {U'（', U'）'},
     {U'「', U'」'},
     {U'『', U'』'},
@@ -20,6 +20,9 @@ constexpr std::array<BracketPair, 14> kBracketPairs{{
     {U'(', U')'},
     {U'[', U']'},
     {U'{', U'}'},
+    {U'"', U'"'},
+    {U'\'', U'\''},
+    {U'`', U'`'},
 }};
 }  // namespace
 

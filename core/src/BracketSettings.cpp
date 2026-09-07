@@ -11,6 +11,9 @@ BracketSettings ParseBracketSettings(std::string_view json) {
   const auto root = ipc::json::Parse(json);
   if (!root || !root->IsObject()) return settings;
   settings.pairing.enabled = root->GetBool("bracketPairing").value_or(false);
+  settings.pairing.symmetric_quote_pairing =
+      root->GetBool("bracketSymmetricQuotePairing").value_or(false);
+  settings.pairing.wrap_selection = root->GetBool("bracketWrapSelection").value_or(false);
   settings.pairing.skip_over_closing = root->GetBool("bracketSkipOverClosing").value_or(true);
   settings.pairing.backspace_deletes_pair =
       root->GetBool("bracketBackspaceDeletesPair").value_or(true);

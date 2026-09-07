@@ -4,6 +4,8 @@
   "bracketPairsPath": "",
   "bracketPairingAppPolicy": "denylist",
   "bracketPairingApps": [],
+  "bracketSymmetricQuotePairing": false,
+  "bracketWrapSelection": false,
   "bracketPairingTrigger": "immediate",
   "bracketSkipOverClosing": true,
   "bracketBackspaceDeletesPair": true,

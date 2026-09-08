@@ -1,5 +1,6 @@
 add_library(azookey_tsf_tip SHARED
   src/BracketEditSession.cpp
+  src/AiInputGuard.cpp
   src/CandidateListUIElement.cpp
   src/CandidateUiCoordinator.cpp
   src/CandidateWindow.cpp
@@ -38,6 +39,7 @@ if(AZOOKEY_BUILD_TESTS)
 
     add_executable(${target_name}
       src/BracketEditSession.cpp
+      src/AiInputGuard.cpp
       src/CandidateListUIElement.cpp
       src/CandidateUiCoordinator.cpp
       src/CandidateWindow.cpp

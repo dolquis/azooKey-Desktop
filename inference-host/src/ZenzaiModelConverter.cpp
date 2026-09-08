@@ -308,9 +308,10 @@ std::string CleanLeftContext(const std::string& preceding_text) {
 std::string BuildZenzaiPrompt(const std::string& kana, const core::ConversionContext& context,
                               const std::string& profile = {}) {
   std::string prompt;
-  if (!profile.empty()) {
+  const auto& effective_profile = profile.empty() ? context.instruction_profile : profile;
+  if (!effective_profile.empty()) {
     prompt += Utf8(U'\U0000EE03');
-    prompt += profile;
+    prompt += effective_profile;
   }
   const auto left_context = CleanLeftContext(context.preceding_text);
   if (!left_context.empty()) {

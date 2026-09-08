@@ -18,6 +18,8 @@
   "customRomajiTablePath": "%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv",
   "predictionEnabled": true,
   "aiBackend": "none",
+  "openAiTimeoutMs": 30000,
+  "privacy": {"mode": "normal", "custom": {"aiCandidate": true, "externalAi": false}},
   "openAiApiKey": "",
   "openAiApiEndpoint": "https://api.openai.com/v1",
   "openAiModel": "gpt-4o-mini",

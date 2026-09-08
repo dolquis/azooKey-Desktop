@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/AiBackend.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/RewriterData.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
@@ -120,6 +121,8 @@ class InferenceEngine {
   bool RemoveUserWord(const std::string& word, const std::string& ruby);
 
   bool LoadModel();
+  AiTransformResult TransformLocal(const AiTransformRequest& request,
+                                   const std::atomic<bool>* cancel, AiDeadline deadline);
   bool LoadModel(const ModelLoadOptions& options);
   ModelLoadResult LoadModelWithResult();
   ModelLoadResult LoadModelWithResult(const ModelLoadOptions& options);

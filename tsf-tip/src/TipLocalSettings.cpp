@@ -162,6 +162,7 @@ void TipLocalSettings::Stop() noexcept {
   const std::lock_guard<std::mutex> lock(mutex_);
   settings_ = {};
   rewriters_.reset();
+  ai_ = {};
 }
 
 core::BracketSettings TipLocalSettings::Snapshot() const {
@@ -174,13 +175,22 @@ std::optional<TipRewriterSettings> TipLocalSettings::RewriterSnapshot() const {
   return rewriters_;
 }
 
+TipAiSettings TipLocalSettings::AiSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return ai_;
+}
+
 void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   TipRewriterSettings rewriters;
+  TipAiSettings ai;
   try {
     const auto contents = ReadBounded(path_);
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
+      ai.privacy = core::ParseAiPrivacy(*json);
+      ai.timeout_ms = static_cast<int>(
+          std::clamp<int64_t>(json->GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
       rewriters.symbol = json->GetBool("symbolRewriter").value_or(false);
       rewriters.emoji = json->GetBool("emojiRewriter").value_or(false);
       rewriters.trigger = json->GetBool("emojiTriggerSearch").value_or(true);
@@ -206,12 +216,14 @@ void TipLocalSettings::Reload() noexcept {
     }
     next.table = std::make_shared<const core::BracketTable>(std::move(parsed.table));
   } catch (...) {
+    ai = {};
     next = {};  // No contents/paths in diagnostics, no writes to user configuration.
   }
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     settings_ = std::move(next);
     rewriters_ = rewriters;
+    ai_ = ai;
   }
   changed_.notify_all();
 }

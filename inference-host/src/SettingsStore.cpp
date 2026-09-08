@@ -152,6 +152,9 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.open_ai_api_endpoint =
       ReadString(object, "openAiApiEndpoint", settings.open_ai_api_endpoint);
   settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
+  settings.ai_privacy = core::ParseAiPrivacy(ipc::json::Value(object));
+  settings.open_ai_timeout_ms = static_cast<int32_t>(std::clamp<int64_t>(
+      ipc::json::Value(object).GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
   settings.include_context_in_ai_transform =
       ReadBool(object, "includeContextInAITransform", settings.include_context_in_ai_transform);
   settings.context_reselection =

@@ -113,6 +113,24 @@
       "default": "none",
       "description": "Phase 5 (M16): AI 変換バックエンド。Phase 6-B (M24) で local-zenzai を有効化"
     },
+    "openAiTimeoutMs": {
+      "type": "integer", "minimum": 1000, "maximum": 120000, "default": 30000,
+      "description": "M16/M58-C: 再試行を含むAIリクエストの全体期限（ミリ秒）"
+    },
+    "privacy": {
+      "type": "object", "additionalProperties": false, "default": {},
+      "properties": {
+        "mode": {"type": "string", "enum": ["normal", "private", "secure", "offline", "custom"], "default": "normal"},
+        "custom": {
+          "type": "object", "additionalProperties": false, "default": {},
+          "properties": {
+            "aiCandidate": {"type": "boolean", "default": true},
+            "externalAi": {"type": "boolean", "default": false}
+          }
+        }
+      },
+      "description": "共有AI基盤の送信許可。secureはAI禁止、private/offlineはローカルのみ。その他のM46軸は別途実装"
+    },
     "openAiApiKey": {
       "type": "string",
       "default": "",

@@ -478,14 +478,20 @@ secure 中に TIP が Magic Conversion を発火させないことと、本入�
 | `batchAutoPunctuation` | `false` | `ai-cleanup` 時の句読点自動挿入（M58-C） |
 | `postCommitLint` | `false` | X-3-3 の有効化 |
 
-追加提案キー（実装 PR で確定。本書で予約）:
+共有AI基盤の期限設定:
 
 | キー | 既定 | 意味 |
 |---|---|---|
-| `openAiTimeoutMs` | `30000` | 外部 API receive タイムアウト（§7.1） |
+| `openAiTimeoutMs` | `30000` | 外部 API receive と再試行を含む全体期限。1000〜120000 ms（§7.1） |
 
-> `mvp-settings.schema.json` への `openAiTimeoutMs` 追加は M16 実装 PR の範囲。本書は
-> キーの存在と既定値を契約として予約する（schema 変更は実装 PR でレビュー）。
+`AiBackend::Transform`はM58-Cから共通利用する。WinHTTPはダウンロードと
+proxy・TLS検証の方針を共有し、AIのPOSTは非同期ハンドルの終了通知まで待って
+キャンセルする。HTTPS以外は数値loopbackのみ許可し、redirectは追従しない。
+応答本文は256 KiB、整文結果は64 KiBまでとする。
+
+ローカル整文はZenzaiのprofile付き変換を使用し、生ローマ字と句読点方針を
+profileに渡す。モデルの指示追従と誤字補正の品質は実モデルで確認する。
+自動Lintの呼び出し契約はローカル限定だが、finding生成とM16のUIは別範囲とする。
 
 ---
 

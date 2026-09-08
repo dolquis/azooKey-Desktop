@@ -8,6 +8,8 @@ target_link_libraries(azookey_host_paths
 )
 
 add_library(azookey_host STATIC
+  src/AiBackend.cpp
+  src/AiHttp.cpp
   src/DictionaryCandidateProvider.cpp
   src/Dispatcher.cpp
   src/HostArgs.cpp
@@ -42,7 +44,7 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(azookey_host PUBLIC ole32 psapi PRIVATE bcrypt winhttp)
+  target_link_libraries(azookey_host PUBLIC ole32 psapi PRIVATE bcrypt winhttp crypt32)
 endif()
 
 add_executable(azookey_inference_host src/main.cpp)

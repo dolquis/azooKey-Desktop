@@ -739,6 +739,41 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
+AiTransformResult InferenceEngine::TransformLocal(const AiTransformRequest& request,
+                                                  const std::atomic<bool>* cancel,
+                                                  AiDeadline deadline) {
+  std::shared_ptr<core::IConverter> converter;
+  {
+    std::lock_guard lock(state_mutex_);
+    // The dictionary fallback is not a local AI backend.
+    if (!model_loaded_ || request.task == AiTask::Lint) return {false, {}, AiErrorClass::Disabled};
+    converter = active_converter_;
+  }
+  core::ConversionContext context;
+  context.cancel = cancel;
+  context.deadline = deadline;
+  context.max_candidates = 1;
+  context.preceding_text = TakeLastUtf8Codepoints(request.left_context, 128);
+  context.instruction_profile =
+      request.task == AiTask::Cleanup
+          ? "入力の誤字を補正し、意味を変えず自然な日本語に整える。生ローマ字: " +
+                request.raw_romaji
+      : request.mode == "translate" ? "英語に翻訳する。"
+      : request.mode == "summarize" ? "簡潔に要約する。"
+      : request.mode == "free"      ? request.prompt
+                                    : "自然な日本語に書き直す。";
+  context.instruction_profile +=
+      request.auto_punctuation ? "。必要な句読点を補う。" : "。入力にない句読点を追加しない。";
+  std::lock_guard lock(converter_call_mutex_);
+  if (cancel && cancel->load()) return {false, {}, AiErrorClass::Canceled};
+  if (std::chrono::steady_clock::now() >= deadline) return {false, {}, AiErrorClass::Timeout};
+  const auto candidates = converter->Convert(request.text, context);
+  if (candidates.empty() || candidates.front().surface.empty() ||
+      candidates.front().source != core::CandidateSource::Model)
+    return {false, {}, AiErrorClass::Parse};
+  return {true, candidates.front().surface, AiErrorClass::None};
+}
+
 bool InferenceEngine::CommitSegmentsObservation(
     const ipc::CommitSegmentsObservationRequest& request, uint64_t now_epoch_sec) {
   std::shared_ptr<core::IConverter> converter;

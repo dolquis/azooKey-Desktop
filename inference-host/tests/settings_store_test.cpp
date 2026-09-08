@@ -40,6 +40,25 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 
 }  // namespace
 
+TEST(SettingsStoreTest, AiPrivacyAndTimeoutAreAppliedAndBounded) {
+  const auto dir = TestDir("azookey_settings_ai_privacy");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"openAiTimeoutMs":2500,"privacy":{"mode":"private"}})");
+  azookey::host::SettingsStore store(path);
+  auto result = store.Load();
+  EXPECT_EQ(result.settings.open_ai_timeout_ms, 2500);
+  EXPECT_TRUE(result.settings.ai_privacy.ai);
+  EXPECT_FALSE(result.settings.ai_privacy.external);
+  WriteText(path, R"({"openAiTimeoutMs":999999,"privacy":{"mode":"secure"}})");
+  result = store.Reload();
+  EXPECT_EQ(result.settings.open_ai_timeout_ms, 120000);
+  EXPECT_FALSE(result.settings.ai_privacy.ai);
+  WriteText(path, R"({"openAiTimeoutMs":"invalid","privacy":{"mode":false}})");
+  result = store.Reload();
+  EXPECT_EQ(result.settings.open_ai_timeout_ms, 30000);
+  EXPECT_FALSE(result.settings.ai_privacy.external);
+}
+
 TEST(SettingsStoreTest, LoadsCommonProfilesAndReloadKeepsPreviousSnapshotImmutable) {
   const auto dir = TestDir("azookey_settings_profiles");
   const auto path = dir / "settings.json";

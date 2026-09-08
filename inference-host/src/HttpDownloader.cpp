@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/host/HttpSession.h"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -392,17 +394,10 @@ HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) 
   auto parsed = ParseUrl(request.url, &error);
   if (!parsed) return Failure(std::move(error));
 
-  const DWORD access_type =
-      parsed->loopback ? WINHTTP_ACCESS_TYPE_NO_PROXY : WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
-  UniqueInternetHandle session(WinHttpOpen(user_agent_.c_str(), access_type, WINHTTP_NO_PROXY_NAME,
-                                           WINHTTP_NO_PROXY_BYPASS, 0));
+  UniqueInternetHandle session(OpenHttpSession(
+      user_agent_.c_str(), parsed->loopback, false, static_cast<int>(request.connect_timeout_ms),
+      static_cast<int>(request.send_timeout_ms), static_cast<int>(request.receive_timeout_ms)));
   if (!session) return Failure(WindowsError("opening WinHTTP session"));
-  if (!WinHttpSetTimeouts(session.get(), static_cast<int>(request.connect_timeout_ms),
-                          static_cast<int>(request.connect_timeout_ms),
-                          static_cast<int>(request.send_timeout_ms),
-                          static_cast<int>(request.receive_timeout_ms))) {
-    return Failure(WindowsError("setting WinHTTP timeouts"));
-  }
 
   UniqueInternetHandle connection(
       WinHttpConnect(session.get(), parsed->host.c_str(), parsed->port, 0));

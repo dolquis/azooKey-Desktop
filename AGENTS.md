@@ -5,7 +5,7 @@
 ## 最優先の安全規則
 
 - ユーザーの未コミット変更を勝手に戻さない。同じファイルで交差する場合は差分を確認し、最小限の編集にする。
-- 作業開始時、進捗確認時、PR 前に `git status -sb` を確認する。進捗確認では `git fetch origin` 後に `main` と `origin/main` を比較し、作業中ブランチは不用意に切り替えない。
+- 作業開始時、進捗確認時、PR 前に `git status -sb` を確認する。remote の進捗・PR のマージ判定・レビュー base の確定前には `git fetch origin` を行い、`main` と `origin/main`、作業ブランチと `origin/main` の差を切替なしで確認する。同じ取得済み snapshot 内のローカル検証では繰り返さず、別作業からの再開や remote 更新の通知後は再取得する。
 - secret、credential、token、`.env`、ローカル設定、生成物、Context-Mode の DB / cache、CodeGraph の index を編集、index、commit しない。
 - `main` へ直接 push しない。新規 PR は Draft とし、通常は `dolquis/<repository-name>` の `main` 向けに作成する。base / head の repository と branch、compare 範囲を確認し、同じ head の PR を重複作成しない。
 - フォーク元や upstream への PR、`legacy/` の変更は、実行前にユーザーへ確認する。
@@ -23,6 +23,7 @@
 ## 調査と実装
 
 - 不明点が結果を大きく変える場合は確認する。軽微な判断は既存実装、仕様、リポジトリの慣習に従う。
+- 確認前に依頼、承認済み会話、Issue、spec、ADR、既存契約を照合する。外部挙動、schema、受入条件を変える未決事項は具体案と影響を示して確認し、回答に依存しない作業は進める。契約内の実装や仕様へ戻す修正は根拠を示して続行する。
 - 非自明な変更では、編集前にスコープ、予定ファイル、検証方法、主なリスクを短く整理する。
 - 最小差分を基本とし、無関係なリファクタリング、整形、rename、メタデータ更新を混ぜない。
 - 文字列検索・局所編集は Read / Edit / `rg`、symbol の宣言・実装・参照・診断・rename・削除はファイル数によらず Serena を優先する。
@@ -31,6 +32,12 @@
 - Context-Mode が利用可能なら大量の文書・検索結果・diff・ログの整理に使い、symbol 解析は Serena に任せる。要約だけで完了を判断せず、重要箇所は実ファイル、最新 diff、関連テストで確認する。
 - 公開 API、schema、永続化、認証、権限、安全設計、データ削除、課金、通知、外部連携では、構造と参照元と関連文書を確認してから変更する。
 - GitHub 操作は各ハーネスで利用可能な GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
+
+対象 checkout の識別と出力の絞り方は `docs/handoff/agent-tooling-setup.md` に従う。
+
+## ローカルサブエージェント
+
+ローカル分担の規約は `docs/linear-conventions.md` §2.1、azooKey 固有の分担例は `docs/handoff/agent-tooling-setup.md`「ローカル分担の例」を参照する。
 
 ## セルフレビューと PR
 

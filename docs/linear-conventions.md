@@ -54,6 +54,8 @@ Issue には「次の AI 役割」を示す `agent:*` を 1 つ付ける。た�
 - 実行したら Codex Run Record（§6）に approval / Codex task link / branch / commit / PR / validation / remaining risk を記録する。
 - 無許可で Codex Cloud が動いた場合はインシデントとして扱う: delegate を解除して Issue を候補へ戻し、GitHub に branch / PR が到達していないか確認し、Issue に記録する。
 
+ローカル分担の共通規則は本段落を正典とし、AGENTS・Skill・tooling runbook から本段落を参照し、それぞれ工程固有の補足を持つ。承認されたローカル作業内の分担は Cloud 起動と区別する。品質改善または時間短縮が見込める独立した調査・実装・レビューには、機構が利用可能な枠内で積極的に分担する。利用できない場合は同じ検証範囲を親が担当する。目的、対象・非対象、書込み境界、成果形式、検証、PR 本数・Issue 順序・完了条件を渡し、全履歴を無条件に複製しない。親が統合と最終検証を担い、共有ファイル・build directory の競合を防ぎ、共有 Serena の対象変更を直列管理する。小修正や直列依存のみの仕事は分割しない。この分担は Cloud 起動、新しいユーザー所有タスク作成、仕様変更、Human Gate の追加承認を代行しない。
+
 ### 実行許可フォーマット（人間 → Issue コメント）
 
 - Issue / Repo / Scope（Acceptance Criteria のみ）

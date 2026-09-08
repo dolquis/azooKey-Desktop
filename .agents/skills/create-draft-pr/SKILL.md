@@ -18,6 +18,13 @@ description: GitHubで新規Pull Requestを作成するときに使用する。�
 - fork元やupstreamへPRを作成する必要がある場合は、作成前に必ずユーザーへ確認する。
 - 既存PRがReady状態の場合は、無理にDraftへ戻さない。
 
+## 確認と出力
+
+- PR 本数、Issue 順序、Draft 提出／マージ等の完了条件をユーザー依頼と承認済み会話から保持する。既存の承認範囲の操作を再確認せず進め、不明点が結果を変える場合だけ具体案と影響を示して確認する。
+- connector 結果は PR 番号、状態、Draft、base/head repository・branch・SHA、URL、必要な検証へ絞る。構造が予想外ならキーを調べ、全文へ自動で戻さない。
+- self-review で内容を確認した全差分は再利用する。base/head の変化、未確認差分、stage／commit への包含を確認し、一致する既読差分を繰り返し出力しない。大きな diff や CI log は Context-Mode 等で解析し、終了コード、失敗 ID、重要 warning、根拠位置を保持する。通常の返却目安は 4〜8 KiB とし、必要な証拠は段階的に追加する。
+- ローカル分担の共通規則は agent-ops の `linear-conventions.md` §2.1（製品 repo では `docs/linear-conventions.md`）を正典とする。機構が利用できなければ親が確認する。同じ head の push／PR 作成は親が直列実行し、重複を防ぐ。
+
 ## 手順1: Repositoryとbranchの特定
 
 1. 次の読み取りコマンドなどで、現在の状態を確認する。

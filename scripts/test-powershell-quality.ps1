@@ -16,6 +16,7 @@ $powerShellFiles = @(
   Join-Path $PSScriptRoot "clangd-database.ps1"
   Join-Path $PSScriptRoot "prepare-clangd.ps1"
   Join-Path $PSScriptRoot "host-supervisor.ps1"
+  Join-Path $PSScriptRoot "host-startup-log.ps1"
   Join-Path $PSScriptRoot "start-installed-host.ps1"
   Join-Path $PSScriptRoot "wait-installed-host.ps1"
   Join-Path $PSScriptRoot "make-vm-verify-package.ps1"

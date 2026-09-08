@@ -565,7 +565,7 @@ Describe "development registration scripts" {
 param([string]$CounterPath)
 Add-Content -LiteralPath $CounterPath -Value "launched"
 [Console]::Error.WriteLine("simulated crash")
-exit 3
+exit 1
 '@ | Set-Content -LiteralPath $childPath
 
       $powerShellPath = (Get-Process -Id $PID).Path

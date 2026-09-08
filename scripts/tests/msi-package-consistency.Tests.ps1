@@ -139,7 +139,7 @@ Describe "WiX MSI package consistency" {
     $xml.SelectNodes('//w:RegistryValue[contains(@Key,"CurrentVersion\Run")]', $ns).Count | Should -Be 1
     $startup.SelectSingleNode('w:RegistryValue[@Name="InstallDirectory"]', $ns).Value |
       Should -Be '[INSTALLFOLDER]'
-    foreach ($fileId in @("HostSupervisor", "InstalledHostLauncher", "InstalledHostWaiter")) {
+    foreach ($fileId in @("HostSupervisor", "InstalledHostLauncher", "InstalledHostWaiter", "HostStartupLog")) {
       $file = $xml.SelectSingleNode("//w:File[@Id='$fileId']", $ns)
       $file.Source | Should -Match '\$\(HostScriptsDir\)'
       $componentId = $file.ParentNode.Id
@@ -161,6 +161,8 @@ Describe "WiX MSI package consistency" {
     $step = $xml.SelectSingleNode('//w:Custom[@Action="WaitForInstalledHost"]', $ns)
     $step.Before | Should -Be "RemoveFiles"
     $step.Condition | Should -Be '$HostStartupComponent = 2'
+    $xml.SelectSingleNode('//w:Property[@Id="MSIRESTARTMANAGERCONTROL"]', $ns).Value | Should -Be 'DisableShutdown'
+    $xml.SelectSingleNode('//w:Property[@Id="MSIDISABLERMRESTART"]', $ns).Value | Should -Be '1'
   }
 
   It "builds and uploads an unsigned MSI in the guarded release workflow" {

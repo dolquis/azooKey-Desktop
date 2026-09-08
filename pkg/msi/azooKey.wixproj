@@ -39,6 +39,7 @@
   </PropertyGroup>
 
   <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
+    <Error Condition="!Exists('$(HostScriptsDir)\host-startup-log.ps1')" Text="Host startup logger missing" />
     <Error Condition="!Exists('$(HostScriptsDir)\host-supervisor.ps1')" Text="Host supervisor missing" />
     <Error Condition="!Exists('$(HostScriptsDir)\start-installed-host.ps1')" Text="Installed host launcher missing" />
     <Error Condition="!Exists('$(HostScriptsDir)\wait-installed-host.ps1')" Text="Installed host shutdown waiter missing" />

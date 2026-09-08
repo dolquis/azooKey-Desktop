@@ -273,8 +273,9 @@ int main(int argc, char** argv) {
   }
   azookey::host::SupervisorLifetime supervisor_process(parsed_args.args.supervisor_pid);
   if (!supervisor_process.IsRunning()) {
-    std::cerr << "error: supervisor process is unavailable" << std::endl;
-    return 2;
+    std::cerr << "event=supervisor_unavailable win32_error=" << supervisor_process.ErrorCode()
+              << std::endl;
+    return 3;
   }
   config = std::move(parsed_args.args.config);
   auto explicit_learning_path = std::move(parsed_args.args.explicit_learning_path);
@@ -529,13 +530,24 @@ int main(int argc, char** argv) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "pipe_listening",
                     {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
-    while (!StopRequested() && supervisor_process.IsRunning()) {
+    auto supervisor_state = supervisor_process.GetState();
+    while (!StopRequested() &&
+           supervisor_state == azookey::host::SupervisorLifetime::State::Running) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      supervisor_state = supervisor_process.GetState();
     }
     server.Stop();
-    runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "host_stopped",
-                    {{"result", SafeLogText("ok")}});
-    return 0;
+    const bool wait_failed = supervisor_state == azookey::host::SupervisorLifetime::State::Failed;
+    const auto stop_reason = wait_failed       ? "supervisor_wait_failed"
+                             : StopRequested() ? "requested"
+                                               : "supervisor_exited";
+    runtime_log.Log(wait_failed ? azookey::logging::RuntimeLogLevel::Error
+                                : azookey::logging::RuntimeLogLevel::Info,
+                    "host_stopped",
+                    {{"result", SafeLogText(wait_failed ? "error" : "ok")},
+                     {"stop_reason", SafeLogText(stop_reason)},
+                     {"win32_error", SafeLogText(std::to_string(supervisor_process.ErrorCode()))}});
+    return wait_failed ? 3 : 0;
   }
 
   std::string line;

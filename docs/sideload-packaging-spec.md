@@ -834,7 +834,7 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
 #### MSI のログオン常駐
 
 MVP の MSI は 64-bit の `HKLM\Software\Microsoft\Windows\CurrentVersion\Run` に
-`azooKeyHost` を登録する。各ユーザーのログオン時に Windows PowerShell を非表示で起動し、
+`azooKeyHost` を登録する。各ユーザーのログオン時に Windows PowerShell へ `-WindowStyle Hidden` を指定し、
 インストール先の `start-installed-host.ps1` を実行する。
 実行権限はログオンユーザーの通常権限であり、昇格する Task Scheduler は採用しない。
 MSIX の startup task / app execution alias は本節の MSI 経路とは別に扱う。
@@ -851,7 +851,15 @@ Run の実行は Windows により遅延され得るため、ログオン直後�
 §1.6.3 に従う。Vulkan probe は `--probe-vulkan` を単独で指定し、モデル、IPC、ユーザーデータを
 初期化せず、列挙したデバイス数を `vulkan_devices=<数>` として出力する。成功は終了コード 0 と
 正のデバイス数の両方で判定し、タイムアウトや異常終了は CPU へ戻す。選択した実行体と理由は
-各ユーザーのログディレクトリで、各起動の stderr に対応する `.startup.json` へ記録する。
+各ユーザーのログディレクトリで `inference-host-stderr.log.supervisor.jsonl` へ記録する。
+probe のタイムアウト、起動失敗、終了コード、デバイス 0、出力不正、loader 検査不能を区別し、
+Win32 エラーと probe stderr の先頭 2048 文字を診断用に残す。
+launcher 自身の失敗・登録不一致は `host-launcher.log` に記録する。
+両診断ログは各 1 MiB で 1 世代ローテーションし、書き込み不能時はユーザーの一時ディレクトリの
+`azooKey-host-startup.log`（同じ上限）へ試行する。診断ログの失敗だけでは Host 起動を止めない。
+stderr は直近 20 起動分を保持する。ログ保持は過去の起動ファイル数の制限であり、稼働中の stderr の
+サイズ上限ではない。終了コード 2（引数）・3（supervisor 監視失敗）、または安定稼働前の
+5 回連続失敗で再起動を停止し、次回ログオンまたは手動再起動で再試行する。
 開発用 Host が同じユーザーの pipe を所有する場合は、その終了を待つ。
 
 MSI はアンインストールと major upgrade で Run 値と
@@ -866,6 +874,16 @@ MSI はアンインストールと major upgrade で Run 値と
 ログオン起動、別ユーザーの初回起動と復帰は DEV-676、MSI の削除・upgrade・rollback と
 登録値の後始末は DEV-673 の実機ゲートで確認する。静的テストや MSI 生成だけでは
 これらの成功を判定しない。
+
+`InstallValidate` の files-in-use 判定は登録値の削除より早い。MSI は
+`MSIRESTARTMANAGERCONTROL=DisableShutdown` と `MSIDISABLERMRESTART=1` を指定し、
+Restart Manager による自動終了・再起動と supervisor の競合を抑止する。
+files-in-use の検出や再起動要求そのものは抑止しない。repair／同一版再インストールでは
+削除用 waiter は動かないため、稼働中ファイルの置換には Windows の再起動が必要になり得る。
+DEV-673 では稼働中の削除・repair・同一版再インストールについて、full／reduced UI の
+ダイアログ、終了コード 3010、再起動後の実行版を確認する。
+`-WindowStyle Hidden` はコンソール割り当て前の非表示を保証しないため、ログオン時に一瞬の表示が
+起きないことは保証しない。DEV-676 で実機の見え方も確認する。
 
 ## 2. EV/OV コード署名（M29）
 

@@ -57,6 +57,9 @@
               KeyPath="yes" />
         </Component>
 
+        <Component Id="HostStartupLogComponent" Guid="*">
+          <File Id="HostStartupLog" Source="$(HostScriptsDir)\host-startup-log.ps1" KeyPath="yes" />
+        </Component>
         <Component Id="HostSupervisorComponent" Guid="*">
           <File Id="HostSupervisor" Source="$(HostScriptsDir)\host-supervisor.ps1" KeyPath="yes" />
         </Component>
@@ -106,7 +109,11 @@
       </Directory>
     </StandardDirectory>
 
+    <!-- Retain files-in-use detection without racing supervisor restarts. -->
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />
+    <Property Id="MSIDISABLERMRESTART" Value="1" />
     <Feature Id="MainFeature" Title="azooKey" Level="1">
+      <ComponentRef Id="HostStartupLogComponent" />
       <ComponentRef Id="TipComponent" />
       <ComponentRef Id="HostComponent" />
       <ComponentRef Id="HostSupervisorComponent" />

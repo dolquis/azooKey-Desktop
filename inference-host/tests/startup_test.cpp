@@ -21,6 +21,10 @@ TEST(HostStartupTest, NoSupervisorDoesNotRestrictLifetime) {
 TEST(HostStartupTest, InvalidSupervisorFailsClosed) {
   const azookey::host::SupervisorLifetime lifetime(0xffffffffU);
   EXPECT_FALSE(lifetime.IsRunning());
+  EXPECT_EQ(lifetime.GetState(), azookey::host::SupervisorLifetime::State::Failed);
+#ifdef _WIN32
+  EXPECT_NE(lifetime.ErrorCode(), 0U);
+#endif
 }
 
 #ifdef _WIN32
@@ -46,6 +50,7 @@ TEST(HostStartupTest, ObservesProcessExitThroughRetainedHandle) {
   }
   ASSERT_EQ(result, WAIT_OBJECT_0);
   EXPECT_FALSE(lifetime.IsRunning());
+  EXPECT_EQ(lifetime.GetState(), azookey::host::SupervisorLifetime::State::Exited);
 }
 #endif
 

@@ -26,7 +26,7 @@ target_link_libraries(host_scheduler_tests
 )
 azookey_discover_tests(host_scheduler_tests)
 
-add_executable(host_args_tests args_test.cpp)
+add_executable(host_args_tests args_test.cpp startup_test.cpp)
 target_link_libraries(host_args_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )

@@ -23,12 +23,12 @@ BEGIN
     BEGIN
         BLOCK "041104B0"
         BEGIN
-            VALUE "CompanyName", "dolquis\0"
-            VALUE "FileDescription", "azooKey Settings\0"
+            VALUE "CompanyName", "dolquis"
+            VALUE "FileDescription", "azooKey Settings"
             VALUE "FileVersion", AZOOKEY_VERSION_STRING
-            VALUE "InternalName", "azookey_settings\0"
-            VALUE "OriginalFilename", "azookey_settings.exe\0"
-            VALUE "ProductName", "azooKey Desktop\0"
+            VALUE "InternalName", "azookey_settings"
+            VALUE "OriginalFilename", "azookey_settings.exe"
+            VALUE "ProductName", "azooKey Desktop"
             VALUE "ProductVersion", AZOOKEY_VERSION_STRING
         END
     END

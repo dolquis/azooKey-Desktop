@@ -6,7 +6,7 @@
     <HostExePath Condition="'$(HostExePath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\inference-host\azookey_inference_host.exe</HostExePath>
     <SettingsPayloadDir Condition="'$(SettingsPayloadDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\settings-app\Release</SettingsPayloadDir>
     <SettingsExePath Condition="'$(SettingsExePath)' == ''">$(SettingsPayloadDir)\azookey_settings.exe</SettingsExePath>
-    <SettingsIconPath>$(MSBuildThisFileDirectory)..\..\settings-app\Assets\azookey-settings.ico</SettingsIconPath>
+    <SettingsIconPath Condition="'$(SettingsIconPath)' == ''">$(MSBuildThisFileDirectory)..\..\settings-app\Assets\azookey-settings.ico</SettingsIconPath>
     <VCRuntimeDir Condition="'$(VCRuntimeDir)' == ''">__NOT_PROVIDED__</VCRuntimeDir>
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>

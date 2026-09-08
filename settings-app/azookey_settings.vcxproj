@@ -97,7 +97,6 @@
   <ItemGroup>
     <Manifest Include="app.manifest" />
     <ResourceCompile Include="azookey_settings.rc" />
-    <Image Include="Assets\azookey-settings.ico" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="App.xaml.h"><DependentUpon>App.xaml</DependentUpon></ClInclude>
     <ClInclude Include="LaunchArguments.h" />

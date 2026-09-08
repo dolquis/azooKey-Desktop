@@ -65,6 +65,7 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
       - name: Configure
+        shell: pwsh
         env:
           PRODUCT_VERSION: ${{ steps.msi-version.outputs.version }}
         run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON "-DAZOOKEY_PRODUCT_VERSION=$env:PRODUCT_VERSION"
@@ -72,6 +73,17 @@ jobs:
         run: cmake --build --preset windows-release --parallel 1
       - name: Build self-contained settings app
         run: cmake --build --preset windows-release --target azookey_settings --parallel 1
+      - name: Verify settings product version
+        shell: pwsh
+        env:
+          PRODUCT_VERSION: ${{ steps.msi-version.outputs.version }}
+        run: |
+          $path = (Resolve-Path build/windows-release/settings-app/Release/azookey_settings.exe -ErrorAction Stop).Path
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+          $expected = "$env:PRODUCT_VERSION.0"
+          if ($info.FileVersion -ne $expected -or $info.ProductVersion -ne $expected) {
+            throw "Settings version mismatch: expected $expected, FileVersion=$($info.FileVersion), ProductVersion=$($info.ProductVersion)"
+          }
       - name: Test
         run: ctest --preset windows-release --no-tests=error
       - name: Resolve app-local MSVC runtime

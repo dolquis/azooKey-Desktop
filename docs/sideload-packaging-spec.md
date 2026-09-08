@@ -1620,6 +1620,19 @@ GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base M
 component KeyPath に保つ。release workflow は `azookey_settings` target をビルドしてから両
 property を MSI ビルドへ渡す。
 
+#### 設定アプリの製品メタデータ
+
+設定アプリの EXE と MSI の advertised ショートカットは、同じ
+`settings-app/Assets/azookey-settings.ico` を使用する。EXE は RC resource として、
+MSI は Icon table の `SettingsIcon.exe` stream として格納する。
+実際のスタートメニューでのアイコン表示は DEV-673 の実機確認に含める。
+
+Release の FileVersion / ProductVersion は、タグ `vMAJOR.MINOR.PATCH` から
+得た MSI 製品バージョンに `.0` を付けた値とする。通常の開発ビルドの既定値は
+`0.0.0.0` とし、CMake の `AZOOKEY_PRODUCT_VERSION` で指定できる。
+Release workflow は設定アプリをビルドした直後に EXE の両バージョンを読み取り、
+期待値との不一致をエラーにする。
+
 ### 4.2 アンインストール時
 
 `RemoveFiles` の前に `msiexec /z [#TipDll]` で `DllUnregisterServer` を呼ぶ。

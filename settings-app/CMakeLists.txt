@@ -39,6 +39,7 @@ if(AZOOKEY_BUILD_TESTS AND TARGET GTest::gtest_main)
   azookey_discover_tests(azookey_settings_persistence_tests LABEL settings-app)
 endif()
 
+set(AZOOKEY_PRODUCT_VERSION "0.0.0" CACHE STRING "Product version (MAJOR.MINOR.PATCH)")
 set(AZOOKEY_SETTINGS_CONFIGURATION "$<IF:$<CONFIG:Debug>,Debug,Release>")
 set(AZOOKEY_SETTINGS_OUTPUT_DIR
     "${CMAKE_BINARY_DIR}/settings-app/${AZOOKEY_SETTINGS_CONFIGURATION}/")
@@ -57,6 +58,7 @@ add_custom_target(azookey_settings
           /target:Build
           /property:Configuration=${AZOOKEY_SETTINGS_CONFIGURATION}
           /property:Platform=x64
+          /property:AzooKeyProductVersion=${AZOOKEY_PRODUCT_VERSION}
           /property:OutDir=${AZOOKEY_SETTINGS_OUTPUT_DIR}
           /property:IntDir=${CMAKE_CURRENT_BINARY_DIR}/obj/${AZOOKEY_SETTINGS_CONFIGURATION}/
           /property:AzooKeyWilIncludeDir=${AZOOKEY_SETTINGS_WIL_INCLUDE_DIR}

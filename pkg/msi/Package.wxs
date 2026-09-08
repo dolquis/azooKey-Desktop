@@ -85,11 +85,16 @@
                 Name="azooKey Settings"
                 Description="Configure azooKey"
                 Advertise="yes"
+                Icon="SettingsIcon.exe"
+                IconIndex="0"
                 WorkingDirectory="INSTALLFOLDER" />
           </File>
         </Component>
       </Directory>
     </StandardDirectory>
+
+    <!-- Advertised shortcuts need an Icon table stream, even with an EXE icon. -->
+    <Icon Id="SettingsIcon.exe" SourceFile="$(SettingsIconPath)" />
 
     <Feature Id="MainFeature" Title="azooKey" Level="1">
       <ComponentRef Id="TipComponent" />

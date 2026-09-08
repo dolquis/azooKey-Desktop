@@ -96,6 +96,29 @@ Describe "WiX MSI package consistency" {
     $script:releaseWorkflow | Should -Match '"-p:SettingsExePath='
   }
 
+  It "shares the product icon between the EXE and advertised shortcut" {
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $shortcut = $xml.SelectSingleNode('//w:Shortcut[@Id="SettingsShortcut"]', $ns)
+    $shortcut.Advertise | Should -Be "yes"
+    $shortcut.Icon | Should -Be "SettingsIcon.exe"
+    $shortcut.IconIndex | Should -Be "0"
+    $xml.SelectSingleNode('//w:Icon[@Id="SettingsIcon.exe"]', $ns).SourceFile |
+      Should -Be '$(SettingsIconPath)'
+    $script:settingsProject | Should -Match 'ResourceCompile Include="azookey_settings.rc"'
+    $script:project | Should -Match 'settings-app\\Assets\\azookey-settings.ico'
+  }
+
+  It "passes the validated release version to the settings EXE and MSI" {
+    $script:releaseWorkflow.IndexOf('name: Resolve MSI version') |
+      Should -BeLessThan $script:releaseWorkflow.IndexOf('name: Configure')
+    $script:releaseWorkflow | Should -Match 'PRODUCT_VERSION: \$\{\{ steps.msi-version.outputs.version \}\}'
+    $script:releaseWorkflow | Should -Match '-DAZOOKEY_PRODUCT_VERSION=\$env:PRODUCT_VERSION'
+    $script:settingsCMake | Should -Match '/property:AzooKeyProductVersion=\$\{AZOOKEY_PRODUCT_VERSION\}'
+    $script:settingsProject | Should -Match '#define AZOOKEY_VERSION_STRING'
+  }
+
   It "records licenses for the redistributed settings runtime" {
     $script:thirdPartyLicenses | Should -Match 'Microsoft Windows App SDK'
     $script:thirdPartyLicenses | Should -Match 'Microsoft Windows C\+\+/WinRT'

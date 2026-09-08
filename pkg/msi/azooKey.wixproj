@@ -6,6 +6,7 @@
     <HostExePath Condition="'$(HostExePath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\inference-host\azookey_inference_host.exe</HostExePath>
     <SettingsPayloadDir Condition="'$(SettingsPayloadDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\settings-app\Release</SettingsPayloadDir>
     <SettingsExePath Condition="'$(SettingsExePath)' == ''">$(SettingsPayloadDir)\azookey_settings.exe</SettingsExePath>
+    <SettingsIconPath Condition="'$(SettingsIconPath)' == ''">$(MSBuildThisFileDirectory)..\..\settings-app\Assets\azookey-settings.ico</SettingsIconPath>
     <VCRuntimeDir Condition="'$(VCRuntimeDir)' == ''">__NOT_PROVIDED__</VCRuntimeDir>
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
@@ -25,6 +26,7 @@
       HostExePath=$(HostExePath);
       SettingsPayloadDir=$(SettingsPayloadDir);
       SettingsExePath=$(SettingsExePath);
+      SettingsIconPath=$(SettingsIconPath);
       VCRuntimeDir=$(VCRuntimeDir);
       LicensePath=$(LicensePath);
       ThirdPartyLicensesPath=$(ThirdPartyLicensesPath);
@@ -39,6 +41,7 @@
   </PropertyGroup>
 
   <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
+    <Error Condition="!Exists('$(SettingsIconPath)')" Text="Settings icon not found: $(SettingsIconPath)" />
     <Error Condition="!Exists('$(HostScriptsDir)\host-startup-log.ps1')" Text="Host startup logger missing" />
     <Error Condition="!Exists('$(HostScriptsDir)\host-supervisor.ps1')" Text="Host supervisor missing" />
     <Error Condition="!Exists('$(HostScriptsDir)\start-installed-host.ps1')" Text="Installed host launcher missing" />

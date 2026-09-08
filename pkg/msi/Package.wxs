@@ -103,11 +103,16 @@
                 Name="azooKey Settings"
                 Description="Configure azooKey"
                 Advertise="yes"
+                Icon="SettingsIcon.exe"
+                IconIndex="0"
                 WorkingDirectory="INSTALLFOLDER" />
           </File>
         </Component>
       </Directory>
     </StandardDirectory>
+
+    <!-- Advertised shortcuts need an Icon table stream, even with an EXE icon. -->
+    <Icon Id="SettingsIcon.exe" SourceFile="$(SettingsIconPath)" />
 
     <!-- Retain files-in-use detection without racing supervisor restarts. -->
     <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />

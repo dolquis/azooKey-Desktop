@@ -13,6 +13,7 @@
     <ProjectName>azookey_settings</ProjectName>
     <RootNamespace>azookey_settings</RootNamespace>
     <TargetName>$(RootNamespace)</TargetName>
+    <AzooKeyProductVersion Condition="'$(AzooKeyProductVersion)'==''">0.0.0</AzooKeyProductVersion>
     <DefaultLanguage>ja-JP</DefaultLanguage>
     <MinimumVisualStudioVersion>17.0</MinimumVisualStudioVersion>
     <AppContainerApplication>false</AppContainerApplication>
@@ -74,9 +75,13 @@
     <Link>
       <AdditionalDependencies>advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
     <ClCompile><PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <ResourceCompile><PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile><PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
@@ -91,6 +96,7 @@
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="app.manifest" />
+    <ResourceCompile Include="azookey_settings.rc" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="App.xaml.h"><DependentUpon>App.xaml</DependentUpon></ClInclude>
     <ClInclude Include="LaunchArguments.h" />
@@ -127,4 +133,14 @@
     <None Include="HybridCRT.props" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="ValidateProductVersion" BeforeTargets="ResourceCompile">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(AzooKeyProductVersion)', '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'))"
+           Text="AzooKeyProductVersion must be MAJOR.MINOR.PATCH." />
+    <Error Condition="$([System.Version]::Parse('$(AzooKeyProductVersion)').Major) &gt; 65535 Or $([System.Version]::Parse('$(AzooKeyProductVersion)').Minor) &gt; 65535 Or $([System.Version]::Parse('$(AzooKeyProductVersion)').Build) &gt; 65535"
+           Text="VERSIONINFO fields must not exceed 65535." />
+    <!-- Keep string quotes in a header instead of passing them through rc.exe /D. -->
+    <WriteLinesToFile File="$(IntDir)azookey-version.rc.h" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="#define AZOOKEY_VERSION_NUMBERS $(AzooKeyProductVersion.Replace('.', ',')),0&#xA;#define AZOOKEY_VERSION_STRING &quot;$(AzooKeyProductVersion).0&quot;" />
+    <ItemGroup><FileWrites Include="$(IntDir)azookey-version.rc.h" /></ItemGroup>
+  </Target>
 </Project>

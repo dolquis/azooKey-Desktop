@@ -126,7 +126,7 @@ jobs:
               esac
 
               case "$path" in
-                *.ps1|*.psm1|*.psd1)
+                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msix/*)
                   powershell_quality=true
                   ;;
               esac

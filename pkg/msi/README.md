@@ -33,7 +33,7 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 
 出力は `pkg\msi\bin\Release\azooKey-1.0.0-x64.msi` です。
 別の成果物を使う場合は、`TipDllPath`、`HostExePath`、`SettingsPayloadDir`、
-`SettingsExePath` を MSBuild property で指定します。`SettingsExePath` の既定値は
+`SettingsExePath`、`SettingsIconPath` を MSBuild property で指定します。`SettingsExePath` の既定値は
 `$(SettingsPayloadDir)\azookey_settings.exe` なので、通常は `SettingsPayloadDir` だけを
 変更すれば足ります。
 `VCRuntimeDir` には、使用した MSVC toolset の x64 `Microsoft.VC*.CRT`

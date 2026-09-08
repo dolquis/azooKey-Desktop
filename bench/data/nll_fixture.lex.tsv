@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT; THIRD_PARTY_LICENSES; synthetic benchmark fixture
+# THIRD_PARTY_LICENSES is a dictbuild contract marker; no third-party material (see DATA-LICENSE.md).
+surface	reading	pos	cost	frequency	category	source_id
+構成	こうせい	名詞	0	1.0	general	nll-fixture
+公正	こうせい	名詞	0	0.95	general	nll-fixture
+校正	こうせい	名詞	0	0.95	general	nll-fixture
+更生	こうせい	名詞	0	0.95	general	nll-fixture
+厚生	こうせい	名詞	0	0.95	general	nll-fixture
+後世	こうせい	名詞	0	0.95	general	nll-fixture
+恒星	こうせい	名詞	0	0.95	general	nll-fixture
+攻勢	こうせい	名詞	0	0.95	general	nll-fixture

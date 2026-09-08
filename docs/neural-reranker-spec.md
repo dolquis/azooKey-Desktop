@@ -958,9 +958,18 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   収まることを示す。prefix decode の再実行コスト（§B3.4）を内訳として分離する。
 - `azookey_nll_bench --model <GGUF> --iterations 10 --top-k 8 --threads 8` は
   固定の「こうせい」候補集合で生成後の追加評価を測る。warm-up は 2 回とし、
-  prefix 平均と全評価 p95、既定予算への適合を出す。評価順序を逆転させた NLL の
-  一致も検証する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
+  prefix 平均と p95、全評価 p95、20ms 超過件数と割合、各反復の内訳を出す。
+  評価順序を逆転させた NLL の一致、生成キャッシュ有無での候補順序の一致も検証し、
+  生成スコアの最大差を別記する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
   計測は 10 秒の診断用 deadline を使い、通常要求の 20ms 予算とは区別する。
+- `--backend cpu|vulkan` で実行経路を指定する。Vulkan は対応ビルドとデバイスを必要とし、
+  CPU への暗黙の代替を測定成功としない。
+- `--query-dictionary <azdic>` は合成の TechnicalTerms 辞書を読み込み、NLL OFF と ON の
+  `QueryCandidates` をそれぞれ 2 回の OFF warm-up 後に連続計測する。
+  `bench/data/nll_fixture.lex.tsv` と同名の metadata JSON が固定入力である。
+  各要求の時間、prompt 再利用トークン数、予算超過、返却候補への適用数を記録する。
+  ON の途中で circuit が開いてもリセットせず、直後の prefix 再計算も測定に含める。
+  全件破棄は候補統合による生成スコア差と混同せず、`RerankNll` の入力境界で検証する。
 
 ## B12. 校正と性能検証（追跡先: DEV-1012）
 

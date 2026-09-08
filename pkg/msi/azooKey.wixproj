@@ -11,6 +11,7 @@
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
     <RewriterDataDir Condition="'$(RewriterDataDir)' == ''">$(MSBuildThisFileDirectory)..\..\data</RewriterDataDir>
+    <HostScriptsDir>$(MSBuildThisFileDirectory)..\..\scripts</HostScriptsDir>
     <OutputName>azooKey-$(ProductVersion)-x64</OutputName>
     <!--
       Windows App SDK multilingual binaries exceed the MSI File.Language limits.
@@ -29,7 +30,8 @@
       VCRuntimeDir=$(VCRuntimeDir);
       LicensePath=$(LicensePath);
       ThirdPartyLicensesPath=$(ThirdPartyLicensesPath);
-      RewriterDataDir=$(RewriterDataDir)
+      RewriterDataDir=$(RewriterDataDir);
+      HostScriptsDir=$(HostScriptsDir)
     </DefineConstants>
   </PropertyGroup>
 
@@ -40,6 +42,10 @@
 
   <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
     <Error Condition="!Exists('$(SettingsIconPath)')" Text="Settings icon not found: $(SettingsIconPath)" />
+    <Error Condition="!Exists('$(HostScriptsDir)\host-startup-log.ps1')" Text="Host startup logger missing" />
+    <Error Condition="!Exists('$(HostScriptsDir)\host-supervisor.ps1')" Text="Host supervisor missing" />
+    <Error Condition="!Exists('$(HostScriptsDir)\start-installed-host.ps1')" Text="Installed host launcher missing" />
+    <Error Condition="!Exists('$(HostScriptsDir)\wait-installed-host.ps1')" Text="Installed host shutdown waiter missing" />
     <Error Condition="!Exists('$(TipDllPath)')" Text="TIP DLL not found: $(TipDllPath)" />
     <Error Condition="!Exists('$(HostExePath)')" Text="Inference host not found: $(HostExePath)" />
     <Error Condition="!Exists('$(SettingsPayloadDir)')" Text="Settings payload directory not found: $(SettingsPayloadDir)" />

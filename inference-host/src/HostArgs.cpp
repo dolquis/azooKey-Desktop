@@ -1,5 +1,6 @@
 #include "azookey/host/HostArgs.h"
 
+#include <charconv>
 #include <cstddef>
 #include <utility>
 
@@ -29,6 +30,18 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
 
   for (size_t i = 0; i < argv.size(); ++i) {
     const auto& arg = argv[i];
+    if (arg == "--supervisor-pid") {
+      std::string value;
+      if (!TakeValue(argv, i, arg, value, result.error)) return result;
+      const auto parsed =
+          std::from_chars(value.data(), value.data() + value.size(), args.supervisor_pid);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+          args.supervisor_pid == 0) {
+        result.error = "invalid supervisor PID";
+        return result;
+      }
+      continue;
+    }
     if (arg == "userdict") {
       args.userdict_args.emplace(argv.begin() + static_cast<std::ptrdiff_t>(i + 1), argv.end());
       break;
@@ -111,6 +124,9 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
     return result;
   }
 
+  if (args.supervisor_pid != 0 && (!args.pipe_mode || args.userdict_args || args.lookup_args)) {
+    result.error = "--supervisor-pid requires pipe mode";
+  }
   return result;
 }
 

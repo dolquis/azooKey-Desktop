@@ -6,6 +6,8 @@ param(
   [string]$MockDictionaryPath = "",
   [string]$PipeName = "",
   [string]$StderrLogPath = "",
+  # Empty for development registration. MSI removes this registration on uninstall.
+  [string]$InstalledDirectory = "",
   [ValidateRange(1, 60000)]
   [int]$RestartDelayMinMs = 250,
   [ValidateRange(1, 60000)]
@@ -21,6 +23,106 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "host-startup-log.ps1")
+$diagnosticPath = if ($StderrLogPath) { $StderrLogPath + ".supervisor.jsonl" } else { "" }
+
+function Test-InstallationActive {
+  param([string]$Directory)
+  if (-not $Directory) { return $true }
+  $registration = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\azooKey\HostStartup" `
+    -Name "InstallDirectory" -ErrorAction SilentlyContinue
+  return $null -ne $registration -and
+    $registration.InstallDirectory.TrimEnd('\') -ieq $Directory.TrimEnd('\')
+}
+
+function Test-VulkanLoader {
+  if (-not ("AzooKey.SupervisorLoader" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace AzooKey {
+  public static class SupervisorLoader {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool FreeLibrary(IntPtr module);
+  }
+}
+'@
+  }
+  # Drivers install the loader in System32. Never search the current directory.
+  $module = [AzooKey.SupervisorLoader]::LoadLibraryExW("vulkan-1.dll", [IntPtr]::Zero, 0x800)
+  if ($module -eq [IntPtr]::Zero) {
+    $script:selectionDetail = "win32_error=$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+    return $false
+  }
+  [void][AzooKey.SupervisorLoader]::FreeLibrary($module)
+  return $true
+}
+
+function Test-VulkanHost {
+  param([string]$Path, [string]$Arguments = "--probe-vulkan", [int]$TimeoutMilliseconds = 10000)
+  $probe = [Diagnostics.Process]::new()
+  try {
+    $probe.StartInfo = [Diagnostics.ProcessStartInfo]@{
+      FileName = $Path
+      Arguments = $Arguments
+      UseShellExecute = $false
+      CreateNoWindow = $true
+      RedirectStandardOutput = $true
+      RedirectStandardError = $true
+    }
+    [void]$probe.Start()
+    $stdout = $probe.StandardOutput.ReadToEndAsync()
+    $stderr = $probe.StandardError.ReadToEndAsync()
+    if (-not $probe.WaitForExit($TimeoutMilliseconds)) {
+      $script:probeReason = "probe_timeout"
+      try { $probe.Kill() } catch [InvalidOperationException] {
+        $script:selectionDetail = 'probe exited before timeout cleanup'
+      }
+      [void]$probe.WaitForExit(1000)
+      return $false
+    }
+    $output = $stdout.GetAwaiter().GetResult()
+    $errorOutput = $stderr.GetAwaiter().GetResult()
+    $script:selectionDetail = "exit_code=$($probe.ExitCode); stderr=" +
+      $errorOutput.Substring(0, [Math]::Min(2048, $errorOutput.Length))
+    $script:probeReason = if ($output.Trim() -eq 'vulkan_devices=0') { 'probe_no_devices' }
+      elseif ($probe.ExitCode -ne 0) { 'probe_exit_failed' } else { 'probe_invalid_output' }
+    return $probe.ExitCode -eq 0 -and $output.Trim() -match '^vulkan_devices=[1-9][0-9]*$'
+  } catch {
+    $script:probeReason = "probe_launch_failed"
+    $script:selectionDetail = "$($_.Exception.GetType().FullName): $_"
+    return $false
+  } finally {
+    $probe.Dispose()
+  }
+}
+
+function Get-HostSelection {
+  param([string]$BasePath)
+  $addon = Join-Path (Split-Path -Parent $BasePath) "azookey_inference_host_vulkan.exe"
+  $reason = "addon_absent"
+  $script:selectionDetail = ""
+  $script:probeReason = "probe_failed"
+  if (Test-Path -LiteralPath $addon -PathType Leaf) {
+    $reason = "loader_unavailable"
+    $loaderAvailable = $false
+    try { $loaderAvailable = Test-VulkanLoader } catch {
+      $reason = "loader_probe_unavailable"
+      $script:selectionDetail = "$($_.Exception.GetType().FullName): $_"
+    }
+    if ($loaderAvailable) {
+      $reason = "probe_failed"
+      if (Test-VulkanHost -Path $addon) {
+        return [pscustomobject]@{ Path = $addon; Reason = "vulkan_devices_available"; Detail = $script:selectionDetail }
+      }
+      $reason = $script:probeReason
+    }
+  }
+  return [pscustomobject]@{ Path = $BasePath; Reason = $reason; Detail = $script:selectionDetail }
+}
 
 function Test-PerUserPipe {
   param(
@@ -107,39 +209,60 @@ try {
   $restartDelayMs = $RestartDelayMinMs
   $launchCount = 0
   $launchAttemptCount = 0
+  $consecutiveFailures = 0
 
-  while (-not $stopEvent.WaitOne(0)) {
+  while (-not $stopEvent.WaitOne(0) -and (Test-InstallationActive -Directory $InstalledDirectory)) {
     # A host started before this supervisor may already own the per-user pipe.
     # Wait for it to disappear, then take over future restarts.
-    while ((Test-PerUserPipe -Name $PipeName) -and -not $stopEvent.WaitOne(500)) {
+    while ((Test-PerUserPipe -Name $PipeName) -and -not $stopEvent.WaitOne(500) -and
+        (Test-InstallationActive -Directory $InstalledDirectory)) {
       # Intentionally empty.
     }
-    if ($stopEvent.WaitOne(0)) {
+    if ($stopEvent.WaitOne(0) -or -not (Test-InstallationActive -Directory $InstalledDirectory)) {
       break
     }
 
+    $selection = Get-HostSelection -BasePath $HostExePath
+    # Probe can take time. Do not launch after MSI has removed the registration.
+    if (-not (Test-InstallationActive -Directory $InstalledDirectory)) { break }
     $startParameters = @{
-      FilePath = $HostExePath
+      FilePath = $selection.Path
       ArgumentList = $HostArguments
       PassThru = $true
       WindowStyle = "Hidden"
     }
     if ($StderrLogPath) {
-      $launchAttemptCount++
-      $logDirectory = Split-Path -Parent $StderrLogPath
-      if ($logDirectory) {
-        New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+      try {
+        $launchAttemptCount++
+        $logDirectory = Split-Path -Parent $StderrLogPath
+        if ($logDirectory) {
+          New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        }
+        $startParameters.RedirectStandardError = Get-LaunchLogPath `
+          -BasePath $StderrLogPath `
+          -LaunchAttempt $launchAttemptCount
+        # Check redirection before creating the child, then fall back to no redirect.
+        ([IO.File]::Open($startParameters.RedirectStandardError, [IO.FileMode]::CreateNew)).Dispose()
+        Remove-OldHostLaunchLog -BasePath $StderrLogPath -Keep 20
+      } catch {
+        $startParameters.Remove('RedirectStandardError')
+        Write-HostStartupLog -Path $diagnosticPath -EventName "stderr_unavailable" -Detail "$_"
       }
-      $startParameters.RedirectStandardError = Get-LaunchLogPath `
-        -BasePath $StderrLogPath `
-        -LaunchAttempt $launchAttemptCount
     }
+    Write-HostStartupLog -Path $diagnosticPath -EventName $selection.Reason `
+      -Detail "$($selection.Path); $($selection.Detail)"
 
     $startedAt = [DateTimeOffset]::UtcNow
     try {
       $hostProcess = Start-Process @startParameters
       $launchCount++
     } catch {
+      $consecutiveFailures++
+      Write-HostStartupLog -Path $diagnosticPath -EventName "host_launch_failed" -Detail "$_"
+      if ($consecutiveFailures -ge 5) {
+        Write-HostStartupLog -Path $diagnosticPath -EventName "retry_limit"
+        break
+      }
       Write-Warning "Could not start inference host: $_"
       if ($stopEvent.WaitOne($restartDelayMs)) {
         break
@@ -150,13 +273,15 @@ try {
 
     try {
       while (-not $hostProcess.HasExited) {
-        if ($stopEvent.WaitOne(500)) {
-          # Unregistration stops supervision but preserves the current host,
-          # matching the previous unregister-dev.ps1 behavior.
+        if ($stopEvent.WaitOne(500) -or -not (Test-InstallationActive -Directory $InstalledDirectory)) {
+          # Development keeps the host alive. Installed hosts observe this
+          # supervisor's process exit and perform their normal shutdown.
           return
         }
         $hostProcess.Refresh()
       }
+      $exitCode = $hostProcess.ExitCode
+      Write-HostStartupLog -Path $diagnosticPath -EventName "host_exited" -Detail "exit_code=$exitCode"
     } finally {
       $hostProcess.Dispose()
     }
@@ -167,9 +292,16 @@ try {
 
     $runtime = [DateTimeOffset]::UtcNow - $startedAt
     if ($runtime.TotalSeconds -ge $StableRunSeconds) {
+      $consecutiveFailures = 0
       $restartDelayMs = $RestartDelayMinMs
     } else {
+      $consecutiveFailures++
       $restartDelayMs = [Math]::Min($restartDelayMs * 2, $RestartDelayMaxMs)
+    }
+    if ($exitCode -in @(2, 3) -or $consecutiveFailures -ge 5) {
+      Write-HostStartupLog -Path $diagnosticPath -EventName "retry_stopped" `
+        -Detail "exit_code=$exitCode; consecutive_failures=$consecutiveFailures"
+      break
     }
 
     if ($stopEvent.WaitOne($restartDelayMs)) {

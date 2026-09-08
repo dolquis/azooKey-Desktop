@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -17,6 +18,7 @@ struct HostArgs {
   bool explicit_backend{false};
   bool explicit_model_path{false};
   bool pipe_mode{false};
+  std::uint32_t supervisor_pid{0};
   std::string pipe_name;
   std::string handshake_token;
   std::optional<std::vector<std::string>> userdict_args;

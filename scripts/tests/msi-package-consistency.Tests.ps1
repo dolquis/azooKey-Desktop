@@ -145,6 +145,49 @@ Describe "WiX MSI package consistency" {
     $script:packageReadme | Should -Match 'base MSI'
   }
 
+  It "owns a single machine Run entry and packages the shared supervisor" {
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $startup = $xml.SelectSingleNode('//w:Component[@Id="HostStartupComponent"]', $ns)
+    $startup.Bitness | Should -Be "always64"
+    $run = $startup.SelectSingleNode('w:RegistryValue[@Name="azooKeyHost"]', $ns)
+    $run.Root | Should -Be "HKLM"
+    $run.Key | Should -Be 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+    $run.Value | Should -Match '-WindowStyle Hidden'
+    $run.Value | Should -Match '\[#InstalledHostLauncher\]'
+    $command = $run.Value.Replace('[System64Folder]', 'C:\Windows\System32\').Replace(
+      '[#InstalledHostLauncher]', 'C:\Program Files\azooKey\start-installed-host.ps1')
+    $command.Length | Should -BeLessOrEqual 260
+    $xml.SelectNodes('//w:RegistryValue[contains(@Key,"CurrentVersion\Run")]', $ns).Count | Should -Be 1
+    $startup.SelectSingleNode('w:RegistryValue[@Name="InstallDirectory"]', $ns).Value |
+      Should -Be '[INSTALLFOLDER]'
+    foreach ($fileId in @("HostSupervisor", "InstalledHostLauncher", "InstalledHostWaiter", "HostStartupLog")) {
+      $file = $xml.SelectSingleNode("//w:File[@Id='$fileId']", $ns)
+      $file.Source | Should -Match '\$\(HostScriptsDir\)'
+      $componentId = $file.ParentNode.Id
+      $xml.SelectNodes("//w:Feature/w:ComponentRef[@Id='$componentId']", $ns).Count | Should -Be 1
+    }
+    $script:project | Should -Match 'host-supervisor.ps1'
+    $script:project | Should -Match 'start-installed-host.ps1'
+    $script:project | Should -Match 'wait-installed-host.ps1'
+  }
+
+  It "waits for graceful host shutdown before removing installed files" {
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $action = $xml.SelectSingleNode('//w:CustomAction[@Id="WaitForInstalledHost"]', $ns)
+    $action.Execute | Should -Be "deferred"
+    $action.Impersonate | Should -Be "no"
+    $action.Return | Should -Be "check"
+    $step = $xml.SelectSingleNode('//w:Custom[@Action="WaitForInstalledHost"]', $ns)
+    $step.Before | Should -Be "RemoveFiles"
+    $step.Condition | Should -Be '$HostStartupComponent = 2'
+    $xml.SelectSingleNode('//w:Property[@Id="MSIRESTARTMANAGERCONTROL"]', $ns).Value | Should -Be 'DisableShutdown'
+    $xml.SelectSingleNode('//w:Property[@Id="MSIDISABLERMRESTART"]', $ns).Value | Should -Be '1'
+  }
+
   It "builds and uploads an unsigned MSI in the guarded release workflow" {
     $script:releaseWorkflow | Should -Match "vars\.RELEASE_ENABLED == 'true'"
     $script:releaseWorkflow | Should -Match 'dotnet build pkg\\msi\\azooKey\.wixproj'

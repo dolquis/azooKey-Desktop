@@ -13,6 +13,7 @@ add_library(azookey_host STATIC
   src/DictionaryCandidateProvider.cpp
   src/Dispatcher.cpp
   src/HostArgs.cpp
+  src/HostStartup.cpp
   src/HttpDownloader.cpp
   src/InferenceEngine.cpp
   src/LookupCli.cpp

@@ -223,19 +223,49 @@ TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfigurat
 TEST(SettingsDocumentTest, UnsupportedValidBackendIsPreservedUntilUserSelectsOne) {
   const auto dir = TestDir("azookey_settings_document_hidden_backend");
   const auto path = dir / "settings.json";
-  WriteText(path, R"({"model":{"backendPreference":"winml"}})");
+  for (const auto backend : {"cuda", "vulkan", "winml", "directml", "npu"}) {
+    SCOPED_TRACE(backend);
+    WriteText(path, std::string(R"({"backendPreference":"cpu","model":{"backendPreference":")") +
+                        backend + R"("}})");
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
+    EXPECT_FALSE(loaded.settings.model_backend_preference.has_value());
+    EXPECT_EQ(loaded.settings.hidden_backend_preference, backend);
 
-  const auto loaded = azookey::settings::LoadSettingsDocument(path);
-  ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
-  EXPECT_FALSE(loaded.settings.model_backend_preference.has_value());
-  EXPECT_EQ(loaded.settings.hidden_backend_preference, "winml");
+    auto edited = loaded.settings;
+    edited.log_level = "warn";
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed && parsed->IsObject());
+    EXPECT_EQ(parsed->AsObject().at("model").AsObject().at("backendPreference").AsString(),
+              backend);
+    EXPECT_FALSE(parsed->AsObject().contains("backendPreference"));
 
-  auto edited = loaded.settings;
-  edited.log_level = "warn";
-  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
-  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
-  ASSERT_TRUE(parsed && parsed->IsObject());
-  EXPECT_EQ(parsed->AsObject().at("model").AsObject().at("backendPreference").AsString(), "winml");
+    edited.model_backend_preference = "cpu";
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
+    EXPECT_EQ(azookey::settings::LoadSettingsDocument(path).settings.model_backend_preference,
+              "cpu");
+  }
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, VisibleBackendAcceptsOnlyAutoAndCpu) {
+  const auto dir = TestDir("azookey_settings_document_visible_backend");
+  const auto path = dir / "settings.json";
+  azookey::settings::EditableSettings edited;
+  for (const auto backend : {"auto", "cpu"}) {
+    edited.model_backend_preference = backend;
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, edited).ok);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    EXPECT_EQ(loaded.settings.model_backend_preference, backend);
+    EXPECT_TRUE(loaded.settings.hidden_backend_preference.empty());
+  }
+  const auto original = ReadText(path);
+  for (const auto backend : {"cuda", "vulkan", "winml", "directml", "npu", "invalid"}) {
+    edited.model_backend_preference = backend;
+    EXPECT_FALSE(azookey::settings::SaveSettingsDocument(path, edited).ok);
+    EXPECT_EQ(ReadText(path), original);
+  }
   std::filesystem::remove_all(dir);
 }
 

@@ -119,13 +119,15 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
   if (result.settings.model_backend_preference) {
     const auto& backend = *result.settings.model_backend_preference;
-    BackendPreferenceCombo().SelectedIndex(backend == "cpu" ? 1 : backend == "cuda" ? 2 : 0);
+    BackendPreferenceCombo().SelectedIndex(backend == "cpu" ? 1 : 0);
     UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
   } else {
     BackendPreferenceCombo().SelectedIndex(-1);
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-    UnsupportedBackendText().Text(resources.GetString(L"UnsupportedBackendPrefix") +
-                                  winrt::to_hstring(result.settings.hidden_backend_preference));
+    const auto message = resources.GetString(L"UnsupportedBackendPrefix") +
+                         winrt::to_hstring(result.settings.hidden_backend_preference) + L"\n" +
+                         resources.GetString(L"BackendDowngradeNote");
+    UnsupportedBackendText().Text(message);
     UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
   }
 
@@ -177,10 +179,8 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   azookey::settings::EditableSettings settings;
   settings.model_enabled = ModelEnabledToggle().IsOn();
   const int backend_index = BackendPreferenceCombo().SelectedIndex();
-  if (backend_index >= 0) {
-    settings.model_backend_preference = backend_index == 1   ? "cpu"
-                                        : backend_index == 2 ? "cuda"
-                                                             : "auto";
+  if (backend_index == 0 || backend_index == 1) {
+    settings.model_backend_preference = backend_index == 1 ? "cpu" : "auto";
   } else {
     settings.model_backend_preference.reset();
   }
@@ -224,6 +224,10 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   SaveButton().IsEnabled(true);
   SaveProgressRing().IsActive(false);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+  // The disk save is authoritative, even if notifying the Host failed.
+  if (save_result.ok && settings.model_backend_preference) {
+    UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+  }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;
   if (!save_result.ok) {
     ShowStatus(

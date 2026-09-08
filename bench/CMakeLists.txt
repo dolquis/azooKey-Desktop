@@ -32,7 +32,7 @@ if(WIN32)
   target_link_libraries(azookey_conversion_quality PRIVATE bcrypt psapi)
 endif()
 
-add_executable(azookey_bench live_bench.cpp IpcBenchmark.cpp)
+add_executable(azookey_bench live_bench.cpp IpcBenchmark.cpp TemporaryLearningFile.cpp)
 add_dependencies(azookey_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_bench
@@ -61,6 +61,12 @@ set(AZOOKEY_ZENZAI_TEST_MODEL "" CACHE FILEPATH
     "Path to a real Zenzai GGUF used by the llama.cpp CTest smoke")
 
 if(AZOOKEY_BUILD_TESTS)
+  add_executable(temporary_learning_file_tests
+    temporary_learning_file_test.cpp TemporaryLearningFile.cpp)
+  target_link_libraries(temporary_learning_file_tests PRIVATE GTest::gtest_main
+    azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(temporary_learning_file_tests)
+
   add_executable(benchmark_result_tests benchmark_result_test.cpp)
   target_link_libraries(benchmark_result_tests
     PRIVATE azookey_benchmark_result GTest::gtest_main

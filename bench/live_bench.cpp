@@ -171,6 +171,8 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // Keep store and engine after learning_file: engine shutdown flushes learning,
+  // and the atomic writer would recreate the directory if cleanup ran first.
   azookey::learning::LearningStore store(learning_file->Path());
   azookey::host::EngineConfig engine_config;
   engine_config.backend = quality_options.backend == "cuda" ? azookey::host::BackendKind::Cuda

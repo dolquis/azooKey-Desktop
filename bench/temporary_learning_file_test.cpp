@@ -4,12 +4,16 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "TemporaryLearningFile.h"
 
 namespace azookey::bench {
 namespace {
+
+static_assert(!std::is_copy_constructible_v<TemporaryLearningFile>);
+static_assert(!std::is_move_constructible_v<TemporaryLearningFile>);
 
 TEST(TemporaryLearningFileTest, ConcurrentReservationsKeepIndependentFiles) {
   std::vector<std::future<std::unique_ptr<TemporaryLearningFile>>> pending;
@@ -28,7 +32,7 @@ TEST(TemporaryLearningFileTest, ConcurrentReservationsKeepIndependentFiles) {
     int contents = -1;
     input >> contents;
     EXPECT_EQ(contents, static_cast<int>(i));
-    input.close();
+    input.close();  // Windows cannot delete the file while this stream holds it open.
     const auto directory = files[i]->Path().parent_path();
     files[i].reset();
     EXPECT_FALSE(std::filesystem::exists(directory));
@@ -62,6 +66,7 @@ TEST(TemporaryLearningFileTest, CleanupRunsAfterLaterObjectsDuringUnwinding) {
   struct Writer {
     std::filesystem::path path;
     ~Writer() {
+      std::filesystem::create_directories(path.parent_path());
       std::ofstream output(path);
       output << "shutdown";
     }
@@ -75,6 +80,25 @@ TEST(TemporaryLearningFileTest, CleanupRunsAfterLaterObjectsDuringUnwinding) {
   } catch (int) {
   }
   EXPECT_FALSE(std::filesystem::exists(directory));
+}
+
+TEST(TemporaryLearningFileTest, CleanupPreservesUnexpectedFilesAndReportsFailure) {
+  auto owner = std::make_unique<TemporaryLearningFile>();
+  const auto directory = owner->Path().parent_path();
+  const auto unexpected = directory / "unexpected.txt";
+  {
+    std::ofstream output(unexpected);
+    output << "preserve";
+  }
+  testing::internal::CaptureStderr();
+  owner.reset();
+  const auto diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_TRUE(std::filesystem::exists(directory));
+  EXPECT_TRUE(std::filesystem::exists(unexpected));
+  EXPECT_NE(diagnostic.find("benchmark learning cleanup failed:"), std::string::npos);
+  // Remove only the test-owned file and now-empty directory.
+  EXPECT_TRUE(std::filesystem::remove(unexpected));
+  EXPECT_TRUE(std::filesystem::remove(directory));
 }
 
 }  // namespace

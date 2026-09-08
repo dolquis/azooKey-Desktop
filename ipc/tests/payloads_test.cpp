@@ -7,6 +7,7 @@
 #include <string>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Messages.h"
 
 TEST(RewriterPayload, OptionalFieldsRoundTripAndOldPeersDefaultOff) {
   using namespace azookey::ipc;
@@ -70,6 +71,47 @@ TEST(PayloadsTest, JsonEscapeAndRoundTrip) {
   ASSERT_TRUE(v.has_value());
   ASSERT_TRUE(v->IsString());
   EXPECT_EQ(v->AsString(), src);
+}
+
+TEST(PayloadsTest, HostCapabilitiesRemainOptional) {
+  azookey::ipc::HandshakeResponse response;
+  response.host_version = "test";
+  response.capabilities = {"oob_cancel"};
+  const auto parsed =
+      azookey::ipc::ParseHandshakeResponse(azookey::ipc::BuildHandshakeResponse(response));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->capabilities, response.capabilities);
+  const auto legacy = azookey::ipc::ParseHandshakeResponse(R"({"host_version":"old"})");
+  ASSERT_TRUE(legacy);
+  EXPECT_TRUE(legacy->capabilities.empty());
+}
+
+TEST(PayloadsTest, CommitSegmentsRoundTripAndRejectsMalformedSegment) {
+  using namespace azookey::ipc;
+  CommitSegmentsObservationRequest request;
+  CandidateField chosen;
+  chosen.surface = "日本";
+  chosen.reading = "にほん";
+  request.segments.push_back({"にほん", chosen, {chosen}, false});
+  chosen.surface = "。";
+  chosen.reading.clear();
+  request.segments.push_back({"", chosen, {}, true});
+  request.left_context = "前";
+  request.timestamp_ms = 123;
+  request.observation_id = "batch:1";
+  const auto parsed =
+      ParseCommitSegmentsObservationRequest(BuildCommitSegmentsObservationRequest(request));
+  ASSERT_TRUE(parsed);
+  ASSERT_EQ(parsed->segments.size(), 2u);
+  EXPECT_EQ(parsed->segments[0].chosen.surface, "日本");
+  EXPECT_TRUE(parsed->segments[1].is_auto_punctuation);
+  EXPECT_EQ(parsed->left_context, "前");
+  EXPECT_EQ(parsed->observation_id, "batch:1");
+  EXPECT_EQ(parsed->timestamp_ms, 123u);
+  EXPECT_FALSE(ParseCommitSegmentsObservationRequest(R"({"segments":[{}]})"));
+  EXPECT_FALSE(ParseCommitSegmentsObservationRequest(R"({"segments":[]})"));
+  EXPECT_EQ(TypeFromString(TypeToString(MessageType::CommitSegmentsObservation)),
+            MessageType::CommitSegmentsObservation);
 }
 
 TEST(PayloadsTest, Handshake) {

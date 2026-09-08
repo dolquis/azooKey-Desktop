@@ -16,6 +16,7 @@
 // clang-format on
 #endif
 
+#include "azookey/core/BatchConversionChunker.h"
 #include "azookey/ipc/Payloads.h"
 
 namespace azookey::host {
@@ -156,6 +157,14 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return std::nullopt;
     case ipc::MessageType::CommitObservation:
       return HandleCommitObservation(req);
+    case ipc::MessageType::CommitSegmentsObservation: {
+      ipc::CommitObservationResponse response;
+      if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json)) {
+        engine_->CommitSegmentsObservation(*parsed, NowSec());
+        response.ok = true;
+      }
+      return MakeResponse(req, ipc::BuildCommitObservationResponse(response));
+    }
     case ipc::MessageType::AddUserWord:
       return HandleAddUserWord(req);
     case ipc::MessageType::RemoveUserWord:
@@ -189,6 +198,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.error = "not authenticated";
       return MakeResponse(req, ipc::BuildUpdateConfigResponse(r));
     }
+    case ipc::MessageType::CommitSegmentsObservation:
     case ipc::MessageType::CommitObservation: {
       ipc::CommitObservationResponse r;
       r.ok = false;
@@ -247,6 +257,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   res.host_generation_id = config_.host_generation_id;
+  res.capabilities = {"oob_cancel", "commit_segments"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -448,31 +459,32 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   scheduler_->MarkLatest(client_id_, req.request_id);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
-  auto candidates = engine_->QueryCandidates(parsed->reading, "", NowSec(), cancel.get(),
-                                             parsed->max_candidates, false);
-
-  const bool canceled = cancel->load(std::memory_order_acquire);
-  completion.Complete();
-
   ipc::QueryBatchConversionResponse res;
-  res.partial = false;
-  res.canceled = canceled;
-  if (canceled) {
-    return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
+  for (const auto& reading : core::SplitBatchConversion(parsed->reading)) {
+    if (cancel->load(std::memory_order_acquire)) break;
+    auto candidates = engine_->QueryCandidates(reading, "", NowSec(), cancel.get(),
+                                               parsed->max_candidates, false);
+    ipc::BatchConversionSegment segment;
+    segment.reading = reading;
+    for (auto& candidate : candidates) segment.candidates.push_back(ToField(candidate));
+    if (parsed->max_candidates > 0 && segment.candidates.size() > parsed->max_candidates) {
+      segment.candidates.resize(parsed->max_candidates);
+    }
+    if (segment.candidates.empty()) {
+      ipc::CandidateField fallback;
+      fallback.reading = reading;
+      fallback.surface = reading;
+      fallback.source = "fallback";
+      segment.candidates.push_back(std::move(fallback));
+    }
+    res.full_surface += segment.candidates.front().surface;
+    res.segments.push_back(std::move(segment));
   }
-
-  ipc::BatchConversionSegment segment;
-  segment.reading = parsed->reading;
-  for (auto& c : candidates) segment.candidates.push_back(ToField(c));
-  if (parsed->max_candidates > 0 && segment.candidates.size() > parsed->max_candidates) {
-    segment.candidates.resize(parsed->max_candidates);
+  if (cancel->load(std::memory_order_acquire)) {
+    res = {};
+    res.canceled = true;
   }
-  if (!segment.candidates.empty()) {
-    res.full_surface = segment.candidates.front().surface;
-  } else {
-    res.full_surface = parsed->reading;
-  }
-  res.segments.push_back(std::move(segment));
+  completion.Complete();
   return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
 }
 

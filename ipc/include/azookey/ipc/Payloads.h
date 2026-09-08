@@ -23,6 +23,7 @@ struct HandshakeResponse {
   bool accepted{false};
   bool model_loaded{false};
   std::string host_generation_id;
+  std::vector<std::string> capabilities;
   bool batch_romaji_conversion{false};
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};
@@ -139,6 +140,24 @@ struct CommitObservationRequest {
 struct CommitObservationResponse {
   bool ok{false};
 };
+
+struct ObservedSegment {
+  std::string reading;
+  CandidateField chosen;
+  std::vector<CandidateField> shown;
+  bool is_auto_punctuation{false};
+};
+
+struct CommitSegmentsObservationRequest {
+  std::vector<ObservedSegment> segments;
+  std::string left_context;
+  uint64_t timestamp_ms{};
+  std::string observation_id;
+};
+
+std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p);
+std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRequest(
+    const std::string& json);
 
 struct AddUserWordRequest {
   std::string word;

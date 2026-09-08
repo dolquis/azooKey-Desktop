@@ -13,17 +13,81 @@
 #include <vector>
 
 #include "IpcTestData.h"
+#include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace ipc = azookey::ipc;
+
+TEST(BatchConversionChunkerTest, PreservesSentenceBoundariesAndEveryByte) {
+  const std::string input = "にほんご。つぎのぶん！さいご";
+  const auto chunks = azookey::core::SplitBatchConversion(input);
+  ASSERT_EQ(chunks.size(), 3u);
+  EXPECT_EQ(chunks[0], "にほんご。");
+  EXPECT_EQ(chunks[1], "つぎのぶん！");
+  EXPECT_EQ(chunks[0] + chunks[1] + chunks[2], input);
+}
+
+TEST(BatchConversionChunkerTest, HardSplitPreservesUtf8WithoutSentenceBoundaries) {
+  const std::string input = "あいうえおかきくけこ";
+  const auto chunks = azookey::core::SplitBatchConversion(input, 7);
+  std::string joined;
+  for (const auto& chunk : chunks) {
+    EXPECT_LE(chunk.size(), 7u);
+    size_t offset = 0;
+    char32_t codepoint{};
+    while (offset < chunk.size()) {
+      EXPECT_TRUE(azookey::core::DecodeNextUtf8(chunk, offset, codepoint));
+    }
+    joined += chunk;
+  }
+  EXPECT_EQ(joined, input);
+}
+
+TEST(BatchConversionChunkerTest, RawSplitDoesNotFlushPendingRomaji) {
+  for (const auto& input : {std::string("kananakanaka"), std::string(2000, 'n')}) {
+    const auto chunks = azookey::core::SplitBatchRomaji(input, 4);
+    std::string raw;
+    std::string reading;
+    for (const auto& chunk : chunks) {
+      EXPECT_LE(chunk.raw_romaji.size(), 8u);
+      raw += chunk.raw_romaji;
+      reading += chunk.reading;
+    }
+    EXPECT_EQ(raw, input);
+    EXPECT_EQ(reading, azookey::core::RomajiKanaConverter::ConvertForCommit(input));
+  }
+}
+
+TEST(BatchConversionChunkerTest, InputAboveFrameLimitProducesBoundedEnvelopes) {
+  const std::string raw(ipc::kMaxJsonInputBytes + 123, 'a');
+  size_t raw_size = 0;
+  size_t reading_size = 0;
+  for (const auto& chunk : azookey::core::SplitBatchRomaji(raw)) {
+    ipc::QueryBatchConversionRequest request;
+    request.reading = chunk.reading;
+    request.raw_romaji = chunk.raw_romaji;
+    ipc::Envelope envelope;
+    envelope.type = ipc::MessageType::QueryBatchConversion;
+    envelope.trace_id = "batch-boundary-test";
+    envelope.payload_json = ipc::BuildQueryBatchConversionRequest(request);
+    const auto serialized = ipc::Serialize(envelope);
+    ASSERT_TRUE(serialized);
+    ASSERT_LT(serialized->size(), ipc::kMaxFrameSize);
+    raw_size += chunk.raw_romaji.size();
+    reading_size += chunk.reading.size();
+  }
+  EXPECT_EQ(raw_size, raw.size());
+  EXPECT_EQ(reading_size, raw.size() * 3);
+}
 
 namespace {
 
@@ -386,6 +450,29 @@ TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
   EXPECT_EQ(parsed->full_surface, "日本");
 }
 
+TEST_F(DispatcherTest, BatchConversionPreservesAllReadingsAcrossHardSplits) {
+  ipc::QueryBatchConversionRequest request;
+  for (int i = 0; i < 100; ++i) request.reading += "あ";
+  auto response = dispatcher.Dispatch(MakeReq(23, ipc::MessageType::QueryBatchConversion,
+                                              ipc::BuildQueryBatchConversionRequest(request)));
+  ASSERT_TRUE(response);
+  auto parsed = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  ASSERT_GT(parsed->segments.size(), 1u);
+  EXPECT_FALSE(parsed->partial);
+  EXPECT_FALSE(parsed->canceled);
+  std::string joined_reading;
+  std::string joined_surface;
+  for (const auto& segment : parsed->segments) {
+    EXPECT_LE(segment.reading.size(), 96u);
+    ASSERT_FALSE(segment.candidates.empty());
+    joined_reading += segment.reading;
+    joined_surface += segment.candidates.front().surface;
+  }
+  EXPECT_EQ(joined_reading, request.reading);
+  EXPECT_EQ(joined_surface, parsed->full_surface);
+}
+
 TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {
   const std::string dict_path = TempPath("azookey_dispatcher_tsv_source_fixture.tsv");
   const std::string tsv_learning_path = TempPath("azookey_dispatcher_tsv_source_learning.tsv");
@@ -525,6 +612,29 @@ TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCountin
   EXPECT_TRUE(resend_parsed->ok);
   EXPECT_EQ(store.size(), entries_after_first);
   EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1700000000ULL), score_after_first);
+}
+
+TEST_F(DispatcherTest, CommitSegmentsSkipsAutomaticPunctuationAndDeduplicates) {
+  ipc::CommitSegmentsObservationRequest request;
+  request.observation_id = "segments-test";
+  ipc::CandidateField candidate;
+  candidate.reading = "にほん";
+  candidate.surface = "日本";
+  request.segments.push_back({candidate.reading, candidate, {}, false});
+  candidate.reading.clear();
+  candidate.surface = "。";
+  request.segments.push_back({"", candidate, {}, true});
+  const auto before = store.size();
+  for (uint64_t id : {800u, 801u}) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitSegmentsObservation,
+                                    ipc::BuildCommitSegmentsObservationRequest(request)));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+    ASSERT_TRUE(parsed);
+    EXPECT_TRUE(parsed->ok);
+  }
+  EXPECT_EQ(store.size(), before + 1);
 }
 
 TEST_F(DispatcherTest, AddRemoveUserWord) {

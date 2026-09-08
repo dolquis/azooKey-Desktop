@@ -739,6 +739,37 @@ std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string
   return ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
 }
 
+bool InferenceEngine::CommitSegmentsObservation(
+    const ipc::CommitSegmentsObservationRequest& request, uint64_t now_epoch_sec) {
+  std::shared_ptr<core::IConverter> converter;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!NoteObservationIdLocked(request.observation_id)) return false;
+    if (store_) {
+      for (const auto& segment : request.segments) {
+        if (!segment.is_auto_punctuation)
+          store_->Observe(segment.reading, segment.chosen.surface, config_.learning_alpha,
+                          now_epoch_sec);
+      }
+      NoteLearningMutationLocked(now_epoch_sec);
+    }
+    converter = active_converter_;
+  }
+  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+  core::ConversionContext context;
+  context.preceding_text = request.left_context;
+  for (const auto& segment : request.segments) {
+    if (!segment.is_auto_punctuation) {
+      converter->Commit(core::Candidate{segment.chosen.surface, segment.reading, 1.0,
+                                        core::CandidateSource::UserDictionary, "commit"},
+                        context);
+    }
+    context.preceding_text =
+        core::TakeLastUtf8Codepoints(context.preceding_text + segment.chosen.surface, 128);
+  }
+  return true;
+}
+
 bool InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
                                         uint64_t now_epoch_sec, const std::string& observation_id) {
   std::shared_ptr<core::IConverter> converter;

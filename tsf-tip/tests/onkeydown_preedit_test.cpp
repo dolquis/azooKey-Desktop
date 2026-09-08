@@ -2323,6 +2323,36 @@ TEST(TsfTipOnKeyDownPreeditTest, InFlightQueryCancelReachesHostBeforeQueryReturn
   server.Stop();
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, BatchSegmentSelectionCommitsTheWholeSentence) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField first;
+  first.reading = "か";
+  first.surface = "蚊";
+  first.source = "dictionary";
+  auto alternative = first;
+  alternative.surface = "科";
+  auto second = first;
+  second.reading = "に";
+  second.surface = "二";
+  h.service.set_cached_batch_segments_for_test({{"か", {first, alternative}}, {"に", {second}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_TRUE(h.TestPress(VK_RIGHT));
+  ASSERT_TRUE(h.Press(VK_RIGHT));
+  ASSERT_TRUE(h.Press(VK_LEFT));
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "二");
+  EXPECT_EQ(attachment.composition_range.last_text, L"科二");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, BatchRawRomajiPreviewCommitsKanaReadingAsIs) {
   TextServiceHarness h;
   FakeRange range;

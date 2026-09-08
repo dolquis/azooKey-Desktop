@@ -1211,12 +1211,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 #### M58-B: 長文・文節再変換
 
 - **目的**: 長文の一括変換を成立させ、変換結果を文節単位で再選択できるようにする。
-- **前提**: M58-A 完了、M20（再変換）、**M51 の UUIDv7 `trace_id` 生成・伝播**。
-  out-of-band Cancel はキャンセルレジストリと応答相関を `(trace_id, request_id)` で
-  キーするため、`trace_id` がグローバル一意であることに依存する。依存の根拠と、
-  M51 本体より先行させる場合に M58-B スコープへ含める採番範囲は
-  `docs/romaji-batch-conversion-spec.md` §6.3.2 を正典とする（依存するのは M51 のうち
-  `trace_id` の UUIDv7 生成・伝播のみで、レイテンシトレーサ / viewer CLI には依存しない）。
+- **前提**: M58-A 完了、M20（再変換）。キャンセルはprimary/control共通の
+  `client_id`で分離し、M51のtrace生成から独立させる。応答相関と接続の契約は
+  `docs/romaji-batch-conversion-spec.md` §6.3.2を正典とする。
 - **変更対象**: `inference-host/src/Dispatcher.cpp`（文境界チャンク分割・結合・協調
   キャンセル）、`ipc/`（segments 構造・`HandshakeResponse.capabilities`・共有
   `CancellationRegistry`）、`tsf-tip/src/TextService.cpp`（文節カーソル移動・候補切替 UI・

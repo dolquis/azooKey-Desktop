@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -13,6 +12,7 @@
 #include "BenchmarkResult.h"
 #include "ConversionQuality.h"
 #include "IpcBenchmark.h"
+#include "TemporaryLearningFile.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 
@@ -163,10 +163,15 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const auto learning_path = std::filesystem::temp_directory_path() / "azookey_bench_learning.tsv";
-  std::remove(learning_path.string().c_str());
+  std::optional<azookey::bench::TemporaryLearningFile> learning_file;
+  try {
+    learning_file.emplace();
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << std::endl;
+    return 2;
+  }
 
-  azookey::learning::LearningStore store(learning_path);
+  azookey::learning::LearningStore store(learning_file->Path());
   azookey::host::EngineConfig engine_config;
   engine_config.backend = quality_options.backend == "cuda" ? azookey::host::BackendKind::Cuda
                                                             : azookey::host::BackendKind::Cpu;
@@ -174,7 +179,6 @@ int main(int argc, char** argv) {
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
                                         engine_config);
   if (!quality_options.model.empty() && !engine.LoadModel()) {
-    std::remove(learning_path.string().c_str());
     std::cerr << "failed to load evaluation model" << std::endl;
     return 2;
   }
@@ -204,7 +208,6 @@ int main(int argc, char** argv) {
               static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit), false);
         },
         &error);
-    std::remove(learning_path.string().c_str());
     if (!ok) {
       std::cerr << error << std::endl;
       return 2;
@@ -251,7 +254,6 @@ int main(int argc, char** argv) {
     try {
       result.ipc_phases = azookey::bench::RunIpcBenchmark();
     } catch (const std::exception& ex) {
-      std::remove(learning_path.string().c_str());
       std::cerr << ex.what() << std::endl;
       return 2;
     }
@@ -261,7 +263,6 @@ int main(int argc, char** argv) {
   if (!output_path.empty()) {
     std::string error;
     if (!azookey::bench::WriteBenchmarkResult(output_path, json, &error)) {
-      std::remove(learning_path.string().c_str());
       std::cerr << error << std::endl;
       return 2;
     }
@@ -296,7 +297,6 @@ int main(int argc, char** argv) {
     std::cerr << *warning << std::endl;
   }
 
-  std::remove(learning_path.string().c_str());
   if (!result.threshold_passed) {
     std::cerr << "p95 exceeded threshold" << std::endl;
     return 1;

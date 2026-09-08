@@ -365,6 +365,7 @@ std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& 
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
   o.emplace("ai_allowed", p.ai_allowed);
   o.emplace("external_ai_allowed", p.external_ai_allowed);
+  if (!p.ai_backend.empty()) o.emplace("ai_backend", p.ai_backend);
   o.emplace("mode", j::Value(p.mode));
   o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
@@ -382,6 +383,10 @@ std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
   p.ai_allowed = v->GetBool("ai_allowed").value_or(false);
   p.external_ai_allowed = p.ai_allowed && v->GetBool("external_ai_allowed").value_or(false);
+  p.ai_backend = v->GetString("ai_backend").value_or("");
+  if (!p.ai_backend.empty() && p.ai_backend != "none" && p.ai_backend != "openai" &&
+      p.ai_backend != "local-zenzai")
+    return std::nullopt;
   p.mode = v->GetString("mode").value_or(std::string("neural"));
   p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);

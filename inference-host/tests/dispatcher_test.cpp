@@ -502,6 +502,22 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   result = query(827);
   ASSERT_TRUE(result);
   EXPECT_EQ(result->full_surface, "日本。");
+  request.ai_backend = "none";
+  const auto before_override = calls;
+  result = query(831);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  EXPECT_EQ(calls, before_override);
+  {
+    std::ofstream file(path);
+    file << R"({"aiBackend":"none","openAiApiKey":"test-only-placeholder"})";
+  }
+  settings.Reload();
+  request.ai_backend = "openai";
+  result = query(832);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本。");
+  EXPECT_EQ(calls, before_override + 1);
   status = 401;
   result = query(828);
   ASSERT_TRUE(result);
@@ -510,7 +526,7 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   request.ai_allowed = false;
   result = query(829);
   ASSERT_TRUE(result);
-  EXPECT_EQ(result->full_surface, "にほん");
+  EXPECT_EQ(result->full_surface, "日本");
   EXPECT_EQ(calls, before);
   request.ai_allowed = true;
   {
@@ -521,7 +537,8 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   settings.Reload();
   result = query(830);
   ASSERT_TRUE(result);
-  EXPECT_EQ(result->full_surface, "にほん");
+  EXPECT_EQ(result->full_surface, "日本");
+  EXPECT_EQ(result->segments.front().candidates.front().source, "privacy-fallback");
   EXPECT_EQ(calls, before);
   RemovePathNoThrow(path);
 }

@@ -346,7 +346,9 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 - 代替として M16 ダイアログ経路を**非同期化**してよい（変換中はスピナー表示で同期 deadline で
   殺さず、応答到着またはユーザーの明示キャンセルで確定）。長い API レイテンシでも M16 が
   壊れないことを保証する。同期 deadline か非同期かは実装 PR で選択する。
-- `local-zenzai` backend での AI 経路は外部 API ではないため、ローカル経路の M47 deadline に従う。
+- `local-zenzai` backend の通常のAI経路はM47の800 ms期限に従う。
+  M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
+  全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。
 - X-3-3 は非同期 push であり、TIP の同期応答タイムアウトには載らない。
 
 ### 7.2 HTTP ステータス → `AiErrorClass` マッピング（legacy 準拠）

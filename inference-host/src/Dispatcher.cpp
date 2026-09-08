@@ -446,6 +446,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {
   auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json);
   if (!parsed) {
+    static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
+    logger.Log(logging::RuntimeLogLevel::Error, "invalid_batch_request");
     ipc::QueryBatchConversionResponse res;
     return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
   }
@@ -460,6 +462,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
   ipc::QueryBatchConversionResponse res;
+  bool suppress_learning = false;
   if (parsed->mode == "ai-cleanup") {
     AiBackendOptions options;
     core::AiPrivacy privacy{true, true};
@@ -477,22 +480,29 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
       }
     }
     AiTransformRequest transform;
+    if (!parsed->ai_backend.empty()) options.backend = parsed->ai_backend;
     transform.task = AiTask::Cleanup;
     if (parsed->raw_romaji.empty()) options.backend = "none";
     transform.text = parsed->reading;
     transform.raw_romaji = parsed->raw_romaji;
     transform.auto_punctuation = parsed->auto_punctuation;
     transform.ai_allowed = privacy.ai && parsed->ai_allowed;
+    suppress_learning = !transform.ai_allowed;
     transform.external_allowed = privacy.external && parsed->external_ai_allowed;
     const auto result = config_.ai_backend->Transform(
         transform, options, cancel.get(),
         [this](const AiTransformRequest& local, const std::atomic<bool>* flag,
                AiDeadline deadline) { return engine_->TransformLocal(local, flag, deadline); });
-    if (result.ok || !transform.ai_allowed) {
+    if (!result.ok) {
+      static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
+      logger.Log(logging::RuntimeLogLevel::Error, "ai_cleanup_fallback",
+                 {{"error_class", static_cast<uint64_t>(result.error_class)}});
+    }
+    if (result.ok) {
       ipc::CandidateField candidate;
       candidate.reading = parsed->reading;
-      candidate.surface = result.ok ? result.result : parsed->reading;
-      candidate.source = result.ok ? "llm" : "privacy-fallback";
+      candidate.surface = result.result;
+      candidate.source = "llm";
       res.full_surface = candidate.surface;
       res.segments.push_back({parsed->reading, {std::move(candidate)}});
     }
@@ -515,6 +525,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
         fallback.source = "fallback";
         segment.candidates.push_back(std::move(fallback));
       }
+      // Preserve secure/unknown-input learning suppression even when host and
+      // TIP settings snapshots differ. The surface still comes from neural.
+      if (suppress_learning)
+        for (auto& candidate : segment.candidates) candidate.source = "privacy-fallback";
       res.full_surface += segment.candidates.front().surface;
       res.segments.push_back(std::move(segment));
     }

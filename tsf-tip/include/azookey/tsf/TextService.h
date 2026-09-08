@@ -189,7 +189,11 @@ class TextService final : public ITfTextInputProcessorEx,
     return RequestCommitEditSession(context);
   }
   void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false,
-                                         bool auto_punctuation = false);
+                                         bool auto_punctuation = false, bool ai_cleanup = false);
+  core::AiPrivacy pending_ai_privacy_for_test() {
+    std::lock_guard lock(ipc_mtx_);
+    return ipc_pending_ai_privacy_;
+  }
   bool batch_query_in_progress_for_test() const;
   void set_cached_batch_segments_for_test(std::vector<ipc::BatchConversionSegment> segments);
   bool has_pending_ipc_query_for_test();
@@ -299,6 +303,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
   std::atomic<bool> ipc_host_commit_segments_{false};
   core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
+  std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_
 
   // Out-of-band IPC send queue drained ahead of the pending query: Cancel is
   // fire-and-forget, CommitObservation awaits an ACK (M6, M10).

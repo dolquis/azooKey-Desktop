@@ -76,11 +76,12 @@ bool SendAll(SOCKET socket, std::string_view data) {
 class LocalHttpServer {
  public:
   LocalHttpServer(std::string body, bool honor_range, size_t request_count = 1,
-                  unsigned delay_ms = 0)
+                  unsigned delay_ms = 0, unsigned status = 200)
       : body_(std::move(body)),
         honor_range_(honor_range),
         request_count_(request_count),
-        delay_ms_(delay_ms) {
+        delay_ms_(delay_ms),
+        status_(status) {
     socket_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (socket_ == INVALID_SOCKET) return;
 
@@ -186,6 +187,7 @@ class LocalHttpServer {
     std::string response = range_not_satisfiable ? "HTTP/1.1 416 Range Not Satisfiable\r\n"
                                                  : (partial ? "HTTP/1.1 206 Partial Content\r\n"
                                                             : "HTTP/1.1 200 OK\r\n");
+    if (status_ != 200) response = "HTTP/1.1 " + std::to_string(status_) + " Error\r\n";
     if (partial) {
       response += "Content-Range: bytes " + std::to_string(offset) + "-" +
                   std::to_string(body_.size() - 1) + "/" + std::to_string(body_.size()) + "\r\n";
@@ -205,6 +207,7 @@ class LocalHttpServer {
   bool honor_range_{false};
   size_t request_count_{1};
   unsigned delay_ms_{0};
+  unsigned status_{200};
   SOCKET socket_{INVALID_SOCKET};
   uint16_t port_{0};
   std::thread worker_;
@@ -285,6 +288,31 @@ TEST(AiHttpTest, RejectsBrokenProtectedKeyBeforeNetwork) {
   const auto result = azookey::host::PostAiHttp(
       options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(1));
   EXPECT_EQ(result.error, azookey::host::AiErrorClass::Auth);
+}
+TEST(AiHttpTest, HttpFailuresRemainStatusesAndDoNotExposeProviderBodies) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  for (unsigned status : {400u, 401u, 403u, 429u, 500u}) {
+    LocalHttpServer server("must not propagate provider text", false, 1, 0, status);
+    ASSERT_TRUE(server.ok());
+    azookey::host::AiBackendOptions options;
+    const auto url = server.url();
+    options.endpoint = std::string(url.begin(), url.end());
+    options.api_key = "test-only-placeholder";
+    const auto result = azookey::host::PostAiHttp(
+        options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(3));
+    EXPECT_EQ(result.status, status);
+    EXPECT_EQ(result.error, azookey::host::AiErrorClass::None);
+    EXPECT_TRUE(result.body.empty());
+  }
+}
+TEST(AiHttpTest, RejectsNonLoopbackPlainHttpBeforeConnecting) {
+  azookey::host::AiBackendOptions options;
+  options.endpoint = "http://192.0.2.1/v1";
+  options.api_key = "test-only-placeholder";
+  const auto result = azookey::host::PostAiHttp(
+      options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(1));
+  EXPECT_EQ(result.error, azookey::host::AiErrorClass::Parse);
 }
 
 TEST(HttpDownloaderTest, Sha256MismatchNeverPromotesPartFile) {

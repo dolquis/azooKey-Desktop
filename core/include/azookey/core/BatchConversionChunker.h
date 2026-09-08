@@ -10,6 +10,9 @@
 #include "azookey/core/Utf8.h"
 
 namespace azookey::core {
+inline constexpr size_t kModelChunkBytes = 96;
+inline constexpr size_t kIpcChunkBytes = 512;
+inline constexpr size_t kPendingRomajiSlackBytes = 4;
 
 struct BatchRomajiChunk {
   std::string raw_romaji;
@@ -18,8 +21,11 @@ struct BatchRomajiChunk {
 
 // Keep one converter across transport chunks: flushing at an arbitrary raw
 // byte boundary would turn the 'n' in a split 'na' into a spurious 'ん'.
+// Repeated consonants may exceed the raw-byte budget by the bounded slack.
+// At that escape boundary, pending kana belongs to the following chunk; raw
+// and reading concatenations stay lossless, but alignment is approximate.
 inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw,
-                                                      size_t max_bytes = 512) {
+                                                      size_t max_bytes = kIpcChunkBytes) {
   std::vector<BatchRomajiChunk> chunks;
   RomajiKanaConverter converter;
   BatchRomajiChunk current;
@@ -30,7 +36,8 @@ inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw,
     const bool scalar_boundary =
         i + 1 == raw.size() || (static_cast<unsigned char>(raw[i + 1]) & 0xC0) != 0x80;
     if (scalar_boundary && current.raw_romaji.size() >= max_bytes && !current.reading.empty() &&
-        (!converter.HasPending() || current.raw_romaji.size() >= max_bytes + 4)) {
+        (!converter.HasPending() ||
+         current.raw_romaji.size() >= max_bytes + kPendingRomajiSlackBytes)) {
       chunks.push_back(std::move(current));
       current = {};
     }
@@ -44,14 +51,14 @@ inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw,
   return chunks;
 }
 
-// Prefer sentence boundaries; hard splitting never separates a UTF-8 scalar.
+// Prefer sentence boundaries; valid UTF-8 input is split only between scalars.
 // The small model chunk leaves room for prompt, context and output tokens.
-inline std::vector<std::string> SplitBatchConversion(std::string_view text, size_t max_bytes = 96) {
+inline std::vector<std::string> SplitBatchConversion(std::string_view text,
+                                                     size_t max_bytes = kModelChunkBytes) {
   std::vector<std::string> chunks;
   size_t begin = 0;
   while (begin < text.size()) {
     size_t end = begin;
-    size_t sentence_end = begin;
     while (end < text.size()) {
       size_t next = end;
       char32_t codepoint{};
@@ -60,11 +67,9 @@ inline std::vector<std::string> SplitBatchConversion(std::string_view text, size
       end = next;
       if (codepoint == U'。' || codepoint == U'！' || codepoint == U'？' || codepoint == U'\n' ||
           codepoint == U'.' || codepoint == U'!' || codepoint == U'?') {
-        sentence_end = end;
         break;
       }
     }
-    if (sentence_end != begin) end = sentence_end;
     chunks.emplace_back(text.substr(begin, end - begin));
     begin = end;
   }

@@ -136,11 +136,14 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
                                   65536)
     return Failure(AiErrorClass::Parse);
   if (!options.include_context) request.left_context.clear();
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(std::clamp(options.timeout_ms, 1000, 120000));
+  const bool local_path = options.backend == "local-zenzai" || !request.external_allowed ||
+                          request.task == AiTask::Lint;
+  const auto deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(local_path ? (request.task == AiTask::Cleanup ? 30000 : 800)
+                                           : std::clamp(options.timeout_ms, 1000, 120000));
   // Automatic lint never goes to a remote service, even if openai is configured.
-  if (options.backend == "local-zenzai" || !request.external_allowed ||
-      request.task == AiTask::Lint) {
+  if (local_path) {
     if (!local) return Failure(AiErrorClass::Disabled);
     auto result = local(request, cancel, deadline);
     if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
@@ -150,9 +153,10 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
   if (options.backend != "openai") return Failure(AiErrorClass::Disabled);
   if (options.api_key.empty()) return Failure(AiErrorClass::Auth);
   const auto body = BuildBody(request, options);
-  for (unsigned attempt = 0; attempt < 3; ++attempt) {
+  auto last_error = AiErrorClass::Timeout;
+  for (unsigned attempt = 0;; ++attempt) {
     if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
-    if (std::chrono::steady_clock::now() >= deadline) return Failure(AiErrorClass::Timeout);
+    if (std::chrono::steady_clock::now() >= deadline) return Failure(last_error);
     const auto response = transport_(options, body, cancel, deadline);
     if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
     if (std::chrono::steady_clock::now() >= deadline) return Failure(AiErrorClass::Timeout);
@@ -168,16 +172,19 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
     const bool retryable = error == AiErrorClass::RateLimit || error == AiErrorClass::ServerError ||
                            error == AiErrorClass::Network;
     if (!retryable || attempt == 2) return Failure(error);
+    last_error = error;
     const auto backoff = std::chrono::milliseconds(
         (250u << attempt) +
         static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count() % 101));
     const auto delay =
         std::max(backoff, std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::seconds(std::min(response.retry_after_seconds, 120u))));
-    const auto until = std::min(deadline, std::chrono::steady_clock::now() + delay);
+    const auto until = std::chrono::steady_clock::now() + delay;
+    // A response already identified the failure; exhausting the retry budget
+    // must not relabel a quota/server failure as a receive timeout.
+    if (until >= deadline) return Failure(error);
     while (std::chrono::steady_clock::now() < until && !Canceled(cancel))
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  return Failure(AiErrorClass::Network);
 }
 }  // namespace azookey::host

@@ -1254,7 +1254,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (wParam >= '1' && wParam <= '9' && cand_visible) {
       int idx = static_cast<int>(wParam - '1');
       if (idx < candidate_ui_.GetCount()) {
-        if (!shown_batch_segments_.empty()) {
+        if (shown_batch_segments_.size() > 1) {
           const auto rollback_state = capture_preedit_rollback_state();
           const auto move_hr = candidate_ui_.MoveSelection(idx - selected_candidate_idx_);
           if (FAILED(move_hr)) return move_hr;
@@ -2857,9 +2857,11 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
                                const std::string& raw_romaji, const std::string& mode) {
   using namespace azookey::ipc;
   core::AiPrivacy privacy;
+  std::string backend;
   {
     std::lock_guard lock(ipc_mtx_);
     privacy = ipc_pending_ai_privacy_;
+    backend = ipc_pending_ai_backend_;
   }
   std::vector<BatchConversionSegment> segments;
   const auto trace = CreateIpcClientId();
@@ -2869,10 +2871,23 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
   if (has_raw) {
     chunks = core::SplitBatchRomaji(raw_romaji);
   } else {
-    for (auto& chunk : core::SplitBatchConversion(reading, 512))
+    for (auto& chunk : core::SplitBatchConversion(reading, core::kIpcChunkBytes))
       chunks.push_back({{}, std::move(chunk)});
   }
-  bool failed = chunks.size() > 1 && !ipc_host_oob_cancel_;
+  if (chunks.size() > 1 && !ipc_host_oob_cancel_) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "batch_chunking_unsupported");
+    chunks = {{raw_romaji, reading}};
+  }
+  bool failed = false;
+  const auto rearm_neural = [&] {
+    if (mode != "ai-cleanup") return false;
+    std::lock_guard lock(ipc_mtx_);
+    if (ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_) return false;
+    ipc_pending_batch_mode_ = "neural";
+    ipc_has_request_ = true;
+    ipc_inflight_id_ = 0;
+    return true;
+  };
   uint64_t active_id = generation;
   for (const auto& chunk : chunks) {
     if (failed) break;
@@ -2892,6 +2907,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     request.mode = mode;
     request.ai_allowed = privacy.ai;
     request.external_ai_allowed = privacy.external;
+    request.ai_backend = backend;
     request.max_candidates = max_candidates_.load(std::memory_order_relaxed);
     request.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
     Envelope envelope;
@@ -2902,14 +2918,18 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     const auto encoded = Serialize(envelope);
     if (!encoded || encoded->size() >= kMaxFrameSize || !ipc_client_.Send(envelope)) {
       if (!ipc_client_.IsConnected()) {
+        if (rearm_neural()) return;
         RearmPendingQuery(generation);
         return;
       }
       failed = true;
       break;
     }
-    const auto wait_ms =
-        mode == "ai-cleanup" ? local_settings_.AiSnapshot().timeout_ms + 5000 : 30000;
+    const auto wait_ms = mode == "ai-cleanup"
+                             ? (backend == "openai" && privacy.external
+                                    ? local_settings_.AiSnapshot().timeout_ms + 5000
+                                    : 35000)
+                             : 30000;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
     std::optional<QueryBatchConversionResponse> result;
     while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
@@ -2934,6 +2954,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       break;
     }
     if (!result && !ipc_client_.IsConnected()) {
+      if (rearm_neural()) return;
       RearmPendingQuery(generation);
       return;
     }
@@ -2945,8 +2966,10 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       result->segments.push_back({request.reading, {std::move(candidate)}});
     }
     if (!result || result->partial || result->canceled || result->segments.empty()) {
-      SendCancelOutOfBand(active_id);
-      ipc_client_.Disconnect();
+      if (!result || !result->canceled) {
+        SendCancelOutOfBand(active_id);
+        ipc_client_.Disconnect();
+      }
       failed = true;
       break;
     }
@@ -2961,6 +2984,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     }
   }
   if (failed) {
+    if (rearm_neural()) return;
     CandidateField fallback;
     fallback.reading = fallback.surface = reading;
     fallback.source = "fallback";
@@ -2995,9 +3019,11 @@ void TextService::PostQueryCandidates(const std::string& reading, bool live,
 
 void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
                                       ITfContext* context) {
+  const bool ai_cleanup = batch_conversion_ai_cleanup_.load(std::memory_order_relaxed);
   const auto ai_settings = local_settings_.AiSnapshot();
+  auto backend = ai_settings.backend;
   auto privacy = ai_settings.privacy;
-  if (batch_conversion_ai_cleanup_.load(std::memory_order_relaxed)) {
+  if (ai_cleanup) {
     const auto app = foreground_app_.Get();
     if (!app.resolved || !AiInputAllowed(context, client_id_)) privacy = {};
     const auto settings = local_settings_.Snapshot();
@@ -3009,20 +3035,19 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
         privacy = {};
       else if (mode == "private")
         privacy.external = false;
-      const auto backend = value.GetString("aiBackend").value_or("auto");
-      if (backend == "none" && ai_settings.backend != "none") privacy = {};
+      const auto profile_backend = value.GetString("aiBackend").value_or("auto");
+      if (profile_backend != "auto") backend = profile_backend;
       if (backend == "local-zenzai") privacy.external = false;
     }
   }
-  batch_learning_allowed_ =
-      !batch_conversion_ai_cleanup_.load(std::memory_order_relaxed) || privacy.external;
+  batch_learning_allowed_ = !ai_cleanup || privacy.ai;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_ai_privacy_ = privacy;
+  ipc_pending_ai_backend_ = backend;
   ipc_pending_reading_ = reading;
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
-  ipc_pending_batch_mode_ =
-      batch_conversion_ai_cleanup_.load(std::memory_order_relaxed) ? "ai-cleanup" : "neural";
+  ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
   ipc_pending_is_batch_ = true;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
@@ -3174,10 +3199,10 @@ std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
 }
 
 void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_romaji,
-                                                    bool auto_punctuation) {
+                                                    bool auto_punctuation, bool ai_cleanup) {
   batch_romaji_conversion_.store(enabled);
   batch_romaji_preview_romaji_.store(preview_romaji);
-  batch_conversion_ai_cleanup_.store(false);
+  batch_conversion_ai_cleanup_.store(ai_cleanup);
   batch_auto_punctuation_.store(auto_punctuation);
 }
 

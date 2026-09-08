@@ -54,6 +54,40 @@ TEST(AiBackendTest, CleanupCarriesRawInputAndHonorsContextPolicy) {
   EXPECT_TRUE(backend.Transform(request, options).ok);
   EXPECT_NE(body.find("Insert appropriate Japanese punctuation"), std::string::npos);
 }
+TEST(AiBackendTest, RetryAfterBeyondBudgetPreservesFailure) {
+  for (auto [status, expected] :
+       {std::pair{429u, AiErrorClass::RateLimit}, std::pair{503u, AiErrorClass::ServerError}}) {
+    unsigned calls = 0;
+    AiBackend backend([&](const auto&, const auto&, const auto*, auto) {
+      ++calls;
+      return AiHttpResponse{status, {}, AiErrorClass::None, 60};
+    });
+    EXPECT_EQ(backend.Transform(Cleanup(), Remote()).error_class, expected);
+    EXPECT_EQ(calls, 1u);
+  }
+}
+TEST(AiBackendTest, LocalDeadlineDoesNotUseExternalTimeout) {
+  auto options = Remote();
+  options.backend = "local-zenzai";
+  options.timeout_ms = 120000;
+  AiBackend backend;
+  const auto result =
+      backend.Transform(Cleanup(), options, nullptr, [&](const auto&, const auto*, auto deadline) {
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        EXPECT_LE(remaining, std::chrono::seconds(30));
+        EXPECT_GT(remaining, std::chrono::seconds(29));
+        return AiTransformResult{true, "整文", AiErrorClass::None};
+      });
+  EXPECT_TRUE(result.ok);
+}
+TEST(AiBackendTest, RejectsInvalidUtf8AndNulInOutput) {
+  for (auto output : {std::string("\xFF"), std::string("a\0b", 3)}) {
+    AiBackend backend([&](const auto&, const auto&, const auto*, auto) {
+      return AiHttpResponse{200, Reply(output)};
+    });
+    EXPECT_FALSE(backend.Transform(Cleanup(), Remote()).ok);
+  }
+}
 TEST(AiBackendTest, SecureAndDisabledNeverReachEitherBackend) {
   unsigned calls = 0;
   AiBackend backend([&](const auto&, const auto&, const auto*, auto) {

@@ -113,6 +113,7 @@ struct QueryBatchConversionRequest {
   uint32_t max_candidates{10};
   bool ai_allowed{false};
   bool external_ai_allowed{false};
+  std::string ai_backend;  // Empty preserves the host's root setting for older clients.
 };
 
 struct QueryBatchConversionResponse {

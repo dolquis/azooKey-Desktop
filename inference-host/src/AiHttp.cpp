@@ -1,4 +1,5 @@
 #include "azookey/host/AiBackend.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 #ifdef _WIN32
 // Windows crypto declarations require Windows base types first.
@@ -18,6 +19,16 @@
 namespace azookey::host {
 #ifdef _WIN32
 namespace {
+void LogHttpFailure(const char* stage, DWORD error = GetLastError()) {
+  static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
+  logger.Log(logging::RuntimeLogLevel::Error, "ai_http_failure",
+             {{"stage", logging::RuntimeLogSafeText(stage)},
+              {"win32_error", static_cast<uint64_t>(error)}});
+}
+struct SecretHeaders {
+  std::wstring value;
+  ~SecretHeaders() { SecureZeroMemory(value.data(), value.size() * sizeof(wchar_t)); }
+};
 struct InternetCloser {
   void operator()(void* handle) const { WinHttpCloseHandle(handle); }
 };
@@ -36,16 +47,22 @@ std::string DecodeKey(const std::string& stored) {
   const auto encoded = stored.substr(6);
   DWORD size = 0;
   if (!CryptStringToBinaryA(encoded.c_str(), static_cast<DWORD>(encoded.size()),
-                            CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr))
+                            CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr)) {
+    LogHttpFailure("key_base64_size");
     return {};
+  }
   std::vector<BYTE> encrypted(size);
   if (!CryptStringToBinaryA(encoded.c_str(), static_cast<DWORD>(encoded.size()),
-                            CRYPT_STRING_BASE64, encrypted.data(), &size, nullptr, nullptr))
+                            CRYPT_STRING_BASE64, encrypted.data(), &size, nullptr, nullptr)) {
+    LogHttpFailure("key_base64_decode");
     return {};
+  }
   DATA_BLOB input{size, encrypted.data()}, output{};
   if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
-                          &output))
+                          &output)) {
+    LogHttpFailure("key_dpapi_reenter_required");
     return {};
+  }
   std::string key(reinterpret_cast<char*>(output.pbData), output.cbData);
   SecureZeroMemory(output.pbData, output.cbData);
   LocalFree(output.pbData);
@@ -140,43 +157,62 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   }
   Internet session(
       OpenHttpSession(L"azooKey-AI/1.0", loopback, true, 10000, 10000, options.timeout_ms));
-  if (!session) return response;
+  if (!session) {
+    LogHttpFailure("session");
+    return response;
+  }
   Internet connection(WinHttpConnect(session.get(), host.c_str(), parts.nPort, 0));
-  if (!connection) return response;
+  if (!connection) {
+    LogHttpFailure("connect");
+    return response;
+  }
   std::array<char, 8192> buffer{};  // Must outlive Operation's close notification.
+  SecretHeaders headers;
   Operation operation;
   Internet pending(
       WinHttpOpenRequest(connection.get(), L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER,
                          WINHTTP_DEFAULT_ACCEPT_TYPES,
                          parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0));
-  if (!pending) return response;
+  if (!pending) {
+    LogHttpFailure("open_request");
+    return response;
+  }
   DWORD disable = WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_COOKIES;
   DWORD autologon = WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH;
   if (!WinHttpSetOption(pending.get(), WINHTTP_OPTION_DISABLE_FEATURE, &disable, sizeof(disable)) ||
       !WinHttpSetOption(pending.get(), WINHTTP_OPTION_AUTOLOGON_POLICY, &autologon,
-                        sizeof(autologon)))
+                        sizeof(autologon))) {
+    LogHttpFailure("security_options");
     return response;
+  }
   const DWORD_PTR context = reinterpret_cast<DWORD_PTR>(&operation);
   if (!WinHttpSetOption(pending.get(), WINHTTP_OPTION_CONTEXT_VALUE,
-                        const_cast<DWORD_PTR*>(&context), sizeof(context)))
+                        const_cast<DWORD_PTR*>(&context), sizeof(context))) {
+    LogHttpFailure("callback_context");
     return response;
+  }
   if (WinHttpSetStatusCallback(
           pending.get(), Operation::Callback,
           WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES,
-          0) == WINHTTP_INVALID_STATUS_CALLBACK)
+          0) == WINHTTP_INVALID_STATUS_CALLBACK) {
+    LogHttpFailure("callback_registration");
     return response;
+  }
   operation.request = pending.release();
-  auto headers = L"Content-Type: application/json\r\nAuthorization: Bearer " + Wide(key) + L"\r\n";
+  headers.value = L"Content-Type: application/json\r\nAuthorization: Bearer " + Wide(key) + L"\r\n";
   SecureZeroMemory(key.data(), key.size());
   const bool sent =
-      WinHttpSendRequest(operation.request, headers.c_str(), static_cast<DWORD>(headers.size()),
-                         const_cast<char*>(body.data()), static_cast<DWORD>(body.size()),
-                         static_cast<DWORD>(body.size()), context);
-  SecureZeroMemory(headers.data(), headers.size() * sizeof(wchar_t));
-  if (!sent) return response;
+      WinHttpSendRequest(operation.request, headers.value.c_str(),
+                         static_cast<DWORD>(headers.value.size()), const_cast<char*>(body.data()),
+                         static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()), context);
+  if (!sent) {
+    LogHttpFailure("send");
+    return response;
+  }
   response.error = operation.Wait(WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE, cancel, deadline);
   if (response.error != AiErrorClass::None) return response;
   if (!WinHttpReceiveResponse(operation.request, nullptr)) {
+    LogHttpFailure("receive");
     response.error = AiErrorClass::Network;
     return response;
   }
@@ -186,19 +222,28 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
   if (!WinHttpQueryHeaders(operation.request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
                            WINHTTP_NO_HEADER_INDEX)) {
+    LogHttpFailure("status_headers");
     response.error = AiErrorClass::Network;
     return response;
   }
   response.status = status;
+  response.error = AiErrorClass::None;
   DWORD retry = 0, retry_size = sizeof(retry);
   if (WinHttpQueryHeaders(operation.request, WINHTTP_QUERY_RETRY_AFTER | WINHTTP_QUERY_FLAG_NUMBER,
                           WINHTTP_HEADER_NAME_BY_INDEX, &retry, &retry_size,
                           WINHTTP_NO_HEADER_INDEX))
     response.retry_after_seconds = retry;
-  if (status != 200) return response;  // No provider error text is logged or returned to UI.
+  if (status != 200) {
+    // Provider bodies can echo input or credentials; only record bounded metadata.
+    static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
+    logger.Log(logging::RuntimeLogLevel::Error, "ai_http_status",
+               {{"status", static_cast<uint64_t>(status)}});
+    return response;
+  }
   for (;;) {
     if (!WinHttpReadData(operation.request, buffer.data(), static_cast<DWORD>(buffer.size()),
                          nullptr)) {
+      LogHttpFailure("read_body");
       response.error = AiErrorClass::Network;
       return response;
     }

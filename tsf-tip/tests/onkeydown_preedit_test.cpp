@@ -2168,6 +2168,54 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesBatchQueryAndUnbloc
   h.service.stop_ipc_worker_for_test();
   replacement_server.Stop();
 }
+TEST(TsfTipOnKeyDownPreeditTest, AiCanceledResponseRetriesWholeBatchAsNeuralOnLegacyHost) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-ai-fallback-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> ai_calls{0}, neural_calls{0};
+  std::atomic<bool> handshaken{false};
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.batch_conversion_mode = "ai-cleanup";
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          handshaken = true;
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request) return std::nullopt;
+        azookey::ipc::QueryBatchConversionResponse payload;
+        if (request->mode == "ai-cleanup") {
+          ++ai_calls;
+          payload.canceled = true;
+        } else {
+          ++neural_calls;
+          payload.full_surface = "通常変換";
+        }
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true, false, false, true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return handshaken.load(); }));
+  for (int i = 0; i < 260; ++i) {
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+  }
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return neural_calls.load() == 1; }));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  EXPECT_EQ(ai_calls.load(), 1u);
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
 
 TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallback) {
   const std::string pipe_name =
@@ -2351,6 +2399,34 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchSegmentSelectionCommitsTheWholeSentence) {
   ASSERT_TRUE(observation);
   EXPECT_EQ(observation->chosen.surface, "二");
   EXPECT_EQ(attachment.composition_range.last_text, L"科二");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SingleBatchSegmentNumberCommitsImmediately) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField candidate;
+  candidate.reading = "に";
+  candidate.surface = "二";
+  candidate.source = "model";
+  h.service.set_cached_batch_segments_for_test({{"に", {candidate}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press('1'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"二");
+}
+TEST(TsfTipOnKeyDownPreeditTest, BatchAiUnknownInputScopeCannotGrantAiPermission) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true, false, false, true);
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.pending_ipc_query_is_batch_for_test());
+  const auto privacy = h.service.pending_ai_privacy_for_test();
+  EXPECT_FALSE(privacy.ai);
+  EXPECT_FALSE(privacy.external);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchAiResultCommitsWithoutLearningUnalignedPunctuation) {

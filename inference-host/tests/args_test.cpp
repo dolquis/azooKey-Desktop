@@ -48,6 +48,19 @@ TEST(HostArgsTest, RejectsUnsupportedBackend) {
   EXPECT_FALSE(parsed.args.explicit_backend);
 }
 
+TEST(HostArgsTest, SupervisorLifetimeRequiresPositivePidAndPipeMode) {
+  const auto parsed = Parse({"--pipe", "--supervisor-pid", "123"});
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed.args.supervisor_pid, 123U);
+  for (const auto value : {"0", "-1", "1x", "4294967296", "+1", ""}) {
+    EXPECT_FALSE(Parse({"--pipe", "--supervisor-pid", value}));
+  }
+  EXPECT_FALSE(Parse({"--pipe", "--supervisor-pid"}));
+  EXPECT_FALSE(Parse({"--supervisor-pid", "123"}));
+  EXPECT_FALSE(Parse({"--pipe", "--supervisor-pid", "123", "--stdio"}));
+  EXPECT_FALSE(Parse({"--pipe", "--supervisor-pid", "123", "userdict", "list"}));
+}
+
 TEST(HostArgsTest, PipeDoesNotConsumeFollowingOption) {
   const auto parsed = Parse({"--pipe", "--backend", "cuda"});
   ASSERT_TRUE(parsed);

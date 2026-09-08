@@ -831,11 +831,41 @@ ctfmon は対象アプリのプロセス内へ TIP DLL を in-proc ロードす�
 外れており、DEV-673 で確認するのは継承 ACL までとなる。MSIX 側の制限は DEV-101（com4:ComServer ACL 制限）と
 連動する。
 
-**常駐起動（参考）**: Host / launcher のログオン常駐を Run キーでなく **Task Scheduler
-（LogonTrigger + RunLevel=HighestAvailable）+ VBS 非表示起動**で実現し、アンインストール
-時に `schtasks /Delete` する方式がある（UAC プロンプト無しの常駐）。
-`RunLevel=HighestAvailable` は UAC 構成依存である点に注意。MSIX 配布では startup task /
-app execution alias の利用を優先する。
+#### MSI のログオン常駐
+
+MVP の MSI は 64-bit の `HKLM\Software\Microsoft\Windows\CurrentVersion\Run` に
+`azooKeyHost` を登録する。各ユーザーのログオン時に Windows PowerShell を非表示で起動し、
+インストール先の `start-installed-host.ps1` を実行する。
+実行権限はログオンユーザーの通常権限であり、昇格する Task Scheduler は採用しない。
+MSIX の startup task / app execution alias は本節の MSI 経路とは別に扱う。
+
+登録は MSI の machine-wide component が所有する。各ユーザーの HKCU へのコピーや
+管理者による別ユーザーのプロファイル初期化は行わない。インストール後に追加したユーザーも
+同じログオン経路を使い、Host がそのユーザーのデータ領域を初期化する。
+GGUF と設定値はユーザーごとのモデル管理規則に従う。インストール操作だけでは、
+ログオン中の各セッションで Host を起動しない。利用開始にはサインアウトして再ログオンする。
+Run の実行は Windows により遅延され得るため、ログオン直後の即時起動は保証しない
+（[Run and RunOnce Registry Keys](https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys)）。
+
+起動の監視には開発登録と同じ `scripts/host-supervisor.ps1` を使い、実行体の選択は
+§1.6.3 に従う。Vulkan probe は `--probe-vulkan` を単独で指定し、モデル、IPC、ユーザーデータを
+初期化せず、列挙したデバイス数を `vulkan_devices=<数>` として出力する。成功は終了コード 0 と
+正のデバイス数の両方で判定し、タイムアウトや異常終了は CPU へ戻す。選択した実行体と理由は
+各ユーザーのログディレクトリで、各起動の stderr に対応する `.startup.json` へ記録する。
+開発用 Host が同じユーザーの pipe を所有する場合は、その終了を待つ。
+
+MSI はアンインストールと major upgrade で Run 値と
+`HKLM\Software\azooKey\HostStartup` の `InstallDirectory` 値を削除する。
+配布 supervisor は登録の削除を検知して終了し、Host は `--supervisor-pid` で保持した
+プロセスハンドルの終了を検知して通常の終了・保存処理を行う。MSI は登録値の削除後、
+ファイル削除前に配布 launcher とインストール先の Host の終了を待つ。
+期限内に終了しなければメンテナンスを失敗させ、強制終了しない。rollback では MSI が
+登録を復元し、次回ログオンで常駐を再開する。upgrade 後も再ログオンで再開する。
+ユーザーデータと開発登録の HKCU は削除しない。
+
+ログオン起動、別ユーザーの初回起動と復帰は DEV-676、MSI の削除・upgrade・rollback と
+登録値の後始末は DEV-673 の実機ゲートで確認する。静的テストや MSI 生成だけでは
+これらの成功を判定しない。
 
 ## 2. EV/OV コード署名（M29）
 

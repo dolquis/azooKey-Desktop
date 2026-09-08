@@ -57,6 +57,9 @@ Windows App SDK の多言語 DLL は MSI の `File.Language` 制限を超えて�
 TIP DLL の `DllRegisterServer` に COM クラス、TSF プロファイル、カテゴリの登録を委譲します。
 アンインストール時はファイル削除前に `msiexec /z` を実行します。
 どちらの経路にも、後続処理が失敗した場合の rollback action を設定しています。
+Host はインストール後の再ログオンで通常権限の supervisor から起動します。
+削除・upgrade・rollback 時の常駐とデータ保持の規則は
+[`docs/sideload-packaging-spec.md` §1.7](../../docs/sideload-packaging-spec.md#msi-のログオン常駐)を参照してください。
 64-bit TIP を確実に登録するため、カスタムアクションは
 `%SystemRoot%\System32\msiexec.exe`（WiX の `System64Folder`）を使用します。
 

@@ -57,6 +57,21 @@
               KeyPath="yes" />
         </Component>
 
+        <Component Id="HostSupervisorComponent" Guid="*">
+          <File Id="HostSupervisor" Source="$(HostScriptsDir)\host-supervisor.ps1" KeyPath="yes" />
+        </Component>
+        <Component Id="InstalledHostWaiterComponent" Guid="*">
+          <File Id="InstalledHostWaiter" Source="$(HostScriptsDir)\wait-installed-host.ps1" KeyPath="yes" />
+        </Component>
+        <Component Id="HostStartupComponent" Guid="7635B6C2-6707-4C25-9276-F1B99B953E20" Bitness="always64">
+          <File Id="InstalledHostLauncher" Source="$(HostScriptsDir)\start-installed-host.ps1" />
+          <RegistryValue Root="HKLM" Key="SOFTWARE\azooKey\HostStartup"
+              Name="InstallDirectory" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+          <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+              Name="azooKeyHost" Type="string"
+              Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File &quot;[#InstalledHostLauncher]&quot;" />
+        </Component>
+
         <Component Id="LicenseComponent" Guid="ADA29AB6-2AFF-4C87-827F-9C154498BBEE">
           <File
               Id="LicenseFile"
@@ -94,6 +109,9 @@
     <Feature Id="MainFeature" Title="azooKey" Level="1">
       <ComponentRef Id="TipComponent" />
       <ComponentRef Id="HostComponent" />
+      <ComponentRef Id="HostSupervisorComponent" />
+      <ComponentRef Id="InstalledHostWaiterComponent" />
+      <ComponentRef Id="HostStartupComponent" />
       <ComponentRef Id="SymbolDataComponent" />
       <ComponentRef Id="EmojiDataComponent" />
       <ComponentRef Id="VCRuntimeComponent" />
@@ -147,7 +165,13 @@
         Impersonate="no"
         Return="ignore" />
 
+    <CustomAction Id="WaitForInstalledHost" Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File &quot;[#InstalledHostWaiter]&quot;"
+        Execute="deferred" Impersonate="no" Return="check" />
+
     <InstallExecuteSequence>
+      <Custom Action="WaitForInstalledHost" Before="RemoveFiles"
+          Condition="$HostStartupComponent = 2" />
       <Custom
           Action="RegisterTipOnUninstallRollback"
           Before="UnregisterTip"

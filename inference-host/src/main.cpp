@@ -29,6 +29,7 @@
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/HostArgs.h"
+#include "azookey/host/HostStartup.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/LookupCli.h"
 #include "azookey/host/RequestScheduler.h"
@@ -259,10 +260,20 @@ int main(int argc, char** argv) {
   if (!command_line->empty()) {
     raw_args.assign(command_line->begin() + 1, command_line->end());
   }
+  if (raw_args == std::vector<std::string>{"--probe-vulkan"}) {
+    const auto count = azookey::host::ProbeVulkanDevices();
+    std::cout << "vulkan_devices=" << count << std::endl;
+    return count > 0 ? 0 : 1;
+  }
   auto parsed_args = azookey::host::ParseHostArgs(raw_args, std::move(config),
                                                   GetEnvString("AZOOKEY_IPC_HANDSHAKE_TOKEN"));
   if (!parsed_args) {
     std::cerr << "error: " << *parsed_args.error << std::endl;
+    return 2;
+  }
+  azookey::host::SupervisorLifetime supervisor_process(parsed_args.args.supervisor_pid);
+  if (!supervisor_process.IsRunning()) {
+    std::cerr << "error: supervisor process is unavailable" << std::endl;
     return 2;
   }
   config = std::move(parsed_args.args.config);
@@ -518,7 +529,7 @@ int main(int argc, char** argv) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "pipe_listening",
                     {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
-    while (!StopRequested()) {
+    while (!StopRequested() && supervisor_process.IsRunning()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     server.Stop();

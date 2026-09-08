@@ -15,6 +15,13 @@ Vulkan でも機能検査は通ったが、専有環境の性能評価には使�
 測定中の利用率を連続記録しておらず、各標本の外部負荷量と遅延原因は特定していない。
 GPU の予算適合と CPU/GPU の速度比較は保留し、DEV-1055 で負荷条件を管理して再測定する。
 
+レビュー時の補足: 以下の Query 測定では、先行する採点用 converter が解放されず、
+Query 用 engine と最大2モデルが同時常駐していた。Vulkan では遊休モデルの重みと KV も VRAM に残るため、
+外部負荷だけでなくベンチ内部の交絡がある。その寄与量は測定していない。
+採点・次回変換の区間にはまだ Query 用モデルがなく、この同時常駐はない。
+測定器は Query 区間の前に converter を破棄するよう修正したが、下表は修正前の記録として残す。
+DEV-1055 の再測定には修正後の測定器を使う。
+
 ## 条件と集計方法
 
 | 項目 | 値 |
@@ -85,6 +92,12 @@ Vulkan のキャッシュ有無の大小関係は外部負荷を統制してお�
   実機 TIP 操作、広い入力集合の品質校正、GPU 専有条件の性能保証は対象外である。
 
 ## 再現手順
+
+以下はリポジトリルートを作業ディレクトリとする。`--query-dictionary` は TSV ではなく生成済み `.azdic` を渡す。
+相対パスは実行時の作業ディレクトリを基準に解決される。
+レビュー修正後は CTest の `azookey_nll_fixture_smoke` でも fixture を生成・検証し、実モデル NLL テストの前提にする。
+要約行には標本数 `n`、nearest-rank の `elapsed_p50_ms`、`elapsed_p95_ms`、`elapsed_max_ms` を出力する。
+10標本の p95 は最大値であり、1標本の smoke は単一標本の確認に限られる。
 
 README の標準ビルド環境を使い、`$llamaSource` は上記 SHA の既存ソース、`$gguf` は上記 SHA256 の既存モデルへ設定する。
 CPU は `AZOOKEY_LLAMA_CPP_SOURCE_DIR` を指定した `windows-release`、GPU は既存 Vulkan SDK を認識する `windows-vulkan-release` を構成し、`azookey_nll_bench` をビルドする。

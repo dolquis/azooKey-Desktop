@@ -1,11 +1,13 @@
 {
-  "sources": [{
-    "source_id": "nll-fixture",
-    "spdx": "MIT",
-    "upstream_url": "https://github.com/dolquis/azooKey-Desktop",
-    "upstream_revision": "nll-fixture-1",
-    "transform": "synthetic",
-    "copyright": "azooKey Desktop contributors",
-    "notice_ids": []
-  }]
+  "sources": [
+    {
+      "source_id": "nll-fixture",
+      "spdx": "MIT",
+      "upstream_url": "https://github.com/dolquis/azooKey-Desktop",
+      "upstream_revision": "nll-fixture-1",
+      "transform": "synthetic",
+      "copyright": "azooKey Desktop contributors",
+      "notice_ids": []
+    }
+  ]
 }

@@ -61,6 +61,14 @@ set(AZOOKEY_ZENZAI_TEST_MODEL "" CACHE FILEPATH
     "Path to a real Zenzai GGUF used by the llama.cpp CTest smoke")
 
 if(AZOOKEY_BUILD_TESTS)
+  find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+  set(NLL_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/nll-fixture")
+  add_test(NAME azookey_nll_fixture_smoke
+    COMMAND "${CMAKE_COMMAND}" "-DPYTHON=${Python3_EXECUTABLE}"
+            "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}" "-DOUTPUT_DIR=${NLL_FIXTURE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/BuildNllFixture.cmake")
+  set_tests_properties(azookey_nll_fixture_smoke PROPERTIES
+    FIXTURES_SETUP nll_fixture TIMEOUT 30)
   add_executable(benchmark_result_tests benchmark_result_test.cpp)
   target_link_libraries(benchmark_result_tests
     PRIVATE azookey_benchmark_result GTest::gtest_main
@@ -119,12 +127,15 @@ if(AZOOKEY_BUILD_TESTS)
   if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
     add_test(NAME azookey_nll_real_model_context
              COMMAND azookey_nll_bench --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
-                     --iterations 1 --context "原稿の誤字を" --expect-top "校正")
+                     --iterations 1 --context "原稿の誤字を" --expect-top "校正"
+                     --query-dictionary "${NLL_FIXTURE_DIR}/fixture.azdic")
     add_test(NAME azookey_nll_real_model_no_context
              COMMAND azookey_nll_bench --model "${AZOOKEY_ZENZAI_TEST_MODEL}"
-                     --iterations 1 --expect-top "構成")
+                     --iterations 1 --expect-top "構成"
+                     --query-dictionary "${NLL_FIXTURE_DIR}/fixture.azdic")
     set_tests_properties(azookey_nll_real_model_context azookey_nll_real_model_no_context
-      PROPERTIES LABELS "zenzai-real-model" RUN_SERIAL TRUE TIMEOUT 120)
+      PROPERTIES LABELS "zenzai-real-model" RUN_SERIAL TRUE TIMEOUT 120
+                 FIXTURES_REQUIRED nll_fixture)
     add_test(NAME azookey_zenzai_real_model_nihongo_smoke
              COMMAND azookey_zenzai_bench
                      --model "${AZOOKEY_ZENZAI_TEST_MODEL}"

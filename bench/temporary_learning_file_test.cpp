@@ -1,4 +1,4 @@
-#include "TemporaryLearningFile.h"
+#include <gtest/gtest.h>
 
 #include <fstream>
 #include <future>
@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include "TemporaryLearningFile.h"
 
 namespace azookey::bench {
 namespace {
@@ -42,8 +42,14 @@ TEST(TemporaryLearningFileTest, CleanupDoesNotTouchAnotherLiveOwner) {
   ASSERT_NE(first_path.parent_path(), second.Path().parent_path());
   ASSERT_FALSE(std::filesystem::exists(first_path));
   ASSERT_FALSE(std::filesystem::exists(second.Path()));
-  { std::ofstream output(first_path); output << "first"; }
-  { std::ofstream output(second.Path()); output << "second"; }
+  {
+    std::ofstream output(first_path);
+    output << "first";
+  }
+  {
+    std::ofstream output(second.Path());
+    output << "second";
+  }
   first.reset();
   EXPECT_FALSE(std::filesystem::exists(first_path.parent_path()));
   std::ifstream input(second.Path());
@@ -55,7 +61,10 @@ TEST(TemporaryLearningFileTest, CleanupDoesNotTouchAnotherLiveOwner) {
 TEST(TemporaryLearningFileTest, CleanupRunsAfterLaterObjectsDuringUnwinding) {
   struct Writer {
     std::filesystem::path path;
-    ~Writer() { std::ofstream output(path); output << "shutdown"; }
+    ~Writer() {
+      std::ofstream output(path);
+      output << "shutdown";
+    }
   };
   std::filesystem::path directory;
   try {

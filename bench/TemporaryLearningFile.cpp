@@ -10,8 +10,8 @@ TemporaryLearningFile::TemporaryLearningFile() {
   const auto root = std::filesystem::temp_directory_path();
   std::random_device random;
   for (int attempt = 0; attempt < 100; ++attempt) {
-    const auto directory = root / ("azookey-bench-" + std::to_string(random()) + "-" +
-                                   std::to_string(random()));
+    const auto directory =
+        root / ("azookey-bench-" + std::to_string(random()) + "-" + std::to_string(random()));
     // Prepare both paths before acquiring ownership; allocation failures cannot leak it.
     directory_ = directory;
     path_ = directory / "learning.tsv";

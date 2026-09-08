@@ -96,7 +96,9 @@ Linear が持つ。
 
 - ✅ `Handshake` — 要求 `(tip_version, protocol_version, capabilities, client_id?, handshake_token?)` /
   応答 `HandshakeResponse(host_version, protocol_version, accepted, model_loaded,
-  host_generation_id?)`。`host_generation_id` は Host 起動ごとに生成し、同一プロセスの
+  host_generation_id?, capabilities[])`。欠落するcapabilitiesは空配列として受理し、
+  `oob_cancel`と`commit_segments`の広告をもとに長文の制御と学習通知を選ぶ。
+  `host_generation_id` は Host 起動ごとに生成し、同一プロセスの
   全接続で共有する UUID。省略する旧 Host は空文字として受理する。
   `client_id` は primary / control 接続間で Cancel 名前空間を共有するための TIP インスタンス ID、
   `handshake_token` は per-connection 認証ゲートに使う（後述）。
@@ -123,6 +125,11 @@ Linear が持つ。
   捨てる。`observation_id` を省略する旧 TIP は空文字として受理し、冪等化の対象外とする。
   キーの生成規則、両側の上限、失われうる範囲は `docs/learning-data-management-spec.md` §12
   が正典。
+- `QueryBatchConversion`は長文を逐次変換し、再選択用segmentsを返す。
+  `ai-cleanup`は共有`AiBackend::Transform`へ委譲する。入力と許可の契約は
+  `docs/romaji-batch-conversion-spec.md` §6を参照する。
+- `CommitSegmentsObservation`は全文節を検証し、観測ID単位で再送を抑止する。
+  payloadと旧hostへのfallbackは同仕様 §6.4を正典とする。
 - ✅ `AddUserWord` / `RemoveUserWord` — `InferenceEngine` の状態ロック下で
   `UserDictionary` を更新し、永続化に成功した場合だけ `ok=true` を返す。
   永続化に失敗した場合は直前の辞書状態へ戻し、`Health` の `last_error` に反映する。

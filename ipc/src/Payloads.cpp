@@ -110,6 +110,9 @@ std::string BuildHandshakeResponse(const HandshakeResponse& p) {
   o.emplace("protocol_version", j::Value(p.protocol_version));
   o.emplace("accepted", j::Value(p.accepted));
   o.emplace("model_loaded", j::Value(p.model_loaded));
+  j::Array capabilities;
+  for (const auto& capability : p.capabilities) capabilities.emplace_back(capability);
+  o.emplace("capabilities", j::Value(std::move(capabilities)));
   if (!p.host_generation_id.empty()) {
     o.emplace("host_generation_id", j::Value(p.host_generation_id));
   }
@@ -141,6 +144,11 @@ std::optional<HandshakeResponse> ParseHandshakeResponse(const std::string& json)
   p.accepted = v->GetBool("accepted").value_or(false);
   p.model_loaded = v->GetBool("model_loaded").value_or(false);
   p.host_generation_id = v->GetString("host_generation_id").value_or(std::string());
+  if (const auto* capabilities = v->GetArray("capabilities")) {
+    for (const auto& capability : *capabilities) {
+      if (capability.IsString()) p.capabilities.push_back(capability.AsString());
+    }
+  }
   p.batch_romaji_conversion = v->GetBool("batch_romaji_conversion").value_or(false);
   p.batch_romaji_preview_style =
       v->GetString("batch_romaji_preview_style").value_or(std::string("kana"));
@@ -355,6 +363,9 @@ std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& 
   j::Object o;
   o.emplace("reading", j::Value(p.reading));
   if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
+  o.emplace("ai_allowed", p.ai_allowed);
+  o.emplace("external_ai_allowed", p.external_ai_allowed);
+  if (!p.ai_backend.empty()) o.emplace("ai_backend", p.ai_backend);
   o.emplace("mode", j::Value(p.mode));
   o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
@@ -370,6 +381,12 @@ std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
   if (!reading) return std::nullopt;
   p.reading = std::move(*reading);
   p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
+  p.ai_allowed = v->GetBool("ai_allowed").value_or(false);
+  p.external_ai_allowed = p.ai_allowed && v->GetBool("external_ai_allowed").value_or(false);
+  p.ai_backend = v->GetString("ai_backend").value_or("");
+  if (!p.ai_backend.empty() && p.ai_backend != "none" && p.ai_backend != "openai" &&
+      p.ai_backend != "local-zenzai")
+    return std::nullopt;
   p.mode = v->GetString("mode").value_or(std::string("neural"));
   p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
@@ -464,6 +481,59 @@ std::string BuildCommitObservationResponse(const CommitObservationResponse& p) {
   j::Object o;
   o.emplace("ok", j::Value(p.ok));
   return j::Stringify(j::Value(std::move(o)));
+}
+
+std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p) {
+  j::Object object;
+  j::Array segments;
+  for (const auto& segment : p.segments) {
+    j::Object item;
+    item.emplace("reading", j::Value(segment.reading));
+    item.emplace("chosen", CandidateToJson(segment.chosen));
+    j::Array shown;
+    for (const auto& candidate : segment.shown) shown.push_back(CandidateToJson(candidate));
+    item.emplace("shown", j::Value(std::move(shown)));
+    item.emplace("is_auto_punctuation", j::Value(segment.is_auto_punctuation));
+    segments.emplace_back(std::move(item));
+  }
+  object.emplace("segments", j::Value(std::move(segments)));
+  object.emplace("left_context", j::Value(p.left_context));
+  object.emplace("timestamp_ms", j::Value(p.timestamp_ms));
+  object.emplace("observation_id", j::Value(p.observation_id));
+  return j::Stringify(j::Value(std::move(object)));
+}
+
+std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRequest(
+    const std::string& json) {
+  auto object = ParseObject(json);
+  if (!object) return std::nullopt;
+  const auto* segments = object->GetArray("segments");
+  if (!segments || segments->empty()) return std::nullopt;
+  CommitSegmentsObservationRequest request;
+  for (const auto& item : *segments) {
+    auto reading = item.GetString("reading");
+    const auto* chosen = item.Find("chosen");
+    if (!reading || !chosen) return std::nullopt;
+    auto candidate = CandidateFromJson(*chosen);
+    if (!candidate || candidate->surface.empty()) return std::nullopt;
+    ObservedSegment segment;
+    segment.reading = *reading;
+    segment.chosen = std::move(*candidate);
+    segment.is_auto_punctuation = item.GetBool("is_auto_punctuation").value_or(false);
+    if (segment.reading.empty() && !segment.is_auto_punctuation) return std::nullopt;
+    if (const auto* shown = item.GetArray("shown")) {
+      for (const auto& value : *shown) {
+        auto alternative = CandidateFromJson(value);
+        if (!alternative) return std::nullopt;
+        segment.shown.push_back(std::move(*alternative));
+      }
+    }
+    request.segments.push_back(std::move(segment));
+  }
+  request.left_context = object->GetString("left_context").value_or("");
+  request.timestamp_ms = object->GetUInt("timestamp_ms").value_or(0);
+  request.observation_id = object->GetString("observation_id").value_or("");
+  return request;
 }
 
 std::optional<CommitObservationResponse> ParseCommitObservationResponse(const std::string& json) {

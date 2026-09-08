@@ -166,6 +166,28 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = value.IsString();
     } else if (key == "aiBackend") {
       valid = IsStringEnum(value, {"none", "openai", "local-zenzai"});
+    } else if (key == "openAiTimeoutMs") {
+      valid = IsInteger(value, 1000.0, 120000.0);
+    } else if (key == "privacy") {
+      valid = value.IsObject();
+      if (valid) {
+        for (const auto& [field, setting] : value.AsObject()) {
+          if (field == "mode") {
+            valid = valid &&
+                    IsStringEnum(setting, {"normal", "private", "secure", "offline", "custom"});
+          } else if (field == "custom" && setting.IsObject()) {
+            for (const auto& [axis, enabled] : setting.AsObject())
+              valid = valid && (axis == "aiCandidate" || axis == "externalAi") && enabled.IsBool();
+          } else {
+            valid = false;
+          }
+        }
+      }
+      if (!valid) {
+        output.emplace(key, j::Object{{"mode", "secure"}});
+        warnings->push_back("invalid privacy settings were restricted to secure");
+        continue;
+      }
     } else if (key == "backendPreference") {
       valid = IsStringEnum(value, {"auto", "cpu", "cuda", "vulkan", "winml", "directml", "npu"});
     } else if (key == "epPreference") {

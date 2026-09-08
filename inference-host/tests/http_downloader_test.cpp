@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 
+#include "azookey/host/AiBackend.h"
 #include "azookey/host/HttpDownloader.h"
 
 namespace {
@@ -74,8 +75,13 @@ bool SendAll(SOCKET socket, std::string_view data) {
 
 class LocalHttpServer {
  public:
-  LocalHttpServer(std::string body, bool honor_range, size_t request_count = 1)
-      : body_(std::move(body)), honor_range_(honor_range), request_count_(request_count) {
+  LocalHttpServer(std::string body, bool honor_range, size_t request_count = 1,
+                  unsigned delay_ms = 0, unsigned status = 200)
+      : body_(std::move(body)),
+        honor_range_(honor_range),
+        request_count_(request_count),
+        delay_ms_(delay_ms),
+        status_(status) {
     socket_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (socket_ == INVALID_SOCKET) return;
 
@@ -140,10 +146,21 @@ class LocalHttpServer {
       if (read <= 0) break;
       request.append(buffer, static_cast<size_t>(read));
     }
+    const auto body_start = request.find("\r\n\r\n");
+    const auto length_header = request.find("Content-Length: ");
+    if (body_start != std::string::npos && length_header != std::string::npos) {
+      const auto body_length = std::stoul(request.substr(length_header + 16));
+      while (request.size() < body_start + 4 + body_length) {
+        const int count = recv(client, buffer, sizeof(buffer), 0);
+        if (count <= 0) break;
+        request.append(buffer, static_cast<size_t>(count));
+      }
+    }
     {
       std::lock_guard lock(mutex_);
       requests_.push_back(request);
     }
+    if (delay_ms_) std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms_));
 
     size_t offset = 0;
     bool partial = false;
@@ -170,6 +187,7 @@ class LocalHttpServer {
     std::string response = range_not_satisfiable ? "HTTP/1.1 416 Range Not Satisfiable\r\n"
                                                  : (partial ? "HTTP/1.1 206 Partial Content\r\n"
                                                             : "HTTP/1.1 200 OK\r\n");
+    if (status_ != 200) response = "HTTP/1.1 " + std::to_string(status_) + " Error\r\n";
     if (partial) {
       response += "Content-Range: bytes " + std::to_string(offset) + "-" +
                   std::to_string(body_.size() - 1) + "/" + std::to_string(body_.size()) + "\r\n";
@@ -188,6 +206,8 @@ class LocalHttpServer {
   std::string body_;
   bool honor_range_{false};
   size_t request_count_{1};
+  unsigned delay_ms_{0};
+  unsigned status_{200};
   SOCKET socket_{INVALID_SOCKET};
   uint16_t port_{0};
   std::thread worker_;
@@ -217,6 +237,82 @@ azookey::host::HttpDownloadRequest Request(std::wstring url,
   request.send_timeout_ms = 1000;
   request.receive_timeout_ms = 1000;
   return request;
+}
+
+TEST(AiHttpTest, PostsToLoopbackAndBoundsResponse) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  for (const size_t size : {3u, 262145u}) {
+    LocalHttpServer server(std::string(size, 'a'), false);
+    ASSERT_TRUE(server.ok());
+    azookey::host::AiBackendOptions options;
+    const auto url = server.url();
+    options.endpoint = std::string(url.begin(), url.end());
+    options.api_key = "test-only-placeholder";
+    const auto result = azookey::host::PostAiHttp(
+        options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(3));
+    server.Wait();
+    EXPECT_TRUE(server.request().starts_with("POST /model.gguf/chat/completions "));
+    if (size == 3) {
+      EXPECT_EQ(result.status, 200u);
+      EXPECT_EQ(result.body, "aaa");
+    } else
+      EXPECT_EQ(result.error, azookey::host::AiErrorClass::Parse);
+  }
+}
+TEST(AiHttpTest, CancelsAndTimesOutWhileWaitingForHeaders) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  for (bool cancel_request : {false, true}) {
+    LocalHttpServer server("unused", false, 1, 400);
+    ASSERT_TRUE(server.ok());
+    azookey::host::AiBackendOptions options;
+    const auto url = server.url();
+    options.endpoint = std::string(url.begin(), url.end());
+    options.api_key = "test-only-placeholder";
+    std::atomic<bool> cancel{false};
+    std::jthread trigger([&] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (cancel_request) cancel = true;
+    });
+    const auto result = azookey::host::PostAiHttp(
+        options, "{}", &cancel,
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(cancel_request ? 2000 : 100));
+    EXPECT_EQ(result.error, cancel_request ? azookey::host::AiErrorClass::Canceled
+                                           : azookey::host::AiErrorClass::Timeout);
+  }
+}
+TEST(AiHttpTest, RejectsBrokenProtectedKeyBeforeNetwork) {
+  azookey::host::AiBackendOptions options;
+  options.api_key = "dpapi:invalid";
+  const auto result = azookey::host::PostAiHttp(
+      options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(1));
+  EXPECT_EQ(result.error, azookey::host::AiErrorClass::Auth);
+}
+TEST(AiHttpTest, HttpFailuresRemainStatusesAndDoNotExposeProviderBodies) {
+  WinsockScope winsock;
+  ASSERT_TRUE(winsock.ok());
+  for (unsigned status : {400u, 401u, 403u, 429u, 500u}) {
+    LocalHttpServer server("must not propagate provider text", false, 1, 0, status);
+    ASSERT_TRUE(server.ok());
+    azookey::host::AiBackendOptions options;
+    const auto url = server.url();
+    options.endpoint = std::string(url.begin(), url.end());
+    options.api_key = "test-only-placeholder";
+    const auto result = azookey::host::PostAiHttp(
+        options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(3));
+    EXPECT_EQ(result.status, status);
+    EXPECT_EQ(result.error, azookey::host::AiErrorClass::None);
+    EXPECT_TRUE(result.body.empty());
+  }
+}
+TEST(AiHttpTest, RejectsNonLoopbackPlainHttpBeforeConnecting) {
+  azookey::host::AiBackendOptions options;
+  options.endpoint = "http://192.0.2.1/v1";
+  options.api_key = "test-only-placeholder";
+  const auto result = azookey::host::PostAiHttp(
+      options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(1));
+  EXPECT_EQ(result.error, azookey::host::AiErrorClass::Parse);
 }
 
 TEST(HttpDownloaderTest, Sha256MismatchNeverPromotesPartFile) {

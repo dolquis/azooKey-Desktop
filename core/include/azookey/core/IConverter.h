@@ -19,6 +19,8 @@ struct ConversionContext {
   std::optional<std::chrono::steady_clock::time_point> deadline;
   uint32_t max_candidates{0};
   bool live{false};
+  // Optional instruction profile for explicit local AI transformations.
+  std::string instruction_profile;
 };
 
 struct CorrectionHint {

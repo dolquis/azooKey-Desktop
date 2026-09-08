@@ -407,8 +407,11 @@ schema をここで正典として定義し、値の意味（`off` / `local` の
 将来 M で実装する際に、**バージョン / タイムスタンプ付きの明示同意レコード**として別途導入する
 （bare な `"upload"` 値を先行して永続化しない。理由は §8.3）。ローダは未知値を `local` に
 正規化する（前方互換は `docs/sideload-packaging-spec.md` §3.6 拡張方針）。
-**導入 M の区別**: 本 `crashReportConsent` のみ M33（ETW/WER）で先行導入し、他の `privacy.*`
-subfield（`mode` / `custom` / secure 各軸）は M46 で導入する。M33 では `privacy` object に
+**導入 M の区別**: 共有AI基盤では`mode`と`custom.aiCandidate` / `custom.externalAi`を
+先行導入する。TIPの入力scopeがpassword/PIN、または判定不能ならAI送信を抑止する。
+hostはリクエストの許可と設定の許可の積を取り、TIPから許可を引き上げられない。
+他の学習・予測・ログの各軸とM46のUIはこのAI用判定とは別範囲とする。
+`crashReportConsent`はM33（ETW/WER）で、M33では`privacy` objectに
 `crashReportConsent` を既定値付きで加算的に追加する（`docs/sideload-packaging-spec.md` §3.6
 「予定済み top-level 拡張」と整合）。
 

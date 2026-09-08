@@ -23,6 +23,7 @@ struct HandshakeResponse {
   bool accepted{false};
   bool model_loaded{false};
   std::string host_generation_id;
+  std::vector<std::string> capabilities;
   bool batch_romaji_conversion{false};
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};
@@ -110,6 +111,9 @@ struct QueryBatchConversionRequest {
   std::string mode{"neural"};
   bool auto_punctuation{false};
   uint32_t max_candidates{10};
+  bool ai_allowed{false};
+  bool external_ai_allowed{false};
+  std::string ai_backend;  // Empty preserves the host's root setting for older clients.
 };
 
 struct QueryBatchConversionResponse {
@@ -139,6 +143,24 @@ struct CommitObservationRequest {
 struct CommitObservationResponse {
   bool ok{false};
 };
+
+struct ObservedSegment {
+  std::string reading;
+  CandidateField chosen;
+  std::vector<CandidateField> shown;
+  bool is_auto_punctuation{false};
+};
+
+struct CommitSegmentsObservationRequest {
+  std::vector<ObservedSegment> segments;
+  std::string left_context;
+  uint64_t timestamp_ms{};
+  std::string observation_id;
+};
+
+std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p);
+std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRequest(
+    const std::string& json);
 
 struct AddUserWordRequest {
   std::string word;

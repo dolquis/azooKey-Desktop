@@ -346,7 +346,9 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 - 代替として M16 ダイアログ経路を**非同期化**してよい（変換中はスピナー表示で同期 deadline で
   殺さず、応答到着またはユーザーの明示キャンセルで確定）。長い API レイテンシでも M16 が
   壊れないことを保証する。同期 deadline か非同期かは実装 PR で選択する。
-- `local-zenzai` backend での AI 経路は外部 API ではないため、ローカル経路の M47 deadline に従う。
+- `local-zenzai` backend の通常のAI経路はM47の800 ms期限に従う。
+  M58-Cの一括整文（`Cleanup`）は実モデルで800 msを超えるため、独立した30秒の
+  全体期限を使う。`openAiTimeoutMs`では変更しない。TIPは5秒の余裕を加えて待機する。
 - X-3-3 は非同期 push であり、TIP の同期応答タイムアウトには載らない。
 
 ### 7.2 HTTP ステータス → `AiErrorClass` マッピング（legacy 準拠）
@@ -478,14 +480,20 @@ secure 中に TIP が Magic Conversion を発火させないことと、本入�
 | `batchAutoPunctuation` | `false` | `ai-cleanup` 時の句読点自動挿入（M58-C） |
 | `postCommitLint` | `false` | X-3-3 の有効化 |
 
-追加提案キー（実装 PR で確定。本書で予約）:
+共有AI基盤の期限設定:
 
 | キー | 既定 | 意味 |
 |---|---|---|
-| `openAiTimeoutMs` | `30000` | 外部 API receive タイムアウト（§7.1） |
+| `openAiTimeoutMs` | `30000` | 外部 API receive と再試行を含む全体期限。1000〜120000 ms（§7.1） |
 
-> `mvp-settings.schema.json` への `openAiTimeoutMs` 追加は M16 実装 PR の範囲。本書は
-> キーの存在と既定値を契約として予約する（schema 変更は実装 PR でレビュー）。
+`AiBackend::Transform`はM58-Cから共通利用する。WinHTTPはダウンロードと
+proxy・TLS検証の方針を共有し、AIのPOSTは非同期ハンドルの終了通知まで待って
+キャンセルする。HTTPS以外は数値loopbackのみ許可し、redirectは追従しない。
+応答本文は256 KiB、整文結果は64 KiBまでとする。
+
+ローカル整文はZenzaiのprofile付き変換を使用し、生ローマ字と句読点方針を
+profileに渡す。モデルの指示追従と誤字補正の品質は実モデルで確認する。
+自動Lintの呼び出し契約はローカル限定だが、finding生成とM16のUIは別範囲とする。
 
 ---
 

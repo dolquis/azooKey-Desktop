@@ -12,6 +12,7 @@
 #include <optional>
 #include <thread>
 
+#include "azookey/core/AiPrivacy.h"
 #include "azookey/core/BracketSettings.h"
 
 namespace azookey::tsf {
@@ -23,6 +24,11 @@ struct TipRewriterSettings {
   uint32_t maximum{12};
   uint32_t minimum{1};
 };
+struct TipAiSettings {
+  core::AiPrivacy privacy;
+  std::string backend{"none"};
+  int timeout_ms{30000};
+};
 
 // Owns a cancellable directory watch. The worker never touches TSF/COM objects.
 class TipLocalSettings final {
@@ -32,6 +38,7 @@ class TipLocalSettings final {
   void Stop() noexcept;
   core::BracketSettings Snapshot() const;
   std::optional<TipRewriterSettings> RewriterSnapshot() const;
+  TipAiSettings AiSnapshot() const;
 
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
@@ -52,6 +59,7 @@ class TipLocalSettings final {
   std::condition_variable changed_;
   core::BracketSettings settings_;
   std::optional<TipRewriterSettings> rewriters_;
+  TipAiSettings ai_;
   std::filesystem::path path_;
   std::filesystem::path table_path_;
   std::atomic<bool> watch_started_{false};

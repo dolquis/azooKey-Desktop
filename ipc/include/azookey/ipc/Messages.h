@@ -24,6 +24,7 @@ enum class MessageType {
   Ping,
   Health,
   QueryDiagnostics,
+  CommitSegmentsObservation,
   Unknown,
 };
 

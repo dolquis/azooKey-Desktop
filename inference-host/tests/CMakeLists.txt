@@ -5,8 +5,12 @@ target_link_libraries(host_engine_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
 )
 azookey_discover_tests(host_engine_tests)
+if(AZOOKEY_WITH_LLAMA_CPP AND AZOOKEY_ZENZAI_TEST_MODEL)
+  target_compile_definitions(host_engine_tests PRIVATE
+    AZOOKEY_AI_TEST_MODEL="${AZOOKEY_ZENZAI_TEST_MODEL}")
+endif()
 
-add_executable(host_dispatcher_tests dispatcher_test.cpp)
+add_executable(host_dispatcher_tests dispatcher_test.cpp ai_backend_test.cpp)
 target_include_directories(host_dispatcher_tests PRIVATE ${PROJECT_SOURCE_DIR}/ipc/tests)
 target_compile_definitions(host_dispatcher_tests PRIVATE
   AZOOKEY_IPC_TESTDATA_DIR="${PROJECT_SOURCE_DIR}/ipc/testdata"

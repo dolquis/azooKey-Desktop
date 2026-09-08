@@ -189,8 +189,13 @@ class TextService final : public ITfTextInputProcessorEx,
     return RequestCommitEditSession(context);
   }
   void set_batch_romaji_options_for_test(bool enabled, bool preview_romaji = false,
-                                         bool auto_punctuation = false);
+                                         bool auto_punctuation = false, bool ai_cleanup = false);
+  core::AiPrivacy pending_ai_privacy_for_test() {
+    std::lock_guard lock(ipc_mtx_);
+    return ipc_pending_ai_privacy_;
+  }
   bool batch_query_in_progress_for_test() const;
+  void set_cached_batch_segments_for_test(std::vector<ipc::BatchConversionSegment> segments);
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
   uint64_t pending_ipc_request_id_for_test();
@@ -234,6 +239,7 @@ class TextService final : public ITfTextInputProcessorEx,
   core::RomajiKanaConverter romaji_;
   std::string batch_raw_romaji_;
   bool batch_query_in_progress_{false};
+  bool batch_learning_allowed_{true};
   std::atomic<bool> batch_romaji_conversion_{false};
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
@@ -260,10 +266,14 @@ class TextService final : public ITfTextInputProcessorEx,
   // Snapshot of candidates taken when the window was opened (used for commit
   // so that a late QueryCandidates response cannot change what is confirmed).
   std::vector<TipCandidate> shown_candidates_;
+  std::vector<ipc::BatchConversionSegment> shown_batch_segments_;
+  std::vector<size_t> batch_segment_selections_;
+  size_t batch_segment_cursor_{0};
   struct PendingCommitObservation {
     std::string reading;
     ipc::CandidateField chosen;
     std::vector<ipc::CandidateField> shown;
+    std::vector<PendingCommitObservation> segments;
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
 
@@ -290,6 +300,10 @@ class TextService final : public ITfTextInputProcessorEx,
   uint64_t ipc_inflight_id_{0};
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
+  bool ipc_host_oob_cancel_{false};  // IPC worker only.
+  std::atomic<bool> ipc_host_commit_segments_{false};
+  core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
+  std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_
 
   // Out-of-band IPC send queue drained ahead of the pending query: Cancel is
   // fire-and-forget, CommitObservation awaits an ACK (M6, M10).
@@ -315,6 +329,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // thread, read by TIP thread).
   std::mutex candidates_mtx_;
   std::vector<TipCandidate> candidates_;
+  std::vector<ipc::BatchConversionSegment> cached_batch_segments_;
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
 
   void StartIpcWorker();
@@ -324,6 +339,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string IpcPipeName() const;
   void IpcWorkerThread();
   void ServeConnection();
+  void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
+                    const std::string& mode);
   bool PerformHandshake();
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                         const std::string& trace_id, bool update_host_options);
@@ -342,7 +359,8 @@ class TextService final : public ITfTextInputProcessorEx,
                            const std::string& emoji_trigger = {});
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
-  void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);
+  void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
+                           ITfContext* context);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
   POINT CandidateAnchorPoint();

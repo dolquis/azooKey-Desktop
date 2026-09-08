@@ -13,17 +13,81 @@
 #include <vector>
 
 #include "IpcTestData.h"
+#include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace ipc = azookey::ipc;
+
+TEST(BatchConversionChunkerTest, PreservesSentenceBoundariesAndEveryByte) {
+  const std::string input = "にほんご。つぎのぶん！さいご";
+  const auto chunks = azookey::core::SplitBatchConversion(input);
+  ASSERT_EQ(chunks.size(), 3u);
+  EXPECT_EQ(chunks[0], "にほんご。");
+  EXPECT_EQ(chunks[1], "つぎのぶん！");
+  EXPECT_EQ(chunks[0] + chunks[1] + chunks[2], input);
+}
+
+TEST(BatchConversionChunkerTest, HardSplitPreservesUtf8WithoutSentenceBoundaries) {
+  const std::string input = "あいうえおかきくけこ";
+  const auto chunks = azookey::core::SplitBatchConversion(input, 7);
+  std::string joined;
+  for (const auto& chunk : chunks) {
+    EXPECT_LE(chunk.size(), 7u);
+    size_t offset = 0;
+    char32_t codepoint{};
+    while (offset < chunk.size()) {
+      EXPECT_TRUE(azookey::core::DecodeNextUtf8(chunk, offset, codepoint));
+    }
+    joined += chunk;
+  }
+  EXPECT_EQ(joined, input);
+}
+
+TEST(BatchConversionChunkerTest, RawSplitDoesNotFlushPendingRomaji) {
+  for (const auto& input : {std::string("kananakanaka"), std::string(2000, 'n')}) {
+    const auto chunks = azookey::core::SplitBatchRomaji(input, 4);
+    std::string raw;
+    std::string reading;
+    for (const auto& chunk : chunks) {
+      EXPECT_LE(chunk.raw_romaji.size(), 8u);
+      raw += chunk.raw_romaji;
+      reading += chunk.reading;
+    }
+    EXPECT_EQ(raw, input);
+    EXPECT_EQ(reading, azookey::core::RomajiKanaConverter::ConvertForCommit(input));
+  }
+}
+
+TEST(BatchConversionChunkerTest, InputAboveFrameLimitProducesBoundedEnvelopes) {
+  const std::string raw(ipc::kMaxJsonInputBytes + 123, 'a');
+  size_t raw_size = 0;
+  size_t reading_size = 0;
+  for (const auto& chunk : azookey::core::SplitBatchRomaji(raw)) {
+    ipc::QueryBatchConversionRequest request;
+    request.reading = chunk.reading;
+    request.raw_romaji = chunk.raw_romaji;
+    ipc::Envelope envelope;
+    envelope.type = ipc::MessageType::QueryBatchConversion;
+    envelope.trace_id = "batch-boundary-test";
+    envelope.payload_json = ipc::BuildQueryBatchConversionRequest(request);
+    const auto serialized = ipc::Serialize(envelope);
+    ASSERT_TRUE(serialized);
+    ASSERT_LT(serialized->size(), ipc::kMaxFrameSize);
+    raw_size += chunk.raw_romaji.size();
+    reading_size += chunk.reading.size();
+  }
+  EXPECT_EQ(raw_size, raw.size());
+  EXPECT_EQ(reading_size, raw.size() * 3);
+}
 
 namespace {
 
@@ -386,6 +450,122 @@ TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
   EXPECT_EQ(parsed->full_surface, "日本");
 }
 
+TEST_F(DispatcherTest, CleanupWithNoBackendFallsBackToNeural) {
+  ipc::QueryBatchConversionRequest request;
+  request.mode = "ai-cleanup";
+  request.ai_allowed = true;
+  request.reading = "にほん";
+  const auto response = dispatcher.Dispatch(MakeReq(
+      825, ipc::MessageType::QueryBatchConversion, ipc::BuildQueryBatchConversionRequest(request)));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->full_surface, "日本");
+}
+
+TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecureGate) {
+  const auto path = TempPath("azookey_cleanup_settings.json");
+  {
+    std::ofstream file(path);
+    file << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder"})";
+  }
+  azookey::host::SettingsStore settings(path);
+  settings.Load();
+  unsigned calls = 0;
+  unsigned status = 200;
+  std::string sent;
+  auto config = DefaultDispatcherConfig();
+  config.ai_backend = std::make_shared<azookey::host::AiBackend>(
+      [&](const auto&, const std::string& body, const auto*, auto) {
+        ++calls;
+        sent = body;
+        return azookey::host::AiHttpResponse{status,
+                                             R"({"choices":[{"message":{"content":"日本。"}}]})"};
+      });
+  azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
+  ipc::QueryBatchConversionRequest request;
+  request.mode = "ai-cleanup";
+  request.reading = "にほん";
+  request.raw_romaji = "nihno";
+  request.ai_allowed = request.external_ai_allowed = true;
+  const auto query = [&](uint64_t id) {
+    const auto response = handler.Dispatch(MakeReq(id, ipc::MessageType::QueryBatchConversion,
+                                                   ipc::BuildQueryBatchConversionRequest(request)));
+    return response ? ipc::ParseQueryBatchConversionResponse(response->payload_json) : std::nullopt;
+  };
+  auto result = query(826);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  EXPECT_NE(sent.find("nihno"), std::string::npos);
+  EXPECT_EQ(result->segments.front().candidates.front().source, "llm");
+  request.auto_punctuation = true;
+  result = query(827);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本。");
+  request.ai_backend = "none";
+  const auto before_override = calls;
+  result = query(831);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  EXPECT_EQ(calls, before_override);
+  {
+    std::ofstream file(path);
+    file << R"({"aiBackend":"none","openAiApiKey":"test-only-placeholder"})";
+  }
+  settings.Reload();
+  request.ai_backend = "openai";
+  result = query(832);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本。");
+  EXPECT_EQ(calls, before_override + 1);
+  status = 401;
+  result = query(828);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  const auto before = calls;
+  request.ai_allowed = false;
+  result = query(829);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  EXPECT_EQ(calls, before);
+  request.ai_allowed = true;
+  {
+    std::ofstream file(path);
+    file
+        << R"({"aiBackend":"openai","openAiApiKey":"test-only-placeholder","privacy":{"mode":"secure"}})";
+  }
+  settings.Reload();
+  result = query(830);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  EXPECT_EQ(result->segments.front().candidates.front().source, "privacy-fallback");
+  EXPECT_EQ(calls, before);
+  RemovePathNoThrow(path);
+}
+
+TEST_F(DispatcherTest, BatchConversionPreservesAllReadingsAcrossHardSplits) {
+  ipc::QueryBatchConversionRequest request;
+  for (int i = 0; i < 100; ++i) request.reading += "あ";
+  auto response = dispatcher.Dispatch(MakeReq(23, ipc::MessageType::QueryBatchConversion,
+                                              ipc::BuildQueryBatchConversionRequest(request)));
+  ASSERT_TRUE(response);
+  auto parsed = ipc::ParseQueryBatchConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  ASSERT_GT(parsed->segments.size(), 1u);
+  EXPECT_FALSE(parsed->partial);
+  EXPECT_FALSE(parsed->canceled);
+  std::string joined_reading;
+  std::string joined_surface;
+  for (const auto& segment : parsed->segments) {
+    EXPECT_LE(segment.reading.size(), 96u);
+    ASSERT_FALSE(segment.candidates.empty());
+    joined_reading += segment.reading;
+    joined_surface += segment.candidates.front().surface;
+  }
+  EXPECT_EQ(joined_reading, request.reading);
+  EXPECT_EQ(joined_surface, parsed->full_surface);
+}
+
 TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {
   const std::string dict_path = TempPath("azookey_dispatcher_tsv_source_fixture.tsv");
   const std::string tsv_learning_path = TempPath("azookey_dispatcher_tsv_source_learning.tsv");
@@ -525,6 +705,29 @@ TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCountin
   EXPECT_TRUE(resend_parsed->ok);
   EXPECT_EQ(store.size(), entries_after_first);
   EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1700000000ULL), score_after_first);
+}
+
+TEST_F(DispatcherTest, CommitSegmentsSkipsAutomaticPunctuationAndDeduplicates) {
+  ipc::CommitSegmentsObservationRequest request;
+  request.observation_id = "segments-test";
+  ipc::CandidateField candidate;
+  candidate.reading = "にほん";
+  candidate.surface = "日本";
+  request.segments.push_back({candidate.reading, candidate, {}, false});
+  candidate.reading.clear();
+  candidate.surface = "。";
+  request.segments.push_back({"", candidate, {}, true});
+  const auto before = store.size();
+  for (uint64_t id : {800u, 801u}) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::CommitSegmentsObservation,
+                                    ipc::BuildCommitSegmentsObservationRequest(request)));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+    ASSERT_TRUE(parsed);
+    EXPECT_TRUE(parsed->ok);
+  }
+  EXPECT_EQ(store.size(), before + 1);
 }
 
 TEST_F(DispatcherTest, AddRemoveUserWord) {

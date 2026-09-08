@@ -17,6 +17,8 @@ std::string TypeToString(MessageType type) {
     case MessageType::QueryCorrections: return "QueryCorrections";
     case MessageType::Cancel: return "Cancel";
     case MessageType::CommitObservation: return "CommitObservation";
+    case MessageType::CommitSegmentsObservation:
+      return "CommitSegmentsObservation";
     case MessageType::CommitCorrection: return "CommitCorrection";
     case MessageType::AddUserWord: return "AddUserWord";
     case MessageType::UpdateUserWord: return "UpdateUserWord";
@@ -39,6 +41,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "QueryCorrections") return MessageType::QueryCorrections;
   if (value == "Cancel") return MessageType::Cancel;
   if (value == "CommitObservation") return MessageType::CommitObservation;
+  if (value == "CommitSegmentsObservation") return MessageType::CommitSegmentsObservation;
   if (value == "CommitCorrection") return MessageType::CommitCorrection;
   if (value == "AddUserWord") return MessageType::AddUserWord;
   if (value == "UpdateUserWord") return MessageType::UpdateUserWord;

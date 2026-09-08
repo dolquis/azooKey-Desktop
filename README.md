@@ -44,6 +44,10 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 - `third_party/` — header-only submodule（WIL）
 - `legacy/` — 旧 macOS 実装（参照用、未保守）
 
+AI整文は明示的に`aiBackend=openai`を選ぶと外部APIへ入力を送ります。
+APIキー設定は平文も受け付けるため、共有しないでください。`dpapi:`形式の暗号化キーも
+読み込めます。設定と送信制御は[共有AI基盤仕様](docs/ai-backend-spec.md)を参照してください。
+
 ## ビルド要件
 
 - Windows 10 version 1903（build 18362）以降 / Windows 11（OS 付属 ICU が必要）

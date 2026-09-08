@@ -16,9 +16,11 @@
 #include <vector>
 
 #include "azookey/core/IConverter.h"
+#include "azookey/host/AiBackend.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/RewriterData.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
+#include "azookey/ipc/Payloads.h"
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
@@ -119,6 +121,8 @@ class InferenceEngine {
   bool RemoveUserWord(const std::string& word, const std::string& ruby);
 
   bool LoadModel();
+  AiTransformResult TransformLocal(const AiTransformRequest& request,
+                                   const std::atomic<bool>* cancel, AiDeadline deadline);
   bool LoadModel(const ModelLoadOptions& options);
   ModelLoadResult LoadModelWithResult();
   ModelLoadResult LoadModelWithResult(const ModelLoadOptions& options);
@@ -147,6 +151,8 @@ class InferenceEngine {
   // Returns false when the observation was dropped as a duplicate.
   bool CommitObservation(const std::string& reading, const std::string& surface,
                          uint64_t now_epoch_sec, const std::string& observation_id = {});
+  bool CommitSegmentsObservation(const ipc::CommitSegmentsObservationRequest& request,
+                                 uint64_t now_epoch_sec);
   void CommitCorrection(const std::string& reading, const std::string& rejected_surface,
                         const std::string& selected_surface, uint64_t now_epoch_sec);
   bool FlushLearningStore();

@@ -24,6 +24,7 @@ struct DispatcherConfig {
   std::string runtime_tier{"mock"};
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.
   std::shared_ptr<std::mutex> update_config_mutex{std::make_shared<std::mutex>()};
+  std::shared_ptr<AiBackend> ai_backend{std::make_shared<AiBackend>()};
 };
 
 // Envelope-level request handler. Transport-agnostic: drives the same code

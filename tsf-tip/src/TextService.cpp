@@ -18,6 +18,7 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
 #include "azookey/core/PlatformPaths.h"
@@ -27,6 +28,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
+#include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/SettingsLauncher.h"
@@ -1102,6 +1104,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       *eaten = (has_preedit || cand_visible) ? TRUE : FALSE;
     } else if (wParam == VK_UP || wParam == VK_DOWN) {
       *eaten = cand_visible ? TRUE : FALSE;
+    } else if (wParam == VK_LEFT || wParam == VK_RIGHT) {
+      *eaten = cand_visible && !shown_batch_segments_.empty() ? TRUE : FALSE;
     } else if (wParam == VK_RETURN) {
       *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
     } else if (wParam == VK_ESCAPE) {
@@ -1187,6 +1191,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       bool candidate_window_show_pending{false};
       std::string batch_raw_romaji;
       bool batch_query_in_progress{false};
+      std::vector<ipc::BatchConversionSegment> batch_segments;
+      std::vector<size_t> segment_selections;
+      size_t segment_cursor{0};
     };
     auto capture_preedit_rollback_state = [&]() {
       PreeditRollbackState state;
@@ -1197,6 +1204,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       state.shown_candidates = shown_candidates_;
       state.batch_raw_romaji = batch_raw_romaji_;
       state.batch_query_in_progress = batch_query_in_progress_;
+      state.batch_segments = shown_batch_segments_;
+      state.segment_selections = batch_segment_selections_;
+      state.segment_cursor = batch_segment_cursor_;
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         state.cached_candidates = candidates_;
@@ -1211,6 +1221,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       shown_candidates_ = state.shown_candidates;
       batch_raw_romaji_ = state.batch_raw_romaji;
       batch_query_in_progress_ = state.batch_query_in_progress;
+      shown_batch_segments_ = state.batch_segments;
+      batch_segment_selections_ = state.segment_selections;
+      batch_segment_cursor_ = state.segment_cursor;
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_ = state.cached_candidates;
@@ -1241,9 +1254,18 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (wParam >= '1' && wParam <= '9' && cand_visible) {
       int idx = static_cast<int>(wParam - '1');
       if (idx < candidate_ui_.GetCount()) {
-        selected_candidate_idx_ = idx;
-        const HRESULT commit_hr = CommitSelected(context);
-        if (FAILED(commit_hr)) return commit_hr;
+        if (shown_batch_segments_.size() > 1) {
+          const auto rollback_state = capture_preedit_rollback_state();
+          const auto move_hr = candidate_ui_.MoveSelection(idx - selected_candidate_idx_);
+          if (FAILED(move_hr)) return move_hr;
+          selected_candidate_idx_ = idx;
+          const auto update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+          if (FAILED(update_hr)) return update_hr;
+        } else {
+          selected_candidate_idx_ = idx;
+          const HRESULT commit_hr = CommitSelected(context);
+          if (FAILED(commit_hr)) return commit_hr;
+        }
       }
       *eaten = TRUE;
 
@@ -1420,7 +1442,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             candidate_window_show_pending_ = true;
           }
           batch_query_in_progress_ = true;
-          PostBatchConversion(reading, batch_raw_romaji_);
+          PostBatchConversion(reading, batch_raw_romaji_, context);
         }
       } else {
         // Flush any pending romaji so the reading is complete.
@@ -1497,6 +1519,27 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
       }
 
+    } else if ((wParam == VK_LEFT || wParam == VK_RIGHT) && cand_visible &&
+               !shown_batch_segments_.empty()) {
+      const auto rollback_state = capture_preedit_rollback_state();
+      batch_segment_selections_[batch_segment_cursor_] =
+          static_cast<size_t>(selected_candidate_idx_);
+      if (wParam == VK_LEFT && batch_segment_cursor_ > 0) --batch_segment_cursor_;
+      if (wParam == VK_RIGHT && batch_segment_cursor_ + 1 < shown_batch_segments_.size())
+        ++batch_segment_cursor_;
+      const auto& segment = shown_batch_segments_[batch_segment_cursor_];
+      shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
+      selected_candidate_idx_ = static_cast<int>(batch_segment_selections_[batch_segment_cursor_]);
+      candidate_ui_.EndUI();
+      const auto hr =
+          candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                                BuildCandidateViews(shown_candidates_), selected_candidate_idx_);
+      if (FAILED(hr)) {
+        restore_preedit_state(rollback_state);
+        return hr;
+      }
+      *eaten = TRUE;
+      return request_preedit_update_or_restore_on_oom(rollback_state);
     } else if (wParam == VK_UP) {
       if (cand_visible) {
         const auto rollback_state = capture_preedit_rollback_state();
@@ -1813,7 +1856,25 @@ void TextService::PostPendingCommitObservation() {
       throw std::bad_alloc();
     }
 #endif
-    PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+    if (pending.segments.empty()) {
+      PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+    } else if (ipc_host_commit_segments_.load(std::memory_order_relaxed)) {
+      ipc::CommitSegmentsObservationRequest request;
+      request.observation_id = NextCommitObservationId();
+      for (const auto& segment : pending.segments)
+        request.segments.push_back({segment.reading, segment.chosen, segment.shown, false});
+      auto payload = ipc::BuildCommitSegmentsObservationRequest(request);
+      if (payload.size() < ipc::kMaxFrameSize - 1024) {
+        std::lock_guard<std::mutex> lock(ipc_mtx_);
+        ipc_send_queue_.push_back(
+            {ipc::MessageType::CommitSegmentsObservation, std::move(payload), true});
+        TrimIpcSendQueueLocked();
+        ipc_cv_.notify_one();
+      }
+    } else {
+      for (const auto& segment : pending.segments)
+        PostCommitObservation(segment.reading, segment.chosen, segment.shown);
+    }
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
     // observations are posted. Drop best-effort learning telemetry rather than
@@ -1959,6 +2020,25 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
 
 HRESULT TextService::CommitSelected(ITfContext* context) {
   if (!context) return S_OK;
+  const bool multi_segment = shown_batch_segments_.size() > 1;
+  const std::string batch_surface =
+      multi_segment ? CurrentDisplayedPreeditSurface() : std::string{};
+  PendingCommitObservation batch_observation;
+  if (multi_segment) {
+    for (size_t i = 0; i < shown_batch_segments_.size(); ++i) {
+      const auto& segment = shown_batch_segments_[i];
+      const auto selected = i == batch_segment_cursor_
+                                ? static_cast<size_t>(selected_candidate_idx_)
+                                : batch_segment_selections_[i];
+      if (selected < segment.candidates.size()) {
+        auto alternatives = segment.candidates;
+        auto candidate = alternatives[selected];
+        alternatives.erase(alternatives.begin() + static_cast<std::ptrdiff_t>(selected));
+        batch_observation.segments.push_back(
+            {segment.reading, std::move(candidate), std::move(alternatives), {}});
+      }
+    }
+  }
 
   // Use the snapshot taken when Space opened the window so that a late
   // QueryCandidates response cannot silently alter what gets committed.
@@ -2003,16 +2083,30 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     if (need_notify) ipc_cv_.notify_one();
   }
 
-  commit_surface_ = chosen.field.surface.empty() ? reading : chosen.field.surface;
+  commit_surface_ = multi_segment                  ? batch_surface
+                    : chosen.field.surface.empty() ? reading
+                                                   : chosen.field.surface;
   committing_ = true;
   SetCommitContext(context);
-  if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
-      chosen.field.source != "symbol" && chosen.field.source != "emoji") {
+  if (multi_segment) {
+    pending_commit_observation_ = std::move(batch_observation);
+  } else if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
+             chosen.field.source != "symbol" && chosen.field.source != "emoji") {
     pending_commit_observation_ =
-        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown)};
+        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown), {}};
   } else {
     pending_commit_observation_.reset();
   }
+  // AI output can contain generated punctuation without a reading alignment.
+  if (!batch_learning_allowed_ || chosen.field.source == "llm" ||
+      chosen.field.source == "privacy-fallback" ||
+      (pending_commit_observation_ &&
+       std::any_of(pending_commit_observation_->segments.begin(),
+                   pending_commit_observation_->segments.end(), [](const auto& segment) {
+                     return segment.chosen.source == "llm" ||
+                            segment.chosen.source == "privacy-fallback";
+                   })))
+    pending_commit_observation_.reset();
   // Defer clearing preedit and recording learning until the synchronous commit
   // edit session has actually completed.  A request accepted asynchronously is
   // not enough: SetText/EndComposition may still fail and the user input must
@@ -2210,6 +2304,12 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   if (update_host_options) {
     ObserveHostGeneration(hpayload->host_generation_id);
     batch_romaji_conversion_.store(hpayload->batch_romaji_conversion, std::memory_order_relaxed);
+    ipc_host_oob_cancel_ = std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                                     "oob_cancel") != hpayload->capabilities.end();
+    ipc_host_commit_segments_.store(
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                  "commit_segments") != hpayload->capabilities.end(),
+        std::memory_order_relaxed);
     batch_romaji_preview_romaji_.store(hpayload->batch_romaji_preview_style == "romaji",
                                        std::memory_order_relaxed);
     batch_conversion_ai_cleanup_.store(hpayload->batch_conversion_mode == "ai-cleanup",
@@ -2455,21 +2555,16 @@ void TextService::ServeConnection() {
     }
 
     if (!has_qc || (reading.empty() && emoji_trigger.empty())) continue;
+    if (is_batch) {
+      ConvertBatch(req_id, reading, raw_romaji, batch_mode);
+      if (!ipc_client_.IsConnected()) return;
+      continue;
+    }
 
     Envelope qenv;
     qenv.version = 1;
     qenv.request_id = req_id;
-    if (is_batch) {
-      QueryBatchConversionRequest qreq;
-      qreq.reading = reading;
-      qreq.raw_romaji = raw_romaji;
-      qreq.mode = batch_mode.empty() ? "neural" : batch_mode;
-      qreq.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
-      qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
-      qenv.trace_id = "tip-batch-query";
-      qenv.type = MessageType::QueryBatchConversion;
-      qenv.payload_json = BuildQueryBatchConversionRequest(qreq);
-    } else {
+    {
       QueryCandidatesRequest qreq;
       qreq.reading = reading;
       qreq.left_context = "";
@@ -2696,30 +2791,7 @@ void TextService::ServeConnection() {
       continue;
     }
 
-    if (qres && is_batch) {
-      auto qpayload = ParseQueryBatchConversionResponse(qres->payload_json);
-      if (!qpayload || qpayload->canceled) {
-        ++next_id;
-        continue;
-      }
-      if (!qpayload->segments.empty()) {
-        response_candidates = qpayload->segments.front().candidates;
-      }
-      if (response_candidates.empty() && !qpayload->full_surface.empty()) {
-        CandidateField fallback;
-        fallback.surface = qpayload->full_surface;
-        fallback.reading = reading;
-        fallback.source = "model";
-        response_candidates.push_back(std::move(fallback));
-      }
-      if (response_candidates.empty()) {
-        CandidateField fallback;
-        fallback.surface = reading;
-        fallback.reading = reading;
-        fallback.source = "fallback";
-        response_candidates.push_back(std::move(fallback));
-      }
-    } else if (qres) {
+    if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
         ++next_id;
@@ -2762,6 +2834,7 @@ void TextService::ServeConnection() {
           continue;
         }
         candidates_ = std::move(tip_candidates);
+        cached_batch_segments_.clear();
         if (candidate_window_show_pending_) {
           if (candidates_.empty()) {
             candidate_window_show_pending_ = false;
@@ -2780,6 +2853,156 @@ void TextService::ServeConnection() {
   }
 }
 
+void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
+                               const std::string& raw_romaji, const std::string& mode) {
+  using namespace azookey::ipc;
+  core::AiPrivacy privacy;
+  std::string backend;
+  {
+    std::lock_guard lock(ipc_mtx_);
+    privacy = ipc_pending_ai_privacy_;
+    backend = ipc_pending_ai_backend_;
+  }
+  std::vector<BatchConversionSegment> segments;
+  const auto trace = CreateIpcClientId();
+  // Split raw input first so every AI request keeps its corresponding kana.
+  const bool has_raw = !raw_romaji.empty();
+  std::vector<core::BatchRomajiChunk> chunks;
+  if (has_raw) {
+    chunks = core::SplitBatchRomaji(raw_romaji);
+  } else {
+    for (auto& chunk : core::SplitBatchConversion(reading, core::kIpcChunkBytes))
+      chunks.push_back({{}, std::move(chunk)});
+  }
+  if (chunks.size() > 1 && !ipc_host_oob_cancel_) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "batch_chunking_unsupported");
+    chunks = {{raw_romaji, reading}};
+  }
+  bool failed = false;
+  const auto rearm_neural = [&] {
+    if (mode != "ai-cleanup") return false;
+    std::lock_guard lock(ipc_mtx_);
+    if (ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_) return false;
+    ipc_pending_batch_mode_ = "neural";
+    ipc_has_request_ = true;
+    ipc_inflight_id_ = 0;
+    return true;
+  };
+  uint64_t active_id = generation;
+  for (const auto& chunk : chunks) {
+    if (failed) break;
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      if (ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_) {
+        ipc_inflight_id_ = 0;
+        return;
+      }
+      active_id = ++ipc_pending_id_;
+      generation = active_id;
+      ipc_inflight_id_ = active_id;
+    }
+    QueryBatchConversionRequest request;
+    request.reading = ApplyDefaultCompositionPunctuation(chunk.reading);
+    request.raw_romaji = chunk.raw_romaji;
+    request.mode = mode;
+    request.ai_allowed = privacy.ai;
+    request.external_ai_allowed = privacy.external;
+    request.ai_backend = backend;
+    request.max_candidates = max_candidates_.load(std::memory_order_relaxed);
+    request.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
+    Envelope envelope;
+    envelope.request_id = active_id;
+    envelope.trace_id = trace;
+    envelope.type = MessageType::QueryBatchConversion;
+    envelope.payload_json = BuildQueryBatchConversionRequest(request);
+    const auto encoded = Serialize(envelope);
+    if (!encoded || encoded->size() >= kMaxFrameSize || !ipc_client_.Send(envelope)) {
+      if (!ipc_client_.IsConnected()) {
+        if (rearm_neural()) return;
+        RearmPendingQuery(generation);
+        return;
+      }
+      failed = true;
+      break;
+    }
+    const auto wait_ms = mode == "ai-cleanup"
+                             ? (backend == "openai" && privacy.external
+                                    ? local_settings_.AiSnapshot().timeout_ms + 5000
+                                    : 35000)
+                             : 30000;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
+    std::optional<QueryBatchConversionResponse> result;
+    while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
+      bool stale;
+      {
+        std::lock_guard<std::mutex> lock(ipc_mtx_);
+        stale = ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_;
+      }
+      if (stale) {
+        SendCancelOutOfBand(active_id);
+        ipc_client_.Disconnect();
+        std::lock_guard<std::mutex> lock(ipc_mtx_);
+        ipc_inflight_id_ = 0;
+        return;
+      }
+      auto response = ipc_client_.ReceiveWithTimeout(50, deadline);
+      if (!response) continue;
+      if (response->request_id != active_id || response->trace_id != trace ||
+          response->type != MessageType::QueryBatchConversion)
+        continue;
+      result = ParseQueryBatchConversionResponse(response->payload_json);
+      break;
+    }
+    if (!result && !ipc_client_.IsConnected()) {
+      if (rearm_neural()) return;
+      RearmPendingQuery(generation);
+      return;
+    }
+    if (result && result->segments.empty() && !result->full_surface.empty()) {
+      CandidateField candidate;
+      candidate.reading = request.reading;
+      candidate.surface = result->full_surface;
+      candidate.source = "model";
+      result->segments.push_back({request.reading, {std::move(candidate)}});
+    }
+    if (!result || result->partial || result->canceled || result->segments.empty()) {
+      if (!result || !result->canceled) {
+        SendCancelOutOfBand(active_id);
+        ipc_client_.Disconnect();
+      }
+      failed = true;
+      break;
+    }
+    for (auto& segment : result->segments) {
+      if (segment.candidates.empty()) {
+        CandidateField candidate;
+        candidate.reading = candidate.surface = segment.reading;
+        candidate.source = "fallback";
+        segment.candidates.push_back(std::move(candidate));
+      }
+      segments.push_back(std::move(segment));
+    }
+  }
+  if (failed) {
+    if (rearm_neural()) return;
+    CandidateField fallback;
+    fallback.reading = fallback.surface = reading;
+    fallback.source = "fallback";
+    segments = {{reading, {std::move(fallback)}}};
+  }
+  bool notify = false;
+  {
+    std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+    ipc_inflight_id_ = 0;
+    if (ipc_pending_id_ != generation || ipc_has_request_ || segments.empty()) return;
+    cached_batch_segments_ = std::move(segments);
+    const auto& first = cached_batch_segments_.front();
+    candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
+    notify = candidate_window_show_pending_;
+  }
+  if (notify) candidate_ui_.PostCandidatesReady();
+}
+
 void TextService::PostQueryCandidates(const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -2794,13 +3017,37 @@ void TextService::PostQueryCandidates(const std::string& reading, bool live,
   ipc_cv_.notify_one();
 }
 
-void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji) {
+void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
+                                      ITfContext* context) {
+  const bool ai_cleanup = batch_conversion_ai_cleanup_.load(std::memory_order_relaxed);
+  const auto ai_settings = local_settings_.AiSnapshot();
+  auto backend = ai_settings.backend;
+  auto privacy = ai_settings.privacy;
+  if (ai_cleanup) {
+    const auto app = foreground_app_.Get();
+    if (!app.resolved || !AiInputAllowed(context, client_id_)) privacy = {};
+    const auto settings = local_settings_.Snapshot();
+    if (settings.profiles) {
+      const auto profile = settings.profiles->Resolve(app, WindowsAppNameEqual);
+      const ipc::json::Value value(profile);
+      const auto mode = value.GetString("privacyMode").value_or("inherit");
+      if (mode == "secure")
+        privacy = {};
+      else if (mode == "private")
+        privacy.external = false;
+      const auto profile_backend = value.GetString("aiBackend").value_or("auto");
+      if (profile_backend != "auto") backend = profile_backend;
+      if (backend == "local-zenzai") privacy.external = false;
+    }
+  }
+  batch_learning_allowed_ = !ai_cleanup || privacy.ai;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
+  ipc_pending_ai_privacy_ = privacy;
+  ipc_pending_ai_backend_ = backend;
   ipc_pending_reading_ = reading;
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
-  ipc_pending_batch_mode_ =
-      batch_conversion_ai_cleanup_.load(std::memory_order_relaxed) ? "ai-cleanup" : "neural";
+  ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
   ipc_pending_is_batch_ = true;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
@@ -2813,6 +3060,18 @@ std::string TextService::CurrentPreeditSurface() const {
 
 std::string TextService::CurrentDisplayedPreeditSurface() const {
   if (emoji_mode_ != EmojiMode::Inactive) return CurrentPreeditSurface();
+  if (candidate_ui_.IsShowing() && !shown_batch_segments_.empty()) {
+    std::string surface;
+    for (size_t i = 0; i < shown_batch_segments_.size(); ++i) {
+      const auto& segment = shown_batch_segments_[i];
+      const size_t selection = i == batch_segment_cursor_
+                                   ? static_cast<size_t>(selected_candidate_idx_)
+                                   : batch_segment_selections_[i];
+      surface += selection < segment.candidates.size() ? segment.candidates[selection].surface
+                                                       : segment.reading;
+    }
+    return surface;
+  }
   if (candidate_ui_.IsShowing() && selected_candidate_idx_ >= 0 &&
       selected_candidate_idx_ < static_cast<int>(shown_candidates_.size())) {
     return shown_candidates_[static_cast<size_t>(selected_candidate_idx_)].field.surface;
@@ -2847,6 +3106,9 @@ void TextService::ShowCandidateWindowFromCache() {
     candidate_window_show_pending_ = false;
     if (candidates_.empty()) return;
     shown_candidates_ = candidates_;
+    shown_batch_segments_ = cached_batch_segments_;
+    batch_segment_selections_.assign(shown_batch_segments_.size(), 0);
+    batch_segment_cursor_ = 0;
     snapshot = shown_candidates_;
   }
 
@@ -2937,14 +3199,25 @@ std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
 }
 
 void TextService::set_batch_romaji_options_for_test(bool enabled, bool preview_romaji,
-                                                    bool auto_punctuation) {
+                                                    bool auto_punctuation, bool ai_cleanup) {
   batch_romaji_conversion_.store(enabled);
   batch_romaji_preview_romaji_.store(preview_romaji);
-  batch_conversion_ai_cleanup_.store(false);
+  batch_conversion_ai_cleanup_.store(ai_cleanup);
   batch_auto_punctuation_.store(auto_punctuation);
 }
 
 bool TextService::batch_query_in_progress_for_test() const { return batch_query_in_progress_; }
+
+void TextService::set_cached_batch_segments_for_test(
+    std::vector<ipc::BatchConversionSegment> segments) {
+  std::lock_guard<std::mutex> lock(candidates_mtx_);
+  cached_batch_segments_ = std::move(segments);
+  if (!cached_batch_segments_.empty()) {
+    const auto& first = cached_batch_segments_.front();
+    candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
+    candidate_window_show_pending_ = true;
+  }
+}
 
 bool TextService::has_pending_ipc_query_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -2996,9 +3269,20 @@ std::string TextService::BatchReadingForConversion() const {
       core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_));
 }
 
-void TextService::RefreshBatchPreeditSurface() { preedit_kana_ = BatchPreviewSurface(); }
+void TextService::RefreshBatchPreeditSurface() {
+  preedit_kana_ = BatchPreviewSurface();
+  shown_batch_segments_.clear();
+  batch_segment_selections_.clear();
+  batch_segment_cursor_ = 0;
+  std::lock_guard<std::mutex> lock(candidates_mtx_);
+  cached_batch_segments_.clear();
+}
 
 void TextService::ClearBatchState() {
+  batch_learning_allowed_ = true;
+  shown_batch_segments_.clear();
+  batch_segment_selections_.clear();
+  batch_segment_cursor_ = 0;
   emoji_mode_ = EmojiMode::Inactive;
   batch_raw_romaji_.clear();
   batch_query_in_progress_ = false;

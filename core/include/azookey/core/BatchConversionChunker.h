@@ -18,7 +18,8 @@ struct BatchRomajiChunk {
 
 // Keep one converter across transport chunks: flushing at an arbitrary raw
 // byte boundary would turn the 'n' in a split 'na' into a spurious 'ん'.
-inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw, size_t max_bytes = 512) {
+inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw,
+                                                      size_t max_bytes = 512) {
   std::vector<BatchRomajiChunk> chunks;
   RomajiKanaConverter converter;
   BatchRomajiChunk current;
@@ -26,8 +27,8 @@ inline std::vector<BatchRomajiChunk> SplitBatchRomaji(const std::string& raw, si
     const char byte = raw[i];
     current.raw_romaji.push_back(byte);
     current.reading += converter.Feed(byte);
-    const bool scalar_boundary = i + 1 == raw.size() ||
-                                 (static_cast<unsigned char>(raw[i + 1]) & 0xC0) != 0x80;
+    const bool scalar_boundary =
+        i + 1 == raw.size() || (static_cast<unsigned char>(raw[i + 1]) & 0xC0) != 0x80;
     if (scalar_boundary && current.raw_romaji.size() >= max_bytes && !current.reading.empty() &&
         (!converter.HasPending() || current.raw_romaji.size() >= max_bytes + 4)) {
       chunks.push_back(std::move(current));

@@ -314,7 +314,7 @@ EditableSettings ExtractEditableSettings(const j::Object& root) {
   }
   if (const auto it = model.find("backendPreference"); it != model.end() && it->second.IsString()) {
     const auto& value = it->second.AsString();
-    if (value == "auto" || value == "cpu" || value == "cuda") {
+    if (value == "auto" || value == "cpu") {
       settings.model_backend_preference = value;
     } else {
       settings.model_backend_preference.reset();
@@ -361,7 +361,7 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
                                         std::chrono::milliseconds lock_timeout) {
   SettingsSaveResult result;
   if (settings.model_backend_preference && *settings.model_backend_preference != "auto" &&
-      *settings.model_backend_preference != "cpu" && *settings.model_backend_preference != "cuda") {
+      *settings.model_backend_preference != "cpu") {
     result.error = "invalid model backend preference";
     return result;
   }

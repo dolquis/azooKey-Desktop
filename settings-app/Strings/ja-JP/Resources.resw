@@ -41,7 +41,8 @@
   <data name="BackendPreferenceLabel.Text" xml:space="preserve"><value>推論デバイス</value></data>
   <data name="BackendAuto.Content" xml:space="preserve"><value>自動</value></data>
   <data name="BackendCpu.Content" xml:space="preserve"><value>CPU</value></data>
-  <data name="BackendCuda.Content" xml:space="preserve"><value>CUDA</value></data>
+  <data name="CpuOnlyDistributionNote.Text" xml:space="preserve"><value>v1.0 の配布ビルドは CPU 推論のみを含みます。</value></data>
+  <data name="BackendDowngradeNote" xml:space="preserve"><value>現在の配布ビルドでは CPU 実行へ降格します。</value></data>
   <data name="ModelPathTextBox.Header" xml:space="preserve"><value>モデルファイル</value></data>
   <data name="ModelPathTextBox.PlaceholderText" xml:space="preserve"><value>C:\models\model.gguf（空欄ならモデル未選択）</value></data>
   <data name="AdvancedSectionTitle.Text" xml:space="preserve"><value>詳細</value></data>

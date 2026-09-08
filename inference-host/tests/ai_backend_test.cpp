@@ -124,6 +124,17 @@ TEST(AiBackendTest, RejectsEmptyMalformedAndOversizedResponses) {
     EXPECT_EQ(backend.Transform(Cleanup(), Remote()).error_class, AiErrorClass::Parse);
   }
 }
+TEST(AiBackendTest, PunctuationOffPreservesOnlyExistingMarks) {
+  AiBackend backend([](const auto&, const auto&, const auto*, auto) {
+    return AiHttpResponse{200, Reply("今日は、晴れ。明日も、晴れ！")};
+  });
+  auto request = Cleanup();
+  request.text = "きょうは、はれあしたもはれ";
+  EXPECT_EQ(backend.Transform(request, Remote()).result, "今日は、晴れ明日も晴れ");
+  request.auto_punctuation = true;
+  EXPECT_EQ(backend.Transform(request, Remote()).result, "今日は、晴れ。明日も、晴れ！");
+}
+
 TEST(AiPrivacyTest, DefaultsAndCustomIntersection) {
   const auto normal = azookey::core::ParseAiPrivacy(j::Object{});
   EXPECT_TRUE(normal.ai);

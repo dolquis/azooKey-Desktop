@@ -168,6 +168,8 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   "raw_romaji": "nihongo...",   // 生ローマ字。mode=ai-cleanup では必須 / neural では任意
   "mode": "neural",             // "neural" | "ai-cleanup"
   "auto_punctuation": false,     // ai-cleanup 時の句読点自動挿入（batchAutoPunctuation を伝搬）
+  "ai_allowed": false,           // TIPの安全入力判定。欠落・型不正はfalse
+  "external_ai_allowed": false,  // ai_allowedとの積。hostの設定でも再制限
   "max_candidates": 5            // 文節あたり候補数
   // `ipc::QueryBatchConversionRequest` は "left_context" を持たない。M58-C（AI 整文）で
   // 直近確定文を渡す必要が生じた場合は、payload revision とともに追加する
@@ -458,6 +460,13 @@ return { ok: true }
   フォールバックを選ぶこと（§6.4.3）。
 
 ## 7. 長文・性能・失敗時（主に M58-B）
+
+AI整文は生ローマ字と読みを共有バックエンドへ送り、成功時だけ`source=llm`の
+結果を採用する。未設定、HTTP失敗、不正応答は通常変換へ戻す。安全入力の判定が
+不明または禁止ならかなを保持し、AI処理を行わない。句読点OFFでは入力にない
+句読点の追加を結果側でも抑える。生成文と読みの細かな対応を持たないため、
+AI整文結果の学習通知は省略する。private/secureのAI経路でも学習通知を省略する。
+TIPはAI期限に5秒の余裕を足して待機し、追加入力・Escではキャンセルする。
 
 M58-Bの実装では、TIPは生ローマ字を512バイト程度（未確定子音は最大4バイトの
 余裕を持たせる）で分割し、一つのローマ字変換器を通して読みの欠落を防ぐ。

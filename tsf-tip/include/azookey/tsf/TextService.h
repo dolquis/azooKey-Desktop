@@ -235,6 +235,7 @@ class TextService final : public ITfTextInputProcessorEx,
   core::RomajiKanaConverter romaji_;
   std::string batch_raw_romaji_;
   bool batch_query_in_progress_{false};
+  bool batch_learning_allowed_{true};
   std::atomic<bool> batch_romaji_conversion_{false};
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
@@ -297,6 +298,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_has_known_host_generation_{false};
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
   std::atomic<bool> ipc_host_commit_segments_{false};
+  core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
 
   // Out-of-band IPC send queue drained ahead of the pending query: Cancel is
   // fire-and-forget, CommitObservation awaits an ACK (M6, M10).
@@ -352,7 +354,8 @@ class TextService final : public ITfTextInputProcessorEx,
                            const std::string& emoji_trigger = {});
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
-  void PostBatchConversion(const std::string& reading, const std::string& raw_romaji);
+  void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
+                           ITfContext* context);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
   POINT CandidateAnchorPoint();

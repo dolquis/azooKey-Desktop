@@ -111,6 +111,8 @@ struct QueryBatchConversionRequest {
   std::string mode{"neural"};
   bool auto_punctuation{false};
   uint32_t max_candidates{10};
+  bool ai_allowed{false};
+  bool external_ai_allowed{false};
 };
 
 struct QueryBatchConversionResponse {

@@ -189,6 +189,7 @@ void TipLocalSettings::Reload() noexcept {
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
       ai.privacy = core::ParseAiPrivacy(*json);
+      ai.backend = json->GetString("aiBackend").value_or("none");
       ai.timeout_ms = static_cast<int>(
           std::clamp<int64_t>(json->GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
       rewriters.symbol = json->GetBool("symbolRewriter").value_or(false);

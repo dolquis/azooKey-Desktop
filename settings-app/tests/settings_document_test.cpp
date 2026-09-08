@@ -48,6 +48,28 @@ std::string ReadText(const std::filesystem::path& path) {
 
 }  // namespace
 
+TEST(SettingsDocumentTest, PreservesAiPrivacyAndTimeoutAndFailsClosedOnInvalidPrivacy) {
+  const auto dir = TestDir("azookey_settings_ai_writeback");
+  const auto path = dir / "settings.json";
+  WriteText(
+      path,
+      R"({"privacy":{"mode":"custom","custom":{"aiCandidate":true,"externalAi":false}},"openAiTimeoutMs":45000})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  EXPECT_TRUE(saved.ok);
+  auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->GetInt("openAiTimeoutMs"), 45000);
+  ASSERT_TRUE(parsed->Find("privacy"));
+  EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "custom");
+  WriteText(path, R"({"privacy":{"mode":"custom","custom":{"externalAi":"false"}}})");
+  const auto invalid = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(azookey::settings::SaveSettingsDocument(path, invalid.settings).ok);
+  parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "secure");
+}
+
 TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValues) {
   const auto dir = TestDir("azookey_settings_profile_writeback");
   const auto path = dir / "settings.json";

@@ -1,9 +1,11 @@
 #include "azookey/host/AiBackend.h"
 
 #include <algorithm>
+#include <map>
 #include <thread>
 #include <utility>
 
+#include "azookey/core/Utf8.h"
 #include "azookey/ipc/Json.h"
 
 namespace azookey::host {
@@ -39,6 +41,8 @@ AiTransformResult ParseResult(const std::string& body) {
   const auto root = j::Parse(body);
   const auto* choices = root ? root->GetArray("choices") : nullptr;
   if (!choices || choices->empty()) return Failure(AiErrorClass::Parse);
+  if (const auto finish = choices->front().GetString("finish_reason"); finish && *finish != "stop")
+    return Failure(AiErrorClass::Parse);
   const auto* message = choices->front().Find("message");
   const auto content = message ? message->GetString("content") : std::nullopt;
   if (!content) return Failure(AiErrorClass::Parse);
@@ -48,11 +52,49 @@ AiTransformResult ParseResult(const std::string& body) {
     if (!value) return Failure(AiErrorClass::Parse);
     result = *value;
   } else {
+    const auto first = content->find_first_not_of(" \r\n\t");
+    if (first != std::string::npos && ((*content)[first] == '{' || (*content)[first] == '['))
+      return Failure(AiErrorClass::Parse);
     result = *content;  // Compatibility with providers that ignore response_format.
   }
   result = Trim(std::move(result));
   if (result.empty() || result.size() > 65536) return Failure(AiErrorClass::Parse);
   return {true, std::move(result), AiErrorClass::None};
+}
+AiTransformResult ApplyPunctuationPolicy(AiTransformResult result,
+                                         const AiTransformRequest& request) {
+  if (result.ok) {
+    if (result.result.empty() || result.result.size() > 65536) return Failure(AiErrorClass::Parse);
+    for (size_t pos = 0; pos < result.result.size();) {
+      char32_t cp{};
+      if (!core::DecodeNextUtf8(result.result, pos, cp) || cp == 0)
+        return Failure(AiErrorClass::Parse);
+    }
+  }
+  if (!result.ok || request.task != AiTask::Cleanup || request.auto_punctuation) return result;
+  const auto punctuation = [](char32_t cp) {
+    return cp == U'。' || cp == U'、' || cp == U'！' || cp == U'？' || cp == U'.' || cp == U',' ||
+           cp == U'!' || cp == U'?';
+  };
+  std::map<char32_t, size_t> remaining;
+  for (size_t pos = 0; pos < request.text.size();) {
+    char32_t cp{};
+    core::DecodeNextUtf8(request.text, pos, cp);
+    if (punctuation(cp)) ++remaining[cp];
+  }
+  std::string filtered;
+  for (size_t pos = 0; pos < result.result.size();) {
+    const auto begin = pos;
+    char32_t cp{};
+    core::DecodeNextUtf8(result.result, pos, cp);
+    if (!punctuation(cp) || remaining[cp] > 0) {
+      filtered.append(result.result, begin, pos - begin);
+      if (punctuation(cp)) --remaining[cp];
+    }
+  }
+  if (filtered.empty()) return Failure(AiErrorClass::Parse);
+  result.result = std::move(filtered);
+  return result;
 }
 }  // namespace
 
@@ -89,7 +131,9 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
   if (!request.ai_allowed) return Failure(AiErrorClass::BlockedBySecure);
   if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
   if (options.backend == "none") return Failure(AiErrorClass::Disabled);
-  if (request.text.empty() || request.text.size() + request.raw_romaji.size() > 65536)
+  if (request.text.empty() || request.text.size() + request.raw_romaji.size() +
+                                      request.left_context.size() + request.prompt.size() >
+                                  65536)
     return Failure(AiErrorClass::Parse);
   if (!options.include_context) request.left_context.clear();
   const auto deadline = std::chrono::steady_clock::now() +
@@ -101,7 +145,7 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
     auto result = local(request, cancel, deadline);
     if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
     if (std::chrono::steady_clock::now() >= deadline) return Failure(AiErrorClass::Timeout);
-    return result;
+    return ApplyPunctuationPolicy(std::move(result), request);
   }
   if (options.backend != "openai") return Failure(AiErrorClass::Disabled);
   if (options.api_key.empty()) return Failure(AiErrorClass::Auth);
@@ -113,7 +157,7 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
     if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
     if (std::chrono::steady_clock::now() >= deadline) return Failure(AiErrorClass::Timeout);
     if (response.error == AiErrorClass::None && response.status == 200)
-      return ParseResult(response.body);
+      return ApplyPunctuationPolicy(ParseResult(response.body), request);
     auto error = response.error;
     if (error == AiErrorClass::None) {
       error = response.status == 401 || response.status == 403 ? AiErrorClass::Auth

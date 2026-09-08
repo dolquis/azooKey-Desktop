@@ -237,6 +237,33 @@ class ThrowingLearningStore final : public azookey::learning::LearningStore {
 };
 }  // namespace
 
+TEST(InferenceEngineTest, LocalAiCleanupRealModelSmoke) {
+#ifndef AZOOKEY_AI_TEST_MODEL
+  GTEST_SKIP() << "Requires llama.cpp and an explicit AZOOKEY_ZENZAI_TEST_MODEL";
+#else
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        {});
+  azookey::host::ModelLoadOptions model;
+  model.path = AZOOKEY_AI_TEST_MODEL;
+  ASSERT_TRUE(engine.LoadModel(model));
+  azookey::host::AiTransformRequest request;
+  request.task = azookey::host::AiTask::Cleanup;
+  request.ai_allowed = true;
+  request.text = "きょうはいいてんきです";
+  request.raw_romaji = "kyouhaiitenkidesu";
+  azookey::host::AiBackendOptions options;
+  options.backend = "local-zenzai";
+  const auto result = azookey::host::AiBackend().Transform(
+      request, options, nullptr, [&](const auto& input, const auto* cancel, auto deadline) {
+        return engine.TransformLocal(input, cancel, deadline);
+      });
+  ASSERT_TRUE(result.ok) << static_cast<int>(result.error_class);
+  EXPECT_FALSE(result.result.empty());
+  EXPECT_EQ(result.result.find("。"), std::string::npos);
+  RecordProperty("cleanup_result", result.result);
+#endif
+}
+
 TEST(InferenceEngineTest, QueryWithLearningBoost) {
   const char* path = "azookey_host_engine_learning.tsv";
   std::remove(path);

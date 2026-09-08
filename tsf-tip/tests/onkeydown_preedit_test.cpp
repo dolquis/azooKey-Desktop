@@ -2353,6 +2353,24 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchSegmentSelectionCommitsTheWholeSentence) {
   EXPECT_EQ(attachment.composition_range.last_text, L"科二");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, BatchAiResultCommitsWithoutLearningUnalignedPunctuation) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField candidate;
+  candidate.reading = "に";
+  candidate.surface = "二。";
+  candidate.source = "llm";
+  h.service.set_cached_batch_segments_for_test({{"に", {candidate}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  EXPECT_EQ(attachment.composition_range.last_text, L"二。");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, BatchRawRomajiPreviewCommitsKanaReadingAsIs) {
   TextServiceHarness h;
   FakeRange range;

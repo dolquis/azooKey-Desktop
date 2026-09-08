@@ -28,6 +28,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
+#include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/SettingsLauncher.h"
@@ -1441,7 +1442,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             candidate_window_show_pending_ = true;
           }
           batch_query_in_progress_ = true;
-          PostBatchConversion(reading, batch_raw_romaji_);
+          PostBatchConversion(reading, batch_raw_romaji_, context);
         }
       } else {
         // Flush any pending romaji so the reading is complete.
@@ -2096,6 +2097,16 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   } else {
     pending_commit_observation_.reset();
   }
+  // AI output can contain generated punctuation without a reading alignment.
+  if (!batch_learning_allowed_ || chosen.field.source == "llm" ||
+      chosen.field.source == "privacy-fallback" ||
+      (pending_commit_observation_ &&
+       std::any_of(pending_commit_observation_->segments.begin(),
+                   pending_commit_observation_->segments.end(), [](const auto& segment) {
+                     return segment.chosen.source == "llm" ||
+                            segment.chosen.source == "privacy-fallback";
+                   })))
+    pending_commit_observation_.reset();
   // Defer clearing preedit and recording learning until the synchronous commit
   // edit session has actually completed.  A request accepted asynchronously is
   // not enough: SetText/EndComposition may still fail and the user input must
@@ -2845,6 +2856,11 @@ void TextService::ServeConnection() {
 void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
                                const std::string& raw_romaji, const std::string& mode) {
   using namespace azookey::ipc;
+  core::AiPrivacy privacy;
+  {
+    std::lock_guard lock(ipc_mtx_);
+    privacy = ipc_pending_ai_privacy_;
+  }
   std::vector<BatchConversionSegment> segments;
   const auto trace = CreateIpcClientId();
   // Split raw input first so every AI request keeps its corresponding kana.
@@ -2874,6 +2890,8 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     request.reading = ApplyDefaultCompositionPunctuation(chunk.reading);
     request.raw_romaji = chunk.raw_romaji;
     request.mode = mode;
+    request.ai_allowed = privacy.ai;
+    request.external_ai_allowed = privacy.external;
     request.max_candidates = max_candidates_.load(std::memory_order_relaxed);
     request.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
     Envelope envelope;
@@ -2890,7 +2908,9 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       failed = true;
       break;
     }
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    const auto wait_ms =
+        mode == "ai-cleanup" ? local_settings_.AiSnapshot().timeout_ms + 5000 : 30000;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
     std::optional<QueryBatchConversionResponse> result;
     while (std::chrono::steady_clock::now() < deadline && ipc_client_.IsConnected()) {
       bool stale;
@@ -2973,8 +2993,31 @@ void TextService::PostQueryCandidates(const std::string& reading, bool live,
   ipc_cv_.notify_one();
 }
 
-void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji) {
+void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
+                                      ITfContext* context) {
+  const auto ai_settings = local_settings_.AiSnapshot();
+  auto privacy = ai_settings.privacy;
+  if (batch_conversion_ai_cleanup_.load(std::memory_order_relaxed)) {
+    const auto app = foreground_app_.Get();
+    if (!app.resolved || !AiInputAllowed(context, client_id_)) privacy = {};
+    const auto settings = local_settings_.Snapshot();
+    if (settings.profiles) {
+      const auto profile = settings.profiles->Resolve(app, WindowsAppNameEqual);
+      const ipc::json::Value value(profile);
+      const auto mode = value.GetString("privacyMode").value_or("inherit");
+      if (mode == "secure")
+        privacy = {};
+      else if (mode == "private")
+        privacy.external = false;
+      const auto backend = value.GetString("aiBackend").value_or("auto");
+      if (backend == "none" && ai_settings.backend != "none") privacy = {};
+      if (backend == "local-zenzai") privacy.external = false;
+    }
+  }
+  batch_learning_allowed_ =
+      !batch_conversion_ai_cleanup_.load(std::memory_order_relaxed) || privacy.external;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
+  ipc_pending_ai_privacy_ = privacy;
   ipc_pending_reading_ = reading;
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
@@ -3211,6 +3254,7 @@ void TextService::RefreshBatchPreeditSurface() {
 }
 
 void TextService::ClearBatchState() {
+  batch_learning_allowed_ = true;
   shown_batch_segments_.clear();
   batch_segment_selections_.clear();
   batch_segment_cursor_ = 0;

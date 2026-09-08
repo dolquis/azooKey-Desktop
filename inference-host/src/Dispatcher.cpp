@@ -460,25 +460,64 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
   ipc::QueryBatchConversionResponse res;
-  for (const auto& reading : core::SplitBatchConversion(parsed->reading)) {
-    if (cancel->load(std::memory_order_acquire)) break;
-    auto candidates = engine_->QueryCandidates(reading, "", NowSec(), cancel.get(),
-                                               parsed->max_candidates, false);
-    ipc::BatchConversionSegment segment;
-    segment.reading = reading;
-    for (auto& candidate : candidates) segment.candidates.push_back(ToField(candidate));
-    if (parsed->max_candidates > 0 && segment.candidates.size() > parsed->max_candidates) {
-      segment.candidates.resize(parsed->max_candidates);
+  if (parsed->mode == "ai-cleanup") {
+    AiBackendOptions options;
+    core::AiPrivacy privacy{true, true};
+    {
+      std::lock_guard lock(*config_.update_config_mutex);
+      if (settings_store_) {
+        const auto& settings = settings_store_->settings();
+        options.backend = settings.ai_backend;
+        options.endpoint = settings.open_ai_api_endpoint;
+        options.api_key = settings.open_ai_api_key;
+        options.model = settings.open_ai_model;
+        options.timeout_ms = settings.open_ai_timeout_ms;
+        options.include_context = settings.include_context_in_ai_transform;
+        privacy = settings.ai_privacy;
+      }
     }
-    if (segment.candidates.empty()) {
-      ipc::CandidateField fallback;
-      fallback.reading = reading;
-      fallback.surface = reading;
-      fallback.source = "fallback";
-      segment.candidates.push_back(std::move(fallback));
+    AiTransformRequest transform;
+    transform.task = AiTask::Cleanup;
+    if (parsed->raw_romaji.empty()) options.backend = "none";
+    transform.text = parsed->reading;
+    transform.raw_romaji = parsed->raw_romaji;
+    transform.auto_punctuation = parsed->auto_punctuation;
+    transform.ai_allowed = privacy.ai && parsed->ai_allowed;
+    transform.external_allowed = privacy.external && parsed->external_ai_allowed;
+    const auto result = config_.ai_backend->Transform(
+        transform, options, cancel.get(),
+        [this](const AiTransformRequest& local, const std::atomic<bool>* flag,
+               AiDeadline deadline) { return engine_->TransformLocal(local, flag, deadline); });
+    if (result.ok || !transform.ai_allowed) {
+      ipc::CandidateField candidate;
+      candidate.reading = parsed->reading;
+      candidate.surface = result.ok ? result.result : parsed->reading;
+      candidate.source = result.ok ? "llm" : "privacy-fallback";
+      res.full_surface = candidate.surface;
+      res.segments.push_back({parsed->reading, {std::move(candidate)}});
     }
-    res.full_surface += segment.candidates.front().surface;
-    res.segments.push_back(std::move(segment));
+  }
+  if (res.segments.empty()) {
+    for (const auto& reading : core::SplitBatchConversion(parsed->reading)) {
+      if (cancel->load(std::memory_order_acquire)) break;
+      auto candidates = engine_->QueryCandidates(reading, "", NowSec(), cancel.get(),
+                                                 parsed->max_candidates, false);
+      ipc::BatchConversionSegment segment;
+      segment.reading = reading;
+      for (auto& candidate : candidates) segment.candidates.push_back(ToField(candidate));
+      if (parsed->max_candidates > 0 && segment.candidates.size() > parsed->max_candidates) {
+        segment.candidates.resize(parsed->max_candidates);
+      }
+      if (segment.candidates.empty()) {
+        ipc::CandidateField fallback;
+        fallback.reading = reading;
+        fallback.surface = reading;
+        fallback.source = "fallback";
+        segment.candidates.push_back(std::move(fallback));
+      }
+      res.full_surface += segment.candidates.front().surface;
+      res.segments.push_back(std::move(segment));
+    }
   }
   if (cancel->load(std::memory_order_acquire)) {
     res = {};

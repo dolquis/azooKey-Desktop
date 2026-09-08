@@ -7,6 +7,7 @@
 #include <iostream>
 #include <utility>
 
+#include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
@@ -767,11 +768,19 @@ AiTransformResult InferenceEngine::TransformLocal(const AiTransformRequest& requ
   std::lock_guard lock(converter_call_mutex_);
   if (cancel && cancel->load()) return {false, {}, AiErrorClass::Canceled};
   if (std::chrono::steady_clock::now() >= deadline) return {false, {}, AiErrorClass::Timeout};
-  const auto candidates = converter->Convert(request.text, context);
-  if (candidates.empty() || candidates.front().surface.empty() ||
-      candidates.front().source != core::CandidateSource::Model)
-    return {false, {}, AiErrorClass::Parse};
-  return {true, candidates.front().surface, AiErrorClass::None};
+  std::string result;
+  for (const auto& chunk : core::SplitBatchConversion(request.text)) {
+    if (cancel && cancel->load()) return {false, {}, AiErrorClass::Canceled};
+    if (std::chrono::steady_clock::now() >= deadline) return {false, {}, AiErrorClass::Timeout};
+    const auto candidates = converter->Convert(chunk, context);
+    if (candidates.empty() || candidates.front().surface.empty() ||
+        candidates.front().source != core::CandidateSource::Model)
+      return {false, {}, AiErrorClass::Parse};
+    result += candidates.front().surface;
+    context.preceding_text =
+        TakeLastUtf8Codepoints(context.preceding_text + candidates.front().surface, 128);
+  }
+  return {true, std::move(result), AiErrorClass::None};
 }
 
 bool InferenceEngine::CommitSegmentsObservation(

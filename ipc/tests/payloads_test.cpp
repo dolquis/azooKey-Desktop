@@ -86,6 +86,25 @@ TEST(PayloadsTest, HostCapabilitiesRemainOptional) {
   EXPECT_TRUE(legacy->capabilities.empty());
 }
 
+TEST(PayloadsTest, BatchAiPermissionsFailClosedAndRoundTrip) {
+  const auto legacy = azookey::ipc::ParseQueryBatchConversionRequest(R"({"reading":"かな"})");
+  ASSERT_TRUE(legacy);
+  EXPECT_FALSE(legacy->ai_allowed);
+  EXPECT_FALSE(legacy->external_ai_allowed);
+  auto request = *legacy;
+  request.ai_allowed = request.external_ai_allowed = true;
+  const auto parsed = azookey::ipc::ParseQueryBatchConversionRequest(
+      azookey::ipc::BuildQueryBatchConversionRequest(request));
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->ai_allowed);
+  EXPECT_TRUE(parsed->external_ai_allowed);
+  const auto invalid = azookey::ipc::ParseQueryBatchConversionRequest(
+      R"({"reading":"かな","ai_allowed":"true","external_ai_allowed":true})");
+  ASSERT_TRUE(invalid);
+  EXPECT_FALSE(invalid->ai_allowed);
+  EXPECT_FALSE(invalid->external_ai_allowed);
+}
+
 TEST(PayloadsTest, CommitSegmentsRoundTripAndRejectsMalformedSegment) {
   using namespace azookey::ipc;
   CommitSegmentsObservationRequest request;

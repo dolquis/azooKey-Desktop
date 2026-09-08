@@ -26,6 +26,7 @@ struct TipRewriterSettings {
 };
 struct TipAiSettings {
   core::AiPrivacy privacy;
+  std::string backend{"none"};
   int timeout_ms{30000};
 };
 

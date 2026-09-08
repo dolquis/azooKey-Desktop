@@ -124,11 +124,9 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
   } else {
     BackendPreferenceCombo().SelectedIndex(-1);
     Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
-    auto message = resources.GetString(L"UnsupportedBackendPrefix") +
-                   winrt::to_hstring(result.settings.hidden_backend_preference);
-    if (result.settings.hidden_backend_preference == "cuda") {
-      message = message + L"\n" + resources.GetString(L"CudaDowngradeNote");
-    }
+    const auto message = resources.GetString(L"UnsupportedBackendPrefix") +
+                         winrt::to_hstring(result.settings.hidden_backend_preference) + L"\n" +
+                         resources.GetString(L"BackendDowngradeNote");
     UnsupportedBackendText().Text(message);
     UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
   }
@@ -226,6 +224,10 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   SaveButton().IsEnabled(true);
   SaveProgressRing().IsActive(false);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+  // The disk save is authoritative, even if notifying the Host failed.
+  if (save_result.ok && settings.model_backend_preference) {
+    UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+  }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;
   if (!save_result.ok) {
     ShowStatus(

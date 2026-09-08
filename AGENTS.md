@@ -5,7 +5,7 @@
 ## 最優先の安全規則
 
 - ユーザーの未コミット変更を勝手に戻さない。同じファイルで交差する場合は差分を確認し、最小限の編集にする。
-- 作業開始時、進捗確認時、PR 前に `git status -sb` を確認する。最新の remote 状態が判断に必要な場合は `git fetch origin` で更新し、作業中ブランチを切り替えずに `origin/main` との差を確認する。
+- 作業開始時、進捗確認時、PR 前に `git status -sb` を確認する。remote の進捗・PR のマージ判定・レビュー base の確定前には `git fetch origin` を行い、`main` と `origin/main`、作業ブランチと `origin/main` の差を切替なしで確認する。同じ取得済み snapshot 内のローカル検証では繰り返さず、別作業からの再開や remote 更新の通知後は再取得する。
 - secret、credential、token、`.env`、ローカル設定、生成物、Context-Mode の DB / cache、CodeGraph の index を編集、index、commit しない。
 - `main` へ直接 push しない。新規 PR は Draft とし、通常は `dolquis/<repository-name>` の `main` 向けに作成する。base / head の repository と branch、compare 範囲を確認し、同じ head の PR を重複作成しない。
 - フォーク元や upstream への PR、`legacy/` の変更は、実行前にユーザーへ確認する。
@@ -33,13 +33,11 @@
 - 公開 API、schema、永続化、認証、権限、安全設計、データ削除、課金、通知、外部連携では、構造と参照元と関連文書を確認してから変更する。
 - GitHub 操作は各ハーネスで利用可能な GitHub 連携を優先し、必要に応じて `gh` CLI を使う。
 
-対象 checkout の識別、出力の絞り方、ローカル分担の詳細は `docs/handoff/agent-tooling-setup.md` に従う。
+対象 checkout の識別と出力の絞り方は `docs/handoff/agent-tooling-setup.md` に従う。
 
 ## ローカルサブエージェント
 
-- 品質改善または時間短縮が見込める独立した調査、実装、レビューは、利用可能な枠内で積極的に分担する。目的、対象と非対象、書込み境界、成果形式、検証条件を渡し、親が統合と最終検証を担う。
-- PR 本数、Issue 順序、完了条件と承認条件を保持する。単一の小修正や直列依存だけの作業は分割せず、全履歴を無条件に渡さない。同一ファイル、build directory、共有 Serena の対象変更を競合させない。
-- このローカル分担は Codex Cloud の起動や新しいユーザー所有タスクの作成とは区別する。
+ローカル分担の規約は `docs/linear-conventions.md` §2.1、azooKey 固有の分担例は `docs/handoff/agent-tooling-setup.md`「ローカル分担の例」を参照する。
 
 ## セルフレビューと PR
 

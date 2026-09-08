@@ -1,6 +1,7 @@
 # エージェント用ツールのセットアップと診断
 
 本書は、Claude Code と Codex が azooKey-Desktop の調査、Windows ビルド、実機確認で使うホスト側ツールの恒常 runbook である。
+本書は `AGENTS.md`「調査と実装」「ローカルサブエージェント」から参照される。
 標準のビルド、CTest、bench、TIP 登録コマンドは `README.md`、失敗時の切り分けは `docs/debugging.md` に置き、本書ではエージェント固有の接続条件と調査手順を扱う。
 
 ## 設定の正典
@@ -61,18 +62,17 @@ UI Automation は TIP の実アプリ挙動を確認する補助である。
 
 ## 調査対象とツールの選択
 
-本節は `AGENTS.md` の調査手順から参照される。
 Context-Mode、CodeGraph、Serena はホスト側の登録と呼出可否を確認し、repo へ重複登録しない。
 
 | 対象 | 手順 |
 |---|---|
 | 既知の文書、設定、文字列 | Read / `rg` で対象パスと節を絞る |
 | C++ の構造や影響範囲 | 対象 checkout に `.codegraph/` があり利用可能なら CodeGraph を先に使う。`projectPath` は実際の checkout、初回の `maxFiles` は 1〜3 とする |
-| 定義と参照 | Serena の絶対パスと言語を確認して必要な symbol だけ取得する。既知の symbol は `relative_path` と `max_matches: 1` で絞り、本文不要なら `include_body: false` とする |
+| 定義と参照 | Serena の絶対パスと言語を確認する。既知の symbol は `name_path_pattern` と `relative_path` で絞り、本文不要なら `include_body: false` とする。実際のツール schema が対応する場合だけ `max_matches: 1` を追加する |
 | 大量の文書、diff、ログ | Context-Mode 内で解析し、必要な証拠だけ返す。対象 cwd または絶対パスを指定し、repo ごとに取得と検索の対象を区別する |
 
 index 不在、ツール不在、対象不一致の場合は、限定した `rg`、実ファイル、関連検証へ戻る。
-index の作成や別 checkout の index による代用は行わない。
+index は自動作成せず、作成はユーザー判断とする。別 checkout の index を対象ソースの代用にしない。
 Serena の診断は C++ の build / test / lint の代替にしない。
 一度取得した正確なソースは再利用し、鮮度警告、編集、未解決の疑問がある範囲を再取得する。
 
@@ -90,6 +90,4 @@ Serena の診断は C++ の build / test / lint の代替にしない。
 ## ローカル分担の例
 
 Host 実装と TIP / IPC 利用側の影響確認、学習処理と復旧テストの検討、独立した差分レビューを分担候補にする。
-各担当へ関連する仕様と証拠を渡し、同一ファイルと同じ build directory の書込みを分離する。
-共有 Serena の対象切替は親が直列に管理する。
-親は境界間の整合と最終検証を担当し、実機入力や管理者操作の承認条件を各担当へ引き継ぐ。
+分担時の共通規約は `docs/linear-conventions.md` §2.1 に従う。azooKey 固有の引継ぎ対象には、実機入力や管理者操作の承認条件を含める。

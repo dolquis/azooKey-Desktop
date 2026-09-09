@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../core/tests/EtwCapture.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/tsf/TextService.h"
 
@@ -2369,6 +2371,64 @@ TEST(TsfTipOnKeyDownPreeditTest, InFlightQueryCancelReachesHostBeforeQueryReturn
   allow_query_return.store(true);
   h.service.stop_ipc_worker_for_test();
   server.Stop();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FailedOutOfBandHandshakeStillCompletesCancelledBatchTrace) {
+  std::atomic<uint64_t> query_id{0};
+  const auto captured = azookey::testing::CaptureEtw([&] {
+    const std::string pipe_name =
+        "\\\\.\\pipe\\azookey-tip-cancel-trace-test-" + std::to_string(GetCurrentProcessId());
+    std::atomic<unsigned> handshakes{0};
+    std::atomic<bool> release_query{false};
+    azookey::ipc::NamedPipeServer server;
+    ASSERT_TRUE(server.Start(
+        pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+          auto res = req;
+          if (req.type == azookey::ipc::MessageType::Handshake) {
+            azookey::ipc::HandshakeResponse payload;
+            payload.accepted = ++handshakes == 1;
+            payload.batch_romaji_conversion = true;
+            res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+            return res;
+          }
+          if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+          query_id.store(req.request_id);
+          const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+          while (!release_query.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          return std::nullopt;
+        }));
+    TextServiceHarness h;
+    h.service.set_batch_romaji_options_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return query_id.load() != 0; }));
+    ASSERT_TRUE(h.Press(VK_ESCAPE));
+    EXPECT_TRUE(WaitUntil([&] { return handshakes.load() >= 2; }));
+    // Disconnecting after the rejected OOB handshake must not replace the
+    // already final local cancellation with a Disconnected completion.
+    h.service.stop_ipc_worker_for_test();
+    release_query = true;
+    server.Stop();
+  });
+  if (captured.status == ERROR_ACCESS_DENIED) GTEST_SKIP() << "ETW session requires elevation";
+  ASSERT_EQ(captured.status, ERROR_SUCCESS);
+  ASSERT_NE(query_id.load(), 0u);
+  unsigned completions = 0;
+  for (const auto& event : captured.events) {
+    if (event.id != 3001) continue;
+    ASSERT_EQ(event.data.size(), 56u);
+    uint64_t id = 0, result = 0;
+    std::memcpy(&id, event.data.data(), sizeof(id));
+    if (id != query_id.load()) continue;
+    std::memcpy(&result, event.data.data() + 48, sizeof(result));
+    EXPECT_EQ(result, static_cast<uint64_t>(azookey::core::EtwResult::Cancelled));
+    ++completions;
+  }
+  EXPECT_EQ(completions, 1u);
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, BatchSegmentSelectionCommitsTheWholeSentence) {

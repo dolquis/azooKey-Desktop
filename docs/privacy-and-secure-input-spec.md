@@ -383,7 +383,7 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
     "disableLearningInPrivateMode": true,
     "disableExternalAIInPrivateMode": true,
     "redactLogs": true,
-    "crashReportConsent": "local",
+    "crashReportConsent": "off",
     "secureApps": [],
     "secureUrlPatterns": [],
     "privateApps": [],
@@ -399,14 +399,15 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 各軸の既定は §5.2 の private 相当の安全側に揃え、欠落キーは schema 既定で補完される。
 `custom` の解決順・不変条件（`aiCandidate = false` で `externalAi` を強制 OFF）は §5.2 を正典とする。
 
-`crashReportConsent`（M33）は WER クラッシュダンプの収集同意を表す。本キーは
+`crashReportConsent`（M33）は azooKey 管理クラッシュダンプの収集同意を表す。本キーは
 schema をここで正典として定義し、値の意味（`off` / `local` の挙動・ダンプ最小化・
-保持運用）は `docs/sideload-packaging-spec.md` §8.3 を正典とする。既定 `local`
-はローカル保存のみで自動送信しない（§2「ローカル完結」「明示同意なしにクラウド送信しない」）。
+保持運用）は `docs/sideload-packaging-spec.md` §8.3 を正典とする。既定は `off` で、
+明示的な `local` 選択時のみ、本文・スタック・レジスタなどのメモリを含まない
+メタデータをローカル保存する。自動送信は行わない。
 **M33 の enum は `off` / `local` のみ**とし、送信（upload）は schema 化しない。送信経路は
 将来 M で実装する際に、**バージョン / タイムスタンプ付きの明示同意レコード**として別途導入する
-（bare な `"upload"` 値を先行して永続化しない。理由は §8.3）。ローダは未知値を `local` に
-正規化する（前方互換は `docs/sideload-packaging-spec.md` §3.6 拡張方針）。
+（bare な `"upload"` 値を先行して永続化しない。理由は §8.3）。ローダは欠落・未知値・型不正を
+`off` に正規化し、設定ファイルの読み取り・解析失敗時も収集を停止する。
 **導入 M の区別**: 共有AI基盤では`mode`と`custom.aiCandidate` / `custom.externalAi`を
 先行導入する。TIPの入力scopeがpassword/PIN、または判定不能ならAI送信を抑止する。
 hostはリクエストの許可と設定の許可の積を取り、TIPから許可を引き上げられない。
@@ -453,7 +454,7 @@ schema fragment（`properties.privacy` への追加）:
       "crashReportConsent": {
         "type": "string",
         "enum": ["off", "local"],
-        "default": "local"
+        "default": "off"
       },
       "secureApps": {
         "type": "array",

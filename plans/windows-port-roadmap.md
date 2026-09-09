@@ -980,16 +980,19 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: 本番環境の観測性とクラッシュ収集。
 - **前提**: Phase 6 完了（観測性はパッケージング非依存。Store MSIX の M28 には依存しない。spec §0）。
-- **変更対象**: `core/src/EtwLogger.cpp`（新規）、`inference-host/src/CrashHandler.cpp`
-  （新規、`SetUnhandledExceptionFilter`）、`settings/mvp-settings.schema.json`
+- **変更対象**: `core/src/EtwLogger.cpp`、`core/src/CrashReporting.cpp`、
+  `core/src/CrashRetention.cpp`、`settings/mvp-settings.schema.json`
   （`privacy.crashReportConsent` subfield を先行導入。§3.6 / `privacy-and-secure-input-spec.md` §7）。
 - **実装範囲**: `docs/sideload-packaging-spec.md` §7、§8。
 - **受け入れ条件**:
   - `wpr -start` でトレース取得、`wpa` で Event ID が見える
   - ETW トレース（`.etl`）に入力本文（`reading` / `surface` 等）が含まれない
     （build / env / mode によらず。spec §7.2.1）
-  - Host クラッシュで `%LOCALAPPDATA%\azooKey\crashes\*.dmp` が残る
-  - `privacy.crashReportConsent = off` で azooKey 管理のダンプ
+  - `privacy.crashReportConsent = local` への明示 opt-in 後、Host クラッシュで
+    `%LOCALAPPDATA%\azooKey\crashes\*.dmp` が残る
+  - ダンプは許可したメタデータだけを含み、本文を含み得るメモリ・スタック・レジスタを
+    収集しない（spec §8.1）
+  - 既定の `privacy.crashReportConsent = off` で azooKey 管理のダンプ
     （`%LOCALAPPDATA%\azooKey\crashes\`）が書かれない（OS の WER / LocalDumps はマシン
     ポリシーで azooKey 同意スコープ外。azooKey は自身向け LocalDumps 登録をしない。spec §8.3）
   - ダンプ保持上限（既定 最新 5 / 50 MB / 30 日）超過で古いダンプが削除される（spec §8.2）

@@ -14,6 +14,7 @@ struct EditableSettings {
   std::string hidden_backend_preference;
   std::string model_selected_path;
   std::string log_level{"info"};
+  std::string crash_report_consent{"off"};
 };
 
 enum class SettingsDocumentStatus {

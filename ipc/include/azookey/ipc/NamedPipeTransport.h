@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "azookey/core/EtwLogger.h"
 #include "azookey/ipc/Messages.h"
 
 namespace azookey::ipc {
@@ -102,6 +103,9 @@ class NamedPipeClient {
   bool IsConnected() const;
 
   bool Send(const Envelope& envelope);
+  // Set before connecting or starting the worker; metadata only, never wire data.
+  void SetTraceClientId(const core::EtwGuid& client) noexcept;
+  void FinishTraceRequest(std::uint64_t request, core::EtwResult outcome);
   std::optional<Envelope> Receive();
   // Wait up to `timeout_ms` for the complete frame. An idle timeout preserves
   // the connection and unread response; a timeout after the frame starts drops

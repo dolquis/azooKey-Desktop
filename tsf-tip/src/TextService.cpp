@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <iterator>
 #include <new>
@@ -19,6 +20,7 @@
 #include <utility>
 
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/EtwLogger.h"
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
 #include "azookey/core/PlatformPaths.h"
@@ -32,10 +34,21 @@
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/SettingsLauncher.h"
+#include "azookey/tsf/TextServiceFactory.h"
 
 namespace {
 
 constexpr const char* kTipVersion = "0.1.0";
+
+azookey::core::EtwGuid TraceGuid(const std::string& value) {
+  azookey::core::EtwGuid bytes{};
+  GUID guid{};
+  if (value.size() != 36) return bytes;
+  const std::wstring wide = L"{" + std::wstring(value.begin(), value.end()) + L"}";
+  if (SUCCEEDED(CLSIDFromString(wide.c_str(), &guid)))
+    std::memcpy(bytes.data(), &guid, sizeof(guid));
+  return bytes;
+}
 constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
 constexpr uint32_t kCancelConnectTimeoutMs = 200;
 constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
@@ -638,6 +651,7 @@ CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect, HWND tex
 #endif
 
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
+  ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
   if (ipc_client_id_.empty()) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_client_id_fallback");
@@ -740,11 +754,15 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   } catch (...) {
     // Local settings are optional; allocation/path failures leave defaults.
   }
+  core::EtwGuid profile{};
+  std::memcpy(profile.data(), &kTextServiceProfileGuid, sizeof(kTextServiceProfileGuid));
+  core::EtwLogger::LogActivate(client_id_, profile);
   return S_OK;
 }
 
 STDMETHODIMP TextService::Deactivate() {
   AZOOKEY_ASSERT_UI_THREAD();
+  core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
   HRESULT result = UnadviseTextServiceSinks();
 
@@ -1675,6 +1693,8 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
                                                   ITfComposition* pComposition) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (composition_ == pComposition) {
+    if (!etw_composition_end_in_progress_)
+      core::EtwLogger::LogCompositionEnd(etw_composition_length_, false);
     composition_->Release();
     composition_ = nullptr;
   }
@@ -2001,6 +2021,7 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
       return;
     }
     if (composition_) {
+      core::EtwLogger::LogCompositionEnd(etw_composition_length_, false);
       composition_->Release();
       composition_ = nullptr;
     }
@@ -2258,6 +2279,8 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
     }
   }
 
+  if (steady_clock::now() >= deadline)
+    ipc_client_.FinishTraceRequest(expected_request_id, core::EtwResult::Timeout);
   return false;
 }
 
@@ -2295,7 +2318,11 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_send_failed");
     return false;
   }
+  const auto handshake_deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   auto hres = client.ReceiveWithTimeout(timeout_ms);
+  if (!hres && std::chrono::steady_clock::now() >= handshake_deadline)
+    client.FinishTraceRequest(henv.request_id, core::EtwResult::Timeout);
   auto hpayload = hres ? ParseHandshakeResponse(hres->payload_json) : std::nullopt;
   if (!hpayload || !hpayload->accepted) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_rejected");
@@ -2382,10 +2409,13 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
+  // Local cancellation is final even when the best-effort OOB delivery fails.
+  ipc_client_.FinishTraceRequest(target_request_id, core::EtwResult::Cancelled);
   const auto pipe_name = IpcPipeName();
   if (pipe_name.empty()) return false;
 
   NamedPipeClient cancel_client;
+  cancel_client.SetTraceClientId(TraceGuid(ipc_client_id_));
   if (!cancel_client.Connect(pipe_name, connect_timeout_ms)) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_cancel_connect_failed",
                {{"target_request_id", target_request_id}});
@@ -2421,6 +2451,18 @@ void TextService::RearmPendingQuery(uint64_t req_id) {
 }
 
 void TextService::IpcWorkerThread() {
+  // A scoped observer only: /EHsc cannot safely recover from an asynchronous
+  // fault across the worker's C++ locks/RAII. Preserve application/OS handling.
+  // Keep the numeric code available to a debugger without logging on this path.
+  static_assert(std::atomic<uint32_t>::is_always_lock_free);
+  __try {
+    IpcWorkerThreadImpl();
+  } __except ((ipc_worker_exception_code_.store(GetExceptionCode(), std::memory_order_relaxed),
+               EXCEPTION_CONTINUE_SEARCH)) {
+  }
+}
+
+void TextService::IpcWorkerThreadImpl() {
   AZOOKEY_BIND_IPC_THREAD();
   using namespace azookey::ipc;
 
@@ -2745,6 +2787,7 @@ void TextService::ServeConnection() {
       continue;
     }
     if (!qres && query_deadline_exceeded && !is_batch) {
+      ipc_client_.FinishTraceRequest(req_id, core::EtwResult::Timeout);
       ipc::Envelope cancel_env;
       cancel_env.version = 1;
       cancel_env.request_id = next_id++;
@@ -2966,6 +3009,8 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       result->segments.push_back({request.reading, {std::move(candidate)}});
     }
     if (!result || result->partial || result->canceled || result->segments.empty()) {
+      if (!result && std::chrono::steady_clock::now() >= deadline)
+        ipc_client_.FinishTraceRequest(active_id, core::EtwResult::Timeout);
       if (!result || !result->canceled) {
         SendCancelOutOfBand(active_id);
         ipc_client_.Disconnect();
@@ -3454,7 +3499,9 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         // EndComposition finalizes the text in the document.
         ITfComposition* comp = service_->composition_;
         comp->AddRef();
+        service_->etw_composition_end_in_progress_ = true;
         const HRESULT end_hr = comp->EndComposition(ec);
+        service_->etw_composition_end_in_progress_ = false;
         if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
           service_->composition_ = nullptr;
           comp->Release();
@@ -3465,6 +3512,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           restore_pending_commit();
           return end_hr;
         }
+        core::EtwLogger::LogCompositionEnd(surface.size(), true);
         if (committed_range) {
           TF_SELECTION sel{};
           sel.range = committed_range;
@@ -3514,13 +3562,16 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 
         ITfComposition* comp = service_->composition_;
         comp->AddRef();
+        service_->etw_composition_end_in_progress_ = true;
         const HRESULT end_hr = comp->EndComposition(ec);
+        service_->etw_composition_end_in_progress_ = false;
         if (SUCCEEDED(end_hr) && service_->composition_ == comp) {
           service_->composition_ = nullptr;
           comp->Release();
         }
         comp->Release();
         if (FAILED(end_hr)) return end_hr;
+        core::EtwLogger::LogCompositionEnd(service_->etw_composition_length_, false);
       }
       return S_OK;
     }
@@ -3546,6 +3597,8 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       sel.range->Release();
       pCtxComp->Release();
       if (FAILED(hr) || !service_->composition_) return hr;
+      core::EtwLogger::LogCompositionStart(kana.size());
+      service_->etw_composition_length_ = kana.size();
     }
 
     // Update composition text.
@@ -3558,6 +3611,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       pRange->Release();
       return set_text_hr;
     }
+    service_->etw_composition_length_ = kana.size();
 
     // Cache the caret screen position for the candidate window anchor (M5/M19).
     {

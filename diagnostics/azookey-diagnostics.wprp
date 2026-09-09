@@ -11,6 +11,10 @@
       <BufferSize Value="1024" />
       <Buffers Value="20" />
     </SystemCollector>
+    <EventCollector Id="EventCollector_AzooKey" Name="azooKey ETW">
+      <BufferSize Value="64" />
+      <Buffers Value="16" />
+    </EventCollector>
 
     <SystemProvider Id="SystemProvider_AzooKeyDiagnostics">
       <Keywords>
@@ -25,6 +29,7 @@
         <Keyword Value="Registry" />
       </Keywords>
     </SystemProvider>
+    <EventProvider Id="EventProvider_AzooKey" Name="89553f1c-7d18-4a6d-a720-534921c8b730" Level="5" />
 
     <Profile
       Id="AzooKeyDiagnostics.Verbose.File"
@@ -36,6 +41,11 @@
         <SystemCollectorId Value="SystemCollector_AzooKeyDiagnostics">
           <SystemProviderId Value="SystemProvider_AzooKeyDiagnostics" />
         </SystemCollectorId>
+        <EventCollectorId Value="EventCollector_AzooKey">
+          <EventProviders>
+            <EventProviderId Value="EventProvider_AzooKey" />
+          </EventProviders>
+        </EventCollectorId>
       </Collectors>
     </Profile>
 

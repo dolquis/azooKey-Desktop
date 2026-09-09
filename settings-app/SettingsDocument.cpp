@@ -175,6 +175,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
           if (field == "mode") {
             valid = valid &&
                     IsStringEnum(setting, {"normal", "private", "secure", "offline", "custom"});
+          } else if (field == "crashReportConsent") {
+            // Consent is sanitized independently of the existing AI privacy axes.
+            continue;
           } else if (field == "custom" && setting.IsObject()) {
             for (const auto& [axis, enabled] : setting.AsObject())
               valid = valid && (axis == "aiCandidate" || axis == "externalAi") && enabled.IsBool();
@@ -188,6 +191,14 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
         warnings->push_back("invalid privacy settings were restricted to secure");
         continue;
       }
+      auto privacy = value.AsObject();
+      if (const auto consent = privacy.find("crashReportConsent"); consent != privacy.end() &&
+          !IsStringEnum(consent->second, {"off", "local"})) {
+        consent->second = j::Value("off");
+        warnings->push_back("invalid crash report consent was disabled");
+      }
+      output.emplace(key, j::Value(std::move(privacy)));
+      continue;
     } else if (key == "backendPreference") {
       valid = IsStringEnum(value, {"auto", "cpu", "cuda", "vulkan", "winml", "directml", "npu"});
     } else if (key == "epPreference") {
@@ -300,6 +311,11 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
 
 EditableSettings ExtractEditableSettings(const j::Object& root) {
   EditableSettings settings;
+  if (const auto privacy = root.find("privacy"); privacy != root.end() && privacy->second.IsObject()) {
+    if (const auto consent = privacy->second.AsObject().find("crashReportConsent");
+        consent != privacy->second.AsObject().end() && consent->second.IsString())
+      settings.crash_report_consent = consent->second.AsString();
+  }
   if (const auto it = root.find("logLevel"); it != root.end() && it->second.IsString()) {
     settings.log_level = it->second.AsString();
   }
@@ -360,6 +376,10 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
                                         const EditableSettings& settings,
                                         std::chrono::milliseconds lock_timeout) {
   SettingsSaveResult result;
+  if (settings.crash_report_consent != "off" && settings.crash_report_consent != "local") {
+    result.error = "invalid crash report consent";
+    return result;
+  }
   if (settings.model_backend_preference && *settings.model_backend_preference != "auto" &&
       *settings.model_backend_preference != "cpu") {
     result.error = "invalid model backend preference";
@@ -400,6 +420,11 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   }
   root["model"] = j::Value(std::move(model));
   root["logLevel"] = j::Value(settings.log_level);
+  j::Object privacy;
+  if (const auto current = root.find("privacy"); current != root.end() && current->second.IsObject())
+    privacy = current->second.AsObject();
+  privacy["crashReportConsent"] = j::Value(settings.crash_report_consent);
+  root["privacy"] = j::Value(std::move(privacy));
   root.erase("backendPreference");
 
   std::string serialized = j::Stringify(j::Value(std::move(root)));

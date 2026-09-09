@@ -133,6 +133,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // Accessed by EditSession.
   std::string preedit_kana_;
   ITfComposition* composition_{nullptr};
+  bool etw_composition_end_in_progress_{false};
+  std::uint64_t etw_composition_length_{0};
   bool committing_{false};
   std::string commit_surface_;
   POINT caret_pt_{0, 0};
@@ -338,6 +340,8 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT UnadviseTextServiceSinks();
   std::string IpcPipeName() const;
   void IpcWorkerThread();
+  void IpcWorkerThreadImpl();
+  std::atomic<uint32_t> ipc_worker_exception_code_{0};
   void ServeConnection();
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
                     const std::string& mode);

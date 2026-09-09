@@ -2,6 +2,8 @@ add_executable(core_tests
   app_profile_resolver_test.cpp
   bracket_pairing_test.cpp
   command_line_test.cpp
+  crash_retention_test.cpp
+  etw_logger_test.cpp
   katakana_rewriter_test.cpp
   live_conversion_chunker_test.cpp
   number_rewriter_test.cpp
@@ -18,6 +20,14 @@ target_link_libraries(core_tests
 )
 
 azookey_discover_tests(core_tests)
+
+add_executable(crash_reporting_tests crash_reporting_test.cpp)
+target_link_libraries(crash_reporting_tests PRIVATE
+  azookey_core GTest::gtest azookey_project_options azookey_project_warnings)
+if(WIN32)
+  target_link_libraries(crash_reporting_tests PRIVATE dbghelp)
+endif()
+azookey_discover_tests(crash_reporting_tests)
 
 add_executable(runtime_logger_tests
   runtime_logger_test.cpp

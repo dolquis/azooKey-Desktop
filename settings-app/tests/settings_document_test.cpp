@@ -48,6 +48,45 @@ std::string ReadText(const std::filesystem::path& path) {
 
 }  // namespace
 
+TEST(SettingsDocumentTest, CrashConsentRoundTripPreservesAiPrivacyAndDefaultsOff) {
+  const auto dir = TestDir("azookey_settings_crash_writeback");
+  const auto path = dir / "settings.json";
+  EXPECT_EQ(azookey::settings::LoadSettingsDocument(path).settings.crash_report_consent, "off");
+  WriteText(path, R"({"privacy":{"mode":"custom","custom":{"aiCandidate":true,"externalAi":false},"crashReportConsent":"local"}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_EQ(loaded.settings.crash_report_consent, "local");
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->Find("privacy")->GetString("crashReportConsent"), "local");
+  EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "custom");
+  EXPECT_EQ(parsed->Find("privacy")->Find("custom")->GetBool("externalAi"), false);
+  loaded.settings.crash_report_consent = "off";
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_EQ(azookey::settings::LoadSettingsDocument(path).settings.crash_report_consent, "off");
+}
+
+TEST(SettingsDocumentTest, InvalidCrashConsentFailsClosedWithoutChangingAiMode) {
+  const auto dir = TestDir("azookey_settings_invalid_crash_consent");
+  const auto path = dir / "settings.json";
+  for (const auto* consent : {"true", "null", "42", "\"unknown\""}) {
+    WriteText(path, std::string(R"({"privacy":{"mode":"private","crashReportConsent":)") + consent + "}}");
+    auto loaded = azookey::settings::LoadSettingsDocument(path);
+    EXPECT_EQ(loaded.settings.crash_report_consent, "off");
+    EXPECT_FALSE(loaded.warnings.empty());
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "private");
+    EXPECT_EQ(parsed->Find("privacy")->GetString("crashReportConsent"), "off");
+  }
+  const auto original = ReadText(path);
+  auto invalid = azookey::settings::LoadSettingsDocument(path).settings;
+  invalid.crash_report_consent = "upload";
+  EXPECT_FALSE(azookey::settings::SaveSettingsDocument(path, invalid).ok);
+  EXPECT_EQ(ReadText(path), original);
+}
+
 TEST(SettingsDocumentTest, PreservesAiPrivacyAndTimeoutAndFailsClosedOnInvalidPrivacy) {
   const auto dir = TestDir("azookey_settings_ai_writeback");
   const auto path = dir / "settings.json";

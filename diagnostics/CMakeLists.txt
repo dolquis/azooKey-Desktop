@@ -30,6 +30,7 @@ target_link_libraries(azookey_diagnostics
 
 if(WIN32)
   target_link_libraries(azookey_diagnostics PRIVATE advapi32 ole32)
+  add_subdirectory(etw)
 endif()
 
 add_executable(azookey_diag azookey_diag.cpp)

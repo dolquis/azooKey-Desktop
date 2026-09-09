@@ -10,7 +10,7 @@ add_library(azookey_ipc STATIC
 
 target_include_directories(azookey_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_ipc
-  PUBLIC azookey_project_options azookey_json
+  PUBLIC azookey_project_options azookey_json azookey_core
   PRIVATE azookey_project_warnings
 )
 

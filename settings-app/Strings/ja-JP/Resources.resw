@@ -71,4 +71,14 @@
   <data name="ProfileLabel.Text" xml:space="preserve"><value>プロファイル:</value></data>
   <data name="NotSuppliedValue" xml:space="preserve"><value>(未指定)</value></data>
   <data name="InvalidValue" xml:space="preserve"><value>(無効)</value></data>
+  <data name="CrashReportConsentToggle.Header" xml:space="preserve"><value>障害診断をこの端末に保存する</value></data>
+  <data name="CrashReportConsentToggle.OnContent" xml:space="preserve"><value>許可する</value></data>
+  <data name="CrashReportConsentToggle.OffContent" xml:space="preserve"><value>許可しない（既定）</value></data>
+  <data name="CrashReportDescription.Text" xml:space="preserve"><value>保存すると反映されます。許可した場合だけ、例外コードなどの最小限の診断情報をこの端末に保存します。入力本文、候補、学習内容、メモリ、スタックは収集せず、自動送信もしません。既存の診断ファイルは、保存先から確認・削除できます。</value></data>
+  <data name="OpenCrashReportsButton.Content" xml:space="preserve"><value>診断ファイルの保存先を開く</value></data>
+  <data name="CrashReportFolderTitle" xml:space="preserve"><value>診断ファイルの保存先</value></data>
+  <data name="CrashReportFolderUnavailable" xml:space="preserve"><value>保存先がまだないか、開けません。保存を許可して設定を保存すると、診断用フォルダーが作成されます。</value></data>
+  <data name="CrashReportReady" xml:space="preserve"><value>この Settings アプリでの保存準備ができています。</value></data>
+  <data name="CrashReportDisabled" xml:space="preserve"><value>この Settings アプリでは診断ファイルを収集しません。</value></data>
+  <data name="CrashReportUnavailable" xml:space="preserve"><value>この Settings アプリでは診断ファイルを保存できません。保存先やアクセス権を確認してください。保存に失敗した障害は、OS の既定の障害処理へ引き継ぎます。</value></data>
 </root>

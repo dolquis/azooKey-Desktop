@@ -832,6 +832,11 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 `success` と `skipped` だけなら pass する。`windows.yml` にジョブを追加するときは
 `ci-gate` の `needs` にも加える。加えなければそのジョブの失敗が required check を素通りする。
 
+例外は `ci-gate` の `ADVISORY_JOBS` に挙げる advisory ジョブで、結果は集約の出力に
+残すが失敗判定には入れない。`cpp-tidy` がこれに当たる（§4.3 / §11.5 が非ブロッキングと
+定める）。解析ステップの `continue-on-error` だけでは、checkout・依存導入・configure の
+失敗でジョブ結果が `failure` になり、advisory ジョブが required check をブロックする。
+
 `.github/workflows/docs.yml` と `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
 `.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する
 対話ジョブであり、required にしても判定に寄与しない。

@@ -1345,6 +1345,12 @@ jobs:
   # 判定は needs の結果のみを見る。failure / cancelled が 1 件でもあれば fail し、
   # success と skipped だけなら pass する。新しいジョブを windows.yml に足したら
   # needs へも必ず追加すること（漏れると required check が素通りする）。
+  #
+  # 例外は ADVISORY_JOBS に挙げる advisory ジョブで、結果は表示するが失敗判定に
+  # 入れない。clang-tidy は dev-infra spec §4.3 / §11.5 が非ブロッキングと定めて
+  # おり、所見や解析基盤の一時障害で PR を止めない。解析ステップの
+  # continue-on-error だけでは checkout / apt / configure の失敗でジョブ結果が
+  # failure になり、required check をブロックしてしまう。
   ci-gate:
     name: CI gate
     needs:
@@ -1371,10 +1377,17 @@ jobs:
         shell: bash
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          # 失敗判定から除外する advisory ジョブ（カンマ区切り）。
+          ADVISORY_JOBS: cpp-tidy
         run: |
           set -euo pipefail
 
-          results="$(jq -r 'to_entries[] | "\(.key)=\(.value.result)"' <<<"$NEEDS_JSON")"
+          results="$(jq -r --arg advisory "$ADVISORY_JOBS" '
+            ($advisory | split(",")) as $adv
+            | to_entries[]
+            | "\(.key)=\(.value.result)"
+              + (if (.key | IN($adv[])) then " (advisory; not gated)" else "" end)
+          ' <<<"$NEEDS_JSON")"
           echo "$results"
           {
             echo "## CI gate"
@@ -1384,8 +1397,10 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          failed="$(jq -r '
-            to_entries
+          failed="$(jq -r --arg advisory "$ADVISORY_JOBS" '
+            ($advisory | split(",")) as $adv
+            | to_entries
+            | map(select((.key | IN($adv[])) | not))
             | map(select(.value.result == "failure" or .value.result == "cancelled"))
             | map(.key)
             | join(", ")
@@ -1394,4 +1409,4 @@ jobs:
             echo "::error::CI gate failed. Blocking jobs: $failed"
             exit 1
           fi
-          echo "CI gate passed (only success/skipped results)."
+          echo "CI gate passed (no blocking failures)."

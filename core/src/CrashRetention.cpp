@@ -17,12 +17,16 @@ namespace {
 bool IsManagedName(std::string_view name) {
   constexpr std::string_view host = "azookey-host-";
   constexpr std::string_view settings = "azookey-settings-";
-  if (name.starts_with(host)) name.remove_prefix(host.size());
-  else if (name.starts_with(settings)) name.remove_prefix(settings.size());
-  else return false;
+  if (name.starts_with(host))
+    name.remove_prefix(host.size());
+  else if (name.starts_with(settings))
+    name.remove_prefix(settings.size());
+  else
+    return false;
   // yyyyMMddTHHmmssZ-<decimal pid>.dmp
   if (name.size() < 21 || name[8] != 'T' || name[15] != 'Z' || name[16] != '-' ||
-      !name.ends_with(".dmp")) return false;
+      !name.ends_with(".dmp"))
+    return false;
   for (std::size_t i = 0; i < name.size() - 4; ++i) {
     if (i == 8 || i == 15 || i == 16) continue;
     if (name[i] < '0' || name[i] > '9') return false;
@@ -48,8 +52,8 @@ bool IsLink(const std::filesystem::path& path, std::error_code& ec) {
 }  // namespace
 
 CrashRetentionResult PruneCrashDumps(const std::filesystem::path& directory,
-                                    CrashRetentionLimits limits,
-                                    std::filesystem::file_time_type now) noexcept {
+                                     CrashRetentionLimits limits,
+                                     std::filesystem::file_time_type now) noexcept {
   CrashRetentionResult result;
   try {
     std::error_code ec;

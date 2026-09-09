@@ -45,14 +45,15 @@ TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisab
   const auto path = dir / "settings.json";
   azookey::host::SettingsStore store(path);
   EXPECT_EQ(store.Load().settings.crash_report_consent, "off");
-  for (const auto* text : {R"({})", R"({"privacy":false})",
-                           R"({"privacy":{"crashReportConsent":true}})",
-                           R"({"privacy":{"crashReportConsent":"unknown"}})",
-                           R"({"privacy":{"crashReportConsent":"off"}})"}) {
+  for (const auto* text :
+       {R"({})", R"({"privacy":false})", R"({"privacy":{"crashReportConsent":true}})",
+        R"({"privacy":{"crashReportConsent":"unknown"}})",
+        R"({"privacy":{"crashReportConsent":"off"}})"}) {
     WriteText(path, text);
     EXPECT_EQ(store.Reload().settings.crash_report_consent, "off") << text;
   }
-  WriteText(path, R"({"logLevel":"debug","privacy":{"mode":"private","crashReportConsent":"local"}})");
+  WriteText(path,
+            R"({"logLevel":"debug","privacy":{"mode":"private","crashReportConsent":"local"}})");
   const auto enabled = store.Reload();
   EXPECT_EQ(enabled.settings.crash_report_consent, "local");
   EXPECT_TRUE(enabled.settings.ai_privacy.ai);

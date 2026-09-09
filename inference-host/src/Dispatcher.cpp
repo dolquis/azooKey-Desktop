@@ -38,8 +38,7 @@ core::EtwGuid ClientGuid(std::string_view value) {
   };
   // GUID uses little endian Data1/Data2/Data3, then eight byte-sized fields.
   constexpr size_t positions[]{6, 4, 2, 0, 11, 9, 16, 14, 19, 21, 24, 26, 28, 30, 32, 34};
-  if (value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-')
-    return result;
+  if (value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-') return result;
   for (size_t index = 0; index < result.size(); ++index) {
     const int high = hex(value[positions[index]]);
     const int low = hex(value[positions[index] + 1]);
@@ -61,7 +60,8 @@ class InferenceTrace {
       result_ = core::EtwResult::Cancelled;
     core::EtwLogger::LogInferenceEnd(
         context_.request_id, candidates_,
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_).count(),
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
+            .count(),
         result_, context_.client);
   }
   void Finish(core::EtwResult result, uint64_t candidates = 0) {
@@ -480,8 +480,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                      : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
     const auto ordinary_limit = parsed->max_candidates;
     const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
-    candidates = engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(),
-                                          cancel.get(), ordinary_limit, parsed->live, trace.context());
+    candidates =
+        engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
+                                 ordinary_limit, parsed->live, trace.context());
     if (!parsed->live && (rewriters.symbol_enabled || rewriters.emoji_enabled))
       candidates = engine_->QueryRewriters(rewriters, parsed->reading, {}, std::move(candidates),
                                            merged_limit);
@@ -507,10 +508,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {
   auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json);
-  InferenceTrace trace(req.request_id, client_id_,
-                       parsed && parsed->mode == "ai-cleanup" ? core::EtwBackend::Ai
-                                                             : core::EtwBackend::Unknown,
-                       parsed ? parsed->reading.size() : 0);
+  InferenceTrace trace(
+      req.request_id, client_id_,
+      parsed && parsed->mode == "ai-cleanup" ? core::EtwBackend::Ai : core::EtwBackend::Unknown,
+      parsed ? parsed->reading.size() : 0);
   if (!parsed) {
     static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
     logger.Log(logging::RuntimeLogLevel::Error, "invalid_batch_request");
@@ -567,20 +568,22 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     } catch (...) {
       core::EtwLogger::LogInferencePhase(
           req.request_id, core::EtwPhase::AiTransform, core::EtwBackend::Ai,
-          std::chrono::duration<double, std::milli>(
-              std::chrono::steady_clock::now() - phase_start).count(),
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_start)
+              .count(),
           cancel->load(std::memory_order_acquire) ? core::EtwResult::Cancelled
-                                                : core::EtwResult::Failed,
+                                                  : core::EtwResult::Failed,
           trace.context()->client);
       throw;
     }
-    const auto phase_result = result.ok ? core::EtwResult::Success
+    const auto phase_result =
+        result.ok                                      ? core::EtwResult::Success
         : result.error_class == AiErrorClass::Canceled ? core::EtwResult::Cancelled
-        : result.error_class == AiErrorClass::Timeout ? core::EtwResult::Timeout
-                                                      : core::EtwResult::Failed;
+        : result.error_class == AiErrorClass::Timeout  ? core::EtwResult::Timeout
+                                                       : core::EtwResult::Failed;
     core::EtwLogger::LogInferencePhase(
         req.request_id, core::EtwPhase::AiTransform, core::EtwBackend::Ai,
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_start).count(),
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_start)
+            .count(),
         phase_result, trace.context()->client);
     if (!result.ok) {
       static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
@@ -629,7 +632,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   completion.Complete();
   uint64_t candidate_count = 0;
   for (const auto& segment : res.segments) candidate_count += segment.candidates.size();
-  trace.Finish(res.canceled ? core::EtwResult::Cancelled : core::EtwResult::Success, candidate_count);
+  trace.Finish(res.canceled ? core::EtwResult::Cancelled : core::EtwResult::Success,
+               candidate_count);
   return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
 }
 
@@ -694,7 +698,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   std::lock_guard<std::mutex> lock(*config_.update_config_mutex);
   const auto load_result = settings_store_->Reload();
   core::CrashReporting::SetConsent(load_result.settings.crash_report_consent == "local"
-                                     ? core::CrashConsent::Local : core::CrashConsent::Off);
+                                       ? core::CrashConsent::Local
+                                       : core::CrashConsent::Off);
   if (load_result.status == SettingsLoadStatus::Invalid) {
     res.ok = false;
     res.error = load_result.error.value_or("invalid settings.json");

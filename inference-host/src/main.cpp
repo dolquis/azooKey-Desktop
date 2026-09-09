@@ -380,10 +380,10 @@ int main(int argc, char** argv) {
   azookey::host::SettingsStore settings_store(user_paths->settings_path);
   const auto settings_result = settings_store.Load();
   CrashRegistration crash_registration;
-  azookey::core::CrashReporting::Initialize(
-      azookey::core::CrashModule::Host,
-      settings_result.settings.crash_report_consent == "local"
-          ? azookey::core::CrashConsent::Local : azookey::core::CrashConsent::Off);
+  azookey::core::CrashReporting::Initialize(azookey::core::CrashModule::Host,
+                                            settings_result.settings.crash_report_consent == "local"
+                                                ? azookey::core::CrashConsent::Local
+                                                : azookey::core::CrashConsent::Off);
   runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "crash_reporting_status",
                   {{"status", static_cast<uint64_t>(azookey::core::CrashReporting::Status())}});
   const auto cli_backend = config.backend;

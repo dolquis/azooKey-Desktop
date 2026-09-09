@@ -1,7 +1,5 @@
 #pragma once
 
-#include "azookey/core/EtwLogger.h"
-
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "azookey/core/EtwLogger.h"
 #include "azookey/ipc/Messages.h"
 
 namespace azookey::ipc {

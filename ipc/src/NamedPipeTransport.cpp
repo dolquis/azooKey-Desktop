@@ -6,8 +6,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cwchar>
-#include <memory>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -760,8 +760,9 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx,
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.read_hard, ctx.read_frame_started,
                            ctx.read_hard_deadline)};
   auto envelope = ReadFramedEnvelope(pipe, io);
-  if (outcome) *outcome = envelope ? core::EtwResult::Success :
-      (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
+  if (outcome)
+    *outcome = envelope ? core::EtwResult::Success
+                        : (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
   NoteSoftDeadline(ctx, io.deadline);
   return envelope;
 }
@@ -777,8 +778,9 @@ bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext
   FrameIo io{ctx.cancel_event, ctx.overlapped,
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.write_hard, /*armed=*/true)};
   const bool ok = WriteBytes(pipe, frame->data(), frame->size(), io);
-  if (outcome) *outcome = ok ? core::EtwResult::Success :
-      (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
+  if (outcome)
+    *outcome = ok ? core::EtwResult::Success
+                  : (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
   NoteSoftDeadline(ctx, io.deadline);
   return ok;
 }
@@ -837,10 +839,11 @@ ClientReceiveResult ReceiveClientEnvelope(
       const auto frame_started = std::chrono::steady_clock::now();
       core::EtwResult outcome = core::EtwResult::Failed;
       auto envelope = ReadEnvelope(connection->pipe.get(), ctx, &outcome);
-      core::EtwLogger::LogIpcPhase(envelope ? envelope->request_id : 0,
-          core::EtwPhase::FrameRead,
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_started).count(),
-          outcome, trace_client);
+      core::EtwLogger::LogIpcPhase(envelope ? envelope->request_id : 0, core::EtwPhase::FrameRead,
+                                   std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - frame_started)
+                                       .count(),
+                                   outcome, trace_client);
       if (!envelope || WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
         return {ClientReceiveStatus::Failed, std::nullopt, outcome};
       }
@@ -1071,16 +1074,19 @@ struct NamedPipeClient::Impl {
     std::lock_guard<std::mutex> guard(trace_mutex);
     const auto found = trace_requests.find({expected, request});
     if (found == trace_requests.end()) return;
-    const auto elapsed = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - found->second).count();
+    const auto elapsed =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - found->second)
+            .count();
     core::EtwLogger::LogIpcResponse(request, elapsed, result, trace_client);
     trace_requests.erase(found);
   }
   void TraceOutstanding(core::EtwResult result) {
     std::lock_guard<std::mutex> guard(trace_mutex);
     for (const auto& [request, started] : trace_requests) {
-      core::EtwLogger::LogIpcResponse(request.second,
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+      core::EtwLogger::LogIpcResponse(
+          request.second,
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+              .count(),
           result, trace_client);
     }
     trace_requests.clear();
@@ -1206,8 +1212,13 @@ std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const {
   return impl_->soft_deadline_exceeded.load(std::memory_order_relaxed);
 }
 
-NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) { core::EtwLogger::Register(); }
-NamedPipeClient::~NamedPipeClient() { Disconnect(); core::EtwLogger::Unregister(); }
+NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {
+  core::EtwLogger::Register();
+}
+NamedPipeClient::~NamedPipeClient() {
+  Disconnect();
+  core::EtwLogger::Unregister();
+}
 void NamedPipeClient::SetTraceClientId(const core::EtwGuid& client) noexcept {
   std::lock_guard<std::mutex> guard(impl_->trace_mutex);
   impl_->trace_client = client;
@@ -1288,7 +1299,7 @@ bool NamedPipeClient::Send(const Envelope& envelope) {
     // Optional telemetry must not make a valid IPC send fail.
   }
   core::EtwLogger::LogIpcRequest(envelope.request_id, static_cast<std::uint64_t>(envelope.type),
-                                envelope.payload_json.size(), impl_->TraceClient());
+                                 envelope.payload_json.size(), impl_->TraceClient());
 
   TransportContext ctx;
   ctx.cancel_event = connection->cancel_event.get();
@@ -1297,8 +1308,10 @@ bool NamedPipeClient::Send(const Envelope& envelope) {
   const auto frame_started = std::chrono::steady_clock::now();
   core::EtwResult outcome = core::EtwResult::Failed;
   const bool written = WriteEnvelope(connection->pipe.get(), envelope, ctx, &outcome);
-  core::EtwLogger::LogIpcPhase(envelope.request_id, core::EtwPhase::FrameWrite,
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_started).count(),
+  core::EtwLogger::LogIpcPhase(
+      envelope.request_id, core::EtwPhase::FrameWrite,
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_started)
+          .count(),
       outcome, impl_->TraceClient());
   if (!written) {
     impl_->TraceResponse(envelope.request_id, outcome, connection.get());
@@ -1327,7 +1340,8 @@ std::optional<Envelope> NamedPipeClient::Receive() {
     impl_->DisconnectConnection(connection, result.outcome);
     return std::nullopt;
   }
-  if (result.envelope) impl_->TraceResponse(result.envelope->request_id, core::EtwResult::Success, connection.get());
+  if (result.envelope)
+    impl_->TraceResponse(result.envelope->request_id, core::EtwResult::Success, connection.get());
   return std::move(result.envelope);
 }
 
@@ -1349,7 +1363,8 @@ std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(
     phase_a_deadline = *request_deadline;
   }
 
-  auto result = ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline, impl_->TraceClient());
+  auto result =
+      ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline, impl_->TraceClient());
   if (result.status == ClientReceiveStatus::Failed) {
     impl_->DisconnectConnection(connection, result.outcome);
     return std::nullopt;
@@ -1357,7 +1372,8 @@ std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(
   if (result.status == ClientReceiveStatus::IdleTimeout) {
     return std::nullopt;
   }
-  if (result.envelope) impl_->TraceResponse(result.envelope->request_id, core::EtwResult::Success, connection.get());
+  if (result.envelope)
+    impl_->TraceResponse(result.envelope->request_id, core::EtwResult::Success, connection.get());
   return std::move(result.envelope);
 }
 

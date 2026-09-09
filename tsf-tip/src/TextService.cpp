@@ -9,8 +9,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <iterator>
 #include <new>
@@ -45,7 +45,8 @@ azookey::core::EtwGuid TraceGuid(const std::string& value) {
   GUID guid{};
   if (value.size() != 36) return bytes;
   const std::wstring wide = L"{" + std::wstring(value.begin(), value.end()) + L"}";
-  if (SUCCEEDED(CLSIDFromString(wide.c_str(), &guid))) std::memcpy(bytes.data(), &guid, sizeof(guid));
+  if (SUCCEEDED(CLSIDFromString(wide.c_str(), &guid)))
+    std::memcpy(bytes.data(), &guid, sizeof(guid));
   return bytes;
 }
 constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
@@ -2317,8 +2318,8 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_send_failed");
     return false;
   }
-  const auto handshake_deadline = std::chrono::steady_clock::now() +
-                                  std::chrono::milliseconds(timeout_ms);
+  const auto handshake_deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   auto hres = client.ReceiveWithTimeout(timeout_ms);
   if (!hres && std::chrono::steady_clock::now() >= handshake_deadline)
     client.FinishTraceRequest(henv.request_id, core::EtwResult::Timeout);

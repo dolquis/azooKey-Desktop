@@ -2,8 +2,8 @@
 
 #include <atomic>
 #include <cstddef>
-#include <cwchar>
 #include <ctime>
+#include <cwchar>
 
 #include "azookey/core/CrashRetention.h"
 #include "azookey/core/PlatformPaths.h"
@@ -12,10 +12,13 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// Windows SDK extension headers require the Windows base types first.
+// clang-format off
 #include <Windows.h>
 #include <DbgHelp.h>
 #include <Psapi.h>
 #include <ShlObj.h>
+// clang-format on
 #include <process.h>
 #endif
 
@@ -49,7 +52,9 @@ struct ExclusiveLock {
       : held(try_only ? TryAcquireSRWLockExclusive(&state_lock) != FALSE : true) {
     if (!try_only) AcquireSRWLockExclusive(&state_lock);
   }
-  ~ExclusiveLock() { if (held) ReleaseSRWLockExclusive(&state_lock); }
+  ~ExclusiveLock() {
+    if (held) ReleaseSRWLockExclusive(&state_lock);
+  }
 };
 
 // Host and Settings share a retention budget, including concurrent crashes.
@@ -89,8 +94,14 @@ bool PrepareDirectory() {
 // The entire record is explicitly zeroed. None of these streams reference memory,
 // a CONTEXT, exception parameters, a TEB, a user path, or dynamically read strings.
 #pragma pack(push, 4)
-struct OneThreadList { ULONG32 NumberOfThreads; MINIDUMP_THREAD Threads[1]; };
-struct OneModuleList { ULONG32 NumberOfModules; MINIDUMP_MODULE Modules[1]; };
+struct OneThreadList {
+  ULONG32 NumberOfThreads;
+  MINIDUMP_THREAD Threads[1];
+};
+struct OneModuleList {
+  ULONG32 NumberOfModules;
+  MINIDUMP_MODULE Modules[1];
+};
 #pragma pack(pop)
 static_assert(offsetof(OneThreadList, Threads) == 4);
 static_assert(sizeof(OneThreadList) == 4 + sizeof(MINIDUMP_THREAD));
@@ -114,7 +125,8 @@ unsigned __stdcall ReportWorker(void*) {
     if (!request_state.compare_exchange_strong(expected, RequestState::Writing)) {
       continue;
     }
-    request_written.store(CrashReporting::WriteReport(request_code, request_address, request_thread));
+    request_written.store(
+        CrashReporting::WriteReport(request_code, request_address, request_thread));
     const auto previous = request_state.exchange(RequestState::Done);
     if (previous != RequestState::AbandonedWriting) SetEvent(worker_done);
     // Acknowledge the write before retention: slow cleanup must not cause WER
@@ -123,7 +135,8 @@ unsigned __stdcall ReportWorker(void*) {
       ExclusiveLock lock;
       RetentionLock retention_lock;
       if (retention_lock.held && !worker_stop.load() && consent == CrashConsent::Local &&
-          PruneCrashDumps(directory_path).failed) status.store(CrashStatus::WriteFailed);
+          PruneCrashDumps(directory_path).failed)
+        status.store(CrashStatus::WriteFailed);
     }
   }
   return 0;
@@ -135,7 +148,8 @@ bool StartWorker() {
   worker_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (worker_wake && worker_done) {
     worker_stop.store(false);
-    worker_thread = reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, &ReportWorker, nullptr, 0, nullptr));
+    worker_thread =
+        reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, &ReportWorker, nullptr, 0, nullptr));
     if (worker_thread) return true;
   }
   if (worker_wake) CloseHandle(worker_wake);
@@ -148,7 +162,10 @@ bool RequestReport(EXCEPTION_POINTERS* exception) {
   // Avoid heap/filesystem work and blocking lock acquisition on the faulting thread.
   if (!TryAcquireSRWLockShared(&state_lock)) return false;
   const bool allowed = consent == CrashConsent::Local && worker_thread && !worker_stop.load();
-  if (!allowed) { ReleaseSRWLockShared(&state_lock); return false; }
+  if (!allowed) {
+    ReleaseSRWLockShared(&state_lock);
+    return false;
+  }
   auto expected = RequestState::Idle;
   if (!request_state.compare_exchange_strong(expected, RequestState::Pending)) {
     ReleaseSRWLockShared(&state_lock);
@@ -184,8 +201,8 @@ bool RequestReport(EXCEPTION_POINTERS* exception) {
 }
 
 LONG WINAPI Filter(EXCEPTION_POINTERS* exception) {
-  if (exception && exception->ExceptionRecord &&
-      RequestReport(exception)) return EXCEPTION_EXECUTE_HANDLER;
+  if (exception && exception->ExceptionRecord && RequestReport(exception))
+    return EXCEPTION_EXECUTE_HANDLER;
   const auto previous = previous_filter.load(std::memory_order_acquire);
   return previous && previous != &Filter ? previous(exception) : EXCEPTION_CONTINUE_SEARCH;
 }
@@ -196,7 +213,9 @@ std::filesystem::path CrashReporting::DefaultDirectory() noexcept {
   try {
     const auto local = GetLocalAppDataDirectory();
     return local ? *local / "azooKey" / "crashes" : std::filesystem::path{};
-  } catch (...) { return {}; }
+  } catch (...) {
+    return {};
+  }
 }
 
 void CrashReporting::Initialize(CrashModule owner, CrashConsent mode,
@@ -213,7 +232,8 @@ void CrashReporting::Initialize(CrashModule owner, CrashConsent mode,
       if (!path.empty() && path.size() < std::size(directory_path) - 80)
         wcscpy_s(directory_path, std::size(directory_path), path.c_str());
       MODULEINFO image{};
-      if (GetModuleInformation(GetCurrentProcess(), GetModuleHandleW(nullptr), &image, sizeof(image))) {
+      if (GetModuleInformation(GetCurrentProcess(), GetModuleHandleW(nullptr), &image,
+                               sizeof(image))) {
         image_base = reinterpret_cast<std::uint64_t>(image.lpBaseOfDll);
         image_size = image.SizeOfImage;
       }
@@ -227,7 +247,9 @@ void CrashReporting::Initialize(CrashModule owner, CrashConsent mode,
     status.store(CrashStatus::DirectoryUnavailable, std::memory_order_release);
   }
 #else
-  (void)owner; (void)mode; (void)directory;
+  (void)owner;
+  (void)mode;
+  (void)directory;
   status.store(CrashStatus::Unsupported);
 #endif
 }
@@ -252,9 +274,10 @@ void CrashReporting::SetConsent(CrashConsent mode) noexcept {
     }
     RetentionLock retention_lock;
     const bool failed = !retention_lock.held || PruneCrashDumps(directory_path).failed;
-    status.store(failed ? CrashStatus::WriteFailed : CrashStatus::Ready,
-                 std::memory_order_release);
-  } catch (...) { status.store(CrashStatus::DirectoryUnavailable, std::memory_order_release); }
+    status.store(failed ? CrashStatus::WriteFailed : CrashStatus::Ready, std::memory_order_release);
+  } catch (...) {
+    status.store(CrashStatus::DirectoryUnavailable, std::memory_order_release);
+  }
 #else
   (void)mode;
 #endif
@@ -272,7 +295,8 @@ void CrashReporting::Shutdown() noexcept {
       return;
     }
     if (installed) {
-      const auto current = SetUnhandledExceptionFilter(previous_filter.load(std::memory_order_acquire));
+      const auto current =
+          SetUnhandledExceptionFilter(previous_filter.load(std::memory_order_acquire));
       // Do not remove a filter installed later by another process component.
       if (current != &Filter) SetUnhandledExceptionFilter(current);
       installed = false;
@@ -302,7 +326,8 @@ bool CrashReporting::WriteReport(std::uint32_t code, std::uint64_t address,
     // waits for the bounded request. This also avoids racing its short shared lock.
     ExclusiveLock lock;
     if (!lock.held || consent != CrashConsent::Local ||
-        request_state.load() == RequestState::AbandonedWriting) return false;
+        request_state.load() == RequestState::AbandonedWriting)
+      return false;
     if (!PrepareDirectory()) {
       status.store(CrashStatus::DirectoryUnavailable, std::memory_order_release);
       return false;
@@ -329,7 +354,8 @@ bool CrashReporting::WriteReport(std::uint32_t code, std::uint64_t address,
     dump.header.StreamDirectoryRva = offsetof(MetadataDump, streams);
     dump.header.TimeDateStamp = static_cast<ULONG>(std::time(nullptr));
     dump.streams[0] = {SystemInfoStream, {sizeof(dump.system), offsetof(MetadataDump, system)}};
-    dump.streams[1] = {ExceptionStream, {sizeof(dump.exception), offsetof(MetadataDump, exception)}};
+    dump.streams[1] = {ExceptionStream,
+                       {sizeof(dump.exception), offsetof(MetadataDump, exception)}};
     dump.streams[2] = {ThreadListStream, {sizeof(dump.threads), offsetof(MetadataDump, threads)}};
     dump.streams[3] = {ModuleListStream, {sizeof(dump.modules), offsetof(MetadataDump, modules)}};
 #if defined(_M_ARM64)
@@ -350,19 +376,19 @@ bool CrashReporting::WriteReport(std::uint32_t code, std::uint64_t address,
     dump.modules.Modules[0].BaseOfImage = image_base;
     dump.modules.Modules[0].SizeOfImage = image_size;
     dump.modules.Modules[0].ModuleNameRva = offsetof(MetadataDump, name_bytes);
-    wcscpy_s(dump.name, std::size(dump.name), module == CrashModule::Host
-        ? L"azookey_inference_host.exe" : L"azookey_settings.exe");
+    wcscpy_s(dump.name, std::size(dump.name),
+             module == CrashModule::Host ? L"azookey_inference_host.exe" : L"azookey_settings.exe");
     dump.name_bytes = static_cast<ULONG>(std::wcslen(dump.name) * sizeof(wchar_t));
     SYSTEMTIME utc{};
     GetSystemTime(&utc);
     wchar_t filename[32768]{};
-    const auto length = std::swprintf(filename, std::size(filename),
-        L"%ls\\azookey-%ls-%04u%02u%02uT%02u%02u%02uZ-%lu.dmp", directory_path,
-        module == CrashModule::Host ? L"host" : L"settings", utc.wYear, utc.wMonth, utc.wDay,
-        utc.wHour, utc.wMinute, utc.wSecond, GetCurrentProcessId());
+    const auto length = std::swprintf(
+        filename, std::size(filename), L"%ls\\azookey-%ls-%04u%02u%02uT%02u%02u%02uZ-%lu.dmp",
+        directory_path, module == CrashModule::Host ? L"host" : L"settings", utc.wYear, utc.wMonth,
+        utc.wDay, utc.wHour, utc.wMinute, utc.wSecond, GetCurrentProcessId());
     if (length < 0) return false;
-    if (consent != CrashConsent::Local ||
-        request_state.load() == RequestState::AbandonedWriting) return false;
+    if (consent != CrashConsent::Local || request_state.load() == RequestState::AbandonedWriting)
+      return false;
     HANDLE file = CreateFileW(filename, GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
@@ -376,15 +402,19 @@ bool CrashReporting::WriteReport(std::uint32_t code, std::uint64_t address,
                            request_state.load() != RequestState::AbandonedWriting;
     CloseHandle(file);
     if (!succeeded) DeleteFileW(filename);
-    status.store(consent != CrashConsent::Local ? CrashStatus::Disabled :
-                 succeeded ? CrashStatus::Ready : CrashStatus::WriteFailed, std::memory_order_release);
+    status.store(consent != CrashConsent::Local ? CrashStatus::Disabled
+                 : succeeded                    ? CrashStatus::Ready
+                                                : CrashStatus::WriteFailed,
+                 std::memory_order_release);
     return succeeded;
   } catch (...) {
     status.store(CrashStatus::WriteFailed, std::memory_order_release);
     return false;
   }
 #else
-  (void)code; (void)address; (void)thread_id;
+  (void)code;
+  (void)address;
+  (void)thread_id;
   return false;
 #endif
 }

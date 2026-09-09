@@ -16,8 +16,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// clang-format off
 #include <Windows.h>
 #include <DbgHelp.h>
+// clang-format on
 #include <process.h>
 
 namespace {
@@ -25,9 +27,7 @@ namespace fs = std::filesystem;
 using namespace azookey::core;
 constexpr DWORD kPreviousFilterExit = 73;
 
-LONG WINAPI PreviousFilter(EXCEPTION_POINTERS*) {
-  ExitProcess(kPreviousFilterExit);
-}
+LONG WINAPI PreviousFilter(EXCEPTION_POINTERS*) { ExitProcess(kPreviousFilterExit); }
 
 class CrashReportingTest : public testing::Test {
  protected:
@@ -35,12 +35,14 @@ class CrashReportingTest : public testing::Test {
   fs::path directory;
   std::optional<DWORD> RunProbe(const wchar_t* mode) {
     wchar_t executable[32768]{};
-    const auto length = GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
+    const auto length =
+        GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
     if (length == 0 || length >= std::size(executable)) {
       ADD_FAILURE() << "Cannot resolve test executable";
       return std::nullopt;
     }
-    const auto child = _wspawnl(_P_NOWAIT, executable, executable, mode, directory.c_str(), nullptr);
+    const auto child =
+        _wspawnl(_P_NOWAIT, executable, executable, mode, directory.c_str(), nullptr);
     if (child == -1) {
       ADD_FAILURE() << "Cannot start crash probe";
       return std::nullopt;
@@ -123,15 +125,15 @@ TEST_F(CrashReportingTest, ControlledCrashProducesOnlyAllowlistedStreamsWithoutM
   const auto bounded = [&](size_t offset, size_t length) {
     return offset <= data.size() && length <= data.size() - offset;
   };
-  ASSERT_TRUE(bounded(header->StreamDirectoryRva,
-                      header->NumberOfStreams * sizeof(MINIDUMP_DIRECTORY)));
-  const auto* entries = reinterpret_cast<const MINIDUMP_DIRECTORY*>(
-      data.data() + header->StreamDirectoryRva);
+  ASSERT_TRUE(
+      bounded(header->StreamDirectoryRva, header->NumberOfStreams * sizeof(MINIDUMP_DIRECTORY)));
+  const auto* entries =
+      reinterpret_cast<const MINIDUMP_DIRECTORY*>(data.data() + header->StreamDirectoryRva);
   for (ULONG index = 0; index < header->NumberOfStreams; ++index) {
     const auto& stream = entries[index];
     ASSERT_TRUE(bounded(stream.Location.Rva, stream.Location.DataSize));
-    EXPECT_GE(stream.Location.Rva, header->StreamDirectoryRva +
-                                      header->NumberOfStreams * sizeof(MINIDUMP_DIRECTORY));
+    EXPECT_GE(stream.Location.Rva,
+              header->StreamDirectoryRva + header->NumberOfStreams * sizeof(MINIDUMP_DIRECTORY));
     EXPECT_TRUE(stream.StreamType == SystemInfoStream || stream.StreamType == ExceptionStream ||
                 stream.StreamType == ThreadListStream || stream.StreamType == ModuleListStream);
     for (ULONG previous = 0; previous < index; ++previous) {
@@ -151,7 +153,8 @@ TEST_F(CrashReportingTest, ControlledCrashProducesOnlyAllowlistedStreamsWithoutM
     }
     return value;
   };
-  const auto* exception = static_cast<MINIDUMP_EXCEPTION_STREAM*>(read(ExceptionStream, sizeof(MINIDUMP_EXCEPTION_STREAM)));
+  const auto* exception = static_cast<MINIDUMP_EXCEPTION_STREAM*>(
+      read(ExceptionStream, sizeof(MINIDUMP_EXCEPTION_STREAM)));
   ASSERT_NE(exception, nullptr);
   EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, 0xe0420001u);
   EXPECT_EQ(exception->ExceptionRecord.NumberParameters, 0u);
@@ -172,11 +175,13 @@ TEST_F(CrashReportingTest, ControlledCrashProducesOnlyAllowlistedStreamsWithoutM
   ASSERT_NE(modules, nullptr);
   ASSERT_EQ(modules->NumberOfModules, 1u);
   ASSERT_TRUE(bounded(modules->Modules[0].ModuleNameRva, sizeof(ULONG32)));
-  const auto* name = reinterpret_cast<const MINIDUMP_STRING*>(data.data() + modules->Modules[0].ModuleNameRva);
+  const auto* name =
+      reinterpret_cast<const MINIDUMP_STRING*>(data.data() + modules->Modules[0].ModuleNameRva);
   ASSERT_EQ(name->Length % sizeof(wchar_t), 0u);
   ASSERT_TRUE(bounded(modules->Modules[0].ModuleNameRva,
                       sizeof(ULONG32) + static_cast<size_t>(name->Length)));
-  EXPECT_EQ(std::wstring(name->Buffer, name->Length / sizeof(wchar_t)), L"azookey_inference_host.exe");
+  EXPECT_EQ(std::wstring(name->Buffer, name->Length / sizeof(wchar_t)),
+            L"azookey_inference_host.exe");
   EXPECT_EQ(modules->Modules[0].CvRecord.DataSize, 0u);
   EXPECT_EQ(modules->Modules[0].MiscRecord.DataSize, 0u);
   EXPECT_NE(read(SystemInfoStream, sizeof(MINIDUMP_SYSTEM_INFO)), nullptr);
@@ -237,9 +242,10 @@ int wmain(int argc, wchar_t** argv) {
     volatile char sentinel[] = "private-input-candidate-prompt-api-key-sentinel";
     (void)sentinel;
     azookey::core::CrashReporting::Initialize(azookey::core::CrashModule::Host,
-        std::wstring_view(argv[1]) == L"--crash-off-probe" ? azookey::core::CrashConsent::Off
-                                                         : azookey::core::CrashConsent::Local,
-        argv[2]);
+                                              std::wstring_view(argv[1]) == L"--crash-off-probe"
+                                                  ? azookey::core::CrashConsent::Off
+                                                  : azookey::core::CrashConsent::Local,
+                                              argv[2]);
     RaiseException(0xe0420001, EXCEPTION_NONCONTINUABLE, 0, nullptr);
     return 99;
   }

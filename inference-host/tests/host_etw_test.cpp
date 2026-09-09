@@ -1,13 +1,12 @@
 #include <gtest/gtest.h>
 
 #ifdef _WIN32
-#include "EtwCapture.h"
-
 #include <algorithm>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
 
+#include "EtwCapture.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/ipc/Payloads.h"
@@ -19,14 +18,18 @@ namespace ipc = azookey::ipc;
 
 class ThrowingConverter final : public core::IConverter {
  public:
-  std::vector<core::Candidate> Convert(const std::string&, const core::ConversionContext&) override {
+  std::vector<core::Candidate> Convert(const std::string&,
+                                       const core::ConversionContext&) override {
     throw std::runtime_error("private-converter-error-must-not-appear-in-etw");
   }
-  std::vector<core::Candidate> PredictNext(const std::string&, const core::ConversionContext&) override {
+  std::vector<core::Candidate> PredictNext(const std::string&,
+                                           const core::ConversionContext&) override {
     return {};
   }
   std::vector<core::Candidate> Correct(const std::string&, const core::CorrectionHint&,
-                                     const core::ConversionContext&) override { return {}; }
+                                       const core::ConversionContext&) override {
+    return {};
+  }
   void Commit(const core::Candidate&, const core::ConversionContext&) override {}
   void Learn(const std::string&, const std::string&) override {}
 };
@@ -55,8 +58,8 @@ TEST(HostEtwTest, CorrelatesSuccessCancellationAndFailedBackendFallbackWithoutTe
   ipc::HandshakeRequest handshake;
   handshake.protocol_version = 1;
   handshake.client_id = client;
-  ASSERT_TRUE(dispatcher.Dispatch(Request(1, ipc::MessageType::Handshake,
-                                           ipc::BuildHandshakeRequest(handshake))));
+  ASSERT_TRUE(dispatcher.Dispatch(
+      Request(1, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(handshake))));
   ipc::QueryCandidatesRequest query;
   query.reading = "にほん";
   const auto payload = ipc::BuildQueryCandidatesRequest(query);
@@ -71,7 +74,7 @@ TEST(HostEtwTest, CorrelatesSuccessCancellationAndFailedBackendFallbackWithoutTe
     batch.ai_backend = "none";
     batch.ai_allowed = true;
     EXPECT_TRUE(dispatcher.Dispatch(Request(9, ipc::MessageType::QueryBatchConversion,
-                                             ipc::BuildQueryBatchConversionRequest(batch))));
+                                            ipc::BuildQueryBatchConversionRequest(batch))));
     host::InferenceEngine throwing(std::make_unique<ThrowingConverter>(), nullptr, {});
     host::Dispatcher failing(&throwing, &scheduler, nullptr);
     EXPECT_THROW(failing.Dispatch(Request(10, ipc::MessageType::QueryCandidates, payload)),
@@ -95,7 +98,7 @@ TEST(HostEtwTest, CorrelatesSuccessCancellationAndFailedBackendFallbackWithoutTe
   EXPECT_EQ(count(10, 4002, core::EtwResult::Failed), 1);
   EXPECT_EQ(count(10, 4001, core::EtwResult::Failed), 1);
   const core::EtwGuid expected{0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 0x78, 0x56,
-                              0x90, 0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78};
+                               0x90, 0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78};
   for (const auto& event : captured.events) {
     ASSERT_EQ(event.data.size(), 56u);
     if (Number(event, 0) == 7 && (event.id == 4000 || event.id == 4001 || event.id == 4002))

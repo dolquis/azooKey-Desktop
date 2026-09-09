@@ -566,13 +566,14 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
         core::EtwLogger::LogInferencePhase(
             telemetry->request_id, core::EtwPhase::Converter,
             model ? core::EtwBackend::Neural : core::EtwBackend::Kana,
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count(),
             result, telemetry->client);
       }
     };
     try {
-      auto values = target->Convert(
-          kana, BuildContext(kana, limited_context, cancel, deadline, effective_max_candidates, live));
+      auto values = target->Convert(kana, BuildContext(kana, limited_context, cancel, deadline,
+                                                       effective_max_candidates, live));
       auto result = canceled() ? core::EtwResult::Cancelled : core::EtwResult::Success;
       // Zenzai can absorb an exception and return kana fallback candidates.
       // Preserve that backend failure independently of the successful response.
@@ -580,7 +581,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
         const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(target.get());
         if (zenzai && zenzai->last_error()) {
           result = deadline && std::chrono::steady_clock::now() >= *deadline
-                       ? core::EtwResult::Timeout : core::EtwResult::Failed;
+                       ? core::EtwResult::Timeout
+                       : core::EtwResult::Failed;
         }
       }
       emit(result);
@@ -821,7 +823,8 @@ bool InferenceEngine::CommitSegmentsObservation(
         if (!segment.is_auto_punctuation) {
           store_->Observe(segment.reading, segment.chosen.surface, config_.learning_alpha,
                           now_epoch_sec);
-          core::EtwLogger::LogLearningObserve(segment.reading.size(), segment.chosen.surface.size());
+          core::EtwLogger::LogLearningObserve(segment.reading.size(),
+                                              segment.chosen.surface.size());
         }
       }
       NoteLearningMutationLocked(now_epoch_sec);

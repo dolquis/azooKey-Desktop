@@ -28,11 +28,11 @@ class EtwLogger {
   static void LogIpcCancel(std::uint64_t target, const EtwGuid& client = {}) noexcept;
   static void LogIpcPhase(std::uint64_t request, EtwPhase phase, double latency_ms,
                           EtwResult result, const EtwGuid& client = {}) noexcept;
-  static void LogInferenceStart(std::uint64_t request, EtwBackend backend,
-                               std::uint64_t kana_len, const EtwGuid& client = {}) noexcept;
-  static void LogInferenceEnd(std::uint64_t request, std::uint64_t candidates,
-                             double latency_ms, EtwResult result = EtwResult::Success,
-                             const EtwGuid& client = {}) noexcept;
+  static void LogInferenceStart(std::uint64_t request, EtwBackend backend, std::uint64_t kana_len,
+                                const EtwGuid& client = {}) noexcept;
+  static void LogInferenceEnd(std::uint64_t request, std::uint64_t candidates, double latency_ms,
+                              EtwResult result = EtwResult::Success,
+                              const EtwGuid& client = {}) noexcept;
   static void LogLearningObserve(std::uint64_t reading_len, std::uint64_t surface_len) noexcept;
   static void LogInferencePhase(std::uint64_t request, EtwPhase phase, EtwBackend backend,
                                 double latency_ms, EtwResult result,

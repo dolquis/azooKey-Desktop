@@ -1,16 +1,16 @@
-#include "azookey/core/EtwLogger.h"
-
 #include <gtest/gtest.h>
 
 #include <cstring>
 #include <type_traits>
 
+#include "azookey/core/EtwLogger.h"
+
 using namespace azookey::core;
 
-static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogLearningObserve),
-                                    const char*, const char*>);
-static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogError),
-                                    const char*, EtwErrorCode, std::int32_t>);
+static_assert(
+    !std::is_invocable_v<decltype(&EtwLogger::LogLearningObserve), const char*, const char*>);
+static_assert(
+    !std::is_invocable_v<decltype(&EtwLogger::LogError), const char*, EtwErrorCode, std::int32_t>);
 
 TEST(EtwLoggerTest, BalancedLifetimeAndDisabledProviderAreSafe) {
   EtwLogger::Unregister();
@@ -28,15 +28,16 @@ TEST(EtwLoggerTest, BalancedLifetimeAndDisabledProviderAreSafe) {
 
 TEST(EtwLoggerTest, RealEtwEventsContainOnlyFixedTypedMetadata) {
   const auto result_capture = azookey::testing::CaptureEtw([] {
-  EtwGuid client{};
-  client[0] = 42;
-  EtwLogger::LogIpcRequest(17, 2, 100, client);
-  EtwLogger::LogInferencePhase(17, EtwPhase::Converter, EtwBackend::Neural,
-                              2.5, EtwResult::Failed, client);
-  EtwLogger::LogLearningObserve(5, 7);
-  EtwLogger::LogError(EtwModule::Host, EtwErrorCode::Business, -1);
+    EtwGuid client{};
+    client[0] = 42;
+    EtwLogger::LogIpcRequest(17, 2, 100, client);
+    EtwLogger::LogInferencePhase(17, EtwPhase::Converter, EtwBackend::Neural, 2.5,
+                                 EtwResult::Failed, client);
+    EtwLogger::LogLearningObserve(5, 7);
+    EtwLogger::LogError(EtwModule::Host, EtwErrorCode::Business, -1);
   });
-  if (result_capture.status == ERROR_ACCESS_DENIED) GTEST_SKIP() << "ETW session permission unavailable";
+  if (result_capture.status == ERROR_ACCESS_DENIED)
+    GTEST_SKIP() << "ETW session permission unavailable";
   ASSERT_EQ(result_capture.status, ERROR_SUCCESS);
   const auto& captured = result_capture.events;
   ASSERT_EQ(captured.size(), 4u);

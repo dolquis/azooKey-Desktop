@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cwchar>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "azookey/ipc/Limits.h"
+#include "azookey/ipc/Payloads.h"
 
 #ifdef _WIN32
 
@@ -391,6 +393,7 @@ struct FrameIo {
   HANDLE cancel_event{nullptr};
   bool overlapped{false};
   FrameDeadline deadline;
+  bool timed_out{false};
 };
 
 HANDLE PrepareReusableOverlappedEvent() {
@@ -637,6 +640,7 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size, FrameIo& io) {
     // Chunks that complete synchronously never reach FinishOverlappedIo, and the
     // retry paths below loop back here, so the budget is re-checked every pass.
     if (io.deadline.HardExpired()) {
+      io.timed_out = true;
       return false;
     }
     const DWORD chunk =
@@ -647,7 +651,10 @@ bool ReadBytes(HANDLE pipe, uint8_t* data, size_t size, FrameIo& io) {
       io.deadline.Arm();
     }
     if (!result.ok) {
-      if (result.stopped || result.timed_out) return false;
+      if (result.stopped || result.timed_out) {
+        io.timed_out = result.timed_out;
+        return false;
+      }
       const auto err = result.error;
       if (err == ERROR_NO_DATA) {
         if (offset == 0 || ++transient_no_data_retries > kMaxTransientReadNoDataRetries) {
@@ -677,13 +684,17 @@ bool WriteBytes(HANDLE pipe, const uint8_t* data, size_t size, FrameIo& io) {
   size_t no_progress_retries = 0;
   while (offset < size) {
     if (io.deadline.HardExpired()) {
+      io.timed_out = true;
       return false;
     }
     const DWORD chunk =
         static_cast<DWORD>(std::min<size_t>(size - offset, static_cast<size_t>(kPipeBufferSize)));
     const auto result = WritePipeChunk(pipe, data + offset, chunk, io);
     if (!result.ok) {
-      if (result.stopped || result.timed_out) return false;
+      if (result.stopped || result.timed_out) {
+        io.timed_out = result.timed_out;
+        return false;
+      }
       const auto err = result.error;
       if (err == ERROR_PIPE_BUSY) {
         if (++no_progress_retries > kMaxTransientWriteNoProgressRetries) {
@@ -740,7 +751,8 @@ std::optional<Envelope> ReadFramedEnvelope(HANDLE pipe, FrameIo& io) {
   return Deserialize(json);
 }
 
-std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx) {
+std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx,
+                                     core::EtwResult* outcome = nullptr) {
   // One budget spans header and body: it stays unarmed while the connection is
   // idle and starts as soon as the peer sends the first byte of the header, so
   // a peer that announces a frame and then goes silent is bounded.
@@ -748,11 +760,15 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx) {
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.read_hard, ctx.read_frame_started,
                            ctx.read_hard_deadline)};
   auto envelope = ReadFramedEnvelope(pipe, io);
+  if (outcome) *outcome = envelope ? core::EtwResult::Success :
+      (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
   NoteSoftDeadline(ctx, io.deadline);
   return envelope;
 }
 
-bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext& ctx) {
+bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext& ctx,
+                   core::EtwResult* outcome = nullptr) {
+  if (outcome) *outcome = core::EtwResult::Failed;
   const auto json = Serialize(envelope);
   if (!json) return false;
   const auto frame = EncodeLengthPrefixed(*json);
@@ -761,6 +777,8 @@ bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext
   FrameIo io{ctx.cancel_event, ctx.overlapped,
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.write_hard, /*armed=*/true)};
   const bool ok = WriteBytes(pipe, frame->data(), frame->size(), io);
+  if (outcome) *outcome = ok ? core::EtwResult::Success :
+      (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
   NoteSoftDeadline(ctx, io.deadline);
   return ok;
 }
@@ -792,12 +810,14 @@ enum class ClientReceiveStatus {
 struct ClientReceiveResult {
   ClientReceiveStatus status{ClientReceiveStatus::Failed};
   std::optional<Envelope> envelope;
+  core::EtwResult outcome{core::EtwResult::Disconnected};
 };
 
 ClientReceiveResult ReceiveClientEnvelope(
     const std::shared_ptr<ClientConnection>& connection,
     std::optional<std::chrono::steady_clock::time_point> phase_a_deadline,
-    std::optional<std::chrono::steady_clock::time_point> request_deadline) {
+    std::optional<std::chrono::steady_clock::time_point> request_deadline,
+    const core::EtwGuid& trace_client) {
   while (true) {
     if (WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
       return {ClientReceiveStatus::Failed, std::nullopt};
@@ -814,9 +834,15 @@ ClientReceiveResult ReceiveClientEnvelope(
       ctx.read_frame_started = true;
       ctx.deadlines = connection->deadlines;
       ctx.read_hard_deadline = request_deadline;
-      auto envelope = ReadEnvelope(connection->pipe.get(), ctx);
+      const auto frame_started = std::chrono::steady_clock::now();
+      core::EtwResult outcome = core::EtwResult::Failed;
+      auto envelope = ReadEnvelope(connection->pipe.get(), ctx, &outcome);
+      core::EtwLogger::LogIpcPhase(envelope ? envelope->request_id : 0,
+          core::EtwPhase::FrameRead,
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_started).count(),
+          outcome, trace_client);
       if (!envelope || WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
-        return {ClientReceiveStatus::Failed, std::nullopt};
+        return {ClientReceiveStatus::Failed, std::nullopt, outcome};
       }
       return {ClientReceiveStatus::Received, std::move(envelope)};
     }
@@ -1031,21 +1057,52 @@ struct NamedPipeServer::Impl {
 };
 
 struct NamedPipeClient::Impl {
+  core::EtwGuid trace_client{};
+  std::mutex trace_mutex;
+  using TraceKey = std::pair<const ClientConnection*, std::uint64_t>;
+  std::map<TraceKey, std::chrono::steady_clock::time_point> trace_requests;
+  core::EtwGuid TraceClient() {
+    std::lock_guard<std::mutex> guard(trace_mutex);
+    return trace_client;
+  }
+
+  void TraceResponse(std::uint64_t request, core::EtwResult result,
+                     const ClientConnection* expected) {
+    std::lock_guard<std::mutex> guard(trace_mutex);
+    const auto found = trace_requests.find({expected, request});
+    if (found == trace_requests.end()) return;
+    const auto elapsed = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - found->second).count();
+    core::EtwLogger::LogIpcResponse(request, elapsed, result, trace_client);
+    trace_requests.erase(found);
+  }
+  void TraceOutstanding(core::EtwResult result) {
+    std::lock_guard<std::mutex> guard(trace_mutex);
+    for (const auto& [request, started] : trace_requests) {
+      core::EtwLogger::LogIpcResponse(request.second,
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+          result, trace_client);
+    }
+    trace_requests.clear();
+  }
   std::shared_ptr<ClientConnection> CurrentConnection() const {
     std::lock_guard<std::mutex> lock(mutex);
     return connection;
   }
 
-  void DisconnectConnection(const std::shared_ptr<ClientConnection>& expected = nullptr) {
+  void DisconnectConnection(const std::shared_ptr<ClientConnection>& expected = nullptr,
+                            core::EtwResult outcome = core::EtwResult::Disconnected) {
     std::shared_ptr<ClientConnection> disconnected;
     {
       std::lock_guard<std::mutex> lock(mutex);
       if (expected) {
         disconnected = expected;
         if (connection == expected) {
+          TraceOutstanding(outcome);
           connection.reset();
         }
       } else {
+        TraceOutstanding(outcome);
         disconnected = std::move(connection);
       }
     }
@@ -1149,8 +1206,16 @@ std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const {
   return impl_->soft_deadline_exceeded.load(std::memory_order_relaxed);
 }
 
-NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
-NamedPipeClient::~NamedPipeClient() { Disconnect(); }
+NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) { core::EtwLogger::Register(); }
+NamedPipeClient::~NamedPipeClient() { Disconnect(); core::EtwLogger::Unregister(); }
+void NamedPipeClient::SetTraceClientId(const core::EtwGuid& client) noexcept {
+  std::lock_guard<std::mutex> guard(impl_->trace_mutex);
+  impl_->trace_client = client;
+}
+void NamedPipeClient::FinishTraceRequest(std::uint64_t request, core::EtwResult outcome) {
+  const auto connection = impl_->CurrentConnection();
+  impl_->TraceResponse(request, outcome, connection.get());
+}
 
 bool NamedPipeClient::Connect(const std::string& pipe_name, uint32_t timeout_ms) {
   Disconnect();
@@ -1209,16 +1274,46 @@ bool NamedPipeClient::Send(const Envelope& envelope) {
   const auto connection = impl_->CurrentConnection();
   if (!connection) return false;
 
+  try {
+    std::lock_guard<std::mutex> connection_guard(impl_->mutex);
+    std::lock_guard<std::mutex> guard(impl_->trace_mutex);
+    // Bound metadata when a peer never replies. No payload is retained.
+    if (envelope.type != MessageType::Cancel && impl_->connection == connection) {
+      const Impl::TraceKey key{connection.get(), envelope.request_id};
+      if (impl_->trace_requests.size() >= 128 && !impl_->trace_requests.contains(key))
+        impl_->trace_requests.erase(impl_->trace_requests.begin());
+      impl_->trace_requests[key] = std::chrono::steady_clock::now();
+    }
+  } catch (...) {
+    // Optional telemetry must not make a valid IPC send fail.
+  }
+  core::EtwLogger::LogIpcRequest(envelope.request_id, static_cast<std::uint64_t>(envelope.type),
+                                envelope.payload_json.size(), impl_->TraceClient());
+
   TransportContext ctx;
   ctx.cancel_event = connection->cancel_event.get();
   ctx.overlapped = true;
   ctx.deadlines = connection->deadlines;
-  if (!WriteEnvelope(connection->pipe.get(), envelope, ctx)) {
+  const auto frame_started = std::chrono::steady_clock::now();
+  core::EtwResult outcome = core::EtwResult::Failed;
+  const bool written = WriteEnvelope(connection->pipe.get(), envelope, ctx, &outcome);
+  core::EtwLogger::LogIpcPhase(envelope.request_id, core::EtwPhase::FrameWrite,
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_started).count(),
+      outcome, impl_->TraceClient());
+  if (!written) {
+    impl_->TraceResponse(envelope.request_id, outcome, connection.get());
     impl_->DisconnectConnection(connection);
     return false;
   }
   if (WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
+    impl_->TraceResponse(envelope.request_id, core::EtwResult::Cancelled, connection.get());
     return false;
+  }
+  if (envelope.type == MessageType::Cancel) {
+    if (const auto cancel = ParseCancel(envelope.payload_json)) {
+      core::EtwLogger::LogIpcCancel(cancel->target_request_id, impl_->TraceClient());
+      impl_->TraceResponse(cancel->target_request_id, core::EtwResult::Cancelled, connection.get());
+    }
   }
   return true;
 }
@@ -1227,11 +1322,12 @@ std::optional<Envelope> NamedPipeClient::Receive() {
   const auto connection = impl_->CurrentConnection();
   if (!connection) return std::nullopt;
 
-  auto result = ReceiveClientEnvelope(connection, std::nullopt, std::nullopt);
+  auto result = ReceiveClientEnvelope(connection, std::nullopt, std::nullopt, impl_->TraceClient());
   if (result.status != ClientReceiveStatus::Received) {
-    impl_->DisconnectConnection(connection);
+    impl_->DisconnectConnection(connection, result.outcome);
     return std::nullopt;
   }
+  if (result.envelope) impl_->TraceResponse(result.envelope->request_id, core::EtwResult::Success, connection.get());
   return std::move(result.envelope);
 }
 
@@ -1253,14 +1349,15 @@ std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(
     phase_a_deadline = *request_deadline;
   }
 
-  auto result = ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline);
+  auto result = ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline, impl_->TraceClient());
   if (result.status == ClientReceiveStatus::Failed) {
-    impl_->DisconnectConnection(connection);
+    impl_->DisconnectConnection(connection, result.outcome);
     return std::nullopt;
   }
   if (result.status == ClientReceiveStatus::IdleTimeout) {
     return std::nullopt;
   }
+  if (result.envelope) impl_->TraceResponse(result.envelope->request_id, core::EtwResult::Success, connection.get());
   return std::move(result.envelope);
 }
 
@@ -1288,6 +1385,8 @@ std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const { return 0; }
 
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
 NamedPipeClient::~NamedPipeClient() = default;
+void NamedPipeClient::SetTraceClientId(const core::EtwGuid&) noexcept {}
+void NamedPipeClient::FinishTraceRequest(std::uint64_t, core::EtwResult) {}
 bool NamedPipeClient::Connect(const std::string&, uint32_t) { return false; }
 void NamedPipeClient::Disconnect() {}
 bool NamedPipeClient::IsConnected() const { return false; }

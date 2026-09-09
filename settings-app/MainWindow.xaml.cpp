@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <string>
 
+#include "azookey/core/CrashReporting.h"
+
 namespace {
 
 struct DispatcherQueueAwaiter {
@@ -112,6 +114,11 @@ Windows::Foundation::IAsyncAction MainWindow::LoadSettingsCoreAsync() {
 }
 
 void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocumentResult& result) {
+  const bool collect_crash_metadata = result.settings.crash_report_consent == "local";
+  CrashReportConsentToggle().IsOn(collect_crash_metadata);
+  azookey::core::CrashReporting::SetConsent(collect_crash_metadata
+      ? azookey::core::CrashConsent::Local : azookey::core::CrashConsent::Off);
+  UpdateCrashReportStatus();
   SaveButton().IsEnabled(result.status !=
                              azookey::settings::SettingsDocumentStatus::LockUnavailable &&
                          result.status != azookey::settings::SettingsDocumentStatus::ReadError);
@@ -177,6 +184,7 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   }
 
   azookey::settings::EditableSettings settings;
+  settings.crash_report_consent = CrashReportConsentToggle().IsOn() ? "local" : "off";
   settings.model_enabled = ModelEnabledToggle().IsOn();
   const int backend_index = BackendPreferenceCombo().SelectedIndex();
   if (backend_index == 0 || backend_index == 1) {
@@ -216,12 +224,15 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   const auto save_result = azookey::settings::SaveSettingsDocument(path, settings);
   azookey::settings::SettingsIpcResult ipc_result;
   if (save_result.ok) {
+    azookey::core::CrashReporting::SetConsent(settings.crash_report_consent == "local"
+        ? azookey::core::CrashConsent::Local : azookey::core::CrashConsent::Off);
     ipc_result = azookey::settings::NotifyHostOfSettingsChange(
         azookey::settings::DefaultSettingsIpcOptions());
   }
   co_await ResumeForeground(dispatcher);
 
   SaveButton().IsEnabled(true);
+  UpdateCrashReportStatus();
   SaveProgressRing().IsActive(false);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
   // The disk save is authoritative, even if notifying the Host failed.
@@ -254,6 +265,30 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
                final_resources.GetString(L"SaveSucceededTitle"),
                final_resources.GetString(L"SaveSucceededMessage"));
   }
+}
+
+void MainWindow::UpdateCrashReportStatus() {
+  using azookey::core::CrashStatus;
+  const auto status = azookey::core::CrashReporting::Status();
+  const auto key = status == CrashStatus::Ready ? L"CrashReportReady" :
+      status == CrashStatus::Disabled ? L"CrashReportDisabled" : L"CrashReportUnavailable";
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  CrashReportStatusText().Text(resources.GetString(key));
+}
+
+void MainWindow::OpenCrashReportsButton_Click(Windows::Foundation::IInspectable const&,
+                                             Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  const auto directory = azookey::core::CrashReporting::DefaultDirectory();
+  std::error_code error;
+  if (!directory.empty() && std::filesystem::is_directory(directory, error)) {
+    const auto opened = ShellExecuteW(nullptr, L"open", directory.c_str(), nullptr, nullptr,
+                                      SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(opened) > 32) return;
+  }
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Informational,
+              resources.GetString(L"CrashReportFolderTitle"),
+              resources.GetString(L"CrashReportFolderUnavailable"));
 }
 
 void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {

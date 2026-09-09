@@ -509,7 +509,8 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
                                                               const std::string& context,
                                                               uint64_t now_epoch_sec,
                                                               const std::atomic<bool>* cancel,
-                                                              uint32_t max_candidates, bool live) {
+                                                              uint32_t max_candidates, bool live,
+                                                              const InferenceTelemetry* telemetry) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -557,13 +558,43 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
                                                 : std::min(max_candidates, config.max_candidates);
   const auto limited_context = TakeLastUtf8Codepoints(context, config.max_context_length);
   std::unique_lock<std::mutex> converter_lock(converter_call_mutex_);
+  const auto convert = [&](const std::shared_ptr<core::IConverter>& target, bool model,
+                           std::optional<std::chrono::steady_clock::time_point> deadline) {
+    const auto start = std::chrono::steady_clock::now();
+    const auto emit = [&](core::EtwResult result) {
+      if (telemetry) {
+        core::EtwLogger::LogInferencePhase(
+            telemetry->request_id, core::EtwPhase::Converter,
+            model ? core::EtwBackend::Neural : core::EtwBackend::Kana,
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+            result, telemetry->client);
+      }
+    };
+    try {
+      auto values = target->Convert(
+          kana, BuildContext(kana, limited_context, cancel, deadline, effective_max_candidates, live));
+      auto result = canceled() ? core::EtwResult::Cancelled : core::EtwResult::Success;
+      // Zenzai can absorb an exception and return kana fallback candidates.
+      // Preserve that backend failure independently of the successful response.
+      if (!canceled() && model) {
+        const auto* zenzai = dynamic_cast<const ZenzaiModelConverter*>(target.get());
+        if (zenzai && zenzai->last_error()) {
+          result = deadline && std::chrono::steady_clock::now() >= *deadline
+                       ? core::EtwResult::Timeout : core::EtwResult::Failed;
+        }
+      }
+      emit(result);
+      return values;
+    } catch (...) {
+      emit(canceled() ? core::EtwResult::Cancelled : core::EtwResult::Failed);
+      throw;
+    }
+  };
   {
     // IConverter implementations own mutable decode state. Serialize calls to
     // that state without holding state_mutex_, so Health and model swaps remain responsive.
     try {
-      converted =
-          converter->Convert(kana, BuildContext(kana, limited_context, cancel, conversion_deadline,
-                                                effective_max_candidates, live));
+      converted = convert(converter, using_model_converter, conversion_deadline);
       if (canceled()) return {};
       if (using_model_converter) {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -579,9 +610,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
           model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
         }
       }
-      converted = fallback_converter->Convert(
-          kana, BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates,
-                             live));
+      converted = convert(fallback_converter, false, std::nullopt);
     } catch (...) {
       convert_failed = true;
       if (!using_model_converter || !fallback_converter) throw;
@@ -592,9 +621,7 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
           model_runtime_error_ = "zenzai-convert-exception:unknown";
         }
       }
-      converted = fallback_converter->Convert(
-          kana, BuildContext(kana, limited_context, cancel, std::nullopt, effective_max_candidates,
-                             live));
+      converted = convert(fallback_converter, false, std::nullopt);
     }
   }
   // Enabled NLL retains ownership through merge so another request cannot replace
@@ -791,9 +818,11 @@ bool InferenceEngine::CommitSegmentsObservation(
     if (!NoteObservationIdLocked(request.observation_id)) return false;
     if (store_) {
       for (const auto& segment : request.segments) {
-        if (!segment.is_auto_punctuation)
+        if (!segment.is_auto_punctuation) {
           store_->Observe(segment.reading, segment.chosen.surface, config_.learning_alpha,
                           now_epoch_sec);
+          core::EtwLogger::LogLearningObserve(segment.reading.size(), segment.chosen.surface.size());
+        }
       }
       NoteLearningMutationLocked(now_epoch_sec);
     }
@@ -825,6 +854,7 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     if (!NoteObservationIdLocked(observation_id)) return false;
     if (store_) {
       store_->Observe(reading, surface, config_.learning_alpha, now_epoch_sec);
+      core::EtwLogger::LogLearningObserve(reading.size(), surface.size());
       NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;
@@ -859,6 +889,7 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
     if (store_) {
       store_->ObserveCorrection(reading, rejected_surface, selected_surface, config_.learning_alpha,
                                 now_epoch_sec);
+      core::EtwLogger::LogLearningObserve(reading.size(), selected_surface.size());
       NoteLearningMutationLocked(now_epoch_sec);
     }
     converter = active_converter_;

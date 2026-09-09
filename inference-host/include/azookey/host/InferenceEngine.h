@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "azookey/core/EtwLogger.h"
 #include "azookey/core/IConverter.h"
 #include "azookey/host/AiBackend.h"
 #include "azookey/host/NllScorer.h"
@@ -28,6 +29,11 @@
 #include "azookey/logging/RuntimeLogger.h"
 
 namespace azookey::host {
+
+struct InferenceTelemetry {
+  uint64_t request_id{};
+  core::EtwGuid client{};
+};
 
 enum class BackendKind {
   Cpu,
@@ -134,7 +140,8 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
                                                uint64_t now_epoch_sec,
                                                const std::atomic<bool>* cancel,
-                                               uint32_t max_candidates = 0, bool live = false);
+                                               uint32_t max_candidates = 0, bool live = false,
+                                               const InferenceTelemetry* telemetry = nullptr);
 
   // Backwards-compatible overload without cancel support.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,

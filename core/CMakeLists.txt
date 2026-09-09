@@ -4,7 +4,10 @@ add_library(azookey_core STATIC
   src/BracketSettings.cpp
   src/BracketTable.cpp
   src/CommandLine.cpp
+  src/CrashRetention.cpp
+  src/CrashReporting.cpp
   src/DoubleArrayTrie.cpp
+  src/EtwLogger.cpp
   src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp
   src/NumberRewriter.cpp
@@ -30,7 +33,7 @@ target_link_libraries(azookey_core
   PRIVATE azookey_project_warnings
 )
 if(WIN32)
-  target_link_libraries(azookey_core PRIVATE ole32 shell32 icu)
+  target_link_libraries(azookey_core PRIVATE ole32 shell32 icu advapi32 psapi)
 else()
   find_package(ICU REQUIRED COMPONENTS uc)
   target_link_libraries(azookey_core PRIVATE ICU::uc)

@@ -51,6 +51,16 @@
                     <ComboBoxItem Content="debug" />
                 </ComboBox>
             </StackPanel>
+            <ToggleSwitch x:Name="CrashReportConsentToggle"
+                          x:Uid="CrashReportConsentToggle"
+                          AutomationProperties.AutomationId="CrashReportConsentToggle" />
+            <TextBlock x:Uid="CrashReportDescription" TextWrapping="Wrap"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock x:Name="CrashReportStatusText" TextWrapping="Wrap"
+                       AutomationProperties.AutomationId="CrashReportStatusText" />
+            <Button x:Uid="OpenCrashReportsButton"
+                    Click="OpenCrashReportsButton_Click"
+                    AutomationProperties.AutomationId="OpenCrashReportsButton" />
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <Button x:Name="SaveButton"
                         x:Uid="SaveButton"

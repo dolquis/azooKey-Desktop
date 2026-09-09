@@ -6,12 +6,18 @@
 // clang-format on
 
 #include <microsoft.ui.xaml.window.h>
+#include "azookey/core/CrashReporting.h"
 
 namespace winrt::azookey_settings::implementation {
 
-App::App() { InitializeComponent(); }
+App::App() {
+  ::azookey::core::CrashReporting::Initialize(::azookey::core::CrashModule::Settings,
+                                            ::azookey::core::CrashConsent::Off);
+  InitializeComponent();
+}
 
 App::~App() {
+  ::azookey::core::CrashReporting::Shutdown();
   if (app_instance_ != nullptr && activated_token_.value != 0) {
     app_instance_.Activated(activated_token_);
   }

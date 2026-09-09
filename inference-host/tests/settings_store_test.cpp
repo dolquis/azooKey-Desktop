@@ -40,6 +40,31 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 
 }  // namespace
 
+TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisablesIt) {
+  const auto dir = TestDir("azookey_settings_crash_consent");
+  const auto path = dir / "settings.json";
+  azookey::host::SettingsStore store(path);
+  EXPECT_EQ(store.Load().settings.crash_report_consent, "off");
+  for (const auto* text : {R"({})", R"({"privacy":false})",
+                           R"({"privacy":{"crashReportConsent":true}})",
+                           R"({"privacy":{"crashReportConsent":"unknown"}})",
+                           R"({"privacy":{"crashReportConsent":"off"}})"}) {
+    WriteText(path, text);
+    EXPECT_EQ(store.Reload().settings.crash_report_consent, "off") << text;
+  }
+  WriteText(path, R"({"logLevel":"debug","privacy":{"mode":"private","crashReportConsent":"local"}})");
+  const auto enabled = store.Reload();
+  EXPECT_EQ(enabled.settings.crash_report_consent, "local");
+  EXPECT_TRUE(enabled.settings.ai_privacy.ai);
+  EXPECT_FALSE(enabled.settings.ai_privacy.external);
+  WriteText(path, "{");
+  const auto invalid = store.Reload();
+  EXPECT_EQ(invalid.status, azookey::host::SettingsLoadStatus::Invalid);
+  EXPECT_EQ(invalid.settings.crash_report_consent, "off");
+  EXPECT_EQ(store.settings().crash_report_consent, "off");
+  EXPECT_EQ(invalid.settings.log_level, "debug");
+}
+
 TEST(SettingsStoreTest, AiPrivacyAndTimeoutAreAppliedAndBounded) {
   const auto dir = TestDir("azookey_settings_ai_privacy");
   const auto path = dir / "settings.json";

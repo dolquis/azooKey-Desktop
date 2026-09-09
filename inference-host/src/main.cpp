@@ -25,6 +25,8 @@
 #endif
 
 #include "azookey/core/CommandLine.h"
+#include "azookey/core/CrashReporting.h"
+#include "azookey/core/EtwLogger.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
@@ -44,6 +46,15 @@
 #include "azookey/logging/RuntimeLogger.h"
 
 namespace {
+
+struct EtwRegistration {
+  EtwRegistration() { azookey::core::EtwLogger::Register(); }
+  ~EtwRegistration() { azookey::core::EtwLogger::Unregister(); }
+};
+
+struct CrashRegistration {
+  ~CrashRegistration() { azookey::core::CrashReporting::Shutdown(); }
+};
 
 azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
   return azookey::logging::RuntimeLogSafeText(std::move(value));
@@ -241,6 +252,7 @@ int wmain(int argc, wchar_t** argv) {
 #else
 int main(int argc, char** argv) {
 #endif
+  EtwRegistration etw_registration;
 #ifdef _WIN32
   // Construct before the engine so its destructor signals completion only
   // after the engine destructor has flushed pending learning observations.
@@ -367,6 +379,13 @@ int main(int argc, char** argv) {
 
   azookey::host::SettingsStore settings_store(user_paths->settings_path);
   const auto settings_result = settings_store.Load();
+  CrashRegistration crash_registration;
+  azookey::core::CrashReporting::Initialize(
+      azookey::core::CrashModule::Host,
+      settings_result.settings.crash_report_consent == "local"
+          ? azookey::core::CrashConsent::Local : azookey::core::CrashConsent::Off);
+  runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "crash_reporting_status",
+                  {{"status", static_cast<uint64_t>(azookey::core::CrashReporting::Status())}});
   const auto cli_backend = config.backend;
   const auto cli_model_path = config.model_path;
   config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, settings_result.settings,

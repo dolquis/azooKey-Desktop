@@ -49,6 +49,7 @@ struct RuntimeSettings {
   bool live_conversion{false};
   bool llm_magic_conversion{false};
   std::string log_level{"info"};
+  std::string crash_report_consent{"off"};
   std::string input_style{"default"};
   std::string custom_romaji_table_path{"%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv"};
   bool prediction_enabled{true};

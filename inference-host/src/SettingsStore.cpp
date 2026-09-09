@@ -153,6 +153,11 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadString(object, "openAiApiEndpoint", settings.open_ai_api_endpoint);
   settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
   settings.ai_privacy = core::ParseAiPrivacy(ipc::json::Value(object));
+  if (const auto privacy = object.find("privacy");
+      privacy != object.end() && privacy->second.IsObject()) {
+    settings.crash_report_consent =
+        ReadEnum(privacy->second.AsObject(), "crashReportConsent", "off", {"off", "local"});
+  }
   settings.open_ai_timeout_ms = static_cast<int32_t>(std::clamp<int64_t>(
       ipc::json::Value(object).GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
   settings.include_context_in_ai_transform =
@@ -259,6 +264,9 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
   const auto finish_invalid = [&]() -> SettingsLoadResult {
     if (preserve_current_on_invalid) {
       result.settings = settings_;
+      // An unreadable consent must never keep crash collection enabled.
+      result.settings.crash_report_consent = "off";
+      settings_.crash_report_consent = "off";
     } else {
       settings_ = result.settings;
     }

@@ -121,6 +121,10 @@
       "type": "object", "additionalProperties": false, "default": {},
       "properties": {
         "mode": {"type": "string", "enum": ["normal", "private", "secure", "offline", "custom"], "default": "normal"},
+        "crashReportConsent": {
+          "type": "string", "enum": ["off", "local"], "default": "off",
+          "description": "障害診断の明示的な保存同意。localは例外コード等の最小メタデータだけを端末内に保存し、本文・メモリ・スタックは収集しない。自動送信は行わない"
+        },
         "custom": {
           "type": "object", "additionalProperties": false, "default": {},
           "properties": {

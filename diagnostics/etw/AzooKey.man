@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<instrumentationManifest xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events">
+  <instrumentation>
+    <events>
+      <provider name="azooKey-Desktop" guid="{89553f1c-7d18-4a6d-a720-534921c8b730}" symbol="AZOOKEY_ETW_PROVIDER"
+          resourceFileName="azookey_etw_manifest.dll" messageFileName="azookey_etw_manifest.dll">
+        <keywords><keyword name="Metadata" mask="0x1"/></keywords>
+        <templates>
+          <template tid="T1000">
+            <data name="client_id" inType="win:UInt64"/>
+            <data name="reserved1" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="profile_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T1001">
+            <data name="client_id" inType="win:UInt64"/>
+            <data name="reserved1" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="reserved_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T2000">
+            <data name="length" inType="win:UInt64"/>
+            <data name="reserved1" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="reserved_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T2001">
+            <data name="length" inType="win:UInt64"/>
+            <data name="committed" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="reserved_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T3000">
+            <data name="request_id" inType="win:UInt64"/>
+            <data name="message_type" inType="win:UInt64"/>
+            <data name="payload_size" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T3001">
+            <data name="request_id" inType="win:UInt64"/>
+            <data name="reserved1" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="latency_ms" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="result" inType="win:UInt64"/>
+          </template>
+          <template tid="T3002">
+            <data name="target_request_id" inType="win:UInt64"/>
+            <data name="reserved1" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T4000">
+            <data name="request_id" inType="win:UInt64"/>
+            <data name="backend" inType="win:UInt64"/>
+            <data name="kana_len" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T4001">
+            <data name="request_id" inType="win:UInt64"/>
+            <data name="n_candidates" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="latency_ms" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="result" inType="win:UInt64"/>
+          </template>
+          <template tid="T4002">
+            <data name="request_id" inType="win:UInt64"/>
+            <data name="phase" inType="win:UInt64"/>
+            <data name="backend" inType="win:UInt64"/>
+            <data name="latency_ms" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="result" inType="win:UInt64"/>
+          </template>
+          <template tid="T5000">
+            <data name="reading_len" inType="win:UInt64"/>
+            <data name="surface_len" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="reserved_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T5001">
+            <data name="reading_len" inType="win:UInt64"/>
+            <data name="surface_len" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="reserved_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T9000">
+            <data name="source" inType="win:UInt64"/>
+            <data name="error_code" inType="win:UInt64"/>
+            <data name="hr" inType="win:UInt64"/>
+            <data name="reserved_latency" inType="win:Double"/>
+            <data name="reserved_guid" inType="win:GUID"/>
+            <data name="reserved_result" inType="win:UInt64"/>
+          </template>
+          <template tid="T3003">
+            <data name="request_id" inType="win:UInt64"/>
+            <data name="phase" inType="win:UInt64"/>
+            <data name="reserved2" inType="win:UInt64"/>
+            <data name="latency_ms" inType="win:Double"/>
+            <data name="client_id" inType="win:GUID"/>
+            <data name="result" inType="win:UInt64"/>
+          </template>
+        </templates>
+        <events>
+          <event value="1000" version="0" symbol="Activate" level="win:Informational" keywords="Metadata" template="T1000"/>
+          <event value="1001" version="0" symbol="Deactivate" level="win:Informational" keywords="Metadata" template="T1001"/>
+          <event value="2000" version="0" symbol="CompositionStart" level="win:Informational" keywords="Metadata" template="T2000"/>
+          <event value="2001" version="0" symbol="CompositionEnd" level="win:Informational" keywords="Metadata" template="T2001"/>
+          <event value="3000" version="0" symbol="IpcRequest" level="win:Informational" keywords="Metadata" template="T3000"/>
+          <event value="3001" version="0" symbol="IpcResponse" level="win:Informational" keywords="Metadata" template="T3001"/>
+          <event value="3002" version="0" symbol="IpcCancel" level="win:Informational" keywords="Metadata" template="T3002"/>
+          <event value="4000" version="0" symbol="InferenceStart" level="win:Informational" keywords="Metadata" template="T4000"/>
+          <event value="4001" version="0" symbol="InferenceEnd" level="win:Informational" keywords="Metadata" template="T4001"/>
+          <event value="4002" version="0" symbol="InferencePhase" level="win:Informational" keywords="Metadata" template="T4002"/>
+          <event value="5000" version="0" symbol="LearningObserve" level="win:Informational" keywords="Metadata" template="T5000"/>
+          <event value="5001" version="0" symbol="LearningForget" level="win:Informational" keywords="Metadata" template="T5001"/>
+          <event value="9000" version="0" symbol="Error" level="win:Informational" keywords="Metadata" template="T9000"/>
+          <event value="3003" version="0" symbol="IpcPhase" level="win:Informational" keywords="Metadata" template="T3003"/>
+        </events>
+      </provider>
+    </events>
+  </instrumentation>
+</instrumentationManifest>

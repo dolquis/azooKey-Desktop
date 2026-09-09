@@ -1836,11 +1836,12 @@ WinSparkle 互換の `appcast.xml` フィードも `gh-pages` ブランチで提
 ### 7.1 Provider GUID
 
 ```cpp
-// {ZZZZZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZZZZZZZZZ}
-constexpr GUID kAzooKeyEtwProvider = { ... };
+// {89553f1c-7d18-4a6d-a720-534921c8b730}
+constexpr GUID kAzooKeyEtwProvider = {
+    0x89553f1c, 0x7d18, 0x4a6d, {0xa7, 0x20, 0x53, 0x49, 0x21, 0xc8, 0xb7, 0x30}};
 ```
 
-GUID 実値は M33 着手時に `uuidgen` で確定。
+Provider 名は `azooKey-Desktop`。GUID はバージョン間で固定する。
 
 ### 7.2 Event ID 表
 
@@ -1850,17 +1851,32 @@ GUID 実値は M33 着手時に `uuidgen` で確定。
 | 1001 | Deactivate | client_id |
 | 2000 | CompositionStart | length |
 | 2001 | CompositionEnd | length, committed |
-| 3000 | IpcRequest | request_id, message_type, payload_size |
-| 3001 | IpcResponse | request_id, latency_ms |
-| 3002 | IpcCancel | target_request_id |
-| 4000 | InferenceStart | request_id, backend, kana_len |
-| 4001 | InferenceEnd | request_id, n_candidates, latency_ms |
+| 3000 | IpcRequest | request_id, message_type, payload_size, client_guid |
+| 3001 | IpcResponse | request_id, latency_ms, client_guid, result |
+| 3002 | IpcCancel | target_request_id, client_guid |
+| 3003 | IpcPhase | request_id, phase, latency_ms, client_guid, result |
+| 4000 | InferenceStart | request_id, backend, kana_len, client_guid |
+| 4001 | InferenceEnd | request_id, n_candidates, latency_ms, client_guid, result |
+| 4002 | InferencePhase | request_id, phase, backend, latency_ms, client_guid, result |
 | 5000 | LearningObserve | reading_len, surface_len |
 | 5001 | LearningForget | reading_len, surface_len |
 | 9000 | Error | source, error_code, hr |
 
 > 上表のフィールドは長さ・件数・enum・数値・GUID・ID のみで構成し、入力本文を
 > 含めない。本文を載せない理由と禁止対象は §7.2.1 を正典とする。
+
+相関キーは `client_guid` と `request_id` の組とする。GUID 形式でない旧クライアントの
+ID はゼロ GUID とし、本文や任意文字列に置き換えない。`result` は Success=0、Timeout=1、
+Disconnected=2、Failed=3、Cancelled=4、`backend` は Unknown=0、Kana=1、Neural=2、Ai=3。
+`phase` は Converter=0、AiTransform=1、FrameWrite=2、FrameRead=3 とする。
+converter の失敗後に代替変換が成功した場合、4002 は Failed、4001 は Success を記録する。
+`kana_len`、`reading_len`、`surface_len`、`payload_size` は UTF-8 バイト数、
+Composition の `length` は UTF-16 コード単位数、`latency_ms` は単調時計によるミリ秒。
+
+バイナリレイアウトは `diagnostics/etw/AzooKey.man` の template で定義する。
+各イベントは UInt64 3 個、Double 1 個、GUID 1 個、UInt64 1 個の 56 バイトとし、
+イベントが使わない `reserved*` フィールドはゼロにする。末尾の UInt64 は結果分類、
+GUID は 1000 では profile GUID、要求イベントでは client GUID を表す。
 
 #### 7.2.1 本文を ETW に載せない（redaction 規律）
 
@@ -1889,7 +1905,7 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 
 ### 7.3 ラッパ
 
-`core/src/EtwLogger.cpp`（新規）：
+`core/src/EtwLogger.cpp`：
 
 ```cpp
 // Module / ErrorCode は閉じた enum。文字列引数を一切持たせず、本文混入を
@@ -1919,123 +1935,110 @@ public:
 
 ### 7.4 観測
 
-`wpr -start GeneralProfile -filemode` + `wpa.exe` で開発者がトレース可能。
-本番ユーザーは ETW を意識せず、問題報告時に WPR トレースを取ってもらう。
+`diagnostics/azookey-diagnostics.wprp` は azooKey provider と OS の CSwitch / DiskIO を
+同じトレースへ収集する。`GeneralProfile` だけでは azooKey のイベントは有効にならない。
+manifest のリソース DLL は `azookey_etw_manifest` ターゲットで生成する。
+
+開発者はビルド後、リポジトリルートの管理者 PowerShell から以下を実行する。
+manifest 登録と WPR の開始・終了は診断時の明示操作であり、IME の起動・インストールでは行わない。
+
+```powershell
+$manifest = (Resolve-Path diagnostics/etw/AzooKey.man).Path
+$resources = (Resolve-Path build/windows-debug/diagnostics/etw/azookey_etw_manifest.dll).Path
+wevtutil im $manifest /rf:$resources /mf:$resources
+wpr -profiles diagnostics/azookey-diagnostics.wprp
+wpr -start diagnostics/azookey-diagnostics.wprp!AzooKeyDiagnostics -filemode
+# IME を有効にして一度変換する。
+wpr -stop azookey.etl
+wpa.exe azookey.etl
+# 診断が終了したら開発用 manifest 登録を解除する。
+wevtutil um $manifest
+```
+
+WPA の Generic Events で provider `azooKey-Desktop` を絞り、同一の
+`client_guid` / `request_id` の 3000 → 3003 → 4000 → 4002 → 4001 → 3001 を確認する。
+3003 の FrameRead と FrameWrite は読み書きの区間、4002 は backend の区間を表す。
+タイムアウト・切断・converter 障害は `result` で分類し、CSwitch / DiskIO と時間軸を比較する。
+WPR / WPA の実機確認は、自動テストによる provider 登録・採取の確認とは別に行う。
 
 ## 8. WER（Windows Error Reporting、M33）
 
-### 8.1 MiniDumpWriteDump
+### 8.1 許可したメタデータだけを保存する minidump
 
-```cpp
-// ダンプ種別: 本文（入力バッファ・候補・学習データ・API キー）を取り込みやすい
-// データセグメント / フルメモリ / ヒープは含めず、原因解析に要る最小集合に限定する。
-// 詳細な根拠と禁止フラグは §8.3 を正典とする。
-constexpr MINIDUMP_TYPE kAzooKeyDumpType = static_cast<MINIDUMP_TYPE>(
-    MiniDumpNormal |                  // スタック + モジュール一覧（最小）
-    MiniDumpWithThreadInfo |          // スレッド状態（本文を含まない）
-    MiniDumpWithUnloadedModules |     // アンロード済みモジュール
-    MiniDumpIgnoreInaccessibleMemory);
+Host / Settings は `CrashReporting` を初期化し、明示的に
+`SetUnhandledExceptionFilter` を設定する。TIP DLL は利用アプリ内で動くため、
+プロセス全体の例外フィルタを設定しない。TIP の IPC 処理は局所的な
+`__try` / `__except` の局所境界で数値の例外コードだけを記録し、
+`EXCEPTION_CONTINUE_SEARCH` で利用アプリ / OS の障害処理へ伝播する。
+`/EHsc` では非同期例外時の C++ オブジェクト解放を保証できないため、
+アクセス違反を握りつぶして IPC worker を再開する復旧は行わない。
 
-LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep) {
-    // crashReportConsent=off: azooKey のダンプを書かず OS 既定処理（既定の
-    // UnhandledExceptionFilter = WER 等）へ委ねる。次フィルタ / 既定へ進める
-    // 戻り値は EXCEPTION_CONTINUE_SEARCH（§8.3）。
-    if (!CrashReporting::DumpAllowed()) return EXCEPTION_CONTINUE_SEARCH;
+ダンプはプロセスメモリを走査せず、次の 4 ストリームだけを明示的に構成する。
+`MiniDumpWriteDump` の通常ダンプに含まれるスタックやレジスタは収集しない。
 
-    // 保存先は %LOCALAPPDATA%\azooKey\crashes\ に統一（§8.2）。GetTempPath は使わない。
-    // NextDumpPath() はディレクトリの存在を保証してからパスを返す（起動時にも作成済み。
-    // 新規プロファイル / アンインストール後の掃除で親ディレクトリが無くても dump を失わない。§8.2）。
-    std::wstring path = CrashReporting::NextDumpPath();  // azookey-<module>-<UTCstamp>-<pid>.dmp
+| ストリーム | 保存する情報 |
+|---|---|
+| `SystemInfoStream` | システムのアーキテクチャと固定のプラットフォーム識別値 |
+| `ExceptionStream` | 数値の例外コード・例外アドレス・障害スレッド ID |
+| `ThreadListStream` | 障害スレッド ID のみ。スタック・コンテキスト・TEB は含めない |
+| `ModuleListStream` | Host または Settings の固定 exe 名、起動時に取得したモジュールのベースアドレスとサイズ |
 
-    bool wrote = false;
-    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        MINIDUMP_EXCEPTION_INFORMATION mei{
-            GetCurrentThreadId(), ep, FALSE
-        };
-        wrote = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
-                                  hFile,
-                                  kAzooKeyDumpType,
-                                  &mei, nullptr, nullptr);
-        CloseHandle(hFile);
-    }
-    CrashReporting::RotateDumps();  // 保持上限を適用（§8.2）
-    // 自前 dump を書けたときのみ EXCEPTION_EXECUTE_HANDLER（OS 既定 WER の二重ダンプを避け
-    // プロセス終了へ）。ディレクトリ欠落・書き込み失敗で dump を残せなかったときは OS 既定
-    // フォールバックを潰さないよう EXCEPTION_CONTINUE_SEARCH を返す（§8.2）。
-    return wrote ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
-}
+ストリームと未使用フィールドはゼロ初期化する。例外パラメータ、レジスタ、
+スタック、ヒープ、データセグメント、ユーザーパス、任意の文字列は保存しない。
+この形式では例外位置の照合はできるが、呼び出し履歴や変数の復元はできない。
 
-// main で
-SetUnhandledExceptionFilter(UnhandledFilter);
-```
-
-Host / Settings は明示的に `SetUnhandledExceptionFilter` で設定。
-TIP DLL は in-proc なのでアプリ側を巻き込まないよう **設定しない**。
-代わりに `__try`/`__except` で IPC ループ等のスコープを囲む。
+`local` の有効化時に書き込み worker を用意し、例外フィルタは数値フィールドを
+渡して最大 1,000 ms 待つ。ディレクトリ作成、ファイル I/O、保持処理は worker が行う。
+無効時、要求が競合した場合、保存失敗時、待機が期限に達した場合は以前のフィルタまたは
+OS 既定処理へ委ねる。自前ダンプの保存成功を確認できた場合だけ
+`EXCEPTION_EXECUTE_HANDLER` を返す。プロセス内の障害であるため、worker による
+保存も保証はしない。
 
 ### 8.2 保存先・保持・削除運用
 
 - **保存先**: `%LOCALAPPDATA%\azooKey\crashes\`。ファイル名は
   `azookey-<module>-<UTC: yyyyMMddTHHmmssZ>-<pid>.dmp`（`<module>` は `host` /
-  `settings`）。`GetTempPath` 直下への書き込み（旧 §8.1）は廃止し、保存先を一本化する。
-- **ディレクトリ作成（必須）**: クラッシュディレクトリは **起動時**（`CrashReporting` 初期化 /
-  `SetUnhandledExceptionFilter` 設定時）に作成し、`NextDumpPath()` も呼び出しのたびに存在を
-  冪等に保証する（`SHCreateDirectoryEx` 等で再帰作成）。新規プロファイルやアンインストール後の
-  掃除で親ディレクトリが無い状態でも初回 dump を失わないため。ディレクトリ欠落・書き込み失敗で
-  自前 dump を残せなかった場合、`UnhandledFilter` は `EXCEPTION_CONTINUE_SEARCH` を返して OS 既定
-  フォールバックを潰さない（§8.1。自前 dump 取得時のみ `EXCEPTION_EXECUTE_HANDLER`）。
-- **保持上限（ローテーション）**: 既定で **最新 5 個 / 合計 50 MB / 30 日**を上限とし、
-  いずれかを超えた古いダンプから削除する。`module` をまたいだ全体集合に対して適用する。
-- **適用タイミング**: Host / Settings 起動時に一度、および各ダンプ書き込み直後
-  （`RotateDumps()`）に実行する。クラッシュ時の `UnhandledFilter` 内処理は最小限に保つ。
-- **アンインストール時**: MSIX（§1.4）・手動アンインストール経路ともに当該ディレクトリを
-  削除し、ダンプを残骸として残さない（`compat-test` の残骸 0 smoke 対象に含める）。
+  `settings`）。同名ファイルを上書きしない。
+- **ディレクトリ作成**: `local` の有効化時に作成し、保存時にも存在を確認して、
+  削除されていれば再作成する。`off` では収集用ディレクトリを作らない。
+  作成・書き込みに失敗しても OS の障害処理を妨げない。
+- **保持上限**: 既定で **最新 5 個 / 合計 50 MB / 30 日**を上限とし、
+  いずれかを超えた古いダンプから削除する。Host / Settings をまたいだ集合に適用する。
+  対象は所定の名前を持つ通常ファイルのみとし、シンボリックリンク、reparse point、
+  サブディレクトリや無関係なファイルを辿らない。
+- **適用タイミング**: `local` の有効化時に適用し、書き込み前にも新規 1 個分の枠を確保する。
+  Host / Settings の同時書き込みは同一セッション内の名前付き mutex で直列化する。
+  書き込み成功後は完了を通知してから再度適用するが、プロセス終了によって中断され得る。
+  `off` への切替は新規収集を停止し、既存ファイルの手動削除は保存先から行う。
+- **アンインストール時**: MSIX（§1.4）・手動アンインストール経路では当該ディレクトリも
+  削除対象とする（`compat-test` の残骸 0 smoke 対象）。
 
 ### 8.3 ダンプ内容の最小化と同意（redaction / consent）
 
-クラッシュダンプはメモリ断片を含むため、入力本文・候補・学習データ（`reading` /
-`surface`）・OpenAI API キーを意図せず取り込み得る。これを設計原則
-（`docs/privacy-and-secure-input-spec.md` §2「ローカル完結」「明示同意なしにクラウド
-送信しない」「fail closed」）に沿って最小化する。
+本節は `docs/privacy-and-secure-input-spec.md` §7 から参照される収集・保持方針の正典とする。
+本文を後から検出・マスクする方式ではなく、§8.1 の許可したフィールドだけを保存する。
+入力本文、候補、学習データ（`reading` / `surface`）、API キーを含み得る
+メモリ断片は取り込まない。
 
-- **ダンプ種別の最小化（§8.1）**: `MiniDumpWithDataSegs`（データセグメント = グローバル /
-  静的バッファ）・`MiniDumpWithFullMemory`・`MiniDumpWithProcessThreadData`・
-  `MiniDumpWithHandleData` は**使わない**。これらは入力バッファ・学習データ・API キーを
-  取り込む可能性が高い。スタックメモリには確定前の入力断片が残り得るが、原因解析に必須の
-  ため許容し、データセグメント / ヒープ / フルメモリの全面取り込みは行わないことで露出面を
-  抑える。
-- **同意キー** `privacy.crashReportConsent`（enum、既定 `local`。schema 正典は
+- **同意キー** `privacy.crashReportConsent`（enum、既定 `off`。schema の定義は
   `docs/privacy-and-secure-input-spec.md` §7）:
-  - `off` — azooKey 管理のダンプ（§8.2 の `%LOCALAPPDATA%\azooKey\crashes\`）を書かない。
-    `UnhandledFilter` は `DumpAllowed()==false` のとき **`EXCEPTION_CONTINUE_SEARCH`** を返して
-    既定の `UnhandledExceptionFilter` へ進める（`EXCEPTION_EXECUTE_HANDLER` は WER を迂回して
-    プロセス終了へ進む値であり、IME がマシンの障害処理を上書きするのは不適切なため用いない）。
-    なお自前 dump を書いた経路は二重ダンプ回避のため `EXCEPTION_EXECUTE_HANDLER` を返す（§8.1）。
-    - **同意スコープの明確化**: `crashReportConsent` は **azooKey 管理ダンプの生成可否のみ**を
-      制御する。OS の WER / LocalDumps はマシン全体のポリシー（管理者 / ユーザーの OS 設定）で
-      あり azooKey の同意スコープ外とする。azooKey は **自身向けの WER LocalDumps 登録を行わず**
-      （`HKLM/HKCU\...\Windows Error Reporting\LocalDumps\<exe>` を作らない）、OS 既定を有効化も
-      強制無効化もしない。したがって `off` でも、既にマシンに WER / LocalDumps ポリシーが
-      設定されていれば OS 側ダンプは生じ得るが、それは azooKey 管理外であり本同意の対象外。
-      `off` が保証するのは「azooKey が自前ダンプを書かない／自前の WER 収集を仕込まない」こと
-      である。
-  - `local` — `%LOCALAPPDATA%` 配下に保存のみ。自動送信は一切しない（Phase 7 の実装範囲・
-    既定）。
-  - **送信（upload）は M33 schema に含めない**。送信経路は Phase 7 では未実装で、
-    `crashReportConsent` の enum は `off` / `local` のみとする。送信機能は将来 M で実装する際に、
-    **バージョン / タイムスタンプ付きの明示同意レコード**として別途追加する（bare な enum 値
-    `"upload"` を先行して永続化しない）。理由: M33 で `upload` を enum に入れて永続化可能にすると、
-    設定 UI / 管理者 / `settings.json` 直書きで送信経路実装前に `crashReportConsent: "upload"` が
-    残り、将来の送信実装時に「新規の明示同意」と区別できず one-shot 再同意保証を迂回し得るため。
-    ローダは未知値を `local` に正規化する（前方互換は §3.6 拡張方針）。
-- **送信は常に明示操作**: 自動アップロード・GitHub Issue 自動起票は行わない。ユーザーは
-  設定アプリ「詳細 → クラッシュレポート」から、対象ダンプを選んで手動でアーカイブ・添付
-  する（§8.2 の保存ディレクトリを開く）。
-- **要約の redaction**: M44 診断 ZIP の `crash-summary.txt` は
-  `docs/dev-infrastructure-spec.md` §12.5 のとおり **WER ダンプの要約のみ**を含め、
-  ダンプ本体・スタック上の文字列バッファを含めない。本書 §8 と §12.5 は同一方針とする。
+  - `off` — azooKey 管理のダンプを書かない。キー欠落、未知値、型不正、
+    設定ファイルの読み取り・解析失敗も `off` として扱う。
+  - `local` — ユーザーが明示的に選択した場合のみ、§8.1 のメタデータを
+    `%LOCALAPPDATA%` 配下へ保存する。自動送信しない。
+- **OS 側との境界**: 本キーが制御するのは azooKey 管理ダンプの新規生成のみとする。
+  azooKey は WER LocalDumps のレジストリ登録を作成せず、OS の WER / LocalDumps 設定を
+  有効化も無効化もしない。`off` でも、管理者やユーザーが設定した OS 側の収集は
+  行われ得る。その内容は本キーの制御対象外とする。
+- **同意操作**: 設定アプリのクラッシュレポート設定で `local` を選び、保存すると適用する。
+  保存先を開く操作を用意する。自動アップロード・GitHub Issue 自動起票は行わず、
+  外部への添付はユーザーの明示操作とする。
+- **送信同意は別契約**: M33 の enum は `off` / `local` のみとし、`upload` を含めない。
+  送信機能を追加する場合は、バージョンとタイムスタンプを持つ明示同意レコードを
+  別途導入する。既存の `local` や未知値を送信への同意に読み替えない。
+- **診断 ZIP**: M44 の `crash-summary.txt` は
+  `docs/dev-infrastructure-spec.md` §12.5 に従い、ダンプの要約だけを含める。
+  ダンプ本体やメモリ上の文字列バッファを同梱しない。
 
 ## 9. DPAPI 学習データ暗号化（M34）
 

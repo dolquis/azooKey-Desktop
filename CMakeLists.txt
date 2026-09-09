@@ -403,3 +403,74 @@ if(AZOOKEY_BUILD_TESTS)
     add_dependencies(azookey_check ${AZOOKEY_CHECK_DEPENDS} azookey_inference_host)
   endif()
 endif()
+
+# --- Precompiled header (DEV-910 measurement) --------------------------------
+# Off by default: this exists so that "PCH on/off x sccache hit/miss" can be
+# measured on the real MSVC build. Applied to repo targets that compile at
+# least AZOOKEY_PCH_MIN_SOURCES translation units; below that the one extra
+# PCH compilation per target costs more than it saves. Third-party targets
+# (GoogleTest, WIL) are left alone.
+option(AZOOKEY_USE_PCH "Precompile a common header for large repo targets" OFF)
+set(AZOOKEY_PCH_MIN_SOURCES 8 CACHE STRING
+    "Minimum translation units for a target to receive the precompiled header")
+
+function(azookey_apply_pch)
+  set(_pch_header "${CMAKE_SOURCE_DIR}/cmake/azookey_pch.h")
+  set(_dirs "${CMAKE_SOURCE_DIR}")
+  set(_applied "")
+  while(_dirs)
+    list(POP_FRONT _dirs _dir)
+    get_property(_subdirs DIRECTORY "${_dir}" PROPERTY SUBDIRECTORIES)
+    foreach(_sub IN LISTS _subdirs)
+      # Skip FetchContent/submodule trees: their targets carry their own flags.
+      string(FIND "${_sub}" "${CMAKE_BINARY_DIR}" _in_build)
+      string(FIND "${_sub}" "${CMAKE_SOURCE_DIR}/third_party" _in_third_party)
+      if(_in_build EQUAL -1 AND _in_third_party EQUAL -1)
+        list(APPEND _dirs "${_sub}")
+      endif()
+    endforeach()
+    get_property(_targets DIRECTORY "${_dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_target IN LISTS _targets)
+      get_target_property(_type ${_target} TYPE)
+      if(NOT _type MATCHES "^(STATIC|SHARED|MODULE|OBJECT)_LIBRARY$|^EXECUTABLE$")
+        continue()
+      endif()
+      get_target_property(_sources ${_target} SOURCES)
+      set(_tu_count 0)
+      foreach(_source IN LISTS _sources)
+        if(_source MATCHES "\.(cpp|cxx|cc)$")
+          math(EXPR _tu_count "${_tu_count} + 1")
+        endif()
+      endforeach()
+      if(_tu_count GREATER_EQUAL ${AZOOKEY_PCH_MIN_SOURCES})
+        target_precompile_headers(${_target} PRIVATE "${_pch_header}")
+        list(APPEND _applied "${_target}(${_tu_count})")
+      endif()
+    endforeach()
+  endwhile()
+  list(SORT _applied)
+  message(STATUS "PCH applied to ${_applied}")
+endfunction()
+
+if(AZOOKEY_USE_PCH)
+  azookey_apply_pch()
+endif()
+
+# Unity-build exclusions needed to make -DCMAKE_UNITY_BUILD=ON compile at all,
+# so that unity can be measured against PCH. Both are real collisions found by
+# building with `ninja -k 0`, not workarounds invented for the benchmark:
+#
+# * UserDictCli.cpp and LookupCli.cpp each define SetError/ReadOptionValue in an
+#   anonymous namespace. Merging them into one TU redefines both.
+# * BenchmarkResult.cpp calls ipc::json::Value::GetObject without undefining the
+#   Win32 GetObject macro; it is safe today only because <windows.h> is not in
+#   its include path. Merging it with BenchmarkCommandLine.cpp, which does
+#   include <windows.h>, rewrites the call to GetObjectA and fails to link.
+if(CMAKE_UNITY_BUILD)
+  set_source_files_properties("${CMAKE_SOURCE_DIR}/inference-host/src/UserDictCli.cpp"
+    TARGET_DIRECTORY azookey_host
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+  set_source_files_properties("${CMAKE_SOURCE_DIR}/bench/BenchmarkResult.cpp"
+    TARGET_DIRECTORY azookey_benchmark_result
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+endif()

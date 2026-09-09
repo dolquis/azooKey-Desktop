@@ -22,6 +22,26 @@ cmake --build --preset linux-debug
 ctest --preset linux-debug --no-tests=error
 ```
 
+### MSVC のヘッダ変更が増分ビルドへ反映されない場合
+
+Ninja は MSVC の `/showIncludes` 出力からヘッダ依存を記録する。
+configure で検出した接頭辞と実ビルドの出力言語が異なると、ヘッダを変更しても
+呼出側が再コンパイルされず、ABI の不一致でアクセス違反が起こり得る。
+ルート `CMakeLists.txt` は `project()` の前と compiler launcher の両方で
+`VSLANG=1033` を指定し、検出とビルドの言語を揃える。
+
+疑わしい場合は、対象 build ディレクトリの `CMakeFiles/rules.ninja` にある
+`msvc_deps_prefix` が `Note: including file:` であることを確認する。
+`ninja -C build/windows-debug -t deps` で、ヘッダを使うオブジェクトの
+`#deps` が 0 なら依存追跡を確認する。ビルドログに英語の include 行が大量に
+残る場合も、Ninja が接頭辞を認識していない可能性がある。
+
+接頭辞は CMake のコンパイラ検出結果に保存されるため、通常の再configureだけでは
+古い値が残る。異なる言語で生成した build ディレクトリから移行するときは、
+README の configure 手順に `-B <新しいbuildディレクトリ>` を加えて検出し直し、
+build と CTest にもそのディレクトリを指定する。ヘッダ変更後に呼出側と実装側が
+再コンパイルされることを確認する。sccache の全削除だけでは接頭辞の不一致は直らない。
+
 ## Bench
 
 ```powershell

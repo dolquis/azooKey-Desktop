@@ -48,6 +48,9 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/bracket_pairing_test.cpp` | 括弧テーブルの上書き・追加・無効化、アプリ別 allow/deny ポリシーの重ね合わせ、挿入・skip・空ペア Backspace 削除、対称引用符の境界判定 |
 | `core_tests` | `core/tests/app_profile_resolver_test.cpp` | アプリ別プロファイルの部分上書き、`auto`/inherit の解決順、プロセス名・ウィンドウクラス照合と決定的衝突報告、不正値の inherit |
 | `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定、機微本文の伏せ字化、環境変数 opt-in と level、書込不能先での非 throw、世代ローテーションと保持期間 |
+| `core_tests` | `core/tests/crash_retention_test.cpp` | クラッシュ診断の個数・容量・保存期間制限、リンクと無関係なファイルの保護 |
+| `core_tests` | `core/tests/etw_logger_test.cpp` | ETW イベントの固定長 payload、数値フィールド、要求の対応付けと終了結果 |
+| `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、同意 off と保存不能時の fallback、許可 stream と本文非混入 |
 | `ipc_tests` | `ipc/tests/messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
 | `ipc_json_tests` | `ipc/tests/json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
 | `ipc_payloads_tests` | `ipc/tests/payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject |
@@ -62,6 +65,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_engine_tests` | `inference-host/tests/rewriter_test.cpp` | リライターの遅延ロードと一度きりロード、データ欠落時の非リトライと不正行 skip、手動クエリのみのマージと通常候補数の保持、同梱データの round-trip と index 予算 |
 | `host_dispatcher_tests` | `inference-host/tests/dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ |
 | `host_dispatcher_tests` | `inference-host/tests/ai_backend_test.cpp` | AI 整文バックエンドの privacy 既定と secure/disabled 時の非送信、retry 上限と cancel 後の遅延成功の非公開、応答の UTF-8・NUL・サイズ検証 |
+| `host_dispatcher_tests` | `inference-host/tests/host_etw_test.cpp` | Host の要求・推論・学習フェーズの ETW 対応付けと結果 |
 | `host_scheduler_tests` | `inference-host/tests/scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `host_args_tests` | `inference-host/tests/args_test.cpp` | `--backend` 別名と未対応値の reject、`--pipe` のオプション非消費、handshake・パス系オプション、非 ASCII パスの UTF-8 保持 |
 | `host_args_tests` | `inference-host/tests/startup_test.cpp` | supervisor 未指定時の寿命非制限、不正 supervisor の fail-closed、保持ハンドル経由のプロセス終了監視、mock host が Vulkan を広告しないこと |

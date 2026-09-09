@@ -2409,6 +2409,8 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
+  // Local cancellation is final even when the best-effort OOB delivery fails.
+  ipc_client_.FinishTraceRequest(target_request_id, core::EtwResult::Cancelled);
   const auto pipe_name = IpcPipeName();
   if (pipe_name.empty()) return false;
 
@@ -2435,7 +2437,6 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
                {{"target_request_id", target_request_id}});
     return false;
   }
-  ipc_client_.FinishTraceRequest(target_request_id, core::EtwResult::Cancelled);
   return true;
 }
 

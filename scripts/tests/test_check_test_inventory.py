@@ -51,27 +51,27 @@ add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
 """
 
 INVENTORY_ROWS = [
-    "| `core_tests` | `romaji_kana_converter_test.cpp` | ローマ字かな変換 |",
-    "| `core_tests` | `utf8_test.cpp` | UTF-8 境界 |",
-    "| `tsf_tip_staleness_tests` | `staleness_test.cpp` | 応答の陳腐化判定 |",
+    "| `core_tests` | `core/tests/romaji_kana_converter_test.cpp` | ローマ字かな変換 |",
+    "| `core_tests` | `core/tests/utf8_test.cpp` | UTF-8 境界 |",
+    "| `tsf_tip_staleness_tests` | `tsf-tip/tests/staleness_test.cpp` | 応答の陳腐化判定 |",
     "| `core_cli_smoke` | `core_cli` | CLI の起動 |",
 ]
 
 
-def build_roadmap(rows: list[str]) -> str:
+def build_document(rows: list[str]) -> str:
     return "\n".join(
         [
-            "## テスト体系",
+            "# テスト一覧",
             "",
-            "### 現存テスト一覧",
+            "## 現存テスト一覧",
             "",
             "| ターゲット | テスト | 主要シナリオ |",
             "|---|---|---|",
             *rows,
             "",
-            "#### CTest 以外の自動検査",
+            "## CTest 以外の自動検査",
             "",
-            "| `core_tests` | `never_parsed_test.cpp` | 別表なので無視される |",
+            "| `core_tests` | `core/tests/never_parsed_test.cpp` | 別表なので無視される |",
             "",
         ]
     )
@@ -82,7 +82,7 @@ class FixtureRepository:
         self.root = directory
         (directory / "core" / "tests").mkdir(parents=True)
         (directory / "tsf-tip").mkdir(parents=True)
-        (directory / "plans").mkdir(parents=True)
+        (directory / "docs").mkdir(parents=True)
         (directory / "build" / "generated").mkdir(parents=True)
         (directory / "CMakeLists.txt").write_text(ROOT_CMAKE, encoding="utf-8")
         (directory / "core" / "tests" / "CMakeLists.txt").write_text(
@@ -95,8 +95,8 @@ class FixtureRepository:
         (directory / "build" / "generated" / "CMakeLists.txt").write_text(
             "add_test(NAME stale_generated_test COMMAND true)\n", encoding="utf-8"
         )
-        (directory / "plans" / "windows-port-roadmap.md").write_text(
-            build_roadmap(rows), encoding="utf-8"
+        (directory / "docs" / "test-inventory.md").write_text(
+            build_document(rows), encoding="utf-8"
         )
 
 
@@ -118,15 +118,19 @@ class CollectionTests(unittest.TestCase):
     def test_collects_gtest_pairs_from_add_executable(self) -> None:
         registrations = self.collect()
         self.assertIn(
-            ("core_tests", "romaji_kana_converter_test.cpp"),
+            ("core_tests", "core/tests/romaji_kana_converter_test.cpp"),
             registrations.gtest_pairs,
         )
-        self.assertIn(("core_tests", "utf8_test.cpp"), registrations.gtest_pairs)
+        self.assertIn(
+            ("core_tests", "core/tests/utf8_test.cpp"), registrations.gtest_pairs
+        )
 
     def test_collects_gtest_pair_from_the_tsf_tip_wrapper(self) -> None:
+        # The wrapper's source is relative to the calling CMakeLists, not to the
+        # file that defines the function.
         registrations = self.collect()
         self.assertIn(
-            ("tsf_tip_staleness_tests", "staleness_test.cpp"),
+            ("tsf_tip_staleness_tests", "tsf-tip/tests/staleness_test.cpp"),
             registrations.gtest_pairs,
         )
 
@@ -147,6 +151,17 @@ class ComparisonTests(unittest.TestCase):
         status, output = run_main(INVENTORY_ROWS)
         self.assertEqual(status, 0, output)
 
+    def test_row_with_the_wrong_directory_fails(self) -> None:
+        # A source moved between directories, or a mistyped directory in the
+        # table, must not pass just because the file name still matches.
+        rows = [
+            row.replace("`core/tests/utf8_test.cpp`", "`totally/wrong/utf8_test.cpp`")
+            for row in INVENTORY_ROWS
+        ]
+        status, output = run_main(rows)
+        self.assertEqual(status, 1)
+        self.assertIn("totally/wrong/utf8_test.cpp", output)
+
     def test_removed_row_fails(self) -> None:
         rows = [row for row in INVENTORY_ROWS if "utf8_test.cpp" not in row]
         status, output = run_main(rows)
@@ -160,14 +175,16 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("core_cli_smoke", output)
 
     def test_phantom_target_row_fails(self) -> None:
-        rows = INVENTORY_ROWS + ["| `ghost_tests` | `ghost_test.cpp` | 実在しない |"]
+        rows = INVENTORY_ROWS + [
+            "| `ghost_tests` | `core/tests/ghost_test.cpp` | 実在しない |"
+        ]
         status, output = run_main(rows)
         self.assertEqual(status, 1)
         self.assertIn("ghost_tests", output)
 
     def test_row_with_the_wrong_source_fails(self) -> None:
         rows = [
-            row.replace("`utf8_test.cpp`", "`utf16_test.cpp`") for row in INVENTORY_ROWS
+            row.replace("utf8_test.cpp", "utf16_test.cpp") for row in INVENTORY_ROWS
         ]
         status, output = run_main(rows)
         self.assertEqual(status, 1)
@@ -175,7 +192,7 @@ class ComparisonTests(unittest.TestCase):
 
 
 class RepositoryTests(unittest.TestCase):
-    def test_the_committed_roadmap_matches_the_committed_cmake(self) -> None:
+    def test_the_committed_document_matches_the_committed_cmake(self) -> None:
         stdout = io.StringIO()
         with redirect_stdout(stdout):
             status = MODULE.main(["--repo-root", str(REPO_ROOT)])

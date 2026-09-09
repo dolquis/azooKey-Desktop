@@ -1,30 +1,14 @@
 name: Build
 
+# ワークフローレベルの paths-ignore は置かない。発火しないワークフローのジョブは
+# check run 自体が生成されず、required checks に指定した PR が待機状態のまま
+# merge 不能になるため（dev-infra spec §4.9）。ドキュメント・計画・エージェント設定・
+# legacy 参照資産だけの変更でスキップする判定は changes ジョブの build 出力へ移し、
+# 終端の ci-gate が全 needs の結果を集約する。
 on:
   push:
     branches: [main]
-    # ドキュメント・計画・エージェント設定・legacy 参照資産だけの変更ではビルド系
-    # ジョブを起動しない。branch protection 未設定のためワークフローレベルの
-    # paths-ignore で足りる（required checks を導入する場合は changes + ci-gate 構成へ）。
-    # ワークフロー自身（.github/workflows/**）やコードは無視パターンに含めないため
-    # 変更時は通常どおり CI が走る。
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.codex/**'
-      - '.agents/**'
-      - 'legacy/**'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.codex/**'
-      - '.agents/**'
-      - 'legacy/**'
   workflow_dispatch:
 
 # 既定は最小権限。PR への診断コメント投稿に必要な pull-requests: write は、それを
@@ -45,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      build: ${{ steps.filter.outputs.build }}
       settings_schema: ${{ steps.filter.outputs.settings_schema }}
       powershell_quality: ${{ steps.filter.outputs.powershell_quality }}
       cpp_tidy: ${{ steps.filter.outputs.cpp_tidy }}
@@ -63,6 +48,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          build=false
           settings_schema=false
           powershell_quality=false
           cpp_tidy=false
@@ -96,6 +82,7 @@ jobs:
           fi
 
           if [ "$run_all" = true ]; then
+            build=true
             settings_schema=true
             powershell_quality=true
             cpp_tidy=true
@@ -104,6 +91,17 @@ jobs:
             echo "Classifying files changed since $BASE:"
             while IFS= read -r path; do
               printf '  %s\n' "$path"
+
+              # 旧ワークフローレベル paths-ignore の反転。ここに挙げたパスだけの
+              # 変更ならビルド系ジョブを起動しない。case の * は '/' にも一致する
+              # ため 'docs/*' は入れ子も覆う。
+              case "$path" in
+                *.md|docs/*|plans/*|.claude/*|.codex/*|.agents/*|legacy/*)
+                  ;;
+                *)
+                  build=true
+                  ;;
+              esac
 
               case "$path" in
                 .github/workflows/windows.yml)
@@ -139,6 +137,7 @@ jobs:
           fi
 
           {
+            echo "build=$build"
             echo "settings_schema=$settings_schema"
             echo "powershell_quality=$powershell_quality"
             echo "cpp_tidy=$cpp_tidy"
@@ -198,6 +197,8 @@ jobs:
 
   quality:
     name: Pre-commit
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -234,7 +235,10 @@ jobs:
 
   dependency-review:
     name: Dependency review
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: >-
+      needs.changes.outputs.build == 'true' &&
+      github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -263,6 +267,8 @@ jobs:
 
   windows-build:
     name: Windows ${{ matrix.config }}
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 45
     # このジョブだけが PR へ診断コメントを投稿するため pull-requests: write を持つ。
@@ -595,6 +601,8 @@ jobs:
 
   windows-llama-build:
     name: Windows llama.cpp real-model smoke
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 40
     env:
@@ -717,7 +725,9 @@ jobs:
   windows-vulkan-compile:
     name: Windows Vulkan compile/link only
     needs: changes
-    if: needs.changes.outputs.vulkan_compile == 'true'
+    if: >-
+      needs.changes.outputs.build == 'true' &&
+      needs.changes.outputs.vulkan_compile == 'true'
     runs-on: windows-2022
     # ggml-vulkan は SPIR-V シェーダー生成とコンパイルで通常の Host ビルドより
     # 長い。llama.cpp ジョブと同じ --parallel 1 を使うためさらに余裕を持たせる。
@@ -844,6 +854,8 @@ jobs:
 
   linux-build:
     name: Linux Debug
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -888,6 +900,8 @@ jobs:
 
   linux-coverage:
     name: Linux coverage (informational)
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -990,6 +1004,8 @@ jobs:
 
   linux-no-tests:
     name: Linux build without tests
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1016,6 +1032,8 @@ jobs:
 
   windows-no-tests:
     name: Windows build without tests
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 25
     env:
@@ -1050,6 +1068,8 @@ jobs:
   # tidy configure step (dev-infra spec §4.3/§11.5).
   cpp-format:
     name: C++ format (changed-lines gate)
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -1150,3 +1170,61 @@ jobs:
           echo "Running clang-tidy on:"
           printf '%s\n' "${CHANGED[@]}"
           clang-tidy-18 -p build/linux-debug "${CHANGED[@]}" || true
+
+  # 終端の集約ジョブ。main の branch ruleset へ required check として指定するのは
+  # このジョブだけとする（dev-infra spec §4.9）。ワークフローが常に発火し、かつ
+  # 本ジョブが if: always() で必ず実行されるため、docs だけの PR でも check run が
+  # 生成され「Expected — Waiting for status to be reported」で止まらない。
+  #
+  # 判定は needs の結果のみを見る。failure / cancelled が 1 件でもあれば fail し、
+  # success と skipped だけなら pass する。新しいジョブを windows.yml に足したら
+  # needs へも必ず追加すること（漏れると required check が素通りする）。
+  ci-gate:
+    name: CI gate
+    needs:
+      - changes
+      - settings-schema
+      - powershell-quality
+      - quality
+      - dependency-review
+      - windows-build
+      - windows-llama-build
+      - windows-vulkan-compile
+      - linux-build
+      - linux-coverage
+      - linux-no-tests
+      - windows-no-tests
+      - cpp-format
+      - cpp-tidy
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate job results
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+
+          results="$(jq -r 'to_entries[] | "\(.key)=\(.value.result)"' <<<"$NEEDS_JSON")"
+          echo "$results"
+          {
+            echo "## CI gate"
+            echo ""
+            echo '```text'
+            echo "$results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed="$(jq -r '
+            to_entries
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | map(.key)
+            | join(", ")
+          ' <<<"$NEEDS_JSON")"
+          if [ -n "$failed" ]; then
+            echo "::error::CI gate failed. Blocking jobs: $failed"
+            exit 1
+          fi
+          echo "CI gate passed (only success/skipped results)."

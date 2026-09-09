@@ -1171,6 +1171,172 @@ jobs:
           printf '%s\n' "${CHANGED[@]}"
           clang-tidy-18 -p build/linux-debug "${CHANGED[@]}" || true
 
+  # ARM64（Windows on Arm）クロスビルドゲート。正典は
+  # docs/copilot-pc-backend-spec.md §8.1 / §8.4 受け入れ条件 1。
+  #
+  # 既存 windows-build の matrix に行追加せず専用ジョブとするのは、x64 Release と
+  # ARM64 Release がどちらも config == Release になり artifact 名が衝突すること、
+  # ctest をスキップすると x64 側の最終ゲートが参照する tests_ec が未設定になり
+  # ビルド成功でも落ちることの 2 点による（spec §8.1）。
+  #
+  # 対象外: ctest（x64 ホストで ARM64 バイナリは実行できない。ネイティブ実行は
+  # spec §8.4）、azookey_settings.exe（vcxproj が x64 の ProjectConfiguration と
+  # packages.lock.json しか持たず、アーキ別 parameterize は spec §8.3 の M28/M29）。
+  windows-arm64-crossbuild:
+    name: Windows ARM64 cross-build
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      # ARM64 の SDK ヘッダ / import lib / リンカ環境を構成する。
+      - name: Set up MSVC ARM64 cross environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64_arm64
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      # コンパイラは clang-cl 固定（cl.exe は ggml が ARM で拒否する）。取り違えを
+      # 診断可能にするため、解決したパスとバージョンをログへ残す。
+      - name: Report clang-cl toolchain
+        shell: pwsh
+        run: |
+          $clang = Get-Command clang-cl -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $clang) {
+            throw "clang-cl was not found on PATH; the ARM64 cross build requires it."
+          }
+          Write-Host "clang-cl: $($clang.Source)"
+          clang-cl --version
+
+      - name: Configure ARM64 cross build
+        id: configure
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cmake --preset windows-release-arm64 -DAZOOKEY_FETCH_WIL=ON 2>&1 | Tee-Object -FilePath configure-arm64.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build ARM64 binaries
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-release-arm64 2>&1 | Tee-Object -FilePath build-arm64.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report sccache stats
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+
+      # 受け入れ条件の機械検査。configure ログで §8.2 の分岐が効いたことを確認し、
+      # 生成物が ARM64 イメージであることを PE の COFF ヘッダから確認する。
+      # ヘッダは直接読む（dumpbin は amd64_arm64 環境での PATH 解決に依存するため）。
+      - name: Verify ARM64 target resolution and binaries
+        id: verify
+        if: steps.build.outcome == 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Get-Content -Raw -LiteralPath configure-arm64.log
+          foreach ($expected in @(
+            'azooKey ARM64 target: CMAKE_SYSTEM_PROCESSOR=ARM64',
+            'azooKey ARM64 target: GGML_NATIVE=OFF',
+            'azooKey ARM64 target: GGML_CPU_ARM_ARCH=armv8.2-a+dotprod'
+          )) {
+            if ($log -notmatch [regex]::Escape($expected)) {
+              throw "Configure log did not report '$expected'; the ARM64 flag branch was skipped."
+            }
+            Write-Host "configure: $expected"
+          }
+
+          # IMAGE_DOS_HEADER.e_lfanew は 0x3C、その先頭が 'PE\0\0'、続く
+          # IMAGE_FILE_HEADER.Machine が 2 バイト。IMAGE_FILE_MACHINE_ARM64 = 0xAA64。
+          function Get-PeMachine([string] $Path) {
+            $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).ProviderPath)
+            try {
+              $reader = [System.IO.BinaryReader]::new($stream)
+              $stream.Position = 0x3C
+              $stream.Position = $reader.ReadInt32()
+              if ($reader.ReadUInt32() -ne 0x00004550) {
+                throw "Not a PE image: $Path"
+              }
+              return $reader.ReadUInt16()
+            } finally {
+              $stream.Dispose()
+            }
+          }
+
+          $binaries = @(
+            'build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll',
+            'build/windows-release-arm64/inference-host/azookey_inference_host.exe'
+          )
+          foreach ($binary in $binaries) {
+            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+              throw "ARM64 build output is missing: $binary"
+            }
+            $machine = Get-PeMachine $binary
+            if ($machine -ne 0xAA64) {
+              throw ("{0} is not an ARM64 image: machine=0x{1:X4}" -f $binary, $machine)
+            }
+            Write-Host ("{0} -> machine=0x{1:X4} (ARM64)" -f $binary, $machine)
+          }
+
+      - name: Upload ARM64 cross-build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-arm64-crossbuild-logs
+          path: |
+            configure-arm64.log
+            build-arm64.log
+          if-no-files-found: ignore
+
+      - name: Upload ARM64 binaries
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-arm64-crossbuild-binaries
+          path: |
+            build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll
+            build/windows-release-arm64/inference-host/azookey_inference_host.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # このジョブの fail ゲートは configure / build / 検査のみを見る。x64 側の
+      # tests_ec は参照しない（ctest を実行しないため）。
+      - name: Fail if the ARM64 cross build failed
+        if: always()
+        shell: pwsh
+        run: |
+          $results = [ordered]@{
+            Configure = '${{ steps.configure.outcome }}'
+            Build = '${{ steps.build.outcome }}'
+            Verify = '${{ steps.verify.outcome }}'
+          }
+          $failed = @()
+          foreach ($entry in $results.GetEnumerator()) {
+            Write-Host "$($entry.Key): $($entry.Value)"
+            # Verify は Build 失敗時に skipped になる。その場合は Build 自体が失敗と
+            # して計上されるため、skipped を重ねて報告しない。
+            if ($entry.Value -ne 'success' -and $entry.Value -ne 'skipped') {
+              $failed += $entry.Key
+            }
+          }
+          if ($failed.Count -gt 0) {
+            Write-Error "Failed ARM64 cross-build phases: $($failed -join ', ')"
+            exit 1
+          }
+
   # 終端の集約ジョブ。main の branch ruleset へ required check として指定するのは
   # このジョブだけとする（dev-infra spec §4.9）。ワークフローが常に発火し、かつ
   # 本ジョブが if: always() で必ず実行されるため、docs だけの PR でも check run が
@@ -1190,6 +1356,7 @@ jobs:
       - windows-build
       - windows-llama-build
       - windows-vulkan-compile
+      - windows-arm64-crossbuild
       - linux-build
       - linux-coverage
       - linux-no-tests

@@ -151,6 +151,32 @@ function(azookey_add_llama_cpp)
   endif()
 endfunction()
 
+# ARM64（Windows on Arm）ターゲットの ggml フラグ。正典は
+# docs/copilot-pc-backend-spec.md §8.2。
+#
+# GGML_NATIVE=ON はビルドホストの CPU を検出して -march=native 相当を当てるため、
+# x64 ホストから ARM64 をクロスビルドすると x64 の機能を誤検出する。クロス／ネイティブの
+# 双方で OFF に固定し、ARM の機能は明示フラグで与える。
+#
+# ベースライン ISA は ARMv8.2-A + dotprod とする。dotprod は Snapdragon X /
+# Neoverse N1(Ampere Altra) / Cobalt(N2) いずれも備える。i8mm は ARMv8.2〜v8.5 で
+# 任意であり、焼き込むと非搭載機で illegal instruction になるため入れない。
+#
+# CMAKE_SYSTEM_PROCESSOR は cmake/toolchains/win-arm64-clang.cmake が ARM64 に固定する。
+# toolchain file なしではホスト値（Windows では AMD64）に追従し、この分岐が無音で
+# スキップされる。判定結果は configure ログから確認できるよう STATUS に出す。
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+  set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+  set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod" CACHE STRING "")
+  message(STATUS "azooKey ARM64 target: CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}")
+  message(STATUS "azooKey ARM64 target: GGML_NATIVE=${GGML_NATIVE}")
+  message(STATUS "azooKey ARM64 target: GGML_CPU_ARM_ARCH=${GGML_CPU_ARM_ARCH}")
+else()
+  message(STATUS
+    "azooKey non-ARM64 target: CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}; "
+    "ARM baseline ISA flags are not applied")
+endif()
+
 set(AZOOKEY_WITH_LLAMA_CPP OFF)
 azookey_add_llama_cpp()
 

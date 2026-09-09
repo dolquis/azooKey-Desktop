@@ -66,6 +66,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | ドキュメント | 役割 |
 |---|---|
 | [`debugging.md`](debugging.md) | ビルドの差分（Release / Linux）・ベンチ・手動確認・ログ収集・CI・典型トラブル |
+| [`test-inventory.md`](test-inventory.md) | CTest 登録テストと CTest 以外の自動検査の一覧の正典。`scripts/check_test_inventory.py` が CMake との一致を検査する。未解消のカバレッジギャップは roadmap「テスト体系」 |
 | [`licensing-policy.md`](licensing-policy.md) | 第三者資産 attribution と採用手順の正典。集約表記は [`THIRD_PARTY_LICENSES`](../THIRD_PARTY_LICENSES) |
 | [`linear-conventions.md`](linear-conventions.md) | Linear のラベル、状態遷移、監査、Project Delta（§13）の正典 |
 | Linear（外部・team `Dev`） | 課題・進捗・状態・優先度・サイクルの正典（管制塔） |

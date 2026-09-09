@@ -12,6 +12,9 @@ on:
       - 'scripts/docs-lint.py'
       - 'scripts/check_agent_instruction_size.py'
       - 'scripts/tests/test_agent_instruction_size.py'
+      - 'scripts/check_test_inventory.py'
+      - 'scripts/tests/test_check_test_inventory.py'
+      - '**/CMakeLists.txt'
       - '.docs-lint.toml'
       - '.docs-lint-baseline.json'
   pull_request:
@@ -24,6 +27,9 @@ on:
       - 'scripts/docs-lint.py'
       - 'scripts/check_agent_instruction_size.py'
       - 'scripts/tests/test_agent_instruction_size.py'
+      - 'scripts/check_test_inventory.py'
+      - 'scripts/tests/test_check_test_inventory.py'
+      - '**/CMakeLists.txt'
       - '.docs-lint.toml'
       - '.docs-lint-baseline.json'
 
@@ -58,3 +64,11 @@ jobs:
 
       - name: Enforce AGENTS.md byte budget
         run: python3 scripts/check_agent_instruction_size.py
+
+      # docs/test-inventory.md はテスト一覧の正典なので、CMake がテストを増減したら
+      # 同じ PR で表も更新させる。
+      - name: Test the test inventory checker
+        run: python3 scripts/tests/test_check_test_inventory.py
+
+      - name: Check the test inventory against CMake
+        run: python3 scripts/check_test_inventory.py

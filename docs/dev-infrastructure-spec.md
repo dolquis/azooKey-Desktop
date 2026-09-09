@@ -819,13 +819,25 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 | check 名 | ワークフロー |
 |---|---|
 | `Secret scan` | `.github/workflows/secret-scan.yml` |
+| `CI gate` | `.github/workflows/windows.yml` |
 
-`.github/workflows/windows.yml` はワークフローレベルの `paths-ignore` で docs 変更を除外するため、
-その配下のジョブ（`Windows Debug` / `Windows Release` / `Pre-commit` / `C++ format (changed-lines gate)` /
-`Dependency review`）はこの基準を満たさない。同ファイル冒頭のコメントが定めるとおり、
-required checks へ加えるには `paths-ignore` を `changes` ジョブの出力による条件分岐へ移し、
-`if: always()` で全 `needs` の結果を集約する終端ジョブを設ける必要がある（DEV-1000）。
-`.github/workflows/docs.yml` と `.github/workflows/sbom.yml` も `paths` で絞られるため対象外とする。
+`.github/workflows/windows.yml` はワークフローレベルの `paths` / `paths-ignore` を持たず、
+すべての PR で発火する。ドキュメント・計画・エージェント設定・`legacy/` だけの変更で重量ジョブを
+省く判定は `changes` ジョブの `build` 出力による `if:` 条件が担い、スキップされたジョブは
+`skipped` として報告される。`build` の判定は base commit を取得できない場合と
+`workflow_dispatch` で `true` へ倒し、偽陰性スキップを作らない。
+
+終端の `ci-gate`（表示名 `CI gate`）は `if: always()` で必ず実行され、`needs` に列挙した
+全ジョブの結果を集約する。`failure` または `cancelled` が 1 件でもあれば fail し、
+`success` と `skipped` だけなら pass する。`windows.yml` にジョブを追加するときは
+`ci-gate` の `needs` にも加える。加えなければそのジョブの失敗が required check を素通りする。
+
+例外は `ci-gate` の `ADVISORY_JOBS` に挙げる advisory ジョブで、結果は集約の出力に
+残すが失敗判定には入れない。`cpp-tidy` がこれに当たる（§4.3 / §11.5 が非ブロッキングと
+定める）。解析ステップの `continue-on-error` だけでは、checkout・依存導入・configure の
+失敗でジョブ結果が `failure` になり、advisory ジョブが required check をブロックする。
+
+`.github/workflows/docs.yml` と `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
 `.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する
 対話ジョブであり、required にしても判定に寄与しない。
 

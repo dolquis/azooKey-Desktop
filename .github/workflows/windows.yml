@@ -1,30 +1,14 @@
 name: Build
 
+# ワークフローレベルの paths-ignore は置かない。発火しないワークフローのジョブは
+# check run 自体が生成されず、required checks に指定した PR が待機状態のまま
+# merge 不能になるため（dev-infra spec §4.9）。ドキュメント・計画・エージェント設定・
+# legacy 参照資産だけの変更でスキップする判定は changes ジョブの build 出力へ移し、
+# 終端の ci-gate が全 needs の結果を集約する。
 on:
   push:
     branches: [main]
-    # ドキュメント・計画・エージェント設定・legacy 参照資産だけの変更ではビルド系
-    # ジョブを起動しない。branch protection 未設定のためワークフローレベルの
-    # paths-ignore で足りる（required checks を導入する場合は changes + ci-gate 構成へ）。
-    # ワークフロー自身（.github/workflows/**）やコードは無視パターンに含めないため
-    # 変更時は通常どおり CI が走る。
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.codex/**'
-      - '.agents/**'
-      - 'legacy/**'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'plans/**'
-      - '.claude/**'
-      - '.codex/**'
-      - '.agents/**'
-      - 'legacy/**'
   workflow_dispatch:
 
 # 既定は最小権限。PR への診断コメント投稿に必要な pull-requests: write は、それを
@@ -45,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      build: ${{ steps.filter.outputs.build }}
       settings_schema: ${{ steps.filter.outputs.settings_schema }}
       powershell_quality: ${{ steps.filter.outputs.powershell_quality }}
       cpp_tidy: ${{ steps.filter.outputs.cpp_tidy }}
@@ -63,6 +48,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          build=false
           settings_schema=false
           powershell_quality=false
           cpp_tidy=false
@@ -96,6 +82,7 @@ jobs:
           fi
 
           if [ "$run_all" = true ]; then
+            build=true
             settings_schema=true
             powershell_quality=true
             cpp_tidy=true
@@ -104,6 +91,17 @@ jobs:
             echo "Classifying files changed since $BASE:"
             while IFS= read -r path; do
               printf '  %s\n' "$path"
+
+              # 旧ワークフローレベル paths-ignore の反転。ここに挙げたパスだけの
+              # 変更ならビルド系ジョブを起動しない。case の * は '/' にも一致する
+              # ため 'docs/*' は入れ子も覆う。
+              case "$path" in
+                *.md|docs/*|plans/*|.claude/*|.codex/*|.agents/*|legacy/*)
+                  ;;
+                *)
+                  build=true
+                  ;;
+              esac
 
               case "$path" in
                 .github/workflows/windows.yml)
@@ -139,6 +137,7 @@ jobs:
           fi
 
           {
+            echo "build=$build"
             echo "settings_schema=$settings_schema"
             echo "powershell_quality=$powershell_quality"
             echo "cpp_tidy=$cpp_tidy"
@@ -198,6 +197,8 @@ jobs:
 
   quality:
     name: Pre-commit
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -234,7 +235,10 @@ jobs:
 
   dependency-review:
     name: Dependency review
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: >-
+      needs.changes.outputs.build == 'true' &&
+      github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -263,6 +267,8 @@ jobs:
 
   windows-build:
     name: Windows ${{ matrix.config }}
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 45
     # このジョブだけが PR へ診断コメントを投稿するため pull-requests: write を持つ。
@@ -595,6 +601,8 @@ jobs:
 
   windows-llama-build:
     name: Windows llama.cpp real-model smoke
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 40
     env:
@@ -717,7 +725,9 @@ jobs:
   windows-vulkan-compile:
     name: Windows Vulkan compile/link only
     needs: changes
-    if: needs.changes.outputs.vulkan_compile == 'true'
+    if: >-
+      needs.changes.outputs.build == 'true' &&
+      needs.changes.outputs.vulkan_compile == 'true'
     runs-on: windows-2022
     # ggml-vulkan は SPIR-V シェーダー生成とコンパイルで通常の Host ビルドより
     # 長い。llama.cpp ジョブと同じ --parallel 1 を使うためさらに余裕を持たせる。
@@ -844,6 +854,8 @@ jobs:
 
   linux-build:
     name: Linux Debug
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -888,6 +900,8 @@ jobs:
 
   linux-coverage:
     name: Linux coverage (informational)
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -990,6 +1004,8 @@ jobs:
 
   linux-no-tests:
     name: Linux build without tests
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1016,6 +1032,8 @@ jobs:
 
   windows-no-tests:
     name: Windows build without tests
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 25
     env:
@@ -1050,6 +1068,8 @@ jobs:
   # tidy configure step (dev-infra spec §4.3/§11.5).
   cpp-format:
     name: C++ format (changed-lines gate)
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -1150,3 +1170,243 @@ jobs:
           echo "Running clang-tidy on:"
           printf '%s\n' "${CHANGED[@]}"
           clang-tidy-18 -p build/linux-debug "${CHANGED[@]}" || true
+
+  # ARM64（Windows on Arm）クロスビルドゲート。正典は
+  # docs/copilot-pc-backend-spec.md §8.1 / §8.4 受け入れ条件 1。
+  #
+  # 既存 windows-build の matrix に行追加せず専用ジョブとするのは、x64 Release と
+  # ARM64 Release がどちらも config == Release になり artifact 名が衝突すること、
+  # ctest をスキップすると x64 側の最終ゲートが参照する tests_ec が未設定になり
+  # ビルド成功でも落ちることの 2 点による（spec §8.1）。
+  #
+  # 対象外: ctest（x64 ホストで ARM64 バイナリは実行できない。ネイティブ実行は
+  # spec §8.4）、azookey_settings.exe（vcxproj が x64 の ProjectConfiguration と
+  # packages.lock.json しか持たず、アーキ別 parameterize は spec §8.3 の M28/M29）。
+  windows-arm64-crossbuild:
+    name: Windows ARM64 cross-build
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      # ARM64 の SDK ヘッダ / import lib / リンカ環境を構成する。
+      - name: Set up MSVC ARM64 cross environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64_arm64
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      # コンパイラは clang-cl 固定（cl.exe は ggml が ARM で拒否する）。取り違えを
+      # 診断可能にするため、解決したパスとバージョンをログへ残す。
+      - name: Report clang-cl toolchain
+        shell: pwsh
+        run: |
+          $clang = Get-Command clang-cl -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $clang) {
+            throw "clang-cl was not found on PATH; the ARM64 cross build requires it."
+          }
+          Write-Host "clang-cl: $($clang.Source)"
+          clang-cl --version
+
+      - name: Configure ARM64 cross build
+        id: configure
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cmake --preset windows-release-arm64 -DAZOOKEY_FETCH_WIL=ON 2>&1 | Tee-Object -FilePath configure-arm64.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build ARM64 binaries
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-release-arm64 2>&1 | Tee-Object -FilePath build-arm64.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report sccache stats
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+
+      # 受け入れ条件の機械検査。configure ログで §8.2 の分岐が効いたことを確認し、
+      # 生成物が ARM64 イメージであることを PE の COFF ヘッダから確認する。
+      # ヘッダは直接読む（dumpbin は amd64_arm64 環境での PATH 解決に依存するため）。
+      - name: Verify ARM64 target resolution and binaries
+        id: verify
+        if: steps.build.outcome == 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Get-Content -Raw -LiteralPath configure-arm64.log
+          foreach ($expected in @(
+            'azooKey ARM64 target: CMAKE_SYSTEM_PROCESSOR=ARM64',
+            'azooKey ARM64 target: GGML_NATIVE=OFF',
+            'azooKey ARM64 target: GGML_CPU_ARM_ARCH=armv8.2-a+dotprod'
+          )) {
+            if ($log -notmatch [regex]::Escape($expected)) {
+              throw "Configure log did not report '$expected'; the ARM64 flag branch was skipped."
+            }
+            Write-Host "configure: $expected"
+          }
+
+          # IMAGE_DOS_HEADER.e_lfanew は 0x3C、その先頭が 'PE\0\0'、続く
+          # IMAGE_FILE_HEADER.Machine が 2 バイト。IMAGE_FILE_MACHINE_ARM64 = 0xAA64。
+          function Get-PeMachine([string] $Path) {
+            $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).ProviderPath)
+            try {
+              $reader = [System.IO.BinaryReader]::new($stream)
+              $stream.Position = 0x3C
+              $stream.Position = $reader.ReadInt32()
+              if ($reader.ReadUInt32() -ne 0x00004550) {
+                throw "Not a PE image: $Path"
+              }
+              return $reader.ReadUInt16()
+            } finally {
+              $stream.Dispose()
+            }
+          }
+
+          $binaries = @(
+            'build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll',
+            'build/windows-release-arm64/inference-host/azookey_inference_host.exe'
+          )
+          foreach ($binary in $binaries) {
+            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+              throw "ARM64 build output is missing: $binary"
+            }
+            $machine = Get-PeMachine $binary
+            if ($machine -ne 0xAA64) {
+              throw ("{0} is not an ARM64 image: machine=0x{1:X4}" -f $binary, $machine)
+            }
+            Write-Host ("{0} -> machine=0x{1:X4} (ARM64)" -f $binary, $machine)
+          }
+
+      - name: Upload ARM64 cross-build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-arm64-crossbuild-logs
+          path: |
+            configure-arm64.log
+            build-arm64.log
+          if-no-files-found: ignore
+
+      - name: Upload ARM64 binaries
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-arm64-crossbuild-binaries
+          path: |
+            build/windows-release-arm64/tsf-tip/azookey_tsf_tip.dll
+            build/windows-release-arm64/inference-host/azookey_inference_host.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # このジョブの fail ゲートは configure / build / 検査のみを見る。x64 側の
+      # tests_ec は参照しない（ctest を実行しないため）。
+      - name: Fail if the ARM64 cross build failed
+        if: always()
+        shell: pwsh
+        run: |
+          $results = [ordered]@{
+            Configure = '${{ steps.configure.outcome }}'
+            Build = '${{ steps.build.outcome }}'
+            Verify = '${{ steps.verify.outcome }}'
+          }
+          $failed = @()
+          foreach ($entry in $results.GetEnumerator()) {
+            Write-Host "$($entry.Key): $($entry.Value)"
+            # Verify は Build 失敗時に skipped になる。その場合は Build 自体が失敗と
+            # して計上されるため、skipped を重ねて報告しない。
+            if ($entry.Value -ne 'success' -and $entry.Value -ne 'skipped') {
+              $failed += $entry.Key
+            }
+          }
+          if ($failed.Count -gt 0) {
+            Write-Error "Failed ARM64 cross-build phases: $($failed -join ', ')"
+            exit 1
+          }
+
+  # 終端の集約ジョブ。main の branch ruleset へ required check として指定するのは
+  # このジョブだけとする（dev-infra spec §4.9）。ワークフローが常に発火し、かつ
+  # 本ジョブが if: always() で必ず実行されるため、docs だけの PR でも check run が
+  # 生成され「Expected — Waiting for status to be reported」で止まらない。
+  #
+  # 判定は needs の結果のみを見る。failure / cancelled が 1 件でもあれば fail し、
+  # success と skipped だけなら pass する。新しいジョブを windows.yml に足したら
+  # needs へも必ず追加すること（漏れると required check が素通りする）。
+  #
+  # 例外は ADVISORY_JOBS に挙げる advisory ジョブで、結果は表示するが失敗判定に
+  # 入れない。clang-tidy は dev-infra spec §4.3 / §11.5 が非ブロッキングと定めて
+  # おり、所見や解析基盤の一時障害で PR を止めない。解析ステップの
+  # continue-on-error だけでは checkout / apt / configure の失敗でジョブ結果が
+  # failure になり、required check をブロックしてしまう。
+  ci-gate:
+    name: CI gate
+    needs:
+      - changes
+      - settings-schema
+      - powershell-quality
+      - quality
+      - dependency-review
+      - windows-build
+      - windows-llama-build
+      - windows-vulkan-compile
+      - windows-arm64-crossbuild
+      - linux-build
+      - linux-coverage
+      - linux-no-tests
+      - windows-no-tests
+      - cpp-format
+      - cpp-tidy
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate job results
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          # 失敗判定から除外する advisory ジョブ（カンマ区切り）。
+          ADVISORY_JOBS: cpp-tidy
+        run: |
+          set -euo pipefail
+
+          results="$(jq -r --arg advisory "$ADVISORY_JOBS" '
+            ($advisory | split(",")) as $adv
+            | to_entries[]
+            | "\(.key)=\(.value.result)"
+              + (if (.key | IN($adv[])) then " (advisory; not gated)" else "" end)
+          ' <<<"$NEEDS_JSON")"
+          echo "$results"
+          {
+            echo "## CI gate"
+            echo ""
+            echo '```text'
+            echo "$results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed="$(jq -r --arg advisory "$ADVISORY_JOBS" '
+            ($advisory | split(",")) as $adv
+            | to_entries
+            | map(select((.key | IN($adv[])) | not))
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | map(.key)
+            | join(", ")
+          ' <<<"$NEEDS_JSON")"
+          if [ -n "$failed" ]; then
+            echo "::error::CI gate failed. Blocking jobs: $failed"
+            exit 1
+          fi
+          echo "CI gate passed (no blocking failures)."

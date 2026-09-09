@@ -37,6 +37,7 @@ Windows 版は **TSF TIP (in-process DLL)** と **Inference Host (別プロセ�
 - `bench/` — レイテンシ計測 CLI
 - `compat-test/` — アプリ互換性テストハーネス
 - `diagnostics/` — 登録・pipe・ログの診断ツール
+- `dictbuild/` — オフライン辞書ビルダ（配布物には非同梱）
 - `scripts/` — TIP 登録/解除・診断・VM 検証パッケージ生成の PowerShell / Python スクリプト
 - `pkg/` — MSI・MSIX パッケージング
 - `docs/` — 設計メモ・機能仕様・デバッグ手順（[`docs/README.md`](./docs/README.md) が索引）

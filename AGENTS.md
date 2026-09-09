@@ -16,7 +16,7 @@
 - 開発対象は Windows 版 azooKey-Desktop。主な保守領域は `tsf-tip/`、`inference-host/`、`core/`、`ipc/`、`learning/`、`settings/`。
 - `legacy/` は macOS / Swift の参照資産であり、Windows 版の仕様判断には `docs/*-spec.md` を優先する。
 - 状態、進捗、優先度、担当、サイクル、課題追跡の正典は Linear（workspace `dolquis` / team `Dev`）。GitHub Issues は mirror とする。
-- 機能仕様の正典は対応する `docs/*-spec.md`、マイルストーン定義、依存関係、受け入れ条件の定義、リスクは `plans/windows-port-roadmap.md`、ビルドとテストの標準手順は `README.md`、停止時の切り分けは `docs/debugging.md` とする。
+- 機能仕様の正典は対応する `docs/*-spec.md`、マイルストーン定義、依存関係、受け入れ条件の定義、リスクは `plans/windows-port-roadmap.md`、ビルドとテストの標準手順は `README.md`、テスト一覧は `docs/test-inventory.md`、停止時の切り分けは `docs/debugging.md` とする。
 - Linear のラベル、状態遷移、GitHub 連携、週次監査は `docs/linear-conventions.md` を参照する。repo 固有差分は同文書の Project Delta に置く。
 - ルートの README、AGENTS、CLAUDE を変更するときは `azookey-doc-governance` を使う。`docs/` と `plans/` では各ディレクトリの `AGENTS.md` に従う。
 

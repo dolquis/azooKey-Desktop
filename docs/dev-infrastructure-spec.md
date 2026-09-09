@@ -329,12 +329,12 @@ TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-cl
   最も重く、その 84.3% がヘッダ展開である。
 * したがって**当てどころは PCH** である。PCH はまさにヘッダ展開の繰り返しを削る手段で、
   この分布と一致する。
-* **unity build の採否は、この計測だけでは決まらない（未確定）。** unity build が削るのは
-  TU 数に比例する固定費だけではない。複数の `.cpp` を同じ TU へまとめると、include guard
-  や `#pragma once` の効く共通ヘッダは unity batch 内で 1 度しか解析されない。つまり
+* **unity build もこの内訳だけでは決まらない。** unity build が削るのは TU 数に比例する
+  固定費だけではない。複数の `.cpp` を同じ TU へまとめると、include guard や
+  `#pragma once` の効く共通ヘッダは unity batch 内で 1 度しか解析されない。つまり
   ここで支配項と測った「TU ごとに繰り返すヘッダ展開」そのものが削減対象になる。
-  内訳から不採用を導くことはできないため、unity on/off の実測と、無名 namespace /
-  マクロ衝突の保守コストとの比較が済むまで採否を保留する。
+  内訳から不採用を導くことはできないため、unity on/off も実測の対象とした。
+  結論は §11.8 にある。
 * 重量 TU は `tsf-tip` に限らない。`ipc` / `diagnostics` / `compat-test` にも同程度の
   ヘッダ展開コストが出ており、PCH の適用対象を `tsf-tip` と `settings-app` に限定する
   前提は、実測では支持されない。
@@ -344,9 +344,10 @@ TU 別コンパイル時間の総和は 74.2 秒（並列実行のため wall-cl
 * **絶対値を MSVC へ一般化できない。** 実際の CI と開発ループが使うのは `cl.exe` で
   あり、本計測は clang-cl のもの。内訳の傾向（ヘッダ展開が支配的）は構造的なもので
   移りやすいが、短縮幅の見積もりには使えない。
-* **PCH の採否はこの計測だけでは決まらない。** §4.7 の sccache と PCH は相互作用し、
+* **PCH の採否もこの計測だけでは決まらない。** §4.7 の sccache と PCH は相互作用し、
   MSVC の PCH（`/Yc` `/Yu`）を挟むとキャッシュのヒット率が落ちて正味で悪化しうる。
-  採否は「PCH 有無 × sccache hit/miss」の 4 条件を MSVC で実測して決める（別課題）。
+  そのため採否は「PCH 有無 × sccache hit/miss」の 4 条件を MSVC で実測して決めた。
+  結論は §11.8 にある。
 * **ヘッダ展開のうち「純粋な解析」と「実体化」の比率は出せない。** 上記のとおり
   両者は重なる指標であり、exclusive time は取っていない（個別イベントが粒度で
   落ちているため、算出には粒度を下げた再計測が要る）。「ヘッダ展開が支配的」と
@@ -819,13 +820,25 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 | check 名 | ワークフロー |
 |---|---|
 | `Secret scan` | `.github/workflows/secret-scan.yml` |
+| `CI gate` | `.github/workflows/windows.yml` |
 
-`.github/workflows/windows.yml` はワークフローレベルの `paths-ignore` で docs 変更を除外するため、
-その配下のジョブ（`Windows Debug` / `Windows Release` / `Pre-commit` / `C++ format (changed-lines gate)` /
-`Dependency review`）はこの基準を満たさない。同ファイル冒頭のコメントが定めるとおり、
-required checks へ加えるには `paths-ignore` を `changes` ジョブの出力による条件分岐へ移し、
-`if: always()` で全 `needs` の結果を集約する終端ジョブを設ける必要がある（DEV-1000）。
-`.github/workflows/docs.yml` と `.github/workflows/sbom.yml` も `paths` で絞られるため対象外とする。
+`.github/workflows/windows.yml` はワークフローレベルの `paths` / `paths-ignore` を持たず、
+すべての PR で発火する。ドキュメント・計画・エージェント設定・`legacy/` だけの変更で重量ジョブを
+省く判定は `changes` ジョブの `build` 出力による `if:` 条件が担い、スキップされたジョブは
+`skipped` として報告される。`build` の判定は base commit を取得できない場合と
+`workflow_dispatch` で `true` へ倒し、偽陰性スキップを作らない。
+
+終端の `ci-gate`（表示名 `CI gate`）は `if: always()` で必ず実行され、`needs` に列挙した
+全ジョブの結果を集約する。`failure` または `cancelled` が 1 件でもあれば fail し、
+`success` と `skipped` だけなら pass する。`windows.yml` にジョブを追加するときは
+`ci-gate` の `needs` にも加える。加えなければそのジョブの失敗が required check を素通りする。
+
+例外は `ci-gate` の `ADVISORY_JOBS` に挙げる advisory ジョブで、結果は集約の出力に
+残すが失敗判定には入れない。`cpp-tidy` がこれに当たる（§4.3 / §11.5 が非ブロッキングと
+定める）。解析ステップの `continue-on-error` だけでは、checkout・依存導入・configure の
+失敗でジョブ結果が `failure` になり、advisory ジョブが required check をブロックする。
+
+`.github/workflows/docs.yml` と `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
 `.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する
 対話ジョブであり、required にしても判定に寄与しない。
 
@@ -1978,6 +1991,131 @@ versioned Protobuf へ移行する案を挙げる。しかし本プロジェク�
 `docs/sideload-packaging-spec.md` §3.0）であり、既存 C++/WinRT スタックとの親和性・
 配布形態整合を根拠とする。TIP/Host と別プロセスで IPC 連携する点は C# でも成立するが、
 確定済みの決定を覆すだけの決定的な差は現時点で無いため、C++/WinRT を維持する。
+
+### 11.8 PCH — 不採用 / unity build — 見送り（DEV-910 で確定 / 2026-09）
+
+§2.7 は、ビルド時間の支配項が「TU ごとに繰り返すヘッダ展開」であることを clang-cl の
+`-ftime-trace` で示した。その削減手段として PCH と unity build を MSVC で実測し、
+**PCH は不採用、unity build は見送りとする。**
+
+#### 測定条件
+
+| 項目 | 値 |
+|---|---|
+| コンパイラ | MSVC（`cl.exe`、CI と開発ループが実際に使うもの） |
+| 構成 | Debug、Ninja、`-j 20`、20 論理プロセッサ |
+| 対象 | `AZOOKEY_BUILD_TESTS=ON` / `AZOOKEY_BUILD_BENCH=ON`、241 TU |
+| キャッシュ | `AZOOKEY_USE_COMPILER_CACHE=ON`（`/Z7` Embedded が効く条件） |
+| 計測範囲 | `cmake --build` のみ。configure は含めない |
+| 試行 | 各条件 3 回、中央値（最小-最大） |
+
+`SCCACHE_DIR` は計測専用ディレクトリへ向け、cold 条件はキャッシュディレクトリの
+作り直しで作る。GoogleTest は事前取得した v1.17.0 のソースツリーを指定し、
+configure ごとのダウンロードを計測から排除する。
+
+**configure 時に `VSLANG=1033` を与えること。** これが無いと日本語 UI ホストでは ninja が
+header dependency を 1 件も記録せず、さらに PCH の有無で `/showIncludes` の未消費出力量が
+変わるため、計測にバイアスが乗る。この不具合そのものは DEV-1002 で扱う。
+
+#### 4 条件の結果
+
+| 条件 | PCH | sccache | 中央値 | 最小-最大 |
+|---|---|---|---|---|
+| 1 | 無 | cold | 130.3 s | 93.2-137.8 |
+| 2 | 無 | warm | 29.4 s | 21.9-30.4 |
+| 3 | 有 | cold | 70.3 s | 62.4-73.7 |
+| 4 | 有 | warm | 42.1 s | 32.9-252.6 |
+
+PCH は cold を 46.1% 短縮し、warm を 43.0% 悪化させる。
+
+条件 4 の最大値 252.6 s は他の 2 回（42.1 s / 32.9 s）で再現しなかった単発の外れ値だが、
+除外せず範囲に残す。cold 条件は同一セル内でも 93-138 s とばらつくため、
+この幅を超える差だけを有意と読む。
+
+#### sccache のヒット率がどう変わるか
+
+`sccache --show-stats` の実測値。warm 条件、ninja がコンパイルしたオブジェクト数を分母とする。
+
+| | コンパイル対象 | cache hit | hit 率 |
+|---|---|---|---|
+| PCH 無 | 241 | 241 | 100% |
+| PCH 有 | 254 | 73 | 28.7% |
+
+**残る 71.3% は cache miss ではなく、構造的にキャッシュ不能である。** sccache が挙げる
+non-cacheable の理由は `/Fp` が 168 件、`/Yc` が 13 件で、PCH を使う全 TU と PCH 生成
+そのものに一致する。sccache は PCH 関連フラグを持つコンパイルをキャッシュ対象から外すため、
+これらは cache が warm でも毎回コンパイルされる。PCH がヘッダ解析を削る利得と、
+キャッシュを失う損失が相殺し、warm では損失が上回る。
+
+#### 不採用の根拠
+
+CI と日常の開発ループでは cache が warm な条件が支配的である。CI は sccache を GitHub
+Actions のキャッシュサービスで run 間再利用し（§4.7）、ローカルでも初回ビルド以降は warm
+になる。**PCH が改善するのは、頻度の低い cold 条件だけである。**
+
+ローカルの増分ビルドでは PCH に利得がある（ヘッダ 1 本の変更で 42.7 s → 17.5 s、
+単一 `.cpp` の変更で 10.0 s → 7.5 s）。これを取りに行く案として、PCH をローカル専用
+preset に限る構成も検討したが採らない。ビルド構成が二重化し、CI が通らない経路が
+できるうえ、ローカルでもブランチ切り替え後のフルビルドは warm 条件に当たって
+43% の悪化を受けるためである。PCH の適用には DEV-1086 の解消も前提となる。
+
+#### unity build を見送る理由
+
+unity build は性能だけを見れば採用に足る。cold 71.5 s（-45.1%）、warm 16.5 s（-43.9%）で
+**PCH と違い warm でも改善し、全 TU がキャッシュ可能なまま**である（hit 率 100%）。
+unity ビルドの成果物で CTest は全件成功する。
+
+それでも見送るのは、性能ではなく順序の問題による。
+
+* 241 から 76 へ減った edge のうち 80、**削減量の 48% は `tsf_tip_*_tests` 8 target が
+  同じ 11 ソースを重複コンパイルしている分**である（DEV-1087）。この重複は unity build の
+  意味論的リスクを負わずに構造的に除去でき、Issue が挙げる「テストターゲット限定の適用」も
+  そちらで実現される。
+* 重複を除いた後に unity build がどれだけ上積みするかは測っていない。
+* 適用には除外が 2 件必要になる（`inference-host/src/UserDictCli.cpp` の無名 namespace 衝突、
+  `bench/BenchmarkResult.cpp` の `GetObject` マクロ衝突）。加えて unity batch は
+  ソースの並び順で決まるため、ソースを 1 本足すと無関係な batch の内容が変わり、
+  それまで通っていた組み合わせが壊れうる。
+* 単一 `.cpp` の変更に対する増分ビルドは 10.0 s → 12.4 s と 24% 悪化する。
+  batch 全体が再コンパイルされるためで、最も頻度の高い操作が遅くなる。
+
+再評価は DEV-1086 と DEV-1087 が入った後に、本節と同じ 4 条件で行う。
+`UNITY_BUILD_BATCH_SIZE` は既定値のまま測っており、調整の余地を残している。
+
+#### この判断が対象としないもの
+
+`settings-app` は 4 条件の対象外である。MSBuild が `azookey_settings.vcxproj` を
+ビルドする独立経路にあり、CMake の compiler launcher が及ばないため sccache とは
+相互作用しない。PCH は `pch.h` と `/Yu` で既に使っている。Issue が当初挙げた
+「対象は `tsf-tip/` と `settings-app/`」という前提は、この 2 点で成り立たない。
+`tsf-tip` 以外にも重いヘッダ展開が出ている点は §2.7 のとおりである。
+
+#### 再現手順
+
+計測に使った CMake 側の足場は commit `a52527a` にある。`AZOOKEY_USE_PCH`（既定 OFF、
+TU 数が 8 以上の repo target 13 個 / 168 TU へ `target_precompile_headers` を適用）、
+`cmake/azookey_pch.h`（過半の TU が使う標準ヘッダと `<windows.h>`、および
+`GetObject` の `#undef`）、`CMAKE_UNITY_BUILD` 時の除外 2 件からなる。
+結論を反映した次の commit で取り除いてあるため、再現するときはこの commit の
+CMake 変更を復元する。
+
+```powershell
+$env:VSLANG = "1033"
+$env:SCCACHE_DIR = "<計測専用ディレクトリ>"
+cmake -S . -B build/pch -G Ninja -DCMAKE_BUILD_TYPE=Debug `
+  -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=ON `
+  -DAZOOKEY_USE_COMPILER_CACHE=ON -DAZOOKEY_USE_PCH=ON `
+  -DAZOOKEY_FETCH_GOOGLETEST=ON `
+  -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="<取得済み googletest>"
+sccache --zero-stats
+cmake --build build/pch -j 20
+sccache --show-stats
+```
+
+cold は `SCCACHE_DIR` を作り直してから、warm は同じキャッシュのまま build ディレクトリを
+作り直してから測る。unity build は `-DCMAKE_UNITY_BUILD=ON` を渡す。
+衝突を洗い出すときは ninja の `-k 0` を使う。既定の `-k 1` は最初の失敗で
+スケジューリングを止めるため、衝突件数を過小に見積もる。
 
 ## 12. IME 診断・修復ウィザード（M44）
 

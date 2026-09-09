@@ -81,6 +81,19 @@
       }
     },
     {
+      "name": "windows-release-arm64",
+      "displayName": "Windows Release (ARM64 cross-build)",
+      "description": "clang-cl cross-build for Windows on Arm (copilot-pc-backend-spec 8.1). Tests and benchmarks are off because GoogleTest discovery runs the built executable, which an x64 host cannot do for ARM64 binaries; ARM64 ctest belongs to the native ARM64 route (8.4).",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build/windows-release-arm64",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/win-arm64-clang.cmake",
+      "cacheVariables": {
+        "AZOOKEY_BUILD_TESTS": "OFF",
+        "AZOOKEY_BUILD_BENCH": "OFF",
+        "AZOOKEY_FETCH_GOOGLETEST": "OFF"
+      }
+    },
+    {
       "name": "windows-no-tests",
       "displayName": "Windows without tests",
       "inherits": "windows-release",
@@ -162,6 +175,10 @@
     {
       "name": "windows-release",
       "configurePreset": "windows-release"
+    },
+    {
+      "name": "windows-release-arm64",
+      "configurePreset": "windows-release-arm64"
     },
     {
       "name": "windows-no-tests",

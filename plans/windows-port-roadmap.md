@@ -2,7 +2,7 @@
 
 本書は Windows 版 azooKey-Desktop の**唯一の開発計画ドキュメント**。
 v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルストーン定義
-（Phase 5〜7・追加機能）・受け入れ条件・依存関係・テスト体系を一本化して
+（Phase 5〜7・追加機能）・受け入れ条件・依存関係を一本化して
 管理する。前提となる方針・構成は以下を参照:
 
 - `docs/windows-port-asset-audit.md`: 既存 macOS 資産の流用可否棚卸し
@@ -12,7 +12,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 
 > **状態・進捗の正典は Linear。** 各マイルストーンの進捗・状態・優先度・担当は Linear
 > （team `Dev` / project「azooKey Desktop / Windows IME MVP」）を正典とする。本書は構造・
-> マイルストーン定義・依存関係・受け入れ条件の「定義」・テスト体系・リスクの正典であり、
+> マイルストーン定義・依存関係・受け入れ条件の「定義」・リスクの正典であり、
 > 完了状態（✅/🚧/⚠️）や「現状」「残作業」は持たない。運用は `docs/linear-conventions.md` を参照。
 
 ## 全体目標
@@ -23,7 +23,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 - **コア方針**: TIP (in-proc COM DLL) はキー処理と UI のみ担当し、推論・学習は
   Named Pipe 経由で `inference-host` (per-user 常駐 EXE) に委譲する。
 
-## 現在のソース構成（2026-05 時点）
+## ソース構成
 
 | ディレクトリ        | 役割                                                     | 概要（構成・主な実装単位）                   |
 |---------------------|----------------------------------------------------------|---------------------------------------------|
@@ -32,7 +32,14 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore` / `Reranker` / `UserDictionary`（tests あり） |
 | `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp`。モデルロード境界は M8 で扱う |
 | `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel（M1〜M10 の範囲） |
-| `bench/`            | パフォーマンス計測                                       | `azookey_bench`                             |
+| `bench/`            | パフォーマンス計測                                       | `azookey_bench` / `azookey_zenzai_bench` / `azookey_nll_bench` と変換品質評価 |
+| `settings/`         | 設定の JSON Schema と既定値サンプル                      | `mvp-settings.schema.json` / `model-catalog.schema.json`（TIP・Host・設定アプリの共通正典） |
+| `settings-app/`     | WinUI 3 設定アプリ（MSBuild ビルド）                     | `SettingsDocument` / `SettingsIpcClient` / `LaunchArguments`（tests あり） |
+| `diagnostics/`      | 登録・pipe・ログの診断ツール                             | `azookey_diagnostics` ライブラリと `azookey_diag` CLI（tests あり） |
+| `compat-test/`      | アプリ互換性テストハーネス                               | `compat_test` ランナーと C001〜C012 のケース（tests あり） |
+| `dictbuild/`        | オフライン辞書ビルダ（Python）と辞書ランタイムのテスト   | `dictbuild.py` と `dictionary_tests`。配布物には非同梱 |
+| `pkg/`              | MSI / MSIX パッケージング資産                            | WiX 定義・AppxManifest・パッケージ生成スクリプト |
+| `scripts/`          | 開発・検証・文書検査のスクリプト                         | TIP 登録/解除・診断・VM 検証パッケージ生成の PowerShell と、文書・テスト一覧の Python 検査 |
 | `legacy/Core/` (Swift) | macOS 版の仕様参照源                                  | 移植対象ではなく仕様参照のみ（`legacy/` に保全・未保守） |
 
 ## マイルストーン
@@ -324,7 +331,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **テスト**: 各マイルストーンで `*/tests/` 配下に最低 1 件の単体テストを
   追加する。Windows 依存のないものは Linux/macOS CI でも回す。
-  詳細なテストカバレッジとギャップは `## テスト体系` 章を参照。
+  現存テストの一覧は `docs/test-inventory.md`、未解消のギャップは `## テスト体系` 章を参照。
 - **ログ**: TIP/Host とも構造化ログ（JSON Lines）を `%LOCALAPPDATA%\azooKey\logs\`
   に出す。当面は TIP=`OutputDebugStringA`（DebugView）/ Host=stderr。
   JSON Lines ファイルログへの切替は M41（構造化ログと可観測性）で行う。
@@ -333,67 +340,18 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 - **ドキュメント**: 各マイルストーン完了時に `docs/windows-tsf-host-architecture.md`
   を実装に合わせて更新する。
 
-## テスト体系（2026-05 現在）
+## テスト体系
 
-### テストフレームワーク
-
-テストフレームワークは **GoogleTest**、実行ランナーは **CTest** を併用する。
-GoogleTest はまず `find_package` でシステムインストール版を探し、見つからず
-かつ `-DAZOOKEY_FETCH_GOOGLETEST=ON` が指定されたときのみ `FetchContent` で
-ダウンロードする（ネットワーク取得は明示オプトイン）。いずれでも入手できない
-場合は警告を出してテストのみスキップし、ビルド自体は継続する（オフライン環境で
-`cmake -S . -B build` が失敗しないようにするため）。
-各テストは共通ヘルパ `azookey_discover_tests`（内部で `gtest_discover_tests` を呼び出し、
-`DISCOVERY_TIMEOUT` は既定 60 秒）により **ケース単位**（`SuiteName.TestName`）で CTest に
-登録されるため、下表の各実行ファイルは内部の `TEST()`/`TEST_F()` ごとに個別の CTest
-エントリへ展開される。
-共通ヘルパはケース単位の `TIMEOUT` と `LABELS` も付与でき、TSF/COM 境界に触る
-テストは `tsf-com` label で診断用に抽出できる。
-現行 preset では `ctest --preset windows-debug` または
-`ctest --preset windows-release` で一括実行する。
-
-### 現存テスト一覧
-
-| ターゲット | テスト | 主要シナリオ |
-|---|---|---|
-| `core_tests`（`core/tests/`） | `romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音） |
-| `core_tests` | `simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn` |
-| `ipc_tests` | `messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
-| `ipc_json_tests` | `json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
-| `ipc_payloads_tests` | `payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject |
-| `ipc_named_pipe_transport_tests` | `named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持、accept churn 下での複数クライアント同時接続（`ConcurrentClientsConnectDuringAcceptChurn`） |
-| `ipc_tip_client_tests` | `tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
-| `learning_tests` | `learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
-| `reranker_tests` | `reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
-| `user_dictionary_tests` | `user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
-| `host_engine_tests` | `engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload、`LoadModel` の GGUF 実プローブ（最小ヘッダ受理・不正 GGUF reject・CPU backend ロード成功・path 空時の MVP fallback）、`--backend cuda` 指定時の CPU フォールバック |
-| `host_dispatcher_tests` | `dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ |
-| `host_scheduler_tests` | `scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
-| `host_user_data_paths_tests` | `user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
-| `tsf_tip_com_smoke_tests` | `com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)`、`ActivateEx` の sink advise / unadvise。加えて登録 round-trip（`RegisterPublishesProfileAndUnregisterRemovesIt`、`FailedCategoryRegistrationRollsBackAndRetrySucceeds`）を実装済みだが、opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で CI では走らない（下記ギャップ 1） |
-| `tsf_tip_onkeydown_preedit_tests` | `onkeydown_preedit_test.cpp` | `OnKeyDown`/`OnTestKeyDown` で romaji→kana preedit 蓄積、Backspace（pending romaji / UTF-8 単位 kana 削除）、Escape クリア、Space で pending flush、preedit 無し時の制御キー非消費 |
-| `tsf_tip_display_attribute_tests` | `display_attribute_test.cpp` | `ITfDisplayAttributeProvider`（`GetDisplayAttributeInfo`/`EnumDisplayAttributeInfo`）と `InputDisplayAttributeInfo`（GUID/説明/下線属性、`Next`/`Reset`/`Skip`/`Clone`、null 引数 reject） |
-| `tsf_tip_activate_uiless_tests` | `activate_uiless_test.cpp` | `ActivateEx` が `ITfThreadMgrEx::GetActiveFlags`（`dwFlags` ではなく）から UI-less 状態を導出する（spec §2.10） |
-| `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
-| `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
-| `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
-
-#### CTest 以外の自動検査
-
-CTest に載らない検査は次のとおり。CTest の一覧と混在させず、実行系統ごとに分けて把握する。
-
-| 検査 | 実行系統 | 内容 |
-|---|---|---|
-| `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）で `core`/`ipc`/`learning`/`inference-host` を、`windows-asan`（MSVC ASan）でこれに `tsf-tip` を加えた全体を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
-| `.github/workflows/secret-scan.yml` / `.github/workflows/windows.yml` の `quality` / `linux-no-tests` / `windows-no-tests` | GitHub Actions（PR / `main` push / 手動 dispatch） | path 除外なしの secret scan で PR commit range または作業ツリーを gitleaks 走査。pre-commit の actionlint / taplo（yamlfmt の既存 baseline は DEV-913）、`AZOOKEY_BUILD_TESTS=OFF` + bench 無効の Linux / Windows build を独立ジョブで検証（`docs/dev-infrastructure-spec.md` §4.3） |
-| `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
-| `scripts/doctor.ps1`（`just doctor`） | 開発者・エージェントの手元 | 不足ツール・未初期化 dev shell・未取得依存の診断（`docs/dev-infrastructure-spec.md` §2.5。§12 の `azookey_diag.exe` とは別物） |
+テストフレームワーク、CTest に登録されているテストの一覧、CTest 以外の自動検査は
+[`docs/test-inventory.md`](../docs/test-inventory.md) を正典とする。本章は、そこに載る
+検査だけでは足りない部分、すなわち Phase 3/4 着手前に解消したいカバレッジの目標を持つ。
 
 ### 既知のテストギャップ（Phase 3/4 着手前に解消したい）
 
-> 解消済みのギャップは本リストに残さず `現存テスト一覧` 表（および `CTest 以外の自動検査` 表）に
-> 反映する（達成状態の正典は Linear）。以下は未解消の目標カバレッジの定義のみを並べる。
-> 一部だけ実装済みの項目は、実装済み部分を上記 2 表へ移し、本リストには残ギャップだけを書く。
+> 解消済みのギャップは本リストに残さず [`docs/test-inventory.md`](../docs/test-inventory.md) の
+> `現存テスト一覧` 表（および `CTest 以外の自動検査` 表）へ反映する（達成状態の正典は Linear）。
+> 以下は未解消の目標カバレッジの定義のみを並べる。一部だけ実装済みの項目は、実装済み部分を
+> 同文書の 2 表へ移し、本リストには残ギャップだけを書く。
 
 中期（Phase 3 / Zenzai 統合と並行）:
 1. **`tsf-tip` レジストリ round-trip の CI カバレッジ** — `DllRegisterServer` 後に HKLM の COM
@@ -425,8 +383,10 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
    確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認
    （手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。M3 の DisplayAttribute / CompositionSink
    部分は `compat-test/m3_display_attribute_checklist.md`（D-01〜D-10）で先行して定義済み。
-7. **bench IPC 内訳メトリクス** — `bench/` に serialize / send / host_compute / recv / apply_ui の
-   フェーズ別レイテンシ計測を追加し、遅延要因の切り分けを可能にする（M41 の相関 ID・フェーズ設計と整合）。
+7. **bench IPC 内訳メトリクス** — serialize / framing / deserialize と pipe round-trip の
+   フェーズ別レイテンシは `azookey_bench_ipc_smoke` がカバー済み。残ギャップは pipe round-trip の
+   内訳（送信 / Host 計算 / 受信）と UI 反映フェーズの分離で、遅延要因を最後まで切り分けられる
+   ようにする（M41 の相関 ID・フェーズ設計と整合）。
 ## リスクと不確実性
 
 未決の設計判断:
@@ -490,8 +450,8 @@ macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照�
 
 | Phase | スコープ | 対象 M | 検証ゲート |
 |---|---|---|---|
-| Phase 1 | TIP 基盤完成 | M1〜M4 | 実機 IME でローマ字を打鍵し、Host から候補を取得して候補ウィンドウへ表示する。実機動作は M2 のキーイベント sink 配線（Issue #33）に依存 |
-| Phase 2 | 候補選択と確定動線 | M5 / M6 / M10 | 候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機確認は M2（Issue #33）に依存 |
+| Phase 1 | TIP 基盤完成 | M1〜M4 | 実機 IME でローマ字を打鍵し、Host から候補を取得して候補ウィンドウへ表示する |
+| Phase 2 | 候補選択と確定動線 | M5 / M6 / M10 | 候補選択・確定・観測送信・早打ち耐性（in-flight cancel + staleness）。実機確認は M2 の受け入れ条件（`ITfKeyEventSink::OnKeyDown` 到達）を前提とする |
 | Phase 3 | 実 Zenzai と辞書 UI のつなぎ込み（3〜5 週） | M8 / M9 | M8 / M9 の受け入れ条件を満たす。ビルド・CTest・ユーザー辞書 CLI ラウンドトリップ・実機 Win11 VM での TIP 登録と Zenzai 候補確認・GPU 要求時の CPU 降格・`bench/` の p50/p95 の手順は `README.md`（GGUF 配置と `-ModelPath` 登録）、`docs/debugging.md`（ビルド・手動確認・ユーザー辞書 CLI）、`docs/zenzai-gpu-route.md`（Zenzai ベンチと計測ゲート） |
 | Phase 4 | 配布可能化 — v1.0 リリースゲート（4〜6 週） | M11 / M12 | クリーン Win11 VM で MSI インストール → IME 選択 → 入力 → 確定 → アンインストールでクリーン状態に戻る。CI 緑、タグ push で未署名 MSI が自動公開。入力対象は Win32 デスクトップアプリかつ x64 プロセスに限る（`docs/sideload-packaging-spec.md` §0.1） |
 

@@ -1,12 +1,6 @@
 #include <Ole2.h>
 #include <UIAutomation.h>
 
-#include "runner/CompatTypes.h"
-
-#ifdef GetObject
-#undef GetObject
-#endif
-
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -19,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "runner/CompatTypes.h"
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
 #include "runner/TargetConfigLoader.h"

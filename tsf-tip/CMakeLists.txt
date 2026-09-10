@@ -33,44 +33,47 @@ target_link_libraries(azookey_tsf_tip
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 if(AZOOKEY_BUILD_TESTS)
+  # Compile the shared implementation once with the test-only hooks enabled.
+  add_library(azookey_tsf_tip_test_objects OBJECT
+    src/BracketEditSession.cpp
+    src/AiInputGuard.cpp
+    src/CandidateListUIElement.cpp
+    src/CandidateUiCoordinator.cpp
+    src/CandidateWindow.cpp
+    src/DisplayAttribute.cpp
+    src/ForegroundAppDetector.cpp
+    src/SettingsLauncher.cpp
+    src/TextService.cpp
+    src/TipLocalSettings.cpp
+    src/TextServiceFactory.cpp
+  )
+  target_include_directories(azookey_tsf_tip_test_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_definitions(azookey_tsf_tip_test_objects PUBLIC
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN AZOOKEY_TSF_TESTING)
+  target_link_libraries(azookey_tsf_tip_test_objects
+    PUBLIC
+      azookey_core
+      azookey_ipc
+      GTest::gtest_main
+      azookey_project_options
+      azookey_project_warnings
+      ole32
+      oleaut32
+      uuid
+      shlwapi
+      shcore
+      shell32
+      user32
+      gdi32
+      dwrite
+  )
+
   function(add_tsf_tip_unit_test target_name test_source)
     set(one_value_args LABEL TIMEOUT)
     cmake_parse_arguments(TSF_TIP_TEST "" "${one_value_args}" "" ${ARGN})
 
-    add_executable(${target_name}
-      src/BracketEditSession.cpp
-      src/AiInputGuard.cpp
-      src/CandidateListUIElement.cpp
-      src/CandidateUiCoordinator.cpp
-      src/CandidateWindow.cpp
-      src/DisplayAttribute.cpp
-      src/ForegroundAppDetector.cpp
-      src/SettingsLauncher.cpp
-      src/TextService.cpp
-      src/TipLocalSettings.cpp
-      src/TextServiceFactory.cpp
-      ${test_source}
-    )
-    target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_compile_definitions(${target_name} PRIVATE
-      UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN AZOOKEY_TSF_TESTING)
-    target_link_libraries(${target_name}
-      PRIVATE
-        azookey_core
-        azookey_ipc
-        GTest::gtest_main
-        azookey_project_options
-        azookey_project_warnings
-        ole32
-        oleaut32
-        uuid
-        shlwapi
-        shcore
-        shell32
-        user32
-        gdi32
-        dwrite
-    )
+    add_executable(${target_name} ${test_source})
+    target_link_libraries(${target_name} PRIVATE azookey_tsf_tip_test_objects)
     set(tsf_tip_discover_args)
     if(TSF_TIP_TEST_LABEL)
       list(APPEND tsf_tip_discover_args LABEL ${TSF_TIP_TEST_LABEL})

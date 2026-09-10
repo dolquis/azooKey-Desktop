@@ -1,10 +1,6 @@
 #include <Windows.h>
 #include <gtest/gtest.h>
 
-#ifdef GetObject
-#undef GetObject
-#endif
-
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -152,7 +148,7 @@ TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   ASSERT_TRUE(parsed);
   ASSERT_TRUE(parsed->IsObject());
   EXPECT_EQ(parsed->GetInt("schema_version"), 1);
-  const auto* summary = parsed->GetObject("summary");
+  const auto* summary = parsed->FindObject("summary");
   ASSERT_NE(summary, nullptr);
   EXPECT_EQ(azookey::ipc::json::Value(*summary).GetUInt("pass"), 1u);
   EXPECT_EQ(azookey::ipc::json::Value(*summary).GetUInt("fail"), 1u);
@@ -200,7 +196,7 @@ TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
     EXPECT_EQ(parsed->GetString("app_id"), expected.app_id);
     EXPECT_EQ(parsed->GetString("automation_level"), "full");
 
-    const auto* window = parsed->GetObject("window");
+    const auto* window = parsed->FindObject("window");
     ASSERT_NE(window, nullptr);
     const azookey::ipc::json::Value window_value(*window);
     EXPECT_EQ(window_value.GetString("class"), expected.window_class);
@@ -232,21 +228,21 @@ TEST(TargetConfigFilesTest, EdgeAndVsCodeDeclareDocumentedWorkarounds) {
 
   const auto edge = load("edge");
   ASSERT_TRUE(edge);
-  const auto* edge_workarounds = edge->GetObject("workarounds");
+  const auto* edge_workarounds = edge->FindObject("workarounds");
   ASSERT_NE(edge_workarounds, nullptr);
   const azookey::ipc::json::Value edge_value(*edge_workarounds);
   EXPECT_EQ(edge_value.GetBool("prefer_get_text_ext"), true);
   EXPECT_EQ(edge_value.GetString("display_attribute_fallback"), "ime-default-rendering");
-  const auto* edge_launch = edge->GetObject("launch");
+  const auto* edge_launch = edge->FindObject("launch");
   ASSERT_NE(edge_launch, nullptr);
   const azookey::ipc::json::Value edge_launch_value(*edge_launch);
-  const auto* edge_document = edge_launch_value.GetObject("temporary_document");
+  const auto* edge_document = edge_launch_value.FindObject("temporary_document");
   ASSERT_NE(edge_document, nullptr);
   EXPECT_EQ(azookey::ipc::json::Value(*edge_document).GetBool("save_before_close"), false);
 
   const auto vscode = load("vscode");
   ASSERT_TRUE(vscode);
-  const auto* vscode_workarounds = vscode->GetObject("workarounds");
+  const auto* vscode_workarounds = vscode->FindObject("workarounds");
   ASSERT_NE(vscode_workarounds, nullptr);
   const azookey::ipc::json::Value vscode_value(*vscode_workarounds);
   EXPECT_EQ(vscode_value.GetBool("prefer_ime_candidates_during_preedit"), true);
@@ -257,7 +253,7 @@ TEST(TargetConfigFilesTest, NotepadAllowsOnlyOwnedTemporaryDocumentInReusedWindo
   const auto path = std::filesystem::path(AZOOKEY_COMPAT_TARGETS_DIR) / "notepad.json";
   const auto parsed = azookey::ipc::json::Parse(ReadFile(path));
   ASSERT_TRUE(parsed);
-  const auto* workarounds = parsed->GetObject("workarounds");
+  const auto* workarounds = parsed->FindObject("workarounds");
   ASSERT_NE(workarounds, nullptr);
   const azookey::ipc::json::Value workaround_value(*workarounds);
   EXPECT_EQ(workaround_value.GetBool("require_new_window"), false);

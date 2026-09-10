@@ -27,9 +27,6 @@
 #include <msctf.h>
 #include <winternl.h>
 // clang-format on
-#ifdef GetObject
-#undef GetObject
-#endif
 #endif
 
 #include "SettingsSchema.h"
@@ -208,7 +205,7 @@ bool ValidateJsonSchema(const j::Value& value, const j::Value& schema) {
     }
   }
   if (value.IsObject()) {
-    const auto* properties = schema.GetObject("properties");
+    const auto* properties = schema.FindObject("properties");
     const bool allow_additional = !schema.Find("additionalProperties") ||
                                   !schema.Find("additionalProperties")->IsBool() ||
                                   schema.Find("additionalProperties")->AsBool();
@@ -278,7 +275,7 @@ SettingsProbe ProbeSettings(const std::filesystem::path& path) {
     result.valid = false;
     return result;
   }
-  if (const auto* model = value->GetObject("model")) {
+  if (const auto* model = value->FindObject("model")) {
     const auto enabled = model->find("enabled");
     if (enabled != model->end() && enabled->second.IsBool()) {
       result.model_enabled = enabled->second.AsBool();

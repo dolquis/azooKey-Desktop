@@ -5,10 +5,6 @@
 #endif
 #include <Windows.h>
 
-#ifdef GetObject
-#undef GetObject
-#endif
-
 #include <chrono>
 #include <cstdint>
 #include <filesystem>

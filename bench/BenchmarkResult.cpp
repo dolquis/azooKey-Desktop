@@ -69,7 +69,7 @@ BaselineComparison CompareBaseline(const std::filesystem::path& path, const std:
   const auto baseline_bench = parsed->GetString("bench");
   const auto baseline_commit = parsed->GetString("commit");
   const auto baseline_config = parsed->GetString("config");
-  const auto* latency = parsed->GetObject("latencyMs");
+  const auto* latency = parsed->FindObject("latencyMs");
   if (!version || *version != kBenchmarkSchemaVersion || !baseline_bench || !baseline_commit ||
       !baseline_config || latency == nullptr) {
     return Unavailable("incompatible", "baseline schema is incomplete or unsupported");

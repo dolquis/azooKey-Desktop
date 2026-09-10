@@ -32,7 +32,8 @@ Exit status is 0 when the table and CMake agree, 1 otherwise.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import os
+from pathlib import Path, PurePath
 import re
 import sys
 
@@ -76,6 +77,15 @@ def read_call_arguments(text: str, open_parenthesis_index: int) -> list[str]:
     return []
 
 
+def repo_relative_posix(path: PurePath, repo_root: PurePath) -> str:
+    """Return `path` relative to `repo_root` with forward slashes.
+
+    The comparison against the table is done on slash-separated logical paths,
+    so a Windows checkout must not feed backslashes into it.
+    """
+    return path.relative_to(repo_root).as_posix()
+
+
 def resolve_source(cmakelists_relative_directory: str, source: str) -> str | None:
     """Resolve a source listed in CMake to a repo-relative path."""
     if "$" in source:
@@ -88,14 +98,35 @@ def resolve_source(cmakelists_relative_directory: str, source: str) -> str | Non
     return "/".join(parts)
 
 
+def is_pruned_directory(parent: Path, name: str, depth: int) -> bool:
+    """Whether the walk must not descend into `parent / name`.
+
+    Besides the vendored trees, this keeps the walk inside *this* checkout:
+    a linked worktree or a nested clone carries its own `CMakeLists.txt`
+    files, and collecting them would attribute another checkout's tests to
+    this one. A worktree's `.git` is a file, not a directory, so both are
+    detected by mere existence.
+    """
+    if depth == 0 and name in EXCLUDED_TOP_LEVEL_DIRECTORIES:
+        return True
+    if name.startswith("."):
+        return True
+    return (parent / name / ".git").exists()
+
+
 def collect_cmake_files(repo_root: Path) -> list[Path]:
     files = []
-    for path in sorted(repo_root.rglob("CMakeLists.txt")):
-        relative = path.relative_to(repo_root)
-        if relative.parts[0] in EXCLUDED_TOP_LEVEL_DIRECTORIES:
-            continue
-        files.append(path)
-    return files
+    for directory, subdirectories, filenames in os.walk(repo_root):
+        current = Path(directory)
+        depth = len(current.relative_to(repo_root).parts)
+        subdirectories[:] = sorted(
+            name
+            for name in subdirectories
+            if not is_pruned_directory(current, name, depth)
+        )
+        if "CMakeLists.txt" in filenames:
+            files.append(current / "CMakeLists.txt")
+    return sorted(files)
 
 
 class Registrations:
@@ -114,8 +145,8 @@ def collect_registrations(repo_root: Path) -> Registrations:
     registrations = Registrations()
 
     for path in collect_cmake_files(repo_root):
-        relative = str(path.relative_to(repo_root))
-        directory = str(path.parent.relative_to(repo_root))
+        relative = repo_relative_posix(path, repo_root)
+        directory = repo_relative_posix(path.parent, repo_root)
         text = strip_cmake_comments(path.read_text(encoding="utf-8"))
 
         executable_sources: dict[str, list[str]] = {}

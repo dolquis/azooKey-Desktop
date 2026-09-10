@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 import tempfile
 import unittest
@@ -95,6 +95,26 @@ class FixtureRepository:
         (directory / "build" / "generated" / "CMakeLists.txt").write_text(
             "add_test(NAME stale_generated_test COMMAND true)\n", encoding="utf-8"
         )
+        # A linked worktree of the same repository: its `.git` is a file.
+        worktree = directory / ".claude" / "worktrees" / "other"
+        worktree.mkdir(parents=True)
+        (worktree / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+        (worktree / "CMakeLists.txt").write_text(
+            "add_test(NAME worktree_leak COMMAND true)\n", encoding="utf-8"
+        )
+        # The same, outside a dot-directory: only the `.git` file stops it.
+        linked = directory / "linked" / "other"
+        linked.mkdir(parents=True)
+        (linked / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+        (linked / "CMakeLists.txt").write_text(
+            "add_test(NAME linked_worktree_leak COMMAND true)\n", encoding="utf-8"
+        )
+        # A nested checkout outside any dot-directory: its `.git` is a directory.
+        nested = directory / "vendor" / "nested"
+        (nested / ".git").mkdir(parents=True)
+        (nested / "CMakeLists.txt").write_text(
+            "add_test(NAME nested_checkout_leak COMMAND true)\n", encoding="utf-8"
+        )
         (directory / "docs" / "test-inventory.md").write_text(
             build_document(rows), encoding="utf-8"
         )
@@ -144,6 +164,40 @@ class CollectionTests(unittest.TestCase):
         self.assertIn("core_cli_smoke", registrations.ctest_names)
         self.assertNotIn("commented_out", registrations.ctest_names)
         self.assertNotIn("stale_generated_test", registrations.ctest_names)
+
+    def test_skips_worktrees_and_nested_checkouts(self) -> None:
+        # Another checkout's CMake must not be attributed to this one.
+        registrations = self.collect()
+        self.assertNotIn("worktree_leak", registrations.ctest_names)
+        self.assertNotIn("linked_worktree_leak", registrations.ctest_names)
+        self.assertNotIn("nested_checkout_leak", registrations.ctest_names)
+
+
+class PathTests(unittest.TestCase):
+    def test_windows_paths_become_slash_separated(self) -> None:
+        # A Windows checkout must produce the same logical paths as a POSIX
+        # one; backslashes would never match the table's slash-separated cells.
+        root = PureWindowsPath(r"C:\src\azooKey-Desktop")
+        self.assertEqual(
+            MODULE.repo_relative_posix(root / "core" / "tests" / "CMakeLists.txt", root),
+            "core/tests/CMakeLists.txt",
+        )
+        self.assertEqual(
+            MODULE.repo_relative_posix(root / "core" / "tests", root), "core/tests"
+        )
+        self.assertEqual(MODULE.repo_relative_posix(root, root), ".")
+
+    def test_posix_paths_are_unchanged(self) -> None:
+        root = PurePosixPath("/src/azooKey-Desktop")
+        self.assertEqual(
+            MODULE.repo_relative_posix(root / "core" / "tests" / "CMakeLists.txt", root),
+            "core/tests/CMakeLists.txt",
+        )
+
+    def test_resolve_source_accepts_the_repository_root_directory(self) -> None:
+        self.assertEqual(
+            MODULE.resolve_source(".", "tests/root_test.cpp"), "tests/root_test.cpp"
+        )
 
 
 class ComparisonTests(unittest.TestCase):

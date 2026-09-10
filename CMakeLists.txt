@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
 
+# Match the MSVC launcher below during project()'s /showIncludes detection.
+# Otherwise a non-English host can cache a localized dependency prefix while
+# the actual build emits English, leaving Ninja with no header dependencies.
+set(AZOOKEY_MSVC_VSLANG 1033)
+if(CMAKE_HOST_WIN32)
+  # Intentionally override the caller's language, including configure diagnostics.
+  set(ENV{VSLANG} "${AZOOKEY_MSVC_VSLANG}")
+endif()
+
 # --- Compiler cache (sccache/ccache) -----------------------------------------
 # Detected before project() so that, on MSVC, we can pick a debug-information
 # format compatible with the cache. sccache/ccache cannot cache objects that
@@ -36,8 +45,8 @@ if(AZOOKEY_USE_COMPILER_CACHE AND AZOOKEY_COMPILER_CACHE)
   message(STATUS "Compiler cache enabled: ${AZOOKEY_COMPILER_CACHE}")
 endif()
 
-# CMake detects MSVC's /showIncludes prefix in English, while cl.exe follows
-# the host UI language during normal Ninja builds. Keep the compiler output in
+# Match the language used for /showIncludes detection above during normal Ninja
+# builds, which can run outside this CMake process. Keep the compiler output in
 # English so Ninja records header dependencies instead of silently storing an
 # empty dependency set on non-English Windows hosts. Preserve any existing
 # launcher (for example sccache) after the environment wrapper.
@@ -46,7 +55,7 @@ if(MSVC)
     set(_azookey_existing_launcher
         "${CMAKE_${_azookey_lang}_COMPILER_LAUNCHER}")
     set(CMAKE_${_azookey_lang}_COMPILER_LAUNCHER
-        "${CMAKE_COMMAND};-E;env;VSLANG=1033")
+        "${CMAKE_COMMAND};-E;env;VSLANG=${AZOOKEY_MSVC_VSLANG}")
     if(_azookey_existing_launcher)
       list(APPEND CMAKE_${_azookey_lang}_COMPILER_LAUNCHER
            ${_azookey_existing_launcher})

@@ -102,6 +102,13 @@ class FixtureRepository:
         (worktree / "CMakeLists.txt").write_text(
             "add_test(NAME worktree_leak COMMAND true)\n", encoding="utf-8"
         )
+        # The same, outside a dot-directory: only the `.git` file stops it.
+        linked = directory / "linked" / "other"
+        linked.mkdir(parents=True)
+        (linked / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+        (linked / "CMakeLists.txt").write_text(
+            "add_test(NAME linked_worktree_leak COMMAND true)\n", encoding="utf-8"
+        )
         # A nested checkout outside any dot-directory: its `.git` is a directory.
         nested = directory / "vendor" / "nested"
         (nested / ".git").mkdir(parents=True)
@@ -162,6 +169,7 @@ class CollectionTests(unittest.TestCase):
         # Another checkout's CMake must not be attributed to this one.
         registrations = self.collect()
         self.assertNotIn("worktree_leak", registrations.ctest_names)
+        self.assertNotIn("linked_worktree_leak", registrations.ctest_names)
         self.assertNotIn("nested_checkout_leak", registrations.ctest_names)
 
 

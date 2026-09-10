@@ -16,9 +16,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
-#ifdef GetObject
-#undef GetObject
-#endif
 #endif
 
 #include "SettingsDocument.h"
@@ -123,7 +120,7 @@ TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValu
   EXPECT_FALSE(saved.warnings.empty());
   const auto parsed = azookey::ipc::json::Parse(ReadText(path));
   ASSERT_TRUE(parsed);
-  const auto* profiles = parsed->GetObject("profilesByApp");
+  const auto* profiles = parsed->FindObject("profilesByApp");
   ASSERT_NE(profiles, nullptr);
   ASSERT_EQ(profiles->size(), 1u);
   const auto& profile = profiles->at("Code.exe");
@@ -132,7 +129,7 @@ TEST(SettingsDocumentTest, PreservesAllCommonProfileFieldsAndSanitizesNestedValu
   EXPECT_EQ(profile.GetString("privacyMode"), "secure");
   EXPECT_EQ(profile.GetString("promptPrefix"), "");
   EXPECT_EQ(profile.GetString("aiBackend"), "auto");
-  EXPECT_EQ(profile.GetObject("candidateTagBoosts")->at("Technical").AsNumber(), 3);
+  EXPECT_EQ(profile.FindObject("candidateTagBoosts")->at("Technical").AsNumber(), 3);
   std::filesystem::remove_all(dir);
 }
 

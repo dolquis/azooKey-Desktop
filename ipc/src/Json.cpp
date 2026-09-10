@@ -491,7 +491,7 @@ const Array* Value::GetArray(std::string_view key) const {
   return &v->AsArray();
 }
 
-const Object* Value::GetObject(std::string_view key) const {
+const Object* Value::FindObject(std::string_view key) const {
   const auto* v = Find(key);
   if (!v || !v->IsObject()) return nullptr;
   return &v->AsObject();

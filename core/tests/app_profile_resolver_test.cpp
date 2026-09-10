@@ -76,8 +76,8 @@ TEST(AppProfileResolverTest, InvalidFieldsInheritAndBoostsAreBoundedWithoutLosin
   const j::Value result(resolver.Resolve({"code.exe", "", true}));
   EXPECT_EQ(result.GetBool("learningEnabled"), false);
   EXPECT_EQ(result.GetString("privacyMode"), "secure");
-  ASSERT_NE(result.GetObject("candidateTagBoosts"), nullptr);
-  const auto& boosts = *result.GetObject("candidateTagBoosts");
+  ASSERT_NE(result.FindObject("candidateTagBoosts"), nullptr);
+  const auto& boosts = *result.FindObject("candidateTagBoosts");
   EXPECT_EQ(boosts.at("Technical").AsNumber(), 3);
   EXPECT_EQ(boosts.at("English").AsNumber(), 1);
   EXPECT_EQ(boosts.at("FutureTag").AsNumber(), 2);

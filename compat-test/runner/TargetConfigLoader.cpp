@@ -2,10 +2,6 @@
 
 #include <Windows.h>
 
-#ifdef GetObject
-#undef GetObject
-#endif
-
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -100,8 +96,8 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
   const auto display_name = parsed->GetString("display_name");
   const auto app_id = parsed->GetString("app_id");
   const auto automation_level = parsed->GetString("automation_level");
-  const auto* launch = parsed->GetObject("launch");
-  const auto* window = parsed->GetObject("window");
+  const auto* launch = parsed->FindObject("launch");
+  const auto* window = parsed->FindObject("window");
   const auto* cases = parsed->GetArray("cases");
   if (!id || !IsValidTargetId(*id) || !display_name || !app_id || !automation_level || !launch ||
       !window || !cases) {
@@ -148,7 +144,7 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
     if (!item.IsString()) return std::nullopt;
     config.cases.push_back(item.AsString());
   }
-  if (const auto* workarounds = parsed->GetObject("workarounds")) {
+  if (const auto* workarounds = parsed->FindObject("workarounds")) {
     const azookey::ipc::json::Value workaround_value(*workarounds);
     config.use_temporary_document =
         workaround_value.GetBool("use_temporary_document").value_or(false);
@@ -156,7 +152,7 @@ std::optional<TargetConfig> LoadTargetConfig(const std::filesystem::path& path) 
     config.allow_reused_window_for_temporary_document =
         workaround_value.GetBool("allow_reused_window_for_temporary_document").value_or(false);
   }
-  if (const auto* temporary_document = launch_value.GetObject("temporary_document")) {
+  if (const auto* temporary_document = launch_value.FindObject("temporary_document")) {
     const azookey::ipc::json::Value temporary_document_value(*temporary_document);
     const auto extension = temporary_document_value.GetString("extension");
     const auto document_contents = temporary_document_value.GetString("contents");

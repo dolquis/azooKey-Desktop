@@ -57,7 +57,7 @@ struct Value {
   std::optional<uint64_t> GetUInt(std::string_view key) const;
   std::optional<bool> GetBool(std::string_view key) const;
   const Array* GetArray(std::string_view key) const;
-  const Object* GetObject(std::string_view key) const;
+  const Object* FindObject(std::string_view key) const;
 };
 
 std::optional<Value> Parse(std::string_view text);

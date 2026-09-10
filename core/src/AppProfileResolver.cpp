@@ -12,9 +12,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
-#ifdef GetObject
-#undef GetObject
-#endif
 #endif
 
 namespace azookey::core {
@@ -165,11 +162,11 @@ AppProfileResolver AppProfileResolver::FromSettings(const j::Value& settings,
   // "auto" is profile-only. Global aiBackend is always a concrete backend.
   if (resolver.globals_.at("aiBackend").AsString() == "auto")
     resolver.globals_["aiBackend"] = "none";
-  if (const auto* profiles = settings.GetObject("profilesByApp"))
+  if (const auto* profiles = settings.FindObject("profilesByApp"))
     resolver.profiles_ = SanitizeAppProfiles(*profiles, warnings);
   else if (settings.Find("profilesByApp"))
     Warn(warnings, "invalid profilesByApp removed");
-  if (const auto* legacy = settings.GetObject("promptPrefixByApp")) {
+  if (const auto* legacy = settings.FindObject("promptPrefixByApp")) {
     for (const auto& [name, value] : *legacy)
       if (value.IsString()) resolver.legacy_.emplace(name, value);
     WarnCollisions(resolver.legacy_, warnings);

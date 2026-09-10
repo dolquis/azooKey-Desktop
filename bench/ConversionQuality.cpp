@@ -21,10 +21,6 @@
 #include <Windows.h>
 #include <bcrypt.h>
 #include <psapi.h>
-
-#ifdef GetObject
-#undef GetObject
-#endif
 #endif
 
 #include "azookey/ipc/Json.h"
@@ -447,7 +443,7 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
   if (!baseline_version || !baseline_version->IsNumber() || baseline_version->AsNumber() != 1.0) {
     throw std::runtime_error("baseline is incompatible: version");
   }
-  const auto* baseline_config = parsed->GetObject("config");
+  const auto* baseline_config = parsed->FindObject("config");
   if (!baseline_config) throw std::runtime_error("baseline is incompatible: config");
   const auto compatible_value = [](const j::Value& current, const j::Value& baseline) {
     if (current.IsNull() && baseline.IsNull()) return true;
@@ -483,7 +479,7 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
       throw std::runtime_error(std::string("baseline is incompatible: ") + key);
     }
   }
-  const auto* baseline_summary = parsed->GetObject("summary");
+  const auto* baseline_summary = parsed->FindObject("summary");
   if (!baseline_summary) throw std::runtime_error("baseline is missing summary");
   const auto add_diff = [&](const std::string& key, const j::Object& current,
                             const j::Object& baseline, const std::string& prefix,
@@ -499,7 +495,7 @@ j::Object BaselineDiff(const std::filesystem::path& path, const j::Object& confi
   constexpr std::array keys = {"top1_accuracy",         "top5_accuracy", "exact_match_rate",
                                "nfkc_exact_match_rate", "cer",           "nfkc_cer"};
   for (const auto* key : keys) add_diff(key, summary, *baseline_summary, "", &diff);
-  const auto* baseline_categories = parsed->GetObject("by_category");
+  const auto* baseline_categories = parsed->FindObject("by_category");
   if (!baseline_categories) return diff;
   for (const auto& [category, current] : categories) {
     const auto baseline = baseline_categories->find(category);

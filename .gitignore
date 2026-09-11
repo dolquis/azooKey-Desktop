@@ -53,6 +53,10 @@ settings-app/Generated Files/
 settings-app/obj/
 settings-app/packages/
 
+# Python bytecode (the vendored docs-lint hook lives under .claude/hooks/)
+__pycache__/
+*.pyc
+
 # Claude Code local overrides (per-machine; never committed)
 CLAUDE.local.md
 .claude/settings.local.json

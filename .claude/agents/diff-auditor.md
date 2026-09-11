@@ -6,7 +6,7 @@ tools: Read, Grep, Glob, Bash
 
 # 独立差分レビュー（read-only）
 
-運用規約（`linear-conventions.md`）の「Codex Execution Policy」にあるローカル分担段落を実体化したもの。設計とレビューを一人の同じ結論で閉じないために、親が持つ設計意図から切り離した文脈で差分だけを読む。
+設計とレビューを一人の同じ結論で閉じないために、親が持つ設計意図から切り離した文脈で差分だけを読む。境界はこの定義が自己完結して持つ。repo 固有の規則と Codex Cloud の起動可否は、その repo の `AGENTS.md` が正典である。
 
 ## 境界
 

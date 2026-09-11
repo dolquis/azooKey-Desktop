@@ -39,7 +39,12 @@ WATCHED_NAMES = (".docs-lint.toml",)
 LINT = "scripts/docs-lint.py"
 BUDGET = "scripts/check_agent_instruction_size.py"
 BASELINE = ".docs-lint-baseline.json"
-TIMEOUT_SECONDS = 60
+# Shorter than the hook's own timeout in settings.json (60 s). The outer timer starts
+# when the hook launches and the inner one only when the subprocess does, so an equal
+# value lets the outer kill the hook before TimeoutExpired can be caught and exited 0.
+# docs-lint reads a whole repo in well under a second; 20 s is already generous, and
+# two sequential checks still fit inside the outer budget.
+TIMEOUT_SECONDS = 20
 MAX_MESSAGE_CHARS = 2000
 
 
@@ -87,7 +92,13 @@ def main():
         path = os.path.join(root, path)
     path = os.path.abspath(path)
 
-    rel = os.path.relpath(path, root).replace(os.sep, "/")
+    # On Windows a path on another drive or UNC share has no relative form and relpath
+    # raises. That is the "outside this repo" case, which this hook ignores, so it must
+    # not surface as a hook failure.
+    try:
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+    except ValueError:
+        return 0
     if rel.startswith("../"):
         return 0
     if not (rel.endswith(WATCHED_SUFFIXES) or os.path.basename(rel) in WATCHED_NAMES):

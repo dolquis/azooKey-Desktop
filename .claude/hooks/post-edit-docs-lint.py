@@ -70,6 +70,26 @@ def run(root, args):
     return done.returncode == 0, done.stdout.decode("utf-8", "replace")
 
 
+def baseline_is_tracked(root):
+    """True when the repo commits its baseline, which is what its CI reads.
+
+    Presence on disk is not the test: a baseline someone wrote locally with
+    --write-baseline can be .gitignore'd (Codex-Router does exactly that), and CI
+    then runs the strict mode instead. Keying off the untracked file would make the
+    hook disagree with CI in both directions -- reporting HEURISTIC growth CI does
+    not gate on, and hiding a new DECISIVE finding that fits under a stale count.
+    Anything that goes wrong here (no git, no repo, git missing) falls back to the
+    strict mode, which is the stricter of the two.
+    """
+    try:
+        done = subprocess.run(["git", "ls-files", "--error-unmatch", "--", BASELINE],
+                              cwd=root, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -108,12 +128,13 @@ def main():
 
     notes = []
 
-    # A repo with a baseline gates on the increase, which is the same verdict its
-    # CI job reaches. A repo without one has nothing frozen, so fall back to the
-    # DECISIVE tier only: HEURISTIC is over-detection by construction, and a repo
-    # that carries a standing pile of it would see the same irrelevant list after
-    # every Markdown edit. The origin's CI still requires zero of both tiers.
-    if os.path.exists(os.path.join(root, BASELINE)):
+    # A repo that commits its baseline gates on the increase, which is the same
+    # verdict its CI job reaches. A repo without a committed one has nothing frozen,
+    # so fall back to the DECISIVE tier only: HEURISTIC is over-detection by
+    # construction, and a repo carrying a standing pile of it would see the same
+    # irrelevant list after every Markdown edit. The origin's CI requires zero of
+    # both tiers, so there the hook is the looser of the two by design.
+    if baseline_is_tracked(root):
         lint_args = [LINT, "--baseline", BASELINE]
     else:
         lint_args = [LINT, "--strict", "decisive"]

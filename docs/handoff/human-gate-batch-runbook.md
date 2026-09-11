@@ -36,38 +36,28 @@ cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
 ```
 
-パッケージを作る前に、preflight が通る状態かをホストで確認する。
-
-```powershell
-.\build\windows-release\bench\azookey_zenzai_bench.exe
-```
-
-出力に `llama_cpp=1` が含まれない場合は、この時点で configure をやり直す。
-VM へ持ち込んでから登録で弾かれると、checkpoint 復元からやり直しになる。
+パッケージ生成時に CMake cache の llama.cpp 構成を自動検査する。
+`-ModelPath` を指定した場合は、`AZOOKEY_FETCH_LLAMA_CPP` または
+`AZOOKEY_LLAMA_CPP_SOURCE_DIR` が有効でなければ生成を拒否する。
+この検査は VM での `register-dev.ps1` の実行時 preflight を代替しない。
 
 ```powershell
 .\scripts\make-vm-verify-package.ps1 `
   -Preset windows-release `
   -OutputDirectory .\build\vm-verify-packages `
   -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe `
-  -ModelPath C:\path\to\zenz-v3.gguf
+  -ModelPath C:\path\to\zenz-v3.gguf `
+  -IncludeCompat
 ```
 
 `-ModelPath` は本セッションでは省略できない。
-スクリプト側は既定 `""` で省略を許し、モデルと bench を含まないパッケージを正常に生成するため、指定漏れはエラーにならない。
+スクリプトは `-AllowNoModel` を明示しない限りモデル省略を拒否する。
 一方 DEV-225 の A5 判定は実 GGUF での推論結果を見るものであり、GGUF なしでは `SimpleConverter` の静的辞書しか動かず判定が成立しない。
-上の preflight 確認と同じく、VM へ持ち込む前に指定したかどうかを見る。
+したがって本セッションでは `-AllowNoModel` を使わない。
 
-**compat runner の同伴バンドル**：`make-vm-verify-package.ps1` の payload は TIP、Host、diag、登録スクリプト、bootstrap、GGUF 関連だけで、`compat_test.exe` と target JSON を含まない。
-DEV-716 は zip だけでは実行できないので、別に固めて持ち込む。
-
-```powershell
-$bundle = ".\build\vm-verify-packages\compat-bundle"
-New-Item -ItemType Directory -Path $bundle -Force | Out-Null
-Copy-Item .\build\windows-release\compat-test\compat_test.exe $bundle
-Copy-Item .\compat-test\targets -Destination $bundle -Recurse -Force
-Compress-Archive -Path "$bundle\*" -DestinationPath "$bundle.zip" -Force
-```
+**compat runner の同梱**：`-IncludeCompat` で `compat_test.exe` と `targets/` 以下の全ファイルを
+同じ検証 zip に追加する。各ファイルの SHA-256 は `manifest.json` に記録される。
+DEV-716 で使うため、本セッションでは既定で無効のこのスイッチを明示する。
 
 VM 側では `compat_test.exe` と `targets\` を同じディレクトリへ展開する。
 runner は `--target` に渡したパスから target JSON を読むため、両者の相対関係を崩さない。

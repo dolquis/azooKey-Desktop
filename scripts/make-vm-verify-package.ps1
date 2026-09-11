@@ -5,6 +5,8 @@ param(
   [string]$OutputDirectory = "",
   [string]$MockDictionaryPath = "",
   [string]$ModelPath = "",
+  [switch]$AllowNoModel,
+  [switch]$IncludeCompat,
   [string]$RuntimeInstallerPath = ""
 )
 
@@ -123,17 +125,28 @@ function Assert-VmVerifyBuildReady {
     [Parameter(Mandatory = $true)]
     [string]$BuildDirectory,
     [switch]$IncludeBench,
+    [switch]$IncludeCompat,
     [AllowNull()]
     [pscustomobject]$CommandResult = $null
   )
 
   if ($null -eq $CommandResult) {
-    $targets = @("azookey_tsf_tip", "azookey_inference_host")
+    $targets = @("azookey_tsf_tip", "azookey_inference_host", "azookey_diag")
     if ($IncludeBench) {
       $targets += "azookey_zenzai_bench"
     }
-    $output = & cmake --build $BuildDirectory --target $targets -- -n 2>&1
-    $exitCode = $LASTEXITCODE
+    if ($IncludeCompat) {
+      $targets += "compat_test"
+    }
+    $previousNinjaStatus = $env:NINJA_STATUS
+    try {
+      # Keep the exact one-action check independent of the caller's display format.
+      $env:NINJA_STATUS = '[%f/%t] '
+      $output = & cmake --build $BuildDirectory --target $targets -- -n 2>&1
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $env:NINJA_STATUS = $previousNinjaStatus
+    }
   } else {
     $output = $CommandResult.Output
     $exitCode = [int]$CommandResult.ExitCode
@@ -142,7 +155,24 @@ function Assert-VmVerifyBuildReady {
   if ($exitCode -ne 0) {
     throw "Build freshness check failed for '$BuildDirectory' (exit $exitCode): $outputText"
   }
-  if ($outputText -notmatch '(?im)ninja:\s+no work to do\.') {
+  $ready = $outputText -match '^ninja:\s+no work to do\.$'
+  if ($IncludeBench -and $outputText -ceq '[1/1] Refreshing benchmark commit header') {
+    # This description is shared with bench/CMakeLists.txt's custom target COMMENT.
+    # The only allowed work is the write-if-different commit header generator.
+    # A changed HEAD/override must still force a real build of its consumers.
+    $cachePath = Join-Path $BuildDirectory "CMakeCache.txt"
+    $source = Get-VmVerifyCacheValue -CachePath $cachePath -Name "CMAKE_HOME_DIRECTORY"
+    $commit = Get-VmVerifyCacheValue -CachePath $cachePath -Name "AZOOKEY_BENCH_GIT_COMMIT"
+    if (-not $commit -or $commit -match '^(?i:0|OFF|NO|FALSE|N|IGNORE|NOTFOUND)$' -or
+        $commit -match '(?i)-NOTFOUND$') {
+      $commit = Get-VmVerifyGitCommit -RepositoryRoot $source
+    }
+    $header = Join-Path $BuildDirectory "bench\generated\BenchmarkCommit.h"
+    $expected = "#pragma once`n#define AZOOKEY_BENCH_COMMIT `"$commit`"`n"
+    $ready = (Test-Path -LiteralPath $header -PathType Leaf) -and
+      ([System.IO.File]::ReadAllText($header).Replace("`r`n", "`n") -ceq $expected)
+  }
+  if (-not $ready) {
     throw ("Build artifacts are stale for '$BuildDirectory'. " +
       "Run the preset build before packaging. Dry-run output: $outputText")
   }
@@ -279,8 +309,14 @@ function Export-VmVerifyPackage {
     [string]$DestinationDirectory,
     [string]$MockDictionary = "",
     [string]$Model = "",
+    [switch]$AllowNoModel,
+    [switch]$IncludeCompat,
     [string]$RuntimeInstaller = ""
   )
+
+  if (-not $Model -and -not $AllowNoModel) {
+    throw "Specify -ModelPath with a GGUF model, or explicitly use -AllowNoModel for a model-free package."
+  }
 
   $repository = (Resolve-Path -LiteralPath $RepositoryRoot).Path
   $presetsPath = Join-Path $repository "CMakePresets.json"
@@ -315,12 +351,37 @@ function Export-VmVerifyPackage {
   }
 
   $tipDll = Join-Path $configuration.BinaryDir "tsf-tip\azookey_tsf_tip.dll"
+  $buildPrerequisites = [ordered]@{
+    AZOOKEY_FETCH_LLAMA_CPP = Get-VmVerifyCacheValue -CachePath $cachePath -Name "AZOOKEY_FETCH_LLAMA_CPP"
+    AZOOKEY_LLAMA_CPP_SOURCE_DIR = Get-VmVerifyCacheValue -CachePath $cachePath -Name "AZOOKEY_LLAMA_CPP_SOURCE_DIR"
+  }
+  $llamaEnabled = $false
+  foreach ($value in $buildPrerequisites.Values) {
+    if ($value -and $value -notmatch '^(?i:0|OFF|NO|FALSE|N|IGNORE|NOTFOUND)$' -and
+        $value -notmatch '(?i)-NOTFOUND$') {
+      $llamaEnabled = $true
+    }
+  }
+  if ($Model -and -not $llamaEnabled) {
+    throw ("Inference host is not linked with llama.cpp according to CMakeCache.txt. " +
+      "Reconfigure with cmake --preset $PresetName -DAZOOKEY_FETCH_LLAMA_CPP=ON " +
+      "(or set AZOOKEY_LLAMA_CPP_SOURCE_DIR), then rebuild before packaging.")
+  }
   $hostExe = Join-Path $configuration.BinaryDir "inference-host\azookey_inference_host.exe"
   $diagExe = Join-Path $configuration.BinaryDir "diagnostics\azookey_diag.exe"
   $benchExe = Join-Path $configuration.BinaryDir "bench\azookey_zenzai_bench.exe"
+  $compatExe = Join-Path $configuration.BinaryDir "compat-test\compat_test.exe"
+  $compatTargets = Join-Path $repository "compat-test\targets"
   $requiredArtifacts = @($tipDll, $hostExe, $diagExe)
   if ($Model) {
     $requiredArtifacts += $benchExe
+  }
+  if ($IncludeCompat) {
+    $requiredArtifacts += $compatExe
+    if (-not (Test-Path -LiteralPath $compatTargets -PathType Container) -or
+        -not (Get-ChildItem -LiteralPath $compatTargets -File -Recurse)) {
+      throw "Required compat targets are missing: $compatTargets"
+    }
   }
   foreach ($artifact in $requiredArtifacts) {
     if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
@@ -329,7 +390,8 @@ function Export-VmVerifyPackage {
   }
   Assert-VmVerifyBuildReady `
     -BuildDirectory $configuration.BinaryDir `
-    -IncludeBench:([bool]$Model)
+    -IncludeBench:([bool]$Model) `
+    -IncludeCompat:$IncludeCompat
 
   foreach ($optionalPath in @($MockDictionary, $Model, $RuntimeInstaller)) {
     if ($optionalPath -and -not (Test-Path -LiteralPath $optionalPath -PathType Leaf)) {
@@ -367,6 +429,13 @@ function Export-VmVerifyPackage {
       @{ Source = (Join-Path $repository "scripts\verify-bootstrap.ps1"); Archive = "verify-bootstrap.ps1"; Role = "vm-bootstrap-script" }
       @{ Source = (Join-Path $repository "docs\handoff\dev32-verification-checklist.md"); Archive = "dev32-verification-checklist.md"; Role = "verification-checklist" }
     )
+    if ($IncludeCompat) {
+      $payloads += @{ Source = $compatExe; Archive = "compat_test.exe"; Role = "compat-runner" }
+      foreach ($target in Get-ChildItem -LiteralPath $compatTargets -File -Recurse | Sort-Object FullName) {
+        $relative = $target.FullName.Substring($compatTargets.Length).TrimStart("\").Replace("\", "/")
+        $payloads += @{ Source = $target.FullName; Archive = "targets/$relative"; Role = "compat-targets" }
+      }
+    }
     if ($MockDictionary) {
       $payloads += @{
         Source = $MockDictionary
@@ -408,6 +477,7 @@ function Export-VmVerifyPackage {
       commit = $commit
       preset = $PresetName
       buildType = $actualBuildType
+      buildPrerequisites = $buildPrerequisites
       generatedAtUtc = [DateTimeOffset]::UtcNow.ToString("o")
       files = @($files | Sort-Object path)
     }
@@ -445,6 +515,8 @@ if ($MyInvocation.InvocationName -ne ".") {
     -DestinationDirectory $OutputDirectory `
     -MockDictionary $MockDictionaryPath `
     -Model $ModelPath `
+    -AllowNoModel:$AllowNoModel `
+    -IncludeCompat:$IncludeCompat `
     -RuntimeInstaller $RuntimeInstallerPath
 
   Write-Output "VM verification package: $($result.ZipPath)"

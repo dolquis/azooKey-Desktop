@@ -171,11 +171,21 @@ M37 受け入れ条件には含めず、導入は Linear で追跡する（2026-
 zip を生成する。
 入力は CMake configure preset と出力先で、preset の既定値は
 `windows-release` とする。
+`-ModelPath` の省略には `-AllowNoModel` の明示を必須とする。
+モデルを指定する場合は CMake cache の `AZOOKEY_FETCH_LLAMA_CPP` または
+`AZOOKEY_LLAMA_CPP_SOURCE_DIR` が有効であることを生成時に検査する。
+これは登録時の実行時 preflight や実 GGUF 推論の Human Gate を代替しない。
 
 スクリプトは `CMakePresets.json` の `binaryDir` と `CMAKE_BUILD_TYPE` を解決し、
 実 build directory の `CMakeCache.txt` と照合する。
-さらに `azookey_tsf_tip` と `azookey_inference_host` の Ninja dry-run が
-`no work to do` になることを確認する。
+さらに `azookey_tsf_tip`、`azookey_inference_host`、`azookey_diag` の Ninja dry-run が
+`no work to do` になることを確認する。`-ModelPath` 指定時は
+`azookey_zenzai_bench`、`-IncludeCompat` 指定時は `compat_test` も対象にする。
+dry-run の間だけ `NINJA_STATUS` を `[%f/%t] ` に固定し、終了時には元の値へ戻す。
+bench を含む場合に限り、出力が `[1/1] Refreshing benchmark commit header` の
+1 行だけで、既存の `bench/generated/BenchmarkCommit.h` が現在の HEAD または
+有効な `AZOOKEY_BENCH_GIT_COMMIT` override と一致する場合も許可する。
+ヘッダーの欠落・不一致や、コンパイル・リンクなどの追加作業があれば拒否する。
 manifest の commit が同梱スクリプトと文書も一意に指すよう、tracked/untracked を
 含む作業ツリーが clean であることも要求する。
 成果物の欠落、build type の不一致、別 checkout の CMake cache、stale target、
@@ -203,6 +213,11 @@ zip のルートには次を置く。
 GGUF を追加する場合は、同じ build directory の `azookey_zenzai_bench.exe` も
 zip ルートへ追加する。
 生成前の Ninja dry-run では bench target も鮮度確認の対象にする。
+`-IncludeCompat`（既定は無効）を指定すると、同じ build directory の
+`compat_test.exe` を zip ルートへ、`compat-test/targets/` 以下の全ファイルを
+相対階層を保って `targets/` へ追加し、compat target も鮮度確認の対象にする。
+manifest の role はそれぞれ `compat-runner` と `compat-targets` とし、各ファイルの
+SHA-256 を記録する。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。
 
@@ -217,6 +232,7 @@ top-level field を持つ。
 | `commit` | string | 40 桁の Git commit |
 | `preset` | string | 入力した configure preset 名 |
 | `buildType` | string | preset と cache で一致した `CMAKE_BUILD_TYPE` |
+| `buildPrerequisites` | object | cache の `AZOOKEY_FETCH_LLAMA_CPP` と `AZOOKEY_LLAMA_CPP_SOURCE_DIR` を同名キーの文字列で保持 |
 | `generatedAtUtc` | string | ISO 8601 UTC 生成時刻 |
 | `files` | array | 同梱ファイルの `path`、`role`、`size`、`sha256` |
 

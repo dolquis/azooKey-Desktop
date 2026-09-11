@@ -52,3 +52,7 @@ diagnostics/captures/
 settings-app/Generated Files/
 settings-app/obj/
 settings-app/packages/
+
+# Claude Code local overrides (per-machine; never committed)
+CLAUDE.local.md
+.claude/settings.local.json

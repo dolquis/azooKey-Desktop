@@ -17,6 +17,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-docs-lint.py",
+            "timeout": 60,
+            "statusMessage": "docs-lint (edited document)"
+          }
+        ]
+      }
     ]
   }
 }

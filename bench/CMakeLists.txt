@@ -9,6 +9,7 @@ add_custom_target(azookey_benchmark_commit_header
           "-DAZOOKEY_BENCH_GIT_COMMIT_OVERRIDE=${AZOOKEY_BENCH_GIT_COMMIT}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateBenchmarkCommit.cmake"
   BYPRODUCTS "${AZOOKEY_BENCH_COMMIT_HEADER}"
+  # scripts/make-vm-verify-package.ps1 matches this description in its dry-run check.
   COMMENT "Refreshing benchmark commit header"
   VERBATIM
 )

@@ -178,8 +178,14 @@ zip を生成する。
 
 スクリプトは `CMakePresets.json` の `binaryDir` と `CMAKE_BUILD_TYPE` を解決し、
 実 build directory の `CMakeCache.txt` と照合する。
-さらに `azookey_tsf_tip` と `azookey_inference_host` の Ninja dry-run が
-`no work to do` になることを確認する。
+さらに `azookey_tsf_tip`、`azookey_inference_host`、`azookey_diag` の Ninja dry-run が
+`no work to do` になることを確認する。`-ModelPath` 指定時は
+`azookey_zenzai_bench`、`-IncludeCompat` 指定時は `compat_test` も対象にする。
+dry-run の間だけ `NINJA_STATUS` を `[%f/%t] ` に固定し、終了時には元の値へ戻す。
+bench を含む場合に限り、出力が `[1/1] Refreshing benchmark commit header` の
+1 行だけで、既存の `bench/generated/BenchmarkCommit.h` が現在の HEAD または
+有効な `AZOOKEY_BENCH_GIT_COMMIT` override と一致する場合も許可する。
+ヘッダーの欠落・不一致や、コンパイル・リンクなどの追加作業があれば拒否する。
 manifest の commit が同梱スクリプトと文書も一意に指すよう、tracked/untracked を
 含む作業ツリーが clean であることも要求する。
 成果物の欠落、build type の不一致、別 checkout の CMake cache、stale target、

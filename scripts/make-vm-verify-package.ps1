@@ -138,8 +138,15 @@ function Assert-VmVerifyBuildReady {
     if ($IncludeCompat) {
       $targets += "compat_test"
     }
-    $output = & cmake --build $BuildDirectory --target $targets -- -n 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousNinjaStatus = $env:NINJA_STATUS
+    try {
+      # Keep the exact one-action check independent of the caller's display format.
+      $env:NINJA_STATUS = '[%f/%t] '
+      $output = & cmake --build $BuildDirectory --target $targets -- -n 2>&1
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $env:NINJA_STATUS = $previousNinjaStatus
+    }
   } else {
     $output = $CommandResult.Output
     $exitCode = [int]$CommandResult.ExitCode
@@ -150,6 +157,7 @@ function Assert-VmVerifyBuildReady {
   }
   $ready = $outputText -match '^ninja:\s+no work to do\.$'
   if ($IncludeBench -and $outputText -ceq '[1/1] Refreshing benchmark commit header') {
+    # This description is shared with bench/CMakeLists.txt's custom target COMMENT.
     # The only allowed work is the write-if-different commit header generator.
     # A changed HEAD/override must still force a real build of its consumers.
     $cachePath = Join-Path $BuildDirectory "CMakeCache.txt"

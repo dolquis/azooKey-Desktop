@@ -4,6 +4,7 @@ Describe "VM package benchmark freshness" {
   }
 
   BeforeEach {
+    $script:originalNinjaStatus = $env:NINJA_STATUS
     $script:build = Join-Path $TestDrive "build"
     New-Item -ItemType Directory -Path "$script:build\bench\generated" -Force | Out-Null
     @(
@@ -13,6 +14,44 @@ Describe "VM package benchmark freshness" {
     Mock Get-VmVerifyGitCommit { "a" * 40 }
     [System.IO.File]::WriteAllText("$script:build\bench\generated\BenchmarkCommit.h",
       "#pragma once`n#define AZOOKEY_BENCH_COMMIT `"$('a' * 40)`"`n")
+  }
+
+  AfterEach {
+    $env:NINJA_STATUS = $script:originalNinjaStatus
+  }
+
+  It "normalizes Ninja status and restores the caller's value: <Status>" -TestCases @(
+    @{ Status = '[%f/%t %es] ' }
+    @{ Status = $null }
+  ) {
+    param($Status)
+    $env:NINJA_STATUS = $Status
+    Mock cmake {
+      $env:NINJA_STATUS | Should -BeExactly '[%f/%t] '
+      $global:LASTEXITCODE = 0
+      '[1/1] Refreshing benchmark commit header'
+    }
+    Assert-VmVerifyBuildReady -BuildDirectory $script:build -IncludeBench
+    $env:NINJA_STATUS | Should -BeExactly $Status
+    Should -Invoke cmake -Times 1 -Exactly
+  }
+
+  It "restores Ninja status when the command fails: <Throws>" -TestCases @(
+    @{ Throws = $false }
+    @{ Throws = $true }
+  ) {
+    param($Throws)
+    $script:commandThrows = $Throws
+    $env:NINJA_STATUS = '[%f/%t %es] '
+    Mock cmake {
+      $env:NINJA_STATUS | Should -BeExactly '[%f/%t] '
+      if ($script:commandThrows) { throw 'command invocation failed' }
+      $global:LASTEXITCODE = 1
+      'ninja: no work to do.'
+    }
+    { Assert-VmVerifyBuildReady -BuildDirectory $script:build -IncludeBench } | Should -Throw
+    $env:NINJA_STATUS | Should -BeExactly '[%f/%t %es] '
+    Should -Invoke cmake -Times 1 -Exactly
   }
 
   It "accepts only the known no-op generator with the current commit header" {

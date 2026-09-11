@@ -9,6 +9,7 @@ add_custom_target(azookey_benchmark_commit_header
           "-DAZOOKEY_BENCH_GIT_COMMIT_OVERRIDE=${AZOOKEY_BENCH_GIT_COMMIT}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateBenchmarkCommit.cmake"
   BYPRODUCTS "${AZOOKEY_BENCH_COMMIT_HEADER}"
+  COMMENT "Refreshing benchmark commit header"
   VERBATIM
 )
 

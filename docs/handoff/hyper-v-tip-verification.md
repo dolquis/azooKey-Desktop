@@ -59,7 +59,8 @@ cmake --build --preset windows-release
 .\scripts\make-vm-verify-package.ps1 `
   -Preset windows-release `
   -OutputDirectory .\build\vm-verify-packages `
-  -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe
+  -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe `
+  -AllowNoModel
 ```
 
 `make-vm-verify-package.ps1` は preset と CMake cache の build type を照合し、
@@ -74,7 +75,9 @@ Ninja dry-run で対象バイナリが最新と確認できた場合だけ zip �
 クリーンな VM へ持ち込む場合は、Microsoft の配布元から別途取得した installer を
 `-RuntimeInstallerPath` で明示する。
 mock dictionary は `-MockDictionaryPath`、GGUF は `-ModelPath` で追加できる。
-GGUF を指定する場合は llama.cpp 対応 preset をビルドしておく。
+上のモデルなしの例では `-AllowNoModel` を明示する。実 GGUF を使う場合は
+これを `-ModelPath <GGUF>` に置き換え、llama.cpp 対応 preset をビルドしておく。
+生成時に cache の llama.cpp 構成を自動検査する。
 生成スクリプトは同じ build directory の `azookey_zenzai_bench.exe` も収集し、
 VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動検出する。
 いずれもローカルファイルだけを収集し、ネットワークには接続しない。
@@ -166,7 +169,7 @@ Host と検証対象アプリを起動し直す。環境変数の設定、出力
 削除手順は [`../debugging.md`](../debugging.md)「ログ収集」を参照する。
 
 > ⚠️ **変換能力の前提**: 検証パッケージを `make-vm-verify-package.ps1` の
-> `-ModelPath <GGUF>` も `-MockDictionaryPath <TSV>` も指定せずに生成すると、bootstrap が
+> `-AllowNoModel` を明示し、`-ModelPath <GGUF>` も `-MockDictionaryPath <TSV>` も指定せずに生成すると、bootstrap が
 > host へ渡す辞書もモデルも無く、`ZenzaiModelConverter` は `SimpleConverter` の静的辞書
 > （わたし / にほん / とうきょう 等＋学習語）へフォールバックする。この状態では**辞書外の
 > 語が漢字に変換されない**。判定の扱いは dev32-verification-checklist.md の同じ注記

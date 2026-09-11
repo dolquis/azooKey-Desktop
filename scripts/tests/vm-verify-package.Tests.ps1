@@ -52,6 +52,8 @@ Describe "VM verification package automation" {
         Set-Content -LiteralPath (Join-Path $Root "CMakePresets.json") -Encoding UTF8
 
       @(
+        "AZOOKEY_FETCH_LLAMA_CPP:BOOL=ON"
+        "AZOOKEY_LLAMA_CPP_SOURCE_DIR:PATH="
         "CMAKE_BUILD_TYPE:STRING=$BuildType"
         "CMAKE_HOME_DIRECTORY:INTERNAL=$($Root.Replace('\', '/'))"
       ) | Set-Content `
@@ -138,8 +140,9 @@ Describe "VM verification package automation" {
 
   Context "make-vm-verify-package.ps1" {
     BeforeEach {
-      $script:testRepository = Join-Path $TestDrive "repository"
-      $script:testOutput = Join-Path $TestDrive "output"
+      $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString("N"))
+      $script:testRepository = Join-Path $caseRoot "repository"
+      $script:testOutput = Join-Path $caseRoot "output"
       Initialize-TestRepository -Root $script:testRepository
     }
 
@@ -151,7 +154,7 @@ Describe "VM verification package automation" {
       $result = Export-VmVerifyPackage `
         -RepositoryRoot $script:testRepository `
         -PresetName "windows-release" `
-        -DestinationDirectory $script:testOutput
+        -DestinationDirectory $script:testOutput -AllowNoModel
 
       Test-Path -LiteralPath $result.ZipPath -PathType Leaf | Should -BeTrue
       Test-Path -LiteralPath $result.ManifestPath -PathType Leaf | Should -BeTrue
@@ -161,6 +164,8 @@ Describe "VM verification package automation" {
       $manifest.commit | Should -Be "0123456789abcdef0123456789abcdef01234567"
       $manifest.preset | Should -Be "windows-release"
       $manifest.buildType | Should -Be "Release"
+      $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
+      $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
       @($manifest.files).Count | Should -Be 9
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
         Should -Be 1
@@ -175,10 +180,19 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath (Join-Path $expanded "AppContainerAcl.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "verify-bootstrap.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "azookey_diag.exe") | Should -BeTrue
+      Test-Path -LiteralPath (Join-Path $expanded "compat_test.exe") | Should -BeFalse
+      Test-Path -LiteralPath (Join-Path $expanded "targets") | Should -BeFalse
+      foreach ($file in $manifest.files) {
+        $payloadPath = Join-Path $expanded $file.path
+        (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant() |
+          Should -BeExactly $file.sha256
+        (Get-Item -LiteralPath $payloadPath).Length | Should -Be $file.size
+      }
       $manifestBytes = [System.IO.File]::ReadAllBytes($result.ManifestPath)
       [BitConverter]::ToString($manifestBytes[0..2]) | Should -Not -Be "EF-BB-BF"
       Should -Invoke Assert-VmVerifyWorktreeClean -Times 1 -Exactly
-      Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly
+      Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly `
+        -ParameterFilter { -not $IncludeCompat -and -not $IncludeBench }
     }
 
     It "rejects a missing release artifact" {
@@ -189,7 +203,7 @@ Describe "VM verification package automation" {
         Export-VmVerifyPackage `
           -RepositoryRoot $script:testRepository `
           -PresetName "windows-release" `
-          -DestinationDirectory $script:testOutput
+          -DestinationDirectory $script:testOutput -AllowNoModel
       } | Should -Throw "*Required build artifact is missing*"
     }
 
@@ -204,7 +218,7 @@ Describe "VM verification package automation" {
         Export-VmVerifyPackage `
           -RepositoryRoot $script:testRepository `
           -PresetName "windows-release" `
-          -DestinationDirectory $script:testOutput
+          -DestinationDirectory $script:testOutput -AllowNoModel
       } | Should -Throw "*Preset/build mismatch*"
     }
 
@@ -252,7 +266,121 @@ Describe "VM verification package automation" {
         Should -Be "abcdef0123456789abcdef0123456789abcdef01"
     }
 
-    It "packages the llama preflight bench beside an optional GGUF model" {
+    It "requires explicit consent to omit a GGUF model" {
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput
+      } | Should -Throw "*AllowNoModel*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "rejects a stale compat runner" {
+      {
+        Assert-VmVerifyBuildReady -BuildDirectory "C:\build" -IncludeCompat `
+          -CommandResult ([pscustomobject]@{
+            ExitCode = 0
+            Output = "[1/1] Linking CXX executable compat-test/compat_test.exe"
+          })
+      } | Should -Throw "*Build artifacts are stale*"
+    }
+
+    It "rejects a missing cache even when model omission is explicit" {
+      Remove-Item -LiteralPath (Join-Path $script:testRepository "build/windows-release/CMakeCache.txt")
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*CMake cache is missing*"
+    }
+
+    It "rejects GGUF with false or unknown llama prerequisites: <Fetch> / <Source>" -ForEach @(
+      @{ Fetch = "OFF"; Source = "" }
+      @{ Fetch = "FALSE"; Source = "NO" }
+      @{ Fetch = "0"; Source = "IGNORE" }
+      @{ Fetch = "N"; Source = "NOTFOUND" }
+      @{ Fetch = "OFF"; Source = "llama-NOTFOUND" }
+      @{ Fetch = ""; Source = "" }
+    ) {
+      $cachePath = Join-Path $script:testRepository "build/windows-release/CMakeCache.txt"
+      $cache = Get-Content -LiteralPath $cachePath | Where-Object { $_ -notmatch '^AZOOKEY_' }
+      if ($Fetch) { $cache += "AZOOKEY_FETCH_LLAMA_CPP:BOOL=$Fetch" }
+      if ($Source) { $cache += "AZOOKEY_LLAMA_CPP_SOURCE_DIR:PATH=$Source" }
+      $cache | Set-Content -LiteralPath $cachePath
+      $model = Join-Path $TestDrive "model.gguf"
+      "model" | Set-Content -LiteralPath $model
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -Model $model
+      } | Should -Throw "*llama*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "accepts a local llama source with fetch disabled and preserves raw cache values" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      $cachePath = Join-Path $script:testRepository "build/windows-release/CMakeCache.txt"
+      (Get-Content -Raw -LiteralPath $cachePath).Replace(
+        "AZOOKEY_FETCH_LLAMA_CPP:BOOL=ON", "AZOOKEY_FETCH_LLAMA_CPP:BOOL=OFF").Replace(
+        "AZOOKEY_LLAMA_CPP_SOURCE_DIR:PATH=", "AZOOKEY_LLAMA_CPP_SOURCE_DIR:PATH=C:/local/llama.cpp") |
+        Set-Content -LiteralPath $cachePath
+      $model = Join-Path $TestDrive "model.gguf"
+      "model" | Set-Content -LiteralPath $model
+      $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" -DestinationDirectory $script:testOutput -Model $model
+      $result.Manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "OFF"
+      $result.Manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR |
+        Should -BeExactly "C:/local/llama.cpp"
+    }
+
+    It "includes the compat runner and every nested target with verified archive hashes" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      New-Item -ItemType Directory -Path (Join-Path $script:testRepository "build/windows-release/compat-test"),
+        (Join-Path $script:testRepository "compat-test/targets/nested") -Force | Out-Null
+      "runner" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_test.exe")
+      "{}" | Set-Content (Join-Path $script:testRepository "compat-test/targets/notepad.json")
+      "support" | Set-Content (Join-Path $script:testRepository "compat-test/targets/nested/support.txt")
+      $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeCompat
+      @($result.Manifest.files | Where-Object role -eq "compat-runner").Count | Should -Be 1
+      @($result.Manifest.files | Where-Object role -eq "compat-targets").Count | Should -Be 2
+      $expanded = Join-Path $TestDrive "compat-expanded"
+      Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
+      Test-Path (Join-Path $expanded "compat_test.exe") | Should -BeTrue
+      Test-Path (Join-Path $expanded "targets/nested/support.txt") | Should -BeTrue
+      foreach ($file in $result.Manifest.files) {
+        $payloadPath = Join-Path $expanded $file.path
+        (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant() |
+          Should -BeExactly $file.sha256
+        (Get-Item -LiteralPath $payloadPath).Length | Should -Be $file.size
+      }
+      Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly -ParameterFilter { $IncludeCompat }
+    }
+
+    It "rejects missing compat <Missing>" -ForEach @(
+      @{ Missing = "runner" }
+      @{ Missing = "targets" }
+    ) {
+      New-Item -ItemType Directory -Path (Join-Path $script:testRepository "build/windows-release/compat-test") -Force |
+        Out-Null
+      if ($Missing -eq "targets") {
+        "runner" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_test.exe")
+        $expectedError = "*compat targets*"
+      } else {
+        New-Item -ItemType Directory -Path (Join-Path $script:testRepository "compat-test/targets") -Force |
+          Out-Null
+        "{}" | Set-Content (Join-Path $script:testRepository "compat-test/targets/notepad.json")
+        $expectedError = "*artifact*compat_test.exe*"
+      }
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeCompat
+      } | Should -Throw $expectedError
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "packages the llama preflight bench beside a GGUF model" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}
       Mock Assert-VmVerifyBuildReady {}

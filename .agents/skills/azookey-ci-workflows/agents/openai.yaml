@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey CI とワークフロー"
+  short_description: "GitHub Actions、preset、pre-commit の変更を安全に案内します"
+  default_prompt: "Use $azookey-ci-workflows to review this workflow or preset change against the CI quality gate spec."

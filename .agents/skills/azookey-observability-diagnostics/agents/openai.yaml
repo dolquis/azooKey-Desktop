@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey 可観測性と診断"
+  short_description: "ログ、ETW、crash 収集、診断 CLI を漏洩なく扱います"
+  default_prompt: "Use $azookey-observability-diagnostics to review this logging or diagnostics change for redaction and schema stability."

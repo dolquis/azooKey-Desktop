@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey Linear 課題運用"
+  short_description: "Linear の起票、状態遷移、検証メモ、監査を規約どおりに行います"
+  default_prompt: "Use $azookey-linear-issue-ops to file or transition the Linear issue for this work according to docs/linear-conventions.md."

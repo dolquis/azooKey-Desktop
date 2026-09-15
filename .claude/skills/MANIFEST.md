@@ -29,6 +29,12 @@
 | `azookey-settings-schema-evolution` | repo | この repo | `cba3bf8` | あり（`agents/openai.yaml`） |
 | `tsf-ipc-protocol` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
 | `tsf-tip-development` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
+| `azookey-core-conversion` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
+| `azookey-observability-diagnostics` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
+| `azookey-settings-app-ui` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
+| `azookey-ci-workflows` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
+| `azookey-linear-issue-ops` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
+| `azookey-quality-harness` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |
 
 ## 区分の根拠と未確定事項
 

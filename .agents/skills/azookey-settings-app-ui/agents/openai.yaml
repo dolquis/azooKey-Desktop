@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey 設定アプリ UI"
+  short_description: "WinUI 3 設定アプリの表示、保存、Host 通知を安全に扱います"
+  default_prompt: "Use $azookey-settings-app-ui to review this settings-app change for persistence, IPC and UI consistency."

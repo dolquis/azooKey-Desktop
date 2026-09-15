@@ -78,9 +78,9 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 `ipc/include/azookey/ipc/Messages.h` で定義。文字列変換は
 `TypeToString` / `TypeFromString` を経由する。
 
-次表は現行実装のスナップショットである（named型16 + `Unknown` sentinel = 17 entries。
-うちDispatcherまで配線済みは12種、enumのみは4種）。変更前に`Messages.*`、`Payloads.*`、
-`Dispatcher.cpp`を再確認する。
+次表は enum の並び順に従う。「現在の配線」列は `Messages.*`、`Payloads.*`、
+`inference-host/src/Dispatcher.cpp`、`tsf-tip/src/TextService.cpp` を読んで確定したもので、
+件数は数えない。type を追加・配線したら同じ変更で本表を更新し、変更前にも上記 4 箇所を再確認する。
 
 | 種別 | 現在の配線 | 役割 |
 |---|---|---|
@@ -100,11 +100,12 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `Ping` | codec + Host | 疎通確認 |
 | `Health` | codec + Host | Host状態取得 |
 | `QueryDiagnostics` | codec + Host + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback stateの取得。要求payloadは空オブジェクト。送信元は`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）で、TIPからは送らない |
+| `CommitSegmentsObservation` | codec + Host + TIP | 一括変換で確定した文節列（`ObservedSegment` の配列、左文脈、`observation_id`）の学習フィードバック。TIP は確定文節が非空で、かつ Handshake で Host が対応を告知した場合だけ送り、それ以外は `CommitObservation` へ落とす |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の
 struct (例: `HandshakeRequest`, `QueryCandidatesRequest`, `CandidateField`,
-`CommitObservationRequest`) を参照。
+`CommitObservationRequest`, `CommitSegmentsObservationRequest`) を参照。
 
 ## Handshakeと接続認証
 

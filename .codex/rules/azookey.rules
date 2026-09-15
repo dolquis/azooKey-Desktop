@@ -1,0 +1,107 @@
+# Codex CLI の実行ポリシー（execpolicy）。.claude/settings.json の permissions と対応させる。
+# 書式: https://learn.chatgpt.com/docs/agent-configuration/rules
+# 判定は forbidden > prompt > allow の順で最も厳しいものが勝つ。allow はサンドボックス外で
+# 確認なしに実行する許可なので、読み取り系と repo の標準検証コマンドだけに絞る。
+# 検証: codex execpolicy check --pretty --rules .codex/rules/azookey.rules -- <command>
+# この repo の .codex/ 層が trust されたときだけ読み込まれる。
+
+# ── forbidden: AGENTS.md「最優先の安全規則」が禁じる操作 ──────────────────
+
+prefix_rule(
+    pattern = ["git", "push", "origin", "main"],
+    decision = "forbidden",
+    justification = "main へ直接 push しない。作業 branch を push して Draft PR を作る（create-draft-pr）。",
+    match = ["git push origin main", "git push origin main --tags"],
+    not_match = ["git push origin dolquis/dev-1150-agents"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "-u", "origin", "main"],
+    decision = "forbidden",
+    justification = "main へ直接 push しない。作業 branch を push して Draft PR を作る（create-draft-pr）。",
+    match = ["git push -u origin main"],
+    not_match = ["git push -u origin dolquis/dev-1150-agents"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["--force", "-f", "--force-with-lease"]],
+    decision = "forbidden",
+    justification = "force push はユーザーの明示依頼が無い限り行わない（create-draft-pr）。必要ならユーザーに依頼して手動で実行してもらう。",
+    match = ["git push --force origin feature", "git push -f", "git push --force-with-lease"],
+    not_match = ["git push -u origin feature"],
+)
+
+# ── prompt: 可逆でない、または他人の作業に影響する操作 ──────────────────
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "push は宛先 branch を確認してから行う。",
+    match = ["git push", "git push -u origin feature"],
+    not_match = ["git pull origin main"],
+)
+
+prefix_rule(
+    pattern = ["git", ["reset", "checkout", "restore", "clean", "rebase", "stash"]],
+    decision = "prompt",
+    justification = "ユーザーの未コミット変更を戻す可能性がある操作は確認する（AGENTS.md「最優先の安全規則」）。",
+    match = ["git reset --hard", "git checkout -- .", "git restore .", "git clean -fd", "git rebase -i main", "git stash drop"],
+    not_match = ["git status", "git branch --show-current"],
+)
+
+prefix_rule(
+    pattern = ["git", "commit", "--amend"],
+    decision = "prompt",
+    justification = "履歴の書き換えは確認する。通常は新しい commit を積む。",
+    match = ["git commit --amend --no-edit"],
+    not_match = ["git commit -m msg"],
+)
+
+# ── allow: 読み取り系と repo の標準検証。サンドボックス外でも確認なし ────────
+
+prefix_rule(
+    pattern = ["git", ["status", "diff", "log", "show", "merge-base", "ls-files", "fetch", "rev-parse", "check-ignore"]],
+    justification = "読み取り系 git。pre-pr-self-review が要求する範囲確定に使う。",
+    match = ["git status -sb", "git diff --stat origin/main", "git log --oneline -5", "git fetch origin main"],
+    not_match = ["git push origin feature", "git reset --hard"],
+)
+
+prefix_rule(
+    pattern = ["git", "branch", ["--list", "--show-current", "-a", "-r"]],
+    justification = "branch の一覧と現在 branch の確認。",
+    match = ["git branch --show-current", "git branch --list", "git branch -a"],
+    not_match = ["git branch -D feature", "git branch feature"],
+)
+
+prefix_rule(
+    pattern = ["git", "remote", ["-v", "show", "get-url"]],
+    justification = "remote の確認。",
+    match = ["git remote -v", "git remote get-url origin"],
+    not_match = ["git remote add upstream https://example.invalid/x.git", "git remote set-url origin https://example.invalid/x.git"],
+)
+
+prefix_rule(
+    pattern = ["rg"],
+    justification = "文字列検索は読み取り専用。",
+    match = ["rg -n foo docs", "rg --files"],
+)
+
+prefix_rule(
+    pattern = ["python3", ["scripts/docs-lint.py", "scripts/check_agent_instruction_size.py", "scripts/check_test_inventory.py"]],
+    justification = "docs 系の検証スクリプト。CI と同じゲートをローカルで回す。",
+    match = ["python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json", "python3 scripts/check_test_inventory.py"],
+    not_match = ["python3 scripts/register-dev.py"],
+)
+
+prefix_rule(
+    pattern = [["cmake", "ctest", "ninja"]],
+    justification = "README の標準 build / test。書き込み先は build directory に限られる。",
+    match = ["cmake --preset windows-debug", "cmake --build --preset windows-debug --target azookey_check", "ctest --preset linux-debug --no-tests=error", "ninja -C build/windows-debug"],
+)
+
+prefix_rule(
+    pattern = ["just", ["doctor", "ci", "configure", "build", "test", "bench", "format-check", "lint"]],
+    justification = "justfile の標準レシピ。TIP の register / unregister は含まない（管理者 PowerShell で人間が行う）。",
+    match = ["just doctor --fix-hints", "just ci", "just test windows-debug"],
+    not_match = ["just register", "just unregister"],
+)

@@ -1,0 +1,18 @@
+{
+  "description": "azooKey-Desktop の Codex 用 lifecycle hooks。Claude Code 側の .claude/settings.json の hooks と対応させる。この repo の .codex/ 層が trust されたときだけ読み込まれる。",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/post-edit-docs-lint.py\"",
+            "timeout": 60,
+            "statusMessage": "docs-lint (edited document)"
+          }
+        ]
+      }
+    ]
+  }
+}

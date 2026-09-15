@@ -26,12 +26,12 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 
 ## サブエージェントの使い分け
 
-本節は Claude Code 専用（Agent tool、Explore、Plan、カスタム agent、プラグイン agent は Claude Code 固有機能のため）。アドバイザーが判断の独立チェックであるのに対し、サブエージェントは作業の分担である。分担の共通規約（目的・対象・書込み境界・成果形式・検証の受け渡し、共有 build directory の競合回避、同じ head への push の直列化）は `docs/linear-conventions.md` §2.1 に従い、返された結論は親が実ファイルと最新 diff で検証する。
+本節は Claude Code 専用（Agent tool、Explore、Plan、カスタム agent、プラグイン agent は Claude Code 固有機能のため）。アドバイザーが判断の独立チェックであるのに対し、サブエージェントは作業の分担である。分担の共通規約（目的・対象・書込み境界・成果形式・検証の受け渡し、共有ファイルと build directory の競合回避、共有 Serena の対象変更の直列管理）は `docs/linear-conventions.md` §2.1 に従う。同じ head への push と PR 作成は `create-draft-pr` のとおり親が直列に行い、返された結論は親が実ファイルと最新 diff で検証する。
 
 | 場面 | 使うもの |
 |---|---|
 | 複数ファイルや命名規約をまたぐ調査で、結論だけが要る | Explore agent。結果は実ファイルで確認する |
-| `AGENTS.md`「非自明な変更では、編集前にスコープ・予定ファイル・検証方法を整理」 | Plan mode、または Plan agent |
+| `AGENTS.md`「調査と実装」が求める、非自明な変更の編集前のスコープ整理 | Plan mode、または Plan agent |
 | Draft PR 作成前・最終報告前に、spec・安全規則・依頼範囲との整合を設計意図から切り離して読む | `diff-auditor`（`.claude/agents/`、read-only）。`pre-pr-self-review` の差分レビューと併用する |
 | コード品質の観点別レビュー（規約準拠、silent failure、テスト網羅、型設計、コメント、簡素化） | `pr-review-toolkit` の各 agent。まとめて掛けるときは `/pr-review-toolkit:review-pr` |
 | 互いに独立した調査・実装を同時に進める | Agent tool を同一メッセージで複数起動する |

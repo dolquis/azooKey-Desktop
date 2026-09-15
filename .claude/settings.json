@@ -8,21 +8,23 @@
   },
   "permissions": {
     "allow": [
-      "Bash(git status *)",
-      "Bash(git diff *)",
-      "Bash(git log *)",
-      "Bash(git show *)",
-      "Bash(git merge-base *)",
-      "Bash(git ls-files *)",
-      "Bash(git branch *)",
-      "Bash(git remote *)",
-      "Bash(rg *)",
-      "Bash(python3 scripts/docs-lint.py *)",
-      "Bash(python3 scripts/check_agent_instruction_size.py *)",
-      "Bash(python3 scripts/check_test_inventory.py *)"
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git branch --list:*)",
+      "Bash(git branch --show-current)",
+      "Bash(git remote -v)",
+      "Bash(git remote show:*)",
+      "Bash(rg:*)",
+      "Bash(python3 scripts/docs-lint.py:*)",
+      "Bash(python3 scripts/check_agent_instruction_size.py:*)",
+      "Bash(python3 scripts/check_test_inventory.py:*)"
     ],
     "ask": [
-      "Bash(git push *)",
+      "Bash(git push:*)",
       "Edit(legacy/**)",
       "Write(legacy/**)"
     ],

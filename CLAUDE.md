@@ -39,3 +39,12 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 | 実装 PR で spec・schema・テスト一覧のどこが失効したかを網羅列挙する | `spec-drift-checker`（`.claude/agents/`、read-only）。`azookey-doc-governance` の失効チェックと併用する |
 
 `diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質を見る。`windows-build-runner` は判定せず実行と抽出だけを担う。repo 固有の agent は `.claude/agents/` と `.codex/agents/` で本文を同期する。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。typo・1 行の可逆な修正・直列依存だけの仕事は分割しない。サブエージェントの結論は完了判定ではなく入力であり、Human Gate や Codex Cloud 起動の代替にもしない。
+
+### Agent Teams
+
+Agent Teams は `.claude/settings.json` の `env` で有効化してある（experimental。対話セッション専用で、`-p` 実行では通常のサブエージェントとして動く）。サブエージェントが親へ結果を返して終わるのに対し、teammate は自分のコンテキストを持ち、共有 task list と `SendMessage` で lead や他の teammate と協調する。使う場面は、互いに独立した実装を複数ファイルへ同時に進めるとき、または `diff-auditor` と `pr-review-toolkit` のレビューを実装と並行させるときに限る。調査だけなら Explore agent、build / test だけなら `windows-build-runner` で足りる。
+
+- teammate の役割は `.claude/agents/` の定義を spawn 時に指定して使う（`tools` と `model` と本文が適用される。`skills` は settings から読む）。
+- 書込み境界は spawn prompt で明示する。同じファイルと共有 build directory を複数の teammate に割り当てない。push と PR 作成は lead が直列に行う。
+- in-process の teammate は background subagent を起動できない。`/resume` で teammate は復元されない。nested team は作れない。
+- 表示モード（`teammateMode`）は個人設定で選ぶ。repo 設定には置かない。

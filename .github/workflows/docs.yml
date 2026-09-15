@@ -14,6 +14,8 @@ on:
       - 'scripts/tests/test_agent_instruction_size.py'
       - 'scripts/check_test_inventory.py'
       - 'scripts/tests/test_check_test_inventory.py'
+      - 'scripts/check_skill_references.py'
+      - 'scripts/tests/test_check_skill_references.py'
       - '**/CMakeLists.txt'
       - '.docs-lint.toml'
       - '.docs-lint-baseline.json'
@@ -29,6 +31,8 @@ on:
       - 'scripts/tests/test_agent_instruction_size.py'
       - 'scripts/check_test_inventory.py'
       - 'scripts/tests/test_check_test_inventory.py'
+      - 'scripts/check_skill_references.py'
+      - 'scripts/tests/test_check_skill_references.py'
       - '**/CMakeLists.txt'
       - '.docs-lint.toml'
       - '.docs-lint-baseline.json'
@@ -72,3 +76,11 @@ jobs:
 
       - name: Check the test inventory against CMake
         run: python3 scripts/check_test_inventory.py
+
+      # .claude/skills/MANIFEST.md が repo 固有と分類した Skill の routing 表は、
+      # ファイル名と CTest target を手書きで持つ。実体が動いたら同じ PR で直させる。
+      - name: Test the skill reference checker
+        run: python3 scripts/tests/test_check_skill_references.py
+
+      - name: Check repo-owned skills against the repository
+        run: python3 scripts/check_skill_references.py

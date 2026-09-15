@@ -19,6 +19,7 @@
 #include <thread>
 #include <utility>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/core/Utf8.h"
 
 #ifndef AZOOKEY_WITH_LLAMA_CPP
@@ -1114,8 +1115,11 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
   ZenzaiLoadResult result;
   result.info.path = path;
 
+  // `path` holds UTF-8 bytes. The narrow std::filesystem::path constructor would
+  // decode them with the active code page on Windows, so go through Utf8Path.
+  const auto fs_path = core::Utf8Path(path);
   std::error_code ec;
-  const auto status = std::filesystem::status(path, ec);
+  const auto status = std::filesystem::status(fs_path, ec);
   if (ec) {
     result.error = "model file probe failed: " + ec.message();
     return result;
@@ -1129,7 +1133,7 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
     return result;
   }
 
-  const auto size = std::filesystem::file_size(path, ec);
+  const auto size = std::filesystem::file_size(fs_path, ec);
   if (ec) {
     result.error = "model file size probe failed: " + ec.message();
     return result;
@@ -1140,7 +1144,7 @@ ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path) {
     return result;
   }
 
-  std::ifstream file(path, std::ios::binary);
+  std::ifstream file(fs_path, std::ios::binary);
   if (!file.is_open()) {
     result.error = "model file could not be opened";
     return result;
@@ -1221,6 +1225,8 @@ ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path, const ZenzaiRuntim
   if (!described_overrides.empty()) {
     model_params.kv_overrides = kv_overrides.data();
   }
+  // llama.cpp opens model files through ggml_fopen, which decodes the name as UTF-8
+  // on Windows, so the UTF-8 bytes are passed through unchanged.
   runtime->model = llama_model_load_from_file(path.c_str(), model_params);
   if (!runtime->model) {
     result.ok = false;

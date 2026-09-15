@@ -49,8 +49,8 @@ active code page で符号化されるため、CLI の入力経路として使�
 この UTF-8 バイト列から `azookey::core::Utf8Path` で `std::filesystem::path` を構築する。
 narrow の `std::filesystem::path` コンストラクタは Windows で active code page として復号する
 ため、CLI 由来のパスには使わない。path を文字列へ戻す表示と JSON 出力は
-`azookey::core::PathToUtf8` を使う。model 読み込み経路（`--model` と settings の
-`model.selected_path`）は本節の契約の対象外とする。
+`azookey::core::PathToUtf8` を使う。`--model` の model path も同じ UTF-8 バイト列として
+model 読み込み経路へ渡す。model path の文字コード契約は `docs/zenzai-inference-spec.md` §9.3 に置く。
 
 application manifest の `activeCodePage="UTF-8"` は、この契約の実現手段として採らない。
 manifest の埋め込みは MSVC かつ identity package 有効時に限られ、採用すると build 構成によって

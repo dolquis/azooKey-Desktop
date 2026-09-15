@@ -897,6 +897,16 @@ Zenzai 推論パラメータは **既存の `model.*` 名前空間**（`settings
 | `model.backendPreference` / `model.nGpuLayers` | auto / -1 | backend 選択（§1.3、`copilot-pc-backend-spec`） |
 | `model.fallbackToSimpleConverter` | true | 劣化モードの SimpleConverter フォールバック（§7.4） |
 
+`EngineConfig.model_path` と `ModelLoadOptions.path` は UTF-8 バイト列の `std::string` とする。
+供給元の `--model`（wide argv から変換した UTF-8、`docs/windows-tsf-host-architecture.md`）、
+settings.json の `model.selectedPath`、IPC の `LoadModel` payload はいずれも UTF-8 である。
+Host が GGUF を probe するときは `azookey::core::Utf8Path` で `std::filesystem::path` を構築する。
+narrow の `std::filesystem::path` コンストラクタと `std::ifstream(std::string)` は Windows で
+active code page として復号するため、model path には使わない。llama.cpp の
+`llama_model_load_from_file` と `gguf_init_from_file` は Windows で `ggml_fopen` を通り、
+ファイル名を UTF-8 として UTF-16 へ変換して開くため、UTF-8 バイト列をそのまま渡す。
+llama.cpp の revision を更新するときは、この UTF-8 解釈が保たれていることを確認する。
+
 **新規に追加する推論整形キー**（`model` オブジェクトへ追加。`model` は
 `additionalProperties: false` のため **schema 拡張が必要**。拡張は `area:settings` /
 M11 / DEV-203 が `docs/model-management-spec.md` と整合のうえ反映する。本 docs PR では

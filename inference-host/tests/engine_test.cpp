@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/SettingsStore.h"
@@ -52,7 +53,7 @@ bool WaitForFileExists(const std::string& path, std::chrono::milliseconds timeou
   }
   return std::filesystem::exists(path);
 }
-void WriteMinimalGguf(const std::string& path, uint32_t version = 3) {
+void WriteMinimalGguf(const std::filesystem::path& path, uint32_t version = 3) {
   std::ofstream out(path, std::ios::binary);
   out.write("GGUF", 4);
   const unsigned char bytes[4] = {
@@ -1038,6 +1039,60 @@ TEST(InferenceEngineTest, ProbeZenzaiGgufModelAcceptsMinimalHeader) {
   EXPECT_FALSE(result.runtime);
 
   std::remove(model_path.c_str());
+}
+
+TEST(InferenceEngineTest, ProbeZenzaiGgufModelKeepsNonAsciiPathAsUtf8) {
+  // UTF-8 bytes for 日本語モデル.gguf, written as escapes so the fixture pins the
+  // bytes that --model and model.selectedPath deliver.
+  constexpr const char* kModelName =
+      "azookey_probe_\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x83\xa2\xe3\x83\x87\xe3\x83\xab.gguf";
+  const auto model_file =
+      std::filesystem::temp_directory_path() / azookey::core::Utf8Path(kModelName);
+  std::filesystem::remove(model_file);
+  WriteMinimalGguf(model_file);
+  // path::string() would encode with the active code page on Windows.
+  const auto model_path = azookey::core::PathToUtf8(model_file);
+
+  const auto result = azookey::host::ProbeZenzaiGgufModel(model_path);
+  EXPECT_TRUE(result.ok) << result.error;
+  EXPECT_EQ(result.info.path, model_path);
+  EXPECT_EQ(result.info.file_size_bytes, 8u);
+  EXPECT_EQ(result.info.gguf_version, 3u);
+
+  std::filesystem::remove(model_file);
+}
+
+TEST(InferenceEngineTest, LoadModelAcceptsNonAsciiUtf8Path) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const char* lpath = "azookey_host_engine_load_non_ascii.tsv";
+  std::remove(lpath);
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  // UTF-8 bytes for 日本語モデル.gguf.
+  constexpr const char* kModelName =
+      "azookey_load_\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x83\xa2\xe3\x83\x87\xe3\x83\xab.gguf";
+  const auto model_file =
+      std::filesystem::temp_directory_path() / azookey::core::Utf8Path(kModelName);
+  std::filesystem::remove(model_file);
+  WriteMinimalGguf(model_file);
+
+  azookey::host::ModelLoadOptions options;
+  options.path = azookey::core::PathToUtf8(model_file);
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+
+  const auto result = engine->LoadModelWithResult(options);
+  EXPECT_TRUE(result.ok) << result.error.value_or("");
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_EQ(engine->config().model_path, options.path);
+
+  std::filesystem::remove(model_file);
+  std::remove(lpath);
 }
 
 TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {

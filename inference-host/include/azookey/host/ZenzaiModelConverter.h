@@ -83,6 +83,7 @@ struct ZenzaiKvOverride {
   int64_t int_value{};
 };
 
+// `path` is UTF-8 on every platform; see docs/zenzai-inference-spec.md §9.3.
 ZenzaiLoadResult ProbeZenzaiGgufModel(const std::string& path);
 ZenzaiLoadResult LoadZenzaiGgufModel(const std::string& path,
                                      const ZenzaiRuntimeOptions& options = {});

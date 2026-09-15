@@ -35,5 +35,7 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 | Draft PR 作成前・最終報告前に、spec・安全規則・依頼範囲との整合を設計意図から切り離して読む | `diff-auditor`（`.claude/agents/`、read-only）。`pre-pr-self-review` の差分レビューと併用する |
 | コード品質の観点別レビュー（規約準拠、silent failure、テスト網羅、型設計、コメント、簡素化） | `pr-review-toolkit` の各 agent。まとめて掛けるときは `/pr-review-toolkit:review-pr` |
 | 互いに独立した調査・実装を同時に進める | Agent tool を同一メッセージで複数起動する |
+| Windows の configure / build / CTest / bench を回し、失敗した target・CTest 名・warning・ログ位置だけが要る | `windows-build-runner`（`.claude/agents/`）。ソース編集と git 操作はしない |
+| 実装 PR で spec・schema・テスト一覧のどこが失効したかを網羅列挙する | `spec-drift-checker`（`.claude/agents/`、read-only）。`azookey-doc-governance` の失効チェックと併用する |
 
-`diff-auditor` は spec と契約の整合、`pr-review-toolkit` はコードの質を見る。両者は代替関係ではなく、C++ の変更を含む PR では両方を掛ける。typo・1 行の可逆な修正・直列依存だけの仕事は分割しない。サブエージェントの結論は完了判定ではなく入力であり、Human Gate や Codex Cloud 起動の代替にもしない。
+`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質を見る。`windows-build-runner` は判定せず実行と抽出だけを担う。repo 固有の agent は `.claude/agents/` と `.codex/agents/` で本文を同期する。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。typo・1 行の可逆な修正・直列依存だけの仕事は分割しない。サブエージェントの結論は完了判定ではなく入力であり、Human Gate や Codex Cloud 起動の代替にもしない。

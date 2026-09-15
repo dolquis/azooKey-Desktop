@@ -25,7 +25,8 @@
       "Bash(rg:*)",
       "Bash(python3 scripts/docs-lint.py:*)",
       "Bash(python3 scripts/check_agent_instruction_size.py:*)",
-      "Bash(python3 scripts/check_test_inventory.py:*)"
+      "Bash(python3 scripts/check_test_inventory.py:*)",
+      "Bash(python3 scripts/check_skill_references.py:*)"
     ],
     "ask": [
       "Bash(git push:*)",

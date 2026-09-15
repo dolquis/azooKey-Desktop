@@ -6,8 +6,8 @@
 
 ## 設定の正典
 
-- Claude Code の repo MCP は `.mcp.json`、プラグインは `.claude/settings.json` が定義する。
-- Codex の repo 固有 sandbox と MCP は `.codex/config.toml` が定義する。
+- Claude Code の repo MCP は `.mcp.json`、プラグインと permissions は `.claude/settings.json`、カスタム agent は `.claude/agents/*.md` が定義する。
+- Codex の repo 固有 sandbox、MCP、`[agents]` は `.codex/config.toml`、カスタム agent は `.codex/agents/*.toml`、コマンドの実行ポリシー（execpolicy）は `.codex/rules/*.rules`、lifecycle hooks は `.codex/hooks.json` が定義する。いずれも project の `.codex/` 層を trust したときだけ読み込まれる。`.codex/hooks/` の adapter は `.claude/hooks/` のベンダリング hook を Codex の入力形式へ橋渡しする薄い層であり、検査本体は共有 hook が持つ。repo 固有 agent は両ディレクトリで本文を同期し、ハーネス固有の frontmatter / TOML キーだけ差異を許す。
 - Context7 は各開発者が Claude Code と Codex のユーザー連携で有効にする。repo 設定には重複登録しない。Context7 が利用できない場合、Microsoft API は Microsoft Learn の公式リファレンスを優先する。
 - Skill の配置とミラー規則は `AGENTS.md`「Skill の配置」に従う。
 

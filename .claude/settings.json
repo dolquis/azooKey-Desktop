@@ -6,6 +6,39 @@
     "commit-commands@claude-plugins-official": true,
     "pr-review-toolkit@claude-plugins-official": true
   },
+  "permissions": {
+    "allow": [
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git merge-base *)",
+      "Bash(git ls-files *)",
+      "Bash(git branch *)",
+      "Bash(git remote *)",
+      "Bash(rg *)",
+      "Bash(python3 scripts/docs-lint.py *)",
+      "Bash(python3 scripts/check_agent_instruction_size.py *)",
+      "Bash(python3 scripts/check_test_inventory.py *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Edit(legacy/**)",
+      "Write(legacy/**)"
+    ],
+    "deny": [
+      "Edit(.env*)",
+      "Write(.env*)",
+      "Edit(**/secrets/**)",
+      "Write(**/secrets/**)",
+      "Edit(.serena/memories/**)",
+      "Write(.serena/memories/**)",
+      "Edit(.codegraph/**)",
+      "Write(.codegraph/**)",
+      "Edit(.claude/settings.local.json)",
+      "Write(.claude/settings.local.json)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

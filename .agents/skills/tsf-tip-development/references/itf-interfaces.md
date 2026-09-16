@@ -11,6 +11,8 @@
 - [TextServiceFactory](#textservicefactory-tsf-tipincludeazookeytsftextservicefactoryh)
 - [DisplayAttribute](#displayattribute-tsf-tipincludeazookeytsfdisplayattributeh)
 - [Candidate UI](#candidatelistuielement-tsf-tipincludeazookeytsfcandidatelistuielementh)
+- [内部 EditSession](#内部で-itfeditsession-を実装する補助)
+- [COM ではない補助クラス](#com-ではない補助クラス)
 - [DllMain](#dllmain-tsf-tipsrcdllmaincpp)
 - [対応テスト](#対応テスト)
 
@@ -39,9 +41,13 @@
   (`OnCompositionTerminated`)。
 - `ITfDisplayAttributeProvider` — 下線 / 色付けスタイル提供
   (`EnumDisplayAttributeInfo`, `GetDisplayAttributeInfo`)。
+- `ITfFnConfigure` — 言語バー / 設定メニューからの設定 UI 起動 (`Show`)。
+  `Show` は UI thread で `SettingsLauncher` の `LaunchSettingsApplication` へ委譲し、
+  `azookey_settings.exe` を `ShellExecuteExW` で起動する。TIP 自身は設定 UI を描画しない。
 
 `TextService::QueryInterface`は`IID_IUnknown`、`IID_ITfTextInputProcessor`、
-`IID_ITfTextInputProcessorEx`、上記sink/providerのIIDを公開する。多重継承を追加しただけでは
+`IID_ITfTextInputProcessorEx`、上記sink/providerのIID、`IID_ITfFunction`、
+`IID_ITfFnConfigure`を公開する。多重継承を追加しただけでは
 COMから取得できないため、QueryInterfaceと契約テストを同じ変更で更新する。
 
 内部で参照する TSF 側インターフェース: `ITfThreadMgr`, `ITfContext`,
@@ -86,6 +92,37 @@ COM interfaceそのものではないが、自前`CandidateWindow`と`ITfUIEleme
 - どちらの経路でもlifecycle終了時に`EndUIElement`とpointer解放を行う。
 - `TF_TMF_UIELEMENTENABLEDONLY`は`ITfThreadMgrEx::GetActiveFlags`から判定する。
 
+## 内部で `ITfEditSession` を実装する補助
+
+`EditSession` のほかに、翻訳単位の短い同期 EditSession を内部 class として持つ補助がある。
+どちらも public header には COM class を出さず、関数または static メソッドだけを公開する。
+
+- `AiInputAllowed` (`tsf-tip/include/azookey/tsf/AiInputGuard.h`) — 内部の `ScopeSession` が
+  `ITfEditSession` を実装し、`TF_ES_SYNC | TF_ES_READ` で `RequestEditSession` を発行して
+  context の `InputScope` を読む。owner thread 専用で、InputScope が判定できない場合は
+  fail closed（AI 入力を許可しない）。UIA や network を呼ばない。
+- `BracketEditSession` (`tsf-tip/include/azookey/tsf/BracketEditSession.h`) — 内部の
+  `SynchronousSession` が `ITfEditSession` を実装し、`ReadHint` / `Apply` / `Finish` の static
+  メソッドが同期 EditSession を要求して括弧ペアリング（`core::BracketPairingAction`）を
+  TSF 操作へ翻訳する。判定ロジックは `core/` 側にあり、ここは翻訳だけを持つ。
+
+新しい内部 EditSession を足すときも、`QueryInterface` で `IID_ITfEditSession` を返し、
+`DoEditSession` から C++ 例外を漏らさない点は `EditSession` と同じ契約に従う。
+
+## COM ではない補助クラス
+
+TSF/COM object ではないが、thread 境界と責務境界を持つため変更時に確認する。
+
+- `CandidateWindow` (`CandidateWindow.h`) — 候補リストを描画する popup HWND。生成した thread
+  でだけ使い、内部 lock を持たない。`CandidateUiCoordinator` が `pbShow` に応じて表示を決める。
+- `TipLocalSettings` (`TipLocalSettings.h`) — Host に依存せず共有 `settings.json` を読み、
+  directory watch worker で再読込する。worker は TSF/COM object に触らず、`Snapshot` /
+  `RewriterSnapshot` の値型だけを UI thread へ渡す。
+- `ForegroundAppDetector` (`ForegroundAppDetector.h`) — アプリ別プロファイル解決のための
+  前面プロセス判定。owner thread 専用で、window title を読まず、identity を IPC へ送らない。
+- `SettingsLauncher` (`SettingsLauncher.h`) — `ITfFnConfigure::Show` の実体。テスト用 hook は
+  `AZOOKEY_TSF_TESTING` 時のみ公開する。
+
 ## DllMain (`tsf-tip/src/DllMain.cpp`)
 
 - エクスポート: `DllMain`, `DllGetClassObject`, `DllCanUnloadNow`,
@@ -110,7 +147,14 @@ COM interfaceそのものではないが、自前`CandidateWindow`と`ITfUIEleme
 | `ActivateEx` / UI-less | `tsf_tip_activate_uiless_tests` |
 | Candidate UI negotiation | `tsf_tip_candidate_ui_coordinator_tests` |
 | key / composition / preedit | `tsf_tip_onkeydown_preedit_tests` |
+| 応答の鮮度（stale response 破棄） | `tsf_tip_staleness_tests` |
+| caret 位置と候補窓の座標 | `tsf_tip_caret_position_tests` |
+| 候補窓の DPI スケール | `tsf_tip_candidate_window_dpi_tests` |
+| TIP ローカル設定の読込と監視 | `tsf_tip_local_settings_tests` |
 | COM/profile/category登録 | `tsf_tip_com_smoke_tests` (`tsf-com` label) |
+
+上の target 名は入口であり網羅ではない。CTest 一覧の正典は `docs/test-inventory.md` で、
+target の追加・削除はそちらと `scripts/check_test_inventory.py` が追う。
 
 ## メンテナンス手順
 

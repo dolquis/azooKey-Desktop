@@ -9,15 +9,19 @@
 | ユーザー辞書、import/export、CLI | `docs/learning-data-management-spec.md`, `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」 | `learning/src/UserDictionary.cpp`, `inference-host/src/UserDictCli.cpp` | `user_dictionary_tests`, `host_userdict_cli_tests` |
 | reranker と候補順位への学習反映 | `docs/user-learning-enhancement-spec.md` | `learning/src/Reranker.cpp` | `reranker_tests` |
 | secure input、ログ、外部送信 | `docs/privacy-and-secure-input-spec.md` | `inference-host/src/InferenceEngine.cpp`, `inference-host/src/Dispatcher.cpp` | `host_engine_tests`, `host_dispatcher_tests` |
-| 自動単語学習 | `docs/auto-word-registration-spec.md` | 現在の実装入口を確認する | 関連する learning / host テスト |
-| typo correction と学習の相互作用 | `docs/typo-correction-learning-spec.md` | 現在の実装入口を確認する | 関連する converter / learning テスト |
+| 自動単語学習と辞書レイヤ | `docs/auto-word-registration-spec.md` | `learning/src/DictionaryStore.cpp`（静的・可変レイヤの優先度と無効化）、`inference-host/src/DictionaryCandidateProvider.cpp` | `dictionary_tests`、`host_engine_tests` |
+| typo correction と学習の相互作用 | `docs/typo-correction-learning-spec.md` | `learning/src/DictionaryStore.cpp` の該当レイヤ、`inference-host/src/InferenceEngine.cpp` | `dictionary_tests`、`host_engine_tests` |
+| bench 用一時学習ファイル | `docs/conversion-quality-benchmark-spec.md` §3 | `bench/TemporaryLearningFile.cpp` | `temporary_learning_file_tests` |
 
 ## 検証コマンドの選び方
 
 - 学習ライブラリ: `learning_tests`, `user_dictionary_tests`, `reranker_tests`, `atomic_file_tests`
 - Host 経由の辞書操作: `host_userdict_cli_tests`
 - secure input や request lifecycle: `host_engine_tests`, `host_dispatcher_tests`
+- 辞書レイヤと自動単語: `dictionary_tests`
 - 影響が横断的な場合: `cmake --build --preset windows-debug --target azookey_check`
+
+上の target 名は入口であり網羅ではない。CTest 一覧の正典は `docs/test-inventory.md` で、target の追加・削除はそちらと `scripts/check_test_inventory.py` が追う。
 
 Windows の実ビルドと CTest はリポジトリ指定の Windows Headless CMake Build 手順で実行する。対象 target が最新か確認せず、古い実行ファイルへ `ctest` だけを実行しない。
 

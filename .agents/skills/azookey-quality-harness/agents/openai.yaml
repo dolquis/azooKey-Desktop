@@ -1,0 +1,4 @@
+interface:
+  display_name: "azooKey 品質ハーネス"
+  short_description: "bench と実アプリ互換テストを条件を揃えて扱います"
+  default_prompt: "Use $azookey-quality-harness to review this bench or compat-test change and record the measurement conditions."

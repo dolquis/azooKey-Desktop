@@ -57,6 +57,19 @@
               KeyPath="yes" />
         </Component>
 
+        <!--
+          ggml は既定で OpenMP を有効にするため、llama.cpp を組み込んだ Host は
+          VCOMP140.DLL を暗黙インポートする。これは CRT とは別の
+          Microsoft.VC*.OpenMP redist であり、同梱しないと VC++ Redistributable
+          未導入の環境で Host が 0xC0000135 で即時終了する。
+        -->
+        <Component Id="VCOpenMPComponent" Guid="7E5CC888-1673-4177-A547-328023215584">
+          <File
+              Id="Vcomp140Dll"
+              Source="$(VCOpenMPDir)\vcomp140.dll"
+              KeyPath="yes" />
+        </Component>
+
         <Component Id="HostStartupLogComponent" Guid="*">
           <File Id="HostStartupLog" Source="$(HostScriptsDir)\host-startup-log.ps1" KeyPath="yes" />
         </Component>
@@ -127,6 +140,7 @@
       <ComponentRef Id="SymbolDataComponent" />
       <ComponentRef Id="EmojiDataComponent" />
       <ComponentRef Id="VCRuntimeComponent" />
+      <ComponentRef Id="VCOpenMPComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
       <ComponentRef Id="SettingsComponent" />

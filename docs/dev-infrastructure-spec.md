@@ -198,16 +198,26 @@ zip のルートには次を置く。
 
 - `azookey_tsf_tip.dll`
 - `azookey_inference_host.exe`
+- `azookey_diag.exe`
 - `register-dev.ps1`
 - `unregister-dev.ps1`
 - `host-supervisor.ps1`
+- `host-startup-log.ps1`
 - `AppContainerAcl.ps1`
 - `verify-bootstrap.ps1`
 - `dev32-verification-checklist.md`
 - `manifest.json`
 
-`AppContainerAcl.ps1` は `register-dev.ps1` と `unregister-dev.ps1` が dot-source
-する実行時依存であるため、登録スクリプトと同じディレクトリへ置く。
+`AppContainerAcl.ps1` は `register-dev.ps1` と `unregister-dev.ps1` が、
+`host-startup-log.ps1` は `host-supervisor.ps1` が dot-source する実行時依存で
+あるため、いずれも参照元スクリプトと同じディレクトリへ置く。
+payload の一覧は手書きなので、zip 生成時に各 PowerShell payload の dot-source を
+静的に走査し、参照先が同じ zip に無ければ zip を書かずに失敗する。走査は
+`. (Join-Path $PSScriptRoot "x.ps1")` を行頭でも入れ子の block 内でも拾い、行頭の
+dot-source でこの形に解決できないものは見逃さずに失敗として扱う。
+`verify-bootstrap.ps1` は、既存 Host を停止する前にこれらの実行時依存の実在を
+確認する。停止したあとに `register-dev.ps1` と supervisor を起動するので、起動に
+失敗すると入力できない VM が残るためである。
 `-MockDictionaryPath` の TSV は `data/`、`-ModelPath` の GGUF は `models/` に
 追加する。
 GGUF を追加する場合は、同じ build directory の `azookey_zenzai_bench.exe` も

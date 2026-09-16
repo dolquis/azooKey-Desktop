@@ -1606,11 +1606,35 @@ custom-action DLL を呼ぶと `InprocServer32` が一時パスを指してし�
 Major Upgrade は `afterInstallInitialize` で旧版を先に削除し、旧版の解除後に新版を登録する。
 
 base MSI には TIP、Inference Host、`LICENSE`、`THIRD_PARTY_LICENSES` に加え、
-両バイナリが直接依存する
-`msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` を app-local で同梱する。
-これらはビルドに使用した MSVC toolset の x64 `Microsoft.VC*.CRT` から取得し、
-TIP と Host と同じ `%ProgramFiles%\azooKey` へ配置する。これにより、
-VC++ Redistributable が未導入のクリーンな Windows 11 でも起動可能にする。
+配布バイナリが直接依存する MSVC ランタイムを app-local で同梱する。
+`msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` はビルドに使用した MSVC
+toolset の x64 `Microsoft.VC*.CRT` から取得する。llama.cpp を組み込んだ Host は
+ggml の OpenMP 経路により `vcomp140.dll` も暗黙インポートするため、これを
+x64 `Microsoft.VC*.OpenMP` から取得して同じく同梱する。OpenMP は CRT とは別の
+redist ディレクトリであり、`VCRuntimeDir` と `VCOpenMPDir` の 2 つの MSBuild
+property で取得元を渡す。いずれも TIP と Host と同じ `%ProgramFiles%\azooKey` へ
+配置する。これにより、VC++ Redistributable が未導入のクリーンな Windows 11 でも
+起動可能にする。同梱漏れは、配布先で
+`STATUS_DLL_NOT_FOUND`（`0xC0000135`）による即時終了として表面化する。
+
+同梱一覧は `Package.wxs` の手書き `<File>` なので、ビルド構成の変更が増やした
+ランタイム依存は静かに漏れうる。`scripts/check-app-local-runtime.ps1` は配布する PE の
+import を `dumpbin /dependents`（delay load を含む）で読み、MSVC ランタイムの命名規則
+（`msvcp` / `msvcr` / `vcruntime` / `vcomp` / `concrt` / `vccorlib` で始まり、
+`msvcp140_atomic_wait` のような非数値の接尾辞も含む）に一致する名前が、MSI の同梱一覧に
+あるかを検査する。release workflow は MSI をビルドする前にこれを実行する。
+
+照合先は取得元の redist ディレクトリではなく MSI の同梱一覧とする。redist
+ディレクトリは `msvcp140_1.dll` や `concrt140.dll` のように MSI が同梱しないファイルも
+持つため、そちらと突き合わせると「取得元にはあるが MSI に入らない」依存を見逃す。
+同梱一覧は `Package.wxs` が個別に列挙する `<File>` と、`<Files Include="...\**">` で
+ツリーごと harvest する設定アプリ payload の実ファイルから組み立てる。OS が常に提供する
+DLL は対象にせず、allowlist を持たない。設定アプリは Hybrid CRT で静的リンクするため、
+この検査では MSVC ランタイムの import を持たない側として通る。
+
+`Package.wxs`、release workflow のランタイム解決、SBOM の `RUNTIME_FILES` は同じ
+ファイル集合を別々に手書きするため、`scripts/tests/msi-package-consistency.Tests.ps1`
+が三者の一致を検査する。片方だけ増やすと SBOM が出荷物を過少報告する。
 GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base MSI へ含めない。
 設定アプリは `SettingsPayloadDir` を必須入力として self-contained 出力一式を同梱する。
 `SettingsExePath` は実行ファイルの取得元パスであり、既定値は

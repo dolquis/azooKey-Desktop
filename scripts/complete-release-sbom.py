@@ -1,8 +1,9 @@
 """Enrich the MSI's Syft SPDX 2.3 document with declared build inputs.
 
 Attribution comes from THIRD_PARTY_LICENSES; versions are never copied here.
-Only the canonical release build (FetchContent, locked NuGet, app-local CRT)
-is supported. Missing or inconsistent evidence fails before writing output.
+Only the canonical release build (FetchContent, locked NuGet, app-local MSVC
+runtime) is supported. Missing or inconsistent evidence fails before writing
+output.
 """
 
 import argparse
@@ -15,8 +16,19 @@ import re
 import subprocess
 
 
-RUNTIME_FILES = {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"}
+# vcomp140.dll is the OpenMP runtime ggml imports; it ships from a different
+# redist directory than the CRT, so the search covers every --runtime-dir.
+RUNTIME_FILES = {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"}
 BUILD_ONLY = {"Microsoft.Windows.SDK.BuildTools", "Microsoft.Windows.SDK.BuildTools.MSIX"}
+
+
+def runtime_file(directories, name):
+    """Find an app-local runtime DLL across the supplied redist directories."""
+    for directory in directories:
+        candidate = Path(directory) / name
+        if candidate.is_file():
+            return candidate
+    raise ValueError(f"App-local runtime file not found in any --runtime-dir: {name}")
 
 
 def read_json(path):
@@ -133,7 +145,7 @@ def msi_root(document, msi, version):
     return package["SPDXID"]
 
 
-def complete(document, root, build_dir, runtime_info, runtime_dir, msi, version):
+def complete(document, root, build_dir, runtime_info, runtime_dirs, msi, version):
     if document.get("spdxVersion") != "SPDX-2.3":
         raise ValueError("Expected a Syft SPDX-2.3 document")
     result = copy.deepcopy(document)
@@ -162,7 +174,8 @@ def complete(document, root, build_dir, runtime_info, runtime_dir, msi, version)
     covered = set()
     runtime = read_json(runtime_info)
     if len(runtime) != len(RUNTIME_FILES) or {x["name"] for x in runtime} != RUNTIME_FILES:
-        raise ValueError("Expected exactly the three app-local CRT DLLs")
+        raise ValueError("Expected exactly the app-local MSVC runtime DLLs: "
+                         + ", ".join(sorted(RUNTIME_FILES)))
     for item in inventory(root):
         source, _, selector = item["source"].partition(":")
         license_id = item["license"]
@@ -192,7 +205,7 @@ def complete(document, root, build_dir, runtime_info, runtime_dir, msi, version)
             for entry in runtime:
                 if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", entry["version"]) or entry["version"] == "0.0.0.0":
                     raise ValueError("Missing numeric CRT file version")
-                digest = sha256(runtime_dir / entry["name"])
+                digest = sha256(runtime_file(runtime_dirs, entry["name"]))
                 if digest != entry["sha256"]:
                     raise ValueError("CRT changed after version capture")
                 entries.append((entry["name"], entry["version"], "NOASSERTION",
@@ -218,8 +231,10 @@ def complete(document, root, build_dir, runtime_info, runtime_dir, msi, version)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ("input", "output", "build-dir", "runtime-info", "runtime-dir", "msi"):
+    for flag in ("input", "output", "build-dir", "runtime-info", "msi"):
         parser.add_argument("--" + flag, required=True, type=Path)
+    # The CRT and the OpenMP runtime live in sibling redist directories.
+    parser.add_argument("--runtime-dir", required=True, type=Path, action="append")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--version", required=True)
     args = parser.parse_args()

@@ -18,6 +18,7 @@ Describe "WiX MSI package consistency" {
     $script:settingsCMake = Get-Content -Raw $settingsCMakePath
     $script:thirdPartyLicenses = Get-Content -Raw $thirdPartyLicensesPath
     $script:rootReadme = Get-Content -Raw $rootReadmePath
+    $script:repoRoot = $repoRoot
   }
 
   It "pins the WiX SDK and builds an x64 package" {
@@ -57,6 +58,55 @@ Describe "WiX MSI package consistency" {
     $script:releaseWorkflow | Should -Match 'Resolve app-local MSVC runtime'
     $script:releaseWorkflow | Should -Match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.x86\.x64'
     $script:releaseWorkflow | Should -Match '"-p:VCRuntimeDir=\$\{\{ steps\.vc-runtime\.outputs\.dir \}\}"'
+  }
+
+  It "deploys the OpenMP runtime that the llama.cpp-linked host imports" {
+    $script:package | Should -Match 'Source="\$\(VCOpenMPDir\)\\vcomp140\.dll"'
+    $script:project | Should -Match "Condition=`"!Exists\('\$\(VCOpenMPDir\)\\vcomp140\.dll'\)`""
+    $script:releaseWorkflow | Should -Match '\.OpenMP\$'
+    $script:releaseWorkflow | Should -Match '"-p:VCOpenMPDir=\$\{\{ steps\.vc-runtime\.outputs\.openmp-dir \}\}"'
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $component = $xml.SelectSingleNode('//w:File[@Id="Vcomp140Dll"]', $ns).ParentNode
+    $component.Guid | Should -Not -Be "*"
+    $xml.SelectNodes("//w:Feature/w:ComponentRef[@Id='$($component.Id)']", $ns).Count |
+      Should -Be 1
+  }
+
+  It "verifies the shipped PE imports against the MSI payload before packaging" {
+    $script:releaseWorkflow | Should -Match 'Verify the MSI ships every imported MSVC runtime'
+    $script:releaseWorkflow.IndexOf('name: Verify the MSI ships every imported MSVC runtime') |
+      Should -BeLessThan $script:releaseWorkflow.IndexOf('- name: Build unsigned MSI')
+    $script:releaseWorkflow | Should -Match 'scripts/check-app-local-runtime\.ps1'
+    $script:releaseWorkflow | Should -Match '-PackagePath "\$\{\{ github\.workspace \}\}\\pkg\\msi\\Package\.wxs"'
+  }
+
+  It "keeps the SBOM and release workflow runtime lists equal to the packaged files" {
+    # 同梱一覧は Package.wxs / release.yml / complete-release-sbom.py の三箇所に
+    # 手書きされる。片方だけ増やすと SBOM が出荷物を過少報告する。
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $packaged = @($xml.SelectNodes('//w:File', $ns) |
+      ForEach-Object { $_.GetAttribute("Source") } |
+      Where-Object { $_ -match '^\$\((?:VCRuntimeDir|VCOpenMPDir)\)\\(.+)$' } |
+      ForEach-Object { $Matches[1].ToLowerInvariant() } |
+      Sort-Object)
+    $packaged | Should -Not -BeNullOrEmpty
+
+    $sbom = Get-Content -Raw (Join-Path $script:repoRoot "scripts\complete-release-sbom.py")
+    $declared = [regex]::Match($sbom, '(?m)^RUNTIME_FILES = \{(?<body>[^}]*)\}')
+    $declared.Success | Should -BeTrue
+    @([regex]::Matches($declared.Groups["body"].Value, '"([^"]+)"') |
+      ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } | Sort-Object) |
+      Should -Be $packaged
+
+    $sources = [regex]::Match($script:releaseWorkflow, '\$runtimeSources = \[ordered\]@\{(?<body>[^}]*)\}')
+    $sources.Success | Should -BeTrue
+    @([regex]::Matches($sources.Groups["body"].Value, '"([^"]+)"\s*=') |
+      ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } | Sort-Object) |
+      Should -Be $packaged
   }
 
   It "registers and unregisters the installed TIP with elevated deferred actions" {

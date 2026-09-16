@@ -473,6 +473,9 @@ function Invoke-VmVerifyBootstrap {
   }
   $registerScript = Join-Path $root "register-dev.ps1"
   $supervisorScript = Join-Path $root "host-supervisor.ps1"
+  # payload 内の dot-source 依存。欠けていると supervisor と登録が起動できない。
+  $startupLogScript = Join-Path $root "host-startup-log.ps1"
+  $appContainerAclScript = Join-Path $root "AppContainerAcl.ps1"
   $manifestPath = Join-Path $root "manifest.json"
 
   $package = [pscustomobject][ordered]@{
@@ -520,7 +523,11 @@ function Invoke-VmVerifyBootstrap {
     $MockDictionary = Get-VmVerifyBootstrapPath -Path $MockDictionary
   }
 
-  foreach ($requiredPath in @($TipDll, $HostExe, $registerScript, $supervisorScript)) {
+  # 既存 Host の停止より前に検査する。停止してから register-dev.ps1 や supervisor の
+  # 起動に失敗すると、入力できない状態のまま VM が残る。
+  foreach ($requiredPath in @(
+      $TipDll, $HostExe, $registerScript, $supervisorScript, $startupLogScript,
+      $appContainerAclScript)) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
       throw "VM verification package file is missing: $requiredPath"
     }

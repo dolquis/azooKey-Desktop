@@ -109,9 +109,23 @@ jobs:
           if (-not $crtDir) {
             throw "The x64 MSVC runtime directory was not found under $redistRoot."
           }
+          # ggml は既定で OpenMP を使うため、llama.cpp を組み込んだ Host は
+          # VCOMP140.DLL を暗黙インポートする（DEV-1137）。CRT とは別 redist。
+          $openMpDir = Get-ChildItem (Join-Path $versionDir.FullName "x64") -Directory |
+            Where-Object { $_.Name -match '^Microsoft\.VC\d+\.OpenMP$' } |
+            Select-Object -First 1
+          if (-not $openMpDir) {
+            throw "The x64 MSVC OpenMP runtime directory was not found under $redistRoot."
+          }
 
-          $runtimeInfo = foreach ($name in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
-            $path = Join-Path $crtDir.FullName $name
+          $runtimeSources = [ordered]@{
+            "msvcp140.dll" = $crtDir.FullName
+            "vcruntime140.dll" = $crtDir.FullName
+            "vcruntime140_1.dll" = $crtDir.FullName
+            "vcomp140.dll" = $openMpDir.FullName
+          }
+          $runtimeInfo = foreach ($name in $runtimeSources.Keys) {
+            $path = Join-Path $runtimeSources[$name] $name
             if (-not (Test-Path $path)) {
               throw "Required MSVC runtime file is missing: $name"
             }
@@ -124,9 +138,23 @@ jobs:
           }
           ConvertTo-Json -InputObject @($runtimeInfo) | Set-Content -Encoding utf8 runtime-info.json
           "dir=$($crtDir.FullName)" >> $env:GITHUB_OUTPUT
+          "openmp-dir=$($openMpDir.FullName)" >> $env:GITHUB_OUTPUT
+      # Package.wxs の同梱一覧は手書きなので、ビルド構成が増やしたランタイム依存が
+      # 静かに漏れる。MSI をビルドする前に、配布する PE の import と突き合わせる。
+      - name: Verify the MSI ships every imported MSVC runtime
+        shell: pwsh
+        run: |
+          $settingsPayload = "${{ github.workspace }}\build\windows-release\settings-app\Release"
+          ./scripts/check-app-local-runtime.ps1 `
+            -BinaryPath `
+              "${{ github.workspace }}\build\windows-release\tsf-tip\azookey_tsf_tip.dll", `
+              "${{ github.workspace }}\build\windows-release\inference-host\azookey_inference_host.exe", `
+              "$settingsPayload\azookey_settings.exe" `
+            -PackagePath "${{ github.workspace }}\pkg\msi\Package.wxs" `
+            -PayloadDirectory "$settingsPayload"
       - name: Build unsigned MSI
         run: >-
-          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe"
+          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:VCOpenMPDir=${{ steps.vc-runtime.outputs.openmp-dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe"
       - name: Verify MSI is unsigned
         id: msi-artifact
         shell: pwsh
@@ -158,6 +186,7 @@ jobs:
         env:
           MSI_PATH: ${{ steps.msi-artifact.outputs.path }}
           VC_RUNTIME_DIR: ${{ steps.vc-runtime.outputs.dir }}
+          VC_OPENMP_DIR: ${{ steps.vc-runtime.outputs.openmp-dir }}
           MSI_VERSION: ${{ steps.msi-version.outputs.version }}
         run: |
           git diff --exit-code -- settings-app/packages.lock.json
@@ -165,7 +194,8 @@ jobs:
           python scripts/complete-release-sbom.py `
             --input azooKey.syft.spdx.json --output azooKey.spdx.json `
             --build-dir build/windows-release --runtime-info runtime-info.json `
-            --runtime-dir "$env:VC_RUNTIME_DIR" --msi "$env:MSI_PATH" --version "$env:MSI_VERSION"
+            --runtime-dir "$env:VC_RUNTIME_DIR" --runtime-dir "$env:VC_OPENMP_DIR" `
+            --msi "$env:MSI_PATH" --version "$env:MSI_VERSION"
       # attestation はリポジトリに残る公開記録なので、実際に配布するタグ push で
       # だけ作る。dry-run で作ると未配布ビルドの証明が残り、誤解を生む。
       #

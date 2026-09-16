@@ -8,6 +8,7 @@
     <SettingsExePath Condition="'$(SettingsExePath)' == ''">$(SettingsPayloadDir)\azookey_settings.exe</SettingsExePath>
     <SettingsIconPath Condition="'$(SettingsIconPath)' == ''">$(MSBuildThisFileDirectory)..\..\settings-app\Assets\azookey-settings.ico</SettingsIconPath>
     <VCRuntimeDir Condition="'$(VCRuntimeDir)' == ''">__NOT_PROVIDED__</VCRuntimeDir>
+    <VCOpenMPDir Condition="'$(VCOpenMPDir)' == ''">__NOT_PROVIDED__</VCOpenMPDir>
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
     <RewriterDataDir Condition="'$(RewriterDataDir)' == ''">$(MSBuildThisFileDirectory)..\..\data</RewriterDataDir>
@@ -28,6 +29,7 @@
       SettingsExePath=$(SettingsExePath);
       SettingsIconPath=$(SettingsIconPath);
       VCRuntimeDir=$(VCRuntimeDir);
+      VCOpenMPDir=$(VCOpenMPDir);
       LicensePath=$(LicensePath);
       ThirdPartyLicensesPath=$(ThirdPartyLicensesPath);
       RewriterDataDir=$(RewriterDataDir);
@@ -53,6 +55,7 @@
     <Error Condition="!Exists('$(VCRuntimeDir)\msvcp140.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\msvcp140.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
     <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
     <Error Condition="!Exists('$(VCRuntimeDir)\vcruntime140_1.dll')" Text="MSVC runtime not found: $(VCRuntimeDir)\vcruntime140_1.dll. Set VCRuntimeDir to the x64 Microsoft.VC*.CRT directory." />
+    <Error Condition="!Exists('$(VCOpenMPDir)\vcomp140.dll')" Text="MSVC runtime not found: $(VCOpenMPDir)\vcomp140.dll. Set VCOpenMPDir to the x64 Microsoft.VC*.OpenMP directory." />
     <Error Condition="!Exists('$(LicensePath)')" Text="License file not found: $(LicensePath)" />
     <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
     <Error Condition="!Exists('$(RewriterDataDir)\symbol.tsv')" Text="Symbol data not found" />

@@ -256,6 +256,68 @@ function Add-VmVerifyPayloadFile {
   }
 }
 
+function Get-VmVerifyScriptDependency {
+  <#
+    .SYNOPSIS
+      PowerShell payload が dot-source する同一ディレクトリのスクリプト名を返す。
+    .DESCRIPTION
+      payload の一覧は手書きのため、dot-source される補助スクリプトを足し忘れても
+      ZIP 生成は成功し、VM 上で初めて失敗する（DEV-1140）。
+      `. (Join-Path $PSScriptRoot "x.ps1")` は行頭でも入れ子の block 内でも拾う。
+      行頭の dot-source でこの形に解決できないものは、黙って見逃さず例外にする。
+  #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  $resolvable = '\.\s+\(Join-Path\s+\$PSScriptRoot\s+"([^"\\/]+\.ps1)"\)'
+  $names = @()
+  foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+    $matched = [regex]::Matches($line, $resolvable)
+    foreach ($match in $matched) {
+      $names += $match.Groups[1].Value
+    }
+    if ($matched.Count -eq 0 -and $line -match '^\s*\.\s') {
+      throw ("Unsupported dot-source form in '$Path'; the VM verification payload " +
+        "dependency check cannot resolve it: $($line.Trim())")
+    }
+  }
+  return $names
+}
+
+function Assert-VmVerifyScriptDependency {
+  <#
+    .SYNOPSIS
+      payload の PowerShell スクリプトが dot-source する依存が同じ ZIP に入るか検査する。
+  #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
+    [object[]]$Payload
+  )
+
+  $archived = @{}
+  foreach ($entry in $Payload) {
+    $archived[([string]$entry.Archive)] = $true
+  }
+  foreach ($entry in $Payload) {
+    $archive = [string]$entry.Archive
+    if ([System.IO.Path]::GetExtension($archive) -ine ".ps1") {
+      continue
+    }
+    # dot-source は展開先のスクリプトから見た $PSScriptRoot で解決される。
+    $directory = [System.IO.Path]::GetDirectoryName($archive.Replace("\", "/")).Replace("\", "/")
+    foreach ($dependency in Get-VmVerifyScriptDependency -Path ([string]$entry.Source)) {
+      $expected = if ($directory) { "$directory/$dependency" } else { $dependency }
+      if (-not $archived.ContainsKey($expected)) {
+        throw ("VM verification payload '$archive' dot-sources '$dependency', but the " +
+          "package does not contain '$expected'. Add it to the payload list.")
+      }
+    }
+  }
+}
+
 function Compress-VmVerifyArchive {
   param(
     [Parameter(Mandatory = $true)]
@@ -425,6 +487,7 @@ function Export-VmVerifyPackage {
       @{ Source = (Join-Path $repository "scripts\register-dev.ps1"); Archive = "register-dev.ps1"; Role = "registration-script" }
       @{ Source = (Join-Path $repository "scripts\unregister-dev.ps1"); Archive = "unregister-dev.ps1"; Role = "unregistration-script" }
       @{ Source = (Join-Path $repository "scripts\host-supervisor.ps1"); Archive = "host-supervisor.ps1"; Role = "host-supervisor-script" }
+      @{ Source = (Join-Path $repository "scripts\host-startup-log.ps1"); Archive = "host-startup-log.ps1"; Role = "host-supervisor-dependency" }
       @{ Source = (Join-Path $repository "scripts\AppContainerAcl.ps1"); Archive = "AppContainerAcl.ps1"; Role = "registration-dependency" }
       @{ Source = (Join-Path $repository "scripts\verify-bootstrap.ps1"); Archive = "verify-bootstrap.ps1"; Role = "vm-bootstrap-script" }
       @{ Source = (Join-Path $repository "docs\handoff\dev32-verification-checklist.md"); Archive = "dev32-verification-checklist.md"; Role = "verification-checklist" }
@@ -471,6 +534,10 @@ function Export-VmVerifyPackage {
         -Role $payload.Role `
         -StagingDirectory $staging
     }
+
+    # 欠落した dot-source 依存は VM 上でしか表面化しないので、ZIP を書く前に落とす。
+    # 各 payload の実在は Add-VmVerifyPayloadFile が先に確認している。
+    Assert-VmVerifyScriptDependency -Payload $payloads
 
     $manifest = [ordered]@{
       schemaVersion = 1

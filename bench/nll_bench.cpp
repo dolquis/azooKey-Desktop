@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -99,7 +101,14 @@ int main(int argc, char** argv) {
       std::vector<double> elapsed, prefix, cached_convert, after_nll_convert;
       std::vector<double> cached_prompt, after_nll_prompt;
       double generation_score_delta = 0.0;
+      uint64_t minimum_reused_tokens = std::numeric_limits<uint64_t>::max();
       azookey::host::NllEvaluation last;
+      // Score once before any generation, so the prefix is decoded rather than reused. The
+      // shared logits row has to reproduce these scores exactly (§B3.1).
+      context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      const auto cold = converter.EvaluateNllForValidation("こうせい", surfaces, context);
+      if (cold.scores.size() != surfaces.size()) throw std::runtime_error("incomplete cold scores");
+      if (cold.prefix_reused_tokens != 0) throw std::runtime_error("cold evaluation reused a KV");
       // Two warm-ups, then measure the scoring layer after generation has used the same KV.
       for (int i = -2; i < iterations; ++i) {
         context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -133,11 +142,19 @@ int main(int argc, char** argv) {
                 .count();
         if (last.scores.size() != surfaces.size())
           throw std::runtime_error("incomplete NLL scores");
+        // Scoring follows a generation of the same reading, so the prompt comes from its KV cache.
+        if (last.prefix_reused_tokens == 0)
+          throw std::runtime_error("generation prefix was not shared with NLL");
+        minimum_reused_tokens = std::min(minimum_reused_tokens, last.prefix_reused_tokens);
         if (i >= 0) {
           elapsed.push_back(ms);
           prefix.push_back(last.prefix_ms);
         }
         measure_convert(after_nll_convert, after_nll_prompt);
+      }
+      for (size_t i = 0; i < last.scores.size(); ++i) {
+        if (!std::isfinite(cold.scores[i]) || std::abs(cold.scores[i] - last.scores[i]) > 1e-5)
+          throw std::runtime_error("shared prefix changed NLL");
       }
       auto reversed = surfaces;
       std::reverse(reversed.begin(), reversed.end());
@@ -191,6 +208,7 @@ int main(int argc, char** argv) {
                 << " elapsed_max_ms=" << *std::max_element(elapsed.begin(), elapsed.end())
                 << " budget_ms=" << default_budget_ms << " elapsed_p95_ms=" << p95
                 << " prefix_mean_ms=" << Mean(prefix) << " prefix_p95_ms=" << P95(prefix)
+                << " prefix_reused_tokens_min=" << minimum_reused_tokens
                 << " over_default_budget=" << over_budget
                 << " over_default_budget_rate=" << static_cast<double>(over_budget) / iterations
                 << " cached_convert_p95_ms=" << P95(cached_convert)
@@ -198,7 +216,7 @@ int main(int argc, char** argv) {
                 << " cached_prompt_mean_ms=" << Mean(cached_prompt)
                 << " after_nll_prompt_mean_ms=" << Mean(after_nll_prompt)
                 << " within_default_budget=" << (p95 <= default_budget_ms)
-                << " order_invariant=1 generation_order_invariant=1"
+                << " order_invariant=1 generation_order_invariant=1 shared_prefix_invariant=1"
                 << " generation_max_score_delta=" << generation_score_delta
                 << " top=" << surfaces[winner] << '\n';
       for (size_t i = 0; i < last.scores.size(); ++i)

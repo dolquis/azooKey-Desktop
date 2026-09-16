@@ -1557,6 +1557,21 @@ TEST(InferenceEngineTest, FindsCommonPromptTokenPrefix) {
   EXPECT_EQ(azookey::host::CommonPrefixLength({1}, {2}), 0u);
 }
 
+TEST(InferenceEngineTest, RetainsPromptPrefixOnlyWhenLogitsCanBeServed) {
+  // Without cached logits the final prompt token is re-decoded, so its logits are observable.
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1, 2, 3}, {1, 2, 3}, false), 2u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1, 2, 3}, {1, 2, 3}, true), 3u);
+  // A prompt that only extends or diverges from the cache never reuses its last token.
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1, 2}, {1, 2, 3}, true), 2u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1, 2, 3}, {1, 2}, true), 1u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1, 2, 3}, {1, 2, 4}, true), 2u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1}, {2}, true), 0u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({}, {1, 2}, true), 0u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1, 2}, {}, true), 0u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1}, {1}, true), 1u);
+  EXPECT_EQ(azookey::host::RetainedPromptPrefixLength({1}, {1}, false), 0u);
+}
+
 TEST(InferenceEngineTest, PlansInitialBeamSequencesFromPromptRoot) {
   const auto plan = azookey::host::PlanBeamSequenceAssignments({0, 0, 0, 0}, {});
 

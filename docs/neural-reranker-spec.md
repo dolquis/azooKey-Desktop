@@ -604,7 +604,7 @@ nll_per_char(s) = NLL_total(s) / max(1, C(s))
 候補ごとにロールバックする**。
 
 ```
-1. KV をクリアし、P を decode する（prefix KV 確立、prefix_len トークン）
+1. 再利用できない範囲の KV を落とし、P の残りを decode する（prefix KV 確立、prefix_len トークン。§B3.4）
 1'. prefix 最終位置の logits を**スナップショットへ複製**する（§B3.1）
 2. 各候補 s について:
    a. t_1 の logprob は 1'. のスナップショットから読む
@@ -628,8 +628,9 @@ decode 後に読める「最終位置の logits」は prefix のものではな�
   異なるため、特定トークンの値だけでは足りない。
 - log-softmax の分母（§B2.2 の最大値減算を含む正規化項）は**スナップショットから
   1 回だけ算出**し、全候補で使い回す。
-- スナップショットの寿命は 1 リクエスト内。次リクエストでは prefix が変わるため
-  必ず取り直す。
+- スナップショットは prefix キャッシュと寿命を共にする。キャッシュが指す prompt と
+  一致する限り再利用し、prompt が変われば、あるいはキャッシュを無効化すれば
+  取り直す（§B3.4）。
 
 回帰テストで固定する（§B11）: 候補を 2 件以上与え、候補 2 の `t_1` の logprob が
 **prefix 由来**であること（候補 1 の出力由来になっていないこと）。
@@ -665,10 +666,16 @@ prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
 - 生成経路と**同一の `llama_context`** を使う。モデルを 2 つ常駐させない。
 - NllScorer は `Convert` の**完了後**、`converter_call_mutex_` を保持して走る。
   decode 中は `state_mutex_` を保持せず、Health とモデル交換の応答性を保つ。
-- `Convert` の beam decode が KV を触るため、NllScorer は prefix を必ず 1 回
-  decode し直す前提で予算を組む（§B12）。
-- 評価の前後に生成用 prefix キャッシュを無効化する。途中の失敗や cancel でも
-  KV を消去し、次の生成が古いキャッシュを参照しないようにする。
+- `Convert` と NllScorer は同じ prompt prefix を KV キャッシュで共有する（§B12）。
+  評価は beam の作業シーケンスを解放し、sequence 0 を再利用できる prefix 長へ
+  切り詰めてから、残りのトークンだけを decode する。prompt が生成時のものと一致し、
+  その最終トークンの logits を保持していれば decode するトークンは 0 になる。
+- 生成は prompt の最終トークンを必ず decode し直す。beam の初手はその decode の
+  logits を読むためである。
+- 候補ごとの rollback は prefix 長で止まるので、評価を終えた時点で sequence 0 は
+  prompt だけを保持する。キャッシュはその prompt を指したまま次の生成へ引き継ぐ。
+- 途中の失敗や cancel では prefix キャッシュを無効化して KV を消去し、次の生成が
+  古いキャッシュを参照しないようにする。
 - NllScorer を別スレッドへ出さない（`llama_context` は共有できない）。
 
 ## B4. 責務境界
@@ -955,10 +962,13 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
 **bench**
 
 - `bench/` に `K = nllTopK` での追加レイテンシを計測する case を足し、§B7 の予算内に
-  収まることを示す。prefix decode の再実行コスト（§B3.4）を内訳として分離する。
+  収まることを示す。生成と共有したあとの prefix コスト（§B3.4）と、その共有で
+  decode せずに済んだ prompt トークン数を内訳として分離する。
 - `azookey_nll_bench --model <GGUF> --iterations 10 --top-k 8 --threads 8` は
   固定の「こうせい」候補集合で生成後の追加評価を測る。warm-up は 2 回とし、
-  prefix 平均と p95、全評価 p95、20ms 超過件数と割合、各反復の内訳を出す。
+  prefix 平均と p95、prefix 再利用トークン数の最小値、全評価 p95、20ms 超過件数と
+  割合、各反復の内訳を出す。
+  生成前（prefix を全 decode）と生成後（prefix を共有）で NLL スコアが一致すること、
   評価順序を逆転させた NLL の一致、生成キャッシュ有無での候補順序の一致も検証し、
   生成スコアの最大差を別記する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
   計測は 10 秒の診断用 deadline を使い、通常要求の 20ms 予算とは区別する。
@@ -971,12 +981,13 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   ON の途中で circuit が開いてもリセットせず、直後の prefix 再計算も測定に含める。
   全件破棄は候補統合による生成スコア差と混同せず、`RerankNll` の入力境界で検証する。
 
-## B12. 校正と性能検証（追跡先: DEV-1012）
+## B12. 校正と性能検証（追跡先: DEV-1012、DEV-1055）
 
-- NllScorer が prefix を必ず 1 回 decode し直す前提が、
-  §B7 の予算（既定 20ms）に収まるか。収まらない場合は `Convert` と NllScorer で
-  prefix decode を共有する最適化を別課題として起票する（本章の契約は変えずに
-  実装内部で吸収できる範囲）。
+- prefix を生成と共有した NllScorer の評価が §B7 の予算（既定 20ms）に収まるか。
+  共有は §B3.4 のとおり実装内部で完結し、本章の契約は変えない。
+- 測定は固定モデル・入力・threads・warmup・反復を揃え、CPU と、専有条件を確保できる
+  GPU で行う。GPU では測定中の利用率と電力状態も記録する。専有・アイドル条件を
+  確保できない測定から GPU の優劣は結論しない。
 - `nllWeight` / `nllTopK` / `nllBudgetMs` の既定値校正。M52 ベンチ
   （`docs/conversion-quality-benchmark-spec.md`）が整備された時点で実測に置き換える。
 - 構造化ログのフィールドは §B4.2、ログ形式の正典は

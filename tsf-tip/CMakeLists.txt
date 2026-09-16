@@ -107,6 +107,7 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_bracket_edit_session_tests tests/bracket_edit_session_test.cpp)
   add_executable(tsf_tip_local_settings_tests src/TipLocalSettings.cpp tests/local_settings_test.cpp)
   target_include_directories(tsf_tip_local_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_definitions(tsf_tip_local_settings_tests PRIVATE

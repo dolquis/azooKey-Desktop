@@ -5,6 +5,9 @@
 #include <array>
 #include <functional>
 #include <new>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "azookey/tsf/TextService.h"
@@ -74,6 +77,33 @@ HRESULT Selection(ITfContext* context, TfEditCookie cookie, ComPtr<ITfRange>& ra
   return fetched == 1 && range ? S_OK : E_FAIL;
 }
 
+// Reads the single code unit next to `range` on the given side. `readable`
+// separates a document edge, which legitimately has no character, from a
+// provider that refused the read.
+std::optional<WCHAR> ReadNeighbour(TfEditCookie cookie, ITfRange* range, bool before,
+                                   bool& readable) {
+  readable = false;
+  ComPtr<ITfRange> adjacent;
+  if (FAILED(range->Clone(&adjacent)) || !adjacent) return std::nullopt;
+  if (FAILED(adjacent->Collapse(cookie, before ? TF_ANCHOR_START : TF_ANCHOR_END)))
+    return std::nullopt;
+  LONG shifted = 0;
+  const HRESULT hr = before ? adjacent->ShiftStart(cookie, -1, &shifted, nullptr)
+                            : adjacent->ShiftEnd(cookie, 1, &shifted, nullptr);
+  if (FAILED(hr)) return std::nullopt;
+  if (shifted == 0) {
+    readable = true;
+    return std::nullopt;
+  }
+  if (shifted != (before ? -1 : 1)) return std::nullopt;
+  WCHAR character{};
+  ULONG count = 0;
+  if (FAILED(adjacent->GetText(cookie, 0, &character, 1, &count)) || count != 1)
+    return std::nullopt;
+  readable = true;
+  return character;
+}
+
 core::EditContextHint ReadAtCookie(ITfContext* context, TfEditCookie cookie) {
   core::EditContextHint hint;
   ComPtr<ITfRange> selection;
@@ -83,19 +113,10 @@ core::EditContextHint ReadAtCookie(ITfContext* context, TfEditCookie cookie) {
   hint.selection_collapsed = empty != FALSE;
   if (!empty) return hint;
   for (const bool before : {true, false}) {
-    ComPtr<ITfRange> adjacent;
-    if (FAILED(selection->Clone(&adjacent)) || !adjacent) return {};
-    if (FAILED(adjacent->Collapse(cookie, before ? TF_ANCHOR_START : TF_ANCHOR_END))) return {};
-    LONG shifted = 0;
-    const HRESULT hr = before ? adjacent->ShiftStart(cookie, -1, &shifted, nullptr)
-                              : adjacent->ShiftEnd(cookie, 1, &shifted, nullptr);
-    if (FAILED(hr)) return {};
-    if (shifted == 0) continue;
-    if (shifted != (before ? -1 : 1)) return {};
-    WCHAR character{};
-    ULONG count = 0;
-    if (FAILED(adjacent->GetText(cookie, 0, &character, 1, &count)) || count != 1) return {};
-    (before ? hint.char_before : hint.char_after) = character;
+    bool readable = false;
+    const auto character = ReadNeighbour(cookie, selection.Get(), before, readable);
+    if (!readable) return {};
+    if (character) (before ? hint.char_before : hint.char_after) = *character;
   }
   return hint;
 }
@@ -118,6 +139,117 @@ HRESULT PlaceCaret(ITfContext* context, TfEditCookie cookie, ITfRange* range, bo
   selection.range = range;
   selection.style.ase = TF_AE_NONE;
   return context->SetSelection(cookie, 1, &selection);
+}
+
+HRESULT SetCaret(ITfContext* context, TfEditCookie cookie, ITfRange* caret) {
+  TF_SELECTION selection{};
+  selection.range = caret;
+  selection.style.ase = TF_AE_NONE;
+  return context->SetSelection(cookie, 1, &selection);
+}
+
+// Collapses a clone of `written` to `offset` code units into the text that was
+// just written there, using one of the three arrangements providers are known
+// to leave that range in.
+ComPtr<ITfRange> CaretCandidate(TfEditCookie cookie, ITfRange* written, int route, LONG forward,
+                                LONG backward, HRESULT& error) {
+  // A refused move reports E_FAIL, so the caller can still surface the more
+  // specific failure of a provider that ran out of memory.
+  error = E_FAIL;
+  ComPtr<ITfRange> caret;
+  const auto fail = [&](HRESULT hr) {
+    error = FAILED(hr) ? hr : E_FAIL;
+    return nullptr;
+  };
+  if (const HRESULT hr = written->Clone(&caret); FAILED(hr) || !caret) return fail(hr);
+  LONG shifted = 0;
+  switch (route) {
+    case 0:  // The range covers the text, or stayed at its leading edge.
+      if (const HRESULT hr = caret->Collapse(cookie, TF_ANCHOR_START); FAILED(hr)) return fail(hr);
+      if (!forward) break;
+      if (const HRESULT hr = caret->ShiftStart(cookie, forward, &shifted, nullptr);
+          FAILED(hr) || shifted != forward)
+        return fail(hr);
+      break;
+    case 1:  // The range stayed at the trailing edge of the written text.
+      if (const HRESULT hr = caret->Collapse(cookie, TF_ANCHOR_END); FAILED(hr)) return fail(hr);
+      if (!backward) break;
+      if (const HRESULT hr = caret->ShiftStart(cookie, -backward, &shifted, nullptr);
+          FAILED(hr) || shifted != -backward)
+        return fail(hr);
+      if (const HRESULT hr = caret->Collapse(cookie, TF_ANCHOR_START); FAILED(hr)) return fail(hr);
+      break;
+    default:  // As route 0, for a provider that only moves the end anchor.
+      if (const HRESULT hr = caret->Collapse(cookie, TF_ANCHOR_START); FAILED(hr)) return fail(hr);
+      if (!forward) break;
+      if (const HRESULT hr = caret->ShiftEnd(cookie, forward, &shifted, nullptr);
+          FAILED(hr) || shifted != forward)
+        return fail(hr);
+      if (const HRESULT hr = caret->Collapse(cookie, TF_ANCHOR_END); FAILED(hr)) return fail(hr);
+      break;
+  }
+  error = S_OK;
+  return caret;
+}
+
+// Confirms a candidate against the characters the write was supposed to leave
+// around it. Unreadable neighbours stay kUnknown so a document that refuses
+// GetText is not denied a caret it would otherwise have received.
+enum class CaretCheck { kMatches, kUnknown, kMismatch };
+
+CaretCheck CheckCaret(TfEditCookie cookie, ITfRange* caret, std::wstring_view written,
+                      size_t offset) {
+  auto verdict = CaretCheck::kMatches;
+  for (const bool before : {true, false}) {
+    if (before ? offset == 0 : offset >= written.size()) continue;
+    const size_t index = before ? offset - 1 : offset;
+    bool readable = false;
+    const auto character = ReadNeighbour(cookie, caret, before, readable);
+    if (!readable || !character) {
+      verdict = CaretCheck::kUnknown;
+      continue;
+    }
+    if (*character != written[index]) return CaretCheck::kMismatch;
+  }
+  return verdict;
+}
+
+// Places the caret `offset` code units into the text just written to `written`.
+// Providers disagree on where SetText leaves that range - covering the text, or
+// collapsed at either edge - and some refuse one shift direction outright, so
+// every arrangement is tried and confirmed against the document instead of
+// leaving the caret outside the pair that was inserted (DEV-1142).
+HRESULT PlaceCaretAfterWrite(ITfContext* context, TfEditCookie cookie, ITfRange* written_range,
+                             std::wstring_view written, size_t offset) {
+  const LONG forward = static_cast<LONG>(offset);
+  const LONG backward = static_cast<LONG>(written.size() - offset);
+  constexpr int kTrailingEdgeRoute = 1;
+  ComPtr<ITfRange> unconfirmed;
+  ComPtr<ITfRange> unconfirmed_trailing;
+  HRESULT failure = E_FAIL;
+  for (int route = 0; route < 3; ++route) {
+    HRESULT error = S_OK;
+    auto caret = CaretCandidate(cookie, written_range, route, forward, backward, error);
+    if (!caret) {
+      if (failure == E_FAIL) failure = error;
+      continue;
+    }
+    const auto check = CheckCaret(cookie, caret.Get(), written, offset);
+    if (check == CaretCheck::kMatches) return SetCaret(context, cookie, caret.Get());
+    if (check != CaretCheck::kUnknown) continue;
+    if (route == kTrailingEdgeRoute)
+      unconfirmed_trailing = std::move(caret);
+    else if (!unconfirmed)
+      unconfirmed = std::move(caret);
+  }
+  // No route matched the document. Move the caret only where nothing could be
+  // read at all; guessing over a definite mismatch would select or split text.
+  // A document that answers no read gets the trailing-edge route, which is
+  // where the caret went before the other two existed: an unverifiable guess
+  // must not land further from the pair than the previous behaviour did.
+  if (unconfirmed_trailing) return SetCaret(context, cookie, unconfirmed_trailing.Get());
+  if (unconfirmed) return SetCaret(context, cookie, unconfirmed.Get());
+  return failure;
 }
 }  // namespace
 
@@ -165,7 +297,7 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
         const HRESULT write = range->SetText(cookie, 0, &character, 1);
         if (FAILED(write)) return write;
         applied = true;
-        return PlaceCaret(context, cookie, range.Get(), false);
+        return PlaceCaretAfterWrite(context, cookie, range.Get(), {&character, 1}, 1);
       };
       ComPtr<ITfRange> reader;
       hr = range->Clone(&reader);
@@ -188,7 +320,7 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
       hr = range->SetText(cookie, 0, text.data(), static_cast<LONG>(text.size()));
       if (FAILED(hr)) return hr;
       applied = true;
-      return PlaceCaret(context, cookie, range.Get(), false);
+      return PlaceCaretAfterWrite(context, cookie, range.Get(), text, text.size());
     }
     LONG shifted = 0;
     if (action.type == ActionType::kSkipClosing) {
@@ -224,7 +356,8 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
         return FAILED(hr) ? hr : E_FAIL;
       }
     }
-    hr = range->SetText(cookie, 0, text, pair ? 2 : 1);
+    const std::wstring_view written(text, pair ? 2 : 1);
+    hr = range->SetText(cookie, 0, text, static_cast<LONG>(written.size()));
     if (FAILED(hr)) {
       if (composition) composition->EndComposition(cookie);
       return hr;
@@ -234,7 +367,8 @@ HRESULT BracketEditSession::Apply(TextService& service, ITfContext* context, TfC
       service.composition_ = composition.Detach();
       service.bracket_composition_ = true;
     }
-    return PlaceCaret(context, cookie, range.Get(), pair);
+    // Between the pair, which for a single literal is past the one character.
+    return PlaceCaretAfterWrite(context, cookie, range.Get(), written, 1);
   });
 }
 

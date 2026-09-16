@@ -22,6 +22,7 @@ class LocalSettingsTest : public ::testing::Test {
     path = root / L"config" / L"settings.json";
   }
   void TearDown() override {
+    azookey::tsf::TipLocalSettings::RefuseWatchArmsForTest(0);
     reader.Stop();
     std::error_code error;
     std::filesystem::remove_all(root, error);
@@ -211,6 +212,48 @@ TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {
     stream << R"({"bracketPairing":true})";
   }
   std::filesystem::rename(temporary, path);
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+}
+
+// DEV-1143: the observer is what makes an already-connected TIP re-handshake,
+// so it must fire for a settings edit and stay quiet for the reloads that carry
+// no new Host options.
+TEST_F(LocalSettingsTest, ReportsSettingsEditsButNotUnchangedReloads) {
+  std::atomic<unsigned> notifications{0};
+  reader.SetOnChanged([&] { ++notifications; });
+  Write(R"({"bracketPairing":false})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(notifications.load(), 0u);
+
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  EXPECT_GE(notifications.load(), 1u);
+
+  const auto before = notifications.load();
+  {
+    std::ofstream stream(root / L"bracket-pairs.tsv");
+    stream << "(\t}\n";
+  }
+  ASSERT_TRUE(reader.WaitForSnapshotForTest([](const auto& settings) {
+    const auto pair = azookey::core::LookupBracketPair(U'(', settings.Table());
+    return pair && pair->close == U'}';
+  }));
+  EXPECT_EQ(notifications.load(), before);
+}
+
+// DEV-1141: a watch that cannot rearm used to end the loop, so every later
+// save was ignored and the app policy stayed at whatever it held until the TIP
+// was deactivated and reactivated.
+TEST_F(LocalSettingsTest, KeepsObservingSavesAfterTheWatchFailsToRearm) {
+  Write(R"({"bracketPairing":false})");
+  ASSERT_TRUE(reader.Start(path));
+  // Refuses both the rearm inside Consume and the rebind that follows it.
+  azookey::tsf::TipLocalSettings::RefuseWatchArmsForTest(2);
+  Write(R"({"bracketPairing":true})");
+  ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  Write(R"({"bracketPairing":false})");
+  ASSERT_TRUE(reader.WaitForEnabledForTest(false));
+  Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.WaitForEnabledForTest(true));
 }
 

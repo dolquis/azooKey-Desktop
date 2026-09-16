@@ -63,7 +63,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_engine_tests` | `inference-host/tests/engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload、`LoadModel` の GGUF 実プローブ（最小ヘッダ受理・不正 GGUF reject・CPU backend ロード成功・path 空時の MVP fallback）、`--backend cuda` 指定時の CPU フォールバック |
 | `host_engine_tests` | `inference-host/tests/nll_scorer_test.cpp` | NLL 再スコアの prefix スナップショットと次トークン位置、log-softmax の数値安定性、Unicode スカラ単位の正規化、timeout/cancel 時の候補不変とサーキット開放、モデル未ロード時の既定維持 |
 | `host_engine_tests` | `inference-host/tests/rewriter_test.cpp` | リライターの遅延ロードと一度きりロード、データ欠落時の非リトライと不正行 skip、手動クエリのみのマージと通常候補数の保持、同梱データの round-trip と index 予算 |
-| `host_dispatcher_tests` | `inference-host/tests/dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ |
+| `host_dispatcher_tests` | `inference-host/tests/dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ、`UpdateConfig` を待たずに Handshake が更新後の settings.json から TIP 向け設定を返し、その読み取りが runtime 設定を置き換えないこと |
 | `host_dispatcher_tests` | `inference-host/tests/ai_backend_test.cpp` | AI 整文バックエンドの privacy 既定と secure/disabled 時の非送信、retry 上限と cancel 後の遅延成功の非公開、応答の UTF-8・NUL・サイズ検証 |
 | `host_dispatcher_tests` | `inference-host/tests/host_etw_test.cpp` | Host の要求・推論・学習フェーズの ETW 対応付けと結果 |
 | `host_scheduler_tests` | `inference-host/tests/scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
@@ -74,7 +74,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_http_downloader_tests` | `inference-host/tests/http_downloader_test.cpp` | SHA256 不一致時の `.part` 非昇格、Range 再開・Range 無視サーバでの再取得、上限超過応答の非昇格、非 loopback 平文 HTTP の接続前 reject |
 | `host_userdict_cli_tests` | `inference-host/tests/userdict_cli_test.cpp` | `userdict` CLI の add/list/remove ラウンドトリップ、dry-run、稼働中 Host 優先と直接編集の使い分け、import/export と非 ASCII パス保持 |
 | `host_lookup_cli_tests` | `inference-host/tests/lookup_cli_test.cpp` | `lookup` CLI の読み完全一致・読み前置一致・表記一致、ロック取得不可時の失敗、TSV/JSON の列、破損ユーザー辞書を隔離も変更もしないこと |
-| `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離と現行設定の維持 |
+| `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離と現行設定の維持、読み込み済みより新しいファイルだけを隔離せずに読む Handshake 用の先読み |
 | `host_cli_unicode_argv` | `azookey_inference_host` | 実プロセスの argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
 | `dictionary_tests` | `dictbuild/tests/dictionary_test.cpp` | 辞書 trie の探索方向と最短優先の上限、破損検出、参照失敗時の該当レイヤのみ無効化、静的辞書と可変辞書の独立、ユーザー変更の追跡 |
 | `dictbuild_python_tests` | `dictbuild/tests/test_dictbuild.py` | オフライン辞書ビルダ（Python）の単体テスト |
@@ -83,7 +83,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `diagnostics_cli_rejects_repair_with_json` | `azookey_diag` | `--repair` と `--json` の併用を非 0 終了で拒否 |
 | `tsf_tip_com_smoke_tests` | `tsf-tip/tests/com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)`、`ActivateEx` の sink advise / unadvise。登録 round-trip（`RegisterPublishesProfileAndUnregisterRemovesIt`、`FailedCategoryRegistrationRollsBackAndRetrySucceeds`）は opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、CI では走らない（roadmap「既知のテストギャップ」1） |
 | `tsf_tip_onkeydown_preedit_tests` | `tsf-tip/tests/onkeydown_preedit_test.cpp` | `OnKeyDown`/`OnTestKeyDown` で romaji→kana preedit 蓄積、Backspace（pending romaji / UTF-8 単位 kana 削除）、Escape クリア、Space で pending flush、preedit 無し時の制御キー非消費、`TsfTipBracketTest` によるカッコペアリング（ペア挿入・skip・空ペア削除・選択囲み・composition の確定と取消・per-app 有効範囲）の `OnKeyDown` 経由の結合検証 |
-| `tsf_tip_bracket_edit_session_tests` | `tsf-tip/tests/bracket_edit_session_test.cpp` | `BracketEditSession` を `OnKeyDown` を介さず直接呼ぶ単体契約。`RunSync` の 同期セッション契約（context 無し・実行されなかったセッション・遅延実行されたセッションの不発）、`ReadHint` の隣接 1 文字読取と読取失敗時に空ではなく unknown な hint を返すこと、immediate ペア挿入が単一 SetText と対の内側への collapsed なキャレット設定になること、書込ロックの要求、キャレット操作が失敗しても 挿入済みテキストを再適用しないこと（skip は逆に applied を立てないこと）、composition の開始・範囲取得が失敗したときの後始末 |
+| `tsf_tip_bracket_edit_session_tests` | `tsf-tip/tests/bracket_edit_session_test.cpp` | `BracketEditSession` を `OnKeyDown` を介さず直接呼ぶ単体契約。`RunSync` の 同期セッション契約（context 無し・実行されなかったセッション・遅延実行されたセッションの不発）、`ReadHint` の隣接 1 文字読取と読取失敗時に空ではなく unknown な hint を返すこと、immediate ペア挿入が単一 SetText と対の内側への collapsed なキャレット設定になること、書込ロックの要求、キャレット操作が失敗しても 挿入済みテキストを再適用しないこと（skip は逆に applied を立てないこと）、composition の開始・範囲取得が失敗したときの後始末、SetText 後の range が両端どちらで collapsed になっても、また片方向の shift を拒否されても対の内側へキャレットが入ること、どの経路も確認できないときはキャレットを動かさず、隣接文字を読めないときは末尾基準の位置に留めること |
 | `tsf_tip_display_attribute_tests` | `tsf-tip/tests/display_attribute_test.cpp` | `ITfDisplayAttributeProvider`（`GetDisplayAttributeInfo`/`EnumDisplayAttributeInfo`）と `InputDisplayAttributeInfo`（GUID/説明/下線属性、`Next`/`Reset`/`Skip`/`Clone`、null 引数 reject） |
 | `tsf_tip_activate_uiless_tests` | `tsf-tip/tests/activate_uiless_test.cpp` | `ActivateEx` が `ITfThreadMgrEx::GetActiveFlags`（`dwFlags` ではなく）から UI-less 状態を導出する（spec §2.10） |
 | `tsf_tip_staleness_tests` | `tsf-tip/tests/staleness_test.cpp` | 連続応答のうち最新のみ受理、より新しいリクエストが queue 済みの応答の破棄、commit で無効化された応答の破棄 |
@@ -91,7 +91,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_candidate_ui_coordinator_tests` | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | 候補 UI の app-drawn / TIP 描画切替、`BeginUIElement` 失敗の HRESULT 報告、UI-less 時の `ITfUIElementMgr` 要求と欠落時 fallback、選択移動の wrap |
 | `tsf_tip_candidate_window_dpi_tests` | `tsf-tip/tests/candidate_window_dpi_test.cpp` | 候補ウィンドウのレイアウト metrics の DPI スケール、DPI 0 の既定 fallback、絵文字判定が漢字・文字記号を巻き込まないこと、description 有無での列構成 |
 | `tsf_tip_query_interface_contract_tests` | `tsf-tip/tests/query_interface_contract_test.cpp` | `QueryInterface` の null out-param と未対応 IID の契約、`ITfFnConfigure`／`ITfFunction` 公開、`Show` からのプロファイル付き設定アプリ起動と失敗時 HRESULT |
-| `tsf_tip_local_settings_tests` | `tsf-tip/tests/local_settings_test.cpp` | Host 非依存で共有設定ファイルを読む TIP ローカル設定、ローマ字テーブル変更の監視と再読み込み、Unicode パス・再作成ディレクトリへの再バインド、不正・過大ファイルでの既定復帰 |
+| `tsf_tip_local_settings_tests` | `tsf-tip/tests/local_settings_test.cpp` | Host 非依存で共有設定ファイルを読む TIP ローカル設定、ローマ字テーブル変更の監視と再読み込み、Unicode パス・再作成ディレクトリへの再バインド、不正・過大ファイルでの既定復帰、監視の再 arm に失敗しても以後の保存を取りこぼさないこと、内容が変わった保存だけを観測者へ通知すること |
 | `azookey_settings_launch_arguments_tests` | `settings-app/tests/launch_arguments_test.cpp` | 設定アプリ起動引数の round-trip、値欠落・不正 LangId / プロファイルの reject、未指定と空指定の区別、重複・未知オプションの reject |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧 |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_ipc_client_test.cpp` | 設定アプリから Host への Handshake と `UpdateConfig` 送信 |

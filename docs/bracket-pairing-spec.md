@@ -455,7 +455,7 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
 
 | ClientAction | TSF 操作 |
 |---|---|
-| `insertBracketPair(O,C)`（immediate） | カーソル位置（選択 range）に `O`+`C` を 1 回 `SetText` → その range を `Collapse(TF_ANCHOR_START)` 後 `ShiftStart(+len(O))` 等で `O` と `C` の境界へ collapse → `SetSelection`（§5.2） |
+| `insertBracketPair(O,C)`（immediate） | カーソル位置（選択 range）に `O`+`C` を 1 回 `SetText` → §5.2 の経路で `O` と `C` の境界へ collapse し、隣接文字で確認してから `SetSelection` |
 | `insertBracketPair(O,C)`（composition） | composition を作り surface=`O`+`C`、内側境界へキャレット。確定操作で `EndComposition` し内側を維持 |
 | `skipOverClosing(C)` | カーソル range を `ShiftEnd(+1)`（1 code unit）→ `Collapse(TF_ANCHOR_END)` → `SetSelection`（挿入はしない。§5.3） |
 | `deleteBracketPair()` | カーソル range を左へ `ShiftStart(-1)`・右へ `ShiftEnd(+1)` し空文字 `SetText`（左右 2 code unit 削除。§5.3） |
@@ -465,7 +465,9 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
 既存 commit パスは `committed_range->SetText(ec, 0, surface, len)` のあと
 `committed_range->Collapse(ec, TF_ANCHOR_END)` → `context_->SetSelection(ec, 1, &sel)` で
 **末尾**にキャレットを置く（`tsf-tip/src/TextService.cpp` 参照）。本機能の immediate 挿入は
-この「末尾へ collapse」を「**`O` と `C` の境界へ collapse**」に変えるだけである。
+この「末尾へ collapse」を「**`O` と `C` の境界へ collapse**」に変えたものである。ただし
+`SetText` が返す range の形はアプリの text store 実装で異なるため、経路は 1 本では足りない
+（§5.2）。
 
 ### 5.2 カーソルを内側へ置く（immediate）
 
@@ -476,12 +478,38 @@ TIP の `ForegroundAppDetector` は、キー入力を受け取る自プロセス
    `O` と `C` の境界へ。
 3. `TF_SELECTION sel{ .range = range, ... }` を `context_->SetSelection(ec, 1, &sel)`。
 
-代替実装: SetText 後の range を `Collapse(TF_ANCHOR_END)`（`C` の後）→ `ShiftStart(ec,
--len(C), ...)` で **start のみ**を `O` と `C` の境界へ戻し、**最後に `Collapse(TF_ANCHOR_START)`
-で end を start に揃えて collapse する**。この最終 collapse を省くと range は start=境界・
-end=`C` の後で**非 collapsed のまま `C` を選択範囲に含み**、`SetSelection` がキャレットでなく
-`C` を選択してしまう（immediate では直後の入力が `C` を置換する）。最終 collapse まで行えば
-主経路（手順 1〜3）と同値。実装時にどちらかへ確定。
+末尾側から辿る経路も同値とする: SetText 後の range を `Collapse(TF_ANCHOR_END)`（`C` の後）→
+`ShiftStart(ec, -len(C), ...)` で **start のみ**を `O` と `C` の境界へ戻し、**最後に
+`Collapse(TF_ANCHOR_START)` で end を start に揃えて collapse する**。この最終 collapse を
+省くと range は start=境界・end=`C` の後で**非 collapsed のまま `C` を選択範囲に含み**、
+`SetSelection` がキャレットでなく `C` を選択してしまう（immediate では直後の入力が `C` を
+置換する）。
+
+いずれか一方だけを実装してはならない。SetText が返した range の形と、どちらの anchor を
+動かせるかはアプリの text store 実装で異なり、単一経路では書込みが成功したあとキャレットが
+`C` の外側へ取り残される。**同じ書込セッションで書いたテキストに対するキャレット配置**
+（immediate のペア挿入、単一リテラルの挿入、§4.9 の選択の囲み）は次の 3 経路を順に試し、
+**移した先の隣接文字が書き込んだ文字列と一致するかを同じ書込ロック内で読んで確認**し、
+最初に一致した位置だけを `SetSelection` へ渡す。目標位置は書込んだ文字列の先頭から数えた
+code unit 数で、ペア挿入と単一リテラルでは `len(O)`、囲みでは書込んだ全長（`C` の後ろ）と
+する:
+
+1. 手順 1〜2（start を前進）。range が書込んだテキストを覆う場合と、先頭境界で collapsed の
+   まま残る場合の双方を満たす。
+2. 上記の末尾側経路（end へ collapse して start を後退）。range が末尾境界で collapsed の
+   まま残る場合を満たす。
+3. `Collapse(TF_ANCHOR_START)` → `ShiftEnd(ec, +len(O), ...)` → `Collapse(TF_ANCHOR_END)`。
+   start anchor の移動を拒否する provider を満たす。
+
+隣接文字を読めない provider では、確認の取れない候補のうち経路 2 のものを優先して採用する。
+経路 2 は本節の代替経路（末尾基準）であり、確認できない推測が従来の位置より外側へ出ることを
+防ぐ。文字は読めたが一致しない候補は採らない。一致した候補も確認不能な候補も得られなかった
+とき（どの経路でも移動できなかった場合を含む）は `SetSelection` を呼ばず、§4.8 / §4.9 と同じく
+挿入済みテキストを再送せずにキャレット失敗として返す。返す HRESULT は最初に観測した失敗の
+ものとし、観測できなければ `E_FAIL` とする。
+
+composition トリガの確定（`EndComposition` 後の内側維持）は本節の対象外であり、末尾基準の
+単一経路を使う。
 
 ### 5.3 隣接文字の読取（スキップ・削除判定）
 
@@ -567,6 +595,11 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
   子ディレクトリの作成を検出して監視を付け替え、LocalAppData やドライブ全体を再帰監視しない。
   `Deactivate` は監視 I/O をキャンセルして終了を待ち、ハンドルを解放する。TIP は設定を作成・
   書換え・隔離せず、設定本文をログへ出さない。
+- 監視の登録（`CreateFileW` / `ReadDirectoryChangesW`）に失敗しても監視スレッドは終了せず、
+  一定間隔の再試行へ縮退する。間隔は再試行ごとに伸ばし、上限で頭打ちにする。再登録に成功した
+  時点で取りこぼしを埋めるために再読込し、登録の失敗と復帰は構造化ログへ記録する。監視が
+  `Deactivate` まで復帰しない場合も、最後に読めたスナップショットを保ち続ける。監視の停止を
+  理由に設定を既定値へ戻さない。
 - host 側 `SettingsStore` と**同一ファイルを正典**として共有するため設定の二重管理にはならない。
   TIP・host は同じ `settings.json` をそれぞれローカルに読む（書き込みは設定 UI / 既存経路）。
 - 設定 UI（M30）完成までは、この settings.json を手編集 / 環境変数で補う（host CLI 経由には

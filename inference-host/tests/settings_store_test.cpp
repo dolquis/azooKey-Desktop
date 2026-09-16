@@ -40,6 +40,40 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 
 }  // namespace
 
+TEST(SettingsStoreTest, SettingsWrittenAfterLoadReadsOnlyAheadOfTheLoadedFile) {
+  const auto dir = TestDir("azookey_settings_written_after_load");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"maxCandidates":9})");
+  azookey::host::SettingsStore store(path);
+  store.Load();
+  ASSERT_EQ(store.settings().max_candidates, 9);
+  // Nothing newer than the load: the Handshake reply answers from memory.
+  EXPECT_FALSE(store.SettingsWrittenAfterLoad().has_value());
+
+  const auto stamp = std::filesystem::last_write_time(path);
+  WriteText(path, R"({"maxCandidates":11})");
+  std::filesystem::last_write_time(path, stamp + std::chrono::seconds(1));
+  const auto written = store.SettingsWrittenAfterLoad();
+  ASSERT_TRUE(written.has_value());
+  EXPECT_EQ(written->max_candidates, 11);
+  // Reading ahead of UpdateConfig must not adopt the file as runtime settings:
+  // applying a reload stays that message's job, model reload and all.
+  EXPECT_EQ(store.settings().max_candidates, 9);
+
+  // An unparsable file is left alone rather than quarantined from this path,
+  // and the caller keeps the settings it already had.
+  WriteText(path, "{");
+  std::filesystem::last_write_time(path, stamp + std::chrono::seconds(2));
+  EXPECT_FALSE(store.SettingsWrittenAfterLoad().has_value());
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(dir / "settings.json.invalid"));
+
+  // A file that disappears mid-save is not a reason to fall back to defaults.
+  std::filesystem::remove(path);
+  EXPECT_FALSE(store.SettingsWrittenAfterLoad().has_value());
+  EXPECT_EQ(store.settings().max_candidates, 9);
+}
+
 TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisablesIt) {
   const auto dir = TestDir("azookey_settings_crash_consent");
   const auto path = dir / "settings.json";

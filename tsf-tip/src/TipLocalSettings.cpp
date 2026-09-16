@@ -39,6 +39,31 @@ std::string ReadBounded(const std::filesystem::path& path) {
   return contents;
 }
 
+// How long an unarmed watch waits before trying to bind again. A failed
+// CreateFileW/ReadDirectoryChangesW must degrade to polling, never end the
+// watch: a dead loop keeps serving the snapshot it happened to hold until the
+// TIP is deactivated and reactivated (DEV-1141). The interval backs off so a
+// directory that is gone for good does not cost every process a rebind per
+// second for the rest of the session.
+constexpr DWORD kRearmRetryMinMs = 1000;
+constexpr DWORD kRearmRetryMaxMs = 30000;
+
+logging::RuntimeLogger& WatchLogger() {
+  static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("tip"));
+  return logger;
+}
+
+#ifdef AZOOKEY_TSF_TESTING
+// Refuses the next N arms so a test can reproduce a watch that cannot rebind.
+std::atomic<unsigned> g_refused_arms{0};
+bool RefuseArmForTest() {
+  unsigned remaining = g_refused_arms.load();
+  while (remaining && !g_refused_arms.compare_exchange_weak(remaining, remaining - 1)) {
+  }
+  return remaining != 0;
+}
+#endif
+
 class DirectoryWatch final {
  public:
   ~DirectoryWatch() { Close(); }
@@ -101,6 +126,12 @@ class DirectoryWatch final {
  private:
   bool Arm() {
     ResetEvent(operation_.hEvent);
+#ifdef AZOOKEY_TSF_TESTING
+    if (RefuseArmForTest()) {
+      pending_ = false;
+      return false;
+    }
+#endif
     pending_ =
         ReadDirectoryChangesW(directory_, buffer_.data(), static_cast<DWORD>(buffer_.size()), FALSE,
                               FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
@@ -159,6 +190,7 @@ void TipLocalSettings::Stop() noexcept {
   stop_ = nullptr;
   ready_ = nullptr;
   watch_started_.store(false);
+  last_contents_.reset();  // The worker is joined, so the next Start loads afresh.
   const std::lock_guard<std::mutex> lock(mutex_);
   settings_ = {};
   rewriters_.reset();
@@ -184,8 +216,9 @@ void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;
+  std::string contents;
   try {
-    const auto contents = ReadBounded(path_);
+    contents = ReadBounded(path_);
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
       ai.privacy = core::ParseAiPrivacy(*json);
@@ -210,10 +243,9 @@ void TipLocalSettings::Reload() noexcept {
                       .lexically_normal();
     auto parsed = core::ParseBracketTable(ReadBounded(table_path_));
     if (!parsed.invalid_lines.empty()) {
-      static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("tip"));
-      logger.Log(logging::RuntimeLogLevel::Warn, "bracket_table_invalid_rows",
-                 {{"count", static_cast<uint64_t>(parsed.invalid_lines.size())},
-                  {"first_line", static_cast<uint64_t>(parsed.invalid_lines.front())}});
+      WatchLogger().Log(logging::RuntimeLogLevel::Warn, "bracket_table_invalid_rows",
+                        {{"count", static_cast<uint64_t>(parsed.invalid_lines.size())},
+                         {"first_line", static_cast<uint64_t>(parsed.invalid_lines.front())}});
     }
     next.table = std::make_shared<const core::BracketTable>(std::move(parsed.table));
   } catch (...) {
@@ -227,18 +259,29 @@ void TipLocalSettings::Reload() noexcept {
     ai_ = ai;
   }
   changed_.notify_all();
+  // Only a real edit to the settings file is worth an IPC round trip: the
+  // activation load and the reloads that rebind the bracket table watch see
+  // the same bytes, and the Host holds no state that depends on them.
+  const bool changed = last_contents_ && *last_contents_ != contents;
+  last_contents_ = std::move(contents);
+  if (!changed) return;
+  // Outside the lock: the observer only flags work for another thread, and a
+  // throwing callback must not take the watcher down with it.
+  try {
+    if (changed_callback_) changed_callback_();
+  } catch (...) {
+  }
 }
 
 void TipLocalSettings::Watch() noexcept {
   try {
     DirectoryWatch config, table;
-    if (!config.Open(path_)) {
-      SetEvent(ready_);
-      return;
-    }
+    // A failed first bind still enters the loop below, which retries on a
+    // bounded poll. Start() reports the initial result so activation can log a
+    // watch that did not come up immediately.
+    watch_started_.store(config.Open(path_));
     auto watched_table = table_path_;
     table.Open(watched_table);
-    watch_started_.store(true);
 #ifdef AZOOKEY_TSF_TESTING
     {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -249,20 +292,63 @@ void TipLocalSettings::Watch() noexcept {
     // races on the worker without blocking ActivateEx on three full reads.
     SetEvent(ready_);
     Reload();
+    constexpr DWORD kUnarmed = MAXDWORD;
+    bool unarmed_reported = false;
+    DWORD retry_ms = kRearmRetryMinMs;
     for (;;) {
-      if (watched_table != table_path_ || !table.Event()) {
+      if (watched_table != table_path_) {
         watched_table = table_path_;
         table.Open(watched_table);
         Reload();
+      } else if (!table.Event() && table.Open(watched_table)) {
+        Reload();
       }
-      const HANDLE handles[]{stop_, config.Event(), table.Event()};
-      if (!handles[1]) break;
-      const DWORD wait = WaitForMultipleObjects(handles[2] ? 3 : 2, handles, FALSE, INFINITE);
-      if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2) break;
+      // Rebinding the configuration watch here, rather than ending the loop,
+      // is what keeps a transient bind failure from freezing the snapshot for
+      // the rest of the activation. Read once the watch is armed again, and
+      // report each transition so a watch that stops seeing saves is visible
+      // in the log instead of only in the user's stale settings.
+      if (!config.Event()) {
+        if (config.Open(path_)) {
+          if (unarmed_reported) {
+            WatchLogger().Log(logging::RuntimeLogLevel::Info, "tip_settings_watch_rebound");
+            unarmed_reported = false;
+          }
+          Reload();
+        } else if (!unarmed_reported) {
+          WatchLogger().Log(logging::RuntimeLogLevel::Warn, "tip_settings_watch_unarmed");
+          unarmed_reported = true;
+        }
+      }
+      HANDLE handles[3]{stop_};
+      DWORD count = 1;
+      const DWORD config_index = config.Event() ? count : kUnarmed;
+      if (config.Event()) handles[count++] = config.Event();
+      const DWORD table_index = table.Event() ? count : kUnarmed;
+      if (table.Event()) handles[count++] = table.Event();
+      // Only a fully armed pair may sleep indefinitely; anything else polls so
+      // the failed watch is retried instead of being waited on forever.
+      if (count == 3) retry_ms = kRearmRetryMinMs;
+      const DWORD timeout = count == 3 ? INFINITE : retry_ms;
+      const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, timeout);
+      if (wait == WAIT_TIMEOUT) {
+        retry_ms = (std::min)(retry_ms * 2, kRearmRetryMaxMs);
+        continue;
+      }
+      const bool config_signalled =
+          config_index != kUnarmed && wait == WAIT_OBJECT_0 + config_index;
+      const bool table_signalled = table_index != kUnarmed && wait == WAIT_OBJECT_0 + table_index;
+      if (!config_signalled && !table_signalled) {
+        // stop_, or a wait this thread cannot recover from. Report the latter:
+        // leaving the loop means no further save is seen this activation.
+        if (wait != WAIT_OBJECT_0)
+          WatchLogger().Log(logging::RuntimeLogLevel::Warn, "tip_settings_watch_wait_failed");
+        break;
+      }
 #ifdef AZOOKEY_TSF_TESTING
       ++watch_notifications_;
 #endif
-      if (!(wait == WAIT_OBJECT_0 + 1 ? config.Consume() : table.Consume())) continue;
+      if (!(config_signalled ? config.Consume() : table.Consume())) continue;
       // Rebind after a missing parent was created or a watched directory was
       // deleted/recreated. Read after arming to close the replacement race.
       config.Open(path_);
@@ -275,6 +361,8 @@ void TipLocalSettings::Watch() noexcept {
 }
 
 #ifdef AZOOKEY_TSF_TESTING
+void TipLocalSettings::RefuseWatchArmsForTest(unsigned count) { g_refused_arms.store(count); }
+
 void TipLocalSettings::SetForTest(const core::BracketSettings& settings) {
   const std::lock_guard<std::mutex> lock(mutex_);
   settings_ = settings;

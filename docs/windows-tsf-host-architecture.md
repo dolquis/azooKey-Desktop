@@ -99,7 +99,8 @@ Linear が持つ。
   host_generation_id?, capabilities[])`。欠落するcapabilitiesは空配列として受理し、
   `oob_cancel`と`commit_segments`の広告をもとに長文の制御と学習通知を選ぶ。
   `host_generation_id` は Host 起動ごとに生成し、同一プロセスの
-  全接続で共有する UUID。省略する旧 Host は空文字として受理する。
+  全接続で共有する UUID。省略する旧 Host は空文字として受理する。応答は TIP 向け runtime
+  設定（下記「設定（SettingsStore）」）も載せる。
   `client_id` は primary / control 接続間で Cancel 名前空間を共有するための TIP インスタンス ID、
   `handshake_token` は per-connection 認証ゲートに使う（後述）。
 - ✅ `Ping` / `Health`
@@ -242,6 +243,22 @@ Linear が持つ。
   未指定キーを schema default にフォールバックして提供する。
 - `settings.json` はファイル正典とし、設定アプリからの IPC `UpdateConfig` は payload 空の
   再読込トリガとして扱う。設定オブジェクトは IPC schema へ二重定義しない。
+- `HandshakeResponse` が載せる TIP 向け設定（batch 変換モード、句読点方針、rewriter、
+  `maxCandidates`）は、応答を作る直前に `settings.json` の更新時刻を見て、読み込み済みの
+  設定より新しければファイルから直接読んで応答に載せる。設定アプリは保存してから
+  `UpdateConfig` を送るため、保存を検知した TIP の再 Handshake が `UpdateConfig` を
+  追い越しうる。この読み取りは runtime 設定を置き換えず、`UpdateConfig` の再読込・
+  `EngineConfig` の適用・モデル再ロード・crash consent の適用は従来どおり `UpdateConfig`
+  の責務に残す。
+- 応答のためのこの読み取りは、`UpdateConfig` を直列化する mutex を取らない。`UpdateConfig`
+  はモデル再ロードの間その mutex を保持するため、Handshake が同じ mutex を待つと TIP の
+  handshake timeout を超えて全接続が切断・再接続を繰り返す。同じ理由で、この経路は不正な
+  JSON を隔離せず、ファイルロックを長く待たず、読めない・壊れている・存在しないときは
+  読み込み済みの設定をそのまま使う。更新時刻が同一 tick 内に収まる連続保存は 1 回として
+  扱われ、後続の `UpdateConfig` が最終状態を適用する。
+- TIP 側は、接続が健全なまま `settings.json` が変わった場合に同じ接続で Handshake を
+  し直して上記の設定を取り直す。再接続を待たないため、既に開いている文書が旧設定のまま
+  取り残されない。
 - 推論チューニング値は `inferenceThreads`、`maxCandidates`、`maxContextLength` を使う。
   `inferenceThreads` は 0 から 8 で、0 の場合は `powerProfile` に従う。
   `auto` は Windows の電源状態から AC 時 8、バッテリ時 2、取得失敗・不明時 4 を基準とする。

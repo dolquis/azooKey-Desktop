@@ -303,6 +303,10 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
+  // Set by the local settings watcher when settings.json changed, so a healthy
+  // connection re-runs the handshake instead of serving the batch mode and
+  // punctuation policy it captured at activation (DEV-1143).
+  std::atomic<bool> ipc_refresh_options_{false};
   std::atomic<bool> ipc_host_commit_segments_{false};
   core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
   std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_
@@ -347,7 +351,8 @@ class TextService final : public ITfTextInputProcessorEx,
                     const std::string& mode);
   bool PerformHandshake();
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
-                        const std::string& trace_id, bool update_host_options);
+                        const std::string& trace_id, bool update_host_options,
+                        uint64_t request_id = 1);
   bool SendCancelOutOfBand(uint64_t target_request_id);
   bool SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
                            uint32_t handshake_timeout_ms);
@@ -355,6 +360,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                 ipc::MessageType expected_type);
   bool ObserveHostGeneration(const std::string& host_generation_id);
+  void RequestHostOptionRefresh();
   void RearmPendingQuery(uint64_t req_id);
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();

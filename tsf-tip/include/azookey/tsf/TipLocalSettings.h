@@ -34,6 +34,10 @@ struct TipAiSettings {
 class TipLocalSettings final {
  public:
   ~TipLocalSettings();
+  // Runs on the watcher thread after every reload. Set it before Start and
+  // keep it free of TSF/COM work; it exists so an already-connected TIP can
+  // refresh the options it only receives in the Host handshake (DEV-1143).
+  void SetOnChanged(std::function<void()> callback) { changed_callback_ = std::move(callback); }
   bool Start(const std::filesystem::path& settings_path) noexcept;
   void Stop() noexcept;
   core::BracketSettings Snapshot() const;
@@ -50,6 +54,9 @@ class TipLocalSettings final {
     return watch_directories_;
   }
   unsigned WatchNotificationsForTest() const { return watch_notifications_.load(); }
+  // Makes the next `count` directory-watch arms fail, standing in for the
+  // transient CreateFileW/ReadDirectoryChangesW failures a TIP cannot provoke.
+  static void RefuseWatchArmsForTest(unsigned count);
 #endif
 
  private:
@@ -57,6 +64,12 @@ class TipLocalSettings final {
   void Watch() noexcept;
   mutable std::mutex mutex_;
   std::condition_variable changed_;
+  std::function<void()> changed_callback_;
+  // Last bytes read from the settings file; empty until the first load, so the
+  // activation load itself is not reported as a change. Touched only by
+  // Reload, which runs on the activating thread until the worker starts and on
+  // the worker afterwards, never both at once.
+  std::optional<std::string> last_contents_;
   core::BracketSettings settings_;
   std::optional<TipRewriterSettings> rewriters_;
   TipAiSettings ai_;

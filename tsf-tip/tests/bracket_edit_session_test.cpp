@@ -37,7 +37,13 @@ struct RangeFaults {
   // must treat the short shift as an error instead of leaving the caret
   // outside the pair it just inserted.
   bool shift_start_reports_zero{false};
+  bool shift_end_reports_zero{false};
   bool get_text_reports_zero{false};
+  // Where a provider leaves the written range once SetText returns. Only
+  // kCoversText keeps covering it; the others collapse it against one edge,
+  // which is what breaks a caret move anchored on the opposite one.
+  enum class WrittenRange { kCoversText, kCollapsesAtStart, kCollapsesAtEnd };
+  WrittenRange written_range{WrittenRange::kCoversText};
 };
 
 // Offsets are UTF-16 code units, matching the ACP offsets msctf hands a TIP.
@@ -98,8 +104,18 @@ class FakeRange final : public ITfRange {
     document_.set_text_calls.push_back(replacement);
     document_.text.replace(static_cast<size_t>(start_), static_cast<size_t>(end_ - start_),
                            replacement);
-    // A real range keeps covering the text it just wrote. PlaceCaret relies on it.
-    end_ = start_ + static_cast<LONG>(replacement.size());
+    switch (document_.faults.written_range) {
+      case RangeFaults::WrittenRange::kCoversText:
+        end_ = start_ + static_cast<LONG>(replacement.size());
+        break;
+      case RangeFaults::WrittenRange::kCollapsesAtStart:
+        end_ = start_;
+        break;
+      case RangeFaults::WrittenRange::kCollapsesAtEnd:
+        start_ += static_cast<LONG>(replacement.size());
+        end_ = start_;
+        break;
+    }
     return S_OK;
   }
 
@@ -129,6 +145,7 @@ class FakeRange final : public ITfRange {
   STDMETHODIMP ShiftEnd(TfEditCookie, LONG shift, LONG* shifted, const TF_HALTCOND*) override {
     if (shifted) *shifted = 0;
     if (FAILED(document_.faults.shift_end)) return document_.faults.shift_end;
+    if (document_.faults.shift_end_reports_zero) return S_OK;
     const LONG target = Clamp(end_ + shift);
     if (shifted) *shifted = target - end_;
     end_ = target;
@@ -678,8 +695,9 @@ TEST(BracketEditSessionRunSync, RetainedSessionCannotRunAfterTheRequestReturns) 
 }
 
 // --- Apply: immediate insertion and caret failure after the write landed ---
-// These fix the TSF operation sequence and the post-write failure contract.
-// They do not reproduce DEV-1142, whose cause is still undetermined.
+// These fix the TSF operation sequence and the post-write failure contract,
+// including the provider variations behind DEV-1142: a written range that does
+// not keep covering its text, and a shift the provider silently refuses.
 
 TEST(BracketEditSessionApply, ImmediateInsertPairPutsTheCaretBetweenOpenAndClose) {
   FakeDocument document = MakeDocument(L"", 0);
@@ -708,9 +726,87 @@ TEST(BracketEditSessionApply, ImmediateInsertPairPutsTheCaretBetweenOpenAndClose
   EXPECT_EQ(context.last_flags & TF_ES_READWRITE, static_cast<DWORD>(TF_ES_READWRITE));
 }
 
+// DEV-1142: VS Code and Edge left the caret past the closing bracket. Both
+// shapes below produced that, because the one caret route the TIP ran needed
+// an anchor the provider had either moved or refused to move.
+TEST(BracketEditSessionApply, ImmediateInsertPairReachesTheBoundaryFromEitherEdge) {
+  for (const auto shape :
+       {RangeFaults::WrittenRange::kCollapsesAtStart, RangeFaults::WrittenRange::kCollapsesAtEnd}) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    FakeDocument document = MakeDocument(L"", 0);
+    document.faults.written_range = shape;
+    FakeContext context(document);
+    azookey::tsf::TextService service;
+    bool applied = false;
+
+    const HRESULT hr =
+        BracketEditSession::Apply(service, &context, kClientId,
+                                  MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                  ImmediateSettings(), applied);
+
+    EXPECT_EQ(hr, S_OK);
+    EXPECT_TRUE(applied);
+    EXPECT_EQ(document.text, L"「」");
+    EXPECT_EQ(document.set_text_calls.size(), 1u);
+    EXPECT_EQ(document.set_selection_count, 1);
+    EXPECT_TRUE(document.last_selection_collapsed);
+    EXPECT_EQ(document.selection_start, 1);
+  }
+}
+
+// A provider that reports a refused start shift as success still has a working
+// end anchor, so the caret reaches the boundary through it.
 TEST(BracketEditSessionApply, InsertedPairSurvivesAShortCaretShift) {
   FakeDocument document = MakeDocument(L"", 0);
   document.faults.shift_start_reports_zero = true;
+  FakeContext context(document);
+  azookey::tsf::TextService service;
+  bool applied = false;
+
+  const HRESULT hr =
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied);
+
+  EXPECT_EQ(hr, S_OK);
+  EXPECT_TRUE(applied);
+  EXPECT_EQ(document.text, L"「」");
+  EXPECT_EQ(document.set_text_calls.size(), 1u);
+  // A refused shift must not leave the caret selecting the closing bracket.
+  EXPECT_TRUE(document.last_selection_collapsed);
+  EXPECT_EQ(document.selection_start, 1);
+}
+
+// A document that answers no read cannot confirm any route, and an unreadable
+// neighbour also costs the pair (the hint read degrades it to a literal). The
+// caret must still land where the single pre-DEV-1142 route put it, never
+// further out: shifting forward from a range the provider left at the trailing
+// edge walks past text that was already in the document.
+TEST(BracketEditSessionApply, UnreadableDocumentKeepsTheCaretAtTheTrailingEdgeRoute) {
+  FakeDocument document = MakeDocument(L"あい", 0);
+  document.faults.written_range = RangeFaults::WrittenRange::kCollapsesAtEnd;
+  document.faults.get_text_reports_zero = true;
+  FakeContext context(document);
+  azookey::tsf::TextService service;
+  bool applied = false;
+
+  const HRESULT hr =
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied);
+
+  EXPECT_EQ(hr, S_OK);
+  EXPECT_TRUE(applied);
+  EXPECT_EQ(document.text, L"「あい");
+  EXPECT_TRUE(document.last_selection_collapsed);
+  // Right after the character that was written, not past the existing text.
+  EXPECT_EQ(document.selection_start, 1);
+}
+
+TEST(BracketEditSessionApply, InsertedPairKeepsTheCaretUntouchedWhenNoShiftMoves) {
+  FakeDocument document = MakeDocument(L"", 0);
+  document.faults.shift_start_reports_zero = true;
+  document.faults.shift_end_reports_zero = true;
   FakeContext context(document);
   azookey::tsf::TextService service;
   bool applied = false;
@@ -726,8 +822,8 @@ TEST(BracketEditSessionApply, InsertedPairSurvivesAShortCaretShift) {
   EXPECT_TRUE(applied);
   EXPECT_EQ(document.text, L"「」");
   EXPECT_EQ(document.set_text_calls.size(), 1u);
-  // A refused shift must not leave the caret selecting the closing bracket.
-  EXPECT_TRUE(document.set_selection_count == 0 || document.last_selection_collapsed);
+  // Nothing may be selected on the strength of a position no route confirmed.
+  EXPECT_EQ(document.set_selection_count, 0);
 }
 
 TEST(BracketEditSessionApply, InsertedPairSurvivesASetSelectionFailure) {

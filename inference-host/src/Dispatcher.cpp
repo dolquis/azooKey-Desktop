@@ -327,7 +327,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   authenticated_ = res.accepted;
   res.model_loaded = engine_->model_loaded();
   if (settings_store_) {
-    const auto& settings = settings_store_->settings();
+    // The settings app writes settings.json before it sends UpdateConfig, so a
+    // TIP that re-handshakes on the file change can arrive first and would
+    // otherwise be answered with the values it already has (DEV-1143). Read
+    // the newer file directly rather than reloading the store: taking
+    // update_config_mutex here would park this reply behind the model reload
+    // UpdateConfig performs under it, past the TIP's handshake timeout.
+    const auto written = settings_store_->SettingsWrittenAfterLoad();
+    const auto& settings = written ? *written : settings_store_->settings();
     res.batch_romaji_conversion = settings.batch_romaji_conversion;
     res.batch_romaji_preview_style = settings.batch_romaji_preview_style;
     res.batch_conversion_mode = settings.batch_conversion_mode;

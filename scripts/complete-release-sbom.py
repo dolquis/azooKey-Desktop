@@ -1,8 +1,9 @@
 """Enrich the MSI's Syft SPDX 2.3 document with declared build inputs.
 
 Attribution comes from THIRD_PARTY_LICENSES; versions are never copied here.
-Only the canonical release build (FetchContent, locked NuGet, app-local CRT)
-is supported. Missing or inconsistent evidence fails before writing output.
+Only the canonical release build (FetchContent, locked NuGet, app-local MSVC
+runtime) is supported. Missing or inconsistent evidence fails before writing
+output.
 """
 
 import argparse

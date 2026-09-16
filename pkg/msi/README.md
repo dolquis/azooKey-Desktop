@@ -47,8 +47,9 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 配置します。`vcomp140.dll` は llama.cpp を組み込んだ Inference Host が ggml の
 OpenMP 経路で暗黙インポートするため、欠けるとクリーン環境で Host が
 `0xC0000135` で即時終了します。同梱漏れは
-`scripts/check-app-local-runtime.ps1` が PE の import と突き合わせて検出します。
-release workflow は MSI をビルドする前にこれを実行します。
+`scripts/check-app-local-runtime.ps1` が、配布する PE の import と
+`Package.wxs` の同梱一覧を突き合わせて検出します。release workflow は MSI を
+ビルドする前にこれを実行します。
 本体の `LICENSE` と、同梱依存を記録した `THIRD_PARTY_LICENSES` も
 テキストファイルとして配置します。
 

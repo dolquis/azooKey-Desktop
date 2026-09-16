@@ -263,24 +263,25 @@ function Get-VmVerifyScriptDependency {
     .DESCRIPTION
       payload の一覧は手書きのため、dot-source される補助スクリプトを足し忘れても
       ZIP 生成は成功し、VM 上で初めて失敗する（DEV-1140）。
-      認識できない dot-source の書き方は、黙って見逃さずに例外にする。
+      `. (Join-Path $PSScriptRoot "x.ps1")` は行頭でも入れ子の block 内でも拾う。
+      行頭の dot-source でこの形に解決できないものは、黙って見逃さず例外にする。
   #>
   param(
     [Parameter(Mandatory = $true)]
     [string]$Path
   )
 
+  $resolvable = '\.\s+\(Join-Path\s+\$PSScriptRoot\s+"([^"\\/]+\.ps1)"\)'
   $names = @()
   foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
-    if ($line -notmatch '^\s*\.\s') {
-      continue
+    $matched = [regex]::Matches($line, $resolvable)
+    foreach ($match in $matched) {
+      $names += $match.Groups[1].Value
     }
-    if ($line -match '^\s*\.\s+\(Join-Path\s+\$PSScriptRoot\s+"([^"\\/]+\.ps1)"\)\s*$') {
-      $names += $Matches[1]
-      continue
+    if ($matched.Count -eq 0 -and $line -match '^\s*\.\s') {
+      throw ("Unsupported dot-source form in '$Path'; the VM verification payload " +
+        "dependency check cannot resolve it: $($line.Trim())")
     }
-    throw ("Unsupported dot-source form in '$Path'; the VM verification payload " +
-      "dependency check cannot resolve it: $($line.Trim())")
   }
   return $names
 }

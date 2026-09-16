@@ -1617,13 +1617,24 @@ property で取得元を渡す。いずれも TIP と Host と同じ `%ProgramFi
 起動可能にする。同梱漏れは、配布先で
 `STATUS_DLL_NOT_FOUND`（`0xC0000135`）による即時終了として表面化する。
 
-同梱一覧は手書きなので、ビルド構成の変更が増やしたランタイム依存は静かに漏れうる。
-`scripts/check-app-local-runtime.ps1` は配布する PE の import を `dumpbin /dependents`
-で読み、MSVC ランタイムの命名規則（`msvcp` / `msvcr` / `vcruntime` / `vcomp` /
-`concrt`）に一致する名前が同梱元ディレクトリに実在するかを検査する。release
-workflow は MSI をビルドする前にこれを実行する。OS が常に提供する DLL は対象にせず、
-allowlist を持たない。設定アプリは Hybrid CRT で静的リンクするため、この検査では
-MSVC ランタイムの import を持たない側として通る。
+同梱一覧は `Package.wxs` の手書き `<File>` なので、ビルド構成の変更が増やした
+ランタイム依存は静かに漏れうる。`scripts/check-app-local-runtime.ps1` は配布する PE の
+import を `dumpbin /dependents`（delay load を含む）で読み、MSVC ランタイムの命名規則
+（`msvcp` / `msvcr` / `vcruntime` / `vcomp` / `concrt` / `vccorlib` で始まり、
+`msvcp140_atomic_wait` のような非数値の接尾辞も含む）に一致する名前が、MSI の同梱一覧に
+あるかを検査する。release workflow は MSI をビルドする前にこれを実行する。
+
+照合先は取得元の redist ディレクトリではなく MSI の同梱一覧とする。redist
+ディレクトリは `msvcp140_1.dll` や `concrt140.dll` のように MSI が同梱しないファイルも
+持つため、そちらと突き合わせると「取得元にはあるが MSI に入らない」依存を見逃す。
+同梱一覧は `Package.wxs` が個別に列挙する `<File>` と、`<Files Include="...\**">` で
+ツリーごと harvest する設定アプリ payload の実ファイルから組み立てる。OS が常に提供する
+DLL は対象にせず、allowlist を持たない。設定アプリは Hybrid CRT で静的リンクするため、
+この検査では MSVC ランタイムの import を持たない側として通る。
+
+`Package.wxs`、release workflow のランタイム解決、SBOM の `RUNTIME_FILES` は同じ
+ファイル集合を別々に手書きするため、`scripts/tests/msi-package-consistency.Tests.ps1`
+が三者の一致を検査する。片方だけ増やすと SBOM が出荷物を過少報告する。
 GGUF モデルは初回取得、CUDA runtime は optional add-on とし、base MSI へ含めない。
 設定アプリは `SettingsPayloadDir` を必須入力として self-contained 出力一式を同梱する。
 `SettingsExePath` は実行ファイルの取得元パスであり、既定値は

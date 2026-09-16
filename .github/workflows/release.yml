@@ -139,13 +139,10 @@ jobs:
           ConvertTo-Json -InputObject @($runtimeInfo) | Set-Content -Encoding utf8 runtime-info.json
           "dir=$($crtDir.FullName)" >> $env:GITHUB_OUTPUT
           "openmp-dir=$($openMpDir.FullName)" >> $env:GITHUB_OUTPUT
-      # 同梱一覧は手書きなので、ビルド構成が増やしたランタイム依存が静かに漏れる。
-      # MSI をビルドする前に、配布する PE の import と同梱元を突き合わせる。
-      - name: Verify app-local runtime covers every shipped import
+      # Package.wxs の同梱一覧は手書きなので、ビルド構成が増やしたランタイム依存が
+      # 静かに漏れる。MSI をビルドする前に、配布する PE の import と突き合わせる。
+      - name: Verify the MSI ships every imported MSVC runtime
         shell: pwsh
-        env:
-          VC_RUNTIME_DIR: ${{ steps.vc-runtime.outputs.dir }}
-          VC_OPENMP_DIR: ${{ steps.vc-runtime.outputs.openmp-dir }}
         run: |
           $settingsPayload = "${{ github.workspace }}\build\windows-release\settings-app\Release"
           ./scripts/check-app-local-runtime.ps1 `
@@ -153,7 +150,8 @@ jobs:
               "${{ github.workspace }}\build\windows-release\tsf-tip\azookey_tsf_tip.dll", `
               "${{ github.workspace }}\build\windows-release\inference-host\azookey_inference_host.exe", `
               "$settingsPayload\azookey_settings.exe" `
-            -RuntimeDirectory "$env:VC_RUNTIME_DIR", "$env:VC_OPENMP_DIR", "$settingsPayload"
+            -PackagePath "${{ github.workspace }}\pkg\msi\Package.wxs" `
+            -PayloadDirectory "$settingsPayload"
       - name: Build unsigned MSI
         run: >-
           dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:VCOpenMPDir=${{ steps.vc-runtime.outputs.openmp-dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe"

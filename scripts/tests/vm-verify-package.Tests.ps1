@@ -101,7 +101,8 @@ Describe "VM verification package automation" {
           "azookey_inference_host.exe",
           "register-dev.ps1",
           "host-supervisor.ps1",
-          "host-startup-log.ps1")) {
+          "host-startup-log.ps1",
+          "AppContainerAcl.ps1")) {
         $fileName | Set-Content -LiteralPath (Join-Path $Root $fileName)
       }
       [ordered]@{
@@ -215,6 +216,24 @@ Describe "VM verification package automation" {
         "# host-supervisor.ps1",
         '. (Join-Path $PSScriptRoot "host-startup-log.ps1")',
         '. (Join-Path $PSScriptRoot "not-packaged.ps1")'
+      ) | Set-Content -LiteralPath (
+        Join-Path $script:testRepository "scripts\host-supervisor.ps1")
+
+      {
+        Export-VmVerifyPackage `
+          -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" `
+          -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*dot-sources 'not-packaged.ps1'*"
+    }
+
+    It "resolves a dot-source nested inside a block, not only at the line start" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      @(
+        "# host-supervisor.ps1",
+        'if ($true) { . (Join-Path $PSScriptRoot "not-packaged.ps1") }'
       ) | Set-Content -LiteralPath (
         Join-Path $script:testRepository "scripts\host-supervisor.ps1")
 
@@ -511,16 +530,20 @@ Describe "VM verification package automation" {
       }
     }
 
-    It "stops before touching a serving host when the supervisor dependency is absent" {
-      # host-supervisor.ps1 は host-startup-log.ps1 を dot-source する。欠けたまま
-      # 既存 Host を止めると、入力できない VM が残る（DEV-1140）。
+    It "stops before touching a serving host when a dot-source dependency is absent: <Missing>" -ForEach @(
+      @{ Missing = "host-startup-log.ps1" }
+      @{ Missing = "AppContainerAcl.ps1" }
+    ) {
+      # host-supervisor.ps1 は host-startup-log.ps1 を、register-dev.ps1 は
+      # AppContainerAcl.ps1 を dot-source する。どちらも既存 Host を止めたあとに
+      # 走るので、欠けたまま進むと入力できない VM が残る（DEV-1140）。
       $script:bootstrapState.Registered = $true
       $script:bootstrapState.Pipe = $true
-      Remove-Item -LiteralPath (Join-Path $script:testPackageRoot "host-startup-log.ps1")
+      Remove-Item -LiteralPath (Join-Path $script:testPackageRoot $Missing)
 
       {
         Invoke-VmVerifyBootstrap -PackageRoot $script:testPackageRoot -HasCheckpoint
-      } | Should -Throw "*host-startup-log.ps1*"
+      } | Should -Throw "*$Missing*"
       Should -Invoke Invoke-VmVerifyHostSupervisorShutdown -Times 0 -Exactly
       Should -Invoke Invoke-VmVerifyHostProcessTermination -Times 0 -Exactly
     }

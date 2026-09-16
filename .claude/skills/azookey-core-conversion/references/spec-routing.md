@@ -14,7 +14,7 @@
 | 括弧ペアリングの判定 | `docs/bracket-pairing-spec.md` §3、§4、§6 | `core/src/BracketPairing.cpp`、`core/src/BracketTable.cpp`、`core/src/BracketSettings.cpp` | `core_tests`（`core/tests/bracket_pairing_test.cpp`）。TSF への翻訳は `tsf-tip-development` |
 | 動的句読点 | `docs/dynamic-punctuation-spec.md` | 対応する spec の「InputState への統合」節が指す実装 | 関連する `core_tests` と TIP テスト |
 | アプリ別プロファイル解決 | `docs/app-profile-spec.md` §5、§9 | `core/src/AppProfileResolver.cpp`。前面アプリ判定は `tsf-tip/src/ForegroundAppDetector.cpp` | `core_tests`（`core/tests/app_profile_resolver_test.cpp`） |
-| UTF-8 / コマンドライン / パス | `docs/windows-tsf-host-architecture.md` の CLI エンコーディング境界 | `core/src/Utf8.cpp`、`core/src/CommandLine.cpp`、`core/src/PlatformPaths.cpp` | `core_tests`（`utf8`、`command_line`）、`host_args_tests` |
+| UTF-8 / コマンドライン / パス | `docs/windows-tsf-host-architecture.md`（CLI 引数と UTF-8 の境界を定義する節） | `core/src/Utf8.cpp`、`core/src/CommandLine.cpp`、`core/src/PlatformPaths.cpp` | `core_tests`（`utf8`、`command_line`）、`host_args_tests` |
 | AI 変換のプライバシー判定 | `docs/privacy-and-secure-input-spec.md` | `core/include/azookey/core/AiPrivacy.h`、`tsf-tip/src/AiInputGuard.cpp` | `host_engine_tests`、TIP テスト |
 
 ログ、redaction、crash 収集も `core/` にあるが、`azookey-observability-diagnostics` が扱う。

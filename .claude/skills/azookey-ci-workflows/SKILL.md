@@ -34,8 +34,8 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
 - `main` の ruleset は「PR を経由すること」を担保する設定であり、required approvals は 0 である。
   設定変更は人間が GitHub 上で行う Human Gate として扱う。
 - workflow のログ、artifact、PR コメントに secret、証明書、ユーザーパス、モデルの絶対パスを出さない。
-- 実モデルを使うジョブ（`windows-llama-build`、`benchmarks`）は pin したモデルとハッシュ検証を前提にする。
-  pin なしの実モデル取得を required check に入れない。
+- 実モデルを使うジョブ（`windows.yml` の `windows-llama-build`）は pin したモデルと SHA256 検証を前提にする。
+  pin なしの実モデル取得を required check に入れない。`benchmarks.yml` の `benchmark` ジョブは Linux でモデル無しの bench を回すもので、実モデル検証ではない。
 - `scripts/docs-lint.py`、`scripts/check_agent_instruction_size.py`、
   `.claude/hooks/post-edit-docs-lint.py` は `dolquis/agent-ops` のベンダリングコピーで、
   この repo では編集しない。呼び出し方だけを workflow 側で変える。

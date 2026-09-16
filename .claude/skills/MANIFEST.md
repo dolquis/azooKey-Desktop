@@ -23,10 +23,10 @@
 | `pre-pr-self-review` | shared | `dolquis/agent-ops` | 未記録（repo 側 `aa8378a`、`f8e5731` で同期） | あり |
 | `doc-coauthoring` | third-party | `anthropics/skills` | 未記録（repo 側 `aa8378a`。`NOTICE.md` 参照） | なし（`.docs-lint.toml` の `mirror.claude_only`） |
 | `azookey-doc-governance` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
-| `azookey-inference-model-workflow` | repo | この repo | `cba3bf8` | あり（`agents/openai.yaml`） |
-| `azookey-learning-data-safety` | repo | この repo | `cba3bf8` | あり（`agents/openai.yaml`） |
-| `azookey-packaging-release-workflow` | repo | この repo | `cba3bf8` | あり（`agents/openai.yaml`） |
-| `azookey-settings-schema-evolution` | repo | この repo | `cba3bf8` | あり（`agents/openai.yaml`） |
+| `azookey-inference-model-workflow` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
+| `azookey-learning-data-safety` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
+| `azookey-packaging-release-workflow` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
+| `azookey-settings-schema-evolution` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
 | `tsf-ipc-protocol` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
 | `tsf-tip-development` | repo | この repo | `6c286e9` で agent-ops から初回配布 | あり（`agents/openai.yaml`） |
 | `azookey-core-conversion` | repo | この repo | 本 repo で作成 | あり（`agents/openai.yaml`） |

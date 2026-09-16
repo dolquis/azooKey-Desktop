@@ -5,7 +5,7 @@ description: azooKey Desktop の settings-app/ 配下の WinUI 3 / C++/WinRT 設
 
 # azooKey 設定アプリ UI
 
-設定アプリは `settings.json` の唯一の writer であり、Host と TIP はそれを読むだけである。
+`settings.json` を保存する writer は設定アプリだけで、Host は parse 失敗時の quarantine rename だけを同じロック区間で行い、TIP は読むだけである（正典は `docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
 UI の変更は schema、runtime 既定値、Host の再読込、TIP のローカル監視まで一つの契約として扱う。
 schema と既定値の同期そのものは `azookey-settings-schema-evolution` が持ち、本スキルは
 UI 実装と設定アプリ固有のビルド経路を扱う。
@@ -25,8 +25,9 @@ UI 実装と設定アプリ固有のビルド経路を扱う。
 
 ## 必須ガードレール
 
-- `settings.json` の書き込みは `SettingsDocument` の atomic replace
-  （`learning` の `WriteTextFileAtomically`）だけに残す。Host や TIP から書かない。
+- `settings.json` の保存は `SettingsDocument` の atomic replace
+  （`learning` の `WriteTextFileAtomically`）だけに残す。Host は quarantine rename 以外を書かず、TIP は書かない。
+  「設定アプリだけが書くので競合しない」とは扱わず、`FileLock.h` の排他を保存と quarantine の両方で取る。
 - 不正な `settings.json` は quarantine してから保存する既存契約を、無言の上書きに変えない。
 - UI が持つ既定値を schema、sample、runtime と一致させる。UI だけで既定値を決めない。
 - C++/WinRT と Windows App SDK は `settings-app/` に閉じる。`tsf-tip/` へ持ち込まない。

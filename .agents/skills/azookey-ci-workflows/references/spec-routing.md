@@ -15,7 +15,7 @@
 | `CMakePresets.json` | preset の定義 | `docs/dev-infrastructure-spec.md` §4.2、`README.md` | `cmake --list-presets` |
 | `.pre-commit-config.yaml` | clang-format、gitleaks、actionlint、PowerShell 品質、settings schema、yamlfmt、taplo | `docs/dev-infrastructure-spec.md` §4.3 | `pre-commit run --all-files` |
 | `justfile` | preset を束ねる開発者向けレシピ（`ci`、`doctor`、`register` など） | `README.md`、`docs/handoff/agent-tooling-setup.md` | `just --list` |
-| `.github/dependabot.yml`、`.github/CODEOWNERS` | Actions の週次更新、レビュー担当 | `docs/dev-infrastructure-spec.md` §3 | なし |
+| `.github/dependabot.yml`、`.github/CODEOWNERS` | Actions の週次更新、レビュー担当 | `docs/dev-infrastructure-spec.md` §3.4（pin 済み依存の更新手順）。CODEOWNERS の正典はファイル自身 | なし |
 | `scripts/cloud-setup.sh`、`.claude/settings.json` の `SessionStart` hook | Claude Code on the web の初期化 | `docs/handoff/claude-code-web-setup.md` | `bash scripts/cloud-setup.sh` |
 
 ## 変更時に同期するもの

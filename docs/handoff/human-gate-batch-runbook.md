@@ -284,7 +284,7 @@ Direct でのファイル取得経路が失われ、ゲスト内にログが残�
 
 | 終了コード | 意味 | 扱い |
 |---|---|---|
-| `1641` | `ERROR_SUCCESS_REBOOT_INITIATED` | 成功。Installer が再起動を開始した。`/norestart` を付けた実行でも返りうる |
+| `1641` | `ERROR_SUCCESS_REBOOT_INITIATED` | 成功。Installer が再起動を開始した。`/norestart` を付けた実行でこれが返った場合は抑止が効かなかった経路なので、失敗として扱わず、調査対象として verbose ログを回収する（DEV-1139） |
 | `3010` | `ERROR_SUCCESS_REBOOT_REQUIRED` | 成功。再起動は呼び出し側が行う |
 | `1638` | 同一製品の別バージョンが導入済み | 対象の版を確認する |
 

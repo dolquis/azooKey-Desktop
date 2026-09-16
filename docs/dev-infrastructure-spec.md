@@ -198,6 +198,7 @@ zip のルートには次を置く。
 
 - `azookey_tsf_tip.dll`
 - `azookey_inference_host.exe`
+- `azookey_diag.exe`
 - `register-dev.ps1`
 - `unregister-dev.ps1`
 - `host-supervisor.ps1`

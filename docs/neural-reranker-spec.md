@@ -615,7 +615,8 @@ nll_per_char(s) = NLL_total(s) / max(1, C(s))
 
 ### B3.1 prefix logits のスナップショット契約
 
-**prefix 最終位置の logits は、prefix decode の直後に複製して全候補で再利用する。**
+**prefix 最終位置の logits は、prefix を decode した経路（生成・評価のいずれか）の直後に
+複製して全候補で再利用する。**
 
 `llama_get_logits*` が返すのは**直近の `llama_decode()` の出力**である。KV を
 `prefix_len` へロールバックしても logits バッファは巻き戻らないため、候補 1 の
@@ -969,7 +970,7 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   prefix 平均と p95、prefix 再利用トークン数の最小値、全評価 p95、20ms 超過件数と
   割合、各反復の内訳を出す。
   生成前（prefix を全 decode）と生成後（prefix を共有）で NLL スコアが一致すること、
-  評価順序を逆転させた NLL の一致、生成キャッシュ有無での候補順序の一致も検証し、
+  評価順序を逆転させた NLL の一致、NLL 評価の前後での候補順序と件数の一致も検証し、
   生成スコアの最大差を別記する。`--context` と `--expect-top` で文脈と最上位候補の完全一致を指定できる。
   計測は 10 秒の診断用 deadline を使い、通常要求の 20ms 予算とは区別する。
 - `--backend cpu|vulkan` で実行経路を指定する。Vulkan は対応ビルドとデバイスを必要とし、
@@ -978,7 +979,8 @@ decode 経路そのもの（§B3）は llama 有りビルドの test に置く�
   `QueryCandidates` をそれぞれ 2 回の OFF warm-up 後に連続計測する。
   `bench/data/nll_fixture.lex.tsv` と同名の metadata JSON が固定入力である。
   各要求の時間、prompt 再利用トークン数、予算超過、返却候補への適用数を記録する。
-  ON の途中で circuit が開いてもリセットせず、直後の prefix 再計算も測定に含める。
+  ON の途中で circuit が開いてもリセットせず、NLL が中断または失敗した直後の
+  prefix 再計算も測定に含める。
   全件破棄は候補統合による生成スコア差と混同せず、`RerankNll` の入力境界で検証する。
 
 ## B12. 校正と性能検証（追跡先: DEV-1012、DEV-1055）

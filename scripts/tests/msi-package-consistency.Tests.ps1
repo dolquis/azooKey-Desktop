@@ -59,6 +59,28 @@ Describe "WiX MSI package consistency" {
     $script:releaseWorkflow | Should -Match '"-p:VCRuntimeDir=\$\{\{ steps\.vc-runtime\.outputs\.dir \}\}"'
   }
 
+  It "deploys the OpenMP runtime that the llama.cpp-linked host imports" {
+    $script:package | Should -Match 'Source="\$\(VCOpenMPDir\)\\vcomp140\.dll"'
+    $script:project | Should -Match "Condition=`"!Exists\('\$\(VCOpenMPDir\)\\vcomp140\.dll'\)`""
+    $script:releaseWorkflow | Should -Match '\.OpenMP\$'
+    $script:releaseWorkflow | Should -Match '"-p:VCOpenMPDir=\$\{\{ steps\.vc-runtime\.outputs\.openmp-dir \}\}"'
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $component = $xml.SelectSingleNode('//w:File[@Id="Vcomp140Dll"]', $ns).ParentNode
+    $component.Guid | Should -Not -Be "*"
+    $xml.SelectNodes("//w:Feature/w:ComponentRef[@Id='$($component.Id)']", $ns).Count |
+      Should -Be 1
+  }
+
+  It "verifies the shipped PE imports against the app-local runtime before packaging" {
+    $script:releaseWorkflow | Should -Match 'Verify app-local runtime covers every shipped import'
+    $script:releaseWorkflow.IndexOf('name: Verify app-local runtime covers every shipped import') |
+      Should -BeLessThan $script:releaseWorkflow.IndexOf('- name: Build unsigned MSI')
+    $script:releaseWorkflow | Should -Match 'scripts/check-app-local-runtime\.ps1'
+    $script:releaseWorkflow | Should -Match '--runtime-dir "\$env:VC_RUNTIME_DIR" --runtime-dir "\$env:VC_OPENMP_DIR"'
+  }
+
   It "registers and unregisters the installed TIP with elevated deferred actions" {
     $script:package | Should -Match 'Id="RegisterTip"[\s\S]*?/y &quot;\[#TipDll\]&quot;[\s\S]*?Execute="deferred"[\s\S]*?Impersonate="no"'
     $script:package | Should -Match 'Id="UnregisterTip"[\s\S]*?/z &quot;\[#TipDll\]&quot;[\s\S]*?Execute="deferred"[\s\S]*?Impersonate="no"'

@@ -36,9 +36,15 @@ class ReleaseSbomTests(unittest.TestCase):
                                     (self.root / "CMakeLists.txt").read_text(encoding="utf-8")))
         self.cache = self.build / "CMakeCache.txt"
         self.cache.write_text("".join(f"{k}:STRING={v}\n" for k, v in self.pins.items()), encoding="utf-8")
+        # The CRT and the OpenMP runtime ship from sibling redist directories,
+        # so the fixture keeps them apart and passes both as --runtime-dir.
+        self.crt_dir = self.root
+        self.openmp_dir = self.root / "openmp"
+        self.openmp_dir.mkdir()
+        self.runtime_dirs = [self.crt_dir, self.openmp_dir]
         self.runtime = []
         for name in sorted(SBOM.RUNTIME_FILES):
-            path = self.root / name
+            path = (self.openmp_dir if name.startswith("vcomp") else self.crt_dir) / name
             path.write_bytes(name.encode())
             self.runtime.append({"name": name, "version": "14.44.35211.0", "sha256": SBOM.sha256(path)})
         self.runtime_info = self.root / "runtime.json"
@@ -60,9 +66,10 @@ class ReleaseSbomTests(unittest.TestCase):
         key = "AZOOKEY_LLAMA_CPP_GIT_TAG" if "llama_cpp-src" in args[2] else "AZOOKEY_WIL_GIT_TAG"
         return self.pins[key] + "\n"
 
-    def generate(self):
+    def generate(self, runtime_dirs=None):
         with patch.object(SBOM.subprocess, "check_output", side_effect=self.git):
-            return SBOM.complete(self.document, self.root, self.build, self.runtime_info, self.root, self.msi, "1.2.3")
+            return SBOM.complete(self.document, self.root, self.build, self.runtime_info,
+                                 runtime_dirs or self.runtime_dirs, self.msi, "1.2.3")
 
     def test_release_inventory_preserves_syft_and_links_dependencies(self):
         before = copy.deepcopy(self.document)
@@ -143,7 +150,7 @@ class ReleaseSbomTests(unittest.TestCase):
             result = self.generate()
             self.assertEqual(result["documentDescribes"], [self.root_id])
             self.assertEqual(sum(p["name"].endswith(self.msi.name) for p in result["packages"]), 1)
-            self.assertEqual(len(result["packages"]), 14)
+            self.assertEqual(len(result["packages"]), 15)
             self.assertEqual(sum(r["relationshipType"] == "DESCRIBES" for r in result["relationships"]), len(relationships))
             self.assertTrue(all(r["spdxElementId"] == self.root_id for r in result["relationships"] if r["relationshipType"] == "DEPENDS_ON"))
 
@@ -164,14 +171,20 @@ class ReleaseSbomTests(unittest.TestCase):
             self.generate()
 
     def test_missing_changed_and_duplicate_runtime_are_rejected(self):
-        for entries in (self.runtime[:2], [self.runtime[0]] * 3):
+        for entries in (self.runtime[:2], [self.runtime[0]] * len(SBOM.RUNTIME_FILES)):
             self.runtime_info.write_text(json.dumps(entries), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "three app-local"):
+            with self.assertRaisesRegex(ValueError, "app-local MSVC runtime DLLs"):
                 self.generate()
         self.runtime_info.write_text(json.dumps(self.runtime), encoding="utf-8")
-        (self.root / self.runtime[0]["name"]).write_bytes(b"changed")
+        (self.crt_dir / self.runtime[0]["name"]).write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "CRT changed"):
             self.generate()
+
+    def test_runtime_outside_every_runtime_dir_is_rejected(self):
+        openmp = next(x["name"] for x in self.runtime if x["name"].startswith("vcomp"))
+        self.assertTrue((self.openmp_dir / openmp).is_file())
+        with self.assertRaisesRegex(ValueError, "not found in any --runtime-dir"):
+            self.generate(runtime_dirs=[self.crt_dir])
 
     def test_missing_version_is_rejected(self):
         self.runtime[0]["version"] = ""
@@ -252,12 +265,13 @@ class ReleaseSbomTests(unittest.TestCase):
         output = self.root / "output.json"
         args = [sys.executable, str(ROOT / "scripts/complete-release-sbom.py"), "--root", str(self.root),
                 "--build-dir", str(self.build), "--runtime-info", str(self.runtime_info),
-                "--runtime-dir", str(self.root), "--msi", str(self.msi), "--input", str(source), "--output", str(output), "--version", "1.2.3"]
+                "--runtime-dir", str(self.crt_dir), "--runtime-dir", str(self.openmp_dir),
+                "--msi", str(self.msi), "--input", str(source), "--output", str(output), "--version", "1.2.3"]
         good = subprocess.run(args, capture_output=True, text=True)
         self.assertEqual(good.returncode, 0, good.stderr)
         before = output.read_bytes()
         self.assertIn("WIL", {p["name"] for p in SBOM.read_json(output)["packages"]})
-        (self.root / self.runtime[0]["name"]).write_bytes(b"changed")
+        (self.crt_dir / self.runtime[0]["name"]).write_bytes(b"changed")
         bad = subprocess.run(args, capture_output=True, text=True)
         self.assertNotEqual(bad.returncode, 0)
         self.assertEqual(output.read_bytes(), before)

@@ -4,7 +4,7 @@
 `%ProgramFiles%\azooKey` へ配置する x64 の per-machine MSI を生成します。
 WiX Toolset は MSBuild SDK として 5.0.2 に固定しているため、グローバルインストールは不要です。
 クリーンな Windows 11 でも起動できるよう、Release バイナリが直接依存する
-MSVC runtime 3 ファイルを app-local で同梱します。
+MSVC runtime を app-local で同梱します。
 
 ```powershell
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -18,6 +18,9 @@ $redistVersion = Get-ChildItem "$installPath\VC\Redist\MSVC" -Directory |
 $vcRuntimeDir = Get-ChildItem "$($redistVersion.FullName)\x64" -Directory |
   Where-Object { $_.Name -match '^Microsoft\.VC\d+\.CRT$' } |
   Select-Object -First 1
+$vcOpenMPDir = Get-ChildItem "$($redistVersion.FullName)\x64" -Directory |
+  Where-Object { $_.Name -match '^Microsoft\.VC\d+\.OpenMP$' } |
+  Select-Object -First 1
 
 cmake --preset windows-release `
   -DAZOOKEY_FETCH_GOOGLETEST=ON `
@@ -28,7 +31,8 @@ cmake --build --preset windows-release --target azookey_settings
 dotnet build .\pkg\msi\azooKey.wixproj `
   --configuration Release `
   -p:ProductVersion=1.0.0 `
-  "-p:VCRuntimeDir=$($vcRuntimeDir.FullName)"
+  "-p:VCRuntimeDir=$($vcRuntimeDir.FullName)" `
+  "-p:VCOpenMPDir=$($vcOpenMPDir.FullName)"
 ```
 
 出力は `pkg\msi\bin\Release\azooKey-1.0.0-x64.msi` です。
@@ -37,8 +41,14 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 `$(SettingsPayloadDir)\azookey_settings.exe` なので、通常は `SettingsPayloadDir` だけを
 変更すれば足ります。
 `VCRuntimeDir` には、使用した MSVC toolset の x64 `Microsoft.VC*.CRT`
+ディレクトリを、`VCOpenMPDir` には同じ redist の x64 `Microsoft.VC*.OpenMP`
 ディレクトリを指定します。MSI は `msvcp140.dll`、`vcruntime140.dll`、
-`vcruntime140_1.dll` を TIP と Inference Host と同じディレクトリへ配置します。
+`vcruntime140_1.dll`、`vcomp140.dll` を TIP と Inference Host と同じディレクトリへ
+配置します。`vcomp140.dll` は llama.cpp を組み込んだ Inference Host が ggml の
+OpenMP 経路で暗黙インポートするため、欠けるとクリーン環境で Host が
+`0xC0000135` で即時終了します。同梱漏れは
+`scripts/check-app-local-runtime.ps1` が PE の import と突き合わせて検出します。
+release workflow は MSI をビルドする前にこれを実行します。
 本体の `LICENSE` と、同梱依存を記録した `THIRD_PARTY_LICENSES` も
 テキストファイルとして配置します。
 

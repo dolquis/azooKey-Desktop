@@ -193,11 +193,14 @@ SOFTWARE.
 
 <!-- sbom: {"source":"runtime","name":"MSVC runtime","license":"LicenseRef-MSVC-runtime"} -->
 
-- Source: Visual Studio の `VC\Redist\MSVC\<version>\x64\Microsoft.VC*.CRT`
+- Source: Visual Studio の `VC\Redist\MSVC\<version>\x64\Microsoft.VC*.CRT` と
+  `VC\Redist\MSVC\<version>\x64\Microsoft.VC*.OpenMP`
 - License: Microsoft Software License Terms の Distributable Code
 - Copyright: Microsoft Corporation
 - azooKey path: リポジトリへはベンダリングせず、MSI ビルド時に
-  `msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` を app-local 配置する
+  `msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll`、`vcomp140.dll` を
+  app-local 配置する。`vcomp140.dll` は llama.cpp を組み込んだ Inference Host が
+  ggml の OpenMP 経路で暗黙インポートする
 - Notes: ビルドに使用した Visual Studio の REDIST list に含まれる x64 ファイルだけを
   使用する。配布可否は Visual Studio ライセンス条項に従う。
 

@@ -72,10 +72,20 @@ Describe "VM verification package automation" {
           "register-dev.ps1",
           "unregister-dev.ps1",
           "host-supervisor.ps1",
+          "host-startup-log.ps1",
           "AppContainerAcl.ps1",
           "verify-bootstrap.ps1")) {
         "# $scriptName" | Set-Content -LiteralPath (Join-Path $Root "scripts\$scriptName")
       }
+      # 本物と同じ dot-source を持たせ、推移的依存の検査を実際に通す。
+      @(
+        "# host-supervisor.ps1",
+        '. (Join-Path $PSScriptRoot "host-startup-log.ps1")'
+      ) | Set-Content -LiteralPath (Join-Path $Root "scripts\host-supervisor.ps1")
+      @(
+        "# register-dev.ps1",
+        '. (Join-Path $PSScriptRoot "AppContainerAcl.ps1")'
+      ) | Set-Content -LiteralPath (Join-Path $Root "scripts\register-dev.ps1")
       "# checklist" | Set-Content -LiteralPath (Join-Path $Root "docs\handoff\dev32-verification-checklist.md")
     }
 
@@ -90,7 +100,8 @@ Describe "VM verification package automation" {
           "azookey_tsf_tip.dll",
           "azookey_inference_host.exe",
           "register-dev.ps1",
-          "host-supervisor.ps1")) {
+          "host-supervisor.ps1",
+          "host-startup-log.ps1")) {
         $fileName | Set-Content -LiteralPath (Join-Path $Root $fileName)
       }
       [ordered]@{
@@ -166,7 +177,7 @@ Describe "VM verification package automation" {
       $manifest.buildType | Should -Be "Release"
       $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
       $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
-      @($manifest.files).Count | Should -Be 9
+      @($manifest.files).Count | Should -Be 10
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
         Should -Be 1
       foreach ($file in $manifest.files) {
@@ -178,6 +189,7 @@ Describe "VM verification package automation" {
       Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
       Test-Path -LiteralPath (Join-Path $expanded "manifest.json") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "AppContainerAcl.ps1") | Should -BeTrue
+      Test-Path -LiteralPath (Join-Path $expanded "host-startup-log.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "verify-bootstrap.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "azookey_diag.exe") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "compat_test.exe") | Should -BeFalse
@@ -193,6 +205,43 @@ Describe "VM verification package automation" {
       Should -Invoke Assert-VmVerifyWorktreeClean -Times 1 -Exactly
       Should -Invoke Assert-VmVerifyBuildReady -Times 1 -Exactly `
         -ParameterFilter { -not $IncludeCompat -and -not $IncludeBench }
+    }
+
+    It "rejects a payload whose dot-source dependency is not packaged" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      @(
+        "# host-supervisor.ps1",
+        '. (Join-Path $PSScriptRoot "host-startup-log.ps1")',
+        '. (Join-Path $PSScriptRoot "not-packaged.ps1")'
+      ) | Set-Content -LiteralPath (
+        Join-Path $script:testRepository "scripts\host-supervisor.ps1")
+
+      {
+        Export-VmVerifyPackage `
+          -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" `
+          -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*dot-sources 'not-packaged.ps1'*"
+    }
+
+    It "rejects a dot-source form the dependency check cannot resolve" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      @(
+        "# host-supervisor.ps1",
+        '. "$PSScriptRoot\host-startup-log.ps1"'
+      ) | Set-Content -LiteralPath (
+        Join-Path $script:testRepository "scripts\host-supervisor.ps1")
+
+      {
+        Export-VmVerifyPackage `
+          -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" `
+          -DestinationDirectory $script:testOutput -AllowNoModel
+      } | Should -Throw "*Unsupported dot-source form*"
     }
 
     It "rejects a missing release artifact" {
@@ -460,6 +509,20 @@ Describe "VM verification package automation" {
       Mock Install-VmVerifyVCRuntime {
         $script:bootstrapState.Runtime = $true
       }
+    }
+
+    It "stops before touching a serving host when the supervisor dependency is absent" {
+      # host-supervisor.ps1 は host-startup-log.ps1 を dot-source する。欠けたまま
+      # 既存 Host を止めると、入力できない VM が残る（DEV-1140）。
+      $script:bootstrapState.Registered = $true
+      $script:bootstrapState.Pipe = $true
+      Remove-Item -LiteralPath (Join-Path $script:testPackageRoot "host-startup-log.ps1")
+
+      {
+        Invoke-VmVerifyBootstrap -PackageRoot $script:testPackageRoot -HasCheckpoint
+      } | Should -Throw "*host-startup-log.ps1*"
+      Should -Invoke Invoke-VmVerifyHostSupervisorShutdown -Times 0 -Exactly
+      Should -Invoke Invoke-VmVerifyHostProcessTermination -Times 0 -Exactly
     }
 
     It "keeps registration and host startup idempotent across two runs" {

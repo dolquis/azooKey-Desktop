@@ -20,6 +20,7 @@ $powerShellFiles = @(
   Join-Path $PSScriptRoot "start-installed-host.ps1"
   Join-Path $PSScriptRoot "wait-installed-host.ps1"
   Join-Path $PSScriptRoot "make-vm-verify-package.ps1"
+  Join-Path $PSScriptRoot "check-app-local-runtime.ps1"
   Join-Path $PSScriptRoot "register-dev.ps1"
   Join-Path $PSScriptRoot "unregister-dev.ps1"
   Join-Path $PSScriptRoot "verify-bootstrap.ps1"

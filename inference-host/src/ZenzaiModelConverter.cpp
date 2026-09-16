@@ -608,17 +608,27 @@ struct ZenzaiModelRuntime {
   ZenzaiModelRuntime(const ZenzaiModelRuntime&) = delete;
   ZenzaiModelRuntime& operator=(const ZenzaiModelRuntime&) = delete;
 
+  static constexpr int32_t kMaxWorkingSequences = 4;
+
   llama_model* model{nullptr};
   llama_context* context{nullptr};
   std::vector<llama_token> cached_prompt_tokens;
+  // Logits of the final cached prompt token. Non-empty only while it describes
+  // cached_prompt_tokens as a whole; written and cleared together with the token cache.
+  std::vector<float> cached_prompt_logits;
 
+  // Generation and NLL scoring share the prompt prefix in the KV cache. Both release the beam
+  // working sequences, trim sequence 0 to the reusable prefix, and leave the cache describing
+  // the prompt they decoded. Any failure or cancel invalidates the cache instead.
   NllEvaluation ScoreNll(const std::string& kana, std::span<const std::string> surfaces,
                          const core::ConversionContext& conversion_context) {
     if (!model || !context) throw std::runtime_error("nll runtime unavailable");
-    InvalidatePromptCache();
     struct CacheGuard {
       ZenzaiModelRuntime* runtime;
-      ~CacheGuard() { runtime->InvalidatePromptCache(); }
+      bool preserve{false};
+      ~CacheGuard() {
+        if (!preserve) runtime->InvalidatePromptCache();
+      }
     } cache_guard{this};
     LlamaDecodeControl control{&conversion_context};
     LlamaDecodeAbortScope abort_scope(context, &control);
@@ -628,6 +638,7 @@ struct ZenzaiModelRuntime {
       const core::ConversionContext& input;
       LlamaDecodeControl& control;
       llama_pos prefix_length{};
+      size_t reused_tokens{};
 
       Decoder(ZenzaiModelRuntime& r, const std::string& k, const core::ConversionContext& c,
               LlamaDecodeControl& abort)
@@ -697,8 +708,17 @@ struct ZenzaiModelRuntime {
         if (tokens.size() >= llama_n_ctx(runtime.context))
           throw std::runtime_error("nll prefix exceeds context capacity");
         prefix_length = static_cast<llama_pos>(tokens.size());
-        auto rows = Decode(tokens, 0, false);
+        // Reuse whatever generation (or a previous evaluation) left in the KV cache.
+        const auto retained = runtime.PreparePromptPrefix(tokens, true);
+        reused_tokens = retained;
+        if (retained == tokens.size()) {
+          return runtime.cached_prompt_logits;
+        }
+        auto rows =
+            Decode(std::span(tokens).subspan(retained), static_cast<llama_pos>(retained), false);
         if (rows.size() != 1) throw std::runtime_error("nll prefix logits unavailable");
+        runtime.cached_prompt_tokens = tokens;
+        runtime.cached_prompt_logits = rows.front();
         return std::move(rows.front());
       }
       std::vector<std::vector<float>> DecodeSuffix(std::span<const int32_t> tokens) override {
@@ -709,14 +729,57 @@ struct ZenzaiModelRuntime {
           throw std::runtime_error("nll KV rollback failed");
       }
     } decoder{*this, kana, conversion_context, control};
-    return EvaluateNll(decoder, surfaces, conversion_context);
+    auto evaluation = EvaluateNll(decoder, surfaces, conversion_context);
+    // Every candidate rolled its suffix back, so sequence 0 again holds exactly the prompt.
+    evaluation.prefix_reused_tokens = static_cast<uint64_t>(decoder.reused_tokens);
+    cache_guard.preserve = true;
+    return evaluation;
   }
 
   void InvalidatePromptCache() {
     cached_prompt_tokens.clear();
+    cached_prompt_logits.clear();
     if (context) {
       llama_memory_clear(llama_get_memory(context), false);
     }
+  }
+
+  // Releases the beam working sequences, trims sequence 0 to the reusable prompt prefix and
+  // returns its length. allow_full_reuse lets a caller that can serve the final prompt token's
+  // logits from cached_prompt_logits skip decoding altogether; generation passes false because
+  // its first step reads the logits of the token it just decoded.
+  size_t PreparePromptPrefix(const std::vector<llama_token>& prompt_tokens, bool allow_full_reuse) {
+    auto* memory = llama_get_memory(context);
+    for (int32_t sequence = 1; sequence <= kMaxWorkingSequences; ++sequence) {
+      (void)llama_memory_seq_rm(memory, sequence, -1, -1);
+    }
+    const size_t retained = RetainedPromptPrefixLength(
+        cached_prompt_tokens, prompt_tokens, allow_full_reuse && !cached_prompt_logits.empty());
+    if (retained == 0) {
+      InvalidatePromptCache();
+      return 0;
+    }
+    if (!llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(retained), -1)) {
+      throw std::runtime_error("llama.cpp prompt KV suffix reset failed");
+    }
+    // Keep the cache describing what sequence 0 now holds; the caller extends it once its own
+    // decode succeeds. The logits belong to a prompt that is no longer being decoded.
+    cached_prompt_tokens.resize(retained);
+    if (retained != prompt_tokens.size()) {
+      cached_prompt_logits.clear();
+    }
+    return retained;
+  }
+
+  // Copies the logits of the token decoded last, which is the final prompt token when called
+  // straight after the prompt decode. Valid only alongside a complete cached_prompt_tokens.
+  void CachePromptLogits() {
+    cached_prompt_logits.clear();
+    const auto vocab_size = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    if (vocab_size <= 0) return;
+    const auto* logits = llama_get_logits_ith(context, -1);
+    if (!logits) return;
+    cached_prompt_logits.assign(logits, logits + vocab_size);
   }
 
   std::vector<llama_token> TokenizePrompt(const std::string& kana,
@@ -786,24 +849,9 @@ struct ZenzaiModelRuntime {
     bool completed_quota_reached = false;
 
     ZenzaiDecodeStats decode_stats;
-    constexpr int32_t kMaxWorkingSequences = 4;
-    for (int32_t sequence = 1; sequence <= kMaxWorkingSequences; ++sequence) {
-      (void)llama_memory_seq_rm(llama_get_memory(context), sequence, -1, -1);
-    }
-    size_t retained_prompt_tokens = 0;
-    if (!cached_prompt_tokens.empty()) {
-      retained_prompt_tokens = CommonPrefixLength(cached_prompt_tokens, prompt_tokens);
-      // llama.cpp does not retain logits for an arbitrary cached prefix. Re-decode at least the
-      // final prompt token so step zero observes logits for the current prompt.
-      retained_prompt_tokens =
-          std::min(retained_prompt_tokens, prompt_tokens.empty() ? 0u : prompt_tokens.size() - 1);
-      if (!llama_memory_seq_rm(llama_get_memory(context), 0,
-                               static_cast<llama_pos>(retained_prompt_tokens), -1)) {
-        throw std::runtime_error("llama.cpp prompt KV suffix reset failed");
-      }
-    } else {
-      llama_memory_clear(llama_get_memory(context), false);
-    }
+    // llama.cpp does not retain logits for an arbitrary cached prefix, and step zero reads the
+    // logits of the last decoded token, so generation never reuses the prompt whole.
+    const size_t retained_prompt_tokens = PreparePromptPrefix(prompt_tokens, false);
     std::vector<llama_token> prompt_suffix(prompt_tokens.begin() + retained_prompt_tokens,
                                            prompt_tokens.end());
     decode_stats.prompt_tokens = static_cast<uint64_t>(prompt_suffix.size());
@@ -822,6 +870,9 @@ struct ZenzaiModelRuntime {
       return {};
     }
     cached_prompt_tokens = prompt_tokens;
+    // Step zero and a following NLL evaluation want the same row; copy it before the beams
+    // overwrite the output buffer.
+    CachePromptLogits();
     const auto prompt_size = static_cast<llama_pos>(prompt_tokens.size());
 
     for (int32_t step = 0; step < max_new && !beams.empty(); ++step) {
@@ -1001,6 +1052,19 @@ int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads) {
 size_t CommonPrefixLength(const std::vector<int32_t>& lhs, const std::vector<int32_t>& rhs) {
   const auto mismatch = std::mismatch(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
   return static_cast<size_t>(std::distance(lhs.begin(), mismatch.first));
+}
+
+size_t RetainedPromptPrefixLength(const std::vector<int32_t>& cached_tokens,
+                                  const std::vector<int32_t>& prompt_tokens,
+                                  bool cached_logits_available) {
+  if (cached_tokens.empty() || prompt_tokens.empty()) {
+    return 0;
+  }
+  const auto common = CommonPrefixLength(cached_tokens, prompt_tokens);
+  if (cached_logits_available && common == cached_tokens.size() && common == prompt_tokens.size()) {
+    return common;
+  }
+  return std::min(common, prompt_tokens.size() - 1);
 }
 
 BeamSequencePlan PlanBeamSequenceAssignments(const std::vector<int32_t>& parent_sequences,

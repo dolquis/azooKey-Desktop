@@ -32,6 +32,13 @@ struct ZenzaiRuntimeOptions {
 int32_t RecommendedZenzaiThreadCount(uint32_t hardware_threads);
 size_t CommonPrefixLength(const std::vector<int32_t>& lhs, const std::vector<int32_t>& rhs);
 
+// Prompt tokens reusable from the KV cache. Reusing the prompt whole requires the cached
+// logits of its final token; without them the last token is re-decoded so the caller still
+// observes logits for the current prompt.
+size_t RetainedPromptPrefixLength(const std::vector<int32_t>& cached_tokens,
+                                  const std::vector<int32_t>& prompt_tokens,
+                                  bool cached_logits_available);
+
 struct BeamSequenceCopy {
   int32_t source_sequence{};
   int32_t destination_sequence{};

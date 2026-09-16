@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string_view>
@@ -37,6 +38,9 @@ class NllDecoder {
 struct NllEvaluation {
   std::vector<double> scores;
   double prefix_ms{};
+  // Prompt tokens served from the KV cache that generation, or a previous evaluation, left
+  // behind instead of being decoded again.
+  uint64_t prefix_reused_tokens{};
 };
 NllEvaluation EvaluateNll(NllDecoder& decoder, std::span<const std::string> surfaces,
                           const core::ConversionContext& context);

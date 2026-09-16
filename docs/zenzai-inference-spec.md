@@ -608,19 +608,24 @@ std::vector<core::Candidate> ZenzaiModelConverter::Convert(
 - CPU の llama.cpp 経路は、prompt sequence 0 を変換間で保持する。新しい prompt token 列と
   直前の正常完了時に記録した token 列の共通接頭辞長を `p` とし、sequence 0 の `p` 以降を
   削除して suffix だけを decode する。共通接頭辞が無い場合は sequence 0 を全削除して
-  prompt 全体を decode する。今回の prompt 全体が接頭辞に含まれる場合も、現在の prompt 末尾の
-  logits を得るため最終 token だけは削除して再 decode する。beam ごとの KV キャッシュの扱い
+  prompt 全体を decode する。生成経路では、今回の prompt 全体が接頭辞に含まれる場合も、
+  現在の prompt 末尾の logits を得るため最終 token だけは削除して再 decode する。beam の
+  初手がその decode の logits を読むためである。末尾 token の logits を記録している
+  consumer は prompt 全体を再利用してよい（`docs/neural-reranker-spec.md` §B3.4）。
+  beam ごとの KV キャッシュの扱い
   （sequence 割り当て、prune 時の付け替え、中断時の状態）は **§9.2.3** が規定し、beam は
   sequence 0 を変更しない。
 - prompt 接頭辞キャッシュは、次のいずれかで無効化して sequence 0 を全削除する。
   - 前回の `Generate` が例外または cancel で終了した場合。
+  - NLL 評価が例外または cancel で終了した場合（`docs/neural-reranker-spec.md` §B3.4）。
   - 前回の prompt decode が deadline または decode error で完了しなかった場合。
   - モデル再ロードで `llama_context` が再生成された場合。この境界では runtime 自体を破棄する。
   - tokenizer override または prompt template の変更により、記録した token 列を現 runtime の
     prompt と比較できない場合。
   preceding text、学習情報、ユーザー辞書など prompt 内容の変更は、新旧 token 列の比較で
   suffix 差分または共通接頭辞 0 として扱う。deadline で best-so-far を返す正常完了は
-  sequence 0 を変更しないため、キャッシュを維持する。
+  sequence 0 を変更しないため、キャッシュを維持する。正常完了した NLL 評価も
+  sequence 0 に prompt だけを残すため、同じくキャッシュを維持する。
 - `azookey_zenzai_bench` は、プロンプトと beam の decode 時間、decode token 数、
   prompt の再利用 token 数、beam 評価回数を schema v1 の `decodePhases` と text 出力へ記録する。
   統計は正常完了した変換だけを対象とし、中断または例外で終わった変換の途中経過は公開しない。
@@ -826,13 +831,14 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
   触れた sequence の内容は不定として扱い、次の変換で再利用しない。
 - `Generate` は開始時に working sequence を全て消去する。前の変換が cancel、deadline、例外の
   どれで終わっていても、この消去で状態が確定する。
-- KV キャッシュ全体を clear する経路（現行の `Generate` 冒頭、`neural-reranker-spec` §B3 の
-  NllScorer など）は、`seq_id` 0 の常駐記録も無効化する（§9.2.3.6）。
+- KV キャッシュ全体を clear する経路（再利用できる接頭辞が無いと判定したとき、および
+  生成・評価が失敗または cancel したとき）は、`seq_id` 0 の常駐記録も無効化する
+  （§9.2.3.6）。
 
 #### 9.2.3.6 DEV-859（変換をまたぐ prompt 接頭辞 KV キャッシュ）との境界
 
 `seq_id` 0 の所有権と無効化条件は本節が規定する。DEV-859 が規定するのは「常駐する接頭辞を
-どこまで再利用し、どこから decode し直すか」の差分計算だけである。本節が課す制約は次の 3 つ。
+どこまで再利用し、どこから decode し直すか」の差分計算だけである。本節が課す制約は次の 4 つ。
 
 - beam 探索は `seq_id` 0 を読む（複製元にする）だけで、`seq_id` 0 に token を足さず、
   `seq_id` 0 から token を削らない。
@@ -840,9 +846,13 @@ best-so-far として候補化する（§6.4、§7.4、§9.2.2）。本方式で
   （または一致判定に足る識別子と長さ）を自分で記録する。KV 側に問い合わせる手段は無い。
 - prompt decode が中断で完了しなかったとき、および KV キャッシュ全体を clear したときは、
   その記録を無効（常駐長 0）とする。
+- 常駐接頭辞を丸ごと再利用する consumer は、その最終 token の logits も記録する。接頭辞を
+  切り詰めた時点でこの logits 記録を無効化する。記録が無い consumer は最終 token を
+  decode し直す。
 
-DEV-857 の実装時点では常駐接頭辞の再利用者が存在しない。DEV-857 は `Generate` 冒頭の KV 全体
-clear を現行のまま残してよく、常駐長の記録を先に作る必要はない。
+常駐接頭辞の再利用者は `neural-reranker-spec` §B3.4 の NllScorer であり、上の 4 制約は
+その consumer に課される。DEV-857 の実装時点では再利用者が存在せず、`Generate` 冒頭の
+KV 全体 clear を残したまま常駐長の記録を後回しにしてよかった。
 
 #### 9.2.3.7 context のサイズと実装時に確認する項目
 

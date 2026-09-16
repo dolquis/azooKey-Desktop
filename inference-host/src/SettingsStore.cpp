@@ -261,6 +261,13 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
       azookey::learning::AcquireExclusiveFileLockForPath(settings_path_, file_lock_timeout_);
   const bool may_quarantine = file_lock.has_value();
 
+  // Stamped under the lock and before the read, so a writer cannot slip a
+  // revision between the stamp and the content it is supposed to describe.
+  std::error_code stamp_error;
+  const auto stamp = std::filesystem::last_write_time(settings_path_, stamp_error);
+  loaded_write_time_.store(stamp_error ? kNoWriteTime : stamp.time_since_epoch().count(),
+                           std::memory_order_release);
+
   const auto finish_invalid = [&]() -> SettingsLoadResult {
     if (preserve_current_on_invalid) {
       result.settings = settings_;
@@ -319,6 +326,39 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
 SettingsLoadResult SettingsStore::Load() { return LoadImpl(false); }
 
 SettingsLoadResult SettingsStore::Reload() { return LoadImpl(true); }
+
+std::optional<RuntimeSettings> SettingsStore::SettingsWrittenAfterLoad() {
+  std::error_code ec;
+  const auto stamp = std::filesystem::last_write_time(settings_path_, ec);
+  // A file that cannot be stat'ed, or still carries the timestamp the loaded
+  // settings were parsed from, needs no read. Timestamps only move forward
+  // per save, so two saves inside one filesystem tick look like one; the
+  // UpdateConfig that follows each save still applies the later one.
+  if (ec) return std::nullopt;
+  const int64_t stamped = stamp.time_since_epoch().count();
+  if (stamped == loaded_write_time_.load(std::memory_order_acquire)) return std::nullopt;
+
+  const std::lock_guard<std::mutex> lock(peeked_mutex_);
+  if (peeked_ && peeked_write_time_ == stamped) return peeked_;
+  // Deliberately not the load path: this runs while a reply is owed, so it
+  // never waits out a writer, never quarantines a file the user may still be
+  // editing, and never replaces the runtime settings a failed parse would
+  // reset. Any of those outcomes leaves the caller with what it already has.
+  constexpr std::chrono::milliseconds kPeekLockTimeout{100};
+  auto file_lock =
+      azookey::learning::AcquireExclusiveFileLockForPath(settings_path_, kPeekLockTimeout);
+  if (!file_lock) return std::nullopt;
+  auto content = ReadFile(settings_path_, nullptr);
+  if (!content) return std::nullopt;
+  auto parsed = j::Parse(*content);
+  if (!parsed || !parsed->IsObject()) return std::nullopt;
+  RuntimeSettings settings = ParseRuntimeSettings(parsed->AsObject());
+  settings.app_profiles = std::make_shared<const core::AppProfileResolver>(
+      core::AppProfileResolver::FromSettings(*parsed));
+  peeked_write_time_ = stamped;
+  peeked_ = std::move(settings);
+  return peeked_;
+}
 
 InferenceThreadEnvironment QueryInferenceThreadEnvironment() {
   InferenceThreadEnvironment environment;

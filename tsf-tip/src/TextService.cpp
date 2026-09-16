@@ -660,6 +660,10 @@ TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
 
 TextService::~TextService() {
   AZOOKEY_ASSERT_UI_THREAD();
+  // Before the IPC members it signals: the watcher holds a callback bound to
+  // this object, and a release that skips Deactivate would otherwise leave it
+  // running against members already destroyed.
+  local_settings_.Stop();
   StopIpcWorker();
   ClearCommitContext();
 }
@@ -749,6 +753,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   StartIpcWorker();
   try {
     if (const auto local = core::GetLocalAppDataDirectory()) {
+      local_settings_.SetOnChanged([this] { RequestHostOptionRefresh(); });
       local_settings_.Start(*local / "azooKey" / "config" / "settings.json");
     }
   } catch (...) {
@@ -2295,7 +2300,8 @@ bool TextService::PerformHandshake() {
 }
 
 bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
-                                   const std::string& trace_id, bool update_host_options) {
+                                   const std::string& trace_id, bool update_host_options,
+                                   uint64_t request_id) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
@@ -2309,7 +2315,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
 
   Envelope henv;
   henv.version = 1;
-  henv.request_id = 1;
+  henv.request_id = request_id;
   henv.trace_id = trace_id;
   henv.type = MessageType::Handshake;
   henv.payload_json = BuildHandshakeRequest(hs);
@@ -2320,10 +2326,28 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   }
   const auto handshake_deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  auto hres = client.ReceiveWithTimeout(timeout_ms);
-  if (!hres && std::chrono::steady_clock::now() >= handshake_deadline)
-    client.FinishTraceRequest(henv.request_id, core::EtwResult::Timeout);
-  auto hpayload = hres ? ParseHandshakeResponse(hres->payload_json) : std::nullopt;
+  // A handshake sent on an already-serving connection can meet a response the
+  // query loop abandoned. Read past anything that is not this handshake's
+  // reply rather than dropping the connection over it.
+  std::optional<HandshakeResponse> hpayload;
+  for (;;) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= handshake_deadline) {
+      client.FinishTraceRequest(henv.request_id, core::EtwResult::Timeout);
+      break;
+    }
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(handshake_deadline - now).count();
+    auto hres = client.ReceiveWithTimeout(static_cast<uint32_t>(remaining > 0 ? remaining : 1));
+    if (!hres) {
+      if (std::chrono::steady_clock::now() >= handshake_deadline)
+        client.FinishTraceRequest(henv.request_id, core::EtwResult::Timeout);
+      break;
+    }
+    if (!IsExpectedIpcResponse(*hres, henv.request_id, MessageType::Handshake)) continue;
+    hpayload = ParseHandshakeResponse(hres->payload_json);
+    break;
+  }
   if (!hpayload || !hpayload->accepted) {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_rejected");
     return false;
@@ -2397,6 +2421,19 @@ bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
              {{"previous_host_generation_id", SafeLogText(previous_generation_id)},
               {"host_generation_id", SafeLogText(host_generation_id)}});
   return true;
+}
+
+// Called on the local settings watcher thread. Only flags the worker: the
+// handshake itself must run on the IPC thread that owns the connection.
+void TextService::RequestHostOptionRefresh() {
+  ipc_refresh_options_.store(true, std::memory_order_relaxed);
+  {
+    // Taken and released only to order the store against the worker's
+    // predicate check, which runs under this mutex. Without it the flag can
+    // land between that check and the wait, and the wake-up is lost.
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+  }
+  ipc_cv_.notify_all();
 }
 
 bool TextService::SendCancelOutOfBand(uint64_t target_request_id) {
@@ -2480,6 +2517,10 @@ void TextService::IpcWorkerThreadImpl() {
   uint32_t backoff_ms = kBackoffMinMs;
 
   while (!ipc_stop_.load()) {
+    // Cleared before connecting: this handshake already carries whatever the
+    // settings file holds now, while a change that lands afterwards keeps the
+    // flag set and is picked up by ServeConnection.
+    ipc_refresh_options_.store(false, std::memory_order_relaxed);
     const bool established =
         ipc_client_.Connect(pipe_name, kConnectTimeoutMs) && PerformHandshake();
     if (!established) {
@@ -2530,7 +2571,8 @@ void TextService::ServeConnection() {
     {
       std::unique_lock<std::mutex> lock(ipc_mtx_);
       ipc_cv_.wait(lock, [this] {
-        return ipc_stop_.load() || ipc_has_request_ || !ipc_send_queue_.empty();
+        return ipc_stop_.load() || ipc_has_request_ || !ipc_send_queue_.empty() ||
+               ipc_refresh_options_.load(std::memory_order_relaxed);
       });
       if (ipc_stop_.load()) break;
 
@@ -2547,6 +2589,22 @@ void TextService::ServeConnection() {
         emoji_trigger = ipc_pending_emoji_trigger_;
         ipc_has_request_ = false;
         has_qc = true;
+      }
+    }
+
+    // The settings file changed under a connection that never drops, so the
+    // batch mode, punctuation policy and rewriter flags this TIP received at
+    // activation are stale. Re-run the handshake before serving anything with
+    // them; a refusal drops to the reconnect loop, which handshakes again. The
+    // queue this iteration already took ownership of goes back first, so a
+    // refused refresh cannot swallow a CommitObservation.
+    if (ipc_refresh_options_.exchange(false, std::memory_order_relaxed)) {
+      constexpr uint32_t kRefreshHandshakeTimeoutMs = 3000;
+      if (!PerformHandshake(ipc_client_, kRefreshHandshakeTimeoutMs, "tip-settings-refresh",
+                            /*update_host_options=*/true, next_id++)) {
+        RequeueUnackedSendItems(to_send, 0);
+        if (has_qc) RearmPendingQuery(req_id);
+        return;
       }
     }
 

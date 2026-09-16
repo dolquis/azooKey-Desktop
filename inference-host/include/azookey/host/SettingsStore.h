@@ -1,10 +1,13 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -106,14 +109,29 @@ class SettingsStore {
 
   SettingsLoadResult Load();
   SettingsLoadResult Reload();
+  // The settings as they stand on disk when the file has been written since
+  // the last load, or nullopt when the loaded settings are already current or
+  // the file cannot be read. Lets the Handshake reply answer from the file the
+  // settings app just wrote, ahead of the UpdateConfig it sends next
+  // (DEV-1143), without adopting them as the runtime settings: applying a
+  // reload stays the caller-serialised job of UpdateConfig.
+  std::optional<RuntimeSettings> SettingsWrittenAfterLoad();
 
  private:
+  static constexpr int64_t kNoWriteTime = (std::numeric_limits<int64_t>::min)();
+
   SettingsLoadResult LoadImpl(bool preserve_current_on_invalid);
 
   std::filesystem::path settings_path_;
   std::chrono::milliseconds file_lock_timeout_;
+  // Written by LoadImpl, read without the caller's mutex by
+  // SettingsWrittenAfterLoad, which must not block behind a model reload.
+  std::atomic<int64_t> loaded_write_time_{kNoWriteTime};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
+  std::mutex peeked_mutex_;
+  std::optional<RuntimeSettings> peeked_;
+  int64_t peeked_write_time_{kNoWriteTime};
 };
 
 enum class PowerSource { Unknown, Ac, Battery };

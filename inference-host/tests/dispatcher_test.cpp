@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -283,6 +284,54 @@ TEST_F(DispatcherTest, HandshakeIncludesTipRuntimeSettings) {
   EXPECT_TRUE(parsed->number_rewriter);
   EXPECT_TRUE(parsed->katakana_rewriter);
   EXPECT_EQ(parsed->max_candidates, 17u);
+
+  std::remove(settings_path.c_str());
+}
+
+// DEV-1143: the settings app writes settings.json and only then sends
+// UpdateConfig, so a TIP that re-handshakes on the file change must not be
+// answered with the values the store loaded before that write. The reply reads
+// the file without adopting it, so UpdateConfig still owns the reload.
+TEST_F(DispatcherTest, HandshakeAnswersFromSettingsWrittenBeforeUpdateConfig) {
+  const std::string settings_path = TempPath("azookey_dispatcher_reread_settings.json");
+  std::remove(settings_path.c_str());
+  const auto write = [&](const std::string& contents) {
+    std::ofstream out(settings_path);
+    ASSERT_TRUE(out.is_open());
+    out << contents;
+  };
+  write(R"({"batchConversionMode":"neural","batchAutoPunctuation":false,"maxCandidates":17})");
+  azookey::host::SettingsStore settings_store(settings_path);
+  settings_store.Load();
+  azookey::host::Dispatcher settings_dispatcher(&engine, &scheduler, &user_dict,
+                                                DefaultDispatcherConfig(), &settings_store);
+
+  ipc::HandshakeRequest req;
+  req.tip_version = "0.1.0";
+  req.protocol_version = kProtocolVersion;
+  const auto handshake = [&](uint64_t id) {
+    auto resp = settings_dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+    return resp ? ipc::ParseHandshakeResponse(resp->payload_json) : std::nullopt;
+  };
+
+  auto before = handshake(3);
+  ASSERT_TRUE(before.has_value());
+  EXPECT_EQ(before->batch_conversion_mode, "neural");
+  EXPECT_FALSE(before->batch_auto_punctuation);
+
+  const auto loaded_stamp = std::filesystem::last_write_time(settings_path);
+  write(R"({"batchConversionMode":"ai-cleanup","batchAutoPunctuation":true,"maxCandidates":21})");
+  // Stamped explicitly so the assertion tests the freshness check rather than
+  // how finely the filesystem happens to resolve two writes in a row.
+  std::filesystem::last_write_time(settings_path, loaded_stamp + std::chrono::seconds(1));
+  auto after = handshake(4);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->batch_conversion_mode, "ai-cleanup");
+  EXPECT_TRUE(after->batch_auto_punctuation);
+  EXPECT_EQ(after->max_candidates, 21u);
+  EXPECT_EQ(settings_store.settings().batch_conversion_mode, "neural");
+  EXPECT_EQ(settings_store.settings().max_candidates, 17);
 
   std::remove(settings_path.c_str());
 }

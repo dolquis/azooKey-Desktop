@@ -646,10 +646,10 @@ TEST(BracketEditSessionRunSync, AcceptedButUnexecutedSessionFails) {
   azookey::tsf::TextService service;
   bool applied = true;
 
-  const HRESULT hr = BracketEditSession::Apply(
-      service, &context, kClientId,
-      MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), ImmediateSettings(),
-      applied);
+  const HRESULT hr =
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied);
 
   EXPECT_EQ(hr, E_FAIL);
   EXPECT_FALSE(applied);
@@ -663,10 +663,10 @@ TEST(BracketEditSessionRunSync, RetainedSessionCannotRunAfterTheRequestReturns) 
   azookey::tsf::TextService service;
   bool applied = true;
 
-  const HRESULT hr = BracketEditSession::Apply(
-      service, &context, kClientId,
-      MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), ImmediateSettings(),
-      applied);
+  const HRESULT hr =
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied);
 
   EXPECT_EQ(hr, E_FAIL);
   EXPECT_FALSE(applied);
@@ -687,10 +687,10 @@ TEST(BracketEditSessionApply, ImmediateInsertPairPutsTheCaretBetweenOpenAndClose
   azookey::tsf::TextService service;
   bool applied = false;
 
-  const HRESULT hr = BracketEditSession::Apply(
-      service, &context, kClientId,
-      MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), ImmediateSettings(),
-      applied);
+  const HRESULT hr =
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied);
 
   EXPECT_EQ(hr, S_OK);
   EXPECT_TRUE(applied);
@@ -708,7 +708,6 @@ TEST(BracketEditSessionApply, ImmediateInsertPairPutsTheCaretBetweenOpenAndClose
   EXPECT_EQ(context.last_flags & TF_ES_READWRITE, static_cast<DWORD>(TF_ES_READWRITE));
 }
 
-
 TEST(BracketEditSessionApply, InsertedPairSurvivesAShortCaretShift) {
   FakeDocument document = MakeDocument(L"", 0);
   document.faults.shift_start_reports_zero = true;
@@ -716,10 +715,10 @@ TEST(BracketEditSessionApply, InsertedPairSurvivesAShortCaretShift) {
   azookey::tsf::TextService service;
   bool applied = false;
 
-  const HRESULT hr = BracketEditSession::Apply(
-      service, &context, kClientId,
-      MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), ImmediateSettings(),
-      applied);
+  const HRESULT hr =
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied);
 
   EXPECT_EQ(hr, E_FAIL);
   // The text is already in the document, so `applied` stays true and the caller
@@ -738,11 +737,11 @@ TEST(BracketEditSessionApply, InsertedPairSurvivesASetSelectionFailure) {
   azookey::tsf::TextService service;
   bool applied = false;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
-                ImmediateSettings(), applied),
-            E_FAIL);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied),
+      E_FAIL);
   EXPECT_TRUE(applied);
   EXPECT_EQ(document.text, L"「」");
   EXPECT_EQ(document.set_text_calls.size(), 1u);
@@ -758,11 +757,11 @@ TEST(BracketEditSessionApply, InsertedLiteralSurvivesACaretCloneFailure) {
   azookey::tsf::TextService service;
   bool applied = false;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
-                ImmediateSettings(), applied),
-            E_OUTOFMEMORY);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied),
+      E_OUTOFMEMORY);
   EXPECT_TRUE(applied);
   EXPECT_EQ(document.text, L"「");
   EXPECT_TRUE(document.set_selection_count == 0 || document.last_selection_collapsed);
@@ -775,11 +774,11 @@ TEST(BracketEditSessionApply, InsertedLiteralSurvivesACaretCollapseFailure) {
   azookey::tsf::TextService service;
   bool applied = false;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
-                ImmediateSettings(), applied),
-            E_FAIL);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied),
+      E_FAIL);
   EXPECT_TRUE(applied);
   EXPECT_EQ(document.text, L"「");
   EXPECT_TRUE(document.set_selection_count == 0 || document.last_selection_collapsed);
@@ -792,19 +791,16 @@ TEST(BracketEditSessionApply, FailedInsertionIsNotReportedAsApplied) {
   azookey::tsf::TextService service;
   bool applied = true;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
-                ImmediateSettings(), applied),
-            E_FAIL);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                ImmediateSettings(), applied),
+      E_FAIL);
   EXPECT_FALSE(applied);
   EXPECT_TRUE(document.text.empty());
 }
 
 // --- Apply: revalidation under the write lock -----------------------------
-
-
-
 
 TEST(BracketEditSessionApply, SkipClosingCaretFailureIsNotReportedAsApplied) {
   FakeDocument document = MakeDocument(L"」", 0);
@@ -815,17 +811,15 @@ TEST(BracketEditSessionApply, SkipClosingCaretFailureIsNotReportedAsApplied) {
 
   // Unlike insertion, skipping writes nothing, so a caret failure leaves the
   // document untouched and nothing to protect from a replay.
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kSkipClosing, kClose, kClose),
-                ImmediateSettings(), applied),
-            E_FAIL);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kSkipClosing, kClose, kClose),
+                                ImmediateSettings(), applied),
+      E_FAIL);
   EXPECT_FALSE(applied);
   EXPECT_EQ(document.text, L"」");
   EXPECT_TRUE(document.set_text_calls.empty());
 }
-
-
 
 TEST(BracketEditSessionApply, PassThroughWritesNothing) {
   FakeDocument document = MakeDocument(L"ab", 1);
@@ -833,21 +827,17 @@ TEST(BracketEditSessionApply, PassThroughWritesNothing) {
   azookey::tsf::TextService service;
   bool applied = true;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kPassThrough, kOpen, kClose),
-                ImmediateSettings(), applied),
-            S_FALSE);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kPassThrough, kOpen, kClose),
+                                ImmediateSettings(), applied),
+      S_FALSE);
   EXPECT_FALSE(applied);
   EXPECT_EQ(document.text, L"ab");
   EXPECT_TRUE(document.set_text_calls.empty());
 }
 
-
-
-
 // --- Apply + Finish: composition trigger ----------------------------------
-
 
 TEST(BracketEditSessionComposition, CancelRemovesThePair) {
   FakeDocument document = MakeDocument(L"a", 1);
@@ -857,11 +847,11 @@ TEST(BracketEditSessionComposition, CancelRemovesThePair) {
   azookey::tsf::TextService service;
   bool applied = false;
 
-  ASSERT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), settings,
-                applied),
-            S_OK);
+  ASSERT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      S_OK);
   ASSERT_TRUE(service.bracket_composition_for_test());
 
   ASSERT_EQ(BracketEditSession::Finish(service, &context, kClientId, /*cancel=*/true), S_OK);
@@ -880,11 +870,11 @@ TEST(BracketEditSessionComposition, MissingCompositionSupportFailsWithoutWriting
   azookey::tsf::TextService service;
   bool applied = true;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), settings,
-                applied),
-            E_NOINTERFACE);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      E_NOINTERFACE);
   EXPECT_FALSE(applied);
   EXPECT_TRUE(document.text.empty());
   EXPECT_FALSE(service.bracket_composition_for_test());
@@ -899,11 +889,11 @@ TEST(BracketEditSessionComposition, RefusedCompositionStartLeavesNoText) {
   azookey::tsf::TextService service;
   bool applied = true;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), settings,
-                applied),
-            E_FAIL);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      E_FAIL);
   EXPECT_FALSE(applied);
   EXPECT_TRUE(document.text.empty());
   EXPECT_FALSE(service.bracket_composition_for_test());
@@ -918,11 +908,11 @@ TEST(BracketEditSessionComposition, UnreadableCompositionRangeEndsTheComposition
   azookey::tsf::TextService service;
   bool applied = true;
 
-  EXPECT_EQ(BracketEditSession::Apply(
-                service, &context, kClientId,
-                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose), settings,
-                applied),
-            E_FAIL);
+  EXPECT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      E_FAIL);
   EXPECT_FALSE(applied);
   EXPECT_TRUE(document.text.empty());
   EXPECT_FALSE(service.bracket_composition_for_test());

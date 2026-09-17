@@ -24,6 +24,13 @@ inline constexpr uint64_t kTypoCorrectionMaxRecordAgeSec = 180ULL * 24 * 60 * 60
 
 // Section 6 accept filters, in UTF-8 code points rather than bytes.
 inline constexpr size_t kTypoCorrectionMinReadingLength = 2;
+// Upper bound on a reading the store will consider, in code points. The accept
+// filter runs an O(n*m) edit distance, and the readings arrive from the TIP over
+// IPC where a frame may carry up to a megabyte: without this cap one crafted
+// ObserveTypo could occupy the store's lock for the length of a quadratic scan
+// over hundreds of thousands of code points. A mistyped reading is a preedit,
+// so anything beyond this is not a typo pair regardless.
+inline constexpr size_t kTypoCorrectionMaxReadingLength = 64;
 inline constexpr size_t kTypoCorrectionMaxEditDistance = 3;
 inline constexpr double kTypoCorrectionEditDistanceRatio = 0.34;
 

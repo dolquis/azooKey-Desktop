@@ -34,6 +34,11 @@ std::string EscapeTsvField(const std::string& value) {
       case '\r':
         escaped += "\\r";
         break;
+      case '#':
+        // Load() skips a line that starts with '#' as a comment, so a reading
+        // beginning with one would make the whole record vanish on reload.
+        escaped += "\\#";
+        break;
       default:
         escaped.push_back(ch);
         break;
@@ -63,6 +68,9 @@ std::string UnescapeTsvField(const std::string& value) {
         break;
       case 'r':
         unescaped.push_back('\r');
+        break;
+      case '#':
+        unescaped.push_back('#');
         break;
       default:
         unescaped.push_back('\\');
@@ -215,7 +223,18 @@ bool TypoCorrectionStore::IsLearnablePair(const std::string& wrong, const std::s
     return false;
   }
 
+  // Bound the work before the quadratic step, not after.
+  if (wrong_length > kTypoCorrectionMaxReadingLength ||
+      correct_length > kTypoCorrectionMaxReadingLength) {
+    return false;
+  }
+
   const size_t limit = EditDistanceLimit(std::max(wrong_length, correct_length));
+  // Edit distance is at least the length difference, so a pair that differs by
+  // more than the limit is rejected without building the table at all.
+  const size_t length_difference =
+      wrong_length > correct_length ? wrong_length - correct_length : correct_length - wrong_length;
+  if (length_difference > limit) return false;
   return Utf8EditDistance(wrong, correct) <= limit;
 }
 

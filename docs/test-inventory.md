@@ -71,12 +71,12 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_scheduler_tests` | `inference-host/tests/scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `host_args_tests` | `inference-host/tests/args_test.cpp` | `--backend` 別名と未対応値の reject、`--pipe` のオプション非消費、handshake・パス系オプション、非 ASCII パスの UTF-8 保持 |
 | `host_args_tests` | `inference-host/tests/startup_test.cpp` | supervisor 未指定時の寿命非制限、不正 supervisor の fail-closed、保持ハンドル経由のプロセス終了監視、mock host が Vulkan を広告しないこと |
-| `host_user_data_paths_tests` | `inference-host/tests/user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
+| `host_user_data_paths_tests` | `inference-host/tests/user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`、`typo_corrections.tsv`/`auto_words.tsv`）、`--learning-path` 明示時に新ストアが同階層へ解決されること |
 | `host_model_catalog_tests` | `inference-host/tests/model_catalog_test.cpp` | モデルカタログの既定補完と明示既定 id、不正・重複 id と未知既定の reject、`models\zenzai\` 配下での解決、ローカル欠落の報告 |
 | `host_http_downloader_tests` | `inference-host/tests/http_downloader_test.cpp` | SHA256 不一致時の `.part` 非昇格、Range 再開・Range 無視サーバでの再取得、上限超過応答の非昇格、非 loopback 平文 HTTP の接続前 reject |
 | `host_userdict_cli_tests` | `inference-host/tests/userdict_cli_test.cpp` | `userdict` CLI の add/list/remove ラウンドトリップ、dry-run、稼働中 Host 優先と直接編集の使い分け、import/export と非 ASCII パス保持 |
 | `host_lookup_cli_tests` | `inference-host/tests/lookup_cli_test.cpp` | `lookup` CLI の読み完全一致・読み前置一致・表記一致、ロック取得不可時の失敗、TSV/JSON の列、破損ユーザー辞書を隔離も変更もしないこと |
-| `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離と現行設定の維持、読み込み済みより新しいファイルだけを隔離せずに読む Handshake 用の先読み |
+| `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離と現行設定の維持、読み込み済みより新しいファイルだけを隔離せずに読む Handshake 用の先読み、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の既定値・範囲外値の既定復帰・`EngineConfig` への反映 |
 | `host_cli_unicode_argv` | `azookey_inference_host` | 実プロセスの argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
 | `dictionary_tests` | `dictbuild/tests/dictionary_test.cpp` | 辞書 trie の探索方向と最短優先の上限、破損検出、参照失敗時の該当レイヤのみ無効化、静的辞書と可変辞書の独立、ユーザー変更の追跡 |
 | `dictbuild_python_tests` | `dictbuild/tests/test_dictbuild.py` | オフライン辞書ビルダ（Python）の単体テスト |
@@ -96,7 +96,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_query_interface_contract_tests` | `tsf-tip/tests/query_interface_contract_test.cpp` | `QueryInterface` の null out-param と未対応 IID の契約、`ITfFnConfigure`／`ITfFunction` 公開、`Show` からのプロファイル付き設定アプリ起動と失敗時 HRESULT |
 | `tsf_tip_local_settings_tests` | `tsf-tip/tests/local_settings_test.cpp` | Host 非依存で共有設定ファイルを読む TIP ローカル設定、ローマ字テーブル変更の監視と再読み込み、Unicode パス・再作成ディレクトリへの再バインド、不正・過大ファイルでの既定復帰、監視の再 arm に失敗しても以後の保存を取りこぼさないこと、内容が変わった保存だけを観測者へ通知すること |
 | `azookey_settings_launch_arguments_tests` | `settings-app/tests/launch_arguments_test.cpp` | 設定アプリ起動引数の round-trip、値欠落・不正 LangId / プロファイルの reject、未指定と空指定の区別、重複・未知オプションの reject |
-| `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧 |
+| `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の保存時保持と不正値の削除 |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_ipc_client_test.cpp` | 設定アプリから Host への Handshake と `UpdateConfig` 送信 |
 | `compat_test_unit_tests` | `compat-test/tests/compat_test_unit_tests.cpp` | 互換ハーネスの target 定義検証（自動化契約・既知回避策・一時文書の所有）、レポート schema と非信頼テキストの伏せ字化、クリップボード復元、ウィンドウ所有権判定 |
 | `temporary_learning_file_tests` | `bench/temporary_learning_file_test.cpp` | bench 用一時学習ファイルの並行予約時の独立性、他所有者への非干渉、巻き戻し時の後始末と想定外ファイルの保全 |

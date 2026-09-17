@@ -283,3 +283,25 @@ TEST(AutoWordStoreTest, ResetClearsTheTable) {
   EXPECT_EQ(store.Size(), 0u);
   EXPECT_EQ(store.ListByState(AutoWordState::Pending).size(), 0u);
 }
+
+TEST(AutoWordStoreTest, RoundTripsSurfacesThatStartWithAComment) {
+  const auto path = TempPath("azookey_auto_word_hash.tsv");
+  // Load() treats a leading '#' as a comment, so an unescaped one would drop the
+  // whole record on the next read.
+  const std::string surface = "#タグ";
+  {
+    AutoWordStore store(path);
+    store.Observe(surface, "たぐ", kNow, 3, false);
+    ASSERT_TRUE(store.Save());
+  }
+
+  AutoWordStore reloaded(path);
+  ASSERT_TRUE(reloaded.Load());
+  const auto pending = reloaded.ListByState(AutoWordState::Pending);
+  ASSERT_EQ(pending.size(), 1u);
+  EXPECT_EQ(pending[0].surface, surface);
+  EXPECT_EQ(pending[0].reading, "たぐ");
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}

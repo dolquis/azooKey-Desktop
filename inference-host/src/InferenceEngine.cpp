@@ -496,7 +496,6 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.auto_word_mining_enabled = config.auto_word_mining_enabled;
   config_.auto_word_auto_register = config.auto_word_auto_register;
   config_.auto_word_min_count = config.auto_word_min_count;
-  config_.auto_word_default_score = config.auto_word_default_score;
 }
 
 BackendKind InferenceEngine::backend() const {
@@ -805,14 +804,26 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   // the front, marked, while the candidates for what the user actually typed
   // stay in place below it. Injecting after reranking keeps the position
   // deterministic instead of letting the score comparison bury the suggestion.
-  if (!suggest_reading.empty() && !canceled()) {
+  //
+  // Skipped for live conversion: that path runs on every keystroke, and doubling
+  // the conversion work there to offer a correction the user has not asked to
+  // see is the wrong trade.
+  if (!suggest_reading.empty() && !live && !canceled()) {
+    // The primary conversion may have thrown and fallen back. Reusing the
+    // converter that just failed would only hit the same exception and discard
+    // the suggestion, so follow the fallback.
+    const auto& suggest_converter =
+        convert_failed && fallback_converter ? fallback_converter : converter;
+    // A fresh budget: the deadline above was consumed by the primary
+    // conversion, so passing it again would time this one out before it starts.
+    const auto suggest_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
     std::vector<core::Candidate> suggestions;
     {
       std::lock_guard<std::mutex> suggest_lock(converter_call_mutex_);
       try {
-        suggestions = converter->Convert(
+        suggestions = suggest_converter->Convert(
             suggest_reading, BuildContext(suggest_reading, limited_context, cancel,
-                                          conversion_deadline, effective_max_candidates, live));
+                                          suggest_deadline, effective_max_candidates, live));
       } catch (...) {
         // A failed suggestion is not worth failing the query the user asked for.
         suggestions.clear();

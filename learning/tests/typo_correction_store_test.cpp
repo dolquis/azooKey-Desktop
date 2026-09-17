@@ -8,6 +8,7 @@
 
 namespace {
 
+using azookey::learning::kTypoCorrectionMaxReadingLength;
 using azookey::learning::TypoCorrectionStore;
 
 constexpr uint64_t kNow = 1'700'000'000;
@@ -212,4 +213,51 @@ TEST(TypoCorrectionStoreTest, ResetClearsTheTable) {
   store.Reset();
   EXPECT_EQ(store.size(), 0u);
   EXPECT_FALSE(store.Lookup("こんちには", 1, kNow).has_value());
+}
+
+TEST(TypoCorrectionStoreTest, RejectsOverlongReadingsWithoutRunningTheDistanceTable) {
+  TypoCorrectionStore store(TempPath("azookey_typo_overlong.tsv"));
+
+  // Readings arrive from the TIP over IPC, where one frame can carry a megabyte.
+  // The accept filter is quadratic, so an over-long pair has to be refused on
+  // length alone rather than after building the table.
+  std::string long_reading;
+  for (size_t i = 0; i < kTypoCorrectionMaxReadingLength + 1; ++i) long_reading += "あ";
+  std::string long_variant = long_reading;
+  long_variant += "い";
+  EXPECT_FALSE(store.Observe(long_reading, long_variant, kNow));
+
+  // A pair whose lengths differ by more than the limit is refused too.
+  EXPECT_FALSE(store.Observe("あい", "あいうえおかき", kNow));
+
+  // Just inside the cap still works.
+  std::string at_cap;
+  for (size_t i = 0; i < kTypoCorrectionMaxReadingLength; ++i) at_cap += "あ";
+  std::string at_cap_variant = at_cap;
+  at_cap_variant.replace(at_cap_variant.size() - 3, 3, "い");
+  EXPECT_TRUE(store.Observe(at_cap, at_cap_variant, kNow));
+  EXPECT_EQ(store.size(), 1u);
+}
+
+TEST(TypoCorrectionStoreTest, RoundTripsReadingsThatStartWithAComment) {
+  const auto path = TempPath("azookey_typo_hash.tsv");
+  // Load() treats a leading '#' as a comment, so an unescaped one would drop the
+  // whole record on the next read.
+  const std::string wrong = "#あい";
+  const std::string correct = "#あう";
+  {
+    TypoCorrectionStore store(path);
+    ASSERT_TRUE(store.Observe(wrong, correct, kNow));
+    ASSERT_TRUE(store.Save());
+  }
+
+  TypoCorrectionStore reloaded(path);
+  ASSERT_TRUE(reloaded.Load());
+  ASSERT_EQ(reloaded.size(), 1u);
+  const auto entries = reloaded.All();
+  EXPECT_EQ(entries[0].wrong_reading, wrong);
+  EXPECT_EQ(entries[0].correct_reading, correct);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
 }

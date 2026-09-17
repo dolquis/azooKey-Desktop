@@ -83,10 +83,6 @@ struct EngineConfig {
   bool auto_word_mining_enabled{true};
   bool auto_word_auto_register{false};
   uint32_t auto_word_min_count{3};
-  // Between the bundled lexicon and an explicit user-dictionary entry: a mined
-  // word is more trusted than a generic dictionary hit but less than a word the
-  // user registered by hand (spec section 6).
-  double auto_word_default_score{1.0};
 };
 
 struct ModelLoadOptions {

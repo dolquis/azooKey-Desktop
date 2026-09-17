@@ -62,10 +62,11 @@ const std::unordered_map<std::string, double>* FindLongestBigramMatch(
   return best;
 }
 
-// The tab cannot appear in a reading loaded from the TSV dictionary, so it is
-// an unambiguous separator for the composite key.
+// Length-prefixed rather than delimiter-joined: the readings that reach Learn()
+// come from IPC and may contain any byte, so a chosen separator could be forged
+// to make two different pairs share one key.
 std::string ProvenanceKey(const std::string& reading, const std::string& surface) {
-  return reading + '	' + surface;
+  return std::to_string(reading.size()) + ':' + reading + surface;
 }
 
 bool PrefixFallbackRankLess(const Candidate& lhs, const Candidate& rhs) {

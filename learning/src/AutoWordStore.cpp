@@ -35,6 +35,11 @@ std::string EscapeTsvField(const std::string& value) {
       case '\r':
         escaped += "\\r";
         break;
+      case '#':
+        // Load() skips a line that starts with '#' as a comment, so a surface
+        // beginning with one would make the whole record vanish on reload.
+        escaped += "\\#";
+        break;
       default:
         escaped.push_back(ch);
         break;
@@ -64,6 +69,9 @@ std::string UnescapeTsvField(const std::string& value) {
         break;
       case 'r':
         unescaped.push_back('\r');
+        break;
+      case '#':
+        unescaped.push_back('#');
         break;
       default:
         unescaped.push_back('\\');

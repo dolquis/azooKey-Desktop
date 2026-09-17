@@ -46,11 +46,9 @@ macOS 版 `legacy/` は対象外。
 | `suggest`（既定） | する | 補正後読みの変換結果を `typo-correction` マーク付きで候補リスト先頭付近に注入。元の読みの候補も残す。 |
 | `auto_replace` | する | 補正後読みのみで変換し、preedit のかなも補正後へ置換。 |
 
-- host 側 `SettingsStore` は導入済みだが、`typoCorrectionMode` の schema 追加・runtime
-  反映は本機能の実装範囲。未配線の間、当面の実効値は次の経路で受ける:
-  - inference-host: CLI 引数 `--typo-mode off|suggest|auto_replace`
-    （環境変数 `AZOOKEY_TYPO_MODE` フォールバック）
-  - TIP: 環境変数 `AZOOKEY_TYPO_MODE`（`ActivateEx` で取得）
+- 実効値の経路は `settings.json` の `typoCorrectionMode` とする。host の
+  `SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が
+  `EngineConfig::typo_correction_mode` へ反映する。TIP は設定を参照しない。
 - `off` の最終ゲートは host 側。TIP は検出した観測を緩く送り、蓄積・適用の
   可否は host が判定する（TIP に設定プラミングを持ち込まない）。
 
@@ -163,16 +161,23 @@ host に送る。検出トリガは 2 種。
 
 ## 8. 設定（`settings/`）
 
-`settings/mvp-settings.schema.json` に文書化のみ追加する（ローダー実装は将来課題）。
+`settings/mvp-settings.schema.json` が定義を持ち、`SettingsStore` が読む。
 
 ```json
 "typoCorrectionMode": {
   "type": "string",
   "enum": ["off", "suggest", "auto_replace"],
   "default": "suggest",
-  "description": "個人のタイプミス傾向を学習し修正する動作モード。実効値は当面 host の --typo-mode 引数 / 環境変数 AZOOKEY_TYPO_MODE。設定ローダー実装は将来課題。"
+  "description": "M35: 個人のタイプミス傾向を学習し修正する動作モード。docs/typo-correction-learning-spec.md section 8"
+},
+"typoMinCount": {
+  "type": "integer", "minimum": 1, "maximum": 100, "default": 3,
+  "description": "M35: 同じ打ち間違えペアをこの回数観測してから補正候補に使う"
 }
 ```
+
+`typoMinCount` は `EngineConfig::typo_min_count` の設定キーである。`settings.json`
+に無いときは既定 3 を使う。範囲外の値は既定へ戻す。
 
 ## 9. テスト計画
 
@@ -197,6 +202,9 @@ host に送る。検出トリガは 2 種。
 | 新規 | `learning/tests/typo_correction_store_test.cpp` |
 | 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` |
 | 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` |
+| 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` |
+| 編集 | `inference-host/include/azookey/host/UserDataPaths.h`, `inference-host/src/UserDataPaths.cpp` |
+| 編集 | `settings/default-settings.sample.json`, `settings-app/SettingsDocument.cpp` |
 | 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` |
 | 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` |
 | 編集 | `inference-host/include/azookey/host/Dispatcher.h`, `src/Dispatcher.cpp` |
@@ -210,13 +218,13 @@ host に送る。検出トリガは 2 種。
 2. テスト: `ctest --preset windows-debug --output-on-failure`
    （`typo_correction_store_tests` / `payloads_test` / `engine_test` /
    `dispatcher_test` が green であること）
-3. host を `--typo-mode suggest` / `auto_replace` で stdio 起動し、同一
-   `wrong_reading` の `ObserveTypo` を 3 回送ってから `QueryCandidates` を投げ、
-   suggest で `typo-correction` 候補が注入され、auto_replace で
-   `corrected_reading` が返ることを確認。
-4. Windows 実機があれば TIP を導入し `AZOOKEY_TYPO_MODE` を設定して、未確定中
-   backspace 訂正・確定直後打ち直しを実操作で確認。実機が無い場合はその旨を
-   明示し、自動テストとプロトコルレベル確認で代替する。
+3. `settings.json` に `typoCorrectionMode` を `suggest` / `auto_replace` で書いて
+   host を stdio 起動し、同一 `wrong_reading` の `ObserveTypo` を `typoMinCount`
+   回送ってから `QueryCandidates` を投げ、suggest で `typo-correction` 候補が
+   注入され、auto_replace で `corrected_reading` が返ることを確認。
+4. Windows 実機があれば TIP を導入し、未確定中 backspace 訂正・確定直後打ち直しを
+   実操作で確認。実機が無い場合はその旨を明示し、自動テストとプロトコルレベル
+   確認で代替する。
 
 ---
 

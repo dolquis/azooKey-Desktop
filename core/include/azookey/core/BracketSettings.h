@@ -6,6 +6,7 @@
 
 #include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/BracketPairing.h"
+#include "azookey/core/SecureApps.h"
 
 namespace azookey::core {
 
@@ -25,6 +26,9 @@ struct BracketSettings {
   std::shared_ptr<const BracketTable> table;
   std::shared_ptr<const BracketAppPolicy> app_policy;
   std::shared_ptr<const AppProfileResolver> profiles;
+  // M46 privacy.secureApps user additions, lowercase-normalized. Matched
+  // against the bundled kDefaultSecureApps union by core::IsSecureApp.
+  std::shared_ptr<const std::vector<std::string>> secure_apps;
 
   const BracketTable& Table() const { return table ? *table : BuiltinBracketTable(); }
 };

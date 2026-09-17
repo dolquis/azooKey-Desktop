@@ -49,39 +49,66 @@ class ScopeSession final : public ITfEditSession {
     InputScope* scopes = nullptr;
     UINT count = 0;
     if (FAILED(scope->GetInputScopes(&scopes, &count))) return E_FAIL;
-    allowed = count > 0;
+    // An empty scope set says nothing about the field, so it stays Unknown.
+    if (count > 0) classification = InputScopeClass::Normal;
     for (UINT i = 0; i < count; ++i)
       if (scopes[i] == IS_PASSWORD || scopes[i] == IS_NUMERIC_PASSWORD ||
           scopes[i] == IS_NUMERIC_PIN || scopes[i] == IS_ALPHANUMERIC_PIN ||
           scopes[i] == IS_ALPHANUMERIC_PIN_SET)
-        allowed = false;
+        classification = InputScopeClass::Password;
     CoTaskMemFree(scopes);
     return S_OK;
   }
-  bool allowed{false};
+  InputScopeClass classification{InputScopeClass::Unknown};
   ITfContext* context;
 
  private:
   LONG refs{1};
 };
+
+HWND FocusWindow() {
+  GUITHREADINFO info{sizeof(info)};
+  if (!GetGUIThreadInfo(GetCurrentThreadId(), &info)) return nullptr;
+  return info.hwndFocus;
+}
 }  // namespace
 
-bool AiInputAllowed(ITfContext* context, TfClientId client_id) {
-  if (!context) return false;
-  GUITHREADINFO info{sizeof(info)};
-  if (!GetGUIThreadInfo(GetCurrentThreadId(), &info) || !info.hwndFocus) return false;
+InputScopeClass ClassifyFocusWindow(HWND focus) {
+  if (!focus) return InputScopeClass::Unknown;
   wchar_t name[32]{};
-  if (!GetClassNameW(info.hwndFocus, name, 32)) return false;
+  if (!GetClassNameW(focus, name, 32)) return InputScopeClass::Unknown;
   if ((_wcsicmp(name, L"Edit") == 0 || _wcsnicmp(name, L"RichEdit", 8) == 0) &&
-      (GetWindowLongPtrW(info.hwndFocus, GWL_STYLE) & ES_PASSWORD))
-    return false;
+      (GetWindowLongPtrW(focus, GWL_STYLE) & ES_PASSWORD))
+    return InputScopeClass::Password;
+  return InputScopeClass::Normal;
+}
+
+InputScopeClass ClassifyInputScope(ITfContext* context, TfClientId client_id) {
+  if (!context) return InputScopeClass::Unknown;
   ComPtr<ScopeSession> session;
   session.Attach(new (std::nothrow) ScopeSession(context));
-  if (!session) return false;
+  if (!session) return InputScopeClass::Unknown;
   HRESULT executed = E_FAIL;
   const auto result =
       context->RequestEditSession(client_id, session.Get(), TF_ES_SYNC | TF_ES_READ, &executed);
   session->context = nullptr;  // Never retain a raw context if an app delays the session.
-  return SUCCEEDED(result) && executed == S_OK && session->allowed;
+  if (FAILED(result) || executed != S_OK) return InputScopeClass::Unknown;
+  return session->classification;
+}
+
+InputGateDecision CombineInputGate(InputScopeClass focus, InputScopeClass scope) {
+  // AI needs both axes to say Normal, so anything unclassified refuses it.
+  // Secure needs one axis to positively say Password, so nothing unclassified
+  // claims it.
+  if (focus == InputScopeClass::Password) return {false, true};
+  return {focus == InputScopeClass::Normal && scope == InputScopeClass::Normal,
+          scope == InputScopeClass::Password};
+}
+
+InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id) {
+  const auto focus = ClassifyFocusWindow(FocusWindow());
+  // A password-styled focus window is answer enough; skip the edit session.
+  if (focus == InputScopeClass::Password) return CombineInputGate(focus, InputScopeClass::Unknown);
+  return CombineInputGate(focus, ClassifyInputScope(context, client_id));
 }
 }  // namespace azookey::tsf

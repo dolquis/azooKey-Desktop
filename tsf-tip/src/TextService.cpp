@@ -24,6 +24,7 @@
 #include "azookey/core/KatakanaRewriter.h"
 #include "azookey/core/NumberRewriter.h"
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/core/SecureApps.h"
 #include "azookey/core/SymbolRewriter.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/ipc/Limits.h"
@@ -1889,13 +1890,8 @@ void TextService::PostPendingCommitObservation() {
       for (const auto& segment : pending.segments)
         request.segments.push_back({segment.reading, segment.chosen, segment.shown, false});
       auto payload = ipc::BuildCommitSegmentsObservationRequest(request);
-      if (payload.size() < ipc::kMaxFrameSize - 1024) {
-        std::lock_guard<std::mutex> lock(ipc_mtx_);
-        ipc_send_queue_.push_back(
-            {ipc::MessageType::CommitSegmentsObservation, std::move(payload), true});
-        TrimIpcSendQueueLocked();
-        ipc_cv_.notify_one();
-      }
+      if (payload.size() < ipc::kMaxFrameSize - 1024)
+        PostIpcSend(ipc::MessageType::CommitSegmentsObservation, std::move(payload), true);
     } else {
       for (const auto& segment : pending.segments)
         PostCommitObservation(segment.reading, segment.chosen, segment.shown);
@@ -2046,6 +2042,11 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
 
 HRESULT TextService::CommitSelected(ITfContext* context) {
   if (!context) return S_OK;
+  // Every observation the TIP can produce is built below, so this is the one
+  // place the M46 secure decision has to be current (DEV-1187). A neural batch
+  // conversion never evaluated the AI axes, and the plain per-key path never
+  // evaluated anything at all; both are covered by evaluating here.
+  const bool secure = ResolvePrivacy(context, false).secure;
   const bool multi_segment = shown_batch_segments_.size() > 1;
   const std::string batch_surface =
       multi_segment ? CurrentDisplayedPreeditSurface() : std::string{};
@@ -2124,7 +2125,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     pending_commit_observation_.reset();
   }
   // AI output can contain generated punctuation without a reading alignment.
-  if (!batch_learning_allowed_ || chosen.field.source == "llm" ||
+  if (secure || !batch_learning_allowed_ || chosen.field.source == "llm" ||
       chosen.field.source == "privacy-fallback" ||
       (pending_commit_observation_ &&
        std::any_of(pending_commit_observation_->segments.begin(),
@@ -3120,29 +3121,54 @@ void TextService::PostQueryCandidates(const std::string& reading, bool live,
   ipc_cv_.notify_one();
 }
 
+// One evaluation for every outbound route. The M46 secure axis and the AI
+// privacy axes are resolved from the same foreground-app lookup and the same
+// single input-scope probe, so a batch conversion, a commit and a prediction
+// cannot disagree about whether the current context is secure.
+TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bool evaluate_ai) {
+  static const std::vector<std::string> kNoUserSecureApps;
+  const auto ai_settings = local_settings_.AiSnapshot();
+  PrivacyDecision decision;
+  decision.ai = ai_settings.privacy;
+  decision.backend = ai_settings.backend;
+
+  const auto app = foreground_app_.Get();
+  const auto settings = local_settings_.Snapshot();
+  const auto gate = EvaluateInputGate(context, client_id_);
+  // spec section 4.3: a foreground window that cannot be resolved is treated as
+  // secure, because an app we cannot see may be the one holding the secret.
+  decision.secure =
+      !app.resolved || gate.secure ||
+      core::IsSecureApp(app.process_name,
+                        settings.secure_apps ? *settings.secure_apps : kNoUserSecureApps,
+                        WindowsAppNameEqual);
+  if (evaluate_ai && (!app.resolved || !gate.ai_allowed)) decision.ai = {};
+  if (settings.profiles) {
+    const ipc::json::Value value(settings.profiles->Resolve(app, WindowsAppNameEqual));
+    const auto mode = value.GetString("privacyMode").value_or("inherit");
+    if (mode == "secure") {
+      decision.secure = true;
+      if (evaluate_ai) decision.ai = {};
+    } else if (mode == "private" && evaluate_ai) {
+      decision.ai.external = false;
+    }
+    if (evaluate_ai) {
+      const auto profile_backend = value.GetString("aiBackend").value_or("auto");
+      if (profile_backend != "auto") decision.backend = profile_backend;
+      if (decision.backend == "local-zenzai") decision.ai.external = false;
+    }
+  }
+  if (decision.secure) decision.ai = {};
+  secure_input_.store(decision.secure, std::memory_order_relaxed);
+  return decision;
+}
+
 void TextService::PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
                                       ITfContext* context) {
   const bool ai_cleanup = batch_conversion_ai_cleanup_.load(std::memory_order_relaxed);
-  const auto ai_settings = local_settings_.AiSnapshot();
-  auto backend = ai_settings.backend;
-  auto privacy = ai_settings.privacy;
-  if (ai_cleanup) {
-    const auto app = foreground_app_.Get();
-    if (!app.resolved || !AiInputAllowed(context, client_id_)) privacy = {};
-    const auto settings = local_settings_.Snapshot();
-    if (settings.profiles) {
-      const auto profile = settings.profiles->Resolve(app, WindowsAppNameEqual);
-      const ipc::json::Value value(profile);
-      const auto mode = value.GetString("privacyMode").value_or("inherit");
-      if (mode == "secure")
-        privacy = {};
-      else if (mode == "private")
-        privacy.external = false;
-      const auto profile_backend = value.GetString("aiBackend").value_or("auto");
-      if (profile_backend != "auto") backend = profile_backend;
-      if (backend == "local-zenzai") privacy.external = false;
-    }
-  }
+  const auto decision = ResolvePrivacy(context, ai_cleanup);
+  const auto backend = decision.backend;
+  const auto privacy = decision.ai;
   batch_learning_allowed_ = !ai_cleanup || privacy.ai;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_ai_privacy_ = privacy;
@@ -3418,6 +3444,15 @@ void TextService::PostCancel(uint64_t target_request_id) {
 }
 
 void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool expects_response) {
+  // M46 (spec section 5): the route-common choke point. Whatever produced this
+  // message, learning and prediction traffic never leaves the TIP while the
+  // context is secure. Conversion traffic is not suppressed: the user still has
+  // to be able to type in a password manager's notes field.
+  if (secure_input_.load(std::memory_order_relaxed) &&
+      (type == ipc::MessageType::CommitObservation ||
+       type == ipc::MessageType::CommitSegmentsObservation ||
+       type == ipc::MessageType::QueryPredictions))
+    return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0});
   TrimIpcSendQueueLocked();

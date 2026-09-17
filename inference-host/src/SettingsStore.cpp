@@ -153,10 +153,13 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadString(object, "openAiApiEndpoint", settings.open_ai_api_endpoint);
   settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
   settings.ai_privacy = core::ParseAiPrivacy(ipc::json::Value(object));
+  settings.secure_apps = core::ParseSecureApps(ipc::json::Value(object));
   if (const auto privacy = object.find("privacy");
       privacy != object.end() && privacy->second.IsObject()) {
     settings.crash_report_consent =
         ReadEnum(privacy->second.AsObject(), "crashReportConsent", "off", {"off", "local"});
+    settings.show_secure_indicator =
+        ReadBool(privacy->second.AsObject(), "showSecureIndicator", settings.show_secure_indicator);
   }
   settings.open_ai_timeout_ms = static_cast<int32_t>(std::clamp<int64_t>(
       ipc::json::Value(object).GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));

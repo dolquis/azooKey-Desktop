@@ -1619,7 +1619,12 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemo
   azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), E_OUTOFMEMORY);
 
-  EXPECT_EQ(h.context.request_count, previous_request_count);
+  // CommitSelected runs the M46 privacy probe (one synchronous read-only edit
+  // session) before it decides whether to learn from this commit, so the count
+  // moves by exactly that one. The commit's own write session must still never
+  // be requested once its allocation has failed.
+  EXPECT_EQ(h.context.request_count, previous_request_count + 1);
+  EXPECT_EQ(h.context.last_flags, static_cast<DWORD>(TF_ES_SYNC | TF_ES_READ));
   EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_EQ(h.service.commit_surface_, "蚊");
   EXPECT_TRUE(h.service.committing_);
@@ -4222,4 +4227,125 @@ TEST(TsfTipOnKeyDownPreeditTest, SystemModifiedKeysPassThroughDuringPreedit) {
   EXPECT_TRUE(h.TestPress('A'));
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "かあ");
+}
+
+// --- M46 secure suppression on the ordinary (non AI-cleanup) routes ---
+// The gate used to live inside PostBatchConversion's `if (ai_cleanup)` block,
+// so plain conversion in a password manager was still learned from (DEV-1187).
+
+namespace {
+// A plain commit with one host candidate: the shortest path that produces a
+// CommitObservation.
+void CommitOneCandidate(TextServiceHarness& h) {
+  h.service.preedit_kana_ = "かな";
+  std::vector<azookey::ipc::CandidateField> host_candidates(1);
+  host_candidates[0].reading = "かな";
+  host_candidates[0].surface = "仮名";
+  host_candidates[0].source = "dictionary";
+  h.service.set_cached_candidates_for_test(std::move(host_candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  h.service.set_selected_candidate_index_for_test(0);
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+}
+}  // namespace
+
+TEST(TsfTipSecureInputTest, BundledSecureAppSuppressesCommitObservation) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"KeePass.exe", "WindowsForms10.Window.8.app.0", true});
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+TEST(TsfTipSecureInputTest, UserAddedSecureAppSuppressesCommitObservation) {
+  TextServiceHarness h;
+  azookey::core::BracketSettings settings;
+  settings.secure_apps =
+      std::make_shared<const std::vector<std::string>>(std::vector<std::string>{"vault.exe"});
+  h.service.set_bracket_settings_for_test(settings);
+  h.service.set_foreground_app_for_test({"Vault.exe", "Vault", true});
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+// spec section 4.3: a foreground window we cannot resolve is treated as secure,
+// because the app we cannot see may be the one holding the secret.
+TEST(TsfTipSecureInputTest, UnresolvedForegroundAppSuppressesCommitObservation) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({});
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+TEST(TsfTipSecureInputTest, OrdinaryAppStillLearnsAndRecoversAfterASecureApp) {
+  {
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    CommitOneCandidate(h);
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation.has_value());
+    EXPECT_EQ(observation->chosen.surface, "仮名");
+  }
+  // Round trip within one service instance: secure must not latch on.
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"keepass.exe", "KeePass", true});
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  CommitOneCandidate(h);
+  const auto restored = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->chosen.surface, "仮名");
+}
+
+// The neural batch path never ran the privacy resolution at all, so a multi
+// segment commit in a secure app used to be learned from unconditionally.
+TEST(TsfTipSecureInputTest, NeuralBatchCommitInSecureAppSuppressesObservation) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_foreground_app_for_test({"1Password.exe", "1Password", true});
+  azookey::ipc::CandidateField first;
+  first.reading = "か";
+  first.surface = "蚊";
+  first.source = "dictionary";
+  auto second = first;
+  second.reading = "に";
+  second.surface = "二";
+  h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {second}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+// Whatever route builds the message, the send path is the last line of defence.
+TEST(TsfTipSecureInputTest, SendChokePointDropsLearningTrafficWhileSecure) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"bitwarden.exe", "Bitwarden", true});
+  CommitOneCandidate(h);
+
+  azookey::ipc::CandidateField chosen;
+  chosen.reading = "かな";
+  chosen.surface = "仮名";
+  chosen.source = "dictionary";
+  h.service.post_commit_observation_for_test("かな", chosen);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            0);
+
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  CommitOneCandidate(h);
+  // Count rather than presence: the commit above queues one observation of its
+  // own, so a gate that stayed shut would still leave "some" observation here.
+  const auto after_commit = h.service.queued_ipc_types_for_test();
+  const auto before = std::count(after_commit.begin(), after_commit.end(),
+                                 azookey::ipc::MessageType::CommitObservation);
+  h.service.post_commit_observation_for_test("かな", chosen);
+  const auto after_post = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(after_post.begin(), after_post.end(),
+                       azookey::ipc::MessageType::CommitObservation),
+            before + 1);
 }

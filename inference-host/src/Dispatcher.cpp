@@ -517,8 +517,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                                    ordinary_limit, parsed->live, trace.context());
     candidates = std::move(queried.candidates);
     corrected_reading = std::move(queried.corrected_reading);
+    // Under auto_replace the conversion ran on the corrected reading, so the
+    // rewriters have to key off the same reading or they would look up the
+    // typo the user is no longer being shown.
+    const std::string& rewriter_reading =
+        corrected_reading.empty() ? parsed->reading : corrected_reading;
     if (!parsed->live && (rewriters.symbol_enabled || rewriters.emoji_enabled))
-      candidates = engine_->QueryRewriters(rewriters, parsed->reading, {}, std::move(candidates),
+      candidates = engine_->QueryRewriters(rewriters, rewriter_reading, {}, std::move(candidates),
                                            merged_limit);
   }
 

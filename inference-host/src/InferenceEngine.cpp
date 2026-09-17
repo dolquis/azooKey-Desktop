@@ -196,17 +196,22 @@ void InferenceEngine::SetAutoWordStore(learning::AutoWordStore* store) {
 
 bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
                                   const std::string& correct_reading, uint64_t now_epoch_sec) {
-  // The store is caller-serialized and state_mutex_ is the serializer, so the
-  // gate, the mutation and the save all happen under one hold of it.
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  // "off" stops the learning too, not just the application: a user who turned
-  // the feature off should not accumulate a correction table.
-  if (!typo_store_ || config_.typo_correction_mode == "off") return false;
-  if (!typo_store_->Observe(wrong_reading, correct_reading, now_epoch_sec)) return false;
-  if (!typo_store_->Save()) {
-    if (runtime_logger_) {
-      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "typo_store_save_failed", {});
-    }
+  learning::TypoCorrectionStore* store = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    // "off" stops the learning too, not just the application: a user who turned
+    // the feature off should not accumulate a correction table.
+    if (!typo_store_ || config_.typo_correction_mode == "off") return false;
+    store = typo_store_;
+  }
+  // The store keeps no lock of its own, so typo_store_mutex_ serializes it.
+  // Taking it after state_mutex_ has been released keeps Save()'s disk write off
+  // the mutex the query path takes several times per request; the two are never
+  // held together, so there is no ordering hazard.
+  std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+  if (!store->Observe(wrong_reading, correct_reading, now_epoch_sec)) return false;
+  if (!store->Save() && runtime_logger_) {
+    runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "typo_store_save_failed", {});
   }
   return true;
 }
@@ -610,12 +615,22 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   CandidatesResult out;
   std::string suggest_reading;
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    if (typo_store_ && config_.typo_correction_mode != "off") {
-      auto corrected =
-          typo_store_->Lookup(requested_kana, config_.typo_min_count, now_epoch_sec);
+    learning::TypoCorrectionStore* store = nullptr;
+    std::string mode;
+    uint32_t min_count = 0;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      store = typo_store_;
+      mode = config_.typo_correction_mode;
+      min_count = config_.typo_min_count;
+    }
+    // typo_store_mutex_ alone, never together with state_mutex_ (see the member
+    // declaration): the store has no lock of its own and ObserveTypo mutates it.
+    if (store && mode != "off") {
+      std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+      auto corrected = store->Lookup(requested_kana, min_count, now_epoch_sec);
       if (corrected && *corrected != requested_kana) {
-        if (config_.typo_correction_mode == "auto_replace") {
+        if (mode == "auto_replace") {
           out.corrected_reading = std::move(*corrected);
         } else {
           suggest_reading = std::move(*corrected);
@@ -1026,6 +1041,10 @@ bool InferenceEngine::IsMiningCandidateLocked(const std::string& reading,
   }
   learning::LookupContext context;
   context.mode = learning::LookupMode::Exact;
+  // 0 means "no cap": this is a membership question, and truncating to the
+  // default 32 best-scoring surfaces would report a real dictionary word as
+  // unknown whenever its reading has many candidates.
+  context.max_results = 0;
   for (const auto& entry : dictionaries_.Lookup(reading, context)) {
     if (entry.surface == surface) return false;
   }
@@ -1059,16 +1078,22 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
     }
     converter = active_converter_;
   }
-  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
-  // The membership question has to be answered before Commit: Commit feeds
-  // Learn(), which inserts the pair into the converter's own bucket, so asking
-  // afterwards would report every committed word as already known.
-  if (auto_word_store && converter->Contains(reading, surface)) auto_word_store = nullptr;
-  converter->Commit(
-      core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
-      core::ConversionContext{});
+  {
+    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    // The membership question has to be answered before Commit: Commit feeds
+    // Learn(), which inserts the pair into the converter's own bucket, so
+    // asking afterwards would report every committed word as already known.
+    if (auto_word_store && converter->Contains(reading, surface)) auto_word_store = nullptr;
+    converter->Commit(
+        core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
+        core::ConversionContext{});
+  }
   if (auto_word_store) {
-    // AutoWordStore holds its own mutex, so this runs outside state_mutex_.
+    // Deliberately outside both engine mutexes: Save() writes a temp file,
+    // flushes it to disk and renames it, and every QueryCandidates takes
+    // converter_call_mutex_ to convert. Holding it across the flush would stall
+    // the next candidate query behind this commit's disk write. AutoWordStore
+    // has its own mutex, so it needs no help from ours.
     auto_word_store->Observe(surface, reading, now_epoch_sec, auto_word_min_count,
                              auto_word_auto_register);
     if (!auto_word_store->Save() && runtime_logger_) {

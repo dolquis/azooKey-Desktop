@@ -248,6 +248,10 @@ class InferenceEngine {
   const learning::UserDictionary* indexed_user_dict_{nullptr};
   uint64_t indexed_user_revision_{};
   bool user_dictionary_enabled_{true};
+  // Serializes TypoCorrectionStore, which keeps no lock of its own. Held on its
+  // own, never nested with state_mutex_, so the store's disk write does not
+  // stall the query path that takes state_mutex_ several times per request.
+  mutable std::mutex typo_store_mutex_;
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
   std::mutex model_load_mutex_;

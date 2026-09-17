@@ -131,9 +131,17 @@
             "aiCandidate": {"type": "boolean", "default": true},
             "externalAi": {"type": "boolean", "default": false}
           }
+        },
+        "secureApps": {
+          "type": "array", "items": {"type": "string"}, "default": [],
+          "description": "M46: 自動secure判定に使うユーザー追加の実行ファイル名（basename）。バンドル既定リストは再掲せず、実効判定は既定との和集合。照合は大文字小文字を無視する"
+        },
+        "showSecureIndicator": {
+          "type": "boolean", "default": true,
+          "description": "M46: secure中であることをユーザーへ表示する"
         }
       },
-      "description": "共有AI基盤の送信許可。secureはAI禁止、private/offlineはローカルのみ。その他のM46軸は別途実装"
+      "description": "共有AI基盤の送信許可とM46のsecure判定。secureはAI禁止、private/offlineはローカルのみ。autoSecureInput・secureUrlPatterns・privateApps等の残りのM46軸は別途実装"
     },
     "openAiApiKey": {
       "type": "string",

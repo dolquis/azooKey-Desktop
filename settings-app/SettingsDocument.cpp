@@ -175,6 +175,12 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
           } else if (field == "crashReportConsent") {
             // Consent is sanitized independently of the existing AI privacy axes.
             continue;
+          } else if (field == "secureApps") {
+            valid = valid && setting.IsArray() &&
+                    std::all_of(setting.AsArray().begin(), setting.AsArray().end(),
+                                [](const auto& item) { return item.IsString(); });
+          } else if (field == "showSecureIndicator") {
+            valid = valid && setting.IsBool();
           } else if (field == "custom" && setting.IsObject()) {
             for (const auto& [axis, enabled] : setting.AsObject())
               valid = valid && (axis == "aiCandidate" || axis == "externalAi") && enabled.IsBool();

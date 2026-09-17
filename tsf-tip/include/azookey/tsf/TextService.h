@@ -241,7 +241,14 @@ class TextService final : public ITfTextInputProcessorEx,
   core::RomajiKanaConverter romaji_;
   std::string batch_raw_romaji_;
   bool batch_query_in_progress_{false};
+  // AI axis of the batch path: an ai-cleanup conversion whose privacy was
+  // reduced must not be learned from. Reset with the rest of the batch state.
   bool batch_learning_allowed_{true};
+  // Route-common M46 secure state, written only by ResolvePrivacy and holding
+  // the answer from the most recent commit or batch conversion. Batch
+  // bookkeeping does not touch it, so ClearBatchState cannot reopen the gate in
+  // PostIpcSend. Atomic because it guards a queue the IPC worker also drains.
+  std::atomic<bool> secure_input_{false};
   std::atomic<bool> batch_romaji_conversion_{false};
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
@@ -371,6 +378,15 @@ class TextService final : public ITfTextInputProcessorEx,
                          bool test_only, bool& handled);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
                            ITfContext* context);
+  // Single evaluation point for the M46 secure decision and the AI privacy
+  // axes. Owner thread only: it probes the foreground app and the TSF input
+  // scope. Updates secure_input_ so every outbound route sees one answer.
+  struct PrivacyDecision {
+    bool secure{false};
+    core::AiPrivacy ai;
+    std::string backend;
+  };
+  PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
   POINT CandidateAnchorPoint();

@@ -6,6 +6,7 @@
 #include <future>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "azookey/core/PlatformPaths.h"
 
@@ -72,6 +73,38 @@ TEST(SettingsStoreTest, SettingsWrittenAfterLoadReadsOnlyAheadOfTheLoadedFile) {
   std::filesystem::remove(path);
   EXPECT_FALSE(store.SettingsWrittenAfterLoad().has_value());
   EXPECT_EQ(store.settings().max_candidates, 9);
+}
+
+TEST(SettingsStoreTest, SecureAppsNormalizeAndMalformedPrivacyFallsBackToDefaults) {
+  const auto dir = TestDir("azookey_settings_secure_apps");
+  const auto path = dir / "settings.json";
+  azookey::host::SettingsStore store(path);
+  const auto loaded = store.Load();
+  EXPECT_TRUE(loaded.settings.secure_apps.empty());
+  EXPECT_TRUE(loaded.settings.show_secure_indicator);
+
+  WriteText(path, R"({"privacy":{"secureApps":["KeePassXC.EXE","",3,"vault.exe"]}})");
+  const auto parsed = store.Reload();
+  // Names are lowercased at this boundary and non-string entries are dropped,
+  // so an entry a user typed in the wrong case still matches.
+  EXPECT_EQ(parsed.settings.secure_apps, (std::vector<std::string>{"keepassxc.exe", "vault.exe"}));
+
+  // Anything that is not a list of names degrades to "bundled defaults only"
+  // rather than to no secure detection, and never stops the host from loading.
+  for (const auto* text :
+       {R"({})", R"({"privacy":false})", R"({"privacy":{"secureApps":"keepass.exe"}})",
+        R"({"privacy":{"secureApps":{}}})", R"({"privacy":{}})"}) {
+    WriteText(path, text);
+    EXPECT_TRUE(store.Reload().settings.secure_apps.empty()) << text;
+  }
+
+  for (const auto* text : {R"({"privacy":{"showSecureIndicator":"yes"}})",
+                           R"({"privacy":{"showSecureIndicator":1}})", R"({"privacy":{}})"}) {
+    WriteText(path, text);
+    EXPECT_TRUE(store.Reload().settings.show_secure_indicator) << text;
+  }
+  WriteText(path, R"({"privacy":{"showSecureIndicator":false}})");
+  EXPECT_FALSE(store.Reload().settings.show_secure_indicator);
 }
 
 TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisablesIt) {

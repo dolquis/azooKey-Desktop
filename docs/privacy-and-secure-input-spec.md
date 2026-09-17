@@ -103,7 +103,9 @@ Windows の UAC 認証ダイアログで前面に来ることがあるため保�
 #### 4.1.1 バンドル既定リストの保守手順・更新元
 
 - **更新元はリポジトリのみ**: `kDefaultSecureApps` はコード内の静的定数
-  （`tsf-tip/src/ForegroundAppDetector.cpp` に隣接する単一ヘッダ等）で定義し、
+  （`core/include/azookey/core/SecureApps.h`。TIP の照合と Host の設定パースが同じ
+  ヘッダを共有するため、`tsf-tip/` ではなく `core/` に置く。実効リストの照合主体は
+  TIP であり、Host は §5.1.1 のとおり前面アプリを解決しない）で定義し、
   **ネットワーク取得・テレメトリ駆動の自動更新は行わない**（§12 および
   `docs/app-profile-spec.md` §12「クラウド辞書はプライバシー上非対応」と整合）。
 - **更新はアプリリリース経由**: エントリの追加・削除は通常の PR としてレビュー
@@ -188,15 +190,24 @@ M48 `AppProfileResolver` lookup）が小文字で比較できるようにする�
 この非対称により、検出不能でも学習・外部 AI が秘密入力へ漏れない一方、通常の
 候補生成は素の挙動を維持する。
 
+**入力 scope 軸の扱い**: §4 表の優先 2（パスワード入力欄）は TSF の
+`GUID_PROP_INPUTSCOPE` から判定する。scope が password / PIN と**積極的に判定
+できたときだけ** secure とし、取得できない場合（property 未提供・同期読取セッション
+の拒否・scope 0 件）は secure 側へ倒さない。前面アプリ軸の fail-closed が backstop
+として働くうえ、`GUID_PROP_INPUTSCOPE` を提供しないアプリは珍しくなく、ここで倒すと
+学習が無言で広範に停止するためである。AI 送信軸は §2 のとおり fail closed を保ち、
+判定不能な scope では送信を抑止する。この二軸の非対称が `AiInputAllowed` と
+`SecureInputDetected`（`tsf-tip/src/AiInputGuard.cpp`）の差である。
+
 ## 5. secure 中の挙動契約
 
 `PrivacyGate::IsSecure() == true` の間、以下を**強制抑止**する:
 
 | 抑止対象 | 実装ポイント |
 |---|---|
-| `CommitObservation` IPC を送信しない | `tsf-tip/src/TextService.cpp::Commit` |
+| `CommitObservation` IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` を経路共通の choke point として落とす |
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
-| `QueryPredictions` IPC を送信しない | `tsf-tip/src/PredictionWindow.cpp` |
+| `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::PostIpcSend` が message type で落とす。学習・予測系の送出は `PostIpcSend` を通す規約とし、queue へ直接積まない |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/dev-infrastructure-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |
@@ -395,6 +406,17 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 `secureApps` には §4.1 のバンドル既定を再掲せず、ユーザー追加分のみを保存する
 （既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
+`settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・
+`custom.aiCandidate`・`custom.externalAi`・`secureApps`・`showSecureIndicator` であり、
+`inference-host/src/SettingsStore.cpp` と `settings-app/SettingsDocument.cpp` の許可キーも
+これに一致する。schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
+`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`・`redactLogs`・`custom` の
+learning / prediction / detailedLogging）は書き込めない。`additionalProperties: false` が
+schema 検証で弾き、`settings-app/SettingsDocument.cpp` の許可キー判定は未知の `privacy`
+フィールドを含む object を `{"mode": "secure"}` へ潰す。実行時はこれらの軸の既定値が
+適用され、`autoSecureInput` は `true` 固定として §4 の自動 secure 判定が常に働く。
+§4 前段が定めるユーザー側の無効化手段は、当該キーが schema へ入るまで存在しない。
+
 `privacy.custom` は `mode = custom` のときのみ参照する（他モードでは無視する）。
 各軸の既定は §5.2 の private 相当の安全側に揃え、欠落キーは schema 既定で補完される。
 `custom` の解決順・不変条件（`aiCandidate = false` で `externalAi` を強制 OFF）は §5.2 を正典とする。
@@ -561,10 +583,11 @@ Response:
 
 ## 12. 将来拡張
 
-- パスワード欄の TSF 自動判定（`ITfContextView` から取得試行）
 - ブラウザの URL パターン判定（Edge / Chrome の UI Automation）
 - RDP / VM 内での自動 secure
 - アプリ別の `mode` 切替（`custom` モードの GUI 編集）
+- パスワード欄判定の UI Automation 経路（§4 表の優先 2 は TSF の
+  `GUID_PROP_INPUTSCOPE` と `ES_PASSWORD` まで。UIA へは広げない）
 
-これらは M46 の本範囲外。M46 では `secureApps` ベースの自動切替まで
-実装し、上記は将来 M に分離する。
+M46 の範囲は `secureApps` ベースの自動切替と §4.3「入力 scope 軸の扱い」の
+パスワード欄判定までとし、上記は将来 M に分離する。

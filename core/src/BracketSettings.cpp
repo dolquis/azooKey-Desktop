@@ -36,6 +36,7 @@ BracketSettings ParseBracketSettings(std::string_view json) {
   settings.app_policy = std::move(policy);
   settings.profiles =
       std::make_shared<const AppProfileResolver>(AppProfileResolver::FromSettings(*root));
+  settings.secure_apps = std::make_shared<const std::vector<std::string>>(ParseSecureApps(*root));
   return settings;
 }
 

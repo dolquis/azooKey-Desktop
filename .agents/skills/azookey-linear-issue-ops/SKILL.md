@@ -39,8 +39,26 @@ Linear MCP を優先する。起票と更新は `save_issue`、コメントは `
 
 ### 監査
 
-週次監査は §11 の共通項目と §13 の repo 固有項目（spec-first、アーカイブ衛生、保留理由の失効、
-実装課題と人間ゲートの分離）を順に確認し、結果は Project の Status Update に追記する。
+週次監査は機械判定から始める。機械判定の正典は origin `dolquis/agent-ops` が持つ
+`<agent-ops>/scripts/linear-audit.py` で、この repo へベンダリングしない。team 横断のツールであり、
+product repo 側に複製を置くと silent fork になる。実行のたびに origin を取得する。
+
+```sh
+git clone --depth 1 https://github.com/dolquis/agent-ops <path>
+LINEAR_API_KEY=<非空文字列> python3 <path>/scripts/linear-audit.py --team Dev
+```
+
+読み取り専用で Linear へ書き込まない。`CONFIRMED` が 1 件でもあると exit 1 になる。
+`api.linear.app` への認証をインジェクトするハーネスでは実鍵を渡さない（`LINEAR_API_KEY` は
+スクリプト側の非空チェックを通すためだけに要る）。インジェクトが無い環境では実鍵を環境変数で
+渡し、コマンド履歴と Issue 本文に残さない。TLS 検証が通らない場合はハーネスの CA bundle を
+`SSL_CERT_FILE` で指す。
+
+`CONFIRMED` を先に処置する。`REVIEW` はヒューリスティックで過検出を前提とするため、採否を
+判断して棄却する場合は理由を当該 Issue に残す。そのうえで §11 の共通項目と §13 の repo 固有項目
+（spec-first、アーカイブ衛生、保留理由の失効、実装課題と人間ゲートの分離、一括誤 Done、
+Linear と main の突合）を順に確認する。機械判定が持たない項目はこちらにしかない。
+結果は Project の Status Update に追記する。
 
 ## 必須ガードレール
 

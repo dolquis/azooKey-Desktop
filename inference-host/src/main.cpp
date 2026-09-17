@@ -428,6 +428,30 @@ int main(int argc, char** argv) {
                   "user_dictionary_load",
                   {{"result", SafeLogText(user_dict_loaded ? "ok" : "error")}});
 
+  azookey::learning::TypoCorrectionStore typo_store(user_paths->typo_store_path);
+  const bool typo_store_loaded = typo_store.Load();
+  runtime_log.Log(typo_store_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                    : azookey::logging::RuntimeLogLevel::Warn,
+                  "typo_store_load",
+                  {{"result", SafeLogText(typo_store_loaded ? "ok" : "error")}});
+
+  azookey::learning::AutoWordStore auto_word_store(user_paths->auto_word_store_path);
+  const bool auto_word_store_loaded = auto_word_store.Load();
+  runtime_log.Log(auto_word_store_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                         : azookey::logging::RuntimeLogLevel::Warn,
+                  "auto_word_store_load",
+                  {{"result", SafeLogText(auto_word_store_loaded ? "ok" : "error")}});
+  // Spec section 3-3: sweep pending words that were never confirmed, once per
+  // start rather than on every observation.
+  const auto now_epoch_sec = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count());
+  if (auto_word_store.PrunePending(now_epoch_sec,
+                                   azookey::learning::kAutoWordDefaultPendingMaxAgeSec) > 0) {
+    (void)auto_word_store.Save();
+  }
+
   auto converter = std::make_unique<azookey::core::SimpleConverter>();
   if (!mock_dict_path.empty()) {
     converter->LoadFromTsv(mock_dict_path);
@@ -435,6 +459,8 @@ int main(int argc, char** argv) {
 
   azookey::host::InferenceEngine engine(std::move(converter), &store, config, &runtime_log);
   engine.SetUserDictionary(&user_dict);
+  engine.SetTypoStore(&typo_store);
+  engine.SetAutoWordStore(&auto_word_store);
 #ifdef _WIN32
   // Discover only installer-controlled static layers, never the current directory.
   const auto dictionary_directory = GetExeDirectory() / "dict";
@@ -497,7 +523,7 @@ int main(int argc, char** argv) {
   // For pipe mode a new Dispatcher is created per client connection so that
   // each client's authentication state is isolated.
   azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf,
-                                             &settings_store);
+                                             &settings_store, &auto_word_store);
 
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
@@ -535,9 +561,10 @@ int main(int argc, char** argv) {
     }
 
     azookey::ipc::NamedPipeServer server;
-    if (!server.Start(pipe_name, [&engine, &scheduler, &user_dict, &settings_store, dconf]() {
-          auto d = std::make_shared<azookey::host::Dispatcher>(&engine, &scheduler, &user_dict,
-                                                               dconf, &settings_store);
+    if (!server.Start(pipe_name, [&engine, &scheduler, &user_dict, &settings_store,
+                                 &auto_word_store, dconf]() {
+          auto d = std::make_shared<azookey::host::Dispatcher>(
+              &engine, &scheduler, &user_dict, dconf, &settings_store, &auto_word_store);
           return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };
         })) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "pipe_listen_failed",

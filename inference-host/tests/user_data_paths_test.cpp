@@ -88,3 +88,30 @@ TEST(UserDataPathsTest, EnsureCreatesLayoutAndExplicitParents) {
   std::filesystem::remove_all(local);
   std::filesystem::remove_all(explicit_dir.parent_path());
 }
+
+TEST(UserDataPathsTest, TypoAndAutoWordStoresSitBesideTheLearningStore) {
+  const auto local = TestRoot("azookey_m35_m36_localappdata");
+  azookey::host::UserDataPathInputs inputs;
+  inputs.local_app_data = local;
+
+  auto paths = azookey::host::ResolveUserDataPaths(inputs);
+  ASSERT_TRUE(paths.has_value());
+  EXPECT_EQ(paths->typo_store_path, local / "azooKey" / "data" / "typo_corrections.tsv");
+  EXPECT_EQ(paths->auto_word_store_path, local / "azooKey" / "data" / "auto_words.tsv");
+}
+
+TEST(UserDataPathsTest, ExplicitLearningPathAlsoRelocatesTheNewStores) {
+  // With no LOCALAPPDATA, data_dir is empty; deriving the two stores from the
+  // learning path keeps them next to a real directory instead of landing on a
+  // bare relative filename.
+  const auto custom = TestRoot("azookey_m35_m36_explicit") / "state";
+  azookey::host::UserDataPathInputs inputs;
+  inputs.explicit_learning_path = custom / "learning.tsv";
+  inputs.explicit_user_dict_path = custom / "user_dict.json";
+
+  auto paths = azookey::host::ResolveUserDataPaths(inputs);
+  ASSERT_TRUE(paths.has_value());
+  EXPECT_EQ(paths->typo_store_path, custom / "typo_corrections.tsv");
+  EXPECT_EQ(paths->auto_word_store_path, custom / "auto_words.tsv");
+  EXPECT_TRUE(paths->typo_store_path.has_parent_path());
+}

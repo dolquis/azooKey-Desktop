@@ -223,6 +223,25 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
         ReadBool(*model, "benchmarkOnModelChange", settings.model.benchmark_on_model_change);
   }
 
+  settings.typo_correction_mode = ReadEnum(object, "typoCorrectionMode",
+                                           settings.typo_correction_mode,
+                                           {"off", "suggest", "auto_replace"});
+  settings.typo_min_count =
+      ReadRangedInt32(object, "typoMinCount", settings.typo_min_count, 1, 100);
+
+  if (const auto* auto_word = ReadObject(object, "autoWordRegistration")) {
+    settings.auto_word.mining_enabled =
+        ReadBool(*auto_word, "miningEnabled", settings.auto_word.mining_enabled);
+    settings.auto_word.trending_enabled =
+        ReadBool(*auto_word, "trendingEnabled", settings.auto_word.trending_enabled);
+    settings.auto_word.registration_mode = ReadEnum(
+        *auto_word, "registrationMode", settings.auto_word.registration_mode, {"confirm", "auto"});
+    settings.auto_word.mining_min_count = ReadRangedInt32(
+        *auto_word, "miningMinCount", settings.auto_word.mining_min_count, 1, 100);
+    settings.auto_word.trending_interval_hours = ReadRangedInt32(
+        *auto_word, "trendingIntervalHours", settings.auto_word.trending_interval_hours, 1, 8760);
+  }
+
   if (const auto* auto_update = ReadObject(object, "autoUpdate")) {
     settings.auto_update.enabled = ReadBool(*auto_update, "enabled", settings.auto_update.enabled);
     settings.auto_update.channel =
@@ -411,6 +430,11 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
   }
   config.max_candidates = static_cast<uint32_t>(settings.max_candidates);
   config.max_context_length = static_cast<uint32_t>(settings.max_context_length);
+  config.typo_correction_mode = settings.typo_correction_mode;
+  config.typo_min_count = static_cast<uint32_t>(settings.typo_min_count);
+  config.auto_word_mining_enabled = settings.auto_word.mining_enabled;
+  config.auto_word_auto_register = settings.auto_word.registration_mode == "auto";
+  config.auto_word_min_count = static_cast<uint32_t>(settings.auto_word.mining_min_count);
 
   std::string backend_preference = settings.backend_preference;
   if (settings.model.backend_preference != "auto") {

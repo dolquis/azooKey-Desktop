@@ -314,6 +314,28 @@
       "type": "string", "default": "",
       "description": "絵文字 TSV のパス。空文字列は Host と同階層の data/emoji.tsv"
     },
+    "typoCorrectionMode": {
+      "type": "string",
+      "enum": ["off", "suggest", "auto_replace"],
+      "default": "suggest",
+      "description": "M35: 個人のタイプミス傾向を学習し修正する動作モード。docs/typo-correction-learning-spec.md section 8"
+    },
+    "typoMinCount": {
+      "type": "integer", "minimum": 1, "maximum": 100, "default": 3,
+      "description": "M35: 同じ打ち間違えペアをこの回数観測してから補正候補に使う"
+    },
+    "autoWordRegistration": {
+      "type": "object",
+      "description": "M36: 新語の自動取得・辞書追加; docs/auto-word-registration-spec.md section 8",
+      "properties": {
+        "miningEnabled": { "type": "boolean", "default": true },
+        "trendingEnabled": { "type": "boolean", "default": false },
+        "registrationMode": { "type": "string", "enum": ["confirm", "auto"], "default": "confirm" },
+        "miningMinCount": { "type": "integer", "default": 3, "minimum": 1, "maximum": 100 },
+        "trendingIntervalHours": { "type": "integer", "default": 24, "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
     "reranker": {
       "type": "object",
       "description": "Track B NLL reranking; docs/neural-reranker-spec.md section B9",

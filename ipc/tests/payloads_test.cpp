@@ -536,3 +536,139 @@ TEST(PayloadsTest, QueryErrorIsOptionalAndRoundTrips) {
   EXPECT_FALSE(parsed->ok);
   EXPECT_EQ(parsed->error, error.error);
 }
+
+TEST(PayloadsTest, ObserveTypoRequestRoundTrips) {
+  azookey::ipc::ObserveTypoRequest request;
+  request.wrong_reading = "こんちには";
+  request.correct_reading = "こんにちは";
+  request.timestamp_ms = 1'780'000'000'000ULL;
+
+  const auto parsed =
+      azookey::ipc::ParseObserveTypoRequest(azookey::ipc::BuildObserveTypoRequest(request));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->wrong_reading, request.wrong_reading);
+  EXPECT_EQ(parsed->correct_reading, request.correct_reading);
+  EXPECT_EQ(parsed->timestamp_ms, request.timestamp_ms);
+
+  azookey::ipc::ObserveTypoResponse response;
+  response.ok = true;
+  const auto parsed_response =
+      azookey::ipc::ParseObserveTypoResponse(azookey::ipc::BuildObserveTypoResponse(response));
+  ASSERT_TRUE(parsed_response);
+  EXPECT_TRUE(parsed_response->ok);
+}
+
+TEST(PayloadsTest, ObserveTypoRejectsHalfSpecifiedPairs) {
+  // Correcting to an empty reading is not a correction; neither is an update
+  // that says only what the result should be.
+  EXPECT_FALSE(azookey::ipc::ParseObserveTypoRequest(R"({"wrong_reading":"こんちには"})"));
+  EXPECT_FALSE(azookey::ipc::ParseObserveTypoRequest(R"({"correct_reading":"こんにちは"})"));
+  EXPECT_FALSE(azookey::ipc::ParseObserveTypoRequest("{}"));
+  EXPECT_FALSE(azookey::ipc::ParseObserveTypoRequest("not json"));
+  // timestamp_ms is optional and defaults to zero.
+  const auto parsed = azookey::ipc::ParseObserveTypoRequest(
+      R"({"wrong_reading":"こんちには","correct_reading":"こんにちは"})");
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->timestamp_ms, 0u);
+}
+
+TEST(PayloadsTest, QueryCandidatesResponseCarriesCorrectedReading) {
+  azookey::ipc::QueryCandidatesResponse response;
+  response.corrected_reading = "こんにちは";
+  const auto parsed = azookey::ipc::ParseQueryCandidatesResponse(
+      azookey::ipc::BuildQueryCandidatesResponse(response));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->corrected_reading, "こんにちは");
+
+  // A host that predates M35 omits the field; that decodes as "no correction"
+  // and the field is not written back when empty.
+  const auto legacy =
+      azookey::ipc::ParseQueryCandidatesResponse(R"({"candidates":[],"partial":false})");
+  ASSERT_TRUE(legacy);
+  EXPECT_TRUE(legacy->corrected_reading.empty());
+  EXPECT_EQ(azookey::ipc::BuildQueryCandidatesResponse(azookey::ipc::QueryCandidatesResponse{})
+                .find("corrected_reading"),
+            std::string::npos);
+}
+
+TEST(PayloadsTest, ListNewWordCandidatesRoundTrips) {
+  azookey::ipc::ListNewWordCandidatesRequest request;
+  request.state_filter = "confirmed";
+  request.max_items = 12;
+  const auto parsed_request = azookey::ipc::ParseListNewWordCandidatesRequest(
+      azookey::ipc::BuildListNewWordCandidatesRequest(request));
+  ASSERT_TRUE(parsed_request);
+  EXPECT_EQ(parsed_request->state_filter, "confirmed");
+  EXPECT_EQ(parsed_request->max_items, 12u);
+
+  // Defaults apply when the caller sends neither field.
+  const auto defaulted = azookey::ipc::ParseListNewWordCandidatesRequest("{}");
+  ASSERT_TRUE(defaulted);
+  EXPECT_EQ(defaulted->state_filter, "pending");
+  EXPECT_EQ(defaulted->max_items, 50u);
+
+  azookey::ipc::ListNewWordCandidatesResponse response;
+  azookey::ipc::NewWordField field;
+  field.surface = "あずきー";
+  field.reading = "あずきー";
+  field.source = "mining";
+  field.state = "pending";
+  field.count = 4;
+  field.last_seen_epoch = 1'700'000'000ULL;
+  response.items.push_back(field);
+  const auto parsed_response = azookey::ipc::ParseListNewWordCandidatesResponse(
+      azookey::ipc::BuildListNewWordCandidatesResponse(response));
+  ASSERT_TRUE(parsed_response);
+  ASSERT_EQ(parsed_response->items.size(), 1u);
+  EXPECT_EQ(parsed_response->items[0].surface, field.surface);
+  EXPECT_EQ(parsed_response->items[0].source, field.source);
+  EXPECT_EQ(parsed_response->items[0].state, field.state);
+  EXPECT_EQ(parsed_response->items[0].count, field.count);
+  EXPECT_EQ(parsed_response->items[0].last_seen_epoch, field.last_seen_epoch);
+}
+
+TEST(PayloadsTest, ListNewWordCandidatesRejectsUnknownFilterAndOutOfRangeLimit) {
+  // Widening an unknown filter to "everything" would show the user words they
+  // already rejected.
+  EXPECT_FALSE(azookey::ipc::ParseListNewWordCandidatesRequest(R"({"state_filter":"all"})"));
+  EXPECT_FALSE(azookey::ipc::ParseListNewWordCandidatesRequest(R"({"state_filter":""})"));
+  EXPECT_FALSE(azookey::ipc::ParseListNewWordCandidatesRequest(R"({"max_items":0})"));
+  EXPECT_FALSE(azookey::ipc::ParseListNewWordCandidatesRequest(R"({"max_items":100000})"));
+  EXPECT_FALSE(azookey::ipc::ParseListNewWordCandidatesRequest("not json"));
+  // Malformed items are skipped rather than blanking the whole page.
+  const auto lenient = azookey::ipc::ParseListNewWordCandidatesResponse(
+      R"({"items":[{"surface":"あ"},{"surface":"あずきー","reading":"あずきー"}]})");
+  ASSERT_TRUE(lenient);
+  ASSERT_EQ(lenient->items.size(), 1u);
+  EXPECT_EQ(lenient->items[0].surface, "あずきー");
+}
+
+TEST(PayloadsTest, ResolveNewWordRoundTripsAndRejectsUnknownAction) {
+  for (const std::string action : {"confirm", "reject"}) {
+    azookey::ipc::ResolveNewWordRequest request;
+    request.surface = "あずきー";
+    request.reading = "あずきー";
+    request.action = action;
+    const auto parsed =
+        azookey::ipc::ParseResolveNewWordRequest(azookey::ipc::BuildResolveNewWordRequest(request));
+    ASSERT_TRUE(parsed) << action;
+    EXPECT_EQ(parsed->action, action);
+    EXPECT_EQ(parsed->surface, request.surface);
+    EXPECT_EQ(parsed->reading, request.reading);
+  }
+
+  // An unknown action must not fall through to one of the two real outcomes.
+  EXPECT_FALSE(azookey::ipc::ParseResolveNewWordRequest(
+      R"({"surface":"あずきー","reading":"あずきー","action":"delete"})"));
+  EXPECT_FALSE(azookey::ipc::ParseResolveNewWordRequest(
+      R"({"surface":"あずきー","reading":"あずきー"})"));
+  EXPECT_FALSE(azookey::ipc::ParseResolveNewWordRequest(
+      R"({"surface":"","reading":"あずきー","action":"confirm"})"));
+
+  azookey::ipc::ResolveNewWordResponse response;
+  response.ok = true;
+  const auto parsed_response =
+      azookey::ipc::ParseResolveNewWordResponse(azookey::ipc::BuildResolveNewWordResponse(response));
+  ASSERT_TRUE(parsed_response);
+  EXPECT_TRUE(parsed_response->ok);
+}

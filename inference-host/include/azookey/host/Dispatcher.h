@@ -9,6 +9,7 @@
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Messages.h"
+#include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace azookey::host {
@@ -35,9 +36,13 @@ struct DispatcherConfig {
 // response Envelope to send back to the caller.
 class Dispatcher {
  public:
+  // auto_word_store is trailing and defaulted rather than sitting next to
+  // user_dict as the spec sketches it, so the existing call sites keep
+  // compiling. nullptr disables the two approval messages.
   Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
              learning::UserDictionary* user_dict, DispatcherConfig config = {},
-             SettingsStore* settings_store = nullptr);
+             SettingsStore* settings_store = nullptr,
+             learning::AutoWordStore* auto_word_store = nullptr);
   ~Dispatcher();
 
   std::optional<ipc::Envelope> Dispatch(const ipc::Envelope& request);
@@ -58,6 +63,9 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleAddUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleRemoveUserWord(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleUpdateConfig(const ipc::Envelope& req);
+  void HandleObserveTypo(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleListNewWordCandidates(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
   bool RequiresAuthenticatedSession() const;
   void SetClientId(std::string client_id);
 
@@ -65,6 +73,7 @@ class Dispatcher {
   RequestScheduler* scheduler_;
   learning::UserDictionary* user_dict_;
   SettingsStore* settings_store_;
+  learning::AutoWordStore* auto_word_store_;
   DispatcherConfig config_;
   bool authenticated_{false};
   std::string client_id_;

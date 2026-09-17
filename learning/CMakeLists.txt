@@ -1,7 +1,9 @@
 add_library(azookey_learning STATIC
+  src/AutoWordStore.cpp
   src/DictionaryStore.cpp
   src/LearningStore.cpp
   src/Reranker.cpp
+  src/TypoCorrectionStore.cpp
   src/UserDictionary.cpp
 )
 

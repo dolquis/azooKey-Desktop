@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Limits.h"
 
 namespace azookey::ipc {
 
@@ -333,6 +334,11 @@ std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p) {
   for (const auto& c : p.candidates) arr.push_back(CandidateToJson(c));
   o.emplace("candidates", j::Value(std::move(arr)));
   o.emplace("partial", j::Value(p.partial));
+  // Omitted when empty so a response to a client that predates M35 keeps its
+  // previous shape on the wire.
+  if (!p.corrected_reading.empty()) {
+    o.emplace("corrected_reading", j::Value(p.corrected_reading));
+  }
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -354,6 +360,8 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
     }
   }
   p.partial = v->GetBool("partial").value_or(false);
+  // Absent for hosts that predate M35: decodes as "no correction applied".
+  p.corrected_reading = v->GetString("corrected_reading").value_or(std::string());
   return p;
 }
 
@@ -643,6 +651,173 @@ std::optional<UpdateConfigResponse> ParseUpdateConfigResponse(const std::string&
   if (!ok) return std::nullopt;
   p.ok = *ok;
   if (auto error = v->GetString("error")) p.error = std::move(*error);
+  return p;
+}
+
+// -------- ObserveTypo (M35) --------
+
+std::string BuildObserveTypoRequest(const ObserveTypoRequest& p) {
+  j::Object o;
+  o.emplace("wrong_reading", j::Value(p.wrong_reading));
+  o.emplace("correct_reading", j::Value(p.correct_reading));
+  o.emplace("timestamp_ms", j::Value(p.timestamp_ms));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ObserveTypoRequest> ParseObserveTypoRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ObserveTypoRequest p;
+  // Both readings are required: a half-specified pair has nothing to learn from
+  // and must not be applied as "correct to empty".
+  auto wrong = v->GetString("wrong_reading");
+  auto correct = v->GetString("correct_reading");
+  if (!wrong || !correct) return std::nullopt;
+  p.wrong_reading = std::move(*wrong);
+  p.correct_reading = std::move(*correct);
+  p.timestamp_ms = v->GetUInt("timestamp_ms").value_or(0);
+  return p;
+}
+
+std::string BuildObserveTypoResponse(const ObserveTypoResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ObserveTypoResponse> ParseObserveTypoResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ObserveTypoResponse p;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  p.ok = *ok;
+  return p;
+}
+
+// -------- ListNewWordCandidates / ResolveNewWord (M36-A) --------
+
+namespace {
+
+bool IsKnownNewWordState(const std::string& value) {
+  return value == "pending" || value == "confirmed" || value == "rejected";
+}
+
+j::Value NewWordToJson(const NewWordField& w) {
+  j::Object o;
+  o.emplace("surface", j::Value(w.surface));
+  o.emplace("reading", j::Value(w.reading));
+  o.emplace("source", j::Value(w.source));
+  o.emplace("state", j::Value(w.state));
+  o.emplace("count", j::Value(static_cast<uint64_t>(w.count)));
+  o.emplace("last_seen_epoch", j::Value(w.last_seen_epoch));
+  return j::Value(std::move(o));
+}
+
+std::optional<NewWordField> NewWordFromJson(const j::Value& v) {
+  if (!v.IsObject()) return std::nullopt;
+  NewWordField w;
+  auto surface = v.GetString("surface");
+  auto reading = v.GetString("reading");
+  if (!surface || !reading) return std::nullopt;
+  w.surface = std::move(*surface);
+  w.reading = std::move(*reading);
+  w.source = v.GetString("source").value_or(std::string());
+  w.state = v.GetString("state").value_or(std::string());
+  w.count = static_cast<uint32_t>(v.GetUInt("count").value_or(0));
+  w.last_seen_epoch = v.GetUInt("last_seen_epoch").value_or(0);
+  return w;
+}
+
+}  // namespace
+
+std::string BuildListNewWordCandidatesRequest(const ListNewWordCandidatesRequest& p) {
+  j::Object o;
+  o.emplace("state_filter", j::Value(p.state_filter));
+  o.emplace("max_items", j::Value(static_cast<uint64_t>(p.max_items)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ListNewWordCandidatesRequest> ParseListNewWordCandidatesRequest(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ListNewWordCandidatesRequest p;
+  if (auto filter = v->GetString("state_filter")) {
+    // An unrecognized filter is rejected rather than widened to "everything":
+    // listing rejected words to a caller that asked for pending ones would put
+    // words the user turned down back in front of them.
+    if (!IsKnownNewWordState(*filter)) return std::nullopt;
+    p.state_filter = std::move(*filter);
+  }
+  if (auto max_items = v->GetUInt("max_items")) {
+    if (*max_items == 0 || *max_items > kMaxNewWordCandidates) return std::nullopt;
+    p.max_items = static_cast<uint32_t>(*max_items);
+  }
+  return p;
+}
+
+std::string BuildListNewWordCandidatesResponse(const ListNewWordCandidatesResponse& p) {
+  j::Object o;
+  j::Array items;
+  for (const auto& w : p.items) items.push_back(NewWordToJson(w));
+  o.emplace("items", j::Value(std::move(items)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ListNewWordCandidatesResponse> ParseListNewWordCandidatesResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ListNewWordCandidatesResponse p;
+  if (const auto* arr = v->GetArray("items")) {
+    // Malformed entries are skipped, matching the module's lenient decode for
+    // arrays of optional elements.
+    for (const auto& e : *arr) {
+      if (auto w = NewWordFromJson(e)) p.items.push_back(std::move(*w));
+    }
+  }
+  return p;
+}
+
+std::string BuildResolveNewWordRequest(const ResolveNewWordRequest& p) {
+  j::Object o;
+  o.emplace("surface", j::Value(p.surface));
+  o.emplace("reading", j::Value(p.reading));
+  o.emplace("action", j::Value(p.action));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ResolveNewWordRequest> ParseResolveNewWordRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ResolveNewWordRequest p;
+  auto surface = v->GetString("surface");
+  auto reading = v->GetString("reading");
+  auto action = v->GetString("action");
+  if (!surface || !reading || !action) return std::nullopt;
+  if (surface->empty() || reading->empty()) return std::nullopt;
+  // An unknown action must not fall through to one of the two real outcomes.
+  if (*action != "confirm" && *action != "reject") return std::nullopt;
+  p.surface = std::move(*surface);
+  p.reading = std::move(*reading);
+  p.action = std::move(*action);
+  return p;
+}
+
+std::string BuildResolveNewWordResponse(const ResolveNewWordResponse& p) {
+  j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ResolveNewWordResponse> ParseResolveNewWordResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ResolveNewWordResponse p;
+  auto ok = v->GetBool("ok");
+  if (!ok) return std::nullopt;
+  p.ok = *ok;
   return p;
 }
 

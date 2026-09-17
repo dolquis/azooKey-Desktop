@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "azookey/ipc/Json.h"
@@ -178,4 +179,27 @@ TEST(MessagesTest, LengthPrefixedFramingRejectsOversizedFrames) {
 
   EXPECT_FALSE(azookey::ipc::DecodeLengthPrefixed(bytes).has_value());
   EXPECT_FALSE(azookey::ipc::EncodeLengthPrefixed(std::string(oversized, 'x')).has_value());
+}
+
+TEST(MessagesTest, M35AndM36MessageTypesRoundTripThroughTheirNames) {
+  // The wire carries the type as a string, so a new enum value is only
+  // compatible once both directions of the mapping know it.
+  for (const auto& [name, type] :
+       std::vector<std::pair<std::string, azookey::ipc::MessageType>>{
+           {"ObserveTypo", azookey::ipc::MessageType::ObserveTypo},
+           {"ListNewWordCandidates", azookey::ipc::MessageType::ListNewWordCandidates},
+           {"ResolveNewWord", azookey::ipc::MessageType::ResolveNewWord}}) {
+    EXPECT_EQ(azookey::ipc::TypeFromString(name), type) << name;
+    EXPECT_EQ(azookey::ipc::TypeToString(type), name) << name;
+
+    azookey::ipc::Envelope env;
+    env.request_id = 7;
+    env.type = type;
+    env.payload_json = "{}";
+    const auto serialized = azookey::ipc::Serialize(env);
+    ASSERT_TRUE(serialized.has_value()) << name;
+    const auto decoded = azookey::ipc::Deserialize(*serialized);
+    ASSERT_TRUE(decoded.has_value()) << name;
+    EXPECT_EQ(decoded->type, type) << name;
+  }
 }

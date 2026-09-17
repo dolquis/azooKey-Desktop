@@ -176,11 +176,12 @@ class RequestCompletionGuard {
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
                        learning::UserDictionary* user_dict, DispatcherConfig config,
-                       SettingsStore* settings_store)
+                       SettingsStore* settings_store, learning::AutoWordStore* auto_word_store)
     : engine_(engine),
       scheduler_(scheduler),
       user_dict_(user_dict),
       settings_store_(settings_store),
+      auto_word_store_(auto_word_store),
       config_(std::move(config)) {
   if (!config_.update_config_mutex) {
     config_.update_config_mutex = std::make_shared<std::mutex>();
@@ -227,6 +228,14 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleRemoveUserWord(req);
     case ipc::MessageType::UpdateConfig:
       return HandleUpdateConfig(req);
+    case ipc::MessageType::ObserveTypo:
+      // Fire-and-forget (spec section 7): no reply is sent at all.
+      HandleObserveTypo(req);
+      return std::nullopt;
+    case ipc::MessageType::ListNewWordCandidates:
+      return HandleListNewWordCandidates(req);
+    case ipc::MessageType::ResolveNewWord:
+      return HandleResolveNewWord(req);
     default:
       // Preserve the request type in the response envelope so future clients can
       // correlate the protocol error without waiting for a timeout.
@@ -259,6 +268,21 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       ipc::CommitObservationResponse r;
       r.ok = false;
       return MakeResponse(req, ipc::BuildCommitObservationResponse(r));
+    }
+    case ipc::MessageType::ObserveTypo:
+      // Fire-and-forget either way: dropping it silently is the same shape an
+      // authenticated session gives, and nothing is recorded.
+      return std::nullopt;
+    case ipc::MessageType::ListNewWordCandidates: {
+      // An empty list rather than the store's contents: the approval list is
+      // built from what the user typed.
+      return MakeResponse(
+          req, ipc::BuildListNewWordCandidatesResponse(ipc::ListNewWordCandidatesResponse{}));
+    }
+    case ipc::MessageType::ResolveNewWord: {
+      ipc::ResolveNewWordResponse r;
+      r.ok = false;
+      return MakeResponse(req, ipc::BuildResolveNewWordResponse(r));
     }
     case ipc::MessageType::LoadModel: {
       ipc::LoadModelResponse r;
@@ -465,6 +489,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   const auto rewriters = engine_->config().rewriters;
   std::vector<core::Candidate> candidates;
+  std::string corrected_reading;
   if (!parsed->emoji_trigger.empty()) {
     if (!parsed->reading.empty()) {
       static std::atomic_flag warned = ATOMIC_FLAG_INIT;
@@ -487,9 +512,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
                      : (rewriters.symbol_enabled ? 4u : 0u) + (rewriters.emoji_enabled ? 4u : 0u);
     const auto ordinary_limit = parsed->max_candidates;
     const size_t merged_limit = ordinary_limit == 0 ? 0 : size_t{ordinary_limit} + reserve;
-    candidates =
-        engine_->QueryCandidates(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
-                                 ordinary_limit, parsed->live, trace.context());
+    auto queried =
+        engine_->QueryCandidatesEx(parsed->reading, parsed->left_context, NowSec(), cancel.get(),
+                                   ordinary_limit, parsed->live, trace.context());
+    candidates = std::move(queried.candidates);
+    corrected_reading = std::move(queried.corrected_reading);
     if (!parsed->live && (rewriters.symbol_enabled || rewriters.emoji_enabled))
       candidates = engine_->QueryRewriters(rewriters, parsed->reading, {}, std::move(candidates),
                                            merged_limit);
@@ -509,8 +536,67 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     res.candidates.resize(parsed->max_candidates);
   }
   res.partial = false;
+  res.corrected_reading = std::move(corrected_reading);
   trace.Finish(core::EtwResult::Success, res.candidates.size());
   return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
+}
+
+void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
+  auto parsed = ipc::ParseObserveTypoRequest(req.payload_json);
+  if (!parsed) return;
+  // The engine applies the accept filters and the "off" gate; a rejected pair
+  // is simply not recorded, and there is no reply to carry that outcome.
+  engine_->ObserveTypo(parsed->wrong_reading, parsed->correct_reading, NowSec());
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleListNewWordCandidates(const ipc::Envelope& req) {
+  ipc::ListNewWordCandidatesResponse res;
+  auto parsed = ipc::ParseListNewWordCandidatesRequest(req.payload_json);
+  if (!parsed || !auto_word_store_) {
+    return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(res));
+  }
+
+  learning::AutoWordState state = learning::AutoWordState::Pending;
+  if (!learning::ParseAutoWordState(parsed->state_filter, state)) {
+    return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(res));
+  }
+
+  auto words = auto_word_store_->ListByState(state);
+  // Most recently seen first, so a page of max_items shows the words the user
+  // has been typing rather than an arbitrary slice of the map order.
+  std::sort(words.begin(), words.end(), [](const learning::AutoWord& a, const learning::AutoWord& b) {
+    if (a.last_seen_epoch != b.last_seen_epoch) return a.last_seen_epoch > b.last_seen_epoch;
+    if (a.surface != b.surface) return a.surface < b.surface;
+    return a.reading < b.reading;
+  });
+  if (words.size() > parsed->max_items) words.resize(parsed->max_items);
+
+  res.items.reserve(words.size());
+  for (const auto& word : words) {
+    ipc::NewWordField field;
+    field.surface = word.surface;
+    field.reading = word.reading;
+    field.source = std::string(learning::AutoWordSourceName(word.source));
+    field.state = std::string(learning::AutoWordStateName(word.state));
+    field.count = word.count;
+    field.last_seen_epoch = word.last_seen_epoch;
+    res.items.push_back(std::move(field));
+  }
+  return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelope& req) {
+  ipc::ResolveNewWordResponse res;
+  auto parsed = ipc::ParseResolveNewWordRequest(req.payload_json);
+  if (parsed && auto_word_store_) {
+    res.ok = parsed->action == "confirm"
+                 ? auto_word_store_->Confirm(parsed->surface, parsed->reading)
+                 : auto_word_store_->Reject(parsed->surface, parsed->reading);
+    // Persist only a decision that changed something, so a repeated click does
+    // not rewrite the file.
+    if (res.ok) res.ok = auto_word_store_->Save();
+  }
+  return MakeResponse(req, ipc::BuildResolveNewWordResponse(res));
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {

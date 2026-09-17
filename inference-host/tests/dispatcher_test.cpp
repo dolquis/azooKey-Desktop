@@ -23,7 +23,9 @@
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace ipc = azookey::ipc;
@@ -1456,4 +1458,167 @@ TEST_F(DispatcherTest, RepeatedHandshakeDoesNotRetainClientStateAfterDisconnect)
                   .Dispatch(MakeReq(81, ipc::MessageType::QueryCandidates,
                                     ipc::BuildQueryCandidatesRequest(query)))
                   .has_value());
+}
+
+// ---- M35 / M36-A ----
+
+TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
+  const auto typo_path =
+      (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo.tsv").string();
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path);
+  engine.SetTypoStore(&typo);
+
+  ipc::ObserveTypoRequest request;
+  request.wrong_reading = "こんちには";
+  request.correct_reading = "こんにちは";
+  request.timestamp_ms = 1'700'000'000'000ULL;
+
+  const auto response = dispatcher.Dispatch(
+      MakeReq(51, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(request)));
+  // Spec section 7: no reply at all, so a blocking client must not wait on one.
+  EXPECT_FALSE(response.has_value());
+  EXPECT_EQ(typo.size(), 1u);
+
+  // A malformed payload is dropped just as silently.
+  EXPECT_FALSE(dispatcher.Dispatch(MakeReq(52, ipc::MessageType::ObserveTypo, "{}")).has_value());
+  EXPECT_EQ(typo.size(), 1u);
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
+TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace) {
+  const auto typo_path =
+      (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo_auto.tsv").string();
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path);
+  engine.SetTypoStore(&typo);
+  auto config = engine.config();
+  config.typo_correction_mode = "auto_replace";
+  config.typo_min_count = 2;
+  engine.ApplyConfig(config);
+
+  // The dispatcher stamps the query with the wall clock, and Lookup ignores
+  // records older than 180 days, so the observation has to be recent.
+  const auto now_epoch_sec = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count());
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+  typo.Observe("こんちには", "こんにちは", now_epoch_sec);
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "こんちには";
+  const auto response = dispatcher.Dispatch(
+      MakeReq(53, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseQueryCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->corrected_reading, "こんにちは");
+
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
+TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
+  const auto auto_word_path =
+      (std::filesystem::temp_directory_path() / "azookey_dispatcher_auto_words.tsv").string();
+  std::remove(auto_word_path.c_str());
+  azookey::learning::AutoWordStore auto_words(auto_word_path);
+  auto_words.Observe("azooKey", "あずきー", 1'700'000'000ULL, 3, false);
+  auto_words.Observe("azooKey社", "あずきーしゃ", 1'700'000'100ULL, 3, false);
+
+  azookey::host::Dispatcher approval(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     nullptr, &auto_words);
+
+  ipc::ListNewWordCandidatesRequest list;
+  list.state_filter = "pending";
+  auto response = approval.Dispatch(MakeReq(
+      60, ipc::MessageType::ListNewWordCandidates, ipc::BuildListNewWordCandidatesRequest(list)));
+  ASSERT_TRUE(response.has_value());
+  auto listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(listed);
+  ASSERT_EQ(listed->items.size(), 2u);
+  // Most recently seen first.
+  EXPECT_EQ(listed->items[0].surface, "azooKey社");
+  EXPECT_EQ(listed->items[0].state, "pending");
+  EXPECT_EQ(listed->items[0].source, "mining");
+
+  // max_items pages the response.
+  list.max_items = 1;
+  response = approval.Dispatch(MakeReq(
+      61, ipc::MessageType::ListNewWordCandidates, ipc::BuildListNewWordCandidatesRequest(list)));
+  ASSERT_TRUE(response.has_value());
+  listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(listed);
+  EXPECT_EQ(listed->items.size(), 1u);
+
+  ipc::ResolveNewWordRequest resolve;
+  resolve.surface = "azooKey";
+  resolve.reading = "あずきー";
+  resolve.action = "confirm";
+  response = approval.Dispatch(
+      MakeReq(62, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  auto resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_TRUE(resolved->ok);
+  EXPECT_EQ(auto_words.LookupConfirmed("あずきー").size(), 1u);
+
+  resolve.surface = "azooKey社";
+  resolve.reading = "あずきーしゃ";
+  resolve.action = "reject";
+  response = approval.Dispatch(
+      MakeReq(63, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_TRUE(resolved->ok);
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Rejected).size(), 1u);
+
+  // The decision reached disk, so it survives a restart.
+  azookey::learning::AutoWordStore reloaded(auto_word_path);
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.LookupConfirmed("あずきー").size(), 1u);
+  EXPECT_EQ(reloaded.ListByState(azookey::learning::AutoWordState::Rejected).size(), 1u);
+
+  // An unknown key resolves to nothing rather than reporting success.
+  resolve.surface = "しらないご";
+  resolve.reading = "しらないご";
+  resolve.action = "confirm";
+  response = approval.Dispatch(
+      MakeReq(64, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_FALSE(resolved->ok);
+
+  std::remove(auto_word_path.c_str());
+}
+
+TEST_F(DispatcherTest, ApprovalMessagesWithoutAStoreAnswerInsteadOfCrashing) {
+  // The default fixture dispatcher has no AutoWordStore.
+  auto response = dispatcher.Dispatch(MakeReq(70, ipc::MessageType::ListNewWordCandidates, "{}"));
+  ASSERT_TRUE(response.has_value());
+  const auto listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(listed);
+  EXPECT_TRUE(listed->items.empty());
+
+  ipc::ResolveNewWordRequest resolve;
+  resolve.surface = "azooKey";
+  resolve.reading = "あずきー";
+  resolve.action = "confirm";
+  response = dispatcher.Dispatch(
+      MakeReq(71, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  const auto resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_FALSE(resolved->ok);
+
+  // ObserveTypo stays fire-and-forget with no store behind it.
+  EXPECT_FALSE(dispatcher
+                   .Dispatch(MakeReq(72, ipc::MessageType::ObserveTypo,
+                                     R"({"wrong_reading":"こんちには","correct_reading":"こんにちは"})"))
+                   .has_value());
 }

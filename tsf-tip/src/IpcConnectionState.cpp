@@ -26,10 +26,8 @@ constexpr std::array<IpcConnectionTransition, 13> kTransitions{{
     {S::Degraded, E::Stopped, S::Disconnected},
 }};
 
-bool IsFailedAttemptTransition(IpcConnectionState from, IpcConnectionState to) {
-  return (from == S::Disconnected && to == S::Connecting) ||
-         (from == S::Connecting && to == S::Disconnected) ||
-         (from == S::Handshaking && to == S::Disconnected);
+bool IsConnectAttemptState(IpcConnectionState state) {
+  return state == S::Disconnected || state == S::Connecting || state == S::Handshaking;
 }
 }  // namespace
 
@@ -84,9 +82,9 @@ std::string_view IpcConnectionEventName(IpcConnectionEvent event) {
 }
 
 bool ShouldLogIpcConnectionTransition(IpcConnectionState from, IpcConnectionState to,
-                                      uint32_t failed_attempts) {
-  if (!IsFailedAttemptTransition(from, to)) return true;
-  return failed_attempts <= 1 || std::has_single_bit(failed_attempts);
+                                      uint32_t attempt) {
+  if (!IsConnectAttemptState(from) || !IsConnectAttemptState(to)) return true;
+  return attempt <= 1 || std::has_single_bit(attempt);
 }
 
 }  // namespace azookey::tsf

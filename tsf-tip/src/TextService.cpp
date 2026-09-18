@@ -2216,6 +2216,9 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
 void TextService::StartIpcWorker() {
   AZOOKEY_ASSERT_UI_THREAD();
   ipc_stop_.store(false);
+  // A worker stopped while Disconnected leaves no Stopped transition behind, so
+  // a reactivation starts its attempt count afresh here.
+  ipc_failed_connect_attempts_ = 0;
   ipc_thread_ = std::thread(&TextService::IpcWorkerThread, this);
 }
 
@@ -2260,13 +2263,16 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
                 {"event", SafeLogText(std::string(IpcConnectionEventName(event)))}});
     return;
   }
+  // 1-based number of the connect attempt this event belongs to, so both halves
+  // of one attempt are logged or skipped together.
+  uint32_t attempt = ipc_failed_connect_attempts_ + 1;
   if (event == IpcConnectionEvent::ConnectFailed || event == IpcConnectionEvent::HandshakeFailed) {
     ++ipc_failed_connect_attempts_;
   } else if (event == IpcConnectionEvent::HandshakeAccepted) {
     ipc_failed_connect_attempts_ = 0;
   }
   ipc_connection_state_.store(*to, std::memory_order_release);
-  if (!ShouldLogIpcConnectionTransition(from, *to, ipc_failed_connect_attempts_)) return;
+  if (!ShouldLogIpcConnectionTransition(from, *to, attempt)) return;
   const bool lost_host =
       *to == IpcConnectionState::Degraded ||
       (*to == IpcConnectionState::Disconnected && event != IpcConnectionEvent::Stopped);
@@ -2276,7 +2282,7 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
       {{"from", SafeLogText(std::string(IpcConnectionStateName(from)))},
        {"to", SafeLogText(std::string(IpcConnectionStateName(*to)))},
        {"event", SafeLogText(std::string(IpcConnectionEventName(event)))},
-       {"failed_attempts", static_cast<uint64_t>(ipc_failed_connect_attempts_)}});
+       {"attempt", static_cast<uint64_t>(attempt)}});
 }
 
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,

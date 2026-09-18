@@ -1722,10 +1722,11 @@ Ready ─→ Degraded （ハードタイムアウト / 連続失敗時）
 設定変更時に確立済み接続の上で再実行する Handshake は遷移を起こさない。
 
 遷移ログのイベント名は `ipc_connection_state_transition` で、フィールドは `from` / `to` /
-`event`（上表の固定語）と `failed_attempts`（直近の `Ready` 以降に失敗した接続試行数）だけとする。
-入力本文を載せるフィールドは持たない。Host 停止中は backoff ごとに
-`Disconnected → Connecting → Disconnected` を繰り返すため、この失敗試行の遷移は
-`failed_attempts` が 1 または 2 のべき乗のときだけ記録する。それ以外の遷移は毎回記録する。
+`event`（上表の固定語）と `attempt`（直近の `Ready` 以降の何回目の接続試行か。1 始まり）だけとする。
+入力本文を載せるフィールドは持たない。Host 停止中や Handshake を拒否され続ける間は、backoff ごとに
+`Disconnected` / `Connecting` / `Handshaking` の間の遷移を繰り返す。この 3 状態の間の遷移は
+`attempt` が 1 または 2 のべき乗のときだけ記録し、同じ試行の遷移はまとめて記録するか省く。
+`Ready` / `Degraded` に出入りする遷移は毎回記録する。
 表に無い組を受けたときは `ipc_connection_state_rejected` を記録する。
 
 Handshake 応答には protocol v1 の省略可能フィールド

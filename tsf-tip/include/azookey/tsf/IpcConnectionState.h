@@ -58,12 +58,13 @@ std::optional<IpcConnectionState> NextIpcConnectionState(IpcConnectionState from
 std::string_view IpcConnectionStateName(IpcConnectionState state);
 std::string_view IpcConnectionEventName(IpcConnectionEvent event);
 
-// While the Host is down the worker cycles Disconnected -> Connecting ->
-// Disconnected on every backoff tick. Those failed-attempt transitions are
-// logged only when `failed_attempts` (1-based count since the last Ready) is a
-// power of two, so a long outage produces a logarithmic number of records.
-// Every other transition is always logged.
+// While the Host is down (or keeps refusing the handshake) the worker cycles
+// through Disconnected, Connecting and Handshaking on every backoff tick. Those
+// transitions are logged only when `attempt` (1-based connect attempt since the
+// last Ready) is 1 or a power of two, so a long outage produces a logarithmic
+// number of records and every transition of one attempt is judged by the same
+// number. Transitions into or out of Ready / Degraded are always logged.
 bool ShouldLogIpcConnectionTransition(IpcConnectionState from, IpcConnectionState to,
-                                      uint32_t failed_attempts);
+                                      uint32_t attempt);
 
 }  // namespace azookey::tsf

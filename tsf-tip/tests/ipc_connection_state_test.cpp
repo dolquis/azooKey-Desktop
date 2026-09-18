@@ -115,6 +115,28 @@ TEST(TsfTipIpcConnectionStateTest, FailedAttemptTransitionsAreLoggedLogarithmica
   EXPECT_EQ(logged, (std::vector<uint32_t>{1, 2, 4, 8, 16}));
   EXPECT_FALSE(azookey::tsf::ShouldLogIpcConnectionTransition(S::Disconnected, S::Connecting, 3));
   EXPECT_FALSE(azookey::tsf::ShouldLogIpcConnectionTransition(S::Handshaking, S::Disconnected, 5));
+  // A Host that accepts the pipe but refuses the handshake is thinned as well.
+  EXPECT_FALSE(azookey::tsf::ShouldLogIpcConnectionTransition(S::Connecting, S::Handshaking, 3));
+  EXPECT_TRUE(azookey::tsf::ShouldLogIpcConnectionTransition(S::Connecting, S::Handshaking, 4));
+}
+
+TEST(TsfTipIpcConnectionStateTest, BothHalvesOfOneAttemptShareTheDecision) {
+  for (uint32_t attempt = 1; attempt <= 20; ++attempt) {
+    const bool start =
+        azookey::tsf::ShouldLogIpcConnectionTransition(S::Disconnected, S::Connecting, attempt);
+    EXPECT_EQ(
+        azookey::tsf::ShouldLogIpcConnectionTransition(S::Connecting, S::Disconnected, attempt),
+        start)
+        << attempt;
+    EXPECT_EQ(
+        azookey::tsf::ShouldLogIpcConnectionTransition(S::Connecting, S::Handshaking, attempt),
+        start)
+        << attempt;
+    EXPECT_EQ(
+        azookey::tsf::ShouldLogIpcConnectionTransition(S::Handshaking, S::Disconnected, attempt),
+        start)
+        << attempt;
+  }
 }
 
 TEST(TsfTipIpcConnectionStateTest, HostFacingTransitionsAreAlwaysLogged) {
@@ -125,7 +147,7 @@ TEST(TsfTipIpcConnectionStateTest, HostFacingTransitionsAreAlwaysLogged) {
     EXPECT_TRUE(
         azookey::tsf::ShouldLogIpcConnectionTransition(S::Ready, S::Disconnected, attempts));
     EXPECT_TRUE(
-        azookey::tsf::ShouldLogIpcConnectionTransition(S::Connecting, S::Handshaking, attempts));
+        azookey::tsf::ShouldLogIpcConnectionTransition(S::Degraded, S::Disconnected, attempts));
   }
 }
 }  // namespace

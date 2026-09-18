@@ -1505,8 +1505,8 @@ M51 で全 11 phase を記録する。phase 体系は 1 つだけで、M41 用�
 ### 7.5 タイムアウト規約
 
 変換候補問い合わせのタイムアウトを定義する（例: ソフト 150ms / ハード
-300ms）。ソフト超過はログに記録、ハード超過は当該リクエストを打ち切り
-劣化モード（§8.3）へ移行する。
+300ms）。ソフト超過はログに記録、ハード超過は当該リクエストを打ち切る。
+打ち切りが連続した場合の劣化モードへの移行は §8.3 の劣化判定に従う。
 
 本節が定めるのは request レイヤ（要求送信から応答受信まで。推論時間を含む）の
 規約であり、transport レイヤのフレームデッドライン（§6.4.7）とは別物である。
@@ -1698,7 +1698,9 @@ TIP 側 IPC ワーカー（`tsf-tip/src/TextService.cpp::IpcWorkerThread`）に
 Disconnected ─→ Connecting ─→ Handshaking ─→ Ready
      ↑              │              │           │
      └──────────────┴──────────────┴───────────┘ (失敗・切断時)
-Ready ─→ Degraded （ハードタイムアウト / 連続失敗時）
+Ready ─→ Degraded （deadline 超過の連続時。§8.3）
+Degraded ─→ Ready （応答の再開時）
+Degraded ─→ Disconnected （切断時）
 ```
 
 各状態遷移はログ（§7）に記録する。
@@ -1718,8 +1720,10 @@ Ready ─→ Degraded （ハードタイムアウト / 連続失敗時）
 | `Degraded` | `response_restored` | `Ready` |
 | `Degraded` | `connection_lost` / `stopped` | `Disconnected` |
 
-状態機械に載せるのは primary 接続だけである。out-of-band Cancel 用の短命な control 接続と、
-設定変更時に確立済み接続の上で再実行する Handshake は遷移を起こさない。
+状態機械に載せるのは primary 接続だけである。out-of-band Cancel 用の短命な control 接続は
+遷移を起こさない。設定変更時に確立済み接続の上で再実行する Handshake は `Connecting` /
+`Handshaking` を経由せず、成功は応答として扱い（§8.3。`Degraded` なら `response_restored`）、
+拒否は `connection_lost` とする。
 
 遷移ログのイベント名は `ipc_connection_state_transition` で、フィールドは `from` / `to` /
 `event`（上表の固定語）と `attempt`（直近の `Ready` 以降の何回目の接続試行か。1 始まり）だけとする。
@@ -1758,10 +1762,13 @@ stale 化する。未送信または接続断後に再武装された pending �
 - ヘルス監視は既存 `Health` メッセージを流用し、定期的に往復確認する。
   - primary 接続で送るものが無い状態が監視間隔（既定 5s）続いたときだけ `Health` を 1 回送る。
     入力中の要求とは同じ接続で直列に扱い、監視を割り込ませない。
-  - 応答待ちは §8.5.2 の IPC Ping と同じ 500ms を上限とする。待機中に `QueryCandidates` や
-    送信キューの項目が入ったら待機を打ち切って要求を先に送る。打ち切った `Health` の遅れた
+  - 応答待ちは §8.5.2 の IPC Ping と同じ 500ms を上限とする。待機中に `QueryCandidates`、
+    送信キューの項目、設定変更による Handshake の再実行要求が入ったら、待機を打ち切って
+    そちらを先に処理する。打ち切った `Health` の遅れた
     応答は request ID 不一致として読み捨て、stale 応答のログは出さない。
   - 応答が上限内に返らなければ `ipc_health_timeout` を記録する。
+  - `Health` の送信失敗や監視中の切断は `ipc_health_send_failed` を記録し、`connection_lost` として
+    再接続へ戻す。これにより、idle 中に Host が停止した場合も次のキー入力を待たずに検知する。
 - 劣化判定は処理種別ごとの deadline 超過を共通に数える。`Health` の無応答と
   `QueryCandidates` の deadline 超過（§8.5.2 の fast 150ms）はどちらも 1 回の超過として
   `ipc_host_deadline_missed` に記録し、連続 2 回で `Ready` から `Degraded` へ遷移する
@@ -1770,8 +1777,6 @@ stale 化する。未送信または接続断後に再武装された pending �
 - `Health`、`QueryCandidates`、一括変換、設定再読込の Handshake のいずれかに応答が返った時点で、
   連続回数を 0 に戻し、`Degraded` なら `Ready` へ戻す（`response_restored`）。`Health` の
   `status` が `degraded` / `error` でも応答として扱う。
-  - `Health` の送信失敗や監視中の切断は `connection_lost` として再接続へ戻す。これにより、
-    idle 中に Host が停止した場合も次のキー入力を待たずに検知する。
 
 ### 8.4 本マイルストーンの範囲
 

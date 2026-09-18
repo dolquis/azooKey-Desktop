@@ -1757,6 +1757,23 @@ stale 化する。未送信または接続断後に再武装された pending �
   ヘルス監視の無応答）、TIP は `Degraded` 状態へ移行し、`SimpleConverter`
   相当のローカルフォールバックで入力継続を保証する。Host 復帰後は
   `Ready` へ戻す。
+- TIP 内のローカルフォールバック候補は、TIP 自身がローマ字→かな変換した読みそのもの
+  （ひらがな）と、`core::ExpandKatakanaCandidates` による全角・半角カタカナとする。
+  いずれも `source` は `fallback` で、TIP 内で完結するため辞書や Host を要さない。
+  `core::SimpleConverter` の組み込み辞書は試験用の数語しか持たないため TIP には載せない。
+  - 次のいずれかの間、TIP は Host の候補を待たず Space でこの候補を即時に表示する。
+    直近の接続・Handshake が失敗した、確立済みの接続が切れた、`Degraded` に入った。
+    `Ready` へ戻るとこの扱いを解く。TIP 起動直後の初回接続前は Host の候補を待つ。
+  - 通常入力では、送出済みの `QueryCandidates` は取り消さず、Host 復帰後に応答すれば
+    候補キャッシュを更新する。一括変換では、接続が無い間は Host 宛ての要求を出さず、読み全体を
+    1 文節とするローカル候補を表示する。`Degraded`（pipe は生きている）では最初の Space で
+    Host へ要求を送り、その応答で `Ready` に戻れるようにする。一括変換の応答を待つ間に Host が
+    使えなくなった場合、または `Degraded` で応答を待っている場合は、次の Space で待機中の要求を
+    取り消してローカル候補を表示し、Enter で読み（かな）をそのまま確定する。
+  - `QueryCandidates` の deadline 超過、一括変換の失敗、Host が候補の無い文節を返した場合も
+    同じ候補を使う。
+  - 確定した候補の `source` が `fallback`（一括変換では文節のいずれか）なら、その確定の
+    `CommitObservation` は送らない。Host が候補の無い文節に補う `fallback` も同じ扱いとする。
 - 「Host から一定時間応答がない場合」には、pipe 接続自体は維持されているが
   `QueryCandidates` / `Health` の有効応答が deadline 内に返らない
   connected-but-silent 状態を含める。TIP は pipe 切断を待たず、処理種別ごとの

@@ -204,6 +204,22 @@ std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
   return result;
 }
 
+// Candidates the TIP can offer on its own while the Host cannot answer (spec
+// §8.3 degraded mode): the kana reading as typed plus its katakana forms. The
+// reading already went through the TIP's own romaji -> kana conversion, so no
+// Host is needed. source "fallback" keeps them out of CommitObservation.
+std::vector<azookey::ipc::CandidateField> BuildLocalFallbackCandidates(const std::string& reading) {
+  // Always at least the reading itself, so even an empty segment keeps one
+  // candidate for the candidate UI and the batch commit.
+  std::vector<azookey::ipc::CandidateField> result;
+  result.push_back({reading, reading, 0.0, "fallback"});
+  for (const auto& katakana : azookey::core::ExpandKatakanaCandidates(reading)) {
+    if (katakana.surface == reading) continue;
+    result.push_back({katakana.surface, reading, 0.0, "fallback"});
+  }
+  return result;
+}
+
 std::vector<azookey::tsf::CandidateViewItem> BuildCandidateViews(
     const std::vector<azookey::tsf::TipCandidate>& candidates) {
   std::vector<azookey::tsf::CandidateViewItem> items;
@@ -1455,9 +1471,32 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           selected_candidate_idx_ = candidate_ui_.GetSelected();
           const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
           if (FAILED(update_hr)) return update_hr;
-        } else if (batch_query_in_progress_) {
+        } else if (batch_query_in_progress_ && !IpcHostUnavailable()) {
           // Batch conversion is already waiting for a response.  Eat repeated
           // Space presses without re-sending the same request.
+        } else if (IpcHostUnavailable() && (batch_query_in_progress_ ||
+                                            ipc_connection_state_.load(std::memory_order_acquire) !=
+                                                IpcConnectionState::Degraded)) {
+          // No Host to convert with: offer the TIP-local candidates at once
+          // instead of leaving the batch waiting (and Enter swallowed) until
+          // the Host comes back. A batch that was already waiting when the Host
+          // went away is withdrawn first. A Degraded Host still holds the pipe,
+          // so the first Space still asks it (its answer is what restores
+          // Ready); a second Space while that request waits lands here.
+          if (batch_query_in_progress_) {
+            CancelPendingQueriesForLifecycle();
+            batch_query_in_progress_ = false;
+          }
+          const std::string reading = BatchReadingForConversion();
+          {
+            std::lock_guard<std::mutex> lk(candidates_mtx_);
+            cached_batch_segments_ = {{reading, BuildLocalFallbackCandidates(reading)}};
+            candidates_ = BuildTipCandidates(reading, cached_batch_segments_.front().candidates,
+                                             false, false);
+            shown_candidates_.clear();
+            candidate_window_show_pending_ = true;
+          }
+          ShowCandidateWindowFromCache();
         } else {
           const std::string reading = BatchReadingForConversion();
           {
@@ -1501,8 +1540,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           } else {
             // Snapshot the candidate list so commit always reflects what was
             // displayed, even if a late QueryCandidates response arrives later.
-            if (symbol_rewriter_.load(std::memory_order_relaxed) ||
-                emoji_rewriter_.load(std::memory_order_relaxed)) {
+            const bool host_unavailable = IpcHostUnavailable();
+            if (!host_unavailable && (symbol_rewriter_.load(std::memory_order_relaxed) ||
+                                      emoji_rewriter_.load(std::memory_order_relaxed))) {
               {
                 std::scoped_lock lk(candidates_mtx_, ipc_mtx_);
                 if (candidate_window_show_pending_ && !ipc_pending_live_ &&
@@ -1520,6 +1560,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             bool wait_for_candidates = false;
             {
               std::lock_guard<std::mutex> lk(candidates_mtx_);
+              if (candidates_.empty() && host_unavailable) {
+                // The pending query stays queued for when the Host returns;
+                // until then the TIP-local candidates keep input moving.
+                const std::string reading = CurrentPreeditSurface();
+                candidates_ =
+                    BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
+                                       number_rewriter_.load(std::memory_order_relaxed),
+                                       katakana_rewriter_.load(std::memory_order_relaxed));
+              }
               if (candidates_.empty()) {
                 candidate_window_show_pending_ = true;
                 wait_for_candidates = true;
@@ -1592,9 +1641,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT commit_hr = CommitSelected(context);
         if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
-      } else if (BatchRomajiEnabled() && batch_query_in_progress_) {
+      } else if (BatchRomajiEnabled() && batch_query_in_progress_ && !IpcHostUnavailable()) {
         *eaten = TRUE;
       } else if (!preedit_kana_.empty() || romaji_.HasPending()) {
+        // With the Host gone a waiting batch never answers, so Enter commits
+        // the kana reading; CommitPreeditAsIs withdraws the pending request.
         const HRESULT commit_hr = CommitPreeditAsIs(context);
         if (FAILED(commit_hr)) return commit_hr;
         *eaten = TRUE;
@@ -2126,13 +2177,16 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     pending_commit_observation_.reset();
   }
   // AI output can contain generated punctuation without a reading alignment.
+  // "fallback" is the reading offered because no conversion was available
+  // (Host silent, unreachable, or empty); it carries nothing to learn.
   if (secure || !batch_learning_allowed_ || chosen.field.source == "llm" ||
-      chosen.field.source == "privacy-fallback" ||
+      chosen.field.source == "privacy-fallback" || chosen.field.source == "fallback" ||
       (pending_commit_observation_ &&
        std::any_of(pending_commit_observation_->segments.begin(),
                    pending_commit_observation_->segments.end(), [](const auto& segment) {
                      return segment.chosen.source == "llm" ||
-                            segment.chosen.source == "privacy-fallback";
+                            segment.chosen.source == "privacy-fallback" ||
+                            segment.chosen.source == "fallback";
                    })))
     pending_commit_observation_.reset();
   // Defer clearing preedit and recording learning until the synchronous commit
@@ -2220,6 +2274,7 @@ void TextService::StartIpcWorker() {
   // A worker stopped while Disconnected leaves no Stopped transition behind, so
   // a reactivation starts its attempt count afresh here.
   ipc_failed_connect_attempts_ = 0;
+  ipc_host_unavailable_.store(false, std::memory_order_release);
   ipc_thread_ = std::thread(&TextService::IpcWorkerThread, this);
 }
 
@@ -2273,6 +2328,14 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
     ipc_failed_connect_attempts_ = 0;
   }
   ipc_connection_state_.store(*to, std::memory_order_release);
+  // Set once the Host has actually failed us (not merely before the first
+  // connect) and cleared on Ready, so the TIP thread knows when to stop waiting
+  // for Host candidates and offer local ones.
+  if (*to == IpcConnectionState::Ready || event == IpcConnectionEvent::Stopped) {
+    ipc_host_unavailable_.store(false, std::memory_order_release);
+  } else if (*to == IpcConnectionState::Degraded || *to == IpcConnectionState::Disconnected) {
+    ipc_host_unavailable_.store(true, std::memory_order_release);
+  }
   if (!ShouldLogIpcConnectionTransition(from, *to, attempt)) return;
   const bool lost_host =
       *to == IpcConnectionState::Degraded ||
@@ -3023,11 +3086,7 @@ void TextService::ServeConnection() {
                    {{"request_id", req_id}});
       }
 
-      CandidateField fallback;
-      fallback.surface = reading;
-      fallback.reading = reading;
-      fallback.source = "fallback";
-      if (emoji_trigger.empty()) response_candidates.push_back(std::move(fallback));
+      if (emoji_trigger.empty()) response_candidates = BuildLocalFallbackCandidates(reading);
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_query_timeout",
                  {{"request_id", req_id}, {"result", SafeLogText("cancelled")}});
     } else if (!qres) {
@@ -3236,21 +3295,14 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       break;
     }
     for (auto& segment : result->segments) {
-      if (segment.candidates.empty()) {
-        CandidateField candidate;
-        candidate.reading = candidate.surface = segment.reading;
-        candidate.source = "fallback";
-        segment.candidates.push_back(std::move(candidate));
-      }
+      if (segment.candidates.empty())
+        segment.candidates = BuildLocalFallbackCandidates(segment.reading);
       segments.push_back(std::move(segment));
     }
   }
   if (failed) {
     if (rearm_neural()) return;
-    CandidateField fallback;
-    fallback.reading = fallback.surface = reading;
-    fallback.source = "fallback";
-    segments = {{reading, {std::move(fallback)}}};
+    segments = {{reading, BuildLocalFallbackCandidates(reading)}};
   }
   bool notify = false;
   {

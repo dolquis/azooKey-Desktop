@@ -2045,6 +2045,8 @@ class HealthProbeHost {
             res.payload_json = azookey::ipc::BuildQueryCandidatesResponse(payload);
             return res;
           }
+          // Batch conversion is never answered: this Host is silent for it.
+          if (req.type == azookey::ipc::MessageType::QueryBatchConversion) batches.fetch_add(1);
           return std::nullopt;
         });
   }
@@ -2053,6 +2055,7 @@ class HealthProbeHost {
   std::atomic<bool> answer_query{true};
   std::atomic<int> health_probes{0};
   std::atomic<int> queries{0};
+  std::atomic<int> batches{0};
   std::atomic<long long> query_received_at{0};
 
  private:
@@ -2106,10 +2109,12 @@ TEST(TsfTipOnKeyDownPreeditTest, SilentHostDegradesAfterHealthTimeoutsAndRecover
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
   EXPECT_GE(host.health_probes.load(), 3);
+  EXPECT_TRUE(h.service.ipc_host_unavailable_for_test());
 
   host.answer_health.store(true);
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+  EXPECT_FALSE(h.service.ipc_host_unavailable_for_test());
 
   h.service.stop_ipc_worker_for_test();
 }
@@ -2178,6 +2183,162 @@ TEST(TsfTipOnKeyDownPreeditTest, PendingHealthProbeDoesNotDelayQueryCandidates) 
   EXPECT_LT(received_at - pressed_at, std::chrono::milliseconds(1000));
   ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
   EXPECT_EQ(h.service.cached_candidates_for_test().front().surface, "下");
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1176: with no Host to answer, Space offers the TIP-local kana and katakana
+// at once instead of waiting, the kana commits, and nothing is learned from it.
+TEST(TsfTipOnKeyDownPreeditTest, UnreachableHostSpaceOffersLocalCandidatesWithoutLearning) {
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test("\\\\.\\pipe\\azookey-tip-no-host-test-" +
+                                       std::to_string(GetCurrentProcessId()));
+  // Before any connect attempt has failed, Space still waits for the Host.
+  EXPECT_FALSE(h.service.ipc_host_unavailable_for_test());
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return h.service.ipc_host_unavailable_for_test(); }));
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_GE(shown.size(), 2u);
+  EXPECT_EQ(shown[0].surface, "か");
+  EXPECT_EQ(shown[1].surface, "カ");
+  for (const auto& candidate : shown) EXPECT_EQ(candidate.source, "fallback");
+
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  EXPECT_EQ(attachment.composition_range.last_text, L"か");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1176: batch conversion used to sit waiting for an unreachable Host with
+// Enter swallowed; now Space shows the local candidates without a request.
+TEST(TsfTipOnKeyDownPreeditTest, UnreachableHostBatchSpaceShowsLocalCandidatesImmediately) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_ipc_pipe_name_for_test("\\\\.\\pipe\\azookey-tip-no-host-batch-test-" +
+                                       std::to_string(GetCurrentProcessId()));
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return h.service.ipc_host_unavailable_for_test(); }));
+
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.batch_query_in_progress_for_test());
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_FALSE(shown.empty());
+  EXPECT_EQ(shown[0].surface, "に");
+  EXPECT_EQ(shown[0].source, "fallback");
+
+  FakeCompositionAttachment attachment(h);
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  EXPECT_EQ(attachment.composition_range.last_text, L"に");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1176: a batch already waiting when the Host dies must not keep Space and
+// Enter swallowed until the Host returns: Space offers the local candidates and
+// Enter commits the kana reading.
+TEST(TsfTipOnKeyDownPreeditTest, HostLostDuringBatchReleasesSpaceAndEnter) {
+  for (const WPARAM key : {static_cast<WPARAM>(VK_SPACE), static_cast<WPARAM>(VK_RETURN)}) {
+    const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-batch-host-lost-test-" +
+                                  std::to_string(GetCurrentProcessId()) + "-" + std::to_string(key);
+    std::atomic<bool> batch_received{false};
+    azookey::ipc::NamedPipeServer server;
+    ASSERT_TRUE(server.Start(
+        pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+          if (req.type == azookey::ipc::MessageType::Handshake) {
+            azookey::ipc::Envelope res;
+            res.version = req.version;
+            res.request_id = req.request_id;
+            res.trace_id = req.trace_id;
+            res.type = req.type;
+            azookey::ipc::HandshakeResponse payload;
+            payload.host_version = "test-host";
+            payload.accepted = true;
+            payload.batch_romaji_conversion = true;
+            res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::QueryBatchConversion)
+            batch_received.store(true);
+          return std::nullopt;
+        }));
+
+    TextServiceHarness h;
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.set_batch_romaji_options_for_test(true);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] {
+      return h.service.ipc_connection_state_for_test() == azookey::tsf::IpcConnectionState::Ready;
+    }));
+    ASSERT_TRUE(h.Press('N'));
+    ASSERT_TRUE(h.Press('I'));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return batch_received.load(); }));
+    ASSERT_TRUE(h.service.batch_query_in_progress_for_test());
+
+    server.Stop();
+    ASSERT_TRUE(WaitUntil([&] { return h.service.ipc_host_unavailable_for_test(); },
+                          std::chrono::milliseconds(5000)));
+
+    FakeCompositionAttachment attachment(h);
+    ASSERT_TRUE(h.Press(key));
+    EXPECT_FALSE(h.service.batch_query_in_progress_for_test());
+    if (key == VK_SPACE) {
+      const auto shown = h.service.shown_candidates_for_test();
+      ASSERT_FALSE(shown.empty());
+      EXPECT_EQ(shown[0].surface, "に");
+      EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+    }
+    EXPECT_EQ(attachment.composition_range.last_text, L"に");
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+
+    h.service.stop_ipc_worker_for_test();
+  }
+}
+
+// DEV-1176: a Degraded Host still holds the pipe, so the first batch Space asks
+// it (an answer would restore Ready); while that request waits on the silent
+// Host, the next Space withdraws it and shows the local candidates.
+TEST(TsfTipOnKeyDownPreeditTest, DegradedHostBatchAsksHostFirstThenFallsBackOnNextSpace) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-degraded-batch-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_health.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+  // After the handshake, which carries the Host's (disabled) batch setting.
+  h.service.set_batch_romaji_options_for_test(true);
+
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_TRUE(h.service.batch_query_in_progress_for_test());
+  ASSERT_TRUE(WaitUntil([&] { return host.batches.load() >= 1; }));
+
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_FALSE(h.service.batch_query_in_progress_for_test());
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_FALSE(shown.empty());
+  EXPECT_EQ(shown[0].surface, "に");
+  EXPECT_EQ(shown[0].source, "fallback");
 
   h.service.stop_ipc_worker_for_test();
 }
@@ -2533,13 +2694,14 @@ TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallbac
 
   ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
   auto cached = h.service.cached_candidates_for_test();
-  ASSERT_EQ(cached.size(), 1u);
+  ASSERT_GE(cached.size(), 2u);
   EXPECT_EQ(cached[0].surface, "か");
   EXPECT_EQ(cached[0].reading, "か");
-  EXPECT_EQ(cached[0].source, "fallback");
+  EXPECT_EQ(cached[1].surface, "カ");
+  for (const auto& candidate : cached) EXPECT_EQ(candidate.source, "fallback");
 
   h.service.show_candidate_window_from_cache_for_test();
-  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 1u);
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), cached.size());
   EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "か");
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
 

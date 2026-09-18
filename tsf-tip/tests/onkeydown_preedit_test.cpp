@@ -2005,8 +2005,8 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
 
 namespace {
 // Fake Host for the DEV-1175 Health cases: accepts the handshake, counts Health
-// probes and answers them only while `answer_health` is set, and answers every
-// QueryCandidates with one candidate.
+// probes and answers them only while `answer_health` is set, and answers each
+// QueryCandidates with one candidate while `answer_query` is set.
 class HealthProbeHost {
  public:
   explicit HealthProbeHost(std::string pipe_name) : pipe_name_(std::move(pipe_name)) {}
@@ -2038,6 +2038,8 @@ class HealthProbeHost {
           }
           if (req.type == azookey::ipc::MessageType::QueryCandidates) {
             query_received_at.store(std::chrono::steady_clock::now().time_since_epoch().count());
+            queries.fetch_add(1);
+            if (!answer_query.load()) return std::nullopt;
             azookey::ipc::QueryCandidatesResponse payload;
             payload.candidates.push_back({"下", "か", 1.0, "test"});
             res.payload_json = azookey::ipc::BuildQueryCandidatesResponse(payload);
@@ -2048,7 +2050,9 @@ class HealthProbeHost {
   }
 
   std::atomic<bool> answer_health{true};
+  std::atomic<bool> answer_query{true};
   std::atomic<int> health_probes{0};
+  std::atomic<int> queries{0};
   std::atomic<long long> query_received_at{0};
 
  private:
@@ -2104,6 +2108,43 @@ TEST(TsfTipOnKeyDownPreeditTest, SilentHostDegradesAfterHealthTimeoutsAndRecover
   EXPECT_GE(host.health_probes.load(), 3);
 
   host.answer_health.store(true);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1175: while the user keeps typing the worker never idles long enough to
+// probe, so QueryCandidates deadlines alone must move a silent Host to Degraded
+// and a timely answer must bring it back to Ready.
+TEST(TsfTipOnKeyDownPreeditTest, QueryDeadlineMissesDegradeWithoutIdleProbeAndAnswerRestores) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-query-deadline-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_query.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  // An interval far beyond the test keeps Health out of the picture.
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/600000, /*timeout_ms=*/500,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(WaitUntil([&] { return host.queries.load() >= 1; }));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.has_pending_ipc_query_for_test(); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+  EXPECT_EQ(host.health_probes.load(), 0);
+
+  host.answer_query.store(true);
+  ASSERT_TRUE(h.Press('I'));
   ASSERT_TRUE(WaitUntil(
       [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
 

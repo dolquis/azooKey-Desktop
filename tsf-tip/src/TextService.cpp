@@ -2292,6 +2292,28 @@ bool TextService::HasQueuedIpcWorkLocked() const {
          ipc_refresh_options_.load(std::memory_order_relaxed);
 }
 
+// The Host answered a request in time: it is not silent, so clear the count of
+// missed deadlines and leave Degraded if it was there (spec §8.3).
+void TextService::NoteHostResponded() {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  ipc_consecutive_deadline_misses_ = 0;
+  if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded)
+    TransitionIpcConnection(IpcConnectionEvent::ResponseRestored);
+}
+
+// A request's deadline passed while the pipe stayed open (connected but
+// silent). Enough of these in a row move Ready to Degraded without waiting for
+// the pipe to drop.
+void TextService::NoteHostDeadlineMissed() {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  ++ipc_consecutive_deadline_misses_;
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_host_deadline_missed",
+             {{"consecutive_misses", static_cast<uint64_t>(ipc_consecutive_deadline_misses_)}});
+  if (ipc_consecutive_deadline_misses_ >= ipc_deadline_miss_threshold_ &&
+      ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Ready)
+    TransitionIpcConnection(IpcConnectionEvent::ResponseDeadlineExceeded);
+}
+
 // One idle Health round trip on the primary connection (spec §8.3). The wait is
 // bounded by ipc_health_timeout_ms_ and abandoned as soon as a query or queued
 // item arrives, so the probe never holds up QueryCandidates; a reply that lands
@@ -2620,7 +2642,7 @@ void TextService::IpcWorkerThreadImpl() {
       // PerformHandshake applies a Host generation change (stale request IDs)
       // before Ready is entered, as spec §8.2 requires.
       established = PerformHandshake();
-      if (established) ipc_health_consecutive_failures_ = 0;
+      if (established) ipc_consecutive_deadline_misses_ = 0;
       TransitionIpcConnection(established ? IpcConnectionEvent::HandshakeAccepted
                                           : IpcConnectionEvent::HandshakeFailed);
     }
@@ -2701,18 +2723,11 @@ void TextService::ServeConnection() {
     if (health_due) {
       switch (ProbeHostHealth(next_id++)) {
         case HealthProbeResult::Answered:
-          ipc_health_consecutive_failures_ = 0;
-          if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded)
-            TransitionIpcConnection(IpcConnectionEvent::ResponseRestored);
+          NoteHostResponded();
           break;
         case HealthProbeResult::TimedOut:
-          ++ipc_health_consecutive_failures_;
-          RuntimeLog(
-              azookey::logging::RuntimeLogLevel::Warn, "ipc_health_timeout",
-              {{"consecutive_failures", static_cast<uint64_t>(ipc_health_consecutive_failures_)}});
-          if (ipc_health_consecutive_failures_ >= ipc_health_failure_threshold_ &&
-              ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Ready)
-            TransitionIpcConnection(IpcConnectionEvent::ResponseDeadlineExceeded);
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_health_timeout");
+          NoteHostDeadlineMissed();
           break;
         case HealthProbeResult::Interrupted:
           break;
@@ -2738,6 +2753,7 @@ void TextService::ServeConnection() {
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
+      NoteHostResponded();
     }
 
     // Drain fire-and-forget queue (CommitObservation, Cancel) first. A send or
@@ -2974,6 +2990,11 @@ void TextService::ServeConnection() {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
     }
+    if (qres) {
+      NoteHostResponded();
+    } else if (query_deadline_exceeded && !is_batch) {
+      NoteHostDeadlineMissed();
+    }
     std::vector<CandidateField> response_candidates;
     if (cancel_inflight && cancel_inflight_out_of_band && !qres) {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_query_cancelled_out_of_band",
@@ -3189,6 +3210,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
           response->type != MessageType::QueryBatchConversion)
         continue;
       result = ParseQueryBatchConversionResponse(response->payload_json);
+      NoteHostResponded();
       break;
     }
     if (!result && !ipc_client_.IsConnected()) {

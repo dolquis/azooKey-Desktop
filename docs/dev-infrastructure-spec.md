@@ -1761,10 +1761,15 @@ stale 化する。未送信または接続断後に再武装された pending �
   - 応答待ちは §8.5.2 の IPC Ping と同じ 500ms を上限とする。待機中に `QueryCandidates` や
     送信キューの項目が入ったら待機を打ち切って要求を先に送る。打ち切った `Health` の遅れた
     応答は request ID 不一致として読み捨て、stale 応答のログは出さない。
-  - 応答が上限内に返らないたびに `ipc_health_timeout` を記録し、連続 2 回で `Ready` から
-    `Degraded` へ遷移する（`response_deadline_exceeded`）。応答の中身（`status` が
-    `degraded` / `error` でも）は問わず、上限内に返った時点で連続回数を 0 に戻し、
-    `Degraded` なら `Ready` へ戻す（`response_restored`）。
+  - 応答が上限内に返らなければ `ipc_health_timeout` を記録する。
+- 劣化判定は処理種別ごとの deadline 超過を共通に数える。`Health` の無応答と
+  `QueryCandidates` の deadline 超過（§8.5.2 の fast 150ms）はどちらも 1 回の超過として
+  `ipc_host_deadline_missed` に記録し、連続 2 回で `Ready` から `Degraded` へ遷移する
+  （`response_deadline_exceeded`）。入力し続けて idle にならない間も、この経路で劣化を判定する。
+  一括変換の deadline 超過は接続を切って再接続へ戻すため、この回数には含めない。
+- `Health`、`QueryCandidates`、一括変換、設定再読込の Handshake のいずれかに応答が返った時点で、
+  連続回数を 0 に戻し、`Degraded` なら `Ready` へ戻す（`response_restored`）。`Health` の
+  `status` が `degraded` / `error` でも応答として扱う。
   - `Health` の送信失敗や監視中の切断は `connection_lost` として再接続へ戻す。これにより、
     idle 中に Host が停止した場合も次のキー入力を待たずに検知する。
 

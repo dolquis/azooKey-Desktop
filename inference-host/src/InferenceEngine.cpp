@@ -77,10 +77,10 @@ bool IsAsciiAlphaCodepoint(char32_t c) {
 // symbol. Used to reject surfaces made only of marks.
 bool IsWordCodepoint(char32_t c) {
   return IsKanaCodepoint(c) || IsAsciiAlphaCodepoint(c) ||
-         (c >= 0x3400 && c <= 0x4DBF) ||    // CJK extension A
-         (c >= 0x4E00 && c <= 0x9FFF) ||    // CJK unified ideographs
-         (c >= 0xF900 && c <= 0xFAFF) ||    // CJK compatibility ideographs
-         (c >= 0x20000 && c <= 0x2FA1F);    // CJK extensions B and beyond
+         (c >= 0x3400 && c <= 0x4DBF) ||  // CJK extension A
+         (c >= 0x4E00 && c <= 0x9FFF) ||  // CJK unified ideographs
+         (c >= 0xF900 && c <= 0xFAFF) ||  // CJK compatibility ideographs
+         (c >= 0x20000 && c <= 0x2FA1F);  // CJK extensions B and beyond
 }
 
 core::ConversionContext BuildContext(
@@ -638,8 +638,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     }
   }
   // Shadows the parameter so the rest of the pipeline reads one reading.
-  const std::string& kana =
-      out.corrected_reading.empty() ? requested_kana : out.corrected_reading;
+  const std::string& kana = out.corrected_reading.empty() ? requested_kana : out.corrected_reading;
 
   std::shared_ptr<core::IConverter> converter;
   std::shared_ptr<core::IConverter> fallback_converter;
@@ -830,10 +829,9 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
       }
     }
     for (auto& suggestion : suggestions) {
-      const bool already_shown =
-          std::any_of(result.begin(), result.end(), [&](const core::Candidate& existing) {
-            return existing.surface == suggestion.surface;
-          });
+      const bool already_shown = std::any_of(
+          result.begin(), result.end(),
+          [&](const core::Candidate& existing) { return existing.surface == suggestion.surface; });
       if (already_shown) continue;
       suggestion.reading = suggest_reading;
       suggestion.debug_info = kTypoCorrectionMark;

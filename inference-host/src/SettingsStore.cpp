@@ -223,9 +223,9 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
         ReadBool(*model, "benchmarkOnModelChange", settings.model.benchmark_on_model_change);
   }
 
-  settings.typo_correction_mode = ReadEnum(object, "typoCorrectionMode",
-                                           settings.typo_correction_mode,
-                                           {"off", "suggest", "auto_replace"});
+  settings.typo_correction_mode =
+      ReadEnum(object, "typoCorrectionMode", settings.typo_correction_mode,
+               {"off", "suggest", "auto_replace"});
   settings.typo_min_count =
       ReadRangedInt32(object, "typoMinCount", settings.typo_min_count, 1, 100);
 
@@ -236,8 +236,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
         ReadBool(*auto_word, "trendingEnabled", settings.auto_word.trending_enabled);
     settings.auto_word.registration_mode = ReadEnum(
         *auto_word, "registrationMode", settings.auto_word.registration_mode, {"confirm", "auto"});
-    settings.auto_word.mining_min_count = ReadRangedInt32(
-        *auto_word, "miningMinCount", settings.auto_word.mining_min_count, 1, 100);
+    settings.auto_word.mining_min_count =
+        ReadRangedInt32(*auto_word, "miningMinCount", settings.auto_word.mining_min_count, 1, 100);
     settings.auto_word.trending_interval_hours = ReadRangedInt32(
         *auto_word, "trendingIntervalHours", settings.auto_word.trending_interval_hours, 1, 8760);
   }

@@ -184,8 +184,7 @@ TEST(MessagesTest, LengthPrefixedFramingRejectsOversizedFrames) {
 TEST(MessagesTest, M35AndM36MessageTypesRoundTripThroughTheirNames) {
   // The wire carries the type as a string, so a new enum value is only
   // compatible once both directions of the mapping know it.
-  for (const auto& [name, type] :
-       std::vector<std::pair<std::string, azookey::ipc::MessageType>>{
+  for (const auto& [name, type] : std::vector<std::pair<std::string, azookey::ipc::MessageType>>{
            {"ObserveTypo", azookey::ipc::MessageType::ObserveTypo},
            {"ListNewWordCandidates", azookey::ipc::MessageType::ListNewWordCandidates},
            {"ResolveNewWord", azookey::ipc::MessageType::ResolveNewWord}}) {

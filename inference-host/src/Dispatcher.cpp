@@ -569,11 +569,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleListNewWordCandidates(const ipc::
   auto words = auto_word_store_->ListByState(state);
   // Most recently seen first, so a page of max_items shows the words the user
   // has been typing rather than an arbitrary slice of the map order.
-  std::sort(words.begin(), words.end(), [](const learning::AutoWord& a, const learning::AutoWord& b) {
-    if (a.last_seen_epoch != b.last_seen_epoch) return a.last_seen_epoch > b.last_seen_epoch;
-    if (a.surface != b.surface) return a.surface < b.surface;
-    return a.reading < b.reading;
-  });
+  std::sort(words.begin(), words.end(),
+            [](const learning::AutoWord& a, const learning::AutoWord& b) {
+              if (a.last_seen_epoch != b.last_seen_epoch)
+                return a.last_seen_epoch > b.last_seen_epoch;
+              if (a.surface != b.surface) return a.surface < b.surface;
+              return a.reading < b.reading;
+            });
   if (words.size() > parsed->max_items) words.resize(parsed->max_items);
 
   res.items.reserve(words.size());

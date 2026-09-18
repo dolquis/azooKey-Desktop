@@ -339,8 +339,8 @@ bool AutoWordStore::Load() {
     word.surface = UnescapeTsvField(fields[0]);
     word.reading = UnescapeTsvField(fields[1]);
     if (word.surface.empty() || word.reading.empty() ||
-        !ParseAutoWordSource(fields[2], word.source) || !ParseAutoWordState(fields[3], word.state) ||
-        !ParseUnsigned(fields[4], word.count) ||
+        !ParseAutoWordSource(fields[2], word.source) ||
+        !ParseAutoWordState(fields[3], word.state) || !ParseUnsigned(fields[4], word.count) ||
         !ParseUnsigned(fields[5], word.first_seen_epoch) ||
         !ParseUnsigned(fields[6], word.last_seen_epoch) || !ParseScore(fields[7], word.score)) {
       LogMalformedLine(path_, line_number);

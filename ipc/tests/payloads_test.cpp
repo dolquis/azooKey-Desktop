@@ -660,15 +660,15 @@ TEST(PayloadsTest, ResolveNewWordRoundTripsAndRejectsUnknownAction) {
   // An unknown action must not fall through to one of the two real outcomes.
   EXPECT_FALSE(azookey::ipc::ParseResolveNewWordRequest(
       R"({"surface":"あずきー","reading":"あずきー","action":"delete"})"));
-  EXPECT_FALSE(azookey::ipc::ParseResolveNewWordRequest(
-      R"({"surface":"あずきー","reading":"あずきー"})"));
+  EXPECT_FALSE(
+      azookey::ipc::ParseResolveNewWordRequest(R"({"surface":"あずきー","reading":"あずきー"})"));
   EXPECT_FALSE(azookey::ipc::ParseResolveNewWordRequest(
       R"({"surface":"","reading":"あずきー","action":"confirm"})"));
 
   azookey::ipc::ResolveNewWordResponse response;
   response.ok = true;
-  const auto parsed_response =
-      azookey::ipc::ParseResolveNewWordResponse(azookey::ipc::BuildResolveNewWordResponse(response));
+  const auto parsed_response = azookey::ipc::ParseResolveNewWordResponse(
+      azookey::ipc::BuildResolveNewWordResponse(response));
   ASSERT_TRUE(parsed_response);
   EXPECT_TRUE(parsed_response->ok);
 }

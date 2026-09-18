@@ -1501,10 +1501,10 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
 
   // The dispatcher stamps the query with the wall clock, and Lookup ignores
   // records older than 180 days, so the observation has to be recent.
-  const auto now_epoch_sec = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::seconds>(
-          std::chrono::system_clock::now().time_since_epoch())
-          .count());
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
   typo.Observe("こんちには", "こんにちは", now_epoch_sec);
   typo.Observe("こんちには", "こんにちは", now_epoch_sec);
 
@@ -1534,8 +1534,8 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
 
   ipc::ListNewWordCandidatesRequest list;
   list.state_filter = "pending";
-  auto response = approval.Dispatch(MakeReq(
-      60, ipc::MessageType::ListNewWordCandidates, ipc::BuildListNewWordCandidatesRequest(list)));
+  auto response = approval.Dispatch(MakeReq(60, ipc::MessageType::ListNewWordCandidates,
+                                            ipc::BuildListNewWordCandidatesRequest(list)));
   ASSERT_TRUE(response.has_value());
   auto listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
   ASSERT_TRUE(listed);
@@ -1547,8 +1547,8 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
 
   // max_items pages the response.
   list.max_items = 1;
-  response = approval.Dispatch(MakeReq(
-      61, ipc::MessageType::ListNewWordCandidates, ipc::BuildListNewWordCandidatesRequest(list)));
+  response = approval.Dispatch(MakeReq(61, ipc::MessageType::ListNewWordCandidates,
+                                       ipc::BuildListNewWordCandidatesRequest(list)));
   ASSERT_TRUE(response.has_value());
   listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
   ASSERT_TRUE(listed);
@@ -1617,8 +1617,9 @@ TEST_F(DispatcherTest, ApprovalMessagesWithoutAStoreAnswerInsteadOfCrashing) {
   EXPECT_FALSE(resolved->ok);
 
   // ObserveTypo stays fire-and-forget with no store behind it.
-  EXPECT_FALSE(dispatcher
-                   .Dispatch(MakeReq(72, ipc::MessageType::ObserveTypo,
-                                     R"({"wrong_reading":"こんちには","correct_reading":"こんにちは"})"))
-                   .has_value());
+  EXPECT_FALSE(
+      dispatcher
+          .Dispatch(MakeReq(72, ipc::MessageType::ObserveTypo,
+                            R"({"wrong_reading":"こんちには","correct_reading":"こんにちは"})"))
+          .has_value());
 }

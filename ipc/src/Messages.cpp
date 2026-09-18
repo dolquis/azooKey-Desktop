@@ -28,10 +28,12 @@ std::string TypeToString(MessageType type) {
     case MessageType::Health: return "Health";
     case MessageType::QueryDiagnostics:
       return "QueryDiagnostics";
-    case MessageType::ObserveTypo: return "ObserveTypo";
+    case MessageType::ObserveTypo:
+      return "ObserveTypo";
     case MessageType::ListNewWordCandidates:
       return "ListNewWordCandidates";
-    case MessageType::ResolveNewWord: return "ResolveNewWord";
+    case MessageType::ResolveNewWord:
+      return "ResolveNewWord";
     default: return "Unknown";
   }
 }

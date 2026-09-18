@@ -432,8 +432,7 @@ int main(int argc, char** argv) {
   const bool typo_store_loaded = typo_store.Load();
   runtime_log.Log(typo_store_loaded ? azookey::logging::RuntimeLogLevel::Info
                                     : azookey::logging::RuntimeLogLevel::Warn,
-                  "typo_store_load",
-                  {{"result", SafeLogText(typo_store_loaded ? "ok" : "error")}});
+                  "typo_store_load", {{"result", SafeLogText(typo_store_loaded ? "ok" : "error")}});
 
   azookey::learning::AutoWordStore auto_word_store(user_paths->auto_word_store_path);
   const bool auto_word_store_loaded = auto_word_store.Load();
@@ -443,10 +442,10 @@ int main(int argc, char** argv) {
                   {{"result", SafeLogText(auto_word_store_loaded ? "ok" : "error")}});
   // Spec section 3-3: sweep pending words that were never confirmed, once per
   // start rather than on every observation.
-  const auto now_epoch_sec = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::seconds>(
-          std::chrono::system_clock::now().time_since_epoch())
-          .count());
+  const auto now_epoch_sec =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
   if (auto_word_store.PrunePending(now_epoch_sec,
                                    azookey::learning::kAutoWordDefaultPendingMaxAgeSec) > 0) {
     (void)auto_word_store.Save();
@@ -562,7 +561,7 @@ int main(int argc, char** argv) {
 
     azookey::ipc::NamedPipeServer server;
     if (!server.Start(pipe_name, [&engine, &scheduler, &user_dict, &settings_store,
-                                 &auto_word_store, dconf]() {
+                                  &auto_word_store, dconf]() {
           auto d = std::make_shared<azookey::host::Dispatcher>(
               &engine, &scheduler, &user_dict, dconf, &settings_store, &auto_word_store);
           return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };

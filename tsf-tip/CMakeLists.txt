@@ -8,6 +8,7 @@ add_library(azookey_tsf_tip SHARED
   src/DisplayAttribute.cpp
   src/ForegroundAppDetector.cpp
   src/IpcConnectionState.cpp
+  src/IpcReconnectBackoff.cpp
   src/exports.def
   src/SettingsLauncher.cpp
   src/TextService.cpp
@@ -44,6 +45,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp
     src/IpcConnectionState.cpp
+    src/IpcReconnectBackoff.cpp
     src/SettingsLauncher.cpp
     src/TextService.cpp
     src/TipLocalSettings.cpp
@@ -120,6 +122,7 @@ if(AZOOKEY_BUILD_TESTS)
   azookey_discover_tests(tsf_tip_local_settings_tests TIMEOUT 30)
   add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ipc_connection_state_tests tests/ipc_connection_state_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_ipc_reconnect_backoff_tests tests/ipc_reconnect_backoff_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_display_attribute_tests tests/display_attribute_test.cpp
     LABEL tsf-com
     TIMEOUT 15)

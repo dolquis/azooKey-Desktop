@@ -118,8 +118,9 @@ function ConvertTo-VmVerifySummaryToken {
   return "redacted"
 }
 
-# 自由文は 1 行へ畳み、ドライブ付きパス・UNC パス・拡張パスを <path> へ置換し、
-# 長さを切る。ログ本文が紛れ込んでもサマリを膨らませない。
+# 自由文は 1 行へ畳み、パスを <path> へ置換し、長さを切る。ログ本文が紛れ込んでも
+# サマリを膨らませない。ユーザー名は空白を含みうるため、パスを空白で区切って
+# 判定しない。引用符内のパス、プロファイル配下の残り全体、区切り文字を含む語を順に潰す。
 function ConvertTo-VmVerifySummarySafeText {
   param(
     [AllowNull()]
@@ -132,9 +133,12 @@ function ConvertTo-VmVerifySummarySafeText {
     return ""
   }
   $text = $text -replace '[\r\n\t]+', ' '
+  $text = $text -replace '(''|")[^''"]*[\\/][^''"]*\1', '$1<path>$1'
+  $text = $text -replace '(?i)(?:[A-Z]:)?[\\/](?:Users|Documents and Settings)[\\/][^''"<>|]*', '<path>'
   $text = $text -replace '(?i)\\\\\?\\[^\s"''<>|]*', '<path>'
   $text = $text -replace '(?i)(?<![A-Za-z0-9])[A-Z]:[\\/][^\s"''<>|]*', '<path>'
   $text = $text -replace '\\\\[^\s"''<>|]+', '<path>'
+  $text = $text -replace '[^\s"''<>|]*\\[^\s"''<>|]*', '<path>'
   $text = $text.Trim()
   if ($text.Length -gt $MaxLength) {
     $text = $text.Substring(0, $MaxLength) + "..."
@@ -158,10 +162,20 @@ function Get-VmVerifySummarySha256 {
 # 入力ファイルを読む。未指定・不在・解析不能を区別して返し、例外にしない。
 # PowerShell 5.1 の > リダイレクトは UTF-16 で書くため、BOM 判定のある
 # Get-Content -Raw で読む。
+# 系統ごとの必須キー。別系統の JSON や途中で切れた出力を、件数 0 の「取得」として
+# 扱わないために確認する。
+$script:VmVerifySummaryRequiredKeys = @{
+  bootstrap = @("overallStatus", "checks")
+  diag = @("status", "checks")
+  compat = @("target", "results")
+}
+
 function Read-VmVerifySummaryInput {
   param(
     [AllowEmptyString()]
-    [string]$Path
+    [string]$Path,
+    [Parameter(Mandatory = $true)]
+    [string]$Source
   )
 
   if (-not $Path) {
@@ -171,14 +185,37 @@ function Read-VmVerifySummaryInput {
     return [pscustomobject][ordered]@{ State = "missing"; Reason = "file not found"; Data = $null }
   }
   try {
-    $data = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+    $data = ConvertFrom-Json -InputObject (Get-Content -Raw -LiteralPath $Path) -NoEnumerate
   } catch {
     return [pscustomobject][ordered]@{ State = "invalid"; Reason = "not valid JSON"; Data = $null }
   }
-  if ($null -eq $data -or $data -is [array]) {
+  if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) {
     return [pscustomobject][ordered]@{ State = "invalid"; Reason = "not a JSON object"; Data = $null }
   }
+  $names = @($data.PSObject.Properties.Name)
+  foreach ($key in $script:VmVerifySummaryRequiredKeys[$Source]) {
+    if ($names -notcontains $key) {
+      return [pscustomobject][ordered]@{ State = "invalid"; Reason = "unexpected shape"; Data = $null }
+    }
+  }
   return [pscustomobject][ordered]@{ State = "present"; Reason = ""; Data = $data }
+}
+
+# PowerShell 7 の ConvertFrom-Json は ISO 8601 の文字列をローカル時刻の DateTime へ
+# 変換する。UTC の ISO 8601 へ戻してから出す。
+function ConvertTo-VmVerifySummaryUtcText {
+  param(
+    [AllowNull()]
+    $Value
+  )
+
+  if ($Value -is [datetime]) {
+    return $Value.ToUniversalTime().ToString("o")
+  }
+  if ($Value -is [DateTimeOffset]) {
+    return $Value.UtcDateTime.ToString("o")
+  }
+  return ConvertTo-VmVerifySummarySafeText -Value $Value -MaxLength 40
 }
 
 function Get-VmVerifySummaryInputState {
@@ -234,7 +271,7 @@ function Get-VmVerifySummaryManifest {
     commit = [string]$manifest.commit
     preset = $preset
     buildType = ConvertTo-VmVerifySummaryToken -Value $manifest.buildType
-    generatedAtUtc = ConvertTo-VmVerifySummarySafeText -Value $manifest.generatedAtUtc -MaxLength 40
+    generatedAtUtc = ConvertTo-VmVerifySummaryUtcText -Value $manifest.generatedAtUtc
     bundledModel = $model
     compatBundled = ($roles -contains "compat-runner")
   }
@@ -374,10 +411,20 @@ function Get-VmVerifySummaryCompatReport {
     }
   }
 
+  # runner が書いた summary と数え直した件数の食い違いは、観測値として残す。
+  $reportedSummaryMatches = $null
+  if ($Data.summary) {
+    $reportedSummaryMatches = (
+      [string]$Data.summary.pass -eq [string]$counts["pass"] -and
+      [string]$Data.summary.fail -eq [string]$counts["fail"] -and
+      [string]$Data.summary.failing_skip -eq [string]$counts["failingSkip"])
+  }
+
   return [pscustomobject][ordered]@{
     targetId = ConvertTo-VmVerifySummaryToken -Value $Data.target.id
     displayName = ConvertTo-VmVerifySummarySafeText -Value $Data.target.display_name -MaxLength 80
     automationLevel = ConvertTo-VmVerifySummaryToken -Value $Data.target.automation_level
+    reportedSummaryMatches = $reportedSummaryMatches
     counts = [pscustomobject]$counts
     results = @($results)
   }
@@ -404,16 +451,20 @@ function Get-VmVerifySummary {
 
   $total = Get-VmVerifySummaryEmptyCount
 
-  $bootstrapInput = Read-VmVerifySummaryInput -Path $BootstrapJsonPath
+  $bootstrapInput = Read-VmVerifySummaryInput -Path $BootstrapJsonPath -Source "bootstrap"
   $inputs += Get-VmVerifySummaryInputState `
     -Name "bootstrap" -State $bootstrapInput.State -Reason $bootstrapInput.Reason
   $bootstrap = $null
   if ($bootstrapInput.State -eq "present") {
     $bootstrap = Get-VmVerifySummaryBootstrap -Data $bootstrapInput.Data -ManifestCommit $package.commit
-    Add-VmVerifySummaryCount -Target $total -Source $bootstrap.counts
+    # 別 commit のパッケージで得た結果は、この manifest を軸にした合計へ混ぜない。
+    # 系統ごとの件数と不一致の事実は bootstrap 側に残す。
+    if ($bootstrap.packageCommitVsManifest -ne "mismatch") {
+      Add-VmVerifySummaryCount -Target $total -Source $bootstrap.counts
+    }
   }
 
-  $diagInput = Read-VmVerifySummaryInput -Path $DiagJsonPath
+  $diagInput = Read-VmVerifySummaryInput -Path $DiagJsonPath -Source "diag"
   $inputs += Get-VmVerifySummaryInputState -Name "diag" -State $diagInput.State -Reason $diagInput.Reason
   $diag = $null
   if ($diagInput.State -eq "present") {
@@ -427,7 +478,7 @@ function Get-VmVerifySummary {
     $inputs += Get-VmVerifySummaryInputState -Name "compat" -State "missing" -Reason "not provided"
   }
   for ($index = 0; $index -lt $compatPaths.Count; $index++) {
-    $compatInput = Read-VmVerifySummaryInput -Path $compatPaths[$index]
+    $compatInput = Read-VmVerifySummaryInput -Path $compatPaths[$index] -Source "compat"
     $inputs += Get-VmVerifySummaryInputState `
       -Name "compat[$index]" -State $compatInput.State -Reason $compatInput.Reason
     if ($compatInput.State -eq "present") {
@@ -543,11 +594,15 @@ function ConvertTo-VmVerifySummaryMarkdown {
   $lines.Add("| 系統 | 入力 | pass | fail | failing-skip | 人間待ち | warning | 対象外 | 不明 |")
   $lines.Add("|---|---|---:|---:|---:|---:|---:|---:|---:|")
   $bootstrapCounts = $null
+  $bootstrapLabel = "bootstrap (``verify-bootstrap.ps1 -Json``)"
   if ($Summary.bootstrap) {
     $bootstrapCounts = $Summary.bootstrap.counts
+    if ($Summary.bootstrap.packageCommitVsManifest -eq "mismatch") {
+      $bootstrapLabel = "$bootstrapLabel（commit 不一致のため合計に含めない）"
+    }
   }
   $lines.Add((Format-VmVerifySummaryCountRow `
-    -Label "bootstrap (``verify-bootstrap.ps1 -Json``)" `
+    -Label $bootstrapLabel `
     -State (Get-VmVerifySummaryInputLabel -Summary $Summary -Name "bootstrap") `
     -Counts $bootstrapCounts))
   $diagCounts = $null
@@ -567,8 +622,12 @@ function ConvertTo-VmVerifySummaryMarkdown {
     $lines.Add((Format-VmVerifySummaryCountRow -Label "compat" -State $state -Counts $null))
   }
   foreach ($report in @($Summary.compat)) {
+    $compatLabel = "compat ``$($report.targetId)``"
+    if ($report.reportedSummaryMatches -eq $false) {
+      $compatLabel = "$compatLabel（report.json の summary と results が食い違う）"
+    }
     $lines.Add((Format-VmVerifySummaryCountRow `
-      -Label "compat ``$($report.targetId)``" -State "取得" -Counts $report.counts))
+      -Label $compatLabel -State "取得" -Counts $report.counts))
   }
   $lines.Add((Format-VmVerifySummaryCountRow -Label "**合計**" -State "" -Counts $Summary.counts))
   $lines.Add("")

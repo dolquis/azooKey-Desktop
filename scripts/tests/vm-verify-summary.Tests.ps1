@@ -68,6 +68,8 @@ Describe "VM verification summary" {
             @{ id = "vcRuntime"; status = "pass"; message = "VC++ x64 runtime is already available." }
             @{ id = "tipRegistration"; status = "fail"; message = "Failed at C:\Users\alice\azookey-verify\register-dev.ps1`nline 2 of log" }
             @{ id = "inferenceHost"; status = "pass"; message = "Host at \\fileserver\share\alice is serving." }
+            @{ id = "profileQuoted"; status = "pass"; message = "Cannot find path 'C:\Users\John Smith\AppData\Local\x.dll' because it does not exist." }
+            @{ id = "profileBare"; status = "pass"; message = "Stale host C:\Users\Mary Ann\azookey\host.exe stopped; also saw \Users\zqxuser\x and rel\carol\y" }
             @{ id = "microsoftIme"; status = "pass"; message = "Microsoft Japanese IME remains available for recovery." }
             @{ id = "vmCheckpoint"; status = "manual_required"; message = "Confirm the Hyper-V checkpoint." }
             @{ id = "debugView"; status = "not_applicable"; message = "DebugView setup is only required for Debug verification." }
@@ -128,10 +130,11 @@ Describe "VM verification summary" {
 
     $summary.package.commit | Should -Be $script:testCommit
     $summary.package.bundledModel | Should -Be "zenz-v3.1-small.gguf"
+    $summary.package.generatedAtUtc | Should -Be "2026-01-01T00:00:00.0000000Z"
     $summary.os.build | Should -Be "26100.4061"
     $summary.missingInputs.Count | Should -Be 0
 
-    $summary.bootstrap.counts.pass | Should -Be 3
+    $summary.bootstrap.counts.pass | Should -Be 5
     $summary.bootstrap.counts.fail | Should -Be 1
     $summary.bootstrap.counts.manualRequired | Should -Be 1
     $summary.bootstrap.counts.notApplicable | Should -Be 1
@@ -144,8 +147,9 @@ Describe "VM verification summary" {
     $summary.compat[0].counts.pass | Should -Be 1
     $summary.compat[0].counts.fail | Should -Be 1
     $summary.compat[0].counts.failingSkip | Should -Be 1
+    $summary.compat[0].reportedSummaryMatches | Should -BeFalse
 
-    $summary.counts.pass | Should -Be 5
+    $summary.counts.pass | Should -Be 7
     $summary.counts.fail | Should -Be 3
     $summary.counts.failingSkip | Should -Be 1
     $summary.counts.manualRequired | Should -Be 1
@@ -201,6 +205,32 @@ Describe "VM verification summary" {
     $summary.bootstrap.packageCommitVsManifest | Should -Be "unknown"
   }
 
+  It "treats JSON of an unexpected shape as invalid instead of an empty present input" {
+    $root = Join-Path $TestDrive "shape"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $noResults = Write-TestJson -Path (Join-Path $root "compat.json") -Value @{
+      schema_version = 1
+      target = @{ id = "notepad" }
+    }
+    $wrapped = Join-Path $root "wrapped.json"
+    '[{"status":"ok","checks":[]}]' | Set-Content -LiteralPath $wrapped -Encoding UTF8
+    $crossed = Initialize-TestDiag -Root $root
+
+    $summary = Get-VmVerifySummary `
+      -ManifestPath (Initialize-TestManifest -Root $root) `
+      -BootstrapJsonPath $crossed `
+      -DiagJsonPath $wrapped `
+      -CompatReportPath @($noResults)
+
+    foreach ($name in @("bootstrap", "diag", "compat[0]")) {
+      ($summary.inputs | Where-Object { $_.name -eq $name }).state | Should -Be "invalid"
+    }
+    ($summary.inputs | Where-Object { $_.name -eq "bootstrap" }).reason | Should -Be "unexpected shape"
+    ($summary.inputs | Where-Object { $_.name -eq "diag" }).reason | Should -Be "not a JSON object"
+    $summary.missingInputs | Should -Contain "compat[0]"
+    @($summary.compat).Count | Should -Be 0
+  }
+
   It "flags a bootstrap result taken from a different package commit" {
     $root = Join-Path $TestDrive "mismatch"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -210,7 +240,12 @@ Describe "VM verification summary" {
       -BootstrapJsonPath (Initialize-TestBootstrap -Root $root -Commit ("f" * 40))
 
     $summary.bootstrap.packageCommitVsManifest | Should -Be "mismatch"
-    ConvertTo-VmVerifySummaryMarkdown -Summary $summary | Should -Match "\*\*不一致\*\*"
+    $summary.bootstrap.counts.fail | Should -Be 1
+    $summary.counts.pass | Should -Be 0
+    $summary.counts.fail | Should -Be 0
+    $markdown = ConvertTo-VmVerifySummaryMarkdown -Summary $summary
+    $markdown | Should -Match "\*\*不一致\*\*"
+    $markdown | Should -Match "commit 不一致のため合計に含めない"
   }
 
   It "keeps absolute paths, user names and log bodies out of both outputs" {
@@ -231,13 +266,16 @@ Describe "VM verification summary" {
       $text | Should -Not -Match "alice"
       $text | Should -Not -Match "(?i)[a-z]:[\\/]"
       $text | Should -Not -Match "fileserver"
+      $text | Should -Not -MatchExactly "Smith|Mary|zqxuser|carol"
       $text | Should -Not -Match "secret\.gguf"
       $text | Should -Not -Match "processId"
     }
 
     $summary = $result.Summary
     ($summary.bootstrap.checks | Where-Object { $_.id -eq "tipRegistration" }).message |
-      Should -Be "Failed at <path> line 2 of log"
+      Should -Be "Failed at <path>"
+    ($summary.bootstrap.checks | Where-Object { $_.id -eq "profileQuoted" }).message |
+      Should -Be "Cannot find path '<path>' because it does not exist."
     $summary.bootstrap.hostBinary.runningSha256 | Should -Be ("c" * 64)
     $summary.compat[0].results[1].artifact | Should -Be "failures/notepad_C-002_fail"
     $summary.compat[0].results[2].reasonCode | Should -Be "redacted"
@@ -269,7 +307,7 @@ Describe "VM verification summary" {
     $markdown | Should -Match "## 検証環境"
     $markdown | Should -Match "- 検証日 / 検証者:\n"
     $markdown | Should -Match "人間ゲートの合否を表さない"
-    $markdown | Should -Match "\| compat ``vscode`` \| 取得 \| 1 \| 1 \| 1 \|"
+    $markdown | Should -Match "\| compat ``vscode``（report.json の summary と results が食い違う） \| 取得 \| 1 \| 1 \| 1 \|"
     $markdown | Should -Not -Match "Outcome"
   }
 

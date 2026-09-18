@@ -304,17 +304,23 @@ Markdown は `docs/handoff/human-gate-batch-runbook.md` Part C の環境ブロ�
 | `warning` | — | `warning` | — |
 | `notApplicable` | `not_applicable` | — | — |
 
-compat の件数は `report.json` の `summary` ではなく `results` から数え直す。
+compat の件数は `report.json` の `summary` ではなく `results` から数え直し、
+`summary` との一致を `reportedSummaryMatches` に記録する。
 未指定・不在・解析不能の入力は `inputs[].state` の `missing` / `invalid` と
 `missingInputs` に記録し、省かない。
+系統ごとの必須キー（bootstrap は `overallStatus` と `checks`、diag は `status` と
+`checks`、compat は `target` と `results`）を欠く JSON も `invalid` とする。
 manifest の commit が 40 桁でない場合と preset が無い場合は、サマリを書かずに失敗する。
 bootstrap の `package.commit` と manifest の commit の一致は
 `bootstrap.packageCommitVsManifest`（`match`、`mismatch`、`unknown`）として記録する。
+`mismatch` の bootstrap の件数は `bootstrap.counts` に残し、合計の `counts` へは加えない。
 
 redaction は許可リストで行う。識別子（check ID、status、target ID、reason code、
 モデルのファイル名）は英数字と `._-` だけの値を通し、外れた値は `redacted` に置き換える。
-自由文の `message` は 1 行へ畳み、ドライブ付きパス・UNC パス・`\\?\` パスを
-`<path>` へ置換して 200 文字で切る。
+自由文の `message` は 1 行へ畳み、パスを `<path>` へ置換して 200 文字で切る。
+ユーザー名は空白を含みうるため、引用符内のパスは引用符内全体を、`\Users\` と
+`\Documents and Settings\` 以降は空白を越えて置換する。
+ドライブ付きパス・UNC パス・`\\?\` パス・区切り文字 `\` を含む語も置換する。
 `azookey_diag` の `details`、bootstrap の `hostBinary` のパスと process ID は拾わない。
 compat の `artifact` は出力ディレクトリ相対のパスだけを通す。
 
@@ -332,7 +338,7 @@ compat の `artifact` は出力ディレクトリ相対のパスだけを通す�
 | `counts` | object | 全系統を合算した分類ごとの件数と `missingInputs` の件数 |
 | `bootstrap` | object / null | `overallStatus`、`packageCommitVsManifest`、`hostBinary` の status と SHA-256、分類件数、`checks` |
 | `diag` | object / null | `status`、分類件数、`checks` |
-| `compat` | array | target ごとの ID、表示名、automation level、分類件数、`results` |
+| `compat` | array | target ごとの ID、表示名、automation level、`reportedSummaryMatches`、分類件数、`results` |
 
 ### 2.7 ビルド時間の内訳（実測）
 

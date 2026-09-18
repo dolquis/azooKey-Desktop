@@ -120,6 +120,13 @@ if(AZOOKEY_BUILD_TESTS)
   target_link_libraries(tsf_tip_local_settings_tests PRIVATE
     azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
   azookey_discover_tests(tsf_tip_local_settings_tests TIMEOUT 30)
+  # The keymap is the pure core map; this target only adds <windows.h> to check
+  # the core VK constants against VK_* and needs no TIP objects.
+  add_executable(tsf_tip_keymap_tests tests/keymap_test.cpp)
+  target_compile_definitions(tsf_tip_keymap_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(tsf_tip_keymap_tests PRIVATE
+    azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(tsf_tip_keymap_tests TIMEOUT 30)
   add_tsf_tip_unit_test(tsf_tip_staleness_tests tests/staleness_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ipc_connection_state_tests tests/ipc_connection_state_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ipc_reconnect_backoff_tests tests/ipc_reconnect_backoff_test.cpp)

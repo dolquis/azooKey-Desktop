@@ -103,9 +103,12 @@ enum class InputStateKind {
 | Previewing | StartConversion | Selecting | Show CandidateWindow（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
-| 任意 | Cancel | Idle | CancelComposition |
+| Selecting | Input / Backspace | Composing | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない） |
+| Selecting | Cancel | Composing | 候補窓を閉じて reading を再表示。候補キャッシュは保持し、次の StartConversion で再表示する（M10 の Esc 挙動） |
+| Composing / Previewing / UnicodeInput | Cancel | Idle | CancelComposition |
 | Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
 | ReplaceSuggestion | Commit | Idle | TransformSelectedText IPC + ReplaceSelection |
+| ReplaceSuggestion | Cancel | Idle | Hide Prompt |
 | Idle | StartUnicodeInput | UnicodeInput | StartComposition + hex buffer |
 | UnicodeInput | Commit | Idle | hex → UTF-32 → UTF-16 surrogate, EndComposition |
 
@@ -141,6 +144,29 @@ TSF 操作に対応付ける。
 実装は `tsf-tip/src/TextService.cpp::ApplyClientAction(const ClientAction&)`
 として 1 メソッドに集約。引数は variant 型。EditSession が必要なものは
 queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
+
+C++ の `ClientAction` は `core/include/azookey/core/ClientAction.h` の `std::variant` で、
+上表の各行に対応する struct（`AppendToMarkedText` / `ReplaceMarkedText` / `CommitMarkedText` /
+`CancelMarkedText` / `ShowCandidateWindow` / `HideCandidateWindow` / `ShowPredictionWindow` /
+`HidePredictionWindow` / `ReplaceSelectedText` / `PlayBeep`）に、状態機械が必要とする次の副作用を
+append-only で加える（§1.5.2）。preedit の更新は romaji のかな化で既存文字が変わるため、
+`AppendToMarkedText` ではなく `ReplaceMarkedText`（全体置換）で表す。
+
+| ClientAction | 意味 | TSF / TIP 側の操作 |
+|---|---|---|
+| `QueryCandidates(reading)` | reading の候補を問い合わせる | `PostQueryCandidates`。request id と staleness は TIP が持つ（§1.5.4） |
+| `UpdateCandidateSelection(index)` | 表示中の候補窓のハイライトだけを動かす | `CandidateUiCoordinator::MoveSelection`（§1.6.2 (B)） |
+| `ObserveCommit(reading, surface)` | 候補確定を学習へ記録する | `PostCommitObservation` |
+| `ToggleInputMode(Hankaku / HiraKata)` | 入力モードを切り替える | 入力モードの compartment 更新 |
+| `ShowReplaceSuggestionPrompt(mode)` | 選択テキストを取得してプロンプトを出す（§4.2, §4.3） | Magic Conversion / Replace Suggestion のダイアログ |
+| `SubmitReplaceSuggestion` | プロンプトを送信する | `TransformSelectedText` IPC。応答は `ReplaceSelectedText` で反映 |
+| `HideReplaceSuggestionPrompt` | プロンプトを閉じる | ダイアログを閉じる |
+| `ForgetLastCommit` | 直近確定を忘却する（§7） | 忘却 IPC |
+| `ToggleDebugWindow` | デバッグ窓を開閉する（§8） | デバッグ窓の表示切替 |
+
+候補確定は `[HideCandidateWindow, ReplaceMarkedText(surface), CommitMarkedText,
+ObserveCommit(reading, surface)]`、as-is 確定は `[ReplaceMarkedText(reading), CommitMarkedText]` の
+列で表す（as-is 確定は学習観測を出さない）。
 
 ### 1.4 キーバインドマッピング
 
@@ -180,6 +206,21 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
 
 「英数キー」「かな」のダブルタップは独自検出ロジック → §4.1（トリガ検出）参照。
 
+状態ごとの解決（§1.5.3 第 1 層）は `core/src/UserActionMap.cpp` の
+`MapUserAction(VK, modifiers, InputStateKind)` が持ち、表の補足として次を定める。
+
+- composition 内カーソルを持たないため、`VK_DELETE` / `VK_HOME` / `VK_END` / Ctrl+A / Ctrl+E は
+  どの状態でも `nullopt`（パススルー）とする。Ctrl+I / O / S も予約のまま `nullopt` とする。
+- `VK_LEFT` / `VK_RIGHT` / Ctrl+B / Ctrl+F は Selecting でだけ `Backward` / `Forward` になる。
+  TIP は batch 変換の文節移動にだけ使い、文節が無いときはパススルーする。
+- Ctrl+H は reading（または Unicode 16 進バッファ）がある状態で `Backspace`、Ctrl+P / Ctrl+N は
+  Selecting で `Up` / `Down` になる。
+- Alt または Win を含む組合せは常に `nullopt` とする。
+- TIP は `ClientAction` の効果を実装している `UserAction`（文字入力、Backspace、変換・候補操作、
+  Commit、Cancel、Selecting 中の Forward / Backward）だけを消費する。モード切替・Unicode 入力・
+  Forget・デバッグ窓の `UserAction` は、対応するマイルストーン（M16 / M18）が効果を実装するまで
+  TIP でパススルーする。
+
 ### 1.5 C++ 移植境界（純粋性契約・拡張点・VK 表所有権・非回帰戦略）
 
 §1.1〜§1.4 はレガシー（macOS）の UserAction / InputState / ClientAction / VK 表を定義する。
@@ -208,7 +249,7 @@ queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
   HandleResult HandleEvent(const UserActionEvent& event,
                            const EditContextHint& hint = {}) const;
   ```
-- **`EditContextHint`**（正典定義。`docs/bracket-pairing-spec.md` §3.1.1 は本定義を参照する）:
+- **`EditContextHint`**（正典定義。`core/include/azookey/core/EditContextHint.h`。`docs/bracket-pairing-spec.md` §3.1.1 は本定義を参照する）:
   ```cpp
   struct EditContextHint {
       std::optional<char32_t> char_before;  // キャレット直前 1 文字（無ければ nullopt）
@@ -463,7 +504,8 @@ azooKey が自分で決める設計判断である。karukan の欠けとして�
   避ける、(c) `HandleResult.next` の選択 index を TIP が読んで反映する契約に一本化する。レガシー
   Swift `ClientAction`（`legacy/.../Actions/ClientAction.swift`）は
   `selectNextCandidate` 系を持つが、これは Swift 実装の選択であって C++ 側の必須要件ではない。
-  推奨は (b)（TSF では窓の再構築コストが実測課題になり得るため）だが、決定は M13 実装 PR に委ねる。
+  azooKey は (b) を採る（TSF では窓の再構築コストが実測課題になり得るため）。
+  `UpdateCandidateSelection(index)` + `ReplaceMarkedText(surface)` の列で反映する（§1.3）。
 - **候補ページング・スクロールの反映方式（azooKey 設計判断）**: 候補数が窓の表示件数を超えるときの
   ページ送りも karukan に専用アクションは無い（同様に `ShowCandidates` 再発行で表現しうる）。
   M13 スコープでは 1〜9 の数字選択と Up/Down 巡回のみを保存（§1.5.4）すれば足りる。候補窓が複数

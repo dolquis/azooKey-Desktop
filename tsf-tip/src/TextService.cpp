@@ -26,6 +26,7 @@
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SecureApps.h"
 #include "azookey/core/SymbolRewriter.h"
+#include "azookey/core/UserActionMap.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
@@ -251,10 +252,59 @@ std::vector<azookey::ipc::CandidateField> HostCandidateFields(
 
 bool IsVirtualKeyDown(int vk) { return (GetKeyState(vk) & 0x8000) != 0; }
 
-bool HasSystemModifierDown() {
-  return IsVirtualKeyDown(VK_CONTROL) || IsVirtualKeyDown(VK_LCONTROL) ||
-         IsVirtualKeyDown(VK_RCONTROL) || IsVirtualKeyDown(VK_MENU) || IsVirtualKeyDown(VK_LMENU) ||
-         IsVirtualKeyDown(VK_RMENU) || IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+uint32_t CurrentKeyModifiers() {
+  uint32_t modifiers = 0;
+  if (IsVirtualKeyDown(VK_SHIFT)) modifiers |= azookey::core::kModifierShift;
+  if (IsVirtualKeyDown(VK_CONTROL) || IsVirtualKeyDown(VK_LCONTROL) ||
+      IsVirtualKeyDown(VK_RCONTROL))
+    modifiers |= azookey::core::kModifierCtrl;
+  if (IsVirtualKeyDown(VK_MENU) || IsVirtualKeyDown(VK_LMENU) || IsVirtualKeyDown(VK_RMENU))
+    modifiers |= azookey::core::kModifierAlt;
+  if (IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN))
+    modifiers |= azookey::core::kModifierWin;
+  return modifiers;
+}
+
+bool HasSystemModifier(uint32_t modifiers) {
+  return (modifiers & (azookey::core::kModifierCtrl | azookey::core::kModifierAlt |
+                       azookey::core::kModifierWin)) != 0;
+}
+
+// First layer of the key pipeline (docs/legacy-parity-spec.md §1.5.3). The TIP
+// derives the state kind from its composition and candidate window, and passes
+// through actions whose effects it does not implement yet (mode toggles,
+// Unicode input, Forget, debug window).
+std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t modifiers,
+                                                        bool has_preedit, bool cand_visible) {
+  using azookey::core::InputStateKind;
+  using azookey::core::UserAction;
+  const InputStateKind kind = cand_visible  ? InputStateKind::Selecting
+                              : has_preedit ? InputStateKind::Composing
+                                            : InputStateKind::Idle;
+  auto event = azookey::core::MapUserAction(static_cast<uint32_t>(key), modifiers, kind);
+  if (!event) return std::nullopt;
+  switch (event->action) {
+    case UserAction::Input:
+    case UserAction::Backspace:
+    case UserAction::Forward:
+    case UserAction::Backward:
+    case UserAction::Up:
+    case UserAction::Down:
+    case UserAction::StartConversion:
+    case UserAction::NextCandidate:
+    case UserAction::PrevCandidate:
+    case UserAction::SelectByDigit:
+    case UserAction::Commit:
+    case UserAction::Cancel:
+      return event;
+    default:
+      return std::nullopt;
+  }
+}
+
+bool IsActionKey(const std::optional<azookey::core::UserActionEvent>& event,
+                 azookey::core::UserAction action) {
+  return event && event->action == action;
 }
 
 std::optional<char> TranslateAsciiDecimalDigit(WPARAM virtual_key, LPARAM key_data) {
@@ -1099,58 +1149,68 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 #endif
 
-    if (HasSystemModifierDown()) return S_OK;
+    const uint32_t modifiers = CurrentKeyModifiers();
+    // Ctrl chords reach the IME only when they map to an implemented action.
+    if (HasSystemModifier(modifiers) &&
+        !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                   candidate_ui_.IsShowing()))
+      return S_OK;
     if (committing_) {
       *eaten = TRUE;
       return S_OK;
     }
 
-    bool emoji_handled = false;
-    const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, true, emoji_handled);
-    if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
-    bool bracket_handled = false;
-    const HRESULT bracket_hr =
-        HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled);
-    if (FAILED(bracket_hr) || bracket_handled) {
-      if (*eaten) {
-        bracket_test_context_ = context;
-        bracket_test_key_ = wParam;
+    if (!HasSystemModifier(modifiers)) {
+      bool emoji_handled = false;
+      const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, true, emoji_handled);
+      if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
+      bool bracket_handled = false;
+      const HRESULT bracket_hr =
+          HandleBracketKey(context, wParam, lParam, eaten, true, bracket_handled);
+      if (FAILED(bracket_hr) || bracket_handled) {
+        if (*eaten) {
+          bracket_test_context_ = context;
+          bracket_test_key_ = wParam;
+        }
+        return bracket_hr;
       }
-      return bracket_hr;
     }
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
+    const auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
 
-    if (wParam >= '1' && wParam <= '9' && cand_visible) {
+    using core::UserAction;
+    if (IsActionKey(key_event, UserAction::SelectByDigit)) {
       *eaten = TRUE;
     } else if (decimal_digit && !BatchRomajiEnabled() &&
                number_rewriter_.load(std::memory_order_relaxed)) {
       *eaten = TRUE;
-    } else if (wParam >= 'A' && wParam <= 'Z') {
+    } else if (!key_event) {
+      // Not consumed in this state.
+    } else if (key_event->action == UserAction::Input) {
+      if (wParam >= 'A' && wParam <= 'Z') {
+        *eaten = TRUE;
+      } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
+        // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
+        // composition が無いときは通常のハイフンとしてアプリへ通す。
+        *eaten = has_preedit ? TRUE : FALSE;
+      } else if (composition_symbol) {
+        // 明示句読点と slash は composition 中だけ取り込む。composition が無いときは
+        // アプリへパススルーし、通常の記号入力を横取りしない。
+        *eaten = has_preedit ? TRUE : FALSE;
+      }
+    } else if (key_event->action == UserAction::Backspace) {
+      *eaten = has_preedit ? TRUE : FALSE;
+    } else if (key_event->action == UserAction::Forward ||
+               key_event->action == UserAction::Backward) {
+      *eaten = !shown_batch_segments_.empty() ? TRUE : FALSE;
+    } else {
+      // Conversion, candidate navigation, Commit and Cancel are mapped only
+      // while a preedit or the candidate window exists.
       *eaten = TRUE;
-    } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
-      // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
-      // composition が無いときは通常のハイフンとしてアプリへ通す。
-      *eaten = has_preedit ? TRUE : FALSE;
-    } else if (composition_symbol) {
-      // 明示句読点と slash は composition 中だけ取り込む。composition が無いときは
-      // アプリへパススルーし、通常の記号入力を横取りしない。
-      *eaten = has_preedit ? TRUE : FALSE;
-    } else if (wParam == VK_BACK) {
-      *eaten = has_preedit ? TRUE : FALSE;
-    } else if (wParam == VK_SPACE) {
-      *eaten = (has_preedit || cand_visible) ? TRUE : FALSE;
-    } else if (wParam == VK_UP || wParam == VK_DOWN) {
-      *eaten = cand_visible ? TRUE : FALSE;
-    } else if (wParam == VK_LEFT || wParam == VK_RIGHT) {
-      *eaten = cand_visible && !shown_batch_segments_.empty() ? TRUE : FALSE;
-    } else if (wParam == VK_RETURN) {
-      *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
-    } else if (wParam == VK_ESCAPE) {
-      *eaten = (cand_visible || has_preedit) ? TRUE : FALSE;
     }
     if (bracket_composition_ && !*eaten) {
       // Unclaimed navigation keys may never reach OnKeyDown. Finalize here
@@ -1191,7 +1251,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
   try {
-    if (HasSystemModifierDown()) return S_OK;
+    const uint32_t modifiers = CurrentKeyModifiers();
+    // Ctrl chords reach the IME only when they map to an implemented action.
+    if (HasSystemModifier(modifiers) &&
+        !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                   candidate_ui_.IsShowing()))
+      return S_OK;
 
     if (committing_) {
       ITfContext* retry_context = commit_context_ ? commit_context_ : active_context_;
@@ -1210,17 +1275,19 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
 
-    bool emoji_handled = false;
-    const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
-    if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
-    bool bracket_handled = false;
-    const HRESULT bracket_hr =
-        HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
-    if (bracket_claimed && !*eaten) {
-      *eaten = TRUE;
-      return bracket_hr == E_OUTOFMEMORY ? bracket_hr : S_OK;
+    if (!HasSystemModifier(modifiers)) {
+      bool emoji_handled = false;
+      const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
+      if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
+      bool bracket_handled = false;
+      const HRESULT bracket_hr =
+          HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
+      if (bracket_claimed && !*eaten) {
+        *eaten = TRUE;
+        return bracket_hr == E_OUTOFMEMORY ? bracket_hr : S_OK;
+      }
+      if (FAILED(bracket_hr) || bracket_handled) return bracket_hr;
     }
-    if (FAILED(bracket_hr) || bracket_handled) return bracket_hr;
 
     struct PreeditRollbackState {
       std::string preedit;
@@ -1290,10 +1357,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
+    const auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
-    if (wParam >= '1' && wParam <= '9' && cand_visible) {
-      int idx = static_cast<int>(wParam - '1');
+    using core::UserAction;
+    const bool is_input = IsActionKey(key_event, UserAction::Input);
+    const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
+    if (IsActionKey(key_event, UserAction::SelectByDigit)) {
+      int idx = key_event->digit - 1;
       if (idx < candidate_ui_.GetCount()) {
         if (shown_batch_segments_.size() > 1) {
           const auto rollback_state = capture_preedit_rollback_state();
@@ -1329,7 +1400,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       PostQueryCandidates(CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if (wParam >= 'A' && wParam <= 'Z') {
+    } else if (is_input && wParam >= 'A' && wParam <= 'Z') {
       const auto rollback_state = capture_preedit_rollback_state();
       // Hide candidate window when the user resumes typing.
       if (cand_visible) {
@@ -1358,7 +1429,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
+    } else if (is_input && (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
                (BatchRomajiEnabled() ? !batch_raw_romaji_.empty()
                                      : (!preedit_kana_.empty() || romaji_.HasPending()))) {
       // 長音: composition 中のハイフンキー（主キー・テンキー）を長音符「ー」として
@@ -1387,7 +1458,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if (composition_symbol && has_preedit) {
+    } else if (is_input && composition_symbol && has_preedit) {
       const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_ui_.EndUI();
@@ -1412,7 +1483,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if (wParam == VK_BACK) {
+    } else if (IsActionKey(key_event, UserAction::Backspace)) {
       const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_ui_.EndUI();
@@ -1461,12 +1532,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
       }
 
-    } else if (wParam == VK_SPACE) {
+    } else if (IsActionKey(key_event, UserAction::StartConversion) ||
+               IsActionKey(key_event, UserAction::NextCandidate) ||
+               IsActionKey(key_event, UserAction::PrevCandidate)) {
       if (BatchRomajiEnabled() && !batch_raw_romaji_.empty()) {
         *eaten = TRUE;
         if (cand_visible) {
           const auto rollback_state = capture_preedit_rollback_state();
-          const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
+          const HRESULT move_hr = candidate_ui_.MoveSelection(candidate_step);
           if (FAILED(move_hr)) return move_hr;
           selected_candidate_idx_ = candidate_ui_.GetSelected();
           const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
@@ -1531,8 +1604,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           // yet — to prevent a literal space leaking into the application.
           *eaten = TRUE;
           if (cand_visible) {
-            // Cycle to next candidate using the existing snapshot.
-            const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
+            // Cycle the candidate using the existing snapshot.
+            const HRESULT move_hr = candidate_ui_.MoveSelection(candidate_step);
             if (FAILED(move_hr)) return move_hr;
             selected_candidate_idx_ = candidate_ui_.GetSelected();
             const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
@@ -1593,13 +1666,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
       }
 
-    } else if ((wParam == VK_LEFT || wParam == VK_RIGHT) && cand_visible &&
-               !shown_batch_segments_.empty()) {
+    } else if ((IsActionKey(key_event, UserAction::Backward) ||
+                IsActionKey(key_event, UserAction::Forward)) &&
+               cand_visible && !shown_batch_segments_.empty()) {
       const auto rollback_state = capture_preedit_rollback_state();
       batch_segment_selections_[batch_segment_cursor_] =
           static_cast<size_t>(selected_candidate_idx_);
-      if (wParam == VK_LEFT && batch_segment_cursor_ > 0) --batch_segment_cursor_;
-      if (wParam == VK_RIGHT && batch_segment_cursor_ + 1 < shown_batch_segments_.size())
+      if (IsActionKey(key_event, UserAction::Backward) && batch_segment_cursor_ > 0)
+        --batch_segment_cursor_;
+      if (IsActionKey(key_event, UserAction::Forward) &&
+          batch_segment_cursor_ + 1 < shown_batch_segments_.size())
         ++batch_segment_cursor_;
       const auto& segment = shown_batch_segments_[batch_segment_cursor_];
       shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
@@ -1614,7 +1690,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       *eaten = TRUE;
       return request_preedit_update_or_restore_on_oom(rollback_state);
-    } else if (wParam == VK_UP) {
+    } else if (IsActionKey(key_event, UserAction::Up)) {
       if (cand_visible) {
         const auto rollback_state = capture_preedit_rollback_state();
         const HRESULT move_hr = candidate_ui_.MoveSelection(-1);
@@ -1625,7 +1701,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
       }
 
-    } else if (wParam == VK_DOWN) {
+    } else if (IsActionKey(key_event, UserAction::Down)) {
       if (cand_visible) {
         const auto rollback_state = capture_preedit_rollback_state();
         const HRESULT move_hr = candidate_ui_.MoveSelection(+1);
@@ -1636,7 +1712,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
       }
 
-    } else if (wParam == VK_RETURN) {
+    } else if (IsActionKey(key_event, UserAction::Commit)) {
       if (cand_visible) {
         const HRESULT commit_hr = CommitSelected(context);
         if (FAILED(commit_hr)) return commit_hr;
@@ -1651,7 +1727,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         *eaten = TRUE;
       }
 
-    } else if (wParam == VK_ESCAPE) {
+    } else if (IsActionKey(key_event, UserAction::Cancel)) {
       if (cand_visible) {
         const auto rollback_state = capture_preedit_rollback_state();
         candidate_ui_.EndUI();

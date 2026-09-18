@@ -81,6 +81,12 @@ enum class InputStateKind {
 | Selecting | Cancel (Esc) | BatchAccumulating | 変換結果を破棄し蓄積状態へ戻す |
 | BatchAccumulating | Cancel (Esc) | Idle | CancelComposition |
 
+Host が使えない間（接続・Handshake の失敗、切断、`Degraded`。`docs/dev-infrastructure-spec.md`
+§8.3）は次の例外がある。BatchAccumulating の Space は `QueryBatchConversion` を送らず、読み全体を
+1 文節とする TIP 内ローカル候補で Selecting に入る（`Degraded` では最初の Space だけ Host へ送る）。
+BatchConverting の Space は in-flight を `Cancel` してローカル候補で Selecting に入り、Enter は
+読み（かな）をそのまま確定する。応答が来ない Host を待ち続けて入力が止まることを防ぐためである。
+
 `batchRomajiConversion == false` のときは従来どおり Composing / Previewing に
 遷移し、本状態は使われない。ライブ変換（M14）・予測（M15）は
 BatchAccumulating 中は抑制する。

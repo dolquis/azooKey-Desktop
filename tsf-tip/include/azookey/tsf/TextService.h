@@ -211,6 +211,7 @@ class TextService final : public ITfTextInputProcessorEx,
   IpcConnectionState ipc_connection_state_for_test() const {
     return ipc_connection_state_.load(std::memory_order_acquire);
   }
+  bool ipc_host_unavailable_for_test() const { return IpcHostUnavailable(); }
   // Call before start_ipc_worker_for_test; the worker reads these unlocked.
   void set_ipc_health_timing_for_test(uint32_t interval_ms, uint32_t timeout_ms,
                                       uint32_t failure_threshold) {
@@ -309,6 +310,11 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<IpcConnectionState> ipc_connection_state_{IpcConnectionState::Disconnected};
   // Failed connect/handshake attempts since the last Ready. IPC worker only.
   uint32_t ipc_failed_connect_attempts_{0};
+  // True while the Host has failed (connect/handshake failure, lost connection
+  // or Degraded) and not yet come back to Ready. Written by the IPC worker,
+  // read by the TIP thread to switch to TIP-local candidates (spec §8.3).
+  std::atomic<bool> ipc_host_unavailable_{false};
+  bool IpcHostUnavailable() const { return ipc_host_unavailable_.load(std::memory_order_acquire); }
   // Silent-Host detection (spec §8.3). The Host is probed with Health only after
   // the worker has had nothing to send for ipc_health_interval_ms_. A missed
   // deadline (Health within ipc_health_timeout_ms_, QueryCandidates, batch)

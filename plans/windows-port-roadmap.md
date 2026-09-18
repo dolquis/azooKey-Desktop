@@ -426,7 +426,7 @@ v1.0 リリースに向けたリスクと対応:
 | MSIX 配布 (M11) の machine-wide 登録 | アンインストール後にレジストリが残る | `DllRegisterServer` は machine-wide (HKLM) 登録に統一済み。MSIX manifest で `comServer` を宣言し、アンインストール時に確実に消えることを VM テストで確認 |
 | 設定 UI フレームワーク選定 (M11) | 配布サイズ・依存ランタイム | WinUI 3（C++/WinRT）に確定（DEV-99）。決定内容と残るスパイクは M11「UI フレームワーク決定」 |
 | 署名証明書の調達 (M29) | MVP リリースには影響しない（配布方針転換、spec §0） | MVP は未署名 MSI（DEV-415）、MS Store は MS 再署名（DEV-416）で有料証明書不要。証明書はスタンドアロン MSIX サイドロード着手時のみ（経路 B 確定済み・延期、DEV-255） |
-| Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は `SimpleConverter` 劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
+| Host 停止・無応答時の入力停止 (M42) | 入力中に候補更新が止まり UX が劣化 | 接続状態機械 + exponential backoff 再接続、無応答時は TIP 内のかな・カタカナ候補による劣化モードへ（`docs/dev-infrastructure-spec.md` §8） |
 | IPC 観測性不足による遅延切り分け困難 (M41) | TIP/Pipe/Host のどこが遅いか特定できず最適化が滞る | 構造化ログ（相関 ID・フェーズ別 `latency_ms`）とエラーコード体系を導入（同 §7） |
 | 自前 JSON パーサの IPC 境界堅牢性 (M40) | malformed 入力でのクラッシュ・未定義動作 | ネスト深度/最大長制限・fuzz テスト・Named Pipe 強化。外部ライブラリ移行は v1.0 の範囲では行わず自前パーサを維持する（同 §6.2, §11.2.1。再評価条件も同節） |
 | 学習永続化の書き込み増幅・無制限増大 | 確定時レイテンシ増加、SSD 書き込み増、学習 TSV 肥大化 | `LearningStore` は N 件/T 秒デバウンス、明示 flush、保存失敗ログ、上限件数 + weight 閾値 GC で抑制。burst 先頭の同期 flush は T 秒のレート制限を課し、追加書き込みを 1 burst あたり最大 1 回に抑える（`docs/learning-data-management-spec.md` §11.2） |
@@ -1732,7 +1732,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - 接続状態機械（Disconnected/Connecting/Handshaking/Ready/Degraded）
   - exponential backoff + jitter による再接続
   - ヘルス監視（`Health` メッセージ流用）
-  - 無応答時の劣化モード（`SimpleConverter` 相当のローカルフォールバック）
+  - 無応答時の劣化モード（TIP 内のかな・カタカナ候補によるローカルフォールバック。spec §8.3）
   - Host 世代 ID: Host 起動ごとにランダムな世代 ID（インスタンス UUID）を
     発行し `HandshakeResponse` に載せる。TIP は世代変化を検知したら
     pending / in-flight を破棄する（`host_generation_id` の生成・伝播・

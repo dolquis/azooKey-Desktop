@@ -34,6 +34,7 @@
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
+#include "azookey/tsf/IpcReconnectBackoff.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextServiceFactory.h"
 
@@ -2620,13 +2621,14 @@ void TextService::IpcWorkerThreadImpl() {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "ipc_pipe_name_unavailable");
     return;
   }
-  // Reconnect with exponential backoff so the worker survives a host that is
-  // started after the TIP, crashes, or restarts. The thread exits only on
-  // Deactivate (ipc_stop_), never on a dropped connection (DEV-168).
+  // Reconnect with jittered exponential backoff so the worker survives a host
+  // that is started after the TIP, crashes, or restarts, without every TIP in
+  // the session retrying in lockstep. The thread exits only on Deactivate
+  // (ipc_stop_), never on a dropped connection (DEV-168).
   constexpr uint32_t kConnectTimeoutMs = 500;
   constexpr uint32_t kBackoffMinMs = 250;
   constexpr uint32_t kBackoffMaxMs = 3000;
-  uint32_t backoff_ms = kBackoffMinMs;
+  IpcReconnectBackoff backoff(kBackoffMinMs, kBackoffMaxMs);
 
   while (!ipc_stop_.load()) {
     // Cleared before connecting: this handshake already carries whatever the
@@ -2648,16 +2650,14 @@ void TextService::IpcWorkerThreadImpl() {
     }
     if (!established) {
       ipc_client_.Disconnect();
-      if (WaitForReconnectOrStop(backoff_ms)) break;
-      backoff_ms *= 2;
-      if (backoff_ms > kBackoffMaxMs) backoff_ms = kBackoffMaxMs;
+      if (WaitForReconnectOrStop(backoff.Next())) break;
       continue;
     }
 
     // Healthy connection: reset backoff and serve until the pipe drops. A
     // QueryCandidates enqueued while the host was down is still pending and is
     // picked up immediately, so candidates recover without the user retyping.
-    backoff_ms = kBackoffMinMs;
+    backoff.Reset();
     ServeConnection();
 
     ipc_client_.Disconnect();

@@ -98,6 +98,10 @@ struct QueryCandidatesResponse {
   bool partial{false};
   bool ok{true};
   std::optional<std::string> error;
+  // M35 auto_replace: the reading the host substituted for the requested one.
+  // Empty means no correction was applied, which is also how an older host that
+  // omits the field decodes.
+  std::string corrected_reading;
 };
 
 struct BatchConversionSegment {
@@ -189,6 +193,50 @@ struct UpdateConfigResponse {
   std::optional<std::string> error;
 };
 
+// M35. Fire-and-forget: the TIP does not wait for a reply, and the response
+// exists so the handler has a shape to build when one is ever needed.
+struct ObserveTypoRequest {
+  std::string wrong_reading;
+  std::string correct_reading;
+  uint64_t timestamp_ms{};
+};
+
+struct ObserveTypoResponse {
+  bool ok{false};
+};
+
+// M36-A approval flow.
+struct ListNewWordCandidatesRequest {
+  // One of "pending", "confirmed", "rejected". An unknown value is rejected by
+  // the parser rather than silently listing everything.
+  std::string state_filter{"pending"};
+  uint32_t max_items{50};
+};
+
+struct NewWordField {
+  std::string surface;
+  std::string reading;
+  std::string source;
+  std::string state;
+  uint32_t count{0};
+  uint64_t last_seen_epoch{0};
+};
+
+struct ListNewWordCandidatesResponse {
+  std::vector<NewWordField> items;
+};
+
+struct ResolveNewWordRequest {
+  std::string surface;
+  std::string reading;
+  // "confirm" or "reject"; any other value fails the parse.
+  std::string action;
+};
+
+struct ResolveNewWordResponse {
+  bool ok{false};
+};
+
 // Builders return the JSON payload string (Envelope.payload_json content).
 std::string BuildHandshakeRequest(const HandshakeRequest& p);
 std::string BuildHandshakeResponse(const HandshakeResponse& p);
@@ -209,6 +257,12 @@ std::string BuildAddUserWordResponse(const AddUserWordResponse& p);
 std::string BuildRemoveUserWordRequest(const RemoveUserWordRequest& p);
 std::string BuildRemoveUserWordResponse(const RemoveUserWordResponse& p);
 std::string BuildUpdateConfigResponse(const UpdateConfigResponse& p);
+std::string BuildObserveTypoRequest(const ObserveTypoRequest& p);
+std::string BuildObserveTypoResponse(const ObserveTypoResponse& p);
+std::string BuildListNewWordCandidatesRequest(const ListNewWordCandidatesRequest& p);
+std::string BuildListNewWordCandidatesResponse(const ListNewWordCandidatesResponse& p);
+std::string BuildResolveNewWordRequest(const ResolveNewWordRequest& p);
+std::string BuildResolveNewWordResponse(const ResolveNewWordResponse& p);
 
 // Parsers accept the JSON payload string (Envelope.payload_json content).
 std::optional<HandshakeRequest> ParseHandshakeRequest(const std::string& json);
@@ -232,5 +286,13 @@ std::optional<AddUserWordResponse> ParseAddUserWordResponse(const std::string& j
 std::optional<RemoveUserWordRequest> ParseRemoveUserWordRequest(const std::string& json);
 std::optional<RemoveUserWordResponse> ParseRemoveUserWordResponse(const std::string& json);
 std::optional<UpdateConfigResponse> ParseUpdateConfigResponse(const std::string& json);
+std::optional<ObserveTypoRequest> ParseObserveTypoRequest(const std::string& json);
+std::optional<ObserveTypoResponse> ParseObserveTypoResponse(const std::string& json);
+std::optional<ListNewWordCandidatesRequest> ParseListNewWordCandidatesRequest(
+    const std::string& json);
+std::optional<ListNewWordCandidatesResponse> ParseListNewWordCandidatesResponse(
+    const std::string& json);
+std::optional<ResolveNewWordRequest> ParseResolveNewWordRequest(const std::string& json);
+std::optional<ResolveNewWordResponse> ParseResolveNewWordResponse(const std::string& json);
 
 }  // namespace azookey::ipc

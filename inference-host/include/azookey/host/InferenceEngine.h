@@ -22,9 +22,11 @@
 #include "azookey/host/RewriterData.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DictionaryStore.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/Reranker.h"
+#include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -74,6 +76,13 @@ struct EngineConfig {
   double prediction_learning_min_score{0.05};
   // Default score for user-dictionary entries that lack an explicit value.
   double user_word_default_score{1.5};
+  // M35 typo correction; docs/typo-correction-learning-spec.md section 5-2.
+  std::string typo_correction_mode{"suggest"};
+  uint32_t typo_min_count{learning::kTypoCorrectionDefaultMinCount};
+  // M36-A mining; docs/auto-word-registration-spec.md section 8.
+  bool auto_word_mining_enabled{true};
+  bool auto_word_auto_register{false};
+  uint32_t auto_word_min_count{3};
 };
 
 struct ModelLoadOptions {
@@ -113,6 +122,10 @@ class InferenceEngine {
 
   // External, non-owning. May be nullptr (no user dictionary).
   void SetUserDictionary(learning::UserDictionary* dict);
+  // External, non-owning; nullptr disables typo correction entirely (M35).
+  void SetTypoStore(learning::TypoCorrectionStore* store);
+  // External, non-owning; nullptr disables new-word mining entirely (M36-A).
+  void SetAutoWordStore(learning::AutoWordStore* store);
   struct DictionaryLoadResult {
     std::string name;
     bool loaded;
@@ -135,8 +148,22 @@ class InferenceEngine {
   bool StartModelPreload(ModelLoadOptions options);
   void WaitForModelPreload();
 
-  // QueryCandidates with optional cancel polling. Returns an empty vector
-  // immediately when *cancel is observed true. cancel may be nullptr.
+  struct CandidatesResult {
+    std::vector<core::Candidate> candidates;
+    // Non-empty only under typo_correction_mode "auto_replace": the reading the
+    // conversion actually ran on, so the TIP can replace its preedit.
+    std::string corrected_reading;
+  };
+
+  // QueryCandidates with optional cancel polling, plus the typo-corrected
+  // reading (M35). Returns an empty result when *cancel is observed true.
+  // cancel may be nullptr.
+  CandidatesResult QueryCandidatesEx(const std::string& kana, const std::string& context,
+                                     uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+                                     uint32_t max_candidates = 0, bool live = false,
+                                     const InferenceTelemetry* telemetry = nullptr);
+
+  // Candidates only; equivalent to QueryCandidatesEx(...).candidates.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
                                                uint64_t now_epoch_sec,
                                                const std::atomic<bool>* cancel,
@@ -160,6 +187,11 @@ class InferenceEngine {
                          uint64_t now_epoch_sec, const std::string& observation_id = {});
   bool CommitSegmentsObservation(const ipc::CommitSegmentsObservationRequest& request,
                                  uint64_t now_epoch_sec);
+  // M35: records one observed (mistyped reading -> retyped reading) pair and
+  // persists it. Returns false when there is no store, or when the pair fails
+  // the accept filters.
+  bool ObserveTypo(const std::string& wrong_reading, const std::string& correct_reading,
+                   uint64_t now_epoch_sec);
   void CommitCorrection(const std::string& reading, const std::string& rejected_surface,
                         const std::string& selected_surface, uint64_t now_epoch_sec);
   bool FlushLearningStore();
@@ -182,6 +214,10 @@ class InferenceEngine {
 
  private:
   RewriterData rewriter_data_;
+  // M36-A section 4-3: shape and dictionary-membership filters that decide
+  // whether a committed (reading, surface) pair is an unknown word worth mining.
+  // Holds state_mutex_ for the dictionary lookups.
+  bool IsMiningCandidateLocked(const std::string& reading, const std::string& surface) const;
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
   bool NoteObservationIdLocked(const std::string& observation_id);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
@@ -202,10 +238,16 @@ class InferenceEngine {
   learning::LearningStore* store_;
   learning::Reranker reranker_;
   learning::UserDictionary* user_dict_{nullptr};
+  learning::TypoCorrectionStore* typo_store_{nullptr};
+  learning::AutoWordStore* auto_word_store_{nullptr};
   learning::DictionaryStore dictionaries_;
   const learning::UserDictionary* indexed_user_dict_{nullptr};
   uint64_t indexed_user_revision_{};
   bool user_dictionary_enabled_{true};
+  // Serializes TypoCorrectionStore, which keeps no lock of its own. Held on its
+  // own, never nested with state_mutex_, so the store's disk write does not
+  // stall the query path that takes state_mutex_ several times per request.
+  mutable std::mutex typo_store_mutex_;
   mutable std::mutex state_mutex_;
   mutable std::mutex converter_call_mutex_;
   std::mutex model_load_mutex_;

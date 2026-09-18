@@ -416,3 +416,71 @@ TEST(SettingsDocumentTest, InvalidDocumentIsNotOverwrittenWhenQuarantineSuffixes
   EXPECT_EQ(ReadText(path), invalid);
   std::filesystem::remove_all(dir);
 }
+
+TEST(SettingsDocumentTest, TypoAndAutoWordKeysSurviveASaveAndInvalidOnesAreDropped) {
+  const auto dir = TestDir("azookey_settings_document_typo_auto_word");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "typoCorrectionMode": "auto_replace",
+    "typoMinCount": 5,
+    "autoWordRegistration": {
+      "miningEnabled": false,
+      "trendingEnabled": true,
+      "registrationMode": "auto",
+      "miningMinCount": 7,
+      "trendingIntervalHours": 6
+    }
+  })");
+
+  azookey::settings::EditableSettings settings;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto& root = parsed->AsObject();
+  // The sanitizer drops keys it does not know, so an unlisted key would be
+  // silently lost every time the settings app writes the file.
+  ASSERT_TRUE(root.contains("typoCorrectionMode"));
+  EXPECT_EQ(root.at("typoCorrectionMode").AsString(), "auto_replace");
+  ASSERT_TRUE(root.contains("typoMinCount"));
+  EXPECT_EQ(root.at("typoMinCount").AsNumber(), 5.0);
+  ASSERT_TRUE(root.contains("autoWordRegistration"));
+  const auto& auto_word = root.at("autoWordRegistration").AsObject();
+  EXPECT_FALSE(auto_word.at("miningEnabled").AsBool());
+  EXPECT_TRUE(auto_word.at("trendingEnabled").AsBool());
+  EXPECT_EQ(auto_word.at("registrationMode").AsString(), "auto");
+  EXPECT_EQ(auto_word.at("miningMinCount").AsNumber(), 7.0);
+  EXPECT_EQ(auto_word.at("trendingIntervalHours").AsNumber(), 6.0);
+}
+
+TEST(SettingsDocumentTest, InvalidTypoAndAutoWordValuesAreRemoved) {
+  const auto dir = TestDir("azookey_settings_document_typo_auto_word_invalid");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "typoCorrectionMode": "aggressive",
+    "typoMinCount": 0,
+    "autoWordRegistration": {
+      "registrationMode": "whenever",
+      "miningMinCount": 9999,
+      "unknownKey": true
+    }
+  })");
+
+  azookey::settings::EditableSettings settings;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto& root = parsed->AsObject();
+  // Removing the key restores the runtime default rather than persisting a
+  // value the host would have to reinterpret.
+  EXPECT_FALSE(root.contains("typoCorrectionMode"));
+  EXPECT_FALSE(root.contains("typoMinCount"));
+  ASSERT_TRUE(root.contains("autoWordRegistration"));
+  const auto& auto_word = root.at("autoWordRegistration").AsObject();
+  EXPECT_FALSE(auto_word.contains("registrationMode"));
+  EXPECT_FALSE(auto_word.contains("miningMinCount"));
+  EXPECT_FALSE(auto_word.contains("unknownKey"));
+}

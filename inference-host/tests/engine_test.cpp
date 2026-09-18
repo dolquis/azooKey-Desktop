@@ -13,6 +13,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
@@ -20,7 +22,9 @@
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace {
@@ -2003,4 +2007,268 @@ TEST(InferenceEngineTest, QueryCandidatesKeepsHealthAndModelSwapResponsive) {
 
   std::remove(model_path.c_str());
   std::remove(lpath);
+}
+
+// ---- M35: typo correction ----
+
+namespace {
+
+// A converter with a real lexicon, so Contains() can tell a dictionary entry
+// from a word the engine has only seen committed.
+std::unique_ptr<azookey::core::SimpleConverter> MakeConverterWithDictionary(
+    const std::vector<std::pair<std::string, std::string>>& entries) {
+  const auto path = TempPath("azookey_engine_dict_fixture.tsv");
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    for (const auto& entry : entries) {
+      out << entry.first << '\t' << entry.second << "\t2.0\n";
+    }
+  }
+  auto converter = std::make_unique<azookey::core::SimpleConverter>();
+  converter->LoadFromTsv(path);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  return converter;
+}
+
+std::unique_ptr<azookey::host::InferenceEngine> MakeEngineWithConverter(
+    std::unique_ptr<azookey::core::IConverter> converter, azookey::learning::LearningStore& store,
+    azookey::host::EngineConfig cfg) {
+  return std::make_unique<azookey::host::InferenceEngine>(std::move(converter), &store, cfg);
+}
+
+bool HasCandidateMarked(const std::vector<azookey::core::Candidate>& candidates,
+                        const std::string& mark) {
+  return std::any_of(candidates.begin(), candidates.end(),
+                     [&](const auto& c) { return c.debug_info == mark; });
+}
+
+}  // namespace
+
+TEST(EngineTypoCorrectionTest, SuggestInjectsAMarkedCandidateOnlyOverTheThreshold) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_suggest_learning.tsv"));
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_suggest.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.typo_min_count = 3;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"こんにちは", "今日は"}}), store, cfg);
+  engine->SetTypoStore(&typo);
+
+  // Below the threshold the pair is accumulated but never applied.
+  EXPECT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  EXPECT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  auto below = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_FALSE(HasCandidateMarked(below.candidates, "typo-correction"));
+
+  EXPECT_TRUE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  auto applied = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_TRUE(HasCandidateMarked(applied.candidates, "typo-correction"));
+  // suggest leaves the preedit alone: only auto_replace reports a substitution.
+  EXPECT_TRUE(applied.corrected_reading.empty());
+  // The marked candidate leads, and it carries the corrected reading.
+  ASSERT_FALSE(applied.candidates.empty());
+  EXPECT_EQ(applied.candidates.front().debug_info, "typo-correction");
+  EXPECT_EQ(applied.candidates.front().reading, "こんにちは");
+}
+
+TEST(EngineTypoCorrectionTest, AutoReplaceConvertsTheCorrectedReadingAndReportsIt) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_auto_learning.tsv"));
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_auto.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "auto_replace";
+  cfg.typo_min_count = 2;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"こんにちは", "今日は"}}), store, cfg);
+  engine->SetTypoStore(&typo);
+
+  engine->ObserveTypo("こんちには", "こんにちは", kNowBase);
+  engine->ObserveTypo("こんちには", "こんにちは", kNowBase);
+
+  auto result = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_EQ(result.corrected_reading, "こんにちは");
+  // The whole pipeline ran on the corrected reading, so the dictionary entry
+  // for it is present.
+  EXPECT_TRUE(std::any_of(result.candidates.begin(), result.candidates.end(),
+                          [](const auto& c) { return c.surface == "今日は"; }));
+}
+
+TEST(EngineTypoCorrectionTest, OffInjectsNothingAndLearnsNothing) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_off_learning.tsv"));
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_off.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "off";
+  cfg.typo_min_count = 1;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"こんにちは", "今日は"}}), store, cfg);
+  engine->SetTypoStore(&typo);
+
+  // "off" gates the learning as well as the application.
+  EXPECT_FALSE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  EXPECT_EQ(typo.size(), 0u);
+
+  // Even with a table populated behind the engine's back, off injects nothing.
+  typo.Observe("こんちには", "こんにちは", kNowBase);
+  auto result = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_FALSE(HasCandidateMarked(result.candidates, "typo-correction"));
+  EXPECT_TRUE(result.corrected_reading.empty());
+}
+
+TEST(EngineTypoCorrectionTest, WithoutAStoreQueryIsUnchanged) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_nostore_learning.tsv"));
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  auto engine = MakeEngine(store, cfg);
+
+  auto result = engine->QueryCandidatesEx("こんちには", "", kNowBase, nullptr);
+  EXPECT_TRUE(result.corrected_reading.empty());
+  EXPECT_FALSE(HasCandidateMarked(result.candidates, "typo-correction"));
+}
+
+// ---- M36-A: new word mining ----
+
+TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = true;
+  cfg.auto_word_auto_register = false;
+  cfg.auto_word_min_count = 3;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"きしゃ", "汽車"}}), store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+
+  // Commit() feeds the converter's own Learn(), so without the
+  // dictionary-vs-learned distinction the second commit would look "known" and
+  // the count would stop at one.
+  for (int i = 0; i < 3; ++i) {
+    engine->CommitObservation("あずきー", "アズーキー", kNowBase + static_cast<uint64_t>(i));
+  }
+  const auto pending = auto_words.ListByState(azookey::learning::AutoWordState::Pending);
+  ASSERT_EQ(pending.size(), 1u);
+  EXPECT_EQ(pending[0].surface, "アズーキー");
+  EXPECT_EQ(pending[0].reading, "あずきー");
+  EXPECT_EQ(pending[0].count, 3u);
+  // registrationMode "confirm": reaching the threshold does not confirm it.
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Confirmed).size(), 0u);
+}
+
+TEST(EngineAutoWordMiningTest, AutoModeConfirmsAtTheThreshold) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_auto_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_auto.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = true;
+  cfg.auto_word_auto_register = true;
+  cfg.auto_word_min_count = 2;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+
+  engine->CommitObservation("あずきー", "アズーキー", kNowBase);
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Confirmed).size(), 0u);
+  engine->CommitObservation("あずきー", "アズーキー", kNowBase + 1);
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Confirmed).size(), 1u);
+}
+
+TEST(EngineAutoWordMiningTest, KnownWordsAndNoisyShapesAreNotMined) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_filters_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_filters.tsv"));
+  azookey::learning::UserDictionary user_dict(TempPath("azookey_engine_mining_userdict.json"));
+  azookey::learning::UserWord registered;
+  registered.word = "azooKey社";
+  registered.ruby = "あずきーしゃ";
+  user_dict.Add(registered);
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = true;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"きしゃ", "汽車"}}), store, cfg);
+  engine->SetUserDictionary(&user_dict);
+  engine->SetAutoWordStore(&auto_words);
+
+  engine->CommitObservation("きしゃ", "汽車", kNowBase);             // in the dictionary
+  engine->CommitObservation("あずきーしゃ", "azooKey社", kNowBase);  // in the user dictionary
+  engine->CommitObservation("あ", "亜", kNowBase);                   // one code point
+  engine->CommitObservation("", "なぞ", kNowBase);                   // no reading
+  engine->CommitObservation("あいう", "あいう", kNowBase);           // nothing converted
+  engine->CommitObservation("にせんにじゅう", "2020年", kNowBase);   // contains digits
+  engine->CommitObservation("ゆーあーるえる", "http", kNowBase);     // ASCII only
+  engine->CommitObservation("かっこ", "「」", kNowBase);             // punctuation only
+  engine->CommitObservation("abc", "エービーシー", kNowBase);        // reading is not kana
+
+  EXPECT_EQ(auto_words.Size(), 0u);
+}
+
+TEST(EngineAutoWordMiningTest, MiningDisabledAndNoStoreAreBothNoOps) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_off_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_off.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = false;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+  engine->CommitObservation("あずきー", "アズーキー", kNowBase);
+  EXPECT_EQ(auto_words.Size(), 0u);
+
+  // No store at all must not crash the commit path.
+  azookey::host::EngineConfig enabled;
+  enabled.auto_word_mining_enabled = true;
+  auto storeless = MakeEngine(store, enabled);
+  EXPECT_TRUE(storeless->CommitObservation("あずきー", "アズーキー", kNowBase));
+}
+
+TEST(EngineAutoWordMiningTest, DuplicateObservationIdIsNotMinedTwice) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_dedupe_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_dedupe.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = true;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+
+  EXPECT_TRUE(engine->CommitObservation("あずきー", "アズーキー", kNowBase, "obs-1"));
+  // A resend after a pipe drop must not inflate the mining count either.
+  EXPECT_FALSE(engine->CommitObservation("あずきー", "アズーキー", kNowBase, "obs-1"));
+  const auto pending = auto_words.ListByState(azookey::learning::AutoWordState::Pending);
+  ASSERT_EQ(pending.size(), 1u);
+  EXPECT_EQ(pending[0].count, 1u);
+}
+
+TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_applyconfig_learning.tsv"));
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_applyconfig_typo.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_applyconfig_words.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.typo_correction_mode = "suggest";
+  cfg.auto_word_mining_enabled = true;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetTypoStore(&typo);
+  engine->SetAutoWordStore(&auto_words);
+
+  // UpdateConfig goes through ApplyConfig, which copies field by field. A field
+  // it forgets would leave the setting effective only until the next restart.
+  auto updated = engine->config();
+  updated.typo_correction_mode = "off";
+  updated.typo_min_count = 9;
+  updated.auto_word_mining_enabled = false;
+  updated.auto_word_auto_register = true;
+  updated.auto_word_min_count = 11;
+  engine->ApplyConfig(updated);
+
+  const auto applied = engine->config();
+  EXPECT_EQ(applied.typo_correction_mode, "off");
+  EXPECT_EQ(applied.typo_min_count, 9u);
+  EXPECT_FALSE(applied.auto_word_mining_enabled);
+  EXPECT_TRUE(applied.auto_word_auto_register);
+  EXPECT_EQ(applied.auto_word_min_count, 11u);
+
+  // And the new values actually take effect.
+  EXPECT_FALSE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
+  engine->CommitObservation("あずきー", "アズーキー", kNowBase);
+  EXPECT_EQ(auto_words.Size(), 0u);
 }

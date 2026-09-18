@@ -598,3 +598,83 @@ TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
   EXPECT_EQ(store.last_result().settings.log_level, "debug");
   std::filesystem::remove_all(dir);
 }
+
+TEST(SettingsStoreTest, TypoAndAutoWordKeysReachTheEngineConfig) {
+  const auto dir = TestDir("azookey_settings_typo_auto_word");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "typoCorrectionMode": "auto_replace",
+    "typoMinCount": 5,
+    "autoWordRegistration": {
+      "miningEnabled": false,
+      "trendingEnabled": true,
+      "registrationMode": "auto",
+      "miningMinCount": 7,
+      "trendingIntervalHours": 6
+    }
+  })");
+
+  azookey::host::SettingsStore store(path);
+  const auto result = store.Load();
+  ASSERT_EQ(result.status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_EQ(store.settings().typo_correction_mode, "auto_replace");
+  EXPECT_EQ(store.settings().typo_min_count, 5);
+  EXPECT_FALSE(store.settings().auto_word.mining_enabled);
+  EXPECT_TRUE(store.settings().auto_word.trending_enabled);
+  EXPECT_EQ(store.settings().auto_word.registration_mode, "auto");
+  EXPECT_EQ(store.settings().auto_word.mining_min_count, 7);
+  EXPECT_EQ(store.settings().auto_word.trending_interval_hours, 6);
+
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      azookey::host::EngineConfig{}, store.settings());
+  EXPECT_EQ(config.typo_correction_mode, "auto_replace");
+  EXPECT_EQ(config.typo_min_count, 5u);
+  EXPECT_FALSE(config.auto_word_mining_enabled);
+  // registrationMode "auto" is what turns on automatic promotion.
+  EXPECT_TRUE(config.auto_word_auto_register);
+  EXPECT_EQ(config.auto_word_min_count, 7u);
+}
+
+TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
+  const auto dir = TestDir("azookey_settings_typo_auto_word_invalid");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "typoCorrectionMode": "aggressive",
+    "typoMinCount": 0,
+    "autoWordRegistration": {
+      "registrationMode": "whenever",
+      "miningMinCount": 9999
+    }
+  })");
+
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  // An out-of-range or unknown value falls back to the documented default
+  // rather than to an arbitrary one.
+  EXPECT_EQ(store.settings().typo_correction_mode, "suggest");
+  EXPECT_EQ(store.settings().typo_min_count, 3);
+  EXPECT_EQ(store.settings().auto_word.registration_mode, "confirm");
+  EXPECT_EQ(store.settings().auto_word.mining_min_count, 3);
+
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(
+      azookey::host::EngineConfig{}, store.settings());
+  // "confirm" is the safe default: nothing is registered without the user.
+  EXPECT_FALSE(config.auto_word_auto_register);
+}
+
+TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
+  const auto dir = TestDir("azookey_settings_typo_auto_word_empty");
+  const auto path = dir / "settings.json";
+  WriteText(path, "{}");
+
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  // These are the values settings/default-settings.sample.json ships.
+  EXPECT_EQ(store.settings().typo_correction_mode, "suggest");
+  EXPECT_EQ(store.settings().typo_min_count, 3);
+  EXPECT_TRUE(store.settings().auto_word.mining_enabled);
+  EXPECT_FALSE(store.settings().auto_word.trending_enabled);
+  EXPECT_EQ(store.settings().auto_word.registration_mode, "confirm");
+  EXPECT_EQ(store.settings().auto_word.mining_min_count, 3);
+  EXPECT_EQ(store.settings().auto_word.trending_interval_hours, 24);
+}

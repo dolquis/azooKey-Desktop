@@ -25,6 +25,9 @@ enum class MessageType {
   Health,
   QueryDiagnostics,
   CommitSegmentsObservation,
+  ObserveTypo,
+  ListNewWordCandidates,
+  ResolveNewWord,
   Unknown,
 };
 

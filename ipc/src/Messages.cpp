@@ -28,6 +28,12 @@ std::string TypeToString(MessageType type) {
     case MessageType::Health: return "Health";
     case MessageType::QueryDiagnostics:
       return "QueryDiagnostics";
+    case MessageType::ObserveTypo:
+      return "ObserveTypo";
+    case MessageType::ListNewWordCandidates:
+      return "ListNewWordCandidates";
+    case MessageType::ResolveNewWord:
+      return "ResolveNewWord";
     default: return "Unknown";
   }
 }
@@ -50,6 +56,9 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "Ping") return MessageType::Ping;
   if (value == "Health") return MessageType::Health;
   if (value == "QueryDiagnostics") return MessageType::QueryDiagnostics;
+  if (value == "ObserveTypo") return MessageType::ObserveTypo;
+  if (value == "ListNewWordCandidates") return MessageType::ListNewWordCandidates;
+  if (value == "ResolveNewWord") return MessageType::ResolveNewWord;
   return MessageType::Unknown;
 }
 

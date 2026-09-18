@@ -41,6 +41,19 @@ class IConverter {
   virtual void Commit(const Candidate& selected_candidate, const ConversionContext& context) = 0;
   virtual void Learn(const std::string& committed_surface,
                      const std::string& committed_reading) = 0;
+
+  // Whether (reading, surface) is a real dictionary entry of this converter, as
+  // opposed to something Convert can synthesize heuristically or something
+  // Learn recorded from a commit. New-word mining (M36-A) needs that
+  // distinction: Convert always returns identity and long-vowel candidates, so
+  // its output cannot answer "does the dictionary know this word".
+  // The default is false, which makes a converter with no lexicon of its own
+  // report nothing rather than block mining.
+  virtual bool Contains(const std::string& reading, const std::string& surface) const {
+    (void)reading;
+    (void)surface;
+    return false;
+  }
 };
 
 }  // namespace azookey::core

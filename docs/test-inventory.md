@@ -36,7 +36,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | ターゲット | テスト | 主要シナリオ |
 |---|---|---|
 | `core_tests` | `core/tests/romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音） |
-| `core_tests` | `core/tests/simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn` |
+| `core_tests` | `core/tests/simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn`、`Contains` が実辞書エントリと `Learn` 由来の確定履歴を区別すること |
 | `core_tests` | `core/tests/utf8_test.cpp` | UTF-8 デコード/エンコードの符号位置境界と埋め込み NUL、不正シーケンスの 1 バイト消費、suffix の境界保持 |
 | `core_tests` | `core/tests/command_line_test.cpp` | wide 引数の UTF-8 変換、非 ASCII パス引数、未対 surrogate と null 引数の reject、パス境界のバイト保持 |
 | `core_tests` | `core/tests/redaction_test.cpp` | ユーザープロファイルパスの区切り・ドライブ差を跨ぐ正規化、既知 credential prefix の伏せ字化 |
@@ -51,30 +51,32 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/crash_retention_test.cpp` | クラッシュ診断の個数・容量・保存期間制限、リンクと無関係なファイルの保護 |
 | `core_tests` | `core/tests/etw_logger_test.cpp` | ETW イベントの固定長 payload、数値フィールド、要求の対応付けと終了結果 |
 | `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、同意 off と保存不能時の fallback、許可 stream と本文非混入 |
-| `ipc_tests` | `ipc/tests/messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping |
+| `ipc_tests` | `ipc/tests/messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping（`ObserveTypo` / `ListNewWordCandidates` / `ResolveNewWord` の名前往復を含む）|
 | `ipc_json_tests` | `ipc/tests/json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
-| `ipc_payloads_tests` | `ipc/tests/payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject |
+| `ipc_payloads_tests` | `ipc/tests/payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject、`ObserveTypo` と `QueryCandidatesResponse.corrected_reading` の往復と欠如時の後方互換、`ListNewWordCandidates` / `ResolveNewWord` の往復と不正 `state_filter`・`max_items`・`action` の reject |
 | `ipc_named_pipe_transport_tests` | `ipc/tests/named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持、accept churn 下での複数クライアント同時接続（`ConcurrentClientsConnectDuringAcceptChurn`） |
 | `ipc_tip_client_tests` | `ipc/tests/tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
 | `learning_tests` | `learning/tests/learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
 | `user_dictionary_tests` | `learning/tests/user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
 | `reranker_tests` | `learning/tests/reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
+| `typo_correction_store_tests` | `learning/tests/typo_correction_store_test.cpp` | M35 打ち間違えペアの頻度カウントとしきい値境界、UTF-8 コードポイント単位の編集距離と長さ・同一・空読みフィルタ、`last_updated` 経過による無視、Save/Load ラウンドトリップとタブ・改行のエスケープ、ファイル無し・破損行の読み飛ばし、`Reset` |
+| `auto_word_store_tests` | `learning/tests/auto_word_store_test.cpp` | M36-A pending / confirmed / rejected の状態遷移、`confirm` モードでの非自動昇格と `auto` モードの閾値昇格、却下語の再提示抑止、`IngestTrending` の rejected skip と mining ソース優先、`PrunePending` の対象限定、Save/Load ラウンドトリップとエスケープ、ファイル無し・破損行の読み飛ばし、`Reset` |
 | `atomic_file_tests` | `learning/tests/atomic_file_test.cpp` | 原子的書き込み後の一時ファイル残置なし、親ディレクトリ不正・ディレクトリ衝突時の既存ファイル保護、同一パス並行書き込みとファイルロック |
-| `host_engine_tests` | `inference-host/tests/engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload、`LoadModel` の GGUF 実プローブ（最小ヘッダ受理・不正 GGUF reject・CPU backend ロード成功・path 空時の MVP fallback）、`--backend cuda` 指定時の CPU フォールバック |
+| `host_engine_tests` | `inference-host/tests/engine_test.cpp` | 学習ブースト、user-dict 注入、cancel 早期 return、legacy overload、`LoadModel` の GGUF 実プローブ（最小ヘッダ受理・不正 GGUF reject・CPU backend ロード成功・path 空時の MVP fallback）、`--backend cuda` 指定時の CPU フォールバック、M35 suggest のマーク付き候補注入と閾値未満での非適用・`auto_replace` の `corrected_reading`・`off` の無変化と非学習、M36-A の OOV マイニング蓄積と `confirm` / `auto` モード差、既知語・記号・数字・ASCII・非かな読みの除外、mining 無効時と store 未設定時の no-op、observation_id 重複の非二重計上 |
 | `host_engine_tests` | `inference-host/tests/nll_scorer_test.cpp` | NLL 再スコアの prefix スナップショットと次トークン位置、log-softmax の数値安定性、Unicode スカラ単位の正規化、timeout/cancel 時の候補不変とサーキット開放、モデル未ロード時の既定維持 |
 | `host_engine_tests` | `inference-host/tests/rewriter_test.cpp` | リライターの遅延ロードと一度きりロード、データ欠落時の非リトライと不正行 skip、手動クエリのみのマージと通常候補数の保持、同梱データの round-trip と index 予算 |
-| `host_dispatcher_tests` | `inference-host/tests/dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ、`UpdateConfig` を待たずに Handshake が更新後の settings.json から TIP 向け設定を返し、その読み取りが runtime 設定を置き換えないこと |
+| `host_dispatcher_tests` | `inference-host/tests/dispatcher_test.cpp` | Handshake/Ping/QueryCandidates/QueryBatchConversion/Cancel/Commit/AddUserWord/RemoveUserWord/Health の主要ハンドラ、`UpdateConfig` を待たずに Handshake が更新後の settings.json から TIP 向け設定を返し、その読み取りが runtime 設定を置き換えないこと、`ObserveTypo` の無応答とストア更新、`QueryCandidates` 応答の `corrected_reading`、`ListNewWordCandidates` / `ResolveNewWord` の承認フローと store 未設定時の応答 |
 | `host_dispatcher_tests` | `inference-host/tests/ai_backend_test.cpp` | AI 整文バックエンドの privacy 既定と secure/disabled 時の非送信、retry 上限と cancel 後の遅延成功の非公開、応答の UTF-8・NUL・サイズ検証 |
 | `host_dispatcher_tests` | `inference-host/tests/host_etw_test.cpp` | Host の要求・推論・学習フェーズの ETW 対応付けと結果 |
 | `host_scheduler_tests` | `inference-host/tests/scheduler_test.cpp` | `NextRequestId` 連番、`Cancel`/`IsCanceled`、`MarkLatest`/`IsLatest`、thread-safety smoke |
 | `host_args_tests` | `inference-host/tests/args_test.cpp` | `--backend` 別名と未対応値の reject、`--pipe` のオプション非消費、handshake・パス系オプション、非 ASCII パスの UTF-8 保持 |
 | `host_args_tests` | `inference-host/tests/startup_test.cpp` | supervisor 未指定時の寿命非制限、不正 supervisor の fail-closed、保持ハンドル経由のプロセス終了監視、mock host が Vulkan を広告しないこと |
-| `host_user_data_paths_tests` | `inference-host/tests/user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`） |
+| `host_user_data_paths_tests` | `inference-host/tests/user_data_paths_test.cpp` | `UserDataPaths` のパス解決（root/config/data/logs/models、`learning.tsv`/`user_dict.json`、`typo_corrections.tsv`/`auto_words.tsv`）、`--learning-path` 明示時に新ストアが同階層へ解決されること |
 | `host_model_catalog_tests` | `inference-host/tests/model_catalog_test.cpp` | モデルカタログの既定補完と明示既定 id、不正・重複 id と未知既定の reject、`models\zenzai\` 配下での解決、ローカル欠落の報告 |
 | `host_http_downloader_tests` | `inference-host/tests/http_downloader_test.cpp` | SHA256 不一致時の `.part` 非昇格、Range 再開・Range 無視サーバでの再取得、上限超過応答の非昇格、非 loopback 平文 HTTP の接続前 reject |
 | `host_userdict_cli_tests` | `inference-host/tests/userdict_cli_test.cpp` | `userdict` CLI の add/list/remove ラウンドトリップ、dry-run、稼働中 Host 優先と直接編集の使い分け、import/export と非 ASCII パス保持 |
 | `host_lookup_cli_tests` | `inference-host/tests/lookup_cli_test.cpp` | `lookup` CLI の読み完全一致・読み前置一致・表記一致、ロック取得不可時の失敗、TSV/JSON の列、破損ユーザー辞書を隔離も変更もしないこと |
-| `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離と現行設定の維持、読み込み済みより新しいファイルだけを隔離せずに読む Handshake 用の先読み |
+| `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離と現行設定の維持、読み込み済みより新しいファイルだけを隔離せずに読む Handshake 用の先読み、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の既定値・範囲外値の既定復帰・`EngineConfig` への反映 |
 | `host_cli_unicode_argv` | `azookey_inference_host` | 実プロセスの argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
 | `dictionary_tests` | `dictbuild/tests/dictionary_test.cpp` | 辞書 trie の探索方向と最短優先の上限、破損検出、参照失敗時の該当レイヤのみ無効化、静的辞書と可変辞書の独立、ユーザー変更の追跡 |
 | `dictbuild_python_tests` | `dictbuild/tests/test_dictbuild.py` | オフライン辞書ビルダ（Python）の単体テスト |
@@ -94,7 +96,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_query_interface_contract_tests` | `tsf-tip/tests/query_interface_contract_test.cpp` | `QueryInterface` の null out-param と未対応 IID の契約、`ITfFnConfigure`／`ITfFunction` 公開、`Show` からのプロファイル付き設定アプリ起動と失敗時 HRESULT |
 | `tsf_tip_local_settings_tests` | `tsf-tip/tests/local_settings_test.cpp` | Host 非依存で共有設定ファイルを読む TIP ローカル設定、ローマ字テーブル変更の監視と再読み込み、Unicode パス・再作成ディレクトリへの再バインド、不正・過大ファイルでの既定復帰、監視の再 arm に失敗しても以後の保存を取りこぼさないこと、内容が変わった保存だけを観測者へ通知すること |
 | `azookey_settings_launch_arguments_tests` | `settings-app/tests/launch_arguments_test.cpp` | 設定アプリ起動引数の round-trip、値欠落・不正 LangId / プロファイルの reject、未指定と空指定の区別、重複・未知オプションの reject |
-| `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧 |
+| `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の保存時保持と不正値の削除 |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_ipc_client_test.cpp` | 設定アプリから Host への Handshake と `UpdateConfig` 送信 |
 | `compat_test_unit_tests` | `compat-test/tests/compat_test_unit_tests.cpp` | 互換ハーネスの target 定義検証（自動化契約・既知回避策・一時文書の所有）、レポート schema と非信頼テキストの伏せ字化、クリップボード復元、ウィンドウ所有権判定 |
 | `temporary_learning_file_tests` | `bench/temporary_learning_file_test.cpp` | bench 用一時学習ファイルの並行予約時の独立性、他所有者への非干渉、巻き戻し時の後始末と想定外ファイルの保全 |

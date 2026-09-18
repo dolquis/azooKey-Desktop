@@ -62,6 +62,13 @@ const std::unordered_map<std::string, double>* FindLongestBigramMatch(
   return best;
 }
 
+// Length-prefixed rather than delimiter-joined: the readings that reach Learn()
+// come from IPC and may contain any byte, so a chosen separator could be forged
+// to make two different pairs share one key.
+std::string ProvenanceKey(const std::string& reading, const std::string& surface) {
+  return std::to_string(reading.size()) + ':' + reading + surface;
+}
+
 bool PrefixFallbackRankLess(const Candidate& lhs, const Candidate& rhs) {
   if (lhs.score != rhs.score) return lhs.score > rhs.score;
   if (lhs.reading != rhs.reading) return lhs.reading < rhs.reading;
@@ -121,6 +128,7 @@ bool SimpleConverter::LoadFromTsv(const std::string& path) {
     c.score = score;
     c.source = SourceFromTsvTag(source);
     c.debug_info = source.empty() ? "tsv" : source;
+    learned_only_keys_.erase(ProvenanceKey(reading, c.surface));
     dictionary_[reading].push_back(std::move(c));
     any = true;
   }
@@ -241,7 +249,23 @@ void SimpleConverter::Learn(const std::string& committed_surface, const std::str
     found->debug_info = "learned";
     return;
   }
+  // Remember that this entry is commit history rather than lexicon content.
+  // debug_info cannot carry that fact: the branch above rewrites it the next
+  // time the same pair is committed.
+  learned_only_keys_.insert(ProvenanceKey(committed_reading, committed_surface));
   bucket.insert(bucket.begin(), Candidate{committed_surface, committed_reading, 1.2, CandidateSource::UserDictionary, "learned-new"});
+}
+
+bool SimpleConverter::Contains(const std::string& reading, const std::string& surface) const {
+  const auto bucket = dictionary_.find(reading);
+  if (bucket == dictionary_.end()) return false;
+  const bool present = std::any_of(bucket->second.begin(), bucket->second.end(),
+                                   [&](const Candidate& c) { return c.surface == surface; });
+  if (!present) return false;
+  // An entry Learn() added is not something the dictionary knows. Reporting it
+  // as known would make a new word "known" from its very first commit, so
+  // new-word mining could never observe a second occurrence of it.
+  return learned_only_keys_.find(ProvenanceKey(reading, surface)) == learned_only_keys_.end();
 }
 
 }  // namespace azookey::core

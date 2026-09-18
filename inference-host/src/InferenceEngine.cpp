@@ -33,7 +33,55 @@ constexpr size_t kPredictionDisplayLimit = 5;
 constexpr size_t kMaxTrackedObservationIds =
     static_cast<size_t>(ipc::kMaxPipeInstances) * ipc::kMaxQueuedCommitObservations;
 
+// docs/typo-correction-learning-spec.md section 5-2: the debug_info value the
+// TIP looks for to render a suggested correction differently.
+constexpr const char* kTypoCorrectionMark = "typo-correction";
+
+// docs/auto-word-registration-spec.md section 4-3 shape filters, in UTF-8 code
+// points.
+constexpr size_t kMinMinedSurfaceLength = 2;
+constexpr size_t kMaxMinedSurfaceLength = 20;
+
 using core::TakeLastUtf8Codepoints;
+
+std::vector<char32_t> DecodeUtf8Codepoints(std::string_view value) {
+  std::vector<char32_t> codepoints;
+  size_t offset = 0;
+  char32_t codepoint = 0;
+  while (offset < value.size()) {
+    const size_t previous = offset;
+    core::DecodeNextUtf8(value, offset, codepoint);
+    codepoints.push_back(codepoint);
+    // DecodeNextUtf8 consumes the offending byte on failure; stop if it ever
+    // reports no progress so a malformed tail cannot spin here.
+    if (offset == previous) break;
+  }
+  return codepoints;
+}
+
+bool IsKanaCodepoint(char32_t c) {
+  // Hiragana and katakana blocks, which together cover the prolonged sound mark
+  // and the voiced-sound marks a reading can legitimately contain.
+  return (c >= 0x3041 && c <= 0x309F) || (c >= 0x30A0 && c <= 0x30FF);
+}
+
+bool IsDigitCodepoint(char32_t c) {
+  return (c >= U'0' && c <= U'9') || (c >= 0xFF10 && c <= 0xFF19);
+}
+
+bool IsAsciiAlphaCodepoint(char32_t c) {
+  return (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z');
+}
+
+// A code point that can carry lexical meaning, as opposed to punctuation or a
+// symbol. Used to reject surfaces made only of marks.
+bool IsWordCodepoint(char32_t c) {
+  return IsKanaCodepoint(c) || IsAsciiAlphaCodepoint(c) ||
+         (c >= 0x3400 && c <= 0x4DBF) ||  // CJK extension A
+         (c >= 0x4E00 && c <= 0x9FFF) ||  // CJK unified ideographs
+         (c >= 0xF900 && c <= 0xFAFF) ||  // CJK compatibility ideographs
+         (c >= 0x20000 && c <= 0x2FA1F);  // CJK extensions B and beyond
+}
 
 core::ConversionContext BuildContext(
     const std::string& kana, const std::string& context, const std::atomic<bool>* cancel = nullptr,
@@ -134,6 +182,38 @@ void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   user_dict_ = dict;
   RefreshDictionaryLocked();
+}
+
+void InferenceEngine::SetTypoStore(learning::TypoCorrectionStore* store) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  typo_store_ = store;
+}
+
+void InferenceEngine::SetAutoWordStore(learning::AutoWordStore* store) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  auto_word_store_ = store;
+}
+
+bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
+                                  const std::string& correct_reading, uint64_t now_epoch_sec) {
+  learning::TypoCorrectionStore* store = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    // "off" stops the learning too, not just the application: a user who turned
+    // the feature off should not accumulate a correction table.
+    if (!typo_store_ || config_.typo_correction_mode == "off") return false;
+    store = typo_store_;
+  }
+  // The store keeps no lock of its own, so typo_store_mutex_ serializes it.
+  // Taking it after state_mutex_ has been released keeps Save()'s disk write off
+  // the mutex the query path takes several times per request; the two are never
+  // held together, so there is no ordering hazard.
+  std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+  if (!store->Observe(wrong_reading, correct_reading, now_epoch_sec)) return false;
+  if (!store->Save() && runtime_logger_) {
+    runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "typo_store_save_failed", {});
+  }
+  return true;
 }
 
 void InferenceEngine::RefreshDictionaryLocked() {
@@ -411,6 +491,11 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.prediction_learning_max_entries = config.prediction_learning_max_entries;
   config_.prediction_learning_min_score = config.prediction_learning_min_score;
   config_.user_word_default_score = config.user_word_default_score;
+  config_.typo_correction_mode = config.typo_correction_mode;
+  config_.typo_min_count = config.typo_min_count;
+  config_.auto_word_mining_enabled = config.auto_word_mining_enabled;
+  config_.auto_word_auto_register = config.auto_word_auto_register;
+  config_.auto_word_min_count = config.auto_word_min_count;
 }
 
 BackendKind InferenceEngine::backend() const {
@@ -511,9 +596,49 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
                                                               const std::atomic<bool>* cancel,
                                                               uint32_t max_candidates, bool live,
                                                               const InferenceTelemetry* telemetry) {
+  return QueryCandidatesEx(kana, context, now_epoch_sec, cancel, max_candidates, live, telemetry)
+      .candidates;
+}
+
+InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
+    const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
+    const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
+    const InferenceTelemetry* telemetry) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
+
+  // M35: resolve the typo correction before anything looks the reading up, so
+  // auto_replace runs dictionary lookup, conversion and reranking on the
+  // corrected reading rather than patching the result afterwards.
+  CandidatesResult out;
+  std::string suggest_reading;
+  {
+    learning::TypoCorrectionStore* store = nullptr;
+    std::string mode;
+    uint32_t min_count = 0;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      store = typo_store_;
+      mode = config_.typo_correction_mode;
+      min_count = config_.typo_min_count;
+    }
+    // typo_store_mutex_ alone, never together with state_mutex_ (see the member
+    // declaration): the store has no lock of its own and ObserveTypo mutates it.
+    if (store && mode != "off") {
+      std::lock_guard<std::mutex> typo_lock(typo_store_mutex_);
+      auto corrected = store->Lookup(requested_kana, min_count, now_epoch_sec);
+      if (corrected && *corrected != requested_kana) {
+        if (mode == "auto_replace") {
+          out.corrected_reading = std::move(*corrected);
+        } else {
+          suggest_reading = std::move(*corrected);
+        }
+      }
+    }
+  }
+  // Shadows the parameter so the rest of the pipeline reads one reading.
+  const std::string& kana = out.corrected_reading.empty() ? requested_kana : out.corrected_reading;
 
   std::shared_ptr<core::IConverter> converter;
   std::shared_ptr<core::IConverter> fallback_converter;
@@ -673,10 +798,53 @@ std::vector<core::Candidate> InferenceEngine::QueryCandidates(const std::string&
     std::lock_guard<std::mutex> lock(state_mutex_);
     result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
   }
+
+  // M35 suggest: convert the corrected reading too and put its best candidate at
+  // the front, marked, while the candidates for what the user actually typed
+  // stay in place below it. Injecting after reranking keeps the position
+  // deterministic instead of letting the score comparison bury the suggestion.
+  //
+  // Skipped for live conversion: that path runs on every keystroke, and doubling
+  // the conversion work there to offer a correction the user has not asked to
+  // see is the wrong trade.
+  if (!suggest_reading.empty() && !live && !canceled()) {
+    // The primary conversion may have thrown and fallen back. Reusing the
+    // converter that just failed would only hit the same exception and discard
+    // the suggestion, so follow the fallback.
+    const auto& suggest_converter =
+        convert_failed && fallback_converter ? fallback_converter : converter;
+    // A fresh budget: the deadline above was consumed by the primary
+    // conversion, so passing it again would time this one out before it starts.
+    const auto suggest_deadline = std::chrono::steady_clock::now() + kModelConversionBudget;
+    std::vector<core::Candidate> suggestions;
+    {
+      std::lock_guard<std::mutex> suggest_lock(converter_call_mutex_);
+      try {
+        suggestions = suggest_converter->Convert(
+            suggest_reading, BuildContext(suggest_reading, limited_context, cancel,
+                                          suggest_deadline, effective_max_candidates, live));
+      } catch (...) {
+        // A failed suggestion is not worth failing the query the user asked for.
+        suggestions.clear();
+      }
+    }
+    for (auto& suggestion : suggestions) {
+      const bool already_shown = std::any_of(
+          result.begin(), result.end(),
+          [&](const core::Candidate& existing) { return existing.surface == suggestion.surface; });
+      if (already_shown) continue;
+      suggestion.reading = suggest_reading;
+      suggestion.debug_info = kTypoCorrectionMark;
+      result.insert(result.begin(), std::move(suggestion));
+      break;
+    }
+  }
+
   if (effective_max_candidates > 0 && result.size() > effective_max_candidates) {
     result.resize(effective_max_candidates);
   }
-  return result;
+  out.candidates = std::move(result);
+  return out;
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
@@ -846,9 +1014,58 @@ bool InferenceEngine::CommitSegmentsObservation(
   return true;
 }
 
+bool InferenceEngine::IsMiningCandidateLocked(const std::string& reading,
+                                              const std::string& surface) const {
+  // Section 4-3 shape filters. An empty reading leaves nothing to look the word
+  // up by, and reading == surface means nothing was converted.
+  if (reading.empty() || surface.empty() || reading == surface) return false;
+
+  const auto reading_points = DecodeUtf8Codepoints(reading);
+  if (reading_points.size() < kMinMinedSurfaceLength) return false;
+  // A reading that is not kana is not a reading.
+  if (!std::all_of(reading_points.begin(), reading_points.end(), IsKanaCodepoint)) return false;
+
+  const auto surface_points = DecodeUtf8Codepoints(surface);
+  // One code point is a single kanji or a mis-commit; an over-long surface is a
+  // whole sentence committed by accident.
+  if (surface_points.size() < kMinMinedSurfaceLength ||
+      surface_points.size() > kMaxMinedSurfaceLength) {
+    return false;
+  }
+  // Digits are excluded conservatively: dates and counters are not new words.
+  if (std::any_of(surface_points.begin(), surface_points.end(), IsDigitCodepoint)) return false;
+  // Pure ASCII keeps URLs and code fragments out.
+  if (std::all_of(surface_points.begin(), surface_points.end(),
+                  [](char32_t c) { return c < 0x80; })) {
+    return false;
+  }
+  // Symbols and punctuation only: nothing lexical to register.
+  if (std::none_of(surface_points.begin(), surface_points.end(), IsWordCodepoint)) return false;
+
+  // Dictionary membership. A word any layer already knows is not new.
+  if (user_dict_) {
+    for (const auto& word : user_dict_->Lookup(reading)) {
+      if (word.word == surface) return false;
+    }
+  }
+  learning::LookupContext context;
+  context.mode = learning::LookupMode::Exact;
+  // 0 means "no cap": this is a membership question, and truncating to the
+  // default 32 best-scoring surfaces would report a real dictionary word as
+  // unknown whenever its reading has many candidates.
+  context.max_results = 0;
+  for (const auto& entry : dictionaries_.Lookup(reading, context)) {
+    if (entry.surface == surface) return false;
+  }
+  return true;
+}
+
 bool InferenceEngine::CommitObservation(const std::string& reading, const std::string& surface,
                                         uint64_t now_epoch_sec, const std::string& observation_id) {
   std::shared_ptr<core::IConverter> converter;
+  learning::AutoWordStore* auto_word_store = nullptr;
+  uint32_t auto_word_min_count = 0;
+  bool auto_word_auto_register = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     // A resend after a pipe drop must not re-apply an observation the Host
@@ -860,12 +1077,38 @@ bool InferenceEngine::CommitObservation(const std::string& reading, const std::s
       core::EtwLogger::LogLearningObserve(reading.size(), surface.size());
       NoteLearningMutationLocked(now_epoch_sec);
     }
+    // M36-A: decide here, while the dictionary index is held, whether this
+    // commit looks like an unknown word.
+    if (auto_word_store_ && config_.auto_word_mining_enabled &&
+        IsMiningCandidateLocked(reading, surface)) {
+      auto_word_store = auto_word_store_;
+      auto_word_min_count = config_.auto_word_min_count;
+      auto_word_auto_register = config_.auto_word_auto_register;
+    }
     converter = active_converter_;
   }
-  std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
-  converter->Commit(
-      core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
-      core::ConversionContext{});
+  {
+    std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    // The membership question has to be answered before Commit: Commit feeds
+    // Learn(), which inserts the pair into the converter's own bucket, so
+    // asking afterwards would report every committed word as already known.
+    if (auto_word_store && converter->Contains(reading, surface)) auto_word_store = nullptr;
+    converter->Commit(
+        core::Candidate{surface, reading, 1.0, core::CandidateSource::UserDictionary, "commit"},
+        core::ConversionContext{});
+  }
+  if (auto_word_store) {
+    // Deliberately outside both engine mutexes: Save() writes a temp file,
+    // flushes it to disk and renames it, and every QueryCandidates takes
+    // converter_call_mutex_ to convert. Holding it across the flush would stall
+    // the next candidate query behind this commit's disk write. AutoWordStore
+    // has its own mutex, so it needs no help from ours.
+    auto_word_store->Observe(surface, reading, now_epoch_sec, auto_word_min_count,
+                             auto_word_auto_register);
+    if (!auto_word_store->Save() && runtime_logger_) {
+      runtime_logger_->Log(logging::RuntimeLogLevel::Warn, "auto_word_store_save_failed", {});
+    }
+  }
   return true;
 }
 

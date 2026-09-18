@@ -42,6 +42,17 @@ struct RuntimeAutoUpdateSettings {
   int32_t check_interval_hours{24};
 };
 
+// M36 autoWordRegistration.*; docs/auto-word-registration-spec.md section 8.
+// trending_enabled and trending_interval_hours are parsed here so the settings
+// round-trip is complete, but nothing consumes them until M36-B lands.
+struct RuntimeAutoWordSettings {
+  bool mining_enabled{true};
+  bool trending_enabled{false};
+  std::string registration_mode{"confirm"};
+  int32_t mining_min_count{3};
+  int32_t trending_interval_hours{24};
+};
+
 struct RuntimeSettings {
   std::shared_ptr<const core::AppProfileResolver> app_profiles;
   const core::AppProfileResolver& AppProfiles() const {
@@ -94,6 +105,10 @@ struct RuntimeSettings {
   int32_t emoji_max_candidates{12};
   int32_t emoji_trigger_min_query_length{1};
   std::string emoji_data_path;
+  // M35 typoCorrectionMode / typoMinCount.
+  std::string typo_correction_mode{"suggest"};
+  int32_t typo_min_count{3};
+  RuntimeAutoWordSettings auto_word;
   RuntimeAutoUpdateSettings auto_update;
 };
 

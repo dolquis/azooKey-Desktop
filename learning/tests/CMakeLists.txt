@@ -16,6 +16,18 @@ target_link_libraries(reranker_tests
 )
 azookey_discover_tests(reranker_tests)
 
+add_executable(typo_correction_store_tests typo_correction_store_test.cpp)
+target_link_libraries(typo_correction_store_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(typo_correction_store_tests)
+
+add_executable(auto_word_store_tests auto_word_store_test.cpp)
+target_link_libraries(auto_word_store_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(auto_word_store_tests)
+
 add_executable(atomic_file_tests atomic_file_test.cpp)
 target_link_libraries(atomic_file_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "azookey/core/IConverter.h"
 
@@ -29,9 +31,14 @@ class SimpleConverter final : public IConverter {
                                  const ConversionContext& context) override;
   void Commit(const Candidate& selected_candidate, const ConversionContext& context) override;
   void Learn(const std::string& committed_surface, const std::string& committed_reading) override;
+  bool Contains(const std::string& reading, const std::string& surface) const override;
 
  private:
   std::unordered_map<std::string, std::vector<Candidate>> dictionary_;
+  // (reading, surface) pairs that only exist because Learn() recorded a commit.
+  // Contains() excludes them so new-word mining can tell the lexicon from the
+  // converter's own commit history.
+  std::unordered_set<std::string> learned_only_keys_;
   std::unordered_map<std::string, std::unordered_map<std::string, double>> bigram_bonus_;
 };
 

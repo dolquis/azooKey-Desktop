@@ -51,6 +51,9 @@ std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inpu
   paths.user_dict_path = inputs.explicit_user_dict_path
                              ? inputs.explicit_user_dict_path->lexically_normal()
                              : (paths.data_dir / "user_dict.json").lexically_normal();
+  const auto data_root = paths.learning_path.parent_path();
+  paths.typo_store_path = (data_root / "typo_corrections.tsv").lexically_normal();
+  paths.auto_word_store_path = (data_root / "auto_words.tsv").lexically_normal();
   return paths;
 }
 
@@ -58,7 +61,9 @@ bool EnsureUserDataDirectories(const UserDataPaths& paths) {
   return CreateDirectoryIfNeeded(paths.config_dir) && CreateDirectoryIfNeeded(paths.data_dir) &&
          CreateDirectoryIfNeeded(paths.logs_dir) && CreateDirectoryIfNeeded(paths.models_dir) &&
          CreateParentDirectoryIfNeeded(paths.learning_path) &&
-         CreateParentDirectoryIfNeeded(paths.user_dict_path);
+         CreateParentDirectoryIfNeeded(paths.user_dict_path) &&
+         CreateParentDirectoryIfNeeded(paths.typo_store_path) &&
+         CreateParentDirectoryIfNeeded(paths.auto_word_store_path);
 }
 
 }  // namespace azookey::host

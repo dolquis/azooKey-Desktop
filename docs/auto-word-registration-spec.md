@@ -65,8 +65,12 @@ TSV（`LearningStore` の区切り規約に準拠、`#` コメント可）。先
 
 ```
 # azookey-auto-word-store v1
-surface	reading	source	state	count	first_seen_epoch	last_seen_epoch	score
+# surface	reading	source	state	count	first_seen_epoch	last_seen_epoch	score
 ```
+
+列名行は `#` 付きのコメントとして書く。`#` が無いと、列名行とレコード行を
+読み手が区別できない。フィールド中の `\`・タブ・改行・先頭の `#` は
+`LearningStore` と同じ規約でエスケープする。
 
 - `source`: `mining` | `trending`、`state`: `pending` | `confirmed` | `rejected`
 - 既定パス: `%LOCALAPPDATA%\azooKey\data\auto_words.tsv`
@@ -80,7 +84,7 @@ surface	reading	source	state	count	first_seen_epoch	last_seen_epoch	score
 ```cpp
 class AutoWordStore {
  public:
-  explicit AutoWordStore(std::string path);
+  explicit AutoWordStore(std::filesystem::path path);
 
   bool Load();
   bool Save() const;
@@ -156,9 +160,17 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 > 必ず identity（`{kana, kana}`）・長音・引用符などのヒューリスティック候補を
 > 返す。よって「`Convert` の出力に surface が含まれるか」で既知判定をしては
 > **いけない**。実辞書エントリ（dictionary バケット）の membership を直接確認
-> すること。推奨は `IConverter` に `bool Contains(reading, surface)` を追加し、
-> Zenzai（M8）導入後も統一的に判定できるようにする。当面は内蔵辞書バケットの
-> 直接参照でよい。
+> すること。`IConverter` に `bool Contains(reading, surface)` を追加し、
+> Zenzai（M8）導入後も統一的に判定できるようにする。
+>
+> `Contains` は **`Learn()` 由来の確定履歴を既知語として扱わない**。
+> `SimpleConverter::Commit` は `Learn()` を呼んで確定語を辞書バケットへ入れる
+> ため、バケットの membership をそのまま見ると新語が初回確定で「既知」になり、
+> 2 回目以降を観測できず `miningMinCount` に到達しない。
+>
+> `Contains` の既定実装は `false` を返す。`ZenzaiModelConverter` は override
+> しないので、モデルバックエンド利用時の既知語判定はユーザー辞書と静的辞書
+> レイヤだけになる。Zenzai 内部語彙を判定に含めるのは M53 以降の課題とする。
 
 ### 4-3. 誤検出フィルタ
 
@@ -272,7 +284,7 @@ if (auto_word_store_) {
 - `ipc/include/azookey/ipc/Payloads.h` / `src/Payloads.cpp`:
 
 ```cpp
-struct ListNewWordCandidatesRequest { std::string state_filter; uint32_t max_items{50}; };
+struct ListNewWordCandidatesRequest { std::string state_filter{"pending"}; uint32_t max_items{50}; };
 struct NewWordField {
   std::string surface, reading, source, state;
   uint32_t count{0};
@@ -283,6 +295,18 @@ struct ListNewWordCandidatesResponse { std::vector<NewWordField> items; };
 struct ResolveNewWordRequest { std::string surface, reading, action; }; // action: confirm|reject
 struct ResolveNewWordResponse { bool ok{false}; };
 ```
+
+parser の受理条件:
+
+- `state_filter` は `pending` / `confirmed` / `rejected` のいずれか。未知の値は
+  パース失敗とする。全件表示へ広げると、利用者が却下した語を再び見せることになる。
+- `max_items` は 1 以上 `kMaxNewWordCandidates`（500、`ipc/include/azookey/ipc/Limits.h`）
+  以下。範囲外はパース失敗とする。上限が無いと 1 応答へストア全件を詰めさせられる。
+- `ResolveNewWordRequest` は `surface` / `reading` が空、または `action` が
+  `confirm` / `reject` 以外ならパース失敗とする。
+
+`ResolveNewWordResponse.ok` は「この呼び出しで状態が変わり、保存できた」を表す。
+対象語が無い場合と、既に同じ状態だった場合はいずれも `false` になる。
 
 ### 7-2. Dispatcher 配線
 
@@ -325,15 +349,14 @@ struct ResolveNewWordResponse { bool ok{false}; };
 }
 ```
 
-host 側 `SettingsStore` は導入済みだが、本機能の設定キー追加・runtime 反映は
-M36 実装範囲のため、当面の実効値は host CLI 引数 / 環境変数で受ける（M35 と同じ運用）:
-`--auto-word-mining on|off` / `--auto-word-trending on|off` /
-`--auto-word-mode confirm|auto` / `--auto-word-min-count N` /
-`--auto-word-store <path>` / `--trending-url <url>`
-（環境変数 `AZOOKEY_AUTOWORD_*` フォールバック）。`EngineConfig` には
-`auto_word_mining_enabled` / `auto_word_trending_enabled` /
-`auto_word_auto_register` / `auto_word_min_count` / `auto_word_default_score`
-を追加する。
+実効値の経路は `settings.json` の `autoWordRegistration.*` とする。host の
+`SettingsStore` が読み、`ApplyRuntimeSettingsToEngineConfig` が `EngineConfig` の
+`auto_word_mining_enabled` / `auto_word_auto_register`（`registrationMode == "auto"`）/
+`auto_word_min_count` へ反映する。
+
+`trendingIntervalHours` の上限は 8760（1 年）とする。`auto_word_trending_enabled` と
+`auto_word_default_score` は取り込みと候補注入を持つ側の課題（M36-B / M53）で
+`EngineConfig` へ追加する。
 
 ## 9. プライバシー方針
 
@@ -361,6 +384,12 @@ M36 実装範囲のため、当面の実効値は host CLI 引数 / 環境変数
 |---|---|---|
 | 新規 | `learning/include/azookey/learning/AutoWordStore.h` / `src/AutoWordStore.cpp` | A |
 | 新規 | `learning/tests/auto_word_store_test.cpp` | A |
+| 編集 | `core/include/azookey/core/IConverter.h`（`Contains`） | A |
+| 編集 | `core/include/azookey/core/SimpleConverter.h`, `core/src/SimpleConverter.cpp` | A |
+| 編集 | `core/tests/simple_converter_test.cpp` | A |
+| 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` | A |
+| 編集 | `inference-host/include/azookey/host/UserDataPaths.h`, `inference-host/src/UserDataPaths.cpp` | A |
+| 編集 | `settings/default-settings.sample.json`, `settings-app/SettingsDocument.cpp` | A |
 | 新規 | `inference-host/include/azookey/host/TrendingWordFetcher.h` / `src/TrendingWordFetcher.cpp` | B |
 | 再利用 | `inference-host/include/azookey/host/HttpDownloader.h` / `src/HttpDownloader.cpp`（M32 で新設。§5-4） | B |
 | 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` | A |
@@ -401,10 +430,11 @@ M36 実装範囲のため、当面の実効値は host CLI 引数 / 環境変数
 2. テスト: `ctest --preset windows-debug --output-on-failure`
    （`auto_word_store_tests` / `payloads_test` / `engine_test` /
    `dispatcher_test`、M36-B では `trending_word_fetcher_tests` が green）。
-3. host を `--auto-word-mining on --auto-word-mode auto` で stdio 起動し、
-   辞書に無い `(reading, surface)` の `CommitObservation` を `miningMinCount`
-   回送ってから同じ reading の `QueryCandidates` を投げ、`auto-word` マーク付き
-   候補が注入されることを確認。`confirm` モードでは `ListNewWordCandidates` /
+3. `settings.json` に `autoWordRegistration.miningEnabled: true` と
+   `registrationMode: "auto"` を書いて host を stdio 起動し、辞書に無い
+   `(reading, surface)` の `CommitObservation` を `miningMinCount` 回送ってから
+   同じ reading の `QueryCandidates` を投げ、`auto-word` マーク付き候補が
+   注入されることを確認。`confirm` モードでは `ListNewWordCandidates` /
    `ResolveNewWord` で承認後に注入されることを確認。
 4. M36-B: 正規アセットとハッシュ不一致アセットの両方で `FetchOnce` を実行し、
    検証通過時のみ取り込まれることを確認。

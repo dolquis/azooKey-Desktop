@@ -354,3 +354,31 @@ TEST(SimpleConverterTest, ContextAware) {
   ASSERT_FALSE(committed.empty());
   EXPECT_EQ(committed.front().surface, "NIPPON");
 }
+
+TEST(SimpleConverterTest, ContainsSeparatesTheLexiconFromCommitHistory) {
+  azookey::core::SimpleConverter converter;
+
+  // A seeded dictionary entry is known; a word nobody registered is not.
+  EXPECT_TRUE(converter.Contains("にほん", "日本"));
+  EXPECT_FALSE(converter.Contains("にほん", "二本足"));
+  EXPECT_FALSE(converter.Contains("あずきー", "アズーキー"));
+
+  // Convert() always synthesizes identity and long-vowel candidates, so its
+  // output cannot answer the membership question.
+  const auto synthesized = converter.Convert("あずきー", azookey::core::ConversionContext{});
+  EXPECT_FALSE(synthesized.empty());
+  EXPECT_FALSE(converter.Contains("あずきー", "あずきー"));
+
+  // Learning a word repeatedly must not make it look like a dictionary entry:
+  // new-word mining counts second and later commits.
+  converter.Learn("アズーキー", "あずきー");
+  EXPECT_FALSE(converter.Contains("あずきー", "アズーキー"));
+  converter.Learn("アズーキー", "あずきー");
+  EXPECT_FALSE(converter.Contains("あずきー", "アズーキー"));
+  converter.Learn("アズーキー", "あずきー");
+  EXPECT_FALSE(converter.Contains("あずきー", "アズーキー"));
+
+  // Learning a word that is already in the dictionary leaves it known.
+  converter.Learn("日本", "にほん");
+  EXPECT_TRUE(converter.Contains("にほん", "日本"));
+}

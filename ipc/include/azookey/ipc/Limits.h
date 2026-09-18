@@ -16,4 +16,9 @@ inline constexpr uint32_t kMaxPipeInstances = 32;
 // docs/learning-data-management-spec.md section 12.
 inline constexpr std::size_t kMaxQueuedCommitObservations = 64;
 
+// Ceiling on ListNewWordCandidates.max_items (M36-A). Caps how large a single
+// approval-list response the Host will assemble, so a client asking for an
+// unbounded page cannot make it serialize the whole store into one frame.
+inline constexpr uint32_t kMaxNewWordCandidates = 500;
+
 }  // namespace azookey::ipc

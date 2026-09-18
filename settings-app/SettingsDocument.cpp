@@ -117,6 +117,30 @@ j::Object SanitizeAutoUpdate(const j::Object& input, std::vector<std::string>* w
   return output;
 }
 
+j::Object SanitizeAutoWordRegistration(const j::Object& input,
+                                       std::vector<std::string>* warnings) {
+  j::Object output;
+  for (const auto& [key, value] : input) {
+    bool valid = false;
+    if (key == "miningEnabled" || key == "trendingEnabled") {
+      valid = value.IsBool();
+    } else if (key == "registrationMode") {
+      valid = IsStringEnum(value, {"confirm", "auto"});
+    } else if (key == "miningMinCount") {
+      valid = IsInteger(value, 1.0, 100.0);
+    } else if (key == "trendingIntervalHours") {
+      valid = IsInteger(value, 1.0, 8760.0);
+    }
+    if (valid) {
+      output.emplace(key, value);
+    } else {
+      warnings->push_back("autoWordRegistration." + key +
+                          " was removed because it is unknown or invalid");
+    }
+  }
+  return output;
+}
+
 j::Object SanitizeStringMap(const j::Object& input, std::vector<std::string>* warnings) {
   j::Object output;
   for (const auto& [key, value] : input) {
@@ -216,6 +240,10 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsInteger(value, 1.0, 50.0);
     } else if (key == "emojiTriggerMinQueryLength") {
       valid = IsInteger(value, 1.0, 8.0);
+    } else if (key == "typoCorrectionMode") {
+      valid = IsStringEnum(value, {"off", "suggest", "auto_replace"});
+    } else if (key == "typoMinCount") {
+      valid = IsInteger(value, 1.0, 100.0);
     } else if (key == "maxContextLength") {
       valid = IsInteger(value, 0.0, 30.0);
     } else if (key == "batchRomajiPreviewStyle") {
@@ -227,6 +255,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       continue;
     } else if (key == "reranker" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeReranker(value.AsObject(), warnings)));
+      continue;
+    } else if (key == "autoWordRegistration" && value.IsObject()) {
+      output.emplace(key, j::Value(SanitizeAutoWordRegistration(value.AsObject(), warnings)));
       continue;
     } else if (key == "autoUpdate" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeAutoUpdate(value.AsObject(), warnings)));

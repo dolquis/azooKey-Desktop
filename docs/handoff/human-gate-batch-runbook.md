@@ -430,6 +430,23 @@ Linear への記録様式を揃えておく。
 
 全ゲート共通で先頭に置く環境ブロック。
 
+環境ブロックの機械で埋まる欄と自動観測の件数は、VM から回収した出力からホスト側で生成できる。
+VM 内で `verify-bootstrap.ps1 -Json`、`azookey_diag.exe --json` の出力と compat の `report.json` を保存してホストへ回収し、`winver` の OS ビルド番号を控えてから次を実行する。
+
+```powershell
+pwsh -File .\scripts\vm-verify-summary.ps1 `
+  -ManifestPath .\build\vm-verify-packages\<zip basename>.manifest.json `
+  -BootstrapJsonPath .\collected\bootstrap.json `
+  -DiagJsonPath .\collected\diag.json `
+  -CompatReportPath .\collected\notepad\report.json, .\collected\vscode\report.json `
+  -OsBuild <OS build> `
+  -OutputDirectory .\build\vm-verify-summary
+```
+
+生成された `verification-summary.md` を検証メモの先頭に貼り、空欄を人が埋める。
+サマリは観測値の集約であり、ゲートの合否は各課題の判定基準で人が決める。
+入力の schema と分類は `docs/dev-infrastructure-spec.md` §2.6 を参照する。
+
 ```md
 ## 検証環境
 - 検証日 / 検証者:

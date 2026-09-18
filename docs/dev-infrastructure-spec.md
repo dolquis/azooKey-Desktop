@@ -279,6 +279,67 @@ manifest の `gguf-model`、`llama-preflight`、`mock-dictionary` role は自動
 Hyper-V checkpoint の作成と DebugView の capture 設定は guest から自動化せず、
 人間の確認結果を表す。
 
+`scripts/vm-verify-summary.ps1` は、VM から回収した機械可読な成果物を
+ホスト側で 1 つの検証サマリへ束ねる。
+PowerShell 7 で実行し、zip には同梱しない。
+入力はパッケージの manifest（`-ManifestPath`、必須）、`verify-bootstrap.ps1 -Json`
+の出力、`azookey_diag.exe --json` の出力、target ごとの compat `report.json`
+（§13.5、複数可）、VM の OS ビルド番号（`-OsBuild`）とする。
+OS ビルド番号はホストの値と取り違えないよう自動取得しない。
+`-OutputDirectory` へ `verification-summary.json` と `verification-summary.md` を
+BOM なし UTF-8 で書き出す。
+Markdown は `docs/handoff/human-gate-batch-runbook.md` Part C の環境ブロックに沿い、
+機械で埋まらない欄は空欄のまま残す。
+
+サマリは観測値の集約であり、人間ゲートの合否を表さない。全体の合否欄は持たない。
+各入力の status は次の分類へ写し、分類ごとに数える。
+未知の status は `unrecognized` として数え、`pass` へ丸めない。
+
+| 分類 | bootstrap | diag | compat |
+|---|---|---|---|
+| `pass` | `pass` | `ok` | `pass` |
+| `fail` | `fail` | `error` | `fail` |
+| `failingSkip` | — | — | `failing-skip` |
+| `manualRequired` | `manual_required` | — | — |
+| `warning` | — | `warning` | — |
+| `notApplicable` | `not_applicable` | — | — |
+
+compat の件数は `report.json` の `summary` ではなく `results` から数え直し、
+`summary` との一致を `reportedSummaryMatches` に記録する。
+未指定・不在・解析不能の入力は `inputs[].state` の `missing` / `invalid` と
+`missingInputs` に記録し、省かない。
+系統ごとの必須キー（bootstrap は `overallStatus` と `checks`、diag は `status` と
+`checks`、compat は `target` と `results`）を欠く JSON も `invalid` とする。
+manifest の commit が 40 桁でない場合と preset が無い場合は、サマリを書かずに失敗する。
+bootstrap の `package.commit` と manifest の commit の一致は
+`bootstrap.packageCommitVsManifest`（`match`、`mismatch`、`unknown`）として記録する。
+`mismatch` の bootstrap の件数は `bootstrap.counts` に残し、合計の `counts` へは加えない。
+
+redaction は許可リストで行う。識別子（check ID、status、target ID、reason code、
+モデルのファイル名）は英数字と `._-` だけの値を通し、外れた値は `redacted` に置き換える。
+自由文の `message` は 1 行へ畳み、パスを `[path]` へ置換して 200 文字で切る。
+ユーザー名は空白を含みうるため、引用符内のパスは引用符内全体を、`\Users\` と
+`\Documents and Settings\` 以降は空白を越えて置換する。
+ドライブ付きパス・UNC パス・`\\?\` パス・区切り文字 `\` を含む語も置換する。
+`azookey_diag` の `details`、bootstrap の `hostBinary` のパスと process ID は拾わない。
+compat の `artifact` は出力ディレクトリ相対のパスだけを通す。
+
+`verification-summary.json` の schema v1 は次の top-level field を持つ。
+
+| field | 型 | 内容 |
+|---|---|---|
+| `schemaVersion` | integer | 固定値 `1` |
+| `generatedAtUtc` | string | ISO 8601 UTC 生成時刻 |
+| `notice` | string | 人間ゲートの合否を表さない旨の固定文 |
+| `package` | object | manifest の `commit`、`preset`、`buildType`、`generatedAtUtc`、同梱モデルのファイル名 `bundledModel`、compat runner 同梱の有無 `compatBundled` |
+| `os` | object | `build`（未取得・不正なら空文字列） |
+| `inputs` | array | 入力ごとの `name`、`state`（`present`、`missing`、`invalid`）、`reason` |
+| `missingInputs` | array | `state` が `present` でない入力の `name` |
+| `counts` | object | 全系統を合算した分類ごとの件数と `missingInputs` の件数 |
+| `bootstrap` | object / null | `overallStatus`、`packageCommitVsManifest`、`hostBinary` の status と SHA-256、分類件数、`checks` |
+| `diag` | object / null | `status`、分類件数、`checks` |
+| `compat` | array | target ごとの ID、表示名、automation level、`reportedSummaryMatches`、分類件数、`results` |
+
 ### 2.7 ビルド時間の内訳（実測）
 
 本節は M37 の受け入れ条件ではなく、ビルド時間短縮策の当てどころを決めるための計測

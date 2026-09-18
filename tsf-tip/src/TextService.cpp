@@ -2248,6 +2248,37 @@ bool TextService::WaitForReconnectOrStop(uint32_t delay_ms) {
   return ipc_stop_.load();
 }
 
+// Applies one event to the primary-connection state machine (spec §8.2) and
+// records the transition. Only enum names and a counter are logged, never input.
+void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  const auto from = ipc_connection_state_.load(std::memory_order_relaxed);
+  const auto to = NextIpcConnectionState(from, event);
+  if (!to) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_connection_state_rejected",
+               {{"from", SafeLogText(std::string(IpcConnectionStateName(from)))},
+                {"event", SafeLogText(std::string(IpcConnectionEventName(event)))}});
+    return;
+  }
+  if (event == IpcConnectionEvent::ConnectFailed || event == IpcConnectionEvent::HandshakeFailed) {
+    ++ipc_failed_connect_attempts_;
+  } else if (event == IpcConnectionEvent::HandshakeAccepted) {
+    ipc_failed_connect_attempts_ = 0;
+  }
+  ipc_connection_state_.store(*to, std::memory_order_release);
+  if (!ShouldLogIpcConnectionTransition(from, *to, ipc_failed_connect_attempts_)) return;
+  const bool lost_host =
+      *to == IpcConnectionState::Degraded ||
+      (*to == IpcConnectionState::Disconnected && event != IpcConnectionEvent::Stopped);
+  RuntimeLog(
+      lost_host ? azookey::logging::RuntimeLogLevel::Warn : azookey::logging::RuntimeLogLevel::Info,
+      "ipc_connection_state_transition",
+      {{"from", SafeLogText(std::string(IpcConnectionStateName(from)))},
+       {"to", SafeLogText(std::string(IpcConnectionStateName(*to)))},
+       {"event", SafeLogText(std::string(IpcConnectionEventName(event)))},
+       {"failed_attempts", static_cast<uint64_t>(ipc_failed_connect_attempts_)}});
+}
+
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                            ipc::MessageType expected_type) {
   AZOOKEY_ASSERT_IPC_THREAD();
@@ -2522,8 +2553,18 @@ void TextService::IpcWorkerThreadImpl() {
     // settings file holds now, while a change that lands afterwards keeps the
     // flag set and is picked up by ServeConnection.
     ipc_refresh_options_.store(false, std::memory_order_relaxed);
-    const bool established =
-        ipc_client_.Connect(pipe_name, kConnectTimeoutMs) && PerformHandshake();
+    TransitionIpcConnection(IpcConnectionEvent::ConnectStarted);
+    bool established = false;
+    if (!ipc_client_.Connect(pipe_name, kConnectTimeoutMs)) {
+      TransitionIpcConnection(IpcConnectionEvent::ConnectFailed);
+    } else {
+      TransitionIpcConnection(IpcConnectionEvent::PipeConnected);
+      // PerformHandshake applies a Host generation change (stale request IDs)
+      // before Ready is entered, as spec §8.2 requires.
+      established = PerformHandshake();
+      TransitionIpcConnection(established ? IpcConnectionEvent::HandshakeAccepted
+                                          : IpcConnectionEvent::HandshakeFailed);
+    }
     if (!established) {
       ipc_client_.Disconnect();
       if (WaitForReconnectOrStop(backoff_ms)) break;
@@ -2543,8 +2584,11 @@ void TextService::IpcWorkerThreadImpl() {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
     }
+    if (!ipc_stop_.load()) TransitionIpcConnection(IpcConnectionEvent::ConnectionLost);
   }
 
+  if (ipc_connection_state_.load(std::memory_order_relaxed) != IpcConnectionState::Disconnected)
+    TransitionIpcConnection(IpcConnectionEvent::Stopped);
   RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_worker_stopped");
 }
 

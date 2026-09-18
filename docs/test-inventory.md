@@ -90,6 +90,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_display_attribute_tests` | `tsf-tip/tests/display_attribute_test.cpp` | `ITfDisplayAttributeProvider`（`GetDisplayAttributeInfo`/`EnumDisplayAttributeInfo`）と `InputDisplayAttributeInfo`（GUID/説明/下線属性、`Next`/`Reset`/`Skip`/`Clone`、null 引数 reject） |
 | `tsf_tip_activate_uiless_tests` | `tsf-tip/tests/activate_uiless_test.cpp` | `ActivateEx` が `ITfThreadMgrEx::GetActiveFlags`（`dwFlags` ではなく）から UI-less 状態を導出する（spec §2.10） |
 | `tsf_tip_staleness_tests` | `tsf-tip/tests/staleness_test.cpp` | 連続応答のうち最新のみ受理、より新しいリクエストが queue 済みの応答の破棄、commit で無効化された応答の破棄 |
+| `tsf_tip_ipc_connection_state_tests` | `tsf-tip/tests/ipc_connection_state_test.cpp` | IPC ワーカーの接続状態機械（spec §8.2）。表に載る全遷移の遷移先、載らない (状態, イベント) の拒否、自己遷移が無いこと、`Disconnected` から全状態へ到達できること、ログ用の状態名・イベント名が固定語彙で一意なこと、再接続失敗の遷移ログが 2 のべき乗回目だけに間引かれること |
 | `tsf_tip_caret_position_tests` | `tsf-tip/tests/caret_position_test.cpp` | text extent 優先のキャレット位置決定と物理座標正規化、変換失敗時の座標保持、GUI スレッドキャレットと物理カーソルへの段階的 fallback、フォーカス喪失・コンテキスト push でのキャッシュ破棄 |
 | `tsf_tip_candidate_ui_coordinator_tests` | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | 候補 UI の app-drawn / TIP 描画切替、`BeginUIElement` 失敗の HRESULT 報告、UI-less 時の `ITfUIElementMgr` 要求と欠落時 fallback、選択移動の wrap |
 | `tsf_tip_candidate_window_dpi_tests` | `tsf-tip/tests/candidate_window_dpi_test.cpp` | 候補ウィンドウのレイアウト metrics の DPI スケール、DPI 0 の既定 fallback、絵文字判定が漢字・文字記号を巻き込まないこと、description 有無での列構成 |

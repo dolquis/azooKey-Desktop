@@ -1933,6 +1933,76 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
   replacement_server.Stop();
 }
 
+// DEV-1173: the worker walks the spec §8.2 state machine on real pipe events:
+// no Ready without an accepted handshake, out of Ready when the Host stops, and
+// back to Ready when it restarts.
+TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-connection-state-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<bool> reject_handshake{true};
+  std::atomic<int> handshakes{0};
+  const auto handler =
+      [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+    azookey::ipc::Envelope res;
+    res.version = req.version;
+    res.request_id = req.request_id;
+    res.trace_id = req.trace_id;
+    res.type = req.type;
+    if (req.type == azookey::ipc::MessageType::Handshake) {
+      handshakes.fetch_add(1);
+      azookey::ipc::HandshakeResponse payload;
+      payload.host_version = "test-host";
+      payload.accepted = !reject_handshake.load();
+      res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+      return res;
+    }
+    return std::nullopt;
+  };
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Disconnected);
+
+  // No Host yet: the worker keeps retrying and never reaches Ready.
+  h.service.start_ipc_worker_for_test();
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  EXPECT_NE(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+
+  // A Host that refuses the handshake keeps the worker out of Ready as well.
+  azookey::ipc::NamedPipeServer rejecting_server;
+  ASSERT_TRUE(rejecting_server.Start(pipe_name, handler));
+  ASSERT_TRUE(WaitUntil([&] { return handshakes.load() > 0; }, std::chrono::milliseconds(5000)));
+  EXPECT_NE(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+  rejecting_server.Stop();
+
+  reject_handshake.store(false);
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, handler));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; },
+      std::chrono::milliseconds(5000)));
+
+  // Host stops: an idle worker only notices on its next send, so type to make
+  // it send. The connection then leaves Ready while the worker reconnects.
+  server.Stop();
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() != IpcConnectionState::Ready; }));
+
+  // Host restarts: Ready again.
+  azookey::ipc::NamedPipeServer restarted_server;
+  ASSERT_TRUE(restarted_server.Start(pipe_name, handler));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; },
+      std::chrono::milliseconds(5000)));
+
+  h.service.stop_ipc_worker_for_test();
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Disconnected);
+  restarted_server.Stop();
+}
+
 // DEV-554: the send-queue bound has to hold while the host is unreachable, which
 // is when the worker never reaches the code that drains the queue. Enqueueing
 // past the cap must therefore drop the oldest observations right away.

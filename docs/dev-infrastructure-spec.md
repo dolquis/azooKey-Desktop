@@ -1703,6 +1703,31 @@ Ready ─→ Degraded （ハードタイムアウト / 連続失敗時）
 
 各状態遷移はログ（§7）に記録する。
 
+遷移は次の 13 本に限る（実装は `tsf-tip/src/IpcConnectionState.cpp` の遷移表）。
+表に無い (状態, イベント) の組は拒否し、状態を変えない。自己遷移は持たない。
+
+| From | イベント | To |
+|---|---|---|
+| `Disconnected` | `connect_started` | `Connecting` |
+| `Connecting` | `pipe_connected` | `Handshaking` |
+| `Connecting` | `connect_failed` / `stopped` | `Disconnected` |
+| `Handshaking` | `handshake_accepted` | `Ready` |
+| `Handshaking` | `handshake_failed` / `stopped` | `Disconnected` |
+| `Ready` | `connection_lost` / `stopped` | `Disconnected` |
+| `Ready` | `response_deadline_exceeded` | `Degraded` |
+| `Degraded` | `response_restored` | `Ready` |
+| `Degraded` | `connection_lost` / `stopped` | `Disconnected` |
+
+状態機械に載せるのは primary 接続だけである。out-of-band Cancel 用の短命な control 接続と、
+設定変更時に確立済み接続の上で再実行する Handshake は遷移を起こさない。
+
+遷移ログのイベント名は `ipc_connection_state_transition` で、フィールドは `from` / `to` /
+`event`（上表の固定語）と `failed_attempts`（直近の `Ready` 以降に失敗した接続試行数）だけとする。
+入力本文を載せるフィールドは持たない。Host 停止中は backoff ごとに
+`Disconnected → Connecting → Disconnected` を繰り返すため、この失敗試行の遷移は
+`failed_attempts` が 1 または 2 のべき乗のときだけ記録する。それ以外の遷移は毎回記録する。
+表に無い組を受けたときは `ipc_connection_state_rejected` を記録する。
+
 Handshake 応答には protocol v1 の省略可能フィールド
 `host_generation_id: string` を含める。Host はプロセス起動時にランダムな UUID を
 1 回生成し、同じ Host プロセスが受け付ける primary / control を含む全接続へ同じ値を返す。

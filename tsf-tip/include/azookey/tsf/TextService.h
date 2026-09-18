@@ -20,6 +20,7 @@
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
+#include "azookey/tsf/IpcConnectionState.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
@@ -207,6 +208,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_ipc_pipe_name_for_test(std::string pipe_name);
   void start_ipc_worker_for_test();
   void stop_ipc_worker_for_test();
+  IpcConnectionState ipc_connection_state_for_test() const {
+    return ipc_connection_state_.load(std::memory_order_acquire);
+  }
   POINT caret_point_for_test() const { return caret_pt_; }
   bool caret_point_valid_for_test() const { return caret_pt_valid_; }
   void set_caret_point_for_test(POINT point, bool valid) {
@@ -293,6 +297,11 @@ class TextService final : public ITfTextInputProcessorEx,
   std::condition_variable ipc_cv_;
   std::thread ipc_thread_;
   std::atomic<bool> ipc_stop_{false};
+  // Primary-connection state (spec §8.2). Written only by the IPC worker
+  // through TransitionIpcConnection; atomic so the TIP thread can read it.
+  std::atomic<IpcConnectionState> ipc_connection_state_{IpcConnectionState::Disconnected};
+  // Failed connect/handshake attempts since the last Ready. IPC worker only.
+  uint32_t ipc_failed_connect_attempts_{0};
 #ifdef AZOOKEY_TSF_TESTING
   std::string ipc_pipe_name_for_test_;
 #endif
@@ -364,6 +373,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
                            uint32_t handshake_timeout_ms);
   bool WaitForReconnectOrStop(uint32_t delay_ms);
+  void TransitionIpcConnection(IpcConnectionEvent event);
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                 ipc::MessageType expected_type);
   bool ObserveHostGeneration(const std::string& host_generation_id);

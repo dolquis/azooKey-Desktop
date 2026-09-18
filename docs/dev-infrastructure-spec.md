@@ -1756,6 +1756,17 @@ stale 化する。未送信または接続断後に再武装された pending �
   connected-but-silent 状態を含める。TIP は pipe 切断を待たず、処理種別ごとの
   deadline で劣化判定する。
 - ヘルス監視は既存 `Health` メッセージを流用し、定期的に往復確認する。
+  - primary 接続で送るものが無い状態が監視間隔（既定 5s）続いたときだけ `Health` を 1 回送る。
+    入力中の要求とは同じ接続で直列に扱い、監視を割り込ませない。
+  - 応答待ちは §8.5.2 の IPC Ping と同じ 500ms を上限とする。待機中に `QueryCandidates` や
+    送信キューの項目が入ったら待機を打ち切って要求を先に送る。打ち切った `Health` の遅れた
+    応答は request ID 不一致として読み捨て、stale 応答のログは出さない。
+  - 応答が上限内に返らないたびに `ipc_health_timeout` を記録し、連続 2 回で `Ready` から
+    `Degraded` へ遷移する（`response_deadline_exceeded`）。応答の中身（`status` が
+    `degraded` / `error` でも）は問わず、上限内に返った時点で連続回数を 0 に戻し、
+    `Degraded` なら `Ready` へ戻す（`response_restored`）。
+  - `Health` の送信失敗や監視中の切断は `connection_lost` として再接続へ戻す。これにより、
+    idle 中に Host が停止した場合も次のキー入力を待たずに検知する。
 
 ### 8.4 本マイルストーンの範囲
 

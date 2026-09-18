@@ -2003,6 +2003,144 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
   restarted_server.Stop();
 }
 
+namespace {
+// Fake Host for the DEV-1175 Health cases: accepts the handshake, counts Health
+// probes and answers them only while `answer_health` is set, and answers every
+// QueryCandidates with one candidate.
+class HealthProbeHost {
+ public:
+  explicit HealthProbeHost(std::string pipe_name) : pipe_name_(std::move(pipe_name)) {}
+  ~HealthProbeHost() { server_.Stop(); }
+
+  bool Start() {
+    return server_.Start(
+        pipe_name_,
+        [this](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+          azookey::ipc::Envelope res;
+          res.version = req.version;
+          res.request_id = req.request_id;
+          res.trace_id = req.trace_id;
+          res.type = req.type;
+          if (req.type == azookey::ipc::MessageType::Handshake) {
+            azookey::ipc::HandshakeResponse payload;
+            payload.host_version = "test-host";
+            payload.accepted = true;
+            res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::Health) {
+            health_probes.fetch_add(1);
+            if (!answer_health.load()) return std::nullopt;
+            azookey::ipc::HealthPayload payload;
+            payload.status = "ok";
+            res.payload_json = azookey::ipc::BuildHealth(payload);
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::QueryCandidates) {
+            query_received_at.store(std::chrono::steady_clock::now().time_since_epoch().count());
+            azookey::ipc::QueryCandidatesResponse payload;
+            payload.candidates.push_back({"下", "か", 1.0, "test"});
+            res.payload_json = azookey::ipc::BuildQueryCandidatesResponse(payload);
+            return res;
+          }
+          return std::nullopt;
+        });
+  }
+
+  std::atomic<bool> answer_health{true};
+  std::atomic<int> health_probes{0};
+  std::atomic<long long> query_received_at{0};
+
+ private:
+  std::string pipe_name_;
+  azookey::ipc::NamedPipeServer server_;
+};
+}  // namespace
+
+// DEV-1175: a Host that keeps answering Health keeps the connection Ready.
+TEST(TsfTipOnKeyDownPreeditTest, IdleHealthProbeKeepsReadyWhileHostAnswers) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-health-ready-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  bool left_ready = false;
+  ASSERT_TRUE(WaitUntil([&] {
+    left_ready |= h.service.ipc_connection_state_for_test() != IpcConnectionState::Ready;
+    return host.health_probes.load() >= 6;
+  }));
+  EXPECT_FALSE(left_ready);
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1175: a connected-but-silent Host is Degraded after the threshold of
+// unanswered probes, without the pipe dropping, and Ready again once it answers.
+TEST(TsfTipOnKeyDownPreeditTest, SilentHostDegradesAfterHealthTimeoutsAndRecovers) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-health-degraded-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_health.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
+                                           /*failure_threshold=*/3);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+  EXPECT_GE(host.health_probes.load(), 3);
+
+  host.answer_health.store(true);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+
+  h.service.stop_ipc_worker_for_test();
+}
+
+// DEV-1175: a probe waiting on a silent Host gives way to a keystroke, so the
+// QueryCandidates goes out long before the Health timeout would have expired.
+TEST(TsfTipOnKeyDownPreeditTest, PendingHealthProbeDoesNotDelayQueryCandidates) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-health-latency-test-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_health.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  constexpr uint32_t kHealthTimeoutMs = 5000;
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/20, kHealthTimeoutMs,
+                                           /*failure_threshold=*/100);
+  h.service.start_ipc_worker_for_test();
+  // The first probe is now waiting out its long timeout on the silent Host.
+  ASSERT_TRUE(WaitUntil([&] { return host.health_probes.load() >= 1; }));
+
+  const auto pressed_at = std::chrono::steady_clock::now();
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(WaitUntil([&] { return host.query_received_at.load() != 0; }));
+  const auto received_at = std::chrono::steady_clock::time_point(
+      std::chrono::steady_clock::duration(host.query_received_at.load()));
+  EXPECT_LT(received_at - pressed_at, std::chrono::milliseconds(1000));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  EXPECT_EQ(h.service.cached_candidates_for_test().front().surface, "下");
+
+  h.service.stop_ipc_worker_for_test();
+}
+
 // DEV-554: the send-queue bound has to hold while the host is unreachable, which
 // is when the worker never reaches the code that drains the queue. Enqueueing
 // past the cap must therefore drop the oldest observations right away.

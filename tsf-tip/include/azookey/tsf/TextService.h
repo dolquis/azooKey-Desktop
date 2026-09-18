@@ -211,6 +211,13 @@ class TextService final : public ITfTextInputProcessorEx,
   IpcConnectionState ipc_connection_state_for_test() const {
     return ipc_connection_state_.load(std::memory_order_acquire);
   }
+  // Call before start_ipc_worker_for_test; the worker reads these unlocked.
+  void set_ipc_health_timing_for_test(uint32_t interval_ms, uint32_t timeout_ms,
+                                      uint32_t failure_threshold) {
+    ipc_health_interval_ms_ = interval_ms;
+    ipc_health_timeout_ms_ = timeout_ms;
+    ipc_health_failure_threshold_ = failure_threshold;
+  }
   POINT caret_point_for_test() const { return caret_pt_; }
   bool caret_point_valid_for_test() const { return caret_pt_valid_; }
   void set_caret_point_for_test(POINT point, bool valid) {
@@ -302,6 +309,14 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<IpcConnectionState> ipc_connection_state_{IpcConnectionState::Disconnected};
   // Failed connect/handshake attempts since the last Ready. IPC worker only.
   uint32_t ipc_failed_connect_attempts_{0};
+  // Idle Health probe (spec §8.3). The Host is probed only after the worker has
+  // had nothing to send for ipc_health_interval_ms_; that many consecutive
+  // probes without a reply within ipc_health_timeout_ms_ move Ready to Degraded.
+  // Fixed after the worker starts; IPC worker reads them.
+  uint32_t ipc_health_interval_ms_{5000};
+  uint32_t ipc_health_timeout_ms_{500};
+  uint32_t ipc_health_failure_threshold_{2};
+  uint32_t ipc_health_consecutive_failures_{0};  // IPC worker only.
 #ifdef AZOOKEY_TSF_TESTING
   std::string ipc_pipe_name_for_test_;
 #endif
@@ -374,6 +389,9 @@ class TextService final : public ITfTextInputProcessorEx,
                            uint32_t handshake_timeout_ms);
   bool WaitForReconnectOrStop(uint32_t delay_ms);
   void TransitionIpcConnection(IpcConnectionEvent event);
+  enum class HealthProbeResult { Answered, TimedOut, Interrupted, ConnectionLost };
+  HealthProbeResult ProbeHostHealth(uint64_t request_id);
+  bool HasQueuedIpcWorkLocked() const;
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                 ipc::MessageType expected_type);
   bool ObserveHostGeneration(const std::string& host_generation_id);

@@ -2285,6 +2285,56 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
        {"attempt", static_cast<uint64_t>(attempt)}});
 }
 
+// Caller holds ipc_mtx_. True when the serve loop has something to send, so an
+// idle Health probe must give way to it.
+bool TextService::HasQueuedIpcWorkLocked() const {
+  return ipc_has_request_ || !ipc_send_queue_.empty() ||
+         ipc_refresh_options_.load(std::memory_order_relaxed);
+}
+
+// One idle Health round trip on the primary connection (spec §8.3). The wait is
+// bounded by ipc_health_timeout_ms_ and abandoned as soon as a query or queued
+// item arrives, so the probe never holds up QueryCandidates; a reply that lands
+// after that is discarded by the next receive as a stale request id.
+TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  using namespace std::chrono;
+
+  ipc::Envelope env;
+  env.version = 1;
+  env.request_id = request_id;
+  env.trace_id = "tip-health";
+  env.type = ipc::MessageType::Health;
+  env.payload_json = "{}";
+  if (!ipc_client_.Send(env)) return HealthProbeResult::ConnectionLost;
+
+  constexpr uint32_t kHealthPollMs = 50;
+  const auto deadline = steady_clock::now() + milliseconds(ipc_health_timeout_ms_);
+  while (true) {
+    bool interrupted = ipc_stop_.load();
+    if (!interrupted) {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      interrupted = HasQueuedIpcWorkLocked();
+    }
+    if (interrupted) {
+      ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Cancelled);
+      return HealthProbeResult::Interrupted;
+    }
+    if (!ipc_client_.IsConnected()) return HealthProbeResult::ConnectionLost;
+    const auto now = steady_clock::now();
+    if (now >= deadline) break;
+    const auto remaining_ms = duration_cast<milliseconds>(deadline - now).count();
+    const auto wait_ms = static_cast<uint32_t>(
+        std::clamp<long long>(remaining_ms, 1, static_cast<long long>(kHealthPollMs)));
+    auto response = ipc_client_.ReceiveWithTimeout(wait_ms, deadline);
+    if (response && IsExpectedIpcResponse(*response, request_id, ipc::MessageType::Health))
+      return HealthProbeResult::Answered;
+  }
+  if (!ipc_client_.IsConnected()) return HealthProbeResult::ConnectionLost;
+  ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Timeout);
+  return HealthProbeResult::TimedOut;
+}
+
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
                                            ipc::MessageType expected_type) {
   AZOOKEY_ASSERT_IPC_THREAD();
@@ -2306,6 +2356,8 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
     auto response = ipc_client_.ReceiveWithTimeout(wait_ms, deadline);
     if (response) {
       if (!IsExpectedIpcResponse(*response, expected_request_id, expected_type)) {
+        // A late reply to an idle Health probe that gave way to this request.
+        if (response->type == ipc::MessageType::Health) continue;
         if (expected_request_id != 0 && response->request_id != expected_request_id) {
           RuntimeLog(
               azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
@@ -2568,6 +2620,7 @@ void TextService::IpcWorkerThreadImpl() {
       // PerformHandshake applies a Host generation change (stale request IDs)
       // before Ready is entered, as spec §8.2 requires.
       established = PerformHandshake();
+      if (established) ipc_health_consecutive_failures_ = 0;
       TransitionIpcConnection(established ? IpcConnectionEvent::HandshakeAccepted
                                           : IpcConnectionEvent::HandshakeFailed);
     }
@@ -2618,13 +2671,13 @@ void TextService::ServeConnection() {
     bool live = true;
     std::string emoji_trigger;
     std::vector<IpcSendItem> to_send;
+    bool health_due = false;
 
     {
       std::unique_lock<std::mutex> lock(ipc_mtx_);
-      ipc_cv_.wait(lock, [this] {
-        return ipc_stop_.load() || ipc_has_request_ || !ipc_send_queue_.empty() ||
-               ipc_refresh_options_.load(std::memory_order_relaxed);
-      });
+      health_due =
+          !ipc_cv_.wait_for(lock, std::chrono::milliseconds(ipc_health_interval_ms_),
+                            [this] { return ipc_stop_.load() || HasQueuedIpcWorkLocked(); });
       if (ipc_stop_.load()) break;
 
       to_send = std::move(ipc_send_queue_);
@@ -2641,6 +2694,34 @@ void TextService::ServeConnection() {
         ipc_has_request_ = false;
         has_qc = true;
       }
+    }
+
+    // Nothing to send for a whole interval: probe the Host so a connected but
+    // silent Host is noticed without waiting for the next keystroke.
+    if (health_due) {
+      switch (ProbeHostHealth(next_id++)) {
+        case HealthProbeResult::Answered:
+          ipc_health_consecutive_failures_ = 0;
+          if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded)
+            TransitionIpcConnection(IpcConnectionEvent::ResponseRestored);
+          break;
+        case HealthProbeResult::TimedOut:
+          ++ipc_health_consecutive_failures_;
+          RuntimeLog(
+              azookey::logging::RuntimeLogLevel::Warn, "ipc_health_timeout",
+              {{"consecutive_failures", static_cast<uint64_t>(ipc_health_consecutive_failures_)}});
+          if (ipc_health_consecutive_failures_ >= ipc_health_failure_threshold_ &&
+              ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Ready)
+            TransitionIpcConnection(IpcConnectionEvent::ResponseDeadlineExceeded);
+          break;
+        case HealthProbeResult::Interrupted:
+          break;
+        case HealthProbeResult::ConnectionLost:
+          if (!ipc_stop_.load())
+            RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_health_send_failed");
+          return;
+      }
+      continue;
     }
 
     // The settings file changed under a connection that never drops, so the
@@ -2832,6 +2913,11 @@ void TextService::ServeConnection() {
       qres = ipc_client_.ReceiveWithTimeout(wait_ms, query_request_deadline);
       if (qres) {
         if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
+          if (qres->type == ipc::MessageType::Health) {
+            // A late reply to an idle Health probe that gave way to this query.
+            qres.reset();
+            continue;
+          }
           if (qres->request_id != req_id) {
             RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_response",
                        {{"request_id", qres->request_id}, {"expected_request_id", req_id}});

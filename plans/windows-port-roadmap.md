@@ -377,8 +377,10 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 開発基盤・品質強化トラック（M37〜M43 と並行、`docs/dev-infrastructure-spec.md` 参照）:
 5. **`NamedPipeServer` 再接続耐性（劣化モード復帰）** — Host を別 process で停止 → 再起動し、
    TIP-client が exponential backoff で再接続して劣化モードから復帰するシナリオを M42 の状態機械
-   テストで扱う。単純な再接続成立は `ClientReconnectsAfterHostRestart` がカバー済みで、残ギャップは
-   劣化モードの状態遷移そのもの（複数接続・切断時の client cleanup 単体テストは M40 で対応）。
+   テストで扱う。単純な再接続成立は `ClientReconnectsAfterHostRestart`、状態遷移と劣化モードへの出入りは
+   `tsf_tip_ipc_connection_state_tests` と `tsf_tip_onkeydown_preedit_tests` の fake Host 結合テストが
+   カバー済みで、残ギャップは別 process の実 Host を停止・再起動する経路（実機確認は Human Gate。
+   複数接続・切断時の client cleanup 単体テストは M40 で対応）。
 6. **アプリ互換マトリクス試験** — Notepad / Office / ブラウザ / VS Code / ターミナルで composition・
    確定・フォーカス遷移・サロゲートペア・絵文字・結合文字・Undo/Redo の端ケースを確認
    （手動チェックリスト主体、Phase 6 の M20〜M23 と関連）。M3 の DisplayAttribute / CompositionSink

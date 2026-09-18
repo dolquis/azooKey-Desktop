@@ -317,7 +317,7 @@ bootstrap の `package.commit` と manifest の commit の一致は
 
 redaction は許可リストで行う。識別子（check ID、status、target ID、reason code、
 モデルのファイル名）は英数字と `._-` だけの値を通し、外れた値は `redacted` に置き換える。
-自由文の `message` は 1 行へ畳み、パスを `<path>` へ置換して 200 文字で切る。
+自由文の `message` は 1 行へ畳み、パスを `[path]` へ置換して 200 文字で切る。
 ユーザー名は空白を含みうるため、引用符内のパスは引用符内全体を、`\Users\` と
 `\Documents and Settings\` 以降は空白を越えて置換する。
 ドライブ付きパス・UNC パス・`\\?\` パス・区切り文字 `\` を含む語も置換する。

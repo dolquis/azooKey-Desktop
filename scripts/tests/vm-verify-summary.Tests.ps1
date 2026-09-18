@@ -273,9 +273,9 @@ Describe "VM verification summary" {
 
     $summary = $result.Summary
     ($summary.bootstrap.checks | Where-Object { $_.id -eq "tipRegistration" }).message |
-      Should -Be "Failed at <path>"
+      Should -Be "Failed at [path]"
     ($summary.bootstrap.checks | Where-Object { $_.id -eq "profileQuoted" }).message |
-      Should -Be "Cannot find path '<path>' because it does not exist."
+      Should -Be "Cannot find path '[path]' because it does not exist."
     $summary.bootstrap.hostBinary.runningSha256 | Should -Be ("c" * 64)
     $summary.compat[0].results[1].artifact | Should -Be "failures/notepad_C-002_fail"
     $summary.compat[0].results[2].reasonCode | Should -Be "redacted"

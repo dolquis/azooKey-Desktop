@@ -21,7 +21,7 @@
   OS ビルド番号はホストのものと取り違えないよう自動取得せず、明示指定だけを受け付ける。
 
   入力本文・ログ本文・ユーザー名を含みうる絶対パスはサマリへ出さない。
-  各入力からは既知のフィールドだけを拾い、自由文の message はパスを <path> へ
+  各入力からは既知のフィールドだけを拾い、自由文の message はパスを [path] へ
   置換して短く切る。azookey_diag の details と bootstrap の hostBinary のパスは
   拾わない。
 #>
@@ -118,7 +118,7 @@ function ConvertTo-VmVerifySummaryToken {
   return "redacted"
 }
 
-# 自由文は 1 行へ畳み、パスを <path> へ置換し、長さを切る。ログ本文が紛れ込んでも
+# 自由文は 1 行へ畳み、パスを [path] へ置換し、長さを切る。ログ本文が紛れ込んでも
 # サマリを膨らませない。ユーザー名は空白を含みうるため、パスを空白で区切って
 # 判定しない。引用符内のパス、プロファイル配下の残り全体、区切り文字を含む語を順に潰す。
 function ConvertTo-VmVerifySummarySafeText {
@@ -133,12 +133,12 @@ function ConvertTo-VmVerifySummarySafeText {
     return ""
   }
   $text = $text -replace '[\r\n\t]+', ' '
-  $text = $text -replace '(''|")[^''"]*[\\/][^''"]*\1', '$1<path>$1'
-  $text = $text -replace '(?i)(?:[A-Z]:)?[\\/](?:Users|Documents and Settings)[\\/][^''"<>|]*', '<path>'
-  $text = $text -replace '(?i)\\\\\?\\[^\s"''<>|]*', '<path>'
-  $text = $text -replace '(?i)(?<![A-Za-z0-9])[A-Z]:[\\/][^\s"''<>|]*', '<path>'
-  $text = $text -replace '\\\\[^\s"''<>|]+', '<path>'
-  $text = $text -replace '[^\s"''<>|]*\\[^\s"''<>|]*', '<path>'
+  $text = $text -replace '(''|")[^''"]*[\\/][^''"]*\1', '$1[path]$1'
+  $text = $text -replace '(?i)(?:[A-Z]:)?[\\/](?:Users|Documents and Settings)[\\/][^''"<>|]*', '[path]'
+  $text = $text -replace '(?i)\\\\\?\\[^\s"''<>|]*', '[path]'
+  $text = $text -replace '(?i)(?<![A-Za-z0-9])[A-Z]:[\\/][^\s"''<>|]*', '[path]'
+  $text = $text -replace '\\\\[^\s"''<>|]+', '[path]'
+  $text = $text -replace '[^\s"''<>|]*\\[^\s"''<>|]*', '[path]'
   $text = $text.Trim()
   if ($text.Length -gt $MaxLength) {
     $text = $text.Substring(0, $MaxLength) + "..."
@@ -159,9 +159,6 @@ function Get-VmVerifySummarySha256 {
   return ""
 }
 
-# 入力ファイルを読む。未指定・不在・解析不能を区別して返し、例外にしない。
-# PowerShell 5.1 の > リダイレクトは UTF-16 で書くため、BOM 判定のある
-# Get-Content -Raw で読む。
 # 系統ごとの必須キー。別系統の JSON や途中で切れた出力を、件数 0 の「取得」として
 # 扱わないために確認する。
 $script:VmVerifySummaryRequiredKeys = @{
@@ -170,6 +167,9 @@ $script:VmVerifySummaryRequiredKeys = @{
   compat = @("target", "results")
 }
 
+# 入力ファイルを読む。未指定・不在・解析不能を区別して返し、例外にしない。
+# PowerShell 5.1 の > リダイレクトは UTF-16 で書くため、BOM 判定のある
+# Get-Content -Raw で読む。
 function Read-VmVerifySummaryInput {
   param(
     [AllowEmptyString()]
@@ -514,7 +514,8 @@ function ConvertTo-VmVerifySummaryCell {
     $Value
   )
 
-  return ([string]$Value).Replace("|", "\|")
+  # GitHub と Linear の Markdown は <...> をタグとして落とすため、実体参照にする。
+  return ([string]$Value).Replace("|", "\|").Replace("<", "&lt;").Replace(">", "&gt;")
 }
 
 function Format-VmVerifySummaryCountRow {

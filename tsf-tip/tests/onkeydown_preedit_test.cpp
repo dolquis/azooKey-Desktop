@@ -3553,6 +3553,58 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresRe
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, ShiftSpaceCyclesCandidatesBackward) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  std::vector<azookey::ipc::CandidateField> candidates(3);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  candidates[2].surface = "課";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(attachment.composition_range.last_text, L"蚊");
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(h.TestPress(VK_SPACE));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+  EXPECT_EQ(attachment.composition_range.last_text, L"課");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CtrlBindingsEditReadingAndMoveCandidates) {
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_TRUE(h.Press('K'));
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_TRUE(h.TestPress('H'));
+  EXPECT_TRUE(h.Press('H'));
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  EXPECT_FALSE(h.TestPress('N'));
+  EXPECT_FALSE(h.Press('N'));
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[1].surface = "科";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  EXPECT_TRUE(h.Press(VK_SPACE));
+
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_TRUE(h.TestPress('N'));
+  EXPECT_TRUE(h.Press('N'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"科");
+  EXPECT_TRUE(h.Press('P'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"蚊");
+  h.keyboard_state.SetDown(VK_CONTROL, false);
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, TypingAfterCandidateSelectionRestoresReadingBeforeAppending) {
   TextServiceHarness h;
   FakeCompositionAttachment attachment(h);

@@ -8,6 +8,7 @@ add_library(azookey_core STATIC
   src/CrashReporting.cpp
   src/DoubleArrayTrie.cpp
   src/EtwLogger.cpp
+  src/InputState.cpp
   src/KatakanaRewriter.cpp
   src/LiveConversionChunker.cpp
   src/NumberRewriter.cpp
@@ -20,6 +21,7 @@ add_library(azookey_core STATIC
   src/SimpleConverter.cpp
   src/SymbolChainTable.cpp
   src/SymbolRewriter.cpp
+  src/UserActionMap.cpp
   src/Utf8.cpp
 )
 

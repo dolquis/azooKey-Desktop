@@ -45,6 +45,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/katakana_rewriter_test.cpp` | 全角→半角カタカナの展開順、濁点・半濁点の分解と長音・ヲの写像、非対応かな混在時の半角抑止、不正 UTF-8 の reject |
 | `core_tests` | `core/tests/symbol_rewriter_test.cpp` | 記号 seed の固定順展開と family 非回転、ペア記号と組み込みペアリングの一致、候補マージ時の枠配分と重複除去 |
 | `core_tests` | `core/tests/rewriter_index_test.cpp` | リライターデータの互換かな正規化、読み完全一致の順位付けと上限、BOM/CRLF 受理、不正行の skip と sequence 保持 |
+| `core_tests` | `core/tests/input_state_test.cpp` | 入力状態機械の全状態 × 全 `UserAction` の遷移表、候補の往復（表示・巡回・数字選択・確定と学習観測）、cache miss 時に `Selecting` へ入らず応答到着で遷移すること、応答待ち中の Enter の as-is 確定、Backspace の削除単位、モード切替での reading 保持、Unicode 入力の範囲検査と桁数上限 |
 | `core_tests` | `core/tests/bracket_pairing_test.cpp` | 括弧テーブルの上書き・追加・無効化、アプリ別 allow/deny ポリシーの重ね合わせ、挿入・skip・空ペア Backspace 削除、対称引用符の境界判定 |
 | `core_tests` | `core/tests/app_profile_resolver_test.cpp` | アプリ別プロファイルの部分上書き、`auto`/inherit の解決順、プロセス名・ウィンドウクラス照合と決定的衝突報告、不正値の inherit |
 | `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定、機微本文の伏せ字化、環境変数 opt-in と level、書込不能先での非 throw、世代ローテーションと保持期間 |
@@ -96,6 +97,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_candidate_ui_coordinator_tests` | `tsf-tip/tests/candidate_ui_coordinator_test.cpp` | 候補 UI の app-drawn / TIP 描画切替、`BeginUIElement` 失敗の HRESULT 報告、UI-less 時の `ITfUIElementMgr` 要求と欠落時 fallback、選択移動の wrap |
 | `tsf_tip_candidate_window_dpi_tests` | `tsf-tip/tests/candidate_window_dpi_test.cpp` | 候補ウィンドウのレイアウト metrics の DPI スケール、DPI 0 の既定 fallback、絵文字判定が漢字・文字記号を巻き込まないこと、description 有無での列構成 |
 | `tsf_tip_query_interface_contract_tests` | `tsf-tip/tests/query_interface_contract_test.cpp` | `QueryInterface` の null out-param と未対応 IID の契約、`ITfFnConfigure`／`ITfFunction` 公開、`Show` からのプロファイル付き設定アプリ起動と失敗時 HRESULT |
+| `tsf_tip_keymap_tests` | `tsf-tip/tests/keymap_test.cpp` | VK → `UserAction` 写像（第 1 層）の全エントリを状態ごとに検証、数字キーの `digit`、Alt / Win 組合せと表に無いキーのパススルー、core の VK 定数と `VK_*` の一致 |
 | `tsf_tip_local_settings_tests` | `tsf-tip/tests/local_settings_test.cpp` | Host 非依存で共有設定ファイルを読む TIP ローカル設定、ローマ字テーブル変更の監視と再読み込み、Unicode パス・再作成ディレクトリへの再バインド、不正・過大ファイルでの既定復帰、監視の再 arm に失敗しても以後の保存を取りこぼさないこと、内容が変わった保存だけを観測者へ通知すること |
 | `azookey_settings_launch_arguments_tests` | `settings-app/tests/launch_arguments_test.cpp` | 設定アプリ起動引数の round-trip、値欠落・不正 LangId / プロファイルの reject、未指定と空指定の区別、重複・未知オプションの reject |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の保存時保持と不正値の削除 |

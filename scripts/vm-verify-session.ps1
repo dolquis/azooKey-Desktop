@@ -10,6 +10,9 @@
   次を自動化する。
 
     -Prepare : 検証前チェックポイントを取得し、zip を VM へ転送する。
+    -Run     : PowerShell Direct でゲスト内の bootstrap を実行し、対話ユーザーの
+               スケジュールタスク経由で compat_test.exe を実行して、成果物をホストへ
+               回収する（docs/handoff/hyper-v-vm-verification-plan.md §5 の L1）。
     -Restore : 指定チェックポイントへ復元する。
 
   チェックポイント名はパッケージの manifest.json（commit / preset）から決定的に
@@ -17,17 +20,29 @@
 
   VMConnect の基本セッションへの切り替えは対話操作のため自動化しない。
   -Prepare の完了時に、IME 検証は基本セッションで行うことを出力で明示する。
+
+  -Run のゲスト資格情報は -Credential（PSCredential。SecretManagement に
+  PSCredential として保管した secret なら Get-Secret の戻り値をそのまま渡せる）か、
+  省略時の Get-Credential で受け取る。
+  平文のパスワードを引数に取らず、ログにも書かない。
 #>
 param(
   [switch]$Prepare,
   [switch]$Restore,
+  [switch]$Run,
   [string]$VMName = "",
   [string]$PackagePath = "",
   [string]$CheckpointName = "",
-  [string]$GuestDestination = "C:\azookey-verify"
+  [string]$GuestDestination = "C:\azookey-verify",
+  [System.Management.Automation.PSCredential]$Credential = $null,
+  [string]$ResultsDirectory = "",
+  [ValidateRange(1, 240)]
+  [int]$TimeoutMinutes = 45
 )
 
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "vm-verify-guest.ps1")
 
 function Get-VmVerifySessionAbsolutePath {
   param(
@@ -286,7 +301,8 @@ function Invoke-VmVerifySessionPrepare {
   Write-Host "Checkpoint: $checkpoint"
   Write-Host "Guest path: $destinationPath"
   Write-Host ""
-  Write-Host "Next: expand the archive in the guest and run verify-bootstrap.ps1."
+  Write-Host "Next: expand the archive in the guest and run verify-bootstrap.ps1,"
+  Write-Host "or run this script with -Run to execute bootstrap and compat_test.exe from the host."
   Write-Host "IME verification must run in a BASIC session. Enhanced sessions (VMConnect over RDP)"
   Write-Host "redirect input, so TIP behaviour cannot be judged there. Switch VMConnect to a basic"
   Write-Host "session before typing. This step is interactive and is not automated."
@@ -337,9 +353,370 @@ function Invoke-VmVerifySessionRestore {
   }
 }
 
+# ---------------------------------------------------------------------------
+# -Run のホスト側。PowerShell Direct の呼び出しは Pester から差し替えられるよう
+# 1 箇所ずつ関数へ閉じ込める。
+# ---------------------------------------------------------------------------
+
+function Get-VmVerifySessionCredential {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$VMName
+  )
+
+  return Get-Credential -Message (
+    "Local administrator of '$VMName' who is signed in to its console (basic session)")
+}
+
+function Open-VmVerifySessionGuestSession {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$VMName,
+    [Parameter(Mandatory = $true)]
+    [System.Management.Automation.PSCredential]$Credential
+  )
+
+  return New-PSSession -VMName $VMName -Credential $Credential -ErrorAction Stop
+}
+
+function Close-VmVerifySessionGuestSession {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Session
+  )
+
+  Remove-PSSession -Session $Session -ErrorAction SilentlyContinue
+}
+
+function Invoke-VmVerifySessionGuestStep {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Session,
+    [Parameter(Mandatory = $true)]
+    [string]$Name,
+    [object[]]$ArgumentList = @()
+  )
+
+  $definition = (Get-Command -Name $Name -CommandType Function -ErrorAction Stop).ScriptBlock
+  return Invoke-Command -Session $Session -ScriptBlock $definition `
+    -ArgumentList $ArgumentList -ErrorAction Stop
+}
+
+function Copy-VmVerifySessionGuestArtifact {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Session,
+    [Parameter(Mandatory = $true)]
+    [string]$GuestPath,
+    [Parameter(Mandatory = $true)]
+    [string]$Destination
+  )
+
+  Copy-Item -FromSession $Session -Path $GuestPath -Destination $Destination `
+    -Recurse -Force -ErrorAction Stop
+}
+
+function ConvertFrom-VmVerifySessionJson {
+  param(
+    [AllowEmptyString()]
+    [string]$Text,
+    [Parameter(Mandatory = $true)]
+    [string]$Description
+  )
+
+  if (-not $Text -or -not $Text.Trim()) {
+    throw "$Description produced no output."
+  }
+  try {
+    return $Text | ConvertFrom-Json
+  } catch {
+    throw "$Description is not valid JSON: $($_.Exception.Message)"
+  }
+}
+
+function Assert-VmVerifySessionInteractiveUser {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Info,
+    [Parameter(Mandatory = $true)]
+    [string]$VMName
+  )
+
+  if (-not $Info.IsAdministrator) {
+    throw ("The PowerShell Direct account '$($Info.SessionUser)' is not a local administrator " +
+      "of '$VMName'. verify-bootstrap.ps1 registers the TIP machine-wide and cannot show a UAC " +
+      "prompt in a non-interactive session.")
+  }
+  if (-not $Info.ConsoleUser) {
+    throw (@(
+      "Nobody is signed in to the console of '$VMName', so compat_test.exe has no interactive desktop."
+      "Sign in through VMConnect in a BASIC session (an enhanced session is RDP and does not count),"
+      "or configure auto sign-in on the verification VM."
+    ) -join [Environment]::NewLine)
+  }
+  if ($Info.ConsoleUser -ne $Info.SessionUser) {
+    throw ("The console user '$($Info.ConsoleUser)' differs from the PowerShell Direct account " +
+      "'$($Info.SessionUser)'. The inference host pipe and its auto-start are per user; " +
+      "pass the credentials of the console user.")
+  }
+  if ($Info.Locked) {
+    throw ("The console of '$VMName' is locked or at the sign-in screen. UI Automation and " +
+      "SendInput fail on a locked desktop; unlock it and disable the lock screen on the verification VM.")
+  }
+}
+
+function Get-VmVerifySessionEncodedArgument {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Command
+  )
+
+  $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
+  return "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encoded"
+}
+
+function Get-VmVerifySessionRunnerScript {
+  $definitions = foreach ($name in @("Invoke-VmVerifyGuestBootstrap", "Invoke-VmVerifyGuestCompatRun")) {
+    $body = (Get-Command -Name $name -CommandType Function -ErrorAction Stop).ScriptBlock.ToString()
+    "function $name {$body}"
+  }
+  return $definitions -join [Environment]::NewLine
+}
+
+function Get-VmVerifySessionTargetSummary {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Status
+  )
+
+  # compat_test.exe の終了コード: 0 = 全件 pass、1 = fail を含む、
+  # 2 = fail は無いが failing-skip を含む（compat-test/README.md）。
+  foreach ($target in @($Status.targets)) {
+    $outcome = switch ([int]$target.exitCode) {
+      0 { "pass" }
+      1 { "fail" }
+      2 { "failing-skip" }
+      default { "error" }
+    }
+    if ($outcome -ne "error" -and -not $target.reportJson) {
+      $outcome = "error"
+    }
+    [pscustomobject][ordered]@{
+      Target = [string]$target.target
+      ExitCode = [int]$target.exitCode
+      Outcome = $outcome
+    }
+  }
+}
+
+function Invoke-VmVerifySessionGuestRun {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Session,
+    [Parameter(Mandatory = $true)]
+    [string]$VMName,
+    [Parameter(Mandatory = $true)]
+    $Paths,
+    [Parameter(Mandatory = $true)]
+    [int]$TimeoutSeconds
+  )
+
+  $targets = @(Invoke-VmVerifySessionGuestStep -Session $Session -Name "Initialize-VmVerifyGuestPackage" `
+      -ArgumentList @($Paths.GuestZip, $Paths.GuestPackageRoot, $Paths.GuestRunRoot))
+  $user = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Get-VmVerifyGuestInteractiveUser"
+  Assert-VmVerifySessionInteractiveUser -Info $user -VMName $VMName
+
+  Write-Host "Running verify-bootstrap.ps1 -Json in '$VMName' over PowerShell Direct..."
+  $directPath = Join-Path $Paths.GuestRunRoot "bootstrap-direct.json"
+  $directExitCode = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Invoke-VmVerifyGuestBootstrap" `
+    -ArgumentList @($Paths.GuestPackageRoot, $directPath, $true)
+  $directText = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Read-VmVerifyGuestText" `
+    -ArgumentList @($directPath)
+  $direct = ConvertFrom-VmVerifySessionJson -Text $directText `
+    -Description ("verify-bootstrap.ps1 -Json over PowerShell Direct (exit $directExitCode; " +
+      "see bootstrap-direct.error.log in the artifacts)")
+  Write-Host "Bootstrap over PowerShell Direct: $($direct.overallStatus)"
+  # 層 1 の bootstrap が fail なら compat へ進まない（plan §3）。
+  if ($direct.overallStatus -eq "fail") {
+    $failed = @($direct.checks | Where-Object { $_.status -eq "fail" } |
+        ForEach-Object { "$($_.id): $($_.message)" })
+    throw ("verify-bootstrap.ps1 reported overallStatus=fail over PowerShell Direct, " +
+      "so compat_test.exe was not run. " + ($failed -join "; "))
+  }
+
+  $hostState = Invoke-VmVerifySessionGuestStep -Session $Session `
+    -Name "Invoke-VmVerifyGuestSessionZeroHostShutdown" -ArgumentList @($Paths.GuestPackageRoot)
+  Write-Host "Session 0 inference host shutdown: $hostState"
+
+  $runnerPath = Join-Path $Paths.GuestRunRoot "interactive-runner.ps1"
+  Invoke-VmVerifySessionGuestStep -Session $Session -Name "Write-VmVerifyGuestRunner" `
+    -ArgumentList @($runnerPath, (Get-VmVerifySessionRunnerScript)) | Out-Null
+  $command = ". '" + $runnerPath.Replace("'", "''") + "'; Invoke-VmVerifyGuestCompatRun" +
+    " -PackageRoot '" + $Paths.GuestPackageRoot.Replace("'", "''") + "'" +
+    " -RunRoot '" + $Paths.GuestRunRoot.Replace("'", "''") + "'"
+  $taskName = "azooKey-vm-verify-" + (Split-Path -Leaf $Paths.GuestRunRoot)
+
+  Write-Host ("Running compat_test.exe ($($targets -join ', ')) as '$($user.ConsoleUser)' " +
+    "through an interactive scheduled task...")
+  $taskExitCode = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Invoke-VmVerifyGuestInteractiveTask" `
+    -ArgumentList @($taskName, $user.ConsoleUser, (Get-VmVerifySessionEncodedArgument -Command $command), $TimeoutSeconds)
+  $taskResult = "0x{0:X8}" -f [int64]$taskExitCode
+  $statusText = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Read-VmVerifyGuestText" `
+    -ArgumentList @((Join-Path $Paths.GuestRunRoot "interactive-status.json"))
+  $status = ConvertFrom-VmVerifySessionJson -Text $statusText `
+    -Description "The interactive run status (task result $taskResult)"
+  if (-not $status.completed) {
+    throw "The interactive run did not complete (task result $taskResult): $($status.error)"
+  }
+
+  return [pscustomobject][ordered]@{
+    DirectBootstrap = $direct
+    InteractiveStatus = $status
+    Targets = @(Get-VmVerifySessionTargetSummary -Status $status)
+  }
+}
+
+function Receive-VmVerifySessionArtifact {
+  param(
+    [Parameter(Mandatory = $true)]
+    $Session,
+    [Parameter(Mandatory = $true)]
+    [string]$GuestRunRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$HostRunRoot
+  )
+
+  # 実行ディレクトリを作る前に失敗した場合は回収対象が無い。回収失敗と区別し、
+  # 元の失敗理由を二次エラーで埋もれさせない。azooKey ログの複製は付随作業なので、
+  # 失敗しても警告に留め、bootstrap の JSON と compat の report は回収を続ける。
+  $logState = ""
+  try {
+    $logState = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Copy-VmVerifyGuestLog" `
+      -ArgumentList @($GuestRunRoot)
+  } catch {
+    Write-Warning "azooKey logs could not be copied into the run directory: $($_.Exception.Message)"
+  }
+  if ($logState -eq "no-run-root") {
+    return [pscustomobject]@{ Collected = $false; Error = "" }
+  }
+  try {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $HostRunRoot) -Force | Out-Null
+    Copy-VmVerifySessionGuestArtifact -Session $Session -GuestPath $GuestRunRoot -Destination $HostRunRoot
+    return [pscustomobject]@{ Collected = $true; Error = "" }
+  } catch {
+    return [pscustomobject]@{ Collected = $false; Error = $_.Exception.Message }
+  }
+}
+
+function Invoke-VmVerifySessionRun {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$VMName,
+    [string]$PackagePath = "",
+    [string]$CheckpointName = "",
+    [Parameter(Mandatory = $true)]
+    [string]$GuestDestination,
+    [System.Management.Automation.PSCredential]$Credential = $null,
+    [string]$ResultsDirectory = "",
+    [int]$TimeoutMinutes = 45
+  )
+
+  $package = Resolve-VmVerifySessionPackage -RepositoryRoot $RepositoryRoot -PackagePath $PackagePath
+  $manifest = Get-VmVerifySessionManifest -ManifestPath $package.ManifestPath
+  $checkpoint = $CheckpointName
+  if (-not $checkpoint) {
+    $checkpoint = Get-VmVerifySessionCheckpointName -Manifest $manifest
+  }
+
+  Assert-VmVerifySessionVMRunning -VMName $VMName | Out-Null
+  # bootstrap は TIP を machine-wide に登録する。戻す基準の無い VM では実行しない。
+  if (-not (Get-VmVerifySessionCheckpoint -VMName $VMName -CheckpointName $checkpoint)) {
+    throw ("Checkpoint '$checkpoint' was not found on '$VMName'. Run -Prepare first: " +
+      "-Run registers the TIP machine-wide and needs a checkpoint to restore afterwards.")
+  }
+
+  $baseName = [System.IO.Path]::GetFileNameWithoutExtension($package.ZipPath)
+  $runName = "$baseName-" + [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
+  $paths = [pscustomobject][ordered]@{
+    GuestZip = Join-Path $GuestDestination "$baseName.zip"
+    GuestPackageRoot = Join-Path $GuestDestination $baseName
+    GuestRunRoot = Join-Path (Join-Path $GuestDestination "runs") $runName
+  }
+  if (-not $ResultsDirectory) {
+    $ResultsDirectory = Join-Path $RepositoryRoot "build\vm-verify-results"
+  }
+  $hostRunRoot = Join-Path (Get-VmVerifySessionAbsolutePath -Path $ResultsDirectory) $runName
+
+  if (-not $Credential) {
+    try {
+      $Credential = Get-VmVerifySessionCredential -VMName $VMName
+    } catch {
+      throw ("Guest credentials are required for PowerShell Direct. Pass -Credential " +
+        "(for example -Credential (Get-Secret -Name <name>)) when no prompt is available. " +
+        "Original error: $($_.Exception.Message)")
+    }
+    if (-not $Credential) {
+      throw "Guest credentials were not provided, so PowerShell Direct cannot be used."
+    }
+  }
+
+  try {
+    $session = Open-VmVerifySessionGuestSession -VMName $VMName -Credential $Credential
+  } catch {
+    throw ("Could not open a PowerShell Direct session to '$VMName'. Check the guest " +
+      "credentials, that the guest has finished booting, and that the PowerShell Direct " +
+      "integration service is running. Original error: $($_.Exception.Message)")
+  }
+
+  $outcome = $null
+  $failures = @()
+  try {
+    $outcome = Invoke-VmVerifySessionGuestRun -Session $session -VMName $VMName `
+      -Paths $paths -TimeoutSeconds ($TimeoutMinutes * 60)
+  } catch {
+    $failures += $_.Exception.Message
+  } finally {
+    $collection = Receive-VmVerifySessionArtifact -Session $session `
+      -GuestRunRoot $paths.GuestRunRoot -HostRunRoot $hostRunRoot
+    Close-VmVerifySessionGuestSession -Session $session
+  }
+
+  if ($collection.Error) {
+    $failures += "Artifacts could not be collected from '$VMName':$($paths.GuestRunRoot): $($collection.Error)"
+  } elseif ($collection.Collected) {
+    Write-Host "Artifacts: $hostRunRoot"
+  } else {
+    Write-Host "No artifacts were produced: the guest run directory was not created."
+  }
+  if ($outcome) {
+    foreach ($target in $outcome.Targets) {
+      Write-Host "compat_test.exe $($target.Target): $($target.Outcome) (exit $($target.ExitCode))"
+      if ($target.Outcome -in @("fail", "error")) {
+        $failures += "compat_test.exe target '$($target.Target)' ended with $($target.Outcome) (exit $($target.ExitCode))."
+      }
+    }
+    if (@($outcome.Targets).Count -eq 0) {
+      $failures += "compat_test.exe ran no targets."
+    }
+  }
+  if ($failures.Count -ne 0) {
+    throw ((@("L1 guest verification did not pass on '$VMName'.") + $failures) -join [Environment]::NewLine)
+  }
+
+  Write-Host ("L1 guest verification finished without fail. Review failing-skip cases in each report.md; " +
+    "this result does not replace the basic-session checks or the human gate.")
+  return [pscustomobject][ordered]@{
+    CheckpointName = $checkpoint
+    ResultsPath = $hostRunRoot
+    Targets = $outcome.Targets
+  }
+}
+
 if ($MyInvocation.InvocationName -ne ".") {
-  if ($Prepare -eq $Restore) {
-    throw "Specify exactly one of -Prepare or -Restore."
+  if (@($Prepare, $Restore, $Run | Where-Object { $_ }).Count -ne 1) {
+    throw "Specify exactly one of -Prepare, -Restore, or -Run."
   }
   if (-not $VMName) {
     throw "-VMName is required. Check the name with Get-VM."
@@ -354,6 +731,16 @@ if ($MyInvocation.InvocationName -ne ".") {
       -PackagePath $PackagePath `
       -CheckpointName $CheckpointName `
       -GuestDestination $GuestDestination | Out-Null
+  } elseif ($Run) {
+    Invoke-VmVerifySessionRun `
+      -RepositoryRoot $repositoryRoot `
+      -VMName $VMName `
+      -PackagePath $PackagePath `
+      -CheckpointName $CheckpointName `
+      -GuestDestination $GuestDestination `
+      -Credential $Credential `
+      -ResultsDirectory $ResultsDirectory `
+      -TimeoutMinutes $TimeoutMinutes | Out-Null
   } else {
     Invoke-VmVerifySessionRestore `
       -RepositoryRoot $repositoryRoot `

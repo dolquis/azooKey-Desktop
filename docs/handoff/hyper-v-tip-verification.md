@@ -156,6 +156,38 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 - `-CheckpointConfirmed` は checkpoint を作成するオプションではない。
   ホスト側で取得済みと確認した事実だけを bootstrap へ渡す。
 
+#### ホストからの一括実行（`-Run`）
+
+手順 3 と `compat_test.exe` の実行は、ホスト側から 1 コマンドでも実行できる。
+パッケージは `make-vm-verify-package.ps1 -IncludeCompat` で生成しておく。
+
+```powershell
+# ホスト側。手順 1 の後に実行する。資格情報は対話で入力する。
+.\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>"
+
+# SecretManagement に PSCredential として保管した資格情報を使う場合
+.\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -Credential (Get-Secret -Name "<名前>")
+```
+
+- 前提は、手順 1 の checkpoint があること、ゲストのコンソール（VMConnect の基本セッション）に
+  ローカル管理者がサインインしていてロックされていないこと、資格情報がそのユーザーのものであること。
+  いずれかを満たさない場合は理由を出して非ゼロ終了する。
+- PowerShell Direct のセッションで zip を展開し、`verify-bootstrap.ps1 -Json -CheckpointConfirmed`
+  を実行する。VC++ Redistributable の導入と TIP の machine-wide 登録はここで済む。
+  `overallStatus=fail` なら compat へ進まない。
+- PowerShell Direct のセッションは Session 0 にあり、そこで起動した Host には対話セッションの
+  TIP が接続できない。そのため bootstrap が Session 0 で起動した supervisor と Host を停止する。
+- 続いてコンソールユーザーの非昇格スケジュールタスク（LogonType Interactive。パスワードを保存しない）
+  で bootstrap を再実行し、Host を対話セッションで起動する。Host がそのセッションにあることを
+  確認してから、同梱の `targets/*.json` ごとに `compat_test.exe` を実行する。
+- 成果物（bootstrap の JSON と警告・エラーのログ、`compat-report-<target>/`、各 target のログ、
+  `%LOCALAPPDATA%\azooKey\logs`）は `build\vm-verify-results\<パッケージ名>-<UTC 時刻>\` へ回収する。
+  回収先は `-ResultsDirectory` で変えられる。
+- `compat_test.exe` の fail、report の欠落、タイムアウト（既定 45 分、`-TimeoutMinutes`）は非ゼロ終了にする。
+  failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。
+- TIP 登録を含むため、`-Run` は人間がホストで実行する。結果は層 1 の先行検証であり、
+  手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
+
 ### 4. 実機検証（★基本セッションに切替えて）
 
 VMConnect を基本セッションに切替（拡張セッションをオフ）。メモ帳で打鍵する。

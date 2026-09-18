@@ -180,6 +180,9 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 - 続いてコンソールユーザーの非昇格スケジュールタスク（LogonType Interactive。パスワードを保存しない）
   で bootstrap を再実行し、Host を対話セッションで起動する。Host がそのセッションにあることを
   確認してから、同梱の `targets/*.json` ごとに `compat_test.exe` を実行する。
+- `compat_test.exe` は azooKey を選択しないため、compat の前にコンソールユーザーの日本語の
+  入力方式へ azooKey を追加し、既定の入力方式（`Set-WinDefaultInputMethodOverride`）にする。
+  Microsoft IME は削除しない。この設定もチェックポイントの復元で元に戻る。
 - 成果物（bootstrap の JSON と警告・エラーのログ、`compat-report-<target>/`、各 target のログ、
   `%LOCALAPPDATA%\azooKey\logs`）は `build\vm-verify-results\<パッケージ名>-<UTC 時刻>\` へ回収する。
   回収先は `-ResultsDirectory` で変えられる。

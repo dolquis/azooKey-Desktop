@@ -960,6 +960,7 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
           ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $OutputPath
         return 0
       }
+      Mock Invoke-VmVerifyGuestInputMethodSelection { "switched" }
       Mock Get-Process { [pscustomobject]@{ SessionId = 1 } }
       Mock Get-Process -ParameterFilter { $Id -eq 4242 } {
         [pscustomobject]@{ SessionId = $script:hostSessionId }
@@ -1017,6 +1018,94 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $status.error | Should -Match "overallStatus=fail in the interactive session"
       Should -Invoke Start-Process -Times 0 -Exactly
     }
+
+    It "does not run compat when azooKey cannot be selected as the input method" {
+      Mock Invoke-VmVerifyGuestInputMethodSelection {
+        throw "azooKey could not be made the default input method of the console user."
+      }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $status = Read-RunStatus
+      $status.completed | Should -BeFalse
+      $status.error | Should -Match "default input method"
+      Should -Invoke Start-Process -Times 0 -Exactly
+    }
+  }
+
+  Context "-Run input method selection" {
+    BeforeEach {
+      # International モジュールの cmdlet は実行ユーザーの設定を書き換えるため、
+      # 引数の型を持たないスタブへ差し替えてから Mock する。
+      function Get-WinDefaultInputMethodOverride { [CmdletBinding()] param() }
+      function Get-WinUserLanguageList { [CmdletBinding()] param() }
+      function Set-WinUserLanguageList {
+        [CmdletBinding(SupportsShouldProcess = $true)]
+        param($LanguageList, [switch]$Force)
+        if ($PSCmdlet.ShouldProcess("$LanguageList", "Set $Force")) {
+          throw "Set-WinUserLanguageList must be mocked in tests."
+        }
+      }
+      function Set-WinDefaultInputMethodOverride {
+        [CmdletBinding(SupportsShouldProcess = $true)]
+        param($InputTip)
+        if ($PSCmdlet.ShouldProcess($InputTip)) {
+          throw "Set-WinDefaultInputMethodOverride must be mocked in tests."
+        }
+      }
+
+      $script:azooKeyTip = "0411:{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}"
+      $microsoftImeTip = "0411:{03B5835F-F03C-411B-9CE2-AA23E1171E36}{A76C93D9-5523-4E90-AAFA-4DB112F9AC76}"
+      $script:overrideTip = ""
+      $script:languageList = @([pscustomobject]@{
+          LanguageTag = "ja"
+          InputMethodTips = [System.Collections.Generic.List[string]]::new([string[]]@($microsoftImeTip))
+        })
+      Mock Get-WinDefaultInputMethodOverride {
+        if ($script:overrideTip) {
+          [pscustomobject]@{ InputMethodTip = $script:overrideTip }
+        }
+      }
+      Mock Get-WinUserLanguageList { $script:languageList }
+      Mock Set-WinUserLanguageList {}
+      Mock Set-WinDefaultInputMethodOverride { $script:overrideTip = $InputTip }
+    }
+
+    It "adds azooKey to the Japanese input methods and makes it the default" {
+      Invoke-VmVerifyGuestInputMethodSelection | Should -Be "switched"
+
+      $script:languageList[0].InputMethodTips | Should -Contain $script:azooKeyTip
+      $script:languageList[0].InputMethodTips | Should -Contain $microsoftImeTip
+      Should -Invoke Set-WinUserLanguageList -Times 1 -Exactly
+      Should -Invoke Set-WinDefaultInputMethodOverride -Times 1 -Exactly -ParameterFilter {
+        $InputTip -eq $script:azooKeyTip
+      }
+    }
+
+    It "leaves the settings alone when azooKey is already the default" {
+      $script:overrideTip = $script:azooKeyTip
+
+      Invoke-VmVerifyGuestInputMethodSelection | Should -Be "already-default"
+
+      Should -Invoke Set-WinUserLanguageList -Times 0 -Exactly
+      Should -Invoke Set-WinDefaultInputMethodOverride -Times 0 -Exactly
+    }
+
+    It "fails when Japanese is not in the language list" {
+      $script:languageList = @([pscustomobject]@{
+          LanguageTag = "en-US"
+          InputMethodTips = [System.Collections.Generic.List[string]]::new()
+        })
+
+      { Invoke-VmVerifyGuestInputMethodSelection } | Should -Throw -ExpectedMessage "*Japanese*"
+    }
+
+    It "fails when the override does not take effect" {
+      Mock Set-WinDefaultInputMethodOverride {}
+
+      { Invoke-VmVerifyGuestInputMethodSelection } |
+        Should -Throw -ExpectedMessage "*could not be made the default input method*"
+    }
   }
 
   Context "-Run guest script portability" {
@@ -1029,7 +1118,10 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $errors | Should -BeNullOrEmpty
       @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) |
           ForEach-Object { $_.Name }) |
-        Should -Be @("Invoke-VmVerifyGuestBootstrap", "Invoke-VmVerifyGuestCompatRun")
+        Should -Be @(
+          "Invoke-VmVerifyGuestBootstrap",
+          "Invoke-VmVerifyGuestInputMethodSelection",
+          "Invoke-VmVerifyGuestCompatRun")
     }
 
     It "encodes the task command so that quoted guest paths survive" {

@@ -476,7 +476,10 @@ function Get-VmVerifySessionEncodedArgument {
 }
 
 function Get-VmVerifySessionRunnerScript {
-  $definitions = foreach ($name in @("Invoke-VmVerifyGuestBootstrap", "Invoke-VmVerifyGuestCompatRun")) {
+  $definitions = foreach ($name in @(
+      "Invoke-VmVerifyGuestBootstrap",
+      "Invoke-VmVerifyGuestInputMethodSelection",
+      "Invoke-VmVerifyGuestCompatRun")) {
     $body = (Get-Command -Name $name -CommandType Function -ErrorAction Stop).ScriptBlock.ToString()
     "function $name {$body}"
   }

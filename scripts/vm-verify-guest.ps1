@@ -40,7 +40,13 @@ function Initialize-VmVerifyGuestPackage {
   }
   if ($expandedHash.Trim() -ne $zipHash) {
     if (Test-Path -LiteralPath $PackageRoot) {
-      Remove-Item -LiteralPath $PackageRoot -Recurse -Force
+      try {
+        Remove-Item -LiteralPath $PackageRoot -Recurse -Force
+      } catch {
+        throw ("The previously expanded package is in use and cannot be replaced: $PackageRoot. " +
+          "Restore the checkpoint (-Restore), run -Prepare again, then retry. " +
+          "Original error: $($_.Exception.Message)")
+      }
     }
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $PackageRoot -Force
     Set-Content -LiteralPath $markerPath -Value $zipHash -Encoding ASCII
@@ -269,8 +275,37 @@ function Invoke-VmVerifyGuestInteractiveTask {
   }
 }
 
-# 対話タスクが実行する本体。ゲストへは Invoke-VmVerifyGuestBootstrap と一緒に
-# スクリプトファイルとして書き出す。失敗しても状態ファイルは必ず書く。
+# compat_test.exe は azooKey を選択しない（compat-test/README.md）。TIP の登録は
+# 入力方式を選択可能にするだけなので、対話ユーザーの既定入力方式を azooKey にする。
+# ユーザー単位の設定であり、検証後の checkpoint 復元で元に戻る。
+function Invoke-VmVerifyGuestInputMethodSelection {
+  $tip = "0411:{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}"
+  $current = Get-WinDefaultInputMethodOverride
+  if ($current -and [string]$current.InputMethodTip -eq $tip) {
+    return "already-default"
+  }
+
+  $languages = Get-WinUserLanguageList
+  $japanese = @($languages | Where-Object { $_.LanguageTag -like "ja*" }) | Select-Object -First 1
+  if (-not $japanese) {
+    throw "Japanese is not in the console user's language list, so azooKey cannot be selected."
+  }
+  if (@($japanese.InputMethodTips) -notcontains $tip) {
+    $japanese.InputMethodTips.Add($tip)
+    Set-WinUserLanguageList -LanguageList $languages -Force
+  }
+  Set-WinDefaultInputMethodOverride -InputTip $tip
+
+  $selected = Get-WinDefaultInputMethodOverride
+  if (-not $selected -or [string]$selected.InputMethodTip -ne $tip) {
+    throw "azooKey could not be made the default input method of the console user."
+  }
+  return "switched"
+}
+
+# 対話タスクが実行する本体。ゲストへは Invoke-VmVerifyGuestBootstrap、
+# Invoke-VmVerifyGuestInputMethodSelection と一緒にスクリプトファイルとして
+# 書き出す。失敗しても状態ファイルは必ず書く。
 function Invoke-VmVerifyGuestCompatRun {
   param(
     [Parameter(Mandatory = $true)]
@@ -289,6 +324,7 @@ function Invoke-VmVerifyGuestCompatRun {
     bootstrapStatus = ""
     hostProcessId = 0
     hostSessionId = $null
+    inputMethod = ""
     targets = @()
     error = ""
   }
@@ -313,6 +349,7 @@ function Invoke-VmVerifyGuestCompatRun {
       throw ("The inference host runs in session $($status.hostSessionId), not in the " +
         "interactive session $sessionId, so the TIP cannot connect to it.")
     }
+    $status.inputMethod = Invoke-VmVerifyGuestInputMethodSelection
 
     $compat = Join-Path $PackageRoot "compat_test.exe"
     $targets = @(Get-ChildItem -LiteralPath (Join-Path $PackageRoot "targets") `

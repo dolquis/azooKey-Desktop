@@ -23,6 +23,55 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 - ☐ 標準 Microsoft IME が残っている（切替不能時の保険）
 - ☐ VM チェックポイント取得済み
 
+## compat runner との分担
+
+`compat_test.exe` が判定する内容を、人間が同じセッションで繰り返さないための対応表である。
+ケース定義の正典は [`docs/dev-infrastructure-spec.md`](../dev-infrastructure-spec.md) §13.3 で、本節はケース ID だけを参照する。
+A 系・B 系の各行は次の 3 分類のどれかに属する。
+
+- **(a) 機械判定**: 行の判定内容を、対応ケースが同じ観点で判定する。下記の省略条件をすべて満たす場合に限り、人間セッションで省略できる。
+- **(b) 人間判定**: 対応ケースが無い、または判定に操作 UI、視覚、体感が要る。
+- **(c) 補助**: 対応ケースの結果を根拠として参照できるが、行の一部をケースが判定しない。最終判断は人間が行い、省略しない。
+
+| 行 | 分類 | 対応ケース | ケースが判定しない部分 |
+|---|---|---|---|
+| A1 | (b) | なし | Win+Space での選択。runner は azooKey を選択しない |
+| A2 | (c) | C-002 / C-003 / C-012 | `ka` の入力と下線の描画。ケースは `nihongo` と `ja` 系を送り、preedit の文字列だけを読む |
+| A3 | (c) | C-002 / C-012 | `kitto` / `syatu` / `siro` / `nn`。C-002 は `nihongo` の preedit、C-012 は `ja` 系だけを判定する |
+| A4 | (a) | C-002 / C-003 | なし |
+| A5 | (c) | C-001 / C-004 | 組込辞書語 `watashi` での候補と、候補ウィンドウの見え方。C-001 は辞書外の `nihongo` を使う |
+| A5-opt | (a) | C-001 | なし |
+| A6 | (b) | なし | ↑↓ での選択移動と preedit の更新 |
+| A7 | (c) | C-001 | 数字キーでの確定、候補ウィンドウが閉じること、確定後のキャレット位置。C-001 は Enter で確定した文字列だけを見る |
+| A8 | (c) | C-001 | TIP と Host のログでの往復の確認 |
+| B1 | (c) | C-011 / C-008 | Alt+Tab。C-011 は Ctrl+A/C/V/L/S、Alt メニュー、Win キーを、C-008 は Ctrl+Z / Ctrl+Y を送る |
+| B2 | (b) | なし | 即 Space と高速入力からの復帰 |
+| B3 | (c) | C-009 | アプリ終了と IME 切替での残留、ゴースト候補窓。C-009 は crash しないことだけを見る |
+| B4 | (c) | C-010 | host の後起動と、再接続後に候補が戻ること。C-010 は kill 後の pipe 復帰までを見る |
+| B5 | (c) | C-010 | host の無応答と、host 異常中の IME 切替とアプリ終了 |
+| B6 | (c) | C-004 / C-006 | 可読性と高 DPI での崩れ。ケースは候補ウィンドウの位置だけを見る |
+| B7 | (c) | Notepad / Edge / VS Code の各 target の C-001〜C-012 | 32 bit アプリと Office。Office は同 spec §13.3.1 の手動チェックリストが扱う |
+
+**省略条件。** (a) の行を省略してよいのは、次をすべて満たす compat の report がある場合に限る。
+1 つでも欠ければ省略せず実施する。
+
+1. compat を実行した検証 zip と、本セッションの検証 zip が同じ commit である。`report.json` は commit を持たないため、zip の `manifest.json` の commit で照合する。
+2. ビルド構成（preset）が同じである。zip の `manifest.json` の `preset` で照合する。
+3. 省略する行を確認するアプリと同じ target の report である。report が無いアプリでは省略しない。
+4. バックエンドと辞書の条件（上の「バックエンド」欄）が同じである。
+5. report で C-001 が pass であり、行の対応ケースもすべて pass である。C-011 を除く C-002 以降は、C-001 が pass でないと `failing-skip` になる。C-001 は辞書外の `nihongo` を確定するため、`--mock-dict`、`--model`、学習語のいずれも無い環境では fail になり、その場合は全行を実施する。
+6. report はゲストのコンソールの対話セッションで得たものである（`vm-verify-session.ps1 -Run` のスケジュールタスク実行、または基本セッションでの手動実行）。拡張セッションで得た結果を根拠にしない。
+
+**`failing-skip` と fail の扱い。**
+`failing-skip` は機械が判定できなかったことを表し、pass ではない。
+対応ケースが `failing-skip` の行は人間が実施し、人間の結果だけで PASS / FAIL を記録する。
+機械の `failing-skip` を人間の PASS に読み替えない。
+対応ケースが fail の行も省略しない。
+機械の fail を FAIL へそのまま転記せず、人間が同じ行を実施して、環境起因（変換辞書が無いための C-001 の fail など）か回帰かを切り分ける。
+
+**記録。** 省略した行は `☐ compat` を選び、備考に根拠の report（target、出力先、`manifest.json` の commit）を書く。
+(b) と (c) の行で compat の結果を参照した場合は、備考に target とケースの結果を書く。
+
 ---
 
 ## A. コア動線（DEV-32 必須）
@@ -39,13 +88,13 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 ☐ PASS ☐ FAIL ☐ 既知(DEV-198) — 備考:
 
 **A4. 編集（M3）** — Backspace で1文字戻る / ESC で composition 全クリア
-☐ PASS ☐ FAIL — 備考:
+☐ PASS ☐ FAIL ☐ compat — 備考:
 
 **A5. 候補変換（M4/M5）** — `watashi`（組込辞書語）→ Space で「私」等の漢字候補が出る
 ☐ PASS ☐ FAIL — 備考:（`watashi`/`nihon`/`toukyou` は組込辞書で必ず変換される。ここでの Fail は IPC/flush/候補 UI 等の **新規リグレッション**）
 
 **A5-opt. 辞書外語の変換（任意。結果サマリのコア 8 にはカウントしない）** — `nihongo`（辞書外語）→ Space。`--mock-dict`/学習/実 GGUF モデル（`--model`）のいずれも無ければ漢字化されない
-☐ 既知(GGUF 未指定: 漢字が出ない) ☐ PASS（`--mock-dict`/学習/`--model`使用時に漢字化）— 備考:
+☐ 既知(GGUF 未指定: 漢字が出ない) ☐ PASS（`--mock-dict`/学習/`--model`使用時に漢字化） ☐ compat — 備考:
 
 **A6. 候補選択（M5）** — ↑↓ で選択移動、preedit 更新
 ☐ PASS ☐ FAIL — 備考:
@@ -92,8 +141,9 @@ azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）�
 - 本検証で参照する主な既知バグ: DEV-197 / DEV-198 / DEV-190 / DEV-171 / DEV-173 / DEV-160（各 ID を Linear で開いて最新状態を参照）
 
 ## 結果サマリ
-- コア(A): ___ / 8（PASS ___ / 既知 ___ / 新規 FAIL ___）
+- コア(A): ___ / 8（PASS ___ / compat ___ / 既知 ___ / 新規 FAIL ___）
 - 拡張(B): ___ / 7（PASS ___ / 既知 ___ / 新規 FAIL ___）
+- `☐ compat` の行は PASS に数えず、compat の欄に数える。人間が確認した行と機械が判定した行を合計で混ぜないためである。
 - **新規リグレッション**: ☐ なし ☐ あり
 - 新規検出した問題（→ Linear 起票。ラベル必須: `repo:*` + `area:*` + `agent:*`。実機確認など人間専任タスクは `agent:*` の代わりに `gate:human-required` を付与）:
 

@@ -123,13 +123,15 @@ class CheckAgentDefinitionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             make_repo(root)
-            body = "See `docs/gone.md` and `azookey-missing-skill`.\n"
+            body = "See `docs/gone.md`, `azookey-missing-skill` and the `tsf-tip` directory.\n"
+            (root / "tsf-tip").mkdir()
             write(root / ".claude" / "agents" / "reviewer.md", claude_file("other", "review", body))
             write(root / ".codex" / "agents" / "reviewer.toml", codex_file("reviewer", "review", body, "read-only"))
             problems = MODULE.check(root)
             self.assertTrue(any("name がファイル名" in p for p in problems))
             self.assertTrue(any("`docs/gone.md`" in p for p in problems))
             self.assertTrue(any("`azookey-missing-skill`" in p for p in problems))
+            self.assertFalse(any("`tsf-tip`" in p for p in problems))
 
     def test_codex_config_is_parsed_and_agents_stay_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

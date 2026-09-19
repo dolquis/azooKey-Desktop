@@ -192,7 +192,7 @@ def check_references(body: str, relative: str, repo_root: Path, paths_module) ->
         if paths_module.is_repository_path(token):
             if not (repo_root / token.rstrip("/")).exists():
                 problems.append(f"{relative}: 存在しないパス `{token}`")
-        elif REPO_SKILL_PATTERN.match(token) and not (skills_dir / token).is_dir():
+        elif REPO_SKILL_PATTERN.match(token) and not (skills_dir / token).is_dir() and not (repo_root / token).is_dir():
             problems.append(f"{relative}: 存在しない Skill `{token}`")
     return problems
 

@@ -2,17 +2,8 @@ set(AZOOKEY_BENCH_GIT_COMMIT "" CACHE STRING
     "Git commit recorded in benchmark JSON; defaults to HEAD at build time")
 set(AZOOKEY_BENCH_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(AZOOKEY_BENCH_COMMIT_HEADER "${AZOOKEY_BENCH_GENERATED_DIR}/BenchmarkCommit.h")
-add_custom_target(azookey_benchmark_commit_header
-  COMMAND "${CMAKE_COMMAND}"
-          "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
-          "-DOUTPUT_FILE=${AZOOKEY_BENCH_COMMIT_HEADER}"
-          "-DAZOOKEY_BENCH_GIT_COMMIT_OVERRIDE=${AZOOKEY_BENCH_GIT_COMMIT}"
-          -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateBenchmarkCommit.cmake"
-  BYPRODUCTS "${AZOOKEY_BENCH_COMMIT_HEADER}"
-  # scripts/make-vm-verify-package.ps1 matches this description in its dry-run check.
-  COMMENT "Refreshing benchmark commit header"
-  VERBATIM
-)
+include("${CMAKE_CURRENT_SOURCE_DIR}/BenchmarkCommit.cmake")
+azookey_add_benchmark_commit_header()
 
 add_library(azookey_benchmark_result BenchmarkCommandLine.cpp BenchmarkResult.cpp)
 target_include_directories(azookey_benchmark_result PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

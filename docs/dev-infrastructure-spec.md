@@ -182,6 +182,10 @@ zip を生成する。
 `no work to do` になることを確認する。`-ModelPath` 指定時は
 `azookey_zenzai_bench`、`-IncludeCompat` 指定時は `compat_test` も対象にする。
 dry-run の間だけ `NINJA_STATUS` を `[%f/%t] ` に固定し、終了時には元の値へ戻す。
+bench の commit ヘッダーは Git の HEAD・参照先と override の変更を依存として追跡し、
+ビルド直後に変更がなければ、ヘッダー更新や consumer の再ビルドを要求しない。
+branch 切替、detached HEAD、linked worktree、packed ref からの更新でも、
+次のビルドで記録する commit を更新する。
 bench を含む場合に限り、出力が `[1/1] Refreshing benchmark commit header` の
 1 行だけで、既存の `bench/generated/BenchmarkCommit.h` が現在の HEAD または
 有効な `AZOOKEY_BENCH_GIT_COMMIT` override と一致する場合も許可する。

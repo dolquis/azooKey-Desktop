@@ -2,7 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "advisorModel": "fable",
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
   },
   "enabledPlugins": {
     "clangd-lsp@claude-plugins-official": true,
@@ -26,7 +27,8 @@
       "Bash(python3 scripts/docs-lint.py:*)",
       "Bash(python3 scripts/check_agent_instruction_size.py:*)",
       "Bash(python3 scripts/check_test_inventory.py:*)",
-      "Bash(python3 scripts/check_skill_references.py:*)"
+      "Bash(python3 scripts/check_skill_references.py:*)",
+      "Bash(python3 scripts/check_agent_definitions.py:*)"
     ],
     "ask": [
       "Bash(git push:*)",

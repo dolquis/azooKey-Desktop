@@ -9,6 +9,7 @@ on:
       - 'plans/**'
       - '.claude/**'
       - '.agents/**'
+      - '.codex/**'
       - 'scripts/docs-lint.py'
       - 'scripts/check_agent_instruction_size.py'
       - 'scripts/tests/test_agent_instruction_size.py'
@@ -16,6 +17,9 @@ on:
       - 'scripts/tests/test_check_test_inventory.py'
       - 'scripts/check_skill_references.py'
       - 'scripts/tests/test_check_skill_references.py'
+      - 'scripts/check_agent_definitions.py'
+      - 'scripts/tests/test_check_agent_definitions.py'
+      - 'scripts/tests/test_agent_readonly_guard.py'
       - '**/CMakeLists.txt'
       - '.docs-lint.toml'
       - '.docs-lint-baseline.json'
@@ -26,6 +30,7 @@ on:
       - 'plans/**'
       - '.claude/**'
       - '.agents/**'
+      - '.codex/**'
       - 'scripts/docs-lint.py'
       - 'scripts/check_agent_instruction_size.py'
       - 'scripts/tests/test_agent_instruction_size.py'
@@ -33,6 +38,9 @@ on:
       - 'scripts/tests/test_check_test_inventory.py'
       - 'scripts/check_skill_references.py'
       - 'scripts/tests/test_check_skill_references.py'
+      - 'scripts/check_agent_definitions.py'
+      - 'scripts/tests/test_check_agent_definitions.py'
+      - 'scripts/tests/test_agent_readonly_guard.py'
       - '**/CMakeLists.txt'
       - '.docs-lint.toml'
       - '.docs-lint-baseline.json'
@@ -84,3 +92,14 @@ jobs:
 
       - name: Check repo-owned skills against the repository
         run: python3 scripts/check_skill_references.py
+
+      # .claude/agents/MANIFEST.md が区分 repo とした agent は、Claude 側 .md と Codex 側
+      # .toml の本文・description・read-only 指定を揃える契約を持つ。片側だけ直した PR を
+      # ここで止める。read-only guard hook の allow / deny 表も同じジョブで固定する。
+      - name: Test the agent definition checker and the read-only guard hook
+        run: |
+          python3 scripts/tests/test_check_agent_definitions.py
+          python3 scripts/tests/test_agent_readonly_guard.py
+
+      - name: Check agent definitions against the manifest
+        run: python3 scripts/check_agent_definitions.py

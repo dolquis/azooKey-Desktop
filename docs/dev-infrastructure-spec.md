@@ -598,7 +598,7 @@ OFF のまま）。
   一致させ、権限列（`read-only` / `build-write`）に応じた `disallowedTools` と
   `hooks.PreToolUse`、`sandbox_mode` を両側で持つ。`scripts/check_agent_definitions.py` が
   `docs-lint` ジョブで検査し、`.codex/config.toml` の parse と `[agents].enabled` も確認する。
-  分担の規約は `docs/handoff/agent-orchestration.md`
+  `tools` が `Agent` を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の

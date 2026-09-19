@@ -148,6 +148,62 @@ class CheckAgentDefinitionsTest(unittest.TestCase):
             (root / ".claude" / "agents" / "shared-agent.md").unlink()
             self.assertTrue(any("shared-agent.md が無い" in p for p in MODULE.check(root)))
 
+    def test_agent_tool_and_missing_tools_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repo(root)
+            text = claude_file("reviewer", "review", BODY).replace("tools: Read, Grep, Glob, Bash", "tools: Read, Agent, Bash")
+            write(root / ".claude" / "agents" / "reviewer.md", text)
+            self.assertTrue(any("tools に Agent" in p for p in MODULE.check(root)))
+            write(root / ".claude" / "agents" / "reviewer.md", text.replace("tools: Read, Agent, Bash\n", ""))
+            self.assertTrue(any("tools を明示していない" in p for p in MODULE.check(root)))
+
+    def test_list_style_frontmatter_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repo(root)
+            text = claude_file("reviewer", "review", BODY).replace(
+                "disallowedTools: Edit, Write, NotebookEdit", 'disallowedTools: ["Edit", "Write", "NotebookEdit"]'
+            ).replace("    - matcher: Bash", '    - matcher: "Bash"')
+            write(root / ".claude" / "agents" / "reviewer.md", text)
+            self.assertEqual(MODULE.check(root), [])
+
+    def test_guard_hook_must_sit_on_the_bash_matcher(self) -> None:
+        wrong_entry = GUARD_HOOK.replace("matcher: Bash", "matcher: Edit") + (
+            "    - matcher: Bash\n      hooks:\n        - type: command\n          command: ./other.sh\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_repo(root)
+            text = claude_file("reviewer", "review", BODY, hook=False)
+            text = text.replace("maxTurns: 10\n", "maxTurns: 10\n" + wrong_entry)
+            write(root / ".claude" / "agents" / "reviewer.md", text)
+            self.assertTrue(any("hooks.PreToolUse" in p for p in MODULE.check(root)))
+
+    def test_fallback_parser_matches_pyyaml_on_canonical_layout(self) -> None:
+        original = MODULE.yaml
+        try:
+            for path in sorted((REPO_ROOT / ".claude" / "agents").glob("*.md")):
+                if path.name == "MANIFEST.md":
+                    continue
+                parts = MODULE.split_frontmatter(path.read_text(encoding="utf-8"))
+                assert parts is not None
+                MODULE.yaml = None
+                fallback = MODULE.parse_frontmatter(parts[0])
+                MODULE.yaml = original
+                self.assertEqual(fallback.get("name"), path.stem)
+                if original is not None:
+                    reference = MODULE.parse_frontmatter(parts[0])
+                    self.assertEqual(MODULE.declares_guard_hook(fallback), MODULE.declares_guard_hook(reference))
+                    self.assertEqual(MODULE.as_tool_set(fallback.get("tools")), MODULE.as_tool_set(reference.get("tools")))
+            MODULE.yaml = None
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                make_repo(root)
+                self.assertEqual(MODULE.check(root), [])
+        finally:
+            MODULE.yaml = original
+
     def test_real_repository_is_consistent(self) -> None:
         self.assertEqual(MODULE.check(REPO_ROOT), [])
 

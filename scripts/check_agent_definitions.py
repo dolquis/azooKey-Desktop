@@ -15,7 +15,8 @@ the other, so this script does:
   `disallowedTools` (Edit, Write, NotebookEdit) plus a `hooks.PreToolUse` entry
   on `Bash` that runs `agent-readonly-guard.py`, and Codex
   `sandbox_mode = "read-only"`; `build-write` needs the Claude `disallowedTools`
-  and Codex `workspace-write`;
+  and Codex `workspace-write`; every `repo` agent lists its `tools` explicitly
+  and leaves `Agent` out, so it cannot spawn subagents;
 - back-quoted repository paths in `repo` bodies exist, and back-quoted tokens
   that look like repo-owned Skill names (`azookey-*`, `tsf-*`) are Skills;
 - `.codex/config.toml` and every `.codex/agents/*.toml` parse, and
@@ -25,6 +26,11 @@ the other, so this script does:
 file is required and its body is not compared, because a finding there could
 only be fixed at the origin. The manifest, not this script, decides which
 agents are shared.
+
+Frontmatter is parsed with PyYAML when it is installed. Without it a line-based
+fallback handles the layout used in this repo: two-space indentation, one
+`key: value` per line, `tools` / `disallowedTools` as a comma list or an inline
+`[a, b]` list, and the `hooks` block written as in `spec-drift-checker.md`.
 """
 
 from __future__ import annotations
@@ -35,6 +41,11 @@ from pathlib import Path
 import re
 import sys
 import tomllib
+
+try:  # PyYAML is optional: the fallback parser below handles the canonical layout.
+    import yaml
+except ImportError:  # pragma: no cover - exercised in the test suite by forcing None
+    yaml = None
 
 
 sys.dont_write_bytecode = True
@@ -83,47 +94,90 @@ def split_frontmatter(text: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
-def frontmatter_scalar(frontmatter: str, key: str) -> str | None:
-    """Return the value of a top-level `key: value` line, without a YAML parser."""
-    for line in frontmatter.splitlines():
-        if line.startswith("#") or line.startswith(" "):
+def parse_frontmatter(frontmatter: str) -> dict:
+    """Return the frontmatter as a dict, via PyYAML or the line-based fallback."""
+    if yaml is not None:
+        loaded = yaml.safe_load(frontmatter)
+        return loaded if isinstance(loaded, dict) else {}
+    return fallback_parse(frontmatter)
+
+
+def fallback_parse(frontmatter: str) -> dict:
+    """Parse the canonical layout without PyYAML.
+
+    Top-level `key: value` lines become strings. A `hooks:` block is reduced to
+    {"PreToolUse": [{"matcher": ..., "hooks": [{"command": ...}]}]} by treating
+    each `- matcher:` line as a new entry and attaching the `command:` lines that
+    follow it, until the next entry or the next top-level key.
+    """
+    data: dict = {}
+    hooks: dict[str, list[dict]] = {}
+    event: str | None = None
+    entry: dict | None = None
+    in_hooks = False
+    for raw in frontmatter.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
             continue
-        name, separator, value = line.partition(":")
-        if separator and name.strip() == key:
-            return value.strip().strip("\"'")
-    return None
-
-
-def frontmatter_declares_guard_hook(frontmatter: str) -> bool:
-    """True when hooks.PreToolUse has a Bash matcher running the guard script."""
-    lines = frontmatter.splitlines()
-    in_hooks = in_pre_tool_use = False
-    saw_bash_matcher = saw_guard = False
-    for line in lines:
-        if not line.startswith(" "):
-            in_hooks = line.split(":")[0].strip() == "hooks"
-            in_pre_tool_use = False
+        indent = len(raw) - len(raw.lstrip(" "))
+        line = raw.strip()
+        if indent == 0:
+            key, separator, value = line.partition(":")
+            if not separator:
+                continue
+            key = key.strip()
+            in_hooks = key == "hooks"
+            event = entry = None
+            if not in_hooks:
+                data[key] = value.strip()
             continue
         if not in_hooks:
             continue
-        stripped = line.strip()
-        if re.match(r"^[A-Za-z]+:\s*$", stripped) and len(line) - len(line.lstrip()) <= 2:
-            in_pre_tool_use = stripped == "PreToolUse:"
+        if indent == 2 and line.endswith(":"):
+            event = line[:-1]
+            hooks.setdefault(event, [])
+            entry = None
             continue
-        if not in_pre_tool_use:
+        if event is None:
             continue
-        if re.match(r"^-?\s*matcher:\s*[\"']?Bash[\"']?\s*$", stripped):
-            saw_bash_matcher = True
-        if stripped.startswith("command:") and GUARD_HOOK_NAME in stripped:
-            saw_guard = True
-    return saw_bash_matcher and saw_guard
+        if line.startswith("- "):
+            key, _, value = line[2:].partition(":")
+            if key.strip() == "matcher":
+                entry = {"matcher": value.strip().strip("\"'"), "hooks": []}
+                hooks[event].append(entry)
+            elif key.strip() == "type" and entry is not None:
+                entry["hooks"].append({})
+            continue
+        key, separator, value = line.partition(":")
+        if separator and entry is not None and key.strip() == "command":
+            if not entry["hooks"]:
+                entry["hooks"].append({})
+            entry["hooks"][-1]["command"] = value.strip().strip("\"'")
+    if hooks:
+        data["hooks"] = hooks
+    return data
 
 
-def disallowed_tools(frontmatter: str) -> set[str]:
-    value = frontmatter_scalar(frontmatter, "disallowedTools")
+def as_tool_set(value) -> set[str]:
+    """Normalise `tools` / `disallowedTools` written as a comma string or a list."""
     if value is None:
         return set()
-    return {item.strip() for item in value.strip("[]").split(",") if item.strip()}
+    if isinstance(value, str):
+        value = value.strip().strip("[]").split(",")
+    return {str(item).strip().strip("\"'") for item in value if str(item).strip()}
+
+
+def declares_guard_hook(frontmatter: dict) -> bool:
+    """True when one hooks.PreToolUse entry matches Bash and runs the guard script."""
+    hooks = frontmatter.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    for entry in hooks.get("PreToolUse") or []:
+        if not isinstance(entry, dict) or str(entry.get("matcher", "")).strip("\"'") != "Bash":
+            continue
+        for hook in entry.get("hooks") or []:
+            if isinstance(hook, dict) and GUARD_HOOK_NAME in str(hook.get("command", "")):
+                return True
+    return False
 
 
 def check_references(body: str, relative: str, repo_root: Path, paths_module) -> list[str]:
@@ -158,17 +212,21 @@ def check_pair(
     parts = split_frontmatter(claude_path.read_text(encoding="utf-8"))
     if parts is None:
         return [f"{claude_rel}: frontmatter（--- で囲む YAML）が無い"]
-    frontmatter, claude_body = parts
+    frontmatter_text, claude_body = parts
+    try:
+        frontmatter = parse_frontmatter(frontmatter_text)
+    except Exception as error:  # yaml.YAMLError or a fallback slip
+        return [f"{claude_rel}: frontmatter を parse できない: {error}"]
     try:
         codex = tomllib.loads(codex_path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
         return [f"{codex_rel}: TOML として parse できない: {error}"]
 
-    if frontmatter_scalar(frontmatter, "name") != name:
+    if str(frontmatter.get("name", "")).strip() != name:
         problems.append(f"{claude_rel}: frontmatter の name がファイル名 `{name}` と違う")
     if codex.get("name") != name:
         problems.append(f"{codex_rel}: name がファイル名 `{name}` と違う")
-    if frontmatter_scalar(frontmatter, "description") != codex.get("description"):
+    if str(frontmatter.get("description", "")).strip() != str(codex.get("description", "")).strip():
         problems.append(f"{claude_rel} / {codex_rel}: description が一致しない")
 
     codex_body = codex.get("developer_instructions")
@@ -177,13 +235,18 @@ def check_pair(
     elif claude_body.strip() != codex_body.strip():
         problems.append(f"{claude_rel} / {codex_rel}: 本文が byte 一致しない")
 
-    tools = disallowed_tools(frontmatter)
-    missing = [tool for tool in REQUIRED_DISALLOWED_TOOLS if tool not in tools]
+    tools = as_tool_set(frontmatter.get("tools"))
+    if not tools:
+        problems.append(f"{claude_rel}: tools を明示していない（allowlist が無いと Agent を含む全ツールを継承する）")
+    elif "Agent" in tools:
+        problems.append(f"{claude_rel}: tools に Agent がある（reviewer / runner は subagent を spawn しない）")
+    disallowed = as_tool_set(frontmatter.get("disallowedTools"))
+    missing = [tool for tool in REQUIRED_DISALLOWED_TOOLS if tool not in disallowed]
     if missing:
         problems.append(f"{claude_rel}: disallowedTools に {', '.join(missing)} が無い")
     sandbox = codex.get("sandbox_mode")
     if permission == "read-only":
-        if not frontmatter_declares_guard_hook(frontmatter):
+        if not declares_guard_hook(frontmatter):
             problems.append(
                 f"{claude_rel}: hooks.PreToolUse（matcher Bash、{GUARD_HOOK_NAME}）が無い"
             )

@@ -44,7 +44,7 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 
 Agent Teams は `.claude/settings.json` の `env` で有効化してある（experimental。対話セッション専用で、`-p` 実行では通常のサブエージェントとして動く）。サブエージェントが親へ結果を返して終わるのに対し、teammate は自分のコンテキストを持ち、共有 task list と `SendMessage` で lead や他の teammate と協調する。使う場面は、互いに独立した実装を複数ファイルへ同時に進めるとき、または `diff-auditor` と `pr-review-toolkit` のレビューを実装と並行させるときに限る。調査だけなら Explore agent、build / test だけなら `windows-build-runner` で足りる。
 
-- teammate の役割は `.claude/agents/` の定義を spawn 時に指定して使う（`tools` と `model` と本文が適用される。`skills` は settings から読む）。
+- teammate の役割は `.claude/agents/` の定義を spawn 時に指定して使う（`tools` と `model` と本文が適用される。`skills` は settings から読み、frontmatter の `hooks` と `disallowedTools` は適用されない。read-only reviewer は名前を付けない通常 subagent で起動する）。
 - 書込み境界は spawn prompt で明示する。同じファイルと共有 build directory を複数の teammate に割り当てない。push と PR 作成は lead が直列に行う。
 - in-process の teammate は background subagent を起動できない。`/resume` で teammate は復元されない。nested team は作れない。
 - 表示モード（`teammateMode`）は個人設定で選ぶ。repo 設定には置かない。

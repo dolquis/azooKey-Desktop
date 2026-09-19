@@ -22,8 +22,9 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 4. Human Gate（実機確認、管理者権限、TIP 登録、署名）を CI、agent レビュー、シミュレーションで代替しない。
 5. Codex Cloud への assign / delegate / mention は `docs/linear-conventions.md` §2.1 の人間承認規則に従う。
 6. agent の報告は完了判定ではなく入力である。親が実ファイルと最新 diff で検証する。
-7. reviewer と build runner は subagent を spawn しない。Claude Code の subagent は既定で再帰 spawn できるため、agent 本文で禁じ、`.claude/settings.json` の env で深さも制限する。
-8. read-only は文章ではなく機構で担保する。Claude 側は `disallowedTools` と frontmatter `hooks.PreToolUse`（`.claude/hooks/agent-readonly-guard.py`）、Codex 側は `sandbox_mode = "read-only"`。`windows-build-runner` だけは build directory へ書くため、この規則の意図的な例外として `MANIFEST.md` に記録する。
+7. reviewer と build runner は subagent を spawn しない。Claude Code の subagent は既定で再帰 spawn できるため、agent 本文で禁じるだけでなく、repo 所有 agent の `tools` を明示の allowlist にして `Agent` を含めない。`scripts/check_agent_definitions.py` がこれを検査する。
+8. read-only は文章ではなく機構で担保する。Codex 側は `sandbox_mode = "read-only"` で OS が強制する。Claude 側は `disallowedTools` と frontmatter `hooks.PreToolUse`（`.claude/hooks/agent-readonly-guard.py`）で書込み系 git、リダイレクト、build コマンドを止める。この hook は字句解析であり、インタプリタ経由の書込み（`python3 -c` など）は見えないため、逸脱のコストを上げる機構であって sandbox ではない。`windows-build-runner` は build directory へ書くため意図的な例外、`shared` の agent は origin の定義に従い、Claude 側の hook は再配布で取り込む。どちらも `.claude/agents/MANIFEST.md` の権限列に記録する。
+   Agent Teams の teammate として spawn した場合、agent 定義のうち適用されるのは `tools`、`model`、本文だけで、frontmatter の `hooks` と `disallowedTools` は乗らない。Agent Teams が有効な session では、名前を付けて spawn した subagent は teammate として起動する。read-only reviewer は名前を付けず通常の subagent として起動し、teammate にするなら Bash guard が無いことを前提に `tools` の allowlist だけで運用する。
 9. 親が編集中の working tree を reviewer に読ませない。レビューは編集を止めた checkpoint に対して行う。
 10. typo、1 行の可逆な修正、直列依存だけの仕事、1 ファイルの明白な変更は分割しない。
 
@@ -54,7 +55,7 @@ specialist の同時起動は通常 2 体、横断変更でも 3 体までとし
 | C++ を含む重要差分 | `diff-auditor` | `pr-review-toolkit`、対応する境界 |
 | Windows configure / build / test | `windows-build-runner` | build 完了後に read-only review |
 
-`boundary-reviewer` は境界名を受け取る汎用 read-only agent で、境界ごとに別 spawn する（1 体に複数境界を渡さない）。定義が無いハーネスや未導入の期間は、同じ境界の確認を親が対応 Skill（`tsf-tip-development`、`tsf-ipc-protocol`、`azookey-core-conversion`、`azookey-learning-data-safety`）を読んで担当する（parent-only fallback）。
+`boundary-reviewer` は境界名を受け取る汎用 read-only agent で、境界ごとに別 spawn する（1 体に複数境界を渡さない）。`.claude/agents/MANIFEST.md` に定義が無いハーネスでは、同じ境界の確認を親が対応 Skill（`tsf-tip-development`、`tsf-ipc-protocol`、`azookey-core-conversion`、`azookey-learning-data-safety`）を読んで担当する（parent-only fallback）。
 `diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質、`windows-build-runner` は実行と抽出だけを担う。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。
 
 ## background と並列実行
@@ -74,7 +75,7 @@ background へ回さないもの:
 - 管理者権限、TIP 登録、署名、実機アプリ互換性確認。
 - 出力先を分離できない生成処理。
 
-agent 定義には `background: true` と `isolation: worktree` を固定しない。同じ定義を Agent Teams の teammate と通常 subagent の双方に使うため、実行形は親が spawn 時に選ぶ。
+agent 定義には `background: true` と `isolation: worktree` を固定しない。同じ定義を Agent Teams の teammate と通常 subagent の双方に使うため、実行形は親が spawn 時に選ぶ。read-only reviewer を teammate にすると frontmatter の hook が外れる点は不変条件 8 のとおり。
 
 ## snapshot 契約
 
@@ -116,9 +117,9 @@ Validation owned by parent: <commands>
 1. Codex は `.codex/config.toml` の `[agents].enabled` を `false` にするか、該当 agent 定義を revert する。`scripts/check_agent_definitions.py` は `enabled = false` を検出するので、縮退中は CI の docs-lint ジョブがその旨を報告する。
 2. Claude Code は `.claude/settings.json` の `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` を外し、通常の単一 subagent または親のみへ戻す。
 3. agent が使えない環境では、上記 parent-only fallback のとおり同じ検証範囲を親が担当する。
-4. pilot Issue は Canceled または Backlog へ戻し、理由をコメントに残す。アーカイブしない。
+4. 該当する Linear Issue は Canceled または Backlog へ戻し、理由をコメントに残す。アーカイブしない。
 
 ## 機械検査
 
-`scripts/check_agent_definitions.py`（`.github/workflows/docs.yml` の `docs-lint` ジョブ）が、`.claude/agents/MANIFEST.md` の区分 `repo` の agent について Claude / Codex ペアの存在、`name` と `description` の一致、本文の byte 一致、権限列（read-only / build-write）と両側の設定の対応、本文が参照する repo path と Skill の実在、`.codex/config.toml` と `.codex/agents/*.toml` の TOML parse を検査する。
+`scripts/check_agent_definitions.py`（`.github/workflows/docs.yml` の `docs-lint` ジョブ）が、`.claude/agents/MANIFEST.md` の区分 `repo` の agent について Claude / Codex ペアの存在、`name` と `description` の一致、本文の byte 一致、権限列（read-only / build-write）と両側の設定の対応、`tools` が明示の allowlist で `Agent` を含まないこと、本文が参照する repo path と Skill の実在、`.codex/config.toml` と `.codex/agents/*.toml` の TOML parse を検査する。
 `scripts/tests/test_agent_readonly_guard.py` は read-only guard hook の allow / deny 表を固定する。

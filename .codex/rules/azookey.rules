@@ -87,9 +87,9 @@ prefix_rule(
 )
 
 prefix_rule(
-    pattern = ["python3", ["scripts/docs-lint.py", "scripts/check_agent_instruction_size.py", "scripts/check_test_inventory.py"]],
+    pattern = ["python3", ["scripts/docs-lint.py", "scripts/check_agent_instruction_size.py", "scripts/check_test_inventory.py", "scripts/check_skill_references.py", "scripts/check_agent_definitions.py"]],
     justification = "docs 系の検証スクリプト。CI と同じゲートをローカルで回す。",
-    match = ["python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json", "python3 scripts/check_test_inventory.py"],
+    match = ["python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json", "python3 scripts/check_test_inventory.py", "python3 scripts/check_agent_definitions.py"],
     not_match = ["python3 scripts/register-dev.py"],
 )
 

@@ -37,7 +37,7 @@
 
 ## ローカルサブエージェント
 
-ローカル分担の規約は `docs/linear-conventions.md` §2.1、azooKey 固有の分担例は `docs/handoff/agent-tooling-setup.md`「ローカル分担の例」を参照する。Claude Code のサブエージェント（Explore、Plan、`diff-auditor`、プラグイン agent）の使い分けは `CLAUDE.md`「サブエージェントの使い分け」が持つ。
+ローカル分担の規約は `docs/linear-conventions.md` §2.1、azooKey 固有の分担例は `docs/handoff/agent-tooling-setup.md`「ローカル分担の例」を参照する。Claude Code のサブエージェント（Explore、Plan、`diff-auditor`、プラグイン agent）の使い分けは `CLAUDE.md`「サブエージェントの使い分け」が持つ。分割レベル、touched path からの route、snapshot 契約、返却形式は `docs/handoff/agent-orchestration.md`、agent の所有と権限は `.claude/agents/MANIFEST.md` が持つ。
 
 ## セルフレビューと PR
 

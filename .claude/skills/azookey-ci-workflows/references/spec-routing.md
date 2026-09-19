@@ -5,7 +5,7 @@
 | workflow / 設定 | 役割 | 正典 | ローカルで回せる検査 |
 |---|---|---|---|
 | `.github/workflows/windows.yml` | 変更分類、Windows Debug / Release build と CTest、settings schema、PowerShell 品質、pre-commit、dependency review、llama.cpp 実モデル smoke、Vulkan compile | `docs/dev-infrastructure-spec.md` §4.1〜§4.4、§4.7、§4.8 | `pre-commit run --all-files`、`check-jsonschema`（`azookey-settings-schema-evolution` 参照）、`scripts/test-powershell-quality.ps1`（Windows） |
-| `.github/workflows/docs.yml` | docs-lint、AGENTS.md 予算、テスト一覧、Skill 参照の突合 | `docs/dev-infrastructure-spec.md` §4.3、`docs/test-inventory.md` | `python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、`python3 scripts/check_agent_instruction_size.py`、`python3 scripts/check_test_inventory.py`、`python3 scripts/check_skill_references.py`、`scripts/tests/` の各 `test_*.py` |
+| `.github/workflows/docs.yml` | docs-lint、AGENTS.md 予算、テスト一覧、Skill 参照、agent 定義の突合 | `docs/dev-infrastructure-spec.md` §4.3、`docs/test-inventory.md` | `python3 scripts/docs-lint.py --baseline .docs-lint-baseline.json`、`python3 scripts/check_agent_instruction_size.py`、`python3 scripts/check_test_inventory.py`、`python3 scripts/check_skill_references.py`、`python3 scripts/check_agent_definitions.py`、`scripts/tests/` の各 `test_*.py` |
 | `.github/workflows/sanitizers.yml` | 週次の ASan / UBSan（Linux）と MSVC ASan | `docs/dev-infrastructure-spec.md` §4.6 | `cmake --preset linux-asan-ubsan` で Linux 側を再現 |
 | `.github/workflows/benchmarks.yml` | Release benchmark の履歴と回帰警告 | `docs/dev-infrastructure-spec.md` §4.5、`azookey-quality-harness` skill | bench の単体テスト（`benchmark_result_tests`） |
 | `.github/workflows/compat.yml` | `compat_test` のビルド | `docs/dev-infrastructure-spec.md` §13、`azookey-quality-harness` skill | `compat_test_unit_tests`（Windows） |

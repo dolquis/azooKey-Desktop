@@ -593,6 +593,12 @@ OFF のまま）。
   ベンダリングしたコピーであり、閾値・終了コード・出力形式の正典は origin にある。
   この repo では編集せず、変更は origin で行って配布し直す。本節は azooKey が
   この検査を CI のどのジョブで走らせるかを定義する。
+- agent 定義の突合 — `.claude/agents/MANIFEST.md` が区分 `repo` としたカスタム agent は、
+  `.claude/agents/<name>.md` と `.codex/agents/<name>.toml` で `name`・`description`・本文を
+  一致させ、権限列（`read-only` / `build-write`）に応じた `disallowedTools` と
+  `hooks.PreToolUse`、`sandbox_mode` を両側で持つ。`scripts/check_agent_definitions.py` が
+  `docs-lint` ジョブで検査し、`.codex/config.toml` の parse と `[agents].enabled` も確認する。
+  `tools` が `Agent` を含まないことも同じ script が見る。分担の規約は `docs/handoff/agent-orchestration.md`。
 - `clang-format` 変更行ゲート（`cpp-format` ジョブ、`git-clang-format`）—
   PR の**変更行のみ**を必須チェックする。M37 受け入れ条件「`clang-format
   --dry-run` が新規追加コードに対して差分ゼロ」に対応する。既存負債（未整形の

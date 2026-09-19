@@ -26,7 +26,7 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 
 ## サブエージェントの使い分け
 
-本節は Claude Code 専用（Agent tool、Explore、Plan、カスタム agent、プラグイン agent は Claude Code 固有機能のため）。アドバイザーが判断の独立チェックであるのに対し、サブエージェントは作業の分担である。分担の共通規約（目的・対象・書込み境界・成果形式・検証の受け渡し、共有ファイルと build directory の競合回避、共有 Serena の対象変更の直列管理）は `docs/linear-conventions.md` §2.1 に従う。同じ head への push と PR 作成は `create-draft-pr` のとおり親が直列に行い、返された結論は親が実ファイルと最新 diff で検証する。
+本節は Claude Code 専用（Agent tool、Explore、Plan、カスタム agent、プラグイン agent は Claude Code 固有機能のため）。アドバイザーが判断の独立チェックであるのに対し、サブエージェントは作業の分担である。分担の共通規約は `docs/linear-conventions.md` §2.1、分割レベル（L0〜L4）、touched path からの route、background の可否、spawn 時に渡す snapshot 契約、統一返却形式、ロールバックは `docs/handoff/agent-orchestration.md` に従う。agent の所有（shared / repo）と権限は `.claude/agents/MANIFEST.md` が持ち、`scripts/check_agent_definitions.py` が Claude / Codex の対称性を検査する。同じ head への push と PR 作成は `create-draft-pr` のとおり親が直列に行い、返された結論は親が実ファイルと最新 diff で検証する。
 
 | 場面 | 使うもの |
 |---|---|
@@ -38,13 +38,13 @@ typo・コメントのみ・軽微で可逆な変更など計画の余地が小�
 | Windows の configure / build / CTest / bench を回し、失敗した target・CTest 名・warning・ログ位置だけが要る | `windows-build-runner`（`.claude/agents/`）。ソース編集と git 操作はしない |
 | 実装 PR で spec・schema・テスト一覧のどこが失効したかを網羅列挙する | `spec-drift-checker`（`.claude/agents/`、read-only）。`azookey-doc-governance` の失効チェックと併用する |
 
-`diff-auditor` は差分と契約の整合、`spec-drift-checker` は spec 側の更新漏れ、`pr-review-toolkit` はコードの質を見る。`windows-build-runner` は判定せず実行と抽出だけを担う。repo 固有の agent は `.claude/agents/` と `.codex/agents/` で本文を同期する。これらは代替関係ではなく、C++ の変更を含む PR では `diff-auditor` と `pr-review-toolkit` の両方を掛ける。typo・1 行の可逆な修正・直列依存だけの仕事は分割しない。サブエージェントの結論は完了判定ではなく入力であり、Human Gate や Codex Cloud 起動の代替にもしない。
+各 agent の役割分担、read-only の担保（`disallowedTools` と frontmatter `hooks.PreToolUse`）、reviewer は spawn しないという不変条件は `docs/handoff/agent-orchestration.md` が持つ。repo 固有の agent は `.claude/agents/` と `.codex/agents/` で本文を byte 一致させる。サブエージェントの結論は完了判定ではなく入力であり、Human Gate や Codex Cloud 起動の代替にもしない。
 
 ### Agent Teams
 
 Agent Teams は `.claude/settings.json` の `env` で有効化してある（experimental。対話セッション専用で、`-p` 実行では通常のサブエージェントとして動く）。サブエージェントが親へ結果を返して終わるのに対し、teammate は自分のコンテキストを持ち、共有 task list と `SendMessage` で lead や他の teammate と協調する。使う場面は、互いに独立した実装を複数ファイルへ同時に進めるとき、または `diff-auditor` と `pr-review-toolkit` のレビューを実装と並行させるときに限る。調査だけなら Explore agent、build / test だけなら `windows-build-runner` で足りる。
 
-- teammate の役割は `.claude/agents/` の定義を spawn 時に指定して使う（`tools` と `model` と本文が適用される。`skills` は settings から読む）。
+- teammate の役割は `.claude/agents/` の定義を spawn 時に指定して使う（`tools` と `model` と本文が適用される。`skills` は settings から読み、frontmatter の `hooks` と `disallowedTools` は適用されない。read-only reviewer は名前を付けない通常 subagent で起動する）。
 - 書込み境界は spawn prompt で明示する。同じファイルと共有 build directory を複数の teammate に割り当てない。push と PR 作成は lead が直列に行う。
 - in-process の teammate は background subagent を起動できない。`/resume` で teammate は復元されない。nested team は作れない。
 - 表示モード（`teammateMode`）は個人設定で選ぶ。repo 設定には置かない。

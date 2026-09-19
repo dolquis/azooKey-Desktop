@@ -85,6 +85,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/dev32-verification-checklist.md`](handoff/dev32-verification-checklist.md) | VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する汎用チェックリスト |
 | [`handoff/claude-code-web-setup.md`](handoff/claude-code-web-setup.md) | Claude Code on the web のセットアップ手順 |
 | [`handoff/agent-tooling-setup.md`](handoff/agent-tooling-setup.md) | Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順 |
+| [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバック |
 
 ## Phase 一覧
 

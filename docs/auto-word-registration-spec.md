@@ -418,8 +418,7 @@ parser の受理条件:
 
 ## 8. 設定
 
-`settings/mvp-settings.schema.json` に追加する（**M36 実装着手時に追加**。
-本仕様書では定義のみ記載）。
+`settings/mvp-settings.schema.json` の `autoWordRegistration` として定義する。
 
 ```json
 "autoWordRegistration": {

@@ -42,7 +42,11 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 }  // namespace
 
 TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
-  struct Case { const char* json; bool secure; bool detailed; };
+  struct Case {
+    const char* json;
+    bool secure;
+    bool detailed;
+  };
   const Case cases[] = {
       {"{}", false, false},
       {R"({"privacy":{}})", false, false},
@@ -57,9 +61,12 @@ TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
       {R"({"privacy":{"mode":"normal","redactLogs":"false"}})", false, false},
       {R"({"privacy":{"mode":"custom","redactLogs":false}})", false, false},
       {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":false}})", false, false},
-      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":true}}})", false, true},
-      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":"true"}}})", false, false},
-      {R"({"privacy":{"mode":"custom","redactLogs":true,"custom":{"detailedLogging":true}}})", false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":true}}})",
+       false, true},
+      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":"true"}}})",
+       false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":true,"custom":{"detailedLogging":true}}})",
+       false, false},
   };
   const auto dir = TestDir("azookey_settings_body_log_policy");
   const auto path = dir / "settings.json";

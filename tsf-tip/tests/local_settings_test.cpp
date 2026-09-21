@@ -72,13 +72,11 @@ TEST_F(LocalSettingsTest, ExplicitSecureModeReloadsAndNormalModeRecovers) {
   ASSERT_TRUE(reader.Start(path));
   EXPECT_TRUE(reader.AiSnapshot().privacy_policy.secure);
   Write(R"({"privacy":{"mode":"normal","redactLogs":false}})");
-  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) {
-    return !privacy.secure && privacy.detailed_logging_allowed;
-  }));
+  ASSERT_TRUE(reader.WaitForPrivacyForTest(
+      [](const auto& privacy) { return !privacy.secure && privacy.detailed_logging_allowed; }));
   Write(R"({"privacy":{"mode":"secure","redactLogs":false}})");
-  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) {
-    return privacy.secure && !privacy.detailed_logging_allowed;
-  }));
+  ASSERT_TRUE(reader.WaitForPrivacyForTest(
+      [](const auto& privacy) { return privacy.secure && !privacy.detailed_logging_allowed; }));
 }
 
 TEST_F(LocalSettingsTest, MissingSettingsUseDefaultsButMalformedSettingsFailClosed) {

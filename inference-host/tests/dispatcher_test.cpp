@@ -1676,11 +1676,11 @@ TEST_F(DispatcherTest, LearningEventsDenyUnknownAndDoNotConsumeObservationIds) {
     else
       base = R"({"wrong_reading":"こんちには","correct_reading":"こんにちは")";
     const auto before = store.size();
-    for (const auto* flags : {"", R"(,"secure":false)", R"(,"learning_allowed":true)",
-                              R"(,"secure":true,"learning_allowed":true)",
-                              R"(,"secure":true,"learning_allowed":false)",
-                              R"(,"secure":false,"learning_allowed":false)",
-                              R"(,"secure":null,"learning_allowed":"true")"}) {
+    for (const auto* flags :
+         {"", R"(,"secure":false)", R"(,"learning_allowed":true)",
+          R"(,"secure":true,"learning_allowed":true)", R"(,"secure":true,"learning_allowed":false)",
+          R"(,"secure":false,"learning_allowed":false)",
+          R"(,"secure":null,"learning_allowed":"true")"}) {
       const auto response = dispatcher.Dispatch(MakeReq(9101, type, base + flags + "}"));
       if (type == ipc::MessageType::ObserveTypo) {
         EXPECT_FALSE(response);

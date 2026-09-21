@@ -166,8 +166,8 @@ RuntimeLogLevel ParseLevel(std::string value) {
 bool IsBodyField(std::string_view key) {
   const auto lower = LowerAscii(std::string(key));
   constexpr std::array<std::string_view, 9> fields = {
-      "reading", "surface", "surface_text", "candidate.text", "preedit_text",
-      "composition", "committed_text", "prompt", "raw_keys"};
+      "reading",     "surface",        "surface_text", "candidate.text", "preedit_text",
+      "composition", "committed_text", "prompt",       "raw_keys"};
   return std::find(fields.begin(), fields.end(), lower) != fields.end();
 }
 
@@ -176,11 +176,10 @@ std::string SerializeFieldValue(const RuntimeLogField& field, bool allow_body) {
       [&field, allow_body](const auto& value) -> std::string {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, RuntimeLogSafeText>) {
-          const bool redact = IsSensitiveRuntimeLogField(field.key) &&
-                              !(allow_body && IsBodyField(field.key));
-          const std::string text = redact
-                                       ? std::string(kRedacted)
-                                       : azookey::core::RedactFreeText(value.value);
+          const bool redact =
+              IsSensitiveRuntimeLogField(field.key) && !(allow_body && IsBodyField(field.key));
+          const std::string text =
+              redact ? std::string(kRedacted) : azookey::core::RedactFreeText(value.value);
           return "\"" + EscapeJson(text) + "\"";
         } else if constexpr (std::is_same_v<T, bool>) {
           return value ? "true" : "false";
@@ -332,9 +331,9 @@ void AppendLine(const RuntimeLoggerOptions& options, const std::filesystem::path
 bool IsSensitiveRuntimeLogField(std::string_view key) {
   const auto lower = LowerAscii(std::string(key));
   constexpr std::array<std::string_view, 16> fragments = {
-      "reading", "surface", "candidate", "prompt", "raw_key",
-      "title",   "text",    "preedit",   "query",  "composition",
-      "secret", "token", "password", "credential", "api_key", "authorization",
+      "reading",  "surface",    "candidate", "prompt",        "raw_key", "title",
+      "text",     "preedit",    "query",     "composition",   "secret",  "token",
+      "password", "credential", "api_key",   "authorization",
   };
   return std::any_of(fragments.begin(), fragments.end(), [&lower](std::string_view fragment) {
     return lower.find(fragment) != std::string::npos;
@@ -359,7 +358,7 @@ RuntimeLoggerOptions RuntimeLoggerOptionsFromEnvironment(
 }
 
 static std::string SerializeRecord(const RuntimeLogRecord& record, bool body_opt_in,
-                                  core::PrivacyPolicy privacy) {
+                                   core::PrivacyPolicy privacy) {
   // Compile-time enforcement also covers manually constructed logger options.
 #if defined(_DEBUG) && !defined(NDEBUG)
   const bool allow_body = body_opt_in && !privacy.secure && privacy.detailed_logging_allowed;
@@ -387,9 +386,9 @@ std::string SerializeRuntimeLogRecord(const RuntimeLogRecord& record) {
 
 RuntimeLogger::RuntimeLogger(RuntimeLoggerOptions options) : options_(std::move(options)) {}
 
-std::string RuntimeLogger::FormatRecord(
-    RuntimeLogLevel level, std::string_view event,
-    std::initializer_list<RuntimeLogField> fields, core::PrivacyPolicy privacy) const noexcept {
+std::string RuntimeLogger::FormatRecord(RuntimeLogLevel level, std::string_view event,
+                                        std::initializer_list<RuntimeLogField> fields,
+                                        core::PrivacyPolicy privacy) const noexcept {
   if (event.empty()) return {};
   try {
     RuntimeLogRecord record;

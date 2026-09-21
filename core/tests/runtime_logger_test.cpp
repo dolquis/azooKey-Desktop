@@ -333,13 +333,12 @@ TEST(RuntimeLoggerTest, BodyLoggingRequiresEveryPermissionAndPreservesNonBodyPro
     RuntimeLogger logger(options);
     for (const bool secure : {false, true}) {
       for (const bool detailed : {false, true}) {
-        const auto line = logger.FormatRecord(
-            RuntimeLogLevel::Info, "body_probe",
-            {{"reading", SafeLogText("body-sentinel")},
-             {"window_title", SafeLogText("window-sentinel")},
-             {"credential", SafeLogText("secret-sentinel")},
-             {"candidate_count", uint64_t{3}}},
-            {secure, detailed});
+        const auto line = logger.FormatRecord(RuntimeLogLevel::Info, "body_probe",
+                                              {{"reading", SafeLogText("body-sentinel")},
+                                               {"window_title", SafeLogText("window-sentinel")},
+                                               {"credential", SafeLogText("secret-sentinel")},
+                                               {"candidate_count", uint64_t{3}}},
+                                              {secure, detailed});
 #if defined(_DEBUG) && !defined(NDEBUG)
         const bool allowed = opt_in && !secure && detailed;
 #else
@@ -352,7 +351,7 @@ TEST(RuntimeLoggerTest, BodyLoggingRequiresEveryPermissionAndPreservesNonBodyPro
       }
     }
     const auto line = logger.FormatRecord(RuntimeLogLevel::Info, "default_deny",
-                                         {{"reading", SafeLogText("body-sentinel")}});
+                                          {{"reading", SafeLogText("body-sentinel")}});
     EXPECT_EQ(line.find("body-sentinel"), std::string::npos);
   }
 }

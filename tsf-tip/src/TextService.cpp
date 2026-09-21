@@ -2013,7 +2013,7 @@ void TextService::PostPendingCommitObservation() {
 #endif
     if (pending.segments.empty()) {
       PostCommitObservation(pending.reading, pending.chosen, pending.shown, pending.secure,
-                             pending.learning_allowed);
+                            pending.learning_allowed);
     } else if (ipc_host_commit_segments_.load(std::memory_order_relaxed)) {
       ipc::CommitSegmentsObservationRequest request;
       request.observation_id = NextCommitObservationId();
@@ -2027,7 +2027,7 @@ void TextService::PostPendingCommitObservation() {
     } else {
       for (const auto& segment : pending.segments)
         PostCommitObservation(segment.reading, segment.chosen, segment.shown, pending.secure,
-                               pending.learning_allowed);
+                              pending.learning_allowed);
     }
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
@@ -2256,8 +2256,8 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   } else if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
              chosen.field.source != "symbol" && chosen.field.source != "emoji") {
     pending_commit_observation_ =
-        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown), {}, secure,
-                                 !secure && batch_learning_allowed_};
+        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown),
+                                 {},      secure,       !secure && batch_learning_allowed_};
   } else {
     pending_commit_observation_.reset();
   }
@@ -2574,7 +2574,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   HandshakeRequest hs;
   hs.tip_version = kTipVersion;
   hs.protocol_version = kHandshakeProtocolVersion;
-  hs.capabilities = {"ping", "query_candidates", "query_batch_conversion", "commit_observation",
+  hs.capabilities = {"ping",   "query_candidates", "query_batch_conversion", "commit_observation",
                      "cancel", "secure_flag"};
   hs.client_id = ipc_client_id_;
   hs.handshake_token = IpcHandshakeTokenFromEnv();
@@ -3767,8 +3767,7 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
   if (secure_input_.load(std::memory_order_relaxed) &&
       (type == ipc::MessageType::CommitObservation ||
        type == ipc::MessageType::CommitSegmentsObservation ||
-       type == ipc::MessageType::ObserveTypo ||
-       type == ipc::MessageType::QueryPredictions))
+       type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions))
     return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0});

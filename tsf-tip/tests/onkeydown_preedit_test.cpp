@@ -4781,9 +4781,11 @@ TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesNeuralBatchObservations)
   }
   EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
   const auto queued = h.service.queued_ipc_types_for_test();
-  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation), 0);
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation),
+            0);
   EXPECT_EQ(std::count(queued.begin(), queued.end(),
-                       azookey::ipc::MessageType::CommitSegmentsObservation), 0);
+                       azookey::ipc::MessageType::CommitSegmentsObservation),
+            0);
 
   h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
   h.service.preedit_kana_ = "かに";
@@ -4803,8 +4805,8 @@ TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesNeuralBatchObservations)
 
 TEST(TsfTipSecureInputTest, QueryWireUsesEventSnapshotAndAdvertisesSecureFlag) {
   using namespace azookey::ipc;
-  const std::string pipe_name = "\\\\.\\pipe\\azookey-privacy-wire-" +
-                                std::to_string(GetCurrentProcessId());
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-privacy-wire-" + std::to_string(GetCurrentProcessId());
   std::atomic<bool> advertised{false};
   std::mutex mutex;
   std::vector<std::pair<bool, bool>> policies;
@@ -4815,7 +4817,7 @@ TEST(TsfTipSecureInputTest, QueryWireUsesEventSnapshotAndAdvertisesSecureFlag) {
       const auto handshake = ParseHandshakeRequest(request.payload_json);
       if (handshake)
         advertised.store(std::find(handshake->capabilities.begin(), handshake->capabilities.end(),
-                                    "secure_flag") != handshake->capabilities.end());
+                                   "secure_flag") != handshake->capabilities.end());
       HandshakeResponse handshake_response;
       handshake_response.accepted = true;
       response.payload_json = BuildHandshakeResponse(handshake_response);

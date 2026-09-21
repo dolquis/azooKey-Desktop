@@ -216,12 +216,17 @@ void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;
+  ai.privacy_policy = {};  // Unreadable or malformed settings fail closed.
   std::string contents;
   try {
     contents = ReadBounded(path_);
+    std::error_code missing_error;
+    if (contents.empty() && !std::filesystem::exists(path_, missing_error) && !missing_error)
+      ai.privacy_policy = {false, false};  // No file uses the normal-mode defaults.
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
       ai.privacy = core::ParseAiPrivacy(*json);
+      ai.privacy_policy = core::ParsePrivacyPolicy(*json);
       ai.backend = json->GetString("aiBackend").value_or("none");
       ai.timeout_ms = static_cast<int>(
           std::clamp<int64_t>(json->GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
@@ -250,6 +255,7 @@ void TipLocalSettings::Reload() noexcept {
     next.table = std::make_shared<const core::BracketTable>(std::move(parsed.table));
   } catch (...) {
     ai = {};
+    ai.privacy_policy = {};
     next = {};  // No contents/paths in diagnostics, no writes to user configuration.
   }
   {
@@ -366,6 +372,19 @@ void TipLocalSettings::RefuseWatchArmsForTest(unsigned count) { g_refused_arms.s
 void TipLocalSettings::SetForTest(const core::BracketSettings& settings) {
   const std::lock_guard<std::mutex> lock(mutex_);
   settings_ = settings;
+}
+
+void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
+  const auto json = ipc::json::Parse(contents);
+  const std::lock_guard<std::mutex> lock(mutex_);
+  ai_.privacy_policy = json ? core::ParsePrivacyPolicy(*json) : core::PrivacyPolicy{};
+}
+
+bool TipLocalSettings::WaitForPrivacyForTest(
+    const std::function<bool(const core::PrivacyPolicy&)>& predicate) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return changed_.wait_for(lock, std::chrono::seconds(5),
+                           [&] { return predicate(ai_.privacy_policy); });
 }
 
 bool TipLocalSettings::WaitForSnapshotForTest(

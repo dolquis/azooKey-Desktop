@@ -309,6 +309,8 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   o.emplace("live", j::Value(p.live));
   if (!p.emoji_trigger.empty()) o.emplace("emoji_trigger", j::Value(p.emoji_trigger));
+  o.emplace("secure", j::Value(p.secure));
+  o.emplace("learning_allowed", j::Value(p.learning_allowed));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -323,6 +325,8 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
   p.live = v->GetBool("live").value_or(false);
   p.emoji_trigger = v->GetString("emoji_trigger").value_or(std::string());
+  p.secure = v->GetBool("secure").value_or(true);
+  p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
   return p;
 }
 
@@ -458,6 +462,8 @@ std::string BuildCommitObservationRequest(const CommitObservationRequest& p) {
   o.emplace("left_context", j::Value(p.left_context));
   o.emplace("timestamp_ms", j::Value(p.timestamp_ms));
   o.emplace("observation_id", j::Value(p.observation_id));
+  o.emplace("secure", j::Value(p.secure));
+  o.emplace("learning_allowed", j::Value(p.learning_allowed));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -482,6 +488,8 @@ std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std:
   p.timestamp_ms = v->GetUInt("timestamp_ms").value_or(0);
   // Absent for TIPs that predate DEV-554: parse as empty (no dedupe).
   p.observation_id = v->GetString("observation_id").value_or(std::string());
+  p.secure = v->GetBool("secure").value_or(true);
+  p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
   return p;
 }
 
@@ -508,6 +516,8 @@ std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservatio
   object.emplace("left_context", j::Value(p.left_context));
   object.emplace("timestamp_ms", j::Value(p.timestamp_ms));
   object.emplace("observation_id", j::Value(p.observation_id));
+  object.emplace("secure", j::Value(p.secure));
+  object.emplace("learning_allowed", j::Value(p.learning_allowed));
   return j::Stringify(j::Value(std::move(object)));
 }
 
@@ -541,6 +551,8 @@ std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRe
   request.left_context = object->GetString("left_context").value_or("");
   request.timestamp_ms = object->GetUInt("timestamp_ms").value_or(0);
   request.observation_id = object->GetString("observation_id").value_or("");
+  request.secure = object->GetBool("secure").value_or(true);
+  request.learning_allowed = object->GetBool("learning_allowed").value_or(false);
   return request;
 }
 
@@ -661,6 +673,8 @@ std::string BuildObserveTypoRequest(const ObserveTypoRequest& p) {
   o.emplace("wrong_reading", j::Value(p.wrong_reading));
   o.emplace("correct_reading", j::Value(p.correct_reading));
   o.emplace("timestamp_ms", j::Value(p.timestamp_ms));
+  o.emplace("secure", j::Value(p.secure));
+  o.emplace("learning_allowed", j::Value(p.learning_allowed));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -676,6 +690,8 @@ std::optional<ObserveTypoRequest> ParseObserveTypoRequest(const std::string& jso
   p.wrong_reading = std::move(*wrong);
   p.correct_reading = std::move(*correct);
   p.timestamp_ms = v->GetUInt("timestamp_ms").value_or(0);
+  p.secure = v->GetBool("secure").value_or(true);
+  p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
   return p;
 }
 

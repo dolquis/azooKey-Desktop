@@ -68,6 +68,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleResolveNewWord(const ipc::Envelope& req);
   bool RequiresAuthenticatedSession() const;
   void SetClientId(std::string client_id);
+  bool LearningAllowed(bool secure, bool learning_allowed, bool host_secure) const;
 
   InferenceEngine* engine_;
   RequestScheduler* scheduler_;
@@ -76,6 +77,7 @@ class Dispatcher {
   learning::AutoWordStore* auto_word_store_;
   DispatcherConfig config_;
   bool authenticated_{false};
+  bool client_supports_secure_flag_{false};
   std::string client_id_;
 };
 

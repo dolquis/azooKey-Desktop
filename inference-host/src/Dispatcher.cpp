@@ -215,8 +215,12 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     case ipc::MessageType::CommitObservation:
       return HandleCommitObservation(req);
     case ipc::MessageType::CommitSegmentsObservation: {
+      auto privacy =
+          settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
-      if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json)) {
+      if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
+          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
+                                    privacy && privacy->policy.secure)) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }
@@ -333,6 +337,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& req) {
+  client_supports_secure_flag_ = false;
   ipc::HandshakeResponse res;
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
@@ -343,6 +348,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
     const bool token_ok = config_.handshake_token.empty() ||
                           ConstantTimeEquals(parsed->handshake_token, config_.handshake_token);
     res.accepted = version_ok && token_ok;
+    client_supports_secure_flag_ =
+        res.accepted && std::find(parsed->capabilities.begin(), parsed->capabilities.end(),
+                                  "secure_flag") != parsed->capabilities.end();
     SetClientId(res.accepted ? std::move(parsed->client_id) : std::string());
   } else {
     res.accepted = false;
@@ -378,6 +386,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
 
 bool Dispatcher::RequiresAuthenticatedSession() const {
   return !config_.handshake_token.empty() && !authenticated_;
+}
+
+bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed, bool host_secure) const {
+  return client_supports_secure_flag_ && !secure && learning_allowed && !host_secure;
 }
 
 void Dispatcher::SetClientId(std::string client_id) {
@@ -549,6 +561,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   auto parsed = ipc::ParseObserveTypoRequest(req.payload_json);
   if (!parsed) return;
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  if (!LearningAllowed(parsed->secure, parsed->learning_allowed, privacy && privacy->policy.secure))
+    return;
   // The engine applies the accept filters and the "off" gate; a rejected pair
   // is simply not recorded, and there is no reply to carry that outcome.
   engine_->ObserveTypo(parsed->wrong_reading, parsed->correct_reading, NowSec());
@@ -744,8 +760,12 @@ void Dispatcher::HandleCancel(const ipc::Envelope& req) {
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Envelope& req) {
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
   ipc::CommitObservationResponse res;
-  if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json)) {
+  if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json);
+      parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
+                                privacy && privacy->policy.secure)) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
     engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),

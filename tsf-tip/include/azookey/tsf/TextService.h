@@ -146,6 +146,10 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_bracket_settings_for_test(const core::BracketSettings& settings) {
     local_settings_.SetForTest(settings);
   }
+  void set_privacy_settings_for_test(std::string_view contents) {
+    local_settings_.SetPrivacyForTest(contents);
+  }
+  void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
   bool bracket_composition_for_test() const { return bracket_composition_; }
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));
@@ -179,10 +183,20 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
   std::optional<ipc::CommitObservationRequest> first_queued_commit_observation_for_test();
+  std::optional<ipc::CommitSegmentsObservationRequest> last_queued_segments_observation_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    for (auto item = ipc_send_queue_.rbegin(); item != ipc_send_queue_.rend(); ++item)
+      if (item->type == ipc::MessageType::CommitSegmentsObservation)
+        return ipc::ParseCommitSegmentsObservationRequest(item->payload_json);
+    return std::nullopt;
+  }
+  void set_commit_segments_supported_for_test(bool supported) {
+    ipc_host_commit_segments_.store(supported);
+  }
   std::vector<ipc::MessageType> queued_ipc_types_for_test();
   void post_commit_observation_for_test(const std::string& reading,
                                         const ipc::CandidateField& chosen) {
-    PostCommitObservation(reading, chosen, {});
+    PostCommitObservation(reading, chosen, {}, secure_input_.load(), true);
   }
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
@@ -295,6 +309,8 @@ class TextService final : public ITfTextInputProcessorEx,
     ipc::CandidateField chosen;
     std::vector<ipc::CandidateField> shown;
     std::vector<PendingCommitObservation> segments;
+    bool secure{true};
+    bool learning_allowed{false};
   };
   std::optional<PendingCommitObservation> pending_commit_observation_;
 
@@ -335,6 +351,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_has_request_{false};
   bool ipc_pending_is_batch_{false};
   bool ipc_pending_live_{true};
+  bool ipc_pending_secure_{true};
+  bool ipc_pending_learning_allowed_{false};
   std::string ipc_pending_emoji_trigger_;
   // ID of the QueryCandidates currently sent but not yet received (0 = none).
   // Protected by ipc_mtx_; written by the worker thread, read by TIP thread.
@@ -410,7 +428,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();
   std::string NextCommitObservationId();
-  void PostQueryCandidates(const std::string& reading, bool live = true,
+  void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
@@ -423,6 +441,7 @@ class TextService final : public ITfTextInputProcessorEx,
     bool secure{false};
     core::AiPrivacy ai;
     std::string backend;
+    bool detailed_logging_allowed{false};
   };
   PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
   static void OnCandidatesReady(void* context);
@@ -453,7 +472,8 @@ class TextService final : public ITfTextInputProcessorEx,
 
   // M6: enqueue a CommitObservation to the IPC worker.
   void PostCommitObservation(const std::string& reading, const ipc::CandidateField& chosen,
-                             const std::vector<ipc::CandidateField>& shown);
+                             const std::vector<ipc::CandidateField>& shown, bool secure,
+                             bool learning_allowed);
   // M10: enqueue a Cancel message to the IPC worker.
   void PostCancel(uint64_t target_request_id);
   // Internal: push an item onto ipc_send_queue_ and notify the worker.

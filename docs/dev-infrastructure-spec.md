@@ -1468,7 +1468,7 @@ backend 選択、query latency、error、exception summary、learning/user-dict
   - キー駆動操作 — TIP が `OnKeyDown` で 1 `trace_id` を発番し、その操作の複数 IPC
     （`QueryCandidates` 等）を束ねる。
   - 非キー（lifecycle / settings）IPC — `Handshake` / `Ping` / `LoadModel` /
-    `QueryDiagnostics`（§12.6）/ `UpdatePrivacyMode`（privacy §9）等は、その発行側
+    `QueryDiagnostics`（§12.6）等は、その発行側
     （TIP / 設定アプリ）が操作開始時に UUIDv7 を採番する。単発操作は 1 envelope = 1 `trace_id`。
 - `request_id` は **すべて TIP（client）側で採番**し、Host は応答で echo するのみ。
   TIP には 2 系統の allocator があり、実装はこの分担を維持する（新たに統合しない）:
@@ -1528,22 +1528,33 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 
 | 優先 | 条件 | 本文系フィールドの扱い |
 |---|---|---|
-| 1（最優先） | secure 中（`PrivacyGate::IsSecure()==true`） | **常に redact**。Debug でも `AZOOKEY_LOG_BODY=1` でも出力しない |
-| 2 | プライバシー設定が詳細ログ不許可（`PrivacyGate::DetailedLoggingAllowed()==false`。`privacy.redactLogs=true`〔既定〕、または mode が `private`／`secure`） | **常に redact**。build / env を無視 |
+| 1（最優先） | secure 中（`policy.secure == true`） | **常に redact**。Debug でも `AZOOKEY_LOG_BODY=1` でも出力しない |
+| 2 | プライバシー設定が詳細ログ不許可（`policy.detailed_logging_allowed == false`。`privacy.redactLogs=true`〔既定〕、または mode が `private`／`secure`） | **常に redact**。build / env を無視 |
 | 3 | Release ビルド（既定） | **常に redact**。`request_id` / `trace_id` / 長さ / `result` / `latency_ms` 等のメタ情報のみ |
 | 4 | Debug ビルド かつ `AZOOKEY_LOG_BODY=1` | 本文を出力（opt-in。開発時のみ） |
 | 5 | Debug ビルド（既定、env 未設定） | redact（メタ情報のみ） |
 
 等価な単一条件として、本文出力は
-**`Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬IsSecure() ∧ DetailedLoggingAllowed()`** が成り立つ
+**`Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬policy.secure ∧ policy.detailed_logging_allowed`** が成り立つ
 ときのみ。いずれか 1 つでも偽なら redact する。
 
-- `PrivacyGate::DetailedLoggingAllowed()`（`docs/privacy-and-secure-input-spec.md` §5.1）が
-  mode（§3）と `privacy.redactLogs`（同 §7 schema, 既定 `true`）を集約した正典クエリであり、
-  本表 優先 2 はそれを参照するだけで重複ロジックを持たない。`redactLogs` の既定が `true` の
-  ため、**設定未変更のユーザーは Debug + `AZOOKEY_LOG_BODY=1` でも本文が出ない**。
-- redact 時は値を `***redacted***` に置換し、`window_title` は `window_title_hash`
-  のみに置換する（`docs/privacy-and-secure-input-spec.md` §8 と同一規約）。
+- `core::ParsePrivacyPolicy(settings)` が `privacy.mode` と `privacy.redactLogs` を
+  解決する。ログへ渡す TIP の設定は `TipAiSettings.privacy_policy` に保持する。
+  Host の `RuntimeSettings.privacy_policy` は学習ゲートの secure 判定に用いる。
+  詳細ログを許可するのは
+  `redactLogs = false` を満たし、mode が `normal` / `offline`、または
+  `custom` かつ `custom.detailedLogging = true` の場合に限る。
+  `private` / `secure`、設定欠落・型不正・未知 mode は詳細ログ不許可とする。
+- `RuntimeLogger::Log` / `FormatRecord` は任意のイベント単位 policy を受け取り、
+  省略時は `PrivacyPolicy{secure = true, detailed_logging_allowed = false}` 相当で
+  本文を拒否する。`AZOOKEY_LOG_BODY` は文字列が厳密に `1` の場合のみ有効。
+- TIP の同期 `conversion_selected` イベントは、`CommitSelected` 内で
+  `RequestCommitEditSession` より前に解決した policy と `reading` / `surface` を渡す。
+  非 secure、入力 scope の検査成功、グローバルの詳細ログ許可をすべて満たし、
+  プロファイルが `private` でない場合だけ本文を許可する。scope が不明なら詳細ログを拒否する。
+  非同期の確定処理へ許可を持ち越さない。他のメタデータの出力条件は変えない。
+- redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
+  パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。
 - 本ポリシーの実装は M44 診断 ZIP（§12.5）と secure redaction（同 §5 / §8）で
   **共通の redaction 関数** を用い、二重定義・不整合を作らない。
 - レイテンシ trace（§7.7）は本文を含まないメタ情報であり、本ポリシーの
@@ -2383,7 +2394,7 @@ migration 要・読み込み不可・破損・**選択中機能の資格情報�
 
 **D-014 の「実効バックエンド」の定義**: global `settings.aiBackend` と、設定された
 全 `profilesByApp.*` プロファイルの `aiBackend` を `docs/app-profile-spec.md` §4.2 の
-解決規則（`auto` を global へ展開 → `PrivacyGate` による降格を適用）で評価した実効値の
+解決規則（`auto` を global へ展開 → プライバシー判定による降格を適用）で評価した実効値の
 集合を指す。診断は前面アプリに依存しない**静的構成チェック**のため、その集合の
 **いずれか 1 つでも** `openai` に解決されれば「OpenAI 鍵を要求する」とみなす。逆に
 プロファイルが `aiBackend=openai` を宣言しても、privacy（`secure`、または `private` /

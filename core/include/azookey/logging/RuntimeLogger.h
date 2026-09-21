@@ -10,6 +10,8 @@
 #include <variant>
 #include <vector>
 
+#include "azookey/core/PrivacyPolicy.h"
+
 namespace azookey::logging {
 
 enum class RuntimeLogLevel {
@@ -41,6 +43,7 @@ struct RuntimeLogRecord {
 
 struct RuntimeLoggerOptions {
   bool enabled{false};
+  bool body_opt_in{false};
   std::string component;
   std::filesystem::path logs_directory;
   RuntimeLogLevel minimum_level{RuntimeLogLevel::Info};
@@ -62,9 +65,11 @@ class RuntimeLogger {
 
   bool enabled() const noexcept { return options_.enabled; }
   std::string FormatRecord(RuntimeLogLevel level, std::string_view event,
-                           std::initializer_list<RuntimeLogField> fields = {}) const noexcept;
+                           std::initializer_list<RuntimeLogField> fields = {},
+                           core::PrivacyPolicy privacy = {}) const noexcept;
   void Log(RuntimeLogLevel level, std::string_view event,
-           std::initializer_list<RuntimeLogField> fields = {}) noexcept;
+           std::initializer_list<RuntimeLogField> fields = {},
+           core::PrivacyPolicy privacy = {}) noexcept;
 
  private:
   RuntimeLoggerOptions options_;

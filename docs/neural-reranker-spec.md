@@ -915,9 +915,8 @@ Track B が単独で成立するための形式である。
   `docs/privacy-and-secure-input-spec.md` §5 は secure 中の候補生成を
   「内蔵変換 + 既存辞書のみ」に限定しており、LLM を追加で走らせる本層はその契約に
   反する。ユーザー設定 OFF の `disabled` とは区別して記録し、プライバシー監査で
-  識別できるようにする。M46（`PrivacyGate`）未実装の環境では判定手段が無いため
-  本条は適用されない。M46 完了後に Host 側 gate を参照する配線を入れる
-  （Track B の実装が M46 より先行しても、本条は M46 側の統合作業として扱う）。
+  識別できるようにする。判定の責務は M46 の
+  `privacy-and-secure-input-spec.md` §5.1.1 に従い、本層の消費側で適用する。
 - NllScorer は**学習データを書かない**。`LearningStore` にも Track A の露出トレース
   （§6.1）にも寄与しない。読み取り専用の評価層である。
 - ログに `reading` / `surface` を出さない。`debug_info` に載せるのは数値のみで、

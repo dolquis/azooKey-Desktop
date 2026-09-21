@@ -153,6 +153,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadString(object, "openAiApiEndpoint", settings.open_ai_api_endpoint);
   settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
   settings.ai_privacy = core::ParseAiPrivacy(ipc::json::Value(object));
+  settings.privacy_policy = core::ParsePrivacyPolicy(ipc::json::Value(object));
   settings.secure_apps = core::ParseSecureApps(ipc::json::Value(object));
   if (const auto privacy = object.find("privacy");
       privacy != object.end() && privacy->second.IsObject()) {
@@ -274,6 +275,16 @@ SettingsStore::SettingsStore(std::filesystem::path settings_path,
   last_result_.settings = settings_;
 }
 
+SettingsStore::PrivacyGuard SettingsStore::LockPrivacyPolicy() const {
+  std::unique_lock lock(privacy_mutex_);
+  return {std::move(lock), privacy_policy_};
+}
+
+void SettingsStore::PublishPrivacyPolicy() {
+  std::lock_guard lock(privacy_mutex_);
+  privacy_policy_ = settings_.privacy_policy;
+}
+
 SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
   RuntimeSettings defaults;
   SettingsLoadResult result;
@@ -299,6 +310,10 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
     } else {
       settings_ = result.settings;
     }
+    // Retaining unrelated last-good options must not retain privacy consent.
+    result.settings.privacy_policy = {};
+    settings_.privacy_policy = {};
+    PublishPrivacyPolicy();
     last_result_ = result;
     return last_result_;
   };
@@ -312,6 +327,7 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
   }
   if (!exists) {
     settings_ = result.settings;
+    PublishPrivacyPolicy();
     last_result_ = result;
     return last_result_;
   }
@@ -341,6 +357,7 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
       core::AppProfileResolver::FromSettings(*parsed, &result.profile_warnings));
   result.status = SettingsLoadStatus::Loaded;
   settings_ = result.settings;
+  PublishPrivacyPolicy();
   last_result_ = result;
   return last_result_;
 }

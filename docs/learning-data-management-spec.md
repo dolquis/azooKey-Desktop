@@ -316,9 +316,8 @@ configure offline ガードに違反しないことを CI で確認する。
 ## 8. プライバシー
 
 - M46 secure mode 中はエクスポート / インポート操作を blocking する
-  （M46 `PrivacyGate::CurrentMode() == Mode::Secure` または
-  `!PrivacyGate::LearningAllowed()` のとき。`docs/privacy-and-secure-input-spec.md`
-  §6 の API を使用し、本 spec で新規 API を追加しない）
+  （secure または学習不許可のとき。消費側の判定責務は
+  `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う）
 - バックアップ ZIP には API キー / OpenAI 関連設定を含めない（`settings`
   含める場合は M44 §12.5 と同じ redaction）
 

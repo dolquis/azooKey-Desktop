@@ -91,6 +91,9 @@ struct QueryCandidatesRequest {
   uint32_t max_candidates{10};
   bool live{false};
   std::string emoji_trigger;
+  // Missing or invalid event privacy is denied (protocol v1 additive fields).
+  bool secure{true};
+  bool learning_allowed{false};
 };
 
 struct QueryCandidatesResponse {
@@ -140,8 +143,11 @@ struct CommitObservationRequest {
   // Idempotency key for at-least-once delivery (DEV-554). Unique per TIP
   // instance and stable across resends of the same commit, so a Host that
   // already applied the observation can ignore the duplicate. Empty means the
-  // sender does not support dedupe (legacy TIP) and the Host applies it as-is.
+  // sender does not support dedupe; privacy authorization is still required.
   std::string observation_id;
+  // Missing or invalid event privacy is denied (protocol v1 additive fields).
+  bool secure{true};
+  bool learning_allowed{false};
 };
 
 struct CommitObservationResponse {
@@ -160,6 +166,9 @@ struct CommitSegmentsObservationRequest {
   std::string left_context;
   uint64_t timestamp_ms{};
   std::string observation_id;
+  // Missing or invalid event privacy is denied (protocol v1 additive fields).
+  bool secure{true};
+  bool learning_allowed{false};
 };
 
 std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservationRequest& p);
@@ -199,6 +208,9 @@ struct ObserveTypoRequest {
   std::string wrong_reading;
   std::string correct_reading;
   uint64_t timestamp_ms{};
+  // Missing or invalid event privacy is denied (protocol v1 additive fields).
+  bool secure{true};
+  bool learning_allowed{false};
 };
 
 struct ObserveTypoResponse {

@@ -67,6 +67,28 @@ TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {
   }));
 }
 
+TEST_F(LocalSettingsTest, ExplicitSecureModeReloadsAndNormalModeRecovers) {
+  Write(R"({"privacy":{"mode":"secure"}})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_TRUE(reader.AiSnapshot().privacy_policy.secure);
+  Write(R"({"privacy":{"mode":"normal","redactLogs":false}})");
+  ASSERT_TRUE(reader.WaitForPrivacyForTest(
+      [](const auto& privacy) { return !privacy.secure && privacy.detailed_logging_allowed; }));
+  Write(R"({"privacy":{"mode":"secure","redactLogs":false}})");
+  ASSERT_TRUE(reader.WaitForPrivacyForTest(
+      [](const auto& privacy) { return privacy.secure && !privacy.detailed_logging_allowed; }));
+}
+
+TEST_F(LocalSettingsTest, MissingSettingsUseDefaultsButMalformedSettingsFailClosed) {
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(reader.AiSnapshot().privacy_policy.secure);
+  EXPECT_FALSE(reader.AiSnapshot().privacy_policy.detailed_logging_allowed);
+  Write("{");
+  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) { return privacy.secure; }));
+  Write("{}");
+  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) { return !privacy.secure; }));
+}
+
 TEST_F(LocalSettingsTest, ReloadsCommonProfilesAndPreservesPreviousSnapshot) {
   Write(R"({"bracketPairing":true,"profilesByApp":{"code.exe":{"bracketPairing":"on"}}})");
   ASSERT_TRUE(reader.Start(path));

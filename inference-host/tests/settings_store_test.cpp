@@ -41,6 +41,49 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 
 }  // namespace
 
+TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
+  struct Case {
+    const char* json;
+    bool secure;
+    bool detailed;
+  };
+  const Case cases[] = {
+      {"{}", false, false},
+      {R"({"privacy":{}})", false, false},
+      {R"({"privacy":false})", true, false},
+      {R"({"privacy":{"mode":12,"redactLogs":false}})", true, false},
+      {R"({"privacy":{"mode":"unknown","redactLogs":false}})", true, false},
+      {R"({"privacy":{"redactLogs":false}})", false, true},
+      {R"({"privacy":{"mode":"normal","redactLogs":false}})", false, true},
+      {R"({"privacy":{"mode":"offline","redactLogs":false}})", false, true},
+      {R"({"privacy":{"mode":"secure","redactLogs":false}})", true, false},
+      {R"({"privacy":{"mode":"private","redactLogs":false}})", false, false},
+      {R"({"privacy":{"mode":"normal","redactLogs":"false"}})", false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":false}})", false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":false}})", false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":true}}})",
+       false, true},
+      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":"true"}}})",
+       false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":true,"custom":{"detailedLogging":true}}})",
+       false, false},
+  };
+  const auto dir = TestDir("azookey_settings_body_log_policy");
+  const auto path = dir / "settings.json";
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.json);
+    WriteText(path, item.json);
+    azookey::host::SettingsStore store(path);
+    const auto loaded = store.Load();
+    EXPECT_EQ(loaded.settings.privacy_policy.secure, item.secure);
+    EXPECT_EQ(loaded.settings.privacy_policy.detailed_logging_allowed, item.detailed);
+  }
+  const auto malformed = azookey::core::ParsePrivacyPolicy(azookey::ipc::json::Value{});
+  EXPECT_TRUE(malformed.secure);
+  EXPECT_FALSE(malformed.detailed_logging_allowed);
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsStoreTest, SettingsWrittenAfterLoadReadsOnlyAheadOfTheLoadedFile) {
   const auto dir = TestDir("azookey_settings_written_after_load");
   const auto path = dir / "settings.json";
@@ -580,12 +623,15 @@ TEST(SettingsStoreTest, SharedLockSerializesAtomicWriterBeforeRead) {
 TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
   const auto dir = TestDir("azookey_settings_reload_invalid");
   const auto path = dir / "settings.json";
-  WriteText(path, R"({"liveConversion":true,"logLevel":"debug"})");
+  WriteText(path, R"({"liveConversion":true,"logLevel":"debug",
+                      "privacy":{"mode":"normal","redactLogs":false}})");
 
   azookey::host::SettingsStore store(path);
   ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
   ASSERT_TRUE(store.settings().live_conversion);
   ASSERT_EQ(store.settings().log_level, "debug");
+  ASSERT_FALSE(store.settings().privacy_policy.secure);
+  ASSERT_TRUE(store.settings().privacy_policy.detailed_logging_allowed);
 
   WriteText(path, "{ invalid json");
   const auto result = store.Reload();
@@ -596,6 +642,15 @@ TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
   EXPECT_TRUE(store.settings().live_conversion);
   EXPECT_EQ(store.settings().log_level, "debug");
   EXPECT_EQ(store.last_result().settings.log_level, "debug");
+  EXPECT_TRUE(result.settings.privacy_policy.secure);
+  EXPECT_FALSE(result.settings.privacy_policy.detailed_logging_allowed);
+  EXPECT_TRUE(store.settings().privacy_policy.secure);
+  EXPECT_FALSE(store.settings().privacy_policy.detailed_logging_allowed);
+
+  WriteText(path, R"({"privacy":{"mode":"normal","redactLogs":false}})");
+  const auto restored = store.Reload();
+  EXPECT_FALSE(restored.settings.privacy_policy.secure);
+  EXPECT_TRUE(restored.settings.privacy_policy.detailed_logging_allowed);
   std::filesystem::remove_all(dir);
 }
 
@@ -677,4 +732,36 @@ TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
   EXPECT_EQ(store.settings().auto_word.registration_mode, "confirm");
   EXPECT_EQ(store.settings().auto_word.mining_min_count, 3);
   EXPECT_EQ(store.settings().auto_word.trending_interval_hours, 24);
+}
+
+TEST(SettingsStoreTest, PrivacyPublicationWaitsForActiveLearningGuard) {
+  using namespace std::chrono_literals;
+  const auto dir = TestDir("azookey_settings_privacy_publication");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore store(path);
+  store.Load();
+  auto guard = store.LockPrivacyPolicy();
+  EXPECT_FALSE(guard.policy.secure);
+  WriteText(path, R"({"privacy":{"mode":"secure"}})");
+  std::promise<void> started;
+  auto entered = started.get_future();
+  auto reload = std::async(std::launch::async, [&] {
+    started.set_value();
+    return store.Reload();
+  });
+  entered.wait();
+  EXPECT_EQ(reload.wait_for(100ms), std::future_status::timeout);
+  EXPECT_FALSE(guard.policy.secure);
+  guard.lock.unlock();
+  const auto result = reload.get();
+  EXPECT_TRUE(result.settings.privacy_policy.secure);
+  EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  WriteText(path, R"({"privacy":{"mode":"normal"}})");
+  store.Reload();
+  EXPECT_FALSE(store.LockPrivacyPolicy().policy.secure);
+  WriteText(path, "invalid json");
+  store.Reload();
+  EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  std::filesystem::remove_all(dir);
 }

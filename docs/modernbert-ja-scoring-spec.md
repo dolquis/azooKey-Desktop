@@ -367,7 +367,7 @@ final_score = ... + normalize(modernbert_score) * W_BERT + ...
 balanced mode（既定）では W_BERT = 0.05、quality mode では 0.10 など
 で調整する（`settings.conversionQuality` キー）。
 
-## 9. PrivacyGate 連携
+## 9. secure 判定との連携
 
 M46 secure 中は ModernBERT を **完全 OFF** にする:
 - ロードしない / 既ロード済みなら使用しない

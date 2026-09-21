@@ -7,7 +7,7 @@
 - `docs/legacy-parity-spec.md` §4（Magic Conversion。本書が §4.4〜§4.6 を拡充する）
 - `docs/romaji-batch-conversion-spec.md` §5 / §6(M58-C `ai-cleanup`、`raw_romaji`)
 - `docs/rich-features-spec.md` X-3-3（Post-Commit Lint）/ X-3-5（訂正の学習）
-- `docs/privacy-and-secure-input-spec.md` §5（secure 中の挙動契約、`PrivacyGate`）
+- `docs/privacy-and-secure-input-spec.md` §5（secure 中の挙動契約、プライバシー判定）
 - `docs/app-profile-spec.md` §4.2（M48 アプリ別 backend 解決）
 - `docs/sideload-packaging-spec.md` §9（M34 DPAPI）
 - `plans/windows-port-roadmap.md` M16 / M32 / M34 / M46 / M47 / M48 / M58-C
@@ -37,7 +37,7 @@
    system-prompt マッピング・`response_format`）（§5）。
 3. **HTTP 実装経路**（共通 WinHTTP 基盤の契約。M32 `HttpDownloader` との分担）（§6）。
 4. **エラー / リトライ / レート制限 / タイムアウト**ポリシー（M47 と整合）（§7）。
-5. **secure ゲート連携**（M46 `PrivacyGate`。外部 AI へ渡さない保証）（§8）。
+5. **secure ゲート連携**（M46 プライバシー判定。外部 AI へ渡さない保証）（§8）。
 6. **API キーの at-rest 保存**（M34 DPAPI 前の暫定平文と `dpapi:` prefix 規約）（§9）。
 7. **ストリーミング境界**（MVP `stream=false` と Phase 6 `stream=true`）（§10）。
 
@@ -60,7 +60,7 @@
   異なる 3 消費者はそれぞれ専用 IPC メッセージを持つが、Host 側は共有の
   `AiBackend` インターフェイス（単一 `Transform` コア）へ集約する（§3）。
 - **入口で secure ガード**: 外部 AI へ渡らない保証は `AiBackend` の入口（Host 側）で
-  `PrivacyGate` を強制チェックして担保する。TIP 側の抑止（§8）は多層防御の一層で
+  プライバシー判定を強制チェックして担保する。TIP 側の抑止（§8）は多層防御の一層で
   あり、Host 側ガードを省略しない（§8）。
 - **backend 中立の fallback**: `openai` 失敗・`none`・secure いずれでも、各消費者は
   定義された fallback 連鎖（§7.4）へ落ち、Host を落とさない（§7.5、M47 と整合）。
@@ -140,7 +140,7 @@ struct AiTransformResult {
 
 class AiBackend {
 public:
-  // 入口で PrivacyGate を強制チェックし（§8）、backend ごとの実装へ委譲する。
+  // 入口で プライバシー判定を強制チェックし（§8）、backend ごとの実装へ委譲する。
   // 同期 API。非同期化（X-3-3 / streaming）は既存 RequestScheduler
   // (inference-host/src/RequestScheduler.cpp) 側で行う。
   AiTransformResult Transform(const AiTransformRequest& req);
@@ -152,8 +152,8 @@ public:
 ### 3.3 backend 選択と消費者別既定
 
 - 実効 backend は次の順で解決する（既存契約を流用）。
-  1. **secure ガード**（M46）: `PrivacyGate::ExternalAiAllowed()==false` なら外部を
-     禁止、`AiCandidateAllowed()==false` なら AI 自体を禁止 → 実効 backend を
+  1. **secure ガード**（M46）: `外部 AI 許可==false` なら外部を
+     禁止、`AI 候補生成許可==false` なら AI 自体を禁止 → 実効 backend を
      `None` に強制（§8）。`privacy-and-secure-input-spec.md` §5 / §5.2 が正典。
   2. **アプリ別プロファイル**（M48）: `app-profile-spec.md` §4.2 の backend 解決。
      **M48 未実装時はこの段を飛ばし、3 のグローバル設定へフォールバックする**
@@ -398,23 +398,21 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 
 ---
 
-## 8. secure ゲート連携（M46 `PrivacyGate`）
+## 8. secure ゲート連携（M46 プライバシー判定）
 
 `privacy-and-secure-input-spec.md` §5 が正典。本書は `AiBackend` 入口での
 **強制ガード**を契約として固定する。
 
-`AiBackend` は host 側にあるため、ここで参照する `PrivacyGate` は
-`privacy-and-secure-input-spec.md` §5.1.1 の **host 側インスタンス（二次ゲート）**
-である。前面アプリ由来の secure 判定は TIP 側が行い、host 側インスタンスは設定
-`privacy.mode` と M48 プロファイル通知（および per-request フラグを持つ経路では
-その値）から解決する。`TransformSelectedText` は privacy フラグを持たないため、
-secure 中に TIP が Magic Conversion を発火させないことと、本入口ガードの
-2 層で担保する（同 §5.1.1）。
+`AiBackend` の消費側は、設定と当該要求から解決した許可条件で
+処理を制限する。入力先由来の secure 判定は TIP が担い、Host は前面アプリを
+検出しない。`TransformSelectedText` の secure 中の送信抑止は TIP が担う。
+本節の AI backend ガードは消費側の設計契約であり、共有ゲートインスタンスや
+M48 のモード通知 API を前提としない。
 
-- **入口ガード（必須）**: `AiBackend::Transform` の先頭で `PrivacyGate` を問い合わせ、
-  - `AiCandidateAllowed()==false` → 実効 backend を `None`、`error_class=BlockedBySecure`
+- **入口ガード（必須）**: `AiBackend::Transform` の入口で要求ごとの許可条件を評価し、
+  - `AI 候補生成許可==false` → 実効 backend を `None`、`error_class=BlockedBySecure`
     で早期 return（ローカル zenzai も動かさない）。
-  - `ExternalAiAllowed()==false` かつ実効 backend が `OpenAi` → 外部送信を行わず、
+  - `外部 AI 許可==false` かつ実効 backend が `OpenAi` → 外部送信を行わず、
     消費者の fallback（§7.4）へ。`local-zenzai` が許可されていればそちらへ寄せる。
   - `privacy-and-secure-input-spec.md` §5 の抑止表は `aiBackend=none` 強制の実装
     ポイントを `inference-host/src/AiBackend.cpp` と明記しており、本契約はそれを満たす。
@@ -422,7 +420,7 @@ secure 中に TIP が Magic Conversion を発火させないことと、本入�
   `TextService.cpp::OnDoubleTap`）。Host 側入口ガードは TIP 側抑止に依存せず**独立に**
   保証する（呼び出し経路の取りこぼし・将来の新消費者に対する安全側）。この二重化は
   同 §5.1.1 の二段ゲートの一部であり、TIP 側抑止だけでは本契約を満たさない。
-- **不変条件**: `ExternalAiAllowed() ⇒ AiCandidateAllowed()`（同 §5.1）。`secure` では
+- **不変条件**: `外部 AI 許可 ⇒ AI 候補生成許可`（同 §5.1）。`secure` では
   両方 false。`private` / `offline` は AI 候補可・外部不可（ローカルのみ）。
 - **ログ**: secure 中は `reading` / `surface` / 本文を redact（同 §5、
   `dev-infrastructure-spec.md` §7.6 優先順位 1）。
@@ -505,7 +503,7 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
   応答（`mode` 別 system プロンプト）が選択へ置換される（`legacy-parity-spec.md` §4）。
 - **共有抽象**: M16 / M58-C / X-3-3 が Host 側で同一 `AiBackend::Transform` を通る
   （別 backend 実装に分岐しない）。ユニットテストで 3 `AiTask` の正規化を検証する。
-- **secure ガード**: `PrivacyGate` が `AiCandidateAllowed()==false`（secure）を返すとき、
+- **secure ガード**: プライバシー判定が `AI 候補生成許可==false`（secure）を返すとき、
   `AiBackend::Transform` が外部送信せず `BlockedBySecure` で早期 return する
   （Host 側ガード単体テスト。TIP 抑止に依存しない）。
 - **エラー分類**: 401/403/429/5xx/timeout/parse が §7.2 の `AiErrorClass` に分類され、
@@ -531,7 +529,7 @@ profileに渡す。モデルの指示追従と誤字補正の品質は実モデ�
   Phase 5 直後へ前倒しする。M16 は M34 を hard prerequisite にしない（暫定平文 +
   README 注意喚起）。
 - **M16 ↔ M46**: secure ガードは §8 で `AiBackend` 入口に強制。M46 同時期/先行が
-  望ましい（roadmap M16 既述）。`PrivacyGate` 不在時は外部 AI を有効化しない安全側に
+  望ましい（roadmap M16 既述）。プライバシー判定 不在時は外部 AI を有効化しない安全側に
   倒す（実装上の暫定は M16 PR でレビュー）。
 - **M16 ↔ M48**: backend 解決順（§3.3）の第 2 段がアプリ別プロファイル
   （`app-profile-spec.md` §4.2）。M16 は M48 に依存せず、M48 未実装時はこの段を

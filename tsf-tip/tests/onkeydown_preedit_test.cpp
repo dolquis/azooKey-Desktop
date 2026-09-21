@@ -416,6 +416,7 @@ class NoopContext : public ITfContext {
   STDMETHODIMP RequestEditSession(TfClientId tid, ITfEditSession* edit_session, DWORD flags,
                                   HRESULT* session_result) override {
     request_count++;
+    requested_flags.push_back(flags);
     last_client_id = tid;
     last_flags = flags;
     if (!session_result) return E_POINTER;
@@ -524,6 +525,7 @@ class NoopContext : public ITfContext {
   }
 
   int request_count{0};
+  std::vector<DWORD> requested_flags;
   TfClientId last_client_id{TF_CLIENTID_NULL};
   DWORD last_flags{0};
   HRESULT request_result{S_OK};
@@ -1642,7 +1644,10 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "か");
   EXPECT_GE(h.context.request_count, 2);
-  EXPECT_EQ(h.context.last_flags, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE);
+  EXPECT_NE(std::find(h.context.requested_flags.begin(), h.context.requested_flags.end(),
+                      static_cast<DWORD>(TF_ES_ASYNCDONTCARE | TF_ES_READWRITE)),
+            h.context.requested_flags.end());
+  EXPECT_EQ(h.context.last_flags, static_cast<DWORD>(TF_ES_SYNC | TF_ES_READ));
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, OemCompositionTranslationUsesCurrentKeyboardLayoutWhenSupported) {
@@ -2432,6 +2437,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
           if (const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json)) {
             std::lock_guard<std::mutex> lock(observed_mtx);
             first_observation_id = payload->observation_id;
+            EXPECT_FALSE(payload->secure);
+            EXPECT_TRUE(payload->learning_allowed);
           }
           first_commit_received.store(true);
         }
@@ -2467,6 +2474,8 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitObservationIsResentAfterHostDiesBeforeAck
           if (const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json)) {
             std::lock_guard<std::mutex> lock(observed_mtx);
             second_observation_id = payload->observation_id;
+            EXPECT_FALSE(payload->secure);
+            EXPECT_TRUE(payload->learning_allowed);
           }
           second_commit_received.store(true);
           azookey::ipc::CommitObservationResponse ack;
@@ -4732,8 +4741,128 @@ TEST(TsfTipSecureInputTest, UserAddedSecureAppSuppressesCommitObservation) {
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }
 
-// spec section 4.3: a foreground window we cannot resolve is treated as secure,
-// because the app we cannot see may be the one holding the secret.
+TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesLearningAndNormalModeRecovers) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  CommitOneCandidate(h);
+  const auto restored = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->chosen.surface, "仮名");
+  EXPECT_FALSE(restored->secure);
+  EXPECT_TRUE(restored->learning_allowed);
+}
+
+TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesNeuralBatchObservations) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  h.service.set_commit_segments_supported_for_test(true);
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  h.service.preedit_kana_ = "かに";
+  azookey::ipc::CandidateField first;
+  first.reading = "か";
+  first.surface = "蚊";
+  first.source = "dictionary";
+  auto second = first;
+  second.reading = "に";
+  second.surface = "二";
+  h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {second}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  {
+    ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
+    FakeCompositionAttachment attachment(h);
+    EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  }
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  const auto queued = h.service.queued_ipc_types_for_test();
+  EXPECT_EQ(std::count(queued.begin(), queued.end(), azookey::ipc::MessageType::CommitObservation), 0);
+  EXPECT_EQ(std::count(queued.begin(), queued.end(),
+                       azookey::ipc::MessageType::CommitSegmentsObservation), 0);
+
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  h.service.preedit_kana_ = "かに";
+  h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {second}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  {
+    ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
+    FakeCompositionAttachment attachment(h);
+    EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  }
+  const auto restored = h.service.last_queued_segments_observation_for_test();
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->segments.size(), 2u);
+  EXPECT_FALSE(restored->secure);
+  EXPECT_TRUE(restored->learning_allowed);
+}
+
+TEST(TsfTipSecureInputTest, QueryWireUsesEventSnapshotAndAdvertisesSecureFlag) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-privacy-wire-" +
+                                std::to_string(GetCurrentProcessId());
+  std::atomic<bool> advertised{false};
+  std::mutex mutex;
+  std::vector<std::pair<bool, bool>> policies;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      const auto handshake = ParseHandshakeRequest(request.payload_json);
+      if (handshake)
+        advertised.store(std::find(handshake->capabilities.begin(), handshake->capabilities.end(),
+                                    "secure_flag") != handshake->capabilities.end());
+      HandshakeResponse handshake_response;
+      handshake_response.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake_response);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        policies.emplace_back(query->secure, query->learning_allowed);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  // Changing settings after enqueue must not rewrite that event's flags.
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  h.service.start_ipc_worker_for_test();
+  const auto wait_for_queries = [&](size_t count) {
+    return WaitUntil([&] {
+      const std::lock_guard<std::mutex> lock(mutex);
+      return policies.size() >= count;
+    });
+  };
+  ASSERT_TRUE(wait_for_queries(1));
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(wait_for_queries(2));
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(wait_for_queries(3));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  EXPECT_TRUE(advertised.load());
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(policies.size(), 3u);
+  EXPECT_EQ(policies[0], std::make_pair(false, true));
+  EXPECT_EQ(policies[1], std::make_pair(true, false));
+  EXPECT_EQ(policies[2], std::make_pair(false, true));
+}
+
+// Failure to identify the app hosting the TIP is treated as secure.
 TEST(TsfTipSecureInputTest, UnresolvedForegroundAppSuppressesCommitObservation) {
   TextServiceHarness h;
   h.service.set_foreground_app_for_test({});
@@ -4769,6 +4898,7 @@ TEST(TsfTipSecureInputTest, NeuralBatchCommitInSecureAppSuppressesObservation) {
   TextServiceHarness h;
   h.service.set_batch_romaji_options_for_test(true);
   h.service.set_foreground_app_for_test({"1Password.exe", "1Password", true});
+  h.service.preedit_kana_ = "かに";
   azookey::ipc::CandidateField first;
   first.reading = "か";
   first.surface = "蚊";
@@ -4779,6 +4909,7 @@ TEST(TsfTipSecureInputTest, NeuralBatchCommitInSecureAppSuppressesObservation) {
   h.service.set_cached_batch_segments_for_test({{"か", {first}}, {"に", {second}}});
   h.service.show_candidate_window_from_cache_for_test();
   FakeCompositionAttachment attachment(h);
+  ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
   EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }

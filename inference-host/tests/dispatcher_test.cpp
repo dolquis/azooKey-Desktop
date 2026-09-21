@@ -190,6 +190,15 @@ class DispatcherTest : public ::testing::Test {
     return env;
   }
 
+  void EnableEventPrivacy(azookey::host::Dispatcher& target) {
+    ipc::HandshakeRequest request;
+    request.tip_version = "test";
+    request.client_id = "privacy-test";
+    request.capabilities = {"secure_flag"};
+    target.Dispatch(
+        MakeReq(9000, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(request)));
+  }
+
   std::string learning_path;
   std::string user_dict_path;
   azookey::learning::LearningStore store;
@@ -714,7 +723,10 @@ TEST_F(DispatcherTest, CancelMessageNoReply) {
 }
 
 TEST_F(DispatcherTest, CommitObservation) {
+  EnableEventPrivacy(dispatcher);
   ipc::CommitObservationRequest c;
+  c.secure = false;
+  c.learning_allowed = true;
   c.reading = "にほん";
   c.chosen = {"二本", "にほん", 0.4, "fallback"};
   c.shown = {{"日本", "にほん", 1.0, "static"}, c.chosen};
@@ -732,7 +744,10 @@ TEST_F(DispatcherTest, CommitObservation) {
 // must answer ok=true (so the TIP stops retrying) without counting the commit
 // twice in the learning store.
 TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCounting) {
+  EnableEventPrivacy(dispatcher);
   ipc::CommitObservationRequest c;
+  c.secure = false;
+  c.learning_allowed = true;
   c.reading = "にほん";
   c.chosen = {"二本", "にほん", 0.4, "fallback"};
   c.timestamp_ms = 1700000000000ULL;
@@ -759,7 +774,10 @@ TEST_F(DispatcherTest, CommitObservationResendIsAcknowledgedWithoutDoubleCountin
 }
 
 TEST_F(DispatcherTest, CommitSegmentsSkipsAutomaticPunctuationAndDeduplicates) {
+  EnableEventPrivacy(dispatcher);
   ipc::CommitSegmentsObservationRequest request;
+  request.secure = false;
+  request.learning_allowed = true;
   request.observation_id = "segments-test";
   ipc::CandidateField candidate;
   candidate.reading = "にほん";
@@ -1463,6 +1481,7 @@ TEST_F(DispatcherTest, RepeatedHandshakeDoesNotRetainClientStateAfterDisconnect)
 // ---- M35 / M36-A ----
 
 TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
+  EnableEventPrivacy(dispatcher);
   const auto typo_path =
       (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo.tsv").string();
   std::remove(typo_path.c_str());
@@ -1470,6 +1489,8 @@ TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
   engine.SetTypoStore(&typo);
 
   ipc::ObserveTypoRequest request;
+  request.secure = false;
+  request.learning_allowed = true;
   request.wrong_reading = "こんちには";
   request.correct_reading = "こんにちは";
   request.timestamp_ms = 1'700'000'000'000ULL;
@@ -1622,4 +1643,160 @@ TEST_F(DispatcherTest, ApprovalMessagesWithoutAStoreAnswerInsteadOfCrashing) {
           .Dispatch(MakeReq(72, ipc::MessageType::ObserveTypo,
                             R"({"wrong_reading":"こんちには","correct_reading":"こんにちは"})"))
           .has_value());
+}
+
+TEST_F(DispatcherTest, LearningEventsDenyUnknownAndDoNotConsumeObservationIds) {
+  EnableEventPrivacy(dispatcher);
+  const auto typo_path = TempPath("azookey_event_privacy_typo.tsv");
+  std::remove(typo_path.c_str());
+  azookey::learning::TypoCorrectionStore typo(typo_path);
+  engine.SetTypoStore(&typo);
+  ipc::QueryCandidatesRequest query;
+  query.reading = "normal";
+  query.secure = false;
+  query.learning_allowed = true;
+  dispatcher.Dispatch(
+      MakeReq(9100, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
+  for (auto type : {ipc::MessageType::CommitObservation,
+                    ipc::MessageType::CommitSegmentsObservation, ipc::MessageType::ObserveTypo}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const std::string id = "privacy-denied-" + std::to_string(static_cast<int>(type));
+    const std::string reading = "privacy" + id;
+    std::string base;
+    if (type == ipc::MessageType::CommitObservation)
+      base =
+          R"({"reading":")" + reading +
+          R"(","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"},"observation_id":")" +
+          id + "\"";
+    else if (type == ipc::MessageType::CommitSegmentsObservation)
+      base =
+          R"({"segments":[{"reading":")" + reading +
+          R"(","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}}],"observation_id":")" +
+          id + "\"";
+    else
+      base = R"({"wrong_reading":"こんちには","correct_reading":"こんにちは")";
+    const auto before = store.size();
+    for (const auto* flags : {"", R"(,"secure":false)", R"(,"learning_allowed":true)",
+                              R"(,"secure":true,"learning_allowed":true)",
+                              R"(,"secure":true,"learning_allowed":false)",
+                              R"(,"secure":false,"learning_allowed":false)",
+                              R"(,"secure":null,"learning_allowed":"true")"}) {
+      const auto response = dispatcher.Dispatch(MakeReq(9101, type, base + flags + "}"));
+      if (type == ipc::MessageType::ObserveTypo) {
+        EXPECT_FALSE(response);
+      } else {
+        ASSERT_TRUE(response);
+        const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+        ASSERT_TRUE(parsed);
+        EXPECT_FALSE(parsed->ok);
+      }
+      EXPECT_EQ(store.size(), before);
+      EXPECT_EQ(typo.size(), 0u);
+    }
+    const auto allowed = dispatcher.Dispatch(
+        MakeReq(9102, type, base + R"(,"secure":false,"learning_allowed":true})"));
+    if (type == ipc::MessageType::ObserveTypo) {
+      EXPECT_FALSE(allowed);
+      EXPECT_EQ(typo.size(), 1u);
+    } else {
+      ASSERT_TRUE(allowed);
+      EXPECT_TRUE(ipc::ParseCommitObservationResponse(allowed->payload_json)->ok);
+      EXPECT_EQ(store.size(), before + 1);
+    }
+  }
+  engine.SetTypoStore(nullptr);
+  std::remove(typo_path.c_str());
+}
+
+TEST_F(DispatcherTest, SecureFlagCapabilityIsConnectionLocalAndResetOnEveryHandshake) {
+  ipc::CommitObservationRequest commit;
+  commit.reading = "かな";
+  commit.chosen = {"仮名", "かな", 1.0, "static"};
+  commit.secure = false;
+  commit.learning_allowed = true;
+  auto allowed = [&](azookey::host::Dispatcher& target) {
+    auto response = target.Dispatch(MakeReq(9200, ipc::MessageType::CommitObservation,
+                                            ipc::BuildCommitObservationRequest(commit)));
+    EXPECT_TRUE(response);
+    return response && ipc::ParseCommitObservationResponse(response->payload_json)->ok;
+  };
+  EXPECT_FALSE(allowed(dispatcher));
+  EnableEventPrivacy(dispatcher);
+  EXPECT_TRUE(allowed(dispatcher));
+  azookey::host::Dispatcher other(&engine, &scheduler, &user_dict, DefaultDispatcherConfig());
+  EXPECT_FALSE(allowed(other));
+  ipc::HandshakeRequest refresh;
+  refresh.tip_version = "test";
+  refresh.client_id = "privacy-test";
+  dispatcher.Dispatch(
+      MakeReq(9201, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(refresh)));
+  EXPECT_FALSE(allowed(dispatcher));
+  EnableEventPrivacy(dispatcher);
+  dispatcher.Dispatch(MakeReq(9202, ipc::MessageType::Handshake, "{}"));
+  EXPECT_FALSE(allowed(dispatcher));
+  EnableEventPrivacy(dispatcher);
+  refresh.capabilities = {"secure_flag"};
+  refresh.protocol_version = 999;
+  dispatcher.Dispatch(
+      MakeReq(9203, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(refresh)));
+  EXPECT_FALSE(allowed(dispatcher));
+  EnableEventPrivacy(dispatcher);
+  EXPECT_TRUE(allowed(dispatcher));
+}
+
+TEST_F(DispatcherTest, HostSecureSettingsRejectAllLearningAndMining) {
+  const auto settings_path = TempPath("azookey_learning_privacy_settings.json");
+  const auto mining_path = TempPath("azookey_learning_privacy_mining.tsv");
+  const auto typo_path = TempPath("azookey_learning_privacy_typo.tsv");
+  std::remove(mining_path.c_str());
+  std::remove(typo_path.c_str());
+  {
+    std::ofstream out(settings_path);
+    out << R"({"privacy":{"mode":"secure"}})";
+  }
+  azookey::host::SettingsStore settings(settings_path);
+  settings.Load();
+  azookey::learning::AutoWordStore mining(mining_path);
+  azookey::learning::TypoCorrectionStore typo(typo_path);
+  engine.SetAutoWordStore(&mining);
+  engine.SetTypoStore(&typo);
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                   &settings, &mining);
+  EnableEventPrivacy(target);
+  ipc::CommitObservationRequest commit;
+  commit.reading = "あずきーしゃ";
+  commit.chosen = {"azooKey社", commit.reading, 1.0, "static"};
+  commit.secure = false;
+  commit.learning_allowed = true;
+  ipc::CommitSegmentsObservationRequest segments;
+  segments.segments.push_back({commit.reading, commit.chosen, {}, false});
+  segments.secure = false;
+  segments.learning_allowed = true;
+  ipc::ObserveTypoRequest observation;
+  observation.wrong_reading = "こんちには";
+  observation.correct_reading = "こんにちは";
+  observation.secure = false;
+  observation.learning_allowed = true;
+  const auto before = store.size();
+  for (auto type :
+       {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
+    const auto payload = type == ipc::MessageType::CommitObservation
+                             ? ipc::BuildCommitObservationRequest(commit)
+                             : ipc::BuildCommitSegmentsObservationRequest(segments);
+    const auto response = target.Dispatch(MakeReq(9300, type, payload));
+    ASSERT_TRUE(response);
+    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+    ASSERT_TRUE(parsed);
+    EXPECT_FALSE(parsed->ok);
+  }
+  EXPECT_FALSE(target.Dispatch(
+      MakeReq(9301, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
+  EXPECT_EQ(store.size(), before);
+  EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
+  EXPECT_EQ(typo.size(), 0u);
+  EXPECT_FALSE(std::filesystem::exists(mining_path));
+  EXPECT_FALSE(std::filesystem::exists(typo_path));
+  engine.SetAutoWordStore(nullptr);
+  engine.SetTypoStore(nullptr);
+  std::remove(settings_path.c_str());
 }

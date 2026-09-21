@@ -658,7 +658,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
     GET+SHA256 ダウンロードを後から実装（**M32 を Phase 5 へ前倒ししない**。§6 / §13）。
   - **API キー**: `dpapi:` prefix 規約で保存（§9）。M34 を Phase 5 直後へ前倒し、ただし
     M16 は M34 を hard prerequisite にしない（暫定平文 + README 注意喚起）。
-  - **secure ゲート**: `AiBackend` 入口で `PrivacyGate` を強制チェック（§8、M46 連携）。
+  - **secure ゲート**: `AiBackend` 入口で プライバシー判定を強制チェック（§8、M46 連携）。
 - **受け入れ条件**:
   - 英数 / かな双方のダブルタップで `TransformSelectedText` が呼ばれる
   - OpenAI 互換エンドポイントで `gpt-4o-mini` 応答が表示される
@@ -1119,7 +1119,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ `app_id` を伝播）、
   `settings-app/`（アプリ別設定タブ）。
 - **実装範囲**: `docs/app-profile-spec.md`。
-  - `ForegroundAppDetector` + 500ms TTL キャッシュ
+  - `ForegroundAppDetector::Get()` による入力先検出とプロセス名キャッシュ
   - 解決順: `profilesByApp[process_name]` →
     `profilesByApp[window_class]` → `profilesByApp[default]` → グローバル
   - 候補タグ重み（Technical / English / Polite など）の boost
@@ -1219,15 +1219,15 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: `ai-cleanup` モードで誤字補正・句読点挿入・整文まで AI に委譲する。
 - **前提**: M58-A 完了、M16（aiBackend）、M24（local-zenzai）、**M46（セーフ入力モード /
-  PrivacyGate）**。`ai-cleanup` は全文を外部 AI（OpenAI 等）に送りうるため、M46 の
+  プライバシー判定）**。`ai-cleanup` は全文を外部 AI（OpenAI 等）に送りうるため、M46 の
   secure ゲートを前提とする（`docs/privacy-and-secure-input-spec.md`）。
 - **変更対象**: `inference-host/src/Dispatcher.cpp`・`InferenceEngine.cpp`
   （`mode="ai-cleanup"` 経路）、`settings/mvp-settings.schema.json`
-  （`batchAutoPunctuation`）、M46 の `PrivacyGate` 連携。
+  （`batchAutoPunctuation`）、M46 の プライバシー判定連携。
 - **実装範囲**: `docs/romaji-batch-conversion-spec.md` §5・§6.1・§7。
   - `aiBackend`（local-zenzai / openai）へ全文委譲、`includeContextInAITransform` 整合
   - `mode=ai-cleanup` のリクエストでは `raw_romaji`（生ローマ字）を必須で送る
-  - **secure 入力（M46 PrivacyGate）では `ai-cleanup` を強制無効化**し外部 AI へ送らない
+  - **secure 入力（M46 プライバシー判定）では `ai-cleanup` を強制無効化**し外部 AI へ送らない
     （`neural` / かな確定へ fallback）。secure-app・パスワード欄の全文が外部 AI に
     渡らないことを保証する
   - `batchAutoPunctuation` を `QueryBatchConversion` の `auto_punctuation` として host へ
@@ -1237,7 +1237,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - `batchConversionMode=ai-cleanup` で誤字を含むローマ字全文が補正・整文される
     （`raw_romaji` を必須送信し、生ローマ字の誤字パターンを補正に使う）
   - secure 指定アプリ / パスワード欄では `ai-cleanup` が外部 AI に送信せず `neural`
-    / かな確定に fallback する（M46 PrivacyGate と整合）
+    / かな確定に fallback する（M46 プライバシー判定と整合）
   - `aiBackend=none` のとき `neural` に fallback して動作する
   - `batchAutoPunctuation` ON/OFF で句読点挿入が切り替わる
 - **参照仕様**: `docs/romaji-batch-conversion-spec.md`
@@ -1712,7 +1712,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - エラーコード体系 enum（transport / protocol / business）
   - タイムアウト規約（ソフト/ハード）
   - 入力本文・候補語のログ redaction は §7.6 の優先順位に従う。本文出力は
-    `Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬secure ∧ DetailedLoggingAllowed()` のときのみ
+    `Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬secure ∧ policy.detailed_logging_allowed` のときのみ
     （`privacy.redactLogs` 既定 `true`。単に Debug というだけでは出さない）
 - **受け入れ条件**:
   - TIP / Host が JSON Lines ログを所定ディレクトリに出力する
@@ -1955,7 +1955,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   ため、M16 が先行すると secure アプリ向けの初期プライバシーギャップが
   発生する）。M34（DPAPI）とは並行で進められる。
 - **変更対象**: `settings/mvp-settings.schema.json`（`privacy.*` ブロック
-  追加）、`inference-host/src/PrivacyGate.cpp`（新規）、
+  追加）、`tsf-tip/src/TextService.cpp`（secure 判定と送信抑止）、
   `inference-host/src/Dispatcher.cpp`（CommitObservation /
   QueryPredictions / Magic Conversion の抑止）、
   `tsf-tip/src/ForegroundAppDetector.cpp`（新規、M48 と共用）。

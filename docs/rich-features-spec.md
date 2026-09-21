@@ -513,28 +513,9 @@ QueryCandidates / QueryPredictions / QueryLiveConversion で `context` フィー
 
 ### X-4-4. ForegroundAppDetector
 
-```cpp
-class ForegroundAppDetector {
-public:
-    // GetForegroundWindow + GetWindowThreadProcessId + GetModuleFileNameEx
-    // 500ms TTL キャッシュ
-    std::string CurrentAppId();
-private:
-    std::string cached_;
-    uint64_t    cached_ms_ = 0;
-};
-```
-
-- `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` で対象プロセスハンドルを取得
-- `K32GetModuleFileNameExW(hProc, nullptr, ...)` で実行ファイルパス
-- パスから basename を取り出し、lowercase 化（`"Code.exe"` → `"code.exe"`）
-
-> **M46/M48 統合（正準定義）**: 自動 secure 判定（M46）とアプリ別プロファイル（M48）で
-> 共用する `ForegroundAppDetector` の正準定義（`ForegroundApp` 構造体・500ms TTL +
-> `EVENT_SYSTEM_FOREGROUND` 無効化・`QueryFullProcessImageNameW` 解決・fail-closed）は
-> `docs/privacy-and-secure-input-spec.md` §4.2 / §4.3 に一本化する。本節 X-4-4 の
-> `CurrentAppId()` / `K32GetModuleFileNameExW` はその初期スケッチであり、実装時は M46 の
-> 正準定義に従う。
+入力先アプリの識別は `ForegroundAppDetector::Get()` を使う。型、owner thread、
+プロセス名キャッシュ、同一プロセスのクラス取得、解決不能時の扱いは
+`docs/privacy-and-secure-input-spec.md` §4.2 / §4.3 を正典とする。
 
 ### X-4-5. bench 拡張
 

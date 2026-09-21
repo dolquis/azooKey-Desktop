@@ -7,6 +7,7 @@
 #include <locale>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "azookey/core/PlatformPaths.h"
@@ -322,4 +323,80 @@ TEST(RuntimeLoggerTest, FormatRecordPreservesFieldsAndRedactionForDebugView) {
   EXPECT_NE(record.find("\"request_id\":42"), std::string::npos);
   EXPECT_EQ(record.find("private-preedit"), std::string::npos);
   EXPECT_NE(record.find("***redacted***"), std::string::npos);
+}
+
+TEST(RuntimeLoggerTest, BodyLoggingRequiresEveryPermissionAndPreservesNonBodyProtection) {
+  for (const bool opt_in : {false, true}) {
+    RuntimeLoggerOptions options;
+    options.component = "tip";
+    options.body_opt_in = opt_in;
+    RuntimeLogger logger(options);
+    for (const bool secure : {false, true}) {
+      for (const bool detailed : {false, true}) {
+        const auto line = logger.FormatRecord(
+            RuntimeLogLevel::Info, "body_probe",
+            {{"reading", SafeLogText("body-sentinel")},
+             {"window_title", SafeLogText("window-sentinel")},
+             {"credential", SafeLogText("secret-sentinel")},
+             {"candidate_count", uint64_t{3}}},
+            {secure, detailed});
+#if defined(_DEBUG) && !defined(NDEBUG)
+        const bool allowed = opt_in && !secure && detailed;
+#else
+        const bool allowed = false;
+#endif
+        EXPECT_EQ(line.find("body-sentinel") != std::string::npos, allowed);
+        EXPECT_EQ(line.find("window-sentinel"), std::string::npos);
+        EXPECT_EQ(line.find("secret-sentinel"), std::string::npos);
+        EXPECT_NE(line.find("\"candidate_count\":3"), std::string::npos);
+      }
+    }
+    const auto line = logger.FormatRecord(RuntimeLogLevel::Info, "default_deny",
+                                         {{"reading", SafeLogText("body-sentinel")}});
+    EXPECT_EQ(line.find("body-sentinel"), std::string::npos);
+  }
+}
+
+TEST(RuntimeLoggerTest, BodyEnvironmentRequiresExactOne) {
+  for (const auto* value : {"", "0", "true", "01", "1"}) {
+    ScopedEnvironment body("AZOOKEY_LOG_BODY", value);
+    const auto options = azookey::logging::RuntimeLoggerOptionsFromEnvironment("tip");
+    EXPECT_EQ(options.body_opt_in, std::string(value) == "1");
+  }
+}
+
+TEST(RuntimeLoggerTest, ConcurrentEventPoliciesDoNotShareBodyPermission) {
+  const auto directory = TestDirectory("azookey_runtime_log_event_policy");
+  RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.body_opt_in = true;
+  options.component = "tip";
+  options.logs_directory = directory;
+  RuntimeLogger logger(options);
+  auto write = [&](bool allowed) {
+    for (int i = 0; i < 16; ++i) {
+      const auto body = allowed ? "allowed-sentinel" : "denied-sentinel";
+      const azookey::core::PrivacyPolicy privacy{!allowed, allowed};
+      const auto formatted = logger.FormatRecord(RuntimeLogLevel::Info, "parallel",
+                                                 {{"reading", SafeLogText(body)}}, privacy);
+#if defined(_DEBUG) && !defined(NDEBUG)
+      EXPECT_EQ(formatted.find(body) != std::string::npos, allowed);
+#else
+      EXPECT_EQ(formatted.find(body), std::string::npos);
+#endif
+      logger.Log(RuntimeLogLevel::Info, "parallel", {{"reading", SafeLogText(body)}}, privacy);
+    }
+  };
+  std::thread allow(write, true);
+  std::thread deny(write, false);
+  allow.join();
+  deny.join();
+  const auto logs = ReadAllLogs(directory);
+  EXPECT_EQ(logs.find("denied-sentinel"), std::string::npos);
+#if defined(_DEBUG) && !defined(NDEBUG)
+  EXPECT_NE(logs.find("allowed-sentinel"), std::string::npos);
+#else
+  EXPECT_EQ(logs.find("allowed-sentinel"), std::string::npos);
+#endif
+  std::filesystem::remove_all(directory);
 }

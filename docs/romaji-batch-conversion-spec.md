@@ -156,7 +156,7 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   `includeContextInAITransform` の文脈付与方針と整合させる。`aiBackend == none`
   のときは `neural` に fallback する。**このモードでは `raw_romaji`（生ローマ字）が
   必須**（§6.1）。誤字補正は打鍵そのものの誤りパターンを参照するため。
-  **secure 入力（M46 PrivacyGate）では本モードを強制無効化**し、全文を外部 AI へ
+  **secure 入力（M46 のプライバシー判定）では本モードを強制無効化**し、全文を外部 AI へ
   送らない（`neural` / かな確定へ fallback）。`ai-cleanup` は全文を外部 AI
   （OpenAI 等）に渡しうるため、secure-app・パスワード欄の入力が漏れないよう M46 の
   セーフ入力契約（`docs/privacy-and-secure-input-spec.md`）に従う。

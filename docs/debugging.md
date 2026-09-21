@@ -147,8 +147,18 @@ Release ビルドでは入力本文、候補本文、`prompt`、`window_title` �
 ```
 
 Debug ビルドでは、TIP の構造化 JSON レコードを `OutputDebugStringA` でも出力するため、
-DebugView または WinDbg で同じフィールドと redact 済みの値を観測できる。
+DebugView または WinDbg で同じフィールドと redaction ポリシー適用後の値を観測できる。
 Host の stderr も従来どおり残る。
+
+本文を確認する場合は Debug ビルドに加え、`AZOOKEY_LOG_BODY=1`、非 secure の入力、
+`privacy.redactLogs=false`、詳細ログを許可するモードがすべて必要となる。
+許可するモードは `normal` / `offline`、または `custom.detailedLogging=true` の
+`custom` である。`private` / `secure`、欠落・不正な設定、イベントの policy 省略時は
+本文を出力しない。TIP の `conversion_selected` の `reading` / `surface` は候補確定を
+要求する直前の policy で判定し、入力 scope が不明、または profile が `private` の場合も
+本文を出力しない。確認後は本文ログの opt-in を解除する。
+資格情報・パス・ウィンドウタイトルと診断 ZIP は、この opt-in でも redact する。
+正典は `dev-infrastructure-spec.md` §7.6。
 
 ### 候補 UI の `pbShow` を収集する
 

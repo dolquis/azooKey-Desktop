@@ -23,7 +23,7 @@ ipc::json::Object SanitizeAppProfiles(const ipc::json::Object& profiles,
                                       std::vector<std::string>* warnings = nullptr);
 
 // Immutable, I/O-free profile selection. Resolved fields are configuration,
-// not authorization: consumers must enforce PrivacyGate before acting on them.
+// not authorization: consumers must enforce privacy constraints before acting on them.
 class AppProfileResolver {
  public:
   static AppProfileResolver FromSettings(const ipc::json::Value& settings,

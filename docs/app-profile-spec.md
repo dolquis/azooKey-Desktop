@@ -24,7 +24,7 @@
   `profilesByApp` 優先
 - **解決順は明示**: process_name → window_class → default → global
 - **secure 優先**: M46 の secure mode が profile より優先される
-- **キャッシュ**: ForegroundApp の検出は 500ms TTL でキャッシュ
+- **キャッシュ**: 入力先のプロセス名は無効化までキャッシュし、ウィンドウクラスは取得ごとに更新
 
 ## 3. ForegroundAppDetector
 
@@ -32,11 +32,11 @@ M46 で導入した `tsf-tip/src/ForegroundAppDetector.cpp` を共用する。
 **`ForegroundApp` 構造体・キャッシュ戦略・スレッド親和性・解決機構・
 fail-closed の正準定義は `docs/privacy-and-secure-input-spec.md` §4.2 / §4.3**
 とし、本 spec では再定義しない。M48 は同一インスタンスから `ForegroundApp`
-（`process_name` は `lower()` 正規化済み / `window_class` / `window_title_hash`）
-を取得する。`window_title` 生値は検出器プロセス内専用で IPC には出さない（§3.1）。
-フォーカス変更時の invalidate（`EVENT_SYSTEM_FOREGROUND`）と 500ms TTL も §4.3 に従う。
+（UTF-8 の `process_name` / `window_class` と `resolved`）を `Get()` で取得する。
+プロセス名は無効化までキャッシュし、クラス名は取得ごとに更新する。
+タイトル・タイトル hash は取得しない。詳細は §4.3 に従う。
 
-`ForegroundApp.resolved == false`（前面 / プロセス名が解決不能）の場合、M48 は
+`ForegroundApp.resolved == false`（入力先のプロセス名が解決不能）の場合、M48 は
 プロファイル未適用＝`default` / グローバルで扱う（boost なし）。プライバシー軸の
 fail-closed（解決不能を secure 扱い）は M46 §4.3 が担当し、プロファイル軸はそれに
 従属する。
@@ -50,14 +50,12 @@ fail-closed（解決不能を secure 扱い）は M46 §4.3 が担当し、プ�
 {
   "app": {
     "process_name": "code.exe",
-    "window_class": "Chrome_WidgetWin_1",
-    "window_title_hash": "0xabcd1234"
+    "window_class": "Chrome_WidgetWin_1"
   }
 }
 ```
 
-`window_title` 本体は機密の可能性があるため `hash` のみを送る（M46 §8 と
-整合）。
+これは Host 向けの伝達契約である。検出器は IPC を送らず、タイトルやその hash も供給しない。
 
 ## 4. 設定スキーマ
 
@@ -196,16 +194,16 @@ enum `["auto", "local-zenzai", "openai", "none"]` の **`auto` はプロファ�
 持たない）。実装は `auto` を root へ書き戻さず、解決時に `settings.aiBackend` へ展開する。
 
 **プライバシーが profile backend に優先（backend 制約）**: backend 解決はモード名の
-列挙ではなく M46 `PrivacyGate` の per-axis クエリ（§5.1。**§5 のグローバル floor 適用後**の
+列挙ではなく M46 プライバシー判定の per-axis クエリ（§5.1。**§5 のグローバル floor 適用後**の
 実効状態で評価し、per-app `normal` がグローバル `offline` / `secure` / `custom` を緩和した
 後の値ではない）に従う。これにより `custom`（例: 外部 AI のみ無効化）を含め全モードを
 統一的に扱う。優先順位を以下に確定する:
 
 1. まず `auto` を `settings.aiBackend` へ展開する（`auto` のまま下の判定に渡さない。
    継承された `openai` を取りこぼさないため）。
-2. `PrivacyGate::AiCandidateAllowed() == false`（`secure`、または `custom` で AI 候補生成を
+2. `AI 候補生成許可 == false`（`secure`、または `custom` で AI 候補生成を
    無効化）→ `aiBackend = none`（外部・ローカルとも AI を使わない。M46 §5 の抑止契約に従う）。
-3. `PrivacyGate::ExternalAiAllowed() == false`（`private` / `offline` / `custom` で外部 AI
+3. `外部 AI 許可 == false`（`private` / `offline` / `custom` で外部 AI
    無効）→ 外部 `openai` を禁止。展開後の値が `openai`（明示・`auto` 継承のいずれも）なら
    モデル搭載時 `local-zenzai` へ降格、未搭載なら `none`。`local-zenzai` は許可。
 4. 上記いずれにも該当しない（外部 AI 許可）→ 展開後の `profile.aiBackend` を適用。
@@ -252,23 +250,11 @@ window_class → default）に限り、下記の **グローバル floor** を�
 `private` / `secure` の場合、`normal` はその floor までしか戻らず、リテラルな `normal`
 （保護なし）には落とさない。
 
-`privacyMode` が `inherit` 以外（`normal` / `private` / `secure`）の
-プロファイルは、解決後に M46 `PrivacyGate` へ通知する。理由文字列は
-モードごとに以下:
-
-- `secure` → `auto_secure_app`（学習・外部 AI 完全 OFF）
-- `private` → `auto_private_app`（外部 AI OFF / 学習は context_hash のみ）
-- `normal` → `auto_normal_app`（上位 profile レイヤの `private` / `secure` を明示解除して
-  **グローバル floor** に戻す。グローバルが `offline` / `private` / `secure` の場合はその
-  floor を維持する）
-
-通知先は `docs/privacy-and-secure-input-spec.md` §5.1.1 の **host 側インスタンス**
-である（プロファイル解決は `AppProfileResolver` が host 側で行うため）。
-
-`inherit` の場合は通知せず、グローバル設定（`settings.privacyMode` 等）を
-そのまま使う。`PrivacyGate` 側は同一ユーザーアクション内で複数通知を受けた場合、
-各軸で最も厳しい制約を採り（`secure` > `private` / `offline` > `normal`。`private` と
-`offline` は各軸の union）、かつグローバル `privacy.mode` を floor として下回らない。
+`privacyMode` はプロファイルからの要求値であり、許可そのものではない。
+消費側は解決結果とグローバル設定から各軸の制約を評価し、グローバル floor を維持する。
+`inherit` はグローバル方針を継承する。この契約はモード遷移通知や理由文字列の
+送信 API を定義しない。TIP と Host の責務は
+`docs/privacy-and-secure-input-spec.md` §5.1.1 に従う。
 
 ## 6. 既存 `promptPrefixByApp` との統合
 
@@ -357,18 +343,18 @@ public:
 ```
 
 Dispatcher への適用では、IPC ハンドラの先頭で `Resolve` を呼び、
-PrivacyGate の許可範囲内で候補生成 / rerank / external AI を切り替える。
+プライバシー判定の許可範囲内で候補生成 / rerank / external AI を切り替える。
 この消費側の統合は共通基盤とは別に実装する。
 
 ### 9.1 共通基盤と機能への適用境界
 
 resolver は設定フィールドを選ぶ純粋な処理であり、TSF 操作、IPC、ファイル I/O、
-PrivacyGate の通知を行わない。`privacyMode` はプロファイルからの要求値であり、
-グローバル floor 適用後の許可判定ではない。消費側は §4.2 / §5 の PrivacyGate 制約を
+許可判定を行わない。`privacyMode` はプロファイルからの要求値であり、
+グローバル floor 適用後の許可判定ではない。消費側は §4.2 / §5 の プライバシー判定制約を
 満たしてから候補・学習・AI に適用する。共通基盤だけでは、これらの実動作は切り替わらない。
 カッコ設定の適用境界は `bracket-pairing-spec.md` §4.5.0 とする。
 カッコ設定を適用する in-process TIP は入力先の自プロセス名と自スレッドのウィンドウクラスを
-使う。§3 の M46 / Host 向け前面アプリ・プライバシー検出を、このローカル識別で代替しない。
+使う。M46 / M48 も §3 の同じ入力先識別を共用する。
 
 不正なプロファイル・未知フィールド・型や enum の不正は除外して下位層を継承し、
 タグ倍率は読み込み時にも `[1.0, 3.0]` に制限する。未知のタグ名は保存時に保持し、
@@ -379,7 +365,7 @@ PrivacyGate の通知を行わない。`privacyMode` はプロファイルから
 
 - unit: 解決順（process_name → window_class → default → global）の網羅
 - unit: `promptPrefixByApp` legacy 読み込み + `profilesByApp` 優先
-- unit: `privacyMode = secure` 時に M46 PrivacyGate へ通知
+- unit: `privacyMode = secure` の要求値とグローバル floor の解決
 - integration: `code.exe` 検出 → 技術語タグ boost
 - integration: `outlook.exe` 検出 → polite タグ boost
 - e2e（M50 connect）: アプリ切替 1 秒以内にプロファイル反映

@@ -672,3 +672,215 @@ TEST(PayloadsTest, ResolveNewWordRoundTripsAndRejectsUnknownAction) {
   ASSERT_TRUE(parsed_response);
   EXPECT_TRUE(parsed_response->ok);
 }
+
+TEST(PayloadsTest, EventPrivacyDefaultsDenyAndExplicitFlagsRoundTrip) {
+  {
+    azookey::ipc::QueryCandidatesRequest request;
+    request.reading = "kana";
+    EXPECT_TRUE(request.secure);
+    EXPECT_FALSE(request.learning_allowed);
+    for (bool secure : {false, true}) {
+      for (bool allowed : {false, true}) {
+        request.secure = secure;
+        request.learning_allowed = allowed;
+        const auto parsed = azookey::ipc::ParseQueryCandidatesRequest(
+            azookey::ipc::BuildQueryCandidatesRequest(request));
+        ASSERT_TRUE(parsed);
+        EXPECT_EQ(parsed->secure, secure);
+        EXPECT_EQ(parsed->learning_allowed, allowed);
+      }
+    }
+    {
+      const auto parsed = azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"kana"})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed =
+          azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"kana","secure":false})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, false);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseQueryCandidatesRequest(
+          R"({"reading":"kana","learning_allowed":true})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, true);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseQueryCandidatesRequest(
+          R"({"reading":"kana","secure":null,"learning_allowed":"true"})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseQueryCandidatesRequest(
+          R"({"reading":"kana","secure":0,"learning_allowed":1})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+  }
+  {
+    azookey::ipc::CommitObservationRequest request;
+    request.reading = "kana";
+    request.chosen.surface = "word";
+    EXPECT_TRUE(request.secure);
+    EXPECT_FALSE(request.learning_allowed);
+    for (bool secure : {false, true}) {
+      for (bool allowed : {false, true}) {
+        request.secure = secure;
+        request.learning_allowed = allowed;
+        const auto parsed = azookey::ipc::ParseCommitObservationRequest(
+            azookey::ipc::BuildCommitObservationRequest(request));
+        ASSERT_TRUE(parsed);
+        EXPECT_EQ(parsed->secure, secure);
+        EXPECT_EQ(parsed->learning_allowed, allowed);
+      }
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitObservationRequest(
+          R"({"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitObservationRequest(
+          R"({"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"},"secure":false})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, false);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitObservationRequest(
+          R"({"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"},"learning_allowed":true})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, true);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitObservationRequest(
+          R"({"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"},"secure":null,"learning_allowed":"true"})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitObservationRequest(
+          R"({"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"},"secure":0,"learning_allowed":1})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+  }
+  {
+    azookey::ipc::CommitSegmentsObservationRequest request;
+    request.segments.push_back({"kana", {"word", "kana", 1.0, "static"}, {}, false});
+    EXPECT_TRUE(request.secure);
+    EXPECT_FALSE(request.learning_allowed);
+    for (bool secure : {false, true}) {
+      for (bool allowed : {false, true}) {
+        request.secure = secure;
+        request.learning_allowed = allowed;
+        const auto parsed = azookey::ipc::ParseCommitSegmentsObservationRequest(
+            azookey::ipc::BuildCommitSegmentsObservationRequest(request));
+        ASSERT_TRUE(parsed);
+        EXPECT_EQ(parsed->secure, secure);
+        EXPECT_EQ(parsed->learning_allowed, allowed);
+      }
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitSegmentsObservationRequest(
+          R"({"segments":[{"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}}]})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitSegmentsObservationRequest(
+          R"({"segments":[{"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}}],"secure":false})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, false);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitSegmentsObservationRequest(
+          R"({"segments":[{"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}}],"learning_allowed":true})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, true);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitSegmentsObservationRequest(
+          R"({"segments":[{"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}}],"secure":null,"learning_allowed":"true"})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseCommitSegmentsObservationRequest(
+          R"({"segments":[{"reading":"kana","chosen":{"surface":"word","reading":"kana","score":1,"source":"static"}}],"secure":0,"learning_allowed":1})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+  }
+  {
+    azookey::ipc::ObserveTypoRequest request;
+    request.wrong_reading = "wrong";
+    request.correct_reading = "right";
+    EXPECT_TRUE(request.secure);
+    EXPECT_FALSE(request.learning_allowed);
+    for (bool secure : {false, true}) {
+      for (bool allowed : {false, true}) {
+        request.secure = secure;
+        request.learning_allowed = allowed;
+        const auto parsed =
+            azookey::ipc::ParseObserveTypoRequest(azookey::ipc::BuildObserveTypoRequest(request));
+        ASSERT_TRUE(parsed);
+        EXPECT_EQ(parsed->secure, secure);
+        EXPECT_EQ(parsed->learning_allowed, allowed);
+      }
+    }
+    {
+      const auto parsed = azookey::ipc::ParseObserveTypoRequest(
+          R"({"wrong_reading":"wrong","correct_reading":"right"})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseObserveTypoRequest(
+          R"({"wrong_reading":"wrong","correct_reading":"right","secure":false})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, false);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseObserveTypoRequest(
+          R"({"wrong_reading":"wrong","correct_reading":"right","learning_allowed":true})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, true);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseObserveTypoRequest(
+          R"({"wrong_reading":"wrong","correct_reading":"right","secure":null,"learning_allowed":"true"})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+    {
+      const auto parsed = azookey::ipc::ParseObserveTypoRequest(
+          R"({"wrong_reading":"wrong","correct_reading":"right","secure":0,"learning_allowed":1})");
+      ASSERT_TRUE(parsed);
+      EXPECT_EQ(parsed->secure, true);
+      EXPECT_EQ(parsed->learning_allowed, false);
+    }
+  }
+}

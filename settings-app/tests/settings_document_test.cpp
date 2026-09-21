@@ -45,6 +45,43 @@ std::string ReadText(const std::filesystem::path& path) {
 
 }  // namespace
 
+TEST(SettingsDocumentTest, BodyLogPolicySurvivesUnrelatedSettingsSave) {
+  const auto dir = TestDir("azookey_settings_body_log_preserve");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":true,"externalAi":false}}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(loaded.warnings.empty());
+  loaded.settings.log_level = "warn";
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed);
+  const auto* privacy = parsed->Find("privacy");
+  ASSERT_NE(privacy, nullptr);
+  EXPECT_EQ(privacy->GetString("mode"), "custom");
+  EXPECT_EQ(privacy->GetBool("redactLogs"), false);
+  ASSERT_NE(privacy->Find("custom"), nullptr);
+  EXPECT_EQ(privacy->Find("custom")->GetBool("detailedLogging"), true);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, MalformedBodyLogPolicyRestrictsPrivacyOnSave) {
+  const auto dir = TestDir("azookey_settings_body_log_invalid");
+  const auto path = dir / "settings.json";
+  for (const auto* text : {
+           R"({"privacy":{"redactLogs":"false"}})",
+           R"({"privacy":{"redactLogs":false,"custom":{"detailedLogging":1}}})"}) {
+    WriteText(path, text);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    EXPECT_FALSE(loaded.warnings.empty());
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "secure");
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, CrashConsentRoundTripPreservesAiPrivacyAndDefaultsOff) {
   const auto dir = TestDir("azookey_settings_crash_writeback");
   const auto path = dir / "settings.json";

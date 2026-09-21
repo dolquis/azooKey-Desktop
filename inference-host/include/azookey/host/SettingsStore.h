@@ -14,6 +14,7 @@
 
 #include "azookey/core/AiPrivacy.h"
 #include "azookey/core/AppProfileResolver.h"
+#include "azookey/core/PrivacyPolicy.h"
 #include "azookey/core/SecureApps.h"
 #include "azookey/host/InferenceEngine.h"
 
@@ -76,6 +77,7 @@ struct RuntimeSettings {
   bool prediction_enabled{true};
   std::string ai_backend{"none"};
   core::AiPrivacy ai_privacy{true, true};
+  core::PrivacyPolicy privacy_policy{false, false};
   int32_t open_ai_timeout_ms{30000};
   std::string open_ai_api_key;
   std::string open_ai_api_endpoint{"https://api.openai.com/v1"};

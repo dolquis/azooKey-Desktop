@@ -127,8 +127,14 @@ class AutoWordStore {
 
 ### 4-1. 配線 — 新 IPC は不要
 
-既存の `CommitObservation` を再利用する。`CommitObservationRequest{reading,
-chosen, shown, left_context, timestamp_ms}` が確定読み・確定 surface を含み、
+既存の `CommitObservation` を再利用する。Host は受理済み接続の
+`secure_flag` と、当該イベントの `secure == false` /
+`learning_allowed == true` を確認してから学習へ渡す。欠落・型不正は拒否する。
+同じ契約を `CommitSegmentsObservation` にも適用し、直近の候補要求から推定しない。
+詳細は `docs/privacy-and-secure-input-spec.md` §5.1.1 に従う。
+
+`CommitObservationRequest{reading,
+chosen, shown, left_context, timestamp_ms, secure, learning_allowed}` が確定読み・確定 surface を含み、
 `Dispatcher::HandleCommitObservation` が `engine_->CommitObservation(reading,
 chosen.surface, now)` を呼ぶ。この `InferenceEngine::CommitObservation` 内に
 OOV 検出を追加する。

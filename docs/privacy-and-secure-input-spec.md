@@ -46,7 +46,7 @@ AI 変換 / 学習 / 外部 API / ログが扱う情報をユーザーが制御�
 `custom`（個別指定）は固定プリセットを持たず、learning / prediction /
 external-AI / AI-candidate / detailed-logging の 5 軸をユーザーが個別に
 指定する上級者向けモードである。各軸を永続化する per-axis スキーマと
-PrivacyGate クエリへの解決は §5.2 / §7（`privacy.custom`）で定義する。
+許可軸への解決は §5.2 / §7（`privacy.custom`）で定義する。
 
 ## 4. 自動 secure 判定
 
@@ -91,7 +91,7 @@ basename の **大文字小文字を無視**（`lower()` 正規化して比較�
    （§7 schema の既定が `[]` なのはこのため）。
 
 実効判定は `effectiveSecureApps = kDefaultSecureApps ∪ lower(privacy.secureApps)`。
-`ForegroundApp.process_name`（§4.2 で `lower()` 済み）が実効集合に含まれる
+`ForegroundApp.process_name`（§4.2、照合時に大文字小文字を無視）が実効集合に含まれる
 場合、`autoSecureInput` 有効時（§4 前段）に自動 secure とする。`lsass.exe` は
 Windows の UAC 認証ダイアログで前面に来ることがあるため保険として含める。
 
@@ -121,74 +121,46 @@ Windows の UAC 認証ダイアログで前面に来ることがあるため保�
 ### 4.2 ForegroundAppDetector（共有・正準定義）
 
 M46 が導入し M48（`docs/app-profile-spec.md`）と**共用する正準コンポーネント**。
-TIP プロセス側 `tsf-tip/src/ForegroundAppDetector.cpp`（新規）に**単一
+入力先アプリにロードされた TIP の `tsf-tip/src/ForegroundAppDetector.cpp` に**単一
 インスタンス**として実装し、自動 secure 判定（§4）と M48 の per-request
 `app` フィールド（app-profile §3.1）の双方を、この 1 つの検出器から供給する
 （二重実装を作らない。`docs/windows-tsf-host-architecture.md` のコンポーネント
 一覧と整合）。app-profile §3 は本定義を参照し、再定義しない。
 
 ```cpp
-struct ForegroundApp {
-  bool         resolved = false;       // 解決可否（false = 前面/プロセス取得不可）
-  std::wstring process_name;           // "keepass.exe"（basename, lower() 正規化）
-  std::wstring window_class;           // "Notepad" / "Chrome_WidgetWin_1"
-  uint32_t     window_title_hash = 0;  // 学習・IPC 用 hash（FNV-1a 等）
-
-  // 検出器プロセス内専用。IPC payload にもログにも載せない（§8 / dev-infra §7.6）。
-  // hash 計算と将来のパスワード欄ヒューリスティック（§12）のためだけに保持する。
-  std::wstring window_title;
+struct ForegroundApp {                // core/include/azookey/core/AppProfileResolver.h
+  std::string process_name;           // UTF-8 の実行ファイル basename
+  std::string window_class;           // UTF-8 の同一プロセスのウィンドウクラス
+  bool resolved{false};               // プロセス名の解決可否
 };
 
 class ForegroundAppDetector {
 public:
-  const ForegroundApp& Current();    // 500ms TTL キャッシュ（§4.3）
-  void Invalidate();                  // フォーカス変更時に次回 Current() を強制再解決
+  core::ForegroundApp Get();          // owner thread から同期取得
+  void Invalidate();                  // キャッシュをクリア
 };
 ```
 
-`process_name` は検出器境界で `lower()` 正規化し、全消費側（`secureApps` 照合 /
-M48 `AppProfileResolver` lookup）が小文字で比較できるようにする。`window_title`
-生値は機密の可能性があるため、Host へ送る IPC payload には `window_title_hash`
-のみを含める（§8 / `docs/dev-infrastructure-spec.md` §7.6 と整合）。
+型の正典は `core/include/azookey/core/AppProfileResolver.h`、検出器の宣言は
+`tsf-tip/include/azookey/tsf/ForegroundAppDetector.h` に置く。プロセス名は照合側で
+大文字小文字を無視して比較する。タイトル・タイトル hash は取得も保持もしない。
 
 ### 4.3 キャッシュ戦略・スレッド・解決機構・フェイルクローズ
 
-**スレッド親和性**: `Current()` / `Invalidate()` は TIP の STA スレッド（TSF
-コールバックスレッド）から呼ぶ。検出器は IPC を行わずブロッキングしない
-（per-keystroke 呼び出しに耐える軽量同期処理）。
+`Get()` / `Invalidate()` は TIP の owner thread から呼ぶ。検出器は
+`GetModuleFileNameW(nullptr, ...)` で入力を受け取る同一プロセスの実行ファイルを取得し、
+UTF-8 の basename を `Invalidate()` までキャッシュする。各 `Get()` で
+`GetFocus()` と `GetAncestor(..., GA_ROOT)` を使い、同一プロセスのウィンドウだけを
+対象に `GetClassNameW` でクラス名を取得する。クラスを取得できなければ空文字列とする。
+500ms TTL や前面ウィンドウの WinEventHook は設けない。
 
-**キャッシュ（500ms TTL + イベント無効化）**:
+モジュールパス取得失敗・バッファ不足・basename の UTF-8 変換失敗では
+`resolved = false` とする。ウィンドウクラスの取得失敗だけでは unresolved にしない。
+他プロセスを `OpenProcess` する設計ではなく、UIPI による他プロセス照会失敗を
+この検出器の失敗条件として扱わない。
 
-- `Current()` は前回解決から 500ms 以内ならキャッシュ値を返し、超過時のみ
-  再解決する。500ms TTL はイベント取りこぼし（同一ウィンドウのタイトル変更など）
-  に対するバックストップ。
-- フォーカス変更は `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, …,
-  WINEVENT_OUTOFCONTEXT)` で監視し、コールバックで `Invalidate()` を呼ぶ。次回
-  `Current()` は TTL を待たず即再解決する。
-- 優先順位: **イベント無効化が TTL に優先**（無効化されたら必ず再解決）、TTL は
-  イベント間の上限。フック登録は検出器生成時、解除は破棄時に行いリークさせない。
-
-**解決機構**:
-
-1. `GetForegroundWindow()` → `GetWindowThreadProcessId()`
-2. `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, …)`
-3. `QueryFullProcessImageNameW` で実行ファイルパス → basename → `lower()`
-   （`docs/rich-features-spec.md` §X-4-4 の `K32GetModuleFileNameExW` 経路は本定義で
-   置換する。UWP / 保護プロセスでの取得性が高い方を正典とする）
-4. `RealGetWindowClassW` で `window_class`
-5. `window_title`（内部専用）→ `window_title_hash`
-
-**フェイルクローズ（fail closed）**: 前面ウィンドウ / プロセス名が解決できない
-場合（HWND が null、`OpenProcess` が UIPI で拒否される＝TIP 非昇格で**昇格アプリ**が
-前面、など）、`ForegroundApp{ resolved = false }` を返す。§2「fail closed」原則に従い:
-
-- **プライバシー軸**: `autoSecureInput = true`（既定）のとき、解決不能な前面は
-  **secure 扱い**にする（アプリが見えない＝機密の可能性があるため安全側へ）。
-- **プロファイル軸（M48）**: 解決不能時はプロファイル未適用＝`default` / グローバルで
-  扱う（boost なし）。プロファイルは非プライバシー軸のため fail-closed の対象外。
-
-この非対称により、検出不能でも学習・外部 AI が秘密入力へ漏れない一方、通常の
-候補生成は素の挙動を維持する。
+- **プライバシー軸**: `autoSecureInput = true` のとき、プロセス名の解決不能は secure 扱い。
+- **プロファイル軸（M48）**: 解決不能時は `default` / グローバル設定を適用する。
 
 **入力 scope 軸の扱い**: §4 表の優先 2（パスワード入力欄）は TSF の
 `GUID_PROP_INPUTSCOPE` から判定する。scope が password / PIN と**積極的に判定
@@ -201,7 +173,7 @@ M48 `AppProfileResolver` lookup）が小文字で比較できるようにする�
 
 ## 5. secure 中の挙動契約
 
-`PrivacyGate::IsSecure() == true` の間、以下を**強制抑止**する:
+TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な間、以下を**強制抑止**する:
 
 | 抑止対象 | 実装ポイント |
 |---|---|
@@ -214,117 +186,61 @@ M48 `AppProfileResolver` lookup）が小文字で比較できるようにする�
 | 候補生成は内蔵変換 + 既存辞書のみ | `inference-host/src/Dispatcher.cpp` |
 | M55 補正候補の学習・適用を停止 | `correction/TypoCorrectionEngine.cpp` |
 
-### 5.1 PrivacyGate 実装
+### 5.1 判定の責務と許可軸
 
-`inference-host/src/PrivacyGate.cpp`（新規）として以下を実装する。TIP 側も同一の
-クエリ契約を持つインスタンスを保持し、両者の分界は §5.1.1 で定義する:
+TIP は `TextService::ResolvePrivacy` で設定と入力先の検出結果を解決し、
+`secure_input_` を使って送信・学習スナップショットを抑止する。Host は
+`Dispatcher` の各要求処理で、その要求のフラグと設定を検査する。
+共有するのは許可条件であり、状態を共有するゲートオブジェクトやモード遷移通知 API は設けない。
 
-```cpp
-class PrivacyGate {
-public:
-  enum class Mode { Normal, Private, Secure, Offline, Custom };
+学習、予測、外部 AI、AI 候補生成、詳細ログは別の許可軸である。§3 / §5.2 は
+各モードの意味を定義する。外部 AI の許可は AI 候補生成の許可を前提とし、
+secure は全軸に優先する。これらの軸名は C++ の呼出 API を表さない。
+private / custom の学習方針の適用は、secure 判定とは別の消費側の責務とする。
 
-  Mode CurrentMode() const;
-  bool IsSecure() const;             // CurrentMode() == Mode::Secure と同値
-
-  // 動作可否クエリ
-  bool LearningAllowed() const;
-  bool PredictionAllowed() const;
-  bool ExternalAiAllowed() const;
-  bool AiCandidateAllowed() const;   // AI 候補生成（ローカル zenzai / 外部 LLM）が許可されるか
-  bool DetailedLoggingAllowed() const;
-
-  // モード遷移
-  void EnterSecureFor(std::wstring_view app);
-  void ExitSecure();
-  void SetExplicitMode(Mode mode);
-};
-```
-
-`Dispatcher` は各 IPC ハンドラの先頭で `PrivacyGate` に問い合わせ、
-許可されない処理は早期 return + ログ記録（`result = "blocked"`）と
-する。
-
-**`IsSecure()`**: `CurrentMode() == Mode::Secure` を返す述語であり、独立した
-第 6 のモードではない。`docs/dev-infrastructure-spec.md` §7.6 の `IsSecure()` と
-`docs/learning-data-management-spec.md` の `CurrentMode() == Mode::Secure` は同一条件を指す。
-secure が他のモードより優先される点は §2 / §5.2 解決順 1 のとおりで、`IsSecure()` が
-true の間は §5 冒頭の抑止表が per-axis 設定より優先する。
-
-**AI 軸の 2 クエリ**: `AiCandidateAllowed()` は AI ベースの候補生成（ローカル zenzai
-変換・外部 LLM のいずれも）が許可されるかを表し、`ExternalAiAllowed()` はそのうち
-**外部 LLM** のみを表す。不変条件: `ExternalAiAllowed() ⇒ AiCandidateAllowed()`（外部が
-許可されるなら AI 候補も許可）。`AiCandidateAllowed()` が false になるのは `secure`、および
-`custom` で AI 候補生成を無効化した場合で、このとき backend は `none`（ローカル zenzai も
-動かさない）。`private` / `offline` は `AiCandidateAllowed()=true` かつ
-`ExternalAiAllowed()=false`（ローカルのみ）。`docs/app-profile-spec.md` §4.2 の backend
-解決はこの 2 クエリを参照する。
-
-**`custom` モードの per-axis スキーマ（DEV-319 で確定）**: §3 の `custom`（個別指定）は、
-learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸を `privacy.custom`
-（§7）で個別に永続化する。各 PrivacyGate クエリと per-axis フラグの対応・解決順・既定は
-**§5.2** で定義する。DEV-121（PR #145）で暫定的に置いた「`privacy.mode = custom` → `private`
-相当」の fallback は、§5.2 の per-axis 既定（未指定軸は private 相当の安全側）に置換される。
-軸を 1 つも指定しない `custom` は従来どおり private 相当に解決するため、移行は後方互換である。
+詳細ログの設定解決は `core::ParsePrivacyPolicy(settings)` が担い、
+`RuntimeSettings.privacy_policy` に `core::PrivacyPolicy` を保持する。
+その既定は `secure = true`、`detailed_logging_allowed = false` である。
+本文の出力条件は `docs/dev-infrastructure-spec.md` §7.6 に従う。
 
 #### 5.1.1 判定主体と二段ゲート
 
 本節は `docs/typo-correction-learning-spec.md` §12.12.2 / §12.13、
-`docs/ai-backend-spec.md` §8、`docs/app-profile-spec.md` §5 から正典として
-参照される。
+`docs/ai-backend-spec.md` §8、`docs/app-profile-spec.md` §5 から参照される。
 
-`PrivacyGate` は TIP と host の両プロセスに同一クエリ契約のインスタンスを持つ。
-**前面アプリに由来する privacy 状態（自動 secure 判定 §4）の判定主体は TIP 側**
-とする。前面ウィンドウを解決できるのは TIP だけであり（§4.2 の
-`ForegroundAppDetector` は TIP の STA スレッドで動く）、host は自プロセスから
-前面アプリを解決しない。
-
-| レイヤ | mode の解決元 | 役割 |
+| レイヤ | 判定入力 | 役割 |
 |---|---|---|
-| TIP 側インスタンス | `ForegroundAppDetector`（§4.2）+ 設定 `privacy.*`（§7） | 一次ゲート。§5 表のうち `tsf-tip/` の抑止を行い、判定値を IPC に載せる |
-| host 側インスタンス | 設定 `privacy.*` + リクエスト単位で TIP から受け取る privacy フラグ + M48 プロファイル通知（`docs/app-profile-spec.md` §5） | 二次ゲート（fail-closed）。§5 表のうち `inference-host/` の抑止と `AiBackend` 入口ガード（`docs/ai-backend-spec.md` §8）を行う |
+| TIP | 設定、入力 scope、入力先アプリ | イベント時に secure を判定し、送信・保留観測を抑止する |
+| Host | 当該要求の privacy フラグ、接続の受理済み capability、設定 | 学習要求を独立に検査する。入力先を自ら検出しない |
 
-- **モード遷移 API の所在**: `EnterSecureFor()` / `ExitSecure()` は前面アプリの
-  検出結果を反映する経路であり、**TIP 側インスタンスのみ**が呼ぶ。host 側
-  インスタンスはこれらを自発的に呼ばず、設定・リクエスト単位のフラグ・
-  プロファイル通知から解決する。`SetExplicitMode()` はユーザーが明示した
-  モードの反映であり、両インスタンスが設定 `privacy.mode`（§7）経由で同じ値を見る。
-- **wire 表現の正典**: TIP が host へ渡す privacy フラグ（`QueryCandidates` の
-  `secure`、`ObserveTypo` の `secure` / `learning_allowed`、handshake
-  `capabilities` の `"secure_flag"`）の定義は
-  `docs/typo-correction-learning-spec.md` §12.13 を正典とし、本書では再定義しない。
-- **host が二次ゲートを持つ理由**: TIP は信頼するが単一障害点にしない。
-  **per-request フラグを定義してあるメッセージ**（`QueryCandidates` /
-  `ObserveTypo`。`docs/typo-correction-learning-spec.md` §12.13）では、TIP が
-  privacy 非対応（`"secure_flag"` 非広告）でフラグが未知のとき、host は §2
-  fail closed に従い該当軸を抑止する（解決規約は同 §12.12.2 の host 二次ゲート項）。
-- **フラグを持たないメッセージの扱い**: `CommitObservation` /
-  `QueryPredictions` / `TransformSelectedText` は privacy フラグを payload に
-  持たない。これらの secure 由来の抑止は §5 表のとおり **TIP が送らないこと**で
-  担保し、host 側インスタンスは設定 `privacy.mode`（§7）と M48 プロファイル通知から
-  解決する。フラグ不在をもって既定で抑止側へ倒すことはしない（学習・予測を
-  恒常的に止めてしまうため）。M46 がこれらへリクエスト単位の privacy フィールドを
-  導入する場合は、`docs/typo-correction-learning-spec.md` §12.13 の「M46 が同等の
-  リクエスト単位 privacy フィールドを別途定義する場合は M46 のフィールドへ寄せる」
-  規約に従い、本書 §5.1.1 と同 §12.13 を同一 PR で更新する。
-- **多層防御としての重複**: §5 冒頭の抑止表が TIP 側と host 側の双方に実装
-  ポイントを持つのはこの二段構成によるもので、片側だけの実装では契約を満たさない。
+`ObserveTypo`、`CommitObservation`、`CommitSegmentsObservation` は
+イベントごとの `secure` と `learning_allowed` を運ぶ。Host が学習を許可するのは、
+受理済み接続が `secure_flag` に対応し、当該要求の `secure == false` かつ
+`learning_allowed == true` の場合に限る。欠落・型不正はそれぞれ
+`true` / `false` の安全側で扱い、直近の `QueryCandidates` から推定しない。
+`QueryCandidates` にも `secure` を載せる。wire 契約は
+`docs/typo-correction-learning-spec.md` §12.13 と payload 定義を参照する。
+
+これは protocol v1 の加算的拡張である。古い TIP と新しい Host の組合せでは
+学習を拒否し、新しい TIP と古い Host の組合せでは TIP の送信抑止を維持する。
+`QueryPredictions` / `TransformSelectedText` の secure 由来の送信抑止は TIP が担う。
+これらに学習観測用フラグの欠落判定を流用しない。
 
 ### 5.2 `custom` モードの per-axis 解決
 
-`privacy.mode = custom` のとき、各 PrivacyGate クエリは `privacy.custom`（§7）の対応フラグを
+`privacy.mode = custom` のとき、各許可軸は `privacy.custom`（§7）の対応フラグを
 返す。`custom` は §3 の他モードのような固定プリセットを持たず、軸ごとにユーザーが許可・抑止
 を指定する上級者向けモードである。
 
 **クエリと per-axis フラグの対応**:
 
-| PrivacyGate クエリ | backing フラグ | 既定 |
+| 許可軸 | backing フラグ | 既定 |
 |---|---|---|
-| `LearningAllowed()` | `privacy.custom.learning` | `false` |
-| `PredictionAllowed()` | `privacy.custom.prediction` | `true` |
-| `AiCandidateAllowed()` | `privacy.custom.aiCandidate` | `true` |
-| `ExternalAiAllowed()` | `privacy.custom.externalAi ∧ privacy.custom.aiCandidate` | `false` |
-| `DetailedLoggingAllowed()` | `privacy.custom.detailedLogging ∧ ¬privacy.redactLogs` | `false`（`redactLogs` 既定 `true` のため） |
+| 学習許可 | `privacy.custom.learning` | `false` |
+| 予測許可 | `privacy.custom.prediction` | `true` |
+| AI 候補生成許可 | `privacy.custom.aiCandidate` | `true` |
+| 外部 AI 許可 | `privacy.custom.externalAi ∧ privacy.custom.aiCandidate` | `false` |
+| 詳細ログ許可 | `privacy.custom.detailedLogging ∧ ¬privacy.redactLogs` | `false`（`redactLogs` 既定 `true` のため） |
 
 **解決順（precedence）**:
 
@@ -334,15 +250,14 @@ learning / prediction / external-AI / AI-candidate / detailed-logging の 5 軸�
 2. secure でないとき `mode = custom` なら、各クエリは上表の backing フラグをそのまま返す。
    未指定の軸は §7 schema の既定（= private 相当の安全側）で補完するため、欠落キーがあっても
    挙動は一意に定まる。
-3. **不変条件の強制**: §5.1 の `ExternalAiAllowed() ⇒ AiCandidateAllowed()` を保つため、
-   `aiCandidate = false` のときは `externalAi` の保存値によらず `ExternalAiAllowed() = false` に
+3. **不変条件の強制**: §5.1 の 外部 AI 許可 ⇒ AI 候補生成許可 を保つため、
+   `aiCandidate = false` のときは `externalAi` の保存値によらず 外部 AI 不許可 に
    強制する（AI 候補生成を止めるなら外部送信も止まる、の安全側固定）。このとき backend は
    `none`（ローカル zenzai も外部 LLM も動かさない。§5.1 と整合）。
-4. **`redactLogs` は詳細ログの floor**: `DetailedLoggingAllowed()` は per-axis フラグ単独では
+4. **`redactLogs` は詳細ログの floor**: 詳細ログ許可は per-axis フラグ単独では
    true にならず、`privacy.redactLogs = false`（既定 `true`）を併せて満たす場合のみ true になる。
    `privacy.custom.detailedLogging = true` でも `redactLogs = true` の間は本文系フィールドを
-   redact し続ける（`docs/dev-infrastructure-spec.md` §7.6 優先順位 2「DetailedLoggingAllowed()
-   は mode と `redactLogs` を集約した正典クエリ」と整合。`custom` でも `redactLogs` を迂回しない）。
+   redact し続ける（`docs/dev-infrastructure-spec.md` §7.6 の設定解決に従う）。
    これにより Debug + `AZOOKEY_LOG_BODY=1` であっても、`redactLogs` が有効な限り入力本文は出力されない。
 
 **既定の意味**: per-axis 既定（learning OFF / prediction ON / aiCandidate ON / externalAi OFF /
@@ -353,7 +268,7 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 **他設定との関係**: `disableLearningInPrivateMode` / `disableExternalAIInPrivateMode`（§7）は
 `private` モード専用のトグルであり、`custom` には適用しない（`custom` では `privacy.custom.*`
 が唯一の権威）。`docs/app-profile-spec.md` §4.2 の backend 解決は、`custom` でも
-`AiCandidateAllowed()` / `ExternalAiAllowed()` の 2 クエリ経由で一貫して評価される。
+AI 候補生成許可 / 外部 AI 許可 の 2 クエリ経由で一貫して評価される。
 
 ## 6. UI 表示
 
@@ -407,11 +322,12 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 （既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
 `settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・
-`custom.aiCandidate`・`custom.externalAi`・`secureApps`・`showSecureIndicator` であり、
+`custom.aiCandidate`・`custom.externalAi`・`custom.detailedLogging`・`redactLogs`・
+`secureApps`・`showSecureIndicator` であり、
 `inference-host/src/SettingsStore.cpp` と `settings-app/SettingsDocument.cpp` の許可キーも
 これに一致する。schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
-`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`・`redactLogs`・`custom` の
-learning / prediction / detailedLogging）は書き込めない。`additionalProperties: false` が
+`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`・`custom` の
+learning / prediction）は書き込めない。`additionalProperties: false` が
 schema 検証で弾き、`settings-app/SettingsDocument.cpp` の許可キー判定は未知の `privacy`
 フィールドを含む object を `{"mode": "secure"}` へ潰す。実行時はこれらの軸の既定値が
 適用され、`autoSecureInput` は `true` 固定として §4 の自動 secure 判定が常に働く。
@@ -507,66 +423,23 @@ schema fragment（`properties.privacy` への追加）:
 具体的には secure 中は以下を Release・Debug 双方で抑止する:
 
 - `reading`, `surface`, `candidate.text` を `***redacted***` に置換
-- `window_title` を `window_title_hash` のみに置換
+- `window_title` を redact（タイトル hash も生成しない）
 - M16 Magic Conversion の prompt と応答を一切ログしない
 - M55 typo の `raw_keys` / `observed_reading` を hash 化
 
 これらは M44 診断 ZIP（`docs/dev-infrastructure-spec.md` §12.5）の
 redaction ポリシーと共通の関数で処理する。
 
-## 9. UpdatePrivacyMode IPC
+## 9. 設定反映とイベント単位の判定
 
-設定アプリ / TIP から Host にモード変更を伝達する新規 IPC。エンベロープは
-既存 wire format `{version, request_id, type, trace_id, payload}` に従う。
-
-Request:
-
-```json
-{
-  "version": 1,
-  "request_id": 200,
-  "type": "UpdatePrivacyMode",
-  "trace_id": "018fd2c2-...",
-  "payload": {
-    "mode": "secure",
-    "reason": "user_explicit"
-  }
-}
-```
-
-`reason` の取り得る値:
-
-| 値 | 送信元 | 用途 |
-|---|---|---|
-| `user_explicit` | 設定アプリ / ショートカット | ユーザーが明示的に切替 |
-| `auto_secure_app` | M48 AppProfileResolver | `privacyMode = secure` プロファイル解決時 |
-| `auto_private_app` | M48 AppProfileResolver | `privacyMode = private` プロファイル解決時 |
-| `auto_normal_app` | M48 AppProfileResolver | `privacyMode = normal` プロファイル解決時（厳格モードからの明示解除） |
-| `auto_password_field` | M46 secure 検出 | パスワード入力欄に focus した時 |
-
-`reason` 列は forward-compatible とし、未知の値は host 側で
-`unknown_reason` 扱いとしつつ `mode` だけ適用する（M40 互換性ルール）。
-
-Response:
-
-```json
-{
-  "version": 1,
-  "request_id": 200,
-  "type": "UpdatePrivacyMode",
-  "trace_id": "018fd2c2-...",
-  "payload": {
-    "applied_mode": "secure",
-    "previous_mode": "normal"
-  }
-}
-```
-
-`MessageType` enum 末尾に `UpdatePrivacyMode` を append（M40 互換性）。
+明示モードは設定 `privacy.mode` から読み取る。TIP は入力イベント時に
+`ResolvePrivacy` で入力先と設定を評価し、Host は各要求のフラグを評価する。
+アプリ解決結果をモード遷移 IPC や理由通知へ変換して共有状態を更新する契約は設けない。
+学習イベントの wire 契約は §5.1.1 に従う。
 
 ## 10. テスト
 
-- unit: `PrivacyGate` の各モードでの動作可否
+- unit: TIP の secure 判定、Host の要求ごとの学習可否、詳細ログの設定解決
 - unit: `ForegroundAppDetector` のキャッシュ動作
 - integration: `secureApps` 指定で `Observe` / `QueryPredictions` /
   Magic Conversion が抑止される
@@ -578,7 +451,7 @@ Response:
 ## 11. M46 受け入れ条件
 
 受け入れ条件の定義の正典は [`plans/windows-port-roadmap.md`](../plans/windows-port-roadmap.md)
-の M46 節とする。本書は secure 判定・PrivacyGate の責務境界・ログ redaction・設定キーを
+の M46 節とする。本書は secure 判定・プライバシー判定の責務境界・ログ redaction・設定キーを
 定義し、受け入れ条件を複製しない。
 
 ## 12. 将来拡張

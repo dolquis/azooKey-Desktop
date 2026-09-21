@@ -14,6 +14,7 @@
 
 #include "azookey/core/AiPrivacy.h"
 #include "azookey/core/BracketSettings.h"
+#include "azookey/core/PrivacyPolicy.h"
 
 namespace azookey::tsf {
 
@@ -26,6 +27,7 @@ struct TipRewriterSettings {
 };
 struct TipAiSettings {
   core::AiPrivacy privacy;
+  core::PrivacyPolicy privacy_policy{false, false};
   std::string backend{"none"};
   int timeout_ms{30000};
 };
@@ -46,7 +48,9 @@ class TipLocalSettings final {
 
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
+  void SetPrivacyForTest(std::string_view contents);
   bool WaitForEnabledForTest(bool enabled);
+  bool WaitForPrivacyForTest(const std::function<bool(const core::PrivacyPolicy&)>& predicate);
   bool WaitForRewritersForTest(const std::function<bool(const TipRewriterSettings&)>& predicate);
   bool WaitForSnapshotForTest(const std::function<bool(const core::BracketSettings&)>& predicate);
   std::array<std::filesystem::path, 2> WatchDirectoriesForTest() const {

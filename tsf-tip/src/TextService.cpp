@@ -92,13 +92,14 @@ azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
 }
 
 void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
-                std::initializer_list<azookey::logging::RuntimeLogField> fields = {}) {
+                std::initializer_list<azookey::logging::RuntimeLogField> fields = {},
+                azookey::core::PrivacyPolicy privacy = {}) {
   auto& logger = TipRuntimeLogger();
 #ifdef _DEBUG
-  const auto record = logger.FormatRecord(level, event, fields);
+  const auto record = logger.FormatRecord(level, event, fields, privacy);
   if (!record.empty()) OutputDebugStringA(("[azooKey TIP] " + record + "\n").c_str());
 #endif
-  logger.Log(level, event, fields);
+  logger.Log(level, event, fields, privacy);
 }
 
 void LogCandidateUiBegin(const azookey::tsf::CandidateUiBeginObservation& observation,
@@ -1130,7 +1131,7 @@ HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_
       std::lock_guard<std::mutex> lock(candidates_mtx_);
       candidate_window_show_pending_ = true;
     }
-    PostQueryCandidates({}, false, preedit_kana_.substr(1));
+    PostQueryCandidates(context, {}, false, preedit_kana_.substr(1));
   }
   return S_OK;
 }
@@ -1397,7 +1398,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       preedit_kana_.push_back(*decimal_digit);
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      PostQueryCandidates(CurrentPreeditSurface());
+      PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (is_input && wParam >= 'A' && wParam <= 'Z') {
@@ -1426,7 +1427,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (is_input && (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
@@ -1455,7 +1456,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (is_input && composition_symbol && has_preedit) {
@@ -1480,7 +1481,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      if (!BatchRomajiEnabled()) PostQueryCandidates(CurrentPreeditSurface());
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (IsActionKey(key_event, UserAction::Backspace)) {
@@ -1512,7 +1513,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         const std::string reading = CurrentPreeditSurface();
-        if (!reading.empty()) PostQueryCandidates(reading);
+        if (!reading.empty()) PostQueryCandidates(context, reading);
         *eaten = TRUE;
       } else if (!preedit_kana_.empty()) {
         {
@@ -1528,7 +1529,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         const std::string reading = CurrentPreeditSurface();
-        if (!reading.empty()) PostQueryCandidates(reading);
+        if (!reading.empty()) PostQueryCandidates(context, reading);
         *eaten = TRUE;
       }
 
@@ -1597,7 +1598,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
             candidates_.clear();
             candidate_window_show_pending_ = false;
           }
-          PostQueryCandidates(CurrentPreeditSurface());
+          PostQueryCandidates(context, CurrentPreeditSurface());
         }
         if (!preedit_kana_.empty()) {
           // Always eat Space during preedit — even if candidates haven't arrived
@@ -1626,7 +1627,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                 shown_candidates_.clear();
                 candidate_window_show_pending_ = true;
               }
-              PostQueryCandidates(CurrentPreeditSurface(), false);
+              PostQueryCandidates(context, CurrentPreeditSurface(), false);
               return S_OK;
             }
             std::vector<TipCandidate> snapshot;
@@ -2011,10 +2012,13 @@ void TextService::PostPendingCommitObservation() {
     }
 #endif
     if (pending.segments.empty()) {
-      PostCommitObservation(pending.reading, pending.chosen, pending.shown);
+      PostCommitObservation(pending.reading, pending.chosen, pending.shown, pending.secure,
+                             pending.learning_allowed);
     } else if (ipc_host_commit_segments_.load(std::memory_order_relaxed)) {
       ipc::CommitSegmentsObservationRequest request;
       request.observation_id = NextCommitObservationId();
+      request.secure = pending.secure;
+      request.learning_allowed = pending.learning_allowed;
       for (const auto& segment : pending.segments)
         request.segments.push_back({segment.reading, segment.chosen, segment.shown, false});
       auto payload = ipc::BuildCommitSegmentsObservationRequest(request);
@@ -2022,7 +2026,8 @@ void TextService::PostPendingCommitObservation() {
         PostIpcSend(ipc::MessageType::CommitSegmentsObservation, std::move(payload), true);
     } else {
       for (const auto& segment : pending.segments)
-        PostCommitObservation(segment.reading, segment.chosen, segment.shown);
+        PostCommitObservation(segment.reading, segment.chosen, segment.shown, pending.secure,
+                               pending.learning_allowed);
     }
   } catch (...) {
     // The document commit has already succeeded by the time pending commit
@@ -2174,11 +2179,14 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   // place the M46 secure decision has to be current (DEV-1187). A neural batch
   // conversion never evaluated the AI axes, and the plain per-key path never
   // evaluated anything at all; both are covered by evaluating here.
-  const bool secure = ResolvePrivacy(context, false).secure;
+  const auto privacy = ResolvePrivacy(context, false);
+  const bool secure = privacy.secure;
   const bool multi_segment = shown_batch_segments_.size() > 1;
   const std::string batch_surface =
       multi_segment ? CurrentDisplayedPreeditSurface() : std::string{};
   PendingCommitObservation batch_observation;
+  batch_observation.secure = secure;
+  batch_observation.learning_allowed = !secure && batch_learning_allowed_;
   if (multi_segment) {
     for (size_t i = 0; i < shown_batch_segments_.size(); ++i) {
       const auto& segment = shown_batch_segments_[i];
@@ -2248,7 +2256,8 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   } else if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
              chosen.field.source != "symbol" && chosen.field.source != "emoji") {
     pending_commit_observation_ =
-        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown), {}};
+        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown), {}, secure,
+                                 !secure && batch_learning_allowed_};
   } else {
     pending_commit_observation_.reset();
   }
@@ -2269,6 +2278,11 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   // edit session has actually completed.  A request accepted asynchronously is
   // not enough: SetText/EndComposition may still fail and the user input must
   // stay retryable.
+  // Log at selection time on the owner thread, before an asynchronous commit
+  // can cross a context transition. No mutable process-wide permission is used.
+  RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "conversion_selected",
+             {{"reading", SafeLogText(reading)}, {"surface", SafeLogText(commit_surface_)}},
+             {secure, privacy.detailed_logging_allowed});
   const HRESULT commit_hr = RequestCommitEditSession(context);
   if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
@@ -2561,7 +2575,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   hs.tip_version = kTipVersion;
   hs.protocol_version = kHandshakeProtocolVersion;
   hs.capabilities = {"ping", "query_candidates", "query_batch_conversion", "commit_observation",
-                     "cancel"};
+                     "cancel", "secure_flag"};
   hs.client_id = ipc_client_id_;
   hs.handshake_token = IpcHandshakeTokenFromEnv();
 
@@ -2830,6 +2844,8 @@ void TextService::ServeConnection() {
     bool has_qc = false;
     bool is_batch = false;
     bool live = true;
+    bool secure = true;
+    bool learning_allowed = false;
     std::string emoji_trigger;
     std::vector<IpcSendItem> to_send;
     bool health_due = false;
@@ -2851,6 +2867,8 @@ void TextService::ServeConnection() {
         req_id = ipc_pending_id_;
         is_batch = ipc_pending_is_batch_;
         live = ipc_pending_live_;
+        secure = ipc_pending_secure_;
+        learning_allowed = ipc_pending_learning_allowed_;
         emoji_trigger = ipc_pending_emoji_trigger_;
         ipc_has_request_ = false;
         has_qc = true;
@@ -2957,6 +2975,8 @@ void TextService::ServeConnection() {
       qreq.left_context = "";
       qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
       qreq.live = live;
+      qreq.secure = secure;
+      qreq.learning_allowed = learning_allowed;
       qreq.emoji_trigger = emoji_trigger;
       if (!emoji_trigger.empty()) {
         qreq.max_candidates = emoji_max_candidates_.load(std::memory_order_relaxed);
@@ -3393,9 +3413,12 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
   if (notify) candidate_ui_.PostCandidatesReady();
 }
 
-void TextService::PostQueryCandidates(const std::string& reading, bool live,
+void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
+  const auto privacy = ResolvePrivacy(context, false);
   std::lock_guard<std::mutex> lock(ipc_mtx_);
+  ipc_pending_secure_ = privacy.secure;
+  ipc_pending_learning_allowed_ = !privacy.secure;
   ipc_pending_reading_ = reading;
   ipc_pending_live_ = live;
   ipc_pending_emoji_trigger_ = emoji_trigger;
@@ -3417,14 +3440,15 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   PrivacyDecision decision;
   decision.ai = ai_settings.privacy;
   decision.backend = ai_settings.backend;
+  decision.detailed_logging_allowed = ai_settings.privacy_policy.detailed_logging_allowed;
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
   const auto gate = EvaluateInputGate(context, client_id_);
-  // spec section 4.3: a foreground window that cannot be resolved is treated as
-  // secure, because an app we cannot see may be the one holding the secret.
+  // The receiving in-process app must be identifiable. Explicit secure mode
+  // also suppresses learning, independently of whether the AI axes are used.
   decision.secure =
-      !app.resolved || gate.secure ||
+      ai_settings.privacy_policy.secure || !app.resolved || gate.secure ||
       core::IsSecureApp(app.process_name,
                         settings.secure_apps ? *settings.secure_apps : kNoUserSecureApps,
                         WindowsAppNameEqual);
@@ -3435,8 +3459,9 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     if (mode == "secure") {
       decision.secure = true;
       if (evaluate_ai) decision.ai = {};
-    } else if (mode == "private" && evaluate_ai) {
-      decision.ai.external = false;
+    } else if (mode == "private") {
+      if (evaluate_ai) decision.ai.external = false;
+      decision.detailed_logging_allowed = false;
     }
     if (evaluate_ai) {
       const auto profile_backend = value.GetString("aiBackend").value_or("auto");
@@ -3445,6 +3470,8 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     }
   }
   if (decision.secure) decision.ai = {};
+  // A failed scope probe must never unlock development body logging.
+  decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
   secure_input_.store(decision.secure, std::memory_order_relaxed);
   return decision;
 }
@@ -3705,7 +3732,8 @@ void TextService::ClearBatchState() {
 
 void TextService::PostCommitObservation(const std::string& reading,
                                         const ipc::CandidateField& chosen,
-                                        const std::vector<ipc::CandidateField>& shown) {
+                                        const std::vector<ipc::CandidateField>& shown, bool secure,
+                                        bool learning_allowed) {
   using namespace std::chrono;
   const uint64_t now_ms = static_cast<uint64_t>(
       duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
@@ -3717,6 +3745,8 @@ void TextService::PostCommitObservation(const std::string& reading,
   req.left_context = "";
   req.timestamp_ms = now_ms;
   req.observation_id = NextCommitObservationId();
+  req.secure = secure;
+  req.learning_allowed = learning_allowed;
 
   PostIpcSend(ipc::MessageType::CommitObservation, ipc::BuildCommitObservationRequest(req), true);
 }
@@ -3737,6 +3767,7 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
   if (secure_input_.load(std::memory_order_relaxed) &&
       (type == ipc::MessageType::CommitObservation ||
        type == ipc::MessageType::CommitSegmentsObservation ||
+       type == ipc::MessageType::ObserveTypo ||
        type == ipc::MessageType::QueryPredictions))
     return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);

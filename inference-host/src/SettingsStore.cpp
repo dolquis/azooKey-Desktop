@@ -153,6 +153,7 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadString(object, "openAiApiEndpoint", settings.open_ai_api_endpoint);
   settings.open_ai_model = ReadString(object, "openAiModel", settings.open_ai_model);
   settings.ai_privacy = core::ParseAiPrivacy(ipc::json::Value(object));
+  settings.privacy_policy = core::ParsePrivacyPolicy(ipc::json::Value(object));
   settings.secure_apps = core::ParseSecureApps(ipc::json::Value(object));
   if (const auto privacy = object.find("privacy");
       privacy != object.end() && privacy->second.IsObject()) {
@@ -299,6 +300,9 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
     } else {
       settings_ = result.settings;
     }
+    // Retaining unrelated last-good options must not retain privacy consent.
+    result.settings.privacy_policy = {};
+    settings_.privacy_policy = {};
     last_result_ = result;
     return last_result_;
   };

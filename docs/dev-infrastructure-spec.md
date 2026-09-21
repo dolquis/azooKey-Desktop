@@ -1539,7 +1539,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 ときのみ。いずれか 1 つでも偽なら redact する。
 
 - `core::ParsePrivacyPolicy(settings)` が `privacy.mode` と `privacy.redactLogs` を
-  解決し、`RuntimeSettings.privacy_policy` に保持する。詳細ログを許可するのは
+  解決する。ログへ渡す TIP の設定は `TipAiSettings.privacy_policy` に保持する。
+  Host の `RuntimeSettings.privacy_policy` は学習ゲートの secure 判定に用いる。
+  詳細ログを許可するのは
   `redactLogs = false` を満たし、mode が `normal` / `offline`、または
   `custom` かつ `custom.detailedLogging = true` の場合に限る。
   `private` / `secure`、設定欠落・型不正・未知 mode は詳細ログ不許可とする。

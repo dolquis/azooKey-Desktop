@@ -215,10 +215,12 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
     case ipc::MessageType::CommitObservation:
       return HandleCommitObservation(req);
     case ipc::MessageType::CommitSegmentsObservation: {
-      std::lock_guard privacy_lock(*config_.update_config_mutex);
+      auto privacy =
+          settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
       if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
-          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed)) {
+          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
+                                    privacy && privacy->policy.secure)) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }
@@ -386,11 +388,8 @@ bool Dispatcher::RequiresAuthenticatedSession() const {
   return !config_.handshake_token.empty() && !authenticated_;
 }
 
-bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed) const {
-  if (!client_supports_secure_flag_ || secure || !learning_allowed) return false;
-  // The handler holds update_config_mutex through the learning operation so
-  // UpdateConfig cannot revoke host permission between the check and the write.
-  return !settings_store_ || !settings_store_->settings().privacy_policy.secure;
+bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed, bool host_secure) const {
+  return client_supports_secure_flag_ && !secure && learning_allowed && !host_secure;
 }
 
 void Dispatcher::SetClientId(std::string client_id) {
@@ -562,8 +561,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   auto parsed = ipc::ParseObserveTypoRequest(req.payload_json);
   if (!parsed) return;
-  std::lock_guard privacy_lock(*config_.update_config_mutex);
-  if (!LearningAllowed(parsed->secure, parsed->learning_allowed)) return;
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
+  if (!LearningAllowed(parsed->secure, parsed->learning_allowed, privacy && privacy->policy.secure))
+    return;
   // The engine applies the accept filters and the "off" gate; a rejected pair
   // is simply not recorded, and there is no reply to carry that outcome.
   engine_->ObserveTypo(parsed->wrong_reading, parsed->correct_reading, NowSec());
@@ -759,10 +760,12 @@ void Dispatcher::HandleCancel(const ipc::Envelope& req) {
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Envelope& req) {
-  std::lock_guard privacy_lock(*config_.update_config_mutex);
+  auto privacy =
+      settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
   ipc::CommitObservationResponse res;
   if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json);
-      parsed && LearningAllowed(parsed->secure, parsed->learning_allowed)) {
+      parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
+                                privacy && privacy->policy.secure)) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
     engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),

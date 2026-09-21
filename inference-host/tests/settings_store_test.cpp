@@ -733,3 +733,35 @@ TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
   EXPECT_EQ(store.settings().auto_word.mining_min_count, 3);
   EXPECT_EQ(store.settings().auto_word.trending_interval_hours, 24);
 }
+
+TEST(SettingsStoreTest, PrivacyPublicationWaitsForActiveLearningGuard) {
+  using namespace std::chrono_literals;
+  const auto dir = TestDir("azookey_settings_privacy_publication");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"privacy":{"mode":"normal"}})");
+  azookey::host::SettingsStore store(path);
+  store.Load();
+  auto guard = store.LockPrivacyPolicy();
+  EXPECT_FALSE(guard.policy.secure);
+  WriteText(path, R"({"privacy":{"mode":"secure"}})");
+  std::promise<void> started;
+  auto entered = started.get_future();
+  auto reload = std::async(std::launch::async, [&] {
+    started.set_value();
+    return store.Reload();
+  });
+  entered.wait();
+  EXPECT_EQ(reload.wait_for(100ms), std::future_status::timeout);
+  EXPECT_FALSE(guard.policy.secure);
+  guard.lock.unlock();
+  const auto result = reload.get();
+  EXPECT_TRUE(result.settings.privacy_policy.secure);
+  EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  WriteText(path, R"({"privacy":{"mode":"normal"}})");
+  store.Reload();
+  EXPECT_FALSE(store.LockPrivacyPolicy().policy.secure);
+  WriteText(path, "invalid json");
+  store.Reload();
+  EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  std::filesystem::remove_all(dir);
+}

@@ -131,6 +131,14 @@ class SettingsStore {
   const RuntimeSettings& settings() const { return settings_; }
   const SettingsLoadResult& last_result() const { return last_result_; }
 
+  struct PrivacyGuard {
+    std::unique_lock<std::mutex> lock;
+    core::PrivacyPolicy policy;
+  };
+  // Hold through the learning operation. Reload publishes under this same lock,
+  // independently of model loading and the caller's config serialization lock.
+  PrivacyGuard LockPrivacyPolicy() const;
+
   SettingsLoadResult Load();
   SettingsLoadResult Reload();
   // The settings as they stand on disk when the file has been written since
@@ -145,12 +153,15 @@ class SettingsStore {
   static constexpr int64_t kNoWriteTime = (std::numeric_limits<int64_t>::min)();
 
   SettingsLoadResult LoadImpl(bool preserve_current_on_invalid);
+  void PublishPrivacyPolicy();
 
   std::filesystem::path settings_path_;
   std::chrono::milliseconds file_lock_timeout_;
   // Written by LoadImpl, read without the caller's mutex by
   // SettingsWrittenAfterLoad, which must not block behind a model reload.
   std::atomic<int64_t> loaded_write_time_{kNoWriteTime};
+  mutable std::mutex privacy_mutex_;
+  core::PrivacyPolicy privacy_policy_{false, false};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
   std::mutex peeked_mutex_;

@@ -6,11 +6,13 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "IpcTestData.h"
@@ -1799,4 +1801,101 @@ TEST_F(DispatcherTest, HostSecureSettingsRejectAllLearningAndMining) {
   engine.SetAutoWordStore(nullptr);
   engine.SetTypoStore(nullptr);
   std::remove(settings_path.c_str());
+}
+
+TEST_F(DispatcherTest, LearningPrivacyDoesNotWaitForUpdateConfigModelLoad) {
+  using namespace std::chrono_literals;
+  const auto path = TempPath("azookey_privacy_model_reload.json");
+  for (bool secure : {false, true}) {
+    SCOPED_TRACE(secure);
+    // Start with the opposite policy so publication is observable without
+    // reading the non-thread-safe general settings object.
+    {
+      std::ofstream out(path);
+      out << (secure ? R"({"privacy":{"mode":"normal"}})" : R"({"privacy":{"mode":"secure"}})");
+    }
+    azookey::host::SettingsStore settings(path);
+    settings.Load();
+    const auto config = DefaultDispatcherConfig();
+    azookey::host::Dispatcher updater(&engine, &scheduler, &user_dict, config, &settings);
+    azookey::host::Dispatcher observer(&engine, &scheduler, &user_dict, config, &settings);
+    EnableEventPrivacy(observer);
+    {
+      std::ofstream out(path);
+      out << (secure ? R"({"privacy":{"mode":"secure"}})" : R"({"privacy":{"mode":"normal"}})");
+    }
+    std::promise<void> loading;
+    std::promise<void> release;
+    auto entered = loading.get_future();
+    auto released = release.get_future().share();
+    azookey::host::ModelLoadOptions options;
+    options.path = "missing-privacy-test-model.gguf";
+    options.before_probe_for_tests = [&] {
+      loading.set_value();
+      released.wait();
+    };
+    auto model =
+        std::async(std::launch::async, [&] { return engine.LoadModelWithResult(options); });
+    if (entered.wait_for(2s) != std::future_status::ready) {
+      release.set_value();
+      model.get();
+      FAIL() << "model load did not reach the test barrier";
+    }
+    auto update = std::async(std::launch::async, [&] {
+      return updater.Dispatch(MakeReq(9400, ipc::MessageType::UpdateConfig, "{}"));
+    });
+    bool published = false;
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      {
+        const auto privacy = settings.LockPrivacyPolicy();
+        published = privacy.policy.secure == secure;
+      }
+      if (published) break;
+      std::this_thread::yield();
+    }
+    auto learning = std::async(std::launch::async, [&] {
+      ipc::CommitObservationRequest commit;
+      commit.reading = "かな";
+      commit.chosen = {"仮名", "かな", 1.0, "static"};
+      commit.secure = false;
+      commit.learning_allowed = true;
+      ipc::CommitSegmentsObservationRequest segments;
+      segments.segments.push_back({commit.reading, commit.chosen, {}, false});
+      segments.secure = false;
+      segments.learning_allowed = true;
+      for (const auto type :
+           {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
+        const auto response =
+            observer.Dispatch(MakeReq(9401, type,
+                                      type == ipc::MessageType::CommitObservation
+                                          ? ipc::BuildCommitObservationRequest(commit)
+                                          : ipc::BuildCommitSegmentsObservationRequest(segments)));
+        if (!response) return false;
+        const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+        if (!parsed || parsed->ok == secure) return false;
+      }
+      ipc::ObserveTypoRequest typo;
+      typo.wrong_reading = "こんちには";
+      typo.correct_reading = "こんにちは";
+      typo.secure = false;
+      typo.learning_allowed = true;
+      return !observer
+                  .Dispatch(MakeReq(9402, ipc::MessageType::ObserveTypo,
+                                    ipc::BuildObserveTypoRequest(typo)))
+                  .has_value();
+    });
+    const bool completed = learning.wait_for(1s) == std::future_status::ready;
+    const bool update_waiting = update.wait_for(0s) == std::future_status::timeout;
+    // Always unblock both async tasks before any fatal test assertion.
+    release.set_value();
+    model.get();
+    update.get();
+    const bool correct = learning.get();
+    EXPECT_TRUE(published);
+    EXPECT_TRUE(update_waiting);
+    EXPECT_TRUE(completed) << "learning waited behind model loading";
+    EXPECT_TRUE(correct);
+  }
+  std::remove(path.c_str());
 }

@@ -1957,7 +1957,11 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **変更対象**: `settings/mvp-settings.schema.json`（`privacy.*` ブロック
   追加）、`tsf-tip/src/TextService.cpp`（secure 判定と送信抑止）、
   `inference-host/src/Dispatcher.cpp`（CommitObservation /
-  QueryPredictions / Magic Conversion の抑止）、
+  CommitSegmentsObservation / ObserveTypo の学習抑止）、
+  `ipc/src/Payloads.cpp`（イベント単位の privacy フラグ）、
+  `core/include/azookey/core/PrivacyPolicy.h`（設定解決）、
+  `core/src/RuntimeLogger.cpp`（本文ログ許可と redaction）、
+  `inference-host/src/SettingsStore.cpp`（Host の privacy 設定）、
   `tsf-tip/src/ForegroundAppDetector.cpp`（新規、M48 と共用）。
 - **実装範囲**: `docs/privacy-and-secure-input-spec.md`。
   - モード 5 種（`normal` / `private` / `secure` / `offline` / `custom`）

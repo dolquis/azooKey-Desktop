@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -1648,6 +1649,77 @@ TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
                       static_cast<DWORD>(TF_ES_ASYNCDONTCARE | TF_ES_READWRITE)),
             h.context.requested_flags.end());
   EXPECT_EQ(h.context.last_flags, static_cast<DWORD>(TF_ES_SYNC | TF_ES_READ));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PrivacyProbeSyntheticLatencyAndCallsPerKey) {
+  char enabled[2]{};
+  const bool benchmark =
+      GetEnvironmentVariableA("AZOOKEY_TSF_PRIVACY_BENCH", enabled, 2) == 1 && enabled[0] == '1';
+  const size_t warmup = benchmark ? 1000 : 2;
+  const size_t samples = benchmark ? 10000 : 8;
+  TextServiceHarness h;
+  // Keep the real in-process app detector; warmup fills its executable-name cache.
+  // NoopContext accepts but does not execute edit sessions, so InputScope is
+  // Unknown. No IPC worker, composition rendering, or real text-store work runs.
+  // Alternating append/backspace bounds preedit size without ending composition.
+  h.service.preedit_kana_ = "か";
+  h.context.requested_flags.reserve(3 * (warmup + samples));
+  const auto report = [&](const char* operation, std::vector<double> values) {
+    if (!benchmark) return;
+    std::sort(values.begin(), values.end());
+    const auto percentile = [&](size_t percent) {
+      return values[(values.size() * percent + 99) / 100 - 1];
+    };
+    const std::string prefix = std::string("privacy_bench_") + operation;
+    RecordProperty(prefix + "_p50_us", std::to_string(percentile(50)));
+    RecordProperty(prefix + "_p95_us", std::to_string(percentile(95)));
+    RecordProperty(prefix + "_p99_us", std::to_string(percentile(99)));
+    RecordProperty(prefix + "_max_us", std::to_string(values.back()));
+    std::printf(
+        "[ PRIVACY_BENCH ] %s warmup=%zu samples=%zu p50_us=%.3f p95_us=%.3f "
+        "p99_us=%.3f max_us=%.3f\n",
+        operation, warmup, samples, percentile(50), percentile(95), percentile(99), values.back());
+  };
+  const auto scope_reads = [&] {
+    return std::count(h.context.requested_flags.begin(), h.context.requested_flags.end(),
+                      static_cast<DWORD>(TF_ES_SYNC | TF_ES_READ));
+  };
+  if (benchmark) {
+    RecordProperty("privacy_bench_conditions",
+                   "synthetic;real_cached_app_detector;unknown_scope;no_edit_session_execution;"
+                   "no_ipc_worker;no_rendering;no_latency_threshold");
+    std::printf(
+        "[ PRIVACY_BENCH ] synthetic real_cached_app_detector unknown_scope "
+        "no_edit_session_execution no_ipc_worker no_rendering no_latency_threshold\n");
+  }
+  std::vector<double> key_times;
+  key_times.reserve(samples);
+  for (size_t i = 0; i < warmup + samples; ++i) {
+    BOOL eaten = FALSE;
+    const auto start = std::chrono::steady_clock::now();
+    const HRESULT result = h.service.OnKeyDown(&h.context, i % 2 == 0 ? 'A' : VK_BACK, 0, &eaten);
+    const auto end = std::chrono::steady_clock::now();
+    ASSERT_EQ(result, S_OK);
+    ASSERT_TRUE(eaten);
+    if (i >= warmup)
+      key_times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+  }
+  EXPECT_EQ(scope_reads(), static_cast<std::ptrdiff_t>(warmup + samples));
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+  report("on_key_down", std::move(key_times));
+
+  const auto before = scope_reads();
+  std::vector<double> privacy_times;
+  privacy_times.reserve(samples);
+  for (size_t i = 0; i < warmup + samples; ++i) {
+    const auto start = std::chrono::steady_clock::now();
+    h.service.resolve_privacy_for_benchmark(&h.context);
+    const auto end = std::chrono::steady_clock::now();
+    if (i >= warmup)
+      privacy_times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+  }
+  EXPECT_EQ(scope_reads() - before, static_cast<std::ptrdiff_t>(warmup + samples));
+  report("resolve_privacy", std::move(privacy_times));
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, OemCompositionTranslationUsesCurrentKeyboardLayoutWhenSupported) {

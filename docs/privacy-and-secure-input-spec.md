@@ -177,7 +177,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 
 | 抑止対象 | 実装ポイント |
 |---|---|
-| `CommitObservation` IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` を経路共通の choke point として落とす |
+| 学習観測 IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` / `ObserveTypo` を経路共通の choke point として落とす |
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
 | `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::PostIpcSend` が message type で落とす。学習・予測系の送出は `PostIpcSend` を通す規約とし、queue へ直接積まない |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |
@@ -199,8 +199,16 @@ secure は全軸に優先する。これらの軸名は C++ の呼出 API を表
 private / custom の学習方針の適用は、secure 判定とは別の消費側の責務とする。
 
 詳細ログの設定解決は `core::ParsePrivacyPolicy(settings)` が担い、
-`RuntimeSettings.privacy_policy` に `core::PrivacyPolicy` を保持する。
-その既定は `secure = true`、`detailed_logging_allowed = false` である。
+TIP は `TipAiSettings.privacy_policy` を保持し、入力先の条件と交差させてログへ渡す。
+Host の `RuntimeSettings.privacy_policy` は学習ゲートの secure 判定に用いる。
+`core::PrivacyPolicy` の構造体既定は `secure = true`、
+`detailed_logging_allowed = false` であり、判定コンテキスト省略時の安全側を表す。
+設定ファイルがない場合や、有効な設定 object で `privacy` が欠ける場合の
+実効モードは `normal`、詳細ログは不許可である。`privacy.mode` だけの欠落も
+モードは `normal` に解決し、詳細ログは別途 `redactLogs` の条件で判定する。
+設定の読取失敗・JSON 不正、
+object でない設定または `privacy`、未知・型不正の `privacy.mode` は secure 相当とし、
+学習、`QueryPredictions`、AI 送信を停止する。これを通常起動の既定と混同しない。
 本文の出力条件は `docs/dev-infrastructure-spec.md` §7.6 に従う。
 
 #### 5.1.1 判定主体と二段ゲート
@@ -215,11 +223,20 @@ private / custom の学習方針の適用は、secure 判定とは別の消費�
 
 `ObserveTypo`、`CommitObservation`、`CommitSegmentsObservation` は
 イベントごとの `secure` と `learning_allowed` を運ぶ。Host が学習を許可するのは、
-受理済み接続が `secure_flag` に対応し、当該要求の `secure == false` かつ
+受理済み接続が `secure_flag` に対応し、Host 設定が非 secure で、当該要求の `secure == false` かつ
 `learning_allowed == true` の場合に限る。欠落・型不正はそれぞれ
 `true` / `false` の安全側で扱い、直近の `QueryCandidates` から推定しない。
-`QueryCandidates` にも `secure` を載せる。wire 契約は
+TIP の学習フラグは `!secure` を基本とし、batch の学習対象条件も併せて満たす場合に
+`learning_allowed = true` とする。private / custom の学習軸の反映は別の消費側契約であり、
+この wire フラグをモード表全体の学習許可と同一視しない。
+`QueryCandidates` にも両フラグを載せるが、Host の候補要求処理はどちらも
+補正適用の判定には用いない。M55 の補正適用ゲートは別の機能契約とする。wire 契約は
 `docs/typo-correction-learning-spec.md` §12.13 と payload 定義を参照する。
+
+Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定から
+ストア書込みまで保持する。同じ専用 mutex を使う `PublishPrivacyPolicy()` と直列化し、
+判定直後の設定変更で学習許可がすり抜けることを防ぐ。この mutex はモデル再ロードの
+`update_config_mutex` と分離し、学習要求をモデル再ロード完了待ちにしない。
 
 これは protocol v1 の加算的拡張である。古い TIP と新しい Host の組合せでは
 学習を拒否し、新しい TIP と古い Host の組合せでは TIP の送信抑止を維持する。

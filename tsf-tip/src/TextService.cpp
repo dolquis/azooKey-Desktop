@@ -2175,10 +2175,9 @@ void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_acti
 
 HRESULT TextService::CommitSelected(ITfContext* context) {
   if (!context) return S_OK;
-  // Every observation the TIP can produce is built below, so this is the one
-  // place the M46 secure decision has to be current (DEV-1187). A neural batch
-  // conversion never evaluated the AI axes, and the plain per-key path never
-  // evaluated anything at all; both are covered by evaluating here.
+  // Re-evaluate at commit time: focus, scope or settings may have changed
+  // since the query or batch conversion that produced the selected candidate.
+  // Every observation below must carry this commit's privacy decision.
   const auto privacy = ResolvePrivacy(context, false);
   const bool secure = privacy.secure;
   const bool multi_segment = shown_batch_segments_.size() > 1;

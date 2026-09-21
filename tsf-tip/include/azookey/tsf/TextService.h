@@ -149,6 +149,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_privacy_settings_for_test(std::string_view contents) {
     local_settings_.SetPrivacyForTest(contents);
   }
+  void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
   bool bracket_composition_for_test() const { return bracket_composition_; }
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));

@@ -625,6 +625,43 @@ TEST(PayloadsTest, ListNewWordCandidatesRoundTrips) {
   EXPECT_EQ(parsed_response->items[0].state, field.state);
   EXPECT_EQ(parsed_response->items[0].count, field.count);
   EXPECT_EQ(parsed_response->items[0].last_seen_epoch, field.last_seen_epoch);
+  EXPECT_TRUE(parsed_response->ok);
+  EXPECT_FALSE(parsed_response->error);
+}
+
+TEST(PayloadsTest, NewWordResponsesCarryAnErrorChannel) {
+  // A failure is distinguishable from "no words in that state".
+  azookey::ipc::ListNewWordCandidatesResponse list;
+  list.ok = false;
+  list.error = std::string(azookey::ipc::kNewWordErrorStoreUnavailable);
+  const auto parsed_list = azookey::ipc::ParseListNewWordCandidatesResponse(
+      azookey::ipc::BuildListNewWordCandidatesResponse(list));
+  ASSERT_TRUE(parsed_list);
+  EXPECT_FALSE(parsed_list->ok);
+  EXPECT_EQ(parsed_list->error, "store_unavailable");
+  EXPECT_TRUE(parsed_list->items.empty());
+
+  azookey::ipc::ResolveNewWordResponse resolve;
+  resolve.ok = false;
+  resolve.error = std::string(azookey::ipc::kNewWordErrorNotFound);
+  const auto parsed_resolve =
+      azookey::ipc::ParseResolveNewWordResponse(azookey::ipc::BuildResolveNewWordResponse(resolve));
+  ASSERT_TRUE(parsed_resolve);
+  EXPECT_FALSE(parsed_resolve->ok);
+  EXPECT_FALSE(parsed_resolve->changed);
+  EXPECT_EQ(parsed_resolve->error, "not_found");
+
+  // Protocol v1 additive fields: a payload from before the error channel still
+  // parses, as a successful list and as an unchanged resolve.
+  const auto legacy_list = azookey::ipc::ParseListNewWordCandidatesResponse(R"({"items":[]})");
+  ASSERT_TRUE(legacy_list);
+  EXPECT_TRUE(legacy_list->ok);
+  EXPECT_FALSE(legacy_list->error);
+  const auto legacy_resolve = azookey::ipc::ParseResolveNewWordResponse(R"({"ok":true})");
+  ASSERT_TRUE(legacy_resolve);
+  EXPECT_TRUE(legacy_resolve->ok);
+  EXPECT_FALSE(legacy_resolve->changed);
+  EXPECT_FALSE(legacy_resolve->error);
 }
 
 TEST(PayloadsTest, ListNewWordCandidatesRejectsUnknownFilterAndOutOfRangeLimit) {
@@ -667,10 +704,13 @@ TEST(PayloadsTest, ResolveNewWordRoundTripsAndRejectsUnknownAction) {
 
   azookey::ipc::ResolveNewWordResponse response;
   response.ok = true;
+  response.changed = true;
   const auto parsed_response = azookey::ipc::ParseResolveNewWordResponse(
       azookey::ipc::BuildResolveNewWordResponse(response));
   ASSERT_TRUE(parsed_response);
   EXPECT_TRUE(parsed_response->ok);
+  EXPECT_TRUE(parsed_response->changed);
+  EXPECT_FALSE(parsed_response->error);
 }
 
 TEST(PayloadsTest, EventPrivacyDefaultsDenyAndExplicitFlagsRoundTrip) {

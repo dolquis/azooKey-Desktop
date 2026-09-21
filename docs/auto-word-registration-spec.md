@@ -74,8 +74,10 @@ TSV（`LearningStore` の区切り規約に準拠、`#` コメント可）。先
 
 - `source`: `mining` | `trending`、`state`: `pending` | `confirmed` | `rejected`
 - 既定パス: `%LOCALAPPDATA%\azooKey\data\auto_words.tsv`
-  （`learning.tsv` / `user_dict.json` と同じ `data\` 配下。host CLI `--auto-word-store` で上書き。
-  §14.10 の非配布データ配置と一致させる）
+  （`learning.tsv` / `user_dict.json` と同じ `data\` 配下。host CLI で `--learning <path>` を
+  明示すると、その親ディレクトリの `auto_words.tsv` を使う。§14.10 の非配布データ配置と
+  一致させる）
+- `score` は、読み戻したときに同じ `double` になる最短の 10 進表現で書く。
 - パース失敗行はスキップ。ファイル無しは空ストアで成功扱い（`UserDictionary::Load`
   の挙動に合わせる）。
 
@@ -106,6 +108,12 @@ class AutoWordStore {
   std::vector<AutoWord> ListByState(AutoWordState state) const;
   bool Confirm(const std::string& surface, const std::string& reading);
   bool Reject(const std::string& surface, const std::string& reading);
+  // 承認 IPC 用: 状態を無条件に設定し、直前の状態を返す（キーが無ければ nullopt）
+  std::optional<AutoWordState> SetState(const std::string& surface, const std::string& reading,
+                                        AutoWordState state);
+  // 保存失敗時の巻き戻し用: 現在の状態が expected のときだけ desired へ変える
+  bool CompareAndSetState(const std::string& surface, const std::string& reading,
+                          AutoWordState expected, AutoWordState desired);
 
   // QueryCandidates 用: reading でルックアップし Confirmed のみ返す。
   std::vector<AutoWord> LookupConfirmed(const std::string& reading) const;
@@ -174,9 +182,12 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 > ため、バケットの membership をそのまま見ると新語が初回確定で「既知」になり、
 > 2 回目以降を観測できず `miningMinCount` に到達しない。
 >
-> `Contains` の既定実装は `false` を返す。`ZenzaiModelConverter` は override
-> しないので、モデルバックエンド利用時の既知語判定はユーザー辞書と静的辞書
-> レイヤだけになる。Zenzai 内部語彙を判定に含めるのは M53 以降の課題とする。
+> `Contains` の既定実装は `false` を返す。`ZenzaiModelConverter::Contains` は
+> フォールバック変換器（`SimpleConverter`）の `Contains` へ委譲する。モデル
+> バックエンド利用時も、既知語判定はユーザー辞書・静的辞書レイヤ・フォール
+> バック変換器の実辞書の 3 つを見る。Zenzai モデル自身の語彙は
+> `(reading, surface)` で引ける索引を持たないため判定に含めず、M53 以降の
+> 課題とする。
 
 ### 4-3. 誤検出フィルタ
 
@@ -258,16 +269,16 @@ M32（自動更新）の `UpdateChecker.cpp` と HTTP DL + SHA256 検証パタ�
 
 ## 6. 適用（`QueryCandidates` への注入）
 
-`InferenceEngine::QueryCandidates`（`InferenceEngine.cpp` 102-136 行）の
-`user_dict_` ルックアップ直後、`converter_->Convert` の前に追加する。
+`InferenceEngine::QueryCandidatesEx` の `user_dict_` ルックアップ直後、
+`converter_->Convert` の前に追加する。読みは typo 補正後の `kana` を使う。
 
 ```cpp
-if (auto_word_store_) {
-  for (const auto& w : auto_word_store_->LookupConfirmed(kana)) {  // Confirmed のみ
+if (auto_word_store) {  // state_mutex_ の下で auto_word_store_ を写したもの
+  for (auto& w : auto_word_store->LookupConfirmed(kana)) {  // Confirmed のみ
     core::Candidate c;
-    c.surface = w.surface;
-    c.reading = w.reading;
-    c.score   = w.score;
+    c.surface = std::move(w.surface);
+    c.reading = std::move(w.reading);
+    c.score   = w.score > 0.0 ? w.score : config.auto_word_default_score;
     c.source  = core::CandidateSource::UserDictionary;
     c.debug_info = "auto-word";
     merged.push_back(std::move(c));
@@ -277,8 +288,17 @@ if (auto_word_store_) {
 
 - **pending 語は注入しない**（`LookupConfirmed` が Confirmed 限定）。承認後に
   初めて変換へ反映される。
-- `EngineConfig` に `auto_word_default_score` を追加し、user_dict と内蔵辞書の
-  中間程度のスコアを既定にする（誤候補の過剰な昇格を防ぐ）。
+- `LookupConfirmed` は `state_mutex_` の外で呼ぶ。`AutoWordStore` は自前の
+  mutex を持ち、`CommitObservation` の `Save()` はディスクへの flush の間
+  その mutex を保持する。`state_mutex_` の下で待つと、Health やモデル切替が
+  確定時の書き込みの後ろで止まる。
+- `EngineConfig::auto_word_default_score`（既定 1.2）は、スコアを持たない語
+  （マイニング由来の語はすべて `score == 0`）に使う。user_dict の既定値
+  `user_word_default_score`（1.5）より低いので、同じ surface のユーザー辞書語が
+  マージで勝つ。静的辞書の一般的な完全一致（frequency + base 層の優先度 0.20 +
+  完全一致 0.10）よりは高い。設定キーは持たない。
+- `debug_info` は識別用の印である。重複除去で他の候補とまとめられると、
+  `;dup:` 付きで連結される。
 
 ## 7. 承認フロー
 
@@ -296,10 +316,18 @@ struct NewWordField {
   uint32_t count{0};
   uint64_t last_seen_epoch{0};
 };
-struct ListNewWordCandidatesResponse { std::vector<NewWordField> items; };
+struct ListNewWordCandidatesResponse {
+  bool ok{true};
+  std::optional<std::string> error;
+  std::vector<NewWordField> items;
+};
 
 struct ResolveNewWordRequest { std::string surface, reading, action; }; // action: confirm|reject
-struct ResolveNewWordResponse { bool ok{false}; };
+struct ResolveNewWordResponse {
+  bool ok{false};
+  bool changed{false};
+  std::optional<std::string> error;
+};
 ```
 
 parser の受理条件:
@@ -311,17 +339,43 @@ parser の受理条件:
 - `ResolveNewWordRequest` は `surface` / `reading` が空、または `action` が
   `confirm` / `reject` 以外ならパース失敗とする。
 
-`ResolveNewWordResponse.ok` は「この呼び出しで状態が変わり、保存できた」を表す。
-対象語が無い場合と、既に同じ状態だった場合はいずれも `false` になる。
+応答の意味:
+
+- `ListNewWordCandidatesResponse.ok` が `true` なら、`items` は指定状態の語を
+  `max_items` 件まで並べたものである。空配列は「その状態の語が無い」を意味する。
+  一覧を作れなかった場合は `ok=false` と `error` を返し、`items` は空にする。
+- `ResolveNewWordResponse.ok` は「呼び出し後に対象語が要求した状態にあり、
+  その状態がファイルに保存されている」を表す。`changed` はこの呼び出しで
+  状態が変わった場合だけ `true` になる。既に同じ状態の語への同じ操作は
+  `ok=true, changed=false` を返し、ファイルを書き直さない。
+- `ok=false` のときは `error` に次のいずれかを入れる。
+
+| `error` | 意味 |
+|---|---|
+| `invalid_request` | payload の parse に失敗した（上記の受理条件を満たさない） |
+| `store_unavailable` | Host に `AutoWordStore` が設定されていない |
+| `not_authenticated` | Handshake 未成立の接続からの要求 |
+| `not_found` | `(surface, reading)` の語がストアに無い（Resolve のみ） |
+| `save_failed` | 状態変更を保存できなかった（Resolve のみ）。メモリ上の状態は元に戻す |
+
+`ok` / `changed` / `error` は protocol v1 への追加フィールドである。
+`ListNewWordCandidatesResponse` で `ok` が無い応答は `ok=true`、
+`ResolveNewWordResponse` で `changed` が無い応答は `changed=false` として読む。
+同じ操作の繰り返しを `ok=true` とする `ok` の意味は `Envelope.version` 1 のまま
+適用し、繰り返しを `ok=false` とする旧い意味は互換のために残さない。
 
 ### 7-2. Dispatcher 配線
 
 - `Dispatcher` コンストラクタに `learning::AutoWordStore* auto_word_store` を追加
   （`user_dict` の隣）。
 - `Dispatch` の switch に 2 ケース追加。
-- `HandleListNewWordCandidates`: `auto_word_store_->ListByState(...)` →
-  `NewWordField` に変換。
-- `HandleResolveNewWord`: action に応じ `Confirm` / `Reject` → `Save()`。
+- `HandleListNewWordCandidates`: `auto_word_store_->ListByState(...)` の結果を
+  `last_seen_epoch` の新しい順に並べ、`max_items` 件で切って `NewWordField` に変換。
+- `HandleResolveNewWord`: action に応じた目標状態を `AutoWordStore::SetState`
+  で設定し、直前の状態を受け取る。直前の状態が目標と同じなら保存せず
+  `ok=true, changed=false` を返す。変わった場合は `Save()` し、失敗したら
+  直前の状態へ戻して `save_failed` を返す。戻すのは語がまだ目標状態にある
+  場合だけとし（`CompareAndSetState`）、その間に別の接続が下した判断を消さない。
 
 ### 7-3. UI と MVP 暫定
 
@@ -331,9 +385,36 @@ parser の受理条件:
 - **M30 完成前の MVP 暫定**（いずれか／併用）:
   1. **auto モード限定運用** — 承認 UI が無い間は `registrationMode=auto` を
      推奨設定とし、pending を経ず即 confirmed。
-  2. **host のデバッグ CLI** — `--list-new-words` /
-     `--confirm-new-word <surface> <reading>` のワンショットサブコマンドを
-     `inference-host` に追加（`AutoWordStore` を直接操作。検証・dogfooding 用）。
+  2. **host の `newwords` サブコマンド** — 検証・dogfooding 用のワンショット
+     CLI。`userdict` / `lookup` と同じく host の引数に `newwords` を置き、
+     それ以降をサブコマンドの引数として読む。
+
+     ```
+     azookey_inference_host newwords list [--state pending|confirmed|rejected] [--format json|tsv]
+     azookey_inference_host newwords confirm --reading <reading> --surface <surface> [--offline]
+     azookey_inference_host newwords reject  --reading <reading> --surface <surface> [--offline]
+     ```
+
+     - `list` は `auto_words.tsv` を直接読む（既定は `--state pending`）。host は
+       観測と承認のたびに保存するので、ファイルが共有の参照元になる。並びは
+       `ListNewWordCandidates` と同じ `last_seen_epoch` の新しい順とする。
+       ストアを読めない場合は標準出力へ何も出さず、標準エラーへ理由を出して
+       終了コード 1 で終わる。
+     - `confirm` / `reject` は既定で稼働中の host へ Named Pipe で接続し、
+       Handshake の後に `ResolveNewWord` を送る。host はストアをメモリ上に持ち、
+       次の保存でファイル全体を書き直す。稼働中の host の裏でファイルを編集すると
+       変更が失われるため、接続できない場合は失敗とする。`--offline` を付けた
+       ときだけファイルを直接編集する。直接編集は host と同じ `Load` / `Save`
+       を使うので、読めなかった破損行は書き直しで失われる（§3-2 のスキップ規則）。
+     - JSON 出力は 1 行 1 オブジェクトとする。`list` は語ごとに `op` / `ok` /
+       `reading` / `surface` / `source` / `state` / `count` / `last_seen_epoch`
+       を出し、該当語が無ければ `{"ok":true,"op":"list"}` の 1 行を出す。TSV は
+       `reading` / `surface` / `source` / `state` / `count` / `last_seen_epoch`
+       の順に並べる。`confirm` / `reject` は `op` / `ok` / `changed` / `reading` /
+       `surface` / `via`（`ipc` / `file`）と、失敗時の `error`（§7-1 のコード、
+       または接続・Handshake の失敗理由）を出す。
+     - 終了コードは `ok=true`（`changed=false` を含む）で 0、失敗で 1、引数の
+       誤りで 2 とする。
 
 ## 8. 設定
 
@@ -360,9 +441,10 @@ parser の受理条件:
 `auto_word_mining_enabled` / `auto_word_auto_register`（`registrationMode == "auto"`）/
 `auto_word_min_count` へ反映する。
 
-`trendingIntervalHours` の上限は 8760（1 年）とする。`auto_word_trending_enabled` と
-`auto_word_default_score` は取り込みと候補注入を持つ側の課題（M36-B / M53）で
-`EngineConfig` へ追加する。
+`trendingIntervalHours` の上限は 8760（1 年）とする。`auto_word_trending_enabled` は
+取り込みを持つ側の課題（M36-B）で `EngineConfig` へ追加する。
+`auto_word_default_score` は §6 の注入が使う `EngineConfig` の内部値であり、
+設定キーを持たない。
 
 ## 9. プライバシー方針
 
@@ -402,6 +484,10 @@ parser の受理条件:
 | 編集 | `ipc/include/azookey/ipc/Payloads.h`, `ipc/src/Payloads.cpp` | A |
 | 編集 | `inference-host/include/azookey/host/InferenceEngine.h`, `src/InferenceEngine.cpp` | A |
 | 編集 | `inference-host/include/azookey/host/Dispatcher.h`, `src/Dispatcher.cpp` | A |
+| 編集 | `inference-host/include/azookey/host/ZenzaiModelConverter.h`, `src/ZenzaiModelConverter.cpp`（`Contains`） | A |
+| 新規 | `inference-host/include/azookey/host/NewWordsCli.h` / `src/NewWordsCli.cpp`（§7-3） | A |
+| 編集 | `inference-host/include/azookey/host/HostArgs.h`, `src/HostArgs.cpp` | A |
+| 新規 | `inference-host/tests/newwords_cli_test.cpp` | A |
 | 編集 | `inference-host/src/main.cpp` | A / B |
 | 編集 | `settings/mvp-settings.schema.json` | A |
 | 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` | A |
@@ -413,19 +499,30 @@ parser の受理条件:
   `Observe` の pending 追加 → count++ → しきい値で Confirmed 昇格 /
   `auto_promote` 即昇格 / Reject 後の再 `Observe` が無視される /
   `LookupConfirmed` が pending を返さない / `IngestTrending` の rejected skip・
-  mining 優先 / Save→Load 往復 / `PrunePending` の経過判定 /
+  mining 優先 / Save→Load 往復（score が値を変えずに往復すること） /
+  `SetState` が直前の状態を返すこと / `CompareAndSetState` が期待状態のときだけ
+  変えること / `PrunePending` の経過判定 /
   キー一意性（reading 空 vs 非空）。
 - `ipc/tests/payloads_test.cpp`: `ListNewWordCandidates` / `ResolveNewWord` の
-  Build→Parse 往復、不正 action・欠損フィールドのパース失敗。
+  Build→Parse 往復、不正 action・欠損フィールドのパース失敗、`ok` / `changed` /
+  `error` の往復と、これらを欠く応答の既定値。
 - `ipc/tests/messages_test.cpp`: 新 `MessageType` の `TypeToString` /
   `TypeFromString` 往復。
 - `inference-host/tests/engine_test.cpp`: `CommitObservation` で OOV が記録 /
   既知語（user_dict・内蔵辞書）は記録されない / 誤検出フィルタで除外 /
-  Confirmed 語が `QueryCandidates` に `debug_info="auto-word"` で注入 /
-  pending 語は注入されない。
+  Zenzai 利用時もフォールバック変換器の辞書語は記録されない /
+  Confirmed 語が `QueryCandidates` に `debug_info="auto-word"` と
+  `auto_word_default_score` で注入 / pending 語は注入されない /
+  `registrationMode=confirm` では承認するまで注入されない。
 - `inference-host/tests/dispatcher_test.cpp`: `HandleListNewWordCandidates` が
   pending 一覧を返す / `HandleResolveNewWord` confirm/reject の反映 /
-  `auto_word_store_=nullptr` でクラッシュしない。
+  同じ操作の繰り返しが `ok=true, changed=false` / `not_found`・`invalid_request`・
+  `store_unavailable` の各 `error` / 保存失敗時に `save_failed` を返し状態を戻す /
+  承認後にはじめて `QueryCandidates` へ注入される。
+- `inference-host/tests/newwords_cli_test.cpp`: 引数検証 / `list` の並びと
+  JSON・TSV 出力 / `--offline` での直接編集 / host 不在時にファイルを触らず
+  失敗すること / 稼働中の Dispatcher 経由の confirm で pending → confirmed →
+  注入まで通ること。
 - 新規 `inference-host/tests/trending_word_fetcher_test.cpp`（M36-B）:
   SHA256 検証成功/失敗の分岐。`HttpDownloader` をインターフェース化し
   テストダブルを注入（HTTP はモック / ローカルファイル経由）。
@@ -440,8 +537,9 @@ parser の受理条件:
    `registrationMode: "auto"` を書いて host を stdio 起動し、辞書に無い
    `(reading, surface)` の `CommitObservation` を `miningMinCount` 回送ってから
    同じ reading の `QueryCandidates` を投げ、`auto-word` マーク付き候補が
-   注入されることを確認。`confirm` モードでは `ListNewWordCandidates` /
-   `ResolveNewWord` で承認後に注入されることを確認。
+   注入されることを確認。`confirm` モードでは `azookey_inference_host newwords list` で
+   pending を確認し、`azookey_inference_host newwords confirm --reading <reading>
+   --surface <surface>` で承認した後に注入されることを確認。
 4. M36-B: 正規アセットとハッシュ不一致アセットの両方で `FetchOnce` を実行し、
    検証通過時のみ取り込まれることを確認。
 

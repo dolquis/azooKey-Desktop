@@ -219,6 +219,56 @@ TEST(AutoWordStoreTest, SaveLoadRoundTrip) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(AutoWordStoreTest, ScoreSurvivesSaveLoadExactly) {
+  const auto path = TempPath("azookey_auto_word_score.tsv");
+  // Neither value fits in six significant digits.
+  const double first = 1.0 / 3.0;
+  const double second = 0.1 + 0.2;
+  {
+    AutoWordStore store(path);
+    store.IngestTrending({AutoWord{"推し活", "おしかつ", AutoWordSource::Trending,
+                                   AutoWordState::Pending, 1, 0, 0, first},
+                          AutoWord{"界隈", "かいわい", AutoWordSource::Trending,
+                                   AutoWordState::Pending, 1, 0, 0, second}},
+                         kNow, false);
+    ASSERT_TRUE(store.Save());
+  }
+
+  AutoWordStore reloaded(path);
+  ASSERT_TRUE(reloaded.Load());
+  for (const auto& word : reloaded.ListByState(AutoWordState::Pending)) {
+    EXPECT_EQ(word.score, word.surface == "推し活" ? first : second) << word.surface;
+  }
+  EXPECT_EQ(reloaded.Size(), 2u);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(AutoWordStoreTest, SetStateReportsThePreviousState) {
+  AutoWordStore store(TempPath("azookey_auto_word_set_state.tsv"));
+  EXPECT_FALSE(store.SetState("なし", "なし", AutoWordState::Confirmed));
+
+  store.Observe("あずきー", "あずきー", kNow, 3, false);
+  EXPECT_EQ(store.SetState("あずきー", "あずきー", AutoWordState::Confirmed),
+            AutoWordState::Pending);
+  EXPECT_EQ(store.SetState("あずきー", "あずきー", AutoWordState::Confirmed),
+            AutoWordState::Confirmed);
+  // Unlike Confirm/Reject it can go back to Pending, which is what a rollback needs.
+  EXPECT_EQ(store.SetState("あずきー", "あずきー", AutoWordState::Pending),
+            AutoWordState::Confirmed);
+  EXPECT_TRUE(store.LookupConfirmed("あずきー").empty());
+
+  // A rollback only lands on the state it expects to undo.
+  EXPECT_FALSE(store.CompareAndSetState("あずきー", "あずきー", AutoWordState::Confirmed,
+                                        AutoWordState::Rejected));
+  EXPECT_TRUE(store.CompareAndSetState("あずきー", "あずきー", AutoWordState::Pending,
+                                       AutoWordState::Rejected));
+  EXPECT_EQ(store.ListByState(AutoWordState::Rejected).size(), 1u);
+  EXPECT_FALSE(
+      store.CompareAndSetState("なし", "なし", AutoWordState::Pending, AutoWordState::Confirmed));
+}
+
 TEST(AutoWordStoreTest, RoundTripsSurfacesContainingTabs) {
   const auto path = TempPath("azookey_auto_word_escape.tsv");
   const std::string surface = "あず\tきー";

@@ -1064,8 +1064,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   着手する場合は `auto` モード / デバッグ CLI 限定運用になる。
 - **変更対象**: `learning/src/AutoWordStore.cpp`（新規）、`ipc/src/Messages.cpp`
   ・`ipc/src/Payloads.cpp`（`ListNewWordCandidates` / `ResolveNewWord` 追加）、
-  `inference-host/src/InferenceEngine.cpp`・`Dispatcher.cpp`・`main.cpp`、
-  `settings/mvp-settings.schema.json`。
+  `inference-host/src/InferenceEngine.cpp`・`Dispatcher.cpp`・`main.cpp`・
+  `ZenzaiModelConverter.cpp`・`HostArgs.cpp`・`NewWordsCli.cpp`（新規。承認用
+  `newwords` CLI、spec §7-3）、`settings/mvp-settings.schema.json`。
 - **実装範囲**: `docs/auto-word-registration-spec.md` §3〜§4・§6〜§9。
   - `CommitObservation` を hook した OOV 検出（新 IPC 不要）
   - 新ストア `AutoWordStore`（pending / confirmed / rejected の状態管理）

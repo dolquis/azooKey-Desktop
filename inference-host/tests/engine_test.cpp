@@ -2238,6 +2238,98 @@ TEST(EngineAutoWordMiningTest, DuplicateObservationIdIsNotMinedTwice) {
   EXPECT_EQ(pending[0].count, 1u);
 }
 
+TEST(EngineAutoWordMiningTest, ModelBackendStillConsultsTheFallbackLexicon) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_zenzai_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_zenzai.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = true;
+  auto engine =
+      MakeEngineWithConverter(MakeConverterWithDictionary({{"きしゃ", "汽車"}}), store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+
+  const auto model_file = std::filesystem::temp_directory_path() / "azookey_mining_zenzai.gguf";
+  WriteMinimalGguf(model_file);
+  azookey::host::ModelLoadOptions options;
+  options.path = azookey::core::PathToUtf8(model_file);
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  const auto loaded = engine->LoadModelWithResult(options);
+  ASSERT_TRUE(loaded.ok) << loaded.error.value_or("");
+
+  // With Zenzai active, a word the fallback lexicon knows is still known.
+  engine->CommitObservation("きしゃ", "汽車", kNowBase);
+  EXPECT_EQ(auto_words.Size(), 0u);
+  engine->CommitObservation("あずきー", "アズーキー", kNowBase);
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Pending).size(), 1u);
+
+  std::filesystem::remove(model_file);
+}
+
+// ---- M36-A: injection of confirmed words (spec section 6) ----
+
+namespace {
+
+const azookey::core::Candidate* FindAutoWord(
+    const std::vector<azookey::core::Candidate>& candidates, const std::string& surface) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(), [&](const auto& c) {
+    return c.surface == surface && c.debug_info.find("auto-word") != std::string::npos;
+  });
+  return it == candidates.end() ? nullptr : &*it;
+}
+
+}  // namespace
+
+TEST(EngineAutoWordInjectionTest, ConfirmedWordsAreInjectedAndPendingWordsAreNot) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject.tsv"));
+  auto_words.Observe("阿頭季", "あずき", kNowBase, 3, false);
+  auto_words.Observe("小豆期", "あずき", kNowBase, 3, false);
+  ASSERT_TRUE(auto_words.Confirm("阿頭季", "あずき"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_default_score = 1.25;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+
+  const auto candidates = engine->QueryCandidates("あずき", "", kNowBase);
+  const auto* confirmed = FindAutoWord(candidates, "阿頭季");
+  ASSERT_NE(confirmed, nullptr);
+  EXPECT_EQ(confirmed->reading, "あずき");
+  EXPECT_EQ(confirmed->source, azookey::core::CandidateSource::UserDictionary);
+  // A mined word carries no score of its own, so the configured default applies.
+  EXPECT_DOUBLE_EQ(confirmed->score, 1.25);
+  EXPECT_EQ(FindAutoWord(candidates, "小豆期"), nullptr);
+
+  // Detaching the store stops the injection.
+  engine->SetAutoWordStore(nullptr);
+  EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+}
+
+TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
+  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_confirm_learning.tsv"));
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject_confirm.tsv"));
+
+  azookey::host::EngineConfig cfg;
+  cfg.auto_word_mining_enabled = true;
+  cfg.auto_word_auto_register = false;  // registrationMode "confirm"
+  cfg.auto_word_min_count = 2;
+  auto engine = MakeEngine(store, cfg);
+  engine->SetAutoWordStore(&auto_words);
+
+  for (int i = 0; i < 3; ++i) {
+    engine->CommitObservation("あずきー", "アズーキー", kNowBase + static_cast<uint64_t>(i));
+  }
+  // Past the threshold, still pending, still not injected.
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Pending).size(), 1u);
+  EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずきー", "", kNowBase + 10), "アズーキー"),
+            nullptr);
+
+  ASSERT_TRUE(auto_words.Confirm("アズーキー", "あずきー"));
+  EXPECT_NE(FindAutoWord(engine->QueryCandidates("あずきー", "", kNowBase + 11), "アズーキー"),
+            nullptr);
+}
+
 TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
   azookey::learning::LearningStore store(TempPath("azookey_engine_applyconfig_learning.tsv"));
   azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_applyconfig_typo.tsv"));

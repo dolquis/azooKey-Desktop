@@ -1481,6 +1481,10 @@ void ZenzaiModelConverter::Learn(const std::string& committed_surface,
   fallback_->Learn(committed_surface, committed_reading);
 }
 
+bool ZenzaiModelConverter::Contains(const std::string& reading, const std::string& surface) const {
+  return fallback_ && fallback_->Contains(reading, surface);
+}
+
 std::vector<core::Candidate> ZenzaiModelConverter::DegradeToFallback(
     const std::string& kana, const core::ConversionContext& context, const std::string& reason) {
   last_error_ = "zenzai-degraded:" + reason;

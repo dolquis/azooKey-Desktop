@@ -34,6 +34,7 @@
 #include "azookey/host/HostStartup.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/LookupCli.h"
+#include "azookey/host/NewWordsCli.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/UserDataPaths.h"
@@ -300,6 +301,7 @@ int main(int argc, char** argv) {
   auto handshake_token = std::move(parsed_args.args.handshake_token);
   auto userdict_args = std::move(parsed_args.args.userdict_args);
   auto lookup_args = std::move(parsed_args.args.lookup_args);
+  auto newwords_args = std::move(parsed_args.args.newwords_args);
 
   azookey::host::UserDataPathInputs path_inputs;
   path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
@@ -322,6 +324,27 @@ int main(int argc, char** argv) {
     run_options.learning_path = user_paths->learning_path;
     run_options.user_dict_path = user_paths->user_dict_path;
     auto result = azookey::host::RunLookupCli(*cli_options, run_options);
+    for (const auto& line : result.output_lines) {
+      std::cout << line << std::endl;
+    }
+    if (!result.error.empty()) {
+      std::cerr << "error: " << result.error << std::endl;
+    }
+    return result.exit_code;
+  }
+
+  if (newwords_args) {
+    std::string parse_error;
+    auto cli_options = azookey::host::ParseNewWordsCliArgs(*newwords_args, &parse_error);
+    if (!cli_options) {
+      std::cerr << "error: " << parse_error << std::endl;
+      return 2;
+    }
+    azookey::host::NewWordsCliRunOptions run_options;
+    run_options.auto_word_store_path = user_paths->auto_word_store_path;
+    run_options.pipe_name = pipe_name.empty() ? azookey::ipc::DefaultPipeName() : pipe_name;
+    run_options.handshake_token = handshake_token;
+    auto result = azookey::host::RunNewWordsCli(*cli_options, run_options);
     for (const auto& line : result.output_lines) {
       std::cout << line << std::endl;
     }

@@ -101,6 +101,9 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `Health` | codec + Host | Host状態取得 |
 | `QueryDiagnostics` | codec + Host + 診断CLI | runtime tier、backend、RSS、学習・辞書件数、fallback stateの取得。要求payloadは空オブジェクト。送信元は`diagnostics/`の`azookey_diag`（`Diagnostics.cpp`のIPCプローブ）で、TIPからは送らない |
 | `CommitSegmentsObservation` | codec + Host + TIP | 一括変換で確定した文節列（`ObservedSegment` の配列、左文脈、`observation_id`）の学習フィードバック。TIP は確定文節が非空で、かつ Handshake で Host が対応を告知した場合だけ送り、それ以外は `CommitObservation` へ落とす |
+| `ObserveTypo` | codec + Host | M35 の打ち間違えペアの観測。Host は応答を返さない。TIP は secure 時の遮断対象に含めるが送信元ではない |
+| `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
+| `ResolveNewWord` | codec + Host + newwords CLI | M36-A の新語の承認・却下。送信元は `inference-host` の `newwords` CLI（`NewWordsCli.cpp`）で、TIP からは送らない |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

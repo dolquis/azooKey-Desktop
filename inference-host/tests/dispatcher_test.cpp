@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -403,6 +404,30 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   ASSERT_TRUE(add_before_payload.has_value());
   EXPECT_FALSE(add_before_payload->ok);
   EXPECT_TRUE(user_dict.Lookup("あずきい").empty());
+
+  // The approval messages say why they refused instead of looking like an
+  // empty store.
+  auto list_before_handshake =
+      token_dispatcher.Dispatch(MakeReq(82, ipc::MessageType::ListNewWordCandidates, "{}"));
+  ASSERT_TRUE(list_before_handshake.has_value());
+  auto list_before_payload =
+      ipc::ParseListNewWordCandidatesResponse(list_before_handshake->payload_json);
+  ASSERT_TRUE(list_before_payload.has_value());
+  EXPECT_FALSE(list_before_payload->ok);
+  EXPECT_EQ(list_before_payload->error, "not_authenticated");
+  EXPECT_TRUE(list_before_payload->items.empty());
+  ipc::ResolveNewWordRequest resolve;
+  resolve.surface = "azooKey";
+  resolve.reading = "あずきー";
+  resolve.action = "confirm";
+  auto resolve_before_handshake = token_dispatcher.Dispatch(
+      MakeReq(83, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(resolve_before_handshake.has_value());
+  auto resolve_before_payload =
+      ipc::ParseResolveNewWordResponse(resolve_before_handshake->payload_json);
+  ASSERT_TRUE(resolve_before_payload.has_value());
+  EXPECT_FALSE(resolve_before_payload->ok);
+  EXPECT_EQ(resolve_before_payload->error, "not_authenticated");
 
   ipc::HandshakeRequest req;
   req.tip_version = "0.1.0";
@@ -1562,6 +1587,7 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
   ASSERT_TRUE(response.has_value());
   auto listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
   ASSERT_TRUE(listed);
+  EXPECT_TRUE(listed->ok);
   ASSERT_EQ(listed->items.size(), 2u);
   // Most recently seen first.
   EXPECT_EQ(listed->items[0].surface, "azooKey社");
@@ -1587,7 +1613,19 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
   auto resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
   ASSERT_TRUE(resolved);
   EXPECT_TRUE(resolved->ok);
+  EXPECT_TRUE(resolved->changed);
   EXPECT_EQ(auto_words.LookupConfirmed("あずきー").size(), 1u);
+
+  // Confirming it again is a success that changes nothing, not a failure the
+  // UI would have to explain.
+  response = approval.Dispatch(
+      MakeReq(65, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_TRUE(resolved->ok);
+  EXPECT_FALSE(resolved->changed);
+  EXPECT_FALSE(resolved->error);
 
   resolve.surface = "azooKey社";
   resolve.reading = "あずきーしゃ";
@@ -1616,7 +1654,103 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
   resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
   ASSERT_TRUE(resolved);
   EXPECT_FALSE(resolved->ok);
+  EXPECT_EQ(resolved->error, "not_found");
 
+  // A malformed request is reported as such, on both messages.
+  response = approval.Dispatch(MakeReq(66, ipc::MessageType::ResolveNewWord, R"({"action":"x"})"));
+  ASSERT_TRUE(response.has_value());
+  resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_FALSE(resolved->ok);
+  EXPECT_EQ(resolved->error, "invalid_request");
+  response = approval.Dispatch(
+      MakeReq(67, ipc::MessageType::ListNewWordCandidates, R"({"state_filter":"all"})"));
+  ASSERT_TRUE(response.has_value());
+  listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(listed);
+  EXPECT_FALSE(listed->ok);
+  EXPECT_EQ(listed->error, "invalid_request");
+
+  // Both words are resolved, so pending is genuinely empty: that is ok=true.
+  list.state_filter = "pending";
+  list.max_items = 50;
+  response = approval.Dispatch(MakeReq(68, ipc::MessageType::ListNewWordCandidates,
+                                       ipc::BuildListNewWordCandidatesRequest(list)));
+  ASSERT_TRUE(response.has_value());
+  listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
+  ASSERT_TRUE(listed);
+  EXPECT_TRUE(listed->ok);
+  EXPECT_TRUE(listed->items.empty());
+
+  std::remove(auto_word_path.c_str());
+}
+
+TEST_F(DispatcherTest, ResolveNewWordRollsBackWhenSaveFails) {
+  // The store's parent "directory" is a regular file, so every Save() fails.
+  const auto blocker = std::filesystem::temp_directory_path() / "azookey_dispatcher_save_blocker";
+  std::filesystem::remove_all(blocker);
+  {
+    std::ofstream(blocker) << "not a directory";
+  }
+  azookey::learning::AutoWordStore auto_words(blocker / "auto_words.tsv");
+  auto_words.Observe("azooKey", "あずきー", 1'700'000'000ULL, 3, false);
+  azookey::host::Dispatcher approval(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     nullptr, &auto_words);
+
+  ipc::ResolveNewWordRequest resolve;
+  resolve.surface = "azooKey";
+  resolve.reading = "あずきー";
+  resolve.action = "confirm";
+  auto response = approval.Dispatch(
+      MakeReq(69, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  const auto resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_FALSE(resolved->ok);
+  EXPECT_FALSE(resolved->changed);
+  EXPECT_EQ(resolved->error, "save_failed");
+  // Memory still matches the file: the word is pending and is not injected.
+  EXPECT_TRUE(auto_words.LookupConfirmed("あずきー").empty());
+  EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Pending).size(), 1u);
+
+  std::filesystem::remove_all(blocker);
+}
+
+TEST_F(DispatcherTest, ConfirmedNewWordIsInjectedOnlyAfterApproval) {
+  const auto auto_word_path =
+      (std::filesystem::temp_directory_path() / "azookey_dispatcher_auto_words_inject.tsv")
+          .string();
+  std::remove(auto_word_path.c_str());
+  azookey::learning::AutoWordStore auto_words(auto_word_path);
+  // registrationMode=confirm: the threshold is reached but auto_promote is off.
+  for (uint64_t i = 0; i < 3; ++i) {
+    auto_words.Observe("阿頭季", "あずき", 1'700'000'000ULL + i, 3, false);
+  }
+  engine.SetAutoWordStore(&auto_words);
+  azookey::host::Dispatcher approval(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     nullptr, &auto_words);
+
+  const auto has_auto_word = [&]() {
+    const auto candidates = engine.QueryCandidates("あずき", "", 1'700'000'100ULL);
+    return std::any_of(candidates.begin(), candidates.end(), [](const auto& c) {
+      return c.surface == "阿頭季" && c.debug_info.find("auto-word") != std::string::npos;
+    });
+  };
+  EXPECT_FALSE(has_auto_word());
+
+  ipc::ResolveNewWordRequest resolve;
+  resolve.surface = "阿頭季";
+  resolve.reading = "あずき";
+  resolve.action = "confirm";
+  auto response = approval.Dispatch(
+      MakeReq(73, ipc::MessageType::ResolveNewWord, ipc::BuildResolveNewWordRequest(resolve)));
+  ASSERT_TRUE(response.has_value());
+  const auto resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
+  ASSERT_TRUE(resolved);
+  EXPECT_TRUE(resolved->ok);
+  EXPECT_TRUE(has_auto_word());
+
+  engine.SetAutoWordStore(nullptr);
   std::remove(auto_word_path.c_str());
 }
 
@@ -1627,6 +1761,9 @@ TEST_F(DispatcherTest, ApprovalMessagesWithoutAStoreAnswerInsteadOfCrashing) {
   const auto listed = ipc::ParseListNewWordCandidatesResponse(response->payload_json);
   ASSERT_TRUE(listed);
   EXPECT_TRUE(listed->items.empty());
+  // Distinguishable from a store that genuinely has no pending words.
+  EXPECT_FALSE(listed->ok);
+  EXPECT_EQ(listed->error, "store_unavailable");
 
   ipc::ResolveNewWordRequest resolve;
   resolve.surface = "azooKey";
@@ -1638,6 +1775,7 @@ TEST_F(DispatcherTest, ApprovalMessagesWithoutAStoreAnswerInsteadOfCrashing) {
   const auto resolved = ipc::ParseResolveNewWordResponse(response->payload_json);
   ASSERT_TRUE(resolved);
   EXPECT_FALSE(resolved->ok);
+  EXPECT_EQ(resolved->error, "store_unavailable");
 
   // ObserveTypo stays fire-and-forget with no store behind it.
   EXPECT_FALSE(

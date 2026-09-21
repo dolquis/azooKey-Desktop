@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -72,6 +73,17 @@ class AutoWordStore {
   std::vector<AutoWord> ListByState(AutoWordState state) const;
   bool Confirm(const std::string& surface, const std::string& reading);
   bool Reject(const std::string& surface, const std::string& reading);
+  // Moves the word to `state` whatever it was before and returns the previous
+  // state, or nullopt when the key is absent. The approval handler uses the
+  // previous state to tell an idempotent repeat from a change and to roll the
+  // change back when Save() fails.
+  std::optional<AutoWordState> SetState(const std::string& surface, const std::string& reading,
+                                        AutoWordState state);
+  // Moves the word from `expected` to `desired` only if it is still in
+  // `expected`. A rollback uses this so it cannot undo a decision another
+  // connection made in the meantime. Returns whether the state was changed.
+  bool CompareAndSetState(const std::string& surface, const std::string& reading,
+                          AutoWordState expected, AutoWordState desired);
 
   // Confirmed words for one reading; pending and rejected words never surface.
   std::vector<AutoWord> LookupConfirmed(const std::string& reading) const;

@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -2035,4 +2036,156 @@ TEST_F(DispatcherTest, LearningPrivacyDoesNotWaitForUpdateConfigModelLoad) {
     EXPECT_TRUE(correct);
   }
   std::remove(path.c_str());
+}
+
+namespace {
+
+// Blocks inside Convert until the request's cancel flag is raised, the way a
+// long Zenzai decode polls its abort callback.
+class CancelObservingConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    entered_.store(true);
+    const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < give_up) {
+      if (context.cancel && context.cancel->load()) {
+        saw_cancel_.store(true);
+        return {};
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return {azookey::core::Candidate{kana, kana, 1.0, azookey::core::CandidateSource::Heuristic,
+                                     "not-canceled"}};
+  }
+
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+  const std::atomic<bool>& entered() const { return entered_; }
+  const std::atomic<bool>& saw_cancel() const { return saw_cancel_; }
+
+ private:
+  std::atomic<bool> entered_{false};
+  std::atomic<bool> saw_cancel_{false};
+};
+
+}  // namespace
+
+// M47 section 8.5.2: an out-of-band Cancel stops the conversion itself, not
+// only the reply, so a converter that runs past the TIP's deadline does not
+// hold the next request back.
+TEST_F(DispatcherTest, OutOfBandCancelReachesTheRunningConverter) {
+  const std::string path = TempPath("azookey_dispatcher_cancel_reaches_converter.tsv");
+  std::remove(path.c_str());
+  azookey::learning::LearningStore cancel_store(path);
+  auto converter = std::make_unique<CancelObservingConverter>();
+  auto* observed = converter.get();
+  azookey::host::InferenceEngine cancel_engine(std::move(converter), &cancel_store, {});
+  azookey::host::RequestScheduler cancel_scheduler;
+  azookey::host::Dispatcher primary(&cancel_engine, &cancel_scheduler, nullptr,
+                                    DefaultDispatcherConfig());
+  azookey::host::Dispatcher control(&cancel_engine, &cancel_scheduler, nullptr,
+                                    DefaultDispatcherConfig());
+  auto handshake = [this](azookey::host::Dispatcher& connection, uint64_t request_id) {
+    ipc::HandshakeRequest req;
+    req.tip_version = "0.1.0";
+    req.protocol_version = kProtocolVersion;
+    req.client_id = "cancel-client";
+    auto response = connection.Dispatch(
+        MakeReq(request_id, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+    return response && ipc::ParseHandshakeResponse(response->payload_json)->accepted;
+  };
+  ASSERT_TRUE(handshake(primary, 1));
+  ASSERT_TRUE(handshake(control, 2));
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "わたし";
+  auto pending = std::async(std::launch::async, [&] {
+    return primary.Dispatch(
+        MakeReq(90, ipc::MessageType::QueryCandidates, ipc::BuildQueryCandidatesRequest(query)));
+  });
+  const auto entered_by = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!observed->entered().load() && std::chrono::steady_clock::now() < entered_by) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(observed->entered().load());
+
+  const auto canceled_at = std::chrono::steady_clock::now();
+  ipc::CancelPayload cancel;
+  cancel.target_request_id = 90;
+  EXPECT_FALSE(
+      control.Dispatch(MakeReq(3, ipc::MessageType::Cancel, ipc::BuildCancel(cancel))).has_value());
+  ASSERT_EQ(pending.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+  EXPECT_LT(std::chrono::steady_clock::now() - canceled_at, std::chrono::seconds(3));
+  EXPECT_FALSE(pending.get().has_value());
+  EXPECT_TRUE(observed->saw_cancel().load());
+
+  cancel_engine.FlushLearningStore();
+  std::remove(path.c_str());
+}
+
+// M47 section 8.5.3 / 12.6: SafeMode is reported first, refuses model loads,
+// and ends when the user turns the flag off.
+TEST_F(DispatcherTest, SafeModeIsReportedRefusesModelLoadsAndClearsOnUpdateConfig) {
+  const auto settings_path = TempPath("azookey_dispatcher_safe_mode_settings.json");
+  std::remove(settings_path.c_str());
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    out << R"({"model":{"enabled":false},"safeMode":{"enabled":true,"lastCrashCount":3}})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict,
+                                              DefaultDispatcherConfig(), &settings_store);
+  auto update = config_dispatcher.Dispatch(MakeReq(80, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(update.has_value());
+  EXPECT_EQ(engine.health_state(), azookey::host::HealthState::SafeMode);
+
+  const auto fallback_state = [&](uint64_t id) {
+    auto response =
+        config_dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryDiagnostics, "{}"));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed = ipc::ParseQueryDiagnostics(response->payload_json);
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->fallback_state : std::string();
+  };
+  // model.enabled=false would otherwise read as healthy (D-009).
+  EXPECT_EQ(fallback_state(81), "safe_mode");
+
+  const auto model_path = TempPath("azookey_dispatcher_safe_mode_model.gguf");
+  WriteMinimalGguf(model_path);
+  ipc::LoadModelRequest load;
+  load.path = model_path;
+  load.backend = "cpu";
+  auto loaded = config_dispatcher.Dispatch(
+      MakeReq(82, ipc::MessageType::LoadModel, ipc::BuildLoadModelRequest(load)));
+  ASSERT_TRUE(loaded.has_value());
+  const auto load_result = ipc::ParseLoadModelResponse(loaded->payload_json);
+  ASSERT_TRUE(load_result.has_value());
+  EXPECT_FALSE(load_result->ok);
+  EXPECT_EQ(load_result->error, "safe_mode");
+  EXPECT_FALSE(engine.model_loaded());
+
+  {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    out << R"({"model":{"enabled":false},"safeMode":{"enabled":false,"lastCrashCount":3}})";
+  }
+  update = config_dispatcher.Dispatch(MakeReq(83, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(update.has_value());
+  EXPECT_EQ(engine.health_state(), azookey::host::HealthState::Healthy);
+  EXPECT_EQ(fallback_state(84), "healthy");
+
+  std::remove(model_path.c_str());
+  std::remove(settings_path.c_str());
 }

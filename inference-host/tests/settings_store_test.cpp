@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -37,6 +38,12 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
   std::filesystem::create_directories(path.parent_path());
   std::ofstream out(path, std::ios::binary);
   out << text;
+}
+
+// Closes the file before returning, so the test can remove its directory.
+std::string ReadText(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
 }  // namespace
@@ -763,5 +770,107 @@ TEST(SettingsStoreTest, PrivacyPublicationWaitsForActiveLearningGuard) {
   WriteText(path, "invalid json");
   store.Reload();
   EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  std::filesystem::remove_all(dir);
+}
+
+// M47 section 8.5.3: SafeMode turns AI and learning off over whatever the rest
+// of the file asks for, and the engine config follows.
+TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
+  const auto dir = TestDir("azookey_settings_safe_mode_overrides");
+  const auto path = dir / "settings.json";
+  const std::string rest =
+      R"("aiBackend":"openai","llmMagicConversion":true,"batchConversionMode":"ai-cleanup",)"
+      R"("privacy":{"mode":"normal","redactLogs":false,"aiEnabled":true,"externalAiEnabled":true},)"
+      R"("reranker":{"nllRerankEnabled":true},"typoCorrectionMode":"auto_replace",)"
+      R"("autoWordRegistration":{"miningEnabled":true,"trendingEnabled":true},)"
+      R"("model":{"enabled":true,"selectedPath":"C:/models/zenzai.gguf","autoLoadOnHostStart":true})";
+  WriteText(path, "{" + rest + "}");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_FALSE(store.settings().safe_mode.enabled);
+  EXPECT_TRUE(store.settings().model.enabled);
+  EXPECT_FALSE(store.settings().privacy_policy.secure);
+
+  WriteText(path, "{" + rest +
+                      R"(,"safeMode":{"enabled":true,"enteredAt":"2026-09-22T01:02:03Z",)"
+                      R"("lastCrashCount":3}})");
+  ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  const auto& settings = store.settings();
+  EXPECT_TRUE(settings.safe_mode.enabled);
+  EXPECT_EQ(settings.safe_mode.entered_at, "2026-09-22T01:02:03Z");
+  EXPECT_EQ(settings.safe_mode.last_crash_count, 3);
+  EXPECT_FALSE(settings.model.enabled);
+  EXPECT_FALSE(settings.model.auto_load_on_host_start);
+  EXPECT_FALSE(settings.nll.enabled);
+  EXPECT_FALSE(settings.llm_magic_conversion);
+  EXPECT_EQ(settings.ai_backend, "none");
+  EXPECT_EQ(settings.batch_conversion_mode, "neural");
+  EXPECT_FALSE(settings.ai_privacy.ai);
+  EXPECT_FALSE(settings.ai_privacy.external);
+  EXPECT_TRUE(settings.privacy_policy.secure);
+  EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
+  EXPECT_EQ(settings.typo_correction_mode, "off");
+  EXPECT_FALSE(settings.auto_word.mining_enabled);
+  EXPECT_FALSE(settings.auto_word.trending_enabled);
+
+  azookey::host::EngineConfig base;
+  base.model_path = "C:/models/zenzai.gguf";
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig(base, settings);
+  EXPECT_TRUE(config.model_path.empty());
+  EXPECT_FALSE(config.nll.enabled);
+  EXPECT_FALSE(config.auto_word_mining_enabled);
+  EXPECT_EQ(config.typo_correction_mode, "off");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, SafeModeDefaultsOffAndIgnoresMistypedValues) {
+  const auto dir = TestDir("azookey_settings_safe_mode_defaults");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"safeMode":{"enabled":"yes","enteredAt":7,"lastCrashCount":-1}})");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_FALSE(store.settings().safe_mode.enabled);
+  EXPECT_TRUE(store.settings().safe_mode.entered_at.empty());
+  EXPECT_EQ(store.settings().safe_mode.last_crash_count, 0);
+  EXPECT_TRUE(store.settings().model.enabled);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, PersistSafeModeKeepsOtherKeysAndLoadsBackEnabled) {
+  const auto dir = TestDir("azookey_settings_safe_mode_persist");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"maxCandidates":5,"model":{"selectedPath":"a.gguf"},"unknownKey":[1,2]})");
+  azookey::host::SettingsStore store(path);
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_TRUE(store.settings().safe_mode.enabled);
+  EXPECT_EQ(store.settings().safe_mode.entered_at, "2026-09-22T01:02:03Z");
+  EXPECT_EQ(store.settings().safe_mode.last_crash_count, 3);
+  EXPECT_EQ(store.settings().max_candidates, 5);
+  EXPECT_EQ(store.settings().model.selected_path, "a.gguf");
+
+  EXPECT_NE(ReadText(path).find(R"("unknownKey":[1,2])"), std::string::npos) << ReadText(path);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, PersistSafeModeCreatesAMissingFile) {
+  const auto dir = TestDir("azookey_settings_safe_mode_missing");
+  const auto path = dir / "config" / "settings.json";
+  std::filesystem::create_directories(path.parent_path());
+  azookey::host::SettingsStore store(path);
+  ASSERT_TRUE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 4));
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  EXPECT_TRUE(store.settings().safe_mode.enabled);
+  EXPECT_EQ(store.settings().safe_mode.last_crash_count, 4);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsStoreTest, PersistSafeModeLeavesAnUnparsableFileAlone) {
+  const auto dir = TestDir("azookey_settings_safe_mode_invalid");
+  const auto path = dir / "settings.json";
+  WriteText(path, "{ not json");
+  azookey::host::SettingsStore store(path);
+  EXPECT_FALSE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
+  EXPECT_EQ(ReadText(path), "{ not json");
   std::filesystem::remove_all(dir);
 }

@@ -375,6 +375,11 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     (void)FlushLearningStoreLocked();
     next_config = config_;
     next_config.model_path = options.path;
+    // Section 8.5.1: a reload is accepted once it starts, and only a model the
+    // engine can actually load again takes it out of DegradedModel.
+    if (!options.path.empty() && health_.state() == HealthState::DegradedModel) {
+      (void)ApplyHealthEventLocked(HealthEvent::ModelReloadAccepted);
+    }
     next_config.backend = options.backend;
     next_config.n_gpu_layers = options.n_gpu_layers;
     if (options.n_threads) {
@@ -409,6 +414,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       active_converter_ = fallback_converter_;
       last_error_ = result.error;
       model_runtime_error_.reset();
+      NoteModelLoadFailedLocked();
     }
     return result;
   }
@@ -458,6 +464,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
       active_converter_ = fallback_converter_;
       last_error_ = result.error;
       model_runtime_error_.reset();
+      NoteModelLoadFailedLocked();
     }
     return result;
   }
@@ -470,8 +477,63 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   model_loaded_ = true;
   last_error_ = backend_error;
   model_runtime_error_.reset();
+  // model_loaded_ is what Health reports, so this is the model_loaded == true
+  // that the RecoveringModel exit waits for.
+  if (health_.state() == HealthState::RecoveringModel) {
+    (void)ApplyHealthEventLocked(HealthEvent::ModelLoadConfirmed);
+  }
   result.ok = true;
   return result;
+}
+
+void InferenceEngine::NoteModelLoadFailedLocked() {
+  // A failed load that leaves an earlier model serving is not a degradation;
+  // callers only get here once the engine has fallen back.
+  if (health_.state() == HealthState::RecoveringModel) {
+    (void)ApplyHealthEventLocked(HealthEvent::ModelRecoveryFailed);
+  } else if (health_.state() == HealthState::Healthy) {
+    (void)ApplyHealthEventLocked(HealthEvent::ModelFailed);
+  }
+}
+
+std::optional<HealthTransition> InferenceEngine::ApplyHealthEvent(HealthEvent event) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return ApplyHealthEventLocked(event);
+}
+
+std::optional<HealthTransition> InferenceEngine::ApplyHealthEventLocked(HealthEvent event) {
+  const auto from = health_.state();
+  const auto transition = health_.Apply(event);
+  if (runtime_logger_) {
+    if (transition) {
+      runtime_logger_->Log(
+          logging::RuntimeLogLevel::Info, "health_state_transition",
+          {{"from", logging::RuntimeLogSafeText(std::string(HealthStateName(transition->from)))},
+           {"to", logging::RuntimeLogSafeText(std::string(HealthStateName(transition->to)))},
+           {"event", logging::RuntimeLogSafeText(std::string(HealthEventName(event)))}});
+    } else {
+      runtime_logger_->Log(
+          logging::RuntimeLogLevel::Warn, "health_state_rejected",
+          {{"from", logging::RuntimeLogSafeText(std::string(HealthStateName(from)))},
+           {"event", logging::RuntimeLogSafeText(std::string(HealthEventName(event)))}});
+    }
+  }
+  return transition;
+}
+
+void InferenceEngine::RestoreHealthState(HealthState state) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  health_ = HealthStateMachine(state);
+  if (runtime_logger_) {
+    runtime_logger_->Log(
+        logging::RuntimeLogLevel::Info, "health_state_restored",
+        {{"to", logging::RuntimeLogSafeText(std::string(HealthStateName(state)))}});
+  }
+}
+
+HealthState InferenceEngine::health_state() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return health_.state();
 }
 
 void InferenceEngine::ApplyConfig(const EngineConfig& config) {
@@ -538,6 +600,7 @@ EngineHealthSnapshot InferenceEngine::health_snapshot() const {
   snapshot.last_error = last_error_ ? last_error_ : model_runtime_error_;
   snapshot.learning_entries = store_ ? store_->size() : 0;
   snapshot.user_dict_entries = user_dict_ ? user_dict_->Size() : 0;
+  snapshot.health_state = health_.state();
   return snapshot;
 }
 

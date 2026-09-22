@@ -2373,3 +2373,73 @@ TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
   engine->CommitObservation("あずきー", "アズーキー", kNowBase);
   EXPECT_EQ(auto_words.Size(), 0u);
 }
+
+// M47 section 8.5.1: the engine drives the model rows of the health machine
+// from its own load outcomes.
+TEST(InferenceEngineTest, ModelLoadOutcomesDriveTheHealthState) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+  const std::string lpath = TempPath("azookey_host_engine_health_state.tsv");
+  std::remove(lpath.c_str());
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  azookey::host::ModelLoadOptions missing;
+  missing.path = TempPath("azookey_host_engine_health_missing.gguf");
+  std::remove(missing.path.c_str());
+  missing.backend = azookey::host::BackendKind::Cpu;
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::DegradedModel);
+  EXPECT_EQ(engine->health_snapshot().health_state, azookey::host::HealthState::DegradedModel);
+
+  // Accepted, then failed again: back to DegradedModel through RecoveringModel.
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::DegradedModel);
+
+  const std::string model_path = TempPath("azookey_host_engine_health_model.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions valid;
+  valid.path = model_path;
+  valid.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(valid);
+  std::optional<azookey::host::HealthState> during_load;
+  valid.before_probe_for_tests = [&] { during_load = engine->health_state(); };
+  ASSERT_TRUE(engine->LoadModelWithResult(valid).ok);
+  EXPECT_EQ(during_load, azookey::host::HealthState::RecoveringModel);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  // With a model serving, a failed swap keeps it and is not a degradation.
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  engine.reset();
+  std::remove(model_path.c_str());
+  std::remove(lpath.c_str());
+}
+
+TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
+  const std::string lpath = TempPath("azookey_host_engine_health_safe_mode.tsv");
+  std::remove(lpath.c_str());
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+  ASSERT_TRUE(engine->ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected));
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
+
+  azookey::host::ModelLoadOptions missing;
+  missing.path = TempPath("azookey_host_engine_health_safe_missing.gguf");
+  std::remove(missing.path.c_str());
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
+  EXPECT_FALSE(engine->ApplyHealthEvent(azookey::host::HealthEvent::ModelLoadConfirmed));
+
+  engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
+  EXPECT_TRUE(engine->ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared));
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  engine.reset();
+  std::remove(lpath.c_str());
+}

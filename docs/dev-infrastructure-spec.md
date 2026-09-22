@@ -1891,6 +1891,28 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 ものだけを満たす。model 復旧中は pipe が生きていても（Ping OK）モデル未ロードのうちは
 `DegradedModel` に留め、`degraded-model` UI（§8.5.4）を消さない。
 
+遷移表は `inference-host/src/HealthStateMachine.cpp` が持つ。`Recovering` は突入元ごとに
+`RecoveringTransport` / `RecoveringModel` の 2 値で表し、ログの状態名は `healthy` /
+`degraded_simple` / `degraded_model` / `recovering_transport` / `recovering_model` /
+`safe_mode` とする。表に無い (状態, イベント) の組は拒否して状態を変えず、自己遷移は持たない。
+遷移は `health_state_transition`（`from` / `to` / `event`）、拒否は `health_state_rejected`、
+永続化された `SafeMode` での起動は `health_state_restored` として記録する。
+
+状態機械の遷移のうち、Host が自分で観測できるものは Host が駆動する。
+
+- model 系: `InferenceEngine` がモデルロードの結果で駆動する。モデルを持たない状態でロードに
+  失敗すると `DegradedModel`、`DegradedModel` でパス付きのロードを始めると `RecoveringModel`、
+  そのロードが成功して `model_loaded` が真になると `Healthy`、失敗すると `DegradedModel` へ戻る。
+  別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
+- `SafeMode`: Host が起動時に §8.5.3 の条件で入り、`UpdateConfig` で
+  `settings.safeMode.enabled=false` を読んだときに `Healthy` へ戻る。
+
+transport 系（`Healthy` → `DegradedSimple` → `RecoveringTransport` → `Healthy`）は TIP が
+観測する事象であり、M42 の接続状態機械（§8.2）の `Degraded` / 再接続 / `Ready` が同じ
+遷移を担う。M47 はこれを TIP 側に重複させず、§8.3 の劣化判定とローカル候補をそのまま使う。
+候補ウィンドウの劣化インジケータ（§8.5.4）を実装する時点で、TIP がこの対応に沿って
+transport 系のイベントを状態機械へ渡す。
+
 #### 8.5.2 timeout 表
 
 M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
@@ -1924,32 +1946,51 @@ fallback や次リクエスト処理を妨げる設計は不可とする。
 
 #### 8.5.3 SafeMode 突入条件
 
-直近 60 秒以内に Host プロセスが 3 回連続でクラッシュした場合、TIP は
+直近 60 秒以内に Host プロセスが 3 回連続でクラッシュした場合、Host は
 `SafeMode` に入り、設定で AI / 学習を一時的に強制 OFF にする。次回起動
-時にユーザー通知で復旧手順を案内する。M47 v1（M30 未完了時）は TIP の
-候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
+時にユーザー通知で復旧手順を案内する。
+
+クラッシュは Host 自身が次の起動時に検知する。TIP は Host の終了コードを観測できない
+ためである。pipe モードの Host は起動時に `%LOCALAPPDATA%\azooKey\data\host_run_state.txt`
+へ実行中の印（自プロセスの PID）を書き、正常な終了経路（停止要求、supervisor の終了、
+pipe の listen 失敗）で印を消す。起動時に印が残っていれば、前回の Host は終了経路に
+到達せずに終わったものとして、その検知時刻を 1 回のクラッシュとして記録する。記録した
+PID のプロセスがまだ生きている場合は、別の Host が pipe を持っている重複起動であり、
+クラッシュとして数えず印にも触れない。正常終了は記録を空にするので、数えるのは直近の
+正常終了以降の連続クラッシュだけとなる。60 秒の窓に 3 回目が入った起動で `SafeMode` に入る。
+
+`SafeMode` の間、Host は `settings.json` の内容にかかわらず次を強制する。モデルを
+ロードしない（`model.enabled` と `--model` の指定を無視し、`LoadModel` は
+`error: "safe_mode"` で拒否する）、NLL rerank・`llmMagicConversion`・`aiBackend`
+（`none` 扱い）・`ai-cleanup` の一括変換・外部 AI を止める、学習の書き込みを止める
+（privacy の `secure` と同じ扱い）、`typoCorrectionMode` を `off`、自動単語登録の
+抽出を止める。辞書・既存の学習結果による変換は続ける。
+
+M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。
 SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し、
-ユーザーが手動で解除するまで継続する。M47 実装時に
-`settings/mvp-settings.schema.json`（既存スキーマは
-`additionalProperties: false` のため、未定義キーは現状 reject される）に
-以下を追加する:
+ユーザーが手動で解除するまで継続する。キーは他の設定と同じ camelCase とし、
+`settings/mvp-settings.schema.json` に次の形で持つ:
 
 ```json
 "safeMode": {
   "type": "object",
-  "description": "M47: Host 連続クラッシュ時の安全モード状態",
   "properties": {
     "enabled": { "type": "boolean", "default": false },
-    "entered_at": { "type": "string", "description": "RFC 3339 タイムスタンプ" },
-    "last_crash_count": { "type": "integer", "default": 0 }
+    "enteredAt": { "type": "string", "description": "RFC 3339 タイムスタンプ（UTC）" },
+    "lastCrashCount": { "type": "integer", "default": 0, "minimum": 0 }
   },
   "additionalProperties": false
 }
 ```
 
-スキーマ追加と Host 側の読み書きパスを同じ PR / コミットで揃え、永続化
-されない不整合状態を作らない。
+Host は `SafeMode` に入るとき、`settings.json` のファイルロックを取り、ディスク上の内容へ
+`safeMode` オブジェクトだけを合成して atomic に書き戻す（他のキーは保つ）。ファイルが
+存在するのに読めない、または JSON として解釈できない場合は書き換えず、その起動では
+`SafeMode` に入らない（`safe_mode_entered` を `result: "error"` で記録する）。書き込みは
+TIP の設定監視にも届き、TIP は通常の設定変更と同じく Handshake をやり直す。
+スキーマと Host 側の読み書きパスは同じ PR / コミットで揃え、永続化されない不整合状態を
+作らない。
 
 #### 8.5.4 UI 通知
 

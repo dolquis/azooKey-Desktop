@@ -142,7 +142,8 @@ Linear が持つ。
 - ✅ `QueryDiagnostics` — 要求 payload は空オブジェクト / 応答
   `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
   learning_entries, user_dict_entries, fallback_state, last_error?)`。
-  `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` のいずれか。
+  `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` / `safe_mode` のいずれかで、
+  `safe_mode`（`docs/dev-infrastructure-spec.md` §8.5.3）は他のどの判定より優先する。
   送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
   `Diagnostics.cpp` の IPC プローブが Handshake → Ping に続けて `request_id=3` /
   `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`

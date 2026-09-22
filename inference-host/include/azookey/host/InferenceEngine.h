@@ -18,6 +18,7 @@
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/IConverter.h"
 #include "azookey/host/AiBackend.h"
+#include "azookey/host/HealthStateMachine.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/RewriterData.h"
 #include "azookey/host/ZenzaiDecodeStats.h"
@@ -117,6 +118,7 @@ struct EngineHealthSnapshot {
   std::optional<std::string> last_error;
   size_t learning_entries{};
   size_t user_dict_entries{};
+  HealthState health_state{HealthState::Healthy};
 };
 
 class InferenceEngine {
@@ -217,6 +219,14 @@ class InferenceEngine {
   std::optional<std::string> effective_last_error() const;
   std::optional<ZenzaiDecodeStats> last_zenzai_decode_stats() const;
 
+  // M47 section 8.5.1. The engine drives the model rows itself from its load
+  // outcomes; the Host drives SafeMode. The transport rows describe what the
+  // TIP sees and are not driven here.
+  std::optional<HealthTransition> ApplyHealthEvent(HealthEvent event);
+  // Startup only: resumes SafeMode persisted by an earlier process.
+  void RestoreHealthState(HealthState state);
+  HealthState health_state() const;
+
  private:
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
@@ -229,6 +239,8 @@ class InferenceEngine {
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec);
   void MirrorModelRuntimeErrorLocked(const std::shared_ptr<core::IConverter>& converter);
+  std::optional<HealthTransition> ApplyHealthEventLocked(HealthEvent event);
+  void NoteModelLoadFailedLocked();
   void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
   bool FlushLearningStoreLocked();
@@ -262,6 +274,7 @@ class InferenceEngine {
   logging::RuntimeLogger* runtime_logger_;  // Non-owning; must outlive the engine.
   bool model_loaded_{false};
   bool model_preload_in_progress_{false};
+  HealthStateMachine health_;
   std::optional<std::string> last_error_;
   std::optional<std::string> model_runtime_error_;
   size_t unsaved_observations_{0};

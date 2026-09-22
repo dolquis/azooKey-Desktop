@@ -447,7 +447,11 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   p.last_error = engine_health.last_error;
 
   const bool model_enabled = !settings_store_ || settings_store_->settings().model.enabled;
-  if (!model_enabled) {
+  // Section 12.6 / D-009: SafeMode outranks everything, model.enabled=false
+  // included, because it is the one state the user has to act on.
+  if (SafeModeEnabled()) {
+    p.fallback_state = "safe_mode";
+  } else if (!model_enabled) {
     p.fallback_state = "healthy";
   } else if (!effective_model_loaded) {
     p.fallback_state = "degraded_simple";
@@ -459,12 +463,23 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
 }
 
+bool Dispatcher::SafeModeEnabled() const {
+  // The engine's state, not the settings: UpdateConfig holds its lock through
+  // a model reload, and the engine is kept in step with the flag at startup
+  // and on every UpdateConfig.
+  return engine_->health_state() == HealthState::SafeMode;
+}
+
 std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& req) {
   ipc::LoadModelResponse res;
   auto parsed = ipc::ParseLoadModelRequest(req.payload_json);
   if (!parsed) {
     res.ok = false;
     res.error = "invalid LoadModel payload";
+  } else if (SafeModeEnabled()) {
+    // Section 8.5.3: no model runs in SafeMode, whoever asks.
+    res.ok = false;
+    res.error = "safe_mode";
   } else {
     auto backend = ParseBackend(parsed->backend);
     if (!backend) {
@@ -859,8 +874,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleUpdateConfig(const ipc::Envelope&
   if (config_.override_backend) {
     next_config.backend = *config_.override_backend;
   }
-  if (config_.override_model_path) {
+  const bool safe_mode = load_result.settings.safe_mode.enabled;
+  if (config_.override_model_path && !safe_mode) {
     next_config.model_path = *config_.override_model_path;
+  }
+  // SafeMode ends only here, when the user has turned the flag off (section
+  // 8.5.1); a flag that appears on disk is followed as it stands.
+  if (!safe_mode && engine_->health_state() == HealthState::SafeMode) {
+    (void)engine_->ApplyHealthEvent(HealthEvent::SafeModeCleared);
+  } else if (safe_mode && engine_->health_state() != HealthState::SafeMode) {
+    engine_->RestoreHealthState(HealthState::SafeMode);
   }
   engine_->ApplyConfig(next_config);
   const auto model_result = engine_->LoadModelWithResult(

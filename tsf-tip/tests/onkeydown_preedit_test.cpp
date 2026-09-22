@@ -3634,6 +3634,37 @@ TEST(TsfTipOnKeyDownPreeditTest, ArrowSelectionUpdatesPreeditAndEscapeRestoresRe
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMetadata) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.input_state_for_test().kind(),
+            azookey::core::InputStateKind::Composing);
+  EXPECT_EQ(h.service.input_state_for_test().Reading(), "か");
+
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].surface = "蚊";
+  candidates[0].reading = "か";
+  candidates[0].source = "dictionary";
+  candidates[1].surface = "科";
+  candidates[1].reading = "か";
+  candidates[1].source = "dictionary";
+  h.service.set_cached_candidates_for_test(std::move(candidates));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.input_state_for_test().kind(),
+            azookey::core::InputStateKind::Selecting);
+  EXPECT_EQ(h.service.input_state_for_test().selected_index(), 0u);
+
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"科");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->chosen.surface, "科");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, ShiftSpaceCyclesCandidatesBackward) {
   TextServiceHarness h;
   FakeCompositionAttachment attachment(h);

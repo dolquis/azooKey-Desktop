@@ -36,6 +36,8 @@ class InputState {
   InputStateKind kind() const { return kind_; }
   // Confirmed kana plus the preview of pending romaji.
   std::string Reading() const;
+  const std::string& confirmed_kana() const { return kana_; }
+  const RomajiKanaConverter& pending_romaji() const { return romaji_; }
   // Latest candidates delivered for the current reading, or the fixed
   // snapshot while Selecting.
   const std::vector<Candidate>& candidates() const { return candidates_; }
@@ -48,6 +50,12 @@ class InputState {
 
   // Setting injected by the frontend. Only affects later Input events.
   InputState WithLiveConversion(bool enabled) const;
+  // Import composition state when returning from a frontend-owned input path.
+  // The frontend owns the corresponding marked-text update; no actions are emitted.
+  InputState WithComposition(std::string confirmed_kana,
+                             const RomajiKanaConverter& pending_romaji = {}) const;
+  // Discard logical composition state without emitting TSF actions.
+  InputState Reset() const;
 
   HandleResult HandleEvent(const UserActionEvent& event, const EditContextHint& hint = {}) const;
   // Feedback event: the frontend delivers a fresh (non-stale) candidate

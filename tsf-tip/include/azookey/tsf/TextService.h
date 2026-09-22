@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "azookey/core/RomajiKanaConverter.h"
+#include "azookey/core/InputState.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
@@ -159,6 +160,7 @@ class TextService final : public ITfTextInputProcessorEx,
                                                 std::vector<ipc::CandidateField> candidates);
   std::vector<ipc::CandidateField> cached_candidates_for_test();
   std::vector<ipc::CandidateField> shown_candidates_for_test() const;
+  const core::InputState& input_state_for_test() const { return input_state_; }
   std::vector<CandidateViewItem> candidate_views_for_test(
       const std::string& reading, std::vector<ipc::CandidateField> candidates) const;
   void set_number_rewriter_enabled_for_test(bool enabled) {
@@ -265,6 +267,15 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ui_less_mode_{false};
 
   core::RomajiKanaConverter romaji_;
+  // Logical state for the ordinary (non-batch) input pipeline. The legacy
+  // fields above and below remain presentation/metadata mirrors for TSF and
+  // the batch/emoji/rewriter paths until those paths enter InputState.
+  core::InputState input_state_;
+  bool core_input_active_{true};
+  bool core_action_in_progress_{false};
+  std::optional<size_t> core_commit_selected_index_;
+  std::string core_marked_surface_;
+  std::vector<TipCandidate> core_cached_metadata_;
   std::string batch_raw_romaji_;
   bool batch_query_in_progress_{false};
   // AI axis of the batch path: an ai-cleanup conversion whose privacy was
@@ -446,6 +457,10 @@ class TextService final : public ITfTextInputProcessorEx,
   PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
+  HRESULT ApplyClientAction(ITfContext* context, const core::ClientAction& action,
+                            bool& preedit_update_needed, bool& commit_pending);
+  HRESULT ApplyInputStateResult(ITfContext* context, core::HandleResult result);
+  std::vector<core::Candidate> CoreCandidatesFromCache();
   POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;
   std::string CurrentDisplayedPreeditSurface() const;

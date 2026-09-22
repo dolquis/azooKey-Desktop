@@ -1826,8 +1826,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   - timeout 時の Cancel + staleness check による古い結果破棄
   - Cancel / deadline を Host Dispatcher から converter / reranker / backend 推論処理まで
     伝播し、応答抑止だけに依存しない
-  - 連続クラッシュ N 回での `SafeMode` 突入と、次回起動時のユーザー通知
-  - 候補ウィンドウ下部の控えめな劣化インジケータ（§8.7）
+  - 連続クラッシュ N 回での `SafeMode` 突入（検知と突入は Host 側。§8.5.3）と、次回起動時のユーザー通知
+  - 候補ウィンドウ下部の控えめな劣化インジケータ（§8.5.4）
 - **受け入れ条件**:
   - Host を手動 kill しても入力中のアプリが固まらない
   - Host が接続済みのまま `QueryCandidates` に応答しない場合でも、

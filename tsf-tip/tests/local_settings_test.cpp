@@ -258,8 +258,9 @@ TEST_F(LocalSettingsTest, ReportsSettingsEditsButNotUnchangedReloads) {
     // Reload publishes the snapshot before it runs the observer, and a
     // truncating write can reach the watcher as two reloads. Counting the
     // callbacks that already see the edit lets the test wait for the last one.
-    if (reader.Snapshot().pairing.enabled) ++enabled_notifications;
+    // Bump the total first so seeing enabled_notifications implies it is counted.
     ++notifications;
+    if (reader.Snapshot().pairing.enabled) ++enabled_notifications;
   });
   Write(R"({"bracketPairing":false})");
   ASSERT_TRUE(reader.Start(path));

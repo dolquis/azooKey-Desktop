@@ -1689,9 +1689,8 @@ TEST_F(DispatcherTest, ResolveNewWordRollsBackWhenSaveFails) {
   // The store's parent "directory" is a regular file, so every Save() fails.
   const auto blocker = std::filesystem::temp_directory_path() / "azookey_dispatcher_save_blocker";
   std::filesystem::remove_all(blocker);
-  {
-    std::ofstream(blocker) << "not a directory";
-  }
+  // The temporary stream closes the file at the end of the statement.
+  std::ofstream(blocker) << "not a directory";
   azookey::learning::AutoWordStore auto_words(blocker / "auto_words.tsv");
   auto_words.Observe("azooKey", "あずきー", 1'700'000'000ULL, 3, false);
   azookey::host::Dispatcher approval(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),

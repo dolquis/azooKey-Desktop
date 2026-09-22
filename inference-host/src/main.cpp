@@ -42,6 +42,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -401,7 +402,74 @@ int main(int argc, char** argv) {
   }
 
   azookey::host::SettingsStore settings_store(user_paths->settings_path);
-  const auto settings_result = settings_store.Load();
+  auto settings_result = settings_store.Load();
+
+  // M47 section 8.5.3: only the resident pipe Host counts crashes. A Host
+  // started while the one that wrote the marker is still alive is a duplicate
+  // about to fail to listen, not a crash, so it leaves the history alone.
+  const auto run_history_path = user_paths->data_dir / "host_run_state.txt";
+  constexpr auto kRunHistoryLockTimeout = std::chrono::milliseconds(2000);
+  bool owns_run_history = false;
+  bool entered_safe_mode = false;
+  // Two Hosts starting together must not both read a dead mark and both claim it.
+  auto run_history_lock = pipe_mode ? azookey::learning::AcquireExclusiveFileLockForPath(
+                                          run_history_path, kRunHistoryLockTimeout)
+                                    : std::nullopt;
+  if (pipe_mode && !run_history_lock) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+  }
+  if (run_history_lock) {
+    const auto previous = azookey::host::ReadHostRunHistory(run_history_path)
+                              .value_or(azookey::host::HostRunHistory{});
+    if (!azookey::host::IsMarkOwnerAlive(previous)) {
+      const auto now_epoch_ms =
+          static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count());
+      const auto outcome =
+          azookey::host::RecordHostStart(previous, azookey::host::CurrentProcessId(),
+                                         azookey::host::CurrentProcessStartTime(), now_epoch_ms);
+      owns_run_history = azookey::host::WriteHostRunHistory(run_history_path, outcome.next);
+      if (!owns_run_history) {
+        runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+      }
+      if (outcome.previous_run_crashed) {
+        runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_previous_run_crashed",
+                        {{"recent_crashes", static_cast<uint64_t>(outcome.recent_crashes)}});
+      }
+      if (outcome.crash_loop && !settings_result.settings.safe_mode.enabled) {
+        // An unparsable file was already quarantined by the load above, so it
+        // now reads as missing; writing a fresh one here would replace settings
+        // the user may still recover, which section 8.5.3 rules out.
+        entered_safe_mode =
+            settings_result.status != azookey::host::SettingsLoadStatus::Invalid &&
+            settings_store.PersistSafeModeEntered(azookey::host::FormatRfc3339Utc(now_epoch_ms),
+                                                  static_cast<int32_t>(outcome.recent_crashes));
+        runtime_log.Log(entered_safe_mode ? azookey::logging::RuntimeLogLevel::Warn
+                                          : azookey::logging::RuntimeLogLevel::Error,
+                        "safe_mode_entered",
+                        {{"result", SafeLogText(entered_safe_mode ? "ok" : "error")},
+                         {"crash_count", static_cast<uint64_t>(outcome.recent_crashes)}});
+        if (entered_safe_mode) settings_result = settings_store.Load();
+      }
+    }
+    run_history_lock.reset();
+  }
+  // Entering counts even if a save raced the reload and dropped the flag again.
+  const bool safe_mode = entered_safe_mode || settings_result.settings.safe_mode.enabled;
+  const auto mark_clean_exit = [&]() {
+    if (!owns_run_history) return;
+    // Clear only this process's own mark: a Host that lost the pipe to another
+    // one must not erase the mark of the Host that is running.
+    auto lock = azookey::learning::AcquireExclusiveFileLockForPath(run_history_path,
+                                                                   kRunHistoryLockTimeout);
+    const auto current = lock ? azookey::host::ReadHostRunHistory(run_history_path) : std::nullopt;
+    if (!current || !azookey::host::IsOwnMark(*current)) return;
+    if (!azookey::host::WriteHostRunHistory(run_history_path,
+                                            azookey::host::RecordHostCleanExit())) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+    }
+  };
   CrashRegistration crash_registration;
   azookey::core::CrashReporting::Initialize(azookey::core::CrashModule::Host,
                                             settings_result.settings.crash_report_consent == "local"
@@ -416,7 +484,8 @@ int main(int argc, char** argv) {
   if (explicit_backend) {
     config.backend = cli_backend;
   }
-  if (explicit_model_path) {
+  // SafeMode runs no model, including one named on the command line.
+  if (explicit_model_path && !safe_mode) {
     config.model_path = cli_model_path;
   }
   if (settings_result.status == azookey::host::SettingsLoadStatus::Invalid) {
@@ -483,6 +552,11 @@ int main(int argc, char** argv) {
   engine.SetUserDictionary(&user_dict);
   engine.SetTypoStore(&typo_store);
   engine.SetAutoWordStore(&auto_word_store);
+  if (entered_safe_mode) {
+    (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected);
+  } else if (safe_mode) {
+    engine.RestoreHealthState(azookey::host::HealthState::SafeMode);
+  }
 #ifdef _WIN32
   // Discover only installer-controlled static layers, never the current directory.
   const auto dictionary_directory = GetExeDirectory() / "dict";
@@ -493,7 +567,7 @@ int main(int argc, char** argv) {
                      {"error", SafeLogText(result.error)}});
   }
 #endif
-  if (explicit_model_path) {
+  if (explicit_model_path && !safe_mode) {
     const bool model_loaded = engine.LoadModel();
     runtime_log.Log(model_loaded ? azookey::logging::RuntimeLogLevel::Info
                                  : azookey::logging::RuntimeLogLevel::Error,
@@ -592,6 +666,7 @@ int main(int argc, char** argv) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "pipe_listen_failed",
                       {{"result", SafeLogText("error")}});
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
+      mark_clean_exit();
       return 2;
     }
 
@@ -615,6 +690,7 @@ int main(int argc, char** argv) {
                     {{"result", SafeLogText(wait_failed ? "error" : "ok")},
                      {"stop_reason", SafeLogText(stop_reason)},
                      {"win32_error", SafeLogText(std::to_string(supervisor_process.ErrorCode()))}});
+    mark_clean_exit();
     return wait_failed ? 3 : 0;
   }
 

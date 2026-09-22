@@ -79,5 +79,9 @@
     "enabled": true,
     "channel": "stable",
     "checkIntervalHours": 24
+  },
+  "safeMode": {
+    "enabled": false,
+    "lastCrashCount": 0
   }
 }

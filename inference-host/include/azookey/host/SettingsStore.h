@@ -54,6 +54,14 @@ struct RuntimeAutoWordSettings {
   int32_t trending_interval_hours{24};
 };
 
+// M47 safeMode.*; docs/dev-infrastructure-spec.md section 8.5.3. Only the
+// Host writes it (on a crash loop) and only the user clears it.
+struct RuntimeSafeModeSettings {
+  bool enabled{false};
+  std::string entered_at;
+  int32_t last_crash_count{0};
+};
+
 struct RuntimeSettings {
   std::shared_ptr<const core::AppProfileResolver> app_profiles;
   const core::AppProfileResolver& AppProfiles() const {
@@ -112,6 +120,9 @@ struct RuntimeSettings {
   int32_t typo_min_count{3};
   RuntimeAutoWordSettings auto_word;
   RuntimeAutoUpdateSettings auto_update;
+  // While enabled, the parsed values above are already the SafeMode ones: no
+  // model, no learning, no AI (see ApplySafeModeOverrides in the .cpp).
+  RuntimeSafeModeSettings safe_mode;
 };
 
 struct SettingsLoadResult {
@@ -148,6 +159,12 @@ class SettingsStore {
   // (DEV-1143), without adopting them as the runtime settings: applying a
   // reload stays the caller-serialised job of UpdateConfig.
   std::optional<RuntimeSettings> SettingsWrittenAfterLoad();
+  // Section 8.5.3: records SafeMode in settings.json, keeping every other key.
+  // Under the file lock, merged into what is on disk and written atomically. A
+  // file that is there but cannot be read or parsed is left alone (false): the
+  // flag is not worth replacing settings the user may still recover. Does not
+  // reload; the caller loads the result.
+  bool PersistSafeModeEntered(const std::string& entered_at, int32_t crash_count);
 
  private:
   static constexpr int64_t kNoWriteTime = (std::numeric_limits<int64_t>::min)();

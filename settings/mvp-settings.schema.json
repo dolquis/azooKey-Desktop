@@ -359,6 +359,16 @@
         "checkIntervalHours": { "type": "integer", "default": 24, "minimum": 1 }
       },
       "additionalProperties": false
+    },
+    "safeMode": {
+      "type": "object",
+      "description": "M47: Host 連続クラッシュ時の安全モード状態。Host が記録し、解除はユーザーだけが行う。docs/dev-infrastructure-spec.md section 8.5.3",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "enteredAt": { "type": "string", "description": "RFC 3339 タイムスタンプ（UTC）" },
+        "lastCrashCount": { "type": "integer", "default": 0, "minimum": 0 }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

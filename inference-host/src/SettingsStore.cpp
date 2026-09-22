@@ -19,6 +19,7 @@
 #endif
 
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/FileLock.h"
 
 namespace azookey::host {
@@ -118,6 +119,24 @@ std::optional<std::filesystem::path> QuarantineInvalidFile(const std::filesystem
   }
   if (error) *error = "failed to quarantine invalid settings.json: no available suffix";
   return std::nullopt;
+}
+
+// Section 8.5.3: SafeMode stops AI, learning and external APIs whatever the
+// rest of the file asks for. Overriding the parsed values, rather than checking
+// the flag at each use, keeps every reader of RuntimeSettings on the same stop.
+void ApplySafeModeOverrides(RuntimeSettings& settings) {
+  settings.model.enabled = false;
+  settings.model.auto_load_on_host_start = false;
+  settings.nll.enabled = false;
+  settings.llm_magic_conversion = false;
+  settings.ai_backend = "none";
+  settings.batch_conversion_mode = "neural";
+  settings.ai_privacy = core::AiPrivacy{false, false};
+  // Secure is what the Dispatcher checks before any learning write.
+  settings.privacy_policy = core::PrivacyPolicy{true, false};
+  settings.typo_correction_mode = "off";
+  settings.auto_word.mining_enabled = false;
+  settings.auto_word.trending_enabled = false;
 }
 
 RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
@@ -251,6 +270,16 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
         ReadInt32(*auto_update, "checkIntervalHours", settings.auto_update.check_interval_hours);
   }
 
+  if (const auto* safe_mode = ReadObject(object, "safeMode")) {
+    settings.safe_mode.enabled = ReadBool(*safe_mode, "enabled", settings.safe_mode.enabled);
+    settings.safe_mode.entered_at =
+        ReadString(*safe_mode, "enteredAt", settings.safe_mode.entered_at);
+    settings.safe_mode.last_crash_count =
+        ReadRangedInt32(*safe_mode, "lastCrashCount", settings.safe_mode.last_crash_count, 0,
+                        (std::numeric_limits<int32_t>::max)());
+  }
+  if (settings.safe_mode.enabled) ApplySafeModeOverrides(settings);
+
   return settings;
 }
 
@@ -360,6 +389,32 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
   PublishPrivacyPolicy();
   last_result_ = result;
   return last_result_;
+}
+
+bool SettingsStore::PersistSafeModeEntered(const std::string& entered_at, int32_t crash_count) {
+  auto file_lock =
+      azookey::learning::AcquireExclusiveFileLockForPath(settings_path_, file_lock_timeout_);
+  if (!file_lock) return false;
+  j::Object root;
+  std::error_code ec;
+  const bool exists = std::filesystem::exists(settings_path_, ec);
+  if (ec) return false;
+  if (exists) {
+    auto content = ReadFile(settings_path_, nullptr);
+    if (!content) return false;
+    auto parsed = j::Parse(*content);
+    if (!parsed || !parsed->IsObject()) return false;
+    root = parsed->AsObject();
+  }
+  j::Object safe_mode;
+  safe_mode["enabled"] = j::Value(true);
+  safe_mode["enteredAt"] = j::Value(entered_at);
+  safe_mode["lastCrashCount"] = j::Value(crash_count);
+  root["safeMode"] = j::Value(std::move(safe_mode));
+  // The same shape settings-app/SettingsDocument.cpp writes.
+  std::string serialized = j::Stringify(j::Value(std::move(root)));
+  serialized.push_back('\n');
+  return azookey::learning::WriteTextFileAtomically(settings_path_, serialized);
 }
 
 SettingsLoadResult SettingsStore::Load() { return LoadImpl(false); }

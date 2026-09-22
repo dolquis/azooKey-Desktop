@@ -210,6 +210,15 @@ cmake --build --preset windows-debug --target azookey_check
   （`from` / `to` / `event`）で追える。接続したまま応答が無い Host は
   `ipc_host_deadline_missed` / `ipc_health_timeout` の後に `degraded` への遷移として現れる。Host stderr に `named pipe listening: \\.\pipe\azookey-<SID>`
   （SID 解決に失敗した場合は Debug ビルドに限り `azookey-default`）が出ているか確認。
+- **Zenzai・AI・学習が効かなくなった（SafeMode）**: Host が 60 秒以内に 3 回続けて異常終了すると
+  SafeMode に入り、ユーザーが解除するまで続く（`docs/dev-infrastructure-spec.md` §8.5.3）。
+  `azookey_diag` の `fallback_state` が `safe_mode`（D-009）であること、Host ログの
+  `safe_mode_entered` / `host_previous_run_crashed` で確認する。クラッシュの原因（直前に変えた
+  モデルや backend など）を取り除いたうえで、`%LOCALAPPDATA%\azooKey\config\settings.json` の
+  `safeMode.enabled` を `false` にする。Host がそれを読むのは起動時と `UpdateConfig` だけなので、
+  サインアウトして入り直すか、設定アプリで任意の設定を保存して `UpdateConfig` を送らせる。
+  直前のクラッシュから 60 秒以内に Host を強制終了して再起動すると、それも 1 回と数えて
+  再び SafeMode に入ることがある。
 - **Full CTest が途中で止まる**: まず `build/agent-logs/*-test-*.log` と
   `build/<preset>/Testing/Temporary/LastTest.log*` を確認し、最後に開始された
   CTest case を特定する。

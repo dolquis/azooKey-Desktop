@@ -112,6 +112,8 @@ Linear が持つ。
   fallback converter を active にする。probe 失敗時は、まだモデル未ロードの初回ロードなら
   MVP fallback converter へ切り替える一方、既にモデルロード済みの再ロードでは直前にロード
   済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
+  SafeMode 中はロードせず `ok=false` / `error: "safe_mode"` を返す
+  （`docs/dev-infrastructure-spec.md` §8.5.3）。
 - ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live)` /
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
   応答前に `max_candidates` で件数を切り詰める。
@@ -142,7 +144,8 @@ Linear が持つ。
 - ✅ `QueryDiagnostics` — 要求 payload は空オブジェクト / 応答
   `(model_loaded, loaded_model_path?, engine, backend, rss_mb, ep?, ep_state?, ep_last_error?,
   learning_entries, user_dict_entries, fallback_state, last_error?)`。
-  `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` のいずれか。
+  `fallback_state` は `healthy` / `degraded_simple` / `degraded_model` / `safe_mode` のいずれかで、
+  `safe_mode`（`docs/dev-infrastructure-spec.md` §8.5.3）は他のどの判定より優先する。
   送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
   `Diagnostics.cpp` の IPC プローブが Handshake → Ping に続けて `request_id=3` /
   `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
@@ -292,8 +295,9 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
 | `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
-| `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
+| `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.tsv` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
+| `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/dev-infrastructure-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
 | `auto_words.tsv` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | atomic replace のみ。ファイル単位ロックは取らない。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
 - 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
@@ -301,7 +305,8 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 - したがって `user_dict.json` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
 - `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json` 自体は変更しない。`user_dict.json` に対する writer 操作は `--offline` の add / remove と `import` である。
-- `settings.json` を保存するのは設定アプリだけだが、設定アプリと Host はどちらも mutator である。
+- `settings.json` を保存するのは設定アプリと、SafeMode に入るときの Host である。Host は同じファイルロックの下でディスク上の内容へ `safeMode` だけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` を保つ。
+  どちらも mutator である。
   設定アプリは保存前の read-modify-write で JSON の parse に失敗したとき、Host は `SettingsStore::Load` / `Reload` で parse に失敗したときに、`settings.json` を `.invalid*` へ rename する。
   ロックを取らずに読むと、Host が破損した内容を読んでから rename するまでの間に設定アプリが atomic replace で正常なファイルを置いたとき、Host はその新しいファイルを quarantine し、保存した設定が消える。
   したがって「設定アプリだけが書くので競合しない」とは扱わない。この競合は、保存と Host の read から quarantine までを同一の named mutex 下で直列化し、quarantine の条件を内容の不正だけに絞ることで解消する（DEV-806 で確定。実装は DEV-808、GitHub Issue #278 はその mirror）。契約は次の 4 点である。

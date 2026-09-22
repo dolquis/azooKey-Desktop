@@ -21,6 +21,12 @@ target_link_libraries(host_dispatcher_tests
 )
 azookey_discover_tests(host_dispatcher_tests)
 
+add_executable(host_health_state_tests health_state_machine_test.cpp)
+target_link_libraries(host_health_state_tests
+  PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(host_health_state_tests)
+
 add_executable(host_scheduler_tests scheduler_test.cpp)
 target_link_libraries(host_scheduler_tests
   PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings

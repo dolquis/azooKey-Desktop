@@ -522,8 +522,17 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_TRUE(WaitForFileExists(path, std::chrono::milliseconds(2500)));
 
+  // The flush renames a complete temp file into place, so a failed Load here
+  // is an open that lost to another handle on the fresh file (the rename
+  // itself, or a scanner on CI runners). Retry the open instead of reading once.
   azookey::learning::LearningStore loaded(path);
-  ASSERT_TRUE(loaded.Load());
+  const auto load_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+  bool load_ok = loaded.Load();
+  while (!load_ok && std::chrono::steady_clock::now() < load_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    load_ok = loaded.Load();
+  }
+  ASSERT_TRUE(load_ok);
   EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 10), 0.0);
 
   engine.reset();
@@ -2363,4 +2372,110 @@ TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
   EXPECT_FALSE(engine->ObserveTypo("こんちには", "こんにちは", kNowBase));
   engine->CommitObservation("あずきー", "アズーキー", kNowBase);
   EXPECT_EQ(auto_words.Size(), 0u);
+}
+
+// M47 section 8.5.1: the engine drives the model rows of the health machine
+// from its own load outcomes.
+TEST(InferenceEngineTest, ModelLoadOutcomesDriveTheHealthState) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+  const std::string lpath = TempPath("azookey_host_engine_health_state.tsv");
+  std::remove(lpath.c_str());
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  azookey::host::ModelLoadOptions missing;
+  missing.path = TempPath("azookey_host_engine_health_missing.gguf");
+  std::remove(missing.path.c_str());
+  missing.backend = azookey::host::BackendKind::Cpu;
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::DegradedModel);
+  EXPECT_EQ(engine->health_snapshot().health_state, azookey::host::HealthState::DegradedModel);
+
+  // Accepted, then failed again: back to DegradedModel through RecoveringModel.
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::DegradedModel);
+
+  const std::string model_path = TempPath("azookey_host_engine_health_model.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions valid;
+  valid.path = model_path;
+  valid.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(valid);
+  std::optional<azookey::host::HealthState> during_load;
+  valid.before_probe_for_tests = [&] { during_load = engine->health_state(); };
+  ASSERT_TRUE(engine->LoadModelWithResult(valid).ok);
+  EXPECT_EQ(during_load, azookey::host::HealthState::RecoveringModel);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  // With a model serving, a failed swap keeps it and is not a degradation.
+  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  EXPECT_TRUE(engine->model_loaded());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  engine.reset();
+  std::remove(model_path.c_str());
+  std::remove(lpath.c_str());
+}
+
+// A SafeMode that begins while the GGUF is being loaded, after the check at the
+// start of the load, still keeps the loaded model from going live.
+TEST(InferenceEngineTest, SafeModeEnteredDuringALoadDiscardsTheModel) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+  const std::string lpath = TempPath("azookey_host_engine_health_safe_mode_race.tsv");
+  std::remove(lpath.c_str());
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_host_engine_health_safe_mode_race.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  options.before_load_for_tests = [&](azookey::host::BackendKind) {
+    engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
+  };
+
+  const auto result = engine->LoadModelWithResult(options);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.error, "safe_mode");
+  EXPECT_FALSE(engine->model_loaded());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
+
+  engine.reset();
+  std::remove(model_path.c_str());
+  std::remove(lpath.c_str());
+}
+
+TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
+  const std::string lpath = TempPath("azookey_host_engine_health_safe_mode.tsv");
+  std::remove(lpath.c_str());
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+  ASSERT_TRUE(engine->ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected));
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
+
+  azookey::host::ModelLoadOptions missing;
+  missing.path = TempPath("azookey_host_engine_health_safe_missing.gguf");
+  std::remove(missing.path.c_str());
+  // Refused before any probe: SafeMode runs no model, whichever caller asks.
+  const auto refused = engine->LoadModelWithResult(missing);
+  EXPECT_FALSE(refused.ok);
+  EXPECT_EQ(refused.error, "safe_mode");
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
+  EXPECT_FALSE(engine->ApplyHealthEvent(azookey::host::HealthEvent::ModelLoadConfirmed));
+
+  engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
+  EXPECT_TRUE(engine->ApplyHealthEvent(azookey::host::HealthEvent::SafeModeCleared));
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
+
+  engine.reset();
+  std::remove(lpath.c_str());
 }

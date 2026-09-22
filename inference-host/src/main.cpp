@@ -42,6 +42,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -407,18 +408,27 @@ int main(int argc, char** argv) {
   // started while the one that wrote the marker is still alive is a duplicate
   // about to fail to listen, not a crash, so it leaves the history alone.
   const auto run_history_path = user_paths->data_dir / "host_run_state.txt";
+  constexpr auto kRunHistoryLockTimeout = std::chrono::milliseconds(2000);
   bool owns_run_history = false;
   bool entered_safe_mode = false;
-  if (pipe_mode) {
+  // Two Hosts starting together must not both read a dead mark and both claim it.
+  auto run_history_lock = pipe_mode ? azookey::learning::AcquireExclusiveFileLockForPath(
+                                          run_history_path, kRunHistoryLockTimeout)
+                                    : std::nullopt;
+  if (pipe_mode && !run_history_lock) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+  }
+  if (run_history_lock) {
     const auto previous = azookey::host::ReadHostRunHistory(run_history_path)
                               .value_or(azookey::host::HostRunHistory{});
-    if (!(previous.running && azookey::host::IsOtherProcessAlive(previous.pid))) {
+    if (!azookey::host::IsMarkOwnerAlive(previous)) {
       const auto now_epoch_ms =
           static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::system_clock::now().time_since_epoch())
                                    .count());
       const auto outcome =
-          azookey::host::RecordHostStart(previous, azookey::host::CurrentProcessId(), now_epoch_ms);
+          azookey::host::RecordHostStart(previous, azookey::host::CurrentProcessId(),
+                                         azookey::host::CurrentProcessStartTime(), now_epoch_ms);
       owns_run_history = azookey::host::WriteHostRunHistory(run_history_path, outcome.next);
       if (!owns_run_history) {
         runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
@@ -439,11 +449,20 @@ int main(int argc, char** argv) {
         if (entered_safe_mode) settings_result = settings_store.Load();
       }
     }
+    run_history_lock.reset();
   }
-  const bool safe_mode = settings_result.settings.safe_mode.enabled;
+  // Entering counts even if a save raced the reload and dropped the flag again.
+  const bool safe_mode = entered_safe_mode || settings_result.settings.safe_mode.enabled;
   const auto mark_clean_exit = [&]() {
-    if (owns_run_history && !azookey::host::WriteHostRunHistory(
-                                run_history_path, azookey::host::RecordHostCleanExit())) {
+    if (!owns_run_history) return;
+    // Clear only this process's own mark: a Host that lost the pipe to another
+    // one must not erase the mark of the Host that is running.
+    auto lock = azookey::learning::AcquireExclusiveFileLockForPath(run_history_path,
+                                                                   kRunHistoryLockTimeout);
+    const auto current = lock ? azookey::host::ReadHostRunHistory(run_history_path) : std::nullopt;
+    if (!current || !azookey::host::IsOwnMark(*current)) return;
+    if (!azookey::host::WriteHostRunHistory(run_history_path,
+                                            azookey::host::RecordHostCleanExit())) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
     }
   };

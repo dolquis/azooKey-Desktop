@@ -88,7 +88,10 @@ inline constexpr std::chrono::milliseconds kSafeModeCrashWindow{60000};
 
 struct HostRunHistory {
   bool running{false};
+  // Who wrote the running mark. The start time tells that process apart from
+  // an unrelated one that later reuses its PID.
   uint32_t pid{0};
+  uint64_t process_start{0};
   // Detection times of the crashes since the last clean exit, oldest first.
   std::vector<int64_t> crash_epoch_ms;
 };
@@ -105,16 +108,22 @@ struct HostStartOutcome {
 // while the process named in `previous` is still alive, since that is another
 // Host holding the pipe and not a crash.
 HostStartOutcome RecordHostStart(const HostRunHistory& previous, uint32_t pid,
-                                 int64_t now_epoch_ms);
+                                 uint64_t process_start, int64_t now_epoch_ms);
 // A clean exit ends the run of consecutive crashes.
 HostRunHistory RecordHostCleanExit();
 
 // nullopt when the file is missing or unreadable, which is a fresh history.
 std::optional<HostRunHistory> ReadHostRunHistory(const std::filesystem::path& path);
 bool WriteHostRunHistory(const std::filesystem::path& path, const HostRunHistory& history);
-// Whether `pid` names a live process other than this one.
-bool IsOtherProcessAlive(uint32_t pid);
+// Whether the process that wrote `history`'s running mark is still alive and
+// is not this one. A live process under the same PID but with another start
+// time is an unrelated process that reused the PID.
+bool IsMarkOwnerAlive(const HostRunHistory& history);
+// Whether `history` is the running mark this process wrote.
+bool IsOwnMark(const HostRunHistory& history);
 uint32_t CurrentProcessId();
+// Creation time of this process in an OS-defined unit; 0 when unavailable.
+uint64_t CurrentProcessStartTime();
 
 // RFC 3339 in UTC with second precision, for settings.safeMode.enteredAt.
 std::string FormatRfc3339Utc(int64_t epoch_ms);

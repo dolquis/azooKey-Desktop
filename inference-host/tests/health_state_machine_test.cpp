@@ -140,7 +140,7 @@ TEST(HealthStateMachineTest, NamesAreDistinctLogWords) {
 }
 
 TEST(HostCrashHistoryTest, FirstStartAndCleanRestartsAreNotCrashes) {
-  const auto first = azookey::host::RecordHostStart(HostRunHistory{}, 10, kNow);
+  const auto first = azookey::host::RecordHostStart(HostRunHistory{}, 10, 0, kNow);
   EXPECT_FALSE(first.previous_run_crashed);
   EXPECT_EQ(first.recent_crashes, 0u);
   EXPECT_FALSE(first.crash_loop);
@@ -148,30 +148,30 @@ TEST(HostCrashHistoryTest, FirstStartAndCleanRestartsAreNotCrashes) {
   EXPECT_EQ(first.next.pid, 10u);
 
   const auto after_clean =
-      azookey::host::RecordHostStart(azookey::host::RecordHostCleanExit(), 11, kNow + 1000);
+      azookey::host::RecordHostStart(azookey::host::RecordHostCleanExit(), 11, 0, kNow + 1000);
   EXPECT_FALSE(after_clean.previous_run_crashed);
   EXPECT_FALSE(after_clean.crash_loop);
 }
 
 TEST(HostCrashHistoryTest, ThreeCrashesInsideSixtySecondsEnterSafeMode) {
-  auto history = azookey::host::RecordHostStart(HostRunHistory{}, 1, kNow).next;
-  auto outcome = azookey::host::RecordHostStart(history, 2, kNow + 1000);
+  auto history = azookey::host::RecordHostStart(HostRunHistory{}, 1, 0, kNow).next;
+  auto outcome = azookey::host::RecordHostStart(history, 2, 0, kNow + 1000);
   EXPECT_TRUE(outcome.previous_run_crashed);
   EXPECT_EQ(outcome.recent_crashes, 1u);
   EXPECT_FALSE(outcome.crash_loop);
-  outcome = azookey::host::RecordHostStart(outcome.next, 3, kNow + 2000);
+  outcome = azookey::host::RecordHostStart(outcome.next, 3, 0, kNow + 2000);
   EXPECT_EQ(outcome.recent_crashes, 2u);
   EXPECT_FALSE(outcome.crash_loop);
-  outcome = azookey::host::RecordHostStart(outcome.next, 4, kNow + 3000);
+  outcome = azookey::host::RecordHostStart(outcome.next, 4, 0, kNow + 3000);
   EXPECT_EQ(outcome.recent_crashes, azookey::host::kSafeModeCrashThreshold);
   EXPECT_TRUE(outcome.crash_loop);
 }
 
 TEST(HostCrashHistoryTest, CrashesOutsideTheWindowOrBeforeACleanExitDoNotCount) {
   const int64_t window = azookey::host::kSafeModeCrashWindow.count();
-  HostRunHistory spread{true, 1, {kNow - window, kNow - window + 1}};
+  HostRunHistory spread{true, 1, 0, {kNow - window, kNow - window + 1}};
   // The first falls on the window's edge and drops out; the second stays.
-  auto outcome = azookey::host::RecordHostStart(spread, 2, kNow);
+  auto outcome = azookey::host::RecordHostStart(spread, 2, 0, kNow);
   EXPECT_EQ(outcome.recent_crashes, 2u);
   EXPECT_FALSE(outcome.crash_loop);
 
@@ -179,13 +179,13 @@ TEST(HostCrashHistoryTest, CrashesOutsideTheWindowOrBeforeACleanExitDoNotCount) 
   auto history = azookey::host::RecordHostCleanExit();
   EXPECT_TRUE(history.crash_epoch_ms.empty());
   history.running = true;
-  outcome = azookey::host::RecordHostStart(history, 3, kNow);
+  outcome = azookey::host::RecordHostStart(history, 3, 0, kNow);
   EXPECT_EQ(outcome.recent_crashes, 1u);
 }
 
 TEST(HostCrashHistoryTest, TimesAheadOfTheClockAreDropped) {
-  HostRunHistory history{true, 1, {kNow + 5000, kNow + 6000}};
-  const auto outcome = azookey::host::RecordHostStart(history, 2, kNow);
+  HostRunHistory history{true, 1, 0, {kNow + 5000, kNow + 6000}};
+  const auto outcome = azookey::host::RecordHostStart(history, 2, 0, kNow);
   EXPECT_EQ(outcome.recent_crashes, 1u);
   EXPECT_FALSE(outcome.crash_loop);
 }
@@ -194,12 +194,13 @@ TEST(HostCrashHistoryTest, HistoryRoundTripsThroughTheFile) {
   const auto path = TempFile("azookey_host_run_state_roundtrip.txt");
   EXPECT_FALSE(azookey::host::ReadHostRunHistory(path).has_value());
 
-  HostRunHistory running{true, 4242, {kNow, kNow + 10}};
+  HostRunHistory running{true, 4242, 133'000'000'000'000'000, {kNow, kNow + 10}};
   ASSERT_TRUE(azookey::host::WriteHostRunHistory(path, running));
   const auto read = azookey::host::ReadHostRunHistory(path);
   ASSERT_TRUE(read.has_value());
   EXPECT_TRUE(read->running);
   EXPECT_EQ(read->pid, 4242u);
+  EXPECT_EQ(read->process_start, running.process_start);
   EXPECT_EQ(read->crash_epoch_ms, running.crash_epoch_ms);
 
   ASSERT_TRUE(azookey::host::WriteHostRunHistory(path, azookey::host::RecordHostCleanExit()));
@@ -214,7 +215,8 @@ TEST(HostCrashHistoryTest, MalformedHistoryIsTreatedAsFresh) {
   const auto path = TempFile("azookey_host_run_state_malformed.txt");
   for (const char* content :
        {"", "not a history\n", "azookey-host-run v1\n", "azookey-host-run v1\nrunning\n",
-        "azookey-host-run v1\nmaybe 1\n", "azookey-host-run v1\nstopped\nsoon\n"}) {
+        "azookey-host-run v1\nrunning 7\n", "azookey-host-run v1\nmaybe 1\n",
+        "azookey-host-run v1\nstopped\nsoon\n"}) {
     {
       std::ofstream out(path, std::ios::binary | std::ios::trunc);
       out << content;
@@ -229,9 +231,23 @@ TEST(HostCrashHistoryTest, MalformedHistoryIsTreatedAsFresh) {
   std::filesystem::remove(path);
 }
 
-TEST(HostCrashHistoryTest, ThisProcessIsNotAnotherLiveHost) {
-  EXPECT_FALSE(azookey::host::IsOtherProcessAlive(azookey::host::CurrentProcessId()));
-  EXPECT_FALSE(azookey::host::IsOtherProcessAlive(0));
+TEST(HostCrashHistoryTest, OnlyAMarkFromAnotherLiveProcessBlocksCounting) {
+  const HostRunHistory own{
+      true, azookey::host::CurrentProcessId(), azookey::host::CurrentProcessStartTime(), {}};
+  EXPECT_TRUE(azookey::host::IsOwnMark(own));
+  EXPECT_FALSE(azookey::host::IsMarkOwnerAlive(own));
+
+  // This process's PID with another start time is a PID reused by an
+  // unrelated process: it neither owns the mark nor keeps it alive.
+  HostRunHistory reused = own;
+  reused.process_start = own.process_start + 1;
+  EXPECT_FALSE(azookey::host::IsOwnMark(reused));
+
+  EXPECT_FALSE(azookey::host::IsMarkOwnerAlive(HostRunHistory{}));
+  EXPECT_FALSE(azookey::host::IsMarkOwnerAlive(HostRunHistory{true, 0, 0, {}}));
+  HostRunHistory stopped = own;
+  stopped.running = false;
+  EXPECT_FALSE(azookey::host::IsOwnMark(stopped));
 }
 
 TEST(HostCrashHistoryTest, EnteredAtIsRfc3339Utc) {

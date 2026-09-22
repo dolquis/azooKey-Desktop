@@ -2432,7 +2432,10 @@ TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
   azookey::host::ModelLoadOptions missing;
   missing.path = TempPath("azookey_host_engine_health_safe_missing.gguf");
   std::remove(missing.path.c_str());
-  EXPECT_FALSE(engine->LoadModelWithResult(missing).ok);
+  // Refused before any probe: SafeMode runs no model, whichever caller asks.
+  const auto refused = engine->LoadModelWithResult(missing);
+  EXPECT_FALSE(refused.ok);
+  EXPECT_EQ(refused.error, "safe_mode");
   EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
   EXPECT_FALSE(engine->ApplyHealthEvent(azookey::host::HealthEvent::ModelLoadConfirmed));
 

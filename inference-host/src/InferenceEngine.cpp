@@ -373,6 +373,12 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     (void)FlushLearningStoreLocked();
+    // Section 8.5.3: checked again under the load lock, so a SafeMode entered
+    // after the Dispatcher's own check still stops the load.
+    if (!options.path.empty() && health_.state() == HealthState::SafeMode) {
+      result.error = "safe_mode";
+      return result;
+    }
     next_config = config_;
     next_config.model_path = options.path;
     // Section 8.5.1: a reload is accepted once it starts, and only a model the

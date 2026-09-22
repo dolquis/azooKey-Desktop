@@ -113,7 +113,7 @@ std::optional<HealthTransition> HealthStateMachine::Apply(HealthEvent event) {
 }
 
 HostStartOutcome RecordHostStart(const HostRunHistory& previous, uint32_t pid,
-                                 int64_t now_epoch_ms) {
+                                 uint64_t process_start, int64_t now_epoch_ms) {
   HostStartOutcome outcome;
   outcome.previous_run_crashed = previous.running;
   const int64_t window_start = now_epoch_ms - kSafeModeCrashWindow.count();
@@ -133,6 +133,7 @@ HostStartOutcome RecordHostStart(const HostRunHistory& previous, uint32_t pid,
       outcome.previous_run_crashed && outcome.recent_crashes >= kSafeModeCrashThreshold;
   outcome.next.running = true;
   outcome.next.pid = pid;
+  outcome.next.process_start = process_start;
   return outcome;
 }
 
@@ -156,7 +157,7 @@ std::optional<HostRunHistory> ReadHostRunHistory(const std::filesystem::path& pa
   status >> word;
   if (word == "running") {
     history.running = true;
-    status >> history.pid;
+    status >> history.pid >> history.process_start;
     if (!status) return std::nullopt;
   } else if (word != "stopped") {
     return std::nullopt;
@@ -176,7 +177,7 @@ bool WriteHostRunHistory(const std::filesystem::path& path, const HostRunHistory
   std::ostringstream out;
   out << kRunHistoryHeader << '\n';
   if (history.running) {
-    out << "running " << history.pid << '\n';
+    out << "running " << history.pid << ' ' << history.process_start << '\n';
   } else {
     out << "stopped\n";
   }
@@ -184,20 +185,37 @@ bool WriteHostRunHistory(const std::filesystem::path& path, const HostRunHistory
   return learning::WriteTextFileAtomically(path, out.str());
 }
 
-bool IsOtherProcessAlive(uint32_t pid) {
-  if (pid == 0) return false;
+namespace {
+
 #ifdef _WIN32
-  if (pid == ::GetCurrentProcessId()) return false;
-  HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+uint64_t ProcessStartTime(HANDLE process) {
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!::GetProcessTimes(process, &created, &exited, &kernel, &user)) return 0;
+  return (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+}
+#endif
+
+}  // namespace
+
+bool IsMarkOwnerAlive(const HostRunHistory& history) {
+  if (!history.running || history.pid == 0 || IsOwnMark(history)) return false;
+#ifdef _WIN32
+  HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, history.pid);
   if (!process) return false;
   DWORD exit_code = 0;
   const bool alive = ::GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE;
+  const uint64_t start = alive ? ProcessStartTime(process) : 0;
   ::CloseHandle(process);
-  return alive;
+  // A PID now held by a process started at another time is not the writer.
+  return alive && (history.process_start == 0 || start == history.process_start);
 #else
-  if (static_cast<pid_t>(pid) == ::getpid()) return false;
-  return ::kill(static_cast<pid_t>(pid), 0) == 0;
+  return ::kill(static_cast<pid_t>(history.pid), 0) == 0;
 #endif
+}
+
+bool IsOwnMark(const HostRunHistory& history) {
+  return history.running && history.pid == CurrentProcessId() &&
+         history.process_start == CurrentProcessStartTime();
 }
 
 uint32_t CurrentProcessId() {
@@ -205,6 +223,14 @@ uint32_t CurrentProcessId() {
   return static_cast<uint32_t>(::GetCurrentProcessId());
 #else
   return static_cast<uint32_t>(::getpid());
+#endif
+}
+
+uint64_t CurrentProcessStartTime() {
+#ifdef _WIN32
+  return ProcessStartTime(::GetCurrentProcess());
+#else
+  return 0;
 #endif
 }
 

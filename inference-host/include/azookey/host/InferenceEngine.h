@@ -83,6 +83,11 @@ struct EngineConfig {
   bool auto_word_mining_enabled{true};
   bool auto_word_auto_register{false};
   uint32_t auto_word_min_count{3};
+  // Score for a confirmed auto-word that carries none of its own (every mined
+  // word). Below user_word_default_score so an explicit user entry for the same
+  // surface wins the merge, and above a typical static-dictionary hit
+  // (frequency + base priority 0.20 + exact bonus 0.10). Spec section 6.
+  double auto_word_default_score{1.2};
 };
 
 struct ModelLoadOptions {

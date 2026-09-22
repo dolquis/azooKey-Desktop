@@ -775,6 +775,8 @@ std::optional<ListNewWordCandidatesRequest> ParseListNewWordCandidatesRequest(
 
 std::string BuildListNewWordCandidatesResponse(const ListNewWordCandidatesResponse& p) {
   j::Object o;
+  o.emplace("ok", j::Value(p.ok));
+  if (p.error) o.emplace("error", j::Value(*p.error));
   j::Array items;
   for (const auto& w : p.items) items.push_back(NewWordToJson(w));
   o.emplace("items", j::Value(std::move(items)));
@@ -786,6 +788,9 @@ std::optional<ListNewWordCandidatesResponse> ParseListNewWordCandidatesResponse(
   auto v = ParseObject(json);
   if (!v) return std::nullopt;
   ListNewWordCandidatesResponse p;
+  // A response without `ok` predates the error channel and was a success.
+  p.ok = v->GetBool("ok").value_or(true);
+  if (auto error = v->GetString("error")) p.error = std::move(*error);
   if (const auto* arr = v->GetArray("items")) {
     // Malformed entries are skipped, matching the module's lenient decode for
     // arrays of optional elements.
@@ -824,6 +829,8 @@ std::optional<ResolveNewWordRequest> ParseResolveNewWordRequest(const std::strin
 std::string BuildResolveNewWordResponse(const ResolveNewWordResponse& p) {
   j::Object o;
   o.emplace("ok", j::Value(p.ok));
+  o.emplace("changed", j::Value(p.changed));
+  if (p.error) o.emplace("error", j::Value(*p.error));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -834,6 +841,8 @@ std::optional<ResolveNewWordResponse> ParseResolveNewWordResponse(const std::str
   auto ok = v->GetBool("ok");
   if (!ok) return std::nullopt;
   p.ok = *ok;
+  p.changed = v->GetBool("changed").value_or(false);
+  if (auto error = v->GetString("error")) p.error = std::move(*error);
   return p;
 }
 

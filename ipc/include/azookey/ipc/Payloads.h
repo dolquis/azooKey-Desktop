@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace azookey::ipc {
@@ -234,7 +235,20 @@ struct NewWordField {
   uint64_t last_seen_epoch{0};
 };
 
+// Error codes carried in the `error` field of the two M36-A responses
+// (docs/auto-word-registration-spec.md section 7-1).
+inline constexpr std::string_view kNewWordErrorInvalidRequest = "invalid_request";
+inline constexpr std::string_view kNewWordErrorStoreUnavailable = "store_unavailable";
+inline constexpr std::string_view kNewWordErrorNotAuthenticated = "not_authenticated";
+inline constexpr std::string_view kNewWordErrorNotFound = "not_found";
+inline constexpr std::string_view kNewWordErrorSaveFailed = "save_failed";
+
 struct ListNewWordCandidatesResponse {
+  // false with `error` set when the list could not be produced; an empty
+  // `items` with ok=true means there really are no words in that state.
+  // Absent on the wire means true (protocol v1 additive field).
+  bool ok{true};
+  std::optional<std::string> error;
   std::vector<NewWordField> items;
 };
 
@@ -246,7 +260,12 @@ struct ResolveNewWordRequest {
 };
 
 struct ResolveNewWordResponse {
+  // true when the word is in the requested state after the call and that state
+  // is on disk. Re-confirming a confirmed word is ok=true, changed=false.
   bool ok{false};
+  // true only when this call moved the word to a new state. Absent means false.
+  bool changed{false};
+  std::optional<std::string> error;
 };
 
 // Builders return the JSON payload string (Envelope.payload_json content).

@@ -37,13 +37,14 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
 `--pipe-name` は値を必須とする。
 `--model`、`--learning`、`--user-dict`、`--mock-dict`、`--handshake-token` も値を必須とする。
 `userdict` より後ろのトークンは user dictionary CLI へ、`lookup` より後ろのトークンは
-読み取り専用 lookup CLI へそのまま渡す。
+読み取り専用 lookup CLI へ、`newwords` より後ろのトークンは新語承認 CLI
+（`docs/auto-word-registration-spec.md` §7-3）へそのまま渡す。
 
 CLI 引数の文字列は UTF-8 バイト列とする。Windows の entry point は wide argv（`wmain`）で受け、
 引数ごとに UTF-16 から UTF-8 へ変換する。対を成さない surrogate のように UTF-8 へ変換できない
 引数は exit code 2 で拒否し、置換文字で代用しない。narrow `main` の argv は process の
-active code page で符号化されるため、CLI の入力経路として使わない。この契約は `userdict` と
-`lookup` へ渡すトークンにも同じく及ぶ。
+active code page で符号化されるため、CLI の入力経路として使わない。この契約は `userdict`、
+`lookup`、`newwords` へ渡すトークンにも同じく及ぶ。
 
 `--learning`、`--user-dict`、`--mock-dict`、`userdict import`、`userdict export` の明示パスは、
 この UTF-8 バイト列から `azookey::core::Utf8Path` で `std::filesystem::path` を構築する。
@@ -191,6 +192,11 @@ Linear が持つ。
   不正行は skip 件数として報告し、同一 `(surface, reading)` は既存 `Add` と同じく後勝ちで
   置換する。`userdict export` は既存 JSON schema
   `{ "version": 1, "entries": [...] }` で書き出す。
+- 新語候補（M36-A）の承認には
+  `azookey_inference_host.exe [--learning <path>] newwords <list|confirm|reject> ...` を使う。
+  `confirm` / `reject` は `userdict add` と同じく既定で起動中 Host へ IPC 送信し、
+  直接編集は `--offline` を付けたときだけ行う。構文と出力は
+  `docs/auto-word-registration-spec.md` §7-3 に従う。
 - M11 / M30 の設定アプリ完成後も、`userdict` サブコマンドは v1.x の診断・移行用
   CLI として併存させる。GUI が通常操作面になった後も、CI やサポート手順から再現できる
   低レベル操作面として削除しない。
@@ -288,6 +294,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 | `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
 | `learning.tsv` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
+| `auto_words.tsv` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | atomic replace のみ。ファイル単位ロックは取らない。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
 - 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
   この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json` の直接 writer にはならない。

@@ -496,6 +496,7 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.auto_word_mining_enabled = config.auto_word_mining_enabled;
   config_.auto_word_auto_register = config.auto_word_auto_register;
   config_.auto_word_min_count = config.auto_word_min_count;
+  config_.auto_word_default_score = config.auto_word_default_score;
 }
 
 BackendKind InferenceEngine::backend() const {
@@ -645,10 +646,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   EngineConfig config;
   uint64_t nll_revision{};
   bool using_model_converter = false;
+  learning::AutoWordStore* auto_word_store = nullptr;
   std::vector<core::Candidate> merged;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     converter = active_converter_;
+    auto_word_store = auto_word_store_;
     fallback_converter = fallback_converter_;
     config = config_;
     nll_revision = nll_config_revision_;
@@ -669,6 +672,22 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
         c.debug_info = "user-dict";
         merged.push_back(std::move(c));
       }
+    }
+  }
+  if (auto_word_store) {
+    // M36-A (spec section 6). Outside state_mutex_: the store has its own
+    // mutex, and CommitObservation holds it across Save()'s disk flush, which
+    // must not stall Health or model swaps behind this query. Pending and
+    // rejected words never come back from LookupConfirmed.
+    for (auto& w : auto_word_store->LookupConfirmed(kana)) {
+      core::Candidate c;
+      c.surface = std::move(w.surface);
+      c.reading = std::move(w.reading);
+      // Mined words never set a score; 0 would bury them under every static hit.
+      c.score = w.score > 0.0 ? w.score : config.auto_word_default_score;
+      c.source = core::CandidateSource::UserDictionary;
+      c.debug_info = "auto-word";
+      merged.push_back(std::move(c));
     }
   }
 

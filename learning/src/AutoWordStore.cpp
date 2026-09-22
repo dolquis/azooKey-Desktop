@@ -105,6 +105,15 @@ bool ParseScore(std::string_view token, double& value) {
   return true;
 }
 
+// Shortest representation that parses back to the same double. A stream's
+// default six significant digits would drift the value on every Save/Load.
+std::string FormatScore(double score) {
+  char buffer[32];
+  const auto result = std::to_chars(buffer, buffer + sizeof(buffer), score);
+  if (result.ec != std::errc{}) return "0";
+  return std::string(buffer, result.ptr);
+}
+
 void LogMalformedLine(const std::filesystem::path& path, size_t line_number) {
   const auto utf8_path = path.u8string();
   const std::string display_path(reinterpret_cast<const char*>(utf8_path.data()), utf8_path.size());
@@ -260,6 +269,26 @@ bool AutoWordStore::Reject(const std::string& surface, const std::string& readin
   return SetStateLocked(surface, reading, AutoWordState::Rejected);
 }
 
+std::optional<AutoWordState> AutoWordStore::SetState(const std::string& surface,
+                                                     const std::string& reading,
+                                                     AutoWordState state) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto* word = FindLocked(surface, reading);
+  if (!word) return std::nullopt;
+  const AutoWordState previous = word->state;
+  word->state = state;
+  return previous;
+}
+
+bool AutoWordStore::CompareAndSetState(const std::string& surface, const std::string& reading,
+                                       AutoWordState expected, AutoWordState desired) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto* word = FindLocked(surface, reading);
+  if (!word || word->state != expected) return false;
+  word->state = desired;
+  return true;
+}
+
 std::vector<AutoWord> AutoWordStore::LookupConfirmed(const std::string& reading) const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<AutoWord> result;
@@ -364,7 +393,7 @@ bool AutoWordStore::Save() const {
       out << EscapeTsvField(word.surface) << '\t' << EscapeTsvField(word.reading) << '\t'
           << AutoWordSourceName(word.source) << '\t' << AutoWordStateName(word.state) << '\t'
           << word.count << '\t' << word.first_seen_epoch << '\t' << word.last_seen_epoch << '\t'
-          << word.score << '\n';
+          << FormatScore(word.score) << '\n';
     }
   }
   return WriteTextFileAtomically(path_, out.str());

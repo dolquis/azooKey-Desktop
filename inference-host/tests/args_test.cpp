@@ -113,6 +113,16 @@ TEST(HostArgsTest, LookupConsumesRemainingArguments) {
             (std::vector<std::string>{"--mode", "prefix", "--query", "a"}));
 }
 
+TEST(HostArgsTest, NewWordsConsumesRemainingArguments) {
+  const auto parsed = Parse({"--pipe-name", "pipe-name", "newwords", "confirm", "--reading", "a"});
+  ASSERT_TRUE(parsed);
+  ASSERT_TRUE(parsed.args.newwords_args.has_value());
+  EXPECT_EQ(*parsed.args.newwords_args, (std::vector<std::string>{"confirm", "--reading", "a"}));
+
+  // A one-shot CLI run has no supervisor to watch.
+  EXPECT_FALSE(Parse({"--pipe", "--supervisor-pid", "1234", "newwords", "list"}));
+}
+
 TEST(HostArgsTest, RejectsMissingValuesAndUnknownArguments) {
   for (const char* option : {"--backend", "--model", "--learning", "--user-dict", "--mock-dict",
                              "--pipe-name", "--handshake-token"}) {

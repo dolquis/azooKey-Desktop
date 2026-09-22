@@ -50,6 +50,10 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
       args.lookup_args.emplace(argv.begin() + static_cast<std::ptrdiff_t>(i + 1), argv.end());
       break;
     }
+    if (arg == "newwords") {
+      args.newwords_args.emplace(argv.begin() + static_cast<std::ptrdiff_t>(i + 1), argv.end());
+      break;
+    }
     if (arg == "--cuda") {
       args.config.backend = BackendKind::Cuda;
       args.explicit_backend = true;
@@ -124,7 +128,8 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
     return result;
   }
 
-  if (args.supervisor_pid != 0 && (!args.pipe_mode || args.userdict_args || args.lookup_args)) {
+  if (args.supervisor_pid != 0 &&
+      (!args.pipe_mode || args.userdict_args || args.lookup_args || args.newwords_args)) {
     result.error = "--supervisor-pid requires pipe mode";
   }
   return result;

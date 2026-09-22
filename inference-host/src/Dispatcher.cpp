@@ -278,14 +278,17 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       // authenticated session gives, and nothing is recorded.
       return std::nullopt;
     case ipc::MessageType::ListNewWordCandidates: {
-      // An empty list rather than the store's contents: the approval list is
-      // built from what the user typed.
-      return MakeResponse(
-          req, ipc::BuildListNewWordCandidatesResponse(ipc::ListNewWordCandidatesResponse{}));
+      // No items rather than the store's contents: the approval list is built
+      // from what the user typed.
+      ipc::ListNewWordCandidatesResponse r;
+      r.ok = false;
+      r.error = std::string(ipc::kNewWordErrorNotAuthenticated);
+      return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(r));
     }
     case ipc::MessageType::ResolveNewWord: {
       ipc::ResolveNewWordResponse r;
       r.ok = false;
+      r.error = std::string(ipc::kNewWordErrorNotAuthenticated);
       return MakeResponse(req, ipc::BuildResolveNewWordResponse(r));
     }
     case ipc::MessageType::LoadModel: {
@@ -572,15 +575,19 @@ void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
 
 std::optional<ipc::Envelope> Dispatcher::HandleListNewWordCandidates(const ipc::Envelope& req) {
   ipc::ListNewWordCandidatesResponse res;
+  const auto fail = [&](std::string_view error) {
+    res.ok = false;
+    res.error = std::string(error);
+    return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(res));
+  };
   auto parsed = ipc::ParseListNewWordCandidatesRequest(req.payload_json);
-  if (!parsed || !auto_word_store_) {
-    return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(res));
-  }
-
   learning::AutoWordState state = learning::AutoWordState::Pending;
-  if (!learning::ParseAutoWordState(parsed->state_filter, state)) {
-    return MakeResponse(req, ipc::BuildListNewWordCandidatesResponse(res));
+  // The parser already restricts state_filter to the three names, so a failed
+  // ParseAutoWordState here would be a codec/store mismatch, not user input.
+  if (!parsed || !learning::ParseAutoWordState(parsed->state_filter, state)) {
+    return fail(ipc::kNewWordErrorInvalidRequest);
   }
+  if (!auto_word_store_) return fail(ipc::kNewWordErrorStoreUnavailable);
 
   auto words = auto_word_store_->ListByState(state);
   // Most recently seen first, so a page of max_items shows the words the user
@@ -610,16 +617,37 @@ std::optional<ipc::Envelope> Dispatcher::HandleListNewWordCandidates(const ipc::
 
 std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelope& req) {
   ipc::ResolveNewWordResponse res;
+  const auto reply = [&]() { return MakeResponse(req, ipc::BuildResolveNewWordResponse(res)); };
+  const auto fail = [&](std::string_view error) {
+    res.ok = false;
+    res.error = std::string(error);
+    return reply();
+  };
   auto parsed = ipc::ParseResolveNewWordRequest(req.payload_json);
-  if (parsed && auto_word_store_) {
-    res.ok = parsed->action == "confirm"
-                 ? auto_word_store_->Confirm(parsed->surface, parsed->reading)
-                 : auto_word_store_->Reject(parsed->surface, parsed->reading);
-    // Persist only a decision that changed something, so a repeated click does
-    // not rewrite the file.
-    if (res.ok) res.ok = auto_word_store_->Save();
+  if (!parsed) return fail(ipc::kNewWordErrorInvalidRequest);
+  if (!auto_word_store_) return fail(ipc::kNewWordErrorStoreUnavailable);
+
+  const auto target = parsed->action == "confirm" ? learning::AutoWordState::Confirmed
+                                                  : learning::AutoWordState::Rejected;
+  const auto previous = auto_word_store_->SetState(parsed->surface, parsed->reading, target);
+  if (!previous) return fail(ipc::kNewWordErrorNotFound);
+  // A repeated click is a success that changed nothing, and it does not
+  // rewrite the file.
+  if (*previous == target) {
+    res.ok = true;
+    return reply();
   }
-  return MakeResponse(req, ipc::BuildResolveNewWordResponse(res));
+  if (!auto_word_store_->Save()) {
+    // Put the word back so memory keeps matching the file: otherwise a failed
+    // confirm would still inject the word until the host restarts. Only if it
+    // is still in our state, so a concurrent resolve from another connection
+    // is not undone.
+    auto_word_store_->CompareAndSetState(parsed->surface, parsed->reading, target, *previous);
+    return fail(ipc::kNewWordErrorSaveFailed);
+  }
+  res.ok = true;
+  res.changed = true;
+  return reply();
 }
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {

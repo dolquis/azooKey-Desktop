@@ -438,7 +438,11 @@ int main(int argc, char** argv) {
                         {{"recent_crashes", static_cast<uint64_t>(outcome.recent_crashes)}});
       }
       if (outcome.crash_loop && !settings_result.settings.safe_mode.enabled) {
+        // An unparsable file was already quarantined by the load above, so it
+        // now reads as missing; writing a fresh one here would replace settings
+        // the user may still recover, which section 8.5.3 rules out.
         entered_safe_mode =
+            settings_result.status != azookey::host::SettingsLoadStatus::Invalid &&
             settings_store.PersistSafeModeEntered(azookey::host::FormatRfc3339Utc(now_epoch_ms),
                                                   static_cast<int32_t>(outcome.recent_crashes));
         runtime_log.Log(entered_safe_mode ? azookey::logging::RuntimeLogLevel::Warn

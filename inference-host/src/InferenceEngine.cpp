@@ -477,6 +477,12 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   auto next_converter =
       std::make_shared<ZenzaiModelConverter>(std::move(loaded), fallback_converter_.get());
   std::lock_guard<std::mutex> lock(state_mutex_);
+  // The probe and load ran without state_mutex_, so SafeMode may have begun
+  // since the check at the top; a model loaded across that must not go live.
+  if (health_.state() == HealthState::SafeMode) {
+    result.error = "safe_mode";
+    return result;
+  }
   ApplyModelConfigFields(config_, next_config);
   model_converter_ = std::move(next_converter);
   active_converter_ = model_converter_;

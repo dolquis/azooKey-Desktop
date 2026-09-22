@@ -2421,6 +2421,39 @@ TEST(InferenceEngineTest, ModelLoadOutcomesDriveTheHealthState) {
   std::remove(lpath.c_str());
 }
 
+// A SafeMode that begins while the GGUF is being loaded, after the check at the
+// start of the load, still keeps the loaded model from going live.
+TEST(InferenceEngineTest, SafeModeEnteredDuringALoadDiscardsTheModel) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+  const std::string lpath = TempPath("azookey_host_engine_health_safe_mode_race.tsv");
+  std::remove(lpath.c_str());
+  azookey::learning::LearningStore store(lpath);
+  auto engine = MakeEngine(store);
+
+  const std::string model_path = TempPath("azookey_host_engine_health_safe_mode_race.gguf");
+  WriteMinimalGguf(model_path);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  options.backend = azookey::host::BackendKind::Cpu;
+  EnableMockZenzaiCandidatesForTests(options);
+  options.before_load_for_tests = [&](azookey::host::BackendKind) {
+    engine->RestoreHealthState(azookey::host::HealthState::SafeMode);
+  };
+
+  const auto result = engine->LoadModelWithResult(options);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.error, "safe_mode");
+  EXPECT_FALSE(engine->model_loaded());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);
+
+  engine.reset();
+  std::remove(model_path.c_str());
+  std::remove(lpath.c_str());
+}
+
 TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
   const std::string lpath = TempPath("azookey_host_engine_health_safe_mode.tsv");
   std::remove(lpath.c_str());

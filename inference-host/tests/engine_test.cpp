@@ -522,8 +522,17 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   EXPECT_FALSE(std::filesystem::exists(path));
   EXPECT_TRUE(WaitForFileExists(path, std::chrono::milliseconds(2500)));
 
+  // The flush renames a complete temp file into place, so the only way Load
+  // fails here is an open that loses to a handle still held on the fresh file
+  // (a scanner on CI runners). Retry the open instead of reading it once.
   azookey::learning::LearningStore loaded(path);
-  ASSERT_TRUE(loaded.Load());
+  const auto load_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+  bool load_ok = loaded.Load();
+  while (!load_ok && std::chrono::steady_clock::now() < load_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    load_ok = loaded.Load();
+  }
+  ASSERT_TRUE(load_ok);
   EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 10), 0.0);
 
   engine.reset();

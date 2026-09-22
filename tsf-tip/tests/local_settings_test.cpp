@@ -11,6 +11,17 @@
 #include "azookey/tsf/TipLocalSettings.h"
 
 namespace {
+template <typename Predicate>
+bool WaitUntil(Predicate predicate,
+               std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return predicate();
+}
+
 class LocalSettingsTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -242,13 +253,21 @@ TEST_F(LocalSettingsTest, DetectsCreationModificationDeletionAndReplacement) {
 // no new Host options.
 TEST_F(LocalSettingsTest, ReportsSettingsEditsButNotUnchangedReloads) {
   std::atomic<unsigned> notifications{0};
-  reader.SetOnChanged([&] { ++notifications; });
+  std::atomic<unsigned> enabled_notifications{0};
+  reader.SetOnChanged([&] {
+    // Reload publishes the snapshot before it runs the observer, and a
+    // truncating write can reach the watcher as two reloads. Counting the
+    // callbacks that already see the edit lets the test wait for the last one.
+    if (reader.Snapshot().pairing.enabled) ++enabled_notifications;
+    ++notifications;
+  });
   Write(R"({"bracketPairing":false})");
   ASSERT_TRUE(reader.Start(path));
   EXPECT_EQ(notifications.load(), 0u);
 
   Write(R"({"bracketPairing":true})");
   ASSERT_TRUE(reader.WaitForEnabledForTest(true));
+  ASSERT_TRUE(WaitUntil([&] { return enabled_notifications.load() >= 1u; }));
   EXPECT_GE(notifications.load(), 1u);
 
   const auto before = notifications.load();

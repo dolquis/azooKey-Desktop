@@ -3348,8 +3348,7 @@ void TextService::ServeConnection() {
       }
       // Deliver every fresh ordinary response on the UI thread, including a
       // live result that arrived before Space was pressed.
-      if (notify_ui || (!is_batch && emoji_trigger.empty()))
-        candidate_ui_.PostCandidatesReady();
+      if (notify_ui || (!is_batch && emoji_trigger.empty())) candidate_ui_.PostCandidatesReady();
     } else {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
                  {{"request_id", req_id}});
@@ -3622,8 +3621,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     shown_candidates_ = core_cached_metadata_;
     if (shown_candidates_.size() != show->candidates.size()) return E_UNEXPECTED;
     for (size_t i = 0; i < shown_candidates_.size(); ++i)
-      if (shown_candidates_[i].field.surface != show->candidates[i].surface)
-        return E_UNEXPECTED;
+      if (shown_candidates_[i].field.surface != show->candidates[i].surface) return E_UNEXPECTED;
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
       candidate_window_show_pending_ = false;
@@ -3631,8 +3629,8 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     selected_candidate_idx_ = static_cast<int>(show->selected_index);
     const auto items = BuildCandidateViews(shown_candidates_);
     if (items.empty()) return S_OK;
-    const HRESULT hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items,
-                                             selected_candidate_idx_);
+    const HRESULT hr =
+        candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, selected_candidate_idx_);
     if (FAILED(hr)) return hr;
     preedit_update_needed = true;
   } else if (const auto* selection = std::get_if<core::UpdateCandidateSelection>(&action)) {
@@ -3664,9 +3662,13 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
           chosen.field.source != "llm" && chosen.field.source != "privacy-fallback" &&
           chosen.field.source != "fallback") {
         const auto privacy = ResolvePrivacy(context, false);
-        pending_commit_observation_ = PendingCommitObservation{
-            observe->reading, chosen.field, HostCandidateFields(shown_candidates_), {},
-            privacy.secure, !privacy.secure && batch_learning_allowed_};
+        pending_commit_observation_ =
+            PendingCommitObservation{observe->reading,
+                                     chosen.field,
+                                     HostCandidateFields(shown_candidates_),
+                                     {},
+                                     privacy.secure,
+                                     !privacy.secure && batch_learning_allowed_};
       }
     }
   }
@@ -3810,9 +3812,8 @@ std::string TextService::CurrentPreeditSurface() const {
 }
 
 std::string TextService::CurrentDisplayedPreeditSurface() const {
-  if (core_input_active_ &&
-      (input_state_.kind() != core::InputStateKind::Idle || committing_ ||
-       !core_marked_surface_.empty() || core_action_in_progress_))
+  if (core_input_active_ && (input_state_.kind() != core::InputStateKind::Idle || committing_ ||
+                             !core_marked_surface_.empty() || core_action_in_progress_))
     return core_marked_surface_;
   if (emoji_mode_ != EmojiMode::Inactive) return CurrentPreeditSurface();
   if (candidate_ui_.IsShowing() && !shown_batch_segments_.empty()) {
@@ -3851,7 +3852,8 @@ void TextService::ShowCandidateWindowFromCache() {
   if (core_input_active_ && input_state_.kind() != core::InputStateKind::Idle &&
       shown_batch_segments_.empty() && emoji_mode_ == EmojiMode::Inactive) {
     if (input_state_.kind() == core::InputStateKind::Selecting ||
-        input_state_.Reading() != CurrentPreeditSurface()) return;
+        input_state_.Reading() != CurrentPreeditSurface())
+      return;
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
       candidate_window_show_pending_ = false;

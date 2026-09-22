@@ -260,8 +260,8 @@ TEST(InputStateTest, TypingWhileSelectingClosesWindowAndContinuesReading) {
 }
 
 TEST(InputStateTest, TypingWhileSelectingWithLiveConversionReturnsToComposing) {
-  const HandleResult result = Selecting().WithLiveConversion(true).HandleEvent(
-      Ev(UserAction::Input, U'k'));
+  const HandleResult result =
+      Selecting().WithLiveConversion(true).HandleEvent(Ev(UserAction::Input, U'k'));
   EXPECT_EQ(result.next.kind(), K::Composing);
   EXPECT_EQ(result.next.Reading(), "かなk");
   EXPECT_EQ(result.actions,

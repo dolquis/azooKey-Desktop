@@ -14,8 +14,8 @@
 #include <thread>
 #include <vector>
 
-#include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/core/InputState.h"
+#include "azookey/core/RomajiKanaConverter.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"

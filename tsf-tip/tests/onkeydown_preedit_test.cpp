@@ -3640,8 +3640,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMet
   FakeCompositionAttachment attachment(h);
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
-  EXPECT_EQ(h.service.input_state_for_test().kind(),
-            azookey::core::InputStateKind::Composing);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Composing);
   EXPECT_EQ(h.service.input_state_for_test().Reading(), "か");
 
   std::vector<azookey::ipc::CandidateField> candidates(2);
@@ -3653,8 +3652,7 @@ TEST(TsfTipOnKeyDownPreeditTest, DigitCommitUsesInputStateSnapshotAndSelectedMet
   candidates[1].source = "dictionary";
   h.service.set_cached_candidates_for_test(std::move(candidates));
   ASSERT_TRUE(h.Press(VK_SPACE));
-  EXPECT_EQ(h.service.input_state_for_test().kind(),
-            azookey::core::InputStateKind::Selecting);
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
   EXPECT_EQ(h.service.input_state_for_test().selected_index(), 0u);
 
   ASSERT_TRUE(h.Press('2'));

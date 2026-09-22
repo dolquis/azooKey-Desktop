@@ -959,7 +959,7 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 %LOCALAPPDATA%\azooKey\
   config\   settings.json
   data\     learning.tsv / user_dict.json / typo_corrections.tsv（M35）/
-            auto_words.tsv（M36-A）
+            auto_words.tsv（M36-A）/ host_run_state.txt（M47）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
 ```
@@ -967,7 +967,8 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 注: `typo_corrections.tsv`（M35）と `auto_words.tsv`（M36-A）は
 `learning.tsv` / `user_dict.json` と同じ `data\` 配下に置く（`UserDataPaths`
 の `data_dir` 規約に合わせる）。M49 backup（`docs/learning-data-management-spec.md`
-§2）の対象範囲は本レイアウトを正典とする。
+§2）の対象範囲は本レイアウトを正典とする。ただし `host_run_state.txt`（§8.5.3 の
+クラッシュ検知用の印）はユーザーデータではなく、backup の対象に含めない。
 
 `%LOCALAPPDATA%` は `SHGetKnownFolderPath(FOLDERID_LocalAppData, ...)` で
 取得する（WIL 導入後は `wil::unique_cotaskmem_string` で受ける）。必要な
@@ -1896,7 +1897,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 `degraded_simple` / `degraded_model` / `recovering_transport` / `recovering_model` /
 `safe_mode` とする。表に無い (状態, イベント) の組は拒否して状態を変えず、自己遷移は持たない。
 遷移は `health_state_transition`（`from` / `to` / `event`）、拒否は `health_state_rejected`、
-永続化された `SafeMode` での起動は `health_state_restored` として記録する。
+設定の `safeMode.enabled` に合わせて `SafeMode` に置いた場合は `health_state_restored` として記録する。
 
 状態機械の遷移のうち、Host が自分で観測できるものは Host が駆動する。
 
@@ -1905,7 +1906,9 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
   そのロードが成功して `model_loaded` が真になると `Healthy`、失敗すると `DegradedModel` へ戻る。
   別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
 - `SafeMode`: Host が起動時に §8.5.3 の条件で入り、`UpdateConfig` で
-  `settings.safeMode.enabled=false` を読んだときに `Healthy` へ戻る。
+  `settings.safeMode.enabled=false` を読んだときに `Healthy` へ戻る。起動時や `UpdateConfig` で
+  `enabled=true` を読んだときは、突入の経路によらずその値に従って `SafeMode` に置く
+  （`health_state_restored`）。フラグが真である間の強制事項は §8.5.3 が定める。
 
 transport 系（`Healthy` → `DegradedSimple` → `RecoveringTransport` → `Healthy`）は TIP が
 観測する事象であり、M42 の接続状態機械（§8.2）の `Degraded` / 再接続 / `Ready` が同じ
@@ -1958,6 +1961,9 @@ pipe の listen 失敗）で印を消す。起動時に印が残っていれば�
 PID のプロセスがまだ生きている場合は、別の Host が pipe を持っている重複起動であり、
 クラッシュとして数えず印にも触れない。正常終了は記録を空にするので、数えるのは直近の
 正常終了以降の連続クラッシュだけとなる。60 秒の窓に 3 回目が入った起動で `SafeMode` に入る。
+前回のクラッシュを検知した起動は `host_previous_run_crashed`（`recent_crashes`）、突入は
+`safe_mode_entered`（`result` / `crash_count`）、印の書き込み失敗は `host_run_history_write_failed`
+として記録する。
 
 `SafeMode` の間、Host は `settings.json` の内容にかかわらず次を強制する。モデルを
 ロードしない（`model.enabled` と `--model` の指定を無視し、`LoadModel` は

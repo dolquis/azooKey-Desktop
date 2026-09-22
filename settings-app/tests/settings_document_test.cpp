@@ -522,3 +522,32 @@ TEST(SettingsDocumentTest, InvalidTypoAndAutoWordValuesAreRemoved) {
   EXPECT_FALSE(auto_word.contains("miningMinCount"));
   EXPECT_FALSE(auto_word.contains("unknownKey"));
 }
+
+// M47: the Host records SafeMode here and only the user clears it, so an
+// unrelated save must carry it through unchanged.
+TEST(SettingsDocumentTest, SafeModeSurvivesASaveAndInvalidFieldsAreDropped) {
+  const auto dir = TestDir("azookey_settings_document_safe_mode");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "safeMode": {
+      "enabled": true,
+      "enteredAt": "2026-09-22T01:02:03Z",
+      "lastCrashCount": 3,
+      "unknownKey": 1
+    }
+  })");
+
+  azookey::settings::EditableSettings settings;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto& root = parsed->AsObject();
+  ASSERT_TRUE(root.contains("safeMode"));
+  const auto& safe_mode = root.at("safeMode").AsObject();
+  EXPECT_TRUE(safe_mode.at("enabled").AsBool());
+  EXPECT_EQ(safe_mode.at("enteredAt").AsString(), "2026-09-22T01:02:03Z");
+  EXPECT_EQ(safe_mode.at("lastCrashCount").AsNumber(), 3.0);
+  EXPECT_FALSE(safe_mode.contains("unknownKey"));
+}

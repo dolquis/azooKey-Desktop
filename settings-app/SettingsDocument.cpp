@@ -117,6 +117,28 @@ j::Object SanitizeAutoUpdate(const j::Object& input, std::vector<std::string>* w
   return output;
 }
 
+// M47 safeMode, written by the Host on a crash loop. Dropping it here would let
+// any unrelated save take the Host out of SafeMode.
+j::Object SanitizeSafeMode(const j::Object& input, std::vector<std::string>* warnings) {
+  j::Object output;
+  for (const auto& [key, value] : input) {
+    bool valid = false;
+    if (key == "enabled") {
+      valid = value.IsBool();
+    } else if (key == "enteredAt") {
+      valid = value.IsString();
+    } else if (key == "lastCrashCount") {
+      valid = IsInteger(value, 0.0);
+    }
+    if (valid) {
+      output.emplace(key, value);
+    } else {
+      warnings->push_back("safeMode." + key + " was removed because it is unknown or invalid");
+    }
+  }
+  return output;
+}
+
 j::Object SanitizeAutoWordRegistration(const j::Object& input,
                                        std::vector<std::string>* warnings) {
   j::Object output;
@@ -264,6 +286,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       continue;
     } else if (key == "autoUpdate" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeAutoUpdate(value.AsObject(), warnings)));
+      continue;
+    } else if (key == "safeMode" && value.IsObject()) {
+      output.emplace(key, j::Value(SanitizeSafeMode(value.AsObject(), warnings)));
       continue;
     } else if (key == "promptPrefixByApp" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeStringMap(value.AsObject(), warnings)));

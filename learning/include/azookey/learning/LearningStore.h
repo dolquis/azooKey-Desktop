@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "azookey/learning/DpapiCrypto.h"
+
 namespace azookey::learning {
 
 inline constexpr std::string_view kLearningStoreEscapedTsvHeader =
@@ -38,7 +40,7 @@ struct PrefixLookupResult {
 
 class LearningStore {
  public:
-  explicit LearningStore(std::filesystem::path path);
+  explicit LearningStore(std::filesystem::path path, const ByteCrypto* crypto = nullptr);
   virtual ~LearningStore() = default;
 
   bool Load();
@@ -60,8 +62,10 @@ class LearningStore {
 
  private:
   std::filesystem::path path_;
+  const ByteCrypto* crypto_;
   std::map<std::string, std::map<std::string, LearningRecord>> table_;
   mutable bool dirty_{false};
+  bool save_blocked_by_load_failure_{false};
 };
 
 }  // namespace azookey::learning

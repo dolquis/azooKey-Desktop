@@ -14,6 +14,11 @@ struct MainWindow : MainWindowT<MainWindow> {
   void ApplyLaunchArguments(std::wstring_view raw_arguments);
   winrt::fire_and_forget SaveButton_Click(Windows::Foundation::IInspectable const& sender,
                                           Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  void OpenAiApiKeyPasswordBox_PasswordChanged(
+      Windows::Foundation::IInspectable const& sender,
+      Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  void ClearOpenAiApiKeyButton_Click(Windows::Foundation::IInspectable const& sender,
+                                    Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void OpenCrashReportsButton_Click(Windows::Foundation::IInspectable const& sender,
                                     Microsoft::UI::Xaml::RoutedEventArgs const& args);
 
@@ -27,6 +32,7 @@ struct MainWindow : MainWindowT<MainWindow> {
                   const winrt::hstring& title, const winrt::hstring& message);
 
   std::optional<std::filesystem::path> settings_path_;
+  bool openai_api_key_changed_{false};
 };
 
 }  // namespace winrt::azookey_settings::implementation

@@ -1,11 +1,11 @@
 #include "azookey/host/AiBackend.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/logging/RuntimeLogger.h"
 
 #ifdef _WIN32
 // Windows crypto declarations require Windows base types first.
 // clang-format off
 #include "azookey/host/HttpSession.h"
-#include <wincrypt.h>
 // clang-format on
 
 #include <array>
@@ -42,33 +42,6 @@ std::wstring Wide(const std::string& text) {
                       result.data(), size);
   return result;
 }
-std::string DecodeKey(const std::string& stored) {
-  if (!stored.starts_with("dpapi:")) return stored;
-  const auto encoded = stored.substr(6);
-  DWORD size = 0;
-  if (!CryptStringToBinaryA(encoded.c_str(), static_cast<DWORD>(encoded.size()),
-                            CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr)) {
-    LogHttpFailure("key_base64_size");
-    return {};
-  }
-  std::vector<BYTE> encrypted(size);
-  if (!CryptStringToBinaryA(encoded.c_str(), static_cast<DWORD>(encoded.size()),
-                            CRYPT_STRING_BASE64, encrypted.data(), &size, nullptr, nullptr)) {
-    LogHttpFailure("key_base64_decode");
-    return {};
-  }
-  DATA_BLOB input{size, encrypted.data()}, output{};
-  if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
-                          &output)) {
-    LogHttpFailure("key_dpapi_reenter_required");
-    return {};
-  }
-  std::string key(reinterpret_cast<char*>(output.pbData), output.cbData);
-  SecureZeroMemory(output.pbData, output.cbData);
-  LocalFree(output.pbData);
-  return key;
-}
-
 // Only the caller invokes WinHTTP APIs. Callbacks publish completion state;
 // cancellation closes an idle async handle and waits for HANDLE_CLOSING before
 // releasing callback state or request/response buffers.
@@ -130,8 +103,9 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     response.error = AiErrorClass::Canceled;
     return response;
   }
-  auto key = DecodeKey(options.api_key);
-  if (key.empty() || key.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
+  const auto key = learning::UnprotectSecret(options.api_key);
+  if (!key || key.value.empty() ||
+      key.value.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
     response.error = AiErrorClass::Auth;
     return response;
   }
@@ -199,8 +173,8 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     return response;
   }
   operation.request = pending.release();
-  headers.value = L"Content-Type: application/json\r\nAuthorization: Bearer " + Wide(key) + L"\r\n";
-  SecureZeroMemory(key.data(), key.size());
+  headers.value = L"Content-Type: application/json\r\nAuthorization: Bearer " +
+                  Wide(key.value) + L"\r\n";
   const bool sent =
       WinHttpSendRequest(operation.request, headers.value.c_str(),
                          static_cast<DWORD>(headers.value.size()), const_cast<char*>(body.data()),

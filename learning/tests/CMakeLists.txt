@@ -4,6 +4,12 @@ target_link_libraries(learning_tests
 )
 azookey_discover_tests(learning_tests)
 
+add_executable(dpapi_crypto_tests dpapi_crypto_test.cpp)
+target_link_libraries(dpapi_crypto_tests
+  PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(dpapi_crypto_tests)
+
 add_executable(user_dictionary_tests user_dictionary_test.cpp)
 target_link_libraries(user_dictionary_tests
   PRIVATE azookey_learning GTest::gtest_main azookey_project_options azookey_project_warnings

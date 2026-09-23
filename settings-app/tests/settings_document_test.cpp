@@ -20,6 +20,7 @@
 
 #include "SettingsDocument.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 
 namespace {
@@ -44,6 +45,49 @@ std::string ReadText(const std::filesystem::path& path) {
 }
 
 }  // namespace
+
+#ifdef _WIN32
+TEST(SettingsDocumentTest, ApiKeyInputIsProtectedAndShownOnlyAsEditablePlaintext) {
+  const auto dir = TestDir("azookey_settings_api_key_protect");
+  const auto path = dir / "settings.json";
+  azookey::settings::EditableSettings settings;
+  settings.openai_api_key = "test-api-key";
+  settings.openai_api_key_changed = true;
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, settings).ok);
+  const auto text = ReadText(path);
+  EXPECT_EQ(text.find("test-api-key"), std::string::npos);
+  const auto parsed = azookey::ipc::json::Parse(text);
+  ASSERT_TRUE(parsed);
+  const auto stored = parsed->GetString("openAiApiKey");
+  ASSERT_TRUE(stored);
+  EXPECT_EQ(stored->rfind("dpapi:", 0), 0u);
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_EQ(loaded.settings.openai_api_key, "test-api-key");
+  EXPECT_FALSE(loaded.settings.openai_api_key_unavailable);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, LegacyApiKeyMigratesAndCorruptCipherIsPreservedUntilReplaced) {
+  const auto dir = TestDir("azookey_settings_api_key_migrate");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"openAiApiKey":"legacy-key"})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_EQ(ReadText(path).find("legacy-key"), std::string::npos);
+
+  WriteText(path, R"({"openAiApiKey":"dpapi:bad!"})");
+  loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(loaded.settings.openai_api_key_unavailable);
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_NE(ReadText(path).find("dpapi:bad!"), std::string::npos);
+  loaded.settings.openai_api_key_changed = true;
+  loaded.settings.openai_api_key = "replacement-key";
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_EQ(azookey::settings::LoadSettingsDocument(path).settings.openai_api_key,
+            "replacement-key");
+  std::filesystem::remove_all(dir);
+}
+#endif
 
 TEST(SettingsDocumentTest, BodyLogPolicySurvivesUnrelatedSettingsSave) {
   const auto dir = TestDir("azookey_settings_body_log_preserve");

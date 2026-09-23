@@ -23,11 +23,14 @@
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/learning/AutoWordStore.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
 
 namespace {
+
+using azookey::learning::EncryptedPathFor;
 
 constexpr uint64_t kNowBase = 1'700'000'000ULL;
 
@@ -47,15 +50,28 @@ std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(
 std::string TempPath(const char* name) {
   return (std::filesystem::temp_directory_path() / name).string();
 }
-bool WaitForFileExists(const std::string& path, std::chrono::milliseconds timeout) {
+
+// The constructor still accepts the legacy path, while persistence uses .enc.
+// Return the removal status of .enc for tests that assert a prior flush.
+int RemoveProtectedStoreFile(const std::filesystem::path& path) {
+  std::error_code ec;
+  const bool removed = std::filesystem::remove(EncryptedPathFor(path), ec);
+  std::filesystem::remove(path, ec);
+  auto backup = path;
+  backup += ".bak";
+  std::filesystem::remove(backup, ec);
+  return removed ? 0 : -1;
+}
+
+bool WaitForFileExists(const std::filesystem::path& target, std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (std::filesystem::exists(path)) {
+    if (std::filesystem::exists(target)) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
-  return std::filesystem::exists(path);
+  return std::filesystem::exists(target);
 }
 void WriteMinimalGguf(const std::filesystem::path& path, uint32_t version = 3) {
   std::ofstream out(path, std::ios::binary);
@@ -271,7 +287,7 @@ TEST(InferenceEngineTest, LocalAiCleanupRealModelSmoke) {
 
 TEST(InferenceEngineTest, QueryWithLearningBoost) {
   const char* path = "azookey_host_engine_learning.tsv";
-  std::remove(path);
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   auto engine = MakeEngine(store);
@@ -291,7 +307,7 @@ TEST(InferenceEngineTest, QueryWithLearningBoost) {
   EXPECT_EQ(fourth.front().surface, "二本");
 
   engine.reset();
-  std::remove(path);
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, QueryAppliesConfiguredCandidateAndUnicodeContextLimits) {
@@ -338,7 +354,7 @@ TEST(InferenceEngineTest, ConfiguredCandidateLimitCanExceedLegacyTipLimit) {
 
 TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_count.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -349,26 +365,26 @@ TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(path));
-  ASSERT_EQ(std::remove(path.c_str()), 0);
+  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 2);
   engine->CommitObservation("reading", "surface", kNowBase + 3);
-  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_TRUE(store.dirty());
 
   engine->CommitObservation("reading", "surface", kNowBase + 4);
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_FALSE(store.dirty());
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 // DEV-554: a CommitObservation resent after a pipe drop carries the same
 // observation_id, so the Host must apply it exactly once.
 TEST(InferenceEngineTest, CommitObservationIgnoresRepeatedObservationId) {
   const std::string path = TempPath("azookey_host_engine_observation_id_dedupe.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -389,14 +405,14 @@ TEST(InferenceEngineTest, CommitObservationIgnoresRepeatedObservationId) {
   EXPECT_GT(store.Score("にほん", "二本", kNowBase + 1), after_first);
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 // A TIP that predates DEV-554 sends no observation_id. Those observations carry
 // no dedupe information, so every one of them must still be applied.
 TEST(InferenceEngineTest, CommitObservationWithoutObservationIdIsNeverDeduped) {
   const std::string path = TempPath("azookey_host_engine_observation_id_absent.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -412,14 +428,14 @@ TEST(InferenceEngineTest, CommitObservationWithoutObservationIdIsNeverDeduped) {
   EXPECT_GT(store.Score("にほん", "二本", kNowBase + 1), after_first);
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 // The dedupe ring is bounded, so an id evicted by newer traffic is applied
 // again. The bound is what keeps a long-lived Host from growing without limit.
 TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
   const std::string path = TempPath("azookey_host_engine_observation_id_evict.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -441,7 +457,7 @@ TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
   EXPECT_TRUE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 // DEV-554: one engine serves every connection, so a second TIP replaying its own
@@ -449,7 +465,7 @@ TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
 // that TIP gets to resend them.
 TEST(InferenceEngineTest, CommitObservationDedupeSurvivesAnotherTipsFullBacklog) {
   const std::string path = TempPath("azookey_host_engine_observation_id_multi_tip.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -473,12 +489,12 @@ TEST(InferenceEngineTest, CommitObservationDedupeSurvivesAnotherTipsFullBacklog)
   EXPECT_FALSE(engine->CommitObservation("にほん", "二本", kNowBase + 1, "tip-a:1"));
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_interval.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -489,23 +505,23 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("initial", "saved", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(path));
-  ASSERT_EQ(std::remove(path.c_str()), 0);
+  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 10);
   engine->CommitObservation("reading", "surface", kNowBase + 14);
-  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
 
   engine->CommitObservation("reading", "surface", kNowBase + 15);
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_FALSE(store.dirty());
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObservation) {
   const std::string path = TempPath("azookey_host_engine_learning_idle_interval.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -516,11 +532,11 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("initial", "saved", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(path));
-  ASSERT_EQ(std::remove(path.c_str()), 0);
+  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("reading", "surface", kNowBase + 10);
-  EXPECT_FALSE(std::filesystem::exists(path));
-  EXPECT_TRUE(WaitForFileExists(path, std::chrono::milliseconds(2500)));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
+  EXPECT_TRUE(WaitForFileExists(EncryptedPathFor(path), std::chrono::milliseconds(2500)));
 
   // The flush renames a complete temp file into place, so a failed Load here
   // is an open that lost to another handle on the fresh file (the rename
@@ -536,12 +552,12 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 10), 0.0);
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
   const std::string path = TempPath("azookey_host_engine_learning_flush.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -552,21 +568,21 @@ TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(path));
-  ASSERT_EQ(std::remove(path.c_str()), 0);
+  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("pending", "observation", kNowBase + 2);
-  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_TRUE(engine->FlushLearningStore());
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_FALSE(store.dirty());
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, PrunesLearningStoreOnlyAtFlushBoundary) {
   const std::string path = TempPath("azookey_host_engine_learning_prune_on_flush.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -578,21 +594,21 @@ TEST(InferenceEngineTest, PrunesLearningStoreOnlyAtFlushBoundary) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("a", "first", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(path));
-  ASSERT_EQ(std::remove(path.c_str()), 0);
+  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
   engine->CommitObservation("b", "second", kNowBase + 2);
   engine->CommitObservation("b", "second", kNowBase + 3);
   EXPECT_EQ(store.size(), 2u);
-  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
 
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_EQ(store.size(), 1u);
   EXPECT_EQ(store.Score("a", "first", kNowBase + 3), 0.0);
   EXPECT_GT(store.Score("b", "second", kNowBase + 3), 0.0);
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
@@ -618,7 +634,7 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
   std::filesystem::remove_all(root);
   EXPECT_TRUE(engine->FlushLearningStore());
   EXPECT_FALSE(store.dirty());
-  EXPECT_TRUE(std::filesystem::exists(blocked_path));
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(blocked_path)));
 
   engine.reset();
   std::filesystem::remove_all(root);
@@ -626,7 +642,7 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
 
 TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicitFlush) {
   const std::string path = TempPath("azookey_host_engine_learning_burst_start.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -637,7 +653,7 @@ TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicit
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("reading", "surface", kNowBase + 1);
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_FALSE(store.dirty());
 
   azookey::learning::LearningStore loaded(path);
@@ -645,12 +661,12 @@ TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicit
   EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 1), 0.0);
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, BurstStartFlushIsRateLimitedWithinInterval) {
   const std::string path = TempPath("azookey_host_engine_learning_burst_rate_limit.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
 
   azookey::host::EngineConfig cfg;
@@ -661,20 +677,20 @@ TEST(InferenceEngineTest, BurstStartFlushIsRateLimitedWithinInterval) {
   auto engine = MakeEngine(store, cfg);
 
   engine->CommitObservation("first", "saved", kNowBase + 1);
-  ASSERT_TRUE(std::filesystem::exists(path));
-  ASSERT_EQ(std::remove(path.c_str()), 0);
+  ASSERT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  ASSERT_EQ(RemoveProtectedStoreFile(path), 0);
 
   engine->CommitObservation("second", "pending", kNowBase + 2);
-  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_TRUE(store.dirty());
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, UserDictionaryInjection) {
   const char* lpath = "azookey_host_engine_user_dict_learn.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -700,14 +716,14 @@ TEST(InferenceEngineTest, UserDictionaryInjection) {
     EXPECT_NE(c.surface, "azooKey");
   }
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
   const std::string lpath = TempPath("azookey_host_engine_user_dict_reload_add.tsv");
   const std::string udict_path = TempPath("azookey_host_engine_user_dict_reload_add.json");
-  std::remove(lpath.c_str());
-  std::remove(udict_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
 
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
@@ -735,15 +751,15 @@ TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
   EXPECT_EQ(loaded.Lookup("external").size(), 1u);
   EXPECT_EQ(loaded.Lookup("added").size(), 1u);
 
-  std::remove(udict_path.c_str());
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
   const std::string lpath = TempPath("azookey_host_engine_user_dict_reload_remove.tsv");
   const std::string udict_path = TempPath("azookey_host_engine_user_dict_reload_remove.json");
-  std::remove(lpath.c_str());
-  std::remove(udict_path.c_str());
+  RemoveProtectedStoreFile(lpath);
+  RemoveProtectedStoreFile(udict_path);
 
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
@@ -767,13 +783,13 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
   ASSERT_TRUE(loaded.Load());
   EXPECT_TRUE(loaded.Lookup("external").empty());
 
-  std::remove(udict_path.c_str());
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, CancelEarlyReturn) {
   const char* lpath = "azookey_host_engine_cancel.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -785,12 +801,12 @@ TEST(InferenceEngineTest, CancelEarlyReturn) {
   auto cands2 = engine->QueryCandidates("にほん", "", kNowBase, &cancel);
   EXPECT_FALSE(cands2.empty());
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LegacyOverloadStillWorks) {
   const char* lpath = "azookey_host_engine_legacy.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -798,7 +814,7 @@ TEST(InferenceEngineTest, LegacyOverloadStillWorks) {
   // and the existing bench harness.
   auto cands = engine->QueryCandidates("わたし", "", kNowBase);
   EXPECT_FALSE(cands.empty());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
@@ -825,7 +841,7 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
 
 TEST(InferenceEngineTest, PredictionsPrependLearningDeduplicateAndCapDisplayCount) {
   const auto path = TempPath("azookey_host_prediction_learning.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
   store.Observe("にほんご", "日本語", 5.0, kNowBase);
   store.Observe("にほんじん", "日本人", 4.0, kNowBase);
@@ -857,12 +873,12 @@ TEST(InferenceEngineTest, PredictionsPrependLearningDeduplicateAndCapDisplayCoun
             1);
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, PredictionsExcludeExactReadingAndApplyUpdatedLearningConfig) {
   const auto path = TempPath("azookey_host_prediction_exact.tsv");
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
   azookey::learning::LearningStore store(path);
   store.Observe("にほん", "完全一致", 10.0, kNowBase);
   store.Observe("にほんご", "日本語", 1.0, kNowBase);
@@ -884,12 +900,12 @@ TEST(InferenceEngineTest, PredictionsExcludeExactReadingAndApplyUpdatedLearningC
   EXPECT_EQ(predictions.front().reading, "にほんご");
 
   engine.reset();
-  std::remove(path.c_str());
+  RemoveProtectedStoreFile(path);
 }
 
 TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {
   const char* lpath = "azookey_host_engine_load_empty.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -904,12 +920,12 @@ TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {
   ASSERT_FALSE(cands.empty());
   EXPECT_EQ(cands.front().surface, "日本");
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   const char* lpath = "azookey_host_engine_load_missing.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   azookey::host::EngineConfig config;
   config.inference_threads = 6;
@@ -936,7 +952,7 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   ASSERT_FALSE(cands.empty());
   EXPECT_EQ(cands.front().surface, "日本");
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, ResolvedPowerProfileThreadsSurviveRuntimeAndModelReloads) {
@@ -973,7 +989,7 @@ TEST(InferenceEngineTest, StartModelPreloadKeepsFallbackResponsiveWhileLoadIsPen
   using namespace std::chrono_literals;
 
   const char* lpath = "azookey_host_engine_preload_pending.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1024,7 +1040,7 @@ TEST(InferenceEngineTest, StartModelPreloadKeepsFallbackResponsiveWhileLoadIsPen
   ASSERT_TRUE(failed_health.last_error.has_value());
   EXPECT_NE(failed_health.last_error->find("model file"), std::string::npos);
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, ProbeZenzaiGgufModelRejectsMissingPath) {
@@ -1082,7 +1098,7 @@ TEST(InferenceEngineTest, LoadModelAcceptsNonAsciiUtf8Path) {
   }
 
   const char* lpath = "azookey_host_engine_load_non_ascii.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1105,7 +1121,7 @@ TEST(InferenceEngineTest, LoadModelAcceptsNonAsciiUtf8Path) {
   EXPECT_EQ(engine->config().model_path, options.path);
 
   std::filesystem::remove(model_file);
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {
@@ -1127,7 +1143,7 @@ TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {
 #if AZOOKEY_WITH_LLAMA_CPP
 TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
   const char* lpath = "azookey_host_engine_load_diagnostic.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1141,7 +1157,7 @@ TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
   const auto result = engine->LoadModelWithResult(options);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 
   EXPECT_FALSE(result.ok);
   ASSERT_TRUE(result.error.has_value());
@@ -1251,7 +1267,7 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   }
 
   const char* lpath = "azookey_host_engine_load_valid.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1285,7 +1301,7 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
   EXPECT_FALSE(engine->effective_last_error().has_value());
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly) {
@@ -1295,7 +1311,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly)
   }
 
   const char* lpath = "azookey_host_engine_zenzai_no_mock.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1319,7 +1335,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly)
   EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
@@ -1329,7 +1345,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   }
 
   const char* lpath = "azookey_host_engine_zenzai_degraded.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1400,7 +1416,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   }
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
@@ -1410,7 +1426,7 @@ TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   }
 
   const char* lpath = "azookey_host_engine_zenzai_live_top_one.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1438,7 +1454,7 @@ TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   EXPECT_EQ(top_one.front().source, azookey::core::CandidateSource::Model);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, CanceledZenzaiConvertPreservesDegradedHealth) {
@@ -1448,7 +1464,7 @@ TEST(InferenceEngineTest, CanceledZenzaiConvertPreservesDegradedHealth) {
   }
 
   const char* lpath = "azookey_host_engine_zenzai_cancel_health.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1475,7 +1491,7 @@ TEST(InferenceEngineTest, CanceledZenzaiConvertPreservesDegradedHealth) {
   EXPECT_EQ(*engine->effective_last_error(), degraded_error);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
@@ -1485,7 +1501,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
   }
 
   const char* lpath = "azookey_host_engine_zenzai_invalid_utf8.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1508,7 +1524,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
   EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
@@ -1518,7 +1534,7 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   }
 
   const char* lpath = "azookey_host_engine_zenzai_deadline_utf8.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1551,7 +1567,7 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
   EXPECT_NE(engine->effective_last_error()->find("invalid-utf8-surface"), std::string::npos);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, RecommendsAvailableZenzaiThreadsCappedAtEight) {
@@ -1612,7 +1628,7 @@ TEST(InferenceEngineTest, PlansPrunedBeamSequencesWithoutUnnecessaryCopies) {
 
 TEST(InferenceEngineTest, ModelConversionDeadlineUsesSixHundredMillisecondBudget) {
   const char* lpath = "azookey_host_engine_model_budget.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
 
   auto converter = std::make_unique<DeadlineCapturingConverter>();
@@ -1628,7 +1644,7 @@ TEST(InferenceEngineTest, ModelConversionDeadlineUsesSixHundredMillisecondBudget
   EXPECT_LE(converter_ptr->remaining_budget(), std::chrono::milliseconds(600));
   EXPECT_GE(converter_ptr->remaining_budget(), std::chrono::milliseconds(500));
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
@@ -1638,7 +1654,7 @@ TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
   }
 
   const char* lpath = "azookey_host_engine_zenzai_sane_unique.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1670,12 +1686,12 @@ TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
   EXPECT_FALSE(engine->effective_last_error().has_value());
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
   const char* lpath = "azookey_host_engine_load_invalid.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1693,7 +1709,7 @@ TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
   EXPECT_FALSE(engine->model_loaded());
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, VulkanFailureFallsBackToCpuAndRetainsHealthError) {
@@ -1771,7 +1787,7 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
   }
 
   const char* lpath = "azookey_host_engine_load_cuda.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1796,7 +1812,7 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
   EXPECT_FALSE(engine->last_error().has_value());
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
@@ -1806,7 +1822,7 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
   }
 
   const char* lpath = "azookey_host_engine_reload_failure.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1839,7 +1855,7 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
             cands.end());
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
@@ -1849,7 +1865,7 @@ TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
   }
 
   const char* lpath = "azookey_host_engine_reload_success.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1870,7 +1886,7 @@ TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
   EXPECT_EQ(CountOccurrences(debug, "zenzai-degraded"), 1u);
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel) {
@@ -1880,13 +1896,13 @@ TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel)
   }
 
   const char* lpath = "azookey_host_engine_user_dict_zenzai_dedup.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
   const std::string udict_path =
       (std::filesystem::temp_directory_path() / "azookey_host_engine_user_zenzai.json").string();
-  std::remove(udict_path.c_str());
+  RemoveProtectedStoreFile(udict_path);
   azookey::learning::UserDictionary dict(udict_path);
   azookey::learning::UserWord w;
   w.word = "日本語";
@@ -1919,13 +1935,13 @@ TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel)
             cands.end());
 
   std::remove(model_path.c_str());
-  std::remove(udict_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(udict_path);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   const char* lpath = "azookey_host_engine_load_threaded.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -1953,7 +1969,7 @@ TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   reader.join();
   EXPECT_FALSE(engine->model_loaded());
 
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, QueryCandidatesKeepsHealthAndModelSwapResponsive) {
@@ -1965,7 +1981,7 @@ TEST(InferenceEngineTest, QueryCandidatesKeepsHealthAndModelSwapResponsive) {
   using namespace std::chrono_literals;
 
   const char* lpath = "azookey_host_engine_query_load_responsive.tsv";
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
 
   auto converter = std::make_unique<BlockingConverter>();
@@ -2015,7 +2031,7 @@ TEST(InferenceEngineTest, QueryCandidatesKeepsHealthAndModelSwapResponsive) {
   EXPECT_EQ(query_result.front().debug_info, "blocking-converter");
 
   std::remove(model_path.c_str());
-  std::remove(lpath);
+  RemoveProtectedStoreFile(lpath);
 }
 
 // ---- M35: typo correction ----
@@ -2382,7 +2398,7 @@ TEST(InferenceEngineTest, ModelLoadOutcomesDriveTheHealthState) {
                     "loads require a full model fixture.";
   }
   const std::string lpath = TempPath("azookey_host_engine_health_state.tsv");
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
   EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
@@ -2418,7 +2434,7 @@ TEST(InferenceEngineTest, ModelLoadOutcomesDriveTheHealthState) {
 
   engine.reset();
   std::remove(model_path.c_str());
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(lpath);
 }
 
 // A SafeMode that begins while the GGUF is being loaded, after the check at the
@@ -2429,7 +2445,7 @@ TEST(InferenceEngineTest, SafeModeEnteredDuringALoadDiscardsTheModel) {
                     "loads require a full model fixture.";
   }
   const std::string lpath = TempPath("azookey_host_engine_health_safe_mode_race.tsv");
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
 
@@ -2451,12 +2467,12 @@ TEST(InferenceEngineTest, SafeModeEnteredDuringALoadDiscardsTheModel) {
 
   engine.reset();
   std::remove(model_path.c_str());
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(lpath);
 }
 
 TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
   const std::string lpath = TempPath("azookey_host_engine_health_safe_mode.tsv");
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(lpath);
   azookey::learning::LearningStore store(lpath);
   auto engine = MakeEngine(store);
   ASSERT_TRUE(engine->ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected));
@@ -2477,5 +2493,5 @@ TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
   EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   engine.reset();
-  std::remove(lpath.c_str());
+  RemoveProtectedStoreFile(lpath);
 }

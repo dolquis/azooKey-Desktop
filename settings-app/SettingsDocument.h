@@ -13,6 +13,9 @@ struct EditableSettings {
   std::optional<std::string> model_backend_preference{std::string("auto")};
   std::string hidden_backend_preference;
   std::string model_selected_path;
+  std::string openai_api_key;
+  bool openai_api_key_changed{false};
+  bool openai_api_key_unavailable{false};
   std::string log_level{"info"};
   std::string crash_report_consent{"off"};
 };

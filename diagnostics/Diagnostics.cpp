@@ -36,6 +36,7 @@
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/logging/RuntimeLogger.h"
 #include "azookey/tsf/TextServiceFactory.h"
@@ -383,26 +384,37 @@ bool ParseLearningRecord(std::string_view line) {
 
 bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries) {
   *entries = 0;
-  std::error_code ec;
-  if (!std::filesystem::exists(path, ec)) return true;
-  std::ifstream input(path);
-  if (!input) return false;
-  std::string line;
-  while (std::getline(input, line)) {
-    if (!ParseLearningRecord(line)) return false;
+  std::string text;
+  const auto source = learning::ReadProtectedText(path, learning::DpapiCrypto(), text);
+  if (source == learning::ProtectedFileSource::Missing) return true;
+  if (source == learning::ProtectedFileSource::Error) return false;
+  std::string_view remaining(text);
+  bool valid = true;
+  while (!remaining.empty()) {
+    const auto end = remaining.find('\n');
+    const auto line = remaining.substr(0, end);
+    if (!ParseLearningRecord(line)) {
+      valid = false;
+      break;
+    }
     if (!line.empty() && line != learning::kLearningStoreEscapedTsvHeader) ++*entries;
+    if (end == std::string_view::npos) break;
+    remaining.remove_prefix(end + 1);
   }
-  return input.eof();
+  learning::SecureErase(text);
+  return valid;
 }
 
 bool ProbeUserDictionary(const std::filesystem::path& path, uint64_t* entries,
                          uint64_t* skipped_entries) {
   *entries = 0;
   *skipped_entries = 0;
-  std::error_code ec;
-  if (!std::filesystem::exists(path, ec)) return true;
-  const auto text = ReadTextFile(path);
-  const auto value = text ? j::Parse(*text) : std::nullopt;
+  std::string text;
+  const auto source = learning::ReadProtectedText(path, learning::DpapiCrypto(), text);
+  if (source == learning::ProtectedFileSource::Missing) return true;
+  if (source == learning::ProtectedFileSource::Error) return false;
+  const auto value = j::Parse(text);
+  learning::SecureErase(text);
   if (!value || !value->IsObject()) return false;
   const auto* words = value->GetArray("entries");
   if (!words) return false;

@@ -10,9 +10,19 @@
 
 #include "azookey/core/Candidate.h"
 #include "azookey/learning/LearningStore.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/Reranker.h"
 
 namespace {
+
+void RemoveStoreFiles(const std::filesystem::path& path) {
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  auto backup = path;
+  backup += ".bak";
+  std::filesystem::remove(backup, ec);
+}
 
 class CommaDecimalPunct : public std::numpunct<char> {
  protected:
@@ -36,7 +46,7 @@ class ScopedGlobalLocale {
 TEST(LearningStoreTest, SaveLoadAndCorrectionDownweight) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   azookey::learning::LearningStore store(path);
   store.Observe("にほん", "日本", 1.0, 100);
@@ -56,7 +66,7 @@ TEST(LearningStoreTest, SaveLoadAndCorrectionDownweight) {
   (void)ranked;
   EXPECT_LE(loaded.Score("にほん", "日本", 120), loaded.Score("にほん", "二本", 120));
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
@@ -67,7 +77,7 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
   azookey::learning::LearningStore store(path.string());
   store.Observe("とうきょう", "東京", 1.0, 200);
   EXPECT_TRUE(store.Save());
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
   size_t temp_files = 0;
   for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
@@ -87,7 +97,7 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
 TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInSurface) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_escape_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   azookey::learning::LearningStore store(path);
   store.Observe("にほん", "日本", 1.0, 300);
@@ -104,14 +114,14 @@ TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInSurface) {
   EXPECT_DOUBLE_EQ(loaded.Score("にほん", "日\n本", 300), 3.0);
   EXPECT_DOUBLE_EQ(loaded.Score("にほん", "C:\\temp", 300), 4.0);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInReading) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_reading_escape_test.tsv")
           .string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   azookey::learning::LearningStore store(path);
   store.Observe("a\tb", "surface", 1.0, 350);
@@ -127,13 +137,13 @@ TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInReading) {
   EXPECT_DOUBLE_EQ(loaded.Score("C:\\temp", "surface", 350), 3.0);
   EXPECT_DOUBLE_EQ(loaded.Score("a", "b\tsurface", 350), 0.0);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, LegacyTsvKeepsBackslashSequencesLiteral) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_legacy_escape_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   {
     std::ofstream ofs(path);
@@ -157,13 +167,13 @@ TEST(LearningStoreTest, LegacyTsvKeepsBackslashSequencesLiteral) {
   EXPECT_DOUBLE_EQ(migrated.Score("legacy", "C:\\temp", 500), 2.0);
   EXPECT_DOUBLE_EQ(migrated.Score("legacy", "C:\\new", 500), 3.0);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, LoadParsesNumericFieldsIndependentOfGlobalLocale) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_locale_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   {
     std::ofstream ofs(path);
@@ -177,13 +187,13 @@ TEST(LearningStoreTest, LoadParsesNumericFieldsIndependentOfGlobalLocale) {
   EXPECT_EQ(loaded.size(), 1u);
   EXPECT_DOUBLE_EQ(loaded.Score("reading", "surface", 400), 1.5);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, SaveWritesClassicNumericFieldsIndependentOfGlobalLocale) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_save_locale_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   {
     ScopedGlobalLocale locale(std::locale(std::locale::classic(), new CommaDecimalPunct));
@@ -192,18 +202,19 @@ TEST(LearningStoreTest, SaveWritesClassicNumericFieldsIndependentOfGlobalLocale)
     EXPECT_TRUE(store.Save());
   }
 
-  std::ifstream ifs(path);
-  std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  std::string content;
+  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::DpapiCrypto(), content),
+            azookey::learning::ProtectedFileSource::Encrypted);
   EXPECT_NE(content.find("1.5 400"), std::string::npos);
   EXPECT_EQ(content.find("1,5 400"), std::string::npos);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, LoadSkipsMalformedRowsAndKeepsValidRows) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_malformed_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   {
     std::ofstream ofs(path);
@@ -219,13 +230,13 @@ TEST(LearningStoreTest, LoadSkipsMalformedRowsAndKeepsValidRows) {
   EXPECT_DOUBLE_EQ(loaded.Score("valid", "entry", 400), 1.5);
   EXPECT_DOUBLE_EQ(loaded.Score("valid", "second", 401), 2.5);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, LoadSkipsNonFiniteAndOutOfRangeNumericFields) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_numeric_validation.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   {
     std::ofstream ofs(path);
@@ -255,13 +266,13 @@ TEST(LearningStoreTest, LoadSkipsNonFiniteAndOutOfRangeNumericFields) {
   EXPECT_DOUBLE_EQ(loaded.Score("overflow-time", "entry", 0), 0.0);
   EXPECT_DOUBLE_EQ(loaded.Score("trailing-token", "entry", 406), 0.0);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, ScoreClampsClockRollbackToFullWeight) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_clock_rollback.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   azookey::learning::LearningStore store(path);
   store.Observe("にほん", "二本", 3.25, 1000);
@@ -269,7 +280,7 @@ TEST(LearningStoreTest, ScoreClampsClockRollbackToFullWeight) {
   EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 1000), 3.25);
   EXPECT_DOUBLE_EQ(store.Score("にほん", "二本", 900), 3.25);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 TEST(LearningStoreTest, DirtyTracksSaveSuccessAndFailure) {
   const auto root = std::filesystem::temp_directory_path() / "azookey_learning_dirty_test";
@@ -303,7 +314,7 @@ TEST(LearningStoreTest, PruneDropsLowScoresAndCapsRecordCount) {
   constexpr uint64_t kNow = 2'000'000'000;
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_prune_test.tsv").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   azookey::learning::LearningStore store(path);
   store.Observe("r", "drop-low", 1.0, kNow);
@@ -320,7 +331,7 @@ TEST(LearningStoreTest, PruneDropsLowScoresAndCapsRecordCount) {
   store.Prune(/*max_records=*/10, /*min_weight=*/0.05, kNow);
   EXPECT_DOUBLE_EQ(store.Score("r", "drop-decayed", kNow), 0.0);
 
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, LookupPrefixSortsAndCountsOnlyTheMatchingRange) {
@@ -374,6 +385,7 @@ TEST(LearningStoreTest, LookupPrefixAvoidsFullScanAndSupportsPartialUtf8Bytes) {
 TEST(LearningStoreTest, LegacyRowsRemainFirstWinsAndSaveInSerializedKeyOrder) {
   constexpr uint64_t kNow = 2'000'000'000;
   const auto path = std::filesystem::temp_directory_path() / "azookey_learning_legacy_order.tsv";
+  RemoveStoreFiles(path);
   {
     std::ofstream out(path, std::ios::binary);
     ASSERT_TRUE(out.is_open());
@@ -388,14 +400,14 @@ TEST(LearningStoreTest, LegacyRowsRemainFirstWinsAndSaveInSerializedKeyOrder) {
   EXPECT_DOUBLE_EQ(store.Score("a", "A", kNow), 1.0);
   ASSERT_TRUE(store.Save());
 
-  std::ifstream in(path, std::ios::binary);
-  const std::string saved((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  std::string saved;
+  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::DpapiCrypto(), saved),
+            azookey::learning::ProtectedFileSource::Encrypted);
   EXPECT_EQ(saved,
             "# azookey-learning-tsv escaped=1\n"
             "a\tA\t1 2000000000\n"
             "b\tB\t2 2000000000\n");
-  in.close();
-  std::filesystem::remove(path);
+  RemoveStoreFiles(path);
 }
 
 TEST(LearningStoreTest, LookupPrefixExcludesCorrectionRecordAtZeroWeight) {
@@ -420,7 +432,7 @@ TEST(LearningStoreTest, NonAsciiWindowsPathRoundTripsWithoutNarrowing) {
   azookey::learning::LearningStore store(path);
   store.Observe("にほんご", "日本語", 2.0, kNow);
   ASSERT_TRUE(store.Save());
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
   azookey::learning::LearningStore loaded(path);
   ASSERT_TRUE(loaded.Load());

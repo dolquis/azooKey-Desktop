@@ -413,9 +413,9 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     auto entries = dict.All();
     SortEntries(&entries);
     if (!options.dry_run) {
-      azookey::learning::UserDictionary exported(azookey::core::Utf8Path(options.path));
+      azookey::learning::UserDictionary exported(dict.path());
       exported.ReplaceAll(entries);
-      if (!exported.Save()) {
+      if (!exported.SavePlaintextExport(azookey::core::Utf8Path(options.path))) {
         result.exit_code = 1;
         result.error = "failed to save export JSON";
       }

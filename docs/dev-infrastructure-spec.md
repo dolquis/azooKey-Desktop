@@ -962,17 +962,18 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 ```
 %LOCALAPPDATA%\azooKey\
   config\   settings.json
-  data\     learning.tsv / user_dict.json / typo_corrections.tsv（M35）/
-            auto_words.tsv（M36-A）/ host_run_state.txt（M47）
+  data\     learning.tsv.enc / user_dict.json.enc / typo_corrections.tsv.enc（M35）/
+            auto_words.tsv.enc（M36-A）/ host_run_state.txt（M47）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
 ```
 
-注: `typo_corrections.tsv`（M35）と `auto_words.tsv`（M36-A）は
-`learning.tsv` / `user_dict.json` と同じ `data\` 配下に置く（`UserDataPaths`
+注: `typo_corrections.tsv.enc`（M35）と `auto_words.tsv.enc`（M36-A）は
+`learning.tsv.enc` / `user_dict.json.enc` と同じ `data\` 配下に置く（`UserDataPaths`
 の `data_dir` 規約に合わせる）。M49 backup（`docs/learning-data-management-spec.md`
 §2）の対象範囲は本レイアウトを正典とする。ただし `host_run_state.txt`（§8.5.3 の
 クラッシュ検知用の印）はユーザーデータではなく、backup の対象に含めない。
+拡張子 `.enc` のない旧ファイルは移行元で、移行時の `.bak` は保全する。
 
 `%LOCALAPPDATA%` は `SHGetKnownFolderPath(FOLDERID_LocalAppData, ...)` で
 取得する（WIL 導入後は `wil::unique_cotaskmem_string` で受ける）。必要な

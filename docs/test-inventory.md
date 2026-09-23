@@ -59,6 +59,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `ipc_handshake_token_tests` | `ipc/tests/handshake_token_test.cpp` | 暗号乱数 token の生成、原子的な更新と読取、不正・欠落値の拒否、ファイル ACL |
 | `ipc_tip_client_tests` | `ipc/tests/tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
 | `learning_tests` | `learning/tests/learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
+| `dpapi_crypto_tests` | `learning/tests/dpapi_crypto_test.cpp` | ユーザースコープ DPAPI の往復、暗号化ファイル移行、復号失敗時の平文 fallback 拒否、モック暗号境界 |
 | `user_dictionary_tests` | `learning/tests/user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
 | `reranker_tests` | `learning/tests/reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
 | `typo_correction_store_tests` | `learning/tests/typo_correction_store_test.cpp` | M35 打ち間違えペアの頻度カウントとしきい値境界、UTF-8 コードポイント単位の編集距離と長さ・同一・空読みフィルタ、`last_updated` 経過による無視、Save/Load ラウンドトリップとタブ・改行のエスケープ、ファイル無し・破損行の読み飛ばし、`Reset` |
@@ -103,7 +104,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `tsf_tip_keymap_tests` | `tsf-tip/tests/keymap_test.cpp` | VK → `UserAction` 写像（第 1 層）の全エントリを状態ごとに検証、数字キーの `digit`、Alt / Win 組合せと表に無いキーのパススルー、core の VK 定数と `VK_*` の一致 |
 | `tsf_tip_local_settings_tests` | `tsf-tip/tests/local_settings_test.cpp` | Host 非依存で共有設定ファイルを読む TIP ローカル設定、ローマ字テーブル変更の監視と再読み込み、Unicode パス・再作成ディレクトリへの再バインド、不正・過大ファイルでの既定復帰、privacy の secure ↔ normal 再読込と不正設定での拒否、監視の再 arm に失敗しても以後の保存を取りこぼさないこと、内容が変わった保存だけを観測者へ通知すること |
 | `azookey_settings_launch_arguments_tests` | `settings-app/tests/launch_arguments_test.cpp` | 設定アプリ起動引数の round-trip、値欠落・不正 LangId / プロファイルの reject、未指定と空指定の区別、重複・未知オプションの reject |
-| `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧、`privacy.redactLogs` / `privacy.custom.detailedLogging` の保存時保持と不正値の secure 制限、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の保存時保持と不正値の削除 |
+| `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧、privacy 学習・ログ軸の保持と不正値の secure 制限、API キーの DPAPI 保護・旧平文移行・復号不能値の保全、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の保存時保持と不正値の削除 |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_ipc_client_test.cpp` | 設定アプリから Host への Handshake と `UpdateConfig` 送信 |
 | `compat_test_unit_tests` | `compat-test/tests/compat_test_unit_tests.cpp` | 互換ハーネスの target 定義検証（自動化契約・既知回避策・一時文書の所有）、レポート schema と非信頼テキストの伏せ字化、クリップボード復元、ウィンドウ所有権判定 |
 | `temporary_learning_file_tests` | `bench/temporary_learning_file_test.cpp` | bench 用一時学習ファイルの並行予約時の独立性、他所有者への非干渉、巻き戻し時の後始末と想定外ファイルの保全 |

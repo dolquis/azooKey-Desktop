@@ -188,15 +188,23 @@ std::string SerializedKey(const std::string& reading, const std::string& surface
 }
 }  // namespace
 
-LearningStore::LearningStore(std::filesystem::path path) : path_(std::move(path)) {}
+LearningStore::LearningStore(std::filesystem::path path, const ByteCrypto* crypto)
+    : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
 bool LearningStore::Load() {
   table_.clear();
   dirty_ = false;
-  std::ifstream ifs(path_);
-  if (!ifs.is_open()) {
+  save_blocked_by_load_failure_ = false;
+  std::string text;
+  const auto source = ReadProtectedText(path_, *crypto_, text);
+  if (source == ProtectedFileSource::Missing) {
     return false;
   }
+  if (source == ProtectedFileSource::Error) {
+    save_blocked_by_load_failure_ = true;
+    return false;
+  }
+  std::istringstream ifs(text);
   std::string line;
   size_t line_number = 0;
   bool escaped_fields = false;
@@ -228,10 +236,18 @@ bool LearningStore::Load() {
     }
     table_[reading].emplace(surface, rec);
   }
+  if (source == ProtectedFileSource::Plaintext &&
+      !MigratePlaintextFile(path_, text, *crypto_)) {
+    save_blocked_by_load_failure_ = true;
+    SecureErase(text);
+    return false;
+  }
+  SecureErase(text);
   return true;
 }
 
 bool LearningStore::Save() const {
+  if (save_blocked_by_load_failure_) return false;
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kLearningStoreEscapedTsvHeader << '\n';
@@ -247,7 +263,7 @@ bool LearningStore::Save() const {
   for (const auto& [key, record] : rows) {
     out << key << '\t' << record->weight << ' ' << record->last_updated_epoch_sec << '\n';
   }
-  const bool saved = WriteTextFileAtomically(path_, out.str());
+  const bool saved = WriteProtectedText(path_, out.str(), *crypto_);
   if (saved) {
     dirty_ = false;
   }

@@ -44,6 +44,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/FileLock.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -203,7 +204,9 @@ void MigrateLegacyDefaultFileIfNeeded(const char* legacy_name,
 #else
   const std::filesystem::path legacy(legacy_name);
 #endif
-  if (std::filesystem::exists(target) || !std::filesystem::exists(legacy)) {
+  if (std::filesystem::exists(target) ||
+      std::filesystem::exists(azookey::learning::EncryptedPathFor(target)) ||
+      !std::filesystem::exists(legacy)) {
     return;
   }
 

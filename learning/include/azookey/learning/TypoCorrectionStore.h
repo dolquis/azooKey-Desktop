@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "azookey/learning/DpapiCrypto.h"
+
 namespace azookey::learning {
 
 inline constexpr std::string_view kTypoCorrectionStoreEscapedTsvHeader =
@@ -46,8 +48,8 @@ struct TypoCorrectionEntry {
 };
 
 // Frequency table of (wrong reading -> correct reading) pairs observed when the
-// user retypes a reading. Backed by a TSV file that follows the LearningStore
-// separator and escaping convention:
+// user retypes a reading. Persisted as encrypted TSV at path + ".enc" and
+// follows the LearningStore separator and escaping convention:
 //
 //   # azookey-typo-correction-tsv escaped=1
 //   wrong_reading<TAB>correct_reading<TAB>count last_updated_epoch
@@ -56,7 +58,7 @@ struct TypoCorrectionEntry {
 // lock of its own.
 class TypoCorrectionStore {
  public:
-  explicit TypoCorrectionStore(std::filesystem::path path);
+  explicit TypoCorrectionStore(std::filesystem::path path, const ByteCrypto* crypto = nullptr);
 
   // Counts the pair when it passes the section 6 accept filters. Returns false
   // (recording nothing) for a pair that is out of range.
@@ -75,9 +77,8 @@ class TypoCorrectionStore {
   std::optional<std::string> Lookup(const std::string& wrong, uint32_t min_count,
                                     uint64_t now_epoch_sec) const;
 
-  // Missing file -> empty store, returns true: a store that has never been
-  // written is not an error. Malformed rows are skipped so one bad line does not
-  // discard the rest of the table.
+  // Missing file -> empty store, returns true. Malformed rows are skipped;
+  // decrypt or migration failure returns false and blocks Save.
   bool Load();
   bool Save() const;
   void Reset();
@@ -98,7 +99,9 @@ class TypoCorrectionStore {
 
  private:
   std::filesystem::path path_;
+  const ByteCrypto* crypto_;
   std::map<std::string, std::map<std::string, TypoCorrectionRecord>> table_;
+  bool save_blocked_by_load_failure_{false};
 };
 
 }  // namespace azookey::learning

@@ -4,8 +4,19 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <system_error>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
 
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/AtomicFile.h"
@@ -60,7 +71,8 @@ bool QuarantineCorruptFile(const std::filesystem::path& source) {
 
 }  // namespace
 
-UserDictionary::UserDictionary(std::filesystem::path path) : path_(std::move(path)) {}
+UserDictionary::UserDictionary(std::filesystem::path path, const ByteCrypto* crypto)
+    : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
 bool UserDictionary::Load() { return LoadImpl(true); }
 
@@ -70,21 +82,27 @@ bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
   ++revision_;
   by_ruby_.clear();
   save_blocked_by_corrupt_load_ = false;
-  std::ifstream ifs(path_);
-  if (!ifs.is_open()) {
+  std::string text;
+  const auto source = ReadProtectedText(path_, *crypto_, text);
+  if (source == ProtectedFileSource::Missing) {
     return true;  // missing file is fine
   }
-  std::ostringstream oss;
-  oss << ifs.rdbuf();
-  ifs.close();
-  auto v = j::Parse(oss.str());
+  if (source == ProtectedFileSource::Error) {
+    save_blocked_by_corrupt_load_ = true;
+    return false;
+  }
+  auto v = j::Parse(text);
   if (!v || !v->IsObject()) {
-    save_blocked_by_corrupt_load_ = !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
+    save_blocked_by_corrupt_load_ = source == ProtectedFileSource::Encrypted ||
+                                    !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
+    SecureErase(text);
     return false;
   }
   const auto* entries = v->GetArray("entries");
   if (!entries) {
-    save_blocked_by_corrupt_load_ = !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
+    save_blocked_by_corrupt_load_ = source == ProtectedFileSource::Encrypted ||
+                                    !quarantine_corrupt_file || !QuarantineCorruptFile(path_);
+    SecureErase(text);
     return false;
   }
   for (const auto& e : *entries) {
@@ -92,13 +110,66 @@ bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
       by_ruby_[w->ruby].push_back(std::move(*w));
     }
   }
+  if (source == ProtectedFileSource::Plaintext && quarantine_corrupt_file &&
+      !MigratePlaintextFile(path_, text, *crypto_)) {
+    save_blocked_by_corrupt_load_ = true;
+    SecureErase(text);
+    return false;
+  }
+  SecureErase(text);
   return true;
+}
+
+static bool SameExportTarget(const std::filesystem::path& left,
+                             const std::filesystem::path& right) {
+  std::error_code ec;
+  const auto absolute_left = std::filesystem::absolute(left, ec).lexically_normal();
+  if (ec) return true;
+  ec.clear();
+  const auto absolute_right = std::filesystem::absolute(right, ec).lexically_normal();
+  if (ec) return true;
+  if (absolute_left == absolute_right) return true;
+#ifdef _WIN32
+  const auto wide_left = absolute_left.wstring();
+  const auto wide_right = absolute_right.wstring();
+  if (wide_left.size() > (std::numeric_limits<int>::max)() ||
+      wide_right.size() > (std::numeric_limits<int>::max)()) return true;
+  const int comparison = ::CompareStringOrdinal(wide_left.c_str(),
+                                                 static_cast<int>(wide_left.size()),
+                                                 wide_right.c_str(),
+                                                 static_cast<int>(wide_right.size()), TRUE);
+  if (comparison == 0 || comparison == CSTR_EQUAL) return true;
+#endif
+  ec.clear();
+  const bool left_exists = std::filesystem::exists(absolute_left, ec);
+  if (ec) return true;
+  const bool right_exists = std::filesystem::exists(absolute_right, ec);
+  if (ec) return true;
+  if (left_exists && right_exists) {
+    ec.clear();
+    const bool equivalent = std::filesystem::equivalent(absolute_left, absolute_right, ec);
+    return ec || equivalent;
+  }
+  return false;
 }
 
 bool UserDictionary::Save() const {
   if (save_blocked_by_corrupt_load_) {
     return false;
   }
+  return WriteProtectedText(path_, Serialize(), *crypto_);
+}
+
+bool UserDictionary::SavePlaintextExport(const std::filesystem::path& export_path) const {
+  if (save_blocked_by_corrupt_load_) return false;
+  auto backup = path_;
+  backup += ".bak";
+  if (SameExportTarget(export_path, path_) || SameExportTarget(export_path, storage_path()) ||
+      SameExportTarget(export_path, backup)) return false;
+  return WriteTextFileAtomically(export_path, Serialize());
+}
+
+std::string UserDictionary::Serialize() const {
   j::Object root;
   root.emplace("version", j::Value(1));
   j::Array entries;
@@ -108,7 +179,7 @@ bool UserDictionary::Save() const {
     }
   }
   root.emplace("entries", j::Value(std::move(entries)));
-  return WriteTextFileAtomically(path_, j::Stringify(j::Value(std::move(root))));
+  return j::Stringify(j::Value(std::move(root)));
 }
 
 bool UserDictionary::Add(const UserWord& w) {

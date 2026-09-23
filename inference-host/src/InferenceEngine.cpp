@@ -13,6 +13,7 @@
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 
 namespace azookey::host {
@@ -146,6 +147,10 @@ void ApplyModelConfigFields(EngineConfig& target, const EngineConfig& source) {
 
 bool UserDictionaryFileExists(const learning::UserDictionary& dict) {
   std::error_code ec;
+  if (std::filesystem::exists(learning::EncryptedPathFor(dict.path()), ec) && !ec) {
+    return true;
+  }
+  ec.clear();
   return std::filesystem::exists(dict.path(), ec) && !ec;
 }
 }  // namespace

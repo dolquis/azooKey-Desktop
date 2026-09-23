@@ -15,6 +15,7 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/learning/DpapiCrypto.h"
 
 namespace {
 
@@ -128,7 +129,7 @@ TEST(UserDictCliTest, DirectModePreservesNonAsciiWindowsPath) {
   ASSERT_TRUE(add);
   const auto result = azookey::host::RunUserDictCli(*add, DirectRunOptions(path));
   ASSERT_EQ(result.exit_code, 0);
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
   azookey::learning::UserDictionary loaded(path);
   ASSERT_TRUE(loaded.Load());

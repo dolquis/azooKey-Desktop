@@ -35,7 +35,7 @@ function(run_host description)
 endfunction()
 
 run_host("userdict add" userdict add --offline --reading "${reading}" --surface "${surface}")
-if(NOT EXISTS "${user_dict_path}")
+if(NOT EXISTS "${user_dict_path}.enc")
   message(FATAL_ERROR "user dictionary was not written to the requested UTF-8 path")
 endif()
 

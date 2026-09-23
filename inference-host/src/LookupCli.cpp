@@ -13,6 +13,7 @@
 
 #include "azookey/host/CliText.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
@@ -125,7 +126,8 @@ std::string TsvLine(const LookupMatch& match) {
 
 bool PathExists(const std::filesystem::path& path, bool* exists) {
   std::error_code error;
-  *exists = std::filesystem::exists(path, error);
+  *exists = std::filesystem::exists(learning::EncryptedPathFor(path), error);
+  if (!error && !*exists) *exists = std::filesystem::exists(path, error);
   return !error;
 }
 

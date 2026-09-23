@@ -5,6 +5,7 @@
 #include <string>
 
 #include "azookey/learning/TypoCorrectionStore.h"
+#include "azookey/learning/DpapiCrypto.h"
 
 namespace {
 
@@ -18,17 +19,16 @@ std::filesystem::path TempPath(const char* name) {
   auto path = std::filesystem::temp_directory_path() / name;
   std::error_code ec;
   std::filesystem::remove(path, ec);
+  std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  auto backup = path;
+  backup += ".bak";
+  std::filesystem::remove(backup, ec);
   return path;
 }
 
 void WriteFile(const std::filesystem::path& path, const std::string& content) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   out << content;
-}
-
-std::string ReadFile(const std::filesystem::path& path) {
-  std::ifstream in(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
 }  // namespace
@@ -197,7 +197,9 @@ TEST(TypoCorrectionStoreTest, SavedFileCarriesTheEscapedHeader) {
   store.Observe("こんちには", "こんにちは", kNow);
   ASSERT_TRUE(store.Save());
 
-  const auto content = ReadFile(path);
+  std::string content;
+  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::DpapiCrypto(), content),
+            azookey::learning::ProtectedFileSource::Encrypted);
   EXPECT_EQ(content.rfind(std::string(azookey::learning::kTypoCorrectionStoreEscapedTsvHeader), 0),
             0u);
 

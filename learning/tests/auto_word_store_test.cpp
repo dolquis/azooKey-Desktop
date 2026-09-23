@@ -5,6 +5,7 @@
 #include <string>
 
 #include "azookey/learning/AutoWordStore.h"
+#include "azookey/learning/DpapiCrypto.h"
 
 namespace {
 
@@ -20,6 +21,10 @@ std::filesystem::path TempPath(const char* name) {
   auto path = std::filesystem::temp_directory_path() / name;
   std::error_code ec;
   std::filesystem::remove(path, ec);
+  std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  auto backup = path;
+  backup += ".bak";
+  std::filesystem::remove(backup, ec);
   return path;
 }
 

@@ -2129,6 +2129,7 @@ void TextService::PostPendingCommitObservation() {
   if (!pending_commit_observation_) return;
   auto pending = std::move(*pending_commit_observation_);
   pending_commit_observation_.reset();
+  if (!pending.learning_allowed) return;
   try {
 #ifdef AZOOKEY_TSF_TESTING
     if (testing::ConsumePendingCommitObservationFailureForTest()) {
@@ -2327,7 +2328,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
       multi_segment ? CurrentDisplayedPreeditSurface() : std::string{};
   PendingCommitObservation batch_observation;
   batch_observation.secure = secure;
-  batch_observation.learning_allowed = !secure && batch_learning_allowed_;
+  batch_observation.learning_allowed = privacy.learning_allowed && batch_learning_allowed_;
   if (multi_segment) {
     for (size_t i = 0; i < shown_batch_segments_.size(); ++i) {
       const auto& segment = shown_batch_segments_[i];
@@ -2396,16 +2397,16 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     pending_commit_observation_ = std::move(batch_observation);
   } else if (!chosen.field.surface.empty() && !reading.empty() && !chosen.local &&
              chosen.field.source != "symbol" && chosen.field.source != "emoji") {
-    pending_commit_observation_ =
-        PendingCommitObservation{reading, chosen.field, HostCandidateFields(shown),
-                                 {},      secure,       !secure && batch_learning_allowed_};
+    pending_commit_observation_ = PendingCommitObservation{
+        reading, chosen.field, HostCandidateFields(shown),
+        {},      secure,       privacy.learning_allowed && batch_learning_allowed_};
   } else {
     pending_commit_observation_.reset();
   }
   // AI output can contain generated punctuation without a reading alignment.
   // "fallback" is the reading offered because no conversion was available
   // (Host silent, unreachable, or empty); it carries nothing to learn.
-  if (secure || !batch_learning_allowed_ || chosen.field.source == "llm" ||
+  if (!privacy.learning_allowed || !batch_learning_allowed_ || chosen.field.source == "llm" ||
       chosen.field.source == "privacy-fallback" || chosen.field.source == "fallback" ||
       (pending_commit_observation_ &&
        std::any_of(pending_commit_observation_->segments.begin(),
@@ -3574,7 +3575,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   const auto privacy = ResolvePrivacy(context, false);
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
-  ipc_pending_learning_allowed_ = !privacy.secure;
+  ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_reading_ = reading;
   ipc_pending_live_ = live;
   ipc_pending_emoji_trigger_ = emoji_trigger;
@@ -3597,6 +3598,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   decision.ai = ai_settings.privacy;
   decision.backend = ai_settings.backend;
   decision.detailed_logging_allowed = ai_settings.privacy_policy.detailed_logging_allowed;
+  decision.learning_allowed = ai_settings.privacy_policy.learning_allowed;
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
@@ -3618,6 +3620,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     } else if (mode == "private") {
       if (evaluate_ai) decision.ai.external = false;
       decision.detailed_logging_allowed = false;
+      decision.learning_allowed = false;
     }
     if (evaluate_ai) {
       const auto profile_backend = value.GetString("aiBackend").value_or("auto");
@@ -3625,7 +3628,10 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
       if (decision.backend == "local-zenzai") decision.ai.external = false;
     }
   }
-  if (decision.secure) decision.ai = {};
+  if (decision.secure) {
+    decision.ai = {};
+    decision.learning_allowed = false;
+  }
   // A failed scope probe must never unlock development body logging.
   decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
   secure_input_.store(decision.secure, std::memory_order_relaxed);
@@ -3733,7 +3739,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
                                      HostCandidateFields(shown_candidates_),
                                      {},
                                      privacy.secure,
-                                     !privacy.secure && batch_learning_allowed_};
+                                     privacy.learning_allowed && batch_learning_allowed_};
       }
     }
   }

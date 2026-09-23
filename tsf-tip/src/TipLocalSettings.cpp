@@ -222,7 +222,7 @@ void TipLocalSettings::Reload() noexcept {
     contents = ReadBounded(path_);
     std::error_code missing_error;
     if (contents.empty() && !std::filesystem::exists(path_, missing_error) && !missing_error)
-      ai.privacy_policy = {false, false};  // No file uses the normal-mode defaults.
+      ai.privacy_policy = {false, false, true};  // No file uses the normal-mode defaults.
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
       ai.privacy = core::ParseAiPrivacy(*json);

@@ -1910,60 +1910,96 @@ TEST_F(DispatcherTest, SecureFlagCapabilityIsConnectionLocalAndResetOnEveryHands
   EXPECT_TRUE(allowed(dispatcher));
 }
 
-TEST_F(DispatcherTest, HostSecureSettingsRejectAllLearningAndMining) {
+TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
   const auto settings_path = TempPath("azookey_learning_privacy_settings.json");
   const auto mining_path = TempPath("azookey_learning_privacy_mining.tsv");
   const auto typo_path = TempPath("azookey_learning_privacy_typo.tsv");
-  std::remove(mining_path.c_str());
-  std::remove(typo_path.c_str());
+  for (const auto* policy : {
+           R"({"privacy":{"mode":"secure"}})",
+           R"({"privacy":{"mode":"private"}})",
+           R"({"privacy":{"mode":"custom"}})",
+           R"({"privacy":{"mode":"custom","custom":{"learning":false}}})",
+           R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})",
+       }) {
+    SCOPED_TRACE(policy);
+    std::remove(mining_path.c_str());
+    std::remove(typo_path.c_str());
+    {
+      std::ofstream out(settings_path);
+      out << policy;
+    }
+    azookey::host::SettingsStore settings(settings_path);
+    settings.Load();
+    azookey::learning::AutoWordStore mining(mining_path);
+    azookey::learning::TypoCorrectionStore typo(typo_path);
+    engine.SetAutoWordStore(&mining);
+    engine.SetTypoStore(&typo);
+    azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     &settings, &mining);
+    EnableEventPrivacy(target);
+    ipc::CommitObservationRequest commit;
+    commit.reading = "あずきーしゃ";
+    commit.chosen = {"azooKey社", commit.reading, 1.0, "static"};
+    commit.secure = false;
+    commit.learning_allowed = true;
+    ipc::CommitSegmentsObservationRequest segments;
+    segments.segments.push_back({commit.reading, commit.chosen, {}, false});
+    segments.secure = false;
+    segments.learning_allowed = true;
+    ipc::ObserveTypoRequest observation;
+    observation.wrong_reading = "こんちには";
+    observation.correct_reading = "こんにちは";
+    observation.secure = false;
+    observation.learning_allowed = true;
+    const auto before = store.size();
+    for (auto type :
+         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
+      const auto payload = type == ipc::MessageType::CommitObservation
+                               ? ipc::BuildCommitObservationRequest(commit)
+                               : ipc::BuildCommitSegmentsObservationRequest(segments);
+      const auto response = target.Dispatch(MakeReq(9300, type, payload));
+      ASSERT_TRUE(response);
+      const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+      ASSERT_TRUE(parsed);
+      EXPECT_FALSE(parsed->ok);
+    }
+    EXPECT_FALSE(target.Dispatch(
+        MakeReq(9301, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
+    EXPECT_EQ(store.size(), before);
+    EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
+    EXPECT_EQ(typo.size(), 0u);
+    EXPECT_FALSE(std::filesystem::exists(mining_path));
+    EXPECT_FALSE(std::filesystem::exists(typo_path));
+    engine.SetAutoWordStore(nullptr);
+    engine.SetTypoStore(nullptr);
+    std::remove(settings_path.c_str());
+  }
+}
+
+TEST_F(DispatcherTest, HostCustomLearningOptInRestoresObservations) {
+  const auto settings_path = TempPath("azookey_custom_learning_settings.json");
   {
     std::ofstream out(settings_path);
-    out << R"({"privacy":{"mode":"secure"}})";
+    out << R"({"privacy":{"mode":"custom","custom":{"learning":true}}})";
   }
   azookey::host::SettingsStore settings(settings_path);
   settings.Load();
-  azookey::learning::AutoWordStore mining(mining_path);
-  azookey::learning::TypoCorrectionStore typo(typo_path);
-  engine.SetAutoWordStore(&mining);
-  engine.SetTypoStore(&typo);
   azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
-                                   &settings, &mining);
+                                   &settings);
   EnableEventPrivacy(target);
   ipc::CommitObservationRequest commit;
-  commit.reading = "あずきーしゃ";
-  commit.chosen = {"azooKey社", commit.reading, 1.0, "static"};
+  commit.reading = "かな";
+  commit.chosen = {"仮名", "かな", 1.0, "static"};
   commit.secure = false;
   commit.learning_allowed = true;
-  ipc::CommitSegmentsObservationRequest segments;
-  segments.segments.push_back({commit.reading, commit.chosen, {}, false});
-  segments.secure = false;
-  segments.learning_allowed = true;
-  ipc::ObserveTypoRequest observation;
-  observation.wrong_reading = "こんちには";
-  observation.correct_reading = "こんにちは";
-  observation.secure = false;
-  observation.learning_allowed = true;
   const auto before = store.size();
-  for (auto type :
-       {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
-    const auto payload = type == ipc::MessageType::CommitObservation
-                             ? ipc::BuildCommitObservationRequest(commit)
-                             : ipc::BuildCommitSegmentsObservationRequest(segments);
-    const auto response = target.Dispatch(MakeReq(9300, type, payload));
-    ASSERT_TRUE(response);
-    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
-    ASSERT_TRUE(parsed);
-    EXPECT_FALSE(parsed->ok);
-  }
-  EXPECT_FALSE(target.Dispatch(
-      MakeReq(9301, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
-  EXPECT_EQ(store.size(), before);
-  EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
-  EXPECT_EQ(typo.size(), 0u);
-  EXPECT_FALSE(std::filesystem::exists(mining_path));
-  EXPECT_FALSE(std::filesystem::exists(typo_path));
-  engine.SetAutoWordStore(nullptr);
-  engine.SetTypoStore(nullptr);
+  const auto response = target.Dispatch(MakeReq(9350, ipc::MessageType::CommitObservation,
+                                                ipc::BuildCommitObservationRequest(commit)));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_GT(store.size(), before);
   std::remove(settings_path.c_str());
 }
 

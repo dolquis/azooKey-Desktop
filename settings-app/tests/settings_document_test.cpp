@@ -50,7 +50,7 @@ TEST(SettingsDocumentTest, BodyLogPolicySurvivesUnrelatedSettingsSave) {
   const auto path = dir / "settings.json";
   WriteText(
       path,
-      R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":true,"externalAi":false}}})");
+      R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"learning":true,"detailedLogging":true,"externalAi":false}}})");
   auto loaded = azookey::settings::LoadSettingsDocument(path);
   EXPECT_TRUE(loaded.warnings.empty());
   loaded.settings.log_level = "warn";
@@ -63,6 +63,7 @@ TEST(SettingsDocumentTest, BodyLogPolicySurvivesUnrelatedSettingsSave) {
   EXPECT_EQ(privacy->GetBool("redactLogs"), false);
   ASSERT_NE(privacy->Find("custom"), nullptr);
   EXPECT_EQ(privacy->Find("custom")->GetBool("detailedLogging"), true);
+  EXPECT_EQ(privacy->Find("custom")->GetBool("learning"), true);
   std::filesystem::remove_all(dir);
 }
 
@@ -70,7 +71,8 @@ TEST(SettingsDocumentTest, MalformedBodyLogPolicyRestrictsPrivacyOnSave) {
   const auto dir = TestDir("azookey_settings_body_log_invalid");
   const auto path = dir / "settings.json";
   for (const auto* text : {R"({"privacy":{"redactLogs":"false"}})",
-                           R"({"privacy":{"redactLogs":false,"custom":{"detailedLogging":1}}})"}) {
+                           R"({"privacy":{"redactLogs":false,"custom":{"detailedLogging":1}}})",
+                           R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})"}) {
     WriteText(path, text);
     const auto loaded = azookey::settings::LoadSettingsDocument(path);
     EXPECT_FALSE(loaded.warnings.empty());

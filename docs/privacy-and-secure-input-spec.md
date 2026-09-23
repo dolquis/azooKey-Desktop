@@ -196,13 +196,14 @@ TIP は `TextService::ResolvePrivacy` で設定と入力先の検出結果を解
 学習、予測、外部 AI、AI 候補生成、詳細ログは別の許可軸である。§3 / §5.2 は
 各モードの意味を定義する。外部 AI の許可は AI 候補生成の許可を前提とし、
 secure は全軸に優先する。これらの軸名は C++ の呼出 API を表さない。
-private / custom の学習方針の適用は、secure 判定とは別の消費側の責務とする。
+private / custom の学習方針は secure 判定と独立した許可軸として解決する。
 
 詳細ログの設定解決は `core::ParsePrivacyPolicy(settings)` が担い、
 TIP は `TipAiSettings.privacy_policy` を保持し、入力先の条件と交差させてログへ渡す。
-Host の `RuntimeSettings.privacy_policy` は学習ゲートの secure 判定に用いる。
+Host の `RuntimeSettings.privacy_policy` は学習ゲートの secure と学習許可の判定に用いる。
 `core::PrivacyPolicy` の構造体既定は `secure = true`、
-`detailed_logging_allowed = false` であり、判定コンテキスト省略時の安全側を表す。
+`detailed_logging_allowed = false`、`learning_allowed = false` であり、
+判定コンテキスト省略時の安全側を表す。
 設定ファイルがない場合や、有効な設定 object で `privacy` が欠ける場合の
 実効モードは `normal`、詳細ログは不許可である。`privacy.mode` だけの欠落も
 モードは `normal` に解決し、詳細ログは別途 `redactLogs` の条件で判定する。
@@ -218,17 +219,18 @@ object でない設定または `privacy`、未知・型不正の `privacy.mode`
 
 | レイヤ | 判定入力 | 役割 |
 |---|---|---|
-| TIP | 設定、入力 scope、入力先アプリ | イベント時に secure を判定し、送信・保留観測を抑止する |
-| Host | 当該要求の privacy フラグ、接続の受理済み capability、設定 | 学習要求を独立に検査する。入力先を自ら検出しない |
+| TIP | 設定、入力 scope、入力先アプリ | イベント時に secure と学習許可を判定し、学習不可なら送信・保留観測を抑止する |
+| Host | 当該要求の privacy フラグ、接続の受理済み capability、グローバル設定 | 学習要求を独立に検査する。入力先を自ら検出しない |
 
 `ObserveTypo`、`CommitObservation`、`CommitSegmentsObservation` は
 イベントごとの `secure` と `learning_allowed` を運ぶ。Host が学習を許可するのは、
-受理済み接続が `secure_flag` に対応し、Host 設定が非 secure で、当該要求の `secure == false` かつ
+受理済み接続が `secure_flag` に対応し、Host 設定が非 secure かつ学習を許可し、当該要求の `secure == false` かつ
 `learning_allowed == true` の場合に限る。欠落・型不正はそれぞれ
 `true` / `false` の安全側で扱い、直近の `QueryCandidates` から推定しない。
-TIP の学習フラグは `!secure` を基本とし、batch の学習対象条件も併せて満たす場合に
-`learning_allowed = true` とする。private / custom の学習軸の反映は別の消費側契約であり、
-この wire フラグをモード表全体の学習許可と同一視しない。
+TIP の学習フラグは `!secure`、グローバルモードの学習許可、app profile の
+`privacyMode = private` による禁止、batch の学習対象条件をすべて満たす場合に
+`learning_allowed = true` とする。グローバルの private / custom による禁止は
+app profile の `privacyMode = normal` でも解除できない。
 `QueryCandidates` にも両フラグを載せるが、Host の候補要求処理はどちらも
 補正適用の判定には用いない。M55 の補正適用ゲートは別の機能契約とする。wire 契約は
 `docs/typo-correction-learning-spec.md` §12.13 と payload 定義を参照する。
@@ -339,12 +341,11 @@ AI 候補生成許可 / 外部 AI 許可 の 2 クエリ経由で一貫して評
 （既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
 `settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・
-`custom.aiCandidate`・`custom.externalAi`・`custom.detailedLogging`・`redactLogs`・
+`custom.learning`・`custom.aiCandidate`・`custom.externalAi`・`custom.detailedLogging`・`redactLogs`・
 `secureApps`・`showSecureIndicator` であり、
 `inference-host/src/SettingsStore.cpp` と `settings-app/SettingsDocument.cpp` の許可キーも
 これに一致する。schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
-`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`・`custom` の
-learning / prediction）は書き込めない。`additionalProperties: false` が
+`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`・`custom.prediction`）は書き込めない。`additionalProperties: false` が
 schema 検証で弾き、`settings-app/SettingsDocument.cpp` の許可キー判定は未知の `privacy`
 フィールドを含む object を `{"mode": "secure"}` へ潰す。実行時はこれらの軸の既定値が
 適用され、`autoSecureInput` は `true` 固定として §4 の自動 secure 判定が常に働く。

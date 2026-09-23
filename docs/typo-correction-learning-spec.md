@@ -714,12 +714,11 @@ secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評�
 本節はそれを M55 の経路へ適用する。
 
 **protocol v1 の学習イベント契約**: TIP は secure 判定をイベント時に評価し、
-`learning_allowed` を `!secure` と学習経路固有の条件から決める。batch では
-学習対象でない確定を除外する。private / custom の学習軸をこのフラグへ反映する
-機能は別途定義し、M46 の secure 配線だけでモード表全体の学習制御を保証しない。
+`learning_allowed` を `!secure`、グローバル privacy の学習許可、app profile の
+private 禁止、学習経路固有の条件から決める。batch では学習対象でない確定を除外する。
 
 Host は `ObserveTypo` / `CommitObservation` / `CommitSegmentsObservation` ごとに、
-受理済み接続の `secure_flag`、非 secure の Host 設定、当該イベントの
+受理済み接続の `secure_flag`、非 secure かつ学習許可の Host 設定、当該イベントの
 `secure == false` と `learning_allowed == true` をすべて要求する。
 欠落・型不正は安全側の既定値で学習を拒否する。直近の `QueryCandidates` の
 フラグを観測イベントへ流用しない。TIP は secure 遷移で保留観測をクリアする。
@@ -800,9 +799,8 @@ v1 の `ObserveTypoRequest { wrong_reading, correct_reading, timestamp_ms }`
 ```
 
 - `secure` / `learning_allowed` は当該イベントで判定した値であり、
-  TIP は `!secure` と学習経路の条件を使う。private / custom の学習軸を
-  反映する機能は、この secure 配線と区別する（§12.12.2）。
-- Host は受理済み接続の `secure_flag`、非 secure の Host 設定、
+  TIP は `!secure`、private / custom の学習許可、学習経路の条件を使う。
+- Host は受理済み接続の `secure_flag`、非 secure かつ学習許可の Host 設定、
   `secure == false` かつ `learning_allowed == true` で蓄積可否を判定する。
   直近の候補要求から推定しない。
 - 欠落・型不正は parse 成功と安全側の既定値に解決し、学習ゲートで拒否する。

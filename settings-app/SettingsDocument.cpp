@@ -231,7 +231,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
             for (const auto& [axis, enabled] : setting.AsObject())
               valid =
                   valid &&
-                  (axis == "aiCandidate" || axis == "externalAi" || axis == "detailedLogging") &&
+                  (axis == "learning" || axis == "aiCandidate" || axis == "externalAi" ||
+                   axis == "detailedLogging") &&
                   enabled.IsBool();
           } else {
             valid = false;

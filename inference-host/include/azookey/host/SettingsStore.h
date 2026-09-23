@@ -85,7 +85,7 @@ struct RuntimeSettings {
   bool prediction_enabled{true};
   std::string ai_backend{"none"};
   core::AiPrivacy ai_privacy{true, true};
-  core::PrivacyPolicy privacy_policy{false, false};
+  core::PrivacyPolicy privacy_policy{false, false, true};
   int32_t open_ai_timeout_ms{30000};
   std::string open_ai_api_key;
   std::string open_ai_api_endpoint{"https://api.openai.com/v1"};
@@ -178,7 +178,7 @@ class SettingsStore {
   // SettingsWrittenAfterLoad, which must not block behind a model reload.
   std::atomic<int64_t> loaded_write_time_{kNoWriteTime};
   mutable std::mutex privacy_mutex_;
-  core::PrivacyPolicy privacy_policy_{false, false};
+  core::PrivacyPolicy privacy_policy_{false, false, true};
   RuntimeSettings settings_;
   SettingsLoadResult last_result_;
   std::mutex peeked_mutex_;

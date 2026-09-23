@@ -1,8 +1,8 @@
 #include "SettingsIpcClient.h"
 
-#include <cstdlib>
 #include <utility>
 
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
@@ -23,19 +23,6 @@ azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageTy
   return envelope;
 }
 
-std::string ReadHandshakeToken() {
-  size_t required = 0;
-  if (getenv_s(&required, nullptr, 0, "AZOOKEY_IPC_HANDSHAKE_TOKEN") != 0 || required == 0) {
-    return {};
-  }
-  std::string value(required, '\0');
-  if (getenv_s(&required, value.data(), value.size(), "AZOOKEY_IPC_HANDSHAKE_TOKEN") != 0) {
-    return {};
-  }
-  if (!value.empty() && value.back() == '\0') value.pop_back();
-  return value;
-}
-
 SettingsIpcResult Failure(std::string error) {
   SettingsIpcResult result;
   result.error = std::move(error);
@@ -47,12 +34,15 @@ SettingsIpcResult Failure(std::string error) {
 SettingsIpcOptions DefaultSettingsIpcOptions() {
   SettingsIpcOptions options;
   options.pipe_name = azookey::ipc::DefaultPipeName();
-  options.handshake_token = ReadHandshakeToken();
   return options;
 }
 
 SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) {
   if (options.pipe_name.empty()) return Failure("could not resolve the per-user IPC pipe");
+  const auto token = options.handshake_token.empty()
+                         ? azookey::ipc::ReadClientHandshakeToken()
+                         : std::optional<std::string>(options.handshake_token);
+  if (!token) return Failure("settings were saved, but the IPC token is unavailable");
 
   azookey::ipc::NamedPipeClient client;
   if (!client.Connect(options.pipe_name, options.connect_timeout_ms)) {
@@ -64,7 +54,7 @@ SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) 
   handshake.protocol_version = azookey::ipc::kHandshakeProtocolVersion;
   handshake.capabilities = {"settings"};
   handshake.client_id = "settings-app";
-  handshake.handshake_token = options.handshake_token;
+  handshake.handshake_token = *token;
   if (!client.Send(MakeEnvelope(kHandshakeRequestId, azookey::ipc::MessageType::Handshake,
                                 azookey::ipc::BuildHandshakeRequest(handshake)))) {
     return Failure("settings were saved, but the host handshake could not be sent");

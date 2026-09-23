@@ -24,6 +24,7 @@
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/Payloads.h"
@@ -384,6 +385,31 @@ TEST_F(DispatcherTest, HandshakeRequiresConfiguredToken) {
   auto matched_payload = ipc::ParseHandshakeResponse(matched->payload_json);
   ASSERT_TRUE(matched_payload.has_value());
   EXPECT_TRUE(matched_payload->accepted);
+}
+
+TEST_F(DispatcherTest, GeneratedTokenFileAuthenticatesHandshake) {
+  const auto path = std::filesystem::path(TempPath("azookey_dispatcher_generated_token"));
+  RemovePathNoThrow(path);
+  const auto generated = ipc::GenerateHandshakeToken();
+  ASSERT_TRUE(generated);
+  ASSERT_TRUE(ipc::PublishHandshakeToken(path, *generated));
+  const auto read = ipc::ReadHandshakeTokenFile(path);
+  ASSERT_TRUE(read);
+
+  auto config = DefaultDispatcherConfig();
+  config.handshake_token = *generated;
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+  ipc::HandshakeRequest request;
+  request.tip_version = "test";
+  request.protocol_version = kProtocolVersion;
+  request.handshake_token = *read;
+  const auto response = token_dispatcher.Dispatch(MakeReq(
+      6, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(request)));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseHandshakeResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->accepted);
+  RemovePathNoThrow(path);
 }
 
 TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHandshake) {

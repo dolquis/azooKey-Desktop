@@ -56,6 +56,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `ipc_json_tests` | `ipc/tests/json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
 | `ipc_payloads_tests` | `ipc/tests/payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject、`ObserveTypo` と `QueryCandidatesResponse.corrected_reading` の往復と欠如時の後方互換、`QueryCandidates` と学習イベントの privacy フラグの往復および欠落・型不正時の安全側の既定値、`ListNewWordCandidates` / `ResolveNewWord` の往復と不正 `state_filter`・`max_items`・`action` の reject、両応答の `ok` / `changed` / `error` の往復と欠如時の後方互換 |
 | `ipc_named_pipe_transport_tests` | `ipc/tests/named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持、accept churn 下での複数クライアント同時接続（`ConcurrentClientsConnectDuringAcceptChurn`） |
+| `ipc_handshake_token_tests` | `ipc/tests/handshake_token_test.cpp` | 暗号乱数 token の生成、原子的な更新と読取、不正・欠落値の拒否、ファイル ACL |
 | `ipc_tip_client_tests` | `ipc/tests/tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
 | `learning_tests` | `learning/tests/learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
 | `user_dictionary_tests` | `learning/tests/user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |

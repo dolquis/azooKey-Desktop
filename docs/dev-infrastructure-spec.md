@@ -1223,18 +1223,18 @@ length-prefix フレーミング + `kMaxFrameSize`）を基盤に強化する:
   **トークンの配布チャネル（v1.0 決定）**: env 事前共有（`AZOOKEY_IPC_HANDSHAKE_TOKEN`）
   は in-proc TIP が Host 起動時の環境を共有しないため production では成立しない。
   そこで Host が起動時に暗号論的乱数 16 byte（hex 32 文字）を生成し、現在ユーザー
-  のみが読める `%LOCALAPPDATA%\azooKey\config\ipc-token`（NTFS ACL 継承で
-  current-user RX）へ §5.4 の write-then-rename で原子的に書き出す。TIP は Handshake
+  のみが読める `%LOCALAPPDATA%\azooKey\config\ipc-token`（継承を保護した明示 DACL で
+  現在ユーザー、SYSTEM、Administrators のみアクセス可能）へ §5.4 の write-then-rename で
+  原子的に書き出す。TIP は Handshake
   直前に同ファイルを読みトークンを得る。Host 再起動時はファイルを新トークンで
   上書きし、TIP は**再 Handshake のたびにファイルを読み直す**（M42 再接続時も同様）。
   環境変数 `AZOOKEY_IPC_HANDSHAKE_TOKEN` は開発・テスト用の上書き経路として残す。
   本チャネルは上記の defense-in-depth 価値に見合うものであり、認証の保証は与えない。
 
-  **トークン未設定時の縮退**: ファイルも環境変数も無い場合は per-logon pipe ACL
-  のみに依拠し、Host は warn ログを出す（現行 `inference-host/src/main.cpp` の
-  挙動）。Release では §6.4.1 の SID fail-closed により pipe 自体が current logon
-  に限定されるため、トークン未設定でも remote / 別ユーザー / 別 logon session は
-  到達しない。
+  **トークン取得失敗時の拒否**: Host はトークンの生成・書き出し、または token
+  ファイルの所有ロック取得に失敗した場合、pipe の受付開始前に error で終了する。
+  TIP と各 IPC クライアントは環境変数も token ファイルも使えない場合、Handshake
+  を送らず接続を失敗として扱う。per-logon pipe ACL だけへの縮退は行わない。
   トークンが設定されている場合の比較は、値の一致位置を処理時間へ反映しない
   定数時間比較を使う。
 - **6.4.5 client cleanup** — 切断済み client が Stop まで保持される現状を
@@ -1370,8 +1370,8 @@ deadline 超過のうち、フレームが転送途中だった場合だけは�
 - uint64 フィールド（`request_id` / `Ping` / `Cancel.target_request_id` /
   `CommitObservation.timestamp_ms`）が 2^53 超でも丸めず全域 round-trip する（DEV-163）
 - 非 plain 数値形の桁あふれ（例 `18446744073709551616.0`）を `nullopt` で拒否する（DEV-163 / DEV-188）
-- Handshake トークンが per-user ファイルチャネルで配布され、未設定時は
-  ACL 縮退 + warn ログとなる（§6.4.4）
+- Handshake トークンが per-user ファイルチャネルで配布され、取得・発行に
+  失敗した場合は接続または Host 起動を拒否する（§6.4.4）
 
 > 注: 本節は受け入れ条件の「定義」のみを持ち、各項目の達成状態は持たない
 > （正典は Linear）。協定外メッセージ（DEV-162）・数値 codec の locale 非依存

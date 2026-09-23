@@ -40,6 +40,7 @@
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/Messages.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/learning/FileLock.h"
@@ -303,6 +304,13 @@ int main(int argc, char** argv) {
   auto userdict_args = std::move(parsed_args.args.userdict_args);
   auto lookup_args = std::move(parsed_args.args.lookup_args);
   auto newwords_args = std::move(parsed_args.args.newwords_args);
+  const auto resolve_client_token = [&]() {
+    if (!handshake_token.empty()) return true;
+    const auto token = azookey::ipc::ReadClientHandshakeToken();
+    if (!token) return false;
+    handshake_token = *token;
+    return true;
+  };
 
   azookey::host::UserDataPathInputs path_inputs;
   path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
@@ -341,6 +349,11 @@ int main(int argc, char** argv) {
       std::cerr << "error: " << parse_error << std::endl;
       return 2;
     }
+    if (cli_options->command != azookey::host::NewWordsCliCommand::List &&
+        !cli_options->offline && !resolve_client_token()) {
+      std::cerr << "error: IPC handshake token unavailable" << std::endl;
+      return 2;
+    }
     azookey::host::NewWordsCliRunOptions run_options;
     run_options.auto_word_store_path = user_paths->auto_word_store_path;
     run_options.pipe_name = pipe_name.empty() ? azookey::ipc::DefaultPipeName() : pipe_name;
@@ -369,6 +382,13 @@ int main(int argc, char** argv) {
     auto cli_options = azookey::host::ParseUserDictCliArgs(*userdict_args, &parse_error);
     if (!cli_options) {
       std::cerr << "error: " << parse_error << std::endl;
+      return 2;
+    }
+    if (!cli_options->offline && !cli_options->dry_run &&
+        (cli_options->command == azookey::host::UserDictCliCommand::Add ||
+         cli_options->command == azookey::host::UserDictCliCommand::Remove) &&
+        !resolve_client_token()) {
+      std::cerr << "error: IPC handshake token unavailable" << std::endl;
       return 2;
     }
     azookey::host::UserDictCliRunOptions run_options;
@@ -607,11 +627,35 @@ int main(int argc, char** argv) {
   if (explicit_model_path) {
     dconf.override_model_path = cli_model_path;
   }
+  // A resident Host owns the token path for its entire pipe lifetime. A
+  // duplicate Host must not rotate the first Host's token before its own
+  // pipe listen attempt is rejected.
+  std::optional<azookey::learning::ScopedFileLock> handshake_token_owner;
   if (pipe_mode) {
     if (handshake_token.empty()) {
-      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_missing");
-      std::cerr << "warn: no IPC handshake token configured; relying on per-user pipe ACL"
-                << std::endl;
+      const auto token_path = azookey::ipc::DefaultHandshakeTokenPath();
+      if (token_path) {
+        handshake_token_owner = azookey::learning::AcquireExclusiveFileLockForPath(
+            *token_path, std::chrono::milliseconds(0));
+        if (!handshake_token_owner) {
+          runtime_log.Log(azookey::logging::RuntimeLogLevel::Error,
+                          "ipc_handshake_token_owner_unavailable");
+          std::cerr << "error: IPC handshake token owner unavailable" << std::endl;
+          mark_clean_exit();
+          return 2;
+        }
+        const auto generated = azookey::ipc::GenerateHandshakeToken();
+        if (generated && azookey::ipc::PublishHandshakeToken(*token_path, *generated)) {
+          handshake_token = *generated;
+        }
+      }
+    }
+    if (handshake_token.empty()) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Error,
+                      "ipc_handshake_token_unavailable");
+      std::cerr << "error: IPC handshake token unavailable" << std::endl;
+      mark_clean_exit();
+      return 2;
     }
     dconf.handshake_token = handshake_token;
   }

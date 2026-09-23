@@ -33,6 +33,7 @@
 #include "azookey/core/Redaction.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/LearningStore.h"
@@ -98,20 +99,6 @@ std::string LowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return value;
-}
-
-std::string EnvironmentValue(const char* name) {
-#ifdef _WIN32
-  char* buffer = nullptr;
-  size_t size = 0;
-  if (_dupenv_s(&buffer, &size, name) != 0 || !buffer) return {};
-  std::string value(buffer);
-  std::free(buffer);
-  return value;
-#else
-  const char* value = std::getenv(name);
-  return value ? std::string(value) : std::string();
-#endif
 }
 
 bool IsSensitiveKey(std::string_view key) {
@@ -739,9 +726,9 @@ void ProbeRegistration(Snapshot& snapshot) {
 #endif
 }
 
-std::string HandshakeToken() { return EnvironmentValue("AZOOKEY_IPC_HANDSHAKE_TOKEN"); }
-
 void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* ping_json) {
+  const auto token = ipc::ReadClientHandshakeToken();
+  if (!token) return;
   ipc::NamedPipeClient client;
   if (!client.Connect(ipc::DefaultPipeName(), kConnectTimeoutMs)) return;
 
@@ -756,7 +743,7 @@ void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* pi
                                               0
 #endif
                                           );
-  handshake.handshake_token = HandshakeToken();
+  handshake.handshake_token = *token;
   ipc::Envelope request;
   request.request_id = 1;
   request.trace_id = "diag-handshake";

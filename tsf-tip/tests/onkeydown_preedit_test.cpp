@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -23,6 +24,7 @@
 
 #include "../../core/tests/EtwCapture.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
@@ -660,7 +662,24 @@ class FakeComposition : public ITfComposition {
 
 class TextServiceHarness {
  public:
-  ~TextServiceHarness() { service.Deactivate(); }
+  TextServiceHarness() {
+    char* existing = nullptr;
+    size_t length = 0;
+    const int read_result = _dupenv_s(&existing, &length, "AZOOKEY_IPC_HANDSHAKE_TOKEN");
+    if (read_result == 0 && (!existing || !*existing)) {
+      installed_handshake_token_ =
+          _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "tip-test-token") == 0;
+      EXPECT_TRUE(installed_handshake_token_);
+    }
+    std::free(existing);
+  }
+
+  ~TextServiceHarness() {
+    service.Deactivate();
+    if (installed_handshake_token_) {
+      _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "");
+    }
+  }
 
   BOOL Press(WPARAM key) {
     BOOL eaten = FALSE;
@@ -679,6 +698,9 @@ class TextServiceHarness {
   KeyboardStateGuard keyboard_state;
   NoopContext context;
   azookey::tsf::TextService service;
+
+ private:
+  bool installed_handshake_token_{false};
 };
 
 class FakeCompositionAttachment {

@@ -3,6 +3,7 @@ target_include_directories(azookey_json PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(azookey_json PUBLIC azookey_project_options PRIVATE azookey_project_warnings)
 
 add_library(azookey_ipc STATIC
+  src/HandshakeToken.cpp
   src/Messages.cpp
   src/NamedPipeTransport.cpp
   src/Payloads.cpp
@@ -21,7 +22,7 @@ if(WIN32)
 
   # advapi32 is required by ConvertStringSecurityDescriptorToSecurityDescriptorW
   # used by the M1 Named Pipe DACL setup.
-  target_link_libraries(azookey_ipc PUBLIC advapi32)
+  target_link_libraries(azookey_ipc PUBLIC advapi32 bcrypt)
 endif()
 
 if(AZOOKEY_BUILD_FUZZERS)

@@ -29,6 +29,7 @@
 #include "azookey/core/UserActionMap.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -129,22 +130,6 @@ void LogCandidateUiBegin(const azookey::tsf::CandidateUiBeginObservation& observ
   } catch (...) {
     // Candidate UI routing must not fail because best-effort diagnostics failed.
   }
-}
-
-std::string IpcHandshakeTokenFromEnv() {
-#if defined(_MSC_VER)
-  char* value = nullptr;
-  size_t length = 0;
-  if (_dupenv_s(&value, &length, "AZOOKEY_IPC_HANDSHAKE_TOKEN") != 0 || value == nullptr) {
-    return {};
-  }
-  std::string result(value);
-  std::free(value);
-  return result;
-#else
-  const char* value = std::getenv("AZOOKEY_IPC_HANDSHAKE_TOKEN");
-  return value ? std::string(value) : std::string();
-#endif
 }
 
 std::wstring Utf8ToWide(const std::string& utf8) {
@@ -2741,7 +2726,12 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   hs.capabilities = {"ping",   "query_candidates", "query_batch_conversion", "commit_observation",
                      "cancel", "secure_flag"};
   hs.client_id = ipc_client_id_;
-  hs.handshake_token = IpcHandshakeTokenFromEnv();
+  const auto token = ReadClientHandshakeToken();
+  if (!token) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_handshake_token_unavailable");
+    return false;
+  }
+  hs.handshake_token = *token;
 
   Envelope henv;
   henv.version = 1;

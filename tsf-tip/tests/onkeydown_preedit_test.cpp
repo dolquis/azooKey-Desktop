@@ -4427,6 +4427,59 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitAfterExternalTerminationDoesNotInse
   EXPECT_EQ(h.service.composition_, nullptr);
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, ExternalReplacementDropsQueuedCandidateObservation) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  candidate.source = "test";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_TRUE(h.service.has_pending_commit_observation_for_test());
+  ASSERT_EQ(h.ExternallyTerminate(L"別"), S_OK);
+
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"別");
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationPostsQueuedCandidateObservationWhenRetained) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  candidate.source = "test";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_TRUE(h.service.has_pending_commit_observation_for_test());
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, "か");
+  EXPECT_EQ(observation->chosen.surface, "蚊");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusKeepsDisplayedCandidateOnce) {
   DocumentPreeditHarness h;
   ASSERT_TRUE(h.Press('K'));

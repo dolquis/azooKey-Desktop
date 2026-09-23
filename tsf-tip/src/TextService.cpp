@@ -4277,6 +4277,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       const std::string pending_commit_surface = service_->commit_surface_;
       const auto pending_commit_observation = service_->pending_commit_observation_;
       const std::wstring surface = Utf8ToWide(pending_commit_surface);
+      bool committed_surface_in_document = true;
       std::wstring terminated_text;
       std::wstring previous_surface;
       if (!service_->terminated_composition_previous_surface_.empty())
@@ -4329,6 +4330,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         } else if (terminated_text != surface) {
           // The application changed the text after our last preedit update.
           // Respect that edit instead of putting the old reading back.
+          committed_surface_in_document = false;
           RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "external_composition_text_changed");
         }
       } else if (service_->composition_) {
@@ -4389,7 +4391,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           return text_hr;
         }
       }
-      post_pending_commit_observation();
+      if (committed_surface_in_document)
+        post_pending_commit_observation();
+      else
+        service_->pending_commit_observation_.reset();
       return S_OK;
     }
 

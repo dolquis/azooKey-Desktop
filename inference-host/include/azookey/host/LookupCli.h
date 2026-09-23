@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+namespace azookey::learning {
+class ByteCrypto;
+}
+
 namespace azookey::host {
 
 enum class LookupCliMode {
@@ -29,6 +33,7 @@ struct LookupCliRunOptions {
   std::filesystem::path learning_path;
   std::filesystem::path user_dict_path;
   std::chrono::milliseconds user_dict_lock_timeout{5000};
+  const learning::ByteCrypto* crypto{nullptr};
 };
 
 struct LookupCliResult {

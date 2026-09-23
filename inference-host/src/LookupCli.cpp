@@ -209,7 +209,7 @@ LookupCliResult RunLookupCli(const LookupCliOptions& options,
       return result;
     }
     if (user_dict_exists) {
-      learning::UserDictionary dictionary(run_options.user_dict_path);
+      learning::UserDictionary dictionary(run_options.user_dict_path, run_options.crypto);
       if (!dictionary.LoadReadOnly()) {
         result.exit_code = 1;
         result.error = "failed to load user dictionary";
@@ -230,7 +230,7 @@ LookupCliResult RunLookupCli(const LookupCliOptions& options,
     return result;
   }
   if (learning_exists) {
-    learning::LearningStore store(run_options.learning_path);
+    learning::LearningStore store(run_options.learning_path, run_options.crypto);
     if (!store.Load()) {
       result.exit_code = 1;
       result.error = "failed to load learning store";

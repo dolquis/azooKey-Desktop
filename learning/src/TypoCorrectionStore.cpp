@@ -347,8 +347,7 @@ bool TypoCorrectionStore::Load() {
     }
     table_[wrong][correct] = rec;
   }
-  if (source == ProtectedFileSource::Plaintext &&
-      !MigratePlaintextFile(path_, text, *crypto_)) {
+  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
     save_blocked_by_load_failure_ = true;
     SecureErase(text);
     return false;

@@ -28,8 +28,7 @@ class TestCrypto final : public ByteCrypto {
 
   bool IsAvailable() const override { return available; }
 
-  bool Encrypt(const std::vector<uint8_t>& plain,
-               std::vector<uint8_t>& cipher) const override {
+  bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
     if (!encrypt_ok) return false;
     if (on_encrypt) on_encrypt();
     cipher = {0xA5};
@@ -37,8 +36,7 @@ class TestCrypto final : public ByteCrypto {
     return true;
   }
 
-  bool Decrypt(const std::vector<uint8_t>& cipher,
-               std::vector<uint8_t>& plain) const override {
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
     if (!decrypt_ok || cipher.empty() || cipher.front() != 0xA5) return false;
     plain.clear();
     for (size_t i = 1; i < cipher.size(); ++i) plain.push_back(cipher[i] ^ 0x5A);
@@ -51,9 +49,9 @@ class TempRoot {
   TempRoot() {
     static std::atomic<unsigned> serial{0};
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    path_ = std::filesystem::temp_directory_path() /
-            ("azookey-dpapi-test-" + std::to_string(stamp) + "-" +
-             std::to_string(serial.fetch_add(1)));
+    path_ =
+        std::filesystem::temp_directory_path() /
+        ("azookey-dpapi-test-" + std::to_string(stamp) + "-" + std::to_string(serial.fetch_add(1)));
     std::filesystem::create_directories(path_);
   }
   ~TempRoot() { std::filesystem::remove_all(path_); }
@@ -87,8 +85,7 @@ TEST(DpapiCryptoTest, SecretPrefixRoundTripAndFailureKinds) {
   ASSERT_EQ(encrypted.status, SecretStatus::Ok);
   EXPECT_TRUE(encrypted.encrypted);
   EXPECT_EQ(encrypted.value.rfind("dpapi:", 0), 0u);
-  EXPECT_EQ(UnprotectSecret(encrypted.value, crypto).value,
-            "key-\xE6\x97\xA5\xE6\x9C\xAC");
+  EXPECT_EQ(UnprotectSecret(encrypted.value, crypto).value, "key-\xE6\x97\xA5\xE6\x9C\xAC");
   EXPECT_FALSE(UnprotectSecret("legacy", crypto).encrypted);
   EXPECT_EQ(UnprotectSecret("dpapi:%%%%", crypto).status, SecretStatus::InvalidEncoding);
   crypto.available = false;
@@ -202,8 +199,7 @@ TEST(DpapiCryptoTest, DictionaryMigrationAndExplicitPlaintextExport) {
   TempRoot root;
   TestCrypto crypto;
   const auto path = root.path() / "user_dict.json";
-  const std::string original =
-      R"({"version":1,"entries":[{"word":"azooKey","ruby":"azookey"}]})";
+  const std::string original = R"({"version":1,"entries":[{"word":"azooKey","ruby":"azookey"}]})";
   Write(path, original);
   UserDictionary dict(path, &crypto);
   ASSERT_TRUE(dict.Load());
@@ -239,8 +235,7 @@ TEST(DpapiCryptoTest, DictionaryMigrationAndExplicitPlaintextExport) {
   EXPECT_EQ(Read(dict.storage_path()), cipher);
   size_t quarantined = 0;
   for (const auto& item : std::filesystem::directory_iterator(root.path())) {
-    if (item.path().filename().string().find(".corrupt.") != std::string::npos)
-      ++quarantined;
+    if (item.path().filename().string().find(".corrupt.") != std::string::npos) ++quarantined;
   }
   EXPECT_EQ(quarantined, 0u);
 }
@@ -281,5 +276,17 @@ TEST(DpapiCryptoTest, WindowsDpapiRoundTripRejectsCorruptBlob) {
   EXPECT_EQ(reloaded, plain);
   cipher.front() ^= 0xff;
   EXPECT_FALSE(DpapiCrypto().Decrypt(cipher, reloaded));
+}
+#else
+TEST(DpapiCryptoTest, NonWindowsProductionCryptoFailsClosed) {
+  const auto& crypto = DpapiCrypto();
+  EXPECT_FALSE(crypto.IsAvailable());
+  EXPECT_EQ(ProtectSecret("key", crypto).status, SecretStatus::CryptoUnavailable);
+
+  TempRoot root;
+  const auto path = root.path() / "learning.tsv";
+  EXPECT_FALSE(WriteProtectedText(path, "reading\tsurface\t1 100\n", crypto));
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(EncryptedPathFor(path)));
 }
 #endif

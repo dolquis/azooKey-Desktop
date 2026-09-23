@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/host/LookupCli.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/FileLock.h"
@@ -53,13 +54,13 @@ std::filesystem::path CreateUniqueTempRoot() {
 }
 
 void SeedStores(const TestPaths& paths) {
-  azookey::learning::UserDictionary dictionary(paths.user_dict);
+  azookey::learning::UserDictionary dictionary(paths.user_dict, &azookey::learning::test::Crypto());
   dictionary.Add({"日本", "にほん", 1285, 501, -5.0});
   dictionary.Add({"日本語", "にほんご", std::nullopt, std::nullopt, -4.0});
   dictionary.Add({"食べる", "たべる", std::nullopt, std::nullopt, std::nullopt});
   ASSERT_TRUE(dictionary.Save());
 
-  azookey::learning::LearningStore learning(paths.learning);
+  azookey::learning::LearningStore learning(paths.learning, &azookey::learning::test::Crypto());
   learning.Observe("にほん", "二本", 1.5, 100);
   learning.Observe("にほんばし", "日本橋", 2.5, 200);
   learning.Observe("たべる", "食べる", 3.5, 300);
@@ -75,7 +76,9 @@ std::optional<azookey::host::LookupCliOptions> Parse(std::initializer_list<const
 
 azookey::host::LookupCliResult RunLookup(const azookey::host::LookupCliOptions& options,
                                          const TestPaths& paths) {
-  return azookey::host::RunLookupCli(options, {paths.learning, paths.user_dict});
+  azookey::host::LookupCliRunOptions run_options{paths.learning, paths.user_dict};
+  run_options.crypto = &azookey::learning::test::Crypto();
+  return azookey::host::RunLookupCli(options, run_options);
 }
 
 }  // namespace
@@ -136,6 +139,7 @@ TEST_F(LookupCliTest, FailsWhenUserDictionaryLockIsUnavailable) {
   }
 
   azookey::host::LookupCliRunOptions run_options{paths.learning, paths.user_dict};
+  run_options.crypto = &azookey::learning::test::Crypto();
   run_options.user_dict_lock_timeout = std::chrono::milliseconds(0);
   const auto result = azookey::host::RunLookupCli(*options, run_options);
 

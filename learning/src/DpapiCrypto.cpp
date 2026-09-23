@@ -34,15 +34,14 @@ class UserDpapiCrypto final : public ByteCrypto {
 #endif
   }
 
-  bool Encrypt(const std::vector<uint8_t>& plain,
-               std::vector<uint8_t>& cipher) const override {
+  bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
 #ifdef _WIN32
     if (plain.size() > (std::numeric_limits<DWORD>::max)()) return false;
-    DATA_BLOB input{static_cast<DWORD>(plain.size()),
-                    const_cast<BYTE*>(plain.data())};
+    DATA_BLOB input{static_cast<DWORD>(plain.size()), const_cast<BYTE*>(plain.data())};
     DATA_BLOB output{};
     if (!::CryptProtectData(&input, L"azooKey-learning", nullptr, nullptr, nullptr,
-                            CRYPTPROTECT_UI_FORBIDDEN, &output)) return false;
+                            CRYPTPROTECT_UI_FORBIDDEN, &output))
+      return false;
     cipher.assign(output.pbData, output.pbData + output.cbData);
     ::LocalFree(output.pbData);
     return true;
@@ -53,14 +52,14 @@ class UserDpapiCrypto final : public ByteCrypto {
 #endif
   }
 
-  bool Decrypt(const std::vector<uint8_t>& cipher,
-               std::vector<uint8_t>& plain) const override {
+  bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const override {
 #ifdef _WIN32
     if (cipher.empty() || cipher.size() > (std::numeric_limits<DWORD>::max)()) return false;
     DATA_BLOB input{static_cast<DWORD>(cipher.size()), const_cast<BYTE*>(cipher.data())};
     DATA_BLOB output{};
-    if (!::CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
-                              CRYPTPROTECT_UI_FORBIDDEN, &output)) return false;
+    if (!::CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
+                              &output))
+      return false;
     if (output.cbData)
       plain.assign(output.pbData, output.pbData + output.cbData);
     else
@@ -96,8 +95,8 @@ class MigrationSource {
  public:
   explicit MigrationSource(const std::filesystem::path& path) : path_(path) {
 #ifdef _WIN32
-    handle_ = ::CreateFileW(path.wstring().c_str(), GENERIC_READ | DELETE, FILE_SHARE_READ,
-                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    handle_ = ::CreateFileW(path.wstring().c_str(), GENERIC_READ | DELETE, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 #endif
   }
   MigrationSource(const MigrationSource&) = delete;
@@ -113,15 +112,15 @@ class MigrationSource {
     if (handle_ == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};
     if (!::GetFileSizeEx(handle_, &size) || size.QuadPart < 0 ||
-        static_cast<unsigned long long>(size.QuadPart) >
-            (std::numeric_limits<size_t>::max)()) return false;
+        static_cast<unsigned long long>(size.QuadPart) > (std::numeric_limits<size_t>::max)())
+      return false;
     LARGE_INTEGER start{};
     if (!::SetFilePointerEx(handle_, start, nullptr, FILE_BEGIN)) return false;
     bytes.resize(static_cast<size_t>(size.QuadPart));
     size_t offset = 0;
     while (offset < bytes.size()) {
-      const DWORD chunk = static_cast<DWORD>(
-          (std::min)(bytes.size() - offset, static_cast<size_t>((std::numeric_limits<DWORD>::max)())));
+      const DWORD chunk = static_cast<DWORD>((std::min)(
+          bytes.size() - offset, static_cast<size_t>((std::numeric_limits<DWORD>::max)())));
       DWORD read = 0;
       if (!::ReadFile(handle_, bytes.data() + offset, chunk, &read, nullptr) || read == 0)
         return false;
@@ -213,10 +212,10 @@ bool DecodeBase64(std::string_view encoded, std::vector<uint8_t>& bytes) {
     const int c = pad2 ? 0 : Base64Digit(encoded[i + 2]);
     const int d = pad3 ? 0 : Base64Digit(encoded[i + 3]);
     if (a < 0 || b < 0 || c < 0 || d < 0 || (pad2 && !pad3) ||
-        ((pad2 || pad3) && i + 4 != encoded.size()) ||
-        (pad2 && (b & 15) != 0) || (pad3 && !pad2 && (c & 3) != 0)) return false;
-    const uint32_t block = (static_cast<uint32_t>(a) << 18) |
-                           (static_cast<uint32_t>(b) << 12) |
+        ((pad2 || pad3) && i + 4 != encoded.size()) || (pad2 && (b & 15) != 0) ||
+        (pad3 && !pad2 && (c & 3) != 0))
+      return false;
+    const uint32_t block = (static_cast<uint32_t>(a) << 18) | (static_cast<uint32_t>(b) << 12) |
                            (static_cast<uint32_t>(c) << 6) | static_cast<uint32_t>(d);
     bytes.push_back(static_cast<uint8_t>(block >> 16));
     if (!pad2) bytes.push_back(static_cast<uint8_t>(block >> 8));
@@ -256,9 +255,8 @@ ProtectedFileSource ReadProtectedText(const std::filesystem::path& plain_path,
   bool encrypted_exists = false;
   if (!Exists(EncryptedPathFor(plain_path), encrypted_exists)) return ProtectedFileSource::Error;
   if (encrypted_exists) {
-    return DecryptFile(EncryptedPathFor(plain_path), crypto, text)
-               ? ProtectedFileSource::Encrypted
-               : ProtectedFileSource::Error;
+    return DecryptFile(EncryptedPathFor(plain_path), crypto, text) ? ProtectedFileSource::Encrypted
+                                                                   : ProtectedFileSource::Error;
   }
   bool plain_exists = false;
   if (!Exists(plain_path, plain_exists)) return ProtectedFileSource::Error;
@@ -296,7 +294,8 @@ bool MigratePlaintextFile(const std::filesystem::path& plain_path, std::string_v
   } else {
     std::error_code ec;
     if (!std::filesystem::copy_file(plain_path, backup, std::filesystem::copy_options::none, ec) ||
-        ec || !FlushFileToDisk(backup)) return false;
+        ec || !FlushFileToDisk(backup))
+      return false;
     std::string copied;
     if (!ReadBytes(backup, copied) || copied != current) return false;
   }
@@ -319,7 +318,8 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
   bool backup_exists = false;
   if (!Exists(plain_path, plain_exists) || plain_exists ||
       !Exists(encrypted_path, encrypted_exists) || !Exists(backup, backup_exists) ||
-      (backup_exists && !encrypted_exists)) return false;
+      (backup_exists && !encrypted_exists))
+    return false;
   if (encrypted_exists) {
     std::string previous;
     const bool can_decrypt = DecryptFile(encrypted_path, crypto, previous);
@@ -336,14 +336,12 @@ SecretResult ProtectSecret(std::string_view plain, const ByteCrypto& crypto) {
   std::vector<uint8_t> cipher;
   const bool encrypted = crypto.Encrypt(input, cipher);
   SecureErase(input);
-  if (!encrypted || cipher.empty())
-    return {SecretStatus::CryptoFailure, {}, false};
+  if (!encrypted || cipher.empty()) return {SecretStatus::CryptoFailure, {}, false};
   return {SecretStatus::Ok, std::string(kSecretPrefix) + EncodeBase64(cipher), true};
 }
 
 SecretResult UnprotectSecret(std::string_view stored, const ByteCrypto& crypto) {
-  if (!stored.starts_with(kSecretPrefix))
-    return {SecretStatus::Ok, std::string(stored), false};
+  if (!stored.starts_with(kSecretPrefix)) return {SecretStatus::Ok, std::string(stored), false};
   stored.remove_prefix(kSecretPrefix.size());
   std::vector<uint8_t> cipher;
   if (!DecodeBase64(stored, cipher)) return {SecretStatus::InvalidEncoding, {}, true};

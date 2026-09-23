@@ -60,8 +60,8 @@ bool WritePrivateFile(const std::filesystem::path& path, std::string_view conten
   DWORD required = 0;
   GetTokenInformation(token, TokenUser, nullptr, 0, &required);
   std::vector<unsigned char> token_info(required);
-  const bool got_user = required > 0 &&
-                        GetTokenInformation(token, TokenUser, token_info.data(), required, &required);
+  const bool got_user =
+      required > 0 && GetTokenInformation(token, TokenUser, token_info.data(), required, &required);
   CloseHandle(token);
   if (!got_user) return false;
 
@@ -71,12 +71,11 @@ bool WritePrivateFile(const std::filesystem::path& path, std::string_view conten
   }
   // Protect the DACL so a permissive parent cannot expose the temporary file
   // before its atomic rename. SYSTEM and administrators retain recovery access.
-  const std::wstring sddl =
-      std::wstring(L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;") + sid + L")";
+  const std::wstring sddl = std::wstring(L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;") + sid + L")";
   LocalFree(sid);
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1,
-                                                              &descriptor, nullptr)) {
+                                                            &descriptor, nullptr)) {
     return false;
   }
   SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
@@ -85,9 +84,9 @@ bool WritePrivateFile(const std::filesystem::path& path, std::string_view conten
   LocalFree(descriptor);
   if (file == INVALID_HANDLE_VALUE) return false;
   DWORD written = 0;
-  const bool ok = WriteFile(file, content.data(), static_cast<DWORD>(content.size()), &written,
-                            nullptr) &&
-                  written == content.size() && FlushFileBuffers(file);
+  const bool ok =
+      WriteFile(file, content.data(), static_cast<DWORD>(content.size()), &written, nullptr) &&
+      written == content.size() && FlushFileBuffers(file);
   CloseHandle(file);
   if (!ok) {
     DeleteFileW(path.c_str());
@@ -136,7 +135,7 @@ std::optional<std::string> GenerateHandshakeToken() {
   std::array<unsigned char, 16> bytes{};
 #ifdef _WIN32
   if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(bytes.size()),
-                                       BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
     return std::nullopt;
   }
 #else
@@ -160,17 +159,19 @@ bool PublishHandshakeToken(const std::filesystem::path& path, std::string_view t
 
   static std::atomic<uint64_t> sequence{0};
   auto temp = path;
-  temp += ".tmp." + std::to_string(
+  temp += ".tmp." +
+          std::to_string(
 #ifdef _WIN32
-      GetCurrentProcessId()
+              GetCurrentProcessId()
 #else
-      std::chrono::steady_clock::now().time_since_epoch().count()
+              std::chrono::steady_clock::now().time_since_epoch().count()
 #endif
-  ) + "." + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+                  ) +
+          "." + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
 #ifdef _WIN32
   if (!WritePrivateFile(temp, token)) return false;
   const bool renamed = MoveFileExW(temp.c_str(), path.c_str(),
-                                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+                                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
   if (!renamed) DeleteFileW(temp.c_str());
   return renamed;
 #else

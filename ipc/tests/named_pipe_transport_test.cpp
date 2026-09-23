@@ -743,9 +743,8 @@ TEST(NamedPipeTransportTest, MalformedBinaryFixturesDisconnectWithinFrameDeadlin
     const char* name;
     size_t size;
   };
-  constexpr FixtureCase cases[] = {{"truncated-frame.bin", 2},
-                                   {"zero-byte-frame.bin", 4},
-                                   {"length-mismatch-frame.bin", 7}};
+  constexpr FixtureCase cases[] = {
+      {"truncated-frame.bin", 2}, {"zero-byte-frame.bin", 4}, {"length-mismatch-frame.bin", 7}};
   for (const auto& test_case : cases) {
     SCOPED_TRACE(test_case.name);
     const auto frame = ReadFrameFixture(test_case.name);

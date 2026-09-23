@@ -4,6 +4,7 @@
 #include <fstream>
 #include <string>
 
+#include "TestByteCrypto.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DpapiCrypto.h"
 
@@ -36,7 +37,8 @@ void WriteFile(const std::filesystem::path& path, const std::string& content) {
 }  // namespace
 
 TEST(AutoWordStoreTest, ObserveAddsPendingThenCountsRepeats) {
-  AutoWordStore store(TempPath("azookey_auto_word_observe.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_observe.tsv"),
+                      &azookey::learning::test::Crypto());
 
   EXPECT_FALSE(store.Observe("あずきー", "あずきー", kNow, 3, false));
   EXPECT_EQ(store.Size(), 1u);
@@ -56,7 +58,8 @@ TEST(AutoWordStoreTest, ObserveAddsPendingThenCountsRepeats) {
 }
 
 TEST(AutoWordStoreTest, ConfirmModeNeverPromotesAutomatically) {
-  AutoWordStore store(TempPath("azookey_auto_word_confirm_mode.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_confirm_mode.tsv"),
+                      &azookey::learning::test::Crypto());
 
   // auto_promote = false is registrationMode "confirm": the threshold is never
   // consulted, however many times the word is typed.
@@ -69,7 +72,8 @@ TEST(AutoWordStoreTest, ConfirmModeNeverPromotesAutomatically) {
 }
 
 TEST(AutoWordStoreTest, AutoModePromotesAtTheThreshold) {
-  AutoWordStore store(TempPath("azookey_auto_word_auto_mode.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_auto_mode.tsv"),
+                      &azookey::learning::test::Crypto());
 
   EXPECT_FALSE(store.Observe("あずきー", "あずきー", kNow, 3, true));
   EXPECT_FALSE(store.Observe("あずきー", "あずきー", kNow, 3, true));
@@ -85,7 +89,8 @@ TEST(AutoWordStoreTest, AutoModePromotesAtTheThreshold) {
 }
 
 TEST(AutoWordStoreTest, RejectedWordsAreNeverOfferedAgain) {
-  AutoWordStore store(TempPath("azookey_auto_word_rejected.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_rejected.tsv"),
+                      &azookey::learning::test::Crypto());
   store.Observe("あずきー", "あずきー", kNow, 3, false);
   ASSERT_TRUE(store.Reject("あずきー", "あずきー"));
 
@@ -105,7 +110,7 @@ TEST(AutoWordStoreTest, RejectedWordsAreNeverOfferedAgain) {
 }
 
 TEST(AutoWordStoreTest, ConfirmRejectAndLookupConfirmed) {
-  AutoWordStore store(TempPath("azookey_auto_word_states.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_states.tsv"), &azookey::learning::test::Crypto());
   store.Observe("あずきー", "あずきー", kNow, 3, false);
   store.Observe("あずきー社", "あずきー", kNow, 3, false);
 
@@ -124,7 +129,8 @@ TEST(AutoWordStoreTest, ConfirmRejectAndLookupConfirmed) {
 }
 
 TEST(AutoWordStoreTest, IngestTrendingSkipsRejectedAndKeepsMiningSource) {
-  AutoWordStore store(TempPath("azookey_auto_word_trending.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_trending.tsv"),
+                      &azookey::learning::test::Crypto());
   store.Observe("あずきー", "あずきー", kNow, 3, false);
   store.Observe("きゃくたい", "きゃくたい", kNow, 3, false);
   ASSERT_TRUE(store.Reject("きゃくたい", "きゃくたい"));
@@ -177,7 +183,7 @@ TEST(AutoWordStoreTest, IngestTrendingSkipsRejectedAndKeepsMiningSource) {
 }
 
 TEST(AutoWordStoreTest, PrunePendingDropsOnlyStalePendingWords) {
-  AutoWordStore store(TempPath("azookey_auto_word_prune.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_prune.tsv"), &azookey::learning::test::Crypto());
   store.Observe("ふるいご", "ふるいご", kNow - 100 * kDay, 3, false);
   store.Observe("あたらしいご", "あたらしいご", kNow, 3, false);
   store.Observe("かくていご", "かくていご", kNow - 100 * kDay, 3, false);
@@ -196,7 +202,7 @@ TEST(AutoWordStoreTest, PrunePendingDropsOnlyStalePendingWords) {
 TEST(AutoWordStoreTest, SaveLoadRoundTrip) {
   const auto path = TempPath("azookey_auto_word_roundtrip.tsv");
   {
-    AutoWordStore store(path);
+    AutoWordStore store(path, &azookey::learning::test::Crypto());
     store.Observe("あずきー", "あずきー", kNow, 3, false);
     store.Observe("あずきー", "あずきー", kNow + 5, 3, false);
     store.Observe("かくていご", "かくていご", kNow, 3, false);
@@ -206,7 +212,7 @@ TEST(AutoWordStoreTest, SaveLoadRoundTrip) {
     ASSERT_TRUE(store.Save());
   }
 
-  AutoWordStore reloaded(path);
+  AutoWordStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   EXPECT_EQ(reloaded.Size(), 3u);
   const auto pending = reloaded.ListByState(AutoWordState::Pending);
@@ -230,7 +236,7 @@ TEST(AutoWordStoreTest, ScoreSurvivesSaveLoadExactly) {
   const double first = 1.0 / 3.0;
   const double second = 0.1 + 0.2;
   {
-    AutoWordStore store(path);
+    AutoWordStore store(path, &azookey::learning::test::Crypto());
     store.IngestTrending({AutoWord{"推し活", "おしかつ", AutoWordSource::Trending,
                                    AutoWordState::Pending, 1, 0, 0, first},
                           AutoWord{"界隈", "かいわい", AutoWordSource::Trending,
@@ -239,7 +245,7 @@ TEST(AutoWordStoreTest, ScoreSurvivesSaveLoadExactly) {
     ASSERT_TRUE(store.Save());
   }
 
-  AutoWordStore reloaded(path);
+  AutoWordStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   for (const auto& word : reloaded.ListByState(AutoWordState::Pending)) {
     EXPECT_EQ(word.score, word.surface == "推し活" ? first : second) << word.surface;
@@ -251,7 +257,8 @@ TEST(AutoWordStoreTest, ScoreSurvivesSaveLoadExactly) {
 }
 
 TEST(AutoWordStoreTest, SetStateReportsThePreviousState) {
-  AutoWordStore store(TempPath("azookey_auto_word_set_state.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_set_state.tsv"),
+                      &azookey::learning::test::Crypto());
   EXPECT_FALSE(store.SetState("なし", "なし", AutoWordState::Confirmed));
 
   store.Observe("あずきー", "あずきー", kNow, 3, false);
@@ -278,12 +285,12 @@ TEST(AutoWordStoreTest, RoundTripsSurfacesContainingTabs) {
   const auto path = TempPath("azookey_auto_word_escape.tsv");
   const std::string surface = "あず\tきー";
   {
-    AutoWordStore store(path);
+    AutoWordStore store(path, &azookey::learning::test::Crypto());
     store.Observe(surface, "あずきー", kNow, 3, false);
     ASSERT_TRUE(store.Save());
   }
 
-  AutoWordStore reloaded(path);
+  AutoWordStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   const auto pending = reloaded.ListByState(AutoWordState::Pending);
   ASSERT_EQ(pending.size(), 1u);
@@ -294,7 +301,8 @@ TEST(AutoWordStoreTest, RoundTripsSurfacesContainingTabs) {
 }
 
 TEST(AutoWordStoreTest, MissingFileLoadsAsEmptyStore) {
-  AutoWordStore store(TempPath("azookey_auto_word_missing.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_missing.tsv"),
+                      &azookey::learning::test::Crypto());
   EXPECT_TRUE(store.Load());
   EXPECT_EQ(store.Size(), 0u);
 }
@@ -312,7 +320,7 @@ TEST(AutoWordStoreTest, SkipsCorruptRowsAndKeepsTheRest) {
             "\t\tmining\tpending\t1\t1700000000\t1700000000\t0\n"
             "かくてい\tかくてい\ttrending\tconfirmed\t7\t1700000000\t1700000100\t0.75\n");
 
-  AutoWordStore store(path);
+  AutoWordStore store(path, &azookey::learning::test::Crypto());
   // A corrupt file is not a failed load: the readable rows are kept.
   EXPECT_TRUE(store.Load());
   EXPECT_EQ(store.Size(), 2u);
@@ -330,7 +338,7 @@ TEST(AutoWordStoreTest, SkipsCorruptRowsAndKeepsTheRest) {
 }
 
 TEST(AutoWordStoreTest, ResetClearsTheTable) {
-  AutoWordStore store(TempPath("azookey_auto_word_reset.tsv"));
+  AutoWordStore store(TempPath("azookey_auto_word_reset.tsv"), &azookey::learning::test::Crypto());
   store.Observe("あずきー", "あずきー", kNow, 3, false);
   ASSERT_EQ(store.Size(), 1u);
 
@@ -345,12 +353,12 @@ TEST(AutoWordStoreTest, RoundTripsSurfacesThatStartWithAComment) {
   // whole record on the next read.
   const std::string surface = "#タグ";
   {
-    AutoWordStore store(path);
+    AutoWordStore store(path, &azookey::learning::test::Crypto());
     store.Observe(surface, "たぐ", kNow, 3, false);
     ASSERT_TRUE(store.Save());
   }
 
-  AutoWordStore reloaded(path);
+  AutoWordStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   const auto pending = reloaded.ListByState(AutoWordState::Pending);
   ASSERT_EQ(pending.size(), 1u);

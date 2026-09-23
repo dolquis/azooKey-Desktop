@@ -23,8 +23,8 @@
 #include <vector>
 
 #include "../../core/tests/EtwCapture.h"
-#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/HandshakeToken.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
@@ -667,8 +667,7 @@ class TextServiceHarness {
     size_t length = 0;
     const int read_result = _dupenv_s(&existing, &length, "AZOOKEY_IPC_HANDSHAKE_TOKEN");
     if (read_result == 0 && (!existing || !*existing)) {
-      installed_handshake_token_ =
-          _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "tip-test-token") == 0;
+      installed_handshake_token_ = _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "tip-test-token") == 0;
       EXPECT_TRUE(installed_handshake_token_);
     }
     std::free(existing);

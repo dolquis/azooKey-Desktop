@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
@@ -250,7 +251,8 @@ class PredictionConverter final : public azookey::core::IConverter {
 class ThrowingLearningStore final : public azookey::learning::LearningStore {
  public:
   ThrowingLearningStore()
-      : azookey::learning::LearningStore(TempPath("azookey_host_engine_reranker_throw.tsv")) {}
+      : azookey::learning::LearningStore(TempPath("azookey_host_engine_reranker_throw.tsv"),
+                                         &azookey::learning::test::Crypto()) {}
 
   double Score(const std::string&, const std::string&, uint64_t) const override {
     throw std::runtime_error("score failure");
@@ -288,7 +290,7 @@ TEST(InferenceEngineTest, LocalAiCleanupRealModelSmoke) {
 TEST(InferenceEngineTest, QueryWithLearningBoost) {
   const char* path = "azookey_host_engine_learning.tsv";
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   auto engine = MakeEngine(store);
 
@@ -355,7 +357,7 @@ TEST(InferenceEngineTest, ConfiguredCandidateLimitCanExceedLegacyTipLimit) {
 TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_count.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -385,7 +387,7 @@ TEST(InferenceEngineTest, CommitObservationDebouncesUntilCountThreshold) {
 TEST(InferenceEngineTest, CommitObservationIgnoresRepeatedObservationId) {
   const std::string path = TempPath("azookey_host_engine_observation_id_dedupe.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -413,7 +415,7 @@ TEST(InferenceEngineTest, CommitObservationIgnoresRepeatedObservationId) {
 TEST(InferenceEngineTest, CommitObservationWithoutObservationIdIsNeverDeduped) {
   const std::string path = TempPath("azookey_host_engine_observation_id_absent.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -436,7 +438,7 @@ TEST(InferenceEngineTest, CommitObservationWithoutObservationIdIsNeverDeduped) {
 TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
   const std::string path = TempPath("azookey_host_engine_observation_id_evict.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -466,7 +468,7 @@ TEST(InferenceEngineTest, CommitObservationDedupeRingEvictsOldestIds) {
 TEST(InferenceEngineTest, CommitObservationDedupeSurvivesAnotherTipsFullBacklog) {
   const std::string path = TempPath("azookey_host_engine_observation_id_multi_tip.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -495,7 +497,7 @@ TEST(InferenceEngineTest, CommitObservationDedupeSurvivesAnotherTipsFullBacklog)
 TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
   const std::string path = TempPath("azookey_host_engine_learning_debounce_interval.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -522,7 +524,7 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterInterval) {
 TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObservation) {
   const std::string path = TempPath("azookey_host_engine_learning_idle_interval.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -541,7 +543,7 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
   // The flush renames a complete temp file into place, so a failed Load here
   // is an open that lost to another handle on the fresh file (the rename
   // itself, or a scanner on CI runners). Retry the open instead of reading once.
-  azookey::learning::LearningStore loaded(path);
+  azookey::learning::LearningStore loaded(path, &azookey::learning::test::Crypto());
   const auto load_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
   bool load_ok = loaded.Load();
   while (!load_ok && std::chrono::steady_clock::now() < load_deadline) {
@@ -558,7 +560,7 @@ TEST(InferenceEngineTest, CommitObservationFlushesAfterIntervalWithoutAnotherObs
 TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
   const std::string path = TempPath("azookey_host_engine_learning_flush.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -583,7 +585,7 @@ TEST(InferenceEngineTest, FlushLearningStorePersistsPendingObservation) {
 TEST(InferenceEngineTest, PrunesLearningStoreOnlyAtFlushBoundary) {
   const std::string path = TempPath("azookey_host_engine_learning_prune_on_flush.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -617,7 +619,7 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
   const auto blocked_path = root / "learning-as-directory.tsv";
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(blocked_path);
-  azookey::learning::LearningStore store(blocked_path.string());
+  azookey::learning::LearningStore store(blocked_path.string(), &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -643,7 +645,7 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
 TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicitFlush) {
   const std::string path = TempPath("azookey_host_engine_learning_burst_start.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -656,7 +658,7 @@ TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicit
   EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
   EXPECT_FALSE(store.dirty());
 
-  azookey::learning::LearningStore loaded(path);
+  azookey::learning::LearningStore loaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   EXPECT_GT(loaded.Score("reading", "surface", kNowBase + 1), 0.0);
 
@@ -667,7 +669,7 @@ TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicit
 TEST(InferenceEngineTest, BurstStartFlushIsRateLimitedWithinInterval) {
   const std::string path = TempPath("azookey_host_engine_learning_burst_rate_limit.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.learning_alpha = 0.8;
@@ -691,12 +693,12 @@ TEST(InferenceEngineTest, BurstStartFlushIsRateLimitedWithinInterval) {
 TEST(InferenceEngineTest, UserDictionaryInjection) {
   const char* lpath = "azookey_host_engine_user_dict_learn.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string udict_path =
       (std::filesystem::temp_directory_path() / "azookey_host_engine_user.json").string();
-  azookey::learning::UserDictionary dict(udict_path);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
   azookey::learning::UserWord w;
   w.word = "azooKey";
   w.ruby = "あずきい";
@@ -725,9 +727,9 @@ TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
   RemoveProtectedStoreFile(lpath);
   RemoveProtectedStoreFile(udict_path);
 
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
-  azookey::learning::UserDictionary dict(udict_path);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   engine->SetUserDictionary(&dict);
 
@@ -735,7 +737,7 @@ TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
   external.word = "External";
   external.ruby = "external";
   {
-    azookey::learning::UserDictionary writer(udict_path);
+    azookey::learning::UserDictionary writer(udict_path, &azookey::learning::test::Crypto());
     ASSERT_TRUE(writer.Load());
     writer.Add(external);
     ASSERT_TRUE(writer.Save());
@@ -746,7 +748,7 @@ TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
   added.ruby = "added";
   ASSERT_TRUE(engine->AddUserWord(added));
 
-  azookey::learning::UserDictionary loaded(udict_path);
+  azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   EXPECT_EQ(loaded.Lookup("external").size(), 1u);
   EXPECT_EQ(loaded.Lookup("added").size(), 1u);
@@ -761,9 +763,9 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
   RemoveProtectedStoreFile(lpath);
   RemoveProtectedStoreFile(udict_path);
 
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
-  azookey::learning::UserDictionary dict(udict_path);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   engine->SetUserDictionary(&dict);
 
@@ -771,7 +773,7 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
   external.word = "External";
   external.ruby = "external";
   {
-    azookey::learning::UserDictionary writer(udict_path);
+    azookey::learning::UserDictionary writer(udict_path, &azookey::learning::test::Crypto());
     ASSERT_TRUE(writer.Load());
     writer.Add(external);
     ASSERT_TRUE(writer.Save());
@@ -779,7 +781,7 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
 
   ASSERT_TRUE(engine->RemoveUserWord("External", "external"));
 
-  azookey::learning::UserDictionary loaded(udict_path);
+  azookey::learning::UserDictionary loaded(udict_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   EXPECT_TRUE(loaded.Lookup("external").empty());
 
@@ -790,7 +792,7 @@ TEST(InferenceEngineTest, RemoveUserWordReloadsDiskBeforeSaving) {
 TEST(InferenceEngineTest, CancelEarlyReturn) {
   const char* lpath = "azookey_host_engine_cancel.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   std::atomic<bool> cancel{true};
@@ -807,7 +809,7 @@ TEST(InferenceEngineTest, CancelEarlyReturn) {
 TEST(InferenceEngineTest, LegacyOverloadStillWorks) {
   const char* lpath = "azookey_host_engine_legacy.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   // Three-argument overload exists for backwards compatibility with main.cpp
@@ -842,7 +844,7 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
 TEST(InferenceEngineTest, PredictionsPrependLearningDeduplicateAndCapDisplayCount) {
   const auto path = TempPath("azookey_host_prediction_learning.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
   store.Observe("にほんご", "日本語", 5.0, kNowBase);
   store.Observe("にほんじん", "日本人", 4.0, kNowBase);
   store.Observe("にほんしゅ", "日本酒", 3.0, kNowBase);
@@ -879,7 +881,7 @@ TEST(InferenceEngineTest, PredictionsPrependLearningDeduplicateAndCapDisplayCoun
 TEST(InferenceEngineTest, PredictionsExcludeExactReadingAndApplyUpdatedLearningConfig) {
   const auto path = TempPath("azookey_host_prediction_exact.tsv");
   RemoveProtectedStoreFile(path);
-  azookey::learning::LearningStore store(path);
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
   store.Observe("にほん", "完全一致", 10.0, kNowBase);
   store.Observe("にほんご", "日本語", 1.0, kNowBase);
   store.Observe("にほんじん", "日本人", 0.5, kNowBase);
@@ -906,7 +908,7 @@ TEST(InferenceEngineTest, PredictionsExcludeExactReadingAndApplyUpdatedLearningC
 TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {
   const char* lpath = "azookey_host_engine_load_empty.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const auto result = engine->LoadModelWithResult();
@@ -926,7 +928,7 @@ TEST(InferenceEngineTest, LoadModelFallbackWithoutPath) {
 TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
   const char* lpath = "azookey_host_engine_load_missing.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   azookey::host::EngineConfig config;
   config.inference_threads = 6;
   auto engine = MakeEngine(store, config);
@@ -957,7 +959,8 @@ TEST(InferenceEngineTest, LoadModelRecordsOptionsAndMissingPath) {
 
 TEST(InferenceEngineTest, ResolvedPowerProfileThreadsSurviveRuntimeAndModelReloads) {
   using namespace azookey::host;
-  azookey::learning::LearningStore store(TempPath("azookey_power_profile_reload.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_power_profile_reload.tsv"),
+                                         &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
   RuntimeSettings settings;
   int queries = 0;
@@ -990,7 +993,7 @@ TEST(InferenceEngineTest, StartModelPreloadKeepsFallbackResponsiveWhileLoadIsPen
 
   const char* lpath = "azookey_host_engine_preload_pending.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   std::promise<void> probe_entered_promise;
@@ -1099,7 +1102,7 @@ TEST(InferenceEngineTest, LoadModelAcceptsNonAsciiUtf8Path) {
 
   const char* lpath = "azookey_host_engine_load_non_ascii.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   // UTF-8 bytes for 日本語モデル.gguf.
@@ -1144,7 +1147,7 @@ TEST(InferenceEngineTest, ProbeZenzaiGgufModelClassifiesUnsupportedVersion) {
 TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
   const char* lpath = "azookey_host_engine_load_diagnostic.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_invalid_llama_model.gguf");
@@ -1268,7 +1271,7 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
 
   const char* lpath = "azookey_host_engine_load_valid.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_minimal_zenzai.gguf");
@@ -1312,7 +1315,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly)
 
   const char* lpath = "azookey_host_engine_zenzai_no_mock.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_no_mock_zenzai.gguf");
@@ -1346,7 +1349,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
 
   const char* lpath = "azookey_host_engine_zenzai_degraded.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_degraded_zenzai.gguf");
@@ -1427,7 +1430,7 @@ TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
 
   const char* lpath = "azookey_host_engine_zenzai_live_top_one.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_live_top_one_zenzai.gguf");
@@ -1465,7 +1468,7 @@ TEST(InferenceEngineTest, CanceledZenzaiConvertPreservesDegradedHealth) {
 
   const char* lpath = "azookey_host_engine_zenzai_cancel_health.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_cancel_health_zenzai.gguf");
@@ -1502,7 +1505,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeRejectsInvalidUtf8Surface) {
 
   const char* lpath = "azookey_host_engine_zenzai_invalid_utf8.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_invalid_utf8_zenzai.gguf");
@@ -1535,7 +1538,7 @@ TEST(InferenceEngineTest, DeadlineBestSoFarTrimsOnlyIncompleteUtf8Suffix) {
 
   const char* lpath = "azookey_host_engine_zenzai_deadline_utf8.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_deadline_utf8_zenzai.gguf");
@@ -1629,7 +1632,7 @@ TEST(InferenceEngineTest, PlansPrunedBeamSequencesWithoutUnnecessaryCopies) {
 TEST(InferenceEngineTest, ModelConversionDeadlineUsesSixHundredMillisecondBudget) {
   const char* lpath = "azookey_host_engine_model_budget.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
 
   auto converter = std::make_unique<DeadlineCapturingConverter>();
   auto* converter_ptr = converter.get();
@@ -1655,7 +1658,7 @@ TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
 
   const char* lpath = "azookey_host_engine_zenzai_sane_unique.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_sane_unique_zenzai.gguf");
@@ -1692,7 +1695,7 @@ TEST(InferenceEngineTest, ZenzaiCandidateLimitCountsOnlySaneUniqueCandidates) {
 TEST(InferenceEngineTest, LoadModelRejectsInvalidGguf) {
   const char* lpath = "azookey_host_engine_load_invalid.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_invalid_zenzai.gguf");
@@ -1718,7 +1721,7 @@ TEST(InferenceEngineTest, VulkanFailureFallsBackToCpuAndRetainsHealthError) {
   }
   const char* learning_path = "azookey_host_engine_vulkan_fallback.tsv";
   std::remove(learning_path);
-  azookey::learning::LearningStore store(learning_path);
+  azookey::learning::LearningStore store(learning_path, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
   const auto model_path = TempPath("azookey_vulkan_fallback.gguf");
   WriteMinimalGguf(model_path);
@@ -1744,7 +1747,7 @@ TEST(InferenceEngineTest, VulkanFailureFallsBackToCpuAndRetainsHealthError) {
 TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsRetainBothErrors) {
   const char* learning_path = "azookey_host_engine_both_backends_fail.tsv";
   std::remove(learning_path);
-  azookey::learning::LearningStore store(learning_path);
+  azookey::learning::LearningStore store(learning_path, &azookey::learning::test::Crypto());
   const auto model_path = TempPath("azookey_both_backends_fail.gguf");
   WriteMinimalGguf(model_path);
   for (const bool unknown_exception : {false, true}) {
@@ -1788,7 +1791,7 @@ TEST(InferenceEngineTest, LoadModelCudaFallsBackToCpuForNow) {
 
   const char* lpath = "azookey_host_engine_load_cuda.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_cuda_fallback_zenzai.gguf");
@@ -1823,7 +1826,7 @@ TEST(InferenceEngineTest, LoadModelFailureKeepsPreviouslyLoadedModel) {
 
   const char* lpath = "azookey_host_engine_reload_failure.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_reload_success_zenzai.gguf");
@@ -1866,7 +1869,7 @@ TEST(InferenceEngineTest, LoadModelSuccessDoesNotChainWrappers) {
 
   const char* lpath = "azookey_host_engine_reload_success.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_reload_chain_zenzai.gguf");
@@ -1897,13 +1900,13 @@ TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel)
 
   const char* lpath = "azookey_host_engine_user_dict_zenzai_dedup.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string udict_path =
       (std::filesystem::temp_directory_path() / "azookey_host_engine_user_zenzai.json").string();
   RemoveProtectedStoreFile(udict_path);
-  azookey::learning::UserDictionary dict(udict_path);
+  azookey::learning::UserDictionary dict(udict_path, &azookey::learning::test::Crypto());
   azookey::learning::UserWord w;
   w.word = "日本語";
   w.ruby = "にほんご";
@@ -1942,7 +1945,7 @@ TEST(InferenceEngineTest, UserDictionaryDuplicateKeepsUserSourceOverZenzaiModel)
 TEST(InferenceEngineTest, LoadModelStateAccessorsThreadedSmoke) {
   const char* lpath = "azookey_host_engine_load_threaded.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   std::thread writer([&engine]() {
@@ -1982,7 +1985,7 @@ TEST(InferenceEngineTest, QueryCandidatesKeepsHealthAndModelSwapResponsive) {
 
   const char* lpath = "azookey_host_engine_query_load_responsive.tsv";
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
 
   auto converter = std::make_unique<BlockingConverter>();
   auto* blocking_converter = converter.get();
@@ -2071,8 +2074,10 @@ bool HasCandidateMarked(const std::vector<azookey::core::Candidate>& candidates,
 }  // namespace
 
 TEST(EngineTypoCorrectionTest, SuggestInjectsAMarkedCandidateOnlyOverTheThreshold) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_suggest_learning.tsv"));
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_suggest.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_suggest_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_suggest.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "suggest";
@@ -2099,8 +2104,10 @@ TEST(EngineTypoCorrectionTest, SuggestInjectsAMarkedCandidateOnlyOverTheThreshol
 }
 
 TEST(EngineTypoCorrectionTest, AutoReplaceConvertsTheCorrectedReadingAndReportsIt) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_auto_learning.tsv"));
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_auto.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_auto_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_auto.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "auto_replace";
@@ -2121,8 +2128,10 @@ TEST(EngineTypoCorrectionTest, AutoReplaceConvertsTheCorrectedReadingAndReportsI
 }
 
 TEST(EngineTypoCorrectionTest, OffInjectsNothingAndLearnsNothing) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_off_learning.tsv"));
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_off.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_off_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_off.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "off";
@@ -2143,7 +2152,8 @@ TEST(EngineTypoCorrectionTest, OffInjectsNothingAndLearnsNothing) {
 }
 
 TEST(EngineTypoCorrectionTest, WithoutAStoreQueryIsUnchanged) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_nostore_learning.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_nostore_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "suggest";
   auto engine = MakeEngine(store, cfg);
@@ -2156,8 +2166,10 @@ TEST(EngineTypoCorrectionTest, WithoutAStoreQueryIsUnchanged) {
 // ---- M36-A: new word mining ----
 
 TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.auto_word_mining_enabled = true;
@@ -2183,8 +2195,10 @@ TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending
 }
 
 TEST(EngineAutoWordMiningTest, AutoModeConfirmsAtTheThreshold) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_auto_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_auto.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_auto_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_auto.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.auto_word_mining_enabled = true;
@@ -2200,9 +2214,12 @@ TEST(EngineAutoWordMiningTest, AutoModeConfirmsAtTheThreshold) {
 }
 
 TEST(EngineAutoWordMiningTest, KnownWordsAndNoisyShapesAreNotMined) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_filters_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_filters.tsv"));
-  azookey::learning::UserDictionary user_dict(TempPath("azookey_engine_mining_userdict.json"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_filters_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_filters.tsv"),
+                                              &azookey::learning::test::Crypto());
+  azookey::learning::UserDictionary user_dict(TempPath("azookey_engine_mining_userdict.json"),
+                                              &azookey::learning::test::Crypto());
   azookey::learning::UserWord registered;
   registered.word = "azooKey社";
   registered.ruby = "あずきーしゃ";
@@ -2229,8 +2246,10 @@ TEST(EngineAutoWordMiningTest, KnownWordsAndNoisyShapesAreNotMined) {
 }
 
 TEST(EngineAutoWordMiningTest, MiningDisabledAndNoStoreAreBothNoOps) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_off_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_off.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_off_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_off.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.auto_word_mining_enabled = false;
@@ -2247,8 +2266,10 @@ TEST(EngineAutoWordMiningTest, MiningDisabledAndNoStoreAreBothNoOps) {
 }
 
 TEST(EngineAutoWordMiningTest, DuplicateObservationIdIsNotMinedTwice) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_dedupe_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_dedupe.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_dedupe_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_dedupe.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.auto_word_mining_enabled = true;
@@ -2264,8 +2285,10 @@ TEST(EngineAutoWordMiningTest, DuplicateObservationIdIsNotMinedTwice) {
 }
 
 TEST(EngineAutoWordMiningTest, ModelBackendStillConsultsTheFallbackLexicon) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_zenzai_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_zenzai.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_zenzai_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_zenzai.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.auto_word_mining_enabled = true;
@@ -2306,8 +2329,10 @@ const azookey::core::Candidate* FindAutoWord(
 }  // namespace
 
 TEST(EngineAutoWordInjectionTest, ConfirmedWordsAreInjectedAndPendingWordsAreNot) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject.tsv"),
+                                              &azookey::learning::test::Crypto());
   auto_words.Observe("阿頭季", "あずき", kNowBase, 3, false);
   auto_words.Observe("小豆期", "あずき", kNowBase, 3, false);
   ASSERT_TRUE(auto_words.Confirm("阿頭季", "あずき"));
@@ -2332,8 +2357,10 @@ TEST(EngineAutoWordInjectionTest, ConfirmedWordsAreInjectedAndPendingWordsAreNot
 }
 
 TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_confirm_learning.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject_confirm.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_confirm_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject_confirm.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.auto_word_mining_enabled = true;
@@ -2356,9 +2383,12 @@ TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
 }
 
 TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_applyconfig_learning.tsv"));
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_applyconfig_typo.tsv"));
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_applyconfig_words.tsv"));
+  azookey::learning::LearningStore store(TempPath("azookey_engine_applyconfig_learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_applyconfig_typo.tsv"),
+                                              &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_applyconfig_words.tsv"),
+                                              &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "suggest";
@@ -2399,7 +2429,7 @@ TEST(InferenceEngineTest, ModelLoadOutcomesDriveTheHealthState) {
   }
   const std::string lpath = TempPath("azookey_host_engine_health_state.tsv");
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
   EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
@@ -2446,7 +2476,7 @@ TEST(InferenceEngineTest, SafeModeEnteredDuringALoadDiscardsTheModel) {
   }
   const std::string lpath = TempPath("azookey_host_engine_health_safe_mode_race.tsv");
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
 
   const std::string model_path = TempPath("azookey_host_engine_health_safe_mode_race.gguf");
@@ -2473,7 +2503,7 @@ TEST(InferenceEngineTest, SafeModeEnteredDuringALoadDiscardsTheModel) {
 TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
   const std::string lpath = TempPath("azookey_host_engine_health_safe_mode.tsv");
   RemoveProtectedStoreFile(lpath);
-  azookey::learning::LearningStore store(lpath);
+  azookey::learning::LearningStore store(lpath, &azookey::learning::test::Crypto());
   auto engine = MakeEngine(store);
   ASSERT_TRUE(engine->ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected));
   EXPECT_EQ(engine->health_state(), azookey::host::HealthState::SafeMode);

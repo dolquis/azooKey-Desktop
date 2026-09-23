@@ -14,10 +14,8 @@ namespace azookey::learning {
 class ByteCrypto {
  public:
   virtual ~ByteCrypto() = default;
-  virtual bool Encrypt(const std::vector<uint8_t>& plain,
-                       std::vector<uint8_t>& cipher) const = 0;
-  virtual bool Decrypt(const std::vector<uint8_t>& cipher,
-                       std::vector<uint8_t>& plain) const = 0;
+  virtual bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const = 0;
+  virtual bool Decrypt(const std::vector<uint8_t>& cipher, std::vector<uint8_t>& plain) const = 0;
   virtual bool IsAvailable() const { return true; }
 };
 

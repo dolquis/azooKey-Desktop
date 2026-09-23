@@ -39,12 +39,12 @@
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/host/UserDictCli.h"
-#include "azookey/ipc/Messages.h"
 #include "azookey/ipc/HandshakeToken.h"
+#include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
-#include "azookey/learning/FileLock.h"
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/FileLock.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -352,8 +352,8 @@ int main(int argc, char** argv) {
       std::cerr << "error: " << parse_error << std::endl;
       return 2;
     }
-    if (cli_options->command != azookey::host::NewWordsCliCommand::List &&
-        !cli_options->offline && !resolve_client_token()) {
+    if (cli_options->command != azookey::host::NewWordsCliCommand::List && !cli_options->offline &&
+        !resolve_client_token()) {
       std::cerr << "error: IPC handshake token unavailable" << std::endl;
       return 2;
     }
@@ -654,8 +654,7 @@ int main(int argc, char** argv) {
       }
     }
     if (handshake_token.empty()) {
-      runtime_log.Log(azookey::logging::RuntimeLogLevel::Error,
-                      "ipc_handshake_token_unavailable");
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "ipc_handshake_token_unavailable");
       std::cerr << "error: IPC handshake token unavailable" << std::endl;
       mark_clean_exit();
       return 2;

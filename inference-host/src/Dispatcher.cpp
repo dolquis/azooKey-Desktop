@@ -219,9 +219,9 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
       if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
-          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
-                                    privacy && (privacy->policy.secure ||
-                                                !privacy->policy.learning_allowed))) {
+          parsed && LearningAllowed(
+                        parsed->secure, parsed->learning_allowed,
+                        privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }
@@ -810,9 +810,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
       settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
   ipc::CommitObservationResponse res;
   if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json);
-      parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
-                                privacy && (privacy->policy.secure ||
-                                            !privacy->policy.learning_allowed))) {
+      parsed &&
+      LearningAllowed(parsed->secure, parsed->learning_allowed,
+                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
     engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),

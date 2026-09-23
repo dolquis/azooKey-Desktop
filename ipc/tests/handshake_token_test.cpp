@@ -1,4 +1,4 @@
-#include "azookey/ipc/HandshakeToken.h"
+#include <gtest/gtest.h>
 
 #include <chrono>
 #include <filesystem>
@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include "azookey/ipc/HandshakeToken.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -23,8 +23,8 @@ class HandshakeTokenTest : public ::testing::Test {
  protected:
   void SetUp() override {
     directory_ = std::filesystem::temp_directory_path() /
-                 ("azookey-token-test-" + std::to_string(
-                     std::chrono::steady_clock::now().time_since_epoch().count()));
+                 ("azookey-token-test-" +
+                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     path_ = directory_ / "ipc-token";
   }
   void TearDown() override {
@@ -53,7 +53,7 @@ TEST_F(HandshakeTokenTest, MissingAndMalformedFilesAreRejected) {
   EXPECT_FALSE(ReadHandshakeTokenFile(path_));
   std::filesystem::create_directories(directory_);
   const std::vector<std::string> malformed = {"", "deadbeef", std::string(32, 'g'),
-                                               std::string(32, 'a') + "\n"};
+                                              std::string(32, 'a') + "\n"};
   for (const auto& value : malformed) {
     std::ofstream(path_, std::ios::binary | std::ios::trunc) << value;
     EXPECT_FALSE(ReadHandshakeTokenFile(path_)) << value.size();
@@ -66,8 +66,9 @@ TEST_F(HandshakeTokenTest, PublishedFileHasProtectedPrivateDacl) {
   ASSERT_TRUE(PublishHandshakeToken(path_, "0123456789abcdef0123456789abcdef"));
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   PACL dacl = nullptr;
-  ASSERT_EQ(GetNamedSecurityInfoW(path_.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                  nullptr, nullptr, &dacl, nullptr, &descriptor), ERROR_SUCCESS);
+  ASSERT_EQ(GetNamedSecurityInfoW(path_.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr,
+                                  nullptr, &dacl, nullptr, &descriptor),
+            ERROR_SUCCESS);
   SECURITY_DESCRIPTOR_CONTROL control{};
   DWORD revision = 0;
   ASSERT_TRUE(GetSecurityDescriptorControl(descriptor, &control, &revision));
@@ -81,7 +82,8 @@ TEST_F(HandshakeTokenTest, PublishedFileHasProtectedPrivateDacl) {
   DWORD required = 0;
   GetTokenInformation(process_token, TokenUser, nullptr, 0, &required);
   std::vector<unsigned char> token_info(required);
-  ASSERT_TRUE(GetTokenInformation(process_token, TokenUser, token_info.data(), required, &required));
+  ASSERT_TRUE(
+      GetTokenInformation(process_token, TokenUser, token_info.data(), required, &required));
   CloseHandle(process_token);
   const auto* user = reinterpret_cast<const TOKEN_USER*>(token_info.data());
   for (DWORD i = 0; i < info.AceCount; ++i) {

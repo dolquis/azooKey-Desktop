@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+namespace azookey::learning {
+class ByteCrypto;
+}
+
 namespace azookey::host {
 
 enum class UserDictCliCommand {
@@ -41,6 +45,7 @@ struct UserDictCliRunOptions {
   bool prefer_pipe{true};
   uint32_t connect_timeout_ms{100};
   uint32_t response_timeout_ms{2000};
+  const learning::ByteCrypto* crypto{nullptr};
 };
 
 struct UserDictCliResult {

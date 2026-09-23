@@ -84,10 +84,9 @@ TEST_F(LocalSettingsTest, ExplicitSecureModeReloadsAndNormalModeRecovers) {
   EXPECT_TRUE(reader.AiSnapshot().privacy_policy.secure);
   EXPECT_FALSE(reader.AiSnapshot().privacy_policy.learning_allowed);
   Write(R"({"privacy":{"mode":"normal","redactLogs":false}})");
-  ASSERT_TRUE(reader.WaitForPrivacyForTest(
-      [](const auto& privacy) {
-        return !privacy.secure && privacy.detailed_logging_allowed && privacy.learning_allowed;
-      }));
+  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) {
+    return !privacy.secure && privacy.detailed_logging_allowed && privacy.learning_allowed;
+  }));
   Write(R"({"privacy":{"mode":"secure","redactLogs":false}})");
   ASSERT_TRUE(reader.WaitForPrivacyForTest(
       [](const auto& privacy) { return privacy.secure && !privacy.detailed_logging_allowed; }));

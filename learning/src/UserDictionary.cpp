@@ -133,11 +133,11 @@ static bool SameExportTarget(const std::filesystem::path& left,
   const auto wide_left = absolute_left.wstring();
   const auto wide_right = absolute_right.wstring();
   if (wide_left.size() > (std::numeric_limits<int>::max)() ||
-      wide_right.size() > (std::numeric_limits<int>::max)()) return true;
-  const int comparison = ::CompareStringOrdinal(wide_left.c_str(),
-                                                 static_cast<int>(wide_left.size()),
-                                                 wide_right.c_str(),
-                                                 static_cast<int>(wide_right.size()), TRUE);
+      wide_right.size() > (std::numeric_limits<int>::max)())
+    return true;
+  const int comparison =
+      ::CompareStringOrdinal(wide_left.c_str(), static_cast<int>(wide_left.size()),
+                             wide_right.c_str(), static_cast<int>(wide_right.size()), TRUE);
   if (comparison == 0 || comparison == CSTR_EQUAL) return true;
 #endif
   ec.clear();
@@ -165,7 +165,8 @@ bool UserDictionary::SavePlaintextExport(const std::filesystem::path& export_pat
   auto backup = path_;
   backup += ".bak";
   if (SameExportTarget(export_path, path_) || SameExportTarget(export_path, storage_path()) ||
-      SameExportTarget(export_path, backup)) return false;
+      SameExportTarget(export_path, backup))
+    return false;
   return WriteTextFileAtomically(export_path, Serialize());
 }
 

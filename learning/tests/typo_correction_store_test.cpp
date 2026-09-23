@@ -4,8 +4,9 @@
 #include <fstream>
 #include <string>
 
-#include "azookey/learning/TypoCorrectionStore.h"
+#include "TestByteCrypto.h"
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/TypoCorrectionStore.h"
 
 namespace {
 
@@ -34,7 +35,7 @@ void WriteFile(const std::filesystem::path& path, const std::string& content) {
 }  // namespace
 
 TEST(TypoCorrectionStoreTest, CountsPairsAndAppliesOnlyAtMinCount) {
-  TypoCorrectionStore store(TempPath("azookey_typo_count.tsv"));
+  TypoCorrectionStore store(TempPath("azookey_typo_count.tsv"), &azookey::learning::test::Crypto());
 
   EXPECT_TRUE(store.Observe("こんちには", "こんにちは", kNow));
   EXPECT_FALSE(store.Lookup("こんちには", 3).has_value());
@@ -51,7 +52,8 @@ TEST(TypoCorrectionStoreTest, CountsPairsAndAppliesOnlyAtMinCount) {
 }
 
 TEST(TypoCorrectionStoreTest, LookupPrefersTheMostFrequentCorrection) {
-  TypoCorrectionStore store(TempPath("azookey_typo_frequent.tsv"));
+  TypoCorrectionStore store(TempPath("azookey_typo_frequent.tsv"),
+                            &azookey::learning::test::Crypto());
   for (int i = 0; i < 3; ++i) store.Observe("かんじへんかん", "かんじへんかんき", kNow);
   for (int i = 0; i < 5; ++i) store.Observe("かんじへんかん", "かんじへんこう", kNow);
 
@@ -61,7 +63,8 @@ TEST(TypoCorrectionStoreTest, LookupPrefersTheMostFrequentCorrection) {
 }
 
 TEST(TypoCorrectionStoreTest, RejectsPairsOutsideTheAcceptFilters) {
-  TypoCorrectionStore store(TempPath("azookey_typo_filters.tsv"));
+  TypoCorrectionStore store(TempPath("azookey_typo_filters.tsv"),
+                            &azookey::learning::test::Crypto());
 
   // Identical readings carry no correction.
   EXPECT_FALSE(store.Observe("あいうえお", "あいうえお", kNow));
@@ -96,7 +99,7 @@ TEST(TypoCorrectionStoreTest, EditDistanceCountsCodePointsNotBytes) {
 }
 
 TEST(TypoCorrectionStoreTest, IgnoresRecordsThatAreTooOld) {
-  TypoCorrectionStore store(TempPath("azookey_typo_age.tsv"));
+  TypoCorrectionStore store(TempPath("azookey_typo_age.tsv"), &azookey::learning::test::Crypto());
   const uint64_t long_ago = kNow - 200 * kDay;
   for (int i = 0; i < 3; ++i) store.Observe("こんちには", "こんにちは", long_ago);
 
@@ -112,13 +115,13 @@ TEST(TypoCorrectionStoreTest, IgnoresRecordsThatAreTooOld) {
 TEST(TypoCorrectionStoreTest, SaveLoadRoundTrip) {
   const auto path = TempPath("azookey_typo_roundtrip.tsv");
   {
-    TypoCorrectionStore store(path);
+    TypoCorrectionStore store(path, &azookey::learning::test::Crypto());
     for (int i = 0; i < 4; ++i) store.Observe("こんちには", "こんにちは", kNow);
     store.Observe("あいさつ", "あいさい", kNow);
     ASSERT_TRUE(store.Save());
   }
 
-  TypoCorrectionStore reloaded(path);
+  TypoCorrectionStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   EXPECT_EQ(reloaded.size(), 2u);
   const auto entries = reloaded.All();
@@ -140,12 +143,12 @@ TEST(TypoCorrectionStoreTest, RoundTripsReadingsContainingTabsAndNewlines) {
   const std::string wrong = "あい\tう";
   const std::string correct = "あい\nう";
   {
-    TypoCorrectionStore store(path);
+    TypoCorrectionStore store(path, &azookey::learning::test::Crypto());
     ASSERT_TRUE(store.Observe(wrong, correct, kNow));
     ASSERT_TRUE(store.Save());
   }
 
-  TypoCorrectionStore reloaded(path);
+  TypoCorrectionStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   ASSERT_EQ(reloaded.size(), 1u);
   const auto entries = reloaded.All();
@@ -158,7 +161,7 @@ TEST(TypoCorrectionStoreTest, RoundTripsReadingsContainingTabsAndNewlines) {
 
 TEST(TypoCorrectionStoreTest, MissingFileLoadsAsEmptyStore) {
   const auto path = TempPath("azookey_typo_missing.tsv");
-  TypoCorrectionStore store(path);
+  TypoCorrectionStore store(path, &azookey::learning::test::Crypto());
   EXPECT_TRUE(store.Load());
   EXPECT_EQ(store.size(), 0u);
 }
@@ -175,7 +178,7 @@ TEST(TypoCorrectionStoreTest, SkipsCorruptRowsAndKeepsTheRest) {
             "ばらばら\tぜんぜんちがう\t9 1700000000\n"
             "さしすせ\tさしすそ\t2 1700000000\n");
 
-  TypoCorrectionStore store(path);
+  TypoCorrectionStore store(path, &azookey::learning::test::Crypto());
   // A corrupt file is not a failed load: the readable rows are kept.
   EXPECT_TRUE(store.Load());
   // The malformed rows, the zero count, and the pair that no longer passes the
@@ -193,12 +196,12 @@ TEST(TypoCorrectionStoreTest, SkipsCorruptRowsAndKeepsTheRest) {
 
 TEST(TypoCorrectionStoreTest, SavedFileCarriesTheEscapedHeader) {
   const auto path = TempPath("azookey_typo_header.tsv");
-  TypoCorrectionStore store(path);
+  TypoCorrectionStore store(path, &azookey::learning::test::Crypto());
   store.Observe("こんちには", "こんにちは", kNow);
   ASSERT_TRUE(store.Save());
 
   std::string content;
-  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::DpapiCrypto(), content),
+  ASSERT_EQ(azookey::learning::ReadProtectedText(path, azookey::learning::test::Crypto(), content),
             azookey::learning::ProtectedFileSource::Encrypted);
   EXPECT_EQ(content.rfind(std::string(azookey::learning::kTypoCorrectionStoreEscapedTsvHeader), 0),
             0u);
@@ -208,7 +211,7 @@ TEST(TypoCorrectionStoreTest, SavedFileCarriesTheEscapedHeader) {
 }
 
 TEST(TypoCorrectionStoreTest, ResetClearsTheTable) {
-  TypoCorrectionStore store(TempPath("azookey_typo_reset.tsv"));
+  TypoCorrectionStore store(TempPath("azookey_typo_reset.tsv"), &azookey::learning::test::Crypto());
   for (int i = 0; i < 3; ++i) store.Observe("こんちには", "こんにちは", kNow);
   ASSERT_EQ(store.size(), 1u);
 
@@ -218,7 +221,8 @@ TEST(TypoCorrectionStoreTest, ResetClearsTheTable) {
 }
 
 TEST(TypoCorrectionStoreTest, RejectsOverlongReadingsWithoutRunningTheDistanceTable) {
-  TypoCorrectionStore store(TempPath("azookey_typo_overlong.tsv"));
+  TypoCorrectionStore store(TempPath("azookey_typo_overlong.tsv"),
+                            &azookey::learning::test::Crypto());
 
   // Readings arrive from the TIP over IPC, where one frame can carry a megabyte.
   // The accept filter is quadratic, so an over-long pair has to be refused on
@@ -248,12 +252,12 @@ TEST(TypoCorrectionStoreTest, RoundTripsReadingsThatStartWithAComment) {
   const std::string wrong = "#あい";
   const std::string correct = "#あう";
   {
-    TypoCorrectionStore store(path);
+    TypoCorrectionStore store(path, &azookey::learning::test::Crypto());
     ASSERT_TRUE(store.Observe(wrong, correct, kNow));
     ASSERT_TRUE(store.Save());
   }
 
-  TypoCorrectionStore reloaded(path);
+  TypoCorrectionStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   ASSERT_EQ(reloaded.size(), 1u);
   const auto entries = reloaded.All();

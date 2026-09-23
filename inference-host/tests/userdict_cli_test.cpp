@@ -8,14 +8,15 @@
 #include <string>
 #include <vector>
 
+#include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/host/UserDictCli.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
-#include "azookey/learning/UserDictionary.h"
 #include "azookey/learning/DpapiCrypto.h"
+#include "azookey/learning/UserDictionary.h"
 
 namespace {
 
@@ -27,6 +28,7 @@ azookey::host::UserDictCliRunOptions DirectRunOptions(const std::filesystem::pat
   azookey::host::UserDictCliRunOptions options;
   options.user_dict_path = path;
   options.prefer_pipe = false;
+  options.crypto = &azookey::learning::test::Crypto();
   return options;
 }
 
@@ -89,7 +91,7 @@ TEST(UserDictCliTest, DirectAddListRemoveRoundTrip) {
   EXPECT_EQ(add_json->GetString("reading"), "nihongo");
   EXPECT_EQ(add_json->GetString("surface"), "Nihongo");
 
-  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   auto matches = dict.Lookup("nihongo");
   ASSERT_EQ(matches.size(), 1u);
@@ -112,7 +114,7 @@ TEST(UserDictCliTest, DirectAddListRemoveRoundTrip) {
   EXPECT_EQ(remove_result.exit_code, 0);
   ASSERT_EQ(remove_result.output_lines.size(), 1u);
 
-  azookey::learning::UserDictionary after(path.string());
+  azookey::learning::UserDictionary after(path.string(), &azookey::learning::test::Crypto());
   ASSERT_TRUE(after.Load());
   EXPECT_TRUE(after.Lookup("nihongo").empty());
 
@@ -131,7 +133,7 @@ TEST(UserDictCliTest, DirectModePreservesNonAsciiWindowsPath) {
   ASSERT_EQ(result.exit_code, 0);
   EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
-  azookey::learning::UserDictionary loaded(path);
+  azookey::learning::UserDictionary loaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   ASSERT_EQ(loaded.Lookup("にほんご").size(), 1u);
 
@@ -152,7 +154,7 @@ TEST(UserDictCliTest, DirectDryRunDoesNotMutate) {
   ASSERT_TRUE(json.has_value());
   EXPECT_TRUE(json->GetBool("dry_run").value_or(false));
 
-  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   EXPECT_EQ(dict.Size(), 0u);
 
@@ -182,6 +184,7 @@ TEST(UserDictCliTest, RequiresOfflineForDirectEditWhenPipeUnavailable) {
   std::filesystem::remove_all(path.parent_path());
 
   azookey::host::UserDictCliRunOptions run_options;
+  run_options.crypto = &azookey::learning::test::Crypto();
   run_options.user_dict_path = path.string();
   run_options.pipe_name = UniquePipeName("azookey-userdict-cli-missing-pipe");
   run_options.prefer_pipe = true;
@@ -213,7 +216,7 @@ TEST(UserDictCliTest, RequiresOfflineForDirectEditWhenPipeUnavailable) {
   EXPECT_TRUE(offline_json->GetBool("ok").value_or(false));
   EXPECT_EQ(offline_json->GetString("via"), "direct");
 
-  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   auto matches = dict.Lookup("offline");
   ASSERT_EQ(matches.size(), 1u);
@@ -283,6 +286,7 @@ TEST(UserDictCliTest, PrefersRunningHostOverDirectEdit) {
   }
 
   azookey::host::UserDictCliRunOptions run_options;
+  run_options.crypto = &azookey::learning::test::Crypto();
   run_options.user_dict_path = path.string();
   run_options.pipe_name = pipe_name;
   run_options.handshake_token = "test-token";
@@ -373,6 +377,7 @@ TEST(UserDictCliTest, RunningHostRejectionSurfacesFailure) {
   }
 
   azookey::host::UserDictCliRunOptions run_options;
+  run_options.crypto = &azookey::learning::test::Crypto();
   run_options.user_dict_path = path.string();
   run_options.pipe_name = pipe_name;
   run_options.prefer_pipe = true;
@@ -445,7 +450,7 @@ TEST(UserDictCliTest, DirectImportExportRoundTrip) {
   EXPECT_EQ(import_json->GetUInt("imported"), 3u);
   EXPECT_EQ(import_json->GetUInt("skipped"), 2u);
 
-  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   ASSERT_TRUE(dict.Load());
   EXPECT_EQ(dict.Size(), 2u);
   auto matches = dict.Lookup("nihongo");
@@ -465,7 +470,8 @@ TEST(UserDictCliTest, DirectImportExportRoundTrip) {
   EXPECT_TRUE(export_json->GetBool("ok").value_or(false));
   EXPECT_EQ(export_json->GetUInt("exported"), 2u);
 
-  azookey::learning::UserDictionary exported(export_path.string());
+  azookey::learning::UserDictionary exported(export_path.string(),
+                                             &azookey::learning::test::Crypto());
   ASSERT_TRUE(exported.Load());
   EXPECT_EQ(exported.Size(), 2u);
   auto exported_matches = exported.Lookup("azookey");
@@ -515,7 +521,7 @@ TEST(UserDictCliTest, DirectImportExportKeepsNonAsciiPathsAsUtf8) {
   ASSERT_EQ(export_result.exit_code, 0) << export_result.error;
   EXPECT_TRUE(std::filesystem::exists(export_path));
 
-  azookey::learning::UserDictionary exported(export_path);
+  azookey::learning::UserDictionary exported(export_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(exported.Load());
   auto matches = exported.Lookup("\xe3\x81\xab\xe3\x81\xbb\xe3\x82\x93\xe3\x81\x94");
   ASSERT_EQ(matches.size(), 1u);

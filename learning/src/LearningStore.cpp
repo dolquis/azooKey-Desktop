@@ -236,8 +236,7 @@ bool LearningStore::Load() {
     }
     table_[reading].emplace(surface, rec);
   }
-  if (source == ProtectedFileSource::Plaintext &&
-      !MigratePlaintextFile(path_, text, *crypto_)) {
+  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
     save_blocked_by_load_failure_ = true;
     SecureErase(text);
     return false;

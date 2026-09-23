@@ -59,7 +59,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `ipc_handshake_token_tests` | `ipc/tests/handshake_token_test.cpp` | 暗号乱数 token の生成、原子的な更新と読取、不正・欠落値の拒否、ファイル ACL |
 | `ipc_tip_client_tests` | `ipc/tests/tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
 | `learning_tests` | `learning/tests/learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
-| `dpapi_crypto_tests` | `learning/tests/dpapi_crypto_test.cpp` | ユーザースコープ DPAPI の往復、暗号化ファイル移行、復号失敗時の平文 fallback 拒否、モック暗号境界 |
+| `dpapi_crypto_tests` | `learning/tests/dpapi_crypto_test.cpp` | ユーザースコープ DPAPI の往復、暗号化ファイル移行、復号失敗時の平文 fallback 拒否、モック暗号境界、非 Windows での暗号利用不可時の拒否 |
 | `user_dictionary_tests` | `learning/tests/user_dictionary_test.cpp` | Add/Lookup/Remove、Save/Load round trip、missing file、malformed JSON |
 | `reranker_tests` | `learning/tests/reranker_test.cpp` | null-store、空 candidates、stable sort、時間減衰、学習ブースト、correction downweight |
 | `typo_correction_store_tests` | `learning/tests/typo_correction_store_test.cpp` | M35 打ち間違えペアの頻度カウントとしきい値境界、UTF-8 コードポイント単位の編集距離と長さ・同一・空読みフィルタ、`last_updated` 経過による無視、Save/Load ラウンドトリップとタブ・改行のエスケープ、ファイル無し・破損行の読み飛ばし、`Reset` |
@@ -82,7 +82,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_lookup_cli_tests` | `inference-host/tests/lookup_cli_test.cpp` | `lookup` CLI の読み完全一致・読み前置一致・表記一致、ロック取得不可時の失敗、TSV/JSON の列、破損ユーザー辞書を隔離も変更もしないこと |
 | `host_newwords_cli_tests` | `inference-host/tests/newwords_cli_test.cpp` | M36-A `newwords` CLI の引数検証、`list` の並びと JSON/TSV 出力、`--offline` の直接編集と冪等な再実行、Host 不在時にファイルを変更しないこと、稼働中の Dispatcher 経由の confirm で pending → confirmed → 候補注入まで通ることと Host の `error` の伝達 |
 | `host_settings_store_tests` | `inference-host/tests/settings_store_test.cpp` | 設定の既定値補完とクランプ、model ブロックによる backend 上書き、推論スレッド数の電源プロファイル追従、不正 JSON の隔離、一般設定の維持、privacy 許可のリセットと正常設定での復旧、専用 mutex による policy 公開と学習判定・書込みの直列化、読み込み済みより新しいファイルだけを隔離せずに読む Handshake 用の先読み、privacy の secure・詳細ログ許可・欠落と不正値の安全側解決、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の既定値・範囲外値の既定復帰・`EngineConfig` への反映、`safeMode.*` の解釈と SafeMode 中の AI・学習・モデルの強制停止、SafeMode の記録が他のキーを保ち欠落ファイルを作り解釈できないファイルを書き換えないこと |
-| `host_cli_unicode_argv` | `azookey_inference_host` | 実プロセスの argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
+| `host_cli_unicode_argv` | `azookey_inference_host` | Windows の実プロセス argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
 | `dictionary_tests` | `dictbuild/tests/dictionary_test.cpp` | 辞書 trie の探索方向と最短優先の上限、破損検出、参照失敗時の該当レイヤのみ無効化、静的辞書と可変辞書の独立、ユーザー変更の追跡 |
 | `dictbuild_python_tests` | `dictbuild/tests/test_dictbuild.py` | オフライン辞書ビルダ（Python）の単体テスト |
 | `diagnostics_tests` | `diagnostics/tests/diagnostics_test.cpp` | 診断 JSON schema の固定、機微本文の除外とランタイムログのバイト上限、zip 収集物の限定、D-014 の実効 OpenAI backend と DPAPI 状態、`--repair` の冪等性と失敗時の非成功報告 |

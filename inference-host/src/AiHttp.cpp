@@ -104,8 +104,7 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     return response;
   }
   const auto key = learning::UnprotectSecret(options.api_key);
-  if (!key || key.value.empty() ||
-      key.value.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
+  if (!key || key.value.empty() || key.value.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
     response.error = AiErrorClass::Auth;
     return response;
   }
@@ -173,8 +172,8 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     return response;
   }
   operation.request = pending.release();
-  headers.value = L"Content-Type: application/json\r\nAuthorization: Bearer " +
-                  Wide(key.value) + L"\r\n";
+  headers.value =
+      L"Content-Type: application/json\r\nAuthorization: Bearer " + Wide(key.value) + L"\r\n";
   const bool sent =
       WinHttpSendRequest(operation.request, headers.value.c_str(),
                          static_cast<DWORD>(headers.value.size()), const_cast<char*>(body.data()),

@@ -171,8 +171,8 @@ class DispatcherTest : public ::testing::Test {
   DispatcherTest()
       : learning_path("azookey_dispatcher_test_learning.tsv"),
         user_dict_path("azookey_dispatcher_test_user.json"),
-        store(learning_path),
-        user_dict(user_dict_path),
+        store(learning_path, &azookey::learning::test::Crypto()),
+        user_dict(user_dict_path, &azookey::learning::test::Crypto()),
         engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {}),
         dispatcher(&engine, &scheduler, &user_dict, DefaultDispatcherConfig()) {
     std::remove(learning_path.c_str());

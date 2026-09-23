@@ -717,6 +717,7 @@ struct BracketDocument {
   bool fail_read{false};
   bool fail_write{false};
   bool short_shift{false};
+  bool fail_clone{false};
 };
 
 class DocumentRange final : public FakeRange {
@@ -733,9 +734,12 @@ class DocumentRange final : public FakeRange {
                        ULONG* count) override {
     *count = 0;
     if (document->fail_read) return E_FAIL;
-    *count = std::min(capacity, static_cast<ULONG>(end - start));
-    std::copy_n(document->text.data() + start, *count, text);
-    if (flags & TF_TF_MOVESTART) start += static_cast<LONG>(*count);
+    const LONG document_end = static_cast<LONG>(document->text.size());
+    const LONG readable_start = std::clamp(start, 0L, document_end);
+    const LONG readable_end = std::clamp(end, readable_start, document_end);
+    *count = std::min(capacity, static_cast<ULONG>(readable_end - readable_start));
+    std::copy_n(document->text.data() + readable_start, *count, text);
+    if (flags & TF_TF_MOVESTART) start = readable_start + static_cast<LONG>(*count);
     return S_OK;
   }
   STDMETHODIMP SetText(TfEditCookie, DWORD, const WCHAR* text, LONG length) override {
@@ -776,6 +780,10 @@ class DocumentRange final : public FakeRange {
     return S_OK;
   }
   STDMETHODIMP Clone(ITfRange** copy) override {
+    if (document->fail_clone) {
+      *copy = nullptr;
+      return E_FAIL;
+    }
     *copy = new DocumentRange(document, start, end);
     return S_OK;
   }
@@ -877,6 +885,41 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   bool reject_write{false};
   bool skip_callback{false};
   std::function<void()> before_write;
+};
+
+class DocumentPreeditHarness {
+ public:
+  DocumentPreeditHarness() { context.run_edit_session = true; }
+  ~DocumentPreeditHarness() { service.Deactivate(); }
+
+  BOOL Press(WPARAM key) {
+    BOOL eaten = FALSE;
+    const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
+    EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
+    return eaten;
+  }
+
+  HRESULT ExternallyTerminate(std::optional<std::wstring_view> host_text = std::nullopt) {
+    ITfComposition* composition = service.composition_;
+    if (!composition) return E_UNEXPECTED;
+    if (host_text) {
+      ITfRange* range = nullptr;
+      const HRESULT range_hr = composition->GetRange(&range);
+      if (FAILED(range_hr) || !range) return FAILED(range_hr) ? range_hr : E_FAIL;
+      const HRESULT text_hr =
+          range->SetText(1, 0, host_text->data(), static_cast<LONG>(host_text->size()));
+      range->Release();
+      if (FAILED(text_hr)) return text_hr;
+    }
+    // TSF may reject GetRange after ending a composition; recovery must use
+    // the range captured while the preedit was still active.
+    static_cast<DocumentComposition*>(composition)->get_range_result = E_UNEXPECTED;
+    return service.OnCompositionTerminated(1, composition);
+  }
+
+  KeyboardStateGuard keyboard_state;
+  DocumentContext context;
+  azookey::tsf::TextService service;
 };
 
 std::optional<WCHAR> TranslateBracketForTest(WPARAM key, LPARAM) {
@@ -4275,6 +4318,366 @@ TEST(TsfTipOnKeyDownPreeditTest, FocusLossPreservesQueuedCommitWhenSyncCommitIsR
   EXPECT_EQ(h.service.commit_surface_, "か");
   EXPECT_TRUE(h.service.committing_);
   EXPECT_TRUE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusKeepsExistingPreeditOnce) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_NE(h.service.composition_, nullptr);
+  const int writes = h.context.document->writes;
+
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes);
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_FALSE(h.service.has_active_context_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationCommitsLatestPreeditWhenUpdateIsQueued) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_NE(h.service.composition_, nullptr);
+
+  h.context.skip_callback = true;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.service.preedit_kana_, "かき");
+  ASSERT_EQ(h.context.document->text, L"か");
+  const int writes_before_termination = h.context.document->writes;
+
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  h.context.skip_callback = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"かき");
+  EXPECT_EQ(h.context.document->writes, writes_before_termination + 1);
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationCommitsShorterQueuedPreedit) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.context.document->text, L"かき");
+
+  h.context.skip_callback = true;
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+  ASSERT_EQ(h.context.document->text, L"かき");
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  h.context.skip_callback = false;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FailedRangeCloneReplacesPreviousCachedRange) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  const auto* original_range = h.service.composition_range_;
+  ASSERT_NE(original_range, nullptr);
+
+  h.context.document->fail_clone = true;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_EQ(h.context.document->text, L"かき");
+  ASSERT_NE(h.service.composition_range_, nullptr);
+  EXPECT_NE(h.service.composition_range_, original_range);
+  EXPECT_EQ(static_cast<DocumentRange*>(h.service.composition_range_)->end, 2);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, QueuedCommitAfterExternalTerminationDoesNotInsertTwice) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_NE(h.service.composition_, nullptr);
+
+  h.context.reject_write = true;
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_EQ(h.service.commit_surface_, "か");
+  const int writes_before_termination = h.context.document->writes;
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  h.context.reject_write = false;
+  BOOL eaten = FALSE;
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, VK_SPACE, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes_before_termination);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalReplacementDropsQueuedCandidateObservation) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  candidate.source = "test";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_TRUE(h.service.has_pending_commit_observation_for_test());
+  ASSERT_EQ(h.ExternallyTerminate(L"別"), S_OK);
+
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"別");
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationPostsQueuedCandidateObservationWhenRetained) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  candidate.source = "test";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_TRUE(h.service.has_pending_commit_observation_for_test());
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  const auto observation = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(observation.has_value());
+  EXPECT_EQ(observation->reading, "か");
+  EXPECT_EQ(observation->chosen.surface, "蚊");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusKeepsDisplayedCandidateOnce) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  const int writes = h.context.document->writes;
+
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.context.document->writes, writes);
+  EXPECT_EQ(h.service.composition_, nullptr);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusRestoresClearedPreeditOnce) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_EQ(h.context.document->text, L"");
+  const int writes_after_host_clear = h.context.document->writes;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_clear + 1);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_clear + 1);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, RejectedFocusRestoreRetriesBeforeConsumingNextKey) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_EQ(h.context.document->text, L"");
+  const int writes_after_host_clear = h.context.document->writes;
+
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_clear);
+  EXPECT_TRUE(h.service.has_active_context_for_test());
+
+  h.context.reject_write = false;
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_clear + 1);
+  EXPECT_EQ(h.service.preedit_kana_, "");
+
+  // Model the host caret at the end of the restored text before new input.
+  h.context.document->start = 1;
+  h.context.document->end = 1;
+  ASSERT_TRUE(h.Press('I'));
+  EXPECT_EQ(h.context.document->text, L"かい");
+  EXPECT_EQ(h.service.preedit_kana_, "い");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationThenFocusRestoresClearedCandidateOnce) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_EQ(h.context.document->text, L"");
+  const int writes_after_host_clear = h.context.document->writes;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_clear + 1);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExternalTerminationDoesNotOverwriteHostReplacement) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+
+  ASSERT_EQ(h.ExternallyTerminate(L"別"), S_OK);
+  const int writes_after_host_replace = h.context.document->writes;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+
+  EXPECT_EQ(h.context.document->text, L"別");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_replace);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FocusBeforeCompositionTerminationCommitsPreeditOnce) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_NE(h.service.composition_, nullptr);
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_EQ(h.context.document->text, L"か");
+  const int writes_after_focus = h.context.document->writes;
+  EXPECT_EQ(h.service.composition_, nullptr);
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_EQ(h.context.document->writes, writes_after_focus);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ExplicitEscapeCancelsInsteadOfRestoringPreedit) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.context.document->text, L"");
+  const int writes_after_escape = h.context.document->writes;
+
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.context.document->writes, writes_after_escape);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, EscapeAfterExternalTerminationCancelsPendingRestore) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_EQ(h.context.document->text, L"");
+  h.context.reject_write = true;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_FALSE(h.service.terminated_composition_surface_.empty());
+
+  BOOL eaten = FALSE;
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, VK_ESCAPE, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  h.context.reject_write = false;
+  EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NewInputAfterExternalTerminationKeepsPreviousText) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+  h.context.document->start = 1;
+  h.context.document->end = 1;
+
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+
+  EXPECT_EQ(h.context.document->text, L"かに");
+  EXPECT_EQ(h.service.preedit_kana_, "に");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NewInputBeforeFocusRestoresHostClearedText) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_EQ(h.context.document->text, L"");
+  const int writes_after_host_clear = h.context.document->writes;
+
+  // The host keeps its caret at the composition's trailing edge.
+  h.context.document->start = 1;
+  h.context.document->end = 1;
+  ASSERT_TRUE(h.Press('I'));
+
+  EXPECT_EQ(h.context.document->text, L"かい");
+  EXPECT_EQ(h.context.document->writes, writes_after_host_clear + 2);
+  EXPECT_EQ(h.service.preedit_kana_, "い");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PassThroughKeyRestoresHostClearedTextBeforeApplicationEdit) {
+  DocumentPreeditHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.ExternallyTerminate(L""), S_OK);
+  ASSERT_EQ(h.context.document->text, L"");
+
+  BOOL eaten = TRUE;
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, VK_SPACE, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.context.document->text, L"か");
+  EXPECT_TRUE(h.service.terminated_composition_surface_.empty());
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, CompositionTerminationPreservesQueuedCommitUntilEditSessionRuns) {

@@ -60,6 +60,12 @@ Describe "VM package benchmark freshness" {
       Should -Not -Throw
   }
 
+  It "accepts a fully idle benchmark dependency graph" {
+    { Assert-VmVerifyBuildReady -BuildDirectory $script:build -IncludeBench `
+        -CommandResult ([pscustomobject]@{ ExitCode = 0; Output = 'ninja: no work to do.' }) } |
+      Should -Not -Throw
+  }
+
   It "rejects a header from the previous commit" {
     Mock Get-VmVerifyGitCommit { "b" * 40 }
     { Assert-VmVerifyBuildReady -BuildDirectory $script:build -IncludeBench `
@@ -98,6 +104,7 @@ Describe "VM package benchmark freshness" {
 
   It "rejects additional work or ambiguous output: <Output>" -TestCases @(
     @{ Output = "[1/2] Refreshing benchmark commit header`n[2/2] Building CXX object" }
+    @{ Output = "[1/3] Refreshing benchmark commit header`n[2/3] Building CXX object bench/zenzai_bench.cpp.obj`n[3/3] Linking CXX executable bench/azookey_zenzai_bench.exe" }
     @{ Output = "[1/1] Building CXX object" }
     @{ Output = "[1/1] Refreshing benchmark commit header`nunknown command" }
     @{ Output = "ninja: no work to do.`n[1/1] Building CXX object" }

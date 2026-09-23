@@ -1154,7 +1154,6 @@ HRESULT TextService::HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lParam,
                                         BOOL* eaten) {
   AZOOKEY_ASSERT_UI_THREAD();
-  UNREFERENCED_PARAMETER(context);
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
   bracket_test_context_ = nullptr;
@@ -1165,11 +1164,26 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 #endif
 
+    if (!terminated_composition_surface_.empty() && !committing_) {
+      if (wParam == VK_ESCAPE && SameComIdentity(context, active_context_)) {
+        *eaten = TRUE;
+        return S_OK;
+      }
+      const bool same_context = SameComIdentity(context, active_context_);
+      CleanupForLifecycleLoss(active_context_, /*release_active_context=*/!same_context,
+                              LifecycleCleanupFailurePolicy::PreserveComposition);
+      if (!terminated_composition_surface_.empty()) {
+        *eaten = TRUE;
+        return S_OK;
+      }
+    }
+
     const uint32_t modifiers = CurrentKeyModifiers();
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                   candidate_ui_.IsShowing()))
+                   candidate_ui_.IsShowing()) &&
+        !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
     if (committing_) {
       *eaten = TRUE;
@@ -1267,11 +1281,37 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
   try {
+    // A new key in the same context means the host kept input focus. If the
+    // key belongs to another context, finish the old text before using it.
+    if (!terminated_composition_surface_.empty() && !committing_) {
+      if (wParam == VK_ESCAPE && SameComIdentity(context, active_context_)) {
+        ClearTextStateForLifecycle();
+        *eaten = TRUE;
+        return S_OK;
+      }
+      if (SameComIdentity(context, active_context_)) {
+        const bool consume_after_retry = terminated_focus_cleanup_pending_;
+        CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
+                                LifecycleCleanupFailurePolicy::PreserveComposition);
+        if (!terminated_composition_surface_.empty() || consume_after_retry) {
+          *eaten = TRUE;
+          return S_OK;
+        }
+      } else {
+        CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
+                                LifecycleCleanupFailurePolicy::PreserveComposition);
+        if (!terminated_composition_surface_.empty()) {
+          *eaten = TRUE;
+          return S_OK;
+        }
+      }
+    }
     const uint32_t modifiers = CurrentKeyModifiers();
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
-                   candidate_ui_.IsShowing()))
+                   candidate_ui_.IsShowing()) &&
+        !(committing_ && !terminated_composition_surface_.empty()))
       return S_OK;
 
     if (committing_) {
@@ -1906,12 +1946,25 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
                                                   ITfComposition* pComposition) {
   AZOOKEY_ASSERT_UI_THREAD();
-  if (composition_ == pComposition) {
-    if (!etw_composition_end_in_progress_)
-      core::EtwLogger::LogCompositionEnd(etw_composition_length_, false);
-    composition_->Release();
-    composition_ = nullptr;
+  if (composition_ != pComposition) return S_OK;
+  const bool external_termination = !etw_composition_end_in_progress_;
+  std::string terminated_surface =
+      external_termination ? (committing_ ? commit_surface_ : CurrentDisplayedPreeditSurface())
+                           : std::string{};
+  std::string previous_surface = std::move(composition_range_surface_);
+  ITfRange* terminated_range = nullptr;
+  if (!terminated_surface.empty()) {
+    terminated_range = composition_range_;
+    composition_range_ = nullptr;
+    if (!terminated_range && FAILED(pComposition->GetRange(&terminated_range))) {
+      if (terminated_range) terminated_range->Release();
+      terminated_range = nullptr;
+    }
   }
+  if (!etw_composition_end_in_progress_)
+    core::EtwLogger::LogCompositionEnd(etw_composition_length_, false);
+  composition_->Release();
+  composition_ = nullptr;
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
   const bool preserve_pending_commit = committing_;
@@ -1920,6 +1973,13 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
   ITfContext* pending_commit_context = commit_context_;
   if (pending_commit_context) pending_commit_context->AddRef();
   ClearTextStateForLifecycle();
+  if (!terminated_surface.empty() && terminated_range) {
+    terminated_composition_surface_ = std::move(terminated_surface);
+    terminated_composition_previous_surface_ = std::move(previous_surface);
+    terminated_composition_range_ = terminated_range;
+  } else if (!terminated_surface.empty()) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "external_composition_range_unavailable");
+  }
   if (preserve_pending_commit) {
     committing_ = true;
     commit_surface_ = pending_commit_surface;
@@ -2116,6 +2176,18 @@ void TextService::PostPendingCommitObservation() {
 }
 
 void TextService::ClearTextStateForLifecycle() {
+  if (composition_range_) {
+    composition_range_->Release();
+    composition_range_ = nullptr;
+  }
+  if (terminated_composition_range_) {
+    terminated_composition_range_->Release();
+    terminated_composition_range_ = nullptr;
+  }
+  terminated_composition_surface_.clear();
+  terminated_composition_previous_surface_.clear();
+  composition_range_surface_.clear();
+  terminated_focus_cleanup_pending_ = false;
   bracket_test_context_ = nullptr;
   bracket_composition_ = false;
   preedit_kana_.clear();
@@ -2162,6 +2234,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   std::string pending_surface;
   if (committing_) {
     pending_surface = commit_surface_;
+  } else if (!terminated_composition_surface_.empty()) {
+    pending_surface = terminated_composition_surface_;
   } else if (!batch_raw_romaji_.empty()) {
     pending_surface = BatchReadingForConversion();
   } else {
@@ -2174,6 +2248,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
   const bool has_lifecycle_commit_surface = committing_ || !pending_surface.empty();
   if (!composition_ && !has_lifecycle_commit_surface) return true;
   if (!context) return false;
+  if (!terminated_composition_surface_.empty()) terminated_focus_cleanup_pending_ = true;
 
   const std::string saved_preedit = preedit_kana_;
   const bool saved_committing = committing_;
@@ -4202,6 +4277,13 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       const std::string pending_commit_surface = service_->commit_surface_;
       const auto pending_commit_observation = service_->pending_commit_observation_;
       const std::wstring surface = Utf8ToWide(pending_commit_surface);
+      bool committed_surface_in_document = true;
+      std::wstring terminated_text;
+      std::wstring previous_surface;
+      if (!service_->terminated_composition_previous_surface_.empty())
+        previous_surface = Utf8ToWide(service_->terminated_composition_previous_surface_);
+      if (!service_->terminated_composition_surface_.empty())
+        terminated_text.resize(std::max(surface.size(), previous_surface.size()) + 1);
       service_->committing_ = false;
       service_->commit_surface_.clear();
       const auto restore_pending_commit = [&]() {
@@ -4218,7 +4300,40 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->PostPendingCommitObservation();
       };
 
-      if (service_->composition_) {
+      if (!service_->terminated_composition_surface_.empty()) {
+        // The host ended the composition before its focus notification. Use
+        // the range we last wrote, rather than the current selection, which
+        // may already belong to another control. Leave text the host retained
+        // untouched and restore only a range that the host emptied.
+        ITfRange* range = service_->terminated_composition_range_;
+        if (!range) {
+          restore_pending_commit();
+          return E_FAIL;
+        }
+        ULONG length = 0;
+        const HRESULT read_hr = range->GetText(ec, 0, terminated_text.data(),
+                                               static_cast<ULONG>(terminated_text.size()), &length);
+        if (FAILED(read_hr)) {
+          restore_pending_commit();
+          return read_hr;
+        }
+        terminated_text.resize(length);
+        if (terminated_text.empty() ||
+            (!previous_surface.empty() && terminated_text == previous_surface &&
+             terminated_text != surface)) {
+          const HRESULT write_hr =
+              range->SetText(ec, 0, surface.c_str(), static_cast<LONG>(surface.size()));
+          if (FAILED(write_hr)) {
+            restore_pending_commit();
+            return write_hr;
+          }
+        } else if (terminated_text != surface) {
+          // The application changed the text after our last preedit update.
+          // Respect that edit instead of putting the old reading back.
+          committed_surface_in_document = false;
+          RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "external_composition_text_changed");
+        }
+      } else if (service_->composition_) {
         ITfRange* committed_range = nullptr;
         if (!surface.empty()) {
           HRESULT text_hr = service_->composition_->GetRange(&committed_range);
@@ -4276,12 +4391,16 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           return text_hr;
         }
       }
-      post_pending_commit_observation();
+      if (committed_surface_in_document)
+        post_pending_commit_observation();
+      else
+        service_->pending_commit_observation_.reset();
       return S_OK;
     }
 
     // Normal preedit update.
-    const std::wstring kana = Utf8ToWide(service_->CurrentDisplayedPreeditSurface());
+    std::string displayed_surface = service_->CurrentDisplayedPreeditSurface();
+    const std::wstring kana = Utf8ToWide(displayed_surface);
 
     if (kana.empty()) {
       if (service_->composition_) {
@@ -4347,6 +4466,15 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       pRange->Release();
       return set_text_hr;
     }
+    ITfRange* saved_range = nullptr;
+    if (FAILED(pRange->Clone(&saved_range)) || !saved_range) {
+      if (saved_range) saved_range->Release();
+      pRange->AddRef();
+      saved_range = pRange;
+    }
+    if (service_->composition_range_) service_->composition_range_->Release();
+    service_->composition_range_ = saved_range;
+    service_->composition_range_surface_ = std::move(displayed_surface);
     service_->etw_composition_length_ = kana.size();
 
     // Cache the caret screen position for the candidate window anchor (M5/M19).

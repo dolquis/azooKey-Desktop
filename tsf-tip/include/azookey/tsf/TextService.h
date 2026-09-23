@@ -135,6 +135,12 @@ class TextService final : public ITfTextInputProcessorEx,
   // Accessed by EditSession.
   std::string preedit_kana_;
   ITfComposition* composition_{nullptr};
+  ITfRange* composition_range_{nullptr};
+  std::string composition_range_surface_;
+  ITfRange* terminated_composition_range_{nullptr};
+  std::string terminated_composition_surface_;
+  std::string terminated_composition_previous_surface_;
+  bool terminated_focus_cleanup_pending_{false};
   bool etw_composition_end_in_progress_{false};
   std::uint64_t etw_composition_length_{0};
   bool committing_{false};

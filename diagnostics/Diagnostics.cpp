@@ -30,6 +30,8 @@
 #endif
 
 #include "SettingsSchema.h"
+#include "azookey/core/AiPrivacy.h"
+#include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/Redaction.h"
 #include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Json.h"
@@ -245,7 +247,53 @@ struct SettingsProbe {
   bool missing{true};
   bool model_enabled{true};
   std::string selected_path;
+  DpapiState dpapi_state{DpapiState::NotRequired};
 };
+
+bool RequiresOpenAiKey(const j::Value& settings) {
+  const auto privacy = core::ParseAiPrivacy(settings);
+  if (!privacy.ai || !privacy.external) return false;
+
+  if (settings.GetString("aiBackend").value_or("none") == "openai") return true;
+
+  const auto* profiles = settings.FindObject("profilesByApp");
+  if (!profiles) return false;
+  const auto resolver = core::AppProfileResolver::FromSettings(settings);
+  for (const auto& [name, _] : *profiles) {
+    // Resolve each configured profile with the same default and field overlay
+    // rules as the runtime. A key may name a process or a window class.
+    const core::ForegroundApp app{name, name, name != "default"};
+    const auto resolved = resolver.Resolve(app);
+    const auto backend = resolved.find("aiBackend");
+    if (backend == resolved.end() || !backend->second.IsString() ||
+        backend->second.AsString() != "openai") continue;
+    const auto mode = resolved.find("privacyMode");
+    const auto privacy_mode = mode != resolved.end() && mode->second.IsString()
+                                  ? mode->second.AsString()
+                                  : std::string("inherit");
+    if (privacy_mode != "private" && privacy_mode != "secure") return true;
+  }
+  return false;
+}
+
+DpapiState ProbeDpapiSettings(const j::Value& settings, const learning::ByteCrypto& crypto) {
+  if (!RequiresOpenAiKey(settings)) return DpapiState::NotRequired;
+  const auto stored = settings.GetString("openAiApiKey").value_or("");
+  if (stored.empty()) return DpapiState::MissingKey;
+  if (!stored.starts_with("dpapi:")) return DpapiState::Plaintext;
+
+  auto secret = learning::UnprotectSecret(stored, crypto);
+  const auto status = secret.status;
+  const bool nonempty = !secret.value.empty();
+#ifdef _WIN32
+  if (!secret.value.empty()) SecureZeroMemory(secret.value.data(), secret.value.size());
+#else
+  std::fill(secret.value.begin(), secret.value.end(), '\0');
+#endif
+  if (status == learning::SecretStatus::CryptoUnavailable) return DpapiState::Unavailable;
+  return status == learning::SecretStatus::Ok && nonempty ? DpapiState::Decrypted
+                                                          : DpapiState::DecryptFailed;
+}
 
 SettingsProbe ProbeSettings(const std::filesystem::path& path) {
   SettingsProbe result;
@@ -255,14 +303,17 @@ SettingsProbe ProbeSettings(const std::filesystem::path& path) {
   const auto text = ReadTextFile(path);
   if (!text) {
     result.valid = false;
+    result.dpapi_state = DpapiState::Unavailable;
     return result;
   }
   const auto value = j::Parse(*text);
   const auto schema = j::Parse(kSettingsSchemaJson);
   if (!value || !value->IsObject() || !schema || !ValidateJsonSchema(*value, *schema)) {
     result.valid = false;
+    result.dpapi_state = DpapiState::Unavailable;
     return result;
   }
+  result.dpapi_state = ProbeDpapiSettings(*value, learning::DpapiCrypto());
   if (const auto* model = value->FindObject("model")) {
     const auto enabled = model->find("enabled");
     if (enabled != model->end() && enabled->second.IsBool()) {
@@ -1016,6 +1067,15 @@ void CleanupStaleLogProbeFiles(const std::filesystem::path& directory) {
 
 bool ProbeSettingsFile(const std::filesystem::path& path) { return ProbeSettings(path).valid; }
 
+DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
+                                  const learning::ByteCrypto& crypto) {
+  const auto settings = j::Parse(settings_json);
+  const auto schema = j::Parse(kSettingsSchemaJson);
+  if (!settings || !settings->IsObject() || !schema ||
+      !ValidateJsonSchema(*settings, *schema)) return DpapiState::Unavailable;
+  return ProbeDpapiSettings(*settings, crypto);
+}
+
 bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries) {
   return ProbeLearningStore(path, entries);
 }
@@ -1249,6 +1309,39 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
                                             : "Runtime logs directory is missing or not writable",
            {{"writable", j::Value(snapshot.logs_directory_writable)}});
 
+  Status dpapi_status = Status::Ok;
+  const char* dpapi_state = "not_required";
+  const char* dpapi_message = "No effective OpenAI backend requires an API key";
+  switch (snapshot.dpapi_state) {
+    case DpapiState::NotRequired:
+      break;
+    case DpapiState::MissingKey:
+      dpapi_status = Status::Warning;
+      dpapi_state = "missing_key";
+      dpapi_message = "OpenAI is selected but the API key is not configured";
+      break;
+    case DpapiState::Plaintext:
+      dpapi_state = "plaintext";
+      dpapi_message = "OpenAI API key is configured in the legacy plaintext format";
+      break;
+    case DpapiState::Decrypted:
+      dpapi_state = "decrypted";
+      dpapi_message = "OpenAI API key can be decrypted for this user";
+      break;
+    case DpapiState::DecryptFailed:
+      dpapi_status = Status::Error;
+      dpapi_state = "decrypt_failed";
+      dpapi_message = "OpenAI API key cannot be decrypted; re-enter the key";
+      break;
+    case DpapiState::Unavailable:
+      dpapi_status = Status::Warning;
+      dpapi_state = "unavailable";
+      dpapi_message = "OpenAI API key check is unavailable";
+      break;
+  }
+  AddCheck(report, "D-014", "dpapi", dpapi_status, dpapi_message,
+           {{"state", j::Value(dpapi_state)}});
+
   return report;
 }
 
@@ -1297,6 +1390,7 @@ ProbeResult ProbeSystem() {
     const auto settings = ProbeSettings(paths->settings_path);
     snapshot.settings_valid = settings.valid;
     snapshot.settings_missing = settings.missing;
+    snapshot.dpapi_state = settings.dpapi_state;
     snapshot.model_enabled = settings.model_enabled;
     snapshot.selected_model_path = settings.selected_path;
     const auto model_path = ExpandEnvironmentPath(settings.selected_path);
@@ -1311,6 +1405,7 @@ ProbeResult ProbeSystem() {
   } else {
     snapshot.settings_valid = false;
     snapshot.settings_missing = false;
+    snapshot.dpapi_state = DpapiState::Unavailable;
     snapshot.learning_store_valid = false;
     snapshot.user_dict_valid = false;
   }

@@ -9,8 +9,10 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/UserDictionary.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -23,6 +25,25 @@ namespace j = ::azookey::ipc::json;
 std::filesystem::path TempPath(const char* name) {
   return std::filesystem::temp_directory_path() / name;
 }
+
+class MockDpapiCrypto final : public azookey::learning::ByteCrypto {
+ public:
+  bool available{true};
+  bool decrypt_succeeds{true};
+  mutable int decrypt_calls{};
+
+  bool IsAvailable() const override { return available; }
+  bool Encrypt(const std::vector<uint8_t>&, std::vector<uint8_t>&) const override {
+    return false;
+  }
+  bool Decrypt(const std::vector<uint8_t>& cipher,
+               std::vector<uint8_t>& plain) const override {
+    ++decrypt_calls;
+    if (cipher != std::vector<uint8_t>({1, 2, 3}) || !decrypt_succeeds) return false;
+    plain.assign({'s', 'e', 'c', 'r', 'e', 't', '-', 'b', 'o', 'd', 'y'});
+    return true;
+  }
+};
 
 TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) {
   diag::Snapshot snapshot;
@@ -164,12 +185,86 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
       "status": "ok",
       "message": "Runtime logs directory is writable",
       "details": {"writable": true}
+    },
+    {
+      "id": "D-014",
+      "name": "dpapi",
+      "status": "ok",
+      "message": "No effective OpenAI backend requires an API key",
+      "details": {"state": "not_required"}
     }
   ]
 }
 )json");
   ASSERT_TRUE(expected.has_value());
   EXPECT_EQ(actual, j::Stringify(*expected));
+}
+
+TEST(DiagnosticsTest, DpapiRequiresKeyOnlyForEffectiveOpenAiBackends) {
+  MockDpapiCrypto crypto;
+  const auto probe = [&](std::string_view json) {
+    return diag::ProbeDpapiSettingsJson(json, crypto);
+  };
+  EXPECT_EQ(probe(R"({"aiBackend":"none"})"), diag::DpapiState::NotRequired);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","openAiApiKey":"dpapi:AQID"})"),
+            diag::DpapiState::NotRequired);
+  EXPECT_EQ(probe(R"({"aiBackend":"openai"})"), diag::DpapiState::MissingKey);
+  EXPECT_EQ(probe(R"({"aiBackend":"openai","openAiApiKey":"legacy-key"})"),
+            diag::DpapiState::Plaintext);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai"}}})"),
+            diag::DpapiState::MissingKey);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai"}}})"),
+            diag::DpapiState::MissingKey);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"default":{"aiBackend":"openai","privacyMode":"private"},"app.exe":{"privacyMode":"normal"}}})"),
+            diag::DpapiState::MissingKey);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"private"}}})"),
+            diag::DpapiState::NotRequired);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"secure"}}})"),
+            diag::DpapiState::NotRequired);
+  EXPECT_EQ(probe(R"({"aiBackend":"openai","openAiApiKey":"dpapi:AQID","privacy":{"mode":"offline"}})"),
+            diag::DpapiState::NotRequired);
+  EXPECT_EQ(probe(R"({"aiBackend":"none","privacy":{"mode":"offline"},"profilesByApp":{"app.exe":{"aiBackend":"openai","privacyMode":"normal"}}})"),
+            diag::DpapiState::NotRequired);
+  EXPECT_EQ(probe(R"({"aiBackend":"openai","privacy":{"mode":"custom","custom":{"externalAi":false}}})"),
+            diag::DpapiState::NotRequired);
+  EXPECT_EQ(crypto.decrypt_calls, 0);
+}
+
+TEST(DiagnosticsTest, DpapiProbeDistinguishesDecryptionFailureAndUnavailableWithoutLeakingKey) {
+  MockDpapiCrypto crypto;
+  constexpr std::string_view settings =
+      R"({"aiBackend":"openai","openAiApiKey":"dpapi:AQID"})";
+  EXPECT_EQ(diag::ProbeDpapiSettingsJson(settings, crypto), diag::DpapiState::Decrypted);
+  crypto.decrypt_succeeds = false;
+  EXPECT_EQ(diag::ProbeDpapiSettingsJson(settings, crypto), diag::DpapiState::DecryptFailed);
+  crypto.available = false;
+  EXPECT_EQ(diag::ProbeDpapiSettingsJson(settings, crypto), diag::DpapiState::Unavailable);
+  EXPECT_EQ(crypto.decrypt_calls, 2);
+  EXPECT_EQ(diag::ProbeDpapiSettingsJson(
+                R"({"aiBackend":"openai","openAiApiKey":"dpapi:invalid"})", crypto),
+            diag::DpapiState::DecryptFailed);
+  EXPECT_EQ(diag::ProbeDpapiSettingsJson("{", crypto), diag::DpapiState::Unavailable);
+
+  diag::Snapshot snapshot;
+  snapshot.dpapi_state = diag::DpapiState::Decrypted;
+  const auto success_report = diag::EvaluateSnapshot(snapshot, 1);
+  ASSERT_EQ(success_report.checks.back().id, "D-014");
+  EXPECT_EQ(success_report.checks.back().status, diag::Status::Ok);
+  const auto success = diag::SerializeReport(success_report);
+  EXPECT_EQ(success.find("secret-body"), std::string::npos);
+  EXPECT_NE(success.find(R"("state":"decrypted")"), std::string::npos);
+  snapshot.dpapi_state = diag::DpapiState::MissingKey;
+  EXPECT_EQ(diag::EvaluateSnapshot(snapshot, 1).checks.back().status, diag::Status::Warning);
+  snapshot.dpapi_state = diag::DpapiState::DecryptFailed;
+  const auto failure_report = diag::EvaluateSnapshot(snapshot, 1);
+  EXPECT_EQ(failure_report.checks.back().status, diag::Status::Error);
+  const auto failure = diag::SerializeReport(failure_report);
+  EXPECT_NE(failure.find(R"("state":"decrypt_failed")"), std::string::npos);
+  snapshot.dpapi_state = diag::DpapiState::Unavailable;
+  const auto unavailable_report = diag::EvaluateSnapshot(snapshot, 1);
+  EXPECT_EQ(unavailable_report.checks.back().status, diag::Status::Warning);
+  const auto unavailable = diag::SerializeReport(unavailable_report);
+  EXPECT_NE(unavailable.find(R"("state":"unavailable")"), std::string::npos);
 }
 
 TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {

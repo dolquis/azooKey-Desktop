@@ -85,7 +85,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_cli_unicode_argv` | `azookey_inference_host` | 実プロセスの argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
 | `dictionary_tests` | `dictbuild/tests/dictionary_test.cpp` | 辞書 trie の探索方向と最短優先の上限、破損検出、参照失敗時の該当レイヤのみ無効化、静的辞書と可変辞書の独立、ユーザー変更の追跡 |
 | `dictbuild_python_tests` | `dictbuild/tests/test_dictbuild.py` | オフライン辞書ビルダ（Python）の単体テスト |
-| `diagnostics_tests` | `diagnostics/tests/diagnostics_test.cpp` | 診断 JSON schema の固定、機微本文の除外とランタイムログのバイト上限、zip 収集物の限定、`--repair` の冪等性と失敗時の非成功報告 |
+| `diagnostics_tests` | `diagnostics/tests/diagnostics_test.cpp` | 診断 JSON schema の固定、機微本文の除外とランタイムログのバイト上限、zip 収集物の限定、D-014 の実効 OpenAI backend と DPAPI 状態、`--repair` の冪等性と失敗時の非成功報告 |
 | `diagnostics_cli_rejects_help_with_json` | `azookey_diag` | `--help` と `--json` の併用を非 0 終了で拒否 |
 | `diagnostics_cli_rejects_repair_with_json` | `azookey_diag` | `--repair` と `--json` の併用を非 0 終了で拒否 |
 | `tsf_tip_com_smoke_tests` | `tsf-tip/tests/com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)`、`ActivateEx` の sink advise / unadvise。登録 round-trip（`RegisterPublishesProfileAndUnregisterRemovesIt`、`FailedCategoryRegistrationRollsBackAndRetrySucceeds`）は opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、CI では走らない（roadmap「既知のテストギャップ」1） |

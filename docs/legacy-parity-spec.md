@@ -141,9 +141,10 @@ TSF 操作に対応付ける。
 | `replaceSelectedText(s)` | selection range に `SetText(s)`、composition 無し |
 | `playBeep()` | `MessageBeep(MB_OK)` |
 
-実装は `tsf-tip/src/TextService.cpp::ApplyClientAction(const ClientAction&)`
-として 1 メソッドに集約。引数は variant 型。EditSession が必要なものは
-queue に積み、UI スレッドで `RequestEditSession` を呼ぶ。
+M3〜M10 の通常入力では、`TextService::ApplyInputStateResult` が `InputState` の返す
+`ClientAction` 列を順に処理し、TSF 側の副作用を `TextService::ApplyClientAction` に渡す。
+`ClientAction` は variant 型である。EditSession が必要な preedit 更新と確定は
+`RequestPreeditUpdate` と `RequestCommitEditSession` を介して適用する。
 
 C++ の `ClientAction` は `core/include/azookey/core/ClientAction.h` の `std::variant` で、
 上表の各行に対応する struct（`AppendToMarkedText` / `ReplaceMarkedText` / `CommitMarkedText` /
@@ -366,17 +367,17 @@ VK→UserAction マッピング（§1.4）は 2 層に分け、責務を分界�
 
 #### 1.5.4 非回帰移行戦略（M3〜M10 の挙動保存）
 
-M13 の載せ替え対象は、`tsf-tip/src/TextService.cpp::OnKeyDown` が M3〜M10 の挙動を
-メンバ変数へ分散させた inline 分岐で表している範囲である。状態機械への載せ替えは以下の
-戦略で、挙動回帰なし（roadmap M13 受け入れ条件）を担保する。
+M13 の載せ替え対象は、M3〜M10 の通常入力における reading と候補選択の論理状態である。
+`OnKeyDown` は入力を `InputState::HandleEvent` に渡し、非同期候補の鮮度を TIP 側で確認してから
+`InputState::HandleCandidatesArrived` に渡す。状態機械への載せ替えは以下の戦略で、
+挙動回帰なし（roadmap M13 受け入れ条件）を担保する。
 
 - **特性化テスト先行（strangler 移行）**: リファクタ前に、現行 OnKeyDown の M3〜M10 挙動を
   状態遷移として `core/tests/input_state_test.cpp` に固定する。既存
   `tsf-tip/tests/onkeydown_preedit_test.cpp` は移行中も常に緑に保つ（等価性ゲート）。
 - **状態所有の分割**: 現行の暗黙状態を以下に振り分ける。
-  - **core `InputState`（論理状態）**: `kind`、reading バッファ（`preedit_kana_` + `romaji_` の
-    ペンディング = `core::RomajiKanaConverter`）、候補スナップショット（`shown_candidates_`）+
-    選択 index（`selected_candidate_idx_`）、Unicode 16 進バッファ。
+  - **core `InputState`（論理状態）**: `kind`、reading（確定かなと pending romaji）、
+    候補スナップショットと選択 index、Unicode 16 進バッファ。
   - **TIP 専有（プランビング・`TextService` に残す）**: `ITfComposition* composition_`、
     `ITfContext*`（active / commit context）、IPC の id 群（`ipc_pending_id_` /
     `ipc_inflight_id_` / `ipc_has_request_` — **staleness は TIP 側に残す**）、
@@ -385,6 +386,11 @@ M13 の載せ替え対象は、`tsf-tip/src/TextService.cpp::OnKeyDown` が M3�
   - **分界の根拠**: IPC staleness と TSF オブジェクトは本質的に非同期・プラットフォーム依存。
     core は同期・純粋に保つ。候補の **データ + 選択 index** は core へ、候補 **ウィンドウ** は
     TIP に残す。
+  - **TIP の mirror と例外経路**: `preedit_kana_` / `romaji_` は EditSession と例外経路の表示用、
+    `shown_candidates_` / `selected_candidate_idx_` は候補 UI と IPC 学習 metadata 用の mirror とする。
+    通常入力の正典は `input_state_` とし、batch、emoji、number rewriter、rewriter 有効時の
+    Space は TIP の前処理を維持する。例外経路から通常入力へ戻す際は composition を core に
+    取り込むか、reading が空なら core を初期化する。
 - **非同期候補と staleness の保存**: 候補問い合わせは非同期のため、純粋 core は待てない。
   `HandleEvent(StartConversion)` を `Composing` で受けたら `[queryCandidates(reading)]` を出すが、
   **候補が未到着のうちは `Selecting` へ遷移しない**（候補スナップショット・窓が無い状態で Enter /

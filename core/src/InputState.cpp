@@ -44,6 +44,21 @@ InputState InputState::WithLiveConversion(bool enabled) const {
   return next;
 }
 
+InputState InputState::WithComposition(std::string confirmed_kana,
+                                       const RomajiKanaConverter& pending_romaji) const {
+  InputState next = Reset();
+  next.kana_ = std::move(confirmed_kana);
+  next.romaji_ = pending_romaji;
+  if (!next.kana_.empty() || next.romaji_.HasPending()) next.kind_ = InputStateKind::Composing;
+  return next;
+}
+
+InputState InputState::Reset() const {
+  InputState next = *this;
+  next.ResetComposition();
+  return next;
+}
+
 HandleResult InputState::HandleEvent(const UserActionEvent& event,
                                      const EditContextHint& hint) const {
   // M13 transitions are document independent; hint-dependent paths (M61-A)
@@ -178,9 +193,7 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
     case UserAction::Backspace:
       // Resuming edits closes the window without committing the highlight.
       result.actions.push_back(HideCandidateWindow{});
-      next.kind_ = next.live_conversion_ && IsCharacterInput(event.action)
-                       ? InputStateKind::Previewing
-                       : InputStateKind::Composing;
+      next.kind_ = InputStateKind::Composing;
       next.selected_index_ = 0;
       if (IsCharacterInput(event.action)) {
         next.AppendInput(event);

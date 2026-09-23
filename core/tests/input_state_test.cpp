@@ -259,6 +259,47 @@ TEST(InputStateTest, TypingWhileSelectingClosesWindowAndContinuesReading) {
             (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
 }
 
+TEST(InputStateTest, TypingWhileSelectingWithLiveConversionReturnsToComposing) {
+  const HandleResult result =
+      Selecting().WithLiveConversion(true).HandleEvent(Ev(UserAction::Input, U'k'));
+  EXPECT_EQ(result.next.kind(), K::Composing);
+  EXPECT_EQ(result.next.Reading(), "かなk");
+  EXPECT_EQ(result.actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
+}
+
+TEST(InputStateTest, ImportedCompositionPreservesPendingRomajiAndDiscardsCandidateCache) {
+  RomajiKanaConverter pending;
+  EXPECT_TRUE(pending.Feed('k').empty());
+  const InputState imported = Selecting().WithComposition("か", pending);
+  EXPECT_EQ(imported.kind(), K::Composing);
+  EXPECT_EQ(imported.confirmed_kana(), "か");
+  EXPECT_EQ(imported.pending_romaji().PreviewPending(), "k");
+  EXPECT_EQ(imported.Reading(), "かk");
+  EXPECT_TRUE(imported.candidates().empty());
+  EXPECT_EQ(imported.selected_index(), 0u);
+  EXPECT_FALSE(imported.awaiting_candidates());
+
+  const HandleResult erased = imported.HandleEvent(Ev(UserAction::Backspace));
+  EXPECT_EQ(erased.next.Reading(), "か");
+  EXPECT_EQ(erased.actions, (Actions{ReplaceMarkedText{"か"}, QueryCandidates{"か"}}));
+}
+
+TEST(InputStateTest, ResetKeepsSettingsButDiscardsLogicalComposition) {
+  const InputState reset = Composing()
+                               .HandleEvent(Ev(UserAction::StartConversion))
+                               .next.WithLiveConversion(true)
+                               .Reset();
+  EXPECT_EQ(reset.kind(), K::Idle);
+  EXPECT_TRUE(reset.live_conversion());
+  EXPECT_TRUE(reset.Reading().empty());
+  EXPECT_TRUE(reset.candidates().empty());
+  EXPECT_EQ(reset.selected_index(), 0u);
+  EXPECT_FALSE(reset.awaiting_candidates());
+  EXPECT_EQ(reset.WithComposition("").kind(), K::Idle);
+  EXPECT_EQ(reset.WithComposition("かな").kind(), K::Composing);
+}
+
 // Cache miss: StartConversion never enters Selecting without a snapshot.
 TEST(InputStateTest, CacheMissQueriesAndStaysComposing) {
   const HandleResult result = Composing().HandleEvent(Ev(UserAction::StartConversion));

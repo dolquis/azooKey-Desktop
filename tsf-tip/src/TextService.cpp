@@ -814,6 +814,21 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
   candidate_ui_.Create();
   candidate_ui_.SetOnClick([this](int idx) {
+    if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
+        active_context_) {
+      core::UserActionEvent event;
+      event.action = core::UserAction::SelectByDigit;
+      event.digit = idx + 1;
+      try {
+        auto result = input_state_.HandleEvent(event);
+        core_commit_selected_index_ = static_cast<size_t>(idx);
+        ApplyInputStateResult(active_context_, std::move(result));
+      } catch (...) {
+        core_action_in_progress_ = false;
+      }
+      core_commit_selected_index_.reset();
+      return;
+    }
     selected_candidate_idx_ = idx;
     if (active_context_) CommitSelected(active_context_);
   });
@@ -1266,6 +1281,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (SUCCEEDED(retry_hr)) {
         preedit_kana_.clear();
         romaji_.Reset();
+        input_state_ = input_state_.Reset();
+        core_marked_surface_.clear();
         ClearBatchState();
         *eaten = TRUE;
         return S_OK;
@@ -1279,10 +1296,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (!HasSystemModifier(modifiers)) {
       bool emoji_handled = false;
       const HRESULT emoji_hr = HandleEmojiKey(context, wParam, lParam, eaten, false, emoji_handled);
+      if (emoji_handled) core_input_active_ = false;
       if (FAILED(emoji_hr) || emoji_handled) return emoji_hr;
       bool bracket_handled = false;
       const HRESULT bracket_hr =
           HandleBracketKey(context, wParam, lParam, eaten, false, bracket_handled);
+      if (bracket_handled) core_input_active_ = false;
       if (bracket_claimed && !*eaten) {
         *eaten = TRUE;
         return bracket_hr == E_OUTOFMEMORY ? bracket_hr : S_OK;
@@ -1364,6 +1383,62 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     using core::UserAction;
     const bool is_input = IsActionKey(key_event, UserAction::Input);
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
+    // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
+    // and the rewriter Space path keep their existing TIP pre-processing.
+    const bool legacy_path = BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive ||
+                             bracket_composition_ ||
+                             number_rewriter_.load(std::memory_order_relaxed) ||
+                             (IsActionKey(key_event, UserAction::StartConversion) &&
+                              (symbol_rewriter_.load(std::memory_order_relaxed) ||
+                               emoji_rewriter_.load(std::memory_order_relaxed)));
+    if (!legacy_path && !core_input_active_ && !has_preedit && !cand_visible) {
+      input_state_ = input_state_.Reset();
+      core_marked_surface_.clear();
+      core_input_active_ = true;
+    }
+    if (!legacy_path && core_input_active_ && key_event) {
+      core::UserActionEvent event = *key_event;
+      bool supported = true;
+      if (event.action == UserAction::Input) {
+        if (wParam >= 'A' && wParam <= 'Z') {
+          event.codepoint = static_cast<char32_t>(wParam);
+        } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) && has_preedit) {
+          event.codepoint = U'-';
+        } else if (composition_symbol && has_preedit) {
+          size_t offset = 0;
+          char32_t cp = 0;
+          if (core::DecodeNextUtf8(composition_symbol->surface, offset, cp) &&
+              offset == composition_symbol->surface.size())
+            event.codepoint = cp;
+          else
+            supported = false;
+        } else {
+          supported = false;
+        }
+      }
+      if (supported && input_state_.kind() == core::InputStateKind::Idle && has_preedit)
+        input_state_ = input_state_.WithComposition(preedit_kana_, romaji_);
+      if (supported && (!cand_visible || input_state_.kind() == core::InputStateKind::Selecting)) {
+        if (input_state_.kind() == core::InputStateKind::Composing &&
+            !input_state_.awaiting_candidates()) {
+          auto cached = CoreCandidatesFromCache();
+          if (!cached.empty()) {
+            const HRESULT cache_hr = ApplyInputStateResult(
+                context, input_state_.HandleCandidatesArrived(std::move(cached)));
+            if (FAILED(cache_hr)) return cache_hr;
+          }
+        }
+        if (event.action == UserAction::SelectByDigit && event.digit >= 1 &&
+            static_cast<size_t>(event.digit) <= input_state_.candidates().size())
+          core_commit_selected_index_ = static_cast<size_t>(event.digit - 1);
+        const HRESULT hr = ApplyInputStateResult(context, input_state_.HandleEvent(event));
+        core_commit_selected_index_.reset();
+        if (FAILED(hr)) return hr;
+        *eaten = TRUE;
+        return S_OK;
+      }
+    }
+    if (legacy_path) core_input_active_ = false;
     if (IsActionKey(key_event, UserAction::SelectByDigit)) {
       int idx = key_event->digit - 1;
       if (idx < candidate_ui_.GetCount()) {
@@ -1761,8 +1836,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
   } catch (const std::bad_alloc&) {
+    core_action_in_progress_ = false;
+    core_commit_selected_index_.reset();
     return E_OUTOFMEMORY;
   } catch (...) {
+    core_action_in_progress_ = false;
+    core_commit_selected_index_.reset();
     return E_FAIL;
   }
   return S_OK;
@@ -2041,6 +2120,9 @@ void TextService::ClearTextStateForLifecycle() {
   bracket_composition_ = false;
   preedit_kana_.clear();
   romaji_.Reset();
+  input_state_ = input_state_.Reset();
+  core_marked_surface_.clear();
+  core_input_active_ = true;
   ClearBatchState();
   committing_ = false;
   commit_surface_.clear();
@@ -2286,6 +2368,10 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
     romaji_.Reset();
+    if (!core_action_in_progress_) {
+      input_state_ = input_state_.Reset();
+      core_marked_surface_.clear();
+    }
     ClearBatchState();
   } else if (!committing_) {
     commit_surface_.clear();
@@ -2348,6 +2434,10 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
   if (SUCCEEDED(commit_hr)) {
     preedit_kana_.clear();
     romaji_.Reset();
+    if (!core_action_in_progress_) {
+      input_state_ = input_state_.Reset();
+      core_marked_surface_.clear();
+    }
     ClearBatchState();
   } else if (!committing_) {
     commit_surface_.clear();
@@ -3256,7 +3346,9 @@ void TextService::ServeConnection() {
           }
         }
       }
-      if (notify_ui) candidate_ui_.PostCandidatesReady();
+      // Deliver every fresh ordinary response on the UI thread, including a
+      // live result that arrived before Space was pressed.
+      if (notify_ui || (!is_batch && emoji_trigger.empty())) candidate_ui_.PostCandidatesReady();
     } else {
       RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_stale_query_result",
                  {{"request_id", req_id}});
@@ -3495,11 +3587,234 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_cv_.notify_one();
 }
 
+std::vector<core::Candidate> TextService::CoreCandidatesFromCache() {
+  std::lock_guard<std::mutex> lock(candidates_mtx_);
+  core_cached_metadata_ = candidates_;
+  std::vector<core::Candidate> result;
+  result.reserve(core_cached_metadata_.size());
+  for (const auto& item : core_cached_metadata_) {
+    core::Candidate candidate;
+    candidate.surface = item.field.surface;
+    candidate.reading = item.field.reading;
+    candidate.score = item.field.score;
+    candidate.description = item.description;
+    result.push_back(std::move(candidate));
+  }
+  return result;
+}
+
+HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAction& action,
+                                       bool& preedit_update_needed, bool& commit_pending) {
+  if (const auto* replace = std::get_if<core::ReplaceMarkedText>(&action)) {
+    core_marked_surface_ = replace->text;
+    preedit_update_needed = true;
+  } else if (std::holds_alternative<core::CancelMarkedText>(action)) {
+    core_marked_surface_.clear();
+    CancelPendingQueriesForLifecycle();
+    preedit_update_needed = true;
+  } else if (std::holds_alternative<core::HideCandidateWindow>(action)) {
+    candidate_ui_.EndUI();
+    preedit_update_needed = true;
+  } else if (const auto* show = std::get_if<core::ShowCandidateWindow>(&action)) {
+    // The TIP snapshot retains IPC metadata; InputState owns the logical
+    // candidate list and selected index. Both are captured at the same point.
+    shown_candidates_ = core_cached_metadata_;
+    if (shown_candidates_.size() != show->candidates.size()) return E_UNEXPECTED;
+    for (size_t i = 0; i < shown_candidates_.size(); ++i)
+      if (shown_candidates_[i].field.surface != show->candidates[i].surface) return E_UNEXPECTED;
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      candidate_window_show_pending_ = false;
+    }
+    selected_candidate_idx_ = static_cast<int>(show->selected_index);
+    const auto items = BuildCandidateViews(shown_candidates_);
+    if (items.empty()) return S_OK;
+    const HRESULT hr =
+        candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, selected_candidate_idx_);
+    if (FAILED(hr)) return hr;
+    preedit_update_needed = true;
+  } else if (const auto* selection = std::get_if<core::UpdateCandidateSelection>(&action)) {
+    const int index = static_cast<int>(selection->index);
+    const HRESULT hr = candidate_ui_.MoveSelection(index - selected_candidate_idx_);
+    if (FAILED(hr)) return hr;
+    selected_candidate_idx_ = index;
+    preedit_update_needed = true;
+  } else if (const auto* query = std::get_if<core::QueryCandidates>(&action)) {
+    core_cached_metadata_.clear();
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      candidates_.clear();
+      candidate_window_show_pending_ = input_state_.awaiting_candidates();
+    }
+    PostQueryCandidates(context, query->reading);
+  } else if (std::holds_alternative<core::CommitMarkedText>(action)) {
+    pending_commit_observation_.reset();
+    commit_pending = true;
+  } else if (const auto* observe = std::get_if<core::ObserveCommit>(&action)) {
+    // Preserve the source and alternatives from the displayed TIP snapshot.
+    // InputState deliberately carries only the pure reading/surface decision.
+    const size_t commit_index = core_commit_selected_index_.value_or(
+        selected_candidate_idx_ >= 0 ? static_cast<size_t>(selected_candidate_idx_) : 0);
+    if (commit_index < shown_candidates_.size()) {
+      const auto& chosen = shown_candidates_[commit_index];
+      if (chosen.field.surface == observe->surface && !chosen.local &&
+          chosen.field.source != "symbol" && chosen.field.source != "emoji" &&
+          chosen.field.source != "llm" && chosen.field.source != "privacy-fallback" &&
+          chosen.field.source != "fallback") {
+        const auto privacy = ResolvePrivacy(context, false);
+        pending_commit_observation_ =
+            PendingCommitObservation{observe->reading,
+                                     chosen.field,
+                                     HostCandidateFields(shown_candidates_),
+                                     {},
+                                     privacy.secure,
+                                     !privacy.secure && batch_learning_allowed_};
+      }
+    }
+  }
+  return S_OK;
+}
+
+HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResult result) {
+  auto previous_state = input_state_;
+  auto previous_kana = preedit_kana_;
+  auto previous_romaji = romaji_;
+  auto previous_marked = core_marked_surface_;
+  auto previous_metadata = core_cached_metadata_;
+  auto previous_shown = shown_candidates_;
+  const int previous_selected = selected_candidate_idx_;
+  const bool was_showing = candidate_ui_.IsShowing();
+  bool preedit_was_updated = false;
+  auto rollback = [&]() {
+    input_state_ = std::move(previous_state);
+    preedit_kana_ = std::move(previous_kana);
+    romaji_ = std::move(previous_romaji);
+    core_marked_surface_ = std::move(previous_marked);
+    core_cached_metadata_ = std::move(previous_metadata);
+    shown_candidates_ = std::move(previous_shown);
+    selected_candidate_idx_ = previous_selected;
+    core_action_in_progress_ = false;
+    try {
+      if (was_showing && !shown_candidates_.empty()) {
+        candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                              BuildCandidateViews(shown_candidates_), previous_selected);
+      } else {
+        candidate_ui_.EndUI();
+      }
+      if (preedit_was_updated && context) RequestPreeditUpdate(context);
+    } catch (...) {
+      // Logical rollback must survive a second allocation failure in TSF UI.
+    }
+  };
+  try {
+    input_state_ = std::move(result.next);
+    core_action_in_progress_ = true;
+    bool preedit_update_needed = false;
+    bool commit_pending = false;
+    HRESULT hr = S_OK;
+    for (const auto& action : result.actions) {
+      if (std::holds_alternative<core::QueryCandidates>(action)) continue;
+      hr = ApplyClientAction(context, action, preedit_update_needed, commit_pending);
+      if (FAILED(hr)) break;
+    }
+    if (SUCCEEDED(hr) && preedit_update_needed && !commit_pending) {
+      const HRESULT update_hr = RequestPreeditUpdate(context);
+      preedit_was_updated = SUCCEEDED(update_hr);
+      // Keep the existing async edit-session contract: only allocation failure
+      // can roll the logical key transition back synchronously.
+      if (update_hr == E_OUTOFMEMORY) hr = update_hr;
+    }
+    if (SUCCEEDED(hr)) {
+      for (const auto& action : result.actions) {
+        if (!std::holds_alternative<core::QueryCandidates>(action)) continue;
+        hr = ApplyClientAction(context, action, preedit_update_needed, commit_pending);
+        if (FAILED(hr)) break;
+      }
+    }
+    if (SUCCEEDED(hr) && commit_pending) {
+      // A queued or in-flight query must be cancelled even when no worker has
+      // started yet (the existing M10 commit contract).
+      {
+        std::lock_guard<std::mutex> lock(ipc_mtx_);
+        bool need_notify = false;
+        if (ipc_has_request_) {
+          ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}),
+                                     false, ipc_pending_id_});
+          ipc_has_request_ = false;
+          need_notify = true;
+        }
+        if (ipc_inflight_id_ != 0) {
+          ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                                     false, ipc_inflight_id_});
+          need_notify = true;
+        }
+        ++ipc_pending_id_;
+        TrimIpcSendQueueLocked();
+        if (need_notify) ipc_cv_.notify_one();
+      }
+      {
+        std::lock_guard<std::mutex> lock(candidates_mtx_);
+        candidates_.clear();
+        candidate_window_show_pending_ = false;
+      }
+      commit_surface_ = core_marked_surface_;
+      committing_ = true;
+      SetCommitContext(context);
+      hr = RequestCommitEditSession(context);
+      if (SUCCEEDED(hr)) {
+        core_marked_surface_.clear();
+        shown_candidates_.clear();
+        selected_candidate_idx_ = 0;
+        preedit_kana_.clear();
+        romaji_.Reset();
+        ClearBatchState();
+      } else if (!committing_) {
+        commit_surface_.clear();
+        pending_commit_observation_.reset();
+      }
+      if (hr != E_OUTOFMEMORY) hr = S_OK;
+    }
+    if (hr == E_OUTOFMEMORY || FAILED(hr)) {
+      rollback();
+      return hr;
+    }
+    if (!commit_pending) {
+      preedit_kana_ = input_state_.confirmed_kana();
+      romaji_ = input_state_.pending_romaji();
+      selected_candidate_idx_ = static_cast<int>(input_state_.selected_index());
+      if (input_state_.kind() != core::InputStateKind::Selecting) shown_candidates_.clear();
+    }
+    if (input_state_.awaiting_candidates() && IpcHostUnavailable()) {
+      const std::string reading = input_state_.Reading();
+      {
+        std::lock_guard<std::mutex> lock(candidates_mtx_);
+        candidates_ = BuildTipCandidates(reading, BuildLocalFallbackCandidates(reading),
+                                         number_rewriter_.load(std::memory_order_relaxed),
+                                         katakana_rewriter_.load(std::memory_order_relaxed));
+      }
+      core_action_in_progress_ = false;
+      return ApplyInputStateResult(context,
+                                   input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
+    }
+    core_action_in_progress_ = false;
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    rollback();
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    rollback();
+    return E_FAIL;
+  }
+}
+
 std::string TextService::CurrentPreeditSurface() const {
   return preedit_kana_ + romaji_.PreviewPending();
 }
 
 std::string TextService::CurrentDisplayedPreeditSurface() const {
+  if (core_input_active_ && (input_state_.kind() != core::InputStateKind::Idle || committing_ ||
+                             !core_marked_surface_.empty() || core_action_in_progress_))
+    return core_marked_surface_;
   if (emoji_mode_ != EmojiMode::Inactive) return CurrentPreeditSurface();
   if (candidate_ui_.IsShowing() && !shown_batch_segments_.empty()) {
     std::string surface;
@@ -3534,6 +3849,19 @@ POINT TextService::CandidateAnchorPoint() {
 }
 
 void TextService::ShowCandidateWindowFromCache() {
+  if (core_input_active_ && input_state_.kind() != core::InputStateKind::Idle &&
+      shown_batch_segments_.empty() && emoji_mode_ == EmojiMode::Inactive) {
+    if (input_state_.kind() == core::InputStateKind::Selecting ||
+        input_state_.Reading() != CurrentPreeditSurface())
+      return;
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      candidate_window_show_pending_ = false;
+    }
+    ApplyInputStateResult(active_context_,
+                          input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
+    return;
+  }
   if (CurrentPreeditSurface().empty() || candidate_ui_.IsShowing()) {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidate_window_show_pending_ = false;

@@ -1538,8 +1538,10 @@ patch として追加し、本表を更新する。`EtwPhase` 側に JSON Lines 
 本表へ行を加える。
 
 ETW は文字列を持たない（`docs/sideload-packaging-spec.md` §7.2.1）ため `trace_id` を載せず、
-相関キーを `(client_guid, request_id)` とする。`client_guid` は TIP の接続ごとの ID で、
-TIP インスタンスごとに独立して採番される `request_id` の衝突を分ける。JSON Lines と ETW は
+相関キーを `(client_guid, request_id)` とする。`client_guid` は TIP インスタンスの ID で、
+primary 接続と control 接続で共有する。TIP インスタンスごとに独立して採番される `request_id` の
+TIP 間の衝突を分ける。1 つの TIP の中では 2 系統の allocator と control 接続の wire id が
+同じ数値を取りうるため、`IpcRequest`（3000）の `message_type` と時刻で分ける。JSON Lines と ETW は
 `request_id` と時刻で突き合わせ、TIP 間の衝突は JSON Lines では `trace_id`、ETW では
 `client_guid` で分ける。
 
@@ -1560,9 +1562,10 @@ IPC 応答 payload の `error` 文字列（`unsupported_message_type`、`safe_mo
 ### 7.5 タイムアウト規約
 
 変換候補問い合わせを含む request レイヤの timeout は、処理種別ごとに 1 つの deadline とする。
-値は §8.5.2 の timeout 表が正典である。deadline を超えた要求は打ち切り
-（Cancel を送り、応答は staleness check で破棄する）、ローカル候補（§8.3）で入力を続け、
-超過をログに記録する。ソフト / ハードの 2 段は持たず、打ち切り前の警告段階は置かない。
+値は §8.5.2 の timeout 表が正典である。deadline を超えた要求は打ち切り、遅れて届いた応答は
+staleness check で破棄し、超過をログに記録する。変換要求（`QueryCandidates` など）は Host に
+Cancel を送り、ローカル候補（§8.3）で入力を続ける。`Health` のように Host 側で重い処理を
+伴わない要求は Cancel を送らない。ソフト / ハードの 2 段は持たず、打ち切り前の警告段階は置かない。
 打ち切りが連続した場合の劣化モードへの移行は §8.3 の劣化判定に従う。
 
 本節が定めるのは request レイヤ（要求送信から応答受信まで。推論時間を含む）の
@@ -1611,8 +1614,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   本文系・機密を判定する `logging::IsSensitiveRuntimeLogField`
   （`core/include/azookey/logging/RuntimeLogger.h`）と、自由文字列のユーザーパスを環境変数表記へ
   正規化し資格情報の形をした部分を伏せる `core::RedactFreeText`
-  （`core/include/azookey/core/Redaction.h`）とする。診断 ZIP が settings の field を判定する規則も
-  この 2 関数に寄せ、別の判定表を持たない。
+  （`core/include/azookey/core/Redaction.h`）とする。診断 ZIP の settings は、本文系 field の判定に
+  `logging::IsSensitiveRuntimeLogField` を使い、それに加えて §12.5 の `settings.redacted.json` 行が
+  定める settings 固有の field（API key、prompt、path）を処理する。本文系の判定を別に書き起こさない。
 - レイテンシ trace（§7.7）は本文を含まないメタ情報であり、本ポリシーの
   redact 対象外（phase 別 `latency_ms` は Release でも記録してよい）。
 - 互換性テスト（§13）でも、Release 既定で本文がログ・成果物に残らないことを
@@ -1928,11 +1932,13 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 | `SafeMode` | 連続クラッシュにより AI / 学習を停止 | 安定優先 |
 
 遷移トリガと駆動 timeout（§8.5.2）を一覧化する。`request_id` / `trace_id`
-（§7.3）で staleness を判定し、状態遷移は §7 のログに記録する。
+（§7.3）で staleness を判定し、状態遷移は §7 のログに記録する。`DegradedSimple` /
+`RecoveringTransport` を通る行は、TIP が合成する表示状態（下記「ユーザー可視状態の合成」）の
+遷移であり、Host の状態機械はこれらの行を通らない。
 
 | From | To | トリガ | 駆動 timeout / 閾値 |
 |---|---|---|---|
-| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates` fast 150ms / live 80ms の deadline 超過が連続 2 回（§8.3） |
+| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates` 150ms の deadline 超過が連続 2 回（§8.3） |
 | `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 or 推論 timeout | Model load 30s / 推論 deadline 超過 |
 | `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake 受理） | exponential backoff（§8.3） |
 | `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` または `UpdateConfig` によるパス付きの再ロード開始（完了ではない） | Model load 30s |
@@ -1994,7 +2000,9 @@ TIP は Host の状態を primary 接続の `QueryDiagnostics`（§12.6）で取
 - `Health`（§8.3）の応答の `status` または `model_loaded` が直前の応答から変わったとき。
 
 `QueryDiagnostics` は入力中の要求と同じ接続で直列に扱い、応答待ちの上限と、入力の要求が
-来たときの打ち切りは §8.3 の `Health` と同じ規則に従う。取得に失敗した場合は表示を変えない。
+来たときの打ち切りは §8.3 の `Health` と同じ規則に従う。取得に失敗した場合と入力の要求で
+打ち切った場合は表示を変えず、次に primary 接続が監視間隔（§8.3）の間 idle になったときに
+送り直す。取得できるまで送り直しを続け、上の 2 つの契機を待たない。
 応答の `loaded_model_path` / `last_error` などの文字列は、TIP の表示にもログにも使わない。
 
 `HealthPayload.status` は Host が `last_error` から決める粗い値である。`last_error` が無ければ
@@ -2138,8 +2146,11 @@ TIP の設定監視にも届き、TIP は通常の設定変更と同じく Hands
 - 「再試行」クリックで TIP は `UpdateConfig` を送る。Host は `settings.json` を読み直し、
   選択中のモデルと backend で再ロードする（§8.5.1 の `RecoveringModel`）。TIP はモデルの
   パスも backend も持たないため、`LoadModel` は使わない。再ロードは完了まで応答しないため、
-  Cancel と同じく Handshake を済ませた短命な control 接続（§7.3）で送り、primary 接続の
-  入力処理を待たせない。結果は §8.5.1 の契機で取得する `fallback_state` で観測する
+  IPC ワーカーとは別のスレッドから、Cancel と同じく Handshake を済ませた短命な control 接続
+  （§7.3）で送り、primary 接続の入力処理を待たせない。応答は control 接続で待ってから閉じ、
+  待ちの上限は §8.5.2 の Model load とする。送信中は同じ TIP インスタンスから重ねて送らず、
+  [再試行] を押せない状態にする。複数の TIP から届いた `UpdateConfig` は Host が直列に処理する。
+  結果は §8.5.1 の契機で取得する `fallback_state` で観測する
 - `safe_mode` では再ロードが `error: "safe_mode"` で拒否されるため [再試行] を出さず、
   [詳細] で `docs/debugging.md`「典型トラブル」の解除手順を案内する
 

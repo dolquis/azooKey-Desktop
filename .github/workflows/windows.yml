@@ -1067,13 +1067,17 @@ jobs:
           $coverageExe = Join-Path $env:RUNNER_TEMP 'OpenCppCoverage/OpenCppCoverage.exe'
           $arguments = @(
             '--cover_children',
+            "--modules=$env:GITHUB_WORKSPACE",
             "--sources=$env:GITHUB_WORKSPACE",
             '--excluded_sources=*\tests\*',
             '--excluded_sources=*\third_party\*',
             '--excluded_sources=*\build\*',
             "--export_type=html:$(Join-Path $reportDir 'html')",
             "--export_type=cobertura:$(Join-Path $reportDir 'coverage.xml')",
-            '--', 'ctest.exe', '--preset', 'windows-debug', '--no-tests=error', '--parallel', '1'
+            # The debugger changes deliberate crash behavior; large log-bound tests hit
+            # their normal 60-second CTest timeout under instrumentation.
+            '--', 'ctest.exe', '--preset', 'windows-debug', '--no-tests=error', '--parallel', '1',
+            '--exclude-regex', '^(CrashReportingTest[.]|DiagnosticsTest[.]CollectionBounds)'
           )
           & $coverageExe @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

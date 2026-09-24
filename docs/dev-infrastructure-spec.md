@@ -621,6 +621,8 @@ OFF のまま）。
   Windows Debug の CTest 子プロセスを計測する。tests / `third_party` / `build` を
   集計から除き、HTML と Cobertura を `windows-opencppcoverage` artifact として
   14 日保持する。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
+  デバッガ下で挙動が変わるクラッシュ注入テストと、計測時に時間制限を超える
+  大量ログ境界テストは計測 CTest から除く。通常の Windows Debug ジョブでは実行する。
   Linux の portable subset とは別系列で可視化する。数値閾値は設けない。
   計測・レポート生成の失敗はジョブに表示するが、`ci-gate` では advisory として
   扱い、PR の必須チェックを止めない

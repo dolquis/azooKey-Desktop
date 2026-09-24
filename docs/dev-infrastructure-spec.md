@@ -1541,8 +1541,13 @@ ETW は文字列を持たない（`docs/sideload-packaging-spec.md` §7.2.1）�
 相関キーを `(client_guid, request_id)` とする。`client_guid` は TIP インスタンスの ID で、
 primary 接続と control 接続で共有する。TIP インスタンスごとに独立して採番される `request_id` の
 TIP 間の衝突を分ける。1 つの TIP の中では 2 系統の allocator と control 接続の wire id が
-同じ数値を取りうるため、`IpcRequest`（3000）の `message_type` と時刻で分ける。JSON Lines と ETW は
-`request_id` と時刻で突き合わせ、TIP 間の衝突は JSON Lines では `trace_id`、ETW では
+同じ数値を取りうる。`IpcRequest`（3000）は `message_type` を持つが、`IpcResponse` / `IpcPhase` /
+`InferenceStart` / `InferenceEnd` は MessageType も接続の識別子も持たないため、
+`(client_guid, request_id)` は ETW の中で要求を一意に決めるキーではない。ETW は区間の所要時間と
+OS イベント（CSwitch / DiskIO）との重ね合わせに使い、要求単位の厳密な結合は JSON Lines の
+`(trace_id, request_id)` と MessageType で行う。ETW の行を要求へ結び付ける必要がある調査では、
+JSON Lines の同じ `request_id` の行と時刻で照合し、一意に決まらない組は結合しない。
+JSON Lines と ETW を突き合わせるときも、TIP 間の衝突は JSON Lines では `trace_id`、ETW では
 `client_guid` で分ける。
 
 ### 7.4 エラーコード体系
@@ -1913,7 +1918,7 @@ Recovering
 Healthy
 
 Healthy
-  ↓ model load failed / inference timeout
+  ↓ model load failed
 DegradedModel    ← Host は健康だが Zenzai 無効、辞書 + 学習 + Simple
   ↓ reload success
 Healthy
@@ -1927,7 +1932,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 |---|---|---|
 | `Healthy` | Host + Zenzai 正常 | 通常 |
 | `DegradedSimple` | Host 不調（pipe 切断または connected-but-silent）。TIP 内ローカル候補（§8.3）で継続 | 変換品質低下 |
-| `DegradedModel` | Host は正常だが Zenzai 無効（ロード失敗・推論 deadline 超過）。Host の辞書 + 学習 + SimpleConverter で継続 | 変換品質低下 |
+| `DegradedModel` | Host は正常だが Zenzai 無効（モデルのロード失敗）。Host の辞書 + 学習 + SimpleConverter で継続 | 変換品質低下 |
 | `Recovering` | 再接続 / 再ロード中 | 一時的に候補更新遅延 |
 | `SafeMode` | 連続クラッシュにより AI / 学習を停止 | 安定優先 |
 
@@ -1939,7 +1944,7 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 | From | To | トリガ | 駆動 timeout / 閾値 |
 |---|---|---|---|
 | `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates` 150ms の deadline 超過が連続 2 回（§8.3） |
-| `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 or 推論 timeout | Model load 30s / 推論 deadline 超過 |
+| `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 | Model load 30s |
 | `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake 受理） | exponential backoff（§8.3） |
 | `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` または `UpdateConfig` によるパス付きの再ロード開始（完了ではない） | Model load 30s |
 | `Recovering`（transport 復旧） | `Healthy` | Handshake 受理後に TIP が Host の状態（`QueryDiagnostics.fallback_state`）を受け取る | `QueryDiagnostics` 500ms 以内 |
@@ -1966,6 +1971,11 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
   失敗すると `DegradedModel`、`DegradedModel` でパス付きのロードを始めると `RecoveringModel`、
   そのロードが成功して `model_loaded` が真になると `Healthy`、失敗すると `DegradedModel` へ戻る。
   別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
+- 推論の失敗と deadline 超過は状態を変えない。ロード済みモデルの推論が例外や deadline 超過で
+  失敗した要求は、その要求だけを SimpleConverter の候補へ落とす（`ZenzaiModelConverter` の
+  fallback）。次の要求は再び Zenzai で処理する。要求単位で落とすため、単発の遅延でモデル全体を
+  止めず、`DegradedModel` からの復帰にモデルの再ロードも要さない。連続した失敗で状態を
+  遷移させる規則は、閾値の根拠（ベンチでの頻度と品質への影響）を得てから本表へ行として追加する。
 - `SafeMode`: Host が起動時に §8.5.3 の条件で入り、`UpdateConfig` で
   `settings.safeMode.enabled=false` を読んだときに `Healthy` へ戻る。起動時や `UpdateConfig` で
   `enabled=true` を読んだときは、突入の経路によらずその値に従って `SafeMode` に置く
@@ -2162,11 +2172,11 @@ karukan は `max_latency_ms` を超えたら main（90M）から light（26M）�
 ためである。ParallelBeam も同じ理由で採らない。
 
 その上で、この機構が解こうとしている問題、すなわち「遅いときは軽い経路へ落として応答を
-返す」ことは、**M47 の縮退経路が担う**。§8.5.1 の `Healthy` → `DegradedModel`
-は推論 deadline 超過を遷移トリガに持ち、その閾値は §8.5.2 の Heavy inference 800ms で
-ある。これが karukan の `max_latency_ms` に対応する。落ちる先は軽量モデルではなく、
-Zenzai を無効化した辞書 + 学習 + SimpleConverter の経路であり、モデルをもう 1 つ常駐
-させずに同じ目的を果たす。backend の切り替えもモデル差し替えとは別の軸にあり、ロード失敗時に
+返す」ことは、**M47 の要求単位の fallback が担う**。§8.5.1 のとおり、推論が deadline を
+超えた要求はその要求だけを SimpleConverter の候補へ落とし、状態機械は遷移させない。
+この deadline は §8.5.2 の Heavy inference 800ms であり、これが karukan の
+`max_latency_ms` に対応する。落ちる先は軽量モデルではなく、辞書 + 学習 +
+SimpleConverter の経路であり、モデルをもう 1 つ常駐させずに同じ目的を果たす。backend の切り替えもモデル差し替えとは別の軸にあり、ロード失敗時に
 CPU backend へ再試行し、それも失敗したら SimpleConverter へ落とす経路は
 `docs/model-management-spec.md` §5.3 が定めている。
 

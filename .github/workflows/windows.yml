@@ -1002,6 +1002,114 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  windows-coverage:
+    name: Windows coverage (informational)
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Cache GoogleTest source
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/windows-debug/_deps
+          key: googletest-v1.17.0-${{ runner.os }}-Coverage-Debug
+          restore-keys: |
+            googletest-v1.17.0-${{ runner.os }}-
+
+      - name: Install pinned OpenCppCoverage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '0.9.9.0'
+          $installer = Join-Path $env:RUNNER_TEMP "OpenCppCoverageSetup-x64-$version.exe"
+          $url = "https://github.com/OpenCppCoverage/OpenCppCoverage/releases/download/release-$version/OpenCppCoverageSetup-x64-$version.exe"
+          & curl.exe --fail --location --silent --show-error $url --output $installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = '2295A733DA39412C61E4F478677519DD0BB1893D88313CE56B468C9E50517888'
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash
+          if ($actual -ne $expected) { throw "OpenCppCoverage installer SHA256 mismatch" }
+          $toolDir = Join-Path $env:RUNNER_TEMP 'OpenCppCoverage'
+          $process = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$toolDir"
+          ) -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "OpenCppCoverage installer failed: $($process.ExitCode)" }
+          $coverageExe = Join-Path $toolDir 'OpenCppCoverage.exe'
+          if (-not (Test-Path -LiteralPath $coverageExe -PathType Leaf)) {
+            throw 'OpenCppCoverage.exe was not installed'
+          }
+
+      - name: Configure Windows Debug coverage build
+        shell: pwsh
+        run: |
+          cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_USE_COMPILER_CACHE=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Windows Debug coverage targets
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run CTest with OpenCppCoverage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reportDir = Join-Path $env:GITHUB_WORKSPACE 'build/windows-debug/coverage'
+          New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+          $coverageExe = Join-Path $env:RUNNER_TEMP 'OpenCppCoverage/OpenCppCoverage.exe'
+          $arguments = @(
+            '--cover_children',
+            "--modules=$env:GITHUB_WORKSPACE",
+            "--sources=$env:GITHUB_WORKSPACE",
+            '--excluded_sources=*\tests\*',
+            '--excluded_sources=*\third_party\*',
+            '--excluded_sources=*\build\*',
+            "--export_type=html:$(Join-Path $reportDir 'html')",
+            "--export_type=cobertura:$(Join-Path $reportDir 'coverage.xml')",
+            # The debugger changes deliberate crash behavior; large log-bound tests hit
+            # their normal 60-second CTest timeout under instrumentation.
+            '--', 'ctest.exe', '--preset', 'windows-debug', '--no-tests=error', '--parallel', '1',
+            '--exclude-regex', '^(CrashReportingTest[.]|DiagnosticsTest[.]CollectionBounds)'
+          )
+          & $coverageExe @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $xmlPath = Join-Path $reportDir 'coverage.xml'
+          if (-not (Test-Path -LiteralPath $xmlPath -PathType Leaf)) {
+            throw 'OpenCppCoverage did not produce coverage.xml'
+          }
+          [xml]$report = Get-Content -Raw -LiteralPath $xmlPath
+          $validLines = [int]$report.coverage.GetAttribute('lines-valid')
+          if ($validLines -le 0) { throw 'OpenCppCoverage reported no instrumented source lines' }
+          $sourceFiles = @($report.SelectNodes('//class') | ForEach-Object { $_.GetAttribute('filename') })
+          if (-not ($sourceFiles | Where-Object { $_ -match 'NamedPipeTransport\.cpp$' })) {
+            throw 'Windows-only NamedPipeTransport.cpp is missing from the coverage report'
+          }
+          $lineRate = $report.coverage.GetAttribute('line-rate')
+          @(
+            '## Windows OpenCppCoverage (informational)',
+            '',
+            "Line coverage: $lineRate; valid lines: $validLines",
+            'Portable Linux LLVM coverage is reported separately.'
+          ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload Windows coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-opencppcoverage
+          path: build/windows-debug/coverage
+          if-no-files-found: ignore
+          retention-days: 14
+
   linux-no-tests:
     name: Linux build without tests
     needs: changes
@@ -1347,9 +1455,9 @@ jobs:
   # needs へも必ず追加すること（漏れると required check が素通りする）。
   #
   # 例外は ADVISORY_JOBS に挙げる advisory ジョブで、結果は表示するが失敗判定に
-  # 入れない。clang-tidy は dev-infra spec §4.3 / §11.5 が非ブロッキングと定めて
-  # おり、所見や解析基盤の一時障害で PR を止めない。解析ステップの
-  # continue-on-error だけでは checkout / apt / configure の失敗でジョブ結果が
+  # 入れない。clang-tidy は dev-infra spec §4.3 / §11.5、Windows coverage は
+  # §4.3 / §10 が非ブロッキングと定めており、所見や解析基盤の一時障害で PR を止めない。
+  # 解析ステップの continue-on-error だけでは checkout / apt / configure の失敗でジョブ結果が
   # failure になり、required check をブロックしてしまう。
   ci-gate:
     name: CI gate
@@ -1365,6 +1473,7 @@ jobs:
       - windows-arm64-crossbuild
       - linux-build
       - linux-coverage
+      - windows-coverage
       - linux-no-tests
       - windows-no-tests
       - cpp-format
@@ -1378,7 +1487,7 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           # 失敗判定から除外する advisory ジョブ（カンマ区切り）。
-          ADVISORY_JOBS: cpp-tidy
+          ADVISORY_JOBS: cpp-tidy,windows-coverage
         run: |
           set -euo pipefail
 

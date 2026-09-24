@@ -68,6 +68,7 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
   snapshot.learning_entries = 2;
   snapshot.user_dict_entries = 3;
   snapshot.logs_directory_writable = true;
+  snapshot.foreground_app = {true, true, diag::AppProcessArchitecture::X64, false};
   azookey::ipc::QueryDiagnosticsPayload host;
   host.model_loaded = true;
   host.loaded_model_path = snapshot.selected_model_path;
@@ -192,6 +193,13 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
       "status": "ok",
       "message": "No effective OpenAI backend requires an API key",
       "details": {"state": "not_required"}
+    },
+    {
+      "id": "D-015",
+      "name": "app_compatibility",
+      "status": "warning",
+      "message": "Foreground app TSF context has not been verified",
+      "details": {"reason": "context_unverified"}
     }
   ]
 }
@@ -248,23 +256,107 @@ TEST(DiagnosticsTest, DpapiProbeDistinguishesDecryptionFailureAndUnavailableWith
   diag::Snapshot snapshot;
   snapshot.dpapi_state = diag::DpapiState::Decrypted;
   const auto success_report = diag::EvaluateSnapshot(snapshot, 1);
-  ASSERT_EQ(success_report.checks.back().id, "D-014");
-  EXPECT_EQ(success_report.checks.back().status, diag::Status::Ok);
+  const auto dpapi_check = [](const diag::Report& report) -> const diag::Check& {
+    return *std::find_if(report.checks.begin(), report.checks.end(),
+                         [](const diag::Check& check) { return check.id == "D-014"; });
+  };
+  EXPECT_EQ(dpapi_check(success_report).status, diag::Status::Ok);
   const auto success = diag::SerializeReport(success_report);
   EXPECT_EQ(success.find("secret-body"), std::string::npos);
   EXPECT_NE(success.find(R"("state":"decrypted")"), std::string::npos);
   snapshot.dpapi_state = diag::DpapiState::MissingKey;
-  EXPECT_EQ(diag::EvaluateSnapshot(snapshot, 1).checks.back().status, diag::Status::Warning);
+  EXPECT_EQ(dpapi_check(diag::EvaluateSnapshot(snapshot, 1)).status, diag::Status::Warning);
   snapshot.dpapi_state = diag::DpapiState::DecryptFailed;
   const auto failure_report = diag::EvaluateSnapshot(snapshot, 1);
-  EXPECT_EQ(failure_report.checks.back().status, diag::Status::Error);
+  EXPECT_EQ(dpapi_check(failure_report).status, diag::Status::Error);
   const auto failure = diag::SerializeReport(failure_report);
   EXPECT_NE(failure.find(R"("state":"decrypt_failed")"), std::string::npos);
   snapshot.dpapi_state = diag::DpapiState::Unavailable;
   const auto unavailable_report = diag::EvaluateSnapshot(snapshot, 1);
-  EXPECT_EQ(unavailable_report.checks.back().status, diag::Status::Warning);
+  EXPECT_EQ(dpapi_check(unavailable_report).status, diag::Status::Warning);
   const auto unavailable = diag::SerializeReport(unavailable_report);
   EXPECT_NE(unavailable.find(R"("state":"unavailable")"), std::string::npos);
+}
+
+TEST(DiagnosticsTest, AppCompatibilityClassifiesKnownExclusionsAndUnknownContext) {
+  diag::ForegroundAppInfo info;
+  const auto reason = [&] { return diag::ClassifyAppCompatibility(info); };
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::NoForegroundWindow);
+  info.has_window = true;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::ProcessUnavailable);
+  info.process_opened = true;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::ArchitectureUnknown);
+  info.architecture = diag::AppProcessArchitecture::X86;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::X86);
+  info.architecture = diag::AppProcessArchitecture::Other;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::UnsupportedArchitecture);
+  info.architecture = diag::AppProcessArchitecture::X64;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::ContainerUnknown);
+  info.app_container = true;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::AppContainer);
+  info.app_container = false;
+  EXPECT_EQ(reason(), diag::AppCompatibilityReason::ContextUnverified);
+}
+
+TEST(DiagnosticsTest, AppCompatibilityDistinguishesX64EmulationFromArm64Native) {
+  constexpr auto unknown = diag::kProcessMachineUnknown;
+  constexpr auto arm64 = diag::kProcessMachineArm64;
+  const auto classify = [](uint16_t process, uint16_t native, std::optional<uint16_t> resolved) {
+    return diag::ClassifyAppProcessArchitecture(process, native, resolved);
+  };
+  EXPECT_EQ(classify(diag::kProcessMachineX86, arm64, std::nullopt),
+            diag::AppProcessArchitecture::X86);
+  EXPECT_EQ(classify(unknown, diag::kProcessMachineX64, std::nullopt),
+            diag::AppProcessArchitecture::X64);
+  EXPECT_EQ(classify(unknown, arm64, diag::kProcessMachineX64), diag::AppProcessArchitecture::X64);
+  EXPECT_EQ(classify(unknown, arm64, arm64), diag::AppProcessArchitecture::Other);
+  EXPECT_EQ(classify(unknown, arm64, std::nullopt), diag::AppProcessArchitecture::Unknown);
+
+  diag::ForegroundAppInfo info{true, true, classify(unknown, arm64, diag::kProcessMachineX64),
+                               false};
+  EXPECT_EQ(diag::ClassifyAppCompatibility(info), diag::AppCompatibilityReason::ContextUnverified);
+  info.architecture = classify(unknown, arm64, arm64);
+  EXPECT_EQ(diag::ClassifyAppCompatibility(info),
+            diag::AppCompatibilityReason::UnsupportedArchitecture);
+  info.architecture = classify(unknown, arm64, std::nullopt);
+  EXPECT_EQ(diag::ClassifyAppCompatibility(info),
+            diag::AppCompatibilityReason::ArchitectureUnknown);
+
+  diag::Snapshot snapshot;
+  snapshot.foreground_app = info;
+  const auto d015 = [&] { return diag::EvaluateSnapshot(snapshot, 1).checks.back(); };
+  EXPECT_EQ(d015().status, diag::Status::Warning);
+  snapshot.foreground_app.architecture = classify(unknown, arm64, diag::kProcessMachineX64);
+  EXPECT_EQ(d015().status, diag::Status::Warning);
+  snapshot.foreground_app.architecture = classify(unknown, arm64, arm64);
+  EXPECT_EQ(d015().status, diag::Status::Error);
+}
+
+TEST(DiagnosticsTest, AppCompatibilityJsonUsesStableReasonWithoutWindowText) {
+  diag::Snapshot snapshot;
+  snapshot.foreground_app = {true, true, diag::AppProcessArchitecture::X86, false};
+  const auto report = diag::EvaluateSnapshot(snapshot, 1);
+  const auto& check = report.checks.back();
+  EXPECT_EQ(check.id, "D-015");
+  EXPECT_EQ(check.status, diag::Status::Error);
+  EXPECT_EQ(diag::AppCompatibilityReasonName(diag::ClassifyAppCompatibility(snapshot.foreground_app)),
+            "x86");
+  const auto json = diag::SerializeReport(report);
+  EXPECT_NE(json.find(R"("reason":"x86")"), std::string::npos);
+  EXPECT_EQ(json.find("window_title"), std::string::npos);
+  EXPECT_EQ(json.find("process_name"), std::string::npos);
+
+  snapshot.foreground_app = {true, true, diag::AppProcessArchitecture::X64, true};
+  const auto container_report = diag::EvaluateSnapshot(snapshot, 1);
+  EXPECT_EQ(container_report.checks.back().status, diag::Status::Error);
+  EXPECT_NE(diag::SerializeReport(container_report).find(R"("reason":"app_container")"),
+            std::string::npos);
+
+  snapshot.foreground_app.app_container = false;
+  const auto unverified_report = diag::EvaluateSnapshot(snapshot, 1);
+  EXPECT_EQ(unverified_report.checks.back().status, diag::Status::Warning);
+  EXPECT_NE(diag::SerializeReport(unverified_report).find(R"("reason":"context_unverified")"),
+            std::string::npos);
 }
 
 TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {

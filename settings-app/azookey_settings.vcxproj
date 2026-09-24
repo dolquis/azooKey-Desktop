@@ -116,6 +116,7 @@
     <ClCompile Include="SettingsDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\AppProfileResolver.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\CrashReporting.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\core\src\ThreadStackGuarantee.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\CrashRetention.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\PlatformPaths.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\core\src\EtwLogger.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

@@ -51,7 +51,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定、機微本文の伏せ字化、環境変数 opt-in と level、Debug・本文 opt-in・非secure・詳細ログ許可の積による本文出力、Release の強制 redaction、イベント間・並行呼出し間の許可分離、書込不能先での非 throw、世代ローテーションと保持期間 |
 | `core_tests` | `core/tests/crash_retention_test.cpp` | クラッシュ診断の個数・容量・保存期間制限、リンクと無関係なファイルの保護 |
 | `core_tests` | `core/tests/etw_logger_test.cpp` | ETW イベントの固定長 payload、数値フィールド、要求の対応付けと終了結果 |
-| `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、同意 off と保存不能時の fallback、許可 stream と本文非混入 |
+| `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、main / worker の実スタックオーバーフローと同意 off、保存不能時の fallback、許可 stream と本文非混入 |
 | `ipc_tests` | `ipc/tests/messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping（`ObserveTypo` / `ListNewWordCandidates` / `ResolveNewWord` の名前往復を含む）|
 | `ipc_json_tests` | `ipc/tests/json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
 | `ipc_payloads_tests` | `ipc/tests/payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord の build/parse + malformed reject、`ObserveTypo` と `QueryCandidatesResponse.corrected_reading` の往復と欠如時の後方互換、`QueryCandidates` と学習イベントの privacy フラグの往復および欠落・型不正時の安全側の既定値、`ListNewWordCandidates` / `ResolveNewWord` の往復と不正 `state_filter`・`max_items`・`action` の reject、両応答の `ok` / `changed` / `error` の往復と欠如時の後方互換 |
@@ -85,7 +85,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `host_cli_unicode_argv` | `azookey_inference_host` | Windows の実プロセス argv 境界で非 ASCII 引数が UTF-8 のまま CLI に届くこと |
 | `dictionary_tests` | `dictbuild/tests/dictionary_test.cpp` | 辞書 trie の探索方向と最短優先の上限、破損検出、参照失敗時の該当レイヤのみ無効化、静的辞書と可変辞書の独立、ユーザー変更の追跡 |
 | `dictbuild_python_tests` | `dictbuild/tests/test_dictbuild.py` | オフライン辞書ビルダ（Python）の単体テスト |
-| `diagnostics_tests` | `diagnostics/tests/diagnostics_test.cpp` | 診断 JSON schema の固定、機微本文の除外とランタイムログのバイト上限、zip 収集物の限定、D-014 の実効 OpenAI backend と DPAPI 状態、`--repair` の冪等性と失敗時の非成功報告 |
+| `diagnostics_tests` | `diagnostics/tests/diagnostics_test.cpp` | 診断 JSON schema の固定、機微本文の除外とランタイムログのバイト上限、zip 収集物の限定、D-014 の実効 OpenAI backend と DPAPI 状態、D-015 の既知非対応・未確認理由、`--repair` の冪等性と失敗時の非成功報告 |
 | `diagnostics_cli_rejects_help_with_json` | `azookey_diag` | `--help` と `--json` の併用を非 0 終了で拒否 |
 | `diagnostics_cli_rejects_repair_with_json` | `azookey_diag` | `--repair` と `--json` の併用を非 0 終了で拒否 |
 | `tsf_tip_com_smoke_tests` | `tsf-tip/tests/com_smoke_test.cpp` | DLL `DllGetClassObject` → `IClassFactory::CreateInstance(IID_IUnknown)`、`ActivateEx` の sink advise / unadvise。登録 round-trip（`RegisterPublishesProfileAndUnregisterRemovesIt`、`FailedCategoryRegistrationRollsBackAndRetrySucceeds`）は opt-in 環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` + 昇格時のみ実行で、CI では走らない（roadmap「既知のテストギャップ」1） |
@@ -133,6 +133,7 @@ CTest に載らない検査は次のとおり。CTest の一覧と混在させ�
 |---|---|---|
 | `.github/workflows/sanitizers.yml` | GitHub Actions（`cron: 17 2 * * 1` の週次 + 手動 dispatch） | `linux-asan-ubsan`（ASan + UBSan）で `core`/`ipc`/`learning`/`inference-host` を、`windows-asan`（MSVC ASan）でこれに `tsf-tip` を加えた全体を検査。頻度・対象・preset の内訳は `docs/dev-infrastructure-spec.md` §4.6 が正典 |
 | `.github/workflows/secret-scan.yml` / `.github/workflows/windows.yml` の `quality` / `linux-no-tests` / `windows-no-tests` | GitHub Actions（PR / `main` push / 手動 dispatch） | path 除外なしの secret scan で PR commit range または作業ツリーを gitleaks 走査。pre-commit の actionlint / taplo（yamlfmt の既存 baseline は DEV-913）、`AZOOKEY_BUILD_TESTS=OFF` + bench 無効の Linux / Windows build を独立ジョブで検証（`docs/dev-infrastructure-spec.md` §4.3） |
+| `.github/workflows/windows.yml` の `windows-coverage` | GitHub Actions（build 対象の PR / `main` push / 手動 dispatch） | OpenCppCoverage 0.9.9.0 で Windows Debug の CTest 子プロセスを計測し、HTML と Cobertura を `windows-opencppcoverage` artifact に 14 日保持。クラッシュ注入と大量ログ境界の計測非互換テストは除外し、通常の Windows Debug ジョブで実行。Linux LLVM coverage と別系列の informational ジョブで、数値閾値による合否判定はしない（`docs/dev-infrastructure-spec.md` §4.3 / §10） |
 | `.github/workflows/docs.yml` の `docs-lint` | GitHub Actions（PR / `main` push） | `scripts/docs-lint.py` の文書ドリフト検査（DECISIVE はベースライン 0 件で凍結）、`scripts/check_agent_instruction_size.py` の `AGENTS.md` バイト予算、`scripts/check_test_inventory.py` による「現存テスト一覧」と `CMakeLists.txt` 登録の突合、`scripts/check_skill_references.py` による repo 固有 Skill（`.claude/skills/MANIFEST.md` の区分 `repo`）の routing 表とパス・CTest target の突合、`scripts/check_agent_definitions.py` による repo 固有 agent（`.claude/agents/MANIFEST.md` の区分 `repo`）の Claude / Codex 本文・権限の突合と `scripts/tests/test_agent_readonly_guard.py` の read-only guard 表 |
 | `scripts/tests/msix-identity-consistency.Tests.ps1` | Pester（CI） | MSIX identity manifest と `kTextServiceClsid` / `kTextServiceProfileGuid` / `kJapaneseLangId` の静的整合、Option A の不変条件、ビルド埋め込み配線 |
 | `scripts/tests/test_benchmark_commit_freshness.py` | Python unittest（手動。CMake / Ninja / Git が必要） | commit ヘッダーと consumer の依存追跡。ソース・ヘッダー・HEAD・override・branch・worktree・packed ref の変更後の再ビルドと、ビルド直後の dry-run を検証 |

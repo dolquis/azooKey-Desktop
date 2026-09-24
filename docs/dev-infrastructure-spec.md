@@ -617,7 +617,15 @@ OFF のまま）。
   `linux-llvm-coverage` artifact として 14 日保持する。初期段階では数値を可視化する
   だけで、目標値を下回ってもジョブを失敗させない。一方、profile が生成されない、
   またはレポート生成に失敗するなど計測基盤が壊れた場合はジョブを失敗させる。
-  Windows 専用コードと Cobertura は Phase 2 の OpenCppCoverage 導入時に追加する
+- Windows coverage ジョブ — OpenCppCoverage 0.9.9.0 の SHA256 検証済み installer を使い、
+  Windows Debug の CTest 子プロセスを計測する。tests / `third_party` / `build` を
+  集計から除き、HTML と Cobertura を `windows-opencppcoverage` artifact として
+  14 日保持する。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
+  デバッガ下で挙動が変わるクラッシュ注入テストと、計測時に時間制限を超える
+  大量ログ境界テストは計測 CTest から除く。通常の Windows Debug ジョブでは実行する。
+  Linux の portable subset とは別系列で可視化する。数値閾値は設けない。
+  計測・レポート生成の失敗はジョブに表示するが、`ci-gate` では advisory として
+  扱い、PR の必須チェックを止めない
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
   移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
@@ -648,12 +656,12 @@ OFF のまま）。
   `language: system` でローカル導入済みモジュールを使い、CI は pinned
   module version を導入して同じ wrapper を呼ぶ
 
-`settings-schema`、`powershell-quality`、`cpp-tidy` は、先行する `changes` ジョブが
+`settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` は、先行する `changes` ジョブが
 対象ファイルの変更を検出した場合だけ起動する。
 `settings-schema` は `settings/`、`powershell-quality` は PowerShell の script / module /
-manifest、`cpp-tidy` は portable subset の C++ source を対象とする。
+manifest、`cpp-tidy` は portable subset の C++ source、`windows-coverage` は build 対象を扱う。
 手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
-三つの専門ジョブをすべて起動する。
+これらの専門ジョブをすべて起動する。
 
 clang-tidy / CodeQL は**必須ゲートには含めない**（導入コストが高く、段階導入と
 する）。ただし変更行 clang-tidy は `cpp-tidy` ジョブで advisory（`continue-on-error`、
@@ -671,7 +679,8 @@ BinSkim も既存所見を可視化する段階では **advisory**（`continue-o
 ### 4.4 artifact 整理
 
 configure / build / test の各ログ、Release ビルドの `.pdb`、Release binary hardening の
-SARIF・`dumpbin` 出力・要約、Linux coverage の HTML・LCOV・JSON summary を
+SARIF・`dumpbin` 出力・要約、Linux coverage の HTML・LCOV・JSON summary、
+Windows coverage の HTML・Cobertura を
 artifact として保存する。PR diagnostic コメントは
 マトリクスの config ごとの結果を反映する。Release 用 artifact の保持期間は 14 日間とする。
 
@@ -931,8 +940,8 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 `ci-gate` の `needs` にも加える。加えなければそのジョブの失敗が required check を素通りする。
 
 例外は `ci-gate` の `ADVISORY_JOBS` に挙げる advisory ジョブで、結果は集約の出力に
-残すが失敗判定には入れない。`cpp-tidy` がこれに当たる（§4.3 / §11.5 が非ブロッキングと
-定める）。解析ステップの `continue-on-error` だけでは、checkout・依存導入・configure の
+残すが失敗判定には入れない。`cpp-tidy`（§4.3 / §11.5）と
+`windows-coverage`（§4.3 / §10）がこれに当たる。解析ステップの `continue-on-error` だけでは、checkout・依存導入・configure の
 失敗でジョブ結果が `failure` になり、advisory ジョブが required check をブロックする。
 
 `.github/workflows/docs.yml` と `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
@@ -2118,8 +2127,9 @@ WIL は header-only のため、vcpkg ではなく submodule または `FetchCon
 Portable C++ 行カバレッジは Linux coverage ジョブの `summary.txt` と `summary.json` で
 継続観測する。
 80% は目標値であり、初期段階では PR の合否条件にしない。
-Windows 専用コードを含む全体値は OpenCppCoverage 導入後に別系列として扱い、
-portable subset の履歴へ混在させない。
+Windows 専用コードを含む値は OpenCppCoverage の Cobertura と HTML で別系列として
+観測し、portable subset の履歴へ混在させない。Windows 系列に 80% の目標値は
+適用せず、閾値ゲート化は別途判断する。
 
 ## 11. 不採用とした提案
 
@@ -2301,14 +2311,20 @@ unity ビルドの成果物で CTest は全件成功する。
   意味論的リスクを負わずに構造的に除去でき、Issue が挙げる「テストターゲット限定の適用」も
   そちらで実現される。
 * 重複を除いた後に unity build がどれだけ上積みするかは測っていない。
-* 適用には除外が 2 件必要になる（`inference-host/src/UserDictCli.cpp` の無名 namespace 衝突、
+* DEV-910 の計測時には除外が 2 件必要だった（`inference-host/src/UserDictCli.cpp` の無名 namespace 衝突、
   `bench/BenchmarkResult.cpp` の `GetObject` マクロ衝突）。加えて unity batch は
   ソースの並び順で決まるため、ソースを 1 本足すと無関係な batch の内容が変わり、
   それまで通っていた組み合わせが壊れうる。
 * 単一 `.cpp` の変更に対する増分ビルドは 10.0 s → 12.4 s と 24% 悪化する。
   batch 全体が再コンパイルされるためで、最も頻度の高い操作が遅くなる。
 
-再評価は DEV-1086 と DEV-1087 が入った後に、本節と同じ 4 条件で行う。
+再評価は本節と同じ 4 条件で行う。CMake の再評価用対策として、Win32 `max` マクロとの
+衝突を core target の `NOMINMAX` で防ぐ。無名 namespace の同名 helper を持つ
+学習ストア、Host CLI / モデル関連ソース、core / Host のテストソースは、該当 target の
+`CMakeLists.txt` で衝突する組から必要なソースだけを unity batch から除外する。
+`CrashReporting.cpp` と `ThreadStackGuarantee.cpp` も別 object にして、TIP DLL が
+クラッシュフィルタ本体を取り込まないリンク境界を保つ。これらは unity build の既定採用を
+意味しない。
 `UNITY_BUILD_BATCH_SIZE` は既定値のまま測っており、調整の余地を残している。
 
 #### この判断が対象としないもの
@@ -2358,8 +2374,8 @@ UX が即死しやすいため、本機能は配布前（Phase 4 ゲート）に
 #### 12.1.1 M44 実装スコープ
 
 M44 は `azookey_diag.exe --json`、`--repair`、`--collect` を提供し、
-D-001〜D-013 を診断する。
-Host が停止している場合もローカルで判定できる項目を継続し、13 項目すべてを
+D-001〜D-015 を診断する。
+Host が停止している場合もローカルで判定できる項目を継続し、全項目を
 stable schema の `checks` 配列へ出力する。
 
 Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ランタイム tier
@@ -2374,7 +2390,7 @@ Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ラン
 収集は新しいファイルを優先し、1 ファイルあたり末尾 1 MiB、合計 8 MiB を上限とする。
 切り詰めまたは除外が発生した場合は `logs/README.txt` に件数と上限を記録する。
 
-D-014、D-015、設定アプリの診断タブは follow-up とする。
+設定アプリの診断タブは follow-up とする。
 
 ### 12.2 診断項目
 
@@ -2394,7 +2410,7 @@ D-014、D-015、設定アプリの診断タブは follow-up とする。
 | D-012 | settings | schema validation 成功 | 不正値のリセット |
 | D-013 | logs | `%LOCALAPPDATA%\azooKey\logs\` 書き込み可能 | ディレクトリ作成 |
 | D-014 | DPAPI | 暗号化データを復号できるか | 再認証 / 再入力を促す |
-| D-015 | app compatibility | 現在の前面アプリで TSF context が取得できるか | 互換性情報表示（M50 result） |
+| D-015 | app compatibility | 前面ウィンドウのプロセスアーキテクチャと AppContainer 状態から既知の非対応条件を判定する。対象アプリ内の TSF context 取得可否は CLI からは観測しない | 互換性情報表示（M50 result） |
 
 D-013 は実効ログディレクトリ内に一時ファイルを作成して削除し、実際の書き込み可否を
 判定する。プロセス終了などで残った診断用一時ファイルは、次回診断時に 24 時間を
@@ -2432,11 +2448,27 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
 | D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
-| D-015 | 前面アプリで TSF context 取得可**かつ §13.3.2 の既知の劣化 / workaround なし**（§13.2 の自動化レベルに関わらず、context が取れれば automation level では warning にしない） | TSF context は取得できるが既知の product workaround / 部分的劣化がある（§13.3.2） | TSF context 取得不可 | ✗（§13 互換性情報へ） |
+| D-015 | —（CLI は対象アプリ内の TSF context を直接観測しない） | x64 の通常プロセス、または前面ウィンドウ・プロセス情報・アーキテクチャ・トークンの取得不能で、既知の非対応条件を確定できない | x86、x64 以外のアーキテクチャ、または AppContainer プロセスを確認 | ✗（§13 互換性情報へ） |
+
+ARM64 ホストでは `IsWow64Process2` の結果だけで x64 エミュレーションと ARM64
+ネイティブを区別できないため、`GetProcessInformation(ProcessMachineTypeInfo)` で
+対象プロセスのアーキテクチャを確認する。同情報を取得できない場合は
+`architecture_unknown` の `warning` とし、ARM64 を非対応と推定しない。
+確認できた ARM64 ネイティブは、`docs/sideload-packaging-spec.md` §0.1 の
+x64 入力対象スコープに従い
+`unsupported_architecture` とする。
+
+D-015 の `details.reason` は `context_unverified`、`no_foreground_window`、
+`process_unavailable`、`architecture_unknown`、`container_unknown`、`x86`、
+`unsupported_architecture`、`app_container` の固定 enum とする。`warning` は
+「対応を確認済み」ではなく、プロセス条件からは TSF context の可否を決められないことを
+意味する。アプリ別の実入力と既知の劣化は §13 の互換性ハーネスで判定する。
+ウィンドウタイトル、プロセス名、入力本文は D-015 の JSON に含めない。
 
 全体 `status` は §12.4 の規約どおり `checks[].status` の最悪値
-（`error` > `warning` > `ok`）とする。`warning` は「縮退しているが入力は
-継続できる」、`error` は「当該機能が成立しない」を意味し、UI（§12.7）の
+（`error` > `warning` > `ok`）とする。通常の `warning` は「縮退しているが入力は
+継続できる」を意味する。D-015 の `warning` だけは TSF context が未確認であり、
+入力の成立を主張しない。`error` は「当該機能が成立しない」を意味し、UI（§12.7）の
 アイコン（✅ / ⚠️ / ❌）に対応させる。任意データ・任意機密の「未設定」は
 正常系として扱い、`warning` を出さない。具体的には、クリーンインストール
 直後で学習・辞書が空（`UserDictionary::Load()` は欠損ファイルを空の成功

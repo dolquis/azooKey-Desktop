@@ -9,6 +9,7 @@
 
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/SymbolRewriter.h"
+#include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
@@ -165,7 +166,10 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       config_(std::move(config)),
       runtime_logger_(runtime_logger) {
   if (store_) {
-    learning_flush_thread_ = std::thread(&InferenceEngine::LearningFlushWorker, this);
+    learning_flush_thread_ = std::thread([this] {
+      core::ReserveCurrentThreadStack();
+      LearningFlushWorker();
+    });
   }
 }
 
@@ -346,6 +350,7 @@ bool InferenceEngine::StartModelPreload(ModelLoadOptions options) {
   }
   try {
     model_preload_thread_ = std::thread([this, options = std::move(options)]() mutable {
+      core::ReserveCurrentThreadStack();
       (void)LoadModelWithResult(options);
       std::lock_guard<std::mutex> lock(state_mutex_);
       model_preload_in_progress_ = false;

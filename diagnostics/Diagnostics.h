@@ -31,6 +31,42 @@ enum class DpapiState {
   Unavailable,
 };
 
+enum class AppProcessArchitecture {
+  Unknown,
+  X86,
+  X64,
+  Other,
+};
+
+// PE IMAGE_FILE_MACHINE values; keep the classifier available on non-Windows builds.
+inline constexpr uint16_t kProcessMachineUnknown = 0x0000;
+inline constexpr uint16_t kProcessMachineX86 = 0x014c;
+inline constexpr uint16_t kProcessMachineX64 = 0x8664;
+inline constexpr uint16_t kProcessMachineArm64 = 0xaa64;
+
+// resolved_machine is ProcessMachineTypeInfo when ARM64 makes IsWow64Process2 ambiguous.
+AppProcessArchitecture ClassifyAppProcessArchitecture(uint16_t process_machine,
+                                                      uint16_t native_machine,
+                                                      std::optional<uint16_t> resolved_machine);
+
+struct ForegroundAppInfo {
+  bool has_window{false};
+  bool process_opened{false};
+  AppProcessArchitecture architecture{AppProcessArchitecture::Unknown};
+  std::optional<bool> app_container;
+};
+
+enum class AppCompatibilityReason {
+  ContextUnverified,
+  NoForegroundWindow,
+  ProcessUnavailable,
+  ArchitectureUnknown,
+  ContainerUnknown,
+  X86,
+  UnsupportedArchitecture,
+  AppContainer,
+};
+
 struct Check {
   std::string id;
   std::string name;
@@ -69,6 +105,7 @@ struct Snapshot {
   uint64_t user_dict_entries{};
   uint64_t user_dict_skipped_entries{};
   bool logs_directory_writable{false};
+  ForegroundAppInfo foreground_app;
   std::optional<ipc::QueryDiagnosticsPayload> host_diagnostics;
 };
 
@@ -121,6 +158,9 @@ struct ArchiveEntry {
 Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms);
 std::string SerializeReport(const Report& report);
 std::string StatusName(Status status);
+ForegroundAppInfo ProbeForegroundApp();
+AppCompatibilityReason ClassifyAppCompatibility(const ForegroundAppInfo& info);
+std::string_view AppCompatibilityReasonName(AppCompatibilityReason reason);
 
 ProbeResult ProbeSystem();
 RepairReport RepairSystem();

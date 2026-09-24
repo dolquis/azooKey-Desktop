@@ -2020,6 +2020,15 @@ OS 既定処理へ委ねる。自前ダンプの保存成功を確認できた�
 `EXCEPTION_EXECUTE_HANDLER` を返す。プロセス内の障害であるため、worker による
 保存も保証はしない。
 
+スタックオーバーフロー時のフィルタ実行余地として、Host / Settings の main thread と
+Host が管理する worker の各開始点で `SetThreadStackGuarantee` により 64 KiB を要求する。
+この予約は呼び出したスレッドまたは fiber にのみ適用され、プロセス全体には波及しない。
+予約または fiber ごとの成功記録に失敗したスレッドでのスタックオーバーフローは
+azooKey 管理ダンプを試みず、OS の障害処理へ委ねる。WinRT threadpool と外部ライブラリが
+管理するスレッドには予約を保証せず、同じ fallback を適用する。
+実際のスタック枯渇は隔離した子プロセスの main / worker で検証し、
+`off` では成果物を作らない。スタックやメモリ内容の収集範囲は増やさない。
+
 ### 8.2 保存先・保持・削除運用
 
 - **保存先**: `%LOCALAPPDATA%\azooKey\crashes\`。ファイル名は

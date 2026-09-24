@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 構造化ランタイムログ（JSON Lines、環境変数、ローテーション） | `docs/dev-infrastructure-spec.md` §7.2〜§7.5、`docs/debugging.md`「ログ収集」 | `core/src/RuntimeLogger.cpp`、`core/include/azookey/logging/RuntimeLogger.h` | `runtime_logger_tests`（OS mutex のため `RESOURCE_LOCK` 付き） |
 | redaction | `docs/dev-infrastructure-spec.md` §7.6、`docs/privacy-and-secure-input-spec.md` §8 | `core/src/Redaction.cpp` | `core_tests`（`core/tests/redaction_test.cpp`） |
-| ETW イベント | `docs/dev-infrastructure-spec.md` §7.3、§7.7、`docs/windows-tsf-host-architecture.md` | `core/src/EtwLogger.cpp`、`diagnostics/etw/AzooKey.man`（provider `azooKey-Desktop`）、`diagnostics/azookey-diagnostics.wprp` | `core_tests`（`core/tests/etw_logger_test.cpp`） |
+| ETW イベント | `docs/sideload-packaging-spec.md` §7（provider、Event ID、redaction）、`docs/dev-infrastructure-spec.md` §7.3（phase の対応表と相関キー） | `core/src/EtwLogger.cpp`、`diagnostics/etw/AzooKey.man`（provider `azooKey-Desktop`）、`diagnostics/azookey-diagnostics.wprp` | `core_tests`（`core/tests/etw_logger_test.cpp`） |
 | crash 収集と同意 | `docs/sideload-packaging-spec.md`（同梱と同意の扱い）、`plans/windows-port-roadmap.md` の該当 M | `core/src/CrashReporting.cpp` | `crash_reporting_tests`（Windows では `dbghelp` をリンク） |
 | dump の保持と削除 | 同上 | `core/src/CrashRetention.cpp` | `core_tests`（`core/tests/crash_retention_test.cpp`） |
 | 診断ウィザードと CLI | `docs/dev-infrastructure-spec.md` §12 | `diagnostics/Diagnostics.cpp`、`diagnostics/azookey_diag.cpp`、`diagnostics/SettingsSchema.h.in` | `diagnostics_tests` |

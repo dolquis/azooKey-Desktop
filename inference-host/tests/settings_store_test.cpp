@@ -345,6 +345,46 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsStoreTest, DynamicPunctuationSettingsDefaultAndValidation) {
+  const auto dir = TestDir("azookey_settings_dynamic_punctuation");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"liveConversion":true})");
+  azookey::host::SettingsStore store(path);
+  auto result = store.Load();
+  EXPECT_FALSE(result.settings.dynamic_punctuation);
+  EXPECT_EQ(result.settings.dynamic_punctuation_style, "ja");
+  EXPECT_EQ(result.settings.dynamic_punctuation_stability, "onPause");
+  EXPECT_EQ(result.settings.dynamic_punctuation_idle_ms, 400);
+  EXPECT_DOUBLE_EQ(result.settings.segment_boundary_confidence, 0.5);
+
+  WriteText(path, R"({"liveConversion":true,"dynamicPunctuation":true,
+    "dynamicPunctuationStyle":"fullwidth_latin","dynamicPunctuationStability":"eager",
+    "dynamicPunctuationIdleMs":250,"segmentBoundaryConfidence":0.75,
+    "punctuationRulesPath":"C:/rules/custom.tsv"})");
+  result = store.Reload();
+  EXPECT_TRUE(result.settings.dynamic_punctuation);
+  EXPECT_EQ(result.settings.dynamic_punctuation_style, "fullwidth_latin");
+  EXPECT_EQ(result.settings.dynamic_punctuation_stability, "eager");
+  EXPECT_EQ(result.settings.dynamic_punctuation_idle_ms, 250);
+  EXPECT_DOUBLE_EQ(result.settings.segment_boundary_confidence, 0.75);
+  EXPECT_EQ(result.settings.punctuation_rules_path, "C:/rules/custom.tsv");
+  const auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, result.settings);
+  EXPECT_TRUE(config.dynamic_punctuation);
+  EXPECT_DOUBLE_EQ(config.segment_boundary_confidence, 0.75);
+  EXPECT_EQ(config.punctuation_rules_path, "C:/rules/custom.tsv");
+
+  WriteText(path, R"({"dynamicPunctuation":true,"dynamicPunctuationStyle":"invalid",
+    "dynamicPunctuationStability":"invalid","dynamicPunctuationIdleMs":0,
+    "segmentBoundaryConfidence":2})");
+  result = store.Reload();
+  EXPECT_TRUE(result.settings.dynamic_punctuation);
+  EXPECT_EQ(result.settings.dynamic_punctuation_style, "ja");
+  EXPECT_EQ(result.settings.dynamic_punctuation_stability, "onPause");
+  EXPECT_EQ(result.settings.dynamic_punctuation_idle_ms, 400);
+  EXPECT_DOUBLE_EQ(result.settings.segment_boundary_confidence, 0.5);
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   const auto dir = TestDir("azookey_settings_model_override");
   const auto path = dir / "settings.json";

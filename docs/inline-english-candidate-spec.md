@@ -592,8 +592,9 @@ p.english_candidates = v->GetBool("english_candidates").value_or(false);
 
 ### 6.3 Response
 
-`QueryCandidatesResponse` は構造不変（`candidates[]` + `partial`）。英単語候補は
-`candidates[]` に `tag = English(4)` を付けて混在させる（§6.1）。
+英単語候補は `QueryCandidatesResponse.candidates[]` に `tag = English(4)` を付けて
+混在させる（§6.1）。M59 の任意 `segments[]` は句読点を伴うライブ変換用であり、
+英単語候補の識別には使わない。
 
 ```jsonc
 {

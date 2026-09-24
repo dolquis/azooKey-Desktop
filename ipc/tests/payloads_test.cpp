@@ -264,12 +264,16 @@ TEST(PayloadsTest, QueryCandidates) {
   req.left_context = "私は";
   req.max_candidates = 5;
   req.live = true;
+  req.auto_punctuation = true;
+  req.punctuation_style = "fullwidth_latin";
   auto json = azookey::ipc::BuildQueryCandidatesRequest(req);
   auto parsed = azookey::ipc::ParseQueryCandidatesRequest(json);
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed->reading, "にほんご");
   EXPECT_EQ(parsed->max_candidates, 5);
   EXPECT_TRUE(parsed->live);
+  EXPECT_TRUE(parsed->auto_punctuation);
+  EXPECT_EQ(parsed->punctuation_style, "fullwidth_latin");
 
   azookey::ipc::QueryCandidatesResponse res;
   res.candidates = {
@@ -283,6 +287,38 @@ TEST(PayloadsTest, QueryCandidates) {
   ASSERT_EQ(parsed2->candidates.size(), 2u);
   EXPECT_EQ(parsed2->candidates[0].surface, "日本語");
   EXPECT_EQ(parsed2->candidates[0].score, 1.0);
+}
+
+TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {
+  const auto old_request =
+      azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"かな","live":true})");
+  ASSERT_TRUE(old_request);
+  EXPECT_FALSE(old_request->auto_punctuation);
+  EXPECT_EQ(old_request->punctuation_style, "ja");
+
+  azookey::ipc::QueryCandidatesResponse response;
+  response.candidates = {{"今日は晴れです。", "きょうははれです", 0.9, "model"}};
+  response.segments = {
+      {0, 3, 0.9, false, "今日は", "きょうは", 0, 0, 0, 0},
+      {3, 7, 0.8, false, "晴れです", "はれです", 0, 0, 0, 0},
+      {7, 8, 0.0, true, "。", "", 11, 11, 0, 0},
+  };
+  const auto parsed = azookey::ipc::ParseQueryCandidatesResponse(
+      azookey::ipc::BuildQueryCandidatesResponse(response));
+  ASSERT_TRUE(parsed);
+  ASSERT_EQ(parsed->segments.size(), 3u);
+  EXPECT_EQ(parsed->segments.back().start_char, 7u);
+  EXPECT_TRUE(parsed->segments.back().auto_punctuation);
+  EXPECT_TRUE(parsed->segments.back().reading.empty());
+  EXPECT_EQ(parsed->segments.back().pos, 11u);
+  std::string joined;
+  for (const auto& segment : parsed->segments) joined += segment.surface;
+  EXPECT_EQ(joined, parsed->candidates.front().surface);
+
+  const auto old_response = azookey::ipc::ParseQueryCandidatesResponse(
+      R"({"candidates":[{"surface":"かな","reading":"かな"}]})");
+  ASSERT_TRUE(old_response);
+  EXPECT_TRUE(old_response->segments.empty());
 }
 
 TEST(PayloadsTest, QueryCandidatesResponseDropsMalformedEntries) {

@@ -182,7 +182,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     bool valid = false;
     if (key == "inputMode") {
       valid = IsStringEnum(value, {"hiragana", "alnum_half", "alnum_full"});
-    } else if (key == "liveConversion" || key == "llmMagicConversion" ||
+    } else if (key == "liveConversion" || key == "dynamicPunctuation" ||
+               key == "llmMagicConversion" ||
                key == "predictionEnabled" || key == "includeContextInAITransform" ||
                key == "contextReselection" || key == "postCommitLint" ||
                key == "retroactiveRecompute" || key == "sentenceCompletion" ||
@@ -206,8 +207,18 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsStringEnum(value, {"default", "custom"});
     } else if (key == "customRomajiTablePath" || key == "openAiApiKey" ||
                key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath" ||
-               key == "symbolDataPath" || key == "emojiDataPath") {
+               key == "symbolDataPath" || key == "emojiDataPath" ||
+               key == "punctuationRulesPath") {
       valid = value.IsString();
+    } else if (key == "dynamicPunctuationStyle") {
+      valid = IsStringEnum(value, {"ja", "fullwidth_latin"});
+    } else if (key == "dynamicPunctuationStability") {
+      valid = IsStringEnum(value, {"onPause", "eager"});
+    } else if (key == "dynamicPunctuationIdleMs") {
+      valid = IsInteger(value, 1.0, 2147483647.0);
+    } else if (key == "segmentBoundaryConfidence") {
+      valid = value.IsNumber() && std::isfinite(value.AsNumber()) &&
+              value.AsNumber() >= 0.0 && value.AsNumber() <= 1.0;
     } else if (key == "aiBackend") {
       valid = IsStringEnum(value, {"none", "openai", "local-zenzai"});
     } else if (key == "openAiTimeoutMs") {

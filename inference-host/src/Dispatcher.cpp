@@ -5,6 +5,8 @@
 #include <chrono>
 #include <string_view>
 
+#include "azookey/host/PunctuationInserter.h"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -519,7 +521,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
-  const auto rewriters = engine_->config().rewriters;
+  const auto engine_config = engine_->config();
+  const auto rewriters = engine_config.rewriters;
   std::vector<core::Candidate> candidates;
   std::string corrected_reading;
   if (!parsed->emoji_trigger.empty()) {
@@ -568,6 +571,18 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
   ipc::QueryCandidatesResponse res;
   for (auto& c : candidates) res.candidates.push_back(ToField(c));
+  if (parsed->live && parsed->auto_punctuation && engine_config.enable_live_conversion &&
+      engine_config.dynamic_punctuation && !res.candidates.empty()) {
+    ipc::LiveSegment converted;
+    converted.surface = res.candidates.front().surface;
+    converted.reading = res.candidates.front().reading;
+    converted.score = 1.0;
+    const auto rules = PunctuationInserter::LoadRules(engine_config.punctuation_rules_path);
+    auto inserted = PunctuationInserter::Insert({converted}, rules, parsed->punctuation_style,
+                                                engine_config.segment_boundary_confidence);
+    res.candidates.front().surface = std::move(inserted.surface);
+    res.segments = std::move(inserted.segments);
+  }
   if (!parsed->emoji_trigger.empty() && parsed->max_candidates > 0 &&
       res.candidates.size() > parsed->max_candidates) {
     res.candidates.resize(parsed->max_candidates);

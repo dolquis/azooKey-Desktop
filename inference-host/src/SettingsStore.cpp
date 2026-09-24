@@ -156,6 +156,25 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.input_mode =
       ReadEnum(object, "inputMode", settings.input_mode, {"hiragana", "alnum_half", "alnum_full"});
   settings.live_conversion = ReadBool(object, "liveConversion", settings.live_conversion);
+  settings.dynamic_punctuation =
+      ReadBool(object, "dynamicPunctuation", settings.dynamic_punctuation);
+  settings.dynamic_punctuation_style =
+      ReadEnum(object, "dynamicPunctuationStyle", settings.dynamic_punctuation_style,
+               {"ja", "fullwidth_latin"});
+  settings.dynamic_punctuation_stability =
+      ReadEnum(object, "dynamicPunctuationStability", settings.dynamic_punctuation_stability,
+               {"onPause", "eager"});
+  settings.dynamic_punctuation_idle_ms =
+      ReadRangedInt32(object, "dynamicPunctuationIdleMs", settings.dynamic_punctuation_idle_ms, 1,
+                      (std::numeric_limits<int32_t>::max)());
+  if (const auto value = object.find("segmentBoundaryConfidence");
+      value != object.end() && value->second.IsNumber() &&
+      std::isfinite(value->second.AsNumber()) && value->second.AsNumber() >= 0.0 &&
+      value->second.AsNumber() <= 1.0) {
+    settings.segment_boundary_confidence = value->second.AsNumber();
+  }
+  settings.punctuation_rules_path =
+      ReadString(object, "punctuationRulesPath", settings.punctuation_rules_path);
   settings.llm_magic_conversion =
       ReadBool(object, "llmMagicConversion", settings.llm_magic_conversion);
   settings.log_level =
@@ -476,6 +495,9 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(
     EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
     const InferenceThreadEnvironmentProvider& provider) {
   config.enable_live_conversion = settings.live_conversion;
+  config.dynamic_punctuation = settings.dynamic_punctuation;
+  config.segment_boundary_confidence = settings.segment_boundary_confidence;
+  config.punctuation_rules_path = settings.punctuation_rules_path;
   config.rewriters.symbol_enabled = settings.symbol_rewriter;
   config.rewriters.emoji_enabled = settings.emoji_rewriter;
   config.rewriters.trigger_enabled = settings.emoji_trigger_search;

@@ -308,6 +308,8 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   o.emplace("left_context", j::Value(p.left_context));
   o.emplace("max_candidates", j::Value(static_cast<uint64_t>(p.max_candidates)));
   o.emplace("live", j::Value(p.live));
+  o.emplace("auto_punctuation", j::Value(p.auto_punctuation));
+  o.emplace("punctuation_style", j::Value(p.punctuation_style));
   if (!p.emoji_trigger.empty()) o.emplace("emoji_trigger", j::Value(p.emoji_trigger));
   o.emplace("secure", j::Value(p.secure));
   o.emplace("learning_allowed", j::Value(p.learning_allowed));
@@ -324,6 +326,8 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.left_context = v->GetString("left_context").value_or(std::string());
   if (auto m = v->GetUInt("max_candidates")) p.max_candidates = static_cast<uint32_t>(*m);
   p.live = v->GetBool("live").value_or(false);
+  p.auto_punctuation = v->GetBool("auto_punctuation").value_or(false);
+  p.punctuation_style = v->GetString("punctuation_style").value_or("ja");
   p.emoji_trigger = v->GetString("emoji_trigger").value_or(std::string());
   p.secure = v->GetBool("secure").value_or(true);
   p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
@@ -338,6 +342,24 @@ std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p) {
   for (const auto& c : p.candidates) arr.push_back(CandidateToJson(c));
   o.emplace("candidates", j::Value(std::move(arr)));
   o.emplace("partial", j::Value(p.partial));
+  if (!p.segments.empty()) {
+    j::Array segments;
+    for (const auto& segment : p.segments) {
+      j::Object item;
+      item.emplace("start_char", j::Value(static_cast<uint64_t>(segment.start_char)));
+      item.emplace("end_char", j::Value(static_cast<uint64_t>(segment.end_char)));
+      item.emplace("score", j::Value(segment.score));
+      item.emplace("auto_punctuation", j::Value(segment.auto_punctuation));
+      item.emplace("surface", j::Value(segment.surface));
+      item.emplace("reading", j::Value(segment.reading));
+      item.emplace("pos", j::Value(static_cast<uint64_t>(segment.pos)));
+      item.emplace("head_pos", j::Value(static_cast<uint64_t>(segment.head_pos)));
+      item.emplace("sem", j::Value(static_cast<uint64_t>(segment.sem)));
+      item.emplace("head_sem", j::Value(static_cast<uint64_t>(segment.head_sem)));
+      segments.emplace_back(std::move(item));
+    }
+    o.emplace("segments", j::Value(std::move(segments)));
+  }
   // Omitted when empty so a response to a client that predates M35 keeps its
   // previous shape on the wire.
   if (!p.corrected_reading.empty()) {
@@ -364,6 +386,35 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
     }
   }
   p.partial = v->GetBool("partial").value_or(false);
+  if (const auto* segments = v->GetArray("segments")) {
+    for (const auto& item : *segments) {
+      if (!item.IsObject()) continue;
+      const auto start = item.GetUInt("start_char");
+      const auto end = item.GetUInt("end_char");
+      const auto score = item.GetNumber("score");
+      const auto surface = item.GetString("surface");
+      if (!start || !end || *start > UINT32_MAX || *end > UINT32_MAX || *end < *start || !score ||
+          !surface)
+        continue;
+      LiveSegment segment;
+      segment.start_char = static_cast<uint32_t>(*start);
+      segment.end_char = static_cast<uint32_t>(*end);
+      segment.score = *score;
+      segment.auto_punctuation = item.GetBool("auto_punctuation").value_or(false);
+      segment.surface = *surface;
+      segment.reading = item.GetString("reading").value_or("");
+      if (segment.auto_punctuation && !segment.reading.empty()) continue;
+      const auto read_byte = [&item](const char* field) -> uint8_t {
+        const auto value = item.GetUInt(field).value_or(0);
+        return value <= UINT8_MAX ? static_cast<uint8_t>(value) : 0;
+      };
+      segment.pos = read_byte("pos");
+      segment.head_pos = read_byte("head_pos");
+      segment.sem = read_byte("sem");
+      segment.head_sem = read_byte("head_sem");
+      p.segments.push_back(std::move(segment));
+    }
+  }
   // Absent for hosts that predate M35: decodes as "no correction applied".
   p.corrected_reading = v->GetString("corrected_reading").value_or(std::string());
   return p;

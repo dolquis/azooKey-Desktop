@@ -1309,6 +1309,12 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `inputStyle` | enum `default`/`custom` | `default` | 入力 | M17 | 即時 | roadmap M17 |
 | `customRomajiTablePath` | string（パス） | `…\custom-romaji.tsv` | 入力 | M17 | 即時（ホットリロード） | roadmap M17 |
 | `liveConversion` | bool | `false` | 入力 | M14 | 即時 | roadmap M14 |
+| `dynamicPunctuation` | bool | `false` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
+| `dynamicPunctuationStyle` | enum `ja`/`fullwidth_latin` | `ja` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
+| `dynamicPunctuationStability` | enum `onPause`/`eager` | `onPause` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
+| `dynamicPunctuationIdleMs` | integer (ms) | `400` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
+| `segmentBoundaryConfidence` | number (0.0–1.0) | `0.5` | 入力 | M59 | 即時 | `dynamic-punctuation-spec.md` |
+| `punctuationRulesPath` | string（パス） | `…\punctuation-rules.tsv` | 入力 | M59 | 即時（ホットリロード） | `dynamic-punctuation-spec.md` |
 | `predictionEnabled` | bool | `true` | 入力 | M15 | 即時 | roadmap M15 |
 | `batchRomajiConversion` | bool | `false` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |
 | `batchRomajiPreviewStyle` | enum `kana`/`romaji` | `kana` | 入力 | M58-A | 即時 | `romaji-batch-conversion-spec.md` |

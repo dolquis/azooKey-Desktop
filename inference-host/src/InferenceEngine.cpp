@@ -564,6 +564,9 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   config_.nll = ClampNllConfig(config.nll);
   ++nll_config_revision_;
   config_.enable_live_conversion = config.enable_live_conversion;
+  config_.dynamic_punctuation = config.dynamic_punctuation;
+  config_.segment_boundary_confidence = config.segment_boundary_confidence;
+  config_.punctuation_rules_path = config.punctuation_rules_path;
   config_.inference_threads = config.inference_threads;
   config_.max_candidates = config.max_candidates;
   config_.max_context_length = config.max_context_length;

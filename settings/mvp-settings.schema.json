@@ -81,6 +81,30 @@
       "default": false,
       "description": "Phase 5 (M14): true で Composing 中に候補ウィンドウを抑制し Preedit にライブ最良候補を表示"
     },
+    "dynamicPunctuation": {
+      "type": "boolean", "default": false,
+      "description": "M59: ライブ変換中の動的自動句読点"
+    },
+    "dynamicPunctuationStyle": {
+      "type": "string", "enum": ["ja", "fullwidth_latin"], "default": "ja",
+      "description": "M59: 自動句読点の字種"
+    },
+    "dynamicPunctuationStability": {
+      "type": "string", "enum": ["onPause", "eager"], "default": "onPause",
+      "description": "M59: 自動句読点の挿入タイミング"
+    },
+    "dynamicPunctuationIdleMs": {
+      "type": "integer", "minimum": 1, "maximum": 2147483647, "default": 400,
+      "description": "M59: onPause の入力停止判定ミリ秒"
+    },
+    "segmentBoundaryConfidence": {
+      "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5,
+      "description": "M59: 読点を許す文節境界信頼度の下限"
+    },
+    "punctuationRulesPath": {
+      "type": "string", "default": "%LOCALAPPDATA%\\azooKey\\punctuation-rules.tsv",
+      "description": "M59: 句読点規則 TSV ファイルのパス"
+    },
     "llmMagicConversion": {
       "type": "boolean",
       "default": false,

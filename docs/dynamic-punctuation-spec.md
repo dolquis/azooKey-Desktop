@@ -546,9 +546,14 @@ p.punctuation_style = v->GetString("punctuation_style").value_or("ja");
 
 ### 7.2 Response（`QueryCandidatesResponse` に `segments[]` を追加）
 
-現状 `QueryCandidatesResponse` は `candidates[]` + `partial` のみで文節構造を持たない。
-M59 は**任意配列 `segments[]` を新規追加**する（X-1-1 の segments と整合）。`segments` を
+`QueryCandidatesResponse` は `candidates[]` + `partial` に加えて、
+**任意配列 `segments[]`** を持つ（X-1-1 の segments と整合）。`segments` を
 省略した応答は従来どおり（句読点なし・文節情報なし）に解釈される。
+
+変換器が文節境界を返さない場合、host は最良候補全体を 1 文節として扱い、
+`pos` / `head_pos` / `sem` / `head_sem` は `Unknown` とする。この場合は
+文節間の読点を判定せず、文末規則に一致するときだけ句点を判定する。
+文節間の読点を利用するには、変換器が信頼度と品詞情報を伴う文節列を返す必要がある。
 
 各 segment フィールド:
 
@@ -778,10 +783,9 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 
 ## 8. 設定スキーマ
 
-実装時に `settings/mvp-settings.schema.json` へ以下を追加する
-（`additionalProperties:false` を維持。`description` に対応 M を記載する既存流儀に
-合わせる）。本書（spec）が JSON schema の正典であり、実ファイルへの追加は M59 実装時に
-行う（本セッションは設計確定のみでスキーマファイルは変更しない）。
+`settings/mvp-settings.schema.json` は以下のキーを定義する
+（`additionalProperties:false` を維持し、`description` に対応 M を記載する）。
+設定の意味は本書、機械検証上の型と制約は JSON Schema を正典とする。
 
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|
@@ -811,7 +815,7 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 - **guard EBNF 評価** (同上): `=`/`!=`/`;`(AND)・空 guard 常真・`sentence_final`・`prev_sem` /
   `next_head_sem`、Unknown pos/sem での評価バイアス（`=`→偽 / `!=`→真）、未知トークン行
   スキップ（§4.1.5）。
-- **状態機械** (`core/tests/input_state_test.cpp`): `dynamicPunctuation` ON で
+- **状態機械** (`core/tests/m59_input_state_test.cpp`、`core/tests/input_state_test.cpp`): `dynamicPunctuation` ON で
   Backspace がかな単位を削除し自動句読点を削除単位に数えないこと、入力変化で句読点が
   再配置・削除されること、`liveConversion=false` で本機能が無効化され従来遷移が不変で
   あること、OFF で従来遷移が不変であること。

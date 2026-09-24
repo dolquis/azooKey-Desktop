@@ -96,7 +96,9 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
     return std::nullopt;
   }
   if (IsCompositionSymbol(virtual_key)) {
-    if (IsComposing(kind) || kind == InputStateKind::Selecting)
+    if (IsComposing(kind) || kind == InputStateKind::Selecting ||
+        (kind == InputStateKind::Idle && !shift &&
+         (virtual_key == vk::kOemComma || virtual_key == vk::kOemPeriod)))
       return Make(UserAction::Input, modifiers);
     return std::nullopt;
   }

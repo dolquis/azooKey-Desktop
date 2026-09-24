@@ -2144,6 +2144,164 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
   restarted_server.Stop();
 }
 
+// A late Health reply is still on the primary pipe when settings trigger a
+// second handshake. The worker must ignore it and apply the new Host options
+// before the next conversion on that same connection.
+TEST(TsfTipOnKeyDownPreeditTest,
+     SettingsRefreshRehandshakeSkipsStaleHealthAndAppliesBatchBeforeNextRequest) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-settings-refresh-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::atomic<int> connections{0};
+  std::atomic<int> handshakes{0};
+  std::atomic<bool> health_received{false};
+  std::atomic<bool> release_health{false};
+  std::atomic<bool> batch_received{false};
+  std::atomic<uint32_t> batch_max_candidates{0};
+  std::atomic<bool> batch_auto_punctuation{false};
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&]() -> azookey::ipc::NamedPipeServer::MessageHandler {
+    ++connections;
+    return [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+      auto res = req;
+      if (req.type == azookey::ipc::MessageType::Handshake) {
+        const int count = ++handshakes;
+        azookey::ipc::HandshakeResponse payload;
+        payload.host_version = "test-host";
+        payload.host_generation_id = "same-generation";
+        payload.accepted = true;
+        payload.batch_romaji_conversion = count >= 2;
+        payload.batch_auto_punctuation = count >= 2;
+        payload.max_candidates = count >= 2 ? 17 : 3;
+        res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+        return res;
+      }
+      if (req.type == azookey::ipc::MessageType::Health && !health_received.exchange(true)) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!release_health.load() && std::chrono::steady_clock::now() < deadline)
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        return res;
+      }
+      if (req.type == azookey::ipc::MessageType::Health) return res;
+      if (req.type == azookey::ipc::MessageType::QueryBatchConversion) {
+        if (const auto payload = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json)) {
+          batch_max_candidates.store(payload->max_candidates);
+          batch_auto_punctuation.store(payload->auto_punctuation);
+        }
+        batch_received.store(true);
+      }
+      return std::nullopt;
+    };
+  }));
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/500,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return health_received.load(); }));
+  EXPECT_EQ(handshakes.load(), 1);
+  EXPECT_FALSE(h.service.batch_romaji_conversion_for_test());
+
+  h.service.request_host_option_refresh_for_test();
+  // Let the interrupted Health receive return before its reply is released.
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  release_health.store(true);
+  ASSERT_TRUE(WaitUntil([&] { return handshakes.load() >= 2; }));
+  ASSERT_TRUE(WaitUntil([&] { return h.service.batch_romaji_conversion_for_test(); }));
+  ASSERT_TRUE(h.Press('N'));
+  ASSERT_TRUE(h.Press('I'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return batch_received.load(); }, std::chrono::milliseconds(5000)));
+  EXPECT_EQ(batch_max_candidates.load(), 17u);
+  EXPECT_TRUE(batch_auto_punctuation.load());
+  EXPECT_EQ(connections.load(), 1);
+  EXPECT_EQ(handshakes.load(), 2);
+
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
+// The refresh branch has already removed both items from the queue when the
+// Host rejects it. The observation must survive reconnect; its Cancel refers
+// to a request on the old connection and must not be replayed there.
+TEST(TsfTipOnKeyDownPreeditTest, RejectedSettingsRefreshRequeuesObservationButDropsExpiredCancel) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-settings-refresh-reject-test-" +
+                                std::to_string(GetCurrentProcessId());
+  std::atomic<int> connections{0};
+  std::atomic<int> handshakes{0};
+  std::atomic<bool> initial_handshake_received{false};
+  std::atomic<bool> release_initial_handshake{false};
+  std::atomic<bool> observation_received{false};
+  std::atomic<bool> cancel_received{false};
+  std::mutex observation_mtx;
+  std::string received_observation_id;
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&]() -> azookey::ipc::NamedPipeServer::MessageHandler {
+    ++connections;
+    return [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+      auto res = req;
+      if (req.type == azookey::ipc::MessageType::Handshake) {
+        const int count = ++handshakes;
+        if (count == 1) {
+          initial_handshake_received.store(true);
+          const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+          while (!release_initial_handshake.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        azookey::ipc::HandshakeResponse payload;
+        payload.host_version = "test-host";
+        payload.host_generation_id = "same-generation";
+        payload.accepted = count != 2;
+        res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+        return res;
+      }
+      if (req.type == azookey::ipc::MessageType::Health) return res;
+      if (req.type == azookey::ipc::MessageType::Cancel) cancel_received.store(true);
+      if (req.type == azookey::ipc::MessageType::CommitObservation) {
+        const auto payload = azookey::ipc::ParseCommitObservationRequest(req.payload_json);
+        if (payload) {
+          std::lock_guard<std::mutex> lock(observation_mtx);
+          received_observation_id = payload->observation_id;
+        }
+        observation_received.store(true);
+        azookey::ipc::CommitObservationResponse ack;
+        ack.ok = true;
+        res.payload_json = azookey::ipc::BuildCommitObservationResponse(ack);
+        return res;
+      }
+      return std::nullopt;
+    };
+  }));
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return initial_handshake_received.load(); }));
+
+  azookey::ipc::CandidateField chosen;
+  chosen.surface = "仮名";
+  chosen.reading = "かな";
+  chosen.source = "test";
+  h.service.post_commit_observation_for_test("かな", chosen);
+  h.service.post_cancel_for_test(42);
+  const auto queued = h.service.last_queued_commit_observation_for_test();
+  ASSERT_TRUE(queued.has_value());
+  h.service.request_host_option_refresh_for_test();
+  release_initial_handshake.store(true);
+
+  ASSERT_TRUE(WaitUntil([&] { return handshakes.load() >= 3; }, std::chrono::milliseconds(5000)));
+  ASSERT_TRUE(WaitUntil([&] { return observation_received.load(); }));
+  EXPECT_EQ(connections.load(), 2);
+  EXPECT_FALSE(cancel_received.load());
+  {
+    std::lock_guard<std::mutex> lock(observation_mtx);
+    EXPECT_EQ(received_observation_id, queued->observation_id);
+  }
+
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
 namespace {
 // Fake Host for the DEV-1175 Health cases: accepts the handshake, counts Health
 // probes and answers them only while `answer_health` is set, and answers each

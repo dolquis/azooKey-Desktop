@@ -13,6 +13,7 @@
 
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <unistd.h>
 #else
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -535,6 +536,11 @@ TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
 }
 
 TEST(SettingsStoreTest, ReadFailureDoesNotQuarantineFile) {
+#ifndef _WIN32
+  if (geteuid() == 0) {
+    GTEST_SKIP() << "root bypasses file permissions, so chmod(0) cannot simulate a read failure";
+  }
+#endif
   const auto dir = TestDir("azookey_settings_read_failure");
   const auto path = dir / "settings.json";
   WriteText(path, R"({"liveConversion":true})");

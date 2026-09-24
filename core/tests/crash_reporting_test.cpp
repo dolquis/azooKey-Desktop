@@ -307,13 +307,13 @@ int wmain(int argc, wchar_t** argv) {
     // Deliberately resident on the crashing stack; it must never enter the artifact.
     volatile char sentinel[] = "private-input-candidate-prompt-api-key-sentinel";
     (void)sentinel;
-    azookey::core::CrashReporting::Initialize(azookey::core::CrashModule::Host,
-                                              (mode == L"--crash-off-probe" ||
-                                               mode == L"--stack-off-main" ||
-                                               mode == L"--stack-off-worker")
-                                                  ? azookey::core::CrashConsent::Off
-                                                  : azookey::core::CrashConsent::Local,
-                                              argv[2]);
+    azookey::core::CrashReporting::Initialize(
+        azookey::core::CrashModule::Host,
+        (mode == L"--crash-off-probe" || mode == L"--stack-off-main" ||
+         mode == L"--stack-off-worker")
+            ? azookey::core::CrashConsent::Off
+            : azookey::core::CrashConsent::Local,
+        argv[2]);
     if (stack_probe) {
       if (mode == L"--stack-local-worker" || mode == L"--stack-off-worker") {
         const auto worker = reinterpret_cast<HANDLE>(

@@ -587,6 +587,33 @@ exit 1
       foreach ($stderrLog in $stderrLogs) {
         Assert-Condition ((Get-Content -Raw -LiteralPath $stderrLog.FullName) -match "simulated crash") "Each launch log should contain the host stderr."
       }
+      $diagnosticPath = "$stderrLogBase.supervisor.jsonl"
+      $diagnostics = @(Get-Content -LiteralPath $diagnosticPath | ConvertFrom-Json)
+      $exits = @($diagnostics | Where-Object { $_.event -eq 'host_exited' })
+      Assert-Condition ($exits.Count -eq 2) "host-supervisor.ps1 should record both failed exits."
+      foreach ($record in $exits) {
+        Assert-Condition ($record.detail -eq 'exit_code=1') "host-supervisor.ps1 should retain the nonzero exit code."
+      }
+    }
+
+    It "records the exit code of a native host that stops retry immediately" {
+      $stderrLogBase = Join-Path $TestDrive "native-host-stderr.log"
+      & $script:supervisorPath `
+        -HostExePath $env:ComSpec `
+        -HostArguments '/d /c exit 2' `
+        -PipeName "azookey-supervisor-test-$([guid]::NewGuid().ToString('N'))" `
+        -StderrLogPath $stderrLogBase `
+        -InstanceKey "test-$([guid]::NewGuid().ToString('N'))" `
+        -RestartDelayMinMs 10 `
+        -RestartDelayMaxMs 20 `
+        -MaxLaunchCount 3
+
+      $diagnosticPath = "$stderrLogBase.supervisor.jsonl"
+      $diagnostics = @(Get-Content -LiteralPath $diagnosticPath | ConvertFrom-Json)
+      $exit = @($diagnostics | Where-Object { $_.event -eq 'host_exited' })
+      $stopped = @($diagnostics | Where-Object { $_.event -eq 'retry_stopped' })
+      Assert-Condition ($exit.Count -eq 1 -and $exit[0].detail -eq 'exit_code=2') "host_exited should retain the native process exit code."
+      Assert-Condition ($stopped.Count -eq 1 -and $stopped[0].detail -match '^exit_code=2; ') "retry_stopped should retain the native process exit code."
     }
   }
 }

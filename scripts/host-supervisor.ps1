@@ -225,12 +225,7 @@ try {
     $selection = Get-HostSelection -BasePath $HostExePath
     # Probe can take time. Do not launch after MSI has removed the registration.
     if (-not (Test-InstallationActive -Directory $InstalledDirectory)) { break }
-    $startParameters = @{
-      FilePath = $selection.Path
-      ArgumentList = $HostArguments
-      PassThru = $true
-      WindowStyle = "Hidden"
-    }
+    $stderrPath = ""
     if ($StderrLogPath) {
       try {
         $launchAttemptCount++
@@ -238,14 +233,14 @@ try {
         if ($logDirectory) {
           New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
         }
-        $startParameters.RedirectStandardError = Get-LaunchLogPath `
+        $stderrPath = Get-LaunchLogPath `
           -BasePath $StderrLogPath `
           -LaunchAttempt $launchAttemptCount
         # Check redirection before creating the child, then fall back to no redirect.
-        ([IO.File]::Open($startParameters.RedirectStandardError, [IO.FileMode]::CreateNew)).Dispose()
+        ([IO.File]::Open($stderrPath, [IO.FileMode]::CreateNew)).Dispose()
         Remove-OldHostLaunchLog -BasePath $StderrLogPath -Keep 20
       } catch {
-        $startParameters.Remove('RedirectStandardError')
+        $stderrPath = ""
         Write-HostStartupLog -Path $diagnosticPath -EventName "stderr_unavailable" -Detail "$_"
       }
     }
@@ -253,10 +248,35 @@ try {
       -Detail "$($selection.Path); $($selection.Detail)"
 
     $startedAt = [DateTimeOffset]::UtcNow
+    $hostProcess = [Diagnostics.Process]::new()
+    $stderrFile = $null
+    $stderrCopy = $null
     try {
-      $hostProcess = Start-Process @startParameters
+      $hostProcess.StartInfo = [Diagnostics.ProcessStartInfo]@{
+        FileName = $selection.Path
+        Arguments = $HostArguments
+        UseShellExecute = $false
+        CreateNoWindow = $true
+        WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+        RedirectStandardError = [bool]$stderrPath
+      }
+      if ($stderrPath) {
+        try {
+          $stderrFile = [IO.File]::Open($stderrPath, [IO.FileMode]::Open,
+            [IO.FileAccess]::Write, [IO.FileShare]::Read)
+        } catch {
+          $hostProcess.StartInfo.RedirectStandardError = $false
+          Write-HostStartupLog -Path $diagnosticPath -EventName "stderr_unavailable" -Detail "$_"
+        }
+      }
+      [void]$hostProcess.Start()
+      if ($stderrFile) {
+        $stderrCopy = $hostProcess.StandardError.BaseStream.CopyToAsync($stderrFile)
+      }
       $launchCount++
     } catch {
+      if ($stderrFile) { $stderrFile.Dispose() }
+      $hostProcess.Dispose()
       $consecutiveFailures++
       Write-HostStartupLog -Path $diagnosticPath -EventName "host_launch_failed" -Detail "$_"
       if ($consecutiveFailures -ge 5) {
@@ -280,9 +300,21 @@ try {
         }
         $hostProcess.Refresh()
       }
+      $hostProcess.WaitForExit()
       $exitCode = $hostProcess.ExitCode
+      if ($stderrCopy) {
+        try {
+          if (-not $stderrCopy.Wait(1000)) {
+            Write-HostStartupLog -Path $diagnosticPath -EventName "stderr_unavailable" `
+              -Detail "stderr copy did not complete after host exit"
+          }
+        } catch {
+          Write-HostStartupLog -Path $diagnosticPath -EventName "stderr_unavailable" -Detail "$_"
+        }
+      }
       Write-HostStartupLog -Path $diagnosticPath -EventName "host_exited" -Detail "exit_code=$exitCode"
     } finally {
+      if ($stderrFile) { $stderrFile.Dispose() }
       $hostProcess.Dispose()
     }
 

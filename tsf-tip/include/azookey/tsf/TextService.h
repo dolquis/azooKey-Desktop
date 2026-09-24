@@ -228,6 +228,11 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string pending_ipc_reading_for_test();
   std::string pending_ipc_raw_romaji_for_test();
   void set_ipc_pipe_name_for_test(std::string pipe_name);
+  void request_host_option_refresh_for_test() { RequestHostOptionRefresh(); }
+  bool batch_romaji_conversion_for_test() const {
+    return batch_romaji_conversion_.load(std::memory_order_relaxed);
+  }
+  void post_cancel_for_test(uint64_t target_request_id) { PostCancel(target_request_id); }
   void start_ipc_worker_for_test();
   void stop_ipc_worker_for_test();
   IpcConnectionState ipc_connection_state_for_test() const {

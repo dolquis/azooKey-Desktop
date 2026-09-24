@@ -1705,20 +1705,20 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   （新規）、`tsf-tip/src/TextService.cpp`、`inference-host/src/`、
   `ipc/src/`。
 - **実装範囲**: `docs/dev-infrastructure-spec.md` §7。
-  - JSON Lines ログ（`ts`/`level`/`component`/`request_id`/`phase`/
-    `latency_ms`/`result`/`error_code`）
+  - JSON Lines ログ（必須は `ts`/`level`/`component`/`event`。`request_id`/`result`/
+    `error_code` は該当時。`trace_id`/`phase`/`latency_ms` は M51）
   - 相関 ID（`request_id` は TIP 採番。`QueryCandidates`/staleness は `ipc_pending_id_`、
     送信キュー〔`CommitObservation`〔応答あり〕/ `Cancel`〔応答なし〕〕は接続ローカル連番。
-    `trace_id` と組で相関。詳細は `docs/dev-infrastructure-spec.md` §7.3）とフェーズ別レイテンシ
+    `trace_id` と組で相関。詳細は `docs/dev-infrastructure-spec.md` §7.3）
   - エラーコード体系 enum（transport / protocol / business）
-  - タイムアウト規約（ソフト/ハード）
+  - タイムアウト規約（処理種別ごとに 1 つの deadline。値は同 §8.5.2）
   - 入力本文・候補語のログ redaction は §7.6 の優先順位に従う。本文出力は
     `Debug ∧ AZOOKEY_LOG_BODY=1 ∧ ¬secure ∧ policy.detailed_logging_allowed` のときのみ
     （`privacy.redactLogs` 既定 `true`。単に Debug というだけでは出さない）
 - **受け入れ条件**:
-  - TIP / Host が JSON Lines ログを所定ディレクトリに出力する
-  - 各行に `request_id` / `phase` / `latency_ms` / `result` が含まれる
-  - エラーコードが 3 カテゴリ enum で固定される
+  - `AZOOKEY_LOG=1` のとき TIP / Host が JSON Lines ログを所定ディレクトリに出力する
+  - 各行に `ts` / `component` / `level` / `event` が含まれ、IPC 要求に関する行は `request_id` を持つ
+  - エラーを記録する行の `error_code` が 3 カテゴリのいずれかになる
   - Release ビルドで入力本文・候補語がログに出力されない
 - **参照仕様**: `docs/dev-infrastructure-spec.md` §7
 

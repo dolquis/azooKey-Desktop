@@ -1429,13 +1429,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
     // and the rewriter Space path keep TIP pre-processing, while standalone
     // punctuation always uses the fixed local candidates in core mode.
-    const bool legacy_path = BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive ||
-                             bracket_composition_ ||
-                             (!standalone_punctuation &&
-                              (number_rewriter_.load(std::memory_order_relaxed) ||
-                               (IsActionKey(key_event, UserAction::StartConversion) &&
-                                (symbol_rewriter_.load(std::memory_order_relaxed) ||
-                                 emoji_rewriter_.load(std::memory_order_relaxed)))));
+    const bool legacy_path =
+        BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
+        (!standalone_punctuation && (number_rewriter_.load(std::memory_order_relaxed) ||
+                                     (IsActionKey(key_event, UserAction::StartConversion) &&
+                                      (symbol_rewriter_.load(std::memory_order_relaxed) ||
+                                       emoji_rewriter_.load(std::memory_order_relaxed)))));
     if (!legacy_path && !core_input_active_ && !has_preedit && !cand_visible) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -1449,8 +1448,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           event.codepoint = static_cast<char32_t>(wParam);
         } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) && has_preedit) {
           event.codepoint = U'-';
-        } else if (composition_symbol &&
-                   (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
+        } else if (composition_symbol && (has_preedit || composition_symbol->raw == ',' ||
+                                          composition_symbol->raw == '.')) {
           size_t offset = 0;
           char32_t cp = 0;
           if (core::DecodeNextUtf8(composition_symbol->surface, offset, cp) &&

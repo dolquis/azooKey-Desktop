@@ -1,10 +1,11 @@
 #include "azookey/host/Dispatcher.h"
-#include "azookey/host/PunctuationInserter.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <string_view>
+
+#include "azookey/host/PunctuationInserter.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -578,7 +579,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     converted.score = 1.0;
     const auto rules = PunctuationInserter::LoadRules(engine_config.punctuation_rules_path);
     auto inserted = PunctuationInserter::Insert({converted}, rules, parsed->punctuation_style,
-                                                 engine_config.segment_boundary_confidence);
+                                                engine_config.segment_boundary_confidence);
     res.candidates.front().surface = std::move(inserted.surface);
     res.segments = std::move(inserted.segments);
   }

@@ -156,7 +156,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.input_mode =
       ReadEnum(object, "inputMode", settings.input_mode, {"hiragana", "alnum_half", "alnum_full"});
   settings.live_conversion = ReadBool(object, "liveConversion", settings.live_conversion);
-  settings.dynamic_punctuation = ReadBool(object, "dynamicPunctuation", settings.dynamic_punctuation);
+  settings.dynamic_punctuation =
+      ReadBool(object, "dynamicPunctuation", settings.dynamic_punctuation);
   settings.dynamic_punctuation_style =
       ReadEnum(object, "dynamicPunctuationStyle", settings.dynamic_punctuation_style,
                {"ja", "fullwidth_latin"});
@@ -164,8 +165,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
       ReadEnum(object, "dynamicPunctuationStability", settings.dynamic_punctuation_stability,
                {"onPause", "eager"});
   settings.dynamic_punctuation_idle_ms =
-      ReadRangedInt32(object, "dynamicPunctuationIdleMs", settings.dynamic_punctuation_idle_ms,
-                      1, (std::numeric_limits<int32_t>::max)());
+      ReadRangedInt32(object, "dynamicPunctuationIdleMs", settings.dynamic_punctuation_idle_ms, 1,
+                      (std::numeric_limits<int32_t>::max)());
   if (const auto value = object.find("segmentBoundaryConfidence");
       value != object.end() && value->second.IsNumber() &&
       std::isfinite(value->second.AsNumber()) && value->second.AsNumber() >= 0.0 &&

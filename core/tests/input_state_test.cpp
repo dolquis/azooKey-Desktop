@@ -418,8 +418,8 @@ TEST(InputStateTest, ExplicitPunctuationStartsCompositionAndBackspaceClearsIt) {
     const auto mapped = MapUserAction(key, 0, K::Idle);
     ASSERT_TRUE(mapped);
     EXPECT_EQ(mapped->action, UserAction::Input);
-    const auto inserted = InputState{}.HandleEvent(Ev(UserAction::Input,
-                                                       key == vk::kOemComma ? U'、' : U'。'));
+    const auto inserted =
+        InputState{}.HandleEvent(Ev(UserAction::Input, key == vk::kOemComma ? U'、' : U'。'));
     EXPECT_EQ(inserted.next.Reading(), surface);
     EXPECT_EQ(inserted.next.kind(), K::Composing);
     EXPECT_EQ(inserted.next.HandleEvent(Ev(UserAction::Backspace)).next.kind(), K::Idle);

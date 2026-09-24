@@ -290,7 +290,8 @@ TEST(PayloadsTest, QueryCandidates) {
 }
 
 TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {
-  const auto old_request = azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"かな","live":true})");
+  const auto old_request =
+      azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"かな","live":true})");
   ASSERT_TRUE(old_request);
   EXPECT_FALSE(old_request->auto_punctuation);
   EXPECT_EQ(old_request->punctuation_style, "ja");

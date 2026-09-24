@@ -393,8 +393,9 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
       const auto end = item.GetUInt("end_char");
       const auto score = item.GetNumber("score");
       const auto surface = item.GetString("surface");
-      if (!start || !end || *start > UINT32_MAX || *end > UINT32_MAX || *end < *start ||
-          !score || !surface) continue;
+      if (!start || !end || *start > UINT32_MAX || *end > UINT32_MAX || *end < *start || !score ||
+          !surface)
+        continue;
       LiveSegment segment;
       segment.start_char = static_cast<uint32_t>(*start);
       segment.end_char = static_cast<uint32_t>(*end);

@@ -1,4 +1,5 @@
-add_executable(host_engine_tests engine_test.cpp nll_scorer_test.cpp rewriter_test.cpp)
+add_executable(host_engine_tests engine_test.cpp nll_scorer_test.cpp rewriter_test.cpp
+  punctuation_inserter_test.cpp)
 target_compile_definitions(host_engine_tests PRIVATE
   AZOOKEY_REWRITER_DATA_DIR="${PROJECT_SOURCE_DIR}/data")
 target_link_libraries(host_engine_tests

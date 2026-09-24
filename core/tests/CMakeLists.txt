@@ -7,7 +7,9 @@ add_executable(core_tests
   input_state_test.cpp
   katakana_rewriter_test.cpp
   live_conversion_chunker_test.cpp
+  m59_input_state_test.cpp
   number_rewriter_test.cpp
+  punctuation_rules_test.cpp
   redaction_test.cpp
   rewriter_index_test.cpp
   romaji_kana_converter_test.cpp

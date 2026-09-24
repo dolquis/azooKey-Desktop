@@ -71,6 +71,12 @@ struct RuntimeSettings {
   NllConfig nll;
   std::string input_mode{"hiragana"};
   bool live_conversion{false};
+  bool dynamic_punctuation{false};
+  std::string dynamic_punctuation_style{"ja"};
+  std::string dynamic_punctuation_stability{"onPause"};
+  int32_t dynamic_punctuation_idle_ms{400};
+  double segment_boundary_confidence{0.5};
+  std::string punctuation_rules_path{"%LOCALAPPDATA%\\azooKey\\punctuation-rules.tsv"};
   bool llm_magic_conversion{false};
   std::string log_level{"info"};
   std::string crash_report_consent{"off"};

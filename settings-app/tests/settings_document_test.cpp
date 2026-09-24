@@ -340,6 +340,28 @@ TEST(SettingsDocumentTest, SavesModelSettingsWithoutDroppingTipBracketConfigurat
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsDocumentTest, PreservesValidDynamicPunctuationSettings) {
+  const auto dir = TestDir("azookey_settings_dynamic_punctuation_document");
+  const auto path = dir / "settings.json";
+  const std::string json = R"({"dynamicPunctuation":true,
+    "dynamicPunctuationStyle":"fullwidth_latin","dynamicPunctuationStability":"eager",
+    "dynamicPunctuationIdleMs":350,"segmentBoundaryConfidence":0.75,
+    "punctuationRulesPath":"C:/rules/custom.tsv"})";
+  WriteText(path, json);
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok);
+  const auto actual = azookey::ipc::json::Parse(ReadText(path));
+  const auto expected = azookey::ipc::json::Parse(json);
+  ASSERT_TRUE(actual && expected);
+  for (const auto& [key, value] : expected->AsObject()) {
+    ASSERT_TRUE(actual->AsObject().contains(key)) << key;
+    EXPECT_EQ(azookey::ipc::json::Stringify(actual->AsObject().at(key)),
+              azookey::ipc::json::Stringify(value)) << key;
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, UnsupportedValidBackendIsPreservedUntilUserSelectsOne) {
   const auto dir = TestDir("azookey_settings_document_hidden_backend");
   const auto path = dir / "settings.json";

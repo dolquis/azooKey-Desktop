@@ -66,6 +66,9 @@ struct EngineConfig {
   uint32_t max_candidates{9};
   uint32_t max_context_length{10};
   bool enable_live_conversion{true};
+  bool dynamic_punctuation{false};
+  double segment_boundary_confidence{0.5};
+  std::string punctuation_rules_path{"%LOCALAPPDATA%\\azooKey\\punctuation-rules.tsv"};
   double learning_alpha{0.8};
   size_t learning_flush_every_n{8};
   uint64_t learning_flush_interval_sec{5};

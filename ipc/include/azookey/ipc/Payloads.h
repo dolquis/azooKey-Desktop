@@ -91,14 +91,32 @@ struct QueryCandidatesRequest {
   std::string left_context;
   uint32_t max_candidates{10};
   bool live{false};
+  bool auto_punctuation{false};
+  std::string punctuation_style{"ja"};
   std::string emoji_trigger;
   // Missing or invalid event privacy is denied (protocol v1 additive fields).
   bool secure{true};
   bool learning_allowed{false};
 };
 
+// Offsets count UTF-16 code units in candidates[0].surface. Surface and reading
+// are carried separately so learning never slices UTF-8 with those offsets.
+struct LiveSegment {
+  uint32_t start_char{};
+  uint32_t end_char{};
+  double score{};
+  bool auto_punctuation{false};
+  std::string surface;
+  std::string reading;
+  uint8_t pos{};
+  uint8_t head_pos{};
+  uint8_t sem{};
+  uint8_t head_sem{};
+};
+
 struct QueryCandidatesResponse {
   std::vector<CandidateField> candidates;
+  std::vector<LiveSegment> segments;
   bool partial{false};
   bool ok{true};
   std::optional<std::string> error;

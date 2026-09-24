@@ -142,10 +142,24 @@ std::wstring Utf8ToWide(const std::string& utf8) {
   return result;
 }
 
+bool IsStandalonePunctuation(const std::string& reading) {
+  return reading == "、" || reading == "。";
+}
+
+std::vector<azookey::ipc::CandidateField> StandalonePunctuationCandidates(
+    const std::string& reading) {
+  return {{reading, reading, 0.0, "fallback"},
+          {reading == "、" ? "," : ".", reading, 0.0, "fallback"}};
+}
+
 std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
     const std::string& reading, std::vector<azookey::ipc::CandidateField> candidates,
     bool number_rewriter_enabled, bool katakana_rewriter_enabled,
     bool symbol_rewriter_enabled = false) {
+  if (IsStandalonePunctuation(reading)) {
+    auto local = StandalonePunctuationCandidates(reading);
+    return {{std::move(local[0]), "", true}, {std::move(local[1]), "半角", true}};
+  }
   std::vector<azookey::tsf::TipCandidate> result;
   result.reserve(candidates.size() + 8);
   for (auto& candidate : candidates) {
@@ -196,6 +210,7 @@ std::vector<azookey::tsf::TipCandidate> BuildTipCandidates(
 // reading already went through the TIP's own romaji -> kana conversion, so no
 // Host is needed. source "fallback" keeps them out of CommitObservation.
 std::vector<azookey::ipc::CandidateField> BuildLocalFallbackCandidates(const std::string& reading) {
+  if (IsStandalonePunctuation(reading)) return StandalonePunctuationCandidates(reading);
   // Always at least the reading itself, so even an empty segment keeps one
   // candidate for the candidate UI and the batch commit.
   std::vector<azookey::ipc::CandidateField> result;
@@ -1213,9 +1228,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
         // composition が無いときは通常のハイフンとしてアプリへ通す。
         *eaten = has_preedit ? TRUE : FALSE;
       } else if (composition_symbol) {
-        // 明示句読点と slash は composition 中だけ取り込む。composition が無いときは
-        // アプリへパススルーし、通常の記号入力を横取りしない。
-        *eaten = has_preedit ? TRUE : FALSE;
+        const bool punctuation = composition_symbol->raw == ',' || composition_symbol->raw == '.';
+        *eaten = has_preedit || punctuation ? TRUE : FALSE;
       }
     } else if (key_event->action == UserAction::Backspace) {
       *eaten = has_preedit ? TRUE : FALSE;
@@ -1408,14 +1422,20 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     using core::UserAction;
     const bool is_input = IsActionKey(key_event, UserAction::Input);
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
+    const bool standalone_punctuation =
+        IsStandalonePunctuation(CurrentPreeditSurface()) ||
+        (!has_preedit && composition_symbol &&
+         (composition_symbol->raw == ',' || composition_symbol->raw == '.'));
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
-    // and the rewriter Space path keep their existing TIP pre-processing.
+    // and the rewriter Space path keep TIP pre-processing, while standalone
+    // punctuation always uses the fixed local candidates in core mode.
     const bool legacy_path = BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive ||
                              bracket_composition_ ||
-                             number_rewriter_.load(std::memory_order_relaxed) ||
-                             (IsActionKey(key_event, UserAction::StartConversion) &&
-                              (symbol_rewriter_.load(std::memory_order_relaxed) ||
-                               emoji_rewriter_.load(std::memory_order_relaxed)));
+                             (!standalone_punctuation &&
+                              (number_rewriter_.load(std::memory_order_relaxed) ||
+                               (IsActionKey(key_event, UserAction::StartConversion) &&
+                                (symbol_rewriter_.load(std::memory_order_relaxed) ||
+                                 emoji_rewriter_.load(std::memory_order_relaxed)))));
     if (!legacy_path && !core_input_active_ && !has_preedit && !cand_visible) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -1429,7 +1449,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           event.codepoint = static_cast<char32_t>(wParam);
         } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) && has_preedit) {
           event.codepoint = U'-';
-        } else if (composition_symbol && has_preedit) {
+        } else if (composition_symbol &&
+                   (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
           size_t offset = 0;
           char32_t cp = 0;
           if (core::DecodeNextUtf8(composition_symbol->surface, offset, cp) &&
@@ -1559,7 +1580,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
-    } else if (is_input && composition_symbol && has_preedit) {
+    } else if (is_input && composition_symbol &&
+               (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
       const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
         candidate_ui_.EndUI();
@@ -1645,6 +1667,17 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           selected_candidate_idx_ = candidate_ui_.GetSelected();
           const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
           if (FAILED(update_hr)) return update_hr;
+        } else if (IsStandalonePunctuation(BatchReadingForConversion())) {
+          const std::string reading = BatchReadingForConversion();
+          {
+            std::lock_guard<std::mutex> lk(candidates_mtx_);
+            cached_batch_segments_ = {{reading, StandalonePunctuationCandidates(reading)}};
+            candidates_ = BuildTipCandidates(reading, cached_batch_segments_.front().candidates,
+                                             false, false);
+            shown_candidates_.clear();
+            candidate_window_show_pending_ = true;
+          }
+          ShowCandidateWindowFromCache();
         } else if (batch_query_in_progress_ && !IpcHostUnavailable()) {
           // Batch conversion is already waiting for a response.  Eat repeated
           // Space presses without re-sending the same request.
@@ -3714,10 +3747,12 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     core_cached_metadata_.clear();
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
-      candidates_.clear();
+      candidates_ = IsStandalonePunctuation(query->reading)
+                        ? BuildTipCandidates(query->reading, {}, false, false)
+                        : std::vector<TipCandidate>{};
       candidate_window_show_pending_ = input_state_.awaiting_candidates();
     }
-    PostQueryCandidates(context, query->reading);
+    if (!IsStandalonePunctuation(query->reading)) PostQueryCandidates(context, query->reading);
   } else if (std::holds_alternative<core::CommitMarkedText>(action)) {
     pending_commit_observation_.reset();
     commit_pending = true;

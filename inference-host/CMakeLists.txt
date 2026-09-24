@@ -20,6 +20,7 @@ add_library(azookey_host STATIC
   src/LookupCli.cpp
   src/NewWordsCli.cpp
   src/ModelCatalog.cpp
+  src/PunctuationInserter.cpp
   src/NllScorer.cpp
   src/RequestScheduler.cpp
   src/RewriterData.cpp

@@ -3,6 +3,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/InputState.h"
@@ -409,6 +410,22 @@ TEST(InputStateTest, HyphenBecomesLongVowelAndPunctuationFlushesRomaji) {
   EXPECT_EQ(Feed(InputState{}, U"ka-").Reading(), "かー");
   EXPECT_EQ(Feed(InputState{}, U"kan、").Reading(), "かん、");
   EXPECT_EQ(Feed(InputState{}, U"ka/").Reading(), "か/");
+}
+
+TEST(InputStateTest, ExplicitPunctuationStartsCompositionAndBackspaceClearsIt) {
+  for (const auto [key, surface] :
+       {std::pair{vk::kOemComma, "、"}, std::pair{vk::kOemPeriod, "。"}}) {
+    const auto mapped = MapUserAction(key, 0, K::Idle);
+    ASSERT_TRUE(mapped);
+    EXPECT_EQ(mapped->action, UserAction::Input);
+    const auto inserted = InputState{}.HandleEvent(Ev(UserAction::Input,
+                                                       key == vk::kOemComma ? U'、' : U'。'));
+    EXPECT_EQ(inserted.next.Reading(), surface);
+    EXPECT_EQ(inserted.next.kind(), K::Composing);
+    EXPECT_EQ(inserted.next.HandleEvent(Ev(UserAction::Backspace)).next.kind(), K::Idle);
+    EXPECT_FALSE(MapUserAction(key, kModifierShift, K::Idle));
+  }
+  EXPECT_FALSE(MapUserAction(vk::kOem2, 0, K::Idle));
 }
 
 TEST(InputStateTest, InputAlnumAppendsLiterally) {

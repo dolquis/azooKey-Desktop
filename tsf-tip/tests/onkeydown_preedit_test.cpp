@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1807,10 +1808,16 @@ TEST(TsfTipOnKeyDownPreeditTest, OemPunctuationAndSlashJoinActivePreedit) {
   h.keyboard_state.SetDown(VK_LSHIFT, false);
   h.keyboard_state.SetDown(VK_RSHIFT, false);
 
-  EXPECT_FALSE(h.TestPress(VK_OEM_COMMA));
-  EXPECT_FALSE(h.Press(VK_OEM_COMMA));
-  EXPECT_FALSE(h.TestPress(VK_OEM_PERIOD));
-  EXPECT_FALSE(h.Press(VK_OEM_PERIOD));
+  EXPECT_TRUE(h.TestPress(VK_OEM_COMMA));
+  EXPECT_TRUE(h.Press(VK_OEM_COMMA));
+  EXPECT_EQ(h.service.preedit_kana_, "、");
+  EXPECT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_TRUE(h.TestPress(VK_OEM_PERIOD));
+  EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "。");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, "");
   EXPECT_FALSE(h.TestPress(VK_OEM_2));
   EXPECT_FALSE(h.Press(VK_OEM_2));
 
@@ -2142,6 +2149,89 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
   h.service.stop_ipc_worker_for_test();
   EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Disconnected);
   restarted_server.Stop();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationStartsAndClearsDocumentComposition) {
+  OemCompositionTranslationGuard oem_translation;
+  for (const auto [key, surface] :
+       {std::pair{VK_OEM_COMMA, L"、"}, std::pair{VK_OEM_PERIOD, L"。"}}) {
+    DocumentPreeditHarness h;
+    ASSERT_EQ(h.service.composition_, nullptr);
+    ASSERT_TRUE(h.Press(key));
+    EXPECT_EQ(h.context.document->text, surface);
+    EXPECT_NE(h.service.composition_, nullptr);
+    EXPECT_TRUE(h.Press(VK_BACK));
+    EXPECT_EQ(h.context.document->text, L"");
+    EXPECT_EQ(h.service.preedit_kana_, "");
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationHalfwidthCandidateCommitsWithoutLearning) {
+  OemCompositionTranslationGuard oem_translation;
+  for (const auto [key, japanese, ascii] :
+       {std::tuple{VK_OEM_COMMA, "、", L","}, std::tuple{VK_OEM_PERIOD, "。", L"."}}) {
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    const auto shown = h.service.shown_candidates_for_test();
+    ASSERT_EQ(shown.size(), 2u);
+    EXPECT_EQ(shown[0].surface, japanese);
+    EXPECT_EQ(shown[1].surface, key == VK_OEM_COMMA ? "," : ".");
+    EXPECT_EQ(shown[1].source, "fallback");
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(attachment.composition_range.last_text, ascii);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationUsesLocalCandidatesWithRewritersEnabled) {
+  OemCompositionTranslationGuard oem_translation;
+  TextServiceHarness h;
+  h.service.set_number_rewriter_enabled_for_test(true);
+  h.service.set_symbol_rewriter_for_test(true);
+  h.service.set_emoji_rewriter_for_test(true);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_EQ(shown.size(), 2u);
+  EXPECT_EQ(shown[0].surface, "、");
+  EXPECT_EQ(shown[1].surface, ",");
+  EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationDigitAndEscapeKeepReadingInSync) {
+  OemCompositionTranslationGuard oem_translation;
+  TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press(VK_OEM_COMMA));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(attachment.composition_range.last_text, L",");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.service.preedit_kana_, "、");
+  EXPECT_EQ(attachment.composition_range.last_text, L"、");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L",");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, BatchStandalonePunctuationKeepsRawAndOffersHalfwidth) {
+  OemCompositionTranslationGuard oem_translation;
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "。");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  const auto shown = h.service.shown_candidates_for_test();
+  ASSERT_EQ(shown.size(), 2u);
+  EXPECT_EQ(shown[0].surface, "。");
+  EXPECT_EQ(shown[1].surface, ".");
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L".");
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test());
 }
 
 // A late Health reply is still on the primary pipe when settings trigger a

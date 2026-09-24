@@ -440,11 +440,11 @@ UI-less モードとアプリ描画ホストでは、候補は `ITfCandidateList
 生成文字へ写してから ASCII の `:` かどうかを判定する（`TranslateOemCompositionSymbol` と同じ
 手法）。
 
-ここには既存方針の例外がある。TIP は現在、記号キーを composition 中だけ取り込み、composition が
-無いときはアプリへ通す（`tsf-tip/src/TextService.cpp` の OEM 記号の扱い）。`:trigger` は
-composition が無い状態から `:` を取り込んで composition を始めるため、この方針を破る唯一の入口に
-なる。破らずに済ませる方法は無い。`:smile` にはかな読みが無く、composition を先に開く手段が
-`:` の打鍵以外にないためである。
+ここには記号キーの例外がある。TIP は明示句読点の `,` / `.` を composition が無い状態でも
+`、` / `。` として取り込み、それ以外の OEM 記号キーは composition 中だけ取り込む
+（`docs/tsf-deep-integration-spec.md` §3.5）。`:trigger` は composition が無い状態から
+`:` を取り込んで composition を始める別の入口となる。`:smile` にはかな読みが無く、
+composition を先に開くには `:` の打鍵が必要なためである。
 
 例外の影響は 3 つの条件で抑える。第一に、既定 OFF の `emojiRewriter` と `inputMode == "hiragana"`
 の二重ゲートにより、英数モードのパススルーは一切変わらない。`http://` のように英数モードで打つ
@@ -839,8 +839,8 @@ M62-C は次の 2 つの経路で記号候補を生成する。
 2 つは合成して働く。読み引きが族の代表を候補列へ置き、chain がその族を広げる。
 
 chain の入口を候補の表層形に置くのは、記号だけからなる読みが通常の打鍵では発生しないためである。
-TIP は記号キーを composition 中だけ取り込み、composition が無いときはアプリへ通す（§11.1 が
-`:` の例外を論じるときに挙げた既存方針）。
+TIP は明示句読点を除く記号キーを composition 中だけ取り込み、composition が無いときは
+アプリへ通す（§11.1 の `:` も例外）。
 読みを入口にすると、chain は `「` を単独で読みへ入れる手段がないまま、事実上発火しない。
 
 責務の分担は次のとおりとする。

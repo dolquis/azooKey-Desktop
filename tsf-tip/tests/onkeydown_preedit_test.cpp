@@ -2149,8 +2149,8 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
 // before the next conversion on that same connection.
 TEST(TsfTipOnKeyDownPreeditTest,
      SettingsRefreshRehandshakeSkipsStaleHealthAndAppliesBatchBeforeNextRequest) {
-  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-settings-refresh-test-" +
-                                std::to_string(GetCurrentProcessId());
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-settings-refresh-test-" + std::to_string(GetCurrentProcessId());
   std::atomic<int> connections{0};
   std::atomic<int> handshakes{0};
   std::atomic<bool> health_received{false};

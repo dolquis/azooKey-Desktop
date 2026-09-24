@@ -2450,6 +2450,14 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | —（CLI は対象アプリ内の TSF context を直接観測しない） | x64 の通常プロセス、または前面ウィンドウ・プロセス情報・アーキテクチャ・トークンの取得不能で、既知の非対応条件を確定できない | x86、x64 以外のアーキテクチャ、または AppContainer プロセスを確認 | ✗（§13 互換性情報へ） |
 
+ARM64 ホストでは `IsWow64Process2` の結果だけで x64 エミュレーションと ARM64
+ネイティブを区別できないため、`GetProcessInformation(ProcessMachineTypeInfo)` で
+対象プロセスのアーキテクチャを確認する。同情報を取得できない場合は
+`architecture_unknown` の `warning` とし、ARM64 を非対応と推定しない。
+確認できた ARM64 ネイティブは、`docs/sideload-packaging-spec.md` §0.1 の
+x64 入力対象スコープに従い
+`unsupported_architecture` とする。
+
 D-015 の `details.reason` は `context_unverified`、`no_foreground_window`、
 `process_unavailable`、`architecture_unknown`、`container_unknown`、`x86`、
 `unsupported_architecture`、`app_container` の固定 enum とする。`warning` は

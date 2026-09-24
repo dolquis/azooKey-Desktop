@@ -38,6 +38,17 @@ enum class AppProcessArchitecture {
   Other,
 };
 
+// PE IMAGE_FILE_MACHINE values; keep the classifier available on non-Windows builds.
+inline constexpr uint16_t kProcessMachineUnknown = 0x0000;
+inline constexpr uint16_t kProcessMachineX86 = 0x014c;
+inline constexpr uint16_t kProcessMachineX64 = 0x8664;
+inline constexpr uint16_t kProcessMachineArm64 = 0xaa64;
+
+// resolved_machine is ProcessMachineTypeInfo when ARM64 makes IsWow64Process2 ambiguous.
+AppProcessArchitecture ClassifyAppProcessArchitecture(uint16_t process_machine,
+                                                      uint16_t native_machine,
+                                                      std::optional<uint16_t> resolved_machine);
+
 struct ForegroundAppInfo {
   bool has_window{false};
   bool process_opened{false};

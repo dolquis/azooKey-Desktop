@@ -1168,16 +1168,17 @@ ForegroundAppInfo ProbeForegroundApp() {
   USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
   USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
   if (IsWow64Process2(process, &process_machine, &native_machine)) {
-    const USHORT machine = process_machine == IMAGE_FILE_MACHINE_UNKNOWN
-                               ? native_machine
-                               : process_machine;
-    if (machine == IMAGE_FILE_MACHINE_I386) {
-      info.architecture = AppProcessArchitecture::X86;
-    } else if (machine == IMAGE_FILE_MACHINE_AMD64) {
-      info.architecture = AppProcessArchitecture::X64;
-    } else {
-      info.architecture = AppProcessArchitecture::Other;
+    std::optional<uint16_t> resolved_machine;
+    if (process_machine == IMAGE_FILE_MACHINE_UNKNOWN &&
+        native_machine == IMAGE_FILE_MACHINE_ARM64) {
+      PROCESS_MACHINE_INFORMATION machine_info{};
+      if (GetProcessInformation(process, ProcessMachineTypeInfo, &machine_info,
+                                sizeof(machine_info))) {
+        resolved_machine = machine_info.ProcessMachine;
+      }
     }
+    info.architecture =
+        ClassifyAppProcessArchitecture(process_machine, native_machine, resolved_machine);
   }
 
   HANDLE token = nullptr;
@@ -1193,6 +1194,19 @@ ForegroundAppInfo ProbeForegroundApp() {
   CloseHandle(process);
 #endif
   return info;
+}
+
+AppProcessArchitecture ClassifyAppProcessArchitecture(uint16_t process_machine,
+                                                      uint16_t native_machine,
+                                                      std::optional<uint16_t> resolved_machine) {
+  const uint16_t machine = process_machine != kProcessMachineUnknown ? process_machine
+                           : native_machine == kProcessMachineArm64
+                               ? resolved_machine.value_or(kProcessMachineUnknown)
+                               : native_machine;
+  if (machine == kProcessMachineUnknown) return AppProcessArchitecture::Unknown;
+  if (machine == kProcessMachineX86) return AppProcessArchitecture::X86;
+  if (machine == kProcessMachineX64) return AppProcessArchitecture::X64;
+  return AppProcessArchitecture::Other;
 }
 
 AppCompatibilityReason ClassifyAppCompatibility(const ForegroundAppInfo& info) {

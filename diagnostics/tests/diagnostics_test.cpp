@@ -298,6 +298,40 @@ TEST(DiagnosticsTest, AppCompatibilityClassifiesKnownExclusionsAndUnknownContext
   EXPECT_EQ(reason(), diag::AppCompatibilityReason::ContextUnverified);
 }
 
+TEST(DiagnosticsTest, AppCompatibilityDistinguishesX64EmulationFromArm64Native) {
+  constexpr auto unknown = diag::kProcessMachineUnknown;
+  constexpr auto arm64 = diag::kProcessMachineArm64;
+  const auto classify = [](uint16_t process, uint16_t native, std::optional<uint16_t> resolved) {
+    return diag::ClassifyAppProcessArchitecture(process, native, resolved);
+  };
+  EXPECT_EQ(classify(diag::kProcessMachineX86, arm64, std::nullopt),
+            diag::AppProcessArchitecture::X86);
+  EXPECT_EQ(classify(unknown, diag::kProcessMachineX64, std::nullopt),
+            diag::AppProcessArchitecture::X64);
+  EXPECT_EQ(classify(unknown, arm64, diag::kProcessMachineX64), diag::AppProcessArchitecture::X64);
+  EXPECT_EQ(classify(unknown, arm64, arm64), diag::AppProcessArchitecture::Other);
+  EXPECT_EQ(classify(unknown, arm64, std::nullopt), diag::AppProcessArchitecture::Unknown);
+
+  diag::ForegroundAppInfo info{true, true, classify(unknown, arm64, diag::kProcessMachineX64),
+                               false};
+  EXPECT_EQ(diag::ClassifyAppCompatibility(info), diag::AppCompatibilityReason::ContextUnverified);
+  info.architecture = classify(unknown, arm64, arm64);
+  EXPECT_EQ(diag::ClassifyAppCompatibility(info),
+            diag::AppCompatibilityReason::UnsupportedArchitecture);
+  info.architecture = classify(unknown, arm64, std::nullopt);
+  EXPECT_EQ(diag::ClassifyAppCompatibility(info),
+            diag::AppCompatibilityReason::ArchitectureUnknown);
+
+  diag::Snapshot snapshot;
+  snapshot.foreground_app = info;
+  const auto d015 = [&] { return diag::EvaluateSnapshot(snapshot, 1).checks.back(); };
+  EXPECT_EQ(d015().status, diag::Status::Warning);
+  snapshot.foreground_app.architecture = classify(unknown, arm64, diag::kProcessMachineX64);
+  EXPECT_EQ(d015().status, diag::Status::Warning);
+  snapshot.foreground_app.architecture = classify(unknown, arm64, arm64);
+  EXPECT_EQ(d015().status, diag::Status::Error);
+}
+
 TEST(DiagnosticsTest, AppCompatibilityJsonUsesStableReasonWithoutWindowText) {
   diag::Snapshot snapshot;
   snapshot.foreground_app = {true, true, diag::AppProcessArchitecture::X86, false};

@@ -316,15 +316,25 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
   auto backup = plain_path;
   backup += ".bak";
   bool backup_exists = false;
-  if (!Exists(plain_path, plain_exists) || plain_exists ||
-      !Exists(encrypted_path, encrypted_exists) || !Exists(backup, backup_exists) ||
-      (backup_exists && !encrypted_exists))
+  if (!Exists(plain_path, plain_exists) || !Exists(encrypted_path, encrypted_exists) ||
+      !Exists(backup, backup_exists) || (backup_exists && !encrypted_exists))
     return false;
   if (encrypted_exists) {
     std::string previous;
     const bool can_decrypt = DecryptFile(encrypted_path, crypto, previous);
     SecureErase(previous);
     if (!can_decrypt) return false;
+  }
+  if (plain_exists) {
+    if (!encrypted_exists || !backup_exists) return false;
+    std::string backed_up;
+    MigrationSource source(plain_path);
+    std::string current;
+    const bool matches_backup = ReadBytes(backup, backed_up) && source.Read(current) &&
+                                current == backed_up && source.Remove();
+    SecureErase(current);
+    SecureErase(backed_up);
+    if (!matches_backup) return false;
   }
   return EncryptAndWrite(encrypted_path, text, crypto);
 }

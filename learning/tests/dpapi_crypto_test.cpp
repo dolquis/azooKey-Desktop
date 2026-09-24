@@ -265,6 +265,28 @@ TEST(DpapiCryptoTest, TypoAndAutoWordMigrateToEncryptedFiles) {
   EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(auto_path)));
 }
 
+TEST(DpapiCryptoTest, InterruptedMigrationFinishesBeforeSaving) {
+  TempRoot root;
+  TestCrypto crypto;
+  const auto path = root.path() / "learning.tsv";
+  const std::string original = "reading\tsurface\t2 100\n";
+  Write(path, original);
+  LearningStore first(path, &crypto);
+  ASSERT_TRUE(first.Load());
+
+  // Simulate termination after .enc was written but before the source was removed.
+  Write(path, original);
+  LearningStore restarted(path, &crypto);
+  ASSERT_TRUE(restarted.Load());
+  restarted.Observe("new", "value", 1, 100);
+  ASSERT_TRUE(restarted.Save());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_EQ(Read(Backup(path)), original);
+  LearningStore saved(path, &crypto);
+  ASSERT_TRUE(saved.Load());
+  EXPECT_GT(saved.Score("new", "value", 100), 0.0);
+}
+
 #ifdef _WIN32
 TEST(DpapiCryptoTest, WindowsDpapiRoundTripRejectsCorruptBlob) {
   const std::vector<uint8_t> plain = {0, 1, 2, 255};

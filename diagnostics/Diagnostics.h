@@ -31,6 +31,31 @@ enum class DpapiState {
   Unavailable,
 };
 
+enum class AppProcessArchitecture {
+  Unknown,
+  X86,
+  X64,
+  Other,
+};
+
+struct ForegroundAppInfo {
+  bool has_window{false};
+  bool process_opened{false};
+  AppProcessArchitecture architecture{AppProcessArchitecture::Unknown};
+  std::optional<bool> app_container;
+};
+
+enum class AppCompatibilityReason {
+  ContextUnverified,
+  NoForegroundWindow,
+  ProcessUnavailable,
+  ArchitectureUnknown,
+  ContainerUnknown,
+  X86,
+  UnsupportedArchitecture,
+  AppContainer,
+};
+
 struct Check {
   std::string id;
   std::string name;
@@ -69,6 +94,7 @@ struct Snapshot {
   uint64_t user_dict_entries{};
   uint64_t user_dict_skipped_entries{};
   bool logs_directory_writable{false};
+  ForegroundAppInfo foreground_app;
   std::optional<ipc::QueryDiagnosticsPayload> host_diagnostics;
 };
 
@@ -121,6 +147,9 @@ struct ArchiveEntry {
 Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms);
 std::string SerializeReport(const Report& report);
 std::string StatusName(Status status);
+ForegroundAppInfo ProbeForegroundApp();
+AppCompatibilityReason ClassifyAppCompatibility(const ForegroundAppInfo& info);
+std::string_view AppCompatibilityReasonName(AppCompatibilityReason reason);
 
 ProbeResult ProbeSystem();
 RepairReport RepairSystem();

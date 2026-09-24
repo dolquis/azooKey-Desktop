@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Payloads.h"
 
@@ -964,6 +965,7 @@ struct NamedPipeServer::Impl {
           }
           try {
             std::thread([this, client, conn_handler = std::move(conn_handler)]() mutable {
+              core::ReserveCurrentThreadStack();
               ClientLoop(client, std::move(conn_handler));
             }).detach();
           } catch (...) {
@@ -1161,7 +1163,10 @@ bool NamedPipeServer::Start(const std::string& pipe_name, ConnectionFactory fact
   impl_->conn_factory = std::move(factory);
   impl_->listen_pipe = std::move(first_pipe);
   impl_->running.store(true);
-  impl_->accept_thread = std::thread([this]() { impl_->AcceptLoop(); });
+  impl_->accept_thread = std::thread([this]() {
+    core::ReserveCurrentThreadStack();
+    impl_->AcceptLoop();
+  });
   return true;
 }
 

@@ -1151,6 +1151,89 @@ std::string StatusName(Status status) {
   return "error";
 }
 
+ForegroundAppInfo ProbeForegroundApp() {
+  ForegroundAppInfo info;
+#ifdef _WIN32
+  const HWND window = GetForegroundWindow();
+  if (!window) return info;
+  info.has_window = true;
+
+  DWORD pid = 0;
+  GetWindowThreadProcessId(window, &pid);
+  if (pid == 0) return info;
+  const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return info;
+  info.process_opened = true;
+
+  USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+  USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+  if (IsWow64Process2(process, &process_machine, &native_machine)) {
+    const USHORT machine = process_machine == IMAGE_FILE_MACHINE_UNKNOWN
+                               ? native_machine
+                               : process_machine;
+    if (machine == IMAGE_FILE_MACHINE_I386) {
+      info.architecture = AppProcessArchitecture::X86;
+    } else if (machine == IMAGE_FILE_MACHINE_AMD64) {
+      info.architecture = AppProcessArchitecture::X64;
+    } else {
+      info.architecture = AppProcessArchitecture::Other;
+    }
+  }
+
+  HANDLE token = nullptr;
+  if (OpenProcessToken(process, TOKEN_QUERY, &token)) {
+    DWORD is_app_container = 0;
+    DWORD bytes = 0;
+    if (GetTokenInformation(token, TokenIsAppContainer, &is_app_container,
+                            sizeof(is_app_container), &bytes)) {
+      info.app_container = is_app_container != 0;
+    }
+    CloseHandle(token);
+  }
+  CloseHandle(process);
+#endif
+  return info;
+}
+
+AppCompatibilityReason ClassifyAppCompatibility(const ForegroundAppInfo& info) {
+  if (!info.has_window) return AppCompatibilityReason::NoForegroundWindow;
+  if (!info.process_opened) return AppCompatibilityReason::ProcessUnavailable;
+  // Known exclusions take precedence over an unrelated failed probe.
+  if (info.architecture == AppProcessArchitecture::X86) return AppCompatibilityReason::X86;
+  if (info.app_container == true) return AppCompatibilityReason::AppContainer;
+  if (info.architecture == AppProcessArchitecture::Other) {
+    return AppCompatibilityReason::UnsupportedArchitecture;
+  }
+  if (info.architecture == AppProcessArchitecture::Unknown) {
+    return AppCompatibilityReason::ArchitectureUnknown;
+  }
+  if (!info.app_container) return AppCompatibilityReason::ContainerUnknown;
+  // A separate CLI process cannot observe the target's TSF context.
+  return AppCompatibilityReason::ContextUnverified;
+}
+
+std::string_view AppCompatibilityReasonName(AppCompatibilityReason reason) {
+  switch (reason) {
+    case AppCompatibilityReason::ContextUnverified:
+      return "context_unverified";
+    case AppCompatibilityReason::NoForegroundWindow:
+      return "no_foreground_window";
+    case AppCompatibilityReason::ProcessUnavailable:
+      return "process_unavailable";
+    case AppCompatibilityReason::ArchitectureUnknown:
+      return "architecture_unknown";
+    case AppCompatibilityReason::ContainerUnknown:
+      return "container_unknown";
+    case AppCompatibilityReason::X86:
+      return "x86";
+    case AppCompatibilityReason::UnsupportedArchitecture:
+      return "unsupported_architecture";
+    case AppCompatibilityReason::AppContainer:
+      return "app_container";
+  }
+  return "context_unverified";
+}
+
 std::string RepairStatusName(RepairStatus status) {
   switch (status) {
     case RepairStatus::Succeeded:
@@ -1342,6 +1425,16 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
   AddCheck(report, "D-014", "dpapi", dpapi_status, dpapi_message,
            {{"state", j::Value(dpapi_state)}});
 
+  const auto compatibility = ClassifyAppCompatibility(snapshot.foreground_app);
+  const bool unsupported = compatibility == AppCompatibilityReason::X86 ||
+                           compatibility == AppCompatibilityReason::UnsupportedArchitecture ||
+                           compatibility == AppCompatibilityReason::AppContainer;
+  AddCheck(report, "D-015", "app_compatibility",
+           unsupported ? Status::Error : Status::Warning,
+           unsupported ? "Foreground app is outside the supported input scope"
+                       : "Foreground app TSF context has not been verified",
+           {{"reason", j::Value(std::string(AppCompatibilityReasonName(compatibility)))}});
+
   return report;
 }
 
@@ -1376,6 +1469,7 @@ std::string SerializeReport(const Report& report) {
 ProbeResult ProbeSystem() {
   ProbeResult result;
   Snapshot snapshot;
+  snapshot.foreground_app = ProbeForegroundApp();
   ProbeRegistration(snapshot);
   result.tip_path = snapshot.tip_path;
   snapshot.host_running = IsHostRunning();

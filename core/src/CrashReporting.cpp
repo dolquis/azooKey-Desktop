@@ -7,6 +7,7 @@
 
 #include "azookey/core/CrashRetention.h"
 #include "azookey/core/PlatformPaths.h"
+#include "azookey/core/ThreadStackGuarantee.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -120,6 +121,7 @@ struct MetadataDump {
 };
 
 unsigned __stdcall ReportWorker(void*) {
+  ReserveCurrentThreadStack();
   while (WaitForSingleObject(worker_wake, INFINITE) == WAIT_OBJECT_0 && !worker_stop.load()) {
     auto expected = RequestState::Pending;
     if (!request_state.compare_exchange_strong(expected, RequestState::Writing)) {
@@ -201,6 +203,12 @@ bool RequestReport(EXCEPTION_POINTERS* exception) {
 }
 
 LONG WINAPI Filter(EXCEPTION_POINTERS* exception) {
+  // An overflowing thread without its own reserve cannot safely run the
+  // bounded request path or another in-process filter. Leave it to the OS.
+  if (exception && exception->ExceptionRecord &&
+      exception->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW &&
+      !HasCurrentThreadStackGuarantee())
+    return EXCEPTION_CONTINUE_SEARCH;
   if (exception && exception->ExceptionRecord && RequestReport(exception))
     return EXCEPTION_EXECUTE_HANDLER;
   const auto previous = previous_filter.load(std::memory_order_acquire);
@@ -221,6 +229,7 @@ std::filesystem::path CrashReporting::DefaultDirectory() noexcept {
 void CrashReporting::Initialize(CrashModule owner, CrashConsent mode,
                                 const std::filesystem::path& directory) noexcept {
 #ifdef _WIN32
+  ReserveCurrentThreadStack();
   try {
     {
       ExclusiveLock lock;

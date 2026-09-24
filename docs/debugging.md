@@ -204,6 +204,13 @@ cmake --build --preset windows-debug --target azookey_check
 
 ## 典型トラブル
 
+- **特定のアプリだけ入力できない**: 対象アプリを前面にして `azookey_diag --json` の
+  `D-015` を確認する。ターミナルを前面にしたまま起動するとターミナルが検査対象になるため、
+  遅延起動などで診断時に対象アプリを前面にする。`details.reason` が `x86` / `unsupported_architecture` /
+  `app_container` なら既知の非対応条件に該当する。`context_unverified` や情報取得不能の
+  reason は TSF context の可否を示さないため、`docs/dev-infrastructure-spec.md` §13 の
+  互換性テストで確認する。
+  診断 JSON にウィンドウタイトルや入力本文は含めない。
 - **TIP は動くが候補が遅延**: Host 未起動 / 名前付きパイプ接続失敗を疑う。
   TIP は 250ms から 3000ms までの jitter 付き指数バックオフで再接続を試み続け、Deactivate まで
   諦めない（DEV-168）。接続の状態は TIP の構造化ログ `ipc_connection_state_transition`

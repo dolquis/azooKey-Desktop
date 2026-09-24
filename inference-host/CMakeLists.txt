@@ -28,6 +28,16 @@ add_library(azookey_host STATIC
   src/ZenzaiModelConverter.cpp
 )
 
+# The CLI sources define the same anonymous-namespace helpers.
+set_source_files_properties(src/UserDictCli.cpp src/NewWordsCli.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# ZenzaiModelConverter.cpp and InferenceEngine.cpp both define AppendDebugTag.
+set_source_files_properties(src/ZenzaiModelConverter.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# HttpDownloader.cpp and ModelCatalog.cpp both define IsValidSha256 and LowerAscii.
+set_source_files_properties(src/HttpDownloader.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+
 target_include_directories(azookey_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_host
   PUBLIC

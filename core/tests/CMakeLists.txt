@@ -16,6 +16,10 @@ add_executable(core_tests
   utf8_test.cpp
 )
 
+# number_rewriter_test.cpp and simple_converter_test.cpp both define FindCandidate.
+set_source_files_properties(number_rewriter_test.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+
 target_link_libraries(core_tests
   PRIVATE azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings
 )

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "azookey/core/CrashReporting.h"
+#include "azookey/core/ThreadStackGuarantee.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -28,6 +29,20 @@ using namespace azookey::core;
 constexpr DWORD kPreviousFilterExit = 73;
 
 LONG WINAPI PreviousFilter(EXCEPTION_POINTERS*) { ExitProcess(kPreviousFilterExit); }
+
+volatile unsigned char stack_probe_sink{};
+__declspec(noinline) void ExhaustStack(unsigned depth) {
+  volatile unsigned char block[4096];
+  block[0] = static_cast<unsigned char>(depth);
+  if (depth < 1000000) ExhaustStack(depth + 1);
+  stack_probe_sink = block[0];  // Keep the recursive call from becoming a tail call.
+}
+
+unsigned __stdcall StackOverflowWorker(void*) {
+  ReserveCurrentThreadStack();
+  ExhaustStack(0);
+  return 98;
+}
 
 class CrashReportingTest : public testing::Test {
  protected:
@@ -230,22 +245,87 @@ TEST_F(CrashReportingTest, FailedCrashWriteReachesPreviousFilterWithinDeadline) 
   std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
   EXPECT_EQ(contents, "preserve-existing-file");
 }
+
+TEST_F(CrashReportingTest, ActualStackOverflowOnMainAndWorkerHonorsConsent) {
+  const wchar_t* const modes[] = {L"--stack-local-main", L"--stack-local-worker",
+                                  L"--stack-off-main", L"--stack-off-worker"};
+  for (const auto* mode : modes) {
+    SCOPED_TRACE(fs::path(mode).string());
+    directory = root / mode;
+    const auto exit_code = RunProbe(mode);
+    ASSERT_TRUE(exit_code);
+    const bool local = std::wstring_view(mode).find(L"--stack-local-") == 0;
+    if (local) {
+      EXPECT_NE(*exit_code, 0u);
+      EXPECT_NE(*exit_code, kPreviousFilterExit);
+      EXPECT_NE(*exit_code, 98u);
+    } else {
+      EXPECT_EQ(*exit_code, kPreviousFilterExit);
+    }
+    if (!local) {
+      EXPECT_FALSE(fs::exists(directory));
+      continue;
+    }
+    ASSERT_TRUE(fs::exists(directory));
+    const auto first = fs::directory_iterator(directory);
+    ASSERT_NE(first, fs::directory_iterator{});
+    EXPECT_EQ(std::distance(first, fs::directory_iterator{}), 1);
+    std::ifstream input(first->path(), std::ios::binary);
+    std::string data{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    ASSERT_GE(data.size(), sizeof(MINIDUMP_HEADER));
+    EXPECT_EQ(data.find("private-input-candidate-prompt-api-key-sentinel"), std::string::npos);
+    const auto* header = reinterpret_cast<const MINIDUMP_HEADER*>(data.data());
+    ASSERT_EQ(header->Signature, MINIDUMP_SIGNATURE);
+    ASSERT_EQ(header->NumberOfStreams, 4u);
+    PMINIDUMP_DIRECTORY stream{};
+    void* value{};
+    ULONG length{};
+    ASSERT_TRUE(MiniDumpReadDumpStream(data.data(), ExceptionStream, &stream, &value, &length));
+    ASSERT_GE(length, sizeof(MINIDUMP_EXCEPTION_STREAM));
+    const auto* exception = static_cast<MINIDUMP_EXCEPTION_STREAM*>(value);
+    EXPECT_EQ(exception->ExceptionRecord.ExceptionCode, EXCEPTION_STACK_OVERFLOW);
+    EXPECT_EQ(exception->ExceptionRecord.NumberParameters, 0u);
+    EXPECT_EQ(exception->ThreadContext.DataSize, 0u);
+    ASSERT_TRUE(MiniDumpReadDumpStream(data.data(), ThreadListStream, &stream, &value, &length));
+    ASSERT_GE(length, sizeof(ULONG32) + sizeof(MINIDUMP_THREAD));
+    const auto* threads = static_cast<MINIDUMP_THREAD_LIST*>(value);
+    ASSERT_EQ(threads->NumberOfThreads, 1u);
+    EXPECT_EQ(threads->Threads[0].Stack.Memory.DataSize, 0u);
+    EXPECT_EQ(threads->Threads[0].ThreadContext.DataSize, 0u);
+  }
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-  if (argc == 3 && (std::wstring_view(argv[1]) == L"--crash-probe" ||
-                    std::wstring_view(argv[1]) == L"--crash-off-probe" ||
-                    std::wstring_view(argv[1]) == L"--crash-failure-probe")) {
+  const std::wstring_view mode = argc == 3 ? std::wstring_view(argv[1]) : std::wstring_view{};
+  const bool stack_probe = mode == L"--stack-local-main" || mode == L"--stack-local-worker" ||
+                           mode == L"--stack-off-main" || mode == L"--stack-off-worker";
+  if (argc == 3 && (mode == L"--crash-probe" || mode == L"--crash-off-probe" ||
+                    mode == L"--crash-failure-probe" || stack_probe)) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     SetUnhandledExceptionFilter(&PreviousFilter);
     // Deliberately resident on the crashing stack; it must never enter the artifact.
     volatile char sentinel[] = "private-input-candidate-prompt-api-key-sentinel";
     (void)sentinel;
     azookey::core::CrashReporting::Initialize(azookey::core::CrashModule::Host,
-                                              std::wstring_view(argv[1]) == L"--crash-off-probe"
+                                              (mode == L"--crash-off-probe" ||
+                                               mode == L"--stack-off-main" ||
+                                               mode == L"--stack-off-worker")
                                                   ? azookey::core::CrashConsent::Off
                                                   : azookey::core::CrashConsent::Local,
                                               argv[2]);
+    if (stack_probe) {
+      if (mode == L"--stack-local-worker" || mode == L"--stack-off-worker") {
+        const auto worker = reinterpret_cast<HANDLE>(
+            _beginthreadex(nullptr, 0, &StackOverflowWorker, nullptr, 0, nullptr));
+        if (!worker) return 97;
+        WaitForSingleObject(worker, INFINITE);
+        CloseHandle(worker);
+        return 98;
+      }
+      ExhaustStack(0);
+      return 98;
+    }
     RaiseException(0xe0420001, EXCEPTION_NONCONTINUABLE, 0, nullptr);
     return 99;
   }

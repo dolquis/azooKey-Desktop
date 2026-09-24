@@ -219,8 +219,9 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
           settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
       ipc::CommitObservationResponse response;
       if (auto parsed = ipc::ParseCommitSegmentsObservationRequest(req.payload_json);
-          parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
-                                    privacy && privacy->policy.secure)) {
+          parsed && LearningAllowed(
+                        parsed->secure, parsed->learning_allowed,
+                        privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
         engine_->CommitSegmentsObservation(*parsed, NowSec());
         response.ok = true;
       }
@@ -391,8 +392,9 @@ bool Dispatcher::RequiresAuthenticatedSession() const {
   return !config_.handshake_token.empty() && !authenticated_;
 }
 
-bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed, bool host_secure) const {
-  return client_supports_secure_flag_ && !secure && learning_allowed && !host_secure;
+bool Dispatcher::LearningAllowed(bool secure, bool learning_allowed,
+                                 bool host_learning_blocked) const {
+  return client_supports_secure_flag_ && !secure && learning_allowed && !host_learning_blocked;
 }
 
 void Dispatcher::SetClientId(std::string client_id) {
@@ -581,7 +583,8 @@ void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {
   if (!parsed) return;
   auto privacy =
       settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
-  if (!LearningAllowed(parsed->secure, parsed->learning_allowed, privacy && privacy->policy.secure))
+  if (!LearningAllowed(parsed->secure, parsed->learning_allowed,
+                       privacy && (privacy->policy.secure || !privacy->policy.learning_allowed)))
     return;
   // The engine applies the accept filters and the "off" gate; a rejected pair
   // is simply not recorded, and there is no reply to carry that outcome.
@@ -807,8 +810,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
       settings_store_ ? std::optional{settings_store_->LockPrivacyPolicy()} : std::nullopt;
   ipc::CommitObservationResponse res;
   if (auto parsed = ipc::ParseCommitObservationRequest(req.payload_json);
-      parsed && LearningAllowed(parsed->secure, parsed->learning_allowed,
-                                privacy && privacy->policy.secure)) {
+      parsed &&
+      LearningAllowed(parsed->secure, parsed->learning_allowed,
+                      privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
     engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),

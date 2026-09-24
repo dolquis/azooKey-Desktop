@@ -1240,10 +1240,12 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 |---|---|
 | 設定 | `%LOCALAPPDATA%\azooKey\config\settings.json` |
 | カスタムローマ字 | `%LOCALAPPDATA%\azooKey\config\custom-romaji.tsv` |
-| 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv`（DPAPI 暗号化、M34） |
-| ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json` |
+| 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv.enc`（DPAPI 暗号化、M34） |
+| ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
 | モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 の `expected.json` ピンが定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |
 | ログ | `%LOCALAPPDATA%\azooKey\logs\*.jsonl` |
+
+拡張子 `.enc` のない `learning.tsv` と `user_dict.json` は旧版からの移行元であり、移行後の保存先ではない。
 
 ### 3.5 `ITfFnConfigure` 連携（Windows 設定「詳細設定」からの起動）
 
@@ -2073,58 +2075,19 @@ OS 既定処理へ委ねる。自前ダンプの保存成功を確認できた�
 
 ### 9.2 実装
 
-`learning/src/DpapiCrypto.cpp`（新規）：
-
-```cpp
-#include <dpapi.h>
-
-bool EncryptToFile(const std::vector<uint8_t>& plain,
-                   const std::wstring& path) {
-    DATA_BLOB in{ static_cast<DWORD>(plain.size()),
-                  const_cast<BYTE*>(plain.data()) };
-    DATA_BLOB out{};
-    if (!CryptProtectData(&in, L"azooKey-learning",
-                          nullptr, nullptr, nullptr,
-                          CRYPTPROTECT_UI_FORBIDDEN, &out)) {
-        return false;
-    }
-    bool ok = WriteAllBytes(path, out.pbData, out.cbData);
-    LocalFree(out.pbData);
-    return ok;
-}
-
-bool DecryptFromFile(const std::wstring& path,
-                     std::vector<uint8_t>& plain) {
-    std::vector<uint8_t> cipher;
-    if (!ReadAllBytes(path, cipher)) return false;
-    DATA_BLOB in{ static_cast<DWORD>(cipher.size()), cipher.data() };
-    DATA_BLOB out{};
-    if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr,
-                            CRYPTPROTECT_UI_FORBIDDEN, &out)) {
-        return false;
-    }
-    plain.assign(out.pbData, out.pbData + out.cbData);
-    LocalFree(out.pbData);
-    return true;
-}
-```
+`learning/src/DpapiCrypto.cpp` の `DpapiByteCrypto` が現在の Windows ユーザーの
+DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先して復号し、存在しない
+場合に限って旧平文ファイルを読む。復号失敗時は平文へフォールバックしない。
+`WriteProtectedText` は暗号化結果を `.enc` へ原子的に保存する。
 
 ### 9.3 LearningStore との統合
 
-`LearningStore::Load`/`Save` でラップ：
-
-```cpp
-bool LearningStore::Save() {
-    std::vector<uint8_t> tsv = SerializeToTsv();
-    return EncryptToFile(tsv, path_);
-}
-
-bool LearningStore::Load() {
-    std::vector<uint8_t> tsv;
-    if (!DecryptFromFile(path_, tsv)) return false;
-    return DeserializeFromTsv(tsv);
-}
-```
+`LearningStore::Load` は `ReadProtectedText` で得た内容を TSV として解析し、旧平文を
+読み込んだ場合は `MigratePlaintextFile` で `.bak` を保全してから `.enc` を作る。
+`LearningStore::Save` は `WriteProtectedText` を使い、移行前の平文や読み込み失敗が
+残る状態では上書きしない。暗号化ファイルと旧平文が共存するときは、復号が成功し、
+旧平文が保全済みの `.bak` と一致する場合だけ旧平文を削除して保存を続ける。
+ユーザー辞書、誤字補正、新語のストアも同じ保護境界に従う。
 
 ### 9.4 移行
 
@@ -2133,10 +2096,15 @@ bool LearningStore::Load() {
 - 起動時、`learning.tsv`（平文）と `learning.tsv.enc`（暗号化）の両方を check
 - 平文があれば読み込んで暗号化形式に書き直し、平文を削除（バックアップは
   `learning.tsv.bak` に残す）
+- `.enc` が既にある場合は暗号化ファイルを優先し、復号に失敗しても平文へ
+  フォールバックしない。移行では元ファイルを `.bak` に残し、暗号化書き込みが
+  成功するまでは元ファイルを維持する。`typo_corrections.tsv` と
+  `auto_words.tsv` にも同じ境界を適用する。
 
 ### 9.5 ユーザー辞書
 
-`user_dict.json` も同様に暗号化（M34 範囲）。
+`user_dict.json` も同様に暗号化（M34 範囲）。明示的な辞書エクスポートは、
+利用者が指定した出力先へ平文 JSON を書く操作として区別する。
 
 設定 JSON（`settings.json`）は **暗号化しない**（API キー以外は機密性低い）。
 ただし `openAiApiKey` は **個別に DPAPI 暗号化**：

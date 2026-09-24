@@ -167,7 +167,8 @@ bool ParseAutoWordState(std::string_view value, AutoWordState& out) {
   return false;
 }
 
-AutoWordStore::AutoWordStore(std::filesystem::path path) : path_(std::move(path)) {}
+AutoWordStore::AutoWordStore(std::filesystem::path path, const ByteCrypto* crypto)
+    : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
 AutoWord* AutoWordStore::FindLocked(const std::string& surface, const std::string& reading) {
   const auto by_reading = table_.find(reading);
@@ -339,11 +340,18 @@ void AutoWordStore::Reset() {
 bool AutoWordStore::Load() {
   std::lock_guard<std::mutex> lock(mutex_);
   table_.clear();
-  std::ifstream ifs(path_);
-  if (!ifs.is_open()) {
+  save_blocked_by_load_failure_ = false;
+  std::string text;
+  const auto source = ReadProtectedText(path_, *crypto_, text);
+  if (source == ProtectedFileSource::Missing) {
     // No file yet is an empty store, matching UserDictionary::Load.
     return true;
   }
+  if (source == ProtectedFileSource::Error) {
+    save_blocked_by_load_failure_ = true;
+    return false;
+  }
+  std::istringstream ifs(text);
 
   std::string line;
   size_t line_number = 0;
@@ -377,11 +385,18 @@ bool AutoWordStore::Load() {
     }
     table_[word.reading].emplace(word.surface, std::move(word));
   }
+  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
+    save_blocked_by_load_failure_ = true;
+    SecureErase(text);
+    return false;
+  }
+  SecureErase(text);
   return true;
 }
 
 bool AutoWordStore::Save() const {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (save_blocked_by_load_failure_) return false;
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kAutoWordStoreTsvHeader << '\n';
@@ -396,7 +411,7 @@ bool AutoWordStore::Save() const {
           << FormatScore(word.score) << '\n';
     }
   }
-  return WriteTextFileAtomically(path_, out.str());
+  return WriteProtectedText(path_, out.str(), *crypto_);
 }
 
 }  // namespace azookey::learning

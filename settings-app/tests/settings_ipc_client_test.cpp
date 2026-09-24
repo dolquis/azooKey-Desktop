@@ -62,6 +62,7 @@ TEST(SettingsIpcClientTest, HandshakesThenSendsEmptyUpdateConfigPayload) {
 
   azookey::settings::SettingsIpcOptions options;
   options.pipe_name = pipe_name;
+  options.handshake_token = "settings-test-token";
   options.connect_timeout_ms = 1000;
   options.response_timeout_ms = 1000;
   const auto result = azookey::settings::NotifyHostOfSettingsChange(options);

@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "azookey/learning/DpapiCrypto.h"
+
 namespace azookey::learning {
 
 struct UserWord {
@@ -22,7 +24,7 @@ struct UserWord {
   }
 };
 
-// User-managed dictionary of words. Backed by a JSON file on disk.
+// User-managed dictionary of words. JSON is encrypted at path + ".enc".
 //
 // File schema (version 1):
 //   { "version": 1, "entries": [
@@ -33,19 +35,21 @@ struct UserWord {
 // Optional fields (cid, mid, value) are omitted from JSON when absent.
 class UserDictionary {
  public:
-  explicit UserDictionary(std::filesystem::path path);
+  explicit UserDictionary(std::filesystem::path path, const ByteCrypto* crypto = nullptr);
 
   // Load entries from disk. Missing file -> empty dictionary, returns true.
-  // Malformed file -> dictionary becomes empty, file is quarantined when
-  // possible, returns false.
+  // Malformed legacy plaintext is quarantined when possible. Undecryptable
+  // ciphertext is left in place and blocks Save.
   bool Load();
 
   // Load without quarantining or otherwise changing a malformed source file.
   bool LoadReadOnly();
 
-  // Persist current state to disk. Returns false if the file cannot be opened
-  // or a malformed prior file could not be quarantined.
+  // Persist current state as user-scoped ciphertext. Returns false after a
+  // failed load or while unmigrated plaintext is present.
   bool Save() const;
+  // Explicit JSON export. Writes plaintext only to the caller's chosen path.
+  bool SavePlaintextExport(const std::filesystem::path& export_path) const;
 
   // Insert a new entry, or replace the existing entry that has the same
   // (word, ruby) pair. Returns true when a new entry was added (false on
@@ -70,11 +74,14 @@ class UserDictionary {
   void Clear();
 
   const std::filesystem::path& path() const { return path_; }
+  std::filesystem::path storage_path() const { return EncryptedPathFor(path_); }
 
  private:
   bool LoadImpl(bool quarantine_corrupt_file);
+  std::string Serialize() const;
 
   std::filesystem::path path_;
+  const ByteCrypto* crypto_;
   std::map<std::string, std::vector<UserWord>> by_ruby_;
   bool save_blocked_by_corrupt_load_{false};
   uint64_t revision_{};

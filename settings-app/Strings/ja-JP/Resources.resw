@@ -45,6 +45,10 @@
   <data name="BackendDowngradeNote" xml:space="preserve"><value>現在の配布ビルドでは CPU 実行へ降格します。</value></data>
   <data name="ModelPathTextBox.Header" xml:space="preserve"><value>モデルファイル</value></data>
   <data name="ModelPathTextBox.PlaceholderText" xml:space="preserve"><value>C:\models\model.gguf（空欄ならモデル未選択）</value></data>
+  <data name="OpenAiApiKeyPasswordBox.Header" xml:space="preserve"><value>OpenAI API キー</value></data>
+  <data name="OpenAiApiKeyPasswordBox.PlaceholderText" xml:space="preserve"><value>API キーを入力</value></data>
+  <data name="ClearOpenAiApiKeyButton.Content" xml:space="preserve"><value>API キーを削除</value></data>
+  <data name="OpenAiApiKeyDescription.Text" xml:space="preserve"><value>キーは伏字で表示し、変更または保存時に Windows のユーザー保護で暗号化します。削除は保存後に反映されます。</value></data>
   <data name="AdvancedSectionTitle.Text" xml:space="preserve"><value>詳細</value></data>
   <data name="LogLevelLabel.Text" xml:space="preserve"><value>ログレベル</value></data>
   <data name="SaveButton.Content" xml:space="preserve"><value>保存</value></data>

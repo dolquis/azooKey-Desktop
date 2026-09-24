@@ -82,9 +82,11 @@ TEST_F(LocalSettingsTest, ExplicitSecureModeReloadsAndNormalModeRecovers) {
   Write(R"({"privacy":{"mode":"secure"}})");
   ASSERT_TRUE(reader.Start(path));
   EXPECT_TRUE(reader.AiSnapshot().privacy_policy.secure);
+  EXPECT_FALSE(reader.AiSnapshot().privacy_policy.learning_allowed);
   Write(R"({"privacy":{"mode":"normal","redactLogs":false}})");
-  ASSERT_TRUE(reader.WaitForPrivacyForTest(
-      [](const auto& privacy) { return !privacy.secure && privacy.detailed_logging_allowed; }));
+  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) {
+    return !privacy.secure && privacy.detailed_logging_allowed && privacy.learning_allowed;
+  }));
   Write(R"({"privacy":{"mode":"secure","redactLogs":false}})");
   ASSERT_TRUE(reader.WaitForPrivacyForTest(
       [](const auto& privacy) { return privacy.secure && !privacy.detailed_logging_allowed; }));
@@ -94,10 +96,13 @@ TEST_F(LocalSettingsTest, MissingSettingsUseDefaultsButMalformedSettingsFailClos
   ASSERT_TRUE(reader.Start(path));
   EXPECT_FALSE(reader.AiSnapshot().privacy_policy.secure);
   EXPECT_FALSE(reader.AiSnapshot().privacy_policy.detailed_logging_allowed);
+  EXPECT_TRUE(reader.AiSnapshot().privacy_policy.learning_allowed);
   Write("{");
-  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) { return privacy.secure; }));
+  ASSERT_TRUE(reader.WaitForPrivacyForTest(
+      [](const auto& privacy) { return privacy.secure && !privacy.learning_allowed; }));
   Write("{}");
-  ASSERT_TRUE(reader.WaitForPrivacyForTest([](const auto& privacy) { return !privacy.secure; }));
+  ASSERT_TRUE(reader.WaitForPrivacyForTest(
+      [](const auto& privacy) { return !privacy.secure && privacy.learning_allowed; }));
 }
 
 TEST_F(LocalSettingsTest, ReloadsCommonProfilesAndPreservesPreviousSnapshot) {

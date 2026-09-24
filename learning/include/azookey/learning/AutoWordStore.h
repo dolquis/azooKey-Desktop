@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "azookey/learning/DpapiCrypto.h"
+
 namespace azookey::learning {
 
 inline constexpr std::string_view kAutoWordStoreTsvHeader = "# azookey-auto-word-store v1";
@@ -41,7 +43,8 @@ bool ParseAutoWordState(std::string_view value, AutoWordState& out);
 // Words the host has seen but that no dictionary layer knows, held until they
 // are confirmed or rejected. Keyed by (surface, reading).
 //
-// Persisted as TSV using the LearningStore escaping convention:
+// Persisted as encrypted TSV at path + ".enc", using the LearningStore
+// escaping convention:
 //
 //   # azookey-auto-word-store v1
 //   # surface<TAB>reading<TAB>source<TAB>state<TAB>count<TAB>first_seen_epoch<TAB>...
@@ -51,7 +54,7 @@ bool ParseAutoWordState(std::string_view value, AutoWordState& out);
 // updating it from a worker thread while the dispatcher reads it.
 class AutoWordStore {
  public:
-  explicit AutoWordStore(std::filesystem::path path);
+  explicit AutoWordStore(std::filesystem::path path, const ByteCrypto* crypto = nullptr);
 
   // Missing file -> empty store, returns true. Malformed rows are skipped.
   bool Load();
@@ -100,6 +103,8 @@ class AutoWordStore {
 
   mutable std::mutex mutex_;
   std::filesystem::path path_;
+  const ByteCrypto* crypto_;
+  bool save_blocked_by_load_failure_{false};
   // reading -> surface -> word. Gives (surface, reading) uniqueness and the
   // reading-keyed lookup LookupConfirmed needs from one container.
   std::map<std::string, std::map<std::string, AutoWord>> table_;

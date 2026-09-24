@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -129,6 +131,13 @@ HANDLE OpenRawPipeClient(const std::string& pipe_name, int attempts = 200) {
 bool WriteRawPipeSync(HANDLE pipe, const uint8_t* data, DWORD size) {
   DWORD written = 0;
   return WriteFile(pipe, data, size, &written, nullptr) && written == size;
+}
+
+std::vector<uint8_t> ReadFrameFixture(const char* name) {
+  const auto path = std::filesystem::path(AZOOKEY_IPC_TESTDATA_DIR) / name;
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return {};
+  return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 #ifndef NDEBUG
@@ -727,6 +736,40 @@ TEST(NamedPipeTransportTest, ServerRejectsZeroLengthAndOversizedFrames) {
   rejects_header("\\\\.\\pipe\\azookey-ipc-zero-frame-test-" + pid, 0);
   rejects_header("\\\\.\\pipe\\azookey-ipc-oversized-frame-test-" + pid,
                  static_cast<uint32_t>(azookey::ipc::kMaxFrameSize + 1));
+}
+
+TEST(NamedPipeTransportTest, MalformedBinaryFixturesDisconnectWithinFrameDeadline) {
+  struct FixtureCase {
+    const char* name;
+    size_t size;
+  };
+  constexpr FixtureCase cases[] = {
+      {"truncated-frame.bin", 2}, {"zero-byte-frame.bin", 4}, {"length-mismatch-frame.bin", 7}};
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    const auto frame = ReadFrameFixture(test_case.name);
+    ASSERT_EQ(frame.size(), test_case.size);
+    const auto pipe_name = "\\\\.\\pipe\\azookey-ipc-fixture-" +
+                           std::to_string(GetCurrentProcessId()) + "-" + test_case.name;
+    std::atomic<bool> handler_entered{false};
+    azookey::ipc::NamedPipeServer server;
+    ASSERT_TRUE(server.Start(
+        pipe_name,
+        [&handler_entered](const azookey::ipc::Envelope&) -> std::optional<azookey::ipc::Envelope> {
+          handler_entered.store(true);
+          return std::nullopt;
+        }));
+    ScopedPipeHandle client(OpenRawPipeClient(pipe_name));
+    ASSERT_TRUE(client.valid());
+    ASSERT_TRUE(WaitForClientCount(server, 1));
+    const auto started = std::chrono::steady_clock::now();
+    ASSERT_TRUE(WriteRawPipeSync(client.get(), frame.data(), static_cast<DWORD>(frame.size())));
+    EXPECT_TRUE(WaitForClientCount(server, 0, 350));
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(4));
+    EXPECT_FALSE(handler_entered.load());
+    client.Close();
+    server.Stop();
+  }
 }
 
 TEST(NamedPipeTransportTest, ClientDisconnectDuringResponseWriteCleansUp) {

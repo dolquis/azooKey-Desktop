@@ -85,10 +85,12 @@ azookey_discover_tests(host_settings_store_tests)
 
 # The CLI libraries are also exercised through the real command line: only the
 # process boundary shows whether non-ASCII arguments survive Windows argv.
-add_test(NAME host_cli_unicode_argv
-         COMMAND "${CMAKE_COMMAND}"
-                 "-DHOST_EXE=$<TARGET_FILE:azookey_inference_host>"
-                 "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-unicode-argv"
-                 -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertUnicodeArgvCli.cmake")
-set_tests_properties(host_cli_unicode_argv PROPERTIES TIMEOUT 60)
+if(WIN32)
+  add_test(NAME host_cli_unicode_argv
+           COMMAND "${CMAKE_COMMAND}"
+                   "-DHOST_EXE=$<TARGET_FILE:azookey_inference_host>"
+                   "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-unicode-argv"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertUnicodeArgvCli.cmake")
+  set_tests_properties(host_cli_unicode_argv PROPERTIES TIMEOUT 60)
+endif()
 set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS azookey_inference_host)

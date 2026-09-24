@@ -129,6 +129,7 @@
         "custom": {
           "type": "object", "additionalProperties": false, "default": {},
           "properties": {
+            "learning": {"type": "boolean", "default": false},
             "aiCandidate": {"type": "boolean", "default": true},
             "externalAi": {"type": "boolean", "default": false},
             "detailedLogging": {"type": "boolean", "default": false}

@@ -395,7 +395,8 @@ parser の受理条件:
      azookey_inference_host newwords reject  --reading <reading> --surface <surface> [--offline]
      ```
 
-     - `list` は `auto_words.tsv` を直接読む（既定は `--state pending`）。host は
+     - `list` は `AutoWordStore` から `auto_words.tsv.enc` を復号して読む
+       （旧平文 `auto_words.tsv` は移行元。既定は `--state pending`）。host は
        観測と承認のたびに保存するので、ファイルが共有の参照元になる。並びは
        `ListNewWordCandidates` と同じ `last_seen_epoch` の新しい順とする。
        ストアを読めない場合は標準出力へ何も出さず、標準エラーへ理由を出して

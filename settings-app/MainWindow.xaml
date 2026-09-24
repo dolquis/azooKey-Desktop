@@ -37,6 +37,16 @@
             <TextBox x:Name="ModelPathTextBox"
                      x:Uid="ModelPathTextBox"
                      AutomationProperties.AutomationId="ModelPathTextBox" />
+            <PasswordBox x:Name="OpenAiApiKeyPasswordBox"
+                         x:Uid="OpenAiApiKeyPasswordBox"
+                         PasswordChanged="OpenAiApiKeyPasswordBox_PasswordChanged"
+                         AutomationProperties.AutomationId="OpenAiApiKeyPasswordBox" />
+            <Button x:Name="ClearOpenAiApiKeyButton"
+                    x:Uid="ClearOpenAiApiKeyButton"
+                    Click="ClearOpenAiApiKeyButton_Click"
+                    AutomationProperties.AutomationId="ClearOpenAiApiKeyButton" />
+            <TextBlock x:Uid="OpenAiApiKeyDescription" TextWrapping="Wrap"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             <TextBlock x:Uid="AdvancedSectionTitle"
                        Margin="0,8,0,0"
                        Style="{StaticResource SubtitleTextBlockStyle}" />

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/Dispatcher.h"
 #include "azookey/host/InferenceEngine.h"
@@ -44,6 +45,7 @@ azookey::host::NewWordsCliRunOptions OfflineRunOptions(const std::filesystem::pa
   azookey::host::NewWordsCliRunOptions options;
   options.auto_word_store_path = path;
   options.prefer_pipe = false;
+  options.crypto = &azookey::learning::test::Crypto();
   return options;
 }
 
@@ -54,7 +56,7 @@ std::string UniquePipeName(const char* stem) {
 
 // Two pending words, the second seen more recently.
 void SeedStore(const std::filesystem::path& path) {
-  AutoWordStore store(path);
+  AutoWordStore store(path, &azookey::learning::test::Crypto());
   store.Observe("阿頭季", "あずき", kNow, 3, false);
   store.Observe("azooKey社", "あずきーしゃ", kNow + 100, 3, false);
   ASSERT_TRUE(store.Save());
@@ -136,7 +138,7 @@ TEST(NewWordsCliTest, OfflineResolveEditsTheFile) {
   EXPECT_EQ(result.exit_code, 1);
   EXPECT_EQ(result.error, "not_found");
 
-  AutoWordStore reloaded(path);
+  AutoWordStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   EXPECT_EQ(reloaded.LookupConfirmed("あずき").size(), 1u);
   EXPECT_EQ(reloaded.ListByState(AutoWordState::Pending).size(), 1u);
@@ -148,6 +150,7 @@ TEST(NewWordsCliTest, ResolveWithoutARunningHostAsksForOffline) {
   const auto path = TestDir("azookey_newwords_cli_nohost") / "auto_words.tsv";
   SeedStore(path);
   azookey::host::NewWordsCliRunOptions run;
+  run.crypto = &azookey::learning::test::Crypto();
   run.auto_word_store_path = path;
   run.pipe_name = UniquePipeName("azookey-newwords-cli-missing-pipe");
 
@@ -156,7 +159,7 @@ TEST(NewWordsCliTest, ResolveWithoutARunningHostAsksForOffline) {
   EXPECT_EQ(result.exit_code, 1);
   EXPECT_NE(result.error.find("--offline"), std::string::npos);
   // The file is left alone: a host that is merely slow would overwrite it.
-  AutoWordStore reloaded(path);
+  AutoWordStore reloaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   EXPECT_TRUE(reloaded.LookupConfirmed("あずき").empty());
 
@@ -168,9 +171,11 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
   const auto path = dir / "auto_words.tsv";
   SeedStore(path);
 
-  azookey::learning::LearningStore learning(dir / "learning.tsv");
-  azookey::learning::UserDictionary user_dict(dir / "user_dict.json");
-  AutoWordStore auto_words(path);
+  azookey::learning::LearningStore learning(dir / "learning.tsv",
+                                            &azookey::learning::test::Crypto());
+  azookey::learning::UserDictionary user_dict(dir / "user_dict.json",
+                                              &azookey::learning::test::Crypto());
+  AutoWordStore auto_words(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(auto_words.Load());
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(),
                                         &learning, {});
@@ -205,6 +210,7 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
   }
 
   azookey::host::NewWordsCliRunOptions run;
+  run.crypto = &azookey::learning::test::Crypto();
   run.auto_word_store_path = path;
   run.pipe_name = pipe_name;
   run.handshake_token = "test-token";

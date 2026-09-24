@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "../../core/tests/EtwCapture.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/tsf/TextService.h"
 
@@ -660,7 +662,23 @@ class FakeComposition : public ITfComposition {
 
 class TextServiceHarness {
  public:
-  ~TextServiceHarness() { service.Deactivate(); }
+  TextServiceHarness() {
+    char* existing = nullptr;
+    size_t length = 0;
+    const int read_result = _dupenv_s(&existing, &length, "AZOOKEY_IPC_HANDSHAKE_TOKEN");
+    if (read_result == 0 && (!existing || !*existing)) {
+      installed_handshake_token_ = _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "tip-test-token") == 0;
+      EXPECT_TRUE(installed_handshake_token_);
+    }
+    std::free(existing);
+  }
+
+  ~TextServiceHarness() {
+    service.Deactivate();
+    if (installed_handshake_token_) {
+      _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "");
+    }
+  }
 
   BOOL Press(WPARAM key) {
     BOOL eaten = FALSE;
@@ -679,6 +697,9 @@ class TextServiceHarness {
   KeyboardStateGuard keyboard_state;
   NoopContext context;
   azookey::tsf::TextService service;
+
+ private:
+  bool installed_handshake_token_{false};
 };
 
 class FakeCompositionAttachment {
@@ -5262,6 +5283,53 @@ TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesLearningAndNormalModeRec
   EXPECT_TRUE(restored->learning_allowed);
 }
 
+TEST(TsfTipSecureInputTest, PrivateAndCustomLearningPolicySuppressCommitObservation) {
+  struct Case {
+    const char* settings;
+    bool learning;
+  };
+  for (const auto& item : {
+           Case{R"({"privacy":{"mode":"normal"}})", true},
+           Case{R"({"privacy":{"mode":"private"}})", false},
+           Case{R"({"privacy":{"mode":"custom"}})", false},
+           Case{R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})", false},
+           Case{R"({"privacy":{"mode":"custom","custom":{"learning":true}}})", true},
+       }) {
+    SCOPED_TRACE(item.settings);
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(item.settings);
+    CommitOneCandidate(h);
+    EXPECT_EQ(h.service.last_queued_commit_observation_for_test().has_value(), item.learning);
+  }
+}
+
+TEST(TsfTipSecureInputTest, GlobalAndAppProfilePrivacyFloorsCompose) {
+  struct Case {
+    const char* global;
+    const char* profile;
+  };
+  for (const auto& item : {
+           Case{R"({"privacy":{"mode":"normal"}})",
+                R"({"profilesByApp":{"notepad.exe":{"privacyMode":"private"}}})"},
+           Case{R"({"privacy":{"mode":"private"}})",
+                R"({"profilesByApp":{"notepad.exe":{"privacyMode":"normal"}}})"},
+       }) {
+    SCOPED_TRACE(item.global);
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(item.global);
+    const auto json = azookey::ipc::json::Parse(item.profile);
+    ASSERT_TRUE(json);
+    azookey::core::BracketSettings settings;
+    settings.profiles = std::make_shared<const azookey::core::AppProfileResolver>(
+        azookey::core::AppProfileResolver::FromSettings(*json));
+    h.service.set_bracket_settings_for_test(settings);
+    CommitOneCandidate(h);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+  }
+}
+
 TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesNeuralBatchObservations) {
   TextServiceHarness h;
   h.service.set_batch_romaji_options_for_test(true);
@@ -5344,6 +5412,8 @@ TEST(TsfTipSecureInputTest, QueryWireUsesEventSnapshotAndAdvertisesSecureFlag) {
   ASSERT_TRUE(h.Press('K'));
   ASSERT_TRUE(h.Press('A'));
   // Changing settings after enqueue must not rewrite that event's flags.
+  ASSERT_FALSE(h.service.pending_ipc_reading_for_test().empty());
+  ASSERT_TRUE(azookey::ipc::ReadClientHandshakeToken().has_value());
   h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
   h.service.start_ipc_worker_for_test();
   const auto wait_for_queries = [&](size_t count) {
@@ -5358,14 +5428,18 @@ TEST(TsfTipSecureInputTest, QueryWireUsesEventSnapshotAndAdvertisesSecureFlag) {
   h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
   ASSERT_TRUE(h.Press('I'));
   ASSERT_TRUE(wait_for_queries(3));
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"private"}})");
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(wait_for_queries(4));
   h.service.stop_ipc_worker_for_test();
   server.Stop();
   EXPECT_TRUE(advertised.load());
   const std::lock_guard<std::mutex> lock(mutex);
-  ASSERT_EQ(policies.size(), 3u);
+  ASSERT_EQ(policies.size(), 4u);
   EXPECT_EQ(policies[0], std::make_pair(false, true));
   EXPECT_EQ(policies[1], std::make_pair(true, false));
   EXPECT_EQ(policies[2], std::make_pair(false, true));
+  EXPECT_EQ(policies[3], std::make_pair(false, false));
 }
 
 // Failure to identify the app hosting the TIP is treated as secure.

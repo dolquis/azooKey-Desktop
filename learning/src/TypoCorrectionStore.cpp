@@ -171,7 +171,8 @@ std::vector<char32_t> DecodeUtf8(std::string_view value) {
 
 }  // namespace
 
-TypoCorrectionStore::TypoCorrectionStore(std::filesystem::path path) : path_(std::move(path)) {}
+TypoCorrectionStore::TypoCorrectionStore(std::filesystem::path path, const ByteCrypto* crypto)
+    : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
 size_t TypoCorrectionStore::Utf8CharLength(std::string_view value) {
   return DecodeUtf8(value).size();
@@ -296,11 +297,18 @@ std::optional<std::string> TypoCorrectionStore::Lookup(const std::string& wrong,
 
 bool TypoCorrectionStore::Load() {
   table_.clear();
-  std::ifstream ifs(path_);
-  if (!ifs.is_open()) {
+  save_blocked_by_load_failure_ = false;
+  std::string text;
+  const auto source = ReadProtectedText(path_, *crypto_, text);
+  if (source == ProtectedFileSource::Missing) {
     // A store that was never written is an empty store, not a failure.
     return true;
   }
+  if (source == ProtectedFileSource::Error) {
+    save_blocked_by_load_failure_ = true;
+    return false;
+  }
+  std::istringstream ifs(text);
 
   std::string line;
   size_t line_number = 0;
@@ -339,10 +347,17 @@ bool TypoCorrectionStore::Load() {
     }
     table_[wrong][correct] = rec;
   }
+  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
+    save_blocked_by_load_failure_ = true;
+    SecureErase(text);
+    return false;
+  }
+  SecureErase(text);
   return true;
 }
 
 bool TypoCorrectionStore::Save() const {
+  if (save_blocked_by_load_failure_) return false;
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << kTypoCorrectionStoreEscapedTsvHeader << '\n';
@@ -352,7 +367,7 @@ bool TypoCorrectionStore::Save() const {
           << record.last_updated_epoch_sec << '\n';
     }
   }
-  return WriteTextFileAtomically(path_, out.str());
+  return WriteProtectedText(path_, out.str(), *crypto_);
 }
 
 void TypoCorrectionStore::Reset() { table_.clear(); }

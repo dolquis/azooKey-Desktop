@@ -124,6 +124,8 @@ void MainWindow::ApplySettingsToControls(const azookey::settings::SettingsDocume
                          result.status != azookey::settings::SettingsDocumentStatus::ReadError);
   ModelEnabledToggle().IsOn(result.settings.model_enabled);
   ModelPathTextBox().Text(winrt::to_hstring(result.settings.model_selected_path));
+  OpenAiApiKeyPasswordBox().Password(winrt::to_hstring(result.settings.openai_api_key));
+  openai_api_key_changed_ = false;
   if (result.settings.model_backend_preference) {
     const auto& backend = *result.settings.model_backend_preference;
     BackendPreferenceCombo().SelectedIndex(backend == "cpu" ? 1 : 0);
@@ -173,6 +175,19 @@ winrt::fire_and_forget MainWindow::SaveButton_Click(Windows::Foundation::IInspec
   }
 }
 
+void MainWindow::OpenAiApiKeyPasswordBox_PasswordChanged(
+    Windows::Foundation::IInspectable const&,
+    Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  openai_api_key_changed_ = true;
+}
+
+void MainWindow::ClearOpenAiApiKeyButton_Click(
+    Windows::Foundation::IInspectable const&,
+    Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  OpenAiApiKeyPasswordBox().Password(L"");
+  openai_api_key_changed_ = true;
+}
+
 Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   const auto lifetime = get_strong();
   if (!settings_path_) {
@@ -193,6 +208,10 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
     settings.model_backend_preference.reset();
   }
   settings.model_selected_path = winrt::to_string(ModelPathTextBox().Text());
+  settings.openai_api_key_changed = openai_api_key_changed_;
+  if (openai_api_key_changed_) {
+    settings.openai_api_key = winrt::to_string(OpenAiApiKeyPasswordBox().Password());
+  }
   const int log_index = LogLevelCombo().SelectedIndex();
   settings.log_level = log_index == 0   ? "error"
                        : log_index == 1 ? "warn"
@@ -215,6 +234,8 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   }
 
   SaveButton().IsEnabled(false);
+  OpenAiApiKeyPasswordBox().IsEnabled(false);
+  ClearOpenAiApiKeyButton().IsEnabled(false);
   SaveProgressRing().IsActive(true);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Visible);
   SettingsStatusInfoBar().IsOpen(false);
@@ -232,12 +253,17 @@ Windows::Foundation::IAsyncAction MainWindow::SaveSettingsCoreAsync() {
   co_await ResumeForeground(dispatcher);
 
   SaveButton().IsEnabled(true);
+  OpenAiApiKeyPasswordBox().IsEnabled(true);
+  ClearOpenAiApiKeyButton().IsEnabled(true);
   UpdateCrashReportStatus();
   SaveProgressRing().IsActive(false);
   SaveProgressRing().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
   // The disk save is authoritative, even if notifying the Host failed.
   if (save_result.ok && settings.model_backend_preference) {
     UnsupportedBackendText().Visibility(Microsoft::UI::Xaml::Visibility::Collapsed);
+  }
+  if (save_result.ok) {
+    openai_api_key_changed_ = false;
   }
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader final_resources;
   if (!save_result.ok) {

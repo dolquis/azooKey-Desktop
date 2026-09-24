@@ -22,6 +22,7 @@
 #include "azookey/core/AppProfileResolver.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/AtomicFile.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 
 namespace azookey::settings {
@@ -231,7 +232,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
             for (const auto& [axis, enabled] : setting.AsObject())
               valid =
                   valid &&
-                  (axis == "aiCandidate" || axis == "externalAi" || axis == "detailedLogging") &&
+                  (axis == "learning" || axis == "aiCandidate" || axis == "externalAi" ||
+                   axis == "detailedLogging") &&
                   enabled.IsBool();
           } else {
             valid = false;
@@ -371,8 +373,18 @@ j::Object ReadAndSanitize(const std::filesystem::path& path, SettingsDocumentSta
   return SanitizeRoot(parsed->AsObject(), warnings);
 }
 
-EditableSettings ExtractEditableSettings(const j::Object& root) {
+EditableSettings ExtractEditableSettings(const j::Object& root,
+                                         std::vector<std::string>* warnings) {
   EditableSettings settings;
+  if (const auto it = root.find("openAiApiKey"); it != root.end() && it->second.IsString()) {
+    const auto key = azookey::learning::UnprotectSecret(it->second.AsString());
+    if (key) {
+      settings.openai_api_key = key.value;
+    } else {
+      settings.openai_api_key_unavailable = true;
+      warnings->push_back("openAiApiKey could not be decrypted");
+    }
+  }
   if (const auto privacy = root.find("privacy"); privacy != root.end() && privacy->second.IsObject()) {
     if (const auto consent = privacy->second.AsObject().find("crashReportConsent");
         consent != privacy->second.AsObject().end() && consent->second.IsString())
@@ -430,7 +442,7 @@ SettingsDocumentResult LoadSettingsDocument(const std::filesystem::path& path,
     return result;
   }
   const auto root = ReadAndSanitize(path, &result.status, &result.error, &result.warnings);
-  result.settings = ExtractEditableSettings(root);
+  result.settings = ExtractEditableSettings(root, &result.warnings);
   return result;
 }
 
@@ -488,6 +500,28 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   privacy["crashReportConsent"] = j::Value(settings.crash_report_consent);
   root["privacy"] = j::Value(std::move(privacy));
   root.erase("backendPreference");
+
+  if (settings.openai_api_key_changed) {
+    if (settings.openai_api_key.empty()) {
+      root["openAiApiKey"] = j::Value("");
+    } else {
+      const auto protected_key = azookey::learning::ProtectSecret(settings.openai_api_key);
+      if (!protected_key) {
+        result.error = "failed to protect OpenAI API key";
+        return result;
+      }
+      root["openAiApiKey"] = j::Value(protected_key.value);
+    }
+  } else if (const auto it = root.find("openAiApiKey"); it != root.end() &&
+             it->second.IsString() && !it->second.AsString().empty() &&
+             it->second.AsString().rfind("dpapi:", 0) != 0) {
+    const auto protected_key = azookey::learning::ProtectSecret(it->second.AsString());
+    if (!protected_key) {
+      result.error = "failed to protect OpenAI API key";
+      return result;
+    }
+    root["openAiApiKey"] = j::Value(protected_key.value);
+  }
 
   std::string serialized = j::Stringify(j::Value(std::move(root)));
   serialized.push_back('\n');

@@ -53,27 +53,30 @@ TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
     const char* json;
     bool secure;
     bool detailed;
+    bool learning;
   };
   const Case cases[] = {
-      {"{}", false, false},
-      {R"({"privacy":{}})", false, false},
-      {R"({"privacy":false})", true, false},
-      {R"({"privacy":{"mode":12,"redactLogs":false}})", true, false},
-      {R"({"privacy":{"mode":"unknown","redactLogs":false}})", true, false},
-      {R"({"privacy":{"redactLogs":false}})", false, true},
-      {R"({"privacy":{"mode":"normal","redactLogs":false}})", false, true},
-      {R"({"privacy":{"mode":"offline","redactLogs":false}})", false, true},
-      {R"({"privacy":{"mode":"secure","redactLogs":false}})", true, false},
-      {R"({"privacy":{"mode":"private","redactLogs":false}})", false, false},
-      {R"({"privacy":{"mode":"normal","redactLogs":"false"}})", false, false},
-      {R"({"privacy":{"mode":"custom","redactLogs":false}})", false, false},
-      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":false}})", false, false},
+      {"{}", false, false, true},
+      {R"({"privacy":{}})", false, false, true},
+      {R"({"privacy":false})", true, false, false},
+      {R"({"privacy":{"mode":12,"redactLogs":false}})", true, false, false},
+      {R"({"privacy":{"mode":"unknown","redactLogs":false}})", true, false, false},
+      {R"({"privacy":{"redactLogs":false}})", false, true, true},
+      {R"({"privacy":{"mode":"normal","redactLogs":false}})", false, true, true},
+      {R"({"privacy":{"mode":"offline","redactLogs":false}})", false, true, true},
+      {R"({"privacy":{"mode":"secure","redactLogs":false}})", true, false, false},
+      {R"({"privacy":{"mode":"private","redactLogs":false}})", false, false, false},
+      {R"({"privacy":{"mode":"normal","redactLogs":"false"}})", false, false, true},
+      {R"({"privacy":{"mode":"custom","redactLogs":false}})", false, false, false},
+      {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":false}})", false, false, false},
       {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":true}}})",
-       false, true},
+       false, true, false},
       {R"({"privacy":{"mode":"custom","redactLogs":false,"custom":{"detailedLogging":"true"}}})",
-       false, false},
+       false, false, false},
       {R"({"privacy":{"mode":"custom","redactLogs":true,"custom":{"detailedLogging":true}}})",
-       false, false},
+       false, false, false},
+      {R"({"privacy":{"mode":"custom","custom":{"learning":true}}})", false, false, true},
+      {R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})", false, false, false},
   };
   const auto dir = TestDir("azookey_settings_body_log_policy");
   const auto path = dir / "settings.json";
@@ -84,10 +87,12 @@ TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
     const auto loaded = store.Load();
     EXPECT_EQ(loaded.settings.privacy_policy.secure, item.secure);
     EXPECT_EQ(loaded.settings.privacy_policy.detailed_logging_allowed, item.detailed);
+    EXPECT_EQ(loaded.settings.privacy_policy.learning_allowed, item.learning);
   }
   const auto malformed = azookey::core::ParsePrivacyPolicy(azookey::ipc::json::Value{});
   EXPECT_TRUE(malformed.secure);
   EXPECT_FALSE(malformed.detailed_logging_allowed);
+  EXPECT_FALSE(malformed.learning_allowed);
   std::filesystem::remove_all(dir);
 }
 
@@ -244,6 +249,7 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.settings.max_candidates, 9);
   EXPECT_EQ(result.settings.max_context_length, 10);
   EXPECT_TRUE(result.settings.prediction_enabled);
+  EXPECT_TRUE(result.settings.privacy_policy.learning_allowed);
   EXPECT_EQ(result.settings.backend_preference, "auto");
   EXPECT_TRUE(result.settings.model.enabled);
   EXPECT_TRUE(result.settings.model.auto_load_on_host_start);

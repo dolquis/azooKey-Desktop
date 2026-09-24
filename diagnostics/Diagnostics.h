@@ -10,12 +10,25 @@
 
 #include "azookey/ipc/Payloads.h"
 
+namespace azookey::learning {
+class ByteCrypto;
+}
+
 namespace azookey::diagnostics {
 
 enum class Status {
   Ok,
   Warning,
   Error,
+};
+
+enum class DpapiState {
+  NotRequired,
+  MissingKey,
+  Plaintext,
+  Decrypted,
+  DecryptFailed,
+  Unavailable,
 };
 
 struct Check {
@@ -49,6 +62,7 @@ struct Snapshot {
   bool selected_model_valid{false};
   bool settings_valid{true};
   bool settings_missing{true};
+  DpapiState dpapi_state{DpapiState::NotRequired};
   bool learning_store_valid{true};
   bool user_dict_valid{true};
   uint64_t learning_entries{};
@@ -116,6 +130,8 @@ std::string RepairStatusName(RepairStatus status);
 bool RepairReportSucceeded(const RepairReport& report);
 
 bool ProbeSettingsFile(const std::filesystem::path& path);
+DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
+                                  const learning::ByteCrypto& crypto);
 bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries);
 bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
                              uint64_t* skipped_entries);

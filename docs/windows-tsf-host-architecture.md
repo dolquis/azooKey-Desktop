@@ -294,17 +294,19 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 | ファイル | 直接書き込むプロセス | 読み取り | 排他 |
 |---|---|---|---|
-| `user_dict.json` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
+| `user_dict.json.enc` | Host（`AddUserWord` / `RemoveUserWord`）、`userdict` CLI（`--offline` の add / remove、`import`） | Host、`userdict` CLI（`list` / `export`）、`lookup` CLI | `AcquireExclusiveFileLockForPath` + atomic replace |
 | `settings.json` | 設定アプリ（保存、保存前の parse 失敗時の quarantine rename）、Host（parse 失敗時の quarantine rename、SafeMode 突入時の `safeMode` 記録。`docs/dev-infrastructure-spec.md` §8.5.3） | Host（`SettingsStore::Load` / `Reload`） | `AcquireExclusiveFileLockForPath` + atomic replace（保存側）／同一ロック区間内の read → parse → rename（設定アプリと Host。下記） |
-| `learning.tsv` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）。ファイル単位ロックは取らない |
+| `learning.tsv.enc` | Host のみ | Host、`lookup` CLI | Host 内で直列化（debounce flush、上記「学習」）し、保存時に `AcquireExclusiveFileLockForPath` + atomic replace |
 | `data\host_run_state.txt` | pipe モードの Host のみ（起動時の実行中の印、正常終了時の消去。`docs/dev-infrastructure-spec.md` §8.5.3） | 同じ Host（次の起動時） | `AcquireExclusiveFileLockForPath` + atomic replace。印を書いた Host が生きている間は重複起動側が触れず、終了時は自分の印だけを消す |
-| `auto_words.tsv` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | atomic replace のみ。ファイル単位ロックは取らない。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
+| `auto_words.tsv.enc` | Host（マイニング、`ResolveNewWord`、起動時の `PrunePending`）、`newwords` CLI（`--offline` の confirm / reject） | Host、`newwords` CLI（`list`） | `AcquireExclusiveFileLockForPath` + atomic replace。`--offline` は Host 停止中に限る（`docs/auto-word-registration-spec.md` §7-3） |
 
-- 設定アプリは `user_dict.json` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
-  この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json` の直接 writer にはならない。
-- したがって `user_dict.json` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
+拡張子 `.enc` のない旧平文ファイルは移行元であり、移行時は `.bak` を保全する。
+
+- 設定アプリは `user_dict.json.enc` を直接開かない。v1.0 の「ユーザー辞書を編集」は `userdict` CLI の probe を起動し（`docs/sideload-packaging-spec.md` §3.7）、M30 / M49 の辞書 GUI は Host への IPC（`AddUserWord` / `RemoveUserWord` と `docs/learning-data-management-spec.md` §4 のストア操作）を経由する。
+  この制約は版によらない。辞書 GUI が完成しても、設定アプリは `user_dict.json.enc` の直接 writer にはならない。
+- したがって `user_dict.json.enc` に対する独立した直接 writer は Host と `userdict` CLI の二つであり、「Host と設定アプリ」という組み合わせは設計上存在しない。
   プロセス間ロックの実機確認は、稼働中 Host への IPC 経由 `userdict add` と、別プロセスの `userdict add --offline` を重ねて行う（Human Gate は DEV-758、手順は `docs/handoff/human-gate-batch-runbook.md`）。
-- `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json` 自体は変更しない。`user_dict.json` に対する writer 操作は `--offline` の add / remove と `import` である。
+- `userdict export` は読み出した内容を引数のパスへ書くだけで、`user_dict.json.enc` 自体は変更しない。`user_dict.json.enc` に対する writer 操作は `--offline` の add / remove と `import` である。
 - `settings.json` を保存するのは設定アプリと、SafeMode に入るときの Host である。Host は同じファイルロックの下でディスク上の内容へ `safeMode` だけを合成して atomic replace し、読めない・解釈できないファイルは書き換えない。設定アプリの保存は `safeMode` を保つ。
   どちらも mutator である。
   設定アプリは保存前の read-modify-write で JSON の parse に失敗したとき、Host は `SettingsStore::Load` / `Reload` で parse に失敗したときに、`settings.json` を `.invalid*` へ rename する。

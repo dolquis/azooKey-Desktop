@@ -17,12 +17,14 @@
 #include <thread>
 #include <vector>
 
+#include "../../learning/tests/TestByteCrypto.h"
 #include "IpcTestData.h"
 #include "azookey/core/BatchConversionChunker.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
@@ -169,8 +171,8 @@ class DispatcherTest : public ::testing::Test {
   DispatcherTest()
       : learning_path("azookey_dispatcher_test_learning.tsv"),
         user_dict_path("azookey_dispatcher_test_user.json"),
-        store(learning_path),
-        user_dict(user_dict_path),
+        store(learning_path, &azookey::learning::test::Crypto()),
+        user_dict(user_dict_path, &azookey::learning::test::Crypto()),
         engine(std::make_unique<azookey::core::SimpleConverter>(), &store, {}),
         dispatcher(&engine, &scheduler, &user_dict, DefaultDispatcherConfig()) {
     std::remove(learning_path.c_str());
@@ -384,6 +386,31 @@ TEST_F(DispatcherTest, HandshakeRequiresConfiguredToken) {
   auto matched_payload = ipc::ParseHandshakeResponse(matched->payload_json);
   ASSERT_TRUE(matched_payload.has_value());
   EXPECT_TRUE(matched_payload->accepted);
+}
+
+TEST_F(DispatcherTest, GeneratedTokenFileAuthenticatesHandshake) {
+  const auto path = std::filesystem::path(TempPath("azookey_dispatcher_generated_token"));
+  RemovePathNoThrow(path);
+  const auto generated = ipc::GenerateHandshakeToken();
+  ASSERT_TRUE(generated);
+  ASSERT_TRUE(ipc::PublishHandshakeToken(path, *generated));
+  const auto read = ipc::ReadHandshakeTokenFile(path);
+  ASSERT_TRUE(read);
+
+  auto config = DefaultDispatcherConfig();
+  config.handshake_token = *generated;
+  azookey::host::Dispatcher token_dispatcher(&engine, &scheduler, &user_dict, config);
+  ipc::HandshakeRequest request;
+  request.tip_version = "test";
+  request.protocol_version = kProtocolVersion;
+  request.handshake_token = *read;
+  const auto response = token_dispatcher.Dispatch(
+      MakeReq(6, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(request)));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseHandshakeResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->accepted);
+  RemovePathNoThrow(path);
 }
 
 TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHandshake) {
@@ -667,7 +694,8 @@ TEST_F(DispatcherTest, QueryCandidatesSerializesTsvDictionarySource) {
 
   auto converter = std::make_unique<azookey::core::SimpleConverter>();
   ASSERT_TRUE(converter->LoadFromTsv(dict_path));
-  azookey::learning::LearningStore local_store(tsv_learning_path);
+  azookey::learning::LearningStore local_store(tsv_learning_path,
+                                               &azookey::learning::test::Crypto());
   azookey::host::InferenceEngine local_engine(std::move(converter), &local_store, {});
   azookey::host::RequestScheduler local_scheduler;
   azookey::host::Dispatcher local_dispatcher(&local_engine, &local_scheduler, nullptr,
@@ -705,7 +733,8 @@ TEST_F(DispatcherTest, QueryCancelBeforeReply) {
 TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
   const char* throwing_path = "azookey_dispatcher_throwing_learning.tsv";
   std::remove(throwing_path);
-  azookey::learning::LearningStore throwing_store(throwing_path);
+  azookey::learning::LearningStore throwing_store(throwing_path,
+                                                  &azookey::learning::test::Crypto());
   azookey::host::InferenceEngine throwing_engine(std::make_unique<ThrowingConverter>(),
                                                  &throwing_store, {});
   azookey::host::RequestScheduler throwing_scheduler;
@@ -882,7 +911,7 @@ TEST_F(DispatcherTest, AddUserWordSaveFailureReturnsFalseAndRollsBack) {
   }
 
   const auto bad_dict_path = (blocking_parent / "user.json").string();
-  azookey::learning::UserDictionary bad_dict(bad_dict_path);
+  azookey::learning::UserDictionary bad_dict(bad_dict_path, &azookey::learning::test::Crypto());
   engine.SetUserDictionary(&bad_dict);
   azookey::host::Dispatcher bad_dispatcher(&engine, &scheduler, &bad_dict,
                                            DefaultDispatcherConfig());
@@ -917,7 +946,7 @@ TEST_F(DispatcherTest, RemoveUserWordSaveFailureReturnsFalseAndRollsBack) {
   }
 
   const auto bad_dict_path = (blocking_parent / "user.json").string();
-  azookey::learning::UserDictionary bad_dict(bad_dict_path);
+  azookey::learning::UserDictionary bad_dict(bad_dict_path, &azookey::learning::test::Crypto());
   azookey::learning::UserWord existing;
   existing.word = "azooKey";
   existing.ruby = "あずきい";
@@ -1513,7 +1542,7 @@ TEST_F(DispatcherTest, ObserveTypoIsFireAndForgetAndUpdatesTheStore) {
   const auto typo_path =
       (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo.tsv").string();
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path);
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetTypoStore(&typo);
 
   ipc::ObserveTypoRequest request;
@@ -1541,7 +1570,7 @@ TEST_F(DispatcherTest, QueryCandidatesReportsTheCorrectedReadingUnderAutoReplace
   const auto typo_path =
       (std::filesystem::temp_directory_path() / "azookey_dispatcher_typo_auto.tsv").string();
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path);
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetTypoStore(&typo);
   auto config = engine.config();
   config.typo_correction_mode = "auto_replace";
@@ -1574,7 +1603,7 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
   const auto auto_word_path =
       (std::filesystem::temp_directory_path() / "azookey_dispatcher_auto_words.tsv").string();
   std::remove(auto_word_path.c_str());
-  azookey::learning::AutoWordStore auto_words(auto_word_path);
+  azookey::learning::AutoWordStore auto_words(auto_word_path, &azookey::learning::test::Crypto());
   auto_words.Observe("azooKey", "あずきー", 1'700'000'000ULL, 3, false);
   auto_words.Observe("azooKey社", "あずきーしゃ", 1'700'000'100ULL, 3, false);
 
@@ -1640,7 +1669,7 @@ TEST_F(DispatcherTest, ListAndResolveNewWordDriveTheApprovalFlow) {
   EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Rejected).size(), 1u);
 
   // The decision reached disk, so it survives a restart.
-  azookey::learning::AutoWordStore reloaded(auto_word_path);
+  azookey::learning::AutoWordStore reloaded(auto_word_path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(reloaded.Load());
   EXPECT_EQ(reloaded.LookupConfirmed("あずきー").size(), 1u);
   EXPECT_EQ(reloaded.ListByState(azookey::learning::AutoWordState::Rejected).size(), 1u);
@@ -1692,7 +1721,8 @@ TEST_F(DispatcherTest, ResolveNewWordRollsBackWhenSaveFails) {
   std::filesystem::remove_all(blocker);
   // The temporary stream closes the file at the end of the statement.
   std::ofstream(blocker) << "not a directory";
-  azookey::learning::AutoWordStore auto_words(blocker / "auto_words.tsv");
+  azookey::learning::AutoWordStore auto_words(blocker / "auto_words.tsv",
+                                              &azookey::learning::test::Crypto());
   auto_words.Observe("azooKey", "あずきー", 1'700'000'000ULL, 3, false);
   azookey::host::Dispatcher approval(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
                                      nullptr, &auto_words);
@@ -1721,7 +1751,7 @@ TEST_F(DispatcherTest, ConfirmedNewWordIsInjectedOnlyAfterApproval) {
       (std::filesystem::temp_directory_path() / "azookey_dispatcher_auto_words_inject.tsv")
           .string();
   std::remove(auto_word_path.c_str());
-  azookey::learning::AutoWordStore auto_words(auto_word_path);
+  azookey::learning::AutoWordStore auto_words(auto_word_path, &azookey::learning::test::Crypto());
   // registrationMode=confirm: the threshold is reached but auto_promote is off.
   for (uint64_t i = 0; i < 3; ++i) {
     auto_words.Observe("阿頭季", "あずき", 1'700'000'000ULL + i, 3, false);
@@ -1789,7 +1819,7 @@ TEST_F(DispatcherTest, LearningEventsDenyUnknownAndDoNotConsumeObservationIds) {
   EnableEventPrivacy(dispatcher);
   const auto typo_path = TempPath("azookey_event_privacy_typo.tsv");
   std::remove(typo_path.c_str());
-  azookey::learning::TypoCorrectionStore typo(typo_path);
+  azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
   engine.SetTypoStore(&typo);
   ipc::QueryCandidatesRequest query;
   query.reading = "normal";
@@ -1884,60 +1914,96 @@ TEST_F(DispatcherTest, SecureFlagCapabilityIsConnectionLocalAndResetOnEveryHands
   EXPECT_TRUE(allowed(dispatcher));
 }
 
-TEST_F(DispatcherTest, HostSecureSettingsRejectAllLearningAndMining) {
+TEST_F(DispatcherTest, HostPrivacySettingsRejectAllLearningAndMining) {
   const auto settings_path = TempPath("azookey_learning_privacy_settings.json");
   const auto mining_path = TempPath("azookey_learning_privacy_mining.tsv");
   const auto typo_path = TempPath("azookey_learning_privacy_typo.tsv");
-  std::remove(mining_path.c_str());
-  std::remove(typo_path.c_str());
+  for (const auto* policy : {
+           R"({"privacy":{"mode":"secure"}})",
+           R"({"privacy":{"mode":"private"}})",
+           R"({"privacy":{"mode":"custom"}})",
+           R"({"privacy":{"mode":"custom","custom":{"learning":false}}})",
+           R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})",
+       }) {
+    SCOPED_TRACE(policy);
+    std::remove(mining_path.c_str());
+    std::remove(typo_path.c_str());
+    {
+      std::ofstream out(settings_path);
+      out << policy;
+    }
+    azookey::host::SettingsStore settings(settings_path);
+    settings.Load();
+    azookey::learning::AutoWordStore mining(mining_path, &azookey::learning::test::Crypto());
+    azookey::learning::TypoCorrectionStore typo(typo_path, &azookey::learning::test::Crypto());
+    engine.SetAutoWordStore(&mining);
+    engine.SetTypoStore(&typo);
+    azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
+                                     &settings, &mining);
+    EnableEventPrivacy(target);
+    ipc::CommitObservationRequest commit;
+    commit.reading = "あずきーしゃ";
+    commit.chosen = {"azooKey社", commit.reading, 1.0, "static"};
+    commit.secure = false;
+    commit.learning_allowed = true;
+    ipc::CommitSegmentsObservationRequest segments;
+    segments.segments.push_back({commit.reading, commit.chosen, {}, false});
+    segments.secure = false;
+    segments.learning_allowed = true;
+    ipc::ObserveTypoRequest observation;
+    observation.wrong_reading = "こんちには";
+    observation.correct_reading = "こんにちは";
+    observation.secure = false;
+    observation.learning_allowed = true;
+    const auto before = store.size();
+    for (auto type :
+         {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
+      const auto payload = type == ipc::MessageType::CommitObservation
+                               ? ipc::BuildCommitObservationRequest(commit)
+                               : ipc::BuildCommitSegmentsObservationRequest(segments);
+      const auto response = target.Dispatch(MakeReq(9300, type, payload));
+      ASSERT_TRUE(response);
+      const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+      ASSERT_TRUE(parsed);
+      EXPECT_FALSE(parsed->ok);
+    }
+    EXPECT_FALSE(target.Dispatch(
+        MakeReq(9301, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
+    EXPECT_EQ(store.size(), before);
+    EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
+    EXPECT_EQ(typo.size(), 0u);
+    EXPECT_FALSE(std::filesystem::exists(mining_path));
+    EXPECT_FALSE(std::filesystem::exists(typo_path));
+    engine.SetAutoWordStore(nullptr);
+    engine.SetTypoStore(nullptr);
+    std::remove(settings_path.c_str());
+  }
+}
+
+TEST_F(DispatcherTest, HostCustomLearningOptInRestoresObservations) {
+  const auto settings_path = TempPath("azookey_custom_learning_settings.json");
   {
     std::ofstream out(settings_path);
-    out << R"({"privacy":{"mode":"secure"}})";
+    out << R"({"privacy":{"mode":"custom","custom":{"learning":true}}})";
   }
   azookey::host::SettingsStore settings(settings_path);
   settings.Load();
-  azookey::learning::AutoWordStore mining(mining_path);
-  azookey::learning::TypoCorrectionStore typo(typo_path);
-  engine.SetAutoWordStore(&mining);
-  engine.SetTypoStore(&typo);
   azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, DefaultDispatcherConfig(),
-                                   &settings, &mining);
+                                   &settings);
   EnableEventPrivacy(target);
   ipc::CommitObservationRequest commit;
-  commit.reading = "あずきーしゃ";
-  commit.chosen = {"azooKey社", commit.reading, 1.0, "static"};
+  commit.reading = "かな";
+  commit.chosen = {"仮名", "かな", 1.0, "static"};
   commit.secure = false;
   commit.learning_allowed = true;
-  ipc::CommitSegmentsObservationRequest segments;
-  segments.segments.push_back({commit.reading, commit.chosen, {}, false});
-  segments.secure = false;
-  segments.learning_allowed = true;
-  ipc::ObserveTypoRequest observation;
-  observation.wrong_reading = "こんちには";
-  observation.correct_reading = "こんにちは";
-  observation.secure = false;
-  observation.learning_allowed = true;
   const auto before = store.size();
-  for (auto type :
-       {ipc::MessageType::CommitObservation, ipc::MessageType::CommitSegmentsObservation}) {
-    const auto payload = type == ipc::MessageType::CommitObservation
-                             ? ipc::BuildCommitObservationRequest(commit)
-                             : ipc::BuildCommitSegmentsObservationRequest(segments);
-    const auto response = target.Dispatch(MakeReq(9300, type, payload));
-    ASSERT_TRUE(response);
-    const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
-    ASSERT_TRUE(parsed);
-    EXPECT_FALSE(parsed->ok);
-  }
-  EXPECT_FALSE(target.Dispatch(
-      MakeReq(9301, ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(observation))));
-  EXPECT_EQ(store.size(), before);
-  EXPECT_TRUE(mining.ListByState(azookey::learning::AutoWordState::Pending).empty());
-  EXPECT_EQ(typo.size(), 0u);
-  EXPECT_FALSE(std::filesystem::exists(mining_path));
-  EXPECT_FALSE(std::filesystem::exists(typo_path));
-  engine.SetAutoWordStore(nullptr);
-  engine.SetTypoStore(nullptr);
+  const auto response = target.Dispatch(MakeReq(9350, ipc::MessageType::CommitObservation,
+                                                ipc::BuildCommitObservationRequest(commit)));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseCommitObservationResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_GT(store.size(), before);
   std::remove(settings_path.c_str());
 }
 
@@ -2089,7 +2155,7 @@ class CancelObservingConverter final : public azookey::core::IConverter {
 TEST_F(DispatcherTest, OutOfBandCancelReachesTheRunningConverter) {
   const std::string path = TempPath("azookey_dispatcher_cancel_reaches_converter.tsv");
   std::remove(path.c_str());
-  azookey::learning::LearningStore cancel_store(path);
+  azookey::learning::LearningStore cancel_store(path, &azookey::learning::test::Crypto());
   auto converter = std::make_unique<CancelObservingConverter>();
   auto* observed = converter.get();
   azookey::host::InferenceEngine cancel_engine(std::move(converter), &cancel_store, {});

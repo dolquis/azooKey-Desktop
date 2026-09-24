@@ -1,3 +1,4 @@
+#include "TestByteCrypto.h"
 // Direct unit tests for Reranker. Pins down the behaviors that callers
 // (InferenceEngine, TIP) rely on:
 //   - null-store passthrough
@@ -53,7 +54,7 @@ TEST(RerankerTest, EmptyCandidates) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_reranker_empty.tsv").string();
   std::remove(path.c_str());
-  learn::LearningStore store(path);
+  learn::LearningStore store(path, &azookey::learning::test::Crypto());
   learn::Reranker reranker(&store);
 
   auto out = reranker.Apply("にほん", {}, /*now=*/100);
@@ -64,7 +65,7 @@ TEST(RerankerTest, StableSortOnTie) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_reranker_tie.tsv").string();
   std::remove(path.c_str());
-  learn::LearningStore store(path);
+  learn::LearningStore store(path, &azookey::learning::test::Crypto());
   learn::Reranker reranker(&store);
 
   // No learning records → store contributes 0 to every candidate, so input
@@ -81,7 +82,7 @@ TEST(RerankerTest, DropsNonFiniteScoresBeforeSorting) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_reranker_nonfinite.tsv").string();
   std::remove(path.c_str());
-  learn::LearningStore store(path);
+  learn::LearningStore store(path, &azookey::learning::test::Crypto());
   learn::Reranker reranker(&store);
 
   store.Observe("x", "boosted-inf", std::numeric_limits<double>::infinity(), /*now=*/100);
@@ -104,7 +105,7 @@ TEST(RerankerTest, LearningBoostFlipsTop) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_reranker_boost.tsv").string();
   std::remove(path.c_str());
-  learn::LearningStore store(path);
+  learn::LearningStore store(path, &azookey::learning::test::Crypto());
   learn::Reranker reranker(&store);
 
   // Initial top = 日本 (score 1.0 > 0.9).
@@ -127,7 +128,7 @@ TEST(RerankerTest, TimeDecay) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_reranker_decay.tsv").string();
   std::remove(path.c_str());
-  learn::LearningStore store(path);
+  learn::LearningStore store(path, &azookey::learning::test::Crypto());
   learn::Reranker reranker(&store);
 
   // Observe at t=0 (epoch seconds 1700000000).
@@ -165,7 +166,7 @@ TEST(RerankerTest, CorrectionDownweightsRejected) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_reranker_correction.tsv").string();
   std::remove(path.c_str());
-  learn::LearningStore store(path);
+  learn::LearningStore store(path, &azookey::learning::test::Crypto());
   learn::Reranker reranker(&store);
 
   // Observe rejected once, then ObserveCorrection: rejected weight should

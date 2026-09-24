@@ -340,7 +340,7 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     result.error = "failed to lock user dictionary";
     return result;
   }
-  azookey::learning::UserDictionary dict(run_options.user_dict_path);
+  azookey::learning::UserDictionary dict(run_options.user_dict_path, run_options.crypto);
   if (!dict.Load()) {
     result.exit_code = 1;
     result.error = "failed to load user dictionary";
@@ -413,9 +413,9 @@ UserDictCliResult RunDirect(const UserDictCliOptions& options,
     auto entries = dict.All();
     SortEntries(&entries);
     if (!options.dry_run) {
-      azookey::learning::UserDictionary exported(azookey::core::Utf8Path(options.path));
+      azookey::learning::UserDictionary exported(dict.path(), run_options.crypto);
       exported.ReplaceAll(entries);
-      if (!exported.Save()) {
+      if (!exported.SavePlaintextExport(azookey::core::Utf8Path(options.path))) {
         result.exit_code = 1;
         result.error = "failed to save export JSON";
       }

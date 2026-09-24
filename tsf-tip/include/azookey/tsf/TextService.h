@@ -456,6 +456,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // scope. Updates secure_input_ so every outbound route sees one answer.
   struct PrivacyDecision {
     bool secure{false};
+    bool learning_allowed{false};
     core::AiPrivacy ai;
     std::string backend;
     bool detailed_logging_allowed{false};

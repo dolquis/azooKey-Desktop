@@ -108,7 +108,7 @@ NewWordsCliResult ListDirect(const NewWordsCliOptions& options,
   (void)learning::ParseAutoWordState(options.state, state);
   // Reads the persisted file: the running host saves on every observation and
   // every resolve, so the file is the shared source for inspection.
-  learning::AutoWordStore store(run_options.auto_word_store_path);
+  learning::AutoWordStore store(run_options.auto_word_store_path, run_options.crypto);
   if (!store.Load()) {
     result.exit_code = 1;
     result.error = "failed to load auto-word store";
@@ -140,7 +140,7 @@ NewWordsCliResult ListDirect(const NewWordsCliOptions& options,
 
 NewWordsCliResult ResolveDirect(const NewWordsCliOptions& options,
                                 const NewWordsCliRunOptions& run_options) {
-  learning::AutoWordStore store(run_options.auto_word_store_path);
+  learning::AutoWordStore store(run_options.auto_word_store_path, run_options.crypto);
   if (!store.Load()) {
     return ResolveResult(options, false, false, "file", "failed to load auto-word store");
   }

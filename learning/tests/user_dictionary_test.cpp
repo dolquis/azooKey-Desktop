@@ -5,12 +5,25 @@
 #include <fstream>
 #include <string>
 
+#include "TestByteCrypto.h"
+#include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/UserDictionary.h"
+
+namespace {
+void RemoveStoreFiles(const std::filesystem::path& path) {
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(azookey::learning::EncryptedPathFor(path), ec);
+  auto backup = path;
+  backup += ".bak";
+  std::filesystem::remove(backup, ec);
+}
+}  // namespace
 
 TEST(UserDictionaryTest, AddLookupRemove) {
   const std::string p1 =
       (std::filesystem::temp_directory_path() / "azookey_user_dict_t_ignored.json").string();
-  azookey::learning::UserDictionary dict(p1);
+  azookey::learning::UserDictionary dict(p1, &azookey::learning::test::Crypto());
   azookey::learning::UserWord w1;
   w1.word = "azooKey";
   w1.ruby = "あずきい";
@@ -52,10 +65,10 @@ TEST(UserDictionaryTest, AddLookupRemove) {
 
 TEST(UserDictionaryTest, SaveLoadRoundTrip) {
   const char* path = "azookey_user_dict_roundtrip.json";
-  std::remove(path);
+  RemoveStoreFiles(path);
 
   {
-    azookey::learning::UserDictionary dict(path);
+    azookey::learning::UserDictionary dict(path, &azookey::learning::test::Crypto());
     azookey::learning::UserWord w;
     w.word = "日本語";
     w.ruby = "にほんご";
@@ -71,7 +84,7 @@ TEST(UserDictionaryTest, SaveLoadRoundTrip) {
     EXPECT_TRUE(dict.Save());
   }
 
-  azookey::learning::UserDictionary loaded(path);
+  azookey::learning::UserDictionary loaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   EXPECT_EQ(loaded.Size(), 2u);
 
@@ -88,13 +101,13 @@ TEST(UserDictionaryTest, SaveLoadRoundTrip) {
   EXPECT_FALSE(hits2[0].cid.has_value());
   EXPECT_FALSE(hits2[0].value.has_value());
 
-  std::remove(path);
+  RemoveStoreFiles(path);
 }
 
 TEST(UserDictionaryTest, ReplaceAllUsesAddSemanticsForDuplicates) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_user_dict_replace_all.json").string();
-  std::remove(path.c_str());
+  RemoveStoreFiles(path);
 
   azookey::learning::UserWord first;
   first.word = "azooKey";
@@ -108,7 +121,7 @@ TEST(UserDictionaryTest, ReplaceAllUsesAddSemanticsForDuplicates) {
   other.word = "Nihongo";
   other.ruby = "nihongo";
 
-  azookey::learning::UserDictionary dict(path);
+  azookey::learning::UserDictionary dict(path, &azookey::learning::test::Crypto());
   dict.ReplaceAll({first, other, replacement});
   EXPECT_EQ(dict.Size(), 2u);
   auto hits = dict.Lookup("azookey");
@@ -121,7 +134,7 @@ TEST(UserDictionaryTest, LoadMissingFileIsOk) {
   const std::string p2 =
       (std::filesystem::temp_directory_path() / "azookey_user_dict_definitely_missing.json")
           .string();
-  azookey::learning::UserDictionary dict(p2);
+  azookey::learning::UserDictionary dict(p2, &azookey::learning::test::Crypto());
   EXPECT_TRUE(dict.Load());
   EXPECT_EQ(dict.Size(), 0u);
 }
@@ -136,7 +149,7 @@ TEST(UserDictionaryTest, LoadMalformedRejects) {
     ASSERT_TRUE(f.is_open());
     f << "not json at all";
   }
-  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   EXPECT_FALSE(dict.Load());
 
   size_t corrupt_files = 0;
@@ -152,7 +165,7 @@ TEST(UserDictionaryTest, LoadMalformedRejects) {
   replacement.ruby = "あずきい";
   dict.Add(replacement);
   EXPECT_TRUE(dict.Save());
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
   std::filesystem::remove_all(root);
 }
@@ -162,13 +175,13 @@ TEST(UserDictionaryTest, SaveCreatesParentAndLeavesNoTempFile) {
   const auto path = root / "nested" / "user_dict.json";
   std::filesystem::remove_all(root);
 
-  azookey::learning::UserDictionary dict(path.string());
+  azookey::learning::UserDictionary dict(path.string(), &azookey::learning::test::Crypto());
   azookey::learning::UserWord word;
   word.word = "azooKey";
   word.ruby = "あずきい";
   dict.Add(word);
   EXPECT_TRUE(dict.Save());
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
   size_t temp_files = 0;
   for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
@@ -178,7 +191,7 @@ TEST(UserDictionaryTest, SaveCreatesParentAndLeavesNoTempFile) {
   }
   EXPECT_EQ(temp_files, 0u);
 
-  azookey::learning::UserDictionary loaded(path.string());
+  azookey::learning::UserDictionary loaded(path.string(), &azookey::learning::test::Crypto());
   EXPECT_TRUE(loaded.Load());
   EXPECT_EQ(loaded.Size(), 1u);
 
@@ -186,37 +199,39 @@ TEST(UserDictionaryTest, SaveCreatesParentAndLeavesNoTempFile) {
 }
 
 #ifdef _WIN32
-TEST(UserDictionaryTest, NonAsciiWindowsPathRoundTripsAndQuarantines) {
+TEST(UserDictionaryTest, NonAsciiWindowsPathRoundTripsAndPreservesUndecryptableFile) {
   const auto root = std::filesystem::temp_directory_path() / L"azookey_非ASCII_辞書";
   const auto path = root / L"ユーザー辞書.json";
   std::filesystem::remove_all(root);
 
-  azookey::learning::UserDictionary dictionary(path);
+  azookey::learning::UserDictionary dictionary(path, &azookey::learning::test::Crypto());
   dictionary.Add({"日本語", "にほんご", 1285, 501, -5.0});
   ASSERT_TRUE(dictionary.Save());
-  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
 
-  azookey::learning::UserDictionary loaded(path);
+  azookey::learning::UserDictionary loaded(path, &azookey::learning::test::Crypto());
   ASSERT_TRUE(loaded.Load());
   const auto entries = loaded.Lookup("にほんご");
   ASSERT_EQ(entries.size(), 1u);
   EXPECT_EQ(entries.front().word, "日本語");
 
   {
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    std::ofstream output(azookey::learning::EncryptedPathFor(path),
+                         std::ios::binary | std::ios::trunc);
     ASSERT_TRUE(output);
     output << "not valid json";
   }
-  azookey::learning::UserDictionary malformed(path);
+  azookey::learning::UserDictionary malformed(path, &azookey::learning::test::Crypto());
   EXPECT_FALSE(malformed.Load());
-  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
   size_t corrupt_files = 0;
   for (const auto& entry : std::filesystem::directory_iterator(root)) {
     if (entry.path().filename().wstring().find(L".corrupt.") != std::wstring::npos) {
       ++corrupt_files;
     }
   }
-  EXPECT_EQ(corrupt_files, 1u);
+  EXPECT_EQ(corrupt_files, 0u);
+  EXPECT_FALSE(malformed.Save());
 
   std::filesystem::remove_all(root);
 }

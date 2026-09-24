@@ -2189,6 +2189,7 @@ TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationHalfwidthCandidateCommitsW
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationUsesLocalCandidatesWithRewritersEnabled) {
   OemCompositionTranslationGuard oem_translation;
   TextServiceHarness h;
+  FakeCompositionAttachment attachment(h);
   h.service.set_number_rewriter_enabled_for_test(true);
   h.service.set_symbol_rewriter_for_test(true);
   h.service.set_emoji_rewriter_for_test(true);
@@ -2199,6 +2200,26 @@ TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationUsesLocalCandidatesWithRew
   EXPECT_EQ(shown[0].surface, "、");
   EXPECT_EQ(shown[1].surface, ",");
   EXPECT_FALSE(h.service.candidate_window_show_pending_for_test());
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L",");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NumberRewriterDigitAfterStandalonePunctuationMatchesCommit) {
+  OemCompositionTranslationGuard oem_translation;
+  AsciiDecimalDigitTranslationGuard digit_translation;
+  for (const auto [key, expected_reading, expected_text] :
+       {std::tuple{VK_OEM_COMMA, "、1", L"、1"}, std::tuple{VK_OEM_PERIOD, "。1", L"。1"}}) {
+    TextServiceHarness h;
+    FakeCompositionAttachment attachment(h);
+    h.service.set_number_rewriter_enabled_for_test(true);
+    ASSERT_TRUE(h.Press(key));
+    ASSERT_TRUE(h.TestPress('1'));
+    ASSERT_TRUE(h.Press('1'));
+    EXPECT_EQ(h.service.preedit_kana_, expected_reading);
+    EXPECT_EQ(attachment.composition_range.last_text, expected_text);
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(attachment.composition_range.last_text, expected_text);
+  }
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationDigitAndEscapeKeepReadingInSync) {

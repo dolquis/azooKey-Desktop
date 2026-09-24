@@ -1422,8 +1422,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     using core::UserAction;
     const bool is_input = IsActionKey(key_event, UserAction::Input);
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
+    // A composing digit not mapped by core belongs to the number rewriter's
+    // legacy path; a digit selecting a visible punctuation candidate stays in core.
     const bool standalone_punctuation =
-        IsStandalonePunctuation(CurrentPreeditSurface()) ||
+        (IsStandalonePunctuation(CurrentPreeditSurface()) &&
+         !(decimal_digit && !key_event && number_rewriter_.load(std::memory_order_relaxed))) ||
         (!has_preedit && composition_symbol &&
          (composition_symbol->raw == ',' || composition_symbol->raw == '.'));
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting

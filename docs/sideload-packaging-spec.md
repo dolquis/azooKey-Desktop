@@ -1900,7 +1900,9 @@ Provider 名は `azooKey-Desktop`。GUID はバージョン間で固定する。
 相関キーは `client_guid` と `request_id` の組とする。GUID 形式でない旧クライアントの
 ID はゼロ GUID とし、本文や任意文字列に置き換えない。`result` は Success=0、Timeout=1、
 Disconnected=2、Failed=3、Cancelled=4、`backend` は Unknown=0、Kana=1、Neural=2、Ai=3。
-`phase` は Converter=0、AiTransform=1、FrameWrite=2、FrameRead=3 とする。
+`phase` は Converter=0、AiTransform=1、FrameWrite=2、FrameRead=3 とする。この 4 値は
+構造化ログの phase（`docs/dev-infrastructure-spec.md` §7.7.2 の 11 値）の粗い射影であり、
+対応表と `trace_id` を載せない相関の規則は同 §7.3 を正典とする。
 converter の失敗後に代替変換が成功した場合、4002 は Failed、4001 は Success を記録する。
 `kana_len`、`reading_len`、`surface_len`、`payload_size` は UTF-8 バイト数、
 Composition の `length` は UTF-16 コード単位数、`latency_ms` は単調時計によるミリ秒。
@@ -1923,13 +1925,13 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 - 旧 §7.2 の `5000/5001 LearningObserve/Forget` は `reading, surface`（= 入力本文）を
   載せていたが §7.6 違反のため廃止する。代わりに本文長のみを `reading_len` /
   `surface_len`（整数）で記録し、内容は復元できないようにする。
-- `9000 Error` は自由文 `message` を載せず、`source`（`Module` enum で符号化したモジュール
+- `9000 Error` は自由文 `message` を載せず、`source`（`EtwModule` enum で符号化したモジュール
   識別子）/ `error_code`（`docs/dev-infrastructure-spec.md` §7.4 の 3 カテゴリ enum）/
   `hr`（HRESULT）のみとする。例外メッセージ等の自由文は §7.6 を適用済みの構造化ログ側へ
   出し、ETW には載せない。
 - `EtwLogger`（§7.3）は本文型の引数を受ける API を**持たない**。長さ・件数・enum・
   数値・GUID・ID のみを受ける型シグネチャに限定し、本文混入をコンパイル時に防ぐ。
-  `source` も `const char*` ではなく `Module` enum とし、呼び出し側が任意 / ユーザー由来の
+  `source` も `const char*` ではなく `EtwModule` enum とし、呼び出し側が任意 / ユーザー由来の
   文字列を渡せる引数を一切残さない。
 - ETW は本文を含まないメタ情報のみのため、レイテンシ trace（§7.6 redact 対象外）と
   同じく追加の同意を要さない。WPR トレース（`.etl`）の採取・共有はユーザー / 開発者の
@@ -1940,11 +1942,11 @@ opt-in で本文を出し得るのとは異なり、ETW は本文出力経路を
 `core/src/EtwLogger.cpp`：
 
 ```cpp
-// Module / ErrorCode は閉じた enum。文字列引数を一切持たせず、本文混入を
-// コンパイル時に防ぐ（§7.2.1）。ErrorCode は dev-infrastructure-spec.md §7.4 の
+// EtwModule / EtwErrorCode は閉じた enum。文字列引数を一切持たせず、本文混入を
+// コンパイル時に防ぐ（§7.2.1）。EtwErrorCode は dev-infrastructure-spec.md §7.4 の
 // 3 カテゴリ（transport / protocol / business）。§7.2 9000 Error と同一。
-enum class Module { Tip, Host, Settings };
-enum class ErrorCode { Transport, Protocol, Business };
+enum class EtwModule { Tip, Host, Settings, Ipc };
+enum class EtwErrorCode { Transport, Protocol, Business };
 
 class EtwLogger {
 public:
@@ -1952,10 +1954,10 @@ public:
     static void Unregister();
     static void LogActivate(...);
     static void LogIpcRequest(...);
-    // 自由文字列は受けない。source は Module enum、code は ErrorCode enum、
+    // 自由文字列は受けない。source は EtwModule enum、code は EtwErrorCode enum、
     // hr は HRESULT。例外メッセージ等の自由文は ETW に載せず、§7.6 適用済みの
     // 構造化ログへ出す（§7.2.1）。
-    static void LogError(Module source, ErrorCode code, HRESULT hr);
+    static void LogError(EtwModule source, EtwErrorCode code, std::int32_t hr);
 };
 ```
 

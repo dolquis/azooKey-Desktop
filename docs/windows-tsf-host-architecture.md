@@ -149,7 +149,8 @@ Linear が持つ。
   送信側は診断 CLI（`diagnostics/` の `azookey_diag` ターゲット）で、
   `Diagnostics.cpp` の IPC プローブが Handshake → Ping に続けて `request_id=3` /
   `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
-  して診断スナップショットへ格納する。TIP からは送らない。
+  して診断スナップショットへ格納する。TIP が送る契機と、応答のうち `fallback_state` だけを
+  使う規則は `docs/dev-infrastructure-spec.md` §8.5.1 が定める。
 - ⚠️ enum のみ定義済み、Payload/Dispatcher 未実装:
   - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
   - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`

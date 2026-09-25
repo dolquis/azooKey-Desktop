@@ -1443,7 +1443,7 @@ Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
 |---|---|
 | `ts` | ISO 8601 タイムスタンプ |
 | `level` | `info` / `warn` / `error` |
-| `component` | `tip` / `host` / `ipc` |
+| `component` | 行を書いたプロセス。`tip` / `host` |
 | `event` | 機械可読なイベント名 |
 | `request_id` | IPC リクエスト相関 ID（該当時。§7.3） |
 | `trace_id` | ユーザー 1 アクション相関 ID（該当時。§7.3 / §7.7.1） |
@@ -1452,8 +1452,13 @@ Windows の `%LOCALAPPDATA%` 解決は TIP / Host とも
 | `result` | `ok` / `error` / `cancelled` / `blocked`（secure 抑止時。`docs/privacy-and-secure-input-spec.md` §5.1） |
 | `error_code` | §7.4 のエラーコード（error 時） |
 
+`component` はログファイル（`tip-*.jsonl` / `host-*.jsonl`）と 1:1 に対応する。
+`core/` と `ipc/` はライブラリとして TIP / Host に組み込まれ、自分のファイルを持たないため、
+その処理の行は呼び出したプロセスの `component` で書く。どのコードが計測したかは
+`event` と `phase` で表し、`component` を増やして表さない。
+
 `phase` の取り得る値は §7.7.2 の 11 値に固定し、`core/include/azookey/logging/Phase.h`
-の `azookey::logging::Phase` を全コンポーネント（tip / ipc / host）の正典とする。
+の `azookey::logging::Phase` を全コンポーネント（tip / host）の正典とする。
 所要時間フィールドは `latency_ms` を正典名とし、`duration_ms` 等の別名は使わない。
 phase 別の絶対オフセット（key_down=0 起点）が必要な場合のみ任意で `t_ms` を併記する。
 
@@ -1490,11 +1495,13 @@ backend 選択、query latency、error、exception summary、learning/user-dict
   - `ipc_pending_id_`（TIP メンバ）— `QueryCandidates` の応答相関と staleness 判定
     （M10、`req_id == ipc_pending_id_`）・`Cancel.target_request_id` に用いる「最新リクエスト」id。
   - 接続ローカル連番（`next_id`、Handshake=1 の後 2 から開始）— 送信キュー
-    （`ipc_send_queue_`）に積む `CommitObservation` / `Cancel` の wire id。このキューは
+    （`ipc_send_queue_`）に積む `CommitObservation` / `Cancel`、idle 時の `Health`（§8.3）、
+    設定変更時に確立済み接続で再実行する Handshake（§8.2）の wire id。送信キューは
     応答有無が混在する: **`CommitObservation` は応答あり**（TIP が `expects_response=true`
     で送り、`CommitObservationResponse` を待つ。`tsf-tip/src/TextService.cpp` /
     `inference-host/src/Dispatcher.cpp`）、**`Cancel` のみ応答なし**。
-  どちらも `tsf-tip/src/TextService.cpp`。ログ相関では `(trace_id, request_id)` に加え
+  どちらも `tsf-tip/src/TextService.cpp`。2 系統は独立に採番するため、同じ接続上で
+  同じ数値の `request_id` が現れうる。ログ相関では `(trace_id, request_id)` に加え
   MessageType で系統を区別する。`CommitObservation` の応答は**必ず受信・相関する**
   （読み飛ばすと次の受信が stale 応答を拾い pipe ストリームが desync するため、
   「応答なし」扱いにできるのは `Cancel` のみ）。
@@ -1511,9 +1518,37 @@ backend 選択、query latency、error、exception summary、learning/user-dict
 
 フェーズは §7.7.2 の **11 値に固定** し、正典 enum は
 `core/include/azookey/logging/Phase.h`（`azookey::logging::Phase`）とする。
-M41 では粗い部分集合（例: `romaji_convert` / `model_inference` / `total`）のみ記録し、
-M51 で全 11 phase を記録する。phase 体系は 1 つだけで、M41 用と M51 用の別系統は持たない。
+phase の記録は M51 で行う（§7.1.1）。phase 体系は 1 つだけで、M41 用と M51 用の別系統は持たない。
 各フェーズの所要時間は §7.2 の `latency_ms` フィールドに記録して遅延要因を切り分ける。
+
+ETW（`docs/sideload-packaging-spec.md` §7）は固定長の型付きイベントであり、
+`IpcPhase`（3003）/ `InferencePhase`（4002）の `phase` に 4 値の `EtwPhase` を使う。
+これは上記 11 値の別体系ではなく、ETW の固定レイアウトに載せるための粗い射影とする。
+対応は次のとおりで、JSON Lines 側の集計はこの表で ETW と突き合わせる。
+
+| `EtwPhase` | `Phase`（§7.7.2） |
+|---|---|
+| `Converter` | `model_inference` |
+| `FrameWrite` | `pipe_send`（client 側の要求送信） |
+| `FrameRead` | `pipe_recv`（client 側の応答受信） |
+| `AiTransform` | 対応なし（外部 / ローカル AI backend の変換。11 値の外） |
+
+`AiTransform` に対応する phase が必要になった場合は、§7.7.2 の規則に従い `Phase` へ
+patch として追加し、本表を更新する。`EtwPhase` 側に JSON Lines に無い値を足すときも
+本表へ行を加える。
+
+ETW は文字列を持たない（`docs/sideload-packaging-spec.md` §7.2.1）ため `trace_id` を載せず、
+相関キーを `(client_guid, request_id)` とする。`client_guid` は TIP インスタンスの ID で、
+primary 接続と control 接続で共有する。TIP インスタンスごとに独立して採番される `request_id` の
+TIP 間の衝突を分ける。1 つの TIP の中では 2 系統の allocator と control 接続の wire id が
+同じ数値を取りうる。`IpcRequest`（3000）は `message_type` を持つが、`IpcResponse` / `IpcPhase` /
+`InferenceStart` / `InferenceEnd` は MessageType も接続の識別子も持たないため、
+`(client_guid, request_id)` は ETW の中で要求を一意に決めるキーではない。ETW は区間の所要時間と
+OS イベント（CSwitch / DiskIO）との重ね合わせに使い、要求単位の厳密な結合は JSON Lines の
+`(trace_id, request_id)` と MessageType で行う。ETW の行を要求へ結び付ける必要がある調査では、
+JSON Lines の同じ `request_id` の行と時刻で照合し、一意に決まらない組は結合しない。
+JSON Lines と ETW を突き合わせるときも、TIP 間の衝突は JSON Lines では `trace_id`、ETW では
+`client_guid` で分ける。
 
 ### 7.4 エラーコード体系
 
@@ -1523,16 +1558,25 @@ M51 で全 11 phase を記録する。phase 体系は 1 つだけで、M41 用�
 - `protocol` — JSON パース失敗、未知 MessageType、payload 不整合
 - `business` — モデル未ロード、変換失敗、辞書 I/O 失敗
 
+JSON Lines の `error_code` と ETW `9000 Error` の `error_code`（`EtwErrorCode`）は同じ 3 値を使う。
+JSON Lines ではカテゴリ名の文字列（`transport` / `protocol` / `business`）を値とする。
+IPC 応答 payload の `error` 文字列（`unsupported_message_type`、`safe_mode` など）は
+カテゴリより細かい理由であり、`error_code` の値に使わない。ログに理由を残す場合は
+`error_code` にカテゴリを、理由は別フィールドに置く。
+
 ### 7.5 タイムアウト規約
 
-変換候補問い合わせのタイムアウトを定義する（例: ソフト 150ms / ハード
-300ms）。ソフト超過はログに記録、ハード超過は当該リクエストを打ち切る。
+変換候補問い合わせを含む request レイヤの timeout は、処理種別ごとに 1 つの deadline とする。
+値は §8.5.2 の timeout 表が正典である。deadline を超えた要求は打ち切り、遅れて届いた応答は
+staleness check で破棄し、超過をログに記録する。変換要求（`QueryCandidates` など）は Host に
+Cancel を送り、ローカル候補（§8.3）で入力を続ける。`Health` のように Host 側で重い処理を
+伴わない要求は Cancel を送らない。ソフト / ハードの 2 段は持たず、打ち切り前の警告段階は置かない。
 打ち切りが連続した場合の劣化モードへの移行は §8.3 の劣化判定に従う。
 
 本節が定めるのは request レイヤ（要求送信から応答受信まで。推論時間を含む）の
 規約であり、transport レイヤのフレームデッドライン（§6.4.7）とは別物である。
-両者は独立に働き、値を一致させない。フレームデッドラインのソフト超過も本節と
-同じくログ記録に留める（配線は M41）。
+両者は独立に働き、値を一致させない。フレームデッドラインはソフト / ハードの 2 段を持ち、
+ソフト超過はログ記録に留める（§6.4.7。ログの配線は M41）。
 
 ### 7.6 プライバシー配慮（redaction ポリシー正典）
 
@@ -1571,7 +1615,13 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 - redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
   パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。
 - 本ポリシーの実装は M44 診断 ZIP（§12.5）と secure redaction（同 §5 / §8）で
-  **共通の redaction 関数** を用い、二重定義・不整合を作らない。
+  **共通の redaction 関数** を用い、二重定義・不整合を作らない。共通関数は、フィールド名から
+  本文系・機密を判定する `logging::IsSensitiveRuntimeLogField`
+  （`core/include/azookey/logging/RuntimeLogger.h`）と、自由文字列のユーザーパスを環境変数表記へ
+  正規化し資格情報の形をした部分を伏せる `core::RedactFreeText`
+  （`core/include/azookey/core/Redaction.h`）とする。診断 ZIP の settings は、本文系 field の判定に
+  `logging::IsSensitiveRuntimeLogField` を使い、それに加えて §12.5 の `settings.redacted.json` 行が
+  定める settings 固有の field（API key、prompt、path）を処理する。本文系の判定を別に書き起こさない。
 - レイテンシ trace（§7.7）は本文を含まないメタ情報であり、本ポリシーの
   redact 対象外（phase 別 `latency_ms` は Release でも記録してよい）。
 - 互換性テスト（§13）でも、Release 既定で本文がログ・成果物に残らないことを
@@ -1579,10 +1629,10 @@ IME である以上、入力本文・候補語をそのままログに出すと�
 
 ### M41 受け入れ条件
 
-- TIP / Host が JSON Lines ログを `%LOCALAPPDATA%\azooKey\logs\` に出力
-- 各行に `request_id` / `phase` / `latency_ms` / `result` が含まれる
-- エラーコードが 3 カテゴリ enum で固定される
-- タイムアウト規約がコードとログに反映される
+- `AZOOKEY_LOG=1` のとき TIP / Host が JSON Lines ログを `%LOCALAPPDATA%\azooKey\logs\` に出力
+- 各行に `ts` / `component` / `level` / `event` が含まれ、IPC 要求に関する行は `request_id` を持つ
+- エラーを記録する行の `error_code` が §7.4 の 3 カテゴリのいずれかになる
+- タイムアウト規約（§7.5）の deadline 超過がログに記録される
 - Release ビルドで入力本文・候補語がログに出力されない
 
 ### 7.7 M51 拡張: レイテンシ内訳トレーサ
@@ -1613,7 +1663,7 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 
 #### 7.7.2 計測フェーズ
 
-| フェーズ | 説明 | 計測コンポーネント |
+| フェーズ | 説明 | 計測するコード（行の `component` は §7.2 のとおりプロセス名） |
 |---|---|---|
 | `key_down` | TIP がキーを受け取った時刻 | tsf-tip |
 | `romaji_convert` | ローマ字かな変換 | core / tsf-tip |
@@ -1646,7 +1696,7 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 
 ```json
 {"ts":"2026-05-27T10:00:00.000Z","trace_id":"abc","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.001Z","trace_id":"abc","component":"core","phase":"romaji_convert","latency_ms":0.04,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.001Z","trace_id":"abc","component":"tip","phase":"romaji_convert","latency_ms":0.04,"level":"info","result":"ok"}
 {"ts":"2026-05-27T10:00:00.015Z","trace_id":"abc","component":"host","phase":"model_inference","latency_ms":14.5,"backend":"cuda","level":"info","result":"ok"}
 {"ts":"2026-05-27T10:00:00.018Z","trace_id":"abc","component":"tip","phase":"total","latency_ms":18.3,"level":"info","result":"ok"}
 ```
@@ -1861,14 +1911,14 @@ M42 の `Ready` / `Degraded` を更に細分化する:
 ```
 Healthy
   ↓ Host no response (M42 transport)
-DegradedSimple   ← Host 不調は TIP 内ローカル候補（§8.3）、モデル不調は Host の SimpleConverter で継続
+DegradedSimple   ← Host 不調。TIP 内ローカル候補（§8.3）で継続
   ↓ reconnect success
 Recovering
   ↓ health ok
 Healthy
 
 Healthy
-  ↓ model load failed / inference timeout
+  ↓ model load failed
 DegradedModel    ← Host は健康だが Zenzai 無効、辞書 + 学習 + Simple
   ↓ reload success
 Healthy
@@ -1881,22 +1931,24 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
 | 状態 | 説明 | ユーザー影響 |
 |---|---|---|
 | `Healthy` | Host + Zenzai 正常 | 通常 |
-| `DegradedSimple` | Host またはモデル不調。Host 不調は TIP 内ローカル候補（§8.3）、モデル不調は Host の SimpleConverter で継続 | 変換品質低下 |
-| `DegradedModel` | Host は正常だが Zenzai 無効 | 変換品質低下 |
+| `DegradedSimple` | Host 不調（pipe 切断または connected-but-silent）。TIP 内ローカル候補（§8.3）で継続 | 変換品質低下 |
+| `DegradedModel` | Host は正常だが Zenzai 無効（モデルのロード失敗）。Host の辞書 + 学習 + SimpleConverter で継続 | 変換品質低下 |
 | `Recovering` | 再接続 / 再ロード中 | 一時的に候補更新遅延 |
 | `SafeMode` | 連続クラッシュにより AI / 学習を停止 | 安定優先 |
 
 遷移トリガと駆動 timeout（§8.5.2）を一覧化する。`request_id` / `trace_id`
-（§7.3）で staleness を判定し、状態遷移は §7 のログに記録する。
+（§7.3）で staleness を判定し、状態遷移は §7 のログに記録する。`DegradedSimple` /
+`RecoveringTransport` を通る行は、TIP が合成する表示状態（下記「ユーザー可視状態の合成」）の
+遷移であり、Host の状態機械はこれらの行を通らない。
 
 | From | To | トリガ | 駆動 timeout / 閾値 |
 |---|---|---|---|
-| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent） | Ping 500ms / QueryCandidates fast 150ms / Live 80ms / Heavy 800ms 超過 |
-| `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 or 推論 timeout | Model load 30s / 推論 deadline 超過 |
-| `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake） | exponential backoff（§8.3） |
-| `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` 再ロード**受理**（完了ではない） | Model load 30s |
-| `Recovering`（transport 復旧） | `Healthy` | Ping 往復成功（pipe + Handshake Ready） | Ping 500ms 以内 |
-| `Recovering`（model 復旧） | `Healthy` | `LoadModelResponse.ok==true`（受理）**かつ後続 `Health.model_loaded==true`**（`model_loaded` は `HealthPayload`／`HandshakeResponse` の field。`LoadModelResponse` は `ok`/`error` のみ）。Ping や ok だけでは遷移しない | Model load 30s |
+| `Healthy` | `DegradedSimple` | Host 無応答（pipe 切断 or connected-but-silent）。TIP が §8.3 の劣化判定で判定する。一括変換の deadline 超過は接続を切るため pipe 切断として扱う | `Health` 500ms / `QueryCandidates` 150ms の deadline 超過が連続 2 回（§8.3） |
+| `Healthy` | `DegradedModel` | Zenzai モデル load 失敗 | Model load 30s |
+| `DegradedSimple` | `Recovering`（transport 復旧） | 再接続成功（pipe 再確立 + Handshake 受理） | exponential backoff（§8.3） |
+| `DegradedModel` | `Recovering`（model 復旧） | `LoadModel` または `UpdateConfig` によるパス付きの再ロード開始（完了ではない） | Model load 30s |
+| `Recovering`（transport 復旧） | `Healthy` | Handshake 受理後に TIP が Host の状態（`QueryDiagnostics.fallback_state`）を受け取る | `QueryDiagnostics` 500ms 以内 |
+| `Recovering`（model 復旧） | `Healthy` | 再ロードが成功し `model_loaded` が真になる（Host の `InferenceEngine` が判定する。再ロードの受理や `LoadModelResponse.ok` だけでは遷移しない） | Model load 30s |
 | `Recovering`（transport 復旧） | `DegradedSimple` | 再接続失敗 / 再 timeout | 同上 timeout 再超過 |
 | `Recovering`（model 復旧） | `DegradedModel` | 再ロード失敗 / timeout / `model_loaded==false` | Model load 30s 超過 |
 | `Any` | `SafeMode` | Host プロセスが 60s 以内に 3 回連続クラッシュ（§8.5.3） | crash カウンタ ≥3 / 60s |
@@ -1919,26 +1971,83 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
   失敗すると `DegradedModel`、`DegradedModel` でパス付きのロードを始めると `RecoveringModel`、
   そのロードが成功して `model_loaded` が真になると `Healthy`、失敗すると `DegradedModel` へ戻る。
   別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
+- 推論の失敗と deadline 超過は状態を変えない。ロード済みモデルの推論が例外や deadline 超過で
+  失敗した要求は、その要求だけを SimpleConverter の候補へ落とす（`ZenzaiModelConverter` の
+  fallback）。次の要求は再び Zenzai で処理する。要求単位で落とすため、単発の遅延でモデル全体を
+  止めず、`DegradedModel` からの復帰にモデルの再ロードも要さない。連続した失敗で状態を
+  遷移させる規則は、閾値の根拠（ベンチでの頻度と品質への影響）を得てから本表へ行として追加する。
 - `SafeMode`: Host が起動時に §8.5.3 の条件で入り、`UpdateConfig` で
   `settings.safeMode.enabled=false` を読んだときに `Healthy` へ戻る。起動時や `UpdateConfig` で
   `enabled=true` を読んだときは、突入の経路によらずその値に従って `SafeMode` に置く
   （`health_state_restored`）。フラグが真である間の強制事項は §8.5.3 が定める。
 
-transport 系（`Healthy` → `DegradedSimple` → `RecoveringTransport` → `Healthy`）は TIP が
-観測する事象であり、M42 の接続状態機械（§8.2）の `Degraded` / 再接続 / `Ready` が同じ
-遷移を担う。M47 はこれを TIP 側に重複させず、§8.3 の劣化判定とローカル候補をそのまま使う。
-候補ウィンドウの劣化インジケータ（§8.5.4）を実装する時点で、TIP がこの対応に沿って
-transport 系のイベントを状態機械へ渡す。
+transport 系（`Healthy` → `DegradedSimple` → `RecoveringTransport` → `Healthy`）は Host が
+自分で観測できない。応答しない Host は自分の無応答を報告できず、1 つの Host に複数の TIP が
+接続して観測が食い違いうるためである。したがって Host は transport 系のイベント
+（`HostUnresponsive` / `TransportReconnected` / `HostHealthConfirmed` / `TransportRecoveryFailed`）を
+発行せず、Host の状態機械が `DegradedSimple` / `RecoveringTransport` に入る経路は無い。
+transport 系は M42 の接続状態機械（§8.2）が担い、TIP 側に `HealthStateMachine` を複製しない。
+
+##### ユーザー可視状態の合成（TIP）
+
+候補ウィンドウのインジケータ（§8.5.4）が表示する状態は、TIP が自分の接続状態と Host の報告から
+次の順に合成する。上の行が成り立てば下の行は見ない。
+
+| 条件 | 表示する状態 |
+|---|---|
+| §8.3 のローカル候補を即時に表示する条件（直近の接続・Handshake の失敗、確立済み接続の切断、`Degraded`）が成り立つ | `degraded_simple` |
+| `Ready` に戻ってから Host の状態を受け取るまで（`RecoveringTransport` に当たる） | 直前の表示を保つ |
+| 上記以外 | Host が報告した `fallback_state` |
+
+TIP 起動直後の初回接続前は §8.3 と同じく劣化扱いにせず、何も表示しない。
+
+TIP は Host の状態を primary 接続の `QueryDiagnostics`（§12.6）で取得し、`fallback_state`
+だけを使う。IPC の payload は追加しない。送る契機は次の 2 つとする。
+
+- Handshake が受理された直後。初回接続、再接続、設定変更による Handshake の再実行（§8.2）を含む。
+  Host が `settings.json` へ `safeMode` を書くと TIP の設定監視が Handshake をやり直すため、
+  SafeMode への突入もこの契機で観測できる。
+- `Health`（§8.3）の応答の `status` または `model_loaded` が直前の応答から変わったとき。
+
+`QueryDiagnostics` は入力中の要求と同じ接続で直列に扱い、応答待ちの上限と、入力の要求が
+来たときの打ち切りは §8.3 の `Health` と同じ規則に従う。取得に失敗した場合と入力の要求で
+打ち切った場合は表示を変えず、次に primary 接続が監視間隔（§8.3）の間 idle になったときに
+送り直す。取得できるまで送り直しを続け、上の 2 つの契機を待たない。
+応答の `loaded_model_path` / `last_error` などの文字列は、TIP の表示にもログにも使わない。
+
+`HealthPayload.status` は Host が `last_error` から決める粗い値である。`last_error` が無ければ
+`ok`、あってモデルがロード済みまたはパスが設定済みなら `degraded`、それ以外は `error` とする。
+TIP はこの値を状態の取得契機にだけ使い、表示する状態を直接決めない。
+
+##### `fallback_state` の導出（Host）
+
+Host は `QueryDiagnostics.fallback_state` を状態機械の状態と設定から次の順に決める。
+上の行が成り立てば下の行は見ない。
+
+| 条件 | `fallback_state` |
+|---|---|
+| 状態機械が `SafeMode` | `safe_mode` |
+| `model.enabled=false`（SimpleConverter 固定が意図された設定） | `healthy` |
+| 状態機械が `DegradedModel` / `RecoveringModel` | `degraded_model` |
+| 状態機械が `Healthy` | `healthy` |
+
+モデルの無効化は model 系の遷移を起こさない。状態機械が `DegradedModel` のまま無効化されても、
+2 行目により `fallback_state` は `healthy` になる。`Healthy` のまま進むモデルのロード
+（起動直後の初回ロードを含む）と、
+GPU backend のロードに失敗して CPU backend で動いている状態は Zenzai が使えるか使える見込みがあるため
+`healthy` とし、backend の違いは `QueryDiagnostics.backend` で示す。`degraded_simple` は Host が
+自分で返す値ではなく、Host に到達できないときに client 側（TIP の合成、`azookey_diag` の D-009）が
+使う値とする。
 
 #### 8.5.2 timeout 表
 
-M42 §7.5 のソフト/ハードを処理種別ごとに具体化する:
+§7.5 の request レイヤ deadline を処理種別ごとに定める:
 
 | 処理 | timeout |
 |---|---:|
-| IPC Ping | 500ms |
-| QueryCandidates fast | 150ms |
-| QueryLiveConversion | 80ms |
+| IPC Ping / `Health`（TIP の監視は `Health` を使う。§8.3）/ TIP の `QueryDiagnostics`（§8.5.1） | 500ms |
+| `QueryCandidates` fast | 150ms |
+| `QueryCandidates` live（`live=true` の要求。専用の MessageType は持たない） | 80ms |
 | Heavy inference（ローカル Zenzai 変換等） | 800ms |
 | 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕。正典は `docs/ai-backend-spec.md` §7.1 |
 | ModernBERT scoring（M57） | 30〜50ms |
@@ -1964,8 +2073,8 @@ fallback や次リクエスト処理を妨げる設計は不可とする。
 #### 8.5.3 SafeMode 突入条件
 
 直近 60 秒以内に Host プロセスが 3 回連続でクラッシュした場合、Host は
-`SafeMode` に入り、設定で AI / 学習を一時的に強制 OFF にする。次回起動
-時にユーザー通知で復旧手順を案内する。
+`SafeMode` に入り、ユーザーが解除するまで AI / 学習を強制 OFF にする。突入はユーザーへ
+通知して解除手順を案内する（通知の契機と表示は §8.5.4）。
 
 クラッシュは Host 自身が次の起動時に検知する。TIP は Host の終了コードを観測できない
 ためである。pipe モードの Host は起動時に `%LOCALAPPDATA%\azooKey\data\host_run_state.txt`
@@ -1995,7 +2104,10 @@ supervisor を介さない手動起動に限られる。解除の手順は `docs
 M47 v1（M30 未完了時）は TIP の候補ウィンドウ下部バナーで通知する。設定アプリの通知バナーへの統合は
 M30 完了後の follow-up とし、M30 を M47 v1 の前提にはしない。
 SafeMode は `settings.safeMode.enabled = true` フラグとして永続化し、
-ユーザーが手動で解除するまで継続する。キーは他の設定と同じ camelCase とし、
+ユーザーが手動で解除するまで継続する。解除は `safeMode.enabled=false` への書き換えと、
+Host の再起動または `UpdateConfig`（§8.5.1）で行う。解除しても `enteredAt` / `lastCrashCount` は
+消さず、直近の突入の記録として残し、次の突入で上書きする。`host_run_state.txt` の
+クラッシュ記録も解除では消さず、これまでどおり正常終了で空にする。キーは他の設定と同じ camelCase とし、
 `settings/mvp-settings.schema.json` に次の形で持つ:
 
 ```json
@@ -2020,21 +2132,37 @@ TIP の設定監視にも届き、TIP は通常の設定変更と同じく Hands
 
 #### 8.5.4 UI 通知
 
-候補ウィンドウ下部の控えめインジケータで状態を表示する:
+候補ウィンドウ下部の控えめインジケータで、§8.5.1 で TIP が合成した表示状態を示す。
+表示する状態ごとの文言とボタンは次のとおりとする。`healthy` は表示しない。
 
-```
-⚠️ Zenzai が応答しないため、簡易変換で継続しています [詳細] [再試行]
-```
+| 表示状態 | 文言 | ボタン |
+|---|---|---|
+| `degraded_simple` | ⚠️ 変換エンジンに接続できないため、かな・カタカナ候補で継続しています | [詳細] |
+| `degraded_model` | ⚠️ Zenzai を使えないため、簡易変換で継続しています | [詳細] [再試行] |
+| `safe_mode` | ⚠️ 異常終了が続いたため、安全モードで動作しています（AI と学習を停止中） | [詳細] |
 
 毎回ラベルを出すと邪魔になるため:
 
-- 状態遷移直後のみ 1 回表示（5 秒で自動消滅）
+- 表示状態が変わった直後のみ 1 回表示（5 秒で自動消滅）。変わったときに候補ウィンドウが
+  出ていなければ、次に候補ウィンドウを出したときに表示する
+- `safe_mode` は、TIP が接続後に初めて観測したときも「変わった直後」として扱う。Host は起動時に
+  SafeMode へ入るため、これが §8.5.3 の「突入の通知」に当たる。同じ Host 世代
+  （`host_generation_id`、§8.2）の間、TIP インスタンスごとに 1 回だけ表示する
 - 詳細クリックの遷移先は M30 / M44 の進捗で分岐する。M47 v1（M30 未完了
   かつ M44 v1 完了時）は `azookey_diag.exe` の起動方法を案内する TIP 内
   ポップアップを表示する。M30 完了と M44 §12.7 の診断タブ統合（M44
   follow-up）の両方が揃った後は、設定アプリの診断タブを直接開く動作に
   切り替える
-- 「再試行」クリックで `LoadModel` IPC を送る（現在選択中のモデル・backend で再ロード）
+- 「再試行」クリックで TIP は `UpdateConfig` を送る。Host は `settings.json` を読み直し、
+  選択中のモデルと backend で再ロードする（§8.5.1 の `RecoveringModel`）。TIP はモデルの
+  パスも backend も持たないため、`LoadModel` は使わない。再ロードは完了まで応答しないため、
+  IPC ワーカーとは別のスレッドから、Cancel と同じく Handshake を済ませた短命な control 接続
+  （§7.3）で送り、primary 接続の入力処理を待たせない。応答は control 接続で待ってから閉じ、
+  待ちの上限は §8.5.2 の Model load とする。送信中は同じ TIP インスタンスから重ねて送らず、
+  [再試行] を押せない状態にする。複数の TIP から届いた `UpdateConfig` は Host が直列に処理する。
+  結果は §8.5.1 の契機で取得する `fallback_state` で観測する
+- `safe_mode` では再ロードが `error: "safe_mode"` で拒否されるため [再試行] を出さず、
+  [詳細] で `docs/debugging.md`「典型トラブル」の解除手順を案内する
 
 #### 8.5.5 適応モデル切替の再解釈（DEV-411 で確定 / 2026-08）
 
@@ -2044,11 +2172,11 @@ karukan は `max_latency_ms` を超えたら main（90M）から light（26M）�
 ためである。ParallelBeam も同じ理由で採らない。
 
 その上で、この機構が解こうとしている問題、すなわち「遅いときは軽い経路へ落として応答を
-返す」ことは、**M47 の縮退経路が既に実現している**。§8.5.1 の `Healthy` → `DegradedModel`
-は推論 deadline 超過を遷移トリガに持ち、その閾値は §8.5.2 の Heavy inference 800ms で
-ある。これが karukan の `max_latency_ms` に対応する。落ちる先は軽量モデルではなく、
-Zenzai を無効化した辞書 + 学習 + SimpleConverter の経路であり、モデルをもう 1 つ常駐
-させずに同じ目的を果たす。backend の切り替えもモデル差し替えとは別の軸にあり、ロード失敗時に
+返す」ことは、**M47 の要求単位の fallback が担う**。§8.5.1 のとおり、推論が deadline を
+超えた要求はその要求だけを SimpleConverter の候補へ落とし、状態機械は遷移させない。
+この deadline は §8.5.2 の Heavy inference 800ms であり、これが karukan の
+`max_latency_ms` に対応する。落ちる先は軽量モデルではなく、辞書 + 学習 +
+SimpleConverter の経路であり、モデルをもう 1 つ常駐させずに同じ目的を果たす。backend の切り替えもモデル差し替えとは別の軸にあり、ロード失敗時に
 CPU backend へ再試行し、それも失敗したら SimpleConverter へ落とす経路は
 `docs/model-management-spec.md` §5.3 が定めている。
 
@@ -2441,13 +2569,13 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-005 | 接続 + Handshake Ready | — | 接続不可 or Handshake 失敗 | ✗ |
 | D-006 | Ping RTT ≤ 100ms | 100ms < RTT ≤ 500ms | RTT > 500ms or 無応答（§8.5.2 Ping timeout） | ✗ |
 | D-007 | `model.enabled=false`（Zenzai 無効 = 該当なし）、または enabled かつ `model.selectedPath` が存在（R1=`.gguf` ファイル / R2=`genai_config.json` を含む ONNX GenAI ディレクトリ） | enabled だがパス未設定（Zenzai ON だがモデル未選択） | enabled かつ設定済みパスが不在 | ✗（M45 モデル選択へ誘導） |
-| D-008 | `model.enabled=false`、またはモデル未選択（`model.selectedPath` 空 = 検証対象なし。該当なしとし、未選択の warning は D-007 が担う）、または enabled かつ**選択済み**モデルが `valid` **かつ loaded**（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled かつ選択済みモデルが `valid` だが未ロード（fallback 動作中） | enabled かつ**選択済み**モデルの形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
-| D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由） |
+| D-008 | `model.enabled=false`、またはモデル未選択（`model.selectedPath` 空 = 検証対象なし。該当なしとし、未選択の warning は D-007 が担う）、または enabled かつ**選択済み**モデルが `valid` **かつ loaded**（R1=GGUF magic / version、R2=`genai_config.json` パース + 参照 ONNX 実在。model-management-spec §3.3 の format 別 `valid` を使う） | enabled かつ選択済みモデルが `valid` だが未ロード（fallback 動作中）、または Host の実効ランタイムが `mock`（§12.6 `engine`） | enabled かつ**選択済み**モデルの形式別検証に失敗（R1: magic 不一致 / version 非対応 / 破損、R2: config 不正 / 参照 ONNX 欠落） | ✗ |
+| D-009 | `fallback_state == healthy`、または（`safe_mode` でない）`model.enabled=false`（SimpleConverter 固定が意図された設定） | `degraded_simple` / `degraded_model`（enabled 時の非意図的劣化）。Host に到達できず `QueryDiagnostics` を得られない場合は、`model.enabled` なら `degraded_simple`、そうでなければ `healthy` とみなす（§8.5.1） | `safe_mode`（`model.enabled` に関わらず最優先） | ✗（復旧は D-005 / D-008 修復経由。`safe_mode` の解除は §8.5.3） |
 | D-010 | 読み込み成功・schema 妥当（空 / 新規を含む） | 旧 schema だが migration 可能 | 読み込み不可 / 破損 | ✗（バックアップ後の初期化は手動確認） |
 | D-011 | JSON 読み込み成功（空 / 新規・欠損ファイルは空として正常） | — | パース不可 / 破損 | ✗（バックアップ後の修復は手動確認） |
 | D-012 | schema validation 成功 | 旧 schema だが migration 可能 | validation 失敗 | ✗（不正値リセットは確認後） |
 | D-013 | logs ディレクトリ書き込み可 | — | ディレクトリ未作成、または書き込み不可 | ✓ ディレクトリ作成 |
-| D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
+| D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可）、または settings の読み込み・schema 検証の失敗や DPAPI を使えないことで判定できない（`details.state` が `unavailable`。settings の不備そのものは D-012 が担う） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | —（CLI は対象アプリ内の TSF context を直接観測しない） | x64 の通常プロセス、または前面ウィンドウ・プロセス情報・アーキテクチャ・トークンの取得不能で、既知の非対応条件を確定できない | x86、x64 以外のアーキテクチャ、または AppContainer プロセスを確認 | ✗（§13 互換性情報へ） |
 
 ARM64 ホストでは `IsWow64Process2` の結果だけで x64 エミュレーションと ARM64
@@ -2520,13 +2648,11 @@ azookey_diag.exe --collect --output azookey-diag.zip     # 診断 ZIP 生成
       "id": "D-008",
       "name": "model_validation",
       "status": "warning",
-      "message": "Model is valid but not loaded yet. SimpleConverter fallback is active.",
+      "message": "Selected model is valid but is not loaded",
       "details": {
-        "configured_path": "%LOCALAPPDATA%\\azooKey\\models\\zenzai.gguf",
-        "exists": true,
         "valid": true,
         "loaded": false,
-        "backend": "cpu"
+        "engine": "llama_cpp"
       }
     }
   ]
@@ -2584,7 +2710,7 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 │   ├── tip-YYYYMMDD.jsonl.N  (ローテート世代)
 │   └── README.txt            (切り詰めまたは除外時のみ)
 ├── environment.txt           (OS バージョン / CPU / RAM / GPU)
-└── crash-summary.txt         (WER ダンプの要約のみ、ダンプ本体は含めない)
+└── crash-summary.txt         (azooKey 管理ダンプの一覧のみ、ダンプ本体は含めない)
 ```
 
 `diag.json` は §12.3 `--json` 出力と同一の **stable schema** とし、以下を正典とする
@@ -2609,8 +2735,8 @@ azookey-diagnostics-YYYYMMDD-HHMMSS.zip
 - `status` は `checks[].status` の最悪値（error > warning > ok）。
 - 各 ZIP メンバの突き合わせは §7.3 の相関 ID では行わず、診断は単発スナップショット。
   `host-health.json` は §12.6 `QueryDiagnostics` の payload を保存する。ただし
-  自由文字列の `last_error` / `ep_last_error` はパス正規化 + 本文 redaction を
-  通してから保存し（§12.5 / §12.6）、生の payload を**そのまま書き出す経路は持たない**。
+  文字列 field は §12.5 の `host-health.json` 行の規則で処理してから保存し、
+  生の payload を**そのまま書き出す経路は持たない**。
 - 新しい check は `D-0NN` を末尾追加（後方互換）。既存 ID の `name` 改名は破壊的変更扱い。
 
 ### 12.5 機密情報の取り扱い
@@ -2636,11 +2762,11 @@ ZIP メンバごとの redaction ルールを以下に固定する。本文系�
 |---|---|
 | `diag.json` | §12.4 stable schema の制約に従い `message` / `details` に本文・候補・prompt を含めない。パス中のユーザー名は `%LOCALAPPDATA%` 等の環境変数表記へ正規化する |
 | `settings.redacted.json` | API key 等の機密 field に加え、Magic Conversion prompt 系 field（`promptPrefixByApp` の各値、および移行後の `profilesByApp.*.promptPrefix`〔`profilesByApp` は process / window class をキーとする map。配列ではなく全エントリ値が対象〕）を `***redacted***` に置換。さらに path 系 field（`model.selectedPath` / `model.directory` / `customRomajiTablePath` 等の絶対パス）は `diag.json` / `host-health.json` と同じくユーザー名を含む生パス（`C:\Users\...`）を残さないよう `%LOCALAPPDATA%` 等の環境変数表記へ正規化する。§7.6 はログ本文の正典で settings の prompt / path field を対象に含めないため、診断 ZIP では本欄で明示的に処理し、§12.5 の「prompt を含めない」方針と整合させる |
-| `host-health.json` | §12.6 `QueryDiagnostics` payload。構造化 field（bool / enum / 数値）はそのまま保存するが、自由文字列の `last_error` / `ep_last_error` はパス正規化（`%LOCALAPPDATA%` 等）+ 本文 redaction を通してから保存し、生のユーザーパス・backend / API 診断文を残さない |
+| `host-health.json` | §12.6 `QueryDiagnostics` payload。構造化 field（bool / enum / 数値）はそのまま保存するが、文字列の `loaded_model_path` / `last_error` / `ep_last_error` は `core::RedactFreeText`（§7.6）でパス正規化（`%LOCALAPPDATA%` 等）と資格情報の伏せ字を通してから保存し、生のユーザーパスを残さない。自由文字列から本文を後で検出することはできないため、Host は `last_error` / `ep_last_error` を作る時点で入力本文・候補・prompt を入れず、固定の理由語・HRESULT・backend や HTTP のステータスだけで構成する |
 | `ipc-ping.json` | RTT / 成否のみ |
 | `logs/*.jsonl*` | §7.6 の共通 field 判定を用いてログとローテート世代を収集（Release 既定で本文なし）。Debug かつ `AZOOKEY_LOG_BODY=1` の本文入りログは収集時に再 redact する。新しいファイルから 1 ファイル末尾 1 MiB、合計 8 MiB まで収集し、切り詰めまたは除外は `logs/README.txt` に記録する |
 | `environment.txt` | OS バージョン / CPU / RAM / GPU のみ。ホスト名・ユーザー名・シリアル番号を含めない |
-| `crash-summary.txt` | WER ダンプの要約のみ。ダンプ本体・スタック上の文字列バッファを含めない |
+| `crash-summary.txt` | azooKey 管理ダンプ（`docs/sideload-packaging-spec.md` §8.2 の保存先と命名規則に合う `.dmp`）の件数・合計サイズと、各ファイルのファイル名・サイズ・更新時刻だけを記録する。ファイル名は `<module>` / UTC 時刻 / PID だけから成り、ディレクトリ部分は書かない。ダンプを開かず、ダンプ本体・スタック上の文字列バッファを含めない。同意が `off` で保存先が無い場合と、ダンプが 0 件の場合はその旨を 1 行で記す。WER（OS）が保存したダンプは対象外とする |
 
 ### 12.6 IPC: QueryDiagnostics
 
@@ -2677,8 +2803,9 @@ v1 の reader は `rss_mb`、`learning_entries`、`user_dict_entries` の欠落�
 `engine`、`backend`、`fallback_state` は必須であり、欠落時は payload 全体を不正とする。
 
 `--collect` 時はこの IPC で取得した値を `host-health.json` に保存する。
-自由文字列の `last_error` / `ep_last_error` は失敗時にユーザーパスや backend /
-API 診断文を含みうるため、保存前にパス正規化 + 本文 redaction を通す（§12.5）。
+`last_error` / `ep_last_error` は失敗時にユーザーパスを含みうるため、保存前に
+§12.5 の `host-health.json` 行の規則で処理する。Host がこれらに入力本文・候補・prompt を
+入れないことも同行が定める。
 
 ### 12.7 UI
 

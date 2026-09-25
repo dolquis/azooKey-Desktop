@@ -507,6 +507,20 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   EXPECT_FALSE(batch_payload->partial);
   EXPECT_FALSE(batch_payload->canceled);
 
+  user_dict.Add({"明日", "あした"});
+  const auto reverse_request =
+      MakeReq(84, ipc::MessageType::ReverseConvert, ipc::BuildReverseConvertRequest({"明日"}));
+  const auto reverse_after_wrong = token_dispatcher.Dispatch(reverse_request);
+  ASSERT_TRUE(reverse_after_wrong);
+  EXPECT_EQ(reverse_after_wrong->type, reverse_request.type);
+  EXPECT_EQ(reverse_after_wrong->request_id, reverse_request.request_id);
+  EXPECT_EQ(reverse_after_wrong->trace_id, reverse_request.trace_id);
+  const auto reverse_before_payload =
+      ipc::ParseReverseConvertResponse(reverse_after_wrong->payload_json);
+  ASSERT_TRUE(reverse_before_payload);
+  EXPECT_TRUE(reverse_before_payload->reading.empty());
+  EXPECT_DOUBLE_EQ(reverse_before_payload->confidence, 0.0);
+
   req.handshake_token = "expected-token";
   auto matched = token_dispatcher.Dispatch(
       MakeReq(9, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
@@ -522,6 +536,17 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   ASSERT_TRUE(add_payload.has_value());
   EXPECT_TRUE(add_payload->ok);
   EXPECT_EQ(user_dict.Lookup("あずきい").size(), 1u);
+
+  // AddUserWord reloads the persisted dictionary and drops the in-memory word
+  // inserted before the handshake; restore it for the authenticated check.
+  user_dict.Add({"明日", "あした"});
+  const auto reverse_after_handshake = token_dispatcher.Dispatch(reverse_request);
+  ASSERT_TRUE(reverse_after_handshake);
+  const auto reverse_after_payload =
+      ipc::ParseReverseConvertResponse(reverse_after_handshake->payload_json);
+  ASSERT_TRUE(reverse_after_payload);
+  EXPECT_EQ(reverse_after_payload->reading, "あした");
+  EXPECT_DOUBLE_EQ(reverse_after_payload->confidence, 1.0);
 }
 
 TEST_F(DispatcherTest, Ping) {

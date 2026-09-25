@@ -316,6 +316,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.canceled = false;
       return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(r));
     }
+    case ipc::MessageType::ReverseConvert:
+      return MakeResponse(req, ipc::BuildReverseConvertResponse(ipc::ReverseConvertResponse{}));
     case ipc::MessageType::Ping: {
       ipc::PingPayload p;
       p.nonce = 0;

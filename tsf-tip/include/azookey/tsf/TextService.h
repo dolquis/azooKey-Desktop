@@ -235,6 +235,17 @@ class TextService final : public ITfTextInputProcessorEx,
     reconversion_cache_surface_ = std::move(surface);
     reconversion_cache_candidates_ = std::move(candidates);
   }
+  void set_reconversion_ui_for_test(ITfContext* context, ITfRange* range, ITfCandidateList* list) {
+    ClearReconversionState();
+    if (text_edit_context_) text_edit_context_->Release();
+    text_edit_context_ = context;
+    if (context) context->AddRef();
+    reconversion_range_ = range;
+    if (range) range->AddRef();
+    reconversion_list_ = list;
+    if (list) list->AddRef();
+  }
+  bool has_reconversion_ui_for_test() const { return reconversion_list_ != nullptr; }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
   HRESULT request_commit_edit_session_for_test(ITfContext* context) {
@@ -499,7 +510,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void NoteHostDeadlineMissed();
   bool HasQueuedIpcWorkLocked() const;
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
-                                ipc::MessageType expected_type);
+                                ipc::MessageType expected_type,
+                                std::optional<ipc::Envelope>* received = nullptr);
   bool ObserveHostGeneration(const std::string& host_generation_id);
   void RequestHostOptionRefresh();
   void RearmPendingQuery(uint64_t req_id);

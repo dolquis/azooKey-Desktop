@@ -39,6 +39,7 @@ inline constexpr uint32_t kOemPeriod = 0xBE;
 inline constexpr uint32_t kOem2 = 0xBF;
 inline constexpr uint32_t kOemAttn = 0xF0;
 inline constexpr uint32_t kOemAuto = 0xF3;
+inline constexpr uint32_t kOemEnlw = 0xF4;
 }  // namespace vk
 
 // First layer of the key translation (docs/legacy-parity-spec.md §1.5.3):

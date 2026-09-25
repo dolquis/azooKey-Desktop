@@ -55,6 +55,7 @@ azookey::core::EtwGuid TraceGuid(const std::string& value) {
   return bytes;
 }
 constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
+constexpr uint32_t kReconversionResponseTimeoutMs = 750;
 constexpr uint32_t kCancelConnectTimeoutMs = 200;
 constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
 constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
@@ -944,6 +945,19 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
 
   StartIpcWorker();
+  // Activation can happen while a document already has focus (for example,
+  // switching IMEs in place). Its selection will not necessarily change again.
+  ITfDocumentMgr* focused_document = nullptr;
+  if (SUCCEEDED(thread_mgr_->GetFocus(&focused_document)) && focused_document) {
+    ITfContext* focused_context = nullptr;
+    if (SUCCEEDED(focused_document->GetTop(&focused_context)) && focused_context) {
+      AdviseTextEditSink(focused_context);
+      reconversion_prefetch_pending_ = true;
+      candidate_ui_.PostCandidatesReady();
+      focused_context->Release();
+    }
+    focused_document->Release();
+  }
   try {
     if (const auto local = core::GetLocalAppDataDirectory()) {
       local_settings_.SetOnChanged([this] { RequestHostOptionRefresh(); });
@@ -1412,9 +1426,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 
     const uint32_t modifiers = CurrentKeyModifiers();
-    const bool toggle_open = (wParam == VK_KANJI || wParam == VK_OEM_AUTO) &&
-                             (modifiers & (core::kModifierCtrl | core::kModifierAlt |
-                                           core::kModifierWin | core::kModifierShift)) == 0;
+    const bool toggle_open =
+        (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
+        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
+                      core::kModifierShift)) == 0;
     if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
       return S_OK;
     // Ctrl chords reach the IME only when they map to an implemented action.
@@ -1570,9 +1585,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
     const uint32_t modifiers = CurrentKeyModifiers();
-    const bool toggle_open = (wParam == VK_KANJI || wParam == VK_OEM_AUTO) &&
-                             (modifiers & (core::kModifierCtrl | core::kModifierAlt |
-                                           core::kModifierWin | core::kModifierShift)) == 0;
+    const bool toggle_open =
+        (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
+        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
+                      core::kModifierShift)) == 0;
     if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
       return S_OK;
     // Ctrl chords reach the IME only when they map to an implemented action.
@@ -3084,7 +3100,8 @@ TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id)
 }
 
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
-                                           ipc::MessageType expected_type) {
+                                           ipc::MessageType expected_type,
+                                           std::optional<ipc::Envelope>* received) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace std::chrono;
 
@@ -3118,6 +3135,7 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
         }
         continue;
       }
+      if (received) *received = std::move(response);
       return true;
     }
   }
@@ -3905,7 +3923,9 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   if (FAILED(record->GetSelectionStatus(&changed)) || !changed) return S_OK;
   reconversion_prefetch_pending_ = false;
   ++reconversion_generation_;
-  if (reconversion_range_ && !reconversion_list_) ClearReconversionState();
+  // A displayed list still refers to the old range. A later Enter must never
+  // replace text at a location the user has moved away from.
+  if (reconversion_range_) ClearReconversionState();
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     reconversion_cache_surface_.clear();
@@ -3932,6 +3952,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
   if (request.generation != reconversion_generation_.load()) return true;
   std::vector<std::wstring> candidates;
   bool connected = true;
+  bool responded = false;
   Envelope reverse;
   reverse.version = 1;
   reverse.request_id = next_id++;
@@ -3941,16 +3962,21 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
   if (!ipc_client_.Send(reverse)) {
     connected = false;
   } else {
-    const auto reply = ipc_client_.ReceiveWithTimeout(750);
-    if (!reply || !IsExpectedIpcResponse(*reply, reverse.request_id, reverse.type)) {
-      connected = false;
+    std::optional<Envelope> reply;
+    const bool got_reply = WaitForIpcResponseOrStop(kReconversionResponseTimeoutMs,
+                                                    reverse.request_id, reverse.type, &reply);
+    responded |= got_reply;
+    if (!got_reply) {
+      connected = ipc_client_.IsConnected();
     } else if (const auto payload = ParseReverseConvertResponse(reply->payload_json);
                payload && !payload->reading.empty() &&
                request.generation == reconversion_generation_.load()) {
       QueryCandidatesRequest query;
       query.reading = payload->reading;
       query.max_candidates = max_candidates_.load(std::memory_order_relaxed);
-      query.live = false;
+      // This runs on every selection change. The live path bounds model work
+      // and skips NLL reranking while retaining dictionary candidates.
+      query.live = true;
       query.secure = false;
       query.learning_allowed = false;
       Envelope qenv;
@@ -3962,9 +3988,26 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
       if (!ipc_client_.Send(qenv)) {
         connected = false;
       } else {
-        const auto qres = ipc_client_.ReceiveWithTimeout(300);
-        if (!qres || !IsExpectedIpcResponse(*qres, qenv.request_id, qenv.type)) {
-          connected = false;
+        std::optional<Envelope> qres;
+        const bool got_candidates = WaitForIpcResponseOrStop(kReconversionResponseTimeoutMs,
+                                                             qenv.request_id, qenv.type, &qres);
+        responded |= got_candidates;
+        if (!got_candidates) {
+          connected = ipc_client_.IsConnected();
+          if (connected) {
+            // An idle timeout leaves the pipe usable. Cancel the slow query;
+            // any reply racing with Cancel is ignored by the next receive loop.
+            if (!SendCancelOutOfBand(qenv.request_id, kTimeoutCancelConnectTimeoutMs,
+                                     kTimeoutCancelHandshakeTimeoutMs)) {
+              Envelope cancel;
+              cancel.version = 1;
+              cancel.request_id = next_id++;
+              cancel.trace_id = "tip-reconversion-timeout-cancel";
+              cancel.type = MessageType::Cancel;
+              cancel.payload_json = BuildCancel({qenv.request_id});
+              connected = ipc_client_.Send(cancel);
+            }
+          }
         } else if (const auto parsed = ParseQueryCandidatesResponse(qres->payload_json)) {
           for (const auto& candidate : parsed->candidates) {
             const std::wstring surface = Utf8ToWide(candidate.surface);
@@ -3979,7 +4022,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
   if (!connected) {
     ipc_client_.Disconnect();
     NoteHostDeadlineMissed();
-  } else {
+  } else if (responded) {
     NoteHostResponded();
   }
   if (request.generation == reconversion_generation_.load()) {
@@ -4590,8 +4633,12 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context) {
 
 HRESULT TextService::CompleteReconversionSelection(size_t index) {
   if (!reconversion_list_) return S_FALSE;
-  const HRESULT hr = reconversion_list_->SetResult(static_cast<ULONG>(index), CAND_FINALIZED);
-  if (SUCCEEDED(hr)) ClearReconversionState();
+  // SetResult can synchronously notify OnEndEdit, which may release our list.
+  ITfCandidateList* list = reconversion_list_;
+  list->AddRef();
+  const HRESULT hr = list->SetResult(static_cast<ULONG>(index), CAND_FINALIZED);
+  list->Release();
+  if (SUCCEEDED(hr) && reconversion_list_) ClearReconversionState();
   return hr;
 }
 

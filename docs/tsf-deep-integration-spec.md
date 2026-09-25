@@ -509,6 +509,7 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 |---|---|---|
 | `VK_KANJI` (0x19) | 半角/全角 | IME On/Off トグル |
 | `VK_OEM_AUTO` (0xF3) | 同上（一部 HW） | 同上 |
+| `VK_OEM_ENLW` (0xF4) | 同上（一部 HW） | 同上 |
 | `VK_NONCONVERT` (0x1D) | 無変換 | 確定済み or 選択を平仮名/カタカナ/英字 と巡回変換 |
 | `VK_CONVERT` (0x1C) | 変換 | 確定済み or 選択を再変換 (M20 と同経路) |
 | `VK_OEM_ATTN` / `VK_DBE_ALPHANUMERIC` (0xF0) | Caps / 英数 | alphanumeric モードトグル |

@@ -92,6 +92,10 @@ const Entry kEntries[] = {
      0,
      {A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku,
       A::ToggleHankaku}},
+    {VK_OEM_ENLW,
+     0,
+     {A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku,
+      A::ToggleHankaku}},
     {VK_NONCONVERT,
      0,
      {A::ToggleHiraKata, A::ToggleHiraKata, A::ToggleHiraKata, A::ToggleHiraKata, A::ToggleHiraKata,
@@ -114,6 +118,7 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kReturn, static_cast<uint32_t>(VK_RETURN));
   EXPECT_EQ(vk::kKanji, static_cast<uint32_t>(VK_KANJI));
   EXPECT_EQ(vk::kOemAuto, static_cast<uint32_t>(VK_OEM_AUTO));
+  EXPECT_EQ(vk::kOemEnlw, static_cast<uint32_t>(VK_OEM_ENLW));
   EXPECT_EQ(vk::kEscape, static_cast<uint32_t>(VK_ESCAPE));
   EXPECT_EQ(vk::kConvert, static_cast<uint32_t>(VK_CONVERT));
   EXPECT_EQ(vk::kNonConvert, static_cast<uint32_t>(VK_NONCONVERT));

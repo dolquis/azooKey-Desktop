@@ -176,6 +176,31 @@ class TestRange final : public ITfRange {
   ULONG refs_{1};
 };
 
+class ChangedSelectionRecord final : public ITfEditRecord {
+ public:
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfEditRecord) return E_NOINTERFACE;
+    *out = static_cast<ITfEditRecord*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+  STDMETHODIMP_(ULONG) Release() override { return --refs_; }
+  STDMETHODIMP GetSelectionStatus(BOOL* changed) override {
+    if (!changed) return E_POINTER;
+    *changed = TRUE;
+    return S_OK;
+  }
+  STDMETHODIMP GetTextAndPropertyUpdates(DWORD, const GUID**, ULONG, IEnumTfRanges**) override {
+    return E_NOTIMPL;
+  }
+
+ private:
+  ULONG refs_{1};
+};
+
 TEST(ReconversionFunctionTest, QueryRangeExpandsCaretToJapaneseWord) {
   TestContext context;
   auto text = std::make_shared<std::wstring>(L"abc明日xyz");
@@ -354,6 +379,35 @@ TEST(ReconversionFunctionTest, FunctionProviderUsesOnlyMatchingNonsecureCache) {
   service.Deactivate();
 }
 
+TEST(ReconversionFunctionTest, MovingSelectionDismissesDisplayedReconversion) {
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日別");
+  TestRange original(&context, text, 0, 2);
+  TestRange moved(&context, text, 3, 3);
+  auto* function = new azookey::tsf::ReconversionFunction(
+      1, [](ITfRange*, const std::wstring&, std::vector<std::wstring>& candidates) {
+        candidates.push_back(L"あした");
+        return S_OK;
+      });
+  ITfCandidateList* list = nullptr;
+  ASSERT_EQ(function->GetReconversion(&original, &list), S_OK);
+  function->Release();
+  ASSERT_NE(list, nullptr);
+
+  azookey::tsf::TextService service;
+  service.set_reconversion_ui_for_test(&context, &original, list);
+  list->Release();
+  context.selection = &moved;
+  ChangedSelectionRecord record;
+  EXPECT_EQ(service.OnEndEdit(&context, 1, &record), S_OK);
+  EXPECT_FALSE(service.has_reconversion_ui_for_test());
+  BOOL eaten = TRUE;
+  EXPECT_EQ(service.OnTestKeyDown(&context, VK_RETURN, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(*text, L"明日別");
+  service.Deactivate();
+}
+
 TEST(ReconversionFunctionTest, SelectedConvertKeyGetsHostCandidatesAndFinalizesReplacement) {
   using namespace azookey::ipc;
   char* prior_token = nullptr;
@@ -389,7 +443,8 @@ TEST(ReconversionFunctionTest, SelectedConvertKeyGetsHostCandidatesAndFinalizesR
     }
     if (request.type == MessageType::QueryCandidates) {
       const auto payload = ParseQueryCandidatesRequest(request.payload_json);
-      if (payload && payload->reading == "あした" && !payload->secure) ++query_count;
+      if (payload && payload->reading == "あした" && !payload->secure && payload->live)
+        ++query_count;
       QueryCandidatesResponse result;
       result.candidates.push_back({"明日", "あした", 1.0, "test"});
       result.candidates.push_back({"あした", "あした", 0.9, "test"});

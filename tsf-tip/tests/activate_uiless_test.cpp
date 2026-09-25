@@ -285,3 +285,17 @@ TEST(TsfTipActivateUiLessTest, ToggleKeyboardOpenWritesCompartment) {
   EXPECT_EQ(service.Deactivate(), S_OK);
   EXPECT_EQ(service.ToggleKeyboardOpen(), E_UNEXPECTED);
 }
+
+TEST(TsfTipActivateUiLessTest, OemEnlwCanReopenClosedKeyboard) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0, /*keyboard_open=*/false);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  BOOL eaten = FALSE;
+  ASSERT_EQ(service.OnTestKeyDown(nullptr, VK_OEM_ENLW, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  eaten = FALSE;
+  ASSERT_EQ(service.OnKeyDown(nullptr, VK_OEM_ENLW, 0, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}

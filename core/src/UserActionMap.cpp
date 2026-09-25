@@ -70,6 +70,7 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
     switch (virtual_key) {
       case vk::kKanji:
       case vk::kOemAuto:
+      case vk::kOemEnlw:
         return Make(UserAction::ToggleHankaku, modifiers);
       case vk::kNonConvert:
         return Make(UserAction::ToggleHiraKata, modifiers);

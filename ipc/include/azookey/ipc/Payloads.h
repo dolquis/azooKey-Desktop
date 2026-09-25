@@ -126,6 +126,17 @@ struct QueryCandidatesResponse {
   std::string corrected_reading;
 };
 
+// request_id travels in the Envelope, as with QueryCandidates.
+struct QueryLiveConversionRequest {
+  std::string kana;
+  std::string context;
+};
+
+struct QueryLiveConversionResponse {
+  std::string surface;
+  double confidence{};  // Normalized to [0.0, 1.0].
+};
+
 struct BatchConversionSegment {
   std::string reading;
   std::vector<CandidateField> candidates;
@@ -306,6 +317,8 @@ std::string BuildLoadModelRequest(const LoadModelRequest& p);
 std::string BuildLoadModelResponse(const LoadModelResponse& p);
 std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p);
 std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p);
+std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p);
+std::string BuildQueryLiveConversionResponse(const QueryLiveConversionResponse& p);
 std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& p);
 std::string BuildQueryBatchConversionResponse(const QueryBatchConversionResponse& p);
 std::string BuildReverseConvertRequest(const ReverseConvertRequest& p);
@@ -335,6 +348,9 @@ std::optional<LoadModelRequest> ParseLoadModelRequest(const std::string& json);
 std::optional<LoadModelResponse> ParseLoadModelResponse(const std::string& json);
 std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::string& json);
 std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::string& json);
+std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const std::string& json);
+std::optional<QueryLiveConversionResponse> ParseQueryLiveConversionResponse(
+    const std::string& json);
 std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
     const std::string& json);
 std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(

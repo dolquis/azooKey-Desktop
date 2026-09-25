@@ -1711,6 +1711,160 @@ TEST(TsfTipOnKeyDownPreeditTest, CapsKeyTogglesAlphanumericPassThrough) {
   EXPECT_TRUE(h.Press('A'));
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionUpdatesPreeditAndRejectsStaleResponse) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  const uint64_t first_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(first_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"蚊");
+
+  ASSERT_TRUE(h.Press('N'));
+  EXPECT_EQ(h.context.document->text, L"かん");
+  h.service.set_live_conversion_result_for_test(first_id, "か", "古");
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"かん");
+  ASSERT_TRUE(h.Press(VK_BACK));
+  EXPECT_EQ(h.context.document->text, L"か");
+  h.service.set_live_conversion_result_for_test(first_id, "か", "古");
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"か");
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_EQ(h.context.document->text, L"");
+  EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionCommitsDisplayedSurface) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSelectingEscCommitsRestoredReading) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  azookey::ipc::CandidateField candidate;
+  candidate.surface = "蚊";
+  candidate.reading = "か";
+  candidate.source = "test";
+  h.service.set_cached_candidates_for_test({candidate});
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(h.Press(VK_ESCAPE));
+  ASSERT_EQ(h.context.document->text, L"か");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionSettingChangeCommitsDisplayedSurface) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(request_id, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  h.service.set_live_conversion_for_test(false);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"蚊");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionUsesDedicatedIpcAndUpdatesPreedit) {
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-live-test-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::atomic<bool> received{false};
+  azookey::ipc::NamedPipeServer server;
+  ASSERT_TRUE(server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        azookey::ipc::Envelope res;
+        res.version = req.version;
+        res.request_id = req.request_id;
+        res.trace_id = req.trace_id;
+        res.type = req.type;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse handshake;
+          handshake.host_version = "test-host";
+          handshake.host_generation_id = "live-test";
+          handshake.accepted = true;
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(handshake);
+          return res;
+        }
+        if (req.type == azookey::ipc::MessageType::QueryLiveConversion) {
+          const auto payload = azookey::ipc::ParseQueryLiveConversionRequest(req.payload_json);
+          if (payload && payload->kana == "か" && payload->context.empty()) received.store(true);
+          res.payload_json = azookey::ipc::BuildQueryLiveConversionResponse({"蚊", 0.8});
+          return res;
+        }
+        return std::nullopt;
+      }));
+
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return received.load(); }));
+  ASSERT_TRUE(WaitUntil([&] { return h.service.has_live_conversion_result_for_test(); }));
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"蚊");
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionDisabledKeepsCandidateQuery) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_FALSE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, LiveConversionKeepsReadingInSecureContext) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  EXPECT_EQ(h.context.document->text, L"か");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, NonConvertWithoutSelectionPassesThrough) {
   TextServiceHarness h;
   EXPECT_FALSE(h.TestPress(VK_NONCONVERT));

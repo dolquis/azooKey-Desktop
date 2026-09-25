@@ -693,6 +693,23 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
     const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
     const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
     const InferenceTelemetry* telemetry) {
+  return QueryCandidatesExImpl(requested_kana, context, now_epoch_sec, cancel, max_candidates,
+                               live, telemetry, false);
+}
+
+std::optional<core::Candidate> InferenceEngine::QueryLiveConversion(
+    const std::string& kana, const std::string& context, uint64_t now_epoch_sec,
+    const std::atomic<bool>* cancel, const InferenceTelemetry* telemetry) {
+  if (kana.empty()) return std::nullopt;
+  auto result = QueryCandidatesExImpl(kana, context, now_epoch_sec, cancel, 1, true, telemetry, true);
+  if (result.candidates.empty()) return std::nullopt;
+  return std::move(result.candidates.front());
+}
+
+InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
+    const std::string& requested_kana, const std::string& context, uint64_t now_epoch_sec,
+    const std::atomic<bool>* cancel, uint32_t max_candidates, bool live,
+    const InferenceTelemetry* telemetry, bool fast_only) {
   auto canceled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
   if (canceled()) return {};
@@ -738,7 +755,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   std::vector<core::Candidate> merged;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    converter = active_converter_;
+    converter = fast_only ? fallback_converter_ : active_converter_;
     auto_word_store = auto_word_store_;
     fallback_converter = fallback_converter_;
     config = config_;

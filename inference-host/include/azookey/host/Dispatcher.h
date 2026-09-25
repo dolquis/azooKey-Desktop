@@ -58,6 +58,7 @@ class Dispatcher {
   std::optional<ipc::Envelope> HandleLoadModel(const ipc::Envelope& req);
   bool SafeModeEnabled() const;
   std::optional<ipc::Envelope> HandleQueryCandidates(const ipc::Envelope& req);
+  std::optional<ipc::Envelope> HandleQueryLiveConversion(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleQueryBatchConversion(const ipc::Envelope& req);
   std::optional<ipc::Envelope> HandleReverseConvert(const ipc::Envelope& req);
   void HandleCancel(const ipc::Envelope& req);

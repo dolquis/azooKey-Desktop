@@ -431,9 +431,9 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 以下は Phase 5〜6 に対応する IPC メッセージの一覧で、配線済みの型も含む。
 
-> 注: `MessageType` enum は 21 の named 型 + `Unknown` sentinel = 22 entries
+> 注: `MessageType` enum は 22 の named 型 + `Unknown` sentinel = 23 entries
 > （`ipc/include/azookey/ipc/Messages.h` が正典）。このうち Payload/Dispatcher まで
-> 配線済みは 17 種で、残る 4 種（`QueryPredictions` / `QueryCorrections` /
+> 配線済みは 18 種で、残る 4 種（`QueryPredictions` / `QueryCorrections` /
 > `CommitCorrection` / `UpdateUserWord`）は enum のみ。配線済み判定は
 > `Messages.h`・`Payloads.h`/`.cpp`・`Dispatcher.cpp` の 3 点を突き合わせて行い、
 > enum に存在するだけの型を「利用可能」とみなさない。新メッセージ型を enum に
@@ -442,7 +442,7 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|
-| `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14) | legacy-parity §2 |
+| `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14)、配線済み。`kana`・`context` を送り、`surface`・`confidence` を受け取る。要求 ID は Envelope の `request_id` | legacy-parity §2 |
 | `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15) | legacy-parity §3 + rich X-2 |
 | `TransformSelectedText` / `Response` | TIP → Host | Phase 5 (M16) | legacy-parity §4 |
 | `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |

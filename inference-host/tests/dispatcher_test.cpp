@@ -593,6 +593,31 @@ TEST_F(DispatcherTest, QueryCandidates) {
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
 }
 
+TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
+  ipc::QueryLiveConversionRequest query{"にほん", ""};
+  const auto request = MakeReq(21, ipc::MessageType::QueryLiveConversion,
+                               ipc::BuildQueryLiveConversionRequest(query));
+  const auto response = dispatcher.Dispatch(request);
+  ASSERT_TRUE(response);
+  EXPECT_EQ(response->type, ipc::MessageType::QueryLiveConversion);
+  EXPECT_EQ(response->request_id, request.request_id);
+  EXPECT_EQ(response->trace_id, request.trace_id);
+  const auto parsed = ipc::ParseQueryLiveConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->surface, "日本");
+  EXPECT_GE(parsed->confidence, 0.0);
+  EXPECT_LE(parsed->confidence, 1.0);
+}
+
+TEST_F(DispatcherTest, QueryLiveConversionSuppressesPreCanceledReply) {
+  scheduler.Cancel(22);
+  ipc::QueryLiveConversionRequest query{"わたし", ""};
+  const auto response = dispatcher.Dispatch(MakeReq(
+      22, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(query)));
+  EXPECT_FALSE(response);
+  EXPECT_FALSE(scheduler.IsCanceled(22));
+}
+
 TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
   ipc::QueryBatchConversionRequest q;
   q.reading = "にほん";

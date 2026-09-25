@@ -36,6 +36,17 @@ target_compile_definitions(azookey_bench PRIVATE
   AZOOKEY_BENCH_CONFIG="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,unknown>"
 )
 
+add_executable(azookey_rich_features_bench rich_features_bench.cpp)
+add_dependencies(azookey_rich_features_bench azookey_benchmark_commit_header)
+target_include_directories(azookey_rich_features_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
+target_link_libraries(azookey_rich_features_bench
+  PRIVATE azookey_benchmark_result azookey_host
+          azookey_project_options azookey_project_warnings
+)
+target_compile_definitions(azookey_rich_features_bench PRIVATE
+  AZOOKEY_BENCH_CONFIG="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,unknown>"
+)
+
 add_executable(azookey_zenzai_bench zenzai_bench.cpp)
 add_executable(azookey_nll_bench nll_bench.cpp)
 target_link_libraries(azookey_nll_bench
@@ -85,11 +96,19 @@ if(AZOOKEY_BUILD_TESTS)
 
   set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS
     azookey_bench
+    azookey_rich_features_bench
     azookey_zenzai_bench
     azookey_nll_bench
   )
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
+  add_test(NAME azookey_rich_features_bench_smoke
+           COMMAND azookey_rich_features_bench --json)
+  set_tests_properties(azookey_rich_features_bench_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION
+      "\"bench\":\"azookey_rich_features_bench\".*\"schemaVersion\":1.*\"passed\":true"
+    TIMEOUT 10
+  )
   add_test(NAME azookey_bench_json_smoke
            COMMAND azookey_bench --json --max-p95-ms 50)
   set_tests_properties(azookey_bench_json_smoke PROPERTIES

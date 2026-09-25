@@ -260,10 +260,10 @@ TEST(InputStateTest, TypingWhileSelectingClosesWindowAndContinuesReading) {
             (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
 }
 
-TEST(InputStateTest, TypingWhileSelectingWithLiveConversionReturnsToComposing) {
+TEST(InputStateTest, TypingWhileSelectingWithLiveConversionReturnsToPreviewing) {
   const HandleResult result =
       Selecting().WithLiveConversion(true).HandleEvent(Ev(UserAction::Input, U'k'));
-  EXPECT_EQ(result.next.kind(), K::Composing);
+  EXPECT_EQ(result.next.kind(), K::Previewing);
   EXPECT_EQ(result.next.Reading(), "かなk");
   EXPECT_EQ(result.actions,
             (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かなk"}, QueryCandidates{"かなk"}}));
@@ -456,7 +456,7 @@ TEST(InputStateTest, ForgetAndDebugWindowKeepState) {
 TEST(InputStateTest, LiveConversionTurnsComposingIntoPreviewing) {
   const InputState first =
       InputState{}.WithLiveConversion(true).HandleEvent(Ev(UserAction::Input, U'k')).next;
-  EXPECT_EQ(first.kind(), K::Composing);
+  EXPECT_EQ(first.kind(), K::Previewing);
   EXPECT_EQ(first.HandleEvent(Ev(UserAction::Input, U'a')).next.kind(), K::Previewing);
 }
 

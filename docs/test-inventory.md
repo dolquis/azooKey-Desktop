@@ -117,6 +117,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `benchmark_result_tests` | `bench/benchmark_result_test.cpp` | bench JSON schema の固定、baseline 比較の閾値と絶対ノイズ床、baseline 欠落・非互換時の非回帰扱い、UTF-8 出力パス |
 | `conversion_quality_tests` | `bench/conversion_quality_test.cpp` | 変換品質の符号位置単位 CER、canonical / acceptable 一致の区別、raw と NFKC の独立集計、不正 UTF-8 の reject、データセットハッシュの改行正規化 |
 | `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
+| `azookey_rich_features_bench_smoke` | `azookey_rich_features_bench` | M14 軽量ライブ変換の Host 推論 p95 が 30ms 以下で、JSON 出力が schema に一致すること |
 | `azookey_bench_json_smoke` | `azookey_bench` | JSON 出力の schema 固定と `passed` 真、人間向け行の非混入 |
 | `azookey_bench_ipc_smoke` | `azookey_bench` | `--ipc` のフェーズ別レイテンシ出力（serialize / framing / deserialize / pipe round-trip）とサンプル数 |
 | `azookey_conversion_quality_smoke` | `azookey_bench` | 変換品質評価の集計出力・per-case 出力・baseline 比較（非互換 baseline を含む）の生成物検証 |
@@ -130,6 +131,14 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_zenzai_real_model_nihongo_smoke` | `azookey_zenzai_bench` | immutable revision + SHA256 で pin した実 Zenzai GGUF を upstream llama.cpp でロードし、`にほんご` → `日本語` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_sentence_smoke` | `azookey_zenzai_bench` | 同じ pin モデルで `わたしはがくせいです` → `私は学生です` の厳密一致、Zenzai 候補あり、`utf8-prefix-trimmed` 不在、参照実装と同じ prompt token ID 列を検証 |
 | `azookey_zenzai_real_model_json_smoke` | `azookey_zenzai_bench` | 同じ pin モデルでの JSON 出力の schema 固定と `passed` 真、`status=ok` 行の非混入 |
+
+DEV-1198 の追加検証は既存 CTest に含む。`core_tests` は liveConversion 有効時の
+`Previewing` 遷移、`ipc_tests` は `QueryLiveConversion` の型名往復、
+`ipc_payloads_tests` は要求・応答の往復と不正値拒否を確認する。
+`host_engine_tests` と `host_dispatcher_tests` は軽量経路の最良候補、要求 ID、
+キャンセルを確認する。`tsf_tip_onkeydown_preedit_tests` は専用 IPC と preedit 表示、
+古い応答、Backspace・Esc、secure 入力での抑止、表示と確定の一致を確認する。
+`tsf_tip_local_settings_tests` は `liveConversion` の既定 OFF と再読込を確認する。
 
 ## CTest 以外の自動検査
 

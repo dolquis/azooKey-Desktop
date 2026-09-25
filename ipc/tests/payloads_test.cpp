@@ -313,6 +313,46 @@ TEST(PayloadsTest, QueryCandidates) {
   EXPECT_EQ(parsed2->candidates[0].score, 1.0);
 }
 
+TEST(PayloadsTest, QueryLiveConversionRoundTrip) {
+  using namespace azookey::ipc;
+  const QueryLiveConversionRequest request{"きょうは", "昨日は"};
+  const auto parsed_request =
+      ParseQueryLiveConversionRequest(BuildQueryLiveConversionRequest(request));
+  ASSERT_TRUE(parsed_request);
+  EXPECT_EQ(parsed_request->kana, request.kana);
+  EXPECT_EQ(parsed_request->context, request.context);
+
+  const QueryLiveConversionResponse response{"今日は", 0.875};
+  const auto parsed_response =
+      ParseQueryLiveConversionResponse(BuildQueryLiveConversionResponse(response));
+  ASSERT_TRUE(parsed_response);
+  EXPECT_EQ(parsed_response->surface, response.surface);
+  EXPECT_DOUBLE_EQ(parsed_response->confidence, response.confidence);
+}
+
+TEST(PayloadsTest, QueryLiveConversionRejectsMalformedPayloads) {
+  using namespace azookey::ipc;
+  EXPECT_FALSE(ParseQueryLiveConversionRequest("{}").has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":"かな"})").has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":123,"context":""})").has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":"かな","context":null})")
+                   .has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名"})").has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"confidence":0.5})").has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":42,"confidence":0.5})")
+                   .has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":"0.5"})")
+                   .has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":-0.1})")
+                   .has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1.1})")
+                   .has_value());
+  EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"","confidence":0})")
+                  .has_value());
+  EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1})")
+                  .has_value());
+}
+
 TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {
   const auto old_request =
       azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"かな","live":true})");

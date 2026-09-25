@@ -59,6 +59,16 @@ TEST_F(LocalSettingsTest, LoadsSharedFileWithoutHostAndStopsIdempotently) {
   reader.Stop();
 }
 
+TEST_F(LocalSettingsTest, LiveConversionDefaultsOffAndReloads) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(reader.LiveConversionSnapshot());
+  Write(R"({"liveConversion":true})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.LiveConversionSnapshot(); }));
+  Write(R"({"liveConversion":false})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.LiveConversionSnapshot(); }));
+}
+
 TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));

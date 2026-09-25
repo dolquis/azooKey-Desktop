@@ -54,6 +54,8 @@ class CandidateWindow {
     on_candidates_ready_context_ = context;
   }
   void PostCandidatesReady();
+  bool ScheduleCandidatesReady(UINT delay_ms);
+  void CancelScheduledCandidatesReady();
 
 #ifdef AZOOKEY_TSF_TESTING
   struct LayoutMetricsForTest {
@@ -103,6 +105,7 @@ class CandidateWindow {
   static constexpr int kBaseMaxSurfaceWidth = 220;
   static constexpr int kBaseColumnGap = 12;
   static constexpr UINT kCandidatesReadyMessage = WM_APP + 0x4b1;
+  static constexpr UINT_PTR kCandidatesReadyTimer = 0x4b2;
 
   HWND hwnd_{nullptr};
   UINT dpi_{kDefaultDpi};

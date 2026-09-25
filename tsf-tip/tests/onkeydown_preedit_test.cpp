@@ -1712,6 +1712,50 @@ TEST(TsfTipOnKeyDownPreeditTest, PredictionFiltersNonExtensionsBeforeTabSelectio
   EXPECT_FALSE(azookey::tsf::PredictionReadingSuffix("にほんご", filtered.front()));
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, DroppedPredictionRetriesTheSameReading) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t first_generation = h.service.pending_prediction_generation_for_test();
+  ASSERT_NE(first_generation, 0u);
+
+  h.service.retry_dropped_prediction_for_test();
+  EXPECT_GT(h.service.pending_prediction_generation_for_test(), first_generation);
+  EXPECT_EQ(h.service.input_state_for_test().confirmed_kana(), "か");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, AcceptedPredictionRequeriesLiveConversionBeforeCommit) {
+  DocumentPreeditHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_live_conversion_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t old_request = h.service.pending_ipc_request_id_for_test();
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(old_request, "か", "蚊");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"蚊");
+
+  ASSERT_EQ(h.service.apply_prediction_reading_for_test(&h.context, "かん"), S_OK);
+  EXPECT_EQ(h.context.document->text, L"かん");
+  EXPECT_EQ(h.service.input_state_for_test().confirmed_kana(), "かん");
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  EXPECT_EQ(h.service.pending_ipc_reading_for_test(), "かん");
+  const uint64_t new_request = h.service.pending_ipc_request_id_for_test();
+  EXPECT_GT(new_request, old_request);
+
+  h.service.set_live_conversion_result_for_test(old_request, "か", "古");
+  h.service.apply_live_conversion_result_for_test();
+  EXPECT_EQ(h.context.document->text, L"かん");
+  h.service.mark_pending_ipc_query_sent_for_test();
+  h.service.set_live_conversion_result_for_test(new_request, "かん", "缶");
+  h.service.apply_live_conversion_result_for_test();
+  ASSERT_EQ(h.context.document->text, L"缶");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_EQ(h.context.document->text, L"缶");
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, CapsKeyTogglesAlphanumericPassThrough) {
   TextServiceHarness h;
   EXPECT_TRUE(h.TestPress(VK_OEM_ATTN));

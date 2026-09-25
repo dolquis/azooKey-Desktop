@@ -190,6 +190,19 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_prediction_enabled_for_test(bool enabled) {
     local_settings_.SetPredictionEnabledForTest(enabled);
   }
+  HRESULT apply_prediction_reading_for_test(ITfContext* context, const std::string& reading) {
+    return ApplyPredictionReading(context, reading);
+  }
+  uint64_t pending_prediction_generation_for_test() {
+    std::lock_guard lock(ipc_mtx_);
+    return ipc_prediction_request_ ? ipc_prediction_request_->generation : 0;
+  }
+  void retry_dropped_prediction_for_test() {
+    const uint64_t generation = pending_prediction_generation_for_test();
+    prediction_last_query_at_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    prediction_retry_generation_.store(generation, std::memory_order_release);
+    OnCandidatesReady(this);
+  }
   void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
   bool bracket_composition_for_test() const { return bracket_composition_; }
   void set_foreground_app_for_test(core::ForegroundApp app) {
@@ -412,6 +425,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::unordered_map<std::string, PredictionCacheEntry> prediction_cache_;  // UI thread only.
   std::string prediction_last_query_key_;                                   // UI thread only.
   std::chrono::steady_clock::time_point prediction_last_query_at_{};
+  uint64_t prediction_retry_scheduled_generation_{0};  // UI thread only.
+  std::chrono::steady_clock::time_point prediction_retry_due_at_{};
   int selected_candidate_idx_{0};
   // Snapshot of candidates taken when the window was opened (used for commit
   // so that a late QueryCandidates response cannot change what is confirmed).
@@ -485,6 +500,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<bool> ipc_refresh_options_{false};
   std::atomic<bool> prediction_settings_changed_{false};
   std::atomic<bool> prediction_settings_refreshing_{false};
+  std::atomic<uint64_t> prediction_retry_generation_{0};
   std::atomic<bool> ipc_host_commit_segments_{false};
   core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
   std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_
@@ -620,6 +636,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void RefreshPrediction(ITfContext* context);
   void ClearPrediction();
   HRESULT AcceptPrediction(ITfContext* context, size_t index);
+  HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
   RECT PredictionCaretRect();
   HRESULT StartSelectionReconversion(ITfContext* context);
   HRESULT CompleteReconversionSelection(size_t index);

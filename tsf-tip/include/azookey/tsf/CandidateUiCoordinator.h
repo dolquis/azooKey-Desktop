@@ -45,6 +45,8 @@ class CandidateUiCoordinator {
   void SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn, void* context);
   void SetBeginObserver(CandidateUiBeginObserver observer, void* context);
   void PostCandidatesReady();
+  bool ScheduleCandidatesReady(UINT delay_ms);
+  void CancelScheduledCandidatesReady();
 
   HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt, const std::vector<CandidateViewItem>& items,
                   int selected_idx);

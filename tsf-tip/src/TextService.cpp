@@ -4341,11 +4341,25 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     request = std::move(ipc_prediction_request_);
     ipc_prediction_request_.reset();
   }
-  if (!request || !ipc_host_query_predictions_ ||
-      prediction_settings_changed_.load(std::memory_order_acquire) ||
-      prediction_settings_refreshing_.load(std::memory_order_acquire) ||
-      secure_input_.load(std::memory_order_relaxed))
+  if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed))
     return;
+  const auto retry_dropped_request = [&] {
+    if (ipc_stop_.load(std::memory_order_relaxed)) return;
+    bool notify = false;
+    {
+      std::lock_guard lock(ipc_mtx_);
+      if (prediction_generation_ == request->generation) {
+        prediction_retry_generation_.store(request->generation, std::memory_order_release);
+        notify = true;
+      }
+    }
+    if (notify) candidate_ui_.PostCandidatesReady();
+  };
+  if (prediction_settings_changed_.load(std::memory_order_acquire) ||
+      prediction_settings_refreshing_.load(std::memory_order_acquire)) {
+    retry_dropped_request();
+    return;
+  }
   ipc::QueryPredictionsRequest payload;
   payload.kana = request->kana;
   payload.left_side_context = request->left_side_context;
@@ -4356,15 +4370,34 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
   envelope.trace_id = "tip-prediction";
   envelope.type = ipc::MessageType::QueryPredictions;
   envelope.payload_json = ipc::BuildQueryPredictionsRequest(payload);
-  if (!ipc_client_.Send(envelope)) return;
-  std::optional<ipc::Envelope> response;
-  if (!WaitForIpcResponseOrStop(kQueryCandidatesFastTimeoutMs, envelope.request_id,
-                                ipc::MessageType::QueryPredictions, &response) ||
-      !response)
+  {
+    std::lock_guard lock(ipc_mtx_);
+    if (prediction_generation_ != request->generation) return;
+    ipc_inflight_id_ = envelope.request_id;
+  }
+  const auto clear_inflight = [&] {
+    std::lock_guard lock(ipc_mtx_);
+    if (ipc_inflight_id_ == envelope.request_id) ipc_inflight_id_ = 0;
+  };
+  if (!ipc_client_.Send(envelope)) {
+    clear_inflight();
+    retry_dropped_request();
     return;
+  }
+  std::optional<ipc::Envelope> response;
+  const bool received = WaitForIpcResponseOrStop(kQueryCandidatesFastTimeoutMs, envelope.request_id,
+                                                 ipc::MessageType::QueryPredictions, &response);
+  clear_inflight();
+  if (!received || !response) {
+    retry_dropped_request();
+    return;
+  }
   NoteHostResponded();
   auto parsed = ipc::ParseQueryPredictionsResponse(response->payload_json);
-  if (!parsed || !parsed->ok) return;
+  if (!parsed || !parsed->ok) {
+    retry_dropped_request();
+    return;
+  }
   bool notify = false;
   {
     std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
@@ -4376,7 +4409,10 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
       notify = true;
     }
   }
-  if (notify) candidate_ui_.PostCandidatesReady();
+  if (notify)
+    candidate_ui_.PostCandidatesReady();
+  else
+    retry_dropped_request();
 }
 
 void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
@@ -4803,12 +4839,47 @@ void TextService::OnCandidatesReady(void* context) {
       if (service->prediction_settings_changed_.exchange(false, std::memory_order_acq_rel)) {
         if (service->active_context_)
           (void)service->ResolvePrivacy(service->active_context_, false);
+        service->prediction_settings_refreshing_.store(false, std::memory_order_release);
+        refreshing_settings = false;
+        service->prediction_last_query_key_.clear();
         service->RefreshPrediction(service->active_context_);
       }
       service->prediction_settings_refreshing_.store(false, std::memory_order_release);
       refreshing_settings = false;
     }
     service->ApplyPredictionResult();
+    const uint64_t retry_generation =
+        service->prediction_retry_generation_.exchange(0, std::memory_order_acq_rel);
+    if (retry_generation != 0) {
+      std::lock_guard lock(service->ipc_mtx_);
+      if (retry_generation == service->prediction_generation_) {
+        service->prediction_retry_scheduled_generation_ = retry_generation;
+        service->prediction_retry_due_at_ =
+            service->prediction_last_query_at_ + std::chrono::seconds(1);
+      }
+    }
+    if (service->prediction_retry_scheduled_generation_ != 0) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now < service->prediction_retry_due_at_) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   service->prediction_retry_due_at_ - now)
+                                   .count() +
+                               1;
+        service->candidate_ui_.ScheduleCandidatesReady(static_cast<UINT>(remaining));
+      } else {
+        bool still_current = false;
+        {
+          std::lock_guard lock(service->ipc_mtx_);
+          still_current =
+              service->prediction_retry_scheduled_generation_ == service->prediction_generation_;
+        }
+        service->prediction_retry_scheduled_generation_ = 0;
+        if (still_current) {
+          service->prediction_last_query_key_.clear();
+          service->RefreshPrediction(service->active_context_);
+        }
+      }
+    }
   } catch (...) {
     if (refreshing_settings)
       service->prediction_settings_refreshing_.store(false, std::memory_order_release);
@@ -4825,6 +4896,9 @@ RECT TextService::PredictionCaretRect() {
 
 void TextService::ClearPrediction() {
   AZOOKEY_ASSERT_UI_THREAD();
+  candidate_ui_.CancelScheduledCandidatesReady();
+  prediction_retry_scheduled_generation_ = 0;
+  prediction_retry_generation_.store(0, std::memory_order_release);
   prediction_window_.Hide();
   shown_predictions_.clear();
   {
@@ -4870,6 +4944,8 @@ void TextService::RefreshPrediction(ITfContext* context) {
       ++it;
   }
   if (const auto cached = prediction_cache_.find(cache_key); cached != prediction_cache_.end()) {
+    candidate_ui_.CancelScheduledCandidatesReady();
+    prediction_retry_scheduled_generation_ = 0;
     shown_predictions_ = cached->second.predictions;
     std::vector<std::wstring> labels;
     for (const auto& candidate : shown_predictions_)
@@ -4887,6 +4963,8 @@ void TextService::RefreshPrediction(ITfContext* context) {
     return;
   prediction_last_query_key_ = cache_key;
   prediction_last_query_at_ = now;
+  candidate_ui_.CancelScheduledCandidatesReady();
+  prediction_retry_scheduled_generation_ = 0;
   {
     std::lock_guard lock(ipc_mtx_);
     ipc_prediction_request_ =
@@ -4942,32 +5020,19 @@ HRESULT TextService::AcceptPrediction(ITfContext* context, size_t index) {
     ClearPrediction();
     return S_FALSE;
   }
-  const std::string target = current + *suffix;
-  auto previous_state = input_state_;
-  const std::string previous_kana = preedit_kana_;
-  const auto previous_romaji = romaji_;
-  const std::string previous_marked = core_marked_surface_;
-  const std::string previous_live_reading = live_display_reading_;
-  const std::string previous_live_surface = live_display_surface_;
-  input_state_ = input_state_.WithComposition(target, core::RomajiKanaConverter{});
-  preedit_kana_ = target;
-  romaji_.Reset();
-  core_marked_surface_ = target;
-  live_display_reading_.clear();
-  live_display_surface_.clear();
-  const HRESULT hr = RequestPreeditUpdate(context);
-  if (FAILED(hr)) {
-    input_state_ = std::move(previous_state);
-    preedit_kana_ = previous_kana;
-    romaji_ = previous_romaji;
-    core_marked_surface_ = previous_marked;
-    live_display_reading_ = previous_live_reading;
-    live_display_surface_ = previous_live_surface;
-    return hr;
-  }
+  return ApplyPredictionReading(context, current + *suffix);
+}
+
+HRESULT TextService::ApplyPredictionReading(ITfContext* context, const std::string& reading) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!context || reading.empty()) return E_INVALIDARG;
   ClearPrediction();
-  RefreshPrediction(context);
-  return S_OK;
+  CancelPendingQueriesForLifecycle();
+  core::HandleResult result;
+  result.next = input_state_.WithComposition(reading, core::RomajiKanaConverter{});
+  result.actions.push_back(core::ReplaceMarkedText{reading});
+  result.actions.push_back(core::QueryCandidates{reading});
+  return ApplyInputStateResult(context, std::move(result));
 }
 
 void TextService::ApplyLiveConversionResult() {

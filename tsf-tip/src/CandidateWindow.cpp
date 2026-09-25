@@ -431,6 +431,14 @@ void CandidateWindow::PostCandidatesReady() {
   if (hwnd_) PostMessageW(hwnd_, kCandidatesReadyMessage, 0, 0);
 }
 
+bool CandidateWindow::ScheduleCandidatesReady(UINT delay_ms) {
+  return hwnd_ && SetTimer(hwnd_, kCandidatesReadyTimer, delay_ms, nullptr) != 0;
+}
+
+void CandidateWindow::CancelScheduledCandidatesReady() {
+  if (hwnd_) KillTimer(hwnd_, kCandidatesReadyTimer);
+}
+
 bool CandidateWindow::IsVisible() const { return hwnd_ && IsWindowVisible(hwnd_); }
 
 void CandidateWindow::MoveSelection(int delta) {
@@ -549,6 +557,14 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case kCandidatesReadyMessage:
       if (on_candidates_ready_) on_candidates_ready_(on_candidates_ready_context_);
       return 0;
+
+    case WM_TIMER:
+      if (wParam == kCandidatesReadyTimer) {
+        CancelScheduledCandidatesReady();
+        if (on_candidates_ready_) on_candidates_ready_(on_candidates_ready_context_);
+        return 0;
+      }
+      return DefWindowProcW(hwnd, msg, wParam, lParam);
 
     case WM_DPICHANGED: {
       UpdateDpi(LOWORD(wParam));

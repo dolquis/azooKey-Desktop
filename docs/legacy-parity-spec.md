@@ -599,6 +599,8 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 `surface/confidence` をそれぞれ持つ。`confidence` は有限の 0.0..1.0 とする。
 M14 の軽量経路では候補の順位スコアをゼロ基準の sigmoid で単調に写像する。
 X-1 の多 pass 推論では上位 2 候補の差を使って信頼度を較正する。
+Host は Handshake 応答で `query_live_conversion` capability を広告する。
+旧 Host が広告しない場合、TIP は `QueryCandidates` の先頭候補を preedit に使う。
 
 既存 `QueryCandidates` と分けるのは：
 - 返却するのは「最良 1 件」だけで軽量

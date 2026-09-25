@@ -3247,6 +3247,9 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     batch_romaji_conversion_.store(hpayload->batch_romaji_conversion, std::memory_order_relaxed);
     ipc_host_oob_cancel_ = std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                                      "oob_cancel") != hpayload->capabilities.end();
+    ipc_host_live_conversion_ =
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                  "query_live_conversion") != hpayload->capabilities.end();
     ipc_host_commit_segments_.store(
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "commit_segments") != hpayload->capabilities.end(),
@@ -3612,6 +3615,13 @@ void TextService::ServeConnection() {
       ConvertBatch(req_id, reading, raw_romaji, batch_mode);
       if (!ipc_client_.IsConnected()) return;
       continue;
+    }
+
+    if (is_live_conversion && !ipc_host_live_conversion_) {
+      // A protocol-v1 Host from before M14 cannot parse the new type. Keep
+      // live preedit through its supported candidate response instead.
+      is_live_conversion = false;
+      apply_live_preview = true;
     }
 
     Envelope qenv;
@@ -4268,7 +4278,8 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
 }
 
 void TextService::PostQueryLiveConversion(ITfContext* context, const std::string& reading) {
-  if (ResolvePrivacy(context, false).secure) {
+  const auto privacy = ResolvePrivacy(context, false);
+  if (privacy.secure) {
     // The M14 wire request has no privacy bit. Keep the local reading instead
     // of asking the Host to consult user dictionaries in a secure context.
     CancelPendingQueriesForLifecycle();
@@ -4278,6 +4289,9 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   }
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_reading_ = reading;
+  ipc_pending_live_ = true;
+  ipc_pending_secure_ = privacy.secure;
+  ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
   ipc_pending_emoji_trigger_.clear();

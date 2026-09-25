@@ -451,6 +451,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
+  bool ipc_host_live_conversion_{false};  // IPC worker only.
   // Set by the local settings watcher when settings.json changed, so a healthy
   // connection re-runs the handshake instead of serving the batch mode and
   // punctuation policy it captured at activation (DEV-1143).

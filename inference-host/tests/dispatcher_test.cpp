@@ -282,6 +282,9 @@ TEST_F(DispatcherTest, Handshake) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_TRUE(parsed->accepted);
   EXPECT_EQ(parsed->host_generation_id, "dispatcher-test-generation");
+  EXPECT_NE(
+      std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_live_conversion"),
+      parsed->capabilities.end());
 
   ipc::HandshakeRequest bad = req;
   bad.protocol_version = 999;

@@ -11,6 +11,7 @@ enum class MessageType {
   Handshake,
   LoadModel,
   QueryCandidates,
+  QueryLiveConversion,
   QueryBatchConversion,
   QueryPredictions,
   QueryCorrections,

@@ -421,6 +421,43 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
   return p;
 }
 
+// -------- QueryLiveConversion --------
+
+std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p) {
+  j::Object o;
+  o.emplace("kana", j::Value(p.kana));
+  o.emplace("context", j::Value(p.context));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto kana = v->GetString("kana");
+  auto context = v->GetString("context");
+  if (!kana || !context) return std::nullopt;
+  return QueryLiveConversionRequest{std::move(*kana), std::move(*context)};
+}
+
+std::string BuildQueryLiveConversionResponse(const QueryLiveConversionResponse& p) {
+  j::Object o;
+  o.emplace("surface", j::Value(p.surface));
+  o.emplace("confidence", j::Value(p.confidence));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryLiveConversionResponse> ParseQueryLiveConversionResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto surface = v->GetString("surface");
+  auto confidence = v->GetNumber("confidence");
+  if (!surface || !confidence || !std::isfinite(*confidence) || *confidence < 0.0 ||
+      *confidence > 1.0)
+    return std::nullopt;
+  return QueryLiveConversionResponse{std::move(*surface), *confidence};
+}
+
 // -------- ReverseConvert --------
 
 std::string BuildReverseConvertRequest(const ReverseConvertRequest& p) {

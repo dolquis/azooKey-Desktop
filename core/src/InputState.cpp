@@ -116,7 +116,7 @@ HandleResult InputState::HandleIdle(const UserActionEvent& event) const {
     case UserAction::InputAlnum:
       next.AppendInput(event);
       if (next.Reading().empty()) return {{}, *this};
-      next.kind_ = InputStateKind::Composing;
+      next.kind_ = next.live_conversion_ ? InputStateKind::Previewing : InputStateKind::Composing;
       next.AfterReadingChanged(result.actions);
       break;
     case UserAction::StartUnicodeInput:
@@ -200,6 +200,7 @@ HandleResult InputState::HandleSelecting(const UserActionEvent& event) const {
       } else {
         next.EraseLastUnit();
       }
+      if (next.live_conversion_) next.kind_ = InputStateKind::Previewing;
       next.AfterReadingChanged(result.actions);
       break;
     case UserAction::StartConversion:

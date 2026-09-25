@@ -45,10 +45,12 @@ class TipLocalSettings final {
   core::BracketSettings Snapshot() const;
   std::optional<TipRewriterSettings> RewriterSnapshot() const;
   TipAiSettings AiSnapshot() const;
+  bool LiveConversionSnapshot() const;
 
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
   void SetPrivacyForTest(std::string_view contents);
+  void SetLiveConversionForTest(bool enabled);
   bool WaitForEnabledForTest(bool enabled);
   bool WaitForPrivacyForTest(const std::function<bool(const core::PrivacyPolicy&)>& predicate);
   bool WaitForRewritersForTest(const std::function<bool(const TipRewriterSettings&)>& predicate);
@@ -77,6 +79,7 @@ class TipLocalSettings final {
   core::BracketSettings settings_;
   std::optional<TipRewriterSettings> rewriters_;
   TipAiSettings ai_;
+  bool live_conversion_{false};
   std::filesystem::path path_;
   std::filesystem::path table_path_;
   std::atomic<bool> watch_started_{false};

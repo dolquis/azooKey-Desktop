@@ -56,6 +56,8 @@ TEST(MessagesTest, TypeStringMapping) {
             azookey::ipc::MessageType::QueryPredictions);
   EXPECT_EQ(azookey::ipc::TypeFromString("QueryBatchConversion"),
             azookey::ipc::MessageType::QueryBatchConversion);
+  EXPECT_EQ(azookey::ipc::TypeFromString("QueryLiveConversion"),
+            azookey::ipc::MessageType::QueryLiveConversion);
   EXPECT_EQ(azookey::ipc::TypeFromString("QueryCorrections"),
             azookey::ipc::MessageType::QueryCorrections);
   EXPECT_EQ(azookey::ipc::TypeFromString("CommitCorrection"),
@@ -70,6 +72,8 @@ TEST(MessagesTest, TypeStringMapping) {
             "QueryPredictions");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryBatchConversion),
             "QueryBatchConversion");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryLiveConversion),
+            "QueryLiveConversion");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::UpdateConfig),
             "UpdateConfig");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ReverseConvert),

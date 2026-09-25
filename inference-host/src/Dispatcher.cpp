@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <string_view>
 
 #include "azookey/host/PunctuationInserter.h"
@@ -209,6 +210,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleLoadModel(req);
     case ipc::MessageType::QueryCandidates:
       return HandleQueryCandidates(req);
+    case ipc::MessageType::QueryLiveConversion:
+      return HandleQueryLiveConversion(req);
     case ipc::MessageType::QueryBatchConversion:
       return HandleQueryBatchConversion(req);
     case ipc::MessageType::ReverseConvert:
@@ -307,6 +310,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       r.partial = false;
       return MakeResponse(req, ipc::BuildQueryCandidatesResponse(r));
     }
+    case ipc::MessageType::QueryLiveConversion:
+      return MakeResponse(req, ipc::BuildQueryLiveConversionResponse({}));
     case ipc::MessageType::QueryBatchConversion: {
       ipc::QueryBatchConversionResponse r;
       if (auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json)) {
@@ -352,7 +357,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   res.host_generation_id = config_.host_generation_id;
-  res.capabilities = {"oob_cancel", "commit_segments"};
+  res.capabilities = {"oob_cancel", "commit_segments", "query_live_conversion"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -595,6 +600,45 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   res.corrected_reading = std::move(corrected_reading);
   trace.Finish(core::EtwResult::Success, res.candidates.size());
   return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::Envelope& req) {
+  const auto parsed = ipc::ParseQueryLiveConversionRequest(req.payload_json);
+  InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Kana,
+                       parsed ? parsed->kana.size() : 0);
+  ipc::QueryLiveConversionResponse response;
+  if (!parsed || parsed->kana.empty()) {
+    return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
+  }
+
+  auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  if (!cancel) {
+    return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
+  }
+  scheduler_->MarkLatest(client_id_, req.request_id);
+  trace.WatchCancellation(cancel);
+  RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
+
+  const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
+                                                      cancel.get(), trace.context());
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  completion.Complete();
+  if (canceled) {
+    trace.Finish(core::EtwResult::Cancelled);
+    return std::nullopt;
+  }
+  if (candidate) {
+    response.surface = candidate->surface;
+    if (std::isfinite(candidate->score)) {
+      // M14 fallback scores are unbounded ranking values. A zero-baseline
+      // sigmoid preserves their ordering without pinning ordinary scores >1
+      // to certainty; X-1 will calibrate against the runner-up candidate.
+      const double e = std::exp(-std::abs(candidate->score));
+      response.confidence = candidate->score >= 0.0 ? 1.0 / (1.0 + e) : e / (1.0 + e);
+    }
+  }
+  trace.Finish(core::EtwResult::Success, candidate ? 1 : 0);
+  return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
 }
 
 void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {

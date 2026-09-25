@@ -28,7 +28,7 @@ constexpr GUID kLiveAttrUncertainGuid       = { 0xAAB2..., ... };
 constexpr GUID kLiveAttrTentativeGuid       = { 0xAAB3..., ... };
 ```
 
-GUID 実値は M14 着手時に `uuidgen` で確定し、本書に追記する。
+GUID 実値は X-1-1 着手時に `uuidgen` で確定し、本書に追記する。
 
 #### EnumDisplayAttributeInfo 拡張
 
@@ -64,11 +64,12 @@ top-2 候補との差を基準）。
 
 ```
 QueryLiveConversionResponse:
-  request_id
   surface           // 文字列全体
   confidence        // 全体スコア
   segments[]: { start_char, end_char, score }
 ```
+
+`request_id` は M14 と同じく IPC Envelope に置く。
 
 ### X-1-2. TypingTempoTracker
 
@@ -100,9 +101,11 @@ private:
 
 ```
 QueryLiveConversionRequest:
-  request_id, kana, context,
+  kana, context,
   mode: enum { Fast, Heavy }
 ```
+
+`request_id` は IPC Envelope に置く。
 
 Host 側スケジューラ：
 

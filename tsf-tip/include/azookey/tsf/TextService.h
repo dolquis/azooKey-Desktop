@@ -170,6 +170,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_privacy_settings_for_test(std::string_view contents) {
     local_settings_.SetPrivacyForTest(contents);
   }
+  void set_live_conversion_for_test(bool enabled) {
+    local_settings_.SetLiveConversionForTest(enabled);
+  }
   void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
   bool bracket_composition_for_test() const { return bracket_composition_; }
   void set_foreground_app_for_test(core::ForegroundApp app) {
@@ -262,6 +265,25 @@ class TextService final : public ITfTextInputProcessorEx,
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
   uint64_t pending_ipc_request_id_for_test();
+  void mark_pending_ipc_query_sent_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_has_request_ = false;
+  }
+  bool pending_ipc_query_is_live_conversion_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_has_request_ && ipc_pending_is_live_conversion_;
+  }
+  void set_live_conversion_result_for_test(uint64_t request_id, std::string reading,
+                                           std::string surface) {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    live_conversion_result_ =
+        LiveConversionResult{request_id, std::move(reading), std::move(surface)};
+  }
+  bool has_live_conversion_result_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return live_conversion_result_.has_value();
+  }
+  void apply_live_conversion_result_for_test() { ApplyLiveConversionResult(); }
   const std::string& ipc_client_id_for_test() const { return ipc_client_id_; }
   std::string pending_ipc_reading_for_test();
   std::string pending_ipc_raw_romaji_for_test();
@@ -417,6 +439,8 @@ class TextService final : public ITfTextInputProcessorEx,
   uint64_t ipc_pending_id_{0};
   bool ipc_has_request_{false};
   bool ipc_pending_is_batch_{false};
+  bool ipc_pending_is_live_conversion_{false};
+  bool ipc_pending_apply_live_preview_{false};
   bool ipc_pending_live_{true};
   bool ipc_pending_secure_{true};
   bool ipc_pending_learning_allowed_{false};
@@ -427,6 +451,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
+  bool ipc_host_live_conversion_{false};  // IPC worker only.
   // Set by the local settings watcher when settings.json changed, so a healthy
   // connection re-runs the handshake instead of serving the batch mode and
   // punctuation policy it captured at activation (DEV-1143).
@@ -466,6 +491,14 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<TipCandidate> candidates_;
   std::vector<ipc::BatchConversionSegment> cached_batch_segments_;
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
+  struct LiveConversionResult {
+    uint64_t request_id;
+    std::string reading;
+    std::string surface;
+  };
+  std::optional<LiveConversionResult> live_conversion_result_;  // candidates_mtx_
+  std::string live_display_reading_;                            // UI thread only.
+  std::string live_display_surface_;                            // UI thread only.
   struct ReconversionResult {
     uint64_t generation;
     std::wstring surface;
@@ -520,6 +553,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string NextCommitObservationId();
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
+  void PostQueryLiveConversion(ITfContext* context, const std::string& reading);
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
@@ -537,6 +571,7 @@ class TextService final : public ITfTextInputProcessorEx,
   PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
+  void ApplyLiveConversionResult();
   HRESULT StartSelectionReconversion(ITfContext* context);
   HRESULT CompleteReconversionSelection(size_t index);
   void ClearReconversionState();

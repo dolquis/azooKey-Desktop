@@ -1451,6 +1451,11 @@ TEST(InferenceEngineTest, LiveZenzaiRequestsUseTopOneDecodeLimit) {
   EXPECT_EQ(live.front().surface, "日本語");
   EXPECT_EQ(live.front().source, azookey::core::CandidateSource::Model);
 
+  const auto fast = engine->QueryLiveConversion("にほんご", "", kNowBase + 1, nullptr);
+  ASSERT_TRUE(fast);
+  EXPECT_EQ(fast->surface, "にほんご");
+  EXPECT_EQ(fast->source, azookey::core::CandidateSource::Heuristic);
+
   auto top_one = engine->QueryCandidates("にほんご", "", kNowBase + 2, nullptr, 1, false);
   ASSERT_EQ(top_one.size(), 1u);
   EXPECT_EQ(top_one.front().surface, "日本語");

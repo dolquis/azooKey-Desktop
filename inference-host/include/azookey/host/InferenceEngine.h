@@ -173,6 +173,14 @@ class InferenceEngine {
                                      uint32_t max_candidates = 0, bool live = false,
                                      const InferenceTelemetry* telemetry = nullptr);
 
+  // M14: one best candidate through the lightweight fallback converter. Keeps
+  // dictionary and learning ranking while avoiding multi-step model generation.
+  std::optional<core::Candidate> QueryLiveConversion(const std::string& kana,
+                                                     const std::string& context,
+                                                     uint64_t now_epoch_sec,
+                                                     const std::atomic<bool>* cancel,
+                                                     const InferenceTelemetry* telemetry = nullptr);
+
   // Candidates only; equivalent to QueryCandidatesEx(...).candidates.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
                                                uint64_t now_epoch_sec,
@@ -234,6 +242,10 @@ class InferenceEngine {
   HealthState health_state() const;
 
  private:
+  CandidatesResult QueryCandidatesExImpl(const std::string& kana, const std::string& context,
+                                         uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
+                                         uint32_t max_candidates, bool live,
+                                         const InferenceTelemetry* telemetry, bool fast_only);
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.

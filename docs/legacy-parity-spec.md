@@ -95,7 +95,7 @@ enum class InputStateKind {
 
 | 現状 | 入力 | 次状態 | 副作用 |
 |---|---|---|---|
-| Idle | Input | Composing | StartComposition |
+| Idle | Input | Composing（liveConv ON なら Previewing） | StartComposition、liveConv ON では QueryLiveConversion |
 | Composing | StartConversion（候補キャッシュ有） | Selecting | Show CandidateWindow（§1.5.4） |
 | Composing | StartConversion（候補キャッシュ無＝cache miss） | Composing | `QueryCandidates` 送信のみ。**`Selecting` へ遷移せず**応答到着で `Selecting`（§1.5.4。未到着中は Enter=確定 as-is・数字パススルー） |
 | Composing (liveConv ON) | Input | Previewing | QueryLiveConversion + Preedit 更新 |
@@ -103,7 +103,7 @@ enum class InputStateKind {
 | Previewing | StartConversion | Selecting | Show CandidateWindow（最良候補にハイライト） |
 | Selecting | NextCandidate | Selecting | 選択 index +1 |
 | Selecting | Commit | Idle | EndComposition + CommitObservation |
-| Selecting | Input / Backspace | Composing | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない） |
+| Selecting | Input / Backspace | Composing（liveConv ON なら Previewing） | 候補窓を閉じ、reading を編集して再問い合わせ（選択中の候補は確定しない） |
 | Selecting | Cancel | Composing | 候補窓を閉じて reading を再表示。候補キャッシュは保持し、次の StartConversion で再表示する（M10 の Esc 挙動） |
 | Composing / Previewing / UnicodeInput | Cancel | Idle | CancelComposition |
 | Idle | StartAlnumDouble | ReplaceSuggestion | GetSelection + Show Prompt |
@@ -588,11 +588,19 @@ karukan の状態機械テスト `karukan-im/src/core/engine/tests/{basic,cursor
 
 `settings.liveConversion == true` のとき、Composing 状態では
 **候補ウィンドウを表示せず、Preedit にライブ最良候補を表示** する。
+数値・括弧など従来のリライター経路は候補一覧を保持するため、
+`QueryCandidates` の先頭候補をライブ表示に使い、Space で候補一覧を開く。
 
 ### 2.2 IPC
 
 新規 Payload: `QueryLiveConversion(request_id, kana, context)` →
 `QueryLiveConversionResponse(request_id, surface, confidence)`
+`request_id` は既存の IPC `Envelope` に置き、Payload は `kana/context` と
+`surface/confidence` をそれぞれ持つ。`confidence` は有限の 0.0..1.0 とする。
+M14 の軽量経路では候補の順位スコアをゼロ基準の sigmoid で単調に写像する。
+X-1 の多 pass 推論では上位 2 候補の差を使って信頼度を較正する。
+Host は Handshake 応答で `query_live_conversion` capability を広告する。
+旧 Host が広告しない場合、TIP は `QueryCandidates` の先頭候補を preedit に使う。
 
 既存 `QueryCandidates` と分けるのは：
 - 返却するのは「最良 1 件」だけで軽量
@@ -624,6 +632,8 @@ DisplayAttribute: kInputAttributeGuid (Phase 5 は単一属性)
 
 - Esc: `ITfComposition::EndComposition` で composition 消去 + InputState=Idle
 - Backspace: kana を 1 文字戻し、再度 `PostQueryLiveConversion`
+- Secure 入力: M14 の Payload には secure フラグがないため、TIP は Host へ
+  `QueryLiveConversion` を送らず、ローカルの kana を Preedit に保つ。
 - 別のアプリへフォーカス移動: `OnEndEdit` で commit (現状の挙動を維持)
 
 ### 2.5 staleness check との併用

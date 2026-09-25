@@ -1699,6 +1699,24 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemo
   EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, CapsKeyTogglesAlphanumericPassThrough) {
+  TextServiceHarness h;
+  EXPECT_TRUE(h.TestPress(VK_OEM_ATTN));
+  EXPECT_TRUE(h.Press(VK_OEM_ATTN));
+  EXPECT_FALSE(h.TestPress('A'));
+  EXPECT_FALSE(h.Press('A'));
+  EXPECT_TRUE(h.TestPress(VK_OEM_ATTN));
+  EXPECT_TRUE(h.Press(VK_OEM_ATTN));
+  EXPECT_TRUE(h.TestPress('A'));
+  EXPECT_TRUE(h.Press('A'));
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, NonConvertWithoutSelectionPassesThrough) {
+  TextServiceHarness h;
+  EXPECT_FALSE(h.TestPress(VK_NONCONVERT));
+  EXPECT_FALSE(h.Press(VK_NONCONVERT));
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AlphabetInputBuildsKanaPreeditAndEatsKeys) {
   TextServiceHarness h;
 
@@ -4338,7 +4356,10 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitPreeditAsIsUsesSyncEditSessionAndClearsAf
 
   EXPECT_TRUE(h.Press(VK_RETURN));
 
-  EXPECT_EQ(h.context.last_flags, TF_ES_SYNC | TF_ES_READWRITE);
+  EXPECT_NE(std::find(h.context.requested_flags.begin(), h.context.requested_flags.end(),
+                      static_cast<DWORD>(TF_ES_SYNC | TF_ES_READWRITE)),
+            h.context.requested_flags.end());
+  EXPECT_EQ(h.context.last_flags, TF_ES_SYNC | TF_ES_READ);
   EXPECT_EQ(range.set_text_count, 1);
   EXPECT_EQ(range.last_text, std::wstring(1, L'\x304b'));
   EXPECT_EQ(range.collapse_count, 1);

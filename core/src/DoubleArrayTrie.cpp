@@ -485,6 +485,36 @@ bool DoubleArrayTrie::ReadEntries(const PrefixMatch& match,
     return impl_->Fail("dictionary entry read failed");
   }
 }
+void DoubleArrayTrie::LookupSurface(std::string_view surface,
+                                    std::vector<StaticDictionaryEntry>& out) const noexcept {
+  out.clear();
+  if (!IsAvailable() || surface.empty() || !IsValidUtf8(surface)) return;
+  try {
+    for (uint32_t i = 0; i < impl_->entries; ++i) {
+      const size_t at = impl_->records.offset + size_t{i} * 32;
+      const auto offset = impl_->U32(at);
+      const auto length = impl_->U32(at + 4);
+      if (!length || !Range(offset, length, impl_->strings.size)) {
+        impl_->Fail("invalid string range");
+        out.clear();
+        return;
+      }
+      if (length != surface.size() ||
+          std::memcmp(impl_->data + impl_->strings.offset + offset, surface.data(), length) != 0)
+        continue;
+      StaticDictionaryEntry entry;
+      if (!impl_->Record(i, entry)) {
+        out.clear();
+        return;
+      }
+      entry.kind = MatchKind::Exact;
+      out.push_back(std::move(entry));
+    }
+  } catch (...) {
+    impl_->Fail("dictionary surface lookup failed");
+    out.clear();
+  }
+}
 bool DoubleArrayTrie::Verify() const noexcept {
   if (!IsAvailable()) return false;
   try {

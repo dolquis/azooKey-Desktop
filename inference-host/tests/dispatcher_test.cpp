@@ -244,6 +244,30 @@ TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingReques
   EXPECT_NE(scheduler.TrackCancellation(limit + 1), nullptr);
 }
 
+TEST_F(DispatcherTest, ReverseConvertReturnsKnownReadingAndUnknownSignal) {
+  user_dict.Add({"明日", "あした"});
+  auto request = MakeReq(100, ipc::MessageType::ReverseConvert,
+                         ipc::BuildReverseConvertRequest({"明日"}));
+  const auto response = dispatcher.Dispatch(request);
+  ASSERT_TRUE(response);
+  EXPECT_EQ(response->type, ipc::MessageType::ReverseConvert);
+  EXPECT_EQ(response->request_id, request.request_id);
+  EXPECT_EQ(response->trace_id, request.trace_id);
+  const auto parsed = ipc::ParseReverseConvertResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->reading, "あした");
+  EXPECT_DOUBLE_EQ(parsed->confidence, 1.0);
+
+  const auto unknown = dispatcher.Dispatch(MakeReq(
+      101, ipc::MessageType::ReverseConvert,
+      ipc::BuildReverseConvertRequest({"存在しない表層形"})));
+  ASSERT_TRUE(unknown);
+  const auto parsed_unknown = ipc::ParseReverseConvertResponse(unknown->payload_json);
+  ASSERT_TRUE(parsed_unknown);
+  EXPECT_TRUE(parsed_unknown->reading.empty());
+  EXPECT_DOUBLE_EQ(parsed_unknown->confidence, 0.0);
+}
+
 TEST_F(DispatcherTest, Handshake) {
   ipc::HandshakeRequest req;
   req.tip_version = "0.1.0";

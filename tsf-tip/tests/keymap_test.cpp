@@ -88,10 +88,17 @@ const Entry kEntries[] = {
      0,
      {A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku,
       A::ToggleHankaku}},
+    {VK_OEM_AUTO,
+     0,
+     {A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku, A::ToggleHankaku,
+      A::ToggleHankaku}},
     {VK_NONCONVERT,
      0,
      {A::ToggleHiraKata, A::ToggleHiraKata, A::ToggleHiraKata, A::ToggleHiraKata, A::ToggleHiraKata,
       A::ToggleHiraKata}},
+    {VK_CONVERT, 0, {kNone, A::StartConversion, A::StartConversion, A::NextCandidate, kNone, kNone}},
+    {VK_OEM_ATTN, 0, {A::ToggleAlnum, A::ToggleAlnum, A::ToggleAlnum, A::ToggleAlnum,
+                       A::ToggleAlnum, A::ToggleAlnum}},
     {VK_F10,
      0,
      {A::ToggleDebugWindow, A::ToggleDebugWindow, A::ToggleDebugWindow, A::ToggleDebugWindow,
@@ -102,8 +109,11 @@ TEST(KeymapTest, CoreVirtualKeyConstantsMatchWindowsHeaders) {
   EXPECT_EQ(vk::kBack, static_cast<uint32_t>(VK_BACK));
   EXPECT_EQ(vk::kReturn, static_cast<uint32_t>(VK_RETURN));
   EXPECT_EQ(vk::kKanji, static_cast<uint32_t>(VK_KANJI));
+  EXPECT_EQ(vk::kOemAuto, static_cast<uint32_t>(VK_OEM_AUTO));
   EXPECT_EQ(vk::kEscape, static_cast<uint32_t>(VK_ESCAPE));
+  EXPECT_EQ(vk::kConvert, static_cast<uint32_t>(VK_CONVERT));
   EXPECT_EQ(vk::kNonConvert, static_cast<uint32_t>(VK_NONCONVERT));
+  EXPECT_EQ(vk::kOemAttn, static_cast<uint32_t>(VK_OEM_ATTN));
   EXPECT_EQ(vk::kSpace, static_cast<uint32_t>(VK_SPACE));
   EXPECT_EQ(vk::kEnd, static_cast<uint32_t>(VK_END));
   EXPECT_EQ(vk::kHome, static_cast<uint32_t>(VK_HOME));

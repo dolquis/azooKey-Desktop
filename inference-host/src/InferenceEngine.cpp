@@ -954,6 +954,17 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   return out;
 }
 
+std::string InferenceEngine::ReverseConvert(const std::string& surface,
+                                            uint64_t now_epoch_sec) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  RefreshDictionaryLocked();
+  learning::LookupContext context;
+  context.now_epoch_sec = now_epoch_sec;
+  context.user_word_default_score = config_.user_word_default_score;
+  const auto entry = dictionaries_.ReverseLookup(surface, context);
+  return entry ? entry->normalized_reading : std::string{};
+}
+
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
                                                                const std::string& context,
                                                                uint64_t now_epoch_sec) {

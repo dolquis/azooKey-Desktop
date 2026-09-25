@@ -211,6 +211,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleQueryCandidates(req);
     case ipc::MessageType::QueryBatchConversion:
       return HandleQueryBatchConversion(req);
+    case ipc::MessageType::ReverseConvert:
+      return HandleReverseConvert(req);
     case ipc::MessageType::Cancel:
       HandleCancel(req);
       return std::nullopt;
@@ -812,6 +814,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   trace.Finish(res.canceled ? core::EtwResult::Cancelled : core::EtwResult::Success,
                candidate_count);
   return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleReverseConvert(const ipc::Envelope& req) {
+  ipc::ReverseConvertResponse response;
+  if (const auto parsed = ipc::ParseReverseConvertRequest(req.payload_json)) {
+    response.reading = engine_->ReverseConvert(parsed->surface, NowSec());
+    response.confidence = response.reading.empty() ? 0.0 : 1.0;
+  }
+  return MakeResponse(req, ipc::BuildReverseConvertResponse(response));
 }
 
 void Dispatcher::HandleCancel(const ipc::Envelope& req) {

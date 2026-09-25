@@ -18,7 +18,8 @@
 
 ### 1.2 インターフェース実装スケルトン
 
-`tsf-tip/src/ReconversionFunction.h` / `.cpp`（新規）：
+`tsf-tip/include/azookey/tsf/ReconversionFunction.h` と
+`tsf-tip/src/ReconversionFunction.cpp`：
 
 ```cpp
 class ReconversionFunction : public IUnknown
@@ -60,6 +61,12 @@ public:
 - その reading で `QueryCandidates` を実行
 - 結果を `ITfCandidateList` ラッパーで返却
 
+TIP は選択変更を `ITfTextEditSink::OnEndEdit` で検知し、UI メッセージで privacy を
+確認してから IPC worker に逆引きと候補取得を先読みさせる。`GetReconversion` は
+選択範囲と context が一致するキャッシュ済み候補を返す。未取得時は
+`TF_E_NOCONVERSION` を返し、TSF スレッド上で Host の応答を待たない。
+変換キーは選択範囲を保持して非同期取得し、候補 UI に表示する。
+
 新規 IPC：
 
 ```
@@ -76,16 +83,13 @@ ReverseConvertResponse:
 - `GetReconversion` の結果から先頭候補で即座に置換
 - ユーザーが候補を選び直したい場合は別途 `ITfCandidateListUIElement` を介する
 
-### 1.3 Category 登録
+### 1.3 FunctionProvider 公開
 
-`tsf-tip/src/DllMain.cpp::DllRegisterServer` に追加：
-
-```cpp
-ITfCategoryMgr* mgr = ...;
-mgr->RegisterCategory(kTextServiceClsid,
-                      GUID_TFCAT_TIP_RECONVERSION,
-                      kTextServiceClsid);
-```
+`TextService` は `ITfFunctionProvider` を公開し、`ActivateEx` 時に
+`ITfSourceSingle::AdviseSingleSink` で thread manager に登録する。
+`GetFunction` から `ITfFnReconversion` を返し、`Deactivate` 時に
+`UnadviseSingleSink` で解除する。Windows SDK に
+`GUID_TFCAT_TIP_RECONVERSION` という category はないため、category 登録は使わない。
 
 ### 1.4 受け入れ条件
 
@@ -171,11 +175,6 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
     // ...
 }
 ```
-
-> **現状ギャップ（M5 で解消）**: 現行 `TextService::ActivateEx` は
-> `UNREFERENCED_PARAMETER(dwFlags);` でフラグを破棄しており、`ui_less_mode_` を
-> 保持していない（`tsf-tip/src/TextService.cpp`）。最小実装の手順とテスト方針は
-> §2.10 に詳述する。
 
 ### 2.3 CandidateListUIElement 実装
 
@@ -512,10 +511,13 @@ docs ではなく DEV-153（Linear）に記録する**（`AGENTS.md` の状態 L
 | `VK_OEM_AUTO` (0xF3) | 同上（一部 HW） | 同上 |
 | `VK_NONCONVERT` (0x1D) | 無変換 | 確定済み or 選択を平仮名/カタカナ/英字 と巡回変換 |
 | `VK_CONVERT` (0x1C) | 変換 | 確定済み or 選択を再変換 (M20 と同経路) |
-| `VK_OEM_ATTN` (0xF0) | Caps (英語キーボード) | alphanumeric モードトグル |
+| `VK_OEM_ATTN` / `VK_DBE_ALPHANUMERIC` (0xF0) | Caps / 英数 | alphanumeric モードトグル |
 | `VK_DBE_HIRAGANA` (0xF2) | ひらがな | input mode = hiragana |
 | `VK_DBE_KATAKANA` (0xF1) | カタカナ | input mode = katakana |
-| `VK_DBE_ALPHANUMERIC` (0xF0) | 英数 | input mode = alphanumeric |
+
+`VK_OEM_ATTN` と `VK_DBE_ALPHANUMERIC` は同じ VK 値の別名なので、
+VK だけから区別しない。`VK_DBE_HIRAGANA` / `VK_DBE_KATAKANA` の
+入力モード直接指定は、DEV-1205 の半角/全角・無変換・変換・Caps の4キーとは別の拡張である。
 
 ### 3.2 無変換キーの巡回
 
@@ -858,9 +860,9 @@ Phase 6-A 末尾で、`ui_less_mode_ == true` のときは予測候補も自前�
 
 | テスト | 場所 | 内容 |
 |---|---|---|
-| ReconversionFunction | `tsf-tip/tests/reconversion_test.cpp` | Windows 限定。QueryRange / GetReconversion / Reconvert |
+| ReconversionFunction | `tsf-tip/tests/reconversion_function_test.cpp` | Windows 限定。QueryRange / GetReconversion / Reconvert |
 | Configure 起動 | `tsf-tip/tests/configure_test.cpp` | Windows 限定。Show が EXE を起動するか |
-| KeyMap 互換 | `tsf-tip/tests/keymap_msime_compat_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動 |
+| KeyMap 互換 | `tsf-tip/tests/keymap_test.cpp` | Windows 限定。VK_NONCONVERT 等の挙動 |
 | CandidateListUIElement | `tsf-tip/tests/ui_element_test.cpp` | Windows 限定。GetString/GetCount/SetSelection |
 | Key / composition / preedit | `tsf-tip/tests/onkeydown_preedit_test.cpp` | Windows 限定。OEM 句読点と記号、候補選択 surface、末尾 selection、Backspace と Esc の状態遷移 |
 | Segment DisplayAttribute | `tsf-tip/tests/segment_attr_test.cpp` | Windows 限定。3 文節の attribute 設定 |

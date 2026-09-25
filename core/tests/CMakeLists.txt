@@ -1,6 +1,7 @@
 add_executable(core_tests
   app_profile_resolver_test.cpp
   bracket_pairing_test.cpp
+  character_form_cycle_test.cpp
   command_line_test.cpp
   crash_retention_test.cpp
   etw_logger_test.cpp

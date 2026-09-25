@@ -86,6 +86,31 @@ TEST(PayloadsTest, HostCapabilitiesRemainOptional) {
   EXPECT_TRUE(legacy->capabilities.empty());
 }
 
+TEST(PayloadsTest, ReverseConvertRoundTripAndRejectsInvalidPayloads) {
+  using namespace azookey::ipc;
+  const ReverseConvertRequest request{"明日"};
+  const auto decoded_request = ParseReverseConvertRequest(BuildReverseConvertRequest(request));
+  ASSERT_TRUE(decoded_request);
+  EXPECT_EQ(decoded_request->surface, request.surface);
+  EXPECT_FALSE(ParseReverseConvertRequest(R"({})"));
+  EXPECT_FALSE(ParseReverseConvertRequest(R"({"surface":3})"));
+  EXPECT_FALSE(ParseReverseConvertRequest(R"({"surface":""})"));
+
+  const ReverseConvertResponse response{"あした", 1.0};
+  const auto decoded_response =
+      ParseReverseConvertResponse(BuildReverseConvertResponse(response));
+  ASSERT_TRUE(decoded_response);
+  EXPECT_EQ(decoded_response->reading, response.reading);
+  EXPECT_DOUBLE_EQ(decoded_response->confidence, 1.0);
+  const auto unknown = ParseReverseConvertResponse(BuildReverseConvertResponse({}));
+  ASSERT_TRUE(unknown);
+  EXPECT_TRUE(unknown->reading.empty());
+  EXPECT_DOUBLE_EQ(unknown->confidence, 0.0);
+  EXPECT_FALSE(ParseReverseConvertResponse(R"({"reading":"あした"})"));
+  EXPECT_FALSE(ParseReverseConvertResponse(R"({"reading":"あした","confidence":2})"));
+  EXPECT_FALSE(ParseReverseConvertResponse(R"({"reading":"","confidence":1})"));
+}
+
 TEST(PayloadsTest, BatchAiPermissionsFailClosedAndRoundTrip) {
   const auto legacy = azookey::ipc::ParseQueryBatchConversionRequest(R"({"reading":"かな"})");
   ASSERT_TRUE(legacy);

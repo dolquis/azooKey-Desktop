@@ -69,9 +69,12 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
   if (!shift) {
     switch (virtual_key) {
       case vk::kKanji:
+      case vk::kOemAuto:
         return Make(UserAction::ToggleHankaku, modifiers);
       case vk::kNonConvert:
         return Make(UserAction::ToggleHiraKata, modifiers);
+      case vk::kOemAttn:
+        return Make(UserAction::ToggleAlnum, modifiers);
       case vk::kF10:
         return Make(UserAction::ToggleDebugWindow, modifiers);
       default:
@@ -111,6 +114,11 @@ std::optional<UserActionEvent> MapUserAction(uint32_t virtual_key, uint32_t modi
       if (IsComposing(kind)) return Make(UserAction::StartConversion, modifiers);
       if (kind == InputStateKind::Selecting)
         return Make(shift ? UserAction::PrevCandidate : UserAction::NextCandidate, modifiers);
+      break;
+    case vk::kConvert:
+      if (!shift && IsComposing(kind)) return Make(UserAction::StartConversion, modifiers);
+      if (!shift && kind == InputStateKind::Selecting)
+        return Make(UserAction::NextCandidate, modifiers);
       break;
     case vk::kUp:
       if (kind == InputStateKind::Selecting) return Make(UserAction::Up, modifiers);

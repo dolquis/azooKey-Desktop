@@ -179,7 +179,7 @@ TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な�
 |---|---|
 | 学習観測 IPC を送信しない | `tsf-tip/src/TextService.cpp::CommitSelected` が `ResolvePrivacy` で判定して `pending_commit_observation_` を捨て、`PostIpcSend` が `CommitObservation` / `CommitSegmentsObservation` / `ObserveTypo` を経路共通の choke point として落とす |
 | `LearningStore::Observe` を呼ばない | `inference-host/src/Dispatcher.cpp` |
-| `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::PostIpcSend` が message type で落とす。学習・予測系の送出は `PostIpcSend` を通す規約とし、queue へ直接積まない |
+| `QueryPredictions` IPC を送信しない | `tsf-tip/src/TextService.cpp::QueryPendingPrediction` が同期送信の直前に `secure_input_` を確認して落とす。非同期送信は `PostIpcSend` の共通ゲートを通す |
 | Magic Conversion を無効化 | `tsf-tip/src/TextService.cpp::OnDoubleTap` |
 | OpenAI 等の外部 AI を `aiBackend=none` 強制 | `inference-host/src/AiBackend.cpp` |
 | ログに `reading` / `surface` を含めない | M41 logger の redaction（`docs/dev-infrastructure-spec.md` §7.6 優先順位 1。Debug / `AZOOKEY_LOG_BODY=1` でも secure 中は出力しない） |

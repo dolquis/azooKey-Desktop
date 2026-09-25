@@ -680,18 +680,21 @@ QueryLiveConversion も同じ ID 空間。古い response は破棄。
 
 - Tab: 第一候補を受理（preedit に追記）
 - Shift+Tab: 第二候補
-- Esc: ウィンドウを閉じる（predictionEnabled=true なら自動再表示）
+- Esc: ウィンドウを閉じる（predictionEnabled=true なら次の入力更新で再表示）
 - マウス左クリック: 該当候補を受理
 
 ### 3.5 IPC
 
-既存 `QueryPredictions` (enum のみ) の Payload を本実装する。
+`QueryPredictions` の Payload 契約は次のとおり。
 
 ```
-QueryPredictionsRequest:  request_id, kana, leftSideContext, mode
-QueryPredictionsResponse: request_id, predictions[]
+Envelope:                  request_id
+QueryPredictionsRequest:   kana, leftSideContext, mode
+QueryPredictionsResponse:  predictions[], ok?, error?
 ```
 
+`predictions[]` の各要素は既存の `CandidateField` とする。
+`ok` の省略時は `true` とみなし、`false` の場合は `error` に失敗理由を載せる。
 `mode` は X-2 で拡張（`word | phrase | sentence`）。Phase 5 では `word` のみ。
 
 ### 3.6 設定
@@ -978,7 +981,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | Unicode 入力 | `core/tests/unicode_input_test.cpp` | 範囲チェック、サロゲートペア生成 |
 | 候補ウィンドウのレイアウトと DPI 換算 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算 |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3） |
-| 予測候補ウィンドウ配置（§3.2） | M15 実装 PR で `tsf-tip/tests/` に追加 | Windows 限定。モニタ矩形と配置候補の切替 |
+| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。モニタ矩形と配置候補の切替 |
 
 ## 11. 参照
 

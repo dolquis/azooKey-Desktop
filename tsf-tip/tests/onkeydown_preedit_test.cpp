@@ -1699,6 +1699,19 @@ TEST(TsfTipOnKeyDownPreeditTest, CommitSelectedAllocationFailureReturnsOutOfMemo
   EXPECT_TRUE(h.service.has_pending_commit_observation_for_test());
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PredictionFiltersNonExtensionsBeforeTabSelection) {
+  using azookey::ipc::CandidateField;
+  std::vector<CandidateField> candidates;
+  candidates.push_back({"日本", "にほん", 1.0, "model", ""});
+  candidates.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+  candidates.push_back({"別の表記", "ほか", 0.8, "model", ""});
+  auto filtered = azookey::tsf::FilterAcceptablePredictions("にほん", std::move(candidates));
+  ASSERT_EQ(filtered.size(), 1u);
+  EXPECT_EQ(filtered.front().surface, "日本語");
+  EXPECT_EQ(*azookey::tsf::PredictionReadingSuffix("にほん", filtered.front()), "ご");
+  EXPECT_FALSE(azookey::tsf::PredictionReadingSuffix("にほんご", filtered.front()));
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, CapsKeyTogglesAlphanumericPassThrough) {
   TextServiceHarness h;
   EXPECT_TRUE(h.TestPress(VK_OEM_ATTN));

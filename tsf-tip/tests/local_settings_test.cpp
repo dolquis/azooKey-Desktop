@@ -69,6 +69,16 @@ TEST_F(LocalSettingsTest, LiveConversionDefaultsOffAndReloads) {
   ASSERT_TRUE(WaitUntil([&] { return !reader.LiveConversionSnapshot(); }));
 }
 
+TEST_F(LocalSettingsTest, PredictionDefaultsOnAndReloads) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_TRUE(reader.PredictionEnabledSnapshot());
+  Write(R"({"predictionEnabled":false})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.PredictionEnabledSnapshot(); }));
+  Write(R"({"predictionEnabled":true})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.PredictionEnabledSnapshot(); }));
+}
+
 TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));

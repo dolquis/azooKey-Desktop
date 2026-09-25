@@ -212,6 +212,8 @@ std::optional<ipc::Envelope> Dispatcher::Dispatch(const ipc::Envelope& req) {
       return HandleQueryCandidates(req);
     case ipc::MessageType::QueryLiveConversion:
       return HandleQueryLiveConversion(req);
+    case ipc::MessageType::QueryPredictions:
+      return HandleQueryPredictions(req);
     case ipc::MessageType::QueryBatchConversion:
       return HandleQueryBatchConversion(req);
     case ipc::MessageType::ReverseConvert:
@@ -312,6 +314,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
     }
     case ipc::MessageType::QueryLiveConversion:
       return MakeResponse(req, ipc::BuildQueryLiveConversionResponse({}));
+    case ipc::MessageType::QueryPredictions: {
+      ipc::QueryPredictionsResponse r;
+      r.ok = false;
+      r.error = "not authenticated";
+      return MakeResponse(req, ipc::BuildQueryPredictionsResponse(r));
+    }
     case ipc::MessageType::QueryBatchConversion: {
       ipc::QueryBatchConversionResponse r;
       if (auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json)) {
@@ -357,7 +365,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   res.host_version = config_.host_version;
   res.protocol_version = config_.protocol_version;
   res.host_generation_id = config_.host_generation_id;
-  res.capabilities = {"oob_cancel", "commit_segments", "query_live_conversion"};
+  res.capabilities = {"oob_cancel", "commit_segments", "query_live_conversion",
+                      "query_predictions"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -639,6 +648,46 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   }
   trace.Finish(core::EtwResult::Success, candidate ? 1 : 0);
   return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
+}
+
+std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envelope& req) {
+  const auto parsed = ipc::ParseQueryPredictionsRequest(req.payload_json);
+  InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Kana,
+                       parsed ? parsed->kana.size() : 0);
+  ipc::QueryPredictionsResponse response;
+  if (!parsed || parsed->kana.empty()) {
+    response.ok = false;
+    response.error = "invalid_request";
+    return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
+  }
+  if (parsed->mode != "word") {
+    response.ok = false;
+    response.error = "unsupported_prediction_mode";
+    return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
+  }
+
+  auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
+  if (!cancel) {
+    response.ok = false;
+    response.error = "too_many_pending_requests";
+    return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
+  }
+  scheduler_->MarkLatest(client_id_, req.request_id);
+  trace.WatchCancellation(cancel);
+  RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
+
+  auto candidates = engine_->QueryPredictions(parsed->kana, parsed->left_side_context, NowSec());
+  const bool canceled = cancel->load(std::memory_order_acquire);
+  const bool stale = !scheduler_->IsLatest(client_id_, req.request_id);
+  completion.Complete();
+  if (canceled || stale) {
+    trace.Finish(core::EtwResult::Cancelled);
+    return std::nullopt;
+  }
+
+  for (const auto& candidate : candidates) response.predictions.push_back(ToField(candidate));
+  trace.Finish(core::EtwResult::Success, response.predictions.size());
+  return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
 }
 
 void Dispatcher::HandleObserveTypo(const ipc::Envelope& req) {

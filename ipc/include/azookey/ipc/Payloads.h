@@ -137,6 +137,19 @@ struct QueryLiveConversionResponse {
   double confidence{};  // Normalized to [0.0, 1.0].
 };
 
+// request_id travels in the Envelope. Phase 5 supports only mode="word".
+struct QueryPredictionsRequest {
+  std::string kana;
+  std::string left_side_context;
+  std::string mode{"word"};
+};
+
+struct QueryPredictionsResponse {
+  std::vector<CandidateField> predictions;
+  bool ok{true};
+  std::optional<std::string> error;
+};
+
 struct BatchConversionSegment {
   std::string reading;
   std::vector<CandidateField> candidates;
@@ -319,6 +332,8 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p);
 std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p);
 std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p);
 std::string BuildQueryLiveConversionResponse(const QueryLiveConversionResponse& p);
+std::string BuildQueryPredictionsRequest(const QueryPredictionsRequest& p);
+std::string BuildQueryPredictionsResponse(const QueryPredictionsResponse& p);
 std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& p);
 std::string BuildQueryBatchConversionResponse(const QueryBatchConversionResponse& p);
 std::string BuildReverseConvertRequest(const ReverseConvertRequest& p);
@@ -351,6 +366,8 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
 std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const std::string& json);
 std::optional<QueryLiveConversionResponse> ParseQueryLiveConversionResponse(
     const std::string& json);
+std::optional<QueryPredictionsRequest> ParseQueryPredictionsRequest(const std::string& json);
+std::optional<QueryPredictionsResponse> ParseQueryPredictionsResponse(const std::string& json);
 std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
     const std::string& json);
 std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(

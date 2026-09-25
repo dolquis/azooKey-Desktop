@@ -724,6 +724,25 @@ CaretAnchorForTest ResolveCaretAnchorForTest(const RECT* text_ext_rect, HWND tex
 }  // namespace testing
 #endif
 
+std::optional<std::string> PredictionReadingSuffix(std::string_view kana,
+                                                   const ipc::CandidateField& candidate) {
+  const std::string_view reading = candidate.reading;
+  if (kana.empty() || reading.size() <= kana.size() || reading.substr(0, kana.size()) != kana)
+    return std::nullopt;
+  return std::string(reading.substr(kana.size()));
+}
+
+std::vector<ipc::CandidateField> FilterAcceptablePredictions(
+    std::string_view kana, std::vector<ipc::CandidateField> candidates) {
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [kana](const auto& item) {
+                                    return !PredictionReadingSuffix(kana, item).has_value();
+                                  }),
+                   candidates.end());
+  if (candidates.size() > 5) candidates.resize(5);
+  return candidates;
+}
+
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
   ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
@@ -734,6 +753,8 @@ TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
 
 TextService::~TextService() {
   AZOOKEY_ASSERT_UI_THREAD();
+  ClearPrediction();
+  prediction_window_.Destroy();
   // Before the IPC members it signals: the watcher holds a callback bound to
   // this object, and a release that skips Deactivate would otherwise leave it
   // running against members already destroyed.
@@ -943,6 +964,13 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     if (active_context_) CommitSelected(active_context_);
   });
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
+  prediction_window_.SetOnClick([this](int index) {
+    try {
+      if (active_context_) (void)AcceptPrediction(active_context_, static_cast<size_t>(index));
+    } catch (...) {
+      ClearPrediction();
+    }
+  });
 
   StartIpcWorker();
   // Activation can happen while a document already has focus (for example,
@@ -960,7 +988,11 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   }
   try {
     if (const auto local = core::GetLocalAppDataDirectory()) {
-      local_settings_.SetOnChanged([this] { RequestHostOptionRefresh(); });
+      local_settings_.SetOnChanged([this] {
+        RequestHostOptionRefresh();
+        prediction_settings_changed_.store(true, std::memory_order_release);
+        candidate_ui_.PostCandidatesReady();
+      });
       local_settings_.Start(*local / "azooKey" / "config" / "settings.json");
     }
   } catch (...) {
@@ -986,6 +1018,8 @@ STDMETHODIMP TextService::Deactivate() {
   StopIpcWorker();
 
   UnadviseTextEditSink();
+  ClearPrediction();
+  prediction_window_.Destroy();
   ClearReconversionState();
   if (reconversion_cache_context_) {
     reconversion_cache_context_->Release();
@@ -1432,6 +1466,13 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
                       core::kModifierShift)) == 0;
     if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
       return S_OK;
+    if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&
+        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0 &&
+        (wParam == VK_ESCAPE || (wParam == VK_TAB && ((modifiers & core::kModifierShift) == 0 ||
+                                                      shown_predictions_.size() > 1)))) {
+      *eaten = TRUE;
+      return S_OK;
+    }
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
@@ -1591,6 +1632,23 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                       core::kModifierShift)) == 0;
     if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
       return S_OK;
+    if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&
+        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0) {
+      if (wParam == VK_ESCAPE) {
+        ClearPrediction();
+        *eaten = TRUE;
+        return S_OK;
+      }
+      if (wParam == VK_TAB &&
+          (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0) {
+        const size_t index = (modifiers & core::kModifierShift) != 0 ? 1 : 0;
+        if (index < shown_predictions_.size()) {
+          *eaten = TRUE;  // OnTestKeyDown already claimed this Tab, even if it became stale.
+          const HRESULT hr = AcceptPrediction(context, index);
+          return hr == E_OUTOFMEMORY ? hr : S_OK;
+        }
+      }
+    }
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
@@ -2513,11 +2571,15 @@ HRESULT TextService::RequestCommitEditSession(ITfContext* context) {
 }
 
 void TextService::ClearCandidateStateForLifecycle() {
+  ClearPrediction();
+  prediction_cache_.clear();
+  prediction_last_query_key_.clear();
   candidate_ui_.EndUI();
   selected_candidate_idx_ = 0;
   shown_candidates_.clear();
   caret_pt_ = {0, 0};
   caret_pt_valid_ = false;
+  caret_rect_valid_ = false;
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidates_.clear();
@@ -2598,6 +2660,7 @@ void TextService::PostPendingCommitObservation() {
 }
 
 void TextService::ClearTextStateForLifecycle() {
+  ClearPrediction();
   if (composition_range_) {
     composition_range_->Release();
     composition_range_ = nullptr;
@@ -3054,7 +3117,8 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
 // Caller holds ipc_mtx_. True when the serve loop has something to send, so an
 // idle Health probe must give way to it.
 bool TextService::HasQueuedIpcWorkLocked() const {
-  return ipc_has_request_ || ipc_reconversion_request_.has_value() || !ipc_send_queue_.empty() ||
+  return ipc_has_request_ || ipc_reconversion_request_.has_value() ||
+         ipc_prediction_request_.has_value() || !ipc_send_queue_.empty() ||
          ipc_refresh_options_.load(std::memory_order_relaxed);
 }
 
@@ -3190,6 +3254,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   hs.protocol_version = kHandshakeProtocolVersion;
   hs.capabilities = {"ping",
                      "query_candidates",
+                     "query_predictions",
                      "query_live_conversion",
                      "query_batch_conversion",
                      "commit_observation",
@@ -3250,6 +3315,9 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     ipc_host_live_conversion_ =
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "query_live_conversion") != hpayload->capabilities.end();
+    ipc_host_query_predictions_ =
+        std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
+                  "query_predictions") != hpayload->capabilities.end();
     ipc_host_commit_segments_.store(
         std::find(hpayload->capabilities.begin(), hpayload->capabilities.end(),
                   "commit_segments") != hpayload->capabilities.end(),
@@ -3610,7 +3678,10 @@ void TextService::ServeConnection() {
       return;
     }
 
-    if (!has_qc || (reading.empty() && emoji_trigger.empty())) continue;
+    if (!has_qc || (reading.empty() && emoji_trigger.empty())) {
+      QueryPendingPrediction(next_id);
+      continue;
+    }
     if (is_batch) {
       ConvertBatch(req_id, reading, raw_romaji, batch_mode);
       if (!ipc_client_.IsConnected()) return;
@@ -4256,6 +4327,94 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
   if (notify) candidate_ui_.PostCandidatesReady();
 }
 
+void TextService::QueryPendingPrediction(uint64_t& next_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  std::optional<PredictionRequest> request;
+  {
+    std::lock_guard lock(ipc_mtx_);
+    if (prediction_settings_changed_.load(std::memory_order_acquire) ||
+        prediction_settings_refreshing_.load(std::memory_order_acquire)) {
+      ipc_prediction_request_.reset();  // UI thread will requeue after re-evaluating privacy.
+      return;
+    }
+    if (ipc_has_request_) return;  // Host MarkLatest is shared with conversion queries.
+    request = std::move(ipc_prediction_request_);
+    ipc_prediction_request_.reset();
+  }
+  if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed))
+    return;
+  const auto retry_dropped_request = [&] {
+    if (ipc_stop_.load(std::memory_order_relaxed)) return;
+    bool notify = false;
+    {
+      std::lock_guard lock(ipc_mtx_);
+      if (prediction_generation_ == request->generation) {
+        prediction_retry_generation_.store(request->generation, std::memory_order_release);
+        notify = true;
+      }
+    }
+    if (notify) candidate_ui_.PostCandidatesReady();
+  };
+  if (prediction_settings_changed_.load(std::memory_order_acquire) ||
+      prediction_settings_refreshing_.load(std::memory_order_acquire)) {
+    retry_dropped_request();
+    return;
+  }
+  ipc::QueryPredictionsRequest payload;
+  payload.kana = request->kana;
+  payload.left_side_context = request->left_side_context;
+  payload.mode = "word";
+  ipc::Envelope envelope;
+  envelope.version = 1;
+  envelope.request_id = next_id++;
+  envelope.trace_id = "tip-prediction";
+  envelope.type = ipc::MessageType::QueryPredictions;
+  envelope.payload_json = ipc::BuildQueryPredictionsRequest(payload);
+  {
+    std::lock_guard lock(ipc_mtx_);
+    if (prediction_generation_ != request->generation) return;
+    ipc_inflight_id_ = envelope.request_id;
+  }
+  const auto clear_inflight = [&] {
+    std::lock_guard lock(ipc_mtx_);
+    if (ipc_inflight_id_ == envelope.request_id) ipc_inflight_id_ = 0;
+  };
+  if (!ipc_client_.Send(envelope)) {
+    clear_inflight();
+    retry_dropped_request();
+    return;
+  }
+  std::optional<ipc::Envelope> response;
+  const bool received = WaitForIpcResponseOrStop(kQueryCandidatesFastTimeoutMs, envelope.request_id,
+                                                 ipc::MessageType::QueryPredictions, &response);
+  clear_inflight();
+  if (!received || !response) {
+    retry_dropped_request();
+    return;
+  }
+  NoteHostResponded();
+  auto parsed = ipc::ParseQueryPredictionsResponse(response->payload_json);
+  if (!parsed || !parsed->ok) {
+    retry_dropped_request();
+    return;
+  }
+  bool notify = false;
+  {
+    std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+    if (prediction_generation_ == request->generation && !ipc_has_request_ &&
+        !ipc_prediction_request_) {
+      prediction_result_ =
+          PredictionResult{request->generation, request->kana, request->left_side_context,
+                           std::move(parsed->predictions)};
+      notify = true;
+    }
+  }
+  if (notify)
+    candidate_ui_.PostCandidatesReady();
+  else
+    retry_dropped_request();
+}
+
 void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
   const auto privacy = ResolvePrivacy(context, false);
@@ -4620,6 +4779,11 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
                                    input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
     }
     core_action_in_progress_ = false;
+    try {
+      RefreshPrediction(context);
+    } catch (...) {
+      ClearPrediction();  // Prediction is best-effort; never roll back a typed key.
+    }
     return S_OK;
   } catch (const std::bad_alloc&) {
     rollback();
@@ -4667,7 +4831,208 @@ void TextService::OnCandidatesReady(void* context) {
   service->PrefetchSelectedReconversion();
   service->ShowReconversionResult();
   service->ApplyLiveConversionResult();
+  bool refreshing_settings = false;
+  try {
+    if (service->prediction_settings_changed_.load(std::memory_order_acquire)) {
+      service->prediction_settings_refreshing_.store(true, std::memory_order_release);
+      refreshing_settings = true;
+      if (service->prediction_settings_changed_.exchange(false, std::memory_order_acq_rel)) {
+        if (service->active_context_)
+          (void)service->ResolvePrivacy(service->active_context_, false);
+        service->prediction_settings_refreshing_.store(false, std::memory_order_release);
+        refreshing_settings = false;
+        service->prediction_last_query_key_.clear();
+        service->RefreshPrediction(service->active_context_);
+      }
+      service->prediction_settings_refreshing_.store(false, std::memory_order_release);
+      refreshing_settings = false;
+    }
+    service->ApplyPredictionResult();
+    const uint64_t retry_generation =
+        service->prediction_retry_generation_.exchange(0, std::memory_order_acq_rel);
+    if (retry_generation != 0) {
+      std::lock_guard lock(service->ipc_mtx_);
+      if (retry_generation == service->prediction_generation_) {
+        service->prediction_retry_scheduled_generation_ = retry_generation;
+        service->prediction_retry_due_at_ =
+            service->prediction_last_query_at_ + std::chrono::seconds(1);
+      }
+    }
+    if (service->prediction_retry_scheduled_generation_ != 0) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now < service->prediction_retry_due_at_) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   service->prediction_retry_due_at_ - now)
+                                   .count() +
+                               1;
+        service->candidate_ui_.ScheduleCandidatesReady(static_cast<UINT>(remaining));
+      } else {
+        bool still_current = false;
+        {
+          std::lock_guard lock(service->ipc_mtx_);
+          still_current =
+              service->prediction_retry_scheduled_generation_ == service->prediction_generation_;
+        }
+        service->prediction_retry_scheduled_generation_ = 0;
+        if (still_current) {
+          service->prediction_last_query_key_.clear();
+          service->RefreshPrediction(service->active_context_);
+        }
+      }
+    }
+  } catch (...) {
+    if (refreshing_settings)
+      service->prediction_settings_refreshing_.store(false, std::memory_order_release);
+    service->ClearPrediction();
+  }
   service->ShowCandidateWindowFromCache();
+}
+
+RECT TextService::PredictionCaretRect() {
+  if (caret_rect_valid_) return caret_rect_;
+  const POINT point = CandidateAnchorPoint();
+  return {point.x, point.y - 16, point.x + 1, point.y};
+}
+
+void TextService::ClearPrediction() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  candidate_ui_.CancelScheduledCandidatesReady();
+  prediction_retry_scheduled_generation_ = 0;
+  prediction_retry_generation_.store(0, std::memory_order_release);
+  prediction_window_.Hide();
+  shown_predictions_.clear();
+  {
+    std::lock_guard lock(ipc_mtx_);
+    ++prediction_generation_;
+    ipc_prediction_request_.reset();
+  }
+  {
+    std::lock_guard lock(candidates_mtx_);
+    prediction_result_.reset();
+  }
+}
+
+void TextService::RefreshPrediction(ITfContext* context) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!local_settings_.PredictionEnabledSnapshot()) {
+    ClearPrediction();
+    prediction_window_.Destroy();
+    prediction_cache_.clear();
+    prediction_last_query_key_.clear();
+    return;
+  }
+  if (!context || !core_input_active_ || !keyboard_open_ || alnum_mode_ ||
+      candidate_ui_.IsShowing() ||
+      (input_state_.kind() != core::InputStateKind::Composing &&
+       input_state_.kind() != core::InputStateKind::Previewing) ||
+      secure_input_.load(std::memory_order_relaxed)) {
+    ClearPrediction();
+    return;
+  }
+  const std::string kana = input_state_.confirmed_kana();
+  if (kana.empty()) {
+    ClearPrediction();
+    return;
+  }
+  const std::string cache_key =
+      kana + '\0' + std::to_string(std::hash<std::string>{}(prediction_left_context_));
+  const auto now = std::chrono::steady_clock::now();
+  for (auto it = prediction_cache_.begin(); it != prediction_cache_.end();) {
+    if (now - it->second.stored_at >= std::chrono::seconds(1))
+      it = prediction_cache_.erase(it);
+    else
+      ++it;
+  }
+  if (const auto cached = prediction_cache_.find(cache_key); cached != prediction_cache_.end()) {
+    candidate_ui_.CancelScheduledCandidatesReady();
+    prediction_retry_scheduled_generation_ = 0;
+    shown_predictions_ = cached->second.predictions;
+    std::vector<std::wstring> labels;
+    for (const auto& candidate : shown_predictions_)
+      labels.push_back(Utf8ToWide(candidate.surface));
+    if (!labels.empty() && prediction_window_.Create())
+      prediction_window_.Show(labels, PredictionCaretRect());
+    else
+      prediction_window_.Hide();
+    return;
+  }
+  prediction_window_.Hide();
+  shown_predictions_.clear();
+  if (prediction_last_query_key_ == cache_key &&
+      now - prediction_last_query_at_ < std::chrono::seconds(1))
+    return;
+  prediction_last_query_key_ = cache_key;
+  prediction_last_query_at_ = now;
+  candidate_ui_.CancelScheduledCandidatesReady();
+  prediction_retry_scheduled_generation_ = 0;
+  {
+    std::lock_guard lock(ipc_mtx_);
+    ipc_prediction_request_ =
+        PredictionRequest{++prediction_generation_, kana, prediction_left_context_};
+  }
+  ipc_cv_.notify_one();
+}
+
+void TextService::ApplyPredictionResult() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  std::optional<PredictionResult> result;
+  {
+    std::lock_guard lock(candidates_mtx_);
+    result = std::move(prediction_result_);
+    prediction_result_.reset();
+  }
+  if (!local_settings_.PredictionEnabledSnapshot()) {
+    ClearPrediction();
+    prediction_window_.Destroy();
+    prediction_cache_.clear();
+    prediction_last_query_key_.clear();
+    return;
+  }
+  if (!result || !active_context_ || secure_input_.load(std::memory_order_relaxed) ||
+      candidate_ui_.IsShowing() || input_state_.confirmed_kana() != result->kana ||
+      prediction_left_context_ != result->left_side_context)
+    return;
+  {
+    std::lock_guard lock(ipc_mtx_);
+    if (prediction_generation_ != result->generation) return;
+  }
+  result->predictions = FilterAcceptablePredictions(result->kana, std::move(result->predictions));
+  const std::string cache_key =
+      result->kana + '\0' + std::to_string(std::hash<std::string>{}(result->left_side_context));
+  prediction_cache_[cache_key] =
+      PredictionCacheEntry{result->predictions, std::chrono::steady_clock::now()};
+  shown_predictions_ = std::move(result->predictions);
+  std::vector<std::wstring> labels;
+  for (const auto& candidate : shown_predictions_) labels.push_back(Utf8ToWide(candidate.surface));
+  if (!labels.empty() && prediction_window_.Create())
+    prediction_window_.Show(labels, PredictionCaretRect());
+  else
+    prediction_window_.Hide();
+}
+
+HRESULT TextService::AcceptPrediction(ITfContext* context, size_t index) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!context || index >= shown_predictions_.size() || !prediction_window_.IsVisible())
+    return S_FALSE;
+  const std::string current = input_state_.confirmed_kana();
+  const auto suffix = PredictionReadingSuffix(current, shown_predictions_[index]);
+  if (!suffix) {
+    ClearPrediction();
+    return S_FALSE;
+  }
+  return ApplyPredictionReading(context, current + *suffix);
+}
+
+HRESULT TextService::ApplyPredictionReading(ITfContext* context, const std::string& reading) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!context || reading.empty()) return E_INVALIDARG;
+  ClearPrediction();
+  CancelPendingQueriesForLifecycle();
+  core::HandleResult result;
+  result.next = input_state_.WithComposition(reading, core::RomajiKanaConverter{});
+  result.actions.push_back(core::ReplaceMarkedText{reading});
+  result.actions.push_back(core::QueryCandidates{reading});
+  return ApplyInputStateResult(context, std::move(result));
 }
 
 void TextService::ApplyLiveConversionResult() {
@@ -5433,6 +5798,25 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
       const CaretAnchor anchor = ResolveCaretAnchor(text_ext_rect, text_extent_window);
       service_->caret_pt_ = anchor.point;
       service_->caret_pt_valid_ = anchor.valid;
+      service_->caret_rect_valid_ = false;
+      if (text_ext_rect && IsUsableTextExtent(*text_ext_rect)) {
+        RECT physical = *text_ext_rect;
+        bool converted = true;
+        if (text_extent_window) {
+          POINT top_left{physical.left, physical.top};
+          POINT bottom_right{physical.right, physical.bottom};
+          if (LogicalToPhysicalPointForPerMonitorDPI(text_extent_window, &top_left) &&
+              LogicalToPhysicalPointForPerMonitorDPI(text_extent_window, &bottom_right)) {
+            physical = {top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+          } else {
+            converted = false;
+          }
+        }
+        if (converted) {
+          service_->caret_rect_ = physical;
+          service_->caret_rect_valid_ = true;
+        }
+      }
     }
 
     // Apply underline display attribute via GUID_PROP_ATTRIBUTE.

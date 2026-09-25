@@ -5,6 +5,7 @@
 #include <msctf.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -12,7 +13,9 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "azookey/core/InputState.h"
@@ -24,6 +27,7 @@
 #include "azookey/tsf/CharacterFormEditSession.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
+#include "azookey/tsf/PredictionWindow.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #ifdef _DEBUG
@@ -31,6 +35,12 @@
 #endif
 
 namespace azookey::tsf {
+
+// A prediction may be accepted only if its reading extends the current kana.
+std::optional<std::string> PredictionReadingSuffix(std::string_view kana,
+                                                   const ipc::CandidateField& candidate);
+std::vector<ipc::CandidateField> FilterAcceptablePredictions(
+    std::string_view kana, std::vector<ipc::CandidateField> candidates);
 
 #ifdef AZOOKEY_TSF_TESTING
 namespace testing {
@@ -161,6 +171,10 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string commit_surface_;
   POINT caret_pt_{0, 0};
   bool caret_pt_valid_{false};
+  RECT caret_rect_{0, 0, 0, 0};
+  bool caret_rect_valid_{false};
+  // Context extraction is deferred to DEV-1349; the M15 wire field stays empty.
+  std::string prediction_left_context_;
 
 #ifdef AZOOKEY_TSF_TESTING
   bool candidate_window_show_pending_for_test();
@@ -172,6 +186,22 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   void set_live_conversion_for_test(bool enabled) {
     local_settings_.SetLiveConversionForTest(enabled);
+  }
+  void set_prediction_enabled_for_test(bool enabled) {
+    local_settings_.SetPredictionEnabledForTest(enabled);
+  }
+  HRESULT apply_prediction_reading_for_test(ITfContext* context, const std::string& reading) {
+    return ApplyPredictionReading(context, reading);
+  }
+  uint64_t pending_prediction_generation_for_test() {
+    std::lock_guard lock(ipc_mtx_);
+    return ipc_prediction_request_ ? ipc_prediction_request_->generation : 0;
+  }
+  void retry_dropped_prediction_for_test() {
+    const uint64_t generation = pending_prediction_generation_for_test();
+    prediction_last_query_at_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    prediction_retry_generation_.store(generation, std::memory_order_release);
+    OnCandidatesReady(this);
   }
   void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
   bool bracket_composition_for_test() const { return bracket_composition_; }
@@ -386,6 +416,17 @@ class TextService final : public ITfTextInputProcessorEx,
 
   // Candidate UI coordinator (M5).
   CandidateUiCoordinator candidate_ui_;
+  PredictionWindow prediction_window_;
+  std::vector<ipc::CandidateField> shown_predictions_;  // UI thread only.
+  struct PredictionCacheEntry {
+    std::vector<ipc::CandidateField> predictions;
+    std::chrono::steady_clock::time_point stored_at;
+  };
+  std::unordered_map<std::string, PredictionCacheEntry> prediction_cache_;  // UI thread only.
+  std::string prediction_last_query_key_;                                   // UI thread only.
+  std::chrono::steady_clock::time_point prediction_last_query_at_{};
+  uint64_t prediction_retry_scheduled_generation_{0};  // UI thread only.
+  std::chrono::steady_clock::time_point prediction_retry_due_at_{};
   int selected_candidate_idx_{0};
   // Snapshot of candidates taken when the window was opened (used for commit
   // so that a late QueryCandidates response cannot change what is confirmed).
@@ -452,10 +493,14 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_has_known_host_generation_{false};
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
   bool ipc_host_live_conversion_{false};  // IPC worker only.
+  bool ipc_host_query_predictions_{false};  // IPC worker only.
   // Set by the local settings watcher when settings.json changed, so a healthy
   // connection re-runs the handshake instead of serving the batch mode and
   // punctuation policy it captured at activation (DEV-1143).
   std::atomic<bool> ipc_refresh_options_{false};
+  std::atomic<bool> prediction_settings_changed_{false};
+  std::atomic<bool> prediction_settings_refreshing_{false};
+  std::atomic<uint64_t> prediction_retry_generation_{0};
   std::atomic<bool> ipc_host_commit_segments_{false};
   core::AiPrivacy ipc_pending_ai_privacy_;  // protected by ipc_mtx_
   std::string ipc_pending_ai_backend_;      // protected by ipc_mtx_
@@ -481,6 +526,13 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string surface;
   };
   std::optional<ReconversionRequest> ipc_reconversion_request_;  // ipc_mtx_
+  struct PredictionRequest {
+    uint64_t generation;
+    std::string kana;
+    std::string left_side_context;
+  };
+  std::optional<PredictionRequest> ipc_prediction_request_;  // ipc_mtx_
+  uint64_t prediction_generation_{0};                        // ipc_mtx_
   // Monotonic counter behind the CommitObservation idempotency key. Written on
   // the TIP thread, never read by the IPC worker, so an atomic suffices.
   std::atomic<uint64_t> commit_observation_seq_{0};
@@ -497,6 +549,13 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string surface;
   };
   std::optional<LiveConversionResult> live_conversion_result_;  // candidates_mtx_
+  struct PredictionResult {
+    uint64_t generation;
+    std::string kana;
+    std::string left_side_context;
+    std::vector<ipc::CandidateField> predictions;
+  };
+  std::optional<PredictionResult> prediction_result_;           // candidates_mtx_
   std::string live_display_reading_;                            // UI thread only.
   std::string live_display_surface_;                            // UI thread only.
   struct ReconversionResult {
@@ -526,6 +585,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::atomic<uint32_t> ipc_worker_exception_code_{0};
   void ServeConnection();
   bool ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id);
+  void QueryPendingPrediction(uint64_t& next_id);
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
                     const std::string& mode);
   bool PerformHandshake();
@@ -572,6 +632,12 @@ class TextService final : public ITfTextInputProcessorEx,
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
   void ApplyLiveConversionResult();
+  void ApplyPredictionResult();
+  void RefreshPrediction(ITfContext* context);
+  void ClearPrediction();
+  HRESULT AcceptPrediction(ITfContext* context, size_t index);
+  HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
+  RECT PredictionCaretRect();
   HRESULT StartSelectionReconversion(ITfContext* context);
   HRESULT CompleteReconversionSelection(size_t index);
   void ClearReconversionState();

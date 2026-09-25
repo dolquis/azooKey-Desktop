@@ -349,6 +349,60 @@ TEST(PayloadsTest, QueryLiveConversionRejectsMalformedPayloads) {
   EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1})").has_value());
 }
 
+TEST(PayloadsTest, QueryPredictionsRoundTripUsesSpecifiedWireFields) {
+  using namespace azookey::ipc;
+  const QueryPredictionsRequest request{"にほん", "私は", "word"};
+  const auto request_json = BuildQueryPredictionsRequest(request);
+  const auto wire = json::Parse(request_json);
+  ASSERT_TRUE(wire);
+  EXPECT_EQ(wire->GetString("kana"), request.kana);
+  EXPECT_EQ(wire->GetString("leftSideContext"), request.left_side_context);
+  EXPECT_EQ(wire->GetString("mode"), "word");
+  EXPECT_FALSE(wire->GetString("request_id"));
+  const auto parsed_request = ParseQueryPredictionsRequest(request_json);
+  ASSERT_TRUE(parsed_request);
+  EXPECT_EQ(parsed_request->kana, request.kana);
+  EXPECT_EQ(parsed_request->left_side_context, request.left_side_context);
+  EXPECT_EQ(parsed_request->mode, request.mode);
+
+  QueryPredictionsResponse response;
+  response.predictions = {{"日本", "にほん", 1.5, "system", "country"},
+                          {"日本語", "にほんご", 0.5, "model", ""}};
+  const auto parsed_response =
+      ParseQueryPredictionsResponse(BuildQueryPredictionsResponse(response));
+  ASSERT_TRUE(parsed_response);
+  EXPECT_TRUE(parsed_response->ok);
+  ASSERT_EQ(parsed_response->predictions.size(), 2u);
+  EXPECT_EQ(parsed_response->predictions[0].surface, "日本");
+  EXPECT_EQ(parsed_response->predictions[0].description, "country");
+  EXPECT_DOUBLE_EQ(parsed_response->predictions[1].score, 0.5);
+}
+
+TEST(PayloadsTest, QueryPredictionsRejectsMalformedPayloads) {
+  using namespace azookey::ipc;
+  EXPECT_FALSE(ParseQueryPredictionsRequest("{}").has_value());
+  EXPECT_FALSE(ParseQueryPredictionsRequest(R"({"kana":"かな","mode":"word"})").has_value());
+  EXPECT_FALSE(
+      ParseQueryPredictionsRequest(R"({"kana":3,"leftSideContext":"","mode":"word"})").has_value());
+  EXPECT_FALSE(
+      ParseQueryPredictionsRequest(R"({"kana":"かな","leftSideContext":null,"mode":"word"})")
+          .has_value());
+  EXPECT_FALSE(ParseQueryPredictionsRequest(R"({"kana":"かな","leftSideContext":"","mode":42})")
+                   .has_value());
+  EXPECT_FALSE(ParseQueryPredictionsResponse("{}").has_value());
+  EXPECT_FALSE(ParseQueryPredictionsResponse(R"({"predictions":null})").has_value());
+  const auto partial = ParseQueryPredictionsResponse(
+      R"({"predictions":[{"surface":"日本","reading":"にほん"},{"surface":7},null]})");
+  ASSERT_TRUE(partial);
+  ASSERT_EQ(partial->predictions.size(), 1u);
+  EXPECT_EQ(partial->predictions[0].surface, "日本");
+  const auto failed = ParseQueryPredictionsResponse(
+      R"({"ok":false,"error":"unsupported_prediction_mode","predictions":[]})");
+  ASSERT_TRUE(failed);
+  EXPECT_FALSE(failed->ok);
+  EXPECT_EQ(failed->error, "unsupported_prediction_mode");
+}
+
 TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {
   const auto old_request =
       azookey::ipc::ParseQueryCandidatesRequest(R"({"reading":"かな","live":true})");

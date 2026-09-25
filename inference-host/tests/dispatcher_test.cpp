@@ -240,6 +240,15 @@ TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingReques
   EXPECT_TRUE(parsed_batch->canceled);
   EXPECT_TRUE(scheduler.IsLatest(1));
   EXPECT_EQ(scheduler.TrackCancellation(limit + 1), nullptr);
+  const auto predictions =
+      dispatcher.Dispatch(MakeReq(limit + 2, ipc::MessageType::QueryPredictions,
+                                  ipc::BuildQueryPredictionsRequest({"にほん", "", "word"})));
+  ASSERT_TRUE(predictions);
+  const auto parsed_predictions = ipc::ParseQueryPredictionsResponse(predictions->payload_json);
+  ASSERT_TRUE(parsed_predictions);
+  EXPECT_FALSE(parsed_predictions->ok);
+  EXPECT_EQ(parsed_predictions->error, "too_many_pending_requests");
+  EXPECT_TRUE(scheduler.IsLatest(1));
   scheduler.CompleteRequest(1);
   EXPECT_NE(scheduler.TrackCancellation(limit + 1), nullptr);
 }
@@ -284,6 +293,9 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_EQ(parsed->host_generation_id, "dispatcher-test-generation");
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_live_conversion"),
+      parsed->capabilities.end());
+  EXPECT_NE(
+      std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
 
   ipc::HandshakeRequest bad = req;
@@ -510,6 +522,19 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   EXPECT_FALSE(batch_payload->partial);
   EXPECT_FALSE(batch_payload->canceled);
 
+  const auto predictions_request =
+      MakeReq(85, ipc::MessageType::QueryPredictions,
+              ipc::BuildQueryPredictionsRequest({"にほん", "", "word"}));
+  const auto predictions_before = token_dispatcher.Dispatch(predictions_request);
+  ASSERT_TRUE(predictions_before);
+  EXPECT_EQ(predictions_before->request_id, predictions_request.request_id);
+  const auto predictions_before_payload =
+      ipc::ParseQueryPredictionsResponse(predictions_before->payload_json);
+  ASSERT_TRUE(predictions_before_payload);
+  EXPECT_FALSE(predictions_before_payload->ok);
+  EXPECT_EQ(predictions_before_payload->error, "not authenticated");
+  EXPECT_TRUE(predictions_before_payload->predictions.empty());
+
   user_dict.Add({"明日", "あした"});
   const auto reverse_request =
       MakeReq(84, ipc::MessageType::ReverseConvert, ipc::BuildReverseConvertRequest({"明日"}));
@@ -531,6 +556,14 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   auto matched_payload = ipc::ParseHandshakeResponse(matched->payload_json);
   ASSERT_TRUE(matched_payload.has_value());
   EXPECT_TRUE(matched_payload->accepted);
+
+  const auto predictions_after = token_dispatcher.Dispatch(predictions_request);
+  ASSERT_TRUE(predictions_after);
+  const auto predictions_after_payload =
+      ipc::ParseQueryPredictionsResponse(predictions_after->payload_json);
+  ASSERT_TRUE(predictions_after_payload);
+  EXPECT_TRUE(predictions_after_payload->ok);
+  EXPECT_FALSE(predictions_after_payload->predictions.empty());
 
   auto add_after_handshake = token_dispatcher.Dispatch(
       MakeReq(10, ipc::MessageType::AddUserWord, ipc::BuildAddUserWordRequest(add)));
@@ -636,6 +669,60 @@ TEST_F(DispatcherTest, QueryLiveConversionSuppressesPreCanceledReply) {
                                                     ipc::BuildQueryLiveConversionRequest(query)));
   EXPECT_FALSE(response);
   EXPECT_FALSE(scheduler.IsCanceled(22));
+}
+
+TEST_F(DispatcherTest, QueryPredictionsReturnsWordCandidatesAndCorrelatesEnvelope) {
+  const ipc::QueryPredictionsRequest query{"にほん", "私は", "word"};
+  const auto request =
+      MakeReq(24, ipc::MessageType::QueryPredictions, ipc::BuildQueryPredictionsRequest(query));
+  const auto response = dispatcher.Dispatch(request);
+  ASSERT_TRUE(response);
+  EXPECT_EQ(response->type, request.type);
+  EXPECT_EQ(response->request_id, request.request_id);
+  EXPECT_EQ(response->trace_id, request.trace_id);
+  const auto parsed = ipc::ParseQueryPredictionsResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->ok);
+  ASSERT_FALSE(parsed->predictions.empty());
+  EXPECT_EQ(parsed->predictions.front().surface, "日本");
+  EXPECT_EQ(parsed->predictions.front().reading, "にほん");
+}
+
+TEST_F(DispatcherTest, QueryPredictionsRejectsUnsupportedModeAndMalformedRequest) {
+  ipc::QueryPredictionsRequest query{"にほん", "", "phrase"};
+  const auto unsupported = dispatcher.Dispatch(
+      MakeReq(25, ipc::MessageType::QueryPredictions, ipc::BuildQueryPredictionsRequest(query)));
+  ASSERT_TRUE(unsupported);
+  const auto parsed_unsupported = ipc::ParseQueryPredictionsResponse(unsupported->payload_json);
+  ASSERT_TRUE(parsed_unsupported);
+  EXPECT_FALSE(parsed_unsupported->ok);
+  EXPECT_EQ(parsed_unsupported->error, "unsupported_prediction_mode");
+  EXPECT_TRUE(parsed_unsupported->predictions.empty());
+  query.mode = "sentence";
+  const auto sentence = dispatcher.Dispatch(
+      MakeReq(28, ipc::MessageType::QueryPredictions, ipc::BuildQueryPredictionsRequest(query)));
+  ASSERT_TRUE(sentence);
+  const auto parsed_sentence = ipc::ParseQueryPredictionsResponse(sentence->payload_json);
+  ASSERT_TRUE(parsed_sentence);
+  EXPECT_FALSE(parsed_sentence->ok);
+  EXPECT_EQ(parsed_sentence->error, "unsupported_prediction_mode");
+
+  const auto malformed =
+      dispatcher.Dispatch(MakeReq(26, ipc::MessageType::QueryPredictions, R"({"kana":"にほん"})"));
+  ASSERT_TRUE(malformed);
+  const auto parsed_malformed = ipc::ParseQueryPredictionsResponse(malformed->payload_json);
+  ASSERT_TRUE(parsed_malformed);
+  EXPECT_FALSE(parsed_malformed->ok);
+  EXPECT_EQ(parsed_malformed->error, "invalid_request");
+}
+
+TEST_F(DispatcherTest, QueryPredictionsSuppressesPreCanceledReply) {
+  scheduler.Cancel(27);
+  const auto response =
+      dispatcher.Dispatch(MakeReq(27, ipc::MessageType::QueryPredictions,
+                                  ipc::BuildQueryPredictionsRequest({"にほん", "", "word"})));
+  EXPECT_FALSE(response);
+  EXPECT_FALSE(scheduler.IsCanceled(27));
 }
 
 TEST_F(DispatcherTest, QueryBatchConversionReturnsSingleSegment) {
@@ -848,9 +935,8 @@ TEST_F(DispatcherTest, QueryExceptionCompletesCancellationState) {
 }
 
 TEST_F(DispatcherTest, AuthenticatedUnsupportedMessagesReturnExplicitTypedErrors) {
-  for (const auto type : {ipc::MessageType::QueryPredictions, ipc::MessageType::QueryCorrections,
-                          ipc::MessageType::CommitCorrection, ipc::MessageType::UpdateUserWord,
-                          ipc::MessageType::Unknown}) {
+  for (const auto type : {ipc::MessageType::QueryCorrections, ipc::MessageType::CommitCorrection,
+                          ipc::MessageType::UpdateUserWord, ipc::MessageType::Unknown}) {
     const auto response = dispatcher.Dispatch(MakeReq(32, type, "{}"));
     ASSERT_TRUE(response.has_value()) << ipc::TypeToString(type);
     EXPECT_EQ(response->type, type);
@@ -2241,7 +2327,57 @@ class CancelObservingConverter final : public azookey::core::IConverter {
   std::atomic<bool> saw_cancel_{false};
 };
 
+class BlockingPredictionConverter final : public azookey::core::IConverter {
+ public:
+  explicit BlockingPredictionConverter(std::shared_future<void> release)
+      : release_(std::move(release)) {}
+
+  std::future<void> Entered() { return entered_.get_future(); }
+
+  std::vector<azookey::core::Candidate> Convert(const std::string&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext&) override {
+    entered_.set_value();
+    release_.wait();
+    return {{kana, kana, 1.0, azookey::core::CandidateSource::Heuristic, "test"}};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+ private:
+  std::promise<void> entered_;
+  std::shared_future<void> release_;
+};
+
 }  // namespace
+
+TEST_F(DispatcherTest, QueryPredictionsDropsStaleResultAfterNewerRequest) {
+  std::promise<void> release;
+  auto converter = std::make_unique<BlockingPredictionConverter>(release.get_future().share());
+  auto entered = converter->Entered();
+  azookey::host::InferenceEngine local_engine(std::move(converter), &store, {});
+  azookey::host::RequestScheduler local_scheduler;
+  azookey::host::Dispatcher local_dispatcher(&local_engine, &local_scheduler, &user_dict,
+                                             DefaultDispatcherConfig());
+  const auto request = MakeReq(300, ipc::MessageType::QueryPredictions,
+                               ipc::BuildQueryPredictionsRequest({"にほん", "", "word"}));
+  auto pending = std::async(std::launch::async, [&] { return local_dispatcher.Dispatch(request); });
+  const bool started = entered.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  if (started) local_scheduler.MarkLatest(301);
+  release.set_value();
+  const auto response = pending.get();
+  ASSERT_TRUE(started);
+  EXPECT_FALSE(response);
+  EXPECT_FALSE(local_scheduler.IsCanceled(300));
+}
 
 // M47 section 8.5.2: an out-of-band Cancel stops the conversion itself, not
 // only the reply, so a converter that runs past the TIP's deadline does not

@@ -68,6 +68,16 @@ void CandidateUiCoordinator::SetBeginObserver(CandidateUiBeginObserver observer,
 
 void CandidateUiCoordinator::PostCandidatesReady() { own_window_.PostCandidatesReady(); }
 
+bool CandidateUiCoordinator::ScheduleCandidatesReady(UINT delay_ms) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  return own_window_.ScheduleCandidatesReady(delay_ms);
+}
+
+void CandidateUiCoordinator::CancelScheduledCandidatesReady() {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  own_window_.CancelScheduledCandidatesReady();
+}
+
 HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
                                         const std::vector<CandidateViewItem>& items,
                                         int selected_idx) {

@@ -5,6 +5,7 @@ add_library(azookey_tsf_tip SHARED
   src/CandidateListUIElement.cpp
   src/CandidateUiCoordinator.cpp
   src/CandidateWindow.cpp
+  src/PredictionWindow.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
   src/ForegroundAppDetector.cpp
@@ -33,6 +34,10 @@ target_link_libraries(azookey_tsf_tip
     shcore
     shell32
     dwrite
+    d3d11
+    d2d1
+    dcomp
+    dxgi
 )
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
@@ -45,6 +50,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/CandidateListUIElement.cpp
     src/CandidateUiCoordinator.cpp
     src/CandidateWindow.cpp
+    src/PredictionWindow.cpp
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp
     src/IpcConnectionState.cpp
@@ -74,6 +80,10 @@ if(AZOOKEY_BUILD_TESTS)
       user32
       gdi32
       dwrite
+      d3d11
+      d2d1
+      dcomp
+      dxgi
   )
 
   function(add_tsf_tip_unit_test target_name test_source)
@@ -143,6 +153,7 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 15)
   add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_prediction_window_tests tests/prediction_window_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_caret_position_tests tests/caret_position_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_query_interface_contract_tests

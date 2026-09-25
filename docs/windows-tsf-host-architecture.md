@@ -153,13 +153,9 @@ Linear が持つ。
   `trace_id="diag-query-diagnostics"` / payload `{}` で送り、応答を `ParseQueryDiagnostics`
   して診断スナップショットへ格納する。TIP が送る契機と、応答のうち `fallback_state` だけを
   使う規則は `docs/dev-infrastructure-spec.md` §8.5.1 が定める。
-- ⚠️ enum のみ定義済み、Payload/Dispatcher 未実装:
-  - `QueryPredictions` `QueryCorrections` `CommitCorrection` `UpdateUserWord`
-  - `InferenceEngine` 側には既に `QueryPredictions/QueryCorrections/CommitCorrection`
-    関数があるため、Payload と Dispatcher ハンドラを追加すれば配線可能。
-  - 認証済み Dispatcher がこれらの型または `Unknown` を受け取った場合は、request の型と
-    相関 ID を保った `{"ok":false,"error":"unsupported_message_type"}` 応答を返す。
-    無応答は fire-and-forget の `Cancel` に限る。
+- 認証済み Dispatcher がハンドラ未対応の型または `Unknown` を受け取った場合は、
+  request の型と相関 ID を保った `{"ok":false,"error":"unsupported_message_type"}`
+  応答を返す。無応答は fire-and-forget の `Cancel` に限る。
 
 ### Handshake 認証ゲート
 
@@ -429,21 +425,16 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 ## 新規 IPC メッセージ
 
-以下は Phase 5〜6 に対応する IPC メッセージの一覧で、配線済みの型も含む。
+以下は Phase 5〜6 に対応する IPC メッセージの一覧。
 
-> 注: `MessageType` enum は 22 の named 型 + `Unknown` sentinel = 23 entries
-> （`ipc/include/azookey/ipc/Messages.h` が正典）。このうち Payload/Dispatcher まで
-> 配線済みは 18 種で、残る 4 種（`QueryPredictions` / `QueryCorrections` /
-> `CommitCorrection` / `UpdateUserWord`）は enum のみ。配線済み判定は
-> `Messages.h`・`Payloads.h`/`.cpp`・`Dispatcher.cpp` の 3 点を突き合わせて行い、
-> enum に存在するだけの型を「利用可能」とみなさない。新メッセージ型を enum に
-> 追加する際は **`Unknown` sentinel の前に挿入**すること（末尾の `Unknown` の
-> 後ろに追加しない）。
+> 注: 利用可能な型は `Messages.h`、`Payloads.h`/`.cpp`、`Dispatcher.cpp` の
+> 3 点で確認する。enum に存在するだけの型を利用可能とみなさない。
+> 新メッセージ型は **`Unknown` sentinel の前に挿入**する。
 
 | メッセージ | 方向 | 導入 Phase | 参照 |
 |---|---|---|---|
 | `QueryLiveConversion` / `Response` | TIP → Host | Phase 5 (M14)、配線済み。`kana`・`context` を送り、`surface`・`confidence` を受け取る。要求 ID は Envelope の `request_id` | legacy-parity §2 |
-| `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15) | legacy-parity §3 + rich X-2 |
+| `QueryPredictions` / `Response` | TIP → Host | Phase 5 (M15)。Envelope に要求 ID、要求 payload に `kana`・`leftSideContext`・`mode`、応答 payload に `predictions[]` | legacy-parity §3 + rich X-2 |
 | `TransformSelectedText` / `Response` | TIP → Host | Phase 5 (M16) | legacy-parity §4 |
 | `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |

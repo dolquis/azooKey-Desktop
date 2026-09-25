@@ -458,6 +458,50 @@ std::optional<QueryLiveConversionResponse> ParseQueryLiveConversionResponse(
   return QueryLiveConversionResponse{std::move(*surface), *confidence};
 }
 
+// -------- QueryPredictions --------
+
+std::string BuildQueryPredictionsRequest(const QueryPredictionsRequest& p) {
+  j::Object o;
+  o.emplace("kana", j::Value(p.kana));
+  o.emplace("leftSideContext", j::Value(p.left_side_context));
+  o.emplace("mode", j::Value(p.mode));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryPredictionsRequest> ParseQueryPredictionsRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto kana = v->GetString("kana");
+  auto left_side_context = v->GetString("leftSideContext");
+  auto mode = v->GetString("mode");
+  if (!kana || !left_side_context || !mode) return std::nullopt;
+  return QueryPredictionsRequest{std::move(*kana), std::move(*left_side_context), std::move(*mode)};
+}
+
+std::string BuildQueryPredictionsResponse(const QueryPredictionsResponse& p) {
+  j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  j::Array predictions;
+  for (const auto& candidate : p.predictions) predictions.push_back(CandidateToJson(candidate));
+  o.emplace("predictions", j::Value(std::move(predictions)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<QueryPredictionsResponse> ParseQueryPredictionsResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  const auto* predictions = v->GetArray("predictions");
+  if (!predictions) return std::nullopt;
+  QueryPredictionsResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  p.error = v->GetString("error");
+  for (const auto& entry : *predictions) {
+    if (auto candidate = CandidateFromJson(entry)) p.predictions.push_back(std::move(*candidate));
+  }
+  return p;
+}
+
 // -------- ReverseConvert --------
 
 std::string BuildReverseConvertRequest(const ReverseConvertRequest& p) {

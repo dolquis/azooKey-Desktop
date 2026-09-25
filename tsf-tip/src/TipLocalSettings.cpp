@@ -196,6 +196,7 @@ void TipLocalSettings::Stop() noexcept {
   rewriters_.reset();
   ai_ = {};
   live_conversion_ = false;
+  prediction_enabled_ = true;
 }
 
 core::BracketSettings TipLocalSettings::Snapshot() const {
@@ -218,11 +219,17 @@ bool TipLocalSettings::LiveConversionSnapshot() const {
   return live_conversion_;
 }
 
+bool TipLocalSettings::PredictionEnabledSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return prediction_enabled_;
+}
+
 void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;
   bool live_conversion = false;
+  bool prediction_enabled = true;
   ai.privacy_policy = {};  // Unreadable or malformed settings fail closed.
   std::string contents;
   try {
@@ -245,6 +252,7 @@ void TipLocalSettings::Reload() noexcept {
       rewriters.minimum = static_cast<uint32_t>(
           std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
       live_conversion = json->GetBool("liveConversion").value_or(false);
+      prediction_enabled = json->GetBool("predictionEnabled").value_or(true);
     }
     const auto default_path = path_.parent_path().parent_path() / L"bracket-pairs.tsv";
     auto custom =
@@ -272,6 +280,7 @@ void TipLocalSettings::Reload() noexcept {
     rewriters_ = rewriters;
     ai_ = ai;
     live_conversion_ = live_conversion;
+    prediction_enabled_ = prediction_enabled;
   }
   changed_.notify_all();
   // Only a real edit to the settings file is worth an IPC round trip: the
@@ -392,6 +401,11 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   live_conversion_ = enabled;
+}
+
+void TipLocalSettings::SetPredictionEnabledForTest(bool enabled) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  prediction_enabled_ = enabled;
 }
 
 bool TipLocalSettings::WaitForPrivacyForTest(

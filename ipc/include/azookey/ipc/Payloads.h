@@ -149,6 +149,16 @@ struct QueryBatchConversionResponse {
   bool canceled{false};
 };
 
+struct ReverseConvertRequest {
+  std::string surface;
+};
+
+struct ReverseConvertResponse {
+  // Empty reading with confidence 0 means no matching dictionary entry.
+  std::string reading;
+  double confidence{};
+};
+
 struct CancelPayload {
   uint64_t target_request_id{};
 };
@@ -298,6 +308,8 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p);
 std::string BuildQueryCandidatesResponse(const QueryCandidatesResponse& p);
 std::string BuildQueryBatchConversionRequest(const QueryBatchConversionRequest& p);
 std::string BuildQueryBatchConversionResponse(const QueryBatchConversionResponse& p);
+std::string BuildReverseConvertRequest(const ReverseConvertRequest& p);
+std::string BuildReverseConvertResponse(const ReverseConvertResponse& p);
 std::string BuildCancel(const CancelPayload& p);
 std::string BuildCommitObservationRequest(const CommitObservationRequest& p);
 std::string BuildCommitObservationResponse(const CommitObservationResponse& p);
@@ -327,6 +339,8 @@ std::optional<QueryBatchConversionRequest> ParseQueryBatchConversionRequest(
     const std::string& json);
 std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(
     const std::string& json);
+std::optional<ReverseConvertRequest> ParseReverseConvertRequest(const std::string& json);
+std::optional<ReverseConvertResponse> ParseReverseConvertResponse(const std::string& json);
 std::optional<CancelPayload> ParseCancel(const std::string& json);
 std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std::string& json);
 std::optional<CommitObservationResponse> ParseCommitObservationResponse(const std::string& json);

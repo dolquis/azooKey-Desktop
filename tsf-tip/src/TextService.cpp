@@ -37,6 +37,7 @@
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/IpcReconnectBackoff.h"
+#include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextServiceFactory.h"
 
@@ -54,6 +55,7 @@ azookey::core::EtwGuid TraceGuid(const std::string& value) {
   return bytes;
 }
 constexpr uint32_t kQueryCandidatesFastTimeoutMs = 150;
+constexpr uint32_t kReconversionResponseTimeoutMs = 750;
 constexpr uint32_t kCancelConnectTimeoutMs = 200;
 constexpr uint32_t kCancelHandshakeTimeoutMs = 500;
 constexpr uint32_t kTimeoutCancelConnectTimeoutMs = 10;
@@ -273,8 +275,8 @@ bool HasSystemModifier(uint32_t modifiers) {
 
 // First layer of the key pipeline (docs/legacy-parity-spec.md §1.5.3). The TIP
 // derives the state kind from its composition and candidate window, and passes
-// through actions whose effects it does not implement yet (mode toggles,
-// Unicode input, Forget, debug window).
+// through actions whose effects it does not implement yet (Unicode input,
+// Forget, debug window).
 std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t modifiers,
                                                         bool has_preedit, bool cand_visible) {
   using azookey::core::InputStateKind;
@@ -297,6 +299,9 @@ std::optional<azookey::core::UserActionEvent> MapTipKey(WPARAM key, uint32_t mod
     case UserAction::SelectByDigit:
     case UserAction::Commit:
     case UserAction::Cancel:
+    case UserAction::ToggleHankaku:
+    case UserAction::ToggleHiraKata:
+    case UserAction::ToggleAlnum:
       return event;
     default:
       return std::nullopt;
@@ -747,6 +752,12 @@ STDMETHODIMP TextService::QueryInterface(REFIID riid, void** ppvObj) {
     *ppvObj = static_cast<ITfKeyEventSink*>(this);
   } else if (riid == IID_ITfThreadMgrEventSink) {
     *ppvObj = static_cast<ITfThreadMgrEventSink*>(this);
+  } else if (riid == IID_ITfTextEditSink) {
+    *ppvObj = static_cast<ITfTextEditSink*>(this);
+  } else if (riid == IID_ITfCompartmentEventSink) {
+    *ppvObj = static_cast<ITfCompartmentEventSink*>(this);
+  } else if (riid == IID_ITfFunctionProvider) {
+    *ppvObj = static_cast<ITfFunctionProvider*>(this);
   } else if (riid == IID_ITfCompositionSink) {
     *ppvObj = static_cast<ITfCompositionSink*>(this);
   } else if (riid == IID_ITfDisplayAttributeProvider) {
@@ -769,6 +780,80 @@ STDMETHODIMP_(ULONG) TextService::Release() {
   return c;
 }
 
+STDMETHODIMP TextService::GetType(GUID* type) {
+  if (!type) return E_INVALIDARG;
+  *type = kTextServiceClsid;
+  return S_OK;
+}
+
+STDMETHODIMP TextService::GetDescription(BSTR* description) {
+  if (!description) return E_INVALIDARG;
+  *description = SysAllocString(L"azooKey");
+  return *description ? S_OK : E_OUTOFMEMORY;
+}
+
+STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** function) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!function) return E_INVALIDARG;
+  *function = nullptr;
+  if (group != GUID_NULL || (iid != IID_ITfFnReconversion && iid != IID_ITfFunction))
+    return E_NOINTERFACE;
+  try {
+    AddRef();
+    auto owner =
+        std::shared_ptr<TextService>(this, [](TextService* service) { service->Release(); });
+    auto* reconversion = new (std::nothrow)
+        ReconversionFunction(client_id_, [owner](ITfRange* range, const std::wstring& surface,
+                                                 std::vector<std::wstring>& candidates) {
+          ITfContext* context = nullptr;
+          if (FAILED(range->GetContext(&context)) || !context) return TF_E_NOCONVERSION;
+          const bool secure = owner->ResolvePrivacy(context, false).secure;
+          std::lock_guard<std::mutex> lock(owner->candidates_mtx_);
+          const bool same_context = SameComIdentity(context, owner->reconversion_cache_context_);
+          context->Release();
+          if (secure || !same_context || surface != owner->reconversion_cache_surface_ ||
+              owner->reconversion_cache_candidates_.empty())
+            return TF_E_NOCONVERSION;
+          candidates = owner->reconversion_cache_candidates_;
+          return S_OK;
+        });
+    if (!reconversion) return E_OUTOFMEMORY;
+    const HRESULT hr = reconversion->QueryInterface(iid, reinterpret_cast<void**>(function));
+    reconversion->Release();
+    return hr;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
+}
+
+HRESULT TextService::AdviseFunctionProvider() {
+  if (!thread_mgr_) return E_UNEXPECTED;
+  ITfSourceSingle* source = nullptr;
+  const HRESULT query =
+      thread_mgr_->QueryInterface(IID_ITfSourceSingle, reinterpret_cast<void**>(&source));
+  if (FAILED(query) || !source) return FAILED(query) ? query : E_NOINTERFACE;
+  const HRESULT hr = source->AdviseSingleSink(client_id_, IID_ITfFunctionProvider,
+                                              static_cast<ITfFunctionProvider*>(this));
+  source->Release();
+  if (SUCCEEDED(hr)) function_provider_advised_ = true;
+  return hr;
+}
+
+HRESULT TextService::UnadviseFunctionProvider() {
+  if (!function_provider_advised_) return S_OK;
+  function_provider_advised_ = false;
+  if (!thread_mgr_) return E_UNEXPECTED;
+  ITfSourceSingle* source = nullptr;
+  const HRESULT query =
+      thread_mgr_->QueryInterface(IID_ITfSourceSingle, reinterpret_cast<void**>(&source));
+  if (FAILED(query) || !source) return FAILED(query) ? query : E_NOINTERFACE;
+  const HRESULT hr = source->UnadviseSingleSink(client_id_, IID_ITfFunctionProvider);
+  source->Release();
+  return hr;
+}
+
 STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) {
   AZOOKEY_ASSERT_UI_THREAD();
   return ActivateEx(ptim, tid, 0);
@@ -782,6 +867,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   if (!ptim) return E_INVALIDARG;
   if (thread_mgr_) return E_UNEXPECTED;
 
+  keyboard_open_ = true;
   thread_mgr_ = ptim;
   client_id_ = tid;
   thread_mgr_->AddRef();
@@ -809,11 +895,35 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     thread_mgr_->Release();
     thread_mgr_ = nullptr;
     client_id_ = TF_CLIENTID_NULL;
+    keyboard_open_ = true;
     return hr;
+  }
+
+  hr = AdviseKeyboardOpenCompartment();
+  if (FAILED(hr)) {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "keyboard_open_compartment_advise_failed");
+    UnadviseKeyboardOpenCompartment();
+    UnadviseTextServiceSinks();
+    thread_mgr_->Release();
+    thread_mgr_ = nullptr;
+    client_id_ = TF_CLIENTID_NULL;
+    keyboard_open_ = true;
+    return hr;
+  }
+
+  hr = AdviseFunctionProvider();
+  if (FAILED(hr)) {
+    // The function provider enables the application's reconversion menu.
+    // Key-driven reconversion and ordinary typing still work without it.
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "tsf_function_provider_unavailable");
   }
 
   candidate_ui_.Create();
   candidate_ui_.SetOnClick([this](int idx) {
+    if (reconversion_list_) {
+      (void)CompleteReconversionSelection(static_cast<size_t>(idx));
+      return;
+    }
     if (core_input_active_ && input_state_.kind() == core::InputStateKind::Selecting &&
         active_context_) {
       core::UserActionEvent event;
@@ -835,6 +945,19 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
 
   StartIpcWorker();
+  // Activation can happen while a document already has focus (for example,
+  // switching IMEs in place). Its selection will not necessarily change again.
+  ITfDocumentMgr* focused_document = nullptr;
+  if (SUCCEEDED(thread_mgr_->GetFocus(&focused_document)) && focused_document) {
+    ITfContext* focused_context = nullptr;
+    if (SUCCEEDED(focused_document->GetTop(&focused_context)) && focused_context) {
+      AdviseTextEditSink(focused_context);
+      reconversion_prefetch_pending_ = true;
+      candidate_ui_.PostCandidatesReady();
+      focused_context->Release();
+    }
+    focused_document->Release();
+  }
   try {
     if (const auto local = core::GetLocalAppDataDirectory()) {
       local_settings_.SetOnChanged([this] { RequestHostOptionRefresh(); });
@@ -853,9 +976,21 @@ STDMETHODIMP TextService::Deactivate() {
   AZOOKEY_ASSERT_UI_THREAD();
   core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
-  HRESULT result = UnadviseTextServiceSinks();
+  HRESULT result = UnadviseFunctionProvider();
+  const HRESULT keyboard_result = UnadviseKeyboardOpenCompartment();
+  if (SUCCEEDED(result)) result = keyboard_result;
+  const HRESULT sink_result = UnadviseTextServiceSinks();
+  if (SUCCEEDED(result)) result = sink_result;
+  keyboard_open_ = true;
 
   StopIpcWorker();
+
+  UnadviseTextEditSink();
+  ClearReconversionState();
+  if (reconversion_cache_context_) {
+    reconversion_cache_context_->Release();
+    reconversion_cache_context_ = nullptr;
+  }
 
   CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                           LifecycleCleanupFailurePolicy::ReleaseComposition);
@@ -933,6 +1068,118 @@ HRESULT TextService::UnadviseTextServiceSinks() {
   }
 
   return result;
+}
+
+std::string WideToUtf8(const std::wstring& wide) {
+  if (wide.empty()) return {};
+  const int len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
+                                      static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  if (len <= 0) return {};
+  std::string result(len, '\0');
+  return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
+                             static_cast<int>(wide.size()), result.data(), len, nullptr, nullptr)
+             ? result
+             : std::string();
+}
+
+HRESULT TextService::AdviseKeyboardOpenCompartment() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!thread_mgr_) return E_UNEXPECTED;
+
+  ITfCompartmentMgr* manager = nullptr;
+  HRESULT hr =
+      thread_mgr_->QueryInterface(IID_ITfCompartmentMgr, reinterpret_cast<void**>(&manager));
+  // Older hosts and test thread managers may not expose compartments. Keep
+  // the historical open behavior when the interface is unavailable.
+  if (hr == E_NOINTERFACE) return S_OK;
+  if (FAILED(hr) || !manager) return FAILED(hr) ? hr : E_NOINTERFACE;
+
+  hr = manager->GetCompartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &keyboard_open_compartment_);
+  manager->Release();
+  if (FAILED(hr) || !keyboard_open_compartment_) return FAILED(hr) ? hr : E_UNEXPECTED;
+
+  // Read before advising; OnChange will handle subsequent changes.
+  RefreshKeyboardOpen();
+  ITfSource* source = nullptr;
+  hr = keyboard_open_compartment_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
+  if (FAILED(hr) || !source) return FAILED(hr) ? hr : E_NOINTERFACE;
+  hr = source->AdviseSink(IID_ITfCompartmentEventSink, static_cast<ITfCompartmentEventSink*>(this),
+                          &keyboard_open_sink_cookie_);
+  source->Release();
+  return hr;
+}
+
+HRESULT TextService::UnadviseKeyboardOpenCompartment() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  HRESULT result = S_OK;
+  if (keyboard_open_compartment_ && keyboard_open_sink_cookie_ != TF_INVALID_COOKIE) {
+    ITfSource* source = nullptr;
+    result = keyboard_open_compartment_->QueryInterface(IID_ITfSource,
+                                                        reinterpret_cast<void**>(&source));
+    if (SUCCEEDED(result) && source) {
+      result = source->UnadviseSink(keyboard_open_sink_cookie_);
+      source->Release();
+    } else if (SUCCEEDED(result)) {
+      result = E_NOINTERFACE;
+    }
+    if (FAILED(result)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn,
+                 "keyboard_open_compartment_unadvise_failed");
+    } else {
+      keyboard_open_sink_cookie_ = TF_INVALID_COOKIE;
+    }
+  }
+  if (keyboard_open_compartment_) {
+    keyboard_open_compartment_->Release();
+    keyboard_open_compartment_ = nullptr;
+  }
+  return result;
+}
+
+void TextService::RefreshKeyboardOpen() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!keyboard_open_compartment_) return;
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT hr = keyboard_open_compartment_->GetValue(&value);
+  const bool valid = SUCCEEDED(hr) && value.vt == VT_I4;
+  const bool open = valid && value.lVal != 0;
+  VariantClear(&value);
+  if (valid && open != keyboard_open_) {
+    keyboard_open_ = open;
+    alnum_mode_ = false;
+    character_form_cycle_state_.reset();
+    recent_character_form_commit_.reset();
+    // The same lifecycle commit path used for focus loss auto-commits text.
+    // Preserve a denied composition so a later TSF edit session can retry.
+    CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
+                            LifecycleCleanupFailurePolicy::PreserveComposition);
+  }
+}
+
+STDMETHODIMP TextService::OnChange(REFGUID rguid) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (rguid != GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) return S_OK;
+  try {
+    RefreshKeyboardOpen();
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    return E_FAIL;
+  }
+}
+
+HRESULT TextService::ToggleKeyboardOpen() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!keyboard_open_compartment_ || client_id_ == TF_CLIENTID_NULL) return E_UNEXPECTED;
+  VARIANT value;
+  VariantInit(&value);
+  value.vt = VT_I4;
+  value.lVal = keyboard_open_ ? 0 : 1;
+  const HRESULT hr = keyboard_open_compartment_->SetValue(client_id_, &value);
+  if (SUCCEEDED(hr)) RefreshKeyboardOpen();
+  return hr;
 }
 
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
@@ -1179,6 +1426,12 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 
     const uint32_t modifiers = CurrentKeyModifiers();
+    const bool toggle_open =
+        (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
+        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
+                      core::kModifierShift)) == 0;
+    if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
+      return S_OK;
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
@@ -1188,6 +1441,28 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     if (committing_) {
       *eaten = TRUE;
       return S_OK;
+    }
+
+    if (reconversion_list_) {
+      if (wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_UP || wParam == VK_DOWN ||
+          (wParam >= '1' && wParam <= '9')) {
+        *eaten = TRUE;
+        return S_OK;
+      }
+      ClearReconversionState();
+    }
+    if (wParam == VK_CONVERT && modifiers == 0 && !composition_ && preedit_kana_.empty() &&
+        context && !ResolvePrivacy(context, false).secure) {
+      auto* function = new (std::nothrow) ReconversionFunction(client_id_, {});
+      if (!function) return E_OUTOFMEMORY;
+      ITfRange* selected = nullptr;
+      std::wstring surface;
+      const HRESULT hr = function->CaptureSelection(context, &selected, surface);
+      function->Release();
+      if (selected) selected->Release();
+      if (hr == S_OK && !surface.empty()) *eaten = TRUE;
+      if (hr == E_OUTOFMEMORY) return hr;
+      if (*eaten) return S_OK;
     }
 
     if (!HasSystemModifier(modifiers)) {
@@ -1215,6 +1490,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     using core::UserAction;
     if (IsActionKey(key_event, UserAction::SelectByDigit)) {
       *eaten = TRUE;
+    } else if (IsActionKey(key_event, UserAction::ToggleHiraKata)) {
+      const bool can_cycle = CharacterFormEditSession::CanCycleSelection(
+          context, client_id_, character_form_cycle_state_);
+      *eaten = can_cycle || recent_character_form_commit_.has_value() ? TRUE : FALSE;
     } else if (decimal_digit && !BatchRomajiEnabled() &&
                number_rewriter_.load(std::memory_order_relaxed)) {
       *eaten = TRUE;
@@ -1306,6 +1585,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
     const uint32_t modifiers = CurrentKeyModifiers();
+    const bool toggle_open =
+        (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
+        (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
+                      core::kModifierShift)) == 0;
+    if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
+      return S_OK;
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
         !MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
@@ -1331,6 +1616,78 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         return S_OK;
       }
     }
+
+    if (reconversion_list_) {
+      if (wParam == VK_ESCAPE) {
+        ClearReconversionState();
+        *eaten = TRUE;
+        return S_OK;
+      }
+      if (wParam == VK_UP || wParam == VK_DOWN) {
+        (void)candidate_ui_.MoveSelection(wParam == VK_DOWN ? 1 : -1);
+        *eaten = TRUE;
+        return S_OK;
+      }
+      if (wParam == VK_RETURN || (wParam >= '1' && wParam <= '9')) {
+        const size_t index = wParam == VK_RETURN
+                                 ? static_cast<size_t>(std::max(0, candidate_ui_.GetSelected()))
+                                 : static_cast<size_t>(wParam - '1');
+        (void)CompleteReconversionSelection(index);
+        *eaten = TRUE;
+        return S_OK;
+      }
+      ClearReconversionState();
+    }
+    if (wParam == VK_CONVERT && modifiers == 0 && !composition_ && preedit_kana_.empty() &&
+        context) {
+      const HRESULT reconversion_hr = StartSelectionReconversion(context);
+      if (reconversion_hr == S_OK) *eaten = TRUE;
+      return reconversion_hr == E_OUTOFMEMORY ? reconversion_hr : S_OK;
+    }
+
+    const auto mode_key =
+        MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                  candidate_ui_.IsShowing());
+    if (IsActionKey(mode_key, core::UserAction::ToggleHankaku)) {
+      recent_character_form_commit_.reset();
+      const HRESULT hr = ToggleKeyboardOpen();
+      if (SUCCEEDED(hr)) *eaten = TRUE;
+      return hr == E_UNEXPECTED ? S_OK : hr;
+    }
+    if (IsActionKey(mode_key, core::UserAction::ToggleAlnum)) {
+      CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
+                              LifecycleCleanupFailurePolicy::PreserveComposition);
+      if (composition_ || committing_) {
+        *eaten = TRUE;
+        return S_OK;
+      }
+      alnum_mode_ = !alnum_mode_;
+      character_form_cycle_state_.reset();
+      recent_character_form_commit_.reset();
+      *eaten = TRUE;
+      return S_OK;
+    }
+    if (IsActionKey(mode_key, core::UserAction::ToggleHiraKata)) {
+      const auto cycle = CharacterFormEditSession::CycleSelection(context, client_id_,
+                                                                  character_form_cycle_state_);
+      character_form_cycle_state_ = cycle.state;
+      if (cycle.applied) {
+        recent_character_form_commit_.reset();
+        *eaten = TRUE;
+        return S_OK;
+      }
+      if (cycle.status == S_FALSE && recent_character_form_commit_) {
+        const auto recent = CharacterFormEditSession::CycleRecentCommit(
+            context, client_id_, *recent_character_form_commit_);
+        recent_character_form_commit_ = recent.state;
+        *eaten = recent.consume_key ? TRUE : FALSE;
+        return recent.consume_key || recent.status == S_FALSE ? S_OK : recent.status;
+      }
+      *eaten = FALSE;
+      return cycle.status == E_OUTOFMEMORY ? cycle.status : S_OK;
+    }
+
+    recent_character_form_commit_.reset();
 
     if (!HasSystemModifier(modifiers)) {
       bool emoji_handled = false;
@@ -1942,20 +2299,49 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
+    UnadviseTextEditSink();
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
+    if (pdimFocus) {
+      ITfContext* top = nullptr;
+      if (SUCCEEDED(pdimFocus->GetTop(&top)) && top) {
+        AdviseTextEditSink(top);
+        top->Release();
+      }
+    }
   }
   return S_OK;
 }
 STDMETHODIMP TextService::OnPushContext(ITfContext* pic) {
   AZOOKEY_ASSERT_UI_THREAD();
-  UNREFERENCED_PARAMETER(pic);
+  ClearReconversionState();
+  AdviseTextEditSink(pic);
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
   return S_OK;
 }
 STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
   AZOOKEY_ASSERT_UI_THREAD();
+  if (pic && SameComIdentity(pic, text_edit_context_)) {
+    UnadviseTextEditSink();
+    ITfDocumentMgr* document = nullptr;
+    if (SUCCEEDED(pic->GetDocumentMgr(&document)) && document) {
+      ITfContext* top = nullptr;
+      if (SUCCEEDED(document->GetTop(&top)) && top) {
+        if (!SameComIdentity(pic, top)) AdviseTextEditSink(top);
+        top->Release();
+      }
+      document->Release();
+    }
+  }
+  if (pic && SameComIdentity(pic, reconversion_cache_context_)) {
+    ClearReconversionState();
+    reconversion_cache_context_->Release();
+    reconversion_cache_context_ = nullptr;
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    reconversion_cache_surface_.clear();
+    reconversion_cache_candidates_.clear();
+  }
   if (pic && active_context_ && SameComIdentity(pic, active_context_)) {
     CleanupForLifecycleLoss(pic, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -2318,6 +2704,17 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
 
 void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                           LifecycleCleanupFailurePolicy failure_policy) {
+  recent_character_form_commit_.reset();
+  ClearReconversionState();
+  if (reconversion_cache_context_) {
+    reconversion_cache_context_->Release();
+    reconversion_cache_context_ = nullptr;
+  }
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    reconversion_cache_surface_.clear();
+    reconversion_cache_candidates_.clear();
+  }
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
 
@@ -2460,8 +2857,11 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
   RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "conversion_selected",
              {{"reading", SafeLogText(reading)}, {"surface", SafeLogText(commit_surface_)}},
              {secure, privacy.detailed_logging_allowed});
+  const std::string committed_surface = commit_surface_;
   const HRESULT commit_hr = RequestCommitEditSession(context);
   if (SUCCEEDED(commit_hr)) {
+    recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
+        context, client_id_, reading, committed_surface);
     preedit_kana_.clear();
     romaji_.Reset();
     if (!core_action_in_progress_) {
@@ -2526,8 +2926,11 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
   pending_commit_observation_.reset();
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
   // synchronous commit edit session has actually completed.
+  const std::string committed_surface = commit_surface_;
   const HRESULT commit_hr = RequestCommitEditSession(context);
   if (SUCCEEDED(commit_hr)) {
+    recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
+        context, client_id_, surface, committed_surface);
     preedit_kana_.clear();
     romaji_.Reset();
     if (!core_action_in_progress_) {
@@ -2627,7 +3030,7 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
 // Caller holds ipc_mtx_. True when the serve loop has something to send, so an
 // idle Health probe must give way to it.
 bool TextService::HasQueuedIpcWorkLocked() const {
-  return ipc_has_request_ || !ipc_send_queue_.empty() ||
+  return ipc_has_request_ || ipc_reconversion_request_.has_value() || !ipc_send_queue_.empty() ||
          ipc_refresh_options_.load(std::memory_order_relaxed);
 }
 
@@ -2697,7 +3100,8 @@ TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id)
 }
 
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
-                                           ipc::MessageType expected_type) {
+                                           ipc::MessageType expected_type,
+                                           std::optional<ipc::Envelope>* received) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace std::chrono;
 
@@ -2731,6 +3135,7 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
         }
         continue;
       }
+      if (received) *received = std::move(response);
       return true;
     }
   }
@@ -3038,6 +3443,7 @@ void TextService::ServeConnection() {
     bool learning_allowed = false;
     std::string emoji_trigger;
     std::vector<IpcSendItem> to_send;
+    std::optional<ReconversionRequest> reconversion;
     bool health_due = false;
 
     {
@@ -3049,6 +3455,8 @@ void TextService::ServeConnection() {
 
       to_send = std::move(ipc_send_queue_);
       ipc_send_queue_.clear();
+      reconversion = std::move(ipc_reconversion_request_);
+      ipc_reconversion_request_.reset();
 
       if (ipc_has_request_) {
         reading = ipc_pending_reading_;
@@ -3097,6 +3505,10 @@ void TextService::ServeConnection() {
       if (!PerformHandshake(ipc_client_, kRefreshHandshakeTimeoutMs, "tip-settings-refresh",
                             /*update_host_options=*/true, next_id++)) {
         RequeueUnackedSendItems(to_send, 0);
+        if (reconversion) {
+          std::lock_guard<std::mutex> lock(ipc_mtx_);
+          if (!ipc_reconversion_request_) ipc_reconversion_request_ = std::move(reconversion);
+        }
         if (has_qc) RearmPendingQuery(req_id);
         return;
       }
@@ -3131,6 +3543,10 @@ void TextService::ServeConnection() {
           RequeueUnackedSendItems(to_send, i);
         }
         if (has_qc) RearmPendingQuery(req_id);
+        if (reconversion) {
+          std::lock_guard<std::mutex> lock(ipc_mtx_);
+          if (!ipc_reconversion_request_) ipc_reconversion_request_ = std::move(reconversion);
+        }
         return;
       }
       if (!sent_out_of_band && item.expects_response) {
@@ -3144,9 +3560,18 @@ void TextService::ServeConnection() {
           // host discard the duplicate (DEV-554).
           RequeueUnackedSendItems(to_send, i);
           if (has_qc) RearmPendingQuery(req_id);
+          if (reconversion) {
+            std::lock_guard<std::mutex> lock(ipc_mtx_);
+            if (!ipc_reconversion_request_) ipc_reconversion_request_ = std::move(reconversion);
+          }
           return;
         }
       }
+    }
+
+    if (reconversion && !ConvertReconversion(*reconversion, next_id)) {
+      if (has_qc) RearmPendingQuery(req_id);
+      return;
     }
 
     if (!has_qc || (reading.empty() && emoji_trigger.empty())) continue;
@@ -3457,6 +3882,161 @@ void TextService::ServeConnection() {
 
     ++next_id;
   }
+}
+
+void TextService::AdviseTextEditSink(ITfContext* context) {
+  if (!context || SameComIdentity(context, text_edit_context_)) return;
+  UnadviseTextEditSink();
+  ITfSource* source = nullptr;
+  if (FAILED(context->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source))) || !source)
+    return;
+  DWORD cookie = TF_INVALID_COOKIE;
+  const HRESULT hr =
+      source->AdviseSink(IID_ITfTextEditSink, static_cast<ITfTextEditSink*>(this), &cookie);
+  source->Release();
+  if (FAILED(hr)) return;
+  text_edit_context_ = context;
+  text_edit_context_->AddRef();
+  text_edit_cookie_ = cookie;
+}
+
+void TextService::UnadviseTextEditSink() {
+  if (!text_edit_context_) return;
+  ITfSource* source = nullptr;
+  if (SUCCEEDED(
+          text_edit_context_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source))) &&
+      source) {
+    source->UnadviseSink(text_edit_cookie_);
+    source->Release();
+  }
+  text_edit_context_->Release();
+  text_edit_context_ = nullptr;
+  text_edit_cookie_ = TF_INVALID_COOKIE;
+  reconversion_prefetch_pending_ = false;
+}
+
+STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
+                                    ITfEditRecord* record) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!context || !record || !SameComIdentity(context, text_edit_context_)) return S_OK;
+  BOOL changed = FALSE;
+  if (FAILED(record->GetSelectionStatus(&changed)) || !changed) return S_OK;
+  reconversion_prefetch_pending_ = false;
+  ++reconversion_generation_;
+  // A displayed list still refers to the old range. A later Enter must never
+  // replace text at a location the user has moved away from.
+  if (reconversion_range_) ClearReconversionState();
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    reconversion_cache_surface_.clear();
+    reconversion_cache_candidates_.clear();
+  }
+  TF_SELECTION selected{};
+  ULONG fetched = 0;
+  if (FAILED(context->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selected, &fetched)) ||
+      fetched != 1 || !selected.range)
+    return S_OK;
+  BOOL empty = TRUE;
+  const HRESULT hr = selected.range->IsEmpty(cookie, &empty);
+  selected.range->Release();
+  if (SUCCEEDED(hr) && !empty && preedit_kana_.empty() && !composition_) {
+    reconversion_prefetch_pending_ = true;
+    candidate_ui_.PostCandidatesReady();
+  }
+  return S_OK;
+}
+
+bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  using namespace azookey::ipc;
+  if (request.generation != reconversion_generation_.load()) return true;
+  std::vector<std::wstring> candidates;
+  bool connected = true;
+  bool responded = false;
+  Envelope reverse;
+  reverse.version = 1;
+  reverse.request_id = next_id++;
+  reverse.trace_id = "tip-reconversion-reverse";
+  reverse.type = MessageType::ReverseConvert;
+  reverse.payload_json = BuildReverseConvertRequest({request.surface});
+  if (!ipc_client_.Send(reverse)) {
+    connected = false;
+  } else {
+    std::optional<Envelope> reply;
+    const bool got_reply = WaitForIpcResponseOrStop(kReconversionResponseTimeoutMs,
+                                                    reverse.request_id, reverse.type, &reply);
+    responded |= got_reply;
+    if (!got_reply) {
+      connected = ipc_client_.IsConnected();
+    } else if (const auto payload = ParseReverseConvertResponse(reply->payload_json);
+               payload && !payload->reading.empty() &&
+               request.generation == reconversion_generation_.load()) {
+      QueryCandidatesRequest query;
+      query.reading = payload->reading;
+      query.max_candidates = max_candidates_.load(std::memory_order_relaxed);
+      // This runs on every selection change. The live path bounds model work
+      // and skips NLL reranking while retaining dictionary candidates.
+      query.live = true;
+      query.secure = false;
+      query.learning_allowed = false;
+      Envelope qenv;
+      qenv.version = 1;
+      qenv.request_id = next_id++;
+      qenv.trace_id = "tip-reconversion-candidates";
+      qenv.type = MessageType::QueryCandidates;
+      qenv.payload_json = BuildQueryCandidatesRequest(query);
+      if (!ipc_client_.Send(qenv)) {
+        connected = false;
+      } else {
+        std::optional<Envelope> qres;
+        const bool got_candidates = WaitForIpcResponseOrStop(kReconversionResponseTimeoutMs,
+                                                             qenv.request_id, qenv.type, &qres);
+        responded |= got_candidates;
+        if (!got_candidates) {
+          connected = ipc_client_.IsConnected();
+          if (connected) {
+            // An idle timeout leaves the pipe usable. Cancel the slow query;
+            // any reply racing with Cancel is ignored by the next receive loop.
+            if (!SendCancelOutOfBand(qenv.request_id, kTimeoutCancelConnectTimeoutMs,
+                                     kTimeoutCancelHandshakeTimeoutMs)) {
+              Envelope cancel;
+              cancel.version = 1;
+              cancel.request_id = next_id++;
+              cancel.trace_id = "tip-reconversion-timeout-cancel";
+              cancel.type = MessageType::Cancel;
+              cancel.payload_json = BuildCancel({qenv.request_id});
+              connected = ipc_client_.Send(cancel);
+            }
+          }
+        } else if (const auto parsed = ParseQueryCandidatesResponse(qres->payload_json)) {
+          for (const auto& candidate : parsed->candidates) {
+            const std::wstring surface = Utf8ToWide(candidate.surface);
+            if (!surface.empty() &&
+                std::find(candidates.begin(), candidates.end(), surface) == candidates.end())
+              candidates.push_back(surface);
+          }
+        }
+      }
+    }
+  }
+  if (!connected) {
+    ipc_client_.Disconnect();
+    NoteHostDeadlineMissed();
+  } else if (responded) {
+    NoteHostResponded();
+  }
+  if (request.generation == reconversion_generation_.load()) {
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      if (request.generation != reconversion_generation_.load()) return connected;
+      reconversion_cache_surface_ = Utf8ToWide(request.surface);
+      reconversion_cache_candidates_ = candidates;
+      reconversion_result_ = ReconversionResult{request.generation, reconversion_cache_surface_,
+                                                std::move(candidates)};
+    }
+    candidate_ui_.PostCandidatesReady();
+  }
+  return connected;
 }
 
 void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
@@ -3868,8 +4448,12 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       commit_surface_ = core_marked_surface_;
       committing_ = true;
       SetCommitContext(context);
+      const std::string recent_reading = preedit_kana_;
+      const std::string committed_surface = commit_surface_;
       hr = RequestCommitEditSession(context);
       if (SUCCEEDED(hr)) {
+        recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
+            context, client_id_, recent_reading, committed_surface);
         core_marked_surface_.clear();
         shown_candidates_.clear();
         selected_candidate_idx_ = 0;
@@ -3945,7 +4529,160 @@ std::string TextService::CurrentDisplayedPreeditSurface() const {
 
 void TextService::OnCandidatesReady(void* context) {
   if (!context) return;
-  static_cast<TextService*>(context)->ShowCandidateWindowFromCache();
+  auto* service = static_cast<TextService*>(context);
+  service->PrefetchSelectedReconversion();
+  service->ShowReconversionResult();
+  service->ShowCandidateWindowFromCache();
+}
+
+void TextService::ClearReconversionState() {
+  const bool had_reconversion_ui = reconversion_list_ != nullptr;
+  if (reconversion_list_) {
+    reconversion_list_->Release();
+    reconversion_list_ = nullptr;
+  }
+  if (reconversion_range_) {
+    reconversion_range_->Release();
+    reconversion_range_ = nullptr;
+  }
+  reconversion_surface_.clear();
+  if (had_reconversion_ui && candidate_ui_.IsShowing()) candidate_ui_.EndUI();
+  ++reconversion_generation_;
+}
+
+void TextService::PrefetchSelectedReconversion() {
+  if (!reconversion_prefetch_pending_) return;
+  reconversion_prefetch_pending_ = false;
+  if (reconversion_range_) return;
+  ITfContext* context = text_edit_context_;
+  if (!context || ResolvePrivacy(context, false).secure || !preedit_kana_.empty() || composition_)
+    return;
+  auto* function = new (std::nothrow) ReconversionFunction(client_id_, {});
+  if (!function) return;
+  ITfRange* selected = nullptr;
+  std::wstring surface;
+  const HRESULT hr = function->CaptureSelection(context, &selected, surface);
+  function->Release();
+  if (selected) selected->Release();
+  if (FAILED(hr) || surface.empty()) return;
+  const std::string utf8 = WideToUtf8(surface);
+  if (utf8.empty()) return;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    if (surface == reconversion_cache_surface_ && !reconversion_cache_candidates_.empty() &&
+        SameComIdentity(context, reconversion_cache_context_))
+      return;
+    reconversion_cache_surface_.clear();
+    reconversion_cache_candidates_.clear();
+  }
+  if (reconversion_cache_context_) reconversion_cache_context_->Release();
+  reconversion_cache_context_ = context;
+  reconversion_cache_context_->AddRef();
+  const uint64_t generation = ++reconversion_generation_;
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_reconversion_request_ = ReconversionRequest{generation, utf8};
+  }
+  ipc_cv_.notify_one();
+}
+
+HRESULT TextService::StartSelectionReconversion(ITfContext* context) {
+  if (!context || composition_ || !preedit_kana_.empty()) return S_FALSE;
+  if (ResolvePrivacy(context, false).secure) return S_FALSE;
+  auto* function = new (std::nothrow) ReconversionFunction(client_id_, {});
+  if (!function) return E_OUTOFMEMORY;
+  ITfRange* range = nullptr;
+  std::wstring surface;
+  const HRESULT hr = function->CaptureSelection(context, &range, surface);
+  function->Release();
+  if (FAILED(hr)) return hr == TF_E_NOCONVERSION ? S_FALSE : hr;
+  const std::string utf8 = WideToUtf8(surface);
+  if (utf8.empty()) {
+    range->Release();
+    return S_FALSE;
+  }
+  std::vector<std::wstring> cached_candidates;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    if (SameComIdentity(context, reconversion_cache_context_) &&
+        surface == reconversion_cache_surface_)
+      cached_candidates = reconversion_cache_candidates_;
+  }
+  ClearReconversionState();
+  reconversion_range_ = range;
+  reconversion_surface_ = std::move(surface);
+  if (reconversion_cache_context_) reconversion_cache_context_->Release();
+  reconversion_cache_context_ = context;
+  reconversion_cache_context_->AddRef();
+  if (!cached_candidates.empty()) {
+    {
+      std::lock_guard<std::mutex> lock(candidates_mtx_);
+      reconversion_result_ = ReconversionResult{reconversion_generation_, reconversion_surface_,
+                                                std::move(cached_candidates)};
+    }
+    ShowReconversionResult();
+    return S_OK;
+  }
+  {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    ipc_reconversion_request_ = ReconversionRequest{reconversion_generation_, utf8};
+  }
+  ipc_cv_.notify_one();
+  return S_OK;
+}
+
+HRESULT TextService::CompleteReconversionSelection(size_t index) {
+  if (!reconversion_list_) return S_FALSE;
+  // SetResult can synchronously notify OnEndEdit, which may release our list.
+  ITfCandidateList* list = reconversion_list_;
+  list->AddRef();
+  const HRESULT hr = list->SetResult(static_cast<ULONG>(index), CAND_FINALIZED);
+  list->Release();
+  if (SUCCEEDED(hr) && reconversion_list_) ClearReconversionState();
+  return hr;
+}
+
+void TextService::ShowReconversionResult() {
+  std::optional<ReconversionResult> result;
+  {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    result = std::move(reconversion_result_);
+    reconversion_result_.reset();
+  }
+  if (!result || !reconversion_range_ || result->generation != reconversion_generation_ ||
+      result->surface != reconversion_surface_)
+    return;
+  if (result->candidates.empty()) {
+    ClearReconversionState();
+    return;
+  }
+  auto* function = new (std::nothrow) ReconversionFunction(
+      client_id_, [expected = result->surface, values = result->candidates](
+                      ITfRange*, const std::wstring& surface, std::vector<std::wstring>& out) {
+        if (surface != expected) return TF_E_NOCONVERSION;
+        out = values;
+        return S_OK;
+      });
+  if (!function) {
+    ClearReconversionState();
+    return;
+  }
+  ITfCandidateList* list = nullptr;
+  const HRESULT hr = function->GetReconversion(reconversion_range_, &list);
+  function->Release();
+  if (FAILED(hr) || !list) {
+    ClearReconversionState();
+    return;
+  }
+  std::vector<CandidateViewItem> items;
+  items.reserve(result->candidates.size());
+  for (const auto& value : result->candidates) items.push_back({value, L""});
+  if (FAILED(candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0))) {
+    list->Release();
+    ClearReconversionState();
+    return;
+  }
+  reconversion_list_ = list;
 }
 
 POINT TextService::CandidateAnchorPoint() {

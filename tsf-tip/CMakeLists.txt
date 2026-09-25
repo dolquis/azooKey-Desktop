@@ -1,5 +1,6 @@
 add_library(azookey_tsf_tip SHARED
   src/BracketEditSession.cpp
+  src/CharacterFormEditSession.cpp
   src/AiInputGuard.cpp
   src/CandidateListUIElement.cpp
   src/CandidateUiCoordinator.cpp
@@ -9,6 +10,7 @@ add_library(azookey_tsf_tip SHARED
   src/ForegroundAppDetector.cpp
   src/IpcConnectionState.cpp
   src/IpcReconnectBackoff.cpp
+  src/ReconversionFunction.cpp
   src/exports.def
   src/SettingsLauncher.cpp
   src/TextService.cpp
@@ -38,6 +40,7 @@ if(AZOOKEY_BUILD_TESTS)
   # Compile the shared implementation once with the test-only hooks enabled.
   add_library(azookey_tsf_tip_test_objects OBJECT
     src/BracketEditSession.cpp
+    src/CharacterFormEditSession.cpp
     src/AiInputGuard.cpp
     src/CandidateListUIElement.cpp
     src/CandidateUiCoordinator.cpp
@@ -46,6 +49,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/ForegroundAppDetector.cpp
     src/IpcConnectionState.cpp
     src/IpcReconnectBackoff.cpp
+    src/ReconversionFunction.cpp
     src/SettingsLauncher.cpp
     src/TextService.cpp
     src/TipLocalSettings.cpp
@@ -112,6 +116,7 @@ if(AZOOKEY_BUILD_TESTS)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_bracket_edit_session_tests tests/bracket_edit_session_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_character_form_edit_session_tests tests/character_form_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ai_input_guard_tests tests/ai_input_guard_test.cpp)
   add_executable(tsf_tip_local_settings_tests src/TipLocalSettings.cpp tests/local_settings_test.cpp)
   target_include_directories(tsf_tip_local_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -138,6 +143,7 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 15)
   add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_caret_position_tests tests/caret_position_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_query_interface_contract_tests
     tests/query_interface_contract_test.cpp

@@ -34,6 +34,8 @@ std::string TypeToString(MessageType type) {
       return "ListNewWordCandidates";
     case MessageType::ResolveNewWord:
       return "ResolveNewWord";
+    case MessageType::ReverseConvert:
+      return "ReverseConvert";
     default: return "Unknown";
   }
 }
@@ -59,6 +61,7 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "ObserveTypo") return MessageType::ObserveTypo;
   if (value == "ListNewWordCandidates") return MessageType::ListNewWordCandidates;
   if (value == "ResolveNewWord") return MessageType::ResolveNewWord;
+  if (value == "ReverseConvert") return MessageType::ReverseConvert;
   return MessageType::Unknown;
 }
 

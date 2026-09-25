@@ -117,6 +117,8 @@ Linear が持つ。
 - ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live)` /
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
   応答前に `max_candidates` で件数を切り詰める。
+- ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
+  Host は辞書に表層形が完全一致するエントリから読みを逆引きし、未知の表層形では空の読みと信頼度 0 を返す。
 - ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates)` /
   応答 `(segments[], full_surface, partial, canceled)`。各 segment は
   `(reading, candidates[])`。`QueryCandidates` と同じく `RequestScheduler` で
@@ -427,13 +429,11 @@ writer には内容を書き換える操作だけでなく、対象ファイル�
 
 ## 新規 IPC メッセージ
 
-既存の配線済み 12 種（Handshake / Ping / Health / QueryDiagnostics / LoadModel /
-QueryCandidates / QueryBatchConversion / Cancel / CommitObservation / AddUserWord /
-RemoveUserWord / UpdateConfig）に加え、以下を Phase 5〜6 で順次追加する。
+以下は Phase 5〜6 に対応する IPC メッセージの一覧で、配線済みの型も含む。
 
-> 注: `MessageType` enum は 16 の named 型 + `Unknown` sentinel = 17 entries
+> 注: `MessageType` enum は 21 の named 型 + `Unknown` sentinel = 22 entries
 > （`ipc/include/azookey/ipc/Messages.h` が正典）。このうち Payload/Dispatcher まで
-> 配線済みは上記 12 種で、残る 4 種（`QueryPredictions` / `QueryCorrections` /
+> 配線済みは 17 種で、残る 4 種（`QueryPredictions` / `QueryCorrections` /
 > `CommitCorrection` / `UpdateUserWord`）は enum のみ。配線済み判定は
 > `Messages.h`・`Payloads.h`/`.cpp`・`Dispatcher.cpp` の 3 点を突き合わせて行い、
 > enum に存在するだけの型を「利用可能」とみなさない。新メッセージ型を enum に
@@ -448,7 +448,7 @@ RemoveUserWord / UpdateConfig）に加え、以下を Phase 5〜6 で順次追�
 | `RequestPostCommitLint` / `Response` | TIP → Host | Phase 5 末 (M16 拡張) | rich X-3-3 |
 | `LintFinding` | データ型 | Phase 5 末 | rich X-3-3 |
 | `PredictStreamChunk`（push） | Host → TIP | Phase 6 (M24) | rich X-2-5 |
-| `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20) | tsf-deep §1 |
+| `ReverseConvert` / `Response` | TIP → Host | Phase 6-A (M20、配線済み) | tsf-deep §1 |
 | `QueryFullRecompute` / `Response` | TIP → Host | Phase 5 末 | rich X-1-3 |
 | `UpdateUserWord` / `Response` | Settings → Host | Phase 7 (M30) | 既存 enum 配線 |
 | `QueryCorrections` / `CommitCorrection` Payload | TIP → Host | Phase 5〜6 | 既存 enum 配線 |

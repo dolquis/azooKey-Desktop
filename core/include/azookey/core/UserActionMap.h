@@ -15,6 +15,7 @@ inline constexpr uint32_t kBack = 0x08;
 inline constexpr uint32_t kReturn = 0x0D;
 inline constexpr uint32_t kKanji = 0x19;
 inline constexpr uint32_t kEscape = 0x1B;
+inline constexpr uint32_t kConvert = 0x1C;
 inline constexpr uint32_t kNonConvert = 0x1D;
 inline constexpr uint32_t kSpace = 0x20;
 inline constexpr uint32_t kEnd = 0x23;
@@ -36,6 +37,9 @@ inline constexpr uint32_t kOemComma = 0xBC;
 inline constexpr uint32_t kOemMinus = 0xBD;
 inline constexpr uint32_t kOemPeriod = 0xBE;
 inline constexpr uint32_t kOem2 = 0xBF;
+inline constexpr uint32_t kOemAttn = 0xF0;
+inline constexpr uint32_t kOemAuto = 0xF3;
+inline constexpr uint32_t kOemEnlw = 0xF4;
 }  // namespace vk
 
 // First layer of the key translation (docs/legacy-parity-spec.md §1.5.3):

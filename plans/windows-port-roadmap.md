@@ -724,9 +724,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 
 - **目的**: 確定済みテキストの再変換に対応（MS-IME 互換）。
 - **前提**: Phase 5 完了。
-- **変更対象**: `tsf-tip/src/ReconversionFunction.cpp`（新規）、
-  `tsf-tip/src/DllMain.cpp`（Category 登録）、`ipc/src/Payloads.cpp`
-  （`ReverseConvert` 追加）。
+- **変更対象**: `tsf-tip/src/ReconversionFunction.cpp`、
+  `tsf-tip/src/TextService.cpp`（`ITfFunctionProvider` 公開）、
+  `ipc/src/Payloads.cpp`（`ReverseConvert` 追加）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §1。
 - **受け入れ条件**:
   - メモ帳で「明日」選択 → 変換キーで「あした」候補が出る

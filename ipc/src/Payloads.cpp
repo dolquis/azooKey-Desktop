@@ -1,6 +1,7 @@
 #include "azookey/ipc/Payloads.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Limits.h"
@@ -418,6 +419,40 @@ std::optional<QueryCandidatesResponse> ParseQueryCandidatesResponse(const std::s
   // Absent for hosts that predate M35: decodes as "no correction applied".
   p.corrected_reading = v->GetString("corrected_reading").value_or(std::string());
   return p;
+}
+
+// -------- ReverseConvert --------
+
+std::string BuildReverseConvertRequest(const ReverseConvertRequest& p) {
+  j::Object o;
+  o.emplace("surface", j::Value(p.surface));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ReverseConvertRequest> ParseReverseConvertRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto surface = v->GetString("surface");
+  if (!surface || surface->empty()) return std::nullopt;
+  return ReverseConvertRequest{std::move(*surface)};
+}
+
+std::string BuildReverseConvertResponse(const ReverseConvertResponse& p) {
+  j::Object o;
+  o.emplace("reading", j::Value(p.reading));
+  o.emplace("confidence", j::Value(p.confidence));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ReverseConvertResponse> ParseReverseConvertResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto reading = v->GetString("reading");
+  auto confidence = v->GetNumber("confidence");
+  if (!reading || !confidence || !std::isfinite(*confidence) || *confidence < 0.0 ||
+      *confidence > 1.0 || (reading->empty() != (*confidence == 0.0)))
+    return std::nullopt;
+  return ReverseConvertResponse{std::move(*reading), *confidence};
 }
 
 // -------- QueryBatchConversion --------

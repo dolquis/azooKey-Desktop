@@ -64,12 +64,16 @@ TEST(MessagesTest, TypeStringMapping) {
             azookey::ipc::MessageType::UpdateUserWord);
   EXPECT_EQ(azookey::ipc::TypeFromString("UpdateConfig"),
             azookey::ipc::MessageType::UpdateConfig);
+  EXPECT_EQ(azookey::ipc::TypeFromString("ReverseConvert"),
+            azookey::ipc::MessageType::ReverseConvert);
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryPredictions),
             "QueryPredictions");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::QueryBatchConversion),
             "QueryBatchConversion");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::UpdateConfig),
             "UpdateConfig");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ReverseConvert),
+            "ReverseConvert");
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {

@@ -184,6 +184,9 @@ class InferenceEngine {
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,
                                                uint64_t now_epoch_sec);
 
+  // Exact dictionary surface lookup. Empty means no known reading.
+  std::string ReverseConvert(const std::string& surface, uint64_t now_epoch_sec);
+
   std::vector<core::Candidate> QueryPredictions(const std::string& kana, const std::string& context,
                                                 uint64_t now_epoch_sec);
   std::vector<core::Candidate> QueryCorrections(const std::string& kana, const std::string& context,

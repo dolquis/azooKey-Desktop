@@ -28,6 +28,7 @@ enum class MessageType {
   ObserveTypo,
   ListNewWordCandidates,
   ResolveNewWord,
+  ReverseConvert,
   Unknown,
 };
 

@@ -38,6 +38,35 @@ TEST(DictionaryTrie, SearchDirectionsAndShortestFirstLimit) {
   EXPECT_EQ(entries[0].surface, "東京");
 }
 
+TEST(DictionaryTrie, ExactSurfaceLookupUsesStaticRecords) {
+  core::DoubleArrayTrie trie;
+  ASSERT_TRUE(trie.Load(Fixture("valid.azdic"), true));
+  std::vector<core::StaticDictionaryEntry> entries;
+  trie.LookupSurface("東京", entries);
+  ASSERT_EQ(entries.size(), 1U);
+  EXPECT_EQ(entries[0].reading, "とうきょう");
+  trie.LookupSurface("存在しない表層形", entries);
+  EXPECT_TRUE(entries.empty());
+  trie.LookupSurface(std::string("\xc0\xaf"), entries);
+  EXPECT_TRUE(entries.empty());
+}
+
+TEST(DictionaryStore, ReverseLookupRespectsLayerSelectionAndUserWords) {
+  learning::DictionaryStore store;
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("valid.azdic"), true));
+  ASSERT_TRUE(store.ReverseLookup("東京", {}));
+  EXPECT_EQ(store.ReverseLookup("東京", {})->normalized_reading, "とうきょう");
+  learning::UserWord user_word{"東京", "とうきょうユーザー"};
+  user_word.value = 5.0;
+  store.SetUserWords({user_word});
+  ASSERT_TRUE(store.ReverseLookup("東京", {}));
+  EXPECT_EQ(store.ReverseLookup("東京", {})->source, learning::LayerId::User);
+  store.EnableLayer(learning::LayerId::User, false);
+  EXPECT_EQ(store.ReverseLookup("東京", {})->source, learning::LayerId::TechnicalTerms);
+  store.EnableLayer(learning::LayerId::TechnicalTerms, false);
+  EXPECT_FALSE(store.ReverseLookup("東京", {}));
+}
+
 TEST(DictionaryTrie, RejectsCorruptionIncludingValidHashBadReferences) {
   for (const char* name :
        {"magic", "version", "flags", "duplicate", "unaligned", "overflow", "hash", "entry", "kind",

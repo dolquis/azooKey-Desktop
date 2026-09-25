@@ -63,6 +63,8 @@ class DictionaryStore {
   std::string LayerError(LayerId layer) const;
   static double LayerPriority(LayerId layer, bool confirmed = true);
   std::vector<DictionaryEntry> Lookup(std::string_view reading, const LookupContext& context) const;
+  std::optional<DictionaryEntry> ReverseLookup(std::string_view surface,
+                                               const LookupContext& context) const;
 
  private:
   using Index = std::map<std::string, std::vector<DictionaryEntry>>;

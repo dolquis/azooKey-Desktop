@@ -222,4 +222,46 @@ std::vector<DictionaryEntry> DictionaryStore::Lookup(std::string_view reading,
   });
   return result;
 }
+
+std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(std::string_view surface,
+                                                              const LookupContext& ctx) const {
+  if (surface.empty() || !core::IsValidUtf8(surface)) return std::nullopt;
+  std::optional<DictionaryEntry> best;
+  const auto consider = [&](DictionaryEntry entry) {
+    entry.normalized_reading = core::NormalizeReading(entry.reading);
+    if (entry.normalized_reading.empty()) return;
+    entry.score = Score(entry, ctx);
+    if (!std::isfinite(entry.score)) return;
+    if (!best || entry.score > best->score ||
+        (entry.score == best->score && entry.normalized_reading < best->normalized_reading))
+      best = std::move(entry);
+  };
+  for (size_t layer = 0; layer < enabled_.size(); ++layer) {
+    if (!enabled_[layer] || (ctx.excluded_layers & (1U << layer))) continue;
+    if (layer < static_.size()) {
+      const auto& trie = static_[layer];
+      if (!trie || !trie->IsAvailable()) continue;
+      std::vector<core::StaticDictionaryEntry> entries;
+      trie->LookupSurface(surface, entries);
+      for (auto& found : entries) {
+        DictionaryEntry entry;
+        entry.surface = std::move(found.surface);
+        entry.reading = std::move(found.reading);
+        entry.frequency = found.frequency;
+        entry.category_mask = found.category_mask;
+        entry.source = static_cast<LayerId>(found.source);
+        consider(std::move(entry));
+      }
+    } else {
+      // Mutable indexes are keyed by reading and include alias copies. Keep
+      // only exact records; aliases would duplicate the same surface/reading.
+      for (const auto& [key, entries] : mutable_[layer - static_.size()]) {
+        (void)key;
+        for (const auto& entry : entries)
+          if (entry.kind == core::MatchKind::Exact && entry.surface == surface) consider(entry);
+      }
+    }
+  }
+  return best;
+}
 }  // namespace azookey::learning

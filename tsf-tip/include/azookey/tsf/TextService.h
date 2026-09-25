@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -20,8 +21,10 @@
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
+#include "azookey/tsf/CharacterFormEditSession.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
+#include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TipLocalSettings.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
@@ -87,6 +90,9 @@ struct TipCandidate {
 class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfThreadMgrEventSink,
+                          public ITfTextEditSink,
+                          public ITfCompartmentEventSink,
+                          public ITfFunctionProvider,
                           public ITfCompositionSink,
                           public ITfDisplayAttributeProvider,
                           public ITfFnConfigure {
@@ -115,6 +121,12 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) override;
   STDMETHODIMP OnPushContext(ITfContext* pic) override;
   STDMETHODIMP OnPopContext(ITfContext* pic) override;
+  STDMETHODIMP OnEndEdit(ITfContext* context, TfEditCookie cookie, ITfEditRecord* record) override;
+
+  STDMETHODIMP OnChange(REFGUID rguid) override;
+  STDMETHODIMP GetType(GUID* type) override;
+  STDMETHODIMP GetDescription(BSTR* description) override;
+  STDMETHODIMP GetFunction(REFGUID group, REFIID iid, IUnknown** function) override;
 
   STDMETHODIMP OnCompositionTerminated(TfEditCookie ecWrite, ITfComposition* pComposition) override;
 
@@ -131,6 +143,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // ITfThreadMgrEx::GetActiveFlags in ActivateEx (spec §2.10) and propagated to
   // CandidateUiCoordinator for pbShow-driven candidate UI routing.
   bool ui_less_mode() const { return ui_less_mode_; }
+  bool keyboard_open() const { return keyboard_open_; }
+  HRESULT ToggleKeyboardOpen();
 
   // Accessed by EditSession.
   std::string preedit_kana_;
@@ -208,6 +222,30 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   void show_candidate_window_from_cache_for_test();
   bool has_active_context_for_test() const { return active_context_ != nullptr; }
+  std::string pending_reconversion_surface_for_test() {
+    std::lock_guard<std::mutex> lock(ipc_mtx_);
+    return ipc_reconversion_request_ ? ipc_reconversion_request_->surface : std::string{};
+  }
+  void set_reconversion_cache_for_test(ITfContext* context, std::wstring surface,
+                                       std::vector<std::wstring> candidates) {
+    if (reconversion_cache_context_) reconversion_cache_context_->Release();
+    reconversion_cache_context_ = context;
+    if (context) context->AddRef();
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    reconversion_cache_surface_ = std::move(surface);
+    reconversion_cache_candidates_ = std::move(candidates);
+  }
+  void set_reconversion_ui_for_test(ITfContext* context, ITfRange* range, ITfCandidateList* list) {
+    ClearReconversionState();
+    if (text_edit_context_) text_edit_context_->Release();
+    text_edit_context_ = context;
+    if (context) context->AddRef();
+    reconversion_range_ = range;
+    if (range) range->AddRef();
+    reconversion_list_ = list;
+    if (list) list->AddRef();
+  }
+  bool has_reconversion_ui_for_test() const { return reconversion_list_ != nullptr; }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
   HRESULT request_commit_edit_session_for_test(ITfContext* context) {
@@ -275,7 +313,14 @@ class TextService final : public ITfTextInputProcessorEx,
   TfClientId client_id_{TF_CLIENTID_NULL};
   bool key_event_sink_advised_{false};
   DWORD thread_mgr_sink_cookie_{TF_INVALID_COOKIE};
+  ITfCompartment* keyboard_open_compartment_{nullptr};
+  DWORD keyboard_open_sink_cookie_{TF_INVALID_COOKIE};
+  bool keyboard_open_{true};
+  bool function_provider_advised_{false};
   bool ui_less_mode_{false};
+  bool alnum_mode_{false};
+  std::optional<CharacterFormCycleState> character_form_cycle_state_;
+  std::optional<CharacterFormRecentCommit> recent_character_form_commit_;
 
   core::RomajiKanaConverter romaji_;
   // Logical state for the ordinary (non-batch) input pipeline. The legacy
@@ -406,6 +451,11 @@ class TextService final : public ITfTextInputProcessorEx,
     uint32_t attempts{0};
   };
   std::vector<IpcSendItem> ipc_send_queue_;  // protected by ipc_mtx_
+  struct ReconversionRequest {
+    uint64_t generation;
+    std::string surface;
+  };
+  std::optional<ReconversionRequest> ipc_reconversion_request_;  // ipc_mtx_
   // Monotonic counter behind the CommitObservation idempotency key. Written on
   // the TIP thread, never read by the IPC worker, so an atomic suffices.
   std::atomic<uint64_t> commit_observation_seq_{0};
@@ -416,6 +466,22 @@ class TextService final : public ITfTextInputProcessorEx,
   std::vector<TipCandidate> candidates_;
   std::vector<ipc::BatchConversionSegment> cached_batch_segments_;
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
+  struct ReconversionResult {
+    uint64_t generation;
+    std::wstring surface;
+    std::vector<std::wstring> candidates;
+  };
+  std::optional<ReconversionResult> reconversion_result_;    // candidates_mtx_
+  std::wstring reconversion_cache_surface_;                  // candidates_mtx_
+  std::vector<std::wstring> reconversion_cache_candidates_;  // candidates_mtx_
+  ITfContext* reconversion_cache_context_{nullptr};          // UI thread
+  ITfContext* text_edit_context_{nullptr};                   // UI thread, AddRef'd
+  DWORD text_edit_cookie_{TF_INVALID_COOKIE};
+  bool reconversion_prefetch_pending_{false};  // UI thread
+  std::atomic<uint64_t> reconversion_generation_{0};
+  ITfRange* reconversion_range_{nullptr};         // UI thread only
+  ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
+  std::wstring reconversion_surface_;             // UI thread only
 
   void StartIpcWorker();
   void StopIpcWorker();
@@ -426,6 +492,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void IpcWorkerThreadImpl();
   std::atomic<uint32_t> ipc_worker_exception_code_{0};
   void ServeConnection();
+  bool ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id);
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
                     const std::string& mode);
   bool PerformHandshake();
@@ -443,7 +510,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void NoteHostDeadlineMissed();
   bool HasQueuedIpcWorkLocked() const;
   bool WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
-                                ipc::MessageType expected_type);
+                                ipc::MessageType expected_type,
+                                std::optional<ipc::Envelope>* received = nullptr);
   bool ObserveHostGeneration(const std::string& host_generation_id);
   void RequestHostOptionRefresh();
   void RearmPendingQuery(uint64_t req_id);
@@ -469,6 +537,13 @@ class TextService final : public ITfTextInputProcessorEx,
   PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
   static void OnCandidatesReady(void* context);
   void ShowCandidateWindowFromCache();
+  HRESULT StartSelectionReconversion(ITfContext* context);
+  HRESULT CompleteReconversionSelection(size_t index);
+  void ClearReconversionState();
+  void ShowReconversionResult();
+  void PrefetchSelectedReconversion();
+  void AdviseTextEditSink(ITfContext* context);
+  void UnadviseTextEditSink();
   HRESULT ApplyClientAction(ITfContext* context, const core::ClientAction& action,
                             bool& preedit_update_needed, bool& commit_pending);
   HRESULT ApplyInputStateResult(ITfContext* context, core::HandleResult result);
@@ -494,6 +569,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   HRESULT RequestCommitEditSession(ITfContext* context);
   bool RequestLifecycleCommitOrEndComposition(ITfContext* context);
+  HRESULT AdviseKeyboardOpenCompartment();
+  HRESULT UnadviseKeyboardOpenCompartment();
+  HRESULT AdviseFunctionProvider();
+  HRESULT UnadviseFunctionProvider();
+  void RefreshKeyboardOpen();
   void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                LifecycleCleanupFailurePolicy failure_policy);
 

@@ -41,6 +41,7 @@ enum class UserAction : uint16_t {
 
   // Debugging.
   ToggleDebugWindow,
+  ToggleAlnum,
 };
 
 inline constexpr uint32_t kModifierShift = 1u << 0;

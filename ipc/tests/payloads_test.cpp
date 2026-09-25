@@ -335,22 +335,18 @@ TEST(PayloadsTest, QueryLiveConversionRejectsMalformedPayloads) {
   EXPECT_FALSE(ParseQueryLiveConversionRequest("{}").has_value());
   EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":"かな"})").has_value());
   EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":123,"context":""})").has_value());
-  EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":"かな","context":null})")
-                   .has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionRequest(R"({"kana":"かな","context":null})").has_value());
   EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名"})").has_value());
   EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"confidence":0.5})").has_value());
-  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":42,"confidence":0.5})")
-                   .has_value());
-  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":"0.5"})")
-                   .has_value());
-  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":-0.1})")
-                   .has_value());
-  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1.1})")
-                   .has_value());
-  EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"","confidence":0})")
-                  .has_value());
-  EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1})")
-                  .has_value());
+  EXPECT_FALSE(ParseQueryLiveConversionResponse(R"({"surface":42,"confidence":0.5})").has_value());
+  EXPECT_FALSE(
+      ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":"0.5"})").has_value());
+  EXPECT_FALSE(
+      ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":-0.1})").has_value());
+  EXPECT_FALSE(
+      ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1.1})").has_value());
+  EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"","confidence":0})").has_value());
+  EXPECT_TRUE(ParseQueryLiveConversionResponse(R"({"surface":"仮名","confidence":1})").has_value());
 }
 
 TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {

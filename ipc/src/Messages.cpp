@@ -12,7 +12,8 @@ std::string TypeToString(MessageType type) {
     case MessageType::Handshake: return "Handshake";
     case MessageType::LoadModel: return "LoadModel";
     case MessageType::QueryCandidates: return "QueryCandidates";
-    case MessageType::QueryLiveConversion: return "QueryLiveConversion";
+    case MessageType::QueryLiveConversion:
+      return "QueryLiveConversion";
     case MessageType::QueryBatchConversion: return "QueryBatchConversion";
     case MessageType::QueryPredictions: return "QueryPredictions";
     case MessageType::QueryCorrections: return "QueryCorrections";

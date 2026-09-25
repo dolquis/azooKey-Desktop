@@ -620,7 +620,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
   const auto candidate = engine_->QueryLiveConversion(parsed->kana, parsed->context, NowSec(),
-                                                       cancel.get(), trace.context());
+                                                      cancel.get(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);
   completion.Complete();
   if (canceled) {
@@ -629,9 +629,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
   }
   if (candidate) {
     response.surface = candidate->surface;
-    response.confidence = std::isfinite(candidate->score)
-                              ? std::clamp(candidate->score, 0.0, 1.0)
-                              : 0.0;
+    if (std::isfinite(candidate->score)) {
+      // M14 fallback scores are unbounded ranking values. A zero-baseline
+      // sigmoid preserves their ordering without pinning ordinary scores >1
+      // to certainty; X-1 will calibrate against the runner-up candidate.
+      const double e = std::exp(-std::abs(candidate->score));
+      response.confidence = candidate->score >= 0.0 ? 1.0 / (1.0 + e) : e / (1.0 + e);
+    }
   }
   trace.Finish(core::EtwResult::Success, candidate ? 1 : 0);
   return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));

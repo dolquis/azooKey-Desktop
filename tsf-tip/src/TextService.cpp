@@ -1718,6 +1718,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       std::vector<ipc::BatchConversionSegment> batch_segments;
       std::vector<size_t> segment_selections;
       size_t segment_cursor{0};
+      std::string live_display_reading;
+      std::string live_display_surface;
     };
     auto capture_preedit_rollback_state = [&]() {
       PreeditRollbackState state;
@@ -1731,6 +1733,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       state.batch_segments = shown_batch_segments_;
       state.segment_selections = batch_segment_selections_;
       state.segment_cursor = batch_segment_cursor_;
+      state.live_display_reading = live_display_reading_;
+      state.live_display_surface = live_display_surface_;
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         state.cached_candidates = candidates_;
@@ -1748,6 +1752,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       shown_batch_segments_ = state.batch_segments;
       batch_segment_selections_ = state.segment_selections;
       batch_segment_cursor_ = state.segment_cursor;
+      live_display_reading_ = state.live_display_reading;
+      live_display_surface_ = state.live_display_surface;
       {
         std::lock_guard<std::mutex> lk(candidates_mtx_);
         candidates_ = state.cached_candidates;
@@ -1880,7 +1886,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       preedit_kana_.push_back(*decimal_digit);
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      PostCompositionQuery(context, CurrentPreeditSurface());
+      PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (is_input && wParam >= 'A' && wParam <= 'Z') {
@@ -1909,7 +1915,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      if (!BatchRomajiEnabled()) PostCompositionQuery(context, CurrentPreeditSurface());
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (is_input && (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
@@ -1938,7 +1944,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      if (!BatchRomajiEnabled()) PostCompositionQuery(context, CurrentPreeditSurface());
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (is_input && composition_symbol &&
@@ -1964,7 +1970,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
-      if (!BatchRomajiEnabled()) PostCompositionQuery(context, CurrentPreeditSurface());
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
     } else if (IsActionKey(key_event, UserAction::Backspace)) {
@@ -1996,7 +2002,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         const std::string reading = CurrentPreeditSurface();
-        if (!reading.empty()) PostCompositionQuery(context, reading);
+        if (!reading.empty()) PostQueryCandidates(context, reading);
         *eaten = TRUE;
       } else if (!preedit_kana_.empty()) {
         {
@@ -2012,7 +2018,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         const std::string reading = CurrentPreeditSurface();
-        if (!reading.empty()) PostCompositionQuery(context, reading);
+        if (!reading.empty()) PostQueryCandidates(context, reading);
         *eaten = TRUE;
       }
 
@@ -2227,6 +2233,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const auto rollback_state = capture_preedit_rollback_state();
         candidate_ui_.EndUI();
         selected_candidate_idx_ = 0;
+        live_display_reading_.clear();
+        live_display_surface_.clear();
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         *eaten = TRUE;
@@ -2902,8 +2910,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
 
   if (surface.empty()) return S_OK;
   const std::string reading = surface;
-  if (local_settings_.LiveConversionSnapshot() && live_display_reading_ == reading &&
-      !live_display_surface_.empty())
+  if (live_display_reading_ == reading && !live_display_surface_.empty())
     surface = live_display_surface_;
 
   candidate_ui_.EndUI();
@@ -3181,8 +3188,13 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
   HandshakeRequest hs;
   hs.tip_version = kTipVersion;
   hs.protocol_version = kHandshakeProtocolVersion;
-  hs.capabilities = {"ping", "query_candidates", "query_live_conversion",
-                     "query_batch_conversion", "commit_observation", "cancel", "secure_flag"};
+  hs.capabilities = {"ping",
+                     "query_candidates",
+                     "query_live_conversion",
+                     "query_batch_conversion",
+                     "commit_observation",
+                     "cancel",
+                     "secure_flag"};
   hs.client_id = ipc_client_id_;
   const auto token = ReadClientHandshakeToken();
   if (!token) {
@@ -3456,6 +3468,7 @@ void TextService::ServeConnection() {
     bool has_qc = false;
     bool is_batch = false;
     bool is_live_conversion = false;
+    bool apply_live_preview = false;
     bool live = true;
     bool secure = true;
     bool learning_allowed = false;
@@ -3483,6 +3496,7 @@ void TextService::ServeConnection() {
         req_id = ipc_pending_id_;
         is_batch = ipc_pending_is_batch_;
         is_live_conversion = ipc_pending_is_live_conversion_;
+        apply_live_preview = ipc_pending_apply_live_preview_;
         live = ipc_pending_live_;
         secure = ipc_pending_secure_;
         learning_allowed = ipc_pending_learning_allowed_;
@@ -3906,6 +3920,10 @@ void TextService::ServeConnection() {
           continue;
         }
         candidates_ = std::move(tip_candidates);
+        if (apply_live_preview && !candidate_window_show_pending_ && !candidates_.empty()) {
+          live_conversion_result_ =
+              LiveConversionResult{req_id, reading, candidates_.front().field.surface};
+        }
         cached_batch_segments_.clear();
         if (candidate_window_show_pending_) {
           if (candidates_.empty()) {
@@ -4231,6 +4249,8 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
 void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
   const auto privacy = ResolvePrivacy(context, false);
+  const bool apply_live_preview = live && emoji_trigger.empty() && !privacy.secure &&
+                                  !core_input_active_ && local_settings_.LiveConversionSnapshot();
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -4241,6 +4261,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_batch_mode_.clear();
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = false;
+  ipc_pending_apply_live_preview_ = apply_live_preview;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
   ipc_cv_.notify_one();
@@ -4262,16 +4283,10 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = true;
+  ipc_pending_apply_live_preview_ = false;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
   ipc_cv_.notify_one();
-}
-
-void TextService::PostCompositionQuery(ITfContext* context, const std::string& reading) {
-  if (local_settings_.LiveConversionSnapshot())
-    PostQueryLiveConversion(context, reading);
-  else
-    PostQueryCandidates(context, reading);
 }
 
 // One evaluation for every outbound route. The M46 secure axis and the AI
@@ -4341,6 +4356,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
   ipc_pending_is_batch_ = true;
   ipc_pending_is_live_conversion_ = false;
+  ipc_pending_apply_live_preview_ = false;
   ++ipc_pending_id_;
   ipc_has_request_ = true;
   ipc_cv_.notify_one();
@@ -4377,8 +4393,7 @@ HRESULT TextService::ApplyClientAction(ITfContext* context, const core::ClientAc
     candidate_ui_.EndUI();
     // Esc from Selecting restores the reading. A previously displayed live
     // surface must not override the next Enter commit after that transition.
-    if (input_state_.kind() == core::InputStateKind::Composing &&
-        !live_display_surface_.empty()) {
+    if (input_state_.kind() == core::InputStateKind::Composing && !live_display_surface_.empty()) {
       live_display_reading_.clear();
       live_display_surface_.clear();
     }
@@ -4517,7 +4532,7 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     if (SUCCEEDED(hr) && commit_pending) {
       if ((previous_state.kind() == core::InputStateKind::Composing ||
            previous_state.kind() == core::InputStateKind::Previewing) &&
-          live_display_reading_ == previous_state.Reading() && !live_display_surface_.empty() &&
+          live_display_reading_ == core_marked_surface_ && !live_display_surface_.empty() &&
           previous_marked == live_display_surface_)
         core_marked_surface_ = live_display_surface_;
       // A queued or in-flight query must be cancelled even when no worker has
@@ -4647,10 +4662,11 @@ void TextService::ApplyLiveConversionResult() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     result = std::move(live_conversion_result_);
     live_conversion_result_.reset();
+    if (candidate_window_show_pending_) result.reset();
   }
   if (!result || result->surface.empty() || !active_context_ ||
-      !local_settings_.LiveConversionSnapshot() ||
-      candidate_ui_.IsShowing() || result->reading != CurrentPreeditSurface() ||
+      !local_settings_.LiveConversionSnapshot() || candidate_ui_.IsShowing() ||
+      result->reading != CurrentPreeditSurface() ||
       (core_input_active_ && input_state_.kind() != core::InputStateKind::Composing &&
        input_state_.kind() != core::InputStateKind::Previewing))
     return;

@@ -80,8 +80,8 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(),
-                                        nullptr, {});
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        {});
   const std::vector<std::string> inputs = {"わたし", "にほん", "とうきょう", "かなへんかん",
                                            "にほん"};
   const auto query = [&](int iteration) {
@@ -136,8 +136,7 @@ int main(int argc, char** argv) {
               << " p95_ms=" << result.latency.p95_ms << " p99_ms=" << result.latency.p99_ms
               << " max_ms=" << result.latency.max_ms << " max_p95_ms=" << max_p95_ms << '\n';
   }
-  if (const auto warning = azookey::bench::RegressionWarning(result))
-    std::cerr << *warning << '\n';
+  if (const auto warning = azookey::bench::RegressionWarning(result)) std::cerr << *warning << '\n';
   if (!result.threshold_passed) {
     std::cerr << "live conversion p95 exceeded threshold\n";
     return 1;

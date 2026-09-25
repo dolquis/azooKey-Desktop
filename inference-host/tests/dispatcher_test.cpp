@@ -609,11 +609,28 @@ TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
   EXPECT_LE(parsed->confidence, 1.0);
 }
 
+TEST_F(DispatcherTest, QueryLiveConversionDoesNotSaturateUserWordScore) {
+  azookey::learning::UserWord word;
+  word.word = "独自語";
+  word.ruby = "どくじご";
+  word.value = 1.5;
+  ASSERT_TRUE(user_dict.Add(word));
+  const auto response =
+      dispatcher.Dispatch(MakeReq(23, ipc::MessageType::QueryLiveConversion,
+                                  ipc::BuildQueryLiveConversionRequest({word.ruby, ""})));
+  ASSERT_TRUE(response);
+  const auto parsed = ipc::ParseQueryLiveConversionResponse(response->payload_json);
+  ASSERT_TRUE(parsed);
+  ASSERT_EQ(parsed->surface, word.word);
+  EXPECT_GT(parsed->confidence, 0.5);
+  EXPECT_LT(parsed->confidence, 1.0);
+}
+
 TEST_F(DispatcherTest, QueryLiveConversionSuppressesPreCanceledReply) {
   scheduler.Cancel(22);
   ipc::QueryLiveConversionRequest query{"わたし", ""};
-  const auto response = dispatcher.Dispatch(MakeReq(
-      22, ipc::MessageType::QueryLiveConversion, ipc::BuildQueryLiveConversionRequest(query)));
+  const auto response = dispatcher.Dispatch(MakeReq(22, ipc::MessageType::QueryLiveConversion,
+                                                    ipc::BuildQueryLiveConversionRequest(query)));
   EXPECT_FALSE(response);
   EXPECT_FALSE(scheduler.IsCanceled(22));
 }

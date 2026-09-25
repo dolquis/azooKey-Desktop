@@ -276,8 +276,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_live_conversion_result_for_test(uint64_t request_id, std::string reading,
                                            std::string surface) {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
-    live_conversion_result_ = LiveConversionResult{request_id, std::move(reading),
-                                                   std::move(surface)};
+    live_conversion_result_ =
+        LiveConversionResult{request_id, std::move(reading), std::move(surface)};
   }
   bool has_live_conversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
@@ -440,6 +440,7 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ipc_has_request_{false};
   bool ipc_pending_is_batch_{false};
   bool ipc_pending_is_live_conversion_{false};
+  bool ipc_pending_apply_live_preview_{false};
   bool ipc_pending_live_{true};
   bool ipc_pending_secure_{true};
   bool ipc_pending_learning_allowed_{false};
@@ -495,8 +496,8 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string surface;
   };
   std::optional<LiveConversionResult> live_conversion_result_;  // candidates_mtx_
-  std::string live_display_reading_;  // UI thread only.
-  std::string live_display_surface_;  // UI thread only.
+  std::string live_display_reading_;                            // UI thread only.
+  std::string live_display_surface_;                            // UI thread only.
   struct ReconversionResult {
     uint64_t generation;
     std::wstring surface;
@@ -552,7 +553,6 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
   void PostQueryLiveConversion(ITfContext* context, const std::string& reading);
-  void PostCompositionQuery(ITfContext* context, const std::string& reading);
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,

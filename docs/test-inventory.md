@@ -136,8 +136,9 @@ DEV-1198 の追加検証は既存 CTest に含む。`core_tests` は liveConvers
 `Previewing` 遷移、`ipc_tests` は `QueryLiveConversion` の型名往復、
 `ipc_payloads_tests` は要求・応答の往復と不正値拒否を確認する。
 `host_engine_tests` と `host_dispatcher_tests` は軽量経路の最良候補、要求 ID、
-キャンセルを確認する。`tsf_tip_onkeydown_preedit_tests` は専用 IPC と preedit 表示、
-古い応答、Backspace・Esc、secure 入力での抑止、表示と確定の一致を確認する。
+キャンセル、信頼度の飽和回避を確認する。`tsf_tip_onkeydown_preedit_tests` は
+専用 IPC と preedit 表示、古い応答、Backspace・Esc、secure 入力での抑止、
+表示と確定の一致、従来経路での候補照会とライブ表示の維持を確認する。
 `tsf_tip_local_settings_tests` は `liveConversion` の既定 OFF と再読込を確認する。
 
 ## CTest 以外の自動検査

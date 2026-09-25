@@ -430,8 +430,7 @@ std::string BuildQueryLiveConversionRequest(const QueryLiveConversionRequest& p)
   return j::Stringify(j::Value(std::move(o)));
 }
 
-std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(
-    const std::string& json) {
+std::optional<QueryLiveConversionRequest> ParseQueryLiveConversionRequest(const std::string& json) {
   auto v = ParseObject(json);
   if (!v) return std::nullopt;
   auto kana = v->GetString("kana");

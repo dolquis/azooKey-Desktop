@@ -175,9 +175,11 @@ class InferenceEngine {
 
   // M14: one best candidate through the lightweight fallback converter. Keeps
   // dictionary and learning ranking while avoiding multi-step model generation.
-  std::optional<core::Candidate> QueryLiveConversion(
-      const std::string& kana, const std::string& context, uint64_t now_epoch_sec,
-      const std::atomic<bool>* cancel, const InferenceTelemetry* telemetry = nullptr);
+  std::optional<core::Candidate> QueryLiveConversion(const std::string& kana,
+                                                     const std::string& context,
+                                                     uint64_t now_epoch_sec,
+                                                     const std::atomic<bool>* cancel,
+                                                     const InferenceTelemetry* telemetry = nullptr);
 
   // Candidates only; equivalent to QueryCandidatesEx(...).candidates.
   std::vector<core::Candidate> QueryCandidates(const std::string& kana, const std::string& context,

@@ -97,8 +97,7 @@ TEST(PayloadsTest, ReverseConvertRoundTripAndRejectsInvalidPayloads) {
   EXPECT_FALSE(ParseReverseConvertRequest(R"({"surface":""})"));
 
   const ReverseConvertResponse response{"あした", 1.0};
-  const auto decoded_response =
-      ParseReverseConvertResponse(BuildReverseConvertResponse(response));
+  const auto decoded_response = ParseReverseConvertResponse(BuildReverseConvertResponse(response));
   ASSERT_TRUE(decoded_response);
   EXPECT_EQ(decoded_response->reading, response.reading);
   EXPECT_DOUBLE_EQ(decoded_response->confidence, 1.0);

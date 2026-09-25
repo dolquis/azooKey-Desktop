@@ -12,9 +12,8 @@ namespace azookey::tsf {
 
 // The provider supplies candidates from the Host. It must impose a bounded
 // deadline: TSF calls GetReconversion on the caller's apartment.
-using ReconversionCandidateProvider =
-    std::function<HRESULT(ITfRange* range, const std::wstring& surface,
-                          std::vector<std::wstring>& candidates)>;
+using ReconversionCandidateProvider = std::function<HRESULT(
+    ITfRange* range, const std::wstring& surface, std::vector<std::wstring>& candidates)>;
 
 class ReconversionFunction final : public ITfFnReconversion {
  public:

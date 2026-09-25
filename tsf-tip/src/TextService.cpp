@@ -799,16 +799,16 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
     return E_NOINTERFACE;
   try {
     AddRef();
-    auto owner = std::shared_ptr<TextService>(this, [](TextService* service) { service->Release(); });
-    auto* reconversion = new (std::nothrow) ReconversionFunction(
-        client_id_, [owner](ITfRange* range, const std::wstring& surface,
-                            std::vector<std::wstring>& candidates) {
+    auto owner =
+        std::shared_ptr<TextService>(this, [](TextService* service) { service->Release(); });
+    auto* reconversion = new (std::nothrow)
+        ReconversionFunction(client_id_, [owner](ITfRange* range, const std::wstring& surface,
+                                                 std::vector<std::wstring>& candidates) {
           ITfContext* context = nullptr;
           if (FAILED(range->GetContext(&context)) || !context) return TF_E_NOCONVERSION;
           const bool secure = owner->ResolvePrivacy(context, false).secure;
           std::lock_guard<std::mutex> lock(owner->candidates_mtx_);
-          const bool same_context =
-              SameComIdentity(context, owner->reconversion_cache_context_);
+          const bool same_context = SameComIdentity(context, owner->reconversion_cache_context_);
           context->Release();
           if (secure || !same_context || surface != owner->reconversion_cache_surface_ ||
               owner->reconversion_cache_candidates_.empty())
@@ -830,11 +830,11 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
 HRESULT TextService::AdviseFunctionProvider() {
   if (!thread_mgr_) return E_UNEXPECTED;
   ITfSourceSingle* source = nullptr;
-  const HRESULT query = thread_mgr_->QueryInterface(IID_ITfSourceSingle,
-                                                    reinterpret_cast<void**>(&source));
+  const HRESULT query =
+      thread_mgr_->QueryInterface(IID_ITfSourceSingle, reinterpret_cast<void**>(&source));
   if (FAILED(query) || !source) return FAILED(query) ? query : E_NOINTERFACE;
   const HRESULT hr = source->AdviseSingleSink(client_id_, IID_ITfFunctionProvider,
-                                               static_cast<ITfFunctionProvider*>(this));
+                                              static_cast<ITfFunctionProvider*>(this));
   source->Release();
   if (SUCCEEDED(hr)) function_provider_advised_ = true;
   return hr;
@@ -845,8 +845,8 @@ HRESULT TextService::UnadviseFunctionProvider() {
   function_provider_advised_ = false;
   if (!thread_mgr_) return E_UNEXPECTED;
   ITfSourceSingle* source = nullptr;
-  const HRESULT query = thread_mgr_->QueryInterface(IID_ITfSourceSingle,
-                                                    reinterpret_cast<void**>(&source));
+  const HRESULT query =
+      thread_mgr_->QueryInterface(IID_ITfSourceSingle, reinterpret_cast<void**>(&source));
   if (FAILED(query) || !source) return FAILED(query) ? query : E_NOINTERFACE;
   const HRESULT hr = source->UnadviseSingleSink(client_id_, IID_ITfFunctionProvider);
   source->Release();
@@ -1059,7 +1059,7 @@ HRESULT TextService::UnadviseTextServiceSinks() {
 std::string WideToUtf8(const std::wstring& wide) {
   if (wide.empty()) return {};
   const int len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
-                                     static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+                                      static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
   if (len <= 0) return {};
   std::string result(len, '\0');
   return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(),
@@ -1073,26 +1073,23 @@ HRESULT TextService::AdviseKeyboardOpenCompartment() {
   if (!thread_mgr_) return E_UNEXPECTED;
 
   ITfCompartmentMgr* manager = nullptr;
-  HRESULT hr = thread_mgr_->QueryInterface(IID_ITfCompartmentMgr,
-                                            reinterpret_cast<void**>(&manager));
+  HRESULT hr =
+      thread_mgr_->QueryInterface(IID_ITfCompartmentMgr, reinterpret_cast<void**>(&manager));
   // Older hosts and test thread managers may not expose compartments. Keep
   // the historical open behavior when the interface is unavailable.
   if (hr == E_NOINTERFACE) return S_OK;
   if (FAILED(hr) || !manager) return FAILED(hr) ? hr : E_NOINTERFACE;
 
-  hr = manager->GetCompartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
-                               &keyboard_open_compartment_);
+  hr = manager->GetCompartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &keyboard_open_compartment_);
   manager->Release();
   if (FAILED(hr) || !keyboard_open_compartment_) return FAILED(hr) ? hr : E_UNEXPECTED;
 
   // Read before advising; OnChange will handle subsequent changes.
   RefreshKeyboardOpen();
   ITfSource* source = nullptr;
-  hr = keyboard_open_compartment_->QueryInterface(IID_ITfSource,
-                                                   reinterpret_cast<void**>(&source));
+  hr = keyboard_open_compartment_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
   if (FAILED(hr) || !source) return FAILED(hr) ? hr : E_NOINTERFACE;
-  hr = source->AdviseSink(IID_ITfCompartmentEventSink,
-                          static_cast<ITfCompartmentEventSink*>(this),
+  hr = source->AdviseSink(IID_ITfCompartmentEventSink, static_cast<ITfCompartmentEventSink*>(this),
                           &keyboard_open_sink_cookie_);
   source->Release();
   return hr;
@@ -1104,7 +1101,7 @@ HRESULT TextService::UnadviseKeyboardOpenCompartment() {
   if (keyboard_open_compartment_ && keyboard_open_sink_cookie_ != TF_INVALID_COOKIE) {
     ITfSource* source = nullptr;
     result = keyboard_open_compartment_->QueryInterface(IID_ITfSource,
-                                                         reinterpret_cast<void**>(&source));
+                                                        reinterpret_cast<void**>(&source));
     if (SUCCEEDED(result) && source) {
       result = source->UnadviseSink(keyboard_open_sink_cookie_);
       source->Release();
@@ -1418,8 +1415,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     const bool toggle_open = (wParam == VK_KANJI || wParam == VK_OEM_AUTO) &&
                              (modifiers & (core::kModifierCtrl | core::kModifierAlt |
                                            core::kModifierWin | core::kModifierShift)) == 0;
-    if ((!keyboard_open_ && !toggle_open) ||
-        (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
+    if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
       return S_OK;
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
@@ -1433,8 +1429,8 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
 
     if (reconversion_list_) {
-      if (wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_UP ||
-          wParam == VK_DOWN || (wParam >= '1' && wParam <= '9')) {
+      if (wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_UP || wParam == VK_DOWN ||
+          (wParam >= '1' && wParam <= '9')) {
         *eaten = TRUE;
         return S_OK;
       }
@@ -1577,8 +1573,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const bool toggle_open = (wParam == VK_KANJI || wParam == VK_OEM_AUTO) &&
                              (modifiers & (core::kModifierCtrl | core::kModifierAlt |
                                            core::kModifierWin | core::kModifierShift)) == 0;
-    if ((!keyboard_open_ && !toggle_open) ||
-        (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
+    if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
       return S_OK;
     // Ctrl chords reach the IME only when they map to an implemented action.
     if (HasSystemModifier(modifiers) &&
@@ -1634,9 +1629,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return reconversion_hr == E_OUTOFMEMORY ? reconversion_hr : S_OK;
     }
 
-    const auto mode_key = MapTipKey(wParam, modifiers,
-                                    !preedit_kana_.empty() || romaji_.HasPending(),
-                                    candidate_ui_.IsShowing());
+    const auto mode_key =
+        MapTipKey(wParam, modifiers, !preedit_kana_.empty() || romaji_.HasPending(),
+                  candidate_ui_.IsShowing());
     if (IsActionKey(mode_key, core::UserAction::ToggleHankaku)) {
       recent_character_form_commit_.reset();
       const HRESULT hr = ToggleKeyboardOpen();
@@ -1657,8 +1652,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     }
     if (IsActionKey(mode_key, core::UserAction::ToggleHiraKata)) {
-      const auto cycle = CharacterFormEditSession::CycleSelection(
-          context, client_id_, character_form_cycle_state_);
+      const auto cycle = CharacterFormEditSession::CycleSelection(context, client_id_,
+                                                                  character_form_cycle_state_);
       character_form_cycle_state_ = cycle.state;
       if (cycle.applied) {
         recent_character_form_commit_.reset();
@@ -3875,12 +3870,11 @@ void TextService::AdviseTextEditSink(ITfContext* context) {
   if (!context || SameComIdentity(context, text_edit_context_)) return;
   UnadviseTextEditSink();
   ITfSource* source = nullptr;
-  if (FAILED(context->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source))) ||
-      !source)
+  if (FAILED(context->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source))) || !source)
     return;
   DWORD cookie = TF_INVALID_COOKIE;
-  const HRESULT hr = source->AdviseSink(IID_ITfTextEditSink,
-                                        static_cast<ITfTextEditSink*>(this), &cookie);
+  const HRESULT hr =
+      source->AdviseSink(IID_ITfTextEditSink, static_cast<ITfTextEditSink*>(this), &cookie);
   source->Release();
   if (FAILED(hr)) return;
   text_edit_context_ = context;
@@ -3891,8 +3885,8 @@ void TextService::AdviseTextEditSink(ITfContext* context) {
 void TextService::UnadviseTextEditSink() {
   if (!text_edit_context_) return;
   ITfSource* source = nullptr;
-  if (SUCCEEDED(text_edit_context_->QueryInterface(IID_ITfSource,
-                                                   reinterpret_cast<void**>(&source))) &&
+  if (SUCCEEDED(
+          text_edit_context_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source))) &&
       source) {
     source->UnadviseSink(text_edit_cookie_);
     source->Release();
@@ -3904,7 +3898,7 @@ void TextService::UnadviseTextEditSink() {
 }
 
 STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
-                                     ITfEditRecord* record) {
+                                    ITfEditRecord* record) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!context || !record || !SameComIdentity(context, text_edit_context_)) return S_OK;
   BOOL changed = FALSE;
@@ -3994,8 +3988,8 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
       if (request.generation != reconversion_generation_.load()) return connected;
       reconversion_cache_surface_ = Utf8ToWide(request.surface);
       reconversion_cache_candidates_ = candidates;
-      reconversion_result_ =
-          ReconversionResult{request.generation, reconversion_cache_surface_, std::move(candidates)};
+      reconversion_result_ = ReconversionResult{request.generation, reconversion_cache_surface_,
+                                                std::move(candidates)};
     }
     candidate_ui_.PostCandidatesReady();
   }
@@ -4580,8 +4574,8 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context) {
   if (!cached_candidates.empty()) {
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
-      reconversion_result_ =
-          ReconversionResult{reconversion_generation_, reconversion_surface_, std::move(cached_candidates)};
+      reconversion_result_ = ReconversionResult{reconversion_generation_, reconversion_surface_,
+                                                std::move(cached_candidates)};
     }
     ShowReconversionResult();
     return S_OK;

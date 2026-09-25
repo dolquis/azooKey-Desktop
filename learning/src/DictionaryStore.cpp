@@ -223,8 +223,8 @@ std::vector<DictionaryEntry> DictionaryStore::Lookup(std::string_view reading,
   return result;
 }
 
-std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(
-    std::string_view surface, const LookupContext& ctx) const {
+std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(std::string_view surface,
+                                                              const LookupContext& ctx) const {
   if (surface.empty() || !core::IsValidUtf8(surface)) return std::nullopt;
   std::optional<DictionaryEntry> best;
   const auto consider = [&](DictionaryEntry entry) {

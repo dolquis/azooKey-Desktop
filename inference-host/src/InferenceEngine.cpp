@@ -954,8 +954,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesEx(
   return out;
 }
 
-std::string InferenceEngine::ReverseConvert(const std::string& surface,
-                                            uint64_t now_epoch_sec) {
+std::string InferenceEngine::ReverseConvert(const std::string& surface, uint64_t now_epoch_sec) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   RefreshDictionaryLocked();
   learning::LookupContext context;

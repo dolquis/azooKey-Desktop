@@ -52,8 +52,8 @@ class MockKeyboardCompartment final : public ITfCompartment, public ITfSource {
     if (!sink || !cookie) return E_POINTER;
     if (riid != IID_ITfCompartmentEventSink) return E_NOINTERFACE;
     if (sink_) return E_UNEXPECTED;
-    const HRESULT hr = sink->QueryInterface(IID_ITfCompartmentEventSink,
-                                             reinterpret_cast<void**>(&sink_));
+    const HRESULT hr =
+        sink->QueryInterface(IID_ITfCompartmentEventSink, reinterpret_cast<void**>(&sink_));
     if (FAILED(hr)) return hr;
     *cookie = kCookie;
     ++advise_count_;

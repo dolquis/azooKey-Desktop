@@ -246,8 +246,8 @@ TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingReques
 
 TEST_F(DispatcherTest, ReverseConvertReturnsKnownReadingAndUnknownSignal) {
   user_dict.Add({"明日", "あした"});
-  auto request = MakeReq(100, ipc::MessageType::ReverseConvert,
-                         ipc::BuildReverseConvertRequest({"明日"}));
+  auto request =
+      MakeReq(100, ipc::MessageType::ReverseConvert, ipc::BuildReverseConvertRequest({"明日"}));
   const auto response = dispatcher.Dispatch(request);
   ASSERT_TRUE(response);
   EXPECT_EQ(response->type, ipc::MessageType::ReverseConvert);
@@ -258,9 +258,9 @@ TEST_F(DispatcherTest, ReverseConvertReturnsKnownReadingAndUnknownSignal) {
   EXPECT_EQ(parsed->reading, "あした");
   EXPECT_DOUBLE_EQ(parsed->confidence, 1.0);
 
-  const auto unknown = dispatcher.Dispatch(MakeReq(
-      101, ipc::MessageType::ReverseConvert,
-      ipc::BuildReverseConvertRequest({"存在しない表層形"})));
+  const auto unknown =
+      dispatcher.Dispatch(MakeReq(101, ipc::MessageType::ReverseConvert,
+                                  ipc::BuildReverseConvertRequest({"存在しない表層形"})));
   ASSERT_TRUE(unknown);
   const auto parsed_unknown = ipc::ParseReverseConvertResponse(unknown->payload_json);
   ASSERT_TRUE(parsed_unknown);

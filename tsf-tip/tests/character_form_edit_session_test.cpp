@@ -72,8 +72,8 @@ class Range final : public ITfRange {
   STDMETHODIMP InsertEmbedded(TfEditCookie, DWORD, IDataObject*) override { return E_NOTIMPL; }
   STDMETHODIMP ShiftStart(TfEditCookie, LONG requested, LONG* shifted,
                           const TF_HALTCOND*) override {
-    const LONG target = (std::max)(LONG{0}, (std::min)(start_ + requested,
-                                                       static_cast<LONG>(document_.text.size())));
+    const LONG target = (std::max)(
+        LONG{0}, (std::min)(start_ + requested, static_cast<LONG>(document_.text.size())));
     if (shifted) *shifted = target - start_;
     start_ = target;
     end_ = (std::max)(end_, start_);

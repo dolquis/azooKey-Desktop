@@ -121,8 +121,7 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) override;
   STDMETHODIMP OnPushContext(ITfContext* pic) override;
   STDMETHODIMP OnPopContext(ITfContext* pic) override;
-  STDMETHODIMP OnEndEdit(ITfContext* context, TfEditCookie cookie,
-                         ITfEditRecord* record) override;
+  STDMETHODIMP OnEndEdit(ITfContext* context, TfEditCookie cookie, ITfEditRecord* record) override;
 
   STDMETHODIMP OnChange(REFGUID rguid) override;
   STDMETHODIMP GetType(GUID* type) override;
@@ -461,17 +460,17 @@ class TextService final : public ITfTextInputProcessorEx,
     std::wstring surface;
     std::vector<std::wstring> candidates;
   };
-  std::optional<ReconversionResult> reconversion_result_;  // candidates_mtx_
-  std::wstring reconversion_cache_surface_;  // candidates_mtx_
+  std::optional<ReconversionResult> reconversion_result_;    // candidates_mtx_
+  std::wstring reconversion_cache_surface_;                  // candidates_mtx_
   std::vector<std::wstring> reconversion_cache_candidates_;  // candidates_mtx_
-  ITfContext* reconversion_cache_context_{nullptr};  // UI thread
-  ITfContext* text_edit_context_{nullptr};  // UI thread, AddRef'd
+  ITfContext* reconversion_cache_context_{nullptr};          // UI thread
+  ITfContext* text_edit_context_{nullptr};                   // UI thread, AddRef'd
   DWORD text_edit_cookie_{TF_INVALID_COOKIE};
   bool reconversion_prefetch_pending_{false};  // UI thread
   std::atomic<uint64_t> reconversion_generation_{0};
-  ITfRange* reconversion_range_{nullptr};  // UI thread only
+  ITfRange* reconversion_range_{nullptr};         // UI thread only
   ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
-  std::wstring reconversion_surface_;  // UI thread only
+  std::wstring reconversion_surface_;             // UI thread only
 
   void StartIpcWorker();
   void StopIpcWorker();

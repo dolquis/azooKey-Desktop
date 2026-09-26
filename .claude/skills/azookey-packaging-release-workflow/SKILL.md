@@ -24,6 +24,7 @@ description: azooKey Desktop の MSI、WiX、MSIX、AppxManifest、external-loca
 - `.pfx`、秘密鍵、証明書パスワード、token をリポジトリ、ログ、コマンド履歴、PR 本文へ含めない。
 - MSIX の `Identity@Publisher` と署名証明書 Subject の一致を確認し、実在しない Publisher や証明書値を推測で設定しない。
 - machine-wide TIP 登録、証明書ストア変更、署名済み package の登録、IME 実入力、アンインストール確認は、明示された管理者権限、実機確認、人間ゲートとして扱う。
+- 例外として、検証専用の Hyper-V VM 内の開発登録は、`docs/handoff/hyper-v-vm-verification-plan.md` §4.5 の条件と範囲でエージェントが実行してよい。VM 内でも azooKey の MSI / MSIX の導入、署名、証明書ストアの変更は範囲外とする。
 - 管理者権限や実機を要する検証を、エージェント単独で完了扱いにしない。
 - Pester の静的整合テスト、package 生成、署名、インストール、TIP 実動作を別の検証段階として報告する。
 - 前段の検証成功を、後段の検証成功に読み替えない。

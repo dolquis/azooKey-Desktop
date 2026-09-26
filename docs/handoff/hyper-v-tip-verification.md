@@ -188,8 +188,9 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   回収先は `-ResultsDirectory` で変えられる。
 - `compat_test.exe` の fail、report の欠落、タイムアウト（既定 45 分、`-TimeoutMinutes`）は非ゼロ終了にする。
   failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。
-- TIP 登録を含むため、`-Run` は人間がホストで実行する。結果は層 1 の先行検証であり、
-  手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
+- `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
+  [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。
+  結果は層 1 の先行検証であり、手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
 
 ### 4. 実機検証（★基本セッションに切替えて）
 

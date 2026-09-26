@@ -56,6 +56,7 @@ just doctor --json
 
 PowerShell.MCP は、`scripts/register-dev.ps1` などの machine-wide 操作を共有コンソールへ提示するために使う。
 TIP 登録はユーザーが管理者 PowerShell で完了し、エージェントは単独で成功扱いにしない。
+検証専用の Hyper-V VM 内の開発登録に限り、[`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の条件でエージェントが実行してよい。
 
 UI Automation は TIP の実アプリ挙動を確認する補助である。
 登録、署名、実機入力などの Human Gate は、自動テストや UI Automation の成功だけでは完了しない。

@@ -4,15 +4,15 @@
     "native,Version=v0.0": {
       "Microsoft.Windows.CppWinRT": {
         "type": "Direct",
-        "requested": "[3.0.260715.1, )",
-        "resolved": "3.0.260715.1",
-        "contentHash": "zwoJXZ+BV7gEmyosDp/aYai5nXDCN0dZ9cQ4ACLnyCQisRqcGLqH7LXXTNo5Va6lAnXrItbxUWP+dHnel1/Vdw=="
+        "requested": "[3.0.260818.1, )",
+        "resolved": "3.0.260818.1",
+        "contentHash": "jBwP7ycb35/qnvwh+iysvelATSoIjjFtQBg29Ns1f5OVPKa1rur3VhJVQD5p3n/ADE2IAeVo/bN+EiFfztTROw=="
       },
       "Microsoft.Windows.SDK.BuildTools": {
         "type": "Direct",
-        "requested": "[10.0.26100.8249, )",
-        "resolved": "10.0.26100.8249",
-        "contentHash": "WJ+X+fVbBcZFc5q1MufkqBNjeMqWUblbG6PmijNG0tMVt+VXdE5cdaD30dbZ90RwUTidbjxv/tmgovl5czLlrg=="
+        "requested": "[10.0.26100.9169, )",
+        "resolved": "10.0.26100.9169",
+        "contentHash": "aFgIz/1WyMVTfdbkWSPiGb/MTiU3ynNUgCIDvJXdVloimUcm064xskrgXqdEjY3yHQgr2YrW7/Xd36pvD8T+ug=="
       },
       "Microsoft.WindowsAppSDK.DWrite": {
         "type": "Direct",
@@ -25,23 +25,23 @@
       },
       "Microsoft.WindowsAppSDK.Runtime": {
         "type": "Direct",
-        "requested": "[2.4.0, )",
-        "resolved": "2.4.0",
-        "contentHash": "ioljT2/zivSWb6Hc375VPrRrauE5O49OccruHQFI23NdwGERCFBgCr1qCYhFciTxAX9hOMkJeAx0/Wo6Z5y6eg==",
+        "requested": "[2.5.1, )",
+        "resolved": "2.5.1",
+        "contentHash": "EDzGf6Tq9njNfNsTfqKdiwmSzFF/caHItuDa99UTQiOvLXwOjCL1k75/PMLSoHbCo1cSlHh/sSqZVssJ/Z0NzA==",
         "dependencies": {
           "Microsoft.WindowsAppSDK.Base": "2.0.4"
         }
       },
       "Microsoft.WindowsAppSDK.WinUI": {
         "type": "Direct",
-        "requested": "[2.3.6, )",
-        "resolved": "2.3.6",
-        "contentHash": "01ImKF+wYm2aehRWS2GpKeoBL1RutDcJOUSTSo3fkLjOSr+gKPcUGDAtIUwZcQTvHWOct6hT1jKIdyxbJIhpBA==",
+        "requested": "[2.3.9, )",
+        "resolved": "2.3.9",
+        "contentHash": "GiuYUQqMYD5lycT+X2AGX1rlbHU/zf8xoPeZNXZbJj4mZcSr4STsxeRUMxnTUQLAmmjjQaPrTIRjn78vbPhAvg==",
         "dependencies": {
           "Microsoft.Web.WebView2": "1.0.3719.77",
           "Microsoft.WindowsAppSDK.Base": "2.0.4",
-          "Microsoft.WindowsAppSDK.Foundation": "2.3.9",
-          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.3"
+          "Microsoft.WindowsAppSDK.Foundation": "2.3.12",
+          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.8"
         }
       },
       "Microsoft.Web.WebView2": {
@@ -65,17 +65,17 @@
       },
       "Microsoft.WindowsAppSDK.Foundation": {
         "type": "Transitive",
-        "resolved": "2.3.9",
-        "contentHash": "lnfSoKvuMN2nv/NyMDWHX5u2K/tdg8AiyW+z30/YmCbJZp1k38B8/d4pKf+RjgkQbSGbIikN4irae72FXA3X5Q==",
+        "resolved": "2.3.12",
+        "contentHash": "UflrNbXoZmHPt8lLGDk4gQ+yoGfQlCHd3TVTy7YwCMZ/aVGWAiLDqGCEjtWmNsI8ySy6imx3ZlenKfd2/VMPEg==",
         "dependencies": {
           "Microsoft.WindowsAppSDK.Base": "2.0.4",
-          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.3"
+          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.8"
         }
       },
       "Microsoft.WindowsAppSDK.InteractiveExperiences": {
         "type": "Transitive",
-        "resolved": "2.1.3",
-        "contentHash": "2GwSpAWidRKZiGX0yeJ9SxjdgPYMpZXRaHbiss3rC4FglFYSpF/wmhW5axX2zJ/NP2e4LOoOiPtw1W4YRyQiFg==",
+        "resolved": "2.1.9",
+        "contentHash": "59nvb3pQYsBTTGrobeHkB4bkxASHtpaORJl7r6Zvg8PSIDCupEZTPKrIhnUknHDGfAtuBsnORjgvRi2WXGaRhA==",
         "dependencies": {
           "Microsoft.WindowsAppSDK.Base": "2.0.4"
         }
@@ -89,11 +89,11 @@
       },
       "Microsoft.WindowsAppSDK.Foundation": {
         "type": "Transitive",
-        "resolved": "2.3.9",
-        "contentHash": "lnfSoKvuMN2nv/NyMDWHX5u2K/tdg8AiyW+z30/YmCbJZp1k38B8/d4pKf+RjgkQbSGbIikN4irae72FXA3X5Q==",
+        "resolved": "2.3.12",
+        "contentHash": "UflrNbXoZmHPt8lLGDk4gQ+yoGfQlCHd3TVTy7YwCMZ/aVGWAiLDqGCEjtWmNsI8ySy6imx3ZlenKfd2/VMPEg==",
         "dependencies": {
           "Microsoft.WindowsAppSDK.Base": "2.0.4",
-          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.3"
+          "Microsoft.WindowsAppSDK.InteractiveExperiences": "2.1.8"
         }
       }
     }

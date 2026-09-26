@@ -302,7 +302,7 @@ Direct でのファイル取得経路が失われる。その場合は VM を停
 
 | 終了コード | 意味 | 扱い |
 |---|---|---|
-| `1641` | `ERROR_SUCCESS_REBOOT_INITIATED` | 成功。Installer が再起動を開始した。`/f` 系の修復では `/norestart` が無視されるため、これが返る（上記）。`REBOOT=ReallySuppress` を渡した実行でこれが返った場合は別の経路なので、verbose ログを回収して調べる |
+| `1641` | `ERROR_SUCCESS_REBOOT_INITIATED` | 成功。Installer が再起動を開始した。`/f` 系の修復では `/norestart` が無視されるため、使用中ファイルがあればこれが返る（上記）。`REBOOT=ReallySuppress` を渡した実行でこれが返った場合は別の経路なので、verbose ログを回収して調べる |
 | `3010` | `ERROR_SUCCESS_REBOOT_REQUIRED` | 成功。再起動は呼び出し側が行う。TIP を読み込んだプロセスがあれば、修復や更新ではこれが返る |
 | `1638` | 同一製品の別バージョンが導入済み | 対象の版を確認する |
 

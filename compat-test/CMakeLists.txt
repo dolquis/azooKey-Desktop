@@ -1,4 +1,5 @@
 add_library(azookey_compat_test_support STATIC
+  runner/CaseSelection.cpp
   runner/CaseSupport.cpp
   runner/ClipboardIsolation.cpp
   runner/ReportWriter.cpp

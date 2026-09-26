@@ -420,11 +420,25 @@ function Get-VmVerifySummaryCompatReport {
       [string]$Data.summary.failing_skip -eq [string]$counts["failingSkip"])
   }
 
+  # ケースを絞った実行を全件の結果と読み違えないよう、runner の選択を写す。
+  # case_selection を持たない report は選択の記録が無いものとして null にする。
+  $caseSelection = $null
+  if ($Data.case_selection) {
+    $caseSelection = [pscustomobject][ordered]@{
+      excluded = @($Data.case_selection.excluded | ForEach-Object {
+          ConvertTo-VmVerifySummaryToken -Value $_ })
+      prerequisitesAdded = @($Data.case_selection.prerequisites_added | ForEach-Object {
+          ConvertTo-VmVerifySummaryToken -Value $_ })
+      baselineCaseExcluded = $Data.case_selection.baseline_case_excluded -eq $true
+    }
+  }
+
   return [pscustomobject][ordered]@{
     targetId = ConvertTo-VmVerifySummaryToken -Value $Data.target.id
     displayName = ConvertTo-VmVerifySummarySafeText -Value $Data.target.display_name -MaxLength 80
     automationLevel = ConvertTo-VmVerifySummaryToken -Value $Data.target.automation_level
     reportedSummaryMatches = $reportedSummaryMatches
+    caseSelection = $caseSelection
     counts = [pscustomobject]$counts
     results = @($results)
   }
@@ -626,6 +640,12 @@ function ConvertTo-VmVerifySummaryMarkdown {
     $compatLabel = "compat ``$($report.targetId)``"
     if ($report.reportedSummaryMatches -eq $false) {
       $compatLabel = "$compatLabel（report.json の summary と results が食い違う）"
+    }
+    if ($report.caseSelection -and @($report.caseSelection.excluded).Count -ne 0) {
+      $compatLabel = "$compatLabel（部分実行。未実行: $(@($report.caseSelection.excluded) -join ', ')）"
+    }
+    if ($report.caseSelection -and $report.caseSelection.baselineCaseExcluded) {
+      $compatLabel = "$compatLabel（前提の C-001 を除外）"
     }
     $lines.Add((Format-VmVerifySummaryCountRow `
       -Label $compatLabel -State "取得" -Counts $report.counts))

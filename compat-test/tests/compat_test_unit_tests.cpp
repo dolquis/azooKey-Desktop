@@ -6,12 +6,15 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "azookey/ipc/Json.h"
+#include "runner/CaseSelection.h"
 #include "runner/CaseSupport.h"
 #include "runner/ClipboardIsolation.h"
 #include "runner/ReportWriter.h"
@@ -141,7 +144,9 @@ TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
       {"C-003", ResultStatus::FailingSkip, "caret-rectangle-unavailable", 56, {}},
   };
 
-  ASSERT_TRUE(WriteReports(temp.path(), target, results));
+  CasePlan plan;
+  plan.executed = {"C-001", "C-004", "C-003"};
+  ASSERT_TRUE(WriteReports(temp.path(), target, results, plan));
   const std::string json_text = ReadFile(temp.path() / "report.json");
   const std::string markdown = ReadFile(temp.path() / "report.md");
   const auto parsed = azookey::ipc::json::Parse(json_text);
@@ -162,6 +167,130 @@ TEST(CompatReportWriterTest, WritesStableSchemaAndRedactsUntrustedReasonText) {
   EXPECT_NE(markdown.find("**Outcome: FAIL**"), std::string::npos);
   EXPECT_NE(markdown.find("<summary>Case details</summary>"), std::string::npos);
   EXPECT_FALSE(std::filesystem::exists(temp.path() / "logs"));
+  EXPECT_EQ(markdown.find("Excluded cases"), std::string::npos);
+}
+
+std::vector<std::string> JsonStrings(const azookey::ipc::json::Object& object,
+                                     std::string_view key) {
+  std::vector<std::string> values;
+  const azookey::ipc::json::Value value(object);
+  const auto* array = value.GetArray(key);
+  if (!array) return values;
+  for (const auto& item : *array) values.push_back(item.AsString());
+  return values;
+}
+
+TEST(CompatReportWriterTest, RecordsExecutedExcludedAndPrerequisiteCases) {
+  TemporaryDirectory temp;
+  TargetConfig target;
+  target.id = "notepad";
+  CasePlan plan;
+  plan.executed = {"C-001", "C-010"};
+  plan.excluded = {"C-002", "C-011"};
+  plan.prerequisites_added = {"C-001"};
+  std::vector<CaseResult> results{
+      {"C-001", ResultStatus::Pass, "expected-commit-observed", 12, {}},
+      {"C-010", ResultStatus::Pass, "host-recovered", 34, {}},
+  };
+
+  ASSERT_TRUE(WriteReports(temp.path(), target, results, plan));
+  const auto parsed = azookey::ipc::json::Parse(ReadFile(temp.path() / "report.json"));
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->GetInt("schema_version"), 1);
+  const auto* selection = parsed->FindObject("case_selection");
+  ASSERT_NE(selection, nullptr);
+  EXPECT_EQ(JsonStrings(*selection, "executed"), (std::vector<std::string>{"C-001", "C-010"}));
+  EXPECT_EQ(JsonStrings(*selection, "excluded"), (std::vector<std::string>{"C-002", "C-011"}));
+  EXPECT_EQ(JsonStrings(*selection, "prerequisites_added"), std::vector<std::string>{"C-001"});
+  EXPECT_EQ(azookey::ipc::json::Value(*selection).GetBool("baseline_case_excluded"), false);
+  const std::string markdown = ReadFile(temp.path() / "report.md");
+  EXPECT_NE(markdown.find("Excluded cases (not run): C-002, C-011"), std::string::npos);
+  EXPECT_NE(markdown.find("Prerequisite cases added: C-001"), std::string::npos);
+}
+
+TEST(CaseSelectionTest, ParsesCommaSeparatedUniqueCaseIds) {
+  EXPECT_EQ(ParseCaseIdList(L"C-001,C-004"), (std::vector<std::string>{"C-001", "C-004"}));
+  EXPECT_EQ(ParseCaseIdList(L"C-010"), std::vector<std::string>{"C-010"});
+  for (const auto* text : {L"", L"C-001,", L",C-001", L"C-001,,C-004", L"C-001, C-004", L"c-001",
+                           L"C-1", L"C-0001", L"C-00a", L"C-001,C-001"}) {
+    EXPECT_FALSE(ParseCaseIdList(text)) << std::filesystem::path(text).string();
+  }
+}
+
+class CaseSelectionPlanTest : public ::testing::Test {
+ protected:
+  const std::vector<std::string> target_cases{"C-001", "C-002", "C-011", "C-012", "C-010"};
+  const std::set<std::string> dependents{"C-002", "C-010", "C-012"};
+
+  std::optional<CasePlan> Plan(std::optional<std::vector<std::string>> requested,
+                               std::vector<std::string> skipped, std::string* error = nullptr) {
+    return PlanCaseSelection(target_cases, requested, skipped, dependents, error);
+  }
+};
+
+TEST_F(CaseSelectionPlanTest, SelectsEveryTargetCaseInTargetOrderByDefault) {
+  const auto plan = Plan(std::nullopt, {});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, target_cases);
+  EXPECT_TRUE(plan->excluded.empty());
+  EXPECT_TRUE(plan->prerequisites_added.empty());
+  EXPECT_FALSE(plan->baseline_case_excluded);
+}
+
+TEST_F(CaseSelectionPlanTest, SkipKeepsBaselineAndLeavesHostKillForALaterRun) {
+  const auto plan = Plan(std::nullopt, {"C-010"});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-002", "C-011", "C-012"}));
+  EXPECT_EQ(plan->excluded, std::vector<std::string>{"C-010"});
+  EXPECT_FALSE(plan->baseline_case_excluded);
+}
+
+TEST_F(CaseSelectionPlanTest, CasesKeepTargetOrderAndRecordEveryUnselectedCase) {
+  const auto plan = Plan(std::vector<std::string>{"C-010", "C-001"}, {});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-010"}));
+  EXPECT_EQ(plan->excluded, (std::vector<std::string>{"C-002", "C-011", "C-012"}));
+  EXPECT_TRUE(plan->prerequisites_added.empty());
+}
+
+TEST_F(CaseSelectionPlanTest, DependentCaseAloneAddsBaselinePrerequisite) {
+  const auto plan = Plan(std::vector<std::string>{"C-010"}, {});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-010"}));
+  EXPECT_EQ(plan->prerequisites_added, std::vector<std::string>{"C-001"});
+  EXPECT_FALSE(plan->baseline_case_excluded);
+}
+
+TEST_F(CaseSelectionPlanTest, IndependentCaseAloneDoesNotAddBaseline) {
+  const auto plan = Plan(std::vector<std::string>{"C-011"}, {});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, std::vector<std::string>{"C-011"});
+  EXPECT_TRUE(plan->prerequisites_added.empty());
+  EXPECT_FALSE(plan->baseline_case_excluded);
+}
+
+TEST_F(CaseSelectionPlanTest, SkippingBaselineMarksDependentsInsteadOfAddingIt) {
+  const auto plan = Plan(std::vector<std::string>{"C-002", "C-011"}, {"C-001"});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-002", "C-011"}));
+  EXPECT_TRUE(plan->prerequisites_added.empty());
+  EXPECT_TRUE(plan->baseline_case_excluded);
+}
+
+TEST_F(CaseSelectionPlanTest, CombinesCasesAndSkipAndIgnoresSkipOutsideSelection) {
+  const auto plan = Plan(std::vector<std::string>{"C-001", "C-002", "C-010"}, {"C-010", "C-012"});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-002"}));
+}
+
+TEST_F(CaseSelectionPlanTest, RejectsUnknownCasesAndEmptySelection) {
+  std::string error;
+  EXPECT_FALSE(Plan(std::vector<std::string>{"C-013"}, {}, &error));
+  EXPECT_NE(error.find("C-013"), std::string::npos);
+  EXPECT_FALSE(Plan(std::nullopt, {"C-099"}, &error));
+  EXPECT_NE(error.find("C-099"), std::string::npos);
+  EXPECT_FALSE(Plan(std::vector<std::string>{"C-010"}, {"C-010"}, &error));
+  EXPECT_FALSE(Plan(std::nullopt, target_cases, &error));
 }
 
 TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
@@ -356,7 +485,7 @@ TEST(CompatReportWriterTest, RejectsInvalidTargetId) {
   TemporaryDirectory temp;
   TargetConfig target;
   target.id = "vs_code";
-  EXPECT_FALSE(WriteReports(temp.path(), target, {}));
+  EXPECT_FALSE(WriteReports(temp.path(), target, {}, {}));
 }
 
 TEST(CompatReportWriterTest, RejectsNonEmptyOutputDirectory) {

@@ -98,12 +98,13 @@ Describe "VM verification summary" {
       param(
         [Parameter(Mandatory = $true)]
         [string]$Root,
-        [string]$Target = "notepad"
+        [string]$Target = "notepad",
+        $CaseSelection = $null
       )
 
       $directory = Join-Path $Root "compat-$Target"
       New-Item -ItemType Directory -Path $directory -Force | Out-Null
-      return Write-TestJson -Path (Join-Path $directory "report.json") -Value ([ordered]@{
+      $report = [ordered]@{
           schema_version = 1
           target = @{ id = $Target; display_name = "Notepad"; app_id = "notepad.exe"; automation_level = "full" }
           # 意図的に results と食い違わせ、数え直していることを確かめる。
@@ -113,7 +114,11 @@ Describe "VM verification summary" {
             @{ id = "C-002"; status = "fail"; reason_code = "candidate-missing"; duration_ms = 20; artifact = "failures/notepad_C-002_fail" }
             @{ id = "C-003"; status = "failing-skip"; reason_code = "C:\Users\alice\trace.log"; duration_ms = 0; artifact = "C:/Users/alice/failures/x" }
           )
-        })
+        }
+      if ($CaseSelection) {
+        $report.case_selection = $CaseSelection
+      }
+      return Write-TestJson -Path (Join-Path $directory "report.json") -Value $report
     }
   }
 
@@ -309,6 +314,37 @@ Describe "VM verification summary" {
     $markdown | Should -Match "人間ゲートの合否を表さない"
     $markdown | Should -Match "\| compat ``vscode``（report.json の summary と results が食い違う） \| 取得 \| 1 \| 1 \| 1 \|"
     $markdown | Should -Not -Match "Outcome"
+  }
+
+  It "marks a partial compat run instead of presenting it as every case" {
+    $root = Join-Path $TestDrive "partial"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $selection = [ordered]@{
+      executed = @("C-001", "C-002", "C-003")
+      excluded = @("C-010", "C:\Users\alice")
+      prerequisites_added = @("C-001")
+      baseline_case_excluded = $true
+    }
+
+    $result = Invoke-VmVerifySummary `
+      -ManifestPath (Initialize-TestManifest -Root $root) `
+      -CompatReportPath @(
+        Initialize-TestCompat -Root $root -Target "notepad" -CaseSelection $selection
+        Initialize-TestCompat -Root $root -Target "vscode") `
+      -OsBuild "26100.1" `
+      -OutputDirectory (Join-Path $root "out")
+
+    $notepad = $result.Summary.compat | Where-Object { $_.targetId -eq "notepad" }
+    @($notepad.caseSelection.excluded) | Should -Be @("C-010", "redacted")
+    @($notepad.caseSelection.prerequisitesAdded) | Should -Be @("C-001")
+    $notepad.caseSelection.baselineCaseExcluded | Should -BeTrue
+    ($result.Summary.compat | Where-Object { $_.targetId -eq "vscode" }).caseSelection |
+      Should -BeNullOrEmpty
+
+    $markdown = Get-Content -Raw -LiteralPath $result.MarkdownPath
+    $markdown | Should -Match "compat ``notepad``[^|]*（部分実行。未実行: C-010, redacted）（前提の C-001 を除外） \| 取得"
+    $markdown | Should -Not -Match "compat ``vscode``[^|]*部分実行"
+    $markdown | Should -Not -Match "alice"
   }
 
   It "rejects a manifest without a full commit hash" {

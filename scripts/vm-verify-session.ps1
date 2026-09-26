@@ -15,6 +15,10 @@
                回収する（docs/handoff/hyper-v-vm-verification-plan.md §5 の L1）。
     -Restore : 指定チェックポイントへ復元する。
 
+  -Run の -CompatCases / -CompatSkip は compat_test.exe の --cases / --skip へ渡す
+  case ID（C-001 形式）。C-010 は Host を停止するため、手動の打鍵ゲートより前に
+  -CompatSkip C-010 で回し、ゲートの後に -CompatCases C-010 で回せる。
+
   チェックポイント名はパッケージの manifest.json（commit / preset）から決定的に
   生成するため、同じパッケージに対する再実行は常に同じ名前を指す。
 
@@ -37,7 +41,9 @@ param(
   [System.Management.Automation.PSCredential]$Credential = $null,
   [string]$ResultsDirectory = "",
   [ValidateRange(1, 240)]
-  [int]$TimeoutMinutes = 45
+  [int]$TimeoutMinutes = 45,
+  [string[]]$CompatCases = @(),
+  [string[]]$CompatSkip = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -465,6 +471,62 @@ function Assert-VmVerifySessionInteractiveUser {
   }
 }
 
+# "C-001,C-004" と @("C-001", "C-004") のどちらも受け、compat_test.exe へ渡す
+# カンマ区切りへ正規化する。値はタスクのコマンド文字列へ埋め込むため、
+# case ID の形式以外はここで拒否する。
+function ConvertTo-VmVerifySessionCaseList {
+  param(
+    [string[]]$Value = @(),
+    [Parameter(Mandatory = $true)]
+    [string]$ParameterName
+  )
+
+  $ids = @()
+  foreach ($item in @($Value)) {
+    foreach ($id in ([string]$item).Split(",")) {
+      $id = $id.Trim()
+      if ($id -cnotmatch '^C-[0-9]{3}$') {
+        throw "-$ParameterName takes case IDs such as C-001 or C-001,C-004; '$id' is not one."
+      }
+      if ($ids -contains $id) {
+        throw "-$ParameterName lists $id more than once."
+      }
+      $ids += $id
+    }
+  }
+  return ($ids -join ",")
+}
+
+# compat_test.exe は target に無い ID と空になる選択を終了コード 64 で拒否する。
+# TIP 登録と bootstrap に時間を使う前に、同梱の target 定義と照合する。
+function Assert-VmVerifySessionCaseSelection {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
+    [object[]]$TargetCases,
+    [string]$Cases = "",
+    [string]$Skip = ""
+  )
+
+  $requested = @($Cases.Split(",", [StringSplitOptions]::RemoveEmptyEntries))
+  $skipped = @($Skip.Split(",", [StringSplitOptions]::RemoveEmptyEntries))
+  foreach ($target in @($TargetCases)) {
+    $known = @($target.Cases)
+    $unknown = @(@($requested) + @($skipped) | Where-Object { $known -cnotcontains $_ } |
+        Select-Object -Unique)
+    if ($unknown.Count -ne 0) {
+      throw ("Target '$($target.Target)' does not define $($unknown -join ', '). " +
+        "Its cases are $($known -join ', ').")
+    }
+    $selected = @($known | Where-Object {
+        ($requested.Count -eq 0 -or $requested -ccontains $_) -and $skipped -cnotcontains $_
+      })
+    if ($selected.Count -eq 0) {
+      throw "The case selection leaves no case to run for target '$($target.Target)'."
+    }
+  }
+}
+
 function Get-VmVerifySessionEncodedArgument {
   param(
     [Parameter(Mandatory = $true)]
@@ -508,6 +570,7 @@ function Get-VmVerifySessionTargetSummary {
       Target = [string]$target.target
       ExitCode = [int]$target.exitCode
       Outcome = $outcome
+      Excluded = @($target.excluded | Where-Object { $_ } | ForEach-Object { [string]$_ })
     }
   }
 }
@@ -521,11 +584,18 @@ function Invoke-VmVerifySessionGuestRun {
     [Parameter(Mandatory = $true)]
     $Paths,
     [Parameter(Mandatory = $true)]
-    [int]$TimeoutSeconds
+    [int]$TimeoutSeconds,
+    [string]$Cases = "",
+    [string]$Skip = ""
   )
 
   $targets = @(Invoke-VmVerifySessionGuestStep -Session $Session -Name "Initialize-VmVerifyGuestPackage" `
       -ArgumentList @($Paths.GuestZip, $Paths.GuestPackageRoot, $Paths.GuestRunRoot))
+  if ($Cases -or $Skip) {
+    $targetCases = @(Invoke-VmVerifySessionGuestStep -Session $Session -Name "Get-VmVerifyGuestTargetCase" `
+        -ArgumentList @($Paths.GuestPackageRoot))
+    Assert-VmVerifySessionCaseSelection -TargetCases $targetCases -Cases $Cases -Skip $Skip
+  }
   $user = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Get-VmVerifyGuestInteractiveUser"
   Assert-VmVerifySessionInteractiveUser -Info $user -VMName $VMName
 
@@ -557,10 +627,19 @@ function Invoke-VmVerifySessionGuestRun {
   $command = ". '" + $runnerPath.Replace("'", "''") + "'; Invoke-VmVerifyGuestCompatRun" +
     " -PackageRoot '" + $Paths.GuestPackageRoot.Replace("'", "''") + "'" +
     " -RunRoot '" + $Paths.GuestRunRoot.Replace("'", "''") + "'"
+  if ($Cases) {
+    $command += " -Cases '$Cases'"
+  }
+  if ($Skip) {
+    $command += " -Skip '$Skip'"
+  }
   $taskName = "azooKey-vm-verify-" + (Split-Path -Leaf $Paths.GuestRunRoot)
 
   Write-Host ("Running compat_test.exe ($($targets -join ', ')) as '$($user.ConsoleUser)' " +
     "through an interactive scheduled task...")
+  if ($Cases -or $Skip) {
+    Write-Host "Compat case selection: cases=$(if ($Cases) { $Cases } else { 'all' }) skip=$(if ($Skip) { $Skip } else { 'none' })"
+  }
   $taskExitCode = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Invoke-VmVerifyGuestInteractiveTask" `
     -ArgumentList @($taskName, $user.ConsoleUser, (Get-VmVerifySessionEncodedArgument -Command $command), $TimeoutSeconds)
   $taskResult = "0x{0:X8}" -f [int64]$taskExitCode
@@ -623,9 +702,13 @@ function Invoke-VmVerifySessionRun {
     [string]$GuestDestination,
     [System.Management.Automation.PSCredential]$Credential = $null,
     [string]$ResultsDirectory = "",
-    [int]$TimeoutMinutes = 45
+    [int]$TimeoutMinutes = 45,
+    [string[]]$CompatCases = @(),
+    [string[]]$CompatSkip = @()
   )
 
+  $cases = ConvertTo-VmVerifySessionCaseList -Value $CompatCases -ParameterName "CompatCases"
+  $skip = ConvertTo-VmVerifySessionCaseList -Value $CompatSkip -ParameterName "CompatSkip"
   $package = Resolve-VmVerifySessionPackage -RepositoryRoot $RepositoryRoot -PackagePath $PackagePath
   $manifest = Get-VmVerifySessionManifest -ManifestPath $package.ManifestPath
   $checkpoint = $CheckpointName
@@ -677,7 +760,7 @@ function Invoke-VmVerifySessionRun {
   $failures = @()
   try {
     $outcome = Invoke-VmVerifySessionGuestRun -Session $session -VMName $VMName `
-      -Paths $paths -TimeoutSeconds ($TimeoutMinutes * 60)
+      -Paths $paths -TimeoutSeconds ($TimeoutMinutes * 60) -Cases $cases -Skip $skip
   } catch {
     $failures += $_.Exception.Message
   } finally {
@@ -695,7 +778,11 @@ function Invoke-VmVerifySessionRun {
   }
   if ($outcome) {
     foreach ($target in $outcome.Targets) {
-      Write-Host "compat_test.exe $($target.Target): $($target.Outcome) (exit $($target.ExitCode))"
+      $partial = ""
+      if (@($target.Excluded).Count -ne 0) {
+        $partial = "; partial run, not run: $(@($target.Excluded) -join ', ')"
+      }
+      Write-Host "compat_test.exe $($target.Target): $($target.Outcome) (exit $($target.ExitCode)$partial)"
       if ($target.Outcome -in @("fail", "error")) {
         $failures += "compat_test.exe target '$($target.Target)' ended with $($target.Outcome) (exit $($target.ExitCode))."
       }
@@ -724,6 +811,9 @@ if ($MyInvocation.InvocationName -ne ".") {
   if (-not $VMName) {
     throw "-VMName is required. Check the name with Get-VM."
   }
+  if (-not $Run -and (@($CompatCases).Count -ne 0 -or @($CompatSkip).Count -ne 0)) {
+    throw "-CompatCases and -CompatSkip apply only to -Run."
+  }
 
   $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
@@ -743,7 +833,9 @@ if ($MyInvocation.InvocationName -ne ".") {
       -GuestDestination $GuestDestination `
       -Credential $Credential `
       -ResultsDirectory $ResultsDirectory `
-      -TimeoutMinutes $TimeoutMinutes | Out-Null
+      -TimeoutMinutes $TimeoutMinutes `
+      -CompatCases $CompatCases `
+      -CompatSkip $CompatSkip | Out-Null
   } else {
     Invoke-VmVerifySessionRestore `
       -RepositoryRoot $repositoryRoot `

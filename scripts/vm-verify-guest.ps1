@@ -72,6 +72,25 @@ function Initialize-VmVerifyGuestPackage {
   return @($targets | ForEach-Object { $_.BaseName })
 }
 
+# 同梱の target ごとの case ID を返す。-CompatCases / -CompatSkip に target に無い ID が
+# あると compat_test.exe は終了コード 64 で止まるため、bootstrap より前にホスト側で照合する。
+function Get-VmVerifyGuestTargetCase {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PackageRoot
+  )
+
+  $targets = @(Get-ChildItem -LiteralPath (Join-Path $PackageRoot "targets") `
+      -Filter "*.json" -File | Sort-Object Name)
+  foreach ($target in $targets) {
+    $config = Get-Content -Raw -LiteralPath $target.FullName | ConvertFrom-Json
+    [pscustomobject][ordered]@{
+      Target = $target.BaseName
+      Cases = @($config.cases | ForEach-Object { [string]$_ })
+    }
+  }
+}
+
 function Get-VmVerifyGuestInteractiveUser {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -311,7 +330,11 @@ function Invoke-VmVerifyGuestCompatRun {
     [Parameter(Mandatory = $true)]
     [string]$PackageRoot,
     [Parameter(Mandatory = $true)]
-    [string]$RunRoot
+    [string]$RunRoot,
+    # compat_test.exe の --cases / --skip へそのまま渡すカンマ区切りの case ID。
+    # 空なら引数を付けず、target の全ケースを実行する。
+    [string]$Cases = "",
+    [string]$Skip = ""
   )
 
   $ErrorActionPreference = "Stop"
@@ -319,6 +342,8 @@ function Invoke-VmVerifyGuestCompatRun {
   $status = [ordered]@{
     schemaVersion = 1
     completed = $false
+    cases = $Cases
+    skip = $Skip
     sessionId = $sessionId
     bootstrapExitCode = $null
     bootstrapStatus = ""
@@ -352,13 +377,20 @@ function Invoke-VmVerifyGuestCompatRun {
     $status.inputMethod = Invoke-VmVerifyGuestInputMethodSelection
 
     $compat = Join-Path $PackageRoot "compat_test.exe"
+    $selection = ""
+    if ($Cases) {
+      $selection += " --cases $Cases"
+    }
+    if ($Skip) {
+      $selection += " --skip $Skip"
+    }
     $targets = @(Get-ChildItem -LiteralPath (Join-Path $PackageRoot "targets") `
         -Filter "*.json" -File | Sort-Object Name)
     foreach ($target in $targets) {
       $name = $target.BaseName
       $reportDirectory = Join-Path $RunRoot "compat-report-$name"
       $process = Start-Process -FilePath $compat `
-        -ArgumentList "--target `"$($target.FullName)`" --output `"$reportDirectory`"" `
+        -ArgumentList "--target `"$($target.FullName)`" --output `"$reportDirectory`"$selection" `
         -RedirectStandardOutput (Join-Path $RunRoot "compat-$name.stdout.log") `
         -RedirectStandardError (Join-Path $RunRoot "compat-$name.stderr.log") `
         -NoNewWindow -PassThru
@@ -366,10 +398,27 @@ function Invoke-VmVerifyGuestCompatRun {
       # 終了まで待ってしまう。本体だけを待ち、全体の上限はタスクの制限時間に任せる。
       $null = $process.Handle
       $process.WaitForExit()
+      $reportPath = Join-Path $reportDirectory "report.json"
+      $reportJson = [bool](Test-Path -LiteralPath $reportPath -PathType Leaf)
+      # 部分実行を全件 pass と読み違えないよう、実行しなかったケースを状態へ写す。
+      $excluded = @()
+      if ($reportJson) {
+        try {
+          $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
+          if ($report.case_selection) {
+            $excluded = @($report.case_selection.excluded | ForEach-Object { [string]$_ })
+          }
+        } catch {
+          # 壊れた report.json は vm-verify-summary.ps1 が invalid として数える。
+          # 残りの target を止めないよう、ここでは除外なしとして続ける。
+          $excluded = @()
+        }
+      }
       $status.targets += [pscustomobject][ordered]@{
         target = $name
         exitCode = [int]$process.ExitCode
-        reportJson = [bool](Test-Path -LiteralPath (Join-Path $reportDirectory "report.json") -PathType Leaf)
+        reportJson = $reportJson
+        excluded = $excluded
       }
     }
     $status.completed = $true

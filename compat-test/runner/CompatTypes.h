@@ -109,6 +109,8 @@ class AutomationSession {
 struct CaseDefinition {
   std::string id;
   CaseResult (*run)(AutomationSession& session);
+  // C-001 の変換成功を前提にするケース。前提を持たないケースは false を明示する。
+  bool requires_baseline{true};
 };
 
 CaseDefinition MakeC001BasicInputCase();

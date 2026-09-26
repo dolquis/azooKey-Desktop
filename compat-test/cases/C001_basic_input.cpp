@@ -34,6 +34,7 @@ CaseDefinition MakeC001BasicInputCase() {
         }
         return result;
       },
+      false,
   };
 }
 

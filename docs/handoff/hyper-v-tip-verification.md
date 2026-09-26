@@ -190,7 +190,9 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。
 - `-CompatCases` と `-CompatSkip` は、すべての target の `compat_test.exe` へ `--cases` / `--skip`
   として渡る（`C-001,C-004` のようなカンマ区切りか配列で指定する）。形式が `C-NNN` でない値は
-  ゲストへ接続する前に拒否する。C-010 は Host を停止するため、手順 4 の打鍵確認と組み合わせる
+  ゲストへ接続する前に拒否する。同梱の target に無い ID と、実行するケースが残らない選択は、
+  bootstrap の前に拒否する。部分実行の結果は、target ごとの出力に未実行のケースを併記する。
+  C-010 は Host を停止するため、手順 4 の打鍵確認と組み合わせる
   場合は次の順に分ける。C-010 だけの実行では前提の C-001 が自動で追加される。
 
   ```powershell

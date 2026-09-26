@@ -342,7 +342,13 @@ compat の `artifact` は出力ディレクトリ相対のパスだけを通す�
 | `counts` | object | 全系統を合算した分類ごとの件数と `missingInputs` の件数 |
 | `bootstrap` | object / null | `overallStatus`、`packageCommitVsManifest`、`hostBinary` の status と SHA-256、分類件数、`checks` |
 | `diag` | object / null | `status`、分類件数、`checks` |
-| `compat` | array | target ごとの ID、表示名、automation level、`reportedSummaryMatches`、分類件数、`results` |
+| `compat` | array | target ごとの ID、表示名、automation level、`reportedSummaryMatches`、`caseSelection`、分類件数、`results` |
+
+compat の `caseSelection` は `report.json` の `case_selection`（§13.5）を写したもので、
+`excluded`、`prerequisitesAdded`、`baselineCaseExcluded` を持つ。
+`case_selection` を持たない report では `null` とする。
+Markdown では、未実行のケースがある target と C-001 を除外した target の行に、
+部分実行であることを明記する。
 
 ### 2.7 ビルド時間の内訳（実測）
 

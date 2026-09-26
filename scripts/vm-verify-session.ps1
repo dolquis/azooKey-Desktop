@@ -497,6 +497,36 @@ function ConvertTo-VmVerifySessionCaseList {
   return ($ids -join ",")
 }
 
+# compat_test.exe は target に無い ID と空になる選択を終了コード 64 で拒否する。
+# TIP 登録と bootstrap に時間を使う前に、同梱の target 定義と照合する。
+function Assert-VmVerifySessionCaseSelection {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
+    [object[]]$TargetCases,
+    [string]$Cases = "",
+    [string]$Skip = ""
+  )
+
+  $requested = @($Cases.Split(",", [StringSplitOptions]::RemoveEmptyEntries))
+  $skipped = @($Skip.Split(",", [StringSplitOptions]::RemoveEmptyEntries))
+  foreach ($target in @($TargetCases)) {
+    $known = @($target.Cases)
+    $unknown = @(@($requested) + @($skipped) | Where-Object { $known -cnotcontains $_ } |
+        Select-Object -Unique)
+    if ($unknown.Count -ne 0) {
+      throw ("Target '$($target.Target)' does not define $($unknown -join ', '). " +
+        "Its cases are $($known -join ', ').")
+    }
+    $selected = @($known | Where-Object {
+        ($requested.Count -eq 0 -or $requested -ccontains $_) -and $skipped -cnotcontains $_
+      })
+    if ($selected.Count -eq 0) {
+      throw "The case selection leaves no case to run for target '$($target.Target)'."
+    }
+  }
+}
+
 function Get-VmVerifySessionEncodedArgument {
   param(
     [Parameter(Mandatory = $true)]
@@ -540,6 +570,7 @@ function Get-VmVerifySessionTargetSummary {
       Target = [string]$target.target
       ExitCode = [int]$target.exitCode
       Outcome = $outcome
+      Excluded = @($target.excluded | Where-Object { $_ } | ForEach-Object { [string]$_ })
     }
   }
 }
@@ -560,6 +591,11 @@ function Invoke-VmVerifySessionGuestRun {
 
   $targets = @(Invoke-VmVerifySessionGuestStep -Session $Session -Name "Initialize-VmVerifyGuestPackage" `
       -ArgumentList @($Paths.GuestZip, $Paths.GuestPackageRoot, $Paths.GuestRunRoot))
+  if ($Cases -or $Skip) {
+    $targetCases = @(Invoke-VmVerifySessionGuestStep -Session $Session -Name "Get-VmVerifyGuestTargetCase" `
+        -ArgumentList @($Paths.GuestPackageRoot))
+    Assert-VmVerifySessionCaseSelection -TargetCases $targetCases -Cases $Cases -Skip $Skip
+  }
   $user = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Get-VmVerifyGuestInteractiveUser"
   Assert-VmVerifySessionInteractiveUser -Info $user -VMName $VMName
 
@@ -742,7 +778,11 @@ function Invoke-VmVerifySessionRun {
   }
   if ($outcome) {
     foreach ($target in $outcome.Targets) {
-      Write-Host "compat_test.exe $($target.Target): $($target.Outcome) (exit $($target.ExitCode))"
+      $partial = ""
+      if (@($target.Excluded).Count -ne 0) {
+        $partial = "; partial run, not run: $(@($target.Excluded) -join ', ')"
+      }
+      Write-Host "compat_test.exe $($target.Target): $($target.Outcome) (exit $($target.ExitCode)$partial)"
       if ($target.Outcome -in @("fail", "error")) {
         $failures += "compat_test.exe target '$($target.Target)' ended with $($target.Outcome) (exit $($target.ExitCode))."
       }

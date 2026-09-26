@@ -416,6 +416,11 @@ Describe "VM verification session automation" {
       Mock Invoke-VmVerifySessionGuestStep {
         switch ($Name) {
           "Initialize-VmVerifyGuestPackage" { return @("edge", "notepad") }
+          "Get-VmVerifyGuestTargetCase" {
+            foreach ($target in @("edge", "notepad")) {
+              [pscustomobject]@{ Target = $target; Cases = @("C-001", "C-002", "C-004", "C-011", "C-010") }
+            }
+          }
           "Get-VmVerifyGuestInteractiveUser" { return $script:guestUser }
           "Invoke-VmVerifyGuestBootstrap" { return 0 }
           "Read-VmVerifyGuestText" {
@@ -498,6 +503,41 @@ Describe "VM verification session automation" {
         [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(
             ($ArgumentList[2] -split " ")[-1])) -like
           "*Invoke-VmVerifyGuestCompatRun*-Cases 'C-001,C-004,C-010' -Skip 'C-010'"
+      }
+    }
+
+    It "rejects <Case> before bootstrap registers the TIP" -TestCases @(
+      @{ Case = "a case the targets do not define"; CaseList = @("C-013"); SkipList = @(); Message = "*'edge' does not define C-013*" }
+      @{ Case = "a selection that leaves nothing to run"; CaseList = @("C-010"); SkipList = @("C-010"); Message = "*leaves no case to run*" }
+    ) {
+      $root = Join-Path $TestDrive ("run-unknown-case-" + [guid]::NewGuid().ToString("N"))
+      Initialize-TestPackage -Root $root | Out-Null
+
+      { Invoke-VmVerifySessionRun -RepositoryRoot $root -VMName "azooKey-VM" `
+          -GuestDestination "C:\azookey-verify" -Credential $testCredential `
+          -CompatCases $CaseList -CompatSkip $SkipList } | Should -Throw -ExpectedMessage $Message
+
+      Should -Invoke Invoke-VmVerifySessionGuestStep -Times 0 -Exactly -ParameterFilter {
+        $Name -eq "Invoke-VmVerifyGuestBootstrap"
+      }
+      Should -Invoke Close-VmVerifySessionGuestSession -Times 1 -Exactly
+    }
+
+    It "reports the cases a partial run did not execute" {
+      $root = Join-Path $TestDrive "run-partial"
+      Initialize-TestPackage -Root $root | Out-Null
+      $script:interactiveStatus = @{
+        completed = $true
+        error = ""
+        targets = @(@{ target = "notepad"; exitCode = 0; reportJson = $true; excluded = @("C-010") })
+      } | ConvertTo-Json -Depth 4
+
+      $result = Invoke-VmVerifySessionRun -RepositoryRoot $root -VMName "azooKey-VM" `
+        -GuestDestination "C:\azookey-verify" -Credential $testCredential -CompatSkip "C-010"
+
+      @($result.Targets[0].Excluded) | Should -Be @("C-010")
+      Should -Invoke Write-Host -Times 1 -Exactly -ParameterFilter {
+        "$Object" -eq "compat_test.exe notepad: pass (exit 0; partial run, not run: C-010)"
       }
     }
 
@@ -1047,6 +1087,27 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       Should -Invoke Start-Process -Times 2 -Exactly -ParameterFilter {
         $ArgumentList -like "*--output*`" --cases C-001,C-004 --skip C-010"
       }
+    }
+
+    It "records the cases each report excluded" {
+      $report = @{ case_selection = @{ excluded = @("C-010") } } | ConvertTo-Json -Depth 4
+      $report | Set-Content -LiteralPath (Join-Path $runRoot "compat-report-notepad\report.json")
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot -Skip "C-010"
+
+      $status = Read-RunStatus
+      @($status.targets | ForEach-Object { "$($_.target)=$(@($_.excluded) -join ',')" }) |
+        Should -Be @("edge=", "notepad=C-010")
+    }
+
+    It "returns the cases each bundled target defines" {
+      @{ cases = @("C-001", "C-010") } | ConvertTo-Json |
+        Set-Content -LiteralPath (Join-Path $packageRoot "targets\notepad.json")
+
+      $cases = @(Get-VmVerifyGuestTargetCase -PackageRoot $packageRoot)
+
+      @($cases | ForEach-Object { "$($_.Target)=$(@($_.Cases) -join ',')" }) |
+        Should -Be @("edge=", "notepad=C-001,C-010")
     }
 
     It "runs every case when no selection is given" {

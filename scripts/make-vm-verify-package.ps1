@@ -490,6 +490,7 @@ function Export-VmVerifyPackage {
       @{ Source = (Join-Path $repository "scripts\host-startup-log.ps1"); Archive = "host-startup-log.ps1"; Role = "host-supervisor-dependency" }
       @{ Source = (Join-Path $repository "scripts\AppContainerAcl.ps1"); Archive = "AppContainerAcl.ps1"; Role = "registration-dependency" }
       @{ Source = (Join-Path $repository "scripts\verify-bootstrap.ps1"); Archive = "verify-bootstrap.ps1"; Role = "vm-bootstrap-script" }
+      @{ Source = (Join-Path $repository "scripts\learning-data-snapshot.ps1"); Archive = "learning-data-snapshot.ps1"; Role = "learning-snapshot-script" }
       @{ Source = (Join-Path $repository "docs\handoff\dev32-verification-checklist.md"); Archive = "dev32-verification-checklist.md"; Role = "verification-checklist" }
     )
     if ($IncludeCompat) {

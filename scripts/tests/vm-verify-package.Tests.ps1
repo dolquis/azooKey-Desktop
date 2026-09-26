@@ -74,7 +74,8 @@ Describe "VM verification package automation" {
           "host-supervisor.ps1",
           "host-startup-log.ps1",
           "AppContainerAcl.ps1",
-          "verify-bootstrap.ps1")) {
+          "verify-bootstrap.ps1",
+          "learning-data-snapshot.ps1")) {
         "# $scriptName" | Set-Content -LiteralPath (Join-Path $Root "scripts\$scriptName")
       }
       # 本物と同じ dot-source を持たせ、推移的依存の検査を実際に通す。
@@ -178,7 +179,7 @@ Describe "VM verification package automation" {
       $manifest.buildType | Should -Be "Release"
       $manifest.buildPrerequisites.AZOOKEY_FETCH_LLAMA_CPP | Should -BeExactly "ON"
       $manifest.buildPrerequisites.AZOOKEY_LLAMA_CPP_SOURCE_DIR | Should -BeExactly ""
-      @($manifest.files).Count | Should -Be 10
+      @($manifest.files).Count | Should -Be 11
       @($manifest.files | Where-Object { $_.role -eq "registration-dependency" }).Count |
         Should -Be 1
       foreach ($file in $manifest.files) {
@@ -192,6 +193,7 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath (Join-Path $expanded "AppContainerAcl.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "host-startup-log.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "verify-bootstrap.ps1") | Should -BeTrue
+      Test-Path -LiteralPath (Join-Path $expanded "learning-data-snapshot.ps1") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "azookey_diag.exe") | Should -BeTrue
       Test-Path -LiteralPath (Join-Path $expanded "compat_test.exe") | Should -BeFalse
       Test-Path -LiteralPath (Join-Path $expanded "targets") | Should -BeFalse

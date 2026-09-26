@@ -140,8 +140,7 @@ Describe "WiX MSI package consistency" {
     $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.pdb" />'
     $script:package | Should -Match '<Exclude Files="\$\(SettingsPayloadDir\)\\\*\.ilk" />'
     $script:project | Should -Match "Settings executable not found"
-    $script:releaseWorkflow | Should -Match 'Build self-contained settings app'
-    $script:releaseWorkflow | Should -Match '--target azookey_settings'
+    $script:releaseWorkflow | Should -Match 'cmake --build --preset windows-release --target all azookey_settings'
     $script:releaseWorkflow | Should -Match '"-p:SettingsPayloadDir='
     $script:releaseWorkflow | Should -Match '"-p:SettingsExePath='
   }

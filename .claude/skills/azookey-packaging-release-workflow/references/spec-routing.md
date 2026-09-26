@@ -29,7 +29,7 @@
 2. 変更対象に対応する個別 Pester test と静的 manifest / identity 検証を確認する。
 3. 必要な target を Windows Headless CMake Build 手順で実ビルドする。
 4. 正典に記載された canonical script で MSI または MSIX を生成する。
-5. 署名、証明書ストア、package 登録、machine-wide TIP 登録、IME 実入力、rollback、uninstall は、許可された隔離 VM または人間の管理者セッションで確認する。
+5. 署名、証明書ストア、package 登録、machine-wide TIP 登録、IME 実入力、rollback、uninstall は、許可された隔離 VM または人間の管理者セッションで確認する。エージェントが実行してよいのは `docs/handoff/hyper-v-vm-verification-plan.md` §4.5 の範囲（検証 VM 内の開発登録）に限る。
 
 段階 1〜4 が成功しても段階 5 の実機結果を推測しない。
 PoC、CI の静的検証、人間ゲートの状態を分けて記録する。

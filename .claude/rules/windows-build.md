@@ -32,5 +32,5 @@ paths:
 - Full CTest は `cmake --build --preset windows-debug --target azookey_check` を優先する。詳細と停止時の切り分けは `README.md` と `docs/debugging.md` を参照する。
 - `.ninja_lock` は関連する `ninja`、`cmake`、`cl`、`link`、`ctest` のプロセスを確認するまで削除しない。
 - `CreateProcessAsUserW failed: 5` は、ツールが存在しないと断定する前に最小 probe を適切な Windows ホスト実行経路で再確認する。
-- TIP の machine-wide 登録はユーザーが管理者 PowerShell で完了する。実機確認、管理者権限、署名などの Human Gate を CI 成功で代替しない。
+- TIP の machine-wide 登録はユーザーが管理者 PowerShell で完了する。例外として、検証専用の Hyper-V VM 内の開発登録は `docs/handoff/hyper-v-vm-verification-plan.md` §4.5 の条件と範囲でエージェントが実行してよい。実機確認、管理者権限、署名などの Human Gate を CI 成功で代替しない。
 - エージェント用 MCP、プラグイン、ホスト前提、doctor は `docs/handoff/agent-tooling-setup.md` を参照する。

@@ -47,6 +47,8 @@ allowed-tools: Read, Edit, Grep, Glob, WebFetch
   (`scripts/register-dev.ps1` は非管理者なら UAC 昇格して `regsvr32` を実行)。
   PowerShell.MCP(共有コンソール)で登録コマンドを提示し、**実行はユーザーが
   管理者 PowerShell で完了させる**。エージェント単独で登録を完了させない。
+  例外として、検証専用の Hyper-V VM 内の開発登録は、
+  `docs/handoff/hyper-v-vm-verification-plan.md` §4.5 の条件と範囲でエージェントが実行してよい。
   なお HKCU を使うのは inference-host の自動起動(`Run` キー)のみで、TIP の
   COM / プロファイル登録は HKLM 側である。
 - 実アプリでの入力検証：Windows-MCP の UI Automation

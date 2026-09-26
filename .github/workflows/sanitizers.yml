@@ -42,14 +42,14 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cmake --build --preset linux-asan-ubsan --parallel 2 \
+          cmake --build --preset linux-asan-ubsan --parallel 4 \
             2>&1 | tee build/linux-asan-ubsan/build.log
 
       - name: Test
         shell: bash
         run: |
           set -o pipefail
-          ctest --preset linux-asan-ubsan --no-tests=error \
+          ctest --preset linux-asan-ubsan --no-tests=error --parallel 2 \
             2>&1 | tee build/linux-asan-ubsan/ctest.log
 
       - name: Fuzz IPC JSON parser
@@ -110,7 +110,7 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          cmake --build --preset windows-asan --parallel 2 `
+          cmake --build --preset windows-asan --parallel 4 `
             *> build/windows-asan/build.log
           $exitCode = $LASTEXITCODE
           Get-Content build/windows-asan/build.log
@@ -119,7 +119,7 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          ctest --preset windows-asan --no-tests=error `
+          ctest --preset windows-asan --no-tests=error --parallel 2 `
             *> build/windows-asan/ctest.log
           $exitCode = $LASTEXITCODE
           Get-Content build/windows-asan/ctest.log

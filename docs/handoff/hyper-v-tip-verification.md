@@ -203,8 +203,9 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-010
   ```
 
-- TIP 登録を含むため、`-Run` は人間がホストで実行する。結果は層 1 の先行検証であり、
-  手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
+- `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
+  [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。
+  結果は層 1 の先行検証であり、手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
 
 ### 4. 実機検証（★基本セッションに切替えて）
 

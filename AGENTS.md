@@ -10,6 +10,7 @@
 - `main` へ直接 push しない。新規 PR は Draft とし、通常は `dolquis/<repository-name>` の `main` 向けに作成する。base / head の repository と branch、compare 範囲を確認し、同じ head の PR を重複作成しない。
 - フォーク元や upstream への PR、`legacy/` の変更は、実行前にユーザーへ確認する。
 - 実機確認、管理者権限、署名などの Human Gate を CI の成功で代替しない。
+- TIP 登録は人間が実行する。例外として、checkpoint で復元できる検証専用の Hyper-V VM 内に限り、エージェントが開発登録を実行してよい。条件と範囲は `docs/handoff/hyper-v-vm-verification-plan.md` §4.5 に従い、その結果を Human Gate の合格とみなさない。
 
 ## 対象と正典
 

@@ -30,7 +30,7 @@ check-jsonschema --check-metaschema settings/mvp-settings.schema.json settings/m
 check-jsonschema --schemafile settings/mvp-settings.schema.json settings/default-settings.sample.json
 ```
 
-CI と再現条件を合わせる場合は `check-jsonschema==0.37.3` を使う。
+CI と再現条件を合わせる場合は `check-jsonschema==0.38.2` を使う。
 
 - runtime settings: `host_settings_store_tests`
 - model catalog: `host_model_catalog_tests`

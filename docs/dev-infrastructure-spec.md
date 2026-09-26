@@ -209,6 +209,7 @@ zip のルートには次を置く。
 - `host-startup-log.ps1`
 - `AppContainerAcl.ps1`
 - `verify-bootstrap.ps1`
+- `learning-data-snapshot.ps1`
 - `dev32-verification-checklist.md`
 - `manifest.json`
 
@@ -222,6 +223,17 @@ dot-source でこの形に解決できないものは見逃さずに失敗とし
 `verify-bootstrap.ps1` は、既存 Host を停止する前にこれらの実行時依存の実在を
 確認する。停止したあとに `register-dev.ps1` と supervisor を起動するので、起動に
 失敗すると入力できない VM が残るためである。
+`learning-data-snapshot.ps1` は、学習データを不変条件とする Human Gate の境目で
+`%LOCALAPPDATA%\azooKey\data` の状態をラベル付きで JSON へ追記し、2 つのラベルを比べる。
+記録するのはファイルごとの相対パス、存在、サイズ、行数、更新時刻、SHA-256 だけで、
+本文とデータディレクトリの絶対パスは出さない。`.enc` は復号せず暗号文のハッシュで比べる。
+比較は既知のストアとその `.enc`、`.bak` について SHA-256 の変化、追加、削除を変化とし、
+更新時刻だけの変化は変化に数えない。`host_run_state.txt` や Host の一時ファイルなど、
+データディレクトリにある学習データ以外のファイルは一覧に出すが変化には数えない。
+読めなかったファイルは例外の型だけを記録し、比較では `unreadable` として示す。
+データディレクトリは絶対パスの代わりに、記録ファイルごとのランダムな salt を付けたハッシュで識別し、
+識別子の違う 2 つのラベルは比較しない。ラベルは大文字小文字を区別せずに一意とする。
+ゲストの既定シェルである Windows PowerShell 5.1 で動かすため、スクリプトは ASCII だけで書く。
 `-MockDictionaryPath` の TSV は `data/`、`-ModelPath` の GGUF は `models/` に
 追加する。
 GGUF を追加する場合は、同じ build directory の `azookey_zenzai_bench.exe` も

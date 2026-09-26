@@ -340,6 +340,27 @@ DEV-365（DisplayAttribute の描画差の目視）はこの巡回に相乗り�
 巡回で得た打鍵の証跡だけで DEV-365 は閉じられない。
 記録は課題ごとに分けて残す。巡回でまとめて採っても、検証メモは DEV-847 と DEV-153 に別々に書く。
 
+学習データの状態は、ゲストに展開した検証 zip の `learning-data-snapshot.ps1` で記録する。
+「学習データが変わらないこと」を合格条件にするゲート（secure 抑止、AI 整文で学習しないことなど）は、打鍵の多いゲートの後に置くと判定が濁る。
+そうしたゲートの前後でラベルを付けて記録し、2 つのラベルを比べる。
+
+```powershell
+$snapshot = "C:\azookey-verify\learning-snapshots.json"
+powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -Label before-secure -OutputPath $snapshot
+# … ゲートの操作 …
+powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -Label after-secure -OutputPath $snapshot
+powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -From before-secure -To after-secure -OutputPath $snapshot
+```
+
+比較結果の `Changed: yes` は、学習データのストア（`learning.tsv` などとその `.enc`、`.bak`）にハッシュの変化、ファイルの追加または削除があったことを示す。
+更新時刻だけの変化は `touched` と表示し、変化に数えない。
+Host が起動と終了で書き換える `host_run_state.txt` などは `not learning data` と付けて表示し、変化に数えない。
+`Unverified` が出た場合は、ストアを読めなかったので、ラベルを変えて記録し直す。
+`Warning: no learning store` が出た場合の `Changed: no` は証跡にならない。データディレクトリと、IME を使うユーザーのシェルで実行したかを確かめる。
+Host が平文のストアを読み込むと `.enc` と `.bak` への移行が起き、追加と削除が出るので、基準のラベルは Host 起動後に取る。
+記録するのはハッシュ、行数、サイズ、更新時刻だけで、学習データの本文は出力に含まれない。
+JSON は他のゲスト出力と一緒にホストへ回収する。
+
 DEV-676 の項目 3（別ユーザー provisioning）は、VM に第 2 のローカルユーザーが要る。
 セッション前に作っていない場合、この項目だけ実施できない。
 
@@ -671,7 +692,7 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - best-effort 経路 単発 commit 直後に × 終了（Windows Terminal / ConPTY）: ☐ 保持 ☐ 消失
 - 連続 commit の途中で × 終了したときの消失件数: ____ 件（上限 7 件以内かを記録）
 - 対象外経路（タスクマネージャの強制終了、ログオフ）: ☐ 未実施（`docs/learning-data-management-spec.md` §11.1 で対象外。未達として記録しない）
-- 確認方法（終了前後の学習データ差分の取り方）:
+- 確認方法（終了前後の学習データ差分の取り方。`learning-data-snapshot.ps1` の比較結果を貼る）:
 ```
 
 判定は `docs/learning-data-management-spec.md` §11 の区分に従う。

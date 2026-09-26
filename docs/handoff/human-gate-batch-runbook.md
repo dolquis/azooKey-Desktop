@@ -270,12 +270,30 @@ DEV-767 を検証済みとみなして飛ばさず、上記の手順 3 として
 
 #### MSI の保守操作（修復・再インストール）とログ回収
 
-修復（`/fa`）や再インストールは、レーン 1 のチェックリストを終え、保護
+修復や再インストールは、レーン 1 のチェックリストを終え、保護
 checkpoint を取ってから行う。
+
+修復は `/f` 系ではなく、`/i` にプロパティを付けて実行する。
+
+```powershell
+msiexec /i <msi> REINSTALL=ALL REINSTALLMODE=amus REBOOT=ReallySuppress /qn /L*v <log>
+```
+
+`/f` は
+[コマンドラインのプロパティ値を無視する](https://learn.microsoft.com/windows/win32/msi/command-line-options)。
+`/norestart` は `REBOOT=ReallySuppress` と同じ意味なので、`/fa <msi> /qn /norestart`
+では再起動の抑止が効かない。TIP DLL と同梱の CRT は TSF を使うプロセス（explorer、
+メモ帳など）に読み込まれているため、修復では使用中ファイルの置換が起きる。抑止が
+効いていなければ、Installer は `/qn` のまま再起動を開始して `1641` を返す（DEV-1139）。
+上のコマンドは `/i` なのでプロパティが渡り、
+[`REBOOT=ReallySuppress`](https://learn.microsoft.com/windows/win32/msi/reboot)
+が使用中ファイルによる終了時の再起動を抑止する。同じ状況では `3010` が返る。
 
 `msiexec` には `/L*v` で verbose ログをゲスト内のローカルパスへ出し、**操作が
 返った直後にホストへ回収する**。VM がサインイン前の画面へ戻ると PowerShell
-Direct でのファイル取得経路が失われ、ゲスト内にログが残っていても読めない。
+Direct でのファイル取得経路が失われる。その場合は VM を停止したうえで、現行ディスクを
+ホストの管理者 PowerShell から `Mount-VHD -ReadOnly` でマウントして回収する。
+ゲストの OS ボリュームが BitLocker で保護されていて解錠できなければ、この経路は使えない。
 回収してから次の操作へ進み、回収できていないログを前提に原因を推定しない。
 
 終了コードは
@@ -284,14 +302,16 @@ Direct でのファイル取得経路が失われ、ゲスト内にログが残�
 
 | 終了コード | 意味 | 扱い |
 |---|---|---|
-| `1641` | `ERROR_SUCCESS_REBOOT_INITIATED` | 成功。Installer が再起動を開始した。`/norestart` を付けた実行でこれが返った場合は抑止が効かなかった経路なので、失敗として扱わず、調査対象として verbose ログを回収する（DEV-1139） |
-| `3010` | `ERROR_SUCCESS_REBOOT_REQUIRED` | 成功。再起動は呼び出し側が行う |
+| `1641` | `ERROR_SUCCESS_REBOOT_INITIATED` | 成功。Installer が再起動を開始した。`/f` 系の修復では `/norestart` が無視されるため、これが返る（上記）。`REBOOT=ReallySuppress` を渡した実行でこれが返った場合は別の経路なので、verbose ログを回収して調べる |
+| `3010` | `ERROR_SUCCESS_REBOOT_REQUIRED` | 成功。再起動は呼び出し側が行う。TIP を読み込んだプロセスがあれば、修復や更新ではこれが返る |
 | `1638` | 同一製品の別バージョンが導入済み | 対象の版を確認する |
 
-回収した verbose ログでは、実行された実コマンド行、`REBOOT` プロパティの実効値、
-`InstallValidate` の files-in-use 判定、`ScheduleReboot` / `ForceReboot` の有無を
-見る。併せてゲストの System イベントログから再起動関連イベントを採り、MSI 由来か
-別の更新由来かを切り分ける。再現は保護 checkpoint から分離して行う。
+回収した verbose ログでは、サーバー側の `Command Line:` 行に `REBOOT=ReallySuppress`
+が載っているか、`Info 1603`（日本語ログでは `情報 1603`。使用中のファイルと保持プロセス）、`ReplacedInUseFiles`、
+`ScheduleReboot` / `ForceReboot` の有無、`MainEngineThread is returning` の値を見る。
+併せてゲストの System イベントログから再起動関連イベントを採る。イベント 1074 は
+再起動を開始したプロセスを示し、MSI 由来か別の更新由来かを切り分けられる。
+再現は保護 checkpoint から分離して行う。
 
 レーン 1 が終わったら、レーン 2 の開始状態（plan §2 のベースライン checkpoint）へ復元する。
 MSI の machine-wide 登録を残したままレーン 2 の開発登録を重ねると、どちらの登録が効いているか判別できなくなる。

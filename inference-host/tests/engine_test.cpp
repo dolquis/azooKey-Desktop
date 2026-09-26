@@ -2290,6 +2290,11 @@ TEST(EngineAutoWordMiningTest, DuplicateObservationIdIsNotMinedTwice) {
 }
 
 TEST(EngineAutoWordMiningTest, ModelBackendStillConsultsTheFallbackLexicon) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
   azookey::learning::LearningStore store(TempPath("azookey_engine_mining_zenzai_learning.tsv"),
                                          &azookey::learning::test::Crypto());
   azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_zenzai.tsv"),

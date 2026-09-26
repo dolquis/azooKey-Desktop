@@ -4,6 +4,7 @@
 #include <cctype>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace azookey::core {
 namespace {
@@ -55,6 +56,10 @@ bool IsVowelOrY(char c) {
 }  // namespace
 
 std::string RomajiKanaConverter::Feed(char ascii) {
+  if (custom_table_) {
+    pending_.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ascii))));
+    return ConvertCustomPending(false);
+  }
   const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ascii)));
   // 長音: '-' キーは長音符「ー」に変換する（MS-IME 標準のローマ字挙動）。
   // 直前の未確定ローマ字があれば先に確定してから長音符を付与する。
@@ -98,6 +103,22 @@ std::string RomajiKanaConverter::Flush() { return ConvertPending(true); }
 
 void RomajiKanaConverter::Reset() { pending_.clear(); }
 
+void RomajiKanaConverter::SetCustomTable(std::shared_ptr<const CustomRomajiTable> table) {
+  custom_table_ = std::move(table);
+}
+
+bool RomajiKanaConverter::CanContinueCustomWith(char ascii) const {
+  if (!custom_table_ || static_cast<unsigned char>(ascii) > 0x7f) return false;
+  std::string prefix = pending_;
+  const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ascii)));
+  prefix.push_back(lower);
+  const auto starts_rule = [&](std::string_view candidate) {
+    const auto match = custom_table_->lower_bound(candidate);
+    return match != custom_table_->end() && match->first.starts_with(candidate);
+  };
+  return starts_rule(prefix) || (!pending_.empty() && starts_rule(std::string_view(&lower, 1)));
+}
+
 void RomajiKanaConverter::PopPendingPreview() {
   if (pending_.empty()) return;
   const std::string previous_preview = PreviewPending();
@@ -107,14 +128,20 @@ void RomajiKanaConverter::PopPendingPreview() {
 }
 
 std::string RomajiKanaConverter::PreviewPending() const {
-  if (pending_ == "n" || pending_ == "nn") {
+  if (!custom_table_ && (pending_ == "n" || pending_ == "nn")) {
     return "ん";
   }
   return pending_;
 }
 
 std::string RomajiKanaConverter::Preview(const std::string& ascii) {
+  return Preview(ascii, nullptr);
+}
+
+std::string RomajiKanaConverter::Preview(const std::string& ascii,
+                                         std::shared_ptr<const CustomRomajiTable> table) {
   RomajiKanaConverter converter;
+  converter.SetCustomTable(std::move(table));
   std::string output;
   for (char raw : ascii) {
     output += converter.Feed(raw);
@@ -125,7 +152,13 @@ std::string RomajiKanaConverter::Preview(const std::string& ascii) {
 }
 
 std::string RomajiKanaConverter::ConvertForCommit(const std::string& ascii) {
+  return ConvertForCommit(ascii, nullptr);
+}
+
+std::string RomajiKanaConverter::ConvertForCommit(const std::string& ascii,
+                                                  std::shared_ptr<const CustomRomajiTable> table) {
   RomajiKanaConverter converter;
+  converter.SetCustomTable(std::move(table));
   std::string output;
   for (char raw : ascii) {
     output += converter.Feed(raw);
@@ -135,6 +168,7 @@ std::string RomajiKanaConverter::ConvertForCommit(const std::string& ascii) {
 }
 
 std::string RomajiKanaConverter::ConvertPending(bool force_flush) {
+  if (custom_table_) return ConvertCustomPending(force_flush);
   std::string output;
   while (!pending_.empty()) {
     bool matched = false;
@@ -166,6 +200,32 @@ std::string RomajiKanaConverter::ConvertPending(bool force_flush) {
       } else {
         break;
       }
+    }
+  }
+  return output;
+}
+
+std::string RomajiKanaConverter::ConvertCustomPending(bool force_flush) {
+  std::string output;
+  while (!pending_.empty()) {
+    const CustomRomajiRule* best = nullptr;
+    for (size_t length = (std::min)(pending_.size(), size_t{8}); length > 0; --length) {
+      const auto match = custom_table_->find(std::string_view(pending_.data(), length));
+      if (match != custom_table_->end()) {
+        best = &match->second;
+        break;
+      }
+    }
+    const auto longer = custom_table_->upper_bound(pending_);
+    const bool longer_prefix =
+        longer != custom_table_->end() && longer->first.starts_with(pending_);
+    if (!force_flush && longer_prefix) break;
+    if (best) {
+      output += best->output;
+      pending_.erase(0, best->consume);
+    } else {
+      output.push_back(pending_.front());
+      pending_.erase(0, 1);
     }
   }
   return output;

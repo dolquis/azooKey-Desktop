@@ -12,7 +12,8 @@
 namespace azookey::tsf {
 namespace {
 // File operations stay on activation/the watcher, never a keystroke callback.
-std::string ReadBounded(const std::filesystem::path& path) {
+std::string ReadBounded(const std::filesystem::path& path, bool* succeeded = nullptr) {
+  if (succeeded) *succeeded = false;
   constexpr size_t kLimit = 1024 * 1024;
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -36,6 +37,7 @@ std::string ReadBounded(const std::filesystem::path& path) {
   CloseHandle(file);
   if (!read || count > static_cast<size_t>(size.QuadPart)) return {};
   contents.resize(count);
+  if (succeeded) *succeeded = true;
   return contents;
 }
 
@@ -67,6 +69,7 @@ bool RefuseArmForTest() {
 class DirectoryWatch final {
  public:
   ~DirectoryWatch() { Close(); }
+  void Reset() { Close(); }
   bool Open(const std::filesystem::path& path) {
     Close();
     auto ancestor = path.parent_path();
@@ -197,6 +200,7 @@ void TipLocalSettings::Stop() noexcept {
   ai_ = {};
   live_conversion_ = false;
   prediction_enabled_ = true;
+  romaji_table_.reset();
 }
 
 core::BracketSettings TipLocalSettings::Snapshot() const {
@@ -224,12 +228,21 @@ bool TipLocalSettings::PredictionEnabledSnapshot() const {
   return prediction_enabled_;
 }
 
+std::shared_ptr<const core::CustomRomajiTable> TipLocalSettings::RomajiSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return romaji_table_;
+}
+
 void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;
   bool live_conversion = false;
   bool prediction_enabled = true;
+  bool custom_romaji = false;
+  std::string custom_romaji_path;
+  std::shared_ptr<const core::CustomRomajiTable> romaji_table;
+  romaji_path_.clear();
   ai.privacy_policy = {};  // Unreadable or malformed settings fail closed.
   std::string contents;
   try {
@@ -253,6 +266,8 @@ void TipLocalSettings::Reload() noexcept {
           std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
       live_conversion = json->GetBool("liveConversion").value_or(false);
       prediction_enabled = json->GetBool("predictionEnabled").value_or(true);
+      custom_romaji = json->GetString("inputStyle").value_or("default") == "custom";
+      custom_romaji_path = json->GetString("customRomajiTablePath").value_or("");
     }
     const auto default_path = path_.parent_path().parent_path() / L"bracket-pairs.tsv";
     auto custom =
@@ -269,6 +284,43 @@ void TipLocalSettings::Reload() noexcept {
                          {"first_line", static_cast<uint64_t>(parsed.invalid_lines.front())}});
     }
     next.table = std::make_shared<const core::BracketTable>(std::move(parsed.table));
+    romaji_path_.clear();
+    if (custom_romaji) {
+      const auto default_romaji_path = path_.parent_path().parent_path() / L"custom-romaji.tsv";
+      auto custom_path = std::filesystem::path(
+          std::u8string(custom_romaji_path.begin(), custom_romaji_path.end()));
+      // The sample setting uses this environment variable; resolve it without
+      // making paths relative to the application that loaded the TIP.
+      const std::wstring prefix = L"%LOCALAPPDATA%\\";
+      const std::wstring native = custom_path.native();
+      if (native.size() >= prefix.size() &&
+          CompareStringOrdinal(native.data(), static_cast<int>(prefix.size()), prefix.data(),
+                               static_cast<int>(prefix.size()), TRUE) == CSTR_EQUAL) {
+        custom_path =
+            path_.parent_path().parent_path().parent_path() / native.substr(prefix.size());
+      }
+      romaji_path_ = (custom_path.empty()         ? default_romaji_path
+                      : custom_path.is_absolute() ? custom_path
+                                                  : default_romaji_path.parent_path() / custom_path)
+                         .lexically_normal();
+      std::error_code romaji_error;
+      if (std::filesystem::is_regular_file(romaji_path_, romaji_error)) {
+        bool read = false;
+        const auto bytes = ReadBounded(romaji_path_, &read);
+        if (read) {
+          auto romaji = core::CustomRomajiLoader::Parse(bytes);
+          if (!romaji.invalid_lines.empty()) {
+            WatchLogger().Log(
+                logging::RuntimeLogLevel::Warn, "romaji_table_invalid_rows",
+                {{"count", static_cast<uint64_t>(romaji.invalid_lines.size())},
+                 {"first_line", static_cast<uint64_t>(romaji.invalid_lines.front())}});
+          }
+          if (!romaji.table)
+            WatchLogger().Log(logging::RuntimeLogLevel::Warn, "romaji_table_no_valid_rows");
+          romaji_table = std::move(romaji.table);
+        }
+      }
+    }
   } catch (...) {
     ai = {};
     ai.privacy_policy = {};
@@ -281,6 +333,7 @@ void TipLocalSettings::Reload() noexcept {
     ai_ = ai;
     live_conversion_ = live_conversion;
     prediction_enabled_ = prediction_enabled;
+    romaji_table_ = std::move(romaji_table);
   }
   changed_.notify_all();
   // Only a real edit to the settings file is worth an IPC round trip: the
@@ -299,13 +352,15 @@ void TipLocalSettings::Reload() noexcept {
 
 void TipLocalSettings::Watch() noexcept {
   try {
-    DirectoryWatch config, table;
+    DirectoryWatch config, table, romaji;
     // A failed first bind still enters the loop below, which retries on a
     // bounded poll. Start() reports the initial result so activation can log a
     // watch that did not come up immediately.
     watch_started_.store(config.Open(path_));
     auto watched_table = table_path_;
     table.Open(watched_table);
+    auto watched_romaji = romaji_path_;
+    if (!watched_romaji.empty()) romaji.Open(watched_romaji);
 #ifdef AZOOKEY_TSF_TESTING
     {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -327,6 +382,14 @@ void TipLocalSettings::Watch() noexcept {
       } else if (!table.Event() && table.Open(watched_table)) {
         Reload();
       }
+      if (watched_romaji != romaji_path_) {
+        watched_romaji = romaji_path_;
+        romaji.Reset();
+        if (!watched_romaji.empty()) romaji.Open(watched_romaji);
+        Reload();
+      } else if (!watched_romaji.empty() && !romaji.Event() && romaji.Open(watched_romaji)) {
+        Reload();
+      }
       // Rebinding the configuration watch here, rather than ending the loop,
       // is what keeps a transient bind failure from freezing the snapshot for
       // the rest of the activation. Read once the watch is armed again, and
@@ -344,16 +407,19 @@ void TipLocalSettings::Watch() noexcept {
           unarmed_reported = true;
         }
       }
-      HANDLE handles[3]{stop_};
+      HANDLE handles[4]{stop_};
       DWORD count = 1;
       const DWORD config_index = config.Event() ? count : kUnarmed;
       if (config.Event()) handles[count++] = config.Event();
       const DWORD table_index = table.Event() ? count : kUnarmed;
       if (table.Event()) handles[count++] = table.Event();
+      const DWORD romaji_index = romaji.Event() ? count : kUnarmed;
+      if (romaji.Event()) handles[count++] = romaji.Event();
       // Only a fully armed pair may sleep indefinitely; anything else polls so
       // the failed watch is retried instead of being waited on forever.
-      if (count == 3) retry_ms = kRearmRetryMinMs;
-      const DWORD timeout = count == 3 ? INFINITE : retry_ms;
+      const DWORD expected_count = watched_romaji.empty() ? 3 : 4;
+      if (count == expected_count) retry_ms = kRearmRetryMinMs;
+      const DWORD timeout = count == expected_count ? INFINITE : retry_ms;
       const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, timeout);
       if (wait == WAIT_TIMEOUT) {
         retry_ms = (std::min)(retry_ms * 2, kRearmRetryMaxMs);
@@ -362,7 +428,9 @@ void TipLocalSettings::Watch() noexcept {
       const bool config_signalled =
           config_index != kUnarmed && wait == WAIT_OBJECT_0 + config_index;
       const bool table_signalled = table_index != kUnarmed && wait == WAIT_OBJECT_0 + table_index;
-      if (!config_signalled && !table_signalled) {
+      const bool romaji_signalled =
+          romaji_index != kUnarmed && wait == WAIT_OBJECT_0 + romaji_index;
+      if (!config_signalled && !table_signalled && !romaji_signalled) {
         // stop_, or a wait this thread cannot recover from. Report the latter:
         // leaving the loop means no further save is seen this activation.
         if (wait != WAIT_OBJECT_0)
@@ -372,11 +440,15 @@ void TipLocalSettings::Watch() noexcept {
 #ifdef AZOOKEY_TSF_TESTING
       ++watch_notifications_;
 #endif
-      if (!(config_signalled ? config.Consume() : table.Consume())) continue;
+      if (!(config_signalled  ? config.Consume()
+            : table_signalled ? table.Consume()
+                              : romaji.Consume()))
+        continue;
       // Rebind after a missing parent was created or a watched directory was
       // deleted/recreated. Read after arming to close the replacement race.
       config.Open(path_);
       table.Open(watched_table);
+      if (!watched_romaji.empty()) romaji.Open(watched_romaji);
       Reload();
     }
   } catch (...) {
@@ -406,6 +478,11 @@ void TipLocalSettings::SetLiveConversionForTest(bool enabled) {
 void TipLocalSettings::SetPredictionEnabledForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   prediction_enabled_ = enabled;
+}
+
+void TipLocalSettings::SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  romaji_table_ = std::move(table);
 }
 
 bool TipLocalSettings::WaitForPrivacyForTest(

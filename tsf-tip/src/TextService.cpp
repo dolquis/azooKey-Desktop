@@ -407,6 +407,8 @@ azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest
     g_translate_oem_composition_character = &TranslateOemCompositionCharacter;
 azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest g_translate_bracket_character =
     &TranslateKeyboardCharacter;
+azookey::tsf::testing::TranslateOemCompositionCharacterFnForTest
+    g_translate_custom_romaji_character = &TranslateKeyboardCharacter;
 #endif
 
 std::optional<WCHAR> CurrentBracketCharacter(WPARAM key, LPARAM key_data) {
@@ -415,6 +417,19 @@ std::optional<WCHAR> CurrentBracketCharacter(WPARAM key, LPARAM key_data) {
 #else
   return TranslateKeyboardCharacter(key, key_data);
 #endif
+}
+
+std::optional<char> CurrentCustomRomajiCharacter(WPARAM key, LPARAM key_data,
+                                                 const azookey::core::RomajiKanaConverter& romaji) {
+  if (!romaji.HasCustomTable()) return std::nullopt;
+#ifdef AZOOKEY_TSF_TESTING
+  const auto character = g_translate_custom_romaji_character(key, key_data);
+#else
+  const auto character = TranslateKeyboardCharacter(key, key_data);
+#endif
+  if (!character || *character < L'!' || *character > L'~') return std::nullopt;
+  const char ascii = static_cast<char>(*character);
+  return romaji.CanContinueCustomWith(ascii) ? std::optional<char>(ascii) : std::nullopt;
 }
 
 char32_t BracketCodepoint(WCHAR raw, azookey::core::BracketInputMode mode) {
@@ -690,6 +705,14 @@ void SetTranslateBracketCharacterForTest(TranslateOemCompositionCharacterFnForTe
 
 void ClearTranslateBracketCharacterForTest() {
   g_translate_bracket_character = &TranslateKeyboardCharacter;
+}
+
+void SetTranslateCustomRomajiCharacterForTest(TranslateOemCompositionCharacterFnForTest translate) {
+  g_translate_custom_romaji_character = translate ? translate : &TranslateKeyboardCharacter;
+}
+
+void ClearTranslateCustomRomajiCharacterForTest() {
+  g_translate_custom_romaji_character = &TranslateKeyboardCharacter;
 }
 
 std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
@@ -1524,9 +1547,24 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
 
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     const bool cand_visible = candidate_ui_.IsShowing();
-    const auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
+    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
+    core::RomajiKanaConverter input_romaji = romaji_;
+    if (!has_preedit && batch_raw_romaji_.empty()) {
+      input_romaji = {};
+      input_romaji.SetCustomTable(local_settings_.RomajiSnapshot());
+    }
+    std::optional<char> custom_input;
+    if (!HasSystemModifier(modifiers) &&
+        (!key_event || key_event->action == core::UserAction::Input)) {
+      if (composition_symbol && input_romaji.CanContinueCustomWith(composition_symbol->raw))
+        custom_input = composition_symbol->raw;
+      else
+        custom_input = CurrentCustomRomajiCharacter(wParam, lParam, input_romaji);
+    }
+    if (custom_input && !key_event)
+      key_event = core::UserActionEvent{core::UserAction::Input, 0, modifiers, 0};
 
     using core::UserAction;
     if (IsActionKey(key_event, UserAction::SelectByDigit)) {
@@ -1535,18 +1573,18 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       const bool can_cycle = CharacterFormEditSession::CanCycleSelection(
           context, client_id_, character_form_cycle_state_);
       *eaten = can_cycle || recent_character_form_commit_.has_value() ? TRUE : FALSE;
-    } else if (decimal_digit && !BatchRomajiEnabled() &&
+    } else if (decimal_digit && !custom_input && !BatchRomajiEnabled() &&
                number_rewriter_.load(std::memory_order_relaxed)) {
       *eaten = TRUE;
     } else if (!key_event) {
       // Not consumed in this state.
     } else if (key_event->action == UserAction::Input) {
-      if (wParam >= 'A' && wParam <= 'Z') {
+      if (custom_input || (wParam >= 'A' && wParam <= 'Z')) {
         *eaten = TRUE;
       } else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) {
         // 長音: ハイフンキー（主キー・テンキー）は composition 中のみ長音符「ー」として取り込む。
         // composition が無いときは通常のハイフンとしてアプリへ通す。
-        *eaten = has_preedit ? TRUE : FALSE;
+        *eaten = has_preedit || custom_input ? TRUE : FALSE;
       } else if (composition_symbol) {
         const bool punctuation = composition_symbol->raw == ',' || composition_symbol->raw == '.';
         *eaten = has_preedit || punctuation ? TRUE : FALSE;
@@ -1837,28 +1875,53 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
 
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
-    const auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
+    auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
     const auto composition_symbol = TranslateOemCompositionSymbol(wParam, lParam);
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
     using core::UserAction;
+    core::RomajiKanaConverter input_romaji = romaji_;
+    auto input_table = batch_romaji_table_;
+    if (!has_preedit && batch_raw_romaji_.empty()) {
+      input_table = local_settings_.RomajiSnapshot();
+      input_romaji = {};
+      input_romaji.SetCustomTable(input_table);
+    }
+    std::optional<char> custom_input;
+    if (!HasSystemModifier(modifiers) && (!key_event || key_event->action == UserAction::Input)) {
+      if (composition_symbol && input_romaji.CanContinueCustomWith(composition_symbol->raw))
+        custom_input = composition_symbol->raw;
+      else
+        custom_input = CurrentCustomRomajiCharacter(wParam, lParam, input_romaji);
+    }
+    if (custom_input && !key_event)
+      key_event = core::UserActionEvent{UserAction::Input, 0, modifiers, 0};
     const bool is_input = IsActionKey(key_event, UserAction::Input);
+    if (is_input && !has_preedit && batch_raw_romaji_.empty()) {
+      // Capture the latest immutable table only when a new input begins.
+      // A watcher reload must not rewrite an existing preedit.
+      romaji_ = std::move(input_romaji);
+      batch_romaji_table_ = std::move(input_table);
+      if (input_state_.kind() == core::InputStateKind::Idle)
+        input_state_ = input_state_.WithComposition(std::string{}, romaji_);
+    }
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
     // A composing digit not mapped by core belongs to the number rewriter's
     // legacy path; a digit selecting a visible punctuation candidate stays in core.
     const bool standalone_punctuation =
         (IsStandalonePunctuation(CurrentPreeditSurface()) &&
          !(decimal_digit && !key_event && number_rewriter_.load(std::memory_order_relaxed))) ||
-        (!has_preedit && composition_symbol &&
+        (!has_preedit && !custom_input && composition_symbol &&
          (composition_symbol->raw == ',' || composition_symbol->raw == '.'));
     // Ordinary M3-M10 input is decided by core. Batch, emoji, number rewriting
     // and the rewriter Space path keep TIP pre-processing, while standalone
     // punctuation always uses the fixed local candidates in core mode.
     const bool legacy_path =
         BatchRomajiEnabled() || emoji_mode_ != EmojiMode::Inactive || bracket_composition_ ||
-        (!standalone_punctuation && (number_rewriter_.load(std::memory_order_relaxed) ||
-                                     (IsActionKey(key_event, UserAction::StartConversion) &&
-                                      (symbol_rewriter_.load(std::memory_order_relaxed) ||
-                                       emoji_rewriter_.load(std::memory_order_relaxed)))));
+        (!standalone_punctuation &&
+         ((number_rewriter_.load(std::memory_order_relaxed) && !custom_input) ||
+          (IsActionKey(key_event, UserAction::StartConversion) &&
+           (symbol_rewriter_.load(std::memory_order_relaxed) ||
+            emoji_rewriter_.load(std::memory_order_relaxed)))));
     if (!legacy_path && !core_input_active_ && !has_preedit && !cand_visible) {
       input_state_ = input_state_.Reset();
       core_marked_surface_.clear();
@@ -1869,7 +1932,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       core::UserActionEvent event = *key_event;
       bool supported = true;
       if (event.action == UserAction::Input) {
-        if (wParam >= 'A' && wParam <= 'Z') {
+        if (custom_input) {
+          event.codepoint = static_cast<unsigned char>(*custom_input);
+        } else if (wParam >= 'A' && wParam <= 'Z') {
           event.codepoint = static_cast<char32_t>(wParam);
         } else if ((wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) && has_preedit) {
           event.codepoint = U'-';
@@ -1928,7 +1993,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
       *eaten = TRUE;
 
-    } else if (decimal_digit && !BatchRomajiEnabled() &&
+    } else if (decimal_digit && !custom_input && !BatchRomajiEnabled() &&
                number_rewriter_.load(std::memory_order_relaxed)) {
       const auto rollback_state = capture_preedit_rollback_state();
       if (cand_visible) {
@@ -1977,8 +2042,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       *eaten = TRUE;
 
     } else if (is_input && (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) &&
-               (BatchRomajiEnabled() ? !batch_raw_romaji_.empty()
-                                     : (!preedit_kana_.empty() || romaji_.HasPending()))) {
+               (custom_input ||
+                (BatchRomajiEnabled() ? !batch_raw_romaji_.empty()
+                                      : (!preedit_kana_.empty() || romaji_.HasPending())))) {
       // 長音: composition 中のハイフンキー（主キー・テンキー）を長音符「ー」として
       // preedit に取り込む。composition が無いときは本分岐に入らず、ハイフンはアプリへ
       // パススルーする。
@@ -2005,6 +2071,32 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
       *eaten = TRUE;
 
+    } else if (is_input && custom_input && !composition_symbol &&
+               !(wParam >= 'A' && wParam <= 'Z') && wParam != VK_OEM_MINUS &&
+               wParam != VK_SUBTRACT) {
+      const auto rollback_state = capture_preedit_rollback_state();
+      if (cand_visible) {
+        candidate_ui_.EndUI();
+        selected_candidate_idx_ = 0;
+      }
+      {
+        std::lock_guard<std::mutex> lk(candidates_mtx_);
+        candidates_.clear();
+        candidate_window_show_pending_ = false;
+      }
+      if (BatchRomajiEnabled()) {
+        batch_raw_romaji_.push_back(*custom_input);
+        RefreshBatchPreeditSurface();
+        batch_query_in_progress_ = false;
+        CancelPendingQueriesForLifecycle();
+      } else {
+        preedit_kana_ += romaji_.Feed(*custom_input);
+      }
+      const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
+      if (FAILED(update_hr)) return update_hr;
+      if (!BatchRomajiEnabled()) PostQueryCandidates(context, CurrentPreeditSurface());
+      *eaten = TRUE;
+
     } else if (is_input && composition_symbol &&
                (has_preedit || composition_symbol->raw == ',' || composition_symbol->raw == '.')) {
       const auto rollback_state = capture_preedit_rollback_state();
@@ -2023,8 +2115,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         batch_query_in_progress_ = false;
         CancelPendingQueriesForLifecycle();
       } else {
-        preedit_kana_ += romaji_.Flush();
-        preedit_kana_ += composition_symbol->surface;
+        if (custom_input)
+          preedit_kana_ += romaji_.Feed(*custom_input);
+        else {
+          preedit_kana_ += romaji_.Flush();
+          preedit_kana_ += composition_symbol->surface;
+        }
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
@@ -5406,12 +5502,13 @@ std::string TextService::BatchPreviewSurface() const {
   if (batch_romaji_preview_romaji_.load(std::memory_order_relaxed)) {
     return ApplyDefaultCompositionPunctuation(batch_raw_romaji_);
   }
-  return ApplyDefaultCompositionPunctuation(core::RomajiKanaConverter::Preview(batch_raw_romaji_));
+  return ApplyDefaultCompositionPunctuation(
+      core::RomajiKanaConverter::Preview(batch_raw_romaji_, batch_romaji_table_));
 }
 
 std::string TextService::BatchReadingForConversion() const {
   return ApplyDefaultCompositionPunctuation(
-      core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_));
+      core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_, batch_romaji_table_));
 }
 
 void TextService::RefreshBatchPreeditSurface() {
@@ -5430,6 +5527,7 @@ void TextService::ClearBatchState() {
   batch_segment_cursor_ = 0;
   emoji_mode_ = EmojiMode::Inactive;
   batch_raw_romaji_.clear();
+  batch_romaji_table_.reset();
   batch_query_in_progress_ = false;
 }
 

@@ -671,8 +671,8 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: TSV のカスタムテーブルでローマ字→かな変換を差し替え可能にする。
 - **前提**: M13 完了。
 - **変更対象**: `core/src/RomajiKanaConverter.cpp`、
-  `core/src/CustomRomajiLoader.cpp`（新規）、`tsf-tip/src/TextService.cpp`
-  （`ReadDirectoryChangesW` 監視）。
+  `core/src/CustomRomajiLoader.cpp`、`tsf-tip/src/TextService.cpp`、
+  `tsf-tip/src/TipLocalSettings.cpp`（`ReadDirectoryChangesW` 監視）。
 - **実装範囲**: 仕様書 §5（TSV フォーマット、配置、ホットリロード、内蔵
   テーブルとの関係）。
 - **横断**: 仕様完了後に X-3-1（FuzzyMatch）を `RomajiKanaConverter` に追加。

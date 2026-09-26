@@ -39,6 +39,9 @@ struct RangeFaults {
   bool shift_start_reports_zero{false};
   bool shift_end_reports_zero{false};
   bool get_text_reports_zero{false};
+  // The composition owns its text independently of the range returned by
+  // SetText, which some providers collapse at an edge.
+  bool composition_range_tracks_text{false};
   // Where a provider leaves the written range once SetText returns. Only
   // kCoversText keeps covering it; the others collapse it against one edge,
   // which is what breaks a caret move anchored on the opposite one.
@@ -252,7 +255,7 @@ struct FakeRangeReleaser {
 class FakeComposition final : public ITfComposition {
  public:
   FakeComposition(FakeDocument& document, LONG start, LONG end)
-      : range_(new FakeRange(document, start, end)) {}
+      : document_(document), start_(start), range_(new FakeRange(document, start, end)) {}
 
   STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
     if (!object) return E_POINTER;
@@ -277,6 +280,11 @@ class FakeComposition final : public ITfComposition {
     if (!range) return E_POINTER;
     *range = nullptr;
     if (FAILED(get_range_result)) return get_range_result;
+    if (document_.faults.composition_range_tracks_text && !document_.set_text_calls.empty()) {
+      *range = new FakeRange(document_, start_,
+                             start_ + static_cast<LONG>(document_.set_text_calls.back().size()));
+      return S_OK;
+    }
     range_->AddRef();
     *range = range_.get();
     return S_OK;
@@ -295,6 +303,8 @@ class FakeComposition final : public ITfComposition {
   HRESULT get_range_result{S_OK};
 
  private:
+  FakeDocument& document_;
+  LONG start_;
   std::unique_ptr<FakeRange, FakeRangeReleaser> range_;
   LONG references_{1};
 };
@@ -934,6 +944,104 @@ TEST(BracketEditSessionApply, PassThroughWritesNothing) {
 }
 
 // --- Apply + Finish: composition trigger ----------------------------------
+
+TEST(BracketEditSessionComposition, FinishFindsTheBoundaryAfterARefusedStartShift) {
+  for (const auto shape :
+       {RangeFaults::WrittenRange::kCoversText, RangeFaults::WrittenRange::kCollapsesAtStart,
+        RangeFaults::WrittenRange::kCollapsesAtEnd}) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    FakeDocument document = MakeDocument(L"", 0);
+    document.faults.written_range = shape;
+    document.faults.composition_range_tracks_text = true;
+    FakeContext context(document);
+    BracketSettings settings = ImmediateSettings();
+    settings.trigger = BracketPairingTrigger::Composition;
+    azookey::tsf::TextService service;
+    bool applied = false;
+    ASSERT_EQ(
+        BracketEditSession::Apply(service, &context, kClientId,
+                                  MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                  settings, applied),
+        S_OK);
+    ASSERT_TRUE(applied);
+    document.faults.shift_start_reports_zero = true;
+
+    EXPECT_EQ(BracketEditSession::Finish(service, &context, kClientId, /*cancel=*/false), S_OK);
+    EXPECT_EQ(document.text, L"「」");
+    EXPECT_EQ(document.set_text_calls.size(), 1u);
+    EXPECT_EQ(document.selection_start, 1);
+    EXPECT_TRUE(document.last_selection_collapsed);
+    EXPECT_FALSE(service.bracket_composition_for_test());
+  }
+}
+
+TEST(BracketEditSessionComposition, FinishUsesCurrentCompositionLength) {
+  FakeDocument document = MakeDocument(L"", 0);
+  FakeContext context(document);
+  BracketSettings settings = ImmediateSettings();
+  settings.trigger = BracketPairingTrigger::Composition;
+  azookey::tsf::TextService service;
+  bool applied = false;
+  ASSERT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      S_OK);
+  ASSERT_TRUE(applied);
+  Microsoft::WRL::ComPtr<ITfRange> range;
+  ASSERT_EQ(context.composition->GetRange(&range), S_OK);
+  ASSERT_EQ(range->SetText(context.edit_cookie, 0, L"「中」", 3), S_OK);
+
+  EXPECT_EQ(BracketEditSession::Finish(service, &context, kClientId, /*cancel=*/false), S_OK);
+  EXPECT_EQ(document.text, L"「中」");
+  EXPECT_EQ(document.selection_start, 2);
+  EXPECT_TRUE(document.last_selection_collapsed);
+}
+
+TEST(BracketEditSessionComposition, UnreadableRangeFallsBackToTrailingEdge) {
+  FakeDocument document = MakeDocument(L"", 0);
+  FakeContext context(document);
+  BracketSettings settings = ImmediateSettings();
+  settings.trigger = BracketPairingTrigger::Composition;
+  azookey::tsf::TextService service;
+  bool applied = false;
+  ASSERT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      S_OK);
+  document.faults.get_text_reports_zero = true;
+
+  EXPECT_EQ(BracketEditSession::Finish(service, &context, kClientId, /*cancel=*/false), S_OK);
+  EXPECT_EQ(document.selection_start, 1);
+  EXPECT_FALSE(service.bracket_composition_for_test());
+}
+
+TEST(BracketEditSessionComposition, LongRangeFallsBackToTrailingEdge) {
+  FakeDocument document = MakeDocument(L"", 0);
+  FakeContext context(document);
+  BracketSettings settings = ImmediateSettings();
+  settings.trigger = BracketPairingTrigger::Composition;
+  azookey::tsf::TextService service;
+  bool applied = false;
+  ASSERT_EQ(
+      BracketEditSession::Apply(service, &context, kClientId,
+                                MakeAction(BracketPairingActionType::kInsertPair, kOpen, kClose),
+                                settings, applied),
+      S_OK);
+  ASSERT_TRUE(applied);
+  Microsoft::WRL::ComPtr<ITfRange> range;
+  ASSERT_EQ(context.composition->GetRange(&range), S_OK);
+  const std::wstring long_text(65, L'x');
+  ASSERT_EQ(
+      range->SetText(context.edit_cookie, 0, long_text.data(), static_cast<LONG>(long_text.size())),
+      S_OK);
+
+  EXPECT_EQ(BracketEditSession::Finish(service, &context, kClientId, /*cancel=*/false), S_OK);
+  EXPECT_EQ(document.text, long_text);
+  EXPECT_EQ(document.selection_start, 64);
+  EXPECT_FALSE(service.bracket_composition_for_test());
+}
 
 TEST(BracketEditSessionComposition, CancelRemovesThePair) {
   FakeDocument document = MakeDocument(L"a", 1);

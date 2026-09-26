@@ -328,9 +328,10 @@ HandleResult InputState::HandleUnicodeInput(const UserActionEvent& event) const 
 void InputState::AppendInput(const UserActionEvent& event) {
   const char32_t cp = event.codepoint;
   if (cp == 0) return;
-  // Letters and the long-vowel hyphen go through romaji; anything else is
-  // literal and first settles the pending romaji, like explicit punctuation.
-  if (event.action == UserAction::Input && (IsAsciiLetter(cp) || cp == U'-')) {
+  // Keep ordinary punctuation literal, but allow a custom rule to consume
+  // printable ASCII symbols or digits while its prefix is still pending.
+  if (event.action == UserAction::Input && cp <= 0x7f &&
+      (IsAsciiLetter(cp) || cp == U'-' || romaji_.CanContinueCustomWith(static_cast<char>(cp)))) {
     kana_ += romaji_.Feed(static_cast<char>(cp));
     return;
   }

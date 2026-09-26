@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/core/InputState.h"
 #include "azookey/core/UserActionMap.h"
 
@@ -410,6 +411,13 @@ TEST(InputStateTest, HyphenBecomesLongVowelAndPunctuationFlushesRomaji) {
   EXPECT_EQ(Feed(InputState{}, U"ka-").Reading(), "かー");
   EXPECT_EQ(Feed(InputState{}, U"kan、").Reading(), "かん、");
   EXPECT_EQ(Feed(InputState{}, U"ka/").Reading(), "か/");
+}
+
+TEST(InputStateTest, CustomAsciiPunctuationUsesPendingRule) {
+  RomajiKanaConverter romaji;
+  romaji.SetCustomTable(CustomRomajiLoader::Parse("z.\t…\n").table);
+  const auto state = Feed(InputState{}.WithComposition("", romaji), U"z.");
+  EXPECT_EQ(state.Reading(), "…");
 }
 
 TEST(InputStateTest, ExplicitPunctuationStartsCompositionAndBackspaceClearsIt) {

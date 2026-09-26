@@ -247,7 +247,9 @@ function Get-LearningSnapshotRecord {
     [Parameter(Mandatory = $true)]
     [string]$Directory,
     [Parameter(Mandatory = $true)]
-    [string]$DirectoryLabel
+    [string]$DirectoryLabel,
+    [Parameter(Mandatory = $true)]
+    [string]$DirectoryId
   )
 
   $root = [System.IO.Path]::GetFullPath($Directory).TrimEnd("\", "/")
@@ -288,6 +290,7 @@ function Get-LearningSnapshotRecord {
     label = $SnapshotLabel
     capturedAtUtc = [DateTime]::UtcNow.ToString("o")
     dataDirectory = $DirectoryLabel
+    dataDirectoryId = $DirectoryId
     dataDirectoryExists = [bool]$directoryExists
     files = @($records)
   }
@@ -305,6 +308,21 @@ function ConvertTo-LearningSnapshotTimestamp {
   return $Value
 }
 
+# Two labels must come from the same directory, but the absolute path carries the user
+# name. Record a salted hash instead: the salt is random per snapshot file, so the id
+# only distinguishes directories within one file and is not a lookup key elsewhere.
+function Get-LearningSnapshotDirectoryId {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Directory,
+    [Parameter(Mandatory = $true)]
+    [string]$Salt
+  )
+
+  $normalized = [System.IO.Path]::GetFullPath($Directory).TrimEnd("\", "/").ToUpperInvariant()
+  return (Get-LearningSnapshotTextHash -Text "$Salt|$normalized").Substring(0, 16)
+}
+
 function Read-LearningSnapshotDocument {
   param(
     [Parameter(Mandatory = $true)]
@@ -316,6 +334,7 @@ function Read-LearningSnapshotDocument {
       schemaVersion = $script:LearningSnapshotSchemaVersion
       kind = $script:LearningSnapshotKind
       notice = $script:LearningSnapshotNotice
+      directoryIdSalt = [guid]::NewGuid().ToString("N")
       snapshots = @()
     }
   }
@@ -326,6 +345,9 @@ function Read-LearningSnapshotDocument {
       $document.schemaVersion -ne $script:LearningSnapshotSchemaVersion) {
     throw ("'$Path' is not a learning data snapshot file (expected kind=" +
       "$($script:LearningSnapshotKind), schemaVersion=$($script:LearningSnapshotSchemaVersion)).")
+  }
+  if (-not ([string]$document.directoryIdSalt -match '^[0-9a-f]{32}$')) {
+    throw "'$Path' has no valid directoryIdSalt. Record into a new snapshot file."
   }
   # PowerShell 7 ConvertFrom-Json turns ISO 8601 strings into DateTime. Restore the
   # string form that 5.1 keeps before comparing and writing back.
@@ -339,6 +361,7 @@ function Read-LearningSnapshotDocument {
     schemaVersion = $document.schemaVersion
     kind = $document.kind
     notice = $script:LearningSnapshotNotice
+    directoryIdSalt = [string]$document.directoryIdSalt
     snapshots = @($document.snapshots)
   }
 }
@@ -432,14 +455,19 @@ function Add-LearningSnapshot {
   }
   $location = Resolve-LearningSnapshotLocation -DataDirectory $DataDirectory -OutputPath $OutputPath
   $document = Read-LearningSnapshotDocument -Path $location.OutputPath
-  if (@($document.snapshots | Where-Object { $_.label -ceq $SnapshotLabel }).Count -gt 0) {
-    throw "Label '$SnapshotLabel' is already recorded in the snapshot file. Use a new label."
+  # Labels are unique ignoring case, so "before" and "Before" cannot both exist.
+  if (@($document.snapshots | Where-Object { $_.label -eq $SnapshotLabel }).Count -gt 0) {
+    throw "Label '$SnapshotLabel' is already recorded in the snapshot file (labels ignore case). Use a new label."
   }
 
+  $directoryId = Get-LearningSnapshotDirectoryId `
+    -Directory $location.DataDirectory `
+    -Salt $document.directoryIdSalt
   $snapshot = Get-LearningSnapshotRecord `
     -SnapshotLabel $SnapshotLabel `
     -Directory $location.DataDirectory `
-    -DirectoryLabel $location.DirectoryLabel
+    -DirectoryLabel $location.DirectoryLabel `
+    -DirectoryId $directoryId
   $document.snapshots = @($document.snapshots) + @($snapshot)
   Write-LearningSnapshotDocument -Path $location.OutputPath -Document $document
 
@@ -518,25 +546,29 @@ function Compare-LearningSnapshot {
     throw "Snapshot file '$path' does not exist. Record snapshots with -Label first."
   }
   $document = Read-LearningSnapshotDocument -Path $path
-  $snapshots = @{}
-  foreach ($name in @($FromLabel, $ToLabel)) {
-    $found = @($document.snapshots | Where-Object { $_.label -ceq $name })
-    if ($found.Count -eq 0) {
+  $selected = foreach ($name in @($FromLabel, $ToLabel)) {
+    $found = @($document.snapshots | Where-Object { $_.label -eq $name })
+    if ($found.Count -ne 1) {
       throw "Label '$name' is not recorded in the snapshot file."
     }
-    $snapshots[$name] = $found[0]
+    $found[0]
   }
-  if ($snapshots[$FromLabel].dataDirectory -ne $snapshots[$ToLabel].dataDirectory) {
+  $fromSnapshot = $selected[0]
+  $toSnapshot = $selected[1]
+  if (-not $fromSnapshot.dataDirectoryId -or
+      $fromSnapshot.dataDirectory -ne $toSnapshot.dataDirectory -or
+      $fromSnapshot.dataDirectoryId -ne $toSnapshot.dataDirectoryId) {
     throw ("Labels '$FromLabel' and '$ToLabel' were recorded from different data directories " +
-      "('$($snapshots[$FromLabel].dataDirectory)' and '$($snapshots[$ToLabel].dataDirectory)').")
+      "('$($fromSnapshot.dataDirectory)' $($fromSnapshot.dataDirectoryId) and " +
+      "'$($toSnapshot.dataDirectory)' $($toSnapshot.dataDirectoryId)).")
   }
 
   $beforeFiles = @{}
-  foreach ($file in @($snapshots[$FromLabel].files)) {
+  foreach ($file in @($fromSnapshot.files)) {
     $beforeFiles[$file.path] = $file
   }
   $afterFiles = @{}
-  foreach ($file in @($snapshots[$ToLabel].files)) {
+  foreach ($file in @($toSnapshot.files)) {
     $afterFiles[$file.path] = $file
   }
   $paths = @(@($beforeFiles.Keys) + @($afterFiles.Keys) | Sort-Object -Unique)

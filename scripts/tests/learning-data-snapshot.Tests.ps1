@@ -339,6 +339,29 @@ Describe "Learning data snapshot" {
       (Format-LearningSnapshotComparison -Comparison $comparison) -join "`n" | Should -Match "Unverified: 1"
     }
 
+    It "rejects comparing two different custom data directories" {
+      $other = Join-Path $root "other"
+      Write-TestFile -Path (Join-Path $other "learning.tsv") -Text "a`n"
+      Add-LearningSnapshot -SnapshotLabel "other" -DataDirectory $other -OutputPath $script:output | Out-Null
+      Add-LearningSnapshot -SnapshotLabel "same" -DataDirectory $script:data -OutputPath $script:output |
+        Out-Null
+
+      $document = [System.IO.File]::ReadAllText($script:output) | ConvertFrom-Json
+      $ids = @($document.snapshots | ForEach-Object { $_.dataDirectoryId })
+      $ids[0] | Should -Match "^[0-9a-f]{16}$"
+      $ids[0] | Should -Be $ids[2]
+      $ids[0] | Should -Not -Be $ids[1]
+      { Compare-LearningSnapshot -FromLabel "before" -ToLabel "other" -OutputPath $script:output } |
+        Should -Throw "*different data directories*"
+      (Compare-LearningSnapshot -FromLabel "before" -ToLabel "same" -OutputPath $script:output).changed |
+        Should -BeFalse
+    }
+
+    It "rejects a label that differs from a recorded one only by case" {
+      { Add-LearningSnapshot -SnapshotLabel "Before" -DataDirectory $script:data -OutputPath $script:output } |
+        Should -Throw "*already recorded*"
+    }
+
     It "rejects comparing snapshots from different data directories" {
       Add-LearningSnapshot -SnapshotLabel "elsewhere" -DataDirectory $script:data -OutputPath $script:output |
         Out-Null

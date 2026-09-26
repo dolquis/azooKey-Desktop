@@ -31,20 +31,14 @@
     ],
     "ask": [
       "Bash(git push:*)",
-      "Edit(legacy/**)",
-      "Write(legacy/**)"
+      "Edit(legacy/**)"
     ],
     "deny": [
       "Edit(.env*)",
-      "Write(.env*)",
       "Edit(**/secrets/**)",
-      "Write(**/secrets/**)",
       "Edit(.serena/memories/**)",
-      "Write(.serena/memories/**)",
       "Edit(.codegraph/**)",
-      "Write(.codegraph/**)",
-      "Edit(.claude/settings.local.json)",
-      "Write(.claude/settings.local.json)"
+      "Edit(.claude/settings.local.json)"
     ]
   },
   "hooks": {

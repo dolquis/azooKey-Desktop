@@ -624,8 +624,8 @@ OFF のまま）。
   デバッガ下で挙動が変わるクラッシュ注入テストと、計測時に時間制限を超える
   大量ログ境界テストは計測 CTest から除く。通常の Windows Debug ジョブでは実行する。
   Linux の portable subset とは別系列で可視化する。数値閾値は設けない。
-  計測・レポート生成の失敗はジョブに表示するが、`ci-gate` では advisory として
-  扱い、PR の必須チェックを止めない
+  計測・レポート生成の失敗はジョブと `advisory-summary` に表示する。
+  `ci-gate` はこのジョブの完了を待たず、結果を合否判定に含めない
 - bench smoke — `azookey_bench` を CTest から exit=0 で実行（§4.5）
 - `AZOOKEY_BUILD_TESTS=OFF` ビルドが壊れていないことの確認ジョブ — Linux の
   移植対象に加え、Windows では `diagnostics` / `compat-test` / `settings-app` / `tsf-tip` を
@@ -836,7 +836,8 @@ VM 上の人間ゲートセッションに限り、対象アプリと解除手�
 ### 4.7 コンパイラキャッシュ（sccache）
 
 CI のコンパイルジョブ（`windows-build` Debug/Release、`windows-llama-build`、
-`linux-build`）は `mozilla-actions/sccache-action` で sccache を導入し、GitHub
+`windows-vulkan-compile`、`windows-arm64-crossbuild`、`windows-no-tests`、
+`windows-coverage`、`linux-build`）は `mozilla-actions/sccache-action` で sccache を導入し、GitHub
 Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェクトを run 間再利用
 する。ルート `CMakeLists.txt` が sccache を PATH 上で自動検出して compiler launcher
 に設定するため（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）、ワークフロー側の追加設定は
@@ -844,6 +845,15 @@ Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェ
 （Embedded）へ切り替える。この切り替えは Release を対象外とするため、Release の
 `.pdb` artifact（§4.4）は影響を受けない。各ジョブ末尾で `sccache --show-stats` で
 ヒット率を可視化する。
+
+`windows-llama-build` と `windows-vulkan-compile` はビルドを 2 並列で実行する。
+Windows coverage はキャッシュを使用しても最終リンクで PDB を生成し、
+OpenCppCoverage の計測対象と除外条件を維持する。計測 CTest は直列に実行する。
+
+`quality` ジョブは actionlint / yamlfmt / taplo の固定版バイナリを、runner の OS image・
+architecture と各ツールのバージョンを含むキーでキャッシュする。
+完全一致するキャッシュが無い場合は固定版ソースから構築し、復元後もツールを実行してから
+pre-commit の既存 hook を検証する。pre-commit 自体は固定版を毎回導入する。
 
 Windows の Ninja build では、ルート `CMakeLists.txt` が compiler launcher の先頭に
 `cmake -E env VSLANG=1033` を追加する。
@@ -937,12 +947,13 @@ GPG / SSH 署名の設定が必要になるためである。GitHub の web merg
 終端の `ci-gate`（表示名 `CI gate`）は `if: always()` で必ず実行され、`needs` に列挙した
 全ジョブの結果を集約する。`failure` または `cancelled` が 1 件でもあれば fail し、
 `success` と `skipped` だけなら pass する。`windows.yml` にジョブを追加するときは
-`ci-gate` の `needs` にも加える。加えなければそのジョブの失敗が required check を素通りする。
+判定対象なら `ci-gate` の `needs` にも加える。加えなければそのジョブの失敗が required check を素通りする。
 
-例外は `ci-gate` の `ADVISORY_JOBS` に挙げる advisory ジョブで、結果は集約の出力に
-残すが失敗判定には入れない。`cpp-tidy`（§4.3 / §11.5）と
-`windows-coverage`（§4.3 / §10）がこれに当たる。解析ステップの `continue-on-error` だけでは、checkout・依存導入・configure の
-失敗でジョブ結果が `failure` になり、advisory ジョブが required check をブロックする。
+例外は advisory ジョブの `cpp-tidy`（§4.3 / §11.5）と
+`windows-coverage`（§4.3 / §10）で、`ci-gate` の `needs` に含めず、完了も待たない。
+両ジョブの結果は `if: always()` の `advisory-summary` がログと job summary に表示する。
+解析・依存導入・configure の失敗は元ジョブに残し、必須チェックの合否には含めない。
+`advisory-summary` 自体も `ci-gate` の判定対象にしない。
 
 `.github/workflows/docs.yml` と `.github/workflows/sbom.yml` は `paths` で絞られるため対象外とする。
 `.github/workflows/compat.yml` の `Notepad / VS Code / Edge` はラベル付与時のみ実行する

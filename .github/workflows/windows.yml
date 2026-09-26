@@ -201,6 +201,10 @@ jobs:
     if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      YAMLFMT_VERSION: "0.21.0"
+      TAPLO_VERSION: "0.10.0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -209,18 +213,36 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install pinned quality tools
+      - name: Cache pinned quality binaries
+        id: quality-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/azookey-quality/bin
+            ${{ runner.temp }}/azookey-quality/taplo/bin
+          key: quality-tools-v1-ubuntu-24.04-${{ runner.arch }}-actionlint-${{ env.ACTIONLINT_VERSION }}-yamlfmt-${{ env.YAMLFMT_VERSION }}-taplo-${{ env.TAPLO_VERSION }}
+
+      - name: Build pinned quality tools on cache miss
+        if: steps.quality-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin_dir="$RUNNER_TEMP/azookey-quality/bin"
+          mkdir -p "$bin_dir"
+          GOBIN="$bin_dir" go install "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION"
+          GOBIN="$bin_dir" go install "github.com/google/yamlfmt/cmd/yamlfmt@v$YAMLFMT_VERSION"
+          cargo install taplo-cli --version "$TAPLO_VERSION" --locked \
+            --root "$RUNNER_TEMP/azookey-quality/taplo"
+
+      - name: Set up and verify quality tools
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install pre-commit==4.6.2
-
           bin_dir="$RUNNER_TEMP/azookey-quality/bin"
-          mkdir -p "$bin_dir"
-          GOBIN="$bin_dir" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          GOBIN="$bin_dir" go install github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0
-          cargo install taplo-cli --version 0.10.0 --locked \
-            --root "$RUNNER_TEMP/azookey-quality/taplo"
+          "$bin_dir/actionlint" --version
+          "$bin_dir/yamlfmt" --version
+          "$RUNNER_TEMP/azookey-quality/taplo/bin/taplo" --version
           echo "$bin_dir" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/azookey-quality/taplo/bin" >> "$GITHUB_PATH"
 
@@ -665,7 +687,7 @@ jobs:
       - name: Build host tests and Zenzai bench with llama.cpp
         shell: pwsh
         run: |
-          cmake --build build/windows-llama --target host_engine_tests azookey_zenzai_bench azookey_nll_bench --parallel 1 2>&1 | Tee-Object -FilePath build-llama.log
+          cmake --build build/windows-llama --target host_engine_tests azookey_zenzai_bench azookey_nll_bench --parallel 2 2>&1 | Tee-Object -FilePath build-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run pinned real-model smoke via CTest
@@ -815,7 +837,7 @@ jobs:
       - name: Build inference host with ggml-vulkan
         shell: pwsh
         run: |
-          cmake --build --preset windows-vulkan-release --target azookey_inference_host --parallel 1 2>&1 | Tee-Object -FilePath build-vulkan.log
+          cmake --build --preset windows-vulkan-release --target azookey_inference_host --parallel 2 2>&1 | Tee-Object -FilePath build-vulkan.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # 配布形態の前提を CI で固定する。Vulkan 版 Host は vulkan-1.dll を暗黙
@@ -1008,6 +1030,9 @@ jobs:
     if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 90
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1015,6 +1040,9 @@ jobs:
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Cache GoogleTest source
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -1049,7 +1077,7 @@ jobs:
       - name: Configure Windows Debug coverage build
         shell: pwsh
         run: |
-          cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_USE_COMPILER_CACHE=OFF
+          cmake --preset windows-debug -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_USE_COMPILER_CACHE=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows Debug coverage targets
@@ -1057,6 +1085,12 @@ jobs:
         run: |
           cmake --build --preset windows-debug
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report coverage sccache stats
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: sccache --show-stats
 
       - name: Run CTest with OpenCppCoverage
         shell: pwsh
@@ -1452,13 +1486,10 @@ jobs:
   #
   # 判定は needs の結果のみを見る。failure / cancelled が 1 件でもあれば fail し、
   # success と skipped だけなら pass する。新しいジョブを windows.yml に足したら
-  # needs へも必ず追加すること（漏れると required check が素通りする）。
+  # 判定対象なら needs へも必ず追加すること（漏れると required check が素通りする）。
   #
-  # 例外は ADVISORY_JOBS に挙げる advisory ジョブで、結果は表示するが失敗判定に
-  # 入れない。clang-tidy は dev-infra spec §4.3 / §11.5、Windows coverage は
-  # §4.3 / §10 が非ブロッキングと定めており、所見や解析基盤の一時障害で PR を止めない。
-  # 解析ステップの continue-on-error だけでは checkout / apt / configure の失敗でジョブ結果が
-  # failure になり、required check をブロックしてしまう。
+  # advisory ジョブは needs に含めず、完了も待たない。結果は advisory-summary が表示する。
+  # clang-tidy は dev-infra spec §4.3 / §11.5、Windows coverage は §4.3 / §10 に従う。
   ci-gate:
     name: CI gate
     needs:
@@ -1473,11 +1504,9 @@ jobs:
       - windows-arm64-crossbuild
       - linux-build
       - linux-coverage
-      - windows-coverage
       - linux-no-tests
       - windows-no-tests
       - cpp-format
-      - cpp-tidy
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1486,16 +1515,12 @@ jobs:
         shell: bash
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-          # 失敗判定から除外する advisory ジョブ（カンマ区切り）。
-          ADVISORY_JOBS: cpp-tidy,windows-coverage
         run: |
           set -euo pipefail
 
-          results="$(jq -r --arg advisory "$ADVISORY_JOBS" '
-            ($advisory | split(",")) as $adv
-            | to_entries[]
+          results="$(jq -r '
+            to_entries[]
             | "\(.key)=\(.value.result)"
-              + (if (.key | IN($adv[])) then " (advisory; not gated)" else "" end)
           ' <<<"$NEEDS_JSON")"
           echo "$results"
           {
@@ -1506,10 +1531,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          failed="$(jq -r --arg advisory "$ADVISORY_JOBS" '
-            ($advisory | split(",")) as $adv
-            | to_entries
-            | map(select((.key | IN($adv[])) | not))
+          failed="$(jq -r '
+            to_entries
             | map(select(.value.result == "failure" or .value.result == "cancelled"))
             | map(.key)
             | join(", ")
@@ -1519,3 +1542,26 @@ jobs:
             exit 1
           fi
           echo "CI gate passed (no blocking failures)."
+
+  advisory-summary:
+    name: Advisory results
+    needs: [cpp-tidy, windows-coverage]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Summarize advisory job results
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          results="$(jq -r 'to_entries[] | "\(.key)=\(.value.result)"' <<<"$NEEDS_JSON")"
+          echo "$results"
+          {
+            echo "## Advisory results (not gated)"
+            echo ""
+            echo '```text'
+            echo "$results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

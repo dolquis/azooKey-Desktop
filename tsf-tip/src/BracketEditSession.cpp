@@ -251,6 +251,25 @@ HRESULT PlaceCaretAfterWrite(ITfContext* context, TfEditCookie cookie, ITfRange*
   if (unconfirmed) return SetCaret(context, cookie, unconfirmed.Get());
   return failure;
 }
+
+// Finish has no SetText of its own. Read the composition while it still owns
+// its range so the target is based on its current text, including any edits
+// made during composition. An empty or truncated read cannot establish that
+// target; callers retain the legacy trailing-edge route in that case.
+std::optional<std::wstring> ReadCompositionText(TfEditCookie cookie, ITfRange* range) {
+  constexpr ULONG kMaximumLength = 64;
+  ComPtr<ITfRange> reader;
+  if (FAILED(range->Clone(&reader)) || !reader) return std::nullopt;
+  std::array<WCHAR, kMaximumLength + 1> buffer{};
+  ULONG count = 0;
+  if (FAILED(reader->GetText(cookie, TF_TF_MOVESTART, buffer.data(),
+                             static_cast<ULONG>(buffer.size()), &count)) ||
+      count == 0 || count > kMaximumLength)
+    return std::nullopt;
+  BOOL empty = FALSE;
+  if (FAILED(reader->IsEmpty(cookie, &empty)) || !empty) return std::nullopt;
+  return std::wstring(buffer.data(), count);
+}
 }  // namespace
 
 core::EditContextHint BracketEditSession::ReadHint(ITfContext* context, TfClientId client_id) {
@@ -384,6 +403,7 @@ HRESULT BracketEditSession::Finish(TextService& service, ITfContext* context, Tf
     ComPtr<ITfRange> range;
     HRESULT hr = composition->GetRange(&range);
     if (FAILED(hr) || !range) return FAILED(hr) ? hr : E_FAIL;
+    const auto composition_text = cancel ? std::nullopt : ReadCompositionText(cookie, range.Get());
     if (cancel) {
       hr = range->SetText(cookie, 0, L"", 0);
       if (FAILED(hr)) return hr;
@@ -397,6 +417,9 @@ HRESULT BracketEditSession::Finish(TextService& service, ITfContext* context, Tf
     service.bracket_composition_ = false;
     // The text is already finalized. A caret failure cannot be retried as a
     // commit; report it to the caller while leaving no pending text to replay.
+    if (composition_text)
+      return PlaceCaretAfterWrite(context, cookie, range.Get(), *composition_text,
+                                  composition_text->size() - 1);
     return PlaceCaret(context, cookie, range.Get(), !cancel);
   });
 }

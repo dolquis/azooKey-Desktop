@@ -190,6 +190,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_prediction_enabled_for_test(bool enabled) {
     local_settings_.SetPredictionEnabledForTest(enabled);
   }
+  void set_romaji_table_for_test(std::shared_ptr<const core::CustomRomajiTable> table) {
+    local_settings_.SetRomajiTableForTest(std::move(table));
+  }
   HRESULT apply_prediction_reading_for_test(ITfContext* context, const std::string& reading) {
     return ApplyPredictionReading(context, reading);
   }
@@ -385,6 +388,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string core_marked_surface_;
   std::vector<TipCandidate> core_cached_metadata_;
   std::string batch_raw_romaji_;
+  std::shared_ptr<const core::CustomRomajiTable> batch_romaji_table_;
   bool batch_query_in_progress_{false};
   // AI axis of the batch path: an ai-cleanup conversion whose privacy was
   // reduced must not be learned from. Reset with the rest of the batch state.

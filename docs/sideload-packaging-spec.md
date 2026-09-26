@@ -1239,7 +1239,7 @@ Host は `settings.json` を再読込し、即時反映可能なものを適用�
 | 用途 | パス |
 |---|---|
 | 設定 | `%LOCALAPPDATA%\azooKey\config\settings.json` |
-| カスタムローマ字 | `%LOCALAPPDATA%\azooKey\config\custom-romaji.tsv` |
+| カスタムローマ字 | `%LOCALAPPDATA%\azooKey\custom-romaji.tsv` |
 | 学習データ | `%LOCALAPPDATA%\azooKey\data\learning.tsv.enc`（DPAPI 暗号化、M34） |
 | ユーザー辞書 | `%LOCALAPPDATA%\azooKey\data\user_dict.json.enc`（DPAPI 暗号化、M34） |
 | モデル | `%LOCALAPPDATA%\azooKey\models\zenzai\<file>.gguf`（`<file>` は §1.6.1 の `expected.json` ピンが定める実ファイル名。出所は上流 `Miwa-Keita/zenz-v3.2-small-gguf`） |

@@ -7,6 +7,7 @@ add_library(azookey_core STATIC
   src/CommandLine.cpp
   src/CrashRetention.cpp
   src/CrashReporting.cpp
+  src/CustomRomajiLoader.cpp
   src/DoubleArrayTrie.cpp
   src/EtwLogger.cpp
   src/InputState.cpp

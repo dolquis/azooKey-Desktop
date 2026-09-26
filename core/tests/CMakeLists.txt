@@ -4,6 +4,7 @@ add_executable(core_tests
   character_form_cycle_test.cpp
   command_line_test.cpp
   crash_retention_test.cpp
+  custom_romaji_test.cpp
   etw_logger_test.cpp
   input_state_test.cpp
   katakana_rewriter_test.cpp

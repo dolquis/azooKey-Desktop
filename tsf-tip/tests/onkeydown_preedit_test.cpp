@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "../../core/tests/EtwCapture.h"
+#include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/tsf/TextService.h"
@@ -2533,6 +2534,21 @@ TEST(TsfTipOnKeyDownPreeditTest, IpcWorkerConnectionStateFollowsHostLifecycle) {
   h.service.stop_ipc_worker_for_test();
   EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Disconnected);
   restarted_server.Stop();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CustomRomajiAppliesOnNextInputWithoutChangingPreedit) {
+  TextServiceHarness h;
+  const auto first = azookey::core::CustomRomajiLoader::Parse("ka\tカ\n").table;
+  const auto second = azookey::core::CustomRomajiLoader::Parse("ka\t加\n").table;
+  h.service.set_romaji_table_for_test(first);
+  EXPECT_TRUE(h.Press('K'));
+  h.service.set_romaji_table_for_test(second);
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, "カ");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, "加");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationStartsAndClearsDocumentComposition) {

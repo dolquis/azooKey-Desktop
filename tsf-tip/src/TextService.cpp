@@ -1842,6 +1842,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     const auto decimal_digit = CurrentAsciiDecimalDigit(wParam, lParam);
     using core::UserAction;
     const bool is_input = IsActionKey(key_event, UserAction::Input);
+    if (is_input && !has_preedit && batch_raw_romaji_.empty()) {
+      // Capture the latest immutable table only when a new input begins.
+      // A watcher reload must not rewrite an existing preedit.
+      auto table = local_settings_.RomajiSnapshot();
+      romaji_ = core::RomajiKanaConverter{};
+      romaji_.SetCustomTable(table);
+      batch_romaji_table_ = std::move(table);
+      if (input_state_.kind() == core::InputStateKind::Idle)
+        input_state_ = input_state_.WithComposition(std::string{}, romaji_);
+    }
     const int candidate_step = IsActionKey(key_event, UserAction::PrevCandidate) ? -1 : +1;
     // A composing digit not mapped by core belongs to the number rewriter's
     // legacy path; a digit selecting a visible punctuation candidate stays in core.
@@ -5406,12 +5416,13 @@ std::string TextService::BatchPreviewSurface() const {
   if (batch_romaji_preview_romaji_.load(std::memory_order_relaxed)) {
     return ApplyDefaultCompositionPunctuation(batch_raw_romaji_);
   }
-  return ApplyDefaultCompositionPunctuation(core::RomajiKanaConverter::Preview(batch_raw_romaji_));
+  return ApplyDefaultCompositionPunctuation(
+      core::RomajiKanaConverter::Preview(batch_raw_romaji_, batch_romaji_table_));
 }
 
 std::string TextService::BatchReadingForConversion() const {
   return ApplyDefaultCompositionPunctuation(
-      core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_));
+      core::RomajiKanaConverter::ConvertForCommit(batch_raw_romaji_, batch_romaji_table_));
 }
 
 void TextService::RefreshBatchPreeditSurface() {
@@ -5430,6 +5441,7 @@ void TextService::ClearBatchState() {
   batch_segment_cursor_ = 0;
   emoji_mode_ = EmojiMode::Inactive;
   batch_raw_romaji_.clear();
+  batch_romaji_table_.reset();
   batch_query_in_progress_ = false;
 }
 

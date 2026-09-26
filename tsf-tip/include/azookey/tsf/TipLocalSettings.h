@@ -14,6 +14,7 @@
 
 #include "azookey/core/AiPrivacy.h"
 #include "azookey/core/BracketSettings.h"
+#include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/core/PrivacyPolicy.h"
 
 namespace azookey::tsf {
@@ -47,12 +48,14 @@ class TipLocalSettings final {
   TipAiSettings AiSnapshot() const;
   bool LiveConversionSnapshot() const;
   bool PredictionEnabledSnapshot() const;
+  std::shared_ptr<const core::CustomRomajiTable> RomajiSnapshot() const;
 
 #ifdef AZOOKEY_TSF_TESTING
   void SetForTest(const core::BracketSettings& settings);
   void SetPrivacyForTest(std::string_view contents);
   void SetLiveConversionForTest(bool enabled);
   void SetPredictionEnabledForTest(bool enabled);
+  void SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table);
   bool WaitForEnabledForTest(bool enabled);
   bool WaitForPrivacyForTest(const std::function<bool(const core::PrivacyPolicy&)>& predicate);
   bool WaitForRewritersForTest(const std::function<bool(const TipRewriterSettings&)>& predicate);
@@ -83,8 +86,10 @@ class TipLocalSettings final {
   TipAiSettings ai_;
   bool live_conversion_{false};
   bool prediction_enabled_{true};
+  std::shared_ptr<const core::CustomRomajiTable> romaji_table_;
   std::filesystem::path path_;
   std::filesystem::path table_path_;
+  std::filesystem::path romaji_path_;
   std::atomic<bool> watch_started_{false};
   HANDLE stop_{nullptr};
   HANDLE ready_{nullptr};

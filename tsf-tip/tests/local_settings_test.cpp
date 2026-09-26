@@ -79,6 +79,57 @@ TEST_F(LocalSettingsTest, PredictionDefaultsOnAndReloads) {
   ASSERT_TRUE(WaitUntil([&] { return reader.PredictionEnabledSnapshot(); }));
 }
 
+TEST_F(LocalSettingsTest, CustomRomajiLoadsReloadsAndFallsBackWhenMissing) {
+  const auto table_path = root / L"custom-romaji.tsv";
+  auto write_table = [&](const std::string& contents) {
+    std::ofstream stream(table_path, std::ios::binary | std::ios::trunc);
+    stream << contents;
+    stream.close();
+    ASSERT_TRUE(stream.good());
+  };
+  Write(R"({"inputStyle":"custom"})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(reader.RomajiSnapshot());
+  write_table("ka\tカ\ninvalid\n");
+  ASSERT_TRUE(WaitUntil([&] {
+    const auto snapshot = reader.RomajiSnapshot();
+    return snapshot && snapshot->contains("ka") && snapshot->at("ka").output == "カ";
+  }));
+  write_table("ka\t加\n");
+  ASSERT_TRUE(WaitUntil([&] {
+    const auto snapshot = reader.RomajiSnapshot();
+    return snapshot && snapshot->contains("ka") && snapshot->at("ka").output == "加";
+  }));
+  ASSERT_TRUE(std::filesystem::remove(table_path));
+  ASSERT_TRUE(WaitUntil([&] { return !reader.RomajiSnapshot(); }));
+  Write(R"({"inputStyle":"default"})");
+  EXPECT_FALSE(reader.RomajiSnapshot());
+}
+
+TEST_F(LocalSettingsTest, CustomRomajiPathOverrideRebindsWhenSettingsChange) {
+  const auto alternate = root / L"alternate" / L"custom.tsv";
+  std::filesystem::create_directories(alternate.parent_path());
+  {
+    std::ofstream stream(alternate, std::ios::binary);
+    stream << "ka\t加\n";
+  }
+  Write(R"({"inputStyle":"custom","customRomajiTablePath":"alternate/custom.tsv"})");
+  ASSERT_TRUE(reader.Start(path));
+  ASSERT_TRUE(reader.RomajiSnapshot());
+  EXPECT_EQ(reader.RomajiSnapshot()->at("ka").output, "加");
+
+  const auto default_path = root / L"custom-romaji.tsv";
+  {
+    std::ofstream stream(default_path, std::ios::binary);
+    stream << "ka\tカ\n";
+  }
+  Write(R"({"inputStyle":"custom"})");
+  ASSERT_TRUE(WaitUntil([&] {
+    const auto snapshot = reader.RomajiSnapshot();
+    return snapshot && snapshot->contains("ka") && snapshot->at("ka").output == "カ";
+  }));
+}
+
 TEST_F(LocalSettingsTest, RewriterChangesReachExistingTipWithoutHandshake) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));

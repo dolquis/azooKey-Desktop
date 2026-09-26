@@ -181,7 +181,7 @@ Describe "WiX MSI package consistency" {
     $script:settingsProject | Should -Match '<WindowsPackageType>None</WindowsPackageType>'
     $script:settingsProject | Should -Match '<TargetName>\$\(RootNamespace\)</TargetName>'
     $script:settingsCMake | Should -Match 'add_custom_target\(azookey_settings'
-    $script:settingsProject | Should -Match '<PackageReference Include="Microsoft\.WindowsAppSDK\.Runtime" Version="2\.4\.0" />'
+    $script:settingsProject | Should -Match '<PackageReference Include="Microsoft\.WindowsAppSDK\.Runtime" Version="2\.5\.1" />'
     $script:settingsProject | Should -Match '<PackageReference Include="Microsoft\.WindowsAppSDK\.WinUI"'
     $script:settingsProject | Should -Not -Match 'Microsoft\.WindowsAppSDK\.(AI|ML|Search|Widgets)'
     $script:settingsCMake | Should -Match '/restore'

@@ -543,6 +543,7 @@ function Compare-LearningSnapshot {
 
   $changed = $false
   $unreadable = 0
+  $storesPresent = 0
   $entries = foreach ($relative in $paths) {
     $before = $beforeFiles[$relative]
     $after = $afterFiles[$relative]
@@ -553,6 +554,9 @@ function Compare-LearningSnapshot {
     }
     if ($isStore -and $status -eq "unreadable") {
       $unreadable++
+    }
+    if ($isStore -and $status -ne "absent") {
+      $storesPresent++
     }
     [pscustomobject][ordered]@{
       path = $relative
@@ -568,6 +572,7 @@ function Compare-LearningSnapshot {
     to = $ToLabel
     changed = $changed
     unreadableStores = $unreadable
+    storesPresent = $storesPresent
     notice = "Observations only. Human gate verdicts follow each issue's criteria."
     files = @($entries)
   }
@@ -601,6 +606,11 @@ function Format-LearningSnapshotComparison {
     $lines.Add("Changed: yes")
   } else {
     $lines.Add("Changed: no")
+  }
+  # "Changed: no" over an empty directory is not evidence; a wrong account or a Host
+  # that never started looks exactly like that.
+  if ($Comparison.storesPresent -eq 0) {
+    $lines.Add("Warning: no learning store was present in either snapshot. Check the data directory and the user account.")
   }
   if ($Comparison.unreadableStores -gt 0) {
     $lines.Add("Unverified: $($Comparison.unreadableStores) learning store file(s) could not be read. Record again.")

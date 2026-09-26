@@ -356,6 +356,7 @@ powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -From befo
 更新時刻だけの変化は `touched` と表示し、変化に数えない。
 Host が起動と終了で書き換える `host_run_state.txt` などは `not learning data` と付けて表示し、変化に数えない。
 `Unverified` が出た場合は、ストアを読めなかったので、ラベルを変えて記録し直す。
+`Warning: no learning store` が出た場合の `Changed: no` は証跡にならない。データディレクトリと、IME を使うユーザーのシェルで実行したかを確かめる。
 Host が平文のストアを読み込むと `.enc` と `.bak` への移行が起き、追加と削除が出るので、基準のラベルは Host 起動後に取る。
 記録するのはハッシュ、行数、サイズ、更新時刻だけで、学習データの本文は出力に含まれない。
 JSON は他のゲスト出力と一緒にホストへ回収する。

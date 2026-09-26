@@ -350,6 +350,21 @@ Describe "Learning data snapshot" {
         Should -Throw "*different data directories*"
     }
 
+    It "warns when no learning store exists in either snapshot" {
+      $empty = Join-Path $root "empty"
+      $output = Join-Path $root "empty.json"
+      Add-LearningSnapshot -SnapshotLabel "a" -DataDirectory $empty -OutputPath $output | Out-Null
+      Add-LearningSnapshot -SnapshotLabel "b" -DataDirectory $empty -OutputPath $output | Out-Null
+
+      $comparison = Compare-LearningSnapshot -FromLabel "a" -ToLabel "b" -OutputPath $output
+
+      $comparison.storesPresent | Should -Be 0
+      (Format-LearningSnapshotComparison -Comparison $comparison) -join "`n" |
+        Should -Match "Warning: no learning store"
+      $withData = Compare-LearningSnapshot -FromLabel "before" -ToLabel "before" -OutputPath $script:output
+      (Format-LearningSnapshotComparison -Comparison $withData) -join "`n" | Should -Not -Match "Warning:"
+    }
+
     It "fails clearly for an unknown label or a missing file" {
       { Compare-LearningSnapshot -FromLabel "before" -ToLabel "nope" -OutputPath $script:output } |
         Should -Throw "*'nope' is not recorded*"

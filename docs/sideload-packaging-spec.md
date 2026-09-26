@@ -1081,6 +1081,9 @@ service principal 経路の例を示す。
 job 全体を repository variable `RELEASE_ENABLED == 'true'` でガードし、`v*` タグでは
 MSI を Draft Release に添付する。`workflow_dispatch` は同じガード下でビルド確認に使い、
 タグ以外では Release を作成しない。
+ネイティブ成果物と設定アプリは `all azookey_settings --parallel 2` の一回の build で
+構築する。ネイティブコンパイルには Release 専用の sccache を使う
+（`docs/dev-infrastructure-spec.md` §4.7）。設定アプリの MSBuild はキャッシュ対象外である。
 
 スタンドアロン MSIX と自前コード署名は DEV-255 で延期しており、この workflow へ
 署名処理を混在させない。Store 用 MSIX の CI は DEV-416 で別経路として設計する。

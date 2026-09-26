@@ -618,7 +618,10 @@ OFF のまま）。
   だけで、目標値を下回ってもジョブを失敗させない。一方、profile が生成されない、
   またはレポート生成に失敗するなど計測基盤が壊れた場合はジョブを失敗させる。
 - Windows coverage ジョブ — OpenCppCoverage 0.9.9.0 の SHA256 検証済み installer を使い、
-  Windows Debug の CTest 子プロセスを計測する。tests / `third_party` / `build` を
+  Windows Debug の CTest 子プロセスを 2 台の runner に分割して計測する。
+  除外適用後の一覧を名前順に交互配分し、manifest と JUnit で各 shard の実行集合と
+  全 shard の重複・欠落がないことを検証する。各 shard の native coverage を統合してから
+  HTML と Cobertura を生成する。tests / `third_party` / `build` を
   集計から除き、HTML と Cobertura を `windows-opencppcoverage` artifact として
   14 日保持する。`NamedPipeTransport.cpp` を含む Windows 専用コードも対象とし、
   デバッガ下で挙動が変わるクラッシュ注入テストと、計測時に時間制限を超える
@@ -766,6 +769,7 @@ model 未指定の出力要求がファイルを生成せず失敗すること�
 
 `.github/workflows/benchmarks.yml` は main push、日次 schedule、手動実行で Linux Release の
 両 bench を実行する。
+コンパイルには §4.7 の sccache を使い、bench の計測条件は変更しない。
 workflow は直前の成功 run から `benchmark-results` artifact を取得できる場合だけ baseline
 比較を行い、悪化を GitHub Actions warning として表示する。
 今回の結果は両 bench の JSON を含む `benchmark-results` artifact として 90 日保持する。
@@ -801,6 +805,7 @@ DLL を各実行ファイルのディレクトリへ配置する。Linux preset 
 detection と未定義動作検出を fail-fast で有効化する。CTest の後に `ipc/testdata/` を
 seed corpus として `ipc_json_fuzzer` を 60 秒実行し、クラッシュ検体を診断 artifact に
 含める。この実行は週次 schedule と手動 dispatch に限り、PR の required check にはしない。
+CI では build を 4 並列、CTest を 2 並列で実行し、compiler cache は無効にする。
 
 #### 4.6.1 `tsf-tip` に対する ASan の適用範囲
 
@@ -837,7 +842,8 @@ VM 上の人間ゲートセッションに限り、対象アプリと解除手�
 
 CI のコンパイルジョブ（`windows-build` Debug/Release、`windows-llama-build`、
 `windows-vulkan-compile`、`windows-arm64-crossbuild`、`windows-no-tests`、
-`windows-coverage`、`linux-build`）は `mozilla-actions/sccache-action` で sccache を導入し、GitHub
+`windows-coverage-shard`、`linux-build`、Release と Benchmark workflow）は
+`mozilla-actions/sccache-action` で sccache を導入し、GitHub
 Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェクトを run 間再利用
 する。ルート `CMakeLists.txt` が sccache を PATH 上で自動検出して compiler launcher
 に設定するため（`AZOOKEY_USE_COMPILER_CACHE` 既定 ON）、ワークフロー側の追加設定は
@@ -848,7 +854,9 @@ Actions のキャッシュサービス（`SCCACHE_GHA_ENABLED`）でオブジェ
 
 `windows-llama-build` と `windows-vulkan-compile` はビルドを 2 並列で実行する。
 Windows coverage はキャッシュを使用しても最終リンクで PDB を生成し、
-OpenCppCoverage の計測対象と除外条件を維持する。計測 CTest は直列に実行する。
+OpenCppCoverage の計測対象と除外条件を維持する。計測 CTest は各 shard 内で直列に実行する。
+Release workflow は `SCCACHE_GHA_VERSION=release-v1` でキャッシュを分離する。
+設定アプリの MSBuild はこの compiler cache の対象外とする。
 
 `quality` ジョブは actionlint / yamlfmt / taplo の固定版バイナリを、runner の OS image・
 architecture と各ツールのバージョンを含むキーでキャッシュする。
@@ -882,8 +890,8 @@ test preset の設定をそのまま引き継ぐ。
 `azookey_check` は `AZOOKEY_CTEST_PARALLEL_JOBS`（既定値 4）を使う。
 固定値にするのは、ローカルと CI の論理プロセッサ数が異なっても同じ負荷条件で
 テストできるようにするためである。
-ASan / UBSan preset はメモリ負荷を実測していないため、当面は並列設定を継承せず
-直列で実行する。
+ASan / UBSan preset は並列設定を継承せず、ローカルでは直列で実行する。
+定期 CI は §4.6 のとおり CTest の並列度を 2 に上書きする。
 
 共有状態を使うテストだけは `RESOURCE_LOCK` で相互排他にする。
 RuntimeLogger のテストは component 名で決まる OS mutex を共有するため、

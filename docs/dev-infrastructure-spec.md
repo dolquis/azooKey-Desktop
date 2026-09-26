@@ -3087,6 +3087,25 @@ compat-report-YYYYMMDD-HHMMSS/
 `report.md` は target 固有の HTML コメント marker、全体結果、件数表、折りたたみ可能な
 case 詳細表を持ち、そのまま PR コメント本文として使える形式にする。
 
+runner は `--cases C-001,C-004` で実行するケースを選び、`--skip C-010` で除外できる。
+両方を指定した場合は、`--cases` の選択から `--skip` を除く。
+形式が `C-NNN` でない ID、重複、target の `cases` に無い ID、空になる選択は終了コード
+`64` で拒否し、出力ディレクトリを作らない。
+実行順は選択の順ではなく target の `cases` の順に従い、C-010 を最後に置く順序を保つ。
+C-001 を前提とするケースを選び C-001 を選ばなかった場合は、C-001 を前提として追加する。
+`--skip C-001` で明示的に除外した場合は追加せず、前提を持つケースを実行せずに
+`baseline-case-excluded` の `failing-skip` とする。
+除外したケースは `results` と件数に含めず、終了コードは実行したケースだけで決まる。
+
+`report.json` は `schema_version` 1 のまま、次の `case_selection` を持つ。
+
+| フィールド | 内容 |
+|---|---|
+| `executed` | `results` に載るケース。target の順 |
+| `excluded` | target の `cases` のうち実行しなかったケース。target の順 |
+| `prerequisites_added` | 前提として追加したケース（C-001） |
+| `baseline_case_excluded` | C-001 を除外したまま前提を持つケースを選んだ場合に `true` |
+
 ### 13.6 CI 連携
 
 `.github/workflows/compat.yml` に optional な `compat` ジョブを置く。

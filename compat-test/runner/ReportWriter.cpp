@@ -52,6 +52,19 @@ bool WriteTextFile(const std::filesystem::path& path, const std::string& text) {
   return stream.good();
 }
 
+azookey::ipc::json::Array ToJsonArray(const std::vector<std::string>& values) {
+  return azookey::ipc::json::Array(values.begin(), values.end());
+}
+
+std::string JoinCaseIds(const std::vector<std::string>& ids) {
+  std::string joined;
+  for (const auto& id : ids) {
+    if (!joined.empty()) joined += ", ";
+    joined += id;
+  }
+  return joined;
+}
+
 bool EnsureOutputSubdirectories(const std::filesystem::path& output_directory) {
   std::error_code ec;
   std::filesystem::create_directories(output_directory / "screenshots", ec);
@@ -110,7 +123,7 @@ ReportSummary SummarizeResults(const std::vector<CaseResult>& results) {
 }
 
 bool WriteReports(const std::filesystem::path& output_directory, const TargetConfig& target,
-                  const std::vector<CaseResult>& results) {
+                  const std::vector<CaseResult>& results, const CasePlan& plan) {
   if (!IsValidTargetId(target.id)) return false;
   if (!EnsureOutputSubdirectories(output_directory)) return false;
 
@@ -127,8 +140,18 @@ bool WriteReports(const std::filesystem::path& output_directory, const TargetCon
            << "|---|---:|\n"
            << "| Pass | " << summary.passed << " |\n"
            << "| Fail | " << summary.failed << " |\n"
-           << "| Failing skip | " << summary.failing_skipped << " |\n\n"
-           << "<details>\n"
+           << "| Failing skip | " << summary.failing_skipped << " |\n\n";
+  if (!plan.excluded.empty()) {
+    markdown << "Excluded cases (not run): " << JoinCaseIds(plan.excluded) << "\n\n";
+  }
+  if (!plan.prerequisites_added.empty()) {
+    markdown << "Prerequisite cases added: " << JoinCaseIds(plan.prerequisites_added) << "\n\n";
+  }
+  if (plan.baseline_case_excluded) {
+    markdown << "Baseline case " << kBaselineCaseId
+             << " was excluded, so the cases that depend on it are failing-skip.\n\n";
+  }
+  markdown << "<details>\n"
            << "<summary>Case details</summary>\n\n"
            << "| Case | Result | Reason | Duration (ms) | Artifact |\n"
            << "|---|---|---|---:|---|\n";
@@ -162,9 +185,16 @@ bool WriteReports(const std::filesystem::path& output_directory, const TargetCon
   json_target.emplace("app_id", target.app_id);
   json_target.emplace("automation_level", target.automation_level);
 
+  azookey::ipc::json::Object json_selection;
+  json_selection.emplace("executed", ToJsonArray(plan.executed));
+  json_selection.emplace("excluded", ToJsonArray(plan.excluded));
+  json_selection.emplace("prerequisites_added", ToJsonArray(plan.prerequisites_added));
+  json_selection.emplace("baseline_case_excluded", plan.baseline_case_excluded);
+
   azookey::ipc::json::Object root;
   root.emplace("schema_version", 1);
   root.emplace("target", std::move(json_target));
+  root.emplace("case_selection", std::move(json_selection));
   root.emplace("summary", std::move(json_summary));
   root.emplace("results", std::move(json_results));
 

@@ -26,6 +26,16 @@ cmake --build --preset windows-release --target compat_test
   --output compat-report-edge
 ```
 
+`--cases` と `--skip` で実行するケースを選べる。C-010 は Host を停止するため、
+手動の打鍵確認より前に C-010 を除いて実行し、確認の後で C-010 だけを実行できる。
+C-010 だけを選ぶと、前提の C-001 が自動で追加される。選択の規則と `report.json` の
+`case_selection` は §13.5 を参照。
+
+```powershell
+.\build\windows-release\compat-test\compat_test.exe --skip C-010 --output compat-report-no-kill
+.\build\windows-release\compat-test\compat_test.exe --cases C-010 --output compat-report-c010
+```
+
 Notepad は空の一時テキストファイル、VS Code は拡張機能を無効にした新規ウィンドウと
 一時テキストファイル、Edge は InPrivate の新規ウィンドウと外部通信を行わない一時 HTML
 を使う。runner は App Paths も検索するため、`Code.exe` / `msedge.exe` が `PATH` に無い

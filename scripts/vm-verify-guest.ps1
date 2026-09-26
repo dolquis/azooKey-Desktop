@@ -311,7 +311,11 @@ function Invoke-VmVerifyGuestCompatRun {
     [Parameter(Mandatory = $true)]
     [string]$PackageRoot,
     [Parameter(Mandatory = $true)]
-    [string]$RunRoot
+    [string]$RunRoot,
+    # compat_test.exe の --cases / --skip へそのまま渡すカンマ区切りの case ID。
+    # 空なら引数を付けず、target の全ケースを実行する。
+    [string]$Cases = "",
+    [string]$Skip = ""
   )
 
   $ErrorActionPreference = "Stop"
@@ -319,6 +323,8 @@ function Invoke-VmVerifyGuestCompatRun {
   $status = [ordered]@{
     schemaVersion = 1
     completed = $false
+    cases = $Cases
+    skip = $Skip
     sessionId = $sessionId
     bootstrapExitCode = $null
     bootstrapStatus = ""
@@ -352,13 +358,20 @@ function Invoke-VmVerifyGuestCompatRun {
     $status.inputMethod = Invoke-VmVerifyGuestInputMethodSelection
 
     $compat = Join-Path $PackageRoot "compat_test.exe"
+    $selection = ""
+    if ($Cases) {
+      $selection += " --cases $Cases"
+    }
+    if ($Skip) {
+      $selection += " --skip $Skip"
+    }
     $targets = @(Get-ChildItem -LiteralPath (Join-Path $PackageRoot "targets") `
         -Filter "*.json" -File | Sort-Object Name)
     foreach ($target in $targets) {
       $name = $target.BaseName
       $reportDirectory = Join-Path $RunRoot "compat-report-$name"
       $process = Start-Process -FilePath $compat `
-        -ArgumentList "--target `"$($target.FullName)`" --output `"$reportDirectory`"" `
+        -ArgumentList "--target `"$($target.FullName)`" --output `"$reportDirectory`"$selection" `
         -RedirectStandardOutput (Join-Path $RunRoot "compat-$name.stdout.log") `
         -RedirectStandardError (Join-Path $RunRoot "compat-$name.stderr.log") `
         -NoNewWindow -PassThru

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "runner/CaseSelection.h"
 #include "runner/CompatTypes.h"
 
 namespace azookey::compat_test {
@@ -18,6 +19,6 @@ std::filesystem::path CreateTimestampedOutputDirectory();
 bool PrepareOutputDirectory(const std::filesystem::path& output_directory);
 ReportSummary SummarizeResults(const std::vector<CaseResult>& results);
 bool WriteReports(const std::filesystem::path& output_directory, const TargetConfig& target,
-                  const std::vector<CaseResult>& results);
+                  const std::vector<CaseResult>& results, const CasePlan& plan);
 
 }  // namespace azookey::compat_test

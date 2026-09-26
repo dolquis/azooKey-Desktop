@@ -485,6 +485,50 @@ Describe "VM verification session automation" {
       }
     }
 
+    It "passes the compat case selection to the interactive runner" {
+      $root = Join-Path $TestDrive "run-case-selection"
+      Initialize-TestPackage -Root $root | Out-Null
+
+      Invoke-VmVerifySessionRun -RepositoryRoot $root -VMName "azooKey-VM" `
+        -GuestDestination "C:\azookey-verify" -Credential $testCredential `
+        -CompatCases @("C-001,C-004", "C-010") -CompatSkip "C-010" | Out-Null
+
+      Should -Invoke Invoke-VmVerifySessionGuestStep -Times 1 -Exactly -ParameterFilter {
+        $Name -eq "Invoke-VmVerifyGuestInteractiveTask" -and
+        [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(
+            ($ArgumentList[2] -split " ")[-1])) -like
+          "*Invoke-VmVerifyGuestCompatRun*-Cases 'C-001,C-004,C-010' -Skip 'C-010'"
+      }
+    }
+
+    It "omits the case selection from the runner command when none is given" {
+      $root = Join-Path $TestDrive "run-no-case-selection"
+      Initialize-TestPackage -Root $root | Out-Null
+
+      Invoke-TestRun -Root $root | Out-Null
+
+      Should -Invoke Invoke-VmVerifySessionGuestStep -Times 1 -Exactly -ParameterFilter {
+        $Name -eq "Invoke-VmVerifyGuestInteractiveTask" -and
+        [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String(
+            ($ArgumentList[2] -split " ")[-1])) -notmatch "-Cases|-Skip"
+      }
+    }
+
+    It "rejects <Case> before opening a guest session" -TestCases @(
+      @{ Case = "a malformed case ID"; CaseList = @("C-1"); SkipList = @(); Message = "*-CompatCases*'C-1'*" }
+      @{ Case = "an injected quote"; CaseList = @(); SkipList = @("C-010'; Stop-Computer"); Message = "*-CompatSkip*" }
+      @{ Case = "a duplicate case ID"; CaseList = @("C-001,C-001"); SkipList = @(); Message = "*C-001 more than once*" }
+    ) {
+      $root = Join-Path $TestDrive ("run-bad-cases-" + [guid]::NewGuid().ToString("N"))
+      Initialize-TestPackage -Root $root | Out-Null
+
+      { Invoke-VmVerifySessionRun -RepositoryRoot $root -VMName "azooKey-VM" `
+          -GuestDestination "C:\azookey-verify" -Credential $testCredential `
+          -CompatCases $CaseList -CompatSkip $SkipList } | Should -Throw -ExpectedMessage $Message
+
+      Should -Invoke Open-VmVerifySessionGuestSession -Times 0 -Exactly
+    }
+
     It "explains how to pass credentials when no prompt is available" {
       $root = Join-Path $TestDrive "run-no-prompt"
       Initialize-TestPackage -Root $root | Out-Null
@@ -992,6 +1036,27 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       }
     }
 
+    It "passes the case selection to compat_test.exe for every target and records it" {
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot `
+        -Cases "C-001,C-004" -Skip "C-010"
+
+      $status = Read-RunStatus
+      $status.completed | Should -BeTrue
+      $status.cases | Should -Be "C-001,C-004"
+      $status.skip | Should -Be "C-010"
+      Should -Invoke Start-Process -Times 2 -Exactly -ParameterFilter {
+        $ArgumentList -like "*--output*`" --cases C-001,C-004 --skip C-010"
+      }
+    }
+
+    It "runs every case when no selection is given" {
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      Should -Invoke Start-Process -Times 0 -Exactly -ParameterFilter {
+        $ArgumentList -match "--cases|--skip"
+      }
+    }
+
     It "refuses to run compat against a host in another session" {
       $script:hostSessionId = 0
 
@@ -1163,6 +1228,12 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $output = & pwsh -NoProfile -File $sessionScript -Prepare -Run -VMName "azooKey-VM" 2>&1
       $LASTEXITCODE | Should -Not -Be 0
       ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, or -Run"
+    }
+
+    It "exits non-zero when a case selection is given without -Run" {
+      $output = & pwsh -NoProfile -File $sessionScript -Restore -VMName "azooKey-VM" -CompatSkip "C-010" 2>&1
+      $LASTEXITCODE | Should -Not -Be 0
+      ($output | Out-String) | Should -Match "apply only to -Run"
     }
 
     It "exits non-zero when -VMName is missing" {

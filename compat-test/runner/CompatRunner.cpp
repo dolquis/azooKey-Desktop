@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "runner/CaseSelection.h"
 #include "runner/CompatTypes.h"
 #include "runner/ReportWriter.h"
 #include "runner/ScreenshotCapture.h"
@@ -790,7 +791,19 @@ void AutomationSession::CloseLaunchedWindow() {
 
 namespace {
 
-void PrintUsage() { std::cout << "compat_test [--target <target.json>] [--output <directory>]\n"; }
+void PrintUsage() {
+  std::cout << "compat_test [--target <target.json>] [--output <directory>]\n"
+               "            [--cases <C-NNN,...>] [--skip <C-NNN,...>]\n";
+}
+
+std::set<std::string> BaselineDependents(
+    const std::map<std::string, azookey::compat_test::CaseDefinition>& registered) {
+  std::set<std::string> dependents;
+  for (const auto& [id, definition] : registered) {
+    if (definition.requires_baseline) dependents.insert(id);
+  }
+  return dependents;
+}
 
 }  // namespace
 
@@ -804,13 +817,17 @@ int wmain(int argc, wchar_t** argv) {
   }
   std::filesystem::path target_path = AZOOKEY_COMPAT_DEFAULT_TARGET;
   std::filesystem::path output_path;
+  std::optional<std::vector<std::string>> requested_cases;
+  std::optional<std::vector<std::string>> skipped_cases;
   for (int i = 1; i < argc; ++i) {
     const std::wstring_view argument = argv[i];
     if (argument == L"--help" || argument == L"-h") {
       PrintUsage();
       return 0;
     }
-    if ((argument == L"--target" || argument == L"--output") && i + 1 >= argc) {
+    const bool takes_value = argument == L"--target" || argument == L"--output" ||
+                             argument == L"--cases" || argument == L"--skip";
+    if (takes_value && i + 1 >= argc) {
       PrintUsage();
       return 64;
     }
@@ -818,6 +835,17 @@ int wmain(int argc, wchar_t** argv) {
       target_path = argv[++i];
     } else if (argument == L"--output") {
       output_path = argv[++i];
+    } else if (argument == L"--cases" || argument == L"--skip") {
+      auto& destination = argument == L"--cases" ? requested_cases : skipped_cases;
+      if (destination) {
+        std::cerr << "--cases and --skip may each be given only once\n";
+        return 64;
+      }
+      destination = ParseCaseIdList(argv[++i]);
+      if (!destination) {
+        std::cerr << "Case lists must be comma-separated unique IDs such as C-001,C-004\n";
+        return 64;
+      }
     } else {
       PrintUsage();
       return 64;
@@ -828,17 +856,6 @@ int wmain(int argc, wchar_t** argv) {
   if (!target) {
     std::cerr << "Invalid target configuration\n";
     return 64;
-  }
-  if (output_path.empty()) output_path = CreateTimestampedOutputDirectory();
-  if (!PrepareOutputDirectory(output_path)) {
-    std::cerr << "Unable to create output directory\n";
-    return 70;
-  }
-
-  const HRESULT com_result = OleInitialize(nullptr);
-  if (FAILED(com_result)) {
-    std::cerr << "COM initialization failed\n";
-    return 70;
   }
 
   std::map<std::string, CaseDefinition> registered;
@@ -858,19 +875,52 @@ int wmain(int argc, wchar_t** argv) {
        }) {
     registered.emplace(definition.id, definition);
   }
+  const auto baseline_dependents = BaselineDependents(registered);
+
+  std::string selection_error;
+  const auto plan = PlanCaseSelection(target->cases, requested_cases,
+                                      skipped_cases.value_or(std::vector<std::string>{}),
+                                      baseline_dependents, &selection_error);
+  if (!plan) {
+    std::cerr << "Invalid case selection: " << selection_error << "\n";
+    return 64;
+  }
+  if (!plan->excluded.empty()) {
+    std::cout << "Excluded cases: ";
+    for (const auto& id : plan->excluded) std::cout << id << " ";
+    std::cout << "\n";
+  }
+  if (!plan->prerequisites_added.empty()) {
+    std::cout << "Added prerequisite case " << kBaselineCaseId << "\n";
+  }
+
+  if (output_path.empty()) output_path = CreateTimestampedOutputDirectory();
+  if (!PrepareOutputDirectory(output_path)) {
+    std::cerr << "Unable to create output directory\n";
+    return 70;
+  }
+
+  const HRESULT com_result = OleInitialize(nullptr);
+  if (FAILED(com_result)) {
+    std::cerr << "COM initialization failed\n";
+    return 70;
+  }
 
   std::vector<CaseResult> results;
   {
     AutomationSession session(*target);
     std::string start_reason;
     const bool started = session.Start(&start_reason);
-    for (const auto& case_id : target->cases) {
+    for (const auto& case_id : plan->executed) {
       CaseResult result;
       result.id = case_id;
       const auto started_at = std::chrono::steady_clock::now();
       if (!started) {
         result.status = ResultStatus::FailingSkip;
         result.reason_code = start_reason;
+      } else if (plan->baseline_case_excluded && baseline_dependents.contains(case_id)) {
+        result.status = ResultStatus::FailingSkip;
+        result.reason_code = "baseline-case-excluded";
       } else if (const auto it = registered.find(case_id); it != registered.end()) {
         result = it->second.run(session);
       } else {
@@ -889,7 +939,7 @@ int wmain(int argc, wchar_t** argv) {
     }
   }
 
-  const bool wrote_report = WriteReports(output_path, *target, results);
+  const bool wrote_report = WriteReports(output_path, *target, results, *plan);
   const auto summary = SummarizeResults(results);
   OleUninitialize();
   if (!wrote_report) return 70;

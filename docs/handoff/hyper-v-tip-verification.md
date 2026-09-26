@@ -188,6 +188,19 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   回収先は `-ResultsDirectory` で変えられる。
 - `compat_test.exe` の fail、report の欠落、タイムアウト（既定 45 分、`-TimeoutMinutes`）は非ゼロ終了にする。
   failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。
+- `-CompatCases` と `-CompatSkip` は、すべての target の `compat_test.exe` へ `--cases` / `--skip`
+  として渡る（`C-001,C-004` のようなカンマ区切りか配列で指定する）。形式が `C-NNN` でない値は
+  ゲストへ接続する前に拒否する。C-010 は Host を停止するため、手順 4 の打鍵確認と組み合わせる
+  場合は次の順に分ける。C-010 だけの実行では前提の C-001 が自動で追加される。
+
+  ```powershell
+  # 1. Host を停止しないケースだけを先に回し、compat の自動判定を取る
+  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatSkip C-010
+  # 2. 手順 4 の打鍵確認（基本セッション）を行う
+  # 3. 最後に Host 停止と復帰の C-010 だけを回す
+  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-010
+  ```
+
 - TIP 登録を含むため、`-Run` は人間がホストで実行する。結果は層 1 の先行検証であり、
   手順 4 の基本セッションでの確認と人間ゲートを置き換えない。
 

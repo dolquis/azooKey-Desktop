@@ -335,7 +335,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/${{ matrix.preset }}/_deps
-          key: googletest-v1.17.0-${{ runner.os }}-${{ matrix.config }}
+          key: googletest-v1.18.0-${{ runner.os }}-${{ matrix.config }}
 
       - name: Configure
         id: configure
@@ -906,9 +906,9 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/linux-debug/_deps
-          key: googletest-v1.17.0-${{ runner.os }}-Debug
+          key: googletest-v1.18.0-${{ runner.os }}-Debug
           restore-keys: |
-            googletest-v1.17.0-${{ runner.os }}-
+            googletest-v1.18.0-${{ runner.os }}-
 
       - name: Configure
         run: cmake --preset linux-debug -DAZOOKEY_FETCH_GOOGLETEST=ON
@@ -949,9 +949,9 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/linux-coverage/_deps
-          key: googletest-v1.17.0-${{ runner.os }}-Coverage
+          key: googletest-v1.18.0-${{ runner.os }}-Coverage
           restore-keys: |
-            googletest-v1.17.0-${{ runner.os }}-
+            googletest-v1.18.0-${{ runner.os }}-
 
       - name: Configure coverage build
         run: cmake --preset linux-coverage -DAZOOKEY_FETCH_GOOGLETEST=ON
@@ -1056,9 +1056,9 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/windows-debug/_deps
-          key: googletest-v1.17.0-${{ runner.os }}-Coverage-Debug
+          key: googletest-v1.18.0-${{ runner.os }}-Coverage-Debug
           restore-keys: |
-            googletest-v1.17.0-${{ runner.os }}-
+            googletest-v1.18.0-${{ runner.os }}-
 
       - name: Install pinned OpenCppCoverage
         shell: pwsh

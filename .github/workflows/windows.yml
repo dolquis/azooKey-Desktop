@@ -255,6 +255,9 @@ jobs:
             settings-json-schema-metaschema,settings-json-schema-sample
         run: pre-commit run --all-files --show-diff-on-failure
 
+      - name: Test coverage shard contracts
+        run: python scripts/tests/test_coverage_shards.py
+
   dependency-review:
     name: Dependency review
     needs: changes
@@ -1024,15 +1027,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  windows-coverage:
-    name: Windows coverage (informational)
+  windows-coverage-shard:
+    name: Windows coverage shard ${{ matrix.shard }}
     needs: changes
     if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     env:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      COVERAGE_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1096,8 +1104,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $reportDir = Join-Path $env:GITHUB_WORKSPACE 'build/windows-debug/coverage'
+          $reportDir = Join-Path $env:GITHUB_WORKSPACE "build/windows-debug/coverage/shard-$env:COVERAGE_SHARD"
           New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+          # Keep the existing instrumentation-only exclusions; ordinary Debug runs them.
+          ctest --preset windows-debug --show-only=json-v1 --exclude-regex '^(CrashReportingTest[.]|DiagnosticsTest[.]CollectionBounds)' |
+            Set-Content -LiteralPath (Join-Path $reportDir 'ctest.json') -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/coverage-shards.py plan --ctest-json (Join-Path $reportDir 'ctest.json') --shard $env:COVERAGE_SHARD --count 2 --output-dir $reportDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $coverageExe = Join-Path $env:RUNNER_TEMP 'OpenCppCoverage/OpenCppCoverage.exe'
           $arguments = @(
             '--cover_children',
@@ -1106,14 +1120,92 @@ jobs:
             '--excluded_sources=*\tests\*',
             '--excluded_sources=*\third_party\*',
             '--excluded_sources=*\build\*',
-            "--export_type=html:$(Join-Path $reportDir 'html')",
-            "--export_type=cobertura:$(Join-Path $reportDir 'coverage.xml')",
-            # The debugger changes deliberate crash behavior; large log-bound tests hit
-            # their normal 60-second CTest timeout under instrumentation.
+            "--export_type=binary:$(Join-Path $reportDir 'coverage.cov')",
             '--', 'ctest.exe', '--preset', 'windows-debug', '--no-tests=error', '--parallel', '1',
-            '--exclude-regex', '^(CrashReportingTest[.]|DiagnosticsTest[.]CollectionBounds)'
+            '--tests-from-file', (Join-Path $reportDir 'tests.txt'),
+            '--output-junit', (Join-Path $reportDir 'junit.xml')
           )
           & $coverageExe @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/coverage-shards.py verify-run --manifest (Join-Path $reportDir 'manifest.json') --junit (Join-Path $reportDir 'junit.xml')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows coverage shard
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-opencppcoverage-shard-${{ matrix.shard }}
+          path: build/windows-debug/coverage/shard-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-coverage:
+    name: Windows coverage (informational)
+    needs: [changes, windows-coverage-shard]
+    if: always() && !cancelled() && needs.changes.outputs.build == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Require successful coverage shards
+        shell: pwsh
+        env:
+          SHARDS_RESULT: ${{ needs.windows-coverage-shard.result }}
+        run: |
+          if ($env:SHARDS_RESULT -ne 'success') { throw 'Coverage shards did not all succeed' }
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: false
+
+      - name: Download coverage shard 1
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-opencppcoverage-shard-1
+          path: build/windows-debug/coverage/shards/shard-1
+
+      - name: Download coverage shard 2
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-opencppcoverage-shard-2
+          path: build/windows-debug/coverage/shards/shard-2
+
+      - name: Install pinned OpenCppCoverage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '0.9.9.0'
+          $installer = Join-Path $env:RUNNER_TEMP "OpenCppCoverageSetup-x64-$version.exe"
+          $url = "https://github.com/OpenCppCoverage/OpenCppCoverage/releases/download/release-$version/OpenCppCoverageSetup-x64-$version.exe"
+          & curl.exe --fail --location --silent --show-error $url --output $installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = '2295A733DA39412C61E4F478677519DD0BB1893D88313CE56B468C9E50517888'
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash
+          if ($actual -ne $expected) { throw "OpenCppCoverage installer SHA256 mismatch" }
+          $toolDir = Join-Path $env:RUNNER_TEMP 'OpenCppCoverage'
+          $process = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$toolDir"
+          ) -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "OpenCppCoverage installer failed: $($process.ExitCode)" }
+
+      - name: Validate and merge coverage shards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reportDir = Join-Path $env:GITHUB_WORKSPACE 'build/windows-debug/coverage'
+          $shardsDir = Join-Path $reportDir 'shards'
+          python scripts/coverage-shards.py verify-all --root $shardsDir --count 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($shard in 1, 2) {
+            $dir = Join-Path $shardsDir "shard-$shard"
+            python scripts/coverage-shards.py verify-run --manifest (Join-Path $dir 'manifest.json') --junit (Join-Path $dir 'junit.xml')
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $coverageExe = Join-Path $env:RUNNER_TEMP 'OpenCppCoverage/OpenCppCoverage.exe'
+          # Native merge unions coverage by source location; percentages are never averaged.
+          & $coverageExe "--input_coverage=$(Join-Path $shardsDir 'shard-1/coverage.cov')" `
+            "--input_coverage=$(Join-Path $shardsDir 'shard-2/coverage.cov')" `
+            "--export_type=html:$(Join-Path $reportDir 'html')" `
+            "--export_type=cobertura:$(Join-Path $reportDir 'coverage.xml')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $xmlPath = Join-Path $reportDir 'coverage.xml'

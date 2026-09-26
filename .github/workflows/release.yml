@@ -27,6 +27,11 @@ jobs:
     name: Build unsigned MSI and draft release
     runs-on: windows-2022
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      # Keep release objects separate from the ordinary CI cache namespace.
+      SCCACHE_GHA_VERSION: "release-v1"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     if: ${{ vars.RELEASE_ENABLED == 'true' }} # 人間が repository variable で有効化する。
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -36,6 +41,8 @@ jobs:
           submodules: false
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Resolve MSI version
         id: msi-version
         shell: pwsh
@@ -69,10 +76,14 @@ jobs:
         env:
           PRODUCT_VERSION: ${{ steps.msi-version.outputs.version }}
         run: cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON "-DAZOOKEY_PRODUCT_VERSION=$env:PRODUCT_VERSION"
-      - name: Build
-        run: cmake --build --preset windows-release --parallel 1
-      - name: Build self-contained settings app
-        run: cmake --build --preset windows-release --target azookey_settings --parallel 1
+      # The settings custom target has its own MSBuild output/intermediate paths.
+      # One Ninja invocation schedules it alongside the native default targets.
+      - name: Build native targets and self-contained settings app
+        run: cmake --build --preset windows-release --target all azookey_settings --parallel 2
+      - name: Report sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats
       - name: Verify settings product version
         shell: pwsh
         env:

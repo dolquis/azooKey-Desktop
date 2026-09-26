@@ -15,14 +15,23 @@ jobs:
   benchmark:
     name: Release benchmark artifacts
     runs-on: ubuntu-24.04
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Configure Release benchmarks
         run: >-
           cmake -S . -B build/benchmark -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_BENCH_GIT_COMMIT=${{ github.sha }}
       - name: Build benchmarks
         run: >-
           cmake --build build/benchmark --target azookey_bench azookey_zenzai_bench
+      - name: Report sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats
       - name: Download latest successful baseline
         id: baseline
         env:

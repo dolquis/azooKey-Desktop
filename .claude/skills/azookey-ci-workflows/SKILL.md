@@ -27,7 +27,7 @@ PR の唯一の機械的ゲートなので、弱めるときは理由を PR 本�
 ## 必須ガードレール
 
 - GitHub Actions は commit SHA で pin し、末尾コメントにバージョンを書く。ツールは版を固定する
-  （例 `check-jsonschema==0.37.3`、PSScriptAnalyzer `1.24.0`、gitleaks `v8.30.1`）。
+  （例 `check-jsonschema==0.38.2`、PSScriptAnalyzer `1.25.0`、gitleaks `v8.30.1`）。
   dependabot の更新以外で pin を緩めない。
 - `secret-scan`、`dependency-review`、`docs-lint`、`settings-schema` の検査を path filter や
   `continue-on-error` で迂回しない。

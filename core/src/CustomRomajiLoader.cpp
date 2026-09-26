@@ -81,6 +81,7 @@ CustomRomajiParseResult CustomRomajiLoader::Parse(std::string_view tsv) {
     tsv.remove_prefix(end + 1);
     ++line_number;
   }
+  if (table->empty()) table.reset();
   return {std::move(table), std::move(invalid_lines)};
 }
 

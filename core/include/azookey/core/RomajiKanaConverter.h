@@ -15,6 +15,9 @@ class RomajiKanaConverter {
   // Set only at a composition boundary; copies retain their own table snapshot.
   // A null table uses the built-in romaji mappings.
   void SetCustomTable(std::shared_ptr<const CustomRomajiTable> table);
+  bool HasCustomTable() const { return static_cast<bool>(custom_table_); }
+  // Whether this ASCII character continues a rule or begins one after pending bytes flush.
+  bool CanContinueCustomWith(char ascii) const;
   bool HasPending() const { return !pending_.empty(); }
   void PopPendingPreview();
   std::string PreviewPending() const;

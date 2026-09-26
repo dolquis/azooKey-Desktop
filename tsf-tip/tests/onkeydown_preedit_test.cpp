@@ -110,6 +110,31 @@ class OemCompositionTranslationGuard {
   }
 };
 
+std::optional<WCHAR> TranslateCustomRomajiForTest(WPARAM key, LPARAM) {
+  std::array<BYTE, 256> keyboard_state{};
+  if (!GetKeyboardState(keyboard_state.data())) return std::nullopt;
+  if (key == '2' && (keyboard_state[VK_SHIFT] & 0x80) != 0) return L'@';
+  if (key == '1' || key == '2') return static_cast<WCHAR>(key);
+  if (key == VK_OEM_PERIOD) return L'。';
+  if (key >= 'A' && key <= 'Z') return static_cast<WCHAR>(key + ('a' - 'A'));
+  return std::nullopt;
+}
+
+std::optional<WCHAR> TranslateJapanesePeriodForTest(WPARAM key, LPARAM key_data) {
+  if (key == VK_OEM_PERIOD) return L'。';
+  return TranslateDefaultOemCompositionCharacterForTest(key, key_data);
+}
+
+class CustomRomajiTranslationGuard {
+ public:
+  CustomRomajiTranslationGuard() {
+    azookey::tsf::testing::SetTranslateCustomRomajiCharacterForTest(&TranslateCustomRomajiForTest);
+  }
+  ~CustomRomajiTranslationGuard() {
+    azookey::tsf::testing::ClearTranslateCustomRomajiCharacterForTest();
+  }
+};
+
 std::optional<char> TranslateDefaultAsciiDecimalDigitForTest(WPARAM virtual_key, LPARAM) {
   if (virtual_key >= VK_NUMPAD0 && virtual_key <= VK_NUMPAD9) {
     return static_cast<char>('0' + (virtual_key - VK_NUMPAD0));
@@ -2549,6 +2574,41 @@ TEST(TsfTipOnKeyDownPreeditTest, CustomRomajiAppliesOnNextInputWithoutChangingPr
   EXPECT_TRUE(h.Press('K'));
   EXPECT_TRUE(h.Press('A'));
   EXPECT_EQ(h.service.preedit_kana_, "加");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, CustomRomajiSymbolsAndDigitsReachCoreAndBatch) {
+  TextServiceHarness h;
+  OemCompositionTranslationGuard oem_translation;
+  CustomRomajiTranslationGuard custom_translation;
+  azookey::tsf::testing::SetTranslateOemCompositionCharacterForTest(
+      &TranslateJapanesePeriodForTest);
+  h.service.set_romaji_table_for_test(
+      azookey::core::CustomRomajiLoader::Parse("z.\t…\n@@\t@\n12\t十二\n").table);
+
+  EXPECT_TRUE(h.Press('Z'));
+  EXPECT_TRUE(h.TestPress(VK_OEM_PERIOD));
+  EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "…");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+
+  h.keyboard_state.SetDown(VK_SHIFT, true);
+  EXPECT_TRUE(h.TestPress('2'));
+  EXPECT_TRUE(h.Press('2'));
+  EXPECT_TRUE(h.Press('2'));
+  EXPECT_EQ(h.service.preedit_kana_, "@");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+  h.keyboard_state.SetDown(VK_SHIFT, false);
+
+  EXPECT_TRUE(h.TestPress('1'));
+  EXPECT_TRUE(h.Press('1'));
+  EXPECT_TRUE(h.Press('2'));
+  EXPECT_EQ(h.service.preedit_kana_, "十二");
+  EXPECT_TRUE(h.Press(VK_ESCAPE));
+
+  h.service.set_batch_romaji_options_for_test(true);
+  EXPECT_TRUE(h.Press('Z'));
+  EXPECT_TRUE(h.Press(VK_OEM_PERIOD));
+  EXPECT_EQ(h.service.preedit_kana_, "…");
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, StandalonePunctuationStartsAndClearsDocumentComposition) {

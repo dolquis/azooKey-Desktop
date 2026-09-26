@@ -100,6 +100,12 @@ TEST_F(LocalSettingsTest, CustomRomajiLoadsReloadsAndFallsBackWhenMissing) {
     const auto snapshot = reader.RomajiSnapshot();
     return snapshot && snapshot->contains("ka") && snapshot->at("ka").output == "加";
   }));
+  write_table("");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.RomajiSnapshot(); }));
+  write_table("ka\t加\n");
+  ASSERT_TRUE(WaitUntil([&] { return reader.RomajiSnapshot() != nullptr; }));
+  write_table("\xff\xfe");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.RomajiSnapshot(); }));
   ASSERT_TRUE(std::filesystem::remove(table_path));
   ASSERT_TRUE(WaitUntil([&] { return !reader.RomajiSnapshot(); }));
   Write(R"({"inputStyle":"default"})");

@@ -57,6 +57,15 @@ TEST(CustomRomajiTest, CountsSupplementaryCharactersAsTwoUtf16Units) {
   EXPECT_EQ(result.table->at("empty").output, "");
 }
 
+TEST(CustomRomajiTest, EmptyOrInvalidOnlyTableFallsBackToBuiltIn) {
+  for (const std::string tsv :
+       {std::string{}, std::string{"# comment\n"}, std::string{"\xff\xfe"}}) {
+    const auto result = CustomRomajiLoader::Parse(tsv);
+    EXPECT_FALSE(result.table);
+    EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("ka", result.table), "か");
+  }
+}
+
 TEST(CustomRomajiTest, AcceptsEightAsciiInputAndRejectsInvalidUtf8Sequences) {
   const std::string invalid_utf8 = std::string("bad\t") + "\xed\xa0\x80" + "\n";
   const auto result = CustomRomajiLoader::Parse("12345678\t八\n" + invalid_utf8);
@@ -78,6 +87,28 @@ TEST(CustomRomajiTest, CustomTableReplacesBuiltInMappings) {
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("ka", parsed.table), "カ");
   EXPECT_EQ(RomajiKanaConverter::Preview("ka", parsed.table), "カ");
   EXPECT_EQ(RomajiKanaConverter::ConvertForCommit("ka"), "か");
+}
+
+TEST(CustomRomajiTest, CustomAsciiSymbolsAndDigitsAreRulePrefixes) {
+  const auto table = CustomRomajiLoader::Parse("z.\t…\n@@\t@\n12\t十二\n").table;
+  RomajiKanaConverter converter;
+  converter.SetCustomTable(table);
+  EXPECT_TRUE(converter.CanContinueCustomWith('z'));
+  EXPECT_FALSE(converter.CanContinueCustomWith('.'));
+  EXPECT_EQ(converter.Feed('z'), "");
+  EXPECT_TRUE(converter.CanContinueCustomWith('.'));
+  EXPECT_EQ(converter.Feed('.'), "…");
+  EXPECT_EQ(converter.Flush(), "");
+  converter.Reset();
+  EXPECT_EQ(converter.Feed('z'), "");
+  EXPECT_TRUE(converter.CanContinueCustomWith('@'));
+  EXPECT_EQ(converter.Feed('@'), "z");
+  EXPECT_EQ(FeedAll(converter, "@"), "@");
+  converter.Reset();
+  EXPECT_TRUE(converter.CanContinueCustomWith('@'));
+  EXPECT_EQ(FeedAll(converter, "@@"), "@");
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "12"), "十二");
 }
 
 TEST(CustomRomajiTest, ChoosesLongestMatchAndRetainsPartialPrefixUntilFlush) {

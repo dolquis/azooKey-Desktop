@@ -315,6 +315,8 @@ void TipLocalSettings::Reload() noexcept {
                 {{"count", static_cast<uint64_t>(romaji.invalid_lines.size())},
                  {"first_line", static_cast<uint64_t>(romaji.invalid_lines.front())}});
           }
+          if (!romaji.table)
+            WatchLogger().Log(logging::RuntimeLogLevel::Warn, "romaji_table_no_valid_rows");
           romaji_table = std::move(romaji.table);
         }
       }

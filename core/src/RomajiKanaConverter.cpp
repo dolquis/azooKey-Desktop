@@ -107,6 +107,18 @@ void RomajiKanaConverter::SetCustomTable(std::shared_ptr<const CustomRomajiTable
   custom_table_ = std::move(table);
 }
 
+bool RomajiKanaConverter::CanContinueCustomWith(char ascii) const {
+  if (!custom_table_ || static_cast<unsigned char>(ascii) > 0x7f) return false;
+  std::string prefix = pending_;
+  const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ascii)));
+  prefix.push_back(lower);
+  const auto starts_rule = [&](std::string_view candidate) {
+    const auto match = custom_table_->lower_bound(candidate);
+    return match != custom_table_->end() && match->first.starts_with(candidate);
+  };
+  return starts_rule(prefix) || (!pending_.empty() && starts_rule(std::string_view(&lower, 1)));
+}
+
 void RomajiKanaConverter::PopPendingPreview() {
   if (pending_.empty()) return;
   const std::string previous_preview = PreviewPending();

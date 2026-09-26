@@ -73,6 +73,8 @@ void SetTranslateOemCompositionCharacterForTest(
     TranslateOemCompositionCharacterFnForTest translate_character);
 void ClearTranslateOemCompositionCharacterForTest();
 void SetTranslateBracketCharacterForTest(TranslateOemCompositionCharacterFnForTest translate);
+void SetTranslateCustomRomajiCharacterForTest(TranslateOemCompositionCharacterFnForTest translate);
+void ClearTranslateCustomRomajiCharacterForTest();
 void ClearTranslateBracketCharacterForTest();
 std::optional<char> TranslateAsciiDecimalDigitUsingWin32ForTest(WPARAM virtual_key,
                                                                 LPARAM key_data);

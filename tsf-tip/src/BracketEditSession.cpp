@@ -1,5 +1,6 @@
 #include "azookey/tsf/BracketEditSession.h"
 
+#include <wil/com.h>
 #include <wrl/client.h>
 
 #include <array>
@@ -411,8 +412,8 @@ HRESULT BracketEditSession::Finish(TextService& service, ITfContext* context, Tf
     hr = composition->EndComposition(cookie);
     if (FAILED(hr)) return hr;
     if (service.composition_ == composition.Get()) {
-      service.composition_->Release();
-      service.composition_ = nullptr;
+      wil::com_ptr_nothrow<ITfComposition> completed;
+      completed.attach(std::exchange(service.composition_, nullptr));
     }
     service.bracket_composition_ = false;
     // The text is already finalized. A caret failure cannot be retried as a

@@ -99,7 +99,7 @@ set(AZOOKEY_LLAMA_CPP_GIT_TAG
     "427291b5b34cd914a31b3fd3b61a68f6184f4b9f" CACHE STRING
     "Pinned llama.cpp revision used when AZOOKEY_FETCH_LLAMA_CPP is ON")
 set(AZOOKEY_WIL_GIT_TAG
-    "b6ec76a2d9a609897f25a7fa0a0bdf4238e94e35" CACHE STRING
+    "cbf677fb0a942557d08fd129f4c106a76247b2ec" CACHE STRING
     "Pinned WIL revision used when AZOOKEY_FETCH_WIL is ON")
 set(AZOOKEY_BACKEND "cpu" CACHE STRING "Default inference backend: cpu, cuda or vulkan")
 set_property(CACHE AZOOKEY_BACKEND PROPERTY STRINGS cpu cuda vulkan)

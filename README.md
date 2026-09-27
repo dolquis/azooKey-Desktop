@@ -80,7 +80,7 @@ CTest を起動する target で、古い実行ファイルへ `ctest` だけを
 ローカルに見つからないときに `FetchContent` でダウンロードする。システムに
 GoogleTest を導入済みなら省略可。フラグなし・未導入の場合はテストのみスキップ
 してビルドは継続する（オフライン環境向け）。
-WIL は commit SHA に固定した header-only submodule で、Windows IPC のビルド前に
+WIL は commit SHA に固定した header-only submodule で、Windows IPC と TIP のビルド前に
 `git submodule update --init third_party/wil` で初期化する。CI など submodule を使わない
 環境では `-DAZOOKEY_FETCH_WIL=ON` で同じ revision を取得できる。既定値は no-egress の
 ため `OFF` とする。

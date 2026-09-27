@@ -134,6 +134,19 @@ void TracePhase(const std::string& trace_id, azookey::logging::Phase phase,
   }
 }
 
+void TraceKeyDown(const std::string& trace_id) noexcept {
+  try {
+    if (!TipRuntimeLogger().enabled() || trace_id.empty()) return;
+    RuntimeLog(
+        azookey::logging::RuntimeLogLevel::Info, "trace_phase",
+        {{"trace_id", SafeLogText(trace_id)},
+         {"phase",
+          SafeLogText(std::string(azookey::logging::PhaseName(azookey::logging::Phase::KeyDown)))},
+         {"t_ms", 0.0}});
+  } catch (...) {
+  }
+}
+
 class ScopedTracePhase {
  public:
   ScopedTracePhase(const std::string& trace_id, azookey::logging::Phase phase)
@@ -1715,7 +1728,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   active_key_trace_active_ = true;
   active_key_trace_id_ = NewTraceIdNoThrow();
   active_key_trace_start_ = std::chrono::steady_clock::now();
-  TracePhase(active_key_trace_id_, logging::Phase::KeyDown, 0.0);
+  TraceKeyDown(active_key_trace_id_);
   const bool bracket_claimed =
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
@@ -4161,10 +4174,8 @@ void TextService::ServeConnection() {
             std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
             if (IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) &&
                 ipc_pending_trace_id_ == trace_id) {
-              live_conversion_result_ = LiveConversionResult{req_id, reading, payload->surface};
-              candidates_trace_id_ = trace_id;
-              candidates_trace_start_ = trace_start;
-              candidates_trace_pending_ = true;
+              live_conversion_result_ =
+                  LiveConversionResult{req_id, reading, payload->surface, trace_id, trace_start};
               notify_ui = true;
             }
           }
@@ -4233,8 +4244,8 @@ void TextService::ServeConnection() {
         candidates_trace_start_ = trace_start;
         candidates_trace_pending_ = true;
         if (apply_live_preview && !candidate_window_show_pending_ && !candidates_.empty()) {
-          live_conversion_result_ =
-              LiveConversionResult{req_id, reading, candidates_.front().field.surface};
+          live_conversion_result_ = LiveConversionResult{
+              req_id, reading, candidates_.front().field.surface, trace_id, trace_start};
         }
         cached_batch_segments_.clear();
         if (candidate_window_show_pending_) {
@@ -4589,7 +4600,8 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     request = std::move(ipc_prediction_request_);
     ipc_prediction_request_.reset();
   }
-  if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed))
+  if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed) ||
+      !prediction_allowed_.load(std::memory_order_relaxed))
     return;
   const auto retry_dropped_request = [&] {
     if (ipc_stop_.load(std::memory_order_relaxed)) return;
@@ -4604,7 +4616,8 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     if (notify) candidate_ui_.PostCandidatesReady();
   };
   if (prediction_settings_changed_.load(std::memory_order_acquire) ||
-      prediction_settings_refreshing_.load(std::memory_order_acquire)) {
+      prediction_settings_refreshing_.load(std::memory_order_acquire) ||
+      !prediction_allowed_.load(std::memory_order_relaxed)) {
     retry_dropped_request();
     return;
   }
@@ -4634,6 +4647,15 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
       ipc_inflight_trace_id_.clear();
     }
   };
+  // The settings watcher may revoke permission while the payload is built.
+  if (prediction_settings_changed_.load(std::memory_order_acquire) ||
+      prediction_settings_refreshing_.load(std::memory_order_acquire) ||
+      secure_input_.load(std::memory_order_relaxed) ||
+      !prediction_allowed_.load(std::memory_order_relaxed)) {
+    clear_inflight();
+    retry_dropped_request();
+    return;
+  }
   if (!ipc_client_.Send(envelope)) {
     clear_inflight();
     retry_dropped_request();
@@ -4737,6 +4759,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   decision.backend = ai_settings.backend;
   decision.detailed_logging_allowed = ai_settings.privacy_policy.detailed_logging_allowed;
   decision.learning_allowed = ai_settings.privacy_policy.learning_allowed;
+  decision.prediction_allowed = ai_settings.prediction_allowed;
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
@@ -4754,6 +4777,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     const auto mode = value.GetString("privacyMode").value_or("inherit");
     if (mode == "secure") {
       decision.secure = true;
+      decision.prediction_allowed = false;
       if (evaluate_ai) decision.ai = {};
     } else if (mode == "private") {
       if (evaluate_ai) decision.ai.external = false;
@@ -4769,10 +4793,12 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   if (decision.secure) {
     decision.ai = {};
     decision.learning_allowed = false;
+    decision.prediction_allowed = false;
   }
   // A failed scope probe must never unlock development body logging.
   decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
   secure_input_.store(decision.secure, std::memory_order_relaxed);
+  prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
   return decision;
 }
 
@@ -5208,6 +5234,12 @@ void TextService::RefreshPrediction(ITfContext* context) {
     prediction_last_query_key_.clear();
     return;
   }
+  if (!prediction_allowed_.load(std::memory_order_relaxed)) {
+    ClearPrediction();
+    prediction_cache_.clear();
+    prediction_last_query_key_.clear();
+    return;
+  }
   if (!context || !core_input_active_ || !keyboard_open_ || alnum_mode_ ||
       candidate_ui_.IsShowing() ||
       (input_state_.kind() != core::InputStateKind::Composing &&
@@ -5276,7 +5308,8 @@ void TextService::ApplyPredictionResult() {
     return;
   }
   if (!result || !active_context_ || secure_input_.load(std::memory_order_relaxed) ||
-      candidate_ui_.IsShowing() || input_state_.confirmed_kana() != result->kana ||
+      !prediction_allowed_.load(std::memory_order_relaxed) || candidate_ui_.IsShowing() ||
+      input_state_.confirmed_kana() != result->kana ||
       prediction_left_context_ != result->left_side_context)
     return;
   {
@@ -5340,16 +5373,30 @@ void TextService::ApplyLiveConversionResult() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, result->request_id)) return;
   }
+  const auto ui_start = TipRuntimeLogger().enabled() && !result->trace_id.empty()
+                            ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
   const std::string previous_marked = core_marked_surface_;
   const std::string previous_reading = live_display_reading_;
   const std::string previous_surface = live_display_surface_;
   live_display_reading_ = result->reading;
   live_display_surface_ = result->surface;
   if (core_input_active_) core_marked_surface_ = result->surface;
-  if (RequestPreeditUpdate(active_context_) == E_OUTOFMEMORY) {
+  const HRESULT update_hr = RequestPreeditUpdate(active_context_);
+  if (update_hr == E_OUTOFMEMORY) {
     core_marked_surface_ = previous_marked;
     live_display_reading_ = previous_reading;
     live_display_surface_ = previous_surface;
+    return;
+  }
+  if (SUCCEEDED(update_hr) && ui_start != std::chrono::steady_clock::time_point{}) {
+    const auto ui_end = std::chrono::steady_clock::now();
+    TracePhase(result->trace_id, logging::Phase::UiApply,
+               std::chrono::duration<double, std::milli>(ui_end - ui_start).count());
+    if (result->trace_start != std::chrono::steady_clock::time_point{}) {
+      TracePhase(result->trace_id, logging::Phase::Total,
+                 std::chrono::duration<double, std::milli>(ui_end - result->trace_start).count());
+    }
   }
 }
 
@@ -5759,10 +5806,12 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
   // message, learning and prediction traffic never leaves the TIP while the
   // context is secure. Conversion traffic is not suppressed: the user still has
   // to be able to type in a password manager's notes field.
-  if (secure_input_.load(std::memory_order_relaxed) &&
-      (type == ipc::MessageType::CommitObservation ||
-       type == ipc::MessageType::CommitSegmentsObservation ||
-       type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions))
+  if ((secure_input_.load(std::memory_order_relaxed) &&
+       (type == ipc::MessageType::CommitObservation ||
+        type == ipc::MessageType::CommitSegmentsObservation ||
+        type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions)) ||
+      (type == ipc::MessageType::QueryPredictions &&
+       !prediction_allowed_.load(std::memory_order_relaxed)))
     return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back(

@@ -129,23 +129,6 @@ TEST(RuntimeLoggerTest, ErrorCategoryAndLatencyUseCanonicalFields) {
       R"({"ts":"2026-09-27T00:00:00.000Z","component":"host","level":"error","event":"invalid_batch_request","request_id":73,"error_code":"protocol","latency_ms":1.5})");
 }
 
-TEST(RuntimeLoggerTest, TraceIdOnlyRecordsCanonicalUuidV7) {
-  RuntimeLogRecord record{
-      "2026-09-27T00:00:00.000Z",
-      "host",
-      RuntimeLogLevel::Info,
-      "trace_phase",
-      {RuntimeLogField{"trace_id", SafeLogText("private-prompt-text")}},
-  };
-  const auto invalid = azookey::logging::SerializeRuntimeLogRecord(record);
-  EXPECT_NE(invalid.find("\"trace_id\":\"***redacted***\""), std::string::npos);
-  EXPECT_EQ(invalid.find("private-prompt-text"), std::string::npos);
-
-  record.fields[0].value = SafeLogText("018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2");
-  const auto valid = azookey::logging::SerializeRuntimeLogRecord(record);
-  EXPECT_NE(valid.find("\"trace_id\":\"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2\""), std::string::npos);
-}
-
 TEST(RuntimeLoggerTest, IpcTransitionKeepsCauseAndNumericProcessIdentity) {
   RuntimeLogRecord record{
       "2026-09-27T00:00:00.000Z",
@@ -191,6 +174,27 @@ TEST(RuntimeLoggerTest, SensitiveBodiesAreRedacted) {
   EXPECT_EQ(serialized.find("window_title"), std::string::npos);
   EXPECT_NE(serialized.find("***redacted***"), std::string::npos);
   EXPECT_NE(serialized.find("\"candidate_count\":3"), std::string::npos);
+}
+
+TEST(RuntimeLoggerTest, TraceIdFieldRedactsInvalidClientText) {
+  const std::string valid = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  RuntimeLogRecord record{"2026-09-28T00:00:00.000Z",
+                          "host",
+                          RuntimeLogLevel::Info,
+                          "trace_phase",
+                          {RuntimeLogField{"trace_id", SafeLogText(valid)},
+                           RuntimeLogField{"phase", SafeLogText("model_inference")}}};
+  const auto valid_json = azookey::logging::SerializeRuntimeLogRecord(record);
+  EXPECT_NE(valid_json.find("\"trace_id\":\"" + valid + "\""), std::string::npos);
+
+  record.fields[0].value = SafeLogText("secret-ime-input\nmore-text");
+  const auto invalid_json = azookey::logging::SerializeRuntimeLogRecord(record);
+  EXPECT_EQ(invalid_json.find("secret-ime-input"), std::string::npos);
+  EXPECT_NE(invalid_json.find("\"trace_id\":\"***redacted***\""), std::string::npos);
+
+  record.fields[0].value = uint64_t{42};
+  const auto numeric_json = azookey::logging::SerializeRuntimeLogRecord(record);
+  EXPECT_NE(numeric_json.find("\"trace_id\":\"***redacted***\""), std::string::npos);
 }
 
 TEST(RuntimeLoggerTest, EmptyAndReservedFieldsAreSuppressed) {

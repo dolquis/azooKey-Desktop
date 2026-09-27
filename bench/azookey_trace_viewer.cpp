@@ -76,12 +76,14 @@ TraceSummary ReadTrace(const std::filesystem::path& path) {
       WarnSkipped(summary, line_number, "unknown phase");
       continue;
     }
-    const auto latency_ms = value->GetNumber("latency_ms");
-    // key_down is a zero-offset anchor in the M51 schema and may carry only t_ms.
-    if (*phase == azookey::logging::PhaseName(azookey::logging::Phase::KeyDown) && !latency_ms) {
+    // key_down is an offset anchor, never a duration sample.
+    if (*phase == azookey::logging::PhaseName(azookey::logging::Phase::KeyDown)) {
       const auto offset_ms = value->GetNumber("t_ms");
       if (offset_ms && std::isfinite(*offset_ms) && *offset_ms == 0.0) continue;
+      WarnSkipped(summary, line_number, "invalid key_down anchor");
+      continue;
     }
+    const auto latency_ms = value->GetNumber("latency_ms");
     if (!latency_ms || !std::isfinite(*latency_ms) || *latency_ms < 0.0) {
       WarnSkipped(summary, line_number, "missing or invalid latency_ms");
       continue;

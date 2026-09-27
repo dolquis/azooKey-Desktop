@@ -408,6 +408,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // bookkeeping does not touch it, so ClearBatchState cannot reopen the gate in
   // PostIpcSend. Atomic because it guards a queue the IPC worker also drains.
   std::atomic<bool> secure_input_{false};
+  // The privacy permission for QueryPredictions, published by ResolvePrivacy
+  // for the IPC worker. predictionEnabled controls the UI separately.
+  std::atomic<bool> prediction_allowed_{false};
   std::atomic<bool> batch_romaji_conversion_{false};
   std::atomic<bool> batch_romaji_preview_romaji_{false};
   std::atomic<bool> batch_conversion_ai_cleanup_{false};
@@ -570,6 +573,8 @@ class TextService final : public ITfTextInputProcessorEx,
     uint64_t request_id;
     std::string reading;
     std::string surface;
+    std::string trace_id;
+    std::chrono::steady_clock::time_point trace_start{};
   };
   std::optional<LiveConversionResult> live_conversion_result_;  // candidates_mtx_
   struct PredictionResult {
@@ -648,6 +653,7 @@ class TextService final : public ITfTextInputProcessorEx,
   struct PrivacyDecision {
     bool secure{false};
     bool learning_allowed{false};
+    bool prediction_allowed{false};
     core::AiPrivacy ai;
     std::string backend;
     bool detailed_logging_allowed{false};

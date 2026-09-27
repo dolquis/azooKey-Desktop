@@ -394,7 +394,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   azookey::ipc::Envelope henv;
   henv.version = 1;
   henv.request_id = 1;
-  henv.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  henv.trace_id = "transport-handshake";
   henv.type = azookey::ipc::MessageType::Handshake;
   henv.payload_json = azookey::ipc::BuildHandshakeRequest(handshake);
 
@@ -414,7 +414,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   azookey::ipc::Envelope penv;
   penv.version = 1;
   penv.request_id = 2;
-  penv.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e3";
+  penv.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
   penv.type = azookey::ipc::MessageType::Ping;
   penv.payload_json = azookey::ipc::BuildPing(ping);
 
@@ -425,6 +425,13 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   auto ppayload = azookey::ipc::ParsePing(pres->payload_json);
   ASSERT_TRUE(ppayload.has_value());
   EXPECT_EQ(ppayload->nonce, 424242u);
+
+  penv.request_id = 3;
+  penv.trace_id = "private input\nsecond line";
+  ASSERT_TRUE(client.Send(penv));
+  const auto invalid_response = client.Receive();
+  ASSERT_TRUE(invalid_response);
+  EXPECT_EQ(invalid_response->trace_id, penv.trace_id);
 
   client.Disconnect();
   server.Stop();
@@ -441,7 +448,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   int ping_sends = 0;
   int ping_recvs = 0;
   while (std::getline(lines, line)) {
-    if (line.find("\"trace_id\":\"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e3\"") == std::string::npos)
+    if (line.find("\"trace_id\":\"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2\"") == std::string::npos)
       continue;
     EXPECT_NE(line.find("\"event\":\"trace_phase\""), std::string::npos);
     EXPECT_NE(line.find("\"latency_ms\":"), std::string::npos);
@@ -450,6 +457,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   }
   EXPECT_EQ(ping_sends, 1);
   EXPECT_EQ(ping_recvs, 1);
+  EXPECT_EQ(tip_log.find("private input"), std::string::npos);
   std::filesystem::remove(tip_log_path);
 }
 

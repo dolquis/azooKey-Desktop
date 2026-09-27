@@ -55,6 +55,25 @@ logging::RuntimeLogger& WatchLogger() {
   return logger;
 }
 
+// The missing axis uses the schema default; an invalid value cannot grant
+// prediction permission. This is independent of predictionEnabled (UI).
+bool ParsePredictionPermission(const ipc::json::Value& settings) {
+  if (!settings.IsObject()) return false;
+  const auto* privacy = settings.Find("privacy");
+  if (!privacy) return true;
+  if (!privacy->IsObject()) return false;
+  if (privacy->Find("mode") && !privacy->GetString("mode")) return false;
+  const auto mode = privacy->GetString("mode").value_or("normal");
+  if (mode == "secure") return false;
+  if (mode == "normal" || mode == "private" || mode == "offline") return true;
+  if (mode != "custom") return false;
+  const auto* custom = privacy->Find("custom");
+  if (!custom) return true;
+  if (!custom->IsObject()) return false;
+  if (custom->Find("prediction") && !custom->GetBool("prediction")) return false;
+  return custom->GetBool("prediction").value_or(true);
+}
+
 #ifdef AZOOKEY_TSF_TESTING
 // Refuses the next N arms so a test can reproduce a watch that cannot rebind.
 std::atomic<unsigned> g_refused_arms{0};
@@ -237,6 +256,7 @@ void TipLocalSettings::Reload() noexcept {
   core::BracketSettings next;
   TipRewriterSettings rewriters;
   TipAiSettings ai;
+  ai.prediction_allowed = false;  // An unreadable file must not grant prediction permission.
   bool live_conversion = false;
   bool prediction_enabled = true;
   bool custom_romaji = false;
@@ -248,12 +268,15 @@ void TipLocalSettings::Reload() noexcept {
   try {
     contents = ReadBounded(path_);
     std::error_code missing_error;
-    if (contents.empty() && !std::filesystem::exists(path_, missing_error) && !missing_error)
+    if (contents.empty() && !std::filesystem::exists(path_, missing_error) && !missing_error) {
       ai.privacy_policy = {false, false, true};  // No file uses the normal-mode defaults.
+      ai.prediction_allowed = true;
+    }
     next = core::ParseBracketSettings(contents);
     if (const auto json = ipc::json::Parse(contents); json && json->IsObject()) {
       ai.privacy = core::ParseAiPrivacy(*json);
       ai.privacy_policy = core::ParsePrivacyPolicy(*json);
+      ai.prediction_allowed = ParsePredictionPermission(*json);
       ai.backend = json->GetString("aiBackend").value_or("none");
       ai.timeout_ms = static_cast<int>(
           std::clamp<int64_t>(json->GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
@@ -324,6 +347,7 @@ void TipLocalSettings::Reload() noexcept {
   } catch (...) {
     ai = {};
     ai.privacy_policy = {};
+    ai.prediction_allowed = false;
     next = {};  // No contents/paths in diagnostics, no writes to user configuration.
   }
   {
@@ -468,6 +492,7 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
   const auto json = ipc::json::Parse(contents);
   const std::lock_guard<std::mutex> lock(mutex_);
   ai_.privacy_policy = json ? core::ParsePrivacyPolicy(*json) : core::PrivacyPolicy{};
+  ai_.prediction_allowed = json && ParsePredictionPermission(*json);
 }
 
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {

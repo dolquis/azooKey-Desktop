@@ -136,6 +136,32 @@ size_t CountOccurrences(const std::string& haystack, const std::string& needle) 
   return count;
 }
 
+class ThrowOnceConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string& kana,
+                                                const azookey::core::ConversionContext&) override {
+    if (!threw_) {
+      threw_ = true;
+      throw std::runtime_error("first fallback attempt failed");
+    }
+    return {{kana, kana, 1.0, azookey::core::CandidateSource::Heuristic, "fallback"}};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string&, const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  std::vector<azookey::core::Candidate> Correct(const std::string&,
+                                                const azookey::core::CorrectionHint&,
+                                                const azookey::core::ConversionContext&) override {
+    return {};
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+
+ private:
+  bool threw_{false};
+};
+
 class BlockingConverter final : public azookey::core::IConverter {
  public:
   std::vector<azookey::core::Candidate> Convert(const std::string& kana,
@@ -1333,6 +1359,48 @@ TEST(InferenceEngineTest, LoadModelLoadsValidGgufWithCpuBackend) {
 
   std::remove(model_path.c_str());
   RemoveProtectedStoreFile(lpath);
+}
+
+TEST(InferenceEngineTraceTest, ModelExceptionAndFallbackProduceOneInferenceSample) {
+  if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
+    GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
+                    "loads require a full model fixture.";
+  }
+
+  const auto model_path = TempPath("azookey_trace_exception_fallback.gguf");
+  const auto log_path = TempPath("azookey_trace_exception_fallback.jsonl");
+  std::remove(model_path.c_str());
+  std::remove(log_path.c_str());
+  WriteMinimalGguf(model_path);
+  azookey::logging::RuntimeLoggerOptions log_options;
+  log_options.enabled = true;
+  log_options.component = "host";
+  log_options.output_path = log_path;
+  azookey::logging::RuntimeLogger logger(log_options);
+  azookey::host::InferenceEngine engine(std::make_unique<ThrowOnceConverter>(), nullptr, {},
+                                        &logger);
+  azookey::host::ModelLoadOptions options;
+  options.path = model_path;
+  EnableMockZenzaiCandidatesForTests(options);
+  ASSERT_TRUE(engine.LoadModelWithResult(options).ok);
+
+  const azookey::host::InferenceTelemetry telemetry{42, {}, "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2"};
+  const auto candidates =
+      engine.QueryCandidates("にほん", "", kNowBase, nullptr, 10, false, &telemetry);
+  ASSERT_FALSE(candidates.empty());
+
+  std::ifstream stream(log_path);
+  int inference_samples = 0;
+  for (std::string line; std::getline(stream, line);) {
+    if (line.find("\"phase\":\"model_inference\"") == std::string::npos) continue;
+    ++inference_samples;
+    EXPECT_NE(line.find("\"result\":\"ok\""), std::string::npos);
+    EXPECT_NE(line.find("\"backend\":\"cpu\""), std::string::npos);
+    EXPECT_EQ(line.find("\"engine\""), std::string::npos);
+  }
+  EXPECT_EQ(inference_samples, 1);
+  std::remove(model_path.c_str());
+  std::remove(log_path.c_str());
 }
 
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly) {

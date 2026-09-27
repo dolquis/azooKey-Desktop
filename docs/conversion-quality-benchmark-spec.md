@@ -349,6 +349,7 @@ azookey_bench.exe --eval bench/data/kana_kanji_eval.jsonl \
 | `--backend <name>` | backend 強制 |
 | `--model <path>` | モデル強制 |
 | `--trace` | M51 trace ログを出す |
+| `--trace-output <jsonl>` | `--trace` の出力先（既定 `trace.jsonl`、`docs/dev-infrastructure-spec.md` §7.7.4） |
 | `--category <name>` | カテゴリ絞込 |
 | `--iterations <N>` | 各ケースの繰返し回数（latency 用） |
 | `--typo-mode <mode>` | typo 補正モード（`off` / `suggest` / `rank` / `aggressive`、既定 `off`）。`config.typo_correction_mode` に記録（§14.1 互換キー） |
@@ -624,9 +625,9 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
   `exact_match=false` かつ `nfkc_exact_match=true` になること）が CTest で通る
   （DEV-408 テスト方針）
 - baseline 比較レポート（diff_vs_baseline）が生成される
-- `--trace` フラグは M51 完了後の任意統合チェックとして扱う。M51
-  未完了時は本フラグの存在を確認するのみで、出力 schema 検証は M51
-  完了後の follow-up とする
+- `--trace` 指定時は phase JSONL を生成し、`azookey_trace_viewer --json` の
+  schema と phase 別 p50 / p95 / p99 を検証する（M51、
+  `docs/dev-infrastructure-spec.md` §7.7.3）
 - 初期版の評価データが §11.2「M52 初期」列を満たす
   （general / homophone / typo / **typo_clean** の 4 カテゴリ各 100、計 ≥400）。
   `typo_clean` は §4.3.1 のとおり `typo_false_positive_rate` /

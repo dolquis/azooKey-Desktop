@@ -8,11 +8,11 @@
 
 namespace azookey::compat_test {
 
-// C-002〜C-010 と C-012 は、C-001 の変換成功で azooKey の基準動作を確認できた場合だけ実行する。
+// C-002〜C-010 と C-012〜C-013 は、C-001 の変換成功で azooKey の基準動作を確認できた場合だけ実行する。
 inline constexpr std::string_view kBaselineCaseId = "C-001";
 
 struct CasePlan {
-  // target の cases の順に並べる。C-010 を最後に置く target の順序を選択後も保つ。
+  // target の cases の順に並べる。Host fault ケースを最後に置く target の順序を選択後も保つ。
   std::vector<std::string> executed;
   std::vector<std::string> excluded;
   // --cases で依存ケースだけを選んだときに、前提として追加した C-001。

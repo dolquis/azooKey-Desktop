@@ -53,7 +53,7 @@ function Initialize-VmVerifyGuestPackage {
   }
 
   $missing = @()
-  foreach ($name in @("verify-bootstrap.ps1", "compat_test.exe")) {
+  foreach ($name in @("verify-bootstrap.ps1", "compat_test.exe", "compat_host_hang_watchdog.exe")) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $name) -PathType Leaf)) {
       $missing += $name
     }
@@ -353,6 +353,8 @@ function Invoke-VmVerifyGuestCompatRun {
     targets = @()
     error = ""
   }
+  $originalLog = [Environment]::GetEnvironmentVariable("AZOOKEY_LOG", "Process")
+  $originalLogLevel = [Environment]::GetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "Process")
   try {
     # 登録は PowerShell Direct 側で済んでいるため、ここでの再実行は UAC 昇格に
     # 入らず、Host をこの対話セッションで起動して検証するだけになる。
@@ -383,6 +385,14 @@ function Invoke-VmVerifyGuestCompatRun {
     }
     if ($Skip) {
       $selection += " --skip $Skip"
+    }
+    $runHostHang = (-not $Cases -or $Cases.Split(',') -ccontains 'C-013') -and
+      ($Skip.Split(',') -cnotcontains 'C-013')
+    if ($runHostHang) {
+      # 新規起動プロセスだけが継承する。既存 browser / VS Code への委譲時は
+      # C-013 がログ未確認を failing-skip として報告する。
+      [Environment]::SetEnvironmentVariable("AZOOKEY_LOG", "1", "Process")
+      [Environment]::SetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "info", "Process")
     }
     $targets = @(Get-ChildItem -LiteralPath (Join-Path $PackageRoot "targets") `
         -Filter "*.json" -File | Sort-Object Name)
@@ -425,6 +435,8 @@ function Invoke-VmVerifyGuestCompatRun {
   } catch {
     $status.error = $_.Exception.Message
   } finally {
+    [Environment]::SetEnvironmentVariable("AZOOKEY_LOG", $originalLog, "Process")
+    [Environment]::SetEnvironmentVariable("AZOOKEY_LOG_LEVEL", $originalLogLevel, "Process")
     [pscustomobject]$status | ConvertTo-Json -Depth 4 |
       Set-Content -LiteralPath (Join-Path $RunRoot "interactive-status.json") -Encoding UTF8
   }

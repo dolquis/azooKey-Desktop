@@ -83,6 +83,7 @@ class AutomationSession {
 
   const TargetConfig& target() const { return target_; }
   HWND window() const { return window_; }
+  bool target_process_inherited_environment() const { return window_process_is_launched_process_; }
 
  private:
   bool FindEditorElement();
@@ -125,6 +126,7 @@ CaseDefinition MakeC009FocusTransitionCase();
 CaseDefinition MakeC010HostRecoveryCase();
 CaseDefinition MakeC011ShortcutRoutingCase();
 CaseDefinition MakeC012RomanizationCase();
+CaseDefinition MakeC013HostHangCase();
 
 const char* ResultStatusName(ResultStatus status);
 

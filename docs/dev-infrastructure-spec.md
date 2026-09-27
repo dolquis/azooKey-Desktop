@@ -240,9 +240,10 @@ GGUF を追加する場合は、同じ build directory の `azookey_zenzai_bench
 zip ルートへ追加する。
 生成前の Ninja dry-run では bench target も鮮度確認の対象にする。
 `-IncludeCompat`（既定は無効）を指定すると、同じ build directory の
-`compat_test.exe` を zip ルートへ、`compat-test/targets/` 以下の全ファイルを
-相対階層を保って `targets/` へ追加し、compat target も鮮度確認の対象にする。
-manifest の role はそれぞれ `compat-runner` と `compat-targets` とし、各ファイルの
+`compat_test.exe` と C-013 用の `compat_host_hang_watchdog.exe` を zip ルートへ、
+`compat-test/targets/` 以下の全ファイルを相対階層を保って `targets/` へ追加し、
+compat target も鮮度確認の対象にする。manifest の role はそれぞれ
+`compat-runner`、`compat-host-hang-watchdog`、`compat-targets` とし、各ファイルの
 SHA-256 を記録する。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。
@@ -1858,7 +1859,8 @@ Degraded ─→ Disconnected （切断時）
 拒否は `connection_lost` とする。
 
 遷移ログのイベント名は `ipc_connection_state_transition` で、フィールドは `from` / `to` /
-`event`（上表の固定語）と `attempt`（直近の `Ready` 以降の何回目の接続試行か。1 始まり）だけとする。
+`transition_event`（上表の固定語）、`attempt`（直近の `Ready` 以降の何回目の接続試行か。1 始まり）、
+`process_id`（TIP をロードしたアプリの OS プロセス ID）だけとする。
 入力本文を載せるフィールドは持たない。Host 停止中や Handshake を拒否され続ける間は、backoff ごとに
 `Disconnected` / `Connecting` / `Handshaking` の間の遷移を繰り返す。この 3 状態の間の遷移は
 `attempt` が 1 または 2 のべき乗のときだけ記録し、同じ試行の遷移はまとめて記録するか省く。
@@ -2956,8 +2958,11 @@ Edge は ControlType だけで Edit を探索するとアドレスバーへ一�
 | C-010 | Host kill 中も入力が固まらない | DegradedSimple で継続 |
 | C-011 | `Ctrl+A/C/V/L/S`、Alt メニュー、Win キー併用を押す | TIP が食わずアプリ / OS へ通る |
 | C-012 | `ja` / `ju` / `jo` / `jya` / `jyu` / `jyo` を入力 | 「じゃ」「じゅ」「じょ」として preedit / commit できる |
+| C-013 | supervisor 配下の Host を一時停止して入力し、再開する | TIP の `Degraded` 中もかな候補で入力を続け、再開後 `Ready` と通常変換へ戻る |
 
 C-001〜C-012 は `full` アプリ（§13.2）で UI Automation により自動判定できる。
+C-013 は UI Automation と TIP の構造化ログを組み合わせて判定する。
+C-013 は DEV-1364 の追加ケースであり、M50 の C-001〜C-012 受け入れ条件は変えない。
 ただし M50 完了ゲートの**必須対象は Notepad / VS Code / Edge**（M50 受け入れ
 条件）であり、その他の `full` アプリ（Chrome / Windows Terminal /
 Windows Settings 等）は実行可能な範囲で自動判定する best-effort 対象とする。
@@ -3029,7 +3034,13 @@ compat-test/
 │   ├── C009_focus_transition.cpp
 │   ├── C010_host_recovery.cpp
 │   ├── C011_shortcut_routing.cpp
-│   └── C012_romanization.cpp
+│   ├── C012_romanization.cpp
+│   ├── C013_host_hang.cpp
+│   ├── HostHangWatchdogClient.cpp
+│   ├── HostHangWatchdogClient.h
+│   ├── HostHangWatchdogMain.cpp
+│   ├── HostHangWatchdog.h
+│   └── HostProcessSupport.h
 └── targets/
     ├── notepad.json
     ├── edge.json
@@ -3062,8 +3073,17 @@ UTF-16保持確認に限定する。保持できても `surrogate-pair-tip-path-
 C-010 はPowerShell supervisorが起動したHostだけを停止対象とし、再起動プロセスに加えて
 per-user named pipeへの接続を確認してから復帰と判定する。runnerはHostを代替起動しない。
 Notepad targetでは、再接続待ちを後続ケースへ波及させないためC-010を最後に実行する。
+C-013 は同じ supervisor 配下の Host を終了させずに一時停止する。別プロセスの
+`compat_host_hang_watchdog.exe` が再開を担当し、runner の異常終了か 8 秒の期限でも
+再開する。検証 zip には runner と同じディレクトリに watchdog を同梱する。
+停止中の入力継続と再開後の通常変換を UI Automation で確認し、TIP の構造化ログで
+`Degraded` → `Ready` の遷移を確認する。対象アプリが runner 起動プロセス自身なら
+ログ環境変数の継承を確認できるため、遷移の欠落を fail とする。既存プロセスへの
+ウィンドウ委譲などでログ設定を確認できず、対象 PID の遷移が無い場合は failing-skip とし、
+観測条件を満たせない状態を pass にしない。watchdog が期限切れで Host を再開した
+場合は再開失敗と区別して期限切れとして fail にする。
 
-runner / C-001〜C-012 / unit test はトップ `CMakeLists.txt` から
+runner / C-001〜C-013 / unit test はトップ `CMakeLists.txt` から
 `add_subdirectory(compat-test)` で Windows ビルドへ配線する。
 
 runner は起動前後のトップレベルウィンドウを比較し、起動後に増えた対象 class の
@@ -3105,7 +3125,7 @@ handle に限る。
 Edge と VS Code は `Chrome_WidgetWin_1` の新規ウィンドウだけを操作する。
 Edge は外部通信を行わない一時 HTML の textarea、VS Code は拡張機能を無効にした
 一時テキストファイルを使う。
-3 target とも C-010 を最後に実行し、Host の再接続待ちを後続ケースへ波及させない。
+3 target とも C-013、C-010 の順に最後に実行し、Host の停止を後続ケースへ波及させない。
 
 ### 13.5 出力
 

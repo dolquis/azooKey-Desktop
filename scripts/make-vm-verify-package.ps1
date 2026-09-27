@@ -433,13 +433,14 @@ function Export-VmVerifyPackage {
   $diagExe = Join-Path $configuration.BinaryDir "diagnostics\azookey_diag.exe"
   $benchExe = Join-Path $configuration.BinaryDir "bench\azookey_zenzai_bench.exe"
   $compatExe = Join-Path $configuration.BinaryDir "compat-test\compat_test.exe"
+  $compatWatchdogExe = Join-Path $configuration.BinaryDir "compat-test\compat_host_hang_watchdog.exe"
   $compatTargets = Join-Path $repository "compat-test\targets"
   $requiredArtifacts = @($tipDll, $hostExe, $diagExe)
   if ($Model) {
     $requiredArtifacts += $benchExe
   }
   if ($IncludeCompat) {
-    $requiredArtifacts += $compatExe
+    $requiredArtifacts += @($compatExe, $compatWatchdogExe)
     if (-not (Test-Path -LiteralPath $compatTargets -PathType Container) -or
         -not (Get-ChildItem -LiteralPath $compatTargets -File -Recurse)) {
       throw "Required compat targets are missing: $compatTargets"
@@ -495,6 +496,11 @@ function Export-VmVerifyPackage {
     )
     if ($IncludeCompat) {
       $payloads += @{ Source = $compatExe; Archive = "compat_test.exe"; Role = "compat-runner" }
+      $payloads += @{
+        Source = $compatWatchdogExe
+        Archive = "compat_host_hang_watchdog.exe"
+        Role = "compat-host-hang-watchdog"
+      }
       foreach ($target in Get-ChildItem -LiteralPath $compatTargets -File -Recurse | Sort-Object FullName) {
         $relative = $target.FullName.Substring($compatTargets.Length).TrimStart("\").Replace("\", "/")
         $payloads += @{ Source = $target.FullName; Archive = "targets/$relative"; Role = "compat-targets" }

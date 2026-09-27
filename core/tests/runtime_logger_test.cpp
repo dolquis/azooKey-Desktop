@@ -115,6 +115,23 @@ TEST(RuntimeLoggerTest, SchemaSnapshotIsStableJsonLine) {
       R"({"ts":"2026-07-30T12:34:56.789Z","component":"tip","level":"warn","event":"ipc_stale_response","request_id":42,"result":"error","retrying":true})");
 }
 
+TEST(RuntimeLoggerTest, IpcTransitionKeepsCauseAndNumericProcessIdentity) {
+  RuntimeLogRecord record{
+      "2026-09-27T00:00:00.000Z",
+      "tip",
+      RuntimeLogLevel::Warn,
+      "ipc_connection_state_transition",
+      {RuntimeLogField{"from", SafeLogText("ready")},
+       RuntimeLogField{"to", SafeLogText("degraded")},
+       RuntimeLogField{"transition_event", SafeLogText("response_deadline_exceeded")},
+       RuntimeLogField{"attempt", uint64_t{1}}, RuntimeLogField{"process_id", uint64_t{4242}}},
+  };
+
+  EXPECT_EQ(
+      azookey::logging::SerializeRuntimeLogRecord(record),
+      R"({"ts":"2026-09-27T00:00:00.000Z","component":"tip","level":"warn","event":"ipc_connection_state_transition","from":"ready","to":"degraded","transition_event":"response_deadline_exceeded","attempt":1,"process_id":4242})");
+}
+
 TEST(RuntimeLoggerTest, SensitiveBodiesAreRedacted) {
   EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("candidate"));
   EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("preedit_text"));

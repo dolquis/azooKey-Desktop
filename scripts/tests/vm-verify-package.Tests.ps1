@@ -409,15 +409,18 @@ Describe "VM verification package automation" {
       New-Item -ItemType Directory -Path (Join-Path $script:testRepository "build/windows-release/compat-test"),
         (Join-Path $script:testRepository "compat-test/targets/nested") -Force | Out-Null
       "runner" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_test.exe")
+      "watchdog" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_host_hang_watchdog.exe")
       "{}" | Set-Content (Join-Path $script:testRepository "compat-test/targets/notepad.json")
       "support" | Set-Content (Join-Path $script:testRepository "compat-test/targets/nested/support.txt")
       $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
         -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeCompat
       @($result.Manifest.files | Where-Object role -eq "compat-runner").Count | Should -Be 1
+      @($result.Manifest.files | Where-Object role -eq "compat-host-hang-watchdog").Count | Should -Be 1
       @($result.Manifest.files | Where-Object role -eq "compat-targets").Count | Should -Be 2
       $expanded = Join-Path $TestDrive "compat-expanded"
       Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
       Test-Path (Join-Path $expanded "compat_test.exe") | Should -BeTrue
+      Test-Path (Join-Path $expanded "compat_host_hang_watchdog.exe") | Should -BeTrue
       Test-Path (Join-Path $expanded "targets/nested/support.txt") | Should -BeTrue
       foreach ($file in $result.Manifest.files) {
         $payloadPath = Join-Path $expanded $file.path
@@ -430,13 +433,21 @@ Describe "VM verification package automation" {
 
     It "rejects missing compat <Missing>" -ForEach @(
       @{ Missing = "runner" }
+      @{ Missing = "watchdog" }
       @{ Missing = "targets" }
     ) {
       New-Item -ItemType Directory -Path (Join-Path $script:testRepository "build/windows-release/compat-test") -Force |
         Out-Null
       if ($Missing -eq "targets") {
         "runner" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_test.exe")
+        "watchdog" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_host_hang_watchdog.exe")
         $expectedError = "*compat targets*"
+      } elseif ($Missing -eq "watchdog") {
+        "runner" | Set-Content (Join-Path $script:testRepository "build/windows-release/compat-test/compat_test.exe")
+        New-Item -ItemType Directory -Path (Join-Path $script:testRepository "compat-test/targets") -Force |
+          Out-Null
+        "{}" | Set-Content (Join-Path $script:testRepository "compat-test/targets/notepad.json")
+        $expectedError = "*artifact*compat_host_hang_watchdog.exe*"
       } else {
         New-Item -ItemType Directory -Path (Join-Path $script:testRepository "compat-test/targets") -Force |
           Out-Null

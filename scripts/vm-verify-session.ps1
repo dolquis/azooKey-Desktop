@@ -16,8 +16,8 @@
     -Restore : 指定チェックポイントへ復元する。
 
   -Run の -CompatCases / -CompatSkip は compat_test.exe の --cases / --skip へ渡す
-  case ID（C-001 形式）。C-010 は Host を停止するため、手動の打鍵ゲートより前に
-  -CompatSkip C-010 で回し、ゲートの後に -CompatCases C-010 で回せる。
+  case ID（C-001 形式）。C-013 は Host を一時停止し、C-010 は終了するため、手動の
+  打鍵ゲートより前に -CompatSkip C-013,C-010 で回し、ゲートの後に各ケースを回せる。
 
   チェックポイント名はパッケージの manifest.json（commit / preset）から決定的に
   生成するため、同じパッケージに対する再実行は常に同じ名前を指す。

@@ -872,6 +872,7 @@ int wmain(int argc, wchar_t** argv) {
            MakeC010HostRecoveryCase(),
            MakeC011ShortcutRoutingCase(),
            MakeC012RomanizationCase(),
+           MakeC013HostHangCase(),
        }) {
     registered.emplace(definition.id, definition);
   }

@@ -192,16 +192,23 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   として渡る（`C-001,C-004` のようなカンマ区切りか配列で指定する）。形式が `C-NNN` でない値は
   ゲストへ接続する前に拒否する。同梱の target に無い ID と、実行するケースが残らない選択は、
   bootstrap の前に拒否する。部分実行の結果は、target ごとの出力に未実行のケースを併記する。
-  C-010 は Host を停止するため、手順 4 の打鍵確認と組み合わせる
-  場合は次の順に分ける。C-010 だけの実行では前提の C-001 が自動で追加される。
+  C-013 は Host を一時停止し、C-010 は終了するため、手順 4 の打鍵確認と組み合わせる
+  場合は次の順に分ける。どちらかだけの実行では前提の C-001 が自動で追加される。
 
   ```powershell
   # 1. Host を停止しないケースだけを先に回し、compat の自動判定を取る
-  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatSkip C-010
+  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatSkip C-013,C-010
   # 2. 手順 4 の打鍵確認（基本セッション）を行う
-  # 3. 最後に Host 停止と復帰の C-010 だけを回す
+  # 3. Host 無応答と復帰の C-013 を回す（対話タスクが TIP の info ログを有効にする）
+  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-013
+  # 4. 最後に Host kill と復帰の C-010 だけを回す
   .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-010
   ```
+
+  手順 1 の後、Edge や VS Code のプロセスが常駐していると、手順 3 の対話タスクで
+  設定した TIP ログ環境変数は既存プロセスに届かない。C-013 の結果が
+  `tip-info-log-not-confirmed-for-target` の failing-skip なら、未保存の作業を確認して
+  対象アプリの全プロセスを人手で終了し、手順 3 を再実行する。
 
 - `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
   [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。

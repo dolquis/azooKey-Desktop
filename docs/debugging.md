@@ -214,7 +214,7 @@ cmake --build --preset windows-debug --target azookey_check
 - **TIP は動くが候補が遅延**: Host 未起動 / 名前付きパイプ接続失敗を疑う。
   TIP は 250ms から 3000ms までの jitter 付き指数バックオフで再接続を試み続け、Deactivate まで
   諦めない（DEV-168）。接続の状態は TIP の構造化ログ `ipc_connection_state_transition`
-  （`from` / `to` / `event`）で追える。接続したまま応答が無い Host は
+  （`from` / `to` / `transition_event` / `process_id`）で対象アプリごとに追える。接続したまま応答が無い Host は
   `ipc_host_deadline_missed` / `ipc_health_timeout` の後に `degraded` への遷移として現れる。Host stderr に `named pipe listening: \\.\pipe\azookey-<SID>`
   （SID 解決に失敗した場合は Debug ビルドに限り `azookey-default`）が出ているか確認。
 - **Zenzai・AI・学習が効かなくなった（SafeMode）**: Host が 60 秒以内に 3 回続けて異常終了すると

@@ -326,7 +326,7 @@ MSI の machine-wide 登録を残したままレーン 2 の開発登録を重�
 1. **先行自動判定**：`-Run -CompatSkip C-006,C-013,C-010` で Host 停止・DPI 変更を伴わない compat ケースを先に採る。`verify-bootstrap.ps1` が失敗したら、打鍵ゲートへ進まない。runner の結果は人の TIP 操作・目視判定を代替しない。
 2. **設定反映と学習不変**：DEV-1160 を設定系ゲートの最初に置き、既存 TIP 接続への設定反映と新規アプリとの差を確認する。その後、DEV-1188（M46 secure 抑止・インジケータ）、DEV-1346（M14 の secure 抑止項目）、DEV-1046（M58-B/C の AI 整文で学習しない項目）を行う。各項目の直前・直後に学習データを記録して比較し、secure から通常入力へ戻る確認も記録する。DEV-1046 の実 API を使う場合は承認済みの接続先だけを使い、キーと入力本文を証跡へ載せない。
 3. **通常の入力とアプリ巡回**：Notepad → VS Code → Edge を 1 巡し、下の統合チェックリストを使う。DEV-1266（M13、M3〜M10 回帰）を基準に DEV-1346（M14）、DEV-1350（M15）、DEV-760〜762（M61-A/B）を確認する。M14 と M15 は M13 の結果を前提にそれぞれ判定する。DEV-761 の per-app 設定切替は DEV-1160 の確認後に行う。DEV-153 と DEV-365 が要求する残りのアプリも、それぞれの課題で確認する。
-4. **中間 checkpoint と DPI**：巡回の証跡を回収して checkpoint を取る。次にゲストのスケーリングを 150% にし、DEV-716 の C-006 を含む DPI 確認を行う。DEV-365 のスケール別項目も同じ状態で確認する。設定を戻すか checkpoint へ復元してから障害注入へ進む。
+4. **中間 checkpoint と DPI**：巡回の証跡を回収して checkpoint を取る。ゲストの表示スケールを 150% に変えて再サインインし、DEV-716 の C-006 と DEV-365 の D-08（Notepad / VS Code / Edge）を確認する。D-08 は 200% へ変更して再サインインした状態でも 3 アプリを確認する。各スケールで OS の設定値、操作結果、runner の `report.json`、目視記録を復元前にホストへ回収する。最後に設定を戻すか checkpoint へ復元し、登録と Host の Ready を確認してから障害注入へ進む。
 5. **無応答と Host kill**：TIP の info ログ、ETW、Host ログの採取を先に開始する。C-013 の一時停止と復帰を先に行い、DEV-1263（M42）の無応答・ローカル fallback・Ready 復帰を人が確認する。次に C-010 の Host kill を 1 回行い、DEV-716、DEV-1263、DEV-676 の項目 2 へ同じ実走を参照する。Host 不在時の DEV-760（M61-A）の基本ペア動作も確認する。各課題の期待値と判定は別々に記録し、Host が Ready に戻ったことを確かめる。
 6. **ログオンとユーザー変更**：DEV-676 のログオン自動起動、別ユーザー provisioning、監督停止の各項目を行う。ログオフや別ユーザーへの切替は元の対話セッションを変えるので、通常の打鍵と障害注入の後に置く。
 
@@ -338,7 +338,8 @@ MSI の machine-wide 登録を残したままレーン 2 の開発登録を重�
 
 各アプリで DEV-847 の G1〜G3 と DEV-153 の計測を続けてよい。
 DEV-365 の対象アプリと省略できる項目は `compat-test/m3_display_attribute_checklist.md` §3・§3.1 に従う。
-Notepad / Edge / VS Code でも描画属性 D-02 / D-03 / D-07〜D-10 の目視は省略しない。
+Notepad / Edge / VS Code でも描画属性 D-02 / D-03 / D-07 / D-08 / D-10 の目視は省略しない。
+単一ディスプレイの基本セッションでは D-09 のモニタ跨ぎを実施できない。全画面での観察と区別して DEV-365 に D-09 未実施・環境制約を記録し、異なる DPI の複数モニタを使う別セッションで検証する。`compat-test/m3_display_attribute_checklist.md` §5 の完了条件は緩めず、D-09 の実走前に DEV-365 を完了扱いにしない。
 巡回を統合しても検証メモは DEV-847、DEV-153、DEV-365 と新たに実走した各課題へ分けて残す。
 課題ごとの未実施項目と理由も、その課題のコメントに書く。
 
@@ -370,8 +371,10 @@ compat の分割実行例を示す。共有する 1 回の Host kill は Notepad
 
 ```powershell
 .\compat_test.exe --target .\targets\notepad.json --skip C-006,C-013,C-010 --output C:\azookey-verify\compat-notepad-early
-# 巡回後の checkpoint と 150% DPI 設定を終えてから実行する
-.\compat_test.exe --target .\targets\notepad.json --cases C-006 --output C:\azookey-verify\compat-notepad-dpi
+# 巡回後の checkpoint を取り、150% へ変更・再サインインして実行する
+.\compat_test.exe --target .\targets\notepad.json --cases C-006 --output C:\azookey-verify\compat-notepad-dpi-150
+# 150% の証跡をホストへ回収してから 200% へ変更・再サインインして実行する
+.\compat_test.exe --target .\targets\notepad.json --cases C-006 --output C:\azookey-verify\compat-notepad-dpi-200
 # TIP の info ログと ETW を開始し、打鍵を終えてから実行する
 .\compat_test.exe --target .\targets\notepad.json --cases C-013 --output C:\azookey-verify\compat-notepad-hang
 .\compat_test.exe --target .\targets\notepad.json --cases C-010 --output C:\azookey-verify\compat-notepad-kill
@@ -384,6 +387,7 @@ C-013 の直接実行前には `hyper-v-tip-verification.md` に従い、対象�
 `--cases` と `-CompatCases` は必要な C-001 を自動で追加する。選択と除外の詳細は
 `compat-test/README.md` と `hyper-v-tip-verification.md` に従う。
 各回の `report.json` と `case_selection` を保存し、未実行ケースを Pass と数えない。
+ゲスト内で直接実行した C-006 の出力は `-Run` と違って自動回収されない。150% と 200% の実走ごとに異なる出力ディレクトリを指定し、PowerShell Direct の `Copy-Item -FromSession` で `report.json` を含むディレクトリをホストの別々の回収先へコピーする。DEV-365 のスケール別目視記録・画像もホストへ保存し、ファイルの存在と対象スケールを確認してから checkpoint を復元する。回収方法の前提と資格情報の扱いは `hyper-v-tip-verification.md` の手順 3 に従う。
 
 終了コードは、全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2` である。
 
@@ -403,38 +407,6 @@ $exe = (Resolve-Path .\azookey_inference_host.exe).Path
 C-005（マルチディスプレイ端の候補クランプ）は本セッションの対象外で、DEV-782 が扱う。
 基本セッションでは構成を作れないため `failing-skip` として残るが、runner は環境条件を満たせないケースを silent skip せず記録するので、誤って Pass にはならない。
 したがって C-005 に起因する終了コード `2` は失敗ではなく、DEV-716 の判定には含めない。
-
-DEV-758 は `user_dict.json` への同時更新を作る。
-`userdict` CLI は既定で稼働中の Host へ IPC 経由でコマンドを送り、`--offline` を付けるとファイルを直接書く。
-この 2 経路を別々の entry で重ねると、二つの書き手が同じファイルを read-modify-write する状況になる。
-
-単発の `--offline` を 1 回実行するだけでは足りない。
-書き込みが時間的に重ならないため、ロックが無くても通ってしまい、ロックの効きを確認したことにならない。
-
-`Start-Job` へ相対パスを渡さない。
-Windows 11 の既定シェルである Windows PowerShell 5.1 は、子ランスペースを呼び出し元のカレントディレクトリではなくユーザーのホームで開始するため、`.\azookey_inference_host.exe` は解決に失敗する。
-両ジョブが即座に失敗しても `list` は何も変わらないので、「両方残った」と読み違える。
-
-```powershell
-$exe = (Resolve-Path .\azookey_inference_host.exe).Path
-$viaPipe = Start-Job { & $using:exe userdict add --reading ぱいぷ --surface パイプ }
-$viaFile = Start-Job { & $using:exe userdict add --reading ふぁいる --surface ファイル --offline }
-Wait-Job $viaPipe, $viaFile | Out-Null
-Receive-Job $viaPipe, $viaFile
-& $exe userdict list --format json
-```
-
-`Receive-Job` の出力を必ず読み、両ジョブが実際にコマンドを実行したことを先に確かめる。
-これを飛ばすと、失敗を成功と取り違える。
-
-判定は、`list` の出力に両方の entry が残っていることである。
-片方だけが残る場合は、後勝ちの上書きで編集が消失している。
-重なりを確実にするため、同じ操作を数回繰り返して毎回両方が残ることを見る。
-
-`settings.json` は DEV-758 の対象ではない。
-`settings.json` を書くのは設定アプリだけで、Host は `SettingsStore` で読むだけなので、二つのプロセスが同じファイルを書く状況が設計上生じない（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
-設定アプリ側の保存経路（atomic write と共有ファイルロック）は DEV-794 が扱う。
-本ゲートで確認するのは `user_dict.json` の二 writer だけであり、設定アプリを VM へ持ち込む必要もない。
 
 ### レーン 3：昇格と登録状態を変える検証
 
@@ -479,12 +451,36 @@ appverif.exe -query '*' -for $target
 Application Verifier の停止はブレークであり、debugger を接続していないと対象プロセスがそのまま終了して情報が残らない。
 検出があった場合は停止コードと stack を DEV-905 のコメントへ記録し、file:line と再現手順を添えて別課題を起こす。
 
-### このセッションの対象外
+### Windows CLI / コンソールの別枠
 
 TIP 登録を必要としない DEV-963（非 ASCII argv）、DEV-1144（非 ASCII パスの GGUF 実ロード）、DEV-758（user_dict の 2 writer）、DEV-759（コンソール終了時 flush）は Windows CLI / コンソールの別枠で行う。
 同じ VM を使う場合も対話 TIP レーンの進行条件にせず、各課題の前提と合格条件を確認して個別に記録する。
 DEV-758 は稼働中 Host と offline CLI の同時実行を要するが、TIP の打鍵は要しない。
 DEV-759 はコンソールを終了させるため、レーン 2 の Host と混同しない。
+
+#### DEV-758 の 2 writer 実走
+
+`userdict` CLI は既定で稼働中の Host へ IPC 経由でコマンドを送り、`--offline` を付けるとファイルを直接書く。
+この 2 経路を別々の entry で重ねると、二つの書き手が同じ `user_dict.json` を read-modify-write する状況になる。
+単発の `--offline` を 1 回実行するだけでは書き込みが重ならず、ロックの効きを確認できない。
+
+`Start-Job` へ相対パスを渡さない。
+Windows PowerShell 5.1 は子ランスペースをユーザーのホームで開始するため、`.\azookey_inference_host.exe` は解決に失敗する。
+
+```powershell
+$exe = (Resolve-Path .\azookey_inference_host.exe).Path
+$viaPipe = Start-Job { & $using:exe userdict add --reading ぱいぷ --surface パイプ }
+$viaFile = Start-Job { & $using:exe userdict add --reading ふぁいる --surface ファイル --offline }
+Wait-Job $viaPipe, $viaFile | Out-Null
+Receive-Job $viaPipe, $viaFile
+& $exe userdict list --format json
+```
+
+`Receive-Job` で両ジョブが実際に実行されたことを確かめてから、`list` に両 entry が残るかを見る。
+同じ操作を数回繰り返す。片方だけなら編集消失として記録する。
+`settings.json` は対象外である。Host はこれを読むだけであり、設定アプリ側の保存経路は DEV-794 が扱う（`docs/windows-tsf-host-architecture.md`「共有ユーザーデータの writer 責務」）。
+
+### 別環境・前提が必要なゲート
 
 DEV-1248 は TIP 側の検出 2 トリガ、DEV-267 は Store 用 MSIX、DEV-909 は物理 ARM64 機、DEV-782 はマルチディスプレイ構成、DEV-265 は量子別 RSS 測定の前提をそれぞれの課題で確認してから別計画に入れる。
 DEV-194 はホスト側のベンチと変換検証なので、VM の対話セッションと分ける。
@@ -758,14 +754,18 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 
 ```md
 ## 自動 runner
-- C-010 を除く先行実行と C-010 の実行コマンド / 出力先 / 終了コード / `case_selection`:
-- case ごとの結果 (C-001〜C-012、C-005 を除く): pass __ / fail __ / failing-skip __
+- 先行実行: コマンド / 出力先 / 終了コード / `case_selection`: ____
+- C-006（150% / 200% の各回）: コマンド / 出力先 / 終了コード / `case_selection` / ホスト回収先: ____
+- C-013: コマンド / 出力先 / 終了コード / `case_selection`: ____
+- C-010: コマンド / 出力先 / 終了コード / `case_selection`: ____
+- case ごとの結果 (C-001〜C-013、C-005 を除く): pass __ / fail __ / failing-skip __ / 除外・未実行 __
+- C-013 の結果は DEV-1263 にも記録し、DEV-716 の C-001〜C-012 の合否と分ける: ☐ 記録
 - C-005 は対象外（DEV-782）。failing-skip として残ることを確認: ☐ 確認
 
 ## runner が証明できない項目
 - C-007 を azooKey の候補から絵文字確定してサロゲートペアが壊れない: ☐ Pass ☐ Fail ☐ 未実施（DEV-403 が要る場合）
   - 確認経路: ☐ ユーザー辞書へ絵文字 surface を登録 ☐ その他（記載）
-- C-006 を 150% DPI で確認: ☐ Pass ☐ Fail
+- C-006 を 150% DPI で確認し、復元前に証跡を回収: ☐ Pass ☐ Fail / 回収先: ____
 - C-010 で supervisor 稼働下の Host kill、DegradedSimple 継続、pipe 復帰: ☐ Pass ☐ Fail
 - runner 実行の前後でクリップボードが全 format 保持される（遅延レンダリングを含む）: ☐ Pass ☐ Fail
 - 実行前から開いていた Notepad を操作、終了しない: ☐ Pass ☐ Fail

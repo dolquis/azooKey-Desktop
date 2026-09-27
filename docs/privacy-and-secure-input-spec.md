@@ -269,6 +269,11 @@ Host は `SettingsStore::LockPrivacyPolicy()` の `PrivacyGuard` を学習判定
 2. secure でないとき `mode = custom` なら、各クエリは上表の backing フラグをそのまま返す。
    未指定の軸は §7 schema の既定（= private 相当の安全側）で補完するため、欠落キーがあっても
    挙動は一意に定まる。
+   `custom.prediction` の欠落は `true`、型不正は予測不許可として扱う。
+   グローバルの予測不許可は app profile の `privacyMode = normal` でも解除できず、
+   profile の `privacyMode = secure` は予測を停止する。
+   `predictionEnabled` は予測候補ウィンドウの独立した表示スイッチであり、
+   `custom.prediction` の許可値を変更しない。
 3. **不変条件の強制**: §5.1 の 外部 AI 許可 ⇒ AI 候補生成許可 を保つため、
    `aiCandidate = false` のときは `externalAi` の保存値によらず 外部 AI 不許可 に
    強制する（AI 候補生成を止めるなら外部送信も止まる、の安全側固定）。このとき backend は
@@ -352,11 +357,13 @@ TIP は非 secure 入力で、composition または選択範囲の開始位置�
 （既定 `[]`）。実効リストは §4.1 のとおりバンドル既定との和集合で評価する。
 
 `settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・
-`custom.learning`・`custom.aiCandidate`・`custom.externalAi`・`custom.detailedLogging`・`redactLogs`・
+`custom.learning`・`custom.prediction`・`custom.aiCandidate`・`custom.externalAi`・
+`custom.detailedLogging`・`redactLogs`・
 `secureApps`・`showSecureIndicator` であり、
-`inference-host/src/SettingsStore.cpp` と `settings-app/SettingsDocument.cpp` の許可キーも
-これに一致する。schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
-`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`・`custom.prediction`）は書き込めない。`additionalProperties: false` が
+設定アプリの保存許可キーは `settings-app/SettingsDocument.cpp` が管理し、
+予測許可は `tsf-tip/src/TipLocalSettings.cpp` が設定から解決する。
+schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
+`disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`）は書き込めない。`additionalProperties: false` が
 schema 検証で弾き、`settings-app/SettingsDocument.cpp` の許可キー判定は未知の `privacy`
 フィールドを含む object を `{"mode": "secure"}` へ潰す。実行時はこれらの軸の既定値が
 適用され、`autoSecureInput` は `true` 固定として §4 の自動 secure 判定が常に働く。

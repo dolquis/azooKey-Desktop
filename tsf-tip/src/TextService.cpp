@@ -4465,7 +4465,8 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     request = std::move(ipc_prediction_request_);
     ipc_prediction_request_.reset();
   }
-  if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed))
+  if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed) ||
+      !prediction_allowed_.load(std::memory_order_relaxed))
     return;
   const auto retry_dropped_request = [&] {
     if (ipc_stop_.load(std::memory_order_relaxed)) return;
@@ -4480,7 +4481,8 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     if (notify) candidate_ui_.PostCandidatesReady();
   };
   if (prediction_settings_changed_.load(std::memory_order_acquire) ||
-      prediction_settings_refreshing_.load(std::memory_order_acquire)) {
+      prediction_settings_refreshing_.load(std::memory_order_acquire) ||
+      !prediction_allowed_.load(std::memory_order_relaxed)) {
     retry_dropped_request();
     return;
   }
@@ -4503,6 +4505,15 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     std::lock_guard lock(ipc_mtx_);
     if (ipc_inflight_id_ == envelope.request_id) ipc_inflight_id_ = 0;
   };
+  // The settings watcher may revoke permission while the payload is built.
+  if (prediction_settings_changed_.load(std::memory_order_acquire) ||
+      prediction_settings_refreshing_.load(std::memory_order_acquire) ||
+      secure_input_.load(std::memory_order_relaxed) ||
+      !prediction_allowed_.load(std::memory_order_relaxed)) {
+    clear_inflight();
+    retry_dropped_request();
+    return;
+  }
   if (!ipc_client_.Send(envelope)) {
     clear_inflight();
     retry_dropped_request();
@@ -4611,6 +4622,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   decision.backend = ai_settings.backend;
   decision.detailed_logging_allowed = ai_settings.privacy_policy.detailed_logging_allowed;
   decision.learning_allowed = ai_settings.privacy_policy.learning_allowed;
+  decision.prediction_allowed = ai_settings.prediction_allowed;
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
@@ -4628,6 +4640,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     const auto mode = value.GetString("privacyMode").value_or("inherit");
     if (mode == "secure") {
       decision.secure = true;
+      decision.prediction_allowed = false;
       if (evaluate_ai) decision.ai = {};
     } else if (mode == "private") {
       if (evaluate_ai) decision.ai.external = false;
@@ -4643,10 +4656,12 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   if (decision.secure) {
     decision.ai = {};
     decision.learning_allowed = false;
+    decision.prediction_allowed = false;
   }
   // A failed scope probe must never unlock development body logging.
   decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
   secure_input_.store(decision.secure, std::memory_order_relaxed);
+  prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
   return decision;
 }
 
@@ -5059,6 +5074,12 @@ void TextService::RefreshPrediction(ITfContext* context) {
     prediction_last_query_key_.clear();
     return;
   }
+  if (!prediction_allowed_.load(std::memory_order_relaxed)) {
+    ClearPrediction();
+    prediction_cache_.clear();
+    prediction_last_query_key_.clear();
+    return;
+  }
   if (!context || !core_input_active_ || !keyboard_open_ || alnum_mode_ ||
       candidate_ui_.IsShowing() ||
       (input_state_.kind() != core::InputStateKind::Composing &&
@@ -5127,7 +5148,8 @@ void TextService::ApplyPredictionResult() {
     return;
   }
   if (!result || !active_context_ || secure_input_.load(std::memory_order_relaxed) ||
-      candidate_ui_.IsShowing() || input_state_.confirmed_kana() != result->kana ||
+      !prediction_allowed_.load(std::memory_order_relaxed) || candidate_ui_.IsShowing() ||
+      input_state_.confirmed_kana() != result->kana ||
       prediction_left_context_ != result->left_side_context)
     return;
   {
@@ -5635,10 +5657,12 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
   // message, learning and prediction traffic never leaves the TIP while the
   // context is secure. Conversion traffic is not suppressed: the user still has
   // to be able to type in a password manager's notes field.
-  if (secure_input_.load(std::memory_order_relaxed) &&
-      (type == ipc::MessageType::CommitObservation ||
-       type == ipc::MessageType::CommitSegmentsObservation ||
-       type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions))
+  if ((secure_input_.load(std::memory_order_relaxed) &&
+       (type == ipc::MessageType::CommitObservation ||
+        type == ipc::MessageType::CommitSegmentsObservation ||
+        type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions)) ||
+      (type == ipc::MessageType::QueryPredictions &&
+       !prediction_allowed_.load(std::memory_order_relaxed)))
     return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0});

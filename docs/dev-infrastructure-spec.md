@@ -362,6 +362,19 @@ compat の `caseSelection` は `report.json` の `case_selection`（§13.5）を
 Markdown では、未実行のケースがある target と C-001 を除外した target の行に、
 部分実行であることを明記する。
 
+`scripts/vm-verify-linear-drafts.ps1` は schema v1 のサマリ JSON とゲート ID 対応表を
+読み、`issueId` ごとに Markdown の下書きを出す。対応表は `schemaVersion: 1` と
+`gates` 配列を持ち、各行に `source`（bootstrap / diag / compat）、`id`、
+`issueId`（DEV-番号）、必要に応じて compat の `targetId` を指定する。
+同じゲートを複数課題へ対応付けてもよい。対応表にあるがサマリにない ID は
+「未取得」とし、compat の `caseSelection.excluded` にある ID は「未実行」とする。
+自由文・入力本文・ローカル絶対パスは下書きへ転記しない。
+checkpoint 名は summary JSON にないため任意の明示指定とし、未指定なら空欄にする。
+下書きは人間ゲートの合否判定も Linear への投稿も行わない。
+bootstrap の package commit が manifest と不一致の場合、その行の status は `excluded` とし、
+元の観測 status を転記しない。出力先に既存ファイルがある場合は、古い下書きを残したまま
+新しい下書きを混在させないよう書き込みを拒否する。
+
 ### 2.7 ビルド時間の内訳（実測）
 
 本節は M37 の受け入れ条件ではなく、ビルド時間短縮策の当てどころを決めるための計測

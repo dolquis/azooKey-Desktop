@@ -488,6 +488,35 @@ pwsh -File .\scripts\vm-verify-summary.ps1 `
 サマリは観測値の集約であり、ゲートの合否は各課題の判定基準で人が決める。
 入力の schema と分類は `docs/dev-infrastructure-spec.md` §2.6 を参照する。
 
+課題ごとの転記下書きが必要な場合は、ゲート ID と課題の対応表を用意し、次を実行する。
+対応表の各行は `source`、`id`、`issueId` と、必要なら compat の `targetId` を指定する。
+同じゲートを複数課題へ記録する場合は行を分ける（例: C-010 は DEV-716 と DEV-676）。
+対応表は実施するゲートに合わせて確認し、下書きの出力後に Part C の課題別確認項目を人が埋める。
+
+```json
+{
+  "schemaVersion": 1,
+  "gates": [
+    { "source": "compat", "id": "C-001", "issueId": "DEV-716" },
+    { "source": "compat", "id": "C-010", "issueId": "DEV-716" },
+    { "source": "compat", "id": "C-010", "issueId": "DEV-676" }
+  ]
+}
+```
+
+```powershell
+pwsh -File .\scripts\vm-verify-linear-drafts.ps1 `
+  -SummaryPath .\build\vm-verify-summary\verification-summary.json `
+  -GateMapPath .\collected\gate-map.json `
+  -CheckpointName <checkpoint name> `
+  -OutputDirectory .\build\vm-verify-drafts
+```
+
+`-CheckpointName` を省くと checkpoint 名は空欄になる。`DEV-番号.md` の各行は自動観測であり、
+未取得は合否を意味しない。人間待ち・実機の観測・合否の欄は空欄のまま残る。
+出力先は実行ごとに空のディレクトリを指定する。既存ファイルがある場合は書き込まずに止まる。
+スクリプトは Linear に投稿しない。記録と合否判定は人が行う。
+
 ```md
 ## 検証環境
 - 検証日 / 検証者:

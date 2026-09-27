@@ -31,7 +31,8 @@ class ReconversionFunction final : public ITfFnReconversion {
 
   // Convenience entry point for the conversion key; call outside an EditSession.
   HRESULT ReconvertSelection(ITfContext* context);
-  HRESULT CaptureSelection(ITfContext* context, ITfRange** range, std::wstring& surface);
+  HRESULT CaptureSelection(ITfContext* context, ITfRange** range, std::wstring& surface,
+                           ITfRange* expected_range = nullptr);
 
  private:
   ~ReconversionFunction() = default;

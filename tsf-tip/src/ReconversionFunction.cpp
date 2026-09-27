@@ -273,6 +273,20 @@ HRESULT ReadRangeSurface(ITfRange* range, TfClientId client_id, std::wstring& su
                          [&](TfEditCookie cookie) { return ReadSurface(range, cookie, surface); });
 }
 
+HRESULT RangesMatch(ITfRange* selected, ITfRange* expected, TfClientId client_id, bool& match) {
+  match = false;
+  return WithEditSession(selected, client_id, TF_ES_READ, [&](TfEditCookie cookie) {
+    BOOL same_start = FALSE;
+    HRESULT hr = selected->IsEqualStart(cookie, expected, TF_ANCHOR_START, &same_start);
+    if (FAILED(hr)) return hr;
+    if (!same_start) return S_OK;
+    BOOL same_end = FALSE;
+    hr = selected->IsEqualEnd(cookie, expected, TF_ANCHOR_END, &same_end);
+    if (SUCCEEDED(hr)) match = same_end != FALSE;
+    return hr;
+  });
+}
+
 HRESULT ReplaceCandidate(ITfRange* range, TfClientId client_id, const std::wstring& original,
                          const std::wstring& replacement) {
   return WithEditSession(range, client_id, TF_ES_READWRITE, [&](TfEditCookie cookie) {
@@ -280,6 +294,7 @@ HRESULT ReplaceCandidate(ITfRange* range, TfClientId client_id, const std::wstri
     HRESULT hr = ReadSurface(range, cookie, current);
     if (FAILED(hr)) return hr;
     if (current != original) return TF_E_NOCONVERSION;
+    if (replacement == original) return S_OK;
     return range->SetText(cookie, 0, replacement.data(), static_cast<LONG>(replacement.size()));
   });
 }
@@ -432,7 +447,7 @@ HRESULT ReconversionFunction::ReconvertSelection(ITfContext* context) {
 }
 
 HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** range,
-                                               std::wstring& surface) {
+                                               std::wstring& surface, ITfRange* expected_range) {
   if (!context) return E_INVALIDARG;
   if (!range) return E_INVALIDARG;
   *range = nullptr;
@@ -457,6 +472,15 @@ HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** r
     selection = nullptr;
     if (FAILED(query_hr)) return query_hr;
     if (!convertible || !*range) return TF_E_NOCONVERSION;
+    if (expected_range) {
+      bool match = false;
+      const HRESULT match_hr = RangesMatch(*range, expected_range, client_id_, match);
+      if (FAILED(match_hr) || !match) {
+        (*range)->Release();
+        *range = nullptr;
+        return FAILED(match_hr) ? match_hr : TF_E_NOCONVERSION;
+      }
+    }
     const HRESULT read_hr = ReadRangeSurface(*range, client_id_, surface);
     if (FAILED(read_hr) || surface.empty()) {
       (*range)->Release();

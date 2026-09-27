@@ -69,6 +69,18 @@ TEST_F(LocalSettingsTest, LiveConversionDefaultsOffAndReloads) {
   ASSERT_TRUE(WaitUntil([&] { return !reader.LiveConversionSnapshot(); }));
 }
 
+TEST_F(LocalSettingsTest, MaxContextLengthUsesSchemaRangeAndReloads) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_EQ(reader.MaxContextLengthSnapshot(), 10u);
+  Write(R"({"maxContextLength":0})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 0; }));
+  Write(R"({"maxContextLength":30})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 30; }));
+  Write(R"({"maxContextLength":31})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.MaxContextLengthSnapshot() == 10; }));
+}
+
 TEST_F(LocalSettingsTest, PredictionDefaultsOnAndReloads) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));

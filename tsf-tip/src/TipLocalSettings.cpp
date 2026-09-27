@@ -218,6 +218,7 @@ void TipLocalSettings::Stop() noexcept {
   rewriters_.reset();
   ai_ = {};
   live_conversion_ = false;
+  max_context_length_ = 10;
   prediction_enabled_ = true;
   romaji_table_.reset();
 }
@@ -242,6 +243,11 @@ bool TipLocalSettings::LiveConversionSnapshot() const {
   return live_conversion_;
 }
 
+uint32_t TipLocalSettings::MaxContextLengthSnapshot() const {
+  const std::lock_guard lock(mutex_);
+  return max_context_length_;
+}
+
 bool TipLocalSettings::PredictionEnabledSnapshot() const {
   const std::lock_guard lock(mutex_);
   return prediction_enabled_;
@@ -258,6 +264,7 @@ void TipLocalSettings::Reload() noexcept {
   TipAiSettings ai;
   ai.prediction_allowed = false;  // An unreadable file must not grant prediction permission.
   bool live_conversion = false;
+  uint32_t max_context_length = 10;
   bool prediction_enabled = true;
   bool custom_romaji = false;
   std::string custom_romaji_path;
@@ -288,6 +295,9 @@ void TipLocalSettings::Reload() noexcept {
       rewriters.minimum = static_cast<uint32_t>(
           std::clamp<int64_t>(json->GetInt("emojiTriggerMinQueryLength").value_or(1), 1, 8));
       live_conversion = json->GetBool("liveConversion").value_or(false);
+      if (const auto configured = json->GetInt("maxContextLength");
+          configured && *configured >= 0 && *configured <= 30)
+        max_context_length = static_cast<uint32_t>(*configured);
       prediction_enabled = json->GetBool("predictionEnabled").value_or(true);
       custom_romaji = json->GetString("inputStyle").value_or("default") == "custom";
       custom_romaji_path = json->GetString("customRomajiTablePath").value_or("");
@@ -356,6 +366,7 @@ void TipLocalSettings::Reload() noexcept {
     rewriters_ = rewriters;
     ai_ = ai;
     live_conversion_ = live_conversion;
+    max_context_length_ = max_context_length;
     prediction_enabled_ = prediction_enabled;
     romaji_table_ = std::move(romaji_table);
   }
@@ -498,6 +509,11 @@ void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {
   const std::lock_guard<std::mutex> lock(mutex_);
   live_conversion_ = enabled;
+}
+
+void TipLocalSettings::SetMaxContextLengthForTest(uint32_t length) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  max_context_length_ = (std::min)(length, 30u);
 }
 
 void TipLocalSettings::SetPredictionEnabledForTest(bool enabled) {

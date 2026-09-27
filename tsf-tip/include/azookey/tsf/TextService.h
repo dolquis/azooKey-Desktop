@@ -190,6 +190,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_live_conversion_for_test(bool enabled) {
     local_settings_.SetLiveConversionForTest(enabled);
   }
+  void set_max_context_length_for_test(uint32_t length) {
+    local_settings_.SetMaxContextLengthForTest(length);
+  }
   void set_prediction_enabled_for_test(bool enabled) {
     local_settings_.SetPredictionEnabledForTest(enabled);
   }
@@ -284,7 +287,18 @@ class TextService final : public ITfTextInputProcessorEx,
     reconversion_list_ = list;
     if (list) list->AddRef();
   }
+  void set_text_edit_context_for_test(ITfContext* context) {
+    if (text_edit_context_) text_edit_context_->Release();
+    text_edit_context_ = context;
+    if (context) context->AddRef();
+  }
   bool has_reconversion_ui_for_test() const { return reconversion_list_ != nullptr; }
+  void process_candidates_ready_for_test() { OnCandidatesReady(this); }
+  bool has_reconversion_result_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return reconversion_result_.has_value();
+  }
+  void process_reconversion_result_for_test() { ShowReconversionResult(); }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
   HRESULT request_commit_edit_session_for_test(ITfContext* context) {
@@ -515,6 +529,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pipe_name_for_test_;
 #endif
   std::string ipc_pending_reading_;
+  std::string ipc_pending_left_context_;
   std::string ipc_pending_raw_romaji_;
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
@@ -623,6 +638,7 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfContext* text_edit_context_{nullptr};                   // UI thread, AddRef'd
   DWORD text_edit_cookie_{TF_INVALID_COOKIE};
   bool reconversion_prefetch_pending_{false};  // UI thread
+  std::wstring reconversion_prefetch_surface_;  // UI thread, in-flight surface
   std::atomic<uint64_t> reconversion_generation_{0};
   ITfRange* reconversion_range_{nullptr};         // UI thread only
   ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
@@ -674,6 +690,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
   void PostQueryLiveConversion(ITfContext* context, const std::string& reading);
+  std::string CaptureLeftContext(ITfContext* context, bool secure);
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
@@ -699,7 +716,9 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT AcceptPrediction(ITfContext* context, size_t index);
   HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
   RECT PredictionCaretRect();
-  HRESULT StartSelectionReconversion(ITfContext* context);
+  HRESULT StartSelectionReconversion(ITfContext* context,
+                                     const std::wstring* expected_surface = nullptr,
+                                     ITfRange* expected_range = nullptr);
   HRESULT CompleteReconversionSelection(size_t index);
   void ClearReconversionState();
   void ShowReconversionResult();

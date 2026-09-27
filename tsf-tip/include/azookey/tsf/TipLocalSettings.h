@@ -48,6 +48,7 @@ class TipLocalSettings final {
   std::optional<TipRewriterSettings> RewriterSnapshot() const;
   TipAiSettings AiSnapshot() const;
   bool LiveConversionSnapshot() const;
+  uint32_t MaxContextLengthSnapshot() const;
   bool PredictionEnabledSnapshot() const;
   std::shared_ptr<const core::CustomRomajiTable> RomajiSnapshot() const;
 
@@ -55,6 +56,7 @@ class TipLocalSettings final {
   void SetForTest(const core::BracketSettings& settings);
   void SetPrivacyForTest(std::string_view contents);
   void SetLiveConversionForTest(bool enabled);
+  void SetMaxContextLengthForTest(uint32_t length);
   void SetPredictionEnabledForTest(bool enabled);
   void SetRomajiTableForTest(std::shared_ptr<const core::CustomRomajiTable> table);
   bool WaitForEnabledForTest(bool enabled);
@@ -86,6 +88,7 @@ class TipLocalSettings final {
   std::optional<TipRewriterSettings> rewriters_;
   TipAiSettings ai_;
   bool live_conversion_{false};
+  uint32_t max_context_length_{10};
   bool prediction_enabled_{true};
   std::shared_ptr<const core::CustomRomajiTable> romaji_table_;
   std::filesystem::path path_;

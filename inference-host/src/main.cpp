@@ -297,6 +297,7 @@ int main(int argc, char** argv) {
   }
   config = std::move(parsed_args.args.config);
   auto explicit_learning_path = std::move(parsed_args.args.explicit_learning_path);
+  auto explicit_data_root = std::move(parsed_args.args.explicit_data_root);
   auto explicit_user_dict_path = std::move(parsed_args.args.explicit_user_dict_path);
   auto mock_dict_path = std::move(parsed_args.args.mock_dict_path);
   const bool explicit_backend = parsed_args.args.explicit_backend;
@@ -317,6 +318,7 @@ int main(int argc, char** argv) {
 
   azookey::host::UserDataPathInputs path_inputs;
   path_inputs.local_app_data = azookey::host::GetPlatformLocalAppData();
+  path_inputs.explicit_root_dir = explicit_data_root;
   path_inputs.explicit_learning_path = explicit_learning_path;
   path_inputs.explicit_user_dict_path = explicit_user_dict_path;
   auto user_paths = azookey::host::ResolveUserDataPaths(path_inputs);

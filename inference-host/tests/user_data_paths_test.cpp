@@ -44,6 +44,33 @@ TEST(UserDataPathsTest, ExplicitPathsOverrideDefaults) {
   EXPECT_EQ(paths->user_dict_path, explicit_user_dict);
 }
 
+TEST(UserDataPathsTest, ExplicitRootKeepsAllHostFilesTogether) {
+  const auto root = TestRoot("azookey_host_process_root");
+  azookey::host::UserDataPathInputs inputs;
+  inputs.local_app_data = TestRoot("azookey_actual_localappdata");
+  inputs.explicit_root_dir = root;
+  const auto paths = azookey::host::ResolveUserDataPaths(inputs);
+  ASSERT_TRUE(paths);
+  EXPECT_EQ(paths->root_dir, root);
+  EXPECT_EQ(paths->settings_path, root / "config" / "settings.json");
+  EXPECT_EQ(paths->learning_path, root / "data" / "learning.tsv");
+  EXPECT_EQ(paths->user_dict_path, root / "data" / "user_dict.json");
+  EXPECT_EQ(paths->logs_dir, root / "logs");
+  EXPECT_EQ(paths->models_dir, root / "models");
+
+  inputs.local_app_data.reset();
+  const auto without_local = azookey::host::ResolveUserDataPaths(inputs);
+  ASSERT_TRUE(without_local);
+  EXPECT_EQ(without_local->root_dir, root);
+}
+
+TEST(UserDataPathsTest, RelativeExplicitRootFailsClosed) {
+  azookey::host::UserDataPathInputs inputs;
+  inputs.local_app_data = TestRoot("azookey_actual_localappdata");
+  inputs.explicit_root_dir = "relative-root";
+  EXPECT_FALSE(azookey::host::ResolveUserDataPaths(inputs));
+}
+
 TEST(UserDataPathsTest, MissingLocalAppDataFailsClosed) {
   azookey::host::UserDataPathInputs inputs;
   EXPECT_FALSE(azookey::host::ResolveUserDataPaths(inputs).has_value());

@@ -13,6 +13,7 @@ namespace azookey::host {
 struct HostArgs {
   EngineConfig config;
   std::optional<std::filesystem::path> explicit_learning_path;
+  std::optional<std::filesystem::path> explicit_data_root;
   std::optional<std::filesystem::path> explicit_user_dict_path;
   std::string mock_dict_path;
   bool explicit_backend{false};

@@ -93,6 +93,16 @@ HostArgsParseResult ParseHostArgs(const std::vector<std::string>& argv, EngineCo
       args.explicit_learning_path = azookey::core::Utf8Path(value);
       continue;
     }
+    if (arg == "--data-root") {
+      std::string value;
+      if (!TakeValue(argv, i, arg, value, result.error)) return result;
+      args.explicit_data_root = azookey::core::Utf8Path(value);
+      if (!args.explicit_data_root->is_absolute()) {
+        result.error = "--data-root requires an absolute path";
+        return result;
+      }
+      continue;
+    }
     if (arg == "--user-dict") {
       std::string value;
       if (!TakeValue(argv, i, arg, value, result.error)) return result;

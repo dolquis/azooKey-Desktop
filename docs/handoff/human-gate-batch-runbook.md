@@ -387,6 +387,7 @@ C-013 の直接実行前には `hyper-v-tip-verification.md` に従い、対象�
 `--cases` と `-CompatCases` は必要な C-001 を自動で追加する。選択と除外の詳細は
 `compat-test/README.md` と `hyper-v-tip-verification.md` に従う。
 各回の `report.json` と `case_selection` を保存し、未実行ケースを Pass と数えない。
+追加された C-014 / C-016 はライブ変換 OFF、C-018 は ON の report で判定する。設定を切り替える場合は `dev32-verification-checklist.md` の compat 分担に従い、別の出力先で実行して設定と `case_selection` を記録する。反対の設定での `failing-skip` を Pass に読み替えない。C-015 / C-017 / C-018 / C-019 の自動判定は M13〜M15 の人の表示・操作判断を代替しない。
 ゲスト内で直接実行した C-006 の出力は `-Run` と違って自動回収されない。150% と 200% の実走ごとに異なる出力ディレクトリを指定し、PowerShell Direct の `Copy-Item -FromSession` で `report.json` を含むディレクトリをホストの別々の回収先へコピーする。DEV-365 のスケール別目視記録・画像もホストへ保存し、ファイルの存在と対象スケールを確認してから checkpoint を復元する。回収方法の前提と資格情報の扱いは `hyper-v-tip-verification.md` の手順 3 に従う。
 
 終了コードは、全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2` である。
@@ -758,7 +759,8 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - C-006（150% / 200% の各回）: コマンド / 出力先 / 終了コード / `case_selection` / ホスト回収先: ____
 - C-013: コマンド / 出力先 / 終了コード / `case_selection`: ____
 - C-010: コマンド / 出力先 / 終了コード / `case_selection`: ____
-- case ごとの結果 (C-001〜C-013、C-005 を除く): pass __ / fail __ / failing-skip __ / 除外・未実行 __
+- 設定別の追加実行（C-014 / C-016: live OFF、C-018: live ON、C-019: 予測 ON）: 設定 / コマンド / 出力先 / 終了コード / `case_selection`: ____
+- case ごとの結果 (C-001〜C-019、C-005 を除く): pass __ / fail __ / failing-skip __ / 除外・未実行 __
 - C-013 の結果は DEV-1263 にも記録し、DEV-716 の C-001〜C-012 の合否と分ける: ☐ 記録
 - C-005 は対象外（DEV-782）。failing-skip として残ることを確認: ☐ 確認
 

@@ -199,10 +199,12 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
 
   const std::string pipe_name = UniquePipeName("azookey-newwords-cli-test");
   std::mutex mutex;
+  std::vector<std::string> seen_trace_ids;
   azookey::ipc::NamedPipeServer server;
   const bool started = server.Start(
       pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
         std::lock_guard<std::mutex> lock(mutex);
+        seen_trace_ids.push_back(req.trace_id);
         return dispatcher.Dispatch(req);
       });
   if (!started) {
@@ -225,6 +227,13 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
   EXPECT_TRUE(json->GetBool("ok").value_or(false));
   EXPECT_TRUE(json->GetBool("changed").value_or(false));
   EXPECT_EQ(json->GetString("via"), "ipc");
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(seen_trace_ids.size(), 2u);
+    EXPECT_EQ(seen_trace_ids[0], seen_trace_ids[1]);
+    EXPECT_EQ(seen_trace_ids[0].size(), 36u);
+    EXPECT_NE(seen_trace_ids[0], "newwords-cli");
+  }
   // pending -> confirmed in the running host, and the next conversion has it.
   EXPECT_TRUE(has_auto_word());
 
@@ -233,6 +242,12 @@ TEST(NewWordsCliTest, ConfirmThroughTheRunningHostInjectsTheWord) {
       *Parse({"reject", "--reading", "しらない", "--surface", "知らない"}), run);
   EXPECT_EQ(result.exit_code, 1);
   EXPECT_EQ(result.error, "not_found");
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(seen_trace_ids.size(), 4u);
+    EXPECT_EQ(seen_trace_ids[2], seen_trace_ids[3]);
+    EXPECT_NE(seen_trace_ids[0], seen_trace_ids[2]);
+  }
 
   run.handshake_token = "wrong-token";
   result = azookey::host::RunNewWordsCli(

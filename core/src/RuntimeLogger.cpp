@@ -421,14 +421,19 @@ void RuntimeLogger::Log(RuntimeLogLevel level, std::string_view event,
 
     std::lock_guard lock(mutex_);
     std::error_code ec;
-    std::filesystem::create_directories(options_.logs_directory, ec);
+    const auto directory =
+        options_.output_path.empty() ? options_.logs_directory : options_.output_path.parent_path();
+    if (!directory.empty()) std::filesystem::create_directories(directory, ec);
     if (ec) return;
-    if (!retention_checked_) {
+    if (options_.output_path.empty() && !retention_checked_) {
       PruneExpiredLogs(options_);
       retention_checked_ = true;
     }
-    const auto path = options_.logs_directory /
-                      (options_.component + "-" + DateFromTimestamp(record.timestamp) + ".jsonl");
+    const auto path =
+        options_.output_path.empty()
+            ? options_.logs_directory /
+                  (options_.component + "-" + DateFromTimestamp(record.timestamp) + ".jsonl")
+            : options_.output_path;
     AppendLine(options_, path, line);
   } catch (...) {
     // Runtime logging is best-effort and must never affect input or host availability.

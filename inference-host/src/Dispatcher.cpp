@@ -23,6 +23,7 @@
 #include "azookey/core/CrashReporting.h"
 #include "azookey/core/EtwLogger.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/logging/Phase.h"
 
 namespace azookey::host {
 
@@ -61,9 +62,9 @@ core::EtwGuid ClientGuid(std::string_view value) {
 
 class InferenceTrace {
  public:
-  InferenceTrace(uint64_t request, std::string_view client, core::EtwBackend backend,
-                 uint64_t length, logging::RuntimeLogger* logger)
-      : context_{request, ClientGuid(client)}, logger_(&DispatcherLogger(logger)) {
+  InferenceTrace(uint64_t request, std::string_view client, std::string_view trace_id,
+                 core::EtwBackend backend, uint64_t length, logging::RuntimeLogger* logger)
+      : context_{request, ClientGuid(client), trace_id}, logger_(logger) {
     core::EtwLogger::LogInferenceStart(request, backend, length, context_.client);
   }
   ~InferenceTrace() {
@@ -74,20 +75,28 @@ class InferenceTrace {
             .count();
     core::EtwLogger::LogInferenceEnd(context_.request_id, candidates_, latency_ms, result_,
                                      context_.client);
-    if (result_ == core::EtwResult::Success || result_ == core::EtwResult::Cancelled) {
-      logger_->Log(logging::RuntimeLogLevel::Info, "query_latency",
-                   {{"request_id", context_.request_id},
-                    {"latency_ms", latency_ms},
-                    {"result", logging::RuntimeLogSafeText(
-                                   result_ == core::EtwResult::Success ? "ok" : "cancelled")}});
-    } else {
-      logger_->Log(logging::RuntimeLogLevel::Error, "query_latency",
-                   {{"request_id", context_.request_id},
-                    {"latency_ms", latency_ms},
-                    {"result", logging::RuntimeLogSafeText("error")},
-                    {"error_code",
-                     logging::RuntimeLogSafeText(
-                         error_code_ == core::EtwErrorCode::Protocol ? "protocol" : "business")}});
+    if (!logger_ || !logger_->enabled()) return;
+    try {
+      if (result_ == core::EtwResult::Success || result_ == core::EtwResult::Cancelled) {
+        logger_->Log(logging::RuntimeLogLevel::Info, "query_latency",
+                     {{"trace_id", logging::RuntimeLogSafeText(std::string(context_.trace_id))},
+                      {"request_id", context_.request_id},
+                      {"latency_ms", latency_ms},
+                      {"result", logging::RuntimeLogSafeText(
+                                     result_ == core::EtwResult::Success ? "ok" : "cancelled")}});
+      } else {
+        logger_->Log(
+            logging::RuntimeLogLevel::Error, "query_latency",
+            {{"trace_id", logging::RuntimeLogSafeText(std::string(context_.trace_id))},
+             {"request_id", context_.request_id},
+             {"latency_ms", latency_ms},
+             {"result", logging::RuntimeLogSafeText("error")},
+             {"error_code", logging::RuntimeLogSafeText(error_code_ == core::EtwErrorCode::Protocol
+                                                            ? "protocol"
+                                                            : "business")}});
+      }
+    } catch (...) {
+      // Telemetry allocation must not terminate request completion.
     }
   }
   void Finish(core::EtwResult result, uint64_t candidates = 0) {
@@ -201,16 +210,35 @@ class RequestCompletionGuard {
   bool active_{true};
 };
 
+void LogHostQueueWait(logging::RuntimeLogger* logger, const ipc::Envelope& req,
+                      std::optional<std::chrono::steady_clock::time_point> start,
+                      std::string_view result) {
+  if (!start) return;
+  // RequestScheduler has no work queue. This measures admission, including any
+  // wait on its mutex, rather than claiming time spent before transport dispatch.
+  logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
+              {{"trace_id", logging::RuntimeLogSafeText(req.trace_id)},
+               {"request_id", req.request_id},
+               {"phase", logging::RuntimeLogSafeText(
+                             std::string(logging::PhaseName(logging::Phase::HostQueueWait)))},
+               {"latency_ms",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - *start)
+                    .count()},
+               {"result", logging::RuntimeLogSafeText(std::string(result))}});
+}
+
 }  // namespace
 
 Dispatcher::Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
                        learning::UserDictionary* user_dict, DispatcherConfig config,
-                       SettingsStore* settings_store, learning::AutoWordStore* auto_word_store)
+                       SettingsStore* settings_store, learning::AutoWordStore* auto_word_store,
+                       logging::RuntimeLogger* runtime_logger)
     : engine_(engine),
       scheduler_(scheduler),
       user_dict_(user_dict),
       settings_store_(settings_store),
       auto_word_store_(auto_word_store),
+      runtime_logger_(runtime_logger),
       config_(std::move(config)) {
   if (!config_.update_config_mutex) {
     config_.update_config_mutex = std::make_shared<std::mutex>();
@@ -549,20 +577,25 @@ std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& re
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelope& req) {
   auto parsed = ipc::ParseQueryCandidatesRequest(req.payload_json);
-  InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Unknown,
-                       parsed ? parsed->reading.size() : 0, config_.runtime_logger);
+  InferenceTrace trace(req.request_id, client_id_, req.trace_id, core::EtwBackend::Unknown,
+                       parsed ? parsed->reading.size() : 0, runtime_logger_);
   if (!parsed) {
     trace.ProtocolError();
     ipc::QueryCandidatesResponse res;
     res.partial = false;
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
   }
+  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
+                               ? std::optional{std::chrono::steady_clock::now()}
+                               : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
+    LogHostQueueWait(runtime_logger_, req, queue_start, "error");
     // Capacity rejection is a failure, distinct from a tracked cancellation.
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(ipc::QueryCandidatesResponse{}));
   }
   scheduler_->MarkLatest(client_id_, req.request_id);
+  LogHostQueueWait(runtime_logger_, req, queue_start, "ok");
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
@@ -575,7 +608,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
       trace.ProtocolError();
       static std::atomic_flag warned = ATOMIC_FLAG_INIT;
       if (!warned.test_and_set()) {
-        DispatcherLogger(config_.runtime_logger)
+        DispatcherLogger(runtime_logger_)
             .Log(logging::RuntimeLogLevel::Warn, "invalid_mixed_emoji_query",
                  {{"request_id", req.request_id},
                   {"error_code", logging::RuntimeLogSafeText("protocol")}});
@@ -645,19 +678,24 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::Envelope& req) {
   const auto parsed = ipc::ParseQueryLiveConversionRequest(req.payload_json);
-  InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Kana,
-                       parsed ? parsed->kana.size() : 0, config_.runtime_logger);
+  InferenceTrace trace(req.request_id, client_id_, req.trace_id, core::EtwBackend::Kana,
+                       parsed ? parsed->kana.size() : 0, runtime_logger_);
   ipc::QueryLiveConversionResponse response;
   if (!parsed || parsed->kana.empty()) {
     trace.ProtocolError();
     return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
   }
 
+  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
+                               ? std::optional{std::chrono::steady_clock::now()}
+                               : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
+    LogHostQueueWait(runtime_logger_, req, queue_start, "error");
     return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
   }
   scheduler_->MarkLatest(client_id_, req.request_id);
+  LogHostQueueWait(runtime_logger_, req, queue_start, "ok");
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
@@ -685,8 +723,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
 
 std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envelope& req) {
   const auto parsed = ipc::ParseQueryPredictionsRequest(req.payload_json);
-  InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Kana,
-                       parsed ? parsed->kana.size() : 0, config_.runtime_logger);
+  InferenceTrace trace(req.request_id, client_id_, req.trace_id, core::EtwBackend::Kana,
+                       parsed ? parsed->kana.size() : 0, runtime_logger_);
   ipc::QueryPredictionsResponse response;
   if (!parsed || parsed->kana.empty()) {
     trace.ProtocolError();
@@ -701,17 +739,23 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envel
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }
 
+  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
+                               ? std::optional{std::chrono::steady_clock::now()}
+                               : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
+    LogHostQueueWait(runtime_logger_, req, queue_start, "error");
     response.ok = false;
     response.error = "too_many_pending_requests";
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }
   scheduler_->MarkLatest(client_id_, req.request_id);
+  LogHostQueueWait(runtime_logger_, req, queue_start, "ok");
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
-  auto candidates = engine_->QueryPredictions(parsed->kana, parsed->left_side_context, NowSec());
+  auto candidates =
+      engine_->QueryPredictions(parsed->kana, parsed->left_side_context, NowSec(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);
   const bool stale = !scheduler_->IsLatest(client_id_, req.request_id);
   completion.Complete();
@@ -818,12 +862,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleResolveNewWord(const ipc::Envelop
 std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::Envelope& req) {
   auto parsed = ipc::ParseQueryBatchConversionRequest(req.payload_json);
   InferenceTrace trace(
-      req.request_id, client_id_,
+      req.request_id, client_id_, req.trace_id,
       parsed && parsed->mode == "ai-cleanup" ? core::EtwBackend::Ai : core::EtwBackend::Unknown,
-      parsed ? parsed->reading.size() : 0, config_.runtime_logger);
+      parsed ? parsed->reading.size() : 0, runtime_logger_);
   if (!parsed) {
     trace.ProtocolError();
-    DispatcherLogger(config_.runtime_logger)
+    DispatcherLogger(runtime_logger_)
         .Log(logging::RuntimeLogLevel::Error, "invalid_batch_request",
              {{"request_id", req.request_id},
               {"error_code", logging::RuntimeLogSafeText("protocol")}});
@@ -833,14 +877,19 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
   }
 
+  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
+                               ? std::optional{std::chrono::steady_clock::now()}
+                               : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
+    LogHostQueueWait(runtime_logger_, req, queue_start, "error");
     // Preserve the wire response while recording the capacity rejection accurately.
     ipc::QueryBatchConversionResponse res;
     res.canceled = true;
     return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
   }
   scheduler_->MarkLatest(client_id_, req.request_id);
+  LogHostQueueWait(runtime_logger_, req, queue_start, "ok");
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
@@ -900,7 +949,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
             .count(),
         phase_result, trace.context()->client);
     if (!result.ok && result.error_class != AiErrorClass::Canceled) {
-      DispatcherLogger(config_.runtime_logger)
+      DispatcherLogger(runtime_logger_)
           .Log(logging::RuntimeLogLevel::Error, "ai_cleanup_fallback",
                {{"request_id", req.request_id},
                 {"error_code", logging::RuntimeLogSafeText("business")},

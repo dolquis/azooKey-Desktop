@@ -388,6 +388,10 @@ class TextService final : public ITfTextInputProcessorEx,
   // fields above and below remain presentation/metadata mirrors for TSF and
   // the batch/emoji/rewriter paths until those paths enter InputState.
   core::InputState input_state_;
+  // UI thread's current key action; copied into async IPC work before return.
+  std::string active_key_trace_id_;
+  std::chrono::steady_clock::time_point active_key_trace_start_{};
+  bool active_key_trace_active_{false};
   bool core_input_active_{true};
   bool core_action_in_progress_{false};
   std::optional<size_t> core_commit_selected_index_;
@@ -487,6 +491,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pending_reading_;
   std::string ipc_pending_raw_romaji_;
   std::string ipc_pending_batch_mode_;
+  std::string ipc_pending_trace_id_;                                 // protected by ipc_mtx_
+  std::chrono::steady_clock::time_point ipc_pending_trace_start_{};  // ipc_mtx_
   uint64_t ipc_pending_id_{0};
   bool ipc_has_request_{false};
   bool ipc_pending_is_batch_{false};
@@ -499,6 +505,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // ID of the QueryCandidates currently sent but not yet received (0 = none).
   // Protected by ipc_mtx_; written by the worker thread, read by TIP thread.
   uint64_t ipc_inflight_id_{0};
+  std::string ipc_inflight_trace_id_;  // protected by ipc_mtx_
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
   bool ipc_host_oob_cancel_{false};  // IPC worker only.
@@ -529,17 +536,20 @@ class TextService final : public ITfTextInputProcessorEx,
     bool expects_response{false};
     uint64_t cancel_target_id{0};
     uint32_t attempts{0};
+    std::string trace_id;
   };
   std::vector<IpcSendItem> ipc_send_queue_;  // protected by ipc_mtx_
   struct ReconversionRequest {
     uint64_t generation;
     std::string surface;
+    std::string trace_id;
   };
   std::optional<ReconversionRequest> ipc_reconversion_request_;  // ipc_mtx_
   struct PredictionRequest {
     uint64_t generation;
     std::string kana;
     std::string left_side_context;
+    std::string trace_id;
   };
   std::optional<PredictionRequest> ipc_prediction_request_;  // ipc_mtx_
   uint64_t prediction_generation_{0};                        // ipc_mtx_
@@ -551,6 +561,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // thread, read by TIP thread).
   std::mutex candidates_mtx_;
   std::vector<TipCandidate> candidates_;
+  std::string candidates_trace_id_;                                 // candidates_mtx_
+  std::chrono::steady_clock::time_point candidates_trace_start_{};  // candidates_mtx_
+  bool candidates_trace_pending_{false};                            // candidates_mtx_
   std::vector<ipc::BatchConversionSegment> cached_batch_segments_;
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
   struct LiveConversionResult {
@@ -597,14 +610,14 @@ class TextService final : public ITfTextInputProcessorEx,
   bool ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id);
   void QueryPendingPrediction(uint64_t& next_id);
   void ConvertBatch(uint64_t generation, const std::string& reading, const std::string& raw_romaji,
-                    const std::string& mode);
+                    const std::string& mode, const std::string& trace_id);
   bool PerformHandshake();
   bool PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeout_ms,
                         const std::string& trace_id, bool update_host_options,
                         uint64_t request_id = 1);
-  bool SendCancelOutOfBand(uint64_t target_request_id);
+  bool SendCancelOutOfBand(uint64_t target_request_id, const std::string& trace_id);
   bool SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
-                           uint32_t handshake_timeout_ms);
+                           uint32_t handshake_timeout_ms, const std::string& trace_id);
   bool WaitForReconnectOrStop(uint32_t delay_ms);
   void TransitionIpcConnection(IpcConnectionEvent event);
   enum class HealthProbeResult { Answered, TimedOut, Interrupted, ConnectionLost };
@@ -621,6 +634,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();
   std::string NextCommitObservationId();
+  std::string CurrentActionTraceId() const;
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
   void PostQueryLiveConversion(ITfContext* context, const std::string& reading);
@@ -640,7 +654,7 @@ class TextService final : public ITfTextInputProcessorEx,
   };
   PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
   static void OnCandidatesReady(void* context);
-  void ShowCandidateWindowFromCache();
+  bool ShowCandidateWindowFromCache();
   void ApplyLiveConversionResult();
   void ApplyPredictionResult();
   void RefreshPrediction(ITfContext* context);

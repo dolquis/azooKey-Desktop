@@ -23,8 +23,6 @@ struct DispatcherConfig {
   std::optional<BackendKind> override_backend;
   std::optional<std::string> override_model_path;
   std::string runtime_tier{"mock"};
-  // Non-owning; the Host logger outlives all per-connection dispatchers.
-  logging::RuntimeLogger* runtime_logger{nullptr};
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.
   std::shared_ptr<std::mutex> update_config_mutex{std::make_shared<std::mutex>()};
   std::shared_ptr<AiBackend> ai_backend{std::make_shared<AiBackend>()};
@@ -44,7 +42,8 @@ class Dispatcher {
   Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
              learning::UserDictionary* user_dict, DispatcherConfig config = {},
              SettingsStore* settings_store = nullptr,
-             learning::AutoWordStore* auto_word_store = nullptr);
+             learning::AutoWordStore* auto_word_store = nullptr,
+             logging::RuntimeLogger* runtime_logger = nullptr);
   ~Dispatcher();
 
   std::optional<ipc::Envelope> Dispatch(const ipc::Envelope& request);
@@ -81,6 +80,7 @@ class Dispatcher {
   learning::UserDictionary* user_dict_;
   SettingsStore* settings_store_;
   learning::AutoWordStore* auto_word_store_;
+  logging::RuntimeLogger* runtime_logger_;
   DispatcherConfig config_;
   bool authenticated_{false};
   bool client_supports_secure_flag_{false};

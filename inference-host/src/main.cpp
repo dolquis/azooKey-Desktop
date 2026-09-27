@@ -644,7 +644,6 @@ int main(int argc, char** argv) {
 
   azookey::host::RequestScheduler scheduler;
   azookey::host::DispatcherConfig dconf;
-  dconf.runtime_logger = &runtime_log;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = azookey::ipc::kHandshakeProtocolVersion;
   dconf.host_generation_id = CreateHostGenerationId();
@@ -702,7 +701,7 @@ int main(int argc, char** argv) {
   // For pipe mode a new Dispatcher is created per client connection so that
   // each client's authentication state is isolated.
   azookey::host::Dispatcher stdio_dispatcher(&engine, &scheduler, &user_dict, dconf,
-                                             &settings_store, &auto_word_store);
+                                             &settings_store, &auto_word_store, &runtime_log);
 
   const auto startup_health = engine.health_snapshot();
   std::cerr << "azookey inference-host started. backend="
@@ -743,9 +742,10 @@ int main(int argc, char** argv) {
 
     azookey::ipc::NamedPipeServer server;
     if (!server.Start(pipe_name, [&engine, &scheduler, &user_dict, &settings_store,
-                                  &auto_word_store, dconf]() {
-          auto d = std::make_shared<azookey::host::Dispatcher>(
-              &engine, &scheduler, &user_dict, dconf, &settings_store, &auto_word_store);
+                                  &auto_word_store, &runtime_log, dconf]() {
+          auto d = std::make_shared<azookey::host::Dispatcher>(&engine, &scheduler, &user_dict,
+                                                               dconf, &settings_store,
+                                                               &auto_word_store, &runtime_log);
           return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };
         })) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "pipe_listen_failed",

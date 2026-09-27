@@ -8,13 +8,16 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -336,6 +339,16 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-ipc-test-" + std::to_string(GetCurrentProcessId());
 
+  const auto log_dir = std::filesystem::temp_directory_path();
+  const auto log_name = "azookey-ipc-phase-test-" + std::to_string(GetCurrentProcessId());
+  const auto tip_log_path = log_dir / (log_name + "-tip.jsonl");
+  std::filesystem::remove(tip_log_path);
+  azookey::logging::RuntimeLoggerOptions tip_options;
+  tip_options.enabled = true;
+  tip_options.component = "tip";
+  tip_options.output_path = tip_log_path;
+  azookey::logging::RuntimeLogger tip_logger(std::move(tip_options));
+
   azookey::ipc::NamedPipeServer server;
   const bool started = server.Start(
       pipe_name, [](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
@@ -370,6 +383,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   ASSERT_TRUE(started);
 
   azookey::ipc::NamedPipeClient client;
+  client.SetRuntimeLogger(&tip_logger);
   ASSERT_TRUE(client.Connect(pipe_name, 2000));
 
   azookey::ipc::HandshakeRequest handshake;
@@ -414,6 +428,28 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
 
   client.Disconnect();
   server.Stop();
+
+  const auto read_log = [](const std::filesystem::path& path) {
+    std::ifstream input(path);
+    std::string all, line;
+    while (std::getline(input, line)) all += line + '\n';
+    return all;
+  };
+  const auto tip_log = read_log(tip_log_path);
+  std::istringstream lines(tip_log);
+  std::string line;
+  int ping_sends = 0;
+  int ping_recvs = 0;
+  while (std::getline(lines, line)) {
+    if (line.find("\"trace_id\":\"transport-ping\"") == std::string::npos) continue;
+    EXPECT_NE(line.find("\"event\":\"trace_phase\""), std::string::npos);
+    EXPECT_NE(line.find("\"latency_ms\":"), std::string::npos);
+    if (line.find("\"phase\":\"pipe_send\"") != std::string::npos) ++ping_sends;
+    if (line.find("\"phase\":\"pipe_recv\"") != std::string::npos) ++ping_recvs;
+  }
+  EXPECT_EQ(ping_sends, 1);
+  EXPECT_EQ(ping_recvs, 1);
+  std::filesystem::remove(tip_log_path);
 }
 
 TEST(NamedPipeTransportTest, ReceiveWithTimeoutReturnsWhenServerKeepsConnectionOpenWithoutReply) {

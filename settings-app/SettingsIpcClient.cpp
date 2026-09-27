@@ -6,6 +6,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
 
 namespace azookey::settings {
 namespace {
@@ -14,10 +15,10 @@ constexpr uint64_t kHandshakeRequestId = 1;
 constexpr uint64_t kUpdateConfigRequestId = 2;
 
 azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageType type,
-                                    std::string payload) {
+                                    std::string payload, const std::string& trace_id) {
   azookey::ipc::Envelope envelope;
   envelope.request_id = request_id;
-  envelope.trace_id = "settings-app";
+  envelope.trace_id = trace_id;
   envelope.type = type;
   envelope.payload_json = std::move(payload);
   return envelope;
@@ -44,6 +45,13 @@ SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) 
                          : std::optional<std::string>(options.handshake_token);
   if (!token) return Failure("settings were saved, but the IPC token is unavailable");
 
+  std::string trace_id;
+  try {
+    trace_id = azookey::ipc::GenerateTraceId();
+  } catch (...) {
+    return Failure("settings were saved, but the IPC trace ID is unavailable");
+  }
+
   azookey::ipc::NamedPipeClient client;
   if (!client.Connect(options.pipe_name, options.connect_timeout_ms)) {
     return Failure("settings were saved, but the inference host is not running");
@@ -56,7 +64,7 @@ SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) 
   handshake.client_id = "settings-app";
   handshake.handshake_token = *token;
   if (!client.Send(MakeEnvelope(kHandshakeRequestId, azookey::ipc::MessageType::Handshake,
-                                azookey::ipc::BuildHandshakeRequest(handshake)))) {
+                                azookey::ipc::BuildHandshakeRequest(handshake), trace_id))) {
     return Failure("settings were saved, but the host handshake could not be sent");
   }
   const auto handshake_response = client.ReceiveWithTimeout(options.response_timeout_ms);
@@ -70,8 +78,8 @@ SettingsIpcResult NotifyHostOfSettingsChange(const SettingsIpcOptions& options) 
     return Failure("settings were saved, but the host rejected the handshake");
   }
 
-  if (!client.Send(
-          MakeEnvelope(kUpdateConfigRequestId, azookey::ipc::MessageType::UpdateConfig, "{}"))) {
+  if (!client.Send(MakeEnvelope(kUpdateConfigRequestId, azookey::ipc::MessageType::UpdateConfig,
+                                "{}", trace_id))) {
     return Failure("settings were saved, but UpdateConfig could not be sent");
   }
   const auto update_response = client.ReceiveWithTimeout(options.response_timeout_ms);

@@ -39,6 +39,7 @@
 #include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -775,6 +776,14 @@ void ProbeRegistration(Snapshot& snapshot) {
 #endif
 }
 
+std::optional<std::string> DiagnosticTraceId() noexcept {
+  try {
+    return ipc::GenerateTraceId();
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* ping_json) {
   const auto token = ipc::ReadClientHandshakeToken();
   if (!token) return;
@@ -795,7 +804,9 @@ void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* pi
   handshake.handshake_token = *token;
   ipc::Envelope request;
   request.request_id = 1;
-  request.trace_id = "diag-handshake";
+  const auto handshake_trace_id = DiagnosticTraceId();
+  if (!handshake_trace_id) return;
+  request.trace_id = *handshake_trace_id;
   request.type = ipc::MessageType::Handshake;
   request.payload_json = ipc::BuildHandshakeRequest(handshake);
   if (!client.Send(request)) return;
@@ -810,7 +821,9 @@ void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* pi
   ping.nonce = NowMs();
   ping.t_ms = NowMs();
   request.request_id = 2;
-  request.trace_id = "diag-ping";
+  const auto ping_trace_id = DiagnosticTraceId();
+  if (!ping_trace_id) return;
+  request.trace_id = *ping_trace_id;
   request.type = ipc::MessageType::Ping;
   request.payload_json = ipc::BuildPing(ping);
   if (client.Send(request)) {
@@ -831,7 +844,9 @@ void ProbeIpc(Snapshot& snapshot, std::string* host_health_json, std::string* pi
   }
 
   request.request_id = 3;
-  request.trace_id = "diag-query-diagnostics";
+  const auto diagnostics_trace_id = DiagnosticTraceId();
+  if (!diagnostics_trace_id) return;
+  request.trace_id = *diagnostics_trace_id;
   request.type = ipc::MessageType::QueryDiagnostics;
   request.payload_json = "{}";
   if (!client.Send(request)) return;

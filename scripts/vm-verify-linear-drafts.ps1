@@ -38,10 +38,10 @@ function Get-VmVerifyDraftData {
   } catch {
     throw "Required file is not valid JSON."
   }
-  if ($null -eq $data -or $data -isnot [pscustomobject]) {
+  if ($null -eq $data -or $data -isnot [System.Management.Automation.PSCustomObject]) {
     throw "Required JSON root must be an object."
   }
-  return $data
+  return ,$data
 }
 
 function Get-VmVerifyDraftGate {
@@ -80,6 +80,11 @@ function Get-VmVerifyDraftRow {
   $records = @()
   if ($Gate.source -eq "bootstrap" -and $Summary.bootstrap) {
     $records = @($Summary.bootstrap.checks | Where-Object { $_ -and $_.id -ceq $Gate.id })
+    if ($Summary.bootstrap.packageCommitVsManifest -eq "mismatch") {
+      $records = @($records | ForEach-Object {
+          [pscustomobject]@{ targetId = ""; status = "excluded" }
+        })
+    }
   } elseif ($Gate.source -eq "diag" -and $Summary.diag) {
     $records = @($Summary.diag.checks | Where-Object { $_ -and $_.id -ceq $Gate.id })
   } elseif ($Gate.source -eq "compat") {
@@ -146,7 +151,7 @@ function ConvertTo-VmVerifyLinearDraft {
   if ($Summary.bootstrap -and $Summary.bootstrap.packageCommitVsManifest -eq "mismatch" -and
       @($Gates | Where-Object { $_.source -eq "bootstrap" }).Count -gt 0) {
     $lines.Add("")
-    $lines.Add("- bootstrap の package.commit は manifest と不一致。対象行を確認する。")
+    $lines.Add("- bootstrap の package.commit は manifest と不一致。bootstrap の観測結果を除外した。")
   }
   $lines.Add("")
   $lines.Add("## 人間待ち")
@@ -178,6 +183,14 @@ function Invoke-VmVerifyLinearDraft {
   if ($summary.schemaVersion -ne 1) { throw "Unsupported summary schemaVersion." }
   $gates = Get-VmVerifyDraftGate -Map (Get-VmVerifyDraftData -Path $GateMapPath)
   $output = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+  if (Test-Path -LiteralPath $output) {
+    if (-not (Test-Path -LiteralPath $output -PathType Container)) {
+      throw "Output directory must be a directory."
+    }
+    if (Get-ChildItem -LiteralPath $output -Force | Select-Object -First 1) {
+      throw "Output directory must be empty for each run."
+    }
+  }
   New-Item -ItemType Directory -Path $output -Force | Out-Null
   $issues = @($gates | ForEach-Object { $_.issueId } | Sort-Object -Unique)
   foreach ($issue in $issues) {

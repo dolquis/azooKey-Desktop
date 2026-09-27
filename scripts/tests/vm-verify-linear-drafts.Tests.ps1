@@ -101,6 +101,87 @@ Describe "VM verification Linear drafts" {
     Test-Path -LiteralPath (Join-Path $root "out") | Should -BeFalse
   }
 
+  It "rejects scalar and array JSON roots without combining their gates" {
+    $root = Join-Path $TestDrive "root-shapes"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $summaryPath = Write-DraftTestSummary -Root $root
+    $mapPath = Join-Path $root "map.json"
+    $entry = @{ schemaVersion = 1; gates = @(
+        @{ source = "compat"; id = "C-001"; issueId = "DEV-716" }) }
+    $invalidRoots = @(
+      '"text"'
+      (ConvertTo-Json -InputObject @($entry) -Depth 5 -Compress)
+      (ConvertTo-Json -InputObject @($entry, $entry) -Depth 5 -Compress)
+    )
+    foreach ($json in $invalidRoots) {
+      Set-Content -LiteralPath $mapPath -Value $json -Encoding utf8
+      { Invoke-VmVerifyLinearDraft -SummaryPath $summaryPath -GateMapPath $mapPath `
+          -OutputDirectory (Join-Path $root "out") } |
+        Should -Throw "*root must be an object*"
+      Test-Path -LiteralPath (Join-Path $root "out") | Should -BeFalse
+    }
+    $validMap = Write-DraftTestJson -Path $mapPath -Value $entry
+    Set-Content -LiteralPath $summaryPath -Value (ConvertTo-Json -InputObject @(
+        (Get-Content -Raw -LiteralPath $summaryPath | ConvertFrom-Json)) -Depth 10) -Encoding utf8
+    { Invoke-VmVerifyLinearDraft -SummaryPath $summaryPath -GateMapPath $validMap `
+        -OutputDirectory (Join-Path $root "out") } |
+      Should -Throw "*root must be an object*"
+  }
+
+  It "excludes bootstrap statuses from a different package commit" {
+    $root = Join-Path $TestDrive "mismatch"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $summaryPath = Write-DraftTestSummary -Root $root
+    $summary = Get-Content -Raw -LiteralPath $summaryPath | ConvertFrom-Json
+    $summary.bootstrap.packageCommitVsManifest = "mismatch"
+    $summary.bootstrap.checks += [pscustomobject]@{
+      id = "inferenceHost"; status = "pass"; message = "unrelated package"
+    }
+    $null = Write-DraftTestJson -Path $summaryPath -Value $summary
+    $mapPath = Write-DraftTestJson -Path (Join-Path $root "map.json") -Value @{
+      schemaVersion = 1
+      gates = @(
+        @{ source = "bootstrap"; id = "vmCheckpoint"; issueId = "DEV-716" }
+        @{ source = "bootstrap"; id = "inferenceHost"; issueId = "DEV-716" }
+      )
+    }
+    $output = Join-Path $root "out"
+    $null = Invoke-VmVerifyLinearDraft -SummaryPath $summaryPath -GateMapPath $mapPath `
+      -OutputDirectory $output
+    $draft = Get-Content -Raw -LiteralPath (Join-Path $output "DEV-716.md")
+    $draft | Should -Match "\| bootstrap \| vmCheckpoint \|  \| excluded \|"
+    $draft | Should -Match "\| bootstrap \| inferenceHost \|  \| excluded \|"
+    $draft | Should -Not -Match "\| bootstrap \|[^\n]*\| (pass|manual_required) \|"
+    $draft | Should -Not -Match "- bootstrap vmCheckpoint の人間確認:"
+    $draft | Should -Match "commit は manifest と不一致"
+  }
+
+  It "refuses a rerun into a directory holding drafts from an earlier map" {
+    $root = Join-Path $TestDrive "rerun"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $summaryPath = Write-DraftTestSummary -Root $root
+    $mapPath = Write-DraftTestJson -Path (Join-Path $root "map.json") -Value @{
+      schemaVersion = 1
+      gates = @(
+        @{ source = "compat"; id = "C-001"; issueId = "DEV-716" }
+        @{ source = "compat"; id = "C-010"; issueId = "DEV-676" }
+      )
+    }
+    $output = Join-Path $root "out"
+    $null = Invoke-VmVerifyLinearDraft -SummaryPath $summaryPath -GateMapPath $mapPath `
+      -OutputDirectory $output
+    $old716 = Get-Content -Raw -LiteralPath (Join-Path $output "DEV-716.md")
+    $old676 = Get-Content -Raw -LiteralPath (Join-Path $output "DEV-676.md")
+    $null = Write-DraftTestJson -Path $mapPath -Value @{
+      schemaVersion = 1
+      gates = @(@{ source = "compat"; id = "C-001"; issueId = "DEV-716" })
+    }
+    { Invoke-VmVerifyLinearDraft -SummaryPath $summaryPath -GateMapPath $mapPath `
+        -OutputDirectory $output } | Should -Throw "*must be empty*"
+    (Get-Content -Raw -LiteralPath (Join-Path $output "DEV-716.md")) | Should -BeExactly $old716
+    (Get-Content -Raw -LiteralPath (Join-Path $output "DEV-676.md")) | Should -BeExactly $old676
+  }
+
   It "does not expose absolute output paths in the script entry point" {
     $root = Join-Path $TestDrive "entry"
     New-Item -ItemType Directory -Path $root -Force | Out-Null

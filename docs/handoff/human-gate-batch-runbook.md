@@ -514,6 +514,7 @@ pwsh -File .\scripts\vm-verify-linear-drafts.ps1 `
 
 `-CheckpointName` を省くと checkpoint 名は空欄になる。`DEV-番号.md` の各行は自動観測であり、
 未取得は合否を意味しない。人間待ち・実機の観測・合否の欄は空欄のまま残る。
+出力先は実行ごとに空のディレクトリを指定する。既存ファイルがある場合は書き込まずに止まる。
 スクリプトは Linear に投稿しない。記録と合否判定は人が行う。
 
 ```md

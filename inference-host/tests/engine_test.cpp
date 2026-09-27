@@ -52,6 +52,34 @@ std::string TempPath(const char* name) {
   return (std::filesystem::temp_directory_path() / name).string();
 }
 
+class ScopedTempDirectory {
+ public:
+  ScopedTempDirectory() {
+    const auto base = std::filesystem::temp_directory_path();
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = base / ("azookey_engine_fixture_" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                      "_" + std::to_string(next_id_++));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create a unique engine test directory");
+  }
+
+  ~ScopedTempDirectory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
+  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
+
+  std::string File(const char* name) const { return (path_ / name).string(); }
+
+ private:
+  std::filesystem::path path_;
+  static inline std::atomic<uint64_t> next_id_{0};
+};
+
 // The constructor still accepts the legacy path, while persistence uses .enc.
 // Return the removal status of .enc for tests that assert a prior flush.
 int RemoveProtectedStoreFile(const std::filesystem::path& path) {
@@ -2050,17 +2078,21 @@ namespace {
 // from a word the engine has only seen committed.
 std::unique_ptr<azookey::core::SimpleConverter> MakeConverterWithDictionary(
     const std::vector<std::pair<std::string, std::string>>& entries) {
-  const auto path = TempPath("azookey_engine_dict_fixture.tsv");
+  ScopedTempDirectory temp;
+  const auto path = temp.File("dictionary.tsv");
   {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     for (const auto& entry : entries) {
       out << entry.first << '\t' << entry.second << "\t2.0\n";
     }
+    out.close();
+    if (!out) {
+      ADD_FAILURE() << "Could not write engine test dictionary: " << path;
+      return std::make_unique<azookey::core::SimpleConverter>();
+    }
   }
   auto converter = std::make_unique<azookey::core::SimpleConverter>();
-  converter->LoadFromTsv(path);
-  std::error_code ec;
-  std::filesystem::remove(path, ec);
+  EXPECT_TRUE(converter->LoadFromTsv(path)) << "Could not load engine test dictionary: " << path;
   return converter;
 }
 
@@ -2079,9 +2111,10 @@ bool HasCandidateMarked(const std::vector<azookey::core::Candidate>& candidates,
 }  // namespace
 
 TEST(EngineTypoCorrectionTest, SuggestInjectsAMarkedCandidateOnlyOverTheThreshold) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_suggest_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_suggest.tsv"),
+  azookey::learning::TypoCorrectionStore typo(temp.File("typo.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2109,9 +2142,10 @@ TEST(EngineTypoCorrectionTest, SuggestInjectsAMarkedCandidateOnlyOverTheThreshol
 }
 
 TEST(EngineTypoCorrectionTest, AutoReplaceConvertsTheCorrectedReadingAndReportsIt) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_auto_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_auto.tsv"),
+  azookey::learning::TypoCorrectionStore typo(temp.File("typo.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2133,9 +2167,10 @@ TEST(EngineTypoCorrectionTest, AutoReplaceConvertsTheCorrectedReadingAndReportsI
 }
 
 TEST(EngineTypoCorrectionTest, OffInjectsNothingAndLearnsNothing) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_off_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_typo_off.tsv"),
+  azookey::learning::TypoCorrectionStore typo(temp.File("typo.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2157,7 +2192,8 @@ TEST(EngineTypoCorrectionTest, OffInjectsNothingAndLearnsNothing) {
 }
 
 TEST(EngineTypoCorrectionTest, WithoutAStoreQueryIsUnchanged) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_typo_nostore_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
   azookey::host::EngineConfig cfg;
   cfg.typo_correction_mode = "suggest";

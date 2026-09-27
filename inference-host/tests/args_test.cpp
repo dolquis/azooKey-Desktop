@@ -91,6 +91,15 @@ TEST(HostArgsTest, ParsesPathAndHandshakeOptions) {
   EXPECT_EQ(parsed.args.handshake_token, "cli-token");
 }
 
+TEST(HostArgsTest, DataRootRequiresAbsolutePath) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey-test-data";
+  const auto root_arg = azookey::core::PathToUtf8(root);
+  const auto parsed = Parse({"--data-root", root_arg.c_str()});
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed.args.explicit_data_root, root);
+  EXPECT_FALSE(Parse({"--data-root", "relative"}));
+}
+
 TEST(HostArgsTest, UsesDefaultHandshakeTokenWhenNotOverridden) {
   const auto parsed = Parse({"--stdio"});
   ASSERT_TRUE(parsed);
@@ -124,8 +133,8 @@ TEST(HostArgsTest, NewWordsConsumesRemainingArguments) {
 }
 
 TEST(HostArgsTest, RejectsMissingValuesAndUnknownArguments) {
-  for (const char* option : {"--backend", "--model", "--learning", "--user-dict", "--mock-dict",
-                             "--pipe-name", "--handshake-token"}) {
+  for (const char* option : {"--backend", "--model", "--learning", "--data-root", "--user-dict",
+                             "--mock-dict", "--pipe-name", "--handshake-token"}) {
     const auto parsed = Parse({option});
     ASSERT_FALSE(parsed) << option;
     EXPECT_EQ(parsed.error, std::string("missing value for ") + option);

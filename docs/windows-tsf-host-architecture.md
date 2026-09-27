@@ -35,7 +35,10 @@ Host の起動引数は `ParseHostArgs` が一括して解析する。
 値を取る option が末尾にある場合と未知の引数も exit code 2 とし、暗黙の既定値へ戻さない。
 `--pipe` は省略可能な次トークンを pipe 名として扱うが、`--` で始まるトークンは別 option として残す。
 `--pipe-name` は値を必須とする。
-`--model`、`--learning`、`--user-dict`、`--mock-dict`、`--handshake-token` も値を必須とする。
+`--model`、`--learning`、`--user-dict`、`--data-root`、`--mock-dict`、`--handshake-token` も値を必須とする。
+`--data-root` は絶対パスのみ受け付け、Host と CLI の config / data / logs / models を
+その root 配下に解決する。結合テストは一時 root を指定して通常のユーザーデータから隔離する。
+`--learning` と `--user-dict` の明示パスは `--data-root` 内の既定パスより優先する。
 `userdict` より後ろのトークンは user dictionary CLI へ、`lookup` より後ろのトークンは
 読み取り専用 lookup CLI へ、`newwords` より後ろのトークンは新語承認 CLI
 （`docs/auto-word-registration-spec.md` §7-3）へそのまま渡す。
@@ -46,7 +49,7 @@ CLI 引数の文字列は UTF-8 バイト列とする。Windows の entry point 
 active code page で符号化されるため、CLI の入力経路として使わない。この契約は `userdict`、
 `lookup`、`newwords` へ渡すトークンにも同じく及ぶ。
 
-`--learning`、`--user-dict`、`--mock-dict`、`userdict import`、`userdict export` の明示パスは、
+`--learning`、`--user-dict`、`--data-root`、`--mock-dict`、`userdict import`、`userdict export` の明示パスは、
 この UTF-8 バイト列から `azookey::core::Utf8Path` で `std::filesystem::path` を構築する。
 narrow の `std::filesystem::path` コンストラクタは Windows で active code page として復号する
 ため、CLI 由来のパスには使わない。path を文字列へ戻す表示と JSON 出力は

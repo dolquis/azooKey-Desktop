@@ -89,6 +89,15 @@ azookey_discover_tests(host_settings_store_tests)
 # The CLI libraries are also exercised through the real command line: only the
 # process boundary shows whether non-ASCII arguments survive Windows argv.
 if(WIN32)
+  add_executable(host_process_integration_tests host_process_integration_test.cpp)
+  target_compile_definitions(host_process_integration_tests PRIVATE
+    HOST_PROCESS_TEST_EXE="$<TARGET_FILE:azookey_inference_host>")
+  target_link_libraries(host_process_integration_tests
+    PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings)
+  add_dependencies(host_process_integration_tests azookey_inference_host)
+  azookey_discover_tests(host_process_integration_tests
+    RESOURCE_LOCK host_process_integration)
+
   add_test(NAME host_cli_unicode_argv
            COMMAND "${CMAKE_COMMAND}"
                    "-DHOST_EXE=$<TARGET_FILE:azookey_inference_host>"

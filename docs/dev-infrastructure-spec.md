@@ -1043,7 +1043,9 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 
 - `--learning` / `--user-dict` が指定された場合は、従来どおり**明示パスを
   優先**する（既存テスト・CI・開発フローを壊さない）。
-- 指定がない場合のみ `%LOCALAPPDATA%\azooKey\data\...` を使う。
+- `--data-root` を指定した場合は、その絶対パスを config / data / logs / models の
+  root とする。`--learning` / `--user-dict` の明示パスはこの root より優先する。
+- `--data-root` も指定がない場合は `%LOCALAPPDATA%\azooKey\data\...` を使う。
 - 保存先決定ロジックは純粋関数として切り出し、unit test で
   「明示指定優先 / 既定パス生成 / 環境変数欠落時の挙動」を検証する。
 

@@ -183,8 +183,14 @@ InferenceEngine::~InferenceEngine() {
   if (learning_flush_thread_.joinable()) {
     learning_flush_thread_.join();
   }
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  (void)FlushLearningStoreLocked();
+  // Give a transient save failure two bounded retries before shutdown ends.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (FlushLearningStoreLocked()) break;
+    }
+    if (attempt < 2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
 }
 
 void InferenceEngine::SetUserDictionary(learning::UserDictionary* dict) {

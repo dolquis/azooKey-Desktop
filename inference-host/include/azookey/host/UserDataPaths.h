@@ -7,6 +7,7 @@ namespace azookey::host {
 
 struct UserDataPathInputs {
   std::optional<std::filesystem::path> local_app_data;
+  std::optional<std::filesystem::path> explicit_root_dir;
   std::optional<std::filesystem::path> explicit_learning_path;
   std::optional<std::filesystem::path> explicit_user_dict_path;
 };

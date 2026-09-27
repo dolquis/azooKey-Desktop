@@ -32,7 +32,8 @@ class CandidateWindow {
 
   // Show at screen point 'pt' (bottom-left of the caret rect) with given items.
   // selected_idx is clamped to [0, items.size()).
-  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx);
+  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+            std::wstring notice = {});
   void Hide();
   bool IsVisible() const;
   static bool NeedsColorEmoji(const std::wstring& text);
@@ -114,6 +115,7 @@ class CandidateWindow {
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<CandidateViewItem> items_;
+  std::wstring notice_;
   int surface_column_width_{0};
   int selected_idx_{0};
   OnClickFn on_click_;

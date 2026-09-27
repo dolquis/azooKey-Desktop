@@ -870,14 +870,15 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   settings.Load();
   unsigned calls = 0;
   unsigned status = 200;
+  auto transport_error = azookey::host::AiErrorClass::None;
   std::string sent;
   auto config = DefaultDispatcherConfig();
   config.ai_backend = std::make_shared<azookey::host::AiBackend>(
       [&](const auto&, const std::string& body, const auto*, auto) {
         ++calls;
         sent = body;
-        return azookey::host::AiHttpResponse{status,
-                                             R"({"choices":[{"message":{"content":"日本。"}}]})"};
+        return azookey::host::AiHttpResponse{
+            status, R"({"choices":[{"message":{"content":"日本。"}}]})", transport_error};
       });
   azookey::host::Dispatcher handler(&engine, &scheduler, &user_dict, config, &settings);
   ipc::QueryBatchConversionRequest request;
@@ -919,6 +920,26 @@ TEST_F(DispatcherTest, CleanupUsesSharedBackendAndPreservesInputOnFailureOrSecur
   result = query(828);
   ASSERT_TRUE(result);
   EXPECT_EQ(result->full_surface, "日本");
+  ASSERT_TRUE(result->error_class);
+  EXPECT_EQ(*result->error_class, "Auth");
+  status = 429;
+  result = query(833);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->full_surface, "日本");
+  ASSERT_TRUE(result->error_class);
+  EXPECT_EQ(*result->error_class, "RateLimit");
+  status = 0;
+  transport_error = azookey::host::AiErrorClass::Timeout;
+  result = query(834);
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->error_class);
+  EXPECT_EQ(*result->error_class, "Timeout");
+  transport_error = azookey::host::AiErrorClass::KeyReentry;
+  result = query(835);
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->error_class);
+  EXPECT_EQ(*result->error_class, "KeyReentry");
+  transport_error = azookey::host::AiErrorClass::None;
   const auto before = calls;
   request.ai_allowed = false;
   result = query(829);

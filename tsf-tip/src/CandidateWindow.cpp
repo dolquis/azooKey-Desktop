@@ -353,12 +353,13 @@ void CandidateWindow::Destroy() {
   }
 }
 
-void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items,
-                           int selected_idx) {
+void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+                           std::wstring notice) {
   if (!hwnd_ || items.empty()) return;
 
   const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   items_ = items;
+  notice_ = std::move(notice);
   if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
   emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
@@ -371,6 +372,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   if (hdc && font_) old_font = SelectObject(hdc, font_);
   int max_surface_w = metrics_.min_text_width;
   int max_description_w = 0;
+  int notice_width = 0;
   if (hdc) {
     for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
       const auto& item = items_[static_cast<size_t>(i)];
@@ -394,6 +396,11 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
         max_description_w = std::max(max_description_w, static_cast<int>(sz.cx));
       }
     }
+    if (!notice_.empty()) {
+      SIZE size{};
+      GetTextExtentPoint32W(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &size);
+      notice_width = size.cx;
+    }
   }
   if (hdc) {
     if (old_font) SelectObject(hdc, old_font);
@@ -405,7 +412,9 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   int width =
       std::min(columns.content_width + metrics_.horizontal_padding * 2 + metrics_.extra_width,
                metrics_.max_width);
-  int height = metrics_.item_height * static_cast<int>(items_.size());
+  width =
+      std::min(std::max(width, notice_width + metrics_.horizontal_padding * 2), metrics_.max_width);
+  int height = metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
 
   // Keep window on-screen: flip above caret if it would overflow below.
   MONITORINFO mi{};
@@ -537,6 +546,17 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
           }
         }
+      }
+      if (!notice_.empty()) {
+        RECT notice_rc = {0, static_cast<LONG>(items_.size()) * metrics_.item_height,
+                          client_rc.right, client_rc.bottom};
+        FillRect(hdc, &notice_rc,
+                 reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_BTNFACE + 1)));
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        notice_rc.left += metrics_.horizontal_padding;
+        notice_rc.right -= metrics_.horizontal_padding;
+        DrawTextW(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &notice_rc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
       }
       if (old_font) SelectObject(hdc, old_font);
       EndPaint(hwnd, &ps);

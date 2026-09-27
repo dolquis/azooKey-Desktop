@@ -21,4 +21,7 @@ struct C002BackspaceScenario {
 
 bool IsExpectedC002BackspaceTransition(std::wstring_view before, std::wstring_view after);
 
+enum class LiveConversionSetting { Enabled, Disabled, Unavailable };
+LiveConversionSetting ReadLiveConversionSetting();
+
 }  // namespace azookey::compat_test

@@ -2961,19 +2961,20 @@ Edge は ControlType だけで Edit を探索するとアドレスバーへ一�
 | C-011 | `Ctrl+A/C/V/L/S`、Alt メニュー、Win キー併用を押す | TIP が食わずアプリ / OS へ通る |
 | C-012 | `ja` / `ju` / `jo` / `jya` / `jyu` / `jyo` を入力 | 「じゃ」「じゅ」「じょ」として preedit / commit できる |
 | C-013 | supervisor 配下の Host を一時停止して入力し、再開する | TIP の `Degraded` 中もかな候補で入力を続け、再開後 `Ready` と通常変換へ戻る |
-| C-014 | `kitto` / `syatu` / `siro` / `nn` を入力 | 各かなを preedit / commit できる |
+| C-014 | ライブ変換 OFF で `kitto` / `syatu` / `siro` / `nn` を入力 | 各かなを preedit / commit できる |
 | C-015 | 固定 2 候補で ↑↓ / Space / Shift+Space / Ctrl+N/P、数字 2、Esc 2 段階 | 選択 surface、確定文字列、候補窓の消失、reading 復帰を確認する |
-| C-016 | `nihongo` + 即 Space を一括送出し、確定後も入力する | 候補・確定・後続入力を UIA で確認する |
+| C-016 | ライブ変換 OFF で `nihongo` + 即 Space を一括送出し、確定後も入力する | 候補・確定・後続入力を UIA で確認する |
 | C-017 | preedit 中に Ctrl+H を押す | 1 単位が削除される |
 | C-018 | ライブ変換 ON で入力・編集・確定する | UIA で preedit と確定文字列の遷移を確認する |
-| C-019 | 予測候補を表示し Tab / Shift+Tab / Esc を押す | 別 HWND の位置、受理後の文字列、窓の消失を確認する。Shift+Tab は予測窓に 2 件以上表示された場合に判定し、1 件の場合は failing-skip とする |
+| C-019 | 予測候補を表示し Tab / Shift+Tab / Esc を押す | 別 HWND の位置、受理後の文字列変化、窓の消失を確認する。Shift+Tab は予測窓に 2 件以上表示された場合に判定し、1 件の場合は failing-skip とする。表示候補の index は文字列から判定しない |
 
 C-001〜C-012 は `full` アプリ（§13.2）で UI Automation により自動判定できる。
 C-014〜C-019 は UI Automation と対象 process の HWND 列挙により自動判定する。
 C-013 は UI Automation と TIP の構造化ログを組み合わせて判定する。
 C-013 は DEV-1364 の追加ケースであり、M50 の C-001〜C-012 受け入れ条件は変えない。
 予測候補の文字そのものと描画品質は UIA で判定しない。
-ライブ変換が OFF、予測候補が返らない、固定 2 候補の入力配列が利用できない場合は
+ライブ変換が ON の C-014 / C-016、ライブ変換が OFF の C-018、予測候補が返らない場合、
+固定 2 候補の入力配列が利用できない場合は
 該当ケースを `failing-skip` として残す。
 ただし M50 完了ゲートの**必須対象は Notepad / VS Code / Edge**（M50 受け入れ
 条件）であり、その他の `full` アプリ（Chrome / Windows Terminal /

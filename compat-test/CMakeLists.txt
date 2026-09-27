@@ -12,7 +12,7 @@ target_include_directories(azookey_compat_test_support
 )
 target_link_libraries(azookey_compat_test_support
   PUBLIC azookey_ipc azookey_project_options
-  PRIVATE azookey_project_warnings advapi32 ole32 windowscodecs
+  PRIVATE azookey_project_warnings advapi32 ole32 shell32 windowscodecs
 )
 
 add_executable(compat_test

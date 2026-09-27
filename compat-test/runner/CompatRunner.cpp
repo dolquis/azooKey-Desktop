@@ -567,8 +567,19 @@ bool AutomationSession::SendModifiedKey(std::initializer_list<WORD> modifiers, W
   return sent;
 }
 
+bool AutomationSession::DismissPredictionWindow() {
+  prediction_window_remained_ = false;
+  if (!PredictionRect()) return true;
+  if (!SendVirtualKey(VK_ESCAPE)) return false;
+  for (int attempt = 0; attempt < 20 && PredictionRect(); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  prediction_window_remained_ = PredictionRect().has_value();
+  return !prediction_window_remained_;
+}
+
 bool AutomationSession::ClearEditor() {
-  if (!FocusEditor()) return false;
+  if (!FocusEditor() || !DismissPredictionWindow()) return false;
   if (!SendVirtualKey(VK_ESCAPE)) return false;
   IUnknown* unknown = nullptr;
   if (SUCCEEDED(editor_->GetCurrentPattern(UIA_ValuePatternId, &unknown)) && unknown) {

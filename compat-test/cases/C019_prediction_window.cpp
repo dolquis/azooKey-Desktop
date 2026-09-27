@@ -123,6 +123,11 @@ CaseDefinition MakeC019PredictionWindowCase() {
           result.reason_code = "prediction-window-unavailable-for-shift-tab";
           return result;
         }
+        const auto before_shift_tab = session.ReadEditorText();
+        if (!before_shift_tab || *before_shift_tab != L"にほ") {
+          result.reason_code = "prediction-shift-tab-preedit-unobservable";
+          return result;
+        }
         const auto shift_tab_prediction = session.PredictionRect();
         const auto shift_tab_caret = session.CaretRect();
         if (!shift_tab_prediction || !shift_tab_caret) {
@@ -143,8 +148,8 @@ CaseDefinition MakeC019PredictionWindowCase() {
           return result;
         }
         auto after_shift_tab = session.ReadEditorText();
-        for (int attempt = 0; after_shift_tab && *after_shift_tab == L"にほ" && attempt < 20;
-             ++attempt) {
+        for (int attempt = 0;
+             after_shift_tab && *after_shift_tab == *before_shift_tab && attempt < 20; ++attempt) {
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
           after_shift_tab = session.ReadEditorText();
         }
@@ -152,7 +157,8 @@ CaseDefinition MakeC019PredictionWindowCase() {
           result.reason_code = "prediction-shift-tab-result-unobservable";
           return result;
         }
-        if (after_shift_tab->size() <= 2 || after_shift_tab->compare(0, 2, L"にほ") != 0 ||
+        if (after_shift_tab->size() <= before_shift_tab->size() ||
+            after_shift_tab->compare(0, before_shift_tab->size(), *before_shift_tab) != 0 ||
             after_shift_tab->find(L'\t') != std::wstring::npos) {
           result.status = ResultStatus::Fail;
           result.reason_code = "prediction-shift-tab-not-accepted";

@@ -66,12 +66,15 @@ class AutomationSession {
   bool Start(std::string* reason_code);
   bool FocusEditor();
   bool ClearEditor();
+  bool DismissPredictionWindow();
   bool SendAscii(const std::string& text);
   bool SendUnicode(std::wstring_view text);
   bool SendVirtualKey(WORD virtual_key);
   bool SendModifiedKey(std::initializer_list<WORD> modifiers, WORD virtual_key);
   const char* input_failure_reason() const {
-    return focus_lost_ ? "focus-lost" : "input-injection-failed";
+    return focus_lost_                   ? "focus-lost"
+           : prediction_window_remained_ ? "prediction-window-remained"
+                                         : "input-injection-failed";
   }
   std::optional<std::wstring> ReadEditorText();
   std::optional<RECT> CaretRect() const;
@@ -105,6 +108,7 @@ class AutomationSession {
   bool remove_temporary_document_on_destroy_{true};
   bool baseline_verified_{false};
   bool focus_lost_{false};
+  bool prediction_window_remained_{false};
   uint64_t editor_discovery_duration_ms_{0};
   std::filesystem::path temporary_document_;
 };

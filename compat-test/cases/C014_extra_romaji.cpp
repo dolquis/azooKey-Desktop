@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include "runner/CaseSupport.h"
 #include "runner/CompatTypes.h"
 
 namespace azookey::compat_test {
@@ -16,6 +17,13 @@ CaseDefinition MakeC014ExtraRomajiCase() {
         result.id = "C-014";
         if (!session.baseline_verified()) {
           result.reason_code = "baseline-conversion-not-verified";
+          return result;
+        }
+        const auto setting = ReadLiveConversionSetting();
+        if (setting != LiveConversionSetting::Disabled) {
+          result.reason_code = setting == LiveConversionSetting::Enabled
+                                   ? "live-conversion-enabled"
+                                   : "live-conversion-setting-unavailable";
           return result;
         }
         struct Sample {

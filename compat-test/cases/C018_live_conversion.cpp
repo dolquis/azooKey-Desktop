@@ -1,53 +1,13 @@
 #include <Windows.h>
 
 #include <chrono>
-#include <filesystem>
-#include <iterator>
-#include <string>
 #include <thread>
 
-#include "azookey/ipc/Json.h"
+#include "runner/CaseSupport.h"
 #include "runner/CompatTypes.h"
 
 namespace azookey::compat_test {
 namespace {
-
-enum class LiveSetting { Enabled, Disabled, Unavailable };
-
-LiveSetting ReadLiveSetting() {
-  wchar_t local_app_data[32768]{};
-  const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data,
-                                               static_cast<DWORD>(std::size(local_app_data)));
-  if (length == 0 || length >= std::size(local_app_data)) return LiveSetting::Unavailable;
-  const auto path =
-      std::filesystem::path(local_app_data) / L"azooKey" / L"config" / L"settings.json";
-  const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
-                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                  OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    const DWORD error = GetLastError();
-    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
-               ? LiveSetting::Disabled
-               : LiveSetting::Unavailable;
-  }
-  LARGE_INTEGER size{};
-  constexpr LONGLONG kLimit = 1024 * 1024;
-  if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || size.QuadPart > kLimit) {
-    CloseHandle(file);
-    return LiveSetting::Unavailable;
-  }
-  std::string contents(static_cast<size_t>(size.QuadPart) + 1, '\0');
-  DWORD count = 0;
-  const BOOL read =
-      ReadFile(file, contents.data(), static_cast<DWORD>(contents.size()), &count, nullptr);
-  CloseHandle(file);
-  if (!read || count > static_cast<size_t>(size.QuadPart)) return LiveSetting::Unavailable;
-  contents.resize(count);
-  const auto json = ipc::json::Parse(contents);
-  if (!json || !json->IsObject()) return LiveSetting::Disabled;
-  return json->GetBool("liveConversion").value_or(false) ? LiveSetting::Enabled
-                                                         : LiveSetting::Disabled;
-}
 
 std::optional<std::wstring> WaitForText(AutomationSession& session, std::wstring_view expected) {
   for (int attempt = 0; attempt < 30; ++attempt) {
@@ -71,9 +31,9 @@ CaseDefinition MakeC018LiveConversionCase() {
           result.reason_code = "baseline-conversion-not-verified";
           return result;
         }
-        const auto setting = ReadLiveSetting();
-        if (setting != LiveSetting::Enabled) {
-          result.reason_code = setting == LiveSetting::Disabled
+        const auto setting = ReadLiveConversionSetting();
+        if (setting != LiveConversionSetting::Enabled) {
+          result.reason_code = setting == LiveConversionSetting::Disabled
                                    ? "live-conversion-disabled"
                                    : "live-conversion-setting-unavailable";
           return result;
@@ -140,18 +100,9 @@ CaseDefinition MakeC018LiveConversionCase() {
           return result;
         }
         // Prediction Esc has its own meaning; close that separate window first.
-        if (session.PredictionRect()) {
-          if (!session.SendVirtualKey(VK_ESCAPE)) {
-            result.reason_code = session.input_failure_reason();
-            return result;
-          }
-          for (int attempt = 0; attempt < 20 && session.PredictionRect(); ++attempt) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          }
-          if (session.PredictionRect()) {
-            result.reason_code = "prediction-window-remained-before-live-escape";
-            return result;
-          }
+        if (!session.DismissPredictionWindow()) {
+          result.reason_code = session.input_failure_reason();
+          return result;
         }
         if (!session.SendVirtualKey(VK_ESCAPE)) {
           result.reason_code = session.input_failure_reason();

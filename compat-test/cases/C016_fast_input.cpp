@@ -5,6 +5,7 @@
 #include <thread>
 #include <vector>
 
+#include "runner/CaseSupport.h"
 #include "runner/CompatTypes.h"
 
 namespace azookey::compat_test {
@@ -62,6 +63,13 @@ CaseDefinition MakeC016FastInputCase() {
         result.id = "C-016";
         if (!session.baseline_verified()) {
           result.reason_code = "baseline-conversion-not-verified";
+          return result;
+        }
+        const auto setting = ReadLiveConversionSetting();
+        if (setting != LiveConversionSetting::Disabled) {
+          result.reason_code = setting == LiveConversionSetting::Enabled
+                                   ? "live-conversion-enabled"
+                                   : "live-conversion-setting-unavailable";
           return result;
         }
         if (!session.ClearEditor()) {

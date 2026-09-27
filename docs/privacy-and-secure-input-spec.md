@@ -289,6 +289,17 @@ detailedLogging OFF）は §2「fail closed」に沿った private 相当の安�
 が唯一の権威）。`docs/app-profile-spec.md` §4.2 の backend 解決は、`custom` でも
 AI 候補生成許可 / 外部 AI 許可 の 2 クエリ経由で一貫して評価される。
 
+### 5.3 TSF 左文脈の取得と利用範囲
+
+TIP は非 secure 入力で、composition または選択範囲の開始位置が確定できる場合に限り、
+同じ行のその位置の直前から左文脈を最大 30 Unicode コードポイント取得する。取得した文字列は
+既存の `maxContextLength`（既定 10、範囲 0〜30）でも短縮し、0 のときは空にする。
+読取失敗、選択状態が不明、secure 入力のいずれかでは空文字列を使う。
+
+左文脈はローカルの TIP → Host IPC の候補要求に限って渡す。外部 AI への送信、
+ログ本文への記録、別用途への再利用はしない。再変換の選択範囲と候補キャッシュにも
+同じ secure 判定を適用する（`docs/tsf-deep-integration-spec.md` §1.2）。
+
 ## 6. UI 表示
 
 候補ウィンドウ下部 or 設定アプリで現在のプライバシー状態を確認できる。

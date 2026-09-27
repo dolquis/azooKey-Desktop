@@ -11,6 +11,7 @@ add_library(azookey_tsf_tip SHARED
   src/ForegroundAppDetector.cpp
   src/IpcConnectionState.cpp
   src/IpcReconnectBackoff.cpp
+  src/LeftContextReader.cpp
   src/ReconversionFunction.cpp
   src/exports.def
   src/SettingsLauncher.cpp
@@ -56,6 +57,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/ForegroundAppDetector.cpp
     src/IpcConnectionState.cpp
     src/IpcReconnectBackoff.cpp
+    src/LeftContextReader.cpp
     src/ReconversionFunction.cpp
     src/SettingsLauncher.cpp
     src/TextService.cpp

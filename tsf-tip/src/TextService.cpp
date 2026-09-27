@@ -37,6 +37,7 @@
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/IpcReconnectBackoff.h"
+#include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextServiceFactory.h"
@@ -852,13 +853,35 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
           ITfContext* context = nullptr;
           if (FAILED(range->GetContext(&context)) || !context) return TF_E_NOCONVERSION;
           const bool secure = owner->ResolvePrivacy(context, false).secure;
-          std::lock_guard<std::mutex> lock(owner->candidates_mtx_);
-          const bool same_context = SameComIdentity(context, owner->reconversion_cache_context_);
+          if (!secure) {
+            std::lock_guard<std::mutex> lock(owner->candidates_mtx_);
+            if (SameComIdentity(context, owner->reconversion_cache_context_) &&
+                surface == owner->reconversion_cache_surface_ &&
+                !owner->reconversion_cache_candidates_.empty())
+              candidates = owner->reconversion_cache_candidates_;
+          }
+          if (!candidates.empty()) {
+            auto* verifier = new (std::nothrow) ReconversionFunction(owner->client_id_, {});
+            if (!verifier) {
+              context->Release();
+              return E_OUTOFMEMORY;
+            }
+            ITfRange* selected = nullptr;
+            std::wstring selected_surface;
+            const HRESULT match_hr =
+                verifier->CaptureSelection(context, &selected, selected_surface, range);
+            verifier->Release();
+            if (selected) selected->Release();
+            context->Release();
+            return match_hr == S_OK && selected_surface == surface ? S_OK : TF_E_NOCONVERSION;
+          }
+          const bool focused = SameComIdentity(context, owner->text_edit_context_);
+          const HRESULT start_hr =
+              secure || !focused ? S_FALSE
+                                 : owner->StartSelectionReconversion(context, &surface, range);
           context->Release();
-          if (secure || !same_context || surface != owner->reconversion_cache_surface_ ||
-              owner->reconversion_cache_candidates_.empty())
-            return TF_E_NOCONVERSION;
-          candidates = owner->reconversion_cache_candidates_;
+          if (start_hr != S_OK) return TF_E_NOCONVERSION;
+          candidates.push_back(surface);
           return S_OK;
         });
     if (!reconversion) return E_OUTOFMEMORY;
@@ -2701,6 +2724,7 @@ void TextService::CancelPendingQueriesForLifecycle() {
     need_notify = true;
   }
   ++ipc_pending_id_;
+  ipc_pending_left_context_.clear();
   TrimIpcSendQueueLocked();
   if (need_notify) ipc_cv_.notify_one();
 }
@@ -3630,6 +3654,7 @@ void TextService::ServeConnection() {
 
   while (true) {
     std::string reading;
+    std::string left_context;
     std::string raw_romaji;
     std::string batch_mode;
     uint64_t req_id = 0;
@@ -3659,6 +3684,7 @@ void TextService::ServeConnection() {
 
       if (ipc_has_request_) {
         reading = ipc_pending_reading_;
+        left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
         batch_mode = ipc_pending_batch_mode_;
         req_id = ipc_pending_id_;
@@ -3799,11 +3825,11 @@ void TextService::ServeConnection() {
       qenv.trace_id = "tip-key-query";
       if (is_live_conversion) {
         qenv.type = MessageType::QueryLiveConversion;
-        qenv.payload_json = BuildQueryLiveConversionRequest({reading, ""});
+        qenv.payload_json = BuildQueryLiveConversionRequest({reading, left_context});
       } else {
         QueryCandidatesRequest qreq;
         qreq.reading = reading;
-        qreq.left_context = "";
+        qreq.left_context = secure ? std::string{} : left_context;
         qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
         qreq.live = live;
         qreq.secure = secure;
@@ -4161,6 +4187,7 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   BOOL changed = FALSE;
   if (FAILED(record->GetSelectionStatus(&changed)) || !changed) return S_OK;
   reconversion_prefetch_pending_ = false;
+  reconversion_prefetch_surface_.clear();
   ++reconversion_generation_;
   // A displayed list still refers to the old range. A later Enter must never
   // replace text at a location the user has moved away from.
@@ -4512,15 +4539,26 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     retry_dropped_request();
 }
 
+std::string TextService::CaptureLeftContext(ITfContext* context, bool secure) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (secure || !context) return {};
+  ITfRange* composition_range =
+      SameComIdentity(context, active_context_) ? composition_range_ : nullptr;
+  return ReadLeftContext(context, composition_range, client_id_,
+                         local_settings_.MaxContextLengthSnapshot());
+}
+
 void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
   const auto privacy = ResolvePrivacy(context, false);
+  const std::string left_context = CaptureLeftContext(context, privacy.secure);
   const bool apply_live_preview = live && emoji_trigger.empty() && !privacy.secure &&
                                   !core_input_active_ && local_settings_.LiveConversionSnapshot();
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_reading_ = reading;
+  ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = live;
   ipc_pending_emoji_trigger_ = emoji_trigger;
   ipc_pending_raw_romaji_.clear();
@@ -4543,8 +4581,10 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     live_display_surface_.clear();
     return;
   }
+  const std::string left_context = CaptureLeftContext(context, false);
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_reading_ = reading;
+  ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = true;
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
@@ -4621,6 +4661,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_ai_privacy_ = privacy;
   ipc_pending_ai_backend_ = backend;
   ipc_pending_reading_ = reading;
+  ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
@@ -5174,6 +5215,7 @@ void TextService::ClearReconversionState() {
     reconversion_range_ = nullptr;
   }
   reconversion_surface_.clear();
+  reconversion_prefetch_surface_.clear();
   if (had_reconversion_ui && candidate_ui_.IsShowing()) candidate_ui_.EndUI();
   ++reconversion_generation_;
 }
@@ -5207,6 +5249,7 @@ void TextService::PrefetchSelectedReconversion() {
   reconversion_cache_context_ = context;
   reconversion_cache_context_->AddRef();
   const uint64_t generation = ++reconversion_generation_;
+  reconversion_prefetch_surface_ = surface;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     ipc_reconversion_request_ = ReconversionRequest{generation, utf8};
@@ -5214,27 +5257,47 @@ void TextService::PrefetchSelectedReconversion() {
   ipc_cv_.notify_one();
 }
 
-HRESULT TextService::StartSelectionReconversion(ITfContext* context) {
+HRESULT TextService::StartSelectionReconversion(ITfContext* context,
+                                                const std::wstring* expected_surface,
+                                                ITfRange* expected_range) {
   if (!context || composition_ || !preedit_kana_.empty()) return S_FALSE;
   if (ResolvePrivacy(context, false).secure) return S_FALSE;
   auto* function = new (std::nothrow) ReconversionFunction(client_id_, {});
   if (!function) return E_OUTOFMEMORY;
   ITfRange* range = nullptr;
   std::wstring surface;
-  const HRESULT hr = function->CaptureSelection(context, &range, surface);
+  const HRESULT hr = function->CaptureSelection(context, &range, surface, expected_range);
   function->Release();
   if (FAILED(hr)) return hr == TF_E_NOCONVERSION ? S_FALSE : hr;
+  if (expected_surface && surface != *expected_surface) {
+    range->Release();
+    return S_FALSE;
+  }
   const std::string utf8 = WideToUtf8(surface);
   if (utf8.empty()) {
     range->Release();
     return S_FALSE;
   }
+  if (reconversion_range_ && surface == reconversion_surface_ &&
+      SameComIdentity(context, reconversion_cache_context_)) {
+    range->Release();
+    return S_OK;
+  }
   std::vector<std::wstring> cached_candidates;
+  bool adopt_prefetch = false;
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     if (SameComIdentity(context, reconversion_cache_context_) &&
         surface == reconversion_cache_surface_)
       cached_candidates = reconversion_cache_candidates_;
+  }
+  adopt_prefetch = cached_candidates.empty() && !reconversion_range_ &&
+                   surface == reconversion_prefetch_surface_ &&
+                   SameComIdentity(context, reconversion_cache_context_);
+  if (adopt_prefetch) {
+    reconversion_range_ = range;
+    reconversion_surface_ = std::move(surface);
+    return S_OK;
   }
   ClearReconversionState();
   reconversion_range_ = range;

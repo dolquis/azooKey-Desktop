@@ -27,6 +27,7 @@
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
@@ -780,8 +781,9 @@ struct BracketDocument {
 
 class DocumentRange final : public FakeRange {
  public:
-  DocumentRange(std::shared_ptr<BracketDocument> doc, LONG first, LONG last)
-      : document(std::move(doc)), start(first), end(last) {}
+  DocumentRange(std::shared_ptr<BracketDocument> doc, LONG first, LONG last,
+                ITfContext* context = nullptr)
+      : document(std::move(doc)), start(first), end(last), context_(context) {}
   STDMETHODIMP_(ULONG) AddRef() override { return ++references_; }
   STDMETHODIMP_(ULONG) Release() override {
     const ULONG remaining = --references_;
@@ -842,7 +844,14 @@ class DocumentRange final : public FakeRange {
       *copy = nullptr;
       return E_FAIL;
     }
-    *copy = new DocumentRange(document, start, end);
+    *copy = new DocumentRange(document, start, end, context_);
+    return S_OK;
+  }
+  STDMETHODIMP GetContext(ITfContext** out) override {
+    if (!out) return E_POINTER;
+    *out = context_;
+    if (!context_) return E_FAIL;
+    context_->AddRef();
     return S_OK;
   }
   std::shared_ptr<BracketDocument> document;
@@ -850,6 +859,7 @@ class DocumentRange final : public FakeRange {
   LONG end;
 
  private:
+  ITfContext* context_;
   ULONG references_{1};
 };
 
@@ -913,7 +923,7 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   }
   STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG, TF_SELECTION* selection,
                             ULONG* fetched) override {
-    selection->range = new DocumentRange(document, document->start, document->end);
+    selection->range = new DocumentRange(document, document->start, document->end, this);
     selection->style = {};
     *fetched = 1;
     return S_OK;
@@ -979,6 +989,190 @@ class DocumentPreeditHarness {
   DocumentContext context;
   azookey::tsf::TextService service;
 };
+
+TEST(TsfTipLeftContextTest, UsesCompositionStartAndBoundsUnicodeCodepoints) {
+  DocumentContext context;
+  context.document->text = L"前文abc入力";
+  context.document->start = 7;
+  context.document->end = 7;
+  DocumentRange composition(context.document, 5, 7, &context);
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, &composition, 1, 3), "abc");
+
+  context.document->text = L"旧い行\r\n今日は🙂東京";
+  context.document->start = static_cast<LONG>(context.document->text.size());
+  context.document->end = context.document->start;
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 4), "は🙂東京");
+}
+
+TEST(TsfTipLeftContextTest, ExcludesSelectionAndFallsBackOnRejectedOrIncompleteRead) {
+  DocumentContext context;
+  context.document->text = L"abc秘密";
+  context.document->start = 3;
+  context.document->end = 5;
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30), "abc");
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 0).empty());
+  context.reject_read = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+  context.reject_read = false;
+  context.document->fail_read = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+  context.document->fail_read = false;
+  context.document->fail_clone = true;
+  DocumentRange composition(context.document, 3, 5, &context);
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, &composition, 1, 30).empty());
+  context.document->fail_clone = false;
+  DocumentContext other_context;
+  DocumentRange other_composition(context.document, 3, 5, &other_context);
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, &other_composition, 1, 30).empty());
+  context.document->short_shift = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+  context.document->short_shift = false;
+  context.skip_callback = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+}
+
+TEST(TsfTipLeftContextTest, CapsAtThirtyCodepointsAndRejectsMalformedUtf16) {
+  DocumentContext context;
+  context.document->text = std::wstring(31, L'あ');
+  context.document->start = 31;
+  context.document->end = 31;
+  std::string expected;
+  for (int i = 0; i < 30; ++i) expected += "あ";
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 100), expected);
+
+  context.document->text = std::wstring(1, static_cast<wchar_t>(0xd800));
+  context.document->start = 1;
+  context.document->end = 1;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+}
+
+TEST(TsfTipLeftContextTest, CandidateWireUsesEnqueueSnapshotAndOmitsSecureContext) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-candidates-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryCandidatesRequest> requests;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query && query->reading == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        requests.push_back(*query);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  const auto wait_for_requests = [&](size_t count) {
+    return WaitUntil([&] {
+      const std::lock_guard<std::mutex> lock(mutex);
+      return requests.size() >= count;
+    });
+  };
+
+  {
+    DocumentPreeditHarness h;
+    h.context.document->text = L"旧行\r\n明日🙂東京";
+    h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+    h.context.document->end = h.context.document->start;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_max_context_length_for_test(3);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    // The queued request must retain the event's context even if the document changes.
+    const size_t suffix = h.context.document->text.find(L"東京");
+    ASSERT_NE(suffix, std::wstring::npos);
+    h.context.document->text.replace(suffix, 2, L"大阪");
+    h.service.start_ipc_worker_for_test();
+    EXPECT_TRUE(wait_for_requests(1));
+    h.service.stop_ipc_worker_for_test();
+  }
+  {
+    DocumentPreeditHarness h;
+    h.context.document->text = L"秘密の文脈";
+    h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+    h.context.document->end = h.context.document->start;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    h.service.start_ipc_worker_for_test();
+    EXPECT_TRUE(wait_for_requests(2));
+    h.service.stop_ipc_worker_for_test();
+  }
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(requests.size(), 2u);
+  EXPECT_EQ(requests[0].left_context, "🙂東京");
+  EXPECT_FALSE(requests[0].secure);
+  EXPECT_TRUE(requests[1].left_context.empty());
+  EXPECT_TRUE(requests[1].secure);
+}
+
+TEST(TsfTipLeftContextTest, LiveConversionWireUsesBoundedUnicodeContext) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-live-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryLiveConversionRequest> requests;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"query_live_conversion"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryLiveConversion) {
+      const auto query = ParseQueryLiveConversionRequest(request.payload_json);
+      if (query && query->kana == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        requests.push_back(*query);
+      }
+      response.payload_json = BuildQueryLiveConversionResponse({"蚊", 0.8});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.context.document->text = L"前の行\n前🙂東京";
+  h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+  h.context.document->end = h.context.document->start;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_max_context_length_for_test(3);
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  h.service.start_ipc_worker_for_test();
+  EXPECT_TRUE(WaitUntil([&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !requests.empty();
+  }));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].context, "🙂東京");
+}
 
 std::optional<WCHAR> TranslateBracketForTest(WPARAM key, LPARAM) {
   switch (key) {
@@ -2189,7 +2383,8 @@ TEST(TsfTipOnKeyDownPreeditTest, PrivacyProbeSyntheticLatencyAndCallsPerKey) {
     if (i >= warmup)
       key_times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
   }
-  EXPECT_EQ(scope_reads(), static_cast<std::ptrdiff_t>(warmup + samples));
+  // Each key requests one privacy scope probe and one bounded left-context read.
+  EXPECT_EQ(scope_reads(), static_cast<std::ptrdiff_t>(2 * (warmup + samples)));
   EXPECT_EQ(h.service.preedit_kana_, "か");
   report("on_key_down", std::move(key_times));
 

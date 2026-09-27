@@ -36,11 +36,14 @@ TEST(SettingsIpcClientTest, HandshakesThenSendsEmptyUpdateConfigPayload) {
                                 std::to_string(GetCurrentProcessId()) + "-" + std::to_string(stamp);
   std::atomic<bool> saw_empty_update{false};
   std::atomic<bool> authenticated{false};
+  std::atomic<bool> shared_trace{false};
+  std::string handshake_trace;
 
   azookey::ipc::NamedPipeServer server;
   ASSERT_TRUE(server.Start(pipe_name, [&] {
     return [&](const azookey::ipc::Envelope& request) -> std::optional<azookey::ipc::Envelope> {
       if (request.type == azookey::ipc::MessageType::Handshake) {
+        handshake_trace = request.trace_id;
         const auto parsed = azookey::ipc::ParseHandshakeRequest(request.payload_json);
         authenticated = parsed && parsed->tip_version == "settings-app" &&
                         parsed->protocol_version == azookey::ipc::kHandshakeProtocolVersion &&
@@ -51,6 +54,8 @@ TEST(SettingsIpcClientTest, HandshakesThenSendsEmptyUpdateConfigPayload) {
         return ResponseFor(request, azookey::ipc::BuildHandshakeResponse(response));
       }
       if (request.type == azookey::ipc::MessageType::UpdateConfig && authenticated) {
+        shared_trace = request.trace_id == handshake_trace && request.trace_id.size() == 36 &&
+                       request.trace_id[14] == '7';
         saw_empty_update = request.payload_json == "{}";
         azookey::ipc::UpdateConfigResponse response;
         response.ok = true;
@@ -71,4 +76,5 @@ TEST(SettingsIpcClientTest, HandshakesThenSendsEmptyUpdateConfigPayload) {
   EXPECT_TRUE(result.ok) << result.error.value_or("");
   EXPECT_TRUE(authenticated);
   EXPECT_TRUE(saw_empty_update);
+  EXPECT_TRUE(shared_trace);
 }

@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <locale>
@@ -16,6 +17,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/learning/UserDictionary.h"
 
@@ -235,10 +237,10 @@ void SortEntries(std::vector<learning::UserWord>* entries) {
 }
 
 azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageType type,
-                                    std::string payload_json) {
+                                    std::string payload_json, const std::string& trace_id) {
   azookey::ipc::Envelope env;
   env.request_id = request_id;
-  env.trace_id = "userdict-cli";
+  env.trace_id = trace_id;
   env.type = type;
   env.payload_json = std::move(payload_json);
   return env;
@@ -259,13 +261,23 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     return result;
   }
 
+  std::string trace_id;
+  try {
+    trace_id = azookey::ipc::GenerateTraceId();
+  } catch (const std::exception&) {
+    result.exit_code = 1;
+    result.error = "failed to generate trace ID";
+    result.output_lines.push_back(OperationJsonLine(op, false, word, false, "ipc", result.error));
+    return result;
+  }
+
   azookey::ipc::HandshakeRequest handshake;
   handshake.tip_version = "userdict-cli";
   handshake.protocol_version = 1;
   handshake.capabilities = {"userdict-cli"};
   handshake.handshake_token = run_options.handshake_token;
   if (!client.Send(MakeEnvelope(kHandshakeRequestId, azookey::ipc::MessageType::Handshake,
-                                azookey::ipc::BuildHandshakeRequest(handshake)))) {
+                                azookey::ipc::BuildHandshakeRequest(handshake), trace_id))) {
     result.exit_code = 1;
     result.error = "failed to send handshake to running host";
     return result;
@@ -292,13 +304,13 @@ UserDictCliResult RunViaPipe(const UserDictCliOptions& options,
     req.mid = word.mid;
     req.value = word.value;
     command = MakeEnvelope(kCommandRequestId, azookey::ipc::MessageType::AddUserWord,
-                           azookey::ipc::BuildAddUserWordRequest(req));
+                           azookey::ipc::BuildAddUserWordRequest(req), trace_id);
   } else {
     azookey::ipc::RemoveUserWordRequest req;
     req.ruby = word.ruby;
     req.word = word.word;
     command = MakeEnvelope(kCommandRequestId, azookey::ipc::MessageType::RemoveUserWord,
-                           azookey::ipc::BuildRemoveUserWordRequest(req));
+                           azookey::ipc::BuildRemoveUserWordRequest(req), trace_id);
   }
 
   if (!client.Send(command)) {

@@ -22,6 +22,12 @@ target_link_libraries(ipc_handshake_token_tests
 )
 azookey_discover_tests(ipc_handshake_token_tests)
 
+add_executable(ipc_trace_id_tests trace_id_test.cpp)
+target_link_libraries(ipc_trace_id_tests
+  PRIVATE azookey_ipc GTest::gtest_main azookey_project_options azookey_project_warnings
+)
+azookey_discover_tests(ipc_trace_id_tests)
+
 add_executable(ipc_named_pipe_transport_tests named_pipe_transport_test.cpp)
 target_compile_definitions(ipc_named_pipe_transport_tests PRIVATE
   AZOOKEY_IPC_TESTDATA_DIR="${PROJECT_SOURCE_DIR}/ipc/testdata"

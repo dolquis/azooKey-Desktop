@@ -36,6 +36,11 @@ target_compile_definitions(azookey_bench PRIVATE
   AZOOKEY_BENCH_CONFIG="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,unknown>"
 )
 
+add_executable(azookey_trace_viewer azookey_trace_viewer.cpp)
+target_link_libraries(azookey_trace_viewer
+  PRIVATE azookey_benchmark_result azookey_project_options azookey_project_warnings
+)
+
 add_executable(azookey_rich_features_bench rich_features_bench.cpp)
 add_dependencies(azookey_rich_features_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_rich_features_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
@@ -96,12 +101,26 @@ if(AZOOKEY_BUILD_TESTS)
 
   set_property(GLOBAL APPEND PROPERTY AZOOKEY_TEST_TARGETS
     azookey_bench
+    azookey_trace_viewer
     azookey_rich_features_bench
     azookey_zenzai_bench
     azookey_nll_bench
   )
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
+  add_test(NAME azookey_trace_viewer_smoke
+           COMMAND "${CMAKE_COMMAND}"
+                   "-DVIEWER_EXE=$<TARGET_FILE:azookey_trace_viewer>"
+                   "-DTRACE_PATH=${CMAKE_CURRENT_BINARY_DIR}/trace-viewer-smoke.jsonl"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertTraceViewerOutput.cmake")
+  set_tests_properties(azookey_trace_viewer_smoke PROPERTIES TIMEOUT 10)
+  add_test(NAME azookey_bench_trace_smoke
+           COMMAND "${CMAKE_COMMAND}"
+                   "-DBENCH_EXE=$<TARGET_FILE:azookey_bench>"
+                   "-DVIEWER_EXE=$<TARGET_FILE:azookey_trace_viewer>"
+                   "-DTRACE_PATH=${CMAKE_CURRENT_BINARY_DIR}/bench-trace-smoke.jsonl"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/AssertBenchTraceOutput.cmake")
+  set_tests_properties(azookey_bench_trace_smoke PROPERTIES TIMEOUT 30)
   add_test(NAME azookey_rich_features_bench_smoke
            COMMAND azookey_rich_features_bench --json)
   set_tests_properties(azookey_rich_features_bench_smoke PROPERTIES

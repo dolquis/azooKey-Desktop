@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -36,6 +37,7 @@ namespace azookey::host {
 struct InferenceTelemetry {
   uint64_t request_id{};
   core::EtwGuid client{};
+  std::string_view trace_id{};
 };
 
 enum class BackendKind {
@@ -196,7 +198,8 @@ class InferenceEngine {
   std::string ReverseConvert(const std::string& surface, uint64_t now_epoch_sec);
 
   std::vector<core::Candidate> QueryPredictions(const std::string& kana, const std::string& context,
-                                                uint64_t now_epoch_sec);
+                                                uint64_t now_epoch_sec,
+                                                const InferenceTelemetry* telemetry = nullptr);
   std::vector<core::Candidate> QueryCorrections(const std::string& kana, const std::string& context,
                                                 const std::string& rejected_surface,
                                                 uint64_t now_epoch_sec);

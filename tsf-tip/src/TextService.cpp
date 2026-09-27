@@ -32,6 +32,8 @@
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
+#include "azookey/logging/Phase.h"
 #include "azookey/logging/RuntimeLogger.h"
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/BracketEditSession.h"
@@ -105,6 +107,70 @@ void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
 #endif
   logger.Log(level, event, fields, privacy);
 }
+
+std::string NewTraceIdNoThrow() noexcept {
+  try {
+    return azookey::ipc::GenerateTraceId();
+  } catch (...) {
+    static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+    if (!reported.test_and_set()) {
+      try {
+        RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "trace_id_generation_failed");
+      } catch (...) {
+      }
+    }
+    return {};
+  }
+}
+
+void TracePhase(const std::string& trace_id, azookey::logging::Phase phase,
+                double latency_ms) noexcept {
+  try {
+    if (!TipRuntimeLogger().enabled() || trace_id.empty()) return;
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "trace_phase",
+               {{"trace_id", SafeLogText(trace_id)},
+                {"phase", SafeLogText(std::string(azookey::logging::PhaseName(phase)))},
+                {"latency_ms", latency_ms}});
+  } catch (...) {
+  }
+}
+
+void TraceKeyDown(const std::string& trace_id) noexcept {
+  try {
+    if (!TipRuntimeLogger().enabled() || trace_id.empty()) return;
+    RuntimeLog(
+        azookey::logging::RuntimeLogLevel::Info, "trace_phase",
+        {{"trace_id", SafeLogText(trace_id)},
+         {"phase",
+          SafeLogText(std::string(azookey::logging::PhaseName(azookey::logging::Phase::KeyDown)))},
+         {"t_ms", 0.0}});
+  } catch (...) {
+  }
+}
+
+class ScopedTracePhase {
+ public:
+  ScopedTracePhase(const std::string& trace_id, azookey::logging::Phase phase)
+      : trace_id_(trace_id), phase_(phase) {
+    if (TipRuntimeLogger().enabled() && !trace_id.empty())
+      start_ = std::chrono::steady_clock::now();
+  }
+  ~ScopedTracePhase() noexcept {
+    if (start_ == std::chrono::steady_clock::time_point{}) return;
+    try {
+      TracePhase(
+          trace_id_, phase_,
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
+              .count());
+    } catch (...) {
+    }
+  }
+
+ private:
+  const std::string& trace_id_;
+  azookey::logging::Phase phase_;
+  std::chrono::steady_clock::time_point start_{};
+};
 
 void LogCandidateUiBegin(const azookey::tsf::CandidateUiBeginObservation& observation,
                          void*) noexcept {
@@ -768,6 +834,7 @@ std::vector<ipc::CandidateField> FilterAcceptablePredictions(
 }
 
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
+  ipc_client_.SetRuntimeLogger(&TipRuntimeLogger());
   ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
   if (ipc_client_id_.empty()) {
@@ -1657,6 +1724,22 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   AZOOKEY_ASSERT_UI_THREAD();
   if (!eaten) return E_INVALIDARG;
   *eaten = FALSE;
+  struct TraceReset {
+    TextService& service;
+    std::string previous_id;
+    std::chrono::steady_clock::time_point previous_start;
+    bool previous_active;
+    ~TraceReset() {
+      service.active_key_trace_id_ = std::move(previous_id);
+      service.active_key_trace_start_ = previous_start;
+      service.active_key_trace_active_ = previous_active;
+    }
+  } trace_reset{*this, std::move(active_key_trace_id_), active_key_trace_start_,
+                active_key_trace_active_};
+  active_key_trace_active_ = true;
+  active_key_trace_id_ = NewTraceIdNoThrow();
+  active_key_trace_start_ = std::chrono::steady_clock::now();
+  TraceKeyDown(active_key_trace_id_);
   const bool bracket_claimed =
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
@@ -1990,7 +2073,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         if (event.action == UserAction::SelectByDigit && event.digit >= 1 &&
             static_cast<size_t>(event.digit) <= input_state_.candidates().size())
           core_commit_selected_index_ = static_cast<size_t>(event.digit - 1);
-        const HRESULT hr = ApplyInputStateResult(context, input_state_.HandleEvent(event));
+        auto result = [&] {
+          if (event.action != UserAction::Input) return input_state_.HandleEvent(event);
+          ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+          return input_state_.HandleEvent(event);
+        }();
+        const HRESULT hr = ApplyInputStateResult(context, std::move(result));
         core_commit_selected_index_.reset();
         if (FAILED(hr)) return hr;
         *eaten = TRUE;
@@ -2028,7 +2116,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         candidates_.clear();
         candidate_window_show_pending_ = false;
       }
-      preedit_kana_ += romaji_.Flush();
+      {
+        ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+        preedit_kana_ += romaji_.Flush();
+      }
       preedit_kana_.push_back(*decimal_digit);
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
@@ -2057,7 +2148,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         batch_query_in_progress_ = false;
         CancelPendingQueriesForLifecycle();
       } else {
-        preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
+        {
+          ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+          preedit_kana_ += romaji_.Feed(static_cast<char>(wParam));
+        }
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
@@ -2087,7 +2181,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         batch_query_in_progress_ = false;
         CancelPendingQueriesForLifecycle();
       } else {
-        preedit_kana_ += romaji_.Feed('-');
+        {
+          ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+          preedit_kana_ += romaji_.Feed('-');
+        }
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
@@ -2113,7 +2210,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         batch_query_in_progress_ = false;
         CancelPendingQueriesForLifecycle();
       } else {
-        preedit_kana_ += romaji_.Feed(*custom_input);
+        {
+          ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+          preedit_kana_ += romaji_.Feed(*custom_input);
+        }
       }
       const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
       if (FAILED(update_hr)) return update_hr;
@@ -2138,10 +2238,14 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         batch_query_in_progress_ = false;
         CancelPendingQueriesForLifecycle();
       } else {
-        if (custom_input)
+        if (custom_input) {
+          ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
           preedit_kana_ += romaji_.Feed(*custom_input);
-        else {
-          preedit_kana_ += romaji_.Flush();
+        } else {
+          {
+            ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
+            preedit_kana_ += romaji_.Flush();
+          }
           preedit_kana_ += composition_symbol->surface;
         }
       }
@@ -2712,15 +2816,15 @@ void TextService::CancelPendingQueriesForLifecycle() {
   bool need_notify = false;
   if (ipc_has_request_) {
     if (can_send_cancel) {
-      ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false, ipc_pending_id_});
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}),
+                                 false, ipc_pending_id_, 0, ipc_pending_trace_id_});
       need_notify = true;
     }
     ipc_has_request_ = false;
   }
   if (can_send_cancel && ipc_inflight_id_ != 0) {
-    ipc_send_queue_.push_back(
-        {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false, ipc_inflight_id_});
+    ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
+                               false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
     need_notify = true;
   }
   ++ipc_pending_id_;
@@ -3005,14 +3109,14 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
     std::lock_guard<std::mutex> lk(ipc_mtx_);
     bool need_notify = false;
     if (ipc_has_request_) {
-      ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false, ipc_pending_id_});
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}),
+                                 false, ipc_pending_id_, 0, ipc_pending_trace_id_});
       ipc_has_request_ = false;
       need_notify = true;
     }
     if (ipc_inflight_id_ != 0) {
       ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
-                                 false, ipc_inflight_id_});
+                                 false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
       need_notify = true;
     }
     ++ipc_pending_id_;
@@ -3110,14 +3214,14 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
     std::lock_guard<std::mutex> lk(ipc_mtx_);
     bool need_notify = false;
     if (ipc_has_request_) {
-      ipc_send_queue_.push_back(
-          {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}), false, ipc_pending_id_});
+      ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}),
+                                 false, ipc_pending_id_, 0, ipc_pending_trace_id_});
       ipc_has_request_ = false;
       need_notify = true;
     }
     if (ipc_inflight_id_ != 0) {
       ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
-                                 false, ipc_inflight_id_});
+                                 false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
       need_notify = true;
     }
     ++ipc_pending_id_;
@@ -3276,7 +3380,7 @@ TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id)
   ipc::Envelope env;
   env.version = 1;
   env.request_id = request_id;
-  env.trace_id = "tip-health";
+  env.trace_id = NewTraceIdNoThrow();
   env.type = ipc::MessageType::Health;
   env.payload_json = "{}";
   if (!ipc_client_.Send(env)) return HealthProbeResult::ConnectionLost;
@@ -3360,7 +3464,7 @@ bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expecte
 bool TextService::PerformHandshake() {
   AZOOKEY_ASSERT_IPC_THREAD();
   constexpr uint32_t kHandshakeTimeoutMs = 3000;
-  return PerformHandshake(ipc_client_, kHandshakeTimeoutMs, "tip-activate-handshake",
+  return PerformHandshake(ipc_client_, kHandshakeTimeoutMs, NewTraceIdNoThrow(),
                           /*update_host_options=*/true);
 }
 
@@ -3485,6 +3589,7 @@ bool TextService::ObserveHostGeneration(const std::string& host_generation_id) {
       // handshake completes.
       ++ipc_pending_id_;
       ipc_inflight_id_ = 0;
+      ipc_inflight_trace_id_.clear();
       changed = true;
     }
   }
@@ -3518,13 +3623,14 @@ void TextService::RequestHostOptionRefresh() {
   ipc_cv_.notify_all();
 }
 
-bool TextService::SendCancelOutOfBand(uint64_t target_request_id) {
+bool TextService::SendCancelOutOfBand(uint64_t target_request_id, const std::string& trace_id) {
   AZOOKEY_ASSERT_IPC_THREAD();
-  return SendCancelOutOfBand(target_request_id, kCancelConnectTimeoutMs, kCancelHandshakeTimeoutMs);
+  return SendCancelOutOfBand(target_request_id, kCancelConnectTimeoutMs, kCancelHandshakeTimeoutMs,
+                             trace_id);
 }
 
 bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t connect_timeout_ms,
-                                      uint32_t handshake_timeout_ms) {
+                                      uint32_t handshake_timeout_ms, const std::string& trace_id) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
 
@@ -3540,7 +3646,7 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
                {{"target_request_id", target_request_id}});
     return false;
   }
-  if (!PerformHandshake(cancel_client, handshake_timeout_ms, "tip-cancel-handshake",
+  if (!PerformHandshake(cancel_client, handshake_timeout_ms, NewTraceIdNoThrow(),
                         /*update_host_options=*/false)) {
     return false;
   }
@@ -3548,7 +3654,7 @@ bool TextService::SendCancelOutOfBand(uint64_t target_request_id, uint32_t conne
   Envelope cancel_env;
   cancel_env.version = 1;
   cancel_env.request_id = 2;
-  cancel_env.trace_id = "tip-oob-cancel";
+  cancel_env.trace_id = trace_id;
   cancel_env.type = MessageType::Cancel;
   cancel_env.payload_json = BuildCancel({target_request_id});
   if (!cancel_client.Send(cancel_env)) {
@@ -3633,6 +3739,7 @@ void TextService::IpcWorkerThreadImpl() {
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
+      ipc_inflight_trace_id_.clear();
     }
     if (!ipc_stop_.load()) TransitionIpcConnection(IpcConnectionEvent::ConnectionLost);
   }
@@ -3657,6 +3764,8 @@ void TextService::ServeConnection() {
     std::string left_context;
     std::string raw_romaji;
     std::string batch_mode;
+    std::string trace_id;
+    std::chrono::steady_clock::time_point trace_start;
     uint64_t req_id = 0;
     bool has_qc = false;
     bool is_batch = false;
@@ -3687,6 +3796,8 @@ void TextService::ServeConnection() {
         left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
         batch_mode = ipc_pending_batch_mode_;
+        trace_id = ipc_pending_trace_id_;
+        trace_start = ipc_pending_trace_start_;
         req_id = ipc_pending_id_;
         is_batch = ipc_pending_is_batch_;
         is_live_conversion = ipc_pending_is_live_conversion_;
@@ -3729,7 +3840,7 @@ void TextService::ServeConnection() {
     // refused refresh cannot swallow a CommitObservation.
     if (ipc_refresh_options_.exchange(false, std::memory_order_relaxed)) {
       constexpr uint32_t kRefreshHandshakeTimeoutMs = 3000;
-      if (!PerformHandshake(ipc_client_, kRefreshHandshakeTimeoutMs, "tip-settings-refresh",
+      if (!PerformHandshake(ipc_client_, kRefreshHandshakeTimeoutMs, NewTraceIdNoThrow(),
                             /*update_host_options=*/true, next_id++)) {
         RequeueUnackedSendItems(to_send, 0);
         if (reconversion) {
@@ -3752,12 +3863,12 @@ void TextService::ServeConnection() {
       Envelope env;
       env.version = 1;
       env.request_id = next_id++;
-      env.trace_id = "tip-faf";
+      env.trace_id = item.trace_id;
       env.type = item.type;
       env.payload_json = item.payload_json;
       bool sent_out_of_band = false;
       if (item.type == MessageType::Cancel && item.cancel_target_id != 0) {
-        sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
+        sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id, item.trace_id);
         if (!sent_out_of_band) {
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_cancel_fallback",
                      {{"target_request_id", item.cancel_target_id}});
@@ -3806,7 +3917,7 @@ void TextService::ServeConnection() {
       continue;
     }
     if (is_batch) {
-      ConvertBatch(req_id, reading, raw_romaji, batch_mode);
+      ConvertBatch(req_id, reading, raw_romaji, batch_mode, trace_id);
       if (!ipc_client_.IsConnected()) return;
       continue;
     }
@@ -3822,7 +3933,8 @@ void TextService::ServeConnection() {
     qenv.version = 1;
     qenv.request_id = req_id;
     {
-      qenv.trace_id = "tip-key-query";
+      ScopedTracePhase phase(trace_id, logging::Phase::IpcSerialize);
+      qenv.trace_id = trace_id;
       if (is_live_conversion) {
         qenv.type = MessageType::QueryLiveConversion;
         qenv.payload_json = BuildQueryLiveConversionRequest({reading, left_context});
@@ -3848,12 +3960,14 @@ void TextService::ServeConnection() {
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = req_id;
+      ipc_inflight_trace_id_ = trace_id;
     }
 
     if (!ipc_client_.Send(qenv)) {
       {
         std::lock_guard<std::mutex> lock(ipc_mtx_);
         ipc_inflight_id_ = 0;
+        ipc_inflight_trace_id_.clear();
       }
       // Pipe died after we cleared ipc_has_request_: re-arm so the reconnected
       // loop re-issues this reading without the user retyping.
@@ -3894,12 +4008,12 @@ void TextService::ServeConnection() {
         Envelope env;
         env.version = 1;
         env.request_id = next_id++;
-        env.trace_id = "tip-faf";
+        env.trace_id = item.trace_id;
         env.type = item.type;
         env.payload_json = item.payload_json;
         bool sent_out_of_band = false;
         if (item.type == MessageType::Cancel && item.cancel_target_id != 0) {
-          sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
+          sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id, item.trace_id);
           if (!sent_out_of_band) {
             RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_post_query_cancel_fallback",
                        {{"target_request_id", item.cancel_target_id}});
@@ -3944,7 +4058,7 @@ void TextService::ServeConnection() {
 
       qres = ipc_client_.ReceiveWithTimeout(wait_ms, query_request_deadline);
       if (qres) {
-        if (!IsExpectedIpcResponse(*qres, req_id, qenv.type)) {
+        if (!IsExpectedIpcResponse(*qres, req_id, qenv.type) || qres->trace_id != trace_id) {
           if (qres->type == ipc::MessageType::Health) {
             // A late reply to an idle Health probe that gave way to this query.
             qres.reset();
@@ -3981,12 +4095,12 @@ void TextService::ServeConnection() {
         ipc::Envelope env;
         env.version = 1;
         env.request_id = next_id++;
-        env.trace_id = "tip-faf-mid";
+        env.trace_id = item.trace_id;
         env.type = item.type;
         env.payload_json = item.payload_json;
         bool sent_out_of_band = false;
         if (item.type == ipc::MessageType::Cancel && item.cancel_target_id != 0) {
-          sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id);
+          sent_out_of_band = SendCancelOutOfBand(item.cancel_target_id, item.trace_id);
           if (!sent_out_of_band) {
             RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_mid_receive_cancel_fallback",
                        {{"target_request_id", item.cancel_target_id}});
@@ -4005,6 +4119,7 @@ void TextService::ServeConnection() {
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       ipc_inflight_id_ = 0;
+      ipc_inflight_trace_id_.clear();
     }
     if (qres) {
       NoteHostResponded();
@@ -4023,11 +4138,11 @@ void TextService::ServeConnection() {
       ipc::Envelope cancel_env;
       cancel_env.version = 1;
       cancel_env.request_id = next_id++;
-      cancel_env.trace_id = "tip-query-timeout-cancel";
+      cancel_env.trace_id = trace_id;
       cancel_env.type = ipc::MessageType::Cancel;
       cancel_env.payload_json = ipc::BuildCancel({req_id});
       const bool sent_out_of_band = SendCancelOutOfBand(req_id, kTimeoutCancelConnectTimeoutMs,
-                                                        kTimeoutCancelHandshakeTimeoutMs);
+                                                        kTimeoutCancelHandshakeTimeoutMs, trace_id);
       if (!sent_out_of_band && !ipc_client_.Send(cancel_env)) {
         RearmPendingQuery(req_id);
         if (!ipc_stop_.load())
@@ -4069,8 +4184,10 @@ void TextService::ServeConnection() {
           bool notify_ui = false;
           {
             std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
-            if (IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id)) {
-              live_conversion_result_ = LiveConversionResult{req_id, reading, payload->surface};
+            if (IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) &&
+                ipc_pending_trace_id_ == trace_id) {
+              live_conversion_result_ =
+                  LiveConversionResult{req_id, reading, payload->surface, trace_id, trace_start};
               notify_ui = true;
             }
           }
@@ -4103,9 +4220,19 @@ void TextService::ServeConnection() {
     //   2. ipc_pending_id_ still equals req_id — no commit/clear bumped it
     //      while this response was in-transit.
     bool is_fresh = false;
+    const auto staleness_start = TipRuntimeLogger().enabled()
+                                     ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
     {
       std::lock_guard<std::mutex> lock(ipc_mtx_);
-      is_fresh = IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id);
+      is_fresh = IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) &&
+                 ipc_pending_trace_id_ == trace_id;
+    }
+    if (staleness_start != std::chrono::steady_clock::time_point{}) {
+      TracePhase(trace_id, logging::Phase::StalenessCheck,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                           staleness_start)
+                     .count());
     }
 
     if (is_fresh) {
@@ -4119,14 +4246,18 @@ void TextService::ServeConnection() {
       bool notify_ui = false;
       {
         std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
-        if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id)) {
+        if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) ||
+            ipc_pending_trace_id_ != trace_id) {
           ++next_id;
           continue;
         }
         candidates_ = std::move(tip_candidates);
+        candidates_trace_id_ = trace_id;
+        candidates_trace_start_ = trace_start;
+        candidates_trace_pending_ = true;
         if (apply_live_preview && !candidate_window_show_pending_ && !candidates_.empty()) {
-          live_conversion_result_ =
-              LiveConversionResult{req_id, reading, candidates_.front().field.surface};
+          live_conversion_result_ = LiveConversionResult{
+              req_id, reading, candidates_.front().field.surface, trace_id, trace_start};
         }
         cached_batch_segments_.clear();
         if (candidate_window_show_pending_) {
@@ -4222,9 +4353,12 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
   Envelope reverse;
   reverse.version = 1;
   reverse.request_id = next_id++;
-  reverse.trace_id = "tip-reconversion-reverse";
+  reverse.trace_id = request.trace_id;
   reverse.type = MessageType::ReverseConvert;
-  reverse.payload_json = BuildReverseConvertRequest({request.surface});
+  {
+    ScopedTracePhase phase(request.trace_id, logging::Phase::IpcSerialize);
+    reverse.payload_json = BuildReverseConvertRequest({request.surface});
+  }
   if (!ipc_client_.Send(reverse)) {
     connected = false;
   } else {
@@ -4248,9 +4382,12 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
       Envelope qenv;
       qenv.version = 1;
       qenv.request_id = next_id++;
-      qenv.trace_id = "tip-reconversion-candidates";
+      qenv.trace_id = request.trace_id;
       qenv.type = MessageType::QueryCandidates;
-      qenv.payload_json = BuildQueryCandidatesRequest(query);
+      {
+        ScopedTracePhase phase(request.trace_id, logging::Phase::IpcSerialize);
+        qenv.payload_json = BuildQueryCandidatesRequest(query);
+      }
       if (!ipc_client_.Send(qenv)) {
         connected = false;
       } else {
@@ -4264,11 +4401,11 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
             // An idle timeout leaves the pipe usable. Cancel the slow query;
             // any reply racing with Cancel is ignored by the next receive loop.
             if (!SendCancelOutOfBand(qenv.request_id, kTimeoutCancelConnectTimeoutMs,
-                                     kTimeoutCancelHandshakeTimeoutMs)) {
+                                     kTimeoutCancelHandshakeTimeoutMs, request.trace_id)) {
               Envelope cancel;
               cancel.version = 1;
               cancel.request_id = next_id++;
-              cancel.trace_id = "tip-reconversion-timeout-cancel";
+              cancel.trace_id = request.trace_id;
               cancel.type = MessageType::Cancel;
               cancel.payload_json = BuildCancel({qenv.request_id});
               connected = ipc_client_.Send(cancel);
@@ -4306,7 +4443,8 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
 }
 
 void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
-                               const std::string& raw_romaji, const std::string& mode) {
+                               const std::string& raw_romaji, const std::string& mode,
+                               const std::string& trace_id) {
   using namespace azookey::ipc;
   core::AiPrivacy privacy;
   std::string backend;
@@ -4316,7 +4454,6 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     backend = ipc_pending_ai_backend_;
   }
   std::vector<BatchConversionSegment> segments;
-  const auto trace = CreateIpcClientId();
   // Split raw input first so every AI request keeps its corresponding kana.
   const bool has_raw = !raw_romaji.empty();
   std::vector<core::BatchRomajiChunk> chunks;
@@ -4338,6 +4475,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     ipc_pending_batch_mode_ = "neural";
     ipc_has_request_ = true;
     ipc_inflight_id_ = 0;
+    ipc_inflight_trace_id_.clear();
     return true;
   };
   uint64_t active_id = generation;
@@ -4347,11 +4485,13 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       std::lock_guard<std::mutex> lock(ipc_mtx_);
       if (ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_) {
         ipc_inflight_id_ = 0;
+        ipc_inflight_trace_id_.clear();
         return;
       }
       active_id = ++ipc_pending_id_;
       generation = active_id;
       ipc_inflight_id_ = active_id;
+      ipc_inflight_trace_id_ = trace_id;
     }
     QueryBatchConversionRequest request;
     request.reading = ApplyDefaultCompositionPunctuation(chunk.reading);
@@ -4364,9 +4504,12 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     request.auto_punctuation = batch_auto_punctuation_.load(std::memory_order_relaxed);
     Envelope envelope;
     envelope.request_id = active_id;
-    envelope.trace_id = trace;
+    envelope.trace_id = trace_id;
     envelope.type = MessageType::QueryBatchConversion;
-    envelope.payload_json = BuildQueryBatchConversionRequest(request);
+    {
+      ScopedTracePhase phase(trace_id, logging::Phase::IpcSerialize);
+      envelope.payload_json = BuildQueryBatchConversionRequest(request);
+    }
     const auto encoded = Serialize(envelope);
     if (!encoded || encoded->size() >= kMaxFrameSize || !ipc_client_.Send(envelope)) {
       if (!ipc_client_.IsConnected()) {
@@ -4391,15 +4534,16 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
         stale = ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_;
       }
       if (stale) {
-        SendCancelOutOfBand(active_id);
+        SendCancelOutOfBand(active_id, trace_id);
         ipc_client_.Disconnect();
         std::lock_guard<std::mutex> lock(ipc_mtx_);
         ipc_inflight_id_ = 0;
+        ipc_inflight_trace_id_.clear();
         return;
       }
       auto response = ipc_client_.ReceiveWithTimeout(50, deadline);
       if (!response) continue;
-      if (response->request_id != active_id || response->trace_id != trace ||
+      if (response->request_id != active_id || response->trace_id != trace_id ||
           response->type != MessageType::QueryBatchConversion)
         continue;
       result = ParseQueryBatchConversionResponse(response->payload_json);
@@ -4422,7 +4566,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       if (!result && std::chrono::steady_clock::now() >= deadline)
         ipc_client_.FinishTraceRequest(active_id, core::EtwResult::Timeout);
       if (!result || !result->canceled) {
-        SendCancelOutOfBand(active_id);
+        SendCancelOutOfBand(active_id, trace_id);
         ipc_client_.Disconnect();
       }
       failed = true;
@@ -4442,10 +4586,14 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
   {
     std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
     ipc_inflight_id_ = 0;
+    ipc_inflight_trace_id_.clear();
     if (ipc_pending_id_ != generation || ipc_has_request_ || segments.empty()) return;
     cached_batch_segments_ = std::move(segments);
     const auto& first = cached_batch_segments_.front();
     candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
+    candidates_trace_id_ = trace_id;
+    candidates_trace_start_ = ipc_pending_trace_start_;
+    candidates_trace_pending_ = true;
     notify = candidate_window_show_pending_;
   }
   if (notify) candidate_ui_.PostCandidatesReady();
@@ -4493,17 +4641,24 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
   ipc::Envelope envelope;
   envelope.version = 1;
   envelope.request_id = next_id++;
-  envelope.trace_id = "tip-prediction";
+  envelope.trace_id = request->trace_id;
   envelope.type = ipc::MessageType::QueryPredictions;
-  envelope.payload_json = ipc::BuildQueryPredictionsRequest(payload);
+  {
+    ScopedTracePhase phase(request->trace_id, logging::Phase::IpcSerialize);
+    envelope.payload_json = ipc::BuildQueryPredictionsRequest(payload);
+  }
   {
     std::lock_guard lock(ipc_mtx_);
     if (prediction_generation_ != request->generation) return;
     ipc_inflight_id_ = envelope.request_id;
+    ipc_inflight_trace_id_ = envelope.trace_id;
   }
   const auto clear_inflight = [&] {
     std::lock_guard lock(ipc_mtx_);
-    if (ipc_inflight_id_ == envelope.request_id) ipc_inflight_id_ = 0;
+    if (ipc_inflight_id_ == envelope.request_id) {
+      ipc_inflight_id_ = 0;
+      ipc_inflight_trace_id_.clear();
+    }
   };
   // The settings watcher may revoke permission while the payload is built.
   if (prediction_settings_changed_.load(std::memory_order_acquire) ||
@@ -4559,6 +4714,10 @@ std::string TextService::CaptureLeftContext(ITfContext* context, bool secure) {
                          local_settings_.MaxContextLengthSnapshot());
 }
 
+std::string TextService::CurrentActionTraceId() const {
+  return active_key_trace_active_ ? active_key_trace_id_ : NewTraceIdNoThrow();
+}
+
 void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
   const auto privacy = ResolvePrivacy(context, false);
@@ -4574,6 +4733,8 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_emoji_trigger_ = emoji_trigger;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
+  ipc_pending_trace_id_ = CurrentActionTraceId();
+  ipc_pending_trace_start_ = active_key_trace_start_;
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = false;
   ipc_pending_apply_live_preview_ = apply_live_preview;
@@ -4601,6 +4762,8 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
+  ipc_pending_trace_id_ = CurrentActionTraceId();
+  ipc_pending_trace_start_ = active_key_trace_start_;
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = true;
@@ -4680,6 +4843,8 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
+  ipc_pending_trace_id_ = CurrentActionTraceId();
+  ipc_pending_trace_start_ = active_key_trace_start_;
   ipc_pending_is_batch_ = true;
   ipc_pending_is_live_conversion_ = false;
   ipc_pending_apply_live_preview_ = false;
@@ -4868,13 +5033,13 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
         bool need_notify = false;
         if (ipc_has_request_) {
           ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_pending_id_}),
-                                     false, ipc_pending_id_});
+                                     false, ipc_pending_id_, 0, ipc_pending_trace_id_});
           ipc_has_request_ = false;
           need_notify = true;
         }
         if (ipc_inflight_id_ != 0) {
           ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}),
-                                     false, ipc_inflight_id_});
+                                     false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
           need_notify = true;
         }
         ++ipc_pending_id_;
@@ -5038,7 +5203,29 @@ void TextService::OnCandidatesReady(void* context) {
       service->prediction_settings_refreshing_.store(false, std::memory_order_release);
     service->ClearPrediction();
   }
-  service->ShowCandidateWindowFromCache();
+  std::string trace_id;
+  std::chrono::steady_clock::time_point trace_start;
+  {
+    std::lock_guard lock(service->candidates_mtx_);
+    if (service->candidates_trace_pending_) {
+      trace_id = service->candidates_trace_id_;
+      trace_start = service->candidates_trace_start_;
+      service->candidates_trace_pending_ = false;
+    }
+  }
+  const auto ui_start = TipRuntimeLogger().enabled() && !trace_id.empty()
+                            ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+  const bool ui_applied = service->ShowCandidateWindowFromCache();
+  if (ui_applied && ui_start != std::chrono::steady_clock::time_point{}) {
+    const auto ui_end = std::chrono::steady_clock::now();
+    TracePhase(trace_id, logging::Phase::UiApply,
+               std::chrono::duration<double, std::milli>(ui_end - ui_start).count());
+    if (trace_start != std::chrono::steady_clock::time_point{}) {
+      TracePhase(trace_id, logging::Phase::Total,
+                 std::chrono::duration<double, std::milli>(ui_end - trace_start).count());
+    }
+  }
 }
 
 RECT TextService::PredictionCaretRect() {
@@ -5126,8 +5313,8 @@ void TextService::RefreshPrediction(ITfContext* context) {
   prediction_retry_scheduled_generation_ = 0;
   {
     std::lock_guard lock(ipc_mtx_);
-    ipc_prediction_request_ =
-        PredictionRequest{++prediction_generation_, kana, prediction_left_context_};
+    ipc_prediction_request_ = PredictionRequest{++prediction_generation_, kana,
+                                                prediction_left_context_, CurrentActionTraceId()};
   }
   ipc_cv_.notify_one();
 }
@@ -5213,16 +5400,30 @@ void TextService::ApplyLiveConversionResult() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, result->request_id)) return;
   }
+  const auto ui_start = TipRuntimeLogger().enabled() && !result->trace_id.empty()
+                            ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
   const std::string previous_marked = core_marked_surface_;
   const std::string previous_reading = live_display_reading_;
   const std::string previous_surface = live_display_surface_;
   live_display_reading_ = result->reading;
   live_display_surface_ = result->surface;
   if (core_input_active_) core_marked_surface_ = result->surface;
-  if (RequestPreeditUpdate(active_context_) == E_OUTOFMEMORY) {
+  const HRESULT update_hr = RequestPreeditUpdate(active_context_);
+  if (update_hr == E_OUTOFMEMORY) {
     core_marked_surface_ = previous_marked;
     live_display_reading_ = previous_reading;
     live_display_surface_ = previous_surface;
+    return;
+  }
+  if (SUCCEEDED(update_hr) && ui_start != std::chrono::steady_clock::time_point{}) {
+    const auto ui_end = std::chrono::steady_clock::now();
+    TracePhase(result->trace_id, logging::Phase::UiApply,
+               std::chrono::duration<double, std::milli>(ui_end - ui_start).count());
+    if (result->trace_start != std::chrono::steady_clock::time_point{}) {
+      TracePhase(result->trace_id, logging::Phase::Total,
+                 std::chrono::duration<double, std::milli>(ui_end - result->trace_start).count());
+    }
   }
 }
 
@@ -5274,7 +5475,7 @@ void TextService::PrefetchSelectedReconversion() {
   reconversion_prefetch_surface_ = surface;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
-    ipc_reconversion_request_ = ReconversionRequest{generation, utf8};
+    ipc_reconversion_request_ = ReconversionRequest{generation, utf8, CurrentActionTraceId()};
   }
   ipc_cv_.notify_one();
 }
@@ -5341,7 +5542,8 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
   }
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
-    ipc_reconversion_request_ = ReconversionRequest{reconversion_generation_, utf8};
+    ipc_reconversion_request_ =
+        ReconversionRequest{reconversion_generation_, utf8, CurrentActionTraceId()};
   }
   ipc_cv_.notify_one();
   return S_OK;
@@ -5412,32 +5614,32 @@ POINT TextService::CandidateAnchorPoint() {
   return caret_pt_;
 }
 
-void TextService::ShowCandidateWindowFromCache() {
+bool TextService::ShowCandidateWindowFromCache() {
   if (core_input_active_ && input_state_.kind() != core::InputStateKind::Idle &&
       shown_batch_segments_.empty() && emoji_mode_ == EmojiMode::Inactive) {
     if (input_state_.kind() == core::InputStateKind::Selecting ||
         input_state_.Reading() != CurrentPreeditSurface())
-      return;
+      return false;
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
       candidate_window_show_pending_ = false;
     }
-    ApplyInputStateResult(active_context_,
-                          input_state_.HandleCandidatesArrived(CoreCandidatesFromCache()));
-    return;
+    auto result = input_state_.HandleCandidatesArrived(CoreCandidatesFromCache());
+    const bool opens_candidates = !result.actions.empty();
+    return SUCCEEDED(ApplyInputStateResult(active_context_, std::move(result))) && opens_candidates;
   }
   if (CurrentPreeditSurface().empty() || candidate_ui_.IsShowing()) {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidate_window_show_pending_ = false;
-    return;
+    return false;
   }
 
   std::vector<TipCandidate> snapshot;
   {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
-    if (!candidate_window_show_pending_) return;
+    if (!candidate_window_show_pending_) return false;
     candidate_window_show_pending_ = false;
-    if (candidates_.empty()) return;
+    if (candidates_.empty()) return false;
     shown_candidates_ = candidates_;
     shown_batch_segments_ = cached_batch_segments_;
     batch_segment_selections_.assign(shown_batch_segments_.size(), 0);
@@ -5446,20 +5648,22 @@ void TextService::ShowCandidateWindowFromCache() {
   }
 
   const auto items = BuildCandidateViews(snapshot);
-  if (items.empty()) return;
+  if (items.empty()) return false;
 
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
   const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
-  if (FAILED(begin_hr)) return;
+  if (FAILED(begin_hr)) return false;
   if (emoji_mode_ == EmojiMode::Collecting) emoji_mode_ = EmojiMode::Listing;
 
   const HRESULT update_hr = active_context_ ? RequestPreeditUpdate(active_context_) : E_UNEXPECTED;
   if (FAILED(update_hr)) {
     candidate_ui_.EndUI();
     RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "candidate_initial_preedit_update_failed");
+    return false;
   }
+  return true;
 }
 
 #ifdef AZOOKEY_TSF_TESTING
@@ -5646,8 +5850,8 @@ void TextService::PostCommitObservation(const std::string& reading,
 
 void TextService::PostCancel(uint64_t target_request_id) {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
-  ipc_send_queue_.push_back(
-      {ipc::MessageType::Cancel, ipc::BuildCancel({target_request_id}), false, target_request_id});
+  ipc_send_queue_.push_back({ipc::MessageType::Cancel, ipc::BuildCancel({target_request_id}), false,
+                             target_request_id, 0, CurrentActionTraceId()});
   TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
 }
@@ -5665,7 +5869,8 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
        !prediction_allowed_.load(std::memory_order_relaxed)))
     return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
-  ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0});
+  ipc_send_queue_.push_back(
+      {type, std::move(payload), expects_response, 0, 0, CurrentActionTraceId()});
   TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
 }

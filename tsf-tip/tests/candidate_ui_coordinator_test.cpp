@@ -311,6 +311,7 @@ TEST(TsfTipCandidateUiCoordinatorTest, ExceptionAfterRegistrationEndsUiAndReleas
   EXPECT_EQ(thread_mgr.ref_count(), 1);
   ASSERT_TRUE(capture.observation.has_value());
   EXPECT_EQ(capture.observation->result, E_OUTOFMEMORY);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
 }
 
 TEST(TsfTipCandidateUiCoordinatorTest, UiLessModeRequiresUiElementManager) {

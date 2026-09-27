@@ -165,13 +165,14 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     NotifyBeginObserver(S_OK, true, true, pb_show, ui_element_id);
     return S_OK;
   } catch (const std::bad_alloc&) {
+    const bool mgr_available = ui_element_mgr_ != nullptr;
     rollback_exception();
-    NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
-                        kInvalidUiElementId);
+    NotifyBeginObserver(E_OUTOFMEMORY, mgr_available, false, FALSE, kInvalidUiElementId);
     return E_OUTOFMEMORY;
   } catch (...) {
+    const bool mgr_available = ui_element_mgr_ != nullptr;
     rollback_exception();
-    NotifyBeginObserver(E_FAIL, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
+    NotifyBeginObserver(E_FAIL, mgr_available, false, FALSE, kInvalidUiElementId);
     return E_FAIL;
   }
 }

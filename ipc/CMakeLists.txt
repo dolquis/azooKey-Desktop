@@ -7,6 +7,7 @@ add_library(azookey_ipc STATIC
   src/Messages.cpp
   src/NamedPipeTransport.cpp
   src/Payloads.cpp
+  src/TraceId.cpp
 )
 
 target_include_directories(azookey_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

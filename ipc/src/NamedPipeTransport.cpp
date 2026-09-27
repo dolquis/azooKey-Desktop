@@ -18,6 +18,8 @@
 #include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/logging/Phase.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 #ifdef _WIN32
 
@@ -365,6 +367,10 @@ class FrameDeadline {
     return armed_ && std::chrono::steady_clock::now() >= effective_hard_deadline_;
   }
   bool SoftExceeded() const { return armed_ && Elapsed() >= soft_; }
+  double ElapsedMilliseconds() const {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
+        .count();
+  }
 
  private:
   std::chrono::milliseconds Elapsed() const {
@@ -388,6 +394,7 @@ struct TransportContext {
   FrameDeadlineConfig deadlines;
   std::optional<std::chrono::steady_clock::time_point> read_hard_deadline;
   std::atomic<uint64_t>* soft_deadline_counter{nullptr};
+  logging::RuntimeLogger* logger{nullptr};
 };
 
 struct FrameIo {
@@ -730,7 +737,7 @@ void NoteSoftDeadline(const TransportContext& ctx, const FrameDeadline& deadline
   }
 }
 
-std::optional<Envelope> ReadFramedEnvelope(HANDLE pipe, FrameIo& io) {
+std::optional<Envelope> ReadFramedEnvelope(HANDLE pipe, FrameIo& io, double* read_latency_ms) {
   uint8_t header[4]{};
   if (!ReadBytes(pipe, header, sizeof(header), io)) {
     return std::nullopt;
@@ -747,9 +754,25 @@ std::optional<Envelope> ReadFramedEnvelope(HANDLE pipe, FrameIo& io) {
   if (!ReadBytes(pipe, payload.data(), payload.size(), io)) {
     return std::nullopt;
   }
+  if (read_latency_ms) *read_latency_ms = io.deadline.ElapsedMilliseconds();
 
   const std::string json(payload.begin(), payload.end());
   return Deserialize(json);
+}
+
+void LogTransportPhase(logging::RuntimeLogger* logger, const Envelope& envelope,
+                       logging::Phase phase, double latency_ms) noexcept {
+  if (!logger || !logger->enabled() || envelope.trace_id.empty()) return;
+  try {
+    logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
+                {{"trace_id", logging::RuntimeLogSafeText(envelope.trace_id)},
+                 {"request_id", envelope.request_id},
+                 {"phase", logging::RuntimeLogSafeText(std::string(logging::PhaseName(phase)))},
+                 {"latency_ms", latency_ms},
+                 {"result", logging::RuntimeLogSafeText("ok")}});
+  } catch (...) {
+    // Optional tracing must not interrupt an IPC exchange.
+  }
 }
 
 std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx,
@@ -760,7 +783,12 @@ std::optional<Envelope> ReadEnvelope(HANDLE pipe, const TransportContext& ctx,
   FrameIo io{ctx.cancel_event, ctx.overlapped,
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.read_hard, ctx.read_frame_started,
                            ctx.read_hard_deadline)};
-  auto envelope = ReadFramedEnvelope(pipe, io);
+  double read_latency_ms = 0;
+  auto envelope = ReadFramedEnvelope(
+      pipe, io, ctx.logger && ctx.logger->enabled() ? &read_latency_ms : nullptr);
+  if (envelope && ctx.logger && ctx.logger->enabled()) {
+    LogTransportPhase(ctx.logger, *envelope, logging::Phase::PipeRecv, read_latency_ms);
+  }
   if (outcome)
     *outcome = envelope ? core::EtwResult::Success
                         : (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
@@ -779,6 +807,10 @@ bool WriteEnvelope(HANDLE pipe, const Envelope& envelope, const TransportContext
   FrameIo io{ctx.cancel_event, ctx.overlapped,
              FrameDeadline(ctx.deadlines.soft, ctx.deadlines.write_hard, /*armed=*/true)};
   const bool ok = WriteBytes(pipe, frame->data(), frame->size(), io);
+  if (ok && ctx.logger && ctx.logger->enabled()) {
+    LogTransportPhase(ctx.logger, envelope, logging::Phase::PipeSend,
+                      io.deadline.ElapsedMilliseconds());
+  }
   if (outcome)
     *outcome = ok ? core::EtwResult::Success
                   : (io.timed_out ? core::EtwResult::Timeout : core::EtwResult::Disconnected);
@@ -820,7 +852,7 @@ ClientReceiveResult ReceiveClientEnvelope(
     const std::shared_ptr<ClientConnection>& connection,
     std::optional<std::chrono::steady_clock::time_point> phase_a_deadline,
     std::optional<std::chrono::steady_clock::time_point> request_deadline,
-    const core::EtwGuid& trace_client) {
+    const core::EtwGuid& trace_client, logging::RuntimeLogger* logger) {
   while (true) {
     if (WaitForSingleObject(connection->cancel_event.get(), 0) == WAIT_OBJECT_0) {
       return {ClientReceiveStatus::Failed, std::nullopt};
@@ -837,6 +869,7 @@ ClientReceiveResult ReceiveClientEnvelope(
       ctx.read_frame_started = true;
       ctx.deadlines = connection->deadlines;
       ctx.read_hard_deadline = request_deadline;
+      ctx.logger = logger;
       const auto frame_started = std::chrono::steady_clock::now();
       core::EtwResult outcome = core::EtwResult::Failed;
       auto envelope = ReadEnvelope(connection->pipe.get(), ctx, &outcome);
@@ -1062,6 +1095,7 @@ struct NamedPipeServer::Impl {
 };
 
 struct NamedPipeClient::Impl {
+  std::atomic<logging::RuntimeLogger*> logger{nullptr};
   core::EtwGuid trace_client{};
   std::mutex trace_mutex;
   using TraceKey = std::pair<const ClientConnection*, std::uint64_t>;
@@ -1220,6 +1254,10 @@ std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const {
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {
   core::EtwLogger::Register();
 }
+
+void NamedPipeClient::SetRuntimeLogger(logging::RuntimeLogger* logger) noexcept {
+  impl_->logger.store(logger, std::memory_order_relaxed);
+}
 NamedPipeClient::~NamedPipeClient() {
   Disconnect();
   core::EtwLogger::Unregister();
@@ -1310,6 +1348,7 @@ bool NamedPipeClient::Send(const Envelope& envelope) {
   ctx.cancel_event = connection->cancel_event.get();
   ctx.overlapped = true;
   ctx.deadlines = connection->deadlines;
+  ctx.logger = impl_->logger.load(std::memory_order_relaxed);
   const auto frame_started = std::chrono::steady_clock::now();
   core::EtwResult outcome = core::EtwResult::Failed;
   const bool written = WriteEnvelope(connection->pipe.get(), envelope, ctx, &outcome);
@@ -1340,7 +1379,8 @@ std::optional<Envelope> NamedPipeClient::Receive() {
   const auto connection = impl_->CurrentConnection();
   if (!connection) return std::nullopt;
 
-  auto result = ReceiveClientEnvelope(connection, std::nullopt, std::nullopt, impl_->TraceClient());
+  auto result = ReceiveClientEnvelope(connection, std::nullopt, std::nullopt, impl_->TraceClient(),
+                                      impl_->logger.load(std::memory_order_relaxed));
   if (result.status != ClientReceiveStatus::Received) {
     impl_->DisconnectConnection(connection, result.outcome);
     return std::nullopt;
@@ -1369,7 +1409,8 @@ std::optional<Envelope> NamedPipeClient::ReceiveWithTimeout(
   }
 
   auto result =
-      ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline, impl_->TraceClient());
+      ReceiveClientEnvelope(connection, phase_a_deadline, request_deadline, impl_->TraceClient(),
+                            impl_->logger.load(std::memory_order_relaxed));
   if (result.status == ClientReceiveStatus::Failed) {
     impl_->DisconnectConnection(connection, result.outcome);
     return std::nullopt;
@@ -1406,6 +1447,7 @@ std::uint64_t NamedPipeServer::SoftDeadlineExceededCount() const { return 0; }
 
 NamedPipeClient::NamedPipeClient() : impl_(std::make_unique<Impl>()) {}
 NamedPipeClient::~NamedPipeClient() = default;
+void NamedPipeClient::SetRuntimeLogger(logging::RuntimeLogger*) noexcept {}
 void NamedPipeClient::SetTraceClientId(const core::EtwGuid&) noexcept {}
 void NamedPipeClient::FinishTraceRequest(std::uint64_t, core::EtwResult) {}
 bool NamedPipeClient::Connect(const std::string&, uint32_t) { return false; }

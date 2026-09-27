@@ -42,7 +42,8 @@ class Dispatcher {
   Dispatcher(InferenceEngine* engine, RequestScheduler* scheduler,
              learning::UserDictionary* user_dict, DispatcherConfig config = {},
              SettingsStore* settings_store = nullptr,
-             learning::AutoWordStore* auto_word_store = nullptr);
+             learning::AutoWordStore* auto_word_store = nullptr,
+             logging::RuntimeLogger* runtime_logger = nullptr);
   ~Dispatcher();
 
   std::optional<ipc::Envelope> Dispatch(const ipc::Envelope& request);
@@ -79,6 +80,7 @@ class Dispatcher {
   learning::UserDictionary* user_dict_;
   SettingsStore* settings_store_;
   learning::AutoWordStore* auto_word_store_;
+  logging::RuntimeLogger* runtime_logger_;
   DispatcherConfig config_;
   bool authenticated_{false};
   bool client_supports_secure_flag_{false};

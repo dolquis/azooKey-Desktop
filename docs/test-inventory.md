@@ -57,9 +57,10 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/etw_logger_test.cpp` | ETW イベントの固定長 payload、数値フィールド、要求の対応付けと終了結果 |
 | `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、main / worker の実スタックオーバーフロー（通常 Debug）と合成例外（MSVC ASan）での同意・ダンプ検証、同意 off、保存不能時の fallback、許可 stream と本文非混入 |
 | `ipc_tests` | `ipc/tests/messages_test.cpp` | Envelope シリアライズ、length-prefix フレーミング、`MessageType` mapping（`ObserveTypo` / `ListNewWordCandidates` / `ResolveNewWord` / `ReverseConvert` の名前往復を含む）、`QueryLiveConversion` / `QueryPredictions` の型名往復 |
+| `ipc_trace_id_tests` | `ipc/tests/trace_id_test.cpp` | UUIDv7 の形式、生成順の単調増加、並行生成時の一意性、既存 Envelope での往復 |
 | `ipc_json_tests` | `ipc/tests/json_test.cpp` | JSON パーサの int64/uint64 精度、深度・入力長上限、Unicode escape、不正入力、round-trip |
 | `ipc_payloads_tests` | `ipc/tests/payloads_test.cpp` | Handshake/Ping/Health/LoadModel/QueryCandidates/QueryBatchConversion/Cancel/Commit/UserWord/ReverseConvert の build/parse + malformed reject、`ObserveTypo` と `QueryCandidatesResponse.corrected_reading` の往復と欠如時の後方互換、`QueryCandidates` と学習イベントの privacy フラグの往復および欠落・型不正時の安全側の既定値、`ListNewWordCandidates` / `ResolveNewWord` の往復と不正 `state_filter`・`max_items`・`action` の reject、両応答の `ok` / `changed` / `error` の往復と欠如時の後方互換 、M59 の `auto_punctuation` / `punctuation_style` と `segments[]` の往復・欠落時既定値、ライブ変換要求・応答の往復と不正値拒否、予測 Word mode の要求・応答と欠落・型不正値の拒否 |
-| `ipc_named_pipe_transport_tests` | `ipc/tests/named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップ、overlapped 即時完了エラー保持、accept churn 下での複数クライアント同時接続（`ConcurrentClientsConnectDuringAcceptChurn`）、短いヘッダー・本文不足・ゼロ長の固定バイナリ fixture の切断と期限内終了 |
+| `ipc_named_pipe_transport_tests` | `ipc/tests/named_pipe_transport_test.cpp` | サーバ起動 → クライアント接続 → Handshake/Ping ラウンドトリップと `pipe_send` / `pipe_recv` の相関ログ、overlapped 即時完了エラー保持、accept churn 下での複数クライアント同時接続（`ConcurrentClientsConnectDuringAcceptChurn`）、短いヘッダー・本文不足・ゼロ長の固定バイナリ fixture の切断と期限内終了 |
 | `ipc_handshake_token_tests` | `ipc/tests/handshake_token_test.cpp` | 暗号乱数 token の生成、原子的な更新と読取、不正・欠落値の拒否、ファイル ACL |
 | `ipc_tip_client_tests` | `ipc/tests/tip_client_ipc_test.cpp` | TIP-client 経路（StartDebugIpcProbe 相当）の Handshake → Ping → QueryCandidates、Host 停止 → 再起動をまたぐ client 再接続（`ClientReconnectsAfterHostRestart`） |
 | `learning_tests` | `learning/tests/learning_test.cpp` | `LearningStore::Observe/ObserveCorrection/Score`、`Reranker::Apply` 間接テスト |
@@ -123,6 +124,8 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_rich_features_bench_smoke` | `azookey_rich_features_bench` | M14 軽量ライブ変換の Host 推論 p95 が 30ms 以下で、JSON 出力が schema に一致すること |
 | `azookey_bench_json_smoke` | `azookey_bench` | JSON 出力の schema 固定と `passed` 真、人間向け行の非混入 |
 | `azookey_bench_ipc_smoke` | `azookey_bench` | `--ipc` のフェーズ別レイテンシ出力（serialize / framing / deserialize / pipe round-trip）とサンプル数 |
+| `azookey_trace_viewer_smoke` | `azookey_trace_viewer` | JSONL の phase 別 p50/p95/p99 と、不正行・欠損 phase のスキップ、JSON 出力 schema |
+| `azookey_bench_trace_smoke` | `azookey_bench` と `azookey_trace_viewer` | `--trace` 実行時の JSONL に `total` と Host の `model_inference` が出力され、viewer で集計できること |
 | `azookey_conversion_quality_smoke` | `azookey_bench` | 変換品質評価の集計出力・per-case 出力・baseline 比較（非互換 baseline を含む）の生成物検証 |
 | `azookey_nll_fixture_smoke` | `bench/BuildNllFixture.cmake` | NLL 実モデルテストが要求する辞書 fixture の生成（fixture setup） |
 | `azookey_zenzai_bench_missing_model_output` | `azookey_zenzai_bench` | モデル未指定時に degraded を JSON へ記録し、実行自体は落ちないこと |

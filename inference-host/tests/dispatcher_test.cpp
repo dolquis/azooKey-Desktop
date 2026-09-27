@@ -629,6 +629,60 @@ TEST_F(DispatcherTest, QueryCandidates) {
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
 }
 
+TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {
+  const auto log_dir = std::filesystem::temp_directory_path() / "azookey_host_trace_phase_test";
+  RemovePathNoThrow(log_dir);
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        {}, &logger);
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig(),
+                                       nullptr, nullptr, &logger);
+
+  ipc::Envelope request;
+  request.version = 1;
+  request.request_id = 42;
+  request.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  request.type = ipc::MessageType::QueryCandidates;
+  ipc::QueryCandidatesRequest query;
+  query.reading = "にほん";
+  query.max_candidates = 10;
+  request.payload_json = ipc::BuildQueryCandidatesRequest(query);
+  const auto response = dispatcher.Dispatch(request);
+  ASSERT_TRUE(response);
+  EXPECT_EQ(response->trace_id, request.trace_id);
+
+  std::vector<std::string> phases;
+  ASSERT_TRUE(std::filesystem::exists(log_dir));
+  for (const auto& file : std::filesystem::directory_iterator(log_dir)) {
+    if (file.path().extension() != ".jsonl") continue;
+    std::ifstream stream(file.path());
+    for (std::string line; std::getline(stream, line);) {
+      const auto record = ipc::json::Parse(line);
+      ASSERT_TRUE(record);
+      if (record->GetString("event") != "trace_phase") continue;
+      EXPECT_EQ(record->GetString("trace_id"), request.trace_id);
+      EXPECT_EQ(record->GetUInt("request_id"), request.request_id);
+      ASSERT_TRUE(record->GetNumber("latency_ms"));
+      EXPECT_GE(*record->GetNumber("latency_ms"), 0.0);
+      EXPECT_EQ(record->GetString("result"), "ok");
+      EXPECT_EQ(line.find(query.reading), std::string::npos);
+      ASSERT_TRUE(record->GetString("phase"));
+      if (record->GetString("phase") == "model_inference")
+        EXPECT_EQ(record->GetString("backend"), "cpu");
+      phases.push_back(*record->GetString("phase"));
+    }
+  }
+  EXPECT_NE(std::find(phases.begin(), phases.end(), "host_queue_wait"), phases.end());
+  EXPECT_NE(std::find(phases.begin(), phases.end(), "model_inference"), phases.end());
+  EXPECT_NE(std::find(phases.begin(), phases.end(), "rerank"), phases.end());
+  RemovePathNoThrow(log_dir);
+}
+
 TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
   ipc::QueryLiveConversionRequest query{"にほん", ""};
   const auto request = MakeReq(21, ipc::MessageType::QueryLiveConversion,

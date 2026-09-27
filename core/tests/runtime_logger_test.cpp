@@ -302,6 +302,25 @@ TEST(RuntimeLoggerTest, RotationKeepsConfiguredGenerationLimit) {
   std::filesystem::remove_all(directory);
 }
 
+TEST(RuntimeLoggerTest, ExplicitOutputPathWritesOnlyRequestedJsonl) {
+  const auto directory = TestDirectory("azookey_runtime_log_explicit_output");
+  const auto output = directory / "trace.jsonl";
+  RuntimeLoggerOptions options;
+  options.component = "host";
+  options.output_path = output;
+  options.enabled = true;
+  RuntimeLogger logger(std::move(options));
+
+  logger.Log(RuntimeLogLevel::Info, "trace_phase", {{"latency_ms", 1.25}});
+
+  EXPECT_TRUE(std::filesystem::exists(output));
+  EXPECT_NE(ReadAllLogs(directory).find("\"latency_ms\":1.25"), std::string::npos);
+  EXPECT_EQ(std::distance(std::filesystem::directory_iterator(directory),
+                          std::filesystem::directory_iterator{}),
+            1);
+  std::filesystem::remove_all(directory);
+}
+
 TEST(RuntimeLoggerTest, RetentionRemovesOnlyExpiredComponentLogs) {
   const auto directory = TestDirectory("azookey_runtime_log_retention");
   const auto old_host_log = directory / "host-20000101.jsonl";

@@ -1897,6 +1897,7 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionUsesDedicatedIpcAndUpdatesPreedit
                                 std::to_string(GetCurrentProcessId()) + "-" +
                                 std::to_string(GetTickCount64());
   std::atomic<bool> received{false};
+  std::atomic<bool> received_uuidv7_trace{false};
   azookey::ipc::NamedPipeServer server;
   ASSERT_TRUE(server.Start(
       pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
@@ -1917,6 +1918,9 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionUsesDedicatedIpcAndUpdatesPreedit
         if (req.type == azookey::ipc::MessageType::QueryLiveConversion) {
           const auto payload = azookey::ipc::ParseQueryLiveConversionRequest(req.payload_json);
           if (payload && payload->kana == "か" && payload->context.empty()) received.store(true);
+          received_uuidv7_trace.store(req.trace_id.size() == 36 && req.trace_id[14] == '7' &&
+                                      (req.trace_id[19] == '8' || req.trace_id[19] == '9' ||
+                                       req.trace_id[19] == 'a' || req.trace_id[19] == 'b'));
           res.payload_json = azookey::ipc::BuildQueryLiveConversionResponse({"蚊", 0.8});
           return res;
         }
@@ -1932,6 +1936,7 @@ TEST(TsfTipOnKeyDownPreeditTest, LiveConversionUsesDedicatedIpcAndUpdatesPreedit
   ASSERT_TRUE(h.Press('A'));
   h.service.start_ipc_worker_for_test();
   ASSERT_TRUE(WaitUntil([&] { return received.load(); }));
+  EXPECT_TRUE(received_uuidv7_trace.load());
   ASSERT_TRUE(WaitUntil([&] { return h.service.has_live_conversion_result_for_test(); }));
   h.service.apply_live_conversion_result_for_test();
   EXPECT_EQ(h.context.document->text, L"蚊");

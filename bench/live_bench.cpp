@@ -1,10 +1,14 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "BenchmarkCommandLine.h"
@@ -15,6 +19,9 @@
 #include "TemporaryLearningFile.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/ipc/TraceId.h"
+#include "azookey/logging/Phase.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 #ifndef AZOOKEY_BENCH_COMMIT
 #define AZOOKEY_BENCH_COMMIT "unknown"
@@ -33,15 +40,17 @@ constexpr size_t kCurrentZenzaiPromptTemplateVersion = 1;
 
 void PrintUsage(const char* exe) {
   std::cerr << "Usage: " << exe
-            << " [--max-p95-ms N] [--ipc] [--json] [--output PATH] [--baseline PATH]\n"
+            << " [--max-p95-ms N] [--ipc] [--json] [--output PATH] [--baseline PATH]"
+               " [--backend cpu|cuda] [--model PATH] [--trace [--trace-output PATH]]\n"
             << "       " << exe
             << " --eval JSONL --output JSON [--per-case JSONL] [--baseline JSON]"
                " [--backend cpu|cuda] [--model PATH] [--category NAME]"
-               " [--iterations N] [--typo-mode off] [--trace]\n"
+               " [--iterations N] [--typo-mode off] [--trace [--trace-output PATH]]\n"
             << "Reports latency metrics by default. Pass --max-p95-ms to make p95 a hard "
                "failure gate. --json selects JSON stdout; --output writes the same JSON "
                "schema to a file. --ipc adds codec and Windows pipe echo timings. "
-               "--eval selects the conversion-quality evaluator.\n";
+               "--eval selects the conversion-quality evaluator. --trace writes phase JSONL "
+               "to trace.jsonl by default.\n";
 }
 
 double ParseDouble(const std::string& value, const char* name) {
@@ -76,6 +85,48 @@ size_t ParseSize(const std::string& value, const char* name) {
   }
 }
 
+azookey::logging::RuntimeLoggerOptions TraceLoggerOptions(const std::filesystem::path& output_path,
+                                                          std::string component) {
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = std::move(component);
+  options.output_path = output_path;
+  // A benchmark trace must retain all samples instead of rotating at the runtime default (5 MiB).
+  options.max_file_bytes = uintmax_t{1} << 40;
+  return options;
+}
+
+std::vector<azookey::core::Candidate> QueryCandidates(
+    azookey::host::InferenceEngine& engine, const std::string& kana, const std::string& context,
+    uint64_t now_epoch_sec, uint32_t max_candidates, azookey::logging::RuntimeLogger* bench_logger,
+    uint64_t& request_id, const std::string& backend) {
+  if (!bench_logger) {
+    return engine.QueryCandidates(kana, context, now_epoch_sec, nullptr, max_candidates, false);
+  }
+  const auto trace_id = azookey::ipc::GenerateTraceId();
+  const azookey::host::InferenceTelemetry telemetry{++request_id, {}, trace_id};
+  const auto start = std::chrono::steady_clock::now();
+  auto candidates = engine.QueryCandidates(kana, context, now_epoch_sec, nullptr, max_candidates,
+                                           false, &telemetry);
+  const auto latency_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  bench_logger->Log(azookey::logging::RuntimeLogLevel::Info, "latency_phase",
+                    {{"request_id", telemetry.request_id},
+                     {"trace_id", azookey::logging::RuntimeLogSafeText(trace_id)},
+                     {"phase", azookey::logging::RuntimeLogSafeText(std::string(
+                                   azookey::logging::PhaseName(azookey::logging::Phase::Total)))},
+                     {"latency_ms", latency_ms},
+                     {"backend", azookey::logging::RuntimeLogSafeText(backend)},
+                     {"result", azookey::logging::RuntimeLogSafeText("ok")}});
+  return candidates;
+}
+
+bool SamePath(const std::filesystem::path& left, const std::filesystem::path& right) {
+  return !left.empty() && !right.empty() &&
+         std::filesystem::weakly_canonical(std::filesystem::absolute(left)) ==
+             std::filesystem::weakly_canonical(std::filesystem::absolute(right));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -99,6 +150,7 @@ int main(int argc, char** argv) {
   bool ipc_benchmark = false;
   std::filesystem::path output_path;
   std::filesystem::path baseline_path;
+  std::filesystem::path trace_output_path;
   azookey::bench::ConversionQualityOptions quality_options;
   try {
     for (int i = 1; i < argc; ++i) {
@@ -138,6 +190,10 @@ int main(int argc, char** argv) {
         quality_options.typo_mode = RequireValue(argc, argv, i, "--typo-mode");
       } else if (arg == "--trace") {
         quality_options.trace = true;
+      } else if (arg == "--trace-output") {
+        const auto value = RequireValue(argc, argv, i, "--trace-output");
+        if (value.empty()) throw std::invalid_argument("--trace-output requires a non-empty path");
+        trace_output_path = azookey::bench::Utf8Path(value);
       } else {
         throw std::invalid_argument("unknown option: " + arg);
       }
@@ -146,10 +202,23 @@ int main(int argc, char** argv) {
       throw std::invalid_argument("--typo-mode supports only off until M55");
     }
     if (quality_options.eval_path.empty() &&
-        (!quality_options.per_case_path.empty() || !quality_options.model.empty() ||
-         quality_options.backend != "cpu" || quality_options.category != "all" ||
-         quality_options.typo_mode != "off" || quality_options.trace)) {
+        (!quality_options.per_case_path.empty() || quality_options.category != "all" ||
+         quality_options.typo_mode != "off")) {
       throw std::invalid_argument("conversion-quality options require --eval");
+    }
+    if (!trace_output_path.empty() && !quality_options.trace) {
+      throw std::invalid_argument("--trace-output requires --trace");
+    }
+    if (quality_options.trace && trace_output_path.empty()) {
+      trace_output_path = "trace.jsonl";
+    }
+    if (quality_options.trace &&
+        (SamePath(trace_output_path, output_path) ||
+         SamePath(trace_output_path, quality_options.per_case_path) ||
+         SamePath(trace_output_path, quality_options.eval_path) ||
+         SamePath(trace_output_path, baseline_path) ||
+         SamePath(trace_output_path, azookey::bench::Utf8Path(quality_options.model)))) {
+      throw std::invalid_argument("--trace-output must differ from input and result paths");
     }
     if (!quality_options.eval_path.empty() && max_p95_ms) {
       throw std::invalid_argument("--max-p95-ms cannot be combined with --eval");
@@ -171,6 +240,20 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  std::optional<azookey::logging::RuntimeLogger> trace_logger;
+  if (quality_options.trace) {
+    try {
+      const auto directory = trace_output_path.parent_path();
+      if (!directory.empty()) std::filesystem::create_directories(directory);
+      std::ofstream trace_output(trace_output_path, std::ios::binary | std::ios::trunc);
+      if (!trace_output) throw std::runtime_error("cannot create trace output");
+      trace_logger.emplace(TraceLoggerOptions(trace_output_path, "bench"));
+    } catch (const std::exception& ex) {
+      std::cerr << ex.what() << std::endl;
+      return 2;
+    }
+  }
+
   // Keep store and engine after learning_file: engine shutdown flushes learning,
   // and the atomic writer would recreate the directory if cleanup ran first.
   azookey::learning::LearningStore store(learning_file->Path());
@@ -179,9 +262,9 @@ int main(int argc, char** argv) {
                                                             : azookey::host::BackendKind::Cpu;
   engine_config.model_path = quality_options.model;
   azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
-                                        engine_config);
+                                        engine_config, trace_logger ? &*trace_logger : nullptr);
   if (!quality_options.model.empty() && !engine.LoadModel()) {
-    std::cerr << "failed to load evaluation model" << std::endl;
+    std::cerr << "failed to load model" << std::endl;
     return 2;
   }
 
@@ -200,14 +283,17 @@ int main(int argc, char** argv) {
       quality_options.batch_size = kCurrentZenzaiContextBatchSize;
     }
     std::string error;
+    uint64_t request_id = 0;
     const bool ok = azookey::bench::RunConversionQualityEvaluation(
         quality_options,
-        [&engine](const std::string& input, const std::string& context) {
+        [&engine, &request_id, &trace_logger, &quality_options](const std::string& input,
+                                                                const std::string& context) {
           const auto now = static_cast<uint64_t>(
               std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
-          return engine.QueryCandidates(
-              input, context, now, nullptr,
-              static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit), false);
+          return QueryCandidates(
+              engine, input, context, now,
+              static_cast<uint32_t>(azookey::bench::kConversionQualityCandidateLimit),
+              trace_logger ? &*trace_logger : nullptr, request_id, quality_options.backend);
         },
         &error);
     if (!ok) {
@@ -217,17 +303,19 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  engine.LoadModel();
+  if (quality_options.model.empty()) engine.LoadModel();
 
   const std::vector<std::string> inputs = {"わたし", "にほん", "とうきょう", "かなへんかん",
                                            "にほん"};
   std::vector<double> lat_ms;
+  uint64_t request_id = 0;
   for (int i = 0; i < 200; ++i) {
     const auto& kana = inputs[static_cast<size_t>(i) % inputs.size()];
     auto t0 = std::chrono::steady_clock::now();
     auto now = static_cast<uint64_t>(
         std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
-    (void)engine.QueryCandidates(kana, "", now);
+    (void)QueryCandidates(engine, kana, "", now, 0, trace_logger ? &*trace_logger : nullptr,
+                          request_id, quality_options.backend);
     auto t1 = std::chrono::steady_clock::now();
     lat_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
   }

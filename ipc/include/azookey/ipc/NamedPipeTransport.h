@@ -11,6 +11,10 @@
 #include "azookey/core/EtwLogger.h"
 #include "azookey/ipc/Messages.h"
 
+namespace azookey::logging {
+class RuntimeLogger;
+}
+
 namespace azookey::ipc {
 
 // Transport abstraction over a Windows Named Pipe.
@@ -103,6 +107,8 @@ class NamedPipeClient {
   bool IsConnected() const;
 
   bool Send(const Envelope& envelope);
+  // Set before Connect(). The caller owns logger and keeps it alive until client destruction.
+  void SetRuntimeLogger(logging::RuntimeLogger* logger) noexcept;
   // Set before connecting or starting the worker; metadata only, never wire data.
   void SetTraceClientId(const core::EtwGuid& client) noexcept;
   void FinishTraceRequest(std::uint64_t request, core::EtwResult outcome);

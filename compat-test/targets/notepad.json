@@ -18,7 +18,9 @@
   "cases": [
     "C-001", "C-002", "C-003", "C-004",
     "C-005", "C-006", "C-007", "C-008",
-    "C-009", "C-011", "C-012", "C-013", "C-010"
+    "C-009", "C-011", "C-012", "C-014",
+    "C-015", "C-016", "C-017", "C-018", "C-019",
+    "C-013", "C-010"
   ],
   "workarounds": {
     "require_new_window": false,
@@ -26,5 +28,5 @@
     "allow_reused_window_for_temporary_document": true,
     "redact_target_and_candidate_windows": true
   },
-  "notes": "Notepad は M50 gate の full automation target（docs/dev-infrastructure-spec.md §13）。runner が起動した新規ウィンドウ、または一意な一時 document の選択状態を確認できた既存ウィンドウだけを操作する。再利用時は既存ウィンドウと process を終了せず、runner が作成した tab だけを閉じる。class=Notepad のトップレベルウィンドウだけを対象とし、ApplicationFrameWindow/CoreWindow 構成は未対応。C-001〜C-013 を登録し、Host の一時停止を伴う C-013 と kill を伴う C-010 を最後に実行する。"
+  "notes": "Notepad は M50 gate の full automation target（docs/dev-infrastructure-spec.md §13）。runner が起動した新規ウィンドウ、または一意な一時 document の選択状態を確認できた既存ウィンドウだけを操作する。再利用時は既存ウィンドウと process を終了せず、runner が作成した tab だけを閉じる。class=Notepad のトップレベルウィンドウだけを対象とし、ApplicationFrameWindow/CoreWindow 構成は未対応。Host の一時停止を伴う C-013 と kill を伴う C-010 を最後に実行する。"
 }

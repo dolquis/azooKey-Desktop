@@ -76,6 +76,7 @@ class AutomationSession {
   std::optional<std::wstring> ReadEditorText();
   std::optional<RECT> CaretRect() const;
   std::optional<RECT> CandidateRect() const;
+  std::optional<RECT> PredictionRect() const;
   bool CaptureFailureArtifacts(const CaseResult& result,
                                const std::filesystem::path& output_directory) const;
   void MarkBaselineVerified() { baseline_verified_ = true; }
@@ -89,6 +90,7 @@ class AutomationSession {
   bool FindEditorElement();
   bool IsTargetForeground() const;
   bool SendKeyInputs(const std::vector<INPUT>& inputs);
+  std::optional<RECT> WindowRectForClass(std::wstring_view class_name) const;
   void CloseLaunchedWindow();
 
   TargetConfig target_;
@@ -127,6 +129,12 @@ CaseDefinition MakeC010HostRecoveryCase();
 CaseDefinition MakeC011ShortcutRoutingCase();
 CaseDefinition MakeC012RomanizationCase();
 CaseDefinition MakeC013HostHangCase();
+CaseDefinition MakeC014ExtraRomajiCase();
+CaseDefinition MakeC015CandidateKeysCase();
+CaseDefinition MakeC016FastInputCase();
+CaseDefinition MakeC017ControlBackspaceCase();
+CaseDefinition MakeC018LiveConversionCase();
+CaseDefinition MakeC019PredictionWindowCase();
 
 const char* ResultStatusName(ResultStatus status);
 

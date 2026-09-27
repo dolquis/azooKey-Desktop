@@ -31,6 +31,12 @@ add_executable(compat_test
   cases/C012_romanization.cpp
   cases/C013_host_hang.cpp
   cases/HostHangWatchdogClient.cpp
+  cases/C014_extra_romaji.cpp
+  cases/C015_candidate_keys.cpp
+  cases/C016_fast_input.cpp
+  cases/C017_control_backspace.cpp
+  cases/C018_live_conversion.cpp
+  cases/C019_prediction_window.cpp
 )
 target_link_libraries(compat_test
   PRIVATE
@@ -38,6 +44,7 @@ target_link_libraries(compat_test
     azookey_project_options
     azookey_project_warnings
     ole32
+    shcore
     user32
     uiautomationcore
 )

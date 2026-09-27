@@ -617,14 +617,22 @@ std::optional<RECT> AutomationSession::CaretRect() const {
 }
 
 std::optional<RECT> AutomationSession::CandidateRect() const {
+  return WindowRectForClass(target_.candidate_window_class);
+}
+
+std::optional<RECT> AutomationSession::PredictionRect() const {
+  return WindowRectForClass(L"azooKeyPredictionWindow");
+}
+
+std::optional<RECT> AutomationSession::WindowRectForClass(std::wstring_view class_name) const {
   if (!window_) return std::nullopt;
   DWORD target_process_id = 0;
   GetWindowThreadProcessId(window_, &target_process_id);
   struct Data {
-    const std::wstring* class_name;
+    std::wstring_view class_name;
     DWORD process_id;
     HWND result{nullptr};
-  } data{&target_.candidate_window_class, target_process_id};
+  } data{class_name, target_process_id};
   EnumWindows(
       [](HWND window, LPARAM param) -> BOOL {
         auto* data = reinterpret_cast<Data*>(param);
@@ -633,7 +641,7 @@ std::optional<RECT> AutomationSession::CandidateRect() const {
         if (process_id != data->process_id || !IsWindowVisible(window)) return TRUE;
         wchar_t class_name[256]{};
         GetClassNameW(window, class_name, static_cast<int>(std::size(class_name)));
-        if (*data->class_name == class_name) {
+        if (data->class_name == class_name) {
           data->result = window;
           return FALSE;
         }
@@ -873,6 +881,12 @@ int wmain(int argc, wchar_t** argv) {
            MakeC011ShortcutRoutingCase(),
            MakeC012RomanizationCase(),
            MakeC013HostHangCase(),
+           MakeC014ExtraRomajiCase(),
+           MakeC015CandidateKeysCase(),
+           MakeC016FastInputCase(),
+           MakeC017ControlBackspaceCase(),
+           MakeC018LiveConversionCase(),
+           MakeC019PredictionWindowCase(),
        }) {
     registered.emplace(definition.id, definition);
   }

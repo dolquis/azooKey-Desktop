@@ -73,6 +73,12 @@ compat-test/
 │   ├── C011_shortcut_routing.cpp
 │   ├── C012_romanization.cpp
 │   ├── C013_host_hang.cpp
+│   ├── C014_extra_romaji.cpp
+│   ├── C015_candidate_keys.cpp
+│   ├── C016_fast_input.cpp
+│   ├── C017_control_backspace.cpp
+│   ├── C018_live_conversion.cpp
+│   ├── C019_prediction_window.cpp
 │   ├── HostHangWatchdogClient.cpp
 │   ├── HostHangWatchdogClient.h
 │   ├── HostHangWatchdogMain.cpp
@@ -101,11 +107,11 @@ compat-report-YYYYMMDD-HHMMSS/
         └── screenshot.png
 ```
 
-テストケース一覧（C-001〜C-013）と CI 連携は §13.3 / §13.6 を参照。
-Notepad、VS Code、Edge では C-001〜C-013 を実行する。環境条件を満たせず自動判定できないケースも
+テストケース一覧と CI 連携は §13.3 / §13.6 を参照。
+Notepad、VS Code、Edge では target 定義に登録されたケースを実行する。環境条件を満たせず自動判定できないケースも
 silent skip せず `failing-skip` としてレポートへ残す。終了コードは
 全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2`。
-C-002〜C-010 と C-012〜C-013 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
+C-002〜C-010、C-012〜C-019 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
 azooKey の基準動作を確認できた場合だけ実行する。
 
 C-007 の自動操作は、サロゲートペアを一括した `SendInput` で注入し、対象アプリが

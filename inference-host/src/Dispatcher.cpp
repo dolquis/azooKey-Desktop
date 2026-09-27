@@ -30,6 +30,34 @@ namespace azookey::host {
 
 namespace {
 
+const char* AiErrorClassToWire(AiErrorClass error) {
+  switch (error) {
+    case AiErrorClass::Auth:
+      return "Auth";
+    case AiErrorClass::RateLimit:
+      return "RateLimit";
+    case AiErrorClass::ServerError:
+      return "ServerError";
+    case AiErrorClass::Network:
+      return "Network";
+    case AiErrorClass::Timeout:
+      return "Timeout";
+    case AiErrorClass::Parse:
+      return "Parse";
+    case AiErrorClass::BlockedBySecure:
+      return "BlockedBySecure";
+    case AiErrorClass::Disabled:
+      return "Disabled";
+    case AiErrorClass::Canceled:
+      return "Canceled";
+    case AiErrorClass::KeyReentry:
+      return "KeyReentry";
+    case AiErrorClass::None:
+      return nullptr;
+  }
+  return nullptr;
+}
+
 core::EtwGuid ClientGuid(std::string_view value) {
   core::EtwGuid result{};
   if (value.size() == 38 && value.front() == '{' && value.back() == '}')
@@ -908,6 +936,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
       static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
       logger.Log(logging::RuntimeLogLevel::Error, "ai_cleanup_fallback",
                  {{"error_class", static_cast<uint64_t>(result.error_class)}});
+      if (result.error_class != AiErrorClass::Canceled)
+        res.error_class = AiErrorClassToWire(result.error_class);
     }
     if (result.ok) {
       ipc::CandidateField candidate;

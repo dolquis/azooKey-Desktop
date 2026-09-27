@@ -34,7 +34,8 @@ class CandidateWindow {
 
   // Show at screen point 'pt' (bottom-left of the caret rect) with given items.
   // selected_idx is clamped to [0, items.size()).
-  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx);
+  void Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+            std::wstring notice = {});
   void Hide();
   bool IsVisible() const;
   void ShowHealthBanner(CandidateHealthState state);
@@ -83,7 +84,13 @@ class CandidateWindow {
   static LayoutMetricsForTest ComputeLayoutMetricsForTest(UINT dpi);
   static ColumnLayoutForTest ComputeColumnLayoutForTest(int max_surface_width,
                                                         int max_description_width, UINT dpi);
+  LayoutMetricsForTest current_metrics_for_test() const {
+    return {metrics_.item_height, metrics_.horizontal_padding, metrics_.max_width,
+            metrics_.caret_gap,   metrics_.min_text_width,     metrics_.extra_width};
+  }
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
+  HWND hwnd_for_test() const { return hwnd_; }
+  const std::wstring& notice_for_test() const { return notice_; }
 #endif
 
  private:
@@ -124,6 +131,7 @@ class CandidateWindow {
   LayoutMetrics metrics_{kBaseItemHeight, kBaseHorzPad,      kBaseMaxWidth,
                          kBaseCaretGap,   kBaseMinTextWidth, kBaseExtraWidth};
   std::vector<CandidateViewItem> items_;
+  std::wstring notice_;
   int surface_column_width_{0};
   int selected_idx_{0};
   OnClickFn on_click_;

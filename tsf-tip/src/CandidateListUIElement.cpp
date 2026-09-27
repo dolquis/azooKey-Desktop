@@ -7,8 +7,11 @@
 
 namespace azookey::tsf {
 
-CandidateListUIElement::CandidateListUIElement(std::vector<std::wstring> items, int selected_idx)
-    : items_(std::move(items)), selected_idx_(ClampSelection(selected_idx, items_.size())) {}
+CandidateListUIElement::CandidateListUIElement(std::vector<std::wstring> items, int selected_idx,
+                                               std::wstring notice)
+    : items_(std::move(items)),
+      notice_(std::move(notice)),
+      selected_idx_(ClampSelection(selected_idx, items_.size())) {}
 
 STDMETHODIMP CandidateListUIElement::QueryInterface(REFIID riid, void** ppvObj) {
   if (!ppvObj) return E_POINTER;
@@ -34,7 +37,7 @@ STDMETHODIMP_(ULONG) CandidateListUIElement::Release() {
 
 STDMETHODIMP CandidateListUIElement::GetDescription(BSTR* pbstrDescription) {
   if (!pbstrDescription) return E_INVALIDARG;
-  *pbstrDescription = SysAllocString(L"azooKey Candidate List");
+  *pbstrDescription = SysAllocString(notice_.empty() ? L"azooKey Candidate List" : notice_.c_str());
   return *pbstrDescription ? S_OK : E_OUTOFMEMORY;
 }
 

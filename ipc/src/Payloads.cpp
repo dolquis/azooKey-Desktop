@@ -580,6 +580,7 @@ std::string BuildQueryBatchConversionResponse(const QueryBatchConversionResponse
   o.emplace("full_surface", j::Value(p.full_surface));
   o.emplace("partial", j::Value(p.partial));
   o.emplace("canceled", j::Value(p.canceled));
+  if (p.error_class) o.emplace("error_class", j::Value(*p.error_class));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -596,6 +597,7 @@ std::optional<QueryBatchConversionResponse> ParseQueryBatchConversionResponse(
   p.full_surface = v->GetString("full_surface").value_or(std::string());
   p.partial = v->GetBool("partial").value_or(false);
   p.canceled = v->GetBool("canceled").value_or(false);
+  p.error_class = v->GetString("error_class");
   return p;
 }
 

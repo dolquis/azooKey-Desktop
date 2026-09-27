@@ -126,7 +126,7 @@ AiBackend::AiBackend(AiHttpTransport transport)
     : transport_(transport ? std::move(transport) : AiHttpTransport(PostAiHttp)) {}
 
 AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBackendOptions& options,
-                                       const std::atomic<bool>* cancel,
+                                       const AiCancellationFlag* cancel,
                                        const AiLocalTransform& local) const {
   if (!request.ai_allowed) return Failure(AiErrorClass::BlockedBySecure);
   if (Canceled(cancel)) return Failure(AiErrorClass::Canceled);
@@ -183,8 +183,11 @@ AiTransformResult AiBackend::Transform(AiTransformRequest request, const AiBacke
     // A response already identified the failure; exhausting the retry budget
     // must not relabel a quota/server failure as a receive timeout.
     if (until >= deadline) return Failure(error);
-    while (std::chrono::steady_clock::now() < until && !Canceled(cancel))
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (cancel) {
+      cancel->WaitUntil(until);
+    } else {
+      std::this_thread::sleep_until(until);
+    }
   }
 }
 }  // namespace azookey::host

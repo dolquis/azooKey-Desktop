@@ -14,7 +14,8 @@ inline constexpr GUID kCandidateListUiElementGuid = {
 
 class CandidateListUIElement final : public ITfCandidateListUIElement {
  public:
-  CandidateListUIElement(std::vector<std::wstring> items, int selected_idx);
+  CandidateListUIElement(std::vector<std::wstring> items, int selected_idx,
+                         std::wstring notice = {});
 
   CandidateListUIElement(const CandidateListUIElement&) = delete;
   CandidateListUIElement& operator=(const CandidateListUIElement&) = delete;
@@ -47,6 +48,7 @@ class CandidateListUIElement final : public ITfCandidateListUIElement {
 
   LONG ref_count_{1};
   std::vector<std::wstring> items_;
+  std::wstring notice_;
   int selected_idx_{-1};
   DWORD updated_flags_{TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION};
   bool shown_{false};

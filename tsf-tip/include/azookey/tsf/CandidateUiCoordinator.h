@@ -54,7 +54,7 @@ class CandidateUiCoordinator {
   void CancelScheduledCandidatesReady();
 
   HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt, const std::vector<CandidateViewItem>& items,
-                  int selected_idx);
+                  int selected_idx, std::wstring notice = {});
   HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
   HRESULT EndUI();
 
@@ -89,6 +89,7 @@ class CandidateUiCoordinator {
   wil::com_ptr_nothrow<ITfUIElementMgr> ui_element_mgr_;
   DWORD ui_element_id_{kInvalidUiElementId};
   std::vector<CandidateViewItem> items_;
+  std::wstring notice_;
   POINT last_pt_{0, 0};
   int selected_idx_{-1};
   bool ui_less_mode_{false};

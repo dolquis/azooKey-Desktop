@@ -112,7 +112,7 @@ void CandidateUiCoordinator::CancelScheduledCandidatesReady() {
 
 HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
                                         const std::vector<CandidateViewItem>& items,
-                                        int selected_idx) {
+                                        int selected_idx, std::wstring notice) {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   const bool had_ui_element_mgr = ui_element_mgr_ != nullptr;
   const auto rollback_exception = [this, had_ui_element_mgr]() {
@@ -125,6 +125,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       showing_ = false;
       tip_draws_ = true;
       items_.clear();
+      notice_.clear();
       selected_idx_ = -1;
       ReleaseUiElement();
     }
@@ -140,11 +141,12 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     }
 
     items_ = items;
+    notice_ = std::move(notice);
     selected_idx_ = ClampSelection(selected_idx);
     last_pt_ = pt;
 
-    auto* element =
-        new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
+    auto* element = new (std::nothrow)
+        CandidateListUIElement(CandidateSurfaces(items_), selected_idx_, notice_);
     if (!element) {
       NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
                           kInvalidUiElementId);
@@ -158,6 +160,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       if (ui_less_mode_) {
         ReleaseUiElement();
         items_.clear();
+        notice_.clear();
         selected_idx_ = -1;
         const HRESULT result = FAILED(hr) ? hr : E_NOINTERFACE;
         NotifyBeginObserver(result, false, false, FALSE, kInvalidUiElementId);
@@ -177,6 +180,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
       ReleaseUiElement();
       items_.clear();
+      notice_.clear();
       selected_idx_ = -1;
       return hr;
     }
@@ -220,7 +224,7 @@ HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& i
   ui_element_->Update(CandidateSurfaces(items_), selected_idx_,
                       TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION);
   if (tip_draws_) {
-    own_window_.Show(last_pt_, items_, selected_idx_);
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
     return S_OK;
   }
   if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
@@ -240,6 +244,7 @@ HRESULT CandidateUiCoordinator::EndUI() {
   showing_ = false;
   tip_draws_ = true;
   items_.clear();
+  notice_.clear();
   selected_idx_ = -1;
   ReleaseUiElement();
   return result;
@@ -277,7 +282,7 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
   if (!ui_element_) return;
   ui_element_->SetShown(tip_draws_);
   if (tip_draws_) {
-    own_window_.Show(last_pt_, items_, selected_idx_);
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
     ShowPendingHealthBanner();
   } else {
     own_window_.Hide();
@@ -307,7 +312,7 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
   }
   tip_draws_ = true;
   if (showing_ && !items_.empty()) {
-    own_window_.Show(last_pt_, items_, selected_idx_);
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
     ShowPendingHealthBanner();
   }
 }

@@ -393,13 +393,14 @@ void CandidateWindow::Destroy() {
   }
 }
 
-void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items,
-                           int selected_idx) {
+void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+                           std::wstring notice) {
   if (!hwnd_ || items.empty()) return;
   last_anchor_ = pt;
 
   const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   items_ = items;
+  notice_ = std::move(notice);
   if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
   emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
@@ -412,6 +413,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   if (hdc && font_) old_font = SelectObject(hdc, font_);
   int max_surface_w = metrics_.min_text_width;
   int max_description_w = 0;
+  int notice_width = 0;
   if (hdc) {
     for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
       const auto& item = items_[static_cast<size_t>(i)];
@@ -435,6 +437,11 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
         max_description_w = std::max(max_description_w, static_cast<int>(sz.cx));
       }
     }
+    if (!notice_.empty()) {
+      SIZE size{};
+      GetTextExtentPoint32W(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &size);
+      notice_width = size.cx;
+    }
   }
   if (hdc) {
     if (old_font) SelectObject(hdc, old_font);
@@ -446,7 +453,9 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   int width =
       std::min(columns.content_width + metrics_.horizontal_padding * 2 + metrics_.extra_width,
                metrics_.max_width);
-  int height = metrics_.item_height * static_cast<int>(items_.size());
+  width =
+      std::min(std::max(width, notice_width + metrics_.horizontal_padding * 2), metrics_.max_width);
+  int height = metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
   if (health_banner_visible_) {
     width = std::max(width, ScaleForDpi(480, dpi_));
     height += HealthBannerHeight();
@@ -601,13 +610,14 @@ LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wPa
 }
 
 void CandidateWindow::ResizeAtLastAnchor() {
-  if (!items_.empty()) Show(last_anchor_, items_, selected_idx_);
+  if (!items_.empty()) Show(last_anchor_, items_, selected_idx_, notice_);
 }
 
 int CandidateWindow::HealthBannerHeight() const { return metrics_.item_height * 3; }
 
 RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
-  const int top = metrics_.item_height * static_cast<int>(items_.size()) + metrics_.item_height * 2;
+  const int top =
+      metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1) + 2);
   const int button_width = ScaleForDpi(52, dpi_);
   const int right =
       width - metrics_.horizontal_padding -
@@ -616,7 +626,8 @@ RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
 }
 
 RECT CandidateWindow::HealthRetryButtonRect(int width) const {
-  const int top = metrics_.item_height * static_cast<int>(items_.size()) + metrics_.item_height * 2;
+  const int top =
+      metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1) + 2);
   const int right = width - metrics_.horizontal_padding;
   return {right - ScaleForDpi(60, dpi_), top, right, top + metrics_.item_height};
 }
@@ -732,9 +743,20 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           }
         }
       }
+      const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
+      if (!notice_.empty()) {
+        RECT notice_rc = {0, notice_top, client_rc.right, notice_top + metrics_.item_height};
+        FillRect(hdc, &notice_rc,
+                 reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_BTNFACE + 1)));
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        notice_rc.left += metrics_.horizontal_padding;
+        notice_rc.right -= metrics_.horizontal_padding;
+        DrawTextW(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &notice_rc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+      }
       if (health_banner_visible_) {
-        RECT banner_rc{0, metrics_.item_height * static_cast<int>(items_.size()), client_rc.right,
-                       client_rc.bottom};
+        RECT banner_rc{0, notice_top + (notice_.empty() ? 0 : metrics_.item_height),
+                       client_rc.right, client_rc.bottom};
         HBRUSH background = CreateSolidBrush(RGB(255, 249, 225));
         if (background) {
           FillRect(hdc, &banner_rc, background);
@@ -767,7 +789,9 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case WM_LBUTTONDOWN: {
       int x = GET_X_LPARAM(lParam);
       int y = GET_Y_LPARAM(lParam);
-      if (health_banner_visible_ && y >= metrics_.item_height * static_cast<int>(items_.size())) {
+      const int health_banner_top =
+          metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
+      if (health_banner_visible_ && y >= health_banner_top) {
         RECT client_rc{};
         GetClientRect(hwnd, &client_rc);
         POINT click{x, y};

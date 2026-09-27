@@ -251,6 +251,44 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) 
   EXPECT_EQ(thread_mgr.end_count, 1);
 }
 
+TEST(TsfTipCandidateUiCoordinatorTest, NoticeUsesDescriptionWithoutChangingCandidateStrings) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  const POINT pt{10, 20};
+  ASSERT_EQ(
+      coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 1, L"APIキーを再入力してください。"),
+      S_OK);
+  ASSERT_NE(thread_mgr.element, nullptr);
+
+  BSTR description = nullptr;
+  ASSERT_EQ(thread_mgr.element->GetDescription(&description), S_OK);
+  EXPECT_STREQ(description, L"APIキーを再入力してください。");
+  SysFreeString(description);
+
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+  UINT count = 0;
+  UINT selection = 0;
+  EXPECT_EQ(candidates->GetCount(&count), S_OK);
+  EXPECT_EQ(count, 3u);
+  EXPECT_EQ(candidates->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 1u);
+  BSTR surface = nullptr;
+  ASSERT_EQ(candidates->GetString(0, &surface), S_OK);
+  EXPECT_STREQ(surface, L"日本語");
+  SysFreeString(surface);
+  candidates->Release();
+
+  ASSERT_EQ(coordinator.EndUI(), S_OK);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), S_OK);
+  description = nullptr;
+  ASSERT_EQ(thread_mgr.element->GetDescription(&description), S_OK);
+  EXPECT_STREQ(description, L"azooKey Candidate List");
+  SysFreeString(description);
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, BeginUiElementFailureReportsHresult) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_hr = E_FAIL;

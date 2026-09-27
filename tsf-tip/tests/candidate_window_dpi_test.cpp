@@ -5,6 +5,19 @@
 namespace azookey::tsf {
 namespace {
 
+class ScopedPerMonitorDpi {
+ public:
+  ScopedPerMonitorDpi()
+      : previous_(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {}
+  ~ScopedPerMonitorDpi() {
+    if (previous_) SetThreadDpiAwarenessContext(previous_);
+  }
+  bool valid() const { return previous_ != nullptr; }
+
+ private:
+  DPI_AWARENESS_CONTEXT previous_{nullptr};
+};
+
 void ExpectMetrics(const CandidateWindow::LayoutMetricsForTest& metrics, int item_height,
                    int horizontal_padding, int max_width, int caret_gap, int min_text_width,
                    int extra_width) {
@@ -45,6 +58,43 @@ TEST(CandidateWindowDpiTest, DescriptionEnablesClampedTwoColumnLayout) {
   EXPECT_EQ(layout.surface_width, 220);
   EXPECT_EQ(layout.column_gap, 12);
   EXPECT_EQ(layout.content_width, 312);
+}
+
+TEST(CandidateWindowDpiTest, NoticeSurvivesHealthBannerResizeAndKeepsClickRegionsSeparate) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  int candidate_clicks = 0;
+  int retries = 0;
+  window.SetOnClick([&](int) { ++candidate_clicks; });
+  window.SetOnRetry([&] { ++retries; });
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0, L"AI 整文の案内");
+  const HWND hwnd = window.hwnd_for_test();
+  const auto metrics = window.current_metrics_for_test();
+  RECT bounds{};
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 2 * metrics.item_height);
+
+  window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 5 * metrics.item_height);
+  EXPECT_EQ(window.notice_for_test(), L"AI 整文の案内");
+  const int width = bounds.right - bounds.left;
+  const int click_x = width - metrics.horizontal_padding - 10;
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM(click_x, metrics.item_height + metrics.item_height / 2));
+  EXPECT_EQ(candidate_clicks, 0);
+  EXPECT_EQ(retries, 0);
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM(click_x, 4 * metrics.item_height + metrics.item_height / 2));
+  EXPECT_EQ(retries, 1);
+
+  window.HideHealthBanner();
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 2 * metrics.item_height);
+  EXPECT_EQ(window.notice_for_test(), L"AI 整文の案内");
+  window.Destroy();
 }
 
 }  // namespace

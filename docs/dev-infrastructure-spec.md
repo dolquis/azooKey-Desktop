@@ -2577,7 +2577,7 @@ Host の診断は §12.6 `QueryDiagnostics` を使う。`engine` は実効ラン
 | D-006 | IPC Ping | Ping 往復 latency 測定 | pipe / firewall / Host 状態確認 |
 | D-007 | モデルパス | 設定上のモデル（R1=`.gguf` ファイル / R2=ONNX GenAI ディレクトリ）が存在するか | モデル選択 UI（M45）へ誘導 |
 | D-008 | モデル検証 | 形式別検証（R1=GGUF magic / version、R2=`genai_config.json` + 参照 ONNX） | 破損モデル扱い |
-| D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行 |
+| D-009 | fallback 状態 | Zenzai / SimpleConverter / degraded を表示 | モデルロード再試行。`safe_mode` は `safeMode.enabled=false` に変更し、Host を再起動するか `UpdateConfig` を送る（§8.5.3） |
 | D-010 | learning store | 読み込み可能か、破損していないか | バックアップ後に初期化 |
 | D-011 | user dict | JSON 読み込み可能か | バックアップ後に修復 |
 | D-012 | settings | schema validation 成功 | 不正値のリセット |

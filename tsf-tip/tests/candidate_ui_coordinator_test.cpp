@@ -421,6 +421,45 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowTrueUsesTipUiWithoutUpdateNotificat
   EXPECT_EQ(thread_mgr.end_count, 1);
 }
 
+TEST(TsfTipCandidateUiCoordinatorTest, HealthBannerQueuesUntilCandidateWindowIsShown) {
+  using azookey::tsf::CandidateHealthState;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+
+  coordinator.SetHealthState(CandidateHealthState::DegradedModel, "generation-1");
+  EXPECT_TRUE(coordinator.health_banner_pending_for_test());
+  ASSERT_TRUE(coordinator.Create());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+
+  coordinator.SetHealthState(CandidateHealthState::Healthy, "generation-1");
+  EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+  coordinator.EndUI();
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, SafeModeNotifiesOncePerHostGeneration) {
+  using azookey::tsf::CandidateHealthState;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+
+  coordinator.SetHealthState(CandidateHealthState::SafeMode, "generation-1");
+  EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+  coordinator.SetHealthState(CandidateHealthState::Healthy, "generation-1");
+  coordinator.SetHealthState(CandidateHealthState::SafeMode, "generation-1");
+  EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+
+  coordinator.EndUI();
+  coordinator.SetHealthState(CandidateHealthState::SafeMode, "generation-2");
+  EXPECT_TRUE(coordinator.health_banner_pending_for_test());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(coordinator.health_banner_pending_for_test());
+  coordinator.EndUI();
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, MoveSelectionWrapsLargePositiveAndNegativeDeltas) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;

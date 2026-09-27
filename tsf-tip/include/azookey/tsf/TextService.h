@@ -16,6 +16,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/InputState.h"
@@ -343,6 +344,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string pending_ipc_raw_romaji_for_test();
   void set_ipc_pipe_name_for_test(std::string pipe_name);
   void request_host_option_refresh_for_test() { RequestHostOptionRefresh(); }
+  void retry_model_for_test() { RetryModelFromUi(); }
   bool batch_romaji_conversion_for_test() const {
     return batch_romaji_conversion_.load(std::memory_order_relaxed);
   }
@@ -353,6 +355,10 @@ class TextService final : public ITfTextInputProcessorEx,
     return ipc_connection_state_.load(std::memory_order_acquire);
   }
   bool ipc_host_unavailable_for_test() const { return IpcHostUnavailable(); }
+  std::optional<CandidateHealthState> health_display_state_for_test() {
+    std::lock_guard<std::mutex> lock(health_state_mtx_);
+    return health_display_state_;
+  }
   // Call before start_ipc_worker_for_test; the worker reads these unlocked.
   void set_ipc_health_timing_for_test(uint32_t interval_ms, uint32_t timeout_ms,
                                       uint32_t failure_threshold) {
@@ -504,6 +510,21 @@ class TextService final : public ITfTextInputProcessorEx,
   uint32_t ipc_health_timeout_ms_{500};
   uint32_t ipc_deadline_miss_threshold_{2};
   uint32_t ipc_consecutive_deadline_misses_{0};  // IPC worker only.
+  // Published by the IPC worker, consumed by OnCandidatesReady on the UI thread.
+  std::mutex health_state_mtx_;
+  std::optional<CandidateHealthState> health_display_state_;
+  std::string health_display_generation_id_;
+  bool health_diagnostics_pending_{false};                               // IPC worker only.
+  std::chrono::steady_clock::time_point health_diagnostics_retry_at_{};  // IPC worker only.
+  bool health_probe_before_diagnostics_retry_{false};                    // IPC worker only.
+  std::optional<std::pair<std::string, bool>> last_health_response_;     // IPC worker only.
+  // A model retry can take 30 seconds; it uses its own handshaken control pipe
+  // so primary key requests never wait for UpdateConfig.
+  ipc::NamedPipeClient retry_control_client_;
+  std::thread retry_thread_;
+  std::atomic<bool> retry_stop_{false};
+  std::atomic<bool> retry_in_flight_{false};
+  std::atomic<bool> retry_finished_{false};
 #ifdef AZOOKEY_TSF_TESTING
   std::string ipc_pipe_name_for_test_;
 #endif
@@ -646,7 +667,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool WaitForReconnectOrStop(uint32_t delay_ms);
   void TransitionIpcConnection(IpcConnectionEvent event);
   enum class HealthProbeResult { Answered, TimedOut, Interrupted, ConnectionLost };
-  HealthProbeResult ProbeHostHealth(uint64_t request_id);
+  HealthProbeResult ProbeHostHealth(uint64_t request_id,
+                                    std::optional<ipc::HealthPayload>* payload);
+  enum class DiagnosticsProbeResult { Answered, Failed, Interrupted, ConnectionLost };
+  DiagnosticsProbeResult ProbeHostDiagnostics(uint64_t request_id);
+  void PublishHealthDisplayState(CandidateHealthState state);
   void NoteHostResponded();
   void NoteHostDeadlineMissed();
   bool HasQueuedIpcWorkLocked() const;
@@ -655,6 +680,8 @@ class TextService final : public ITfTextInputProcessorEx,
                                 std::optional<ipc::Envelope>* received = nullptr);
   bool ObserveHostGeneration(const std::string& host_generation_id);
   void RequestHostOptionRefresh();
+  void RetryModelFromUi();
+  void RetryModelOnControlThread();
   void RearmPendingQuery(uint64_t req_id);
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();

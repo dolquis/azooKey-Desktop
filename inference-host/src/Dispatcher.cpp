@@ -398,7 +398,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleUnauthenticated(const ipc::Envelo
       ipc::QueryDiagnosticsPayload p;
       p.engine = config_.runtime_tier;
       p.backend = "";
-      p.fallback_state = "degraded_simple";
+      p.fallback_state = "healthy";
       p.last_error = "not authenticated";
       return MakeResponse(req, ipc::BuildQueryDiagnostics(p));
     }
@@ -520,13 +520,12 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryDiagnostics(const ipc::Envel
   const bool model_enabled = !settings_store_ || settings_store_->settings().model.enabled;
   // Section 12.6 / D-009: SafeMode outranks everything, model.enabled=false
   // included, because it is the one state the user has to act on.
-  if (SafeModeEnabled()) {
+  if (engine_health.health_state == HealthState::SafeMode) {
     p.fallback_state = "safe_mode";
   } else if (!model_enabled) {
     p.fallback_state = "healthy";
-  } else if (!effective_model_loaded) {
-    p.fallback_state = "degraded_simple";
-  } else if (engine_health.last_error) {
+  } else if (engine_health.health_state == HealthState::DegradedModel ||
+             engine_health.health_state == HealthState::RecoveringModel) {
     p.fallback_state = "degraded_model";
   } else {
     p.fallback_state = "healthy";
@@ -743,8 +742,8 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envel
   trace.WatchCancellation(cancel);
   RequestCompletionGuard completion(scheduler_, client_id_, req.request_id);
 
-  auto candidates =
-      engine_->QueryPredictions(parsed->kana, parsed->left_side_context, NowSec(), trace.context());
+  auto candidates = engine_->QueryPredictions(parsed->kana, parsed->left_side_context, NowSec(),
+                                              cancel.get(), trace.context());
   const bool canceled = cancel->load(std::memory_order_acquire);
   const bool stale = !scheduler_->IsLatest(client_id_, req.request_id);
   completion.Complete();

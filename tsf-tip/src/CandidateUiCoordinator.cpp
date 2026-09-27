@@ -54,6 +54,38 @@ void CandidateUiCoordinator::SetOnClick(CandidateWindow::OnClickFn fn) {
   own_window_.SetOnClick(std::move(fn));
 }
 
+void CandidateUiCoordinator::SetOnRetry(CandidateWindow::OnRetryFn fn) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  own_window_.SetOnRetry(std::move(fn));
+}
+
+void CandidateUiCoordinator::SetHealthState(CandidateHealthState state,
+                                            const std::string& host_generation_id) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  const bool changed = state != health_state_;
+  const bool new_safe_generation =
+      state == CandidateHealthState::SafeMode &&
+      std::find(notified_safe_mode_generations_.begin(), notified_safe_mode_generations_.end(),
+                host_generation_id) == notified_safe_mode_generations_.end();
+  health_state_ = state;
+  host_generation_id_ = host_generation_id;
+  if (state == CandidateHealthState::Healthy) {
+    health_banner_pending_ = false;
+    own_window_.ShowHealthBanner(CandidateHealthState::Healthy);
+    return;
+  }
+  if (changed || new_safe_generation) {
+    health_banner_pending_ = state != CandidateHealthState::SafeMode || new_safe_generation;
+    own_window_.ShowHealthBanner(CandidateHealthState::Healthy);
+  }
+  ShowPendingHealthBanner();
+}
+
+void CandidateUiCoordinator::SetRetryInFlight(bool in_flight) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  own_window_.SetRetryInFlight(in_flight);
+}
+
 void CandidateUiCoordinator::SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn,
                                                   void* context) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
@@ -251,8 +283,18 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
   ui_element_->SetShown(tip_draws_);
   if (tip_draws_) {
     own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    ShowPendingHealthBanner();
   } else {
     own_window_.Hide();
+  }
+}
+
+void CandidateUiCoordinator::ShowPendingHealthBanner() {
+  if (!health_banner_pending_ || !own_window_.IsVisible()) return;
+  own_window_.ShowHealthBanner(health_state_);
+  health_banner_pending_ = false;
+  if (health_state_ == CandidateHealthState::SafeMode) {
+    notified_safe_mode_generations_.push_back(host_generation_id_);
   }
 }
 
@@ -269,7 +311,10 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
     return;
   }
   tip_draws_ = true;
-  if (showing_ && !items_.empty()) own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+  if (showing_ && !items_.empty()) {
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    ShowPendingHealthBanner();
+  }
 }
 
 void CandidateUiCoordinator::ReleaseUiElement() {

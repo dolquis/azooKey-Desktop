@@ -16,6 +16,8 @@ struct CandidateViewItem {
   std::wstring description;
 };
 
+enum class CandidateHealthState { Healthy, DegradedSimple, DegradedModel, SafeMode };
+
 // Popup window that displays the IME candidate list.
 // Must be created and used on the same thread (no internal locking).
 class CandidateWindow {
@@ -36,6 +38,11 @@ class CandidateWindow {
             std::wstring notice = {});
   void Hide();
   bool IsVisible() const;
+  void ShowHealthBanner(CandidateHealthState state);
+  void HideHealthBanner();
+  void SetRetryInFlight(bool in_flight);
+  using OnRetryFn = std::function<void()>;
+  void SetOnRetry(OnRetryFn fn) { on_retry_ = std::move(fn); }
   static bool NeedsColorEmoji(const std::wstring& text);
 
   // Move selection by delta (+1 = down, -1 = up). Wraps around.
@@ -77,7 +84,13 @@ class CandidateWindow {
   static LayoutMetricsForTest ComputeLayoutMetricsForTest(UINT dpi);
   static ColumnLayoutForTest ComputeColumnLayoutForTest(int max_surface_width,
                                                         int max_description_width, UINT dpi);
+  LayoutMetricsForTest current_metrics_for_test() const {
+    return {metrics_.item_height, metrics_.horizontal_padding, metrics_.max_width,
+            metrics_.caret_gap,   metrics_.min_text_width,     metrics_.extra_width};
+  }
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
+  HWND hwnd_for_test() const { return hwnd_; }
+  const std::wstring& notice_for_test() const { return notice_; }
 #endif
 
  private:
@@ -107,8 +120,11 @@ class CandidateWindow {
   static constexpr int kBaseColumnGap = 12;
   static constexpr UINT kCandidatesReadyMessage = WM_APP + 0x4b1;
   static constexpr UINT_PTR kCandidatesReadyTimer = 0x4b2;
+  static constexpr UINT_PTR kHealthBannerTimer = 0x4b3;
+  static constexpr UINT kHealthBannerDurationMs = 5000;
 
   HWND hwnd_{nullptr};
+  HWND details_hwnd_{nullptr};
   UINT dpi_{kDefaultDpi};
   HFONT font_{nullptr};
   std::unique_ptr<EmojiDrawingCache> emoji_cache_;
@@ -119,6 +135,11 @@ class CandidateWindow {
   int surface_column_width_{0};
   int selected_idx_{0};
   OnClickFn on_click_;
+  OnRetryFn on_retry_;
+  CandidateHealthState health_state_{CandidateHealthState::Healthy};
+  bool health_banner_visible_{false};
+  bool retry_in_flight_{false};
+  POINT last_anchor_{0, 0};
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
   void* on_candidates_ready_context_{nullptr};
 
@@ -130,12 +151,19 @@ class CandidateWindow {
   static HFONT CreateMessageFont(UINT dpi);
   static ATOM RegisterWindowClass();
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+  static LRESULT CALLBACK DetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   // hwnd is the HWND from the WndProc delivery (authoritative; hwnd_ may be
   // null after WM_DESTROY, but trailing messages like WM_NCDESTROY still need
   // a valid handle for DefWindowProcW).
   LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   void UpdateDpi(UINT dpi);
   void Repaint() const;
+  void ResizeAtLastAnchor();
+  void ShowDetails();
+  void HideDetails();
+  int HealthBannerHeight() const;
+  RECT HealthDetailsButtonRect(int width) const;
+  RECT HealthRetryButtonRect(int width) const;
 };
 
 }  // namespace azookey::tsf

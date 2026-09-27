@@ -2944,6 +2944,10 @@ class HealthProbeHost {
                                                                      : "healthy";
             payload.last_error = "untrusted free text that must not reach UI";
             res.payload_json = azookey::ipc::BuildQueryDiagnostics(payload);
+            if (degrade_after_first_diagnostics.exchange(false)) {
+              diagnostics_state.store(1);
+              degraded_health.store(true);
+            }
             return res;
           }
           if (req.type == azookey::ipc::MessageType::UpdateConfig) {
@@ -2973,6 +2977,7 @@ class HealthProbeHost {
   std::atomic<bool> answer_query{true};
   std::atomic<bool> answer_diagnostics{true};
   std::atomic<bool> drop_first_diagnostics{false};
+  std::atomic<bool> degrade_after_first_diagnostics{false};
   std::atomic<bool> degraded_health{false};
   std::atomic<int> diagnostics_state{0};
   std::atomic<int> diagnostics_queries{0};
@@ -3004,6 +3009,28 @@ TEST(TsfTipOnKeyDownPreeditTest, HandshakeQueriesValidatedHostHealthState) {
   ASSERT_TRUE(WaitUntil([&] {
     return h.service.health_display_state_for_test() == CandidateHealthState::DegradedModel;
   }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FirstHealthAfterHandshakeRefreshesDiagnostics) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-first-health-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.degrade_after_first_diagnostics.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] {
+    return host.diagnostics_queries.load() >= 2 &&
+           h.service.health_display_state_for_test() == CandidateHealthState::DegradedModel;
+  }));
+  ASSERT_TRUE(WaitUntil([&] { return host.health_probes.load() >= 3; }));
+  EXPECT_EQ(host.diagnostics_queries.load(), 2);
   h.service.stop_ipc_worker_for_test();
 }
 

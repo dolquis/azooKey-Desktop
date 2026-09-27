@@ -3257,6 +3257,10 @@ void TextService::RetryModelOnControlThread() {
     finish();
     return;
   }
+  if (retry_stop_.load(std::memory_order_acquire)) {
+    finish();
+    return;
+  }
   HandshakeRequest handshake;
   handshake.tip_version = kTipVersion;
   handshake.client_id = ipc_client_id_;
@@ -3885,7 +3889,7 @@ void TextService::ServeConnection() {
           NoteHostResponded();
           if (health) {
             const auto observation = std::make_pair(health->status, health->model_loaded);
-            if (last_health_response_ && *last_health_response_ != observation) {
+            if (!last_health_response_ || *last_health_response_ != observation) {
               health_diagnostics_pending_ = true;
               health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
             }

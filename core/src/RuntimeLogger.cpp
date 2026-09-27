@@ -171,13 +171,29 @@ bool IsBodyField(std::string_view key) {
   return std::find(fields.begin(), fields.end(), lower) != fields.end();
 }
 
+bool IsUuidV7(std::string_view value) {
+  if (value.size() != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' ||
+      value[23] != '-' || value[14] != '7' ||
+      (value[19] != '8' && value[19] != '9' && value[19] != 'a' && value[19] != 'b')) {
+    return false;
+  }
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+    if (!((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string SerializeFieldValue(const RuntimeLogField& field, bool allow_body) {
   return std::visit(
       [&field, allow_body](const auto& value) -> std::string {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, RuntimeLogSafeText>) {
           const bool redact =
-              IsSensitiveRuntimeLogField(field.key) && !(allow_body && IsBodyField(field.key));
+              (field.key == "trace_id" && !IsUuidV7(value.value)) ||
+              (IsSensitiveRuntimeLogField(field.key) && !(allow_body && IsBodyField(field.key)));
           const std::string text =
               redact ? std::string(kRedacted) : azookey::core::RedactFreeText(value.value);
           return "\"" + EscapeJson(text) + "\"";

@@ -52,7 +52,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/punctuation_rules_test.cpp` | M59 の組み込み句読点規則、TSV 上書き・無効化、不正行スキップ、guard 構文と Unknown の判定 |
 | `core_tests` | `core/tests/bracket_pairing_test.cpp` | 括弧テーブルの上書き・追加・無効化、アプリ別 allow/deny ポリシーの重ね合わせ、挿入・skip・空ペア Backspace 削除、対称引用符の境界判定 |
 | `core_tests` | `core/tests/app_profile_resolver_test.cpp` | アプリ別プロファイルの部分上書き、`auto`/inherit の解決順、プロセス名・ウィンドウクラス照合と決定的衝突報告、不正値の inherit |
-| `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定（TIP 遷移の `transition_event` と数値 `process_id` を含む）、機微本文と apiKey の伏せ字化、`error_code` / `latency_ms` の固定フィールド、環境変数 opt-in と level、Debug・本文 opt-in・非secure・詳細ログ許可の積による本文出力、Release の強制 redaction、イベント間・並行呼出し間の許可分離、書込不能先での非 throw、世代ローテーションと保持期間 |
+| `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定（TIP 遷移の `transition_event` と数値 `process_id` を含む）、機微本文と apiKey の伏せ字化、`error_code` / `latency_ms` の固定フィールド、UUIDv7 でない `trace_id` の伏せ字化、環境変数 opt-in と level、Debug・本文 opt-in・非secure・詳細ログ許可の積による本文出力、Release の強制 redaction、イベント間・並行呼出し間の許可分離、書込不能先での非 throw、世代ローテーションと保持期間 |
 | `core_tests` | `core/tests/crash_retention_test.cpp` | クラッシュ診断の個数・容量・保存期間制限、管理対象 dump の判定とリンク拒否、リンクと無関係なファイルの保護 |
 | `core_tests` | `core/tests/etw_logger_test.cpp` | ETW イベントの固定長 payload、数値フィールド、要求の対応付けと終了結果 |
 | `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、main / worker の実スタックオーバーフロー（通常 Debug）と合成例外（MSVC ASan）での同意・ダンプ検証、同意 off、保存不能時の fallback、許可 stream と本文非混入 |

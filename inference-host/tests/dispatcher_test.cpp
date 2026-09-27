@@ -233,8 +233,13 @@ TEST_F(DispatcherTest, QueryLatencyUsesConfiguredLogDirectory) {
   azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, config, nullptr, nullptr,
                                    &logger);
 
-  const auto response = target.Dispatch(MakeReq(101, ipc::MessageType::QueryCandidates, "{"));
+  auto request = MakeReq(101, ipc::MessageType::QueryCandidates, "{");
+  request.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  const auto response = target.Dispatch(request);
   ASSERT_TRUE(response.has_value());
+  request.request_id = 102;
+  request.trace_id = "private-prompt-text";
+  ASSERT_TRUE(target.Dispatch(request).has_value());
   std::string log_text;
   for (const auto& entry : std::filesystem::directory_iterator(directory)) {
     if (entry.path().extension() != ".jsonl") continue;
@@ -242,7 +247,10 @@ TEST_F(DispatcherTest, QueryLatencyUsesConfiguredLogDirectory) {
     log_text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
   }
   EXPECT_NE(log_text.find("\"event\":\"query_latency\""), std::string::npos);
-  EXPECT_NE(log_text.find("\"trace_id\":\"trace-101\""), std::string::npos);
+  EXPECT_NE(log_text.find("\"trace_id\":\"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2\""),
+            std::string::npos);
+  EXPECT_NE(log_text.find("\"trace_id\":\"***redacted***\""), std::string::npos);
+  EXPECT_EQ(log_text.find("private-prompt-text"), std::string::npos);
   EXPECT_NE(log_text.find("\"request_id\":101"), std::string::npos);
 }
 

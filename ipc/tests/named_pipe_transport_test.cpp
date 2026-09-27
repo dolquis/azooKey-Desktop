@@ -394,7 +394,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   azookey::ipc::Envelope henv;
   henv.version = 1;
   henv.request_id = 1;
-  henv.trace_id = "transport-handshake";
+  henv.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
   henv.type = azookey::ipc::MessageType::Handshake;
   henv.payload_json = azookey::ipc::BuildHandshakeRequest(handshake);
 
@@ -414,7 +414,7 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   azookey::ipc::Envelope penv;
   penv.version = 1;
   penv.request_id = 2;
-  penv.trace_id = "transport-ping";
+  penv.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e3";
   penv.type = azookey::ipc::MessageType::Ping;
   penv.payload_json = azookey::ipc::BuildPing(ping);
 
@@ -441,7 +441,8 @@ TEST(NamedPipeTransportTest, HandshakeAndPingRoundTrip) {
   int ping_sends = 0;
   int ping_recvs = 0;
   while (std::getline(lines, line)) {
-    if (line.find("\"trace_id\":\"transport-ping\"") == std::string::npos) continue;
+    if (line.find("\"trace_id\":\"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e3\"") == std::string::npos)
+      continue;
     EXPECT_NE(line.find("\"event\":\"trace_phase\""), std::string::npos);
     EXPECT_NE(line.find("\"latency_ms\":"), std::string::npos);
     if (line.find("\"phase\":\"pipe_send\"") != std::string::npos) ++ping_sends;

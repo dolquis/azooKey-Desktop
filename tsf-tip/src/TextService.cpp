@@ -118,7 +118,10 @@ void LogCandidateUiBegin(const azookey::tsf::CandidateUiBeginObservation& observ
                   {"tip_draws", observation.tip_draws},
                   {"ui_element_id", static_cast<uint64_t>(observation.ui_element_id)},
                   {"process_id", process_id},
+                  {"error_code", SafeLogText("business")},
                   {"hresult", static_cast<int64_t>(observation.result)}});
+      azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Tip,
+                                         azookey::core::EtwErrorCode::Business, observation.result);
       return;
     }
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "candidate_ui_begin",
@@ -766,6 +769,9 @@ std::vector<ipc::CandidateField> FilterAcceptablePredictions(
   return candidates;
 }
 
+TextService::EtwRegistration::EtwRegistration() noexcept { core::EtwLogger::Register(); }
+TextService::EtwRegistration::~EtwRegistration() noexcept { core::EtwLogger::Unregister(); }
+
 TextService::TextService() : ipc_client_id_(CreateIpcClientId()) {
   ipc_client_.SetTraceClientId(TraceGuid(ipc_client_id_));
   candidate_ui_.SetBeginObserver(&LogCandidateUiBegin, nullptr);
@@ -934,7 +940,10 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
   HRESULT hr = AdviseTextServiceSinks();
   if (FAILED(hr)) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "tsf_sink_advise_failed");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "tsf_sink_advise_failed",
+               {{"error_code", SafeLogText("business")}});
+    azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Tip,
+                                       azookey::core::EtwErrorCode::Business, hr);
     UnadviseTextServiceSinks();
     thread_mgr_->Release();
     thread_mgr_ = nullptr;
@@ -945,7 +954,10 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
   hr = AdviseKeyboardOpenCompartment();
   if (FAILED(hr)) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "keyboard_open_compartment_advise_failed");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "keyboard_open_compartment_advise_failed",
+               {{"error_code", SafeLogText("business")}});
+    azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Tip,
+                                       azookey::core::EtwErrorCode::Business, hr);
     UnadviseKeyboardOpenCompartment();
     UnadviseTextServiceSinks();
     thread_mgr_->Release();
@@ -2857,7 +2869,8 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
     committing_ = saved_committing;
     commit_surface_ = saved_commit_surface;
     RuntimeLog(azookey::logging::RuntimeLogLevel::Error,
-               "lifecycle_cleanup_edit_session_allocation_failed");
+               "lifecycle_cleanup_edit_session_allocation_failed",
+               {{"error_code", SafeLogText("business")}});
     return false;
   }
   HRESULT hr_session = E_FAIL;
@@ -3563,7 +3576,8 @@ void TextService::IpcWorkerThreadImpl() {
 
   const auto pipe_name = IpcPipeName();
   if (pipe_name.empty()) {
-    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "ipc_pipe_name_unavailable");
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Error, "ipc_pipe_name_unavailable",
+               {{"error_code", SafeLogText("transport")}});
     return;
   }
   // Reconnect with jittered exponential backoff so the worker survives a host

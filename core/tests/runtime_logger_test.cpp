@@ -115,6 +115,20 @@ TEST(RuntimeLoggerTest, SchemaSnapshotIsStableJsonLine) {
       R"({"ts":"2026-07-30T12:34:56.789Z","component":"tip","level":"warn","event":"ipc_stale_response","request_id":42,"result":"error","retrying":true})");
 }
 
+TEST(RuntimeLoggerTest, ErrorCategoryAndLatencyUseCanonicalFields) {
+  RuntimeLogRecord record{
+      "2026-09-27T00:00:00.000Z",
+      "host",
+      RuntimeLogLevel::Error,
+      "invalid_batch_request",
+      {RuntimeLogField{"request_id", uint64_t{73}},
+       RuntimeLogField{"error_code", SafeLogText("protocol")}, RuntimeLogField{"latency_ms", 1.5}},
+  };
+  EXPECT_EQ(
+      azookey::logging::SerializeRuntimeLogRecord(record),
+      R"({"ts":"2026-09-27T00:00:00.000Z","component":"host","level":"error","event":"invalid_batch_request","request_id":73,"error_code":"protocol","latency_ms":1.5})");
+}
+
 TEST(RuntimeLoggerTest, IpcTransitionKeepsCauseAndNumericProcessIdentity) {
   RuntimeLogRecord record{
       "2026-09-27T00:00:00.000Z",
@@ -135,6 +149,7 @@ TEST(RuntimeLoggerTest, IpcTransitionKeepsCauseAndNumericProcessIdentity) {
 TEST(RuntimeLoggerTest, SensitiveBodiesAreRedacted) {
   EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("candidate"));
   EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("preedit_text"));
+  EXPECT_TRUE(azookey::logging::IsSensitiveRuntimeLogField("apiKey"));
   EXPECT_FALSE(azookey::logging::IsSensitiveRuntimeLogField("request_id"));
 
   RuntimeLogRecord record{
@@ -145,6 +160,7 @@ TEST(RuntimeLoggerTest, SensitiveBodiesAreRedacted) {
       {RuntimeLogField{"reading", SafeLogText("private-reading")},
        RuntimeLogField{"surface_text", SafeLogText("private-surface")},
        RuntimeLogField{"top_candidate", SafeLogText("private-candidate")},
+       RuntimeLogField{"apiKey", SafeLogText("private-api-key")},
        RuntimeLogField{"window_title", SafeLogText("private-window")},
        RuntimeLogField{"candidate_count", uint64_t{3}}},
   };
@@ -153,6 +169,7 @@ TEST(RuntimeLoggerTest, SensitiveBodiesAreRedacted) {
   EXPECT_EQ(serialized.find("private-reading"), std::string::npos);
   EXPECT_EQ(serialized.find("private-surface"), std::string::npos);
   EXPECT_EQ(serialized.find("private-candidate"), std::string::npos);
+  EXPECT_EQ(serialized.find("private-api-key"), std::string::npos);
   EXPECT_EQ(serialized.find("private-window"), std::string::npos);
   EXPECT_EQ(serialized.find("window_title"), std::string::npos);
   EXPECT_NE(serialized.find("***redacted***"), std::string::npos);

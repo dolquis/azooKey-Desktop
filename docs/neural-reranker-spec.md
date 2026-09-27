@@ -707,7 +707,7 @@ prefix 長以降の KV を落とす。pin の正典は `CMakeLists.txt` の
 |---|---|
 | `Candidate::debug_info` | 対象候補に `nll=<nll_per_char>;nlld=<bonus>` を追記（既存の `dup:` 併記と同じ流儀。表層・読みは含めない） |
 | `Health` | **runtime 失敗のみ** `model_runtime_error_` へ `nll-scorer:<reason>` をミラーし、既存の `last_error` フィールドで運ばれる（§B8）。payload の形は変わらない |
-| 構造化ログ（`azookey::logging::RuntimeLogger`） | `nll_rerank` イベントの `reason`、`nll_targets`、`nll_applied`、`prefix_ms`、`elapsed_ms`。適用時は `reason=applied`。既定 OFF・live・cancel では出力しない（§B9） |
+| 構造化ログ（`azookey::logging::RuntimeLogger`） | `nll_rerank` イベントの `reason`、`nll_targets`、`nll_applied`、`latency_ms`（全所要時間）。IPC 要求に紐付く場合は `request_id` も記録する。適用時は `reason=applied`。既定 OFF・live・cancel では出力しない（§B9）。フィールド名の正典は `docs/dev-infrastructure-spec.md` §7.2 |
 
 **`QueryDiagnostics` へは出さない（決定）。** 現行 `QueryDiagnosticsPayload`
 （`ipc/include/azookey/ipc/Payloads.h`）は `model_loaded` / `engine` / `backend` /

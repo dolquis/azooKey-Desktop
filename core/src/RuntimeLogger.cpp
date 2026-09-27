@@ -330,10 +330,10 @@ void AppendLine(const RuntimeLoggerOptions& options, const std::filesystem::path
 
 bool IsSensitiveRuntimeLogField(std::string_view key) {
   const auto lower = LowerAscii(std::string(key));
-  constexpr std::array<std::string_view, 16> fragments = {
-      "reading",  "surface",    "candidate", "prompt",        "raw_key", "title",
-      "text",     "preedit",    "query",     "composition",   "secret",  "token",
-      "password", "credential", "api_key",   "authorization",
+  constexpr std::array<std::string_view, 17> fragments = {
+      "reading",  "surface",    "candidate", "prompt",      "raw_key",       "title",
+      "text",     "preedit",    "query",     "composition", "secret",        "token",
+      "password", "credential", "api_key",   "apikey",      "authorization",
   };
   return std::any_of(fragments.begin(), fragments.end(), [&lower](std::string_view fragment) {
     return lower.find(fragment) != std::string::npos;

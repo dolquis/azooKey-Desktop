@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -64,7 +66,19 @@ azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
   return azookey::logging::RuntimeLogSafeText(std::move(value));
 }
 
+void LogBusinessOutcome(azookey::logging::RuntimeLogger& logger,
+                        azookey::logging::RuntimeLogLevel level, std::string_view event,
+                        std::string result) {
+  if (result == "error") {
+    logger.Log(level, event,
+               {{"result", SafeLogText("error")}, {"error_code", SafeLogText("business")}});
+  } else {
+    logger.Log(level, event, {{"result", SafeLogText(std::move(result))}});
+  }
+}
+
 constexpr const char* kHostVersion = "0.1.0";
+constexpr std::int32_t kUnspecifiedFailureHresult = static_cast<std::int32_t>(0x80004005U);
 volatile std::sig_atomic_t g_signal_stop_requested = 0;
 
 std::string CreateHostGenerationId() {
@@ -413,7 +427,11 @@ int main(int argc, char** argv) {
   azookey::logging::RuntimeLogger runtime_log(
       azookey::logging::RuntimeLoggerOptionsFromEnvironment("host", user_paths->logs_dir));
   if (!azookey::host::EnsureUserDataDirectories(*user_paths)) {
-    runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "user_data_directory_create_failed");
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "user_data_directory_create_failed",
+                    {{"error_code", SafeLogText("business")}});
+    azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Host,
+                                       azookey::core::EtwErrorCode::Business,
+                                       kUnspecifiedFailureHresult);
     std::cerr << "error: failed to create azooKey user data directories under "
               << user_paths->root_dir << std::endl;
     return 2;
@@ -441,7 +459,8 @@ int main(int argc, char** argv) {
                                           run_history_path, kRunHistoryLockTimeout)
                                     : std::nullopt;
   if (pipe_mode && !run_history_lock) {
-    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed",
+                    {{"error_code", SafeLogText("business")}});
   }
   if (run_history_lock) {
     const auto previous = azookey::host::ReadHostRunHistory(run_history_path)
@@ -456,7 +475,8 @@ int main(int argc, char** argv) {
                                          azookey::host::CurrentProcessStartTime(), now_epoch_ms);
       owns_run_history = azookey::host::WriteHostRunHistory(run_history_path, outcome.next);
       if (!owns_run_history) {
-        runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+        runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed",
+                        {{"error_code", SafeLogText("business")}});
       }
       if (outcome.previous_run_crashed) {
         runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_previous_run_crashed",
@@ -470,11 +490,16 @@ int main(int argc, char** argv) {
             settings_result.status != azookey::host::SettingsLoadStatus::Invalid &&
             settings_store.PersistSafeModeEntered(azookey::host::FormatRfc3339Utc(now_epoch_ms),
                                                   static_cast<int32_t>(outcome.recent_crashes));
-        runtime_log.Log(entered_safe_mode ? azookey::logging::RuntimeLogLevel::Warn
-                                          : azookey::logging::RuntimeLogLevel::Error,
-                        "safe_mode_entered",
-                        {{"result", SafeLogText(entered_safe_mode ? "ok" : "error")},
-                         {"crash_count", static_cast<uint64_t>(outcome.recent_crashes)}});
+        if (entered_safe_mode) {
+          runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "safe_mode_entered",
+                          {{"result", SafeLogText("ok")},
+                           {"crash_count", static_cast<uint64_t>(outcome.recent_crashes)}});
+        } else {
+          runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "safe_mode_entered",
+                          {{"result", SafeLogText("error")},
+                           {"error_code", SafeLogText("business")},
+                           {"crash_count", static_cast<uint64_t>(outcome.recent_crashes)}});
+        }
         if (entered_safe_mode) settings_result = settings_store.Load();
       }
     }
@@ -492,7 +517,8 @@ int main(int argc, char** argv) {
     if (!current || !azookey::host::IsOwnMark(*current)) return;
     if (!azookey::host::WriteHostRunHistory(run_history_path,
                                             azookey::host::RecordHostCleanExit())) {
-      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed");
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_run_history_write_failed",
+                      {{"error_code", SafeLogText("business")}});
     }
   };
   CrashRegistration crash_registration;
@@ -515,7 +541,7 @@ int main(int argc, char** argv) {
   }
   if (settings_result.status == azookey::host::SettingsLoadStatus::Invalid) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "settings_load_failed",
-                    {{"result", SafeLogText("error")}});
+                    {{"result", SafeLogText("error")}, {"error_code", SafeLogText("business")}});
     std::cerr << "warn: invalid settings.json";
     if (settings_result.error) std::cerr << ": " << *settings_result.error;
     if (settings_result.quarantined_path) {
@@ -531,32 +557,32 @@ int main(int argc, char** argv) {
   azookey::learning::LearningStore store(user_paths->learning_path);
   const bool learning_loaded = store.Load();
   const bool learning_load_failed = learning_file_existed && !learning_loaded;
-  runtime_log.Log(
-      learning_load_failed ? azookey::logging::RuntimeLogLevel::Warn
-                           : azookey::logging::RuntimeLogLevel::Info,
-      "learning_load",
-      {{"result",
-        SafeLogText(learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"))}});
+  LogBusinessOutcome(runtime_log,
+                     learning_load_failed ? azookey::logging::RuntimeLogLevel::Warn
+                                          : azookey::logging::RuntimeLogLevel::Info,
+                     "learning_load",
+                     learning_loaded ? "ok" : (learning_file_existed ? "error" : "missing"));
 
   azookey::learning::UserDictionary user_dict(user_paths->user_dict_path);
   const bool user_dict_loaded = user_dict.Load();
-  runtime_log.Log(user_dict_loaded ? azookey::logging::RuntimeLogLevel::Info
-                                   : azookey::logging::RuntimeLogLevel::Warn,
-                  "user_dictionary_load",
-                  {{"result", SafeLogText(user_dict_loaded ? "ok" : "error")}});
+  LogBusinessOutcome(runtime_log,
+                     user_dict_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                      : azookey::logging::RuntimeLogLevel::Warn,
+                     "user_dictionary_load", user_dict_loaded ? "ok" : "error");
 
   azookey::learning::TypoCorrectionStore typo_store(user_paths->typo_store_path);
   const bool typo_store_loaded = typo_store.Load();
-  runtime_log.Log(typo_store_loaded ? azookey::logging::RuntimeLogLevel::Info
-                                    : azookey::logging::RuntimeLogLevel::Warn,
-                  "typo_store_load", {{"result", SafeLogText(typo_store_loaded ? "ok" : "error")}});
+  LogBusinessOutcome(runtime_log,
+                     typo_store_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                       : azookey::logging::RuntimeLogLevel::Warn,
+                     "typo_store_load", typo_store_loaded ? "ok" : "error");
 
   azookey::learning::AutoWordStore auto_word_store(user_paths->auto_word_store_path);
   const bool auto_word_store_loaded = auto_word_store.Load();
-  runtime_log.Log(auto_word_store_loaded ? azookey::logging::RuntimeLogLevel::Info
-                                         : azookey::logging::RuntimeLogLevel::Warn,
-                  "auto_word_store_load",
-                  {{"result", SafeLogText(auto_word_store_loaded ? "ok" : "error")}});
+  LogBusinessOutcome(runtime_log,
+                     auto_word_store_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                            : azookey::logging::RuntimeLogLevel::Warn,
+                     "auto_word_store_load", auto_word_store_loaded ? "ok" : "error");
   // Spec section 3-3: sweep pending words that were never confirmed, once per
   // start rather than on every observation.
   const auto now_epoch_sec =
@@ -586,17 +612,23 @@ int main(int argc, char** argv) {
   // Discover only installer-controlled static layers, never the current directory.
   const auto dictionary_directory = GetExeDirectory() / "dict";
   for (const auto& result : engine.LoadBundledDictionaryLayers(dictionary_directory)) {
-    runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "static_dictionary_load",
-                    {{"layer", SafeLogText(result.name)},
-                     {"result", SafeLogText(result.loaded ? "ok" : "unavailable")},
-                     {"error", SafeLogText(result.error)}});
+    if (result.loaded) {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "static_dictionary_load",
+                      {{"layer", SafeLogText(result.name)}, {"result", SafeLogText("ok")}});
+    } else {
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "static_dictionary_load",
+                      {{"layer", SafeLogText(result.name)},
+                       {"result", SafeLogText("error")},
+                       {"error_code", SafeLogText("business")}});
+    }
   }
 #endif
   if (explicit_model_path && !safe_mode) {
     const bool model_loaded = engine.LoadModel();
-    runtime_log.Log(model_loaded ? azookey::logging::RuntimeLogLevel::Info
-                                 : azookey::logging::RuntimeLogLevel::Error,
-                    "model_load", {{"result", SafeLogText(model_loaded ? "ok" : "error")}});
+    LogBusinessOutcome(runtime_log,
+                       model_loaded ? azookey::logging::RuntimeLogLevel::Info
+                                    : azookey::logging::RuntimeLogLevel::Error,
+                       "model_load", model_loaded ? "ok" : "error");
     if (!model_loaded) {
       std::cerr << "warn: model load failed: " << engine.last_error().value_or("unknown error")
                 << " (falling back to SimpleConverter)" << std::endl;
@@ -604,20 +636,21 @@ int main(int argc, char** argv) {
   } else if (settings_store.settings().model.auto_load_on_host_start) {
     const bool preload_started = engine.StartModelPreload(azookey::host::ModelLoadOptions{
         config.model_path, config.backend, config.n_gpu_layers, config.inference_threads});
-    runtime_log.Log(preload_started ? azookey::logging::RuntimeLogLevel::Info
-                                    : azookey::logging::RuntimeLogLevel::Warn,
-                    "model_preload_start",
-                    {{"result", SafeLogText(preload_started ? "ok" : "error")}});
+    LogBusinessOutcome(runtime_log,
+                       preload_started ? azookey::logging::RuntimeLogLevel::Info
+                                       : azookey::logging::RuntimeLogLevel::Warn,
+                       "model_preload_start", preload_started ? "ok" : "error");
   }
 
   azookey::host::RequestScheduler scheduler;
   azookey::host::DispatcherConfig dconf;
+  dconf.runtime_logger = &runtime_log;
   dconf.host_version = kHostVersion;
   dconf.protocol_version = azookey::ipc::kHandshakeProtocolVersion;
   dconf.host_generation_id = CreateHostGenerationId();
   if (dconf.host_generation_id.empty()) {
-    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
-                    "host_generation_id_generation_failed");
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "host_generation_id_generation_failed",
+                    {{"error_code", SafeLogText("business")}});
     std::cerr << "warn: failed to generate the inference Host generation ID" << std::endl;
   }
 #if AZOOKEY_WITH_LLAMA_CPP
@@ -644,7 +677,8 @@ int main(int argc, char** argv) {
             *token_path, std::chrono::milliseconds(0));
         if (!handshake_token_owner) {
           runtime_log.Log(azookey::logging::RuntimeLogLevel::Error,
-                          "ipc_handshake_token_owner_unavailable");
+                          "ipc_handshake_token_owner_unavailable",
+                          {{"error_code", SafeLogText("transport")}});
           std::cerr << "error: IPC handshake token owner unavailable" << std::endl;
           mark_clean_exit();
           return 2;
@@ -656,7 +690,8 @@ int main(int argc, char** argv) {
       }
     }
     if (handshake_token.empty()) {
-      runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "ipc_handshake_token_unavailable");
+      runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "ipc_handshake_token_unavailable",
+                      {{"error_code", SafeLogText("transport")}});
       std::cerr << "error: IPC handshake token unavailable" << std::endl;
       mark_clean_exit();
       return 2;
@@ -688,13 +723,15 @@ int main(int argc, char** argv) {
 
   if (!RegisterSignalHandlers()) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
-                    "shutdown_signal_handler_register_failed");
+                    "shutdown_signal_handler_register_failed",
+                    {{"error_code", SafeLogText("business")}});
     std::cerr << "warn: failed to register process shutdown signal handlers" << std::endl;
   }
 #ifdef _WIN32
   if (!console_control.Register()) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn,
-                    "console_shutdown_handler_register_failed");
+                    "console_shutdown_handler_register_failed",
+                    {{"error_code", SafeLogText("business")}});
     std::cerr << "warn: failed to register Windows console shutdown handler" << std::endl;
   }
 #endif
@@ -712,7 +749,10 @@ int main(int argc, char** argv) {
           return [d](const azookey::ipc::Envelope& env) { return d->Dispatch(env); };
         })) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Error, "pipe_listen_failed",
-                      {{"result", SafeLogText("error")}});
+                      {{"result", SafeLogText("error")}, {"error_code", SafeLogText("transport")}});
+      azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Host,
+                                         azookey::core::EtwErrorCode::Transport,
+                                         kUnspecifiedFailureHresult);
       std::cerr << "error: failed to start named pipe server: " << pipe_name << std::endl;
       mark_clean_exit();
       return 2;
@@ -732,12 +772,20 @@ int main(int argc, char** argv) {
     const auto stop_reason = wait_failed       ? "supervisor_wait_failed"
                              : StopRequested() ? "requested"
                                                : "supervisor_exited";
-    runtime_log.Log(wait_failed ? azookey::logging::RuntimeLogLevel::Error
-                                : azookey::logging::RuntimeLogLevel::Info,
-                    "host_stopped",
-                    {{"result", SafeLogText(wait_failed ? "error" : "ok")},
-                     {"stop_reason", SafeLogText(stop_reason)},
-                     {"win32_error", SafeLogText(std::to_string(supervisor_process.ErrorCode()))}});
+    if (wait_failed) {
+      runtime_log.Log(
+          azookey::logging::RuntimeLogLevel::Error, "host_stopped",
+          {{"result", SafeLogText("error")},
+           {"error_code", SafeLogText("transport")},
+           {"stop_reason", SafeLogText(stop_reason)},
+           {"win32_error", SafeLogText(std::to_string(supervisor_process.ErrorCode()))}});
+    } else {
+      runtime_log.Log(
+          azookey::logging::RuntimeLogLevel::Info, "host_stopped",
+          {{"result", SafeLogText("ok")},
+           {"stop_reason", SafeLogText(stop_reason)},
+           {"win32_error", SafeLogText(std::to_string(supervisor_process.ErrorCode()))}});
+    }
     mark_clean_exit();
     return wait_failed ? 3 : 0;
   }
@@ -748,7 +796,7 @@ int main(int argc, char** argv) {
     auto env = azookey::ipc::Deserialize(line);
     if (!env) {
       runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_parse_failed",
-                      {{"result", SafeLogText("error")}});
+                      {{"result", SafeLogText("error")}, {"error_code", SafeLogText("protocol")}});
       std::cerr << "warn: failed to parse envelope" << std::endl;
       continue;
     }
@@ -759,7 +807,9 @@ int main(int argc, char** argv) {
         std::cout.flush();
       } else {
         runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_serialize_failed",
-                        {{"request_id", env->request_id}, {"result", SafeLogText("error")}});
+                        {{"request_id", env->request_id},
+                         {"result", SafeLogText("error")},
+                         {"error_code", SafeLogText("protocol")}});
         std::cerr << "warn: failed to serialize response envelope" << std::endl;
       }
     }

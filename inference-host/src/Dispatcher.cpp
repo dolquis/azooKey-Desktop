@@ -28,6 +28,14 @@ namespace azookey::host {
 
 namespace {
 
+constexpr std::int32_t kGenericFailureHresult = static_cast<std::int32_t>(0x80004005u);
+
+logging::RuntimeLogger& DispatcherLogger(logging::RuntimeLogger* configured) {
+  if (configured) return *configured;
+  static logging::RuntimeLogger fallback(logging::RuntimeLoggerOptionsFromEnvironment("host"));
+  return fallback;
+}
+
 core::EtwGuid ClientGuid(std::string_view value) {
   core::EtwGuid result{};
   if (value.size() == 38 && value.front() == '{' && value.back() == '}')
@@ -54,23 +62,39 @@ core::EtwGuid ClientGuid(std::string_view value) {
 class InferenceTrace {
  public:
   InferenceTrace(uint64_t request, std::string_view client, core::EtwBackend backend,
-                 uint64_t length)
-      : context_{request, ClientGuid(client)} {
+                 uint64_t length, logging::RuntimeLogger* logger)
+      : context_{request, ClientGuid(client)}, logger_(&DispatcherLogger(logger)) {
     core::EtwLogger::LogInferenceStart(request, backend, length, context_.client);
   }
   ~InferenceTrace() {
     if (result_ == core::EtwResult::Failed && cancel_ && cancel_->load(std::memory_order_acquire))
       result_ = core::EtwResult::Cancelled;
-    core::EtwLogger::LogInferenceEnd(
-        context_.request_id, candidates_,
+    const double latency_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_)
-            .count(),
-        result_, context_.client);
+            .count();
+    core::EtwLogger::LogInferenceEnd(context_.request_id, candidates_, latency_ms, result_,
+                                     context_.client);
+    if (result_ == core::EtwResult::Success || result_ == core::EtwResult::Cancelled) {
+      logger_->Log(logging::RuntimeLogLevel::Info, "query_latency",
+                   {{"request_id", context_.request_id},
+                    {"latency_ms", latency_ms},
+                    {"result", logging::RuntimeLogSafeText(
+                                   result_ == core::EtwResult::Success ? "ok" : "cancelled")}});
+    } else {
+      logger_->Log(logging::RuntimeLogLevel::Error, "query_latency",
+                   {{"request_id", context_.request_id},
+                    {"latency_ms", latency_ms},
+                    {"result", logging::RuntimeLogSafeText("error")},
+                    {"error_code",
+                     logging::RuntimeLogSafeText(
+                         error_code_ == core::EtwErrorCode::Protocol ? "protocol" : "business")}});
+    }
   }
   void Finish(core::EtwResult result, uint64_t candidates = 0) {
     result_ = result;
     candidates_ = candidates;
   }
+  void ProtocolError() { error_code_ = core::EtwErrorCode::Protocol; }
   const InferenceTelemetry* context() const { return &context_; }
   void WatchCancellation(std::shared_ptr<std::atomic<bool>> cancel) { cancel_ = std::move(cancel); }
 
@@ -78,8 +102,10 @@ class InferenceTrace {
   InferenceTelemetry context_;
   std::chrono::steady_clock::time_point start_{std::chrono::steady_clock::now()};
   core::EtwResult result_{core::EtwResult::Failed};
+  core::EtwErrorCode error_code_{core::EtwErrorCode::Business};
   uint64_t candidates_{};
   std::shared_ptr<std::atomic<bool>> cancel_;
+  logging::RuntimeLogger* logger_;
 };
 
 uint64_t NowMs() {
@@ -524,8 +550,9 @@ std::optional<ipc::Envelope> Dispatcher::HandleLoadModel(const ipc::Envelope& re
 std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelope& req) {
   auto parsed = ipc::ParseQueryCandidatesRequest(req.payload_json);
   InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Unknown,
-                       parsed ? parsed->reading.size() : 0);
+                       parsed ? parsed->reading.size() : 0, config_.runtime_logger);
   if (!parsed) {
+    trace.ProtocolError();
     ipc::QueryCandidatesResponse res;
     res.partial = false;
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
@@ -545,10 +572,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
   std::string corrected_reading;
   if (!parsed->emoji_trigger.empty()) {
     if (!parsed->reading.empty()) {
+      trace.ProtocolError();
       static std::atomic_flag warned = ATOMIC_FLAG_INIT;
       if (!warned.test_and_set()) {
-        static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-        logger.Log(logging::RuntimeLogLevel::Warn, "invalid_mixed_emoji_query");
+        DispatcherLogger(config_.runtime_logger)
+            .Log(logging::RuntimeLogLevel::Warn, "invalid_mixed_emoji_query",
+                 {{"request_id", req.request_id},
+                  {"error_code", logging::RuntimeLogSafeText("protocol")}});
+        core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Protocol,
+                                  kGenericFailureHresult);
       }
       ipc::QueryCandidatesResponse invalid;
       invalid.ok = false;
@@ -614,9 +646,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
 std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::Envelope& req) {
   const auto parsed = ipc::ParseQueryLiveConversionRequest(req.payload_json);
   InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Kana,
-                       parsed ? parsed->kana.size() : 0);
+                       parsed ? parsed->kana.size() : 0, config_.runtime_logger);
   ipc::QueryLiveConversionResponse response;
   if (!parsed || parsed->kana.empty()) {
+    trace.ProtocolError();
     return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
   }
 
@@ -653,14 +686,16 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
 std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envelope& req) {
   const auto parsed = ipc::ParseQueryPredictionsRequest(req.payload_json);
   InferenceTrace trace(req.request_id, client_id_, core::EtwBackend::Kana,
-                       parsed ? parsed->kana.size() : 0);
+                       parsed ? parsed->kana.size() : 0, config_.runtime_logger);
   ipc::QueryPredictionsResponse response;
   if (!parsed || parsed->kana.empty()) {
+    trace.ProtocolError();
     response.ok = false;
     response.error = "invalid_request";
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }
   if (parsed->mode != "word") {
+    trace.ProtocolError();
     response.ok = false;
     response.error = "unsupported_prediction_mode";
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
@@ -785,10 +820,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
   InferenceTrace trace(
       req.request_id, client_id_,
       parsed && parsed->mode == "ai-cleanup" ? core::EtwBackend::Ai : core::EtwBackend::Unknown,
-      parsed ? parsed->reading.size() : 0);
+      parsed ? parsed->reading.size() : 0, config_.runtime_logger);
   if (!parsed) {
-    static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-    logger.Log(logging::RuntimeLogLevel::Error, "invalid_batch_request");
+    trace.ProtocolError();
+    DispatcherLogger(config_.runtime_logger)
+        .Log(logging::RuntimeLogLevel::Error, "invalid_batch_request",
+             {{"request_id", req.request_id},
+              {"error_code", logging::RuntimeLogSafeText("protocol")}});
+    core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Protocol,
+                              kGenericFailureHresult);
     ipc::QueryBatchConversionResponse res;
     return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
   }
@@ -859,10 +899,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_start)
             .count(),
         phase_result, trace.context()->client);
-    if (!result.ok) {
-      static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
-      logger.Log(logging::RuntimeLogLevel::Error, "ai_cleanup_fallback",
-                 {{"error_class", static_cast<uint64_t>(result.error_class)}});
+    if (!result.ok && result.error_class != AiErrorClass::Canceled) {
+      DispatcherLogger(config_.runtime_logger)
+          .Log(logging::RuntimeLogLevel::Error, "ai_cleanup_fallback",
+               {{"request_id", req.request_id},
+                {"error_code", logging::RuntimeLogSafeText("business")},
+                {"error_class", static_cast<uint64_t>(result.error_class)}});
+      core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Business,
+                                kGenericFailureHresult);
     }
     if (result.ok) {
       ipc::CandidateField candidate;

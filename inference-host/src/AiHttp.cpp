@@ -1,3 +1,4 @@
+#include "azookey/core/EtwLogger.h"
 #include "azookey/host/AiBackend.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/logging/RuntimeLogger.h"
@@ -23,7 +24,11 @@ void LogHttpFailure(const char* stage, DWORD error = GetLastError()) {
   static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
   logger.Log(logging::RuntimeLogLevel::Error, "ai_http_failure",
              {{"stage", logging::RuntimeLogSafeText(stage)},
+              {"error_code", logging::RuntimeLogSafeText("transport")},
               {"win32_error", static_cast<uint64_t>(error)}});
+  core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Transport,
+                            error == 0 ? static_cast<std::int32_t>(0x80004005U)
+                                       : static_cast<std::int32_t>(HRESULT_FROM_WIN32(error)));
 }
 struct SecretHeaders {
   std::wstring value;
@@ -210,7 +215,10 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     // Provider bodies can echo input or credentials; only record bounded metadata.
     static logging::RuntimeLogger logger(logging::RuntimeLoggerOptionsFromEnvironment("host"));
     logger.Log(logging::RuntimeLogLevel::Error, "ai_http_status",
-               {{"status", static_cast<uint64_t>(status)}});
+               {{"status", static_cast<uint64_t>(status)},
+                {"error_code", logging::RuntimeLogSafeText("business")}});
+    core::EtwLogger::LogError(core::EtwModule::Host, core::EtwErrorCode::Business,
+                              static_cast<std::int32_t>(0x80004005U));
     return response;
   }
   for (;;) {

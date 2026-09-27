@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -24,6 +25,15 @@ namespace j = ::azookey::ipc::json;
 
 std::filesystem::path TempPath(const char* name) {
   return std::filesystem::temp_directory_path() / name;
+}
+
+std::filesystem::path UniqueTempDirectory(const char* prefix) {
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const auto path = std::filesystem::temp_directory_path() /
+                      (std::string(prefix) + std::to_string(std::random_device{}()));
+    if (std::filesystem::create_directory(path)) return path;
+  }
+  throw std::runtime_error("unable to create unique diagnostic test directory");
 }
 
 class MockDpapiCrypto final : public azookey::learning::ByteCrypto {
@@ -103,7 +113,7 @@ TEST(DiagnosticsTest, JsonSchemaSnapshotIsStableAndMockCannotReportLoadedModel) 
       "name": "com_registration",
       "status": "ok",
       "message": "COM and profile registration match",
-      "details": {"matches": true}
+      "details": {"matches": true, "optional_missing": false}
     },
     {
       "id": "D-003",
@@ -559,8 +569,10 @@ TEST(DiagnosticsTest, ProbesFilesWrittenByRuntimeStores) {
   learning.Observe("よみ", "表記", 0.8, 100);
   ASSERT_TRUE(learning.Save());
   uint64_t learning_entries = 0;
-  EXPECT_TRUE(diag::ProbeLearningStoreFile(learning_path, &learning_entries));
+  bool migration_available = true;
+  EXPECT_TRUE(diag::ProbeLearningStoreFile(learning_path, &learning_entries, &migration_available));
   EXPECT_EQ(learning_entries, 1);
+  EXPECT_FALSE(migration_available);
 
   azookey::learning::UserDictionary dictionary(dictionary_path.string());
   EXPECT_TRUE(dictionary.Add({"単語", "たんご", std::nullopt, std::nullopt, std::nullopt}));
@@ -574,6 +586,106 @@ TEST(DiagnosticsTest, ProbesFilesWrittenByRuntimeStores) {
 
   std::filesystem::remove(learning_path, ec);
   std::filesystem::remove(dictionary_path, ec);
+}
+
+TEST(DiagnosticsTest, LegacyLearningStoreIsWarningOnlyWhenReadable) {
+  const auto directory = UniqueTempDirectory("azookey-diag-legacy-learning-");
+  const auto path = directory / "learning.tsv";
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << "yomi\tsurface\t0.8 100\n";
+  }
+  uint64_t entries = 0;
+  bool migration_available = false;
+  EXPECT_TRUE(diag::ProbeLearningStoreFile(path, &entries, &migration_available));
+  EXPECT_EQ(entries, 1U);
+  EXPECT_TRUE(migration_available);
+
+  diag::Snapshot snapshot;
+  snapshot.learning_store_migration_available = migration_available;
+  auto report = diag::EvaluateSnapshot(snapshot, 1);
+  const auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                                  [](const auto& item) { return item.id == "D-010"; });
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Warning);
+
+  snapshot.learning_store_valid = false;
+  report = diag::EvaluateSnapshot(snapshot, 1);
+  const auto failed_check = std::find_if(report.checks.begin(), report.checks.end(),
+                                         [](const auto& item) { return item.id == "D-010"; });
+  ASSERT_NE(failed_check, report.checks.end());
+  EXPECT_EQ(failed_check->status, diag::Status::Error);
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << "invalid learning record\n";
+  }
+  EXPECT_FALSE(diag::ProbeLearningStoreFile(path, &entries, &migration_available));
+  EXPECT_FALSE(migration_available);
+  std::error_code ec;
+  std::filesystem::remove_all(directory, ec);
+}
+
+TEST(DiagnosticsTest, OptionalComDisplayNameIsWarningOnlyWhenRequiredRegistrationMatches) {
+  diag::Snapshot snapshot;
+  snapshot.com_registration_matches = true;
+  snapshot.com_registration_optional_missing = true;
+  auto report = diag::EvaluateSnapshot(snapshot, 1);
+  auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                            [](const auto& item) { return item.id == "D-002"; });
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Warning);
+
+  snapshot.com_registration_matches = false;
+  report = diag::EvaluateSnapshot(snapshot, 1);
+  check = std::find_if(report.checks.begin(), report.checks.end(),
+                       [](const auto& item) { return item.id == "D-002"; });
+  ASSERT_NE(check, report.checks.end());
+  EXPECT_EQ(check->status, diag::Status::Error);
+}
+
+TEST(DiagnosticsTest, CrashSummaryIncludesOnlyManagedRegularDumpMetadata) {
+  const auto directory = UniqueTempDirectory("azookey-diag-crashes-");
+  std::error_code ec;
+  const auto managed = directory / "azookey-host-20260927T120000Z-123.dmp";
+  std::ofstream(managed, std::ios::binary) << "private dump contents";
+  std::ofstream(directory / "other-host-20260927T120000Z-123.dmp") << "unmanaged";
+  std::filesystem::create_directory(directory / "azookey-settings-20260927T120000Z-456.dmp", ec);
+  const auto linked = directory / "azookey-settings-20260927T120001Z-456.dmp";
+  std::filesystem::create_symlink(managed, linked, ec);
+
+  diag::ProbeResult result;
+  result.crashes_directory = directory;
+  const auto entries = diag::BuildCollectionEntries(result);
+  const auto summary = std::find_if(entries.begin(), entries.end(), [](const auto& entry) {
+    return entry.name == "crash-summary.txt";
+  });
+  ASSERT_NE(summary, entries.end());
+  EXPECT_NE(summary->content.find("Managed crash dumps: 1"), std::string::npos);
+  EXPECT_NE(summary->content.find("Total size (bytes): 21"), std::string::npos);
+  EXPECT_NE(summary->content.find("azookey-host-20260927T120000Z-123.dmp"), std::string::npos);
+  EXPECT_NE(summary->content.find(".dmp\t21\t"), std::string::npos);
+  EXPECT_NE(summary->content.find("Z\n"), std::string::npos);
+  EXPECT_EQ(summary->content.find("private dump contents"), std::string::npos);
+  EXPECT_EQ(summary->content.find("other-host"), std::string::npos);
+  EXPECT_EQ(summary->content.find("azookey-settings"), std::string::npos);
+  EXPECT_EQ(summary->content.find(directory.string()), std::string::npos);
+
+  std::filesystem::remove_all(directory, ec);
+}
+
+TEST(DiagnosticsTest, CrashSummaryDistinguishesMissingDirectoryAndNoManagedDumps) {
+  const auto parent = UniqueTempDirectory("azookey-diag-empty-crashes-");
+  const auto directory = parent / "crashes";
+  std::error_code ec;
+  diag::ProbeResult result;
+  result.crashes_directory = directory;
+  auto entries = diag::BuildCollectionEntries(result);
+  EXPECT_EQ(entries.back().content, "No azooKey crash dump directory was found.\n");
+
+  ASSERT_TRUE(std::filesystem::create_directories(directory));
+  entries = diag::BuildCollectionEntries(result);
+  EXPECT_EQ(entries.back().content, "No azooKey managed crash dumps were found.\n");
+  std::filesystem::remove_all(parent, ec);
 }
 
 TEST(DiagnosticsTest, UserDictionaryProbeMatchesRuntimeInvalidEntryTolerance) {

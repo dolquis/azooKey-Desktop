@@ -23,6 +23,8 @@ struct DispatcherConfig {
   std::optional<BackendKind> override_backend;
   std::optional<std::string> override_model_path;
   std::string runtime_tier{"mock"};
+  // Non-owning; the Host logger outlives all per-connection dispatchers.
+  logging::RuntimeLogger* runtime_logger{nullptr};
   // Shared by per-connection Dispatcher copies so config reload/apply is serialized.
   std::shared_ptr<std::mutex> update_config_mutex{std::make_shared<std::mutex>()};
   std::shared_ptr<AiBackend> ai_backend{std::make_shared<AiBackend>()};

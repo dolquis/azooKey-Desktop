@@ -51,6 +51,29 @@ bool IsLink(const std::filesystem::path& path, std::error_code& ec) {
 
 }  // namespace
 
+bool IsManagedCrashDumpFile(const std::filesystem::path& path) noexcept {
+  try {
+    const auto filename = path.filename().u8string();
+    const std::string_view name(reinterpret_cast<const char*>(filename.data()), filename.size());
+    if (!IsManagedName(name)) return false;
+    std::error_code ec;
+    if (IsLink(path, ec)) return false;
+    return std::filesystem::is_regular_file(std::filesystem::symlink_status(path, ec)) && !ec;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool IsSafeCrashDumpDirectory(const std::filesystem::path& directory) noexcept {
+  try {
+    std::error_code ec;
+    if (IsLink(directory, ec)) return false;
+    return std::filesystem::is_directory(std::filesystem::symlink_status(directory, ec)) && !ec;
+  } catch (...) {
+    return false;
+  }
+}
+
 CrashRetentionResult PruneCrashDumps(const std::filesystem::path& directory,
                                      CrashRetentionLimits limits,
                                      std::filesystem::file_time_type now) noexcept {

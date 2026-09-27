@@ -25,7 +25,8 @@ struct EtwCaptureResult {
   std::vector<EtwEvent> events;
 };
 
-inline EtwCaptureResult CaptureEtw(const std::function<void()>& emit) {
+inline EtwCaptureResult CaptureEtw(const std::function<void()>& emit,
+                                   bool register_provider = true) {
   constexpr GUID provider{
       0x89553f1c, 0x7d18, 0x4a6d, {0xa7, 0x20, 0x53, 0x49, 0x21, 0xc8, 0xb7, 0x30}};
   const auto name = L"azookey-etw-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
@@ -53,14 +54,15 @@ inline EtwCaptureResult CaptureEtw(const std::function<void()>& emit) {
     TRACEHANDLE session;
     EVENT_TRACE_PROPERTIES* properties;
     std::filesystem::path path;
+    bool registered_provider;
     ~Cleanup() {
       if (session) ControlTraceW(session, nullptr, properties, EVENT_TRACE_CONTROL_STOP);
-      core::EtwLogger::Unregister();
+      if (registered_provider) core::EtwLogger::Unregister();
       std::error_code ignored;
       std::filesystem::remove(path, ignored);
     }
-  } cleanup{session, properties, path};
-  core::EtwLogger::Register();
+  } cleanup{session, properties, path, register_provider};
+  if (register_provider) core::EtwLogger::Register();
   status = EnableTraceEx2(session, &provider, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
                           TRACE_LEVEL_VERBOSE, 1, 0, 1000, nullptr);
   if (status != ERROR_SUCCESS) return {status, {}};

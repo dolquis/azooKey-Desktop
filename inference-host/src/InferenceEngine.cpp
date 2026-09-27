@@ -24,6 +24,17 @@ constexpr const char* kLearningSaveError = "failed to save learning store";
 constexpr const char* kUserDictionaryLoadError = "failed to load user dictionary";
 constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary";
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
+// Backend diagnostics may contain a path, prompt, or candidate text. Only known
+// model runtime identifiers may leave the engine through Health or QueryDiagnostics.
+std::optional<std::string> SafeModelRuntimeError(const std::optional<std::string>& error) {
+  if (!error) return std::nullopt;
+  if (*error == "zenzai-degraded:empty-generation" ||
+      *error == "zenzai-degraded:invalid-utf8-surface" || *error == "nll-scorer:budget_exceeded" ||
+      *error == "nll-scorer:infer_error") {
+    return error;
+  }
+  return "model runtime failed";
+}
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 constexpr size_t kPredictionDisplayLimit = 5;
 // Depth of the applied-observation ring (DEV-554). One engine is shared by every
@@ -327,8 +338,8 @@ std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
   try {
     // Do not move candidates into Apply: fallback needs the raw order/scores.
     return reranker_.Apply(kana, candidates, now_epoch_sec);
-  } catch (const std::exception& ex) {
-    last_error_ = std::string("reranker failed: ") + ex.what();
+  } catch (const std::exception&) {
+    last_error_ = "reranker failed";
     return candidates;
   } catch (...) {
     last_error_ = "reranker failed: unknown exception";
@@ -428,7 +439,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
 
   auto probe = ProbeZenzaiGgufModel(next_config.model_path);
   if (!probe.ok) {
-    result.error = probe.error;
+    result.error = "model file probe failed";
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
       ApplyModelConfigFields(config_, next_config);
@@ -456,9 +467,9 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
         options.before_load_for_tests(next_config.backend);
       }
       return LoadZenzaiGgufModel(next_config.model_path, runtime_options);
-    } catch (const std::exception& ex) {
+    } catch (const std::exception&) {
       ZenzaiLoadResult failed;
-      failed.error = std::string("model initialization failed: ") + ex.what();
+      failed.error = "model initialization failed";
       return failed;
     } catch (...) {
       ZenzaiLoadResult failed;
@@ -469,7 +480,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   auto loaded = load();
   std::optional<std::string> backend_error;
   if (!loaded.ok && runtime_options.use_vulkan) {
-    backend_error = "Vulkan initialization failed; using CPU fallback: " + loaded.error;
+    backend_error = "Vulkan initialization failed; using CPU fallback";
     next_config.backend = BackendKind::Cpu;
     runtime_options.use_vulkan = false;
     runtime_options.n_gpu_layers = 0;
@@ -477,8 +488,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
     result.error = backend_error;
   }
   if (!loaded.ok) {
-    result.error =
-        backend_error ? *backend_error + "; CPU fallback failed: " + loaded.error : loaded.error;
+    result.error = backend_error ? "Vulkan and CPU model load failed" : "model load failed";
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!model_loaded_) {
       ApplyModelConfigFields(config_, next_config);
@@ -675,7 +685,7 @@ void InferenceEngine::MirrorModelRuntimeErrorLocked(
     const std::shared_ptr<core::IConverter>& converter) {
   auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
   if (zenzai && active_converter_ == converter) {
-    model_runtime_error_ = zenzai->last_error();
+    model_runtime_error_ = SafeModelRuntimeError(zenzai->last_error());
   }
 }
 
@@ -858,14 +868,14 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
         std::lock_guard<std::mutex> lock(state_mutex_);
         MirrorModelRuntimeErrorLocked(converter);
       }
-    } catch (const std::exception& ex) {
+    } catch (const std::exception&) {
       convert_failed = true;
       if (!using_model_converter || !fallback_converter) throw;
       if (canceled()) return {};
       {
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (active_converter_ == converter) {
-          model_runtime_error_ = std::string("zenzai-convert-exception:") + ex.what();
+          model_runtime_error_ = "model conversion failed";
         }
       }
       converted = convert(fallback_converter, false, std::nullopt);
@@ -876,7 +886,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       {
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (active_converter_ == converter) {
-          model_runtime_error_ = "zenzai-convert-exception:unknown";
+          model_runtime_error_ = "model conversion failed";
         }
       }
       converted = convert(fallback_converter, false, std::nullopt);
@@ -915,12 +925,20 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     converter_lock.unlock();
     if (canceled()) return {};
     if (runtime_logger_ && !outcome.reason.empty()) {
-      runtime_logger_->Log(logging::RuntimeLogLevel::Info, "nll_rerank",
-                           {{"reason", logging::RuntimeLogSafeText(outcome.reason)},
-                            {"nll_targets", static_cast<uint64_t>(outcome.targets)},
-                            {"nll_applied", static_cast<uint64_t>(outcome.applied)},
-                            {"prefix_ms", outcome.prefix_ms},
-                            {"elapsed_ms", outcome.elapsed_ms}});
+      if (telemetry) {
+        runtime_logger_->Log(logging::RuntimeLogLevel::Info, "nll_rerank",
+                             {{"request_id", telemetry->request_id},
+                              {"reason", logging::RuntimeLogSafeText(outcome.reason)},
+                              {"nll_targets", static_cast<uint64_t>(outcome.targets)},
+                              {"nll_applied", static_cast<uint64_t>(outcome.applied)},
+                              {"latency_ms", outcome.elapsed_ms}});
+      } else {
+        runtime_logger_->Log(logging::RuntimeLogLevel::Info, "nll_rerank",
+                             {{"reason", logging::RuntimeLogSafeText(outcome.reason)},
+                              {"nll_targets", static_cast<uint64_t>(outcome.targets)},
+                              {"nll_applied", static_cast<uint64_t>(outcome.applied)},
+                              {"latency_ms", outcome.elapsed_ms}});
+      }
     }
   }
 

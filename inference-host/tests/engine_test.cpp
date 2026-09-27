@@ -283,7 +283,7 @@ class ThrowingLearningStore final : public azookey::learning::LearningStore {
                                          &azookey::learning::test::Crypto()) {}
 
   double Score(const std::string&, const std::string&, uint64_t) const override {
-    throw std::runtime_error("score failure");
+    throw std::runtime_error("candidate text private-score-failure");
   }
 };
 }  // namespace
@@ -856,7 +856,8 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
   EXPECT_EQ(candidates.front().surface, "日本");
   ASSERT_TRUE(engine->last_error().has_value());
   ASSERT_TRUE(engine->effective_last_error().has_value());
-  EXPECT_NE(engine->last_error()->find("reranker failed: score failure"), std::string::npos);
+  EXPECT_EQ(*engine->last_error(), "reranker failed");
+  EXPECT_EQ(engine->last_error()->find("private-score-failure"), std::string::npos);
 
   auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
   ASSERT_FALSE(predictions.empty());
@@ -1192,8 +1193,7 @@ TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
 
   EXPECT_FALSE(result.ok);
   ASSERT_TRUE(result.error.has_value());
-  EXPECT_NE(result.error->find("llama.cpp model load failed:"), std::string::npos);
-  EXPECT_GT(result.error->size(), std::string("llama.cpp model load failed:").size());
+  EXPECT_EQ(*result.error, "model load failed");
   const auto health = engine->health_snapshot();
   ASSERT_TRUE(health.last_error.has_value());
   EXPECT_EQ(health.last_error, result.error);
@@ -1777,7 +1777,7 @@ TEST(InferenceEngineTest, VulkanFailureFallsBackToCpuAndRetainsHealthError) {
   std::remove(learning_path);
 }
 
-TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsRetainBothErrors) {
+TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsReturnFixedError) {
   const char* learning_path = "azookey_host_engine_both_backends_fail.tsv";
   std::remove(learning_path);
   azookey::learning::LearningStore store(learning_path, &azookey::learning::test::Crypto());
@@ -1802,10 +1802,9 @@ TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsRetainBothErrors) {
     const auto result = engine->LoadModelWithResult(options);
     EXPECT_FALSE(result.ok);
     ASSERT_TRUE(result.error);
-    EXPECT_NE(result.error->find(unknown_exception ? "unknown exception" : "Vulkan test failure"),
-              std::string::npos);
-    EXPECT_NE(result.error->find("CPU fallback failed"), std::string::npos);
-    EXPECT_NE(result.error->find("CPU test failure"), std::string::npos);
+    EXPECT_EQ(*result.error, "Vulkan and CPU model load failed");
+    EXPECT_EQ(result.error->find("Vulkan test failure"), std::string::npos);
+    EXPECT_EQ(result.error->find("CPU test failure"), std::string::npos);
     EXPECT_EQ(attempts, (std::vector<azookey::host::BackendKind>{azookey::host::BackendKind::Vulkan,
                                                                  azookey::host::BackendKind::Cpu}));
     EXPECT_FALSE(engine->model_loaded());

@@ -32,10 +32,11 @@
 #include "SettingsSchema.h"
 #include "azookey/core/AiPrivacy.h"
 #include "azookey/core/AppProfileResolver.h"
+#include "azookey/core/CrashRetention.h"
 #include "azookey/core/Redaction.h"
 #include "azookey/host/UserDataPaths.h"
-#include "azookey/ipc/Json.h"
 #include "azookey/ipc/HandshakeToken.h"
+#include "azookey/ipc/Json.h"
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/learning/DpapiCrypto.h"
@@ -104,15 +105,10 @@ std::string LowerAscii(std::string value) {
   return value;
 }
 
-bool IsSensitiveKey(std::string_view key) {
-  const auto lower = LowerAscii(std::string(key));
-  return lower.find("apikey") != std::string::npos || lower.find("api_key") != std::string::npos ||
-         lower.find("token") != std::string::npos || lower.find("secret") != std::string::npos ||
-         lower.find("prompt") != std::string::npos;
-}
-
 j::Value RedactValue(const j::Value& value, std::string_view key = {}) {
-  if (!key.empty() && IsSensitiveKey(key)) return j::Value("***redacted***");
+  if (!key.empty() && (logging::IsSensitiveRuntimeLogField(key) || key == "openAiApiKey")) {
+    return j::Value("***redacted***");
+  }
   if (value.IsObject()) {
     j::Object redacted;
     for (const auto& [child_key, child] : value.AsObject()) {
@@ -124,28 +120,6 @@ j::Value RedactValue(const j::Value& value, std::string_view key = {}) {
     j::Array redacted;
     redacted.reserve(value.AsArray().size());
     for (const auto& child : value.AsArray()) redacted.emplace_back(RedactValue(child));
-    return j::Value(std::move(redacted));
-  }
-  return value;
-}
-
-j::Value RedactRuntimeLogValue(const j::Value& value, std::string_view key = {}) {
-  if (!key.empty() && (IsSensitiveKey(key) || logging::IsSensitiveRuntimeLogField(key))) {
-    return j::Value("***redacted***");
-  }
-  if (value.IsObject()) {
-    j::Object redacted;
-    for (const auto& [child_key, child] : value.AsObject()) {
-      redacted.emplace(child_key, RedactRuntimeLogValue(child, child_key));
-    }
-    return j::Value(std::move(redacted));
-  }
-  if (value.IsArray()) {
-    j::Array redacted;
-    redacted.reserve(value.AsArray().size());
-    for (const auto& child : value.AsArray()) {
-      redacted.emplace_back(RedactRuntimeLogValue(child));
-    }
     return j::Value(std::move(redacted));
   }
   return value;
@@ -433,12 +407,16 @@ bool ParseLearningRecord(std::string_view line) {
   return time_result.ec == std::errc{} && time_result.ptr == values.data() + values.size();
 }
 
-bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries) {
+bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries,
+                        bool* migration_available = nullptr) {
   *entries = 0;
+  if (migration_available) *migration_available = false;
   std::string text;
   const auto source = learning::ReadProtectedText(path, learning::DpapiCrypto(), text);
   if (source == learning::ProtectedFileSource::Missing) return true;
   if (source == learning::ProtectedFileSource::Error) return false;
+  const bool legacy_format = !text.empty() && !std::string_view(text).starts_with(
+                                                  learning::kLearningStoreEscapedTsvHeader);
   std::string_view remaining(text);
   bool valid = true;
   while (!remaining.empty()) {
@@ -452,6 +430,7 @@ bool ProbeLearningStore(const std::filesystem::path& path, uint64_t* entries) {
     if (end == std::string_view::npos) break;
     remaining.remove_prefix(end + 1);
   }
+  if (valid && migration_available) *migration_available = legacy_format;
   learning::SecureErase(text);
   return valid;
 }
@@ -771,8 +750,12 @@ void ProbeRegistration(Snapshot& snapshot) {
 #ifdef _WIN32
   const auto clsid = GuidString(tsf::kTextServiceClsid);
   const auto profile = GuidString(tsf::kTextServiceProfileGuid);
-  const std::wstring inproc_key = L"SOFTWARE\\Classes\\CLSID\\" + clsid + L"\\InprocServer32";
+  const std::wstring clsid_key = L"SOFTWARE\\Classes\\CLSID\\" + clsid;
+  const std::wstring inproc_key = clsid_key + L"\\InprocServer32";
   const auto registered = ReadRegistryDefault(HKEY_LOCAL_MACHINE, inproc_key);
+  const auto threading_model =
+      ReadRegistryString(HKEY_LOCAL_MACHINE, inproc_key, L"ThreadingModel");
+  const auto display_name = ReadRegistryDefault(HKEY_LOCAL_MACHINE, clsid_key);
   snapshot.tip_path_registered = registered && !registered->empty();
   if (registered) {
     snapshot.tip_path = std::filesystem::path(*registered).string();
@@ -783,8 +766,11 @@ void ProbeRegistration(Snapshot& snapshot) {
   }
   const std::wstring profile_key =
       L"SOFTWARE\\Microsoft\\CTF\\TIP\\" + clsid + L"\\LanguageProfile\\0x00000411\\" + profile;
-  snapshot.com_registration_matches =
-      snapshot.tip_path_registered && RegistryKeyExists(HKEY_LOCAL_MACHINE, profile_key);
+  snapshot.com_registration_matches = snapshot.tip_path_registered && threading_model &&
+                                      *threading_model == L"Apartment" &&
+                                      (!display_name || *display_name == L"azooKey TSF TIP") &&
+                                      RegistryKeyExists(HKEY_LOCAL_MACHINE, profile_key);
+  snapshot.com_registration_optional_missing = snapshot.com_registration_matches && !display_name;
   snapshot.language_profile_registered = IsLanguageProfileRegistered();
 #endif
 }
@@ -917,7 +903,7 @@ std::string SanitizeRuntimeLog(std::string_view content) {
   while (std::getline(input, line)) {
     const auto value = j::Parse(line);
     if (!value || !value->IsObject()) continue;
-    output << RedactFreeText(j::Stringify(RedactRuntimeLogValue(*value))) << '\n';
+    output << RedactFreeText(j::Stringify(RedactValue(*value))) << '\n';
   }
   return output.str();
 }
@@ -1076,8 +1062,9 @@ DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
   return ProbeDpapiSettings(*settings, crypto);
 }
 
-bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries) {
-  return ProbeLearningStore(path, entries);
+bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries,
+                            bool* migration_available) {
+  return ProbeLearningStore(path, entries, migration_available);
 }
 
 bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
@@ -1278,11 +1265,17 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
             {"exists", j::Value(snapshot.tip_path_exists)},
             {"bitness_matches", j::Value(snapshot.tip_bitness_matches)}});
 
-  AddCheck(report, "D-002", "com_registration",
-           snapshot.com_registration_matches ? Status::Ok : Status::Error,
-           snapshot.com_registration_matches ? "COM and profile registration match"
-                                             : "Required COM or profile registration is missing",
-           {{"matches", j::Value(snapshot.com_registration_matches)}});
+  const auto com_status =
+      !snapshot.com_registration_matches
+          ? Status::Error
+          : (snapshot.com_registration_optional_missing ? Status::Warning : Status::Ok);
+  AddCheck(report, "D-002", "com_registration", com_status,
+           com_status == Status::Error
+               ? "Required COM or profile registration is missing or mismatched"
+               : (com_status == Status::Warning ? "Optional COM display name is missing"
+                                                : "COM and profile registration match"),
+           {{"matches", j::Value(snapshot.com_registration_matches)},
+            {"optional_missing", j::Value(snapshot.com_registration_optional_missing)}});
 
   AddCheck(report, "D-003", "language_profile",
            snapshot.language_profile_registered ? Status::Ok : Status::Error,
@@ -1380,10 +1373,15 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
                                                      : "Runtime is in safe mode"),
            {{"state", j::Value(fallback_state)}});
 
-  AddCheck(report, "D-010", "learning_store",
-           snapshot.learning_store_valid ? Status::Ok : Status::Error,
-           snapshot.learning_store_valid ? "Learning store is readable"
-                                         : "Learning store is unreadable or corrupt",
+  const auto learning_status =
+      !snapshot.learning_store_valid
+          ? Status::Error
+          : (snapshot.learning_store_migration_available ? Status::Warning : Status::Ok);
+  AddCheck(report, "D-010", "learning_store", learning_status,
+           learning_status == Status::Error
+               ? "Learning store is unreadable or corrupt"
+               : (learning_status == Status::Warning ? "Legacy learning store can be migrated"
+                                                     : "Learning store is readable"),
            {{"entries", j::Value(snapshot.learning_entries)}});
 
   AddCheck(report, "D-011", "user_dictionary",
@@ -1492,6 +1490,9 @@ ProbeResult ProbeSystem() {
 
   host::UserDataPathInputs inputs;
   inputs.local_app_data = host::GetPlatformLocalAppData();
+  if (inputs.local_app_data) {
+    result.crashes_directory = *inputs.local_app_data / "azooKey" / "crashes";
+  }
   const auto paths = host::ResolveUserDataPaths(inputs);
   if (paths) {
     result.settings_path = paths->settings_path;
@@ -1507,7 +1508,8 @@ ProbeResult ProbeSystem() {
         !model_path.empty() && std::filesystem::exists(model_path, ec) && !ec;
     snapshot.selected_model_valid = snapshot.selected_model_exists && ValidateModel(model_path);
     snapshot.learning_store_valid =
-        ProbeLearningStore(paths->learning_path, &snapshot.learning_entries);
+        ProbeLearningStore(paths->learning_path, &snapshot.learning_entries,
+                           &snapshot.learning_store_migration_available);
     snapshot.user_dict_valid = ProbeUserDictionary(
         paths->user_dict_path, &snapshot.user_dict_entries, &snapshot.user_dict_skipped_entries);
   } else {
@@ -1692,6 +1694,73 @@ std::string RedactSettingsJson(std::string_view json) {
 
 std::string RedactFreeText(std::string text) { return core::RedactFreeText(std::move(text)); }
 
+namespace {
+
+std::string BuildCrashSummary(const std::filesystem::path& directory) {
+  std::error_code ec;
+  if (directory.empty() || !std::filesystem::exists(directory, ec)) {
+    return ec ? "Crash dump summary unavailable.\n"
+              : "No azooKey crash dump directory was found.\n";
+  }
+  if (!core::IsSafeCrashDumpDirectory(directory)) return "Crash dump summary unavailable.\n";
+
+  struct Dump {
+    std::string name;
+    uintmax_t size;
+    std::filesystem::file_time_type modified;
+  };
+  std::vector<Dump> dumps;
+  std::filesystem::directory_iterator it(directory, ec), end;
+  while (!ec && it != end) {
+    const auto path = it->path();
+    if (core::IsManagedCrashDumpFile(path)) {
+      const auto size = std::filesystem::file_size(path, ec);
+      if (ec) break;
+      const auto modified = std::filesystem::last_write_time(path, ec);
+      if (ec) break;
+      if (core::IsManagedCrashDumpFile(path)) {
+        const auto filename = path.filename().u8string();
+        dumps.push_back(
+            {std::string(reinterpret_cast<const char*>(filename.data()), filename.size()), size,
+             modified});
+      }
+    }
+    it.increment(ec);
+  }
+  if (ec) return "Crash dump summary unavailable.\n";
+  if (dumps.empty()) return "No azooKey managed crash dumps were found.\n";
+
+  std::sort(dumps.begin(), dumps.end(),
+            [](const Dump& left, const Dump& right) { return left.name < right.name; });
+  uintmax_t total_bytes = 0;
+  for (const auto& dump : dumps) {
+    if (dump.size > std::numeric_limits<uintmax_t>::max() - total_bytes) {
+      return "Crash dump summary unavailable.\n";
+    }
+    total_bytes += dump.size;
+  }
+  std::ostringstream output;
+  output << "Managed crash dumps: " << dumps.size() << "\nTotal size (bytes): " << total_bytes
+         << "\n";
+  for (const auto& dump : dumps) {
+    const auto system_time = std::chrono::system_clock::now() +
+                             std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                                 dump.modified - std::filesystem::file_time_type::clock::now());
+    const auto time = std::chrono::system_clock::to_time_t(system_time);
+    std::tm utc{};
+#ifdef _WIN32
+    if (gmtime_s(&utc, &time) != 0) return "Crash dump summary unavailable.\n";
+#else
+    if (!gmtime_r(&time, &utc)) return "Crash dump summary unavailable.\n";
+#endif
+    output << dump.name << '\t' << dump.size << '\t' << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ")
+           << '\n';
+  }
+  return output.str();
+}
+
+}  // namespace
+
 std::vector<ArchiveEntry> BuildCollectionEntries(const ProbeResult& result) {
   std::vector<ArchiveEntry> entries;
   entries.push_back({"diag.json", RedactFreeText(SerializeReport(result.report))});
@@ -1708,8 +1777,7 @@ std::vector<ArchiveEntry> BuildCollectionEntries(const ProbeResult& result) {
   entries.insert(entries.end(), std::make_move_iterator(logs.begin()),
                  std::make_move_iterator(logs.end()));
   entries.push_back({"environment.txt", EnvironmentSummary()});
-  entries.push_back({"crash-summary.txt",
-                     "Crash dump bodies are not included. No crash summary was collected.\n"});
+  entries.push_back({"crash-summary.txt", BuildCrashSummary(result.crashes_directory)});
   return entries;
 }
 

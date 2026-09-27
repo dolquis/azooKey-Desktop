@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -33,6 +35,7 @@
 #include "azookey/learning/LearningStore.h"
 #include "azookey/learning/TypoCorrectionStore.h"
 #include "azookey/learning/UserDictionary.h"
+#include "azookey/logging/RuntimeLogger.h"
 
 namespace ipc = azookey::ipc;
 
@@ -213,6 +216,34 @@ class DispatcherTest : public ::testing::Test {
   azookey::host::RequestScheduler scheduler;
   azookey::host::Dispatcher dispatcher;
 };
+
+TEST_F(DispatcherTest, QueryLatencyUsesConfiguredLogDirectory) {
+  const auto directory = std::filesystem::temp_directory_path() /
+                         ("azookey_dispatcher_query_log_" + std::to_string(std::random_device{}()));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { RemovePathNoThrow(path); }
+  } cleanup{directory};
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = directory;
+  azookey::logging::RuntimeLogger logger(options);
+  auto config = DefaultDispatcherConfig();
+  config.runtime_logger = &logger;
+  azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, config);
+
+  const auto response = target.Dispatch(MakeReq(101, ipc::MessageType::QueryCandidates, "{"));
+  ASSERT_TRUE(response.has_value());
+  std::string log_text;
+  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path());
+    log_text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(log_text.find("\"event\":\"query_latency\""), std::string::npos);
+  EXPECT_NE(log_text.find("\"request_id\":101"), std::string::npos);
+}
 
 TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingRequests) {
   constexpr auto limit = azookey::host::RequestScheduler::kMaxPendingRequestsPerClient;
@@ -1158,7 +1189,7 @@ TEST_F(DispatcherTest, RemoveUserWordSaveFailureReturnsFalseAndRollsBack) {
 
 TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {
   ipc::LoadModelRequest req;
-  req.path = "azookey_dispatcher_missing_zenzai.gguf";
+  req.path = "private-candidate-prompt.gguf";
   req.backend = "cuda";
   req.n_gpu_layers = 24;
 
@@ -1169,6 +1200,8 @@ TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {
   ASSERT_TRUE(parsed.has_value());
   EXPECT_FALSE(parsed->ok);
   EXPECT_TRUE(parsed->error.has_value());
+  EXPECT_EQ(*parsed->error, "model file probe failed");
+  EXPECT_EQ(resp->payload_json.find("private-candidate-prompt"), std::string::npos);
   EXPECT_EQ(engine.backend(), azookey::host::BackendKind::Cuda);
   EXPECT_EQ(engine.config().model_path, req.path);
   ASSERT_TRUE(engine.config().n_gpu_layers.has_value());
@@ -1183,6 +1216,12 @@ TEST_F(DispatcherTest, LoadModelAppliesRequestOptions) {
   EXPECT_EQ(health->backend, "cuda");
   EXPECT_FALSE(health->model_loaded);
   EXPECT_TRUE(health->last_error.has_value());
+  EXPECT_EQ(*health->last_error, "model file probe failed");
+  EXPECT_EQ(health_resp->payload_json.find("private-candidate-prompt"), std::string::npos);
+  const auto diagnostics =
+      dispatcher.Dispatch(MakeReq(67, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(diagnostics);
+  EXPECT_EQ(diagnostics->payload_json.find("private-candidate-prompt"), std::string::npos);
 }
 
 TEST_F(DispatcherTest, LoadModelVulkanFallbackReportsDegradedCpu) {

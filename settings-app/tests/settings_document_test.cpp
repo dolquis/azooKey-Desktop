@@ -111,12 +111,63 @@ TEST(SettingsDocumentTest, BodyLogPolicySurvivesUnrelatedSettingsSave) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsDocumentTest, CustomPredictionSurvivesUnrelatedSettingsSave) {
+  const auto dir = TestDir("azookey_settings_custom_prediction_preserve");
+  const auto path = dir / "settings.json";
+  for (const bool enabled : {false, true}) {
+    WriteText(
+        path,
+        std::string(R"({"privacy":{"mode":"custom","custom":{"learning":false,"prediction":)") +
+            (enabled ? "true" : "false") + R"(,"aiCandidate":true}},"predictionEnabled":false})");
+    auto loaded = azookey::settings::LoadSettingsDocument(path);
+    ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
+    EXPECT_TRUE(loaded.warnings.empty());
+    loaded.settings.log_level = "warn";
+    const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+    ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+    EXPECT_TRUE(saved.warnings.empty());
+
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed && parsed->IsObject());
+    const auto* privacy = parsed->Find("privacy");
+    ASSERT_NE(privacy, nullptr);
+    EXPECT_EQ(privacy->GetString("mode"), "custom");
+    const auto* custom = privacy->Find("custom");
+    ASSERT_NE(custom, nullptr);
+    EXPECT_EQ(custom->GetBool("prediction"), enabled);
+    EXPECT_EQ(custom->GetBool("learning"), false);
+    EXPECT_EQ(parsed->GetBool("predictionEnabled"), false);
+  }
+  std::filesystem::remove_all(dir);
+}
+
+TEST(SettingsDocumentTest, MissingCustomPredictionRemainsAbsentOnUnrelatedSave) {
+  const auto dir = TestDir("azookey_settings_custom_prediction_missing");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({"privacy":{"mode":"custom","custom":{"learning":false}}})");
+  const auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
+  EXPECT_TRUE(loaded.warnings.empty());
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* privacy = parsed->Find("privacy");
+  ASSERT_NE(privacy, nullptr);
+  const auto* custom = privacy->Find("custom");
+  ASSERT_NE(custom, nullptr);
+  EXPECT_EQ(custom->Find("prediction"), nullptr);
+  EXPECT_EQ(custom->GetBool("learning"), false);
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, MalformedBodyLogPolicyRestrictsPrivacyOnSave) {
   const auto dir = TestDir("azookey_settings_body_log_invalid");
   const auto path = dir / "settings.json";
   for (const auto* text : {R"({"privacy":{"redactLogs":"false"}})",
                            R"({"privacy":{"redactLogs":false,"custom":{"detailedLogging":1}}})",
-                           R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})"}) {
+                           R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})",
+                           R"({"privacy":{"mode":"custom","custom":{"prediction":"false"}}})"}) {
     WriteText(path, text);
     const auto loaded = azookey::settings::LoadSettingsDocument(path);
     EXPECT_FALSE(loaded.warnings.empty());

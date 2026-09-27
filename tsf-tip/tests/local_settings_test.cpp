@@ -79,6 +79,49 @@ TEST_F(LocalSettingsTest, PredictionDefaultsOnAndReloads) {
   ASSERT_TRUE(WaitUntil([&] { return reader.PredictionEnabledSnapshot(); }));
 }
 
+TEST_F(LocalSettingsTest, CustomPredictionPermissionDefaultsOnAndReloadsIndependentlyOfUiSwitch) {
+  Write(R"({"predictionEnabled":false,"privacy":{"mode":"custom","custom":{}}})");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_FALSE(reader.PredictionEnabledSnapshot());
+  EXPECT_TRUE(reader.AiSnapshot().prediction_allowed);
+
+  Write(R"({"predictionEnabled":false,"privacy":{"mode":"custom","custom":{"prediction":false}}})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().prediction_allowed; }));
+  EXPECT_FALSE(reader.PredictionEnabledSnapshot());
+
+  Write(R"({"predictionEnabled":true,"privacy":{"mode":"custom","custom":{"prediction":true}}})");
+  ASSERT_TRUE(WaitUntil([&] {
+    return reader.PredictionEnabledSnapshot() && reader.AiSnapshot().prediction_allowed;
+  }));
+
+  Write(R"({"privacy":{"mode":"custom","custom":{"prediction":false}}})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().prediction_allowed; }));
+  Write(R"({"privacy":{"mode":"custom"}})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().prediction_allowed; }));
+}
+
+TEST_F(LocalSettingsTest, InvalidCustomPredictionFailsClosedAndMissingFileRestoresDefault) {
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_TRUE(reader.AiSnapshot().prediction_allowed);
+  for (const auto* json : {
+           R"({"privacy":{"mode":"custom","custom":{"prediction":"false"}}})",
+           R"({"privacy":{"mode":"custom","custom":{"prediction":0}}})",
+           R"({"privacy":{"mode":"custom","custom":null}})",
+           R"({"privacy":{"mode":"secure","custom":{"prediction":true}}})",
+           "{",
+       }) {
+    SCOPED_TRACE(json);
+    reader.Stop();
+    Write(json);
+    ASSERT_TRUE(reader.Start(path));
+    EXPECT_FALSE(reader.AiSnapshot().prediction_allowed);
+  }
+  reader.Stop();
+  ASSERT_TRUE(std::filesystem::remove(path));
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_TRUE(reader.AiSnapshot().prediction_allowed);
+}
+
 TEST_F(LocalSettingsTest, CustomRomajiLoadsReloadsAndFallsBackWhenMissing) {
   const auto table_path = root / L"custom-romaji.tsv";
   auto write_table = [&](const std::string& contents) {

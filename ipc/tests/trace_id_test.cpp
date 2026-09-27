@@ -13,23 +13,11 @@
 namespace azookey::ipc {
 namespace {
 
-bool IsUuidV7(const std::string& id) {
-  if (id.size() != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' ||
-      id[14] != '7' || (id[19] != '8' && id[19] != '9' && id[19] != 'a' && id[19] != 'b')) {
-    return false;
-  }
-  for (std::size_t i = 0; i < id.size(); ++i) {
-    if (i == 8 || i == 13 || i == 18 || i == 23) continue;
-    if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return false;
-  }
-  return true;
-}
-
 TEST(TraceIdTest, ConsecutiveIdsAreValidUniqueAndOrdered) {
   std::string previous;
   for (int i = 0; i < 10000; ++i) {
     const auto id = GenerateTraceId();
-    ASSERT_TRUE(IsUuidV7(id)) << id;
+    ASSERT_TRUE(IsValidTraceId(id)) << id;
     if (!previous.empty()) EXPECT_LT(previous, id);
     previous = id;
   }
@@ -54,7 +42,7 @@ TEST(TraceIdTest, ConcurrentIdsAreUnique) {
   for (auto& thread : threads) thread.join();
 
   ASSERT_EQ(ids.size(), kThreads * kIdsPerThread);
-  for (const auto& id : ids) EXPECT_TRUE(IsUuidV7(id));
+  for (const auto& id : ids) EXPECT_TRUE(IsValidTraceId(id));
   std::sort(ids.begin(), ids.end());
   EXPECT_EQ(std::unique(ids.begin(), ids.end()), ids.end());
 }
@@ -70,6 +58,20 @@ TEST(TraceIdTest, ExistingEnvelopePreservesGeneratedTraceId) {
   const auto decoded = Deserialize(*wire);
   ASSERT_TRUE(decoded);
   EXPECT_EQ(decoded->trace_id, request.trace_id);
+}
+
+TEST(TraceIdTest, RejectsNonUuidV7ValuesBeforeLogging) {
+  constexpr std::string_view valid = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  EXPECT_TRUE(IsValidTraceId(valid));
+  EXPECT_TRUE(IsValidTraceId("018FD2C2-2A3E-7C9A-B8E1-7F3A92D4C5E2"));
+  EXPECT_FALSE(IsValidTraceId(""));
+  EXPECT_FALSE(IsValidTraceId("user input"));
+  EXPECT_FALSE(IsValidTraceId(std::string(1024, 'a')));
+  EXPECT_FALSE(IsValidTraceId("018fd2c2-2a3e-4c9a-b8e1-7f3a92d4c5e2"));
+  EXPECT_FALSE(IsValidTraceId("018fd2c2-2a3e-7c9a-c8e1-7f3a92d4c5e2"));
+  EXPECT_FALSE(IsValidTraceId("018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5eg"));
+  EXPECT_FALSE(IsValidTraceId("018fd2c22a3e-7c9a-b8e1-7f3a92d4c5e2"));
+  EXPECT_FALSE(IsValidTraceId(std::string(valid) + "\ninput"));
 }
 
 }  // namespace

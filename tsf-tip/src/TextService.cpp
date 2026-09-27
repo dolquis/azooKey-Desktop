@@ -134,6 +134,19 @@ void TracePhase(const std::string& trace_id, azookey::logging::Phase phase,
   }
 }
 
+void TraceKeyDown(const std::string& trace_id) noexcept {
+  try {
+    if (!TipRuntimeLogger().enabled() || trace_id.empty()) return;
+    RuntimeLog(
+        azookey::logging::RuntimeLogLevel::Info, "trace_phase",
+        {{"trace_id", SafeLogText(trace_id)},
+         {"phase",
+          SafeLogText(std::string(azookey::logging::PhaseName(azookey::logging::Phase::KeyDown)))},
+         {"t_ms", 0.0}});
+  } catch (...) {
+  }
+}
+
 class ScopedTracePhase {
  public:
   ScopedTracePhase(const std::string& trace_id, azookey::logging::Phase phase)
@@ -1703,7 +1716,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
   active_key_trace_active_ = true;
   active_key_trace_id_ = NewTraceIdNoThrow();
   active_key_trace_start_ = std::chrono::steady_clock::now();
-  TracePhase(active_key_trace_id_, logging::Phase::KeyDown, 0.0);
+  TraceKeyDown(active_key_trace_id_);
   const bool bracket_claimed =
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
@@ -4147,10 +4160,8 @@ void TextService::ServeConnection() {
             std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
             if (IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, req_id) &&
                 ipc_pending_trace_id_ == trace_id) {
-              live_conversion_result_ = LiveConversionResult{req_id, reading, payload->surface};
-              candidates_trace_id_ = trace_id;
-              candidates_trace_start_ = trace_start;
-              candidates_trace_pending_ = true;
+              live_conversion_result_ =
+                  LiveConversionResult{req_id, reading, payload->surface, trace_id, trace_start};
               notify_ui = true;
             }
           }
@@ -4219,8 +4230,8 @@ void TextService::ServeConnection() {
         candidates_trace_start_ = trace_start;
         candidates_trace_pending_ = true;
         if (apply_live_preview && !candidate_window_show_pending_ && !candidates_.empty()) {
-          live_conversion_result_ =
-              LiveConversionResult{req_id, reading, candidates_.front().field.surface};
+          live_conversion_result_ = LiveConversionResult{
+              req_id, reading, candidates_.front().field.surface, trace_id, trace_start};
         }
         cached_batch_segments_.clear();
         if (candidate_window_show_pending_) {
@@ -5326,16 +5337,30 @@ void TextService::ApplyLiveConversionResult() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, result->request_id)) return;
   }
+  const auto ui_start = TipRuntimeLogger().enabled() && !result->trace_id.empty()
+                            ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
   const std::string previous_marked = core_marked_surface_;
   const std::string previous_reading = live_display_reading_;
   const std::string previous_surface = live_display_surface_;
   live_display_reading_ = result->reading;
   live_display_surface_ = result->surface;
   if (core_input_active_) core_marked_surface_ = result->surface;
-  if (RequestPreeditUpdate(active_context_) == E_OUTOFMEMORY) {
+  const HRESULT update_hr = RequestPreeditUpdate(active_context_);
+  if (update_hr == E_OUTOFMEMORY) {
     core_marked_surface_ = previous_marked;
     live_display_reading_ = previous_reading;
     live_display_surface_ = previous_surface;
+    return;
+  }
+  if (SUCCEEDED(update_hr) && ui_start != std::chrono::steady_clock::time_point{}) {
+    const auto ui_end = std::chrono::steady_clock::now();
+    TracePhase(result->trace_id, logging::Phase::UiApply,
+               std::chrono::duration<double, std::milli>(ui_end - ui_start).count());
+    if (result->trace_start != std::chrono::steady_clock::time_point{}) {
+      TracePhase(result->trace_id, logging::Phase::Total,
+                 std::chrono::duration<double, std::milli>(ui_end - result->trace_start).count());
+    }
   }
 }
 

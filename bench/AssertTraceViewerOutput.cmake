@@ -13,6 +13,7 @@ file(WRITE "${TRACE_PATH}"
   "{\"trace_id\":\"x\",\"phase\":\"total\",\"latency_ms\":-1}\n"
   "{\"trace_id\":\"x\",\"phase\":\"total\",\"latency_ms\":\"11\"}\n"
   "{\"trace_id\":\"x\",\"phase\":\"key_down\",\"t_ms\":0}\n"
+  "{\"trace_id\":\"x\",\"phase\":\"key_down\",\"latency_ms\":0}\n"
   "\n")
 
 execute_process(COMMAND "${VIEWER_EXE}" "${TRACE_PATH}" --summary --json
@@ -29,9 +30,10 @@ string(JSON total_p95 GET "${json_output}" phases total p95_ms)
 string(JSON total_p99 GET "${json_output}" phases total p99_ms)
 string(JSON model_n GET "${json_output}" phases model_inference samples)
 string(JSON model_p50 GET "${json_output}" phases model_inference p50_ms)
-if(NOT version EQUAL 1 OR NOT samples EQUAL 5 OR NOT skipped EQUAL 6 OR
+if(NOT version EQUAL 1 OR NOT samples EQUAL 5 OR NOT skipped EQUAL 7 OR
    NOT total_n EQUAL 5 OR NOT total_p50 EQUAL 3 OR NOT total_p95 EQUAL 4 OR
-   NOT total_p99 EQUAL 4 OR NOT model_n EQUAL 3 OR NOT model_p50 EQUAL 20)
+   NOT total_p99 EQUAL 4 OR NOT model_n EQUAL 3 OR NOT model_p50 EQUAL 20 OR
+   json_output MATCHES "\"key_down\"")
   message(FATAL_ERROR "unexpected trace viewer JSON: ${json_output}")
 endif()
 if(NOT json_error MATCHES "trace line 9 skipped: invalid JSON object" OR
@@ -43,7 +45,7 @@ endif()
 execute_process(COMMAND "${VIEWER_EXE}" "${TRACE_PATH}" --summary
   RESULT_VARIABLE text_result OUTPUT_VARIABLE text_output ERROR_VARIABLE text_error)
 if(NOT text_result EQUAL 0 OR
-   NOT text_output MATCHES "QueryCandidates latency summary \\(N=5, skipped=6\\)" OR
+   NOT text_output MATCHES "QueryCandidates latency summary \\(N=5, skipped=7\\)" OR
    NOT text_output MATCHES "total \\(N=5\\): p50=3 ms p95=4 ms p99=4 ms")
   message(FATAL_ERROR "unexpected trace viewer summary: ${text_output} ${text_error}")
 endif()

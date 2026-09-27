@@ -14,6 +14,7 @@
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
 #include "azookey/logging/Phase.h"
@@ -31,7 +32,8 @@ constexpr size_t kPredictionDisplayLimit = 5;
 void LogTracePhase(logging::RuntimeLogger* logger, const InferenceTelemetry* telemetry,
                    logging::Phase phase, std::chrono::steady_clock::time_point start,
                    std::string_view result, std::string_view backend = {}, bool neural = false) {
-  if (!logger || !logger->enabled() || !telemetry || telemetry->trace_id.empty()) return;
+  if (!logger || !logger->enabled() || !telemetry || !ipc::IsValidTraceId(telemetry->trace_id))
+    return;
   const double latency_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   if (neural) {
@@ -863,7 +865,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   const auto convert = [&](const std::shared_ptr<core::IConverter>& target, bool model,
                            std::optional<std::chrono::steady_clock::time_point> deadline) {
     const auto start = std::chrono::steady_clock::now();
-    const auto emit = [&](core::EtwResult result) {
+    const auto emit = [&](core::EtwResult result, bool log_runtime = true) {
       if (telemetry) {
         core::EtwLogger::LogInferencePhase(
             telemetry->request_id, core::EtwPhase::Converter,
@@ -872,11 +874,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                 .count(),
             result, telemetry->client);
       }
-      LogTracePhase(runtime_logger_, telemetry, logging::Phase::ModelInference, start,
-                    result == core::EtwResult::Success     ? "ok"
-                    : result == core::EtwResult::Cancelled ? "cancelled"
-                                                           : "error",
-                    model ? TraceBackend(config.backend) : "cpu", model);
+      if (log_runtime)
+        LogTracePhase(runtime_logger_, telemetry, logging::Phase::ModelInference, start,
+                      result == core::EtwResult::Success     ? "ok"
+                      : result == core::EtwResult::Cancelled ? "cancelled"
+                                                             : "error",
+                      model ? TraceBackend(config.backend) : "cpu", model);
     };
     try {
       auto values = target->Convert(kana, BuildContext(kana, limited_context, cancel, deadline,
@@ -895,7 +898,11 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       emit(result);
       return values;
     } catch (...) {
-      emit(canceled() ? core::EtwResult::Cancelled : core::EtwResult::Failed);
+      // A model exception followed by SimpleConverter fallback is one logical
+      // inference sample. ETW still records the failed model attempt.
+      const bool was_canceled = canceled();
+      emit(was_canceled ? core::EtwResult::Cancelled : core::EtwResult::Failed,
+           !model || !fallback_converter || was_canceled);
       throw;
     }
   };
@@ -943,8 +950,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   if (canceled()) return {};
 
   // The disabled/live path has no evaluation, allocation or additional logging.
-  const bool trace_rerank =
-      runtime_logger_ && runtime_logger_->enabled() && telemetry && !telemetry->trace_id.empty();
+  const bool trace_rerank = runtime_logger_ && runtime_logger_->enabled() && telemetry &&
+                            ipc::IsValidTraceId(telemetry->trace_id);
   const auto rerank_start =
       trace_rerank ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
   if (config.nll.enabled && !live) {
@@ -1065,8 +1072,8 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(
     neural = model_converter_ && converter == model_converter_;
   }
   std::vector<core::Candidate> candidates;
-  const bool tracing =
-      runtime_logger_ && runtime_logger_->enabled() && telemetry && !telemetry->trace_id.empty();
+  const bool tracing = runtime_logger_ && runtime_logger_->enabled() && telemetry &&
+                       ipc::IsValidTraceId(telemetry->trace_id);
   const auto inference_start =
       tracing ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
   {

@@ -116,4 +116,24 @@ std::string GenerateTraceId() {
   return FormatUuid(state.timestamp_ms, state.random_a, state.random_b);
 }
 
+bool IsValidTraceId(std::string_view trace_id) noexcept {
+  if (trace_id.size() != 36 || trace_id[8] != '-' || trace_id[13] != '-' || trace_id[18] != '-' ||
+      trace_id[23] != '-' || trace_id[14] != '7') {
+    return false;
+  }
+  const auto variant = trace_id[19];
+  if (variant != '8' && variant != '9' && variant != 'a' && variant != 'A' && variant != 'b' &&
+      variant != 'B') {
+    return false;
+  }
+  for (std::size_t i = 0; i < trace_id.size(); ++i) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+    const char ch = trace_id[i];
+    if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace azookey::ipc

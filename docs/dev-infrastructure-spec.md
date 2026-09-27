@@ -1543,6 +1543,9 @@ backend 選択、query latency、error、exception summary、learning/user-dict
   - 非キー（lifecycle / settings）IPC — `Handshake` / `Ping` / `LoadModel` /
     `QueryDiagnostics`（§12.6）等は、その発行側
     （TIP / 設定アプリ）が操作開始時に UUIDv7 を採番する。単発操作は 1 envelope = 1 `trace_id`。
+- 受信側は既存 client との互換性のため、文字列だが UUIDv7 形式ではない `trace_id` も
+  envelope として受け付け、応答に echo する。ただしその値を phase ログに記録せず、
+  当該要求の phase 計測を行わない。発行側の UUIDv7 必須条件は緩めない。
 - `request_id` は **すべて TIP（client）側で採番**し、Host は応答で echo するのみ。
   TIP には 2 系統の allocator があり、実装はこの分担を維持する（新たに統合しない）:
   - `ipc_pending_id_`（TIP メンバ）— `QueryCandidates` の応答相関と staleness 判定
@@ -1735,9 +1738,9 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 値の **追加は後方互換（patch）**、**削除 / 改名は破壊的変更（major）** とする
 （読み手は未知 phase を無視。集計ツールは wire 名に依存するため改名不可）。
 
-各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。所要時間は
-`latency_ms`（正典名）に入れ、`key_down` 等の絶対オフセット（key_down=0 起点）が
-必要なときのみ任意で `t_ms` を併記する。
+各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。`key_down` は
+`t_ms:0` の起点行とし、所要時間サンプルに含めない。ほかの phase の所要時間は
+`latency_ms`（正典名）に入れ、絶対オフセットが必要なときのみ任意で `t_ms` を併記する。
 `model_inference` 行には `backend` を付与し、ニューラルモデル経路では
 `engine` も付与する。SimpleConverter fallback は `backend="cpu"` とし、
 ニューラルエンジンを実行していないため `engine` を省く
@@ -1749,6 +1752,10 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 - R2(`winml`) 時のみ `ep`（選択 EP 名。例 `QNNExecutionProvider`）と `ep_state`
   （`NotPresent` / `NotReady` / `Ready` / `Registered` / `Failed`、§4.6）。EP 取得・登録
   失敗をトレースで切り分け可能にする。
+
+モデル推論が例外で失敗して SimpleConverter に fallback した場合、JSONL の
+`model_inference` は fallback の所要時間を 1 件だけ記録する。失敗したモデル試行は
+同じ論理操作の集計サンプルに重ねず、ETW の失敗結果で診断する。
 
 ```json
 {"ts":"2026-05-27T10:00:00.000Z","trace_id":"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}

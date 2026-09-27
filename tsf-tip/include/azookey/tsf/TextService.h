@@ -566,6 +566,8 @@ class TextService final : public ITfTextInputProcessorEx,
     uint64_t request_id;
     std::string reading;
     std::string surface;
+    std::string trace_id;
+    std::chrono::steady_clock::time_point trace_start{};
   };
   std::optional<LiveConversionResult> live_conversion_result_;  // candidates_mtx_
   struct PredictionResult {

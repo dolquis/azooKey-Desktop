@@ -171,7 +171,30 @@ bool IsBodyField(std::string_view key) {
   return std::find(fields.begin(), fields.end(), lower) != fields.end();
 }
 
+bool IsUuidV7TraceId(std::string_view value) {
+  if (value.size() != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' ||
+      value[23] != '-' || value[14] != '7')
+    return false;
+  const auto variant = static_cast<unsigned char>(value[19]);
+  if (variant != '8' && variant != '9' && variant != 'a' && variant != 'b' && variant != 'A' &&
+      variant != 'B')
+    return false;
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+    const auto ch = static_cast<unsigned char>(value[i]);
+    if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')))
+      return false;
+  }
+  return true;
+}
+
 std::string SerializeFieldValue(const RuntimeLogField& field, bool allow_body) {
+  // trace_id is supplied by IPC clients. Never serialize arbitrary client text
+  // through this metadata field, even when detailed body logging is opted in.
+  if (field.key == "trace_id") {
+    const auto* text = std::get_if<RuntimeLogSafeText>(&field.value);
+    if (!text || !IsUuidV7TraceId(text->value)) return "\"***redacted***\"";
+  }
   return std::visit(
       [&field, allow_body](const auto& value) -> std::string {
         using T = std::decay_t<decltype(value)>;

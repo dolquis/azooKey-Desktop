@@ -23,6 +23,7 @@
 #include "azookey/core/CrashReporting.h"
 #include "azookey/core/EtwLogger.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/logging/Phase.h"
 
 namespace azookey::host {
@@ -179,7 +180,7 @@ class RequestCompletionGuard {
 void LogHostQueueWait(logging::RuntimeLogger* logger, const ipc::Envelope& req,
                       std::optional<std::chrono::steady_clock::time_point> start,
                       std::string_view result) {
-  if (!start) return;
+  if (!start || !ipc::IsValidTraceId(req.trace_id)) return;
   // RequestScheduler has no work queue. This measures admission, including any
   // wait on its mutex, rather than claiming time spent before transport dispatch.
   logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
@@ -550,9 +551,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     res.partial = false;
     return MakeResponse(req, ipc::BuildQueryCandidatesResponse(res));
   }
-  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
-                               ? std::optional{std::chrono::steady_clock::now()}
-                               : std::nullopt;
+  const auto queue_start =
+      runtime_logger_ && runtime_logger_->enabled() && ipc::IsValidTraceId(req.trace_id)
+          ? std::optional{std::chrono::steady_clock::now()}
+          : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
     LogHostQueueWait(runtime_logger_, req, queue_start, "error");
@@ -645,9 +647,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryLiveConversion(const ipc::En
     return MakeResponse(req, ipc::BuildQueryLiveConversionResponse(response));
   }
 
-  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
-                               ? std::optional{std::chrono::steady_clock::now()}
-                               : std::nullopt;
+  const auto queue_start =
+      runtime_logger_ && runtime_logger_->enabled() && ipc::IsValidTraceId(req.trace_id)
+          ? std::optional{std::chrono::steady_clock::now()}
+          : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
     LogHostQueueWait(runtime_logger_, req, queue_start, "error");
@@ -696,9 +699,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryPredictions(const ipc::Envel
     return MakeResponse(req, ipc::BuildQueryPredictionsResponse(response));
   }
 
-  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
-                               ? std::optional{std::chrono::steady_clock::now()}
-                               : std::nullopt;
+  const auto queue_start =
+      runtime_logger_ && runtime_logger_->enabled() && ipc::IsValidTraceId(req.trace_id)
+          ? std::optional{std::chrono::steady_clock::now()}
+          : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
     LogHostQueueWait(runtime_logger_, req, queue_start, "error");
@@ -829,9 +833,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryBatchConversion(const ipc::E
     return MakeResponse(req, ipc::BuildQueryBatchConversionResponse(res));
   }
 
-  const auto queue_start = runtime_logger_ && runtime_logger_->enabled() && !req.trace_id.empty()
-                               ? std::optional{std::chrono::steady_clock::now()}
-                               : std::nullopt;
+  const auto queue_start =
+      runtime_logger_ && runtime_logger_->enabled() && ipc::IsValidTraceId(req.trace_id)
+          ? std::optional{std::chrono::steady_clock::now()}
+          : std::nullopt;
   auto cancel = scheduler_->TrackCancellation(client_id_, req.request_id);
   if (!cancel) {
     LogHostQueueWait(runtime_logger_, req, queue_start, "error");

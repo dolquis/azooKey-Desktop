@@ -18,6 +18,7 @@
 #include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/logging/Phase.h"
 #include "azookey/logging/RuntimeLogger.h"
 
@@ -762,7 +763,7 @@ std::optional<Envelope> ReadFramedEnvelope(HANDLE pipe, FrameIo& io, double* rea
 
 void LogTransportPhase(logging::RuntimeLogger* logger, const Envelope& envelope,
                        logging::Phase phase, double latency_ms) noexcept {
-  if (!logger || !logger->enabled() || envelope.trace_id.empty()) return;
+  if (!logger || !logger->enabled() || !IsValidTraceId(envelope.trace_id)) return;
   try {
     logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
                 {{"trace_id", logging::RuntimeLogSafeText(envelope.trace_id)},

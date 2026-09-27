@@ -14,8 +14,10 @@
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
+#include "azookey/logging/Phase.h"
 
 namespace azookey::host {
 
@@ -26,6 +28,52 @@ constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary
 constexpr const char* kUserDictionarySaveError = "failed to save user dictionary";
 constexpr auto kModelConversionBudget = std::chrono::milliseconds(600);
 constexpr size_t kPredictionDisplayLimit = 5;
+
+void LogTracePhase(logging::RuntimeLogger* logger, const InferenceTelemetry* telemetry,
+                   logging::Phase phase, std::chrono::steady_clock::time_point start,
+                   std::string_view result, std::string_view backend = {}, bool neural = false) {
+  if (!logger || !logger->enabled() || !telemetry || !ipc::IsValidTraceId(telemetry->trace_id))
+    return;
+  const double latency_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  if (neural) {
+    logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
+                {{"trace_id", logging::RuntimeLogSafeText(std::string(telemetry->trace_id))},
+                 {"request_id", telemetry->request_id},
+                 {"phase", logging::RuntimeLogSafeText(std::string(logging::PhaseName(phase)))},
+                 {"latency_ms", latency_ms},
+                 {"result", logging::RuntimeLogSafeText(std::string(result))},
+                 {"engine", logging::RuntimeLogSafeText("llama_cpp")},
+                 {"backend", logging::RuntimeLogSafeText(std::string(backend))}});
+  } else if (backend.empty()) {
+    logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
+                {{"trace_id", logging::RuntimeLogSafeText(std::string(telemetry->trace_id))},
+                 {"request_id", telemetry->request_id},
+                 {"phase", logging::RuntimeLogSafeText(std::string(logging::PhaseName(phase)))},
+                 {"latency_ms", latency_ms},
+                 {"result", logging::RuntimeLogSafeText(std::string(result))}});
+  } else {
+    logger->Log(logging::RuntimeLogLevel::Info, "trace_phase",
+                {{"trace_id", logging::RuntimeLogSafeText(std::string(telemetry->trace_id))},
+                 {"request_id", telemetry->request_id},
+                 {"phase", logging::RuntimeLogSafeText(std::string(logging::PhaseName(phase)))},
+                 {"latency_ms", latency_ms},
+                 {"result", logging::RuntimeLogSafeText(std::string(result))},
+                 {"backend", logging::RuntimeLogSafeText(std::string(backend))}});
+  }
+}
+
+std::string_view TraceBackend(BackendKind backend) {
+  switch (backend) {
+    case BackendKind::Cpu:
+      return "cpu";
+    case BackendKind::Cuda:
+      return "cuda";
+    case BackendKind::Vulkan:
+      return "vulkan";
+  }
+  return "cpu";
+}
 // Depth of the applied-observation ring (DEV-554). One engine is shared by every
 // connection, so the ring has to cover the resend backlogs of all TIP instances
 // at once, not just one: after a Host restart several TIPs replay in parallel,
@@ -817,7 +865,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   const auto convert = [&](const std::shared_ptr<core::IConverter>& target, bool model,
                            std::optional<std::chrono::steady_clock::time_point> deadline) {
     const auto start = std::chrono::steady_clock::now();
-    const auto emit = [&](core::EtwResult result) {
+    const auto emit = [&](core::EtwResult result, bool log_runtime = true) {
       if (telemetry) {
         core::EtwLogger::LogInferencePhase(
             telemetry->request_id, core::EtwPhase::Converter,
@@ -826,6 +874,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
                 .count(),
             result, telemetry->client);
       }
+      if (log_runtime)
+        LogTracePhase(runtime_logger_, telemetry, logging::Phase::ModelInference, start,
+                      result == core::EtwResult::Success     ? "ok"
+                      : result == core::EtwResult::Cancelled ? "cancelled"
+                                                             : "error",
+                      model ? TraceBackend(config.backend) : "cpu", model);
     };
     try {
       auto values = target->Convert(kana, BuildContext(kana, limited_context, cancel, deadline,
@@ -844,7 +898,11 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       emit(result);
       return values;
     } catch (...) {
-      emit(canceled() ? core::EtwResult::Cancelled : core::EtwResult::Failed);
+      // A model exception followed by SimpleConverter fallback is one logical
+      // inference sample. ETW still records the failed model attempt.
+      const bool was_canceled = canceled();
+      emit(was_canceled ? core::EtwResult::Cancelled : core::EtwResult::Failed,
+           !model || !fallback_converter || was_canceled);
       throw;
     }
   };
@@ -892,6 +950,10 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   if (canceled()) return {};
 
   // The disabled/live path has no evaluation, allocation or additional logging.
+  const bool trace_rerank = runtime_logger_ && runtime_logger_->enabled() && telemetry &&
+                            ipc::IsValidTraceId(telemetry->trace_id);
+  const auto rerank_start =
+      trace_rerank ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
   if (config.nll.enabled && !live) {
     NllOutcome outcome;
     auto* zenzai = dynamic_cast<ZenzaiModelConverter*>(converter.get());
@@ -913,7 +975,12 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
               })));
     }
     converter_lock.unlock();
-    if (canceled()) return {};
+    if (canceled()) {
+      if (rerank_start)
+        LogTracePhase(runtime_logger_, telemetry, logging::Phase::Rerank, *rerank_start,
+                      "cancelled");
+      return {};
+    }
     if (runtime_logger_ && !outcome.reason.empty()) {
       runtime_logger_->Log(logging::RuntimeLogLevel::Info, "nll_rerank",
                            {{"reason", logging::RuntimeLogSafeText(outcome.reason)},
@@ -929,6 +996,8 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
     std::lock_guard<std::mutex> lock(state_mutex_);
     result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
   }
+  if (rerank_start)
+    LogTracePhase(runtime_logger_, telemetry, logging::Phase::Rerank, *rerank_start, "ok");
 
   // M35 suggest: convert the corrected reading too and put its best candidate at
   // the front, marked, while the candidates for what the user actually typed
@@ -988,22 +1057,35 @@ std::string InferenceEngine::ReverseConvert(const std::string& surface, uint64_t
   return entry ? entry->normalized_reading : std::string{};
 }
 
-std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
-                                                               const std::string& context,
-                                                               uint64_t now_epoch_sec) {
+std::vector<core::Candidate> InferenceEngine::QueryPredictions(
+    const std::string& kana, const std::string& context, uint64_t now_epoch_sec,
+    const InferenceTelemetry* telemetry) {
   std::shared_ptr<core::IConverter> converter;
   uint32_t max_context_length = 0;
+  BackendKind backend = BackendKind::Cpu;
+  bool neural = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     converter = active_converter_;
     max_context_length = config_.max_context_length;
+    backend = config_.backend;
+    neural = model_converter_ && converter == model_converter_;
   }
   std::vector<core::Candidate> candidates;
+  const bool tracing = runtime_logger_ && runtime_logger_->enabled() && telemetry &&
+                       ipc::IsValidTraceId(telemetry->trace_id);
+  const auto inference_start =
+      tracing ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
   {
     std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
     candidates = converter->PredictNext(
         kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length)));
   }
+  if (inference_start)
+    LogTracePhase(runtime_logger_, telemetry, logging::Phase::ModelInference, *inference_start,
+                  "ok", neural ? TraceBackend(backend) : "cpu", neural);
+  const auto rerank_start =
+      tracing ? std::optional{std::chrono::steady_clock::now()} : std::nullopt;
   std::lock_guard<std::mutex> lock(state_mutex_);
   RefreshDictionaryLocked();
   auto dictionary_predictions =
@@ -1012,6 +1094,8 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
   dictionary_predictions =
       ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec);
   candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
+  if (rerank_start)
+    LogTracePhase(runtime_logger_, telemetry, logging::Phase::Rerank, *rerank_start, "ok");
 
   std::vector<core::Candidate> merged;
   merged.reserve(kPredictionDisplayLimit);

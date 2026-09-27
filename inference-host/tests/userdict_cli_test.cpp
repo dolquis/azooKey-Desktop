@@ -233,10 +233,15 @@ TEST(UserDictCliTest, PrefersRunningHostOverDirectEdit) {
   std::mutex mutex;
   std::optional<azookey::ipc::AddUserWordRequest> add_seen;
   std::optional<azookey::ipc::RemoveUserWordRequest> remove_seen;
+  std::vector<std::string> seen_trace_ids;
 
   azookey::ipc::NamedPipeServer server;
   const bool started = server.Start(
       pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          seen_trace_ids.push_back(req.trace_id);
+        }
         azookey::ipc::Envelope res;
         res.version = req.version;
         res.request_id = req.request_id;
@@ -304,6 +309,13 @@ TEST(UserDictCliTest, PrefersRunningHostOverDirectEdit) {
   ASSERT_TRUE(add_json.has_value());
   EXPECT_TRUE(add_json->GetBool("ok").value_or(false));
   EXPECT_EQ(add_json->GetString("via"), "ipc");
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(seen_trace_ids.size(), 2u);
+    EXPECT_EQ(seen_trace_ids[0], seen_trace_ids[1]);
+    EXPECT_EQ(seen_trace_ids[0].size(), 36u);
+    EXPECT_NE(seen_trace_ids[0], "userdict-cli");
+  }
 
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -326,6 +338,12 @@ TEST(UserDictCliTest, PrefersRunningHostOverDirectEdit) {
   ASSERT_TRUE(remove_json.has_value());
   EXPECT_TRUE(remove_json->GetBool("ok").value_or(false));
   EXPECT_EQ(remove_json->GetString("via"), "ipc");
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(seen_trace_ids.size(), 4u);
+    EXPECT_EQ(seen_trace_ids[2], seen_trace_ids[3]);
+    EXPECT_NE(seen_trace_ids[0], seen_trace_ids[2]);
+  }
 
   {
     std::lock_guard<std::mutex> lock(mutex);

@@ -46,6 +46,9 @@ struct RuntimeLoggerOptions {
   bool body_opt_in{false};
   std::string component;
   std::filesystem::path logs_directory;
+  // Optional explicit JSONL destination, primarily for opt-in benchmark traces.
+  // Empty keeps the component/date filename under logs_directory.
+  std::filesystem::path output_path;
   RuntimeLogLevel minimum_level{RuntimeLogLevel::Info};
   uintmax_t max_file_bytes{5 * 1024 * 1024};
   size_t max_generations{3};

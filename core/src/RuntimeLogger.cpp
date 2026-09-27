@@ -171,7 +171,30 @@ bool IsBodyField(std::string_view key) {
   return std::find(fields.begin(), fields.end(), lower) != fields.end();
 }
 
+bool IsUuidV7TraceId(std::string_view value) {
+  if (value.size() != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' ||
+      value[23] != '-' || value[14] != '7')
+    return false;
+  const auto variant = static_cast<unsigned char>(value[19]);
+  if (variant != '8' && variant != '9' && variant != 'a' && variant != 'b' && variant != 'A' &&
+      variant != 'B')
+    return false;
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+    const auto ch = static_cast<unsigned char>(value[i]);
+    if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')))
+      return false;
+  }
+  return true;
+}
+
 std::string SerializeFieldValue(const RuntimeLogField& field, bool allow_body) {
+  // trace_id is supplied by IPC clients. Never serialize arbitrary client text
+  // through this metadata field, even when detailed body logging is opted in.
+  if (field.key == "trace_id") {
+    const auto* text = std::get_if<RuntimeLogSafeText>(&field.value);
+    if (!text || !IsUuidV7TraceId(text->value)) return "\"***redacted***\"";
+  }
   return std::visit(
       [&field, allow_body](const auto& value) -> std::string {
         using T = std::decay_t<decltype(value)>;
@@ -421,14 +444,19 @@ void RuntimeLogger::Log(RuntimeLogLevel level, std::string_view event,
 
     std::lock_guard lock(mutex_);
     std::error_code ec;
-    std::filesystem::create_directories(options_.logs_directory, ec);
+    const auto directory =
+        options_.output_path.empty() ? options_.logs_directory : options_.output_path.parent_path();
+    if (!directory.empty()) std::filesystem::create_directories(directory, ec);
     if (ec) return;
-    if (!retention_checked_) {
+    if (options_.output_path.empty() && !retention_checked_) {
       PruneExpiredLogs(options_);
       retention_checked_ = true;
     }
-    const auto path = options_.logs_directory /
-                      (options_.component + "-" + DateFromTimestamp(record.timestamp) + ".jsonl");
+    const auto path =
+        options_.output_path.empty()
+            ? options_.logs_directory /
+                  (options_.component + "-" + DateFromTimestamp(record.timestamp) + ".jsonl")
+            : options_.output_path;
     AppendLine(options_, path, line);
   } catch (...) {
     // Runtime logging is best-effort and must never affect input or host availability.

@@ -1543,6 +1543,9 @@ backend 選択、query latency、error、exception summary、learning/user-dict
   - 非キー（lifecycle / settings）IPC — `Handshake` / `Ping` / `LoadModel` /
     `QueryDiagnostics`（§12.6）等は、その発行側
     （TIP / 設定アプリ）が操作開始時に UUIDv7 を採番する。単発操作は 1 envelope = 1 `trace_id`。
+- 受信側は既存 client との互換性のため、文字列だが UUIDv7 形式ではない `trace_id` も
+  envelope として受け付け、応答に echo する。ただしその値を phase ログに記録せず、
+  当該要求の phase 計測を行わない。発行側の UUIDv7 必須条件は緩めない。
 - `request_id` は **すべて TIP（client）側で採番**し、Host は応答で echo するのみ。
   TIP には 2 系統の allocator があり、実装はこの分担を維持する（新たに統合しない）:
   - `ipc_pending_id_`（TIP メンバ）— `QueryCandidates` の応答相関と staleness 判定
@@ -1722,7 +1725,7 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 | `romaji_convert` | ローマ字かな変換 | core / tsf-tip |
 | `ipc_serialize` | payload 生成（JSON 化） | ipc / tsf-tip |
 | `pipe_send` | Named Pipe 送信 | ipc |
-| `host_queue_wait` | Host scheduler 待ち | inference-host |
+| `host_queue_wait` | Host scheduler の要求登録・排他待ち | inference-host |
 | `model_inference` | SimpleConverter / Zenzai 推論 | inference-host |
 | `rerank` | 学習 / user dict / tag boost / Tiny / BERT | inference-host |
 | `pipe_recv` | 応答受信 | ipc / tsf-tip |
@@ -1735,10 +1738,13 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
 値の **追加は後方互換（patch）**、**削除 / 改名は破壊的変更（major）** とする
 （読み手は未知 phase を無視。集計ツールは wire 名に依存するため改名不可）。
 
-各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。所要時間は
-`latency_ms`（正典名）に入れ、`key_down` 等の絶対オフセット（key_down=0 起点）が
-必要なときのみ任意で `t_ms` を併記する。
-`model_inference` 行に以下を付与する（M24 `docs/copilot-pc-backend-spec.md` §4 整合）:
+各 phase は §7.2 の構造化ログ行として記録する（既存 schema 互換）。`key_down` は
+`t_ms:0` の起点行とし、所要時間サンプルに含めない。ほかの phase の所要時間は
+`latency_ms`（正典名）に入れ、絶対オフセットが必要なときのみ任意で `t_ms` を併記する。
+`model_inference` 行には `backend` を付与し、ニューラルモデル経路では
+`engine` も付与する。SimpleConverter fallback は `backend="cpu"` とし、
+ニューラルエンジンを実行していないため `engine` を省く
+（M24 `docs/copilot-pc-backend-spec.md` §4 整合）:
 
 - `engine`: `"llama_cpp" | "winml"`
 - `backend`: R1 アクセラレータ `cpu` / `cuda` / `vulkan`（旧 `directml` / `npu` は
@@ -1747,11 +1753,15 @@ IPC は §7.3 のとおり発行側が操作単位で採番する（全 envelope
   （`NotPresent` / `NotReady` / `Ready` / `Registered` / `Failed`、§4.6）。EP 取得・登録
   失敗をトレースで切り分け可能にする。
 
+モデル推論が例外で失敗して SimpleConverter に fallback した場合、JSONL の
+`model_inference` は fallback の所要時間を 1 件だけ記録する。失敗したモデル試行は
+同じ論理操作の集計サンプルに重ねず、ETW の失敗結果で診断する。
+
 ```json
-{"ts":"2026-05-27T10:00:00.000Z","trace_id":"abc","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.001Z","trace_id":"abc","component":"tip","phase":"romaji_convert","latency_ms":0.04,"level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.015Z","trace_id":"abc","component":"host","phase":"model_inference","latency_ms":14.5,"backend":"cuda","level":"info","result":"ok"}
-{"ts":"2026-05-27T10:00:00.018Z","trace_id":"abc","component":"tip","phase":"total","latency_ms":18.3,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.000Z","trace_id":"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2","component":"tip","phase":"key_down","t_ms":0.0,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.001Z","trace_id":"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2","component":"tip","phase":"romaji_convert","latency_ms":0.04,"level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.015Z","trace_id":"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2","component":"host","phase":"model_inference","latency_ms":14.5,"backend":"cuda","level":"info","result":"ok"}
+{"ts":"2026-05-27T10:00:00.018Z","trace_id":"018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2","component":"tip","phase":"total","latency_ms":18.3,"level":"info","result":"ok"}
 ```
 
 #### 7.7.3 trace_viewer CLI
@@ -1766,50 +1776,31 @@ azookey_trace_viewer.exe trace.jsonl --summary
 summary 出力例:
 
 ```
-QueryCandidates latency summary (N=10000)
-  total_p50: 18.3 ms
-  total_p95: 42.1 ms
-  total_p99: 78.4 ms
-  model_inference_p95: 30.4 ms
-  pipe_p95: 1.2 ms
-  ui_apply_p95: 3.8 ms
+QueryCandidates latency summary (N=10000, skipped=0)
+  model_inference (N=10000): p50=11.2 ms p95=30.4 ms p99=55.0 ms
+  pipe_send (N=10000): p50=0.1 ms p95=0.5 ms p99=1.0 ms
+  total (N=10000): p50=18.3 ms p95=42.1 ms p99=78.4 ms
 ```
+
+`--json` は人間向け表示とは別に `schema_version: 1`、phase ごとの
+`samples` / `p50_ms` / `p95_ms` / `p99_ms`、`skipped_lines` を出力する。
+不正 JSON、未知・欠損 phase、無効な `latency_ms` は警告して集計から除く。
 
 #### 7.7.4 オーバーヘッド制御
 
-通常利用時は §7.6 のプライバシー方針に従い、Release では phase 別
-`latency_ms`（メタ情報のみ。本文は含まない）を記録する。詳細な per-key
-trace は以下のいずれかで明示有効化する:
+通常利用時の phase 計測・出力は無効とする。TIP / Host の phase 行は既存の
+構造化ログを `AZOOKEY_LOG=1` で明示有効化したときだけ記録し、既存の
+5 MiB・3 世代・7 日の保持規則を適用する。ログには `trace_id`、`phase`、
+`latency_ms` 等のメタ情報だけを含め、入力本文は含めない。
 
-- `bench/azookey_bench --trace`（ベンチ実行時）
-- `settings.latencyTracing.enabled = true`（設定 GUI から）
-- 環境変数 `AZOOKEY_TRACE=1`（開発時）
-
-サンプリングレート（`latencyTracing.sampleRate`、既定 0.01）で本番でも
-低コストで取得可能にする。
-
-`settings.latencyTracing.*` を設定 GUI から扱うため、M51 実装時に
-`settings/mvp-settings.schema.json`（root が `additionalProperties: false` のため
-未定義トップレベルキーは reject される）へ以下を追加する。スキーマ追加と読み書き
-パスを同じ PR / コミットで揃え、永続化されない不整合状態を作らない（§8.5.3
-`safeMode` と同じ方針）:
-
-```json
-"latencyTracing": {
-  "type": "object",
-  "description": "M51: レイテンシ内訳トレースの取得設定",
-  "properties": {
-    "enabled": { "type": "boolean", "default": false },
-    "sampleRate": { "type": "number", "default": 0.01, "minimum": 0.0, "maximum": 1.0 }
-  },
-  "additionalProperties": false
-}
-```
+ベンチの詳細 JSONL は `azookey_bench --trace` のときだけ生成する。
+`--trace-output PATH` の既定値は `trace.jsonl` で、実行ごとに上書きし、
+結果 JSON や評価入力とは別のパスとする。ベンチ出力の保持は呼出側が管理する。
+サンプリングや設定 GUI からの有効化はこの契約に含めない。
 
 ### M51 受け入れ条件
 
-- 全 IPC envelope に `trace_id` フィールドが追加され、JSON parse 後
-  伝播する
+- 既存の全 IPC envelope の `trace_id` フィールドに UUIDv7 を入れ、JSON parse 後も伝播する
 - 1 リクエスト単位で TIP / IPC / Host / UI の各 phase 時間を JSONL に
   出力できる
 - `azookey_trace_viewer --summary` で p50 / p95 / p99 を出力できる

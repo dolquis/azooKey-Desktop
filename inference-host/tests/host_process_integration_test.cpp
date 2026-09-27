@@ -6,6 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -25,9 +26,14 @@
 namespace {
 
 constexpr DWORD kProcessTimeoutMs = 15000;
+std::atomic<HANDLE> g_control_received{nullptr};
 
 BOOL WINAPI IgnoreTestConsoleControl(DWORD event) {
-  return event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT;
+  if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
+  if (const HANDLE received = g_control_received.load(std::memory_order_acquire)) {
+    SetEvent(received);
+  }
+  return TRUE;
 }
 
 class ChildProcess {
@@ -134,6 +140,8 @@ class HostProcessTest : public ::testing::Test {
 
   bool StartHost() {
     const auto args = CommonArgs();
+    // The Ctrl+C ignore attribute is inherited, including across a new console.
+    if (!SetConsoleCtrlHandler(nullptr, FALSE)) return false;
     if (!host_.Start(host_executable_, args, CREATE_NEW_CONSOLE, directory_.root / "host.log"))
       return false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
@@ -160,16 +168,28 @@ class HostProcessTest : public ::testing::Test {
   bool StopHost(DWORD event) {
     // The Host owns a separate console. Attach only for the signal, so no other
     // CTest or user process receives a console control event.
+    const HANDLE received = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (received == nullptr) return false;
     FreeConsole();
-    if (!AttachConsole(host_.pid())) return false;
+    if (!AttachConsole(host_.pid())) {
+      CloseHandle(received);
+      return false;
+    }
+    g_control_received.store(received, std::memory_order_release);
     if (!SetConsoleCtrlHandler(IgnoreTestConsoleControl, TRUE)) {
+      g_control_received.store(nullptr, std::memory_order_release);
       FreeConsole();
+      CloseHandle(received);
       return false;
     }
     const bool sent = GenerateConsoleCtrlEvent(event, 0) != 0;
-    const bool stopped = sent && host_.Wait() == WAIT_OBJECT_0 && host_.ExitCode() == 0;
-    SetConsoleCtrlHandler(IgnoreTestConsoleControl, FALSE);
+    const bool delivered =
+        sent && WaitForSingleObject(received, kProcessTimeoutMs) == WAIT_OBJECT_0;
+    const bool stopped = delivered && host_.Wait() == WAIT_OBJECT_0 && host_.ExitCode() == 0;
+    // FreeConsole resets this process's handler table after delivery is known.
     FreeConsole();
+    g_control_received.store(nullptr, std::memory_order_release);
+    CloseHandle(received);
     return stopped;
   }
 
@@ -278,6 +298,8 @@ TEST_F(HostProcessTest, ConcurrentIpcAndOfflineUserDictAddsPreserveAllEntries) {
 }
 
 TEST_F(HostProcessTest, CtrlCFlushesPendingLearning) {
+  // Simulate a CTest launcher that passes the inheritable Ctrl+C ignore flag.
+  ASSERT_TRUE(SetConsoleCtrlHandler(nullptr, TRUE));
   ASSERT_TRUE(StartHost()) << "Host failed to listen (exit=" << host_.ExitCode() << ")";
   azookey::ipc::NamedPipeClient client;
   ASSERT_TRUE(ConnectLearningClient(&client));

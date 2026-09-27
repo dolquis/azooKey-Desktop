@@ -27,6 +27,7 @@ target_link_libraries(azookey_tsf_tip
     azookey_binary_hardening
     azookey_project_options
     azookey_project_warnings
+    WIL::WIL
     ole32
     oleaut32
     uuid
@@ -71,6 +72,7 @@ if(AZOOKEY_BUILD_TESTS)
       GTest::gtest_main
       azookey_project_options
       azookey_project_warnings
+      WIL::WIL
       ole32
       oleaut32
       uuid

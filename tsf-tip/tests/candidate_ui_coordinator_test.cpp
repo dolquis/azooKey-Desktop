@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <limits>
+#include <new>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -104,6 +105,7 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
   STDMETHODIMP UpdateUIElement(DWORD dwUIElementId) override {
     if (dwUIElementId != ui_element_id) return E_INVALIDARG;
     ++update_count;
+    if (throw_on_update) throw std::bad_alloc();
     return update_hr;
   }
   STDMETHODIMP EndUIElement(DWORD dwUIElementId) override {
@@ -132,6 +134,7 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
   BOOL begin_pb_show{FALSE};
   HRESULT begin_hr{S_OK};
   HRESULT update_hr{S_OK};
+  bool throw_on_update{false};
   HRESULT end_hr{S_OK};
   bool expose_ui_element_mgr{true};
   DWORD ui_element_id{123};
@@ -139,6 +142,7 @@ class MockThreadMgrWithUiElementMgr final : public ITfThreadMgr, public ITfUIEle
   int update_count{0};
   int end_count{0};
   ITfUIElement* element{nullptr};
+  LONG ref_count() const { return ref_count_; }
 
  private:
   LONG ref_count_{1};
@@ -288,6 +292,26 @@ TEST(TsfTipCandidateUiCoordinatorTest, InitialAppDrawnUpdateFailureEndsUiElement
   EXPECT_EQ(thread_mgr.update_count, 1);
   EXPECT_EQ(thread_mgr.end_count, 1);
   EXPECT_EQ(thread_mgr.element, nullptr);
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, ExceptionAfterRegistrationEndsUiAndReleasesReferences) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  thread_mgr.throw_on_update = true;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  BeginObservationCapture capture;
+  coordinator.SetBeginObserver(&CaptureBeginObservation, &capture);
+
+  POINT pt{10, 20};
+  EXPECT_EQ(coordinator.BeginUI(&thread_mgr, pt, SampleItems(), 0), E_OUTOFMEMORY);
+  EXPECT_FALSE(coordinator.IsShowing());
+  EXPECT_EQ(thread_mgr.begin_count, 1);
+  EXPECT_EQ(thread_mgr.end_count, 1);
+  EXPECT_EQ(thread_mgr.element, nullptr);
+  EXPECT_EQ(thread_mgr.ref_count(), 1);
+  ASSERT_TRUE(capture.observation.has_value());
+  EXPECT_EQ(capture.observation->result, E_OUTOFMEMORY);
+  EXPECT_TRUE(capture.observation->ui_element_mgr_available);
 }
 
 TEST(TsfTipCandidateUiCoordinatorTest, UiLessModeRequiresUiElementManager) {

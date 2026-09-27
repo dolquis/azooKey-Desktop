@@ -163,7 +163,7 @@ SOFTWARE.
 - Copyright: Copyright (c) Microsoft Corporation. All rights reserved.
 - azooKey path: リポジトリへはベンダリングせず submodule 参照。header-only のため
   ソース自体は配布物に含まれないが、WIL のマクロ・インライン関数を使用する
-  `ipc/` のコンパイル成果物が `azookey_tsf_tip.dll` / `azookey_inference_host.exe` に
+  `ipc/` と `tsf-tip/` のコンパイル成果物が `azookey_tsf_tip.dll` / `azookey_inference_host.exe` に
   リンクされる
 - Notes: header-only ライブラリの attribution 要否は要確認（人間レビューで最終判断する）。
   義務の有無が確定するまでは、疑わしきは記載する方針で本節を維持する

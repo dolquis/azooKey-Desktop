@@ -82,71 +82,99 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
                                         const std::vector<CandidateViewItem>& items,
                                         int selected_idx) {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
-  if (items.empty()) return EndUI();
+  const bool had_ui_element_mgr = ui_element_mgr_ != nullptr;
+  const auto rollback_exception = [this, had_ui_element_mgr]() {
+    try {
+      const HRESULT cleanup_hr = EndUI();
+      UNREFERENCED_PARAMETER(cleanup_hr);
+    } catch (...) {
+      // A misbehaving TSF provider may throw during EndUIElement. Still drop our references.
+      ui_element_id_ = kInvalidUiElementId;
+      showing_ = false;
+      tip_draws_ = true;
+      items_.clear();
+      selected_idx_ = -1;
+      ReleaseUiElement();
+    }
+    if (!had_ui_element_mgr) ReleaseUiElementMgr();
+  };
+  try {
+    if (items.empty()) return EndUI();
 
-  const HRESULT end_hr = EndUI();
-  if (FAILED(end_hr)) {
-    NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
-    return end_hr;
-  }
+    const HRESULT end_hr = EndUI();
+    if (FAILED(end_hr)) {
+      NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
+      return end_hr;
+    }
 
-  items_ = items;
-  selected_idx_ = ClampSelection(selected_idx);
-  last_pt_ = pt;
+    items_ = items;
+    selected_idx_ = ClampSelection(selected_idx);
+    last_pt_ = pt;
 
-  auto* element =
-      new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
-  if (!element) {
-    NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
-                        kInvalidUiElementId);
-    return E_OUTOFMEMORY;
-  }
-  ui_element_ = element;
-  ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });
+    auto* element =
+        new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
+    if (!element) {
+      NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
+                          kInvalidUiElementId);
+      return E_OUTOFMEMORY;
+    }
+    ui_element_.attach(element);
+    ui_element_->SetShowCallback([this](bool show) { OnElementShow(show); });
 
-  HRESULT hr = EnsureUiElementMgr(thread_mgr);
-  if (FAILED(hr) || !ui_element_mgr_) {
-    if (ui_less_mode_) {
+    HRESULT hr = EnsureUiElementMgr(thread_mgr);
+    if (FAILED(hr) || !ui_element_mgr_) {
+      if (ui_less_mode_) {
+        ReleaseUiElement();
+        items_.clear();
+        selected_idx_ = -1;
+        const HRESULT result = FAILED(hr) ? hr : E_NOINTERFACE;
+        NotifyBeginObserver(result, false, false, FALSE, kInvalidUiElementId);
+        return result;
+      }
+      showing_ = true;
+      OnPbShown(true);
+      NotifyBeginObserver(S_OK, false, false, FALSE, kInvalidUiElementId);
+      return S_OK;
+    }
+
+    BOOL pb_show = TRUE;
+    DWORD ui_element_id = kInvalidUiElementId;
+    hr = ui_element_mgr_->BeginUIElement(static_cast<ITfUIElement*>(ui_element_.get()), &pb_show,
+                                         &ui_element_id);
+    if (FAILED(hr)) {
+      NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
       ReleaseUiElement();
       items_.clear();
       selected_idx_ = -1;
-      const HRESULT result = FAILED(hr) ? hr : E_NOINTERFACE;
-      NotifyBeginObserver(result, false, false, FALSE, kInvalidUiElementId);
-      return result;
-    }
-    showing_ = true;
-    OnPbShown(true);
-    NotifyBeginObserver(S_OK, false, false, FALSE, kInvalidUiElementId);
-    return S_OK;
-  }
-
-  BOOL pb_show = TRUE;
-  DWORD ui_element_id = kInvalidUiElementId;
-  hr = ui_element_mgr_->BeginUIElement(static_cast<ITfUIElement*>(ui_element_), &pb_show,
-                                       &ui_element_id);
-  if (FAILED(hr)) {
-    NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
-    ReleaseUiElement();
-    items_.clear();
-    selected_idx_ = -1;
-    return hr;
-  }
-
-  ui_element_id_ = ui_element_id;
-  showing_ = true;
-  OnPbShown(pb_show != FALSE);
-  if (!tip_draws_) {
-    ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
-    hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
-    if (FAILED(hr)) {
-      const HRESULT cleanup_hr = EndUI();
-      UNREFERENCED_PARAMETER(cleanup_hr);
-      NotifyBeginObserver(hr, true, true, pb_show, ui_element_id);
       return hr;
     }
+
+    ui_element_id_ = ui_element_id;
+    showing_ = true;
+    OnPbShown(pb_show != FALSE);
+    if (!tip_draws_) {
+      ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
+      hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
+      if (FAILED(hr)) {
+        const HRESULT cleanup_hr = EndUI();
+        UNREFERENCED_PARAMETER(cleanup_hr);
+        NotifyBeginObserver(hr, true, true, pb_show, ui_element_id);
+        return hr;
+      }
+    }
+    NotifyBeginObserver(S_OK, true, true, pb_show, ui_element_id);
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    const bool mgr_available = ui_element_mgr_ != nullptr;
+    rollback_exception();
+    NotifyBeginObserver(E_OUTOFMEMORY, mgr_available, false, FALSE, kInvalidUiElementId);
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    const bool mgr_available = ui_element_mgr_ != nullptr;
+    rollback_exception();
+    NotifyBeginObserver(E_FAIL, mgr_available, false, FALSE, kInvalidUiElementId);
+    return E_FAIL;
   }
-  NotifyBeginObserver(S_OK, true, true, pb_show, ui_element_id);
-  return S_OK;
 }
 
 HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& items,
@@ -204,10 +232,9 @@ HRESULT CandidateUiCoordinator::MoveSelection(int delta) {
 HRESULT CandidateUiCoordinator::EnsureUiElementMgr(ITfThreadMgr* thread_mgr) {
   if (ui_element_mgr_) return S_OK;
   if (!thread_mgr) return E_INVALIDARG;
-  HRESULT hr =
-      thread_mgr->QueryInterface(IID_ITfUIElementMgr, reinterpret_cast<void**>(&ui_element_mgr_));
+  HRESULT hr = thread_mgr->QueryInterface(IID_ITfUIElementMgr, ui_element_mgr_.put_void());
   if (FAILED(hr)) {
-    ui_element_mgr_ = nullptr;
+    ui_element_mgr_.reset();
     return hr;
   }
   return ui_element_mgr_ ? S_OK : E_NOINTERFACE;
@@ -243,17 +270,11 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
 void CandidateUiCoordinator::ReleaseUiElement() {
   if (ui_element_) {
     ui_element_->SetShowCallback({});
-    ui_element_->Release();
-    ui_element_ = nullptr;
+    ui_element_.reset();
   }
 }
 
-void CandidateUiCoordinator::ReleaseUiElementMgr() {
-  if (ui_element_mgr_) {
-    ui_element_mgr_->Release();
-    ui_element_mgr_ = nullptr;
-  }
-}
+void CandidateUiCoordinator::ReleaseUiElementMgr() { ui_element_mgr_.reset(); }
 
 void CandidateUiCoordinator::NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available,
                                                  bool pb_show_available, BOOL pb_show,

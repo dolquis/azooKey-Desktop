@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <msctf.h>
+#include <wil/com.h>
 
 #include <functional>
 #include <string>
@@ -78,8 +79,8 @@ class CandidateUiCoordinator {
   DebugThreadAffinity ui_thread_affinity_;
 #endif
   CandidateWindow own_window_;
-  CandidateListUIElement* ui_element_{nullptr};
-  ITfUIElementMgr* ui_element_mgr_{nullptr};
+  wil::com_ptr_nothrow<CandidateListUIElement> ui_element_;
+  wil::com_ptr_nothrow<ITfUIElementMgr> ui_element_mgr_;
   DWORD ui_element_id_{kInvalidUiElementId};
   std::vector<CandidateViewItem> items_;
   POINT last_pt_{0, 0};

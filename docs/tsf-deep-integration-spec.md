@@ -345,12 +345,12 @@ class CandidateUiCoordinator {
   //      これを省くと初回候補が描画されない（§2.6 フローチャート）。
   // pt は自前 HWND を出す場合のキャレット直下スクリーン座標。
   HRESULT BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
-                  const std::vector<std::wstring>& items, int selected_idx);
+                  const std::vector<CandidateViewItem>& items, int selected_idx);
 
   // 候補リスト or 選択変更時。
   //   pbShow==TRUE 経路: 自前 HWND を再描画（UpdateUIElement は呼ばない）
   //   pbShow==FALSE 経路: ITfUIElementMgr::UpdateUIElement(ui_element_id_) のみ
-  HRESULT UpdateUI(const std::vector<std::wstring>& items, int selected_idx);
+  HRESULT UpdateUI(const std::vector<CandidateViewItem>& items, int selected_idx);
 
   // 終了。pbShow の値に関わらず HWND を Hide し EndUIElement を必ず呼ぶ。
   HRESULT EndUI();
@@ -364,8 +364,8 @@ class CandidateUiCoordinator {
   void OnPbShown(bool tip_draws);
 
   CandidateWindow own_window_;                  // pbShow==TRUE 経路
-  ComPtr<CandidateListUIElement> ui_element_;   // pbShow==FALSE / UI-less 経路
-  ITfUIElementMgr* ui_element_mgr_{nullptr};
+  wil::com_ptr_nothrow<CandidateListUIElement> ui_element_;  // pbShow==FALSE / UI-less 経路
+  wil::com_ptr_nothrow<ITfUIElementMgr> ui_element_mgr_;
   DWORD ui_element_id_{0xFFFFFFFF};             // BeginUIElement が返す ID
   bool ui_less_mode_{false};                    // TF_TMF_UIELEMENTENABLEDONLY
   bool tip_draws_{true};                        // 直近 BeginUI の pbShow 結果
@@ -377,7 +377,7 @@ class CandidateUiCoordinator {
 
 `ITfUIElementMgr::BeginUIElement(ITfUIElement* pElement, BOOL* pbShow,
 DWORD* pdwUIElementId)` / `UpdateUIElement(DWORD)` / `EndUIElement(DWORD)` の各
-シグネチャは msctf.h 準拠。`ui_element_mgr_` は `ActivateEx` 時に
+シグネチャは msctf.h 準拠。`ui_element_mgr_` は `BeginUI` 時に必要なら
 `thread_mgr->QueryInterface(IID_ITfUIElementMgr, ...)` で取得しキャッシュする。
 
 #### 状態遷移

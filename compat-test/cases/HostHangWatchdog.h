@@ -8,6 +8,13 @@
 namespace azookey::compat_test::host_hang {
 
 enum class WakeReason { Release, ParentExited, Deadline, Error };
+enum class ResumeResult { Failed, ReleasedByRequest, ResumedByWatchdog };
+
+inline ResumeResult ClassifyResumeExitCode(DWORD exit_code) {
+  if (exit_code == 0) return ResumeResult::ReleasedByRequest;
+  if (exit_code == 5) return ResumeResult::ResumedByWatchdog;
+  return ResumeResult::Failed;
+}
 
 // The helper waits on [release, parent process] in that order.
 inline WakeReason ClassifyWake(DWORD wait_result) {

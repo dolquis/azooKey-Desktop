@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include "cases/HostHangWatchdog.h"
 #include "cases/HostProcessSupport.h"
 
 namespace azookey::compat_test::host_hang {
@@ -18,7 +19,7 @@ class WatchdogClient {
 
   bool Start();
   bool active() const;
-  bool Resume();
+  ResumeResult Resume();
   HANDLE process() const { return host_process_handle_; }
 
  private:

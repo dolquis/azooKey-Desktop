@@ -35,6 +35,14 @@ TEST(HostHangWatchdogTest, ParentExitAndTimeoutRequireTheSameReleasePath) {
   EXPECT_EQ(ClassifyWake(WAIT_FAILED), WakeReason::Error);
 }
 
+TEST(HostHangWatchdogTest, DeadlineExitMeansResumedButExpired) {
+  using host_hang::ClassifyResumeExitCode;
+  using host_hang::ResumeResult;
+  EXPECT_EQ(ClassifyResumeExitCode(0), ResumeResult::ReleasedByRequest);
+  EXPECT_EQ(ClassifyResumeExitCode(5), ResumeResult::ResumedByWatchdog);
+  EXPECT_EQ(ClassifyResumeExitCode(3), ResumeResult::Failed);
+}
+
 TEST(HostHangWatchdogTest, PartialSuspendAndRetryNeverResumeTheSameThreadTwice) {
   host_hang::SuspensionLedger ledger(3);
   EXPECT_TRUE(ledger.MarkSuspended(0));

@@ -389,6 +389,8 @@ function Invoke-VmVerifyGuestCompatRun {
     $runHostHang = (-not $Cases -or $Cases.Split(',') -ccontains 'C-013') -and
       ($Skip.Split(',') -cnotcontains 'C-013')
     if ($runHostHang) {
+      # 新規起動プロセスだけが継承する。既存 browser / VS Code への委譲時は
+      # C-013 がログ未確認を failing-skip として報告する。
       [Environment]::SetEnvironmentVariable("AZOOKEY_LOG", "1", "Process")
       [Environment]::SetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "info", "Process")
     }

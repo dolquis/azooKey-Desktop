@@ -128,9 +128,14 @@ per-user named pipeへ接続できるまで復帰とは判定しない。runner�
 C-013 は同じ supervisor 配下の Host を一時停止し、停止中のかな入力とアプリ応答、
 同一 Host 再開後の漢字変換を確認する。TIP の `Degraded` → `Ready` は構造化ログでも
 照合するため、実行前に `AZOOKEY_LOG=1` と `AZOOKEY_LOG_LEVEL=info` を設定して
-対象アプリを起動し直す。ログが取得できない、または遷移を対象アプリへ帰属できない
-場合は pass にしない。`compat_host_hang_watchdog.exe` を `compat_test.exe` と同じ
+対象アプリを起動し直す。既存の Edge / VS Code プロセスへ新しいウィンドウが委譲されると、
+環境変数はそのプロセスに届かない。対象 PID の遷移ログが無い場合、runner が起動した
+プロセス自身なら `tip-transition-not-observed` で fail、既存プロセスへの委譲などで
+ログ設定を確認できなければ `tip-info-log-not-confirmed-for-target` で failing-skip とする。
+ログを取得できない、または遷移を対象アプリへ帰属できない場合は pass にしない。
+`compat_host_hang_watchdog.exe` を `compat_test.exe` と同じ
 ディレクトリに置く。監視プロセスは runner の異常終了か 8 秒の期限でも Host を再開する。
+期限で再開できても C-013 は `host-identity-changed-or-hang-expired` で fail にする。
 Host に fault injection 用の起動引数は追加しない。
 
 ## Optional CI

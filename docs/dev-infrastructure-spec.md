@@ -3064,7 +3064,11 @@ C-013 は同じ supervisor 配下の Host を終了させずに一時停止す�
 `compat_host_hang_watchdog.exe` が再開を担当し、runner の異常終了か 8 秒の期限でも
 再開する。検証 zip には runner と同じディレクトリに watchdog を同梱する。
 停止中の入力継続と再開後の通常変換を UI Automation で確認し、TIP の構造化ログで
-`Degraded` → `Ready` の遷移を確認する。観測条件を満たせない場合は pass にしない。
+`Degraded` → `Ready` の遷移を確認する。対象アプリが runner 起動プロセス自身なら
+ログ環境変数の継承を確認できるため、遷移の欠落を fail とする。既存プロセスへの
+ウィンドウ委譲などでログ設定を確認できず、対象 PID の遷移が無い場合は failing-skip とし、
+観測条件を満たせない状態を pass にしない。watchdog が期限切れで Host を再開した
+場合は再開失敗と区別して期限切れとして fail にする。
 
 runner / C-001〜C-013 / unit test はトップ `CMakeLists.txt` から
 `add_subdirectory(compat-test)` で Windows ビルドへ配線する。

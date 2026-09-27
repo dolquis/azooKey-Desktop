@@ -93,20 +93,21 @@ bool WatchdogClient::active() const {
          host_process::IsSameProcess(host_process_handle_, host_);
 }
 
-bool WatchdogClient::Resume() {
-  if (!child_process_ || !release_ || !done_) return false;
+ResumeResult WatchdogClient::Resume() {
+  if (!child_process_ || !release_ || !done_) return ResumeResult::Failed;
   if (!release_requested_) {
     release_requested_ = true;
-    if (!SetEvent(release_)) return false;
+    if (!SetEvent(release_)) return ResumeResult::Failed;
   }
   const std::array<HANDLE, 2> wait_handles{done_, child_process_};
   if (WaitForMultipleObjects(static_cast<DWORD>(wait_handles.size()), wait_handles.data(), FALSE,
                              10000) != WAIT_OBJECT_0) {
-    return false;
+    return ResumeResult::Failed;
   }
-  if (WaitForSingleObject(child_process_, 1000) != WAIT_OBJECT_0) return false;
+  if (WaitForSingleObject(child_process_, 1000) != WAIT_OBJECT_0) return ResumeResult::Failed;
   DWORD exit_code = STILL_ACTIVE;
-  return GetExitCodeProcess(child_process_, &exit_code) && exit_code == 0;
+  if (!GetExitCodeProcess(child_process_, &exit_code)) return ResumeResult::Failed;
+  return ClassifyResumeExitCode(exit_code);
 }
 
 }  // namespace azookey::compat_test::host_hang

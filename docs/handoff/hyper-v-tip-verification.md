@@ -205,6 +205,11 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-010
   ```
 
+  手順 1 の後、Edge や VS Code のプロセスが常駐していると、手順 3 の対話タスクで
+  設定した TIP ログ環境変数は既存プロセスに届かない。C-013 の結果が
+  `tip-info-log-not-confirmed-for-target` の failing-skip なら、未保存の作業を確認して
+  対象アプリの全プロセスを人手で終了し、手順 3 を再実行する。
+
 - `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
   [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。
   結果は層 1 の先行検証であり、手順 4 の基本セッションでの確認と人間ゲートを置き換えない。

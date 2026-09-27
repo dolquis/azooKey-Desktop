@@ -186,7 +186,7 @@ CaseDefinition MakeC013HostHangCase() {
 
         bool degraded_input = false;
         bool responsive = false;
-        bool resumed = false;
+        host_hang::ResumeResult resume_result = host_hang::ResumeResult::Failed;
         bool same_process = false;
         {
           host_hang::WatchdogClient suspension(*host);
@@ -206,14 +206,14 @@ CaseDefinition MakeC013HostHangCase() {
                            preedit->find(L"にほんご") != std::wstring::npos &&
                            text->find(L"にほんご") != std::wstring::npos;
           const bool held_through_input = suspension.active();
-          resumed = suspension.Resume();
+          resume_result = suspension.Resume();
           same_process =
               held_through_input && host_process::IsSameProcess(suspension.process(), *host);
         }
-        if (!resumed) {
+        if (resume_result == host_hang::ResumeResult::Failed) {
           result.status = ResultStatus::Fail;
           result.reason_code = "host-resume-failed";
-        } else if (!same_process) {
+        } else if (resume_result == host_hang::ResumeResult::ResumedByWatchdog || !same_process) {
           result.status = ResultStatus::Fail;
           result.reason_code = "host-identity-changed-or-hang-expired";
         } else if (!responsive || !degraded_input) {
@@ -227,8 +227,12 @@ CaseDefinition MakeC013HostHangCase() {
           if (log_evidence == LogEvidence::Ambiguous) {
             result.reason_code = "tip-transition-process-ambiguous";
           } else if (log_evidence == LogEvidence::Missing) {
-            result.status = ResultStatus::Fail;
-            result.reason_code = "tip-transition-not-observed";
+            if (session.target_process_inherited_environment()) {
+              result.status = ResultStatus::Fail;
+              result.reason_code = "tip-transition-not-observed";
+            } else {
+              result.reason_code = "tip-info-log-not-confirmed-for-target";
+            }
           } else {
             result.status = ResultStatus::Pass;
             result.reason_code = "degraded-input-same-host-and-tip-recovery-observed";

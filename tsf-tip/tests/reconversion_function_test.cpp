@@ -603,6 +603,125 @@ TEST(ReconversionFunctionTest, RightClickCacheMissReturnsOriginalThenShowsDelaye
   server.Stop();
 }
 
+void VerifyEmptyPrefetchCanRetry(bool use_convert_key, bool consume_empty_result) {
+  using namespace azookey::ipc;
+  char* prior_token = nullptr;
+  size_t token_length = 0;
+  ASSERT_EQ(_dupenv_s(&prior_token, &token_length, "AZOOKEY_IPC_HANDSHAKE_TOKEN"), 0);
+  const std::string original_token = prior_token ? prior_token : "";
+  std::free(prior_token);
+  struct TokenRestore {
+    std::string value;
+    ~TokenRestore() { _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", value.c_str()); }
+  } restore{original_token};
+  ASSERT_EQ(_putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "reconversion-test-token"), 0);
+
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-reconversion-empty-prefetch-" +
+                                std::to_string(GetCurrentProcessId()) +
+                                (use_convert_key ? "-convert" : "-right-click") +
+                                (consume_empty_result ? "-consumed" : "-pending");
+  std::atomic<int> reverse_count{0};
+  std::atomic<int> query_count{0};
+  HostReplyGate recovered_query_gate;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    Envelope response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.host_version = "test-host";
+      payload.accepted = true;
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::ReverseConvert) {
+      ++reverse_count;
+      response.payload_json = BuildReverseConvertResponse({"あした", 1.0});
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const int attempt = ++query_count;
+      if (attempt == 2) recovered_query_gate.BlockUntilReleased();
+      QueryCandidatesResponse result;
+      if (attempt == 2) result.candidates.push_back({"あした", "あした", 1.0, "test"});
+      response.payload_json = BuildQueryCandidatesResponse(result);
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日");
+  TestRange range(&context, text, 0, 2);
+  context.selection = &range;
+  azookey::tsf::TextService service;
+  ReleaseHostReplyOnExit release_on_exit{recovered_query_gate};
+  service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  service.set_text_edit_context_for_test(&context);
+  service.set_ipc_pipe_name_for_test(pipe_name);
+  service.start_ipc_worker_for_test();
+  ChangedSelectionRecord record;
+  ASSERT_EQ(service.OnEndEdit(&context, 1, &record), S_OK);
+  service.process_candidates_ready_for_test();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline && !service.has_reconversion_result_for_test())
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_TRUE(service.has_reconversion_result_for_test());
+  ASSERT_EQ(query_count.load(), 1);
+  if (consume_empty_result) {
+    service.process_reconversion_result_for_test();
+    EXPECT_FALSE(service.has_reconversion_result_for_test());
+  }
+
+  if (use_convert_key) {
+    BOOL eaten = FALSE;
+    ASSERT_EQ(service.OnKeyDown(&context, VK_CONVERT, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+  } else {
+    IUnknown* unknown = nullptr;
+    ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+    ITfFnReconversion* function = nullptr;
+    ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+              S_OK);
+    unknown->Release();
+    ITfCandidateList* list = nullptr;
+    ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
+    ASSERT_NE(list, nullptr);
+    ULONG count = 0;
+    EXPECT_EQ(list->GetCandidateNum(&count), S_OK);
+    EXPECT_EQ(count, 1u);
+    list->Release();
+    function->Release();
+  }
+  ASSERT_TRUE(recovered_query_gate.WaitForArrival());
+  EXPECT_EQ(reverse_count.load(), 2);
+  EXPECT_EQ(query_count.load(), 2);
+  if (!consume_empty_result) service.process_reconversion_result_for_test();
+  EXPECT_FALSE(service.has_reconversion_ui_for_test());
+  recovered_query_gate.Release();
+  const auto recovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < recovery_deadline &&
+         !service.has_reconversion_result_for_test())
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_TRUE(service.has_reconversion_result_for_test());
+  service.process_reconversion_result_for_test();
+  EXPECT_TRUE(service.has_reconversion_ui_for_test());
+  EXPECT_EQ(*text, L"明日");
+  EXPECT_EQ(range.set_text_calls(), 0);
+  service.stop_ipc_worker_for_test();
+  service.Deactivate();
+  server.Stop();
+}
+
+TEST(ReconversionFunctionTest, EmptyPrefetchBeforeResultDeliveryRetriesRightClickAndConvert) {
+  VerifyEmptyPrefetchCanRetry(false, false);
+  VerifyEmptyPrefetchCanRetry(true, false);
+}
+
+TEST(ReconversionFunctionTest, EmptyPrefetchAfterResultDeliveryRetriesRightClickAndConvert) {
+  VerifyEmptyPrefetchCanRetry(false, true);
+  VerifyEmptyPrefetchCanRetry(true, true);
+}
+
 TEST(ReconversionFunctionTest, SelectionAndContextChangesInvalidateDelayedHostCandidates) {
   using namespace azookey::ipc;
   char* prior_token = nullptr;

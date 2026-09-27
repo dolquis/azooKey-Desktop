@@ -913,7 +913,8 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
       *result = TS_E_READONLY;
       return S_OK;
     }
-    run_edit_session = !skip_callback;
+    run_edit_session =
+        !skip_callback && !((flags & TF_ES_READWRITE) == TF_ES_READWRITE && skip_write_callback);
     if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && before_write) {
       auto callback = std::move(before_write);
       before_write = {};
@@ -952,6 +953,7 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   bool reject_read{false};
   bool reject_write{false};
   bool skip_callback{false};
+  bool skip_write_callback{false};
   std::function<void()> before_write;
 };
 
@@ -1120,6 +1122,71 @@ TEST(TsfTipLeftContextTest, CandidateWireUsesEnqueueSnapshotAndOmitsSecureContex
   EXPECT_FALSE(requests[0].secure);
   EXPECT_TRUE(requests[1].left_context.empty());
   EXPECT_TRUE(requests[1].secure);
+}
+
+TEST(TsfTipLeftContextTest, CandidateAfterEndedCompositionUsesSelectionInsteadOfStaleRange) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-ended-composition-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryCandidatesRequest> requests;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query && query->reading == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        requests.push_back(*query);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.context.document->text = L"前";
+  h.context.document->start = 1;
+  h.context.document->end = 1;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_EQ(h.service.composition_range_, nullptr);
+
+  h.context.document->text += L"後";
+  h.context.document->start = 3;
+  h.context.document->end = 3;
+  // Reproduce an ended composition whose old range still points at the committed text.
+  // The service owns and releases this range during Deactivate().
+  h.service.composition_range_ = new DocumentRange(h.context.document, 1, 2, &h.context);
+  // Keep the stale range while the next preedit edit session is still pending.
+  h.context.skip_write_callback = true;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+  ASSERT_EQ(h.service.composition_, nullptr);
+  h.service.start_ipc_worker_for_test();
+  EXPECT_TRUE(WaitUntil([&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !requests.empty();
+  }));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].left_context, "前か後");
 }
 
 TEST(TsfTipLeftContextTest, LiveConversionWireUsesBoundedUnicodeContext) {

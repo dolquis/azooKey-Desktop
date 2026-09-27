@@ -292,6 +292,7 @@ class TextService final : public ITfTextInputProcessorEx,
     if (context) context->AddRef();
   }
   bool has_reconversion_ui_for_test() const { return reconversion_list_ != nullptr; }
+  void process_candidates_ready_for_test() { OnCandidatesReady(this); }
   bool has_reconversion_result_for_test() {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     return reconversion_result_.has_value();

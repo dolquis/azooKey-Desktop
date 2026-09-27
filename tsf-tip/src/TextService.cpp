@@ -4543,7 +4543,7 @@ std::string TextService::CaptureLeftContext(ITfContext* context, bool secure) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (secure || !context) return {};
   ITfRange* composition_range =
-      SameComIdentity(context, active_context_) ? composition_range_ : nullptr;
+      composition_ && SameComIdentity(context, active_context_) ? composition_range_ : nullptr;
   return ReadLeftContext(context, composition_range, client_id_,
                          local_settings_.MaxContextLengthSnapshot());
 }
@@ -5284,16 +5284,19 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
     return S_OK;
   }
   std::vector<std::wstring> cached_candidates;
-  bool adopt_prefetch = false;
+  bool prefetch_completed = false;
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     if (SameComIdentity(context, reconversion_cache_context_) &&
         surface == reconversion_cache_surface_)
       cached_candidates = reconversion_cache_candidates_;
+    prefetch_completed =
+        reconversion_result_ && reconversion_result_->generation == reconversion_generation_.load();
   }
-  adopt_prefetch = cached_candidates.empty() && !reconversion_range_ &&
-                   surface == reconversion_prefetch_surface_ &&
-                   SameComIdentity(context, reconversion_cache_context_);
+  // An empty completed prefetch must be retried rather than adopted as in-flight work.
+  const bool adopt_prefetch = cached_candidates.empty() && !prefetch_completed &&
+                              !reconversion_range_ && surface == reconversion_prefetch_surface_ &&
+                              SameComIdentity(context, reconversion_cache_context_);
   if (adopt_prefetch) {
     reconversion_range_ = range;
     reconversion_surface_ = std::move(surface);
@@ -5340,6 +5343,9 @@ void TextService::ShowReconversionResult() {
     result = std::move(reconversion_result_);
     reconversion_result_.reset();
   }
+  // A result without an open range still completes the prefetch.
+  if (result && result->generation == reconversion_generation_)
+    reconversion_prefetch_surface_.clear();
   if (!result || !reconversion_range_ || result->generation != reconversion_generation_ ||
       result->surface != reconversion_surface_)
     return;

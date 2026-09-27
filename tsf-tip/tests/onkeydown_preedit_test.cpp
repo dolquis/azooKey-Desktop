@@ -1880,6 +1880,65 @@ TEST(TsfTipOnKeyDownPreeditTest, CustomPredictionPermissionSuppressesNamedPipeQu
   server.Stop();
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, QueuedPredictionIsDroppedAfterCustomPermissionRevocation) {
+  using namespace azookey::ipc;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-prediction-revoked-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> candidate_queries{0};
+  std::atomic<unsigned> prediction_queries{0};
+  std::atomic<unsigned> cancel_markers{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.accepted = true;
+      payload.capabilities = {"query_predictions"};
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      ++candidate_queries;
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryPredictions) {
+      ++prediction_queries;
+      response.payload_json = BuildQueryPredictionsResponse({});
+      return response;
+    }
+    if (request.type == MessageType::Cancel) {
+      ++cancel_markers;
+      return std::nullopt;
+    }
+    return std::nullopt;
+  }));
+
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"custom","custom":{"prediction":true}}})");
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  const uint64_t queued_generation = h.service.pending_prediction_generation_for_test();
+  ASSERT_NE(queued_generation, 0u);
+
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"custom","custom":{"prediction":false}}})");
+  h.service.resolve_privacy_for_benchmark(&h.context);
+  ASSERT_EQ(h.service.pending_prediction_generation_for_test(), queued_generation);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return candidate_queries.load() > 0; }));
+  ASSERT_TRUE(WaitUntil([&] { return h.service.pending_prediction_generation_for_test() == 0; }));
+  // This in-band marker is handled on the next worker iteration, after prediction processing.
+  h.service.post_cancel_for_test(0);
+  EXPECT_TRUE(WaitUntil([&] { return cancel_markers.load() > 0; }));
+  EXPECT_EQ(prediction_queries.load(), 0u);
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AcceptedPredictionRequeriesLiveConversionBeforeCommit) {
   DocumentPreeditHarness h;
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});

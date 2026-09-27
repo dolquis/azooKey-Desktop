@@ -351,8 +351,8 @@ TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
                      "azooKey compatibility editor"},
   };
   const std::set<std::string> expected_cases{
-      "C-001", "C-002", "C-003", "C-004", "C-005", "C-006", "C-007",
-      "C-008", "C-009", "C-010", "C-011", "C-012", "C-013",
+      "C-001", "C-002", "C-003", "C-004", "C-005", "C-006", "C-007", "C-008", "C-009", "C-010",
+      "C-011", "C-012", "C-013", "C-014", "C-015", "C-016", "C-017", "C-018", "C-019",
   };
 
   for (const auto& expected : targets) {
@@ -385,10 +385,11 @@ TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
       actual_cases.insert(item.AsString());
     }
     EXPECT_EQ(actual_cases, expected_cases);
+    EXPECT_EQ(cases->size(), expected_cases.size());
     ASSERT_FALSE(cases->empty());
-    EXPECT_EQ(cases->back().AsString(), "C-010");
     ASSERT_GE(cases->size(), 2u);
     EXPECT_EQ((*cases)[cases->size() - 2].AsString(), "C-013");
+    EXPECT_EQ(cases->back().AsString(), "C-010");
   }
 }
 

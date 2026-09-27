@@ -311,6 +311,11 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   bool batch_query_in_progress_for_test() const;
   void set_cached_batch_segments_for_test(std::vector<ipc::BatchConversionSegment> segments);
+  std::wstring cached_batch_notice_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return cached_batch_notice_;
+  }
+  std::wstring shown_batch_notice_for_test() const { return shown_batch_notice_; }
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
   uint64_t pending_ipc_request_id_for_test();
@@ -459,6 +464,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // so that a late QueryCandidates response cannot change what is confirmed).
   std::vector<TipCandidate> shown_candidates_;
   std::vector<ipc::BatchConversionSegment> shown_batch_segments_;
+  std::wstring shown_batch_notice_;  // UI thread only; fixed text, never Host body.
   std::vector<size_t> batch_segment_selections_;
   size_t batch_segment_cursor_{0};
   struct PendingCommitObservation {
@@ -505,6 +511,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pending_left_context_;
   std::string ipc_pending_raw_romaji_;
   std::string ipc_pending_batch_mode_;
+  std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   std::string ipc_pending_trace_id_;                                 // protected by ipc_mtx_
   std::chrono::steady_clock::time_point ipc_pending_trace_start_{};  // ipc_mtx_
   uint64_t ipc_pending_id_{0};
@@ -579,6 +586,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::chrono::steady_clock::time_point candidates_trace_start_{};  // candidates_mtx_
   bool candidates_trace_pending_{false};                            // candidates_mtx_
   std::vector<ipc::BatchConversionSegment> cached_batch_segments_;
+  std::wstring cached_batch_notice_;           // candidates_mtx_.
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
   struct LiveConversionResult {
     uint64_t request_id;

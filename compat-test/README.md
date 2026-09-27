@@ -26,13 +26,14 @@ cmake --build --preset windows-release --target compat_test
   --output compat-report-edge
 ```
 
-`--cases` と `--skip` で実行するケースを選べる。C-010 は Host を停止するため、
-手動の打鍵確認より前に C-010 を除いて実行し、確認の後で C-010 だけを実行できる。
-C-010 だけを選ぶと、前提の C-001 が自動で追加される。選択の規則と `report.json` の
+`--cases` と `--skip` で実行するケースを選べる。C-013 は Host を一時停止し、
+C-010 は終了するため、手動の打鍵確認後に分けて実行できる。
+いずれかだけを選ぶと、前提の C-001 が自動で追加される。選択の規則と `report.json` の
 `case_selection` は §13.5 を参照。
 
 ```powershell
-.\build\windows-release\compat-test\compat_test.exe --skip C-010 --output compat-report-no-kill
+.\build\windows-release\compat-test\compat_test.exe --skip C-013,C-010 --output compat-report-no-host-fault
+.\build\windows-release\compat-test\compat_test.exe --cases C-013 --output compat-report-c013
 .\build\windows-release\compat-test\compat_test.exe --cases C-010 --output compat-report-c010
 ```
 
@@ -70,7 +71,13 @@ compat-test/
 │   ├── C009_focus_transition.cpp
 │   ├── C010_host_recovery.cpp
 │   ├── C011_shortcut_routing.cpp
-│   └── C012_romanization.cpp
+│   ├── C012_romanization.cpp
+│   ├── C013_host_hang.cpp
+│   ├── HostHangWatchdogClient.cpp
+│   ├── HostHangWatchdogClient.h
+│   ├── HostHangWatchdogMain.cpp
+│   ├── HostHangWatchdog.h
+│   └── HostProcessSupport.h
 └── targets/
     ├── notepad.json
     ├── edge.json
@@ -94,11 +101,11 @@ compat-report-YYYYMMDD-HHMMSS/
         └── screenshot.png
 ```
 
-テストケース一覧（C-001〜C-012）と CI 連携は §13.3 / §13.6 を参照。
-Notepad、VS Code、Edge では C-001〜C-012 を実行する。環境条件を満たせず自動判定できないケースも
+テストケース一覧（C-001〜C-013）と CI 連携は §13.3 / §13.6 を参照。
+Notepad、VS Code、Edge では C-001〜C-013 を実行する。環境条件を満たせず自動判定できないケースも
 silent skip せず `failing-skip` としてレポートへ残す。終了コードは
 全件 pass が `0`、fail を含む場合が `1`、fail は無いが failing-skip を含む場合が `2`。
-C-002〜C-010 と C-012 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
+C-002〜C-010 と C-012〜C-013 は、英数入力でも成立する誤 pass を避けるため、C-001 の変換成功で
 azooKey の基準動作を確認できた場合だけ実行する。
 
 C-007 の自動操作は、サロゲートペアを一括した `SendInput` で注入し、対象アプリが
@@ -116,7 +123,15 @@ C-011 はクリップボードの全 format を実行前に即時複製してか
 C-010 は正規の PowerShell supervisor が起動したHostだけを対象とし、再起動後の
 per-user named pipeへ接続できるまで復帰とは判定しない。runnerによる代替Host起動は
 行わず、再起動できない場合は `host-recovery-failed` とする。再接続待ちが他のケースへ
-波及しないよう、3 targetともC-010を最後に実行する。
+波及しないよう、3 target とも C-013、C-010 の順に最後に実行する。
+
+C-013 は同じ supervisor 配下の Host を一時停止し、停止中のかな入力とアプリ応答、
+同一 Host 再開後の漢字変換を確認する。TIP の `Degraded` → `Ready` は構造化ログでも
+照合するため、実行前に `AZOOKEY_LOG=1` と `AZOOKEY_LOG_LEVEL=info` を設定して
+対象アプリを起動し直す。ログが取得できない、または遷移を対象アプリへ帰属できない
+場合は pass にしない。`compat_host_hang_watchdog.exe` を `compat_test.exe` と同じ
+ディレクトリに置く。監視プロセスは runner の異常終了か 8 秒の期限でも Host を再開する。
+Host に fault injection 用の起動引数は追加しない。
 
 ## Optional CI
 

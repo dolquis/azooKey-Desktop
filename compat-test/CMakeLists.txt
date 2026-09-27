@@ -29,6 +29,8 @@ add_executable(compat_test
   cases/C010_host_recovery.cpp
   cases/C011_shortcut_routing.cpp
   cases/C012_romanization.cpp
+  cases/C013_host_hang.cpp
+  cases/HostHangWatchdogClient.cpp
 )
 target_link_libraries(compat_test
   PRIVATE
@@ -43,6 +45,17 @@ target_compile_definitions(compat_test
   PRIVATE
     AZOOKEY_COMPAT_DEFAULT_TARGET="${CMAKE_CURRENT_SOURCE_DIR}/targets/notepad.json"
 )
+
+add_executable(compat_host_hang_watchdog
+  cases/HostHangWatchdogMain.cpp
+)
+target_include_directories(compat_host_hang_watchdog
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_link_libraries(compat_host_hang_watchdog
+  PRIVATE azookey_project_options azookey_project_warnings
+)
+add_dependencies(compat_test compat_host_hang_watchdog)
 
 if(AZOOKEY_BUILD_TESTS)
   add_executable(compat_test_unit_tests

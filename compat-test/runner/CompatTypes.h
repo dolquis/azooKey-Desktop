@@ -125,6 +125,7 @@ CaseDefinition MakeC009FocusTransitionCase();
 CaseDefinition MakeC010HostRecoveryCase();
 CaseDefinition MakeC011ShortcutRoutingCase();
 CaseDefinition MakeC012RomanizationCase();
+CaseDefinition MakeC013HostHangCase();
 
 const char* ResultStatusName(ResultStatus status);
 

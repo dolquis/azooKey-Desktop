@@ -52,7 +52,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `core_tests` | `core/tests/punctuation_rules_test.cpp` | M59 の組み込み句読点規則、TSV 上書き・無効化、不正行スキップ、guard 構文と Unknown の判定 |
 | `core_tests` | `core/tests/bracket_pairing_test.cpp` | 括弧テーブルの上書き・追加・無効化、アプリ別 allow/deny ポリシーの重ね合わせ、挿入・skip・空ペア Backspace 削除、対称引用符の境界判定 |
 | `core_tests` | `core/tests/app_profile_resolver_test.cpp` | アプリ別プロファイルの部分上書き、`auto`/inherit の解決順、プロセス名・ウィンドウクラス照合と決定的衝突報告、不正値の inherit |
-| `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定、機微本文の伏せ字化、環境変数 opt-in と level、Debug・本文 opt-in・非secure・詳細ログ許可の積による本文出力、Release の強制 redaction、イベント間・並行呼出し間の許可分離、書込不能先での非 throw、世代ローテーションと保持期間 |
+| `runtime_logger_tests` | `core/tests/runtime_logger_test.cpp` | 構造化ログの JSON 行 schema 固定（TIP 遷移の `transition_event` と数値 `process_id` を含む）、機微本文の伏せ字化、環境変数 opt-in と level、Debug・本文 opt-in・非secure・詳細ログ許可の積による本文出力、Release の強制 redaction、イベント間・並行呼出し間の許可分離、書込不能先での非 throw、世代ローテーションと保持期間 |
 | `core_tests` | `core/tests/crash_retention_test.cpp` | クラッシュ診断の個数・容量・保存期間制限、リンクと無関係なファイルの保護 |
 | `core_tests` | `core/tests/etw_logger_test.cpp` | ETW イベントの固定長 payload、数値フィールド、要求の対応付けと終了結果 |
 | `crash_reporting_tests` | `core/tests/crash_reporting_test.cpp` | 子プロセスのクラッシュ収集、main / worker の実スタックオーバーフローと同意 off、保存不能時の fallback、許可 stream と本文非混入 |
@@ -114,7 +114,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `azookey_settings_launch_arguments_tests` | `settings-app/tests/launch_arguments_test.cpp` | 設定アプリ起動引数の round-trip、値欠落・不正 LangId / プロファイルの reject、未指定と空指定の区別、重複・未知オプションの reject |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_document_test.cpp` | 設定ドキュメントの既定値と隠しキー保持、不正エントリの除去、ロック・読み取り失敗時の既存ファイル不変、不正文書の隔離と原子的保存による復旧、privacy 学習・ログ軸の保持と不正値の secure 制限、API キーの DPAPI 保護・旧平文移行・復号不能値の保全、`typoCorrectionMode`/`typoMinCount`/`autoWordRegistration.*` の保存時保持と不正値の削除 、M59 の 6 設定キーの保存保持 |
 | `azookey_settings_persistence_tests` | `settings-app/tests/settings_ipc_client_test.cpp` | 設定アプリから Host への Handshake と `UpdateConfig` 送信 |
-| `compat_test_unit_tests` | `compat-test/tests/compat_test_unit_tests.cpp` | 互換ハーネスの target 定義検証（自動化契約・既知回避策・一時文書の所有）、ケース選択（`--cases` / `--skip` の解析、C-001 前提の追加と除外）、レポート schema（`case_selection` を含む）と非信頼テキストの伏せ字化、クリップボード復元、ウィンドウ所有権判定 |
+| `compat_test_unit_tests` | `compat-test/tests/compat_test_unit_tests.cpp` | 互換ハーネスの target 定義検証（自動化契約・既知回避策・一時文書の所有、C-013 と C-010 の最終配置）、ケース選択（`--cases` / `--skip` の解析、C-013 を含む C-001 前提の追加と除外）、C-013 watchdog の解除条件と一部停止時の再開記録、レポート schema（`case_selection` を含む）と非信頼テキストの伏せ字化、クリップボード復元、ウィンドウ所有権判定 |
 | `temporary_learning_file_tests` | `bench/temporary_learning_file_test.cpp` | bench 用一時学習ファイルの並行予約時の独立性、他所有者への非干渉、巻き戻し時の後始末と想定外ファイルの保全 |
 | `benchmark_result_tests` | `bench/benchmark_result_test.cpp` | bench JSON schema の固定、baseline 比較の閾値と絶対ノイズ床、baseline 欠落・非互換時の非回帰扱い、UTF-8 出力パス |
 | `conversion_quality_tests` | `bench/conversion_quality_test.cpp` | 変換品質の符号位置単位 CER、canonical / acceptable 一致の区別、raw と NFKC の独立集計、不正 UTF-8 の reject、データセットハッシュの改行正規化 |

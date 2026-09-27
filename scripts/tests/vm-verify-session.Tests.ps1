@@ -742,7 +742,8 @@ Describe "VM verification session automation" {
         param(
           [Parameter(Mandatory = $true)]
           [string]$Root,
-          [switch]$WithoutCompat
+          [switch]$WithoutCompat,
+          [switch]$WithoutWatchdog
         )
 
         $staging = Join-Path $Root "staging"
@@ -751,6 +752,9 @@ Describe "VM verification session automation" {
         "# bootstrap" | Set-Content -LiteralPath (Join-Path $staging "verify-bootstrap.ps1")
         if (-not $WithoutCompat) {
           "exe" | Set-Content -LiteralPath (Join-Path $staging "compat_test.exe")
+          if (-not $WithoutWatchdog) {
+            "watchdog" | Set-Content -LiteralPath (Join-Path $staging "compat_host_hang_watchdog.exe")
+          }
           "{}" | Set-Content -LiteralPath (Join-Path $staging "targets\notepad.json")
           "{}" | Set-Content -LiteralPath (Join-Path $staging "targets\edge.json")
         }
@@ -773,6 +777,7 @@ Describe "VM verification session automation" {
 
       $targets | Should -Be @("edge", "notepad")
       Join-Path $packageRoot "compat_test.exe" | Should -Exist
+      Join-Path $packageRoot "compat_host_hang_watchdog.exe" | Should -Exist
     }
 
     It "expands the archive to a stable path and returns the compat targets" {
@@ -798,7 +803,15 @@ Describe "VM verification session automation" {
 
       { Initialize-VmVerifyGuestPackage -ZipPath $zip `
           -PackageRoot (Join-Path $guestRoot "pkg") -RunRoot (Join-Path $guestRoot "run") } |
-        Should -Throw -ExpectedMessage "*compat_test.exe, targets\*.json*-IncludeCompat*"
+        Should -Throw -ExpectedMessage "*compat_test.exe, compat_host_hang_watchdog.exe, targets\*.json*-IncludeCompat*"
+    }
+
+    It "fails before bootstrap when the compat watchdog is missing" {
+      $zip = Initialize-GuestArchive -Root $guestRoot -WithoutWatchdog
+
+      { Initialize-VmVerifyGuestPackage -ZipPath $zip `
+          -PackageRoot (Join-Path $guestRoot "pkg") -RunRoot (Join-Path $guestRoot "run") } |
+        Should -Throw -ExpectedMessage "*compat_host_hang_watchdog.exe*-IncludeCompat*"
     }
   }
 
@@ -1086,6 +1099,37 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $status.skip | Should -Be "C-010"
       Should -Invoke Start-Process -Times 2 -Exactly -ParameterFilter {
         $ArgumentList -like "*--output*`" --cases C-001,C-004 --skip C-010"
+      }
+    }
+
+    It "enables TIP info logging only while running C-013" {
+      $originalLog = [Environment]::GetEnvironmentVariable("AZOOKEY_LOG", "Process")
+      $originalLevel = [Environment]::GetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "Process")
+      try {
+        [Environment]::SetEnvironmentVariable("AZOOKEY_LOG", "0", "Process")
+        [Environment]::SetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "warn", "Process")
+        $script:observedLog = @()
+        Mock Start-Process {
+          $script:observedLog += "$env:AZOOKEY_LOG/$env:AZOOKEY_LOG_LEVEL"
+          [pscustomobject]@{ ExitCode = 2; Handle = [IntPtr]::Zero } |
+            Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { } -PassThru
+        }
+
+        Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot -Cases "C-013"
+        $script:observedLog | Should -Be @("1/info", "1/info")
+        $env:AZOOKEY_LOG | Should -Be "0"
+        $env:AZOOKEY_LOG_LEVEL | Should -Be "warn"
+
+        $script:observedLog = @()
+        Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot -Cases "C-001"
+        $script:observedLog | Should -Be @("0/warn", "0/warn")
+
+        $script:observedLog = @()
+        Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot -Skip "C-013"
+        $script:observedLog | Should -Be @("0/warn", "0/warn")
+      } finally {
+        [Environment]::SetEnvironmentVariable("AZOOKEY_LOG", $originalLog, "Process")
+        [Environment]::SetEnvironmentVariable("AZOOKEY_LOG_LEVEL", $originalLevel, "Process")
       }
     }
 

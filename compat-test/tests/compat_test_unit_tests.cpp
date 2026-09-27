@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "azookey/ipc/Json.h"
+#include "cases/HostHangWatchdog.h"
 #include "runner/CaseSelection.h"
 #include "runner/CaseSupport.h"
 #include "runner/ClipboardIsolation.h"
@@ -24,6 +25,31 @@
 
 namespace azookey::compat_test {
 namespace {
+
+TEST(HostHangWatchdogTest, ParentExitAndTimeoutRequireTheSameReleasePath) {
+  using host_hang::ClassifyWake;
+  using host_hang::WakeReason;
+  EXPECT_EQ(ClassifyWake(WAIT_OBJECT_0), WakeReason::Release);
+  EXPECT_EQ(ClassifyWake(WAIT_OBJECT_0 + 1), WakeReason::ParentExited);
+  EXPECT_EQ(ClassifyWake(WAIT_TIMEOUT), WakeReason::Deadline);
+  EXPECT_EQ(ClassifyWake(WAIT_FAILED), WakeReason::Error);
+}
+
+TEST(HostHangWatchdogTest, PartialSuspendAndRetryNeverResumeTheSameThreadTwice) {
+  host_hang::SuspensionLedger ledger(3);
+  EXPECT_TRUE(ledger.MarkSuspended(0));
+  EXPECT_TRUE(ledger.MarkSuspended(1));
+  EXPECT_FALSE(ledger.MarkSuspended(1));
+  // Thread 2 failed before SuspendThread succeeded and must not be resumed.
+  EXPECT_FALSE(ledger.NeedsResume(2));
+  EXPECT_FALSE(ledger.AllResumed());
+  EXPECT_TRUE(ledger.MarkResumed(1));
+  EXPECT_FALSE(ledger.MarkResumed(1));
+  // A failed ResumeThread leaves the entry pending for a later retry.
+  EXPECT_TRUE(ledger.NeedsResume(0));
+  EXPECT_TRUE(ledger.MarkResumed(0));
+  EXPECT_TRUE(ledger.AllResumed());
+}
 
 std::string ReadFile(const std::filesystem::path& path) {
   std::ifstream stream(path, std::ios::binary);
@@ -219,8 +245,8 @@ TEST(CaseSelectionTest, ParsesCommaSeparatedUniqueCaseIds) {
 
 class CaseSelectionPlanTest : public ::testing::Test {
  protected:
-  const std::vector<std::string> target_cases{"C-001", "C-002", "C-011", "C-012", "C-010"};
-  const std::set<std::string> dependents{"C-002", "C-010", "C-012"};
+  const std::vector<std::string> target_cases{"C-001", "C-002", "C-011", "C-012", "C-013", "C-010"};
+  const std::set<std::string> dependents{"C-002", "C-010", "C-012", "C-013"};
 
   std::optional<CasePlan> Plan(std::optional<std::vector<std::string>> requested,
                                std::vector<std::string> skipped, std::string* error = nullptr) {
@@ -237,11 +263,11 @@ TEST_F(CaseSelectionPlanTest, SelectsEveryTargetCaseInTargetOrderByDefault) {
   EXPECT_FALSE(plan->baseline_case_excluded);
 }
 
-TEST_F(CaseSelectionPlanTest, SkipKeepsBaselineAndLeavesHostKillForALaterRun) {
-  const auto plan = Plan(std::nullopt, {"C-010"});
+TEST_F(CaseSelectionPlanTest, SkipKeepsBaselineAndLeavesHostFaultsForALaterRun) {
+  const auto plan = Plan(std::nullopt, {"C-013", "C-010"});
   ASSERT_TRUE(plan);
   EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-002", "C-011", "C-012"}));
-  EXPECT_EQ(plan->excluded, std::vector<std::string>{"C-010"});
+  EXPECT_EQ(plan->excluded, (std::vector<std::string>{"C-013", "C-010"}));
   EXPECT_FALSE(plan->baseline_case_excluded);
 }
 
@@ -249,7 +275,7 @@ TEST_F(CaseSelectionPlanTest, CasesKeepTargetOrderAndRecordEveryUnselectedCase) 
   const auto plan = Plan(std::vector<std::string>{"C-010", "C-001"}, {});
   ASSERT_TRUE(plan);
   EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-010"}));
-  EXPECT_EQ(plan->excluded, (std::vector<std::string>{"C-002", "C-011", "C-012"}));
+  EXPECT_EQ(plan->excluded, (std::vector<std::string>{"C-002", "C-011", "C-012", "C-013"}));
   EXPECT_TRUE(plan->prerequisites_added.empty());
 }
 
@@ -259,6 +285,13 @@ TEST_F(CaseSelectionPlanTest, DependentCaseAloneAddsBaselinePrerequisite) {
   EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-010"}));
   EXPECT_EQ(plan->prerequisites_added, std::vector<std::string>{"C-001"});
   EXPECT_FALSE(plan->baseline_case_excluded);
+}
+
+TEST_F(CaseSelectionPlanTest, HostHangAloneAddsBaselinePrerequisite) {
+  const auto plan = Plan(std::vector<std::string>{"C-013"}, {});
+  ASSERT_TRUE(plan);
+  EXPECT_EQ(plan->executed, (std::vector<std::string>{"C-001", "C-013"}));
+  EXPECT_EQ(plan->prerequisites_added, std::vector<std::string>{"C-001"});
 }
 
 TEST_F(CaseSelectionPlanTest, IndependentCaseAloneDoesNotAddBaseline) {
@@ -285,8 +318,8 @@ TEST_F(CaseSelectionPlanTest, CombinesCasesAndSkipAndIgnoresSkipOutsideSelection
 
 TEST_F(CaseSelectionPlanTest, RejectsUnknownCasesAndEmptySelection) {
   std::string error;
-  EXPECT_FALSE(Plan(std::vector<std::string>{"C-013"}, {}, &error));
-  EXPECT_NE(error.find("C-013"), std::string::npos);
+  EXPECT_FALSE(Plan(std::vector<std::string>{"C-014"}, {}, &error));
+  EXPECT_NE(error.find("C-014"), std::string::npos);
   EXPECT_FALSE(Plan(std::nullopt, {"C-099"}, &error));
   EXPECT_NE(error.find("C-099"), std::string::npos);
   EXPECT_FALSE(Plan(std::vector<std::string>{"C-010"}, {"C-010"}, &error));
@@ -310,8 +343,8 @@ TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
                      "azooKey compatibility editor"},
   };
   const std::set<std::string> expected_cases{
-      "C-001", "C-002", "C-003", "C-004", "C-005", "C-006",
-      "C-007", "C-008", "C-009", "C-010", "C-011", "C-012",
+      "C-001", "C-002", "C-003", "C-004", "C-005", "C-006", "C-007",
+      "C-008", "C-009", "C-010", "C-011", "C-012", "C-013",
   };
 
   for (const auto& expected : targets) {
@@ -346,6 +379,8 @@ TEST(TargetConfigFilesTest, M50GateTargetsDeclareFullAutomationContract) {
     EXPECT_EQ(actual_cases, expected_cases);
     ASSERT_FALSE(cases->empty());
     EXPECT_EQ(cases->back().AsString(), "C-010");
+    ASSERT_GE(cases->size(), 2u);
+    EXPECT_EQ((*cases)[cases->size() - 2].AsString(), "C-013");
   }
 }
 

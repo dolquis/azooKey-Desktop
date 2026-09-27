@@ -3206,8 +3206,9 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
       "ipc_connection_state_transition",
       {{"from", SafeLogText(std::string(IpcConnectionStateName(from)))},
        {"to", SafeLogText(std::string(IpcConnectionStateName(*to)))},
-       {"event", SafeLogText(std::string(IpcConnectionEventName(event)))},
-       {"attempt", static_cast<uint64_t>(attempt)}});
+       {"transition_event", SafeLogText(std::string(IpcConnectionEventName(event)))},
+       {"attempt", static_cast<uint64_t>(attempt)},
+       {"process_id", static_cast<uint64_t>(GetCurrentProcessId())}});
 }
 
 // Caller holds ipc_mtx_. True when the serve loop has something to send, so an

@@ -241,11 +241,10 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
             valid = valid && setting.IsBool();
           } else if (field == "custom" && setting.IsObject()) {
             for (const auto& [axis, enabled] : setting.AsObject())
-              valid =
-                  valid &&
-                  (axis == "learning" || axis == "aiCandidate" || axis == "externalAi" ||
-                   axis == "detailedLogging") &&
-                  enabled.IsBool();
+              valid = valid &&
+                      (axis == "learning" || axis == "prediction" || axis == "aiCandidate" ||
+                       axis == "externalAi" || axis == "detailedLogging") &&
+                      enabled.IsBool();
           } else {
             valid = false;
           }

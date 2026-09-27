@@ -506,12 +506,49 @@ TEST(PayloadsTest, QueryBatchConversion) {
   res.segments.push_back(segment);
 
   auto res_json = azookey::ipc::BuildQueryBatchConversionResponse(res);
+  EXPECT_EQ(res_json.find("\"error_class\""), std::string::npos);
   auto res_parsed = azookey::ipc::ParseQueryBatchConversionResponse(res_json);
   ASSERT_TRUE(res_parsed.has_value());
+  EXPECT_FALSE(res_parsed->error_class.has_value());
   EXPECT_EQ(res_parsed->full_surface, "日本語");
   ASSERT_EQ(res_parsed->segments.size(), 1u);
   ASSERT_EQ(res_parsed->segments[0].candidates.size(), 1u);
   EXPECT_EQ(res_parsed->segments[0].candidates[0].surface, "日本語");
+}
+
+TEST(PayloadsTest, QueryBatchConversionErrorClassRoundTrip) {
+  azookey::ipc::QueryBatchConversionResponse response;
+  response.error_class = "Network";
+
+  const auto json = azookey::ipc::BuildQueryBatchConversionResponse(response);
+  EXPECT_NE(json.find("\"error_class\":\"Network\""), std::string::npos);
+  const auto parsed = azookey::ipc::ParseQueryBatchConversionResponse(json);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_TRUE(parsed->error_class.has_value());
+  EXPECT_EQ(*parsed->error_class, "Network");
+}
+
+TEST(PayloadsTest, QueryBatchConversionErrorClassAcceptsUnknownString) {
+  const auto parsed = azookey::ipc::ParseQueryBatchConversionResponse(
+      R"({"full_surface":"かな","error_class":"FutureError"})");
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_TRUE(parsed->error_class.has_value());
+  EXPECT_EQ(*parsed->error_class, "FutureError");
+  EXPECT_EQ(parsed->full_surface, "かな");
+}
+
+TEST(PayloadsTest, QueryBatchConversionErrorClassIgnoresMalformedValues) {
+  for (const auto* json : {
+           R"({"full_surface":"かな","error_class":null})",
+           R"({"full_surface":"かな","error_class":7})",
+           R"({"full_surface":"かな","error_class":false})",
+           R"({"full_surface":"かな","error_class":{}})",
+       }) {
+    const auto parsed = azookey::ipc::ParseQueryBatchConversionResponse(json);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_FALSE(parsed->error_class.has_value());
+    EXPECT_EQ(parsed->full_surface, "かな");
+  }
 }
 
 TEST(PayloadsTest, CancelPreservesLargeTargetRequestId) {

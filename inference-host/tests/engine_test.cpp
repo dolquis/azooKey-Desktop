@@ -312,6 +312,22 @@ class ThrowingLearningStore final : public azookey::learning::LearningStore {
     throw std::runtime_error("candidate text private-score-failure");
   }
 };
+
+class CancelOnScoreLearningStore final : public azookey::learning::LearningStore {
+ public:
+  explicit CancelOnScoreLearningStore(std::atomic<bool>& cancel)
+      : azookey::learning::LearningStore(TempPath("azookey_host_rerank_cancel.tsv"),
+                                         &azookey::learning::test::Crypto()),
+        cancel_(cancel) {}
+
+  double Score(const std::string&, const std::string&, uint64_t) const override {
+    cancel_.store(true, std::memory_order_relaxed);
+    return 0.0;
+  }
+
+ private:
+  std::atomic<bool>& cancel_;
+};
 }  // namespace
 
 TEST(InferenceEngineTest, LocalAiCleanupRealModelSmoke) {
@@ -1403,6 +1419,37 @@ TEST(InferenceEngineTraceTest, ModelExceptionAndFallbackProduceOneInferenceSampl
   std::remove(log_path.c_str());
 }
 
+TEST(InferenceEngineTraceTest, RerankerCancellationLogsCancelledPhase) {
+  const auto log_path = TempPath("azookey_host_rerank_cancel.jsonl");
+  std::remove(log_path.c_str());
+  std::atomic<bool> cancel{false};
+  CancelOnScoreLearningStore store(cancel);
+  azookey::logging::RuntimeLoggerOptions log_options;
+  log_options.enabled = true;
+  log_options.component = "host";
+  log_options.output_path = log_path;
+  azookey::logging::RuntimeLogger logger(log_options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
+                                        {}, &logger);
+  const azookey::host::InferenceTelemetry telemetry{42, {}, "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2"};
+
+  const auto candidates =
+      engine.QueryCandidates("にほん", "", kNowBase, &cancel, 10, false, &telemetry);
+  EXPECT_TRUE(cancel.load(std::memory_order_relaxed));
+  EXPECT_TRUE(candidates.empty());
+
+  std::ifstream stream(log_path);
+  ASSERT_TRUE(stream.is_open());
+  int rerank_samples = 0;
+  for (std::string line; std::getline(stream, line);) {
+    if (line.find("\"phase\":\"rerank\"") == std::string::npos) continue;
+    ++rerank_samples;
+    EXPECT_NE(line.find("\"result\":\"cancelled\""), std::string::npos);
+  }
+  EXPECT_EQ(rerank_samples, 1);
+  std::remove(log_path.c_str());
+}
+
 TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly) {
   if (ProbeOnlyGgufUnsupportedWithRealLlama()) {
     GTEST_SKIP() << "The minimal GGUF fixture is probe-only; real llama.cpp "
@@ -1432,6 +1479,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly)
   }));
   ASSERT_TRUE(engine->effective_last_error().has_value());
   EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   std::remove(model_path.c_str());
   RemoveProtectedStoreFile(lpath);
@@ -1463,6 +1511,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   EXPECT_NE(degraded.front().debug_info.find("zenzai-degraded"), std::string::npos);
   ASSERT_TRUE(engine->effective_last_error().has_value());
   EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   auto nll_config = engine->config();
   nll_config.nll.enabled = true;
@@ -1484,6 +1533,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   ASSERT_FALSE(recovered.empty());
   EXPECT_EQ(recovered.front().surface, "日本語");
   EXPECT_FALSE(engine->effective_last_error().has_value());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   // A mock runtime is loaded in the no-llama build, but cannot score NLL.
   // Repeated NLL requests must neither contaminate health nor change candidates.

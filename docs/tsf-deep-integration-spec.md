@@ -63,9 +63,11 @@ public:
 
 TIP は選択変更を `ITfTextEditSink::OnEndEdit` で検知し、UI メッセージで privacy を
 確認してから IPC worker に逆引きと候補取得を先読みさせる。`GetReconversion` は
-選択範囲と context が一致するキャッシュ済み候補を返す。未取得時は
-`TF_E_NOCONVERSION` を返し、TSF スレッド上で Host の応答を待たない。
-変換キーは選択範囲を保持して非同期取得し、候補 UI に表示する。
+選択範囲と context が一致するキャッシュ済み候補を返す。キャッシュ未取得時は
+元の選択文字列を暫定候補 1 件として直ちに返し、Host の応答を TSF/UI スレッド上で
+待たない。後から届いた Host 候補は azooKey の候補 UI に表示する。選択範囲または
+context が変わった後の応答は破棄し、元の選択範囲へ適用しない。
+変換キーも選択範囲を保持して非同期取得し、候補 UI に表示する。
 
 新規 IPC：
 
@@ -80,8 +82,9 @@ ReverseConvertResponse:
 
 #### Reconvert
 
-- `GetReconversion` の結果から先頭候補で即座に置換
-- ユーザーが候補を選び直したい場合は別途 `ITfCandidateListUIElement` を介する
+- 元の選択文字列と同じ候補を確定した場合、その文字列を変更しない
+- Host 候補の確定は、対象の選択範囲と context が一致する場合に限って置換する
+- 候補選択には azooKey の候補 UI を使う
 
 ### 1.3 FunctionProvider 公開
 

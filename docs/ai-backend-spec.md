@@ -88,10 +88,11 @@
 へ寄せる既定とする（§3.3）。`rich-features-spec.md` §X-3-3 が「Zenzai に渡す」と記すのと
 本書の「同じ `AiBackend` 経路を流用」（roadmap M16 横断）は、この既定で整合する。
 
-### 3.2 Host 側 `AiBackend` インターフェイス
+### 3.2 Host 側 `AiBackend` の概念モデル
 
-`inference-host/src/AiBackend.cpp`（新規）に次の抽象を実装する。3 消費者の IPC
-ハンドラ（`Dispatcher`）は payload を `AiTransformRequest` に正規化して呼ぶ。
+3 消費者の IPC ハンドラ（`Dispatcher`）は payload を `AiTransformRequest` に
+正規化して呼ぶ。以下は拡張対象も含む概念モデルであり、実際の C++ 宣言と許可・
+キャンセル引数の正典は `inference-host/include/azookey/host/AiBackend.h` とする。
 
 ```cpp
 namespace azookey::host {
@@ -105,7 +106,8 @@ enum class AiTask {
 enum class AiBackendKind { None, OpenAi, LocalZenzai };
 
 enum class AiErrorClass {
-  None, Auth, RateLimit, ServerError, Network, Timeout, Parse, BlockedBySecure, Disabled
+  None, Auth, RateLimit, ServerError, Network, Timeout, Parse, BlockedBySecure, Disabled,
+  Canceled, KeyReentry
 };
 
 struct AiTransformRequest {
@@ -364,9 +366,18 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 | receive timeout | `Timeout` | 応答なし |
 | 構造不正 | `Parse` | 応答を解釈できない |
 
-ログには `reading` / `surface` / 本文を出さない（secure 中は §8、通常時も本文ログは
-`dev-infrastructure-spec.md` のログ規約に従う）。エラー本文（API のエラー JSON）は
-要旨化してログし、生レスポンスをそのまま残さない。
+ログには `reading` / `surface` / 入力 / 鍵 / プロバイダ応答本文を出さない
+（secure 中は §8、通常時も `dev-infrastructure-spec.md` のログ規約に従う）。
+エラー本文（API のエラー JSON）は任意の入力や鍵を含み得るため参照・記録せず、
+HTTP status と内部 `AiErrorClass` だけで分類する。
+
+`dpapi:` キーを復号できない場合は `KeyReentry` とし、外部送信せず設定アプリでの
+キー再入力を促す。`QueryBatchConversionResponse.error_class` は失敗分類名を任意で
+返し、旧 Host の省略応答と未知値を TIP が受け入れる。TIP の `ai-cleanup` 劣化案内は
+`Auth` が「API キーを確認してください」、`RateLimit` が「少し待って再試行してください」、
+`Timeout` が「応答がありません。再試行してください」、`KeyReentry` が
+「API キーを再入力してください」を要旨とする。表示文言は固定値とし、候補の
+表層形と確定文字列には含めない。
 
 ### 7.3 リトライ方針
 
@@ -374,6 +385,8 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
   `Auth`（401/403）・`Parse` は**再試行しない**（無駄打ち防止）。
 - **指数バックオフ + ジッタ**、最大 **2 回**再試行（合計 3 回試行）。`Retry-After`
   ヘッダがあれば優先。総待ち時間が §7.1 のタイムアウトを超えない範囲で打ち切る。
+- Host の RequestScheduler が管理するキャンセル通知は、retry 待機を即時解除する。
+  待機解除後は再送せず `Canceled` で終了する。
 - M16（同期・ユーザー待ち）は体感を優先し再試行を抑制（最大 1 回 or 即時 fallback）。
   X-3-3（非同期・背景）は静かに諦めてよい（finding 0 件として扱う）。
 
@@ -394,7 +407,10 @@ M32 の GET 経路は `inference-host/src/HttpDownloader.cpp` に実装し、M16
 - M16 は失敗時、原文を維持し、ダイアログ/インジケータで分類済みメッセージ（§7.2）を
   控えめに提示する。secure 由来の抑止は「セーフ入力のため外部 AI を使用しません」を
   明示する（混乱回避）。
-- M58-C / X-3-3 の劣化表示は各 spec（M47 の候補ウィンドウ下部インジケータ規約）に従う。
+- M58-C は neural fallback の候補表示中、候補の下に分類別の固定案内を表示する。
+  app 描画の UI-less 経路では候補 UIElement の説明として同じ案内を公開する。
+  ホストアプリが説明を実際に描くかはアプリの実機確認対象とする。候補 UI を閉じるか
+  新しい要求へ切り替わると案内を消す。X-3-3 の劣化表示は M47 の規約に従う。
 
 ---
 

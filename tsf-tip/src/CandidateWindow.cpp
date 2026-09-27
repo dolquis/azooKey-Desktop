@@ -3,6 +3,7 @@
 #include <ShellScalingApi.h>
 #include <dwrite_2.h>
 #include <icu.h>
+#include <windowsx.h>
 #include <wrl.h>
 
 #include <algorithm>
@@ -178,7 +179,44 @@ bool DrawColorEmoji(EmojiDrawingCache& cache, HDC hdc, HFONT font, const std::ws
 }
 
 constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
+constexpr wchar_t kDetailsClassName[] = L"azooKeyCandidateHealthDetailsWnd";
 constexpr wchar_t kFallbackFontFace[] = L"Yu Gothic UI";
+
+const wchar_t* HealthBannerText(CandidateHealthState state) {
+  switch (state) {
+    case CandidateHealthState::DegradedSimple:
+      return L"⚠️ 変換エンジンに接続できないため、かな・カタカナ候補で継続しています";
+    case CandidateHealthState::DegradedModel:
+      return L"⚠️ Zenzai を使えないため、簡易変換で継続しています";
+    case CandidateHealthState::SafeMode:
+      return L"⚠️ 異常終了が続いたため、安全モードで動作しています（AI と学習を停止中）";
+    case CandidateHealthState::Healthy:
+      return L"";
+  }
+  return L"";
+}
+
+const wchar_t* HealthDetailsText(CandidateHealthState state) {
+  switch (state) {
+    case CandidateHealthState::DegradedSimple:
+      return L"変換エンジンとの接続を確認してください。詳しく調べるには、コマンドプロンプトで "
+             L"azookey_diag.exe --json を実行してください。診断 ZIP は azookey_diag.exe --collect "
+             L"--output azookey-diag.zip で作成できます。";
+    case CandidateHealthState::DegradedModel:
+      return L"Zenzai "
+             L"モデルを利用できません。モデル設定を確認し、再試行してください。詳しく調べるには、コ"
+             L"マンドプロンプトで azookey_diag.exe --json を実行してください。";
+    case CandidateHealthState::SafeMode:
+      return L"異常終了の原因（直前に変更したモデルや backend "
+             L"など）を取り除き、%LOCALAPPDATA%\\azooKey\\config\\settings.json の "
+             L"safeMode.enabled を false "
+             L"にしてください。その後サインアウトして入り直すか、設定アプリで任意の設定を保存して "
+             L"UpdateConfig を送ってください。詳しくは azookey_diag.exe --json で確認できます。";
+    case CandidateHealthState::Healthy:
+      return L"";
+  }
+  return L"";
+}
 
 HMODULE GetTipModuleHandle() {
   HMODULE module = nullptr;
@@ -343,7 +381,9 @@ bool CandidateWindow::Create() {
 }
 
 void CandidateWindow::Destroy() {
+  HideDetails();
   if (hwnd_) {
+    KillTimer(hwnd_, kHealthBannerTimer);
     DestroyWindow(hwnd_);
     // hwnd_ is cleared in WM_DESTROY handler.
   }
@@ -353,12 +393,14 @@ void CandidateWindow::Destroy() {
   }
 }
 
-void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items,
-                           int selected_idx) {
+void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items, int selected_idx,
+                           std::wstring notice) {
   if (!hwnd_ || items.empty()) return;
+  last_anchor_ = pt;
 
   const ScopedThreadDpiAwarenessContext dpi_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   items_ = items;
+  notice_ = std::move(notice);
   if (!emoji_cache_) emoji_cache_ = std::make_unique<EmojiDrawingCache>();
   emoji_cache_->layouts.clear();
   selected_idx_ = std::clamp(selected_idx, 0, static_cast<int>(items_.size()) - 1);
@@ -371,6 +413,7 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   if (hdc && font_) old_font = SelectObject(hdc, font_);
   int max_surface_w = metrics_.min_text_width;
   int max_description_w = 0;
+  int notice_width = 0;
   if (hdc) {
     for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
       const auto& item = items_[static_cast<size_t>(i)];
@@ -394,6 +437,11 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
         max_description_w = std::max(max_description_w, static_cast<int>(sz.cx));
       }
     }
+    if (!notice_.empty()) {
+      SIZE size{};
+      GetTextExtentPoint32W(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &size);
+      notice_width = size.cx;
+    }
   }
   if (hdc) {
     if (old_font) SelectObject(hdc, old_font);
@@ -405,12 +453,19 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
   int width =
       std::min(columns.content_width + metrics_.horizontal_padding * 2 + metrics_.extra_width,
                metrics_.max_width);
-  int height = metrics_.item_height * static_cast<int>(items_.size());
+  width =
+      std::min(std::max(width, notice_width + metrics_.horizontal_padding * 2), metrics_.max_width);
+  int height = metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
+  if (health_banner_visible_) {
+    width = std::max(width, ScaleForDpi(480, dpi_));
+    height += HealthBannerHeight();
+  }
 
   // Keep window on-screen: flip above caret if it would overflow below.
   MONITORINFO mi{};
   mi.cbSize = sizeof(mi);
   GetMonitorInfoW(mon, &mi);
+  width = std::min(width, static_cast<int>(mi.rcWork.right - mi.rcWork.left));
   if (pt.x + width > mi.rcWork.right) pt.x = mi.rcWork.right - width;
   if (pt.x < mi.rcWork.left) pt.x = mi.rcWork.left;
   if (pt.y + height > mi.rcWork.bottom) {
@@ -424,7 +479,157 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
 }
 
 void CandidateWindow::Hide() {
+  HideDetails();
   if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+  HideHealthBanner();
+}
+
+void CandidateWindow::ShowHealthBanner(CandidateHealthState state) {
+  if (state == CandidateHealthState::Healthy) {
+    HideDetails();
+    HideHealthBanner();
+    health_state_ = state;
+    return;
+  }
+  if (!hwnd_) return;
+  if (state != health_state_) HideDetails();
+  health_state_ = state;
+  health_banner_visible_ = true;
+  if (IsVisible()) ResizeAtLastAnchor();
+  SetTimer(hwnd_, kHealthBannerTimer, kHealthBannerDurationMs, nullptr);
+}
+
+void CandidateWindow::HideHealthBanner() {
+  if (hwnd_) KillTimer(hwnd_, kHealthBannerTimer);
+  if (!health_banner_visible_) return;
+  health_banner_visible_ = false;
+  if (IsVisible()) ResizeAtLastAnchor();
+}
+
+void CandidateWindow::SetRetryInFlight(bool in_flight) {
+  retry_in_flight_ = in_flight;
+  Repaint();
+}
+
+void CandidateWindow::ShowDetails() {
+  if (!hwnd_ || health_state_ == CandidateHealthState::Healthy) return;
+  HideDetails();
+  static const ATOM details_class = []() -> ATOM {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
+    wc.lpfnWndProc = DetailsWndProc;
+    wc.hInstance = GetTipModuleHandle();
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_INFOBK + 1);
+    wc.lpszClassName = kDetailsClassName;
+    ATOM atom = RegisterClassExW(&wc);
+    if (atom) return atom;
+    return GetLastError() == ERROR_CLASS_ALREADY_EXISTS ? ATOM{1} : ATOM{0};
+  }();
+  if (!details_class) return;
+
+  RECT candidate_rc{};
+  GetWindowRect(hwnd_, &candidate_rc);
+  HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitor_info{};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (!GetMonitorInfoW(monitor, &monitor_info)) return;
+  const int width = std::min(ScaleForDpi(480, dpi_), static_cast<int>(monitor_info.rcWork.right -
+                                                                      monitor_info.rcWork.left));
+  const int height = std::min(ScaleForDpi(240, dpi_), static_cast<int>(monitor_info.rcWork.bottom -
+                                                                       monitor_info.rcWork.top));
+  int x =
+      std::clamp(static_cast<int>(candidate_rc.left), static_cast<int>(monitor_info.rcWork.left),
+                 std::max(static_cast<int>(monitor_info.rcWork.left),
+                          static_cast<int>(monitor_info.rcWork.right) - width));
+  int y = static_cast<int>(candidate_rc.bottom);
+  if (y + height > monitor_info.rcWork.bottom) y = static_cast<int>(candidate_rc.top) - height;
+  y = std::clamp(y, static_cast<int>(monitor_info.rcWork.top),
+                 std::max(static_cast<int>(monitor_info.rcWork.top),
+                          static_cast<int>(monitor_info.rcWork.bottom) - height));
+  details_hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                  kDetailsClassName, nullptr, WS_POPUP | WS_BORDER, x, y, width,
+                                  height, hwnd_, nullptr, GetTipModuleHandle(), this);
+  if (details_hwnd_) ShowWindow(details_hwnd_, SW_SHOWNOACTIVATE);
+}
+
+void CandidateWindow::HideDetails() {
+  if (details_hwnd_) DestroyWindow(details_hwnd_);
+}
+
+// static
+LRESULT CALLBACK CandidateWindow::DetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam,
+                                                 LPARAM lParam) {
+  CandidateWindow* self = nullptr;
+  if (msg == WM_NCCREATE) {
+    auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+    self = static_cast<CandidateWindow*>(create->lpCreateParams);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+  } else {
+    self = reinterpret_cast<CandidateWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  }
+  switch (msg) {
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
+    case WM_PAINT: {
+      PAINTSTRUCT paint{};
+      HDC hdc = BeginPaint(hwnd, &paint);
+      RECT rect{};
+      GetClientRect(hwnd, &rect);
+      FillRect(hdc, &rect, reinterpret_cast<HBRUSH>(COLOR_INFOBK + 1));
+      HGDIOBJ old_font = self && self->font_ ? SelectObject(hdc, self->font_) : nullptr;
+      SetBkMode(hdc, TRANSPARENT);
+      SetTextColor(hdc, GetSysColor(COLOR_INFOTEXT));
+      const int pad = self ? self->metrics_.horizontal_padding : 8;
+      InflateRect(&rect, -pad, -pad);
+      rect.bottom -= self ? self->metrics_.item_height : 24;
+      if (self) {
+        DrawTextW(hdc, HealthDetailsText(self->health_state_), -1, &rect,
+                  DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+      }
+      RECT close_rect{};
+      GetClientRect(hwnd, &close_rect);
+      close_rect.left = close_rect.right - (self ? ScaleForDpi(90, self->dpi_) : 90);
+      close_rect.top = close_rect.bottom - (self ? self->metrics_.item_height : 24);
+      DrawTextW(hdc, L"[閉じる]", -1, &close_rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      if (old_font) SelectObject(hdc, old_font);
+      EndPaint(hwnd, &paint);
+      return 0;
+    }
+    case WM_LBUTTONDOWN:
+      if (self) self->HideDetails();
+      return 0;
+    case WM_DESTROY:
+      if (self) self->details_hwnd_ = nullptr;
+      return 0;
+    default:
+      return DefWindowProcW(hwnd, msg, wParam, lParam);
+  }
+}
+
+void CandidateWindow::ResizeAtLastAnchor() {
+  if (!items_.empty()) Show(last_anchor_, items_, selected_idx_, notice_);
+}
+
+int CandidateWindow::HealthBannerHeight() const { return metrics_.item_height * 3; }
+
+RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
+  const int top =
+      metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1) + 2);
+  const int button_width = ScaleForDpi(52, dpi_);
+  const int right =
+      width - metrics_.horizontal_padding -
+      (health_state_ == CandidateHealthState::DegradedModel ? ScaleForDpi(68, dpi_) : 0);
+  return {right - button_width, top, right, top + metrics_.item_height};
+}
+
+RECT CandidateWindow::HealthRetryButtonRect(int width) const {
+  const int top =
+      metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1) + 2);
+  const int right = width - metrics_.horizontal_padding;
+  return {right - ScaleForDpi(60, dpi_), top, right, top + metrics_.item_height};
 }
 
 void CandidateWindow::PostCandidatesReady() {
@@ -538,13 +743,77 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           }
         }
       }
+      const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
+      if (!notice_.empty()) {
+        RECT notice_rc = {0, notice_top, client_rc.right, notice_top + metrics_.item_height};
+        FillRect(hdc, &notice_rc,
+                 reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_BTNFACE + 1)));
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        notice_rc.left += metrics_.horizontal_padding;
+        notice_rc.right -= metrics_.horizontal_padding;
+        DrawTextW(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &notice_rc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+      }
+      if (health_banner_visible_) {
+        RECT banner_rc{0, notice_top + (notice_.empty() ? 0 : metrics_.item_height),
+                       client_rc.right, client_rc.bottom};
+        HBRUSH background = CreateSolidBrush(RGB(255, 249, 225));
+        if (background) {
+          FillRect(hdc, &banner_rc, background);
+          DeleteObject(background);
+        }
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+        RECT text_rc = banner_rc;
+        text_rc.left += metrics_.horizontal_padding;
+        text_rc.right -= metrics_.horizontal_padding;
+        text_rc.top += ScaleForDpi(3, dpi_);
+        text_rc.bottom = banner_rc.bottom - metrics_.item_height;
+        DrawTextW(hdc, HealthBannerText(health_state_), -1, &text_rc,
+                  DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS);
+        RECT details_rc = HealthDetailsButtonRect(client_rc.right);
+        DrawTextW(hdc, L"[詳細]", -1, &details_rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (health_state_ == CandidateHealthState::DegradedModel) {
+          RECT retry_rc = HealthRetryButtonRect(client_rc.right);
+          SetTextColor(
+              hdc, retry_in_flight_ ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(COLOR_WINDOWTEXT));
+          DrawTextW(hdc, L"[再試行]", -1, &retry_rc,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+      }
       if (old_font) SelectObject(hdc, old_font);
       EndPaint(hwnd, &ps);
       return 0;
     }
 
     case WM_LBUTTONDOWN: {
-      int y = static_cast<int>(HIWORD(lParam));
+      int x = GET_X_LPARAM(lParam);
+      int y = GET_Y_LPARAM(lParam);
+      const int health_banner_top =
+          metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
+      if (health_banner_visible_ && y >= health_banner_top) {
+        RECT client_rc{};
+        GetClientRect(hwnd, &client_rc);
+        POINT click{x, y};
+        const RECT details_rc = HealthDetailsButtonRect(client_rc.right);
+        if (PtInRect(&details_rc, click)) {
+          ShowDetails();
+        } else if (health_state_ == CandidateHealthState::DegradedModel && !retry_in_flight_) {
+          const RECT retry_rc = HealthRetryButtonRect(client_rc.right);
+          if (PtInRect(&retry_rc, click) && on_retry_) {
+            retry_in_flight_ = true;
+            Repaint();
+            try {
+              on_retry_();
+            } catch (...) {
+              // Never unwind through a Win32 window procedure.
+              retry_in_flight_ = false;
+              Repaint();
+            }
+          }
+        }
+        return 0;
+      }
       int idx = y / metrics_.item_height;
       if (idx >= 0 && idx < static_cast<int>(items_.size())) {
         selected_idx_ = idx;
@@ -559,6 +828,10 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
       return 0;
 
     case WM_TIMER:
+      if (wParam == kHealthBannerTimer) {
+        HideHealthBanner();
+        return 0;
+      }
       if (wParam == kCandidatesReadyTimer) {
         CancelScheduledCandidatesReady();
         if (on_candidates_ready_) on_candidates_ready_(on_candidates_ready_context_);
@@ -579,6 +852,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     }
 
     case WM_DESTROY:
+      HideDetails();
       hwnd_ = nullptr;
       return 0;
 

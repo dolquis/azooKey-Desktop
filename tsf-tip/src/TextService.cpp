@@ -39,6 +39,7 @@
 #include "azookey/tsf/BracketEditSession.h"
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/IpcReconnectBackoff.h"
+#include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextServiceFactory.h"
@@ -211,6 +212,17 @@ std::wstring Utf8ToWide(const std::string& utf8) {
   std::wstring result(len, L'\0');
   MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), result.data(), len);
   return result;
+}
+
+// Only these fixed strings may reach the candidate UI. Never display a Host
+// response body, user input, or an API key as an error message.
+std::wstring BatchAiFailureNotice(const std::string& error_class) {
+  if (error_class == "Auth") return L"AI整文に失敗しました。APIキーを確認してください。";
+  if (error_class == "RateLimit")
+    return L"AI整文が混み合っています。少し待って再試行してください。";
+  if (error_class == "Timeout") return L"AI整文から応答がありません。再試行してください。";
+  if (error_class == "KeyReentry") return L"APIキーを再入力してください。";
+  return {};
 }
 
 bool IsStandalonePunctuation(const std::string& reading) {
@@ -925,13 +937,35 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
           ITfContext* context = nullptr;
           if (FAILED(range->GetContext(&context)) || !context) return TF_E_NOCONVERSION;
           const bool secure = owner->ResolvePrivacy(context, false).secure;
-          std::lock_guard<std::mutex> lock(owner->candidates_mtx_);
-          const bool same_context = SameComIdentity(context, owner->reconversion_cache_context_);
+          if (!secure) {
+            std::lock_guard<std::mutex> lock(owner->candidates_mtx_);
+            if (SameComIdentity(context, owner->reconversion_cache_context_) &&
+                surface == owner->reconversion_cache_surface_ &&
+                !owner->reconversion_cache_candidates_.empty())
+              candidates = owner->reconversion_cache_candidates_;
+          }
+          if (!candidates.empty()) {
+            auto* verifier = new (std::nothrow) ReconversionFunction(owner->client_id_, {});
+            if (!verifier) {
+              context->Release();
+              return E_OUTOFMEMORY;
+            }
+            ITfRange* selected = nullptr;
+            std::wstring selected_surface;
+            const HRESULT match_hr =
+                verifier->CaptureSelection(context, &selected, selected_surface, range);
+            verifier->Release();
+            if (selected) selected->Release();
+            context->Release();
+            return match_hr == S_OK && selected_surface == surface ? S_OK : TF_E_NOCONVERSION;
+          }
+          const bool focused = SameComIdentity(context, owner->text_edit_context_);
+          const HRESULT start_hr =
+              secure || !focused ? S_FALSE
+                                 : owner->StartSelectionReconversion(context, &surface, range);
           context->Release();
-          if (secure || !same_context || surface != owner->reconversion_cache_surface_ ||
-              owner->reconversion_cache_candidates_.empty())
-            return TF_E_NOCONVERSION;
-          candidates = owner->reconversion_cache_candidates_;
+          if (start_hr != S_OK) return TF_E_NOCONVERSION;
+          candidates.push_back(surface);
           return S_OK;
         });
     if (!reconversion) return E_OUTOFMEMORY;
@@ -1066,6 +1100,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     if (active_context_) CommitSelected(active_context_);
   });
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
+  candidate_ui_.SetOnRetry([this] { RetryModelFromUi(); });
   prediction_window_.SetOnClick([this](int index) {
     try {
       if (active_context_) (void)AcceptPrediction(active_context_, static_cast<size_t>(index));
@@ -1907,6 +1942,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       std::string batch_raw_romaji;
       bool batch_query_in_progress{false};
       std::vector<ipc::BatchConversionSegment> batch_segments;
+      std::wstring batch_notice;
       std::vector<size_t> segment_selections;
       size_t segment_cursor{0};
       std::string live_display_reading;
@@ -1922,6 +1958,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       state.batch_raw_romaji = batch_raw_romaji_;
       state.batch_query_in_progress = batch_query_in_progress_;
       state.batch_segments = shown_batch_segments_;
+      state.batch_notice = shown_batch_notice_;
       state.segment_selections = batch_segment_selections_;
       state.segment_cursor = batch_segment_cursor_;
       state.live_display_reading = live_display_reading_;
@@ -1941,6 +1978,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       batch_raw_romaji_ = state.batch_raw_romaji;
       batch_query_in_progress_ = state.batch_query_in_progress;
       shown_batch_segments_ = state.batch_segments;
+      shown_batch_notice_ = state.batch_notice;
       batch_segment_selections_ = state.segment_selections;
       batch_segment_cursor_ = state.segment_cursor;
       live_display_reading_ = state.live_display_reading;
@@ -1953,7 +1991,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (state.candidate_window_visible && !state.shown_candidates.empty()) {
         const auto items = BuildCandidateViews(state.shown_candidates);
         const POINT pt = CandidateAnchorPoint();
-        candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
+        candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx,
+                              state.batch_notice);
       } else {
         candidate_ui_.EndUI();
       }
@@ -2309,6 +2348,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           {
             std::lock_guard<std::mutex> lk(candidates_mtx_);
             cached_batch_segments_ = {{reading, StandalonePunctuationCandidates(reading)}};
+            cached_batch_notice_.clear();
             candidates_ = BuildTipCandidates(reading, cached_batch_segments_.front().candidates,
                                              false, false);
             shown_candidates_.clear();
@@ -2335,6 +2375,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           {
             std::lock_guard<std::mutex> lk(candidates_mtx_);
             cached_batch_segments_ = {{reading, BuildLocalFallbackCandidates(reading)}};
+            cached_batch_notice_.clear();
             candidates_ = BuildTipCandidates(reading, cached_batch_segments_.front().candidates,
                                              false, false);
             shown_candidates_.clear();
@@ -2452,9 +2493,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
       selected_candidate_idx_ = static_cast<int>(batch_segment_selections_[batch_segment_cursor_]);
       candidate_ui_.EndUI();
-      const auto hr =
-          candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
-                                BuildCandidateViews(shown_candidates_), selected_candidate_idx_);
+      const auto hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                                            BuildCandidateViews(shown_candidates_),
+                                            selected_candidate_idx_, shown_batch_notice_);
       if (FAILED(hr)) {
         restore_preedit_state(rollback_state);
         return hr;
@@ -2816,7 +2857,9 @@ void TextService::CancelPendingQueriesForLifecycle() {
                                false, ipc_inflight_id_, 0, ipc_inflight_trace_id_});
     need_notify = true;
   }
+  ipc_pending_batch_notice_.clear();
   ++ipc_pending_id_;
+  ipc_pending_left_context_.clear();
   TrimIpcSendQueueLocked();
   if (need_notify) ipc_cv_.notify_one();
 }
@@ -3248,16 +3291,28 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
 
 void TextService::StartIpcWorker() {
   AZOOKEY_ASSERT_UI_THREAD();
+  retry_stop_.store(false, std::memory_order_release);
+  retry_in_flight_.store(false, std::memory_order_release);
+  retry_finished_.store(false, std::memory_order_release);
+  candidate_ui_.SetRetryInFlight(false);
   ipc_stop_.store(false);
   // A worker stopped while Disconnected leaves no Stopped transition behind, so
   // a reactivation starts its attempt count afresh here.
   ipc_failed_connect_attempts_ = 0;
   ipc_host_unavailable_.store(false, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lock(health_state_mtx_);
+    health_display_state_.reset();
+    health_display_generation_id_.clear();
+  }
   ipc_thread_ = std::thread(&TextService::IpcWorkerThread, this);
 }
 
 void TextService::StopIpcWorker() {
   AZOOKEY_ASSERT_UI_THREAD();
+  retry_stop_.store(true, std::memory_order_release);
+  retry_control_client_.Disconnect();
+  if (retry_thread_.joinable()) retry_thread_.join();
   if (!ipc_thread_.joinable()) return;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -3313,6 +3368,8 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
     ipc_host_unavailable_.store(false, std::memory_order_release);
   } else if (*to == IpcConnectionState::Degraded || *to == IpcConnectionState::Disconnected) {
     ipc_host_unavailable_.store(true, std::memory_order_release);
+    if (event != IpcConnectionEvent::Stopped)
+      PublishHealthDisplayState(CandidateHealthState::DegradedSimple);
   }
   if (!ShouldLogIpcConnectionTransition(from, *to, attempt)) return;
   const bool lost_host =
@@ -3328,6 +3385,97 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
        {"process_id", static_cast<uint64_t>(GetCurrentProcessId())}});
 }
 
+void TextService::RetryModelFromUi() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (retry_in_flight_.exchange(true, std::memory_order_acq_rel)) return;
+  if (retry_thread_.joinable()) retry_thread_.join();
+  retry_finished_.store(false, std::memory_order_release);
+  candidate_ui_.SetRetryInFlight(true);
+  try {
+    retry_thread_ = std::thread(&TextService::RetryModelOnControlThread, this);
+  } catch (...) {
+    retry_in_flight_.store(false, std::memory_order_release);
+    candidate_ui_.SetRetryInFlight(false);
+  }
+}
+
+void TextService::RetryModelOnControlThread() {
+  using namespace std::chrono;
+  using namespace azookey::ipc;
+  const auto finish = [this] {
+    retry_control_client_.Disconnect();
+    if (!retry_stop_.load(std::memory_order_acquire)) {
+      RequestHostOptionRefresh();
+      retry_finished_.store(true, std::memory_order_release);
+      candidate_ui_.PostCandidatesReady();
+    }
+  };
+  const auto token = ReadClientHandshakeToken();
+  if (!token || retry_stop_.load(std::memory_order_acquire) ||
+      !retry_control_client_.Connect(IpcPipeName(), 500)) {
+    finish();
+    return;
+  }
+  if (retry_stop_.load(std::memory_order_acquire)) {
+    finish();
+    return;
+  }
+  HandshakeRequest handshake;
+  handshake.tip_version = kTipVersion;
+  handshake.client_id = ipc_client_id_;
+  handshake.handshake_token = *token;
+  Envelope request;
+  request.version = 1;
+  request.request_id = 1;
+  request.trace_id = "tip-model-retry-handshake";
+  request.type = MessageType::Handshake;
+  request.payload_json = BuildHandshakeRequest(handshake);
+  if (!retry_control_client_.Send(request)) {
+    finish();
+    return;
+  }
+  auto response = retry_control_client_.ReceiveWithTimeout(3000);
+  if (!response || !IsExpectedIpcResponse(*response, 1, MessageType::Handshake)) {
+    finish();
+    return;
+  }
+  const auto accepted = ParseHandshakeResponse(response->payload_json);
+  if (!accepted || !accepted->accepted || retry_stop_.load(std::memory_order_acquire)) {
+    finish();
+    return;
+  }
+  request.request_id = 2;
+  request.trace_id = "tip-model-retry";
+  request.type = MessageType::UpdateConfig;
+  request.payload_json = "{}";
+  if (!retry_control_client_.Send(request)) {
+    finish();
+    return;
+  }
+  const auto deadline = steady_clock::now() + seconds(30);
+  while (!retry_stop_.load(std::memory_order_acquire) && retry_control_client_.IsConnected() &&
+         steady_clock::now() < deadline) {
+    response = retry_control_client_.ReceiveWithTimeout(50, deadline);
+    if (response && IsExpectedIpcResponse(*response, 2, MessageType::UpdateConfig)) break;
+  }
+  finish();
+}
+
+void TextService::PublishHealthDisplayState(CandidateHealthState state) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(health_state_mtx_);
+    if (health_display_state_ != state ||
+        health_display_generation_id_ != ipc_host_generation_id_) {
+      health_display_state_ = state;
+      health_display_generation_id_ = ipc_host_generation_id_;
+      changed = true;
+    }
+  }
+  if (changed) candidate_ui_.PostCandidatesReady();
+}
+
 // Caller holds ipc_mtx_. True when the serve loop has something to send, so an
 // idle Health probe must give way to it.
 bool TextService::HasQueuedIpcWorkLocked() const {
@@ -3341,8 +3489,11 @@ bool TextService::HasQueuedIpcWorkLocked() const {
 void TextService::NoteHostResponded() {
   AZOOKEY_ASSERT_IPC_THREAD();
   ipc_consecutive_deadline_misses_ = 0;
-  if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded)
+  if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded) {
     TransitionIpcConnection(IpcConnectionEvent::ResponseRestored);
+    health_diagnostics_pending_ = true;
+    health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
+  }
 }
 
 // A request's deadline passed while the pipe stayed open (connected but
@@ -3362,7 +3513,8 @@ void TextService::NoteHostDeadlineMissed() {
 // bounded by ipc_health_timeout_ms_ and abandoned as soon as a query or queued
 // item arrives, so the probe never holds up QueryCandidates; a reply that lands
 // after that is discarded by the next receive as a stale request id.
-TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id) {
+TextService::HealthProbeResult TextService::ProbeHostHealth(
+    uint64_t request_id, std::optional<ipc::HealthPayload>* payload) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace std::chrono;
 
@@ -3393,12 +3545,70 @@ TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id)
     const auto wait_ms = static_cast<uint32_t>(
         std::clamp<long long>(remaining_ms, 1, static_cast<long long>(kHealthPollMs)));
     auto response = ipc_client_.ReceiveWithTimeout(wait_ms, deadline);
-    if (response && IsExpectedIpcResponse(*response, request_id, ipc::MessageType::Health))
+    if (response && IsExpectedIpcResponse(*response, request_id, ipc::MessageType::Health)) {
+      auto parsed = ipc::ParseHealth(response->payload_json);
+      if (!parsed) continue;
+      if (payload) *payload = std::move(parsed);
       return HealthProbeResult::Answered;
+    }
   }
   if (!ipc_client_.IsConnected()) return HealthProbeResult::ConnectionLost;
   ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Timeout);
   return HealthProbeResult::TimedOut;
+}
+
+// QueryDiagnostics shares the primary pipe with key requests. A key or queued
+// send interrupts this bounded receive; its late reply is discarded by the
+// next request-id check. Only the fixed fallback_state vocabulary reaches UI.
+TextService::DiagnosticsProbeResult TextService::ProbeHostDiagnostics(uint64_t request_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  using namespace std::chrono;
+  ipc::Envelope request;
+  request.version = 1;
+  request.request_id = request_id;
+  request.trace_id = "tip-health-diagnostics";
+  request.type = ipc::MessageType::QueryDiagnostics;
+  request.payload_json = "{}";
+  if (!ipc_client_.Send(request)) return DiagnosticsProbeResult::ConnectionLost;
+
+  const auto deadline = steady_clock::now() + milliseconds(500);
+  while (!ipc_stop_.load()) {
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      if (HasQueuedIpcWorkLocked()) {
+        ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Cancelled);
+        return DiagnosticsProbeResult::Interrupted;
+      }
+    }
+    if (!ipc_client_.IsConnected()) return DiagnosticsProbeResult::ConnectionLost;
+    const auto now = steady_clock::now();
+    if (now >= deadline) break;
+    const auto remaining = duration_cast<milliseconds>(deadline - now).count();
+    auto response = ipc_client_.ReceiveWithTimeout(
+        static_cast<uint32_t>(std::clamp<long long>(remaining, 1, 50)), deadline);
+    if (!response ||
+        !IsExpectedIpcResponse(*response, request_id, ipc::MessageType::QueryDiagnostics))
+      continue;
+    const auto diagnostics = ipc::ParseQueryDiagnostics(response->payload_json);
+    if (!diagnostics) return DiagnosticsProbeResult::Failed;
+    const auto& state = diagnostics->fallback_state;
+    std::optional<CandidateHealthState> display_state;
+    if (state == "healthy")
+      display_state = CandidateHealthState::Healthy;
+    else if (state == "degraded_simple")
+      display_state = CandidateHealthState::DegradedSimple;
+    else if (state == "degraded_model")
+      display_state = CandidateHealthState::DegradedModel;
+    else if (state == "safe_mode")
+      display_state = CandidateHealthState::SafeMode;
+    if (!display_state) return DiagnosticsProbeResult::Failed;
+    // A diagnostic reply does not override M42's local-fallback condition.
+    if (!IpcHostUnavailable()) PublishHealthDisplayState(*display_state);
+    return DiagnosticsProbeResult::Answered;
+  }
+  if (!ipc_client_.IsConnected()) return DiagnosticsProbeResult::ConnectionLost;
+  ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Timeout);
+  return DiagnosticsProbeResult::Failed;
 }
 
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
@@ -3553,6 +3763,10 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
                 {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
+    health_diagnostics_pending_ = true;
+    health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
+    health_probe_before_diagnostics_retry_ = false;
+    last_health_response_.reset();
   }
   return true;
 }
@@ -3751,6 +3965,7 @@ void TextService::ServeConnection() {
 
   while (true) {
     std::string reading;
+    std::string left_context;
     std::string raw_romaji;
     std::string batch_mode;
     std::string trace_id;
@@ -3767,12 +3982,29 @@ void TextService::ServeConnection() {
     std::vector<IpcSendItem> to_send;
     std::optional<ReconversionRequest> reconversion;
     bool health_due = false;
+    bool diagnostics_due = false;
 
     {
       std::unique_lock<std::mutex> lock(ipc_mtx_);
-      health_due =
-          !ipc_cv_.wait_for(lock, std::chrono::milliseconds(ipc_health_interval_ms_),
-                            [this] { return ipc_stop_.load() || HasQueuedIpcWorkLocked(); });
+      const auto now = std::chrono::steady_clock::now();
+      if (health_diagnostics_pending_ && !health_probe_before_diagnostics_retry_ &&
+          now >= health_diagnostics_retry_at_ && !HasQueuedIpcWorkLocked()) {
+        diagnostics_due = true;
+      } else {
+        auto wait = std::chrono::milliseconds(ipc_health_interval_ms_);
+        if (health_diagnostics_pending_ && health_diagnostics_retry_at_ > now)
+          wait = std::min(wait, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    health_diagnostics_retry_at_ - now) +
+                                    std::chrono::milliseconds(1));
+        const bool idle = !ipc_cv_.wait_for(
+            lock, wait, [this] { return ipc_stop_.load() || HasQueuedIpcWorkLocked(); });
+        if (idle) {
+          diagnostics_due = health_diagnostics_pending_ &&
+                            !health_probe_before_diagnostics_retry_ &&
+                            std::chrono::steady_clock::now() >= health_diagnostics_retry_at_;
+          health_due = !diagnostics_due;
+        }
+      }
       if (ipc_stop_.load()) break;
 
       to_send = std::move(ipc_send_queue_);
@@ -3782,6 +4014,7 @@ void TextService::ServeConnection() {
 
       if (ipc_has_request_) {
         reading = ipc_pending_reading_;
+        left_context = ipc_pending_left_context_;
         raw_romaji = ipc_pending_raw_romaji_;
         batch_mode = ipc_pending_batch_mode_;
         trace_id = ipc_pending_trace_id_;
@@ -3799,14 +4032,41 @@ void TextService::ServeConnection() {
       }
     }
 
+    if (diagnostics_due) {
+      const auto result = ProbeHostDiagnostics(next_id++);
+      if (result == DiagnosticsProbeResult::ConnectionLost) return;
+      if (result == DiagnosticsProbeResult::Answered) {
+        health_diagnostics_pending_ = false;
+        health_probe_before_diagnostics_retry_ = false;
+      } else {
+        // An interrupted or malformed/timed-out reply leaves the last display
+        // in place. Retry once the primary pipe has been idle for an interval.
+        health_diagnostics_retry_at_ =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(ipc_health_interval_ms_);
+        health_probe_before_diagnostics_retry_ = true;
+      }
+      continue;
+    }
+
     // Nothing to send for a whole interval: probe the Host so a connected but
     // silent Host is noticed without waiting for the next keystroke.
     if (health_due) {
-      switch (ProbeHostHealth(next_id++)) {
+      std::optional<HealthPayload> health;
+      switch (ProbeHostHealth(next_id++, &health)) {
         case HealthProbeResult::Answered:
+          health_probe_before_diagnostics_retry_ = false;
           NoteHostResponded();
+          if (health) {
+            const auto observation = std::make_pair(health->status, health->model_loaded);
+            if (!last_health_response_ || *last_health_response_ != observation) {
+              health_diagnostics_pending_ = true;
+              health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
+            }
+            last_health_response_ = observation;
+          }
           break;
         case HealthProbeResult::TimedOut:
+          health_probe_before_diagnostics_retry_ = false;
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_health_timeout");
           NoteHostDeadlineMissed();
           break;
@@ -3925,11 +4185,11 @@ void TextService::ServeConnection() {
       qenv.trace_id = trace_id;
       if (is_live_conversion) {
         qenv.type = MessageType::QueryLiveConversion;
-        qenv.payload_json = BuildQueryLiveConversionRequest({reading, ""});
+        qenv.payload_json = BuildQueryLiveConversionRequest({reading, left_context});
       } else {
         QueryCandidatesRequest qreq;
         qreq.reading = reading;
-        qreq.left_context = "";
+        qreq.left_context = secure ? std::string{} : left_context;
         qreq.max_candidates = max_candidates_.load(std::memory_order_relaxed);
         qreq.live = live;
         qreq.secure = secure;
@@ -4248,6 +4508,7 @@ void TextService::ServeConnection() {
               req_id, reading, candidates_.front().field.surface, trace_id, trace_start};
         }
         cached_batch_segments_.clear();
+        cached_batch_notice_.clear();
         if (candidate_window_show_pending_) {
           if (candidates_.empty()) {
             candidate_window_show_pending_ = false;
@@ -4306,6 +4567,7 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   BOOL changed = FALSE;
   if (FAILED(record->GetSelectionStatus(&changed)) || !changed) return S_OK;
   reconversion_prefetch_pending_ = false;
+  reconversion_prefetch_surface_.clear();
   ++reconversion_generation_;
   // A displayed list still refers to the old range. A later Enter must never
   // replace text at a location the user has moved away from.
@@ -4455,17 +4717,19 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     chunks = {{raw_romaji, reading}};
   }
   bool failed = false;
-  const auto rearm_neural = [&] {
+  const auto rearm_neural = [&](const std::wstring& notice) {
     if (mode != "ai-cleanup") return false;
     std::lock_guard lock(ipc_mtx_);
     if (ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_) return false;
     ipc_pending_batch_mode_ = "neural";
+    ipc_pending_batch_notice_ = notice;
     ipc_has_request_ = true;
     ipc_inflight_id_ = 0;
     ipc_inflight_trace_id_.clear();
     return true;
   };
   uint64_t active_id = generation;
+  std::wstring failure_notice;
   for (const auto& chunk : chunks) {
     if (failed) break;
     {
@@ -4500,7 +4764,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     const auto encoded = Serialize(envelope);
     if (!encoded || encoded->size() >= kMaxFrameSize || !ipc_client_.Send(envelope)) {
       if (!ipc_client_.IsConnected()) {
-        if (rearm_neural()) return;
+        if (rearm_neural(failure_notice)) return;
         RearmPendingQuery(generation);
         return;
       }
@@ -4538,7 +4802,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       break;
     }
     if (!result && !ipc_client_.IsConnected()) {
-      if (rearm_neural()) return;
+      if (rearm_neural(failure_notice)) return;
       RearmPendingQuery(generation);
       return;
     }
@@ -4549,7 +4813,16 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       candidate.source = "model";
       result->segments.push_back({request.reading, {std::move(candidate)}});
     }
+    if (result && result->canceled) failure_notice.clear();
+    if (mode == "ai-cleanup" && result && !result->canceled && result->error_class) {
+      const auto notice = BatchAiFailureNotice(*result->error_class);
+      if (!notice.empty()) failure_notice = notice;
+    }
     if (!result || result->partial || result->canceled || result->segments.empty()) {
+      if (mode == "ai-cleanup" && (!result || !result->canceled)) {
+        if (!result && std::chrono::steady_clock::now() >= deadline)
+          failure_notice = BatchAiFailureNotice("Timeout");
+      }
       if (!result && std::chrono::steady_clock::now() >= deadline)
         ipc_client_.FinishTraceRequest(active_id, core::EtwResult::Timeout);
       if (!result || !result->canceled) {
@@ -4566,7 +4839,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     }
   }
   if (failed) {
-    if (rearm_neural()) return;
+    if (rearm_neural(failure_notice)) return;
     segments = {{reading, BuildLocalFallbackCandidates(reading)}};
   }
   bool notify = false;
@@ -4576,6 +4849,8 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     ipc_inflight_trace_id_.clear();
     if (ipc_pending_id_ != generation || ipc_has_request_ || segments.empty()) return;
     cached_batch_segments_ = std::move(segments);
+    cached_batch_notice_ = failure_notice.empty() ? ipc_pending_batch_notice_ : failure_notice;
+    ipc_pending_batch_notice_.clear();
     const auto& first = cached_batch_segments_.front();
     candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
     candidates_trace_id_ = trace_id;
@@ -4692,6 +4967,15 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     retry_dropped_request();
 }
 
+std::string TextService::CaptureLeftContext(ITfContext* context, bool secure) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (secure || !context) return {};
+  ITfRange* composition_range =
+      composition_ && SameComIdentity(context, active_context_) ? composition_range_ : nullptr;
+  return ReadLeftContext(context, composition_range, client_id_,
+                         local_settings_.MaxContextLengthSnapshot());
+}
+
 std::string TextService::CurrentActionTraceId() const {
   return active_key_trace_active_ ? active_key_trace_id_ : NewTraceIdNoThrow();
 }
@@ -4699,16 +4983,19 @@ std::string TextService::CurrentActionTraceId() const {
 void TextService::PostQueryCandidates(ITfContext* context, const std::string& reading, bool live,
                                       const std::string& emoji_trigger) {
   const auto privacy = ResolvePrivacy(context, false);
+  const std::string left_context = CaptureLeftContext(context, privacy.secure);
   const bool apply_live_preview = live && emoji_trigger.empty() && !privacy.secure &&
                                   !core_input_active_ && local_settings_.LiveConversionSnapshot();
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_reading_ = reading;
+  ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = live;
   ipc_pending_emoji_trigger_ = emoji_trigger;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
+  ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
   ipc_pending_trace_start_ = active_key_trace_start_;
   ipc_pending_is_batch_ = false;
@@ -4729,13 +5016,16 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
     live_display_surface_.clear();
     return;
   }
+  const std::string left_context = CaptureLeftContext(context, false);
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   ipc_pending_reading_ = reading;
+  ipc_pending_left_context_ = left_context;
   ipc_pending_live_ = true;
   ipc_pending_secure_ = privacy.secure;
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
+  ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
   ipc_pending_trace_start_ = active_key_trace_start_;
   ipc_pending_emoji_trigger_.clear();
@@ -4813,9 +5103,11 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_ai_privacy_ = privacy;
   ipc_pending_ai_backend_ = backend;
   ipc_pending_reading_ = reading;
+  ipc_pending_left_context_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
+  ipc_pending_batch_notice_.clear();
   ipc_pending_trace_id_ = CurrentActionTraceId();
   ipc_pending_trace_start_ = active_key_trace_start_;
   ipc_pending_is_batch_ = true;
@@ -5119,6 +5411,18 @@ std::string TextService::CurrentDisplayedPreeditSurface() const {
 void TextService::OnCandidatesReady(void* context) {
   if (!context) return;
   auto* service = static_cast<TextService*>(context);
+  std::optional<CandidateHealthState> health_state;
+  std::string host_generation_id;
+  {
+    std::lock_guard<std::mutex> lock(service->health_state_mtx_);
+    health_state = service->health_display_state_;
+    host_generation_id = service->health_display_generation_id_;
+  }
+  if (health_state) service->candidate_ui_.SetHealthState(*health_state, host_generation_id);
+  if (service->retry_finished_.exchange(false, std::memory_order_acq_rel)) {
+    service->retry_in_flight_.store(false, std::memory_order_release);
+    service->candidate_ui_.SetRetryInFlight(false);
+  }
   service->PrefetchSelectedReconversion();
   service->ShowReconversionResult();
   service->ApplyLiveConversionResult();
@@ -5411,6 +5715,7 @@ void TextService::ClearReconversionState() {
     reconversion_range_ = nullptr;
   }
   reconversion_surface_.clear();
+  reconversion_prefetch_surface_.clear();
   if (had_reconversion_ui && candidate_ui_.IsShowing()) candidate_ui_.EndUI();
   ++reconversion_generation_;
 }
@@ -5444,6 +5749,7 @@ void TextService::PrefetchSelectedReconversion() {
   reconversion_cache_context_ = context;
   reconversion_cache_context_->AddRef();
   const uint64_t generation = ++reconversion_generation_;
+  reconversion_prefetch_surface_ = surface;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     ipc_reconversion_request_ = ReconversionRequest{generation, utf8, CurrentActionTraceId()};
@@ -5451,27 +5757,50 @@ void TextService::PrefetchSelectedReconversion() {
   ipc_cv_.notify_one();
 }
 
-HRESULT TextService::StartSelectionReconversion(ITfContext* context) {
+HRESULT TextService::StartSelectionReconversion(ITfContext* context,
+                                                const std::wstring* expected_surface,
+                                                ITfRange* expected_range) {
   if (!context || composition_ || !preedit_kana_.empty()) return S_FALSE;
   if (ResolvePrivacy(context, false).secure) return S_FALSE;
   auto* function = new (std::nothrow) ReconversionFunction(client_id_, {});
   if (!function) return E_OUTOFMEMORY;
   ITfRange* range = nullptr;
   std::wstring surface;
-  const HRESULT hr = function->CaptureSelection(context, &range, surface);
+  const HRESULT hr = function->CaptureSelection(context, &range, surface, expected_range);
   function->Release();
   if (FAILED(hr)) return hr == TF_E_NOCONVERSION ? S_FALSE : hr;
+  if (expected_surface && surface != *expected_surface) {
+    range->Release();
+    return S_FALSE;
+  }
   const std::string utf8 = WideToUtf8(surface);
   if (utf8.empty()) {
     range->Release();
     return S_FALSE;
   }
+  if (reconversion_range_ && surface == reconversion_surface_ &&
+      SameComIdentity(context, reconversion_cache_context_)) {
+    range->Release();
+    return S_OK;
+  }
   std::vector<std::wstring> cached_candidates;
+  bool prefetch_completed = false;
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     if (SameComIdentity(context, reconversion_cache_context_) &&
         surface == reconversion_cache_surface_)
       cached_candidates = reconversion_cache_candidates_;
+    prefetch_completed =
+        reconversion_result_ && reconversion_result_->generation == reconversion_generation_.load();
+  }
+  // An empty completed prefetch must be retried rather than adopted as in-flight work.
+  const bool adopt_prefetch = cached_candidates.empty() && !prefetch_completed &&
+                              !reconversion_range_ && surface == reconversion_prefetch_surface_ &&
+                              SameComIdentity(context, reconversion_cache_context_);
+  if (adopt_prefetch) {
+    reconversion_range_ = range;
+    reconversion_surface_ = std::move(surface);
+    return S_OK;
   }
   ClearReconversionState();
   reconversion_range_ = range;
@@ -5515,6 +5844,9 @@ void TextService::ShowReconversionResult() {
     result = std::move(reconversion_result_);
     reconversion_result_.reset();
   }
+  // A result without an open range still completes the prefetch.
+  if (result && result->generation == reconversion_generation_)
+    reconversion_prefetch_surface_.clear();
   if (!result || !reconversion_range_ || result->generation != reconversion_generation_ ||
       result->surface != reconversion_surface_)
     return;
@@ -5587,6 +5919,7 @@ bool TextService::ShowCandidateWindowFromCache() {
     if (candidates_.empty()) return false;
     shown_candidates_ = candidates_;
     shown_batch_segments_ = cached_batch_segments_;
+    shown_batch_notice_ = cached_batch_notice_;
     batch_segment_selections_.assign(shown_batch_segments_.size(), 0);
     batch_segment_cursor_ = 0;
     snapshot = shown_candidates_;
@@ -5598,7 +5931,7 @@ bool TextService::ShowCandidateWindowFromCache() {
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
-  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0, shown_batch_notice_);
   if (FAILED(begin_hr)) return false;
   if (emoji_mode_ == EmojiMode::Collecting) emoji_mode_ = EmojiMode::Listing;
 
@@ -5694,6 +6027,7 @@ void TextService::set_cached_batch_segments_for_test(
     std::vector<ipc::BatchConversionSegment> segments) {
   std::lock_guard<std::mutex> lock(candidates_mtx_);
   cached_batch_segments_ = std::move(segments);
+  cached_batch_notice_.clear();
   if (!cached_batch_segments_.empty()) {
     const auto& first = cached_batch_segments_.front();
     candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
@@ -5755,15 +6089,18 @@ std::string TextService::BatchReadingForConversion() const {
 void TextService::RefreshBatchPreeditSurface() {
   preedit_kana_ = BatchPreviewSurface();
   shown_batch_segments_.clear();
+  shown_batch_notice_.clear();
   batch_segment_selections_.clear();
   batch_segment_cursor_ = 0;
   std::lock_guard<std::mutex> lock(candidates_mtx_);
   cached_batch_segments_.clear();
+  cached_batch_notice_.clear();
 }
 
 void TextService::ClearBatchState() {
   batch_learning_allowed_ = true;
   shown_batch_segments_.clear();
+  shown_batch_notice_.clear();
   batch_segment_selections_.clear();
   batch_segment_cursor_ = 0;
   emoji_mode_ = EmojiMode::Inactive;

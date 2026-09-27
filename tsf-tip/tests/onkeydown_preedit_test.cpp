@@ -27,6 +27,7 @@
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/tsf/LeftContextReader.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
@@ -780,8 +781,9 @@ struct BracketDocument {
 
 class DocumentRange final : public FakeRange {
  public:
-  DocumentRange(std::shared_ptr<BracketDocument> doc, LONG first, LONG last)
-      : document(std::move(doc)), start(first), end(last) {}
+  DocumentRange(std::shared_ptr<BracketDocument> doc, LONG first, LONG last,
+                ITfContext* context = nullptr)
+      : document(std::move(doc)), start(first), end(last), context_(context) {}
   STDMETHODIMP_(ULONG) AddRef() override { return ++references_; }
   STDMETHODIMP_(ULONG) Release() override {
     const ULONG remaining = --references_;
@@ -842,7 +844,14 @@ class DocumentRange final : public FakeRange {
       *copy = nullptr;
       return E_FAIL;
     }
-    *copy = new DocumentRange(document, start, end);
+    *copy = new DocumentRange(document, start, end, context_);
+    return S_OK;
+  }
+  STDMETHODIMP GetContext(ITfContext** out) override {
+    if (!out) return E_POINTER;
+    *out = context_;
+    if (!context_) return E_FAIL;
+    context_->AddRef();
     return S_OK;
   }
   std::shared_ptr<BracketDocument> document;
@@ -850,6 +859,7 @@ class DocumentRange final : public FakeRange {
   LONG end;
 
  private:
+  ITfContext* context_;
   ULONG references_{1};
 };
 
@@ -903,7 +913,8 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
       *result = TS_E_READONLY;
       return S_OK;
     }
-    run_edit_session = !skip_callback;
+    run_edit_session =
+        !skip_callback && !((flags & TF_ES_READWRITE) == TF_ES_READWRITE && skip_write_callback);
     if ((flags & TF_ES_READWRITE) == TF_ES_READWRITE && before_write) {
       auto callback = std::move(before_write);
       before_write = {};
@@ -913,7 +924,7 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   }
   STDMETHODIMP GetSelection(TfEditCookie, ULONG, ULONG, TF_SELECTION* selection,
                             ULONG* fetched) override {
-    selection->range = new DocumentRange(document, document->start, document->end);
+    selection->range = new DocumentRange(document, document->start, document->end, this);
     selection->style = {};
     *fetched = 1;
     return S_OK;
@@ -942,6 +953,7 @@ class DocumentContext final : public NoopContext, public ITfContextComposition {
   bool reject_read{false};
   bool reject_write{false};
   bool skip_callback{false};
+  bool skip_write_callback{false};
   std::function<void()> before_write;
 };
 
@@ -979,6 +991,255 @@ class DocumentPreeditHarness {
   DocumentContext context;
   azookey::tsf::TextService service;
 };
+
+TEST(TsfTipLeftContextTest, UsesCompositionStartAndBoundsUnicodeCodepoints) {
+  DocumentContext context;
+  context.document->text = L"前文abc入力";
+  context.document->start = 7;
+  context.document->end = 7;
+  DocumentRange composition(context.document, 5, 7, &context);
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, &composition, 1, 3), "abc");
+
+  context.document->text = L"旧い行\r\n今日は🙂東京";
+  context.document->start = static_cast<LONG>(context.document->text.size());
+  context.document->end = context.document->start;
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 4), "は🙂東京");
+}
+
+TEST(TsfTipLeftContextTest, ExcludesSelectionAndFallsBackOnRejectedOrIncompleteRead) {
+  DocumentContext context;
+  context.document->text = L"abc秘密";
+  context.document->start = 3;
+  context.document->end = 5;
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30), "abc");
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 0).empty());
+  context.reject_read = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+  context.reject_read = false;
+  context.document->fail_read = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+  context.document->fail_read = false;
+  context.document->fail_clone = true;
+  DocumentRange composition(context.document, 3, 5, &context);
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, &composition, 1, 30).empty());
+  context.document->fail_clone = false;
+  DocumentContext other_context;
+  DocumentRange other_composition(context.document, 3, 5, &other_context);
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, &other_composition, 1, 30).empty());
+  context.document->short_shift = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+  context.document->short_shift = false;
+  context.skip_callback = true;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+}
+
+TEST(TsfTipLeftContextTest, CapsAtThirtyCodepointsAndRejectsMalformedUtf16) {
+  DocumentContext context;
+  context.document->text = std::wstring(31, L'あ');
+  context.document->start = 31;
+  context.document->end = 31;
+  std::string expected;
+  for (int i = 0; i < 30; ++i) expected += "あ";
+  EXPECT_EQ(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 100), expected);
+
+  context.document->text = std::wstring(1, static_cast<wchar_t>(0xd800));
+  context.document->start = 1;
+  context.document->end = 1;
+  EXPECT_TRUE(azookey::tsf::ReadLeftContext(&context, nullptr, 1, 30).empty());
+}
+
+TEST(TsfTipLeftContextTest, CandidateWireUsesEnqueueSnapshotAndOmitsSecureContext) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-candidates-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryCandidatesRequest> requests;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query && query->reading == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        requests.push_back(*query);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  const auto wait_for_requests = [&](size_t count) {
+    return WaitUntil([&] {
+      const std::lock_guard<std::mutex> lock(mutex);
+      return requests.size() >= count;
+    });
+  };
+
+  {
+    DocumentPreeditHarness h;
+    h.context.document->text = L"旧行\r\n明日🙂東京";
+    h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+    h.context.document->end = h.context.document->start;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_max_context_length_for_test(3);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    // The queued request must retain the event's context even if the document changes.
+    const size_t suffix = h.context.document->text.find(L"東京");
+    ASSERT_NE(suffix, std::wstring::npos);
+    h.context.document->text.replace(suffix, 2, L"大阪");
+    h.service.start_ipc_worker_for_test();
+    EXPECT_TRUE(wait_for_requests(1));
+    h.service.stop_ipc_worker_for_test();
+  }
+  {
+    DocumentPreeditHarness h;
+    h.context.document->text = L"秘密の文脈";
+    h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+    h.context.document->end = h.context.document->start;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    h.service.start_ipc_worker_for_test();
+    EXPECT_TRUE(wait_for_requests(2));
+    h.service.stop_ipc_worker_for_test();
+  }
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(requests.size(), 2u);
+  EXPECT_EQ(requests[0].left_context, "🙂東京");
+  EXPECT_FALSE(requests[0].secure);
+  EXPECT_TRUE(requests[1].left_context.empty());
+  EXPECT_TRUE(requests[1].secure);
+}
+
+TEST(TsfTipLeftContextTest, CandidateAfterEndedCompositionUsesSelectionInsteadOfStaleRange) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-ended-composition-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryCandidatesRequest> requests;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      const auto query = ParseQueryCandidatesRequest(request.payload_json);
+      if (query && query->reading == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        requests.push_back(*query);
+      }
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.context.document->text = L"前";
+  h.context.document->start = 1;
+  h.context.document->end = 1;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.context.document->text, L"前か");
+  ASSERT_EQ(h.service.composition_, nullptr);
+  ASSERT_EQ(h.service.composition_range_, nullptr);
+
+  h.context.document->text += L"後";
+  h.context.document->start = 3;
+  h.context.document->end = 3;
+  // Reproduce an ended composition whose old range still points at the committed text.
+  // The service owns and releases this range during Deactivate().
+  h.service.composition_range_ = new DocumentRange(h.context.document, 1, 2, &h.context);
+  // Keep the stale range while the next preedit edit session is still pending.
+  h.context.skip_write_callback = true;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.has_pending_ipc_query_for_test());
+  ASSERT_EQ(h.service.composition_, nullptr);
+  h.service.start_ipc_worker_for_test();
+  EXPECT_TRUE(WaitUntil([&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !requests.empty();
+  }));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].left_context, "前か後");
+}
+
+TEST(TsfTipLeftContextTest, LiveConversionWireUsesBoundedUnicodeContext) {
+  using namespace azookey::ipc;
+  const std::string pipe_name = "\\\\.\\pipe\\azookey-left-context-live-" +
+                                std::to_string(GetCurrentProcessId()) + "-" +
+                                std::to_string(GetTickCount64());
+  std::mutex mutex;
+  std::vector<QueryLiveConversionRequest> requests;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse handshake;
+      handshake.accepted = true;
+      handshake.capabilities = {"query_live_conversion"};
+      response.payload_json = BuildHandshakeResponse(handshake);
+      return response;
+    }
+    if (request.type == MessageType::QueryLiveConversion) {
+      const auto query = ParseQueryLiveConversionRequest(request.payload_json);
+      if (query && query->kana == "か") {
+        const std::lock_guard<std::mutex> lock(mutex);
+        requests.push_back(*query);
+      }
+      response.payload_json = BuildQueryLiveConversionResponse({"蚊", 0.8});
+      return response;
+    }
+    return std::nullopt;
+  }));
+  TextServiceHarness handshake_token_guard;
+  DocumentPreeditHarness h;
+  h.context.document->text = L"前の行\n前🙂東京";
+  h.context.document->start = static_cast<LONG>(h.context.document->text.size());
+  h.context.document->end = h.context.document->start;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_max_context_length_for_test(3);
+  h.service.set_live_conversion_for_test(true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.service.pending_ipc_query_is_live_conversion_for_test());
+  h.service.start_ipc_worker_for_test();
+  EXPECT_TRUE(WaitUntil([&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !requests.empty();
+  }));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].context, "🙂東京");
+}
 
 std::optional<WCHAR> TranslateBracketForTest(WPARAM key, LPARAM) {
   switch (key) {
@@ -2372,7 +2633,8 @@ TEST(TsfTipOnKeyDownPreeditTest, PrivacyProbeSyntheticLatencyAndCallsPerKey) {
     if (i >= warmup)
       key_times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
   }
-  EXPECT_EQ(scope_reads(), static_cast<std::ptrdiff_t>(warmup + samples));
+  // Each key requests one privacy scope probe and one bounded left-context read.
+  EXPECT_EQ(scope_reads(), static_cast<std::ptrdiff_t>(2 * (warmup + samples)));
   EXPECT_EQ(h.service.preedit_kana_, "か");
   report("on_key_down", std::move(key_times));
 
@@ -2939,6 +3201,14 @@ TEST(TsfTipOnKeyDownPreeditTest,
         res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
         return res;
       }
+      if (req.type == azookey::ipc::MessageType::QueryDiagnostics) {
+        azookey::ipc::QueryDiagnosticsPayload payload;
+        payload.engine = "mock";
+        payload.backend = "cpu";
+        payload.fallback_state = "healthy";
+        res.payload_json = azookey::ipc::BuildQueryDiagnostics(payload);
+        return res;
+      }
       if (req.type == azookey::ipc::MessageType::Health && !health_received.exchange(true)) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (!release_health.load() && std::chrono::steady_clock::now() < deadline)
@@ -3085,6 +3355,7 @@ class HealthProbeHost {
           res.trace_id = req.trace_id;
           res.type = req.type;
           if (req.type == azookey::ipc::MessageType::Handshake) {
+            handshakes.fetch_add(1);
             azookey::ipc::HandshakeResponse payload;
             payload.host_version = "test-host";
             payload.accepted = true;
@@ -3094,9 +3365,41 @@ class HealthProbeHost {
           if (req.type == azookey::ipc::MessageType::Health) {
             health_probes.fetch_add(1);
             if (!answer_health.load()) return std::nullopt;
+            if (malformed_health.load()) {
+              res.payload_json = "{}";  // Missing required status and backend.
+              return res;
+            }
             azookey::ipc::HealthPayload payload;
-            payload.status = "ok";
+            payload.status = degraded_health.load() ? "degraded" : "ok";
+            payload.backend = "cpu";
+            payload.model_loaded = !degraded_health.load();
             res.payload_json = azookey::ipc::BuildHealth(payload);
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::QueryDiagnostics) {
+            diagnostics_queries.fetch_add(1);
+            if (!answer_diagnostics.load() || drop_first_diagnostics.exchange(false))
+              return std::nullopt;
+            azookey::ipc::QueryDiagnosticsPayload payload;
+            payload.engine = "mock";
+            payload.backend = "cpu";
+            payload.fallback_state = diagnostics_state.load() == 1   ? "degraded_model"
+                                     : diagnostics_state.load() == 2 ? "safe_mode"
+                                     : diagnostics_state.load() == 3 ? "untrusted_state"
+                                                                     : "healthy";
+            payload.last_error = "untrusted free text that must not reach UI";
+            res.payload_json = azookey::ipc::BuildQueryDiagnostics(payload);
+            if (degrade_after_first_diagnostics.exchange(false)) {
+              diagnostics_state.store(1);
+              degraded_health.store(true);
+            }
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::UpdateConfig) {
+            update_config_requests.fetch_add(1);
+            azookey::ipc::UpdateConfigResponse payload;
+            payload.ok = true;
+            res.payload_json = azookey::ipc::BuildUpdateConfigResponse(payload);
             return res;
           }
           if (req.type == azookey::ipc::MessageType::QueryCandidates) {
@@ -3115,7 +3418,16 @@ class HealthProbeHost {
   }
 
   std::atomic<bool> answer_health{true};
+  std::atomic<bool> malformed_health{false};
   std::atomic<bool> answer_query{true};
+  std::atomic<bool> answer_diagnostics{true};
+  std::atomic<bool> drop_first_diagnostics{false};
+  std::atomic<bool> degrade_after_first_diagnostics{false};
+  std::atomic<bool> degraded_health{false};
+  std::atomic<int> diagnostics_state{0};
+  std::atomic<int> diagnostics_queries{0};
+  std::atomic<int> update_config_requests{0};
+  std::atomic<int> handshakes{0};
   std::atomic<int> health_probes{0};
   std::atomic<int> queries{0};
   std::atomic<int> batches{0};
@@ -3126,6 +3438,167 @@ class HealthProbeHost {
   azookey::ipc::NamedPipeServer server_;
 };
 }  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, HandshakeQueriesValidatedHostHealthState) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-handshake-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.diagnostics_state.store(1);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  ASSERT_TRUE(WaitUntil([&] {
+    return h.service.health_display_state_for_test() == CandidateHealthState::DegradedModel;
+  }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, FirstHealthAfterHandshakeRefreshesDiagnostics) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-first-health-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.degrade_after_first_diagnostics.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] {
+    return host.diagnostics_queries.load() >= 2 &&
+           h.service.health_display_state_for_test() == CandidateHealthState::DegradedModel;
+  }));
+  ASSERT_TRUE(WaitUntil([&] { return host.health_probes.load() >= 3; }));
+  EXPECT_EQ(host.diagnostics_queries.load(), 2);
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, HealthChangeRefreshesDiagnosticsAndRejectsUnknownState) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-change-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/40, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] {
+    return h.service.health_display_state_for_test() == CandidateHealthState::Healthy &&
+           host.health_probes.load() >= 1;
+  }));
+  const int first_count = host.diagnostics_queries.load();
+  host.diagnostics_state.store(3);
+  host.degraded_health.store(true);
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() > first_count; }));
+  EXPECT_EQ(h.service.health_display_state_for_test(), CandidateHealthState::Healthy);
+  host.diagnostics_state.store(2);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.health_display_state_for_test() == CandidateHealthState::SafeMode; }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DiagnosticsTimeoutKeepsStateAndRetriesWhenIdle) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-retry-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.drop_first_diagnostics.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/40, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  EXPECT_FALSE(h.service.health_display_state_for_test().has_value());
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 2; }));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.health_display_state_for_test() == CandidateHealthState::Healthy; }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SilentDiagnosticsDoesNotStarveTransportHealth) {
+  using azookey::tsf::CandidateHealthState;
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-silent-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_diagnostics.store(false);
+  host.answer_health.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; },
+      std::chrono::milliseconds(4000)));
+  EXPECT_GE(host.health_probes.load(), 2);
+  EXPECT_EQ(h.service.health_display_state_for_test(), CandidateHealthState::DegradedSimple);
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, MalformedHealthDoesNotClearDeadlineMisses) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-health-malformed-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.malformed_health.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+  EXPECT_GE(host.health_probes.load(), 2);
+
+  host.malformed_health.store(false);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ModelRetryUsesControlHandshakeAndUpdateConfig) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-model-retry-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.diagnostics_state.store(1);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  h.service.retry_model_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.update_config_requests.load() >= 1; }));
+  EXPECT_GE(host.handshakes.load(), 2);  // primary and control connections
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+  h.service.stop_ipc_worker_for_test();
+  // A stop may interrupt the control request before the UI callback runs.
+  // Reactivation must allow the button to start a fresh retry.
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+  h.service.retry_model_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.update_config_requests.load() >= 2; }));
+  h.service.stop_ipc_worker_for_test();
+}
 
 // DEV-1175: a Host that keeps answering Health keeps the connection Ready.
 TEST(TsfTipOnKeyDownPreeditTest, IdleHealthProbeKeepsReadyWhileHostAnswers) {
@@ -3699,6 +4172,177 @@ TEST(TsfTipOnKeyDownPreeditTest, AiCanceledResponseRetriesWholeBatchAsNeuralOnLe
   EXPECT_EQ(ai_calls.load(), 1u);
   h.service.stop_ipc_worker_for_test();
   server.Stop();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, AiFailureNoticeFollowsFallbackWithoutChangingCommit) {
+  struct Case {
+    const char* error_class;
+    const wchar_t* notice;
+    bool canceled{false};
+    bool ai_success{false};
+    bool host_fallback{false};
+  };
+  const std::vector<Case> cases = {
+      {"Auth", L"AI整文に失敗しました。APIキーを確認してください。", false, false, true},
+      {"RateLimit", L"AI整文が混み合っています。少し待って再試行してください。", false, false,
+       true},
+      {"Timeout", L"AI整文から応答がありません。再試行してください。", false, false, true},
+      {"KeyReentry", L"APIキーを再入力してください。", false, false, true},
+      {nullptr, L""},  // A legacy Host omits error_class.
+      {"FutureClass", L""},
+      {"Auth", L"", true},
+      {nullptr, L"", false, true},
+  };
+  for (size_t index = 0; index < cases.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto& test_case = cases[index];
+    const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-ai-notice-test-" +
+                                  std::to_string(GetCurrentProcessId()) + "-" +
+                                  std::to_string(index);
+    std::atomic<unsigned> ai_calls{0}, neural_calls{0};
+    std::atomic<bool> handshaken{false};
+    azookey::ipc::NamedPipeServer server;
+    ASSERT_TRUE(server.Start(
+        pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+          auto res = req;
+          if (req.type == azookey::ipc::MessageType::Handshake) {
+            azookey::ipc::HandshakeResponse payload;
+            payload.accepted = true;
+            payload.batch_romaji_conversion = true;
+            payload.batch_conversion_mode = "ai-cleanup";
+            res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+            handshaken = true;
+            return res;
+          }
+          if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+          const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+          if (!request) return std::nullopt;
+          azookey::ipc::QueryBatchConversionResponse payload;
+          if (request->mode == "ai-cleanup") {
+            ++ai_calls;
+            payload.canceled = test_case.canceled;
+            if (test_case.error_class) payload.error_class = test_case.error_class;
+            if (test_case.ai_success) payload.full_surface = "AI結果";
+            if (test_case.host_fallback) {
+              azookey::ipc::CandidateField candidate;
+              candidate.reading = request->reading;
+              candidate.surface = "二";
+              candidate.source = "model";
+              payload.segments.push_back({request->reading, {std::move(candidate)}});
+              payload.full_surface = "二";
+            }
+          } else {
+            ++neural_calls;
+            payload.full_surface = "二";
+          }
+          res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+          return res;
+        }));
+
+    TextServiceHarness h;
+    h.service.set_batch_romaji_options_for_test(true, false, false, true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    ASSERT_TRUE(WaitUntil([&] { return handshaken.load(); }));
+    ASSERT_TRUE(h.Press('N'));
+    ASSERT_TRUE(h.Press('I'));
+    ASSERT_TRUE(h.Press(VK_SPACE));
+    ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+    const auto expected_surface = test_case.ai_success ? "AI結果" : "二";
+    EXPECT_EQ(h.service.cached_batch_notice_for_test(), test_case.notice);
+    EXPECT_EQ(h.service.cached_candidates_for_test().front().surface, expected_surface);
+    EXPECT_EQ(ai_calls.load(), 1u);
+    EXPECT_EQ(neural_calls.load(), test_case.ai_success || test_case.host_fallback ? 0u : 1u);
+
+    h.service.stop_ipc_worker_for_test();
+    server.Stop();
+    h.service.show_candidate_window_from_cache_for_test();
+    EXPECT_EQ(h.service.shown_batch_notice_for_test(), test_case.notice);
+    ASSERT_FALSE(h.service.shown_candidates_for_test().empty());
+    EXPECT_EQ(h.service.shown_candidates_for_test().front().surface, expected_surface);
+    FakeCompositionAttachment attachment(h);
+    EXPECT_EQ(h.service.commit_selected_for_test(&h.context), S_OK);
+    EXPECT_EQ(attachment.composition_range.last_text, test_case.ai_success ? L"AI結果" : L"二");
+    EXPECT_TRUE(h.service.shown_batch_notice_for_test().empty());
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, AiFailureNoticeSurvivesLaterChunkDisconnect) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-ai-chunk-disconnect-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> ai_calls{0}, neural_calls{0};
+  std::atomic<bool> handshaken{false};
+  azookey::ipc::NamedPipeServer first_server;
+  ASSERT_TRUE(first_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.batch_conversion_mode = "ai-cleanup";
+          payload.capabilities = {"oob_cancel"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          handshaken = true;
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request || request->mode != "ai-cleanup") return std::nullopt;
+        if (++ai_calls != 1) return std::nullopt;
+        azookey::ipc::QueryBatchConversionResponse payload;
+        payload.error_class = "Auth";
+        azookey::ipc::CandidateField candidate;
+        candidate.reading = request->reading;
+        candidate.surface = "二";
+        candidate.source = "model";
+        payload.segments.push_back({request->reading, {std::move(candidate)}});
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true, false, false, true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return handshaken.load(); }));
+  for (int i = 0; i < 260; ++i) {
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+  }
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return ai_calls.load() == 2; }));
+  first_server.Stop();
+
+  azookey::ipc::NamedPipeServer replacement_server;
+  ASSERT_TRUE(replacement_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.capabilities = {"oob_cancel"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request || request->mode != "neural") return std::nullopt;
+        ++neural_calls;
+        azookey::ipc::QueryBatchConversionResponse payload;
+        payload.full_surface = "二";
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+  ASSERT_TRUE(WaitUntil([&] { return neural_calls.load() == 2; }));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  EXPECT_EQ(h.service.cached_batch_notice_for_test(),
+            L"AI整文に失敗しました。APIキーを確認してください。");
+  EXPECT_EQ(h.service.cached_candidates_for_test().front().surface, "二");
+
+  h.service.stop_ipc_worker_for_test();
+  replacement_server.Stop();
 }
 
 TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallback) {

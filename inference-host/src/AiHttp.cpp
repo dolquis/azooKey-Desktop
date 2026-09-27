@@ -109,7 +109,12 @@ AiHttpResponse PostAiHttp(const AiBackendOptions& options, const std::string& bo
     return response;
   }
   const auto key = learning::UnprotectSecret(options.api_key);
-  if (!key || key.value.empty() || key.value.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
+  if (!key) {
+    response.error =
+        options.api_key.starts_with("dpapi:") ? AiErrorClass::KeyReentry : AiErrorClass::Auth;
+    return response;
+  }
+  if (key.value.empty() || key.value.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
     response.error = AiErrorClass::Auth;
     return response;
   }

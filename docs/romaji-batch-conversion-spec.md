@@ -209,9 +209,16 @@ M58-B 既定（ストリーミング非採用）では各（サブ）リクエ�
   ],
   "full_surface": "日本語を入力する", // 全文の最良連結（Preedit 即時表示用）
   "partial": false,              // チャンク逐次変換途中は true
-  "canceled": false               // §6.3.2 の out-of-band Cancel で打ち切られた場合 true
+  "canceled": false,              // §6.3.2 の out-of-band Cancel で打ち切られた場合 true
+  "error_class": "RateLimit"      // 任意。ai-cleanup 失敗時の分類名
 }
 ```
+
+`error_class` は `ai-cleanup` の失敗を neural fallback 後にも伝える加算的フィールドである。
+成功時と `neural` 要求では省略する。旧 Host の応答で欠落した場合、TIP は従来の
+fallback を維持し、分類別案内は出さない。未知の分類名も同様に扱う。`canceled=true`
+では案内を出さない。TIP が表示する文言は分類名から選んだ固定文言だけとし、
+プロバイダ応答本文、入力、鍵を含めない。候補の表層形と確定結果は案内の有無で変えない。
 
 既存 `QueryCandidates`（単一読み・単一候補列）と分離する理由: 一括変換は
 **複数文節（segments）構造**を返す必要があり、既存 `Candidate`

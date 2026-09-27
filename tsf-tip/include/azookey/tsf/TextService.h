@@ -16,6 +16,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "azookey/core/InputState.h"
@@ -189,6 +190,9 @@ class TextService final : public ITfTextInputProcessorEx,
   void set_live_conversion_for_test(bool enabled) {
     local_settings_.SetLiveConversionForTest(enabled);
   }
+  void set_max_context_length_for_test(uint32_t length) {
+    local_settings_.SetMaxContextLengthForTest(length);
+  }
   void set_prediction_enabled_for_test(bool enabled) {
     local_settings_.SetPredictionEnabledForTest(enabled);
   }
@@ -283,7 +287,18 @@ class TextService final : public ITfTextInputProcessorEx,
     reconversion_list_ = list;
     if (list) list->AddRef();
   }
+  void set_text_edit_context_for_test(ITfContext* context) {
+    if (text_edit_context_) text_edit_context_->Release();
+    text_edit_context_ = context;
+    if (context) context->AddRef();
+  }
   bool has_reconversion_ui_for_test() const { return reconversion_list_ != nullptr; }
+  void process_candidates_ready_for_test() { OnCandidatesReady(this); }
+  bool has_reconversion_result_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return reconversion_result_.has_value();
+  }
+  void process_reconversion_result_for_test() { ShowReconversionResult(); }
   bool active_context_is_for_test(ITfContext* context) const { return active_context_ == context; }
   HRESULT commit_selected_for_test(ITfContext* context) { return CommitSelected(context); }
   HRESULT request_commit_edit_session_for_test(ITfContext* context) {
@@ -297,6 +312,11 @@ class TextService final : public ITfTextInputProcessorEx,
   }
   bool batch_query_in_progress_for_test() const;
   void set_cached_batch_segments_for_test(std::vector<ipc::BatchConversionSegment> segments);
+  std::wstring cached_batch_notice_for_test() {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    return cached_batch_notice_;
+  }
+  std::wstring shown_batch_notice_for_test() const { return shown_batch_notice_; }
   bool has_pending_ipc_query_for_test();
   bool pending_ipc_query_is_batch_for_test();
   uint64_t pending_ipc_request_id_for_test();
@@ -324,6 +344,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string pending_ipc_raw_romaji_for_test();
   void set_ipc_pipe_name_for_test(std::string pipe_name);
   void request_host_option_refresh_for_test() { RequestHostOptionRefresh(); }
+  void retry_model_for_test() { RetryModelFromUi(); }
   bool batch_romaji_conversion_for_test() const {
     return batch_romaji_conversion_.load(std::memory_order_relaxed);
   }
@@ -334,6 +355,10 @@ class TextService final : public ITfTextInputProcessorEx,
     return ipc_connection_state_.load(std::memory_order_acquire);
   }
   bool ipc_host_unavailable_for_test() const { return IpcHostUnavailable(); }
+  std::optional<CandidateHealthState> health_display_state_for_test() {
+    std::lock_guard<std::mutex> lock(health_state_mtx_);
+    return health_display_state_;
+  }
   // Call before start_ipc_worker_for_test; the worker reads these unlocked.
   void set_ipc_health_timing_for_test(uint32_t interval_ms, uint32_t timeout_ms,
                                       uint32_t failure_threshold) {
@@ -449,6 +474,7 @@ class TextService final : public ITfTextInputProcessorEx,
   // so that a late QueryCandidates response cannot change what is confirmed).
   std::vector<TipCandidate> shown_candidates_;
   std::vector<ipc::BatchConversionSegment> shown_batch_segments_;
+  std::wstring shown_batch_notice_;  // UI thread only; fixed text, never Host body.
   std::vector<size_t> batch_segment_selections_;
   size_t batch_segment_cursor_{0};
   struct PendingCommitObservation {
@@ -488,12 +514,29 @@ class TextService final : public ITfTextInputProcessorEx,
   uint32_t ipc_health_timeout_ms_{500};
   uint32_t ipc_deadline_miss_threshold_{2};
   uint32_t ipc_consecutive_deadline_misses_{0};  // IPC worker only.
+  // Published by the IPC worker, consumed by OnCandidatesReady on the UI thread.
+  std::mutex health_state_mtx_;
+  std::optional<CandidateHealthState> health_display_state_;
+  std::string health_display_generation_id_;
+  bool health_diagnostics_pending_{false};                               // IPC worker only.
+  std::chrono::steady_clock::time_point health_diagnostics_retry_at_{};  // IPC worker only.
+  bool health_probe_before_diagnostics_retry_{false};                    // IPC worker only.
+  std::optional<std::pair<std::string, bool>> last_health_response_;     // IPC worker only.
+  // A model retry can take 30 seconds; it uses its own handshaken control pipe
+  // so primary key requests never wait for UpdateConfig.
+  ipc::NamedPipeClient retry_control_client_;
+  std::thread retry_thread_;
+  std::atomic<bool> retry_stop_{false};
+  std::atomic<bool> retry_in_flight_{false};
+  std::atomic<bool> retry_finished_{false};
 #ifdef AZOOKEY_TSF_TESTING
   std::string ipc_pipe_name_for_test_;
 #endif
   std::string ipc_pending_reading_;
+  std::string ipc_pending_left_context_;
   std::string ipc_pending_raw_romaji_;
   std::string ipc_pending_batch_mode_;
+  std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
   std::string ipc_pending_trace_id_;                                 // protected by ipc_mtx_
   std::chrono::steady_clock::time_point ipc_pending_trace_start_{};  // ipc_mtx_
   uint64_t ipc_pending_id_{0};
@@ -568,6 +611,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::chrono::steady_clock::time_point candidates_trace_start_{};  // candidates_mtx_
   bool candidates_trace_pending_{false};                            // candidates_mtx_
   std::vector<ipc::BatchConversionSegment> cached_batch_segments_;
+  std::wstring cached_batch_notice_;           // candidates_mtx_.
   bool candidate_window_show_pending_{false};  // protected by candidates_mtx_
   struct LiveConversionResult {
     uint64_t request_id;
@@ -598,6 +642,7 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfContext* text_edit_context_{nullptr};                   // UI thread, AddRef'd
   DWORD text_edit_cookie_{TF_INVALID_COOKIE};
   bool reconversion_prefetch_pending_{false};  // UI thread
+  std::wstring reconversion_prefetch_surface_;  // UI thread, in-flight surface
   std::atomic<uint64_t> reconversion_generation_{0};
   ITfRange* reconversion_range_{nullptr};         // UI thread only
   ITfCandidateList* reconversion_list_{nullptr};  // UI thread only
@@ -626,7 +671,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool WaitForReconnectOrStop(uint32_t delay_ms);
   void TransitionIpcConnection(IpcConnectionEvent event);
   enum class HealthProbeResult { Answered, TimedOut, Interrupted, ConnectionLost };
-  HealthProbeResult ProbeHostHealth(uint64_t request_id);
+  HealthProbeResult ProbeHostHealth(uint64_t request_id,
+                                    std::optional<ipc::HealthPayload>* payload);
+  enum class DiagnosticsProbeResult { Answered, Failed, Interrupted, ConnectionLost };
+  DiagnosticsProbeResult ProbeHostDiagnostics(uint64_t request_id);
+  void PublishHealthDisplayState(CandidateHealthState state);
   void NoteHostResponded();
   void NoteHostDeadlineMissed();
   bool HasQueuedIpcWorkLocked() const;
@@ -635,6 +684,8 @@ class TextService final : public ITfTextInputProcessorEx,
                                 std::optional<ipc::Envelope>* received = nullptr);
   bool ObserveHostGeneration(const std::string& host_generation_id);
   void RequestHostOptionRefresh();
+  void RetryModelFromUi();
+  void RetryModelOnControlThread();
   void RearmPendingQuery(uint64_t req_id);
   void RequeueUnackedSendItems(std::vector<IpcSendItem>& items, size_t from_index);
   void TrimIpcSendQueueLocked();
@@ -643,6 +694,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostQueryCandidates(ITfContext* context, const std::string& reading, bool live = true,
                            const std::string& emoji_trigger = {});
   void PostQueryLiveConversion(ITfContext* context, const std::string& reading);
+  std::string CaptureLeftContext(ITfContext* context, bool secure);
   HRESULT HandleEmojiKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
                          bool test_only, bool& handled);
   void PostBatchConversion(const std::string& reading, const std::string& raw_romaji,
@@ -668,7 +720,9 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT AcceptPrediction(ITfContext* context, size_t index);
   HRESULT ApplyPredictionReading(ITfContext* context, const std::string& reading);
   RECT PredictionCaretRect();
-  HRESULT StartSelectionReconversion(ITfContext* context);
+  HRESULT StartSelectionReconversion(ITfContext* context,
+                                     const std::wstring* expected_surface = nullptr,
+                                     ITfRange* expected_range = nullptr);
   HRESULT CompleteReconversionSelection(size_t index);
   void ClearReconversionState();
   void ShowReconversionResult();

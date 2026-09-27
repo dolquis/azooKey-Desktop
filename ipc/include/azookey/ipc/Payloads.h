@@ -171,6 +171,7 @@ struct QueryBatchConversionResponse {
   std::string full_surface;
   bool partial{false};
   bool canceled{false};
+  std::optional<std::string> error_class;
 };
 
 struct ReverseConvertRequest {

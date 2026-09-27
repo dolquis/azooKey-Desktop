@@ -287,7 +287,7 @@ TEST(AiHttpTest, RejectsBrokenProtectedKeyBeforeNetwork) {
   options.api_key = "dpapi:invalid";
   const auto result = azookey::host::PostAiHttp(
       options, "{}", nullptr, std::chrono::steady_clock::now() + std::chrono::seconds(1));
-  EXPECT_EQ(result.error, azookey::host::AiErrorClass::Auth);
+  EXPECT_EQ(result.error, azookey::host::AiErrorClass::KeyReentry);
 }
 TEST(AiHttpTest, HttpFailuresRemainStatusesAndDoNotExposeProviderBodies) {
   WinsockScope winsock;

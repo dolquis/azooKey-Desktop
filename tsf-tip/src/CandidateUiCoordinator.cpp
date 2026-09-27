@@ -54,6 +54,38 @@ void CandidateUiCoordinator::SetOnClick(CandidateWindow::OnClickFn fn) {
   own_window_.SetOnClick(std::move(fn));
 }
 
+void CandidateUiCoordinator::SetOnRetry(CandidateWindow::OnRetryFn fn) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  own_window_.SetOnRetry(std::move(fn));
+}
+
+void CandidateUiCoordinator::SetHealthState(CandidateHealthState state,
+                                            const std::string& host_generation_id) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  const bool changed = state != health_state_;
+  const bool new_safe_generation =
+      state == CandidateHealthState::SafeMode &&
+      std::find(notified_safe_mode_generations_.begin(), notified_safe_mode_generations_.end(),
+                host_generation_id) == notified_safe_mode_generations_.end();
+  health_state_ = state;
+  host_generation_id_ = host_generation_id;
+  if (state == CandidateHealthState::Healthy) {
+    health_banner_pending_ = false;
+    own_window_.ShowHealthBanner(CandidateHealthState::Healthy);
+    return;
+  }
+  if (changed || new_safe_generation) {
+    health_banner_pending_ = state != CandidateHealthState::SafeMode || new_safe_generation;
+    own_window_.ShowHealthBanner(CandidateHealthState::Healthy);
+  }
+  ShowPendingHealthBanner();
+}
+
+void CandidateUiCoordinator::SetRetryInFlight(bool in_flight) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  own_window_.SetRetryInFlight(in_flight);
+}
+
 void CandidateUiCoordinator::SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn,
                                                   void* context) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
@@ -80,7 +112,7 @@ void CandidateUiCoordinator::CancelScheduledCandidatesReady() {
 
 HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
                                         const std::vector<CandidateViewItem>& items,
-                                        int selected_idx) {
+                                        int selected_idx, std::wstring notice) {
   AZOOKEY_ASSERT_CANDIDATE_UI_THREAD();
   const bool had_ui_element_mgr = ui_element_mgr_ != nullptr;
   const auto rollback_exception = [this, had_ui_element_mgr]() {
@@ -93,6 +125,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       showing_ = false;
       tip_draws_ = true;
       items_.clear();
+      notice_.clear();
       selected_idx_ = -1;
       ReleaseUiElement();
     }
@@ -108,11 +141,12 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     }
 
     items_ = items;
+    notice_ = std::move(notice);
     selected_idx_ = ClampSelection(selected_idx);
     last_pt_ = pt;
 
-    auto* element =
-        new (std::nothrow) CandidateListUIElement(CandidateSurfaces(items_), selected_idx_);
+    auto* element = new (std::nothrow)
+        CandidateListUIElement(CandidateSurfaces(items_), selected_idx_, notice_);
     if (!element) {
       NotifyBeginObserver(E_OUTOFMEMORY, ui_element_mgr_ != nullptr, false, FALSE,
                           kInvalidUiElementId);
@@ -126,6 +160,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       if (ui_less_mode_) {
         ReleaseUiElement();
         items_.clear();
+        notice_.clear();
         selected_idx_ = -1;
         const HRESULT result = FAILED(hr) ? hr : E_NOINTERFACE;
         NotifyBeginObserver(result, false, false, FALSE, kInvalidUiElementId);
@@ -145,6 +180,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       NotifyBeginObserver(hr, true, false, FALSE, kInvalidUiElementId);
       ReleaseUiElement();
       items_.clear();
+      notice_.clear();
       selected_idx_ = -1;
       return hr;
     }
@@ -188,7 +224,7 @@ HRESULT CandidateUiCoordinator::UpdateUI(const std::vector<CandidateViewItem>& i
   ui_element_->Update(CandidateSurfaces(items_), selected_idx_,
                       TF_CLUIE_COUNT | TF_CLUIE_STRING | TF_CLUIE_SELECTION);
   if (tip_draws_) {
-    own_window_.Show(last_pt_, items_, selected_idx_);
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
     return S_OK;
   }
   if (ui_element_mgr_ && ui_element_id_ != kInvalidUiElementId) {
@@ -208,6 +244,7 @@ HRESULT CandidateUiCoordinator::EndUI() {
   showing_ = false;
   tip_draws_ = true;
   items_.clear();
+  notice_.clear();
   selected_idx_ = -1;
   ReleaseUiElement();
   return result;
@@ -245,9 +282,19 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
   if (!ui_element_) return;
   ui_element_->SetShown(tip_draws_);
   if (tip_draws_) {
-    own_window_.Show(last_pt_, items_, selected_idx_);
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    ShowPendingHealthBanner();
   } else {
     own_window_.Hide();
+  }
+}
+
+void CandidateUiCoordinator::ShowPendingHealthBanner() {
+  if (!health_banner_pending_ || !own_window_.IsVisible()) return;
+  own_window_.ShowHealthBanner(health_state_);
+  health_banner_pending_ = false;
+  if (health_state_ == CandidateHealthState::SafeMode) {
+    notified_safe_mode_generations_.push_back(host_generation_id_);
   }
 }
 
@@ -264,7 +311,10 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
     return;
   }
   tip_draws_ = true;
-  if (showing_ && !items_.empty()) own_window_.Show(last_pt_, items_, selected_idx_);
+  if (showing_ && !items_.empty()) {
+    own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    ShowPendingHealthBanner();
+  }
 }
 
 void CandidateUiCoordinator::ReleaseUiElement() {

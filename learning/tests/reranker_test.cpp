@@ -9,6 +9,9 @@
 //
 // All tests are platform-neutral (no Windows headers, no IPC).
 
+#include <gtest/gtest.h>
+
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -16,8 +19,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include "azookey/core/Candidate.h"
 #include "azookey/learning/LearningStore.h"
@@ -48,6 +49,13 @@ TEST(RerankerTest, NullStorePassthrough) {
   ASSERT_EQ(out.size(), 2u);
   EXPECT_EQ(out[0].surface, "日本");
   EXPECT_EQ(out[1].surface, "二本");
+}
+
+TEST(RerankerTest, CanceledRequestReturnsNoCandidates) {
+  learn::Reranker reranker(nullptr);
+  std::atomic<bool> cancel{true};
+  auto candidates = MakeCandidates({{"日本", 0.9}}, "にほん");
+  EXPECT_TRUE(reranker.Apply("にほん", std::move(candidates), 1000, &cancel).empty());
 }
 
 TEST(RerankerTest, EmptyCandidates) {

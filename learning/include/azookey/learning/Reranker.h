@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 
 #include "azookey/core/Candidate.h"
@@ -13,7 +14,8 @@ class Reranker {
 
   std::vector<azookey::core::Candidate> Apply(const std::string& reading,
                                               std::vector<azookey::core::Candidate> candidates,
-                                              uint64_t now_epoch_sec) const;
+                                              uint64_t now_epoch_sec,
+                                              const std::atomic<bool>* cancel = nullptr) const;
 
  private:
   LearningStore* store_;

@@ -1364,6 +1364,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeWithoutMockCandidatesFallsBackOnly)
   }));
   ASSERT_TRUE(engine->effective_last_error().has_value());
   EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   std::remove(model_path.c_str());
   RemoveProtectedStoreFile(lpath);
@@ -1395,6 +1396,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   EXPECT_NE(degraded.front().debug_info.find("zenzai-degraded"), std::string::npos);
   ASSERT_TRUE(engine->effective_last_error().has_value());
   EXPECT_NE(engine->effective_last_error()->find("empty-generation"), std::string::npos);
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   auto nll_config = engine->config();
   nll_config.nll.enabled = true;
@@ -1416,6 +1418,7 @@ TEST(InferenceEngineTest, LoadedZenzaiRuntimeDegradesToFallbackAndRecovers) {
   ASSERT_FALSE(recovered.empty());
   EXPECT_EQ(recovered.front().surface, "日本語");
   EXPECT_FALSE(engine->effective_last_error().has_value());
+  EXPECT_EQ(engine->health_state(), azookey::host::HealthState::Healthy);
 
   // A mock runtime is loaded in the no-llama build, but cannot score NLL.
   // Repeated NLL requests must neither contaminate health nor change candidates.

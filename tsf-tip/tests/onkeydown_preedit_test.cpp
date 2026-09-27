@@ -2756,6 +2756,14 @@ TEST(TsfTipOnKeyDownPreeditTest,
         res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
         return res;
       }
+      if (req.type == azookey::ipc::MessageType::QueryDiagnostics) {
+        azookey::ipc::QueryDiagnosticsPayload payload;
+        payload.engine = "mock";
+        payload.backend = "cpu";
+        payload.fallback_state = "healthy";
+        res.payload_json = azookey::ipc::BuildQueryDiagnostics(payload);
+        return res;
+      }
       if (req.type == azookey::ipc::MessageType::Health && !health_received.exchange(true)) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (!release_health.load() && std::chrono::steady_clock::now() < deadline)
@@ -2902,6 +2910,7 @@ class HealthProbeHost {
           res.trace_id = req.trace_id;
           res.type = req.type;
           if (req.type == azookey::ipc::MessageType::Handshake) {
+            handshakes.fetch_add(1);
             azookey::ipc::HandshakeResponse payload;
             payload.host_version = "test-host";
             payload.accepted = true;
@@ -2911,9 +2920,37 @@ class HealthProbeHost {
           if (req.type == azookey::ipc::MessageType::Health) {
             health_probes.fetch_add(1);
             if (!answer_health.load()) return std::nullopt;
+            if (malformed_health.load()) {
+              res.payload_json = "{}";  // Missing required status and backend.
+              return res;
+            }
             azookey::ipc::HealthPayload payload;
-            payload.status = "ok";
+            payload.status = degraded_health.load() ? "degraded" : "ok";
+            payload.backend = "cpu";
+            payload.model_loaded = !degraded_health.load();
             res.payload_json = azookey::ipc::BuildHealth(payload);
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::QueryDiagnostics) {
+            diagnostics_queries.fetch_add(1);
+            if (!answer_diagnostics.load() || drop_first_diagnostics.exchange(false))
+              return std::nullopt;
+            azookey::ipc::QueryDiagnosticsPayload payload;
+            payload.engine = "mock";
+            payload.backend = "cpu";
+            payload.fallback_state = diagnostics_state.load() == 1   ? "degraded_model"
+                                     : diagnostics_state.load() == 2 ? "safe_mode"
+                                     : diagnostics_state.load() == 3 ? "untrusted_state"
+                                                                     : "healthy";
+            payload.last_error = "untrusted free text that must not reach UI";
+            res.payload_json = azookey::ipc::BuildQueryDiagnostics(payload);
+            return res;
+          }
+          if (req.type == azookey::ipc::MessageType::UpdateConfig) {
+            update_config_requests.fetch_add(1);
+            azookey::ipc::UpdateConfigResponse payload;
+            payload.ok = true;
+            res.payload_json = azookey::ipc::BuildUpdateConfigResponse(payload);
             return res;
           }
           if (req.type == azookey::ipc::MessageType::QueryCandidates) {
@@ -2932,7 +2969,15 @@ class HealthProbeHost {
   }
 
   std::atomic<bool> answer_health{true};
+  std::atomic<bool> malformed_health{false};
   std::atomic<bool> answer_query{true};
+  std::atomic<bool> answer_diagnostics{true};
+  std::atomic<bool> drop_first_diagnostics{false};
+  std::atomic<bool> degraded_health{false};
+  std::atomic<int> diagnostics_state{0};
+  std::atomic<int> diagnostics_queries{0};
+  std::atomic<int> update_config_requests{0};
+  std::atomic<int> handshakes{0};
   std::atomic<int> health_probes{0};
   std::atomic<int> queries{0};
   std::atomic<int> batches{0};
@@ -2943,6 +2988,145 @@ class HealthProbeHost {
   azookey::ipc::NamedPipeServer server_;
 };
 }  // namespace
+
+TEST(TsfTipOnKeyDownPreeditTest, HandshakeQueriesValidatedHostHealthState) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-handshake-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.diagnostics_state.store(1);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  ASSERT_TRUE(WaitUntil([&] {
+    return h.service.health_display_state_for_test() == CandidateHealthState::DegradedModel;
+  }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, HealthChangeRefreshesDiagnosticsAndRejectsUnknownState) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-change-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/40, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] {
+    return h.service.health_display_state_for_test() == CandidateHealthState::Healthy &&
+           host.health_probes.load() >= 1;
+  }));
+  const int first_count = host.diagnostics_queries.load();
+  host.diagnostics_state.store(3);
+  host.degraded_health.store(true);
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() > first_count; }));
+  EXPECT_EQ(h.service.health_display_state_for_test(), CandidateHealthState::Healthy);
+  host.diagnostics_state.store(2);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.health_display_state_for_test() == CandidateHealthState::SafeMode; }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, DiagnosticsTimeoutKeepsStateAndRetriesWhenIdle) {
+  using azookey::tsf::CandidateHealthState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-retry-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.drop_first_diagnostics.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/40, /*timeout_ms=*/200,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  EXPECT_FALSE(h.service.health_display_state_for_test().has_value());
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 2; }));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.health_display_state_for_test() == CandidateHealthState::Healthy; }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, SilentDiagnosticsDoesNotStarveTransportHealth) {
+  using azookey::tsf::CandidateHealthState;
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-diagnostics-silent-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.answer_diagnostics.store(false);
+  host.answer_health.store(false);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; },
+      std::chrono::milliseconds(4000)));
+  EXPECT_GE(host.health_probes.load(), 2);
+  EXPECT_EQ(h.service.health_display_state_for_test(), CandidateHealthState::DegradedSimple);
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, MalformedHealthDoesNotClearDeadlineMisses) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-health-malformed-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.malformed_health.store(true);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.set_ipc_health_timing_for_test(/*interval_ms=*/30, /*timeout_ms=*/60,
+                                           /*failure_threshold=*/2);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Degraded; }));
+  EXPECT_GE(host.health_probes.load(), 2);
+
+  host.malformed_health.store(false);
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+  h.service.stop_ipc_worker_for_test();
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, ModelRetryUsesControlHandshakeAndUpdateConfig) {
+  using azookey::tsf::IpcConnectionState;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-model-retry-" + std::to_string(GetCurrentProcessId());
+  HealthProbeHost host(pipe_name);
+  host.diagnostics_state.store(1);
+  ASSERT_TRUE(host.Start());
+
+  TextServiceHarness h;
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.diagnostics_queries.load() >= 1; }));
+  h.service.retry_model_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.update_config_requests.load() >= 1; }));
+  EXPECT_GE(host.handshakes.load(), 2);  // primary and control connections
+  EXPECT_EQ(h.service.ipc_connection_state_for_test(), IpcConnectionState::Ready);
+  h.service.stop_ipc_worker_for_test();
+  // A stop may interrupt the control request before the UI callback runs.
+  // Reactivation must allow the button to start a fresh retry.
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil(
+      [&] { return h.service.ipc_connection_state_for_test() == IpcConnectionState::Ready; }));
+  h.service.retry_model_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return host.update_config_requests.load() >= 2; }));
+  h.service.stop_ipc_worker_for_test();
+}
 
 // DEV-1175: a Host that keeps answering Health keeps the connection Ready.
 TEST(TsfTipOnKeyDownPreeditTest, IdleHealthProbeKeepsReadyWhileHostAnswers) {

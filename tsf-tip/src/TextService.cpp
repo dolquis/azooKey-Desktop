@@ -987,6 +987,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     if (active_context_) CommitSelected(active_context_);
   });
   candidate_ui_.SetOnCandidatesReady(&TextService::OnCandidatesReady, this);
+  candidate_ui_.SetOnRetry([this] { RetryModelFromUi(); });
   prediction_window_.SetOnClick([this](int index) {
     try {
       if (active_context_) (void)AcceptPrediction(active_context_, static_cast<size_t>(index));
@@ -3131,16 +3132,28 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
 
 void TextService::StartIpcWorker() {
   AZOOKEY_ASSERT_UI_THREAD();
+  retry_stop_.store(false, std::memory_order_release);
+  retry_in_flight_.store(false, std::memory_order_release);
+  retry_finished_.store(false, std::memory_order_release);
+  candidate_ui_.SetRetryInFlight(false);
   ipc_stop_.store(false);
   // A worker stopped while Disconnected leaves no Stopped transition behind, so
   // a reactivation starts its attempt count afresh here.
   ipc_failed_connect_attempts_ = 0;
   ipc_host_unavailable_.store(false, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lock(health_state_mtx_);
+    health_display_state_.reset();
+    health_display_generation_id_.clear();
+  }
   ipc_thread_ = std::thread(&TextService::IpcWorkerThread, this);
 }
 
 void TextService::StopIpcWorker() {
   AZOOKEY_ASSERT_UI_THREAD();
+  retry_stop_.store(true, std::memory_order_release);
+  retry_control_client_.Disconnect();
+  if (retry_thread_.joinable()) retry_thread_.join();
   if (!ipc_thread_.joinable()) return;
   {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
@@ -3196,6 +3209,8 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
     ipc_host_unavailable_.store(false, std::memory_order_release);
   } else if (*to == IpcConnectionState::Degraded || *to == IpcConnectionState::Disconnected) {
     ipc_host_unavailable_.store(true, std::memory_order_release);
+    if (event != IpcConnectionEvent::Stopped)
+      PublishHealthDisplayState(CandidateHealthState::DegradedSimple);
   }
   if (!ShouldLogIpcConnectionTransition(from, *to, attempt)) return;
   const bool lost_host =
@@ -3211,6 +3226,93 @@ void TextService::TransitionIpcConnection(IpcConnectionEvent event) {
        {"process_id", static_cast<uint64_t>(GetCurrentProcessId())}});
 }
 
+void TextService::RetryModelFromUi() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (retry_in_flight_.exchange(true, std::memory_order_acq_rel)) return;
+  if (retry_thread_.joinable()) retry_thread_.join();
+  retry_finished_.store(false, std::memory_order_release);
+  candidate_ui_.SetRetryInFlight(true);
+  try {
+    retry_thread_ = std::thread(&TextService::RetryModelOnControlThread, this);
+  } catch (...) {
+    retry_in_flight_.store(false, std::memory_order_release);
+    candidate_ui_.SetRetryInFlight(false);
+  }
+}
+
+void TextService::RetryModelOnControlThread() {
+  using namespace std::chrono;
+  using namespace azookey::ipc;
+  const auto finish = [this] {
+    retry_control_client_.Disconnect();
+    if (!retry_stop_.load(std::memory_order_acquire)) {
+      RequestHostOptionRefresh();
+      retry_finished_.store(true, std::memory_order_release);
+      candidate_ui_.PostCandidatesReady();
+    }
+  };
+  const auto token = ReadClientHandshakeToken();
+  if (!token || retry_stop_.load(std::memory_order_acquire) ||
+      !retry_control_client_.Connect(IpcPipeName(), 500)) {
+    finish();
+    return;
+  }
+  HandshakeRequest handshake;
+  handshake.tip_version = kTipVersion;
+  handshake.client_id = ipc_client_id_;
+  handshake.handshake_token = *token;
+  Envelope request;
+  request.version = 1;
+  request.request_id = 1;
+  request.trace_id = "tip-model-retry-handshake";
+  request.type = MessageType::Handshake;
+  request.payload_json = BuildHandshakeRequest(handshake);
+  if (!retry_control_client_.Send(request)) {
+    finish();
+    return;
+  }
+  auto response = retry_control_client_.ReceiveWithTimeout(3000);
+  if (!response || !IsExpectedIpcResponse(*response, 1, MessageType::Handshake)) {
+    finish();
+    return;
+  }
+  const auto accepted = ParseHandshakeResponse(response->payload_json);
+  if (!accepted || !accepted->accepted || retry_stop_.load(std::memory_order_acquire)) {
+    finish();
+    return;
+  }
+  request.request_id = 2;
+  request.trace_id = "tip-model-retry";
+  request.type = MessageType::UpdateConfig;
+  request.payload_json = "{}";
+  if (!retry_control_client_.Send(request)) {
+    finish();
+    return;
+  }
+  const auto deadline = steady_clock::now() + seconds(30);
+  while (!retry_stop_.load(std::memory_order_acquire) && retry_control_client_.IsConnected() &&
+         steady_clock::now() < deadline) {
+    response = retry_control_client_.ReceiveWithTimeout(50, deadline);
+    if (response && IsExpectedIpcResponse(*response, 2, MessageType::UpdateConfig)) break;
+  }
+  finish();
+}
+
+void TextService::PublishHealthDisplayState(CandidateHealthState state) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(health_state_mtx_);
+    if (health_display_state_ != state ||
+        health_display_generation_id_ != ipc_host_generation_id_) {
+      health_display_state_ = state;
+      health_display_generation_id_ = ipc_host_generation_id_;
+      changed = true;
+    }
+  }
+  if (changed) candidate_ui_.PostCandidatesReady();
+}
+
 // Caller holds ipc_mtx_. True when the serve loop has something to send, so an
 // idle Health probe must give way to it.
 bool TextService::HasQueuedIpcWorkLocked() const {
@@ -3224,8 +3326,11 @@ bool TextService::HasQueuedIpcWorkLocked() const {
 void TextService::NoteHostResponded() {
   AZOOKEY_ASSERT_IPC_THREAD();
   ipc_consecutive_deadline_misses_ = 0;
-  if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded)
+  if (ipc_connection_state_.load(std::memory_order_relaxed) == IpcConnectionState::Degraded) {
     TransitionIpcConnection(IpcConnectionEvent::ResponseRestored);
+    health_diagnostics_pending_ = true;
+    health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
+  }
 }
 
 // A request's deadline passed while the pipe stayed open (connected but
@@ -3245,7 +3350,8 @@ void TextService::NoteHostDeadlineMissed() {
 // bounded by ipc_health_timeout_ms_ and abandoned as soon as a query or queued
 // item arrives, so the probe never holds up QueryCandidates; a reply that lands
 // after that is discarded by the next receive as a stale request id.
-TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id) {
+TextService::HealthProbeResult TextService::ProbeHostHealth(
+    uint64_t request_id, std::optional<ipc::HealthPayload>* payload) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace std::chrono;
 
@@ -3276,12 +3382,70 @@ TextService::HealthProbeResult TextService::ProbeHostHealth(uint64_t request_id)
     const auto wait_ms = static_cast<uint32_t>(
         std::clamp<long long>(remaining_ms, 1, static_cast<long long>(kHealthPollMs)));
     auto response = ipc_client_.ReceiveWithTimeout(wait_ms, deadline);
-    if (response && IsExpectedIpcResponse(*response, request_id, ipc::MessageType::Health))
+    if (response && IsExpectedIpcResponse(*response, request_id, ipc::MessageType::Health)) {
+      auto parsed = ipc::ParseHealth(response->payload_json);
+      if (!parsed) continue;
+      if (payload) *payload = std::move(parsed);
       return HealthProbeResult::Answered;
+    }
   }
   if (!ipc_client_.IsConnected()) return HealthProbeResult::ConnectionLost;
   ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Timeout);
   return HealthProbeResult::TimedOut;
+}
+
+// QueryDiagnostics shares the primary pipe with key requests. A key or queued
+// send interrupts this bounded receive; its late reply is discarded by the
+// next request-id check. Only the fixed fallback_state vocabulary reaches UI.
+TextService::DiagnosticsProbeResult TextService::ProbeHostDiagnostics(uint64_t request_id) {
+  AZOOKEY_ASSERT_IPC_THREAD();
+  using namespace std::chrono;
+  ipc::Envelope request;
+  request.version = 1;
+  request.request_id = request_id;
+  request.trace_id = "tip-health-diagnostics";
+  request.type = ipc::MessageType::QueryDiagnostics;
+  request.payload_json = "{}";
+  if (!ipc_client_.Send(request)) return DiagnosticsProbeResult::ConnectionLost;
+
+  const auto deadline = steady_clock::now() + milliseconds(500);
+  while (!ipc_stop_.load()) {
+    {
+      std::lock_guard<std::mutex> lock(ipc_mtx_);
+      if (HasQueuedIpcWorkLocked()) {
+        ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Cancelled);
+        return DiagnosticsProbeResult::Interrupted;
+      }
+    }
+    if (!ipc_client_.IsConnected()) return DiagnosticsProbeResult::ConnectionLost;
+    const auto now = steady_clock::now();
+    if (now >= deadline) break;
+    const auto remaining = duration_cast<milliseconds>(deadline - now).count();
+    auto response = ipc_client_.ReceiveWithTimeout(
+        static_cast<uint32_t>(std::clamp<long long>(remaining, 1, 50)), deadline);
+    if (!response ||
+        !IsExpectedIpcResponse(*response, request_id, ipc::MessageType::QueryDiagnostics))
+      continue;
+    const auto diagnostics = ipc::ParseQueryDiagnostics(response->payload_json);
+    if (!diagnostics) return DiagnosticsProbeResult::Failed;
+    const auto& state = diagnostics->fallback_state;
+    std::optional<CandidateHealthState> display_state;
+    if (state == "healthy")
+      display_state = CandidateHealthState::Healthy;
+    else if (state == "degraded_simple")
+      display_state = CandidateHealthState::DegradedSimple;
+    else if (state == "degraded_model")
+      display_state = CandidateHealthState::DegradedModel;
+    else if (state == "safe_mode")
+      display_state = CandidateHealthState::SafeMode;
+    if (!display_state) return DiagnosticsProbeResult::Failed;
+    // A diagnostic reply does not override M42's local-fallback condition.
+    if (!IpcHostUnavailable()) PublishHealthDisplayState(*display_state);
+    return DiagnosticsProbeResult::Answered;
+  }
+  if (!ipc_client_.IsConnected()) return DiagnosticsProbeResult::ConnectionLost;
+  ipc_client_.FinishTraceRequest(request_id, core::EtwResult::Timeout);
+  return DiagnosticsProbeResult::Failed;
 }
 
 bool TextService::WaitForIpcResponseOrStop(uint32_t timeout_ms, uint64_t expected_request_id,
@@ -3436,6 +3600,10 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "ipc_connected",
                {{"host_version", SafeLogText(hpayload->host_version)},
                 {"host_generation_id", SafeLogText(hpayload->host_generation_id)}});
+    health_diagnostics_pending_ = true;
+    health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
+    health_probe_before_diagnostics_retry_ = false;
+    last_health_response_.reset();
   }
   return true;
 }
@@ -3644,12 +3812,29 @@ void TextService::ServeConnection() {
     std::vector<IpcSendItem> to_send;
     std::optional<ReconversionRequest> reconversion;
     bool health_due = false;
+    bool diagnostics_due = false;
 
     {
       std::unique_lock<std::mutex> lock(ipc_mtx_);
-      health_due =
-          !ipc_cv_.wait_for(lock, std::chrono::milliseconds(ipc_health_interval_ms_),
-                            [this] { return ipc_stop_.load() || HasQueuedIpcWorkLocked(); });
+      const auto now = std::chrono::steady_clock::now();
+      if (health_diagnostics_pending_ && !health_probe_before_diagnostics_retry_ &&
+          now >= health_diagnostics_retry_at_ && !HasQueuedIpcWorkLocked()) {
+        diagnostics_due = true;
+      } else {
+        auto wait = std::chrono::milliseconds(ipc_health_interval_ms_);
+        if (health_diagnostics_pending_ && health_diagnostics_retry_at_ > now)
+          wait = std::min(wait, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    health_diagnostics_retry_at_ - now) +
+                                    std::chrono::milliseconds(1));
+        const bool idle = !ipc_cv_.wait_for(
+            lock, wait, [this] { return ipc_stop_.load() || HasQueuedIpcWorkLocked(); });
+        if (idle) {
+          diagnostics_due = health_diagnostics_pending_ &&
+                            !health_probe_before_diagnostics_retry_ &&
+                            std::chrono::steady_clock::now() >= health_diagnostics_retry_at_;
+          health_due = !diagnostics_due;
+        }
+      }
       if (ipc_stop_.load()) break;
 
       to_send = std::move(ipc_send_queue_);
@@ -3674,14 +3859,41 @@ void TextService::ServeConnection() {
       }
     }
 
+    if (diagnostics_due) {
+      const auto result = ProbeHostDiagnostics(next_id++);
+      if (result == DiagnosticsProbeResult::ConnectionLost) return;
+      if (result == DiagnosticsProbeResult::Answered) {
+        health_diagnostics_pending_ = false;
+        health_probe_before_diagnostics_retry_ = false;
+      } else {
+        // An interrupted or malformed/timed-out reply leaves the last display
+        // in place. Retry once the primary pipe has been idle for an interval.
+        health_diagnostics_retry_at_ =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(ipc_health_interval_ms_);
+        health_probe_before_diagnostics_retry_ = true;
+      }
+      continue;
+    }
+
     // Nothing to send for a whole interval: probe the Host so a connected but
     // silent Host is noticed without waiting for the next keystroke.
     if (health_due) {
-      switch (ProbeHostHealth(next_id++)) {
+      std::optional<HealthPayload> health;
+      switch (ProbeHostHealth(next_id++, &health)) {
         case HealthProbeResult::Answered:
+          health_probe_before_diagnostics_retry_ = false;
           NoteHostResponded();
+          if (health) {
+            const auto observation = std::make_pair(health->status, health->model_loaded);
+            if (last_health_response_ && *last_health_response_ != observation) {
+              health_diagnostics_pending_ = true;
+              health_diagnostics_retry_at_ = std::chrono::steady_clock::now();
+            }
+            last_health_response_ = observation;
+          }
           break;
         case HealthProbeResult::TimedOut:
+          health_probe_before_diagnostics_retry_ = false;
           RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "ipc_health_timeout");
           NoteHostDeadlineMissed();
           break;
@@ -4925,6 +5137,18 @@ std::string TextService::CurrentDisplayedPreeditSurface() const {
 void TextService::OnCandidatesReady(void* context) {
   if (!context) return;
   auto* service = static_cast<TextService*>(context);
+  std::optional<CandidateHealthState> health_state;
+  std::string host_generation_id;
+  {
+    std::lock_guard<std::mutex> lock(service->health_state_mtx_);
+    health_state = service->health_display_state_;
+    host_generation_id = service->health_display_generation_id_;
+  }
+  if (health_state) service->candidate_ui_.SetHealthState(*health_state, host_generation_id);
+  if (service->retry_finished_.exchange(false, std::memory_order_acq_rel)) {
+    service->retry_in_flight_.store(false, std::memory_order_release);
+    service->candidate_ui_.SetRetryInFlight(false);
+  }
   service->PrefetchSelectedReconversion();
   service->ShowReconversionResult();
   service->ApplyLiveConversionResult();

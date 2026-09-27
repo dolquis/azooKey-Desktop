@@ -534,6 +534,14 @@ TEST_F(DispatcherTest, TokenConfiguredDispatcherRejectsMessagesBeforeAcceptedHan
   EXPECT_FALSE(predictions_before_payload->ok);
   EXPECT_EQ(predictions_before_payload->error, "not authenticated");
   EXPECT_TRUE(predictions_before_payload->predictions.empty());
+  const auto diagnostics_before =
+      token_dispatcher.Dispatch(MakeReq(86, ipc::MessageType::QueryDiagnostics, "{}"));
+  ASSERT_TRUE(diagnostics_before.has_value());
+  const auto diagnostics_before_payload =
+      ipc::ParseQueryDiagnostics(diagnostics_before->payload_json);
+  ASSERT_TRUE(diagnostics_before_payload.has_value());
+  EXPECT_EQ(diagnostics_before_payload->fallback_state, "healthy");
+  EXPECT_EQ(diagnostics_before_payload->last_error, "not authenticated");
 
   user_dict.Add({"明日", "あした"});
   const auto reverse_request =
@@ -1266,7 +1274,7 @@ TEST_F(DispatcherTest, LoadModelValidGgufUpdatesHealthAndHandshake) {
   EXPECT_EQ(diagnostics->engine, "mock");
   EXPECT_FALSE(diagnostics->model_loaded);
   EXPECT_FALSE(diagnostics->loaded_model_path.has_value());
-  EXPECT_EQ(diagnostics->fallback_state, "degraded_simple");
+  EXPECT_EQ(diagnostics->fallback_state, "healthy");
 
   ipc::HandshakeRequest hreq;
   hreq.tip_version = "0.1.0";
@@ -1451,7 +1459,50 @@ TEST_F(DispatcherTest, QueryDiagnosticsReportsRuntimeAndFallbackState) {
   EXPECT_TRUE(parsed->backend == "cpu" || parsed->backend == "cuda");
   EXPECT_EQ(parsed->learning_entries, 0u);
   EXPECT_EQ(parsed->user_dict_entries, 0u);
-  EXPECT_EQ(parsed->fallback_state, "degraded_simple");
+  EXPECT_EQ(parsed->fallback_state, "healthy");
+}
+
+TEST_F(DispatcherTest, QueryDiagnosticsReportsModelFailureAndDisabledModelWithoutChangingState) {
+  const auto missing_path = TempPath("azookey_dispatcher_diagnostics_missing.gguf");
+  std::remove(missing_path.c_str());
+  azookey::host::ModelLoadOptions options;
+  options.path = missing_path;
+  ASSERT_FALSE(engine.LoadModelWithResult(options).ok);
+  ASSERT_EQ(engine.health_state(), azookey::host::HealthState::DegradedModel);
+
+  const auto settings_path = TempPath("azookey_dispatcher_diagnostics_settings.json");
+  std::remove(settings_path.c_str());
+  {
+    std::ofstream out(settings_path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    out << R"({"model":{"enabled":true}})";
+  }
+  azookey::host::SettingsStore settings_store(settings_path);
+  settings_store.Load();
+  azookey::host::Dispatcher config_dispatcher(&engine, &scheduler, &user_dict,
+                                              DefaultDispatcherConfig(), &settings_store);
+  const auto fallback_state = [&](uint64_t id) {
+    const auto response =
+        config_dispatcher.Dispatch(MakeReq(id, ipc::MessageType::QueryDiagnostics, "{}"));
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryDiagnostics(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->fallback_state : std::string();
+  };
+  EXPECT_EQ(fallback_state(702), "degraded_model");
+
+  {
+    std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.is_open());
+    out << R"({"model":{"enabled":false}})";
+  }
+  const auto update =
+      config_dispatcher.Dispatch(MakeReq(703, ipc::MessageType::UpdateConfig, "{}"));
+  ASSERT_TRUE(update.has_value());
+  EXPECT_EQ(engine.health_state(), azookey::host::HealthState::DegradedModel);
+  EXPECT_EQ(fallback_state(704), "healthy");
+  std::remove(settings_path.c_str());
 }
 
 TEST_F(DispatcherTest, UpdateConfigWithoutSettingsStoreReturnsError) {
@@ -2430,6 +2481,45 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesTheRunningConverter) {
 
   cancel_engine.FlushLearningStore();
   std::remove(path.c_str());
+}
+
+TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
+  auto converter = std::make_unique<CancelObservingConverter>();
+  auto* observed = converter.get();
+  azookey::host::InferenceEngine local_engine(std::move(converter), &store, {});
+  azookey::host::RequestScheduler local_scheduler;
+  azookey::host::Dispatcher primary(&local_engine, &local_scheduler, &user_dict,
+                                    DefaultDispatcherConfig());
+  azookey::host::Dispatcher control(&local_engine, &local_scheduler, &user_dict,
+                                    DefaultDispatcherConfig());
+  auto handshake = [this](azookey::host::Dispatcher& connection, uint64_t request_id) {
+    ipc::HandshakeRequest req;
+    req.tip_version = "0.1.0";
+    req.protocol_version = kProtocolVersion;
+    req.client_id = "prediction-cancel-client";
+    const auto response = connection.Dispatch(
+        MakeReq(request_id, ipc::MessageType::Handshake, ipc::BuildHandshakeRequest(req)));
+    return response && ipc::ParseHandshakeResponse(response->payload_json)->accepted;
+  };
+  ASSERT_TRUE(handshake(primary, 1));
+  ASSERT_TRUE(handshake(control, 2));
+
+  auto pending = std::async(std::launch::async, [&] {
+    return primary.Dispatch(MakeReq(91, ipc::MessageType::QueryPredictions,
+                                    ipc::BuildQueryPredictionsRequest({"わたし", "", "word"})));
+  });
+  const auto entered_by = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!observed->entered().load() && std::chrono::steady_clock::now() < entered_by) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(observed->entered().load());
+  ipc::CancelPayload cancel;
+  cancel.target_request_id = 91;
+  EXPECT_FALSE(
+      control.Dispatch(MakeReq(3, ipc::MessageType::Cancel, ipc::BuildCancel(cancel))).has_value());
+  EXPECT_EQ(pending.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+  EXPECT_FALSE(pending.get().has_value());
+  EXPECT_TRUE(observed->saw_cancel().load());
 }
 
 // M47 section 8.5.3 / 12.6: SafeMode is reported first, refuses model loads,

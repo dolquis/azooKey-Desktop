@@ -43,6 +43,10 @@ class CandidateUiCoordinator {
 
   void SetUiLessMode(bool ui_less);
   void SetOnClick(CandidateWindow::OnClickFn fn);
+  void SetOnRetry(CandidateWindow::OnRetryFn fn);
+  // Called on the TSF UI thread after the IPC worker publishes a health snapshot.
+  void SetHealthState(CandidateHealthState state, const std::string& host_generation_id);
+  void SetRetryInFlight(bool in_flight);
   void SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn, void* context);
   void SetBeginObserver(CandidateUiBeginObserver observer, void* context);
   void PostCandidatesReady();
@@ -61,6 +65,7 @@ class CandidateUiCoordinator {
 
 #ifdef AZOOKEY_TSF_TESTING
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
+  bool health_banner_pending_for_test() const { return health_banner_pending_; }
 #endif
 
  private:
@@ -69,6 +74,7 @@ class CandidateUiCoordinator {
   HRESULT EnsureUiElementMgr(ITfThreadMgr* thread_mgr);
   void OnPbShown(bool tip_draws);
   void OnElementShow(bool show);
+  void ShowPendingHealthBanner();
   void ReleaseUiElement();
   void ReleaseUiElementMgr();
   void NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available, bool pb_show_available,
@@ -88,6 +94,10 @@ class CandidateUiCoordinator {
   bool ui_less_mode_{false};
   bool tip_draws_{true};
   bool showing_{false};
+  CandidateHealthState health_state_{CandidateHealthState::Healthy};
+  bool health_banner_pending_{false};
+  std::string host_generation_id_;
+  std::vector<std::string> notified_safe_mode_generations_;
   CandidateUiBeginObserver begin_observer_{nullptr};
   void* begin_observer_context_{nullptr};
 };

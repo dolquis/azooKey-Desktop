@@ -196,7 +196,8 @@ class InferenceEngine {
   std::string ReverseConvert(const std::string& surface, uint64_t now_epoch_sec);
 
   std::vector<core::Candidate> QueryPredictions(const std::string& kana, const std::string& context,
-                                                uint64_t now_epoch_sec);
+                                                uint64_t now_epoch_sec,
+                                                const std::atomic<bool>* cancel = nullptr);
   std::vector<core::Candidate> QueryCorrections(const std::string& kana, const std::string& context,
                                                 const std::string& rejected_surface,
                                                 uint64_t now_epoch_sec);
@@ -255,7 +256,8 @@ class InferenceEngine {
   bool NoteObservationIdLocked(const std::string& observation_id);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
-                                                  uint64_t now_epoch_sec);
+                                                  uint64_t now_epoch_sec,
+                                                  const std::atomic<bool>* cancel = nullptr);
   void MirrorModelRuntimeErrorLocked(const std::shared_ptr<core::IConverter>& converter);
   std::optional<HealthTransition> ApplyHealthEventLocked(HealthEvent event);
   void NoteModelLoadFailedLocked();

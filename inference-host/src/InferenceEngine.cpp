@@ -323,16 +323,20 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
 }
 
 std::vector<core::Candidate> InferenceEngine::ApplyRerankerOrRaw(
-    const std::string& kana, std::vector<core::Candidate> candidates, uint64_t now_epoch_sec) {
+    const std::string& kana, std::vector<core::Candidate> candidates, uint64_t now_epoch_sec,
+    const std::atomic<bool>* cancel) {
+  const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
+  if (canceled()) return {};
   try {
     // Do not move candidates into Apply: fallback needs the raw order/scores.
-    return reranker_.Apply(kana, candidates, now_epoch_sec);
+    auto ranked = reranker_.Apply(kana, candidates, now_epoch_sec, cancel);
+    return canceled() ? std::vector<core::Candidate>{} : std::move(ranked);
   } catch (const std::exception& ex) {
     last_error_ = std::string("reranker failed: ") + ex.what();
-    return candidates;
+    return canceled() ? std::vector<core::Candidate>{} : std::move(candidates);
   } catch (...) {
     last_error_ = "reranker failed: unknown exception";
-    return candidates;
+    return canceled() ? std::vector<core::Candidate>{} : std::move(candidates);
   }
 }
 
@@ -927,7 +931,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
   std::vector<core::Candidate> result;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec);
+    result = ApplyRerankerOrRaw(kana, std::move(merged), now_epoch_sec, cancel);
   }
 
   // M35 suggest: convert the corrected reading too and put its best candidate at
@@ -990,7 +994,10 @@ std::string InferenceEngine::ReverseConvert(const std::string& surface, uint64_t
 
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string& kana,
                                                                const std::string& context,
-                                                               uint64_t now_epoch_sec) {
+                                                               uint64_t now_epoch_sec,
+                                                               const std::atomic<bool>* cancel) {
+  const auto canceled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
+  if (canceled()) return {};
   std::shared_ptr<core::IConverter> converter;
   uint32_t max_context_length = 0;
   {
@@ -1001,17 +1008,23 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
   std::vector<core::Candidate> candidates;
   {
     std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
+    if (canceled()) return {};
     candidates = converter->PredictNext(
-        kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length)));
+        kana, BuildContext(kana, TakeLastUtf8Codepoints(context, max_context_length), cancel));
   }
+  if (canceled()) return {};
   std::lock_guard<std::mutex> lock(state_mutex_);
+  if (canceled()) return {};
   RefreshDictionaryLocked();
+  if (canceled()) return {};
   auto dictionary_predictions =
       DictionaryCandidates(dictionaries_, kana, learning::LookupMode::PredictivePrefix,
                            now_epoch_sec, 32, true, config_.user_word_default_score);
   dictionary_predictions =
-      ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec);
-  candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec);
+      ApplyRerankerOrRaw(kana, std::move(dictionary_predictions), now_epoch_sec, cancel);
+  if (canceled()) return {};
+  candidates = ApplyRerankerOrRaw(kana, std::move(candidates), now_epoch_sec, cancel);
+  if (canceled()) return {};
 
   std::vector<core::Candidate> merged;
   merged.reserve(kPredictionDisplayLimit);
@@ -1020,7 +1033,9 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
         std::min(config_.prediction_learning_max_entries, kPredictionDisplayLimit - 2);
     const auto lookup = store_->LookupPrefix(kana, learning_limit,
                                              config_.prediction_learning_min_score, now_epoch_sec);
+    if (canceled()) return {};
     for (const auto& match : lookup.matches) {
+      if (canceled()) return {};
       if (match.reading == kana) continue;
       const bool duplicate = std::any_of(merged.begin(), merged.end(), [&](const auto& item) {
         return item.surface == match.surface;
@@ -1035,6 +1050,7 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
   auto append = [&](std::vector<core::Candidate>& source, size_t limit) {
     size_t added = 0;
     for (auto& candidate : source) {
+      if (canceled()) return;
       if (merged.size() == kPredictionDisplayLimit || added == limit) break;
       if (candidate.surface.empty()) continue;
       const bool duplicate = std::any_of(merged.begin(), merged.end(), [&](const auto& item) {
@@ -1048,9 +1064,11 @@ std::vector<core::Candidate> InferenceEngine::QueryPredictions(const std::string
     }
   };
   append(candidates, 2);
+  if (canceled()) return {};
   append(dictionary_predictions, 2);
+  if (canceled()) return {};
   append(candidates, kPredictionDisplayLimit);
-  return merged;
+  return canceled() ? std::vector<core::Candidate>{} : std::move(merged);
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryCorrections(const std::string& kana,

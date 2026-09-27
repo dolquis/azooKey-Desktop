@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <thread>
 #include <tuple>
 
 #include "azookey/core/AiPrivacy.h"
@@ -127,6 +128,7 @@ TEST(AiBackendTest, PrivateAndAutomaticLintNeverUseRemote) {
 }
 TEST(AiBackendTest, ClassifiesFailuresAndBoundsRetries) {
   for (const auto [status, expected, attempts] : {std::tuple{401u, AiErrorClass::Auth, 1u},
+                                                  {403u, AiErrorClass::Auth, 1u},
                                                   {429u, AiErrorClass::RateLimit, 3u},
                                                   {500u, AiErrorClass::ServerError, 3u},
                                                   {400u, AiErrorClass::Parse, 1u}}) {
@@ -139,12 +141,47 @@ TEST(AiBackendTest, ClassifiesFailuresAndBoundsRetries) {
     EXPECT_EQ(calls, attempts);
   }
 }
+TEST(AiBackendTest, TimeoutAndKeyReentryAreNotRetried) {
+  for (auto error : {AiErrorClass::Timeout, AiErrorClass::KeyReentry}) {
+    unsigned calls = 0;
+    AiBackend backend([&](const auto&, const auto&, const auto*, auto) {
+      ++calls;
+      return AiHttpResponse{0, {}, error};
+    });
+    EXPECT_EQ(backend.Transform(Cleanup(), Remote()).error_class, error);
+    EXPECT_EQ(calls, 1u);
+  }
+}
+TEST(AiBackendTest, SchedulerCancelWakesRetryAfterWait) {
+  RequestScheduler scheduler;
+  auto cancel = scheduler.TrackCancellation(42);
+  ASSERT_NE(cancel, nullptr);
+  std::atomic<unsigned> calls{0};
+  AiBackend backend([&](const auto&, const auto&, const auto*, auto) {
+    ++calls;
+    return AiHttpResponse{429, {}, AiErrorClass::None, 2};
+  });
+  AiTransformResult result;
+  std::jthread worker([&] { result = backend.Transform(Cleanup(), Remote(), cancel.get()); });
+  const auto entered_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (calls.load() == 0 && std::chrono::steady_clock::now() < entered_deadline)
+    std::this_thread::yield();
+  ASSERT_EQ(calls.load(), 1u);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const auto canceled_at = std::chrono::steady_clock::now();
+  scheduler.Cancel(42);
+  worker.join();
+  EXPECT_EQ(result.error_class, AiErrorClass::Canceled);
+  EXPECT_EQ(calls.load(), 1u);
+  EXPECT_LT(std::chrono::steady_clock::now() - canceled_at, std::chrono::seconds(1));
+  scheduler.CompleteRequest(42);
+}
 TEST(AiBackendTest, CancelStopsRetryAndDoesNotPublishLateSuccess) {
-  std::atomic<bool> cancel{false};
+  AiCancellationFlag cancel;
   unsigned calls = 0;
   AiBackend backend([&](const auto&, const auto&, const auto*, auto) {
     ++calls;
-    cancel = true;
+    cancel.Cancel();
     return AiHttpResponse{200, Reply("late result")};
   });
   EXPECT_EQ(backend.Transform(Cleanup(), Remote(), &cancel).error_class, AiErrorClass::Canceled);

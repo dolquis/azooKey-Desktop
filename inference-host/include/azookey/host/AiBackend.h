@@ -5,6 +5,8 @@
 #include <functional>
 #include <string>
 
+#include "azookey/host/RequestScheduler.h"
+
 namespace azookey::host {
 
 enum class AiTask { Transform, Cleanup, Lint };
@@ -18,7 +20,8 @@ enum class AiErrorClass {
   Parse,
   BlockedBySecure,
   Disabled,
-  Canceled
+  Canceled,
+  KeyReentry
 };
 struct AiTransformRequest {
   AiTask task{AiTask::Transform};
@@ -61,7 +64,7 @@ class AiBackend {
  public:
   explicit AiBackend(AiHttpTransport transport = {});
   AiTransformResult Transform(AiTransformRequest request, const AiBackendOptions& options,
-                              const std::atomic<bool>* cancel = nullptr,
+                              const AiCancellationFlag* cancel = nullptr,
                               const AiLocalTransform& local = {}) const;
 
  private:

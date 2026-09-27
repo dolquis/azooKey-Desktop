@@ -144,6 +144,17 @@ std::wstring Utf8ToWide(const std::string& utf8) {
   return result;
 }
 
+// Only these fixed strings may reach the candidate UI. Never display a Host
+// response body, user input, or an API key as an error message.
+std::wstring BatchAiFailureNotice(const std::string& error_class) {
+  if (error_class == "Auth") return L"AI整文に失敗しました。APIキーを確認してください。";
+  if (error_class == "RateLimit")
+    return L"AI整文が混み合っています。少し待って再試行してください。";
+  if (error_class == "Timeout") return L"AI整文から応答がありません。再試行してください。";
+  if (error_class == "KeyReentry") return L"APIキーを再入力してください。";
+  return {};
+}
+
 bool IsStandalonePunctuation(const std::string& reading) {
   return reading == "、" || reading == "。";
 }
@@ -1812,6 +1823,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       std::string batch_raw_romaji;
       bool batch_query_in_progress{false};
       std::vector<ipc::BatchConversionSegment> batch_segments;
+      std::wstring batch_notice;
       std::vector<size_t> segment_selections;
       size_t segment_cursor{0};
       std::string live_display_reading;
@@ -1827,6 +1839,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       state.batch_raw_romaji = batch_raw_romaji_;
       state.batch_query_in_progress = batch_query_in_progress_;
       state.batch_segments = shown_batch_segments_;
+      state.batch_notice = shown_batch_notice_;
       state.segment_selections = batch_segment_selections_;
       state.segment_cursor = batch_segment_cursor_;
       state.live_display_reading = live_display_reading_;
@@ -1846,6 +1859,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       batch_raw_romaji_ = state.batch_raw_romaji;
       batch_query_in_progress_ = state.batch_query_in_progress;
       shown_batch_segments_ = state.batch_segments;
+      shown_batch_notice_ = state.batch_notice;
       batch_segment_selections_ = state.segment_selections;
       batch_segment_cursor_ = state.segment_cursor;
       live_display_reading_ = state.live_display_reading;
@@ -1858,7 +1872,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       if (state.candidate_window_visible && !state.shown_candidates.empty()) {
         const auto items = BuildCandidateViews(state.shown_candidates);
         const POINT pt = CandidateAnchorPoint();
-        candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx);
+        candidate_ui_.BeginUI(thread_mgr_, pt, items, state.selected_candidate_idx,
+                              state.batch_notice);
       } else {
         candidate_ui_.EndUI();
       }
@@ -2193,6 +2208,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           {
             std::lock_guard<std::mutex> lk(candidates_mtx_);
             cached_batch_segments_ = {{reading, StandalonePunctuationCandidates(reading)}};
+            cached_batch_notice_.clear();
             candidates_ = BuildTipCandidates(reading, cached_batch_segments_.front().candidates,
                                              false, false);
             shown_candidates_.clear();
@@ -2219,6 +2235,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           {
             std::lock_guard<std::mutex> lk(candidates_mtx_);
             cached_batch_segments_ = {{reading, BuildLocalFallbackCandidates(reading)}};
+            cached_batch_notice_.clear();
             candidates_ = BuildTipCandidates(reading, cached_batch_segments_.front().candidates,
                                              false, false);
             shown_candidates_.clear();
@@ -2336,9 +2353,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       shown_candidates_ = BuildTipCandidates(segment.reading, segment.candidates, false, false);
       selected_candidate_idx_ = static_cast<int>(batch_segment_selections_[batch_segment_cursor_]);
       candidate_ui_.EndUI();
-      const auto hr =
-          candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
-                                BuildCandidateViews(shown_candidates_), selected_candidate_idx_);
+      const auto hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(),
+                                            BuildCandidateViews(shown_candidates_),
+                                            selected_candidate_idx_, shown_batch_notice_);
       if (FAILED(hr)) {
         restore_preedit_state(rollback_state);
         return hr;
@@ -2700,6 +2717,7 @@ void TextService::CancelPendingQueriesForLifecycle() {
         {ipc::MessageType::Cancel, ipc::BuildCancel({ipc_inflight_id_}), false, ipc_inflight_id_});
     need_notify = true;
   }
+  ipc_pending_batch_notice_.clear();
   ++ipc_pending_id_;
   TrimIpcSendQueueLocked();
   if (need_notify) ipc_cv_.notify_one();
@@ -4103,6 +4121,7 @@ void TextService::ServeConnection() {
               LiveConversionResult{req_id, reading, candidates_.front().field.surface};
         }
         cached_batch_segments_.clear();
+        cached_batch_notice_.clear();
         if (candidate_window_show_pending_) {
           if (candidates_.empty()) {
             candidate_window_show_pending_ = false;
@@ -4304,16 +4323,18 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     chunks = {{raw_romaji, reading}};
   }
   bool failed = false;
-  const auto rearm_neural = [&] {
+  const auto rearm_neural = [&](const std::wstring& notice) {
     if (mode != "ai-cleanup") return false;
     std::lock_guard lock(ipc_mtx_);
     if (ipc_stop_.load() || ipc_pending_id_ != generation || ipc_has_request_) return false;
     ipc_pending_batch_mode_ = "neural";
+    ipc_pending_batch_notice_ = notice;
     ipc_has_request_ = true;
     ipc_inflight_id_ = 0;
     return true;
   };
   uint64_t active_id = generation;
+  std::wstring failure_notice;
   for (const auto& chunk : chunks) {
     if (failed) break;
     {
@@ -4343,7 +4364,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     const auto encoded = Serialize(envelope);
     if (!encoded || encoded->size() >= kMaxFrameSize || !ipc_client_.Send(envelope)) {
       if (!ipc_client_.IsConnected()) {
-        if (rearm_neural()) return;
+        if (rearm_neural({})) return;
         RearmPendingQuery(generation);
         return;
       }
@@ -4380,7 +4401,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       break;
     }
     if (!result && !ipc_client_.IsConnected()) {
-      if (rearm_neural()) return;
+      if (rearm_neural({})) return;
       RearmPendingQuery(generation);
       return;
     }
@@ -4391,7 +4412,16 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       candidate.source = "model";
       result->segments.push_back({request.reading, {std::move(candidate)}});
     }
+    if (result && result->canceled) failure_notice.clear();
+    if (mode == "ai-cleanup" && result && !result->canceled && result->error_class) {
+      const auto notice = BatchAiFailureNotice(*result->error_class);
+      if (!notice.empty()) failure_notice = notice;
+    }
     if (!result || result->partial || result->canceled || result->segments.empty()) {
+      if (mode == "ai-cleanup" && (!result || !result->canceled)) {
+        if (!result && std::chrono::steady_clock::now() >= deadline)
+          failure_notice = BatchAiFailureNotice("Timeout");
+      }
       if (!result && std::chrono::steady_clock::now() >= deadline)
         ipc_client_.FinishTraceRequest(active_id, core::EtwResult::Timeout);
       if (!result || !result->canceled) {
@@ -4408,7 +4438,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     }
   }
   if (failed) {
-    if (rearm_neural()) return;
+    if (rearm_neural(failure_notice)) return;
     segments = {{reading, BuildLocalFallbackCandidates(reading)}};
   }
   bool notify = false;
@@ -4417,6 +4447,8 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     ipc_inflight_id_ = 0;
     if (ipc_pending_id_ != generation || ipc_has_request_ || segments.empty()) return;
     cached_batch_segments_ = std::move(segments);
+    cached_batch_notice_ = failure_notice.empty() ? ipc_pending_batch_notice_ : failure_notice;
+    ipc_pending_batch_notice_.clear();
     const auto& first = cached_batch_segments_.front();
     candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
     notify = candidate_window_show_pending_;
@@ -4525,6 +4557,7 @@ void TextService::PostQueryCandidates(ITfContext* context, const std::string& re
   ipc_pending_emoji_trigger_ = emoji_trigger;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
+  ipc_pending_batch_notice_.clear();
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = false;
   ipc_pending_apply_live_preview_ = apply_live_preview;
@@ -4550,6 +4583,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
   ipc_pending_learning_allowed_ = privacy.learning_allowed;
   ipc_pending_raw_romaji_.clear();
   ipc_pending_batch_mode_.clear();
+  ipc_pending_batch_notice_.clear();
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_is_batch_ = false;
   ipc_pending_is_live_conversion_ = true;
@@ -4624,6 +4658,7 @@ void TextService::PostBatchConversion(const std::string& reading, const std::str
   ipc_pending_emoji_trigger_.clear();
   ipc_pending_raw_romaji_ = raw_romaji;
   ipc_pending_batch_mode_ = ai_cleanup ? "ai-cleanup" : "neural";
+  ipc_pending_batch_notice_.clear();
   ipc_pending_is_batch_ = true;
   ipc_pending_is_live_conversion_ = false;
   ipc_pending_apply_live_preview_ = false;
@@ -5349,6 +5384,7 @@ void TextService::ShowCandidateWindowFromCache() {
     if (candidates_.empty()) return;
     shown_candidates_ = candidates_;
     shown_batch_segments_ = cached_batch_segments_;
+    shown_batch_notice_ = cached_batch_notice_;
     batch_segment_selections_.assign(shown_batch_segments_.size(), 0);
     batch_segment_cursor_ = 0;
     snapshot = shown_candidates_;
@@ -5360,7 +5396,7 @@ void TextService::ShowCandidateWindowFromCache() {
   batch_query_in_progress_ = false;
   selected_candidate_idx_ = 0;
   const POINT pt = CandidateAnchorPoint();
-  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0);
+  const HRESULT begin_hr = candidate_ui_.BeginUI(thread_mgr_, pt, items, 0, shown_batch_notice_);
   if (FAILED(begin_hr)) return;
   if (emoji_mode_ == EmojiMode::Collecting) emoji_mode_ = EmojiMode::Listing;
 
@@ -5454,6 +5490,7 @@ void TextService::set_cached_batch_segments_for_test(
     std::vector<ipc::BatchConversionSegment> segments) {
   std::lock_guard<std::mutex> lock(candidates_mtx_);
   cached_batch_segments_ = std::move(segments);
+  cached_batch_notice_.clear();
   if (!cached_batch_segments_.empty()) {
     const auto& first = cached_batch_segments_.front();
     candidates_ = BuildTipCandidates(first.reading, first.candidates, false, false);
@@ -5515,15 +5552,18 @@ std::string TextService::BatchReadingForConversion() const {
 void TextService::RefreshBatchPreeditSurface() {
   preedit_kana_ = BatchPreviewSurface();
   shown_batch_segments_.clear();
+  shown_batch_notice_.clear();
   batch_segment_selections_.clear();
   batch_segment_cursor_ = 0;
   std::lock_guard<std::mutex> lock(candidates_mtx_);
   cached_batch_segments_.clear();
+  cached_batch_notice_.clear();
 }
 
 void TextService::ClearBatchState() {
   batch_learning_allowed_ = true;
   shown_batch_segments_.clear();
+  shown_batch_notice_.clear();
   batch_segment_selections_.clear();
   batch_segment_cursor_ = 0;
   emoji_mode_ = EmojiMode::Inactive;

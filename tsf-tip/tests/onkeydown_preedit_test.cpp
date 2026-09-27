@@ -740,6 +740,16 @@ class FakeCompositionAttachment {
   }
 
   ~FakeCompositionAttachment() {
+    // The service may cache a clone backed by one of these stack-owned ranges.
+    // Release it before the ranges leave scope, while leaving other ranges alone.
+    auto release_owned_range = [this](ITfRange*& range) {
+      if (range == &composition_range || range == &selection_range) {
+        range->Release();
+        range = nullptr;
+      }
+    };
+    release_owned_range(harness_.service.composition_range_);
+    release_owned_range(harness_.service.terminated_composition_range_);
     if (harness_.service.composition_ == &composition) {
       harness_.service.composition_ = nullptr;
       composition.Release();

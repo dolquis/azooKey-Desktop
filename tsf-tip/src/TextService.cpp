@@ -4364,7 +4364,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
     const auto encoded = Serialize(envelope);
     if (!encoded || encoded->size() >= kMaxFrameSize || !ipc_client_.Send(envelope)) {
       if (!ipc_client_.IsConnected()) {
-        if (rearm_neural({})) return;
+        if (rearm_neural(failure_notice)) return;
         RearmPendingQuery(generation);
         return;
       }
@@ -4401,7 +4401,7 @@ void TextService::ConvertBatch(uint64_t generation, const std::string& reading,
       break;
     }
     if (!result && !ipc_client_.IsConnected()) {
-      if (rearm_neural({})) return;
+      if (rearm_neural(failure_notice)) return;
       RearmPendingQuery(generation);
       return;
     }

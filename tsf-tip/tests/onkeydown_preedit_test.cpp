@@ -3611,6 +3611,84 @@ TEST(TsfTipOnKeyDownPreeditTest, AiFailureNoticeFollowsFallbackWithoutChangingCo
   }
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, AiFailureNoticeSurvivesLaterChunkDisconnect) {
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-tip-ai-chunk-disconnect-test-" + std::to_string(GetCurrentProcessId());
+  std::atomic<unsigned> ai_calls{0}, neural_calls{0};
+  std::atomic<bool> handshaken{false};
+  azookey::ipc::NamedPipeServer first_server;
+  ASSERT_TRUE(first_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.batch_conversion_mode = "ai-cleanup";
+          payload.capabilities = {"oob_cancel"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          handshaken = true;
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request || request->mode != "ai-cleanup") return std::nullopt;
+        if (++ai_calls != 1) return std::nullopt;
+        azookey::ipc::QueryBatchConversionResponse payload;
+        payload.error_class = "Auth";
+        azookey::ipc::CandidateField candidate;
+        candidate.reading = request->reading;
+        candidate.surface = "二";
+        candidate.source = "model";
+        payload.segments.push_back({request->reading, {std::move(candidate)}});
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true, false, false, true);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return handshaken.load(); }));
+  for (int i = 0; i < 260; ++i) {
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+  }
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  ASSERT_TRUE(WaitUntil([&] { return ai_calls.load() == 2; }));
+  first_server.Stop();
+
+  azookey::ipc::NamedPipeServer replacement_server;
+  ASSERT_TRUE(replacement_server.Start(
+      pipe_name, [&](const azookey::ipc::Envelope& req) -> std::optional<azookey::ipc::Envelope> {
+        auto res = req;
+        if (req.type == azookey::ipc::MessageType::Handshake) {
+          azookey::ipc::HandshakeResponse payload;
+          payload.accepted = true;
+          payload.batch_romaji_conversion = true;
+          payload.capabilities = {"oob_cancel"};
+          res.payload_json = azookey::ipc::BuildHandshakeResponse(payload);
+          return res;
+        }
+        if (req.type != azookey::ipc::MessageType::QueryBatchConversion) return std::nullopt;
+        const auto request = azookey::ipc::ParseQueryBatchConversionRequest(req.payload_json);
+        if (!request || request->mode != "neural") return std::nullopt;
+        ++neural_calls;
+        azookey::ipc::QueryBatchConversionResponse payload;
+        payload.full_surface = "二";
+        res.payload_json = azookey::ipc::BuildQueryBatchConversionResponse(payload);
+        return res;
+      }));
+  ASSERT_TRUE(WaitUntil([&] { return neural_calls.load() == 2; }));
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  EXPECT_EQ(h.service.cached_batch_notice_for_test(),
+            L"AI整文に失敗しました。APIキーを確認してください。");
+  EXPECT_EQ(h.service.cached_candidates_for_test().front().surface, "二");
+
+  h.service.stop_ipc_worker_for_test();
+  replacement_server.Stop();
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, QueryCandidatesTimeoutSendsCancelAndUsesFallback) {
   const std::string pipe_name =
       "\\\\.\\pipe\\azookey-tip-qc-timeout-test-" + std::to_string(GetCurrentProcessId());

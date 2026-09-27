@@ -12,6 +12,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
 
 namespace azookey::bench {
 namespace {
@@ -38,7 +39,6 @@ IpcPhaseBreakdown RunIpcBenchmark() {
   }
   ipc::Envelope envelope;
   envelope.type = ipc::MessageType::QueryCandidates;
-  envelope.trace_id = "ipc-benchmark";
   envelope.payload_json = ipc::BuildQueryCandidatesResponse(payload);
   std::vector<double> serialize, framing, deserialize, pipe;
 #ifdef _WIN32
@@ -55,6 +55,7 @@ IpcPhaseBreakdown RunIpcBenchmark() {
 #endif
   for (size_t i = 0; i < kWarmup + kSamples; ++i) {
     envelope.request_id = i + 1;
+    envelope.trace_id = ipc::GenerateTraceId();
     const auto t0 = Clock::now();
     auto encoded = ipc::Serialize(envelope);
     const auto t1 = Clock::now();
@@ -67,7 +68,8 @@ IpcPhaseBreakdown RunIpcBenchmark() {
     const auto d0 = Clock::now();
     auto decoded = ipc::Deserialize(*restored);
     const auto d1 = Clock::now();
-    if (!decoded || decoded->payload_json != envelope.payload_json) {
+    if (!decoded || decoded->trace_id != envelope.trace_id ||
+        decoded->payload_json != envelope.payload_json) {
       throw std::runtime_error("IPC benchmark payload mismatch");
     }
 #ifdef _WIN32
@@ -76,6 +78,7 @@ IpcPhaseBreakdown RunIpcBenchmark() {
     auto response = client.ReceiveWithTimeout(5000);
     const auto p1 = Clock::now();
     if (!response || response->request_id != envelope.request_id ||
+        response->trace_id != envelope.trace_id ||
         response->payload_json != envelope.payload_json) {
       throw std::runtime_error("IPC benchmark echo failed");
     }

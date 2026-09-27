@@ -637,6 +637,107 @@ TEST_F(DispatcherTest, QueryCandidates) {
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
 }
 
+TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {
+  const auto log_dir = std::filesystem::temp_directory_path() / "azookey_host_trace_phase_test";
+  RemovePathNoThrow(log_dir);
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        {}, &logger);
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig(),
+                                       nullptr, nullptr, &logger);
+
+  ipc::Envelope request;
+  request.version = 1;
+  request.request_id = 42;
+  request.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  request.type = ipc::MessageType::QueryCandidates;
+  ipc::QueryCandidatesRequest query;
+  query.reading = "にほん";
+  query.max_candidates = 10;
+  request.payload_json = ipc::BuildQueryCandidatesRequest(query);
+  const auto response = dispatcher.Dispatch(request);
+  ASSERT_TRUE(response);
+  EXPECT_EQ(response->trace_id, request.trace_id);
+
+  std::vector<std::string> phases;
+  ASSERT_TRUE(std::filesystem::exists(log_dir));
+  for (const auto& file : std::filesystem::directory_iterator(log_dir)) {
+    if (file.path().extension() != ".jsonl") continue;
+    std::ifstream stream(file.path());
+    for (std::string line; std::getline(stream, line);) {
+      const auto record = ipc::json::Parse(line);
+      ASSERT_TRUE(record);
+      if (record->GetString("event") != "trace_phase") continue;
+      EXPECT_EQ(record->GetString("trace_id"), request.trace_id);
+      EXPECT_EQ(record->GetUInt("request_id"), request.request_id);
+      ASSERT_TRUE(record->GetNumber("latency_ms"));
+      EXPECT_GE(*record->GetNumber("latency_ms"), 0.0);
+      EXPECT_EQ(record->GetString("result"), "ok");
+      EXPECT_EQ(line.find(query.reading), std::string::npos);
+      ASSERT_TRUE(record->GetString("phase"));
+      if (record->GetString("phase") == "model_inference")
+        EXPECT_EQ(record->GetString("backend"), "cpu");
+      phases.push_back(*record->GetString("phase"));
+    }
+  }
+  EXPECT_NE(std::find(phases.begin(), phases.end(), "host_queue_wait"), phases.end());
+  EXPECT_NE(std::find(phases.begin(), phases.end(), "model_inference"), phases.end());
+  EXPECT_NE(std::find(phases.begin(), phases.end(), "rerank"), phases.end());
+  RemovePathNoThrow(log_dir);
+}
+
+TEST(DispatcherTraceTest, InvalidClientTraceIdNeverEntersHostPhaseLog) {
+  const auto log_dir = std::filesystem::temp_directory_path() / "azookey_host_invalid_trace_test";
+  RemovePathNoThrow(log_dir);
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), nullptr,
+                                        {}, &logger);
+  azookey::host::RequestScheduler scheduler;
+  azookey::host::Dispatcher dispatcher(&engine, &scheduler, nullptr, DefaultDispatcherConfig(),
+                                       nullptr, nullptr, &logger);
+
+  ipc::QueryCandidatesRequest query;
+  query.reading = "にほん";
+  query.max_candidates = 10;
+  for (const auto& invalid : {std::string("private input\nsecond line"), std::string(1024, 'x'),
+                              std::string("018fd2c2-2a3e-4c9a-b8e1-7f3a92d4c5e2")}) {
+    ipc::Envelope request;
+    request.version = 1;
+    request.request_id = 42;
+    request.trace_id = invalid;
+    request.type = ipc::MessageType::QueryCandidates;
+    request.payload_json = ipc::BuildQueryCandidatesRequest(query);
+    const auto response = dispatcher.Dispatch(request);
+    ASSERT_TRUE(response);
+    EXPECT_EQ(response->trace_id, invalid);
+  }
+
+  if (std::filesystem::exists(log_dir)) {
+    for (const auto& file : std::filesystem::directory_iterator(log_dir)) {
+      if (file.path().extension() != ".jsonl") continue;
+      std::ifstream stream(file.path());
+      for (std::string line; std::getline(stream, line);) {
+        EXPECT_EQ(line.find("private input"), std::string::npos);
+        EXPECT_EQ(line.find(std::string(1024, 'x')), std::string::npos);
+        EXPECT_EQ(line.find("018fd2c2-2a3e-4c9a-b8e1-7f3a92d4c5e2"), std::string::npos);
+        const auto record = ipc::json::Parse(line);
+        ASSERT_TRUE(record);
+        EXPECT_NE(record->GetString("event"), "trace_phase");
+      }
+    }
+  }
+  RemovePathNoThrow(log_dir);
+}
+
 TEST_F(DispatcherTest, QueryLiveConversionReturnsBestSurface) {
   ipc::QueryLiveConversionRequest query{"にほん", ""};
   const auto request = MakeReq(21, ipc::MessageType::QueryLiveConversion,
@@ -2484,12 +2585,21 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesTheRunningConverter) {
 }
 
 TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
+  const auto log_dir =
+      std::filesystem::temp_directory_path() /
+      ("azookey_prediction_cancel_trace_" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  azookey::logging::RuntimeLoggerOptions options;
+  options.enabled = true;
+  options.component = "host";
+  options.logs_directory = log_dir;
+  azookey::logging::RuntimeLogger logger(options);
   auto converter = std::make_unique<CancelObservingConverter>();
   auto* observed = converter.get();
-  azookey::host::InferenceEngine local_engine(std::move(converter), &store, {});
+  azookey::host::InferenceEngine local_engine(std::move(converter), &store, {}, &logger);
   azookey::host::RequestScheduler local_scheduler;
   azookey::host::Dispatcher primary(&local_engine, &local_scheduler, &user_dict,
-                                    DefaultDispatcherConfig());
+                                    DefaultDispatcherConfig(), nullptr, nullptr, &logger);
   azookey::host::Dispatcher control(&local_engine, &local_scheduler, &user_dict,
                                     DefaultDispatcherConfig());
   auto handshake = [this](azookey::host::Dispatcher& connection, uint64_t request_id) {
@@ -2504,10 +2614,10 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
   ASSERT_TRUE(handshake(primary, 1));
   ASSERT_TRUE(handshake(control, 2));
 
-  auto pending = std::async(std::launch::async, [&] {
-    return primary.Dispatch(MakeReq(91, ipc::MessageType::QueryPredictions,
-                                    ipc::BuildQueryPredictionsRequest({"わたし", "", "word"})));
-  });
+  auto prediction = MakeReq(91, ipc::MessageType::QueryPredictions,
+                            ipc::BuildQueryPredictionsRequest({"わたし", "", "word"}));
+  prediction.trace_id = "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2";
+  auto pending = std::async(std::launch::async, [&] { return primary.Dispatch(prediction); });
   const auto entered_by = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (!observed->entered().load() && std::chrono::steady_clock::now() < entered_by) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -2520,6 +2630,21 @@ TEST_F(DispatcherTest, OutOfBandCancelReachesPredictionConverter) {
   EXPECT_EQ(pending.wait_for(std::chrono::seconds(3)), std::future_status::ready);
   EXPECT_FALSE(pending.get().has_value());
   EXPECT_TRUE(observed->saw_cancel().load());
+  bool canceled_inference_phase = false;
+  ASSERT_TRUE(std::filesystem::exists(log_dir));
+  for (const auto& file : std::filesystem::directory_iterator(log_dir)) {
+    if (file.path().extension() != ".jsonl") continue;
+    std::ifstream stream(file.path());
+    for (std::string line; std::getline(stream, line);) {
+      const auto record = ipc::json::Parse(line);
+      if (!record || record->GetString("event") != "trace_phase") continue;
+      canceled_inference_phase |= record->GetString("trace_id") == prediction.trace_id &&
+                                  record->GetString("phase") == "model_inference" &&
+                                  record->GetString("result") == "cancelled";
+    }
+  }
+  EXPECT_TRUE(canceled_inference_phase);
+  RemovePathNoThrow(log_dir);
 }
 
 // M47 section 8.5.3 / 12.6: SafeMode is reported first, refuses model loads,

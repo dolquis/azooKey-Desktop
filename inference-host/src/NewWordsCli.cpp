@@ -1,6 +1,7 @@
 #include "azookey/host/NewWordsCli.h"
 
 #include <algorithm>
+#include <exception>
 #include <sstream>
 #include <utility>
 
@@ -9,6 +10,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/ipc/TraceId.h"
 #include "azookey/learning/AutoWordStore.h"
 
 namespace azookey::host {
@@ -92,10 +94,10 @@ NewWordsCliResult ResolveResult(const NewWordsCliOptions& options, bool ok, bool
 }
 
 azookey::ipc::Envelope MakeEnvelope(uint64_t request_id, azookey::ipc::MessageType type,
-                                    std::string payload_json) {
+                                    std::string payload_json, const std::string& trace_id) {
   azookey::ipc::Envelope envelope;
   envelope.request_id = request_id;
-  envelope.trace_id = "newwords-cli";
+  envelope.trace_id = trace_id;
   envelope.type = type;
   envelope.payload_json = std::move(payload_json);
   return envelope;
@@ -171,13 +173,20 @@ NewWordsCliResult ResolveViaPipe(const NewWordsCliOptions& options,
         "failed to connect to running host; pass --offline to edit the file directly");
   }
 
+  std::string trace_id;
+  try {
+    trace_id = azookey::ipc::GenerateTraceId();
+  } catch (const std::exception&) {
+    return ResolveResult(options, false, false, "ipc", "failed to generate trace ID");
+  }
+
   azookey::ipc::HandshakeRequest handshake;
   handshake.tip_version = "newwords-cli";
   handshake.protocol_version = 1;
   handshake.capabilities = {"newwords-cli"};
   handshake.handshake_token = run_options.handshake_token;
   if (!client.Send(MakeEnvelope(kHandshakeRequestId, azookey::ipc::MessageType::Handshake,
-                                azookey::ipc::BuildHandshakeRequest(handshake)))) {
+                                azookey::ipc::BuildHandshakeRequest(handshake), trace_id))) {
     return ResolveResult(options, false, false, "ipc", "failed to send handshake to running host");
   }
   auto handshake_resp = client.ReceiveWithTimeout(run_options.response_timeout_ms);
@@ -195,7 +204,7 @@ NewWordsCliResult ResolveViaPipe(const NewWordsCliOptions& options,
   req.reading = options.reading;
   req.action = OpName(options.command);
   if (!client.Send(MakeEnvelope(kCommandRequestId, azookey::ipc::MessageType::ResolveNewWord,
-                                azookey::ipc::BuildResolveNewWordRequest(req)))) {
+                                azookey::ipc::BuildResolveNewWordRequest(req), trace_id))) {
     return ResolveResult(options, false, false, "ipc", "failed to send request to running host");
   }
   auto resp = client.ReceiveWithTimeout(run_options.response_timeout_ms);

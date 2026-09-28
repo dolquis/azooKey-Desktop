@@ -322,9 +322,39 @@ function Invoke-VmVerifyGuestInputMethodSelection {
   return "switched"
 }
 
+# azookey_diag.exe --json を対話セッションで実行し、標準出力をそのままファイルへ書く。
+# Host の pipe と設定はユーザー単位なので、PowerShell Direct（Session 0）ではなく
+# compat と同じ対話ユーザーで採取する。--json は常に終了コード 0 で、判定は JSON 内の
+# status が持つ。JSON を PowerShell の文字列へ通すと 5.1 の既定エンコーディングで
+# 壊れうるため、標準出力はプロセスから直接ファイルへリダイレクトする。
+function Invoke-VmVerifyGuestDiag {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$PackageRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$OutputPath,
+    [int]$TimeoutSeconds = 120
+  )
+
+  $diag = Join-Path $PackageRoot "azookey_diag.exe"
+  if (-not (Test-Path -LiteralPath $diag -PathType Leaf)) {
+    throw "azookey_diag.exe is not in the package: $diag"
+  }
+  $process = Start-Process -FilePath $diag -ArgumentList "--json" `
+    -RedirectStandardOutput $OutputPath `
+    -RedirectStandardError ([System.IO.Path]::ChangeExtension($OutputPath, ".stderr.log")) `
+    -NoNewWindow -PassThru
+  $null = $process.Handle
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    $process.Kill()
+    throw "azookey_diag.exe --json did not finish within $TimeoutSeconds seconds and was stopped."
+  }
+  return [int]$process.ExitCode
+}
+
 # 対話タスクが実行する本体。ゲストへは Invoke-VmVerifyGuestBootstrap、
-# Invoke-VmVerifyGuestInputMethodSelection と一緒にスクリプトファイルとして
-# 書き出す。失敗しても状態ファイルは必ず書く。
+# Invoke-VmVerifyGuestInputMethodSelection、Invoke-VmVerifyGuestDiag と一緒に
+# スクリプトファイルとして書き出す。失敗しても状態ファイルは必ず書く。
 function Invoke-VmVerifyGuestCompatRun {
   param(
     [Parameter(Mandatory = $true)]
@@ -350,6 +380,9 @@ function Invoke-VmVerifyGuestCompatRun {
     hostProcessId = 0
     hostSessionId = $null
     inputMethod = ""
+    diagExitCode = $null
+    diagJson = $false
+    diagError = ""
     targets = @()
     error = ""
   }
@@ -377,6 +410,21 @@ function Invoke-VmVerifyGuestCompatRun {
         "interactive session $sessionId, so the TIP cannot connect to it.")
     }
     $status.inputMethod = Invoke-VmVerifyGuestInputMethodSelection
+
+    # compat の前に採取する。C-010 は Host を終了し、C-013 は一時停止するため、
+    # compat の後では bootstrap 直後の状態を表さない。diag は付随情報なので、
+    # 失敗しても理由を記録して compat へ進む。
+    $diagPath = Join-Path $RunRoot "azookey-diag.json"
+    try {
+      $status.diagExitCode = Invoke-VmVerifyGuestDiag -PackageRoot $PackageRoot -OutputPath $diagPath
+      $status.diagJson = [bool]((Test-Path -LiteralPath $diagPath -PathType Leaf) -and
+        (Get-Item -LiteralPath $diagPath).Length -gt 0)
+      if (-not $status.diagJson) {
+        $status.diagError = "azookey_diag.exe --json produced no output (exit $($status.diagExitCode))."
+      }
+    } catch {
+      $status.diagError = $_.Exception.Message
+    }
 
     $compat = Join-Path $PackageRoot "compat_test.exe"
     $selection = ""

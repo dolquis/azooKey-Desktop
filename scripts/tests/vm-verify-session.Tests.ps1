@@ -400,6 +400,8 @@ Describe "VM verification session automation" {
       $script:interactiveStatus = @{
         completed = $true
         error = ""
+        diagJson = $true
+        diagError = ""
         targets = @(
           @{ target = "edge"; exitCode = 2; reportJson = $true }
           @{ target = "notepad"; exitCode = 0; reportJson = $true }
@@ -466,6 +468,44 @@ Describe "VM verification session automation" {
       }
       Should -Invoke Close-VmVerifySessionGuestSession -Times 1 -Exactly
       Should -Invoke Get-VmVerifySessionCredential -Times 0 -Exactly
+    }
+
+    It "names the collected diag JSON that vm-verify-summary.ps1 takes" {
+      $script:interactiveStatus = @{
+        completed = $true
+        error = ""
+        diagJson = $true
+        diagError = ""
+        targets = @(@{ target = "notepad"; exitCode = 0; reportJson = $true })
+      } | ConvertTo-Json -Depth 4
+      $root = Join-Path $TestDrive "run-diag"
+      Initialize-TestPackage -Root $root | Out-Null
+
+      $result = Invoke-TestRun -Root $root
+
+      Should -Invoke Write-Host -Times 1 -Exactly -ParameterFilter {
+        $Object -eq "azookey_diag --json: $(Join-Path $result.ResultsPath 'azookey-diag.json')"
+      }
+    }
+
+    It "warns but does not fail the run when diag was not captured" {
+      Mock Write-Warning {}
+      $script:interactiveStatus = @{
+        completed = $true
+        error = ""
+        diagJson = $false
+        diagError = "azookey_diag.exe --json did not finish within 120 seconds and was stopped."
+        targets = @(@{ target = "notepad"; exitCode = 0; reportJson = $true })
+      } | ConvertTo-Json -Depth 4
+      $root = Join-Path $TestDrive "run-no-diag"
+      Initialize-TestPackage -Root $root | Out-Null
+
+      { Invoke-TestRun -Root $root } | Should -Not -Throw
+
+      Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter {
+        $Message -like "*azookey_diag --json was not captured*did not finish within 120 seconds*"
+      }
+      Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $Object -like "azookey_diag --json:*" }
     }
 
     It "prompts for guest credentials only when -Credential is omitted" {
@@ -1058,6 +1098,10 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
         return 0
       }
       Mock Invoke-VmVerifyGuestInputMethodSelection { "switched" }
+      Mock Invoke-VmVerifyGuestDiag {
+        '{"schemaVersion":1,"status":"ok","checks":[]}' | Set-Content -LiteralPath $OutputPath
+        return 0
+      }
       Mock Get-Process { [pscustomobject]@{ SessionId = 1 } }
       Mock Get-Process -ParameterFilter { $Id -eq 4242 } {
         [pscustomobject]@{ SessionId = $script:hostSessionId }
@@ -1087,6 +1131,59 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
         $ArgumentList -like "*--target*notepad.json*--output*compat-report-notepad*"
       }
+    }
+
+    It "captures azookey_diag --json into the run directory after selecting azooKey and before compat" {
+      $script:order = @()
+      Mock Invoke-VmVerifyGuestInputMethodSelection { $script:order += "ime"; "switched" }
+      Mock Invoke-VmVerifyGuestDiag {
+        $script:order += "diag"
+        "{}" | Set-Content -LiteralPath $OutputPath
+        return 0
+      }
+      Mock Start-Process {
+        $script:order += "compat"
+        [pscustomobject]@{ ExitCode = 0; Handle = [IntPtr]::Zero } |
+          Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { } -PassThru
+      }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $script:order | Should -Be @("ime", "diag", "compat", "compat")
+      Should -Invoke Invoke-VmVerifyGuestDiag -Times 1 -Exactly -ParameterFilter {
+        $PackageRoot -eq $packageRoot -and $OutputPath -eq (Join-Path $runRoot "azookey-diag.json")
+      }
+      $status = Read-RunStatus
+      $status.completed | Should -BeTrue
+      $status.diagExitCode | Should -Be 0
+      $status.diagJson | Should -BeTrue
+      $status.diagError | Should -BeNullOrEmpty
+      Join-Path $runRoot "azookey-diag.json" | Should -Exist
+    }
+
+    It "records a diag failure and still runs compat" {
+      Mock Invoke-VmVerifyGuestDiag { throw "azookey_diag.exe is not in the package: X" }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $status = Read-RunStatus
+      $status.completed | Should -BeTrue
+      $status.diagJson | Should -BeFalse
+      $status.diagError | Should -Match "not in the package"
+      Should -Invoke Start-Process -Times 2 -Exactly
+    }
+
+    It "records empty diag output as not captured" {
+      Mock Invoke-VmVerifyGuestDiag {
+        New-Item -ItemType File -Path $OutputPath -Force | Out-Null
+        return 0
+      }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $status = Read-RunStatus
+      $status.diagJson | Should -BeFalse
+      $status.diagError | Should -Match "produced no output"
     }
 
     It "passes the case selection to compat_test.exe for every target and records it" {
@@ -1187,6 +1284,7 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $status.bootstrapExitCode | Should -Be 1
       $status.error | Should -Match "overallStatus=fail in the interactive session"
       Should -Invoke Start-Process -Times 0 -Exactly
+      Should -Invoke Invoke-VmVerifyGuestDiag -Times 0 -Exactly
     }
 
     It "does not run compat when azooKey cannot be selected as the input method" {
@@ -1199,6 +1297,49 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $status = Read-RunStatus
       $status.completed | Should -BeFalse
       $status.error | Should -Match "default input method"
+      Should -Invoke Start-Process -Times 0 -Exactly
+    }
+  }
+
+  Context "-Run guest diag capture" {
+    BeforeEach {
+      $packageRoot = Join-Path $TestDrive ("diag-pkg-" + [guid]::NewGuid().ToString("N"))
+      New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+      "diag" | Set-Content -LiteralPath (Join-Path $packageRoot "azookey_diag.exe")
+      $script:diagOutput = Join-Path $packageRoot "azookey-diag.json"
+      $script:diagExited = $true
+      $script:diagKilled = $false
+      Mock Start-Process {
+        [pscustomobject]@{ ExitCode = 0; Handle = [IntPtr]::Zero } |
+          Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) $null = $ms; $script:diagExited } -PassThru |
+          Add-Member -MemberType ScriptMethod -Name Kill -Value { $script:diagKilled = $true } -PassThru
+      }
+    }
+
+    It "redirects the --json output of the bundled diag straight to the file" {
+      Invoke-VmVerifyGuestDiag -PackageRoot $packageRoot -OutputPath $script:diagOutput | Should -Be 0
+
+      Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
+        $FilePath -eq (Join-Path $packageRoot "azookey_diag.exe") -and
+        $ArgumentList -eq "--json" -and
+        $RedirectStandardOutput -eq $script:diagOutput -and
+        $RedirectStandardError -eq (Join-Path $packageRoot "azookey-diag.stderr.log")
+      }
+    }
+
+    It "stops the diag and fails when it does not finish in time" {
+      $script:diagExited = $false
+
+      { Invoke-VmVerifyGuestDiag -PackageRoot $packageRoot -OutputPath $script:diagOutput -TimeoutSeconds 1 } |
+        Should -Throw -ExpectedMessage "*did not finish within 1 seconds*"
+      $script:diagKilled | Should -BeTrue
+    }
+
+    It "fails without starting anything when the package lacks azookey_diag.exe" {
+      Remove-Item -LiteralPath (Join-Path $packageRoot "azookey_diag.exe")
+
+      { Invoke-VmVerifyGuestDiag -PackageRoot $packageRoot -OutputPath $script:diagOutput } |
+        Should -Throw -ExpectedMessage "*azookey_diag.exe is not in the package*"
       Should -Invoke Start-Process -Times 0 -Exactly
     }
   }
@@ -1291,6 +1432,7 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
         Should -Be @(
           "Invoke-VmVerifyGuestBootstrap",
           "Invoke-VmVerifyGuestInputMethodSelection",
+          "Invoke-VmVerifyGuestDiag",
           "Invoke-VmVerifyGuestCompatRun")
     }
 
@@ -1317,22 +1459,22 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
   }
 
   Context "script entrypoint" {
-    It "exits non-zero when none of -Prepare, -Restore, or -Run is given" {
+    It "exits non-zero when none of -Prepare, -Restore, -Run, or -Collect is given" {
       $output = & pwsh -NoProfile -File $sessionScript -VMName "azooKey-VM" 2>&1
       $LASTEXITCODE | Should -Not -Be 0
-      ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, or -Run"
+      ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, -Run, or -Collect"
     }
 
     It "exits non-zero when both -Prepare and -Restore are given" {
       $output = & pwsh -NoProfile -File $sessionScript -Prepare -Restore -VMName "azooKey-VM" 2>&1
       $LASTEXITCODE | Should -Not -Be 0
-      ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, or -Run"
+      ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, -Run, or -Collect"
     }
 
     It "exits non-zero when -Run is combined with -Prepare" {
       $output = & pwsh -NoProfile -File $sessionScript -Prepare -Run -VMName "azooKey-VM" 2>&1
       $LASTEXITCODE | Should -Not -Be 0
-      ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, or -Run"
+      ($output | Out-String) | Should -Match "exactly one of -Prepare, -Restore, -Run, or -Collect"
     }
 
     It "exits non-zero when a case selection is given without -Run" {

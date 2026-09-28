@@ -26,6 +26,7 @@ $powerShellFiles = @(
   Join-Path $PSScriptRoot "verify-bootstrap.ps1"
   Join-Path $PSScriptRoot "vm-verify-session.ps1"
   Join-Path $PSScriptRoot "vm-verify-guest.ps1"
+  Join-Path $PSScriptRoot "vm-verify-msi.ps1"
   Join-Path $PSScriptRoot "vm-verify-summary.ps1"
   Join-Path $PSScriptRoot "vm-verify-linear-drafts.ps1"
   Join-Path $PSScriptRoot "learning-data-snapshot.ps1"

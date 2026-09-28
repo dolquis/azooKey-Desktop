@@ -11,9 +11,18 @@
 
     -Prepare : 検証前チェックポイントを取得し、zip を VM へ転送する。
     -Run     : PowerShell Direct でゲスト内の bootstrap を実行し、対話ユーザーの
-               スケジュールタスク経由で compat_test.exe を実行して、成果物をホストへ
-               回収する（docs/handoff/hyper-v-vm-verification-plan.md §5 の L1）。
+               スケジュールタスク経由で azookey_diag.exe --json と compat_test.exe を
+               実行して、成果物をホストへ回収する
+               （docs/handoff/hyper-v-vm-verification-plan.md §5 の L1）。
+               diag の出力は実行ディレクトリの azookey-diag.json になり、
+               vm-verify-summary.ps1 -DiagJsonPath へそのまま渡せる。
     -Restore : 指定チェックポイントへ復元する。
+    -Collect : MSI 専用。ゲスト内の MSI の hash を照合し、msiexec の /L*v ログを回収する。
+
+  -PackagePath に .msi を渡すと、レーン 1（MSI）の処理になる（vm-verify-msi.ps1）。
+  -Prepare は -CleanCheckpointName のクリーン checkpoint から派生した状態を確かめ、
+  MSI の hash から決まる checkpoint を取ってから MSI を転送する。msiexec の実行は
+  人が行うため、MSI に -Run は使えない。
 
   -Run の -CompatCases / -CompatSkip は compat_test.exe の --cases / --skip へ渡す
   case ID（C-001 形式）。C-013 は Host を一時停止し、C-010 は終了するため、手動の
@@ -34,9 +43,11 @@ param(
   [switch]$Prepare,
   [switch]$Restore,
   [switch]$Run,
+  [switch]$Collect,
   [string]$VMName = "",
   [string]$PackagePath = "",
   [string]$CheckpointName = "",
+  [string]$CleanCheckpointName = "",
   [string]$GuestDestination = "C:\azookey-verify",
   [System.Management.Automation.PSCredential]$Credential = $null,
   [string]$ResultsDirectory = "",
@@ -49,6 +60,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "vm-verify-guest.ps1")
+. (Join-Path $PSScriptRoot "vm-verify-msi.ps1")
 
 function Get-VmVerifySessionAbsolutePath {
   param(
@@ -541,6 +553,7 @@ function Get-VmVerifySessionRunnerScript {
   $definitions = foreach ($name in @(
       "Invoke-VmVerifyGuestBootstrap",
       "Invoke-VmVerifyGuestInputMethodSelection",
+      "Invoke-VmVerifyGuestDiag",
       "Invoke-VmVerifyGuestCompatRun")) {
     $body = (Get-Command -Name $name -CommandType Function -ErrorAction Stop).ScriptBlock.ToString()
     "function $name {$body}"
@@ -654,6 +667,10 @@ function Invoke-VmVerifySessionGuestRun {
   return [pscustomobject][ordered]@{
     DirectBootstrap = $direct
     InteractiveStatus = $status
+    Diag = [pscustomobject][ordered]@{
+      Captured = [bool]$status.diagJson
+      Error = [string]$status.diagError
+    }
     Targets = @(Get-VmVerifySessionTargetSummary -Status $status)
   }
 }
@@ -777,6 +794,13 @@ function Invoke-VmVerifySessionRun {
     Write-Host "No artifacts were produced: the guest run directory was not created."
   }
   if ($outcome) {
+    # diag は環境ブロック用の付随情報なので、採れなくても L1 の判定は変えない。
+    # 欠けたことは vm-verify-summary.ps1 が missing として明示する。
+    if ($outcome.Diag.Captured -and $collection.Collected) {
+      Write-Host "azookey_diag --json: $(Join-Path $hostRunRoot 'azookey-diag.json')"
+    } elseif (-not $outcome.Diag.Captured) {
+      Write-Warning "azookey_diag --json was not captured in the interactive session: $($outcome.Diag.Error)"
+    }
     foreach ($target in $outcome.Targets) {
       $partial = ""
       if (@($target.Excluded).Count -ne 0) {
@@ -805,8 +829,8 @@ function Invoke-VmVerifySessionRun {
 }
 
 if ($MyInvocation.InvocationName -ne ".") {
-  if (@($Prepare, $Restore, $Run | Where-Object { $_ }).Count -ne 1) {
-    throw "Specify exactly one of -Prepare, -Restore, or -Run."
+  if (@($Prepare, $Restore, $Run, $Collect | Where-Object { $_ }).Count -ne 1) {
+    throw "Specify exactly one of -Prepare, -Restore, -Run, or -Collect."
   }
   if (-not $VMName) {
     throw "-VMName is required. Check the name with Get-VM."
@@ -814,10 +838,47 @@ if ($MyInvocation.InvocationName -ne ".") {
   if (-not $Run -and (@($CompatCases).Count -ne 0 -or @($CompatSkip).Count -ne 0)) {
     throw "-CompatCases and -CompatSkip apply only to -Run."
   }
+  $isMsi = Test-VmVerifyMsiPackagePath -PackagePath $PackagePath
+  if ($isMsi -and $Run) {
+    throw ("-Run does not accept an MSI: a person runs msiexec in lane 1 " +
+      "(hyper-v-vm-verification-plan.md section 4.5). Use -Prepare, install it, then -Collect.")
+  }
+  if ($Collect -and -not $isMsi) {
+    throw "-Collect applies only to an MSI. Pass -PackagePath <file>.msi."
+  }
+  if ($CleanCheckpointName -and -not ($isMsi -and $Prepare)) {
+    throw "-CleanCheckpointName applies only to -Prepare with an MSI."
+  }
 
   $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-  if ($Prepare) {
+  if ($isMsi -and $Prepare) {
+    Invoke-VmVerifyMsiPrepare `
+      -RepositoryRoot $repositoryRoot `
+      -VMName $VMName `
+      -PackagePath $PackagePath `
+      -CleanCheckpointName $CleanCheckpointName `
+      -CheckpointName $CheckpointName `
+      -GuestDestination $GuestDestination `
+      -ResultsDirectory $ResultsDirectory | Out-Null
+  } elseif ($Collect) {
+    Invoke-VmVerifyMsiCollect `
+      -RepositoryRoot $repositoryRoot `
+      -VMName $VMName `
+      -PackagePath $PackagePath `
+      -GuestDestination $GuestDestination `
+      -Credential $Credential `
+      -ResultsDirectory $ResultsDirectory | Out-Null
+  } elseif ($isMsi -and $Restore) {
+    $msiCheckpoint = $CheckpointName
+    if (-not $msiCheckpoint) {
+      $msiCheckpoint = (Get-VmVerifyMsiIdentity -PackagePath $PackagePath).CheckpointName
+    }
+    Invoke-VmVerifySessionRestore `
+      -RepositoryRoot $repositoryRoot `
+      -VMName $VMName `
+      -CheckpointName $msiCheckpoint | Out-Null
+  } elseif ($Prepare) {
     Invoke-VmVerifySessionPrepare `
       -RepositoryRoot $repositoryRoot `
       -VMName $VMName `

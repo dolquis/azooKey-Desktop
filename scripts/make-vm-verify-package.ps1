@@ -348,8 +348,9 @@ function Assert-VmVerifyWorktreeClean {
 # azookey_settings は MSBuild を呼ぶ add_custom_target なので、ninja の dry-run では
 # 常に作業ありと出て鮮度を判定できない。MSBuild が中間ディレクトリに残す
 # *.read.*.tlog（コンパイラ、リンカ、XAML、MIDL、RC が実際に読んだファイル）のうち
-# repository の追跡ファイルと、settings-app/ の追跡ファイル（CMake 側のテストである
-# tests/ を除く）を入力とする。MSBuild の増分判定と同じ入力を見るので、拒否されたら
+# repository の追跡ファイルだけを入力とする。settings-app/ の README やアイコン生成
+# スクリプトのように MSBuild が読まないファイルを入れると、target を回しても exe の
+# 時刻が動かず拒否が解けない。MSBuild の増分判定と同じ入力を見るので、拒否されたら
 # target を回せば解消する。git は checkout で変わったファイルの mtime を更新するため、
 # 別コミットへ移った後の未ビルドも拾える。
 function Get-VmVerifySettingsInput {
@@ -399,11 +400,6 @@ function Get-VmVerifySettingsInput {
           }
         }
       }
-    }
-  }
-  foreach ($relative in $tracked) {
-    if ($relative -like "settings-app/*" -and $relative -notlike "settings-app/tests/*") {
-      [void]$inputs.Add($relative)
     }
   }
   return @($inputs | Sort-Object)

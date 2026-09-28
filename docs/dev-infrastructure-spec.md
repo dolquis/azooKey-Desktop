@@ -265,9 +265,10 @@ self-contained の Windows App SDK ランタイム、`resources.pri`、`*.xbf` �
 `settings-app`、それ以外が `settings-runtime` である。
 `azookey_settings` は MSBuild を呼ぶ custom target で Ninja の dry-run が常に作業ありを
 返すため、鮮度は dry-run ではなく更新時刻で確認する。比べる入力は、MSBuild が中間
-ディレクトリ（`settings-app/obj/<Debug|Release>/`）に残す `*.read.*.tlog` のうち
-repository の追跡ファイルと、`settings-app/` の追跡ファイル（`tests/` を除く）である。
-exe がそのいずれより古ければ拒否する。MSBuild の増分判定と同じ入力を見るため、拒否は
+ディレクトリ（`settings-app/obj/<Debug|Release>/`）に残す `*.read.*.tlog` に載った
+repository の追跡ファイルだけである。exe がそのいずれより古ければ拒否する。
+MSBuild が読まないファイル（`settings-app/Assets/` の README など）は入力に含めない。
+含めると、target を再ビルドしても exe の時刻が動かず、拒否が解けないためである。MSBuild の増分判定と同じ入力を見るため、拒否は
 target の再ビルドで解消する。tlog が無ければ入力を決められないので拒否する。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。

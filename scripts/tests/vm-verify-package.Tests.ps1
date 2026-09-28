@@ -533,7 +533,8 @@ Describe "VM verification package automation" {
           (Join-Path $script:intDir "azookey_settings.tlog") -Force | Out-Null
         "exe" | Set-Content -LiteralPath $script:exe
         foreach ($seed in @("ipc\src\Json.cpp", "core\include\azookey\core\Used.h",
-            "core\tests\Unrelated.cpp", "settings-app\MainWindow.xaml", "settings-app\tests\Test.cpp")) {
+            "core\tests\Unrelated.cpp", "settings-app\MainWindow.xaml", "settings-app\tests\Test.cpp",
+            "settings-app\Assets\README.md")) {
           $path = Join-Path $script:testRepository $seed
           New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
           $seed | Set-Content -LiteralPath $path
@@ -546,10 +547,13 @@ Describe "VM verification package automation" {
             "$root\CORE\INCLUDE\AZOOKEY\CORE\USED.H"
             "C:\WINDOWS\SYSTEM32\TZRES.DLL"
           ), [System.Text.Encoding]::Unicode)
+        [System.IO.File]::WriteAllLines((Join-Path $script:intDir "azookey_settings.tlog\Xaml.read.1u.tlog"), @(
+            "^$root\SETTINGS-APP\MAINWINDOW.XAML"
+          ), [System.Text.Encoding]::Unicode)
         $script:tracked = [pscustomobject]@{
           ExitCode = 0
           Output = @("ipc/src/Json.cpp", "core/include/azookey/core/Used.h", "core/tests/Unrelated.cpp",
-            "settings-app/MainWindow.xaml", "settings-app/tests/Test.cpp")
+            "settings-app/MainWindow.xaml", "settings-app/tests/Test.cpp", "settings-app/Assets/README.md")
         }
 
         function Invoke-TestFreshness {
@@ -558,16 +562,16 @@ Describe "VM verification package automation" {
         }
       }
 
-      It "takes the inputs MSBuild recorded plus the settings-app sources" {
+      It "takes only the tracked inputs MSBuild recorded in its read tlogs" {
         Get-VmVerifySettingsInput -RepositoryRoot $script:testRepository -IntermediateDirectory $script:intDir `
           -TrackedResult $script:tracked |
-          Should -Be @("CORE/INCLUDE/AZOOKEY/CORE/USED.H", "IPC/SRC/JSON.CPP", "settings-app/MainWindow.xaml")
+          Should -Be @("CORE/INCLUDE/AZOOKEY/CORE/USED.H", "IPC/SRC/JSON.CPP", "SETTINGS-APP/MAINWINDOW.XAML")
       }
 
       It "rejects a settings app older than a source MSBuild compiled into it: <Relative>" -ForEach @(
         @{ Relative = "ipc\src\Json.cpp"; Name = "Json.cpp" }
         @{ Relative = "core\include\azookey\core\Used.h"; Name = "USED.H" }
-        @{ Relative = "settings-app\MainWindow.xaml"; Name = "MainWindow.xaml" }
+        @{ Relative = "settings-app\MainWindow.xaml"; Name = "MAINWINDOW.XAML" }
       ) {
         (Get-Item -LiteralPath (Join-Path $script:testRepository $Relative)).LastWriteTimeUtc = [DateTime]::UtcNow
 
@@ -575,7 +579,8 @@ Describe "VM verification package automation" {
       }
 
       It "ignores sources MSBuild does not read, so rebuilding the target always clears the refusal" {
-        foreach ($unread in @("core\tests\Unrelated.cpp", "settings-app\tests\Test.cpp")) {
+        foreach ($unread in @("core\tests\Unrelated.cpp", "settings-app\tests\Test.cpp",
+            "settings-app\Assets\README.md")) {
           (Get-Item -LiteralPath (Join-Path $script:testRepository $unread)).LastWriteTimeUtc = [DateTime]::UtcNow
         }
 

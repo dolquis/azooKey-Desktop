@@ -436,7 +436,7 @@ v1.0 リリースに向けたリスクと対応:
 
 本ロードマップ（Windows 版）の対象外:
 
-- macOS 版 v1.0（Issue #181 で別管理、`legacy/` 配下に保全）
+- macOS 版 v1.0（`legacy/` 配下に保全）
 - `legacy/segment-edit-upstream.md` の文節エディット機能（macOS 向けの上流
   計画、Windows MVP 後）
 - `legacy/Core/Sources/Core/InputUtils/InputState.swift` の FIXME（macOS 側）
@@ -448,7 +448,7 @@ v1.0 リリースに向けたリスクと対応:
 実行順を 4 フェーズで管理する。本章は Phase と対象マイルストーン・検証ゲートの索引で
 あり、目的・変更対象・実装範囲・受け入れ条件の定義は各 M 節が持つ。各マイルストーンの
 進捗・状態の正典は **Linear**（project「azooKey Desktop / Windows IME MVP」）。
-macOS 版（Issue #181）は本計画の対象外（「スコープ外」参照）。
+macOS 版は本計画の対象外（「スコープ外」参照）。
 
 | Phase | スコープ | 対象 M | 検証ゲート |
 |---|---|---|---|

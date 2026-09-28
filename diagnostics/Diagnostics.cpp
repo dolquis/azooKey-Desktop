@@ -100,6 +100,10 @@ Status CheckStatus(const Report& report, std::string_view id) {
   return check ? check->status : Status::Error;
 }
 
+bool RepairRequired(std::string_view id, Status status) {
+  return id == "D-002" ? status == Status::Error : status != Status::Ok;
+}
+
 std::string LowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -121,6 +125,61 @@ j::Value RedactValue(const j::Value& value, std::string_view key = {}) {
     j::Array redacted;
     redacted.reserve(value.AsArray().size());
     for (const auto& child : value.AsArray()) redacted.emplace_back(RedactValue(child));
+    return j::Value(std::move(redacted));
+  }
+  return value;
+}
+
+bool IsSafeSettingsControl(std::string_view key, const j::Value& value) {
+  constexpr std::array<std::string_view, 3> bool_keys = {
+      "aiCandidate", "includeContextInAITransform", "contextReselection"};
+  constexpr std::array<std::string_view, 4> number_keys = {
+      "maxCandidates", "maxContextLength", "emojiMaxCandidates", "emojiTriggerMinQueryLength"};
+  if (value.IsBool()) return std::find(bool_keys.begin(), bool_keys.end(), key) != bool_keys.end();
+  if (value.IsNumber())
+    return std::find(number_keys.begin(), number_keys.end(), key) != number_keys.end();
+  if (key == "candidateTagBoosts" && value.IsObject()) {
+    return std::all_of(value.AsObject().begin(), value.AsObject().end(),
+                       [](const auto& item) { return item.second.IsNumber(); });
+  }
+  return false;
+}
+
+j::Value RedactSettingsValue(const j::Value& value, std::string_view key = {}) {
+  if (key == "openAiApiKey") return j::Value("***redacted***");
+  if (key == "promptPrefixByApp") {
+    if (!value.IsObject()) return j::Value("***redacted***");
+    j::Object redacted;
+    for (const auto& [app, prefix] : value.AsObject()) {
+      (void)prefix;
+      redacted.emplace(app, j::Value("***redacted***"));
+    }
+    return j::Value(std::move(redacted));
+  }
+  if (key == "profilesByApp") {
+    if (!value.IsObject()) return j::Value("***redacted***");
+    j::Object redacted;
+    for (const auto& [app, profile] : value.AsObject()) {
+      redacted.emplace(
+          app, profile.IsObject() ? RedactSettingsValue(profile) : j::Value("***redacted***"));
+    }
+    return j::Value(std::move(redacted));
+  }
+  if (!key.empty() && logging::IsSensitiveRuntimeLogField(key) &&
+      !IsSafeSettingsControl(key, value)) {
+    return j::Value("***redacted***");
+  }
+  if (value.IsObject()) {
+    j::Object redacted;
+    for (const auto& [child_key, child] : value.AsObject()) {
+      redacted.emplace(child_key, RedactSettingsValue(child, child_key));
+    }
+    return j::Value(std::move(redacted));
+  }
+  if (value.IsArray()) {
+    j::Array redacted;
+    redacted.reserve(value.AsArray().size());
+    for (const auto& child : value.AsArray()) redacted.emplace_back(RedactSettingsValue(child));
     return j::Value(std::move(redacted));
   }
   return value;
@@ -1567,10 +1626,10 @@ RepairReport RepairSystem(const RepairHooks& hooks) {
     return repair_report;
   }
 
-  const bool registration_needed = CheckStatus(before.report, "D-001") != Status::Ok ||
-                                   CheckStatus(before.report, "D-002") != Status::Ok ||
-                                   CheckStatus(before.report, "D-003") != Status::Ok;
-  const bool logs_repair_needed = CheckStatus(before.report, "D-013") != Status::Ok;
+  const bool registration_needed = RepairRequired("D-001", CheckStatus(before.report, "D-001")) ||
+                                   RepairRequired("D-002", CheckStatus(before.report, "D-002")) ||
+                                   RepairRequired("D-003", CheckStatus(before.report, "D-003"));
+  const bool logs_repair_needed = RepairRequired("D-013", CheckStatus(before.report, "D-013"));
 
   RepairOperationResult registration{RepairStatus::NotNeeded,
                                      "COM and TSF registration is already healthy."};
@@ -1616,18 +1675,18 @@ RepairReport RepairSystem(const RepairHooks& hooks) {
 
   const auto add_result = [&](std::string id, const RepairOperationResult& operation) {
     const Status before_status = CheckStatus(before.report, id);
+    const bool needed = RepairRequired(id, before_status);
     if (post_probe_failed) {
-      const bool not_needed = before_status == Status::Ok;
       repair_report.repairs.push_back(
-          {std::move(id), not_needed ? RepairStatus::NotNeeded : RepairStatus::Failed,
-           before_status, std::nullopt,
-           not_needed ? "No repair was required before the post-repair probe failed."
-                      : "The post-repair diagnostic probe failed; repair could not be verified."});
+          {std::move(id), needed ? RepairStatus::Failed : RepairStatus::NotNeeded, before_status,
+           std::nullopt,
+           needed ? "The post-repair diagnostic probe failed; repair could not be verified."
+                  : "No repair was required before the post-repair probe failed."});
       return;
     }
     const Status after_status = CheckStatus(after.report, id);
-    if (before_status == Status::Ok) {
-      if (after_status == Status::Ok) {
+    if (!needed) {
+      if (!RepairRequired(id, after_status)) {
         repair_report.repairs.push_back({std::move(id), RepairStatus::NotNeeded, before_status,
                                          after_status, "No repair was required."});
       } else {
@@ -1643,7 +1702,7 @@ RepairReport RepairSystem(const RepairHooks& hooks) {
                                        after_status, operation.message});
       return;
     }
-    if (after_status == Status::Ok) {
+    if (!RepairRequired(id, after_status)) {
       repair_report.repairs.push_back(
           {std::move(id), RepairStatus::Succeeded, before_status, after_status, operation.message});
       return;
@@ -1704,7 +1763,7 @@ bool RepairReportSucceeded(const RepairReport& report) {
 std::string RedactSettingsJson(std::string_view json) {
   const auto value = j::Parse(json);
   if (!value) return "{}";
-  return RedactFreeText(j::Stringify(RedactValue(*value)));
+  return RedactFreeText(j::Stringify(RedactSettingsValue(*value)));
 }
 
 std::string RedactFreeText(std::string text) { return core::RedactFreeText(std::move(text)); }

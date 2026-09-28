@@ -439,6 +439,61 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
   std::filesystem::remove_all(logs_directory, ec);
 }
 
+TEST(DiagnosticsTest, RedactedSettingsKeepTypedControlsAndHideSensitiveValues) {
+  const auto redacted = diag::RedactSettingsJson(R"json({
+    "maxContextLength": 10,
+    "includeContextInAITransform": true,
+    "contextReselection": false,
+    "maxCandidates": 9,
+    "emojiMaxCandidates": 12,
+    "emojiTriggerMinQueryLength": 1,
+    "openAiApiKey": "sk-secret",
+    "promptPrefixByApp": {"app.exe": "private prompt"},
+    "profilesByApp": {"app.exe": {
+      "promptPrefix": "private profile prompt",
+      "candidateTagBoosts": {"technical": 1.5},
+      "privacyMode": "private"
+    }},
+    "privacy": {"custom": {"aiCandidate": true}},
+    "unknownSecret": {"nested": "private value"},
+    "unknownToken": ["private array value"],
+    "unexpected": {"maxCandidates": "private malformed value"}
+  })json");
+  const auto value = j::Parse(redacted);
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(value->GetNumber("maxContextLength"), 10);
+  EXPECT_EQ(value->GetBool("includeContextInAITransform"), true);
+  EXPECT_EQ(value->GetBool("contextReselection"), false);
+  EXPECT_EQ(value->GetNumber("maxCandidates"), 9);
+  EXPECT_EQ(value->GetNumber("emojiMaxCandidates"), 12);
+  EXPECT_EQ(value->GetNumber("emojiTriggerMinQueryLength"), 1);
+  EXPECT_EQ(value->GetString("openAiApiKey"), "***redacted***");
+  const auto* prompts = value->Find("promptPrefixByApp");
+  ASSERT_NE(prompts, nullptr);
+  EXPECT_EQ(prompts->GetString("app.exe"), "***redacted***");
+  const auto* profiles = value->Find("profilesByApp");
+  ASSERT_NE(profiles, nullptr);
+  const auto* profile = profiles->Find("app.exe");
+  ASSERT_NE(profile, nullptr);
+  EXPECT_EQ(profile->GetString("promptPrefix"), "***redacted***");
+  const auto* boosts = profile->Find("candidateTagBoosts");
+  ASSERT_NE(boosts, nullptr);
+  EXPECT_EQ(boosts->GetNumber("technical"), 1.5);
+  EXPECT_EQ(profile->GetString("privacyMode"), "private");
+  const auto* privacy = value->Find("privacy");
+  ASSERT_NE(privacy, nullptr);
+  const auto* custom = privacy->Find("custom");
+  ASSERT_NE(custom, nullptr);
+  EXPECT_EQ(custom->GetBool("aiCandidate"), true);
+  EXPECT_EQ(value->GetString("unknownSecret"), "***redacted***");
+  EXPECT_EQ(value->GetString("unknownToken"), "***redacted***");
+  const auto* unexpected = value->Find("unexpected");
+  ASSERT_NE(unexpected, nullptr);
+  EXPECT_EQ(unexpected->GetString("maxCandidates"), "***redacted***");
+  EXPECT_EQ(redacted.find("private prompt"), std::string::npos);
+  EXPECT_EQ(redacted.find("private malformed value"), std::string::npos);
+}
+
 TEST(DiagnosticsTest, CollectionBoundsEachRuntimeLogAndReportsTruncation) {
   const auto logs_directory = TempPath("azookey-diag-bounded-runtime-logs");
   std::error_code ec;
@@ -775,6 +830,66 @@ TEST(DiagnosticsTest, RepairRunsRegistrationOnceAndRechecksEveryRepairableItem) 
   EXPECT_TRUE(json->GetString("status").has_value());
   ASSERT_NE(json->GetArray("repairs"), nullptr);
   EXPECT_EQ(json->GetArray("repairs")->size(), 4U);
+}
+
+TEST(DiagnosticsTest, RepairSkipsOptionalComDisplayNameWarning) {
+  diag::Snapshot snapshot;
+  snapshot.tip_path_registered = true;
+  snapshot.tip_path_exists = true;
+  snapshot.tip_bitness_matches = true;
+  snapshot.com_registration_matches = true;
+  snapshot.com_registration_optional_missing = true;
+  snapshot.language_profile_registered = true;
+  snapshot.logs_directory_writable = true;
+  diag::ProbeResult probe;
+  probe.report = diag::EvaluateSnapshot(snapshot, 1);
+
+  int registration_repairs = 0;
+  diag::RepairHooks hooks;
+  hooks.probe_system = [&] { return probe; };
+  hooks.repair_registration = [&](const diag::ProbeResult&) {
+    ++registration_repairs;
+    return diag::RepairOperationResult{diag::RepairStatus::PermissionDenied, "elevation required"};
+  };
+  const auto repair = diag::RepairSystem(hooks);
+  EXPECT_EQ(registration_repairs, 0);
+  ASSERT_EQ(repair.repairs.size(), 4U);
+  EXPECT_EQ(repair.repairs[1].before_status, diag::Status::Warning);
+  EXPECT_EQ(repair.repairs[1].after_status, diag::Status::Warning);
+  EXPECT_EQ(repair.repairs[1].status, diag::RepairStatus::NotNeeded);
+  EXPECT_TRUE(diag::RepairReportSucceeded(repair));
+}
+
+TEST(DiagnosticsTest, RepairClearsRequiredComErrorWhenOnlyOptionalWarningRemains) {
+  diag::Snapshot snapshot;
+  snapshot.tip_path_registered = true;
+  snapshot.tip_path_exists = true;
+  snapshot.tip_bitness_matches = true;
+  snapshot.language_profile_registered = true;
+  snapshot.logs_directory_writable = true;
+  diag::Snapshot repaired_snapshot = snapshot;
+  repaired_snapshot.com_registration_matches = true;
+  repaired_snapshot.com_registration_optional_missing = true;
+  diag::ProbeResult before;
+  before.report = diag::EvaluateSnapshot(snapshot, 1);
+  diag::ProbeResult after;
+  after.report = diag::EvaluateSnapshot(repaired_snapshot, 2);
+
+  int probes = 0;
+  int registration_repairs = 0;
+  diag::RepairHooks hooks;
+  hooks.probe_system = [&] { return probes++ == 0 ? before : after; };
+  hooks.repair_registration = [&](const diag::ProbeResult&) {
+    ++registration_repairs;
+    return diag::RepairOperationResult{diag::RepairStatus::Succeeded, "registration refreshed"};
+  };
+  const auto repair = diag::RepairSystem(hooks);
+  EXPECT_EQ(registration_repairs, 1);
+  ASSERT_EQ(repair.repairs.size(), 4U);
+  EXPECT_EQ(repair.repairs[1].before_status, diag::Status::Error);
+  EXPECT_EQ(repair.repairs[1].after_status, diag::Status::Warning);
+  EXPECT_EQ(repair.repairs[1].status, diag::RepairStatus::Succeeded);
+  EXPECT_TRUE(diag::RepairReportSucceeded(repair));
 }
 
 TEST(DiagnosticsTest, RepairIsIdempotentAndReportsPermissionDenial) {

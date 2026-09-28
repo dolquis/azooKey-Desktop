@@ -147,10 +147,10 @@ VM 内の machine-wide 登録は checkpoint の復元で巻き戻せるためで
 - 登録の前に、復元先の checkpoint（`vm-verify-session.ps1 -Prepare` が取るもの、または §2 のベースライン）が対象 VM にあることを確認する。無ければ登録しない。
 - 復元（`-Restore`）は層 3 の人間ゲートが終わってから行い、登録を次の検証へ持ち越さない（§3、§6）。層 1 の完了時点では復元しない。人間が確認する登録状態が消えるためである。エージェントが復元するのは、人間が層 3 の完了を伝えた後に限る。
 
-委任の範囲は、開発登録の経路に限る。
+委任の範囲は、開発登録の経路と、MSI の導入を挟まない MSI レーンの前後の操作に限る。
 
-- 範囲内: 検証 zip を対象とする `vm-verify-session.ps1` の `-Prepare` / `-Run` / `-Restore`、ゲスト内での `verify-bootstrap.ps1`（これが行う VC++ Redistributable の導入を含む）、`register-dev.ps1`、`unregister-dev.ps1` の実行。
-- 範囲外: VM 内であっても、azooKey の MSI / MSIX の導入とアンインストール、署名、証明書ストアの変更。これらは人間が実行する。`vm-verify-session.ps1` に MSI を渡す `-Prepare` / `-Collect` / `-Restore` も、MSI の導入を挟むレーン 1 の手順の一部として人間が実行する。
+- 範囲内: 検証 zip を対象とする `vm-verify-session.ps1` の `-Prepare` / `-Run` / `-Restore`、ゲスト内での `verify-bootstrap.ps1`（これが行う VC++ Redistributable の導入を含む）、`register-dev.ps1`、`unregister-dev.ps1` の実行。MSI を渡す `vm-verify-session.ps1` の `-Prepare`（checkpoint の取得と MSI の転送）、`-Collect`（ログの回収）、`-Restore` の実行。MSI の `-Restore` も、人間がレーン 1 の完了を伝えた後に限る。
+- 範囲外: VM 内であっても、azooKey の MSI / MSIX の導入（`msiexec`）とアンインストール、署名、証明書ストアの変更。これらは人間が実行する。
 
 エージェントの実行結果は先行検証であり、人間ゲートの合格にはならない。
 視覚判断、合否判定、Done 判定は、委任の有無にかかわらず人間に残す。

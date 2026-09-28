@@ -186,6 +186,9 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 - 成果物（bootstrap の JSON と警告・エラーのログ、`compat-report-<target>/`、各 target のログ、
   `%LOCALAPPDATA%\azooKey\logs`）は `build\vm-verify-results\<パッケージ名>-<UTC 時刻>\` へ回収する。
   回収先は `-ResultsDirectory` で変えられる。
+- `-Run` は `azookey_diag.exe --json` を実行せず、その出力も回収しない。
+  `vm-verify-summary.ps1 -DiagJsonPath` へ渡す診断 JSON は、ゲストの対話セッションで
+  `azookey_diag.exe --json` を実行して保存し、ホストへ回収する。
 - `compat_test.exe` の fail、report の欠落、タイムアウト（既定 45 分、`-TimeoutMinutes`）は非ゼロ終了にする。
   failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。
 - `-CompatCases` と `-CompatSkip` は、すべての target の `compat_test.exe` へ `--cases` / `--skip`
@@ -209,6 +212,10 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   設定した TIP ログ環境変数は既存プロセスに届かない。C-013 の結果が
   `tip-info-log-not-confirmed-for-target` の failing-skip なら、未保存の作業を確認して
   対象アプリの全プロセスを人手で終了し、手順 3 を再実行する。
+
+  C-006 はゲストの表示スケール 150% を前提とする（`docs/dev-infrastructure-spec.md` §13.3）。
+  表示スケールを変えずに回す場合は、手順 1 の `-CompatSkip` に C-006 も加える。
+  表示スケールを変える順序は [`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「レーン 2」が定める。
 
 - `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
   [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。

@@ -1886,13 +1886,13 @@ Provider 名は `azooKey-Desktop`。GUID はバージョン間で固定する。
 | 1001 | Deactivate | client_id |
 | 2000 | CompositionStart | length |
 | 2001 | CompositionEnd | length, committed |
-| 3000 | IpcRequest | request_id, message_type, payload_size, client_guid |
-| 3001 | IpcResponse | request_id, latency_ms, client_guid, result |
-| 3002 | IpcCancel | target_request_id, client_guid |
-| 3003 | IpcPhase | request_id, phase, latency_ms, client_guid, result |
-| 4000 | InferenceStart | request_id, backend, kana_len, client_guid |
-| 4001 | InferenceEnd | request_id, n_candidates, latency_ms, client_guid, result |
-| 4002 | InferencePhase | request_id, phase, backend, latency_ms, client_guid, result |
+| 3000 | IpcRequest | request_id, message_type, payload_size, client_id |
+| 3001 | IpcResponse | request_id, latency_ms, client_id, result |
+| 3002 | IpcCancel | target_request_id, client_id |
+| 3003 | IpcPhase | request_id, phase, latency_ms, client_id, result |
+| 4000 | InferenceStart | request_id, backend, kana_len, client_id |
+| 4001 | InferenceEnd | request_id, n_candidates, latency_ms, client_id, result |
+| 4002 | InferencePhase | request_id, phase, backend, latency_ms, client_id, result |
 | 5000 | LearningObserve | reading_len, surface_len |
 | 5001 | LearningForget | reading_len, surface_len |
 | 9000 | Error | source, error_code, hr |
@@ -1900,7 +1900,7 @@ Provider 名は `azooKey-Desktop`。GUID はバージョン間で固定する。
 > 上表のフィールドは長さ・件数・enum・数値・GUID・ID のみで構成し、入力本文を
 > 含めない。本文を載せない理由と禁止対象は §7.2.1 を正典とする。
 
-相関キーは `client_guid` と `request_id` の組とする。GUID 形式でない旧クライアントの
+相関キーは `client_id`（GUID）と `request_id` の組とする。GUID 形式でない旧クライアントの
 ID はゼロ GUID とし、本文や任意文字列に置き換えない。`result` は Success=0、Timeout=1、
 Disconnected=2、Failed=3、Cancelled=4、`backend` は Unknown=0、Kana=1、Neural=2、Ai=3。
 `phase` は Converter=0、AiTransform=1、FrameWrite=2、FrameRead=3 とする。この 4 値は
@@ -1993,7 +1993,7 @@ wevtutil um $manifest
 ```
 
 WPA の Generic Events で provider `azooKey-Desktop` を絞り、同一の
-`client_guid` / `request_id` の 3000 → 3003 → 4000 → 4002 → 4001 → 3001 を確認する。
+`client_id` / `request_id` の 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 を確認する。
 3003 の FrameRead と FrameWrite は読み書きの区間、4002 は backend の区間を表す。
 タイムアウト・切断・converter 障害は `result` で分類し、CSwitch / DiskIO と時間軸を比較する。
 WPR / WPA の実機確認は、自動テストによる provider 登録・採取の確認とは別に行う。

@@ -17,7 +17,7 @@ Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの推奨�
 |---|---|---|
 | `scripts/make-vm-verify-package.ps1` | ホスト側で Release 成果物を manifest 付き検証 zip にする | `docs/dev-infrastructure-spec.md` §2.6 |
 | `verify-bootstrap.ps1`（zip 同梱） | VM 内での導入と事前確認。`-Json` で機械可読な結果を返す | 同上 |
-| `compat_test.exe` と `compat_host_hang_watchdog.exe`（`compat-test/`） | Notepad、VS Code、Edge の C-001〜C-013 を UI Automation + SendInput で自動実行し、`report.json` を出す。watchdog は C-013 の Host 再開を担当する | `docs/dev-infrastructure-spec.md` §13 |
+| `compat_test.exe` と `compat_host_hang_watchdog.exe`（`compat-test/`） | Notepad、VS Code、Edge の compat ケース（範囲は `docs/dev-infrastructure-spec.md` §13.3）を UI Automation + SendInput で自動実行し、`report.json` を出す。watchdog は C-013 の Host 再開を担当する | `docs/dev-infrastructure-spec.md` §13 |
 | `azookey_diag.exe` | 登録、pipe、ログディレクトリの診断と `--repair` | `docs/handoff/windows-diagnostics-playbook.md` |
 
 手動確認の動線はチェックリスト（コア A1〜A8、拡張 B1〜B7）が定義済みである。
@@ -27,10 +27,10 @@ Hyper-V の Windows 11 VM で azooKey TIP を実機確認するときの推奨�
 
 - **OS**: 配布対象に合わせた Windows 11 の最新 GA ビルド。検証記録に `winver` のビルド番号を残す。
 - **世代とリソース**: 第 2 世代、4 vCPU、メモリ 8 GB を起点にする。GGUF を検証する場合はモデルサイズ分を加算する。
-- **統合サービス**: PowerShell Direct（`vmicvmsession`）は既定で有効。`Copy-VMFile` を使う場合だけ Guest Service Interface を有効化する（既定無効）。
+- **統合サービス**: PowerShell Direct（`vmicvmsession`）は既定で有効。Guest Service Interface は既定無効だが、`vm-verify-session.ps1 -Prepare` が検証 zip を `Copy-VMFile` で転送するため有効化する。無効のままでは `-Prepare` が非ゼロ終了する。表示名はローカライズされるので、有効化はコンポーネント ID（`6C09BB55-D683-4DA0-8931-C9BF705F6480`）で選ぶ。
 - **アカウント**: ローカル管理者を 1 つ用意する。ゲスト内自動化（§4）を使う VM に限り、自動サインインを設定し、画面ロックとスクリーンセーバーを無効にする（SendInput と UI Automation は対話セッションがロックされていると失敗する）。
 - **ランタイム**: `vc_redist.x64.exe`（VC++ 2015-2022 Redistributable x64）を導入したベースラインを作る。
-- **checkpoint 運用**: 「クリーン + Redistributable + 上記設定」のベースライン checkpoint を 1 つ維持し、各検証はその上に検証用 checkpoint を取ってから始める。検証後は復元して残骸を持ち越さない。
+- **checkpoint 運用**: 「クリーン + Redistributable + 上記設定」のベースライン checkpoint を 1 つ維持し、各検証はその上に検証用 checkpoint を取ってから始める。検証後は復元して残骸を持ち越さない。MSI 配布形態を検証する VM では、これとは別に Redistributable 未導入のクリーン checkpoint を維持する（[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「レーン 1」）。ベースラインから始めると、MSI の app-local ランタイム同梱を確かめられない。
 - **セッション種別**: ファイル転送は拡張セッション、IME 検証と打鍵は基本セッション（runbook の安全装置に従う）。C-005 に限る例外は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「拡張セッションの限定例外（C-005）」が定める。
 - **保険**: Microsoft IME を削除しない。
 
@@ -69,10 +69,10 @@ VM 操作を補助できるのは、Claude Code または Codex CLI を Hyper-V 
 |---|---|---|---|
 | Hyper-V cmdlet（`Get-VM`、`Checkpoint-VM`、`Restore-VMSnapshot`） | checkpoint の取得、復元、VM 状態確認 | ◎ 実用 | ホスト側で Hyper-V 管理者権限が要る |
 | PowerShell Direct（`Invoke-Command -VMName`、`New-PSSession -VMName` + `Copy-Item -ToSession/-FromSession`） | ネットワーク設定に依存しないゲスト内コマンド実行と双方向ファイル転送 | ◎ 実用 | ホストで管理者権限、ゲスト資格情報が要る。セッションは非対話（§4.3） |
-| `Copy-VMFile` | ホスト→ゲストの片方向ファイル転送 | ○ 代替 | Guest Service Interface が既定無効。PowerShell Direct の転送で足りる |
+| `Copy-VMFile` | ホスト→ゲストの片方向ファイル転送 | ◎ 実用 | Guest Service Interface が要る（既定無効、§2）。`vm-verify-session.ps1 -Prepare` の転送経路 |
 | `Msvm_Keyboard` WMI（`TypeText`、`TypeKey`、`TypeScancodes`） | 仮想キーボードデバイスへの打鍵注入。基本セッションの物理打鍵と同じ入力経路を通る | △ 実験 | `TypeText` は ASCII 512 文字上限。観察手段（下記）とペアでないと判定できない |
 | VMConnect 基本セッション + ホスト UI 自動化（windows-mcp または computer-use MCP） | ホスト UI 越しの打鍵と、VM 画面のスクリーンショット取得。エージェントは画像を直接読める | △ 実験 | 入力が VMConnect ウィンドウへ期待どおり届くか未確認。windows-mcp が接続できない環境では、Claude Code の computer-use MCP が同経路の代替になる |
-| ゲスト内 `compat_test.exe` | C-001〜C-013 の UI Automation 自動実行と機械可読レポート | ◎ 実用 | 対話セッション必須。PowerShell Direct のセッションは対話セッションではないため、対話ユーザーのスケジュールタスク経由で起動する |
+| ゲスト内 `compat_test.exe` | compat ケースの UI Automation 自動実行と機械可読レポート | ◎ 実用 | 対話セッション必須。PowerShell Direct のセッションは対話セッションではないため、対話ユーザーのスケジュールタスク経由で起動する |
 
 結論として、補助は可能である。
 実用度が高い順に、(1) ホスト側オーケストレーション（パッケージ生成、checkpoint 管理、転送、回収）、(2) PowerShell Direct + スケジュールタスクによる `verify-bootstrap.ps1` と `compat_test.exe` の実行、(3) スクリーンショット読解を組み合わせた半自動打鍵確認、の 3 段になる。
@@ -99,7 +99,7 @@ L1 の成立可否を決めるのは DEV-730 と DEV-731 である。
 DEV-732 と DEV-733 の前提は、層 2 の打鍵をゲストの外から送り、結果を VM 画面のスクリーンショットで判定するしかない、というものである。
 この前提は次の 2 点で成り立たなくなった。
 
-- L1 のゲスト内自動検証（`scripts/vm-verify-session.ps1 -Run`）により、`compat_test.exe` がゲストの対話セッションで UI Automation と SendInput を使って C-001〜C-013 を実行する。打鍵結果を UI Automation でテキストとして読むため、スクリーンショットの画像読解より観測が確実である。
+- L1 のゲスト内自動検証（`scripts/vm-verify-session.ps1 -Run`）により、`compat_test.exe` がゲストの対話セッションで UI Automation と SendInput を使って compat ケースを実行する。打鍵結果を UI Automation でテキストとして読むため、スクリーンショットの画像読解より観測が確実である。
 - [`dev32-verification-checklist.md`](./dev32-verification-checklist.md)「compat runner との分担」が、A 系・B 系の各行を機械判定、人間判定、補助に分けている。
 
 ホスト側の打鍵手段（windows-mcp、computer-use MCP、`Msvm_Keyboard`）は、§4.2 が両スパイクの前提として挙げたものと同じであり、判断を変える差分にならない。

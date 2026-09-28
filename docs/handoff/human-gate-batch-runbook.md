@@ -327,10 +327,10 @@ MSI の machine-wide 登録を残したままレーン 2 の開発登録を重�
 前提実装と個別の合格条件は各課題と対応する spec で確認する。
 
 1. **先行自動判定**：`-Run -CompatSkip C-006,C-013,C-010` で Host 停止・DPI 変更を伴わない compat ケースを先に採る。`verify-bootstrap.ps1` が失敗したら、打鍵ゲートへ進まない。runner の結果は人の TIP 操作・目視判定を代替しない。
-2. **設定反映と学習不変**：DEV-1160 を設定系ゲートの最初に置き、既存 TIP 接続への設定反映と新規アプリとの差を確認する。その後、DEV-1188（M46 secure 抑止・インジケータ）、DEV-1346（M14 の secure 抑止項目）、DEV-1046（M58-B/C の AI 整文で学習しない項目）を行う。各項目の直前・直後に学習データを記録して比較し、secure から通常入力へ戻る確認も記録する。DEV-1046 の実 API を使う場合は承認済みの接続先だけを使い、キーと入力本文を証跡へ載せない。DEV-1046 の後に DEV-1411（AI 整文のエラー分類通知）を行う。外部 API を使うかは人が決める。使わない場合は、分類ごとに次の手段で誘発する（分類の定義は `docs/ai-backend-spec.md` §7.2）。`RateLimit` と再試行待機は HTTP 429 でしか起きないため、`openAiApiEndpoint` をゲスト内のループバック stub（`http://127.0.0.1:<port>/v1`）へ向け、429 と `Retry-After` を返させる。平文 HTTP が許されるのは `127.0.0.1` と `[::1]` の直書きだけで、`localhost` は拒否される。同じ stub に 401 を返させると `Auth`、応答を設定したタイムアウトより遅らせると `Timeout` になる。待ち受けていないポートを指すと `Network`、`dpapi:` キーを復号できない状態にすると `KeyReentry` になる。続けて DEV-1360（M17 カスタムローマ字）で `inputStyle=custom` と `customRomajiTablePath` の TSV を指定し、保存し直したときの反映と空・不正 TSV での内蔵表への復帰を確認する。確認後は `inputStyle` を元に戻してから次へ進む。
+2. **設定反映と学習不変**：DEV-1160 を設定系ゲートの最初に置き、既存 TIP 接続への設定反映と新規アプリとの差を確認する。その後、DEV-1188（M46 secure 抑止・インジケータ）、DEV-1346（M14 の secure 抑止項目）、DEV-1046（M58-B/C の AI 整文で学習しない項目）を行う。各項目の直前・直後に学習データを記録して比較し、secure から通常入力へ戻る確認も記録する。DEV-1046 の実 API を使う場合は承認済みの接続先だけを使い、キーと入力本文を証跡へ載せない。DEV-1046 の後に DEV-1411（AI 整文のエラー分類通知）を行う。外部 API を使うかは人が決める。使わない場合は、分類ごとに次の手段で誘発する（分類の定義は `docs/ai-backend-spec.md` §7.2）。stub を使うときは `aiBackend=openai` とし、`openAiApiKey` に機密でない非空のダミーキー（`dpapi:` で始まらない平文）を設定する。キーが空だと HTTP 接続の前に `Auth` になり、ほかの分類を観測できない。`RateLimit` と再試行待機は HTTP 429 でしか起きないため、`openAiApiEndpoint` をゲスト内のループバック stub（`http://127.0.0.1:<port>/v1`）へ向け、429 と `Retry-After` を返させる。平文 HTTP が許されるのは `127.0.0.1` と `[::1]` の直書きだけで、`localhost` は拒否される。同じ stub に 401 を返させると `Auth`、応答を設定したタイムアウトより遅らせると `Timeout` になる。待ち受けていないポートを指すと `Network`、`dpapi:` キーを復号できない状態にすると `KeyReentry` になる。続けて DEV-1360（M17 カスタムローマ字）で `inputStyle=custom` と `customRomajiTablePath` の TSV を指定し、保存し直したときの反映と空・不正 TSV での内蔵表への復帰を確認する。確認後は `inputStyle` を元に戻してから次へ進む。
 3. **通常の入力とアプリ巡回**：Notepad → VS Code → Edge を 1 巡し、下の統合チェックリストを使う。DEV-1266（M13、M3〜M10 回帰）を基準に DEV-1346（M14）、DEV-1350（M15）、DEV-760〜762（M61-A/B）を確認する。M14 と M15 は M13 の結果を前提にそれぞれ判定する。DEV-761 の per-app 設定切替は DEV-1160 の確認後に行う。DEV-153 と DEV-365 が要求する残りのアプリも、それぞれの課題で確認する。Notepad では DEV-1408（M20 再変換）の選択からの変換キー、選択直後の右クリック、選択や位置を変えた後に古い候補が出ないことも確認する。Office を導入した VM では同じ確認を Office でも行い、未導入なら未実施として記録する。
 4. **中間 checkpoint と DPI**：巡回の証跡を回収して checkpoint を取る。ゲストの表示スケールを 150% に変えて再サインインし、DEV-716 の C-006 と DEV-365 の D-08（Notepad / VS Code / Edge）を確認する。D-08 は 200% へ変更して再サインインした状態でも 3 アプリを確認する。各スケールで OS の設定値、操作結果、runner の `report.json`、目視記録を復元前にホストへ回収する。最後に設定を戻すか checkpoint へ復元し、登録と Host の Ready を確認してから障害注入へ進む。
-5. **無応答と Host kill**：TIP の info ログ、ETW、Host ログの採取を先に開始する。C-013 の一時停止と復帰を先に行い、DEV-1263（M42）の無応答・ローカル fallback・Ready 復帰を人が確認する。C-013 の実アプリ結果（Notepad / VS Code / Edge の `report.json` と TIP JSONL）は DEV-1395 に記録する。次に C-010 の Host kill を 1 回行い、DEV-716、DEV-1263、DEV-676 の項目 2 へ同じ実走を参照する。Host 不在時の DEV-760（M61-A）の基本ペア動作も確認する。C-013 と C-010 の実行中は、DEV-1398（M47）の `degraded_simple` の表示と消去も観察する。各課題の期待値と判定は別々に記録し、Host が Ready に戻ったことを確かめる。DEV-1398 の `degraded_model` はモデルのロード失敗で、SafeMode は Host の連続クラッシュ（`docs/dev-infrastructure-spec.md` §8.5.3）で誘発する。SafeMode は手動解除まで残るため、誘発前に checkpoint を取り、確認後に復元してから次へ進む。
+5. **無応答と Host kill**：TIP の info ログ、ETW、Host ログの採取を先に開始する。C-013 の一時停止と復帰を先に行い、DEV-1263（M42）の無応答・ローカル fallback・Ready 復帰を人が確認する。C-013 の実アプリ結果（Notepad / VS Code / Edge の `report.json` と TIP JSONL）は DEV-1395 に記録する。次に C-010 の Host kill を 1 回行い、DEV-716、DEV-1263、DEV-676 の項目 2 へ同じ実走を参照する。Host 不在時の DEV-760（M61-A）の基本ペア動作も確認する。C-013 と C-010 の実行中は、DEV-1398（M47）の `degraded_simple` の表示と消去も観察する。各課題の期待値と判定は別々に記録し、Host が Ready に戻ったことを確かめる。DEV-1398 の `degraded_model` は、モデルを指定せずに Host を起動し、存在しないパスか破損した GGUF をロードさせて誘発する。ロード済みのモデルがあるまま差し替えに失敗しても劣化として扱われない（`docs/dev-infrastructure-spec.md` §8.5.1）。復帰は正しいパスでの再ロードで確認し、検証 zip のモデル指定へ戻してから次へ進む。SafeMode は Host の連続クラッシュ（`docs/dev-infrastructure-spec.md` §8.5.3）で誘発する。SafeMode は手動解除まで残るため、誘発前に checkpoint を取り、確認後に復元してから次へ進む。
 6. **ログオンとユーザー変更**：DEV-676 のログオン自動起動、別ユーザー provisioning、監督停止の各項目を行う。ログオフや別ユーザーへの切替は元の対話セッションを変えるので、通常の打鍵と障害注入の後に置く。
 
 | 訪問順 | 同じ訪問で確認する項目 | 記録先 |
@@ -415,7 +415,7 @@ C-005（マルチディスプレイ端の候補クランプ）は本セッショ
 ### レーン 3：昇格と登録状態を変える検証
 
 DEV-1211（昇格した登録・解除とロールバック）、DEV-1092（ETW とクラッシュ診断の実機設定・採取）、DEV-677（WPR profile の実採取と WPA での読込み）、DEV-905（Application Verifier）を置く。
-DEV-677 は DEV-1092 と同じ管理者 PowerShell で、持ち込んだ ETW / WPR の資産を使って `docs/sideload-packaging-spec.md` §7.4 の手順で採取する。WPA で開けるだけでは合格にしない。Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_guid` / `request_id` の 3000 → 3003 → 4000 → 4002 → 4001 → 3001 が現れるかを人が判定する。ETL は Git へ入れず、採取後は `wevtutil um` で manifest の登録を解除する。
+DEV-677 は DEV-1092 と同じ管理者 PowerShell で、持ち込んだ ETW / WPR の資産を使って `docs/sideload-packaging-spec.md` §7.4 の手順で採取する。WPA で開けるだけでは合格にしない。Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_id` / `request_id` の 3000 → 3003 → 4000 → 4002 → 4001 → 3001 が現れるかを人が判定する。ETL は Git へ入れず、採取後は `wevtutil um` で manifest の登録を解除する。
 管理者権限を使い、登録・診断設定や対象プロセスの状態を変えるので、レーン 2 の観察と証跡回収を終えた後に走らせる。
 各課題が要求する権限、専用成果物、解除条件を課題本文と対応する診断手順で確認する。
 DEV-1211 の失敗注入に Debug ビルドが必要なら、通常の検証 zip と混ぜず別パッケージとして用意し、保護 checkpoint から実施する。
@@ -743,7 +743,7 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 ## DEV-677 WPR 実採取
 - `wevtutil im`、`wpr -start` / `wpr -stop`、`wevtutil um` の終了コードと、ETL のサイズ・SHA-256: ____
 - WPA の版と、Generic Events での `azooKey-Desktop` イベント件数: ____
-- 同じ `client_guid` / `request_id` で 3000 → 3003 → 4000 → 4002 → 4001 → 3001 が揃ったか（揃わなければ欠けた ID）: ____
+- 同じ `client_id` / `request_id` で 3000 → 3003 → 4000 → 4002 → 4001 → 3001 が揃ったか（揃わなければ欠けた ID）: ____
 ```
 
 ### DEV-847

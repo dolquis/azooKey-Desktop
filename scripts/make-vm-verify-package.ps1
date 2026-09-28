@@ -167,9 +167,16 @@ function Get-VmVerifyForeignDependency {
   # `ninja -t deps` は対象ごとの見出し行の下に、依存パスを 4 桁字下げで並べる。
   # 同じドライブのパスは build ディレクトリからの相対（../ を含む）で記録されるため、
   # 別 checkout も相対になりうる。絶対パスへ戻してから比べる。
+  # 見出しが STALE の記録は Ninja 自身が使わず再ビルドするので、鮮度には効かない。
+  # target を絞って clean 再ビルドした後に残る古い記録で拒否しないよう除く。
   $paths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $valid = $false
   foreach ($line in @($DepsResult.Output)) {
-    if ([string]$line -match '^\s{4}(\S.*)$') {
+    if ([string]$line -match '^\S.*#deps \d+.*\((\w+)\)\s*$') {
+      $valid = $Matches[1] -ceq "VALID"
+      continue
+    }
+    if ($valid -and [string]$line -match '^\s{4}(\S.*)$') {
       $path = $Matches[1].Trim()
       if (-not [System.IO.Path]::IsPathRooted($path)) {
         $path = [System.IO.Path]::GetFullPath((Join-Path $buildRoot $path))

@@ -576,6 +576,24 @@ Describe "VM verification package automation" {
       } | Should -Throw "*2 header(s) outside this checkout*SCCACHE_RECACHE*--clean-first*"
     }
 
+    It "ignores stale dependency records that Ninja rebuilds anyway" {
+      $build = Join-Path $script:testRepository "build\windows-release"
+      $deps = [pscustomobject]@{
+        ExitCode = 0
+        Output = @(
+          "core/CMakeFiles/core.dir/src/A.cpp.obj: #deps 1, deps mtime 1 (STALE)"
+          "    C:/other/azooKey-Desktop/core/include/azookey/core/A.h"
+          ""
+          "core/CMakeFiles/core.dir/src/B.cpp.obj: #deps 1, deps mtime 2 (VALID)"
+          "    ../../core/include/azookey/core/A.h"
+        )
+      }
+      $tracked = [pscustomobject]@{ ExitCode = 0; Output = @("core/include/azookey/core/A.h") }
+
+      @(Get-VmVerifyForeignDependency -BuildDirectory $build -RepositoryRoot $script:testRepository `
+          -DepsResult $deps -TrackedResult $tracked).Count | Should -Be 0
+    }
+
     It "accepts a dependency log whose repository headers all live in this checkout" {
       $build = Join-Path $script:testRepository "build\windows-release"
       $deps = [pscustomobject]@{

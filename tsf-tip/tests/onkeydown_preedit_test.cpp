@@ -4500,6 +4500,29 @@ TEST(TsfTipOnKeyDownPreeditTest, InFlightQueryCancelReachesHostBeforeQueryReturn
   server.Stop();
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, TextServiceRegistersEtwForItsLifetime) {
+  const auto captured = azookey::testing::CaptureEtw(
+      [] {
+        {
+          azookey::tsf::TextService first;
+          {
+            azookey::tsf::TextService second;
+            azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Tip,
+                                               azookey::core::EtwErrorCode::Business, E_FAIL);
+          }
+          azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Tip,
+                                             azookey::core::EtwErrorCode::Business, E_FAIL);
+        }
+        azookey::core::EtwLogger::LogError(azookey::core::EtwModule::Tip,
+                                           azookey::core::EtwErrorCode::Business, E_FAIL);
+      },
+      false);
+  if (captured.status == ERROR_ACCESS_DENIED) GTEST_SKIP() << "ETW session requires elevation";
+  ASSERT_EQ(captured.status, ERROR_SUCCESS);
+  ASSERT_EQ(captured.events.size(), 2u);
+  for (const auto& event : captured.events) EXPECT_EQ(event.id, 9000);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, FailedOutOfBandHandshakeStillCompletesCancelledBatchTrace) {
   std::atomic<uint64_t> query_id{0};
   const auto captured = azookey::testing::CaptureEtw([&] {

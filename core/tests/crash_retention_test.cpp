@@ -100,4 +100,29 @@ TEST_F(CrashRetentionTest, DirectoryAndSymlinkAreNeverDeleted) {
   if (linked) EXPECT_TRUE(fs::is_symlink(link));
 }
 
+TEST_F(CrashRetentionTest, ManagedDumpInspectionRejectsLinksAndOtherFiles) {
+  const auto valid = Dump(4, 2, 0);
+  const auto malformed = directory / "azookey-host-20260909T000000Z-abc.dmp";
+  std::ofstream(malformed) << "other";
+  const auto named_directory = directory / "azookey-host-20260909T000000Z-5.dmp";
+  fs::create_directory(named_directory);
+
+  EXPECT_TRUE(azookey::core::IsSafeCrashDumpDirectory(directory));
+  EXPECT_TRUE(azookey::core::IsManagedCrashDumpFile(valid));
+  EXPECT_FALSE(azookey::core::IsManagedCrashDumpFile(malformed));
+  EXPECT_FALSE(azookey::core::IsManagedCrashDumpFile(named_directory));
+
+  const auto link = directory / "azookey-host-20260909T000000Z-6.dmp";
+  std::error_code ec;
+  fs::create_symlink(valid, link, ec);
+  if (!ec) EXPECT_FALSE(azookey::core::IsManagedCrashDumpFile(link));
+
+  const auto directory_link = directory.parent_path() / (directory.filename().string() + "-link");
+  fs::create_directory_symlink(directory, directory_link, ec);
+  if (!ec) {
+    EXPECT_FALSE(azookey::core::IsSafeCrashDumpDirectory(directory_link));
+    fs::remove(directory_link, ec);
+  }
+}
+
 }  // namespace

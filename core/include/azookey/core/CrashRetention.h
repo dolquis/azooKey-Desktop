@@ -18,6 +18,10 @@ struct CrashRetentionResult {
   bool failed{};
 };
 
+// Inspect a dump path without following symlinks or Windows reparse points.
+bool IsManagedCrashDumpFile(const std::filesystem::path& path) noexcept;
+bool IsSafeCrashDumpDirectory(const std::filesystem::path& directory) noexcept;
+
 // Only regular azookey-{host,settings}-<UTC>-<pid>.dmp files are managed.
 // Never follows symlinks, recurses, or creates the directory.
 CrashRetentionResult PruneCrashDumps(

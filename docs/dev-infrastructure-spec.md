@@ -2623,6 +2623,9 @@ D-012 の schema 正典は `settings/mvp-settings.schema.json` とし、CI / pre
 | D-014 | OpenAI 鍵を要求する**実効バックエンド**が無い（global `aiBackend` と全 `profilesByApp.*` の app-profile §4.2 解決後の実効値がいずれも `none` / `local-zenzai`）、または OpenAI を要求する実効バックエンドがあり `openAiApiKey` が非空で有効（plaintext〔M16–M34 移行期。schema が plaintext を許容〕はそのまま有効、`dpapi:` prefix 付きは復号成功） | OpenAI を要求する実効バックエンド（global もしくは**いずれかの** `profilesByApp.*` が §4.2 解決後に `openai`）があるが `openAiApiKey` が空（資格情報未設定で認証不可）、または settings の読み込み・schema 検証の失敗や DPAPI を使えないことで判定できない（`details.state` が `unavailable`。settings の不備そのものは D-012 が担う） | `dpapi:` prefix 付きの暗号化値が復号失敗 | ✗（再認証 / 再入力を促す） |
 | D-015 | —（CLI は対象アプリ内の TSF context を直接観測しない） | x64 の通常プロセス、または前面ウィンドウ・プロセス情報・アーキテクチャ・トークンの取得不能で、既知の非対応条件を確定できない | x86、x64 以外のアーキテクチャ、または AppContainer プロセスを確認 | ✗（§13 互換性情報へ） |
 
+D-002 の `warning` は任意の表示名だけが欠けた状態であり、`--repair` は登録を再実行しない。
+必須登録に不備がある `error` の場合だけ再登録し、再診断で `warning` まで改善した場合は修復成功とする。
+
 ARM64 ホストでは `IsWow64Process2` の結果だけで x64 エミュレーションと ARM64
 ネイティブを区別できないため、`GetProcessInformation(ProcessMachineTypeInfo)` で
 対象プロセスのアーキテクチャを確認する。同情報を取得できない場合は

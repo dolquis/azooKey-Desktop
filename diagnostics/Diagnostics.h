@@ -87,6 +87,7 @@ struct Snapshot {
   bool tip_bitness_matches{false};
   std::string tip_path;
   bool com_registration_matches{false};
+  bool com_registration_optional_missing{false};
   bool language_profile_registered{false};
   bool host_running{false};
   bool handshake_ok{false};
@@ -100,6 +101,7 @@ struct Snapshot {
   bool settings_missing{true};
   DpapiState dpapi_state{DpapiState::NotRequired};
   bool learning_store_valid{true};
+  bool learning_store_migration_available{false};
   bool user_dict_valid{true};
   uint64_t learning_entries{};
   uint64_t user_dict_entries{};
@@ -114,6 +116,7 @@ struct ProbeResult {
   std::filesystem::path settings_path;
   std::filesystem::path tip_path;
   std::filesystem::path logs_directory;
+  std::filesystem::path crashes_directory;
   std::string host_health_json;
   std::string ipc_ping_json;
 };
@@ -172,7 +175,8 @@ bool RepairReportSucceeded(const RepairReport& report);
 bool ProbeSettingsFile(const std::filesystem::path& path);
 DpapiState ProbeDpapiSettingsJson(std::string_view settings_json,
                                   const learning::ByteCrypto& crypto);
-bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries);
+bool ProbeLearningStoreFile(const std::filesystem::path& path, uint64_t* entries,
+                            bool* migration_available = nullptr);
 bool ProbeUserDictionaryFile(const std::filesystem::path& path, uint64_t* entries,
                              uint64_t* skipped_entries);
 bool EmbeddedSettingsSchemaUsesOnlySupportedKeywords();

@@ -309,8 +309,24 @@ class ThrowingLearningStore final : public azookey::learning::LearningStore {
                                          &azookey::learning::test::Crypto()) {}
 
   double Score(const std::string&, const std::string&, uint64_t) const override {
-    throw std::runtime_error("score failure");
+    throw std::runtime_error("candidate text private-score-failure");
   }
+};
+
+class CancelOnScoreLearningStore final : public azookey::learning::LearningStore {
+ public:
+  explicit CancelOnScoreLearningStore(std::atomic<bool>& cancel)
+      : azookey::learning::LearningStore(TempPath("azookey_host_rerank_cancel.tsv"),
+                                         &azookey::learning::test::Crypto()),
+        cancel_(cancel) {}
+
+  double Score(const std::string&, const std::string&, uint64_t) const override {
+    cancel_.store(true, std::memory_order_relaxed);
+    return 0.0;
+  }
+
+ private:
+  std::atomic<bool>& cancel_;
 };
 }  // namespace
 
@@ -882,7 +898,8 @@ TEST(InferenceEngineTest, RerankerFailureFallsBackToRawCandidates) {
   EXPECT_EQ(candidates.front().surface, "日本");
   ASSERT_TRUE(engine->last_error().has_value());
   ASSERT_TRUE(engine->effective_last_error().has_value());
-  EXPECT_NE(engine->last_error()->find("reranker failed: score failure"), std::string::npos);
+  EXPECT_EQ(*engine->last_error(), "reranker failed");
+  EXPECT_EQ(engine->last_error()->find("private-score-failure"), std::string::npos);
 
   auto predictions = engine->QueryPredictions("にほん", "", kNowBase);
   ASSERT_FALSE(predictions.empty());
@@ -1218,8 +1235,7 @@ TEST(InferenceEngineTest, RealLlamaLoadFailureSurfacesDetailedDiagnostic) {
 
   EXPECT_FALSE(result.ok);
   ASSERT_TRUE(result.error.has_value());
-  EXPECT_NE(result.error->find("llama.cpp model load failed:"), std::string::npos);
-  EXPECT_GT(result.error->size(), std::string("llama.cpp model load failed:").size());
+  EXPECT_EQ(*result.error, "model load failed");
   const auto health = engine->health_snapshot();
   ASSERT_TRUE(health.last_error.has_value());
   EXPECT_EQ(health.last_error, result.error);
@@ -1400,6 +1416,37 @@ TEST(InferenceEngineTraceTest, ModelExceptionAndFallbackProduceOneInferenceSampl
   }
   EXPECT_EQ(inference_samples, 1);
   std::remove(model_path.c_str());
+  std::remove(log_path.c_str());
+}
+
+TEST(InferenceEngineTraceTest, RerankerCancellationLogsCancelledPhase) {
+  const auto log_path = TempPath("azookey_host_rerank_cancel.jsonl");
+  std::remove(log_path.c_str());
+  std::atomic<bool> cancel{false};
+  CancelOnScoreLearningStore store(cancel);
+  azookey::logging::RuntimeLoggerOptions log_options;
+  log_options.enabled = true;
+  log_options.component = "host";
+  log_options.output_path = log_path;
+  azookey::logging::RuntimeLogger logger(log_options);
+  azookey::host::InferenceEngine engine(std::make_unique<azookey::core::SimpleConverter>(), &store,
+                                        {}, &logger);
+  const azookey::host::InferenceTelemetry telemetry{42, {}, "018fd2c2-2a3e-7c9a-b8e1-7f3a92d4c5e2"};
+
+  const auto candidates =
+      engine.QueryCandidates("にほん", "", kNowBase, &cancel, 10, false, &telemetry);
+  EXPECT_TRUE(cancel.load(std::memory_order_relaxed));
+  EXPECT_TRUE(candidates.empty());
+
+  std::ifstream stream(log_path);
+  ASSERT_TRUE(stream.is_open());
+  int rerank_samples = 0;
+  for (std::string line; std::getline(stream, line);) {
+    if (line.find("\"phase\":\"rerank\"") == std::string::npos) continue;
+    ++rerank_samples;
+    EXPECT_NE(line.find("\"result\":\"cancelled\""), std::string::npos);
+  }
+  EXPECT_EQ(rerank_samples, 1);
   std::remove(log_path.c_str());
 }
 
@@ -1848,7 +1895,7 @@ TEST(InferenceEngineTest, VulkanFailureFallsBackToCpuAndRetainsHealthError) {
   std::remove(learning_path);
 }
 
-TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsRetainBothErrors) {
+TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsReturnFixedError) {
   const char* learning_path = "azookey_host_engine_both_backends_fail.tsv";
   std::remove(learning_path);
   azookey::learning::LearningStore store(learning_path, &azookey::learning::test::Crypto());
@@ -1873,10 +1920,9 @@ TEST(InferenceEngineTest, FailedVulkanAndCpuLoadsRetainBothErrors) {
     const auto result = engine->LoadModelWithResult(options);
     EXPECT_FALSE(result.ok);
     ASSERT_TRUE(result.error);
-    EXPECT_NE(result.error->find(unknown_exception ? "unknown exception" : "Vulkan test failure"),
-              std::string::npos);
-    EXPECT_NE(result.error->find("CPU fallback failed"), std::string::npos);
-    EXPECT_NE(result.error->find("CPU test failure"), std::string::npos);
+    EXPECT_EQ(*result.error, "Vulkan and CPU model load failed");
+    EXPECT_EQ(result.error->find("Vulkan test failure"), std::string::npos);
+    EXPECT_EQ(result.error->find("CPU test failure"), std::string::npos);
     EXPECT_EQ(attempts, (std::vector<azookey::host::BackendKind>{azookey::host::BackendKind::Vulkan,
                                                                  azookey::host::BackendKind::Cpu}));
     EXPECT_FALSE(engine->model_loaded());

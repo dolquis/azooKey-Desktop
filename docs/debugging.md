@@ -139,6 +139,11 @@ $env:AZOOKEY_LOG_LEVEL = 'info' # info / warn / error
 UTC 日付単位で当日を含む直近 7 日分だけを保持し、それより古い日次ファイルと
 ローテーション世代は次回の書き込み時に削除する。
 Release ビルドでは入力本文、候補本文、`prompt`、`window_title` の生値を出力しない。
+要求を追うときは `trace_id`、`request_id`、記録時刻を使い、MessageType が
+記録された行ではその値も照合する。現行の `trace_phase` と `query_latency` には
+MessageType がないため、同じ ID の組が複数系統に現れた場合、その行を一意の要求へ
+結び付けない。Host の `query_latency` と `latency_ms` を確認する。失敗行の `error_code` は
+`dev-infrastructure-spec.md` §7.4 の分類に従う。
 取得後は環境変数を削除して、Host と検証対象アプリを再起動する。
 
 ```powershell

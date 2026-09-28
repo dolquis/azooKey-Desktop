@@ -377,6 +377,10 @@ class TextService final : public ITfTextInputProcessorEx,
  private:
   friend class EditSession;
   friend class BracketEditSession;
+  struct EtwRegistration {
+    EtwRegistration() noexcept;
+    ~EtwRegistration() noexcept;
+  } etw_registration_;
   TipLocalSettings local_settings_;
   ForegroundAppDetector foreground_app_;
   bool bracket_composition_{false};

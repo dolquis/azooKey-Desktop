@@ -258,7 +258,7 @@ DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がイ
 1. DEV-673 のチェックリストを頭から実施する。
 2. Microsoft Store / UWP 入力の項目は **スコープ外**として記録し、素通りする（§0.1 / DEV-783）。Part A を実施した場合のみ、その結果を併記する。
 3. 続けて **DEV-767** のチェックリスト（設定アプリの起動・二重起動・アンインストール残留物）を実施する。同じクリーン VM 状態を使うため、DEV-673 のアンインストール確認と順序を合わせる。
-4. **DEV-1385** は WiX 7 でビルドした MSI（DEV-1383 の成果物）と WiX 5 でビルドした MSI の 2 つを要する。クリーン checkpoint から WiX 7 版の新規インストールとアンインストールを確認し、クリーン checkpoint へ戻してから WiX 5 版を入れ、WiX 7 版へのアップグレードで旧版が残らないことを確認する。2 つの MSI のファイル名、ProductVersion、SHA-256 を検証メモに記録する。
+4. **DEV-1385** は WiX 7 でビルドした MSI（DEV-1383 の成果物）と WiX 5 でビルドした MSI の 2 つを要する。クリーン checkpoint から WiX 7 版の新規インストールとアンインストールを確認し、クリーン checkpoint へ戻してから WiX 5 版を入れ、WiX 7 版へのアップグレードで旧版が残らないことを確認する。`pkg/msi/Package.wxs` の `MajorUpgrade` は同じ版を上位更新として扱わないため、WiX 7 版の ProductVersion が WiX 5 版より高いことを開始条件とする。2 つの MSI のファイル名、ProductVersion、SHA-256 を検証メモに記録する。
 
 Store 入力の可否は DEV-673 の合否を左右しない。
 MVP が入力先として保証するのは Win32 デスクトップアプリであり、Store / UWP は v1.0 以降へ送ることが確定しているためである。
@@ -415,7 +415,7 @@ C-005（マルチディスプレイ端の候補クランプ）は本セッショ
 ### レーン 3：昇格と登録状態を変える検証
 
 DEV-1211（昇格した登録・解除とロールバック）、DEV-1092（ETW とクラッシュ診断の実機設定・採取）、DEV-677（WPR profile の実採取と WPA での読込み）、DEV-905（Application Verifier）を置く。
-DEV-677 は DEV-1092 と同じ管理者 PowerShell で、持ち込んだ ETW / WPR の資産を使って `docs/sideload-packaging-spec.md` §7.4 の手順で採取する。WPA で開けるだけでは合格にしない。Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_id` / `request_id` の 3000 → 3003 → 4000 → 4002 → 4001 → 3001 が現れるかを人が判定する。ETL は Git へ入れず、採取後は `wevtutil um` で manifest の登録を解除する。
+DEV-677 は DEV-1092 と同じ管理者 PowerShell で、持ち込んだ ETW / WPR の資産を使って `docs/sideload-packaging-spec.md` §7.4 の手順で採取する。WPA で開けるだけでは合格にしない。Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_id` / `request_id` の 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 が現れるかを人が判定する。ETL は Git へ入れず、採取後は `wevtutil um` で manifest の登録を解除する。
 管理者権限を使い、登録・診断設定や対象プロセスの状態を変えるので、レーン 2 の観察と証跡回収を終えた後に走らせる。
 各課題が要求する権限、専用成果物、解除条件を課題本文と対応する診断手順で確認する。
 DEV-1211 の失敗注入に Debug ビルドが必要なら、通常の検証 zip と混ぜず別パッケージとして用意し、保護 checkpoint から実施する。
@@ -743,7 +743,7 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 ## DEV-677 WPR 実採取
 - `wevtutil im`、`wpr -start` / `wpr -stop`、`wevtutil um` の終了コードと、ETL のサイズ・SHA-256: ____
 - WPA の版と、Generic Events での `azooKey-Desktop` イベント件数: ____
-- 同じ `client_id` / `request_id` で 3000 → 3003 → 4000 → 4002 → 4001 → 3001 が揃ったか（揃わなければ欠けた ID）: ____
+- 同じ `client_id` / `request_id` で 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 が揃ったか（揃わなければ欠けた ID）: ____
 ```
 
 ### DEV-847

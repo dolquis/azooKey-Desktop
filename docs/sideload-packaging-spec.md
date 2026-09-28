@@ -1993,7 +1993,7 @@ wevtutil um $manifest
 ```
 
 WPA の Generic Events で provider `azooKey-Desktop` を絞り、同一の
-`client_id` / `request_id` の 3000 → 3003 → 4000 → 4002 → 4001 → 3001 を確認する。
+`client_id` / `request_id` の 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 を確認する。
 3003 の FrameRead と FrameWrite は読み書きの区間、4002 は backend の区間を表す。
 タイムアウト・切断・converter 障害は `result` で分類し、CSwitch / DiskIO と時間軸を比較する。
 WPR / WPA の実機確認は、自動テストによる provider 登録・採取の確認とは別に行う。

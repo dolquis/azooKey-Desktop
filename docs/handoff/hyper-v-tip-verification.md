@@ -183,8 +183,11 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 - `compat_test.exe` は azooKey を選択しないため、compat の前にコンソールユーザーの日本語の
   入力方式へ azooKey を追加し、既定の入力方式（`Set-WinDefaultInputMethodOverride`）にする。
   Microsoft IME は削除しない。この設定もチェックポイントの復元で元に戻る。
-- 成果物（bootstrap の JSON と警告・エラーのログ、`compat-report-<target>/`、各 target のログ、
-  `%LOCALAPPDATA%\azooKey\logs`）は `build\vm-verify-results\<パッケージ名>-<UTC 時刻>\` へ回収する。
+- compat の前に、同じ対話タスクで `azookey_diag.exe --json` を実行し、`azookey-diag.json` へ保存する。
+  C-010 と C-013 は Host を止めるため、compat の後では bootstrap 直後の状態を表さない。
+  diag が失敗しても compat は続け、ホスト側に警告を出す。
+- 成果物（bootstrap の JSON と警告・エラーのログ、`azookey-diag.json`、`compat-report-<target>/`、
+  各 target のログ、`%LOCALAPPDATA%\azooKey\logs`）は `build\vm-verify-results\<パッケージ名>-<UTC 時刻>\` へ回収する。
   回収先は `-ResultsDirectory` で変えられる。
 - `compat_test.exe` の fail、report の欠落、タイムアウト（既定 45 分、`-TimeoutMinutes`）は非ゼロ終了にする。
   failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。

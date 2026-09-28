@@ -7,6 +7,7 @@ param(
   [string]$ModelPath = "",
   [switch]$AllowNoModel,
   [switch]$IncludeCompat,
+  [switch]$IncludeSettings,
   [string]$RuntimeInstallerPath = ""
 )
 
@@ -120,6 +121,108 @@ function Get-VmVerifyCacheValue {
   return $match.Matches[0].Groups[1].Value
 }
 
+# sccache は MSVC の /showIncludes を含む stdout をヒット時にそのまま返し、キャッシュキーには
+# checkout のパスが入らない。別 checkout でコンパイルされた結果が返ると、.ninja_deps は
+# その checkout のヘッダを指す。そのヘッダが無ければ毎回 dirty になり、残っていれば
+# この checkout のヘッダを変えても再コンパイルされない。どちらも dry-run だけでは
+# 原因が見えないため、追跡ファイルと同じ相対パスで終わる checkout 外の依存を列挙する。
+function Get-VmVerifyForeignDependency {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$BuildDirectory,
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [AllowNull()]
+    [pscustomobject]$DepsResult = $null,
+    [AllowNull()]
+    [pscustomobject]$TrackedResult = $null
+  )
+
+  if ($null -eq $DepsResult) {
+    $ninja = Get-VmVerifyCacheValue -CachePath (Join-Path $BuildDirectory "CMakeCache.txt") `
+      -Name "CMAKE_MAKE_PROGRAM"
+    if (-not $ninja) {
+      $ninja = "ninja"
+    }
+    $DepsResult = [pscustomobject]@{ Output = @(& $ninja -C $BuildDirectory -t deps 2>&1); ExitCode = $LASTEXITCODE }
+  }
+  if ([int]$DepsResult.ExitCode -ne 0) {
+    throw "Unable to read the Ninja dependency log of '$BuildDirectory': $(($DepsResult.Output | Out-String).Trim())"
+  }
+  if ($null -eq $TrackedResult) {
+    $TrackedResult = [pscustomobject]@{ Output = @(& git -C $RepositoryRoot ls-files 2>&1); ExitCode = $LASTEXITCODE }
+  }
+  if ([int]$TrackedResult.ExitCode -ne 0) {
+    throw "Unable to list the repository files: $(($TrackedResult.Output | Out-String).Trim())"
+  }
+
+  $tracked = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($relative in @($TrackedResult.Output)) {
+    [void]$tracked.Add(([string]$relative).Replace("\", "/"))
+  }
+  $buildRoot = Get-VmVerifyAbsolutePath -Path $BuildDirectory
+  $local = @($RepositoryRoot, $buildRoot) | ForEach-Object {
+    (Get-VmVerifyAbsolutePath -Path $_).Replace("\", "/").TrimEnd("/") + "/"
+  }
+  # `ninja -t deps` は対象ごとの見出し行の下に、依存パスを 4 桁字下げで並べる。
+  # 同じドライブのパスは build ディレクトリからの相対（../ を含む）で記録されるため、
+  # 別 checkout も相対になりうる。絶対パスへ戻してから比べる。
+  $paths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($line in @($DepsResult.Output)) {
+    if ([string]$line -match '^\s{4}(\S.*)$') {
+      $path = $Matches[1].Trim()
+      if (-not [System.IO.Path]::IsPathRooted($path)) {
+        $path = [System.IO.Path]::GetFullPath((Join-Path $buildRoot $path))
+      }
+      [void]$paths.Add($path.Replace("\", "/"))
+    }
+  }
+
+  $foreign = @()
+  foreach ($path in $paths) {
+    if (@($local | Where-Object { $path.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -ne 0) {
+      continue
+    }
+    $segments = $path.Split("/")
+    for ($index = 1; $index -lt $segments.Count; $index++) {
+      if ($tracked.Contains(($segments[$index..($segments.Count - 1)] -join "/"))) {
+        $foreign += $path
+        break
+      }
+    }
+  }
+  return @($foreign | Sort-Object)
+}
+
+function Assert-VmVerifyLocalDependency {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$BuildDirectory,
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [AllowNull()]
+    [pscustomobject]$DepsResult = $null,
+    [AllowNull()]
+    [pscustomobject]$TrackedResult = $null
+  )
+
+  $foreign = @(Get-VmVerifyForeignDependency -BuildDirectory $BuildDirectory -RepositoryRoot $RepositoryRoot `
+      -DepsResult $DepsResult -TrackedResult $TrackedResult)
+  if ($foreign.Count -eq 0) {
+    return
+  }
+  $shown = @($foreign | Select-Object -First 5)
+  throw (@(
+    "The Ninja dependency log of '$BuildDirectory' points at $($foreign.Count) header(s) outside this checkout, for example:"
+    ($shown | ForEach-Object { "  $_" })
+    "A compiler cache (sccache) returned objects compiled in another checkout together with their /showIncludes output."
+    "Header changes in this checkout may not trigger a rebuild, so the artifacts cannot be tied to this commit."
+    "Rebuild once with the cache refreshed, then clear the variable:"
+    "  `$env:SCCACHE_RECACHE = '1'; cmake --build '$BuildDirectory' --clean-first; Remove-Item Env:SCCACHE_RECACHE"
+    "See docs/debugging.md (compiler cache and header dependencies)."
+  ) -join [Environment]::NewLine)
+}
+
 function Assert-VmVerifyBuildReady {
   param(
     [Parameter(Mandatory = $true)]
@@ -131,6 +234,10 @@ function Assert-VmVerifyBuildReady {
   )
 
   if ($null -eq $CommandResult) {
+    # dry-run より先に見る。別 checkout の依存が dirty の原因なら、stale の一般的な
+    # 案内より具体的な対処を示せる。無いまま no work to do でも拒否する。
+    Assert-VmVerifyLocalDependency -BuildDirectory $BuildDirectory -RepositoryRoot (
+      Get-VmVerifyCacheValue -CachePath (Join-Path $BuildDirectory "CMakeCache.txt") -Name "CMAKE_HOME_DIRECTORY")
     $targets = @("azookey_tsf_tip", "azookey_inference_host", "azookey_diag")
     if ($IncludeBench) {
       $targets += "azookey_zenzai_bench"
@@ -221,6 +328,82 @@ function Assert-VmVerifyWorktreeClean {
   if ($status) {
     throw ("The repository worktree is not clean. Commit or remove local changes " +
       "before creating a commit-addressed VM verification package.")
+  }
+}
+
+# azookey_settings は MSBuild を呼ぶ add_custom_target なので、ninja の dry-run では
+# 常に作業ありと出て鮮度を判定できない。vcxproj がソースを取る 4 ディレクトリの
+# 追跡ファイルより exe が新しいことで代える。git は checkout で変わったファイルの
+# mtime を更新するため、別コミットへ移った後の未ビルドはこれで拾える。
+function Assert-VmVerifySettingsFresh {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$ExecutablePath,
+    [string]$Preset = "windows-release",
+    [AllowNull()]
+    [pscustomobject]$CommandResult = $null
+  )
+
+  if ($null -eq $CommandResult) {
+    $output = & git -C $RepositoryRoot ls-files -- settings-app core ipc learning 2>&1
+    $exitCode = $LASTEXITCODE
+  } else {
+    $output = $CommandResult.Output
+    $exitCode = [int]$CommandResult.ExitCode
+  }
+  if ($exitCode -ne 0) {
+    throw "Unable to list the settings app inputs: $(($output | Out-String).Trim())"
+  }
+
+  $built = (Get-Item -LiteralPath $ExecutablePath).LastWriteTimeUtc
+  $newest = $null
+  foreach ($relative in @($output)) {
+    $path = Join-Path $RepositoryRoot ([string]$relative).Replace("/", "\")
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      continue
+    }
+    $item = Get-Item -LiteralPath $path
+    if (-not $newest -or $item.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc) {
+      $newest = $item
+    }
+  }
+  if ($newest -and $newest.LastWriteTimeUtc -gt $built) {
+    throw ("The settings app is older than its sources: $($newest.FullName) changed after " +
+      "$ExecutablePath was built. Run cmake --build --preset $Preset --target azookey_settings " +
+      "before packaging. The check compares timestamps because Ninja cannot dry-run the MSBuild step.")
+  }
+}
+
+# MSI（pkg/msi/Package.wxs）と同じ範囲を取る。self-contained の Windows App SDK
+# ランタイム、resources.pri、*.xbf は exe と同じディレクトリに無いと起動しないため、
+# 相対構造を保ったまま settings/ へ入れる。
+function Get-VmVerifySettingsPayload {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$SettingsDirectory
+  )
+
+  $root = $SettingsDirectory.TrimEnd("\")
+  foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName) {
+    $relative = $file.FullName.Substring($root.Length).TrimStart("\")
+    $topLevel = -not $relative.Contains("\")
+    if ($relative -like "obj\*") {
+      continue
+    }
+    if ($topLevel -and $file.Extension -in @(".exp", ".lib", ".pdb", ".ilk")) {
+      continue
+    }
+    $role = "settings-runtime"
+    if ($relative -ieq "azookey_settings.exe") {
+      $role = "settings-app"
+    }
+    @{
+      Source = $file.FullName
+      Archive = "settings/" + $relative.Replace("\", "/")
+      Role = $role
+    }
   }
 }
 
@@ -373,6 +556,7 @@ function Export-VmVerifyPackage {
     [string]$Model = "",
     [switch]$AllowNoModel,
     [switch]$IncludeCompat,
+    [switch]$IncludeSettings,
     [string]$RuntimeInstaller = ""
   )
 
@@ -451,10 +635,21 @@ function Export-VmVerifyPackage {
       throw "Required build artifact is missing for preset '$PresetName': $artifact"
     }
   }
+  # settings-app/CMakeLists.txt の OutDir と同じく、Debug 以外は Release に出る。
+  $settingsConfiguration = if ($actualBuildType -ceq "Debug") { "Debug" } else { "Release" }
+  $settingsDirectory = Join-Path $configuration.BinaryDir "settings-app\$settingsConfiguration"
+  $settingsExe = Join-Path $settingsDirectory "azookey_settings.exe"
+  if ($IncludeSettings -and -not (Test-Path -LiteralPath $settingsExe -PathType Leaf)) {
+    throw ("Required build artifact is missing for preset '$PresetName': $settingsExe. " +
+      "Build it with cmake --build --preset $PresetName --target azookey_settings.")
+  }
   Assert-VmVerifyBuildReady `
     -BuildDirectory $configuration.BinaryDir `
     -IncludeBench:([bool]$Model) `
     -IncludeCompat:$IncludeCompat
+  if ($IncludeSettings) {
+    Assert-VmVerifySettingsFresh -RepositoryRoot $repository -ExecutablePath $settingsExe -Preset $PresetName
+  }
 
   foreach ($optionalPath in @($MockDictionary, $Model, $RuntimeInstaller)) {
     if ($optionalPath -and -not (Test-Path -LiteralPath $optionalPath -PathType Leaf)) {
@@ -505,6 +700,9 @@ function Export-VmVerifyPackage {
         $relative = $target.FullName.Substring($compatTargets.Length).TrimStart("\").Replace("\", "/")
         $payloads += @{ Source = $target.FullName; Archive = "targets/$relative"; Role = "compat-targets" }
       }
+    }
+    if ($IncludeSettings) {
+      $payloads += @(Get-VmVerifySettingsPayload -SettingsDirectory $settingsDirectory)
     }
     if ($MockDictionary) {
       $payloads += @{
@@ -591,6 +789,7 @@ if ($MyInvocation.InvocationName -ne ".") {
     -Model $ModelPath `
     -AllowNoModel:$AllowNoModel `
     -IncludeCompat:$IncludeCompat `
+    -IncludeSettings:$IncludeSettings `
     -RuntimeInstaller $RuntimeInstallerPath
 
   Write-Output "VM verification package: $($result.ZipPath)"

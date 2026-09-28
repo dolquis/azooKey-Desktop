@@ -461,6 +461,139 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath $script:testOutput | Should -BeFalse
     }
 
+    It "bundles the settings app with its self-contained runtime under settings/ and the MSI exclusions" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      Mock Assert-VmVerifySettingsFresh {}
+      $settings = Join-Path $script:testRepository "build\windows-release\settings-app\Release"
+      foreach ($relative in @(
+          "azookey_settings.exe", "resources.pri", "Microsoft.WindowsAppRuntime.Bootstrap.dll",
+          "MainWindow.xbf", "Assets\logo.png", "Assets\nested.pdb",
+          "azookey_settings.pdb", "azookey_settings.lib", "azookey_settings.exp",
+          "azookey_settings.ilk", "obj\stale.obj")) {
+        $path = Join-Path $settings $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        $relative | Set-Content -LiteralPath $path
+      }
+
+      $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeSettings
+
+      @($result.Manifest.files | Where-Object role -eq "settings-app" | ForEach-Object path) |
+        Should -Be @("settings/azookey_settings.exe")
+      @($result.Manifest.files | Where-Object role -eq "settings-runtime" | ForEach-Object path | Sort-Object) |
+        Should -Be @(
+          "settings/Assets/logo.png",
+          "settings/Assets/nested.pdb",
+          "settings/MainWindow.xbf",
+          "settings/Microsoft.WindowsAppRuntime.Bootstrap.dll",
+          "settings/resources.pri")
+      $expanded = Join-Path $TestDrive "settings-expanded"
+      Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
+      foreach ($file in $result.Manifest.files) {
+        (Get-FileHash -LiteralPath (Join-Path $expanded $file.path) -Algorithm SHA256).Hash.ToLowerInvariant() |
+          Should -BeExactly $file.sha256
+      }
+      Test-Path (Join-Path $expanded "settings/obj") | Should -BeFalse
+      Should -Invoke Assert-VmVerifySettingsFresh -Times 1 -Exactly -ParameterFilter {
+        $ExecutablePath -eq (Join-Path $settings "azookey_settings.exe") -and $Preset -eq "windows-release"
+      }
+    }
+
+    It "leaves the settings app out and skips its freshness check without -IncludeSettings" {
+      Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+      Mock Assert-VmVerifyWorktreeClean {}
+      Mock Assert-VmVerifyBuildReady {}
+      Mock Assert-VmVerifySettingsFresh {}
+
+      $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+        -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+
+      @($result.Manifest.files | Where-Object { $_.role -like "settings-*" }).Count | Should -Be 0
+      Should -Invoke Assert-VmVerifySettingsFresh -Times 0 -Exactly
+    }
+
+    It "rejects -IncludeSettings when azookey_settings has not been built" {
+      Mock Assert-VmVerifyBuildReady {}
+
+      {
+        Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel -IncludeSettings
+      } | Should -Throw "*azookey_settings.exe*--target azookey_settings*"
+      Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+    }
+
+    It "rejects a settings app older than a tracked source it compiles" {
+      $exe = Join-Path $TestDrive "fresh-check\azookey_settings.exe"
+      $source = Join-Path $script:testRepository "ipc\src\Json.cpp"
+      New-Item -ItemType Directory -Path (Split-Path -Parent $exe), (Split-Path -Parent $source) -Force | Out-Null
+      "exe" | Set-Content -LiteralPath $exe
+      "src" | Set-Content -LiteralPath $source
+      (Get-Item -LiteralPath $exe).LastWriteTimeUtc = [DateTime]::UtcNow.AddHours(-1)
+      $tracked = [pscustomobject]@{ ExitCode = 0; Output = @("ipc/src/Json.cpp", "settings-app/deleted.cpp") }
+
+      {
+        Assert-VmVerifySettingsFresh -RepositoryRoot $script:testRepository -ExecutablePath $exe `
+          -CommandResult $tracked
+      } | Should -Throw "*Json.cpp changed after*--target azookey_settings*"
+
+      (Get-Item -LiteralPath $exe).LastWriteTimeUtc = [DateTime]::UtcNow.AddHours(1)
+      {
+        Assert-VmVerifySettingsFresh -RepositoryRoot $script:testRepository -ExecutablePath $exe `
+          -CommandResult $tracked
+      } | Should -Not -Throw
+    }
+
+    It "rejects a dependency log that points at headers of another checkout" {
+      $build = Join-Path $script:testRepository "build\windows-release"
+      $deps = [pscustomobject]@{
+        ExitCode = 0
+        Output = @(
+          "core/CMakeFiles/core.dir/src/A.cpp.obj: #deps 4, deps mtime 1 (VALID)"
+          "    ../../core/include/azookey/core/A.h"
+          "    C:\Program Files\Microsoft Visual Studio\VC\include\string"
+          "    C:/Users/me/.codex/worktrees/c1e8/azooKey-Desktop/compat-test/runner/CaseSupport.h"
+          "    ../../../other-checkout/core/include/azookey/core/A.h"
+          ""
+        )
+      }
+      $tracked = [pscustomobject]@{
+        ExitCode = 0
+        Output = @("core/include/azookey/core/A.h", "compat-test/runner/CaseSupport.h")
+      }
+
+      $foreign = @(Get-VmVerifyForeignDependency -BuildDirectory $build -RepositoryRoot $script:testRepository `
+          -DepsResult $deps -TrackedResult $tracked)
+
+      $sibling = [System.IO.Path]::GetFullPath((Join-Path $build "..\..\..\other-checkout")).Replace("\", "/")
+      $foreign | Should -Be (@(
+          "$sibling/core/include/azookey/core/A.h",
+          "C:/Users/me/.codex/worktrees/c1e8/azooKey-Desktop/compat-test/runner/CaseSupport.h") | Sort-Object)
+      {
+        Assert-VmVerifyLocalDependency -BuildDirectory $build -RepositoryRoot $script:testRepository `
+          -DepsResult $deps -TrackedResult $tracked
+      } | Should -Throw "*2 header(s) outside this checkout*SCCACHE_RECACHE*--clean-first*"
+    }
+
+    It "accepts a dependency log whose repository headers all live in this checkout" {
+      $build = Join-Path $script:testRepository "build\windows-release"
+      $deps = [pscustomobject]@{
+        ExitCode = 0
+        Output = @(
+          "core/CMakeFiles/core.dir/src/A.cpp.obj: #deps 2, deps mtime 1 (VALID)"
+          "    ../../core/include/azookey/core/A.h"
+          "    C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um\windows.h"
+        )
+      }
+      $tracked = [pscustomobject]@{ ExitCode = 0; Output = @("core/include/azookey/core/A.h") }
+
+      {
+        Assert-VmVerifyLocalDependency -BuildDirectory $build -RepositoryRoot $script:testRepository `
+          -DepsResult $deps -TrackedResult $tracked
+      } | Should -Not -Throw
+    }
+
     It "packages the llama preflight bench beside a GGUF model" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}

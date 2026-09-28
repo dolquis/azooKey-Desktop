@@ -149,8 +149,8 @@ VM 内の machine-wide 登録は checkpoint の復元で巻き戻せるためで
 
 委任の範囲は、開発登録の経路に限る。
 
-- 範囲内: `vm-verify-session.ps1` の `-Prepare` / `-Run` / `-Restore`、ゲスト内での `verify-bootstrap.ps1`（これが行う VC++ Redistributable の導入を含む）、`register-dev.ps1`、`unregister-dev.ps1` の実行。
-- 範囲外: VM 内であっても、azooKey の MSI / MSIX の導入とアンインストール、署名、証明書ストアの変更。これらは人間が実行する。
+- 範囲内: 検証 zip を対象とする `vm-verify-session.ps1` の `-Prepare` / `-Run` / `-Restore`、ゲスト内での `verify-bootstrap.ps1`（これが行う VC++ Redistributable の導入を含む）、`register-dev.ps1`、`unregister-dev.ps1` の実行。
+- 範囲外: VM 内であっても、azooKey の MSI / MSIX の導入とアンインストール、署名、証明書ストアの変更。これらは人間が実行する。`vm-verify-session.ps1` に MSI を渡す `-Prepare` / `-Collect` / `-Restore` も、MSI の導入を挟むレーン 1 の手順の一部として人間が実行する。
 
 エージェントの実行結果は先行検証であり、人間ゲートの合格にはならない。
 視覚判断、合否判定、Done 判定は、委任の有無にかかわらず人間に残す。

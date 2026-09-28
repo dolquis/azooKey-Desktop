@@ -12,6 +12,7 @@ Describe "VM package benchmark freshness" {
       "AZOOKEY_BENCH_GIT_COMMIT:STRING="
     ) | Set-Content "$script:build\CMakeCache.txt"
     Mock Get-VmVerifyGitCommit { "a" * 40 }
+    Mock Assert-VmVerifyLocalDependency {}
     [System.IO.File]::WriteAllText("$script:build\bench\generated\BenchmarkCommit.h",
       "#pragma once`n#define AZOOKEY_BENCH_COMMIT `"$('a' * 40)`"`n")
   }
@@ -52,6 +53,18 @@ Describe "VM package benchmark freshness" {
     { Assert-VmVerifyBuildReady -BuildDirectory $script:build -IncludeBench } | Should -Throw
     $env:NINJA_STATUS | Should -BeExactly '[%f/%t %es] '
     Should -Invoke cmake -Times 1 -Exactly
+  }
+
+  It "checks the dependency log of this checkout before the dry-run" {
+    Mock Assert-VmVerifyLocalDependency { throw "points at 1 header(s) outside this checkout" }
+    Mock cmake { $global:LASTEXITCODE = 0; 'ninja: no work to do.' }
+
+    { Assert-VmVerifyBuildReady -BuildDirectory $script:build } |
+      Should -Throw "*outside this checkout*"
+    Should -Invoke Assert-VmVerifyLocalDependency -Times 1 -Exactly -ParameterFilter {
+      $BuildDirectory -eq $script:build -and $RepositoryRoot -eq $TestDrive
+    }
+    Should -Invoke cmake -Times 0 -Exactly
   }
 
   It "accepts only the known no-op generator with the current commit header" {

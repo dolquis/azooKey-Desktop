@@ -22,6 +22,7 @@ VM を起動する前に、2 種類の成果物をホストで作る。
 **MSI**：DEV-673 と DEV-767 が対象とする配布形態の成果物。両ゲートは同一の MSI を使う。
 互換カテゴリ登録（DEV-766 / PR #271）と設定アプリ同梱（DEV-674 / PR #272）の**両方を含む
 main** から MSI を作り、ファイル名と SHA-256 を検証メモへ記録する。
+SHA-256 はレーン 1 の `vm-verify-session.ps1 -Prepare` が `msi-record.json` に書く値を使う。
 どちらかを欠く MSI で走らせると、修正済みの欠陥を再観測することになる。
 
 **検証 zip**：レーン 2 の全ゲートが使う開発登録用の成果物。
@@ -34,6 +35,7 @@ llama.cpp を含まない Host に対して `-ModelPath` を渡すと、`registe
 cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
+cmake --build --preset windows-release --target azookey_settings
 ```
 
 パッケージ生成時に CMake cache の llama.cpp 構成を自動検査する。
@@ -47,8 +49,13 @@ cmake --build --preset windows-release --target compat_test
   -OutputDirectory .\build\vm-verify-packages `
   -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe `
   -ModelPath C:\path\to\zenz-v3.gguf `
-  -IncludeCompat
+  -IncludeCompat `
+  -IncludeSettings
 ```
+
+依存ログが別の checkout のヘッダーを指していると、パッケージ生成は拒否する。
+compiler cache（sccache）が別 checkout でコンパイルした結果を返した場合に起きる。
+拒否メッセージの手順で cache を更新して clean 再ビルドし、生成をやり直す（`docs/debugging.md`）。
 
 GGUF を使うゲートを同じ zip で検証する場合、`-ModelPath` は省略できない。
 スクリプトは `-AllowNoModel` を明示しない限りモデル省略を拒否する。
@@ -61,6 +68,12 @@ DEV-716 で使うため、本セッションでは既定で無効のこのスイ
 
 VM 側では `compat_test.exe` と `targets\` を同じディレクトリへ展開する。
 runner は `--target` に渡したパスから target JSON を読むため、両者の相対関係を崩さない。
+
+**設定アプリの同梱**：`-IncludeSettings` で `azookey_settings.exe` と self-contained ランタイムを
+同じ検証 zip の `settings\` に追加し、各ファイルの SHA-256 を `manifest.json` に記録する。
+レーン 2 の設定系ゲート（DEV-1160、DEV-761）は、展開したパッケージの
+`settings\azookey_settings.exe` から設定を保存する。別の zip を手作業で作って持ち込まない。
+同梱物の範囲は MSI と同じである。
 
 持ち込むもののうち、パッケージ生成が拾わないものを別途 VM へ入れる。
 
@@ -253,6 +266,27 @@ MSI 配布形態そのものを対象とするゲートを置く。
 DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がインストールできること（CRT の app-local 同梱が効いていること）を見るものなので、ベースライン checkpoint から始めると前提が崩れたまま Pass になり、証跡の意味が失われる。
 どちらの checkpoint を使ったかは、検証メモの環境ブロックの checkpoint 名で残す。
 
+MSI の転送とログの回収は、検証 zip と同じ `vm-verify-session.ps1` に MSI を渡して行う。
+`-Prepare` は、VM の現在の状態がクリーン checkpoint から派生していることを確かめる。
+そのうえで MSI の SHA-256 から決まる checkpoint（`pre-azookey-msi-<12桁>`）を取り、
+MSI をゲストの `C:\azookey-verify\msi-<12桁>\` へ転送して、ホストの結果ディレクトリへ
+`msi-record.json` を書く。`msiexec` は実行しない。導入は人が行う（plan §4.5）。
+
+```powershell
+# ホスト側。VM をクリーン checkpoint へ復元し、起動した状態で実行する。
+.\scripts\vm-verify-session.ps1 -Prepare -VMName "<VM名>" `
+  -PackagePath <msi> -CleanCheckpointName "<クリーン checkpoint 名>"
+# ゲスト側。-Prepare が表示したパスへ、MSI と同じディレクトリにログを出す。
+#   msiexec /i C:\azookey-verify\msi-<12桁>\<msi 名> /L*v C:\azookey-verify\msi-<12桁>\install.log
+# ホスト側。msiexec が返った直後に、ゲストの MSI の hash を照合してログを回収する。
+.\scripts\vm-verify-session.ps1 -Collect -VMName "<VM名>" -PackagePath <msi>
+```
+
+`-Collect` は、MSI と同じディレクトリにある `*.log` を
+`build\vm-verify-results\<msi 名>-<12桁>\logs-<UTC 時刻>\` へ回収し、同じ場所に
+`msi-identity.json`（ホストとゲストの MSI の SHA-256）を書く。
+ゲストの MSI の hash が `-PackagePath` と異なれば回収しない。
+
 1. DEV-673 のチェックリストを頭から実施する。
 2. Microsoft Store / UWP 入力の項目は **スコープ外**として記録し、素通りする（§0.1 / DEV-783）。Part A を実施した場合のみ、その結果を併記する。
 3. 続けて **DEV-767** のチェックリスト（設定アプリの起動・二重起動・アンインストール残留物）を実施する。同じクリーン VM 状態を使うため、DEV-673 のアンインストール確認と順序を合わせる。
@@ -290,8 +324,8 @@ msiexec /i <msi> REINSTALL=ALL REINSTALLMODE=amus REBOOT=ReallySuppress /qn /L*v
 [`REBOOT=ReallySuppress`](https://learn.microsoft.com/windows/win32/msi/reboot)
 が使用中ファイルによる終了時の再起動を抑止する。同じ状況では `3010` が返る。
 
-`msiexec` には `/L*v` で verbose ログをゲスト内のローカルパスへ出し、**操作が
-返った直後にホストへ回収する**。VM がサインイン前の画面へ戻ると PowerShell
+`msiexec` には `/L*v` で verbose ログを MSI と同じゲスト内のディレクトリへ出し、**操作が
+返った直後に `-Collect` でホストへ回収する**。VM がサインイン前の画面へ戻ると PowerShell
 Direct でのファイル取得経路が失われる。その場合は VM を停止したうえで、現行ディスクを
 ホストの管理者 PowerShell から `Mount-VHD -ReadOnly` でマウントして回収する。
 ゲストの OS ボリュームが BitLocker で保護されていて解錠できなければ、この経路は使えない。
@@ -314,6 +348,7 @@ Direct でのファイル取得経路が失われる。その場合は VM を停
 再起動を開始したプロセスを示し、MSI 由来か別の更新由来かを切り分けられる。
 再現は保護 checkpoint から分離して行う。
 
+MSI を入れる前の状態へ戻すときは、`-Restore -PackagePath <msi>` で MSI の checkpoint へ復元する。
 レーン 1 が終わったら、レーン 2 の開始状態（plan §2 のベースライン checkpoint）へ復元する。
 MSI の machine-wide 登録を残したままレーン 2 の開発登録を重ねると、どちらの登録が効いているか判別できなくなる。
 
@@ -494,17 +529,21 @@ Linear への記録様式を揃えておく。
 全ゲート共通で先頭に置く環境ブロック。
 
 環境ブロックの機械で埋まる欄と自動観測の件数は、VM から回収した出力からホスト側で生成できる。
-VM 内で `verify-bootstrap.ps1 -Json`、`azookey_diag.exe --json` の出力と compat の `report.json` を保存してホストへ回収し、`winver` の OS ビルド番号を控えてから次を実行する。
+`vm-verify-session.ps1 -Run` は、対話セッションで採取した `verify-bootstrap.ps1 -Json` の出力、`azookey_diag.exe --json` の出力、compat の `report.json` を 1 つの実行ディレクトリへ回収する。
+`winver` の OS ビルド番号を控えてから、その実行ディレクトリを入力にして次を実行する。
 
 ```powershell
+$run = ".\build\vm-verify-results\<zip basename>-<UTC 時刻>"
 pwsh -File .\scripts\vm-verify-summary.ps1 `
   -ManifestPath .\build\vm-verify-packages\<zip basename>.manifest.json `
-  -BootstrapJsonPath .\collected\bootstrap.json `
-  -DiagJsonPath .\collected\diag.json `
-  -CompatReportPath .\collected\notepad\report.json, .\collected\vscode\report.json `
+  -BootstrapJsonPath "$run\bootstrap-interactive.json" `
+  -DiagJsonPath "$run\azookey-diag.json" `
+  -CompatReportPath "$run\compat-report-notepad\report.json", "$run\compat-report-vscode\report.json" `
   -OsBuild <OS build> `
   -OutputDirectory .\build\vm-verify-summary
 ```
+
+`-Run` を使わずに手で実行した場合は、同じ 3 種類の出力を VM 内で保存してホストへ回収し、それぞれのパスを渡す。
 
 生成された `verification-summary.md` を検証メモの先頭に貼り、空欄を人が埋める。
 サマリは観測値の集約であり、ゲートの合否は各課題の判定基準で人が決める。

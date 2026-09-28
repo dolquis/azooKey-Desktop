@@ -190,10 +190,19 @@ bench を含む場合に限り、出力が `[1/1] Refreshing benchmark commit he
 1 行だけで、既存の `bench/generated/BenchmarkCommit.h` が現在の HEAD または
 有効な `AZOOKEY_BENCH_GIT_COMMIT` override と一致する場合も許可する。
 ヘッダーの欠落・不一致や、コンパイル・リンクなどの追加作業があれば拒否する。
+dry-run の前に `ninja -t deps` の依存ログを走査し、この checkout と build directory の
+外にあって、追跡ファイルと同じ相対パスで終わるヘッダーが 1 件でもあれば拒否する。
+sccache はヒット時に MSVC の `/showIncludes` 出力を保存時のまま返し、キャッシュキーに
+checkout のパスを含めないため、別 checkout でコンパイルした結果の依存が記録されうる。
+その依存が指すヘッダーが無ければ dry-run が毎回 stale を報告し、残っていればこの
+checkout のヘッダー変更が再コンパイルを起こさない。後者は dry-run では検出できない。
+拒否時は `SCCACHE_RECACHE=1` での clean 再ビルドを案内する（`docs/debugging.md`）。
+依存ログは同じドライブのパスを build directory からの相対で記録するため、絶対パスへ
+戻してから判定する。
 manifest の commit が同梱スクリプトと文書も一意に指すよう、tracked/untracked を
 含む作業ツリーが clean であることも要求する。
-成果物の欠落、build type の不一致、別 checkout の CMake cache、stale target、
-未コミット変更のいずれかを検出した場合は、zip を生成せず非ゼロ終了する。
+成果物の欠落、build type の不一致、別 checkout の CMake cache、別 checkout を指す
+依存ログ、stale target、未コミット変更のいずれかを検出した場合は、zip を生成せず非ゼロ終了する。
 出力先は worktree 外、または `.gitignore` 対象の `build/` 配下とする。
 それ以外の worktree 内へ出力すると、次回実行時の clean 判定が前回の成果物を
 未追跡ファイルとして検出する。
@@ -245,6 +254,15 @@ zip ルートへ追加する。
 compat target も鮮度確認の対象にする。manifest の role はそれぞれ
 `compat-runner`、`compat-host-hang-watchdog`、`compat-targets` とし、各ファイルの
 SHA-256 を記録する。
+`-IncludeSettings`（既定は無効）を指定すると、`settings-app/<Debug|Release>/` の
+設定アプリを相対階層を保って `settings/` へ追加する。範囲は MSI（`pkg/msi/Package.wxs`）と
+同じで、`obj/` 以下と直下の `*.exp`、`*.lib`、`*.pdb`、`*.ilk` を除く全ファイルとする。
+self-contained の Windows App SDK ランタイム、`resources.pri`、`*.xbf` は exe と同じ
+ディレクトリに無いと起動しないためである。manifest の role は `azookey_settings.exe` が
+`settings-app`、それ以外が `settings-runtime` である。
+`azookey_settings` は MSBuild を呼ぶ custom target で Ninja の dry-run が常に作業ありを
+返すため、鮮度は dry-run ではなく、exe の更新時刻が `settings-app/`、`core/`、`ipc/`、
+`learning/` の追跡ファイルより新しいことで確認する。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。
 
@@ -303,6 +321,9 @@ PowerShell 7 で実行し、zip には同梱しない。
 の出力、`azookey_diag.exe --json` の出力、target ごとの compat `report.json`
 （§13.5、複数可）、VM の OS ビルド番号（`-OsBuild`）とする。
 OS ビルド番号はホストの値と取り違えないよう自動取得しない。
+`vm-verify-session.ps1 -Run` の実行ディレクトリには、対話セッションで採取した
+`bootstrap-interactive.json`、`azookey-diag.json`、`compat-report-<target>/report.json` が
+入り、それぞれをそのまま入力に渡せる。
 `-OutputDirectory` へ `verification-summary.json` と `verification-summary.md` を
 BOM なし UTF-8 で書き出す。
 Markdown は `docs/handoff/human-gate-batch-runbook.md` Part C の環境ブロックに沿い、

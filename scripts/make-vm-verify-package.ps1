@@ -144,7 +144,8 @@ function Get-VmVerifyForeignDependency {
     if (-not $ninja) {
       $ninja = "ninja"
     }
-    $DepsResult = [pscustomobject]@{ Output = @(& $ninja -C $BuildDirectory -t deps 2>&1); ExitCode = $LASTEXITCODE }
+    # -n は tool 実行時にも依存ログを書き込み用に開かせない（並行ビルドと競合させない）。
+    $DepsResult = [pscustomobject]@{ Output = @(& $ninja -n -C $BuildDirectory -t deps 2>&1); ExitCode = $LASTEXITCODE }
   }
   if ([int]$DepsResult.ExitCode -ne 0) {
     throw "Unable to read the Ninja dependency log of '$BuildDirectory': $(($DepsResult.Output | Out-String).Trim())"
@@ -161,9 +162,8 @@ function Get-VmVerifyForeignDependency {
     [void]$tracked.Add(([string]$relative).Replace("\", "/"))
   }
   $buildRoot = Get-VmVerifyAbsolutePath -Path $BuildDirectory
-  $local = @($RepositoryRoot, $buildRoot) | ForEach-Object {
-    (Get-VmVerifyAbsolutePath -Path $_).Replace("\", "/").TrimEnd("/") + "/"
-  }
+  $buildPrefix = $buildRoot.Replace("\", "/").TrimEnd("/") + "/"
+  $repositoryPrefix = (Get-VmVerifyAbsolutePath -Path $RepositoryRoot).Replace("\", "/").TrimEnd("/") + "/"
   # `ninja -t deps` は対象ごとの見出し行の下に、依存パスを 4 桁字下げで並べる。
   # 同じドライブのパスは build ディレクトリからの相対（../ を含む）で記録されるため、
   # 別 checkout も相対になりうる。絶対パスへ戻してから比べる。
@@ -187,7 +187,14 @@ function Get-VmVerifyForeignDependency {
 
   $foreign = @()
   foreach ($path in $paths) {
-    if (@($local | Where-Object { $path.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -ne 0) {
+    if ($path.StartsWith($buildPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      continue
+    }
+    # repository の下でも、追跡ファイルそのものでなければ自分のものとは限らない。
+    # worktree は本体 checkout の .claude/worktrees/ 以下に置かれるため、本体での
+    # ビルドが worktree のヘッダーを拾った場合もここで別 checkout として扱う。
+    if ($path.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+        $tracked.Contains($path.Substring($repositoryPrefix.Length))) {
       continue
     }
     $segments = $path.Split("/")
@@ -339,34 +346,87 @@ function Assert-VmVerifyWorktreeClean {
 }
 
 # azookey_settings は MSBuild を呼ぶ add_custom_target なので、ninja の dry-run では
-# 常に作業ありと出て鮮度を判定できない。vcxproj がソースを取る 4 ディレクトリの
-# 追跡ファイルより exe が新しいことで代える。git は checkout で変わったファイルの
-# mtime を更新するため、別コミットへ移った後の未ビルドはこれで拾える。
+# 常に作業ありと出て鮮度を判定できない。MSBuild が中間ディレクトリに残す
+# *.read.*.tlog（コンパイラ、リンカ、XAML、MIDL、RC が実際に読んだファイル）のうち
+# repository の追跡ファイルと、settings-app/ の追跡ファイル（CMake 側のテストである
+# tests/ を除く）を入力とする。MSBuild の増分判定と同じ入力を見るので、拒否されたら
+# target を回せば解消する。git は checkout で変わったファイルの mtime を更新するため、
+# 別コミットへ移った後の未ビルドも拾える。
+function Get-VmVerifySettingsInput {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$IntermediateDirectory,
+    [AllowNull()]
+    [pscustomobject]$TrackedResult = $null
+  )
+
+  if ($null -eq $TrackedResult) {
+    $TrackedResult = [pscustomobject]@{ Output = @(& git -C $RepositoryRoot ls-files 2>&1); ExitCode = $LASTEXITCODE }
+  }
+  if ([int]$TrackedResult.ExitCode -ne 0) {
+    throw "Unable to list the repository files: $(($TrackedResult.Output | Out-String).Trim())"
+  }
+  $tracked = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($relative in @($TrackedResult.Output)) {
+    [void]$tracked.Add(([string]$relative).Replace("\", "/"))
+  }
+
+  $tlogs = @()
+  if (Test-Path -LiteralPath $IntermediateDirectory -PathType Container) {
+    $tlogs = @(Get-ChildItem -LiteralPath $IntermediateDirectory -Filter "*.read.*.tlog" -File -Recurse)
+  }
+  if ($tlogs.Count -eq 0) {
+    throw ("MSBuild tracking logs (*.read.*.tlog) were not found under $IntermediateDirectory, " +
+      "so the settings app inputs are unknown. Build the azookey_settings target in this build directory.")
+  }
+
+  $prefix = (Get-VmVerifyAbsolutePath -Path $RepositoryRoot).Replace("\", "/").TrimEnd("/") + "/"
+  $inputs = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($tlog in $tlogs) {
+    foreach ($line in [System.IO.File]::ReadAllLines($tlog.FullName)) {
+      if ($line.StartsWith("#")) {
+        continue
+      }
+      # 行頭の ^ は入力のまとまりの見出しで、| で複数のソースを並べることがある。
+      foreach ($part in $line.TrimStart("^").Split("|")) {
+        $path = $part.Trim().Replace("\", "/")
+        if ($path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+          $relative = $path.Substring($prefix.Length)
+          if ($tracked.Contains($relative)) {
+            [void]$inputs.Add($relative)
+          }
+        }
+      }
+    }
+  }
+  foreach ($relative in $tracked) {
+    if ($relative -like "settings-app/*" -and $relative -notlike "settings-app/tests/*") {
+      [void]$inputs.Add($relative)
+    }
+  }
+  return @($inputs | Sort-Object)
+}
+
 function Assert-VmVerifySettingsFresh {
   param(
     [Parameter(Mandatory = $true)]
     [string]$RepositoryRoot,
     [Parameter(Mandatory = $true)]
     [string]$ExecutablePath,
+    [Parameter(Mandatory = $true)]
+    [string]$IntermediateDirectory,
     [string]$Preset = "windows-release",
     [AllowNull()]
-    [pscustomobject]$CommandResult = $null
+    [pscustomobject]$TrackedResult = $null
   )
 
-  if ($null -eq $CommandResult) {
-    $output = & git -C $RepositoryRoot ls-files -- settings-app core ipc learning 2>&1
-    $exitCode = $LASTEXITCODE
-  } else {
-    $output = $CommandResult.Output
-    $exitCode = [int]$CommandResult.ExitCode
-  }
-  if ($exitCode -ne 0) {
-    throw "Unable to list the settings app inputs: $(($output | Out-String).Trim())"
-  }
-
+  $inputs = Get-VmVerifySettingsInput -RepositoryRoot $RepositoryRoot `
+    -IntermediateDirectory $IntermediateDirectory -TrackedResult $TrackedResult
   $built = (Get-Item -LiteralPath $ExecutablePath).LastWriteTimeUtc
   $newest = $null
-  foreach ($relative in @($output)) {
+  foreach ($relative in $inputs) {
     $path = Join-Path $RepositoryRoot ([string]$relative).Replace("/", "\")
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
       continue
@@ -379,7 +439,8 @@ function Assert-VmVerifySettingsFresh {
   if ($newest -and $newest.LastWriteTimeUtc -gt $built) {
     throw ("The settings app is older than its sources: $($newest.FullName) changed after " +
       "$ExecutablePath was built. Run cmake --build --preset $Preset --target azookey_settings " +
-      "before packaging. The check compares timestamps because Ninja cannot dry-run the MSBuild step.")
+      "before packaging. The check compares timestamps with the inputs MSBuild recorded, " +
+      "because Ninja cannot dry-run the MSBuild step.")
   }
 }
 
@@ -655,7 +716,10 @@ function Export-VmVerifyPackage {
     -IncludeBench:([bool]$Model) `
     -IncludeCompat:$IncludeCompat
   if ($IncludeSettings) {
-    Assert-VmVerifySettingsFresh -RepositoryRoot $repository -ExecutablePath $settingsExe -Preset $PresetName
+    # settings-app/CMakeLists.txt が MSBuild へ渡す IntDir と同じ場所。
+    Assert-VmVerifySettingsFresh -RepositoryRoot $repository -ExecutablePath $settingsExe `
+      -IntermediateDirectory (Join-Path $configuration.BinaryDir "settings-app\obj\$settingsConfiguration") `
+      -Preset $PresetName
   }
 
   foreach ($optionalPath in @($MockDictionary, $Model, $RuntimeInstaller)) {

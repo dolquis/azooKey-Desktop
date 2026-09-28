@@ -10,11 +10,11 @@
   Direct wrappers. Nothing runs on its own.
 
     -Prepare : records the MSI SHA-256, confirms that the VM state derives from the
-               clean checkpoint, takes the MSI-specific checkpoint, and copies the MSI
-               into the guest.
+               clean checkpoint, copies the MSI into the guest, and then takes the
+               MSI-specific checkpoint.
     -Collect : matches the hash of the MSI in the guest and collects the msiexec /L*v
                logs to the host.
-    -Restore : restores the MSI-specific checkpoint.
+    -Restore : restores the MSI-specific checkpoint (MSI copied, not installed).
 
   A person runs msiexec (hyper-v-vm-verification-plan.md section 4.5 keeps MSI
   install and uninstall out of agent scope), so -Run does not accept an MSI.
@@ -173,18 +173,21 @@ function Invoke-VmVerifyMsiPrepare {
   if (Get-VmVerifySessionCheckpoint -VMName $VMName -CheckpointName $checkpoint) {
     throw (@(
       "Checkpoint '$checkpoint' already exists on '$VMName'."
-      "It was created for this same MSI, so the guest may already have it installed."
-      "Restore it first (-Restore), or remove it with:"
+      "It was created for this same MSI and already holds the copied MSI, so -Prepare is not needed again."
+      "Use -Restore to return to it before a reinstall, or remove it to start over from the clean checkpoint:"
       "  Remove-VMSnapshot -VMName '$VMName' -Name '$checkpoint'"
     ) -join [Environment]::NewLine)
   }
 
-  Write-Host "Taking checkpoint '$checkpoint' on '$VMName'..."
-  Invoke-VmVerifySessionCheckpoint -VMName $VMName -CheckpointName $checkpoint | Out-Null
+  # Copy first, then take the checkpoint. Restoring it then returns to a guest that
+  # holds the MSI but has not installed it, so a reinstall and -Collect still work.
+  # A failed copy leaves no checkpoint behind, and -Prepare can simply run again.
   $guest = Get-VmVerifyMsiGuestPath -GuestDestination $GuestDestination -Identity $identity
   Write-Host "Copying $($identity.MsiPath) to '$VMName':$($guest.Msi) ..."
   Invoke-VmVerifySessionFileCopy -VMName $VMName -SourcePath $identity.MsiPath `
     -DestinationPath $guest.Msi | Out-Null
+  Write-Host "Taking checkpoint '$checkpoint' on '$VMName'..."
+  Invoke-VmVerifySessionCheckpoint -VMName $VMName -CheckpointName $checkpoint | Out-Null
 
   $resultsRoot = Get-VmVerifyMsiResultsRoot -RepositoryRoot $RepositoryRoot `
     -ResultsDirectory $ResultsDirectory -Identity $identity

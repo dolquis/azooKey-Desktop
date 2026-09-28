@@ -198,7 +198,10 @@ checkout のパスを含めないため、別 checkout でコンパイルした�
 checkout のヘッダー変更が再コンパイルを起こさない。後者は dry-run では検出できない。
 拒否時は `SCCACHE_RECACHE=1` での clean 再ビルドを案内する（`docs/debugging.md`）。
 依存ログは同じドライブのパスを build directory からの相対で記録するため、絶対パスへ
-戻してから判定する。
+戻してから判定する。repository の下にあっても追跡ファイルそのものでないパスは、
+`.claude/worktrees/` のような入れ子の checkout とみなして同じ判定にかける。
+見出しが `STALE` の記録は Ninja が使わずに再ビルドするため判定から除く。
+依存ログは `ninja -n -t deps` で読み、build directory へ書き込まない。
 manifest の commit が同梱スクリプトと文書も一意に指すよう、tracked/untracked を
 含む作業ツリーが clean であることも要求する。
 成果物の欠落、build type の不一致、別 checkout の CMake cache、別 checkout を指す
@@ -261,8 +264,11 @@ self-contained の Windows App SDK ランタイム、`resources.pri`、`*.xbf` �
 ディレクトリに無いと起動しないためである。manifest の role は `azookey_settings.exe` が
 `settings-app`、それ以外が `settings-runtime` である。
 `azookey_settings` は MSBuild を呼ぶ custom target で Ninja の dry-run が常に作業ありを
-返すため、鮮度は dry-run ではなく、exe の更新時刻が `settings-app/`、`core/`、`ipc/`、
-`learning/` の追跡ファイルより新しいことで確認する。
+返すため、鮮度は dry-run ではなく更新時刻で確認する。比べる入力は、MSBuild が中間
+ディレクトリ（`settings-app/obj/<Debug|Release>/`）に残す `*.read.*.tlog` のうち
+repository の追跡ファイルと、`settings-app/` の追跡ファイル（`tests/` を除く）である。
+exe がそのいずれより古ければ拒否する。MSBuild の増分判定と同じ入力を見るため、拒否は
+target の再ビルドで解消する。tlog が無ければ入力を決められないので拒否する。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。
 

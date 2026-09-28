@@ -268,9 +268,11 @@ DEV-673 の第 1 項目は VC++ Redistributable 未導入の環境で MSI がイ
 
 MSI の転送とログの回収は、検証 zip と同じ `vm-verify-session.ps1` に MSI を渡して行う。
 `-Prepare` は、VM の現在の状態がクリーン checkpoint から派生していることを確かめる。
-そのうえで MSI の SHA-256 から決まる checkpoint（`pre-azookey-msi-<12桁>`）を取り、
-MSI をゲストの `C:\azookey-verify\msi-<12桁>\` へ転送して、ホストの結果ディレクトリへ
-`msi-record.json` を書く。`msiexec` は実行しない。導入は人が行う（plan §4.5）。
+そのうえで MSI をゲストの `C:\azookey-verify\msi-<12桁>\` へ転送し、MSI の SHA-256 から
+決まる checkpoint（`pre-azookey-msi-<12桁>`）を取って、ホストの結果ディレクトリへ
+`msi-record.json` を書く。この checkpoint は MSI を置いただけで導入していない状態なので、
+復元すればそのまま再導入でき、`-Prepare` をやり直す必要はない。
+`msiexec` は実行しない。導入は人が行う（plan §4.5）。
 
 ```powershell
 # ホスト側。VM をクリーン checkpoint へ復元し、起動した状態で実行する。

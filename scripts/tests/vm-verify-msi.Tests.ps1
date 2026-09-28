@@ -77,6 +77,23 @@ Describe "VM verification MSI lane" {
       }
     }
 
+    It "copies the MSI before taking its checkpoint so that a restore still holds it" {
+      $script:order = @()
+      Mock Invoke-VmVerifySessionFileCopy { $script:order += "copy" }
+      Mock Invoke-VmVerifySessionCheckpoint { $script:order += "checkpoint" }
+
+      Invoke-TestPrepare | Out-Null
+
+      $script:order | Should -Be @("copy", "checkpoint")
+    }
+
+    It "leaves no checkpoint behind when the copy fails, so -Prepare can run again" {
+      Mock Invoke-VmVerifySessionFileCopy { throw "Copy-VMFile failed." }
+
+      { Invoke-TestPrepare } | Should -Throw -ExpectedMessage "*Copy-VMFile failed*"
+      Should -Invoke Invoke-VmVerifySessionCheckpoint -Times 0 -Exactly
+    }
+
     It "records the MSI hash, takes its checkpoint, and copies it next to the log directory" {
       $result = Invoke-TestPrepare
 

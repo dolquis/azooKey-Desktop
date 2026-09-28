@@ -497,7 +497,8 @@ Describe "VM verification package automation" {
       }
       Test-Path (Join-Path $expanded "settings/obj") | Should -BeFalse
       Should -Invoke Assert-VmVerifySettingsFresh -Times 1 -Exactly -ParameterFilter {
-        $ExecutablePath -eq (Join-Path $settings "azookey_settings.exe") -and $Preset -eq "windows-release"
+        $ExecutablePath -eq (Join-Path $settings "azookey_settings.exe") -and $Preset -eq "windows-release" -and
+        $IntermediateDirectory -eq (Join-Path $script:testRepository "build\windows-release\settings-app\obj\Release")
       }
     }
 
@@ -524,25 +525,68 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath $script:testOutput | Should -BeFalse
     }
 
-    It "rejects a settings app older than a tracked source it compiles" {
-      $exe = Join-Path $TestDrive "fresh-check\azookey_settings.exe"
-      $source = Join-Path $script:testRepository "ipc\src\Json.cpp"
-      New-Item -ItemType Directory -Path (Split-Path -Parent $exe), (Split-Path -Parent $source) -Force | Out-Null
-      "exe" | Set-Content -LiteralPath $exe
-      "src" | Set-Content -LiteralPath $source
-      (Get-Item -LiteralPath $exe).LastWriteTimeUtc = [DateTime]::UtcNow.AddHours(-1)
-      $tracked = [pscustomobject]@{ ExitCode = 0; Output = @("ipc/src/Json.cpp", "settings-app/deleted.cpp") }
+    Context "settings app freshness" {
+      BeforeEach {
+        $script:exe = Join-Path $TestDrive ("fresh-" + [guid]::NewGuid().ToString("N") + "\azookey_settings.exe")
+        $script:intDir = Join-Path $script:testRepository "build\windows-release\settings-app\obj\Release"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $script:exe),
+          (Join-Path $script:intDir "azookey_settings.tlog") -Force | Out-Null
+        "exe" | Set-Content -LiteralPath $script:exe
+        foreach ($seed in @("ipc\src\Json.cpp", "core\include\azookey\core\Used.h",
+            "core\tests\Unrelated.cpp", "settings-app\MainWindow.xaml", "settings-app\tests\Test.cpp")) {
+          $path = Join-Path $script:testRepository $seed
+          New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+          $seed | Set-Content -LiteralPath $path
+          (Get-Item -LiteralPath $path).LastWriteTimeUtc = [DateTime]::UtcNow.AddHours(-2)
+        }
+        # MSBuild の tlog と同じく、大文字化した絶対パスを UTF-16 で並べる。
+        $root = $script:testRepository.ToUpperInvariant()
+        [System.IO.File]::WriteAllLines((Join-Path $script:intDir "azookey_settings.tlog\CL.read.1.tlog"), @(
+            "^$root\IPC\SRC\JSON.CPP|$root\SETTINGS-APP\PCH.CPP"
+            "$root\CORE\INCLUDE\AZOOKEY\CORE\USED.H"
+            "C:\WINDOWS\SYSTEM32\TZRES.DLL"
+          ), [System.Text.Encoding]::Unicode)
+        $script:tracked = [pscustomobject]@{
+          ExitCode = 0
+          Output = @("ipc/src/Json.cpp", "core/include/azookey/core/Used.h", "core/tests/Unrelated.cpp",
+            "settings-app/MainWindow.xaml", "settings-app/tests/Test.cpp")
+        }
 
-      {
-        Assert-VmVerifySettingsFresh -RepositoryRoot $script:testRepository -ExecutablePath $exe `
-          -CommandResult $tracked
-      } | Should -Throw "*Json.cpp changed after*--target azookey_settings*"
+        function Invoke-TestFreshness {
+          Assert-VmVerifySettingsFresh -RepositoryRoot $script:testRepository -ExecutablePath $script:exe `
+            -IntermediateDirectory $script:intDir -TrackedResult $script:tracked
+        }
+      }
 
-      (Get-Item -LiteralPath $exe).LastWriteTimeUtc = [DateTime]::UtcNow.AddHours(1)
-      {
-        Assert-VmVerifySettingsFresh -RepositoryRoot $script:testRepository -ExecutablePath $exe `
-          -CommandResult $tracked
-      } | Should -Not -Throw
+      It "takes the inputs MSBuild recorded plus the settings-app sources" {
+        Get-VmVerifySettingsInput -RepositoryRoot $script:testRepository -IntermediateDirectory $script:intDir `
+          -TrackedResult $script:tracked |
+          Should -Be @("CORE/INCLUDE/AZOOKEY/CORE/USED.H", "IPC/SRC/JSON.CPP", "settings-app/MainWindow.xaml")
+      }
+
+      It "rejects a settings app older than a source MSBuild compiled into it: <Relative>" -ForEach @(
+        @{ Relative = "ipc\src\Json.cpp"; Name = "Json.cpp" }
+        @{ Relative = "core\include\azookey\core\Used.h"; Name = "USED.H" }
+        @{ Relative = "settings-app\MainWindow.xaml"; Name = "MainWindow.xaml" }
+      ) {
+        (Get-Item -LiteralPath (Join-Path $script:testRepository $Relative)).LastWriteTimeUtc = [DateTime]::UtcNow
+
+        { Invoke-TestFreshness } | Should -Throw "*$Name changed after*--target azookey_settings*"
+      }
+
+      It "ignores sources MSBuild does not read, so rebuilding the target always clears the refusal" {
+        foreach ($unread in @("core\tests\Unrelated.cpp", "settings-app\tests\Test.cpp")) {
+          (Get-Item -LiteralPath (Join-Path $script:testRepository $unread)).LastWriteTimeUtc = [DateTime]::UtcNow
+        }
+
+        { Invoke-TestFreshness } | Should -Not -Throw
+      }
+
+      It "refuses to guess when MSBuild left no tracking logs" {
+        Remove-Item -LiteralPath (Join-Path $script:intDir "azookey_settings.tlog") -Recurse
+
+        { Invoke-TestFreshness } | Should -Throw "*tracking logs*Build the azookey_settings target*"
+      }
     }
 
     It "rejects a dependency log that points at headers of another checkout" {
@@ -574,6 +618,25 @@ Describe "VM verification package automation" {
         Assert-VmVerifyLocalDependency -BuildDirectory $build -RepositoryRoot $script:testRepository `
           -DepsResult $deps -TrackedResult $tracked
       } | Should -Throw "*2 header(s) outside this checkout*SCCACHE_RECACHE*--clean-first*"
+    }
+
+    It "flags a worktree nested inside the repository when the main checkout build picked it up" {
+      $build = Join-Path $script:testRepository "build\windows-release"
+      $deps = [pscustomobject]@{
+        ExitCode = 0
+        Output = @(
+          "core/CMakeFiles/core.dir/src/A.cpp.obj: #deps 2, deps mtime 1 (VALID)"
+          "    ../../core/include/azookey/core/A.h"
+          "    ../../.claude/worktrees/feature/core/include/azookey/core/A.h"
+        )
+      }
+      $tracked = [pscustomobject]@{ ExitCode = 0; Output = @("core/include/azookey/core/A.h") }
+
+      $foreign = @(Get-VmVerifyForeignDependency -BuildDirectory $build -RepositoryRoot $script:testRepository `
+          -DepsResult $deps -TrackedResult $tracked)
+
+      $foreign | Should -Be @(
+        "$($script:testRepository.Replace('\', '/'))/.claude/worktrees/feature/core/include/azookey/core/A.h")
     }
 
     It "ignores stale dependency records that Ninja rebuilds anyway" {

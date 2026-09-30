@@ -181,7 +181,7 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* pThreadMgr,
 
 ### 2.3 CandidateListUIElement 実装
 
-`tsf-tip/src/CandidateListUIElement.h` / `.cpp`（新規）：
+`tsf-tip/include/azookey/tsf/CandidateListUIElement.h` / `tsf-tip/src/CandidateListUIElement.cpp`：
 
 ```cpp
 class CandidateListUIElement
@@ -742,7 +742,7 @@ Windows 設定の「言語と地域 → IME → オプション → 詳細設定
 
 ### 6.2 実装
 
-`tsf-tip/src/TextService.h` / `.cpp` の `TextService` が `ITfFnConfigure` を直接実装する。
+`tsf-tip/include/azookey/tsf/TextService.h` / `tsf-tip/src/TextService.cpp` の `TextService` が `ITfFnConfigure` を直接実装する。
 `GetDisplayName` は `azooKey Settings` を返し、`Show` は `langid` と `profile` を
 `tsf-tip/src/SettingsLauncher.cpp::LaunchSettingsApplication` へ渡す。`TextService::QueryInterface`
 は `IID_ITfFnConfigure` に加え、その基底インターフェイスである `IID_ITfFunction` にも同一の

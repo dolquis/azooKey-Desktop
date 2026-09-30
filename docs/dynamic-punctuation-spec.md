@@ -798,8 +798,8 @@ TIP が `!auto_punctuation` 各文節を既存 `CommitObservation` で順次送�
 
 ## 9. テスト計画
 
-- **句読点挿入ロジック** (`core/tests/punctuation_inserter_test.cpp` 新規 or
-  host テスト): 文節境界・接続表現での読点挿入、文末句点、連続読点の抑制、字種切替
+- **句読点挿入ロジック** (`inference-host/tests/punctuation_inserter_test.cpp`):
+  文節境界・接続表現での読点挿入、文末句点、連続読点の抑制、字種切替
   （`ja` / `fullwidth_latin`）。
 - **品詞ガード** (同上): `pos`/`head_pos` 駆動で「が」の格助詞（読点なし）/接続助詞（読点）、
   「て・で」の補助用言接続（読点なし）/連用中止（読点）が分岐すること。`pos=Unknown` で

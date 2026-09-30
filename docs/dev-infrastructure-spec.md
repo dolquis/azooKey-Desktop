@@ -2120,7 +2120,7 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 |---|---:|
 | IPC Ping / `Health`（TIP の監視は `Health` を使う。§8.3）/ TIP の `QueryDiagnostics`（§8.5.1） | 500ms |
 | `QueryCandidates` fast | 150ms |
-| `QueryCandidates` live（`live=true` の要求。専用の MessageType は持たない） | 80ms |
+| ライブ変換（`QueryLiveConversion`。M14 以前の Host へは `QueryCandidates` の `live=true` で代替する） | 80ms |
 | Heavy inference（ローカル Zenzai 変換等） | 800ms |
 | 外部 AI 呼び出し（M16 Magic Conversion / M58-C ai-cleanup の openai backend） | `openAiTimeoutMs`（既定 30s）+ 余裕。正典は `docs/ai-backend-spec.md` §7.1 |
 | ModernBERT scoring（M57） | 30〜50ms |

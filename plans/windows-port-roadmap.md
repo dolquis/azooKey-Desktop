@@ -67,7 +67,7 @@ M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─→ M5 ─→ M6 ─→ M11 ─→
 
 - **目的**: TIP と Host 間で Named Pipe を確立し `Handshake` + `Ping` が
   往復するところまで到達。
-- **変更対象**: `ipc/`, `inference-host/main.cpp`, `tsf-tip/src/TextService.cpp`
+- **変更対象**: `ipc/`, `inference-host/src/main.cpp`, `tsf-tip/src/TextService.cpp`
 - **実装範囲**:
   - Named Pipe サーバ (Host) / クライアント (TIP) 実装（DACL・長さプリフィックスフレーミング）
   - `Handshake(version, capabilities)` と `Ping`/`Health` のメッセージ実装
@@ -1116,7 +1116,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   アプリ）完成後に UI が揃う。
 - **変更対象**: `settings/mvp-settings.schema.json`（`profilesByApp` ブロック
   追加、`promptPrefixByApp` を後方互換で読み続ける）、
-  `inference-host/src/AppProfileResolver.cpp`（新規）、
+  `core/src/AppProfileResolver.cpp`（新規）、
   `inference-host/src/Dispatcher.cpp`（候補生成・rerank へ `app_id` を伝播）、
   `settings-app/`（アプリ別設定タブ）。
 - **実装範囲**: `docs/app-profile-spec.md`。

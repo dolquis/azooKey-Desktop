@@ -87,6 +87,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `Handshake` | codec + Host | version、capability、client ID、tokenの交換 |
 | `LoadModel` | codec + Host | モデル読込指示 |
 | `QueryCandidates` | codec + Host + TIP | 入力中readingの候補要求 |
+| `QueryLiveConversion` | codec + Host + TIP | M14 のライブ変換要求。`kana`・`context` を送り、`surface`・`confidence` を受け取る |
 | `QueryBatchConversion` | codec + Host + TIP | batch romajiの一括変換要求 |
 | `QueryPredictions` | enumのみ | 将来の予測変換用予約 |
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
@@ -104,6 +105,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `ObserveTypo` | codec + Host | M35 の打ち間違えペアの観測。Host は応答を返さない。TIP は secure 時の遮断対象に含めるが送信元ではない |
 | `ListNewWordCandidates` | codec + Host | M36-A の新語候補一覧。応答は `ok` / `error` を持つ（`docs/auto-word-registration-spec.md` §7-1） |
 | `ResolveNewWord` | codec + Host + newwords CLI | M36-A の新語の承認・却下。送信元は `inference-host` の `newwords` CLI（`NewWordsCli.cpp`）で、TIP からは送らない |
+| `ReverseConvert` | codec + Host + TIP | M20 の再変換で、確定済み表層（`surface`）から読み（`reading`）を引く |
 | `Unknown` | sentinel | 未知type。通常メッセージとして送信しない |
 
 各メッセージの payload スキーマは `ipc/include/azookey/ipc/Payloads.h` 内の

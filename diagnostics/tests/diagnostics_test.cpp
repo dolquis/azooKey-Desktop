@@ -1046,4 +1046,52 @@ TEST(DiagnosticsTest, EmbeddedSettingsSchemaRejectsUnknownAndOutOfRangeInference
   std::filesystem::remove(path);
 }
 
+diag::Status SettingsCheckStatus(bool settings_valid, bool settings_missing) {
+  diag::Snapshot snapshot;
+  snapshot.settings_valid = settings_valid;
+  snapshot.settings_missing = settings_missing;
+  const auto report = diag::EvaluateSnapshot(snapshot, 1);
+  const auto check = std::find_if(report.checks.begin(), report.checks.end(),
+                                  [](const auto& item) { return item.id == "D-012"; });
+  if (check == report.checks.end()) throw std::runtime_error("D-012 check is missing");
+  return check->status;
+}
+
+TEST(DiagnosticsTest, BackwardCompatibleSettingsAreOkAndProbeLeavesFileUnchanged) {
+  const auto directory = UniqueTempDirectory("azookey-diag-compatible-settings-");
+  const auto path = directory / "settings.json";
+  const std::string text = R"({"backendPreference":"directml","epPreference":"npu",)"
+                           R"("promptPrefixByApp":{"Code.exe":"code"},"aiBackend":"openai",)"
+                           R"("openAiApiKey":"plaintext-key"})";
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+  }
+  const bool valid = diag::ProbeSettingsFile(path);
+  EXPECT_TRUE(valid);
+  EXPECT_EQ(SettingsCheckStatus(valid, false), diag::Status::Ok);
+  std::ifstream in(path, std::ios::binary);
+  EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), {}), text);
+  in.close();
+  EXPECT_EQ(SettingsCheckStatus(true, true), diag::Status::Ok);
+  std::filesystem::remove_all(directory);
+}
+
+TEST(DiagnosticsTest, UnregisteredLegacyLookingSettingsAreErrorNotWarning) {
+  const auto directory = UniqueTempDirectory("azookey-diag-unregistered-settings-");
+  const auto path = directory / "settings.json";
+  for (const char* text :
+       {R"({"schemaVersion":1,"backendPreference":"auto"})",
+        R"({"settings":{"backendPreference":"auto"}})", R"({"backendPreference":"directml")"}) {
+    {
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      out << text;
+    }
+    const bool valid = diag::ProbeSettingsFile(path);
+    EXPECT_FALSE(valid) << text;
+    EXPECT_EQ(SettingsCheckStatus(valid, false), diag::Status::Error) << text;
+  }
+  std::filesystem::remove_all(directory);
+}
+
 }  // namespace

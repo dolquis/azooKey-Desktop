@@ -1369,8 +1369,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 #### 拡張方針（`additionalProperties: false` 下でのキー追加）
 
 - **追加は加算的**: 新規キーは既定値付きで追加し、旧 `settings.json` は欠落キーを schema 既定で
-  補完して前方互換を保つ。リネーム・削除・enum 縮小は破壊的変更とし、`SettingsManager` に移行処理を
-  実装してから schema を変更する。
+  補完して前方互換を保つ。リネーム・削除・enum 縮小は破壊的変更とし、Host の `SettingsStore` または
+  設定アプリの `settings-app/SettingsDocument.*` に移行処理を実装し、`docs/dev-infrastructure-spec.md`
+  §12.2.1 に旧形式を登録してから schema を変更する。
 - **schema とコードの同時更新**: 新規 top-level キーの schema 追加と Host 側読み書き実装は同一 PR で
   行い、schema 不在のままキーを書き込む不整合を作らない（`privacy-and-secure-input-spec.md` §7 /
   `app-profile-spec.md` §4 と同方針）。

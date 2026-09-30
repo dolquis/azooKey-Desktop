@@ -1465,6 +1465,8 @@ Report EvaluateSnapshot(const Snapshot& snapshot, uint64_t timestamp_ms) {
            {{"entries", j::Value(snapshot.user_dict_entries)},
             {"skipped_entries", j::Value(snapshot.user_dict_skipped_entries)}});
 
+  // No settings.json legacy format is registered (dev-infrastructure-spec §12.2.1), so unlike
+  // D-010 there is no warning; a schema mismatch is never presumed migratable.
   AddCheck(report, "D-012", "settings", snapshot.settings_valid ? Status::Ok : Status::Error,
            snapshot.settings_valid
                ? (snapshot.settings_missing ? "Settings file is absent; defaults apply"

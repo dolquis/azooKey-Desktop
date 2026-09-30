@@ -89,7 +89,7 @@ payload 本体は型ごとに `Build*Request/Response` / `Parse*Request/Response
 | `QueryCandidates` | codec + Host + TIP | 入力中readingの候補要求 |
 | `QueryLiveConversion` | codec + Host + TIP | M14 のライブ変換要求。`kana`・`context` を送り、`surface`・`confidence` を受け取る |
 | `QueryBatchConversion` | codec + Host + TIP | batch romajiの一括変換要求 |
-| `QueryPredictions` | enumのみ | 将来の予測変換用予約 |
+| `QueryPredictions` | codec + Host + TIP | 予測変換候補の要求。`kana`・`left_side_context`・`mode` を送り、`predictions` を受け取る |
 | `QueryCorrections` | enumのみ | 将来のtypo補正用予約 |
 | `Cancel` | codec + Host + TIP | in-flight要求の取消。Hostはレスポンスを返さない |
 | `CommitObservation` | codec + Host + TIP | 確定操作の学習フィードバック |

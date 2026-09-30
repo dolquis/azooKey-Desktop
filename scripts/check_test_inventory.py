@@ -29,7 +29,7 @@ the table documents the whole suite, not one platform's slice of it.
 The second table, "CTest 以外の自動検査", lists the checks that CTest does not
 run. It is checked against the repository as well:
 
-  workflow job   every job of `.github/workflows/*.yml` needs a row whose
+  workflow job   every job of `.github/workflows/*.yml` / `*.yaml` needs a row whose
                  first cell names both the workflow path and the job id.
                  Jobs that only route or aggregate other jobs are exempted in
                  `EXEMPT_WORKFLOW_JOBS` with a reason; an exemption whose job
@@ -78,7 +78,11 @@ TEST_RUNNERS = {
     "scripts/test-powershell-quality.ps1": ("*.Tests.ps1", '"*.Tests.ps1"'),
 }
 
-JOB_KEY_PATTERN = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
+WORKFLOW_GLOBS = ("*.yml", "*.yaml")
+TOP_LEVEL_KEY_PATTERN = re.compile(r"^([A-Za-z0-9_-]+):\s*(?:#.*)?$")
+MAPPING_KEY_PATTERN = re.compile(
+    r"""^(\s+)(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+)):\s*(?:#.*)?$"""
+)
 CHECKED_PATH_PREFIXES = ("scripts/", f"{WORKFLOW_DIRECTORY}/")
 
 # Directories whose CMake files describe vendored or unmaintained trees.
@@ -307,25 +311,37 @@ def compare(
 def collect_workflow_jobs(repo_root: Path) -> dict[str, list[str]]:
     """Return workflow file name -> job ids, read without a YAML parser.
 
-    Job ids are the two-space-indented keys of the top-level `jobs:` block.
-    Scanning stops at the next top-level key, so `on:` triggers such as
-    `push:` are never mistaken for jobs.
+    Job ids are the keys of the top-level `jobs:` block at the indentation of
+    its first key. Scanning stops at the next top-level key, so `on:` triggers
+    such as `push:` are never mistaken for jobs. A workflow that yields no job
+    comes back with an empty list, which the comparison reports instead of
+    passing it silently.
     """
     workflows: dict[str, list[str]] = {}
     directory = repo_root / WORKFLOW_DIRECTORY
     if not directory.is_dir():
         return workflows
-    for path in sorted(directory.glob("*.yml")):
+    paths = sorted({path for pattern in WORKFLOW_GLOBS for path in directory.glob(pattern)})
+    for path in paths:
         jobs = []
         in_jobs = False
+        job_indent: str | None = None
         for line in path.read_text(encoding="utf-8").splitlines():
-            if line and not line[0].isspace() and not line.startswith("#"):
-                in_jobs = line.rstrip() == "jobs:"
+            if not line.strip() or line.lstrip().startswith("#"):
                 continue
-            if in_jobs:
-                match = JOB_KEY_PATTERN.match(line)
-                if match:
-                    jobs.append(match.group(1))
+            if not line[0].isspace():
+                top_level = TOP_LEVEL_KEY_PATTERN.match(line)
+                in_jobs = top_level is not None and top_level.group(1) == "jobs"
+                continue
+            if not in_jobs:
+                continue
+            match = MAPPING_KEY_PATTERN.match(line)
+            if match is None:
+                continue
+            if job_indent is None:
+                job_indent = match.group(1)
+            if match.group(1) == job_indent:
+                jobs.append(match.group(2) or match.group(3) or match.group(4))
         workflows[path.name] = jobs
     return workflows
 
@@ -399,6 +415,11 @@ def compare_automated_checks(
                 documented_jobs.add((name, token))
 
     for name, jobs in workflows.items():
+        if not jobs:
+            problems.append(
+                f"{WORKFLOW_DIRECTORY}/{name} から job を読み取れません"
+                "（`jobs:` ブロックの書式を確認してください）"
+            )
         for job in jobs:
             if (name, job) in documented_jobs or (name, job) in EXEMPT_WORKFLOW_JOBS:
                 continue

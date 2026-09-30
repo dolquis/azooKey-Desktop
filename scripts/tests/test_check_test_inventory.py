@@ -328,7 +328,39 @@ class AutomatedCheckTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("job `lint` が表にありません", output)
 
-    def test_job_named_under_the_wrong_workflow_fails(self) -> None:
+    def test_other_yaml_layouts_are_read(self) -> None:
+        # A comment after `jobs:`, four-space indentation, a quoted id and the
+        # `.yaml` extension are all valid workflows that must not be skipped.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workflows = root / ".github" / "workflows"
+            workflows.mkdir(parents=True)
+            (workflows / "extra.yaml").write_text(
+                "on: push\n"
+                "jobs: # all jobs\n"
+                "    \"quoted-job\":\n"
+                "        runs-on: ubuntu-latest\n"
+                "        steps:\n"
+                "            - run: true\n"
+                "    plain:\n"
+                "        runs-on: ubuntu-latest\n",
+                encoding="utf-8",
+            )
+            jobs = MODULE.collect_workflow_jobs(root)
+        self.assertEqual(jobs, {"extra.yaml": ["quoted-job", "plain"]})
+
+    def test_workflow_without_readable_jobs_fails(self) -> None:
+        def add_unreadable(root: Path) -> None:
+            (root / ".github" / "workflows" / "odd.yml").write_text(
+                "on: push\njobs: {build: {runs-on: ubuntu-latest}}\n",
+                encoding="utf-8",
+            )
+
+        status, output = run_main(INVENTORY_ROWS, mutate=add_unreadable)
+        self.assertEqual(status, 1)
+        self.assertIn("odd.yml から job を読み取れません", output)
+
+    def test_misspelled_job_fails(self) -> None:
         rows = [row.replace("`lint`", "`lnt`") for row in CHECK_ROWS]
         status, output = run_main(INVENTORY_ROWS, rows)
         self.assertEqual(status, 1)

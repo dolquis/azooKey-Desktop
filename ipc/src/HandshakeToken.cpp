@@ -178,14 +178,23 @@ bool PublishHandshakeToken(const std::filesystem::path& path, std::string_view t
   {
     std::ofstream output(temp, std::ios::binary | std::ios::trunc);
     output.write(token.data(), static_cast<std::streamsize>(token.size()));
+    output.close();
     if (!output) {
-      std::filesystem::remove(temp, ec);
+      std::error_code cleanup_ec;
+      std::filesystem::remove(temp, cleanup_ec);
       return false;
     }
   }
-  std::filesystem::rename(temp, path, ec);
-  if (ec) std::filesystem::remove(temp, ec);
-  return !ec;
+  // Keep the rename result separate from cleanup: a successful remove must not
+  // turn a failed publish into success.
+  std::error_code rename_ec;
+  std::filesystem::rename(temp, path, rename_ec);
+  if (rename_ec) {
+    std::error_code cleanup_ec;
+    std::filesystem::remove(temp, cleanup_ec);
+    return false;
+  }
+  return true;
 #endif
 }
 

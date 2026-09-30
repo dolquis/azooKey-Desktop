@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "azookey/tsf/TipRuntimeLog.h"
+
 namespace azookey::tsf {
 namespace {
 
@@ -42,8 +44,10 @@ class SynchronousSession final : public ITfEditSession {
     try {
       return body_(cookie);
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("CharacterFormEditSession::DoEditSession", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("CharacterFormEditSession::DoEditSession", E_FAIL);
       return E_FAIL;
     }
   }

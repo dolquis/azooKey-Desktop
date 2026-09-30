@@ -43,6 +43,7 @@
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/SettingsLauncher.h"
 #include "azookey/tsf/TextServiceFactory.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 
 namespace {
 
@@ -87,11 +88,8 @@ std::string CreateIpcClientId() {
   return written == 36 ? std::string(buffer, 36) : std::string();
 }
 
-azookey::logging::RuntimeLogger& TipRuntimeLogger() {
-  static azookey::logging::RuntimeLogger logger(
-      azookey::logging::RuntimeLoggerOptionsFromEnvironment("tip"));
-  return logger;
-}
+using azookey::tsf::LogComBoundaryException;
+using azookey::tsf::TipRuntimeLogger;
 
 azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
   return azookey::logging::RuntimeLogSafeText(std::move(value));
@@ -100,12 +98,7 @@ azookey::logging::RuntimeLogSafeText SafeLogText(std::string value) {
 void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
                 std::initializer_list<azookey::logging::RuntimeLogField> fields = {},
                 azookey::core::PrivacyPolicy privacy = {}) {
-  auto& logger = TipRuntimeLogger();
-#ifdef _DEBUG
-  const auto record = logger.FormatRecord(level, event, fields, privacy);
-  if (!record.empty()) OutputDebugStringA(("[azooKey TIP] " + record + "\n").c_str());
-#endif
-  logger.Log(level, event, fields, privacy);
+  azookey::tsf::TipRuntimeLog(TipRuntimeLogger(), level, event, fields, privacy);
 }
 
 std::string NewTraceIdNoThrow() noexcept {
@@ -973,8 +966,10 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
     reconversion->Release();
     return hr;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::GetFunction", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::GetFunction", E_FAIL);
     return E_FAIL;
   }
 }
@@ -1335,8 +1330,10 @@ STDMETHODIMP TextService::OnChange(REFGUID rguid) {
     RefreshKeyboardOpen();
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::OnChange", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::OnChange", E_FAIL);
     return E_FAIL;
   }
 }
@@ -1726,8 +1723,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
     }
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::OnTestKeyDown", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::OnTestKeyDown", E_FAIL);
     return E_FAIL;
   }
 }
@@ -2579,10 +2578,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       }
     }
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::OnKeyDown", E_OUTOFMEMORY);
     core_action_in_progress_ = false;
     core_commit_selected_index_.reset();
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::OnKeyDown", E_FAIL);
     core_action_in_progress_ = false;
     core_commit_selected_index_.reset();
     return E_FAIL;
@@ -2732,8 +2733,10 @@ STDMETHODIMP TextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo**
     *ppEnum = enumerator;
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::EnumDisplayAttributeInfo", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::EnumDisplayAttributeInfo", E_FAIL);
     return E_FAIL;
   }
 }
@@ -2750,8 +2753,10 @@ STDMETHODIMP TextService::GetDisplayAttributeInfo(REFGUID guidInfo,
       *ppInfo = info;
       return S_OK;
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("TextService::GetDisplayAttributeInfo", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("TextService::GetDisplayAttributeInfo", E_FAIL);
       return E_FAIL;
     }
   }
@@ -5369,9 +5374,11 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
     }
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextService::ApplyInputStateResult", E_OUTOFMEMORY);
     rollback();
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("TextService::ApplyInputStateResult", E_FAIL);
     rollback();
     return E_FAIL;
   }
@@ -6545,8 +6552,10 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
     pRange->Release();
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("EditSession::DoEditSession", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("EditSession::DoEditSession", E_FAIL);
     return E_FAIL;
   }
 }

@@ -3,6 +3,8 @@
 #include <new>
 #include <utility>
 
+#include "azookey/tsf/TipRuntimeLog.h"
+
 namespace {
 
 template <typename T, typename... Args>
@@ -111,9 +113,11 @@ STDMETHODIMP EnumDisplayAttributeInfo::Next(ULONG ulCount, ITfDisplayAttributeIn
       ++index_;
     }
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("EnumDisplayAttributeInfo::Next", E_OUTOFMEMORY);
     if (pcFetched) *pcFetched = fetched;
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("EnumDisplayAttributeInfo::Next", E_FAIL);
     if (pcFetched) *pcFetched = fetched;
     return E_FAIL;
   }
@@ -141,8 +145,10 @@ STDMETHODIMP EnumDisplayAttributeInfo::Clone(IEnumTfDisplayAttributeInfo** ppEnu
     *ppEnum = clone;
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("EnumDisplayAttributeInfo::Clone", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("EnumDisplayAttributeInfo::Clone", E_FAIL);
     return E_FAIL;
   }
 }

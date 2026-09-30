@@ -17,6 +17,7 @@ add_library(azookey_tsf_tip SHARED
   src/SettingsLauncher.cpp
   src/TextService.cpp
   src/TipLocalSettings.cpp
+  src/TipRuntimeLog.cpp
   src/TextServiceFactory.cpp
 )
 
@@ -62,6 +63,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/SettingsLauncher.cpp
     src/TextService.cpp
     src/TipLocalSettings.cpp
+    src/TipRuntimeLog.cpp
     src/TextServiceFactory.cpp
   )
   target_include_directories(azookey_tsf_tip_test_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -139,6 +141,13 @@ if(AZOOKEY_BUILD_TESTS)
   target_link_libraries(tsf_tip_local_settings_tests PRIVATE
     azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
   azookey_discover_tests(tsf_tip_local_settings_tests TIMEOUT 30)
+  add_executable(tsf_tip_runtime_log_tests src/TipRuntimeLog.cpp tests/runtime_log_test.cpp)
+  target_include_directories(tsf_tip_runtime_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_definitions(tsf_tip_runtime_log_tests PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(tsf_tip_runtime_log_tests PRIVATE
+    azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(tsf_tip_runtime_log_tests RESOURCE_LOCK azookey-runtime-log TIMEOUT 30)
   # The keymap is the pure core map; this target only adds <windows.h> to check
   # the core VK constants against VK_* and needs no TIP objects.
   add_executable(tsf_tip_keymap_tests tests/keymap_test.cpp)

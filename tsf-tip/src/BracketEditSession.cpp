@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "azookey/tsf/TextService.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 
 namespace azookey::tsf {
 namespace {
@@ -41,8 +42,10 @@ class SynchronousSession final : public ITfEditSession {
     try {
       return body_(cookie);
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("BracketEditSession::DoEditSession", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("BracketEditSession::DoEditSession", E_FAIL);
       return E_FAIL;
     }
   }

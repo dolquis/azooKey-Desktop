@@ -66,6 +66,7 @@ TEST_F(TipRuntimeLogTest, RecordsBadAllocWithOperationKindAndHresult) {
   EXPECT_NE(log.find("\"event\":\"com_boundary_exception\""), std::string::npos) << log;
   EXPECT_NE(log.find("\"operation\":\"TextService::OnKeyDown\""), std::string::npos) << log;
   EXPECT_NE(log.find("\"exception_kind\":\"bad_alloc\""), std::string::npos) << log;
+  EXPECT_NE(log.find("\"error_code\":\"business\""), std::string::npos) << log;
   EXPECT_NE(log.find("\"hresult\":" + std::to_string(static_cast<int64_t>(E_OUTOFMEMORY))),
             std::string::npos)
       << log;

@@ -25,8 +25,9 @@ std::string_view CurrentExceptionKind() noexcept;
 
 // Records an exception that a COM boundary converted to `hr`. Call it from the
 // catch handler before returning. Only the operation name, the exception kind,
-// and the HRESULT are recorded; exception messages may carry input text or
-// paths and are never logged. Never throws, including on allocation failure.
+// and the HRESULT are recorded (error_code "business", mirrored to the ETW
+// Error event); exception messages may carry input text or paths and are never
+// logged. Never throws, including on allocation failure.
 void LogComBoundaryException(logging::RuntimeLogger& logger, std::string_view operation,
                              HRESULT hr) noexcept;
 void LogComBoundaryException(std::string_view operation, HRESULT hr) noexcept;

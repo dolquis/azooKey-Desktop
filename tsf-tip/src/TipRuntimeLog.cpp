@@ -4,6 +4,8 @@
 #include <new>
 #include <string>
 
+#include "azookey/core/EtwLogger.h"
+
 namespace azookey::tsf {
 
 logging::RuntimeLogger& TipRuntimeLogger() {
@@ -37,11 +39,13 @@ std::string_view CurrentExceptionKind() noexcept {
 
 void LogComBoundaryException(logging::RuntimeLogger& logger, std::string_view operation,
                              HRESULT hr) noexcept {
+  core::EtwLogger::LogError(core::EtwModule::Tip, core::EtwErrorCode::Business, hr);
   try {
     TipRuntimeLog(
         logger, logging::RuntimeLogLevel::Error, "com_boundary_exception",
         {{"operation", logging::RuntimeLogSafeText(std::string(operation))},
          {"exception_kind", logging::RuntimeLogSafeText(std::string(CurrentExceptionKind()))},
+         {"error_code", logging::RuntimeLogSafeText("business")},
          {"hresult", static_cast<int64_t>(hr)}});
   } catch (...) {
     // Diagnostics are best-effort; the caller still returns its HRESULT.

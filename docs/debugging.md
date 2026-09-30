@@ -184,7 +184,8 @@ TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterS
 変換した場合は、
 `tip-YYYYMMDD.jsonl` に `event=com_boundary_exception` のレコードが error レベルで 1 行出力される。
 `operation` は例外を捕捉した処理名、`exception_kind` は `bad_alloc` / `std_exception` /
-`unknown`、`hresult` は呼び出し元へ返した値である。例外メッセージは入力本文やパスを
+`unknown`、`hresult` は呼び出し元へ返した値、`error_code` は `business` である。
+同じ `hresult` は ETW の Error イベントにも出力される。例外メッセージは入力本文やパスを
 含みうるため記録しない。TIP 登録の失敗を調べる場合は、`regsvr32` を実行する管理者
 プロセスにも `AZOOKEY_LOG=1` を設定する。
 

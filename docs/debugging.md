@@ -277,5 +277,13 @@ cmake --build --preset windows-debug --target azookey_check
 - **学習が反映されない**: 未指定時は
   `%LOCALAPPDATA%\azooKey\data\learning.tsv`、`--learning` 指定時はその明示パスを確認。
   CommitObservation 受信は Host stderr / Dispatcher テストで確認。
+- **学習・ユーザー辞書の保存が失敗する**: Host / CLI の stderr に出る
+  `persistence error: stage=... category=... code=...` を確認する。
+  `category=system` の `atomic-replace` / `code=5` は Windows のアクセス拒否、
+  `flush-open` / `code=32` は共有違反を表す。一時的な競合では保存処理が短時間再試行する。
+  `dpapi-encrypt` / `dpapi-decrypt` は暗号処理、`lock-create` / `lock-wait` は排他ロックの失敗を表す。
+  再試行・終了時 flush の境界は `docs/learning-data-management-spec.md` §11.1 を参照する。
+  `HostProcessTest` は失敗時に子 CLI ごとの経路・stderr と Host ログを出力する。
+  テストには一時ディレクトリ内の合成データだけを使い、実ユーザーデータを渡さない。
 - **学習暴走**: `learning_alpha` を下げる（既定 0.8）。`LearningStore::Reset` または
   `%LOCALAPPDATA%\azooKey\data\learning.tsv` を削除して再起動。

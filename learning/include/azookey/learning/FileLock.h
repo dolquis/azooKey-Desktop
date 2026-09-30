@@ -10,6 +10,8 @@
 #include <system_error>
 #include <thread>
 
+#include "azookey/learning/PersistenceDiagnostics.h"
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -171,6 +173,8 @@ inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
   const auto name = detail::MutexNameForPath(path);
   HANDLE mutex = ::CreateMutexW(nullptr, FALSE, name.c_str());
   if (!mutex) {
+    detail::ReportPersistenceFailure("lock-create",
+                                     {static_cast<int>(::GetLastError()), std::system_category()});
     return std::nullopt;
   }
   const auto timeout_count = timeout.count();
@@ -183,7 +187,9 @@ inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
   if (wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED) {
     return ScopedFileLock(mutex, true);
   }
+  const DWORD error = wait_result == WAIT_TIMEOUT ? ERROR_TIMEOUT : ::GetLastError();
   ::CloseHandle(mutex);
+  detail::ReportPersistenceFailure("lock-wait", {static_cast<int>(error), std::system_category()});
   return std::nullopt;
 #else
   const auto lock_path = detail::LockFilePathFor(path);

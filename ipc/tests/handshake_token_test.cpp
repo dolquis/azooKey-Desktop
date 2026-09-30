@@ -61,6 +61,22 @@ TEST_F(HandshakeTokenTest, MissingAndMalformedFilesAreRejected) {
   EXPECT_FALSE(PublishHandshakeToken(path_, "invalid"));
 }
 
+TEST_F(HandshakeTokenTest, PublishReportsRenameFailureAndRemovesTemporaryFile) {
+  // A non-empty directory at the destination makes the final rename fail on
+  // both POSIX (EISDIR) and Windows (MoveFileExW access denied).
+  std::filesystem::create_directories(path_);
+  std::ofstream(path_ / "occupied", std::ios::binary) << "x";
+
+  EXPECT_FALSE(PublishHandshakeToken(path_, "0123456789abcdef0123456789abcdef"));
+  EXPECT_TRUE(std::filesystem::is_directory(path_));
+  for (const auto& entry : std::filesystem::directory_iterator(directory_)) {
+    EXPECT_EQ(entry.path(), path_) << "leftover: " << entry.path().string();
+  }
+
+  std::error_code ec;
+  std::filesystem::remove_all(path_, ec);
+}
+
 #ifdef _WIN32
 TEST_F(HandshakeTokenTest, PublishedFileHasProtectedPrivateDacl) {
   ASSERT_TRUE(PublishHandshakeToken(path_, "0123456789abcdef0123456789abcdef"));

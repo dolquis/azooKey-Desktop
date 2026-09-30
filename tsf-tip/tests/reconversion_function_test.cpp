@@ -15,12 +15,15 @@
 #include <thread>
 #include <vector>
 
+#include "KeyboardStateGuard.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
+
+using azookey::tsf::test::KeyboardStateGuard;
 
 class TestContext final : public ITfContext {
  public:
@@ -383,6 +386,7 @@ TEST(ReconversionFunctionTest, SelectedConvertKeyQueuesHostWorkWithoutDeletingTe
   context.selection = &range;
   azookey::tsf::TextService service;
   service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
   ASSERT_EQ(service.OnTestKeyDown(&context, VK_CONVERT, 0, &eaten), S_OK);
   EXPECT_EQ(eaten, TRUE);
@@ -589,6 +593,7 @@ TEST(ReconversionFunctionTest, RightClickCacheMissReturnsOriginalThenShowsDelaye
   ASSERT_EQ(list->GetCandidateNum(&count), S_OK);
   EXPECT_EQ(count, 2u);
   list->Release();
+  KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
   ASSERT_EQ(service.OnKeyDown(&context, VK_DOWN, 0, &eaten), S_OK);
   EXPECT_TRUE(eaten);
@@ -673,6 +678,7 @@ void VerifyEmptyPrefetchCanRetry(bool use_convert_key, bool consume_empty_result
   }
 
   if (use_convert_key) {
+    KeyboardStateGuard keyboard_state;
     BOOL eaten = FALSE;
     ASSERT_EQ(service.OnKeyDown(&context, VK_CONVERT, 0, &eaten), S_OK);
     EXPECT_TRUE(eaten);

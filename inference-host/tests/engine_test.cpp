@@ -2324,9 +2324,10 @@ TEST(EngineTypoCorrectionTest, WithoutAStoreQueryIsUnchanged) {
 // ---- M36-A: new word mining ----
 
 TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2353,9 +2354,10 @@ TEST(EngineAutoWordMiningTest, RepeatedCommitsOfAnUnknownWordAccumulateAsPending
 }
 
 TEST(EngineAutoWordMiningTest, AutoModeConfirmsAtTheThreshold) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_auto_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_auto.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2372,11 +2374,12 @@ TEST(EngineAutoWordMiningTest, AutoModeConfirmsAtTheThreshold) {
 }
 
 TEST(EngineAutoWordMiningTest, KnownWordsAndNoisyShapesAreNotMined) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_filters_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_filters.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
                                               &azookey::learning::test::Crypto());
-  azookey::learning::UserDictionary user_dict(TempPath("azookey_engine_mining_userdict.json"),
+  azookey::learning::UserDictionary user_dict(temp.File("userdict.json"),
                                               &azookey::learning::test::Crypto());
   azookey::learning::UserWord registered;
   registered.word = "azooKey社";
@@ -2404,9 +2407,10 @@ TEST(EngineAutoWordMiningTest, KnownWordsAndNoisyShapesAreNotMined) {
 }
 
 TEST(EngineAutoWordMiningTest, MiningDisabledAndNoStoreAreBothNoOps) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_off_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_off.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2424,9 +2428,10 @@ TEST(EngineAutoWordMiningTest, MiningDisabledAndNoStoreAreBothNoOps) {
 }
 
 TEST(EngineAutoWordMiningTest, DuplicateObservationIdIsNotMinedTwice) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_dedupe_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_dedupe.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2448,9 +2453,10 @@ TEST(EngineAutoWordMiningTest, ModelBackendStillConsultsTheFallbackLexicon) {
                     "loads require a full model fixture.";
   }
 
-  azookey::learning::LearningStore store(TempPath("azookey_engine_mining_zenzai_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_mining_zenzai.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2459,7 +2465,7 @@ TEST(EngineAutoWordMiningTest, ModelBackendStillConsultsTheFallbackLexicon) {
       MakeEngineWithConverter(MakeConverterWithDictionary({{"きしゃ", "汽車"}}), store, cfg);
   engine->SetAutoWordStore(&auto_words);
 
-  const auto model_file = std::filesystem::temp_directory_path() / "azookey_mining_zenzai.gguf";
+  const std::filesystem::path model_file = temp.File("zenzai.gguf");
   WriteMinimalGguf(model_file);
   azookey::host::ModelLoadOptions options;
   options.path = azookey::core::PathToUtf8(model_file);
@@ -2473,8 +2479,6 @@ TEST(EngineAutoWordMiningTest, ModelBackendStillConsultsTheFallbackLexicon) {
   EXPECT_EQ(auto_words.Size(), 0u);
   engine->CommitObservation("あずきー", "アズーキー", kNowBase);
   EXPECT_EQ(auto_words.ListByState(azookey::learning::AutoWordState::Pending).size(), 1u);
-
-  std::filesystem::remove(model_file);
 }
 
 // ---- M36-A: injection of confirmed words (spec section 6) ----

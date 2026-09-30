@@ -6,6 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -27,6 +28,18 @@ namespace {
 
 constexpr DWORD kProcessTimeoutMs = 15000;
 std::atomic<HANDLE> g_control_received{nullptr};
+
+// Returns the last 8 KiB, where the error that ended the process is logged.
+std::string ReadLog(const std::filesystem::path& path) {
+  constexpr std::streamoff kTailBytes = 8192;
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  const std::streamoff size = input ? static_cast<std::streamoff>(input.tellg()) : 0;
+  input.seekg(std::max<std::streamoff>(0, size - kTailBytes));
+  std::string text(static_cast<size_t>(std::min(size, kTailBytes)), '\0');
+  input.read(text.data(), static_cast<std::streamsize>(text.size()));
+  text.resize(static_cast<size_t>(input.gcount()));
+  return text;
+}
 
 BOOL WINAPI IgnoreTestConsoleControl(DWORD event) {
   if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
@@ -136,6 +149,10 @@ class HostProcessTest : public ::testing::Test {
                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     pipe_name_ = "\\\\.\\pipe\\azookey-host-process-" + suffix;
     token_ = "host-process-token-" + suffix;
+  }
+
+  void TearDown() override {
+    if (HasFailure()) std::cerr << "Host log:\n" << ReadLog(directory_.root / "host.log");
   }
 
   bool StartHost() {
@@ -274,14 +291,22 @@ TEST_F(HostProcessTest, ConcurrentIpcAndOfflineUserDictAddsPreserveAllEntries) {
       args.insert(args.end(), {L"--reading", azookey::core::Utf8Path(reading).wstring(),
                                L"--surface", azookey::core::Utf8Path(reading).wstring()});
       auto child = std::make_unique<ChildProcess>();
-      ASSERT_TRUE(child->Start(host_executable_, args, CREATE_NO_WINDOW | CREATE_SUSPENDED));
+      const auto log = directory_.root / ("cli-" + std::to_string(children.size()) + ".log");
+      ASSERT_TRUE(child->Start(host_executable_, args, CREATE_NO_WINDOW | CREATE_SUSPENDED, log));
       children.push_back(std::move(child));
     }
   }
   for (const auto& child : children) ASSERT_TRUE(child->Resume());
-  for (const auto& child : children) {
-    ASSERT_EQ(child->Wait(), WAIT_OBJECT_0) << "CLI timed out";
-    EXPECT_EQ(child->ExitCode(), 0U) << "CLI pid=" << child->pid();
+  for (size_t i = 0; i < children.size(); ++i) {
+    const auto& child = children[i];
+    const auto log = directory_.root / ("cli-" + std::to_string(i) + ".log");
+    const char* route = i % 2 == 0 ? "ipc" : "offline";
+    ASSERT_EQ(child->Wait(), WAIT_OBJECT_0)
+        << "CLI timed out: index=" << i << " via=" << route << " pid=" << child->pid() << '\n'
+        << ReadLog(log);
+    EXPECT_EQ(child->ExitCode(), 0U)
+        << "CLI index=" << i << " via=" << route << " pid=" << child->pid() << '\n'
+        << ReadLog(log);
   }
   azookey::learning::UserDictionary dictionary(UserDictPath());
   ASSERT_TRUE(dictionary.Load());

@@ -1,11 +1,14 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "azookey/learning/PersistenceRetry.h"
 
 namespace azookey::learning {
 
@@ -39,8 +42,10 @@ bool MigratePlaintextFile(const std::filesystem::path& plain_path, std::string_v
                           const ByteCrypto& crypto);
 
 // Refuses to overwrite undecipherable ciphertext or unmigrated plaintext.
+// retry_budget bounds the transient-conflict retries of the final atomic write.
 bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_view text,
-                        const ByteCrypto& crypto);
+                        const ByteCrypto& crypto,
+                        std::chrono::milliseconds retry_budget = kTransientFileRetryBudget);
 
 enum class SecretStatus { Ok, InvalidEncoding, CryptoUnavailable, CryptoFailure };
 

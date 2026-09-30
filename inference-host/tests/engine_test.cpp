@@ -23,6 +23,7 @@
 #include "azookey/host/SettingsStore.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
+#include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
@@ -711,6 +712,66 @@ TEST(InferenceEngineTest, SaveFailureKeepsDirtyStateAndCanRetry) {
   engine.reset();
   std::filesystem::remove_all(root);
 }
+
+#ifdef _WIN32
+TEST(InferenceEngineTest, ShutdownFlushRecoversAfterTemporaryReplaceBlocker) {
+  ScopedTempDirectory directory;
+  const auto path = directory.File("learning.tsv");
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
+  azookey::host::EngineConfig cfg;
+  cfg.learning_flush_every_n = 100;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+  engine->CommitObservation("first", "saved", kNowBase + 1);
+  engine->CommitObservation("pending", "observation", kNowBase + 2);
+  ASSERT_TRUE(store.dirty());
+  const auto encrypted = EncryptedPathFor(path);
+  HANDLE reader = CreateFileW(encrypted.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(reader, INVALID_HANDLE_VALUE);
+  auto shutdown =
+      std::async(std::launch::async, [engine = std::move(engine)]() mutable { engine.reset(); });
+  // The old destructor exhausts all three one-shot saves in about 100 ms.
+  // Hold the sharing conflict beyond that window, then let shutdown complete.
+  EXPECT_EQ(shutdown.wait_for(std::chrono::milliseconds(200)), std::future_status::timeout);
+  CloseHandle(reader);
+  shutdown.get();
+  EXPECT_FALSE(store.dirty());
+  azookey::learning::LearningStore loaded(path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_GT(loaded.Score("pending", "observation", kNowBase + 2), 0.0);
+}
+
+TEST(InferenceEngineTest, ObservationFlushDoesNotWaitOutReplaceBlocker) {
+  ScopedTempDirectory directory;
+  const auto path = directory.File("learning.tsv");
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
+  azookey::host::EngineConfig cfg;
+  cfg.learning_flush_every_n = 1;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+  engine->CommitObservation("first", "saved", kNowBase + 1);
+  ASSERT_FALSE(store.dirty());
+  const auto encrypted = EncryptedPathFor(path);
+  HANDLE reader = CreateFileW(encrypted.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(reader, INVALID_HANDLE_VALUE);
+  testing::internal::CaptureStderr();
+  const auto start = std::chrono::steady_clock::now();
+  engine->CommitObservation("pending", "observation", kNowBase + 2);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  (void)testing::internal::GetCapturedStderr();
+  // The flush runs under the lock queries wait on, so it must not spend the
+  // 500 ms retry budget that shutdown and explicit flushes use.
+  EXPECT_LT(elapsed, std::chrono::milliseconds(400));
+  EXPECT_TRUE(store.dirty());
+  CloseHandle(reader);
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_FALSE(store.dirty());
+}
+#endif
 
 TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicitFlush) {
   const std::string path = TempPath("azookey_host_engine_learning_burst_start.tsv");

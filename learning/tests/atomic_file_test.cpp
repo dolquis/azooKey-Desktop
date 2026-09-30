@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "azookey/learning/AtomicFile.h"
@@ -32,6 +33,118 @@ size_t CountTempFiles(const std::filesystem::path& dir) {
   }
   return temp_files;
 }
+
+#ifdef _WIN32
+class ReadHandle {
+ public:
+  ReadHandle(const std::filesystem::path& path, DWORD sharing)
+      : handle_(CreateFileW(path.c_str(), GENERIC_READ, sharing, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr)) {}
+  ReadHandle(const ReadHandle&) = delete;
+  ReadHandle& operator=(const ReadHandle&) = delete;
+  ~ReadHandle() { Close(); }
+  bool valid() const { return handle_ != INVALID_HANDLE_VALUE; }
+  void Close() {
+    if (valid()) CloseHandle(handle_);
+    handle_ = INVALID_HANDLE_VALUE;
+  }
+
+ private:
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+TEST(AtomicFileTest, FlushRecoversAfterTemporarySharingViolation) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("azookey_atomicfile_flush_sharing_" + std::to_string(GetCurrentProcessId()));
+  std::filesystem::create_directories(root);
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "old"));
+  ReadHandle reader(target, FILE_SHARE_READ);
+  ASSERT_TRUE(reader.valid());
+  auto writer =
+      std::async(std::launch::async, [&] { return azookey::learning::FlushFileToDisk(target); });
+  // Keep the read handle until the writer has had a chance to encounter the
+  // sharing conflict. A one-shot flush returns false instead of waiting here.
+  EXPECT_EQ(writer.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+  reader.Close();
+  EXPECT_TRUE(writer.get());
+  EXPECT_EQ(ReadAll(target), "old");
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, ReplaceRecoversAfterTemporarySharingViolation) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("azookey_atomicfile_replace_sharing_" + std::to_string(GetCurrentProcessId()));
+  std::filesystem::create_directories(root);
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "old"));
+  ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
+  ASSERT_TRUE(reader.valid());  // No FILE_SHARE_DELETE: replacement is blocked.
+  auto writer = std::async(std::launch::async, [&] {
+    return azookey::learning::WriteTextFileAtomically(target, "new");
+  });
+  EXPECT_EQ(writer.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+  EXPECT_EQ(ReadAll(target), "old");
+  reader.Close();
+  EXPECT_TRUE(writer.get());
+  EXPECT_EQ(ReadAll(target), "new");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, PersistentSharingFailurePreservesTargetAndReportsOnlyStageAndCode) {
+  const auto root =
+      std::filesystem::temp_directory_path() /
+      ("azookey_atomicfile_persistent_sharing_" + std::to_string(GetCurrentProcessId()));
+  std::filesystem::create_directories(root);
+  const auto target = root / "private-path.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "private-old-content"));
+  ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
+  ASSERT_TRUE(reader.valid());
+  testing::internal::CaptureStderr();
+  const auto start = std::chrono::steady_clock::now();
+  const bool saved = azookey::learning::WriteTextFileAtomically(target, "private-new-content");
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(saved);
+  EXPECT_LT(elapsed, std::chrono::seconds(2));
+  EXPECT_NE(log.find("stage=atomic-replace category=system code="), std::string::npos);
+  EXPECT_TRUE(log.find("code=5\n") != std::string::npos ||
+              log.find("code=32\n") != std::string::npos ||
+              log.find("code=33\n") != std::string::npos);
+  EXPECT_EQ(log.find("private-path"), std::string::npos);
+  EXPECT_EQ(log.find("private-old-content"), std::string::npos);
+  EXPECT_EQ(log.find("private-new-content"), std::string::npos);
+  EXPECT_EQ(ReadAll(target), "private-old-content");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+  reader.Close();
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, ZeroRetryBudgetFailsWithoutWaitingOutSharingConflict) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("azookey_atomicfile_zero_retry_" + std::to_string(GetCurrentProcessId()));
+  std::filesystem::create_directories(root);
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "old"));
+  ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
+  ASSERT_TRUE(reader.valid());
+  testing::internal::CaptureStderr();
+  const auto start = std::chrono::steady_clock::now();
+  const bool saved =
+      azookey::learning::WriteTextFileAtomically(target, "new", std::chrono::milliseconds::zero());
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(saved);
+  // The default budget keeps retrying for 500 ms.
+  EXPECT_LT(elapsed, std::chrono::milliseconds(400));
+  EXPECT_NE(log.find("stage=atomic-replace"), std::string::npos);
+  EXPECT_EQ(ReadAll(target), "old");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+  reader.Close();
+  std::filesystem::remove_all(root);
+}
+#endif
 
 TEST(AtomicFileTest, SuccessfulWritePersistsContentAndLeavesNoTempFiles) {
   const auto root = std::filesystem::temp_directory_path() / "azookey_atomicfile_success";
@@ -198,6 +311,31 @@ TEST(AtomicFileTest, FileLockExcludesSamePathAcrossThreadsOnWindows) {
 
   std::filesystem::remove_all(root);
 #endif
+}
+
+TEST(AtomicFileTest, BusyFileLockReportsFailureToCallerWithoutLogging) {
+  const auto target = std::filesystem::temp_directory_path() / "azookey_atomicfile_busy_lock.json";
+  auto first =
+      azookey::learning::AcquireExclusiveFileLockForPath(target, std::chrono::milliseconds(100));
+  ASSERT_TRUE(first.has_value());
+
+  // A zero timeout probe (duplicate Host detection, settings peek) expects a
+  // busy lock, so the lock helper itself must stay silent.
+  testing::internal::CaptureStderr();
+  auto blocked = std::async(std::launch::async, [&] {
+    azookey::learning::FileLockFailure failure;
+    const bool acquired = azookey::learning::AcquireExclusiveFileLockForPath(
+                              target, failure, std::chrono::milliseconds::zero())
+                              .has_value();
+    return std::make_pair(acquired, failure);
+  });
+  const auto [acquired, failure] = blocked.get();
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(acquired);
+  ASSERT_NE(failure.stage, nullptr);
+  EXPECT_STREQ(failure.stage, "lock-wait");
+  EXPECT_TRUE(failure.error);
+  EXPECT_EQ(log, "");
 }
 
 }  // namespace

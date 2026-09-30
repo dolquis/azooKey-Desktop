@@ -1,6 +1,7 @@
 #include "azookey/learning/DpapiCrypto.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -41,7 +42,8 @@ class UserDpapiCrypto final : public ByteCrypto {
     DATA_BLOB output{};
     if (!::CryptProtectData(&input, L"azooKey-learning", nullptr, nullptr, nullptr,
                             CRYPTPROTECT_UI_FORBIDDEN, &output))
-      return false;
+      return detail::ReportPersistenceFailure(
+          "dpapi-encrypt", {static_cast<int>(::GetLastError()), std::system_category()});
     cipher.assign(output.pbData, output.pbData + output.cbData);
     ::LocalFree(output.pbData);
     return true;
@@ -59,7 +61,8 @@ class UserDpapiCrypto final : public ByteCrypto {
     DATA_BLOB output{};
     if (!::CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
                               &output))
-      return false;
+      return detail::ReportPersistenceFailure(
+          "dpapi-decrypt", {static_cast<int>(::GetLastError()), std::system_category()});
     if (output.cbData)
       plain.assign(output.pbData, output.pbData + output.cbData);
     else
@@ -76,16 +79,19 @@ class UserDpapiCrypto final : public ByteCrypto {
 };
 
 bool ReadBytes(const std::filesystem::path& path, std::string& bytes) {
+  errno = 0;
   std::ifstream input(path, std::ios::binary);
-  if (!input) return false;
+  if (!input)
+    return detail::ReportPersistenceFailure("read-open", {errno, std::generic_category()});
+  errno = 0;
   bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-  return !input.bad();
+  return !input.bad() || detail::ReportPersistenceFailure("read", {errno, std::generic_category()});
 }
 
 bool Exists(const std::filesystem::path& path, bool& exists) {
   std::error_code ec;
   exists = std::filesystem::exists(path, ec);
-  return !ec;
+  return !ec || detail::ReportPersistenceFailure("stat", ec);
 }
 
 // Hold the source open against writers and renames through the final delete.
@@ -152,14 +158,24 @@ class MigrationSource {
 };
 
 bool EncryptAndWrite(const std::filesystem::path& encrypted_path, std::string_view text,
-                     const ByteCrypto& crypto) {
+                     const ByteCrypto& crypto,
+                     std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) {
   std::vector<uint8_t> plain(text.begin(), text.end());
   std::vector<uint8_t> cipher;
   const bool encrypted = crypto.Encrypt(plain, cipher);
   SecureErase(plain);
-  if (!encrypted || cipher.empty()) return false;
+  if (!encrypted || cipher.empty()) return detail::ReportPersistenceFailure("encrypt");
   return WriteTextFileAtomically(
-      encrypted_path, std::string(reinterpret_cast<const char*>(cipher.data()), cipher.size()));
+      encrypted_path, std::string(reinterpret_cast<const char*>(cipher.data()), cipher.size()),
+      retry_budget);
+}
+
+// Lock failures are persistence errors here, unlike callers that probe a lock.
+std::optional<ScopedFileLock> LockProtectedFile(const std::filesystem::path& encrypted_path) {
+  FileLockFailure failure;
+  auto lock = AcquireExclusiveFileLockForPath(encrypted_path, failure);
+  if (!lock) detail::ReportPersistenceFailure(failure.stage, failure.error);
+  return lock;
 }
 
 bool DecryptFile(const std::filesystem::path& encrypted_path, const ByteCrypto& crypto,
@@ -170,7 +186,7 @@ bool DecryptFile(const std::filesystem::path& encrypted_path, const ByteCrypto& 
   std::vector<uint8_t> plain;
   if (!crypto.Decrypt(cipher, plain)) {
     SecureErase(plain);
-    return false;
+    return detail::ReportPersistenceFailure("decrypt");
   }
   text.assign(plain.begin(), plain.end());
   SecureErase(plain);
@@ -277,7 +293,7 @@ ProtectedFileSource ReadProtectedText(const std::filesystem::path& plain_path,
 bool MigratePlaintextFile(const std::filesystem::path& plain_path, std::string_view text,
                           const ByteCrypto& crypto) {
   const auto encrypted_path = EncryptedPathFor(plain_path);
-  auto lock = AcquireExclusiveFileLockForPath(encrypted_path);
+  auto lock = LockProtectedFile(encrypted_path);
   if (!lock) return false;
   bool encrypted_exists = false;
   if (!Exists(encrypted_path, encrypted_exists) || encrypted_exists) return false;
@@ -307,9 +323,9 @@ bool MigratePlaintextFile(const std::filesystem::path& plain_path, std::string_v
 }
 
 bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_view text,
-                        const ByteCrypto& crypto) {
+                        const ByteCrypto& crypto, std::chrono::milliseconds retry_budget) {
   const auto encrypted_path = EncryptedPathFor(plain_path);
-  auto lock = AcquireExclusiveFileLockForPath(encrypted_path);
+  auto lock = LockProtectedFile(encrypted_path);
   if (!lock) return false;
   bool plain_exists = false;
   bool encrypted_exists = false;
@@ -317,8 +333,9 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
   backup += ".bak";
   bool backup_exists = false;
   if (!Exists(plain_path, plain_exists) || !Exists(encrypted_path, encrypted_exists) ||
-      !Exists(backup, backup_exists) || (backup_exists && !encrypted_exists))
+      !Exists(backup, backup_exists))
     return false;
+  if (backup_exists && !encrypted_exists) return detail::ReportPersistenceFailure("orphan-backup");
   if (encrypted_exists) {
     std::string previous;
     const bool can_decrypt = DecryptFile(encrypted_path, crypto, previous);
@@ -326,7 +343,8 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
     if (!can_decrypt) return false;
   }
   if (plain_exists) {
-    if (!encrypted_exists || !backup_exists) return false;
+    if (!encrypted_exists || !backup_exists)
+      return detail::ReportPersistenceFailure("unmigrated-plaintext");
     std::string backed_up;
     MigrationSource source(plain_path);
     std::string current;
@@ -334,9 +352,9 @@ bool WriteProtectedText(const std::filesystem::path& plain_path, std::string_vie
                                 current == backed_up && source.Remove();
     SecureErase(current);
     SecureErase(backed_up);
-    if (!matches_backup) return false;
+    if (!matches_backup) return detail::ReportPersistenceFailure("migration-source");
   }
-  return EncryptAndWrite(encrypted_path, text, crypto);
+  return EncryptAndWrite(encrypted_path, text, crypto, retry_budget);
 }
 
 SecretResult ProtectSecret(std::string_view plain, const ByteCrypto& crypto) {

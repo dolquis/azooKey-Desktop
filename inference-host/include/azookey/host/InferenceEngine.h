@@ -266,7 +266,9 @@ class InferenceEngine {
   void NoteModelLoadFailedLocked();
   void RestoreUserDictionaryLocked(const std::vector<learning::UserWord>& entries);
   bool ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) const;
-  bool FlushLearningStoreLocked();
+  // Flushes reached while queries wait on state_mutex_ pass zero: they try once
+  // and keep the store dirty. Shutdown and explicit flushes retry conflicts.
+  bool FlushLearningStoreLocked(std::chrono::milliseconds retry_budget);
   void RecordLearningSaveFailureLocked();
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();

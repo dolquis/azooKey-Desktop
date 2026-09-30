@@ -571,7 +571,7 @@ M61-A の5キーは TIP の `ParseBracketSettings` が解釈し、Host 設定の
 | `bracketWrapSelection` | boolean | `false` | M61-B | 範囲選択中の開きカッコで選択を囲む（§4.9） |
 | `bracketPairingAppPolicy` | enum `denylist`/`allowlist` | `denylist` | M61-B | per-app 有効範囲ポリシー（§4.5・§4.5.0。M48 統合） |
 | `bracketPairingApps` | array(string) | `[]` | M61-B | deny/allow 対象の前面プロセス実行ファイル名（例 `"Code.exe"`）。`bracketPairingAppPolicy` に従い解釈。大文字小文字を区別しない（§4.5.0）。M48 プロファイルがあればそちらが優先 |
-| `bracketPairsPath` | string | `%LOCALAPPDATA%\azooKey\bracket-pairs.tsv` | M61-B | カッコ対応表 TSV のパス（カッコ対専用・アプリ名は含まない。§4.5.1）。無ければ組み込み既定のみ。ホットリロード対応 |
+| `bracketPairsPath` | string | `""`（空なら `%LOCALAPPDATA%\azooKey\bracket-pairs.tsv`） | M61-B | カッコ対応表 TSV のパス（カッコ対専用・アプリ名は含まない。§4.5.1）。無ければ組み込み既定のみ。ホットリロード対応 |
 
 ### 6.1 設定の供給経路（TIP ローカル読み取り・Host 非依存）
 

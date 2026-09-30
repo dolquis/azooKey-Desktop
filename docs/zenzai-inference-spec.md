@@ -315,16 +315,14 @@ Windows 版 MVP（M8）の時点では**本格辞書ラティスが無い**（`S
 統合は **converter ではなく `QueryCandidates` 側**で行われる（現行コード）:
 
 ```
-1. user_dict_->Lookup(kana)   → score = value or user_word_default_score(1.5), debug="user-dict"〔source は §7.2 上 UserDictionary だが現状コード未設定。下記注〕
+1. user_dict_->Lookup(kana)   → score = value or user_word_default_score(1.5), debug="user-dict", source=UserDictionary
 2. active_converter_->Convert(kana, ctx)  → Zenzai or SimpleConverter の候補を末尾連結
 3. Reranker::Apply → 各候補 score += LearningStore::Score(reading, surface, now)  → score 降順 stable_sort
 ```
 
-> ⚠️ **現状コードの不整合（DEV-221 が修正）**: 手順 1 の user_dict 候補は現行
-> `QueryCandidates` で `c.surface`/`reading`/`score`/`debug_info` のみ設定し、**`c.source` を
-> 設定していない**ため既定 `CandidateSource::Heuristic` のまま（`core/Candidate.h`）。§7.2 の
-> source 帯・source 依存のマージ/dedup（§7.6）を正しく効かせるには、マージ経路で
-> **`c.source = core::CandidateSource::UserDictionary` を明示設定する**（1 行修正、本契約に含む）。
+手順 1 の user_dict 候補はマージ経路で `c.source = core::CandidateSource::UserDictionary`
+（`core/include/azookey/core/Candidate.h`）を明示設定する。§7.2 の source 帯と source 依存の
+マージ/dedup（§7.6）はこの設定を前提とする。
 
 `ZenzaiModelConverter::Convert` は **手順 2 の候補列を返すだけ**であり、user_dict や
 reranker を意識しない。本書の Zenzai 契約（§6.5 の score / source / debug_info）が
@@ -478,7 +476,7 @@ reranker でソートするのみで**クロスソース dedup をしない**た
   - **下限**: §8.1 の p95 目標 300ms を十分上回らなければならない。ハード予算が
     分位点目標に近いと打ち切りが常態化し、§8.1 の「打ち切り 0 件」条件を満たす計測
     が取れなくなる。
-- **経路**: 本予算は `ConversionContext.deadline`（`core/IConverter.h`）として
+- **経路**: 本予算は `ConversionContext.deadline`（`core/include/azookey/core/IConverter.h`）として
   `InferenceEngine` が 1 変換ごとに設定し、`ZenzaiModelConverter` の beam ループが
   検査して §6.4 の best-so-far 打ち切りを駆動する。予算超過時は最良ビームを返して
   IME を止めない。打ち切りは劣化ではなく正常出力である（§6.4 / §9.2.2）。

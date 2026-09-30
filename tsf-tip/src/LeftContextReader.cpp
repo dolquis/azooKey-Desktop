@@ -7,6 +7,8 @@
 #include <new>
 #include <string>
 
+#include "azookey/tsf/TipRuntimeLog.h"
+
 namespace azookey::tsf {
 namespace {
 
@@ -65,6 +67,7 @@ class ReadSession final : public ITfEditSession {
       if (FAILED(hr) || !range) return E_FAIL;
       return ReadRange(range.Get(), cookie);
     } catch (...) {
+      LogComBoundaryException("LeftContextReader::DoEditSession", E_FAIL);
       result_.clear();
       return E_FAIL;
     }

@@ -10,6 +10,7 @@
 
 #include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/TextServiceFactory.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 
 static HMODULE g_hmod = nullptr;
 
@@ -39,8 +40,10 @@ extern "C" STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv) {
     factory.attach(new azookey::tsf::TextServiceFactory());
     return factory->QueryInterface(riid, ppv);
   } catch (const std::bad_alloc&) {
+    azookey::tsf::LogComBoundaryException("DllGetClassObject", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    azookey::tsf::LogComBoundaryException("DllGetClassObject", E_UNEXPECTED);
     return E_UNEXPECTED;
   }
 }
@@ -211,8 +214,10 @@ extern "C" STDAPI DllRegisterServer() {
   try {
     return RegisterServerImpl();
   } catch (const std::bad_alloc&) {
+    azookey::tsf::LogComBoundaryException("DllRegisterServer", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    azookey::tsf::LogComBoundaryException("DllRegisterServer", E_UNEXPECTED);
     return E_UNEXPECTED;
   }
 }
@@ -273,8 +278,10 @@ extern "C" STDAPI DllUnregisterServer() {
   try {
     return UnregisterServerImpl();
   } catch (const std::bad_alloc&) {
+    azookey::tsf::LogComBoundaryException("DllUnregisterServer", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    azookey::tsf::LogComBoundaryException("DllUnregisterServer", E_UNEXPECTED);
     return E_UNEXPECTED;
   }
 }

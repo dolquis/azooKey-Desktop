@@ -179,6 +179,15 @@ Host の stderr も従来どおり残る。
 資格情報・パス・ウィンドウタイトルと診断 ZIP は、この opt-in でも redact する。
 正典は `dev-infrastructure-spec.md` §7.6。
 
+TIP の COM 境界（`DllGetClassObject`、`DllRegisterServer`、`DllUnregisterServer`、TSF から
+呼ばれる `TextService` などのメソッド）と、`HRESULT` を返す内部処理が例外を `HRESULT` に
+変換した場合は、
+`tip-YYYYMMDD.jsonl` に `event=com_boundary_exception` のレコードが error レベルで 1 行出力される。
+`operation` は例外を捕捉した処理名、`exception_kind` は `bad_alloc` / `std_exception` /
+`unknown`、`hresult` は呼び出し元へ返した値である。例外メッセージは入力本文やパスを
+含みうるため記録しない。TIP 登録の失敗を調べる場合は、`regsvr32` を実行する管理者
+プロセスにも `AZOOKEY_LOG=1` を設定する。
+
 ### 候補 UI の `pbShow` を収集する
 
 アプリ互換確認では、前述のユーザー環境変数を設定してから検証対象アプリを新しく起動し、

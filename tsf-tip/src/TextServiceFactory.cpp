@@ -1,6 +1,9 @@
 #include "azookey/tsf/TextServiceFactory.h"
 
+#include <new>
+
 #include "azookey/tsf/TextService.h"
+#include "azookey/tsf/TipRuntimeLog.h"
 
 namespace azookey::tsf {
 
@@ -24,10 +27,18 @@ STDMETHODIMP TextServiceFactory::CreateInstance(IUnknown* outer, REFIID riid, vo
   if (!ppvObject) return E_INVALIDARG;
   *ppvObject = nullptr;
   if (outer) return CLASS_E_NOAGGREGATION;
-  auto* service = new TextService();
-  const auto hr = service->QueryInterface(riid, ppvObject);
-  service->Release();
-  return hr;
+  try {
+    auto* service = new TextService();
+    const auto hr = service->QueryInterface(riid, ppvObject);
+    service->Release();
+    return hr;
+  } catch (const std::bad_alloc&) {
+    LogComBoundaryException("TextServiceFactory::CreateInstance", E_OUTOFMEMORY);
+    return E_OUTOFMEMORY;
+  } catch (...) {
+    LogComBoundaryException("TextServiceFactory::CreateInstance", E_FAIL);
+    return E_FAIL;
+  }
 }
 STDMETHODIMP TextServiceFactory::LockServer(BOOL lock) {
   UNREFERENCED_PARAMETER(lock);

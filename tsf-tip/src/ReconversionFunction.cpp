@@ -9,6 +9,8 @@
 #include <new>
 #include <utility>
 
+#include "azookey/tsf/TipRuntimeLog.h"
+
 namespace azookey::tsf {
 namespace {
 
@@ -103,8 +105,10 @@ class CandidateEnum final : public RefCounted<IEnumTfCandidates> {
       }
       return *fetched == count ? S_OK : S_FALSE;
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("CandidateEnum::Next", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("CandidateEnum::Next", E_FAIL);
       return E_FAIL;
     }
   }
@@ -152,8 +156,10 @@ class CandidateList final : public RefCounted<ITfCandidateList> {
     try {
       return MakeCandidate(values_, index, out);
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("CandidateList::GetCandidate", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("CandidateList::GetCandidate", E_FAIL);
       return E_FAIL;
     }
   }
@@ -170,8 +176,10 @@ class CandidateList final : public RefCounted<ITfCandidateList> {
     try {
       return ReplaceCandidate(range_, client_id_, original_, (*values_)[index]);
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("CandidateList::SetResult", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("CandidateList::SetResult", E_FAIL);
       return E_FAIL;
     }
   }
@@ -199,8 +207,10 @@ class FunctionEditSession final : public RefCounted<ITfEditSession> {
     try {
       return action_(cookie);
     } catch (const std::bad_alloc&) {
+      LogComBoundaryException("FunctionEditSession::DoEditSession", E_OUTOFMEMORY);
       return E_OUTOFMEMORY;
     } catch (...) {
+      LogComBoundaryException("FunctionEditSession::DoEditSession", E_FAIL);
       return E_FAIL;
     }
   }
@@ -386,9 +396,11 @@ STDMETHODIMP ReconversionFunction::QueryRange(ITfRange* range, ITfRange** new_ra
       result->Release();
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("ReconversionFunction::QueryRange", E_OUTOFMEMORY);
     if (result) result->Release();
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("ReconversionFunction::QueryRange", E_FAIL);
     if (result) result->Release();
     return E_FAIL;
   }
@@ -411,8 +423,10 @@ STDMETHODIMP ReconversionFunction::GetReconversion(ITfRange* range, ITfCandidate
         CandidateList(std::move(snapshot), range, client_id_, std::move(surface));
     return *candidates ? S_OK : E_OUTOFMEMORY;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("ReconversionFunction::GetReconversion", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("ReconversionFunction::GetReconversion", E_FAIL);
     return E_FAIL;
   }
 }
@@ -430,8 +444,10 @@ STDMETHODIMP ReconversionFunction::Reconvert(ITfRange* range) {
     if (candidates.empty()) return TF_E_NOCONVERSION;
     return ReplaceCandidate(range, client_id_, surface, candidates[0]);
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("ReconversionFunction::Reconvert", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("ReconversionFunction::Reconvert", E_FAIL);
     return E_FAIL;
   }
 }
@@ -489,6 +505,7 @@ HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** r
     }
     return S_OK;
   } catch (const std::bad_alloc&) {
+    LogComBoundaryException("ReconversionFunction::CaptureSelection", E_OUTOFMEMORY);
     if (selection) selection->Release();
     if (*range) {
       (*range)->Release();
@@ -496,6 +513,7 @@ HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** r
     }
     return E_OUTOFMEMORY;
   } catch (...) {
+    LogComBoundaryException("ReconversionFunction::CaptureSelection", E_FAIL);
     if (selection) selection->Release();
     if (*range) {
       (*range)->Release();

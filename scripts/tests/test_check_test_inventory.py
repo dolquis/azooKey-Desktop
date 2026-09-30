@@ -8,6 +8,7 @@ import io
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 import tempfile
+from typing import Callable
 import unittest
 
 
@@ -58,7 +59,40 @@ INVENTORY_ROWS = [
 ]
 
 
-def build_document(rows: list[str]) -> str:
+WORKFLOW_YML = """\
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+  lint: # checks the tool
+    needs: changes
+    steps:
+      - run: python scripts/tests/test_tool.py
+  ci-gate:
+    needs: [changes, lint]
+  advisory-summary:
+    runs-on: ubuntu-latest
+"""
+
+PESTER_RUNNER = """\
+$testFiles = Get-ChildItem -Path $pesterTests -Filter "*.Tests.ps1" -File
+"""
+
+CHECK_ROWS = [
+    "| `.github/workflows/windows.yml` の `lint` | GitHub Actions | lint |",
+    "| `scripts/tests/test_tool.py` | Python unittest | tool |",
+    "| `scripts/test-powershell-quality.ps1` | Pester | 全 Pester テスト |",
+    "| `core_tests` | `core/tests/never_parsed_test.cpp` | 別表なので無視される |",
+]
+
+
+def build_document(rows: list[str], check_rows: list[str] | None = None) -> str:
     return "\n".join(
         [
             "# テスト一覧",
@@ -71,14 +105,18 @@ def build_document(rows: list[str]) -> str:
             "",
             "## CTest 以外の自動検査",
             "",
-            "| `core_tests` | `core/tests/never_parsed_test.cpp` | 別表なので無視される |",
+            "| 検査 | 実行系統 | 内容 |",
+            "|---|---|---|",
+            *(CHECK_ROWS if check_rows is None else check_rows),
             "",
         ]
     )
 
 
 class FixtureRepository:
-    def __init__(self, directory: Path, rows: list[str]) -> None:
+    def __init__(
+        self, directory: Path, rows: list[str], check_rows: list[str] | None = None
+    ) -> None:
         self.root = directory
         (directory / "core" / "tests").mkdir(parents=True)
         (directory / "tsf-tip").mkdir(parents=True)
@@ -115,14 +153,32 @@ class FixtureRepository:
         (nested / "CMakeLists.txt").write_text(
             "add_test(NAME nested_checkout_leak COMMAND true)\n", encoding="utf-8"
         )
+        workflows = directory / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "windows.yml").write_text(WORKFLOW_YML, encoding="utf-8")
+        script_tests = directory / "scripts" / "tests"
+        (script_tests / "fixtures").mkdir(parents=True)
+        (script_tests / "test_tool.py").write_text("", encoding="utf-8")
+        (script_tests / "sample.Tests.ps1").write_text("", encoding="utf-8")
+        # Fixture data below scripts/tests is not a test of its own.
+        (script_tests / "fixtures" / "test_data.py").write_text("", encoding="utf-8")
+        (directory / "scripts" / "test-powershell-quality.ps1").write_text(
+            PESTER_RUNNER, encoding="utf-8"
+        )
         (directory / "docs" / "test-inventory.md").write_text(
-            build_document(rows), encoding="utf-8"
+            build_document(rows, check_rows), encoding="utf-8"
         )
 
 
-def run_main(rows: list[str]) -> tuple[int, str]:
+def run_main(
+    rows: list[str],
+    check_rows: list[str] | None = None,
+    mutate: Callable[[Path], None] | None = None,
+) -> tuple[int, str]:
     with tempfile.TemporaryDirectory() as temporary_directory:
-        FixtureRepository(Path(temporary_directory), rows)
+        FixtureRepository(Path(temporary_directory), rows, check_rows)
+        if mutate is not None:
+            mutate(Path(temporary_directory))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             status = MODULE.main(["--repo-root", temporary_directory])
@@ -243,6 +299,117 @@ class ComparisonTests(unittest.TestCase):
         status, output = run_main(rows)
         self.assertEqual(status, 1)
         self.assertIn("utf16_test.cpp", output)
+
+
+def without(fragment: str) -> list[str]:
+    return [row for row in CHECK_ROWS if fragment not in row]
+
+
+class AutomatedCheckTests(unittest.TestCase):
+    def test_jobs_come_from_the_jobs_block_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            FixtureRepository(Path(temporary_directory), INVENTORY_ROWS)
+            jobs = MODULE.collect_workflow_jobs(Path(temporary_directory))
+        # `push:` / `pull_request:` under `on:` share the indentation of jobs.
+        self.assertEqual(
+            jobs, {"windows.yml": ["changes", "lint", "ci-gate", "advisory-summary"]}
+        )
+
+    def test_script_tests_skip_fixture_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            FixtureRepository(Path(temporary_directory), INVENTORY_ROWS)
+            tests = MODULE.collect_script_tests(Path(temporary_directory))
+        self.assertEqual(
+            tests, ["scripts/tests/sample.Tests.ps1", "scripts/tests/test_tool.py"]
+        )
+
+    def test_undocumented_job_fails(self) -> None:
+        status, output = run_main(INVENTORY_ROWS, without("`lint`"))
+        self.assertEqual(status, 1)
+        self.assertIn("job `lint` が表にありません", output)
+
+    def test_other_yaml_layouts_are_read(self) -> None:
+        # A comment after `jobs:`, four-space indentation, a quoted id and the
+        # `.yaml` extension are all valid workflows that must not be skipped.
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workflows = root / ".github" / "workflows"
+            workflows.mkdir(parents=True)
+            (workflows / "extra.yaml").write_text(
+                "on: push\n"
+                "jobs: # all jobs\n"
+                "    \"quoted-job\":\n"
+                "        runs-on: ubuntu-latest\n"
+                "        steps:\n"
+                "            - run: true\n"
+                "    plain:\n"
+                "        runs-on: ubuntu-latest\n",
+                encoding="utf-8",
+            )
+            jobs = MODULE.collect_workflow_jobs(root)
+        self.assertEqual(jobs, {"extra.yaml": ["quoted-job", "plain"]})
+
+    def test_workflow_without_readable_jobs_fails(self) -> None:
+        def add_unreadable(root: Path) -> None:
+            (root / ".github" / "workflows" / "odd.yml").write_text(
+                "on: push\njobs: {build: {runs-on: ubuntu-latest}}\n",
+                encoding="utf-8",
+            )
+
+        status, output = run_main(INVENTORY_ROWS, mutate=add_unreadable)
+        self.assertEqual(status, 1)
+        self.assertIn("odd.yml から job を読み取れません", output)
+
+    def test_misspelled_job_fails(self) -> None:
+        rows = [row.replace("`lint`", "`lnt`") for row in CHECK_ROWS]
+        status, output = run_main(INVENTORY_ROWS, rows)
+        self.assertEqual(status, 1)
+        self.assertIn("`lnt`", output)
+        self.assertIn("job `lint` が表にありません", output)
+
+    def test_missing_workflow_path_fails(self) -> None:
+        rows = CHECK_ROWS + ["| `.github/workflows/gone.yml` の `job` | CI | 削除済み |"]
+        status, output = run_main(INVENTORY_ROWS, rows)
+        self.assertEqual(status, 1)
+        self.assertIn("`.github/workflows/gone.yml` は存在しません", output)
+
+    def test_missing_script_path_fails(self) -> None:
+        rows = [
+            row.replace("test_tool.py", "test_renamed.py") for row in CHECK_ROWS
+        ]
+        status, output = run_main(INVENTORY_ROWS, rows)
+        self.assertEqual(status, 1)
+        self.assertIn("`scripts/tests/test_renamed.py` は存在しません", output)
+        self.assertIn("`scripts/tests/test_tool.py` が表にありません", output)
+
+    def test_runner_row_covers_pester_tests(self) -> None:
+        status, output = run_main(INVENTORY_ROWS, without("test-powershell-quality"))
+        self.assertEqual(status, 1)
+        self.assertIn("`scripts/tests/sample.Tests.ps1` が表にありません", output)
+
+    def test_runner_that_stops_discovering_fails(self) -> None:
+        def drop_pattern(root: Path) -> None:
+            (root / "scripts" / "test-powershell-quality.ps1").write_text(
+                'Invoke-Pester -Path "one.Tests.ps1"\n', encoding="utf-8"
+            )
+
+        status, output = run_main(INVENTORY_ROWS, mutate=drop_pattern)
+        self.assertEqual(status, 1)
+        self.assertIn("まとめて実行していません", output)
+        self.assertIn("`scripts/tests/sample.Tests.ps1` が表にありません", output)
+
+    def test_stale_exemption_fails(self) -> None:
+        def drop_gate(root: Path) -> None:
+            path = root / ".github" / "workflows" / "windows.yml"
+            text = path.read_text(encoding="utf-8")
+            path.write_text(
+                text.replace("  ci-gate:\n    needs: [changes, lint]\n", ""),
+                encoding="utf-8",
+            )
+
+        status, output = run_main(INVENTORY_ROWS, mutate=drop_gate)
+        self.assertEqual(status, 1)
+        self.assertIn("除外リストの .github/workflows/windows.yml の job `ci-gate`", output)
 
 
 class RepositoryTests(unittest.TestCase):

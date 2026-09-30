@@ -22,7 +22,7 @@ struct UserDataPaths {
   std::filesystem::path learning_path;
   std::filesystem::path user_dict_path;
   // M35 / M36-A stores. Placed beside learning.tsv rather than under data_dir
-  // directly, so an explicit --learning-path with no LOCALAPPDATA still puts
+  // directly, so an explicit --learning with no LOCALAPPDATA still puts
   // them somewhere real.
   std::filesystem::path typo_store_path;
   std::filesystem::path auto_word_store_path;

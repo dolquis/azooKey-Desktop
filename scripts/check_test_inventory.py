@@ -26,12 +26,28 @@ Two kinds of registration are collected:
 Registrations guarded by `if(WIN32)` or by a build option are collected too:
 the table documents the whole suite, not one platform's slice of it.
 
-Exit status is 0 when the table and CMake agree, 1 otherwise.
+The second table, "CTest 以外の自動検査", lists the checks that CTest does not
+run. It is checked against the repository as well:
+
+  workflow job   every job of `.github/workflows/*.yml` / `*.yaml` needs a row whose
+                 first cell names both the workflow path and the job id.
+                 Jobs that only route or aggregate other jobs are exempted in
+                 `EXEMPT_WORKFLOW_JOBS` with a reason; an exemption whose job
+                 no longer exists is drift too.
+  script test    every `scripts/tests/test_*.py` and `scripts/tests/*.Tests.ps1`
+                 must appear in some row, either by its own path or through a
+                 runner in `TEST_RUNNERS` that discovers it by pattern.
+  stale token    a `scripts/...` or `.github/workflows/...` path in a row must
+                 exist, and a job id in a first cell must belong to one of the
+                 workflows named in that cell.
+
+Exit status is 0 when both tables agree with the repository, 1 otherwise.
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 from pathlib import Path, PurePath
 import re
@@ -41,6 +57,33 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_RELATIVE_PATH = "docs/test-inventory.md"
 INVENTORY_HEADING = "現存テスト一覧"
+AUTOMATED_CHECKS_HEADING = "CTest 以外の自動検査"
+
+WORKFLOW_DIRECTORY = ".github/workflows"
+SCRIPT_TESTS_DIRECTORY = "scripts/tests"
+SCRIPT_TEST_PATTERNS = ("test_*.py", "*.Tests.ps1")
+
+# (workflow file, job id) -> why the job needs no row. Only jobs that run no
+# check of their own belong here; a job that runs one is documented instead.
+EXEMPT_WORKFLOW_JOBS = {
+    ("windows.yml", "changes"): "後続ジョブの起動条件を決める path 判定だけで、検査を持たない",
+    ("windows.yml", "ci-gate"): "needs に列挙したジョブの結果を必須チェックへ集約するだけ",
+    ("windows.yml", "advisory-summary"): "advisory ジョブの結果を表示するだけ",
+}
+
+# Runner script -> (pattern it covers under SCRIPT_TESTS_DIRECTORY, text the
+# runner must contain). The marker keeps the claim honest: if the runner stops
+# discovering by that pattern, the covered tests fall back to needing rows.
+TEST_RUNNERS = {
+    "scripts/test-powershell-quality.ps1": ("*.Tests.ps1", '"*.Tests.ps1"'),
+}
+
+WORKFLOW_GLOBS = ("*.yml", "*.yaml")
+TOP_LEVEL_KEY_PATTERN = re.compile(r"^([A-Za-z0-9_-]+):\s*(?:#.*)?$")
+MAPPING_KEY_PATTERN = re.compile(
+    r"""^(\s+)(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+)):\s*(?:#.*)?$"""
+)
+CHECKED_PATH_PREFIXES = ("scripts/", f"{WORKFLOW_DIRECTORY}/")
 
 # Directories whose CMake files describe vendored or unmaintained trees.
 EXCLUDED_TOP_LEVEL_DIRECTORIES = ("build", "legacy", "third_party")
@@ -187,17 +230,19 @@ def collect_registrations(repo_root: Path) -> Registrations:
     return registrations
 
 
-def extract_inventory_section(document_text: str) -> list[str]:
+def extract_inventory_section(
+    document_text: str, heading: str = INVENTORY_HEADING
+) -> list[str]:
     lines = document_text.splitlines()
     try:
         start = next(
             index
             for index, line in enumerate(lines)
-            if line.startswith("#") and line.lstrip("#").strip() == INVENTORY_HEADING
+            if line.startswith("#") and line.lstrip("#").strip() == heading
         )
     except StopIteration:
         raise SystemExit(
-            f"{INVENTORY_RELATIVE_PATH} に見出し「{INVENTORY_HEADING}」がありません。"
+            f"{INVENTORY_RELATIVE_PATH} に見出し「{heading}」がありません。"
         )
     section = []
     for line in lines[start + 1 :]:
@@ -263,6 +308,152 @@ def compare(
     return problems
 
 
+def collect_workflow_jobs(repo_root: Path) -> dict[str, list[str]]:
+    """Return workflow file name -> job ids, read without a YAML parser.
+
+    Job ids are the keys of the top-level `jobs:` block at the indentation of
+    its first key. Scanning stops at the next top-level key, so `on:` triggers
+    such as `push:` are never mistaken for jobs. A workflow that yields no job
+    comes back with an empty list, which the comparison reports instead of
+    passing it silently.
+    """
+    workflows: dict[str, list[str]] = {}
+    directory = repo_root / WORKFLOW_DIRECTORY
+    if not directory.is_dir():
+        return workflows
+    paths = sorted({path for pattern in WORKFLOW_GLOBS for path in directory.glob(pattern)})
+    for path in paths:
+        jobs = []
+        in_jobs = False
+        job_indent: str | None = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if not line[0].isspace():
+                top_level = TOP_LEVEL_KEY_PATTERN.match(line)
+                in_jobs = top_level is not None and top_level.group(1) == "jobs"
+                continue
+            if not in_jobs:
+                continue
+            match = MAPPING_KEY_PATTERN.match(line)
+            if match is None:
+                continue
+            if job_indent is None:
+                job_indent = match.group(1)
+            if match.group(1) == job_indent:
+                jobs.append(match.group(2) or match.group(3) or match.group(4))
+        workflows[path.name] = jobs
+    return workflows
+
+
+def collect_script_tests(repo_root: Path) -> list[str]:
+    directory = repo_root / SCRIPT_TESTS_DIRECTORY
+    if not directory.is_dir():
+        return []
+    return sorted(
+        f"{SCRIPT_TESTS_DIRECTORY}/{path.name}"
+        for path in directory.iterdir()
+        if path.is_file()
+        and any(fnmatch.fnmatchcase(path.name, pattern) for pattern in SCRIPT_TEST_PATTERNS)
+    )
+
+
+def parse_check_rows(section_lines: list[str]) -> list[tuple[list[str], list[str]]]:
+    """Return (first cell tokens, whole row tokens) for each table row."""
+    rows = []
+    for line in section_lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if set(cells[0]) <= set("-: "):
+            continue
+        first = BACKTICKED_PATTERN.findall(cells[0])
+        if not first:
+            continue
+        rows.append((first, BACKTICKED_PATTERN.findall(stripped)))
+    return rows
+
+
+def is_checked_path(token: str) -> bool:
+    return token.startswith(CHECKED_PATH_PREFIXES)
+
+
+def compare_automated_checks(
+    repo_root: Path, rows: list[tuple[list[str], list[str]]]
+) -> list[str]:
+    problems = []
+    workflows = collect_workflow_jobs(repo_root)
+    workflow_prefix = f"{WORKFLOW_DIRECTORY}/"
+
+    documented_jobs: set[tuple[str, str]] = set()
+    documented_tokens: set[str] = set()
+
+    for first, tokens in rows:
+        documented_tokens.update(tokens)
+        for token in tokens:
+            if is_checked_path(token) and "*" not in token:
+                if not (repo_root / token).exists():
+                    problems.append(f"表の `{token}` は存在しません")
+        named_workflows = [
+            token[len(workflow_prefix) :]
+            for token in first
+            if token.startswith(workflow_prefix)
+        ]
+        if not named_workflows:
+            continue
+        for token in first:
+            if is_checked_path(token):
+                continue
+            owners = [name for name in named_workflows if token in workflows.get(name, [])]
+            if not owners:
+                problems.append(
+                    f"表の行の job `{token}` は"
+                    f" {' / '.join(named_workflows)} にありません"
+                )
+            for name in owners:
+                documented_jobs.add((name, token))
+
+    for name, jobs in workflows.items():
+        if not jobs:
+            problems.append(
+                f"{WORKFLOW_DIRECTORY}/{name} から job を読み取れません"
+                "（`jobs:` ブロックの書式を確認してください）"
+            )
+        for job in jobs:
+            if (name, job) in documented_jobs or (name, job) in EXEMPT_WORKFLOW_JOBS:
+                continue
+            problems.append(
+                f"{WORKFLOW_DIRECTORY}/{name} の job `{job}` が表にありません"
+            )
+
+    for (name, job), _reason in sorted(EXEMPT_WORKFLOW_JOBS.items()):
+        if job not in workflows.get(name, []):
+            problems.append(
+                f"除外リストの {WORKFLOW_DIRECTORY}/{name} の job `{job}` は存在しません"
+            )
+
+    covered_patterns = []
+    for runner, (pattern, marker) in sorted(TEST_RUNNERS.items()):
+        if runner not in documented_tokens:
+            continue
+        runner_path = repo_root / runner
+        if runner_path.is_file() and marker in runner_path.read_text(encoding="utf-8"):
+            covered_patterns.append(pattern)
+        else:
+            problems.append(f"`{runner}` は `{pattern}` をまとめて実行していません")
+
+    for test in collect_script_tests(repo_root):
+        if test in documented_tokens:
+            continue
+        name = test.rsplit("/", 1)[-1]
+        if any(fnmatch.fnmatchcase(name, pattern) for pattern in covered_patterns):
+            continue
+        problems.append(f"`{test}` が表にありません")
+
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -276,10 +467,14 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = arguments.repo_root.resolve()
     document_path = repo_root / INVENTORY_RELATIVE_PATH
 
+    document_text = document_path.read_text(encoding="utf-8")
     registrations = collect_registrations(repo_root)
-    section = extract_inventory_section(document_path.read_text(encoding="utf-8"))
-    rows = parse_inventory_rows(section)
+    rows = parse_inventory_rows(extract_inventory_section(document_text))
     problems = compare(registrations, rows)
+    check_rows = parse_check_rows(
+        extract_inventory_section(document_text, AUTOMATED_CHECKS_HEADING)
+    )
+    check_problems = compare_automated_checks(repo_root, check_rows)
 
     if problems:
         print(
@@ -294,9 +489,23 @@ def main(argv: list[str] | None = None) -> int:
             "（テストを追加・削除した PR は同じ PR で表を更新します）。",
             file=sys.stderr,
         )
+    if check_problems:
+        print(
+            f"{INVENTORY_RELATIVE_PATH} の「{AUTOMATED_CHECKS_HEADING}」と"
+            f" {WORKFLOW_DIRECTORY} / {SCRIPT_TESTS_DIRECTORY} が一致しません:",
+            file=sys.stderr,
+        )
+        for problem in check_problems:
+            print(f"  - {problem}", file=sys.stderr)
+        print(
+            "\n表をワークフローのジョブとスクリプトテストへ合わせてください"
+            "（ジョブやテストを追加・改名・削除した PR は同じ PR で表を更新します）。",
+            file=sys.stderr,
+        )
+    if problems or check_problems:
         return 1
 
-    print("現存テスト一覧と CMake の登録は一致しています。")
+    print("現存テスト一覧と CMake の登録、CTest 以外の自動検査と CI 実体は一致しています。")
     return 0
 
 

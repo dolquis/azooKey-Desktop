@@ -28,7 +28,7 @@ v1.0 までの実行計画（Phase 1〜4）と、v1.0 以降のマイルスト�
 | ディレクトリ        | 役割                                                     | 概要（構成・主な実装単位）                   |
 |---------------------|----------------------------------------------------------|---------------------------------------------|
 | `core/`             | OS 非依存の変換コア（C++）                               | `RomajiKanaConverter` / `SimpleConverter` / `IConverter`（tests あり） |
-| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | 全 15 `MessageType` 定義・主要 Payload・Named Pipe（tests あり） |
+| `ipc/`              | Named Pipe 上の JSON + length-prefix プロトコル          | `MessageType` 定義・主要 Payload・Named Pipe（tests あり） |
 | `learning/`         | 頻度 + 時間減衰の再ランキング永続化                      | `LearningStore` / `Reranker` / `UserDictionary`（tests あり） |
 | `inference-host/`   | 常駐 EXE。モデル推論・候補生成・学習集約                 | `InferenceEngine` / `Dispatcher` / `RequestScheduler` / `main.cpp`。モデルロード境界は M8 で扱う |
 | `tsf-tip/`          | TIP 本体 (COM DLL)                                       | COM 登録・Composition・候補 UI・確定・Cancel（M1〜M10 の範囲） |

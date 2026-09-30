@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "../../core/tests/EtwCapture.h"
+#include "KeyboardStateGuard.h"
 #include "azookey/core/CustomRomajiLoader.h"
 #include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Limits.h"
@@ -32,38 +33,7 @@
 
 namespace {
 
-class KeyboardStateGuard {
- public:
-  KeyboardStateGuard() {
-    GetKeyboardState(original_.data());
-    ClearSystemModifiers();
-  }
-
-  ~KeyboardStateGuard() { SetKeyboardState(original_.data()); }
-
-  void SetDown(int vk, bool down) {
-    std::array<BYTE, 256> state{};
-    GetKeyboardState(state.data());
-    const auto index = static_cast<size_t>(vk);
-    state[index] =
-        down ? static_cast<BYTE>(state[index] | 0x80) : static_cast<BYTE>(state[index] & 0x7f);
-    SetKeyboardState(state.data());
-  }
-
-  void ClearSystemModifiers() {
-    SetDown(VK_CONTROL, false);
-    SetDown(VK_LCONTROL, false);
-    SetDown(VK_RCONTROL, false);
-    SetDown(VK_MENU, false);
-    SetDown(VK_LMENU, false);
-    SetDown(VK_RMENU, false);
-    SetDown(VK_LWIN, false);
-    SetDown(VK_RWIN, false);
-  }
-
- private:
-  std::array<BYTE, 256> original_{};
-};
+using azookey::tsf::test::KeyboardStateGuard;
 
 bool CurrentKeyboardLayoutProduces(WPARAM virtual_key, bool shift, WCHAR expected) {
   std::array<BYTE, 256> keyboard_state{};
@@ -709,6 +679,7 @@ class TextServiceHarness {
   }
 
   BOOL Press(WPARAM key) {
+    keyboard_state.Reapply();
     BOOL eaten = FALSE;
     const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
@@ -716,6 +687,7 @@ class TextServiceHarness {
   }
 
   BOOL TestPress(WPARAM key) {
+    keyboard_state.Reapply();
     BOOL eaten = FALSE;
     const HRESULT hr = service.OnTestKeyDown(&context, key, 0, &eaten);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnTestKeyDown failed for key " << key;
@@ -963,6 +935,7 @@ class DocumentPreeditHarness {
   ~DocumentPreeditHarness() { service.Deactivate(); }
 
   BOOL Press(WPARAM key) {
+    keyboard_state.Reapply();
     BOOL eaten = FALSE;
     const HRESULT hr = service.OnKeyDown(&context, key, 0, &eaten);
     EXPECT_TRUE(SUCCEEDED(hr)) << "OnKeyDown failed for key " << key;
@@ -1298,6 +1271,7 @@ class BracketHarness {
     context.document->end = end < 0 ? caret : end;
   }
   BOOL Press(WPARAM key, bool test = false, bool expect_success = true) {
+    keyboard.Reapply();
     BOOL eaten = FALSE;
     const HRESULT hr = test ? service.OnTestKeyDown(&context, key, 0, &eaten)
                             : service.OnKeyDown(&context, key, 0, &eaten);
@@ -2944,6 +2918,29 @@ TEST(TsfTipOnKeyDownPreeditTest, HostGenerationChangeReissuesQueryRearmedAfterDi
 
   h.service.stop_ipc_worker_for_test();
   replacement_server.Stop();
+}
+
+// DEV-1393: a modifier that reaches the thread's key state after the harness
+// pinned it (the test waits on IPC in between) must not turn the next letter
+// into an unhandled chord. The harness writes its pinned state back per press.
+TEST(TsfTipOnKeyDownPreeditTest, HarnessRepinsModifiersBeforeEachPress) {
+  TextServiceHarness h;
+  std::array<BYTE, 256> state{};
+  ASSERT_TRUE(GetKeyboardState(state.data()));
+  for (const int vk : {VK_CONTROL, VK_LCONTROL, VK_MENU, VK_LWIN}) {
+    state[static_cast<size_t>(vk)] = 0x80;
+  }
+  ASSERT_TRUE(SetKeyboardState(state.data()));
+
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_EQ(GetKeyState(VK_CONTROL) & 0x8000, 0);
+  EXPECT_EQ(GetKeyState(VK_MENU) & 0x8000, 0);
+  EXPECT_EQ(GetKeyState(VK_LWIN) & 0x8000, 0);
+
+  // A modifier the test asked for stays down across the re-pin.
+  h.keyboard_state.SetDown(VK_CONTROL, true);
+  EXPECT_FALSE(h.Press('K'));
+  EXPECT_NE(GetKeyState(VK_CONTROL) & 0x8000, 0);
 }
 
 // DEV-1173: the worker walks the spec §8.2 state machine on real pipe events:

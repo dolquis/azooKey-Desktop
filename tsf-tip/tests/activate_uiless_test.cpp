@@ -2,10 +2,10 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
-
 #include <gtest/gtest.h>
 #include <msctf.h>
 
+#include "KeyboardStateGuard.h"
 #include "azookey/tsf/TextService.h"
 
 // Verifies that TextService::ActivateEx derives its UI-less state from
@@ -290,6 +290,7 @@ TEST(TsfTipActivateUiLessTest, OemEnlwCanReopenClosedKeyboard) {
   azookey::tsf::TextService service;
   MockThreadMgrEx mock(0, /*keyboard_open=*/false);
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  azookey::tsf::test::KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
   ASSERT_EQ(service.OnTestKeyDown(nullptr, VK_OEM_ENLW, 0, &eaten), S_OK);
   EXPECT_TRUE(eaten);

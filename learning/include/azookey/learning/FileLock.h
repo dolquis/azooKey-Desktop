@@ -10,8 +10,6 @@
 #include <system_error>
 #include <thread>
 
-#include "azookey/learning/PersistenceDiagnostics.h"
-
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -30,6 +28,22 @@
 #endif
 
 namespace azookey::learning {
+
+inline constexpr std::chrono::milliseconds kDefaultFileLockTimeout{5000};
+
+// Why a lock was not acquired. stage is "lock-create" or "lock-wait"; a wait
+// that runs out reports ERROR_TIMEOUT on Windows and ETIMEDOUT elsewhere.
+struct FileLockFailure {
+  const char* stage = nullptr;
+  std::error_code error;
+};
+
+class ScopedFileLock;
+
+// Does not log: some callers treat a busy lock as an expected outcome.
+inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
+    const std::filesystem::path& path, FileLockFailure& failure,
+    std::chrono::milliseconds timeout = kDefaultFileLockTimeout);
 
 class ScopedFileLock {
  public:
@@ -100,7 +114,8 @@ class ScopedFileLock {
   bool owns_{false};
 
   friend std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
-      const std::filesystem::path& path, std::chrono::milliseconds timeout);
+      const std::filesystem::path& path, FileLockFailure& failure,
+      std::chrono::milliseconds timeout);
 };
 
 namespace detail {
@@ -167,14 +182,14 @@ inline std::filesystem::path LockFilePathFor(const std::filesystem::path& path) 
 }  // namespace detail
 
 inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
-    const std::filesystem::path& path,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+    const std::filesystem::path& path, FileLockFailure& failure,
+    std::chrono::milliseconds timeout) {
+  failure = {};
 #ifdef _WIN32
   const auto name = detail::MutexNameForPath(path);
   HANDLE mutex = ::CreateMutexW(nullptr, FALSE, name.c_str());
   if (!mutex) {
-    detail::ReportPersistenceFailure("lock-create",
-                                     {static_cast<int>(::GetLastError()), std::system_category()});
+    failure = {"lock-create", {static_cast<int>(::GetLastError()), std::system_category()}};
     return std::nullopt;
   }
   const auto timeout_count = timeout.count();
@@ -189,17 +204,21 @@ inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
   }
   const DWORD error = wait_result == WAIT_TIMEOUT ? ERROR_TIMEOUT : ::GetLastError();
   ::CloseHandle(mutex);
-  detail::ReportPersistenceFailure("lock-wait", {static_cast<int>(error), std::system_category()});
+  failure = {"lock-wait", {static_cast<int>(error), std::system_category()}};
   return std::nullopt;
 #else
   const auto lock_path = detail::LockFilePathFor(path);
   std::error_code ec;
   if (!lock_path.parent_path().empty()) {
     std::filesystem::create_directories(lock_path.parent_path(), ec);
-    if (ec) return std::nullopt;
+    if (ec) {
+      failure = {"lock-create", ec};
+      return std::nullopt;
+    }
   }
   const int fd = ::open(lock_path.c_str(), O_CREAT | O_RDWR, 0600);
   if (fd < 0) {
+    failure = {"lock-create", {errno, std::generic_category()}};
     return std::nullopt;
   }
   const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -207,17 +226,27 @@ inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
     if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
       return ScopedFileLock(fd, true);
     }
-    if (errno != EWOULDBLOCK && errno != EAGAIN) {
+    const int error = errno;
+    if (error != EWOULDBLOCK && error != EAGAIN) {
       (void)::close(fd);
+      failure = {"lock-wait", {error, std::generic_category()}};
       return std::nullopt;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
       (void)::close(fd);
+      failure = {"lock-wait", {ETIMEDOUT, std::generic_category()}};
       return std::nullopt;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 #endif
+}
+
+inline std::optional<ScopedFileLock> AcquireExclusiveFileLockForPath(
+    const std::filesystem::path& path,
+    std::chrono::milliseconds timeout = kDefaultFileLockTimeout) {
+  FileLockFailure failure;
+  return AcquireExclusiveFileLockForPath(path, failure, timeout);
 }
 
 }  // namespace azookey::learning

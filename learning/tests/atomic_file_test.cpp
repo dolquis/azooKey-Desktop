@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "azookey/learning/AtomicFile.h"
@@ -115,6 +116,30 @@ TEST(AtomicFileTest, PersistentSharingFailurePreservesTargetAndReportsOnlyStageA
   EXPECT_EQ(log.find("private-old-content"), std::string::npos);
   EXPECT_EQ(log.find("private-new-content"), std::string::npos);
   EXPECT_EQ(ReadAll(target), "private-old-content");
+  EXPECT_EQ(CountTempFiles(root), 0u);
+  reader.Close();
+  std::filesystem::remove_all(root);
+}
+
+TEST(AtomicFileTest, ZeroRetryBudgetFailsWithoutWaitingOutSharingConflict) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("azookey_atomicfile_zero_retry_" + std::to_string(GetCurrentProcessId()));
+  std::filesystem::create_directories(root);
+  const auto target = root / "store.tsv";
+  ASSERT_TRUE(azookey::learning::WriteTextFileAtomically(target, "old"));
+  ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
+  ASSERT_TRUE(reader.valid());
+  testing::internal::CaptureStderr();
+  const auto start = std::chrono::steady_clock::now();
+  const bool saved =
+      azookey::learning::WriteTextFileAtomically(target, "new", std::chrono::milliseconds::zero());
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(saved);
+  // The default budget keeps retrying for 500 ms.
+  EXPECT_LT(elapsed, std::chrono::milliseconds(400));
+  EXPECT_NE(log.find("stage=atomic-replace"), std::string::npos);
+  EXPECT_EQ(ReadAll(target), "old");
   EXPECT_EQ(CountTempFiles(root), 0u);
   reader.Close();
   std::filesystem::remove_all(root);
@@ -286,6 +311,31 @@ TEST(AtomicFileTest, FileLockExcludesSamePathAcrossThreadsOnWindows) {
 
   std::filesystem::remove_all(root);
 #endif
+}
+
+TEST(AtomicFileTest, BusyFileLockReportsFailureToCallerWithoutLogging) {
+  const auto target = std::filesystem::temp_directory_path() / "azookey_atomicfile_busy_lock.json";
+  auto first =
+      azookey::learning::AcquireExclusiveFileLockForPath(target, std::chrono::milliseconds(100));
+  ASSERT_TRUE(first.has_value());
+
+  // A zero timeout probe (duplicate Host detection, settings peek) expects a
+  // busy lock, so the lock helper itself must stay silent.
+  testing::internal::CaptureStderr();
+  auto blocked = std::async(std::launch::async, [&] {
+    azookey::learning::FileLockFailure failure;
+    const bool acquired = azookey::learning::AcquireExclusiveFileLockForPath(
+                              target, failure, std::chrono::milliseconds::zero())
+                              .has_value();
+    return std::make_pair(acquired, failure);
+  });
+  const auto [acquired, failure] = blocked.get();
+  const auto log = testing::internal::GetCapturedStderr();
+  EXPECT_FALSE(acquired);
+  ASSERT_NE(failure.stage, nullptr);
+  EXPECT_STREQ(failure.stage, "lock-wait");
+  EXPECT_TRUE(failure.error);
+  EXPECT_EQ(log, "");
 }
 
 }  // namespace

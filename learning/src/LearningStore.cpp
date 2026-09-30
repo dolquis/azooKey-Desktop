@@ -245,7 +245,7 @@ bool LearningStore::Load() {
   return true;
 }
 
-bool LearningStore::Save() const {
+bool LearningStore::Save(std::chrono::milliseconds retry_budget) const {
   if (save_blocked_by_load_failure_) return false;
   std::ostringstream out;
   out.imbue(std::locale::classic());
@@ -262,7 +262,7 @@ bool LearningStore::Save() const {
   for (const auto& [key, record] : rows) {
     out << key << '\t' << record->weight << ' ' << record->last_updated_epoch_sec << '\n';
   }
-  const bool saved = WriteProtectedText(path_, out.str(), *crypto_);
+  const bool saved = WriteProtectedText(path_, out.str(), *crypto_, retry_budget);
   if (saved) {
     dirty_ = false;
   }

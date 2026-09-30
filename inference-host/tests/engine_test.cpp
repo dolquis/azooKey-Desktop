@@ -742,6 +742,35 @@ TEST(InferenceEngineTest, ShutdownFlushRecoversAfterTemporaryReplaceBlocker) {
   ASSERT_TRUE(loaded.Load());
   EXPECT_GT(loaded.Score("pending", "observation", kNowBase + 2), 0.0);
 }
+
+TEST(InferenceEngineTest, ObservationFlushDoesNotWaitOutReplaceBlocker) {
+  ScopedTempDirectory directory;
+  const auto path = directory.File("learning.tsv");
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
+  azookey::host::EngineConfig cfg;
+  cfg.learning_flush_every_n = 1;
+  cfg.learning_flush_interval_sec = 1000;
+  cfg.learning_min_weight = 0.0;
+  auto engine = MakeEngine(store, cfg);
+  engine->CommitObservation("first", "saved", kNowBase + 1);
+  ASSERT_FALSE(store.dirty());
+  const auto encrypted = EncryptedPathFor(path);
+  HANDLE reader = CreateFileW(encrypted.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(reader, INVALID_HANDLE_VALUE);
+  testing::internal::CaptureStderr();
+  const auto start = std::chrono::steady_clock::now();
+  engine->CommitObservation("pending", "observation", kNowBase + 2);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  (void)testing::internal::GetCapturedStderr();
+  // The flush runs under the lock queries wait on, so it must not spend the
+  // 500 ms retry budget that shutdown and explicit flushes use.
+  EXPECT_LT(elapsed, std::chrono::milliseconds(400));
+  EXPECT_TRUE(store.dirty());
+  CloseHandle(reader);
+  EXPECT_TRUE(engine->FlushLearningStore());
+  EXPECT_FALSE(store.dirty());
+}
 #endif
 
 TEST(InferenceEngineTest, BurstStartFlushPersistsFirstObservationWithoutExplicitFlush) {

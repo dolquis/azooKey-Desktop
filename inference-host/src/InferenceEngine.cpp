@@ -17,6 +17,7 @@
 #include "azookey/ipc/TraceId.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/FileLock.h"
+#include "azookey/learning/PersistenceDiagnostics.h"
 #include "azookey/logging/Phase.h"
 
 namespace azookey::host {
@@ -246,7 +247,7 @@ InferenceEngine::~InferenceEngine() {
   for (int attempt = 0; attempt < 3; ++attempt) {
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      if (FlushLearningStoreLocked()) break;
+      if (FlushLearningStoreLocked(learning::kTransientFileRetryBudget)) break;
     }
     if (attempt < 2) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
@@ -333,8 +334,10 @@ bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
   }
 
   // Disk is the cross-process source of truth for user dictionary edits.
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path());
+  learning::FileLockFailure lock_failure;
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
   if (!file_lock) {
+    learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     RecordUserDictionaryFailureLocked(kUserDictionaryLockError);
     return false;
   }
@@ -359,8 +362,10 @@ bool InferenceEngine::RemoveUserWord(const std::string& word, const std::string&
     return false;
   }
 
-  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path());
+  learning::FileLockFailure lock_failure;
+  auto file_lock = learning::AcquireExclusiveFileLockForPath(user_dict_->path(), lock_failure);
   if (!file_lock) {
+    learning::detail::ReportPersistenceFailure(lock_failure.stage, lock_failure.error);
     RecordUserDictionaryFailureLocked(kUserDictionaryLockError);
     return false;
   }
@@ -451,7 +456,7 @@ ModelLoadResult InferenceEngine::LoadModelWithResult(const ModelLoadOptions& opt
   EngineConfig next_config;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    (void)FlushLearningStoreLocked();
+    (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
     // Section 8.5.3: checked again under the load lock, so a SafeMode entered
     // after the Dispatcher's own check still stops the load.
     if (!options.path.empty() && health_.state() == HealthState::SafeMode) {
@@ -1422,7 +1427,7 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
 
 bool InferenceEngine::FlushLearningStore() {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return FlushLearningStoreLocked();
+  return FlushLearningStoreLocked(learning::kTransientFileRetryBudget);
 }
 
 void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
@@ -1446,7 +1451,7 @@ void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {
   learning_flush_cv_.notify_all();
 
   if (burst_start_flush_due || ShouldFlushLearningStoreLocked(now_epoch_sec)) {
-    (void)FlushLearningStoreLocked();
+    (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
   }
 }
 
@@ -1467,7 +1472,7 @@ bool InferenceEngine::ShouldFlushLearningStoreLocked(uint64_t now_epoch_sec) con
              config_.learning_flush_interval_sec;
 }
 
-bool InferenceEngine::FlushLearningStoreLocked() {
+bool InferenceEngine::FlushLearningStoreLocked(std::chrono::milliseconds retry_budget) {
   if (!store_) {
     return true;
   }
@@ -1484,7 +1489,7 @@ bool InferenceEngine::FlushLearningStoreLocked() {
         first_unsaved_observation_epoch_sec_.value_or(0));
     store_->Prune(config_.learning_max_records, config_.learning_min_weight, prune_epoch_sec);
   }
-  if (!store_->Save()) {
+  if (!store_->Save(retry_budget)) {
     RecordLearningSaveFailureLocked();
     first_unsaved_observation_steady_ = std::chrono::steady_clock::now();
     return false;
@@ -1541,7 +1546,7 @@ void InferenceEngine::LearningFlushWorker() {
       continue;
     }
 
-    (void)FlushLearningStoreLocked();
+    (void)FlushLearningStoreLocked(std::chrono::milliseconds::zero());
   }
 }
 }  // namespace azookey::host

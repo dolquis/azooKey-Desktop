@@ -281,7 +281,9 @@ cmake --build --preset windows-debug --target azookey_check
   `persistence error: stage=... category=... code=...` を確認する。
   `category=system` の `atomic-replace` / `code=5` は Windows のアクセス拒否、
   `flush-open` / `code=32` は共有違反を表す。一時的な競合では保存処理が短時間再試行する。
-  `dpapi-encrypt` / `dpapi-decrypt` は暗号処理、`lock-create` / `lock-wait` は排他ロックの失敗を表す。
+  ただし Host の観測契機・定期・モデルロード前の学習 flush は再試行せず、次の flush へ持ち越す。
+  `dpapi-encrypt` / `dpapi-decrypt` は暗号処理、`lock-create` / `lock-wait` は保存時の排他ロックの失敗を表す。
+  重複 Host の検出や設定の読取りのように、ロック競合を想定する経路はこの行を出さない。
   再試行・終了時 flush の境界は `docs/learning-data-management-spec.md` §11.1 を参照する。
   `HostProcessTest` は失敗時に子 CLI ごとの経路・stderr と Host ログを出力する。
   テストには一時ディレクトリ内の合成データだけを使い、実ユーザーデータを渡さない。

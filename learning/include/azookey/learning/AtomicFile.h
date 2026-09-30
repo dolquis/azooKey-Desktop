@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "azookey/learning/PersistenceDiagnostics.h"
+#include "azookey/learning/PersistenceRetry.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -32,8 +33,9 @@ namespace azookey::learning {
 namespace detail {
 
 template <class Operation>
-DWORD RetryTransientFileOperation(Operation operation, bool retry_access_denied = false) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+DWORD RetryTransientFileOperation(Operation operation, std::chrono::milliseconds retry_budget,
+                                  bool retry_access_denied = false) {
+  const auto deadline = std::chrono::steady_clock::now() + retry_budget;
   while (true) {
     const DWORD error = operation();
     if (error == ERROR_SUCCESS) return error;
@@ -49,15 +51,18 @@ DWORD RetryTransientFileOperation(Operation operation, bool retry_access_denied 
 }  // namespace detail
 #endif
 
-inline bool FlushFileToDisk(const std::filesystem::path& path) {
+inline bool FlushFileToDisk(const std::filesystem::path& path,
+                            std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) {
 #ifdef _WIN32
   const auto native_path = path.wstring();
   HANDLE file = INVALID_HANDLE_VALUE;
-  const DWORD open_error = detail::RetryTransientFileOperation([&] {
-    file = CreateFileW(native_path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    return file == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
-  });
+  const DWORD open_error = detail::RetryTransientFileOperation(
+      [&] {
+        file = CreateFileW(native_path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        return file == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+      },
+      retry_budget);
   if (file == INVALID_HANDLE_VALUE) {
     return detail::ReportPersistenceFailure("flush-open",
                                             {static_cast<int>(open_error), std::system_category()});
@@ -68,6 +73,7 @@ inline bool FlushFileToDisk(const std::filesystem::path& path) {
   return ok || detail::ReportPersistenceFailure("flush",
                                                 {static_cast<int>(error), std::system_category()});
 #else
+  (void)retry_budget;
   int fd = open(path.c_str(), O_RDONLY);
   if (fd < 0) {
     return detail::ReportPersistenceFailure("flush-open", {errno, std::generic_category()});
@@ -79,8 +85,10 @@ inline bool FlushFileToDisk(const std::filesystem::path& path) {
 #endif
 }
 
-inline bool WriteTextFileAtomically(const std::filesystem::path& target,
-                                    const std::string& content) {
+// retry_budget bounds each of the flush-open and replace retries on Windows.
+inline bool WriteTextFileAtomically(
+    const std::filesystem::path& target, const std::string& content,
+    std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) {
   std::error_code ec;
   if (!target.parent_path().empty()) {
     std::filesystem::create_directories(target.parent_path(), ec);
@@ -120,7 +128,7 @@ inline bool WriteTextFileAtomically(const std::filesystem::path& target,
       return detail::ReportPersistenceFailure("temp-write", {error, std::generic_category()});
     }
   }
-  if (!FlushFileToDisk(temp)) {
+  if (!FlushFileToDisk(temp, retry_budget)) {
     std::filesystem::remove(temp, ec);
     return false;
   }
@@ -138,7 +146,7 @@ inline bool WriteTextFileAtomically(const std::filesystem::path& target,
                    ? ERROR_SUCCESS
                    : GetLastError();
       },
-      true);
+      retry_budget, true);
   if (error != ERROR_SUCCESS) {
     std::filesystem::remove(temp, ec);
     return detail::ReportPersistenceFailure("atomic-replace",

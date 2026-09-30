@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -44,7 +45,8 @@ class LearningStore {
   virtual ~LearningStore() = default;
 
   bool Load();
-  bool Save() const;
+  // retry_budget bounds transient file-conflict retries; zero tries once.
+  bool Save(std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) const;
   void Reset();
   bool dirty() const;
   size_t size() const;

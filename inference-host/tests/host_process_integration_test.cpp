@@ -6,6 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -28,9 +29,13 @@ namespace {
 constexpr DWORD kProcessTimeoutMs = 15000;
 std::atomic<HANDLE> g_control_received{nullptr};
 
+// Returns the last 8 KiB, where the error that ended the process is logged.
 std::string ReadLog(const std::filesystem::path& path) {
-  std::ifstream input(path, std::ios::binary);
-  std::string text(8192, '\0');
+  constexpr std::streamoff kTailBytes = 8192;
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  const std::streamoff size = input ? static_cast<std::streamoff>(input.tellg()) : 0;
+  input.seekg(std::max<std::streamoff>(0, size - kTailBytes));
+  std::string text(static_cast<size_t>(std::min(size, kTailBytes)), '\0');
   input.read(text.data(), static_cast<std::streamsize>(text.size()));
   text.resize(static_cast<size_t>(input.gcount()));
   return text;

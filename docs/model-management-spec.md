@@ -356,7 +356,8 @@ device 名表示などの補助に留める。
 
 選択した backend で `LoadModel` が失敗した場合:
 
-1. ログに `error_code: business / backend_load_failed` を記録
+1. ログに `result=error`、`error_code=business`、`reason=backend_load_failed` を記録
+   （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）
 2. `last_error` を `ModelCatalogEntry` に保存
 3. CPU backend で再試行
 4. CPU も失敗した場合は `SimpleConverter` fallback（M47

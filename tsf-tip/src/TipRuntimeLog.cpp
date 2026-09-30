@@ -39,7 +39,11 @@ std::string_view CurrentExceptionKind() noexcept {
 
 void LogComBoundaryException(logging::RuntimeLogger& logger, std::string_view operation,
                              HRESULT hr) noexcept {
+  // DLL exports and a failed TextService construction run without the
+  // provider a live TextService holds, so pin it for this one event.
+  core::EtwLogger::Register();
   core::EtwLogger::LogError(core::EtwModule::Tip, core::EtwErrorCode::Business, hr);
+  core::EtwLogger::Unregister();
   try {
     TipRuntimeLog(
         logger, logging::RuntimeLogLevel::Error, "com_boundary_exception",

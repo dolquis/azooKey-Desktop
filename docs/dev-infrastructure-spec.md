@@ -2655,8 +2655,9 @@ D-002 の `warning` は任意の表示名だけが欠けた状態であり、`--
 必須登録に不備がある `error` の場合だけ再登録し、再診断で `warning` まで改善した場合は修復成功とする。
 
 D-012 が `warning` とする旧形式は、本節に登録したものに限る。`settings.json` は版識別子を持たず、
-`settings/mvp-settings.schema.json` はキーの追加だけで拡張する（`docs/sideload-packaging-spec.md` §3.6
-「拡張方針」）。このため過去の schema に適合した `settings.json` は現行 schema にも適合し、`ok` になる。
+`settings/mvp-settings.schema.json` は加算的に拡張する（`docs/sideload-packaging-spec.md` §3.6
+「拡張方針」）。破壊的変更は下記の登録を伴うため、登録済みの旧形式が無い限り、過去の schema に
+適合した `settings.json` は現行 schema にも適合し、`ok` になる。
 後方互換として受理する値形式、すなわち平文の `openAiApiKey`（D-014 が扱う）、root tier の
 `backendPreference` / `epPreference`（`docs/model-management-spec.md` §5.2）、
 `backendPreference` の `directml` / `npu`（同 §5.1）、`promptPrefixByApp`（`docs/app-profile-spec.md` §6）も

@@ -2,8 +2,6 @@
   "schemaVersion": 1,
   "gates": [
     { "source": "bootstrap", "id": "tipRegistration", "issueId": "DEV-1266" },
-    { "source": "bootstrap", "id": "tipRegistration", "issueId": "DEV-1211" },
-    { "source": "bootstrap", "id": "inferenceHost", "issueId": "DEV-676" },
     { "source": "bootstrap", "id": "inferenceHost", "issueId": "DEV-1263" },
     { "source": "diag", "id": "D-001", "issueId": "DEV-1266" },
     { "source": "diag", "id": "D-002", "issueId": "DEV-1266" },

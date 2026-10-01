@@ -31,7 +31,7 @@ GGUF モデルは収録しない。
 
 このディレクトリは検証 zip に含まれない。
 検証 zip と同じ commit の checkout からディレクトリごとゲストへコピーする。
-転送の前提と資格情報の扱いは [`docs/handoff/hyper-v-tip-verification.md`](../../docs/handoff/hyper-v-tip-verification.md) の手順 3 に従う。
+転送の経路と資格情報の扱いは [`docs/handoff/hyper-v-tip-verification.md`](../../docs/handoff/hyper-v-tip-verification.md) の「成果物の持ち込み方式」と手順 1〜3 に従う。
 以下の例は、ゲストの `C:\azookey-verify\fixtures\` へ置いたものとして書く。
 
 コピーの後に、ホストとゲストで同じ一覧が出ることを確かめる。
@@ -42,7 +42,8 @@ Get-ChildItem -LiteralPath . -Recurse -File | Sort-Object FullName |
 ```
 
 このディレクトリの全ファイルは改行を LF に固定してある（`.gitattributes`）。
-ストアはヘッダー行をバイト単位で照合するため、CRLF や BOM が付くとレコードとして読まれなくなる。
+CRLF や BOM が付くと、学習ストアのヘッダー行が照合に失敗し、`auto_words.tsv` は行末の列が数値として読めなくなる。
+移行後の `.bak` の SHA-256 も fixture と一致しなくなる。
 エディタで開いて保存し直さない。
 
 2 つのスクリプトは Windows PowerShell 5.1 で動く。
@@ -126,7 +127,8 @@ powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -Label aft
 powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -From before-migration -To after-migration -OutputPath $snapshot
 ```
 
-配置先に `.enc` や `.bak` が既にあると移行は起きない。
+配置先に `.enc` が既にあると、Host はそちらを読み、平文は移行されない。
+内容の違う `.bak` が残っていると、読み込みが失敗する。
 データディレクトリが空であることを先に確かめる。
 
 比較結果には、4 つのストアそれぞれについて平文の `removed` と、`.enc` と `.bak` の `added` が出る。
@@ -134,13 +136,14 @@ powershell -ExecutionPolicy Bypass -File .\learning-data-snapshot.ps1 -From befo
 件数は次で確かめる。
 
 ```powershell
+$exe = (Resolve-Path .\azookey_inference_host.exe).Path
 & $exe lookup --mode exact --query ごうせいがくしゅう     # 2 件
 & $exe lookup --mode exact --query あずーきーけんしょう   # 1 件
 & $exe userdict list --format json                        # 1 件
 ```
 
 レコードの時刻は 2026-10-01 00:00 UTC（`1790812800`）に固定してある。
-学習の重みは時刻とともに減衰し、打ち間違え学習は古いレコードを捨てる。
+学習の重みは時刻とともに減衰し、打ち間違え学習は 180 日を過ぎたレコードを使わなくなる。
 移行そのものの確認（`.enc` と `.bak` の生成、`.bak` の一致）は時刻に依存しない。
 
 0 バイトの平文ストアは移行の入力にしない（DEV-1460）。
@@ -277,41 +280,48 @@ pwsh -File .\scripts\vm-verify-linear-drafts.ps1 `
   -OutputDirectory .\build\vm-verify-drafts
 ```
 
-対応を置くのは、課題本文か runbook がその観測対象を名指ししている場合に限る。
+対応を置くのは、次のどちらかに当たる場合に限る。
+
+- **観測対象**：課題本文か runbook が、その ID の測るものを確認対象として挙げている。
+- **開始条件**：課題がその状態を前提にして始まり、前提が崩れていると結果を読めない。
+
 下書きの行は、サマリを作った時点の観測である。
-ゲートの操作の後の状態を根拠にする場合は、操作の後に `verify-bootstrap.ps1 -Json` と `azookey_diag.exe --json` を採り直し、サマリを作り直す。
 行があることは合否を意味しない。
+
+diag は読み取りだけなので、ゲートの操作の後の状態を根拠にする場合は、操作の後に `azookey_diag.exe --json` を採り直してサマリを作り直す。
+`verify-bootstrap.ps1` は採り直さない。
+未登録なら TIP を登録し、pipe が無ければ supervisor を起動するので、採り直すとゲートが見たい状態を書き換える。
+bootstrap の行は、セッション開始時の開始条件の観測としてだけ使う。
 
 ### bootstrap（`verify-bootstrap.ps1 -Json`）
 
-| ID | 課題 | 根拠 |
-|---|---|---|
-| `tipRegistration` | DEV-1266 | 課題の確認手順が TIP の登録を開始条件にしている |
-| `tipRegistration` | DEV-1211 | 課題の手順 1 が `register-dev.ps1` による登録である |
-| `inferenceHost` | DEV-676 | 項目 1 が supervisor、Host プロセス、pipe の存在を見る |
-| `inferenceHost` | DEV-1263 | Host が Ready の状態から停止と復帰を見る |
+| ID | 課題 | 種別 | 根拠 |
+|---|---|---|---|
+| `tipRegistration` | DEV-1266 | 開始条件 | 課題の確認手順が TIP の登録済みを前提にしている |
+| `inferenceHost` | DEV-1263 | 開始条件 | Host が pipe で応答している状態から、停止と復帰を見る |
 
 ### diag（`azookey_diag.exe --json`）
 
-| ID | 課題 | 根拠 |
-|---|---|---|
-| `D-001` `D-002` `D-003` | DEV-1266 | TIP DLL、COM 登録、言語プロファイル。TIP の登録が開始条件である |
-| `D-001` `D-002` `D-003` | DEV-1211 | 課題が HKLM CLSID と TSF profile の登録、失敗後の残骸、解除を確認対象にしている |
-| `D-004` `D-005` `D-006` | DEV-676 | Host プロセス、Handshake、ping。項目 1 と項目 2 の観測対象である |
-| `D-004` `D-005` `D-006` | DEV-1263 | 課題が Host の停止と、再起動の後の再接続を確認対象にしている |
-| `D-007` `D-008` | DEV-1144 | 課題が `model.selectedPath` と、ロード済みモデルのパスの一致を見る |
-| `D-008` `D-009` | DEV-1398 | runbook レーン 2 の手順 5 が `degraded_model`、`degraded_simple`、SafeMode を誘発する |
-| `D-010` | DEV-1446 | 課題の項目 1 と項目 2 が、学習ストアの移行と復号の可否を見る |
-| `D-014` | DEV-1446 | 課題の項目 4 が D-014 を名指ししている |
-| `D-014` | DEV-1411 | runbook レーン 2 の手順 2 が、`dpapi:` キーを復号できない状態で `KeyReentry` を誘発する |
-| `D-011` | DEV-758 | 同時更新の対象が `user_dict.json` であり、更新の後に辞書が壊れていないことの観測になる |
-| `D-013` | DEV-1092 | 課題が診断の採取物をローカルへ保存できることを見る。ログのディレクトリへ書けることはその前提である |
+| ID | 課題 | 種別 | 根拠 |
+|---|---|---|---|
+| `D-001` `D-002` `D-003` | DEV-1266 | 開始条件 | TIP DLL、COM 登録、言語プロファイル。課題が TIP の登録済みを前提にしている |
+| `D-001` `D-002` `D-003` | DEV-1211 | 観測対象 | 課題が HKLM CLSID と TSF profile の登録、失敗後の残骸、解除を確認対象にしている |
+| `D-004` `D-005` `D-006` | DEV-676 | 観測対象 | Host プロセス、Handshake、ping。項目 1 と項目 2 が Host と pipe の存在と復帰を見る |
+| `D-004` `D-005` `D-006` | DEV-1263 | 観測対象 | 課題が Host の停止と、再起動の後の再接続を確認対象にしている |
+| `D-007` `D-008` | DEV-1144 | 観測対象 | 課題が `model.selectedPath` と、ロード済みモデルのパスの一致を見る |
+| `D-008` `D-009` | DEV-1398 | 観測対象 | runbook レーン 2 の手順 5 が `degraded_model`、`degraded_simple`、SafeMode を誘発する |
+| `D-010` | DEV-1446 | 観測対象 | 課題の項目 2 が、別ユーザーでは学習ストアを復号できないことを見る。D-010 は `learning.tsv` が復号して読めるかだけを報告し、平文から移行したかどうかは区別しない |
+| `D-014` | DEV-1446 | 観測対象 | 課題の項目 4 が D-014 を名指ししている |
+| `D-014` | DEV-1411 | 観測対象 | runbook レーン 2 の手順 2 が、`dpapi:` キーを復号できない状態で `KeyReentry` を誘発する |
+| `D-011` | DEV-758 | 観測対象 | 同時更新の対象が `user_dict.json` であり、更新の後に辞書が壊れていないことの観測になる |
+| `D-013` | DEV-1092 | 開始条件 | ログのディレクトリへ書けることは、課題が見る診断の採取と保存の前提である |
 
 ### 対応を置かない ID
 
 | ID | 理由 |
 |---|---|
 | `vcRuntime` | 対象の課題（MSI のレーン）は bootstrap を実行しない |
+| `tipRegistration`（DEV-1211 へ）、`inferenceHost`（DEV-676 へ） | bootstrap 自身が登録と Host の起動を行うので、登録と解除、ログオン自動起動を見る課題の観測にならない。この 2 件は diag の行で見る |
 | `microsoftIme` `vmCheckpoint` `debugView` | セッションの安全装置であり、個別の課題の観測対象ではない |
 | `D-009`（DEV-1263 へ） | 課題が見る `degraded` は TIP の接続状態であり、D-009 が報告する Host の fallback 状態とは別である |
 | `D-012` | 設定ファイルの schema 適合を観測対象として名指しする課題が無い |
@@ -319,6 +329,8 @@ pwsh -File .\scripts\vm-verify-linear-drafts.ps1 `
 
 compat の行は、`compat-test/README.md` のケースと、各課題が挙げる C-xxx に対応する。
 C-005 は DEV-782 が扱うので載せない。
+C-013 は DEV-1263 と DEV-1395 に記録し、DEV-716 には載せない。
+runbook が、C-013 の結果を DEV-716 の合否と分けると定めているためである。
 
 対象の課題を入れ替えたときは、この表と `gate-map.json` を同じ変更で直す。
 

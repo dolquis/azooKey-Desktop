@@ -722,7 +722,7 @@ OFF のまま）。
 `settings-schema`、`powershell-quality`、`cpp-tidy`、`windows-coverage` は、先行する `changes` ジョブが
 対象ファイルの変更を検出した場合だけ起動する。
 `settings-schema` は `settings/`、`powershell-quality` は PowerShell の script / module /
-manifest、`cpp-tidy` は portable subset の C++ source、`windows-coverage` は build 対象を扱う。
+manifest と Pester が読む `scripts/vm-verify-fixtures/`、`cpp-tidy` は portable subset の C++ source、`windows-coverage` は build 対象を扱う。
 手動実行と `.github/workflows/windows.yml` 自体の変更では、変更判定を含む構成を検証するため
 これらの専門ジョブをすべて起動する。
 

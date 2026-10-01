@@ -124,7 +124,7 @@ jobs:
               esac
 
               case "$path" in
-                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msix/*)
+                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msix/*|scripts/vm-verify-fixtures/*)
                   powershell_quality=true
                   ;;
               esac

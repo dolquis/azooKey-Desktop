@@ -13,6 +13,6 @@ bench/data/PROVENANCE.json text eol=lf
 # Rewriter TSV grammar and deterministic porter output require LF on Windows too.
 data/*.tsv text eol=lf
 
-# VM verification fixtures are compared byte for byte by the stores they feed
-# (header lines) and are identified by SHA-256 when copied into a guest.
+# VM verification fixtures are identified by SHA-256 when copied into a guest,
+# and CRLF breaks the store header match and the last column of auto_words.tsv.
 scripts/vm-verify-fixtures/** text eol=lf

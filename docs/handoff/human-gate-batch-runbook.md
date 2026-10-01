@@ -429,6 +429,7 @@ DPI の後に全 target を判定する場合は `-CompatCases C-006` を渡せ�
 
 ```powershell
 # 1. Host を停止しないケースだけを先に回し、compat の自動判定を取る
+#    表示スケールを途中で変える本レーンの先行自動判定では、-CompatSkip に C-006 も加える
 .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatSkip C-013,C-010
 # 2. 打鍵確認（基本セッション）を行う
 # 3. Host 無応答と復帰の C-013 を回す（対話タスクが TIP の info ログを有効にする）

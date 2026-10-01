@@ -174,8 +174,12 @@ $root = "C:\azookey-verify\dev759\ctrl-c"      # 経路ごとに変える。絶�
 ```
 
 別の PowerShell から行をクリップボードへ入れ、Host のコンソールへ貼り付ける。
+Host のコンソールは検証の途中で閉じるので、この後の確認もこちらの PowerShell で行う。
+検証 zip を展開したディレクトリで開き、Host のコンソールと同じ値を入れておく。
 
 ```powershell
+$exe = (Resolve-Path .\azookey_inference_host.exe).Path
+$root = "C:\azookey-verify\dev759\ctrl-c"      # Host のコンソールで指定した値と同じにする
 $fx = "C:\azookey-verify\fixtures\data\stdio"
 Get-Content "$fx\handshake.jsonl" | Set-Clipboard      # 貼り付けて "accepted":true を確かめる
 Get-Content "$fx\commit-single.jsonl" | Set-Clipboard  # 貼り付けて "ok":true を確かめる
@@ -222,6 +226,7 @@ $sets = (Get-Content -LiteralPath C:\azookey-verify\non-ascii\paths.json -Raw -E
 DEV-963 の 3 経路は、組ごとに次で確かめる。
 
 ```powershell
+$exe = (Resolve-Path .\azookey_inference_host.exe).Path
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 foreach ($set in $sets) {
   & $exe --learning $set.learningPath --user-dict $set.userDictPath lookup --mode exact --query にほんご

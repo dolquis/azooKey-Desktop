@@ -22,7 +22,8 @@ Describe "WiX MSI package consistency" {
   }
 
   It "pins the WiX SDK and builds an x64 package" {
-    $script:project | Should -Match 'Project Sdk="WixToolset\.Sdk/5\.0\.2"'
+    $script:project | Should -Match 'Project Sdk="WixToolset\.Sdk/7\.0\.0"'
+    $script:project | Should -Match '<AcceptEula>wix7</AcceptEula>'
     $script:project | Should -Match '<InstallerPlatform>x64</InstallerPlatform>'
     $script:project | Should -Match '<TreatWarningsAsErrors>true</TreatWarningsAsErrors>'
   }

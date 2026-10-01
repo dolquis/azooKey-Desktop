@@ -260,6 +260,16 @@ SOFTWARE.
 - Notes: ビルド用ツールであり、`azookey_settings` の app-local payload や MSI へは同梱しない。
   直接・推移依存の解決結果は `settings-app/packages.lock.json` を正典とする。
 
+## WiX Toolset（ビルド時のみ）
+
+- Source: `WixToolset.Sdk` NuGet package。
+  バージョンは `pkg/msi/azooKey.wixproj` の `Project Sdk` を正典とする。
+- License: MS-RL（ソースコード）。nuget.org のバイナリには Open Source Maintenance Fee（OSMF）EULA が適用される。
+- Copyright: .NET Foundation and contributors
+- azooKey path: `pkg/msi/azooKey.wixproj` の MSI build toolchain
+- Notes: ビルド用ツールであり、MSI へ WiX のコードは同梱しない。
+  EULA への同意と料金条件の扱いは `docs/licensing-policy.md`「ビルドツールの利用条件」を正典とする。
+
 ## Microsoft WebView2 loader
 
 <!-- sbom: {"source":"nuget:Microsoft.Web.WebView2","name":"WebView2 loader","license":"BSD-3-Clause"} -->

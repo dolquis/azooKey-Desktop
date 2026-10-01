@@ -1563,7 +1563,9 @@ MSIX 不可環境（Win10 LTSC, 法人ポリシーで AppX 無効）にも本経
 ### 4.1 WiX 構成
 
 `pkg/msi/Package.wxs` と `pkg/msi/azooKey.wixproj` を正典とする。
-WiX Toolset は MSBuild SDK の 5.0.2 に固定し、x64 の per-machine MSI を生成する。
+WiX Toolset は MSBuild SDK の 7.0.0 に固定し、x64 の per-machine MSI を生成する。
+WiX 7 のビルドに必要な OSMF EULA への同意は `azooKey.wixproj` の `AcceptEula` に記録する
+（条件は [`licensing-policy.md`](licensing-policy.md#ビルドツールの利用条件)）。
 配置先は `%ProgramFiles%\azooKey` とする。
 
 ```xml

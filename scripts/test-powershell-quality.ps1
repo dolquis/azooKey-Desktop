@@ -30,6 +30,8 @@ $powerShellFiles = @(
   Join-Path $PSScriptRoot "vm-verify-summary.ps1"
   Join-Path $PSScriptRoot "vm-verify-linear-drafts.ps1"
   Join-Path $PSScriptRoot "learning-data-snapshot.ps1"
+  Join-Path $PSScriptRoot "vm-verify-fixtures/ai-loopback-stub.ps1"
+  Join-Path $PSScriptRoot "vm-verify-fixtures/new-non-ascii-path-fixture.ps1"
   Join-Path (Join-Path $repoRoot "compat-test") "msix_install_uninstall.ps1"
   Join-Path (Join-Path $repoRoot "pkg") "msix/build-identity-package.ps1"
   Join-Path $PSScriptRoot "verify-msix-identity-embedding.ps1"

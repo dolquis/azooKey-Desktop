@@ -1,0 +1,11 @@
+# Same table as valid.tsv except "ka", which becomes half-width katakana.
+# Copy this over the configured path to observe the hot reload.
+a	ア
+i	イ
+u	ウ
+ka	ｶ
+ki	キ
+ku	ク
+n	ン	1
+nn	ン	2
+@@	@

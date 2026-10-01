@@ -38,7 +38,7 @@ repos:
         entry: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-powershell-quality.ps1
         language: system
         pass_filenames: false
-        files: '^((scripts|compat-test)/.*\.ps1|PSScriptAnalyzerSettings\.psd1)$'
+        files: '^((scripts|compat-test)/.*\.ps1|scripts/vm-verify-fixtures/.*|PSScriptAnalyzerSettings\.psd1)$'
 
       - id: settings-json-schema-metaschema
         name: settings JSON Schema metaschemas

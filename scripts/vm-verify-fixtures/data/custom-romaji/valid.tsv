@@ -1,0 +1,11 @@
+# Synthetic custom romaji table for the M17 hot-reload gate.
+# Outputs are katakana so that the table is distinguishable from the built-in one.
+a	ア
+i	イ
+u	ウ
+ka	カ
+ki	キ
+ku	ク
+n	ン	1
+nn	ン	2
+@@	@

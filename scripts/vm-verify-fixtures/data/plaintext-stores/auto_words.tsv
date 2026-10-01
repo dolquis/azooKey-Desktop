@@ -1,0 +1,4 @@
+# azookey-auto-word-store v1
+# surface	reading	source	state	count	first_seen_epoch	last_seen_epoch	score
+合成確定語	ごうせいかくていご	mining	confirmed	4	1790812800	1790812800	1
+合成却下語	ごうせいきゃっかご	trending	rejected	2	1790812800	1790812800	0.5

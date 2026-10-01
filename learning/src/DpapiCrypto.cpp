@@ -38,7 +38,11 @@ class UserDpapiCrypto final : public ByteCrypto {
   bool Encrypt(const std::vector<uint8_t>& plain, std::vector<uint8_t>& cipher) const override {
 #ifdef _WIN32
     if (plain.size() > (std::numeric_limits<DWORD>::max)()) return false;
-    DATA_BLOB input{static_cast<DWORD>(plain.size()), const_cast<BYTE*>(plain.data())};
+    // CryptProtectData rejects a null pbData even when cbData is 0, and an
+    // empty vector has no buffer to point at.
+    BYTE empty_input = 0;
+    DATA_BLOB input{static_cast<DWORD>(plain.size()),
+                    plain.empty() ? &empty_input : const_cast<BYTE*>(plain.data())};
     DATA_BLOB output{};
     if (!::CryptProtectData(&input, L"azooKey-learning", nullptr, nullptr, nullptr,
                             CRYPTPROTECT_UI_FORBIDDEN, &output))

@@ -176,7 +176,7 @@ Describe "VM verification fixtures" {
       $dict.entries[0].word | Should -Not -BeNullOrEmpty
       $dict.entries[0].ruby | Should -Not -BeNullOrEmpty
 
-      # 0 バイトの平文ストアは移行できない（DEV-1460）。
+      # 0 バイトの平文ストアでは、移行後の件数を確かめられない。
       foreach ($file in Get-ChildItem -LiteralPath (Join-Path $script:dataRoot "plaintext-stores") -File) {
         $file.Length | Should -BeGreaterThan 0
       }

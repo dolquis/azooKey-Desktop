@@ -1,13 +1,13 @@
 # DEV-32 実機確認チェックリスト
 
-azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）用チェックリスト。記入して **DEV-32 にコメント**する。環境準備・登録・ログ取得の手順は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md) を参照。
+azooKey TIP の実機動線検証（打鍵 → preedit → 候補 → 確定）用チェックリスト。記入して**対象の課題にコメント**する。環境準備・登録・ログ取得の手順は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md) を参照。
 
 ## 検証環境（記入）
-- 検証日 / 検証者:
-- OS（`winver` のビルド番号）:
-- VM: Hyper-V / セッション種別 = **基本セッション（★必須）**:
-- ビルド構成: ☐ Debug（ログ取得可） ☐ Release / commit:
-- バックエンド: ☐ CPU(SimpleConverter) ☐ gguf / 辞書: ☐ `--mock-dict` 使用 ☐ なし
+検証日 / 検証者、OS build、commit、VM とセッション種別、checkpoint 名、バックエンドの記入欄は、[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「Part C：検証メモのひな形」の環境ブロックが正典である。
+runbook は検証 zip に同梱されないため、環境ブロックはホスト側で runbook の様式、または `vm-verify-summary.ps1` が出力する `verification-summary.md` から用意する。
+その環境ブロックを記録の先頭に置き、本チェックリスト固有の次の欄を加える。セッション種別は**基本セッション（★必須）**とする。
+- ビルド構成: ☐ Debug（ログ取得可） ☐ Release
+- 辞書: ☐ `--mock-dict` 使用 ☐ なし
 
 > ⚠️ **変換能力の前提**: Host は `--model <GGUF>` 指定時のみ llama.cpp 経由の実推論を行う。
 > `--model` 未指定かつ `--mock-dict <TSV>` を使わない場合、**辞書外の語は漢字に変換されない**
@@ -70,7 +70,7 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 1. compat を実行した検証 zip と、本セッションの検証 zip が同じ commit である。`report.json` は commit を持たないため、zip の `manifest.json` の commit で照合する。
 2. ビルド構成（preset）が同じである。zip の `manifest.json` の `preset` で照合する。
 3. 省略する行を確認するアプリと同じ target の report である。report が無いアプリでは省略しない。
-4. バックエンドと辞書の条件（上の「バックエンド」欄）が同じである。
+4. バックエンドと辞書の条件（環境ブロックの「バックエンド」欄と、上の「辞書」欄）が同じである。
 5. report で C-001 が pass であり、行の対応ケースもすべて pass である。C-011 を除く C-002 以降は、C-001 が pass でないと `failing-skip` になる。C-001 は辞書外の `nihongo` を確定するため、`--mock-dict`、`--model`、学習語のいずれも無い環境では fail になり、その場合は全行を実施する。
 6. report はゲストのコンソールの対話セッションで得たものである（`vm-verify-session.ps1 -Run` のスケジュールタスク実行、または基本セッションでの手動実行）。拡張セッションで得た結果を根拠にしない。
 
@@ -166,5 +166,5 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 > **DEV-32 自体のクローズについて**: DEV-32（実機動線検証）のクローズ可否は **Linear 側で判断**する。本チェックの役割は「新規リグレッションが無いこと」の確認であり、既知バグの修正完了は各行で参照した DEV 課題が個別に負う。**既知バグの Done を DEV-32 クローズの前提にしない**（DEV-32 は新規リグレッションが無ければクローズ可、再修正の追跡は各課題側）。
 
 ## 後始末
-- ☐ 記入済みチェックリスト・スクショ・ログを DEV-32 にコメント（→ DEV-5 human gate 判断）
-- ☐ host 停止 → `unregister-dev.ps1` → またはチェックポイント復元
+- ☐ 記入済みチェックリスト・スクショ・ログを対象の課題にコメント
+- ☐ VM を後始末した。チェックポイントへの復元と `unregister-dev.ps1` による解除の手順は [`hyper-v-tip-verification.md`](./hyper-v-tip-verification.md)「5. 記録と後始末」が正典である

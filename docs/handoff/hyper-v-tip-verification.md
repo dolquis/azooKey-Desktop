@@ -199,26 +199,17 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   ゲストへ接続する前に拒否する。同梱の target に無い ID と、実行するケースが残らない選択は、
   bootstrap の前に拒否する。部分実行の結果は、target ごとの出力に未実行のケースを併記する。
   C-013 は Host を一時停止し、C-010 は終了するため、手順 4 の打鍵確認と組み合わせる
-  場合は次の順に分ける。どちらかだけの実行では前提の C-001 が自動で追加される。
+  場合は実行を分ける。どちらかだけの実行では前提の C-001 が自動で追加される。
+  分ける順序（Host を停止しないケースの先行実行、打鍵確認、C-013、C-010）と `-Run` のコマンド例、
+  表示スケールを変える順序は [`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「レーン 2」が正典である。
 
-  ```powershell
-  # 1. Host を停止しないケースだけを先に回し、compat の自動判定を取る
-  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatSkip C-013,C-010
-  # 2. 手順 4 の打鍵確認（基本セッション）を行う
-  # 3. Host 無応答と復帰の C-013 を回す（対話タスクが TIP の info ログを有効にする）
-  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-013
-  # 4. 最後に Host kill と復帰の C-010 だけを回す
-  .\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-010
-  ```
-
-  手順 1 の後、Edge や VS Code のプロセスが常駐していると、手順 3 の対話タスクで
-  設定した TIP ログ環境変数は既存プロセスに届かない。C-013 の結果が
-  `tip-info-log-not-confirmed-for-target` の failing-skip なら、未保存の作業を確認して
-  対象アプリの全プロセスを人手で終了し、手順 3 を再実行する。
+  C-013 の実行では対話タスクが TIP の info ログを有効にする。それより前から Edge や VS Code の
+  プロセスが常駐していると、対話タスクで設定した TIP ログ環境変数は既存プロセスに届かない。
+  C-013 の結果が `tip-info-log-not-confirmed-for-target` の failing-skip なら、未保存の作業を
+  確認して対象アプリの全プロセスを人手で終了し、C-013 を再実行する。
 
   C-006 はゲストの表示スケール 150% を前提とする（`docs/dev-infrastructure-spec.md` §13.3）。
-  表示スケールを変えずに回す場合は、手順 1 の `-CompatSkip` に C-006 も加える。
-  表示スケールを変える順序は [`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「レーン 2」が定める。
+  表示スケールを変えずに回す場合は、先行実行の `-CompatSkip C-013,C-010` に C-006 も加える。
 
 - `-Run` は TIP 登録を含む。エージェントが実行してよいのは、
   [`hyper-v-vm-verification-plan.md`](./hyper-v-vm-verification-plan.md) §4.5 の委任条件を満たす検証 VM に対してだけである。
@@ -230,7 +221,7 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 
 確認項目そのものは [`dev32-verification-checklist.md`](./dev32-verification-checklist.md)
 の A（コア動線 A1〜A8）と B（拡張・回帰確認 B1〜B7）が正典であり、本書には再掲しない。
-チェックリストを開いて上から実施し、記入したものを DEV-32 へコメントする。
+チェックリストを開いて上から実施し、記入したものを対象の課題へコメントする。
 
 詳細ログが必要な場合は、検証前に `AZOOKEY_LOG` と `AZOOKEY_LOG_LEVEL` を設定してから
 Host と検証対象アプリを起動し直す。環境変数の設定、出力先、ローテーション、取得後の
@@ -246,7 +237,10 @@ Host と検証対象アプリを起動し直す。環境変数の設定、出力
 
 ### 5. 記録と後始末
 
-- **記録**: `winver` で OS ビルドを控え、手順・結果・スクショを **DEV-32 にコメント**（→ DEV-5 の human gate も同時クローズ可）。
+本節は検証 VM の後始末の正典であり、[`dev32-verification-checklist.md`](./dev32-verification-checklist.md)「後始末」、
+[`human-gate-batch-runbook.md`](./human-gate-batch-runbook.md)「中止条件と後始末」、本書の付録から参照される。
+
+- **記録**: `winver` で OS ビルドを控え、手順・結果・スクショを**対象の課題にコメント**する。
 - **後始末（どちらか）**:
   - クリーンに戻す（推奨）: チェックポイントに復元
     ```powershell
@@ -270,7 +264,7 @@ Host と検証対象アプリを起動し直す。環境変数の設定、出力
 | preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（付録の手順 3）。 |
 | `logs/` が作成されない、または診断 ZIP にログがない | `azookey_diag.exe --json` で D-013 を確認する。`error` の場合は `azookey_diag.exe --repair` で `%LOCALAPPDATA%\azooKey\logs\` を作成し、再診断結果を確認する。 |
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順 4）。 |
-| 異常系で対象アプリが固まる | DEV-173 の残存（`tsf-tip/src/TextService.cpp` の CommitObservation 応答待ちが無期限 `Receive()`）。正常系検証には影響なし。「Host 強制終了 → 即 IME 切替/アプリ終了」を叩く前に bounded 化すると安全。 |
+| 異常系で対象アプリが固まる | CommitObservation の応答待ちは期限付きであり（`tsf-tip/src/TextService.cpp` の `WaitForIpcResponseOrStop`）、再送は `kMaxCommitObservationSendAttempts` で打ち切る。Host の強制終了や無応答で対象アプリが固まった場合は、[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)「Hang の再現と採取」で dump を採取し、対象の課題へ記録する。 |
 
 ## 付録: Debug ビルド + デバッガ方式（VM に開発環境がある場合）
 
@@ -324,9 +318,9 @@ TIP のイベント例: `ipc_connected` / `ipc_handshake_rejected` /
    - VM に [DebugView](https://learn.microsoft.com/sysinternals/downloads/debugview) を入れ、**管理者で起動 → Capture → "Capture Global Win32"**（TIP は各アプリのプロセス内で動くため Global 推奨）。
    - フィルタに `[azooKey TIP]`。
 
-6. 検証（★基本セッション）: DEV-32 チェックリストを実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
+6. 検証（★基本セッション）: [`dev32-verification-checklist.md`](./dev32-verification-checklist.md) を実施し、DebugView（TIP）とコンソール（host）を突き合わせて IPC 往復を確認。
 
-7. 後始末: `Stop-Process -Name azookey_inference_host -Force` → `.\scripts\unregister-dev.ps1` → またはチェックポイント復元。
+7. 後始末: 本編の手順 5「記録と後始末」に従う。スクリプトで解除する場合、Debug 方式では `.\scripts\unregister-dev.ps1` を `-TipDllPath` なしで実行する。
 
 ### Release 方式との使い分け
 

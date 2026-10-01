@@ -407,7 +407,8 @@ JSON は他のゲスト出力と一緒にホストへ回収する。
 DEV-676 の項目 3（別ユーザー provisioning）は、VM に第 2 のローカルユーザーが要る。
 セッション前に作っていない場合、この項目だけ実施できない。
 
-compat の分割実行例を示す。共有する 1 回の Host kill は Notepad target で行い、障害注入前の自動判定とは分ける。
+compat の分割実行順は本レーンが正典であり、`hyper-v-tip-verification.md` の「ホストからの一括実行（`-Run`）」から参照される。
+分割実行例を示す。共有する 1 回の Host kill は Notepad target で行い、障害注入前の自動判定とは分ける。
 `--output` が既存の非空ディレクトリを指すと runner は実行を拒否するので、実行ごとに出力先を変える。
 
 ```powershell
@@ -424,6 +425,18 @@ compat の分割実行例を示す。共有する 1 回の Host kill は Notepad
 `vm-verify-session.ps1 -Run` の先行自動判定には `-CompatSkip C-006,C-013,C-010` を渡す。
 DPI の後に全 target を判定する場合は `-CompatCases C-006` を渡せる。
 `-Run -CompatCases C-013` / `C-010` は全 target に障害を注入するため、1 回の C-010 を DEV-716 / DEV-1263 / DEV-676 で共有する場合は上の Notepad target だけを実行する。
+全 target を `-Run` で分ける場合は次の順に実行する。
+
+```powershell
+# 1. Host を停止しないケースだけを先に回し、compat の自動判定を取る
+.\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatSkip C-013,C-010
+# 2. 打鍵確認（基本セッション）を行う
+# 3. Host 無応答と復帰の C-013 を回す（対話タスクが TIP の info ログを有効にする）
+.\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-013
+# 4. 最後に Host kill と復帰の C-010 だけを回す
+.\scripts\vm-verify-session.ps1 -Run -VMName "<VM名>" -CompatCases C-010
+```
+
 C-013 の直接実行前には `hyper-v-tip-verification.md` に従い、対象プロセスを起動し直して TIP の info ログを有効にする。
 `--cases` と `-CompatCases` は必要な C-001 を自動で追加する。選択と除外の詳細は
 `compat-test/README.md` と `hyper-v-tip-verification.md` に従う。
@@ -534,6 +547,7 @@ Linear への記録様式を揃えておく。
 各ゲートの完了条件は「検証メモを当該課題へコメントする」ことであり、記録が揃わないと Done へ遷移できない。
 
 全ゲート共通で先頭に置く環境ブロック。
+環境記入欄は本節が正典であり、`dev32-verification-checklist.md`「検証環境（記入）」から参照される。
 
 環境ブロックの機械で埋まる欄と自動観測の件数は、VM から回収した出力からホスト側で生成できる。
 `vm-verify-session.ps1 -Run` は、対話セッションで採取した `verify-bootstrap.ps1 -Json` の出力、`azookey_diag.exe --json` の出力、compat の `report.json` を 1 つの実行ディレクトリへ回収する。
@@ -909,7 +923,7 @@ Part A で Store 入力が依然として成立しない場合、境界確認は
 - `AZOOKEY_LOG` と `AZOOKEY_LOG_LEVEL` を削除する
 - Process Monitor と WPR の採取プロセスが残っていないことを確認する
 - レーン 3 を実施した場合、`appverif.exe -query '*' -for notepad.exe` の出力に設定が残っていないことを確認する
-- ベースライン checkpoint へ復元する
+- ベースライン checkpoint へ復元する。`-Restore` による復元と、復元せずに登録を解除する手順は `hyper-v-tip-verification.md`「5. 記録と後始末」が正典である
 
 dump、ETL、PML、ログには変換中の本文と候補が含まれうる。
 Linear へ添付する前に内容を確認し、入力本文とローカル絶対パスを残さない。

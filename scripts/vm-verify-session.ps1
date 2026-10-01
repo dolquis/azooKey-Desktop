@@ -1,43 +1,47 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Hyper-V ホスト側の検証セッション操作（チェックポイント取得・パッケージ転送・復元）を
-  1 コマンドへまとめる。
+  Bundles the Hyper-V host-side verification session operations (taking a
+  checkpoint, transferring the package, restoring) into one command.
 
 .DESCRIPTION
-  make-vm-verify-package.ps1 が生成した検証パッケージを前提に、
-  docs/handoff/hyper-v-tip-verification.md がホスト側の手作業として規定していた
-  次を自動化する。
+  Given a verification package produced by make-vm-verify-package.ps1, automates
+  the following steps that docs/handoff/hyper-v-tip-verification.md defined as
+  manual host-side work.
 
-    -Prepare : 検証前チェックポイントを取得し、zip を VM へ転送する。
-    -Run     : PowerShell Direct でゲスト内の bootstrap を実行し、対話ユーザーの
-               スケジュールタスク経由で azookey_diag.exe --json と compat_test.exe を
-               実行して、成果物をホストへ回収する
-               （docs/handoff/hyper-v-vm-verification-plan.md §5 の L1）。
-               diag の出力は実行ディレクトリの azookey-diag.json になり、
-               vm-verify-summary.ps1 -DiagJsonPath へそのまま渡せる。
-    -Restore : 指定チェックポイントへ復元する。
-    -Collect : MSI 専用。ゲスト内の MSI の hash を照合し、msiexec の /L*v ログを回収する。
+    -Prepare : takes the pre-verification checkpoint and transfers the zip to the VM.
+    -Run     : runs bootstrap inside the guest over PowerShell Direct, runs
+               azookey_diag.exe --json and compat_test.exe through a scheduled
+               task of the interactive user, and collects the artifacts on the host
+               (L1 in docs/handoff/hyper-v-vm-verification-plan.md section 5).
+               The diag output is azookey-diag.json in the run directory and can
+               be passed as-is to vm-verify-summary.ps1 -DiagJsonPath.
+    -Restore : restores the given checkpoint.
+    -Collect : MSI only. Checks the hash of the MSI in the guest and collects the
+               msiexec /L*v logs.
 
-  -PackagePath に .msi を渡すと、レーン 1（MSI）の処理になる（vm-verify-msi.ps1）。
-  -Prepare は -CleanCheckpointName のクリーン checkpoint から派生した状態を確かめ、
-  MSI の hash から決まる checkpoint を取ってから MSI を転送する。msiexec の実行は
-  人が行うため、MSI に -Run は使えない。
+  Passing an .msi to -PackagePath switches to lane 1 (MSI) (vm-verify-msi.ps1).
+  -Prepare confirms the VM derives from the clean checkpoint named by
+  -CleanCheckpointName, takes a checkpoint named from the MSI hash, and then
+  transfers the MSI. A person runs msiexec, so -Run is not available for an MSI.
 
-  -Run の -CompatCases / -CompatSkip は compat_test.exe の --cases / --skip へ渡す
-  case ID（C-001 形式）。C-013 は Host を一時停止し、C-010 は終了するため、手動の
-  打鍵ゲートより前に -CompatSkip C-013,C-010 で回し、ゲートの後に各ケースを回せる。
+  -CompatCases / -CompatSkip of -Run are case IDs (C-001 format) passed to
+  compat_test.exe --cases / --skip. C-013 suspends the Host and C-010 ends it, so
+  run with -CompatSkip C-013,C-010 before the manual typing gates and run those
+  cases after the gates.
 
-  チェックポイント名はパッケージの manifest.json（commit / preset）から決定的に
-  生成するため、同じパッケージに対する再実行は常に同じ名前を指す。
+  The checkpoint name is generated deterministically from the package's
+  manifest.json (commit / preset), so rerunning against the same package always
+  refers to the same name.
 
-  VMConnect の基本セッションへの切り替えは対話操作のため自動化しない。
-  -Prepare の完了時に、IME 検証は基本セッションで行うことを出力で明示する。
+  Switching VMConnect to the basic session is interactive and is not automated.
+  When -Prepare completes, the output states that IME verification is done in the
+  basic session.
 
-  -Run のゲスト資格情報は -Credential（PSCredential。SecretManagement に
-  PSCredential として保管した secret なら Get-Secret の戻り値をそのまま渡せる）か、
-  省略時の Get-Credential で受け取る。
-  平文のパスワードを引数に取らず、ログにも書かない。
+  -Run takes the guest credential from -Credential (a PSCredential; a secret stored
+  as a PSCredential in SecretManagement can be passed as Get-Secret returns it) or,
+  when omitted, from Get-Credential.
+  It never takes a plain-text password as an argument and never writes one to logs.
 #>
 param(
   [switch]$Prepare,
@@ -71,8 +75,9 @@ function Get-VmVerifySessionAbsolutePath {
   return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
 }
 
-# 明示指定が無ければ、既定の出力ディレクトリから最新のパッケージを選ぶ。
-# zip と manifest は make-vm-verify-package.ps1 が同じ baseName で並べて置く。
+# Without an explicit path, pick the newest package from the default output
+# directory. make-vm-verify-package.ps1 places the zip and manifest side by side
+# under the same baseName.
 function Resolve-VmVerifySessionPackage {
   param(
     [Parameter(Mandatory = $true)]
@@ -132,8 +137,9 @@ function Get-VmVerifySessionManifest {
   return $manifest
 }
 
-# commit / preset から決定的に生成する。同一パッケージでの再実行が同名を指し、
-# 別コミット・別 preset の検証と取り違えない。
+# Generated deterministically from commit / preset. A rerun with the same package
+# refers to the same name and is never confused with a verification of another
+# commit or preset.
 function Get-VmVerifySessionCheckpointName {
   param(
     [Parameter(Mandatory = $true)]
@@ -144,8 +150,8 @@ function Get-VmVerifySessionCheckpointName {
   return "pre-azookey-$($Manifest.preset)-$shortCommit"
 }
 
-# 以降は Hyper-V コマンドレットの薄いラッパ。Hyper-V モジュールが無い環境でも
-# Pester から差し替えられるよう、呼び出しを 1 箇所ずつ関数へ閉じ込める。
+# Thin wrappers around the Hyper-V cmdlets from here on. Each call is enclosed in
+# its own function so that Pester can replace it even without the Hyper-V module.
 function Get-VmVerifySessionVM {
   param(
     [Parameter(Mandatory = $true)]
@@ -155,9 +161,9 @@ function Get-VmVerifySessionVM {
   return Get-VM -Name $VMName -ErrorAction Stop
 }
 
-# Guest Service Interface の component ID。表示名（Name）はホストの言語で
-# ローカライズされ、日本語 Windows では「ゲスト サービス インターフェイス」に
-# なる。表示名で引くと該当環境で必ず取り違えるため、言語非依存の ID で選ぶ。
+# The component ID of Guest Service Interface. The display name (Name) is localized
+# to the host language (Japanese Windows shows it in Japanese), so looking it up by
+# display name always fails on such hosts. Select it by the language-independent ID.
 function Get-VmVerifySessionGuestServiceInterface {
   param(
     [Parameter(Mandatory = $true)]
@@ -239,8 +245,9 @@ function Assert-VmVerifySessionVMRunning {
   return $vm
 }
 
-# Copy-VMFile は Guest Service Interface が有効なときだけ使える。
-# 使えない場合は代替手段を案内して非ゼロ終了する。黙って転送をスキップしない。
+# Copy-VMFile works only while Guest Service Interface is enabled.
+# Otherwise point to an alternative and exit non-zero. Never skip the transfer
+# silently.
 function Assert-VmVerifySessionGuestService {
   param(
     [Parameter(Mandatory = $true)]
@@ -258,8 +265,8 @@ function Assert-VmVerifySessionGuestService {
     return
   }
 
-  # 有効化コマンドも表示名で書かない。ローカライズされたホストでは同じ理由で
-  # 失敗し、案内どおりに実行しても解決しないため。
+  # Do not write the enable command with the display name either. On a localized
+  # host it fails for the same reason, and following the guidance would not help.
   throw (@(
     "Guest Service Interface is not enabled on '$VMName', so Copy-VMFile cannot transfer the package."
     "Enable it on the host and retry (the display name is localized, so select by component ID):"
@@ -295,8 +302,9 @@ function Invoke-VmVerifySessionPrepare {
   Assert-VmVerifySessionVMRunning -VMName $VMName | Out-Null
   Assert-VmVerifySessionGuestService -VMName $VMName
 
-  # 既存の同名チェックポイントは黙って上書きしない。前回の検証で VM が汚れている
-  # 可能性があり、その状態を「検証前」として保存すると基準を失う。
+  # Never silently overwrite an existing checkpoint of the same name. The VM may be
+  # dirty from a previous verification, and saving that state as "before
+  # verification" would lose the baseline.
   if (Get-VmVerifySessionCheckpoint -VMName $VMName -CheckpointName $checkpoint) {
     throw (@(
       "Checkpoint '$checkpoint' already exists on '$VMName'."
@@ -372,8 +380,8 @@ function Invoke-VmVerifySessionRestore {
 }
 
 # ---------------------------------------------------------------------------
-# -Run のホスト側。PowerShell Direct の呼び出しは Pester から差し替えられるよう
-# 1 箇所ずつ関数へ閉じ込める。
+# Host side of -Run. Each PowerShell Direct call is enclosed in its own function so
+# that Pester can replace it.
 # ---------------------------------------------------------------------------
 
 function Get-VmVerifySessionCredential {
@@ -483,9 +491,9 @@ function Assert-VmVerifySessionInteractiveUser {
   }
 }
 
-# "C-001,C-004" と @("C-001", "C-004") のどちらも受け、compat_test.exe へ渡す
-# カンマ区切りへ正規化する。値はタスクのコマンド文字列へ埋め込むため、
-# case ID の形式以外はここで拒否する。
+# Accepts both "C-001,C-004" and @("C-001", "C-004") and normalizes them to the
+# comma-separated form passed to compat_test.exe. The value is embedded in the
+# task's command string, so anything but the case ID format is rejected here.
 function ConvertTo-VmVerifySessionCaseList {
   param(
     [string[]]$Value = @(),
@@ -509,8 +517,9 @@ function ConvertTo-VmVerifySessionCaseList {
   return ($ids -join ",")
 }
 
-# compat_test.exe は target に無い ID と空になる選択を終了コード 64 で拒否する。
-# TIP 登録と bootstrap に時間を使う前に、同梱の target 定義と照合する。
+# compat_test.exe rejects IDs the target does not have, and a selection that ends
+# up empty, with exit code 64. Check against the bundled target definitions before
+# spending time on TIP registration and bootstrap.
 function Assert-VmVerifySessionCaseSelection {
   param(
     [Parameter(Mandatory = $true)]
@@ -567,8 +576,8 @@ function Get-VmVerifySessionTargetSummary {
     $Status
   )
 
-  # compat_test.exe の終了コード: 0 = 全件 pass、1 = fail を含む、
-  # 2 = fail は無いが failing-skip を含む（compat-test/README.md）。
+  # compat_test.exe exit codes: 0 = all pass, 1 = includes a fail,
+  # 2 = no fail but includes failing-skip (compat-test/README.md).
   foreach ($target in @($Status.targets)) {
     $outcome = switch ([int]$target.exitCode) {
       0 { "pass" }
@@ -622,7 +631,7 @@ function Invoke-VmVerifySessionGuestRun {
     -Description ("verify-bootstrap.ps1 -Json over PowerShell Direct (exit $directExitCode; " +
       "see bootstrap-direct.error.log in the artifacts)")
   Write-Host "Bootstrap over PowerShell Direct: $($direct.overallStatus)"
-  # 層 1 の bootstrap が fail なら compat へ進まない（plan §3）。
+  # Do not proceed to compat when the layer 1 bootstrap fails (plan section 3).
   if ($direct.overallStatus -eq "fail") {
     $failed = @($direct.checks | Where-Object { $_.status -eq "fail" } |
         ForEach-Object { "$($_.id): $($_.message)" })
@@ -685,9 +694,10 @@ function Receive-VmVerifySessionArtifact {
     [string]$HostRunRoot
   )
 
-  # 実行ディレクトリを作る前に失敗した場合は回収対象が無い。回収失敗と区別し、
-  # 元の失敗理由を二次エラーで埋もれさせない。azooKey ログの複製は付随作業なので、
-  # 失敗しても警告に留め、bootstrap の JSON と compat の report は回収を続ける。
+  # A failure before the run directory exists leaves nothing to collect. Keep that
+  # apart from a collection failure so a secondary error does not bury the original
+  # reason. Copying the azooKey logs is supplementary, so a failure there is only a
+  # warning and collection of the bootstrap JSON and the compat report continues.
   $logState = ""
   try {
     $logState = Invoke-VmVerifySessionGuestStep -Session $Session -Name "Copy-VmVerifyGuestLog" `
@@ -734,7 +744,8 @@ function Invoke-VmVerifySessionRun {
   }
 
   Assert-VmVerifySessionVMRunning -VMName $VMName | Out-Null
-  # bootstrap は TIP を machine-wide に登録する。戻す基準の無い VM では実行しない。
+  # bootstrap registers the TIP machine-wide. Do not run it on a VM with no baseline
+  # to restore to.
   if (-not (Get-VmVerifySessionCheckpoint -VMName $VMName -CheckpointName $checkpoint)) {
     throw ("Checkpoint '$checkpoint' was not found on '$VMName'. Run -Prepare first: " +
       "-Run registers the TIP machine-wide and needs a checkpoint to restore afterwards.")
@@ -794,8 +805,9 @@ function Invoke-VmVerifySessionRun {
     Write-Host "No artifacts were produced: the guest run directory was not created."
   }
   if ($outcome) {
-    # diag は環境ブロック用の付随情報なので、採れなくても L1 の判定は変えない。
-    # 欠けたことは vm-verify-summary.ps1 が missing として明示する。
+    # diag is supplementary information for the environment block, so failing to
+    # collect it does not change the L1 verdict. vm-verify-summary.ps1 reports the
+    # gap explicitly as missing.
     if ($outcome.Diag.Captured -and $collection.Collected) {
       Write-Host "azookey_diag --json: $(Join-Path $hostRunRoot 'azookey-diag.json')"
     } elseif (-not $outcome.Diag.Captured) {

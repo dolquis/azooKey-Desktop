@@ -121,11 +121,13 @@ function Get-VmVerifyCacheValue {
   return $match.Matches[0].Groups[1].Value
 }
 
-# sccache は MSVC の /showIncludes を含む stdout をヒット時にそのまま返し、キャッシュキーには
-# checkout のパスが入らない。別 checkout でコンパイルされた結果が返ると、.ninja_deps は
-# その checkout のヘッダを指す。そのヘッダが無ければ毎回 dirty になり、残っていれば
-# この checkout のヘッダを変えても再コンパイルされない。どちらも dry-run だけでは
-# 原因が見えないため、追跡ファイルと同じ相対パスで終わる checkout 外の依存を列挙する。
+# On a hit, sccache replays the stdout including MSVC /showIncludes as-is, and the
+# cache key does not include the checkout path. When a result compiled in another
+# checkout comes back, .ninja_deps points at that checkout's headers. If those
+# headers are gone the target is dirty every time; if they remain, changing this
+# checkout's headers does not trigger a recompile. A dry-run alone does not reveal
+# either cause, so list the dependencies outside this checkout that end in the
+# same relative path as a tracked file.
 function Get-VmVerifyForeignDependency {
   param(
     [Parameter(Mandatory = $true)]
@@ -144,7 +146,8 @@ function Get-VmVerifyForeignDependency {
     if (-not $ninja) {
       $ninja = "ninja"
     }
-    # -n は tool 実行時にも依存ログを書き込み用に開かせない（並行ビルドと競合させない）。
+    # -n keeps the tool from opening the deps log for writing (so it does not race a
+    # concurrent build).
     $DepsResult = [pscustomobject]@{ Output = @(& $ninja -n -C $BuildDirectory -t deps 2>&1); ExitCode = $LASTEXITCODE }
   }
   if ([int]$DepsResult.ExitCode -ne 0) {
@@ -164,11 +167,13 @@ function Get-VmVerifyForeignDependency {
   $buildRoot = Get-VmVerifyAbsolutePath -Path $BuildDirectory
   $buildPrefix = $buildRoot.Replace("\", "/").TrimEnd("/") + "/"
   $repositoryPrefix = (Get-VmVerifyAbsolutePath -Path $RepositoryRoot).Replace("\", "/").TrimEnd("/") + "/"
-  # `ninja -t deps` は対象ごとの見出し行の下に、依存パスを 4 桁字下げで並べる。
-  # 同じドライブのパスは build ディレクトリからの相対（../ を含む）で記録されるため、
-  # 別 checkout も相対になりうる。絶対パスへ戻してから比べる。
-  # 見出しが STALE の記録は Ninja 自身が使わず再ビルドするので、鮮度には効かない。
-  # target を絞って clean 再ビルドした後に残る古い記録で拒否しないよう除く。
+  # `ninja -t deps` lists dependency paths indented by four spaces under a heading
+  # line per target. Paths on the same drive are recorded relative to the build
+  # directory (including ../), so another checkout can appear relative too. Convert
+  # them back to absolute paths before comparing.
+  # Records whose heading says STALE are not used by Ninja itself (it rebuilds), so
+  # they do not affect freshness. Skip them so that old records left after a clean
+  # rebuild of selected targets do not cause a rejection.
   $paths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   $valid = $false
   foreach ($line in @($DepsResult.Output)) {
@@ -190,9 +195,10 @@ function Get-VmVerifyForeignDependency {
     if ($path.StartsWith($buildPrefix, [StringComparison]::OrdinalIgnoreCase)) {
       continue
     }
-    # repository の下でも、追跡ファイルそのものでなければ自分のものとは限らない。
-    # worktree は本体 checkout の .claude/worktrees/ 以下に置かれるため、本体での
-    # ビルドが worktree のヘッダーを拾った場合もここで別 checkout として扱う。
+    # Even under the repository, a path is not ours unless it is a tracked file
+    # itself. Worktrees live under .claude/worktrees/ of the main checkout, so when a
+    # build in the main checkout picks up a worktree header it is treated as another
+    # checkout here as well.
     if ($path.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase) -and
         $tracked.Contains($path.Substring($repositoryPrefix.Length))) {
       continue
@@ -248,8 +254,9 @@ function Assert-VmVerifyBuildReady {
   )
 
   if ($null -eq $CommandResult) {
-    # dry-run より先に見る。別 checkout の依存が dirty の原因なら、stale の一般的な
-    # 案内より具体的な対処を示せる。無いまま no work to do でも拒否する。
+    # Check this before the dry-run. If a dependency in another checkout is what
+    # makes the build dirty, this gives a more specific remedy than the generic stale
+    # message. It also rejects when the dry-run reports no work to do.
     Assert-VmVerifyLocalDependency -BuildDirectory $BuildDirectory -RepositoryRoot (
       Get-VmVerifyCacheValue -CachePath (Join-Path $BuildDirectory "CMakeCache.txt") -Name "CMAKE_HOME_DIRECTORY")
     $targets = @("azookey_tsf_tip", "azookey_inference_host", "azookey_diag")
@@ -345,14 +352,16 @@ function Assert-VmVerifyWorktreeClean {
   }
 }
 
-# azookey_settings は MSBuild を呼ぶ add_custom_target なので、ninja の dry-run では
-# 常に作業ありと出て鮮度を判定できない。MSBuild が中間ディレクトリに残す
-# *.read.*.tlog（コンパイラ、リンカ、XAML、MIDL、RC が実際に読んだファイル）のうち
-# repository の追跡ファイルだけを入力とする。settings-app/ の README やアイコン生成
-# スクリプトのように MSBuild が読まないファイルを入れると、target を回しても exe の
-# 時刻が動かず拒否が解けない。MSBuild の増分判定と同じ入力を見るので、拒否されたら
-# target を回せば解消する。git は checkout で変わったファイルの mtime を更新するため、
-# 別コミットへ移った後の未ビルドも拾える。
+# azookey_settings is an add_custom_target that calls MSBuild, so the ninja dry-run
+# always reports work and cannot judge freshness. Use as inputs only the
+# repository's tracked files among those listed in the *.read.*.tlog files MSBuild
+# leaves in the intermediate directory (the files the compiler, linker, XAML, MIDL
+# and RC actually read). Including files MSBuild does not read, such as the README
+# or the icon generation script under settings-app/, would leave the exe timestamp
+# unchanged after building the target, so the rejection would never clear. Because
+# this uses the same inputs as MSBuild's incremental check, building the target
+# clears a rejection. git updates the mtime of files changed by a checkout, so a
+# missing build after switching to another commit is caught too.
 function Get-VmVerifySettingsInput {
   param(
     [Parameter(Mandatory = $true)]
@@ -390,7 +399,8 @@ function Get-VmVerifySettingsInput {
       if ($line.StartsWith("#")) {
         continue
       }
-      # 行頭の ^ は入力のまとまりの見出しで、| で複数のソースを並べることがある。
+      # A leading ^ marks the heading of a group of inputs, which may list several
+      # sources separated by |.
       foreach ($part in $line.TrimStart("^").Split("|")) {
         $path = $part.Trim().Replace("\", "/")
         if ($path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
@@ -440,9 +450,9 @@ function Assert-VmVerifySettingsFresh {
   }
 }
 
-# MSI（pkg/msi/Package.wxs）と同じ範囲を取る。self-contained の Windows App SDK
-# ランタイム、resources.pri、*.xbf は exe と同じディレクトリに無いと起動しないため、
-# 相対構造を保ったまま settings/ へ入れる。
+# Take the same set as the MSI (pkg/msi/Package.wxs). The self-contained Windows App
+# SDK runtime, resources.pri and *.xbf must sit in the same directory as the exe or
+# it does not start, so copy them into settings/ keeping the relative layout.
 function Get-VmVerifySettingsPayload {
   param(
     [Parameter(Mandatory = $true)]
@@ -506,12 +516,14 @@ function Add-VmVerifyPayloadFile {
 function Get-VmVerifyScriptDependency {
   <#
     .SYNOPSIS
-      PowerShell payload が dot-source する同一ディレクトリのスクリプト名を返す。
+      Returns the names of same-directory scripts that a PowerShell payload
+      dot-sources.
     .DESCRIPTION
-      payload の一覧は手書きのため、dot-source される補助スクリプトを足し忘れても
-      ZIP 生成は成功し、VM 上で初めて失敗する（DEV-1140）。
-      `. (Join-Path $PSScriptRoot "x.ps1")` は行頭でも入れ子の block 内でも拾う。
-      行頭の dot-source でこの形に解決できないものは、黙って見逃さず例外にする。
+      The payload list is written by hand, so forgetting to add a dot-sourced helper
+      script still lets the ZIP build succeed and only fails on the VM (DEV-1140).
+      `. (Join-Path $PSScriptRoot "x.ps1")` is found both at the start of a line and
+      inside nested blocks. A dot-source at the start of a line that does not resolve
+      to this form throws instead of being silently ignored.
   #>
   param(
     [Parameter(Mandatory = $true)]
@@ -536,7 +548,8 @@ function Get-VmVerifyScriptDependency {
 function Assert-VmVerifyScriptDependency {
   <#
     .SYNOPSIS
-      payload の PowerShell スクリプトが dot-source する依存が同じ ZIP に入るか検査する。
+      Checks that the dependencies dot-sourced by the payload's PowerShell scripts
+      are in the same ZIP.
   #>
   param(
     [Parameter(Mandatory = $true)]
@@ -553,7 +566,7 @@ function Assert-VmVerifyScriptDependency {
     if ([System.IO.Path]::GetExtension($archive) -ine ".ps1") {
       continue
     }
-    # dot-source は展開先のスクリプトから見た $PSScriptRoot で解決される。
+    # A dot-source resolves against $PSScriptRoot as seen from the extracted script.
     $directory = [System.IO.Path]::GetDirectoryName($archive.Replace("\", "/")).Replace("\", "/")
     foreach ($dependency in Get-VmVerifyScriptDependency -Path ([string]$entry.Source)) {
       $expected = if ($directory) { "$directory/$dependency" } else { $dependency }
@@ -699,7 +712,7 @@ function Export-VmVerifyPackage {
       throw "Required build artifact is missing for preset '$PresetName': $artifact"
     }
   }
-  # settings-app/CMakeLists.txt の OutDir と同じく、Debug 以外は Release に出る。
+  # As with OutDir in settings-app/CMakeLists.txt, everything but Debug goes to Release.
   $settingsConfiguration = if ($actualBuildType -ceq "Debug") { "Debug" } else { "Release" }
   $settingsDirectory = Join-Path $configuration.BinaryDir "settings-app\$settingsConfiguration"
   $settingsExe = Join-Path $settingsDirectory "azookey_settings.exe"
@@ -712,7 +725,7 @@ function Export-VmVerifyPackage {
     -IncludeBench:([bool]$Model) `
     -IncludeCompat:$IncludeCompat
   if ($IncludeSettings) {
-    # settings-app/CMakeLists.txt が MSBuild へ渡す IntDir と同じ場所。
+    # The same location as the IntDir that settings-app/CMakeLists.txt passes to MSBuild.
     Assert-VmVerifySettingsFresh -RepositoryRoot $repository -ExecutablePath $settingsExe `
       -IntermediateDirectory (Join-Path $configuration.BinaryDir "settings-app\obj\$settingsConfiguration") `
       -Preset $PresetName
@@ -807,8 +820,8 @@ function Export-VmVerifyPackage {
         -StagingDirectory $staging
     }
 
-    # 欠落した dot-source 依存は VM 上でしか表面化しないので、ZIP を書く前に落とす。
-    # 各 payload の実在は Add-VmVerifyPayloadFile が先に確認している。
+    # A missing dot-source dependency only surfaces on the VM, so fail before writing
+    # the ZIP. Add-VmVerifyPayloadFile has already checked that each payload exists.
     Assert-VmVerifyScriptDependency -Payload $payloads
 
     $manifest = [ordered]@{

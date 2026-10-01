@@ -12,7 +12,7 @@ param(
   [switch]$SkipAppContainerAcl,
   # Internal: set when the script relaunches itself elevated. The per-user
   # (HKCU) inference-host auto-start is written in the original user's process
-  # *before* elevation, so the elevated reentry must skip it — otherwise, when a
+  # *before* elevation, so the elevated reentry must skip it -- otherwise, when a
   # standard user elevates with a *separate* administrator account, the Run value
   # would land in that administrator's hive instead of the interactive user's.
   [switch]$ElevatedReentry
@@ -222,7 +222,7 @@ if (-not $ElevatedReentry) {
     # right after registration sees a live TIP (preedit works) but no candidates
     # (Space returns nothing) because nothing is serving the per-user pipe yet.
     # Started here, in the original (non-elevated) process, so it runs as the
-    # interactive user — same rationale as the Run entry. The supervisor owns
+    # interactive user -- same rationale as the Run entry. The supervisor owns
     # host restart responsibility and waits for an already-serving host before
     # taking over, so registration never creates a duplicate pipe server.
     #
@@ -253,7 +253,7 @@ if (-not $ElevatedReentry) {
 
 # Machine-wide step (HKLM COM + TSF profile under CTF\TIP): requires elevation.
 # TSF has no persistent per-user TIP registration (see
-# docs/sideload-packaging-spec.md §1). Relaunch elevated if needed. The argument
+# docs/sideload-packaging-spec.md section 1). Relaunch elevated if needed. The argument
 # list is built as a single string with each path wrapped in escaped double
 # quotes so values containing spaces survive the relaunch (Start-Process does not
 # re-quote array elements).
@@ -279,7 +279,7 @@ if (!(Test-Path $TipDllPath)) {
 # advertises the profile. A development build tree lives under the user profile
 # and therefore carries no ALL APPLICATION PACKAGES ACE, so UWP / Microsoft
 # Store apps cannot load the TIP until it is granted (docs/sideload-packaging-
-# spec.md §1.7). Non-fatal: desktop apps work regardless, so a failure here
+# spec.md section 1.7). Non-fatal: desktop apps work regardless, so a failure here
 # degrades AppContainer coverage rather than blocking registration.
 if ($SkipAppContainerAcl) {
   Write-Warning "Skipping the ALL APPLICATION PACKAGES grant (-SkipAppContainerAcl). UWP / Microsoft Store apps will not be able to load this TIP DLL."

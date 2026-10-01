@@ -1,18 +1,19 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  vm-verify-session.ps1 -Run がゲスト内で実行する関数群。
+  Functions that vm-verify-session.ps1 -Run executes inside the guest.
 
 .DESCRIPTION
-  vm-verify-session.ps1 が dot-source し、各関数の本体を PowerShell Direct の
-  Invoke-Command へ送る。対話タスク用のスクリプトにも同じ本体を書き出す。
-  単体では何も実行しない。
+  vm-verify-session.ps1 dot-sources this file and sends each function body to
+  PowerShell Direct Invoke-Command. The same bodies are also written into the
+  script for the interactive task. On its own this file executes nothing.
 #>
 
 # ---------------------------------------------------------------------------
-# -Run のゲスト側関数。Invoke-Command -ScriptBlock へ関数本体だけを送るため、
-# 他の関数やスクリプト変数に依存させず、ゲストの Windows PowerShell 5.1 で動く
-# 構文だけを使う。対話タスク用スクリプトにも同じ本体を書き出す。
+# Guest-side functions for -Run. Only the function body is sent to
+# Invoke-Command -ScriptBlock, so do not depend on other functions or script
+# variables, and use only syntax that runs on the guest's Windows PowerShell 5.1.
+# The same bodies are also written into the script for the interactive task.
 # ---------------------------------------------------------------------------
 
 function Initialize-VmVerifyGuestPackage {
@@ -29,9 +30,10 @@ function Initialize-VmVerifyGuestPackage {
     throw ("The package archive is not in the guest: $ZipPath. " +
       "Run -Prepare first with the same -GuestDestination.")
   }
-  # 展開先は zip 名から決まる固定パスにする。TIP DLL のパスが実行ごとに変わると
-  # bootstrap が登録済みと判定できず、毎回再登録が走るため。zip 名は commit と
-  # preset しか含まないので、同名で送り直された zip は hash で見分けて展開し直す。
+  # Extract to a fixed path derived from the zip name. If the TIP DLL path changed
+  # on every run, bootstrap could not tell it is already registered and would
+  # re-register each time. The zip name only carries the commit and preset, so a
+  # zip re-sent under the same name is told apart by its hash and extracted again.
   $zipHash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash
   $markerPath = Join-Path $PackageRoot ".azookey-verify-archive.sha256"
   $expandedHash = ""
@@ -72,8 +74,9 @@ function Initialize-VmVerifyGuestPackage {
   return @($targets | ForEach-Object { $_.BaseName })
 }
 
-# 同梱の target ごとの case ID を返す。-CompatCases / -CompatSkip に target に無い ID が
-# あると compat_test.exe は終了コード 64 で止まるため、bootstrap より前にホスト側で照合する。
+# Returns the case IDs of each bundled target. compat_test.exe stops with exit code
+# 64 when -CompatCases / -CompatSkip names an ID the target does not have, so the
+# host checks them before bootstrap.
 function Get-VmVerifyGuestTargetCase {
   param(
     [Parameter(Mandatory = $true)]
@@ -94,8 +97,8 @@ function Get-VmVerifyGuestTargetCase {
 function Get-VmVerifyGuestInteractiveUser {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-  # Win32_ComputerSystem.UserName はコンソール（VMConnect の基本セッション）に
-  # サインインしているユーザーを返す。拡張セッション（RDP）だけの場合は空になる。
+  # Win32_ComputerSystem.UserName returns the user signed in to the console (the
+  # VMConnect basic session). It is empty when only an enhanced session (RDP) exists.
   return [pscustomobject][ordered]@{
     ConsoleUser = [string](Get-CimInstance -ClassName Win32_ComputerSystem).UserName
     SessionUser = [string]$identity.Name
@@ -115,10 +118,11 @@ function Invoke-VmVerifyGuestBootstrap {
     [int]$TimeoutSeconds = 900
   )
 
-  # 子プロセスにするのは、bootstrap の exit でこの呼び出し元まで終わらせないため。
-  # -Json の出力は子プロセス自身がファイルへ書く。標準出力をリダイレクトすると、
-  # bootstrap が起動する常駐 supervisor がそのハンドルを継承しうるため。
-  # Write-Warning（stream 3）は JSON を壊すので別ファイルへ分ける。
+  # Run as a child process so that bootstrap's exit does not end this caller too.
+  # The child writes the -Json output to a file itself, because redirecting
+  # stdout could let the resident supervisor that bootstrap starts inherit the
+  # handle. Write-Warning (stream 3) would corrupt the JSON, so it goes to a
+  # separate file.
   $quote = { param($value) "'" + ([string]$value).Replace("'", "''") + "'" }
   $bootstrap = Join-Path $PackageRoot "verify-bootstrap.ps1"
   $warningPath = [System.IO.Path]::ChangeExtension($OutputPath, ".warnings.log")
@@ -134,8 +138,9 @@ function Invoke-VmVerifyGuestBootstrap {
     "catch { `$_ | Out-String | Set-Content -LiteralPath $(& $quote $errorPath) -Encoding UTF8; exit 1 }"
   $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
 
-  # Windows PowerShell 5.1 の Start-Process -Wait は子孫プロセスの終了まで待つため、
-  # 常駐 supervisor が残ると戻らない。本体だけを WaitForExit で待つ。
+  # Start-Process -Wait in Windows PowerShell 5.1 waits for all descendant
+  # processes, so it never returns while the resident supervisor is alive. Wait
+  # only for the child itself with WaitForExit.
   $process = Start-Process -FilePath "powershell.exe" `
     -ArgumentList "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded" `
     -WindowStyle Hidden -PassThru
@@ -147,10 +152,10 @@ function Invoke-VmVerifyGuestBootstrap {
   return [int]$process.ExitCode
 }
 
-# PowerShell Direct のセッションは Session 0 にあり、そこで起動した Host には
-# 対話セッションの TIP が接続できない。bootstrap の pipe 判定と supervisor の
-# mutex はセッションを区別しないため、Session 0 の Host が残っていると対話側の
-# bootstrap がそれを再利用してしまう。対話タスクの前に止めておく。
+# A PowerShell Direct session lives in Session 0, and the TIP in the interactive
+# session cannot connect to a Host started there. bootstrap's pipe check and the
+# supervisor mutex do not distinguish sessions, so a leftover Session 0 Host would
+# be reused by the interactive bootstrap. Stop it before the interactive task.
 function Invoke-VmVerifyGuestSessionZeroHostShutdown {
   param(
     [Parameter(Mandatory = $true)]
@@ -162,8 +167,9 @@ function Invoke-VmVerifyGuestSessionZeroHostShutdown {
 
   $pipeName = Get-VmVerifyPipeName
   if (-not (Test-VmVerifyPipe -PipeName $pipeName)) {
-    # supervisor が Host の再起動を待っている間は pipe が無い。残したままにすると
-    # 対話側の supervisor が mutex を取れず、Session 0 の Host が後から立ち上がる。
+    # While the supervisor waits to restart the Host there is no pipe. If it were
+    # left running, the interactive supervisor could not take the mutex and a
+    # Session 0 Host would come up later.
     Invoke-VmVerifyHostSupervisorShutdown
     if (-not (Wait-VmVerifyHostSupervisorStopped -TimeoutSeconds 10)) {
       throw "The inference host supervisor did not stop within the timeout."
@@ -228,11 +234,12 @@ function Copy-VmVerifyGuestLog {
   return "copied"
 }
 
-# compat_test.exe は UI Automation と SendInput を使うため対話デスクトップが要る。
-# PowerShell Direct のセッションは非対話なので、コンソールにサインインしている
-# ユーザーのスケジュールタスクとして実行する。LogonType Interactive はそのユーザーが
-# サインイン中のときだけ動き、パスワードをタスクへ保存しない。RunLevel Limited に
-# するのは、手動手順と同じ非昇格トークンで Host と対象アプリを起動するため。
+# compat_test.exe uses UI Automation and SendInput, so it needs the interactive
+# desktop. A PowerShell Direct session is non-interactive, so run it as a scheduled
+# task of the user signed in to the console. LogonType Interactive runs only while
+# that user is signed in and does not store a password in the task. RunLevel
+# Limited starts the Host and the target apps with the same non-elevated token as
+# the manual procedure.
 function Invoke-VmVerifyGuestInteractiveTask {
   param(
     [Parameter(Mandatory = $true)]
@@ -287,16 +294,17 @@ function Invoke-VmVerifyGuestInteractiveTask {
       }
       Start-Sleep -Seconds $PollSeconds
     }
-    # LastTaskResult は uint32。0x8xxxxxxx の HRESULT を [int] に変換すると例外になる。
+    # LastTaskResult is a uint32. Converting a 0x8xxxxxxx HRESULT to [int] throws.
     return [int64](Get-ScheduledTaskInfo -TaskName $TaskName).LastTaskResult
   } finally {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   }
 }
 
-# compat_test.exe は azooKey を選択しない（compat-test/README.md）。TIP の登録は
-# 入力方式を選択可能にするだけなので、対話ユーザーの既定入力方式を azooKey にする。
-# ユーザー単位の設定であり、検証後の checkpoint 復元で元に戻る。
+# compat_test.exe does not select azooKey (compat-test/README.md). Registering the
+# TIP only makes the input method selectable, so make azooKey the interactive
+# user's default input method. This is a per-user setting and is undone by
+# restoring the checkpoint after verification.
 function Invoke-VmVerifyGuestInputMethodSelection {
   $tip = "0411:{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}"
   $current = Get-WinDefaultInputMethodOverride
@@ -322,11 +330,12 @@ function Invoke-VmVerifyGuestInputMethodSelection {
   return "switched"
 }
 
-# azookey_diag.exe --json を対話セッションで実行し、標準出力をそのままファイルへ書く。
-# Host の pipe と設定はユーザー単位なので、PowerShell Direct（Session 0）ではなく
-# compat と同じ対話ユーザーで採取する。--json は常に終了コード 0 で、判定は JSON 内の
-# status が持つ。JSON を PowerShell の文字列へ通すと 5.1 の既定エンコーディングで
-# 壊れうるため、標準出力はプロセスから直接ファイルへリダイレクトする。
+# Runs azookey_diag.exe --json in the interactive session and writes stdout to a
+# file as-is. The Host pipe and settings are per user, so collect it as the same
+# interactive user as compat rather than from PowerShell Direct (Session 0).
+# --json always exits with 0; the verdict lives in the status inside the JSON.
+# Passing the JSON through a PowerShell string can corrupt it under the 5.1 default
+# encoding, so stdout is redirected straight from the process to the file.
 function Invoke-VmVerifyGuestDiag {
   param(
     [Parameter(Mandatory = $true)]
@@ -352,17 +361,18 @@ function Invoke-VmVerifyGuestDiag {
   return [int]$process.ExitCode
 }
 
-# 対話タスクが実行する本体。ゲストへは Invoke-VmVerifyGuestBootstrap、
-# Invoke-VmVerifyGuestInputMethodSelection、Invoke-VmVerifyGuestDiag と一緒に
-# スクリプトファイルとして書き出す。失敗しても状態ファイルは必ず書く。
+# The body the interactive task executes. It is written to the guest as a script
+# file together with Invoke-VmVerifyGuestBootstrap,
+# Invoke-VmVerifyGuestInputMethodSelection and Invoke-VmVerifyGuestDiag. The state
+# file is always written, even on failure.
 function Invoke-VmVerifyGuestCompatRun {
   param(
     [Parameter(Mandatory = $true)]
     [string]$PackageRoot,
     [Parameter(Mandatory = $true)]
     [string]$RunRoot,
-    # compat_test.exe の --cases / --skip へそのまま渡すカンマ区切りの case ID。
-    # 空なら引数を付けず、target の全ケースを実行する。
+    # Comma-separated case IDs passed as-is to compat_test.exe --cases / --skip.
+    # When empty, no argument is added and every case of the target runs.
     [string]$Cases = "",
     [string]$Skip = ""
   )
@@ -389,8 +399,9 @@ function Invoke-VmVerifyGuestCompatRun {
   $originalLog = [Environment]::GetEnvironmentVariable("AZOOKEY_LOG", "Process")
   $originalLogLevel = [Environment]::GetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "Process")
   try {
-    # 登録は PowerShell Direct 側で済んでいるため、ここでの再実行は UAC 昇格に
-    # 入らず、Host をこの対話セッションで起動して検証するだけになる。
+    # Registration is already done on the PowerShell Direct side, so this rerun
+    # does not go through UAC elevation; it only starts and checks the Host in this
+    # interactive session.
     $bootstrapPath = Join-Path $RunRoot "bootstrap-interactive.json"
     $status.bootstrapExitCode = Invoke-VmVerifyGuestBootstrap `
       -PackageRoot $PackageRoot -OutputPath $bootstrapPath -CheckpointConfirmed $true
@@ -411,9 +422,9 @@ function Invoke-VmVerifyGuestCompatRun {
     }
     $status.inputMethod = Invoke-VmVerifyGuestInputMethodSelection
 
-    # compat の前に採取する。C-010 は Host を終了し、C-013 は一時停止するため、
-    # compat の後では bootstrap 直後の状態を表さない。diag は付随情報なので、
-    # 失敗しても理由を記録して compat へ進む。
+    # Collect before compat. C-010 ends the Host and C-013 suspends it, so after
+    # compat the state no longer reflects the moment right after bootstrap. diag is
+    # supplementary, so on failure record the reason and continue to compat.
     $diagPath = Join-Path $RunRoot "azookey-diag.json"
     try {
       $status.diagExitCode = Invoke-VmVerifyGuestDiag -PackageRoot $PackageRoot -OutputPath $diagPath
@@ -437,8 +448,8 @@ function Invoke-VmVerifyGuestCompatRun {
     $runHostHang = (-not $Cases -or $Cases.Split(',') -ccontains 'C-013') -and
       ($Skip.Split(',') -cnotcontains 'C-013')
     if ($runHostHang) {
-      # 新規起動プロセスだけが継承する。既存 browser / VS Code への委譲時は
-      # C-013 がログ未確認を failing-skip として報告する。
+      # Only newly started processes inherit this. When launching is delegated to an
+      # existing browser / VS Code, C-013 reports the unverified log as failing-skip.
       [Environment]::SetEnvironmentVariable("AZOOKEY_LOG", "1", "Process")
       [Environment]::SetEnvironmentVariable("AZOOKEY_LOG_LEVEL", "info", "Process")
     }
@@ -452,13 +463,15 @@ function Invoke-VmVerifyGuestCompatRun {
         -RedirectStandardOutput (Join-Path $RunRoot "compat-$name.stdout.log") `
         -RedirectStandardError (Join-Path $RunRoot "compat-$name.stderr.log") `
         -NoNewWindow -PassThru
-      # -Wait は compat_test.exe が起動した対象アプリ（Edge の常駐プロセスなど）の
-      # 終了まで待ってしまう。本体だけを待ち、全体の上限はタスクの制限時間に任せる。
+      # -Wait would also wait for the target apps compat_test.exe started (such as
+      # Edge's resident processes) to exit. Wait only for compat_test.exe itself and
+      # leave the overall limit to the task's time limit.
       $null = $process.Handle
       $process.WaitForExit()
       $reportPath = Join-Path $reportDirectory "report.json"
       $reportJson = [bool](Test-Path -LiteralPath $reportPath -PathType Leaf)
-      # 部分実行を全件 pass と読み違えないよう、実行しなかったケースを状態へ写す。
+      # Copy the cases that did not run into the state so that a partial run is not
+      # mistaken for an all-pass.
       $excluded = @()
       if ($reportJson) {
         try {
@@ -467,8 +480,8 @@ function Invoke-VmVerifyGuestCompatRun {
             $excluded = @($report.case_selection.excluded | ForEach-Object { [string]$_ })
           }
         } catch {
-          # 壊れた report.json は vm-verify-summary.ps1 が invalid として数える。
-          # 残りの target を止めないよう、ここでは除外なしとして続ける。
+          # vm-verify-summary.ps1 counts a broken report.json as invalid. Continue
+          # here as if nothing was excluded so the remaining targets are not stopped.
           $excluded = @()
         }
       }

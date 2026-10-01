@@ -189,9 +189,6 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 - 成果物（bootstrap の JSON と警告・エラーのログ、`azookey-diag.json`、`compat-report-<target>/`、
   各 target のログ、`%LOCALAPPDATA%\azooKey\logs`）は `build\vm-verify-results\<パッケージ名>-<UTC 時刻>\` へ回収する。
   回収先は `-ResultsDirectory` で変えられる。
-- `-Run` は `azookey_diag.exe --json` を実行せず、その出力も回収しない。
-  `vm-verify-summary.ps1 -DiagJsonPath` へ渡す診断 JSON は、ゲストの対話セッションで
-  `azookey_diag.exe --json` を実行して保存し、ホストへ回収する。
 - `compat_test.exe` の fail、report の欠落、タイムアウト（既定 45 分、`-TimeoutMinutes`）は非ゼロ終了にする。
   failing-skip だけの場合は成功として終わるが、各 `report.md` の failing-skip は人が確認する。
 - `-CompatCases` と `-CompatSkip` は、すべての target の `compat_test.exe` へ `--cases` / `--skip`

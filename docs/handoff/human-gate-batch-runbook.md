@@ -79,12 +79,25 @@ runner は `--target` に渡したパスから target JSON を読むため、両
 
 - Sysinternals Suite（`procmon`、`handle`）：Store 入力が再検証で失敗した場合の境界確認に使う
 - ゲスト側の 150% DPI 設定：DEV-716 の C-006 が要求する。ゲスト OS のスケーリング設定なので基本セッションのままで足りる
-- 絵文字を含むユーザー辞書エントリ、または絵文字を返す辞書：DEV-716 の C-007 を TIP 経路で確認するため
+- 絵文字を含むユーザー辞書エントリ、または絵文字を返す辞書：DEV-716 の C-007 を TIP 経路で確認するため。取り込み用の TSV は下の合成 fixture にある
 - DEV-153 の対象アプリ（Chrome、VS Code、Windows ターミナル、Office 365 Word）：未導入のアプリは測れないため、事前に入れるか対象外として記録する。VS Code は DEV-847 の対象でもある
 - 第 2 のローカルユーザーアカウント：DEV-676 の項目 3（別ユーザー provisioning）が要求する
 - デバッガ（WinDbg など）：DEV-905 で Application Verifier が停止したとき、接続していないと停止コードと stack が残らない
 - ETW / WPR の資産：DEV-1092 と DEV-677 が要求する。検証 zip には含まれないため、`diagnostics/azookey-diagnostics.wprp`、`diagnostics/etw/AzooKey.man`、`azookey_etw_manifest` ターゲットで生成した `azookey_etw_manifest.dll` を同じ commit から持ち込む。登録と解除は `docs/sideload-packaging-spec.md` §7.4 の `wevtutil im` / `wevtutil um` に従い、パスはゲストへ置いた場所に読み替える
-- 429 を返すループバックの stub：DEV-1411 の `RateLimit` と再試行待機を、外部 API を使わずに誘発するため（レーン 2 の手順 2）
+- 429 を返すループバックの stub：DEV-1411 の `RateLimit` と再試行待機を、外部 API を使わずに誘発するため（レーン 2 の手順 2）。stub は下の合成 fixture にある
+- 合成 fixture（`scripts/vm-verify-fixtures/`）：検証 zip には含まれないため、検証 zip と同じ commit の checkout からディレクトリごとゲストへコピーする。収録物、コピー後の照合、ゲートごとのコマンドは [`scripts/vm-verify-fixtures/README.md`](../../scripts/vm-verify-fixtures/README.md) が正典であり、本書はコマンドを再掲しない
+
+合成 fixture を使うゲートと、README の対応する節は次のとおり。
+
+| ゲート | 使うもの | README の節 |
+|---|---|---|
+| DEV-716 の C-007 | 絵文字を表層に持つユーザー辞書の TSV | 「絵文字のユーザー辞書」 |
+| DEV-1411 | 401、429 + `Retry-After`、遅延応答を返すループバック stub | 「AI 整文のループバック stub」 |
+| DEV-1360 | カスタムローマ字 TSV（正常、差し替え用、空、不正行のみ） | 「カスタムローマ字 TSV」 |
+| DEV-1446 | DPAPI 暗号化より前の形式の平文ストア | 「平文ストア」 |
+| DEV-963 / DEV-1144 | 非 ASCII のディレクトリ名とファイル名を生成するスクリプト | 「非 ASCII パス」 |
+| DEV-759 | `--stdio` の Host へ渡す Handshake と CommitObservation の行 | 「stdio の行」 |
+| 検証メモの下書き | ゲート ID と課題の対応表 `gate-map.json` | 「gate map」 |
 
 マルチディスプレイ構成は用意しない。
 IME の打鍵検証は基本セッション必須であり（`hyper-v-tip-verification.md` の安全装置）、基本セッションは単一ディスプレイしか持てない。
@@ -297,6 +310,12 @@ MSI の転送とログの回収は、検証 zip と同じ `vm-verify-session.ps1
 3. 続けて **DEV-767** のチェックリスト（設定アプリの起動・二重起動・アンインストール残留物）を実施する。同じクリーン VM 状態を使うため、DEV-673 のアンインストール確認と順序を合わせる。
 4. **DEV-1385** は WiX 7 でビルドした MSI（DEV-1383 の成果物）と WiX 5 でビルドした MSI の 2 つを要する。クリーン checkpoint から WiX 7 版の新規インストールとアンインストールを確認し、クリーン checkpoint へ戻してから WiX 5 版を入れ、WiX 7 版へのアップグレードで旧版が残らないことを確認する。`pkg/msi/Package.wxs` の `MajorUpgrade` は同じ版を上位更新として扱わないため、WiX 7 版の ProductVersion が WiX 5 版より高いことを開始条件とする。2 つの MSI のファイル名、ProductVersion、SHA-256 を検証メモに記録する。
 
+MSI を入れた状態でしか確認できない項目を持つ課題が、ほかに 2 つある。
+レーン 2 以降では状態を作れないので、実施する場合はこのレーンで行い、実施しない場合は未実施と理由を各課題に記録する。
+
+- DEV-676：ログオン時のコンソールウィンドウの表示と、ConstrainedLanguage または PowerShell 5.1 を無効にした環境での launcher の診断。どちらも MSI が登録するログオン経路（`start-installed-host.ps1`。`docs/sideload-packaging-spec.md`「MSI のログオン常駐」）のもので、開発登録は launcher を経由しない。後者は VM の状態を変えるので、checkpoint を取ってから行う。
+- DEV-1092 の項目 4：clean VM での IME 動作と、アンインストール後の診断ファイルの残留。DEV-673 と DEV-767 のアンインストール確認と同じ機会に見る。
+
 Store 入力の可否は DEV-673 の合否を左右しない。
 MVP が入力先として保証するのは Win32 デスクトップアプリであり、Store / UWP は v1.0 以降へ送ることが確定しているためである。
 除外の境界は AppContainer を使うかどうかではなく、パッケージ化された UWP / Store アプリかどうかで引く（§0.1）。
@@ -364,12 +383,24 @@ MSI の machine-wide 登録を残したままレーン 2 の開発登録を重�
 次の順に、可逆な設定と学習データ、通常の打鍵、VM 状態を変える操作を分ける。
 前提実装と個別の合格条件は各課題と対応する spec で確認する。
 
+DEV-1446（M34 DPAPI）の平文から暗号化への移行は、手順 1 より前に行う。
+Host は最初の起動で平文ストアを暗号化するため（`docs/sideload-packaging-spec.md` §9.4・§9.5）、移行はその 1 回でしか観測できない。
+手順 1 の `-Run` と `verify-bootstrap.ps1` は Host を起動するので、先に走らせると移行前の状態を作れない。
+`-Prepare` の後、Host を一度も起動していない状態で合成の平文ストアを配置し、checkpoint を取って移行前を記録する。
+最初の Host 起動は手順 1 の `-Run` に任せ、`-Run` の後に移行後を記録して比較する。
+`-Run` は compat の打鍵も行うので、移行後の記録には compat による学習の書き込みも入る。移行の根拠は `Changed: yes` ではなく、平文の `removed`、`.enc` と `.bak` の `added`、`.bak` の SHA-256 が fixture と一致すること、README の件数で見る。
+`-Prepare` は zip を転送するだけで展開しない。移行前の記録に使う `learning-data-snapshot.ps1` は、検証 zip から `-Run` の展開先（`C:\azookey-verify\<zip の basename>`）とは別のディレクトリへ取り出して使う。
+`-Run` は展開先を自分で作り直すので、同じ場所へ手で展開して使用中のままにすると `-Run` が止まる。手で取り出した側から `register-dev.ps1` と `verify-bootstrap.ps1` を実行しない。
+配置先、移行前後の記録、件数の確認は [`scripts/vm-verify-fixtures/README.md`](../../scripts/vm-verify-fixtures/README.md)「平文ストア」に従う。
+以降の手順は暗号化済みの状態のまま進めてよい。
+DEV-1446 の残りの項目は、設定アプリを操作する手順 2（API キーの `dpapi:` 保存と D-014）と、別ユーザーを使う手順 6（他ユーザーでの復号失敗）で確認する。
+
 1. **先行自動判定**：`-Run -CompatSkip C-006,C-013,C-010` で Host 停止・DPI 変更を伴わない compat ケースを先に採る。`verify-bootstrap.ps1` が失敗したら、打鍵ゲートへ進まない。runner の結果は人の TIP 操作・目視判定を代替しない。
 2. **設定反映と学習不変**：DEV-1160 を設定系ゲートの最初に置き、既存 TIP 接続への設定反映と新規アプリとの差を確認する。その後、DEV-1188（M46 secure 抑止・インジケータ）、DEV-1346（M14 の secure 抑止項目）、DEV-1046（M58-B/C の AI 整文で学習しない項目）を行う。各項目の直前・直後に学習データを記録して比較し、secure から通常入力へ戻る確認も記録する。DEV-1046 の実 API を使う場合は承認済みの接続先だけを使い、キーと入力本文を証跡へ載せない。DEV-1046 の後に DEV-1411（AI 整文のエラー分類通知）を行う。外部 API を使うかは人が決める。使わない場合は、分類ごとに次の手段で誘発する（分類の定義は `docs/ai-backend-spec.md` §7.2）。stub を使うときは `aiBackend=openai` とし、`openAiApiKey` に機密でない非空のダミーキー（`dpapi:` で始まらない平文）を設定する。キーが空だと HTTP 接続の前に `Auth` になり、ほかの分類を観測できない。`RateLimit` と再試行待機は HTTP 429 でしか起きないため、`openAiApiEndpoint` をゲスト内のループバック stub（`http://127.0.0.1:<port>/v1`）へ向け、429 と `Retry-After` を返させる。平文 HTTP が許されるのは `127.0.0.1` と `[::1]` の直書きだけで、`localhost` は拒否される。同じ stub に 401 を返させると `Auth`、応答を設定したタイムアウトより遅らせると `Timeout` になる。待ち受けていないポートを指すと `Network`、`dpapi:` キーを復号できない状態にすると `KeyReentry` になる。続けて DEV-1360（M17 カスタムローマ字）で `inputStyle=custom` と `customRomajiTablePath` の TSV を指定し、保存し直したときの反映と空・不正 TSV での内蔵表への復帰を確認する。確認後は `inputStyle` を元に戻してから次へ進む。
 3. **通常の入力とアプリ巡回**：Notepad → VS Code → Edge を 1 巡し、下の統合チェックリストを使う。DEV-1266（M13、M3〜M10 回帰）を基準に DEV-1346（M14）、DEV-1350（M15）、DEV-760〜762（M61-A/B）を確認する。M14 と M15 は M13 の結果を前提にそれぞれ判定する。DEV-761 の per-app 設定切替は DEV-1160 の確認後に行う。DEV-153 と DEV-365 が要求する残りのアプリも、それぞれの課題で確認する。Notepad では DEV-1408（M20 再変換）の選択からの変換キー、選択直後の右クリック、選択や位置を変えた後に古い候補が出ないことも確認する。Office を導入した VM では同じ確認を Office でも行い、未導入なら未実施として記録する。
 4. **中間 checkpoint と DPI**：巡回の証跡を回収して checkpoint を取る。ゲストの表示スケールを 150% に変えて再サインインし、DEV-716 の C-006 と DEV-365 の D-08（Notepad / VS Code / Edge）を確認する。D-08 は 200% へ変更して再サインインした状態でも 3 アプリを確認する。各スケールで OS の設定値、操作結果、runner の `report.json`、目視記録を復元前にホストへ回収する。最後に設定を戻すか checkpoint へ復元し、登録と Host の Ready を確認してから障害注入へ進む。
 5. **無応答と Host kill**：TIP の info ログ、ETW、Host ログの採取を先に開始する。C-013 の一時停止と復帰を先に行い、DEV-1263（M42）の無応答・ローカル fallback・Ready 復帰を人が確認する。C-013 の実アプリ結果（Notepad / VS Code / Edge の `report.json` と TIP JSONL）は DEV-1395 に記録する。次に C-010 の Host kill を 1 回行い、DEV-716、DEV-1263、DEV-676 の項目 2 へ同じ実走を参照する。Host 不在時の DEV-760（M61-A）の基本ペア動作も確認する。C-013 と C-010 の実行中は、DEV-1398（M47）の `degraded_simple` の表示と消去も観察する。各課題の期待値と判定は別々に記録し、Host が Ready に戻ったことを確かめる。DEV-1398 の `degraded_model` は、モデルを指定せずに Host を起動し、存在しないパスか破損した GGUF をロードさせて誘発する。ロード済みのモデルがあるまま差し替えに失敗しても劣化として扱われない（`docs/dev-infrastructure-spec.md` §8.5.1）。復帰は正しいパスでの再ロードで確認し、検証 zip のモデル指定へ戻してから次へ進む。SafeMode は Host の連続クラッシュ（`docs/dev-infrastructure-spec.md` §8.5.3）で誘発する。SafeMode は手動解除まで残るため、誘発前に checkpoint を取り、確認後に復元してから次へ進む。
-6. **ログオンとユーザー変更**：DEV-676 のログオン自動起動、別ユーザー provisioning、監督停止の各項目を行う。ログオフや別ユーザーへの切替は元の対話セッションを変えるので、通常の打鍵と障害注入の後に置く。
+6. **ログオンとユーザー変更**：DEV-676 のログオン自動起動、別ユーザー provisioning、監督停止の各項目を行う。ログオフや別ユーザーへの切替は元の対話セッションを変えるので、通常の打鍵と障害注入の後に置く。監視失敗や連続失敗による supervisor の停止と、再ログオンまたは手動の再起動での復帰（`docs/sideload-packaging-spec.md`「MSI のログオン常駐」が定める停止条件。開発登録も同じ `host-supervisor.ps1` を使う）は VM の状態を変えるので、ほかの項目を終えて checkpoint を取ってから行う。DEV-676 の確認のうち、ログオン時のコンソールウィンドウの表示と launcher の診断は MSI のログオン経路のものであり、このレーンでは観測できない（レーン 1）。
 
 | 訪問順 | 同じ訪問で確認する項目 | 記録先 |
 |---|---|---|
@@ -458,6 +489,7 @@ $exe = (Resolve-Path .\azookey_inference_host.exe).Path
 ```
 
 登録したエントリを打鍵して候補から確定し、アプリ側の文字列でサロゲートペアが壊れないことを見る。
+ZWJ でつないだ列を含む複数のエントリをまとめて取り込む場合は、`scripts/vm-verify-fixtures/README.md`「絵文字のユーザー辞書」の TSV と手順を使う。
 候補に出ないか確定で壊れる場合は、DEV-403 を要する未達として DEV-716 へ記録する。
 
 C-005（マルチディスプレイ端の候補クランプ）は本セッションの対象外で、DEV-782 が扱う。
@@ -474,6 +506,8 @@ DEV-1211 の失敗注入に Debug ビルドが必要なら、通常の検証 zip
 登録失敗後の HKLM CLSID / TSF profile / category の残骸、再登録、解除を確認してから次へ進む。
 DEV-1211 の解除後、DEV-1092 と DEV-905 のために開発登録済みの保護 checkpoint へ復元する。
 DEV-1092 のトレースと dump は入力本文や秘密情報の混入を確認し、収集設定を元へ戻す。
+DEV-1092 の項目 4（clean VM での IME 動作と、アンインストール後の診断ファイルの残留）は、開発登録のこのレーンでは確認できない。
+レーン 1 で確認していなければ、未実施として理由を DEV-1092 に記録する。
 
 DEV-905 はこのレーンの最後に走らせる。
 Application Verifier は対象イメージの設定を registry（Image File Execution Options）へ書くため、有効なままでは以降のどのゲートも汚染された環境で走ることになる。
@@ -514,6 +548,31 @@ TIP 登録を必要としない DEV-963（非 ASCII argv）、DEV-1144（非 ASC
 同じ VM を使う場合も対話 TIP レーンの進行条件にせず、各課題の前提と合格条件を確認して個別に記録する。
 DEV-758 は稼働中 Host と offline CLI の同時実行を要するが、TIP の打鍵は要しない。
 DEV-759 はコンソールを終了させるため、レーン 2 の Host と混同しない。
+
+DEV-963、DEV-1144、DEV-759 のコマンドと fixture は [`scripts/vm-verify-fixtures/README.md`](../../scripts/vm-verify-fixtures/README.md) が持つ。
+本節は、README に無い実行条件だけを定める。
+
+| ゲート | README の節 | 実行条件 |
+|---|---|---|
+| DEV-963 | 「非 ASCII パス」 | VMConnect の基本セッションの対話コンソールから実行する。PowerShell Direct 経由の実行は、課題が求める通常コンソールの条件を満たさない |
+| DEV-1144 | 「非 ASCII パス」 | 生成した `modelPath` を `--model` と `model.selectedPath` の両方で確認する。レーン 2 の Host と pipe を取り合うので、レーン 2 と 3 の証跡を回収した後に、supervisor ごと止めてから行う |
+| DEV-759 | 「stdio の行」 | 終了経路ごとに新しいデータルートで `--stdio` の Host を起動し、最初に Handshake の行を送る |
+
+DEV-963 と DEV-1144 は active code page で結果の意味が変わる。
+課題が求める code page と異なる環境で実行した場合は、実行した code page での結果として記録し、求められた code page を未実施と明記する。
+code page の値は fixture の生成スクリプトが `paths.json` に書く。
+
+DEV-1144 では Host だけを止めても足りない。
+モデルを指定して登録した開発登録の supervisor は、止まった Host をそのモデルを指す `--model` 付きで起動し直し、明示した `--model` は `model.selectedPath` より優先される。
+`model.selectedPath` 側の確認は、supervisor を止めたうえで `--model` を付けずに pipe で起動した Host に対して行う。
+`azookey_diag.exe --json` の D-008 は、pipe で応答している Host のロード済みパスを `model.selectedPath` と比べるので、この状態で採った D-007 と D-008 を記録する。
+確認の後は checkpoint へ復元するか、登録をやり直して supervisor を戻す。
+
+DEV-759 の stdio 手順は、Handshake を送ってから CommitObservation を送る。
+Host が学習を受け付けるのは、Handshake で `secure_flag` を申告した接続だけである。
+Handshake を省くと CommitObservation は `"ok":false` になり、学習データが作られないので、終了経路の保持と消失を判定できない。
+学習データは暗号化されているため、保持の確認はファイルの行数ではなく README の `lookup` で行う。
+貼り付けた行が Host に届かなかった場合は、その事実を検証メモに書く。
 
 #### DEV-758 の 2 writer 実走
 
@@ -567,21 +626,33 @@ pwsh -File .\scripts\vm-verify-summary.ps1 `
 
 `-Run` を使わずに手で実行した場合は、同じ 3 種類の出力を VM 内で保存してホストへ回収し、それぞれのパスを渡す。
 
+`verify-bootstrap.ps1 -Json` の出力は、セッション開始時の開始条件の観測としてだけ使う。
+サマリの `-BootstrapJsonPath` には、最初の `-Run` の実行ディレクトリのものを渡す。
+登録の状態や Host の起動を観測対象にするゲートでは、操作の後、状態を記録する前に `verify-bootstrap.ps1` を実行しない。`-Run` も bootstrap を実行するので同じ扱いとする。
+bootstrap は未登録なら TIP を登録し、pipe が無ければ supervisor を起動するので、DEV-1211 の解除の後や DEV-676 のログオン確認の前に実行すると、ゲートが見たい状態を書き換える。
+レーン 2 の手順 4 と 5 で compat を分けて回す `-Run` は、この制限に当たらない。
+操作の後の状態を根拠にする場合は、読み取りだけを行う `azookey_diag.exe --json` を採り直してサマリを作り直す。
+
 生成された `verification-summary.md` を検証メモの先頭に貼り、空欄を人が埋める。
 サマリは観測値の集約であり、ゲートの合否は各課題の判定基準で人が決める。
 入力の schema と分類は `docs/dev-infrastructure-spec.md` §2.6 を参照する。
 
-課題ごとの転記下書きが必要な場合は、ゲート ID と課題の対応表を用意し、次を実行する。
-対応表の各行は `source`、`id`、`issueId` と、必要なら compat の `targetId` を指定する。
+課題ごとの転記下書きが必要な場合は、ゲート ID と課題の対応表を渡して次を実行する。
+対応表は repo の `scripts/vm-verify-fixtures/gate-map.json` を使う。
+bootstrap、diag、compat の ID を載せており、各対応の根拠と、対応を置かない ID は `scripts/vm-verify-fixtures/README.md`「gate map」にある。
+対応表の各行は `source`（`bootstrap` / `diag` / `compat`）、`id`、`issueId` と、必要なら compat の `targetId` を指定する。
 同じゲートを複数課題へ記録する場合は行を分ける（例: C-010 は DEV-716、DEV-1263、DEV-676）。
 対応表は実施するゲートに合わせて確認し、下書きの出力後に Part C の課題別確認項目を人が埋める。
+対象の課題を入れ替えるときは、`gate-map.json` と README の表を同じ変更で直す。
+
+書式は次のとおり。
 
 ```json
 {
   "schemaVersion": 1,
   "gates": [
-    { "source": "compat", "id": "C-001", "issueId": "DEV-716" },
-    { "source": "compat", "id": "C-013", "issueId": "DEV-1263" },
+    { "source": "bootstrap", "id": "inferenceHost", "issueId": "DEV-1263" },
+    { "source": "diag", "id": "D-004", "issueId": "DEV-676" },
     { "source": "compat", "id": "C-010", "issueId": "DEV-716" },
     { "source": "compat", "id": "C-010", "issueId": "DEV-1263" },
     { "source": "compat", "id": "C-010", "issueId": "DEV-676" }
@@ -592,7 +663,7 @@ pwsh -File .\scripts\vm-verify-summary.ps1 `
 ```powershell
 pwsh -File .\scripts\vm-verify-linear-drafts.ps1 `
   -SummaryPath .\build\vm-verify-summary\verification-summary.json `
-  -GateMapPath .\collected\gate-map.json `
+  -GateMapPath .\scripts\vm-verify-fixtures\gate-map.json `
   -CheckpointName <checkpoint name> `
   -OutputDirectory .\build\vm-verify-drafts
 ```
@@ -756,10 +827,15 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - 予測窓のキャレット右側配置、画面端での反転と欠け: ____
 - Tab / Shift+Tab / クリック / Esc と読みの残り: ____
 - predictionEnabled OFF との対照: ____
+- `privacy.custom.prediction=false` と secure 入力先（secure 入力欄、app profile の secure）で予測窓が出ない: ____
 
 ## DEV-760 / DEV-761 / DEV-762 M61（各課題へ別コメント）
 - DEV-760 基本ペア・閉じ括弧のスキップ・Backspace・Host 不在時の挙動: ____
+- DEV-760 VS Code / Edge で、対の後に続けて打った文字が対の内側へ入る: ____
+- DEV-760 `bracketPairingTrigger=composition` の確定後にキャレットが対の内側にある（VS Code / Edge）: ____
 - DEV-761 per-app denylist / allowlist と組み込みシード: ____
+- DEV-761 Notepad を閉じずに denylist → allowlist を連続で保存し、IME を再有効化せずに切り替わる（設定ファイルの原子的置換でも同じか）: ____
+- DEV-761 設定監視のログ `tip_settings_watch_*` の有無（`AZOOKEY_LOG=1` と `AZOOKEY_LOG_LEVEL=info` で採った場合）: ____
 - DEV-762 対称デリミタ・選択囲みと Undo: ____
 
 ## DEV-1408 M20 再変換（Notepad / Office）
@@ -769,9 +845,10 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - Office が未導入なら未実施と記録: ☐ 該当
 ```
 
-### 障害注入と診断（DEV-1263 / DEV-1395 / DEV-1398 / DEV-1211 / DEV-1092 / DEV-677）
+### 障害注入と診断（DEV-1263 / DEV-1395 / DEV-1398 / DEV-1211 / DEV-1092 / DEV-677 / DEV-905）
 
 同じ C-013 / C-010 を複数課題の根拠へ使う場合も、課題ごとに期待結果と人の観察を分ける。
+DEV-1092 は課題の 4 項目に分けて書く。項目 4 はレーン 1 の状態で確認した場合だけ結果を書く。
 
 ```md
 ## DEV-1263 M42
@@ -794,14 +871,33 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 - 失敗後の HKLM CLSID / TSF profile / category の残骸、再登録、解除: ____
 
 ## DEV-1092 診断
-- ETW の TIP → IPC → Host → converter/backend 相関と収集権限: ____
-- 診断設定・dump の対話確認、off 時の未生成、解除後の残留: ____
+- 1 ETW で IME 入力 1 回の TIP → IPC → Host → converter/backend の相関、採取権限、manifest の登録と解除、トレースへの本文の非混入: ____
+- 2 設定アプリの明示 off / local 保存、保存先の表示、保存できないときの表示、Host への反映: ____
+- 3 Host / 設定アプリの障害でのメタデータ限定 dump の解析可否、off 時の未生成、OS 管理の WER との境界: ____
+- 4 clean VM での IME 動作とアンインストール後の診断ファイルの残留: ☐ Pass ☐ Fail ☐ 未実施（レーン 1 の状態が要る。理由: ____）
+- 採取設定を元へ戻した: ☐ 確認
 
 ## DEV-677 WPR 実採取
 - `wevtutil im`、`wpr -start` / `wpr -stop`、`wevtutil um` の終了コードと、ETL のサイズ・SHA-256: ____
 - WPA の版と、Generic Events での `azooKey-Desktop` イベント件数: ____
 - 同じ `client_id` / `request_id` で 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 が揃ったか（揃わなければ欠けた ID）: ____
+
+## DEV-905 Application Verifier
+- 対象イメージ / 有効にした検査（Heaps / Handles / Locks）: ____
+- 開始 checkpoint 名: ____
+- 打鍵した動線（`dev32-verification-checklist.md` の A1〜A8）と結果: ____
+- verifier の停止: ☐ なし ☐ あり（停止コード / stack の保存先 / 起票した課題: ____）
+- デバッガの接続: ☐ 接続した ☐ 接続していない（停止時に情報が残らない）
+- `appverif.exe -disable '*' -for notepad.exe` の実行: ☐ 済
+- `appverif.exe -query '*' -for notepad.exe` に設定が残っていない: ☐ 確認
+- 解除の確認後に checkpoint へ復元: ☐ 済
 ```
+
+### DEV-365
+
+DEV-365 の検証メモは `compat-test/m3_display_attribute_checklist.md` §7 の記録テンプレートを使い、本書はひな形を持たない。
+Notepad / Edge / VS Code で省略する D-01 / D-04 / D-05 / D-06 には、根拠にした compat run（レーン 2 の手順 1 の `report.json`）を併記する。
+D-08 はスケールごとに記録し、D-09 は未実施・環境制約として記録する（レーン 2）。
 
 ### DEV-847
 
@@ -880,11 +976,32 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
   - `inference-host-stderr.log` に launch ごとのログ: ☐ あり ☐ なし
 - 3 別ユーザー provisioning が `windows-tsf-host-architecture.md` の記載どおり: ☐ Pass ☐ Fail
 - 4 `unregister-dev.ps1` が稼働中ホストを落とさず監督のみ停止: ☐ Pass ☐ Fail
+- MSI のログオン経路（レーン 1 の状態）でのコンソールウィンドウの一瞬の表示: ☐ 出ない ☐ 出る ☐ 未実施（理由: ____）
+- MSI のログオン経路（レーン 1 の状態）で、ConstrainedLanguage または PowerShell 5.1 を無効にしたときに launcher 診断が残る範囲と回復方法: ____（☐ 未実施。理由: ____）
+- 監視失敗（exit 3）または安定稼働前の 5 回連続失敗で supervisor が停止し、再ログオンか手動の再起動で復帰する: ☐ Pass ☐ Fail ☐ 未実施（理由: ____）
 ```
 
-### Windows CLI / コンソール（DEV-758 / DEV-759）
+### Windows CLI / コンソール（DEV-963 / DEV-1144 / DEV-758 / DEV-759）
 
 ```md
+## DEV-963 非 ASCII argv
+- shell と版 / active code page（`paths.json` の `activeCodePage`）/ コンソールの種類: ____
+- 組 cp932: `lookup` の結果が学習ファイルのレコードに一致: ☐ Pass ☐ Fail
+- 組 cp932: `userdict add` / `list` / `remove` の往復: ☐ Pass ☐ Fail
+- 組 cp932: `--learning` と `--user-dict` のディレクトリに残ったファイル名: ____（想定外の名前: ☐ なし ☐ あり）
+- 組 unicode: `lookup` / `userdict` の往復 / 残ったファイル名: ☐ Pass ☐ Fail（内容: ____）
+- 失敗時に別パスのファイルや文字化けした永続データが作られていない: ☐ 確認
+- 課題が求める code page で未実施の場合、その code page: ____
+
+## DEV-1144 非 ASCII パスの GGUF 実ロード
+- OS build / active code page / Host のビルド（llama.cpp の有無）: ____
+- GGUF のファイル名（元の名前）と SHA-256: ____
+- 組 cp932: `--model` で起動したときのログの `model_load`（ok / error）と Zenzai 候補: ☐ Pass ☐ Fail
+- 組 cp932: `model.selectedPath` での preload と `loaded_model_path` の一致（D-007 / D-008 の status）: ☐ Pass ☐ Fail
+- 組 unicode: `--model` / `model.selectedPath`: ☐ Pass ☐ Fail（内容: ____）
+- 失敗した場合の切り分け（Host の probe / llama.cpp の open / その他）と起票した課題: ____
+- ログの抜粋に入力本文とユーザー名を含む絶対パスが無い: ☐ 確認
+
 ## DEV-758 同時更新
 - user_dict.json: pipe 経由 `userdict add` と `--offline` を重ねて実行し、両方の entry が残る: ☐ Pass ☐ Fail
   - 試行回数 / 毎回両方が残ったか:
@@ -893,12 +1010,13 @@ DEV-673 は TIP と COM 登録、本ゲートは設定 EXE・WinUI ランタイ�
 
 ## DEV-759 コンソール終了時の flush
 - 実行時点で DEV-791 の即時 flush が入っているか: ☐ 入っている ☐ 入っていない（commit: ____）
+- 各経路で Handshake を先に送り、`"accepted":true` と CommitObservation の `"ok":true` を確かめた: ☐ 確認（行が Host に届かなかった経路: ____）
 - 保証経路 stdio モードで Ctrl+C: ☐ 学習データ保持 ☐ 消失（消失なら Fail）
 - best-effort 経路 単発 commit 直後に × 終了（classic conhost）: ☐ 保持 ☐ 消失
 - best-effort 経路 単発 commit 直後に × 終了（Windows Terminal / ConPTY）: ☐ 保持 ☐ 消失
 - 連続 commit の途中で × 終了したときの消失件数: ____ 件（上限 7 件以内かを記録）
 - 対象外経路（タスクマネージャの強制終了、ログオフ）: ☐ 未実施（`docs/learning-data-management-spec.md` §11.1 で対象外。未達として記録しない）
-- 確認方法（終了前後の学習データ差分の取り方。`learning-data-snapshot.ps1` の比較結果を貼る）:
+- 確認方法（経路ごとの `lookup` の件数と、終了前後の `learning-data-snapshot.ps1` の比較結果を貼る）:
 ```
 
 判定は `docs/learning-data-management-spec.md` §11 の区分に従う。

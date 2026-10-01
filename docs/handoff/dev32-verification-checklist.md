@@ -134,8 +134,8 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 **B4. host 後起動・再接続（DEV-168/169）** — host 停止→起動 / kill→再起動で候補復帰
 ☐ PASS ☐ FAIL — 備考:
 
-**B5. host 異常時の安定性（DEV-173）** — host 強制終了/無応答で IME 切替・アプリ終了しても固まらない
-☐ PASS ☐ FAIL ☐ 既知(DEV-173) — 備考:
+**B5. host 異常時の安定性** — host 強制終了/無応答で IME 切替・アプリ終了しても固まらない
+☐ PASS ☐ FAIL — 備考:
 
 **B6. 候補ウィンドウ表示品質（DEV-171/172）** — キャレット近くに出る・可読・高 DPI で崩れない
 ☐ PASS ☐ FAIL ☐ 既知(DEV-171) — 備考:
@@ -150,7 +150,7 @@ M13〜M15 のゲートでも、同じ commit・target・設定で得た report �
 既知の未解決バグの一覧・優先度・状態は **Linear で管理**する（`AGENTS.md`: docs に進捗/状態リストを置かない）。本チェックリストは状態を持たず、各行の `☐ 既知(DEV-xxx)` がそのバグへの参照。現在の状態は Linear で確認すること:
 
 - team `Dev` / project `azooKey Desktop / Windows IME MVP` / label `repo:azooKey-Desktop`
-- 本検証で参照する主な既知バグ: DEV-197 / DEV-198 / DEV-190 / DEV-171 / DEV-173 / DEV-160（各 ID を Linear で開いて最新状態を参照）
+- 本検証で参照する主な既知バグ: DEV-197 / DEV-198 / DEV-190 / DEV-171 / DEV-160（各 ID を Linear で開いて最新状態を参照）
 
 ## 結果サマリ
 - コア(A): ___ / 8（PASS ___ / compat ___ / 既知 ___ / 新規 FAIL ___）

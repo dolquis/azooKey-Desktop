@@ -2,7 +2,11 @@
 
 `azooKey.wixproj` は、`windows-release` の TIP と Inference Host を
 `%ProgramFiles%\azooKey` へ配置する x64 の per-machine MSI を生成します。
-WiX Toolset は MSBuild SDK として 5.0.2 に固定しているため、グローバルインストールは不要です。
+WiX Toolset は MSBuild SDK として 7.0.0 に固定しているため、グローバルインストールは不要です。
+WiX 7 は Open Source Maintenance Fee（OSMF）EULA への同意がないビルドを `WIX7015` で拒否するため、
+`azooKey.wixproj` の `AcceptEula` で同意を記録しています。この project をビルドすると同じ EULA の下で
+WiX のバイナリを使うことになります。条件は
+[`docs/licensing-policy.md`](../../docs/licensing-policy.md#ビルドツールの利用条件)を参照してください。
 クリーンな Windows 11 でも起動できるよう、Release バイナリが直接依存する
 MSVC runtime を app-local で同梱します。
 
@@ -37,7 +41,7 @@ dotnet build .\pkg\msi\azooKey.wixproj `
 
 出力は `pkg\msi\bin\Release\azooKey-1.0.0-x64.msi` です。
 別の成果物を使う場合は、`TipDllPath`、`HostExePath`、`SettingsPayloadDir`、
-`SettingsExePath`、`SettingsIconPath` を MSBuild property で指定します。`SettingsExePath` の既定値は
+`SettingsExePath`、`SettingsIconPath` を MSBuild property に絶対パスで指定します。`SettingsExePath` の既定値は
 `$(SettingsPayloadDir)\azookey_settings.exe` なので、通常は `SettingsPayloadDir` だけを
 変更すれば足ります。
 `VCRuntimeDir` には、使用した MSVC toolset の x64 `Microsoft.VC*.CRT`

@@ -1,5 +1,10 @@
-<Project Sdk="WixToolset.Sdk/5.0.2">
+<Project Sdk="WixToolset.Sdk/7.0.0">
   <PropertyGroup>
+    <!--
+      WiX 7 fails with WIX7015 until the OSMF EULA is accepted. The terms and the
+      fee condition are recorded in docs/licensing-policy.md.
+    -->
+    <AcceptEula>wix7</AcceptEula>
     <InstallerPlatform>x64</InstallerPlatform>
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
     <TipDllPath Condition="'$(TipDllPath)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\tsf-tip\azookey_tsf_tip.dll</TipDllPath>
@@ -37,7 +42,7 @@
     </DefineConstants>
   </PropertyGroup>
 
-  <!-- WiX 5 requires the directory prefix of an exclusion to exist. -->
+  <!-- WiX fails with WIX8601 unless the directory prefix of an exclusion exists. -->
   <PropertyGroup Condition="Exists('$(SettingsPayloadDir)\obj')">
     <DefineConstants>$(DefineConstants);SettingsObjDirExists=1</DefineConstants>
   </PropertyGroup>

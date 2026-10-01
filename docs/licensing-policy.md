@@ -20,6 +20,8 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
   GoogleTest 等）は「未同梱」として `THIRD_PARTY_LICENSES` に区別して記載する。
   配布物（MSIX）への同梱段階の再配布 attribution は
   [`sideload-packaging-spec.md`](sideload-packaging-spec.md) が扱う。
+- ビルド時のみの依存のうち、ライセンスとは別に利用条件への同意を要するものは
+  「ビルドツールの利用条件」で扱う。
 
 ## 三層 attribution モデル
 
@@ -53,12 +55,33 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
   ライセンス連鎖も併記する。standalone NEologd は同梱せず別 DL pack とする方針
   （`plans/windows-port-roadmap.md` M53）。
 
+## ビルドツールの利用条件
+
+配布物へ同梱しないビルドツールのうち、ライセンスとは別に利用条件への同意を要するものを記録する。
+ライセンス表記は他のビルド時のみの依存と同じく `THIRD_PARTY_LICENSES` に置き、本節は同意の
+記録場所と条件だけを持つ。本節は [`sideload-packaging-spec.md`](sideload-packaging-spec.md) §4.1 と
+[`pkg/msi/README.md`](../pkg/msi/README.md) から参照される。
+
+- **WiX Toolset（`WixToolset.Sdk`、MSI ビルド専用）**: ソースコードのライセンスは MS-RL。
+  nuget.org が配布するバイナリには Open Source Maintenance Fee（OSMF）EULA が適用され、
+  WiX 7 は同意を示さないビルドを `WIX7015` で拒否する。同意は `pkg/msi/azooKey.wixproj` の
+  `AcceptEula` に EULA ID で記録する。
+  - 料金は、WiX を収益活動に使い、かつ年間総収入が US$10,000 以上の利用者に課される。
+    どちらかを満たさない利用者には課されない。該当するかどうかの判定と支払いは、同意の主体である
+    dolquis が行う。fork して MSI をビルドする利用者は、自身の条件で同じ判定を行う。
+  - WiX のメジャー版を上げるときは、<https://docs.firegiant.com/wix/osmf/> で EULA ID と条件を
+    確認し直す。
+  - `pkg/msi/Package.wxs` は WiX 拡張の custom action を使わないため、MSI に WiX のコードは入らない。
+    WiX 拡張（`WixToolset.*.wixext`）を追加してその custom action を MSI へ含める場合は、
+    `THIRD_PARTY_LICENSES` の記載を MS-RL に従う再配布 attribution へ改める。
+
 ## 正典の対応
 
 | 対象 | 正典 |
 | -- | -- |
 | 集約 attribution の実体 | ルート `THIRD_PARTY_LICENSES` |
 | attribution 運用規約（本書） | `docs/licensing-policy.md` |
+| ビルドツールの利用条件と同意の記録場所 | `docs/licensing-policy.md`「ビルドツールの利用条件」 |
 | 評価データ（`bench/data/`）のライセンス宣言 | `docs/conversion-quality-benchmark-spec.md` §13 / §14（CC0 / PD / authored 限定） |
 | 配布物への同梱・再配布 attribution | `docs/sideload-packaging-spec.md`（Phase 7） |
 | Release 成果物の SBOM / provenance | `docs/sideload-packaging-spec.md` §4.4（**attribution の正典ではない**。下記注記） |

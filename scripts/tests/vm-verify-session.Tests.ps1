@@ -1446,6 +1446,15 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
         Should -Be $command
     }
 
+    It "keeps the session and guest scripts ASCII-only so that 5.1 does not drop lines" {
+      # Windows PowerShell 5.1 reads a file without BOM in the ANSI code page. With LF
+      # line endings, some multi-byte comments swallow the next line (DEV-1430).
+      foreach ($name in @("vm-verify-session.ps1", "vm-verify-guest.ps1")) {
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $repoRoot "scripts\$name"))
+        @($bytes | Where-Object { $_ -gt 0x7F }).Count | Should -Be 0 -Because $name
+      }
+    }
+
     It "parses the guest functions with Windows PowerShell 5.1" -Skip:(
       -not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
       $guestScript = Join-Path $repoRoot "scripts\vm-verify-guest.ps1"

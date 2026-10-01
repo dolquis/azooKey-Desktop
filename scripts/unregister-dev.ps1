@@ -5,7 +5,7 @@ param(
   [switch]$SkipAppContainerAcl,
   # Internal: set when the script relaunches itself elevated. Per-user (HKCU)
   # cleanup runs in the original user's process *before* elevation, so the
-  # elevated reentry skips it — otherwise a relaunch under a separate
+  # elevated reentry skips it -- otherwise a relaunch under a separate
   # administrator account would clean that administrator's hive, not the
   # interactive user's.
   [switch]$ElevatedReentry
@@ -88,10 +88,10 @@ if (Test-Path $TipDllPath) {
 }
 
 # Mirror of the registration-time AppContainer grant (register-dev.ps1 /
-# docs/sideload-packaging-spec.md §1.7): take the ALL APPLICATION PACKAGES ACE
+# docs/sideload-packaging-spec.md section 1.7): take the ALL APPLICATION PACKAGES ACE
 # back off the TIP DLL and its directory so unregistration leaves no residue.
 # Only the paths the registration ledger records are touched, and only the exact
-# ACE a grant installs is removed — an ACE that predated registration, an
+# ACE a grant installs is removed -- an ACE that predated registration, an
 # inherited one, or anything under a protected system path survives, so an MSI
 # install under `%ProgramFiles%` keeps the ACL Windows gave it.
 if (-not $SkipAppContainerAcl) {
@@ -104,7 +104,7 @@ if (-not $SkipAppContainerAcl) {
 
 # Belt-and-suspenders: remove leftover machine-wide registration directly.
 # DllUnregisterServer already removes these via the TSF APIs, but when the DLL is
-# missing (build cleaned / path changed) regsvr32 /u cannot run — so also delete
+# missing (build cleaned / path changed) regsvr32 /u cannot run -- so also delete
 # the TSF profile + category registration under CTF\TIP, not just the COM CLSID
 # subtree. Otherwise the language profile is orphaned and Windows keeps showing /
 # resolving a broken azooKey input method. Both the native and WOW6432Node views

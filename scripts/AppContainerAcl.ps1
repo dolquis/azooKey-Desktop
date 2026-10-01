@@ -12,10 +12,10 @@
 # ctfmon loads the TIP DLL in-process inside the target application, so without
 # that ACE Japanese input is unavailable in Microsoft Store / AppContainer apps.
 # `%ProgramFiles%` carries the ACE by default, which is why the MSI
-# (docs/sideload-packaging-spec.md §4) inherits it and adds no ACL of its own.
+# (docs/sideload-packaging-spec.md section 4) inherits it and adds no ACL of its own.
 # Development registration loads the TIP straight out of a build tree under the
-# user profile, which does not carry it — so register-dev.ps1 grants it
-# explicitly and unregister-dev.ps1 takes it back. Design: same spec §1.7.
+# user profile, which does not carry it -- so register-dev.ps1 grants it
+# explicitly and unregister-dev.ps1 takes it back. Design: same spec section 1.7.
 #
 # Two rules keep the revoke side from damaging ACLs this repository does not
 # own. First, only the ACEs a registration actually *added* are removed: each
@@ -158,7 +158,7 @@ function Get-AppContainerAccessState {
 
 # Grants ALL APPLICATION PACKAGES read + execute on a single file or directory.
 # Returns $true when the DACL was rewritten, $false when the access was already
-# effective (including by inheritance) so callers can report — and record — only
+# effective (including by inheritance) so callers can report -- and record -- only
 # the ACEs they actually added.
 function Grant-AppContainerReadExecute {
   param(
@@ -187,8 +187,8 @@ function Grant-AppContainerReadExecute {
   return $true
 }
 
-# Removes the one ACE a grant would have installed on this path — same rights,
-# same inheritance, non-inherited — and nothing else. Inherited ACEs belong to a
+# Removes the one ACE a grant would have installed on this path -- same rights,
+# same inheritance, non-inherited -- and nothing else. Inherited ACEs belong to a
 # parent this script does not own, ACEs with other rights or inheritance belong
 # to whoever set them, and protected system paths are skipped outright.
 function Revoke-AppContainerReadExecute {
@@ -240,7 +240,7 @@ function Revoke-AppContainerReadExecute {
 
 # Machine-wide ledger of the paths a registration granted. Registration and
 # unregistration are separate elevated processes, so "did *we* add this ACE"
-# cannot be answered from the DACL alone — an ACE the developer set by hand is
+# cannot be answered from the DACL alone -- an ACE the developer set by hand is
 # byte-identical to ours. The ledger is the record that makes the revoke side
 # precise, and it is deleted along with the last entry.
 function Get-AppContainerGrantLedger {
@@ -326,7 +326,7 @@ function Test-AppContainerGrantLedgerEntry {
 
 # Registration-time grant. Covers the DLL itself (the file the loader opens) and
 # its containing directory (so a rebuilt DLL inherits the ACE). Both calls are
-# idempotent, so an install under `%ProgramFiles%` reports no change at all —
+# idempotent, so an install under `%ProgramFiles%` reports no change at all --
 # and records nothing, which is what keeps unregistration off ACLs it did not
 # create.
 function Grant-TipAppContainerAccess {
@@ -385,7 +385,7 @@ function Grant-TipAppContainerAccess {
 
 # Unregistration-time revoke, mirroring Grant-TipAppContainerAccess. Only paths
 # the ledger says this repository granted are touched, and only the exact ACE a
-# grant installs is removed — so an ACE that predated registration, or one a
+# grant installs is removed -- so an ACE that predated registration, or one a
 # developer set by hand with different rights, survives untouched.
 function Revoke-TipAppContainerAccess {
   param(
@@ -416,7 +416,7 @@ function Revoke-TipAppContainerAccess {
       if (Revoke-AppContainerReadExecute -Path $target) {
         $changed += $target
       }
-      # Retired only on a clean outcome — the ACE was removed, or it is
+      # Retired only on a clean outcome -- the ACE was removed, or it is
       # verifiably no longer there. A failure keeps the entry so the next
       # unregistration retries instead of orphaning the ACE with no record of it.
       $retired += (Get-NormalizedAclPath -Path $target)

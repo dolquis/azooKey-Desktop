@@ -1034,6 +1034,26 @@ Describe "VM verification package automation" {
     }
   }
 
+  Context "Windows PowerShell 5.1 portability" {
+    It "keeps the package builder and every payload script ASCII-only so that 5.1 does not drop lines" {
+      # Windows PowerShell 5.1 reads a file without BOM in the ANSI code page. With LF
+      # line endings, some multi-byte comments swallow the next line (DEV-1430). The
+      # payload scripts run under 5.1 in the guest, so take them from the payload list
+      # instead of a hand-written copy.
+      $builder = Join-Path $repoRoot "scripts\make-vm-verify-package.ps1"
+      $payloadScripts = @([regex]::Matches(
+          [System.IO.File]::ReadAllText($builder),
+          'Join-Path \$repository "scripts\\([^"\\]+\.ps1)"') | ForEach-Object { $_.Groups[1].Value })
+      $payloadScripts | Should -Contain "verify-bootstrap.ps1"
+
+      $nonAscii = @(@("make-vm-verify-package.ps1") + $payloadScripts | Where-Object {
+          $bytes = [System.IO.File]::ReadAllBytes((Join-Path $repoRoot "scripts\$_"))
+          @($bytes | Where-Object { $_ -gt 0x7F }).Count -gt 0
+        })
+      $nonAscii | Should -BeNullOrEmpty
+    }
+  }
+
   Context "bootstrap command wrappers" {
     It "captures registration script streams so JSON output stays clean" {
       $registerScript = Join-Path $TestDrive "noisy-register.ps1"

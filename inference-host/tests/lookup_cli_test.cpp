@@ -234,6 +234,25 @@ TEST_F(LookupCliTest, EmptyStoresReturnSuccessfulEmptyJson) {
   EXPECT_EQ(json->GetUInt("count"), 0u);
 }
 
+TEST_F(LookupCliTest, ZeroByteLearningStoreReturnsSuccessfulEmptyJsonOnEveryRun) {
+  {
+    std::ofstream output(paths.learning, std::ios::binary);
+    ASSERT_TRUE(output);
+  }
+  const auto options = Parse({"--mode", "exact", "--query", "abc"});
+  ASSERT_TRUE(options);
+
+  for (int run = 0; run < 2; ++run) {
+    const auto result = RunLookup(*options, paths);
+    EXPECT_EQ(result.exit_code, 0) << result.error;
+    ASSERT_EQ(result.output_lines.size(), 1u);
+    const auto json = azookey::ipc::json::Parse(result.output_lines.front());
+    ASSERT_TRUE(json);
+    EXPECT_TRUE(json->GetBool("ok").value_or(false));
+    EXPECT_EQ(json->GetUInt("count"), 0u);
+  }
+}
+
 TEST_F(LookupCliTest, TsvOutputUsesDocumentedColumns) {
   SeedStores(paths);
   const auto options = Parse({"--mode", "exact", "--query", "にほん", "--format", "tsv"});

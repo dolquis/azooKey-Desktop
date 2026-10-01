@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "TestByteCrypto.h"
 #include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
@@ -287,7 +288,71 @@ TEST(DpapiCryptoTest, InterruptedMigrationFinishesBeforeSaving) {
   EXPECT_GT(saved.Score("new", "value", 100), 0.0);
 }
 
+// TestCrypto accepts any input, so these run against the platform cipher:
+// user-scope DPAPI is what used to reject an empty plaintext.
+TEST(DpapiCryptoTest, EmptyPlaintextStoresMigrateAsEmptyStores) {
+  TempRoot root;
+  const auto& crypto = test::Crypto();
+  const auto learning_path = root.path() / "learning.tsv";
+  const auto typo_path = root.path() / "typo_corrections.tsv";
+  const auto auto_path = root.path() / "auto_words.tsv";
+  const std::vector<std::filesystem::path> paths = {learning_path, typo_path, auto_path};
+  for (const auto& path : paths) Write(path, "");
+
+  LearningStore learning(learning_path, &crypto);
+  TypoCorrectionStore typos(typo_path, &crypto);
+  AutoWordStore words(auto_path, &crypto);
+  ASSERT_TRUE(learning.Load());
+  ASSERT_TRUE(typos.Load());
+  ASSERT_TRUE(words.Load());
+  EXPECT_EQ(learning.size(), 0u);
+  EXPECT_EQ(typos.size(), 0u);
+  EXPECT_EQ(words.Size(), 0u);
+  for (const auto& path : paths) {
+    EXPECT_FALSE(std::filesystem::exists(path));
+    ASSERT_TRUE(std::filesystem::exists(Backup(path)));
+    EXPECT_EQ(std::filesystem::file_size(Backup(path)), 0u);
+    EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  }
+
+  LearningStore reloaded(learning_path, &crypto);
+  ASSERT_TRUE(reloaded.Load());
+  reloaded.Observe("new", "value", 1, 100);
+  ASSERT_TRUE(reloaded.Save());
+  LearningStore saved(learning_path, &crypto);
+  ASSERT_TRUE(saved.Load());
+  EXPECT_GT(saved.Score("new", "value", 100), 0.0);
+  EXPECT_TRUE(TypoCorrectionStore(typo_path, &crypto).Load());
+  EXPECT_TRUE(AutoWordStore(auto_path, &crypto).Load());
+}
+
+TEST(DpapiCryptoTest, EmptyPlaintextLeftByFailedMigrationRecovers) {
+  TempRoot root;
+  const auto& crypto = test::Crypto();
+  const auto path = root.path() / "learning.tsv";
+  // What a build that could not encrypt an empty plaintext left behind.
+  Write(path, "");
+  Write(Backup(path), "");
+
+  LearningStore store(path, &crypto);
+  ASSERT_TRUE(store.Load());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_EQ(std::filesystem::file_size(Backup(path)), 0u);
+  EXPECT_TRUE(std::filesystem::exists(EncryptedPathFor(path)));
+  store.Observe("new", "value", 1, 100);
+  EXPECT_TRUE(store.Save());
+}
+
 #ifdef _WIN32
+TEST(DpapiCryptoTest, WindowsDpapiRoundTripsEmptyInput) {
+  std::vector<uint8_t> cipher;
+  ASSERT_TRUE(DpapiCrypto().Encrypt({}, cipher));
+  EXPECT_FALSE(cipher.empty());
+  std::vector<uint8_t> reloaded = {1};
+  ASSERT_TRUE(DpapiCrypto().Decrypt(cipher, reloaded));
+  EXPECT_TRUE(reloaded.empty());
+}
+
 TEST(DpapiCryptoTest, WindowsDpapiRoundTripRejectsCorruptBlob) {
   const std::vector<uint8_t> plain = {0, 1, 2, 255};
   std::vector<uint8_t> cipher;

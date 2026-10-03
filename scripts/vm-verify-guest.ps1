@@ -86,7 +86,7 @@ function Get-VmVerifyGuestTargetCase {
   $targets = @(Get-ChildItem -LiteralPath (Join-Path $PackageRoot "targets") `
       -Filter "*.json" -File | Sort-Object Name)
   foreach ($target in $targets) {
-    $config = Get-Content -Raw -LiteralPath $target.FullName | ConvertFrom-Json
+    $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $target.FullName | ConvertFrom-Json
     [pscustomobject][ordered]@{
       Target = $target.BaseName
       Cases = @($config.cases | ForEach-Object { [string]$_ })
@@ -405,7 +405,7 @@ function Invoke-VmVerifyGuestCompatRun {
     $bootstrapPath = Join-Path $RunRoot "bootstrap-interactive.json"
     $status.bootstrapExitCode = Invoke-VmVerifyGuestBootstrap `
       -PackageRoot $PackageRoot -OutputPath $bootstrapPath -CheckpointConfirmed $true
-    $bootstrap = Get-Content -Raw -LiteralPath $bootstrapPath | ConvertFrom-Json
+    $bootstrap = Get-Content -Raw -Encoding UTF8 -LiteralPath $bootstrapPath | ConvertFrom-Json
     $status.bootstrapStatus = [string]$bootstrap.overallStatus
     if ($status.bootstrapStatus -eq "fail") {
       throw "verify-bootstrap.ps1 reported overallStatus=fail in the interactive session."
@@ -475,7 +475,7 @@ function Invoke-VmVerifyGuestCompatRun {
       $excluded = @()
       if ($reportJson) {
         try {
-          $report = Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
+          $report = Get-Content -Raw -Encoding UTF8 -LiteralPath $reportPath | ConvertFrom-Json
           if ($report.case_selection) {
             $excluded = @($report.case_selection.excluded | ForEach-Object { [string]$_ })
           }

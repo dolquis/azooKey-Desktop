@@ -1465,6 +1465,40 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
 
       $errorCount | Should -Be "0"
     }
+
+    It "reads BOM-less UTF-8 target JSON with Japanese notes under Windows PowerShell 5.1" -Skip:(
+      -not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+      # compat-test/targets/*.json are UTF-8 without BOM. Without -Encoding UTF8, 5.1
+      # reads them in the ANSI code page and ConvertFrom-Json fails (DEV-1472). The note
+      # ends with U+3002 (E3 80 82): in cp932 the trailing 0x82 is a lead byte that
+      # swallows the closing quote, as the bundled targets do.
+      $packageRoot = Join-Path $TestDrive "utf8-targets"
+      New-Item -ItemType Directory -Path (Join-Path $packageRoot "targets") -Force | Out-Null
+      $json = '{ "cases": ["C-001", "C-010"], "notes": "C-013 と C-010 は最後に実行する。" }'
+      [System.IO.File]::WriteAllText((Join-Path $packageRoot "targets\notepad.json"), $json,
+        (New-Object System.Text.UTF8Encoding($false)))
+      $guestScript = Join-Path $repoRoot "scripts\vm-verify-guest.ps1"
+      $probe = ". '$($guestScript.Replace("'", "''"))'; " +
+        "Get-VmVerifyGuestTargetCase -PackageRoot '$($packageRoot.Replace("'", "''"))' | " +
+        "ForEach-Object { `$_.Target + '=' + (@(`$_.Cases) -join ',') }"
+
+      $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $probe 2>&1
+
+      $LASTEXITCODE | Should -Be 0 -Because ($output | Out-String)
+      $output | Should -Be "notepad=C-001,C-010"
+    }
+
+    It "reads every JSON file in the guest functions as UTF-8" {
+      # The 5.1 probe above fails only under a multi-byte ANSI code page such as cp932,
+      # so also check the source on hosts with any code page (DEV-1472).
+      $lines = @(Get-Content -LiteralPath (Join-Path $repoRoot "scripts\vm-verify-guest.ps1") |
+          Where-Object { $_ -match "Get-Content\b.*\|\s*ConvertFrom-Json" })
+
+      $lines.Count | Should -BeGreaterThan 0
+      foreach ($line in $lines) {
+        $line | Should -Match "-Encoding UTF8\b"
+      }
+    }
   }
 
   Context "script entrypoint" {

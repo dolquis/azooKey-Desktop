@@ -66,7 +66,8 @@ class ChildProcess {
   }
 
   bool Start(const std::filesystem::path& executable, const std::vector<std::wstring>& args,
-             DWORD flags, const std::filesystem::path& log_path = {}) {
+             DWORD flags, const std::filesystem::path& log_path = {},
+             HANDLE stdin_override = nullptr) {
     std::wstring command = L"\"" + executable.wstring() + L"\"";
     for (const auto& arg : args) command += L" \"" + arg + L"\"";
     STARTUPINFOW startup{};
@@ -87,7 +88,7 @@ class ChildProcess {
         return false;
       }
       startup.dwFlags |= STARTF_USESTDHANDLES;
-      startup.hStdInput = input;
+      startup.hStdInput = stdin_override != nullptr ? stdin_override : input;
       startup.hStdOutput = log;
       startup.hStdError = log;
     }
@@ -356,6 +357,39 @@ TEST_F(HostProcessTest, CtrlBreakFlushesPendingLearning) {
   client.Disconnect();
   ASSERT_TRUE(StopHost(CTRL_BREAK_EVENT));
   EXPECT_TRUE(ContainsLearning("pending-break"));
+}
+
+TEST_F(HostProcessTest, CtrlBreakUnblocksStdioRead) {
+  // Keep stdin open so only the control event can end the Host's blocking read.
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+  HANDLE read_end = nullptr;
+  HANDLE write_end = nullptr;
+  ASSERT_TRUE(CreatePipe(&read_end, &write_end, &attributes, 0));
+  std::unique_ptr<void, decltype(&CloseHandle)> reader(read_end, &CloseHandle);
+  std::unique_ptr<void, decltype(&CloseHandle)> writer(write_end, &CloseHandle);
+  ASSERT_TRUE(SetHandleInformation(write_end, HANDLE_FLAG_INHERIT, 0));
+  ASSERT_TRUE(SetConsoleCtrlHandler(nullptr, FALSE));
+  const std::vector<std::wstring> args = {L"--data-root", directory_.root.wstring(),
+                                          L"--learning",  LearningPath().wstring(),
+                                          L"--user-dict", UserDictPath().wstring()};
+  const auto log = directory_.root / "host.log";
+  const bool started = host_.Start(host_executable_, args, CREATE_NEW_CONSOLE, log, read_end);
+  reader.reset();
+  ASSERT_TRUE(started);
+  // The Host reports a malformed line only from the stdio loop, after the
+  // console control handler is registered.
+  constexpr char kMalformedLine[] = "not-an-envelope\n";
+  DWORD written = 0;
+  ASSERT_TRUE(WriteFile(write_end, kMalformedLine, sizeof(kMalformedLine) - 1, &written, nullptr));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+  while (ReadLog(log).find("warn: failed to parse envelope") == std::string::npos) {
+    ASSERT_TRUE(host_.Running()) << "Host exited before reading stdio";
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "Host did not read stdio";
+    Sleep(25);
+  }
+  // Let main return to the blocking read before the control event.
+  Sleep(250);
+  EXPECT_TRUE(StopHost(CTRL_BREAK_EVENT));
 }
 
 }  // namespace

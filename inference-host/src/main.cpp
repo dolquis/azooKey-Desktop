@@ -108,6 +108,10 @@ void HandleSignal(int) { g_signal_stop_requested = 1; }
 std::atomic<bool> g_console_stop_requested{false};
 HANDLE g_main_thread = nullptr;
 HANDLE g_shutdown_complete = nullptr;
+// Guards g_stdin_read_in_progress so a cancellation cannot land after main has
+// left the stdio read and started other I/O, such as the shutdown flush.
+SRWLOCK g_stdin_read_lock = SRWLOCK_INIT;
+bool g_stdin_read_in_progress = false;
 
 BOOL WINAPI HandleConsoleControl(DWORD control_type) {
   switch (control_type) {
@@ -118,10 +122,14 @@ BOOL WINAPI HandleConsoleControl(DWORD control_type) {
       // StopRequested() may have just been checked before stdio enters a
       // blocking read. Retry cancellation while main unwinds to close that
       // race without performing persistence work in the control handler.
+      // Cancel only while main is in the stdio read: CancelSynchronousIo also
+      // aborts the learning flush's file I/O with ERROR_OPERATION_ABORTED.
       for (DWORD waited_ms = 0; waited_ms < 4500; waited_ms += 10) {
-        if (g_main_thread != nullptr) {
+        AcquireSRWLockExclusive(&g_stdin_read_lock);
+        if (g_stdin_read_in_progress && g_main_thread != nullptr) {
           CancelSynchronousIo(g_main_thread);
         }
+        ReleaseSRWLockExclusive(&g_stdin_read_lock);
         if (g_shutdown_complete != nullptr &&
             WaitForSingleObject(g_shutdown_complete, 10) == WAIT_OBJECT_0) {
           break;
@@ -173,6 +181,27 @@ bool StopRequested() {
   return g_console_stop_requested.load(std::memory_order_relaxed);
 #else
   return false;
+#endif
+}
+
+// Reads one stdio request line unless a stop was requested. On Windows the
+// console control handler may cancel only this read.
+bool ReadStdioLine(std::string& line) {
+#ifdef _WIN32
+  AcquireSRWLockExclusive(&g_stdin_read_lock);
+  if (StopRequested()) {
+    ReleaseSRWLockExclusive(&g_stdin_read_lock);
+    return false;
+  }
+  g_stdin_read_in_progress = true;
+  ReleaseSRWLockExclusive(&g_stdin_read_lock);
+  const bool read = static_cast<bool>(std::getline(std::cin, line));
+  AcquireSRWLockExclusive(&g_stdin_read_lock);
+  g_stdin_read_in_progress = false;
+  ReleaseSRWLockExclusive(&g_stdin_read_lock);
+  return read;
+#else
+  return !StopRequested() && static_cast<bool>(std::getline(std::cin, line));
 #endif
 }
 
@@ -791,7 +820,7 @@ int main(int argc, char** argv) {
   }
 
   std::string line;
-  while (!StopRequested() && std::getline(std::cin, line)) {
+  while (ReadStdioLine(line)) {
     if (line.empty()) continue;
     auto env = azookey::ipc::Deserialize(line);
     if (!env) {

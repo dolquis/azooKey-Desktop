@@ -37,6 +37,9 @@ class MockKeyboardCompartment final : public ITfCompartment, public ITfSource {
   }
   STDMETHODIMP SetValue(TfClientId tid, const VARIANT* value) override {
     if (!value || value->vt != VT_I4) return E_INVALIDARG;
+    ++set_count_;
+    if (FAILED(set_result_)) return set_result_;
+    unset_ = false;
     last_writer_ = tid;
     SetOpen(value->lVal != 0);
     return S_OK;
@@ -44,6 +47,7 @@ class MockKeyboardCompartment final : public ITfCompartment, public ITfSource {
   STDMETHODIMP GetValue(VARIANT* value) override {
     if (!value) return E_INVALIDARG;
     VariantInit(value);
+    if (unset_) return S_FALSE;  // TSF reports an unset compartment this way.
     value->vt = VT_I4;
     value->lVal = open_ ? 1 : 0;
     return S_OK;
@@ -73,6 +77,10 @@ class MockKeyboardCompartment final : public ITfCompartment, public ITfSource {
   int advise_count() const { return advise_count_; }
   int unadvise_count() const { return unadvise_count_; }
   TfClientId last_writer() const { return last_writer_; }
+  int set_count() const { return set_count_; }
+  // Simulates a compartment that no one has written yet (GetValue -> VT_EMPTY).
+  void set_unset(bool unset) { unset_ = unset; }
+  void set_set_result(HRESULT hr) { set_result_ = hr; }
 
  private:
   static constexpr DWORD kCookie = 0x516;
@@ -82,6 +90,9 @@ class MockKeyboardCompartment final : public ITfCompartment, public ITfSource {
   int advise_count_{0};
   int unadvise_count_{0};
   TfClientId last_writer_{TF_CLIENTID_NULL};
+  int set_count_{0};
+  bool unset_{false};
+  HRESULT set_result_{S_OK};
 };
 
 // Minimal thread manager mock implementing the interfaces ActivateEx touches:
@@ -250,13 +261,66 @@ TEST(TsfTipActivateUiLessTest, NoUiElementFlagLeavesUiLessModeFalse) {
   EXPECT_FALSE(ActivateAndReadUiLess(0));
 }
 
-TEST(TsfTipActivateUiLessTest, KeyboardCompartmentInitialStateAndNotifications) {
+TEST(TsfTipActivateUiLessTest, ActivateOpensClosedKeyboardCompartment) {
   azookey::tsf::TextService service;
   MockThreadMgrEx mock(0, /*keyboard_open=*/false);
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), 1);
+  EXPECT_EQ(mock.keyboard_compartment.last_writer(), mock.client_id);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ActivateOpensUnsetKeyboardCompartment) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0, /*keyboard_open=*/false);
+  mock.keyboard_compartment.set_unset(true);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), 1);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ActivateLeavesOpenKeyboardCompartmentUnwritten) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0, /*keyboard_open=*/true);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), 0);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ActivateFollowsClosedCompartmentWhenOpenIsRefused) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0, /*keyboard_open=*/false);
+  mock.keyboard_compartment.set_set_result(E_FAIL);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
   EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), 1);
+  EXPECT_EQ(mock.keyboard_compartment.advise_count(), 1);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ActivateStaysOpenWhenUnsetCompartmentRefusesOpen) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0, /*keyboard_open=*/false);
+  mock.keyboard_compartment.set_unset(true);
+  mock.keyboard_compartment.set_set_result(E_FAIL);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), 1);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, KeyboardCompartmentNotifications) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0, /*keyboard_open=*/false);
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
   EXPECT_EQ(mock.keyboard_compartment.advise_count(), 1);
 
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_FALSE(service.keyboard_open());
   mock.keyboard_compartment.SetOpen(true);
   EXPECT_TRUE(service.keyboard_open());
   mock.keyboard_compartment.SetOpen(false);
@@ -290,6 +354,8 @@ TEST(TsfTipActivateUiLessTest, OemEnlwCanReopenClosedKeyboard) {
   azookey::tsf::TextService service;
   MockThreadMgrEx mock(0, /*keyboard_open=*/false);
   ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  mock.keyboard_compartment.SetOpen(false);
+  ASSERT_FALSE(service.keyboard_open());
   azookey::tsf::test::KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
   ASSERT_EQ(service.OnTestKeyDown(nullptr, VK_OEM_ENLW, 0, &eaten), S_OK);

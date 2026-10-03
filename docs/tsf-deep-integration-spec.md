@@ -591,6 +591,14 @@ src->AdviseSink(IID_ITfCompartmentEventSink, this, &keyboard_open_cookie_);
 `ITfCompartmentEventSink::OnChange(REFGUID rguid)` で IME On/Off を検知。
 `rguid == GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` のとき値を読み出す。
 
+有効化時の初期状態は On とする。azooKey を選んだ直後から日本語入力で始まり、
+Microsoft IME と旧 macOS 版に揃う。`ActivateEx` は sink を購読する前に compartment を読み、
+`VT_I4` の 0、値が未設定（`VT_I4` 以外）、または読み出しに失敗したときは
+`SetValue(client_id, 1)` で On にする。既に On なら書き込まない。`SetValue` が失敗しても
+有効化は失敗させず、`keyboard_open_compartment_set_failed` を警告ログに出して、
+読み直した値に従う。読み直した値が `VT_I4` の 0 なら Off、それ以外は On とする。
+`ITfCompartmentMgr` を持たないホストでは compartment を扱わず、On として動く。
+
 ### 4.2 状態遷移
 
 | 旧 | 新 | 動作 |
@@ -613,6 +621,7 @@ src->AdviseSink(IID_ITfCompartmentEventSink, this, &keyboard_open_cookie_);
 
 ### 4.4 受け入れ条件
 
+- azooKey を選んだ直後、直前の compartment が Off でも IME On で始まる
 - 半角/全角キーで IME On/Off が切り替わり、Status を反映
 - Win+Space で別言語に切替時、composition が確定される
 - アプリ切替時に composition が確定される

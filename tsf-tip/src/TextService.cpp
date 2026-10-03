@@ -1264,6 +1264,26 @@ HRESULT TextService::AdviseKeyboardOpenCompartment() {
   manager->Release();
   if (FAILED(hr) || !keyboard_open_compartment_) return FAILED(hr) ? hr : E_UNEXPECTED;
 
+  // Selecting azooKey starts in Japanese input, as Microsoft IME does: turn a
+  // closed or unset compartment on before advising (spec §4.1). A refused
+  // write does not fail activation; the value read below is followed instead.
+  VARIANT current;
+  VariantInit(&current);
+  const bool already_open = SUCCEEDED(keyboard_open_compartment_->GetValue(&current)) &&
+                            current.vt == VT_I4 && current.lVal != 0;
+  VariantClear(&current);
+  if (!already_open && client_id_ != TF_CLIENTID_NULL) {
+    VARIANT open;
+    VariantInit(&open);
+    open.vt = VT_I4;
+    open.lVal = 1;
+    const HRESULT set_hr = keyboard_open_compartment_->SetValue(client_id_, &open);
+    if (FAILED(set_hr)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "keyboard_open_compartment_set_failed",
+                 {{"error_code", SafeLogText("business")}});
+    }
+  }
+
   // Read before advising; OnChange will handle subsequent changes.
   RefreshKeyboardOpen();
   ITfSource* source = nullptr;

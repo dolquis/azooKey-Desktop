@@ -402,6 +402,15 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfCompartment* keyboard_open_compartment_{nullptr};
   DWORD keyboard_open_sink_cookie_{TF_INVALID_COOKIE};
   bool keyboard_open_{true};
+  // COM identities of document managers that already received the initial
+  // open state (spec §4.1). Compared only, never dereferenced; an entry is
+  // dropped when its document manager is uninitialized.
+  std::vector<const void*> keyboard_open_seen_documents_;
+  const void* focused_document_identity_{nullptr};
+  // A close that reaches the first-focused document within the deadline is
+  // the per-context restore of a new input context, not a user action.
+  const void* keyboard_open_pending_document_{nullptr};
+  std::chrono::steady_clock::time_point keyboard_open_pending_deadline_{};
   bool function_provider_advised_{false};
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
@@ -758,7 +767,13 @@ class TextService final : public ITfTextInputProcessorEx,
   HRESULT UnadviseKeyboardOpenCompartment();
   HRESULT AdviseFunctionProvider();
   HRESULT UnadviseFunctionProvider();
-  void RefreshKeyboardOpen();
+  void RefreshKeyboardOpen(std::string_view source);
+  void OpenKeyboardIfClosed(std::string_view source);
+  void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);
+  void ReopenIfInitialOpenWasUndone();
+  void ClearKeyboardOpenTracking();
+  void LogKeyboardOpenState(std::string_view event, std::string_view source,
+                            bool open_before) const noexcept;
   void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                LifecycleCleanupFailurePolicy failure_policy);
 

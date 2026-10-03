@@ -1,5 +1,6 @@
 #include "azookey/tsf/TextService.h"
 
+#include <imm.h>
 #include <shellscalingapi.h>
 
 #include <algorithm>
@@ -575,6 +576,67 @@ bool SameComIdentity(IUnknown* lhs, IUnknown* rhs) {
   return same;
 }
 
+// The IUnknown pointer used to compare COM objects; the object stays owned by
+// the caller.
+const void* ComIdentity(IUnknown* object) {
+  if (!object) return nullptr;
+  IUnknown* unknown = nullptr;
+  if (FAILED(object->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&unknown))) || !unknown)
+    return object;
+  unknown->Release();
+  return unknown;
+}
+
+// Window for the per-context restore of a newly focused input context to reach
+// the open/close compartment after the initial open state was applied.
+constexpr std::chrono::milliseconds kInitialKeyboardOpenGrace{1000};
+
+std::string DescribeKeyboardOpenValue(ITfCompartment* compartment) {
+  if (!compartment) return "absent";
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT hr = compartment->GetValue(&value);
+  const char* description = FAILED(hr)          ? "error"
+                            : value.vt != VT_I4 ? "unset"
+                            : value.lVal != 0   ? "open"
+                                                : "closed";
+  VariantClear(&value);
+  return description;
+}
+
+int64_t ReadConversionModeForLog(ITfThreadMgr* thread_mgr) {
+  if (!thread_mgr) return -1;
+  ITfCompartmentMgr* manager = nullptr;
+  if (FAILED(
+          thread_mgr->QueryInterface(IID_ITfCompartmentMgr, reinterpret_cast<void**>(&manager))) ||
+      !manager)
+    return -1;
+  ITfCompartment* compartment = nullptr;
+  const HRESULT hr =
+      manager->GetCompartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, &compartment);
+  manager->Release();
+  if (FAILED(hr) || !compartment) return -1;
+  VARIANT value;
+  VariantInit(&value);
+  int64_t mode = -1;
+  if (SUCCEEDED(compartment->GetValue(&value)) && value.vt == VT_I4) mode = value.lVal;
+  VariantClear(&value);
+  compartment->Release();
+  return mode;
+}
+
+// IMM32 keeps an open status per input context (HIMC). Logging it next to the
+// compartment shows whether the IMM32 compatibility layer synchronized it.
+std::string DescribeImmOpenStatus() {
+  const HWND focus = ::GetFocus();
+  if (!focus) return "no_focus_window";
+  const HIMC himc = ImmGetContext(focus);
+  if (!himc) return "no_context";
+  const bool open = ImmGetOpenStatus(himc) != FALSE;
+  ImmReleaseContext(focus, himc);
+  return open ? "open" : "closed";
+}
+
 using GetGuiThreadInfoFn = BOOL(WINAPI*)(DWORD, PGUITHREADINFO);
 using ClientToScreenFn = BOOL(WINAPI*)(HWND, LPPOINT);
 using GetPhysicalCursorPosFn = BOOL(WINAPI*)(LPPOINT);
@@ -1109,6 +1171,9 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   // switching IMEs in place). Its selection will not necessarily change again.
   ITfDocumentMgr* focused_document = nullptr;
   if (SUCCEEDED(thread_mgr_->GetFocus(&focused_document)) && focused_document) {
+    // Activation already opened the keyboard; record the document so a restore
+    // of its input context right after activation is undone once as well.
+    ApplyInitialKeyboardOpenOnFocus(focused_document);
     ITfContext* focused_context = nullptr;
     if (SUCCEEDED(focused_document->GetTop(&focused_context)) && focused_context) {
       AdviseTextEditSink(focused_context);
@@ -1146,6 +1211,7 @@ STDMETHODIMP TextService::Deactivate() {
   const HRESULT sink_result = UnadviseTextServiceSinks();
   if (SUCCEEDED(result)) result = sink_result;
   keyboard_open_ = true;
+  ClearKeyboardOpenTracking();
 
   StopIpcWorker();
 
@@ -1267,25 +1333,10 @@ HRESULT TextService::AdviseKeyboardOpenCompartment() {
   // Selecting azooKey starts in Japanese input, as Microsoft IME does: turn a
   // closed or unset compartment on before advising (spec §4.1). A refused
   // write does not fail activation; the value read below is followed instead.
-  VARIANT current;
-  VariantInit(&current);
-  const bool already_open = SUCCEEDED(keyboard_open_compartment_->GetValue(&current)) &&
-                            current.vt == VT_I4 && current.lVal != 0;
-  VariantClear(&current);
-  if (!already_open && client_id_ != TF_CLIENTID_NULL) {
-    VARIANT open;
-    VariantInit(&open);
-    open.vt = VT_I4;
-    open.lVal = 1;
-    const HRESULT set_hr = keyboard_open_compartment_->SetValue(client_id_, &open);
-    if (FAILED(set_hr)) {
-      RuntimeLog(azookey::logging::RuntimeLogLevel::Warn, "keyboard_open_compartment_set_failed",
-                 {{"error_code", SafeLogText("business")}});
-    }
-  }
+  OpenKeyboardIfClosed("activate");
 
   // Read before advising; OnChange will handle subsequent changes.
-  RefreshKeyboardOpen();
+  RefreshKeyboardOpen("activate");
   ITfSource* source = nullptr;
   hr = keyboard_open_compartment_->QueryInterface(IID_ITfSource, reinterpret_cast<void**>(&source));
   if (FAILED(hr) || !source) return FAILED(hr) ? hr : E_NOINTERFACE;
@@ -1322,7 +1373,89 @@ HRESULT TextService::UnadviseKeyboardOpenCompartment() {
   return result;
 }
 
-void TextService::RefreshKeyboardOpen() {
+void TextService::OpenKeyboardIfClosed(std::string_view source) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (!keyboard_open_compartment_ || client_id_ == TF_CLIENTID_NULL) return;
+  VARIANT current;
+  VariantInit(&current);
+  const bool already_open = SUCCEEDED(keyboard_open_compartment_->GetValue(&current)) &&
+                            current.vt == VT_I4 && current.lVal != 0;
+  VariantClear(&current);
+  LogKeyboardOpenState("keyboard_open_initial", source, keyboard_open_);
+  if (already_open) return;
+  VARIANT open;
+  VariantInit(&open);
+  open.vt = VT_I4;
+  open.lVal = 1;
+  const HRESULT set_hr = keyboard_open_compartment_->SetValue(client_id_, &open);
+  if (FAILED(set_hr)) {
+    RuntimeLog(
+        azookey::logging::RuntimeLogLevel::Warn, "keyboard_open_compartment_set_failed",
+        {{"error_code", SafeLogText("business")}, {"source", SafeLogText(std::string(source))}});
+  }
+}
+
+void TextService::ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr) {
+  AZOOKEY_ASSERT_UI_THREAD();
+  focused_document_identity_ = ComIdentity(document_mgr);
+  if (keyboard_open_pending_document_ != focused_document_identity_)
+    keyboard_open_pending_document_ = nullptr;
+  if (!focused_document_identity_) return;
+  const bool first_focus =
+      std::find(keyboard_open_seen_documents_.begin(), keyboard_open_seen_documents_.end(),
+                focused_document_identity_) == keyboard_open_seen_documents_.end();
+  LogKeyboardOpenState(first_focus ? "keyboard_open_focus_first" : "keyboard_open_focus",
+                       "thread_focus", keyboard_open_);
+  if (!first_focus) return;
+  try {
+    keyboard_open_seen_documents_.push_back(focused_document_identity_);
+  } catch (const std::bad_alloc&) {
+    // Untracked documents are treated as new again on their next focus.
+  }
+  // A new input context starts in Japanese input like a newly activated TIP.
+  // Documents focused again keep whatever state the user left (spec §4.1).
+  keyboard_open_pending_document_ = focused_document_identity_;
+  keyboard_open_pending_deadline_ = std::chrono::steady_clock::now() + kInitialKeyboardOpenGrace;
+  OpenKeyboardIfClosed("first_focus");
+}
+
+void TextService::ReopenIfInitialOpenWasUndone() {
+  AZOOKEY_ASSERT_UI_THREAD();
+  if (keyboard_open_ || !keyboard_open_pending_document_) return;
+  const bool in_time = std::chrono::steady_clock::now() <= keyboard_open_pending_deadline_;
+  const bool same_document = keyboard_open_pending_document_ == focused_document_identity_;
+  // Reopen at most once per new document so the TIP never keeps fighting a
+  // writer that closes the compartment on purpose.
+  keyboard_open_pending_document_ = nullptr;
+  if (!in_time || !same_document) return;
+  OpenKeyboardIfClosed("reopen_after_restore");
+}
+
+void TextService::ClearKeyboardOpenTracking() {
+  keyboard_open_seen_documents_.clear();
+  focused_document_identity_ = nullptr;
+  keyboard_open_pending_document_ = nullptr;
+}
+
+void TextService::LogKeyboardOpenState(std::string_view event, std::string_view source,
+                                       bool open_before) const noexcept {
+  try {
+    if (!TipRuntimeLogger().enabled()) return;
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, event,
+               {{"source", SafeLogText(std::string(source))},
+                {"compartment", SafeLogText(DescribeKeyboardOpenValue(keyboard_open_compartment_))},
+                {"open_before", open_before},
+                {"open", keyboard_open_},
+                {"alnum_mode", alnum_mode_},
+                {"imm_open", SafeLogText(DescribeImmOpenStatus())},
+                {"conversion_mode", ReadConversionModeForLog(thread_mgr_)},
+                {"pending_initial_open", keyboard_open_pending_document_ != nullptr},
+                {"thread_id", static_cast<uint64_t>(GetCurrentThreadId())}});
+  } catch (...) {
+  }
+}
+
+void TextService::RefreshKeyboardOpen(std::string_view source) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!keyboard_open_compartment_) return;
   VARIANT value;
@@ -1331,6 +1464,7 @@ void TextService::RefreshKeyboardOpen() {
   const bool valid = SUCCEEDED(hr) && value.vt == VT_I4;
   const bool open = valid && value.lVal != 0;
   VariantClear(&value);
+  const bool open_before = keyboard_open_;
   if (valid && open != keyboard_open_) {
     keyboard_open_ = open;
     alnum_mode_ = false;
@@ -1341,13 +1475,15 @@ void TextService::RefreshKeyboardOpen() {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/false,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
+  LogKeyboardOpenState("keyboard_open_refresh", source, open_before);
 }
 
 STDMETHODIMP TextService::OnChange(REFGUID rguid) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (rguid != GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) return S_OK;
   try {
-    RefreshKeyboardOpen();
+    RefreshKeyboardOpen("compartment_change");
+    ReopenIfInitialOpenWasUndone();
     return S_OK;
   } catch (const std::bad_alloc&) {
     LogComBoundaryException("TextService::OnChange", E_OUTOFMEMORY);
@@ -1361,12 +1497,14 @@ STDMETHODIMP TextService::OnChange(REFGUID rguid) {
 HRESULT TextService::ToggleKeyboardOpen() {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!keyboard_open_compartment_ || client_id_ == TF_CLIENTID_NULL) return E_UNEXPECTED;
+  // The user chose the state; a pending initial open must not undo it.
+  keyboard_open_pending_document_ = nullptr;
   VARIANT value;
   VariantInit(&value);
   value.vt = VT_I4;
   value.lVal = keyboard_open_ ? 0 : 1;
   const HRESULT hr = keyboard_open_compartment_->SetValue(client_id_, &value);
-  if (SUCCEEDED(hr)) RefreshKeyboardOpen();
+  if (SUCCEEDED(hr)) RefreshKeyboardOpen("toggle_key");
   return hr;
 }
 
@@ -1817,8 +1955,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
                       core::kModifierShift)) == 0;
-    if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
+    if ((!keyboard_open_ && !toggle_open) ||
+        (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN)) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_passthrough",
+                 {{"open", keyboard_open_}, {"alnum_mode", alnum_mode_}});
       return S_OK;
+    }
     if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0) {
       if (wParam == VK_ESCAPE) {
@@ -2637,6 +2779,11 @@ STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) {
 }
 STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
   AZOOKEY_ASSERT_UI_THREAD();
+  if (const void* identity = ComIdentity(pdim)) {
+    std::erase(keyboard_open_seen_documents_, identity);
+    if (focused_document_identity_ == identity) focused_document_identity_ = nullptr;
+    if (keyboard_open_pending_document_ == identity) keyboard_open_pending_document_ = nullptr;
+  }
   if (ActiveContextBelongsToDocumentMgr(pdim)) {
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
@@ -2645,6 +2792,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
 }
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
   AZOOKEY_ASSERT_UI_THREAD();
+  ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
     UnadviseTextEditSink();
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,

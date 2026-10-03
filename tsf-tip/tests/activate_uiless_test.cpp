@@ -242,6 +242,41 @@ class MockThreadMgrEx final : public ITfThreadMgrEx,
   IUnknown* thread_sink_{nullptr};
 };
 
+// Document manager that only needs a COM identity: OnSetFocus compares and
+// records it, and GetTop reports no context.
+class MockDocumentMgr final : public ITfDocumentMgr {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfDocumentMgr) return E_NOINTERFACE;
+    *ppv = static_cast<ITfDocumentMgr*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP CreateContext(TfClientId, DWORD, IUnknown*, ITfContext** pp,
+                             TfEditCookie*) override {
+    if (pp) *pp = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP Push(ITfContext*) override { return E_NOTIMPL; }
+  STDMETHODIMP Pop(DWORD) override { return E_NOTIMPL; }
+  STDMETHODIMP GetTop(ITfContext** pp) override {
+    if (pp) *pp = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetBase(ITfContext** pp) override {
+    if (pp) *pp = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP EnumContexts(IEnumTfContexts** pp) override {
+    if (pp) *pp = nullptr;
+    return E_NOTIMPL;
+  }
+};
+
 bool ActivateAndReadUiLess(DWORD active_flags) {
   azookey::tsf::TextService service;
   MockThreadMgrEx mock(active_flags);
@@ -364,5 +399,68 @@ TEST(TsfTipActivateUiLessTest, OemEnlwCanReopenClosedKeyboard) {
   ASSERT_EQ(service.OnKeyDown(nullptr, VK_OEM_ENLW, 0, &eaten), S_OK);
   EXPECT_TRUE(eaten);
   EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, FirstFocusOpensKeyboardClosedBeforeFocus) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  // The input context restore can close the compartment before focus arrives.
+  mock.keyboard_compartment.SetOpen(false);
+  ASSERT_FALSE(service.keyboard_open());
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.last_writer(), mock.client_id);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, CloseRightAfterFirstFocusIsUndoneOnce) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  const int writes = mock.keyboard_compartment.set_count();
+  // The restore can also arrive after the focus notification.
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes + 1);
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes + 1);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, ToggleAfterFirstFocusIsNotUndone) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  ASSERT_EQ(service.ToggleKeyboardOpen(), S_OK);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, RefocusedDocumentKeepsClosedKeyboard) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr first;
+  MockDocumentMgr second;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&first, nullptr), S_OK);
+  ASSERT_EQ(service.ToggleKeyboardOpen(), S_OK);
+  ASSERT_FALSE(service.keyboard_open());
+
+  ASSERT_EQ(service.OnSetFocus(&second, &first), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+
+  const int writes = mock.keyboard_compartment.set_count();
+  ASSERT_EQ(service.OnSetFocus(&first, &second), S_OK);
+  mock.keyboard_compartment.SetOpen(false);  // restore of the first context
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes);
   EXPECT_EQ(service.Deactivate(), S_OK);
 }

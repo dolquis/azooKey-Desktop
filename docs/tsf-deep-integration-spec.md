@@ -599,6 +599,29 @@ Microsoft IME と旧 macOS 版に揃う。`ActivateEx` は sink を購読する�
 読み直した値に従う。読み直した値が `VT_I4` の 0 なら Off、それ以外は On とする。
 `ITfCompartmentMgr` を持たないホストでは compartment を扱わず、On として動く。
 
+新しい入力先も On で始まる。OPENCLOSE はスレッドの compartment だが、IMM32 互換層は
+入力コンテキスト（HIMC）ごとの開閉状態を持ち、フォーカスの移った先の状態で compartment を
+書き直す。新しい HIMC の既定は閉じた状態のため、有効化時に On にしても、最初の入力先へ
+フォーカスが移ると Off に戻りうる。そこで `ITfThreadMgrEventSink::OnSetFocus` で初めて
+フォーカスを受けた `ITfDocumentMgr`（有効化時に既にフォーカスを持つものを含む）にも、
+有効化時と同じ規則で On を適用する。この初回フォーカスから 1 秒以内に同じ document manager の
+compartment が 0 へ変わったときは、入力コンテキストの復元とみなして 1 度だけ On に戻す。
+TIP が処理した開閉キー（半角/全角、英数、ひらがな）でユーザーが開閉したら、その document manager では
+戻さない。言語バーやアプリの `ImmSetOpenStatus` など TIP を経由しない Off は区別できないため、
+この 1 秒以内に届いたものは 1 度だけ On に戻る。
+一度フォーカスを受けた document manager へ戻ったときは TIP は書き込まず、compartment の値に従う。
+入力先ごとの開閉の復元は IMM32 互換層が行い、TIP は入力先ごとの開閉を記録しない。
+document manager の記録は `OnUninitDocumentMgr` と `Deactivate` で消す。
+
+開閉の経緯は `AZOOKEY_LOG` の info ログで追える。`keyboard_open_initial`（On にする判定、
+`source` は `activate` / `first_focus` / `reopen_after_restore`）、`keyboard_open_focus_first` と
+`keyboard_open_focus`（フォーカス受信）、`keyboard_open_refresh`（値の反映、`source` は
+`activate` / `compartment_change` / `toggle_key`）を出す。これらの行は compartment の値、
+反映前後の開閉、英数モード、フォーカスウィンドウの HIMC の開閉（`imm_open`）、
+`GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION` の値、スレッド ID を持つ。
+`key_passthrough` は Off または英数モードでキーを素通ししたことを、開閉と英数モードの組が
+変わるたびに 1 行だけ出す。打鍵ごとには出さない。どの行も入力本文、キーコード、打鍵の回数を持たない。
+
 ### 4.2 状態遷移
 
 | 旧 | 新 | 動作 |
@@ -622,6 +645,8 @@ Microsoft IME と旧 macOS 版に揃う。`ActivateEx` は sink を購読する�
 ### 4.4 受け入れ条件
 
 - azooKey を選んだ直後、直前の compartment が Off でも IME On で始まる
+- 新しく開いたウィンドウ（新しい入力先）は IME On で始まる
+- 開いたことのある入力先へ戻ったとき、TIP は開閉を書き込まない（IMM32 互換層が入力先ごとの状態を戻すアプリでは、Off にした入力先は Off のまま）
 - 半角/全角キーで IME On/Off が切り替わり、Status を反映
 - Win+Space で別言語に切替時、composition が確定される
 - アプリ切替時に composition が確定される

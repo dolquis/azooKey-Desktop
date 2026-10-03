@@ -1389,9 +1389,13 @@ void TextService::OpenKeyboardIfClosed(std::string_view source) {
   open.lVal = 1;
   const HRESULT set_hr = keyboard_open_compartment_->SetValue(client_id_, &open);
   if (FAILED(set_hr)) {
-    RuntimeLog(
-        azookey::logging::RuntimeLogLevel::Warn, "keyboard_open_compartment_set_failed",
-        {{"error_code", SafeLogText("business")}, {"source", SafeLogText(std::string(source))}});
+    try {
+      RuntimeLog(
+          azookey::logging::RuntimeLogLevel::Warn, "keyboard_open_compartment_set_failed",
+          {{"error_code", SafeLogText("business")}, {"source", SafeLogText(std::string(source))}});
+    } catch (...) {
+      // Reached from OnSetFocus and ActivateEx; logging must not throw out of them.
+    }
   }
 }
 
@@ -1435,6 +1439,20 @@ void TextService::ClearKeyboardOpenTracking() {
   keyboard_open_seen_documents_.clear();
   focused_document_identity_ = nullptr;
   keyboard_open_pending_document_ = nullptr;
+  key_passthrough_logged_state_ = -1;
+}
+
+void TextService::LogKeyPassthroughOnce() noexcept {
+  // One record per open/alphanumeric state, so the log never carries the
+  // count or timing of keys typed while the IME is off.
+  const int state = (keyboard_open_ ? 2 : 0) | (alnum_mode_ ? 1 : 0);
+  if (state == key_passthrough_logged_state_) return;
+  key_passthrough_logged_state_ = state;
+  try {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_passthrough",
+               {{"open", keyboard_open_}, {"alnum_mode", alnum_mode_}});
+  } catch (...) {
+  }
 }
 
 void TextService::LogKeyboardOpenState(std::string_view event, std::string_view source,
@@ -1756,8 +1774,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
         (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin |
                       core::kModifierShift)) == 0;
-    if ((!keyboard_open_ && !toggle_open) || (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN))
+    if ((!keyboard_open_ && !toggle_open) ||
+        (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN)) {
+      LogKeyPassthroughOnce();
       return S_OK;
+    }
     if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&
         (modifiers & (core::kModifierCtrl | core::kModifierAlt | core::kModifierWin)) == 0 &&
         (wParam == VK_ESCAPE || (wParam == VK_TAB && ((modifiers & core::kModifierShift) == 0 ||
@@ -1957,8 +1978,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
                       core::kModifierShift)) == 0;
     if ((!keyboard_open_ && !toggle_open) ||
         (alnum_mode_ && !toggle_open && wParam != VK_OEM_ATTN)) {
-      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_passthrough",
-                 {{"open", keyboard_open_}, {"alnum_mode", alnum_mode_}});
+      LogKeyPassthroughOnce();
       return S_OK;
     }
     if (prediction_window_.IsVisible() && SameComIdentity(context, active_context_) &&

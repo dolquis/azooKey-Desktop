@@ -411,6 +411,8 @@ class TextService final : public ITfTextInputProcessorEx,
   // the per-context restore of a new input context, not a user action.
   const void* keyboard_open_pending_document_{nullptr};
   std::chrono::steady_clock::time_point keyboard_open_pending_deadline_{};
+  // Open/alphanumeric state last reported by key_passthrough, -1 for none.
+  int key_passthrough_logged_state_{-1};
   bool function_provider_advised_{false};
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
@@ -772,6 +774,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);
   void ReopenIfInitialOpenWasUndone();
   void ClearKeyboardOpenTracking();
+  void LogKeyPassthroughOnce() noexcept;
   void LogKeyboardOpenState(std::string_view event, std::string_view source,
                             bool open_before) const noexcept;
   void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,

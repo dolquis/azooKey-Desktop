@@ -464,3 +464,38 @@ TEST(TsfTipActivateUiLessTest, RefocusedDocumentKeepsClosedKeyboard) {
   EXPECT_EQ(mock.keyboard_compartment.set_count(), writes);
   EXPECT_EQ(service.Deactivate(), S_OK);
 }
+
+TEST(TsfTipActivateUiLessTest, CloseAfterFocusMovedAwayIsNotUndone) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr first;
+  MockDocumentMgr second;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&first, nullptr), S_OK);
+  ASSERT_EQ(service.ToggleKeyboardOpen(), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&second, &first), S_OK);
+  ASSERT_TRUE(service.keyboard_open());
+  ASSERT_EQ(service.OnSetFocus(&first, &second), S_OK);
+  const int writes = mock.keyboard_compartment.set_count();
+  // The second document's pending reopen does not apply to the first one.
+  mock.keyboard_compartment.SetOpen(false);
+  EXPECT_FALSE(service.keyboard_open());
+  EXPECT_EQ(mock.keyboard_compartment.set_count(), writes);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, UninitializedDocumentIsNewAgain) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  MockDocumentMgr document;
+  ASSERT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  ASSERT_EQ(service.ToggleKeyboardOpen(), S_OK);
+  ASSERT_FALSE(service.keyboard_open());
+  ASSERT_EQ(service.OnSetFocus(nullptr, &document), S_OK);
+  ASSERT_EQ(service.OnUninitDocumentMgr(&document), S_OK);
+  // A document manager created at the same address is a new input target.
+  ASSERT_EQ(service.OnSetFocus(&document, nullptr), S_OK);
+  EXPECT_TRUE(service.keyboard_open());
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}

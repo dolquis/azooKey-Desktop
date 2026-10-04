@@ -26,6 +26,9 @@ class PredictionWindow {
   void Show(const std::vector<std::wstring>& candidates, RECT caret_rect_screen);
   void Hide();
   bool IsVisible() const;
+  // Stage and HRESULT of the most recent Create or Show failure; never input text.
+  const char* failure_stage() const { return failure_stage_; }
+  HRESULT failure_hr() const { return failure_hr_; }
 
   using OnClickFn = std::function<void(int index)>;
   void SetOnClick(OnClickFn callback) { on_click_ = std::move(callback); }
@@ -40,6 +43,7 @@ class PredictionWindow {
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
   bool InitializeRendering();
+  bool Fail(const char* stage, HRESULT hr);
   bool ResizeSurface(int width, int height);
   bool Draw();
   int MeasureWidth() const;
@@ -55,6 +59,8 @@ class PredictionWindow {
   std::vector<std::wstring> candidates_;
   OnClickFn on_click_;
   std::unique_ptr<RenderState> render_;
+  const char* failure_stage_{""};
+  HRESULT failure_hr_{S_OK};
 };
 
 }  // namespace azookey::tsf

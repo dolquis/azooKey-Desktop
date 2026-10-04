@@ -108,41 +108,56 @@ bool PredictionWindow::InitializeRendering() {
     hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, nullptr, 0,
                            D3D11_SDK_VERSION, &state->d3d_device, nullptr, nullptr);
   }
-  if (FAILED(hr)) return false;
+  if (FAILED(hr)) return Fail("d3d11_device", hr);
 
   ComPtr<IDXGIDevice> dxgi_device;
-  if (FAILED(state->d3d_device.As(&dxgi_device))) return false;
-  if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), nullptr,
-                               reinterpret_cast<void**>(state->d2d_factory.GetAddressOf()))))
-    return false;
-  if (FAILED(state->d2d_factory->CreateDevice(dxgi_device.Get(), &state->d2d_device))) return false;
+  if (FAILED(hr = state->d3d_device.As(&dxgi_device))) return Fail("dxgi_device", hr);
+  if (FAILED(hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1),
+                                    nullptr,
+                                    reinterpret_cast<void**>(state->d2d_factory.GetAddressOf()))))
+    return Fail("d2d_factory", hr);
+  if (FAILED(hr = state->d2d_factory->CreateDevice(dxgi_device.Get(), &state->d2d_device)))
+    return Fail("d2d_device", hr);
 
   // A Direct2D device is required here so BeginDraw can return a device context.
-  if (FAILED(DCompositionCreateDevice2(
-          state->d2d_device.Get(), __uuidof(IDCompositionDevice2),
-          reinterpret_cast<void**>(state->composition_device.GetAddressOf()))))
-    return false;
-  if (FAILED(state->composition_device.As(&state->desktop_device)) ||
-      FAILED(state->desktop_device->CreateTargetForHwnd(hwnd_, TRUE, &state->target)) ||
-      FAILED(state->composition_device->CreateVisual(&state->visual)) ||
-      FAILED(state->target->SetRoot(state->visual.Get())))
-    return false;
+  // DCompositionCreateDevice2 accepts only IDCompositionDevice or
+  // IDCompositionDesktopDevice; asking for IDCompositionDevice2 fails with
+  // E_NOINTERFACE, so query it from the desktop device instead.
+  if (FAILED(hr = DCompositionCreateDevice2(
+                 state->d2d_device.Get(), __uuidof(IDCompositionDesktopDevice),
+                 reinterpret_cast<void**>(state->desktop_device.GetAddressOf()))))
+    return Fail("dcomp_device", hr);
+  if (FAILED(hr = state->desktop_device.As(&state->composition_device)))
+    return Fail("dcomp_device2", hr);
+  if (FAILED(hr = state->desktop_device->CreateTargetForHwnd(hwnd_, TRUE, &state->target)))
+    return Fail("dcomp_target", hr);
+  if (FAILED(hr = state->composition_device->CreateVisual(&state->visual)) ||
+      FAILED(hr = state->target->SetRoot(state->visual.Get())))
+    return Fail("dcomp_visual", hr);
 
-  if (FAILED(
-          DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                              reinterpret_cast<IUnknown**>(state->write_factory.GetAddressOf()))))
-    return false;
+  if (FAILED(hr = DWriteCreateFactory(
+                 DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                 reinterpret_cast<IUnknown**>(state->write_factory.GetAddressOf()))))
+    return Fail("dwrite_factory", hr);
 
   render_ = std::move(state);
   UpdateDpi(GetDpiForWindow(hwnd_));
-  return render_->text_format != nullptr;
+  return render_->text_format != nullptr || Fail("text_format", E_FAIL);
+}
+
+bool PredictionWindow::Fail(const char* stage, HRESULT hr) {
+  failure_stage_ = stage;
+  failure_hr_ = hr;
+  return false;
 }
 
 bool PredictionWindow::Create() {
   try {
-    if (hwnd_) return GetCurrentThreadId() == ui_thread_id_;
+    if (hwnd_) return GetCurrentThreadId() == ui_thread_id_ || Fail("wrong_thread", E_FAIL);
+    failure_stage_ = "";
+    failure_hr_ = S_OK;
     static const ATOM atom = RegisterWindowClass();
-    if (!atom) return false;
+    if (!atom) return Fail("register_class", E_FAIL);
 
     const ScopedThreadDpiAwarenessContext dpi_context;
     ui_thread_id_ = GetCurrentThreadId();
@@ -150,10 +165,11 @@ bool PredictionWindow::Create() {
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
         kWindowClass, nullptr, WS_POPUP | WS_CLIPSIBLINGS, 0, 0, 1, 1, nullptr, nullptr,
         TipModule(), this);
-    if (!hwnd_) return false;
+    if (!hwnd_) return Fail("create_window", HRESULT_FROM_WIN32(GetLastError()));
     if (InitializeRendering()) return true;
   } catch (...) {
     // Allocation failure while setting up DirectComposition is a creation failure.
+    Fail("exception", E_OUTOFMEMORY);
   }
   Destroy();
   return false;
@@ -208,15 +224,17 @@ int PredictionWindow::MeasureWidth() const {
 }
 
 bool PredictionWindow::ResizeSurface(int width, int height) {
-  if (!render_) return false;
+  if (!render_) return Fail("no_render", E_FAIL);
   if (render_->surface && render_->surface_width == width && render_->surface_height == height)
     return true;
 
   ComPtr<IDCompositionSurface> surface;
-  if (FAILED(render_->composition_device->CreateSurface(width, height, DXGI_FORMAT_B8G8R8A8_UNORM,
-                                                        DXGI_ALPHA_MODE_PREMULTIPLIED, &surface)) ||
-      FAILED(render_->visual->SetContent(surface.Get())))
-    return false;
+  HRESULT hr = S_OK;
+  if (FAILED(hr = render_->composition_device->CreateSurface(
+                 width, height, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED,
+                 &surface)) ||
+      FAILED(hr = render_->visual->SetContent(surface.Get())))
+    return Fail("surface", hr);
   render_->surface = std::move(surface);
   render_->surface_width = width;
   render_->surface_height = height;
@@ -224,14 +242,15 @@ bool PredictionWindow::ResizeSurface(int width, int height) {
 }
 
 bool PredictionWindow::Draw() {
-  if (!render_ || !render_->surface) return false;
+  if (!render_ || !render_->surface) return Fail("no_render", E_FAIL);
 
   ComPtr<ID2D1DeviceContext> context;
   POINT offset{};
-  if (FAILED(render_->surface->BeginDraw(nullptr, __uuidof(ID2D1DeviceContext),
-                                         reinterpret_cast<void**>(context.GetAddressOf()),
-                                         &offset)))
-    return false;
+  if (const HRESULT hr =
+          render_->surface->BeginDraw(nullptr, __uuidof(ID2D1DeviceContext),
+                                      reinterpret_cast<void**>(context.GetAddressOf()), &offset);
+      FAILED(hr))
+    return Fail("begin_draw", hr);
 
   context->SetDpi(96.0f, 96.0f);
   context->SetTransform(
@@ -260,13 +279,19 @@ bool PredictionWindow::Draw() {
 
   const HRESULT end_draw = render_->surface->EndDraw();
   context.Reset();
-  return drawn && SUCCEEDED(end_draw) && SUCCEEDED(render_->composition_device->Commit());
+  if (!drawn) return Fail("brush", E_FAIL);
+  if (FAILED(end_draw)) return Fail("end_draw", end_draw);
+  if (const HRESULT hr = render_->composition_device->Commit(); FAILED(hr))
+    return Fail("commit", hr);
+  return true;
 }
 
 void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
                             RECT caret_rect_screen) try {
   if (!hwnd_) return;
   assert(GetCurrentThreadId() == ui_thread_id_);
+  failure_stage_ = "";
+  failure_hr_ = S_OK;
   const ScopedThreadDpiAwarenessContext dpi_context;
   if (candidates.empty()) {
     Hide();
@@ -294,7 +319,10 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
     width_ = std::min(width_, static_cast<int>(work_area.right - work_area.left));
     height_ = std::min(height_, static_cast<int>(work_area.bottom - work_area.top));
   }
-  if (width_ <= 0 || height_ <= 0) return;
+  if (width_ <= 0 || height_ <= 0) {
+    Fail("size", E_FAIL);
+    return;
+  }
   const RECT placement = ComputePlacement(caret_rect_screen, work_area, width_, height_);
   if (!ResizeSurface(width_, height_)) {
     Hide();
@@ -302,14 +330,18 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
   }
   if (!SetWindowPos(hwnd_, HWND_TOPMOST, placement.left, placement.top, width_, height_,
                     SWP_NOACTIVATE | SWP_NOOWNERZORDER)) {
+    Fail("set_window_pos", HRESULT_FROM_WIN32(GetLastError()));
     Hide();
     return;
   }
-  if (Draw())
+  if (Draw()) {
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-  else
+    if (!IsWindowVisible(hwnd_)) Fail("show_window", E_FAIL);
+  } else {
     Hide();
+  }
 } catch (...) {
+  Fail("exception", E_OUTOFMEMORY);
   Hide();
 }
 

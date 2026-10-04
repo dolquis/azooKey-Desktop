@@ -1542,7 +1542,8 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $guestScript = Join-Path $repoRoot "scripts\vm-verify-guest.ps1"
       $probe = ". '$($guestScript.Replace("'", "''"))'; " +
         "try { 'ok:' + (Invoke-VmVerifyGuestInputMethodActivation -QueryOnly).ActiveInputMethod } " +
-        "catch [System.Runtime.InteropServices.COMException] { 'com:' + `$_.Exception.Message }"
+        "catch [System.Runtime.InteropServices.COMException], [System.InvalidCastException] " +
+        "{ 'com:' + `$_.Exception.Message }"
 
       $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $probe 2>&1
 

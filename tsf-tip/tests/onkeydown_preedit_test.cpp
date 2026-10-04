@@ -3,6 +3,8 @@
 #endif
 #include <Windows.h>
 #include <gtest/gtest.h>
+#include <initguid.h>
+#include <inputscope.h>
 #include <msctf.h>
 
 #include <algorithm>
@@ -403,6 +405,11 @@ class NoopContext : public ITfContext {
       AddRef();
       return S_OK;
     }
+    if (riid == IID_ITfCompartmentMgr && compartment_mgr) {
+      compartment_mgr->AddRef();
+      *ppvObject = compartment_mgr;
+      return S_OK;
+    }
     return E_NOINTERFACE;
   }
 
@@ -495,9 +502,13 @@ class NoopContext : public ITfContext {
     return E_NOTIMPL;
   }
 
-  STDMETHODIMP GetAppProperty(REFGUID, ITfReadOnlyProperty** property) override {
-    if (property) *property = nullptr;
-    return E_NOTIMPL;
+  STDMETHODIMP GetAppProperty(REFGUID guid, ITfReadOnlyProperty** property) override {
+    if (!property) return E_POINTER;
+    *property = nullptr;
+    if (guid != GUID_PROP_INPUTSCOPE || !input_scope_property) return E_NOTIMPL;
+    input_scope_property->AddRef();
+    *property = input_scope_property;
+    return S_OK;
   }
 
   STDMETHODIMP TrackProperties(const GUID**, ULONG, const GUID**, ULONG,
@@ -538,6 +549,8 @@ class NoopContext : public ITfContext {
   HRESULT get_active_view_result{S_OK};
   ITfDocumentMgr* document_mgr_{nullptr};
   IUnknown* identity_unknown_{nullptr};
+  ITfCompartmentMgr* compartment_mgr{nullptr};
+  ITfReadOnlyProperty* input_scope_property{nullptr};
   int set_selection_count{0};
   ULONG last_selection_count{0};
   ITfRange* last_selection_range{nullptr};
@@ -7111,4 +7124,169 @@ TEST(TsfTipSecureInputTest, SendChokePointDropsLearningTrafficWhileSecure) {
   EXPECT_EQ(std::count(after_post.begin(), after_post.end(),
                        azookey::ipc::MessageType::CommitObservation),
             before + 1);
+}
+
+// --- DEV-1483: Chromium password fields ---
+// Chromium gives its password field the scope IS_PRIVATE (never IS_PASSWORD)
+// and sets KEYBOARD_DISABLED and EMPTYCONTEXT on that context. TSF still calls
+// the key sinks, so the TIP converted and learned whatever was typed there.
+
+namespace {
+class ChromiumCompartment final : public ITfCompartment {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartment) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartment*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP SetValue(TfClientId, const VARIANT*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetValue(VARIANT* out) override {
+    if (!out) return E_POINTER;
+    VariantInit(out);
+    if (value) {
+      out->vt = VT_I4;
+      out->lVal = value;
+    }
+    return S_OK;
+  }
+  LONG value{0};
+};
+
+class ChromiumCompartmentMgr final : public ITfCompartmentMgr {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartmentMgr) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartmentMgr*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetCompartment(REFGUID id, ITfCompartment** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (id == GUID_COMPARTMENT_KEYBOARD_DISABLED) *out = &keyboard_disabled;
+    if (id == GUID_COMPARTMENT_EMPTYCONTEXT) *out = &empty_context;
+    return *out ? S_OK : E_INVALIDARG;
+  }
+  STDMETHODIMP ClearCompartment(TfClientId, REFGUID) override { return E_NOTIMPL; }
+  STDMETHODIMP EnumCompartments(IEnumGUID** out) override {
+    if (out) *out = nullptr;
+    return E_NOTIMPL;
+  }
+  ChromiumCompartment keyboard_disabled;
+  ChromiumCompartment empty_context;
+};
+
+class PrivateInputScope final : public ITfInputScope {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfInputScope) return E_NOINTERFACE;
+    *out = static_cast<ITfInputScope*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetInputScopes(InputScope** out, UINT* count) override {
+    if (!out || !count) return E_POINTER;
+    *out = static_cast<InputScope*>(CoTaskMemAlloc(sizeof(InputScope)));
+    if (!*out) return E_OUTOFMEMORY;
+    **out = IS_PRIVATE;
+    *count = 1;
+    return S_OK;
+  }
+  STDMETHODIMP GetPhrase(BSTR**, UINT* count) override {
+    if (count) *count = 0;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetRegularExpression(BSTR*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetSRGS(BSTR*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetXML(BSTR*) override { return E_NOTIMPL; }
+};
+
+class PrivateScopeProperty final : public ITfReadOnlyProperty {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfReadOnlyProperty) return E_NOINTERFACE;
+    *out = static_cast<ITfReadOnlyProperty*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP GetType(GUID* type) override {
+    if (type) *type = GUID_PROP_INPUTSCOPE;
+    return S_OK;
+  }
+  STDMETHODIMP EnumRanges(TfEditCookie, IEnumTfRanges** out, ITfRange*) override {
+    if (out) *out = nullptr;
+    return E_NOTIMPL;
+  }
+  STDMETHODIMP GetValue(TfEditCookie, ITfRange*, VARIANT* value) override {
+    if (!value) return E_POINTER;
+    VariantInit(value);
+    value->vt = VT_UNKNOWN;
+    value->punkVal = static_cast<ITfInputScope*>(&scope);
+    scope.AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP GetContext(ITfContext** context) override {
+    if (context) *context = nullptr;
+    return E_NOTIMPL;
+  }
+  PrivateInputScope scope;
+};
+}  // namespace
+
+TEST(TsfTipSecureInputTest, KeyboardDisabledContextPassesEveryKeyThrough) {
+  TextServiceHarness h;
+  ChromiumCompartmentMgr compartments;
+  compartments.keyboard_disabled.value = 1;
+  compartments.empty_context.value = 1;
+  h.context.compartment_mgr = &compartments;
+
+  for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{VK_SPACE}, WPARAM{VK_RETURN}}) {
+    EXPECT_FALSE(h.TestPress(key)) << key;
+    EXPECT_FALSE(h.Press(key)) << key;
+  }
+  EXPECT_EQ(h.service.preedit_kana_, "");
+  EXPECT_EQ(h.context.request_count, 0);
+
+  // The same context typed into once the app re-enables it converts again.
+  compartments.keyboard_disabled.value = 0;
+  compartments.empty_context.value = 0;
+  EXPECT_TRUE(h.Press('K'));
+  EXPECT_TRUE(h.Press('A'));
+  EXPECT_EQ(h.service.preedit_kana_, "か");
+}
+
+TEST(TsfTipSecureInputTest, PrivateInputScopeSuppressesLearningButKeepsPrediction) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"msedge.exe", "Chrome_WidgetWin_1", true});
+  PrivateScopeProperty property;
+  FakeRange selection;
+  h.context.input_scope_property = &property;
+  h.context.selection_range = &selection;
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+  EXPECT_FALSE(h.service.secure_input_for_test());
+  EXPECT_TRUE(h.service.prediction_allowed_for_test());
+
+  // Without IS_PRIVATE the same commit is learned, so the scope is what stopped it.
+  h.context.input_scope_property = nullptr;
+  CommitOneCandidate(h);
+  EXPECT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+  h.context.selection_range = nullptr;
 }

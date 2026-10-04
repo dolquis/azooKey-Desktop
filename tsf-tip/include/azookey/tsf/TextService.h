@@ -24,6 +24,7 @@
 #include "azookey/ipc/Messages.h"
 #include "azookey/ipc/NamedPipeTransport.h"
 #include "azookey/ipc/Payloads.h"
+#include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
 #include "azookey/tsf/CharacterFormEditSession.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
@@ -245,6 +246,8 @@ class TextService final : public ITfTextInputProcessorEx,
   bool has_pending_commit_observation_for_test() const {
     return pending_commit_observation_.has_value();
   }
+  bool secure_input_for_test() const { return secure_input_.load(); }
+  bool prediction_allowed_for_test() const { return prediction_allowed_.load(); }
   std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
   std::optional<ipc::CommitObservationRequest> first_queued_commit_observation_for_test();
   std::optional<ipc::CommitSegmentsObservationRequest> last_queued_segments_observation_for_test() {
@@ -411,8 +414,12 @@ class TextService final : public ITfTextInputProcessorEx,
   // the per-context restore of a new input context, not a user action.
   const void* keyboard_open_pending_document_{nullptr};
   std::chrono::steady_clock::time_point keyboard_open_pending_deadline_{};
-  // Open/alphanumeric state last reported by key_passthrough, -1 for none.
+  // Open/alphanumeric/keyboard-disabled state last reported by
+  // key_passthrough, -1 for none.
   int key_passthrough_logged_state_{-1};
+  // Probe summary last reported by input_gate, so the record appears once per
+  // change of field rather than once per commit or prediction.
+  std::string input_gate_logged_signature_;
   bool function_provider_advised_{false};
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
@@ -774,7 +781,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void ApplyInitialKeyboardOpenOnFocus(ITfDocumentMgr* document_mgr);
   void ReopenIfInitialOpenWasUndone();
   void ClearKeyboardOpenTracking();
-  void LogKeyPassthroughOnce() noexcept;
+  void LogKeyPassthroughOnce(bool keyboard_disabled = false) noexcept;
+  void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
   void LogKeyboardOpenState(std::string_view event, std::string_view source,
                             bool open_before) const noexcept;
   void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,

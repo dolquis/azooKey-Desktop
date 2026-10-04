@@ -107,6 +107,17 @@ VM 側の bootstrap は manifest から GGUF、bench、mock dictionary を自動
 ある。無効な場合はスクリプトが有効化コマンドと代替経路を案内して**非ゼロ終了する**
 （黙って転送をスキップしない）。
 
+統合サービスの有効・無効と DVD の割り当ては checkpoint ごとに保存される。
+Guest Service Interface が無効だった時点の checkpoint へ戻すと、再び無効になる。
+有効化した後に、以後の復元先として使う checkpoint を取り直しておく。
+
+起動中に取った checkpoint は、DVD に割り当てたメディアの参照も保存状態に持つ。
+参照先の ISO を削除していると、その checkpoint へ戻した後の起動が
+「アタッチメントが見つからない」で失敗し、保存状態のままでは DVD を外せない。
+現行 VM の保存状態を `Remove-VMSavedState` で破棄し、`Set-VMDvdDrive -Path $null` で
+外してから起動する。checkpoint 側の保存状態は残るが、起動は電源断後の起動と同じになる。
+DVD を外した状態で checkpoint を取り直しておくと、次からはこの対処が要らない。
+
 ### 2. 転送できない場合の代替経路
 
 Guest Service Interface が使えない VM では、手順 1 が停止する。その場合は zip を手で
@@ -172,6 +183,13 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
 - 前提は、手順 1 の checkpoint があること、ゲストのコンソール（VMConnect の基本セッション）に
   ローカル管理者がサインインしていてロックされていないこと、資格情報がそのユーザーのものであること。
   いずれかを満たさない場合は理由を出して非ゼロ終了する。
+- ゲストのユーザーが Microsoft アカウントの場合、資格情報のユーザー名は `MicrosoftAccount\<メールアドレス>`、
+  パスワードはそのアカウントのパスワードである（サインインに使う PIN では認証できない）。
+  ローカルアカウントなら `<コンピューター名>\<ユーザー名>` か `.\<ユーザー名>` を使う。
+- checkpoint へ戻した直後は、資格情報が正しくても PowerShell Direct が十数秒
+  「資格情報が無効です」を返すことがある。少し待ってから接続し直す。
+- checkpoint へ戻した結果、コンソールが未サインインやロック画面になることがある。
+  サインインは人が VMConnect で行う。
 - PowerShell Direct のセッションで zip を展開し、`verify-bootstrap.ps1 -Json -CheckpointConfirmed`
   を実行する。VC++ Redistributable の導入と TIP の machine-wide 登録はここで済む。
   `overallStatus=fail` なら compat へ進まない。
@@ -229,6 +247,17 @@ VMConnect を基本セッションに切替（拡張セッションをオフ）�
 Host と検証対象アプリを起動し直す。環境変数の設定、出力先、ローテーション、取得後の
 削除手順は [`../debugging.md`](../debugging.md)「ログ収集」を参照する。
 
+Windows 11 のメモ帳や Edge は、起動したプロセスの環境変数を引き継がずに起動されることがある。
+TIP のログを取るときは、User 環境変数として設定する。設定は対話セッションの中で行い、
+変更の通知を explorer に届ける（PowerShell Direct のセッションで設定すると通知が届かない）。
+そのうえで対象アプリを全プロセス終了してから起動し直す。Edge はウィンドウを閉じても
+バックグラウンドのプロセスが残る。
+
+ホストのキーボードとゲストの配列が違う場合（ホストが US 配列、ゲストが JIS 配列など）、
+基本セッションは物理キーの位置で入力を送るため、`@`、括弧、引用符などの記号が別の文字として届く。
+記号の入力を伴う確認は、ゲストと同じ配列のキーボードで行うか、ゲストの対話セッションで
+仮想キーを合成して行い、どちらで行ったかを記録する。ホストに無いキー（変換、半角/全角）も同じ扱いにする。
+
 > ⚠️ **変換能力の前提**: 検証パッケージを `make-vm-verify-package.ps1` の
 > `-AllowNoModel` を明示し、`-ModelPath <GGUF>` も `-MockDictionaryPath <TSV>` も指定せずに生成すると、bootstrap が
 > host へ渡す辞書もモデルも無く、`ZenzaiModelConverter` は `SimpleConverter` の静的辞書
@@ -266,6 +295,7 @@ Host と検証対象アプリを起動し直す。環境変数の設定、出力
 | preedit は出るが候補が出ない | host 未起動。`Get-Process azookey_inference_host` → 無ければ手動 `--pipe` 起動（付録の手順 3）。 |
 | `logs/` が作成されない、または診断 ZIP にログがない | `azookey_diag.exe --json` で D-013 を確認する。`error` の場合は `azookey_diag.exe --repair` で `%LOCALAPPDATA%\azooKey\logs\` を作成し、再診断結果を確認する。 |
 | 入力が変・日本語に切替わらない | 拡張セッションのままになっている可能性 → 基本セッションへ（手順 4）。 |
+| PowerShell Direct から実行した CLI が `failed to connect to running host` を返す | PowerShell Direct のセッションは Session 0 にあり、対話セッションで動く Host の per-user pipe に接続できない。Host 経由の操作は、コンソールユーザーのスケジュールタスク（LogonType Interactive）から実行する。 |
 | 異常系で対象アプリが固まる | CommitObservation の応答待ちは期限付きであり（`tsf-tip/src/TextService.cpp` の `WaitForIpcResponseOrStop`）、再送は `kMaxCommitObservationSendAttempts` で打ち切る。Host の強制終了や無応答で対象アプリが固まった場合は、[`windows-diagnostics-playbook.md`](./windows-diagnostics-playbook.md)「Hang の再現と採取」で dump を採取し、対象の課題へ記録する。 |
 
 ## 付録: Debug ビルド + デバッガ方式（VM に開発環境がある場合）

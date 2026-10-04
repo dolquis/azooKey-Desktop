@@ -45,5 +45,18 @@ TEST(PredictionWindowTest, ClampsToNonPrimaryMonitorWorkAreaWhenNeitherSideFits)
   EXPECT_EQ(result.bottom, 180);
 }
 
+TEST(PredictionWindowTest, CreateAndShowMakeTheWindowVisible) {
+  // Create used to fail at the DirectComposition device on every call, so the
+  // window never appeared even with predictions in hand.
+  PredictionWindow window;
+  ASSERT_TRUE(window.Create()) << window.failure_stage() << " hr=0x" << std::hex
+                               << static_cast<unsigned long>(window.failure_hr());
+  window.Show({L"日本", L"日本語"}, RECT{100, 200, 101, 216});
+  EXPECT_TRUE(window.IsVisible()) << window.failure_stage() << " hr=0x" << std::hex
+                                  << static_cast<unsigned long>(window.failure_hr());
+  window.Hide();
+  EXPECT_FALSE(window.IsVisible());
+}
+
 }  // namespace
 }  // namespace azookey::tsf

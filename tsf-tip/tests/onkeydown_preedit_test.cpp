@@ -2187,6 +2187,64 @@ TEST(TsfTipOnKeyDownPreeditTest, QueuedPredictionIsDroppedAfterCustomPermissionR
   server.Stop();
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, HostPredictionsOpenThePredictionWindowWithAndWithoutLive) {
+  using namespace azookey::ipc;
+  for (const bool live : {false, true}) {
+    SCOPED_TRACE(live ? "live conversion" : "no live conversion");
+    const std::string pipe_name = "\\\\.\\pipe\\azookey-tip-prediction-window-test-" +
+                                  std::to_string(GetCurrentProcessId()) + (live ? "-live" : "");
+    std::atomic<unsigned> prediction_queries{0};
+    NamedPipeServer server;
+    ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+      auto response = request;
+      if (request.type == MessageType::Handshake) {
+        HandshakeResponse payload;
+        payload.accepted = true;
+        payload.capabilities = {"query_predictions", "query_live_conversion"};
+        response.payload_json = BuildHandshakeResponse(payload);
+        return response;
+      }
+      if (request.type == MessageType::QueryCandidates) {
+        response.payload_json = BuildQueryCandidatesResponse({});
+        return response;
+      }
+      if (request.type == MessageType::QueryLiveConversion) {
+        response.payload_json = BuildQueryLiveConversionResponse({});
+        return response;
+      }
+      if (request.type == MessageType::QueryPredictions) {
+        ++prediction_queries;
+        QueryPredictionsResponse payload;
+        payload.predictions.push_back({"日本", "にほん", 1.0, "model", ""});
+        payload.predictions.push_back({"日本語", "にほんご", 0.9, "learning", ""});
+        response.payload_json = BuildQueryPredictionsResponse(payload);
+        return response;
+      }
+      return std::nullopt;
+    }));
+
+    // Without the handshake token the worker never connects, and the window
+    // assertions below would pass vacuously.
+    TextServiceHarness handshake_token_guard;
+    DocumentPreeditHarness h;
+    h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+    h.service.set_live_conversion_for_test(live);
+    h.service.set_prediction_enabled_for_test(true);
+    h.service.set_ipc_pipe_name_for_test(pipe_name);
+    h.service.start_ipc_worker_for_test();
+    for (const WPARAM key : {'N', 'I', 'H', 'O'}) ASSERT_TRUE(h.Press(key));
+    ASSERT_EQ(h.service.input_state_for_test().confirmed_kana(), "にほ");
+    ASSERT_TRUE(WaitUntil([&] { return h.service.has_prediction_result_for_test(); }));
+    EXPECT_GT(prediction_queries.load(), 0u);
+
+    h.service.process_candidates_ready_for_test();
+    EXPECT_EQ(h.service.shown_prediction_count_for_test(), 2u);
+    EXPECT_TRUE(h.service.prediction_window_visible_for_test());
+    h.service.stop_ipc_worker_for_test();
+    server.Stop();
+  }
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, AcceptedPredictionRequeriesLiveConversionBeforeCommit) {
   DocumentPreeditHarness h;
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});

@@ -44,6 +44,28 @@ std::optional<std::string> PredictionReadingSuffix(std::string_view kana,
 std::vector<ipc::CandidateField> FilterAcceptablePredictions(
     std::string_view kana, std::vector<ipc::CandidateField> candidates);
 
+// Where a prediction stopped or ended; logged once per activation each.
+enum class PredictionLogReason : uint8_t {
+  Disabled,
+  NotAllowed,
+  NoContext,
+  KeyboardClosed,
+  AlphanumericMode,
+  CandidateWindow,
+  NotComposing,
+  SecureInput,
+  Queued,
+  HostUnsupported,
+  ResponseDropped,
+  StaleReading,
+  StaleContext,
+  StaleGeneration,
+  NoAcceptablePrediction,
+  WindowCreateFailed,
+  WindowShowFailed,
+  Shown,
+};
+
 #ifdef AZOOKEY_TSF_TESTING
 namespace testing {
 using TranslateOemCompositionCharacterFnForTest = std::optional<WCHAR> (*)(WPARAM, LPARAM);
@@ -207,6 +229,12 @@ class TextService final : public ITfTextInputProcessorEx,
     std::lock_guard lock(ipc_mtx_);
     return ipc_prediction_request_ ? ipc_prediction_request_->generation : 0;
   }
+  bool has_prediction_result_for_test() {
+    std::lock_guard lock(candidates_mtx_);
+    return prediction_result_.has_value();
+  }
+  size_t shown_prediction_count_for_test() const { return shown_predictions_.size(); }
+  bool prediction_window_visible_for_test() const { return prediction_window_.IsVisible(); }
   void retry_dropped_prediction_for_test() {
     const uint64_t generation = pending_prediction_generation_for_test();
     prediction_last_query_at_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
@@ -420,6 +448,9 @@ class TextService final : public ITfTextInputProcessorEx,
   // Probe summary last reported by input_gate, so the record appears once per
   // change of field rather than once per commit or prediction.
   std::string input_gate_logged_signature_;
+  // Prediction outcomes already logged since activation, one bit per reason, so
+  // the log says where predictions stop without the count or timing of keys.
+  std::atomic<uint32_t> prediction_logged_reasons_{0};
   bool function_provider_advised_{false};
   bool ui_less_mode_{false};
   bool alnum_mode_{false};
@@ -783,6 +814,8 @@ class TextService final : public ITfTextInputProcessorEx,
   void ClearKeyboardOpenTracking();
   void LogKeyPassthroughOnce(bool keyboard_disabled = false) noexcept;
   void LogInputGateOnChange(const InputGateDecision& gate, bool secure) noexcept;
+  void LogPredictionOnce(PredictionLogReason reason) noexcept;
+  void ShowPredictionWindow();
   void LogKeyboardOpenState(std::string_view event, std::string_view source,
                             bool open_before) const noexcept;
   void CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,

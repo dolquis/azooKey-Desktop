@@ -166,7 +166,7 @@
         },
         "showSecureIndicator": {
           "type": "boolean", "default": true,
-          "description": "M46: secure中であることをユーザーへ表示する"
+          "description": "M46: secure中であることをユーザーへ表示する（候補ウィンドウ右端の🔒と突入時のtoast）。falseでも抑止は変わらない"
         }
       },
       "description": "共有AI基盤の送信許可とM46のsecure判定。secureはAI禁止、private/offlineはローカルのみ。autoSecureInput・secureUrlPatterns・privateApps等の残りのM46軸は別途実装"

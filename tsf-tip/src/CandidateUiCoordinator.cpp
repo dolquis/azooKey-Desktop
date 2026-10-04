@@ -86,6 +86,22 @@ void CandidateUiCoordinator::SetRetryInFlight(bool in_flight) {
   own_window_.SetRetryInFlight(in_flight);
 }
 
+void CandidateUiCoordinator::SetSecureState(bool secure, bool show_indicator) {
+  AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
+  if (secure == secure_ && show_indicator == show_secure_indicator_) return;
+  const bool entered = secure && !secure_;
+  secure_ = secure;
+  show_secure_indicator_ = show_indicator;
+  const bool visible = secure && show_indicator;
+  if (entered && visible) secure_toast_pending_ = true;
+  if (!visible) {
+    secure_toast_pending_ = false;
+    own_window_.HideSecureToast();
+  }
+  own_window_.SetSecureIndicator(visible);
+  ShowPendingSecureToast();
+}
+
 void CandidateUiCoordinator::SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn,
                                                   void* context) {
   AZOOKEY_ASSERT_BOUND_CANDIDATE_UI_THREAD();
@@ -134,6 +150,9 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
   try {
     if (items.empty()) return EndUI();
 
+    // Re-showing the list (segment moves, rollbacks) is not closing it, so a
+    // secure toast it hides comes back for the rest of its five seconds.
+    const bool resume_secure_toast = own_window_.IsSecureToastVisible();
     const HRESULT end_hr = EndUI();
     if (FAILED(end_hr)) {
       NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
@@ -168,6 +187,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       }
       showing_ = true;
       OnPbShown(true);
+      if (resume_secure_toast) own_window_.ResumeSecureToast();
       NotifyBeginObserver(S_OK, false, false, FALSE, kInvalidUiElementId);
       return S_OK;
     }
@@ -188,6 +208,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     ui_element_id_ = ui_element_id;
     showing_ = true;
     OnPbShown(pb_show != FALSE);
+    if (resume_secure_toast && tip_draws_) own_window_.ResumeSecureToast();
     if (!tip_draws_) {
       ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
       hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);
@@ -283,6 +304,7 @@ void CandidateUiCoordinator::OnPbShown(bool tip_draws) {
   ui_element_->SetShown(tip_draws_);
   if (tip_draws_) {
     own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    ShowPendingSecureToast();
     ShowPendingHealthBanner();
   } else {
     own_window_.Hide();
@@ -296,6 +318,12 @@ void CandidateUiCoordinator::ShowPendingHealthBanner() {
   if (health_state_ == CandidateHealthState::SafeMode) {
     notified_safe_mode_generations_.push_back(host_generation_id_);
   }
+}
+
+void CandidateUiCoordinator::ShowPendingSecureToast() {
+  if (!secure_toast_pending_ || !own_window_.IsVisible()) return;
+  own_window_.ShowSecureToast();
+  secure_toast_pending_ = false;
 }
 
 void CandidateUiCoordinator::OnElementShow(bool show) {
@@ -313,6 +341,7 @@ void CandidateUiCoordinator::OnElementShow(bool show) {
   tip_draws_ = true;
   if (showing_ && !items_.empty()) {
     own_window_.Show(last_pt_, items_, selected_idx_, notice_);
+    ShowPendingSecureToast();
     ShowPendingHealthBanner();
   }
 }

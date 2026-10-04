@@ -97,5 +97,53 @@ TEST(CandidateWindowDpiTest, NoticeSurvivesHealthBannerResizeAndKeepsClickRegion
   window.Destroy();
 }
 
+TEST(CandidateWindowDpiTest, SecureToastShiftsHealthButtonsAndLockIsNotACandidate) {
+  ScopedPerMonitorDpi dpi_context;
+  ASSERT_TRUE(dpi_context.valid());
+  CandidateWindow window;
+  ASSERT_TRUE(window.Create());
+  int candidate_clicks = 0;
+  int retries = 0;
+  window.SetOnClick([&](int) { ++candidate_clicks; });
+  window.SetOnRetry([&] { ++retries; });
+  window.Show(POINT{20, 20}, {{L"候補", L""}}, 0);
+  const HWND hwnd = window.hwnd_for_test();
+  const auto metrics = window.current_metrics_for_test();
+  RECT bounds{};
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  const int plain_width = bounds.right - bounds.left;
+
+  window.SetSecureIndicator(true);
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_GT(bounds.right - bounds.left, plain_width);
+  RECT client{};
+  ASSERT_TRUE(GetClientRect(hwnd, &client));
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(client.right - 2, 2));
+  EXPECT_EQ(candidate_clicks, 0);
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(2, 2));
+  EXPECT_EQ(candidate_clicks, 1);
+
+  window.ShowSecureToast();
+  window.ShowHealthBanner(CandidateHealthState::DegradedModel);
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, 5 * metrics.item_height);
+  ASSERT_TRUE(GetClientRect(hwnd, &client));
+  const int click_x = client.right - metrics.horizontal_padding - 10;
+  // Without the toast row this would be the [再試行] row; now it is banner text.
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM(click_x, 3 * metrics.item_height + metrics.item_height / 2));
+  EXPECT_EQ(retries, 0);
+  SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM(click_x, 4 * metrics.item_height + metrics.item_height / 2));
+  EXPECT_EQ(retries, 1);
+  EXPECT_EQ(candidate_clicks, 1);
+
+  window.HideSecureToast();
+  window.HideHealthBanner();
+  ASSERT_TRUE(GetWindowRect(hwnd, &bounds));
+  EXPECT_EQ(bounds.bottom - bounds.top, metrics.item_height);
+  window.Destroy();
+}
+
 }  // namespace
 }  // namespace azookey::tsf

@@ -5235,6 +5235,7 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
 // single input-scope probe, so a batch conversion, a commit and a prediction
 // cannot disagree about whether the current context is secure.
 TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bool evaluate_ai) {
+  AZOOKEY_ASSERT_UI_THREAD();
   static const std::vector<std::string> kNoUserSecureApps;
   const auto ai_settings = local_settings_.AiSnapshot();
   PrivacyDecision decision;
@@ -5282,6 +5283,8 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
   secure_input_.store(decision.secure, std::memory_order_relaxed);
   prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
+  // Spec §6: the indicator reflects the same decision every route just used.
+  candidate_ui_.SetSecureState(decision.secure, ai_settings.show_secure_indicator);
   return decision;
 }
 

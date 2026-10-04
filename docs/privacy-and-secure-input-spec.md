@@ -320,6 +320,35 @@ TIP は非 secure 入力で、composition または選択範囲の開始位置�
 - 候補ウィンドウ右端に小さな 🔒 アイコンを常時表示
 - 通常モード復帰時は toast なし
 
+表示状態は TIP が `ResolvePrivacy`（§5.1.1）の secure 判定から決め、学習・AI・予測の
+抑止と同じ判定を使う。Host の状態や IPC は使わない。
+
+- **突入と復帰**: TIP インスタンスごとに直前の判定を持ち、非 secure から secure へ
+  変わったときを突入、その逆を復帰とする。TIP インスタンスは非 secure から始めるため、
+  起動後最初の判定が secure なら突入として扱う。入力先アプリの解決不能（§4.3）による
+  secure も突入に数える。解決不能は同一プロセスのモジュールパス取得の失敗であり、
+  プロセスの間は変わらないため、表示が明滅しない。
+- **toast**: 候補ウィンドウ下部の 1 行として表示する。突入時に候補ウィンドウが
+  出ていなければ保留し、TIP が次に候補ウィンドウを描いたときに表示する。表示した時点で
+  保留を消化し、5 秒経つか候補ウィンドウを閉じた時点で消す。文節移動などで候補一覧を
+  出し直すことは閉じることに当たらず、toast は 5 秒の残りの間表示を続ける。復帰したとき、または
+  `showSecureIndicator` が `false` になったときは、保留を捨て、表示中の toast も直ちに
+  消す。secure の間に再び toast を出すことはない。
+- **🔒**: secure の間、候補ウィンドウの 1 行目の右端に表示する。候補の文字列は 🔒 の列に
+  重ねず、🔒 のクリックは候補の選択として扱わない。復帰したら直ちに消す。
+- **`showSecureIndicator`**: `false` のときは toast も 🔒 も出さず、保留中の toast も捨てる。
+  抑止（§5）は変わらない。secure の間に `true` へ変えた場合は 🔒 だけを表示し、突入では
+  ないため toast は出さない。値が無い・bool でない・設定ファイルを読めない場合は `true` と
+  して扱う。表示だけを切り替えるキーであり、抑止の fail closed とは独立である。
+- **UI-less**: アプリが候補を描く間（`ITfUIElement` の pbShow が false）は TIP が候補
+  ウィンドウを描かないため、toast も 🔒 も出さない。toast は保留したまま、TIP が候補
+  ウィンドウを描いたときに表示する。
+- **劣化インジケータとの同時表示**: 候補ウィンドウ下部は M47 の劣化インジケータ
+  （[`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) §8.5.4）と共有する。
+  両方を表示するときは、候補（と案内行）の直下に secure の toast を置き、その下に劣化
+  インジケータを置く。どちらも他方を消さず、5 秒の自動消滅はそれぞれ独立に数える。
+  劣化インジケータの [詳細] / [再試行] は toast の有無に関わらず劣化インジケータの行に置く。
+
 ## 7. 設定スキーマ
 
 `settings/mvp-settings.schema.json` の既定 `additionalProperties: false`
@@ -361,7 +390,7 @@ TIP は非 secure 入力で、composition または選択範囲の開始位置�
 `custom.detailedLogging`・`redactLogs`・
 `secureApps`・`showSecureIndicator` であり、
 設定アプリの保存許可キーは `settings-app/SettingsDocument.cpp` が管理し、
-予測許可は `tsf-tip/src/TipLocalSettings.cpp` が設定から解決する。
+予測許可と `showSecureIndicator` は `tsf-tip/src/TipLocalSettings.cpp` が設定から解決する。
 schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
 `disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`）は書き込めない。`additionalProperties: false` が
 schema 検証で弾き、`settings-app/SettingsDocument.cpp` の許可キー判定は未知の `privacy`
@@ -476,6 +505,8 @@ redaction ポリシーと共通の関数で処理する。
 ## 10. テスト
 
 - unit: TIP の secure 判定、Host の要求ごとの学習可否、詳細ログの設定解決
+- unit: 候補 UI の secure 表示の遷移（§6 の突入 toast の保留と消化、復帰、
+  `showSecureIndicator=false`、劣化インジケータとの並び）
 - unit: `ForegroundAppDetector` のキャッシュ動作
 - integration: `secureApps` 指定で `Observe` / `QueryPredictions` /
   Magic Conversion が抑止される

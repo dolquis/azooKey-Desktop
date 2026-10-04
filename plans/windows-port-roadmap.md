@@ -1963,14 +1963,16 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   `core/include/azookey/core/PrivacyPolicy.h`（設定解決）、
   `core/src/RuntimeLogger.cpp`（本文ログ許可と redaction）、
   `inference-host/src/SettingsStore.cpp`（Host の privacy 設定）、
-  `tsf-tip/src/ForegroundAppDetector.cpp`（新規、M48 と共用）。
+  `tsf-tip/src/ForegroundAppDetector.cpp`（新規、M48 と共用）、
+  `tsf-tip/src/TipLocalSettings.cpp`・`tsf-tip/src/CandidateUiCoordinator.cpp`・
+  `tsf-tip/src/CandidateWindow.cpp`（secure インジケータ）。
 - **実装範囲**: `docs/privacy-and-secure-input-spec.md`。
   - モード 5 種（`normal` / `private` / `secure` / `offline` / `custom`）
   - `secureApps` 自動判定（KeePass.exe / 1Password.exe / Bitwarden.exe など）
   - secure 中の IPC 抑止契約（`CommitObservation` / `QueryPredictions` /
     Magic Conversion を送らない、`aiBackend=none` 強制）
   - ログ redaction（reading / surface を Release ログから除外）
-  - 候補ウィンドウ下部の控えめインジケータ
+  - 候補ウィンドウ右端の 🔒 と下部の突入時 toast（仕様 §6）
 - **受け入れ条件**:
   - `secureApps` 指定アプリで `LearningStore::Observe` が呼ばれない
   - secure 中は OpenAI API 呼び出しが発生しない

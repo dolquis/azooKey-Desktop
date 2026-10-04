@@ -181,6 +181,8 @@ bool DrawColorEmoji(EmojiDrawingCache& cache, HDC hdc, HFONT font, const std::ws
 constexpr wchar_t kClassName[] = L"azooKeyCandidateWnd";
 constexpr wchar_t kDetailsClassName[] = L"azooKeyCandidateHealthDetailsWnd";
 constexpr wchar_t kFallbackFontFace[] = L"Yu Gothic UI";
+constexpr wchar_t kSecureIndicatorText[] = L"🔒";
+constexpr wchar_t kSecureToastText[] = L"🔒 セーフ入力中: 学習・AI・予測は停止しています";
 
 const wchar_t* HealthBannerText(CandidateHealthState state) {
   switch (state) {
@@ -384,6 +386,7 @@ void CandidateWindow::Destroy() {
   HideDetails();
   if (hwnd_) {
     KillTimer(hwnd_, kHealthBannerTimer);
+    KillTimer(hwnd_, kSecureToastTimer);
     DestroyWindow(hwnd_);
     // hwnd_ is cleared in WM_DESTROY handler.
   }
@@ -442,6 +445,12 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
       GetTextExtentPoint32W(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &size);
       notice_width = size.cx;
     }
+    if (secure_toast_visible_) {
+      SIZE size{};
+      GetTextExtentPoint32W(hdc, kSecureToastText, static_cast<int>(wcslen(kSecureToastText)),
+                            &size);
+      notice_width = std::max(notice_width, static_cast<int>(size.cx));
+    }
   }
   if (hdc) {
     if (old_font) SelectObject(hdc, old_font);
@@ -450,12 +459,12 @@ void CandidateWindow::Show(POINT pt, const std::vector<CandidateViewItem>& items
 
   const ColumnLayout columns = ComputeColumnLayout(max_surface_w, max_description_w, dpi_);
   surface_column_width_ = columns.surface_width;
-  int width =
-      std::min(columns.content_width + metrics_.horizontal_padding * 2 + metrics_.extra_width,
-               metrics_.max_width);
+  int width = std::min(columns.content_width + metrics_.horizontal_padding * 2 +
+                           metrics_.extra_width + SecureIndicatorWidth(),
+                       metrics_.max_width);
   width =
       std::min(std::max(width, notice_width + metrics_.horizontal_padding * 2), metrics_.max_width);
-  int height = metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
+  int height = HealthBannerTop();
   if (health_banner_visible_) {
     width = std::max(width, ScaleForDpi(480, dpi_));
     height += HealthBannerHeight();
@@ -482,6 +491,37 @@ void CandidateWindow::Hide() {
   HideDetails();
   if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
   HideHealthBanner();
+  HideSecureToast();
+}
+
+void CandidateWindow::SetSecureIndicator(bool visible) {
+  if (secure_indicator_visible_ == visible) return;
+  secure_indicator_visible_ = visible;
+  if (IsVisible()) ResizeAtLastAnchor();
+}
+
+void CandidateWindow::ShowSecureToast() {
+  if (!hwnd_) return;
+  secure_toast_visible_ = true;
+  secure_toast_until_ = GetTickCount64() + kSecureToastDurationMs;
+  if (IsVisible()) ResizeAtLastAnchor();
+  SetTimer(hwnd_, kSecureToastTimer, kSecureToastDurationMs, nullptr);
+}
+
+void CandidateWindow::ResumeSecureToast() {
+  if (!hwnd_ || secure_toast_visible_) return;
+  const ULONGLONG now = GetTickCount64();
+  if (now >= secure_toast_until_) return;
+  secure_toast_visible_ = true;
+  if (IsVisible()) ResizeAtLastAnchor();
+  SetTimer(hwnd_, kSecureToastTimer, static_cast<UINT>(secure_toast_until_ - now), nullptr);
+}
+
+void CandidateWindow::HideSecureToast() {
+  if (hwnd_) KillTimer(hwnd_, kSecureToastTimer);
+  if (!secure_toast_visible_) return;
+  secure_toast_visible_ = false;
+  if (IsVisible()) ResizeAtLastAnchor();
 }
 
 void CandidateWindow::ShowHealthBanner(CandidateHealthState state) {
@@ -615,9 +655,20 @@ void CandidateWindow::ResizeAtLastAnchor() {
 
 int CandidateWindow::HealthBannerHeight() const { return metrics_.item_height * 3; }
 
+int CandidateWindow::FooterTop() const {
+  return metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
+}
+
+int CandidateWindow::HealthBannerTop() const {
+  return FooterTop() + (secure_toast_visible_ ? metrics_.item_height : 0);
+}
+
+int CandidateWindow::SecureIndicatorWidth() const {
+  return secure_indicator_visible_ ? ScaleForDpi(kBaseSecureIndicatorWidth, dpi_) : 0;
+}
+
 RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
-  const int top =
-      metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1) + 2);
+  const int top = HealthBannerTop() + metrics_.item_height * 2;
   const int button_width = ScaleForDpi(52, dpi_);
   const int right =
       width - metrics_.horizontal_padding -
@@ -626,8 +677,7 @@ RECT CandidateWindow::HealthDetailsButtonRect(int width) const {
 }
 
 RECT CandidateWindow::HealthRetryButtonRect(int width) const {
-  const int top =
-      metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1) + 2);
+  const int top = HealthBannerTop() + metrics_.item_height * 2;
   const int right = width - metrics_.horizontal_padding;
   return {right - ScaleForDpi(60, dpi_), top, right, top + metrics_.item_height};
 }
@@ -693,6 +743,8 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
       RECT client_rc{};
       GetClientRect(hwnd, &client_rc);
+      // Candidate text stops short of the secure indicator column.
+      const LONG content_right = client_rc.right - SecureIndicatorWidth();
 
       for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
         RECT row_rc = {0, i * metrics_.item_height, client_rc.right,
@@ -710,9 +762,9 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         RECT surface_rc = row_rc;
         surface_rc.left += metrics_.horizontal_padding;
         surface_rc.right = surface_column_width_ > 0
-                               ? std::min(surface_rc.right - metrics_.horizontal_padding,
+                               ? std::min(content_right - metrics_.horizontal_padding,
                                           surface_rc.left + surface_column_width_)
-                               : surface_rc.right - metrics_.horizontal_padding;
+                               : content_right - metrics_.horizontal_padding;
         bool color_drawn = false;
         if (NeedsColorEmoji(item.surface) && emoji_cache_) {
           const auto prefix = std::to_wstring(i + 1) + L". ";
@@ -735,12 +787,22 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
           if (i != selected_idx_) SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
           RECT description_rc = row_rc;
           description_rc.left = surface_rc.right + ScaleForDpi(kBaseColumnGap, dpi_);
-          description_rc.right -= metrics_.horizontal_padding;
+          description_rc.right = content_right - metrics_.horizontal_padding;
           if (description_rc.left < description_rc.right) {
             DrawTextW(hdc, item.description.c_str(), static_cast<int>(item.description.size()),
                       &description_rc,
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
           }
+        }
+      }
+      if (secure_indicator_visible_ && !items_.empty()) {
+        // Top-right corner of the first row; drawn over that row's background.
+        RECT icon_rc{content_right, 0, client_rc.right, metrics_.item_height};
+        SetTextColor(hdc, GetSysColor(selected_idx_ == 0 ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+        const std::wstring icon = kSecureIndicatorText;
+        if (!emoji_cache_ || !DrawColorEmoji(*emoji_cache_, hdc, font_, icon, icon_rc)) {
+          DrawTextW(hdc, icon.c_str(), static_cast<int>(icon.size()), &icon_rc,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
       }
       const int notice_top = metrics_.item_height * static_cast<int>(items_.size());
@@ -754,9 +816,21 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         DrawTextW(hdc, notice_.c_str(), static_cast<int>(notice_.size()), &notice_rc,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
       }
+      if (secure_toast_visible_) {
+        const int toast_top = FooterTop();
+        RECT toast_rc{0, toast_top, client_rc.right, toast_top + metrics_.item_height};
+        FillRect(hdc, &toast_rc, reinterpret_cast<HBRUSH>(static_cast<INT_PTR>(COLOR_INFOBK + 1)));
+        SetTextColor(hdc, GetSysColor(COLOR_INFOTEXT));
+        toast_rc.left += metrics_.horizontal_padding;
+        toast_rc.right -= metrics_.horizontal_padding;
+        const std::wstring toast = kSecureToastText;
+        if (!emoji_cache_ || !DrawColorEmoji(*emoji_cache_, hdc, font_, toast, toast_rc)) {
+          DrawTextW(hdc, toast.c_str(), static_cast<int>(toast.size()), &toast_rc,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        }
+      }
       if (health_banner_visible_) {
-        RECT banner_rc{0, notice_top + (notice_.empty() ? 0 : metrics_.item_height),
-                       client_rc.right, client_rc.bottom};
+        RECT banner_rc{0, HealthBannerTop(), client_rc.right, client_rc.bottom};
         HBRUSH background = CreateSolidBrush(RGB(255, 249, 225));
         if (background) {
           FillRect(hdc, &banner_rc, background);
@@ -789,9 +863,7 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case WM_LBUTTONDOWN: {
       int x = GET_X_LPARAM(lParam);
       int y = GET_Y_LPARAM(lParam);
-      const int health_banner_top =
-          metrics_.item_height * (static_cast<int>(items_.size()) + (notice_.empty() ? 0 : 1));
-      if (health_banner_visible_ && y >= health_banner_top) {
+      if (health_banner_visible_ && y >= HealthBannerTop()) {
         RECT client_rc{};
         GetClientRect(hwnd, &client_rc);
         POINT click{x, y};
@@ -814,6 +886,12 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         }
         return 0;
       }
+      if (secure_indicator_visible_ && y < metrics_.item_height) {
+        RECT client_rc{};
+        GetClientRect(hwnd, &client_rc);
+        // The lock is not a candidate.
+        if (x >= client_rc.right - SecureIndicatorWidth()) return 0;
+      }
       int idx = y / metrics_.item_height;
       if (idx >= 0 && idx < static_cast<int>(items_.size())) {
         selected_idx_ = idx;
@@ -830,6 +908,10 @@ LRESULT CandidateWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     case WM_TIMER:
       if (wParam == kHealthBannerTimer) {
         HideHealthBanner();
+        return 0;
+      }
+      if (wParam == kSecureToastTimer) {
+        HideSecureToast();
         return 0;
       }
       if (wParam == kCandidatesReadyTimer) {

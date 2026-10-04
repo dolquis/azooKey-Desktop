@@ -213,6 +213,15 @@ class TextService final : public ITfTextInputProcessorEx,
     OnCandidatesReady(this);
   }
   void resolve_privacy_for_benchmark(ITfContext* context) { (void)ResolvePrivacy(context, false); }
+  bool resolve_secure_for_test(ITfContext* context) {
+    return ResolvePrivacy(context, false).secure;
+  }
+  bool secure_toast_pending_for_test() const {
+    return candidate_ui_.secure_toast_pending_for_test();
+  }
+  bool secure_indicator_visible_for_test() const {
+    return candidate_ui_.own_window_for_test().secure_indicator_visible_for_test();
+  }
   bool bracket_composition_for_test() const { return bracket_composition_; }
   void set_foreground_app_for_test(core::ForegroundApp app) {
     foreground_app_.SetForTest(std::move(app));

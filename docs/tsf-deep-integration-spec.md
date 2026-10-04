@@ -61,6 +61,11 @@ public:
 - その reading で `QueryCandidates` を実行
 - 結果を `ITfCandidateList` ラッパーで返却
 
+`ReverseConvert` は辞書層（静的層とユーザー辞書）を先に引く。見つからない表層には、
+学習ストアでその表層に確定した読みのうち減衰後の重みが最大のものを返す。それも無く、
+表層が平仮名・片仮名・長音符だけなら、片仮名を平仮名に揃えた表層を読みとする。
+いずれにも当たらなければ読みは空で、TIP は候補 UI を出さずに再変換の範囲を解放する。
+
 TIP は選択変更を `ITfTextEditSink::OnEndEdit` で検知し、UI メッセージで privacy を
 確認してから IPC worker に逆引きと候補取得を先読みさせる。`GetReconversion` は
 選択範囲と context が一致するキャッシュ済み候補を返す。キャッシュ未取得時は

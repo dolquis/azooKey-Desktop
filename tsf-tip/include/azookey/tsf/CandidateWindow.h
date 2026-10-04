@@ -41,6 +41,15 @@ class CandidateWindow {
   void ShowHealthBanner(CandidateHealthState state);
   void HideHealthBanner();
   void SetRetryInFlight(bool in_flight);
+  // M46 secure indicator: a small lock at the window's right edge while secure,
+  // and a one-line toast that hides itself after five seconds.
+  void SetSecureIndicator(bool visible);
+  void ShowSecureToast();
+  void HideSecureToast();
+  // Brings back a toast that a re-show of the window hid, for whatever is left
+  // of its five seconds. No-op once that time has passed.
+  void ResumeSecureToast();
+  bool IsSecureToastVisible() const { return secure_toast_visible_; }
   using OnRetryFn = std::function<void()>;
   void SetOnRetry(OnRetryFn fn) { on_retry_ = std::move(fn); }
   static bool NeedsColorEmoji(const std::wstring& text);
@@ -91,6 +100,11 @@ class CandidateWindow {
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
   HWND hwnd_for_test() const { return hwnd_; }
   const std::wstring& notice_for_test() const { return notice_; }
+  bool secure_indicator_visible_for_test() const { return secure_indicator_visible_; }
+  bool secure_toast_visible_for_test() const { return secure_toast_visible_; }
+  bool health_banner_visible_for_test() const { return health_banner_visible_; }
+  int footer_top_for_test() const { return FooterTop(); }
+  int health_banner_top_for_test() const { return HealthBannerTop(); }
 #endif
 
  private:
@@ -122,6 +136,9 @@ class CandidateWindow {
   static constexpr UINT_PTR kCandidatesReadyTimer = 0x4b2;
   static constexpr UINT_PTR kHealthBannerTimer = 0x4b3;
   static constexpr UINT kHealthBannerDurationMs = 5000;
+  static constexpr UINT_PTR kSecureToastTimer = 0x4b4;
+  static constexpr UINT kSecureToastDurationMs = 5000;
+  static constexpr int kBaseSecureIndicatorWidth = 24;
 
   HWND hwnd_{nullptr};
   HWND details_hwnd_{nullptr};
@@ -139,6 +156,9 @@ class CandidateWindow {
   CandidateHealthState health_state_{CandidateHealthState::Healthy};
   bool health_banner_visible_{false};
   bool retry_in_flight_{false};
+  bool secure_indicator_visible_{false};
+  bool secure_toast_visible_{false};
+  ULONGLONG secure_toast_until_{0};  // GetTickCount64 deadline of the last toast.
   POINT last_anchor_{0, 0};
   OnCandidatesReadyFn on_candidates_ready_{nullptr};
   void* on_candidates_ready_context_{nullptr};
@@ -162,6 +182,11 @@ class CandidateWindow {
   void ShowDetails();
   void HideDetails();
   int HealthBannerHeight() const;
+  // Candidate rows and the notice row end here; the secure toast row, then the
+  // health banner, stack below it.
+  int FooterTop() const;
+  int HealthBannerTop() const;
+  int SecureIndicatorWidth() const;
   RECT HealthDetailsButtonRect(int width) const;
   RECT HealthRetryButtonRect(int width) const;
 };

@@ -7132,6 +7132,38 @@ TEST(TsfTipSecureInputTest, OrdinaryAppStillLearnsAndRecoversAfterASecureApp) {
   EXPECT_EQ(restored->chosen.surface, "仮名");
 }
 
+// DEV-1482: the indicator follows the same resolution that gates learning.
+TEST(TsfTipSecureInputTest, SecureResolutionDrivesIndicatorAndEntryToast) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  EXPECT_FALSE(h.service.resolve_secure_for_test(&h.context));
+  EXPECT_FALSE(h.service.secure_indicator_visible_for_test());
+  EXPECT_FALSE(h.service.secure_toast_pending_for_test());
+
+  h.service.set_foreground_app_for_test({"KeePass.exe", "KeePass", true});
+  EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+  EXPECT_TRUE(h.service.secure_indicator_visible_for_test());
+  EXPECT_TRUE(h.service.secure_toast_pending_for_test());
+
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  EXPECT_FALSE(h.service.resolve_secure_for_test(&h.context));
+  EXPECT_FALSE(h.service.secure_indicator_visible_for_test());
+  EXPECT_FALSE(h.service.secure_toast_pending_for_test());
+}
+
+TEST(TsfTipSecureInputTest, ShowSecureIndicatorFalseKeepsSuppressionButHidesIndicator) {
+  TextServiceHarness h;
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"secure","showSecureIndicator":false}})");
+  EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+  EXPECT_FALSE(h.service.secure_indicator_visible_for_test());
+  EXPECT_FALSE(h.service.secure_toast_pending_for_test());
+  CommitOneCandidate(h);
+  EXPECT_FALSE(h.service.has_pending_commit_observation_for_test());
+  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+}
+
 // The neural batch path never ran the privacy resolution at all, so a multi
 // segment commit in a secure app used to be learned from unconditionally.
 TEST(TsfTipSecureInputTest, NeuralBatchCommitInSecureAppSuppressesObservation) {

@@ -112,6 +112,25 @@ TEST_F(LocalSettingsTest, CustomPredictionPermissionDefaultsOnAndReloadsIndepend
   ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().prediction_allowed; }));
 }
 
+TEST_F(LocalSettingsTest, ShowSecureIndicatorDefaultsOnAndOnlyExplicitFalseHidesIt) {
+  Write("{}");
+  ASSERT_TRUE(reader.Start(path));
+  EXPECT_TRUE(reader.AiSnapshot().show_secure_indicator);
+  Write(R"({"privacy":{"showSecureIndicator":false}})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().show_secure_indicator; }));
+  Write(R"({"privacy":{"showSecureIndicator":true}})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().show_secure_indicator; }));
+  for (const auto* json :
+       {R"({"privacy":{"showSecureIndicator":"no"}})", R"({"privacy":{"showSecureIndicator":0}})",
+        R"({"privacy":null})", "{"}) {
+    SCOPED_TRACE(json);
+    reader.Stop();
+    Write(json);
+    ASSERT_TRUE(reader.Start(path));
+    EXPECT_TRUE(reader.AiSnapshot().show_secure_indicator);
+  }
+}
+
 TEST_F(LocalSettingsTest, InvalidCustomPredictionFailsClosedAndMissingFileRestoresDefault) {
   ASSERT_TRUE(reader.Start(path));
   EXPECT_TRUE(reader.AiSnapshot().prediction_allowed);

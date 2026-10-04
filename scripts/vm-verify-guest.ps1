@@ -330,6 +330,126 @@ function Invoke-VmVerifyGuestInputMethodSelection {
   return "switched"
 }
 
+# Set-WinDefaultInputMethodOverride changes only the default for later sign-ins. A
+# session that is already signed in keeps its current input method (Microsoft IME
+# on a fresh sign-in), and the apps compat_test.exe starts inherit it. So activate
+# the azooKey profile for the whole desktop with TSF, then read the active keyboard
+# profile back. TF_IPPMF_FORSESSION acts on the current desktop, so this must run
+# in the interactive task, not over PowerShell Direct (session 0). The profile must
+# already be enabled for the user, which Invoke-VmVerifyGuestInputMethodSelection
+# does; otherwise ActivateProfile returns S_FALSE. -QueryOnly only reads it back.
+# The result uses the InputMethodTip format of Get-WinUserLanguageList
+# ("0411:{CLSID}{PROFILE}"); a keyboard layout is "0411:HKL:<hex>".
+function Invoke-VmVerifyGuestInputMethodActivation {
+  param(
+    [string]$Tip = "0411:{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}",
+    [switch]$QueryOnly,
+    [int]$TimeoutSeconds = 10
+  )
+
+  if (-not ([System.Management.Automation.PSTypeName]"VmVerifyTsfProfile").Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class VmVerifyTsfProfile {
+  [StructLayout(LayoutKind.Sequential)]
+  struct TF_INPUTPROCESSORPROFILE {
+    public uint dwProfileType;
+    public ushort langid;
+    public Guid clsid;
+    public Guid guidProfile;
+    public Guid catid;
+    public IntPtr hklSubstitute;
+    public uint dwCaps;
+    public IntPtr hkl;
+    public uint dwFlags;
+  }
+
+  // Methods are declared in vtable order (msctf.h).
+  [ComImport, Guid("71c6e74c-0f28-11d8-a82a-00065b84435c"),
+   InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface ITfInputProcessorProfileMgr {
+    [PreserveSig] int ActivateProfile(uint dwProfileType, ushort langid, ref Guid clsid,
+        ref Guid guidProfile, IntPtr hkl, uint dwFlags);
+    [PreserveSig] int DeactivateProfile();
+    [PreserveSig] int GetProfile();
+    [PreserveSig] int EnumProfiles();
+    [PreserveSig] int ReleaseInputProcessor();
+    [PreserveSig] int RegisterProfile();
+    [PreserveSig] int UnregisterProfile();
+    [PreserveSig] int GetActiveProfile(ref Guid catid, out TF_INPUTPROCESSORPROFILE profile);
+  }
+
+  const uint TF_PROFILETYPE_INPUTPROCESSOR = 1;
+  const uint TF_IPPMF_FORSESSION = 0x20000000;
+  static readonly Guid CLSID_TF_InputProcessorProfiles =
+      new Guid("33C53A50-F456-4884-B049-85FD643ECFED");
+  static readonly Guid GUID_TFCAT_TIP_KEYBOARD =
+      new Guid("34745C63-B2F0-4784-8B67-5E12C8701A31");
+
+  static ITfInputProcessorProfileMgr Create() {
+    return (ITfInputProcessorProfileMgr)Activator.CreateInstance(
+        Type.GetTypeFromCLSID(CLSID_TF_InputProcessorProfiles));
+  }
+
+  public static int Activate(ushort langid, Guid clsid, Guid guidProfile) {
+    return Create().ActivateProfile(TF_PROFILETYPE_INPUTPROCESSOR, langid, ref clsid,
+        ref guidProfile, IntPtr.Zero, TF_IPPMF_FORSESSION);
+  }
+
+  public static string GetActive() {
+    Guid catid = GUID_TFCAT_TIP_KEYBOARD;
+    TF_INPUTPROCESSORPROFILE profile;
+    int hr = Create().GetActiveProfile(ref catid, out profile);
+    if (hr != 0) {
+      throw new COMException("GetActiveProfile failed.", hr);
+    }
+    if (profile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR) {
+      return string.Format("{0:X4}:{1}{2}", profile.langid,
+          profile.clsid.ToString("B").ToUpperInvariant(),
+          profile.guidProfile.ToString("B").ToUpperInvariant());
+    }
+    return string.Format("{0:X4}:HKL:{1:X}", profile.langid, profile.hkl.ToInt64());
+  }
+}
+"@
+  }
+
+  if ($QueryOnly) {
+    return [pscustomobject][ordered]@{
+      Activation = "query-only"
+      ActiveInputMethod = [VmVerifyTsfProfile]::GetActive()
+    }
+  }
+  if ($Tip -notmatch "^([0-9A-Fa-f]{4}):(\{[0-9A-Fa-f-]{36}\})(\{[0-9A-Fa-f-]{36}\})$") {
+    throw "Not a text service input method tip: $Tip"
+  }
+  $langid = [Convert]::ToUInt16($Matches[1], 16)
+  $clsid = [Guid]$Matches[2]
+  $guidProfile = [Guid]$Matches[3]
+
+  $active = [VmVerifyTsfProfile]::GetActive()
+  if ($active -eq $Tip) {
+    return [pscustomobject][ordered]@{ Activation = "already-active"; ActiveInputMethod = $active }
+  }
+  $hr = [VmVerifyTsfProfile]::Activate($langid, $clsid, $guidProfile)
+  if ($hr -ne 0) {
+    # S_FALSE (1) means the profile is not enabled for the user, which is a failure too.
+    throw ("ITfInputProcessorProfileMgr::ActivateProfile returned 0x{0:X8} for {1}; " -f $hr, $Tip) +
+      "the active input method stays $active."
+  }
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  while ($true) {
+    $active = [VmVerifyTsfProfile]::GetActive()
+    if ($active -eq $Tip -or [DateTime]::UtcNow -ge $deadline) {
+      break
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  return [pscustomobject][ordered]@{ Activation = "activated"; ActiveInputMethod = $active }
+}
+
 # Runs azookey_diag.exe --json in the interactive session and writes stdout to a
 # file as-is. The Host pipe and settings are per user, so collect it as the same
 # interactive user as compat rather than from PowerShell Direct (Session 0).
@@ -363,8 +483,8 @@ function Invoke-VmVerifyGuestDiag {
 
 # The body the interactive task executes. It is written to the guest as a script
 # file together with Invoke-VmVerifyGuestBootstrap,
-# Invoke-VmVerifyGuestInputMethodSelection and Invoke-VmVerifyGuestDiag. The state
-# file is always written, even on failure.
+# Invoke-VmVerifyGuestInputMethodSelection, Invoke-VmVerifyGuestInputMethodActivation
+# and Invoke-VmVerifyGuestDiag. The state file is always written, even on failure.
 function Invoke-VmVerifyGuestCompatRun {
   param(
     [Parameter(Mandatory = $true)]
@@ -390,6 +510,8 @@ function Invoke-VmVerifyGuestCompatRun {
     hostProcessId = 0
     hostSessionId = $null
     inputMethod = ""
+    inputMethodActivation = ""
+    activeInputMethod = ""
     diagExitCode = $null
     diagJson = $false
     diagError = ""
@@ -421,6 +543,14 @@ function Invoke-VmVerifyGuestCompatRun {
         "interactive session $sessionId, so the TIP cannot connect to it.")
     }
     $status.inputMethod = Invoke-VmVerifyGuestInputMethodSelection
+    $azooKeyTip = "0411:{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}"
+    $activation = Invoke-VmVerifyGuestInputMethodActivation -Tip $azooKeyTip
+    $status.inputMethodActivation = [string]$activation.Activation
+    $status.activeInputMethod = [string]$activation.ActiveInputMethod
+    if ($status.activeInputMethod -ne $azooKeyTip) {
+      throw ("The active input method of the interactive session is " +
+        "'$($status.activeInputMethod)', not azooKey ($azooKeyTip), so compat_test.exe was not run.")
+    }
 
     # Collect before compat. C-010 ends the Host and C-013 suspends it, so after
     # compat the state no longer reflects the moment right after bootstrap. diag is

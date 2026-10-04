@@ -182,6 +182,11 @@ powershell -ExecutionPolicy Bypass -File .\verify-bootstrap.ps1 `
   確認してから、同梱の `targets/*.json` ごとに `compat_test.exe` を実行する。
 - `compat_test.exe` は azooKey を選択しないため、compat の前にコンソールユーザーの日本語の
   入力方式へ azooKey を追加し、既定の入力方式（`Set-WinDefaultInputMethodOverride`）にする。
+  既定の変更はサインイン済みのセッションの現在の入力方式を切り替えないため、同じ対話タスクで
+  TSF の `ITfInputProcessorProfileMgr::ActivateProfile`（`TF_IPPMF_FORSESSION`）を呼び、
+  デスクトップ全体の入力方式を azooKey にする。その後に読み戻した有効なキーボードプロファイルを
+  `interactive-status.json` の `activeInputMethod` に記録する。azooKey でなければ compat を実行せず、
+  その値を理由に含めて非ゼロ終了する。
   Microsoft IME は削除しない。この設定もチェックポイントの復元で元に戻る。
 - compat の前に、同じ対話タスクで `azookey_diag.exe --json` を実行し、`azookey-diag.json` へ保存する。
   C-010 と C-013 は Host を止めるため、compat の後では bootstrap 直後の状態を表さない。

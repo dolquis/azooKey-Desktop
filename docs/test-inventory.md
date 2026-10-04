@@ -35,7 +35,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 
 | ターゲット | テスト | 主要シナリオ |
 |---|---|---|
-| `core_tests` | `core/tests/romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音） |
+| `core_tests` | `core/tests/romaji_kana_converter_test.cpp` | `Feed`/`Flush`/`Preview`/`ConvertForCommit`（小書きっ・ん・長音）、レガシー既定表の拡張綴り（`xtu`・`la`・`wi`・`ve` など）と 4 文字規則の接頭辞保持 |
 | `core_tests` | `core/tests/custom_romaji_test.cpp` | TSV の BOM・UTF-8・長さ・consume・不正行の検証、内蔵表との差し替え、最長一致と入力中の表保持 |
 | `core_tests` | `core/tests/simple_converter_test.cpp` | 固定辞書、TSV ロード、prefix fallback、静的 bigram コンテキスト表（suffix/最長一致）、`Correct`、`Learn`、`Contains` が実辞書エントリと `Learn` 由来の確定履歴を区別すること |
 | `core_tests` | `core/tests/utf8_test.cpp` | UTF-8 デコード/エンコードの符号位置境界と埋め込み NUL、不正シーケンスの 1 バイト消費、suffix の境界保持 |

@@ -9,39 +9,72 @@
 namespace azookey::core {
 namespace {
 
+// Mirrors the legacy default table (AzooKeyKanaKanjiConverter defaultRomanToKanaMap).
+// Doubled consonants, "nn" and the "ny" exception are handled by Feed instead.
 const std::unordered_map<std::string, std::string> kRomajiMap = {
-    {"a", "あ"},   {"i", "い"},   {"u", "う"},    {"e", "え"},   {"o", "お"},
-    {"ka", "か"},  {"ki", "き"},  {"ku", "く"},   {"ke", "け"},  {"ko", "こ"},
-    {"sa", "さ"},  {"shi", "し"}, {"si", "し"},   {"su", "す"},  {"se", "せ"},  {"so", "そ"},
-    {"ta", "た"},  {"chi", "ち"}, {"ti", "ち"},   {"tsu", "つ"}, {"tu", "つ"},
-    {"te", "て"},  {"to", "と"},
-    {"na", "な"},  {"ni", "に"},  {"nu", "ぬ"},   {"ne", "ね"},  {"no", "の"},
-    {"ha", "は"},  {"hi", "ひ"},  {"fu", "ふ"},   {"hu", "ふ"},  {"he", "へ"},  {"ho", "ほ"},
-    {"ma", "ま"},  {"mi", "み"},  {"mu", "む"},   {"me", "め"},  {"mo", "も"},
-    {"ya", "や"},  {"yu", "ゆ"},  {"yo", "よ"},
-    {"ra", "ら"},  {"ri", "り"},  {"ru", "る"},   {"re", "れ"},  {"ro", "ろ"},
-    {"wa", "わ"},  {"wo", "を"},
-    {"ga", "が"},  {"gi", "ぎ"},  {"gu", "ぐ"},   {"ge", "げ"},  {"go", "ご"},
-    {"za", "ざ"},  {"ji", "じ"},  {"zi", "じ"},   {"zu", "ず"},  {"ze", "ぜ"},  {"zo", "ぞ"},
-    {"da", "だ"},  {"di", "ぢ"},  {"du", "づ"},   {"de", "で"},  {"do", "ど"},
-    {"ba", "ば"},  {"bi", "び"},  {"bu", "ぶ"},   {"be", "べ"},  {"bo", "ぼ"},
-    {"pa", "ぱ"},  {"pi", "ぴ"},  {"pu", "ぷ"},   {"pe", "ぺ"},  {"po", "ぽ"},
-    {"kya", "きゃ"}, {"kyu", "きゅ"}, {"kyo", "きょ"},
-    {"sha", "しゃ"}, {"shu", "しゅ"}, {"sho", "しょ"},
-    {"sya", "しゃ"}, {"syu", "しゅ"}, {"syo", "しょ"},
-    {"cha", "ちゃ"}, {"chu", "ちゅ"}, {"cho", "ちょ"},
-    {"tya", "ちゃ"}, {"tyu", "ちゅ"}, {"tyo", "ちょ"},
-    {"nya", "にゃ"}, {"nyu", "にゅ"}, {"nyo", "にょ"},
-    {"hya", "ひゃ"}, {"hyu", "ひゅ"}, {"hyo", "ひょ"},
-    {"mya", "みゃ"}, {"myu", "みゅ"}, {"myo", "みょ"},
-    {"rya", "りゃ"}, {"ryu", "りゅ"}, {"ryo", "りょ"},
-    {"gya", "ぎゃ"}, {"gyu", "ぎゅ"}, {"gyo", "ぎょ"},
-    {"ja", "じゃ"}, {"ju", "じゅ"}, {"je", "じぇ"}, {"jo", "じょ"},
-    {"jya", "じゃ"}, {"jyu", "じゅ"}, {"jyo", "じょ"},
-    {"zya", "じゃ"}, {"zyu", "じゅ"}, {"zyo", "じょ"},
-    {"dya", "ぢゃ"}, {"dyu", "ぢゅ"}, {"dyo", "ぢょ"},
-    {"bya", "びゃ"}, {"byu", "びゅ"}, {"byo", "びょ"},
-    {"pya", "ぴゃ"}, {"pyu", "ぴゅ"}, {"pyo", "ぴょ"}};
+    {"a", "あ"},     {"xa", "ぁ"},    {"la", "ぁ"},    {"i", "い"},     {"xi", "ぃ"},
+    {"li", "ぃ"},    {"u", "う"},     {"wu", "う"},    {"vu", "ゔ"},    {"xu", "ぅ"},
+    {"lu", "ぅ"},    {"e", "え"},     {"xe", "ぇ"},    {"le", "ぇ"},    {"o", "お"},
+    {"xo", "ぉ"},    {"lo", "ぉ"},    {"ka", "か"},    {"ca", "か"},    {"ga", "が"},
+    {"xka", "ゕ"},   {"lka", "ゕ"},   {"ki", "き"},    {"gi", "ぎ"},    {"ku", "く"},
+    {"cu", "く"},    {"gu", "ぐ"},    {"ke", "け"},    {"ge", "げ"},    {"xke", "ゖ"},
+    {"lke", "ゖ"},   {"ko", "こ"},    {"co", "こ"},    {"go", "ご"},    {"sa", "さ"},
+    {"za", "ざ"},    {"si", "し"},    {"ci", "し"},    {"shi", "し"},   {"zi", "じ"},
+    {"ji", "じ"},    {"su", "す"},    {"zu", "ず"},    {"se", "せ"},    {"ce", "せ"},
+    {"ze", "ぜ"},    {"so", "そ"},    {"zo", "ぞ"},    {"ta", "た"},    {"da", "だ"},
+    {"ti", "ち"},    {"chi", "ち"},   {"di", "ぢ"},    {"tu", "つ"},    {"tsu", "つ"},
+    {"xtu", "っ"},   {"ltu", "っ"},   {"xtsu", "っ"},  {"ltsu", "っ"},  {"du", "づ"},
+    {"te", "て"},    {"de", "で"},    {"to", "と"},    {"do", "ど"},    {"na", "な"},
+    {"ni", "に"},    {"nu", "ぬ"},    {"ne", "ね"},    {"no", "の"},    {"ha", "は"},
+    {"ba", "ば"},    {"pa", "ぱ"},    {"hi", "ひ"},    {"bi", "び"},    {"pi", "ぴ"},
+    {"hu", "ふ"},    {"fu", "ふ"},    {"bu", "ぶ"},    {"pu", "ぷ"},    {"he", "へ"},
+    {"be", "べ"},    {"pe", "ぺ"},    {"ho", "ほ"},    {"bo", "ぼ"},    {"po", "ぽ"},
+    {"ma", "ま"},    {"mi", "み"},    {"mu", "む"},    {"me", "め"},    {"mo", "も"},
+    {"ya", "や"},    {"xya", "ゃ"},   {"lya", "ゃ"},   {"yu", "ゆ"},    {"xyu", "ゅ"},
+    {"lyu", "ゅ"},   {"yo", "よ"},    {"xyo", "ょ"},   {"lyo", "ょ"},   {"ra", "ら"},
+    {"ri", "り"},    {"ru", "る"},    {"re", "れ"},    {"ro", "ろ"},    {"wa", "わ"},
+    {"xwa", "ゎ"},   {"lwa", "ゎ"},   {"wyi", "ゐ"},   {"wye", "ゑ"},   {"wo", "を"},
+    {"ye", "いぇ"},  {"va", "ゔぁ"},  {"vi", "ゔぃ"},  {"ve", "ゔぇ"},  {"vo", "ゔぉ"},
+    {"kya", "きゃ"}, {"kyu", "きゅ"}, {"kye", "きぇ"}, {"kyo", "きょ"}, {"gya", "ぎゃ"},
+    {"gyu", "ぎゅ"}, {"gye", "ぎぇ"}, {"gyo", "ぎょ"}, {"qa", "くぁ"},  {"kwa", "くぁ"},
+    {"qwa", "くぁ"}, {"qi", "くぃ"},  {"kwi", "くぃ"}, {"qwi", "くぃ"}, {"qu", "くぅ"},
+    {"kwu", "くぅ"}, {"qwu", "くぅ"}, {"qe", "くぇ"},  {"kwe", "くぇ"}, {"qwe", "くぇ"},
+    {"qo", "くぉ"},  {"kwo", "くぉ"}, {"qwo", "くぉ"}, {"gwa", "ぐぁ"}, {"gwi", "ぐぃ"},
+    {"gwu", "ぐぅ"}, {"gwe", "ぐぇ"}, {"gwo", "ぐぉ"}, {"sha", "しゃ"}, {"sya", "しゃ"},
+    {"shu", "しゅ"}, {"syu", "しゅ"}, {"she", "しぇ"}, {"sye", "しぇ"}, {"sho", "しょ"},
+    {"syo", "しょ"}, {"ja", "じゃ"},  {"zya", "じゃ"}, {"jya", "じゃ"}, {"jyi", "じぃ"},
+    {"ju", "じゅ"},  {"zyu", "じゅ"}, {"jyu", "じゅ"}, {"je", "じぇ"},  {"zye", "じぇ"},
+    {"jye", "じぇ"}, {"jo", "じょ"},  {"zyo", "じょ"}, {"jyo", "じょ"}, {"swa", "すぁ"},
+    {"swi", "すぃ"}, {"swu", "すぅ"}, {"swe", "すぇ"}, {"swo", "すぉ"}, {"cha", "ちゃ"},
+    {"cya", "ちゃ"}, {"tya", "ちゃ"}, {"tyi", "ちぃ"}, {"cyi", "ちぃ"}, {"chu", "ちゅ"},
+    {"cyu", "ちゅ"}, {"tyu", "ちゅ"}, {"che", "ちぇ"}, {"cye", "ちぇ"}, {"tye", "ちぇ"},
+    {"cho", "ちょ"}, {"cyo", "ちょ"}, {"tyo", "ちょ"}, {"tsa", "つぁ"}, {"tsi", "つぃ"},
+    {"tse", "つぇ"}, {"tso", "つぉ"}, {"tha", "てゃ"}, {"thi", "てぃ"}, {"thu", "てゅ"},
+    {"the", "てぇ"}, {"tho", "てょ"}, {"twa", "とぁ"}, {"twi", "とぃ"}, {"twu", "とぅ"},
+    {"twe", "とぇ"}, {"two", "とぉ"}, {"dya", "ぢゃ"}, {"dyi", "ぢぃ"}, {"dyu", "ぢゅ"},
+    {"dye", "ぢぇ"}, {"dyo", "ぢょ"}, {"dha", "でゃ"}, {"dhi", "でぃ"}, {"dhu", "でゅ"},
+    {"dhe", "でぇ"}, {"dho", "でょ"}, {"dwa", "どぁ"}, {"dwi", "どぃ"}, {"dwu", "どぅ"},
+    {"dwe", "どぇ"}, {"dwo", "どぉ"}, {"nya", "にゃ"}, {"nyi", "にぃ"}, {"nyu", "にゅ"},
+    {"nye", "にぇ"}, {"nyo", "にょ"}, {"hya", "ひゃ"}, {"hyi", "ひぃ"}, {"hyu", "ひゅ"},
+    {"hye", "ひぇ"}, {"hyo", "ひょ"}, {"bya", "びゃ"}, {"byi", "びぃ"}, {"byu", "びゅ"},
+    {"bye", "びぇ"}, {"byo", "びょ"}, {"pya", "ぴゃ"}, {"pyi", "ぴぃ"}, {"pyu", "ぴゅ"},
+    {"pye", "ぴぇ"}, {"pyo", "ぴょ"}, {"fa", "ふぁ"},  {"hwa", "ふぁ"}, {"fwa", "ふぁ"},
+    {"fi", "ふぃ"},  {"hwi", "ふぃ"}, {"fwi", "ふぃ"}, {"fwu", "ふぅ"}, {"fe", "ふぇ"},
+    {"hwe", "ふぇ"}, {"fwe", "ふぇ"}, {"fo", "ふぉ"},  {"hwo", "ふぉ"}, {"fwo", "ふぉ"},
+    {"fya", "ふゃ"}, {"fyu", "ふゅ"}, {"fyo", "ふょ"}, {"mya", "みゃ"}, {"myi", "みぃ"},
+    {"myu", "みゅ"}, {"mye", "みぇ"}, {"myo", "みょ"}, {"rya", "りゃ"}, {"ryi", "りぃ"},
+    {"ryu", "りゅ"}, {"rye", "りぇ"}, {"ryo", "りょ"}, {"wi", "うぃ"},  {"we", "うぇ"},
+    {"wha", "うぁ"}, {"whi", "うぃ"}, {"whu", "う"},   {"whe", "うぇ"}, {"who", "うぉ"},
+    {"xn", "ん"},    {"zh", "←"},     {"zj", "↓"},     {"zk", "↑"},     {"zl", "→"}};
+
+constexpr size_t kMaxRomajiKeyLength = 4;
+
+// True when a longer built-in key still starts with `pending` (e.g. "xts" for "xtsu").
+bool IsBuiltinRomajiPrefix(const std::string& pending) {
+  return std::any_of(kRomajiMap.begin(), kRomajiMap.end(), [&](const auto& entry) {
+    return entry.first.size() > pending.size() && entry.first.starts_with(pending);
+  });
+}
 
 bool IsConsonant(char c) {
   const std::string vowels = "aeiou";
@@ -172,7 +205,7 @@ std::string RomajiKanaConverter::ConvertPending(bool force_flush) {
   std::string output;
   while (!pending_.empty()) {
     bool matched = false;
-    const size_t n = std::min<size_t>(3, pending_.size());
+    const size_t n = std::min<size_t>(kMaxRomajiKeyLength, pending_.size());
     for (size_t len = n; len > 0; --len) {
       const std::string chunk = pending_.substr(0, len);
       auto it = kRomajiMap.find(chunk);
@@ -194,7 +227,7 @@ std::string RomajiKanaConverter::ConvertPending(bool force_flush) {
         pending_.clear();
         continue;
       }
-      if (force_flush || pending_.size() >= 3) {
+      if (force_flush || (pending_.size() >= 3 && !IsBuiltinRomajiPrefix(pending_))) {
         output.push_back(pending_.front());
         pending_.erase(0, 1);
       } else {

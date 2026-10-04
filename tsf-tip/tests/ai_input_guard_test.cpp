@@ -213,13 +213,95 @@ class FakeInputScopeProperty final : public ITfReadOnlyProperty {
   LONG refs_{1};
 };
 
-// Only the three calls the guard makes carry behaviour; the rest of ITfContext
-// is present because COM demands the whole vtable.
+class FakeCompartment final : public ITfCompartment {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartment) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartment*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&refs_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&refs_));
+  }
+  STDMETHODIMP SetValue(TfClientId, const VARIANT*) override { return E_NOTIMPL; }
+  STDMETHODIMP GetValue(VARIANT* out) override {
+    if (!out) return E_POINTER;
+    VariantInit(out);
+    // An unset compartment reads back as VT_EMPTY, as TSF reports it.
+    if (value) {
+      out->vt = VT_I4;
+      out->lVal = value;
+    }
+    return S_OK;
+  }
+
+  LONG value{0};
+
+ private:
+  LONG refs_{1};
+};
+
+// Chromium writes the disabled flags through ITfCompartmentMgr on the context.
+class FakeCompartmentMgr final : public ITfCompartmentMgr {
+ public:
+  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfCompartmentMgr) return E_NOINTERFACE;
+    *out = static_cast<ITfCompartmentMgr*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&refs_));
+  }
+  STDMETHODIMP_(ULONG) Release() override {
+    return static_cast<ULONG>(InterlockedDecrement(&refs_));
+  }
+  STDMETHODIMP GetCompartment(REFGUID id, ITfCompartment** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (FAILED(get_result)) return get_result;
+    FakeCompartment* compartment = nullptr;
+    if (id == GUID_COMPARTMENT_KEYBOARD_DISABLED) compartment = &keyboard_disabled;
+    if (id == GUID_COMPARTMENT_EMPTYCONTEXT) compartment = &empty_context;
+    if (!compartment) return E_INVALIDARG;
+    compartment->AddRef();
+    *out = compartment;
+    return S_OK;
+  }
+  STDMETHODIMP ClearCompartment(TfClientId, REFGUID) override { return E_NOTIMPL; }
+  STDMETHODIMP EnumCompartments(IEnumGUID** out) override {
+    if (out) *out = nullptr;
+    return E_NOTIMPL;
+  }
+
+  FakeCompartment keyboard_disabled;
+  FakeCompartment empty_context;
+  HRESULT get_result{S_OK};
+
+ private:
+  LONG refs_{1};
+};
+
+// Only the calls the guard makes carry behaviour; the rest of ITfContext is
+// present because COM demands the whole vtable.
 class FakeGuardContext final : public ITfContext {
  public:
   STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
     if (!out) return E_POINTER;
     *out = nullptr;
+    if (riid == IID_ITfCompartmentMgr && provides_compartments) {
+      *out = static_cast<ITfCompartmentMgr*>(&compartments);
+      compartments.AddRef();
+      return S_OK;
+    }
     if (riid != IID_IUnknown && riid != IID_ITfContext) return E_NOINTERFACE;
     *out = static_cast<ITfContext*>(this);
     AddRef();
@@ -317,6 +399,8 @@ class FakeGuardContext final : public ITfContext {
 
   FakeRange range;
   FakeInputScopeProperty property;
+  FakeCompartmentMgr compartments;
+  bool provides_compartments{true};
   bool provides_input_scope{true};
   bool run_session{true};
   HRESULT request_result{S_OK};
@@ -459,6 +543,123 @@ TEST(TsfTipAiInputGuardTest, PasswordStyledEditWindowClassifiesAsPassword) {
 
 TEST(TsfTipAiInputGuardTest, NoFocusWindowIsUnknown) {
   EXPECT_EQ(ClassifyFocusWindow(nullptr), InputScopeClass::Unknown);
+}
+
+// DEV-1483: Chromium's <input type="password"> context, as tsf_bridge.cc and
+// tsf_input_scope.cc build it. The scope is IS_PRIVATE (never IS_PASSWORD) and
+// the context carries KEYBOARD_DISABLED and EMPTYCONTEXT. Before the fix the
+// scope classified as Normal and text typed there was learned.
+TEST(TsfTipAiInputGuardTest, ChromiumPasswordContextIsDisabledAndSecure) {
+  FakeGuardContext context;
+  FakeInputScope scope({IS_PRIVATE});
+  context.property.scope = &scope;
+  context.compartments.keyboard_disabled.value = 1;
+  context.compartments.empty_context.value = 1;
+
+  EXPECT_TRUE(azookey::tsf::IsContextKeyboardDisabled(&context));
+  const auto gate = azookey::tsf::EvaluateInputGate(&context, 1);
+  EXPECT_TRUE(gate.secure);
+  EXPECT_FALSE(gate.ai_allowed);
+  EXPECT_TRUE(gate.keyboard_disabled);
+  EXPECT_FALSE(gate.learning_allowed);
+  EXPECT_EQ(gate.scope.status, azookey::tsf::InputScopeProbeStatus::Skipped);
+  // The disabled flag is answer enough; no edit session is requested.
+  EXPECT_EQ(context.request_count, 0);
+}
+
+TEST(TsfTipAiInputGuardTest, EitherDisabledCompartmentAloneDisablesTheContext) {
+  {
+    FakeGuardContext context;
+    context.compartments.keyboard_disabled.value = 1;
+    EXPECT_TRUE(azookey::tsf::IsContextKeyboardDisabled(&context));
+  }
+  {
+    // Windows 11 Chromium also marks its no-field context EMPTYCONTEXT only.
+    FakeGuardContext context;
+    context.compartments.empty_context.value = 1;
+    EXPECT_TRUE(azookey::tsf::IsContextKeyboardDisabled(&context));
+  }
+}
+
+TEST(TsfTipAiInputGuardTest, UnreadableOrClearCompartmentsAreNotDisabled) {
+  EXPECT_FALSE(azookey::tsf::IsContextKeyboardDisabled(nullptr));
+  {
+    FakeGuardContext context;
+    EXPECT_FALSE(azookey::tsf::IsContextKeyboardDisabled(&context));
+  }
+  {
+    // Most apps never touch these compartments; failing closed here would
+    // stop the IME everywhere.
+    FakeGuardContext context;
+    context.provides_compartments = false;
+    EXPECT_FALSE(azookey::tsf::IsContextKeyboardDisabled(&context));
+  }
+  {
+    FakeGuardContext context;
+    context.compartments.get_result = E_FAIL;
+    EXPECT_FALSE(azookey::tsf::IsContextKeyboardDisabled(&context));
+  }
+  {
+    FakeGuardContext context;
+    FakeInputScope scope({IS_DEFAULT});
+    context.property.scope = &scope;
+    const auto gate = azookey::tsf::EvaluateInputGate(&context, 1);
+    EXPECT_FALSE(gate.keyboard_disabled);
+    EXPECT_FALSE(gate.secure);
+    EXPECT_TRUE(gate.learning_allowed);
+    EXPECT_EQ(context.request_count, 1);
+  }
+}
+
+// IS_PRIVATE alone is also what Chromium sends for incognito fields, so it
+// withholds learning and AI but is not a password (spec section 3 `private`).
+TEST(TsfTipAiInputGuardTest, PrivateScopeWithholdsLearningButIsNotSecure) {
+  FakeGuardContext context;
+  FakeInputScope scope({IS_PRIVATE});
+  EXPECT_EQ(ClassifyWithScopes(context, scope), InputScopeClass::Private);
+  const auto gate = CombineInputGate(InputScopeClass::Normal, InputScopeClass::Private);
+  EXPECT_FALSE(gate.learning_allowed);
+  EXPECT_FALSE(gate.ai_allowed);
+  EXPECT_FALSE(gate.secure);
+
+  FakeGuardContext both_context;
+  FakeInputScope both({IS_PRIVATE, IS_PASSWORD});
+  EXPECT_EQ(ClassifyWithScopes(both_context, both), InputScopeClass::Password);
+
+  EXPECT_TRUE(CombineInputGate(InputScopeClass::Normal, InputScopeClass::Normal).learning_allowed);
+  EXPECT_TRUE(CombineInputGate(InputScopeClass::Normal, InputScopeClass::Unknown).learning_allowed);
+}
+
+TEST(TsfTipAiInputGuardTest, ProbeReportsScopeValuesAndWhereItStopped) {
+  {
+    FakeGuardContext context;
+    FakeInputScope scope({IS_DEFAULT, IS_PRIVATE});
+    context.property.scope = &scope;
+    const auto probe = azookey::tsf::ProbeInputScope(&context, 1);
+    EXPECT_EQ(probe.status, azookey::tsf::InputScopeProbeStatus::Read);
+    EXPECT_EQ(probe.scopes, "0,61");
+  }
+  {
+    FakeGuardContext context;
+    FakeInputScope scope({});
+    context.property.scope = &scope;
+    EXPECT_EQ(azookey::tsf::ProbeInputScope(&context, 1).status,
+              azookey::tsf::InputScopeProbeStatus::Empty);
+  }
+  {
+    FakeGuardContext context;
+    context.provides_input_scope = false;
+    EXPECT_EQ(azookey::tsf::ProbeInputScope(&context, 1).status,
+              azookey::tsf::InputScopeProbeStatus::NoProperty);
+  }
+  {
+    FakeGuardContext context;
+    context.run_session = false;
+    EXPECT_EQ(azookey::tsf::ProbeInputScope(&context, 1).status,
+              azookey::tsf::InputScopeProbeStatus::SessionFailed);
+  }
+  EXPECT_EQ(azookey::tsf::ProbeInputScope(nullptr, 1).status,
+            azookey::tsf::InputScopeProbeStatus::NoContext);
 }
 
 // The bundled list ships with the app and is only ever changed by a reviewed

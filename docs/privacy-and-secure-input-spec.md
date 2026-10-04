@@ -171,6 +171,24 @@ UTF-8 の basename を `Invalidate()` までキャッシュする。各 `Get()` 
 判定不能な scope では送信を抑止する。この二軸の非対称が `AiInputAllowed` と
 `SecureInputDetected`（`tsf-tip/src/AiInputGuard.cpp`）の差である。
 
+**キーボード無効化された context**: context の `GUID_COMPARTMENT_KEYBOARD_DISABLED`
+または `GUID_COMPARTMENT_EMPTYCONTEXT` が非 0 のとき（`IsContextKeyboardDisabled`）、
+TIP はその context のキーを処理せずアプリへ素通しし、入力 scope の判定より前に
+secure とする。Chromium 系ブラウザはパスワード欄の context にこの 2 つを設定し、
+TSF は設定後も key event sink を呼ぶため、変換を止める責務は TIP にある。
+キーの素通しはアプリによる IME 無効化への追従であり、`autoSecureInput` に依存しない。
+compartment を読めない context は無効化されていないものとして扱う。
+
+**`IS_PRIVATE`**: Chromium はパスワード欄の scope を `IS_PASSWORD` ではなく
+`IS_PRIVATE` とし、InPrivate / incognito の通常欄にも同じ値を返す。scope だけでは
+パスワード欄と区別できないため、`IS_PRIVATE` は secure にしない。学習と AI 送信
+（ローカルの AI 整文を含む）を止め、予測は維持する。§3 の `private` は local の AI を
+許すが、`IS_PRIVATE` では AI 送信軸の fail closed（scope が通常でない）が優先する。
+password / PIN の scope が同時にあれば secure を優先する。
+
+判定に使った compartment、scope 値（`InputScope` の数値）、分類、結果は、値が
+変わったときだけ TIP の info ログ `input_gate` に記録する。入力本文は含めない。
+
 ## 5. secure 中の挙動契約
 
 TIP が `ResolvePrivacy` で secure と判定し、`secure_input_` が有効な間、以下を**強制抑止**する:
@@ -219,7 +237,7 @@ object でない設定または `privacy`、未知・型不正の `privacy.mode`
 
 | レイヤ | 判定入力 | 役割 |
 |---|---|---|
-| TIP | 設定、入力 scope、入力先アプリ | イベント時に secure と学習許可を判定し、学習不可なら送信・保留観測を抑止する |
+| TIP | 設定、入力 scope、context の compartment、入力先アプリ | イベント時に secure と学習許可を判定し、学習不可なら送信・保留観測を抑止する |
 | Host | 当該要求の privacy フラグ、接続の受理済み capability、グローバル設定 | 学習要求を独立に検査する。入力先を自ら検出しない |
 
 `ObserveTypo`、`CommitObservation`、`CommitSegmentsObservation` は
@@ -228,7 +246,8 @@ object でない設定または `privacy`、未知・型不正の `privacy.mode`
 `learning_allowed == true` の場合に限る。欠落・型不正はそれぞれ
 `true` / `false` の安全側で扱い、直近の `QueryCandidates` から推定しない。
 TIP の学習フラグは `!secure`、グローバルモードの学習許可、app profile の
-`privacyMode = private` による禁止、batch の学習対象条件をすべて満たす場合に
+`privacyMode = private` による禁止、入力 scope `IS_PRIVATE` による禁止（§4.3）、
+batch の学習対象条件をすべて満たす場合に
 `learning_allowed = true` とする。グローバルの private / custom による禁止は
 app profile の `privacyMode = normal` でも解除できない。
 `QueryCandidates` にも両フラグを載せるが、Host の候補要求処理はどちらも

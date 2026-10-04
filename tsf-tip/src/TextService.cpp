@@ -1523,15 +1523,51 @@ void TextService::ClearKeyboardOpenTracking() {
   key_passthrough_logged_state_ = -1;
 }
 
-void TextService::LogKeyPassthroughOnce() noexcept {
-  // One record per open/alphanumeric state, so the log never carries the
-  // count or timing of keys typed while the IME is off.
-  const int state = (keyboard_open_ ? 2 : 0) | (alnum_mode_ ? 1 : 0);
+void TextService::LogKeyPassthroughOnce(bool keyboard_disabled) noexcept {
+  // One record per open/alphanumeric/disabled state, so the log never carries
+  // the count or timing of keys typed while the IME is off.
+  const int state = (keyboard_disabled ? 4 : 0) | (keyboard_open_ ? 2 : 0) | (alnum_mode_ ? 1 : 0);
   if (state == key_passthrough_logged_state_) return;
   key_passthrough_logged_state_ = state;
   try {
     RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "key_passthrough",
-               {{"open", keyboard_open_}, {"alnum_mode", alnum_mode_}});
+               {{"open", keyboard_open_},
+                {"alnum_mode", alnum_mode_},
+                {"keyboard_disabled", keyboard_disabled}});
+  } catch (...) {
+  }
+}
+
+void TextService::LogInputGateOnChange(const azookey::tsf::InputGateDecision& gate,
+                                       bool secure) noexcept {
+  // Scope values are InputScope enum numbers and the classes are fixed words;
+  // nothing here is field text. One record per change of field.
+  try {
+    if (!TipRuntimeLogger().enabled()) return;
+    const auto focus = azookey::tsf::InputScopeClassName(gate.focus);
+    const auto scope_class = azookey::tsf::InputScopeClassName(gate.scope.classification);
+    const auto scope_status = azookey::tsf::InputScopeProbeStatusName(gate.scope.status);
+    std::string signature;
+    signature.append(gate.keyboard_disabled ? "1" : "0")
+        .append("|")
+        .append(focus)
+        .append("|")
+        .append(scope_status)
+        .append("|")
+        .append(gate.scope.scopes)
+        .append(secure ? "|1" : "|0");
+    if (signature == input_gate_logged_signature_) return;
+    input_gate_logged_signature_ = std::move(signature);
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "input_gate",
+               {{"keyboard_disabled", gate.keyboard_disabled},
+                {"focus", SafeLogText(std::string(focus))},
+                {"scope_status", SafeLogText(std::string(scope_status))},
+                {"scope_class", SafeLogText(std::string(scope_class))},
+                {"scopes", SafeLogText(gate.scope.scopes)},
+                {"gate_secure", gate.secure},
+                {"gate_ai_allowed", gate.ai_allowed},
+                {"gate_learning_allowed", gate.learning_allowed},
+                {"secure", secure}});
   } catch (...) {
   }
 }
@@ -1850,6 +1886,12 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
       }
     }
 
+    // An app-disabled context (Chromium's password field) is not ours to
+    // convert: TSF still calls the key sinks, so leave every key to the app.
+    if (azookey::tsf::IsContextKeyboardDisabled(context)) {
+      LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
+      return S_OK;
+    }
     const uint32_t modifiers = CurrentKeyModifiers();
     const bool toggle_open =
         (wParam == VK_KANJI || wParam == VK_OEM_AUTO || wParam == VK_OEM_ENLW) &&
@@ -2051,6 +2093,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           return S_OK;
         }
       }
+    }
+    if (azookey::tsf::IsContextKeyboardDisabled(context)) {
+      LogKeyPassthroughOnce(/*keyboard_disabled=*/true);
+      return S_OK;
     }
     const uint32_t modifiers = CurrentKeyModifiers();
     const bool toggle_open =
@@ -5382,6 +5428,8 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
       if (decision.backend == "local-zenzai") decision.ai.external = false;
     }
   }
+  // IS_PRIVATE asks the IME not to learn; prediction stays (spec section 3 `private`).
+  if (!gate.learning_allowed) decision.learning_allowed = false;
   if (decision.secure) {
     decision.ai = {};
     decision.learning_allowed = false;
@@ -5389,6 +5437,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   }
   // A failed scope probe must never unlock development body logging.
   decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
+  LogInputGateOnChange(gate, decision.secure);
   secure_input_.store(decision.secure, std::memory_order_relaxed);
   prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
   // Spec §6: the indicator reflects the same decision every route just used.

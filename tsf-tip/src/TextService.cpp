@@ -902,6 +902,52 @@ std::vector<ipc::CandidateField> FilterAcceptablePredictions(
   return candidates;
 }
 
+namespace {
+
+std::string PredictionLogReasonName(PredictionLogReason reason) {
+  switch (reason) {
+    case PredictionLogReason::Disabled:
+      return "disabled";
+    case PredictionLogReason::NotAllowed:
+      return "not_allowed";
+    case PredictionLogReason::NoContext:
+      return "no_context";
+    case PredictionLogReason::KeyboardClosed:
+      return "keyboard_closed";
+    case PredictionLogReason::AlphanumericMode:
+      return "alphanumeric_mode";
+    case PredictionLogReason::CandidateWindow:
+      return "candidate_window";
+    case PredictionLogReason::NotComposing:
+      return "not_composing";
+    case PredictionLogReason::SecureInput:
+      return "secure_input";
+    case PredictionLogReason::Queued:
+      return "queued";
+    case PredictionLogReason::HostUnsupported:
+      return "host_unsupported";
+    case PredictionLogReason::ResponseDropped:
+      return "response_dropped";
+    case PredictionLogReason::StaleReading:
+      return "stale_reading";
+    case PredictionLogReason::StaleContext:
+      return "stale_context";
+    case PredictionLogReason::StaleGeneration:
+      return "stale_generation";
+    case PredictionLogReason::NoAcceptablePrediction:
+      return "no_acceptable_prediction";
+    case PredictionLogReason::WindowCreateFailed:
+      return "window_create_failed";
+    case PredictionLogReason::WindowShowFailed:
+      return "window_show_failed";
+    case PredictionLogReason::Shown:
+      return "shown";
+  }
+  return "unknown";
+}
+
+}  // namespace
+
 TextService::EtwRegistration::EtwRegistration() noexcept { core::EtwLogger::Register(); }
 TextService::EtwRegistration::~EtwRegistration() noexcept { core::EtwLogger::Unregister(); }
 
@@ -1218,6 +1264,7 @@ STDMETHODIMP TextService::Deactivate() {
   UnadviseTextEditSink();
   ClearPrediction();
   prediction_window_.Destroy();
+  prediction_logged_reasons_.store(0, std::memory_order_relaxed);
   ClearReconversionState();
   if (reconversion_cache_context_) {
     reconversion_cache_context_->Release();
@@ -5068,11 +5115,14 @@ void TextService::QueryPendingPrediction(uint64_t& next_id) {
     request = std::move(ipc_prediction_request_);
     ipc_prediction_request_.reset();
   }
+  if (request && !ipc_host_query_predictions_)
+    LogPredictionOnce(PredictionLogReason::HostUnsupported);
   if (!request || !ipc_host_query_predictions_ || secure_input_.load(std::memory_order_relaxed) ||
       !prediction_allowed_.load(std::memory_order_relaxed))
     return;
   const auto retry_dropped_request = [&] {
     if (ipc_stop_.load(std::memory_order_relaxed)) return;
+    LogPredictionOnce(PredictionLogReason::ResponseDropped);
     bool notify = false;
     {
       std::lock_guard lock(ipc_mtx_);
@@ -5706,6 +5756,42 @@ RECT TextService::PredictionCaretRect() {
   return {point.x, point.y - 16, point.x + 1, point.y};
 }
 
+void TextService::LogPredictionOnce(PredictionLogReason reason) noexcept {
+  const uint32_t bit = 1U << static_cast<unsigned>(reason);
+  if (prediction_logged_reasons_.fetch_or(bit, std::memory_order_relaxed) & bit) return;
+  try {
+    const auto name = SafeLogText(PredictionLogReasonName(reason));
+    if (reason == PredictionLogReason::WindowCreateFailed ||
+        reason == PredictionLogReason::WindowShowFailed) {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "prediction_state",
+                 {{"reason", name},
+                  {"stage", SafeLogText(prediction_window_.failure_stage())},
+                  {"hresult", static_cast<int64_t>(prediction_window_.failure_hr())}});
+    } else {
+      RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "prediction_state", {{"reason", name}});
+    }
+  } catch (...) {
+  }
+}
+
+void TextService::ShowPredictionWindow() {
+  std::vector<std::wstring> labels;
+  for (const auto& candidate : shown_predictions_) labels.push_back(Utf8ToWide(candidate.surface));
+  if (labels.empty()) {
+    LogPredictionOnce(PredictionLogReason::NoAcceptablePrediction);
+    prediction_window_.Hide();
+    return;
+  }
+  if (!prediction_window_.Create()) {
+    LogPredictionOnce(PredictionLogReason::WindowCreateFailed);
+    prediction_window_.Hide();
+    return;
+  }
+  prediction_window_.Show(labels, PredictionCaretRect());
+  LogPredictionOnce(prediction_window_.IsVisible() ? PredictionLogReason::Shown
+                                                   : PredictionLogReason::WindowShowFailed);
+}
+
 void TextService::ClearPrediction() {
   AZOOKEY_ASSERT_UI_THREAD();
   candidate_ui_.CancelScheduledCandidatesReady();
@@ -5727,6 +5813,7 @@ void TextService::ClearPrediction() {
 void TextService::RefreshPrediction(ITfContext* context) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!local_settings_.PredictionEnabledSnapshot()) {
+    LogPredictionOnce(PredictionLogReason::Disabled);
     ClearPrediction();
     prediction_window_.Destroy();
     prediction_cache_.clear();
@@ -5734,16 +5821,28 @@ void TextService::RefreshPrediction(ITfContext* context) {
     return;
   }
   if (!prediction_allowed_.load(std::memory_order_relaxed)) {
+    LogPredictionOnce(PredictionLogReason::NotAllowed);
     ClearPrediction();
     prediction_cache_.clear();
     prediction_last_query_key_.clear();
     return;
   }
-  if (!context || !core_input_active_ || !keyboard_open_ || alnum_mode_ ||
-      candidate_ui_.IsShowing() ||
-      (input_state_.kind() != core::InputStateKind::Composing &&
-       input_state_.kind() != core::InputStateKind::Previewing) ||
-      secure_input_.load(std::memory_order_relaxed)) {
+  std::optional<PredictionLogReason> inactive;
+  if (!context || !core_input_active_)
+    inactive = PredictionLogReason::NoContext;
+  else if (!keyboard_open_)
+    inactive = PredictionLogReason::KeyboardClosed;
+  else if (alnum_mode_)
+    inactive = PredictionLogReason::AlphanumericMode;
+  else if (candidate_ui_.IsShowing())
+    inactive = PredictionLogReason::CandidateWindow;
+  else if (input_state_.kind() != core::InputStateKind::Composing &&
+           input_state_.kind() != core::InputStateKind::Previewing)
+    inactive = PredictionLogReason::NotComposing;
+  else if (secure_input_.load(std::memory_order_relaxed))
+    inactive = PredictionLogReason::SecureInput;
+  if (inactive) {
+    LogPredictionOnce(*inactive);
     ClearPrediction();
     return;
   }
@@ -5765,13 +5864,7 @@ void TextService::RefreshPrediction(ITfContext* context) {
     candidate_ui_.CancelScheduledCandidatesReady();
     prediction_retry_scheduled_generation_ = 0;
     shown_predictions_ = cached->second.predictions;
-    std::vector<std::wstring> labels;
-    for (const auto& candidate : shown_predictions_)
-      labels.push_back(Utf8ToWide(candidate.surface));
-    if (!labels.empty() && prediction_window_.Create())
-      prediction_window_.Show(labels, PredictionCaretRect());
-    else
-      prediction_window_.Hide();
+    ShowPredictionWindow();
     return;
   }
   prediction_window_.Hide();
@@ -5788,6 +5881,7 @@ void TextService::RefreshPrediction(ITfContext* context) {
     ipc_prediction_request_ = PredictionRequest{++prediction_generation_, kana,
                                                 prediction_left_context_, CurrentActionTraceId()};
   }
+  LogPredictionOnce(PredictionLogReason::Queued);
   ipc_cv_.notify_one();
 }
 
@@ -5800,20 +5894,41 @@ void TextService::ApplyPredictionResult() {
     prediction_result_.reset();
   }
   if (!local_settings_.PredictionEnabledSnapshot()) {
+    if (result) LogPredictionOnce(PredictionLogReason::Disabled);
     ClearPrediction();
     prediction_window_.Destroy();
     prediction_cache_.clear();
     prediction_last_query_key_.clear();
     return;
   }
-  if (!result || !active_context_ || secure_input_.load(std::memory_order_relaxed) ||
-      !prediction_allowed_.load(std::memory_order_relaxed) || candidate_ui_.IsShowing() ||
-      input_state_.confirmed_kana() != result->kana ||
-      prediction_left_context_ != result->left_side_context)
+  // Called on every candidates-ready notification; only a delivered result is
+  // worth a log record.
+  if (!result) return;
+  std::optional<PredictionLogReason> dropped;
+  if (!active_context_)
+    dropped = PredictionLogReason::NoContext;
+  else if (secure_input_.load(std::memory_order_relaxed))
+    dropped = PredictionLogReason::SecureInput;
+  else if (!prediction_allowed_.load(std::memory_order_relaxed))
+    dropped = PredictionLogReason::NotAllowed;
+  else if (candidate_ui_.IsShowing())
+    dropped = PredictionLogReason::CandidateWindow;
+  else if (input_state_.confirmed_kana() != result->kana)
+    dropped = PredictionLogReason::StaleReading;
+  else if (prediction_left_context_ != result->left_side_context)
+    dropped = PredictionLogReason::StaleContext;
+  if (dropped) {
+    LogPredictionOnce(*dropped);
     return;
+  }
+  bool stale_generation = false;
   {
     std::lock_guard lock(ipc_mtx_);
-    if (prediction_generation_ != result->generation) return;
+    stale_generation = prediction_generation_ != result->generation;
+  }
+  if (stale_generation) {
+    LogPredictionOnce(PredictionLogReason::StaleGeneration);
+    return;
   }
   result->predictions = FilterAcceptablePredictions(result->kana, std::move(result->predictions));
   const std::string cache_key =
@@ -5821,12 +5936,7 @@ void TextService::ApplyPredictionResult() {
   prediction_cache_[cache_key] =
       PredictionCacheEntry{result->predictions, std::chrono::steady_clock::now()};
   shown_predictions_ = std::move(result->predictions);
-  std::vector<std::wstring> labels;
-  for (const auto& candidate : shown_predictions_) labels.push_back(Utf8ToWide(candidate.surface));
-  if (!labels.empty() && prediction_window_.Create())
-    prediction_window_.Show(labels, PredictionCaretRect());
-  else
-    prediction_window_.Hide();
+  ShowPredictionWindow();
 }
 
 HRESULT TextService::AcceptPrediction(ITfContext* context, size_t index) {

@@ -702,6 +702,19 @@ QueryPredictionsResponse:  predictions[], ok?, error?
 `settings.predictionEnabled`（bool、default=true）。
 OFF のときは `PredictionWindow` を生成しない。
 
+### 3.7 診断ログ
+
+予測が窓に届くまでの経過は `AZOOKEY_LOG` の info ログ `prediction_state` で追える。
+`reason` は止まった箇所または結果を表し、照会しない理由（`disabled` / `not_allowed` /
+`no_context` / `keyboard_closed` / `alphanumeric_mode` / `candidate_window` / `not_composing` /
+`secure_input`）、照会の経過（`queued` / `host_unsupported` / `response_dropped`）、
+応答の破棄（`stale_reading` / `stale_context` / `stale_generation`）、
+表示の結果（`no_acceptable_prediction` / `window_create_failed` / `window_show_failed` / `shown`。
+1 秒キャッシュからの表示を含む）のいずれかをとる。
+`window_create_failed` と `window_show_failed` は失敗した初期化・描画の段階 `stage` と `hresult` を持つ。
+各 `reason` は TIP の activation ごとに 1 回だけ出し、打鍵ごとには出さない。
+どの行も入力本文、予測候補、打鍵の回数を持たない。
+
 ## 4. Magic Conversion / Replace Suggestion (M16)
 
 > AI 変換バックエンド（`AiBackend` / OpenAI 互換 API 呼び出し）の契約は
@@ -987,7 +1000,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | Unicode 入力 | `core/tests/unicode_input_test.cpp` | 範囲チェック、サロゲートペア生成 |
 | 候補ウィンドウのレイアウトと DPI 換算 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算 |
 | キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3） |
-| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。モニタ矩形と配置候補の切替 |
+| 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。モニタ矩形と配置候補の切替、DirectComposition 初期化を含む `Create` と `Show` で窓が可視になること |
 
 ## 11. 参照
 

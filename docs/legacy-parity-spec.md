@@ -848,6 +848,13 @@ sha	しゃ
 `inputStyle == "default"`：内蔵テーブルのみ
 `inputStyle == "custom"`：**内蔵テーブルを差し替え**（マージしない）
 
+内蔵テーブルは、レガシーが依存する AzooKeyKanaKanjiConverter の `defaultRomanToKanaMap`
+（`legacy/Core/Package.swift` で固定した revision）と同じ表規則を持つ。小書き（`xtu`、`la` など）、
+`wi`、`ve` などの拡張綴りもこれに含まれる。子音の重ね打ち（`kk` → `っk`）、`nn`、`n` の後に
+子音が続く場合の「ん」は、表ではなく `RomajiKanaConverter::Feed` で処理し、レガシーと同一の
+挙動は求めない。例えば `nn` の後に母音が続くと、`n` を次の音節へ持ち越す（`konnichiha` →
+「こんにちは」）。
+
 カスタム TSV が存在しない、読み込めない、または有効な規則が 0 件のときは
 内蔵テーブルを使う。
 

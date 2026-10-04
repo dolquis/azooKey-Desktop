@@ -83,6 +83,51 @@ TEST(RomajiKanaConverterTest, AlternativeRomajiAliases) {
   EXPECT_EQ(FeedAll(converter, "ttuki"), "っつき");
 }
 
+TEST(RomajiKanaConverterTest, LegacyDefaultTableSpellings) {
+  azookey::core::RomajiKanaConverter converter;
+  EXPECT_EQ(FeedAll(converter, "xtulawive"), "っぁうぃゔぇ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "ltsu"), "っ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "xtsuxya"), "っゃ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "fakkusu"), "ふぁっくす");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "thi"), "てぃ");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "yewyixn"), "いぇゐん");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "zhzl"), "←→");
+
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "kyashuchann"), "きゃしゅちゃん");
+
+  // The legacy table has no "tch" rule, so the leading t stays literal.
+  converter.Reset();
+  EXPECT_EQ(FeedAll(converter, "tcha"), "tちゃ");
+}
+
+TEST(RomajiKanaConverterTest, PendingLegacyPrefixIsHeldUntilResolved) {
+  azookey::core::RomajiKanaConverter converter;
+  EXPECT_EQ(converter.Feed('x'), "");
+  EXPECT_EQ(converter.Feed('t'), "");
+  EXPECT_EQ(converter.Feed('s'), "");
+  EXPECT_EQ(converter.PreviewPending(), "xts");
+  EXPECT_EQ(converter.Feed('u'), "っ");
+  EXPECT_FALSE(converter.HasPending());
+
+  // A three-letter pending run that no key continues still releases its head.
+  EXPECT_EQ(converter.Feed('k'), "");
+  EXPECT_EQ(converter.Feed('t'), "");
+  EXPECT_EQ(converter.Feed('a'), "kた");
+}
+
 TEST(RomajiKanaConverterTest, Preview) {
   using azookey::core::RomajiKanaConverter;
   EXPECT_EQ(RomajiKanaConverter::Preview("k"), "k");

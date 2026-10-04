@@ -2207,6 +2207,8 @@ TIP の設定監視にも届き、TIP は通常の設定変更と同じく Hands
 
 候補ウィンドウ下部の控えめインジケータで、§8.5.1 で TIP が合成した表示状態を示す。
 表示する状態ごとの文言とボタンは次のとおりとする。`healthy` は表示しない。
+M46 の secure 表示と同時に出すときの並びは
+[`privacy-and-secure-input-spec.md`](privacy-and-secure-input-spec.md) §6 が定める。
 
 | 表示状態 | 文言 | ボタン |
 |---|---|---|

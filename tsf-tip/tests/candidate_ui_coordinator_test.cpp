@@ -460,6 +460,144 @@ TEST(TsfTipCandidateUiCoordinatorTest, SafeModeNotifiesOncePerHostGeneration) {
   coordinator.EndUI();
 }
 
+TEST(TsfTipCandidateUiCoordinatorTest, SecureEntryQueuesOneToastUntilCandidateWindowIsShown) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  coordinator.SetSecureState(true, true);
+  EXPECT_TRUE(coordinator.secure_toast_pending_for_test());
+  EXPECT_TRUE(window.secure_indicator_visible_for_test());
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+
+  // Staying secure neither queues nor repeats the toast.
+  coordinator.EndUI();
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+  coordinator.SetSecureState(true, true);
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+  EXPECT_TRUE(window.secure_indicator_visible_for_test());
+  coordinator.EndUI();
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, LeavingSecureClearsLockAndReentryToastsAgain) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+
+  coordinator.SetSecureState(true, true);
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  coordinator.SetSecureState(false, true);
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+  EXPECT_FALSE(window.secure_indicator_visible_for_test());
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+
+  coordinator.SetSecureState(true, true);
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  EXPECT_TRUE(window.secure_indicator_visible_for_test());
+  coordinator.EndUI();
+
+  // A toast still queued when secure ends is dropped, not shown on return.
+  coordinator.SetSecureState(false, true);
+  coordinator.SetSecureState(true, true);
+  coordinator.SetSecureState(false, true);
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+  coordinator.EndUI();
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, HiddenSecureIndicatorSuppressesToastAndLock) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  coordinator.SetSecureState(true, false);
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  EXPECT_FALSE(window.secure_indicator_visible_for_test());
+
+  // Turning the setting on mid-secure shows the lock, but it is not an entry.
+  coordinator.SetSecureState(true, true);
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  EXPECT_TRUE(window.secure_indicator_visible_for_test());
+
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  coordinator.SetSecureState(false, true);
+  coordinator.SetSecureState(true, true);
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  coordinator.SetSecureState(true, false);
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+  EXPECT_FALSE(window.secure_indicator_visible_for_test());
+  coordinator.EndUI();
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, SecureToastWaitsWhileApplicationDrawsCandidates) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  coordinator.SetSecureState(true, true);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_TRUE(coordinator.secure_toast_pending_for_test());
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+
+  ASSERT_NE(thread_mgr.element, nullptr);
+  EXPECT_EQ(thread_mgr.element->Show(TRUE), S_OK);
+  EXPECT_FALSE(coordinator.secure_toast_pending_for_test());
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  coordinator.EndUI();
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, SecureToastSurvivesReshowingTheCandidateList) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  coordinator.SetSecureState(true, true);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  ASSERT_TRUE(window.secure_toast_visible_for_test());
+  // A segment move re-begins the UI without closing it first.
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{30, 20}, SampleItems(), 1), S_OK);
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  coordinator.EndUI();
+  EXPECT_FALSE(window.secure_toast_visible_for_test());
+}
+
+TEST(TsfTipCandidateUiCoordinatorTest, SecureToastStacksAboveHealthBanner) {
+  using azookey::tsf::CandidateHealthState;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  coordinator.SetHealthState(CandidateHealthState::DegradedModel, "generation-1");
+  coordinator.SetSecureState(true, true);
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_TRUE(window.secure_toast_visible_for_test());
+  EXPECT_TRUE(window.health_banner_visible_for_test());
+  const int row = window.current_metrics_for_test().item_height;
+  EXPECT_EQ(window.footer_top_for_test(), row * static_cast<int>(SampleItems().size()));
+  EXPECT_EQ(window.health_banner_top_for_test(), window.footer_top_for_test() + row);
+  coordinator.EndUI();
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, MoveSelectionWrapsLargePositiveAndNegativeDeltas) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;

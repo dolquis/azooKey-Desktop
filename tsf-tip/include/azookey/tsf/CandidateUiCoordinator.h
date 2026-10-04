@@ -47,6 +47,10 @@ class CandidateUiCoordinator {
   // Called on the TSF UI thread after the IPC worker publishes a health snapshot.
   void SetHealthState(CandidateHealthState state, const std::string& host_generation_id);
   void SetRetryInFlight(bool in_flight);
+  // Called on the TSF UI thread with every privacy resolution. Entering secure
+  // queues one toast until the TIP next draws the candidate window; the lock
+  // indicator follows the state while show_indicator holds.
+  void SetSecureState(bool secure, bool show_indicator);
   void SetOnCandidatesReady(CandidateWindow::OnCandidatesReadyFn fn, void* context);
   void SetBeginObserver(CandidateUiBeginObserver observer, void* context);
   void PostCandidatesReady();
@@ -66,6 +70,8 @@ class CandidateUiCoordinator {
 #ifdef AZOOKEY_TSF_TESTING
   const std::vector<CandidateViewItem>& items_for_test() const { return items_; }
   bool health_banner_pending_for_test() const { return health_banner_pending_; }
+  bool secure_toast_pending_for_test() const { return secure_toast_pending_; }
+  const CandidateWindow& own_window_for_test() const { return own_window_; }
 #endif
 
  private:
@@ -75,6 +81,7 @@ class CandidateUiCoordinator {
   void OnPbShown(bool tip_draws);
   void OnElementShow(bool show);
   void ShowPendingHealthBanner();
+  void ShowPendingSecureToast();
   void ReleaseUiElement();
   void ReleaseUiElementMgr();
   void NotifyBeginObserver(HRESULT result, bool ui_element_mgr_available, bool pb_show_available,
@@ -99,6 +106,11 @@ class CandidateUiCoordinator {
   bool health_banner_pending_{false};
   std::string host_generation_id_;
   std::vector<std::string> notified_safe_mode_generations_;
+  // A new TIP instance starts outside secure, so its first secure resolution
+  // counts as entering it.
+  bool secure_{false};
+  bool show_secure_indicator_{true};
+  bool secure_toast_pending_{false};
   CandidateUiBeginObserver begin_observer_{nullptr};
   void* begin_observer_context_{nullptr};
 };

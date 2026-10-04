@@ -1098,6 +1098,10 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
         return 0
       }
       Mock Invoke-VmVerifyGuestInputMethodSelection { "switched" }
+      $script:azooKeyTip = "0411:{71EE04FA-B35D-4EB8-87A1-582D44A9A58C}{A8F74D91-8DF3-4DA1-B80B-01F7C73D4A90}"
+      Mock Invoke-VmVerifyGuestInputMethodActivation {
+        [pscustomobject]@{ Activation = "activated"; ActiveInputMethod = $script:azooKeyTip }
+      }
       Mock Invoke-VmVerifyGuestDiag {
         '{"schemaVersion":1,"status":"ok","checks":[]}' | Set-Content -LiteralPath $OutputPath
         return 0
@@ -1136,6 +1140,10 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
     It "captures azookey_diag --json into the run directory after selecting azooKey and before compat" {
       $script:order = @()
       Mock Invoke-VmVerifyGuestInputMethodSelection { $script:order += "ime"; "switched" }
+      Mock Invoke-VmVerifyGuestInputMethodActivation {
+        $script:order += "activate"
+        [pscustomobject]@{ Activation = "activated"; ActiveInputMethod = $script:azooKeyTip }
+      }
       Mock Invoke-VmVerifyGuestDiag {
         $script:order += "diag"
         "{}" | Set-Content -LiteralPath $OutputPath
@@ -1149,7 +1157,7 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
 
       Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
 
-      $script:order | Should -Be @("ime", "diag", "compat", "compat")
+      $script:order | Should -Be @("ime", "activate", "diag", "compat", "compat")
       Should -Invoke Invoke-VmVerifyGuestDiag -Times 1 -Exactly -ParameterFilter {
         $PackageRoot -eq $packageRoot -and $OutputPath -eq (Join-Path $runRoot "azookey-diag.json")
       }
@@ -1287,6 +1295,59 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       Should -Invoke Invoke-VmVerifyGuestDiag -Times 0 -Exactly
     }
 
+    It "records the input method that is active in the interactive session" {
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $status = Read-RunStatus
+      $status.completed | Should -BeTrue
+      $status.inputMethod | Should -Be "switched"
+      $status.inputMethodActivation | Should -Be "activated"
+      $status.activeInputMethod | Should -Be $script:azooKeyTip
+      Should -Invoke Invoke-VmVerifyGuestInputMethodActivation -Times 1 -Exactly -ParameterFilter {
+        $Tip -eq $script:azooKeyTip
+      }
+    }
+
+    It "activates azooKey for the session even when it is already the default" {
+      # The default only applies to later sign-ins, so "already-default" says nothing
+      # about the input method the signed-in session is using (DEV-1480).
+      Mock Invoke-VmVerifyGuestInputMethodSelection { "already-default" }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      Should -Invoke Invoke-VmVerifyGuestInputMethodActivation -Times 1 -Exactly
+      (Read-RunStatus).completed | Should -BeTrue
+    }
+
+    It "does not run compat when another input method stays active in the session" {
+      $microsoftIme = "0411:{03B5835F-F03C-411B-9CE2-AA23E1171E36}{A76C93D9-5523-4E90-AAFA-4DB112F9AC76}"
+      Mock Invoke-VmVerifyGuestInputMethodActivation {
+        [pscustomobject]@{ Activation = "activated"; ActiveInputMethod = $microsoftIme }
+      }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $status = Read-RunStatus
+      $status.completed | Should -BeFalse
+      $status.activeInputMethod | Should -Be $microsoftIme
+      $status.error | Should -BeLike "*'$microsoftIme', not azooKey*compat_test.exe was not run*"
+      Should -Invoke Invoke-VmVerifyGuestDiag -Times 0 -Exactly
+      Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
+    It "does not run compat when the session input method cannot be activated" {
+      Mock Invoke-VmVerifyGuestInputMethodActivation {
+        throw "ITfInputProcessorProfileMgr::ActivateProfile returned 0x00000001 for X"
+      }
+
+      Invoke-VmVerifyGuestCompatRun -PackageRoot $packageRoot -RunRoot $runRoot
+
+      $status = Read-RunStatus
+      $status.completed | Should -BeFalse
+      $status.error | Should -Match "ActivateProfile returned 0x00000001"
+      Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
     It "does not run compat when azooKey cannot be selected as the input method" {
       Mock Invoke-VmVerifyGuestInputMethodSelection {
         throw "azooKey could not be made the default input method of the console user."
@@ -1417,6 +1478,12 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       { Invoke-VmVerifyGuestInputMethodSelection } |
         Should -Throw -ExpectedMessage "*could not be made the default input method*"
     }
+
+    It "refuses to activate a value that is not a text service tip" {
+      # The tip is checked before any TSF call, so this never switches the input method.
+      { Invoke-VmVerifyGuestInputMethodActivation -Tip "0411:00000411" } |
+        Should -Throw -ExpectedMessage "*Not a text service input method tip: 0411:00000411*"
+    }
   }
 
   Context "-Run guest script portability" {
@@ -1432,6 +1499,7 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
         Should -Be @(
           "Invoke-VmVerifyGuestBootstrap",
           "Invoke-VmVerifyGuestInputMethodSelection",
+          "Invoke-VmVerifyGuestInputMethodActivation",
           "Invoke-VmVerifyGuestDiag",
           "Invoke-VmVerifyGuestCompatRun")
     }
@@ -1464,6 +1532,23 @@ function Wait-VmVerifyPipe { param($PipeName, $TimeoutSeconds, $ExpectedPresent)
       $errorCount = & powershell.exe -NoProfile -NonInteractive -Command $probe
 
       $errorCount | Should -Be "0"
+    }
+
+    It "reads the active TSF keyboard profile with Windows PowerShell 5.1" -Skip:(
+      -not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+      # Read-only: -QueryOnly never activates a profile. This compiles the C# interop
+      # under 5.1. A session without TSF (such as a CI service session) may refuse the
+      # COM call, which still proves the type compiled and the call was made.
+      $guestScript = Join-Path $repoRoot "scripts\vm-verify-guest.ps1"
+      $probe = ". '$($guestScript.Replace("'", "''"))'; " +
+        "try { 'ok:' + (Invoke-VmVerifyGuestInputMethodActivation -QueryOnly).ActiveInputMethod } " +
+        "catch [System.Runtime.InteropServices.COMException], [System.InvalidCastException] " +
+        "{ 'com:' + `$_.Exception.Message }"
+
+      $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $probe 2>&1
+
+      $LASTEXITCODE | Should -Be 0 -Because ($output | Out-String)
+      [string]$output | Should -Match "^(ok:[0-9A-F]{4}:(\{[0-9A-F-]{36}\}){2}|ok:[0-9A-F]{4}:HKL:[0-9A-F]+|com:.+)$"
     }
 
     It "reads BOM-less UTF-8 target JSON with Japanese notes under Windows PowerShell 5.1" -Skip:(

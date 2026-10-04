@@ -562,6 +562,7 @@ function Get-VmVerifySessionRunnerScript {
   $definitions = foreach ($name in @(
       "Invoke-VmVerifyGuestBootstrap",
       "Invoke-VmVerifyGuestInputMethodSelection",
+      "Invoke-VmVerifyGuestInputMethodActivation",
       "Invoke-VmVerifyGuestDiag",
       "Invoke-VmVerifyGuestCompatRun")) {
     $body = (Get-Command -Name $name -CommandType Function -ErrorAction Stop).ScriptBlock.ToString()

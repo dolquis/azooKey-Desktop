@@ -435,6 +435,38 @@ TEST(ReconversionFunctionTest, FunctionProviderUsesOnlyMatchingNonsecureCache) {
   service.Deactivate();
 }
 
+TEST(ReconversionFunctionTest, RightClickReconvertOnPrefetchedCacheOpensCandidateUi) {
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日");
+  TestRange range(&context, text, 0, 2);
+  context.selection = &range;
+  azookey::tsf::TextService service;
+  service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  service.set_text_edit_context_for_test(&context);
+  service.set_reconversion_cache_for_test(&context, L"明日", {L"あした", L"明日"});
+  IUnknown* unknown = nullptr;
+  ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+  ITfFnReconversion* function = nullptr;
+  ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+            S_OK);
+  unknown->Release();
+  // DEV-1486: a prefetched cache must not let Reconvert replace the selection
+  // with the first candidate; the user chooses in the azooKey candidate UI.
+  EXPECT_EQ(function->Reconvert(&range), S_OK);
+  EXPECT_EQ(*text, L"明日");
+  EXPECT_EQ(range.set_text_calls(), 0);
+  EXPECT_TRUE(service.has_reconversion_ui_for_test());
+  ITfCandidateList* list = nullptr;
+  ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
+  ASSERT_NE(list, nullptr);
+  ULONG count = 0;
+  ASSERT_EQ(list->GetCandidateNum(&count), S_OK);
+  EXPECT_EQ(count, 1u);
+  list->Release();
+  function->Release();
+  service.Deactivate();
+}
+
 TEST(ReconversionFunctionTest, SameSurfaceAtDifferentPositionCannotUseCacheOrStartHostWork) {
   TestContext context;
   auto text = std::make_shared<std::wstring>(L"明日、明日");
@@ -587,12 +619,14 @@ TEST(ReconversionFunctionTest, RightClickCacheMissReturnsOriginalThenShowsDelaye
   ASSERT_TRUE(service.has_reconversion_result_for_test());
   service.process_reconversion_result_for_test();
   ASSERT_TRUE(service.has_reconversion_ui_for_test());
+  // The open azooKey UI owns the Host candidates; the application still sees the original.
   list = nullptr;
   ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
   ASSERT_NE(list, nullptr);
   ASSERT_EQ(list->GetCandidateNum(&count), S_OK);
-  EXPECT_EQ(count, 2u);
+  EXPECT_EQ(count, 1u);
   list->Release();
+  ASSERT_TRUE(service.has_reconversion_ui_for_test());
   KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
   ASSERT_EQ(service.OnKeyDown(&context, VK_DOWN, 0, &eaten), S_OK);

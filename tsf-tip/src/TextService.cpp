@@ -1059,7 +1059,11 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
                 !owner->reconversion_cache_candidates_.empty())
               candidates = owner->reconversion_cache_candidates_;
           }
-          if (!candidates.empty()) {
+          const bool focused = SameComIdentity(context, owner->text_edit_context_);
+          const bool cached = !candidates.empty();
+          // An unfocused context cannot host the azooKey candidate UI, so it
+          // receives the cached list for the application's own UI.
+          if (cached && !focused) {
             auto* verifier = new (std::nothrow) ReconversionFunction(owner->client_id_, {});
             if (!verifier) {
               context->Release();
@@ -1077,20 +1081,25 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
                             match_hr, candidates.size());
             return verified ? S_OK : TF_E_NOCONVERSION;
           }
-          const bool focused = SameComIdentity(context, owner->text_edit_context_);
+          // The focused context selects through the azooKey candidate UI: cached
+          // candidates open it now, otherwise it opens when the Host replies. The
+          // application gets only the original text, so its Reconvert never
+          // replaces the selection with a candidate the user did not choose.
           const HRESULT start_hr =
               secure || !focused ? S_FALSE
                                  : owner->StartSelectionReconversion(context, &surface, range);
           context->Release();
-          std::string_view reason = start_hr == S_OK ? "pending_original" : "start_failed";
+          std::string_view reason = "start_failed";
           if (secure) {
             reason = "secure";
           } else if (!focused) {
             reason = "not_focused_context";
+          } else if (start_hr == S_OK) {
+            reason = cached ? "cached_ui" : "pending_original";
           }
           LogReconversion("provider", reason, start_hr);
           if (start_hr != S_OK) return TF_E_NOCONVERSION;
-          candidates.push_back(surface);
+          candidates.assign(1, surface);
           return S_OK;
         });
     if (!reconversion) return E_OUTOFMEMORY;

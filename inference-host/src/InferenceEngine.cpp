@@ -23,6 +23,24 @@
 namespace azookey::host {
 
 namespace {
+// A surface written only in kana is its own reading. Katakana folds to
+// hiragana; anything else (kanji, ASCII, punctuation) yields empty.
+std::string KanaSurfaceReading(std::string_view surface) {
+  std::string reading;
+  size_t offset = 0;
+  char32_t cp = 0;
+  while (offset < surface.size()) {
+    if (!core::DecodeNextUtf8(surface, offset, cp)) return {};
+    if (cp >= 0x30a1 && cp <= 0x30f6) {
+      cp -= 0x60;
+    } else if (!(cp >= 0x3041 && cp <= 0x3096) && cp != 0x30fc) {
+      return {};
+    }
+    core::AppendUtf8(reading, cp);
+  }
+  return reading;
+}
+
 constexpr const char* kLearningSaveError = "failed to save learning store";
 constexpr const char* kUserDictionaryLoadError = "failed to load user dictionary";
 constexpr const char* kUserDictionaryLockError = "failed to lock user dictionary";
@@ -1085,8 +1103,17 @@ std::string InferenceEngine::ReverseConvert(const std::string& surface, uint64_t
   learning::LookupContext context;
   context.now_epoch_sec = now_epoch_sec;
   context.user_word_default_score = config_.user_word_default_score;
-  const auto entry = dictionaries_.ReverseLookup(surface, context);
-  return entry ? entry->normalized_reading : std::string{};
+  if (const auto entry = dictionaries_.ReverseLookup(surface, context)) {
+    return entry->normalized_reading;
+  }
+  // Static layers are not bundled, so a word the model produced is usually
+  // known only through the commit that learned it.
+  if (store_) {
+    if (auto learned = store_->ReverseLookup(surface, now_epoch_sec); !learned.empty()) {
+      return learned;
+    }
+  }
+  return KanaSurfaceReading(surface);
 }
 
 std::vector<core::Candidate> InferenceEngine::QueryPredictions(

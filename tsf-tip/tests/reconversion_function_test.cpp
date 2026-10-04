@@ -435,6 +435,38 @@ TEST(ReconversionFunctionTest, FunctionProviderUsesOnlyMatchingNonsecureCache) {
   service.Deactivate();
 }
 
+TEST(ReconversionFunctionTest, RightClickReconvertOnPrefetchedCacheOpensCandidateUi) {
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日");
+  TestRange range(&context, text, 0, 2);
+  context.selection = &range;
+  azookey::tsf::TextService service;
+  service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  service.set_text_edit_context_for_test(&context);
+  service.set_reconversion_cache_for_test(&context, L"明日", {L"あした", L"明日"});
+  IUnknown* unknown = nullptr;
+  ASSERT_EQ(service.GetFunction(GUID_NULL, IID_ITfFnReconversion, &unknown), S_OK);
+  ITfFnReconversion* function = nullptr;
+  ASSERT_EQ(unknown->QueryInterface(IID_ITfFnReconversion, reinterpret_cast<void**>(&function)),
+            S_OK);
+  unknown->Release();
+  // DEV-1486: a prefetched cache must not let Reconvert replace the selection
+  // with the first candidate; the user chooses in the azooKey candidate UI.
+  EXPECT_EQ(function->Reconvert(&range), S_OK);
+  EXPECT_EQ(*text, L"明日");
+  EXPECT_EQ(range.set_text_calls(), 0);
+  EXPECT_TRUE(service.has_reconversion_ui_for_test());
+  ITfCandidateList* list = nullptr;
+  ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
+  ASSERT_NE(list, nullptr);
+  ULONG count = 0;
+  ASSERT_EQ(list->GetCandidateNum(&count), S_OK);
+  EXPECT_EQ(count, 1u);
+  list->Release();
+  function->Release();
+  service.Deactivate();
+}
+
 TEST(ReconversionFunctionTest, SameSurfaceAtDifferentPositionCannotUseCacheOrStartHostWork) {
   TestContext context;
   auto text = std::make_shared<std::wstring>(L"明日、明日");
@@ -587,12 +619,14 @@ TEST(ReconversionFunctionTest, RightClickCacheMissReturnsOriginalThenShowsDelaye
   ASSERT_TRUE(service.has_reconversion_result_for_test());
   service.process_reconversion_result_for_test();
   ASSERT_TRUE(service.has_reconversion_ui_for_test());
+  // The open azooKey UI owns the Host candidates; the application still sees the original.
   list = nullptr;
   ASSERT_EQ(function->GetReconversion(&range, &list), S_OK);
   ASSERT_NE(list, nullptr);
   ASSERT_EQ(list->GetCandidateNum(&count), S_OK);
-  EXPECT_EQ(count, 2u);
+  EXPECT_EQ(count, 1u);
   list->Release();
+  ASSERT_TRUE(service.has_reconversion_ui_for_test());
   KeyboardStateGuard keyboard_state;
   BOOL eaten = FALSE;
   ASSERT_EQ(service.OnKeyDown(&context, VK_DOWN, 0, &eaten), S_OK);
@@ -603,6 +637,86 @@ TEST(ReconversionFunctionTest, RightClickCacheMissReturnsOriginalThenShowsDelaye
   EXPECT_EQ(*text, L"あした");
   EXPECT_EQ(range.set_text_calls(), 1);
   function->Release();
+  service.stop_ipc_worker_for_test();
+  service.Deactivate();
+  server.Stop();
+}
+
+// DEV-1486: a Host without a reading for the surface must not leave the convert
+// key armed with an open range; the next press asks the Host again.
+TEST(ReconversionFunctionTest, ConvertKeyWithUnknownReadingReleasesRangeAndRetries) {
+  using namespace azookey::ipc;
+  char* prior_token = nullptr;
+  size_t token_length = 0;
+  ASSERT_EQ(_dupenv_s(&prior_token, &token_length, "AZOOKEY_IPC_HANDSHAKE_TOKEN"), 0);
+  const std::string original_token = prior_token ? prior_token : "";
+  std::free(prior_token);
+  struct TokenRestore {
+    std::string value;
+    ~TokenRestore() { _putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", value.c_str()); }
+  } restore{original_token};
+  ASSERT_EQ(_putenv_s("AZOOKEY_IPC_HANDSHAKE_TOKEN", "reconversion-test-token"), 0);
+
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-reconversion-no-reading-" + std::to_string(GetCurrentProcessId());
+  std::atomic<int> reverse_count{0};
+  std::atomic<int> query_count{0};
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    Envelope response = request;
+    if (request.type == MessageType::Handshake) {
+      HandshakeResponse payload;
+      payload.host_version = "test-host";
+      payload.accepted = true;
+      response.payload_json = BuildHandshakeResponse(payload);
+      return response;
+    }
+    if (request.type == MessageType::ReverseConvert) {
+      ++reverse_count;
+      response.payload_json = BuildReverseConvertResponse({});
+      return response;
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      ++query_count;
+      response.payload_json = BuildQueryCandidatesResponse({});
+      return response;
+    }
+    return std::nullopt;
+  }));
+
+  TestContext context;
+  auto text = std::make_shared<std::wstring>(L"明日");
+  TestRange range(&context, text, 0, 2);
+  context.selection = &range;
+  azookey::tsf::TextService service;
+  service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  service.set_text_edit_context_for_test(&context);
+  service.set_ipc_pipe_name_for_test(pipe_name);
+  service.start_ipc_worker_for_test();
+  KeyboardStateGuard keyboard_state;
+  const auto press_convert_and_wait = [&] {
+    BOOL eaten = FALSE;
+    ASSERT_EQ(service.OnKeyDown(&context, VK_CONVERT, 0, &eaten), S_OK);
+    EXPECT_TRUE(eaten);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline &&
+           !service.has_reconversion_result_for_test())
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_TRUE(service.has_reconversion_result_for_test());
+    service.process_reconversion_result_for_test();
+  };
+
+  press_convert_and_wait();
+  EXPECT_EQ(reverse_count.load(), 1);
+  EXPECT_EQ(query_count.load(), 0);
+  EXPECT_FALSE(service.has_reconversion_ui_for_test());
+
+  press_convert_and_wait();
+  EXPECT_EQ(reverse_count.load(), 2);
+  EXPECT_EQ(query_count.load(), 0);
+  EXPECT_FALSE(service.has_reconversion_ui_for_test());
+  EXPECT_EQ(*text, L"明日");
+  EXPECT_EQ(range.set_text_calls(), 0);
   service.stop_ipc_worker_for_test();
   service.Deactivate();
   server.Stop();

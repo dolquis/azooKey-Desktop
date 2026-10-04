@@ -317,6 +317,45 @@ TEST_F(DispatcherTest, ReverseConvertReturnsKnownReadingAndUnknownSignal) {
   EXPECT_DOUBLE_EQ(parsed_unknown->confidence, 0.0);
 }
 
+// DEV-1486: releases bundle no static layers, so a model-produced surface is
+// reverse-converted from the commit that learned it, and kana is its own reading.
+TEST_F(DispatcherTest, ReverseConvertFallsBackToLearnedCommitAndKanaSurface) {
+  EnableEventPrivacy(dispatcher);
+  const auto reverse = [&](uint64_t id, const std::string& surface) {
+    const auto response = dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::ReverseConvert, ipc::BuildReverseConvertRequest({surface})));
+    EXPECT_TRUE(response);
+    return response ? ipc::ParseReverseConvertResponse(response->payload_json) : std::nullopt;
+  };
+  const auto before = reverse(110, "明日");
+  ASSERT_TRUE(before);
+  EXPECT_TRUE(before->reading.empty());
+
+  ipc::CommitObservationRequest commit;
+  commit.secure = false;
+  commit.learning_allowed = true;
+  commit.reading = "あした";
+  commit.chosen = {"明日", "あした", 1.0, "model"};
+  commit.timestamp_ms = 1700000000000ULL;
+  ASSERT_TRUE(dispatcher.Dispatch(MakeReq(111, ipc::MessageType::CommitObservation,
+                                          ipc::BuildCommitObservationRequest(commit))));
+  const auto learned = reverse(112, "明日");
+  ASSERT_TRUE(learned);
+  EXPECT_EQ(learned->reading, "あした");
+  EXPECT_DOUBLE_EQ(learned->confidence, 1.0);
+
+  const auto katakana = reverse(113, "アシター");
+  ASSERT_TRUE(katakana);
+  EXPECT_EQ(katakana->reading, "あしたー");
+  const auto hiragana = reverse(114, "あした");
+  ASSERT_TRUE(hiragana);
+  EXPECT_EQ(hiragana->reading, "あした");
+  const auto mixed = reverse(115, "Ashita");
+  ASSERT_TRUE(mixed);
+  EXPECT_TRUE(mixed->reading.empty());
+  EXPECT_DOUBLE_EQ(mixed->confidence, 0.0);
+}
+
 TEST_F(DispatcherTest, Handshake) {
   ipc::HandshakeRequest req;
   req.tip_version = "0.1.0";

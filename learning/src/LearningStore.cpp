@@ -331,6 +331,23 @@ PrefixLookupResult LearningStore::LookupPrefix(const std::string& reading_prefix
   return result;
 }
 
+std::string LearningStore::ReverseLookup(const std::string& surface, uint64_t now_epoch_sec) const {
+  std::string best_reading;
+  double best_score = 0.0;
+  if (surface.empty()) return best_reading;
+  for (const auto& [reading, surfaces] : table_) {
+    const auto it = surfaces.find(surface);
+    if (it == surfaces.end()) continue;
+    // Readings iterate in ascending order, so ties keep the smallest one.
+    const double score = DecayedWeight(it->second, now_epoch_sec);
+    if (score > best_score) {
+      best_score = score;
+      best_reading = reading;
+    }
+  }
+  return best_reading;
+}
+
 void LearningStore::Observe(const std::string& reading, const std::string& surface, double alpha,
                             uint64_t now_epoch_sec) {
   auto& rec = table_[reading][surface];

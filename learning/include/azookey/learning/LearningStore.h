@@ -53,6 +53,9 @@ class LearningStore {
   std::vector<LearningEntry> All() const;
   PrefixLookupResult LookupPrefix(const std::string& reading_prefix, size_t limit, double min_score,
                                   uint64_t now_epoch_sec) const;
+  // Returns the reading most strongly learned for `surface`, or empty when no
+  // record with a positive decayed weight exists. Scans every record.
+  std::string ReverseLookup(const std::string& surface, uint64_t now_epoch_sec) const;
 
   void Observe(const std::string& reading, const std::string& surface, double alpha,
                uint64_t now_epoch_sec);

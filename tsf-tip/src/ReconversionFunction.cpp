@@ -14,6 +14,19 @@
 namespace azookey::tsf {
 namespace {
 
+// Records why a reconversion step stopped. Never logs the selected text.
+void LogStage(std::string_view stage, std::string_view result, HRESULT hr = S_OK,
+              uint64_t count = 0) noexcept {
+  try {
+    TipRuntimeLog(TipRuntimeLogger(), logging::RuntimeLogLevel::Info, "reconversion",
+                  {{"stage", logging::RuntimeLogSafeText(std::string(stage))},
+                   {"result", logging::RuntimeLogSafeText(std::string(result))},
+                   {"hr", static_cast<int64_t>(hr)},
+                   {"count", count}});
+  } catch (...) {
+  }
+}
+
 template <typename Interface>
 class RefCounted : public Interface {
  public:
@@ -386,6 +399,8 @@ STDMETHODIMP ReconversionFunction::QueryRange(ITfRange* range, ITfRange** new_ra
       *convertible = TRUE;
       return S_OK;
     });
+    LogStage("query_range", FAILED(hr) ? "error" : (*convertible ? "convertible" : "no_japanese"),
+             hr);
     if (FAILED(hr) || !*convertible) {
       if (result) result->Release();
       return hr;
@@ -412,15 +427,25 @@ STDMETHODIMP ReconversionFunction::GetReconversion(ITfRange* range, ITfCandidate
   try {
     std::wstring surface;
     HRESULT hr = ReadRangeSurface(range, client_id_, surface);
-    if (FAILED(hr)) return hr;
-    if (surface.empty() || !provider_) return TF_E_NOCONVERSION;
+    if (FAILED(hr)) {
+      LogStage("get_reconversion", "read_failed", hr);
+      return hr;
+    }
+    if (surface.empty() || !provider_) {
+      LogStage("get_reconversion", surface.empty() ? "empty_surface" : "no_provider");
+      return TF_E_NOCONVERSION;
+    }
     std::vector<std::wstring> values;
     hr = provider_(range, surface, values);
-    if (FAILED(hr)) return hr;
-    if (values.empty()) return TF_E_NOCONVERSION;
+    if (FAILED(hr) || values.empty()) {
+      LogStage("get_reconversion", FAILED(hr) ? "provider_failed" : "no_candidates", hr);
+      return FAILED(hr) ? hr : TF_E_NOCONVERSION;
+    }
+    const uint64_t count = values.size();
     auto snapshot = std::make_shared<const std::vector<std::wstring>>(std::move(values));
     *candidates = new (std::nothrow)
         CandidateList(std::move(snapshot), range, client_id_, std::move(surface));
+    LogStage("get_reconversion", *candidates ? "ok" : "out_of_memory", S_OK, count);
     return *candidates ? S_OK : E_OUTOFMEMORY;
   } catch (const std::bad_alloc&) {
     LogComBoundaryException("ReconversionFunction::GetReconversion", E_OUTOFMEMORY);
@@ -436,13 +461,25 @@ STDMETHODIMP ReconversionFunction::Reconvert(ITfRange* range) {
   try {
     std::wstring surface;
     HRESULT hr = ReadRangeSurface(range, client_id_, surface);
-    if (FAILED(hr)) return hr;
-    if (surface.empty() || !provider_) return TF_E_NOCONVERSION;
+    if (FAILED(hr)) {
+      LogStage("reconvert", "read_failed", hr);
+      return hr;
+    }
+    if (surface.empty() || !provider_) {
+      LogStage("reconvert", surface.empty() ? "empty_surface" : "no_provider");
+      return TF_E_NOCONVERSION;
+    }
     std::vector<std::wstring> candidates;
     hr = provider_(range, surface, candidates);
-    if (FAILED(hr)) return hr;
-    if (candidates.empty()) return TF_E_NOCONVERSION;
-    return ReplaceCandidate(range, client_id_, surface, candidates[0]);
+    if (FAILED(hr) || candidates.empty()) {
+      LogStage("reconvert", FAILED(hr) ? "provider_failed" : "no_candidates", hr);
+      return FAILED(hr) ? hr : TF_E_NOCONVERSION;
+    }
+    hr = ReplaceCandidate(range, client_id_, surface, candidates[0]);
+    LogStage("reconvert",
+             FAILED(hr) ? "replace_failed" : (candidates[0] == surface ? "unchanged" : "replaced"),
+             hr, candidates.size());
+    return hr;
   } catch (const std::bad_alloc&) {
     LogComBoundaryException("ReconversionFunction::Reconvert", E_OUTOFMEMORY);
     return E_OUTOFMEMORY;
@@ -481,7 +518,11 @@ HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** r
           selection = selected.range;
           return S_OK;
         });
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr)) {
+      LogStage("capture_selection", hr == TF_E_NOCONVERSION ? "no_selection" : "session_failed",
+               hr);
+      return hr;
+    }
     BOOL convertible = FALSE;
     const HRESULT query_hr = QueryRange(selection, range, &convertible);
     selection->Release();
@@ -492,6 +533,7 @@ HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** r
       bool match = false;
       const HRESULT match_hr = RangesMatch(*range, expected_range, client_id_, match);
       if (FAILED(match_hr) || !match) {
+        LogStage("capture_selection", "range_mismatch", match_hr);
         (*range)->Release();
         *range = nullptr;
         return FAILED(match_hr) ? match_hr : TF_E_NOCONVERSION;
@@ -499,10 +541,12 @@ HRESULT ReconversionFunction::CaptureSelection(ITfContext* context, ITfRange** r
     }
     const HRESULT read_hr = ReadRangeSurface(*range, client_id_, surface);
     if (FAILED(read_hr) || surface.empty()) {
+      LogStage("capture_selection", "read_failed", read_hr);
       (*range)->Release();
       *range = nullptr;
       return FAILED(read_hr) ? read_hr : TF_E_NOCONVERSION;
     }
+    LogStage("capture_selection", "ok", S_OK, surface.size());
     return S_OK;
   } catch (const std::bad_alloc&) {
     LogComBoundaryException("ReconversionFunction::CaptureSelection", E_OUTOFMEMORY);

@@ -121,7 +121,7 @@ Linear が持つ。
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source)`。
   応答前に `max_candidates` で件数を切り詰める。
 - ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
-  Host は辞書に表層形が完全一致するエントリから読みを逆引きし、未知の表層形では空の読みと信頼度 0 を返す。
+  逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。
 - ✅ `QueryBatchConversion` — 要求 `(reading, raw_romaji, mode, auto_punctuation, max_candidates)` /
   応答 `(segments[], full_surface, partial, canceled)`。各 segment は
   `(reading, candidates[])`。`QueryCandidates` と同じく `RequestScheduler` で

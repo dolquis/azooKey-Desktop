@@ -102,6 +102,20 @@ void RuntimeLog(azookey::logging::RuntimeLogLevel level, std::string_view event,
   azookey::tsf::TipRuntimeLog(TipRuntimeLogger(), level, event, fields, privacy);
 }
 
+// Records why a reconversion step stopped or what it produced. The selected
+// text and the candidates are never logged.
+void LogReconversion(std::string_view stage, std::string_view result, HRESULT hr = S_OK,
+                     uint64_t count = 0) noexcept {
+  try {
+    RuntimeLog(azookey::logging::RuntimeLogLevel::Info, "reconversion",
+               {{"stage", SafeLogText(std::string(stage))},
+                {"result", SafeLogText(std::string(result))},
+                {"hr", static_cast<int64_t>(hr)},
+                {"count", count}});
+  } catch (...) {
+  }
+}
+
 std::string NewTraceIdNoThrow() noexcept {
   try {
     return azookey::ipc::GenerateTraceId();
@@ -1045,7 +1059,11 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
                 !owner->reconversion_cache_candidates_.empty())
               candidates = owner->reconversion_cache_candidates_;
           }
-          if (!candidates.empty()) {
+          const bool focused = SameComIdentity(context, owner->text_edit_context_);
+          const bool cached = !candidates.empty();
+          // An unfocused context cannot host the azooKey candidate UI, so it
+          // receives the cached list for the application's own UI.
+          if (cached && !focused) {
             auto* verifier = new (std::nothrow) ReconversionFunction(owner->client_id_, {});
             if (!verifier) {
               context->Release();
@@ -1058,18 +1076,34 @@ STDMETHODIMP TextService::GetFunction(REFGUID group, REFIID iid, IUnknown** func
             verifier->Release();
             if (selected) selected->Release();
             context->Release();
-            return match_hr == S_OK && selected_surface == surface ? S_OK : TF_E_NOCONVERSION;
+            const bool verified = match_hr == S_OK && selected_surface == surface;
+            LogReconversion("provider", verified ? "cache_hit" : "cache_selection_changed",
+                            match_hr, candidates.size());
+            return verified ? S_OK : TF_E_NOCONVERSION;
           }
-          const bool focused = SameComIdentity(context, owner->text_edit_context_);
+          // The focused context selects through the azooKey candidate UI: cached
+          // candidates open it now, otherwise it opens when the Host replies. The
+          // application gets only the original text, so its Reconvert never
+          // replaces the selection with a candidate the user did not choose.
           const HRESULT start_hr =
               secure || !focused ? S_FALSE
                                  : owner->StartSelectionReconversion(context, &surface, range);
           context->Release();
+          std::string_view reason = "start_failed";
+          if (secure) {
+            reason = "secure";
+          } else if (!focused) {
+            reason = "not_focused_context";
+          } else if (start_hr == S_OK) {
+            reason = cached ? "cached_ui" : "pending_original";
+          }
+          LogReconversion("provider", reason, start_hr);
           if (start_hr != S_OK) return TF_E_NOCONVERSION;
-          candidates.push_back(surface);
+          candidates.assign(1, surface);
           return S_OK;
         });
     if (!reconversion) return E_OUTOFMEMORY;
+    LogReconversion("get_function", "ok");
     const HRESULT hr = reconversion->QueryInterface(iid, reinterpret_cast<void**>(function));
     reconversion->Release();
     return hr;
@@ -2141,6 +2175,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
     if (wParam == VK_CONVERT && modifiers == 0 && !composition_ && preedit_kana_.empty() &&
         context) {
       const HRESULT reconversion_hr = StartSelectionReconversion(context);
+      LogReconversion("convert_key", reconversion_hr == S_OK ? "started" : "not_started",
+                      reconversion_hr);
       if (reconversion_hr == S_OK) *eaten = TRUE;
       return reconversion_hr == E_OUTOFMEMORY ? reconversion_hr : S_OK;
     }
@@ -4857,7 +4893,10 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
   ++reconversion_generation_;
   // A displayed list still refers to the old range. A later Enter must never
   // replace text at a location the user has moved away from.
-  if (reconversion_range_) ClearReconversionState();
+  if (reconversion_range_) {
+    LogReconversion("selection_changed", "discard_open_range");
+    ClearReconversionState();
+  }
   {
     std::lock_guard<std::mutex> lock(candidates_mtx_);
     reconversion_cache_surface_.clear();
@@ -4881,10 +4920,15 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
 bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id) {
   AZOOKEY_ASSERT_IPC_THREAD();
   using namespace azookey::ipc;
-  if (request.generation != reconversion_generation_.load()) return true;
+  if (request.generation != reconversion_generation_.load()) {
+    LogReconversion("ipc", "stale_before_send");
+    return true;
+  }
   std::vector<std::wstring> candidates;
   bool connected = true;
   bool responded = false;
+  // The last step reached; logged once so a silent empty result has a reason.
+  std::string_view outcome = "candidates";
   Envelope reverse;
   reverse.version = 1;
   reverse.request_id = next_id++;
@@ -4896,16 +4940,24 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
   }
   if (!ipc_client_.Send(reverse)) {
     connected = false;
+    outcome = "reverse_send_failed";
   } else {
     std::optional<Envelope> reply;
     const bool got_reply = WaitForIpcResponseOrStop(kReconversionResponseTimeoutMs,
                                                     reverse.request_id, reverse.type, &reply);
     responded |= got_reply;
+    const auto payload =
+        got_reply ? ParseReverseConvertResponse(reply->payload_json) : std::nullopt;
     if (!got_reply) {
       connected = ipc_client_.IsConnected();
-    } else if (const auto payload = ParseReverseConvertResponse(reply->payload_json);
-               payload && !payload->reading.empty() &&
-               request.generation == reconversion_generation_.load()) {
+      outcome = "reverse_timeout";
+    } else if (!payload) {
+      outcome = "reverse_invalid";
+    } else if (payload->reading.empty()) {
+      outcome = "no_reading";
+    } else if (request.generation != reconversion_generation_.load()) {
+      outcome = "stale_after_reverse";
+    } else {
       QueryCandidatesRequest query;
       query.reading = payload->reading;
       query.max_candidates = max_candidates_.load(std::memory_order_relaxed);
@@ -4925,6 +4977,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
       }
       if (!ipc_client_.Send(qenv)) {
         connected = false;
+        outcome = "query_send_failed";
       } else {
         std::optional<Envelope> qres;
         const bool got_candidates = WaitForIpcResponseOrStop(kReconversionResponseTimeoutMs,
@@ -4932,6 +4985,7 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
         responded |= got_candidates;
         if (!got_candidates) {
           connected = ipc_client_.IsConnected();
+          outcome = "query_timeout";
           if (connected) {
             // An idle timeout leaves the pipe usable. Cancel the slow query;
             // any reply racing with Cancel is ignored by the next receive loop.
@@ -4953,6 +5007,8 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
                 std::find(candidates.begin(), candidates.end(), surface) == candidates.end())
               candidates.push_back(surface);
           }
+        } else {
+          outcome = "query_invalid";
         }
       }
     }
@@ -4963,6 +5019,8 @@ bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64
   } else if (responded) {
     NoteHostResponded();
   }
+  if (request.generation != reconversion_generation_.load()) outcome = "stale_result";
+  LogReconversion("ipc", outcome, S_OK, candidates.size());
   if (request.generation == reconversion_generation_.load()) {
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
@@ -6112,31 +6170,44 @@ void TextService::PrefetchSelectedReconversion() {
     ipc_reconversion_request_ = ReconversionRequest{generation, utf8, CurrentActionTraceId()};
   }
   ipc_cv_.notify_one();
+  LogReconversion("prefetch", "requested");
 }
 
 HRESULT TextService::StartSelectionReconversion(ITfContext* context,
                                                 const std::wstring* expected_surface,
                                                 ITfRange* expected_range) {
-  if (!context || composition_ || !preedit_kana_.empty()) return S_FALSE;
-  if (ResolvePrivacy(context, false).secure) return S_FALSE;
+  if (!context || composition_ || !preedit_kana_.empty()) {
+    LogReconversion("start", context ? "composing" : "no_context");
+    return S_FALSE;
+  }
+  if (ResolvePrivacy(context, false).secure) {
+    LogReconversion("start", "secure");
+    return S_FALSE;
+  }
   auto* function = new (std::nothrow) ReconversionFunction(client_id_, {});
   if (!function) return E_OUTOFMEMORY;
   ITfRange* range = nullptr;
   std::wstring surface;
   const HRESULT hr = function->CaptureSelection(context, &range, surface, expected_range);
   function->Release();
-  if (FAILED(hr)) return hr == TF_E_NOCONVERSION ? S_FALSE : hr;
+  if (FAILED(hr)) {
+    LogReconversion("start", "capture_failed", hr);
+    return hr == TF_E_NOCONVERSION ? S_FALSE : hr;
+  }
   if (expected_surface && surface != *expected_surface) {
+    LogReconversion("start", "surface_mismatch");
     range->Release();
     return S_FALSE;
   }
   const std::string utf8 = WideToUtf8(surface);
   if (utf8.empty()) {
+    LogReconversion("start", "encode_failed");
     range->Release();
     return S_FALSE;
   }
   if (reconversion_range_ && surface == reconversion_surface_ &&
       SameComIdentity(context, reconversion_cache_context_)) {
+    LogReconversion("start", "already_open");
     range->Release();
     return S_OK;
   }
@@ -6155,6 +6226,7 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
                               !reconversion_range_ && surface == reconversion_prefetch_surface_ &&
                               SameComIdentity(context, reconversion_cache_context_);
   if (adopt_prefetch) {
+    LogReconversion("start", "adopt_prefetch");
     reconversion_range_ = range;
     reconversion_surface_ = std::move(surface);
     return S_OK;
@@ -6166,6 +6238,7 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
   reconversion_cache_context_ = context;
   reconversion_cache_context_->AddRef();
   if (!cached_candidates.empty()) {
+    LogReconversion("start", "cached", S_OK, cached_candidates.size());
     {
       std::lock_guard<std::mutex> lock(candidates_mtx_);
       reconversion_result_ = ReconversionResult{reconversion_generation_, reconversion_surface_,
@@ -6180,6 +6253,7 @@ HRESULT TextService::StartSelectionReconversion(ITfContext* context,
         ReconversionRequest{reconversion_generation_, utf8, CurrentActionTraceId()};
   }
   ipc_cv_.notify_one();
+  LogReconversion("start", "requested");
   return S_OK;
 }
 
@@ -6204,10 +6278,21 @@ void TextService::ShowReconversionResult() {
   // A result without an open range still completes the prefetch.
   if (result && result->generation == reconversion_generation_)
     reconversion_prefetch_surface_.clear();
-  if (!result || !reconversion_range_ || result->generation != reconversion_generation_ ||
-      result->surface != reconversion_surface_)
+  if (!result) return;
+  if (!reconversion_range_ || result->generation != reconversion_generation_ ||
+      result->surface != reconversion_surface_) {
+    // Without an open range this is a completed prefetch, cached for a later request.
+    std::string_view reason = "surface_mismatch";
+    if (!reconversion_range_) {
+      reason = "prefetch_cached";
+    } else if (result->generation != reconversion_generation_) {
+      reason = "stale_generation";
+    }
+    LogReconversion("show", reason, S_OK, result->candidates.size());
     return;
+  }
   if (result->candidates.empty()) {
+    LogReconversion("show", "empty_candidates");
     ClearReconversionState();
     return;
   }
@@ -6226,18 +6311,22 @@ void TextService::ShowReconversionResult() {
   const HRESULT hr = function->GetReconversion(reconversion_range_, &list);
   function->Release();
   if (FAILED(hr) || !list) {
+    LogReconversion("show", "list_failed", hr);
     ClearReconversionState();
     return;
   }
   std::vector<CandidateViewItem> items;
   items.reserve(result->candidates.size());
   for (const auto& value : result->candidates) items.push_back({value, L""});
-  if (FAILED(candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0))) {
+  const HRESULT ui_hr = candidate_ui_.BeginUI(thread_mgr_, CandidateAnchorPoint(), items, 0);
+  if (FAILED(ui_hr)) {
+    LogReconversion("show", "ui_failed", ui_hr);
     list->Release();
     ClearReconversionState();
     return;
   }
   reconversion_list_ = list;
+  LogReconversion("show", "shown", S_OK, items.size());
 }
 
 POINT TextService::CandidateAnchorPoint() {

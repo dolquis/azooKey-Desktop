@@ -357,6 +357,21 @@ TEST(LearningStoreTest, LookupPrefixSortsAndCountsOnlyTheMatchingRange) {
   EXPECT_EQ(result.scanned_records, 4u);
 }
 
+TEST(LearningStoreTest, ReverseLookupReturnsStrongestPositiveReadingForSurface) {
+  constexpr uint64_t kNow = 2'000'000'000;
+  azookey::learning::LearningStore store("unused.tsv", &azookey::learning::test::Crypto());
+  store.Observe("みょうにち", "明日", 1.0, kNow);
+  store.Observe("あした", "明日", 3.0, kNow);
+  store.Observe("あす", "明日", 3.0, kNow);
+  store.Observe("きょう", "今日", 0.0, kNow);
+
+  // Equal weights keep the reading that sorts first.
+  EXPECT_EQ(store.ReverseLookup("明日", kNow), "あした");
+  EXPECT_TRUE(store.ReverseLookup("今日", kNow).empty());
+  EXPECT_TRUE(store.ReverseLookup("未学習", kNow).empty());
+  EXPECT_TRUE(store.ReverseLookup("", kNow).empty());
+}
+
 TEST(LearningStoreTest, LookupPrefixAvoidsFullScanAndSupportsPartialUtf8Bytes) {
   constexpr uint64_t kNow = 2'000'000'000;
   azookey::learning::LearningStore store("unused.tsv", &azookey::learning::test::Crypto());

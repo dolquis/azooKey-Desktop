@@ -650,6 +650,13 @@ OFF のまま）。
 
 ### 4.3 追加チェック
 
+- 配布バイナリの app-local MSVC runtime — `windows-llama-build` は Release / CPU / llama.cpp
+  構成で TIP、Host、self-contained 設定アプリをビルドし、MSVC 開発者環境から
+  `scripts/check-app-local-runtime.ps1` を実行する。`Package.wxs` の個別ファイルと設定アプリの
+  harvest payload を照合先にして、MSI に入らないランタイムの import はジョブを失敗させる。
+  build 対象の PR、`main` push、手動 dispatch で実行し、結果を `runtime-llama.log` として
+  build log artifact に残す。同梱契約は `sideload-packaging-spec.md` §4.1 が正典であり、
+  Release workflow の MSI 生成前の検査も維持する。
 - Agent 指示予算 — root `AGENTS.md` の UTF-8 byte size は 12 KiB を目標、
   16 KiB を上限とする。目標超過は GitHub Actions annotation で可視化し、
   上限超過は非 0 終了で PR を停止する。機械利用時の `--json` は単一行を保つ。

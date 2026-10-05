@@ -1636,7 +1636,10 @@ property で取得元を渡す。いずれも TIP と Host と同じ `%ProgramFi
 import を `dumpbin /dependents`（delay load を含む）で読み、MSVC ランタイムの命名規則
 （`msvcp` / `msvcr` / `vcruntime` / `vcomp` / `concrt` / `vccorlib` で始まり、
 `msvcp140_atomic_wait` のような非数値の接尾辞も含む）に一致する名前が、MSI の同梱一覧に
-あるかを検査する。release workflow は MSI をビルドする前にこれを実行する。
+あるかを検査する。Release workflow は MSI をビルドする前にこれを実行する。
+Build workflow の `windows-llama-build` も、Release / CPU / llama.cpp 構成の TIP・Host・
+self-contained 設定アプリに同じ検査を実行する（実行条件は `dev-infrastructure-spec.md` §4.3）。
+本節は同 spec の app-local MSVC runtime 検査から参照される。
 
 照合先は取得元の redist ディレクトリではなく MSI の同梱一覧とする。redist
 ディレクトリは `msvcp140_1.dll` や `concrt140.dll` のように MSI が同梱しないファイルも
@@ -1740,6 +1743,31 @@ attestation はリポジトリに残る公開記録である。`workflow_dispatc
 （§2.3）で attestation を作ると、配布していないビルドに対する証明が残り、検証者に
 誤解を与える。このため attest ステップは `github.ref_type == 'tag'` で限定する。
 SBOM 生成自体は dry-run でも実行し、ステップの破損を早期に検出する。
+
+#### タグ release の draft と asset の確認
+
+タグの選定・push、`RELEASE_ENABLED` の有効化、Release の公開判断は人間が行う。
+エージェントは run と draft Release の読み取り、asset の照合、検証メモの作成を補助する。
+branch を指定した `workflow_dispatch` は MSI と SBOM の生成確認に使える。
+tag ref では attestation と draft 添付も実行されるため、dry-run には branch を指定する。
+
+1. 人間が選んだ `vMAJOR.MINOR.PATCH` タグに対する Release run を開く。
+   `RELEASE_ENABLED` が文字列 `true` であり、`release` job が skip されず成功したことを確認する。
+   `Attest build provenance`、`Attest SBOM`、`Upload Release asset (draft)` の実行結果も確認する。
+   失敗時は job 名、step 名、該当ログを検証メモに残す。
+2. 同じタグの Release が draft であることを確認する。添付ファイルは
+   `azooKey-<MAJOR.MINOR.PATCH>-x64.msi` と `azooKey.spdx.json` の 2 点とする。
+   `gh release view <tag> --repo dolquis/azooKey-Desktop --json tagName,isDraft,assets,url`
+   でもタグ、draft 状態、asset 名とバイト数を読み取れる。
+3. run summary の `Release assets before upload` 表と、Release asset の名前・バイト数を照合する。
+   ダウンロードした各 asset の SHA256 も同じ表と照合する。空ファイル、追加・欠落、
+   別タグの MSI、サイズ・ハッシュの不一致は確認失敗として扱う。
+   添付は `softprops/action-gh-release` が同じ job のファイルを直接読む経路であり、
+   `actions/download-artifact` / `actions/upload-artifact` による受け渡しはこの workflow にはない。
+
+検証メモは Linear の該当課題へ、タグ名・commit SHA・run URL・draft Release URL、
+job と上記 step の結果、各 asset の名前・バイト数・SHA256 と照合結果、人間の判断を残す。
+branch dry-run の成功は、タグ時の attestation・draft 作成・asset 添付の確認を代替しない。
 
 ## 5. WinGet マニフェスト（M32）
 

@@ -687,11 +687,23 @@ jobs:
           cmake -S . -B build/windows-llama -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=ON -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_FETCH_LLAMA_CPP=ON "-DAZOOKEY_ZENZAI_TEST_MODEL=$cmakeModelPath" 2>&1 | Tee-Object -FilePath configure-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build host tests and Zenzai bench with llama.cpp
+      - name: Build shipped binaries, host tests and Zenzai bench with llama.cpp
         shell: pwsh
         run: |
-          cmake --build build/windows-llama --target host_engine_tests azookey_zenzai_bench azookey_nll_bench --parallel 2 2>&1 | Tee-Object -FilePath build-llama.log
+          cmake --build build/windows-llama --target azookey_tsf_tip azookey_inference_host azookey_settings host_engine_tests azookey_zenzai_bench azookey_nll_bench --parallel 2 2>&1 | Tee-Object -FilePath build-llama.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify the MSI ships every imported MSVC runtime
+        shell: pwsh
+        run: |
+          $settingsPayload = "${{ github.workspace }}\build\windows-llama\settings-app\Release"
+          ./scripts/check-app-local-runtime.ps1 `
+            -BinaryPath `
+              "${{ github.workspace }}\build\windows-llama\tsf-tip\azookey_tsf_tip.dll", `
+              "${{ github.workspace }}\build\windows-llama\inference-host\azookey_inference_host.exe", `
+              "$settingsPayload\azookey_settings.exe" `
+            -PackagePath "${{ github.workspace }}\pkg\msi\Package.wxs" `
+            -PayloadDirectory "$settingsPayload" 2>&1 | Tee-Object -FilePath runtime-llama.log
 
       - name: Run pinned real-model smoke via CTest
         shell: pwsh
@@ -734,6 +746,7 @@ jobs:
           path: |
             configure-llama.log
             build-llama.log
+            runtime-llama.log
             test-llama.log
           if-no-files-found: ignore
 

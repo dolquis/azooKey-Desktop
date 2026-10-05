@@ -2044,13 +2044,14 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
   失敗すると `DegradedModel`、`DegradedModel` でパス付きのロードを始めると `RecoveringModel`、
   そのロードが成功して `model_loaded` が真になると `Healthy`、失敗すると `DegradedModel` へ戻る。
   別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
-- 推論の失敗と deadline 超過は、単発でも連続でも状態を変えない（model 系の対象外）。
-  ロード済みモデルの推論が deadline（§8.5.2 の Heavy inference）を超えた要求は、その時点の
-  best-so-far beam があれば Zenzai の候補として返し、劣化として扱わない。例外・空生成・
-  best-so-far の無い deadline 超過で失敗した要求だけを SimpleConverter の候補へ落とす
-  （`ZenzaiModelConverter` の fallback。`docs/zenzai-inference-spec.md` §6.4 / §9.2.2）。
-  次の要求は再び Zenzai で処理する。状態機械に載せない理由は次のとおり。
-  - deadline 超過の多くは best-so-far を返す正常な打ち切りであり、回数を数えても
+- 推論の失敗と打ち切りは、単発でも連続でも Host の状態機械を変えない（model 系の対象外）。
+  ロード済みモデルの推論が 1 変換ハード予算（`docs/zenzai-inference-spec.md` §8.2 の 600ms。
+  上限は §8.5.2 の Heavy inference）を超えた要求は、その時点の best-so-far beam があれば
+  Zenzai の候補として返し、劣化として扱わない。例外・空生成・best-so-far の無い打ち切りで
+  失敗した要求だけを SimpleConverter の候補へ落とす（`ZenzaiModelConverter` の fallback。
+  同 §6.4 / §9.2.2）。次の要求は再び Zenzai で処理する。IPC の deadline 超過は transport 系
+  （§8.3 の劣化判定）が扱い、本項の対象ではない。状態機械に載せない理由は次のとおり。
+  - 打ち切りの多くは best-so-far を返す正常な打ち切りであり、回数を数えても
     品質の低下と対応しない。
   - `degraded_model` の文言（§8.5.4）は Zenzai を使えない状態を示し、[再試行] はモデルの
     再ロードである。モデルが動いていて遅いだけの状態には文言も対処も合わない。
@@ -2058,9 +2059,9 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
     足すと、突入元ごとに退出条件を対応させる規則が崩れる。
 
   推論の hard failure は `model_runtime_error_` を通じて `Health.status=degraded` と
-  `last_error` に出る（次の成功変換で消える）。best-so-far を返した deadline 超過は
-  どちらにも出ず、頻度は M51 の trace の `model_inference` の所要時間（§7.7.2）からだけ
-  観測できる。`fallback_state` の導出（下記）は状態機械の状態と設定だけから決まるため、
+  `last_error` に出る（次の成功変換で消える）。best-so-far を返した打ち切りは
+  `Health` にも `QueryDiagnostics` にも出ず、頻度は所要時間（M51 の trace の
+  `model_inference`（§7.7.2）、ETW の Converter phase）から推定する。`fallback_state` の導出（下記）は状態機械の状態と設定だけから決まるため、
   推論の失敗で `fallback_state` と状態機械が食い違うことはない。推論の遅延を利用者へ
   示す必要が生じた場合は、本項への状態や行の追加として新規課題で扱い、本項の判断を
   暗黙に覆さない。
@@ -2264,11 +2265,11 @@ karukan は `max_latency_ms` を超えたら main（90M）から light（26M）�
 ためである。ParallelBeam も同じ理由で採らない。
 
 その上で、この機構が解こうとしている問題、すなわち「遅いときは軽い経路へ落として応答を
-返す」ことは、**M47 の要求単位の fallback が担う**。§8.5.1 のとおり、推論が deadline を
-超えた要求は、best-so-far beam があればそれを返し、無ければその要求だけを SimpleConverter の
-候補へ落とす。いずれの場合も状態機械は遷移させない。
-この deadline は §8.5.2 の Heavy inference 800ms であり、これが karukan の
-`max_latency_ms` に対応する。落ちる先は軽量モデルではなく、辞書 + 学習 +
+返す」ことは、**M47 の要求単位の fallback が担う**。§8.5.1 のとおり、推論が 1 変換
+ハード予算を超えた要求は、best-so-far beam があればそれを返し、無ければその要求だけを
+SimpleConverter の候補へ落とす。いずれの場合も状態機械は遷移させない。
+この予算は `docs/zenzai-inference-spec.md` §8.2 の 600ms（上限は §8.5.2 の Heavy inference
+800ms）であり、これが karukan の `max_latency_ms` に対応する。落ちる先は軽量モデルではなく、辞書 + 学習 +
 SimpleConverter の経路であり、モデルをもう 1 つ常駐させずに同じ目的を果たす。backend の切り替えもモデル差し替えとは別の軸にあり、ロード失敗時に
 CPU backend へ再試行し、それも失敗したら SimpleConverter へ落とす経路は
 `docs/model-management-spec.md` §5.3 が定めている。

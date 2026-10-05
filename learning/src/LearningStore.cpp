@@ -191,7 +191,11 @@ std::string SerializedKey(const std::string& reading, const std::string& surface
 LearningStore::LearningStore(std::filesystem::path path, const ByteCrypto* crypto)
     : path_(std::move(path)), crypto_(crypto ? crypto : &DpapiCrypto()) {}
 
-bool LearningStore::Load() {
+bool LearningStore::Load() { return LoadImpl(true); }
+
+bool LearningStore::LoadReadOnly() { return LoadImpl(false); }
+
+bool LearningStore::LoadImpl(bool migrate_plaintext) {
   table_.clear();
   dirty_ = false;
   save_blocked_by_load_failure_ = false;
@@ -236,7 +240,8 @@ bool LearningStore::Load() {
     }
     table_[reading].emplace(surface, rec);
   }
-  if (source == ProtectedFileSource::Plaintext && !MigratePlaintextFile(path_, text, *crypto_)) {
+  if (source == ProtectedFileSource::Plaintext && migrate_plaintext &&
+      !MigratePlaintextFile(path_, text, *crypto_)) {
     save_blocked_by_load_failure_ = true;
     SecureErase(text);
     return false;

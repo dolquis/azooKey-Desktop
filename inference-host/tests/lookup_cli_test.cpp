@@ -251,6 +251,8 @@ TEST_F(LookupCliTest, ZeroByteLearningStoreReturnsSuccessfulEmptyJsonOnEveryRun)
     EXPECT_TRUE(json->GetBool("ok").value_or(false));
     EXPECT_EQ(json->GetUInt("count"), 0u);
   }
+  EXPECT_TRUE(std::filesystem::exists(paths.learning));
+  EXPECT_FALSE(std::filesystem::exists(azookey::learning::EncryptedPathFor(paths.learning)));
 }
 
 TEST_F(LookupCliTest, TsvOutputUsesDocumentedColumns) {
@@ -292,6 +294,34 @@ TEST_F(LookupCliTest, MalformedUserDictionaryIsNotQuarantinedOrChanged) {
         entry.path().filename().string().find(".corrupt.") != std::string::npos ? 1u : 0u;
   }
   EXPECT_EQ(corrupt_files, 0u);
+}
+
+TEST_F(LookupCliTest, PlaintextLearningStoreIsReadWithoutMigration) {
+  const std::string legacy = "にほん\t二本\t1.5 100\n";
+  {
+    std::ofstream output(paths.learning, std::ios::binary);
+    ASSERT_TRUE(output);
+    output << legacy;
+  }
+  const auto options = Parse({"--mode", "exact", "--query", "にほん"});
+  ASSERT_TRUE(options);
+
+  const auto result = RunLookup(*options, paths);
+  EXPECT_EQ(result.exit_code, 0) << result.error;
+  ASSERT_EQ(result.output_lines.size(), 1u);
+  const auto json = azookey::ipc::json::Parse(result.output_lines.front());
+  ASSERT_TRUE(json);
+  EXPECT_EQ(json->GetString("source"), "learning");
+  EXPECT_EQ(json->GetString("surface"), "二本");
+
+  std::ifstream input(paths.learning, std::ios::binary);
+  EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()),
+            legacy);
+  input.close();
+  auto backup = paths.learning;
+  backup += ".bak";
+  EXPECT_FALSE(std::filesystem::exists(backup));
+  EXPECT_FALSE(std::filesystem::exists(azookey::learning::EncryptedPathFor(paths.learning)));
 }
 
 #ifdef _WIN32

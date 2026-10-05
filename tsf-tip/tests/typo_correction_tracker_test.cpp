@@ -12,6 +12,33 @@ using azookey::tsf::TypoCorrectionTracker;
 static_assert(std::is_copy_constructible_v<TypoCorrectionTracker>);
 static_assert(std::is_copy_assignable_v<TypoCorrectionTracker>);
 
+TEST(TsfTipTypoCorrectionTrackerTest, PostCommitBackspaceCanOnlyArmInTheUnusedWindow) {
+  TypoCorrectionTracker tracker;
+  const auto& view = tracker;
+  EXPECT_FALSE(view.CanArmPostCommitBackspace());
+  tracker.Commit("かに");
+  EXPECT_TRUE(view.CanArmPostCommitBackspace());
+  tracker.BeginKey(false, true);
+  EXPECT_FALSE(view.CanArmPostCommitBackspace());
+  EXPECT_FALSE(tracker.Commit("かみ").has_value());
+  EXPECT_TRUE(view.CanArmPostCommitBackspace());
+  tracker.Reset();
+  EXPECT_FALSE(view.CanArmPostCommitBackspace());
+}
+
+TEST(TsfTipTypoCorrectionTrackerTest, PendingCorrectionCannotArmOrReplaceItsOriginalReading) {
+  TypoCorrectionTracker tracker;
+  tracker.Commit("こんちには");
+  tracker.BeforeBackspace("かに");
+  EXPECT_FALSE(tracker.CanArmPostCommitBackspace());
+  tracker.BeginKey(true, true);
+  EXPECT_FALSE(tracker.CanArmPostCommitBackspace());
+  const auto pair = tracker.Commit("かみ");
+  ASSERT_TRUE(pair.has_value());
+  EXPECT_EQ(pair->wrong_reading, "かに");
+  EXPECT_EQ(pair->correct_reading, "かみ");
+}
+
 TEST(TsfTipTypoCorrectionTrackerTest, PreeditBackspaceReportsTheReadingBeforeCorrection) {
   TypoCorrectionTracker tracker;
   tracker.BeginKey(true, false);

@@ -7484,6 +7484,47 @@ TEST(TsfTipTypoCorrectionTest, OrdinaryFirstTestKeyClosesPostCommitBackspaceWind
   EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
 }
 
+TEST(TsfTipTypoCorrectionTest, EmptyBackspaceProbesPrivacyOnlyInPostCommitWindow) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  const auto probe_count = [&] {
+    return std::count(h.context.requested_flags.begin(), h.context.requested_flags.end(),
+                      TF_ES_SYNC | TF_ES_READ);
+  };
+  const auto initial = probe_count();
+  for (int i = 0; i < 5; ++i) EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  EXPECT_EQ(probe_count(), initial);
+
+  TypeTypoRomaji(h, "KANI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  const auto committed = probe_count();
+  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  EXPECT_EQ(probe_count(), committed + 1);
+  for (int i = 0; i < 5; ++i) EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  EXPECT_EQ(probe_count(), committed + 1);
+
+  TypeTypoRomaji(h, "KAMI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  const auto next_commit = probe_count();
+  EXPECT_FALSE(ProbeTypoKey(h, VK_LEFT));
+  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  EXPECT_EQ(probe_count(), next_commit);
+}
+
+TEST(TsfTipTypoCorrectionTest, PostCommitBackspaceRechecksPrivateScopeBeforeArming) {
+  PrivateScopeProperty property;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  TypeTypoRomaji(h, "KANI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  h.context.input_scope_property = &property;
+  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  h.context.input_scope_property = nullptr;
+  TypeTypoRomaji(h, "KAMI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+}
+
 TEST(TsfTipTypoCorrectionTest, LifecycleLossClearsPendingBackspaceCorrection) {
   for (const int reset : {0, 1, 2}) {
     SCOPED_TRACE(reset);
@@ -7726,6 +7767,29 @@ TEST(TsfTipTypoCorrectionTest, CorrectedReadingAppliesBeforeSpaceAndKeepsCandida
   EXPECT_EQ(h.service.input_state_for_test().selected_index(), 1u);
   ASSERT_EQ(h.service.input_state_for_test().candidates().size(), 2u);
   EXPECT_EQ(h.service.input_state_for_test().candidates()[1].surface, "紙");
+}
+
+TEST(TsfTipTypoCorrectionTest, CorrectedReadingKeepsLiveSurfaceForEnterCommit) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    h.service.set_live_conversion_for_test(true);
+    TypeTypoRomaji(h, "TABERI");
+    ASSERT_EQ(h.service.preedit_kana_, "たべり");
+    const uint64_t request_id = h.service.pending_ipc_request_id_for_test();
+    h.service.mark_pending_ipc_query_sent_for_test();
+    h.service.set_live_conversion_result_for_test(request_id, "たべり", "食べる");
+    h.service.apply_live_conversion_result_for_test();
+    ASSERT_EQ(h.context.document->text, L"食べる");
+    h.service.set_corrected_candidates_for_test("たべり", "たべる", {});
+
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, L"食べる");
+    EXPECT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Idle);
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_FALSE(h.service.has_pending_ipc_query_for_test());
+  }
 }
 
 TEST(TsfTipTypoCorrectionTest, CorrectedReadingIsUsedForSubsequentAppendAndBackspace) {

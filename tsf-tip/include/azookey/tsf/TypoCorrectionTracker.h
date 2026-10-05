@@ -22,11 +22,16 @@ struct TypoCorrectionPair {
 // The caller handles privacy resets; Host settings remain the learning gate.
 class TypoCorrectionTracker {
  public:
+  bool CanArmPostCommitBackspace() const {
+    return first_key_after_commit_ && pre_correction_reading_.empty();
+  }
+
   // Every key consumes the one-key window, even when it does not arm a retry.
   void BeginKey(bool backspace, bool preedit_empty) {
     if (!first_key_after_commit_) return;
+    const bool arm = backspace && preedit_empty && CanArmPostCommitBackspace();
     first_key_after_commit_ = false;
-    if (backspace && preedit_empty && pre_correction_reading_.empty()) {
+    if (arm) {
       pre_correction_reading_ = last_committed_reading_;
     }
     last_committed_reading_.clear();

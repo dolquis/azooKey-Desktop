@@ -3299,7 +3299,9 @@ void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
   }
   const bool empty = CurrentPreeditSurface().empty();
   const bool backspace = key == VK_BACK && !HasSystemModifier(CurrentKeyModifiers());
-  if (backspace && empty && !ResolvePrivacy(context, false).learning_allowed) return;
+  if (backspace && empty && typo_tracker_.CanArmPostCommitBackspace() &&
+      !ResolvePrivacy(context, false).learning_allowed)
+    return;
   typo_tracker_.BeginKey(backspace, empty);
 }
 
@@ -3366,7 +3368,13 @@ HRESULT TextService::ApplyPendingCorrectedReading(ITfContext* context) {
   input_state_ = input_state_.WithCorrectedReading(pending->corrected_reading);
   preedit_kana_ = pending->corrected_reading;
   romaji_.Reset();
-  if (core_input_active_ && input_state_.kind() != core::InputStateKind::Selecting)
+  // Keep the displayed live surface so CommitAsIs can restore it after Core
+  // emits the corrected reading. Only the live reading needs rebasing here.
+  const bool displaying_live_surface = !live_display_surface_.empty() &&
+                                       core_marked_surface_ == live_display_surface_ &&
+                                       live_display_reading_ == pending->reading;
+  if (core_input_active_ && input_state_.kind() != core::InputStateKind::Selecting &&
+      !displaying_live_surface)
     core_marked_surface_ = pending->corrected_reading;
   if (live_display_reading_ == pending->reading) live_display_reading_ = pending->corrected_reading;
   const HRESULT hr = RequestPreeditUpdate(context);

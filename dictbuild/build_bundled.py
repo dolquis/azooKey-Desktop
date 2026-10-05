@@ -78,7 +78,12 @@ def main() -> int:
         artifact.write_bytes(image)
         dictbuild.verify(artifact.read_bytes())
         (args.output / "ThirdPartyNotices.txt").write_text(
-            f"Third-party notices for the bundled dictionary {artifact.name}\n\n{notices}",
+            f"Third-party notices for the bundled dictionary {artifact.name}\n\n"
+            f"{artifact.name} is derived from the SudachiDict {SUDACHI_REVISION} raw lexicon by "
+            f"dictbuild/extract_sudachi.py (entries filtered by part of speech, reading and cost "
+            f"<= {extract_sudachi.DEFAULT_MAX_COST}; readings converted to hiragana) and "
+            "dictbuild/dictbuild.py. It is not the upstream distribution.\n\n"
+            f"{notices}",
             encoding="utf-8", newline="\n")
     except (OSError, ValueError, KeyError, TypeError, struct.error) as exc:
         print(f"build_bundled: {exc}", file=sys.stderr)

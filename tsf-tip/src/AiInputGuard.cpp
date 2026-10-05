@@ -102,11 +102,17 @@ InputScopeClass ClassifyFocusWindow(HWND focus) {
   return InputScopeClass::Normal;
 }
 
-InputScopeProbe ProbeInputScope(ITfContext* context, TfClientId client_id) {
+InputScopeProbe ProbeInputScope(ITfContext* context, TfClientId client_id,
+                                std::optional<TfEditCookie> edit_cookie) {
   if (!context) return {};
   ComPtr<ScopeSession> session;
   session.Attach(new (std::nothrow) ScopeSession(context));
   if (!session) return {InputScopeClass::Unknown, InputScopeProbeStatus::SessionFailed, {}};
+  if (edit_cookie) {
+    // A queued commit already owns an edit session; never request a nested lock.
+    (void)session->DoEditSession(*edit_cookie);
+    return std::move(session->probe);
+  }
   HRESULT executed = E_FAIL;
   const auto result =
       context->RequestEditSession(client_id, session.Get(), TF_ES_SYNC | TF_ES_READ, &executed);
@@ -161,7 +167,8 @@ InputGateDecision CombineInputGate(InputScopeClass focus, InputScopeClass scope)
   return decision;
 }
 
-InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id) {
+InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id,
+                                    std::optional<TfEditCookie> edit_cookie) {
   // A context the app disabled for keyboard input is Chromium's password field;
   // that is answer enough, so skip the window and the edit session.
   if (IsContextKeyboardDisabled(context)) {
@@ -179,7 +186,7 @@ InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id) {
     decision.scope.status = InputScopeProbeStatus::Skipped;
     return decision;
   }
-  auto scope = ProbeInputScope(context, client_id);
+  auto scope = ProbeInputScope(context, client_id, edit_cookie);
   auto decision = CombineInputGate(focus, scope.classification);
   decision.scope = std::move(scope);
   return decision;

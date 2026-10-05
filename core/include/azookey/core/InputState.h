@@ -54,6 +54,9 @@ class InputState {
   // The frontend owns the corresponding marked-text update; no actions are emitted.
   InputState WithComposition(std::string confirmed_kana,
                              const RomajiKanaConverter& pending_romaji = {}) const;
+  // Apply an accepted corrected reading while preserving active state and candidates.
+  // Clears pending romaji; empty readings and inactive states leave the state unchanged.
+  InputState WithCorrectedReading(std::string confirmed_kana) const;
   // Discard logical composition state without emitting TSF actions.
   InputState Reset() const;
 

@@ -2,6 +2,7 @@
 #include <msctf.h>
 #include <windows.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -30,9 +31,11 @@ struct InputScopeProbe {
 
 // Win32 half: the focus window's class name and ES_PASSWORD style.
 InputScopeClass ClassifyFocusWindow(HWND focus);
-// TSF half: GUID_PROP_INPUTSCOPE read through a synchronous read-only session.
+// TSF half: GUID_PROP_INPUTSCOPE read with the supplied edit cookie, or through
+// a synchronous read-only session when called outside an edit session.
 // Depends only on the context and client id, so a mock context can drive it.
-InputScopeProbe ProbeInputScope(ITfContext* context, TfClientId client_id);
+InputScopeProbe ProbeInputScope(ITfContext* context, TfClientId client_id,
+                                std::optional<TfEditCookie> edit_cookie = std::nullopt);
 InputScopeClass ClassifyInputScope(ITfContext* context, TfClientId client_id);
 // GUID_COMPARTMENT_KEYBOARD_DISABLED or GUID_COMPARTMENT_EMPTYCONTEXT set on the
 // context. Chromium sets both on its password-field context; TSF still calls
@@ -58,7 +61,8 @@ InputGateDecision CombineInputGate(InputScopeClass focus, InputScopeClass scope)
 // Owner-thread only. No UIA or network calls. Probes the context compartments,
 // the focus window and the input scope once each, then derives every axis from
 // that one probe.
-InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id);
+InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id,
+                                    std::optional<TfEditCookie> edit_cookie = std::nullopt);
 
 std::string_view InputScopeClassName(InputScopeClass value) noexcept;
 std::string_view InputScopeProbeStatusName(InputScopeProbeStatus value) noexcept;

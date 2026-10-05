@@ -287,6 +287,106 @@ TEST(InputStateTest, ImportedCompositionPreservesPendingRomajiAndDiscardsCandida
   EXPECT_EQ(erased.actions, (Actions{ReplaceMarkedText{"か"}, QueryCandidates{"か"}}));
 }
 
+TEST(InputStateTest, CorrectedReadingPreservesComposingAndPreviewingState) {
+  for (const bool live : {false, true}) {
+    SCOPED_TRACE(live);
+    const InputState state = Feed(InputState{}.WithLiveConversion(live), U"kanak")
+                                 .HandleCandidatesArrived(KanaCandidates())
+                                 .next;
+    ASSERT_TRUE(state.pending_romaji().HasPending());
+    const InputState corrected = state.WithCorrectedReading("かね");
+    EXPECT_EQ(corrected.kind(), state.kind());
+    EXPECT_EQ(corrected.confirmed_kana(), "かね");
+    EXPECT_EQ(corrected.Reading(), "かね");
+    EXPECT_FALSE(corrected.pending_romaji().HasPending());
+    EXPECT_TRUE(SameCandidateList(corrected.candidates(), state.candidates()));
+    EXPECT_EQ(corrected.selected_index(), state.selected_index());
+    EXPECT_EQ(corrected.awaiting_candidates(), state.awaiting_candidates());
+    EXPECT_EQ(corrected.live_conversion(), live);
+    EXPECT_EQ(state.Reading(), "かなk");
+
+    const HandleResult typed = corrected.HandleEvent(Ev(UserAction::Input, U'a'));
+    EXPECT_EQ(typed.next.Reading(), "かねあ");
+    EXPECT_EQ(typed.actions, (Actions{ReplaceMarkedText{"かねあ"}, QueryCandidates{"かねあ"}}));
+  }
+}
+
+TEST(InputStateTest, CorrectedReadingPreservesSelectingSnapshotAndSelection) {
+  const std::vector<Candidate> candidates = {Candidate{"金", "かね"}, Candidate{"鐘", "かね"}};
+  const InputState state = Composing()
+                               .HandleCandidatesArrived(candidates)
+                               .next.HandleEvent(Ev(UserAction::StartConversion))
+                               .next.HandleEvent(Ev(UserAction::NextCandidate))
+                               .next.WithLiveConversion(true);
+  ASSERT_EQ(state.selected_index(), 1u);
+  const InputState corrected = state.WithCorrectedReading("かね");
+  EXPECT_EQ(corrected.kind(), K::Selecting);
+  EXPECT_EQ(corrected.Reading(), "かね");
+  EXPECT_TRUE(SameCandidateList(corrected.candidates(), candidates));
+  EXPECT_EQ(corrected.selected_index(), 1u);
+  EXPECT_FALSE(corrected.awaiting_candidates());
+  EXPECT_TRUE(corrected.live_conversion());
+  EXPECT_EQ(state.Reading(), "かな");
+
+  EXPECT_EQ(corrected.HandleEvent(Ev(UserAction::Cancel)).actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"かね"}}));
+  EXPECT_EQ(corrected.HandleEvent(Ev(UserAction::Commit)).actions,
+            (Actions{HideCandidateWindow{}, ReplaceMarkedText{"鐘"}, CommitMarkedText{},
+                     ObserveCommit{"かね", "鐘"}}));
+}
+
+TEST(InputStateTest, CorrectedReadingKeepsAwaitingCandidates) {
+  const InputState state = Composing().HandleEvent(Ev(UserAction::StartConversion)).next;
+  ASSERT_TRUE(state.awaiting_candidates());
+  const InputState corrected = state.WithCorrectedReading("かね");
+  EXPECT_EQ(corrected.kind(), K::Composing);
+  EXPECT_EQ(corrected.Reading(), "かね");
+  EXPECT_TRUE(corrected.awaiting_candidates());
+  const HandleResult arrived = corrected.HandleCandidatesArrived({Candidate{"金", "かね"}});
+  EXPECT_EQ(arrived.next.kind(), K::Selecting);
+  EXPECT_FALSE(arrived.next.awaiting_candidates());
+}
+
+TEST(InputStateTest, CorrectedReadingKeepsCustomRomajiTable) {
+  RomajiKanaConverter romaji;
+  romaji.SetCustomTable(CustomRomajiLoader::Parse("z.\t…\n").table);
+  ASSERT_TRUE(romaji.Feed('z').empty());
+  const InputState corrected =
+      InputState{}.WithComposition("かな", romaji).WithCorrectedReading("かね");
+  EXPECT_FALSE(corrected.pending_romaji().HasPending());
+  EXPECT_TRUE(corrected.pending_romaji().HasCustomTable());
+  EXPECT_EQ(Feed(corrected, U"z.").Reading(), "かね…");
+}
+
+TEST(InputStateTest, EmptyCorrectedReadingLeavesActiveStateUnchanged) {
+  for (const InputState& state : {Feed(Composing(), U"k"), Feed(Previewing(), U"k"),
+                                  Selecting().HandleEvent(Ev(UserAction::NextCandidate)).next,
+                                  Composing().HandleEvent(Ev(UserAction::StartConversion)).next}) {
+    SCOPED_TRACE(static_cast<int>(state.kind()));
+    const InputState corrected = state.WithCorrectedReading("");
+    EXPECT_EQ(corrected.kind(), state.kind());
+    EXPECT_EQ(corrected.confirmed_kana(), state.confirmed_kana());
+    EXPECT_EQ(corrected.Reading(), state.Reading());
+    EXPECT_EQ(corrected.pending_romaji().PreviewPending(), state.pending_romaji().PreviewPending());
+    EXPECT_TRUE(SameCandidateList(corrected.candidates(), state.candidates()));
+    EXPECT_EQ(corrected.selected_index(), state.selected_index());
+    EXPECT_EQ(corrected.awaiting_candidates(), state.awaiting_candidates());
+    EXPECT_EQ(corrected.live_conversion(), state.live_conversion());
+  }
+}
+
+TEST(InputStateTest, CorrectedReadingIgnoresInactiveStates) {
+  for (const InputState& state : {InputState{}, UnicodeInput(), ReplaceSuggestion(),
+                                  InputState{}.HandleEvent(Ev(UserAction::StartKanaDouble)).next}) {
+    SCOPED_TRACE(static_cast<int>(state.kind()));
+    const InputState corrected = state.WithCorrectedReading("かね");
+    EXPECT_EQ(corrected.kind(), state.kind());
+    EXPECT_EQ(corrected.Reading(), state.Reading());
+    EXPECT_EQ(corrected.unicode_hex(), state.unicode_hex());
+    EXPECT_EQ(corrected.replace_suggestion_mode(), state.replace_suggestion_mode());
+  }
+}
+
 TEST(InputStateTest, ResetKeepsSettingsButDiscardsLogicalComposition) {
   const InputState reset = Composing()
                                .HandleEvent(Ev(UserAction::StartConversion))

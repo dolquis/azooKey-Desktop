@@ -53,6 +53,18 @@ InputState InputState::WithComposition(std::string confirmed_kana,
   return next;
 }
 
+InputState InputState::WithCorrectedReading(std::string confirmed_kana) const {
+  if (confirmed_kana.empty() ||
+      (kind_ != InputStateKind::Composing && kind_ != InputStateKind::Previewing &&
+       kind_ != InputStateKind::Selecting)) {
+    return *this;
+  }
+  InputState next = *this;
+  next.kana_ = std::move(confirmed_kana);
+  next.romaji_.Reset();
+  return next;
+}
+
 InputState InputState::Reset() const {
   InputState next = *this;
   next.ResetComposition();

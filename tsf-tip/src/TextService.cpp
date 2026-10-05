@@ -1283,6 +1283,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
 
 STDMETHODIMP TextService::Deactivate() {
   AZOOKEY_ASSERT_UI_THREAD();
+  ResetTypoTracking();
   core::EtwLogger::LogDeactivate(client_id_);
   local_settings_.Stop();
   HRESULT result = UnadviseFunctionProvider();
@@ -1646,6 +1647,7 @@ HRESULT TextService::ToggleKeyboardOpen() {
 STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!foreground) {
+    ResetTypoTracking();
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
@@ -1866,6 +1868,9 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPAR
   *eaten = FALSE;
   bracket_test_context_ = nullptr;
   try {
+    TrackTypoKey(context, wParam);
+    typo_test_key_context_ = context;
+    typo_test_key_ = wParam;
 #ifdef AZOOKEY_TSF_TESTING
     if (testing::ConsumeComBoundaryAllocationFailureForTest()) {
       throw std::bad_alloc();
@@ -2069,6 +2074,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       bracket_test_context_ == context && bracket_test_context_ && bracket_test_key_ == wParam;
   bracket_test_context_ = nullptr;
   try {
+    if (typo_test_key_context_ != context || typo_test_key_ != wParam)
+      TrackTypoKey(context, wParam);
+    typo_test_key_context_ = nullptr;
     // A new key in the same context means the host kept input focus. If the
     // key belongs to another context, finish the old text before using it.
     if (!terminated_composition_surface_.empty() && !committing_) {
@@ -2317,6 +2325,8 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
       return S_OK;
     };
 
+    const HRESULT corrected_hr = ApplyPendingCorrectedReading(context);
+    if (FAILED(corrected_hr)) return corrected_hr;
     const bool cand_visible = candidate_ui_.IsShowing();
     const bool has_preedit = !preedit_kana_.empty() || romaji_.HasPending();
     auto key_event = MapTipKey(wParam, modifiers, has_preedit, cand_visible);
@@ -2416,9 +2426,19 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
           ScopedTracePhase phase(active_key_trace_id_, logging::Phase::RomajiConvert);
           return input_state_.HandleEvent(event);
         }();
+        const std::string before_backspace =
+            event.action == UserAction::Backspace && !romaji_.HasPending() ? preedit_kana_
+                                                                           : std::string{};
         const HRESULT hr = ApplyInputStateResult(context, std::move(result));
         core_commit_selected_index_.reset();
         if (FAILED(hr)) return hr;
+        if (!before_backspace.empty()) {
+          if (CurrentPreeditSurface().empty()) (void)ResolvePrivacy(context, false);
+          if (typo_learning_allowed_.load(std::memory_order_relaxed))
+            typo_tracker_.BeforeBackspace(before_backspace);
+        }
+        if (event.action == UserAction::Cancel && input_state_.kind() == core::InputStateKind::Idle)
+          ResetTypoTracking();
         *eaten = TRUE;
         return S_OK;
       }
@@ -2599,6 +2619,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         selected_candidate_idx_ = 0;
       }
       if (BatchRomajiEnabled() && !batch_raw_romaji_.empty()) {
+        const std::string before_backspace = BatchReadingForConversion();
+        core::RomajiKanaConverter before_converter;
+        before_converter.SetCustomTable(batch_romaji_table_);
+        for (const char key : batch_raw_romaji_) (void)before_converter.Feed(key);
+        const bool removed_kana = !before_converter.HasPending();
         {
           std::lock_guard<std::mutex> lk(candidates_mtx_);
           candidates_.clear();
@@ -2610,6 +2635,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         CancelPendingQueriesForLifecycle();
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
+        if (removed_kana && BatchReadingForConversion() != before_backspace &&
+            ResolvePrivacy(context, false).learning_allowed)
+          typo_tracker_.BeforeBackspace(before_backspace);
         *eaten = TRUE;
       } else if (romaji_.HasPending()) {
         {
@@ -2637,7 +2665,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
         const std::string reading = CurrentPreeditSurface();
-        if (!reading.empty()) PostQueryCandidates(context, reading);
+        if (!reading.empty())
+          PostQueryCandidates(context, reading);
+        else
+          (void)ResolvePrivacy(context, false);
+        if (typo_learning_allowed_.load(std::memory_order_relaxed))
+          typo_tracker_.BeforeBackspace(rollback_state.preedit);
         *eaten = TRUE;
       }
 
@@ -2880,6 +2913,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* context, WPARAM wParam, LPARAM l
         }
         const HRESULT update_hr = request_preedit_update_or_restore_on_oom(rollback_state);
         if (FAILED(update_hr)) return update_hr;
+        ResetTypoTracking();
         if (local_settings_.LiveConversionSnapshot()) {
           CancelPendingQueriesForLifecycle();
           live_display_reading_.clear();
@@ -2943,6 +2977,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
   AZOOKEY_ASSERT_UI_THREAD();
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
+    ResetTypoTracking();
     UnadviseTextEditSink();
     CleanupForLifecycleLoss(active_context_, /*release_active_context=*/true,
                             LifecycleCleanupFailurePolicy::PreserveComposition);
@@ -2998,6 +3033,7 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
   AZOOKEY_ASSERT_UI_THREAD();
   if (composition_ != pComposition) return S_OK;
   const bool external_termination = !etw_composition_end_in_progress_;
+  if (external_termination) ResetTypoTracking();
   std::string terminated_surface =
       external_termination ? (committing_ ? commit_surface_ : CurrentDisplayedPreeditSurface())
                            : std::string{};
@@ -3159,6 +3195,7 @@ void TextService::ClearCandidateStateForLifecycle() {
     std::lock_guard<std::mutex> lk(candidates_mtx_);
     candidates_.clear();
     candidate_window_show_pending_ = false;
+    corrected_reading_result_.reset();
   }
 }
 
@@ -3234,6 +3271,124 @@ void TextService::PostPendingCommitObservation() {
     // observations are posted. Drop best-effort learning telemetry rather than
     // reporting commit failure and making the same text retryable.
   }
+}
+
+void TextService::ResetTypoTracking() {
+  typo_tracker_.Reset();
+  pending_typo_commit_.reset();
+  typo_test_key_context_ = nullptr;
+  typo_observation_generation_.fetch_add(1, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  std::erase_if(ipc_send_queue_,
+                [](const auto& item) { return item.type == ipc::MessageType::ObserveTypo; });
+}
+
+bool TextService::CanSendTypoObservation(const IpcSendItem& item) const {
+  return item.type != ipc::MessageType::ObserveTypo ||
+         (!secure_input_.load(std::memory_order_relaxed) &&
+          typo_learning_allowed_.load(std::memory_order_relaxed) &&
+          item.typo_generation == typo_observation_generation_.load(std::memory_order_relaxed));
+}
+
+void TextService::TrackTypoKey(ITfContext* context, WPARAM key) {
+  if (committing_) return;  // A retry key is consumed before the next input.
+  if ((active_context_ && !SameComIdentity(context, active_context_)) || !keyboard_open_ ||
+      alnum_mode_ || IsContextKeyboardDisabled(context)) {
+    ResetTypoTracking();
+    return;
+  }
+  const bool empty = CurrentPreeditSurface().empty();
+  const bool backspace = key == VK_BACK && !HasSystemModifier(CurrentKeyModifiers());
+  if (backspace && empty && typo_tracker_.CanArmPostCommitBackspace() &&
+      !ResolvePrivacy(context, false).learning_allowed)
+    return;
+  typo_tracker_.BeginKey(backspace, empty);
+}
+
+void TextService::PrepareTypoCommit(const std::string& reading) {
+  pending_typo_commit_.reset();
+  // The commit callback evaluates privacy with its edit cookie before writing.
+  if (!batch_learning_allowed_ || reading.empty()) {
+    typo_tracker_.Reset();
+    return;
+  }
+  pending_typo_commit_ = PendingTypoCommit{
+      typo_tracker_, reading, typo_observation_generation_.load(std::memory_order_relaxed)};
+}
+
+void TextService::CompleteTypoCommit(std::optional<PendingTypoCommit> pending,
+                                     bool committed) noexcept {
+  pending_typo_commit_.reset();
+  if (!pending || !committed ||
+      pending->generation != typo_observation_generation_.load(std::memory_order_relaxed) ||
+      secure_input_.load(std::memory_order_relaxed) ||
+      !typo_learning_allowed_.load(std::memory_order_relaxed)) {
+    typo_tracker_.Reset();
+    return;
+  }
+  try {
+    auto pair = pending->tracker.Commit(pending->reading);
+    typo_tracker_ = std::move(pending->tracker);
+    if (!pair) return;
+    ipc::ObserveTypoRequest request;
+    request.wrong_reading = std::move(pair->wrong_reading);
+    request.correct_reading = std::move(pair->correct_reading);
+    request.timestamp_ms =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count());
+    request.secure = false;
+    request.learning_allowed = true;
+    PostIpcSend(ipc::MessageType::ObserveTypo, ipc::BuildObserveTypoRequest(request), false);
+  } catch (...) {
+    // Text is already committed. Best-effort learning must never cause a retry.
+    typo_tracker_.Reset();
+  }
+}
+
+HRESULT TextService::ApplyPendingCorrectedReading(ITfContext* context) {
+  std::optional<CorrectedReadingResult> pending;
+  {
+    std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+    if (!corrected_reading_result_) return S_OK;
+    pending = std::move(corrected_reading_result_);
+    corrected_reading_result_.reset();
+    if (!IsFreshQueryResult(ipc_has_request_, ipc_pending_id_, pending->request_id) ||
+        CurrentPreeditSurface() != pending->reading)
+      return S_OK;
+  }
+  if (!context || !SameComIdentity(context, active_context_) || committing_ ||
+      ResolvePrivacy(context, false).secure)
+    return S_OK;
+  auto previous_state = input_state_;
+  auto previous_kana = preedit_kana_;
+  auto previous_romaji = romaji_;
+  auto previous_marked = core_marked_surface_;
+  auto previous_live_reading = live_display_reading_;
+  input_state_ = input_state_.WithCorrectedReading(pending->corrected_reading);
+  preedit_kana_ = pending->corrected_reading;
+  romaji_.Reset();
+  // Keep the displayed live surface so CommitAsIs can restore it after Core
+  // emits the corrected reading. Only the live reading needs rebasing here.
+  const bool displaying_live_surface = !live_display_surface_.empty() &&
+                                       core_marked_surface_ == live_display_surface_ &&
+                                       live_display_reading_ == pending->reading;
+  if (core_input_active_ && input_state_.kind() != core::InputStateKind::Selecting &&
+      !displaying_live_surface)
+    core_marked_surface_ = pending->corrected_reading;
+  if (live_display_reading_ == pending->reading) live_display_reading_ = pending->corrected_reading;
+  const HRESULT hr = RequestPreeditUpdate(context);
+  if (hr == E_OUTOFMEMORY) {
+    input_state_ = std::move(previous_state);
+    preedit_kana_ = std::move(previous_kana);
+    romaji_ = std::move(previous_romaji);
+    core_marked_surface_ = std::move(previous_marked);
+    live_display_reading_ = std::move(previous_live_reading);
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    if (!corrected_reading_result_) corrected_reading_result_ = std::move(pending);
+    return hr;
+  }
+  return S_OK;
 }
 
 void TextService::ClearTextStateForLifecycle() {
@@ -3362,6 +3517,7 @@ bool TextService::RequestLifecycleCommitOrEndComposition(ITfContext* context) {
 
 void TextService::CleanupForLifecycleLoss(ITfContext* context, bool release_active_context,
                                           LifecycleCleanupFailurePolicy failure_policy) {
+  ResetTypoTracking();
   recent_character_form_commit_.reset();
   ClearReconversionState();
   if (reconversion_cache_context_) {
@@ -3516,6 +3672,7 @@ HRESULT TextService::CommitSelected(ITfContext* context) {
              {{"reading", SafeLogText(reading)}, {"surface", SafeLogText(commit_surface_)}},
              {secure, privacy.detailed_logging_allowed});
   const std::string committed_surface = commit_surface_;
+  PrepareTypoCommit(reading);
   const HRESULT commit_hr = RequestCommitEditSession(context);
   if (SUCCEEDED(commit_hr)) {
     recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
@@ -3590,6 +3747,7 @@ HRESULT TextService::CommitPreeditAsIs(ITfContext* context) {
   // Same deferred-clear pattern as CommitSelected: preserve preedit until the
   // synchronous commit edit session has actually completed.
   const std::string committed_surface = commit_surface_;
+  PrepareTypoCommit(reading);
   const HRESULT commit_hr = RequestCommitEditSession(context);
   if (SUCCEEDED(commit_hr)) {
     recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
@@ -4004,6 +4162,7 @@ bool TextService::PerformHandshake(ipc::NamedPipeClient& client, uint32_t timeou
                      "query_live_conversion",
                      "query_batch_conversion",
                      "commit_observation",
+                     "observe_typo",
                      "cancel",
                      "secure_flag"};
   hs.client_id = ipc_client_id_;
@@ -4430,6 +4589,7 @@ void TextService::ServeConnection() {
     // instead of looping back to the wait on a dead connection.
     for (size_t i = 0; i < to_send.size(); ++i) {
       auto& item = to_send[i];
+      if (!CanSendTypoObservation(item)) continue;
       Envelope env;
       env.version = 1;
       env.request_id = next_id++;
@@ -4575,6 +4735,7 @@ void TextService::ServeConnection() {
         ipc_send_queue_ = std::move(deferred);
       }
       for (auto& item : faf_now) {
+        if (!CanSendTypoObservation(item)) continue;
         Envelope env;
         env.version = 1;
         env.request_id = next_id++;
@@ -4662,6 +4823,7 @@ void TextService::ServeConnection() {
         ipc_send_queue_ = std::move(deferred);
       }
       for (auto& item : mid_faf) {
+        if (!CanSendTypoObservation(item)) continue;
         ipc::Envelope env;
         env.version = 1;
         env.request_id = next_id++;
@@ -4768,6 +4930,7 @@ void TextService::ServeConnection() {
       continue;
     }
 
+    std::string corrected_reading;
     if (qres) {
       auto qpayload = ParseQueryCandidatesResponse(qres->payload_json);
       if (!qpayload) {
@@ -4775,14 +4938,16 @@ void TextService::ServeConnection() {
         continue;
       }
       response_candidates = std::move(qpayload->candidates);
+      if (!is_batch && emoji_trigger.empty() && !secure)
+        corrected_reading = std::move(qpayload->corrected_reading);
     }
 
-    auto tip_candidates =
-        BuildTipCandidates(reading, std::move(response_candidates),
-                           !is_batch && number_rewriter_.load(std::memory_order_relaxed),
-                           !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
-                           !is_batch && !live && emoji_trigger.empty() &&
-                               symbol_rewriter_.load(std::memory_order_relaxed));
+    auto tip_candidates = BuildTipCandidates(
+        corrected_reading.empty() ? reading : corrected_reading, std::move(response_candidates),
+        !is_batch && number_rewriter_.load(std::memory_order_relaxed),
+        !is_batch && katakana_rewriter_.load(std::memory_order_relaxed),
+        !is_batch && !live && emoji_trigger.empty() &&
+            symbol_rewriter_.load(std::memory_order_relaxed));
 
     // M10: discard stale responses.
     // Conditions for freshness:
@@ -4822,6 +4987,9 @@ void TextService::ServeConnection() {
           continue;
         }
         candidates_ = std::move(tip_candidates);
+        corrected_reading_result_.reset();
+        if (!corrected_reading.empty())
+          corrected_reading_result_ = CorrectedReadingResult{req_id, reading, corrected_reading};
         candidates_trace_id_ = trace_id;
         candidates_trace_start_ = trace_start;
         candidates_trace_pending_ = true;
@@ -5388,7 +5556,8 @@ void TextService::PostQueryLiveConversion(ITfContext* context, const std::string
 // privacy axes are resolved from the same foreground-app lookup and the same
 // single input-scope probe, so a batch conversion, a commit and a prediction
 // cannot disagree about whether the current context is secure.
-TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bool evaluate_ai) {
+TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bool evaluate_ai,
+                                                         std::optional<TfEditCookie> edit_cookie) {
   AZOOKEY_ASSERT_UI_THREAD();
   static const std::vector<std::string> kNoUserSecureApps;
   const auto ai_settings = local_settings_.AiSnapshot();
@@ -5401,7 +5570,7 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
-  const auto gate = EvaluateInputGate(context, client_id_);
+  const auto gate = EvaluateInputGate(context, client_id_, edit_cookie);
   // The receiving in-process app must be identifiable. Explicit secure mode
   // also suppresses learning, independently of whether the AI axes are used.
   decision.secure =
@@ -5439,6 +5608,12 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
   decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
   LogInputGateOnChange(gate, decision.secure);
   secure_input_.store(decision.secure, std::memory_order_relaxed);
+  typo_learning_allowed_.store(decision.learning_allowed, std::memory_order_relaxed);
+  if (!decision.learning_allowed) ResetTypoTracking();
+  if (decision.secure) {
+    std::lock_guard<std::mutex> lock(candidates_mtx_);
+    corrected_reading_result_.reset();
+  }
   prediction_allowed_.store(decision.prediction_allowed, std::memory_order_relaxed);
   // Spec §6: the indicator reflects the same decision every route just used.
   candidate_ui_.SetSecureState(decision.secure, ai_settings.show_secure_indicator);
@@ -5672,8 +5847,10 @@ HRESULT TextService::ApplyInputStateResult(ITfContext* context, core::HandleResu
       commit_surface_ = core_marked_surface_;
       committing_ = true;
       SetCommitContext(context);
-      const std::string recent_reading = preedit_kana_;
+      auto final_romaji = previous_state.pending_romaji();
+      const std::string recent_reading = previous_state.confirmed_kana() + final_romaji.Flush();
       const std::string committed_surface = commit_surface_;
+      PrepareTypoCommit(recent_reading);
       hr = RequestCommitEditSession(context);
       if (SUCCEEDED(hr)) {
         recent_character_form_commit_ = CharacterFormEditSession::CaptureRecentCommit(
@@ -6451,6 +6628,28 @@ TextService::first_queued_commit_observation_for_test() {
   return std::nullopt;
 }
 
+std::optional<ipc::ObserveTypoRequest> TextService::last_queued_typo_observation_for_test() {
+  std::lock_guard<std::mutex> lock(ipc_mtx_);
+  for (auto it = ipc_send_queue_.rbegin(); it != ipc_send_queue_.rend(); ++it)
+    if (it->type == ipc::MessageType::ObserveTypo)
+      return ipc::ParseObserveTypoRequest(it->payload_json);
+  return std::nullopt;
+}
+
+void TextService::set_corrected_candidates_for_test(const std::string& reading,
+                                                    const std::string& corrected_reading,
+                                                    std::vector<ipc::CandidateField> candidates,
+                                                    std::optional<uint64_t> request_id) {
+  std::scoped_lock lock(ipc_mtx_, candidates_mtx_);
+  candidates_ = BuildTipCandidates(corrected_reading.empty() ? reading : corrected_reading,
+                                   std::move(candidates), false, false);
+  ipc_has_request_ = false;
+  corrected_reading_result_.reset();
+  if (!corrected_reading.empty())
+    corrected_reading_result_ =
+        CorrectedReadingResult{request_id.value_or(ipc_pending_id_), reading, corrected_reading};
+}
+
 std::vector<ipc::MessageType> TextService::queued_ipc_types_for_test() {
   std::lock_guard<std::mutex> lock(ipc_mtx_);
   std::vector<ipc::MessageType> types;
@@ -6594,11 +6793,14 @@ void TextService::PostIpcSend(ipc::MessageType type, std::string payload, bool e
         type == ipc::MessageType::CommitSegmentsObservation ||
         type == ipc::MessageType::ObserveTypo || type == ipc::MessageType::QueryPredictions)) ||
       (type == ipc::MessageType::QueryPredictions &&
-       !prediction_allowed_.load(std::memory_order_relaxed)))
+       !prediction_allowed_.load(std::memory_order_relaxed)) ||
+      (type == ipc::MessageType::ObserveTypo &&
+       !typo_learning_allowed_.load(std::memory_order_relaxed)))
     return;
   std::lock_guard<std::mutex> lock(ipc_mtx_);
-  ipc_send_queue_.push_back(
-      {type, std::move(payload), expects_response, 0, 0, CurrentActionTraceId()});
+  ipc_send_queue_.push_back({type, std::move(payload), expects_response, 0, 0,
+                             CurrentActionTraceId(),
+                             typo_observation_generation_.load(std::memory_order_relaxed)});
   TrimIpcSendQueueLocked();
   ipc_cv_.notify_one();
 }
@@ -6700,8 +6902,12 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
 
     // M5/M6: commit path — set final surface text and end composition.
     if (service_->committing_) {
+      // Recheck the original context on every successful callback, including
+      // retries and asynchronously granted sessions after a scope change.
+      if (service_->pending_typo_commit_) (void)service_->ResolvePrivacy(context_, false, ec);
       const std::string pending_commit_surface = service_->commit_surface_;
       const auto pending_commit_observation = service_->pending_commit_observation_;
+      auto pending_typo_commit = std::move(service_->pending_typo_commit_);
       const std::wstring surface = Utf8ToWide(pending_commit_surface);
       bool committed_surface_in_document = true;
       std::wstring terminated_text;
@@ -6716,6 +6922,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
         service_->committing_ = true;
         service_->commit_surface_ = pending_commit_surface;
         service_->pending_commit_observation_ = pending_commit_observation;
+        service_->pending_typo_commit_ = std::move(pending_typo_commit);
       };
       const auto post_pending_commit_observation = [&]() {
         if (!pending_commit_observation) {
@@ -6817,6 +7024,7 @@ STDMETHODIMP EditSession::DoEditSession(TfEditCookie ec) {
           return text_hr;
         }
       }
+      service_->CompleteTypoCommit(std::move(pending_typo_commit), committed_surface_in_document);
       if (committed_surface_in_document)
         post_pending_commit_observation();
       else

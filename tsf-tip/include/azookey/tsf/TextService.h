@@ -32,6 +32,7 @@
 #include "azookey/tsf/PredictionWindow.h"
 #include "azookey/tsf/ReconversionFunction.h"
 #include "azookey/tsf/TipLocalSettings.h"
+#include "azookey/tsf/TypoCorrectionTracker.h"
 #ifdef _DEBUG
 #include "azookey/tsf/DebugThreadAffinity.h"
 #endif
@@ -287,6 +288,11 @@ class TextService final : public ITfTextInputProcessorEx,
   bool prediction_allowed_for_test() const { return prediction_allowed_.load(); }
   std::optional<ipc::CommitObservationRequest> last_queued_commit_observation_for_test();
   std::optional<ipc::CommitObservationRequest> first_queued_commit_observation_for_test();
+  std::optional<ipc::ObserveTypoRequest> last_queued_typo_observation_for_test();
+  void set_corrected_candidates_for_test(const std::string& reading,
+                                         const std::string& corrected_reading,
+                                         std::vector<ipc::CandidateField> candidates,
+                                         std::optional<uint64_t> request_id = std::nullopt);
   std::optional<ipc::CommitSegmentsObservationRequest> last_queued_segments_observation_for_test() {
     std::lock_guard<std::mutex> lock(ipc_mtx_);
     for (auto item = ipc_send_queue_.rbegin(); item != ipc_send_queue_.rend(); ++item)
@@ -471,6 +477,23 @@ class TextService final : public ITfTextInputProcessorEx,
   // fields above and below remain presentation/metadata mirrors for TSF and
   // the batch/emoji/rewriter paths until those paths enter InputState.
   core::InputState input_state_;
+  TypoCorrectionTracker typo_tracker_;          // UI apartment only.
+  ITfContext* typo_test_key_context_{nullptr};  // Borrowed until OnKeyDown.
+  WPARAM typo_test_key_{0};
+  struct PendingTypoCommit {
+    TypoCorrectionTracker tracker;
+    std::string reading;
+    uint64_t generation;
+  };
+  std::optional<PendingTypoCommit> pending_typo_commit_;
+  std::atomic<bool> typo_learning_allowed_{false};
+  std::atomic<uint64_t> typo_observation_generation_{0};
+  struct CorrectedReadingResult {
+    uint64_t request_id;
+    std::string reading;
+    std::string corrected_reading;
+  };
+  std::optional<CorrectedReadingResult> corrected_reading_result_;  // candidates_mtx_
   // UI thread's current key action; copied into async IPC work before return.
   std::string active_key_trace_id_;
   std::chrono::steady_clock::time_point active_key_trace_start_{};
@@ -595,7 +618,7 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_pending_raw_romaji_;
   std::string ipc_pending_batch_mode_;
   std::wstring ipc_pending_batch_notice_;  // ipc_mtx_; carried into neural fallback.
-  std::string ipc_pending_trace_id_;                                 // protected by ipc_mtx_
+  std::string ipc_pending_trace_id_;       // protected by ipc_mtx_
   std::chrono::steady_clock::time_point ipc_pending_trace_start_{};  // ipc_mtx_
   uint64_t ipc_pending_id_{0};
   bool ipc_has_request_{false};
@@ -612,8 +635,8 @@ class TextService final : public ITfTextInputProcessorEx,
   std::string ipc_inflight_trace_id_;  // protected by ipc_mtx_
   std::string ipc_host_generation_id_;
   bool ipc_has_known_host_generation_{false};
-  bool ipc_host_oob_cancel_{false};  // IPC worker only.
-  bool ipc_host_live_conversion_{false};  // IPC worker only.
+  bool ipc_host_oob_cancel_{false};         // IPC worker only.
+  bool ipc_host_live_conversion_{false};    // IPC worker only.
   bool ipc_host_query_predictions_{false};  // IPC worker only.
   // Set by the local settings watcher when settings.json changed, so a healthy
   // connection re-runs the handshake instead of serving the batch mode and
@@ -641,6 +664,7 @@ class TextService final : public ITfTextInputProcessorEx,
     uint64_t cancel_target_id{0};
     uint32_t attempts{0};
     std::string trace_id;
+    uint64_t typo_generation{0};
   };
   std::vector<IpcSendItem> ipc_send_queue_;  // protected by ipc_mtx_
   struct ReconversionRequest {
@@ -685,9 +709,9 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string left_side_context;
     std::vector<ipc::CandidateField> predictions;
   };
-  std::optional<PredictionResult> prediction_result_;           // candidates_mtx_
-  std::string live_display_reading_;                            // UI thread only.
-  std::string live_display_surface_;                            // UI thread only.
+  std::optional<PredictionResult> prediction_result_;  // candidates_mtx_
+  std::string live_display_reading_;                   // UI thread only.
+  std::string live_display_surface_;                   // UI thread only.
   struct ReconversionResult {
     uint64_t generation;
     std::wstring surface;
@@ -699,7 +723,7 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfContext* reconversion_cache_context_{nullptr};          // UI thread
   ITfContext* text_edit_context_{nullptr};                   // UI thread, AddRef'd
   DWORD text_edit_cookie_{TF_INVALID_COOKIE};
-  bool reconversion_prefetch_pending_{false};  // UI thread
+  bool reconversion_prefetch_pending_{false};   // UI thread
   std::wstring reconversion_prefetch_surface_;  // UI thread, in-flight surface
   std::atomic<uint64_t> reconversion_generation_{0};
   ITfRange* reconversion_range_{nullptr};         // UI thread only
@@ -768,7 +792,8 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string backend;
     bool detailed_logging_allowed{false};
   };
-  PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai);
+  PrivacyDecision ResolvePrivacy(ITfContext* context, bool evaluate_ai,
+                                 std::optional<TfEditCookie> edit_cookie = std::nullopt);
   static void OnCandidatesReady(void* context);
   bool ShowCandidateWindowFromCache();
   void ApplyLiveConversionResult();
@@ -808,6 +833,12 @@ class TextService final : public ITfTextInputProcessorEx,
   void SetCommitContext(ITfContext* context);
   void ClearCommitContext();
   void PostPendingCommitObservation();
+  void TrackTypoKey(ITfContext* context, WPARAM key);
+  void PrepareTypoCommit(const std::string& reading);
+  void CompleteTypoCommit(std::optional<PendingTypoCommit> pending, bool committed) noexcept;
+  void ResetTypoTracking();
+  HRESULT ApplyPendingCorrectedReading(ITfContext* context);
+  bool CanSendTypoObservation(const IpcSendItem& item) const;
   void ClearTextStateForLifecycle();
   bool ActiveContextBelongsToDocumentMgr(ITfDocumentMgr* document_mgr) const;
   HRESULT RequestCommitEditSession(ITfContext* context);

@@ -151,8 +151,9 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     if (items.empty()) return EndUI();
 
     // Re-showing the list (segment moves, rollbacks) is not closing it, so a
-    // secure toast it hides comes back for the rest of its five seconds.
+    // secure toast or health banner it hides comes back for the rest of its five seconds.
     const bool resume_secure_toast = own_window_.IsSecureToastVisible();
+    const bool resume_health_banner = own_window_.IsHealthBannerVisible();
     const HRESULT end_hr = EndUI();
     if (FAILED(end_hr)) {
       NotifyBeginObserver(end_hr, ui_element_mgr_ != nullptr, false, FALSE, kInvalidUiElementId);
@@ -188,6 +189,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
       showing_ = true;
       OnPbShown(true);
       if (resume_secure_toast) own_window_.ResumeSecureToast();
+      if (resume_health_banner) own_window_.ResumeHealthBanner();
       NotifyBeginObserver(S_OK, false, false, FALSE, kInvalidUiElementId);
       return S_OK;
     }
@@ -209,6 +211,7 @@ HRESULT CandidateUiCoordinator::BeginUI(ITfThreadMgr* thread_mgr, POINT pt,
     showing_ = true;
     OnPbShown(pb_show != FALSE);
     if (resume_secure_toast && tip_draws_) own_window_.ResumeSecureToast();
+    if (resume_health_banner && tip_draws_) own_window_.ResumeHealthBanner();
     if (!tip_draws_) {
       ui_element_->Update(CandidateSurfaces(items_), selected_idx_, kAllInitialCandidateFlags);
       hr = ui_element_mgr_->UpdateUIElement(ui_element_id_);

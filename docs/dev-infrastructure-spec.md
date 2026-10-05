@@ -1974,7 +1974,7 @@ stale 化する。未送信または接続断後に再武装された pending �
 
 M42 は IPC transport 層の状態機械と劣化フォールバックまでを範囲とした。
 M47 はその上に乗る**ユーザー可視 UX レイヤ**を扱う。Zenzai モデル単位の
-劣化（モデル未配置 / ロード失敗 / 推論 timeout）と、連続クラッシュ時の
+劣化（モデル未配置 / ロード失敗）、推論 timeout の要求単位の fallback、連続クラッシュ時の
 SafeMode を導入する。
 
 #### 8.5.1 拡張状態機械
@@ -2044,11 +2044,26 @@ SafeMode         ← AI / 学習 / 外部 API を全停止、最小限の入力�
   失敗すると `DegradedModel`、`DegradedModel` でパス付きのロードを始めると `RecoveringModel`、
   そのロードが成功して `model_loaded` が真になると `Healthy`、失敗すると `DegradedModel` へ戻る。
   別のモデルが動いたまま差し替えだけが失敗した場合は劣化として扱わない。
-- 推論の失敗と deadline 超過は状態を変えない。ロード済みモデルの推論が例外や deadline 超過で
-  失敗した要求は、その要求だけを SimpleConverter の候補へ落とす（`ZenzaiModelConverter` の
-  fallback）。次の要求は再び Zenzai で処理する。要求単位で落とすため、単発の遅延でモデル全体を
-  止めず、`DegradedModel` からの復帰にモデルの再ロードも要さない。連続した失敗で状態を
-  遷移させる規則は、閾値の根拠（ベンチでの頻度と品質への影響）を得てから本表へ行として追加する。
+- 推論の失敗と deadline 超過は、単発でも連続でも状態を変えない（model 系の対象外）。
+  ロード済みモデルの推論が deadline（§8.5.2 の Heavy inference）を超えた要求は、その時点の
+  best-so-far beam があれば Zenzai の候補として返し、劣化として扱わない。例外・空生成・
+  best-so-far の無い deadline 超過で失敗した要求だけを SimpleConverter の候補へ落とす
+  （`ZenzaiModelConverter` の fallback。`docs/zenzai-inference-spec.md` §6.4 / §9.2.2）。
+  次の要求は再び Zenzai で処理する。状態機械に載せない理由は次のとおり。
+  - deadline 超過の多くは best-so-far を返す正常な打ち切りであり、回数を数えても
+    品質の低下と対応しない。
+  - `degraded_model` の文言（§8.5.4）は Zenzai を使えない状態を示し、[再試行] はモデルの
+    再ロードである。モデルが動いていて遅いだけの状態には文言も対処も合わない。
+  - `RecoveringModel` は再ロードを突入の契機とする。推論の成功で `Healthy` へ戻る経路を
+    足すと、突入元ごとに退出条件を対応させる規則が崩れる。
+
+  推論の hard failure は `model_runtime_error_` を通じて `Health.status=degraded` と
+  `last_error` に出る（次の成功変換で消える）。best-so-far を返した deadline 超過は
+  どちらにも出ず、頻度は M51 の trace の `model_inference` の所要時間（§7.7.2）からだけ
+  観測できる。`fallback_state` の導出（下記）は状態機械の状態と設定だけから決まるため、
+  推論の失敗で `fallback_state` と状態機械が食い違うことはない。推論の遅延を利用者へ
+  示す必要が生じた場合は、本項への状態や行の追加として新規課題で扱い、本項の判断を
+  暗黙に覆さない。
 - `SafeMode`: Host が起動時に §8.5.3 の条件で入り、`UpdateConfig` で
   `settings.safeMode.enabled=false` を読んだときに `Healthy` へ戻る。起動時や `UpdateConfig` で
   `enabled=true` を読んだときは、突入の経路によらずその値に従って `SafeMode` に置く
@@ -2219,7 +2234,8 @@ M46 の secure 表示と同時に出すときの並びは
 毎回ラベルを出すと邪魔になるため:
 
 - 表示状態が変わった直後のみ 1 回表示（5 秒で自動消滅）。変わったときに候補ウィンドウが
-  出ていなければ、次に候補ウィンドウを出したときに表示する
+  出ていなければ、次に候補ウィンドウを出したときに表示する。文節移動などで候補一覧を
+  出し直すことは閉じることに当たらず、インジケータは 5 秒の残りの間表示を続ける
 - `safe_mode` は、TIP が接続後に初めて観測したときも「変わった直後」として扱う。Host は起動時に
   SafeMode へ入るため、これが §8.5.3 の「突入の通知」に当たる。同じ Host 世代
   （`host_generation_id`、§8.2）の間、TIP インスタンスごとに 1 回だけ表示する

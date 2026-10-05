@@ -40,6 +40,10 @@ class CandidateWindow {
   bool IsVisible() const;
   void ShowHealthBanner(CandidateHealthState state);
   void HideHealthBanner();
+  // Brings back a banner that a re-show of the window hid, for whatever is left
+  // of its five seconds. No-op once that time has passed or the state is Healthy.
+  void ResumeHealthBanner();
+  bool IsHealthBannerVisible() const { return health_banner_visible_; }
   void SetRetryInFlight(bool in_flight);
   // M46 secure indicator: a small lock at the window's right edge while secure,
   // and a one-line toast that hides itself after five seconds.
@@ -155,6 +159,7 @@ class CandidateWindow {
   OnRetryFn on_retry_;
   CandidateHealthState health_state_{CandidateHealthState::Healthy};
   bool health_banner_visible_{false};
+  ULONGLONG health_banner_until_{0};  // GetTickCount64 deadline of the last banner.
   bool retry_in_flight_{false};
   bool secure_indicator_visible_{false};
   bool secure_toast_visible_{false};

@@ -2557,9 +2557,10 @@ const azookey::core::Candidate* FindAutoWord(
 }  // namespace
 
 TEST(EngineAutoWordInjectionTest, ConfirmedWordsAreInjectedAndPendingWordsAreNot) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("azookey_engine_inject_learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("azookey_engine_inject.tsv"),
                                               &azookey::learning::test::Crypto());
   auto_words.Observe("阿頭季", "あずき", kNowBase, 3, false);
   auto_words.Observe("小豆期", "あずき", kNowBase, 3, false);
@@ -2585,9 +2586,10 @@ TEST(EngineAutoWordInjectionTest, ConfirmedWordsAreInjectedAndPendingWordsAreNot
 }
 
 TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_inject_confirm_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("azookey_engine_inject_confirm_learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_inject_confirm.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("azookey_engine_inject_confirm.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;
@@ -2611,11 +2613,12 @@ TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {
 }
 
 TEST(EngineTypoCorrectionTest, ApplyConfigCarriesTheTypoAndMiningSettings) {
-  azookey::learning::LearningStore store(TempPath("azookey_engine_applyconfig_learning.tsv"),
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("azookey_engine_applyconfig_learning.tsv"),
                                          &azookey::learning::test::Crypto());
-  azookey::learning::TypoCorrectionStore typo(TempPath("azookey_engine_applyconfig_typo.tsv"),
+  azookey::learning::TypoCorrectionStore typo(temp.File("azookey_engine_applyconfig_typo.tsv"),
                                               &azookey::learning::test::Crypto());
-  azookey::learning::AutoWordStore auto_words(TempPath("azookey_engine_applyconfig_words.tsv"),
+  azookey::learning::AutoWordStore auto_words(temp.File("azookey_engine_applyconfig_words.tsv"),
                                               &azookey::learning::test::Crypto());
 
   azookey::host::EngineConfig cfg;

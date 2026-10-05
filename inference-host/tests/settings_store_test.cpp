@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,12 +31,38 @@
 
 namespace {
 
-std::filesystem::path TestDir(const char* name) {
-  auto path = std::filesystem::temp_directory_path() / name;
-  std::filesystem::remove_all(path);
-  std::filesystem::create_directories(path);
-  return path;
-}
+class ScopedTempDirectory {
+ public:
+  explicit ScopedTempDirectory(const char* name) {
+    const auto base = std::filesystem::temp_directory_path();
+#ifdef _WIN32
+    const auto process_id = GetCurrentProcessId();
+#else
+    const auto process_id = getpid();
+#endif
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = base / (std::string(name) + "_" + std::to_string(process_id) + "_" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                      "_" + std::to_string(next_id_++));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create a unique settings test directory");
+  }
+
+  ~ScopedTempDirectory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
+  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+  static inline std::atomic<uint64_t> next_id_{0};
+};
 
 void WriteText(const std::filesystem::path& path, const std::string& text) {
   std::filesystem::create_directories(path.parent_path());
@@ -79,7 +108,8 @@ TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
       {R"({"privacy":{"mode":"custom","custom":{"learning":true}}})", false, false, true},
       {R"({"privacy":{"mode":"custom","custom":{"learning":"true"}}})", false, false, false},
   };
-  const auto dir = TestDir("azookey_settings_body_log_policy");
+  ScopedTempDirectory temp("azookey_settings_body_log_policy");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   for (const auto& item : cases) {
     SCOPED_TRACE(item.json);
@@ -94,11 +124,11 @@ TEST(SettingsStoreTest, BodyLogPolicyDefaultsAndMalformedSettingsFailClosed) {
   EXPECT_TRUE(malformed.secure);
   EXPECT_FALSE(malformed.detailed_logging_allowed);
   EXPECT_FALSE(malformed.learning_allowed);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, SettingsWrittenAfterLoadReadsOnlyAheadOfTheLoadedFile) {
-  const auto dir = TestDir("azookey_settings_written_after_load");
+  ScopedTempDirectory temp("azookey_settings_written_after_load");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"maxCandidates":9})");
   azookey::host::SettingsStore store(path);
@@ -132,7 +162,8 @@ TEST(SettingsStoreTest, SettingsWrittenAfterLoadReadsOnlyAheadOfTheLoadedFile) {
 }
 
 TEST(SettingsStoreTest, SecureAppsNormalizeAndMalformedPrivacyFallsBackToDefaults) {
-  const auto dir = TestDir("azookey_settings_secure_apps");
+  ScopedTempDirectory temp("azookey_settings_secure_apps");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   azookey::host::SettingsStore store(path);
   const auto loaded = store.Load();
@@ -164,7 +195,8 @@ TEST(SettingsStoreTest, SecureAppsNormalizeAndMalformedPrivacyFallsBackToDefault
 }
 
 TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisablesIt) {
-  const auto dir = TestDir("azookey_settings_crash_consent");
+  ScopedTempDirectory temp("azookey_settings_crash_consent");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   azookey::host::SettingsStore store(path);
   EXPECT_EQ(store.Load().settings.crash_report_consent, "off");
@@ -190,7 +222,8 @@ TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisab
 }
 
 TEST(SettingsStoreTest, AiPrivacyAndTimeoutAreAppliedAndBounded) {
-  const auto dir = TestDir("azookey_settings_ai_privacy");
+  ScopedTempDirectory temp("azookey_settings_ai_privacy");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"openAiTimeoutMs":2500,"privacy":{"mode":"private"}})");
   azookey::host::SettingsStore store(path);
@@ -209,7 +242,8 @@ TEST(SettingsStoreTest, AiPrivacyAndTimeoutAreAppliedAndBounded) {
 }
 
 TEST(SettingsStoreTest, LoadsCommonProfilesAndReloadKeepsPreviousSnapshotImmutable) {
-  const auto dir = TestDir("azookey_settings_profiles");
+  ScopedTempDirectory temp("azookey_settings_profiles");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"predictionEnabled":false,"profilesByApp":{
     "default":{"learningEnabled":false},"code.exe":{"style":"technical","bad":true}}})");
@@ -230,11 +264,11 @@ TEST(SettingsStoreTest, LoadsCommonProfilesAndReloadKeepsPreviousSnapshotImmutab
   EXPECT_EQ(
       azookey::ipc::json::Value(loaded.settings.AppProfiles().Resolve(app)).GetString("style"),
       "technical");
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
-  const auto dir = TestDir("azookey_settings_missing");
+  ScopedTempDirectory temp("azookey_settings_missing");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   azookey::host::SettingsStore store(path);
 
@@ -254,12 +288,11 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.settings.backend_preference, "auto");
   EXPECT_TRUE(result.settings.model.enabled);
   EXPECT_TRUE(result.settings.model.auto_load_on_host_start);
-
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
-  const auto dir = TestDir("azookey_settings_nll");
+  ScopedTempDirectory temp("azookey_settings_nll");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"reranker":{"nllRerankEnabled":true,"nllTopK":1e30,
       "nllWeight":-2,"nllBudgetMs":1,"nllFailureThreshold":100}})");
@@ -275,11 +308,11 @@ TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
   WriteText(path, R"({"reranker":{"nllRerankEnabled":"true","nllTopK":1.5,
       "nllWeight":"bad","nllBudgetMs":null,"nllFailureThreshold":false}})");
   EXPECT_EQ(store.Reload().settings.nll, azookey::host::NllConfig{});
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
-  const auto dir = TestDir("azookey_settings_partial");
+  ScopedTempDirectory temp("azookey_settings_partial");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "liveConversion": true,
@@ -341,12 +374,11 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_EQ(*config.inference_threads, 6);
   EXPECT_EQ(config.max_candidates, 12u);
   EXPECT_EQ(config.max_context_length, 20u);
-
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, DynamicPunctuationSettingsDefaultAndValidation) {
-  const auto dir = TestDir("azookey_settings_dynamic_punctuation");
+  ScopedTempDirectory temp("azookey_settings_dynamic_punctuation");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"liveConversion":true})");
   azookey::host::SettingsStore store(path);
@@ -382,11 +414,11 @@ TEST(SettingsStoreTest, DynamicPunctuationSettingsDefaultAndValidation) {
   EXPECT_EQ(result.settings.dynamic_punctuation_stability, "onPause");
   EXPECT_EQ(result.settings.dynamic_punctuation_idle_ms, 400);
   EXPECT_DOUBLE_EQ(result.settings.segment_boundary_confidence, 0.5);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
-  const auto dir = TestDir("azookey_settings_model_override");
+  ScopedTempDirectory temp("azookey_settings_model_override");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "backendPreference": "cuda",
@@ -409,8 +441,6 @@ TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   EXPECT_EQ(config.backend, azookey::host::BackendKind::Cpu);
   EXPECT_TRUE(config.model_path.empty());
   EXPECT_FALSE(config.n_gpu_layers.has_value());
-
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, VulkanPreferenceAndAutoResolveAgainstBuildDefault) {
@@ -463,7 +493,8 @@ TEST(SettingsStoreTest, AutoBackendCanUseExplicitDefaultBackend) {
 }
 
 TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeValues) {
-  const auto dir = TestDir("azookey_settings_inference_numeric");
+  ScopedTempDirectory temp("azookey_settings_inference_numeric");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "inferenceThreads": -5,
@@ -486,8 +517,6 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
   EXPECT_EQ(result.settings.max_context_length, 10);
-
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
@@ -531,7 +560,8 @@ TEST(SettingsStoreTest, ExplicitInferenceThreadsOverrideEnvironmentWithoutQueryi
 
 TEST(SettingsStoreTest, ReloadResamplesPowerSourceAndHonorsNewExplicitThreads) {
   using namespace azookey::host;
-  const auto dir = TestDir("azookey_settings_power_reload");
+  ScopedTempDirectory temp("azookey_settings_power_reload");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"powerProfile":"auto","inferenceThreads":0})");
   SettingsStore store(path);
@@ -553,11 +583,11 @@ TEST(SettingsStoreTest, ReloadResamplesPowerSourceAndHonorsNewExplicitThreads) {
   config = ApplyRuntimeSettingsToEngineConfig(config, explicit_settings.settings, BackendKind::Cpu,
                                               provider);
   EXPECT_EQ(config.inference_threads, 8);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
-  const auto dir = TestDir("azookey_settings_invalid");
+  ScopedTempDirectory temp("azookey_settings_invalid");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, "{ invalid json");
 
@@ -571,8 +601,6 @@ TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
   EXPECT_TRUE(std::filesystem::exists(*result.quarantined_path));
   EXPECT_FALSE(result.settings.live_conversion);
   EXPECT_TRUE(result.settings.prediction_enabled);
-
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, ReadFailureDoesNotQuarantineFile) {
@@ -581,7 +609,8 @@ TEST(SettingsStoreTest, ReadFailureDoesNotQuarantineFile) {
     GTEST_SKIP() << "root bypasses file permissions, so chmod(0) cannot simulate a read failure";
   }
 #endif
-  const auto dir = TestDir("azookey_settings_read_failure");
+  ScopedTempDirectory temp("azookey_settings_read_failure");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"liveConversion":true})");
 
@@ -606,11 +635,11 @@ TEST(SettingsStoreTest, ReadFailureDoesNotQuarantineFile) {
   EXPECT_FALSE(result.quarantined_path.has_value());
   EXPECT_TRUE(std::filesystem::exists(path));
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".invalid"));
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, LockTimeoutLeavesInvalidFileForLaterQuarantine) {
-  const auto dir = TestDir("azookey_settings_lock_timeout");
+  ScopedTempDirectory temp("azookey_settings_lock_timeout");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, "{ invalid json");
 
@@ -643,11 +672,11 @@ TEST(SettingsStoreTest, LockTimeoutLeavesInvalidFileForLaterQuarantine) {
   EXPECT_EQ(retry_result.status, azookey::host::SettingsLoadStatus::Invalid);
   EXPECT_TRUE(retry_result.quarantined_path.has_value());
   EXPECT_FALSE(std::filesystem::exists(path));
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, SharedLockSerializesAtomicWriterBeforeRead) {
-  const auto dir = TestDir("azookey_settings_serialized_writer");
+  ScopedTempDirectory temp("azookey_settings_serialized_writer");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, "{ invalid json");
 
@@ -676,11 +705,11 @@ TEST(SettingsStoreTest, SharedLockSerializesAtomicWriterBeforeRead) {
   EXPECT_FALSE(result.quarantined_path.has_value());
   EXPECT_TRUE(std::filesystem::exists(path));
   EXPECT_FALSE(std::filesystem::exists(path.string() + ".invalid"));
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
-  const auto dir = TestDir("azookey_settings_reload_invalid");
+  ScopedTempDirectory temp("azookey_settings_reload_invalid");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"liveConversion":true,"logLevel":"debug",
                       "privacy":{"mode":"normal","redactLogs":false}})");
@@ -710,11 +739,11 @@ TEST(SettingsStoreTest, InvalidReloadKeepsCurrentSettings) {
   const auto restored = store.Reload();
   EXPECT_FALSE(restored.settings.privacy_policy.secure);
   EXPECT_TRUE(restored.settings.privacy_policy.detailed_logging_allowed);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, TypoAndAutoWordKeysReachTheEngineConfig) {
-  const auto dir = TestDir("azookey_settings_typo_auto_word");
+  ScopedTempDirectory temp("azookey_settings_typo_auto_word");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "typoCorrectionMode": "auto_replace",
@@ -750,7 +779,8 @@ TEST(SettingsStoreTest, TypoAndAutoWordKeysReachTheEngineConfig) {
 }
 
 TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
-  const auto dir = TestDir("azookey_settings_typo_auto_word_invalid");
+  ScopedTempDirectory temp("azookey_settings_typo_auto_word_invalid");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({
     "typoCorrectionMode": "aggressive",
@@ -777,7 +807,8 @@ TEST(SettingsStoreTest, TypoAndAutoWordDefaultsHoldAndInvalidValuesAreIgnored) {
 }
 
 TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
-  const auto dir = TestDir("azookey_settings_typo_auto_word_empty");
+  ScopedTempDirectory temp("azookey_settings_typo_auto_word_empty");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, "{}");
 
@@ -795,7 +826,8 @@ TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
 
 TEST(SettingsStoreTest, PrivacyPublicationWaitsForActiveLearningGuard) {
   using namespace std::chrono_literals;
-  const auto dir = TestDir("azookey_settings_privacy_publication");
+  ScopedTempDirectory temp("azookey_settings_privacy_publication");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"privacy":{"mode":"normal"}})");
   azookey::host::SettingsStore store(path);
@@ -822,13 +854,13 @@ TEST(SettingsStoreTest, PrivacyPublicationWaitsForActiveLearningGuard) {
   WriteText(path, "invalid json");
   store.Reload();
   EXPECT_TRUE(store.LockPrivacyPolicy().policy.secure);
-  std::filesystem::remove_all(dir);
 }
 
 // M47 section 8.5.3: SafeMode turns AI and learning off over whatever the rest
 // of the file asks for, and the engine config follows.
 TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
-  const auto dir = TestDir("azookey_settings_safe_mode_overrides");
+  ScopedTempDirectory temp("azookey_settings_safe_mode_overrides");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   const std::string rest =
       R"("aiBackend":"openai","llmMagicConversion":true,"batchConversionMode":"ai-cleanup",)"
@@ -872,11 +904,11 @@ TEST(SettingsStoreTest, SafeModeOverridesModelAiAndLearning) {
   EXPECT_FALSE(config.nll.enabled);
   EXPECT_FALSE(config.auto_word_mining_enabled);
   EXPECT_EQ(config.typo_correction_mode, "off");
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, SafeModeDefaultsOffAndIgnoresMistypedValues) {
-  const auto dir = TestDir("azookey_settings_safe_mode_defaults");
+  ScopedTempDirectory temp("azookey_settings_safe_mode_defaults");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"safeMode":{"enabled":"yes","enteredAt":7,"lastCrashCount":-1}})");
   azookey::host::SettingsStore store(path);
@@ -885,11 +917,11 @@ TEST(SettingsStoreTest, SafeModeDefaultsOffAndIgnoresMistypedValues) {
   EXPECT_TRUE(store.settings().safe_mode.entered_at.empty());
   EXPECT_EQ(store.settings().safe_mode.last_crash_count, 0);
   EXPECT_TRUE(store.settings().model.enabled);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, PersistSafeModeKeepsOtherKeysAndLoadsBackEnabled) {
-  const auto dir = TestDir("azookey_settings_safe_mode_persist");
+  ScopedTempDirectory temp("azookey_settings_safe_mode_persist");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, R"({"maxCandidates":5,"model":{"selectedPath":"a.gguf"},"unknownKey":[1,2]})");
   azookey::host::SettingsStore store(path);
@@ -902,11 +934,11 @@ TEST(SettingsStoreTest, PersistSafeModeKeepsOtherKeysAndLoadsBackEnabled) {
   EXPECT_EQ(store.settings().model.selected_path, "a.gguf");
 
   EXPECT_NE(ReadText(path).find(R"("unknownKey":[1,2])"), std::string::npos) << ReadText(path);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, PersistSafeModeCreatesAMissingFile) {
-  const auto dir = TestDir("azookey_settings_safe_mode_missing");
+  ScopedTempDirectory temp("azookey_settings_safe_mode_missing");
+  const auto& dir = temp.path();
   const auto path = dir / "config" / "settings.json";
   std::filesystem::create_directories(path.parent_path());
   azookey::host::SettingsStore store(path);
@@ -914,15 +946,14 @@ TEST(SettingsStoreTest, PersistSafeModeCreatesAMissingFile) {
   ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
   EXPECT_TRUE(store.settings().safe_mode.enabled);
   EXPECT_EQ(store.settings().safe_mode.last_crash_count, 4);
-  std::filesystem::remove_all(dir);
 }
 
 TEST(SettingsStoreTest, PersistSafeModeLeavesAnUnparsableFileAlone) {
-  const auto dir = TestDir("azookey_settings_safe_mode_invalid");
+  ScopedTempDirectory temp("azookey_settings_safe_mode_invalid");
+  const auto& dir = temp.path();
   const auto path = dir / "settings.json";
   WriteText(path, "{ not json");
   azookey::host::SettingsStore store(path);
   EXPECT_FALSE(store.PersistSafeModeEntered("2026-09-22T01:02:03Z", 3));
   EXPECT_EQ(ReadText(path), "{ not json");
-  std::filesystem::remove_all(dir);
 }

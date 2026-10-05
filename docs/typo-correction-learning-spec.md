@@ -61,34 +61,36 @@ host に送る。検出トリガは 2 種。
 
 確定前に backspace でかな読みを消して打ち直したケース。
 
-- VK_BACK ハンドラ（`tsf-tip/src/TextService.cpp` 182-203 行付近）で、かな 1 文字を
-  削除する直前、`in_backspace_correction_ == false` のときに
-  `pre_correction_reading_ = preedit_kana_`（削る前の全読み）をスナップショットし、
-  `in_backspace_correction_ = true` にする。
+- `TextService` がかなを削除するキー処理に成功したとき、削除前の全かな読みを
+  `TypoCorrectionTracker::BeforeBackspace` へ渡す。保留ローマ字だけを削除した場合は
+  このトリガを発火させない。訂正中でなければ削除前の読みをスナップショットする。
 - 連続 backspace ではスナップショットを更新しない（burst の最初の状態を保持）。
-- 確定成功時（`CommitSelected` / `CommitPreeditAsIs`）に、
-  `in_backspace_correction_` かつ `pre_correction_reading_` 非空なら
-  `wrong = pre_correction_reading_`、`correct = 確定時の最終かな読み` とし、
-  §6 のフィルタを満たせば `PostObserveTypo(wrong, correct)`。
+- core の確定アクション、`CommitSelected`、`CommitPreeditAsIs` は最終かな読みと
+  tracker を保留する。`EditSession::DoEditSession` で本文の確定に成功した後、
+  `TypoCorrectionTracker::Commit` が §6 のフィルタを満たすペアを返せば
+  `ObserveTypo` を送る。要求の受理だけ、書込み失敗、アプリによる本文の置換では送らない。
+  確定 callback は既存の edit cookie で入力先の privacy を再評価し、再試行や
+  遅延実行の間に学習不可へ変わった観測を失効させる。
 
 ### 4-2. 確定直後の打ち直し
 
 確定したテキストを直後に backspace で消し、別入力をやり直したケース。
 
-- 確定成功時に `last_committed_reading_` / `last_committed_surface_` を保存し、
-  `keystrokes_since_commit_ = 0` にする。
-- `OnKeyDown` 冒頭で、確定直後の **最初のキーが VK_BACK** かつ preedit が空
-  （= 確定済みテキストを消す方向）なら、`pre_correction_reading_ =
-  last_committed_reading_`、`in_backspace_correction_ = true` を設定。
+- 確定成功時に tracker が最終かな読みを保存し、最初の 1 キーの判定窓を開く。
+- `TypoCorrectionTracker::BeginKey` は確定直後の **最初のキーが VK_BACK** かつ
+  preedit が空（= 確定済みテキストを消す方向）のとき、保存した読みを訂正前の読みとする。
   以降の打ち直し→確定で §4-1 と同じ比較ロジックが発火する。
+- アプリへ渡すキーは `OnKeyDown` に届かないため、`OnTestKeyDown` でも判定する。
+  同じキーの `OnKeyDown` で二重に数えず、確定の再試行に使われたキーは窓を消費しない。
 - 通常入力が続いた場合は短いウィンドウ（最初の 1 キーのみ）でリセット。
 
 ### 4-3. 状態リセット
 
-`Deactivate` / `OnCompositionTerminated` / `OnSetFocus(FALSE)` で
-`in_backspace_correction_` / `pre_correction_reading_` /
-`keystrokes_since_commit_` をリセットする。フォーカス移動・言語切替を跨いだ
-誤学習を防ぐ。
+`Deactivate` / 外部からの `OnCompositionTerminated` / `OnSetFocus(FALSE)` と
+入力先の変更で tracker、保留した確定観測、送信待ちの `ObserveTypo` をリセットする。
+TIP 自身の確定に伴う composition 終了は、成功後の観測を消さない。
+学習不可への遷移でも同じリセットを行い、IPC worker が取り出した観測は世代の照合で捨てる。
+フォーカス移動・言語切替・学習不可の区間を跨いだ誤学習を防ぐ。
 
 ## 5. 蓄積と適用（host: `learning/` + `inference-host/`）
 
@@ -131,14 +133,23 @@ host に送る。検出トリガは 2 種。
 ### 5-3. preedit への反映（auto_replace）
 
 `auto_replace` で `QueryCandidatesResponse.corrected_reading` が非空のとき、TIP は
-`preedit_kana_` を補正後読みへ置換する。TSF のスレッド制約のため非同期 preedit
-更新は行わず、MVP では **次のキー入力時 / VK_SPACE 候補表示時に反映** する
+`preedit_kana_` を補正後読みへ置換する。応答は候補と同じ freshness 判定を通して
+元読みと request ID を保留し、反映時にも入力先、元読み、request ID、secure を照合する。
+TSF のスレッド制約のため非同期 preedit
+更新は行わず、**次のキー入力時 / VK_SPACE 候補表示時に反映** する
 （候補ウィンドウには既に補正後候補が出ているため体験上の影響は小さい）。
+
+通常入力は `InputState::WithCorrectedReading` で読みを置換して保留ローマ字を消す。
+Composing / Previewing / Selecting の状態、候補のスナップショット、選択位置、
+候補待ち、live conversion 設定、カスタムローマ字表を保持する。
+空読みとそれ以外の状態では置換しない。`suggest` / `off` の応答は補正読みが空なので、
+TIP の読みを変更しない。モードの判定は §3 のとおり Host が担う。
 
 ## 6. 検出ロジックのエッジケース方針
 
-- **編集距離しきい値**: 読み長に対し相対化。`max(1, ceil(len*0.34))` を上限とし、
-  絶対上限を 3 程度にする。固定値だと長文ペアで誤学習が増える。
+- **編集距離しきい値**: 長い側の読みのコードポイント数を `len` とし、
+  `min(3, max(1, ceil(len*0.34)))` を上限にする。TIP と Host は同じ条件を使い、
+  どちらかの読みが 64 コードポイントを超えるペアを除外する。
 - **最小長**: 2 文字以上のペアのみ学習対象。1 文字読み（「い」→「え」等）は
   単なる候補選択ミスと区別不能。
 - **完全一致除外**: `wrong == correct` は学習しない（同じものを打ち直しただけ）。
@@ -154,7 +165,8 @@ host に送る。検出トリガは 2 種。
 - `MessageType` に `ObserveTypo` を追加（fire-and-forget）。
 - 新ペイロード:
   - `ObserveTypoRequest { std::string wrong_reading, correct_reading;
-    uint64_t timestamp_ms; }`
+    uint64_t timestamp_ms; bool secure; bool learning_allowed; }`
+    — `secure` / `learning_allowed` の省略値は `true` / `false`（fail-closed）。
   - `ObserveTypoResponse { bool ok; }`（対称性のため定義。応答は送らない）
 - `QueryCandidatesResponse` に `std::string corrected_reading` を追加
   （空 = 補正なし。フィールド欠如時は空文字で後方互換）。
@@ -182,6 +194,13 @@ host に送る。検出トリガは 2 種。
 
 ## 9. テスト計画
 
+- `tsf-tip/tests/typo_correction_tracker_test.cpp`: 2 トリガ、連続 backspace、
+  最初の 1 キー以外での誤検出防止、リセット、UTF-8 長と編集距離のフィルタ。
+- `tsf-tip/tests/onkeydown_preedit_test.cpp`: 成功後の観測、確定失敗と再試行、
+  lifecycle と privacy のリセット、handshake、補正読みの保留・次キー反映・stale 拒否。
+- `core/tests/input_state_test.cpp`: 補正読みの置換で状態、固定候補、選択位置、
+  候補待ち、カスタムローマ字表を保持し、空読みと非入力状態では変更しない。
+
 - 新規 `learning/tests/typo_correction_store_test.cpp`:
   Observe/Lookup、しきい値未満で `nullopt`、編集距離超過ペアの拒否、
   UTF-8 編集距離（かな）、Save→Load ラウンドトリップ、Reset。
@@ -201,6 +220,11 @@ host に送る。検出トリガは 2 種。
 | 新規 | `learning/include/azookey/learning/TypoCorrectionStore.h` |
 | 新規 | `learning/src/TypoCorrectionStore.cpp` |
 | 新規 | `learning/tests/typo_correction_store_test.cpp` |
+| 新規 | `tsf-tip/include/azookey/tsf/TypoCorrectionTracker.h` |
+| 新規 | `tsf-tip/tests/typo_correction_tracker_test.cpp` |
+| 編集 | `core/include/azookey/core/InputState.h`, `core/src/InputState.cpp`, `core/tests/input_state_test.cpp` |
+| 編集 | `tsf-tip/CMakeLists.txt`, `tsf-tip/tests/onkeydown_preedit_test.cpp` |
+| 編集 | `tsf-tip/include/azookey/tsf/AiInputGuard.h`, `tsf-tip/src/AiInputGuard.cpp` |
 | 編集 | `learning/CMakeLists.txt`, `learning/tests/CMakeLists.txt` |
 | 編集 | `ipc/include/azookey/ipc/Messages.h`, `ipc/src/Messages.cpp` |
 | 編集 | `inference-host/include/azookey/host/SettingsStore.h`, `inference-host/src/SettingsStore.cpp` |
@@ -782,8 +806,8 @@ M55 の `raw_keys` 抑止・補正適用停止は §12.12.2 の設計契約に�
 #### `ObserveTypoRequest` への per-event `secure` / `learning_allowed`
 
 `ObserveTypo` は fire-and-forget で対応する `QueryCandidates` を持たないため、
-v1 の `ObserveTypoRequest { wrong_reading, correct_reading, timestamp_ms }`
-（§7）に `bool secure = true` と `bool learning_allowed = false` を加える。
+§7 の v1 `ObserveTypoRequest` が持つ `secure = true` と
+`learning_allowed = false` のイベント単位の契約を v2 でも維持する。
 同じイベント単位の契約を `CommitObservationRequest` と
 `CommitSegmentsObservationRequest` にも適用する。protocol version は 1 を維持する。
 古い TIP と新しい Host では学習を拒否し、新しい TIP と古い Host では TIP の抑止を維持する。

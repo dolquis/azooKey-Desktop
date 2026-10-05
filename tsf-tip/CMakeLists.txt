@@ -133,6 +133,11 @@ if(AZOOKEY_BUILD_TESTS)
     TIMEOUT 30)
 
   add_tsf_tip_unit_test(tsf_tip_onkeydown_preedit_tests tests/onkeydown_preedit_test.cpp)
+  add_executable(tsf_tip_typo_correction_tracker_tests tests/typo_correction_tracker_test.cpp)
+  target_include_directories(tsf_tip_typo_correction_tracker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(tsf_tip_typo_correction_tracker_tests PRIVATE
+    azookey_core GTest::gtest_main azookey_project_options azookey_project_warnings)
+  azookey_discover_tests(tsf_tip_typo_correction_tracker_tests)
   add_tsf_tip_unit_test(tsf_tip_bracket_edit_session_tests tests/bracket_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_character_form_edit_session_tests tests/character_form_edit_session_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_ai_input_guard_tests tests/ai_input_guard_test.cpp)

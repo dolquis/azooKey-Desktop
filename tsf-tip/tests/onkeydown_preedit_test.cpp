@@ -7380,3 +7380,506 @@ TEST(TsfTipSecureInputTest, PrivateInputScopeSuppressesLearningButKeepsPredictio
   EXPECT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
   h.context.selection_range = nullptr;
 }
+
+namespace {
+void ConfigureTypoHarness(DocumentPreeditHarness& h, bool legacy = false) {
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"normal"}})");
+  // Enabling a frontend rewriter selects the legacy key path.
+  h.service.set_number_rewriter_enabled_for_test(legacy);
+}
+
+void TypeTypoRomaji(DocumentPreeditHarness& h, std::string_view keys) {
+  for (const unsigned char key : keys) ASSERT_TRUE(h.Press(key));
+}
+
+BOOL ProbeTypoKey(DocumentPreeditHarness& h, WPARAM key) {
+  h.keyboard_state.Reapply();
+  BOOL eaten = FALSE;
+  EXPECT_EQ(h.service.OnTestKeyDown(&h.context, key, 0, &eaten), S_OK);
+  return eaten;
+}
+
+void RetypeKanaBurst(DocumentPreeditHarness& h) {
+  TypeTypoRomaji(h, "KANINA");
+  ASSERT_EQ(h.service.preedit_kana_, "かにな");
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_TRUE(h.Press(VK_BACK));
+  ASSERT_EQ(h.service.preedit_kana_, "か");
+  TypeTypoRomaji(h, "MI");
+  ASSERT_EQ(h.service.preedit_kana_, "かみ");
+}
+
+size_t QueuedTypoCount(DocumentPreeditHarness& h) {
+  const auto types = h.service.queued_ipc_types_for_test();
+  return static_cast<size_t>(
+      std::count(types.begin(), types.end(), azookey::ipc::MessageType::ObserveTypo));
+}
+
+std::vector<azookey::ipc::CandidateField> CorrectedTypoCandidates() {
+  std::vector<azookey::ipc::CandidateField> candidates(2);
+  candidates[0].reading = "かみ";
+  candidates[0].surface = "神";
+  candidates[0].source = "dictionary";
+  candidates[1].reading = "かみ";
+  candidates[1].surface = "紙";
+  candidates[1].source = "dictionary";
+  return candidates;
+}
+}  // namespace
+
+TEST(TsfTipTypoCorrectionTest, BackspaceBurstObservesInitialKanaOnlyAfterSuccessfulCommit) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    RetypeKanaBurst(h);
+    EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"かみ");
+    const auto observation = h.service.last_queued_typo_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->wrong_reading, "かにな");
+    EXPECT_EQ(observation->correct_reading, "かみ");
+    EXPECT_GT(observation->timestamp_ms, 0u);
+    EXPECT_FALSE(observation->secure);
+    EXPECT_TRUE(observation->learning_allowed);
+    EXPECT_EQ(QueuedTypoCount(h), 1u);
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, PassThroughTestKeyBackspaceAfterCommitArmsRetyping) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    TypeTypoRomaji(h, "KANI");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_EQ(h.service.preedit_kana_, "");
+    // TSF does not call OnKeyDown when this probe declines the committed-text
+    // backspace. Its OnTestKeyDown notification must arm the retyping window.
+    EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+    EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+    TypeTypoRomaji(h, "KAMI");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+
+    const auto observation = h.service.last_queued_typo_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->wrong_reading, "かに");
+    EXPECT_EQ(observation->correct_reading, "かみ");
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, OrdinaryFirstTestKeyClosesPostCommitBackspaceWindow) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  TypeTypoRomaji(h, "KANI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(ProbeTypoKey(h, VK_LEFT));
+  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  TypeTypoRomaji(h, "KAMI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+}
+
+TEST(TsfTipTypoCorrectionTest, LifecycleLossClearsPendingBackspaceCorrection) {
+  for (const int reset : {0, 1, 2}) {
+    SCOPED_TRACE(reset);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    RetypeKanaBurst(h);
+    if (reset == 0) {
+      ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+    } else if (reset == 1) {
+      ASSERT_EQ(h.service.Deactivate(), S_OK);
+    } else {
+      ASSERT_EQ(h.ExternallyTerminate(), S_OK);
+    }
+    ASSERT_TRUE(h.service.preedit_kana_.empty());
+    ASSERT_EQ(h.service.OnSetFocus(TRUE), S_OK);
+    ConfigureTypoHarness(h);
+    TypeTypoRomaji(h, "KAMI");
+    ASSERT_EQ(h.service.preedit_kana_, "かみ");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"かみかみ");
+    EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, FocusLossClearsTheCommittedReadingWindow) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  TypeTypoRomaji(h, "KANI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+  ASSERT_EQ(h.service.OnSetFocus(TRUE), S_OK);
+  EXPECT_FALSE(ProbeTypoKey(h, VK_BACK));
+  TypeTypoRomaji(h, "KAMI");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+}
+
+TEST(TsfTipTypoCorrectionTest, RejectedCommitObservesOnceWhenRetryActuallySucceeds) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  RetypeKanaBurst(h);
+  h.context.request_result = TF_E_LOCKED;
+  h.context.request_session_result = TF_E_LOCKED;
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.committing_);
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+
+  h.context.request_result = S_OK;
+  h.context.request_session_result = S_OK;
+  ASSERT_TRUE(ProbeTypoKey(h, 'K'));
+  ASSERT_TRUE(h.Press('K'));
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"かみ");
+  EXPECT_EQ(QueuedTypoCount(h), 1u);
+  const auto observation = h.service.last_queued_typo_observation_for_test();
+  ASSERT_TRUE(observation);
+  EXPECT_EQ(observation->wrong_reading, "かにな");
+  EXPECT_EQ(observation->correct_reading, "かみ");
+  TypeTypoRomaji(h, "KA");
+  EXPECT_EQ(QueuedTypoCount(h), 1u);
+}
+
+TEST(TsfTipTypoCorrectionTest, RetryRechecksCurrentPrivacyBeforeObservingTypo) {
+  for (const bool secure : {false, true}) {
+    SCOPED_TRACE(secure);
+    PrivateScopeProperty property;
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    RetypeKanaBurst(h);
+    h.context.request_result = TF_E_LOCKED;
+    h.context.request_session_result = TF_E_LOCKED;
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    ASSERT_TRUE(h.service.committing_);
+    ASSERT_FALSE(h.service.last_queued_typo_observation_for_test());
+
+    // The context identity stays the same while its field/privacy policy
+    // changes between preparing the commit and successfully retrying it.
+    if (secure)
+      h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+    else
+      h.context.input_scope_property = &property;
+    h.context.request_result = S_OK;
+    h.context.request_session_result = S_OK;
+    ASSERT_TRUE(h.Press('K'));
+    EXPECT_FALSE(h.service.committing_);
+    EXPECT_EQ(h.context.document->text, L"かみ");
+    EXPECT_EQ(h.service.secure_input_for_test(), secure);
+    EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+    EXPECT_EQ(QueuedTypoCount(h), 0u);
+    h.context.input_scope_property = nullptr;
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, QueuedCommitReadsPrivateScopeUsingItsWriteCookie) {
+  PrivateScopeProperty property;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  RetypeKanaBurst(h);
+  h.context.skip_write_callback = true;
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_TRUE(h.service.committing_);
+  ASSERT_FALSE(h.service.last_queued_typo_observation_for_test());
+
+  h.context.input_scope_property = &property;
+  h.context.skip_write_callback = false;
+  // A queued write already has an edit cookie. Privacy must use it without
+  // trying to request a nested read session on the same TSF context.
+  h.context.reject_read = true;
+  const int previous_request_count = h.context.request_count;
+  auto* session = new azookey::tsf::EditSession(&h.service, &h.context);
+  const HRESULT hr = session->DoEditSession(1);
+  session->Release();
+  EXPECT_EQ(hr, S_OK);
+  EXPECT_EQ(h.context.request_count, previous_request_count);
+  EXPECT_FALSE(h.service.committing_);
+  EXPECT_EQ(h.context.document->text, L"かみ");
+  EXPECT_FALSE(h.service.secure_input_for_test());
+  EXPECT_TRUE(h.service.prediction_allowed_for_test());
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+  EXPECT_EQ(QueuedTypoCount(h), 0u);
+  h.context.input_scope_property = nullptr;
+}
+
+TEST(TsfTipTypoCorrectionTest, BatchPendingRomajiDeletionDoesNotArmKanaCorrection) {
+  struct Case {
+    const char* initial;
+    const char* replacement;
+    const char* correct;
+    const wchar_t* surface;
+    bool observe;
+  };
+  for (const auto& item :
+       {Case{"KANIK", "", "かに", L"かに", false}, Case{"KANI", "KA", "かんか", L"かんか", true}}) {
+    SCOPED_TRACE(item.initial);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_batch_romaji_options_for_test(true);
+    TypeTypoRomaji(h, item.initial);
+    ASSERT_TRUE(h.Press(VK_BACK));
+    TypeTypoRomaji(h, item.replacement);
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, item.surface);
+    const auto observation = h.service.last_queued_typo_observation_for_test();
+    ASSERT_EQ(observation.has_value(), item.observe);
+    if (observation) {
+      EXPECT_EQ(observation->wrong_reading, "かに");
+      EXPECT_EQ(observation->correct_reading, item.correct);
+    }
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, CustomRomajiCommitObservesKanaAfterFlushingPendingPrefix) {
+  const auto table =
+      azookey::core::CustomRomajiLoader::Parse("ka\tか\nni\tに\na\tあ\nab\tい\n").table;
+  ASSERT_TRUE(table);
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    h.service.set_romaji_table_for_test(table);
+    TypeTypoRomaji(h, "KANI");
+    ASSERT_EQ(h.service.preedit_kana_, "かに");
+    ASSERT_TRUE(h.Press(VK_BACK));
+    ASSERT_TRUE(h.Press('A'));
+    // "a" remains pending because it is also a prefix of "ab". The committed
+    // reading must include its final kana, rather than only confirmed kana.
+    ASSERT_EQ(h.context.document->text, L"かa");
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.context.document->text, L"かあ");
+    const auto observation = h.service.last_queued_typo_observation_for_test();
+    ASSERT_TRUE(observation);
+    EXPECT_EQ(observation->wrong_reading, "かに");
+    EXPECT_EQ(observation->correct_reading, "かあ");
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, PrivacyModesGateObservationWithoutTipTypoSettings) {
+  struct Case {
+    const char* settings;
+    bool learning;
+  };
+  for (const auto& item : {
+           Case{R"({"privacy":{"mode":"normal"}})", true},
+           Case{R"({"privacy":{"mode":"secure"}})", false},
+           Case{R"({"privacy":{"mode":"private"}})", false},
+           Case{R"({"privacy":{"mode":"custom"}})", false},
+           Case{R"({"privacy":{"mode":"custom","custom":{"learning":true}}})", true},
+       }) {
+    SCOPED_TRACE(item.settings);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    h.service.set_privacy_settings_for_test(item.settings);
+    RetypeKanaBurst(h);
+    ASSERT_TRUE(h.Press(VK_RETURN));
+    EXPECT_EQ(h.service.last_queued_typo_observation_for_test().has_value(), item.learning);
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, PrivateInputScopeSuppressesTypoObservation) {
+  PrivateScopeProperty property;
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.context.input_scope_property = &property;
+  RetypeKanaBurst(h);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+  EXPECT_FALSE(h.service.secure_input_for_test());
+  EXPECT_TRUE(h.service.prediction_allowed_for_test());
+  h.context.input_scope_property = nullptr;
+}
+
+TEST(TsfTipTypoCorrectionTest, SecureTransitionPurgesAlreadyQueuedTypoObservation) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  RetypeKanaBurst(h);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  ASSERT_EQ(QueuedTypoCount(h), 1u);
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"mode":"secure"}})");
+  ASSERT_TRUE(h.service.resolve_secure_for_test(&h.context));
+  EXPECT_FALSE(h.service.last_queued_typo_observation_for_test());
+  EXPECT_EQ(QueuedTypoCount(h), 0u);
+}
+
+TEST(TsfTipTypoCorrectionTest, CorrectedReadingAppliesBeforeSpaceAndKeepsCandidatesWhileSelecting) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  TypeTypoRomaji(h, "KANI");
+  h.service.set_corrected_candidates_for_test("かに", "かみ", CorrectedTypoCandidates());
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.preedit_kana_, "かみ");
+  ASSERT_EQ(h.service.input_state_for_test().kind(), azookey::core::InputStateKind::Selecting);
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+  EXPECT_EQ(h.service.shown_candidates_for_test()[0].surface, "神");
+  ASSERT_TRUE(h.Press(VK_DOWN));
+  ASSERT_EQ(h.service.input_state_for_test().selected_index(), 1u);
+  h.service.set_corrected_candidates_for_test("かみ", "かめ", CorrectedTypoCandidates());
+  EXPECT_TRUE(h.Press(VK_LEFT));
+  EXPECT_EQ(h.service.input_state_for_test().Reading(), "かめ");
+  EXPECT_EQ(h.service.input_state_for_test().selected_index(), 1u);
+  ASSERT_EQ(h.service.input_state_for_test().candidates().size(), 2u);
+  EXPECT_EQ(h.service.input_state_for_test().candidates()[1].surface, "紙");
+}
+
+TEST(TsfTipTypoCorrectionTest, CorrectedReadingIsUsedForSubsequentAppendAndBackspace) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    TypeTypoRomaji(h, "KANI");
+    h.service.set_corrected_candidates_for_test("かに", "かみ", CorrectedTypoCandidates());
+    ASSERT_TRUE(h.Press('I'));
+    EXPECT_EQ(h.service.preedit_kana_, "かみい");
+    ASSERT_TRUE(h.Press(VK_BACK));
+    EXPECT_EQ(h.service.preedit_kana_, "かみ");
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, EmptyCorrectedReadingLeavesTheOriginalReading) {
+  for (const bool legacy : {false, true}) {
+    SCOPED_TRACE(legacy);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h, legacy);
+    TypeTypoRomaji(h, "KANI");
+    h.service.set_corrected_candidates_for_test("かに", "", {});
+    ASSERT_TRUE(h.Press('I'));
+    EXPECT_EQ(h.service.preedit_kana_, "かにい");
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, StaleIdAndMismatchedReadingCannotApplyCorrection) {
+  for (const bool stale_id : {false, true}) {
+    SCOPED_TRACE(stale_id);
+    DocumentPreeditHarness h;
+    ConfigureTypoHarness(h);
+    TypeTypoRomaji(h, "KANI");
+    const auto request_id = h.service.pending_ipc_request_id_for_test();
+    ASSERT_NE(request_id, 0u);
+    h.service.set_corrected_candidates_for_test(stale_id ? "かに" : "ほか", "かみ",
+                                                CorrectedTypoCandidates(),
+                                                stale_id ? request_id + 1 : request_id);
+    ASSERT_TRUE(h.Press('I'));
+    EXPECT_EQ(h.service.preedit_kana_, "かにい");
+  }
+}
+
+TEST(TsfTipTypoCorrectionTest, CorrectedReadingAllocationFailureRollsBackAndCanRetry) {
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  TypeTypoRomaji(h, "KANI");
+  h.service.set_corrected_candidates_for_test("かに", "かみ", CorrectedTypoCandidates());
+  BOOL eaten = TRUE;
+  h.keyboard_state.Reapply();
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(h.service.OnKeyDown(&h.context, VK_SPACE, 0, &eaten), E_OUTOFMEMORY);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.preedit_kana_, "かに");
+  EXPECT_EQ(h.service.input_state_for_test().Reading(), "かに");
+  EXPECT_EQ(h.context.document->text, L"かに");
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.preedit_kana_, "かみ");
+  EXPECT_EQ(h.service.input_state_for_test().Reading(), "かみ");
+  ASSERT_EQ(h.service.shown_candidates_for_test().size(), 2u);
+}
+
+TEST(TsfTipTypoCorrectionTest, WireAdvertisesTypoAndSendsObservationWithoutWaitingForResponse) {
+  using namespace azookey::ipc;
+  TextServiceHarness token_guard;
+  const std::string pipe_name =
+      "\\\\.\\pipe\\azookey-typo-wire-" + std::to_string(GetCurrentProcessId());
+  std::atomic<bool> advertised{false};
+  std::atomic<bool> auto_replace_response_enabled{true};
+  std::atomic<bool> queried_after_observation{false};
+  std::mutex mutex;
+  std::vector<ObserveTypoRequest> observations;
+  std::vector<MessageType> received_types;
+  NamedPipeServer server;
+  ASSERT_TRUE(server.Start(pipe_name, [&](const Envelope& request) -> std::optional<Envelope> {
+    {
+      const std::lock_guard<std::mutex> lock(mutex);
+      received_types.push_back(request.type);
+    }
+    auto response = request;
+    if (request.type == MessageType::Handshake) {
+      const auto handshake = ParseHandshakeRequest(request.payload_json);
+      if (handshake)
+        advertised.store(std::find(handshake->capabilities.begin(), handshake->capabilities.end(),
+                                   "observe_typo") != handshake->capabilities.end());
+      HandshakeResponse handshake_response;
+      handshake_response.accepted = true;
+      response.payload_json = BuildHandshakeResponse(handshake_response);
+      return response;
+    }
+    if (request.type == MessageType::CommitObservation ||
+        request.type == MessageType::CommitSegmentsObservation) {
+      // These earlier observations require an ACK; otherwise the worker waits
+      // for it before it can reach the fire-and-forget ObserveTypo event.
+      response.payload_json = BuildCommitObservationResponse({true});
+      return response;
+    }
+    if (request.type == MessageType::ObserveTypo) {
+      if (auto observation = ParseObserveTypoRequest(request.payload_json)) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        observations.push_back(std::move(*observation));
+      }
+      return std::nullopt;  // ObserveTypo has no response on the wire.
+    }
+    if (request.type == MessageType::QueryCandidates) {
+      {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (!observations.empty()) queried_after_observation.store(true);
+      }
+      QueryCandidatesResponse payload;
+      if (const auto query = ParseQueryCandidatesRequest(request.payload_json);
+          query && query->reading == "かに" && auto_replace_response_enabled.load()) {
+        payload.corrected_reading = "かみ";
+        payload.candidates = CorrectedTypoCandidates();
+      }
+      response.payload_json = BuildQueryCandidatesResponse(payload);
+      return response;
+    }
+    return std::nullopt;
+  }));
+  DocumentPreeditHarness h;
+  ConfigureTypoHarness(h);
+  h.service.set_ipc_pipe_name_for_test(pipe_name);
+  TypeTypoRomaji(h, "KANI");
+  h.service.start_ipc_worker_for_test();
+  ASSERT_TRUE(WaitUntil([&] { return !h.service.cached_candidates_for_test().empty(); }));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  EXPECT_EQ(h.service.preedit_kana_, "かみ");
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  // The second phase observes the user's backspace correction. A fake Host
+  // correction during that burst would change the pair being measured.
+  auto_replace_response_enabled.store(false);
+  RetypeKanaBurst(h);
+  ASSERT_TRUE(h.Press(VK_RETURN));
+  const bool observation_received = WaitUntil([&] {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !observations.empty();
+  });
+  std::string received;
+  if (!observation_received) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    for (const auto type : received_types) received += TypeToString(type) + " ";
+  }
+  ASSERT_TRUE(observation_received) << "Received IPC types: " << received;
+  TypeTypoRomaji(h, "KA");
+  EXPECT_TRUE(WaitUntil([&] { return queried_after_observation.load(); }));
+  h.service.stop_ipc_worker_for_test();
+  server.Stop();
+  EXPECT_TRUE(advertised.load());
+  const std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_EQ(observations.size(), 1u);
+  EXPECT_EQ(observations[0].wrong_reading, "かにな");
+  EXPECT_EQ(observations[0].correct_reading, "かみ");
+  EXPECT_FALSE(observations[0].secure);
+  EXPECT_TRUE(observations[0].learning_allowed);
+}

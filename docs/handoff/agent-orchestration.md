@@ -16,7 +16,7 @@ Claude Code 固有の agent 一覧は `CLAUDE.md`「サブエージェントの�
 
 ## 不変条件
 
-1. 1 塊 = 1 branch = 1 Draft PR。塊は 1 Linear Issue か、1 PR にまとめた関連 Issue 群である（まとめ方は `docs/linear-conventions.md` §13「関連 Issue の塊と PR」）。commit、push、PR の作成・更新、塊に含まれる Issue の In Review への遷移は、その塊の親 agent が直列に行う。管制塔セッションの子セッションは、それぞれが自分の塊の親 agent である。
+1. 1 塊 = 1 branch = 1 Draft PR。塊は 1 Linear Issue か、1 PR にまとめた関連 Issue 群である（まとめ方は `docs/linear-conventions.md` §13「関連 Issue の塊と PR」）。commit、push、PR の作成・更新、塊に含まれる Issue の In Review への遷移は、その塊の親 agent が直列に行う。マージ後の Merged → 検証メモ → Done は、管制塔セッションがあれば管制塔が、無ければ親 agent が行う。管制塔セッションの子セッションは、それぞれが自分の塊の親 agent である。
 2. subagent は別 Issue、別 branch、別 PR を作らず、別セッションも起動しない。branch と PR を持つのは親 agent（子セッションを含む）だけである。
 3. 同じファイルを複数 writer に割り当てない。CMake build directory、生成物、Serena の対象切替を複数 agent で共有しない。
 4. Human Gate（実機確認、管理者権限、TIP 登録、署名）を CI、agent レビュー、シミュレーションで代替しない。

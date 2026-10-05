@@ -434,10 +434,10 @@ Health は Linear の health フィールドで設定し、本文に重ねて書
 
 ### 関連 Issue の塊と PR
 
-関連する Linear Issue は、1 branch / 1 Draft PR の塊にまとめてよい。塊にまとめるのは、同じファイルや同じ契約に触れ、別々の PR にすると衝突や中間状態が生じる Issue に限る。
+関連する Linear Issue は、1 branch / 1 Draft PR の塊にまとめてよい。まとめる目安は、同じファイルや同じ契約に触れ、別々の PR にすると衝突や中間状態が生じることである。
 
 - branch 名は `dolquis/dev-<代表番号>-<slug>` とし、必要なら番号を並べる（例: `dolquis/dev-1434-1415-1492-<slug>`）。
-- PR 本文で塊に含まれる Issue をすべて参照する。closing キーワードの使い分け（§7.1.3）は Issue ごとに適用し、人間ゲートや検証メモ待ちの Issue を `Fixes` で閉じない。
+- PR 本文で塊に含まれる Issue をすべて参照する。closing キーワードの使い分け（§7.1.3）は Issue ごとに適用する。
 - Draft PR を作ったら、塊に含まれる Issue をすべて In Review にする。マージ後の Merged → 検証メモ → Done も Issue ごとに行う。
 - 管制塔セッションが塊ごとに子セッションを立てる場合の担い手（In Review までは子、マージ後は管制塔）は `docs/handoff/agent-orchestration.md`「管制塔セッションと子セッション」に従う。
 

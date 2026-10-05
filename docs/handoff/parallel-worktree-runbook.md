@@ -10,7 +10,7 @@
 - build ディレクトリ。`CMakePresets.json` の `binaryDir` は `${sourceDir}/build/...` なので、worktree ごとに別の build ディレクトリになる。そのぶん、各 worktree で configure と full build をやり直す。
 - submodule。`git worktree add` は submodule を初期化しないため、新しい worktree では `third_party/wil` が未初期化になる。README のとおり `git submodule update --init third_party/wil` で初期化するか、configure に `-DAZOOKEY_FETCH_WIL=ON` を付ける。
 - FetchContent の取得物。リポジトリは `FETCHCONTENT_BASE_DIR` を設定していないので、`-DAZOOKEY_FETCH_GOOGLETEST=ON` などの取得は build ディレクトリごとにダウンロードし直す。テストを登録させるには、GoogleTest が入っていない環境ではこのフラグが要る（README「ビルド & テスト」）。
-- テストが使う名前付きパイプと ETW セッション。名前にプロセス ID を含むため、並行実行で衝突しない。
+- テストが使う名前付きパイプと ETW セッション。名前にプロセス ID または時刻値を含むため、並行実行で衝突しない。
 - COM 登録スモーク（`tsf-tip/tests/com_smoke_test.cpp`）。環境変数 `AZOOKEY_RUN_REGISTRATION_SMOKE` と昇格の両方がそろわないと SKIP するので、通常の並行 CTest では登録に触れない。
 - Serena。`.serena/project.yml` が `.claude/worktrees` を除外しており、worktree ごとに別 project として扱う。
 
@@ -20,14 +20,14 @@
 |---|---|---|
 | sccache のサーバとキャッシュ | 既定（`CMakeLists.txt` の `AZOOKEY_USE_COMPILER_CACHE=ON`）では全 worktree が同じキャッシュを使う。別 checkout のヘッダを指す依存が返り、ヘッダ変更が再コンパイルを起こさないことがある。仕組みと確認方法は `docs/debugging.md` の sccache の節 | `-DAZOOKEY_USE_COMPILER_CACHE=OFF` で configure する。使い続けるなら `SCCACHE_DIR` とサーバのポート（`SCCACHE_SERVER_PORT`）を worktree ごとに分ける |
 | `%TEMP%` 配下の固定名ディレクトリ | 多くのテストが `std::filesystem::temp_directory_path()` の下に固定名のディレクトリを作り、作る前に `remove_all` する（例: `core/tests/runtime_logger_test.cpp` の `TestDirectory`）。並行する CTest が互いのファイルを消す | CTest を起動する前に、`TMP` と `TEMP` を worktree ごとのディレクトリへ向ける |
-| ミューテックス `Local\azooKey-runtime-log-<component>` | `core/src/RuntimeLogger.cpp` が作る。`Local\` はログオンセッション単位なので、worktree をまたいで同じものになる。CTest の `RESOURCE_LOCK azookey-runtime-log` は 1 回の `ctest` の中でしか効かない | ログ系テスト（`runtime_logger_tests`）は worktree をまたいで直列に流す |
+| ミューテックス `Local\azooKey-runtime-log-<component>` | `core/src/RuntimeLogger.cpp` が作る。`Local\` はログオンセッション単位なので、worktree をまたいで同じものになる。CTest の `RESOURCE_LOCK azookey-runtime-log` は 1 回の `ctest` の中でしか効かない | `RESOURCE_LOCK azookey-runtime-log` を持つログ系テストは、worktree をまたいで直列に流す |
 | CPU とディスク | 同時ビルドの負荷で、待ち時間に上限を持つテストが偽の失敗になりうる。例は `ipc/tests/named_pipe_transport_test.cpp` の経過時間の上限アサート、inference-host の engine テストのロード期限、bench の smoke の `--max-p95-ms` | `AZOOKEY_CTEST_PARALLEL_JOBS`（`azookey_check` の並列数）や `ctest --parallel` を下げる。時間で落ちたテストは、他の build が止まった状態で単独に再実行してから判断する |
 
 ## マシン全体で 1 つしかないもの
 
 次の資源は worktree の数によらず 1 つで、並行作業の対象にしない。
 
-- 開発版 TIP の登録（HKLM の CLSID と `CTF\TIP`、HKCU の Run）。TIP 登録は Human Gate であり、エージェントは実行しない（`AGENTS.md`「最優先の安全規則」）。
+- 開発版 TIP の登録（HKLM の CLSID と `CTF\TIP`、HKCU の Run）。TIP 登録は Human Gate であり、エージェントはホスト上で実行しない（検証専用 Hyper-V VM 内の例外を含め `AGENTS.md`「最優先の安全規則」に従う）。
 - 常駐 Host の既定パイプ `\\.\pipe\azookey-<SID>`（`ipc/src/NamedPipeTransport.cpp`）と、`%LOCALAPPDATA%\azooKey\` のユーザーデータ。worktree の build から Host を手で起動して確かめるときは、`--pipe-name` と `--data-root` を指定して常駐 Host と実データから切り離す。
 - compat-test の runner。実アプリを操作するため、同時に 1 つだけ走らせる。
 

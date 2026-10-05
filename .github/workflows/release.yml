@@ -238,6 +238,25 @@ jobs:
         with:
           subject-path: ${{ steps.msi-artifact.outputs.path }}
           sbom-path: ${{ github.workspace }}\azooKey.spdx.json
+      - name: Record Release asset sizes and hashes
+        shell: pwsh
+        env:
+          MSI_PATH: ${{ steps.msi-artifact.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = @($env:MSI_PATH, 'azooKey.spdx.json')
+          $rows = foreach ($path in $assets) {
+            $file = Get-Item -LiteralPath $path -ErrorAction Stop
+            if ($file.Length -le 0) { throw "Release asset is empty: $($file.Name)" }
+            $sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "| $($file.Name) | $($file.Length) | $sha256 |"
+          }
+          @(
+            '## Release assets before upload'
+            ''
+            '| Asset | Bytes | SHA256 |'
+            '|---|---:|---|'
+          ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
       - name: Upload Release asset (draft)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

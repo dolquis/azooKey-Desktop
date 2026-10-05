@@ -7742,15 +7742,53 @@ TEST(TsfTipTypoCorrectionTest, CorrectedReadingIsUsedForSubsequentAppendAndBacks
   }
 }
 
-TEST(TsfTipTypoCorrectionTest, EmptyCorrectedReadingLeavesTheOriginalReading) {
+TEST(TsfTipTypoCorrectionTest, TypoModesApplyOnlyTheHostCorrectedReading) {
+  struct Case {
+    const char* settings;
+    const char* corrected;
+    const char* expected;
+    bool candidates;
+  };
   for (const bool legacy : {false, true}) {
     SCOPED_TRACE(legacy);
-    DocumentPreeditHarness h;
-    ConfigureTypoHarness(h, legacy);
-    TypeTypoRomaji(h, "KANI");
-    h.service.set_corrected_candidates_for_test("かに", "", {});
-    ASSERT_TRUE(h.Press('I'));
-    EXPECT_EQ(h.service.preedit_kana_, "かにい");
+    for (const auto& item : {
+             Case{R"({"privacy":{"mode":"normal"},"typoCorrectionMode":"off"})", "", "かにい",
+                  false},
+             Case{R"({"privacy":{"mode":"normal"},"typoCorrectionMode":"suggest"})", "", "かにい",
+                  true},
+             Case{R"({"privacy":{"mode":"normal"},"typoCorrectionMode":"auto_replace"})", "かみ",
+                  "かみい", true},
+         }) {
+      SCOPED_TRACE(item.settings);
+      DocumentPreeditHarness h;
+      ConfigureTypoHarness(h, legacy);
+      h.service.set_privacy_settings_for_test(item.settings);
+      TypeTypoRomaji(h, "KANI");
+      // Host owns the mode policy: off/suggest leave corrected_reading empty,
+      // while auto_replace supplies it. TIP only applies that returned field.
+      h.service.set_corrected_candidates_for_test(
+          "かに", item.corrected,
+          item.candidates ? CorrectedTypoCandidates()
+                          : std::vector<azookey::ipc::CandidateField>{});
+      ASSERT_TRUE(h.Press('I'));
+      EXPECT_EQ(h.service.preedit_kana_, item.expected);
+      ASSERT_TRUE(h.Press(VK_ESCAPE));
+      ASSERT_TRUE(h.context.document->text.empty());
+      // DocumentRange::SetText does not move this fixture's selection anchors.
+      // Emulate TSF relocating the caret when its composition text is deleted.
+      h.context.document->start = 0;
+      h.context.document->end = 0;
+      RetypeKanaBurst(h);
+      ASSERT_EQ(h.context.document->text, L"かみ");
+      ASSERT_TRUE(h.Press(VK_RETURN));
+      ASSERT_FALSE(h.service.committing_);
+      EXPECT_EQ(h.context.document->text, L"かみ");
+      // TIP observes each mode; Host decides whether to accumulate the pair.
+      const auto observation = h.service.last_queued_typo_observation_for_test();
+      ASSERT_TRUE(observation);
+      EXPECT_EQ(observation->wrong_reading, "かにな");
+      EXPECT_EQ(observation->correct_reading, "かみ");
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <ostream>
 #include <string>
 #include <type_traits>
 
@@ -145,6 +146,8 @@ struct PairCase {
   const char* correct;
   bool accepted;
 };
+
+void PrintTo(const PairCase& value, std::ostream* out) { *out << value.name; }
 
 class TsfTipTypoCorrectionFilterTest : public ::testing::TestWithParam<PairCase> {};
 

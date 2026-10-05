@@ -32,6 +32,12 @@
             <File Id="EmojiDataFile" Source="$(RewriterDataDir)\emoji.tsv" KeyPath="yes" />
           </Component>
         </Directory>
+        <!-- The host loads static dictionary layers from <exe>\dict (DEV-1487). -->
+        <Directory Id="DictionaryFolder" Name="dict">
+          <Component Id="SudachiLexiconComponent" Guid="*">
+            <File Id="SudachiLexiconFile" Source="$(BundledDictionaryDir)\dict\sudachi_lexicon.azdic" KeyPath="yes" />
+          </Component>
+        </Directory>
         <Component Id="TipComponent" Guid="85A678CC-4D73-4C41-B2CF-E0E458AB4AE0">
           <File
               Id="TipDll"
@@ -104,6 +110,14 @@
               KeyPath="yes" />
         </Component>
 
+        <Component Id="DictionaryNoticesComponent" Guid="*">
+          <File
+              Id="DictionaryNoticesFile"
+              Source="$(BundledDictionaryDir)\ThirdPartyNotices.txt"
+              Name="ThirdPartyNotices.txt"
+              KeyPath="yes" />
+        </Component>
+
         <Component Id="SettingsComponent" Guid="4FF5479D-974F-4888-84F8-DA16C599F44D">
           <File
               Id="SettingsExe"
@@ -143,6 +157,8 @@
       <ComponentRef Id="VCOpenMPComponent" />
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
+      <ComponentRef Id="SudachiLexiconComponent" />
+      <ComponentRef Id="DictionaryNoticesComponent" />
       <ComponentRef Id="SettingsComponent" />
       <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">
         <Exclude Files="$(SettingsExePath)" />

@@ -32,6 +32,8 @@ cmake --preset windows-release `
   -DAZOOKEY_FETCH_LLAMA_CPP=ON
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target azookey_settings
+python dictbuild\build_bundled.py --output build\bundled-dictionaries --cache build\dictionary-sources
+python dictbuild\check_bundle.py build\bundled-dictionaries --package pkg\msi\Package.wxs
 dotnet build .\pkg\msi\azooKey.wixproj `
   --configuration Release `
   -p:ProductVersion=1.0.0 `
@@ -56,6 +58,16 @@ OpenMP 経路で暗黙インポートするため、欠けるとクリーン環�
 ビルドする前にこれを実行します。
 本体の `LICENSE` と、同梱依存を記録した `THIRD_PARTY_LICENSES` も
 テキストファイルとして配置します。
+
+静的辞書層は `dictbuild\build_bundled.py` が SHA256 固定の SudachiDict から生成します
+（Python 3.10 以降、初回は約 35 MB をダウンロードし、生成に数分かかります）。MSI は
+`BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic` を
+`INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置し、
+どちらかが欠けるとビルドは失敗します。`dictbuild\check_bundle.py` は、生成物と
+`Package.wxs` の同梱一覧の差、standalone の `neologd_lexicon` pack の混入、帰属の欠落を
+検出します。インストール後は Host の起動ログで `static_dictionary_load` が
+`layer=sudachi_lexicon.azdic`、`result=ok` になることを確認します。同梱しない層
+（`base_lexicon` など）は同じイベントが `result=error` の警告になります。
 
 `azookey_settings` target は、Windows App SDK を app-local に含む unpackaged の
 self-contained 設定アプリを `build\windows-release\settings-app\Release` へ生成します。

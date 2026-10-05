@@ -18,7 +18,7 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
   ものであり、第三者ライセンス義務を持たないため集約対象外とする。
 - ビルド時のみ取得しソースツリーへ含めない依存（`FetchContent` の llama.cpp /
   GoogleTest 等）は「未同梱」として `THIRD_PARTY_LICENSES` に区別して記載する。
-  配布物（MSIX）への同梱段階の再配布 attribution は
+  配布物（base MSI）への同梱段階の再配布 attribution は
   [`sideload-packaging-spec.md`](sideload-packaging-spec.md) が扱う。
 - ビルド時のみの依存のうち、ライセンスとは別に利用条件への同意を要するものは
   「ビルドツールの利用条件」で扱う。
@@ -43,8 +43,9 @@ azooKey-Desktop（Windows 版）へ第三者由来のデータ・コードを同
 2. データを azooKey 形式へ再ポートする（逐語コピーせず、原典準拠で変換）。
 3. 三層 attribution を付す（上記）。
 4. `THIRD_PARTY_LICENSES` の該当節・追記テンプレートに沿って追記する。
-5. 配布ガード（MSIX 構築時の attribution 存在チェック）に載せる。CI チェックは
-   follow-up（本規約整備の後続タスク）。
+5. 配布ガードに載せる。静的辞書層は release workflow が MSI 構築前に
+   `dictbuild/check_bundle.py` で、帰属欠落と同梱不可の pack の混入を検査する
+   （`docs/auto-word-registration-spec.md` §14.10）。
 
 ## ライセンス別の要点
 

@@ -762,14 +762,14 @@ target を達成可能な scoring 経路を確保する。
 ### 14.9 辞書ソースのライセンスと配布判定
 
 各辞書層のソース・ライセンス・配布可否。**配布判定の正典は本節**であり、
-MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従う。ライセンスは
+配布物（`docs/sideload-packaging-spec.md` §4 の base MSI）の同梱物はこの判定に従う。ライセンスは
 外部上流の変更があり得るため、各ソースの一次情報（下記 URL）を **取り込み時に
-再検証**する（最終確認: 2026-06-11）。
+再検証**する（最終確認: 2026-06-11。SudachiDict は 2026-10-05 に v20260723 の LEGAL で再確認）。
 
 | layer | 採用ソース | ライセンス | 配布判定 | 条件・注記 |
 |---|---|---|---|---|
 | `base_lexicon` | azooKey_dictionary_storage | Apache-2.0 | **同梱可**（既存） | azooKey 内蔵辞書。LICENSE / NOTICE を ThirdPartyNotices に保持 |
-| `sudachi_lexicon` | SudachiDict（`core` 版） | Apache-2.0（内包: UniDic=BSD-3-Clause / NEologd 由来データ） | **同梱可** | LEGAL に基づき配布物全体が Apache-2.0。UniDic の BSD-3 著作権表示に加え、SudachiDict NOTICE（内包 NEologd 由来データの Hatena / 郵便 / 駅名 / 人名 帰属）も帰属に伝播（§14.10）。サイズの観点で `full` ではなく `core` を採用 |
+| `sudachi_lexicon` | SudachiDict（`core` 版） | Apache-2.0（内包: UniDic=BSD-3-Clause / NEologd 由来データ） | **同梱可** | LEGAL に基づき配布物全体が Apache-2.0。UniDic の BSD-3 著作権表示に加え、SudachiDict LEGAL（内包 NEologd 由来データの Hatena / 郵便 / 駅名 / 人名 帰属）も帰属に伝播（§14.10）。サイズの観点で `full` ではなく `core` を採用 |
 | `neologd_lexicon` | mecab-ipadic-NEologd | Apache-2.0（ただし上流データに個別条件: Hatena キーワード=はてな社条件・要帰属 / 駅名 / 人名 / 郵便 等） | **別 pack DL（同梱不可）** | サイズ大 + 上流データの provenance が個別条件付き。MSIX に含めず SHA256 検証 DL（既定無効）。取り込み経路は §14.10 の neologd pack follow-up（M36-B とは別作業）。DL 時に上流ライセンス/帰属を提示 |
 | `named_entity_lexicon` | Wikidata（CC0）+ GeoNames（CC-BY-4.0）+ 日本郵便 郵便番号データ | CC0 / CC-BY-4.0 / 権利主張なし | **同梱可**（curated 派生） | Wikidata=CC0（人名/組織/製品 + 読み）。GeoNames=CC-BY-4.0（**帰属必須**）。CC-BY-SA の Wikipedia 本文は **不使用**（share-alike 回避）。郵便データは権利主張なし（帰属歓迎） |
 | `technical_terms_lexicon` | プロジェクト自作 + CC0/CC-BY 上流 | Apache-2.0（自作分）/ 上流に従う | **同梱可** | リポジトリ内で手入れ。外部由来分は上流ライセンス・帰属を ThirdPartyNotices に記載 |
@@ -803,7 +803,7 @@ MSIX 同梱物（`docs/sideload-packaging-spec.md` §1）はこの判定に従�
 
 | 方式 | 対象 layer | 配置 | 更新 |
 |---|---|---|---|
-| **同梱（bundled）** | base / sudachi(core) / named_entity / technical_terms | MSIX 内 read-only データ（`docs/sideload-packaging-spec.md` §1） | アプリ更新時（§14.6） |
+| **同梱（bundled）** | base / sudachi(core) / named_entity / technical_terms | base MSI がインストール先の `dict\` へ置く read-only データ（`docs/sideload-packaging-spec.md` §4） | アプリ更新時（§14.6） |
 | **別 pack DL（optional）** | neologd | SHA256 検証 DL → `%LOCALAPPDATA%\azooKey\packs\` | neologd pack follow-up・既定無効（下記） |
 | **非配布（local-only）** | user / auto_words / app_specific | `%LOCALAPPDATA%\azooKey\data\` | ランタイム |
 
@@ -826,7 +826,7 @@ M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
 
 - 同梱辞書の全ライセンス（Apache-2.0 LICENSE + NOTICE、UniDic BSD-3 著作権表示、
   GeoNames CC-BY-4.0 クレジット、郵便データ出典）を 1 つの
-  `ThirdPartyNotices.txt` に集約して MSIX に同梱し、設定アプリのライセンス画面
+  `ThirdPartyNotices.txt` に集約して配布物に同梱し、設定アプリのライセンス画面
   （`docs/sideload-packaging-spec.md` §3.2 のバージョン/ライセンス導線）から参照
   可能にする。
 - **bundled の SudachiDict(core) は NEologd 由来データを内包する**（LEGAL が
@@ -840,9 +840,9 @@ M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
   としての** notices は ThirdPartyNotices に不要（別 pack DL 時に上流ライセンス/
   帰属を DL 画面で提示する）。ただし上記のとおり SudachiDict 内包の NEologd 由来
   データの帰属は同梱物の一部として含める。
-- **配布ガード**（受け入れ条件 §14.13）: MSIX 構築時に同梱アセットへ
+- **配布ガード**（受け入れ条件 §14.13）: MSI 構築前に同梱アセットへ
   **standalone の mecab-ipadic-NEologd パック（`neologd_lexicon` 層アセット）**
-  が混入しないことを CI でチェックする。ガードの対象は NEologd 単体パックで
+  が混入しないことを release workflow の `dictbuild/check_bundle.py` でチェックする。ガードの対象は NEologd 単体パックで
   あり、**SudachiDict(core) が Apache-2.0 で内包する NEologd 由来データは対象外**
   （SudachiDict は配布物全体が Apache-2.0 であり同梱可、§14.9）。判定は
   ファイル名/マニフェスト（`neologd_lexicon.*` 等の pack 識別子）で行い、
@@ -1313,9 +1313,9 @@ frequency = clamp((8000 - cost) / 10000.0, 0.0, 1.0)
 `(normalized_key, surface, source)` のバイト昇順、タイムスタンプ・絶対パス・並列実行順序は
 アーティファクトに入れない。CI は同一入力で 2 回ビルドし、`content_hash` の一致を確認する。
 
-**上流データの取得**は `AZOOKEY_DICT_SOURCE_DIR` で与えるローカルツリーを基本とし、CI では
-SHA256 でピンした取得を使う。生の上流データは配布物に含めず、同梱するのは変換後の
-`.azdic` だけである（§14.10 の同梱判定はアーティファクトに対して適用する）。
+**上流データの取得**は SHA256 でピンしたダウンロードを使う（`sudachi_lexicon` の経路は
+§15.12）。生の上流データは配布物に含めず、同梱するのは変換後の `.azdic` だけである
+（§14.10 の同梱判定はアーティファクトに対して適用する）。
 
 **帰属**は `META` セクションに持たせる。各アーティファクトは寄与した上流ごとに次を保持し、
 `ThirdPartyNotices.txt` はこの `META` から生成する。
@@ -1416,16 +1416,16 @@ class IDictionaryLayer {
 
 | 項目 | 予算 |
 |---|---|
-| 同梱 `.azdic` 合計（MSIX 圧縮前） | 120 MB 以下 |
+| 同梱 `.azdic` 合計（インストーラ圧縮前） | 120 MB 以下 |
 | 常駐 RSS 増分（mmap 前提、trie イメージのページインのみ） | 40 MB 以下 |
 | 層 1 つのロード（mmap + ヘッダ検証） | 20 ms 以下 |
 | `CommonPrefixSearch` の p95（読み 16 文字以内、warm） | 0.2 ms 以下 |
 | `PredictiveSearch` の p95（読み 4 文字、`max_results` = 32、warm） | 0.5 ms 以下 |
 
 これらは設計上の予算であり、上流の実語彙数によって達成可能性が変わる。SudachiDict
-（core 版）を取り込む段階で実語彙数とアーティファクトサイズを実測し、超過する場合は
-`sudachi_lexicon` の絞り込み（品詞・頻度による足切り）か、§15.2 の LOUDS 系実装への
-切り替えのどちらを採るかを判断する。
+（core 版）は全語彙を入れると `sudachi_lexicon` 単体で予算を超えるため、§15.12 の
+足切りで絞り込む。§15.2 の trie 実装は切り替えない。上流の版を更新するときは
+アーティファクトサイズを測り直し、同梱合計が予算内に収まることを確認する。
 
 trie 単体の検索レイテンシとロード時間は `bench/` 配下のマイクロベンチで測る。
 `docs/conversion-quality-benchmark-spec.md` §6.3 の `latency_*` / `memory_peak_mb` は
@@ -1455,15 +1455,36 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 検索 API の契約は §15.4、層単位の無効化と既存永続化形式の維持は §15.5〜§15.7、
 `META` 由来の帰属は §14.10、サイズとレイテンシ予算は §15.9 を参照する。
 
-### 15.12 実装着手時に確定する事項
+### 15.12 `sudachi_lexicon` の取得・抽出・足切り
 
-本章で確定しないものを明示する。DEV-412 の実装で決め、決めた内容は本章へ反映する。
+**取得経路**。release workflow が `dictbuild/build_bundled.py` で、SudachiDict の raw lexicon
+（core 版 = `small_lex.zip` + `core_lex.zip`）を毎回ダウンロードして生成する。版、URL、
+SHA256 は同スクリプトに固定し、ハッシュが一致しない取得はビルドエラーとする。`--cache` は
+取得済みアーカイブの置き場で、`--offline` はキャッシュだけを使う。生成した `.azdic` も
+上流アーカイブもリポジトリには置かない。上流の版を上げるときは版と SHA256 を同時に更新し、
+`dictbuild/sources/sudachi_lexicon.metadata.json` の `upstream_revision`、`THIRD_PARTY_LICENSES` の
+SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の逐語）を合わせる。
 
-- SudachiDict（core 版）の取得経路。CI でのピン付きダウンロードか、リリースビルド用の
-  事前生成アーティファクトかを、CI 実行時間と再現性の兼ね合いで決める。
-- 上流の品詞体系から中間 TSV の `pos` への抽出規則。ビルダは §15.13 のとおり
-  中間 TSV の品詞名をそのまま `META.pos_table` に保持する。
-- §15.9 の予算を超えた場合の `sudachi_lexicon` 足切り基準（品詞・頻度のしきい値）。
+**抽出規則**（`dictbuild/extract_sudachi.py`）。raw lexicon の 1 行を次のとおり中間 TSV へ写す。
+
+| 中間 TSV | 写像 |
+|---|---|
+| `surface` | 表層形の列（`\uXXXX` エスケープを戻す） |
+| `reading` | 読みの列をカタカナからひらがなへ変換したもの |
+| `pos` | 品詞 1〜4 の `*` 以外を `-` で連結したもの（例: `名詞-固有名詞-人名-姓`）。活用型・活用形は持たない |
+| `cost` | 上流 `cost` をそのまま（`frequency` は空欄とし、§15.6 の写像に従う） |
+| `category` | 品詞が `固有名詞-人名` なら `person_name`、`固有名詞-地名` なら `place_name`、それ以外は `general` |
+
+次の行は取り込まない。連接 ID が `-1` の分割専用エントリ、品詞 1 が `補助記号` / `空白` の
+エントリ、読みがひらがなと長音符以外を含むエントリ（記号の読み「キゴウ」、英字や数字を含む
+読み）、表層形が読みと同じひらがなのエントリ、表層形が `#` で始まるか TAB・改行・NUL・
+二重引用符を含むエントリ（中間 TSV のコメント行と引用符の扱いと衝突するため）。
+
+**足切り**。上流 `cost` が 10000 を超えるエントリを捨てる（`--max-cost` の既定値）。
+上流の core 版を全件入れると `sudachi_lexicon` 単体で §15.9 の同梱合計を超え、
+`cost` 10000 超は希少な活用形と長い固有名詞が大半を占めるためである。品詞による足切りは
+しない。20260723 版ではこの規則で 623,065 エントリ、388,011 キー、約 70 MB の
+アーティファクトになる。
 
 ### 15.13 ビルダと Host の接続契約
 

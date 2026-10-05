@@ -529,14 +529,25 @@ void CandidateWindow::ShowHealthBanner(CandidateHealthState state) {
     HideDetails();
     HideHealthBanner();
     health_state_ = state;
+    health_banner_until_ = 0;
     return;
   }
   if (!hwnd_) return;
   if (state != health_state_) HideDetails();
   health_state_ = state;
   health_banner_visible_ = true;
+  health_banner_until_ = GetTickCount64() + kHealthBannerDurationMs;
   if (IsVisible()) ResizeAtLastAnchor();
   SetTimer(hwnd_, kHealthBannerTimer, kHealthBannerDurationMs, nullptr);
+}
+
+void CandidateWindow::ResumeHealthBanner() {
+  if (!hwnd_ || health_banner_visible_ || health_state_ == CandidateHealthState::Healthy) return;
+  const ULONGLONG now = GetTickCount64();
+  if (now >= health_banner_until_) return;
+  health_banner_visible_ = true;
+  if (IsVisible()) ResizeAtLastAnchor();
+  SetTimer(hwnd_, kHealthBannerTimer, static_cast<UINT>(health_banner_until_ - now), nullptr);
 }
 
 void CandidateWindow::HideHealthBanner() {

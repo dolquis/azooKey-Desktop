@@ -29,7 +29,8 @@ enum class HealthEvent : uint8_t {
   // The Host stopped answering: pipe lost, or connected but silent past the
   // section 8.5.2 deadline of what it was asked.
   HostUnresponsive,
-  // Zenzai failed to load, or an inference ran past its deadline.
+  // Zenzai failed to load. Inference failures and deadline overruns fall back
+  // per request and never raise this (section 8.5.1).
   ModelFailed,
   // The pipe is back and the Handshake was accepted.
   TransportReconnected,

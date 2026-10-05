@@ -95,6 +95,33 @@ TEST(LearningStoreTest, SaveCreatesParentAndLeavesNoTempFile) {
   std::filesystem::remove_all(root);
 }
 
+TEST(LearningStoreTest, LoadReadOnlyKeepsPlaintextUnmigrated) {
+  const auto path = std::filesystem::temp_directory_path() / "azookey_learning_readonly_test.tsv";
+  RemoveStoreFiles(path);
+  const std::string legacy = "にほん\t日本\t2 100\n";
+  {
+    std::ofstream out(path, std::ios::binary);
+    ASSERT_TRUE(out);
+    out << legacy;
+  }
+
+  azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(store.LoadReadOnly());
+  EXPECT_EQ(store.size(), 1u);
+  EXPECT_GT(store.Score("にほん", "日本", 100), 0.0);
+
+  std::ifstream in(path, std::ios::binary);
+  EXPECT_EQ(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()),
+            legacy);
+  in.close();
+  auto backup = path;
+  backup += ".bak";
+  EXPECT_FALSE(std::filesystem::exists(backup));
+  EXPECT_FALSE(std::filesystem::exists(azookey::learning::EncryptedPathFor(path)));
+
+  RemoveStoreFiles(path);
+}
+
 TEST(LearningStoreTest, SaveLoadEscapesTsvSpecialCharactersInSurface) {
   const std::string path =
       (std::filesystem::temp_directory_path() / "azookey_learning_escape_test.tsv").string();

@@ -45,6 +45,8 @@ class LearningStore {
   virtual ~LearningStore() = default;
 
   bool Load();
+  // Load without migrating a legacy plaintext file or otherwise changing the source files.
+  bool LoadReadOnly();
   // retry_budget bounds transient file-conflict retries; zero tries once.
   bool Save(std::chrono::milliseconds retry_budget = kTransientFileRetryBudget) const;
   void Reset();
@@ -66,6 +68,8 @@ class LearningStore {
                        uint64_t now_epoch_sec) const;
 
  private:
+  bool LoadImpl(bool migrate_plaintext);
+
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
   std::map<std::string, std::map<std::string, LearningRecord>> table_;

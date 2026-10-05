@@ -170,6 +170,53 @@ TEST(UserDictionaryTest, LoadMalformedRejects) {
   std::filesystem::remove_all(root);
 }
 
+TEST(UserDictionaryTest, ZeroByteFileLoadsAsEmptyAndMigrates) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_zero_byte";
+  const auto path = root / "user_dict.json";
+  auto backup = path;
+  backup += ".bak";
+  const auto encrypted = azookey::learning::EncryptedPathFor(path);
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  {
+    std::ofstream f(path, std::ios::binary);
+    ASSERT_TRUE(f.is_open());
+  }
+
+  azookey::learning::UserDictionary read_only(path, &azookey::learning::test::Crypto());
+  EXPECT_TRUE(read_only.LoadReadOnly());
+  EXPECT_EQ(read_only.Size(), 0u);
+  EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(std::filesystem::exists(backup));
+  EXPECT_FALSE(std::filesystem::exists(encrypted));
+
+  azookey::learning::UserDictionary dict(path, &azookey::learning::test::Crypto());
+  EXPECT_TRUE(dict.Load());
+  EXPECT_EQ(dict.Size(), 0u);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  ASSERT_TRUE(std::filesystem::exists(backup));
+  EXPECT_EQ(std::filesystem::file_size(backup), 0u);
+  EXPECT_TRUE(std::filesystem::exists(encrypted));
+  for (const auto& entry : std::filesystem::directory_iterator(root)) {
+    EXPECT_EQ(entry.path().filename().string().find(".corrupt."), std::string::npos);
+  }
+
+  azookey::learning::UserDictionary reloaded(path, &azookey::learning::test::Crypto());
+  EXPECT_TRUE(reloaded.Load());
+  EXPECT_EQ(reloaded.Size(), 0u);
+  azookey::learning::UserWord word;
+  word.word = "azooKey";
+  word.ruby = "あずきい";
+  reloaded.Add(word);
+  EXPECT_TRUE(reloaded.Save());
+
+  azookey::learning::UserDictionary saved(path, &azookey::learning::test::Crypto());
+  ASSERT_TRUE(saved.Load());
+  EXPECT_EQ(saved.Size(), 1u);
+
+  std::filesystem::remove_all(root);
+}
+
 TEST(UserDictionaryTest, SaveCreatesParentAndLeavesNoTempFile) {
   const auto root = std::filesystem::temp_directory_path() / "azookey_user_dict_atomic_test";
   const auto path = root / "nested" / "user_dict.json";

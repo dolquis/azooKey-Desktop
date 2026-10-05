@@ -15,7 +15,8 @@
   Each set gets a directory, a plaintext learning file with one synthetic record
   (reading U+306B U+307B U+3093 U+3054, surface U+65E5 U+672C U+8A9E) and the path
   where the CLI should create the user dictionary. The Host migrates the learning
-  file to <name>.enc and <name>.bak the first time it reads it. With -ModelPath the
+  file to <name>.enc and <name>.bak the first time it reads it; the lookup CLI
+  reads it without migrating. With -ModelPath the
   GGUF is copied into each directory under a non-ASCII file name and the copy is
   checked by SHA-256. The model itself is not part of this repository.
 

@@ -2110,6 +2110,8 @@ DPAPI で暗号化・復号する。`ReadProtectedText` は `.enc` を優先し�
 `LearningStore::Save` は `WriteProtectedText` を使い、移行前の平文や読み込み失敗が
 残る状態では上書きしない。暗号化ファイルと旧平文が共存するときは、復号が成功し、
 旧平文が保全済みの `.bak` と一致する場合だけ旧平文を削除して保存を続ける。
+入力を変更しない `LearningStore::LoadReadOnly`（`lookup` CLI が使う）は、旧平文を同じ形式で
+解析し、移行しない。
 ユーザー辞書、誤字補正、新語のストアも同じ保護境界に従う。
 
 ### 9.4 移行

@@ -123,8 +123,21 @@ jobs:
                   ;;
               esac
 
+              # Keep this list aligned with the non-document inputs read by Pester:
+              # msi-package-consistency / msix-identity-consistency: build definitions,
+              # settings project, TIP registration sources, licenses, SBOM and release.
+              # doctor: presets, justfile, .clangd and WPR profile.
+              # vm-verify-fixtures: diagnostic markers and compatibility cases.
               case "$path" in
-                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msix/*|scripts/vm-verify-fixtures/*)
+                *.md|docs/*|plans/*)
+                  # Documentation-only changes do not run PowerShell quality.
+                  ;;
+                *.ps1|*.psm1|*.psd1|pkg/msi/*|pkg/msix/*|scripts/vm-verify-fixtures/*|\
+                CMakeLists.txt|inference-host/CMakeLists.txt|settings-app/CMakeLists.txt|CMakePresets.json|\
+                settings-app/*.vcxproj|\
+                .github/workflows/release.yml|THIRD_PARTY_LICENSES|scripts/complete-release-sbom.py|\
+                .clangd|justfile|diagnostics/azookey-diagnostics.wprp|diagnostics/Diagnostics.cpp|\
+                tsf-tip/include/azookey/tsf/TextServiceFactory.h|tsf-tip/src/DllMain.cpp|compat-test/cases/C*.cpp)
                   powershell_quality=true
                   ;;
               esac

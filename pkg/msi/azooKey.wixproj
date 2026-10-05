@@ -17,6 +17,7 @@
     <LicensePath Condition="'$(LicensePath)' == ''">$(MSBuildThisFileDirectory)..\..\LICENSE</LicensePath>
     <ThirdPartyLicensesPath Condition="'$(ThirdPartyLicensesPath)' == ''">$(MSBuildThisFileDirectory)..\..\THIRD_PARTY_LICENSES</ThirdPartyLicensesPath>
     <RewriterDataDir Condition="'$(RewriterDataDir)' == ''">$(MSBuildThisFileDirectory)..\..\data</RewriterDataDir>
+    <BundledDictionaryDir Condition="'$(BundledDictionaryDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\bundled-dictionaries</BundledDictionaryDir>
     <HostScriptsDir>$(MSBuildThisFileDirectory)..\..\scripts</HostScriptsDir>
     <OutputName>azooKey-$(ProductVersion)-x64</OutputName>
     <!--
@@ -38,6 +39,7 @@
       LicensePath=$(LicensePath);
       ThirdPartyLicensesPath=$(ThirdPartyLicensesPath);
       RewriterDataDir=$(RewriterDataDir);
+      BundledDictionaryDir=$(BundledDictionaryDir);
       HostScriptsDir=$(HostScriptsDir)
     </DefineConstants>
   </PropertyGroup>
@@ -65,5 +67,7 @@
     <Error Condition="!Exists('$(ThirdPartyLicensesPath)')" Text="Third-party licenses file not found: $(ThirdPartyLicensesPath)" />
     <Error Condition="!Exists('$(RewriterDataDir)\symbol.tsv')" Text="Symbol data not found" />
     <Error Condition="!Exists('$(RewriterDataDir)\emoji.tsv')" Text="Emoji data not found" />
+    <Error Condition="!Exists('$(BundledDictionaryDir)\dict\sudachi_lexicon.azdic')" Text="Bundled dictionary not found: $(BundledDictionaryDir)\dict\sudachi_lexicon.azdic. Run dictbuild/build_bundled.py." />
+    <Error Condition="!Exists('$(BundledDictionaryDir)\ThirdPartyNotices.txt')" Text="Bundled dictionary notices not found: $(BundledDictionaryDir)\ThirdPartyNotices.txt" />
   </Target>
 </Project>

@@ -1,0 +1,13 @@
+{
+  "sources": [
+    {
+      "source_id": "sudachidict-core",
+      "spdx": "Apache-2.0",
+      "upstream_url": "https://github.com/WorksApplications/SudachiDict",
+      "upstream_revision": "20260723 (raw small_lex.zip and core_lex.zip)",
+      "transform": "dictbuild/extract_sudachi.py --max-cost 10000",
+      "copyright": "Copyright (c) 2017-2023 Works Applications Co., Ltd.",
+      "notice_ids": ["sudachidict-legal"]
+    }
+  ]
+}

@@ -52,6 +52,23 @@ Describe "WiX MSI package consistency" {
     $script:package | Should -Match 'Id="ThirdPartyLicensesFile"[\s\S]*?Name="THIRD_PARTY_LICENSES\.txt"'
   }
 
+  It "ships the built static dictionary layers where the host discovers them" {
+    # Host は <exe>\dict の層名つき .azdic だけを探索する（auto-word-registration-spec §15.13）。
+    $script:package | Should -Match '<Directory Id="DictionaryFolder" Name="dict">'
+    $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\dict\\sudachi_lexicon\.azdic"'
+    $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\ThirdPartyNotices\.txt"[\s\S]*?Name="ThirdPartyNotices\.txt"'
+    $script:package | Should -Not -Match 'neologd'
+    $script:project | Should -Match '\$\(MSBuildThisFileDirectory\)\.\.\\\.\.\\build\\bundled-dictionaries</BundledDictionaryDir>'
+    $script:project | Should -Match "Condition=`"!Exists\('\$\(BundledDictionaryDir\)\\dict\\sudachi_lexicon\.azdic'\)`""
+    $script:releaseWorkflow | Should -Match 'python dictbuild/build_bundled\.py --output build\\bundled-dictionaries'
+    $script:releaseWorkflow | Should -Match 'python dictbuild/check_bundle\.py build\\bundled-dictionaries --package pkg\\msi\\Package\.wxs'
+    $script:releaseWorkflow.IndexOf('name: Check bundled dictionaries') |
+      Should -BeLessThan $script:releaseWorkflow.IndexOf('- name: Build unsigned MSI')
+    $script:releaseWorkflow | Should -Match 'AZOOKEY_BUNDLED_DICTIONARY_DIR: \$\{\{ github\.workspace \}\}\\build\\bundled-dictionaries\\dict'
+    $script:releaseWorkflow | Should -Match 'ctest --preset windows-release -R ShippedBundleLoadsAndReverseConverts --no-tests=error'
+    $script:releaseWorkflow | Should -Match '"-p:BundledDictionaryDir=\$\{\{ github\.workspace \}\}\\build\\bundled-dictionaries"'
+  }
+
   It "deploys the required MSVC runtime beside the TIP and host" {
     $script:package | Should -Match 'Source="\$\(VCRuntimeDir\)\\msvcp140\.dll"'
     $script:package | Should -Match 'Source="\$\(VCRuntimeDir\)\\vcruntime140\.dll"'

@@ -21,6 +21,7 @@
 `data/symbol.tsv` と `data/emoji.tsv` は次の原典から再ポートした派生データである。
 `scripts/symbol_porter.py --fetch` と `scripts/emoji_porter.py --fetch` で再生成する。
 原典の全ファイルは同梱しない。テスト用の抜粋にも同じ表記を適用する。
+SudachiDict は配布物の静的辞書層の原典であり、生成手順は同節に記す。
 
 ### Mozc（記号・絵文字）
 
@@ -107,6 +108,21 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 
 SPDX-License-Identifier: Unicode-3.0
+
+### SudachiDict（静的辞書層 `sudachi_lexicon`）
+
+- Source: https://github.com/WorksApplications/SudachiDict （raw lexicon 20260723 の
+  `small_lex.zip` と `core_lex.zip`。取得 URL と SHA256 は `dictbuild/build_bundled.py`）
+- License: Apache-2.0（内包 UniDic は BSD-3-Clause を選択。NEologd 由来データの帰属を含む）
+- Copyright: Copyright (c) 2017-2023 Works Applications Co., Ltd.;
+  Copyright (c) 2011-2013, The UniDic Consortium; Copyright (C) 2015-2019 Toshinori Sato (@overlast)
+- Derived path: MSI の `dict\sudachi_lexicon.azdic`（リポジトリには置かない）
+- Regeneration: `python dictbuild/build_bundled.py --output <dir> --cache <dir>`
+  （`dictbuild/extract_sudachi.py` が品詞・読み・cost で絞り込み、`dictbuild/dictbuild.py` が変換する）
+- Notes: Apache-2.0 本文は `dictbuild/notices/Apache-2.0.txt`、SudachiDict の `LEGAL`
+  （UniDic の BSD-3-Clause 全文、はてなキーワード・日本郵便・駅名・人名データの帰属）は
+  `dictbuild/notices/sudachidict-legal.txt` に逐語で置く。両者は辞書の `META` から生成する
+  `ThirdPartyNotices.txt` に入り、MSI がインストール先へ同梱する。
 
 ## ビルド時のみの依存（配布物には同梱しない）
 
@@ -341,7 +357,6 @@ M62-C/D・M53 で取り込む可能性がある資産と、取り込み時に必
 | Mozc `symbol.tsv` 由来データ | 記号リライター（M62-C） | BSD-3-Clause © Google | 名前条項（3rd clause）保持・原典表記の全文転記 |
 | Mozc `emoji_data.tsv` 由来データ | 絵文字リライター（M62-D） | BSD-3-Clause © Google | 同上 |
 | Unicode CLDR 由来データ | 絵文字リライター（M62-D） | Unicode License v3 | CLDR データ条項・出典バージョン明記 |
-| SudachiDict（UniDic 内包） | 辞書強化（M53） | Apache-2.0（内包 UniDic は BSD-3-Clause） | `NOTICE` 継承・内包ライセンス連鎖の併記 |
 
 > 上表は**将来取り込みの計画**であり、現時点で該当データを再配布していないことを再掲する。
 > 定義・受け入れ条件の正典は `plans/windows-port-roadmap.md`（M62 / M53）、進捗・状態は Linear。

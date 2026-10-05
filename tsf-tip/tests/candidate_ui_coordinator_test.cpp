@@ -460,6 +460,37 @@ TEST(TsfTipCandidateUiCoordinatorTest, SafeModeNotifiesOncePerHostGeneration) {
   coordinator.EndUI();
 }
 
+TEST(TsfTipCandidateUiCoordinatorTest, HealthBannerSurvivesReshowingTheCandidateList) {
+  using azookey::tsf::CandidateHealthState;
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.expose_ui_element_mgr = false;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  ASSERT_TRUE(coordinator.Create());
+  const auto& window = coordinator.own_window_for_test();
+
+  coordinator.SetHealthState(CandidateHealthState::DegradedModel, "generation-1");
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  ASSERT_TRUE(window.health_banner_visible_for_test());
+  // A segment move re-begins the UI without closing it first.
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{30, 20}, SampleItems(), 1), S_OK);
+  EXPECT_TRUE(window.health_banner_visible_for_test());
+
+  // Closing the list ends the banner; the next list does not bring it back.
+  coordinator.EndUI();
+  EXPECT_FALSE(window.health_banner_visible_for_test());
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{10, 20}, SampleItems(), 0), S_OK);
+  EXPECT_FALSE(window.health_banner_visible_for_test());
+
+  // A banner hidden by a return to Healthy is not resumed by a re-show.
+  coordinator.SetHealthState(CandidateHealthState::Healthy, "generation-1");
+  coordinator.SetHealthState(CandidateHealthState::DegradedModel, "generation-1");
+  ASSERT_TRUE(window.health_banner_visible_for_test());
+  coordinator.SetHealthState(CandidateHealthState::Healthy, "generation-1");
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, POINT{30, 20}, SampleItems(), 1), S_OK);
+  EXPECT_FALSE(window.health_banner_visible_for_test());
+  coordinator.EndUI();
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, SecureEntryQueuesOneToastUntilCandidateWindowIsShown) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.expose_ui_element_mgr = false;

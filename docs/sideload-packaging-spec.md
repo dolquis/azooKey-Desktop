@@ -1641,6 +1641,15 @@ Build workflow の `windows-llama-build` も、Release / CPU / llama.cpp 構成�
 self-contained 設定アプリに同じ検査を実行する（実行条件は `dev-infrastructure-spec.md` §4.3）。
 本節は同 spec の app-local MSVC runtime 検査から参照される。
 
+base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ、その帰属を
+`%ProgramFiles%\azooKey\ThirdPartyNotices.txt` へ配置する。Host はこの `dict` だけを
+探索する。同梱する層、配布判定、取得元とサイズ予算の正典は
+`docs/auto-word-registration-spec.md` §14.9 / §14.10 / §15.9 / §15.12 であり、本節は
+配置先だけを持つ。辞書は release workflow が `dictbuild/build_bundled.py` で SHA256 固定の
+上流から生成し、`BundledDictionaryDir` property で MSI へ渡す。`dictbuild/check_bundle.py` は
+MSI をビルドする前に、standalone の `neologd_lexicon` pack の混入、層 ID とファイル名の不一致、
+`ThirdPartyNotices.txt` の帰属欠落、`Package.wxs` の同梱一覧と生成物の差を検出して失敗させる。
+
 照合先は取得元の redist ディレクトリではなく MSI の同梱一覧とする。redist
 ディレクトリは `msvcp140_1.dll` や `concrt140.dll` のように MSI が同梱しないファイルも
 持つため、そちらと突き合わせると「取得元にはあるが MSI に入らない」依存を見逃す。

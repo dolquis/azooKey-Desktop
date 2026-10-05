@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -309,5 +310,36 @@ TEST(DictionaryHost, BundledDiscoveryReportsErrorsAndContinues) {
   EXPECT_FALSE(results[1].error.empty());
   EXPECT_TRUE(results[3].loaded);
   EXPECT_TRUE(results[3].error.empty());
+}
+
+std::string Environment(const char* name) {
+#ifdef _WIN32
+  char* value = nullptr;
+  size_t length = 0;
+  if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) return {};
+  std::string result(value);
+  std::free(value);
+  return result;
+#else
+  const char* value = std::getenv(name);
+  return value ? value : "";
+#endif
+}
+
+// The release payload is built from pinned upstreams (dictbuild/build_bundled.py), so this
+// runs only when AZOOKEY_BUNDLED_DICTIONARY_DIR points at its dict directory.
+TEST(DictionaryHost, ShippedBundleLoadsAndReverseConverts) {
+  const auto directory = Environment("AZOOKEY_BUNDLED_DICTIONARY_DIR");
+  if (directory.empty()) GTEST_SKIP() << "AZOOKEY_BUNDLED_DICTIONARY_DIR is not set";
+  core::DoubleArrayTrie trie;
+  ASSERT_TRUE(trie.Load(std::filesystem::path(directory) / "sudachi_lexicon.azdic", true))
+      << trie.Error();
+  host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
+  const auto results = engine.LoadBundledDictionaryLayers(directory);
+  ASSERT_EQ(results.size(), 4U);
+  EXPECT_EQ(results[1].name, "sudachi_lexicon.azdic");
+  EXPECT_TRUE(results[1].loaded) << results[1].error;
+  EXPECT_EQ(engine.ReverseConvert("東京", 0), "とうきょう");
+  EXPECT_EQ(engine.ReverseConvert("変換", 0), "へんかん");
 }
 }  // namespace

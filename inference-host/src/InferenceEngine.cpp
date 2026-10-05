@@ -1106,7 +1106,7 @@ std::string InferenceEngine::ReverseConvert(const std::string& surface, uint64_t
   if (const auto entry = dictionaries_.ReverseLookup(surface, context)) {
     return entry->normalized_reading;
   }
-  // Static layers are not bundled, so a word the model produced is usually
+  // A composite surface or a word outside the bundled static layers is usually
   // known only through the commit that learned it.
   if (store_) {
     if (auto learned = store_->ReverseLookup(surface, now_epoch_sec); !learned.empty()) {

@@ -85,7 +85,8 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`handoff/dev32-verification-checklist.md`](handoff/dev32-verification-checklist.md) | VM 検証パッケージ（`make-vm-verify-package.ps1`）に同梱する汎用チェックリスト |
 | [`handoff/claude-code-web-setup.md`](handoff/claude-code-web-setup.md) | Claude Code on the web のセットアップ手順 |
 | [`handoff/agent-tooling-setup.md`](handoff/agent-tooling-setup.md) | Claude Code / Codex の MCP、ホスト前提、doctor、Human Gate の接続手順 |
-| [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバック |
+| [`handoff/agent-orchestration.md`](handoff/agent-orchestration.md) | Claude Code / Codex でローカル agent を分担させるときの分割レベル、touched path からの route、snapshot 契約、返却形式、ロールバックと、管制塔セッションと子セッションの役割分担 |
+| [`handoff/parallel-worktree-runbook.md`](handoff/parallel-worktree-runbook.md) | 複数 worktree で同時に build / test / PR 作業をするときに共有される資源（sccache、`%TEMP%`、ミューテックス、Host のパイプ、TIP 登録）と回避策、main の取り込み |
 
 ## Phase 一覧
 

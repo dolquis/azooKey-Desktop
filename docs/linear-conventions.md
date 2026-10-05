@@ -432,6 +432,15 @@ Health は Linear の health フィールドで設定し、本文に重ねて書
 - LINEAR_STATUS_MAP: Backlog/Todo → In Progress → In Review（Draft PR 提出済み）→ Merged（PR マージ済み・検証メモ待ち）→ Done（レビュー合格 + マージ + 検証メモ記載後）
 - STAGE_MAP: `plans/windows-port-roadmap.md` の M-number / Phase 定義を正典とする（例: M0, M1, M2... と Phase 1〜7 + 独立トラック）。Linear 側へ転記する場合も roadmap の milestone 名を使う。
 
+### 関連 Issue の塊と PR
+
+関連する Linear Issue は、1 branch / 1 Draft PR の塊にまとめてよい。まとめる目安は、同じファイルや同じ契約に触れ、別々の PR にすると衝突や中間状態が生じることである。
+
+- branch 名は `dolquis/dev-<代表番号>-<slug>` とし、必要なら番号を並べる（例: `dolquis/dev-1434-1415-1492-<slug>`）。
+- PR 本文で塊に含まれる Issue をすべて参照する。closing キーワードの使い分け（§7.1.3）は Issue ごとに適用する。
+- Draft PR を作ったら、塊に含まれる Issue をすべて In Review にする。マージ後の Merged → 検証メモ → Done も Issue ごとに行う。
+- 管制塔セッションが塊ごとに子セッションを立てる場合の担い手（In Review までは子、マージ後は管制塔）は `docs/handoff/agent-orchestration.md`「管制塔セッションと子セッション」に従う。
+
 ### 週次監査の repo 固有追加項目（spec-first 分業の担保）
 
 共有コア §11 の週次 control tower audit チェックリストに加えて、本 repo では設計（`agent:claude-design`）/ 実装（`agent:codex-impl`）分業（§2 / §7.1）の spec-first 規律を次の項目で点検する:

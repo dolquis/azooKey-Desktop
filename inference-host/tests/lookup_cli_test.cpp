@@ -296,6 +296,25 @@ TEST_F(LookupCliTest, MalformedUserDictionaryIsNotQuarantinedOrChanged) {
   EXPECT_EQ(corrupt_files, 0u);
 }
 
+TEST_F(LookupCliTest, ZeroByteUserDictionaryReturnsSuccessfulEmptyJsonWithoutChange) {
+  {
+    std::ofstream output(paths.user_dict, std::ios::binary);
+    ASSERT_TRUE(output);
+  }
+  const auto options = Parse({"--mode", "exact", "--query", "abc"});
+  ASSERT_TRUE(options);
+
+  const auto result = RunLookup(*options, paths);
+  EXPECT_EQ(result.exit_code, 0) << result.error;
+  ASSERT_EQ(result.output_lines.size(), 1u);
+  const auto json = azookey::ipc::json::Parse(result.output_lines.front());
+  ASSERT_TRUE(json);
+  EXPECT_EQ(json->GetUInt("count"), 0u);
+  ASSERT_TRUE(std::filesystem::exists(paths.user_dict));
+  EXPECT_EQ(std::filesystem::file_size(paths.user_dict), 0u);
+  EXPECT_FALSE(std::filesystem::exists(azookey::learning::EncryptedPathFor(paths.user_dict)));
+}
+
 TEST_F(LookupCliTest, PlaintextLearningStoreIsReadWithoutMigration) {
   const std::string legacy = "にほん\t二本\t1.5 100\n";
   {

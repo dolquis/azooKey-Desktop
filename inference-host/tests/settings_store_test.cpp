@@ -288,7 +288,6 @@ TEST(SettingsStoreTest, MissingFileUsesSchemaDefaults) {
   EXPECT_EQ(result.settings.backend_preference, "auto");
   EXPECT_TRUE(result.settings.model.enabled);
   EXPECT_TRUE(result.settings.model.auto_load_on_host_start);
-
 }
 
 TEST(SettingsStoreTest, NllSettingsClampAndReachEngineConfig) {
@@ -375,7 +374,6 @@ TEST(SettingsStoreTest, PartialFileFillsDefaultsAndAppliesEngineConfig) {
   EXPECT_EQ(*config.inference_threads, 6);
   EXPECT_EQ(config.max_candidates, 12u);
   EXPECT_EQ(config.max_context_length, 20u);
-
 }
 
 TEST(SettingsStoreTest, DynamicPunctuationSettingsDefaultAndValidation) {
@@ -443,7 +441,6 @@ TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   EXPECT_EQ(config.backend, azookey::host::BackendKind::Cpu);
   EXPECT_TRUE(config.model_path.empty());
   EXPECT_FALSE(config.n_gpu_layers.has_value());
-
 }
 
 TEST(SettingsStoreTest, VulkanPreferenceAndAutoResolveAgainstBuildDefault) {
@@ -520,7 +517,6 @@ TEST(SettingsStoreTest, NumericInferenceSettingsRejectWrongTypesAndOutOfRangeVal
   EXPECT_EQ(result.settings.inference_threads, 0);
   EXPECT_EQ(result.settings.max_candidates, 9);
   EXPECT_EQ(result.settings.max_context_length, 10);
-
 }
 
 TEST(SettingsStoreTest, AutomaticInferenceThreadsFollowPowerProfile) {
@@ -605,7 +601,6 @@ TEST(SettingsStoreTest, InvalidJsonIsQuarantinedAndDefaultsContinue) {
   EXPECT_TRUE(std::filesystem::exists(*result.quarantined_path));
   EXPECT_FALSE(result.settings.live_conversion);
   EXPECT_TRUE(result.settings.prediction_enabled);
-
 }
 
 TEST(SettingsStoreTest, ReadFailureDoesNotQuarantineFile) {

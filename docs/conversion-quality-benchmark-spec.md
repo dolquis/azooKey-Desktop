@@ -608,6 +608,12 @@ PR コメントに diff_vs_baseline サマリを投稿（PR レビューアが�
   (`observed_reading`, `intended_reading`, `expected_surface`, `left_context`)
   の完全重複不可。
 
+初期セットの `general` / `homophone` は `bench/data/kana_kanji_eval.jsonl`、
+`typo` / `typo_clean` は `bench/data/typo_eval.jsonl` に収める。
+入力ファイルの使い分けと再実行の手順は [bench/data/README.md](../bench/data/README.md)
+を参照する。`conversion_quality_smoke.jsonl` は CTest 専用入力とし、初期セットの
+件数には含めない。
+
 ## 12. M52 受け入れ条件
 
 - `azookey_bench --eval bench/data/kana_kanji_eval.jsonl --output

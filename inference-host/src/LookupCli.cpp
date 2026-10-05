@@ -231,7 +231,7 @@ LookupCliResult RunLookupCli(const LookupCliOptions& options,
   }
   if (learning_exists) {
     learning::LearningStore store(run_options.learning_path, run_options.crypto);
-    if (!store.Load()) {
+    if (!store.LoadReadOnly()) {
       result.exit_code = 1;
       result.error = "failed to load learning store";
       return result;

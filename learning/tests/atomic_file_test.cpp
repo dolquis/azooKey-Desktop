@@ -35,6 +35,119 @@ size_t CountTempFiles(const std::filesystem::path& dir) {
 }
 
 #ifdef _WIN32
+// Advance virtual time only when the retry loop asks to sleep. OS I/O and
+// scheduler delays cannot change the retry-budget assertions below.
+struct RetryTiming {
+  std::chrono::steady_clock::time_point current;
+  std::vector<std::chrono::steady_clock::duration> waits;
+
+  template <class Operation>
+  DWORD Run(Operation operation, std::chrono::milliseconds budget,
+            bool retry_access_denied = false) {
+    return azookey::learning::detail::RetryTransientFileOperation(
+        operation, budget, retry_access_denied, [&] { return current; },
+        [&](std::chrono::steady_clock::duration duration) {
+          waits.push_back(duration);
+          current += duration;
+        });
+  }
+};
+
+TEST(AtomicFileRetryTest, ZeroBudgetAttemptsOnceWithoutWaiting) {
+  for (const DWORD error : {ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, ERROR_ACCESS_DENIED}) {
+    SCOPED_TRACE(error);
+    RetryTiming timing;
+    int attempts = 0;
+    EXPECT_EQ(timing.Run(
+                  [&]() -> DWORD {
+                    ++attempts;
+                    return attempts < 1000 ? error : ERROR_SUCCESS;
+                  },
+                  std::chrono::milliseconds::zero(), true),
+              error);
+    EXPECT_EQ(attempts, 1);
+    EXPECT_TRUE(timing.waits.empty());
+  }
+}
+
+TEST(AtomicFileRetryTest, PersistentTransientFailuresExhaustOnlyTheRetryBudget) {
+  struct Case {
+    std::chrono::milliseconds budget;
+    std::vector<std::chrono::steady_clock::duration> waits;
+  };
+  const Case cases[] = {
+      {azookey::learning::kTransientFileRetryBudget,
+       std::vector<std::chrono::steady_clock::duration>(50, std::chrono::milliseconds(10))},
+      {std::chrono::milliseconds(25),
+       {std::chrono::milliseconds(10), std::chrono::milliseconds(10),
+        std::chrono::milliseconds(5)}},
+  };
+  for (const auto& item : cases) {
+    for (const DWORD error : {ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, ERROR_ACCESS_DENIED}) {
+      SCOPED_TRACE(item.budget.count());
+      SCOPED_TRACE(error);
+      RetryTiming timing;
+      int attempts = 0;
+      EXPECT_EQ(timing.Run(
+                    [&]() -> DWORD {
+                      ++attempts;
+                      // Bound the test even if a regression stops advancing time.
+                      return attempts < 1000 ? error : ERROR_SUCCESS;
+                    },
+                    item.budget, true),
+                error);
+      EXPECT_EQ(timing.waits, item.waits);
+      EXPECT_EQ(attempts, static_cast<int>(item.waits.size()) + 1);
+      EXPECT_EQ(timing.current.time_since_epoch(), item.budget);
+    }
+  }
+}
+
+TEST(AtomicFileRetryTest, SuccessAndPermanentErrorsDoNotWaitOrRetry) {
+  for (const DWORD error : {ERROR_SUCCESS, ERROR_DISK_FULL, ERROR_ACCESS_DENIED}) {
+    SCOPED_TRACE(error);
+    RetryTiming timing;
+    int attempts = 0;
+    EXPECT_EQ(timing.Run(
+                  [&]() -> DWORD {
+                    ++attempts;
+                    return attempts < 1000 ? error : ERROR_SUCCESS;
+                  },
+                  azookey::learning::kTransientFileRetryBudget),
+              error);
+    EXPECT_EQ(attempts, 1);
+    EXPECT_TRUE(timing.waits.empty());
+  }
+}
+
+TEST(AtomicFileRetryTest, RecoveryStopsRetryingImmediately) {
+  RetryTiming timing;
+  int attempts = 0;
+  EXPECT_EQ(timing.Run(
+                [&]() -> DWORD { return ++attempts < 3 ? ERROR_SHARING_VIOLATION : ERROR_SUCCESS; },
+                azookey::learning::kTransientFileRetryBudget),
+            ERROR_SUCCESS);
+  EXPECT_EQ(attempts, 3);
+  const std::vector<std::chrono::steady_clock::duration> expected_waits{
+      std::chrono::milliseconds(10), std::chrono::milliseconds(10)};
+  EXPECT_EQ(timing.waits, expected_waits);
+}
+
+TEST(AtomicFileRetryTest, OperationTimeCountsTowardTheRetryBudget) {
+  RetryTiming timing;
+  int attempts = 0;
+  EXPECT_EQ(timing.Run(
+                [&]() -> DWORD {
+                  ++attempts;
+                  timing.current += azookey::learning::kTransientFileRetryBudget;
+                  return ERROR_SHARING_VIOLATION;
+                },
+                azookey::learning::kTransientFileRetryBudget),
+            ERROR_SHARING_VIOLATION);
+  EXPECT_EQ(attempts, 1);
+  EXPECT_TRUE(timing.waits.empty());
+}
+
 class ReadHandle {
  public:
   ReadHandle(const std::filesystem::path& path, DWORD sharing)
@@ -102,12 +215,9 @@ TEST(AtomicFileTest, PersistentSharingFailurePreservesTargetAndReportsOnlyStageA
   ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
   ASSERT_TRUE(reader.valid());
   testing::internal::CaptureStderr();
-  const auto start = std::chrono::steady_clock::now();
   const bool saved = azookey::learning::WriteTextFileAtomically(target, "private-new-content");
-  const auto elapsed = std::chrono::steady_clock::now() - start;
   const auto log = testing::internal::GetCapturedStderr();
   EXPECT_FALSE(saved);
-  EXPECT_LT(elapsed, std::chrono::seconds(2));
   EXPECT_NE(log.find("stage=atomic-replace category=system code="), std::string::npos);
   EXPECT_TRUE(log.find("code=5\n") != std::string::npos ||
               log.find("code=32\n") != std::string::npos ||
@@ -130,14 +240,10 @@ TEST(AtomicFileTest, ZeroRetryBudgetFailsWithoutWaitingOutSharingConflict) {
   ReadHandle reader(target, FILE_SHARE_READ | FILE_SHARE_WRITE);
   ASSERT_TRUE(reader.valid());
   testing::internal::CaptureStderr();
-  const auto start = std::chrono::steady_clock::now();
   const bool saved =
       azookey::learning::WriteTextFileAtomically(target, "new", std::chrono::milliseconds::zero());
-  const auto elapsed = std::chrono::steady_clock::now() - start;
   const auto log = testing::internal::GetCapturedStderr();
   EXPECT_FALSE(saved);
-  // The default budget keeps retrying for 500 ms.
-  EXPECT_LT(elapsed, std::chrono::milliseconds(400));
   EXPECT_NE(log.find("stage=atomic-replace"), std::string::npos);
   EXPECT_EQ(ReadAll(target), "old");
   EXPECT_EQ(CountTempFiles(root), 0u);

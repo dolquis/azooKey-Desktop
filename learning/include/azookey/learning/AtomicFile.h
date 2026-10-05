@@ -32,20 +32,28 @@ namespace azookey::learning {
 #ifdef _WIN32
 namespace detail {
 
-template <class Operation>
+template <class Operation, class Now, class Sleep>
 DWORD RetryTransientFileOperation(Operation operation, std::chrono::milliseconds retry_budget,
-                                  bool retry_access_denied = false) {
-  const auto deadline = std::chrono::steady_clock::now() + retry_budget;
+                                  bool retry_access_denied, Now now, Sleep sleep) {
+  const auto deadline = now() + retry_budget;
   while (true) {
     const DWORD error = operation();
     if (error == ERROR_SUCCESS) return error;
     const bool transient = error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION ||
                            (retry_access_denied && error == ERROR_ACCESS_DENIED);
-    const auto now = std::chrono::steady_clock::now();
-    if (!transient || now >= deadline) return error;
-    std::this_thread::sleep_for(std::min(
-        deadline - now, std::chrono::steady_clock::duration(std::chrono::milliseconds(10))));
+    const auto current = now();
+    if (!transient || current >= deadline) return error;
+    sleep(std::min(deadline - current,
+                   std::chrono::steady_clock::duration(std::chrono::milliseconds(10))));
   }
+}
+
+template <class Operation>
+DWORD RetryTransientFileOperation(Operation operation, std::chrono::milliseconds retry_budget,
+                                  bool retry_access_denied = false) {
+  return RetryTransientFileOperation(
+      operation, retry_budget, retry_access_denied, [] { return std::chrono::steady_clock::now(); },
+      [](std::chrono::steady_clock::duration duration) { std::this_thread::sleep_for(duration); });
 }
 
 }  // namespace detail

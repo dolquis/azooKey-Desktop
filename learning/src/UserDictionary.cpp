@@ -91,6 +91,16 @@ bool UserDictionary::LoadImpl(bool quarantine_corrupt_file) {
     save_blocked_by_corrupt_load_ = true;
     return false;
   }
+  // A zero-byte file holds no entries; read it as an empty dictionary and
+  // migrate it like a zero-byte TSV store. Migration leaves an empty .enc.
+  if (text.empty()) {
+    if (source == ProtectedFileSource::Plaintext && quarantine_corrupt_file &&
+        !MigratePlaintextFile(path_, text, *crypto_)) {
+      save_blocked_by_corrupt_load_ = true;
+      return false;
+    }
+    return true;
+  }
   auto v = j::Parse(text);
   if (!v || !v->IsObject()) {
     save_blocked_by_corrupt_load_ = source == ProtectedFileSource::Encrypted ||

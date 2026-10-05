@@ -26,7 +26,8 @@ jobs:
   release:
     name: Build unsigned MSI and draft release
     runs-on: windows-2022
-    timeout-minutes: 45
+    # 静的辞書層の生成（Python 製ビルダ、数分）を含む。
+    timeout-minutes: 60
     env:
       SCCACHE_GHA_ENABLED: "true"
       # Keep release objects separate from the ordinary CI cache namespace.
@@ -97,6 +98,21 @@ jobs:
           }
       - name: Test
         run: ctest --preset windows-release --no-tests=error
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      # 静的辞書層は SHA256 で固定した上流から毎回生成する（DEV-1487）。
+      # 生の上流データは同梱せず、変換後の .azdic と ThirdPartyNotices.txt だけを MSI に入れる。
+      - name: Build bundled dictionaries
+        run: python dictbuild/build_bundled.py --output build\bundled-dictionaries --cache "${{ runner.temp }}\dictionary-sources"
+      # standalone の neologd_lexicon pack 混入、層 ID と帰属の欠落、MSI 同梱一覧との差を検出する。
+      - name: Check bundled dictionaries
+        run: python dictbuild/check_bundle.py build\bundled-dictionaries --package pkg\msi\Package.wxs
+      # 出荷する .azdic を Host と同じ C++ リーダーで読み、逆変換できることを確かめる。
+      - name: Load bundled dictionaries with the host reader
+        env:
+          AZOOKEY_BUNDLED_DICTIONARY_DIR: ${{ github.workspace }}\build\bundled-dictionaries\dict
+        run: ctest --preset windows-release -R ShippedBundleLoadsAndReverseConverts --no-tests=error --output-on-failure
       - name: Resolve app-local MSVC runtime
         id: vc-runtime
         shell: pwsh
@@ -165,7 +181,7 @@ jobs:
             -PayloadDirectory "$settingsPayload"
       - name: Build unsigned MSI
         run: >-
-          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:VCOpenMPDir=${{ steps.vc-runtime.outputs.openmp-dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe"
+          dotnet build pkg\msi\azooKey.wixproj --configuration Release -p:ProductVersion=${{ steps.msi-version.outputs.version }} "-p:VCRuntimeDir=${{ steps.vc-runtime.outputs.dir }}" "-p:VCOpenMPDir=${{ steps.vc-runtime.outputs.openmp-dir }}" "-p:SettingsPayloadDir=${{ github.workspace }}\build\windows-release\settings-app\Release" "-p:SettingsExePath=${{ github.workspace }}\build\windows-release\settings-app\Release\azookey_settings.exe" "-p:BundledDictionaryDir=${{ github.workspace }}\build\bundled-dictionaries"
       - name: Verify MSI is unsigned
         id: msi-artifact
         shell: pwsh
@@ -189,9 +205,6 @@ jobs:
           output-file: ${{ github.workspace }}\azooKey.syft.spdx.json
           upload-artifact: false
           upload-release-assets: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
       - name: Complete SBOM with release dependencies
         shell: pwsh
         env:

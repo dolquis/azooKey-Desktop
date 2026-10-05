@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from array import array
 import csv
 import hashlib
 import json
@@ -133,35 +134,66 @@ def load_entries(inputs: list[Path], metadata: dict) -> list[dict]:
 
 
 def make_trie(keys: list[str]) -> bytes:
-    root = {}
-    for key_id, key in enumerate(keys):
-        node = root
-        for byte in key.encode("utf-8"):
-            node = node.setdefault(byte, {})
-        node[0] = key_id
-    nodes = [[0, 0, NONE, 0]]
-    pending = deque([(0, root)])
+    # Sorted keys let each node own a contiguous range, so no per-node child map is
+    # materialized; flat arrays keep a million-key lexicon within memory.
+    encoded = [key.encode("utf-8") for key in keys]
+    base, parent, key_ids, depth = (array("I") for _ in range(4))
+    used = bytearray()
+
+    def grow(size: int) -> None:
+        extra = size - len(used)
+        if extra > 0:
+            extra = max(extra, len(used) // 2)
+            base.extend(bytes(4 * extra))
+            parent.frombytes(b"\xff" * (4 * extra))
+            key_ids.frombytes(b"\xff" * (4 * extra))
+            depth.extend(bytes(4 * extra))
+            used.extend(bytes(extra))
+
+    grow(256)
+    parent[0], used[0] = 0, 1
+    pending = deque([(0, 0, len(encoded), 0)])
     free = 1
     while pending:
-        index, children = pending.popleft()
-        nodes[index][2] = children.get(0, NONE)
-        labels = sorted(b for b in children if b)
-        if not labels:
+        index, lo, hi, level = pending.popleft()
+        if lo < hi and len(encoded[lo]) == level:
+            key_ids[index] = lo
+            lo += 1
+        if lo == hi:
             continue
-        base = max(1, free - labels[0])
-        while any(base + b < len(nodes) and nodes[base + b][1] != NONE for b in labels):
-            base += 1
-        nodes[index][0] = base
-        while len(nodes) <= base + labels[-1]:
-            nodes.append([0, NONE, NONE, 0])
-        for byte in labels:
-            child = base + byte
-            nodes[child][1] = index
-            nodes[child][3] = nodes[index][3] + 1
-            pending.append((child, children[byte]))
-        while free < len(nodes) and nodes[free][1] != NONE:
-            free += 1
-    return b"".join(struct.pack("<IIII", *node) for node in nodes)
+        labels, ranges = [], []
+        while lo < hi:
+            byte, end = encoded[lo][level], lo + 1
+            while end < hi and encoded[end][level] == byte:
+                end += 1
+            labels.append(byte)
+            ranges.append((lo, end))
+            lo = end
+        found = used.find(0, free)
+        free = slot = found if found >= 0 else len(used)
+        while True:
+            offset = slot - labels[0]
+            if offset >= 1:
+                grow(offset + labels[-1] + 1)
+                if not any(used[offset + byte] for byte in labels):
+                    break
+            slot = used.find(0, slot + 1)
+            if slot < 0:
+                slot = len(used)
+        base[index] = offset
+        for byte, (start, end) in zip(labels, ranges):
+            child = offset + byte
+            used[child] = 1
+            parent[child] = index
+            depth[child] = level + 1
+            pending.append((child, start, end, level + 1))
+    size = used.rfind(1) + 1
+    nodes = array("I", bytes(16 * size))
+    for field, values in enumerate((base, parent, key_ids, depth)):
+        nodes[field::4] = values[:size]
+    if sys.byteorder != "little":
+        nodes.byteswap()
+    return nodes.tobytes()
 
 
 def build(inputs: list[Path], metadata: dict, layer: int, catalog: Path) -> tuple[bytes, str]:

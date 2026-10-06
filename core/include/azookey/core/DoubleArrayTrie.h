@@ -56,8 +56,8 @@ class DoubleArrayTrie {
   bool ExactMatch(std::string_view key, PrefixMatch& out) const noexcept;
   bool ReadEntries(const PrefixMatch& match,
                    std::vector<StaticDictionaryEntry>& out) const noexcept;
-  // Exact surface lookup for reconversion. Scans mapped records without
-  // allocating entries for non-matches; reconversion is an infrequent query.
+  // Exact surface lookup for reconversion, in ENTS order. Binary-searches the
+  // optional SIDX section; artifacts without it fall back to scanning ENTS.
   void LookupSurface(std::string_view surface,
                      std::vector<StaticDictionaryEntry>& out) const noexcept;
 

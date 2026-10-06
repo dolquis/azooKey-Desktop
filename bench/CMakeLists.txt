@@ -57,6 +57,10 @@ add_executable(azookey_nll_bench nll_bench.cpp)
 target_link_libraries(azookey_nll_bench
   PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
 )
+add_executable(azookey_reverse_lookup_bench reverse_lookup_bench.cpp)
+target_link_libraries(azookey_reverse_lookup_bench
+  PRIVATE azookey_benchmark_result azookey_host azookey_project_options azookey_project_warnings
+)
 add_dependencies(azookey_zenzai_bench azookey_benchmark_commit_header)
 target_include_directories(azookey_zenzai_bench PRIVATE "${AZOOKEY_BENCH_GENERATED_DIR}")
 target_link_libraries(azookey_zenzai_bench
@@ -105,7 +109,14 @@ if(AZOOKEY_BUILD_TESTS)
     azookey_rich_features_bench
     azookey_zenzai_bench
     azookey_nll_bench
+    azookey_reverse_lookup_bench
   )
+  add_test(NAME azookey_reverse_lookup_bench_smoke
+           COMMAND azookey_reverse_lookup_bench --dict "${NLL_FIXTURE_DIR}/fixture.azdic"
+                   --cold-runs 2 --warm-iterations 10)
+  set_tests_properties(azookey_reverse_lookup_bench_smoke PROPERTIES
+    FIXTURES_REQUIRED nll_fixture TIMEOUT 30
+    PASS_REGULAR_EXPRESSION "reverse_convert_warm n=10 p50_ms=")
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)
   add_test(NAME azookey_trace_viewer_smoke

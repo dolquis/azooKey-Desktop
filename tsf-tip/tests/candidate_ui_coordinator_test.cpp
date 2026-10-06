@@ -251,6 +251,39 @@ TEST(TsfTipCandidateUiCoordinatorTest, PbShowFalseNotifiesAppWithCandidateList) 
   EXPECT_EQ(thread_mgr.end_count, 1);
 }
 
+// Spec candidate-rewriter 10.4: the UI-less / integrated list returns the surface only. Joining
+// the annotation would leak it into the search string of an integrated inline search.
+TEST(TsfTipCandidateUiCoordinatorTest, UiLessListReturnsSurfaceOnlyForAnnotatedRewriterCandidates) {
+  MockThreadMgrWithUiElementMgr thread_mgr;
+  thread_mgr.begin_pb_show = FALSE;
+  azookey::tsf::CandidateUiCoordinator coordinator;
+  const std::vector<azookey::tsf::CandidateViewItem> items{
+      {L"通常", L""}, {L"「」", L"かぎ括弧"}, {L"😄", L"笑顔"}, {L"『", L"始め二重かぎ括弧"}};
+  const POINT pt{10, 20};
+  ASSERT_EQ(coordinator.BeginUI(&thread_mgr, pt, items, 2), S_OK);
+
+  ITfCandidateListUIElement* candidates = QueryCandidateList(thread_mgr.element);
+  ASSERT_NE(candidates, nullptr);
+  UINT count = 0;
+  ASSERT_EQ(candidates->GetCount(&count), S_OK);
+  ASSERT_EQ(count, items.size());
+  for (UINT i = 0; i < count; ++i) {
+    BSTR text = nullptr;
+    ASSERT_EQ(candidates->GetString(i, &text), S_OK);
+    EXPECT_EQ(std::wstring(text, SysStringLen(text)), items[i].surface) << i;
+    SysFreeString(text);
+  }
+  UINT selection = 0;
+  ASSERT_EQ(candidates->GetSelection(&selection), S_OK);
+  EXPECT_EQ(selection, 2u);
+  candidates->Release();
+
+  // The annotation is kept for the TIP-drawn window and is not lost by the UI-less path.
+  ASSERT_EQ(coordinator.items_for_test().size(), items.size());
+  EXPECT_EQ(coordinator.items_for_test()[2].description, L"笑顔");
+  EXPECT_EQ(coordinator.EndUI(), S_OK);
+}
+
 TEST(TsfTipCandidateUiCoordinatorTest, NoticeUsesDescriptionWithoutChangingCandidateStrings) {
   MockThreadMgrWithUiElementMgr thread_mgr;
   thread_mgr.begin_pb_show = FALSE;

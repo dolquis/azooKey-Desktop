@@ -27,6 +27,8 @@ struct InputScopeProbe {
   InputScopeProbeStatus status{InputScopeProbeStatus::NoContext};
   // The InputScope enum values as decimal, comma separated. Never field text.
   std::string scopes;
+  // Preserve IS_PRIVATE independently when a password/PIN scope also exists.
+  bool private_scope{false};
 };
 
 // Win32 half: the focus window's class name and ES_PASSWORD style.
@@ -60,9 +62,26 @@ InputGateDecision CombineInputGate(InputScopeClass focus, InputScopeClass scope)
 
 // Owner-thread only. No UIA or network calls. Probes the context compartments,
 // the focus window and the input scope once each, then derives every axis from
-// that one probe.
+// that one probe. Set probe_password_scope when automatic secure is disabled
+// so password-styled focus does not hide IS_PRIVATE's independent learning ban.
 InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id,
-                                    std::optional<TfEditCookie> edit_cookie = std::nullopt);
+                                    std::optional<TfEditCookie> edit_cookie = std::nullopt,
+                                    bool probe_password_scope = false);
+
+#ifdef AZOOKEY_TSF_TESTING
+// Test processes may have no focus window. Keep the override on the owner
+// thread and restore it on every exit without changing the desktop focus.
+class ScopedFocusClassificationForTest final {
+ public:
+  explicit ScopedFocusClassificationForTest(InputScopeClass classification);
+  ~ScopedFocusClassificationForTest();
+  ScopedFocusClassificationForTest(const ScopedFocusClassificationForTest&) = delete;
+  ScopedFocusClassificationForTest& operator=(const ScopedFocusClassificationForTest&) = delete;
+
+ private:
+  std::optional<InputScopeClass> previous_;
+};
+#endif
 
 std::string_view InputScopeClassName(InputScopeClass value) noexcept;
 std::string_view InputScopeProbeStatusName(InputScopeProbeStatus value) noexcept;

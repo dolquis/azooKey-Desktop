@@ -625,6 +625,9 @@ TEST(TsfTipAiInputGuardTest, PrivateScopeWithholdsLearningButIsNotSecure) {
   FakeGuardContext both_context;
   FakeInputScope both({IS_PRIVATE, IS_PASSWORD});
   EXPECT_EQ(ClassifyWithScopes(both_context, both), InputScopeClass::Password);
+  const auto mixed = azookey::tsf::ProbeInputScope(&both_context, 1);
+  EXPECT_TRUE(mixed.private_scope);
+  EXPECT_EQ(mixed.classification, InputScopeClass::Password);
 
   EXPECT_TRUE(CombineInputGate(InputScopeClass::Normal, InputScopeClass::Normal).learning_allowed);
   EXPECT_TRUE(CombineInputGate(InputScopeClass::Normal, InputScopeClass::Unknown).learning_allowed);

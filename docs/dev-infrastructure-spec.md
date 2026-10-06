@@ -850,6 +850,28 @@ bench が閾値超過などで非ゼロ終了した場合も、生成済みの J
 初回実行、artifact 期限切れ、run 一覧取得または download の失敗は regression と判定せず、
 当該 run の計測を継続する。
 
+独立した `quality-benchmarks.yml` の `quality-benchmark` ジョブは Windows hosted runner で、モデルなしの CPU
+経路を使い `kana_kanji_eval.jsonl` と `typo_eval.jsonl` を `--eval` で採取する。
+SHA-256 と NFKC の Windows API を使うため Windows で採取する。baseline は各 workflow の成功 run
+から選び、品質 job とレイテンシ job の成否が互いの baseline 更新に影響しないようにする。
+`scripts/run-quality-bench.py` は評価 JSON の config と品質 workflow の直前の main 成功 run の
+`conversion-quality-results` artifact を照合し、互換な baseline にだけ `--baseline` を渡す。
+互換キーと指標の正典は `conversion-quality-benchmark-spec.md` §8 / §14.1 とする。
+baseline 不在、破損、version / config 不一致、指標欠落は比較スキップとし、回帰 warning を出さない。
+top1_accuracy / exact_match_rate の低下と CER の増加は、カテゴリ別を含め warning として通知する。
+top5_accuracy、NFKC 系とレイテンシはこの品質 warning の対象にしない。
+品質 JSON と比較状態・理由・差分を含む `comparison.json` は
+`conversion-quality-results` artifact として 90 日保持する。
+品質悪化だけでは終了コードを変更せず、CLI の非ゼロ終了は artifact 保存後に job を失敗させる。
+定期 workflow は PR で起動せず、通常 PR の required check に追加しない。
+reporting の Python テストは `windows.yml` の `quality` ジョブで実行し、
+既存の `changes` 分類により docs-only PR では省略する。
+
+このモデルなし採取は、評価 JSON の schema と artifact 保存・比較経路を確認する smoke である。
+SimpleConverter の静的辞書では当該データセットの top1 / top5 / exact が 0 となるため、
+精度低下の検知を実証できない。CER の差分は記録できるが、実辞書または固定モデルを用いた
+変換品質回帰の受入検証は別途必要とする。smoke の成功を実品質回帰検知の達成とみなさない。
+
 ### 4.6 Sanitizer プリセットと定期実行（M38 範囲外）
 
 `HANDLE` / COM / Named Pipe / UTF-8↔UTF-16 / 自前 JSON パーサ / 非同期 I/O を
@@ -1705,8 +1727,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   本文を拒否する。`AZOOKEY_LOG_BODY` は文字列が厳密に `1` の場合のみ有効。
 - TIP の同期 `conversion_selected` イベントは、`CommitSelected` 内で
   `RequestCommitEditSession` より前に解決した policy と `reading` / `surface` を渡す。
-  非 secure、入力 scope の検査成功、グローバルの詳細ログ許可をすべて満たし、
-  プロファイルが `private` でない場合だけ本文を許可する。scope が不明なら詳細ログを拒否する。
+  非 secure、入力先アプリの解決成功、入力 scope の検査成功、グローバルの詳細ログ許可をすべて満たし、
+  プロファイルが `private` でない場合だけ本文を許可する。アプリ未解決または scope 不明なら、
+  `privacy.autoSecureInput` の値によらず詳細ログを拒否する。
   非同期の確定処理へ許可を持ち越さない。他のメタデータの出力条件は変えない。
 - redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
   パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。

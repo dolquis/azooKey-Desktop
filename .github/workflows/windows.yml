@@ -271,6 +271,9 @@ jobs:
       - name: Test coverage shard contracts
         run: python scripts/tests/test_coverage_shards.py
 
+      - name: Test quality benchmark reporting
+        run: python scripts/tests/test_quality_bench.py
+
   dependency-review:
     name: Dependency review
     needs: changes

@@ -80,6 +80,12 @@ bool ParseShowSecureIndicator(const ipc::json::Value& settings) {
   return privacy->GetBool("showSecureIndicator").value_or(true);
 }
 
+bool ParseAutoSecureInput(const ipc::json::Value& settings) {
+  const auto* privacy = settings.IsObject() ? settings.Find("privacy") : nullptr;
+  if (!privacy || !privacy->IsObject()) return true;
+  return privacy->GetBool("autoSecureInput").value_or(true);
+}
+
 #ifdef AZOOKEY_TSF_TESTING
 // Refuses the next N arms so a test can reproduce a watch that cannot rebind.
 std::atomic<unsigned> g_refused_arms{0};
@@ -291,6 +297,7 @@ void TipLocalSettings::Reload() noexcept {
       ai.privacy_policy = core::ParsePrivacyPolicy(*json);
       ai.prediction_allowed = ParsePredictionPermission(*json);
       ai.show_secure_indicator = ParseShowSecureIndicator(*json);
+      ai.auto_secure_input = ParseAutoSecureInput(*json);
       ai.backend = json->GetString("aiBackend").value_or("none");
       ai.timeout_ms = static_cast<int>(
           std::clamp<int64_t>(json->GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
@@ -509,9 +516,11 @@ void TipLocalSettings::SetForTest(const core::BracketSettings& settings) {
 void TipLocalSettings::SetPrivacyForTest(std::string_view contents) {
   const auto json = ipc::json::Parse(contents);
   const std::lock_guard<std::mutex> lock(mutex_);
+  ai_.privacy = json ? core::ParseAiPrivacy(*json) : core::AiPrivacy{};
   ai_.privacy_policy = json ? core::ParsePrivacyPolicy(*json) : core::PrivacyPolicy{};
   ai_.prediction_allowed = json && ParsePredictionPermission(*json);
   ai_.show_secure_indicator = !json || ParseShowSecureIndicator(*json);
+  ai_.auto_secure_input = !json || ParseAutoSecureInput(*json);
 }
 
 void TipLocalSettings::SetLiveConversionForTest(bool enabled) {

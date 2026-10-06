@@ -357,6 +357,7 @@ configure offline ガードに違反しないことを CI で確認する。
 | `FlushLearningStore()` の明示呼び出し、モデルロード境界 | 保証 |
 | `SIGINT` / `SIGTERM`、`CTRL_C_EVENT` / `CTRL_BREAK_EVENT` | 保証 |
 | stdio モードで stdin が EOF になったときの正常終了 | 保証 |
+| stdio モードで stdout の応答書込みに失敗したとき（broken pipe を含む）の正常終了 | 保証 |
 | pipe モードで停止要求を検出したあとの正常終了 | 保証 |
 | コンソールウィンドウの `×`（`CTRL_CLOSE_EVENT`） | best-effort |
 | ログオフとシステムシャットダウン（`CTRL_LOGOFF_EVENT` / `CTRL_SHUTDOWN_EVENT`、およびセッション終了に伴うプロセス終了） | 対象外 |

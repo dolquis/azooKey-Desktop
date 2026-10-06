@@ -1147,7 +1147,7 @@ STDMETHODIMP TextService::Activate(ITfThreadMgr* ptim, TfClientId tid) {
   return ActivateEx(ptim, tid, 0);
 }
 
-STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) {
+STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags) try {
   AZOOKEY_ASSERT_UI_THREAD();
   // dwFlags does not officially enumerate the UIElement bit, so UI-less state
   // is taken from ITfThreadMgrEx::GetActiveFlags instead (spec §2.10).
@@ -1175,6 +1175,10 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
     }
   }
   candidate_ui_.SetUiLessMode(ui_less_mode_);
+
+#ifdef AZOOKEY_TSF_TESTING
+  if (testing::ConsumeComBoundaryAllocationFailureForTest()) throw std::bad_alloc();
+#endif
 
   HRESULT hr = AdviseTextServiceSinks();
   if (FAILED(hr)) {
@@ -1279,9 +1283,17 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD d
   std::memcpy(profile.data(), &kTextServiceProfileGuid, sizeof(kTextServiceProfileGuid));
   core::EtwLogger::LogActivate(client_id_, profile);
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::ActivateEx", E_OUTOFMEMORY);
+  (void)Deactivate();
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::ActivateEx", E_FAIL);
+  (void)Deactivate();
+  return E_FAIL;
 }
 
-STDMETHODIMP TextService::Deactivate() {
+STDMETHODIMP TextService::Deactivate() try {
   AZOOKEY_ASSERT_UI_THREAD();
   ResetTypoTracking();
   core::EtwLogger::LogDeactivate(client_id_);
@@ -1320,6 +1332,12 @@ STDMETHODIMP TextService::Deactivate() {
   }
   client_id_ = TF_CLIENTID_NULL;
   return result;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::Deactivate", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::Deactivate", E_FAIL);
+  return E_FAIL;
 }
 
 HRESULT TextService::AdviseTextServiceSinks() {
@@ -1644,7 +1662,7 @@ HRESULT TextService::ToggleKeyboardOpen() {
   return hr;
 }
 
-STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
+STDMETHODIMP TextService::OnSetFocus(BOOL foreground) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!foreground) {
     ResetTypoTracking();
@@ -1652,6 +1670,12 @@ STDMETHODIMP TextService::OnSetFocus(BOOL foreground) {
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnSetFocus", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnSetFocus", E_FAIL);
+  return E_FAIL;
 }
 
 HRESULT TextService::HandleBracketKey(ITfContext* context, WPARAM key, LPARAM key_data, BOOL* eaten,
@@ -2960,7 +2984,7 @@ STDMETHODIMP TextService::OnInitDocumentMgr(ITfDocumentMgr* pdim) {
   UNREFERENCED_PARAMETER(pdim);
   return S_OK;
 }
-STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
+STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (const void* identity = ComIdentity(pdim)) {
     std::erase(keyboard_open_seen_documents_, identity);
@@ -2972,8 +2996,14 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* pdim) {
                             LifecycleCleanupFailurePolicy::ReleaseComposition);
   }
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnUninitDocumentMgr", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnUninitDocumentMgr", E_FAIL);
+  return E_FAIL;
 }
-STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) {
+STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus) try {
   AZOOKEY_ASSERT_UI_THREAD();
   ApplyInitialKeyboardOpenOnFocus(pdimFocus);
   if (!SameComIdentity(pdimFocus, pdimPrevFocus)) {
@@ -2990,16 +3020,31 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* 
     }
   }
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnSetFocus", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnSetFocus", E_FAIL);
+  return E_FAIL;
 }
-STDMETHODIMP TextService::OnPushContext(ITfContext* pic) {
+STDMETHODIMP TextService::OnPushContext(ITfContext* pic) try {
   AZOOKEY_ASSERT_UI_THREAD();
+#ifdef AZOOKEY_TSF_TESTING
+  if (testing::ConsumeComBoundaryAllocationFailureForTest()) throw std::bad_alloc();
+#endif
   ClearReconversionState();
   AdviseTextEditSink(pic);
   ClearCandidateStateForLifecycle();
   CancelPendingQueriesForLifecycle();
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnPushContext", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnPushContext", E_FAIL);
+  return E_FAIL;
 }
-STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
+STDMETHODIMP TextService::OnPopContext(ITfContext* pic) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (pic && SameComIdentity(pic, text_edit_context_)) {
     UnadviseTextEditSink();
@@ -3026,10 +3071,16 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pic) {
                             LifecycleCleanupFailurePolicy::PreserveComposition);
   }
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnPopContext", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnPopContext", E_FAIL);
+  return E_FAIL;
 }
 
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
-                                                  ITfComposition* pComposition) {
+                                                  ITfComposition* pComposition) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (composition_ != pComposition) return S_OK;
   const bool external_termination = !etw_composition_end_in_progress_;
@@ -3074,6 +3125,12 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
   }
   if (pending_commit_context) pending_commit_context->Release();
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnCompositionTerminated", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnCompositionTerminated", E_FAIL);
+  return E_FAIL;
 }
 
 STDMETHODIMP TextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) {
@@ -3125,7 +3182,7 @@ STDMETHODIMP TextService::GetDisplayName(BSTR* name) {
   return *name != nullptr ? S_OK : E_OUTOFMEMORY;
 }
 
-STDMETHODIMP TextService::Show(HWND parent, LANGID langid, REFGUID profile) {
+STDMETHODIMP TextService::Show(HWND parent, LANGID langid, REFGUID profile) try {
   AZOOKEY_ASSERT_UI_THREAD();
   const HRESULT hr = LaunchSettingsApplication(parent, langid, profile);
   RuntimeLog(FAILED(hr) ? azookey::logging::RuntimeLogLevel::Warn
@@ -3133,6 +3190,12 @@ STDMETHODIMP TextService::Show(HWND parent, LANGID langid, REFGUID profile) {
              FAILED(hr) ? "settings_launch_failed" : "settings_launch",
              {{"hr", static_cast<int64_t>(hr)}, {"langid", static_cast<uint64_t>(langid)}});
   return hr;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::Show", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::Show", E_FAIL);
+  return E_FAIL;
 }
 
 HRESULT TextService::RequestPreeditUpdate(ITfContext* context, bool* request_accepted) {
@@ -5051,7 +5114,7 @@ void TextService::UnadviseTextEditSink() {
 }
 
 STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
-                                    ITfEditRecord* record) {
+                                    ITfEditRecord* record) try {
   AZOOKEY_ASSERT_UI_THREAD();
   if (!context || !record || !SameComIdentity(context, text_edit_context_)) return S_OK;
   BOOL changed = FALSE;
@@ -5083,6 +5146,12 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie cookie,
     candidate_ui_.PostCandidatesReady();
   }
   return S_OK;
+} catch (const std::bad_alloc&) {
+  LogComBoundaryException("TextService::OnEndEdit", E_OUTOFMEMORY);
+  return E_OUTOFMEMORY;
+} catch (...) {
+  LogComBoundaryException("TextService::OnEndEdit", E_FAIL);
+  return E_FAIL;
 }
 
 bool TextService::ConvertReconversion(const ReconversionRequest& request, uint64_t& next_id) {
@@ -5570,14 +5639,17 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
-  const auto gate = EvaluateInputGate(context, client_id_, edit_cookie);
-  // The receiving in-process app must be identifiable. Explicit secure mode
-  // also suppresses learning, independently of whether the AI axes are used.
+  const auto gate =
+      EvaluateInputGate(context, client_id_, edit_cookie, !ai_settings.auto_secure_input);
+  // Automatic detection is optional; explicit secure mode and app-disabled
+  // keyboard input remain independent safety contracts (privacy spec section 4).
   decision.secure =
-      ai_settings.privacy_policy.secure || !app.resolved || gate.secure ||
-      core::IsSecureApp(app.process_name,
-                        settings.secure_apps ? *settings.secure_apps : kNoUserSecureApps,
-                        WindowsAppNameEqual);
+      ai_settings.privacy_policy.secure || gate.keyboard_disabled ||
+      (ai_settings.auto_secure_input &&
+       (!app.resolved || gate.secure ||
+        core::IsSecureApp(app.process_name,
+                          settings.secure_apps ? *settings.secure_apps : kNoUserSecureApps,
+                          WindowsAppNameEqual)));
   if (evaluate_ai && (!app.resolved || !gate.ai_allowed)) decision.ai = {};
   if (settings.profiles) {
     const ipc::json::Value value(settings.profiles->Resolve(app, WindowsAppNameEqual));
@@ -5598,14 +5670,15 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     }
   }
   // IS_PRIVATE asks the IME not to learn; prediction stays (spec section 3 `private`).
-  if (!gate.learning_allowed) decision.learning_allowed = false;
+  if (gate.scope.private_scope || (!gate.learning_allowed && (!gate.secure || decision.secure)))
+    decision.learning_allowed = false;
   if (decision.secure) {
     decision.ai = {};
     decision.learning_allowed = false;
     decision.prediction_allowed = false;
   }
-  // A failed scope probe must never unlock development body logging.
-  decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
+  // An unresolved app or failed scope probe must never unlock development body logging.
+  decision.detailed_logging_allowed &= !decision.secure && app.resolved && gate.ai_allowed;
   LogInputGateOnChange(gate, decision.secure);
   secure_input_.store(decision.secure, std::memory_order_relaxed);
   typo_learning_allowed_.store(decision.learning_allowed, std::memory_order_relaxed);

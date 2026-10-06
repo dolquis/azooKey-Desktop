@@ -149,7 +149,7 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Configure quality benchmark
         run: >-
-          cmake -S . -B build/quality-benchmark -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_BENCH_GIT_COMMIT=${{ github.sha }}
+          cmake -S . -B build/quality-benchmark -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_FETCH_WIL=ON -DAZOOKEY_BENCH_GIT_COMMIT=${{ github.sha }}
       - name: Build quality benchmark
         run: cmake --build build/quality-benchmark --target azookey_bench
       - name: Report sccache stats

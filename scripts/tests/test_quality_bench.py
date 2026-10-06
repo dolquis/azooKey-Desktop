@@ -224,6 +224,7 @@ class QualityBenchTests(unittest.TestCase):
         self.assertIn("schedule:", events)
         quality = workflow.split("  quality-benchmark:", 1)[1]
         self.assertIn("runs-on: windows-2022", quality)
+        self.assertIn("-DAZOOKEY_FETCH_WIL=ON", quality)
         self.assertIn("--name conversion-quality-results", quality)
         self.assertIn("name: conversion-quality-results", quality)
         self.assertLess(quality.index("Upload conversion quality artifact"),

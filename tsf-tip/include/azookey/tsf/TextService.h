@@ -249,6 +249,9 @@ class TextService final : public ITfTextInputProcessorEx,
   core::AiPrivacy resolve_ai_privacy_for_test(ITfContext* context) {
     return ResolvePrivacy(context, true).ai;
   }
+  bool resolve_detailed_logging_for_test(ITfContext* context) {
+    return ResolvePrivacy(context, false).detailed_logging_allowed;
+  }
   bool secure_toast_pending_for_test() const {
     return candidate_ui_.secure_toast_pending_for_test();
   }

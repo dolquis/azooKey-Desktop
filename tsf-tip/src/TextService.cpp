@@ -5608,8 +5608,8 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     decision.learning_allowed = false;
     decision.prediction_allowed = false;
   }
-  // A failed scope probe must never unlock development body logging.
-  decision.detailed_logging_allowed &= !decision.secure && gate.ai_allowed;
+  // An unresolved app or failed scope probe must never unlock development body logging.
+  decision.detailed_logging_allowed &= !decision.secure && app.resolved && gate.ai_allowed;
   LogInputGateOnChange(gate, decision.secure);
   secure_input_.store(decision.secure, std::memory_order_relaxed);
   typo_learning_allowed_.store(decision.learning_allowed, std::memory_order_relaxed);

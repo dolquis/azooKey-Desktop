@@ -7458,26 +7458,31 @@ TEST(TsfTipSecureInputTest, AutoSecureInputFalseAllowsPasswordLearningButKeepsAi
 
 TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsUnresolvedAppAndUnknownScopeAiGate) {
   TextServiceHarness h;
-  h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(
+      R"({"privacy":{"mode":"custom","autoSecureInput":false,"redactLogs":false,"custom":{"aiCandidate":true,"externalAi":true,"detailedLogging":true}}})");
   azookey::tsf::ScopedFocusClassificationForTest focus(azookey::tsf::InputScopeClass::Normal);
   EXPECT_FALSE(h.service.resolve_secure_for_test(&h.context));
   auto ai = h.service.resolve_ai_privacy_for_test(&h.context);  // Unknown scope.
   EXPECT_FALSE(ai.ai);
   EXPECT_FALSE(ai.external);
+  EXPECT_FALSE(h.service.resolve_detailed_logging_for_test(&h.context));
   PrivateScopeProperty property;
   property.scope.value = IS_DEFAULT;
   FakeRange selection;
   h.context.input_scope_property = &property;
   h.context.selection_range = &selection;
-  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
   h.context.run_edit_session = true;
   ai = h.service.resolve_ai_privacy_for_test(&h.context);
   EXPECT_TRUE(ai.ai);  // Positive control: the setting can allow a classified ordinary field.
   EXPECT_TRUE(ai.external);
+  EXPECT_TRUE(h.service.resolve_detailed_logging_for_test(&h.context));
   h.service.set_foreground_app_for_test({});  // Unresolved app with ordinary scope.
   ai = h.service.resolve_ai_privacy_for_test(&h.context);
   EXPECT_FALSE(ai.ai);
   EXPECT_FALSE(ai.external);
+  EXPECT_FALSE(h.service.resolve_secure_for_test(&h.context));
+  EXPECT_FALSE(h.service.resolve_detailed_logging_for_test(&h.context));
   h.context.selection_range = nullptr;
 }
 

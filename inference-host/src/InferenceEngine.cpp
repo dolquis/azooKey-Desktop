@@ -243,6 +243,7 @@ InferenceEngine::InferenceEngine(std::unique_ptr<core::IConverter> converter,
       reranker_(store),
       config_(std::move(config)),
       runtime_logger_(runtime_logger) {
+  ApplyDictionaryConfigLocked();
   if (store_) {
     learning_flush_thread_ = std::thread([this] {
       core::ReserveCurrentThreadStack();
@@ -342,7 +343,46 @@ std::vector<InferenceEngine::DictionaryLoadResult> InferenceEngine::LoadBundledD
 void InferenceEngine::EnableDictionaryLayer(learning::LayerId layer, bool enabled) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   dictionaries_.EnableLayer(layer, enabled);
-  if (layer == learning::LayerId::User) user_dictionary_enabled_ = enabled;
+  switch (layer) {
+    case learning::LayerId::Sudachi:
+      config_.dictionary.sudachi_enabled = enabled;
+      break;
+    case learning::LayerId::Neologd:
+      config_.dictionary.neologd_enabled = enabled;
+      break;
+    case learning::LayerId::NamedEntity:
+      config_.dictionary.named_entity_enabled = enabled;
+      break;
+    case learning::LayerId::TechnicalTerms:
+      config_.dictionary.technical_terms_enabled = enabled;
+      break;
+    case learning::LayerId::User:
+      config_.dictionary.user_dictionary_enabled = enabled;
+      user_dictionary_enabled_ = enabled;
+      break;
+    case learning::LayerId::AutoWords:
+      config_.dictionary.auto_words_enabled = enabled;
+      break;
+    case learning::LayerId::AppSpecific:
+      config_.dictionary.app_specific_dictionary_enabled = enabled;
+      break;
+    case learning::LayerId::Base:
+      break;
+  }
+}
+
+void InferenceEngine::ApplyDictionaryConfigLocked() {
+  dictionaries_.EnableLayer(learning::LayerId::Sudachi, config_.dictionary.sudachi_enabled);
+  dictionaries_.EnableLayer(learning::LayerId::Neologd, config_.dictionary.neologd_enabled);
+  dictionaries_.EnableLayer(learning::LayerId::NamedEntity,
+                            config_.dictionary.named_entity_enabled);
+  dictionaries_.EnableLayer(learning::LayerId::TechnicalTerms,
+                            config_.dictionary.technical_terms_enabled);
+  dictionaries_.EnableLayer(learning::LayerId::User, config_.dictionary.user_dictionary_enabled);
+  dictionaries_.EnableLayer(learning::LayerId::AutoWords, config_.dictionary.auto_words_enabled);
+  dictionaries_.EnableLayer(learning::LayerId::AppSpecific,
+                            config_.dictionary.app_specific_dictionary_enabled);
+  user_dictionary_enabled_ = config_.dictionary.user_dictionary_enabled;
 }
 
 bool InferenceEngine::AddUserWord(const learning::UserWord& word) {
@@ -651,6 +691,8 @@ HealthState InferenceEngine::health_state() const {
 
 void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  config_.dictionary = config.dictionary;
+  ApplyDictionaryConfigLocked();
   config_.rewriters = config.rewriters;
   config_.nll = ClampNllConfig(config.nll);
   ++nll_config_revision_;
@@ -871,7 +913,7 @@ InferenceEngine::CandidatesResult InferenceEngine::QueryCandidatesExImpl(
       }
     }
   }
-  if (auto_word_store) {
+  if (auto_word_store && config.dictionary.auto_words_enabled) {
     // M36-A (spec section 6). Outside state_mutex_: the store has its own
     // mutex, and CommitObservation holds it across Save()'s disk flush, which
     // must not stall Health or model swaps behind this query. Pending and

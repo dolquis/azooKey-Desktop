@@ -124,6 +124,17 @@ SPDX-License-Identifier: Unicode-3.0
   `dictbuild/notices/sudachidict-legal.txt` に逐語で置く。両者は辞書の `META` から生成する
   `ThirdPartyNotices.txt` に入り、MSI がインストール先へ同梱する。
 
+### プロジェクト自作の技術用語辞書（静的辞書層 `technical_terms_lexicon`）
+
+- Source: `dictbuild/sources/technical_terms_lexicon.lex.tsv`（`authored-v1`、外部辞書の転記なし）
+- License: Apache-2.0
+- Copyright: Copyright (c) 2026 azooKey-Desktop contributors
+- Derived path: MSI の `dict\technical_terms_lexicon.azdic`（リポジトリには置かない）
+- Regeneration: `python dictbuild/build_bundled.py --output <dir> --cache <dir>`
+  （隣接する metadata JSON と `dictbuild/dictbuild.py` から生成）
+- Notes: Apache-2.0 本文は `dictbuild/notices/Apache-2.0.txt`。由来、著作権表示、本文は
+  辞書の `META` から `ThirdPartyNotices.txt` に伝播する。
+
 ## ビルド時のみの依存（配布物には同梱しない）
 
 以下は `FetchContent` で取得する依存のうち、単体テスト専用で配布物（MSI/MSIX）に

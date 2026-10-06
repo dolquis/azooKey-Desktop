@@ -67,6 +67,15 @@
   "emojiDataPath": "",
   "typoCorrectionMode": "suggest",
   "typoMinCount": 3,
+  "dictionary": {
+    "sudachiEnabled": true,
+    "neologdEnabled": false,
+    "namedEntityEnabled": true,
+    "technicalTermsEnabled": true,
+    "userDictionaryEnabled": true,
+    "autoWordsEnabled": true,
+    "appSpecificDictionaryEnabled": true
+  },
   "autoWordRegistration": {
     "miningEnabled": true,
     "trendingEnabled": false,

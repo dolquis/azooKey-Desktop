@@ -42,7 +42,7 @@ azooKey-Desktop（Windows ポート）の設計・計画ドキュメントの一
 | [`rich-features-spec.md`](rich-features-spec.md) | 横断テーマ X-1〜X-4（リッチ化）。M48 と統合 |
 | [`tsf-deep-integration-spec.md`](tsf-deep-integration-spec.md) | Phase 6-A（M20〜M23）TSF 深部統合 |
 | [`copilot-pc-backend-spec.md`](copilot-pc-backend-spec.md) | Phase 6-B（M24〜M27）Copilot+ PC / NPU バックエンド |
-| [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI |
+| [`native-ui-spec.md`](native-ui-spec.md) | Phase 6-C（M26）ネイティブ UI。M53: 設定アプリの辞書ライセンス導線（§4.6） |
 | [`sideload-packaging-spec.md`](sideload-packaging-spec.md) | Phase 7（M28〜M34）サイドロード配信 |
 | [`dev-infrastructure-spec.md`](dev-infrastructure-spec.md) | M37〜M51 のビルド、CI、IPC、診断基盤。§12 は診断ウィザード |
 | [`typo-correction-learning-spec.md`](typo-correction-learning-spec.md) | 追加機能 M35（v1 基本タイプミス学習）+ 変換品質 M55（v2 統合補正エンジン） |

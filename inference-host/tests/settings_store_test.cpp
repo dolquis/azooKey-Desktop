@@ -842,6 +842,63 @@ TEST(SettingsStoreTest, TheShippedSampleMatchesTheParsedDefaults) {
   EXPECT_EQ(store.settings().auto_word.trending_interval_hours, 24);
 }
 
+TEST(SettingsStoreTest, DictionaryLayerDefaultsIgnoreUnknownAndMistypedValues) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_defaults");
+  const auto path = temp.path() / "settings.json";
+  for (const auto* json :
+       {"{}", R"({"dictionary":{}})", R"({"dictionary":false})", R"({"dictionary":null})",
+        R"({"dictionary":[]})",
+        R"({"dictionary":{"sudachiEnabled":"false","neologdEnabled":1,
+                "namedEntityEnabled":null,"technicalTermsEnabled":{},
+                "userDictionaryEnabled":[],"autoWordsEnabled":"true",
+                "appSpecificDictionaryEnabled":0}})",
+        R"({"dictionary":{"unknown":false,"baseEnabled":false,"verifyOnLoad":true,
+                "categoryBoosts":{"technical":1.2}}})"}) {
+    SCOPED_TRACE(json);
+    WriteText(path, json);
+    azookey::host::SettingsStore store(path);
+    ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+    const auto& dictionary = store.settings().dictionary;
+    EXPECT_TRUE(dictionary.sudachi_enabled);
+    EXPECT_FALSE(dictionary.neologd_enabled);
+    EXPECT_TRUE(dictionary.named_entity_enabled);
+    EXPECT_TRUE(dictionary.technical_terms_enabled);
+    EXPECT_TRUE(dictionary.user_dictionary_enabled);
+    EXPECT_TRUE(dictionary.auto_words_enabled);
+    EXPECT_TRUE(dictionary.app_specific_dictionary_enabled);
+  }
+}
+
+TEST(SettingsStoreTest, DictionaryLayerSwitchesParseApplyAndResetOnReload) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_reload");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"dictionary":{
+    "sudachiEnabled":false,"neologdEnabled":true,"namedEntityEnabled":false,
+    "technicalTermsEnabled":false,"userDictionaryEnabled":false,"autoWordsEnabled":false,
+    "appSpecificDictionaryEnabled":false}})");
+  azookey::host::SettingsStore store(path);
+  ASSERT_EQ(store.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  auto config = azookey::host::ApplyRuntimeSettingsToEngineConfig({}, store.settings());
+  EXPECT_FALSE(config.dictionary.sudachi_enabled);
+  EXPECT_TRUE(config.dictionary.neologd_enabled);
+  EXPECT_FALSE(config.dictionary.named_entity_enabled);
+  EXPECT_FALSE(config.dictionary.technical_terms_enabled);
+  EXPECT_FALSE(config.dictionary.user_dictionary_enabled);
+  EXPECT_FALSE(config.dictionary.auto_words_enabled);
+  EXPECT_FALSE(config.dictionary.app_specific_dictionary_enabled);
+
+  WriteText(path, "{}");
+  ASSERT_EQ(store.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  config = azookey::host::ApplyRuntimeSettingsToEngineConfig(config, store.settings());
+  EXPECT_TRUE(config.dictionary.sudachi_enabled);
+  EXPECT_FALSE(config.dictionary.neologd_enabled);
+  EXPECT_TRUE(config.dictionary.named_entity_enabled);
+  EXPECT_TRUE(config.dictionary.technical_terms_enabled);
+  EXPECT_TRUE(config.dictionary.user_dictionary_enabled);
+  EXPECT_TRUE(config.dictionary.auto_words_enabled);
+  EXPECT_TRUE(config.dictionary.app_specific_dictionary_enabled);
+}
+
 TEST(SettingsStoreTest, PrivacyPublicationWaitsForActiveLearningGuard) {
   using namespace std::chrono_literals;
   ScopedTempDirectory temp("azookey_settings_privacy_publication");

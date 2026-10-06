@@ -312,6 +312,55 @@ TEST(DictionaryHost, BundledDiscoveryReportsErrorsAndContinues) {
   EXPECT_TRUE(results[3].error.empty());
 }
 
+TEST(DictionaryHost, SettingsApplyStaticLayerSwitchesToAllLookupDirections) {
+  host::EngineConfig config;
+  config.dictionary.sudachi_enabled = false;
+  config.dictionary.named_entity_enabled = false;
+  config.dictionary.technical_terms_enabled = false;
+  host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, config);
+  const auto loaded = engine.LoadBundledDictionaryLayers(Fixture("settings-layers"));
+  ASSERT_EQ(loaded.size(), 4u);
+  for (size_t i = 1; i < loaded.size(); ++i) ASSERT_TRUE(loaded[i].loaded) << loaded[i].error;
+  const auto contains_fixture_word = [](const auto& candidates) {
+    return std::any_of(candidates.begin(), candidates.end(),
+                       [](const auto& candidate) { return candidate.surface == "high0"; });
+  };
+  EXPECT_FALSE(contains_fixture_word(engine.QueryCandidates("よ0", "", 0)));
+  EXPECT_FALSE(contains_fixture_word(engine.QueryPredictions("よ", "", 0)));
+  EXPECT_TRUE(engine.ReverseConvert("high0", 0).empty());
+  // Even with every optional static layer disabled, the kana fallback remains.
+  EXPECT_FALSE(engine.QueryCandidates("かな", "", 0).empty());
+
+  for (const auto member : {&host::DictionaryLayerConfig::sudachi_enabled,
+                            &host::DictionaryLayerConfig::named_entity_enabled,
+                            &host::DictionaryLayerConfig::technical_terms_enabled}) {
+    config.dictionary.*member = true;
+    engine.ApplyConfig(config);
+    EXPECT_TRUE(contains_fixture_word(engine.QueryCandidates("よ0", "", 0)));
+    EXPECT_TRUE(contains_fixture_word(engine.QueryPredictions("よ", "", 0)));
+    EXPECT_EQ(engine.ReverseConvert("high0", 0), "よ0");
+    config.dictionary.*member = false;
+    engine.ApplyConfig(config);
+    EXPECT_FALSE(contains_fixture_word(engine.QueryCandidates("よ0", "", 0)));
+    EXPECT_FALSE(contains_fixture_word(engine.QueryPredictions("よ", "", 0)));
+    EXPECT_TRUE(engine.ReverseConvert("high0", 0).empty());
+  }
+}
+
+TEST(DictionaryHost, EnabledMissingNeologdPackKeepsOtherLayersAvailable) {
+  host::EngineConfig config;
+  config.dictionary.neologd_enabled = true;
+  host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, config);
+  EXPECT_FALSE(
+      engine.LoadDictionaryLayer(learning::LayerId::Neologd, Fixture("missing-neologd.azdic")));
+  ASSERT_TRUE(engine.LoadDictionaryLayer(learning::LayerId::TechnicalTerms,
+                                         Fixture("settings-layers/technical_terms_lexicon.azdic")));
+  const auto candidates = engine.QueryCandidates("よ0", "", 0);
+  EXPECT_TRUE(std::any_of(candidates.begin(), candidates.end(),
+                          [](const auto& candidate) { return candidate.surface == "high0"; }));
+  EXPECT_EQ(engine.ReverseConvert("high0", 0), "よ0");
+}
+
 std::string Environment(const char* name) {
 #ifdef _WIN32
   char* value = nullptr;
@@ -334,6 +383,10 @@ TEST(DictionaryHost, ShippedBundleLoadsAndReverseConverts) {
   core::DoubleArrayTrie trie;
   ASSERT_TRUE(trie.Load(std::filesystem::path(directory) / "sudachi_lexicon.azdic", true))
       << trie.Error();
+  core::DoubleArrayTrie technical;
+  ASSERT_TRUE(
+      technical.Load(std::filesystem::path(directory) / "technical_terms_lexicon.azdic", true))
+      << technical.Error();
   host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
   const auto results = engine.LoadBundledDictionaryLayers(directory);
   ASSERT_EQ(results.size(), 4U);
@@ -341,5 +394,12 @@ TEST(DictionaryHost, ShippedBundleLoadsAndReverseConverts) {
   EXPECT_TRUE(results[1].loaded) << results[1].error;
   EXPECT_EQ(engine.ReverseConvert("東京", 0), "とうきょう");
   EXPECT_EQ(engine.ReverseConvert("変換", 0), "へんかん");
+  EXPECT_EQ(results[3].name, "technical_terms_lexicon.azdic");
+  ASSERT_TRUE(results[3].loaded) << results[3].error;
+  engine.EnableDictionaryLayer(learning::LayerId::Sudachi, false);
+  EXPECT_EQ(engine.ReverseConvert("TensorRT", 0), "てんそるあーるてぃー");
+  const auto candidates = engine.QueryCandidates("てんそるあーるてぃー", "", 0);
+  EXPECT_TRUE(std::any_of(candidates.begin(), candidates.end(),
+                          [](const auto& candidate) { return candidate.surface == "TensorRT"; }));
 }
 }  // namespace

@@ -1,0 +1,13 @@
+{
+  "sources": [
+    {
+      "source_id": "azookey-technical-terms",
+      "spdx": "Apache-2.0",
+      "upstream_url": "https://github.com/dolquis/azooKey-Desktop/tree/main/dictbuild/sources",
+      "upstream_revision": "authored-v1",
+      "transform": "dictbuild/dictbuild.py from technical_terms_lexicon.lex.tsv",
+      "copyright": "Copyright (c) 2026 azooKey-Desktop contributors",
+      "notice_ids": []
+    }
+  ]
+}

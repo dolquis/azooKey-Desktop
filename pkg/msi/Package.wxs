@@ -37,6 +37,9 @@
           <Component Id="SudachiLexiconComponent" Guid="*">
             <File Id="SudachiLexiconFile" Source="$(BundledDictionaryDir)\dict\sudachi_lexicon.azdic" KeyPath="yes" />
           </Component>
+          <Component Id="TechnicalTermsLexiconComponent" Guid="*">
+            <File Id="TechnicalTermsLexiconFile" Source="$(BundledDictionaryDir)\dict\technical_terms_lexicon.azdic" KeyPath="yes" />
+          </Component>
         </Directory>
         <Component Id="TipComponent" Guid="85A678CC-4D73-4C41-B2CF-E0E458AB4AE0">
           <File
@@ -158,6 +161,7 @@
       <ComponentRef Id="LicenseComponent" />
       <ComponentRef Id="ThirdPartyLicensesComponent" />
       <ComponentRef Id="SudachiLexiconComponent" />
+      <ComponentRef Id="TechnicalTermsLexiconComponent" />
       <ComponentRef Id="DictionaryNoticesComponent" />
       <ComponentRef Id="SettingsComponent" />
       <Files Include="$(SettingsPayloadDir)\**" Directory="INSTALLFOLDER">

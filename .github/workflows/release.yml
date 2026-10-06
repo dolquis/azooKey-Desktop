@@ -105,9 +105,12 @@ jobs:
       # 生の上流データは同梱せず、変換後の .azdic と ThirdPartyNotices.txt だけを MSI に入れる。
       - name: Build bundled dictionaries
         run: python dictbuild/build_bundled.py --output build\bundled-dictionaries --cache "${{ runner.temp }}\dictionary-sources"
+      # 同一入力をキャッシュだけで再生成し、content_hash・全 bytes・通知の一致を検証する。
+      - name: Rebuild bundled dictionaries offline
+        run: python dictbuild/build_bundled.py --output build\bundled-dictionaries-repeated --cache "${{ runner.temp }}\dictionary-sources" --offline
       # standalone の neologd_lexicon pack 混入、層 ID と帰属の欠落、MSI 同梱一覧との差を検出する。
       - name: Check bundled dictionaries
-        run: python dictbuild/check_bundle.py build\bundled-dictionaries --package pkg\msi\Package.wxs
+        run: python dictbuild/check_bundle.py build\bundled-dictionaries --package pkg\msi\Package.wxs --compare build\bundled-dictionaries-repeated
       # 出荷する .azdic を Host と同じ C++ リーダーで読み、逆変換できることを確かめる。
       - name: Load bundled dictionaries with the host reader
         env:

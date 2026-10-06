@@ -317,6 +317,28 @@ void MainWindow::OpenCrashReportsButton_Click(Windows::Foundation::IInspectable 
               resources.GetString(L"CrashReportFolderUnavailable"));
 }
 
+void MainWindow::OpenThirdPartyNoticesButton_Click(Windows::Foundation::IInspectable const&,
+                                                   Microsoft::UI::Xaml::RoutedEventArgs const&) {
+  std::array<wchar_t, 32768> module_path{};
+  const auto length =
+      GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+  if (length > 0 && length < module_path.size()) {
+    const auto notices =
+        std::filesystem::path(std::wstring(module_path.data(), length)).parent_path() /
+        L"ThirdPartyNotices.txt";
+    std::error_code error;
+    if (std::filesystem::is_regular_file(notices, error)) {
+      const auto opened =
+          ShellExecuteW(nullptr, L"open", notices.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+      if (reinterpret_cast<INT_PTR>(opened) > 32) return;
+    }
+  }
+  Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;
+  ShowStatus(Microsoft::UI::Xaml::Controls::InfoBarSeverity::Informational,
+             resources.GetString(L"ThirdPartyNoticesTitle"),
+             resources.GetString(L"ThirdPartyNoticesUnavailable"));
+}
+
 void MainWindow::ApplyLaunchArguments(std::wstring_view raw_arguments) {
   const auto arguments = azookey::settings::ParseLaunchArguments(raw_arguments);
   Microsoft::Windows::ApplicationModel::Resources::ResourceLoader resources;

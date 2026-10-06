@@ -499,3 +499,21 @@ TEST(TsfTipActivateUiLessTest, UninitializedDocumentIsNewAgain) {
   EXPECT_TRUE(service.keyboard_open());
   EXPECT_EQ(service.Deactivate(), S_OK);
 }
+
+TEST(TsfTipActivateUiLessTest, ActivateExConvertsAllocationFailureAndRollsBackActivation) {
+  azookey::tsf::TextService service;
+  MockThreadMgrEx mock(0);
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(service.ActivateEx(&mock, mock.client_id, 0), E_OUTOFMEMORY);
+  azookey::tsf::testing::ClearComBoundaryAllocationFailureForTest();
+  // The failed activation released the thread manager, so activating again is not E_UNEXPECTED.
+  EXPECT_EQ(service.ActivateEx(&mock, mock.client_id, 0), S_OK);
+  EXPECT_EQ(service.Deactivate(), S_OK);
+}
+
+TEST(TsfTipActivateUiLessTest, OnPushContextConvertsAllocationFailureToOutOfMemory) {
+  azookey::tsf::TextService service;
+  azookey::tsf::testing::FailNextComBoundaryAllocationForTest();
+  EXPECT_EQ(service.OnPushContext(nullptr), E_OUTOFMEMORY);
+  azookey::tsf::testing::ClearComBoundaryAllocationFailureForTest();
+}

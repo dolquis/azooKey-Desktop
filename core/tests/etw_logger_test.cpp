@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <type_traits>
 
 #include "azookey/core/EtwLogger.h"
@@ -11,6 +13,34 @@ static_assert(
     !std::is_invocable_v<decltype(&EtwLogger::LogLearningObserve), const char*, const char*>);
 static_assert(
     !std::is_invocable_v<decltype(&EtwLogger::LogError), const char*, EtwErrorCode, std::int32_t>);
+
+// A Handshake token is a std::string, so no event reachable from the handshake path can accept
+// one: the payload is fixed-width integers, enums, and a GUID. The ETW path has no runtime sink to
+// capture, so this compile-time check is what fixes "the token never reaches ETW". Each probe
+// passes every parameter (a function pointer ignores default arguments) with one slot replaced by a
+// string, and the positive control proves the probe itself can succeed.
+static_assert(std::is_invocable_v<decltype(&EtwLogger::LogIpcRequest), std::uint64_t, std::uint64_t,
+                                  std::uint64_t, EtwGuid>);
+static_assert(
+    !std::is_invocable_v<decltype(&EtwLogger::LogError), std::string, EtwErrorCode, std::int32_t>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogError), std::string_view, EtwErrorCode,
+                                   std::int32_t>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcRequest), std::string, std::uint64_t,
+                                   std::uint64_t, EtwGuid>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcRequest), std::uint64_t, std::string,
+                                   std::uint64_t, EtwGuid>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcRequest), std::uint64_t,
+                                   std::uint64_t, std::string, EtwGuid>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcRequest), std::uint64_t,
+                                   std::uint64_t, std::uint64_t, std::string>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcResponse), std::uint64_t, double,
+                                   EtwResult, std::string>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcPhase), std::uint64_t, EtwPhase,
+                                   double, EtwResult, std::string>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogIpcCancel), std::uint64_t, std::string>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogActivate), std::uint64_t, std::string>);
+static_assert(!std::is_invocable_v<decltype(&EtwLogger::LogInferenceStart), std::uint64_t,
+                                   EtwBackend, std::uint64_t, std::string>);
 
 TEST(EtwLoggerTest, BalancedLifetimeAndDisabledProviderAreSafe) {
   EtwLogger::Unregister();

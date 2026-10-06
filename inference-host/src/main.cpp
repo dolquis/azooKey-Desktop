@@ -108,10 +108,10 @@ void HandleSignal(int) { g_signal_stop_requested = 1; }
 std::atomic<bool> g_console_stop_requested{false};
 HANDLE g_main_thread = nullptr;
 HANDLE g_shutdown_complete = nullptr;
-// Guards g_stdin_read_in_progress so a cancellation cannot land after main has
-// left the stdio read and started other I/O, such as the shutdown flush.
-SRWLOCK g_stdin_read_lock = SRWLOCK_INIT;
-bool g_stdin_read_in_progress = false;
+// Guards g_stdio_io_in_progress so a cancellation cannot land after main has
+// left stdio I/O and started other I/O, such as the shutdown flush.
+SRWLOCK g_stdio_io_lock = SRWLOCK_INIT;
+bool g_stdio_io_in_progress = false;
 
 BOOL WINAPI HandleConsoleControl(DWORD control_type) {
   switch (control_type) {
@@ -120,16 +120,16 @@ BOOL WINAPI HandleConsoleControl(DWORD control_type) {
     case CTRL_CLOSE_EVENT:
       g_console_stop_requested.store(true, std::memory_order_relaxed);
       // StopRequested() may have just been checked before stdio enters a
-      // blocking read. Retry cancellation while main unwinds to close that
+      // blocking read or write. Retry cancellation while main unwinds to close that
       // race without performing persistence work in the control handler.
-      // Cancel only while main is in the stdio read: CancelSynchronousIo also
+      // Cancel only while main is in stdio I/O: CancelSynchronousIo also
       // aborts the learning flush's file I/O with ERROR_OPERATION_ABORTED.
       for (DWORD waited_ms = 0; waited_ms < 4500; waited_ms += 10) {
-        AcquireSRWLockExclusive(&g_stdin_read_lock);
-        if (g_stdin_read_in_progress && g_main_thread != nullptr) {
+        AcquireSRWLockExclusive(&g_stdio_io_lock);
+        if (g_stdio_io_in_progress && g_main_thread != nullptr) {
           CancelSynchronousIo(g_main_thread);
         }
-        ReleaseSRWLockExclusive(&g_stdin_read_lock);
+        ReleaseSRWLockExclusive(&g_stdio_io_lock);
         if (g_shutdown_complete != nullptr &&
             WaitForSingleObject(g_shutdown_complete, 10) == WAIT_OBJECT_0) {
           break;
@@ -185,24 +185,47 @@ bool StopRequested() {
 }
 
 // Reads one stdio request line unless a stop was requested. On Windows the
-// console control handler may cancel only this read.
+// console control handler may cancel this read and the response write.
 bool ReadStdioLine(std::string& line) {
 #ifdef _WIN32
-  AcquireSRWLockExclusive(&g_stdin_read_lock);
+  AcquireSRWLockExclusive(&g_stdio_io_lock);
   if (StopRequested()) {
-    ReleaseSRWLockExclusive(&g_stdin_read_lock);
+    ReleaseSRWLockExclusive(&g_stdio_io_lock);
     return false;
   }
-  g_stdin_read_in_progress = true;
-  ReleaseSRWLockExclusive(&g_stdin_read_lock);
+  g_stdio_io_in_progress = true;
+  ReleaseSRWLockExclusive(&g_stdio_io_lock);
   const bool read = static_cast<bool>(std::getline(std::cin, line));
-  AcquireSRWLockExclusive(&g_stdin_read_lock);
-  g_stdin_read_in_progress = false;
-  ReleaseSRWLockExclusive(&g_stdin_read_lock);
+  AcquireSRWLockExclusive(&g_stdio_io_lock);
+  g_stdio_io_in_progress = false;
+  ReleaseSRWLockExclusive(&g_stdio_io_lock);
   return read;
 #else
   return !StopRequested() && static_cast<bool>(std::getline(std::cin, line));
 #endif
+}
+
+// Keep stdout insertion and flush inside the same cancellation gate as stdin.
+// The gate must be closed before the engine's shutdown flush starts file I/O.
+bool WriteStdioResponse(const std::string& response) {
+#ifdef _WIN32
+  AcquireSRWLockExclusive(&g_stdio_io_lock);
+  if (StopRequested()) {
+    ReleaseSRWLockExclusive(&g_stdio_io_lock);
+    return false;
+  }
+  g_stdio_io_in_progress = true;
+  ReleaseSRWLockExclusive(&g_stdio_io_lock);
+#else
+  if (StopRequested()) return false;
+#endif
+  std::cout << response << std::endl;
+#ifdef _WIN32
+  AcquireSRWLockExclusive(&g_stdio_io_lock);
+  g_stdio_io_in_progress = false;
+  ReleaseSRWLockExclusive(&g_stdio_io_lock);
+#endif
+  return static_cast<bool>(std::cout);
 }
 
 bool RegisterSignalHandlers() {
@@ -832,8 +855,7 @@ int main(int argc, char** argv) {
     auto resp = stdio_dispatcher.Dispatch(*env);
     if (resp) {
       if (auto serialized = azookey::ipc::Serialize(*resp)) {
-        std::cout << *serialized << std::endl;
-        std::cout.flush();
+        if (!WriteStdioResponse(*serialized)) break;
       } else {
         runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "stdio_envelope_serialize_failed",
                         {{"request_id", env->request_id},

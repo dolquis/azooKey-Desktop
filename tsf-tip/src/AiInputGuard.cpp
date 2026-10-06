@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "azookey/tsf/TipRuntimeLog.h"
+
 namespace azookey::tsf {
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -56,17 +58,29 @@ class ScopeSession final : public ITfEditSession {
     probe.status = count > 0 ? InputScopeProbeStatus::Read : InputScopeProbeStatus::Empty;
     bool password = false;
     bool private_scope = false;
-    for (UINT i = 0; i < count; ++i) {
-      if (scopes[i] == IS_PASSWORD || scopes[i] == IS_NUMERIC_PASSWORD ||
-          scopes[i] == IS_NUMERIC_PIN || scopes[i] == IS_ALPHANUMERIC_PIN ||
-          scopes[i] == IS_ALPHANUMERIC_PIN_SET)
-        password = true;
-      // Chromium marks password fields IS_PRIVATE, never IS_PASSWORD.
-      if (scopes[i] == IS_PRIVATE) private_scope = true;
-      if (i < kMaxLoggedScopes) {
-        if (i) probe.scopes += ',';
-        probe.scopes += std::to_string(static_cast<int>(scopes[i]));
+    try {
+      for (UINT i = 0; i < count; ++i) {
+        if (scopes[i] == IS_PASSWORD || scopes[i] == IS_NUMERIC_PASSWORD ||
+            scopes[i] == IS_NUMERIC_PIN || scopes[i] == IS_ALPHANUMERIC_PIN ||
+            scopes[i] == IS_ALPHANUMERIC_PIN_SET)
+          password = true;
+        // Chromium marks password fields IS_PRIVATE, never IS_PASSWORD.
+        if (scopes[i] == IS_PRIVATE) private_scope = true;
+        if (i < kMaxLoggedScopes) {
+          if (i) probe.scopes += ',';
+          probe.scopes += std::to_string(static_cast<int>(scopes[i]));
+        }
       }
+    } catch (const std::bad_alloc&) {
+      CoTaskMemFree(scopes);
+      probe.status = InputScopeProbeStatus::SessionFailed;
+      LogComBoundaryException("ScopeSession::DoEditSession", E_OUTOFMEMORY);
+      return E_OUTOFMEMORY;
+    } catch (...) {
+      CoTaskMemFree(scopes);
+      probe.status = InputScopeProbeStatus::SessionFailed;
+      LogComBoundaryException("ScopeSession::DoEditSession", E_FAIL);
+      return E_FAIL;
     }
     CoTaskMemFree(scopes);
     probe.private_scope = private_scope;

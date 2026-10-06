@@ -1682,6 +1682,10 @@ Release の FileVersion / ProductVersion は、タグ `vMAJOR.MINOR.PATCH` か�
 `0.0.0.0` とし、CMake の `AZOOKEY_PRODUCT_VERSION` で指定できる。
 Release workflow は設定アプリをビルドした直後に EXE の両バージョンを読み取り、
 期待値との不一致をエラーにする。
+`azooKey.wixproj` も、`SettingsExePath` の FileVersion が `ProductVersion` に `.0` を付けた値と
+違う場合はビルドを失敗させる。`SettingsExe` は版を持つ KeyPath なので、旧版より低い
+FileVersion をメジャーアップグレードで配ると、costing が component の導入を見送った後に
+`RemoveExistingProducts` が旧版のファイルを消し、アップグレード後に設定アプリが残らない。
 
 ### 4.2 アンインストール時
 

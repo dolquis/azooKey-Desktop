@@ -49,6 +49,22 @@
     <DefineConstants>$(DefineConstants);SettingsObjDirExists=1</DefineConstants>
   </PropertyGroup>
 
+  <!-- MSBuild property functions cannot call FileVersionInfo. -->
+  <UsingTask
+      TaskName="ReadAzooKeyFileVersion"
+      TaskFactory="RoslynCodeTaskFactory"
+      AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <FilePath ParameterType="System.String" Required="true" />
+      <FileVersion ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        FileVersion = System.Diagnostics.FileVersionInfo.GetVersionInfo(FilePath).FileVersion ?? string.Empty;
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
   <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
     <Error Condition="!Exists('$(SettingsIconPath)')" Text="Settings icon not found: $(SettingsIconPath)" />
     <Error Condition="!Exists('$(HostScriptsDir)\host-startup-log.ps1')" Text="Host startup logger missing" />
@@ -69,5 +85,20 @@
     <Error Condition="!Exists('$(RewriterDataDir)\emoji.tsv')" Text="Emoji data not found" />
     <Error Condition="!Exists('$(BundledDictionaryDir)\dict\sudachi_lexicon.azdic')" Text="Bundled dictionary not found: $(BundledDictionaryDir)\dict\sudachi_lexicon.azdic. Run dictbuild/build_bundled.py." />
     <Error Condition="!Exists('$(BundledDictionaryDir)\ThirdPartyNotices.txt')" Text="Bundled dictionary notices not found: $(BundledDictionaryDir)\ThirdPartyNotices.txt" />
+  </Target>
+
+  <!--
+    SettingsExe is a versioned KeyPath in a component shared across major
+    upgrades. If an installed product has a higher FileVersion, costing
+    disallows the component before RemoveExistingProducts deletes the old
+    file, so the upgrade leaves no azookey_settings.exe (DEV-1488).
+    Run before CoreCompile so a mismatch fails before WiX writes the MSI.
+  -->
+  <Target Name="ValidateAzooKeySettingsVersion" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(SettingsExePath)')" Text="Settings executable not found: $(SettingsExePath)" />
+    <ReadAzooKeyFileVersion FilePath="$(SettingsExePath)">
+      <Output TaskParameter="FileVersion" PropertyName="AzooKeySettingsFileVersion" />
+    </ReadAzooKeyFileVersion>
+    <Error Condition="'$(AzooKeySettingsFileVersion)' != '$(ProductVersion).0'" Text="Settings executable FileVersion '$(AzooKeySettingsFileVersion)' does not match MSI ProductVersion '$(ProductVersion).0': $(SettingsExePath). Build azookey_settings with -DAZOOKEY_PRODUCT_VERSION=$(ProductVersion)." />
   </Target>
 </Project>

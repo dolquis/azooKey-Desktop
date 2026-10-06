@@ -29,7 +29,8 @@ $vcOpenMPDir = Get-ChildItem "$($redistVersion.FullName)\x64" -Directory |
 cmake --preset windows-release `
   -DAZOOKEY_FETCH_GOOGLETEST=ON `
   -DAZOOKEY_FETCH_WIL=ON `
-  -DAZOOKEY_FETCH_LLAMA_CPP=ON
+  -DAZOOKEY_FETCH_LLAMA_CPP=ON `
+  -DAZOOKEY_PRODUCT_VERSION=1.0.0
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target azookey_settings
 python dictbuild\build_bundled.py --output build\bundled-dictionaries --cache build\dictionary-sources
@@ -77,6 +78,11 @@ self-contained 設定アプリを `build\windows-release\settings-app\Release` �
 `azooKey Settings` ショートカットは `SettingsExe` の advertised shortcut としてこの
 固定パスを指し、per-machine ファイルを component KeyPath とします。
 設定アプリのビルド成果物が欠けている場合、MSI ビルドは失敗します。
+設定アプリの FileVersion が `ProductVersion` に `.0` を付けた値と違う場合も、MSI ビルドは失敗します。
+`SettingsExe` は版を持つ KeyPath なので、メジャーアップグレードで旧版より低い FileVersion を
+配ると、Windows Installer がその component の導入を見送ったうえで旧版の削除時に
+ファイルを消し、アップグレード後に `azookey_settings.exe` が残りません。
+`AZOOKEY_PRODUCT_VERSION` には MSI の `ProductVersion` と同じ値を指定します。
 Windows App SDK の多言語 DLL は MSI の `File.Language` 制限を超えて既知の
 `ICE03` を生じるため、WiX の検証では ICE 群のうち `ICE03` だけを抑制します。
 

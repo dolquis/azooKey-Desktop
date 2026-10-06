@@ -111,11 +111,15 @@ if(AZOOKEY_BUILD_TESTS)
     azookey_nll_bench
     azookey_reverse_lookup_bench
   )
+  # The dictbuild fixture is generated at build time, so the smoke needs no
+  # CTest fixture that a coverage shard would pull in from another shard.
+  add_dependencies(azookey_reverse_lookup_bench dictionary_fixtures)
   add_test(NAME azookey_reverse_lookup_bench_smoke
-           COMMAND azookey_reverse_lookup_bench --dict "${NLL_FIXTURE_DIR}/fixture.azdic"
+           COMMAND azookey_reverse_lookup_bench
+                   --dict "${CMAKE_BINARY_DIR}/dictbuild/fixtures/valid.azdic"
                    --cold-runs 2 --warm-iterations 10)
   set_tests_properties(azookey_reverse_lookup_bench_smoke PROPERTIES
-    FIXTURES_REQUIRED nll_fixture TIMEOUT 30
+    TIMEOUT 30
     PASS_REGULAR_EXPRESSION "reverse_convert_warm n=10 p50_ms=")
   add_test(NAME azookey_bench_smoke COMMAND azookey_bench --max-p95-ms 50)
   set_tests_properties(azookey_bench_smoke PROPERTIES TIMEOUT 10)

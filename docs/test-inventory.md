@@ -123,7 +123,7 @@ GoogleTest はまず `find_package` でシステムインストール版を探�
 | `benchmark_result_tests` | `bench/benchmark_result_test.cpp` | bench JSON schema の固定、baseline 比較の閾値と絶対ノイズ床、baseline 欠落・非互換時の非回帰扱い、UTF-8 出力パス |
 | `conversion_quality_tests` | `bench/conversion_quality_test.cpp` | 変換品質の符号位置単位 CER、canonical / acceptable 一致の区別、raw と NFKC の独立集計、不正 UTF-8 の reject、データセットハッシュの改行正規化 |
 | `azookey_bench_smoke` | `azookey_bench` | CPU `SimpleConverter` 経路の p50/p95/p99 出力、p95 < 50ms |
-| `azookey_reverse_lookup_bench_smoke` | `azookey_reverse_lookup_bench` | NLL fixture 辞書での `ReverseConvert` の load / cold / warm の p50/p95 出力 |
+| `azookey_reverse_lookup_bench_smoke` | `azookey_reverse_lookup_bench` | dictbuild の fixture 辞書（`valid.azdic`）での `ReverseConvert` の load / cold / warm の p50/p95 出力 |
 | `azookey_rich_features_bench_smoke` | `azookey_rich_features_bench` | M14 軽量ライブ変換の Host 推論 p95 が 30ms 以下で、JSON 出力が schema に一致すること |
 | `azookey_bench_json_smoke` | `azookey_bench` | JSON 出力の schema 固定と `passed` 真、人間向け行の非混入 |
 | `azookey_bench_ipc_smoke` | `azookey_bench` | `--ipc` のフェーズ別レイテンシ出力（serialize / framing / deserialize / pipe round-trip）とサンプル数 |

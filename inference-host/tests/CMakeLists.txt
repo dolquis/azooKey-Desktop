@@ -89,12 +89,22 @@ azookey_discover_tests(host_settings_store_tests)
 # The CLI libraries are also exercised through the real command line: only the
 # process boundary shows whether non-ASCII arguments survive Windows argv.
 if(WIN32)
+  # Run the real entry point with a flush deadline beyond the bounded shutdown
+  # tests. The shipped Host keeps EngineConfig's normal five-second interval.
+  set(host_process_test_flush_interval_sec 3600)
+  add_executable(host_shutdown_test_fixture ../src/main.cpp)
+  target_compile_definitions(host_shutdown_test_fixture PRIVATE
+    AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec})
+  target_link_libraries(host_shutdown_test_fixture PRIVATE
+    azookey_host azookey_binary_hardening azookey_project_options azookey_project_warnings)
   add_executable(host_process_integration_tests host_process_integration_test.cpp)
   target_compile_definitions(host_process_integration_tests PRIVATE
-    HOST_PROCESS_TEST_EXE="$<TARGET_FILE:azookey_inference_host>")
+    HOST_PROCESS_TEST_EXE="$<TARGET_FILE:azookey_inference_host>"
+    HOST_SHUTDOWN_TEST_EXE="$<TARGET_FILE:host_shutdown_test_fixture>"
+    AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC=${host_process_test_flush_interval_sec})
   target_link_libraries(host_process_integration_tests
     PRIVATE azookey_host GTest::gtest_main azookey_project_options azookey_project_warnings)
-  add_dependencies(host_process_integration_tests azookey_inference_host)
+  add_dependencies(host_process_integration_tests azookey_inference_host host_shutdown_test_fixture)
   azookey_discover_tests(host_process_integration_tests
     RESOURCE_LOCK host_process_integration)
 

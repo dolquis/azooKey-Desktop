@@ -331,6 +331,10 @@ int main(int argc, char** argv) {
   ConsoleControlRegistration console_control;
 #endif
   azookey::host::EngineConfig config;
+#ifdef AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC
+  // Only the shutdown-test executable extends the periodic flush deadline.
+  config.learning_flush_interval_sec = AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC;
+#endif
   ApplyDefaultBackend(config);
   const auto default_backend = config.backend;
   std::string args_error;

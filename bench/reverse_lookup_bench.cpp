@@ -19,8 +19,8 @@ using Clock = std::chrono::steady_clock;
 constexpr int kWarmupRounds = 3;
 
 // Hits and misses for the static layer.
-const std::vector<std::string> kSurfaces = {"東京", "日本語", "変換", "明日", "漢字",
-                                            "学校", "存在しない語彙", "東京都庁舎前"};
+const std::vector<std::string> kSurfaces = {"東京", "日本語", "変換",           "明日",
+                                            "漢字", "学校",   "存在しない語彙", "東京都庁舎前"};
 
 double Ms(Clock::time_point start, Clock::time_point end) {
   return std::chrono::duration<double, std::milli>(end - start).count();
@@ -50,8 +50,7 @@ class ReverseLookupBench {
   // in. The OS file cache stays warm (flushing it needs admin rights).
   std::unique_ptr<azookey::host::InferenceEngine> MakeEngine(double* load_ms) const {
     auto engine = std::make_unique<azookey::host::InferenceEngine>(
-        std::make_unique<azookey::core::SimpleConverter>(), nullptr,
-        azookey::host::EngineConfig{});
+        std::make_unique<azookey::core::SimpleConverter>(), nullptr, azookey::host::EngineConfig{});
     const auto start = Clock::now();
     const bool loaded = engine->LoadDictionaryLayer(layer_, dict_);
     *load_ms = Ms(start, Clock::now());

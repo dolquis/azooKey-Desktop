@@ -25,6 +25,9 @@ def generate(directory: Path) -> None:
         "長\taaaaa\t名詞\t5000\t0.3\tgeneral\tfixture",
         "中\tab\t名詞\t5000\t0.3\tgeneral\tfixture",
         "緩\tかと\t名詞\t5000\t0.3\tgeneral\tfixture",
+        # One surface, two readings: reverse lookup returns both in ENTS order.
+        "日本\tにほん\t名詞\t4000\t0.4\tplace_name\tfixture",
+        "日本\tにっぽん\t名詞\t4500\t0.35\tplace_name\tfixture",
     ]
     # Many prefixes and Unicode keys allow an independent map-based reference.
     rows += [f"word{i}\tき{i:04d}\t名詞\t5000\t0.3\tgeneral\tfixture" for i in range(200)]
@@ -122,7 +125,7 @@ def write_surface_index_fixtures(directory: Path, image: bytes, sections: dict) 
     # References are checked when read, so every probe of these lookups hits the corruption.
     (directory / "surface_index_entry.azdic").write_bytes(with_index([0xFFFFFFFF] * entry_count))
     (directory / "surface_index_duplicate.azdic").write_bytes(with_index([tokyo] * entry_count))
-    # Searching 東京 never probes slot 0, so the range [0, count) holds 東京都 there.
+    # Searching 東京 yields the range [0, count), whose slot 0 holds 東京都.
     (directory / "surface_index_mismatch.azdic").write_bytes(
         with_index([tokyo_to] + [tokyo] * (entry_count - 1)))
     # Only the global order is wrong; lookups of other surfaces may still succeed.

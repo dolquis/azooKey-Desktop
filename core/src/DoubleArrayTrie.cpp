@@ -641,8 +641,7 @@ bool DoubleArrayTrie::Verify() const noexcept {
         uint32_t index = 0;
         std::string_view value;
         if (!impl_->SurfaceIndexAt(position, index, value)) return false;
-        if (position &&
-            (value < previous || (value == previous && index <= previous_index)))
+        if (position && (value < previous || (value == previous && index <= previous_index)))
           return impl_->Fail("invalid surface index order");
         previous = value;
         previous_index = index;

@@ -57,8 +57,8 @@ TEST(DictionaryTrie, SurfaceIndexMatchesScanAndOlderArtifactsStillLoad) {
   ASSERT_TRUE(indexed.Load(Fixture("valid.azdic"), true)) << indexed.Error();
   ASSERT_TRUE(scanned.Load(Fixture("no_surface_index.azdic"), true)) << scanned.Error();
   ASSERT_TRUE(extended.Load(Fixture("unknown_section.azdic"), true)) << extended.Error();
-  std::vector<std::string> surfaces = {"都", "東京", "東京都", "場", "ヴァ", "TensorRT",
-                                       "東",  "東京都庁", "",     "word", "zzz"};
+  std::vector<std::string> surfaces = {"都",       "東京", "東京都",   "日本", "場",   "ヴァ",
+                                       "TensorRT", "東",   "東京都庁", "",     "word", "zzz"};
   for (int i = 0; i < 200; ++i) surfaces.push_back("word" + std::to_string(i));
   for (int i = 0; i < 8; ++i) surfaces.push_back("high" + std::to_string(i));
   const auto readings = [](const core::DoubleArrayTrie& trie, const std::string& surface) {
@@ -75,6 +75,8 @@ TEST(DictionaryTrie, SurfaceIndexMatchesScanAndOlderArtifactsStillLoad) {
     EXPECT_EQ(readings(extended, surface), expected);
   }
   EXPECT_EQ(readings(indexed, "東京"), std::vector<std::string>{"東京/とうきょう"});
+  // ENTS is ordered by reading, so a shared surface comes back in that order.
+  EXPECT_EQ(readings(indexed, "日本"), (std::vector<std::string>{"日本/にっぽん", "日本/にほん"}));
   EXPECT_TRUE(indexed.IsAvailable());
 }
 
@@ -117,11 +119,26 @@ TEST(DictionaryStore, ReverseLookupRespectsLayerSelectionAndUserWords) {
 }
 
 TEST(DictionaryTrie, RejectsCorruptionIncludingValidHashBadReferences) {
-  for (const char* name :
-       {"magic", "version", "flags", "duplicate", "unaligned", "overflow", "hash", "entry", "kind",
-        "string", "pos", "source", "truncated", "key_order_same_depth", "key_order_other_depth",
-        "surface_index_size", "surface_index_entry", "surface_index_order",
-        "surface_index_duplicate", "surface_index_mismatch"}) {
+  for (const char* name : {"magic",
+                           "version",
+                           "flags",
+                           "duplicate",
+                           "unaligned",
+                           "overflow",
+                           "hash",
+                           "entry",
+                           "kind",
+                           "string",
+                           "pos",
+                           "source",
+                           "truncated",
+                           "key_order_same_depth",
+                           "key_order_other_depth",
+                           "surface_index_size",
+                           "surface_index_entry",
+                           "surface_index_order",
+                           "surface_index_duplicate",
+                           "surface_index_mismatch"}) {
     SCOPED_TRACE(name);
     core::DoubleArrayTrie trie;
     const auto path = Fixture((std::string(name) + ".azdic").c_str());

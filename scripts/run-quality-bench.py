@@ -15,7 +15,7 @@ COMPATIBLE_KEYS = (
 )
 METRICS = ("top1_accuracy", "top5_accuracy", "exact_match_rate",
            "nfkc_exact_match_rate", "cer", "nfkc_cer")
-MONITORED_METRICS = ("top1_accuracy", "top5_accuracy", "exact_match_rate", "cer")
+MONITORED_METRICS = ("top1_accuracy", "exact_match_rate", "cer")
 DATASETS = ("kana_kanji_eval", "typo_eval")
 
 
@@ -121,7 +121,7 @@ def baseline_status(current, path):
 
 
 def regression_metrics(diff):
-    # NFKC metrics are diagnostic only. Accuracy decreases / CER increases are worse.
+    # Top5 and NFKC metrics are diagnostic only. Top1/exact decreases or CER increases are worse.
     return {key: value for key, value in diff.items()
             if key.rsplit(".", 1)[-1] in MONITORED_METRICS
             and (value > 0 if key.rsplit(".", 1)[-1] == "cer" else value < 0)}

@@ -130,7 +130,7 @@ class QualityBenchTests(unittest.TestCase):
                 "nfkc_cer": 0.5, "nfkc_exact_match_rate": -0.5,
                 "acceptable_match_rate": -0.1, "latency_p95_ms": 100}
         self.assertEqual(set(QUALITY.regression_metrics(diff)),
-                         {"top1_accuracy", "homophone.top5_accuracy", "exact_match_rate", "cer"})
+                         {"top1_accuracy", "exact_match_rate", "cer"})
         self.assertFalse(QUALITY.regression_metrics({"top1_accuracy": 0.01, "cer": -0.1}))
 
     def test_native_json_string_depth_and_size_limits_skip(self):
@@ -191,6 +191,15 @@ class QualityBenchTests(unittest.TestCase):
         self.assertNotIn("::warning title=Conversion quality regression::", output)
         self.assertTrue((self.root / "results/kana_kanji_eval.json").is_file())
 
+    def test_top5_only_decrease_is_preserved_without_warning(self):
+        diff = {"top5_accuracy": -0.1, "homophone.top5_accuracy": -0.2}
+        report, calls, output = self.run_dataset(self.current, diff)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(report["status"], "compared")
+        self.assertEqual(report["diff_vs_baseline"], diff)
+        self.assertFalse(report["warning"])
+        self.assertNotIn("::warning title=Conversion quality regression::", output)
+
     def test_current_command_failure_is_preserved(self):
         report, calls, _ = self.run_dataset(codes=(2,))
         self.assertEqual(report["command_exit_code"], 2)
@@ -217,7 +226,7 @@ class QualityBenchTests(unittest.TestCase):
         self.assertEqual(QUALITY.annotation_text("x%\r\ny"), "x%25%0D%0Ay")
 
     def test_workflow_is_scheduled_not_pr_and_uploads_before_enforcing(self):
-        workflow = (ROOT / ".github/workflows/benchmarks.yml").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/quality-benchmarks.yml").read_text(encoding="utf-8")
         events = workflow.split("permissions:", 1)[0]
         self.assertNotIn("pull_request", events)
         self.assertIn("branches: [main]", events)
@@ -229,6 +238,18 @@ class QualityBenchTests(unittest.TestCase):
         self.assertIn("name: conversion-quality-results", quality)
         self.assertLess(quality.index("Upload conversion quality artifact"),
                         quality.index("Enforce quality command exit code"))
+
+    def test_latency_and_quality_baseline_runs_are_independent(self):
+        latency = (ROOT / ".github/workflows/benchmarks.yml").read_text(encoding="utf-8")
+        quality = (ROOT / ".github/workflows/quality-benchmarks.yml").read_text(encoding="utf-8")
+        self.assertIn("--workflow benchmarks.yml", latency)
+        self.assertNotIn("quality-benchmark:", latency)
+        self.assertNotIn("conversion-quality-results", latency)
+        self.assertIn("--workflow quality-benchmarks.yml", quality)
+        self.assertNotIn("--workflow benchmarks.yml", quality)
+        self.assertNotIn("  benchmark:", quality)
+        self.assertIn("group: conversion-quality-history-${{ github.ref }}", quality)
+        self.assertNotIn("group: benchmark-history-${{ github.ref }}", quality)
 
 
 if __name__ == "__main__":

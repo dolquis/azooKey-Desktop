@@ -534,6 +534,15 @@ M53〜M57 完了時点で達成する目標:
 
 ## 10. CI 連携
 
+main push / 日次 schedule / 手動実行の品質採取と advisory な baseline 比較は
+独立した `quality-benchmarks.yml` の `quality-benchmark` ジョブで行う。実行条件、artifact、比較スキップ、
+warning と終了コードの契約は `dev-infrastructure-spec.md` §4.5 を参照する。
+この定期採取はモデルなし CPU 経路の schema / artifact 接続 smoke とする。
+当該データセットでは top1 / top5 / exact が 0 となり、精度低下の検知を実証できない。
+実品質の回帰検証には実辞書または固定モデルが必要であり、PR 向け回帰ゲートを別途構成する。
+以下は CLI 配線の概略例である。実モデルで検証する場合は `--model` でモデルを指定し、
+§14.1 の config と互換な baseline を用意する必要がある。
+
 既存 GitHub Actions に optional な `quality-bench` ジョブを追加（M52
 完了時）:
 

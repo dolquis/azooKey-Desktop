@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -67,7 +68,7 @@ class ChildProcess {
 
   bool Start(const std::filesystem::path& executable, const std::vector<std::wstring>& args,
              DWORD flags, const std::filesystem::path& log_path = {},
-             HANDLE stdin_override = nullptr) {
+             HANDLE stdin_override = nullptr, HANDLE stdout_override = nullptr) {
     std::wstring command = L"\"" + executable.wstring() + L"\"";
     for (const auto& arg : args) command += L" \"" + arg + L"\"";
     STARTUPINFOW startup{};
@@ -89,7 +90,7 @@ class ChildProcess {
       }
       startup.dwFlags |= STARTF_USESTDHANDLES;
       startup.hStdInput = stdin_override != nullptr ? stdin_override : input;
-      startup.hStdOutput = log;
+      startup.hStdOutput = stdout_override != nullptr ? stdout_override : log;
       startup.hStdError = log;
     }
     PROCESS_INFORMATION info{};
@@ -211,8 +212,7 @@ class HostProcessTest : public ::testing::Test {
     return stopped;
   }
 
-  bool SendCommit(azookey::ipc::NamedPipeClient* client, uint64_t id,
-                  const std::string& reading) const {
+  azookey::ipc::Envelope CommitRequest(uint64_t id, const std::string& reading) const {
     azookey::ipc::CommitObservationRequest commit;
     commit.reading = reading;
     commit.chosen = {"chosen-" + reading, reading, 0.5, "fallback"};
@@ -227,6 +227,12 @@ class HostProcessTest : public ::testing::Test {
     request.trace_id = "host-process";
     request.type = azookey::ipc::MessageType::CommitObservation;
     request.payload_json = azookey::ipc::BuildCommitObservationRequest(commit);
+    return request;
+  }
+
+  bool SendCommit(azookey::ipc::NamedPipeClient* client, uint64_t id,
+                  const std::string& reading) const {
+    const auto request = CommitRequest(id, reading);
     if (!client->Send(request)) return false;
     const auto response = client->ReceiveWithTimeout(2000);
     if (!response) return false;
@@ -269,6 +275,132 @@ class HostProcessTest : public ::testing::Test {
       std::cerr << log.rdbuf();
     }
     return false;
+  }
+
+  void CheckBlockedStdioWrite(std::optional<DWORD> control_event) {
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+    HANDLE input_read = nullptr;
+    HANDLE input_write = nullptr;
+    HANDLE output_read = nullptr;
+    HANDLE output_write = nullptr;
+    ASSERT_TRUE(CreatePipe(&input_read, &input_write, &attributes, 128 * 1024));
+    std::unique_ptr<void, decltype(&CloseHandle)> input_reader(input_read, &CloseHandle);
+    std::unique_ptr<void, decltype(&CloseHandle)> input_writer(input_write, &CloseHandle);
+    ASSERT_TRUE(CreatePipe(&output_read, &output_write, &attributes, 4096));
+    std::unique_ptr<void, decltype(&CloseHandle)> output_reader(output_read, &CloseHandle);
+    std::unique_ptr<void, decltype(&CloseHandle)> output_writer(output_write, &CloseHandle);
+    ASSERT_TRUE(SetHandleInformation(input_write, HANDLE_FLAG_INHERIT, 0));
+    ASSERT_TRUE(SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0));
+    DWORD output_capacity = 0;
+    DWORD input_capacity = 0;
+    ASSERT_TRUE(GetNamedPipeInfo(output_write, nullptr, &output_capacity, nullptr, nullptr));
+    ASSERT_TRUE(GetNamedPipeInfo(input_write, nullptr, &input_capacity, nullptr, nullptr));
+    ASSERT_TRUE(SetConsoleCtrlHandler(nullptr, FALSE));
+    const std::vector<std::wstring> args = {L"--data-root", directory_.root.wstring(),
+                                            L"--learning",  LearningPath().wstring(),
+                                            L"--user-dict", UserDictPath().wstring()};
+    const auto shutdown_host = azookey::core::Utf8Path(HOST_SHUTDOWN_TEST_EXE);
+    ASSERT_TRUE(std::filesystem::exists(shutdown_host));
+    const bool started = host_.Start(shutdown_host, args, CREATE_NEW_CONSOLE,
+                                     directory_.root / "host.log", input_read, output_write);
+    input_reader.reset();
+    output_writer.reset();
+    ASSERT_TRUE(started);
+
+    const auto send = [&](const azookey::ipc::Envelope& request) {
+      const auto serialized = azookey::ipc::Serialize(request);
+      if (!serialized) return false;
+      const auto line = *serialized + '\n';
+      // The entire request fits in stdin's buffer even if Host has not read it.
+      if (line.size() > input_capacity) return false;
+      DWORD written = 0;
+      return WriteFile(input_write, line.data(), static_cast<DWORD>(line.size()), &written,
+                       nullptr) &&
+             written == line.size();
+    };
+    const auto read_response = [&]() -> std::optional<azookey::ipc::Envelope> {
+      std::string line;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+      while (std::chrono::steady_clock::now() < deadline && host_.Running()) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(output_read, nullptr, 0, nullptr, &available, nullptr)) return {};
+        if (available == 0) {
+          Sleep(10);
+          continue;
+        }
+        char ch = 0;
+        DWORD read = 0;
+        if (!ReadFile(output_read, &ch, 1, &read, nullptr) || read != 1) return {};
+        if (ch == '\n') return azookey::ipc::Deserialize(line);
+        line += ch;
+      }
+      return {};
+    };
+    azookey::ipc::HandshakeRequest handshake;
+    handshake.tip_version = "host-process-test";
+    handshake.client_id = "host-process-test";
+    handshake.capabilities = {"secure_flag"};
+    azookey::ipc::Envelope handshake_request;
+    handshake_request.request_id = 1;
+    handshake_request.trace_id = "host-process";
+    handshake_request.type = azookey::ipc::MessageType::Handshake;
+    handshake_request.payload_json = azookey::ipc::BuildHandshakeRequest(handshake);
+    ASSERT_TRUE(send(handshake_request));
+    const auto handshake_response = read_response();
+    ASSERT_TRUE(handshake_response);
+    const auto accepted = azookey::ipc::ParseHandshakeResponse(handshake_response->payload_json);
+    ASSERT_TRUE(accepted && accepted->accepted);
+
+    // The first observation is saved immediately, even with a long interval.
+    const auto first_observation_at = std::chrono::steady_clock::now();
+    ASSERT_TRUE(send(CommitRequest(2, "first-stdio")));
+    const auto first_response = read_response();
+    ASSERT_TRUE(first_response);
+    const auto first_commit =
+        azookey::ipc::ParseCommitObservationResponse(first_response->payload_json);
+    ASSERT_TRUE(first_commit && first_commit->ok);
+    const auto encrypted = azookey::learning::EncryptedPathFor(LearningPath());
+    ASSERT_TRUE(std::filesystem::exists(encrypted));
+    ASSERT_TRUE(ContainsLearning("first-stdio"));
+    const auto first_write = std::filesystem::last_write_time(encrypted);
+    const std::string reading = "pending-stdio";
+    auto pending = CommitRequest(3, reading);
+    // The response echoes trace_id. Its serialized frame cannot fit in stdout,
+    // so seeing a response prefix proves Dispatch completed before we stop.
+    pending.trace_id.assign(64 * 1024, 'x');
+    ASSERT_GT(pending.trace_id.size(), output_capacity);
+    ASSERT_TRUE(send(pending));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+    DWORD available = 0;
+    do {
+      ASSERT_TRUE(PeekNamedPipe(output_read, nullptr, 0, nullptr, &available, nullptr));
+      ASSERT_TRUE(host_.Running()) << "Host exited before writing the response";
+      ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "Host did not write stdio";
+      if (available == 0) Sleep(10);
+    } while (available == 0);
+    ASSERT_LT(available, pending.trace_id.size());
+    ASSERT_EQ(std::filesystem::last_write_time(encrypted), first_write);
+    ASSERT_FALSE(ContainsLearning(reading));
+    // Only one observation is dirty (below the count threshold). Both the
+    // periodic worker and mutation-triggered interval flush use this deadline.
+    const auto flush_interval = std::chrono::seconds(AZOOKEY_HOST_PROCESS_TEST_FLUSH_INTERVAL_SEC);
+    ASSERT_LT(std::chrono::steady_clock::now() - first_observation_at + std::chrono::seconds(30),
+              flush_interval);
+    if (control_event) {
+      // Keep both stdin and unread stdout open through shutdown; EOF or a broken
+      // pipe must not be responsible for releasing the blocked Host.
+      ASSERT_TRUE(StopHost(*control_event));
+    } else {
+      // Break stdout while stdin remains open: the failed response write must
+      // leave the loop without requiring EOF or a console control event.
+      output_reader.reset();
+      ASSERT_EQ(host_.Wait(), WAIT_OBJECT_0);
+      ASSERT_EQ(host_.ExitCode(), 0U);
+    }
+    ASSERT_LT(std::chrono::steady_clock::now() - first_observation_at, flush_interval);
+    EXPECT_TRUE(ContainsLearning(reading));
+    EXPECT_EQ(ReadLog(directory_.root / "host.log").find("failed to save learning store"),
+              std::string::npos);
   }
 
   TestDirectory directory_;
@@ -390,6 +522,18 @@ TEST_F(HostProcessTest, CtrlBreakUnblocksStdioRead) {
   // Let main return to the blocking read before the control event.
   Sleep(250);
   EXPECT_TRUE(StopHost(CTRL_BREAK_EVENT));
+}
+
+TEST_F(HostProcessTest, CtrlCUnblocksStdioWriteAndFlushesPendingLearning) {
+  CheckBlockedStdioWrite(CTRL_C_EVENT);
+}
+
+TEST_F(HostProcessTest, CtrlBreakUnblocksStdioWriteAndFlushesPendingLearning) {
+  CheckBlockedStdioWrite(CTRL_BREAK_EVENT);
+}
+
+TEST_F(HostProcessTest, BrokenStdoutFlushesPendingLearning) {
+  CheckBlockedStdioWrite(std::nullopt);
 }
 
 }  // namespace

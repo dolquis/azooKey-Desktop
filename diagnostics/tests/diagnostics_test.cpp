@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "azookey/ipc/HandshakeToken.h"
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/DpapiCrypto.h"
 #include "azookey/learning/LearningStore.h"
@@ -437,6 +438,41 @@ TEST(DiagnosticsTest, CollectionSnapshotExcludesSensitiveBodies) {
 
   std::filesystem::remove(settings_path, ec);
   std::filesystem::remove_all(logs_directory, ec);
+}
+
+TEST(DiagnosticsTest, CollectionNeverIncludesPublishedHandshakeToken) {
+  const auto config_directory = TempPath("azookey-diag-handshake-token-config");
+  const auto logs_directory = config_directory / "logs";
+  std::error_code ec;
+  std::filesystem::remove_all(config_directory, ec);
+  ASSERT_TRUE(std::filesystem::create_directories(logs_directory));
+  const auto token = azookey::ipc::GenerateHandshakeToken();
+  ASSERT_TRUE(token);
+  ASSERT_TRUE(azookey::ipc::PublishHandshakeToken(config_directory / "ipc-token", *token));
+  const auto settings_path = config_directory / "settings.json";
+  {
+    std::ofstream output(settings_path);
+    output << R"({"maxCandidates":9})";
+  }
+  {
+    std::ofstream output(logs_directory / "host-20260802.jsonl");
+    output << R"({"event":"query_latency","result":"ok"})" << '\n';
+  }
+
+  diag::ProbeResult result;
+  result.settings_path = settings_path;
+  result.logs_directory = logs_directory;
+  result.report.timestamp_ms = 1;
+  result.host_health_json = R"({"status":"ok"})";
+  result.ipc_ping_json = R"({"status":"ok","rtt_ms":1})";
+  const auto entries = diag::BuildCollectionEntries(result);
+  ASSERT_FALSE(entries.empty());
+  for (const auto& entry : entries) {
+    EXPECT_EQ(entry.name.find("ipc-token"), std::string::npos) << entry.name;
+    EXPECT_EQ(entry.content.find(*token), std::string::npos) << entry.name;
+  }
+
+  std::filesystem::remove_all(config_directory, ec);
 }
 
 TEST(DiagnosticsTest, RedactedSettingsKeepTypedControlsAndHideSensitiveValues) {

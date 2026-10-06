@@ -1,5 +1,6 @@
 #include "azookey/host/RewriterData.h"
 
+#include <exception>
 #include <fstream>
 #include <iterator>
 
@@ -43,12 +44,17 @@ std::shared_ptr<const core::RewriterIndex> RewriterData::Get(bool emoji,
   std::ifstream stream(path, std::ios::binary);
   size_t invalid = 0;
   if (stream) {
-    const std::string text((std::istreambuf_iterator<char>(stream)), {});
-    if (!stream.bad()) {
-      auto index = std::make_shared<core::RewriterIndex>(emoji ? core::CandidateSource::Emoji
-                                                               : core::CandidateSource::Symbol);
-      invalid = index->Parse(text);
-      slot.index = std::move(index);
+    try {
+      // libstdc++ opens a directory successfully and throws while reading it.
+      const std::string text((std::istreambuf_iterator<char>(stream)), {});
+      if (!stream.bad()) {
+        auto index = std::make_shared<core::RewriterIndex>(emoji ? core::CandidateSource::Emoji
+                                                                 : core::CandidateSource::Symbol);
+        invalid = index->Parse(text);
+        slot.index = std::move(index);
+      }
+    } catch (const std::exception&) {
+      slot.index.reset();
     }
   }
   if (!slot.index || invalid != 0) {

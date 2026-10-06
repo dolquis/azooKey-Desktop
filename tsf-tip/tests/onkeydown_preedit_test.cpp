@@ -6926,6 +6926,55 @@ TEST(TsfTipSecureInputTest, UserAddedSecureAppSuppressesCommitObservation) {
   EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
 }
 
+TEST(TsfTipSecureInputTest, AutoSecureInputFalseDisablesAppDetectionAndTrueRestoresIt) {
+  for (const azookey::core::ForegroundApp app :
+       {azookey::core::ForegroundApp{"KeePass.exe", "Vault", true},
+        azookey::core::ForegroundApp{"Vault.exe", "Vault", true}, azookey::core::ForegroundApp{}}) {
+    TextServiceHarness h;
+    azookey::core::BracketSettings settings;
+    settings.secure_apps =
+        std::make_shared<const std::vector<std::string>>(std::vector<std::string>{"vault.exe"});
+    h.service.set_bracket_settings_for_test(settings);
+    h.service.set_foreground_app_for_test(app);
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+    CommitOneCandidate(h);
+    const auto observation = h.service.last_queued_commit_observation_for_test();
+    ASSERT_TRUE(observation.has_value());
+    EXPECT_FALSE(observation->secure);
+    EXPECT_TRUE(observation->learning_allowed);
+    EXPECT_TRUE(h.service.prediction_allowed_for_test());
+    EXPECT_FALSE(h.service.secure_indicator_visible_for_test());
+
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":true}})");
+    EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+    EXPECT_FALSE(h.service.prediction_allowed_for_test());
+  }
+}
+
+TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsExplicitSecureAndInvalidSettingsClosed) {
+  TextServiceHarness h;
+  for (const auto* settings : {R"({"privacy":{"mode":"secure","autoSecureInput":false}})",
+                               R"({"privacy":{"mode":"unknown","autoSecureInput":false}})", "{"}) {
+    SCOPED_TRACE(settings);
+    h.service.set_privacy_settings_for_test(settings);
+    EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+    EXPECT_FALSE(h.service.prediction_allowed_for_test());
+    const auto ai = h.service.resolve_ai_privacy_for_test(&h.context);
+    EXPECT_FALSE(ai.ai);
+    EXPECT_FALSE(ai.external);
+  }
+  azookey::core::BracketSettings settings;
+  const auto json =
+      azookey::ipc::json::Parse(R"({"profilesByApp":{"notepad.exe":{"privacyMode":"secure"}}})");
+  ASSERT_TRUE(json);
+  settings.profiles = std::make_shared<const azookey::core::AppProfileResolver>(
+      azookey::core::AppProfileResolver::FromSettings(*json));
+  h.service.set_bracket_settings_for_test(settings);
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+  EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+}
+
 TEST(TsfTipSecureInputTest, ExplicitSecureModeSuppressesLearningAndNormalModeRecovers) {
   TextServiceHarness h;
   h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
@@ -7289,10 +7338,11 @@ class PrivateInputScope final : public ITfInputScope {
   STDMETHODIMP_(ULONG) Release() override { return 1; }
   STDMETHODIMP GetInputScopes(InputScope** out, UINT* count) override {
     if (!out || !count) return E_POINTER;
-    *out = static_cast<InputScope*>(CoTaskMemAlloc(sizeof(InputScope)));
+    *out = static_cast<InputScope*>(CoTaskMemAlloc(sizeof(InputScope) * (include_private ? 2 : 1)));
     if (!*out) return E_OUTOFMEMORY;
-    **out = IS_PRIVATE;
-    *count = 1;
+    **out = value;
+    if (include_private) (*out)[1] = IS_PRIVATE;
+    *count = include_private ? 2 : 1;
     return S_OK;
   }
   STDMETHODIMP GetPhrase(BSTR**, UINT* count) override {
@@ -7302,6 +7352,8 @@ class PrivateInputScope final : public ITfInputScope {
   STDMETHODIMP GetRegularExpression(BSTR*) override { return E_NOTIMPL; }
   STDMETHODIMP GetSRGS(BSTR*) override { return E_NOTIMPL; }
   STDMETHODIMP GetXML(BSTR*) override { return E_NOTIMPL; }
+  InputScope value{IS_PRIVATE};
+  bool include_private{false};
 };
 
 class PrivateScopeProperty final : public ITfReadOnlyProperty {
@@ -7362,23 +7414,120 @@ TEST(TsfTipSecureInputTest, KeyboardDisabledContextPassesEveryKeyThrough) {
   EXPECT_EQ(h.service.preedit_kana_, "か");
 }
 
-TEST(TsfTipSecureInputTest, PrivateInputScopeSuppressesLearningButKeepsPrediction) {
+TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsDisabledContextsSecureAndKeysPassThrough) {
+  for (const bool empty_context : {false, true}) {
+    TextServiceHarness h;
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+    ChromiumCompartmentMgr compartments;
+    (empty_context ? compartments.empty_context : compartments.keyboard_disabled).value = 1;
+    h.context.compartment_mgr = &compartments;
+    EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+    for (const WPARAM key : {WPARAM{'K'}, WPARAM{'A'}, WPARAM{VK_SPACE}, WPARAM{VK_RETURN}}) {
+      EXPECT_FALSE(h.TestPress(key));
+      EXPECT_FALSE(h.Press(key));
+    }
+    EXPECT_TRUE(h.service.preedit_kana_.empty());
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+    EXPECT_EQ(h.context.request_count, 0);
+  }
+}
+
+TEST(TsfTipSecureInputTest, AutoSecureInputFalseAllowsPasswordLearningButKeepsAiInputGate) {
+  azookey::tsf::ScopedFocusClassificationForTest focus(azookey::tsf::InputScopeClass::Normal);
+  for (const InputScope scope : {IS_PASSWORD, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN,
+                                 IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET}) {
+    TextServiceHarness h;
+    PrivateScopeProperty property;
+    property.scope.value = scope;
+    FakeRange selection;
+    h.context.input_scope_property = &property;
+    h.context.selection_range = &selection;
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+    CommitOneCandidate(h);
+    EXPECT_FALSE(h.service.secure_input_for_test());
+    EXPECT_TRUE(h.service.prediction_allowed_for_test());
+    EXPECT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+    const auto ai = h.service.resolve_ai_privacy_for_test(&h.context);
+    EXPECT_FALSE(ai.ai);
+    EXPECT_FALSE(ai.external);
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":true}})");
+    EXPECT_TRUE(h.service.resolve_secure_for_test(&h.context));
+    h.context.selection_range = nullptr;
+  }
+}
+
+TEST(TsfTipSecureInputTest, AutoSecureInputFalseKeepsUnresolvedAppAndUnknownScopeAiGate) {
   TextServiceHarness h;
-  h.service.set_foreground_app_for_test({"msedge.exe", "Chrome_WidgetWin_1", true});
+  h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+  azookey::tsf::ScopedFocusClassificationForTest focus(azookey::tsf::InputScopeClass::Normal);
+  EXPECT_FALSE(h.service.resolve_secure_for_test(&h.context));
+  auto ai = h.service.resolve_ai_privacy_for_test(&h.context);  // Unknown scope.
+  EXPECT_FALSE(ai.ai);
+  EXPECT_FALSE(ai.external);
   PrivateScopeProperty property;
+  property.scope.value = IS_DEFAULT;
   FakeRange selection;
   h.context.input_scope_property = &property;
   h.context.selection_range = &selection;
-  CommitOneCandidate(h);
-  EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
-  EXPECT_FALSE(h.service.secure_input_for_test());
-  EXPECT_TRUE(h.service.prediction_allowed_for_test());
-
-  // Without IS_PRIVATE the same commit is learned, so the scope is what stopped it.
-  h.context.input_scope_property = nullptr;
-  CommitOneCandidate(h);
-  EXPECT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+  h.service.set_foreground_app_for_test({"notepad.exe", "Notepad", true});
+  h.context.run_edit_session = true;
+  ai = h.service.resolve_ai_privacy_for_test(&h.context);
+  EXPECT_TRUE(ai.ai);  // Positive control: the setting can allow a classified ordinary field.
+  EXPECT_TRUE(ai.external);
+  h.service.set_foreground_app_for_test({});  // Unresolved app with ordinary scope.
+  ai = h.service.resolve_ai_privacy_for_test(&h.context);
+  EXPECT_FALSE(ai.ai);
+  EXPECT_FALSE(ai.external);
   h.context.selection_range = nullptr;
+}
+
+TEST(TsfTipSecureInputTest, AutoSecureInputFalsePreservesPrivateLearningInMixedPasswordScopes) {
+  for (const auto focus :
+       {azookey::tsf::InputScopeClass::Normal, azookey::tsf::InputScopeClass::Password}) {
+    azookey::tsf::ScopedFocusClassificationForTest classified_focus(focus);
+    TextServiceHarness h;
+    PrivateScopeProperty property;
+    property.scope.value = IS_PASSWORD;
+    property.scope.include_private = true;
+    FakeRange selection;
+    h.context.input_scope_property = &property;
+    h.context.selection_range = &selection;
+    h.service.set_privacy_settings_for_test(R"({"privacy":{"autoSecureInput":false}})");
+    CommitOneCandidate(h);
+    EXPECT_FALSE(h.service.secure_input_for_test());
+    EXPECT_TRUE(h.service.prediction_allowed_for_test());
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+    const auto ai = h.service.resolve_ai_privacy_for_test(&h.context);
+    EXPECT_FALSE(ai.ai);
+    EXPECT_FALSE(ai.external);
+    property.scope.include_private = false;
+    CommitOneCandidate(h);
+    EXPECT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+    h.context.selection_range = nullptr;
+  }
+}
+
+TEST(TsfTipSecureInputTest, PrivateInputScopeSuppressesLearningButKeepsPrediction) {
+  for (const auto* settings :
+       {R"({"privacy":{"autoSecureInput":true}})", R"({"privacy":{"autoSecureInput":false}})"}) {
+    TextServiceHarness h;
+    h.service.set_foreground_app_for_test({"msedge.exe", "Chrome_WidgetWin_1", true});
+    h.service.set_privacy_settings_for_test(settings);
+    PrivateScopeProperty property;
+    FakeRange selection;
+    h.context.input_scope_property = &property;
+    h.context.selection_range = &selection;
+    CommitOneCandidate(h);
+    EXPECT_FALSE(h.service.last_queued_commit_observation_for_test().has_value());
+    EXPECT_FALSE(h.service.secure_input_for_test());
+    EXPECT_TRUE(h.service.prediction_allowed_for_test());
+
+    // Without IS_PRIVATE the same commit is learned, so the scope is what stopped it.
+    h.context.input_scope_property = nullptr;
+    CommitOneCandidate(h);
+    EXPECT_TRUE(h.service.last_queued_commit_observation_for_test().has_value());
+    h.context.selection_range = nullptr;
+  }
 }
 
 namespace {

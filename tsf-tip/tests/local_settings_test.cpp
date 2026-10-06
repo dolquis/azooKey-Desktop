@@ -112,6 +112,25 @@ TEST_F(LocalSettingsTest, CustomPredictionPermissionDefaultsOnAndReloadsIndepend
   ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().prediction_allowed; }));
 }
 
+TEST_F(LocalSettingsTest, AutoSecureInputDefaultsOnReloadsAndInvalidValuesRestoreDetection) {
+  ASSERT_TRUE(reader.Start(path));  // Missing settings use the schema default.
+  EXPECT_TRUE(reader.AiSnapshot().auto_secure_input);
+  Write(R"({"privacy":{"autoSecureInput":false}})");
+  ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().auto_secure_input; }));
+  Write(R"({"privacy":{"autoSecureInput":true}})");
+  ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().auto_secure_input; }));
+  for (const auto* json :
+       {R"({})", R"({"privacy":{}})", R"({"privacy":{"autoSecureInput":"false"}})",
+        R"({"privacy":{"autoSecureInput":0}})", R"({"privacy":{"autoSecureInput":null}})",
+        R"({"privacy":null})", "{"}) {
+    SCOPED_TRACE(json);
+    Write(R"({"privacy":{"autoSecureInput":false}})");
+    ASSERT_TRUE(WaitUntil([&] { return !reader.AiSnapshot().auto_secure_input; }));
+    Write(json);
+    ASSERT_TRUE(WaitUntil([&] { return reader.AiSnapshot().auto_secure_input; }));
+  }
+}
+
 TEST_F(LocalSettingsTest, ShowSecureIndicatorDefaultsOnAndOnlyExplicitFalseHidesIt) {
   Write("{}");
   ASSERT_TRUE(reader.Start(path));

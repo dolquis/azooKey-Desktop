@@ -669,7 +669,7 @@ overcorrection_penalty =
 | top 候補化の信頼不足（`typo_confidence < minConfidenceForTopCandidate`、0.90） | 第一候補にしない（**`typo_score` ではなく `typo_confidence` で判定**） |
 | ユーザーが過去に拒否（`net_reject >= 1`） | `overcorrection_penalty` で強く減点（§12.10）し top 化不可 |
 | 入力が短すぎる（`Utf8CharLength(reading) <= LEN_MIN`、既定 2 = 2 文字以下） | 補正しない（§12.5 で生成前に遮断） |
-| パスワード欄・秘匿アプリ（M46） | 補正・学習ともに無効（§12.12.1 のゲートで遮断） |
+| M46 で secure と判定された入力 | 補正・学習ともに無効（§12.12.1 のゲートで遮断） |
 | コード入力中（M48 profile = code） | 英字・ローマ字補正を控えめにする（発動ゲートに `code` 抑制を加味） |
 
 - **`typo_score` と昇格ゲートの役割分離**: `typo_score`（§12.10）は候補の
@@ -736,7 +736,7 @@ intended_pattern  = 対応する canonical 形（Romaji Variant 正規化後、�
 
 #### 12.12.2 M46 secure 抑止との連携タイミング
 
-secure（パスワード欄・秘匿アプリ）抑止は **検出時点で評価する fail-closed**
+M46 の実効 secure 判定に基づく抑止は **検出時点で評価する fail-closed**
 とし、TIP（検出）と host（蓄積・適用）の二段で遮断する。M46 のプライバシー判定の
 判定主体と二段ゲートの分界は `docs/privacy-and-secure-input-spec.md` §5.1.1 を
 正典とし（前面アプリ由来の判定は TIP 側、host は fail-closed の二次ゲート）、

@@ -5570,14 +5570,17 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
 
   const auto app = foreground_app_.Get();
   const auto settings = local_settings_.Snapshot();
-  const auto gate = EvaluateInputGate(context, client_id_, edit_cookie);
-  // The receiving in-process app must be identifiable. Explicit secure mode
-  // also suppresses learning, independently of whether the AI axes are used.
+  const auto gate =
+      EvaluateInputGate(context, client_id_, edit_cookie, !ai_settings.auto_secure_input);
+  // Automatic detection is optional; explicit secure mode and app-disabled
+  // keyboard input remain independent safety contracts (privacy spec section 4).
   decision.secure =
-      ai_settings.privacy_policy.secure || !app.resolved || gate.secure ||
-      core::IsSecureApp(app.process_name,
-                        settings.secure_apps ? *settings.secure_apps : kNoUserSecureApps,
-                        WindowsAppNameEqual);
+      ai_settings.privacy_policy.secure || gate.keyboard_disabled ||
+      (ai_settings.auto_secure_input &&
+       (!app.resolved || gate.secure ||
+        core::IsSecureApp(app.process_name,
+                          settings.secure_apps ? *settings.secure_apps : kNoUserSecureApps,
+                          WindowsAppNameEqual)));
   if (evaluate_ai && (!app.resolved || !gate.ai_allowed)) decision.ai = {};
   if (settings.profiles) {
     const ipc::json::Value value(settings.profiles->Resolve(app, WindowsAppNameEqual));
@@ -5598,7 +5601,8 @@ TextService::PrivacyDecision TextService::ResolvePrivacy(ITfContext* context, bo
     }
   }
   // IS_PRIVATE asks the IME not to learn; prediction stays (spec section 3 `private`).
-  if (!gate.learning_allowed) decision.learning_allowed = false;
+  if (gate.scope.private_scope || (!gate.learning_allowed && (!gate.secure || decision.secure)))
+    decision.learning_allowed = false;
   if (decision.secure) {
     decision.ai = {};
     decision.learning_allowed = false;

@@ -237,7 +237,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
             valid = valid && setting.IsArray() &&
                     std::all_of(setting.AsArray().begin(), setting.AsArray().end(),
                                 [](const auto& item) { return item.IsString(); });
-          } else if (field == "showSecureIndicator" || field == "redactLogs") {
+          } else if (field == "showSecureIndicator" || field == "redactLogs" ||
+                     field == "autoSecureInput") {
             valid = valid && setting.IsBool();
           } else if (field == "custom" && setting.IsObject()) {
             for (const auto& [axis, enabled] : setting.AsObject())

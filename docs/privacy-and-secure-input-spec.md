@@ -53,7 +53,10 @@ external-AI / AI-candidate / detailed-logging の 5 軸をユーザーが個別�
 本章の自動 secure 判定は **`privacy.autoSecureInput`（§7、既定 `true`）が有効なときのみ**
 動作する。`autoSecureInput=false` の場合、`secureApps` 一致・パスワード欄・URL パターンの
 いずれの自動判定も行わず（§4.3 の解決不能時 fail-closed も含め auto-secure しない）、secure は
-ユーザーが明示設定したときのみ有効になる。
+ユーザーが明示設定したときのみ有効になる。アプリによる IME 無効化への追従（§4.3）は
+この自動判定に含めず、`autoSecureInput=false` でも secure とキー素通しを維持する。
+AI 入力ゲート（§2、§4.3）も独立して働き、パスワード欄・判定不能な scope・入力先アプリの
+解決不能では、auto-secure を無効にしても AI 本文送信を許可しない。
 
 以下のいずれかに該当した場合（`autoSecureInput` 有効時）、モードを一時的に `secure` とする:
 
@@ -168,8 +171,14 @@ UTF-8 の basename を `Invalidate()` までキャッシュする。各 `Get()` 
 の拒否・scope 0 件）は secure 側へ倒さない。前面アプリ軸の fail-closed が backstop
 として働くうえ、`GUID_PROP_INPUTSCOPE` を提供しないアプリは珍しくなく、ここで倒すと
 学習が無言で広範に停止するためである。AI 送信軸は §2 のとおり fail closed を保ち、
-判定不能な scope では送信を抑止する。この二軸の非対称が `AiInputAllowed` と
-`SecureInputDetected`（`tsf-tip/src/AiInputGuard.cpp`）の差である。
+判定不能な scope では送信を抑止する。この二軸の非対称は `CombineInputGate` /
+`EvaluateInputGate`（`tsf-tip/src/AiInputGuard.cpp`）の `ai_allowed` と `secure` に表れる。
+TIP の `ResolvePrivacy` は `autoSecureInput` で後者の自動 secure の適用を切り替え、
+前者の AI 入力ゲートは維持する。`false` ではパスワード欄検出だけを理由とする学習・予測の
+抑止も解除するが、`IS_PRIVATE` の学習抑止と明示的な secure 設定は維持する。
+password/PIN と `IS_PRIVATE` が同時に返る場合も private の学習抑止を維持する。
+`autoSecureInput=false` では `ES_PASSWORD` 形式のフォーカス欄でも入力 scope を調べ、
+private の学習禁止を自動 secure とは独立に適用する。
 
 **キーボード無効化された context**: context の `GUID_COMPARTMENT_KEYBOARD_DISABLED`
 または `GUID_COMPARTMENT_EMPTYCONTEXT` が非 0 のとき（`IsContextKeyboardDisabled`）、
@@ -407,15 +416,18 @@ TIP は非 secure 入力で、composition または選択範囲の開始位置�
 `settings/mvp-settings.schema.json` の `privacy` が持つキーは `mode`・`crashReportConsent`・
 `custom.learning`・`custom.prediction`・`custom.aiCandidate`・`custom.externalAi`・
 `custom.detailedLogging`・`redactLogs`・
-`secureApps`・`showSecureIndicator` であり、
+`autoSecureInput`・`secureApps`・`showSecureIndicator` であり、
 設定アプリの保存許可キーは `settings-app/SettingsDocument.cpp` が管理し、
-予測許可と `showSecureIndicator` は `tsf-tip/src/TipLocalSettings.cpp` が設定から解決する。
-schema が持たない軸（`autoSecureInput`・`secureUrlPatterns`・`privateApps`・
+予測許可、`autoSecureInput` と `showSecureIndicator` は `tsf-tip/src/TipLocalSettings.cpp` が設定から解決する。
+`autoSecureInput` は boolean で既定 `true`、明示的な `false` のみが自動 secure を無効にする。
+欠落・型不正・読取失敗・JSON 不正では `true` に戻す。Host も同じ値を保持するが、
+入力先の判定と適用は TIP の責務である。設定アプリは有効な値を他設定の保存時にも保持し、
+TIP は既存の設定 watcher で再読込する。schemaVersion と IPC payload は変更しない。
+schema が持たない軸（`secureUrlPatterns`・`privateApps`・
 `disableLearningInPrivateMode`・`disableExternalAIInPrivateMode`）は書き込めない。`additionalProperties: false` が
 schema 検証で弾き、`settings-app/SettingsDocument.cpp` の許可キー判定は未知の `privacy`
-フィールドを含む object を `{"mode": "secure"}` へ潰す。実行時はこれらの軸の既定値が
-適用され、`autoSecureInput` は `true` 固定として §4 の自動 secure 判定が常に働く。
-§4 前段が定めるユーザー側の無効化手段は、当該キーが schema へ入るまで存在しない。
+フィールドを含む object を `{"mode": "secure"}` へ潰す。未公開の軸は実行時にも既定値を
+適用する。`autoSecureInput` の型不正も設定アプリでは同じ secure への制限対象になる。
 
 `privacy.custom` は `mode = custom` のときのみ参照する（他モードでは無視する）。
 各軸の既定は §5.2 の private 相当の安全側に揃え、欠落キーは schema 既定で補完される。

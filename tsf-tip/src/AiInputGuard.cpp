@@ -69,6 +69,7 @@ class ScopeSession final : public ITfEditSession {
       }
     }
     CoTaskMemFree(scopes);
+    probe.private_scope = private_scope;
     if (password)
       probe.classification = InputScopeClass::Password;
     else if (private_scope)
@@ -90,7 +91,22 @@ HWND FocusWindow() {
   if (!GetGUIThreadInfo(GetCurrentThreadId(), &info)) return nullptr;
   return info.hwndFocus;
 }
+
+#ifdef AZOOKEY_TSF_TESTING
+thread_local std::optional<InputScopeClass> g_focus_classification_for_test;
+#endif
 }  // namespace
+
+#ifdef AZOOKEY_TSF_TESTING
+ScopedFocusClassificationForTest::ScopedFocusClassificationForTest(InputScopeClass classification)
+    : previous_(g_focus_classification_for_test) {
+  g_focus_classification_for_test = classification;
+}
+
+ScopedFocusClassificationForTest::~ScopedFocusClassificationForTest() {
+  g_focus_classification_for_test = previous_;
+}
+#endif
 
 InputScopeClass ClassifyFocusWindow(HWND focus) {
   if (!focus) return InputScopeClass::Unknown;
@@ -168,7 +184,8 @@ InputGateDecision CombineInputGate(InputScopeClass focus, InputScopeClass scope)
 }
 
 InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id,
-                                    std::optional<TfEditCookie> edit_cookie) {
+                                    std::optional<TfEditCookie> edit_cookie,
+                                    bool probe_password_scope) {
   // A context the app disabled for keyboard input is Chromium's password field;
   // that is answer enough, so skip the window and the edit session.
   if (IsContextKeyboardDisabled(context)) {
@@ -179,9 +196,13 @@ InputGateDecision EvaluateInputGate(ITfContext* context, TfClientId client_id,
     decision.scope.status = InputScopeProbeStatus::Skipped;
     return decision;
   }
-  const auto focus = ClassifyFocusWindow(FocusWindow());
-  // A password-styled focus window is answer enough; skip the edit session.
-  if (focus == InputScopeClass::Password) {
+  auto focus = ClassifyFocusWindow(FocusWindow());
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_focus_classification_for_test) focus = *g_focus_classification_for_test;
+#endif
+  // Automatic secure already withholds learning. With it disabled, inspect
+  // the scope even for password focus so IS_PRIVATE can still forbid learning.
+  if (focus == InputScopeClass::Password && !probe_password_scope) {
     auto decision = CombineInputGate(focus, InputScopeClass::Unknown);
     decision.scope.status = InputScopeProbeStatus::Skipped;
     return decision;

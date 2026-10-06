@@ -38,7 +38,7 @@ fail-closed の正準定義は `docs/privacy-and-secure-input-spec.md` §4.2 / �
 
 `ForegroundApp.resolved == false`（入力先のプロセス名が解決不能）の場合、M48 は
 プロファイル未適用＝`default` / グローバルで扱う（boost なし）。プライバシー軸の
-fail-closed（解決不能を secure 扱い）は M46 §4.3 が担当し、プロファイル軸はそれに
+fail-closed（`autoSecureInput` 有効時に解決不能を secure 扱い）は M46 §4.3 が担当し、プロファイル軸はそれに
 従属する。
 
 ### 3.1 Host への伝達

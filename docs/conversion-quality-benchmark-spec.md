@@ -534,6 +534,11 @@ M53〜M57 完了時点で達成する目標:
 
 ## 10. CI 連携
 
+main push / 日次 schedule / 手動実行の品質採取と advisory な baseline 比較は
+`benchmarks.yml` の `quality-benchmark` ジョブで行う。実行条件、artifact、比較スキップ、
+warning と終了コードの契約は `dev-infrastructure-spec.md` §4.5 を参照する。
+この定期採取はモデルなし CPU 経路を記録し、以下の PR 向け実モデル回帰ゲートとは分ける。
+
 既存 GitHub Actions に optional な `quality-bench` ジョブを追加（M52
 完了時）:
 

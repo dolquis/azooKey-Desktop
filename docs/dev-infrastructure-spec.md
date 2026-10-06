@@ -850,6 +850,22 @@ bench が閾値超過などで非ゼロ終了した場合も、生成済みの J
 初回実行、artifact 期限切れ、run 一覧取得または download の失敗は regression と判定せず、
 当該 run の計測を継続する。
 
+同 workflow の `quality-benchmark` ジョブは Windows hosted runner で、モデルなしの CPU
+経路を使い `kana_kanji_eval.jsonl` と `typo_eval.jsonl` を `--eval` で採取する。
+SHA-256 と NFKC の Windows API を使うため、Linux のレイテンシ job とは分離する。
+`scripts/run-quality-bench.py` は評価 JSON の config と直前の成功 run の
+`conversion-quality-results` artifact を照合し、互換な baseline にだけ `--baseline` を渡す。
+互換キーと指標の正典は `conversion-quality-benchmark-spec.md` §8 / §14.1 とする。
+baseline 不在、破損、version / config 不一致、指標欠落は比較スキップとし、回帰 warning を出さない。
+素の精度指標の低下と CER の増加は、カテゴリ別を含め warning として通知する。
+NFKC 系とレイテンシはこの品質 warning の対象にしない。
+品質 JSON と比較状態・理由・差分を含む `comparison.json` は
+`conversion-quality-results` artifact として 90 日保持する。
+品質悪化だけでは終了コードを変更せず、CLI の非ゼロ終了は artifact 保存後に job を失敗させる。
+定期 workflow は PR で起動せず、通常 PR の required check に追加しない。
+reporting の Python テストは `windows.yml` の `quality` ジョブで実行し、
+既存の `changes` 分類により docs-only PR では省略する。
+
 ### 4.6 Sanitizer プリセットと定期実行（M38 範囲外）
 
 `HANDLE` / COM / Named Pipe / UTF-8↔UTF-16 / 自前 JSON パーサ / 非同期 I/O を

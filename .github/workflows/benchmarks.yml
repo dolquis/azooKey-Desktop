@@ -133,3 +133,80 @@ jobs:
             echo "Benchmark command failed: live=$LIVE_STATUS zenzai=$ZENZAI_STATUS"
             exit 1
           fi
+
+  quality-benchmark:
+    name: Conversion quality artifacts
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Configure quality benchmark
+        run: >-
+          cmake -S . -B build/quality-benchmark -G Ninja -DCMAKE_BUILD_TYPE=Release -DAZOOKEY_BUILD_TESTS=OFF -DAZOOKEY_BUILD_BENCH=ON -DAZOOKEY_BENCH_GIT_COMMIT=${{ github.sha }}
+      - name: Build quality benchmark
+        run: cmake --build build/quality-benchmark --target azookey_bench
+      - name: Report sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats
+      - name: Download latest successful quality baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p quality-baseline
+          if ! run_id="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow benchmarks.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')"; then
+            echo "::warning title=Quality baseline unavailable::Failed to list prior runs; quality comparisons will be skipped."
+            exit 0
+          fi
+          if [[ -z "$run_id" ]]; then
+            echo "No successful quality baseline is available yet."
+            exit 0
+          fi
+          if ! gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name conversion-quality-results \
+            --dir quality-baseline; then
+            echo "::warning title=Quality baseline unavailable::Failed to download quality baseline; unavailable comparisons will be skipped."
+          fi
+      - name: Run conversion quality evaluations
+        id: run_quality
+        shell: bash
+        run: |
+          status=0
+          python scripts/run-quality-bench.py \
+            --bench build/quality-benchmark/bench/azookey_bench.exe || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Upload conversion quality artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conversion-quality-results
+          path: quality-results/*.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce quality command exit code
+        if: always()
+        shell: bash
+        env:
+          QUALITY_STATUS: ${{ steps.run_quality.outputs.status }}
+        run: |
+          if [[ "$QUALITY_STATUS" != "0" ]]; then
+            echo "Quality command failed: status=$QUALITY_STATUS"
+            exit 1
+          fi

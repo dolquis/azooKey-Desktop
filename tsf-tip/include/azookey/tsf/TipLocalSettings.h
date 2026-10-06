@@ -30,6 +30,8 @@ struct TipAiSettings {
   core::AiPrivacy privacy;
   core::PrivacyPolicy privacy_policy{false, false, true};
   bool prediction_allowed{true};
+  // Only an explicit boolean false disables automatic secure detection.
+  bool auto_secure_input{true};
   // privacy.showSecureIndicator. Only a display switch, so an absent, malformed
   // or unreadable value keeps the indicator on instead of failing closed.
   bool show_secure_indicator{true};

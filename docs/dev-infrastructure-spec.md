@@ -1727,8 +1727,9 @@ IME である以上、入力本文・候補語をそのままログに出すと�
   本文を拒否する。`AZOOKEY_LOG_BODY` は文字列が厳密に `1` の場合のみ有効。
 - TIP の同期 `conversion_selected` イベントは、`CommitSelected` 内で
   `RequestCommitEditSession` より前に解決した policy と `reading` / `surface` を渡す。
-  非 secure、入力 scope の検査成功、グローバルの詳細ログ許可をすべて満たし、
-  プロファイルが `private` でない場合だけ本文を許可する。scope が不明なら詳細ログを拒否する。
+  非 secure、入力先アプリの解決成功、入力 scope の検査成功、グローバルの詳細ログ許可をすべて満たし、
+  プロファイルが `private` でない場合だけ本文を許可する。アプリ未解決または scope 不明なら、
+  `privacy.autoSecureInput` の値によらず詳細ログを拒否する。
   非同期の確定処理へ許可を持ち越さない。他のメタデータの出力条件は変えない。
 - redact 時は値を `***redacted***` に置換する。`window_title`、資格情報、
   パスは本文許可時も redact する。診断 ZIP は詳細ログを収集時に再 redact する。

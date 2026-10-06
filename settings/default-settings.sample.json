@@ -25,7 +25,7 @@
   "predictionEnabled": true,
   "aiBackend": "none",
   "openAiTimeoutMs": 30000,
-  "privacy": {"mode": "normal", "redactLogs": true, "crashReportConsent": "off", "custom": {"learning": false, "prediction": true, "aiCandidate": true, "externalAi": false, "detailedLogging": false}, "secureApps": [], "showSecureIndicator": true},
+  "privacy": {"mode": "normal", "redactLogs": true, "crashReportConsent": "off", "custom": {"learning": false, "prediction": true, "aiCandidate": true, "externalAi": false, "detailedLogging": false}, "autoSecureInput": true, "secureApps": [], "showSecureIndicator": true},
   "openAiApiKey": "",
   "openAiApiEndpoint": "https://api.openai.com/v1",
   "openAiModel": "gpt-4o-mini",

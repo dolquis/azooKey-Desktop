@@ -80,11 +80,12 @@ struct RuntimeSettings {
   bool llm_magic_conversion{false};
   std::string log_level{"info"};
   std::string crash_report_consent{"off"};
-  // M46 privacy.secureApps / showSecureIndicator, parsed here so the host holds
+  // M46 privacy.secureApps / autoSecureInput / showSecureIndicator, parsed so the host holds
   // the same values the TIP does. Matching against core::kDefaultSecureApps is
   // the TIP's job: the host does not resolve the foreground app (spec 5.1.1),
   // and the indicator is drawn by the TIP's candidate window.
   std::vector<std::string> secure_apps;
+  bool auto_secure_input{true};
   bool show_secure_indicator{true};
   std::string input_style{"default"};
   std::string custom_romaji_table_path{"%LOCALAPPDATA%\\azooKey\\custom-romaji.tsv"};

@@ -199,6 +199,8 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
         ReadEnum(privacy->second.AsObject(), "crashReportConsent", "off", {"off", "local"});
     settings.show_secure_indicator =
         ReadBool(privacy->second.AsObject(), "showSecureIndicator", settings.show_secure_indicator);
+    settings.auto_secure_input =
+        ReadBool(privacy->second.AsObject(), "autoSecureInput", settings.auto_secure_input);
   }
   settings.open_ai_timeout_ms = static_cast<int32_t>(std::clamp<int64_t>(
       ipc::json::Value(object).GetInt("openAiTimeoutMs").value_or(30000), 1000, 120000));
@@ -361,6 +363,8 @@ SettingsLoadResult SettingsStore::LoadImpl(bool preserve_current_on_invalid) {
     // Retaining unrelated last-good options must not retain privacy consent.
     result.settings.privacy_policy = {};
     settings_.privacy_policy = {};
+    result.settings.auto_secure_input = true;
+    settings_.auto_secure_input = true;
     PublishPrivacyPolicy();
     last_result_ = result;
     return last_result_;

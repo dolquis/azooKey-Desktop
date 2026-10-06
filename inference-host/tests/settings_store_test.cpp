@@ -194,6 +194,24 @@ TEST(SettingsStoreTest, SecureAppsNormalizeAndMalformedPrivacyFallsBackToDefault
   EXPECT_FALSE(store.Reload().settings.show_secure_indicator);
 }
 
+TEST(SettingsStoreTest, AutoSecureInputOnlyExplicitFalseDisablesAndMalformedReloadRestoresIt) {
+  ScopedTempDirectory temp("azookey_settings_auto_secure_input");
+  const auto path = temp.path() / "settings.json";
+  azookey::host::SettingsStore store(path);
+  EXPECT_TRUE(store.Load().settings.auto_secure_input);
+  for (const auto* text :
+       {R"({})", R"({"privacy":{}})", R"({"privacy":{"autoSecureInput":true}})",
+        R"({"privacy":{"autoSecureInput":"false"}})", R"({"privacy":{"autoSecureInput":0}})",
+        R"({"privacy":{"autoSecureInput":null}})", R"({"privacy":false})", "{"}) {
+    SCOPED_TRACE(text);
+    WriteText(path, R"({"privacy":{"autoSecureInput":false}})");
+    EXPECT_FALSE(store.Reload().settings.auto_secure_input);
+    WriteText(path, text);
+    EXPECT_TRUE(store.Reload().settings.auto_secure_input);
+    EXPECT_TRUE(store.settings().auto_secure_input);
+  }
+}
+
 TEST(SettingsStoreTest, CrashConsentRequiresExplicitLocalAndMalformedReloadDisablesIt) {
   ScopedTempDirectory temp("azookey_settings_crash_consent");
   const auto& dir = temp.path();

@@ -141,6 +141,43 @@ TEST(SettingsDocumentTest, CustomPredictionSurvivesUnrelatedSettingsSave) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsDocumentTest, AutoSecureInputSurvivesUnrelatedSaveAndInvalidValuesRestrictPrivacy) {
+  const auto name = "azookey_settings_auto_secure_input-" +
+                    std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto dir = TestDir(name.c_str());
+  const auto path = dir / "settings.json";
+  for (const bool enabled : {false, true}) {
+    WriteText(path, std::string(R"({"privacy":{"mode":"normal","autoSecureInput":)") +
+                        (enabled ? "true" : "false") + "}}");
+    auto loaded = azookey::settings::LoadSettingsDocument(path);
+    ASSERT_EQ(loaded.status, azookey::settings::SettingsDocumentStatus::Loaded);
+    EXPECT_TRUE(loaded.warnings.empty());
+    loaded.settings.log_level = "warn";
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "normal");
+    EXPECT_EQ(parsed->Find("privacy")->GetBool("autoSecureInput"), enabled);
+  }
+  for (const auto* text :
+       {R"({"privacy":{"autoSecureInput":"false"}})", R"({"privacy":{"autoSecureInput":0}})",
+        R"({"privacy":{"autoSecureInput":null}})",
+        R"({"privacy":{"autoSecureInput":false,"secureUrlPatterns":[]}})"}) {
+    SCOPED_TRACE(text);
+    WriteText(path, text);
+    const auto loaded = azookey::settings::LoadSettingsDocument(path);
+    EXPECT_FALSE(loaded.warnings.empty());
+    ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+    const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+    ASSERT_TRUE(parsed);
+    ASSERT_NE(parsed->Find("privacy"), nullptr);
+    EXPECT_EQ(parsed->Find("privacy")->GetString("mode"), "secure");
+    EXPECT_EQ(parsed->Find("privacy")->Find("autoSecureInput"), nullptr);
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(SettingsDocumentTest, MissingCustomPredictionRemainsAbsentOnUnrelatedSave) {
   const auto dir = TestDir("azookey_settings_custom_prediction_missing");
   const auto path = dir / "settings.json";

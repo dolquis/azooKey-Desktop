@@ -254,6 +254,72 @@ TEST_F(DispatcherTest, QueryLatencyUsesConfiguredLogDirectory) {
   EXPECT_NE(log_text.find("\"request_id\":101"), std::string::npos);
 }
 
+TEST_F(DispatcherTest, HandshakeTokenValuesNeverReachRuntimeLogOrResponses) {
+  const auto directory = std::filesystem::temp_directory_path() /
+                         ("azookey_dispatcher_token_log_" + std::to_string(std::random_device{}()));
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { RemovePathNoThrow(path); }
+  } cleanup{directory};
+  const auto host_token = ipc::GenerateHandshakeToken();
+  const auto wrong_token = ipc::GenerateHandshakeToken();
+  ASSERT_TRUE(host_token);
+  ASSERT_TRUE(wrong_token);
+  ASSERT_NE(*host_token, *wrong_token);
+
+  std::string responses;
+  {
+    azookey::logging::RuntimeLoggerOptions options;
+    options.enabled = true;
+    options.component = "host";
+    options.logs_directory = directory;
+    azookey::logging::RuntimeLogger logger(options);
+    auto config = DefaultDispatcherConfig();
+    config.handshake_token = *host_token;
+    azookey::host::Dispatcher target(&engine, &scheduler, &user_dict, config, nullptr, nullptr,
+                                     &logger);
+
+    uint64_t next_id = 200;
+    // Every handshake is followed by a query so query_latency is written and the
+    // scan below is not vacuously true on an empty log.
+    const auto handshake_then_query = [&](const std::string& handshake_payload) {
+      const auto handshake =
+          target.Dispatch(MakeReq(next_id++, ipc::MessageType::Handshake, handshake_payload));
+      ASSERT_TRUE(handshake.has_value());
+      responses += handshake->payload_json;
+      const auto query =
+          target.Dispatch(MakeReq(next_id++, ipc::MessageType::QueryCandidates, "{"));
+      ASSERT_TRUE(query.has_value());
+      responses += query->payload_json;
+    };
+    const auto handshake_with = [&](const std::string& token) {
+      ipc::HandshakeRequest request;
+      request.tip_version = "test";
+      request.protocol_version = kProtocolVersion;
+      request.handshake_token = token;
+      return ipc::BuildHandshakeRequest(request);
+    };
+
+    handshake_then_query(handshake_with(*wrong_token));
+    handshake_then_query(handshake_with(""));
+    handshake_then_query("{\"handshake_token\":\"" + *wrong_token + "\",");
+    handshake_then_query("{\"handshake_token\":\"" + *host_token + "\",");
+    handshake_then_query(handshake_with(*host_token));
+  }
+
+  std::string log_text;
+  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+    if (entry.path().extension() != ".jsonl") continue;
+    std::ifstream input(entry.path());
+    log_text.append(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(log_text.find("\"event\":\"query_latency\""), std::string::npos);
+  for (const auto& secret : {*host_token, *wrong_token}) {
+    EXPECT_EQ(log_text.find(secret), std::string::npos);
+    EXPECT_EQ(responses.find(secret), std::string::npos);
+  }
+}
+
 TEST_F(DispatcherTest, PendingLimitRejectsQueriesWithoutCompletingExistingRequests) {
   constexpr auto limit = azookey::host::RequestScheduler::kMaxPendingRequestsPerClient;
   for (uint64_t id = 1; id <= limit; ++id) {

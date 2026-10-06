@@ -186,6 +186,16 @@ Describe "WiX MSI package consistency" {
     $script:settingsProject | Should -Match '#define AZOOKEY_VERSION_STRING'
   }
 
+  It "rejects a settings EXE whose FileVersion differs from the MSI version" {
+    # A lower versioned KeyPath than the installed one deletes the EXE on major upgrade (DEV-1488).
+    $script:project | Should -Match 'TaskName="ReadAzooKeyFileVersion"[\s\S]*?FileVersionInfo\.GetVersionInfo\(FilePath\)\.FileVersion'
+    $script:project | Should -Match '<Target Name="ValidateAzooKeySettingsVersion" BeforeTargets="CoreCompile">'
+    $script:project | Should -Match '<ReadAzooKeyFileVersion FilePath="\$\(SettingsExePath\)">[\s\S]*?PropertyName="AzooKeySettingsFileVersion"'
+    $script:project | Should -Match '<Error Condition="''\$\(AzooKeySettingsFileVersion\)'' != ''\$\(ProductVersion\)\.0''"'
+    $script:packageReadme | Should -Match '-DAZOOKEY_PRODUCT_VERSION=1\.0\.0'
+    $script:packageReadme | Should -Match '-p:ProductVersion=1\.0\.0'
+  }
+
   It "records licenses for the redistributed settings runtime" {
     $script:thirdPartyLicenses | Should -Match 'Microsoft Windows App SDK'
     $script:thirdPartyLicenses | Should -Match 'Microsoft Windows C\+\+/WinRT'

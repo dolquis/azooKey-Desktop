@@ -44,6 +44,14 @@ Describe "WiX MSI package consistency" {
     $script:project | Should -Match "Third-party licenses file not found"
   }
 
+  It "validates required payloads before the WiX CoreCompile packaging target" {
+    # Build dependencies run before BeforeTargets="Build"; WiX creates the MSI in CoreCompile.
+    [xml]$xml = $script:project
+    $validation = $xml.SelectSingleNode('/Project/Target[@Name="ValidateAzooKeyPayload"]')
+    $validation | Should -Not -BeNullOrEmpty
+    $validation.GetAttribute("BeforeTargets") | Should -Be "CoreCompile"
+  }
+
   It "installs the TIP and host per-machine under Program Files" {
     $script:package | Should -Match 'Scope="perMachine"'
     $script:package | Should -Match 'StandardDirectory Id="ProgramFiles64Folder"'

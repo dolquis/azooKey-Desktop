@@ -270,6 +270,27 @@ repository の追跡ファイルだけである。exe がそのいずれより�
 MSBuild が読まないファイル（`settings-app/Assets/` の README など）は入力に含めない。
 含めると、target を再ビルドしても exe の時刻が動かず、拒否が解けないためである。MSBuild の増分判定と同じ入力を見るため、拒否は
 target の再ビルドで解消する。tlog が無ければ入力を決められないので拒否する。
+`-IncludeDiagnostics`（既定は無効）を指定すると、WPR profile
+`diagnostics/azookey-diagnostics.wprp`、ETW manifest `diagnostics/etw/AzooKey.man`、
+同じ build directory の `diagnostics/etw/azookey_etw_manifest.dll` を、それぞれ同じ
+相対パスで zip に追加する。role は `wpr-profile`、`etw-manifest`、`etw-resource-dll`
+とし、他の同梱物と同様にコピー後の SHA-256 を記録する。
+ETW DLL の鮮度は専用に検査する。DLL、manifest、ETW の CMake 定義、CMake cache、
+`build.ninja`、生成 `AzooKey.rc` と RC object（`AzooKey.rc.res`）、RC が参照する全 locale の message table と
+`WEVT_TEMPLATE` resource が存在し、DLL がこれらの入力より古くないことを要求する。
+RC object も生成 RC と参照する全 resource より古くないことを要求する。
+DLL だけが再リンクされ、古い RC object が残った場合も拒否する。
+resource の更新が Ninja に追跡されない場合は、`--clean-first` で再コンパイルする。
+resource は同じ build directory の
+生成ディレクトリ内に限る。さらに `azookey_etw_manifest` の Ninja dry-run が idle か、
+`[1/1] Linking CXX shared library diagnostics/etw/azookey_etw_manifest.dll` の1行だけで
+あることを確認する（パス区切りは `/` または `\`）。resource-only DLL は export を持たず
+import `.lib` が生成されないため、この再リンクだけを許可する。
+MC による生成、RC コンパイル、追加作業、失敗したコマンド、不明な出力は拒否する。
+dry-run の間だけ `NINJA_STATUS` を `[%f/%t] ` に固定し、終了時に元へ戻す。
+この検査は build の鮮度確認であり、manifest の hash はコピーしたファイルの同一性を確認する。
+ETW 登録と WPR の開始・停止は package 生成や bootstrap では行わず、人間が診断時に
+明示的に実行する（[`handoff/windows-diagnostics-playbook.md`](./handoff/windows-diagnostics-playbook.md)）。
 `vc_redist.x64.exe` は `-RuntimeInstallerPath` が指定された場合だけ同梱する。
 生成スクリプトは依存ファイルをネットワークから取得しない。
 

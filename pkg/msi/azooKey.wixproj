@@ -65,7 +65,7 @@
     </Task>
   </UsingTask>
 
-  <Target Name="ValidateAzooKeyPayload" BeforeTargets="Build">
+  <Target Name="ValidateAzooKeyPayload" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('$(SettingsIconPath)')" Text="Settings icon not found: $(SettingsIconPath)" />
     <Error Condition="!Exists('$(HostScriptsDir)\host-startup-log.ps1')" Text="Host startup logger missing" />
     <Error Condition="!Exists('$(HostScriptsDir)\host-supervisor.ps1')" Text="Host supervisor missing" />

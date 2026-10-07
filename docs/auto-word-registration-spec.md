@@ -1200,6 +1200,7 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 | `ENTS` | 固定長エントリレコード列（下表） |
 | `STRS` | 文字列プール（UTF-8 の連結。終端子なし） |
 | `META` | UTF-8 JSON。由来・ライセンス・ビルドレシピ（§15.6） |
+| `SIDX` | 任意。表層形索引（`ENTS` の index 列、下記） |
 
 `TRIE` の 1 ノードは 16 バイト固定の `u32 base` / `u32 check` /
 `u32 key_id` / `u32 depth` とする。root は index 0、`check = 0`、
@@ -1260,6 +1261,16 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 `source_priority` を層から引くのと二重に加算すると §14.11 の確定係数が崩れるためで、
 `priority_q` は debug probe 用の informational フィールドとして扱う。
 
+**表層形索引（`SIDX`）**。再変換の逆引き（表層形の完全一致）に使う任意セクションで、
+`entry_count` 個の `u32 entry_index` を `(surface の UTF-8 バイト列, entry_index)` の昇順に並べる。
+リーダーは二分探索で一致範囲を求め、範囲内のエントリを `entry_index` の昇順、すなわち
+`ENTS` の順に返す。`ENTS` は読みの順に並ぶため、索引が無ければ逆引きは `ENTS` の全件走査になり、
+同梱の `sudachi_lexicon` では 1 回ごとに `ENTS` 全体のページインを伴う。
+
+`SIDX` は `format_version` を上げずに足せる。v1 のリーダーは未知の `type` を無視するため、
+`SIDX` を持つアーティファクトも読める。`SIDX` を持たないアーティファクトは、
+`ENTS` を全件走査して同じ結果を返す。`dictbuild` は常に `SIDX` を書き出す。
+
 検証は 3 段に分ける。**どの段でも、違反を検出したらクランプや切り詰めで続行せず拒否する。**
 範囲外のオフセットを有効範囲へ丸めると、別のエントリや別の文字列を正しい値として読んで
 しまい、破損を検出せずに誤った候補を出すことになる。
@@ -1277,6 +1288,7 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
   他のセクションおよびヘッダとセクションテーブルの領域と**重ならない**。
 - 固定長レコードのセクションは `size` がレコード長の倍数であり、件数がヘッダと一致する:
   `KEYS.size == key_count × 8`、`EIDX.size % 8 == 0`、`ENTS.size == entry_count × 32`。
+  `SIDX` は存在する場合だけ `SIDX.size == entry_count × 4` を課す。
 - `TRIE` の `size` が double-array の要素長の倍数である。
 
 **(2) 参照検証（逆参照の時点、O(1)）**。内部参照は全件走査せず、実際に読む瞬間に検査する。
@@ -1289,12 +1301,16 @@ Windows は `CreateFileMappingW` / `MapViewOfFile`、テスト用の POSIX 経�
 - `ENTS[j]` について `surface_off ≤ STRS.size` かつ `surface_len ≤ STRS.size − surface_off`。
   `reading_off` / `reading_len` も同様。`pos_id < META.pos_table` の要素数、
   `source` が既知の層識別子。
+- 二分探索で読む `SIDX[i]` が `entry_count` 未満。求めた一致範囲の中に、表層形が
+  クエリと異なる要素や、`entry_index` が昇順でない要素がある場合は、検索の不一致ではなく
+  順序の破損として扱う。
 
 全件を先に走査しないのは、`ENTS` が数十万件規模になり、ロード予算（§15.9 の 20 ms）を
 超えるためである。逆参照時の検査は分岐 2 つで済み、検索のレイテンシ予算には影響しない。
 
 **(3) 全体検証（明示的に要求されたときのみ、O(N)）**。`content_hash` の照合と、(2) の
 参照検証の全件走査、復元キーの `key_id` 順が UTF-8 バイト辞書順であることの検査を行う。
+`SIDX` があれば、`(surface, entry_index)` が狭義の昇順であること（`ENTS` の置換であること）も検査する。
 C++ と `dictbuild --verify` の両方で検査し、検索時の順序検査は防御的措置として残す。
 実行するのは pack の DL 直後、`dictbuild --verify`、および設定
 `dictionary.verifyOnLoad` が真のときとする。
@@ -1476,7 +1492,8 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 | 層をまたぐ意味論の一致 | 同じ語彙を静的層と mutable 層の双方に入れ、`LookupMode` ごとに両者が同じ結果集合を返すことを確認する（§15.8） |
 | 正規化と alias | §15.3 の各規則について、ビルド時展開されたキーとクエリ時の長音緩和が、期待する `MatchKind` を返すことを確認する。alias キーが `EIDX` 経由で元エントリと同じ `ENTS` レコードを指し、`entry_count`（ヘッダ）が重複を含まないことも確認する |
 | 破損耐性（構造） | `magic` 破壊 / `format_version` 不一致 / 未知 `flags` ビット / 必須セクションの欠落と重複 / 8 バイト境界違反 / セクションの重なり / 固定長セクションの `size` がレコード長の倍数でない / ヘッダの件数と `size` の不一致 / `offset` と `size` の範囲外（overflow を誘う値を含む）/ ファイル末尾の切り詰め / `content_hash` 不一致 |
-| 破損耐性（内部参照） | `key_id ≥ key_count` / `entry_ref_off + entry_count > EIDX.count` / `EIDX[i].entry_index ≥ entry_count` / `EIDX[i].kind` が未知 / `surface_off + surface_len > STRS.size` / `reading_off + reading_len > STRS.size` / `pos_id` が `META.pos_table` の範囲外 / `source` が未知の層識別子 の各ケース |
+| 破損耐性（内部参照） | `key_id ≥ key_count` / `entry_ref_off + entry_count > EIDX.count` / `EIDX[i].entry_index ≥ entry_count` / `EIDX[i].kind` が未知 / `surface_off + surface_len > STRS.size` / `reading_off + reading_len > STRS.size` / `pos_id` が `META.pos_table` の範囲外 / `source` が未知の層識別子 / `SIDX[i] ≥ entry_count` / `SIDX` の一致範囲に表層形の異なる要素や重複がある / `SIDX` の順序違反 の各ケース |
+| 表層形索引の互換 | `SIDX` による逆引きが `ENTS` の全件走査と同じ結果を同じ順で返すこと、`SIDX` を持たないアーティファクトと未知のセクションを持つアーティファクトが読み込まれて逆引きできること、`SIDX.size` の不一致を構造検証で拒否すること |
 | 破損時の縮退 | 上記いずれのケースでも、当該層のみが無効化されて空を返し、値がクランプされて別のエントリや文字列として読まれないこと、プロセスが落ちず他層が機能することを確認する |
 | 後方互換 | 既存 `user_dict.json` / `auto_words.tsv` が層として読み込まれる（§14.13 の再掲） |
 | 帰属生成 | `META` から生成した `ThirdPartyNotices.txt` に、寄与した全上流の SPDX と帰属が含まれることを確認する |

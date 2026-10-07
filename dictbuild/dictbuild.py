@@ -233,19 +233,27 @@ def build(inputs: list[Path], metadata: dict, layer: int, catalog: Path) -> tupl
         key_records.extend(struct.pack("<II", len(refs) // 8, len(references[key])))
         for index, kind in references[key]:
             refs.extend(struct.pack("<IB3x", index, kind))
+    # Surface index for reverse lookup: ENTS indices by (surface bytes, index).
+    by_surface = sorted(range(len(entries)), key=lambda i: (entries[i]["surface"].encode("utf-8"), i))
     sections = [(b"TRIE", make_trie(keys)), (b"KEYS", key_records), (b"EIDX", refs),
                 (b"ENTS", records), (b"STRS", strings),
+                (b"SIDX", struct.pack(f"<{len(by_surface)}I", *by_surface)),
                 (b"META", json.dumps(metadata, ensure_ascii=False, sort_keys=True,
                                      separators=(",", ":")).encode("utf-8"))]
+    image = pack(sections, layer, len(entries), len(keys))
+    verify(image)
+    return image, notices
+
+
+def pack(sections: list[tuple[bytes, bytes]], layer: int, entry_count: int, key_count: int) -> bytes:
     image = bytearray(64 + 24 * len(sections))
     for i, (name, data) in enumerate(sections):
         image.extend(b"\0" * (-len(image) % 8))
         struct.pack_into("<4sIQQ", image, 64 + i * 24, name, 0, len(image), len(data))
         image.extend(data)
     struct.pack_into("<8sHHIIIIIQ", image, 0, b"AZDIC1\0\0", 1, 64, 1, layer,
-                     len(entries), len(keys), len(sections), fnv(image[64:]))
-    verify(bytes(image))
-    return bytes(image), notices
+                     entry_count, key_count, len(sections), fnv(image[64:]))
+    return bytes(image)
 
 
 def verify(image: bytes) -> None:
@@ -269,7 +277,8 @@ def verify(image: bytes) -> None:
         raise ValueError("overlapping sections")
     if not set((b"TRIE", b"KEYS", b"EIDX", b"ENTS", b"STRS", b"META")).issubset(sections):
         raise ValueError("missing section")
-    if len(sections[b"KEYS"]) != key_count * 8 or len(sections[b"ENTS"]) != count * 32:
+    if len(sections[b"KEYS"]) != key_count * 8 or len(sections[b"ENTS"]) != count * 32 or (
+            b"SIDX" in sections and len(sections[b"SIDX"]) != count * 4):
         raise ValueError("record count mismatch")
     nodes = list(struct.iter_unpack("<IIII", sections[b"TRIE"]))
     keys = list(struct.iter_unpack("<II", sections[b"KEYS"]))
@@ -310,6 +319,7 @@ def verify(image: bytes) -> None:
         if entry >= count or kind > 1 or any(reserved):
             raise ValueError("invalid entry reference")
     readings = []
+    surfaces = []
     for off in range(0, len(sections[b"ENTS"]), 32):
         a, b, c, d, pos, category, cost, frequency, source, priority = struct.unpack_from("<IIIIHHhHBB", sections[b"ENTS"], off)
         if pos >= len(meta["pos_table"]) or source != layer or category & ~1023 or any(sections[b"ENTS"][off + 26:off + 32]):
@@ -320,6 +330,14 @@ def verify(image: bytes) -> None:
                 raise ValueError("invalid string range")
             normalize(pool[offset:offset + length].decode("utf-8", errors="strict"))
         readings.append(normalize(sections[b"STRS"][c:c + d].decode("utf-8")))
+        surfaces.append(sections[b"STRS"][a:a + b])
+    if b"SIDX" in sections:
+        order = [index for (index,) in struct.iter_unpack("<I", sections[b"SIDX"])]
+        if any(index >= count for index in order):
+            raise ValueError("invalid surface index")
+        # Strictly increasing (surface, index) also makes SIDX a permutation of ENTS.
+        if any((surfaces[a], a) >= (surfaces[b], b) for a, b in zip(order, order[1:])):
+            raise ValueError("invalid surface index order")
     for key_id, (offset, length) in enumerate(keys):
         for entry, kind, _ in refs[offset:offset + length]:
             key = key_texts[key_id]

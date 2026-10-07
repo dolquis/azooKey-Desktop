@@ -26,14 +26,29 @@ class BuilderTests(unittest.TestCase):
             path = Path(temporary)
             generate(path)
             dictbuild.verify((path / "valid.azdic").read_bytes())
+            compatible = {"valid.azdic", "no_surface_index.azdic", "unknown_section.azdic"}
             for broken in path.glob("*.azdic"):
-                if broken.name == "valid.azdic":
+                if broken.name in compatible:
                     continue
                 with self.subTest(name=broken.name), self.assertRaises(ValueError):
                     dictbuild.verify(broken.read_bytes())
             for broken in path.glob("key_order*.azdic"):
                 with self.subTest(name=broken.name), self.assertRaisesRegex(ValueError, "invalid key order"):
                     dictbuild.verify(broken.read_bytes())
+            for name in ("surface_index_order", "surface_index_duplicate", "surface_index_mismatch"):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "invalid surface index order"):
+                    dictbuild.verify((path / f"{name}.azdic").read_bytes())
+
+    def test_surface_index_is_optional_and_stays_format_version_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            generate(path)
+            image = (path / "valid.azdic").read_bytes()
+            self.assertEqual(struct.unpack_from("<H", image, 8)[0], 1)
+            names = {image[64 + i * 24:68 + i * 24] for i in range(struct.unpack_from("<I", image, 28)[0])}
+            self.assertIn(b"SIDX", names)
+            dictbuild.verify((path / "no_surface_index.azdic").read_bytes())
+            dictbuild.verify((path / "unknown_section.azdic").read_bytes())
 
     def test_normalization_aliases_and_limit(self):
         self.assertEqual(dictbuild.normalize("カタカナＡ１"), "かたかなA1")
@@ -157,7 +172,8 @@ class BundledBuildTests(unittest.TestCase):
             sudachi = (first / "dict" / "sudachi_lexicon.azdic").read_bytes()
             self.assertEqual(struct.unpack_from("<I", sudachi, 20)[0], 2)  # Duplicate Tokyo merged.
             # Metadata carries input names and hashes, never output/work/cache absolute paths.
-            sections = [struct.unpack_from("<4sIQQ", sudachi, 64 + 24 * i) for i in range(6)]
+            section_count = struct.unpack_from("<I", sudachi, 28)[0]
+            sections = [struct.unpack_from("<4sIQQ", sudachi, 64 + 24 * i) for i in range(section_count)]
             _, _, offset, length = next(section for section in sections if section[0] == b"META")
             inputs = json.loads(sudachi[offset:offset + length])["inputs"]
             self.assertEqual([item["name"] for item in inputs], ["sudachi_lexicon.lex.tsv"])

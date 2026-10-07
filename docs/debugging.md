@@ -53,14 +53,22 @@ sccache は MSVC のキャッシュキーに checkout のパスを含めない�
 worktree をまたいでヒットする。ヒット時には保存時の `/showIncludes` 出力をそのまま返し、
 Ninja はそこに書かれた別 checkout のパスを依存として記録する。
 そのヘッダーが消えていれば Ninja は毎回再コンパイルを要求し、残っていればこの checkout の
-ヘッダー変更が再コンパイルを起こさない。`ninja -C <build> -t deps` に、この checkout の外に
-ある repository のヘッダーが並ぶかで確認する。`make-vm-verify-package.ps1` はこれを検出して拒否する。
-解消するには、上と同じく `SCCACHE_RECACHE=1` を設定して `--clean-first` で再ビルドし、設定を戻す。
-`SCCACHE_BASEDIRS` はキャッシュキーだけを正規化し、返す出力は書き換えない。
-checkout 間のヒットが増えるので、この症状には使わない。
-RECACHE で書き直したエントリは、次に別 checkout がヒットすると同じことを起こす。
-worktree を並行してビルドするなら、`SCCACHE_DIR` と `SCCACHE_SERVER_PORT` を worktree ごとに
-分けるか、`-DAZOOKEY_USE_COMPILER_CACHE=OFF` で configure する。
+ヘッダー変更が再コンパイルを起こさない。ヘッダー変更で再コンパイルされた翻訳単位とされなかった
+翻訳単位が同じ実行ファイルに混ざると、構造体レイアウトの不一致でアクセス違反が起こり得る。
+
+ルート `CMakeLists.txt` は、launcher が sccache のとき、MSVC の compiler launcher に
+`SCCACHE_C_CUSTOM_CACHE_BUSTER=<CMAKE_SOURCE_DIR の SHA1>` を加える。キャッシュキーが
+checkout ごとに分かれ、ヒットは同じ checkout 内に限られる。同じ checkout の別 build
+ディレクトリ間では、記録されるヘッダーのパスが一致するのでヒットを共有する。
+`SCCACHE_DIR` を共有したままでもよい。
+
+この設定より前に生成した build ディレクトリでは、`.ninja_deps` に別 checkout のパスが残っている
+ことがある。launcher の変更で compile コマンドが変わるので、再configure 後の最初のビルドで
+全翻訳単位が再コンパイルされ、依存も記録し直される。`ninja -C <build> -t deps` に、この checkout
+の外にある repository のヘッダーが並ぶかで確認する。`make-vm-verify-package.ps1` はこれを検出して
+拒否する。それでも残る場合は、上と同じく `SCCACHE_RECACHE=1` を設定して `--clean-first` で
+再ビルドし、設定を戻す。`SCCACHE_BASEDIRS` はキャッシュキーだけを正規化し、返す出力は
+書き換えない。checkout 間のヒットが増えるので、この症状には使わない。
 
 ## Bench
 

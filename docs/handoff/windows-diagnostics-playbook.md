@@ -145,41 +145,102 @@ cdb.exe -z $dump.FullName -c '~* kb; !locks; !handle 0 3; q' |
 WPR profile と Process Monitor を再現直前に開始し、再現直後に停止する。
 無制限の file-mode trace と PML はディスクを使い続けるため、採取時間を短く保つ。
 Kernel provider を使う WPR profile の開始は、管理者 PowerShell で実行する。
+検証 zip は `make-vm-verify-package.ps1 -IncludeDiagnostics` で生成し、展開先のルートを
+作業ディレクトリにする。以下は一括 runbook の DEV-1092 / DEV-677 からも参照される手順である。
+採取前に3点の role・配置・SHA-256 を manifest と照合する。
 
 ```powershell
+$packageRoot = $PWD.Path
+$packageManifest = Get-Content -Raw (Join-Path $packageRoot 'manifest.json') | ConvertFrom-Json
+$diagnostics = @{
+  'wpr-profile' = 'diagnostics/azookey-diagnostics.wprp'
+  'etw-manifest' = 'diagnostics/etw/AzooKey.man'
+  'etw-resource-dll' = 'diagnostics/etw/azookey_etw_manifest.dll'
+}
+foreach ($role in $diagnostics.Keys) {
+  $entry = @($packageManifest.files | Where-Object role -eq $role)
+  if ($entry.Count -ne 1 -or $entry[0].path -cne $diagnostics[$role]) {
+    throw "Expected one diagnostics payload: $role"
+  }
+  $path = Join-Path $packageRoot $diagnostics[$role]
+  if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry[0].sha256) {
+    throw "Diagnostics payload hash mismatch: $role"
+  }
+}
+$etwManifest = (Resolve-Path 'diagnostics\etw\AzooKey.man').Path
+$etwResources = (Resolve-Path 'diagnostics\etw\azookey_etw_manifest.dll').Path
+# Both file attributes in AzooKey.man name azookey_etw_manifest.dll.
+wevtutil.exe im $etwManifest /rf:$etwResources /mf:$etwResources
+if ($LASTEXITCODE -ne 0) { throw 'ETW manifest registration failed' }
+$wprStarted = $false
 $wprProfile = Join-Path $PWD 'diagnostics\azookey-diagnostics.wprp'
-wpr.exe -start "${wprProfile}!AzooKeyDiagnostics.Verbose" -filemode
-
-$procmon = Start-Process -FilePath $procmonExe -PassThru -ArgumentList @(
-  '-accepteula',
-  '-backingfile',
-  (Join-Path $captureRoot 'ipc-timeout.pml'),
-  '-quiet',
-  '-minimized'
-)
+try {
+  wpr.exe -start "${wprProfile}!AzooKeyDiagnostics.Verbose" -filemode
+  if ($LASTEXITCODE -ne 0) { throw 'WPR start failed' }
+  $wprStarted = $true
+  $procmon = Start-Process -FilePath $procmonExe -PassThru -ErrorAction Stop -ArgumentList @(
+    '-accepteula',
+    '-backingfile',
+    (Join-Path $captureRoot 'ipc-timeout.pml'),
+    '-quiet',
+    '-minimized'
+  )
+} catch {
+  try {
+    if ($wprStarted) { wpr.exe -cancel; $wprStarted = $false }
+  } finally {
+    wevtutil.exe um $etwManifest
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'ETW manifest unregistration failed; retry manually' }
+  }
+  throw
+}
 ```
 
 timeout を一度再現したら、先に WPR を保存し、Process Monitor を終了する。
 
 ```powershell
-wpr.exe -stop (Join-Path $captureRoot 'ipc-timeout.etl') 'azooKey IPC timeout'
-& $procmonExe -terminate -quiet
-if (-not $procmon.HasExited) {
-  $procmon.WaitForExit(10000)
+try {
+  wpr.exe -stop (Join-Path $captureRoot 'ipc-timeout.etl') 'azooKey IPC timeout'
+  if ($LASTEXITCODE -ne 0) {
+    if ($wprStarted) { wpr.exe -cancel }
+    throw 'WPR stop failed; trace was not saved'
+  }
+} finally {
+  $wprStarted = $false
+  & $procmonExe -terminate -quiet
+  if (-not $procmon.HasExited) { $procmon.WaitForExit(10000) }
 }
 ```
 
 WPA では Process と Thread activity、File I/O、Registry、Networking の順で時系列を確認する。
 Process Monitor は採取後に `azookey_inference_host.exe` と入力先アプリで filter し、Named Pipe の connect、read、write、disconnect 周辺を確認する。
 
-現在の profile は OS provider だけを収集する。
-`docs/sideload-packaging-spec.md` §7.2 の azooKey 固有 provider は GUID が未確定であり、phase event の実装は DEV-604 の Work packet B で扱う。
-固有 provider の導入後は、WPA の Generic Events で `request_id` を軸に `IpcRequest`、`IpcResponse`、`InferenceStart`、`InferenceEnd` を対応づける。
+profile は OS provider と azooKey 固有 provider を同じトレースへ収集する。
+WPA の Generic Events で provider `azooKey-Desktop` を絞り、同じ `client_id` / `request_id`
+の phase を対応づける。イベントの定義と順序は
+[`sideload-packaging-spec.md` §7.4](../sideload-packaging-spec.md#74-観測) を参照する。
 
-WPR の停止に失敗した場合は、保存を繰り返さずセッションを cancel する。
+manifest の登録と resource DLL は、WPA や `Get-WinEvent -Path` での解析が終わるまで保持する。
+相関イベントとフィールドの確認を終えてから、次の解除コマンドを独立した手順として実行する。
+停止直後や WPA を開いただけの時点では解除しない。
 
 ```powershell
-wpr.exe -cancel
+wevtutil.exe um $etwManifest
+if ($LASTEXITCODE -ne 0) { throw 'ETW manifest unregistration failed' }
+```
+
+上の停止手順は保存失敗時にセッションを cancel する。
+採取・解析を中断してトレースを破棄する場合は、この手順で開始したセッションを cancel し、登録を解除する。
+保存した ETL を後で解析する場合は登録を保持し、解析を終えてから上の解除手順を実行する。
+
+```powershell
+try {
+  if ($wprStarted) { wpr.exe -cancel; $wprStarted = $false }
+  & $procmonExe -terminate -quiet
+} finally {
+  wevtutil.exe um $etwManifest
+  if ($LASTEXITCODE -ne 0) { throw 'ETW manifest unregistration failed' }
+}
 ```
 
 ## COM と handle leak の再現と採取

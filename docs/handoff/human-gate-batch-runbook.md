@@ -513,7 +513,8 @@ DEV-677 は DEV-1092 と同じ管理者 PowerShell で、`-IncludeDiagnostics` �
 の手順で manifest の hash 照合・登録・採取・解除を行う。WPA で開けるだけでは合格にしない。
 Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_id` / `request_id` の
 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 が現れるかを人が判定する。
-ETL は Git へ入れず、採取後は `wevtutil um` で manifest の登録を解除する。
+ETL は Git へ入れず、WPA または `Get-WinEvent -Path` での解析を終えてから、独立した手順で
+`wevtutil um` により manifest の登録を解除する。解析を後で行う場合も、停止直後には解除しない。
 `AzooKeyDiagnostics` プロファイルの ETL は IPC のフレームと Health を含むため、十数分で GB 単位に育つ。
 採取は確認する操作ごとに短く区切る。WPA を使わずに個々のイベントを読むときは、`tracerpt` で XML 化するとメモリが足りなくなるので、`Get-WinEvent -Path <ETL> -Oldest -FilterXPath` で provider `azooKey-Desktop` と必要なイベント ID に絞る。
 管理者権限を使い、登録・診断設定や対象プロセスの状態を変えるので、レーン 2 の観察と証跡回収を終えた後に走らせる。

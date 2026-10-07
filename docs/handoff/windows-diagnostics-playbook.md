@@ -207,13 +207,8 @@ try {
   }
 } finally {
   $wprStarted = $false
-  try {
-    & $procmonExe -terminate -quiet
-    if (-not $procmon.HasExited) { $procmon.WaitForExit(10000) }
-  } finally {
-    wevtutil.exe um $etwManifest
-    if ($LASTEXITCODE -ne 0) { throw 'ETW manifest unregistration failed' }
-  }
+  & $procmonExe -terminate -quiet
+  if (-not $procmon.HasExited) { $procmon.WaitForExit(10000) }
 }
 ```
 
@@ -225,8 +220,18 @@ WPA の Generic Events で provider `azooKey-Desktop` を絞り、同じ `client
 の phase を対応づける。イベントの定義と順序は
 [`sideload-packaging-spec.md` §7.4](../sideload-packaging-spec.md#74-観測) を参照する。
 
-上の停止手順は保存失敗時も cancel と登録解除を行う。
-停止手順へ進まず採取を中断する場合は、この手順で開始したセッションを cancel し、登録を解除する。
+manifest の登録と resource DLL は、WPA や `Get-WinEvent -Path` での解析が終わるまで保持する。
+相関イベントとフィールドの確認を終えてから、次の解除コマンドを独立した手順として実行する。
+停止直後や WPA を開いただけの時点では解除しない。
+
+```powershell
+wevtutil.exe um $etwManifest
+if ($LASTEXITCODE -ne 0) { throw 'ETW manifest unregistration failed' }
+```
+
+上の停止手順は保存失敗時にセッションを cancel する。
+採取・解析を中断してトレースを破棄する場合は、この手順で開始したセッションを cancel し、登録を解除する。
+保存した ETL を後で解析する場合は登録を保持し、解析を終えてから上の解除手順を実行する。
 
 ```powershell
 try {

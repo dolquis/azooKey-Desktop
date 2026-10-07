@@ -50,12 +50,24 @@ endif()
 # English so Ninja records header dependencies instead of silently storing an
 # empty dependency set on non-English Windows hosts. Preserve any existing
 # launcher (for example sccache) after the environment wrapper.
+#
+# sccache's MSVC cache key ignores the checkout path, and a hit replays the
+# stored /showIncludes output verbatim. A hit from another checkout therefore
+# makes Ninja track that checkout's headers, so header changes here do not
+# rebuild those objects. Salt the key per source tree to keep hits local.
 if(MSVC)
+  set(_azookey_launcher_env "VSLANG=${AZOOKEY_MSVC_VSLANG}")
+  if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "sccache")
+    string(SHA1 _azookey_source_key "${CMAKE_SOURCE_DIR}")
+    list(APPEND _azookey_launcher_env
+         "SCCACHE_C_CUSTOM_CACHE_BUSTER=${_azookey_source_key}")
+    unset(_azookey_source_key)
+  endif()
   foreach(_azookey_lang IN ITEMS C CXX)
     set(_azookey_existing_launcher
         "${CMAKE_${_azookey_lang}_COMPILER_LAUNCHER}")
     set(CMAKE_${_azookey_lang}_COMPILER_LAUNCHER
-        "${CMAKE_COMMAND};-E;env;VSLANG=${AZOOKEY_MSVC_VSLANG}")
+        "${CMAKE_COMMAND};-E;env;${_azookey_launcher_env}")
     if(_azookey_existing_launcher)
       list(APPEND CMAKE_${_azookey_lang}_COMPILER_LAUNCHER
            ${_azookey_existing_launcher})

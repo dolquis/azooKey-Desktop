@@ -20,6 +20,7 @@ add_library(azookey_host STATIC
   src/LookupCli.cpp
   src/NewWordsCli.cpp
   src/ModelCatalog.cpp
+  src/NeologdPack.cpp
   src/PunctuationInserter.cpp
   src/NllScorer.cpp
   src/RequestScheduler.cpp
@@ -38,6 +39,15 @@ set_source_files_properties(src/ZenzaiModelConverter.cpp
 # HttpDownloader.cpp and ModelCatalog.cpp both define IsValidSha256 and LowerAscii.
 set_source_files_properties(src/HttpDownloader.cpp
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+
+set(AZOOKEY_NEOLOGD_PIN "${PROJECT_SOURCE_DIR}/dictbuild/packs/neologd_lexicon.manifest.json")
+set(AZOOKEY_NEOLOGD_PIN_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/NeologdPackPin.cpp")
+add_custom_command(OUTPUT "${AZOOKEY_NEOLOGD_PIN_CPP}"
+  COMMAND ${CMAKE_COMMAND} -DINPUT=${AZOOKEY_NEOLOGD_PIN} -DOUTPUT=${AZOOKEY_NEOLOGD_PIN_CPP}
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/EmbedNeologdPin.cmake"
+  DEPENDS "${AZOOKEY_NEOLOGD_PIN}" "${CMAKE_CURRENT_SOURCE_DIR}/EmbedNeologdPin.cmake"
+  VERBATIM)
+target_sources(azookey_host PRIVATE "${AZOOKEY_NEOLOGD_PIN_CPP}")
 
 target_include_directories(azookey_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(azookey_host

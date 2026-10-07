@@ -90,7 +90,8 @@ def validate_manifest(manifest: dict) -> bool:
         if manifest["upstream_revision"] or manifest["file_name"] or manifest["size"]:
             raise ValueError("unpublished manifest must not name a pack")
         return False
-    if not manifest["url"].startswith("https://"):
+    # The host hands the URL to WinHTTP as UTF-16; printable ASCII keeps that widening exact.
+    if not manifest["url"].startswith("https://") or any(not 0x20 < ord(c) < 0x7F for c in manifest["url"]):
         raise ValueError("pack url must be https")
     if not SHA256.fullmatch(manifest["sha256"]):
         raise ValueError("pack sha256 must be 64 lowercase hex digits")

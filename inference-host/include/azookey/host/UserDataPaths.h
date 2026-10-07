@@ -18,6 +18,9 @@ struct UserDataPaths {
   std::filesystem::path data_dir;
   std::filesystem::path logs_dir;
   std::filesystem::path models_dir;
+  // Optional download packs (auto-word-registration-spec section 14.10). Created only when a
+  // pack is fetched, so EnsureUserDataDirectories leaves it alone.
+  std::filesystem::path packs_dir;
   std::filesystem::path settings_path;
   std::filesystem::path learning_path;
   std::filesystem::path user_dict_path;

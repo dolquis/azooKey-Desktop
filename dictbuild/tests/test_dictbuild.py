@@ -250,6 +250,8 @@ class NeologdPackTests(unittest.TestCase):
             ("unsupported manifest layer_id", dict(manifest, layer_id=4)),
             ("unsupported manifest format_version", dict(manifest, format_version=2)),
             ("url must be https", dict(manifest, url="http://example.invalid/pack.azdic")),
+            ("url must be https", dict(manifest, url="https://example.invalid/パック.azdic")),
+            ("url must be https", dict(manifest, url="https://example.invalid/a b.azdic")),
             # Only one of url and sha256 set is a published manifest with a missing value.
             ("url must be https", dict(manifest, url="")),
             ("sha256 must be 64", dict(manifest, sha256="")),

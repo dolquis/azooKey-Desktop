@@ -187,6 +187,7 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 > バックエンド利用時も、既知語判定はユーザー辞書・静的辞書レイヤ・フォール
 > バック変換器の実辞書の 3 つを見る。Zenzai モデル自身の語彙は既知語判定の
 > 対象外とする。
+> 静的層の収録語は、候補向けの ON/OFF と独立に既知語として扱う（§14.8）。
 >
 > 対象外とする根拠は 2 つある。1 つ目は、モデルが語の単位の語彙を持たないこと
 > である。Zenzai の GGUF は文字単位の GPT-2 系モデル（`tokenizer.ggml.pre` が
@@ -708,6 +709,9 @@ public:
       std::string_view reading,
       const LookupContext& ctx);
 
+  // マイニング専用の完全一致判定。静的層の有効フラグは無視する。
+  bool ContainsKnownWord(std::string_view reading, std::string_view surface) const;
+
   // 個別層の有効化
   void EnableLayer(LayerId layer, bool enabled);
 
@@ -728,7 +732,9 @@ private:
 
 ### 14.8 設定スキーマ拡張
 
-`mvp-settings.schema.json` に追加:
+設定全体の拡張形を次に示す。`mvp-settings.schema.json`、Host、設定アプリの保存対象は
+このうち7つの `*Enabled` キーとする。`verifyOnLoad` と `categoryBoosts` は後続の
+拡張用であり、以下の契約を実装する段階で schema と runtime に追加する。
 
 ```json
 {
@@ -762,6 +768,17 @@ private:
 当該 layer は無効（missing-pack）として扱う。bundled 層（`sudachi` / `named_entity` /
 `technical_terms`）の既定は `true`。
 
+7つのキーは boolean のみを受け付ける。欠落、型不正、`dictionary` 自体の型不正は
+キーの既定値へ戻し、未知のキーは runtime では無視する。schema は未知キーを拒否する。
+設定アプリは表示していない有効なキーを保存時にも保持し、未知または型不正の値は除去する。
+設定の再読込では Host の `EngineConfig` と `DictionaryStore` の有効層を更新する。
+OFF の層は変換候補、読み前置一致による予測、表層形の逆引きへ寄与しない。
+ユーザー辞書と confirmed 自動語の独立した候補注入にも同じ切替を適用する。
+静的層の OFF は auto-word の既知語判定（§4-2）を変えない。ロードと検証を通過した
+静的層は有効フラグにかかわらず専用経路で `(reading, surface)` を確認し、収録済みの語を
+再マイニングしない。候補の取得経路にはこの有効フラグを無視する判定を使わない。
+Base の切替キーは設けない。`appSpecificDictionaryEnabled` は供給元が空なら候補を増やさない。
+
 `verifyOnLoad` の既定は **`false`**。真にすると、静的層アーティファクトのロード時に
 `.azdic` の全バイトハッシュ検証（§15.5）を行う。既定でオフなのは起動レイテンシに
 乗せないためであり、オフでもヘッダとセクション範囲の検証は常に行う。
@@ -783,6 +800,8 @@ umbrella は加算しない）。これにより M52 `named_entity_recall_at_5` 
 target を達成可能な scoring 経路を確保する。
 
 ### 14.9 辞書ソースのライセンスと配布判定
+
+本節と §14.10 は、設定アプリのライセンス導線（`native-ui-spec.md` §4.6）から参照される。
 
 各辞書層のソース・ライセンス・配布可否。**配布判定の正典は本節**であり、
 配布物（`docs/sideload-packaging-spec.md` §4 の base MSI）の同梱物はこの判定に従う。ライセンスは
@@ -1497,6 +1516,8 @@ trie 単体の検索レイテンシとロード時間は `bench/` 配下のマ�
 
 ### 15.12 `sudachi_lexicon` の取得・抽出・足切り
 
+本節は MSI の辞書生成・再現性検査（`sideload-packaging-spec.md` §4.1）から参照される。
+
 **取得経路**。release workflow が `dictbuild/build_bundled.py` で、SudachiDict の raw lexicon
 （core 版 = `small_lex.zip` + `core_lex.zip`）を毎回ダウンロードして生成する。版、URL、
 SHA256 は同スクリプトに固定し、ハッシュが一致しない取得はビルドエラーとする。`--cache` は
@@ -1525,6 +1546,16 @@ SudachiDict 節、`dictbuild/notices/sudachidict-legal.txt`（上流 `LEGAL` の
 `cost` 10000 超は希少な活用形と長い固有名詞が大半を占めるためである。品詞による足切りは
 しない。20260723 版ではこの規則で 623,065 エントリ、388,011 キー、約 70 MB の
 アーティファクトになる。
+
+**同梱ビルドと再現性**。`build_bundled.py` は SudachiDict に続けて、プロジェクト自作の
+`dictbuild/sources/technical_terms_lexicon.lex.tsv` を同じビルダで生成する。技術用語seedの
+revision は `authored-v1`、ライセンスは Apache-2.0、category は `technical`（必要に応じ
+`software` も付与）とし、由来は隣接する metadata JSON に記録する。外部辞書は転記しない。
+帰属は層の固定順で `ThirdPartyNotices.txt` へ集約する。
+release workflow は同じキャッシュを使って別出力先へ2回生成し、2回目を `--offline` とする。
+`check_bundle.py --compare <2回目の出力先>` は両方の配布ガードに加え、層集合、ヘッダの
+`content_hash`、ファイルサイズ、全バイトのSHA256と帰属文書の一致を検査する。
+独立した2回の生成が一致しなければMSIを作成しない。
 
 ### 15.13 ビルダと Host の接続契約
 

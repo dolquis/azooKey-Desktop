@@ -141,6 +141,23 @@ void ApplySafeModeOverrides(RuntimeSettings& settings) {
 
 RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   RuntimeSettings settings;
+  if (const auto* dictionary = ReadObject(object, "dictionary")) {
+    settings.dictionary.sudachi_enabled =
+        ReadBool(*dictionary, "sudachiEnabled", settings.dictionary.sudachi_enabled);
+    settings.dictionary.neologd_enabled =
+        ReadBool(*dictionary, "neologdEnabled", settings.dictionary.neologd_enabled);
+    settings.dictionary.named_entity_enabled =
+        ReadBool(*dictionary, "namedEntityEnabled", settings.dictionary.named_entity_enabled);
+    settings.dictionary.technical_terms_enabled =
+        ReadBool(*dictionary, "technicalTermsEnabled", settings.dictionary.technical_terms_enabled);
+    settings.dictionary.user_dictionary_enabled =
+        ReadBool(*dictionary, "userDictionaryEnabled", settings.dictionary.user_dictionary_enabled);
+    settings.dictionary.auto_words_enabled =
+        ReadBool(*dictionary, "autoWordsEnabled", settings.dictionary.auto_words_enabled);
+    settings.dictionary.app_specific_dictionary_enabled =
+        ReadBool(*dictionary, "appSpecificDictionaryEnabled",
+                 settings.dictionary.app_specific_dictionary_enabled);
+  }
   if (const auto* reranker = ReadObject(object, "reranker")) {
     settings.nll.enabled = ReadBool(*reranker, "nllRerankEnabled", settings.nll.enabled);
     settings.nll.top_k = ReadClampedInt32(*reranker, "nllTopK", settings.nll.top_k, 1, 16);
@@ -498,6 +515,7 @@ EngineConfig ApplyRuntimeSettingsToEngineConfig(EngineConfig config,
 EngineConfig ApplyRuntimeSettingsToEngineConfig(
     EngineConfig config, const RuntimeSettings& settings, BackendKind auto_backend,
     const InferenceThreadEnvironmentProvider& provider) {
+  config.dictionary = settings.dictionary;
   config.enable_live_conversion = settings.live_conversion;
   config.dynamic_punctuation = settings.dynamic_punctuation;
   config.segment_boundary_confidence = settings.segment_boundary_confidence;

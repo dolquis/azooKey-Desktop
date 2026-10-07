@@ -356,6 +356,21 @@
       "type": "integer", "minimum": 1, "maximum": 100, "default": 3,
       "description": "M35: 同じ打ち間違えペアをこの回数観測してから補正候補に使う"
     },
+    "dictionary": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "description": "M53: 辞書レイヤーの候補利用。Base は常に利用し、欠落した辞書 pack は空のレイヤーとして扱う",
+      "properties": {
+        "sudachiEnabled": { "type": "boolean", "default": true },
+        "neologdEnabled": { "type": "boolean", "default": false },
+        "namedEntityEnabled": { "type": "boolean", "default": true },
+        "technicalTermsEnabled": { "type": "boolean", "default": true },
+        "userDictionaryEnabled": { "type": "boolean", "default": true },
+        "autoWordsEnabled": { "type": "boolean", "default": true },
+        "appSpecificDictionaryEnabled": { "type": "boolean", "default": true }
+      }
+    },
     "autoWordRegistration": {
       "type": "object",
       "description": "M36: 新語の自動取得・辞書追加; docs/auto-word-registration-spec.md section 8",

@@ -60,14 +60,16 @@ OpenMP 経路で暗黙インポートするため、欠けるとクリーン環�
 本体の `LICENSE` と、同梱依存を記録した `THIRD_PARTY_LICENSES` も
 テキストファイルとして配置します。
 
-静的辞書層は `dictbuild\build_bundled.py` が SHA256 固定の SudachiDict から生成します
+静的辞書層は `dictbuild\build_bundled.py` が SHA256 固定の SudachiDict と自作の技術用語seedから生成します
 （Python 3.10 以降、初回は約 35 MB をダウンロードし、生成に数分かかります）。MSI は
-`BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic` を
+`BundledDictionaryDir`（既定 `build\bundled-dictionaries`）の `dict\sudachi_lexicon.azdic` と
+`dict\technical_terms_lexicon.azdic` を
 `INSTALLFOLDER\dict` へ、帰属の `ThirdPartyNotices.txt` を `INSTALLFOLDER` へ配置し、
 どちらかが欠けるとビルドは失敗します。`dictbuild\check_bundle.py` は、生成物と
 `Package.wxs` の同梱一覧の差、standalone の `neologd_lexicon` pack の混入、帰属の欠落を
 検出します。インストール後は Host の起動ログで `static_dictionary_load` が
-`layer=sudachi_lexicon.azdic`、`result=ok` になることを確認します。同梱しない層
+両方の層で `result=ok` になることを確認します。設定アプリの「ライセンス」から
+インストール先の `ThirdPartyNotices.txt` を開けます。同梱しない層
 （`base_lexicon` など）は同じイベントが `result=error` の警告になります。
 
 `azookey_settings` target は、Windows App SDK を app-local に含む unpackaged の

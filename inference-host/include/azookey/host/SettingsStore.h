@@ -69,6 +69,7 @@ struct RuntimeSettings {
     return app_profiles ? *app_profiles : defaults;
   }
   NllConfig nll;
+  DictionaryLayerConfig dictionary;
   std::string input_mode{"hiragana"};
   bool live_conversion{false};
   bool dynamic_punctuation{false};

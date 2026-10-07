@@ -64,17 +64,34 @@ Describe "WiX MSI package consistency" {
     # Host は <exe>\dict の層名つき .azdic だけを探索する（auto-word-registration-spec §15.13）。
     $script:package | Should -Match '<Directory Id="DictionaryFolder" Name="dict">'
     $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\dict\\sudachi_lexicon\.azdic"'
+    $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\dict\\technical_terms_lexicon\.azdic"'
     $script:package | Should -Match 'Source="\$\(BundledDictionaryDir\)\\ThirdPartyNotices\.txt"[\s\S]*?Name="ThirdPartyNotices\.txt"'
     $script:package | Should -Not -Match 'neologd'
     $script:project | Should -Match '\$\(MSBuildThisFileDirectory\)\.\.\\\.\.\\build\\bundled-dictionaries</BundledDictionaryDir>'
     $script:project | Should -Match "Condition=`"!Exists\('\$\(BundledDictionaryDir\)\\dict\\sudachi_lexicon\.azdic'\)`""
     $script:releaseWorkflow | Should -Match 'python dictbuild/build_bundled\.py --output build\\bundled-dictionaries'
     $script:releaseWorkflow | Should -Match 'python dictbuild/check_bundle\.py build\\bundled-dictionaries --package pkg\\msi\\Package\.wxs'
+    $script:releaseWorkflow | Should -Match 'python dictbuild/check_bundle\.py[^\r\n]* --compare build\\bundled-dictionaries-repeated'
+    $script:releaseWorkflow | Should -Match 'python dictbuild/build_bundled\.py --output build\\bundled-dictionaries-repeated --cache "\$\{\{ runner\.temp \}\}\\dictionary-sources" --offline'
+    $script:releaseWorkflow.IndexOf('name: Build bundled dictionaries') |
+      Should -BeLessThan $script:releaseWorkflow.IndexOf('name: Rebuild bundled dictionaries offline')
+    $script:releaseWorkflow.IndexOf('name: Rebuild bundled dictionaries offline') |
+      Should -BeLessThan $script:releaseWorkflow.IndexOf('name: Check bundled dictionaries')
     $script:releaseWorkflow.IndexOf('name: Check bundled dictionaries') |
       Should -BeLessThan $script:releaseWorkflow.IndexOf('- name: Build unsigned MSI')
     $script:releaseWorkflow | Should -Match 'AZOOKEY_BUNDLED_DICTIONARY_DIR: \$\{\{ github\.workspace \}\}\\build\\bundled-dictionaries\\dict'
     $script:releaseWorkflow | Should -Match 'ctest --preset windows-release -R ShippedBundleLoadsAndReverseConverts --no-tests=error'
     $script:releaseWorkflow | Should -Match '"-p:BundledDictionaryDir=\$\{\{ github\.workspace \}\}\\build\\bundled-dictionaries"'
+    [xml]$xml = $script:package
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace("w", "http://wixtoolset.org/schemas/v4/wxs")
+    $files = $xml.SelectNodes('//w:Directory[@Id="DictionaryFolder"]/w:Component/w:File', $ns)
+    $files.Count | Should -Be 2
+    foreach ($file in $files) {
+      $file.KeyPath | Should -Be "yes"
+      $xml.SelectNodes("//w:Feature/w:ComponentRef[@Id='$($file.ParentNode.Id)']", $ns).Count |
+        Should -Be 1
+    }
   }
 
   It "deploys the required MSVC runtime beside the TIP and host" {

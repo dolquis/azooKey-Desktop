@@ -71,6 +71,14 @@
             <Button x:Uid="OpenCrashReportsButton"
                     Click="OpenCrashReportsButton_Click"
                     AutomationProperties.AutomationId="OpenCrashReportsButton" />
+            <TextBlock x:Uid="LicensesSectionTitle"
+                       Margin="0,8,0,0"
+                       Style="{StaticResource SubtitleTextBlockStyle}" />
+            <TextBlock x:Uid="LicensesDescription" TextWrapping="Wrap"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <HyperlinkButton x:Uid="OpenThirdPartyNoticesButton"
+                             Click="OpenThirdPartyNoticesButton_Click"
+                             AutomationProperties.AutomationId="OpenThirdPartyNoticesButton" />
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <Button x:Name="SaveButton"
                         x:Uid="SaveButton"

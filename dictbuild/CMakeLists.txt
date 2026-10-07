@@ -21,4 +21,6 @@ if(AZOOKEY_BUILD_TESTS)
   azookey_discover_tests(dictionary_tests)
   add_test(NAME dictbuild_python_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dictbuild.py")
+  add_test(NAME dictbuild_base_score_analysis_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_base_score_analysis.py")
 endif()

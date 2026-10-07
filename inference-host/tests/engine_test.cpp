@@ -852,6 +852,43 @@ TEST(InferenceEngineTest, UserDictionaryInjection) {
   RemoveProtectedStoreFile(lpath);
 }
 
+TEST(InferenceEngineTest, UserDictionarySwitchControlsCandidatesPredictionsAndReverseConversion) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::UserDictionary dictionary(temp.File("user.json"),
+                                               &azookey::learning::test::Crypto());
+  azookey::learning::UserWord word;
+  word.word = "試験専用語";
+  word.ruby = "しけんせんようご";
+  ASSERT_TRUE(dictionary.Add(word));
+  azookey::host::EngineConfig config;
+  config.dictionary.user_dictionary_enabled = false;
+  auto engine = MakeEngine(store, config);
+  engine->SetUserDictionary(&dictionary);
+  const auto contains_word = [&](const auto& candidates) {
+    return std::any_of(candidates.begin(), candidates.end(),
+                       [&](const auto& candidate) { return candidate.surface == word.word; });
+  };
+  EXPECT_FALSE(contains_word(engine->QueryCandidates(word.ruby, "", kNowBase)));
+  EXPECT_FALSE(contains_word(engine->QueryPredictions("しけん", "", kNowBase)));
+  EXPECT_TRUE(engine->ReverseConvert(word.word, kNowBase).empty());
+  EXPECT_EQ(dictionary.Size(), 1u);
+
+  config.dictionary.user_dictionary_enabled = true;
+  engine->ApplyConfig(config);
+  EXPECT_TRUE(contains_word(engine->QueryCandidates(word.ruby, "", kNowBase)));
+  EXPECT_TRUE(contains_word(engine->QueryPredictions("しけん", "", kNowBase)));
+  EXPECT_EQ(engine->ReverseConvert(word.word, kNowBase), word.ruby);
+
+  config.dictionary.user_dictionary_enabled = false;
+  engine->ApplyConfig(config);
+  EXPECT_FALSE(contains_word(engine->QueryCandidates(word.ruby, "", kNowBase)));
+  EXPECT_FALSE(contains_word(engine->QueryPredictions("しけん", "", kNowBase)));
+  EXPECT_TRUE(engine->ReverseConvert(word.word, kNowBase).empty());
+  EXPECT_EQ(dictionary.Size(), 1u);
+}
+
 TEST(InferenceEngineTest, AddUserWordReloadsDiskBeforeSaving) {
   const std::string lpath = TempPath("azookey_host_engine_user_dict_reload_add.tsv");
   const std::string udict_path = TempPath("azookey_host_engine_user_dict_reload_add.json");
@@ -2583,6 +2620,66 @@ TEST(EngineAutoWordInjectionTest, ConfirmedWordsAreInjectedAndPendingWordsAreNot
   // Detaching the store stops the injection.
   engine->SetAutoWordStore(nullptr);
   EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+}
+
+TEST(EngineAutoWordInjectionTest, DictionarySwitchStopsConfirmedWordsAndReenablesWithoutDeletion) {
+  ScopedTempDirectory temp;
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
+                                              &azookey::learning::test::Crypto());
+  auto_words.Observe("阿頭季", "あずき", kNowBase, 3, false);
+  ASSERT_TRUE(auto_words.Confirm("阿頭季", "あずき"));
+  azookey::host::EngineConfig config;
+  config.dictionary.auto_words_enabled = false;
+  auto engine = MakeEngine(store, config);
+  engine->SetAutoWordStore(&auto_words);
+  EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  EXPECT_EQ(auto_words.LookupConfirmed("あずき").size(), 1u);
+  EXPECT_TRUE(engine->config().auto_word_mining_enabled);
+
+  config.dictionary.auto_words_enabled = true;
+  engine->ApplyConfig(config);
+  EXPECT_NE(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  engine->EnableDictionaryLayer(azookey::learning::LayerId::AutoWords, false);
+  EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  engine->EnableDictionaryLayer(azookey::learning::LayerId::AutoWords, true);
+  EXPECT_NE(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  config.dictionary.auto_words_enabled = false;
+  engine->ApplyConfig(config);
+  EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  EXPECT_EQ(auto_words.LookupConfirmed("あずき").size(), 1u);
+}
+
+TEST(EngineAutoWordInjectionTest, SettingsReloadAppliesDictionarySwitchesWithoutChangingMining) {
+  ScopedTempDirectory temp;
+  const auto settings_path = temp.File("settings.json");
+  {
+    std::ofstream out(settings_path);
+    out << R"({"dictionary":{"autoWordsEnabled":false}})";
+  }
+  azookey::host::SettingsStore settings(settings_path);
+  ASSERT_EQ(settings.Load().status, azookey::host::SettingsLoadStatus::Loaded);
+  azookey::learning::LearningStore store(temp.File("learning.tsv"),
+                                         &azookey::learning::test::Crypto());
+  azookey::learning::AutoWordStore auto_words(temp.File("auto_words.tsv"),
+                                              &azookey::learning::test::Crypto());
+  auto_words.Observe("阿頭季", "あずき", kNowBase, 3, false);
+  ASSERT_TRUE(auto_words.Confirm("阿頭季", "あずき"));
+  auto engine =
+      MakeEngine(store, azookey::host::ApplyRuntimeSettingsToEngineConfig({}, settings.settings()));
+  engine->SetAutoWordStore(&auto_words);
+  EXPECT_EQ(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  {
+    std::ofstream out(settings_path);
+    out << R"({"dictionary":{"autoWordsEnabled":true}})";
+  }
+  ASSERT_EQ(settings.Reload().status, azookey::host::SettingsLoadStatus::Loaded);
+  engine->ApplyConfig(
+      azookey::host::ApplyRuntimeSettingsToEngineConfig(engine->config(), settings.settings()));
+  EXPECT_NE(FindAutoWord(engine->QueryCandidates("あずき", "", kNowBase), "阿頭季"), nullptr);
+  EXPECT_TRUE(engine->config().auto_word_mining_enabled);
+  EXPECT_FALSE(engine->config().auto_word_auto_register);
 }
 
 TEST(EngineAutoWordInjectionTest, ConfirmModeInjectsOnlyAfterApproval) {

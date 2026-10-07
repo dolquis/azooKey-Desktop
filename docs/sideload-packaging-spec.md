@@ -1340,8 +1340,9 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
 | `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | モデル / 一般 | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
 | `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
+| `dictionary` | object（7つの層切替） | 下位キーの既定に従う | UI 非表示・保存時保持 | M53 | 即時（設定再読込） | `auto-word-registration-spec.md` §14.8 |
 
-> オブジェクト型キー（`model` / `autoUpdate`）の下位フィールドは「正典」列の spec が確定形を
+> オブジェクト型キー（`model` / `autoUpdate` / `dictionary`）の下位フィールドは「正典」列の spec が確定形を
 > 持つ。本表で再掲せず、ネスト構造の単一情報源を維持する。
 
 > **※ device 選択 UI のバインド先（§3.7）**: `backendPreference` / `epPreference` の **root tier は後方互換用の
@@ -1646,9 +1647,11 @@ base MSI は静的辞書層の `.azdic` を `%ProgramFiles%\azooKey\dict\` へ�
 探索する。同梱する層、配布判定、取得元とサイズ予算の正典は
 `docs/auto-word-registration-spec.md` §14.9 / §14.10 / §15.9 / §15.12 であり、本節は
 配置先だけを持つ。辞書は release workflow が `dictbuild/build_bundled.py` で SHA256 固定の
-上流から生成し、`BundledDictionaryDir` property で MSI へ渡す。`dictbuild/check_bundle.py` は
+上流とリポジトリ内の自作seedから生成し、`BundledDictionaryDir` property で MSI へ渡す。
+2回生成の再現性検査は `auto-word-registration-spec.md` §15.12 を正典とする。`dictbuild/check_bundle.py` は
 MSI をビルドする前に、standalone の `neologd_lexicon` pack の混入、層 ID とファイル名の不一致、
 `ThirdPartyNotices.txt` の帰属欠落、`Package.wxs` の同梱一覧と生成物の差を検出して失敗させる。
+本節の帰属文書の配置先は、設定アプリのライセンス導線（`native-ui-spec.md` §4.6）から参照される。
 
 照合先は取得元の redist ディレクトリではなく MSI の同梱一覧とする。redist
 ディレクトリは `msvcp140_1.dll` や `concrt140.dll` のように MSI が同梱しないファイルも

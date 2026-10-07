@@ -43,6 +43,11 @@ def generate(directory: Path) -> None:
     bundled.mkdir(exist_ok=True)
     (bundled / "base_lexicon.azdic").write_bytes(image)  # Deliberately wrong layer.
     (bundled / "technical_terms_lexicon.azdic").write_bytes(image)
+    settings_layers = directory / "settings-layers"
+    settings_layers.mkdir(exist_ok=True)
+    for layer in (1, 3, 4):
+        layer_image, _ = dictbuild.build([tsv], metadata, layer, directory)
+        (settings_layers / f"{dictbuild.LAYERS[layer]}.azdic").write_bytes(layer_image)
     (directory / "ThirdPartyNotices.txt").write_text(notices, encoding="utf-8")
     sections = {}
     for i in range(struct.unpack_from("<I", image, 28)[0]):

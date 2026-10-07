@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -24,6 +27,34 @@
 #include "azookey/learning/FileLock.h"
 
 namespace {
+
+class ScopedTempDirectory {
+ public:
+  explicit ScopedTempDirectory(const char* name) {
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = std::filesystem::temp_directory_path() /
+              (std::string(name) + "_" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+               std::to_string(next_id_++));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create a unique settings document test directory");
+  }
+
+  ~ScopedTempDirectory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
+  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
+
+  const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+  static inline std::atomic<uint64_t> next_id_{0};
+};
 
 std::filesystem::path TestDir(const char* name) {
   auto path = std::filesystem::temp_directory_path() / name;
@@ -677,6 +708,60 @@ TEST(SettingsDocumentTest, InvalidTypoAndAutoWordValuesAreRemoved) {
   EXPECT_FALSE(auto_word.contains("registrationMode"));
   EXPECT_FALSE(auto_word.contains("miningMinCount"));
   EXPECT_FALSE(auto_word.contains("unknownKey"));
+}
+
+TEST(SettingsDocumentTest, DictionaryLayerSwitchesSurviveAnUnrelatedSave) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_preserve");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"dictionary":{
+    "sudachiEnabled":false,"neologdEnabled":true,"namedEntityEnabled":false,
+    "technicalTermsEnabled":false,"userDictionaryEnabled":false,"autoWordsEnabled":false,
+    "appSpecificDictionaryEnabled":false}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(loaded.warnings.empty());
+  loaded.settings.log_level = "warn";
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  EXPECT_TRUE(saved.warnings.empty());
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* dictionary = parsed->Find("dictionary");
+  ASSERT_TRUE(dictionary && dictionary->IsObject());
+  EXPECT_EQ(dictionary->GetBool("sudachiEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("neologdEnabled"), true);
+  EXPECT_EQ(dictionary->GetBool("namedEntityEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("technicalTermsEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("userDictionaryEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("autoWordsEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("appSpecificDictionaryEnabled"), false);
+}
+
+TEST(SettingsDocumentTest, UnknownAndMistypedDictionaryLayerValuesAreRemoved) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_invalid");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"dictionary":{
+    "sudachiEnabled":"false","neologdEnabled":1,"namedEntityEnabled":null,
+    "technicalTermsEnabled":{},"userDictionaryEnabled":[],"autoWordsEnabled":"true",
+    "appSpecificDictionaryEnabled":0,"baseEnabled":false,"unknown":true,
+    "verifyOnLoad":true,"categoryBoosts":{"technical":1.2}}})");
+  const auto saved =
+      azookey::settings::SaveSettingsDocument(path, azookey::settings::EditableSettings{});
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  EXPECT_EQ(saved.warnings.size(), 11u);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* dictionary = parsed->Find("dictionary");
+  ASSERT_TRUE(dictionary && dictionary->IsObject());
+  EXPECT_TRUE(dictionary->AsObject().empty());
+
+  WriteText(path, R"({"dictionary":false})");
+  const auto wrong_object =
+      azookey::settings::SaveSettingsDocument(path, azookey::settings::EditableSettings{});
+  ASSERT_TRUE(wrong_object.ok);
+  EXPECT_EQ(wrong_object.warnings.size(), 1u);
+  const auto restored = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(restored);
+  EXPECT_EQ(restored->Find("dictionary"), nullptr);
 }
 
 // M47: the Host records SafeMode here and only the user clears it, so an

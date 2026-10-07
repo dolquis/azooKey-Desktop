@@ -58,7 +58,19 @@ constexpr const char* BackendName(BackendKind backend) {
   return "cpu";
 }
 
+// M53 dictionary.*; Base remains available independently of these switches.
+struct DictionaryLayerConfig {
+  bool sudachi_enabled{true};
+  bool neologd_enabled{false};
+  bool named_entity_enabled{true};
+  bool technical_terms_enabled{true};
+  bool user_dictionary_enabled{true};
+  bool auto_words_enabled{true};
+  bool app_specific_dictionary_enabled{true};
+};
+
 struct EngineConfig {
+  DictionaryLayerConfig dictionary;
   RewriterConfig rewriters;
   NllConfig nll;
   BackendKind backend{BackendKind::Cpu};
@@ -273,6 +285,7 @@ class InferenceEngine {
   void RecordUserDictionaryFailureLocked(const char* error);
   void LearningFlushWorker();
   void RefreshDictionaryLocked();
+  void ApplyDictionaryConfigLocked();
 
   std::shared_ptr<core::IConverter> fallback_converter_;
   std::shared_ptr<core::IConverter> model_converter_;

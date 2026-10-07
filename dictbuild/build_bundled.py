@@ -1,4 +1,4 @@
-"""Builds the static dictionary layers that the installer ships, from SHA256-pinned upstreams."""
+"""Builds the bundled static layers from SHA256-pinned upstreams and authored seeds."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ SUDACHI_ARCHIVES = (
     ("core_lex.zip", "a2b39e1572adab08a649b1390b134517adc55f1d733c59358b113298788bf31c"),
 )
 LAYER = "sudachi_lexicon"
+TECHNICAL_LAYER = "technical_terms_lexicon"
 
 
 def sha256(path: Path) -> str:
@@ -62,6 +63,37 @@ def build_sudachi(cache: Path, offline: bool, work: Path) -> tuple[bytes, str]:
     return dictbuild.build([tsv], metadata, dictbuild.LAYERS.index(LAYER), HERE / "notices")
 
 
+def build_technical_terms() -> tuple[bytes, str]:
+    metadata = json.loads((HERE / "sources" / f"{TECHNICAL_LAYER}.metadata.json").read_text(encoding="utf-8"))
+    return dictbuild.build([HERE / "sources" / f"{TECHNICAL_LAYER}.lex.tsv"], metadata,
+                          dictbuild.LAYERS.index(TECHNICAL_LAYER), HERE / "notices")
+
+
+def build_bundle(output: Path, cache: Path, offline: bool) -> None:
+    dictionaries = output / "dict"
+    dictionaries.mkdir(parents=True, exist_ok=True)
+    notices = ["Notices for the bundled dictionaries\n"]
+    with tempfile.TemporaryDirectory() as work:
+        builders = (
+            (LAYER, lambda: build_sudachi(cache, offline, Path(work)),
+             f"Derived from the SudachiDict {SUDACHI_REVISION} raw lexicon by "
+             f"dictbuild/extract_sudachi.py (entries filtered by part of speech, reading and cost "
+             f"<= {extract_sudachi.DEFAULT_MAX_COST}; readings converted to hiragana) and "
+             "dictbuild/dictbuild.py. It is not the upstream distribution."),
+            (TECHNICAL_LAYER, build_technical_terms,
+             "Built from the project-authored Apache-2.0 seed in "
+             "dictbuild/sources/technical_terms_lexicon.lex.tsv by dictbuild/dictbuild.py."),
+        )
+        for layer, builder, description in builders:
+            image, layer_notices = builder()
+            artifact = dictionaries / f"{layer}.azdic"
+            artifact.write_bytes(image)
+            dictbuild.verify(artifact.read_bytes())
+            notices.append(f"{artifact.name}\n{description}\n\n{layer_notices}")
+            print(f"build_bundled: wrote {artifact} ({len(image)} bytes)", file=sys.stderr)
+    (output / "ThirdPartyNotices.txt").write_text("\n".join(notices), encoding="utf-8", newline="\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path,
@@ -70,25 +102,10 @@ def main() -> int:
     parser.add_argument("--offline", action="store_true", help="use only archives already in --cache")
     args = parser.parse_args()
     try:
-        with tempfile.TemporaryDirectory() as work:
-            image, notices = build_sudachi(args.cache, args.offline, Path(work))
-        dictionaries = args.output / "dict"
-        dictionaries.mkdir(parents=True, exist_ok=True)
-        artifact = dictionaries / f"{LAYER}.azdic"
-        artifact.write_bytes(image)
-        dictbuild.verify(artifact.read_bytes())
-        (args.output / "ThirdPartyNotices.txt").write_text(
-            f"Third-party notices for the bundled dictionary {artifact.name}\n\n"
-            f"{artifact.name} is derived from the SudachiDict {SUDACHI_REVISION} raw lexicon by "
-            f"dictbuild/extract_sudachi.py (entries filtered by part of speech, reading and cost "
-            f"<= {extract_sudachi.DEFAULT_MAX_COST}; readings converted to hiragana) and "
-            "dictbuild/dictbuild.py. It is not the upstream distribution.\n\n"
-            f"{notices}",
-            encoding="utf-8", newline="\n")
+        build_bundle(args.output, args.cache, args.offline)
     except (OSError, ValueError, KeyError, TypeError, struct.error) as exc:
         print(f"build_bundled: {exc}", file=sys.stderr)
         return 1
-    print(f"build_bundled: wrote {artifact} ({len(image)} bytes)", file=sys.stderr)
     return 0
 
 

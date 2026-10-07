@@ -63,13 +63,16 @@ class DictionaryStore {
   std::string LayerError(LayerId layer) const;
   static double LayerPriority(LayerId layer, bool confirmed = true);
   std::vector<DictionaryEntry> Lookup(std::string_view reading, const LookupContext& context) const;
+  // Exact membership for mining: loaded static layers count even when disabled.
+  // Reading normalization/aliases/long-vowel fallback match Lookup; mutable switches still apply.
+  bool ContainsKnownWord(std::string_view reading, std::string_view surface) const;
   std::optional<DictionaryEntry> ReverseLookup(std::string_view surface,
                                                const LookupContext& context) const;
 
  private:
   using Index = std::map<std::string, std::vector<DictionaryEntry>>;
   void QueryLayer(size_t layer, std::string_view key, const LookupContext& context,
-                  std::vector<DictionaryEntry>& out) const;
+                  std::vector<DictionaryEntry>& out, bool include_disabled_static = false) const;
   std::array<std::unique_ptr<core::DoubleArrayTrie>, 5> static_;
   std::array<Index, 3> mutable_;
   std::array<bool, 3> mutable_available_{};

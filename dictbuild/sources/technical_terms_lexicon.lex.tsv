@@ -1,0 +1,20 @@
+# Project-authored technical terminology seed, revision authored-v1; no external lexicon copied.
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 azooKey-Desktop contributors
+# Attribution: see THIRD_PARTY_LICENSES and the generated ThirdPartyNotices.txt.
+# Regenerate with dictbuild/build_bundled.py; metadata: technical_terms_lexicon.metadata.json.
+surface	reading	pos	cost	frequency	category	source_id
+TensorRT	てんそるあーるてぃー	名詞		0.72	technical,software	azookey-technical-terms
+ONNX	おにきす	名詞		0.65	technical,software	azookey-technical-terms
+WinUI	うぃんゆーあい	名詞		0.65	technical,software	azookey-technical-terms
+PowerShell	ぱわーしぇる	名詞		0.65	technical,software	azookey-technical-terms
+DirectML	だいれくとえむえる	名詞		0.60	technical,software	azookey-technical-terms
+Vulkan	ゔるかん	名詞		0.60	technical,software	azookey-technical-terms
+TSF	てぃーえすえふ	名詞			technical	azookey-technical-terms
+IPC	あいぴーしー	名詞			technical	azookey-technical-terms
+UTF-8	ゆーてぃーえふえいと	名詞			technical	azookey-technical-terms
+SHA256	しゃにごろく	名詞			technical	azookey-technical-terms
+量子化	りょうしか	名詞			technical	azookey-technical-terms
+再変換	さいへんかん	名詞			technical	azookey-technical-terms
+推論ホスト	すいろんほすと	名詞			technical	azookey-technical-terms
+二重配列トライ	にじゅうはいれつとらい	名詞			technical	azookey-technical-terms

@@ -21,6 +21,8 @@ struct MainWindow : MainWindowT<MainWindow> {
                                     Microsoft::UI::Xaml::RoutedEventArgs const& args);
   void OpenCrashReportsButton_Click(Windows::Foundation::IInspectable const& sender,
                                     Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  void OpenThirdPartyNoticesButton_Click(Windows::Foundation::IInspectable const& sender,
+                                         Microsoft::UI::Xaml::RoutedEventArgs const& args);
 
  private:
   winrt::fire_and_forget LoadSettingsAsync();

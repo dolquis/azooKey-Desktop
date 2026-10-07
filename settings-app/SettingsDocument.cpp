@@ -140,6 +140,22 @@ j::Object SanitizeSafeMode(const j::Object& input, std::vector<std::string>* war
   return output;
 }
 
+j::Object SanitizeDictionary(const j::Object& input, std::vector<std::string>* warnings) {
+  j::Object output;
+  for (const auto& [key, value] : input) {
+    const bool known = key == "sudachiEnabled" || key == "neologdEnabled" ||
+                       key == "namedEntityEnabled" || key == "technicalTermsEnabled" ||
+                       key == "userDictionaryEnabled" || key == "autoWordsEnabled" ||
+                       key == "appSpecificDictionaryEnabled";
+    if (known && value.IsBool()) {
+      output.emplace(key, value);
+    } else {
+      warnings->push_back("dictionary." + key + " was removed because it is unknown or invalid");
+    }
+  }
+  return output;
+}
+
 j::Object SanitizeAutoWordRegistration(const j::Object& input,
                                        std::vector<std::string>* warnings) {
   j::Object output;
@@ -293,6 +309,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       continue;
     } else if (key == "reranker" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeReranker(value.AsObject(), warnings)));
+      continue;
+    } else if (key == "dictionary" && value.IsObject()) {
+      output.emplace(key, j::Value(SanitizeDictionary(value.AsObject(), warnings)));
       continue;
     } else if (key == "autoWordRegistration" && value.IsObject()) {
       output.emplace(key, j::Value(SanitizeAutoWordRegistration(value.AsObject(), warnings)));

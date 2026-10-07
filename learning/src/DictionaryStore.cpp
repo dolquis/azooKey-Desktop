@@ -107,9 +107,10 @@ void DictionaryStore::SetUserWords(const std::vector<UserWord>& words) {
   ReplaceMutable(LayerId::User, std::move(entries));
 }
 void DictionaryStore::QueryLayer(size_t layer, std::string_view key, const LookupContext& ctx,
-                                 std::vector<DictionaryEntry>& out) const {
+                                 std::vector<DictionaryEntry>& out,
+                                 bool include_disabled_static) const {
   out.clear();
-  if (!enabled_[layer]) return;
+  if (!enabled_[layer] && !(include_disabled_static && layer < static_.size())) return;
   if (layer < 5) {
     const auto& trie = static_[layer];
     if (!trie || !trie->IsAvailable()) return;
@@ -221,6 +222,28 @@ std::vector<DictionaryEntry> DictionaryStore::Lookup(std::string_view reading,
            std::tie(b.normalized_reading, b.surface, b.source);
   });
   return result;
+}
+
+bool DictionaryStore::ContainsKnownWord(std::string_view reading, std::string_view surface) const {
+  const auto key = core::NormalizeReading(reading);
+  if (key.empty() || surface.empty()) return false;
+  LookupContext context;
+  context.max_results = 0;  // Membership must not truncate high-cardinality readings.
+  for (size_t layer = 0; layer < enabled_.size(); ++layer) {
+    std::vector<DictionaryEntry> found;
+    QueryLayer(layer, key, context, found, true);
+    if (found.empty() && key.find("ー") != std::string::npos) {
+      auto relaxed = key;
+      size_t position;
+      while ((position = relaxed.find("ー")) != std::string::npos)
+        relaxed.erase(position, std::string("ー").size());
+      if (!relaxed.empty()) QueryLayer(layer, relaxed, context, found, true);
+    }
+    if (std::any_of(found.begin(), found.end(),
+                    [&](const auto& entry) { return entry.surface == surface; }))
+      return true;
+  }
+  return false;
 }
 
 std::optional<DictionaryEntry> DictionaryStore::ReverseLookup(std::string_view surface,

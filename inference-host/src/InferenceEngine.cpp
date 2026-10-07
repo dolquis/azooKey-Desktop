@@ -1393,15 +1393,7 @@ bool InferenceEngine::IsMiningCandidateLocked(const std::string& reading,
       if (word.word == surface) return false;
     }
   }
-  learning::LookupContext context;
-  context.mode = learning::LookupMode::Exact;
-  // 0 means "no cap": this is a membership question, and truncating to the
-  // default 32 best-scoring surfaces would report a real dictionary word as
-  // unknown whenever its reading has many candidates.
-  context.max_results = 0;
-  for (const auto& entry : dictionaries_.Lookup(reading, context)) {
-    if (entry.surface == surface) return false;
-  }
+  if (dictionaries_.ContainsKnownWord(reading, surface)) return false;
   return true;
 }
 

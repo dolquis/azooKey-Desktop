@@ -1,15 +1,22 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
+#include "../../learning/tests/TestByteCrypto.h"
 #include "azookey/core/DoubleArrayTrie.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/SettingsStore.h"
+#include "azookey/learning/AutoWordStore.h"
 #include "azookey/learning/DictionaryStore.h"
 
 namespace {
@@ -17,6 +24,29 @@ using namespace azookey;
 std::filesystem::path Fixture(const char* name) {
   return std::filesystem::path(AZOOKEY_DICT_FIXTURE) / name;
 }
+
+class ScopedMiningDirectory {
+ public:
+  ScopedMiningDirectory() {
+    for (int attempt = 0; attempt < 16; ++attempt) {
+      path_ = std::filesystem::temp_directory_path() /
+              ("azookey_dictionary_mining_" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+               std::to_string(next_id_++));
+      if (std::filesystem::create_directory(path_)) return;
+    }
+    throw std::runtime_error("Could not create dictionary mining test directory");
+  }
+  ~ScopedMiningDirectory() {
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+  }
+  std::filesystem::path File(const char* name) const { return path_ / name; }
+
+ private:
+  std::filesystem::path path_;
+  static inline std::atomic<uint64_t> next_id_{0};
+};
 
 TEST(DictionaryTrie, SearchDirectionsAndShortestFirstLimit) {
   core::DoubleArrayTrie trie;
@@ -256,6 +286,54 @@ TEST(DictionaryStore, AliasKindScoringProvenanceAndDisable) {
   EXPECT_EQ(store.Lookup("かーと", {})[0].kind, core::MatchKind::LongVowelRelaxed);
 }
 
+TEST(DictionaryStore, KnownWordMembershipIgnoresStaticSwitchesAndPreservesReadingSemantics) {
+  learning::DictionaryStore store;
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("valid.azdic"), true));
+  store.EnableLayer(learning::LayerId::TechnicalTerms, false);
+  EXPECT_TRUE(store.ContainsKnownWord("トウキョウ", "東京"));
+  EXPECT_TRUE(store.ContainsKnownWord("ば", "ヴァ"));
+  EXPECT_TRUE(store.ContainsKnownWord("かーと", "緩"));
+  EXPECT_FALSE(store.ContainsKnownWord("とう", "東京"));
+  EXPECT_FALSE(store.ContainsKnownWord("とうきょう", "東京都"));
+  EXPECT_FALSE(store.ContainsKnownWord("とうきょう", "試験専用語"));
+  EXPECT_FALSE(store.ContainsKnownWord("", "東京"));
+  EXPECT_TRUE(store.Lookup("とうきょう", {}).empty());
+  EXPECT_FALSE(store.ReverseLookup("東京", {}));
+
+  std::vector<learning::DictionaryEntry> entries;
+  for (int i = 0; i < 64; ++i) {
+    learning::DictionaryEntry entry;
+    entry.surface = "試験語" + std::to_string(i);
+    entry.reading = "しけんご";
+    entry.frequency = i == 63 ? 0 : 1;
+    entries.push_back(entry);
+  }
+  store.ReplaceMutable(learning::LayerId::User, entries);
+  EXPECT_TRUE(store.ContainsKnownWord("シケンゴ", "試験語63"));
+  store.EnableLayer(learning::LayerId::User, false);
+  EXPECT_FALSE(store.ContainsKnownWord("しけんご", "試験語63"));
+}
+
+TEST(DictionaryStore, KnownWordMembershipRequiresAvailableValidatedStaticData) {
+  learning::DictionaryStore store;
+  store.EnableLayer(learning::LayerId::TechnicalTerms, false);
+  EXPECT_FALSE(store.ContainsKnownWord("とうきょう", "東京"));
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("valid.azdic"), true));
+  EXPECT_TRUE(store.ContainsKnownWord("とうきょう", "東京"));
+  // A failed replacement must not retain membership from the previous artifact.
+  EXPECT_FALSE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("missing.azdic")));
+  EXPECT_FALSE(store.ContainsKnownWord("とうきょう", "東京"));
+  EXPECT_FALSE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("hash.azdic"), true));
+  EXPECT_FALSE(store.ContainsKnownWord("とうきょう", "東京"));
+  EXPECT_FALSE(store.LoadStatic(learning::LayerId::Sudachi, Fixture("valid.azdic"), true));
+  EXPECT_FALSE(store.ContainsKnownWord("とうきょう", "東京"));
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("entry.azdic")));
+  EXPECT_FALSE(store.ContainsKnownWord("aa", "短"));
+  EXPECT_FALSE(store.IsAvailable(learning::LayerId::TechnicalTerms));
+  ASSERT_TRUE(store.LoadStatic(learning::LayerId::TechnicalTerms, Fixture("valid.azdic"), true));
+  EXPECT_TRUE(store.ContainsKnownWord("とうきょう", "東京"));
+}
+
 TEST(DictionaryHost, SuppliesConversionAndPredictionAndTracksUserMutations) {
   host::InferenceEngine engine(std::make_unique<core::SimpleConverter>(), nullptr, {});
   ASSERT_TRUE(
@@ -351,6 +429,85 @@ class PredictingConverter : public core::IConverter {
   void Commit(const core::Candidate&, const core::ConversionContext&) override {}
   void Learn(const std::string&, const std::string&) override {}
 };
+
+TEST(DictionaryHost, DisabledStaticKnownWordsStayOutOfMiningAcrossSettingsReload) {
+  for (const auto& [layer, name] :
+       {std::pair{learning::LayerId::Sudachi, "sudachi_lexicon.azdic"},
+        std::pair{learning::LayerId::NamedEntity, "named_entity_lexicon.azdic"},
+        std::pair{learning::LayerId::TechnicalTerms, "technical_terms_lexicon.azdic"}}) {
+    SCOPED_TRACE(name);
+    for (const bool auto_register : {false, true}) {
+      SCOPED_TRACE(auto_register);
+      ScopedMiningDirectory temp;
+      learning::test::TestByteCrypto crypto;
+      learning::AutoWordStore auto_words(temp.File("auto_words.tsv"), &crypto);
+      const auto write_settings = [&](bool enabled) {
+        std::ofstream out(temp.File("settings.json"));
+        out << R"({"dictionary":{"sudachiEnabled":)" << (enabled ? "true" : "false")
+            << R"(,"namedEntityEnabled":)" << (enabled ? "true" : "false")
+            << R"(,"technicalTermsEnabled":)" << (enabled ? "true" : "false")
+            << R"(},"autoWordRegistration":{"miningEnabled":true,"miningMinCount":2,)"
+            << R"("registrationMode":")" << (auto_register ? "auto" : "confirm") << R"("}})";
+      };
+      write_settings(true);
+      host::SettingsStore settings(temp.File("settings.json"));
+      ASSERT_EQ(settings.Load().status, host::SettingsLoadStatus::Loaded);
+      const auto config = host::ApplyRuntimeSettingsToEngineConfig({}, settings.settings());
+      // This converter has no lexicon or learned commits, so only the loaded layer
+      // can supply the known word in any lookup direction.
+      host::InferenceEngine engine(std::make_unique<PredictingConverter>(), nullptr, config);
+      engine.SetAutoWordStore(&auto_words);
+      ASSERT_TRUE(engine.LoadDictionaryLayer(layer, Fixture("settings-layers") / name, true));
+      const auto contains_known = [](const auto& candidates) {
+        return std::any_of(candidates.begin(), candidates.end(),
+                           [](const auto& entry) { return entry.surface == "東京"; });
+      };
+      EXPECT_TRUE(contains_known(engine.QueryCandidates("とうきょう", "", 100)));
+      EXPECT_TRUE(contains_known(engine.QueryPredictions("とう", "", 100)));
+      EXPECT_EQ(engine.ReverseConvert("東京", 100), "とうきょう");
+      ASSERT_TRUE(engine.CommitObservation("とうきょう", "東京", 100));
+      EXPECT_EQ(auto_words.Size(), 0u);
+
+      write_settings(false);
+      ASSERT_EQ(settings.Reload().status, host::SettingsLoadStatus::Loaded);
+      engine.ApplyConfig(
+          host::ApplyRuntimeSettingsToEngineConfig(engine.config(), settings.settings()));
+      EXPECT_TRUE(engine.config().auto_word_mining_enabled);
+      EXPECT_EQ(engine.config().auto_word_auto_register, auto_register);
+      for (uint64_t now = 101; now <= 103; ++now)
+        ASSERT_TRUE(engine.CommitObservation("トウキョウ", "東京", now));
+      EXPECT_EQ(auto_words.Size(), 0u);
+      EXPECT_FALSE(contains_known(engine.QueryCandidates("とうきょう", "", 103)));
+      EXPECT_FALSE(contains_known(engine.QueryPredictions("とう", "", 103)));
+      EXPECT_TRUE(engine.ReverseConvert("東京", 103).empty());
+
+      engine.EnableDictionaryLayer(layer, true);
+      EXPECT_TRUE(contains_known(engine.QueryCandidates("とうきょう", "", 104)));
+      EXPECT_TRUE(contains_known(engine.QueryPredictions("とう", "", 104)));
+      EXPECT_EQ(engine.ReverseConvert("東京", 104), "とうきょう");
+      ASSERT_TRUE(engine.CommitObservation("とうきょう", "東京", 104));
+      EXPECT_EQ(auto_words.Size(), 0u);
+      engine.EnableDictionaryLayer(layer, false);
+      // Loading again while OFF must keep the distinction between membership
+      // and candidate participation, including a different surface at the same reading.
+      ASSERT_TRUE(engine.LoadDictionaryLayer(layer, Fixture("settings-layers") / name, true));
+      for (uint64_t now = 105; now <= 107; ++now) {
+        ASSERT_TRUE(engine.CommitObservation("とうきょう", "東京", now));
+        ASSERT_TRUE(engine.CommitObservation("とうきょう", "試験専用語", now));
+      }
+      EXPECT_EQ(auto_words.Size(), 1u);
+      const auto mined = auto_words.ListByState(auto_register ? learning::AutoWordState::Confirmed
+                                                              : learning::AutoWordState::Pending);
+      ASSERT_EQ(mined.size(), 1u);
+      EXPECT_EQ(mined[0].surface, "試験専用語");
+      EXPECT_EQ(mined[0].reading, "とうきょう");
+      EXPECT_EQ(mined[0].count, 3u);
+      learning::AutoWordStore reloaded(temp.File("auto_words.tsv"), &crypto);
+      ASSERT_TRUE(reloaded.Load());
+      EXPECT_EQ(reloaded.Size(), 1u);
+    }
+  }
+}
 
 TEST(DictionaryHost, ReservesConverterPredictionsWithLiveReranker) {
   learning::LearningStore store(Fixture("unused-learning.tsv"));

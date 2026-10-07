@@ -187,6 +187,7 @@ void InferenceEngine::CommitObservation(reading, surface, now) {
 > バックエンド利用時も、既知語判定はユーザー辞書・静的辞書レイヤ・フォール
 > バック変換器の実辞書の 3 つを見る。Zenzai モデル自身の語彙は既知語判定の
 > 対象外とする。
+> 静的層の収録語は、候補向けの ON/OFF と独立に既知語として扱う（§14.8）。
 >
 > 対象外とする根拠は 2 つある。1 つ目は、モデルが語の単位の語彙を持たないこと
 > である。Zenzai の GGUF は文字単位の GPT-2 系モデル（`tokenizer.ggml.pre` が
@@ -708,6 +709,9 @@ public:
       std::string_view reading,
       const LookupContext& ctx);
 
+  // マイニング専用の完全一致判定。静的層の有効フラグは無視する。
+  bool ContainsKnownWord(std::string_view reading, std::string_view surface) const;
+
   // 個別層の有効化
   void EnableLayer(LayerId layer, bool enabled);
 
@@ -770,6 +774,9 @@ private:
 設定の再読込では Host の `EngineConfig` と `DictionaryStore` の有効層を更新する。
 OFF の層は変換候補、読み前置一致による予測、表層形の逆引きへ寄与しない。
 ユーザー辞書と confirmed 自動語の独立した候補注入にも同じ切替を適用する。
+静的層の OFF は auto-word の既知語判定（§4-2）を変えない。ロードと検証を通過した
+静的層は有効フラグにかかわらず専用経路で `(reading, surface)` を確認し、収録済みの語を
+再マイニングしない。候補の取得経路にはこの有効フラグを無視する判定を使わない。
 Base の切替キーは設けない。`appSpecificDictionaryEnabled` は供給元が空なら候補を増やさない。
 
 `verifyOnLoad` の既定は **`false`**。真にすると、静的層アーティファクトのロード時に

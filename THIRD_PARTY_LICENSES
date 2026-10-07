@@ -124,6 +124,13 @@ SPDX-License-Identifier: Unicode-3.0
   `dictbuild/notices/sudachidict-legal.txt` に逐語で置く。両者は辞書の `META` から生成する
   `ThirdPartyNotices.txt` に入り、MSI がインストール先へ同梱する。
 
+## 同梱するプロジェクト自作データ
+
+以下は第三者由来の資産ではなく、同梱する自作辞書データの補助カタログ。
+本体のルート `LICENSE`（MIT、Copyright (c) 2025 Miwa Keita）とは区別し、
+`docs/auto-word-registration-spec.md` §14.9 の既存の自作分 Apache-2.0 指定に従う。
+§14.10 に従い、自作分も同梱辞書の全ライセンスを集約する `ThirdPartyNotices.txt` に含める。
+
 ### プロジェクト自作の技術用語辞書（静的辞書層 `technical_terms_lexicon`）
 
 - Source: `dictbuild/sources/technical_terms_lexicon.lex.tsv`（`authored-v1`、外部辞書の転記なし）

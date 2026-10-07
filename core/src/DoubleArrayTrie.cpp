@@ -154,7 +154,8 @@ struct DoubleArrayTrie::Impl {
   mutable const char* error{"not loaded"};
   uint32_t layer{}, entries{}, keys{};
   size_t pos_count{};
-  Section trie, key_section, refs, records, strings, meta;
+  Section trie, key_section, refs, records, strings, meta, surface_index;
+  bool has_surface_index{};
 
   ~Impl() {
     if (mapped) {
@@ -256,9 +257,13 @@ struct DoubleArrayTrie::Impl {
     records = sections.at("ENTS");
     strings = sections.at("STRS");
     meta = sections.at("META");
+    // Optional: artifacts without it fall back to scanning ENTS.
+    has_surface_index = sections.count("SIDX") != 0;
+    if (has_surface_index) surface_index = sections.at("SIDX");
     if (trie.size < 16 || trie.size % 16 || trie.size / 16 > UINT32_MAX ||
         key_section.size != uint64_t{keys} * 8 || refs.size % 8 ||
-        records.size != uint64_t{entries} * 32 || meta.size > 1024 * 1024)
+        records.size != uint64_t{entries} * 32 || meta.size > 1024 * 1024 ||
+        (has_surface_index && surface_index.size != uint64_t{entries} * 4))
       return Fail("invalid section size");
     const auto metadata =
         std::string_view(reinterpret_cast<const char*>(data + meta.offset), meta.size);
@@ -296,6 +301,19 @@ struct DoubleArrayTrie::Impl {
     out = {Node(node, 12), id, offset, count};
     return true;
   }
+  bool Surface(uint32_t index, std::string_view& out) const {
+    const size_t at = records.offset + size_t{index} * 32;
+    const auto offset = U32(at), length = U32(at + 4);
+    if (!length || !Range(offset, length, strings.size)) return Fail("invalid string range");
+    out = {reinterpret_cast<const char*>(data + strings.offset + offset), length};
+    return true;
+  }
+  // Entry index at SIDX[position], checked when it is read (section 15.5 (2)).
+  bool SurfaceIndexAt(uint32_t position, uint32_t& index, std::string_view& surface) const {
+    index = U32(surface_index.offset + size_t{position} * 4);
+    if (index >= entries) return Fail("invalid surface index");
+    return Surface(index, surface);
+  }
   bool Record(uint32_t index, StaticDictionaryEntry& out) const {
     if (index >= entries) return Fail("invalid entry index");
     const auto at = records.offset + size_t{index} * 32;
@@ -319,6 +337,44 @@ struct DoubleArrayTrie::Impl {
       return Fail("invalid entry metadata");
     for (size_t i = 26; i < 32; ++i)
       if (data[at + i]) return Fail("reserved entry bytes");
+    return true;
+  }
+  // Binary search over SIDX. [lower, upper) must hold only the query, in entry
+  // order; anything else there is an order violation, not a miss.
+  bool FindSurface(std::string_view surface, std::vector<StaticDictionaryEntry>& out) const {
+    const auto bound = [&](bool upper, uint32_t& result) {
+      uint32_t first = 0, count = entries;
+      while (count > 0) {
+        const uint32_t step = count / 2, position = first + step;
+        uint32_t index = 0;
+        std::string_view value;
+        if (!SurfaceIndexAt(position, index, value)) return false;
+        if (upper ? !(surface < value) : value < surface) {
+          first = position + 1;
+          count -= step + 1;
+        } else {
+          count = step;
+        }
+      }
+      result = first;
+      return true;
+    };
+    uint32_t lower = 0, upper = 0;
+    if (!bound(false, lower) || !bound(true, upper)) return false;
+    if (upper < lower) return Fail("invalid surface index order");
+    uint32_t previous = 0;
+    for (uint32_t position = lower; position < upper; ++position) {
+      uint32_t index = 0;
+      std::string_view value;
+      if (!SurfaceIndexAt(position, index, value)) return false;
+      if (value != surface) return Fail("surface index mismatch");
+      if (position > lower && index <= previous) return Fail("invalid surface index order");
+      previous = index;
+      StaticDictionaryEntry entry;
+      if (!Record(index, entry)) return false;
+      entry.kind = MatchKind::Exact;
+      out.push_back(std::move(entry));
+    }
     return true;
   }
 };
@@ -490,6 +546,10 @@ void DoubleArrayTrie::LookupSurface(std::string_view surface,
   out.clear();
   if (!IsAvailable() || surface.empty() || !IsValidUtf8(surface)) return;
   try {
+    if (impl_->has_surface_index) {
+      if (!impl_->FindSurface(surface, out)) out.clear();
+      return;
+    }
     for (uint32_t i = 0; i < impl_->entries; ++i) {
       const size_t at = impl_->records.offset + size_t{i} * 32;
       const auto offset = impl_->U32(at);
@@ -572,6 +632,20 @@ bool DoubleArrayTrie::Verify() const noexcept {
     for (uint32_t i = 0; i < impl_->entries; ++i) {
       StaticDictionaryEntry entry;
       if (!impl_->Record(i, entry)) return false;
+    }
+    if (impl_->has_surface_index) {
+      // Strictly increasing (surface, entry_index) also makes SIDX a permutation.
+      uint32_t previous_index = 0;
+      std::string_view previous;
+      for (uint32_t position = 0; position < impl_->entries; ++position) {
+        uint32_t index = 0;
+        std::string_view value;
+        if (!impl_->SurfaceIndexAt(position, index, value)) return false;
+        if (position && (value < previous || (value == previous && index <= previous_index)))
+          return impl_->Fail("invalid surface index order");
+        previous = value;
+        previous_index = index;
+      }
     }
     for (size_t i = 0; i < impl_->refs.size / 8; ++i) {
       const auto at = impl_->refs.offset + i * 8;

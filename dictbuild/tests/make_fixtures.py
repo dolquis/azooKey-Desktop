@@ -25,6 +25,9 @@ def generate(directory: Path) -> None:
         "長\taaaaa\t名詞\t5000\t0.3\tgeneral\tfixture",
         "中\tab\t名詞\t5000\t0.3\tgeneral\tfixture",
         "緩\tかと\t名詞\t5000\t0.3\tgeneral\tfixture",
+        # One surface, two readings: reverse lookup returns both in ENTS order.
+        "日本\tにほん\t名詞\t4000\t0.4\tplace_name\tfixture",
+        "日本\tにっぽん\t名詞\t4500\t0.35\tplace_name\tfixture",
     ]
     # Many prefixes and Unicode keys allow an independent map-based reference.
     rows += [f"word{i}\tき{i:04d}\t名詞\t5000\t0.3\tgeneral\tfixture" for i in range(200)]
@@ -42,7 +45,7 @@ def generate(directory: Path) -> None:
     (bundled / "technical_terms_lexicon.azdic").write_bytes(image)
     (directory / "ThirdPartyNotices.txt").write_text(notices, encoding="utf-8")
     sections = {}
-    for i in range(6):
+    for i in range(struct.unpack_from("<I", image, 28)[0]):
         name, _, off, size = struct.unpack_from("<4sIQQ", image, 64 + i * 24)
         sections[name] = off, size
     mutations = {
@@ -76,7 +79,59 @@ def generate(directory: Path) -> None:
         struct.pack_into("<Q", broken, 32, dictbuild.fnv(broken[64:]))
         (directory / f"{name}.azdic").write_bytes(broken)
     (directory / "truncated.azdic").write_bytes(image[:63])
+    write_surface_index_fixtures(directory, image, sections)
     (directory / "ready").write_text("ready", encoding="utf-8")
+
+
+def write_surface_index_fixtures(directory: Path, image: bytes, sections: dict) -> None:
+    """Writes SIDX corruptions and the two compatibility shapes around it."""
+    entry_count = struct.unpack_from("<I", image, 20)[0]
+    key_count = struct.unpack_from("<I", image, 24)[0]
+    ents_off, _ = sections[b"ENTS"]
+    strs_off, _ = sections[b"STRS"]
+    sidx_off, sidx_size = sections[b"SIDX"]
+
+    def surface(index: int) -> str:
+        off, length = struct.unpack_from("<II", image, ents_off + index * 32)
+        return image[strs_off + off:strs_off + off + length].decode("utf-8")
+
+    def section_bytes(name: bytes) -> bytes:
+        off, size = sections[name]
+        return image[off:off + size]
+
+    def with_index(order: list[int]) -> bytes:
+        broken = bytearray(image)
+        struct.pack_into(f"<{len(order)}I", broken, sidx_off, *order)
+        struct.pack_into("<Q", broken, 32, dictbuild.fnv(broken[64:]))
+        return bytes(broken)
+
+    tokyo = next(i for i in range(entry_count) if surface(i) == "東京")
+    tokyo_to = next(i for i in range(entry_count) if surface(i) == "東京都")
+    order = list(struct.unpack_from(f"<{entry_count}I", image, sidx_off))
+    # Artifacts built before SIDX existed, and ones carrying a section this reader does not know.
+    names = [name for name, _ in sorted(sections.items(), key=lambda item: item[1][0])]
+    layer = struct.unpack_from("<I", image, 16)[0]
+    (directory / "no_surface_index.azdic").write_bytes(dictbuild.pack(
+        [(n, section_bytes(n)) for n in names if n != b"SIDX"], layer, entry_count, key_count))
+    (directory / "unknown_section.azdic").write_bytes(dictbuild.pack(
+        [(n, section_bytes(n)) for n in names] + [(b"ZZZZ", b"future")], layer, entry_count, key_count))
+    # Structure: SIDX must hold exactly one u32 per ENTS record.
+    broken = bytearray(image)
+    table = next(64 + i * 24 for i in range(len(sections))
+                 if image[64 + i * 24:68 + i * 24] == b"SIDX")
+    struct.pack_into("<Q", broken, table + 16, sidx_size - 4)
+    struct.pack_into("<Q", broken, 32, dictbuild.fnv(broken[64:]))
+    (directory / "surface_index_size.azdic").write_bytes(broken)
+    # References are checked when read, so every probe of these lookups hits the corruption.
+    (directory / "surface_index_entry.azdic").write_bytes(with_index([0xFFFFFFFF] * entry_count))
+    (directory / "surface_index_duplicate.azdic").write_bytes(with_index([tokyo] * entry_count))
+    # Searching 東京 yields the range [0, count), whose slot 0 holds 東京都.
+    (directory / "surface_index_mismatch.azdic").write_bytes(
+        with_index([tokyo_to] + [tokyo] * (entry_count - 1)))
+    # Only the global order is wrong; lookups of other surfaces may still succeed.
+    swapped = order[:]
+    swapped[0], swapped[1] = swapped[1], swapped[0]
+    (directory / "surface_index_order.azdic").write_bytes(with_index(swapped))
 
 
 if __name__ == "__main__":

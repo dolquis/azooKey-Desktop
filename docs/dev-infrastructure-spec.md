@@ -2180,6 +2180,20 @@ GPU backend のロードに失敗して CPU backend で動いている状態は 
 timeout は request 送信または backend 処理開始からの wall-clock deadline として扱う。
 connected-but-silent Host でも、pipe 切断や blocking read の解除を待たない。
 
+本表は Host 内の推論予算とも別レイヤである。Host の `InferenceEngine` は 1 変換ごとに
+`docs/zenzai-inference-spec.md` §8.2 の 1 変換ハード予算（600ms）を設定し、超過時は
+best-so-far を返す。Heavy inference はこの予算の上限であり、値を一致させない。
+600ms を上限に揃えない根拠は同 §8.2 の上限と下限の制約である。
+Host は `QueryCandidates` fast とライブ変換の値を自分の deadline として持たない。
+この 2 つは client 側の deadline と Cancel（§7.5）が打ち切る。
+Host 側に置かない理由は次のとおり。
+
+- 再変換も `live=true` の `QueryCandidates` を使い、client はそれをライブ変換より長く待つ。
+  Host は payload から、再変換とライブ変換用の `live=true` の要求を区別できない。
+- Host の予算は推論の開始から数え、client の deadline は送信から数える。同じ値を
+  Host に置いても、client の打ち切りより先に効く場面は Host が負荷で遅れたときに限られる。
+  その場面では、打ち切りが候補を途中で切った出力に変える。
+
 本表は request レイヤの値であり、transport のフレームデッドライン（§6.4.7。
 read 2000ms / write 5000ms）とは別レイヤである。本表の値を変えても §6.4.7 は
 追従せず、逆も同様。フレームデッドラインには推論時間が算入されないため、

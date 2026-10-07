@@ -36,6 +36,7 @@ cmake --preset windows-release -DAZOOKEY_FETCH_GOOGLETEST=ON -DAZOOKEY_FETCH_LLA
 cmake --build --preset windows-release
 cmake --build --preset windows-release --target compat_test
 cmake --build --preset windows-release --target azookey_settings
+cmake --build --preset windows-release --target azookey_etw_manifest
 ```
 
 パッケージ生成時に CMake cache の llama.cpp 構成を自動検査する。
@@ -50,7 +51,8 @@ cmake --build --preset windows-release --target azookey_settings
   -RuntimeInstallerPath C:\path\to\vc_redist.x64.exe `
   -ModelPath C:\path\to\zenz-v3.gguf `
   -IncludeCompat `
-  -IncludeSettings
+  -IncludeSettings `
+  -IncludeDiagnostics
 ```
 
 依存ログが別の checkout のヘッダーを指していると、パッケージ生成は拒否する。
@@ -75,6 +77,13 @@ runner は `--target` に渡したパスから target JSON を読むため、両
 `settings\azookey_settings.exe` から設定を保存する。別の zip を手作業で作って持ち込まない。
 同梱物の範囲は MSI と同じである。
 
+**診断資産の同梱**：`-IncludeDiagnostics` で WPR profile、ETW manifest と resource DLL を
+`diagnostics\` 以下へ追加する。DEV-1092 と DEV-677 は、この同じ zip の診断資産を使う。
+各ファイルの role と SHA-256 は `manifest.json` に記録される。
+DLL は `azookey_etw_manifest` をビルドしてから同梱する。
+登録・採取・解除はレーン3で行い、手順は
+[`windows-diagnostics-playbook.md`「IPC timeout の再現と採取」](./windows-diagnostics-playbook.md#ipc-timeout-の再現と採取) を参照する。
+
 持ち込むもののうち、パッケージ生成が拾わないものを別途 VM へ入れる。
 
 - Sysinternals Suite（`procmon`、`handle`）：Store 入力が再検証で失敗した場合の境界確認に使う
@@ -83,7 +92,6 @@ runner は `--target` に渡したパスから target JSON を読むため、両
 - DEV-153 の対象アプリ（Chrome、VS Code、Windows ターミナル、Office 365 Word）：未導入のアプリは測れないため、事前に入れるか対象外として記録する。VS Code は DEV-847 の対象でもある
 - 第 2 のローカルユーザーアカウント：DEV-676 の項目 3（別ユーザー provisioning）が要求する
 - デバッガ（WinDbg など）：DEV-905 で Application Verifier が停止したとき、接続していないと停止コードと stack が残らない
-- ETW / WPR の資産：DEV-1092 と DEV-677 が要求する。検証 zip には含まれないため、`diagnostics/azookey-diagnostics.wprp`、`diagnostics/etw/AzooKey.man`、`azookey_etw_manifest` ターゲットで生成した `azookey_etw_manifest.dll` を同じ commit から持ち込む。登録と解除は `docs/sideload-packaging-spec.md` §7.4 の `wevtutil im` / `wevtutil um` に従い、パスはゲストへ置いた場所に読み替える
 - 429 を返すループバックの stub：DEV-1411 の `RateLimit` と再試行待機を、外部 API を使わずに誘発するため（レーン 2 の手順 2）。stub は下の合成 fixture にある
 - 合成 fixture（`scripts/vm-verify-fixtures/`）：検証 zip には含まれないため、検証 zip と同じ commit の checkout からディレクトリごとゲストへコピーする。収録物、コピー後の照合、ゲートごとのコマンドは [`scripts/vm-verify-fixtures/README.md`](../../scripts/vm-verify-fixtures/README.md) が正典であり、本書はコマンドを再掲しない
 
@@ -500,7 +508,13 @@ C-005（マルチディスプレイ端の候補クランプ）は本セッショ
 ### レーン 3：昇格と登録状態を変える検証
 
 DEV-1211（昇格した登録・解除とロールバック）、DEV-1092（ETW とクラッシュ診断の実機設定・採取）、DEV-677（WPR profile の実採取と WPA での読込み）、DEV-905（Application Verifier）を置く。
-DEV-677 は DEV-1092 と同じ管理者 PowerShell で、持ち込んだ ETW / WPR の資産を使って `docs/sideload-packaging-spec.md` §7.4 の手順で採取する。WPA で開けるだけでは合格にしない。Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_id` / `request_id` の 3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 が現れるかを人が判定する。ETL は Git へ入れず、採取後は `wevtutil um` で manifest の登録を解除する。
+DEV-677 は DEV-1092 と同じ管理者 PowerShell で、`-IncludeDiagnostics` 付きの検証 zip を
+展開した診断資産を使い、[`windows-diagnostics-playbook.md`「IPC timeout の再現と採取」](./windows-diagnostics-playbook.md#ipc-timeout-の再現と採取)
+の手順で manifest の hash 照合・登録・採取・解除を行う。WPA で開けるだけでは合格にしない。
+Generic Events で provider `azooKey-Desktop` に絞り、同じ `client_id` / `request_id` の
+3000 → 3003（FrameWrite）→ 4000 → 4002 → 4001 → 3003（FrameRead）→ 3001 が現れるかを人が判定する。
+ETL は Git へ入れず、WPA または `Get-WinEvent -Path` での解析を終えてから、独立した手順で
+`wevtutil um` により manifest の登録を解除する。解析を後で行う場合も、停止直後には解除しない。
 `AzooKeyDiagnostics` プロファイルの ETL は IPC のフレームと Health を含むため、十数分で GB 単位に育つ。
 採取は確認する操作ごとに短く区切る。WPA を使わずに個々のイベントを読むときは、`tracerpt` で XML 化するとメモリが足りなくなるので、`Get-WinEvent -Path <ETL> -Oldest -FilterXPath` で provider `azooKey-Desktop` と必要なイベント ID に絞る。
 管理者権限を使い、登録・診断設定や対象プロセスの状態を変えるので、レーン 2 の観察と証跡回収を終えた後に走らせる。

@@ -461,6 +461,83 @@ Describe "VM verification package automation" {
       Test-Path -LiteralPath $script:testOutput | Should -BeFalse
     }
 
+    Context "diagnostics payload" {
+      BeforeEach {
+        Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
+        Mock Assert-VmVerifyWorktreeClean {}
+        Mock Assert-VmVerifyBuildReady {}
+        Mock Assert-VmVerifyDiagnosticsFresh {}
+        foreach ($seedRelative in @(
+            "diagnostics\azookey-diagnostics.wprp", "diagnostics\etw\AzooKey.man",
+            "build\windows-release\diagnostics\etw\azookey_etw_manifest.dll")) {
+          $path = Join-Path $script:testRepository $seedRelative
+          New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+          $seedRelative | Set-Content -LiteralPath $path
+        }
+      }
+
+      It "bundles the WPR profile, ETW manifest and resource DLL with archive hashes" {
+        $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+          -AllowNoModel -IncludeDiagnostics
+
+        $expected = @{
+          "wpr-profile" = "diagnostics/azookey-diagnostics.wprp"
+          "etw-manifest" = "diagnostics/etw/AzooKey.man"
+          "etw-resource-dll" = "diagnostics/etw/azookey_etw_manifest.dll"
+        }
+        $expanded = Join-Path $TestDrive "diagnostics-expanded"
+        Expand-Archive -LiteralPath $result.ZipPath -DestinationPath $expanded
+        foreach ($role in $expected.Keys) {
+          $entry = @($result.Manifest.files | Where-Object role -eq $role)
+          $entry.Count | Should -Be 1
+          $entry[0].path | Should -BeExactly $expected[$role]
+          $copied = Join-Path $expanded $entry[0].path
+          (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Should -BeExactly $entry[0].sha256
+          (Get-Item -LiteralPath $copied).Length | Should -Be $entry[0].size
+        }
+        [System.IO.File]::ReadAllText((Join-Path $expanded "manifest.json")) |
+          Should -BeExactly ([System.IO.File]::ReadAllText($result.ManifestPath))
+        Should -Invoke Assert-VmVerifyDiagnosticsFresh -Times 1 -Exactly -ParameterFilter {
+          $RepositoryRoot -eq $script:testRepository -and $Preset -eq "windows-release" -and
+          $BuildDirectory -eq (Join-Path $script:testRepository "build\windows-release")
+        }
+      }
+
+      It "skips diagnostics and its freshness check when the switch is absent" {
+        $result = Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+          -PresetName "windows-release" -DestinationDirectory $script:testOutput -AllowNoModel
+        @($result.Manifest.files | Where-Object { $_.path -like "diagnostics/*" }).Count | Should -Be 0
+        Should -Invoke Assert-VmVerifyDiagnosticsFresh -Times 0 -Exactly
+      }
+
+      It "rejects a missing diagnostics payload: <Relative>" -ForEach @(
+        @{ Relative = "diagnostics\azookey-diagnostics.wprp" }
+        @{ Relative = "diagnostics\etw\AzooKey.man" }
+        @{ Relative = "build\windows-release\diagnostics\etw\azookey_etw_manifest.dll" }
+      ) {
+        Remove-Item -LiteralPath (Join-Path $script:testRepository $Relative)
+        {
+          Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+            -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+            -AllowNoModel -IncludeDiagnostics
+        } | Should -Throw "*Required VM verification payload is missing*"
+        @(Get-ChildItem -LiteralPath $script:testOutput -Filter "*.zip").Count | Should -Be 0
+        @(Get-ChildItem -LiteralPath $script:testOutput -Filter "*.manifest.json").Count | Should -Be 0
+      }
+
+      It "stops before creating the output when diagnostics are stale" {
+        Mock Assert-VmVerifyDiagnosticsFresh { throw "Diagnostics artifacts are stale" }
+        {
+          Export-VmVerifyPackage -RepositoryRoot $script:testRepository `
+            -PresetName "windows-release" -DestinationDirectory $script:testOutput `
+            -AllowNoModel -IncludeDiagnostics
+        } | Should -Throw "*Diagnostics artifacts are stale*"
+        Test-Path -LiteralPath $script:testOutput | Should -BeFalse
+      }
+    }
+
     It "bundles the settings app with its self-contained runtime under settings/ and the MSI exclusions" {
       Mock Get-VmVerifyGitCommit { "0123456789abcdef0123456789abcdef01234567" }
       Mock Assert-VmVerifyWorktreeClean {}

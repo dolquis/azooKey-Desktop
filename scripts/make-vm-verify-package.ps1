@@ -8,6 +8,7 @@ param(
   [switch]$AllowNoModel,
   [switch]$IncludeCompat,
   [switch]$IncludeSettings,
+  [switch]$IncludeDiagnostics,
   [string]$RuntimeInstallerPath = ""
 )
 
@@ -303,6 +304,98 @@ function Assert-VmVerifyBuildReady {
   if (-not $ready) {
     throw ("Build artifacts are stale for '$BuildDirectory'. " +
       "Run the preset build before packaging. Dry-run output: $outputText")
+  }
+}
+
+function Assert-VmVerifyDiagnosticsFresh {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RepositoryRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$BuildDirectory,
+    [Parameter(Mandatory = $true)]
+    [string]$Preset,
+    [AllowNull()]
+    [pscustomobject]$CommandResult = $null
+  )
+
+  $etwDirectory = Join-Path $BuildDirectory "diagnostics\etw"
+  $generated = Join-Path $etwDirectory "generated"
+  $resources = Join-Path $etwDirectory "azookey_etw_manifest.dll"
+  $rc = Join-Path $generated "AzooKey.rc"
+  $resourceObject = Join-Path $etwDirectory "CMakeFiles\azookey_etw_manifest.dir\generated\AzooKey.rc.res"
+  $inputs = @(
+    (Join-Path $RepositoryRoot "diagnostics\etw\AzooKey.man"),
+    (Join-Path $RepositoryRoot "diagnostics\etw\CMakeLists.txt"),
+    (Join-Path $BuildDirectory "CMakeCache.txt"),
+    (Join-Path $BuildDirectory "build.ninja"),
+    $resourceObject,
+    $rc
+  )
+  foreach ($path in @($resources) + $inputs) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      throw ("Required diagnostics input or artifact is missing: $path. " +
+        "Build with cmake --build --preset $Preset --target azookey_etw_manifest.")
+    }
+  }
+  # MC emits quoted message-table and WEVT_TEMPLATE resource filenames. These
+  # binary inputs are not all in the Ninja graph; inspect the actual generated RC.
+  $tables = [regex]::Matches([System.IO.File]::ReadAllText($rc),
+    '(?m)^\s*\d+\s+(?:\d+|[A-Za-z_][A-Za-z0-9_]*)\s+"([^"\r\n]+)"\s*$')
+  if ($tables.Count -eq 0) {
+    throw "No resource input found in '$rc'. Rebuild the azookey_etw_manifest target."
+  }
+  $generatedRoot = (Get-VmVerifyAbsolutePath -Path $generated).TrimEnd("\") + "\"
+  $resourceInputs = @($rc)
+  foreach ($table in $tables) {
+    $path = Get-VmVerifyAbsolutePath -Path (Join-Path $generated $table.Groups[1].Value)
+    if (-not $path.StartsWith($generatedRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      throw "Required diagnostics resource is missing or outside the generated directory: $path"
+    }
+    $inputs += $path
+    $resourceInputs += $path
+  }
+  $builtAt = (Get-Item -LiteralPath $resources).LastWriteTimeUtc
+  foreach ($path in $inputs) {
+    if ((Get-Item -LiteralPath $path).LastWriteTimeUtc -gt $builtAt) {
+      throw ("Diagnostics artifacts are stale: $path changed after $resources. " +
+        "Build with cmake --build --preset $Preset --target azookey_etw_manifest.")
+    }
+  }
+  # A relink can make the DLL recent while still embedding an older .res.
+  # BIN inputs missing from the Ninja graph must have been compiled into .res.
+  $compiledAt = (Get-Item -LiteralPath $resourceObject).LastWriteTimeUtc
+  foreach ($path in $resourceInputs) {
+    if ((Get-Item -LiteralPath $path).LastWriteTimeUtc -gt $compiledAt) {
+      throw ("Diagnostics artifacts are stale: $path changed after $resourceObject. " +
+        "Recompile resources with cmake --build --preset $Preset --target azookey_etw_manifest --clean-first.")
+    }
+  }
+
+  if ($null -eq $CommandResult) {
+    $previousNinjaStatus = $env:NINJA_STATUS
+    try {
+      $env:NINJA_STATUS = '[%f/%t] '
+      $output = & cmake --build $BuildDirectory --target azookey_etw_manifest -- -n 2>&1
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $env:NINJA_STATUS = $previousNinjaStatus
+    }
+  } else {
+    $output = $CommandResult.Output
+    $exitCode = [int]$CommandResult.ExitCode
+  }
+  $outputText = ($output | Out-String).Trim()
+  if ($exitCode -ne 0) {
+    throw "Diagnostics freshness check failed (exit $exitCode): $outputText"
+  }
+  # This resource-only DLL exports no symbols, so the linker does not write the
+  # import .lib Ninja expects. Allow only that single relink, after checking its
+  # inputs; any MC/RC work, regeneration, or unknown output still rejects the DLL.
+  if ($outputText -cne 'ninja: no work to do.' -and
+      $outputText -cnotmatch '^\[1/1\] Linking CXX shared library diagnostics[/\\]etw[/\\]azookey_etw_manifest\.dll$') {
+    throw "Diagnostics artifacts are stale. Rebuild azookey_etw_manifest. Dry-run output: $outputText"
   }
 }
 
@@ -634,6 +727,7 @@ function Export-VmVerifyPackage {
     [switch]$AllowNoModel,
     [switch]$IncludeCompat,
     [switch]$IncludeSettings,
+    [switch]$IncludeDiagnostics,
     [string]$RuntimeInstaller = ""
   )
 
@@ -730,6 +824,10 @@ function Export-VmVerifyPackage {
       -IntermediateDirectory (Join-Path $configuration.BinaryDir "settings-app\obj\$settingsConfiguration") `
       -Preset $PresetName
   }
+  if ($IncludeDiagnostics) {
+    Assert-VmVerifyDiagnosticsFresh -RepositoryRoot $repository `
+      -BuildDirectory $configuration.BinaryDir -Preset $PresetName
+  }
 
   foreach ($optionalPath in @($MockDictionary, $Model, $RuntimeInstaller)) {
     if ($optionalPath -and -not (Test-Path -LiteralPath $optionalPath -PathType Leaf)) {
@@ -783,6 +881,16 @@ function Export-VmVerifyPackage {
     }
     if ($IncludeSettings) {
       $payloads += @(Get-VmVerifySettingsPayload -SettingsDirectory $settingsDirectory)
+    }
+    if ($IncludeDiagnostics) {
+      $payloads += @(
+        @{ Source = (Join-Path $repository "diagnostics\azookey-diagnostics.wprp");
+          Archive = "diagnostics/azookey-diagnostics.wprp"; Role = "wpr-profile" }
+        @{ Source = (Join-Path $repository "diagnostics\etw\AzooKey.man");
+          Archive = "diagnostics/etw/AzooKey.man"; Role = "etw-manifest" }
+        @{ Source = (Join-Path $configuration.BinaryDir "diagnostics\etw\azookey_etw_manifest.dll");
+          Archive = "diagnostics/etw/azookey_etw_manifest.dll"; Role = "etw-resource-dll" }
+      )
     }
     if ($MockDictionary) {
       $payloads += @{
@@ -870,6 +978,7 @@ if ($MyInvocation.InvocationName -ne ".") {
     -AllowNoModel:$AllowNoModel `
     -IncludeCompat:$IncludeCompat `
     -IncludeSettings:$IncludeSettings `
+    -IncludeDiagnostics:$IncludeDiagnostics `
     -RuntimeInstaller $RuntimeInstallerPath
 
   Write-Output "VM verification package: $($result.ZipPath)"

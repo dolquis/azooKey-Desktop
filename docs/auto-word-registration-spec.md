@@ -845,6 +845,8 @@ M36-B（§5）は `trending-words.json` を WinHTTP で DL → SHA256 検証 →
 - **ローダ**: pack を `neologd_lexicon` 層としてロードする `DictionaryStore`
   ローダ（§14.7）。M36-B の `AutoWordStore::IngestTrending` とは別経路。
 
+pack のファイル名、マニフェスト、生成ツール、検証順序は §15.14 を正典とする。
+
 帰属（**ThirdPartyNotices**）:
 
 - 同梱辞書の全ライセンス（Apache-2.0 LICENSE + NOTICE、UniDic BSD-3 著作権表示、
@@ -1580,3 +1582,82 @@ reranker へ渡す辞書候補は既定で32件以下となる。
 
 META の JSON 読み取りは独立した `azookey_json` ターゲットを core と ipc から利用する。
 既存の include パスと名前空間は維持するが、core は Named Pipe / Envelope 実装へ依存しない。
+
+### 15.14 `neologd_lexicon` pack の形式と生成
+
+§14.10 の別 pack は、`neologd_lexicon` 層（layer id 2）の `.azdic` v1 と、
+それを記述するマニフェスト `neologd_lexicon.manifest.json` の 2 ファイルで構成する。
+`.azdic` は同梱層と同じビルダとリーダを使い、SIDX を含む §15.5 の規則に従う。
+
+**ファイル名**。pack は `neologd_lexicon-<revision>.azdic` とする。`<revision>` は上流
+seed のリリース名で、英数字で始まり英数字・`.`・`_`・`-` だけからなる 64 文字以下の
+文字列である。版をファイル名に含めるのは、Host がメモリマップ中の旧 pack を残したまま
+新しい pack を取得し、検証後に層を差し替えられるようにするためである。
+
+**抽出規則**（`dictbuild/extract_neologd.py`）。mecab-ipadic 形式の seed CSV
+（13 列。`.csv` または公開形式の `.csv.xz`）の 1 行を次のとおり中間 TSV へ写す。
+
+| 中間 TSV | 写像 |
+|---|---|
+| `surface` | 表層形の列 |
+| `reading` | 読みの列をカタカナからひらがなへ変換したもの |
+| `pos` | 品詞 1〜4 の `*` 以外を `-` で連結したもの |
+| `cost` | 上流 `cost` をそのまま（`frequency` は空欄） |
+| `category` | `名詞-固有名詞-人名` は `person_name`、`名詞-固有名詞-地域` は `place_name`、`名詞-固有名詞-組織` は `company_org`、それ以外は `neologism` |
+
+取り込まない行は、§15.12 の除外条件のうち次のものとする。読みがひらがなと長音符以外を
+含むエントリ、表層形が読みと同じエントリ、表層形が `#` で始まるか TAB・改行・NUL・
+二重引用符を含むエントリ。seed には分割専用エントリと記号の品詞が無いため、それらの条件は
+持たない。`cost` による足切りもしない。
+
+中間 TSV の先頭コメントは §15.13 の規則に従う。ただし `THIRD_PARTY_LICENSES` への参照は、
+この pack が `THIRD_PARTY_LICENSES` の対象外であり、帰属はマニフェストが持つことを示す文として書く。
+
+**帰属の正典**は `dictbuild/sources/neologd_lexicon.metadata.json` とする。
+`notice_ids` は上流 `COPYING` の逐語（`dictbuild/notices/mecab-ipadic-neologd-copying.txt`）を
+参照する。`upstream_revision` は生成時に `--revision` の値で置き換える。pack の `META` の
+`sources` と、マニフェストの `attribution` はいずれもこのファイルから生成し、別々に編集しない。
+
+**マニフェスト**（`manifest_version` 1）は次のフィールドだけを持つ。
+
+| フィールド | 内容 |
+|---|---|
+| `manifest_version` | `1` |
+| `pack_id` | `neologd_lexicon` |
+| `layer_id` | `2` |
+| `format` / `format_version` | `azdic` / `1` |
+| `builder_version` | `.azdic` の `META.builder_version` と同じ値（`azdic-1`） |
+| `upstream_revision` | 取り込んだ seed のリリース名 |
+| `file_name` | `neologd_lexicon-<upstream_revision>.azdic` |
+| `size` | pack のバイト数 |
+| `sha256` | pack 全体の SHA256（小文字 16 進 64 桁） |
+| `url` | pack の取得先（`https://` のみ） |
+| `attribution` | `sources`（pack の `META.sources` と同値）と `notices`（DL 前に提示する帰属テキスト。§15.6 の ThirdPartyNotices と同じ生成規則） |
+
+`url` と `sha256` がともに空のマニフェストは「公開された pack が無い」ことを表し、
+このとき `upstream_revision` と `file_name` は空、`size` は 0 とする。Host はこの状態を
+missing-pack（§14.8）として扱い、`neologdEnabled` が真でも層を有効にしない。
+
+**pin したマニフェスト**。アプリが信頼するマニフェストは `dictbuild/packs/neologd_lexicon.manifest.json`
+である。期待 SHA256 の信頼の起点はこの pin であり、配布元から取得したマニフェストや
+sidecar のハッシュは使わない。pack を公開するときは、上流の個別条件（§14.9）を審査した
+うえでこのファイルを公開物の値に更新する。`attribution` が metadata と notice catalog から
+生成した値と一致しないマニフェストは不正とする（`neologd_pack.py check-pinned`）。
+
+**生成と検証**（`dictbuild/neologd_pack.py`）。
+
+```powershell
+python dictbuild/extract_neologd.py mecab-user-dict-seed.<revision>.csv.xz `
+  --revision <revision> --output neologd.lex.tsv
+python dictbuild/neologd_pack.py build neologd.lex.tsv --revision <revision> `
+  --url https://<host>/neologd_lexicon-<revision>.azdic --output out
+python dictbuild/neologd_pack.py verify out/neologd_lexicon.manifest.json `
+  out/neologd_lexicon-<revision>.azdic
+python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
+```
+
+取得した pack は、層としてロードする前に次の順で検証し、いずれかに失敗した pack は
+使わない。(1) マニフェストが公開済みの pack を指す。(2) バイト数が `size` と一致する。
+(3) SHA256 が `sha256` と一致する。(4) §15.5 の全体検証に通る。(5) ヘッダの layer id が 2 である。
+(6) `META.sources` が `attribution.sources` と、`META.builder_version` が `builder_version` と一致する。(3) は `HttpDownloader`（§5-4）が
+取得時にも行い、そのとき `size` を取得の上限バイト数として渡す。

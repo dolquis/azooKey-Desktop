@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <string>
@@ -36,6 +37,7 @@
 #include "azookey/host/HostStartup.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/LookupCli.h"
+#include "azookey/host/NeologdPack.h"
 #include "azookey/host/NewWordsCli.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
@@ -75,6 +77,73 @@ void LogBusinessOutcome(azookey::logging::RuntimeLogger& logger,
   } else {
     logger.Log(level, event, {{"result", SafeLogText(std::move(result))}});
   }
+}
+
+// Shares the engine and log with the neologd pack worker until main leaves scope on any
+// return path. The worker is detached so a slow download never delays shutdown.
+struct NeologdPackSink {
+  std::mutex mutex;
+  azookey::host::InferenceEngine* engine{nullptr};
+  azookey::logging::RuntimeLogger* log{nullptr};
+};
+
+class NeologdPackSinkGuard {
+ public:
+  explicit NeologdPackSinkGuard(std::shared_ptr<NeologdPackSink> sink) : sink_(std::move(sink)) {}
+  ~NeologdPackSinkGuard() {
+    std::lock_guard<std::mutex> lock(sink_->mutex);
+    sink_->engine = nullptr;
+    sink_->log = nullptr;
+  }
+  NeologdPackSinkGuard(const NeologdPackSinkGuard&) = delete;
+  NeologdPackSinkGuard& operator=(const NeologdPackSinkGuard&) = delete;
+
+ private:
+  std::shared_ptr<NeologdPackSink> sink_;
+};
+
+// Section 15.14: only a pack that passed every check reaches the layer, so a failed pack
+// leaves neologd_lexicon in the missing-pack state.
+void StartNeologdPackLoad(std::shared_ptr<NeologdPackSink> sink, std::filesystem::path packs_dir) {
+  std::thread([sink = std::move(sink), packs_dir = std::move(packs_dir)] {
+    azookey::host::NeologdPackResult result;
+    try {
+      const auto parsed =
+          azookey::host::ParseNeologdPackManifest(azookey::host::PinnedNeologdPackManifestJson());
+      if (parsed.manifest) {
+        azookey::host::HttpPackDownloader downloader;
+        result = azookey::host::PrepareNeologdPack(*parsed.manifest, packs_dir, downloader);
+      } else {
+        result.error = "invalid pinned manifest";
+      }
+    } catch (...) {
+      result = {};
+      result.error = "pack preparation failed";
+    }
+    std::lock_guard<std::mutex> lock(sink->mutex);
+    if (!sink->engine || !sink->log) return;
+    try {
+      if (result.status == azookey::host::NeologdPackStatus::Ready &&
+          !sink->engine->LoadDictionaryLayer(azookey::learning::LayerId::Neologd, result.path)) {
+        result.status = azookey::host::NeologdPackStatus::Failed;
+        result.error = "pack load failed";
+      }
+      if (result.status == azookey::host::NeologdPackStatus::Failed) {
+        sink->log->Log(azookey::logging::RuntimeLogLevel::Warn, "neologd_pack_load",
+                       {{"result", SafeLogText("error")},
+                        {"error_code", SafeLogText("business")},
+                        {"reason", SafeLogText(result.error)}});
+      } else {
+        sink->log->Log(
+            azookey::logging::RuntimeLogLevel::Info, "neologd_pack_load",
+            {{"result", SafeLogText(result.status == azookey::host::NeologdPackStatus::Ready
+                                        ? "ok"
+                                        : "missing_pack")}});
+      }
+    } catch (...) {
+      // Nothing escapes a detached thread; the layer stays as the store left it.
+    }
+  }).detach();
 }
 
 constexpr const char* kHostVersion = "0.1.0";
@@ -679,6 +748,18 @@ int main(int argc, char** argv) {
     }
   }
 #endif
+  // Declared after engine and runtime_log so it is destroyed before them.
+  auto neologd_pack_sink = std::make_shared<NeologdPackSink>();
+  neologd_pack_sink->engine = &engine;
+  neologd_pack_sink->log = &runtime_log;
+  NeologdPackSinkGuard neologd_pack_guard(neologd_pack_sink);
+  // Settings reach the pack only at startup (auto-word-registration-spec section 15.14).
+  // Called once this Host owns its transport, so a rejected duplicate never downloads.
+  const auto start_neologd_pack = [&] {
+    if (config.dictionary.neologd_enabled && !safe_mode && !user_paths->packs_dir.empty()) {
+      StartNeologdPackLoad(neologd_pack_sink, user_paths->packs_dir);
+    }
+  };
   if (explicit_model_path && !safe_mode) {
     const bool model_loaded = engine.LoadModel();
     LogBusinessOutcome(runtime_log,
@@ -817,6 +898,7 @@ int main(int argc, char** argv) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Info, "pipe_listening",
                     {{"result", SafeLogText("ok")}});
     std::cerr << "named pipe listening: " << pipe_name << std::endl;
+    start_neologd_pack();
     auto supervisor_state = supervisor_process.GetState();
     while (!StopRequested() &&
            supervisor_state == azookey::host::SupervisorLifetime::State::Running) {
@@ -846,6 +928,7 @@ int main(int argc, char** argv) {
     return wait_failed ? 3 : 0;
   }
 
+  start_neologd_pack();
   std::string line;
   while (ReadStdioLine(line)) {
     if (line.empty()) continue;

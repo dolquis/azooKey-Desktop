@@ -1,10 +1,13 @@
 """Synthetic, authored test data only; never copies installed/user dictionaries."""
+import hashlib
+import json
 from pathlib import Path
 import struct
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dictbuild
+import neologd_pack
 
 
 def generate(directory: Path) -> None:
@@ -85,7 +88,42 @@ def generate(directory: Path) -> None:
         (directory / f"{name}.azdic").write_bytes(broken)
     (directory / "truncated.azdic").write_bytes(image[:63])
     write_surface_index_fixtures(directory, image, sections)
+    write_neologd_pack_fixtures(directory, tsv, metadata, image, directory / "hash.azdic")
     (directory / "ready").write_text("ready", encoding="utf-8")
+
+
+def write_neologd_pack_fixtures(directory: Path, tsv: Path, metadata: dict, other_layer: bytes,
+                                corrupt: Path) -> None:
+    """One directory per case, each holding the pack bytes and the manifest that names them."""
+    revision = "1"
+    pack, _ = dictbuild.build([tsv], metadata, neologd_pack.LAYER_ID, directory)
+    foreign = neologd_pack.with_revision(metadata, "2")
+    # Same records, but META names another builder: only the builder_version check rejects it.
+    count = struct.unpack_from("<I", pack, 28)[0]
+    sections = []
+    for i in range(count):
+        name, _, off, size = struct.unpack_from("<4sIQQ", pack, 64 + i * 24)
+        data = pack[off:off + size]
+        if name == b"META":
+            meta = dict(neologd_pack.read_meta(pack), builder_version="azdic-2")
+            data = json.dumps(meta, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        sections.append((name, data))
+    other_builder = dictbuild.pack(sections, neologd_pack.LAYER_ID, *struct.unpack_from("<II", pack, 20))
+    cases = {
+        "valid": (pack, metadata),
+        "wrong_layer": (other_layer, metadata),
+        "corrupt": (corrupt.read_bytes(), metadata),
+        "foreign_attribution": (pack, foreign),
+        "foreign_builder": (other_builder, metadata),
+    }
+    for name, (data, attributed) in cases.items():
+        case = directory / "neologd" / name
+        case.mkdir(parents=True, exist_ok=True)
+        (case / neologd_pack.pack_file_name(revision)).write_bytes(data)
+        manifest = neologd_pack.make_manifest(attributed, directory, revision, len(data),
+                                              hashlib.sha256(data).hexdigest(),
+                                              "https://example.invalid/neologd_lexicon-1.azdic")
+        neologd_pack.write_manifest(manifest, case / neologd_pack.MANIFEST_NAME)
 
 
 def write_surface_index_fixtures(directory: Path, image: bytes, sections: dict) -> None:

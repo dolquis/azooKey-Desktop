@@ -765,8 +765,9 @@ private:
 
 `neologdEnabled` の既定は **`false`**（opt-in）。`neologd_lexicon` は MSIX 非同梱の
 別 DL pack（§14.9 / §14.10）であり、pack が未ダウンロードの状態で `true` にしても
-当該 layer は無効（missing-pack）として扱う。bundled 層（`sudachi` / `named_entity` /
-`technical_terms`）の既定は `true`。
+当該 layer は無効（missing-pack）として扱う。pack の取得とロードは Host の起動時だけ
+行う（§15.14）。セッション中に `true` へ変えた場合、層は次の起動まで missing-pack のまま
+である。bundled 層（`sudachi` / `named_entity` / `technical_terms`）の既定は `true`。
 
 7つのキーは boolean のみを受け付ける。欠落、型不正、`dictionary` 自体の型不正は
 キーの既定値へ戻し、未知のキーは runtime では無視する。schema は未知キーを拒否する。
@@ -1660,9 +1661,9 @@ seed のリリース名で、英数字で始まり英数字・`.`・`_`・`-` �
 | `builder_version` | `.azdic` の `META.builder_version` と同じ値（`azdic-1`） |
 | `upstream_revision` | 取り込んだ seed のリリース名 |
 | `file_name` | `neologd_lexicon-<upstream_revision>.azdic` |
-| `size` | pack のバイト数 |
+| `size` | pack のバイト数（JSON の整数表記。`1.0` のような小数表記は不正） |
 | `sha256` | pack 全体の SHA256（小文字 16 進 64 桁） |
-| `url` | pack の取得先（`https://` のみ） |
+| `url` | pack の取得先（`https://` で始まる、空白を含まない印字可能 ASCII） |
 | `attribution` | `sources`（pack の `META.sources` と同値）と `notices`（DL 前に提示する帰属テキスト。§15.6 の ThirdPartyNotices と同じ生成規則） |
 
 `url` と `sha256` がともに空のマニフェストは「公開された pack が無い」ことを表し、
@@ -1692,3 +1693,27 @@ python dictbuild/neologd_pack.py pin --from out/neologd_lexicon.manifest.json
 (3) SHA256 が `sha256` と一致する。(4) §15.5 の全体検証に通る。(5) ヘッダの layer id が 2 である。
 (6) `META.sources` が `attribution.sources` と、`META.builder_version` が `builder_version` と一致する。(3) は `HttpDownloader`（§5-4）が
 取得時にも行い、そのとき `size` を取得の上限バイト数として渡す。
+
+**Host での取得とロード**（`inference-host/src/NeologdPack.cpp`）。
+
+- **起動時だけ**: Host は起動時に一度だけ pack を扱う。`dictionary.neologdEnabled` が真で、
+  SafeMode でないときに限る。設定の再読込（§14.8）は層の有効フラグだけを更新し、pack の
+  取得やロードはしない。
+- **pin の読み方**: pin したマニフェストは、ビルド時に `azookey_host` へバイト列として
+  埋め込む。配布物に `neologd_lexicon.*` のファイルは置かないので、§14.10 の配布ガードは
+  そのまま成り立つ。
+- **公開されていないとき**: マニフェストが未公開なら、ネットワークにもファイルにも
+  触れずに missing-pack とする。
+- **取得**: 公開済みなら `%LOCALAPPDATA%\azooKey\packs\<file_name>` を宛先に
+  `HttpDownloader` を呼ぶ。宛先に SHA256 の一致するファイルがすでにあれば、通信せずに
+  それを使う。取得は別スレッドで行い、Host の起動と終了を待たせない。
+- **検証してからロード**: 取得したファイルは、層とは別の `DoubleArrayTrie` で (2) と
+  (4)〜(6) を検証する。すべて通ったものだけを `neologd_lexicon` 層へロードする。
+  検証に失敗した pack は層に入らず、層は missing-pack のまま残る（§15.8）。
+  検証を通った後のロードが失敗した場合は、`DictionaryStore::LoadStatic` の規則どおり層は
+  利用不可となり、いずれの場合も候補に寄与しない。
+- **旧版の削除**: ロードできる pack がそろったら、`packs` 内の別の版の
+  `neologd_lexicon-*.azdic` と、その `.part` を削除する。
+- **ログ**: 結果は `neologd_pack_load` イベントに記録する。`result` は `ok` /
+  `missing_pack` / `error` のいずれかで、失敗時は固定の分類名を `reason` に入れる。
+  パスとサーバの応答はログに出さない。

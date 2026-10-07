@@ -24,6 +24,7 @@ TEST(UserDataPathsTest, DefaultPathsUseLocalAppDataLayout) {
   EXPECT_EQ(paths->data_dir, local / "azooKey" / "data");
   EXPECT_EQ(paths->logs_dir, local / "azooKey" / "logs");
   EXPECT_EQ(paths->models_dir, local / "azooKey" / "models");
+  EXPECT_EQ(paths->packs_dir, local / "azooKey" / "packs");
   EXPECT_EQ(paths->settings_path, local / "azooKey" / "config" / "settings.json");
   EXPECT_EQ(paths->learning_path, local / "azooKey" / "data" / "learning.tsv");
   EXPECT_EQ(paths->user_dict_path, local / "azooKey" / "data" / "user_dict.json");
@@ -57,6 +58,7 @@ TEST(UserDataPathsTest, ExplicitRootKeepsAllHostFilesTogether) {
   EXPECT_EQ(paths->user_dict_path, root / "data" / "user_dict.json");
   EXPECT_EQ(paths->logs_dir, root / "logs");
   EXPECT_EQ(paths->models_dir, root / "models");
+  EXPECT_EQ(paths->packs_dir, root / "packs");
 
   inputs.local_app_data.reset();
   const auto without_local = azookey::host::ResolveUserDataPaths(inputs);
@@ -110,6 +112,7 @@ TEST(UserDataPathsTest, EnsureCreatesLayoutAndExplicitParents) {
   EXPECT_TRUE(std::filesystem::is_directory(paths->data_dir));
   EXPECT_TRUE(std::filesystem::is_directory(paths->logs_dir));
   EXPECT_TRUE(std::filesystem::is_directory(paths->models_dir));
+  EXPECT_FALSE(std::filesystem::exists(paths->packs_dir));
   EXPECT_TRUE(std::filesystem::is_directory(explicit_dir));
 
   std::filesystem::remove_all(local);

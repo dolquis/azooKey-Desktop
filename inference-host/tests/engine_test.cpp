@@ -2862,3 +2862,32 @@ TEST(InferenceEngineTest, SafeModeIsNotLeftByModelEvents) {
   engine.reset();
   RemoveProtectedStoreFile(lpath);
 }
+
+// M54: the scorer stays behind an internal switch. Three commits lift a 2.0
+// candidate by 2.4 under the M7 reranker (to 4.4, first) but only by log(4)
+// under UserLearningScorer (to 3.39, still below 4.0).
+TEST(InferenceEngineTest, UserLearningScorerRanksOnlyWhenSwitchedOn) {
+  const auto rank = [](bool scorer_enabled, const char* file) {
+    const std::string path = TempPath(file);
+    RemoveProtectedStoreFile(path);
+    azookey::learning::LearningStore store(path, &azookey::learning::test::Crypto());
+    azookey::host::EngineConfig config;
+    config.user_learning_scorer_enabled = scorer_enabled;
+    config.learning_min_weight = 0.0;
+    azookey::host::InferenceEngine engine(std::make_unique<ContextCapturingConverter>(), &store,
+                                          config);
+    for (int i = 1; i <= 3; ++i) engine.CommitObservation("かな", "候補3", kNowBase + i);
+    auto candidates = engine.QueryCandidates("かな", "", kNowBase + 3);
+    engine.FlushLearningStore();
+    RemoveProtectedStoreFile(path);
+    return candidates;
+  };
+
+  EXPECT_FALSE(azookey::host::EngineConfig{}.user_learning_scorer_enabled);
+  const auto legacy = rank(false, "azookey_host_engine_scorer_off.tsv");
+  ASSERT_FALSE(legacy.empty());
+  EXPECT_EQ(legacy.front().surface, "候補3");
+  const auto scored = rank(true, "azookey_host_engine_scorer_on.tsv");
+  ASSERT_FALSE(scored.empty());
+  EXPECT_EQ(scored.front().surface, "候補1");
+}

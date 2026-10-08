@@ -254,6 +254,106 @@ TEST(LearningStoreV2Test, ForgetZeroesEveryAppRowAndSaveDropsThePair) {
   EXPECT_EQ(record.commit_count, 1u);
 }
 
+namespace {
+std::string LegacyText(const std::filesystem::path& legacy_path) {
+  std::string text;
+  EXPECT_EQ(learning::ReadProtectedText(legacy_path, learning::test::Crypto(), text),
+            learning::ProtectedFileSource::Encrypted);
+  return text;
+}
+}  // namespace
+
+TEST(LearningStoreV2Test, RemoveFromLegacyFileDropsOnlyThePairFromAnEscapedFile) {
+  ScopedLearningDirectory directory("azookey_learning_v2_legacy_forget_escaped");
+  const auto path = directory.LegacyPath();
+  ASSERT_TRUE(learning::WriteProtectedText(path,
+                                           "# azookey-learning-tsv escaped=1\n"
+                                           "こうしょう\t交渉\t2.4 1999999000\n"
+                                           "a\\tb\tA\t0.8 1999999000\n"
+                                           "broken row\n"
+                                           "\n"
+                                           "こうしょう\t校章\t0.8   1999999001\r\n"
+                                           "a\\tb\tA\t1.6 1999999002\n"
+                                           "a\\tb\tB\t0.8 1999999000",
+                                           learning::test::Crypto()));
+  const auto v2_encrypted = learning::EncryptedPathFor(learning::LearningStoreV2PathFor(path));
+
+  LearningStore store(path, &learning::test::Crypto());
+  // The escaped reading "a\tb" holds a real tab; both of its rows go.
+  ASSERT_TRUE(store.RemoveFromLegacyFile("a\tb", "A"));
+  EXPECT_EQ(LegacyText(path),
+            "# azookey-learning-tsv escaped=1\n"
+            "こうしょう\t交渉\t2.4 1999999000\n"
+            "broken row\n"
+            "\n"
+            "こうしょう\t校章\t0.8   1999999001\r\n"
+            "a\\tb\tB\t0.8 1999999000");
+  ASSERT_TRUE(store.RemoveFromLegacyFile("こうしょう", "交渉"));
+  EXPECT_EQ(LegacyText(path),
+            "# azookey-learning-tsv escaped=1\n"
+            "broken row\n"
+            "\n"
+            "こうしょう\t校章\t0.8   1999999001\r\n"
+            "a\\tb\tB\t0.8 1999999000");
+  EXPECT_FALSE(std::filesystem::exists(v2_encrypted));
+}
+
+TEST(LearningStoreV2Test, RemoveFromLegacyFileComparesRawFieldsWithoutTheHeader) {
+  ScopedLearningDirectory directory("azookey_learning_v2_legacy_forget_raw");
+  const auto path = directory.LegacyPath();
+  // Without the header the fields are not escaped: "a\\tb" is a backslash and a t.
+  ASSERT_TRUE(learning::WriteProtectedText(path,
+                                           "a\\tb\tA\t0.8 1999999000\n"
+                                           "にほん\t日本\t2 1999999000\n",
+                                           learning::test::Crypto()));
+  const auto before = ReadBytes(learning::EncryptedPathFor(path));
+
+  LearningStore store(path, &learning::test::Crypto());
+  ASSERT_TRUE(store.RemoveFromLegacyFile("a\tb", "A"));
+  // No row matched, so nothing was written (a rewrite would re-encrypt).
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), before);
+  ASSERT_TRUE(store.RemoveFromLegacyFile("a\\tb", "A"));
+  EXPECT_EQ(LegacyText(path), "にほん\t日本\t2 1999999000\n");
+}
+
+TEST(LearningStoreV2Test, RemoveFromLegacyFileIsANoOpWithoutTheFile) {
+  ScopedLearningDirectory directory("azookey_learning_v2_legacy_forget_missing");
+  const auto path = directory.LegacyPath();
+  LearningStore store(path, &learning::test::Crypto());
+  EXPECT_TRUE(store.RemoveFromLegacyFile("こうしょう", "交渉"));
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
+  EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST(LearningStoreV2Test, RemoveFromLegacyFileLeavesAnUnreadableFileUntouched) {
+  ScopedLearningDirectory directory("azookey_learning_v2_legacy_forget_unreadable");
+  const auto path = directory.LegacyPath();
+  WriteBytes(learning::EncryptedPathFor(path), "not a protected blob");
+
+  LearningStore store(path, &learning::test::Crypto());
+  EXPECT_FALSE(store.RemoveFromLegacyFile("こうしょう", "交渉"));
+  EXPECT_EQ(ReadBytes(learning::EncryptedPathFor(path)), "not a protected blob");
+}
+
+TEST(LearningStoreV2Test, RemoveFromLegacyFileRefusesUnmigratedPlaintext) {
+  ScopedLearningDirectory directory("azookey_learning_v2_legacy_forget_plaintext");
+  const auto path = directory.LegacyPath();
+  const std::string plaintext = "こうしょう\t交渉\t2 1999999000\nにほん\t日本\t2 1999999000\n";
+  WriteBytes(path, plaintext);
+
+  LearningStore store(path, &learning::test::Crypto());
+  // WriteProtectedText refuses to replace plaintext that was never migrated to
+  // .enc (no .bak kept yet), so the forget fails and the file stays as it is.
+  // Load migrates the file first; after that the removal succeeds.
+  EXPECT_FALSE(store.RemoveFromLegacyFile("こうしょう", "交渉"));
+  EXPECT_EQ(ReadBytes(path), plaintext);
+  EXPECT_FALSE(std::filesystem::exists(learning::EncryptedPathFor(path)));
+
+  ASSERT_TRUE(store.Load());
+  ASSERT_TRUE(store.RemoveFromLegacyFile("こうしょう", "交渉"));
+  EXPECT_EQ(LegacyText(path), "にほん\t日本\t2 1999999000\n");
+}
+
 TEST(LearningStoreV2Test, MergePoliciesDecideExistingRowsOnly) {
   LearningStore imported("unused.tsv", &learning::test::Crypto());
   imported.ObserveEvent(Event(LearningEventType::Commit), 0.5, kNow + 10);

@@ -665,6 +665,7 @@ std::string BuildCommitObservationRequest(const CommitObservationRequest& p) {
   o.emplace("observation_id", j::Value(p.observation_id));
   o.emplace("secure", j::Value(p.secure));
   o.emplace("learning_allowed", j::Value(p.learning_allowed));
+  AppToJson(p.app, o);
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -691,6 +692,8 @@ std::optional<CommitObservationRequest> ParseCommitObservationRequest(const std:
   p.observation_id = v->GetString("observation_id").value_or(std::string());
   p.secure = v->GetBool("secure").value_or(true);
   p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
+  // Absent for TIPs that predate DEV-1184: unknown app, recorded on the global row.
+  p.app = AppFromJson(*v);
   return p;
 }
 
@@ -719,6 +722,7 @@ std::string BuildCommitSegmentsObservationRequest(const CommitSegmentsObservatio
   object.emplace("observation_id", j::Value(p.observation_id));
   object.emplace("secure", j::Value(p.secure));
   object.emplace("learning_allowed", j::Value(p.learning_allowed));
+  AppToJson(p.app, object);
   return j::Stringify(j::Value(std::move(object)));
 }
 
@@ -754,6 +758,7 @@ std::optional<CommitSegmentsObservationRequest> ParseCommitSegmentsObservationRe
   request.observation_id = object->GetString("observation_id").value_or("");
   request.secure = object->GetBool("secure").value_or(true);
   request.learning_allowed = object->GetBool("learning_allowed").value_or(false);
+  request.app = AppFromJson(*object);
   return request;
 }
 
@@ -1208,6 +1213,363 @@ std::optional<BenchmarkModelResponse> ParseBenchmarkModelResponse(const std::str
   const auto completed = v->GetUInt("iterations_completed").value_or(0);
   p.iterations_completed = completed > UINT32_MAX ? 0 : static_cast<uint32_t>(completed);
   p.error = v->GetString("error");
+  return p;
+}
+
+// -------- M49 learning data management (DEV-1190) --------
+
+namespace {
+
+// Request fields are strict: a field present with the wrong JSON type rejects
+// the request instead of falling back to its default, so a malformed request
+// never runs against a store or path the sender did not mean.
+bool ReadOptionalString(const j::Value& v, std::string_view key, std::string& out) {
+  const auto* field = v.Find(key);
+  if (!field) return true;
+  if (!field->IsString()) return false;
+  out = field->AsString();
+  return true;
+}
+
+bool ReadOptionalBool(const j::Value& v, std::string_view key, bool& out) {
+  const auto* field = v.Find(key);
+  if (!field) return true;
+  if (!field->IsBool()) return false;
+  out = field->AsBool();
+  return true;
+}
+
+std::optional<std::string> ReadNonEmptyString(const j::Value& v, std::string_view key) {
+  auto value = v.GetString(key);
+  if (!value || value->empty()) return std::nullopt;
+  return value;
+}
+
+// `stores`: a non-empty array of non-empty strings, at most
+// kMaxLearningDataStores long. Store names are validated by the Host.
+std::optional<std::vector<std::string>> ReadStoreList(const j::Value& v) {
+  const auto* stores = v.GetArray("stores");
+  if (!stores || stores->empty() || stores->size() > kMaxLearningDataStores) return std::nullopt;
+  std::vector<std::string> out;
+  out.reserve(stores->size());
+  for (const auto& store : *stores) {
+    if (!store.IsString() || store.AsString().empty()) return std::nullopt;
+    out.push_back(store.AsString());
+  }
+  return out;
+}
+
+j::Value StoreListToJson(const std::vector<std::string>& stores) {
+  j::Array out;
+  for (const auto& store : stores) out.emplace_back(store);
+  return j::Value(std::move(out));
+}
+
+j::Value LearningEntryToJson(const LearningEntryField& e) {
+  j::Object o;
+  o.emplace("id", j::Value(e.id));
+  if (!e.channel.empty()) o.emplace("channel", j::Value(e.channel));
+  o.emplace("reading", j::Value(e.reading));
+  o.emplace("surface", j::Value(e.surface));
+  o.emplace("weight", j::Value(e.weight));
+  o.emplace("last_updated_epoch_sec", j::Value(e.last_updated_epoch_sec));
+  j::Array tags;
+  for (const auto& tag : e.tags) tags.emplace_back(tag);
+  o.emplace("tags", j::Value(std::move(tags)));
+  j::Object metadata;
+  for (const auto& [key, value] : e.metadata) metadata.emplace(key, j::Value(value));
+  o.emplace("metadata", j::Value(std::move(metadata)));
+  return j::Value(std::move(o));
+}
+
+// An entry without id / reading / surface, or with more tags or metadata keys
+// than the caps, is malformed and skipped by the caller. Non-string tags and
+// metadata values are dropped individually.
+std::optional<LearningEntryField> LearningEntryFromJson(const j::Value& v) {
+  if (!v.IsObject()) return std::nullopt;
+  auto id = v.GetString("id");
+  auto reading = v.GetString("reading");
+  auto surface = v.GetString("surface");
+  if (!id || !reading || !surface) return std::nullopt;
+  LearningEntryField e;
+  e.id = std::move(*id);
+  e.reading = std::move(*reading);
+  e.surface = std::move(*surface);
+  e.channel = v.GetString("channel").value_or(std::string());
+  e.weight = v.GetNumber("weight").value_or(0.0);
+  e.last_updated_epoch_sec = v.GetUInt("last_updated_epoch_sec").value_or(0);
+  if (const auto* tags = v.GetArray("tags")) {
+    if (tags->size() > kMaxLearningEntryTags) return std::nullopt;
+    for (const auto& tag : *tags) {
+      if (tag.IsString()) e.tags.push_back(tag.AsString());
+    }
+  }
+  if (const auto* metadata = v.FindObject("metadata")) {
+    if (metadata->size() > kMaxLearningEntryMetadata) return std::nullopt;
+    for (const auto& entry : *metadata) {
+      if (entry.second.IsString()) e.metadata.emplace(entry.first, entry.second.AsString());
+    }
+  }
+  return e;
+}
+
+j::Value BackupItemToJson(const LearningBackupItemField& item) {
+  j::Object o;
+  o.emplace("name", j::Value(item.name));
+  o.emplace("file", j::Value(item.file));
+  o.emplace("count", j::Value(item.count));
+  o.emplace("sha256", j::Value(item.sha256));
+  return j::Value(std::move(o));
+}
+
+std::optional<LearningBackupItemField> BackupItemFromJson(const j::Value& v) {
+  if (!v.IsObject()) return std::nullopt;
+  auto name = v.GetString("name");
+  if (!name || name->empty()) return std::nullopt;
+  LearningBackupItemField item;
+  item.name = std::move(*name);
+  item.file = v.GetString("file").value_or(std::string());
+  item.count = v.GetUInt("count").value_or(0);
+  item.sha256 = v.GetString("sha256").value_or(std::string());
+  return item;
+}
+
+j::Value CountsToJson(const std::map<std::string, uint64_t>& counts) {
+  j::Object o;
+  for (const auto& [name, count] : counts) o.emplace(name, j::Value(count));
+  return j::Value(std::move(o));
+}
+
+// Returns false when the map has more keys than kMaxLearningDataStores, which
+// rejects the response. Keys whose value is not an unsigned integer are dropped.
+bool CountsFromJson(const j::Value& v, std::string_view key, std::map<std::string, uint64_t>& out) {
+  const auto* counts = v.FindObject(key);
+  if (!counts) return true;
+  if (counts->size() > kMaxLearningDataStores) return false;
+  const j::Value wrapped(*counts);
+  for (const auto& entry : *counts) {
+    if (auto count = wrapped.GetUInt(entry.first)) out.emplace(entry.first, *count);
+  }
+  return true;
+}
+
+bool IsKnownConflictResolution(const std::string& value) {
+  return value == "merge" || value == "overwrite" || value == "keep_both";
+}
+
+}  // namespace
+
+std::string BuildListLearningEntriesRequest(const ListLearningEntriesRequest& p) {
+  j::Object o;
+  o.emplace("store", j::Value(p.store));
+  o.emplace("query", j::Value(p.query));
+  o.emplace("limit", j::Value(static_cast<uint64_t>(p.limit)));
+  o.emplace("offset", j::Value(static_cast<uint64_t>(p.offset)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ListLearningEntriesRequest> ParseListLearningEntriesRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto store = ReadNonEmptyString(*v, "store");
+  if (!store) return std::nullopt;
+  ListLearningEntriesRequest p;
+  p.store = std::move(*store);
+  if (!ReadOptionalString(*v, "query", p.query)) return std::nullopt;
+  if (v->Find("limit")) {
+    const auto limit = v->GetUInt("limit");
+    if (!limit) return std::nullopt;
+    // Section 4.1: the page size is capped, not rejected, above the ceiling.
+    p.limit = static_cast<uint32_t>(std::min<uint64_t>(*limit, kMaxLearningEntries));
+  }
+  if (v->Find("offset")) {
+    const auto offset = v->GetUInt("offset");
+    if (!offset || *offset > UINT32_MAX) return std::nullopt;
+    p.offset = static_cast<uint32_t>(*offset);
+  }
+  return p;
+}
+
+std::string BuildListLearningEntriesResponse(const ListLearningEntriesResponse& p) {
+  j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("total", j::Value(p.total));
+  j::Array entries;
+  for (const auto& e : p.entries) entries.push_back(LearningEntryToJson(e));
+  o.emplace("entries", j::Value(std::move(entries)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ListLearningEntriesResponse> ParseListLearningEntriesResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ListLearningEntriesResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  p.error = v->GetString("error");
+  p.total = v->GetUInt("total").value_or(0);
+  if (const auto* entries = v->GetArray("entries")) {
+    if (entries->size() > kMaxLearningEntries) return std::nullopt;
+    // Malformed entries are skipped, matching the module's lenient decode for
+    // arrays of optional elements.
+    for (const auto& entry : *entries) {
+      if (auto e = LearningEntryFromJson(entry)) p.entries.push_back(std::move(*e));
+    }
+  }
+  return p;
+}
+
+std::string BuildForgetLearningEntryRequest(const ForgetLearningEntryRequest& p) {
+  j::Object o;
+  o.emplace("store", j::Value(p.store));
+  if (!p.id.empty()) o.emplace("id", j::Value(p.id));
+  if (!p.reading.empty()) o.emplace("reading", j::Value(p.reading));
+  if (!p.surface.empty()) o.emplace("surface", j::Value(p.surface));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ForgetLearningEntryRequest> ParseForgetLearningEntryRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto store = ReadNonEmptyString(*v, "store");
+  if (!store) return std::nullopt;
+  ForgetLearningEntryRequest p;
+  p.store = std::move(*store);
+  if (!ReadOptionalString(*v, "id", p.id) || !ReadOptionalString(*v, "reading", p.reading) ||
+      !ReadOptionalString(*v, "surface", p.surface))
+    return std::nullopt;
+  // Exactly one form: an id, or a (reading, surface) pair. A request carrying
+  // both, neither, or half a pair must not pick an entry by guessing.
+  const bool by_id = !p.id.empty();
+  const bool by_pair = !p.reading.empty() || !p.surface.empty();
+  if (by_id == by_pair) return std::nullopt;
+  if (by_pair && (p.reading.empty() || p.surface.empty() || p.store != "learning"))
+    return std::nullopt;
+  return p;
+}
+
+std::string BuildForgetLearningEntryResponse(const ForgetLearningEntryResponse& p) {
+  j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  o.emplace("removed", j::Value(p.removed));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ForgetLearningEntryResponse> ParseForgetLearningEntryResponse(
+    const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ForgetLearningEntryResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  p.removed = v->GetBool("removed").value_or(false);
+  p.error = v->GetString("error");
+  return p;
+}
+
+std::string BuildExportLearningDataRequest(const ExportLearningDataRequest& p) {
+  j::Object o;
+  o.emplace("stores", StoreListToJson(p.stores));
+  o.emplace("destination_path", j::Value(p.destination_path));
+  o.emplace("encrypt", j::Value(p.encrypt));
+  o.emplace("include_settings", j::Value(p.include_settings));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ExportLearningDataRequest> ParseExportLearningDataRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto stores = ReadStoreList(*v);
+  auto destination_path = ReadNonEmptyString(*v, "destination_path");
+  if (!stores || !destination_path) return std::nullopt;
+  ExportLearningDataRequest p;
+  p.stores = std::move(*stores);
+  p.destination_path = std::move(*destination_path);
+  // include_settings=true is decoded as sent; the Host answers it with
+  // kLearningDataErrorUnsupported rather than the codec dropping the request.
+  if (!ReadOptionalBool(*v, "encrypt", p.encrypt) ||
+      !ReadOptionalBool(*v, "include_settings", p.include_settings))
+    return std::nullopt;
+  return p;
+}
+
+std::string BuildExportLearningDataResponse(const ExportLearningDataResponse& p) {
+  j::Object o;
+  o.emplace("status", j::Value(p.status));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("file_size_bytes", j::Value(p.file_size_bytes));
+  o.emplace("encrypted", j::Value(p.encrypted));
+  j::Array items;
+  for (const auto& item : p.items) items.push_back(BackupItemToJson(item));
+  o.emplace("items", j::Value(std::move(items)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ExportLearningDataResponse> ParseExportLearningDataResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto status = v->GetString("status");
+  if (!status) return std::nullopt;
+  ExportLearningDataResponse p;
+  p.status = std::move(*status);
+  p.error = v->GetString("error");
+  p.file_size_bytes = v->GetUInt("file_size_bytes").value_or(0);
+  p.encrypted = v->GetBool("encrypted").value_or(true);
+  if (const auto* items = v->GetArray("items")) {
+    if (items->size() > kMaxLearningDataStores) return std::nullopt;
+    for (const auto& entry : *items) {
+      if (auto item = BackupItemFromJson(entry)) p.items.push_back(std::move(*item));
+    }
+  }
+  return p;
+}
+
+std::string BuildImportLearningDataRequest(const ImportLearningDataRequest& p) {
+  j::Object o;
+  o.emplace("source_path", j::Value(p.source_path));
+  o.emplace("conflict_resolution", j::Value(p.conflict_resolution));
+  o.emplace("stores", StoreListToJson(p.stores));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ImportLearningDataRequest> ParseImportLearningDataRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto source_path = ReadNonEmptyString(*v, "source_path");
+  auto stores = ReadStoreList(*v);
+  if (!source_path || !stores) return std::nullopt;
+  ImportLearningDataRequest p;
+  p.source_path = std::move(*source_path);
+  p.stores = std::move(*stores);
+  if (!ReadOptionalString(*v, "conflict_resolution", p.conflict_resolution)) return std::nullopt;
+  // An unknown policy must not fall through to one of the three real ones.
+  if (!IsKnownConflictResolution(p.conflict_resolution)) return std::nullopt;
+  return p;
+}
+
+std::string BuildImportLearningDataResponse(const ImportLearningDataResponse& p) {
+  j::Object o;
+  o.emplace("status", j::Value(p.status));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  o.emplace("imported_counts", CountsToJson(p.imported_counts));
+  o.emplace("skipped_counts", CountsToJson(p.skipped_counts));
+  o.emplace("conflict_counts", CountsToJson(p.conflict_counts));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ImportLearningDataResponse> ParseImportLearningDataResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto status = v->GetString("status");
+  if (!status) return std::nullopt;
+  ImportLearningDataResponse p;
+  p.status = std::move(*status);
+  p.error = v->GetString("error");
+  if (!CountsFromJson(*v, "imported_counts", p.imported_counts) ||
+      !CountsFromJson(*v, "skipped_counts", p.skipped_counts) ||
+      !CountsFromJson(*v, "conflict_counts", p.conflict_counts))
+    return std::nullopt;
   return p;
 }
 

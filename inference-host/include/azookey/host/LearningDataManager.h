@@ -75,6 +75,10 @@ std::string LearningEntryId(LearningDataStore store, std::string_view channel,
 LearningDataPage ListLearningEntries(const LearningDataStores& stores, LearningDataStore store,
                                      std::string_view query, size_t offset, size_t limit);
 
+// The entry with this id, whatever the page size; nullopt when none matches.
+std::optional<LearningDataEntry> FindLearningEntry(const LearningDataStores& stores,
+                                                   LearningDataStore store, std::string_view id);
+
 // Per store (spec section 4.2): learning zeroes the pair (dropped on the next
 // save), typo and user_dict remove the entry, auto_word marks it rejected so it
 // is not proposed again. Returns false when nothing matched.
@@ -102,6 +106,23 @@ struct LearningImportResult {
   // Keyed by archive item name ("learning", "user_dictionary", ...).
   std::map<std::string, learning::ImportCounts> counts;
 };
+
+// The two halves of ExportLearningData, so a caller can take the snapshot under
+// its store locks and write the archive (encryption, ZIP, disk) outside them.
+std::optional<std::vector<BackupItem>> CollectBackupItems(
+    const LearningDataStores& stores, const std::vector<LearningDataStore>& selected, bool encrypt,
+    BackupError* error);
+LearningExportResult WriteLearningBackup(std::vector<BackupItem> items,
+                                         const std::filesystem::path& destination, bool encrypt,
+                                         const learning::ByteCrypto& crypto,
+                                         const BackupManifest& meta);
+
+// The store half of ImportLearningData: parses the decrypted items, then merges
+// them only when all parse. ReadBackupArchive can run outside the locks.
+LearningImportResult ApplyImportedItems(const LearningDataStores& stores,
+                                        const std::vector<LearningDataStore>& selected,
+                                        std::vector<BackupItem> items,
+                                        learning::ImportConflictPolicy policy);
 
 // Reads and parses every selected item before changing any store, so a bad
 // archive leaves the stores untouched. A selected store absent from the

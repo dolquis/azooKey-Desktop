@@ -113,7 +113,8 @@ struct PrefixLookupResult {
 class LearningStore {
  public:
   // `path` is the M7 location (learning.tsv). Saves go to
-  // LearningStoreV2PathFor(path); the M7 file is only read, to migrate it.
+  // LearningStoreV2PathFor(path); the M7 file is read to migrate it and is
+  // rewritten only by RemoveFromLegacyFile.
   explicit LearningStore(std::filesystem::path path, const ByteCrypto* crypto = nullptr);
   virtual ~LearningStore() = default;
 
@@ -150,6 +151,15 @@ class LearningStore {
   // commit starts from scratch; Save leaves zeroed rows out of the file.
   // Returns false when the pair has no row.
   bool Forget(const std::string& reading, const std::string& surface);
+  // Removes the M7 rows of the pair from the M7 file, in the M7 format, so an
+  // older Host never shows a forgotten pair (learning-data-management-spec
+  // section 4.2). Every other line keeps its bytes. True when the file is
+  // missing or holds no such row (nothing is written); false when the file
+  // cannot be read or WriteProtectedText refuses or fails, leaving it as it was.
+  // Never touches the v2 file. `removed_rows`, when given, says whether a row
+  // was removed (a pair learned only before v2 has no v2 row to forget).
+  bool RemoveFromLegacyFile(const std::string& reading, const std::string& surface,
+                            bool* removed_rows = nullptr) const;
   void Prune(size_t max_records, double min_weight, uint64_t now_epoch_sec);
   // Decayed weight summed over the app rows of the pair.
   virtual double Score(const std::string& reading, const std::string& surface,

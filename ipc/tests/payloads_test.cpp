@@ -7,6 +7,7 @@
 #include <string>
 
 #include "azookey/ipc/Json.h"
+#include "azookey/ipc/Limits.h"
 #include "azookey/ipc/Messages.h"
 
 TEST(RewriterPayload, OptionalFieldsRoundTripAndOldPeersDefaultOff) {
@@ -691,6 +692,41 @@ TEST(PayloadsTest, CommitObservationPreservesLargeTimestamp) {
   EXPECT_EQ(parsed->timestamp_ms, 9007199254740993ULL);
 }
 
+// DEV-1184 M54 app rows: both commit requests carry the foreground app, and a
+// TIP that omits it (or predates the field) decodes as "unknown app".
+TEST(PayloadsTest, CommitRequestsCarryTheAppAndDefaultToUnknown) {
+  using namespace azookey::ipc;
+  CommitObservationRequest single;
+  single.reading = "にほんご";
+  single.chosen = {"日本語", "にほんご", 1.0, "user"};
+  EXPECT_FALSE(json::Parse(BuildCommitObservationRequest(single))->Find("app"));
+  const auto single_unknown = ParseCommitObservationRequest(BuildCommitObservationRequest(single));
+  ASSERT_TRUE(single_unknown);
+  EXPECT_FALSE(single_unknown->app.has_value());
+  single.app = AppIdentity{"notepad.exe", "Notepad"};
+  const auto single_known = ParseCommitObservationRequest(BuildCommitObservationRequest(single));
+  ASSERT_TRUE(single_known && single_known->app);
+  EXPECT_EQ(single_known->app->process_name, "notepad.exe");
+  EXPECT_EQ(single_known->app->window_class, "Notepad");
+
+  CommitSegmentsObservationRequest batch;
+  ObservedSegment segment;
+  segment.reading = "にほんご";
+  segment.chosen = {"日本語", "にほんご", 1.0, "user"};
+  batch.segments.push_back(segment);
+  EXPECT_FALSE(json::Parse(BuildCommitSegmentsObservationRequest(batch))->Find("app"));
+  const auto batch_unknown =
+      ParseCommitSegmentsObservationRequest(BuildCommitSegmentsObservationRequest(batch));
+  ASSERT_TRUE(batch_unknown);
+  EXPECT_FALSE(batch_unknown->app.has_value());
+  batch.app = AppIdentity{"Code.exe", "Chrome_WidgetWin_1"};
+  const auto batch_known =
+      ParseCommitSegmentsObservationRequest(BuildCommitSegmentsObservationRequest(batch));
+  ASSERT_TRUE(batch_known && batch_known->app);
+  EXPECT_EQ(batch_known->app->process_name, "Code.exe");
+  EXPECT_EQ(batch_known->app->window_class, "Chrome_WidgetWin_1");
+}
+
 TEST(PayloadsTest, UserWord) {
   azookey::ipc::AddUserWordRequest add;
   add.word = "azooKey";
@@ -1325,4 +1361,381 @@ TEST(PayloadsTest, QueryCandidatesCarriesRawRomajiAndTheEnglishFlag) {
   ASSERT_TRUE(parsed_response && parsed_response->candidates.size() == 2u);
   EXPECT_EQ(parsed_response->candidates[1].tag, 4u);
   EXPECT_EQ(parsed_response->candidates[1].reading, "apple");
+}
+
+// -------- M49 learning data management (DEV-1190) --------
+
+TEST(PayloadsTest, ListLearningEntriesRequestRoundTripsAndPinsTheWireKeys) {
+  using namespace azookey::ipc;
+  ListLearningEntriesRequest request;
+  request.store = "learning";
+  request.query = "nihon";
+  request.limit = 50;
+  request.offset = 10;
+  const auto json_text = BuildListLearningEntriesRequest(request);
+  EXPECT_EQ(json_text, R"({"limit":50,"offset":10,"query":"nihon","store":"learning"})");
+  const auto parsed = ParseListLearningEntriesRequest(json_text);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->store, "learning");
+  EXPECT_EQ(parsed->query, "nihon");
+  EXPECT_EQ(parsed->limit, 50u);
+  EXPECT_EQ(parsed->offset, 10u);
+
+  const auto defaults = ParseListLearningEntriesRequest(R"({"store":"typo"})");
+  ASSERT_TRUE(defaults);
+  EXPECT_TRUE(defaults->query.empty());
+  EXPECT_EQ(defaults->limit, 100u);
+  EXPECT_EQ(defaults->offset, 0u);
+
+  // Section 4.1: the page size is capped at the ceiling rather than rejected.
+  const auto capped = ParseListLearningEntriesRequest(R"({"store":"learning","limit":100000})");
+  ASSERT_TRUE(capped);
+  EXPECT_EQ(capped->limit, kMaxLearningEntries);
+}
+
+TEST(PayloadsTest, ListLearningEntriesRequestRejectsMissingStoreAndWrongTypes) {
+  using namespace azookey::ipc;
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":""})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":1})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":"learning","query":7})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":"learning","limit":"100"})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":"learning","limit":-1})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":"learning","offset":-1})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":"learning","offset":true})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest(R"({"store":"learning","offset":4294967296})"));
+  EXPECT_FALSE(ParseListLearningEntriesRequest("[]"));
+}
+
+TEST(PayloadsTest, ListLearningEntriesResponseRoundTripsEntries) {
+  using namespace azookey::ipc;
+  ListLearningEntriesResponse response;
+  response.total = 1234;
+  LearningEntryField kana;
+  kana.id = "0123456789abcdef";
+  kana.channel = "kana";
+  kana.reading = "にほんご";
+  kana.surface = "日本語";
+  kana.weight = 4.5;
+  kana.last_updated_epoch_sec = 1780000000;
+  kana.tags = {"notepad.exe"};
+  kana.metadata = {{"commit_count", "3"}, {"reject_count", "0"}};
+  LearningEntryField word;
+  word.id = "fedcba9876543210";
+  word.reading = "あずき";
+  word.surface = "azooKey";
+  response.entries = {kana, word};
+
+  const auto json_text = BuildListLearningEntriesResponse(response);
+  const auto wire = json::Parse(json_text);
+  ASSERT_TRUE(wire);
+  // ok is emitted only on failure, error only when set, channel only when set.
+  EXPECT_FALSE(wire->Find("ok"));
+  EXPECT_FALSE(wire->Find("error"));
+  const auto* entries = wire->GetArray("entries");
+  ASSERT_TRUE(entries && entries->size() == 2u);
+  EXPECT_TRUE((*entries)[0].Find("channel"));
+  EXPECT_FALSE((*entries)[1].Find("channel"));
+  for (const auto* key :
+       {"id", "reading", "surface", "weight", "last_updated_epoch_sec", "tags", "metadata"}) {
+    EXPECT_TRUE((*entries)[0].Find(key)) << key;
+  }
+
+  const auto parsed = ParseListLearningEntriesResponse(json_text);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_FALSE(parsed->error.has_value());
+  EXPECT_EQ(parsed->total, 1234u);
+  ASSERT_EQ(parsed->entries.size(), 2u);
+  EXPECT_EQ(parsed->entries[0].id, "0123456789abcdef");
+  EXPECT_EQ(parsed->entries[0].channel, "kana");
+  EXPECT_EQ(parsed->entries[0].reading, "にほんご");
+  EXPECT_EQ(parsed->entries[0].surface, "日本語");
+  EXPECT_DOUBLE_EQ(parsed->entries[0].weight, 4.5);
+  EXPECT_EQ(parsed->entries[0].last_updated_epoch_sec, 1780000000u);
+  EXPECT_EQ(parsed->entries[0].tags, std::vector<std::string>{"notepad.exe"});
+  EXPECT_EQ(parsed->entries[0].metadata.at("commit_count"), "3");
+  EXPECT_EQ(parsed->entries[0].metadata.size(), 2u);
+  EXPECT_TRUE(parsed->entries[1].channel.empty());
+  EXPECT_TRUE(parsed->entries[1].tags.empty());
+
+  ListLearningEntriesResponse failed;
+  failed.ok = false;
+  failed.error = std::string(kLearningDataErrorStoreUnavailable);
+  const auto parsed_failed =
+      ParseListLearningEntriesResponse(BuildListLearningEntriesResponse(failed));
+  ASSERT_TRUE(parsed_failed);
+  EXPECT_FALSE(parsed_failed->ok);
+  EXPECT_EQ(parsed_failed->error, "store_unavailable");
+  EXPECT_TRUE(parsed_failed->entries.empty());
+}
+
+TEST(PayloadsTest, ListLearningEntriesResponseSkipsMalformedEntriesAndBoundsSizes) {
+  using namespace azookey::ipc;
+  // Entries missing id / reading / surface are skipped; non-string tags and
+  // metadata values are dropped one by one.
+  const auto lenient = ParseListLearningEntriesResponse(
+      R"({"total":3,"entries":[{"reading":"a","surface":"b"},7,)"
+      R"({"id":"x","reading":"a","surface":"b","tags":["t",1],"metadata":{"k":"v","n":2}}]})");
+  ASSERT_TRUE(lenient);
+  ASSERT_EQ(lenient->entries.size(), 1u);
+  EXPECT_EQ(lenient->entries[0].tags, std::vector<std::string>{"t"});
+  EXPECT_EQ(lenient->entries[0].metadata.size(), 1u);
+
+  // More entries than one page may hold rejects the whole response.
+  ListLearningEntriesResponse oversized;
+  LearningEntryField entry;
+  entry.id = "x";
+  entry.reading = "a";
+  entry.surface = "b";
+  oversized.entries.assign(kMaxLearningEntries + 1, entry);
+  EXPECT_FALSE(ParseListLearningEntriesResponse(BuildListLearningEntriesResponse(oversized)));
+  oversized.entries.resize(kMaxLearningEntries);
+  const auto full_page =
+      ParseListLearningEntriesResponse(BuildListLearningEntriesResponse(oversized));
+  ASSERT_TRUE(full_page);
+  EXPECT_EQ(full_page->entries.size(), kMaxLearningEntries);
+
+  // An entry over the tag or metadata cap is malformed and skipped.
+  ListLearningEntriesResponse heavy;
+  LearningEntryField many_tags = entry;
+  many_tags.tags.assign(kMaxLearningEntryTags + 1, "t");
+  LearningEntryField many_keys = entry;
+  for (std::size_t i = 0; i <= kMaxLearningEntryMetadata; ++i) {
+    many_keys.metadata.emplace("k" + std::to_string(i), "v");
+  }
+  heavy.entries = {many_tags, many_keys, entry};
+  const auto parsed_heavy =
+      ParseListLearningEntriesResponse(BuildListLearningEntriesResponse(heavy));
+  ASSERT_TRUE(parsed_heavy);
+  EXPECT_EQ(parsed_heavy->entries.size(), 1u);
+}
+
+TEST(PayloadsTest, ForgetLearningEntryRoundTripsBothForms) {
+  using namespace azookey::ipc;
+  ForgetLearningEntryRequest by_id;
+  by_id.store = "user_dict";
+  by_id.id = "0123456789abcdef";
+  EXPECT_EQ(BuildForgetLearningEntryRequest(by_id),
+            R"({"id":"0123456789abcdef","store":"user_dict"})");
+  const auto parsed_id = ParseForgetLearningEntryRequest(BuildForgetLearningEntryRequest(by_id));
+  ASSERT_TRUE(parsed_id);
+  EXPECT_EQ(parsed_id->store, "user_dict");
+  EXPECT_EQ(parsed_id->id, "0123456789abcdef");
+  EXPECT_TRUE(parsed_id->reading.empty());
+  EXPECT_TRUE(parsed_id->surface.empty());
+
+  ForgetLearningEntryRequest by_pair;
+  by_pair.store = "learning";
+  by_pair.reading = "にほんご";
+  by_pair.surface = "日本語";
+  const auto parsed_pair =
+      ParseForgetLearningEntryRequest(BuildForgetLearningEntryRequest(by_pair));
+  ASSERT_TRUE(parsed_pair);
+  EXPECT_TRUE(parsed_pair->id.empty());
+  EXPECT_EQ(parsed_pair->reading, "にほんご");
+  EXPECT_EQ(parsed_pair->surface, "日本語");
+
+  ForgetLearningEntryResponse response;
+  response.removed = true;
+  EXPECT_EQ(BuildForgetLearningEntryResponse(response), R"({"removed":true})");
+  const auto parsed = ParseForgetLearningEntryResponse(BuildForgetLearningEntryResponse(response));
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->ok);
+  EXPECT_TRUE(parsed->removed);
+  EXPECT_FALSE(parsed->error.has_value());
+
+  ForgetLearningEntryResponse failed;
+  failed.ok = false;
+  failed.error = std::string(kLearningDataErrorSaveFailed);
+  const auto parsed_failed =
+      ParseForgetLearningEntryResponse(BuildForgetLearningEntryResponse(failed));
+  ASSERT_TRUE(parsed_failed);
+  EXPECT_FALSE(parsed_failed->ok);
+  EXPECT_FALSE(parsed_failed->removed);
+  EXPECT_EQ(parsed_failed->error, "save_failed");
+  EXPECT_FALSE(ParseForgetLearningEntryResponse("[]"));
+}
+
+TEST(PayloadsTest, ForgetLearningEntryRejectsAmbiguousOrMalformedForms) {
+  using namespace azookey::ipc;
+  // store is required and non-empty.
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"id":"x"})"));
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"","id":"x"})"));
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":1,"id":"x"})"));
+  // Neither form, or both forms at once.
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"learning"})"));
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"learning","id":""})"));
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(
+      R"({"store":"learning","id":"x","reading":"a","surface":"b"})"));
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"learning","id":"x","reading":"a"})"));
+  // Half a pair.
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"learning","reading":"a"})"));
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"learning","surface":"b"})"));
+  // The pair form is only for the learning store.
+  EXPECT_FALSE(
+      ParseForgetLearningEntryRequest(R"({"store":"user_dict","reading":"a","surface":"b"})"));
+  // Wrong types.
+  EXPECT_FALSE(ParseForgetLearningEntryRequest(R"({"store":"learning","id":7})"));
+  EXPECT_FALSE(
+      ParseForgetLearningEntryRequest(R"({"store":"learning","reading":1,"surface":"b"})"));
+  EXPECT_FALSE(
+      ParseForgetLearningEntryRequest(R"({"store":"learning","reading":"a","surface":null})"));
+}
+
+TEST(PayloadsTest, ExportLearningDataRoundTripsAndAppliesDefaults) {
+  using namespace azookey::ipc;
+  ExportLearningDataRequest request;
+  request.stores = {"learning", "user_dict"};
+  request.destination_path = "C:/Users/me/Desktop/azookey-backup.zip";
+  request.encrypt = false;
+  request.include_settings = true;
+  const auto json_text = BuildExportLearningDataRequest(request);
+  EXPECT_EQ(json_text,
+            R"({"destination_path":"C:/Users/me/Desktop/azookey-backup.zip","encrypt":false,)"
+            R"("include_settings":true,"stores":["learning","user_dict"]})");
+  const auto parsed = ParseExportLearningDataRequest(json_text);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->stores, (std::vector<std::string>{"learning", "user_dict"}));
+  EXPECT_EQ(parsed->destination_path, "C:/Users/me/Desktop/azookey-backup.zip");
+  EXPECT_FALSE(parsed->encrypt);
+  // Decoded as sent; the Host is the one that answers it with "unsupported".
+  EXPECT_TRUE(parsed->include_settings);
+
+  const auto defaults =
+      ParseExportLearningDataRequest(R"({"stores":["typo"],"destination_path":"C:/b.zip"})");
+  ASSERT_TRUE(defaults);
+  EXPECT_TRUE(defaults->encrypt);
+  EXPECT_FALSE(defaults->include_settings);
+
+  ExportLearningDataResponse response;
+  response.status = "success";
+  response.file_size_bytes = 12345;
+  response.encrypted = true;
+  response.items = {{"learning", "learning.tsv.enc", 1234, "ab12"},
+                    {"user_dictionary", "user_dict.json.enc", 42, "cd34"}};
+  const auto parsed_response =
+      ParseExportLearningDataResponse(BuildExportLearningDataResponse(response));
+  ASSERT_TRUE(parsed_response);
+  EXPECT_EQ(parsed_response->status, "success");
+  EXPECT_FALSE(parsed_response->error.has_value());
+  EXPECT_EQ(parsed_response->file_size_bytes, 12345u);
+  EXPECT_TRUE(parsed_response->encrypted);
+  ASSERT_EQ(parsed_response->items.size(), 2u);
+  EXPECT_EQ(parsed_response->items[1].name, "user_dictionary");
+  EXPECT_EQ(parsed_response->items[1].file, "user_dict.json.enc");
+  EXPECT_EQ(parsed_response->items[1].count, 42u);
+  EXPECT_EQ(parsed_response->items[1].sha256, "cd34");
+
+  ExportLearningDataResponse failed;
+  failed.error = "invalid_path";
+  const auto parsed_failed =
+      ParseExportLearningDataResponse(BuildExportLearningDataResponse(failed));
+  ASSERT_TRUE(parsed_failed);
+  EXPECT_EQ(parsed_failed->status, "error");
+  EXPECT_EQ(parsed_failed->error, "invalid_path");
+  EXPECT_TRUE(parsed_failed->items.empty());
+}
+
+TEST(PayloadsTest, ExportLearningDataRejectsMalformedRequestsAndResponses) {
+  using namespace azookey::ipc;
+  const std::string path = R"("destination_path":"C:/b.zip")";
+  EXPECT_FALSE(ParseExportLearningDataRequest("{" + path + "}"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":[],)" + path + "}"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":"learning",)" + path + "}"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":["learning",1],)" + path + "}"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":[""],)" + path + "}"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":["learning"]})"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":["learning"],"destination_path":""})"));
+  EXPECT_FALSE(
+      ParseExportLearningDataRequest(R"({"stores":["learning"],"encrypt":"no",)" + path + "}"));
+  EXPECT_FALSE(ParseExportLearningDataRequest(R"({"stores":["learning"],"include_settings":1,)" +
+                                              path + "}"));
+  ExportLearningDataRequest too_many;
+  too_many.stores.assign(kMaxLearningDataStores + 1, "learning");
+  too_many.destination_path = "C:/b.zip";
+  EXPECT_FALSE(ParseExportLearningDataRequest(BuildExportLearningDataRequest(too_many)));
+
+  // status is required; more items than the cap reject the response.
+  EXPECT_FALSE(ParseExportLearningDataResponse(R"({"file_size_bytes":1})"));
+  ExportLearningDataResponse oversized;
+  oversized.status = "success";
+  oversized.items.assign(kMaxLearningDataStores + 1, {"learning", "f", 1, "h"});
+  EXPECT_FALSE(ParseExportLearningDataResponse(BuildExportLearningDataResponse(oversized)));
+}
+
+TEST(PayloadsTest, ImportLearningDataRoundTripsAndAppliesDefaults) {
+  using namespace azookey::ipc;
+  ImportLearningDataRequest request;
+  request.source_path = "C:/b.zip";
+  request.conflict_resolution = "keep_both";
+  request.stores = {"learning", "user_dict"};
+  const auto json_text = BuildImportLearningDataRequest(request);
+  EXPECT_EQ(json_text, R"({"conflict_resolution":"keep_both","source_path":"C:/b.zip",)"
+                       R"("stores":["learning","user_dict"]})");
+  const auto parsed = ParseImportLearningDataRequest(json_text);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->source_path, "C:/b.zip");
+  EXPECT_EQ(parsed->conflict_resolution, "keep_both");
+  EXPECT_EQ(parsed->stores, (std::vector<std::string>{"learning", "user_dict"}));
+
+  const auto defaults =
+      ParseImportLearningDataRequest(R"({"source_path":"C:/b.zip","stores":["learning"]})");
+  ASSERT_TRUE(defaults);
+  EXPECT_EQ(defaults->conflict_resolution, "merge");
+  EXPECT_TRUE(ParseImportLearningDataRequest(
+      R"({"source_path":"C:/b.zip","stores":["learning"],"conflict_resolution":"overwrite"})"));
+
+  ImportLearningDataResponse response;
+  response.status = "success";
+  response.imported_counts = {{"learning", 1234}, {"user_dictionary", 42}};
+  response.skipped_counts = {{"learning", 5}};
+  EXPECT_EQ(BuildImportLearningDataResponse(response),
+            R"({"conflict_counts":{},"imported_counts":{"learning":1234,"user_dictionary":42},)"
+            R"("skipped_counts":{"learning":5},"status":"success"})");
+  const auto parsed_response =
+      ParseImportLearningDataResponse(BuildImportLearningDataResponse(response));
+  ASSERT_TRUE(parsed_response);
+  EXPECT_EQ(parsed_response->status, "success");
+  EXPECT_FALSE(parsed_response->error.has_value());
+  EXPECT_EQ(parsed_response->imported_counts, response.imported_counts);
+  EXPECT_EQ(parsed_response->skipped_counts, response.skipped_counts);
+  EXPECT_TRUE(parsed_response->conflict_counts.empty());
+
+  ImportLearningDataResponse failed;
+  failed.error = "decrypt_failed";
+  const auto parsed_failed =
+      ParseImportLearningDataResponse(BuildImportLearningDataResponse(failed));
+  ASSERT_TRUE(parsed_failed);
+  EXPECT_EQ(parsed_failed->status, "error");
+  EXPECT_EQ(parsed_failed->error, "decrypt_failed");
+}
+
+TEST(PayloadsTest, ImportLearningDataRejectsMalformedRequestsAndResponses) {
+  using namespace azookey::ipc;
+  EXPECT_FALSE(ParseImportLearningDataRequest(R"({"stores":["learning"]})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(R"({"source_path":"","stores":["learning"]})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(R"({"source_path":1,"stores":["learning"]})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(R"({"source_path":"C:/b.zip"})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(R"({"source_path":"C:/b.zip","stores":[]})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(R"({"source_path":"C:/b.zip","stores":[1]})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(
+      R"({"source_path":"C:/b.zip","stores":["learning"],"conflict_resolution":"replace"})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(
+      R"({"source_path":"C:/b.zip","stores":["learning"],"conflict_resolution":""})"));
+  EXPECT_FALSE(ParseImportLearningDataRequest(
+      R"({"source_path":"C:/b.zip","stores":["learning"],"conflict_resolution":1})"));
+
+  // status is required; non-integer counts are dropped; an oversized map rejects.
+  EXPECT_FALSE(ParseImportLearningDataResponse(R"({"imported_counts":{}})"));
+  const auto lenient = ParseImportLearningDataResponse(
+      R"({"status":"success","imported_counts":{"learning":3,"typo":-1,"x":"7"}})");
+  ASSERT_TRUE(lenient);
+  EXPECT_EQ(lenient->imported_counts, (std::map<std::string, uint64_t>{{"learning", 3}}));
+  ImportLearningDataResponse oversized;
+  oversized.status = "success";
+  for (std::size_t i = 0; i <= kMaxLearningDataStores; ++i) {
+    oversized.conflict_counts.emplace("s" + std::to_string(i), 1);
+  }
+  EXPECT_FALSE(ParseImportLearningDataResponse(BuildImportLearningDataResponse(oversized)));
 }

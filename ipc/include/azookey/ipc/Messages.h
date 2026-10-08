@@ -33,6 +33,11 @@ enum class MessageType {
   // M45 model management (DEV-1191).
   ListModels,
   BenchmarkModel,
+  // M49 learning data management (DEV-1190).
+  ListLearningEntries,
+  ForgetLearningEntry,
+  ExportLearningData,
+  ImportLearningData,
   Unknown,
 };
 

@@ -42,6 +42,14 @@ std::string TypeToString(MessageType type) {
       return "ListModels";
     case MessageType::BenchmarkModel:
       return "BenchmarkModel";
+    case MessageType::ListLearningEntries:
+      return "ListLearningEntries";
+    case MessageType::ForgetLearningEntry:
+      return "ForgetLearningEntry";
+    case MessageType::ExportLearningData:
+      return "ExportLearningData";
+    case MessageType::ImportLearningData:
+      return "ImportLearningData";
     default: return "Unknown";
   }
 }
@@ -71,6 +79,10 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "ReverseConvert") return MessageType::ReverseConvert;
   if (value == "ListModels") return MessageType::ListModels;
   if (value == "BenchmarkModel") return MessageType::BenchmarkModel;
+  if (value == "ListLearningEntries") return MessageType::ListLearningEntries;
+  if (value == "ForgetLearningEntry") return MessageType::ForgetLearningEntry;
+  if (value == "ExportLearningData") return MessageType::ExportLearningData;
+  if (value == "ImportLearningData") return MessageType::ImportLearningData;
   return MessageType::Unknown;
 }
 

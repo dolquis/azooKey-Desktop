@@ -742,9 +742,9 @@ int main(int argc, char** argv) {
         user_paths->english_learning_path}) {
     for (const auto& candidate : {azookey::learning::EncryptedPathFor(base), base}) {
       std::error_code english_path_error;
-      english_file_existed = english_file_existed ||
-                             (std::filesystem::exists(candidate, english_path_error) &&
-                              !english_path_error);
+      english_file_existed =
+          english_file_existed ||
+          (std::filesystem::exists(candidate, english_path_error) && !english_path_error);
     }
   }
   azookey::learning::LearningStore english_store(user_paths->english_learning_path);

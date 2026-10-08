@@ -128,7 +128,7 @@ R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）�
 
 ### 3.2 検出情報
 
-各モデルについて以下のメタデータを `ModelCatalogEntry` として保持する:
+各モデルについて以下のメタデータを `LocalModelEntry`（`inference-host/include/azookey/host/ModelScanner.h`）として保持する。§3.1.1 の宣言的カタログの `ModelCatalogEntry` とは別の型である:
 
 | フィールド | 内容 | 取得元 |
 |---|---|---|
@@ -148,13 +148,36 @@ R2 モデルが存在し前提（Win11 24H2+ / EP 取得・登録可、§4.6）�
 
 ### 3.3 形式別検証
 
+検証で `valid = false` になったエントリは、`last_error` に次の固定カテゴリを入れる
+（ファイルの中身やパスは入れない）。
+
+| 形式 | カテゴリ | 条件 |
+|---|---|---|
+| R1 | `magic_mismatch` | 先頭 4 バイトが `GGUF` でない |
+| R1 | `truncated_header` | magic・version・件数を読む前にファイルが終わる（空ファイルを含む） |
+| R1 | `unsupported_version` | version が 2 / 3 以外（v1 は llama.cpp が読めない） |
+| R1 | `invalid_header` | tensor 数が 0、または tensor 数・key-value 数が 1,000,000 を超える |
+| R1 | `missing_metadata` | 先頭 4 KiB の中で key-value を全件読み切り、`general.architecture` が無い |
+| R1 | `unreadable` | 通常ファイルでない、開けない、またはサイズがあるのに 1 バイトも読めない |
+| R2 | `missing_genai_config` | `genai_config.json` が無い、読めない、または 1 MiB を超える |
+| R2 | `invalid_genai_config` | JSON として読めない、`model.decoder` が無い、参照ファイル名が 1 つも無い |
+| R2 | `missing_model_file` | 参照ファイルが無い、またはディレクトリ外（絶対パスや `..`）を指す |
+| R2 | `missing_tokenizer` | `tokenizer.json` が無い |
+
+R1 は §8 のとおり先頭 4 KiB だけを読む。key-value 部が 4 KiB に収まらない場合は、
+読めた範囲で metadata を埋め、欠落とはみなさない。`model_family` は
+`general.architecture`、`quantization` は `general.file_type`（llama.cpp の `LLAMA_FTYPE_*`
+名）、`n_params` は `general.parameter_count` から取る。ファイル末端の切詰めは
+ロード時（§5.3）に検出する。
+
 **R1（GGUF）**: M8 で実装した GGUF magic / version 検証を再利用する。invalid GGUF は
 `valid = false`（旧 `gguf_valid`）として一覧に残し、ロード対象から除外する。
 
 不正検出パターン:
 - magic mismatch（`GGUF` 以外）
 - version 不一致（サポート範囲外）
-- ファイル末端切詰め（claimed size > actual size）
+- ファイル末端切詰め（claimed size > actual size）。ListModels は先頭 4 KiB しか読まないため、
+  ロード時（§5.3）に検出する
 - metadata 必須キー欠落
 
 **R2（ONNX Runtime GenAI）**: ディレクトリに `genai_config.json` が存在すること、
@@ -239,6 +262,26 @@ Response（host → client、同一 `request_id` / `trace_id` を返す）:
 }
 ```
 
+`ListModels` の契約（実装の正典は `ipc/include/azookey/ipc/Payloads.h`）:
+
+- `directory` は任意。省略時は Host の models ディレクトリ（`UserDataPaths::models_dir`）を
+  走査する。指定する場合は先頭の `%LOCALAPPDATA%` を展開し、models ディレクトリ自身か
+  その配下でなければならない。それ以外は `ok: false` / `error: "directory_outside_models_root"`
+  を返す。
+- `compute_sha256: true` のとき、有効な R1 ファイルの `sha256`（小文字 16 進）を計算する
+  （Windows のみ。R2 は計算しない）。
+- 各エントリは `path`・`file_name`・`format`・`size_bytes`・`valid`・`metadata`・
+  `last_load_status` を必ず持つ。R1 には後方互換の `gguf_valid` も載せる。`metadata` の
+  各フィールドと `sha256`・`last_error` は、値が無いとき省略する。
+- `recommended_backend` は §5 の自動選択（DEV-1192）が実装されるまで送らない。
+- `last_load_status` は、稼働中のエンジンが同じファイルをロード済みなら `success`、
+  ロードに失敗していれば `failed`（`last_error: "load_failed"`）、それ以外は `not_loaded`。
+- 候補を `path` 順に並べてから先頭 256 エントリで打ち切る。シンボリックリンクはたどらない。
+  UTF-8 に変換できない名前のエントリは一覧から除く。
+- `ok: false` のときの `error` は `invalid_request`（payload 不正）、
+  `models_dir_unavailable`（Host に models ディレクトリが無い）、`directory_outside_models_root`、
+  `scan_failed`、`not authenticated`（Handshake 前）のいずれか。
+
 ### 4.2 BenchmarkModel
 
 Request（client → host）:
@@ -286,18 +329,44 @@ Response（host → client）:
 （別 InferenceEngine + 別 model handle）で実行し、ライブの
 `QueryCandidates` は本番 backend に routing し続ける。M24 完了済み環境
 では Heavy レーンスケジューラ上に独立 worker として配置し、M24 未完了
-環境では M45 専用 worker thread で逐次処理する（どちらの場合も
+環境では、要求を受けた接続のスレッドで同期実行する（どちらの場合も
 ライブクエリ用 worker とは別 thread / 別 backend ハンドルを保つ）。
 対象 backend のロード / iteration 実行 / unload が完了するまでベンチ用
 runtime のみを更新し、既存 backend の差し替えは行わない。これにより
 load/unload とライブクエリの race を構造的に排除する。
 
+`BenchmarkModel` の契約:
+
+- 要求を受けた接続のスレッドで同期実行し、ベンチ用の別 `InferenceEngine` に
+  ロードする。ほかの接続のライブクエリは稼働中のエンジンで処理を続ける。
+- Host プロセス全体で同時に 1 本だけ実行する。実行中に届いた要求には
+  `error: "busy"` を返す。
+- `path` は ListModels と同じく models ディレクトリ配下に限る。
+- 応答の `backend` は実際にロードされた backend。CUDA が未リンク、または Vulkan の
+  初期化に失敗して CPU で動いた場合は `cpu` を返す。
+- `backend` は `cpu` / `cuda` / `vulkan`。`cases` は読み（かな）の配列で、省略時は
+  Host 既定の 4 件を使う。1 iteration は `cases` を順に 1 件ずつ `QueryCandidates` する。
+  `warmup` 回は計測しない。
+- 上限: `iterations` は 1〜1000、`warmup` は 0〜100、`cases` は 32 件・各 256 バイトまで。
+- `status` は `success` / `timeout` / `error`。
+  - `timeout`: ロードを含めて 60 秒（§8）を超えた。判定は iteration の合間に行うため、
+    ロード中と 1 回の `QueryCandidates` の途中では打ち切らない。それまでの計測値と
+    `iterations_completed` を返す。
+  - `error`: `error` に固定カテゴリを入れる。`invalid_request`（上限外・空の case）、
+    `unsupported_backend`、`invalid_model`（§3.3 の R1 検証に通らない。R2 を含む）、
+    `path_outside_models_root`、`models_dir_unavailable`、`busy`、`load_failed`、
+    `safe_mode`、`benchmark_failed`、`not authenticated`（Handshake 前）。
+- `vram_mb` はデバイスメモリを計測できない backend では `null`。`rss_mb` は Host
+  プロセスの working set（ライブエンジンを含む）。
+- p50 / p95 / p99 は計測サンプルの nearest-rank。
+
 ### 4.3 IPC 追加方針
 
 `MessageType` enum の `Unknown` sentinel の**前**に `ListModels` / `BenchmarkModel`
-を追加する（enum は 13 named 型 + `Unknown` = 14 entries。末尾の `Unknown` の後ろに
-追加しない）。これにより M40 の互換性ルールを満たす。
-`Handshake` 時の capabilities で client が対応版本を判別する。
+を追加する（末尾の `Unknown` の後ろに追加しない）。これにより M40 の互換性ルールを満たす。
+wire 上の型は文字列なので、enum の数値位置は互換性に影響しない。
+Host は `Handshake` 応答の capabilities で `list_models` / `benchmark_model` を広告し、
+client はそれを見て対応版を判別する。
 
 ## 5. Backend 自動選択
 
@@ -358,7 +427,7 @@ device 名表示などの補助に留める。
 
 1. ログに `result=error`、`error_code=business`、`reason=backend_load_failed` を記録
    （`error_code` はカテゴリ、詳細理由は `reason` に置く。`docs/dev-infrastructure-spec.md` §7.4）
-2. `last_error` を `ModelCatalogEntry` に保存
+2. `last_error` を `LocalModelEntry` に保存
 3. CPU backend で再試行
 4. CPU も失敗した場合は `SimpleConverter` fallback（M47
    `DegradedModel` 状態）
@@ -447,8 +516,8 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 - `ListModels` は ファイル列挙 + GGUF magic 読み（先頭 4 KB）のみで
   完結させる。完全 parse は明示的 `compute_sha256 = true` または ロード
   試行時のみ。
-- `BenchmarkModel` の実行は最大 60 秒。timeout 時は `status = timeout` を
-  返す。
+- `BenchmarkModel` は 60 秒を超えたら次の iteration に進まず打ち切り、
+  `status = timeout` を返す（ロード中は中断しない。§4.2）。
 - Host 占有中の表示は M47 `Recovering` 状態として候補ウィンドウに通知。
 
 ## 9. テスト
@@ -459,7 +528,10 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
   Range レジューム、Range 無視時と `416` 後の全量再取得、サイズ上限超過時の書き込み中断、
   ネットワーク不通時の既存ファイル保持を検証する
 - integration: 不正 GGUF・サイズ不一致・metadata 欠落で fallback する
-- snapshot: `ListModels` / `BenchmarkModel` の JSON schema 固定
+- snapshot: `ListModels` / `BenchmarkModel` の JSON schema 固定。Host の
+  `azookey_inference_host models list [--dir <path>] [--sha256] --json` と
+  `models bench --path <gguf> [--backend ...] [--iterations N] [--warmup N] [--case <読み>]... --json`
+  は IPC 応答 payload と同じ JSON を 1 行で出す
 - e2e（M50 と連携）: GUI 上でモデル切替 → 再起動 → 自動ロード
 
 ## 10. M45 受け入れ条件

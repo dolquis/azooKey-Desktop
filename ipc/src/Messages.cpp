@@ -38,6 +38,10 @@ std::string TypeToString(MessageType type) {
       return "ResolveNewWord";
     case MessageType::ReverseConvert:
       return "ReverseConvert";
+    case MessageType::ListModels:
+      return "ListModels";
+    case MessageType::BenchmarkModel:
+      return "BenchmarkModel";
     default: return "Unknown";
   }
 }
@@ -65,6 +69,8 @@ MessageType TypeFromString(const std::string& value) {
   if (value == "ListNewWordCandidates") return MessageType::ListNewWordCandidates;
   if (value == "ResolveNewWord") return MessageType::ResolveNewWord;
   if (value == "ReverseConvert") return MessageType::ReverseConvert;
+  if (value == "ListModels") return MessageType::ListModels;
+  if (value == "BenchmarkModel") return MessageType::BenchmarkModel;
   return MessageType::Unknown;
 }
 

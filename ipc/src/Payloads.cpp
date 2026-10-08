@@ -1043,4 +1043,168 @@ std::optional<ResolveNewWordResponse> ParseResolveNewWordResponse(const std::str
   return p;
 }
 
+// -------- ListModels / BenchmarkModel (DEV-1191) --------
+
+namespace {
+
+j::Value ListedModelToJson(const ListedModel& m) {
+  j::Object o;
+  o.emplace("path", j::Value(m.path));
+  o.emplace("file_name", j::Value(m.file_name));
+  o.emplace("format", j::Value(m.format));
+  o.emplace("size_bytes", j::Value(m.size_bytes));
+  o.emplace("valid", j::Value(m.valid));
+  // Section 3.2: gguf_valid stays as the R1 alias of valid.
+  if (m.format == "gguf") o.emplace("gguf_valid", j::Value(m.valid));
+  j::Object metadata;
+  if (!m.metadata.model_family.empty())
+    metadata.emplace("model_family", j::Value(m.metadata.model_family));
+  if (!m.metadata.quantization.empty())
+    metadata.emplace("quantization", j::Value(m.metadata.quantization));
+  if (m.metadata.n_params != 0) metadata.emplace("n_params", j::Value(m.metadata.n_params));
+  o.emplace("metadata", j::Value(std::move(metadata)));
+  if (!m.sha256.empty()) o.emplace("sha256", j::Value(m.sha256));
+  o.emplace("last_load_status", j::Value(m.last_load_status));
+  if (!m.last_error.empty()) o.emplace("last_error", j::Value(m.last_error));
+  return j::Value(std::move(o));
+}
+
+std::optional<ListedModel> ListedModelFromJson(const j::Value& v) {
+  if (!v.IsObject()) return std::nullopt;
+  auto path = v.GetString("path");
+  auto format = v.GetString("format");
+  if (!path || !format) return std::nullopt;
+  ListedModel m;
+  m.path = std::move(*path);
+  m.format = std::move(*format);
+  m.file_name = v.GetString("file_name").value_or(std::string());
+  m.size_bytes = v.GetUInt("size_bytes").value_or(0);
+  m.valid = v.GetBool("valid").value_or(v.GetBool("gguf_valid").value_or(false));
+  if (const auto* metadata = v.FindObject("metadata")) {
+    const j::Value md(*metadata);
+    m.metadata.model_family = md.GetString("model_family").value_or(std::string());
+    m.metadata.quantization = md.GetString("quantization").value_or(std::string());
+    m.metadata.n_params = md.GetUInt("n_params").value_or(0);
+  }
+  m.sha256 = v.GetString("sha256").value_or(std::string());
+  m.last_load_status = v.GetString("last_load_status").value_or("not_loaded");
+  m.last_error = v.GetString("last_error").value_or(std::string());
+  return m;
+}
+
+}  // namespace
+
+std::string BuildListModelsRequest(const ListModelsRequest& p) {
+  j::Object o;
+  if (!p.directory.empty()) o.emplace("directory", j::Value(p.directory));
+  o.emplace("compute_sha256", j::Value(p.compute_sha256));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ListModelsRequest> ParseListModelsRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  ListModelsRequest p;
+  if (const auto* directory = v->Find("directory")) {
+    if (!directory->IsString()) return std::nullopt;
+    p.directory = directory->AsString();
+  }
+  p.compute_sha256 = v->GetBool("compute_sha256").value_or(false);
+  return p;
+}
+
+std::string BuildListModelsResponse(const ListModelsResponse& p) {
+  j::Object o;
+  if (!p.ok) o.emplace("ok", j::Value(false));
+  if (p.error) o.emplace("error", j::Value(*p.error));
+  j::Array models;
+  for (const auto& m : p.models) models.push_back(ListedModelToJson(m));
+  o.emplace("models", j::Value(std::move(models)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<ListModelsResponse> ParseListModelsResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  const auto* models = v->GetArray("models");
+  if (!models) return std::nullopt;
+  ListModelsResponse p;
+  p.ok = v->GetBool("ok").value_or(true);
+  if (auto error = v->GetString("error")) p.error = std::move(*error);
+  for (const auto& entry : *models) {
+    if (auto m = ListedModelFromJson(entry)) p.models.push_back(std::move(*m));
+  }
+  return p;
+}
+
+std::string BuildBenchmarkModelRequest(const BenchmarkModelRequest& p) {
+  j::Object o;
+  o.emplace("path", j::Value(p.path));
+  o.emplace("backend", j::Value(p.backend));
+  j::Array cases;
+  for (const auto& c : p.cases) cases.emplace_back(c);
+  o.emplace("cases", j::Value(std::move(cases)));
+  o.emplace("iterations", j::Value(static_cast<uint64_t>(p.iterations)));
+  o.emplace("warmup", j::Value(static_cast<uint64_t>(p.warmup)));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<BenchmarkModelRequest> ParseBenchmarkModelRequest(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto path = v->GetString("path");
+  if (!path || path->empty()) return std::nullopt;
+  BenchmarkModelRequest p;
+  p.path = std::move(*path);
+  p.backend = v->GetString("backend").value_or("cpu");
+  if (const auto* cases = v->Find("cases")) {
+    if (!cases->IsArray()) return std::nullopt;
+    for (const auto& c : cases->AsArray()) {
+      if (!c.IsString()) return std::nullopt;
+      p.cases.push_back(c.AsString());
+    }
+  }
+  const auto iterations = v->GetUInt("iterations").value_or(p.iterations);
+  const auto warmup = v->GetUInt("warmup").value_or(p.warmup);
+  if (iterations > UINT32_MAX || warmup > UINT32_MAX) return std::nullopt;
+  p.iterations = static_cast<uint32_t>(iterations);
+  p.warmup = static_cast<uint32_t>(warmup);
+  return p;
+}
+
+std::string BuildBenchmarkModelResponse(const BenchmarkModelResponse& p) {
+  j::Object o;
+  o.emplace("backend", j::Value(p.backend));
+  o.emplace("p50_ms", j::Value(p.p50_ms));
+  o.emplace("p95_ms", j::Value(p.p95_ms));
+  o.emplace("p99_ms", j::Value(p.p99_ms));
+  o.emplace("load_ms", j::Value(p.load_ms));
+  o.emplace("rss_mb", j::Value(p.rss_mb));
+  o.emplace("vram_mb", p.vram_mb ? j::Value(*p.vram_mb) : j::Value(j::Null{}));
+  o.emplace("status", j::Value(p.status));
+  o.emplace("iterations_completed", j::Value(static_cast<uint64_t>(p.iterations_completed)));
+  o.emplace("error", p.error ? j::Value(*p.error) : j::Value(j::Null{}));
+  return j::Stringify(j::Value(std::move(o)));
+}
+
+std::optional<BenchmarkModelResponse> ParseBenchmarkModelResponse(const std::string& json) {
+  auto v = ParseObject(json);
+  if (!v) return std::nullopt;
+  auto status = v->GetString("status");
+  if (!status) return std::nullopt;
+  BenchmarkModelResponse p;
+  p.status = std::move(*status);
+  p.backend = v->GetString("backend").value_or(std::string());
+  p.p50_ms = v->GetNumber("p50_ms").value_or(0.0);
+  p.p95_ms = v->GetNumber("p95_ms").value_or(0.0);
+  p.p99_ms = v->GetNumber("p99_ms").value_or(0.0);
+  p.load_ms = v->GetNumber("load_ms").value_or(0.0);
+  p.rss_mb = v->GetNumber("rss_mb").value_or(0.0);
+  p.vram_mb = v->GetNumber("vram_mb");
+  const auto completed = v->GetUInt("iterations_completed").value_or(0);
+  p.iterations_completed = completed > UINT32_MAX ? 0 : static_cast<uint32_t>(completed);
+  p.error = v->GetString("error");
+  return p;
+}
+
 }  // namespace azookey::ipc

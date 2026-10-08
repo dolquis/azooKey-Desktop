@@ -265,6 +265,10 @@ RuntimeSettings ParseRuntimeSettings(const j::Object& object) {
   settings.emoji_data_path = ReadString(object, "emojiDataPath", settings.emoji_data_path);
 
   if (const auto* model = ReadObject(object, "model")) {
+    // docs/model-management-spec.md section 5.2: model.* wins, but a root key
+    // beside it is worth a warning so a stale hand edit does not go unnoticed.
+    settings.backend_preference_conflict =
+        model->count("backendPreference") != 0 && object.count("backendPreference") != 0;
     settings.model.enabled = ReadBool(*model, "enabled", settings.model.enabled);
     settings.model.selected_path = ReadString(*model, "selectedPath", settings.model.selected_path);
     settings.model.backend_preference =

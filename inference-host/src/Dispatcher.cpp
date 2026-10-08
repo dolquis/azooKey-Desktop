@@ -1241,15 +1241,15 @@ std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelop
   } else if (SafeModeEnabled()) {
     res.backend = parsed->backend;
     res.error = "safe_mode";
-  } else if (!ResolveModelListingDirectory(parsed->path, config_.models_dir)) {
+  } else if (const auto resolved = ResolveModelListingDirectory(parsed->path, config_.models_dir);
+             !resolved) {
     // Same boundary as ListModels: only models the settings app can list.
     res.backend = parsed->backend;
     res.error = config_.models_dir.empty() ? "models_dir_unavailable" : "path_outside_models_root";
   } else {
     // One benchmark per process: each loads a whole second model.
-    static std::mutex benchmark_mutex;
-    std::unique_lock lock(benchmark_mutex, std::try_to_lock);
-    if (!lock.owns_lock()) {
+    const auto slot = TryAcquireBenchmarkSlot();
+    if (!slot.owns_lock()) {
       res.backend = parsed->backend;
       res.error = "busy";
       return MakeResponse(req, ipc::BuildBenchmarkModelResponse(res));
@@ -1257,7 +1257,10 @@ std::optional<ipc::Envelope> Dispatcher::HandleBenchmarkModel(const ipc::Envelop
     ModelBenchmarkOptions options;
     options.base_config = engine_->config();
     try {
-      res = RunModelBenchmark(*parsed, options);
+      // Load exactly the path that was checked, not the raw request spelling.
+      auto request = *parsed;
+      request.path = core::PathToUtf8(*resolved);
+      res = RunModelBenchmark(request, options);
     } catch (...) {
       res = ipc::BenchmarkModelResponse{};
       res.backend = parsed->backend;

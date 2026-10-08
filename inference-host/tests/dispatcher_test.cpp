@@ -25,6 +25,7 @@
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -1074,6 +1075,15 @@ TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiv
   const auto broken = bench_in(814, root / "models" / "broken.gguf");
   ASSERT_TRUE(broken);
   EXPECT_EQ(broken->error, "invalid_model");
+  {
+    // A second benchmark while one runs is refused rather than queued.
+    const auto running = azookey::host::TryAcquireBenchmarkSlot();
+    ASSERT_TRUE(running.owns_lock());
+    const auto busy = bench_in(815, root / "models" / "broken.gguf");
+    ASSERT_TRUE(busy);
+    EXPECT_EQ(busy->status, "error");
+    EXPECT_EQ(busy->error, "busy");
+  }
   EXPECT_EQ(engine.model_loaded(), loaded_before);
   RemovePathNoThrow(root);
 }

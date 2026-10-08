@@ -62,6 +62,11 @@ ipc::BenchmarkModelResponse Error(ipc::BenchmarkModelResponse response, const ch
 
 }  // namespace
 
+std::unique_lock<std::mutex> TryAcquireBenchmarkSlot() {
+  static std::mutex slot;
+  return std::unique_lock<std::mutex>(slot, std::try_to_lock);
+}
+
 std::vector<std::string> DefaultBenchmarkCases() {
   return {"にほんご", "わたし", "こんにちは", "きょうはいいてんき"};
 }

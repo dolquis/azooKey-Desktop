@@ -365,3 +365,72 @@ TEST(ModelsCliTest, ListJsonIsTheListModelsPayload) {
   EXPECT_EQ(outside.exit_code, 2);
   fs::remove_all(dir);
 }
+
+TEST(ModelScannerTest, DoesNotFollowLinksOutOfTheModelsDirectory) {
+  const auto dir = TestDir();
+  const auto elsewhere = dir / "elsewhere";
+  WriteFile(elsewhere / "outside.gguf", GgufHeader({}));
+  WriteFile(dir / "models" / "inside.gguf", GgufHeader({}));
+  std::error_code ec;
+  fs::create_directory_symlink(elsewhere, dir / "models" / "linked", ec);
+  if (ec) {
+    fs::remove_all(dir);
+    GTEST_SKIP() << "creating a directory symlink needs Developer Mode or privilege here";
+  }
+  fs::create_symlink(elsewhere / "outside.gguf", dir / "models" / "file-link.gguf", ec);
+  const auto models = azookey::host::ScanModelDirectory(dir / "models");
+  ASSERT_EQ(models.size(), 1u);
+  EXPECT_EQ(models[0].file_name, "inside.gguf");
+  fs::remove_all(dir);
+}
+
+#ifdef _WIN32
+TEST(ModelScannerTest, AnUnconvertibleNameDoesNotFailTheListing) {
+  const auto dir = TestDir();
+  WriteFile(dir / "good.gguf", GgufHeader({}));
+  // A lone surrogate is a legal NTFS name but has no UTF-8 spelling.
+  const fs::path bad = dir / std::wstring(L"bad\xD800.gguf");
+  {
+    std::ofstream out(bad, std::ios::binary);
+    if (!out) {
+      fs::remove_all(dir);
+      GTEST_SKIP() << "the file system rejected the lone surrogate name";
+    }
+    const auto header = GgufHeader({});
+    out.write(header.data(), static_cast<std::streamsize>(header.size()));
+  }
+  const auto models = azookey::host::ScanModelDirectory(dir);
+  ASSERT_FALSE(models.empty());
+  EXPECT_NE(Find(models, "good.gguf"), nullptr);
+  for (const auto& entry : models) {
+    EXPECT_NO_THROW((void)azookey::host::ToListedModel(entry, "not_loaded", {}));
+  }
+  fs::remove_all(dir);
+}
+
+TEST(ModelScannerTest, ComputesSha256ForValidGgufFiles) {
+  const auto dir = TestDir();
+  WriteFile(dir / "zenzai.gguf", GgufHeader({}));
+  WriteFile(dir / "broken.gguf", "NOPE");
+  azookey::host::ModelScanOptions options;
+  options.compute_sha256 = true;
+  const auto models = azookey::host::ScanModelDirectory(dir, options);
+  const auto* valid = Find(models, "zenzai.gguf");
+  ASSERT_NE(valid, nullptr);
+  EXPECT_EQ(valid->sha256.size(), 64u);
+  EXPECT_EQ(valid->sha256.find_first_not_of("0123456789abcdef"), std::string::npos);
+  const auto* broken = Find(models, "broken.gguf");
+  ASSERT_NE(broken, nullptr);
+  EXPECT_TRUE(broken->sha256.empty());  // Only valid R1 files are hashed.
+  EXPECT_TRUE(azookey::host::ScanModelDirectory(dir).front().sha256.empty());
+  fs::remove_all(dir);
+}
+#endif
+
+TEST(ModelBenchmarkTest, OnlyOneBenchmarkHoldsTheSlot) {
+  auto first = azookey::host::TryAcquireBenchmarkSlot();
+  ASSERT_TRUE(first.owns_lock());
+  EXPECT_FALSE(azookey::host::TryAcquireBenchmarkSlot().owns_lock());
+  first.unlock();
+  EXPECT_TRUE(azookey::host::TryAcquireBenchmarkSlot().owns_lock());
+}

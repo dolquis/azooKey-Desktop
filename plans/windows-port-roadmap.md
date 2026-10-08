@@ -1925,7 +1925,9 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
   R2 Windows ML）と並行着手すると backend 推奨ロジックの実装が捗る。
 - **変更対象**: `settings-app/`（Model タブ追加）、`ipc/src/Payloads.cpp`
   （`ListModels` / `BenchmarkModel` 追加）、
-  `inference-host/src/ModelCatalog.cpp`（新規）、
+  `inference-host/src/ModelCatalog.cpp`（宣言的カタログ）、
+  `inference-host/src/ModelScanner.cpp` / `ModelBenchmark.cpp` / `ModelsCli.cpp`
+  （走査・形式別検証・ベンチ・`models` CLI）、
   `settings/mvp-settings.schema.json`（`model.*` ブロック追加）。
 - **実装範囲**: `docs/model-management-spec.md` §3〜§7。
   - モデルディレクトリのスキャンと形式別検証（R1=GGUF ファイル、R2=ORT GenAI モデル

@@ -428,6 +428,80 @@ DictionarySettings ExtractDictionarySettings(const j::Object& root) {
   return dictionary;
 }
 
+const j::Value* FindPath(const j::Object& root, std::string_view path) {
+  const j::Object* object = &root;
+  while (true) {
+    const auto dot = path.find('.');
+    const auto it = object->find(std::string(path.substr(0, dot)));
+    if (it == object->end()) return nullptr;
+    if (dot == std::string_view::npos) return &it->second;
+    if (!it->second.IsObject()) return nullptr;
+    object = &it->second.AsObject();
+    path.remove_prefix(dot + 1);
+  }
+}
+
+// Sets a leaf, creating or copying the enclosing objects so their other members survive.
+void SetPath(j::Object* root, std::string_view path, j::Value value) {
+  const auto dot = path.find('.');
+  const std::string key(path.substr(0, dot));
+  if (dot == std::string_view::npos) {
+    (*root)[key] = std::move(value);
+    return;
+  }
+  j::Object child;
+  if (const auto it = root->find(key); it != root->end() && it->second.IsObject()) {
+    child = it->second.AsObject();
+  }
+  SetPath(&child, path.substr(dot + 1), std::move(value));
+  (*root)[key] = j::Value(std::move(child));
+}
+
+std::optional<SettingValue> FromJson(const SettingField& field, const j::Value& value) {
+  std::optional<SettingValue> result;
+  switch (field.kind) {
+    case SettingKind::Bool:
+      if (value.IsBool()) result = value.AsBool();
+      break;
+    case SettingKind::Integer:
+      if (value.IsNumber() && std::isfinite(value.AsNumber()) &&
+          std::floor(value.AsNumber()) == value.AsNumber() &&
+          std::abs(value.AsNumber()) <= 9007199254740992.0) {
+        result = static_cast<int64_t>(value.AsNumber());
+      }
+      break;
+    case SettingKind::Number:
+      if (value.IsNumber()) result = value.AsNumber();
+      break;
+    case SettingKind::Enum:
+    case SettingKind::String:
+      if (value.IsString()) result = value.AsString();
+      break;
+    case SettingKind::StringList:
+      if (value.IsArray()) {
+        std::vector<std::string> items;
+        for (const auto& item : value.AsArray()) {
+          if (!item.IsString()) return std::nullopt;
+          items.push_back(item.AsString());
+        }
+        result = std::move(items);
+      }
+      break;
+  }
+  if (result && ValidateSettingValue(field, *result)) return std::nullopt;
+  return result;
+}
+
+j::Value ToJson(const SettingValue& value) {
+  if (const auto* flag = std::get_if<bool>(&value)) return j::Value(*flag);
+  if (const auto* number = std::get_if<int64_t>(&value)) return j::Value(*number);
+  if (const auto* number = std::get_if<double>(&value)) return j::Value(*number);
+  if (const auto* text = std::get_if<std::string>(&value)) return j::Value(*text);
+  j::Array items;
+  for (const auto& item : std::get<std::vector<std::string>>(value)) items.emplace_back(item);
+  return j::Value(std::move(items));
+}
+
 EditableSettings ExtractEditableSettings(const j::Object& root,
                                          std::vector<std::string>* warnings) {
   EditableSettings settings;
@@ -449,6 +523,17 @@ EditableSettings ExtractEditableSettings(const j::Object& root,
     settings.log_level = it->second.AsString();
   }
   settings.dictionary = ExtractDictionarySettings(root);
+  settings.dictionary_loaded = settings.dictionary;
+  for (const auto& field : GenericSettingFields()) {
+    if (const auto* stored = FindPath(root, field.path)) {
+      if (auto value = FromJson(field, *stored)) settings.values.emplace(field.path, *value);
+    }
+  }
+  if (const auto* safe_mode = FindPath(root, "safeMode"); safe_mode && safe_mode->IsObject()) {
+    settings.safe_mode_enabled = safe_mode->GetBool("enabled").value_or(false);
+    settings.safe_mode_entered_at = safe_mode->GetString("enteredAt").value_or("");
+    settings.safe_mode_last_crash_count = safe_mode->GetInt("lastCrashCount").value_or(0);
+  }
   const auto model_it = root.find("model");
   if (model_it == root.end() || !model_it->second.IsObject()) return settings;
   const auto& model = model_it->second.AsObject();
@@ -520,6 +605,16 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
     result.error = "invalid log level";
     return result;
   }
+  for (const auto& [setting, value] : settings.values) {
+    const auto* field = FindSettingField(setting);
+    const auto problem =
+        field ? ValidateSettingValue(*field, value) : std::optional<std::string>("unknown setting");
+    if (problem) {
+      result.error = setting + ": " + *problem;
+      result.invalid_setting = setting;
+      return result;
+    }
+  }
   auto lock = azookey::learning::AcquireExclusiveFileLockForPath(path, lock_timeout);
   if (!lock) {
     result.error = "settings.json is busy; no changes were written";
@@ -556,12 +651,35 @@ SettingsSaveResult SaveSettingsDocument(const std::filesystem::path& path,
   privacy["crashReportConsent"] = j::Value(settings.crash_report_consent);
   root["privacy"] = j::Value(std::move(privacy));
   root.erase("backendPreference");
+  // A key is written only when it is already on disk or differs from the schema default, so
+  // files keep inheriting defaults for keys the user never changed (section 3.7 write-back).
   if (settings.dictionary) {
-    j::Object dictionary;
+    const DictionarySettings defaults;
     for (const auto& [key, field] : kDictionaryFields) {
-      dictionary[std::string(key)] = j::Value((*settings.dictionary).*field);
+      const std::string dictionary_path = "dictionary." + std::string(key);
+      const bool value = (*settings.dictionary).*field;
+      // A switch left as loaded keeps whatever is on disk now, even if it changed since.
+      if (settings.dictionary_loaded && value == (*settings.dictionary_loaded).*field) continue;
+      if (FindPath(root, dictionary_path) || value != defaults.*field) {
+        SetPath(&root, dictionary_path, j::Value(value));
+      }
     }
-    root["dictionary"] = j::Value(std::move(dictionary));
+  }
+  for (const auto& [setting, value] : settings.values) {
+    const auto* field = FindSettingField(setting);
+    if (FindPath(root, setting) || value != field->default_value) {
+      SetPath(&root, setting, ToJson(value));
+    }
+  }
+  if (settings.clear_safe_mode && FindPath(root, "safeMode.enabled")) {
+    // The Host may have entered SafeMode again since the user asked; that entry is not cleared.
+    const auto* entered_at = FindPath(root, "safeMode.enteredAt");
+    const std::string current = entered_at && entered_at->IsString() ? entered_at->AsString() : "";
+    if (current == settings.safe_mode_entered_at) {
+      SetPath(&root, "safeMode.enabled", j::Value(false));
+    } else {
+      result.safe_mode_reentered = true;
+    }
   }
 
   if (settings.openai_api_key_changed) {

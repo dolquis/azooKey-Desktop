@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <variant>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -773,7 +775,7 @@ TEST(SettingsDocumentTest, DictionaryLayerSwitchesSurviveAnUnrelatedSave) {
   EXPECT_EQ(dictionary->GetBool("appSpecificDictionaryEnabled"), false);
 }
 
-TEST(SettingsDocumentTest, DictionarySwitchesEditedInTheUiAreWrittenWithSchemaDefaults) {
+TEST(SettingsDocumentTest, DictionarySwitchesAreWrittenOnlyWhenStoredOrChanged) {
   ScopedTempDirectory temp("azookey_settings_dictionary_edit");
   const auto path = temp.path() / "settings.json";
   WriteText(path, R"({"dictionary":{"technicalTermsEnabled":false}})");
@@ -790,14 +792,128 @@ TEST(SettingsDocumentTest, DictionarySwitchesEditedInTheUiAreWrittenWithSchemaDe
   ASSERT_TRUE(parsed && parsed->IsObject());
   const auto* dictionary = parsed->Find("dictionary");
   ASSERT_TRUE(dictionary && dictionary->IsObject());
-  EXPECT_EQ(dictionary->AsObject().size(), 7u);
-  EXPECT_EQ(dictionary->GetBool("sudachiEnabled"), true);
+  // Keys left at their schema default and absent from the file keep inheriting the default.
+  EXPECT_EQ(dictionary->AsObject().size(), 3u);
   EXPECT_EQ(dictionary->GetBool("neologdEnabled"), true);
-  EXPECT_EQ(dictionary->GetBool("namedEntityEnabled"), true);
   EXPECT_EQ(dictionary->GetBool("technicalTermsEnabled"), false);
-  EXPECT_EQ(dictionary->GetBool("userDictionaryEnabled"), true);
   EXPECT_EQ(dictionary->GetBool("autoWordsEnabled"), false);
-  EXPECT_EQ(dictionary->GetBool("appSpecificDictionaryEnabled"), true);
+}
+
+TEST(SettingsDocumentTest, DictionarySwitchesLeftAsLoadedKeepEditsMadeSinceLoading) {
+  ScopedTempDirectory temp("azookey_settings_dictionary_external");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"dictionary":{"sudachiEnabled":true}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_TRUE(loaded.settings.dictionary_loaded);
+  // Edited by hand while the settings app was open.
+  WriteText(path, R"({"dictionary":{"sudachiEnabled":false}})");
+  loaded.settings.dictionary->user_dictionary_enabled = false;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto* dictionary = parsed->Find("dictionary");
+  ASSERT_TRUE(dictionary && dictionary->IsObject());
+  EXPECT_EQ(dictionary->GetBool("sudachiEnabled"), false);
+  EXPECT_EQ(dictionary->GetBool("userDictionaryEnabled"), false);
+  EXPECT_EQ(dictionary->AsObject().size(), 2u);
+}
+
+TEST(SettingsDocumentTest, GenericValuesAreWrittenOnlyWhenStoredOrChanged) {
+  ScopedTempDirectory temp("azookey_settings_generic_values");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"maxCandidates":9,"privacy":{"redactLogs":true,"secureApps":["a.exe"]}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  ASSERT_TRUE(loaded.warnings.empty());
+  EXPECT_EQ(std::get<int64_t>(loaded.settings.values.at("maxCandidates")), 9);
+  EXPECT_EQ(std::get<std::vector<std::string>>(loaded.settings.values.at("privacy.secureApps")),
+            std::vector<std::string>{"a.exe"});
+  EXPECT_FALSE(loaded.settings.values.contains("inputMode"));
+
+  loaded.settings.values["inputMode"] = std::string("alnum_half");
+  loaded.settings.values["privacy.custom.learning"] = true;
+  loaded.settings.values["liveConversion"] = false;
+  loaded.settings.values["segmentBoundaryConfidence"] = 0.75;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  EXPECT_EQ(parsed->GetString("inputMode"), "alnum_half");
+  EXPECT_EQ(parsed->GetNumber("maxCandidates"), 9.0);
+  EXPECT_EQ(parsed->GetNumber("segmentBoundaryConfidence"), 0.75);
+  EXPECT_EQ(parsed->Find("liveConversion"), nullptr);
+  const auto* privacy = parsed->Find("privacy");
+  ASSERT_TRUE(privacy && privacy->IsObject());
+  EXPECT_EQ(privacy->GetBool("redactLogs"), true);
+  EXPECT_EQ(privacy->GetString("crashReportConsent"), "off");
+  ASSERT_NE(privacy->GetArray("secureApps"), nullptr);
+  const auto* custom = privacy->Find("custom");
+  ASSERT_TRUE(custom && custom->IsObject());
+  EXPECT_EQ(custom->GetBool("learning"), true);
+  EXPECT_EQ(custom->AsObject().size(), 1u);
+}
+
+TEST(SettingsDocumentTest, InvalidGenericValueIsRejectedWithoutWriting) {
+  ScopedTempDirectory temp("azookey_settings_generic_invalid");
+  const auto path = temp.path() / "settings.json";
+  const std::string original = R"({"maxCandidates":9})";
+  WriteText(path, original);
+  azookey::settings::EditableSettings settings;
+  settings.values["maxCandidates"] = int64_t{33};
+  auto saved = azookey::settings::SaveSettingsDocument(path, settings);
+  EXPECT_FALSE(saved.ok);
+  EXPECT_EQ(saved.invalid_setting, "maxCandidates");
+  EXPECT_EQ(ReadText(path), original);
+
+  settings.values = {{"inputMode", std::string("katakana")}};
+  saved = azookey::settings::SaveSettingsDocument(path, settings);
+  EXPECT_EQ(saved.invalid_setting, "inputMode");
+  settings.values = {{"liveConversion", int64_t{1}}};
+  saved = azookey::settings::SaveSettingsDocument(path, settings);
+  EXPECT_EQ(saved.invalid_setting, "liveConversion");
+  settings.values = {{"reranker.nllTopK", int64_t{8}}};
+  saved = azookey::settings::SaveSettingsDocument(path, settings);
+  EXPECT_EQ(saved.invalid_setting, "reranker.nllTopK");
+  EXPECT_EQ(ReadText(path), original);
+}
+
+TEST(SettingsDocumentTest, SafeModeIsOnlyClearedOnRequest) {
+  ScopedTempDirectory temp("azookey_settings_safe_mode_clear");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"safeMode":{"enabled":true,"enteredAt":"2026-09-22T01:02:03Z",
+    "lastCrashCount":3}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  EXPECT_TRUE(loaded.settings.safe_mode_enabled);
+  EXPECT_EQ(loaded.settings.safe_mode_entered_at, "2026-09-22T01:02:03Z");
+  EXPECT_EQ(loaded.settings.safe_mode_last_crash_count, 3);
+
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  EXPECT_EQ(azookey::ipc::json::Parse(ReadText(path))->Find("safeMode")->GetBool("enabled"), true);
+
+  loaded.settings.clear_safe_mode = true;
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, loaded.settings).ok);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  const auto* safe_mode = parsed->Find("safeMode");
+  ASSERT_TRUE(safe_mode && safe_mode->IsObject());
+  EXPECT_EQ(safe_mode->GetBool("enabled"), false);
+  EXPECT_EQ(safe_mode->GetString("enteredAt"), "2026-09-22T01:02:03Z");
+  EXPECT_EQ(safe_mode->GetNumber("lastCrashCount"), 3.0);
+}
+
+TEST(SettingsDocumentTest, SafeModeEnteredAgainAfterLoadingIsNotCleared) {
+  ScopedTempDirectory temp("azookey_settings_safe_mode_reentry");
+  const auto path = temp.path() / "settings.json";
+  WriteText(path, R"({"safeMode":{"enabled":true,"enteredAt":"2026-09-22T01:02:03Z"}})");
+  auto loaded = azookey::settings::LoadSettingsDocument(path);
+  // The Host enters SafeMode again before the user saves the clear.
+  WriteText(path, R"({"safeMode":{"enabled":true,"enteredAt":"2026-09-23T04:05:06Z"}})");
+  loaded.settings.clear_safe_mode = true;
+  const auto saved = azookey::settings::SaveSettingsDocument(path, loaded.settings);
+  ASSERT_TRUE(saved.ok) << saved.error.value_or("");
+  EXPECT_TRUE(saved.safe_mode_reentered);
+  const auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  EXPECT_EQ(parsed->Find("safeMode")->GetBool("enabled"), true);
 }
 
 TEST(SettingsDocumentTest, MissingDictionaryLoadsSchemaDefaults) {

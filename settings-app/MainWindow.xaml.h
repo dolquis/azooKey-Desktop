@@ -7,6 +7,7 @@
 #include "MainWindow.g.h"
 #include "NeologdAttribution.h"
 #include "SettingsDocument.h"
+#include "SettingsFieldControls.h"
 #include "pch.h"
 
 namespace winrt::azookey_settings::implementation {
@@ -34,6 +35,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   winrt::fire_and_forget ShowNeologdNoticesButton_Click(
       Windows::Foundation::IInspectable const& sender,
       Microsoft::UI::Xaml::RoutedEventArgs const& args);
+  void ClearSafeModeButton_Click(Windows::Foundation::IInspectable const& sender,
+                                 Microsoft::UI::Xaml::RoutedEventArgs const& args);
 
  private:
   winrt::fire_and_forget LoadSettingsAsync();
@@ -48,6 +51,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   azookey::settings::DictionarySettings DictionaryFromControls();
   void SetNeologdToggle(bool enabled);
   Windows::Foundation::IAsyncOperation<bool> ShowNeologdNoticesAsync(bool ask_consent);
+  void ShowSafeMode(const azookey::settings::EditableSettings& settings);
+  void ShowInvalidSetting(const std::string& path);
 
   std::optional<std::filesystem::path> settings_path_;
   bool openai_api_key_changed_{false};
@@ -56,6 +61,8 @@ struct MainWindow : MainWindowT<MainWindow> {
   bool neologd_enabled_{false};
   // The last state read from or written to disk, to tell which saved changes need a restart.
   azookey::settings::EditableSettings saved_settings_;
+  azookey::settings::SettingsFieldControls field_controls_;
+  bool clear_safe_mode_{false};
 };
 
 }  // namespace winrt::azookey_settings::implementation

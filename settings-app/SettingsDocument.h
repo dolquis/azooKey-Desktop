@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "SettingsFields.h"
+
 namespace azookey::settings {
 
 // The dictionary.* layer switches; defaults match settings/mvp-settings.schema.json.
@@ -31,6 +33,16 @@ struct EditableSettings {
   std::string crash_report_consent{"off"};
   // Unset keeps whatever dictionary object is on disk.
   std::optional<DictionarySettings> dictionary;
+  // The switches the UI started from; when set, only switches that differ from it are written.
+  std::optional<DictionarySettings> dictionary_loaded;
+  // Fields of the generic panes (GenericSettingFields), keyed by path. Only valid stored values
+  // are loaded; an absent path keeps what is on disk when saved.
+  SettingValues values;
+  // safeMode is written by the Host; the user can only clear it (section 3.6).
+  bool safe_mode_enabled{false};
+  std::string safe_mode_entered_at;
+  int64_t safe_mode_last_crash_count{0};
+  bool clear_safe_mode{false};
 };
 
 enum class SettingsDocumentStatus {
@@ -53,6 +65,10 @@ struct SettingsSaveResult {
   std::optional<std::string> error;
   std::vector<std::string> warnings;
   std::optional<std::filesystem::path> quarantined_path;
+  // The generic field whose value was rejected, when that is why nothing was written.
+  std::optional<std::string> invalid_setting;
+  // A requested SafeMode clear was skipped because the Host entered SafeMode again.
+  bool safe_mode_reentered{false};
 };
 
 std::optional<std::filesystem::path> DefaultSettingsPath();

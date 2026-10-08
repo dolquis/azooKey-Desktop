@@ -1201,7 +1201,7 @@ v1.0 に引き込まない）。根拠は次の 3 点:
 | 辞書 | `dictionary` の層切替（`neologd_lexicon` pack の帰属提示と同意を含む）/ `autoWordRegistration` / タイプミス学習 |
 | AI | `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `llmMagicConversion` / `includeContextInAITransform` |
 | プライバシー | `privacy`（`crashReportConsent` を除く） |
-| 詳細 | `model.backendPreference` / `model.epPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / `reranker` / 実験フラグ |
+| 詳細 | `model.backendPreference` / `powerProfile` / 推論チューニング値 / `logLevel` / 実験フラグ |
 | バージョン | バージョン情報 / 更新確認 / 障害診断（`privacy.crashReportConsent`）/ ライセンス |
 
 Host の IPC を読むペインは、その IPC を呼ぶ設定アプリ側の client と同じ変更でナビゲーションに加え、
@@ -1214,13 +1214,20 @@ Host の IPC を読むペインは、その IPC を呼ぶ設定アプリ側の c
 | Persona | Persona 表示（読み取り専用） | `rich-features-spec.md` X-2-7 |
 | 校正 | バッチ訂正ビュー | `DetectAnomalies`（`rich-features-spec.md` X-3-6） |
 
-上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「入力」「プライバシー」と
-§3.6 の残りのキーは DEV-1208、「モデル」は DEV-1530、「学習」は DEV-1531、「校正」は DEV-1532、
+上の 2 表と §3.6「UI ペイン」列に対する実装の追跡先は Linear とする。「モデル」は DEV-1530、
+「学習」は DEV-1531、「校正」は DEV-1532、
 「Persona」は DEV-1533、`neologd_lexicon` pack の状態表示は DEV-1534、`profilesByApp` の編集 UI は
 DEV-1535 で追う。
 
 > 本表はペイン割り当ての概観である。設定キーの正典一覧（全 top-level キー・型・既定・永続化・
 > 反映方法・拡張方針）は §3.6 を参照する。
+
+専用コントロールを持たないキーの UI は、`settings-app/SettingsFields.cpp` の記述子表から生成する。
+記述子は各キーの型・既定・範囲・選択肢・ペインと、機能別 spec が「効果を持たない」と定める条件
+（例: `privacy.custom.*` は `privacy.mode` が `custom` のときだけ、括弧の各キーは `bracketPairing` が
+真のときだけ）を持ち、条件を満たさない間はコントロールを無効にする。記述子と schema の型・既定・範囲・
+選択肢の一致、schema の全キーが「生成する / 専用コントロール / 編集しない（理由付き）」のいずれかに
+属すること、表示文字列の有無は `azookey_settings_persistence_tests` が検査する。
 
 > **参考（fkunn1326/azooKey-Windows, MIT）**: 「詳細」ペインの `backendPreference` 選択は、
 > 各バックエンドのランタイム DLL 存在判定（`cudart64_12.dll`+`cublas64_12.dll` / `vulkan-1.dll`）
@@ -1357,7 +1364,7 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `epPreference` | enum `auto`/`npu`/`gpu`/`cpu` | `auto` | 詳細※ | M24（EP 選択 UI は `model.epPreference` にバインド〔下記※〕。root は back-compat のみ・UI 非バインド） | モデル再ロード | `copilot-pc-backend-spec.md` §4.4 |
 | `powerProfile` | enum `auto`/`performance`/`battery_saver` | `auto` | 詳細 | M25 | 即時 | `copilot-pc-backend-spec.md` §5–§6 |
 | `logLevel` | enum `error`/`warn`/`info`/`debug` | `info` | 詳細 | Phase 5（基本） | 即時 | schema / §7 |
-| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | 一般（`enabled` / `selectedPath`）/ 詳細（`backendPreference` / `epPreference`）/ モデル（§3.2） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
+| `model` | object（`model-management-spec.md` §7 が下位フィールドを定義） | — | 一般（`enabled` / `selectedPath`）/ 詳細（`backendPreference`。`epPreference` は §3.7 の解禁条件まで UI に出さない）/ モデル（§3.2） | M45（`enabled`/`selectedPath`/`backendPreference` の 3 フィールドは v1.0=M11 で先行露出、§3.7） | モデル再ロード | `model-management-spec.md` §5/§7 |
 | `autoUpdate` | object（`enabled`/`channel`/`checkIntervalHours`） | — | 一般 | M32 | 即時 | 本書 §6 |
 | `dictionary` | object（7つの層切替） | 下位キーの既定に従う | 辞書 | M53 | 即時（設定再読込）。`neologdEnabled` を真にしたときの pack 取得だけは Host 起動時 | `auto-word-registration-spec.md` §14.8 / §15.14 |
 | `openAiTimeoutMs` | integer（ms、1000–120000） | `30000` | AI | M16 | 即時 | `ai-backend-spec.md` |
@@ -1367,10 +1374,10 @@ CLSID を `CoCreateInstance` し `IID_ITfFnConfigure` を要求して
 | `numberRewriter` / `katakanaRewriter` / `symbolRewriter` / `symbolDataPath` と `emoji*` の 5 キー | bool / integer / string（パス） | 各キーの schema 既定 | 入力 | M62 | 即時 | `candidate-rewriter-spec.md` |
 | `typoCorrectionMode` / `typoMinCount` | enum `off`/`suggest`/`auto_replace` / integer（1–100） | `suggest` / `3` | 辞書 | M35 | 即時 | `typo-correction-learning-spec.md` |
 | `autoWordRegistration` | object | 下位キーの既定に従う | 辞書 | M36-A | 即時（設定再読込） | `auto-word-registration-spec.md` |
-| `reranker` | object | 下位キーの既定に従う | 詳細 | M56 | 即時 | `neural-reranker-spec.md` |
+| `reranker` | object | 下位キーの既定に従う | —（保存時保持。専用 UI は持たない） | M56 | 即時 | `neural-reranker-spec.md` §B9 |
 | `privacy` | object | 下位キーの既定に従う | プライバシー（`crashReportConsent` はバージョン） | M46（`crashReportConsent` は M33） | 即時 | `privacy-and-secure-input-spec.md` §7 |
 | `profilesByApp` | map<string,object> | `{}` | —（保存時保持。編集 UI は持たない） | M48 | 即時 | `app-profile-spec.md` §4 |
-| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
+| `safeMode` | object（Host が書く） | 下位キーの既定に従う | 一般（`enabled` の解除だけを操作し、`enteredAt` / `lastCrashCount` は表示専用。解除は保存まで取り消せ、保存時の `enteredAt` が読み込んだ値と異なる〔Host が再び SafeMode に入った〕ときは解除しない） | M47 | 即時（設定再読込） | `dev-infrastructure-spec.md` |
 
 > オブジェクト型キー（`model` / `autoUpdate` / `dictionary` / `autoWordRegistration` / `reranker` /
 > `privacy` / `safeMode`）とマップ型キーの下位フィールドは「正典」列の spec が確定形を持つ。本表で
@@ -1539,19 +1546,19 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
 | `model.backendPreference` | ◯（詳細、`auto`/`cpu` のみ） | `vulkan` = ggml-vulkan ビルド配布・起動保証（DEV-1001）+ 実行時選択経路の配線（DEV-944） / `cuda` = CUDA リンク済みビルド配布 + 同配線 / `winml`・`directml`・`npu` = M24（`winml` 統合先。§5.1） |
 | `model.selectedPath` | ◯（一般） | — |
 | `logLevel` | ◯（詳細） | — |
-| `model.*` の残りフィールド（`epPreference`/`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（モデル管理 UI） |
-| `epPreference`（root） / `powerProfile` | — | M24 / M25 |
-| `inputMode` | —（実行時にキー操作で切替） | M30（任意） |
-| `inputStyle` / `customRomajiTablePath` | — | M17 |
-| `liveConversion` | — | M14 |
-| `predictionEnabled` | — | M15 |
-| `llmMagicConversion` / `aiBackend` / `openAiApiKey` / `openAiApiEndpoint` / `openAiModel` / `includeContextInAITransform` | — | M16（鍵は §9 DPAPI、M34） |
-| `promptPrefixByApp` | — | rich X-2-6 / M48（`profilesByApp` 統合） |
-| `contextReselection` / `postCommitLint` / `retroactiveRecompute` / `sentenceCompletion`（実験） | — | rich（M30 以降。実験フラグ） |
-| `batchRomajiConversion` / `batchRomajiPreviewStyle` / `batchConversionMode` / `batchAutoPunctuation` | — | M58 |
-| `autoUpdate.*` | — | M32（v1.0＝M11/M12 より後。一般ペインに UI 化） |
-| `dictionary.*` | — | M53 / M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
-| `privacy.*` / `profilesByApp` | — | M46 / M48（下位フィールドの正典は §3.6「拡張方針」） |
+| `model.*` の残りフィールド（`nGpuLayers`/`benchmark*`/`autoLoadOnHostStart`/`fallbackToSimpleConverter` 等） | — | M45（「モデル」ペイン。§3.2） |
+| `model.epPreference` / `epPreference`（root） | — | `model.epPreference` は当該バックエンドをリンクしたビルドの配布後（M24）。root は UI にバインドしない（§3.6 ※） |
+| `powerProfile` / `inferenceThreads` / `maxCandidates` / `maxContextLength` / 実験フラグ | — | M30（詳細ペイン） |
+| `inputMode` / `inputStyle` / `customRomajiTablePath` / `liveConversion` / `predictionEnabled` | — | M30（入力ペイン） |
+| 句読点・バッチ変換・インライン英単語候補・候補リライター・括弧ペアリングの各キー | — | M30（入力ペイン） |
+| `llmMagicConversion` / `aiBackend` / `openAiApiEndpoint` / `openAiModel` / `openAiTimeoutMs` / `includeContextInAITransform` | — | M30（AI ペイン） |
+| `openAiApiKey` | — | M34（AI ペイン。鍵は §9 DPAPI） |
+| `promptPrefixByApp` / `profilesByApp` | — | M48（アプリ別プロファイルの編集 UI。新規編集は `profilesByApp`） |
+| `autoUpdate.*` | — | M30（一般ペイン。更新処理は M32） |
+| `dictionary.*` / `autoWordRegistration.*` / `typoCorrectionMode` / `typoMinCount` | — | M30（辞書ペイン。`neologdEnabled` を真にするときは帰属の提示と同意を経る。`auto-word-registration-spec.md` §15.14） |
+| `privacy.*` | — | M30（プライバシーペイン。`crashReportConsent` はバージョンペイン） |
+| `safeMode.*` | — | M30（一般ペインで解除だけを操作する） |
+| `reranker.*` | — | 専用 UI を持たない（`neural-reranker-spec.md` §B9） |
 
 > v1.0 で UI 化しないキーも schema 正典（§3.6）には残り、`settings.json` 直書きと Host hot-reload で
 > 機能自体は動く。v1.0 設定アプリは未露出キーを**消さない**（下記バリデーションの write-back 規則）。
@@ -1568,6 +1575,14 @@ debug probe で操作し、v1.x（M30 フル UI / 各機能の UI 化マイル�
   エントリは write-back で温存しない**（quarantine して書き戻さない）。これらを温存すると、`additionalProperties: false`
   の固定オブジェクト（§3.6）に対して Host 再読込が `ok=false`（§3.3）になり、UI 側の有効な変更まで Host に拒否されるため。
   すなわち保持対象は「schema-known かつ UI-hidden」に限る。書き込みは破損耐性のため atomic write（一時ファイル → rename、§3.6 永続化）。
+- **UI に露出したキーの書き込み**: 記述子表から生成した UI は、読み込んだ値（有効な値が無ければ schema
+  既定）から変えたキーだけを書く。変えたキーも、`settings.json` にそのキーが無く値が schema 既定と等しいときは
+  書かない。ユーザーが触れていないキーは、記述子の範囲外の値も含めてディスク上の値のまま残り、欠落キーは
+  schema 既定を引き継ぎ続ける（§3.6 拡張方針「欠落キーは schema 既定で補完」）。有効なコントロールの値が
+  型・範囲・選択肢に合わないときは何も書かずに保存を失敗させ、該当する設定名を表示し、そのペインを開いて
+  コントロールにフォーカスする。数値の入力は範囲へ丸めず、表示のために値を丸めない。依存条件を満たさず
+  無効になっているコントロールの不正な値は、保存の対象から外す。`dictionary` の 7 キーも、読み込んだ値から
+  変えたスイッチだけを、ディスクにあるか schema 既定と異なるときに書く。
 - Host 側の再読込時バリデーション（無効なら `UpdateConfigResponse.ok=false` + `error`、runtime 設定維持）は
   §3.3 を正典とする。本節は**設定アプリ側の起動時検証**を補い、二重定義しない。
 

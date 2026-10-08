@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "azookey/tsf/CaretRectResolver.h"
 #include "azookey/tsf/TextService.h"
 
 namespace {
@@ -213,6 +214,138 @@ TEST_F(CaretPositionTest, AllFailuresReturnInvalidOrigin) {
   EXPECT_FALSE(anchor.valid);
   EXPECT_EQ(anchor.point.x, 0);
   EXPECT_EQ(anchor.point.y, 0);
+}
+
+azookey::tsf::CaretWin32Api FakeCaretApi() {
+  return {&FakeGetGuiThreadInfo, &FakeClientToScreen, &FakeGetPhysicalCursorPos,
+          &FakeLogicalToPhysicalPointForPerMonitorDpi, &FakeGetMonitorScalePercent};
+}
+
+TEST_F(CaretPositionTest, CaretRectConvertsBothCornersWithTheDocumentWindow) {
+  const RECT text_extent{10, 20, 30, 44};
+  g_expected_transform_window = reinterpret_cast<HWND>(static_cast<uintptr_t>(2));
+  g_logical_to_physical_succeeds = true;
+  g_physical_offset = {5, 22};
+  RECT physical{};
+
+  EXPECT_TRUE(azookey::tsf::ResolveCaretRect(FakeCaretApi(), text_extent,
+                                             g_expected_transform_window, &physical));
+
+  EXPECT_EQ(physical.left, 15);
+  EXPECT_EQ(physical.top, 42);
+  EXPECT_EQ(physical.right, 35);
+  EXPECT_EQ(physical.bottom, 66);
+  EXPECT_EQ(g_logical_to_physical_calls, 2);
+}
+
+TEST_F(CaretPositionTest, CaretRectIsUnavailableWhenPhysicalConversionFails) {
+  const RECT text_extent{10, 20, 30, 44};
+  g_expected_transform_window = reinterpret_cast<HWND>(static_cast<uintptr_t>(2));
+  RECT physical{1, 2, 3, 4};
+
+  EXPECT_FALSE(azookey::tsf::ResolveCaretRect(FakeCaretApi(), text_extent,
+                                              g_expected_transform_window, &physical));
+  EXPECT_EQ(physical.left, 1);
+}
+
+TEST_F(CaretPositionTest, CaretRectKeepsTextExtentWithoutWindowAndRejectsEmptyExtent) {
+  RECT physical{};
+
+  EXPECT_TRUE(
+      azookey::tsf::ResolveCaretRect(FakeCaretApi(), RECT{10, 20, 30, 44}, nullptr, &physical));
+  EXPECT_EQ(physical.left, 10);
+  EXPECT_EQ(physical.bottom, 44);
+  EXPECT_FALSE(
+      azookey::tsf::ResolveCaretRect(FakeCaretApi(), RECT{10, 20, 10, 44}, nullptr, &physical));
+  EXPECT_EQ(g_logical_to_physical_calls, 0);
+}
+
+TEST_F(CaretPositionTest, AnchorRectUsesTheMonitorScaledFallbackHeight) {
+  g_physical_cursor_point = {100, 200};
+  g_monitor_scale_percent = 150;
+
+  const RECT rect = azookey::tsf::CaretRectFromAnchor(FakeCaretApi(), {100, 200});
+
+  EXPECT_EQ(rect.left, 100);
+  EXPECT_EQ(rect.top, 176);
+  EXPECT_EQ(rect.right, 101);
+  EXPECT_EQ(rect.bottom, 200);
+}
+
+int g_monitor_info_calls = 0;
+bool g_monitor_info_succeeds = true;
+
+// Two side-by-side monitors: the secondary one sits left of the primary at
+// negative coordinates and has a taskbar on its top edge.
+HMONITOR WINAPI FakeMonitorFromPoint(POINT point, DWORD flags) {
+  EXPECT_EQ(flags, static_cast<DWORD>(MONITOR_DEFAULTTONEAREST));
+  return reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(point.x < 0 ? 2 : 1));
+}
+
+BOOL WINAPI FakeGetMonitorInfo(HMONITOR monitor, LPMONITORINFO info) {
+  ++g_monitor_info_calls;
+  if (!g_monitor_info_succeeds) return FALSE;
+  info->rcWork = monitor == reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(2))
+                     ? RECT{-1280, 40, 0, 1024}
+                     : RECT{0, 0, 1920, 1040};
+  return TRUE;
+}
+
+int WINAPI FakeGetSystemMetrics(int index) {
+  switch (index) {
+    case SM_XVIRTUALSCREEN:
+      return -1280;
+    case SM_YVIRTUALSCREEN:
+      return 0;
+    case SM_CXVIRTUALSCREEN:
+      return 3200;
+    case SM_CYVIRTUALSCREEN:
+      return 1080;
+    default:
+      return 0;
+  }
+}
+
+class MonitorWorkAreaTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    g_monitor_info_calls = 0;
+    g_monitor_info_succeeds = true;
+  }
+
+  static azookey::tsf::MonitorWin32Api Api() {
+    return {&FakeMonitorFromPoint, &FakeGetMonitorInfo, &FakeGetSystemMetrics};
+  }
+};
+
+TEST_F(MonitorWorkAreaTest, PicksTheWorkAreaOfTheMonitorUnderThePoint) {
+  const auto primary = azookey::tsf::ResolveMonitorWorkArea(Api(), {500, 500});
+  const auto secondary = azookey::tsf::ResolveMonitorWorkArea(Api(), {-10, 500});
+
+  EXPECT_EQ(primary.work_area.right, 1920);
+  EXPECT_EQ(primary.work_area.bottom, 1040);
+  EXPECT_EQ(secondary.work_area.left, -1280);
+  EXPECT_EQ(secondary.work_area.top, 40);
+  EXPECT_NE(primary.monitor, secondary.monitor);
+}
+
+TEST_F(MonitorWorkAreaTest, FallsBackToTheVirtualScreenWhenMonitorInfoFails) {
+  g_monitor_info_succeeds = false;
+
+  const auto result = azookey::tsf::ResolveMonitorWorkArea(Api(), {500, 500});
+
+  EXPECT_EQ(g_monitor_info_calls, 1);
+  EXPECT_EQ(result.work_area.left, -1280);
+  EXPECT_EQ(result.work_area.top, 0);
+  EXPECT_EQ(result.work_area.right, 1920);
+  EXPECT_EQ(result.work_area.bottom, 1080);
+}
+
+TEST_F(MonitorWorkAreaTest, ReturnsAnEmptyWorkAreaWhenNothingIsAvailable) {
+  const auto result = azookey::tsf::ResolveMonitorWorkArea({}, {500, 500});
+
+  EXPECT_EQ(result.monitor, nullptr);
+  EXPECT_EQ(result.work_area.right - result.work_area.left, 0);
 }
 
 TEST_F(CaretPositionTest, FocusLossClearsCachedCaret) {

@@ -963,14 +963,28 @@ public:
 
 ### 9.2 モニタ判定
 
+キャレットの解決（§9.1、§9.3）とモニタ作業領域の解決は `tsf-tip/src/CaretRectResolver.cpp` が持つ。
+Win32 API は関数ポインタの組（`CaretWin32Api`、`MonitorWin32Api`）で受け取り、テストでは偽物に差し替える。
+
 ```cpp
-HMONITOR mon = MonitorFromPoint({rect.left, rect.top}, MONITOR_DEFAULTTONEAREST);
-MONITORINFO mi{ sizeof(mi) };
-GetMonitorInfo(mon, &mi);
-// mi.rcWork が work area（タスクバー除外）
+MonitorWorkArea m = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), point);
+// MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) のモニタの rcWork（タスクバー除外）。
+// GetMonitorInfo が失敗したときは仮想スクリーン全体を使う。
 ```
 
-候補/予測ウィンドウは `mi.rcWork` 内に収まるよう配置。
+候補ウィンドウ、その詳細ポップアップ、予測候補ウィンドウはすべてこの解決を通す。
+
+モニタを選ぶ点はウィンドウごとに異なる。
+
+- 候補ウィンドウ: キャレット左下の anchor 点。
+- 詳細ポップアップ: 候補ウィンドウの矩形の中心。
+- 予測候補ウィンドウ: キャレット矩形の中心。
+
+候補/予測ウィンドウは作業領域内に収まるよう配置する。
+配置の計算は Win32 を呼ばない純粋関数（`CandidateWindow::ComputePlacement`、`CandidateWindow::ComputeDetailsPlacement`、`PredictionWindow::ComputePlacement`）とする。
+
+- 候補ウィンドウは anchor の下に開き、下端からはみ出すときはキャレットの上へ反転する。幅は作業領域の幅を上限とする。
+- 予測候補ウィンドウはキャレットの右に開き、はみ出すときは左、下端からはみ出すときは上へずらす（§3.2）。
 
 ### 9.3 DPI 対応（Phase 6-B M26 と分担）
 
@@ -992,6 +1006,7 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 最終フォールバックでは、参照 HWND を推測せず `GetPhysicalCursorPos` から物理 screen 座標を直接取得する。
 キャレット高の 16 論理 px は、カーソル位置のモニター拡大率を使って物理 px へ換算する。
 拡大率を取得できない場合は、16 物理 px を使う。
+予測候補ウィンドウが `GetTextExt` の矩形を得られずに anchor 点から矩形を作るときも、同じ換算でキャレット高を決める。
 
 候補ウィンドウは `WM_DPICHANGED` と表示先モニタの DPI に応じて、
 配置範囲、行高、余白、フォントを更新する。
@@ -1006,8 +1021,8 @@ context を `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` に切り替える。
 | カスタムローマ字 TSV | `core/tests/custom_romaji_test.cpp` | パース、重複、コメント、不正行 |
 | LearningStore::Forget | `learning/tests/learning_test.cpp` | Forget 後の Score=0、ForgetMostRecent |
 | Unicode 入力 | `core/tests/unicode_input_test.cpp` | 範囲チェック、サロゲートペア生成 |
-| 候補ウィンドウのレイアウトと DPI 換算 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算 |
-| キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3） |
+| 候補ウィンドウのレイアウト、DPI 換算、配置 | `tsf-tip/tests/candidate_window_dpi_test.cpp` | Windows 限定。行高・余白・最大幅の DPI 換算、作業領域内への配置と上への反転、負座標のモニタ（§9.2） |
+| キャレット座標の取得と正規化 | `tsf-tip/tests/caret_position_test.cpp` | Windows 限定。物理 screen 座標への正規化とフォールバック段位（§9.3）、モニタ作業領域の解決と仮想スクリーンへの fallback（§9.2） |
 | 予測候補ウィンドウ配置（§3.2） | `tsf-tip/tests/prediction_window_test.cpp` | Windows 限定。モニタ矩形と配置候補の切替、DirectComposition 初期化を含む `Create` と `Show` で窓が可視になること |
 
 ## 11. 参照

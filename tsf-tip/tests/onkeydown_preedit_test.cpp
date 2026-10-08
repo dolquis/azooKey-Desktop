@@ -410,6 +410,11 @@ class NoopContext : public ITfContext {
       *ppvObject = compartment_mgr;
       return S_OK;
     }
+    if (riid == IID_ITfMouseTracker && mouse_tracker) {
+      mouse_tracker->AddRef();
+      *ppvObject = mouse_tracker;
+      return S_OK;
+    }
     return E_NOINTERFACE;
   }
 
@@ -424,6 +429,7 @@ class NoopContext : public ITfContext {
   STDMETHODIMP RequestEditSession(TfClientId tid, ITfEditSession* edit_session, DWORD flags,
                                   HRESULT* session_result) override {
     request_count++;
+    if (throw_on_request) throw std::bad_alloc();
     requested_flags.push_back(flags);
     last_client_id = tid;
     last_flags = flags;
@@ -550,6 +556,8 @@ class NoopContext : public ITfContext {
   ITfDocumentMgr* document_mgr_{nullptr};
   IUnknown* identity_unknown_{nullptr};
   ITfCompartmentMgr* compartment_mgr{nullptr};
+  ITfMouseTracker* mouse_tracker{nullptr};
+  bool throw_on_request{false};
   ITfReadOnlyProperty* input_scope_property{nullptr};
   int set_selection_count{0};
   ULONG last_selection_count{0};
@@ -669,6 +677,56 @@ class FakeComposition : public ITfComposition {
 
  private:
   LONG ref_count_{1};
+};
+
+// Records AdviseMouseSink / UnadviseMouseSink and holds the sink like TSF does.
+class FakeMouseTracker final : public ITfMouseTracker {
+ public:
+  ~FakeMouseTracker() { EXPECT_TRUE(sinks_.empty()) << "a mouse sink was never unadvised"; }
+
+  STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
+    if (!object) return E_POINTER;
+    *object = nullptr;
+    if (riid != IID_IUnknown && riid != IID_ITfMouseTracker) return E_NOINTERFACE;
+    *object = static_cast<ITfMouseTracker*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return static_cast<ULONG>(++ref_count); }
+  STDMETHODIMP_(ULONG) Release() override { return static_cast<ULONG>(--ref_count); }
+
+  STDMETHODIMP AdviseMouseSink(ITfRange* range, ITfMouseSink* sink, DWORD* cookie) override {
+    if (!range || !sink || !cookie) return E_INVALIDARG;
+    ++advise_count;
+    sink->AddRef();
+    *cookie = next_cookie_++;
+    sinks_.push_back({*cookie, sink});
+    return S_OK;
+  }
+
+  STDMETHODIMP UnadviseMouseSink(DWORD cookie) override {
+    ++unadvise_count;
+    for (auto it = sinks_.begin(); it != sinks_.end(); ++it) {
+      if (it->first != cookie) continue;
+      it->second->Release();
+      sinks_.erase(it);
+      return S_OK;
+    }
+    ++unknown_cookie_count;
+    return E_INVALIDARG;
+  }
+
+  size_t active_sinks() const { return sinks_.size(); }
+
+  int advise_count{0};
+  int unadvise_count{0};
+  int unknown_cookie_count{0};
+  // Starts at 1 for the stack owner; TextService adds one while it holds the tracker.
+  int ref_count{1};
+
+ private:
+  DWORD next_cookie_{100};
+  std::vector<std::pair<DWORD, ITfMouseSink*>> sinks_;
 };
 
 class TextServiceHarness {
@@ -4679,6 +4737,156 @@ TEST(TsfTipOnKeyDownPreeditTest, BatchSegmentSelectionCommitsTheWholeSentence) {
   EXPECT_EQ(attachment.composition_range.last_text, L"科二");
 }
 
+TEST(TsfTipOnKeyDownPreeditTest, PreeditClickFocusesTheSegmentUnderTheMouse) {
+  TextServiceHarness h;
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField first;
+  first.reading = "か";
+  first.surface = "蚊";
+  first.source = "dictionary";
+  auto alternative = first;
+  alternative.surface = "科";
+  auto second = first;
+  second.reading = "に";
+  second.surface = "二";
+  auto second_alternative = second;
+  second_alternative.surface = "煮";
+  h.service.set_cached_batch_segments_for_test(
+      {{"か", {first, alternative}}, {"に", {second, second_alternative}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  // The edit session records the segments it painted; clicks resolve against them.
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press('2'));
+  ASSERT_EQ(attachment.composition_range.last_text, L"科二");
+
+  BOOL eaten = TRUE;
+  // A move without the left button is not a click.
+  EXPECT_EQ(h.service.OnMouseEvent(1, 2, 0, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  // Quadrant 1 of edge 1 lies on the first character, the focused segment already.
+  EXPECT_EQ(h.service.OnMouseEvent(1, 1, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  ASSERT_TRUE(h.Press('1'));
+  ASSERT_EQ(attachment.composition_range.last_text, L"蚊二");
+  eaten = FALSE;
+  EXPECT_EQ(h.service.OnMouseEvent(1, 2, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  // The digit now picks a candidate for the clicked segment.
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"蚊煮");
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, MouseSinkFollowsTheCompositionAndIsReleasedOnEveryEnd) {
+  struct TestCase {
+    const char* name;
+    std::function<void(TextServiceHarness&, FakeCompositionAttachment&)> end;
+  };
+  const TestCase cases[] = {
+      {"terminated",
+       [](TextServiceHarness& h, FakeCompositionAttachment& attachment) {
+         EXPECT_EQ(h.service.OnCompositionTerminated(1, &attachment.composition), S_OK);
+       }},
+      {"escape", [](TextServiceHarness& h, FakeCompositionAttachment&) { h.Press(VK_ESCAPE); }},
+      {"focus-loss",
+       [](TextServiceHarness& h, FakeCompositionAttachment&) {
+         EXPECT_EQ(h.service.OnSetFocus(FALSE), S_OK);
+       }},
+      {"deactivate",
+       [](TextServiceHarness& h, FakeCompositionAttachment&) {
+         EXPECT_TRUE(SUCCEEDED(h.service.Deactivate()));
+       }},
+  };
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    FakeMouseTracker tracker;
+    TextServiceHarness h;
+    h.context.mouse_tracker = &tracker;
+    FakeCompositionAttachment attachment(h);
+
+    ASSERT_TRUE(h.Press('K'));
+    ASSERT_TRUE(h.Press('A'));
+    // Each preedit update re-advises over the new composition text.
+    EXPECT_EQ(tracker.advise_count, 2);
+    EXPECT_EQ(tracker.active_sinks(), 1u);
+
+    test_case.end(h, attachment);
+    EXPECT_EQ(tracker.active_sinks(), 0u);
+    EXPECT_EQ(tracker.unadvise_count, tracker.advise_count);
+    EXPECT_EQ(tracker.unknown_cookie_count, 0);
+    EXPECT_EQ(tracker.ref_count, 1);
+    h.context.mouse_tracker = nullptr;
+  }
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditClickDoesNotReadviseTheSinkBeingCalled) {
+  FakeMouseTracker tracker;
+  TextServiceHarness h;
+  h.context.mouse_tracker = &tracker;
+  h.service.set_batch_romaji_options_for_test(true);
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+  ASSERT_TRUE(h.Press(VK_SPACE));
+  azookey::ipc::CandidateField first;
+  first.reading = "ほっけ";
+  first.surface = "𩸽";  // Two UTF-16 code units.
+  first.source = "dictionary";
+  auto first_alternative = first;
+  first_alternative.surface = "ほっけ";
+  auto second = first;
+  second.reading = "に";
+  second.surface = "二";
+  auto second_alternative = second;
+  second_alternative.surface = "煮";
+  h.service.set_cached_batch_segments_for_test(
+      {{"ほっけ", {first, first_alternative}}, {"に", {second, second_alternative}}});
+  h.service.show_candidate_window_from_cache_for_test();
+  FakeCompositionAttachment attachment(h);
+  ASSERT_TRUE(h.Press('1'));
+  ASSERT_EQ(attachment.composition_range.last_text, L"𩸽二");
+  const int advised = tracker.advise_count;
+  ASSERT_EQ(tracker.active_sinks(), 1u);
+
+  BOOL eaten = FALSE;
+  // Edge 1 lies inside the surrogate pair, so both of its quadrants stay on the first segment.
+  EXPECT_EQ(h.service.OnMouseEvent(1, 3, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  EXPECT_EQ(tracker.advise_count, advised);
+  // Edge 2 quadrant 2 is the first character of the second segment.
+  EXPECT_EQ(h.service.OnMouseEvent(2, 2, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_TRUE(eaten);
+  // The synchronous preedit update ran without re-advising the sink being called.
+  EXPECT_EQ(tracker.advise_count, advised);
+  EXPECT_EQ(tracker.active_sinks(), 1u);
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"𩸽煮");
+  const int advised_after_key = tracker.advise_count;
+
+  // A failed request still clears the in-progress flag, so later updates re-advise.
+  h.context.throw_on_request = true;
+  EXPECT_EQ(h.service.OnMouseEvent(0, 2, MK_LBUTTON, &eaten), E_OUTOFMEMORY);
+  h.context.throw_on_request = false;
+  // The click had already moved the focus to the first segment.
+  ASSERT_TRUE(h.Press('2'));
+  EXPECT_EQ(attachment.composition_range.last_text, L"ほっけ煮");
+  EXPECT_GT(tracker.advise_count, advised_after_key);
+  h.service.Deactivate();
+  h.context.mouse_tracker = nullptr;
+}
+
+TEST(TsfTipOnKeyDownPreeditTest, PreeditClickIsIgnoredWithoutBatchSegments) {
+  TextServiceHarness h;
+  ASSERT_TRUE(h.Press('K'));
+  ASSERT_TRUE(h.Press('A'));
+
+  BOOL eaten = TRUE;
+  EXPECT_EQ(h.service.OnMouseEvent(0, 2, MK_LBUTTON, &eaten), S_OK);
+  EXPECT_FALSE(eaten);
+  EXPECT_EQ(h.service.OnMouseEvent(0, 2, MK_LBUTTON, nullptr), E_INVALIDARG);
+}
+
 TEST(TsfTipOnKeyDownPreeditTest, SingleBatchSegmentNumberCommitsImmediately) {
   TextServiceHarness h;
   h.service.set_batch_romaji_options_for_test(true);
@@ -4838,7 +5046,8 @@ TEST(TsfTipOnKeyDownPreeditTest, PreeditCaretUsesGetTextExtContractMatrix) {
     EXPECT_EQ(context_view.get_wnd_count, test_case.get_text_ext_result == S_OK ? 1 : 0);
     EXPECT_EQ(context_view.last_edit_cookie, h.context.edit_cookie);
     EXPECT_EQ(context_view.last_range, &attachment.composition_range);
-    EXPECT_EQ(caret_fallback.logical_to_physical_count(), test_case.expect_view_transform ? 1 : 0);
+    // The anchor, then both corners of the prediction caret rect.
+    EXPECT_EQ(caret_fallback.logical_to_physical_count(), test_case.expect_view_transform ? 3 : 0);
     EXPECT_EQ(caret_fallback.last_logical_to_physical_window(),
               test_case.expect_view_transform ? view_window : nullptr);
     EXPECT_EQ(h.service.caret_point_valid_for_test(), true);

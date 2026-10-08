@@ -764,7 +764,7 @@ M 番号は通し連番だが、依存上は以下の前倒し・並行化が可
 - **目的**: 文節ごとに「注目」「変換済み」「未変換」の色分け + マウスクリックで
   注目文節を移動。
 - **前提**: M20 完了。
-- **変更対象**: `tsf-tip/src/DllMain.cpp`（3 新規 GUID）、
+- **変更対象**: `tsf-tip/include/azookey/tsf/DisplayAttribute.h`（3 新規 GUID）、
   `tsf-tip/src/DisplayAttribute.cpp`、`tsf-tip/src/TextService.cpp`
   （文節ごとに `SetValue`、`ITfMouseSink` 接続）。
 - **実装範囲**: `docs/tsf-deep-integration-spec.md` §5、§7。

@@ -13,6 +13,8 @@
 #include <cassert>
 #include <cmath>
 
+#include "azookey/tsf/CaretRectResolver.h"
+
 namespace azookey::tsf {
 namespace {
 
@@ -303,18 +305,17 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
   const POINT center{
       caret_rect_screen.left + (caret_rect_screen.right - caret_rect_screen.left) / 2,
       caret_rect_screen.top + (caret_rect_screen.bottom - caret_rect_screen.top) / 2};
-  const HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+  const MonitorWorkArea monitor = ResolveMonitorWorkArea(DefaultMonitorWin32Api(), center);
   UINT dpi_x = 0;
   UINT dpi_y = 0;
-  if (FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) || !dpi_x)
+  if (!monitor.monitor ||
+      FAILED(GetDpiForMonitor(monitor.monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) || !dpi_x)
     dpi_x = GetDpiForWindow(hwnd_);
   if (dpi_x != dpi_) UpdateDpi(dpi_x);
 
   width_ = MeasureWidth();
   height_ = padding_ * 2 + row_height_ * static_cast<int>(candidates_.size());
-  MONITORINFO info{sizeof(info)};
-  RECT work_area = caret_rect_screen;
-  if (GetMonitorInfoW(monitor, &info)) work_area = info.rcWork;
+  RECT work_area = monitor.work_area;
   if (work_area.right > work_area.left && work_area.bottom > work_area.top) {
     width_ = std::min(width_, static_cast<int>(work_area.right - work_area.left));
     height_ = std::min(height_, static_cast<int>(work_area.bottom - work_area.top));

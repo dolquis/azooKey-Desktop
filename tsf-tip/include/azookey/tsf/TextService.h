@@ -27,6 +27,7 @@
 #include "azookey/tsf/AiInputGuard.h"
 #include "azookey/tsf/CandidateUiCoordinator.h"
 #include "azookey/tsf/CharacterFormEditSession.h"
+#include "azookey/tsf/DisplayAttribute.h"
 #include "azookey/tsf/ForegroundAppDetector.h"
 #include "azookey/tsf/IpcConnectionState.h"
 #include "azookey/tsf/PredictionWindow.h"
@@ -132,6 +133,7 @@ class TextService final : public ITfTextInputProcessorEx,
                           public ITfFunctionProvider,
                           public ITfCompositionSink,
                           public ITfDisplayAttributeProvider,
+                          public ITfMouseSink,
                           public ITfFnConfigure {
  public:
   TextService();
@@ -170,6 +172,10 @@ class TextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) override;
   STDMETHODIMP GetDisplayAttributeInfo(REFGUID guidInfo, ITfDisplayAttributeInfo** ppInfo) override;
 
+  // A left click on a batch-conversion segment focuses it (spec §7).
+  STDMETHODIMP OnMouseEvent(ULONG uEdge, ULONG uQuadrant, DWORD dwBtnStatus,
+                            BOOL* pfEaten) override;
+
   STDMETHODIMP GetDisplayName(BSTR* name) override;
   STDMETHODIMP Show(HWND parent, LANGID langid, REFGUID profile) override;
 
@@ -191,6 +197,16 @@ class TextService final : public ITfTextInputProcessorEx,
   ITfRange* terminated_composition_range_{nullptr};
   std::string terminated_composition_surface_;
   std::string terminated_composition_previous_surface_;
+  // Mouse sink over the composition while it exists (ITfMouseTracker).
+  ITfMouseTracker* mouse_tracker_{nullptr};
+  ITfContext* mouse_tracker_context_{nullptr};
+  DWORD mouse_sink_cookie_{0};
+  // Segments the last edit session painted; mouse edges refer to this layout.
+  std::vector<DisplayedSegment> attributed_segments_;
+  // Keeps the sink TSF is delivering to from being re-advised under it.
+  bool mouse_event_in_progress_{false};
+  // TfGuidAtoms for DisplayAttributeKind, registered on first use.
+  TfGuidAtom display_attribute_atoms_[kDisplayAttributeKindCount]{};
   bool terminated_focus_cleanup_pending_{false};
   bool etw_composition_end_in_progress_{false};
   std::uint64_t etw_composition_length_{0};
@@ -825,6 +841,18 @@ class TextService final : public ITfTextInputProcessorEx,
   POINT CandidateAnchorPoint();
   std::string CurrentPreeditSurface() const;
   std::string CurrentDisplayedPreeditSurface() const;
+  // Batch segments as the preedit shows them, in order; empty when the preedit
+  // is not a batch conversion with the candidate window open.
+  std::vector<DisplayedSegment> DisplayedBatchSegments() const;
+  bool ShowsBatchSegments() const;
+  // The candidate surface the segment shows, or its reading when none is chosen.
+  const std::string& DisplayedBatchSegmentSurface(size_t index, bool* converted) const;
+  // Moves the batch-conversion focus to the segment and re-shows its candidates.
+  HRESULT FocusBatchSegment(size_t index);
+  // Registers display_attribute_atoms_ once; false while any atom is missing.
+  bool EnsureDisplayAttributeAtoms();
+  void AdviseCompositionMouseSink(ITfContext* context, ITfRange* range);
+  void UnadviseCompositionMouseSink();
   bool BatchRomajiEnabled() const;
   std::string BatchPreviewSurface() const;
   std::string BatchReadingForConversion() const;

@@ -41,12 +41,14 @@
   (`OnCompositionTerminated`)。
 - `ITfDisplayAttributeProvider` — 下線 / 色付けスタイル提供
   (`EnumDisplayAttributeInfo`, `GetDisplayAttributeInfo`)。
+- `ITfMouseSink` — preedit 上のマウス操作 (`OnMouseEvent`)。composition range を
+  `ITfMouseTracker::AdviseMouseSink` で監視し、composition の終了時に解除する。
 - `ITfFnConfigure` — 言語バー / 設定メニューからの設定 UI 起動 (`Show`)。
   `Show` は UI thread で `SettingsLauncher` の `LaunchSettingsApplication` へ委譲し、
   `azookey_settings.exe` を `ShellExecuteExW` で起動する。TIP 自身は設定 UI を描画しない。
 
 `TextService::QueryInterface`は`IID_IUnknown`、`IID_ITfTextInputProcessor`、
-`IID_ITfTextInputProcessorEx`、上記sink/providerのIID、`IID_ITfFunction`、
+`IID_ITfTextInputProcessorEx`、上記sink/providerのIID（`IID_ITfMouseSink`を含む）、`IID_ITfFunction`、
 `IID_ITfFnConfigure`を公開する。多重継承を追加しただけでは
 COMから取得できないため、QueryInterfaceと契約テストを同じ変更で更新する。
 
@@ -69,7 +71,8 @@ COMから取得できないため、QueryInterfaceと契約テストを同じ変
 
 ## DisplayAttribute (`tsf-tip/include/azookey/tsf/DisplayAttribute.h`)
 
-- `ITfDisplayAttributeInfo` — 個別の下線属性情報を返す軽量実装。
+- `ITfDisplayAttributeInfo` — `DisplayAttributeKind` ごとの属性情報を返す軽量実装。
+  入力属性（fallback）と、一括変換の注目・変換済み・未変換の文節属性の 4 種類がある。
 - 列挙子 (`IEnumTfDisplayAttributeInfo` 相当) は `DisplayAttribute.cpp` 側で
   実装される。
 

@@ -1,7 +1,6 @@
 #include "azookey/tsf/DebugWindow.h"
 
 #include <algorithm>
-#include <cassert>
 #include <string>
 #include <utility>
 #include <vector>
@@ -75,9 +74,17 @@ bool DebugWindow::Create() {
 }
 
 void DebugWindow::Destroy() {
-  if (HWND hwnd = hwnd_.exchange(nullptr)) {
-    assert(GetCurrentThreadId() == ui_thread_id_);
+  HWND hwnd = hwnd_.exchange(nullptr);
+  if (!hwnd) return;
+  // Detach first: from here on no message may reach this object, which the
+  // caller is free to delete.
+  SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+  if (GetCurrentThreadId() == ui_thread_id_) {
     DestroyWindow(hwnd);
+  } else {
+    // DestroyWindow fails off the owning thread; let that thread close it
+    // (DefWindowProc turns WM_CLOSE into DestroyWindow).
+    PostMessageW(hwnd, WM_CLOSE, 0, 0);
   }
 }
 

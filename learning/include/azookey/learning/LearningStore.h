@@ -24,6 +24,10 @@ inline constexpr std::string_view kLearningStoreV2Header =
 // Weight one commit added before v2 (InferenceEngineConfig::learning_alpha).
 // Migration derives commit_count from it so migrated rows keep their effect.
 inline constexpr double kLegacyCommitWeight = 0.8;
+// Upper bounds applied to values read from a file or merged from a backup, so
+// that sums neither wrap nor overflow.
+inline constexpr uint64_t kMaxLearningCount = 1'000'000'000;
+inline constexpr double kMaxLearningWeight = 1e9;
 // user-learning-enhancement-spec section 4: typo pattern confidence steps.
 inline constexpr double kTypoAcceptWeight = 0.25;
 inline constexpr double kTypoRejectWeight = 0.45;
@@ -163,6 +167,7 @@ class LearningStore {
 
  private:
   bool LoadImpl(bool migrate_plaintext);
+  bool KeepAsideCopy(const std::filesystem::path& v2_path) const;
 
   std::filesystem::path path_;
   const ByteCrypto* crypto_;
@@ -170,6 +175,9 @@ class LearningStore {
   std::map<std::string, std::map<std::string, std::map<std::string, LearningRecord>>> table_;
   mutable bool dirty_{false};
   bool save_blocked_by_load_failure_{false};
+  // Set when Load skipped malformed v2 rows: the next Save first keeps a copy
+  // of the file so those rows are not lost silently.
+  mutable bool preserve_before_save_{false};
 };
 
 }  // namespace azookey::learning

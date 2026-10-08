@@ -1,6 +1,7 @@
 #include "azookey/learning/LearningStore.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -185,9 +186,8 @@ bool ParseRecordValues(std::string_view value, LearningRecord& rec) {
 void FillMigratedCounts(LearningRecord& rec) {
   if (rec.weight <= 0.0) return;
   // Bounded so that an absurd weight cannot overflow the conversion.
-  constexpr double kMaxMigratedCommits = 1e12;
-  const double commits =
-      std::min(std::round(rec.weight / kLegacyCommitWeight), kMaxMigratedCommits);
+  const double commits = std::min(std::round(rec.weight / kLegacyCommitWeight),
+                                  static_cast<double>(kMaxLearningCount));
   rec.commit_count = commits < 1.0 ? 1 : static_cast<uint64_t>(commits);
 }
 
@@ -223,6 +223,12 @@ bool ParseV2Row(std::string_view line, LearningEntry& entry) {
       !ParseUint64(fields[6], rec.reject_count) || !event || !IsContextHash(fields[9])) {
     return false;
   }
+  // A file from a backup may carry values no Host would write; bound them so
+  // that later sums cannot wrap or overflow.
+  rec.weight = std::min(rec.weight, kMaxLearningWeight);
+  rec.commit_count = std::min(rec.commit_count, kMaxLearningCount);
+  rec.accept_count = std::min(rec.accept_count, kMaxLearningCount);
+  rec.reject_count = std::min(rec.reject_count, kMaxLearningCount);
   rec.last_event = *event;
   rec.context_hash = std::string(fields[9]);
   entry.reading = UnescapeTsvField(std::string(fields[0]));
@@ -240,6 +246,7 @@ bool ParseLegacyRow(const std::string& line, bool escaped_fields, LearningEntry&
     return false;
   }
   if (!ParseRecordValues(weight_timestamp, entry.record)) return false;
+  entry.record.weight = std::min(entry.record.weight, kMaxLearningWeight);
   if (escaped_fields) {
     entry.reading = UnescapeTsvField(entry.reading);
     entry.surface = UnescapeTsvField(entry.surface);
@@ -283,20 +290,34 @@ void ParseRows(std::string_view text, OnRow on_row, OnMalformed on_malformed) {
   }
 }
 
-// Duplicate rows keep the first occurrence (spec section 14.3). Returns false
-// when any row was malformed and skipped.
-bool ParseInto(std::string_view text, const std::filesystem::path& path, Table& table) {
-  bool all_valid = true;
+// Duplicate rows keep the first occurrence (spec section 14.3). Returns the
+// number of malformed rows that were skipped.
+size_t ParseInto(std::string_view text, const std::filesystem::path& path, Table& table) {
+  size_t malformed = 0;
   ParseRows(
       text,
       [&](LearningEntry& entry) {
         table[entry.reading][entry.surface].emplace(entry.app_name, std::move(entry.record));
       },
       [&](size_t line_number) {
-        all_valid = false;
+        ++malformed;
         LogMalformedLine(path, line_number);
       });
-  return all_valid;
+  return malformed;
+}
+
+// The shortest text that reads back as the same double, so repeated
+// save / load cycles do not drift.
+std::string FormatWeight(double weight) {
+  std::array<char, 32> buffer{};
+  const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), weight);
+  return std::string(buffer.data(), result.ptr);
+}
+
+// Both operands are bounded first, so the sum cannot wrap.
+uint64_t SaturatingAdd(uint64_t lhs, uint64_t rhs) {
+  return std::min(std::min(lhs, kMaxLearningCount) + std::min(rhs, kMaxLearningCount),
+                  kMaxLearningCount);
 }
 
 bool IsForgotten(const LearningRecord& rec) {
@@ -333,10 +354,10 @@ double SumDecayedWeight(const std::map<std::string, LearningRecord>& rows, uint6
 }
 
 void AddRecord(LearningRecord& into, const LearningRecord& from) {
-  into.weight += from.weight;
-  into.commit_count += from.commit_count;
-  into.accept_count += from.accept_count;
-  into.reject_count += from.reject_count;
+  into.weight = std::min(into.weight + from.weight, kMaxLearningWeight);
+  into.commit_count = SaturatingAdd(into.commit_count, from.commit_count);
+  into.accept_count = SaturatingAdd(into.accept_count, from.accept_count);
+  into.reject_count = SaturatingAdd(into.reject_count, from.reject_count);
   if (from.last_updated_epoch_sec >= into.last_updated_epoch_sec) {
     into.last_updated_epoch_sec = from.last_updated_epoch_sec;
     into.last_event = from.last_event;
@@ -426,6 +447,7 @@ bool LearningStore::LoadImpl(bool migrate_plaintext) {
   table_.clear();
   dirty_ = false;
   save_blocked_by_load_failure_ = false;
+  preserve_before_save_ = false;
   // The v2 file wins once it exists. Until then the M7 file is the source; it
   // is never rewritten in v2, so an older Host can still read it.
   auto source_path = LearningStoreV2PathFor(path_);
@@ -443,7 +465,14 @@ bool LearningStore::LoadImpl(bool migrate_plaintext) {
     save_blocked_by_load_failure_ = true;
     return false;
   }
-  ParseInto(text, source_path, table_);
+  const size_t malformed = ParseInto(text, source_path, table_);
+  // The next save would drop the rows that did not parse; keep the file as
+  // it is now before that happens (never discard data silently).
+  preserve_before_save_ = !from_legacy && malformed > 0;
+  if (preserve_before_save_) {
+    std::cerr << "LearningStore: " << malformed
+              << " malformed rows; the file is kept aside before the next save\n";
+  }
   if (source == ProtectedFileSource::Plaintext && migrate_plaintext &&
       !MigratePlaintextFile(source_path, text, *crypto_)) {
     save_blocked_by_load_failure_ = true;
@@ -475,7 +504,7 @@ std::string LearningStore::SerializeText() const {
   for (const auto& [key, record] : rows) {
     // key is "reading\tsurface\tapp"; app_name moves after the counts.
     const size_t app_separator = key.rfind('\t');
-    out << key.substr(0, app_separator) << '\t' << record->weight << '\t'
+    out << key.substr(0, app_separator) << '\t' << FormatWeight(record->weight) << '\t'
         << record->last_updated_epoch_sec << '\t' << record->commit_count << '\t'
         << record->accept_count << '\t' << record->reject_count << '\t'
         << key.substr(app_separator + 1) << '\t' << LearningEventTypeName(record->last_event)
@@ -487,7 +516,7 @@ std::string LearningStore::SerializeText() const {
 bool LearningStore::LoadText(std::string_view text) {
   table_.clear();
   dirty_ = true;
-  return ParseInto(text, path_, table_);
+  return ParseInto(text, path_, table_) == 0;
 }
 
 bool LearningStore::save_blocked() const { return save_blocked_by_load_failure_; }
@@ -504,13 +533,31 @@ bool LearningStore::Save(std::chrono::milliseconds retry_budget) const {
                          std::filesystem::exists(v2_path, plain_error);
   if (encrypted_error || plain_error) return false;
   if (!v2_exists && !SettleProtectedFile(path_, *crypto_)) return false;
+  if (preserve_before_save_ && !KeepAsideCopy(v2_path)) return false;
   auto text = SerializeText();
   const bool saved = WriteProtectedText(v2_path, text, *crypto_, retry_budget);
   SecureErase(text);
   if (saved) {
     dirty_ = false;
+    preserve_before_save_ = false;
   }
   return saved;
+}
+
+// Copies the file as stored (still encrypted) to <file>.corrupt-<epoch>. An
+// existing copy of the same second is kept; a failed copy blocks the save.
+bool LearningStore::KeepAsideCopy(const std::filesystem::path& v2_path) const {
+  std::error_code ec;
+  auto stored = EncryptedPathFor(v2_path);
+  if (!std::filesystem::exists(stored, ec)) stored = v2_path;
+  if (ec || !std::filesystem::exists(stored, ec)) return !ec;
+  const auto epoch = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+  auto copy = stored;
+  copy += ".corrupt-" + std::to_string(epoch);
+  if (std::filesystem::exists(copy, ec)) return !ec;
+  return std::filesystem::copy_file(stored, copy, std::filesystem::copy_options::none, ec) && !ec;
 }
 
 void LearningStore::Reset() {

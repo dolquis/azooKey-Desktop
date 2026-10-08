@@ -271,6 +271,12 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
   1 entry 32 MiB で、読む前に検査する。
 - **パス**: `destination_path` / `source_path` は絶対パスで `..` を含まず、拡張子は `.zip` とする。
   ファイル名に `:` を含むパス（NTFS の代替データストリーム）は拒否する。
+  UNC（`\\host\share`）とデバイス名前空間（`\\?\`、`\\.\`）、予約デバイス名
+  （`CON`、`PRN`、`AUX`、`NUL`、`COM1`〜`COM9`、`LPT1`〜`LPT9` など。拡張子が付いていても同じ）も拒否する。
+  `source_path` がシンボリックリンクなら、たどらずに拒否する。
+- **上書きしない確定**: export は同じディレクトリの一時ファイルへ書いてから、置換しない移動
+  （Windows では `MOVEFILE_REPLACE_EXISTING` なしの `MoveFileEx`）で確定する。
+  検査の後に別のプロセスが `destination_path` を作っても、上書きせずに `destination_exists` で失敗する。
   `destination_path` は既存ファイルを上書きせず、親ディレクトリが存在すること。
   `source_path` は存在する通常ファイルであること。
 

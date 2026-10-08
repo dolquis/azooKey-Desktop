@@ -1,5 +1,6 @@
 #include "azookey/host/BackupArchive.h"
 
+#include <chrono>
 #include <exception>
 #include <fstream>
 #include <set>
@@ -10,6 +11,13 @@
 #include "azookey/ipc/Json.h"
 #include "azookey/learning/AtomicFile.h"
 #include "azookey/learning/Sha256.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace azookey::host {
 namespace backup_archive_detail {
@@ -36,13 +44,36 @@ bool Fail(BackupError* error, BackupError value) {
   return false;
 }
 
+// Windows maps these names to devices in every directory, extension or not
+// ("NUL.zip" is the null device).
+bool IsReservedDeviceName(const fs::path& filename) {
+  std::string base;
+  for (const auto ch : filename.native()) {
+    if (ch == '.') break;
+    if (ch > 0x7F) return false;
+    base.push_back(static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 'a' + 'A' : ch));
+  }
+  while (!base.empty() && base.back() == ' ') base.pop_back();
+  for (const char* reserved : {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}) {
+    if (base == reserved) return true;
+  }
+  return base.size() == 4 && (base.starts_with("COM") || base.starts_with("LPT")) &&
+         base[3] >= '0' && base[3] <= '9';
+}
+
 // Absolute, no "." or ".." component, and a case-insensitive ".zip" extension.
 bool IsAcceptableArchivePath(const fs::path& path) {
   if (!path.is_absolute() || !path.has_filename()) return false;
+  // Two leading separators mean UNC (\\host\share) or a device namespace
+  // (\\?\, \\.\); the settings app has no reason to name either.
+  const auto& native = path.native();
+  const auto is_separator = [](fs::path::value_type ch) { return ch == '\\' || ch == '/'; };
+  if (native.size() >= 2 && is_separator(native[0]) && is_separator(native[1])) return false;
   // A ':' in the file name would address an NTFS alternate data stream.
   if (path.filename().native().find(fs::path::value_type{':'}) != fs::path::string_type::npos) {
     return false;
   }
+  if (IsReservedDeviceName(path.filename())) return false;
   for (const auto& part : path.relative_path()) {
     if (part == "." || part == "..") return false;
   }
@@ -216,6 +247,31 @@ bool CheckDestination(const fs::path& destination, BackupError* error) {
   return Fail(error, BackupError::DestinationExists);
 }
 
+// Writes a sibling temporary file, then moves it into place with an operation
+// that fails when the destination already exists, so a file created after
+// CheckDestination is never replaced.
+bool CommitWithoutReplacing(const fs::path& destination, const std::string& archive,
+                            BackupError* error) {
+  auto temporary = destination;
+  temporary +=
+      ".tmp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  if (!learning::WriteTextFileAtomically(temporary, archive)) return Fail(error, BackupError::Io);
+  std::error_code ec;
+#ifdef _WIN32
+  // Without MOVEFILE_REPLACE_EXISTING the move fails if the target exists.
+  const bool moved = MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH);
+  const DWORD move_error = moved ? ERROR_SUCCESS : GetLastError();
+  const bool exists = move_error == ERROR_ALREADY_EXISTS || move_error == ERROR_FILE_EXISTS;
+#else
+  fs::create_hard_link(temporary, destination, ec);
+  const bool moved = !ec;
+  const bool exists = ec == std::errc::file_exists;
+#endif
+  fs::remove(temporary, ec);
+  if (moved) return true;
+  return Fail(error, exists ? BackupError::DestinationExists : BackupError::Io);
+}
+
 bool WriteArchive(const fs::path& destination, const std::vector<BackupItem>& items, bool encrypt,
                   const learning::ByteCrypto& crypto, const BackupManifest& meta,
                   BackupManifest* written, uint64_t* file_size, BackupError* error) {
@@ -249,12 +305,7 @@ bool WriteArchive(const fs::path& destination, const std::vector<BackupItem>& it
   const std::string archive = BuildStoreOnlyZip(entries);
   if (archive.size() > kMaxArchiveBytes) return Fail(error, BackupError::TooLarge);
 
-  // Re-check right before the replace to narrow the window in which another
-  // writer could create the destination.
-  if (!CheckDestination(destination, error)) return false;
-  if (!learning::WriteTextFileAtomically(destination, archive)) {
-    return Fail(error, BackupError::Io);
-  }
+  if (!CommitWithoutReplacing(destination, archive, error)) return false;
   if (written) *written = std::move(manifest);
   if (file_size) *file_size = archive.size();
   if (error) *error = BackupError::None;
@@ -264,7 +315,8 @@ bool WriteArchive(const fs::path& destination, const std::vector<BackupItem>& it
 bool ReadSourceBytes(const fs::path& source, std::string& bytes, BackupError* error) {
   if (!IsAcceptableArchivePath(source)) return Fail(error, BackupError::InvalidPath);
   std::error_code ec;
-  const auto status = fs::status(source, ec);
+  // symlink_status: a link is rejected rather than followed somewhere else.
+  const auto status = fs::symlink_status(source, ec);
   if (status.type() == fs::file_type::not_found) return Fail(error, BackupError::SourceMissing);
   if (ec) return Fail(error, BackupError::Io);
   // Never open a directory: on Linux the open succeeds and the read throws.

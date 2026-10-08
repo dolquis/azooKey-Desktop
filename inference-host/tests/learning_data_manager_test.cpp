@@ -419,3 +419,31 @@ TEST(LearningDataManagerTest, PathNamingAnAlternateDataStreamIsRejected) {
       stores.View(), kAllStores, directory.File("a:b.zip"), true, kKeyA, host::BackupManifest{});
   EXPECT_EQ(exported.error, host::BackupError::InvalidPath);
 }
+
+TEST(LearningDataManagerTest, DevicePathsReservedNamesAndLinksAreRejected) {
+  ScopedDirectory directory;
+  Stores stores;
+  stores.Fill();
+  const auto export_to = [&](const std::filesystem::path& path) {
+    return host::ExportLearningData(stores.View(), kAllStores, path, true, kKeyA,
+                                    host::BackupManifest{})
+        .error;
+  };
+  EXPECT_EQ(export_to(directory.File("NUL.zip")), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(directory.File("com1.backup.zip")), host::BackupError::InvalidPath);
+#ifdef _WIN32
+  EXPECT_EQ(export_to(L"\\\\?\\C:\\azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"\\\\.\\C:\\azookey-backup.zip"), host::BackupError::InvalidPath);
+  EXPECT_EQ(export_to(L"\\\\server\\share\\azookey-backup.zip"), host::BackupError::InvalidPath);
+#endif
+
+  const auto archive = directory.File("real.zip");
+  ASSERT_EQ(export_to(archive), host::BackupError::None);
+  const auto link = directory.File("link.zip");
+  std::error_code ec;
+  std::filesystem::create_symlink(archive, link, ec);
+  if (ec) GTEST_SKIP() << "symbolic links are not available: " << ec.message();
+  const auto imported = host::ImportLearningData(stores.View(), kAllStores, link,
+                                                 learning::ImportConflictPolicy::Merge, kKeyA);
+  EXPECT_EQ(imported.error, host::BackupError::InvalidPath);
+}

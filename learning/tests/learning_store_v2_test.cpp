@@ -363,6 +363,99 @@ TEST(LearningStoreV2Test, ExistingV2FileIsSavedWhateverTheLegacyFileHolds) {
   EXPECT_EQ(ReadBytes(backup), "stale\tbackup\t1 1\n");
 }
 
+TEST(LearningStoreV2Test, MalformedV2RowsAreKeptAsideBeforeTheNextSave) {
+  ScopedLearningDirectory directory("azookey_learning_v2_keep_aside");
+  const auto path = directory.LegacyPath();
+  const auto v2_path = learning::LearningStoreV2PathFor(path);
+  ASSERT_TRUE(learning::WriteProtectedText(v2_path,
+                                           "# azookey-learning-tsv escaped=1 version=2\n"
+                                           "ok\tOK\t1\t100\t1\t0\t0\t\tcommit\t\n"
+                                           "broken row\n",
+                                           learning::test::Crypto()));
+  const auto original = ReadBytes(learning::EncryptedPathFor(v2_path));
+
+  LearningStore store(path, &learning::test::Crypto());
+  ASSERT_TRUE(store.Load());
+  EXPECT_EQ(store.size(), 1u);
+  store.Observe("新", "規", 1.0, kNow);
+  ASSERT_TRUE(store.Save());
+
+  std::vector<std::filesystem::path> copies;
+  for (const auto& entry : std::filesystem::directory_iterator(v2_path.parent_path())) {
+    if (entry.path().filename().string().find(".corrupt-") != std::string::npos) {
+      copies.push_back(entry.path());
+    }
+  }
+  ASSERT_EQ(copies.size(), 1u);
+  EXPECT_EQ(ReadBytes(copies.front()), original);
+
+  LearningStore reloaded(path, &learning::test::Crypto());
+  ASSERT_TRUE(reloaded.Load());
+  EXPECT_GT(reloaded.Score("ok", "OK", 100), 0.0);
+  EXPECT_GT(reloaded.Score("新", "規", kNow), 0.0);
+  // A clean file needs no further copy.
+  ASSERT_TRUE(reloaded.Save());
+  size_t after = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(v2_path.parent_path())) {
+    after += entry.path().filename().string().find(".corrupt-") != std::string::npos ? 1 : 0;
+  }
+  EXPECT_EQ(after, 1u);
+}
+
+TEST(LearningStoreV2Test, UnreadableLegacyFileBlocksSaveDuringMigration) {
+  ScopedLearningDirectory directory("azookey_learning_v2_unreadable_legacy");
+  const auto path = directory.LegacyPath();
+  WriteBytes(learning::EncryptedPathFor(path), "not a protected blob");
+
+  LearningStore store(path, &learning::test::Crypto());
+  EXPECT_FALSE(store.Load());
+  EXPECT_TRUE(store.save_blocked());
+  store.Observe("あ", "亜", 1.0, kNow);
+  EXPECT_FALSE(store.Save());
+  EXPECT_FALSE(
+      std::filesystem::exists(learning::EncryptedPathFor(learning::LearningStoreV2PathFor(path))));
+}
+
+TEST(LearningStoreV2Test, ImportedValuesAreBoundedAndMergesSaturate) {
+  LearningStore imported("unused.tsv", &learning::test::Crypto());
+  ASSERT_TRUE(
+      imported.LoadText("# azookey-learning-tsv escaped=1 version=2\n"
+                        "a\tA\t1e300\t1\t18446744073709551615\t0\t0\t\tcommit\t\n"));
+  const auto& bounded = imported.Rows("a", "A")->at("");
+  EXPECT_DOUBLE_EQ(bounded.weight, learning::kMaxLearningWeight);
+  EXPECT_EQ(bounded.commit_count, learning::kMaxLearningCount);
+
+  LearningStore local("unused.tsv", &learning::test::Crypto());
+  ASSERT_TRUE(
+      local.LoadText("# azookey-learning-tsv escaped=1 version=2\n"
+                     "a\tA\t1e300\t1\t18446744073709551615\t0\t0\t\tcommit\t\n"));
+  local.Merge(imported, learning::ImportConflictPolicy::Merge);
+  const auto& merged = local.Rows("a", "A")->at("");
+  EXPECT_DOUBLE_EQ(merged.weight, learning::kMaxLearningWeight);
+  EXPECT_EQ(merged.commit_count, learning::kMaxLearningCount);
+  EXPECT_TRUE(std::isfinite(local.Score("a", "A", 1)));
+}
+
+TEST(LearningStoreV2Test, WeightsSurviveRepeatedSaveAndLoadExactly) {
+  ScopedLearningDirectory directory("azookey_learning_v2_round_trip_weight");
+  const auto path = directory.LegacyPath();
+  const double weight = 0.1 + 0.2;
+  {
+    LearningStore store(path, &learning::test::Crypto());
+    store.Observe("あ", "亜", weight, kNow);
+    ASSERT_TRUE(store.Save());
+  }
+  for (int i = 0; i < 3; ++i) {
+    LearningStore store(path, &learning::test::Crypto());
+    ASSERT_TRUE(store.Load());
+    store.Observe("い", "伊", 1.0, kNow);
+    ASSERT_TRUE(store.Save());
+  }
+  LearningStore loaded(path, &learning::test::Crypto());
+  ASSERT_TRUE(loaded.Load());
+  EXPECT_EQ(loaded.Rows("あ", "亜")->at("").weight, weight);
+}
+
 TEST(LearningStoreV2Test, CountValidLearningRowsRejectsAnyMalformedRow) {
   EXPECT_EQ(learning::CountValidLearningRows("# azookey-learning-tsv escaped=1 version=2\n"
                                              "a\tA\t1\t1\t1\t0\t0\t\tcommit\t\n"),

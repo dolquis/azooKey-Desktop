@@ -358,6 +358,19 @@ bool PromotePartFile(const std::filesystem::path& part, const std::filesystem::p
 
 }  // namespace
 
+std::optional<std::string> ComputeFileSha256(const std::filesystem::path& path,
+                                             std::string* error) {
+  std::string ignored;
+  std::string& sink = error ? *error : ignored;
+#ifdef _WIN32
+  return Sha256File(path, &sink);
+#else
+  (void)path;
+  sink = "SHA256 is only supported on Windows";
+  return std::nullopt;
+#endif
+}
+
 HttpDownloader::HttpDownloader(std::wstring user_agent) : user_agent_(std::move(user_agent)) {}
 
 HttpDownloadResult HttpDownloader::Download(const HttpDownloadRequest& request) const {

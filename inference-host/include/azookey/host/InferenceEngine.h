@@ -16,9 +16,11 @@
 #include <unordered_set>
 #include <vector>
 
+#include "azookey/core/AppProfileResolver.h"
 #include "azookey/core/EtwLogger.h"
 #include "azookey/core/IConverter.h"
 #include "azookey/host/AiBackend.h"
+#include "azookey/host/CandidateTags.h"
 #include "azookey/host/HealthStateMachine.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/RewriterData.h"
@@ -72,6 +74,10 @@ struct DictionaryLayerConfig {
 struct EngineConfig {
   DictionaryLayerConfig dictionary;
   RewriterConfig rewriters;
+  // M48 profilesByApp, published with the rest of the config so a query reads
+  // one consistent snapshot without taking the UpdateConfig lock. Null means
+  // no profiles: every app gets the global settings.
+  std::shared_ptr<const core::AppProfileResolver> app_profiles;
   NllConfig nll;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
@@ -185,7 +191,8 @@ class InferenceEngine {
   CandidatesResult QueryCandidatesEx(const std::string& kana, const std::string& context,
                                      uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
                                      uint32_t max_candidates = 0, bool live = false,
-                                     const InferenceTelemetry* telemetry = nullptr);
+                                     const InferenceTelemetry* telemetry = nullptr,
+                                     const TagBoosts* tag_boosts = nullptr);
 
   // M14: one best candidate through the lightweight fallback converter. Keeps
   // dictionary and learning ranking while avoiding multi-step model generation.
@@ -261,7 +268,8 @@ class InferenceEngine {
   CandidatesResult QueryCandidatesExImpl(const std::string& kana, const std::string& context,
                                          uint64_t now_epoch_sec, const std::atomic<bool>* cancel,
                                          uint32_t max_candidates, bool live,
-                                         const InferenceTelemetry* telemetry, bool fast_only);
+                                         const InferenceTelemetry* telemetry, bool fast_only,
+                                         const TagBoosts* tag_boosts = nullptr);
   RewriterData rewriter_data_;
   // M36-A section 4-3: shape and dictionary-membership filters that decide
   // whether a committed (reading, surface) pair is an unknown word worth mining.

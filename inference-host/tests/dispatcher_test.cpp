@@ -22,8 +22,10 @@
 #include "../../learning/tests/TestByteCrypto.h"
 #include "IpcTestData.h"
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -442,6 +444,12 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
+  for (const char* capability :
+       {"app_profile", "candidate_tag", "list_models", "benchmark_model"}) {
+    EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
+              parsed->capabilities.end())
+        << capability;
+  }
 
   ipc::HandshakeRequest bad = req;
   bad.protocol_version = 999;
@@ -780,6 +788,304 @@ TEST_F(DispatcherTest, QueryCandidates) {
   ASSERT_TRUE(parsed.has_value());
   ASSERT_FALSE(parsed->candidates.empty());
   EXPECT_EQ(parsed->candidates.front().surface, "日本");
+}
+
+namespace {
+
+// Fixed, score-ordered output so the M48 tests see only the tag boost move it.
+class FixedCandidatesConverter final : public azookey::core::IConverter {
+ public:
+  std::vector<azookey::core::Candidate> Convert(const std::string& kana,
+                                                const azookey::core::ConversionContext&) override {
+    azookey::core::Candidate technical{"技術", kana, 5.0};
+    technical.tag = azookey::core::CandidateTag::Technical;
+    return {{"日本", kana, 10.0}, {"二本", kana, 8.0}, {"Nihon", kana, 6.0}, technical};
+  }
+  std::vector<azookey::core::Candidate> PredictNext(
+      const std::string& kana, const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  std::vector<azookey::core::Candidate> Correct(
+      const std::string& kana, const azookey::core::CorrectionHint&,
+      const azookey::core::ConversionContext& context) override {
+    return Convert(kana, context);
+  }
+  void Commit(const azookey::core::Candidate&, const azookey::core::ConversionContext&) override {}
+  void Learn(const std::string&, const std::string&) override {}
+};
+
+class AppProfileDispatchTest : public ::testing::Test {
+ protected:
+  AppProfileDispatchTest()
+      // Per-test name: CTest runs each TEST_F in its own process, possibly in
+      // parallel, so a shared file would be rewritten under another test.
+      : settings_path(TempPath(
+            ("azookey_dispatcher_app_profile_" +
+             std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()) + ".json")
+                .c_str())),
+        engine(std::make_unique<FixedCandidatesConverter>(), nullptr, {}) {}
+  ~AppProfileDispatchTest() override { std::remove(settings_path.c_str()); }
+
+  // Writes settings.json and publishes it through UpdateConfig, as the
+  // settings app does.
+  void ApplySettings(const std::string& json) {
+    {
+      std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+      ASSERT_TRUE(out.is_open());
+      out << json;
+    }
+    settings_store.emplace(settings_path);
+    settings_store->Load();
+    dispatcher.emplace(&engine, &scheduler, nullptr, DefaultDispatcherConfig(), &*settings_store);
+    ipc::Envelope update;
+    update.version = 1;
+    update.request_id = 1;
+    update.type = ipc::MessageType::UpdateConfig;
+    update.payload_json = "{}";
+    const auto response = dispatcher->Dispatch(update);
+    ASSERT_TRUE(response.has_value());
+    const auto parsed = ipc::ParseUpdateConfigResponse(response->payload_json);
+    ASSERT_TRUE(parsed.has_value());
+    ASSERT_TRUE(parsed->ok);
+  }
+
+  std::vector<ipc::CandidateField> Query(std::optional<ipc::AppIdentity> app) {
+    ipc::QueryCandidatesRequest q;
+    q.reading = "にほん";
+    q.app = std::move(app);
+    ipc::Envelope env;
+    env.version = 1;
+    env.request_id = ++next_id;
+    env.type = ipc::MessageType::QueryCandidates;
+    env.payload_json = ipc::BuildQueryCandidatesRequest(q);
+    const auto response = dispatcher->Dispatch(env);
+    EXPECT_TRUE(response.has_value());
+    const auto parsed =
+        response ? ipc::ParseQueryCandidatesResponse(response->payload_json) : std::nullopt;
+    EXPECT_TRUE(parsed.has_value());
+    return parsed ? parsed->candidates : std::vector<ipc::CandidateField>{};
+  }
+
+  // Position of surface, or candidates.size() when absent.
+  static size_t IndexOf(const std::vector<ipc::CandidateField>& candidates,
+                        const std::string& surface) {
+    return static_cast<size_t>(
+        std::find_if(candidates.begin(), candidates.end(),
+                     [&](const ipc::CandidateField& c) { return c.surface == surface; }) -
+        candidates.begin());
+  }
+
+  static void ExpectGlobalOrder(const std::vector<ipc::CandidateField>& candidates) {
+    ASSERT_LT(IndexOf(candidates, "Nihon"), candidates.size());
+    EXPECT_LT(IndexOf(candidates, "日本"), IndexOf(candidates, "二本"));
+    EXPECT_LT(IndexOf(candidates, "二本"), IndexOf(candidates, "Nihon"));
+  }
+
+  std::string settings_path;
+  azookey::host::InferenceEngine engine;
+  azookey::host::RequestScheduler scheduler;
+  std::optional<azookey::host::SettingsStore> settings_store;
+  std::optional<azookey::host::Dispatcher> dispatcher;
+  uint64_t next_id = 100;
+};
+
+constexpr const char* kCodeProfileSettings =
+    R"({"profilesByApp":{"code.exe":{"candidateTagBoosts":{"English":3.0}}}})";
+
+}  // namespace
+
+TEST_F(AppProfileDispatchTest, CandidateTagBoostsReorderCandidatesForTheMatchingApp) {
+  ApplySettings(kCodeProfileSettings);
+  const auto boosted = Query(ipc::AppIdentity{"Code.exe", "Chrome_WidgetWin_1"});
+  ASSERT_LT(IndexOf(boosted, "Nihon"), boosted.size());
+  // 6.0 x 3.0 overtakes 10.0; the untagged candidates keep their order.
+  EXPECT_LT(IndexOf(boosted, "Nihon"), IndexOf(boosted, "日本"));
+  EXPECT_LT(IndexOf(boosted, "日本"), IndexOf(boosted, "二本"));
+  EXPECT_EQ(boosted[IndexOf(boosted, "Nihon")].tag,
+            static_cast<uint8_t>(azookey::core::CandidateTag::English));
+}
+
+TEST_F(AppProfileDispatchTest, RequestsWithoutAppKeepTheGlobalOrder) {
+  ApplySettings(kCodeProfileSettings);
+  ExpectGlobalOrder(Query(std::nullopt));
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"notepad.exe", "Notepad"}));
+}
+
+TEST_F(AppProfileDispatchTest, TheDefaultProfileDoesNotApplyWithoutAResolvedApp) {
+  ApplySettings(R"({"profilesByApp":{"default":{"candidateTagBoosts":{"English":3.0}}}})");
+  ExpectGlobalOrder(Query(std::nullopt));
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"", "Chrome_WidgetWin_1"}));
+  // A resolved app with no profile of its own does get the default profile.
+  const auto resolved = Query(ipc::AppIdentity{"notepad.exe", ""});
+  EXPECT_LT(IndexOf(resolved, "Nihon"), IndexOf(resolved, "日本"));
+}
+
+TEST_F(AppProfileDispatchTest, InvalidProfileValuesFallBackWithoutFailingTheQuery) {
+  ApplySettings(
+      R"({"profilesByApp":{"code.exe":{"candidateTagBoosts":{"English":"high","Unknown":2.0},)"
+      R"("style":"shouting"},"bad.exe":7}})");
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"code.exe", ""}));
+  ExpectGlobalOrder(Query(ipc::AppIdentity{"bad.exe", ""}));
+}
+
+TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {
+  ApplySettings(R"({"profilesByApp":{"code.exe":{"style":"technical"}}})");
+  const auto plain = Query(ipc::AppIdentity{"notepad.exe", ""});
+  EXPECT_LT(IndexOf(plain, "Nihon"), IndexOf(plain, "技術"));
+  // 5.0 x 1.5 = 7.5 passes Nihon (6.0) but not 二本 (8.0); English stays put.
+  const auto technical = Query(ipc::AppIdentity{"code.exe", ""});
+  ASSERT_LT(IndexOf(technical, "技術"), technical.size());
+  EXPECT_LT(IndexOf(technical, "技術"), IndexOf(technical, "Nihon"));
+  EXPECT_LT(IndexOf(technical, "二本"), IndexOf(technical, "技術"));
+  EXPECT_EQ(technical[IndexOf(technical, "技術")].tag,
+            static_cast<uint8_t>(azookey::core::CandidateTag::Technical));
+}
+
+TEST_F(DispatcherTest, ListModelsScansOnlyTheModelsDirectory) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_list_models";
+  RemovePathNoThrow(root);
+  std::filesystem::create_directories(root / "models");
+  {
+    std::ofstream out(root / "models" / "broken.gguf", std::ios::binary);
+    out << "NOPE";
+  }
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = root / "models";
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  const auto list = [&](uint64_t id, const ipc::ListModelsRequest& request) {
+    const auto response = models_dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::ListModels, ipc::BuildListModelsRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    if (response) EXPECT_EQ(response->type, ipc::MessageType::ListModels);
+    return response ? ipc::ParseListModelsResponse(response->payload_json) : std::nullopt;
+  };
+  const auto listed = list(801, {});
+  ASSERT_TRUE(listed && listed->ok);
+  ASSERT_EQ(listed->models.size(), 1u);
+  EXPECT_EQ(listed->models[0].file_name, "broken.gguf");
+  EXPECT_FALSE(listed->models[0].valid);
+  EXPECT_EQ(listed->models[0].last_error, "magic_mismatch");
+  EXPECT_EQ(listed->models[0].last_load_status, "not_loaded");
+
+  ipc::ListModelsRequest outside;
+  outside.directory = azookey::core::PathToUtf8(root);
+  const auto rejected = list(802, outside);
+  ASSERT_TRUE(rejected);
+  EXPECT_FALSE(rejected->ok);
+  EXPECT_EQ(rejected->error, "directory_outside_models_root");
+
+  // Without a configured models directory the Host refuses rather than guessing.
+  const auto unconfigured = dispatcher.Dispatch(MakeReq(803, ipc::MessageType::ListModels, "{}"));
+  ASSERT_TRUE(unconfigured.has_value());
+  const auto unconfigured_parsed = ipc::ParseListModelsResponse(unconfigured->payload_json);
+  ASSERT_TRUE(unconfigured_parsed);
+  EXPECT_FALSE(unconfigured_parsed->ok);
+  EXPECT_EQ(unconfigured_parsed->error, "models_dir_unavailable");
+  RemovePathNoThrow(root);
+}
+
+#if !AZOOKEY_WITH_LLAMA_CPP
+// The header-only GGUF loads only in the probe-only (no llama.cpp) build.
+TEST_F(DispatcherTest, ListModelsReportsTheModelTheLiveEngineLoaded) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_list_loaded";
+  RemovePathNoThrow(root);
+  std::filesystem::create_directories(root);
+  const auto model = root / "live.gguf";
+  {
+    // magic, v3, one tensor, one key: general.architecture = "gpt2".
+    std::string bytes = "GGUF";
+    const auto u32 = [&](uint32_t v) {
+      for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+    };
+    const auto u64 = [&](uint64_t v) {
+      for (int i = 0; i < 8; ++i) bytes.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+    };
+    u32(3);
+    u64(1);
+    u64(1);
+    const std::string key = "general.architecture";
+    u64(key.size());
+    bytes += key;
+    u32(8);
+    u64(4);
+    bytes += "gpt2";
+    std::ofstream out(model, std::ios::binary);
+    out << bytes;
+  }
+  azookey::host::ModelLoadOptions load;
+  load.path = azookey::core::PathToUtf8(model);
+  ASSERT_TRUE(engine.LoadModelWithResult(load).ok);
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = root;
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto response =
+      models_dispatcher.Dispatch(MakeReq(804, ipc::MessageType::ListModels, "{}"));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseListModelsResponse(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->models.size() == 1u);
+  EXPECT_TRUE(parsed->models[0].valid) << parsed->models[0].last_error;
+  EXPECT_EQ(parsed->models[0].last_load_status, "success");
+  EXPECT_EQ(parsed->models[0].metadata.model_family, "gpt2");
+  RemovePathNoThrow(root);
+}
+#endif
+
+TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiveEngine) {
+  const bool loaded_before = engine.model_loaded();
+  const auto bench = [&](uint64_t id, const std::string& payload) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::BenchmarkModel, payload));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseBenchmarkModelResponse(response->payload_json) : std::nullopt;
+  };
+  const auto malformed = bench(811, "{}");
+  ASSERT_TRUE(malformed);
+  EXPECT_EQ(malformed->status, "error");
+  EXPECT_EQ(malformed->error, "invalid_request");
+  const auto unconfigured = bench(812, R"({"path":"definitely-missing.gguf"})");
+  ASSERT_TRUE(unconfigured);
+  EXPECT_EQ(unconfigured->status, "error");
+  EXPECT_EQ(unconfigured->error, "models_dir_unavailable");
+
+  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_benchmark";
+  RemovePathNoThrow(root);
+  std::filesystem::create_directories(root / "models");
+  {
+    std::ofstream out(root / "models" / "broken.gguf", std::ios::binary);
+    out << "NOPE";
+    std::ofstream outside(root / "outside.gguf", std::ios::binary);
+    outside << "NOPE";
+  }
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = root / "models";
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto bench_in = [&](uint64_t id, const std::filesystem::path& path) {
+    ipc::BenchmarkModelRequest request;
+    request.path = azookey::core::PathToUtf8(path);
+    const auto response = models_dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::BenchmarkModel, ipc::BuildBenchmarkModelRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseBenchmarkModelResponse(response->payload_json) : std::nullopt;
+  };
+  // Like ListModels, only paths under the models directory are accepted.
+  const auto outside = bench_in(813, root / "outside.gguf");
+  ASSERT_TRUE(outside);
+  EXPECT_EQ(outside->error, "path_outside_models_root");
+  const auto broken = bench_in(814, root / "models" / "broken.gguf");
+  ASSERT_TRUE(broken);
+  EXPECT_EQ(broken->error, "invalid_model");
+  {
+    // A second benchmark while one runs is refused rather than queued.
+    const auto running = azookey::host::TryAcquireBenchmarkSlot();
+    ASSERT_TRUE(running.owns_lock());
+    const auto busy = bench_in(815, root / "models" / "broken.gguf");
+    ASSERT_TRUE(busy);
+    EXPECT_EQ(busy->status, "error");
+    EXPECT_EQ(busy->error, "busy");
+  }
+  EXPECT_EQ(engine.model_loaded(), loaded_before);
+  RemovePathNoThrow(root);
 }
 
 TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {

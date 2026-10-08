@@ -459,6 +459,20 @@ TEST(SettingsStoreTest, ModelBlockOverridesRootBackendAndCanDisableModel) {
   EXPECT_EQ(config.backend, azookey::host::BackendKind::Cpu);
   EXPECT_TRUE(config.model_path.empty());
   EXPECT_FALSE(config.n_gpu_layers.has_value());
+  // M45 section 5.2: both keys present is flagged so the Host can warn.
+  EXPECT_TRUE(result.settings.backend_preference_conflict);
+}
+
+TEST(SettingsStoreTest, BackendPreferenceConflictNeedsBothKeys) {
+  ScopedTempDirectory temp("azookey_settings_backend_conflict");
+  const auto path = temp.path() / "settings.json";
+  for (const char* json :
+       {R"({"backendPreference":"cuda"})", R"({"model":{"backendPreference":"cpu"}})",
+        R"({"backendPreference":"cuda","model":{"enabled":true}})"}) {
+    WriteText(path, json);
+    azookey::host::SettingsStore store(path);
+    EXPECT_FALSE(store.Load().settings.backend_preference_conflict) << json;
+  }
 }
 
 TEST(SettingsStoreTest, VulkanPreferenceAndAutoResolveAgainstBuildDefault) {

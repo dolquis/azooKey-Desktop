@@ -106,6 +106,9 @@ struct RuntimeSettings {
   std::string backend_preference{"auto"};
   std::string ep_preference{"auto"};
   RuntimeModelSettings model;
+  // Both root backendPreference and model.backendPreference are present; the
+  // model value is used and the Host logs a warning (M45 section 5.2).
+  bool backend_preference_conflict{false};
   std::string power_profile{"auto"};
   int32_t inference_threads{0};
   int32_t max_candidates{9};

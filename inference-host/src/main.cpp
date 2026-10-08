@@ -37,6 +37,7 @@
 #include "azookey/host/HostStartup.h"
 #include "azookey/host/InferenceEngine.h"
 #include "azookey/host/LookupCli.h"
+#include "azookey/host/ModelsCli.h"
 #include "azookey/host/NeologdPack.h"
 #include "azookey/host/NewWordsCli.h"
 #include "azookey/host/RequestScheduler.h"
@@ -447,6 +448,7 @@ int main(int argc, char** argv) {
   auto userdict_args = std::move(parsed_args.args.userdict_args);
   auto lookup_args = std::move(parsed_args.args.lookup_args);
   auto newwords_args = std::move(parsed_args.args.newwords_args);
+  auto models_args = std::move(parsed_args.args.models_args);
   const auto resolve_client_token = [&]() {
     if (!handshake_token.empty()) return true;
     const auto token = azookey::ipc::ReadClientHandshakeToken();
@@ -477,6 +479,25 @@ int main(int argc, char** argv) {
     run_options.learning_path = user_paths->learning_path;
     run_options.user_dict_path = user_paths->user_dict_path;
     auto result = azookey::host::RunLookupCli(*cli_options, run_options);
+    for (const auto& line : result.output_lines) {
+      std::cout << line << std::endl;
+    }
+    if (!result.error.empty()) {
+      std::cerr << "error: " << result.error << std::endl;
+    }
+    return result.exit_code;
+  }
+
+  if (models_args) {
+    std::string parse_error;
+    auto cli_options = azookey::host::ParseModelsCliArgs(*models_args, &parse_error);
+    if (!cli_options) {
+      std::cerr << "error: " << parse_error << std::endl;
+      return 2;
+    }
+    azookey::host::ModelsCliRunOptions run_options;
+    run_options.models_dir = user_paths->models_dir;
+    auto result = azookey::host::RunModelsCli(*cli_options, run_options);
     for (const auto& line : result.output_lines) {
       std::cout << line << std::endl;
     }
@@ -664,6 +685,10 @@ int main(int argc, char** argv) {
   if (explicit_model_path && !safe_mode) {
     config.model_path = cli_model_path;
   }
+  if (settings_result.settings.backend_preference_conflict) {
+    runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "backend_preference_conflict",
+                    {{"result", SafeLogText("ok")}, {"error_code", SafeLogText("business")}});
+  }
   if (settings_result.status == azookey::host::SettingsLoadStatus::Invalid) {
     runtime_log.Log(azookey::logging::RuntimeLogLevel::Warn, "settings_load_failed",
                     {{"result", SafeLogText("error")}, {"error_code", SafeLogText("business")}});
@@ -795,6 +820,7 @@ int main(int argc, char** argv) {
   dconf.runtime_tier = "mock";
 #endif
   dconf.default_backend = default_backend;
+  dconf.models_dir = user_paths->models_dir;
   if (explicit_backend) {
     dconf.override_backend = cli_backend;
   }

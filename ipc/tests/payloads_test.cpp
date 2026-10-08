@@ -435,6 +435,74 @@ TEST(PayloadsTest, QueryCandidatesPunctuationSegmentsAndLegacyDefaults) {
   EXPECT_TRUE(old_response->segments.empty());
 }
 
+TEST(PayloadsTest, QueryRequestsCarryTheForegroundAppAndOmitItWhenUnknown) {
+  using namespace azookey::ipc;
+  QueryCandidatesRequest request;
+  request.reading = "かな";
+  request.app = AppIdentity{"code.exe", "Chrome_WidgetWin_1"};
+  const auto wire = json::Parse(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(wire);
+  const auto* app = wire->FindObject("app");
+  ASSERT_NE(app, nullptr);
+  EXPECT_EQ(json::Value(*app).GetString("process_name"), "code.exe");
+  EXPECT_EQ(json::Value(*app).GetString("window_class"), "Chrome_WidgetWin_1");
+  const auto parsed = ParseQueryCandidatesRequest(BuildQueryCandidatesRequest(request));
+  ASSERT_TRUE(parsed && parsed->app);
+  EXPECT_EQ(parsed->app->process_name, "code.exe");
+  EXPECT_EQ(parsed->app->window_class, "Chrome_WidgetWin_1");
+
+  request.app.reset();
+  EXPECT_FALSE(json::Parse(BuildQueryCandidatesRequest(request))->FindObject("app"));
+  // An older TIP never sends app; a malformed one degrades to "unknown app"
+  // instead of failing the query.
+  for (const char* payload :
+       {R"({"reading":"かな"})", R"({"reading":"かな","app":"code.exe"})",
+        R"({"reading":"かな","app":{"process_name":7}})", R"({"reading":"かな","app":{}})"}) {
+    const auto legacy = ParseQueryCandidatesRequest(payload);
+    ASSERT_TRUE(legacy) << payload;
+    EXPECT_FALSE(legacy->app.has_value()) << payload;
+  }
+
+  QueryPredictionsRequest prediction{"にほん", "", "word", AppIdentity{"outlook.exe", ""}};
+  const auto parsed_prediction =
+      ParseQueryPredictionsRequest(BuildQueryPredictionsRequest(prediction));
+  ASSERT_TRUE(parsed_prediction && parsed_prediction->app);
+  EXPECT_EQ(parsed_prediction->app->process_name, "outlook.exe");
+  EXPECT_TRUE(parsed_prediction->app->window_class.empty());
+  const auto legacy_prediction =
+      ParseQueryPredictionsRequest(R"({"kana":"かな","leftSideContext":"","mode":"word"})");
+  ASSERT_TRUE(legacy_prediction);
+  EXPECT_FALSE(legacy_prediction->app.has_value());
+}
+
+TEST(PayloadsTest, CandidateTagRoundTripsAndIsOmittedWhenNone) {
+  using namespace azookey::ipc;
+  QueryCandidatesResponse response;
+  response.candidates = {{"Nihon", "にほん", 1.0, "model", "", 4},
+                         {"日本", "にほん", 0.5, "system"}};
+  const auto json_text = BuildQueryCandidatesResponse(response);
+  const auto wire = json::Parse(json_text);
+  ASSERT_TRUE(wire);
+  const auto* candidates = wire->GetArray("candidates");
+  ASSERT_TRUE(candidates && candidates->size() == 2u);
+  EXPECT_EQ((*candidates)[0].GetUInt("tag"), 4u);
+  EXPECT_FALSE((*candidates)[1].Find("tag"));
+
+  const auto parsed = ParseQueryCandidatesResponse(json_text);
+  ASSERT_TRUE(parsed && parsed->candidates.size() == 2u);
+  EXPECT_EQ(parsed->candidates[0].tag, 4u);
+  EXPECT_EQ(parsed->candidates[1].tag, 0u);
+
+  // Unknown tags pass through; values beyond uint8 decode as None.
+  const auto other = ParseQueryCandidatesResponse(
+      R"({"candidates":[{"surface":"a","reading":"a","tag":9},)"
+      R"({"surface":"b","reading":"b","tag":256},{"surface":"c","reading":"c","tag":"x"}]})");
+  ASSERT_TRUE(other && other->candidates.size() == 3u);
+  EXPECT_EQ(other->candidates[0].tag, 9u);
+  EXPECT_EQ(other->candidates[1].tag, 0u);
+  EXPECT_EQ(other->candidates[2].tag, 0u);
+}
+
 TEST(PayloadsTest, QueryCandidatesResponseDropsMalformedEntries) {
   // A mix of valid and malformed candidate entries must parse successfully,
   // preserving the valid entries in order while silently dropping the malformed
@@ -1110,4 +1178,124 @@ TEST(PayloadsTest, EventPrivacyDefaultsDenyAndExplicitFlagsRoundTrip) {
       EXPECT_EQ(parsed->learning_allowed, false);
     }
   }
+}
+
+TEST(PayloadsTest, ListModelsRoundTripAndStableSchema) {
+  using namespace azookey::ipc;
+  ListModelsRequest request;
+  request.compute_sha256 = true;
+  EXPECT_EQ(BuildListModelsRequest(request), R"({"compute_sha256":true})");
+  const auto parsed_request =
+      ParseListModelsRequest(R"({"directory":"%LOCALAPPDATA%/azooKey/models"})");
+  ASSERT_TRUE(parsed_request);
+  EXPECT_EQ(parsed_request->directory, "%LOCALAPPDATA%/azooKey/models");
+  EXPECT_FALSE(parsed_request->compute_sha256);
+  EXPECT_FALSE(ParseListModelsRequest(R"({"directory":7})"));
+  EXPECT_FALSE(ParseListModelsRequest("[]"));
+
+  ListModelsResponse response;
+  ListedModel gguf;
+  gguf.path = "C:/m/zenzai.gguf";
+  gguf.file_name = "zenzai.gguf";
+  gguf.format = "gguf";
+  gguf.size_bytes = 1234;
+  gguf.valid = true;
+  gguf.metadata.model_family = "gpt2";
+  gguf.metadata.quantization = "Q4_K_M";
+  gguf.last_load_status = "success";
+  ListedModel onnx;
+  onnx.path = "C:/m/zenz-onnx";
+  onnx.file_name = "zenz-onnx";
+  onnx.format = "onnx_genai";
+  onnx.last_load_status = "not_loaded";
+  onnx.last_error = "missing_tokenizer";
+  response.models = {gguf, onnx};
+  // Section 9 snapshot: the field set and spelling are the stable schema the
+  // settings app and `models list --json` consume.
+  const auto json_text = BuildListModelsResponse(response);
+  EXPECT_EQ(json_text, R"({"models":[{"file_name":"zenzai.gguf","format":"gguf","gguf_valid":true,)"
+                       R"("last_load_status":"success","metadata":{"model_family":"gpt2",)"
+                       R"("quantization":"Q4_K_M"},"path":"C:/m/zenzai.gguf","size_bytes":1234,)"
+                       R"("valid":true},{"file_name":"zenz-onnx","format":"onnx_genai",)"
+                       R"("last_error":"missing_tokenizer","last_load_status":"not_loaded",)"
+                       R"("metadata":{},"path":"C:/m/zenz-onnx","size_bytes":0,"valid":false}]})");
+  const auto parsed = ParseListModelsResponse(json_text);
+  ASSERT_TRUE(parsed && parsed->ok);
+  ASSERT_EQ(parsed->models.size(), 2u);
+  EXPECT_EQ(parsed->models[0].metadata.quantization, "Q4_K_M");
+  EXPECT_TRUE(parsed->models[0].valid);
+  EXPECT_EQ(parsed->models[1].last_error, "missing_tokenizer");
+  EXPECT_FALSE(parsed->models[1].valid);
+
+  const auto failed = ParseListModelsResponse(
+      R"({"ok":false,"error":"directory_outside_models_root","models":[{"path":1},{}]})");
+  ASSERT_TRUE(failed);
+  EXPECT_FALSE(failed->ok);
+  EXPECT_EQ(failed->error, "directory_outside_models_root");
+  EXPECT_TRUE(failed->models.empty());
+  EXPECT_FALSE(ParseListModelsResponse(R"({"ok":true})"));
+
+  // An empty models directory still round-trips as ok with an empty list.
+  EXPECT_EQ(BuildListModelsResponse(ListModelsResponse{}), R"({"models":[]})");
+  const auto empty = ParseListModelsResponse(BuildListModelsResponse(ListModelsResponse{}));
+  ASSERT_TRUE(empty);
+  EXPECT_TRUE(empty->ok);
+  EXPECT_TRUE(empty->models.empty());
+  EXPECT_FALSE(empty->error.has_value());
+}
+
+TEST(PayloadsTest, BenchmarkModelRoundTripAndStableSchema) {
+  using namespace azookey::ipc;
+  BenchmarkModelRequest request;
+  request.path = "C:/m/zenzai.gguf";
+  request.backend = "cuda";
+  request.cases = {"にほんご", "わたし"};
+  request.iterations = 20;
+  request.warmup = 2;
+  const auto parsed_request = ParseBenchmarkModelRequest(BuildBenchmarkModelRequest(request));
+  ASSERT_TRUE(parsed_request);
+  EXPECT_EQ(parsed_request->path, request.path);
+  EXPECT_EQ(parsed_request->backend, "cuda");
+  EXPECT_EQ(parsed_request->cases, request.cases);
+  EXPECT_EQ(parsed_request->iterations, 20u);
+  EXPECT_EQ(parsed_request->warmup, 2u);
+  const auto defaults = ParseBenchmarkModelRequest(R"({"path":"m.gguf"})");
+  ASSERT_TRUE(defaults);
+  EXPECT_EQ(defaults->backend, "cpu");
+  EXPECT_TRUE(defaults->cases.empty());
+  EXPECT_EQ(defaults->iterations, 50u);
+  EXPECT_EQ(defaults->warmup, 5u);
+  EXPECT_FALSE(ParseBenchmarkModelRequest(R"({"path":""})"));
+  EXPECT_FALSE(ParseBenchmarkModelRequest(R"({"path":"m","cases":["a",1]})"));
+  EXPECT_FALSE(ParseBenchmarkModelRequest(R"({"path":"m","iterations":4294967296})"));
+
+  BenchmarkModelResponse response;
+  response.backend = "cpu";
+  response.p50_ms = 1.5;
+  response.p95_ms = 2.5;
+  response.p99_ms = 4;
+  response.load_ms = 120;
+  response.rss_mb = 512;
+  response.status = "success";
+  response.iterations_completed = 50;
+  const auto json_text = BuildBenchmarkModelResponse(response);
+  EXPECT_EQ(json_text, R"({"backend":"cpu","error":null,"iterations_completed":50,"load_ms":120,)"
+                       R"("p50_ms":1.5,"p95_ms":2.5,"p99_ms":4,"rss_mb":512,"status":"success",)"
+                       R"("vram_mb":null})");
+  const auto parsed = ParseBenchmarkModelResponse(json_text);
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(parsed->status, "success");
+  EXPECT_FALSE(parsed->error.has_value());
+  EXPECT_FALSE(parsed->vram_mb.has_value());
+  EXPECT_DOUBLE_EQ(parsed->p95_ms, 2.5);
+  EXPECT_EQ(parsed->iterations_completed, 50u);
+
+  response.status = "timeout";
+  response.error = "timeout";
+  response.vram_mb = 300;
+  const auto timeout = ParseBenchmarkModelResponse(BuildBenchmarkModelResponse(response));
+  ASSERT_TRUE(timeout);
+  EXPECT_EQ(timeout->error, "timeout");
+  EXPECT_EQ(timeout->vram_mb, 300.0);
+  EXPECT_FALSE(ParseBenchmarkModelResponse(R"({"backend":"cpu"})"));
 }

@@ -78,6 +78,13 @@ TEST(MessagesTest, TypeStringMapping) {
             "UpdateConfig");
   EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ReverseConvert),
             "ReverseConvert");
+  for (const auto type :
+       {azookey::ipc::MessageType::ListModels, azookey::ipc::MessageType::BenchmarkModel}) {
+    EXPECT_EQ(azookey::ipc::TypeFromString(azookey::ipc::TypeToString(type)), type);
+  }
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::ListModels), "ListModels");
+  EXPECT_EQ(azookey::ipc::TypeToString(azookey::ipc::MessageType::BenchmarkModel),
+            "BenchmarkModel");
 }
 
 TEST(MessagesTest, LengthPrefixedFramingRoundTrip) {

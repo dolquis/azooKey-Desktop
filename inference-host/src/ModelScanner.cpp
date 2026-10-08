@@ -10,6 +10,7 @@
 
 #include "azookey/core/PlatformPaths.h"
 #include "azookey/host/HttpDownloader.h"
+#include "azookey/host/UserDataPaths.h"
 #include "azookey/ipc/Json.h"
 
 namespace azookey::host {
@@ -254,21 +255,6 @@ uint64_t DirectorySize(const fs::path& dir) {
   return total;
 }
 
-std::optional<fs::path> ExpandLocalAppData(std::string_view requested) {
-  static constexpr std::string_view kPrefix = "%LOCALAPPDATA%";
-  if (requested.size() < kPrefix.size()) return core::Utf8Path(requested);
-  for (size_t i = 0; i < kPrefix.size(); ++i) {
-    const char c = requested[i];
-    const char upper = c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c;
-    if (upper != kPrefix[i]) return core::Utf8Path(requested);
-  }
-  const auto base = core::GetLocalAppDataDirectory();
-  if (!base) return std::nullopt;
-  auto rest = requested.substr(kPrefix.size());
-  while (!rest.empty() && (rest.front() == '\\' || rest.front() == '/')) rest.remove_prefix(1);
-  return rest.empty() ? *base : *base / core::Utf8Path(rest);
-}
-
 // Bounds the directory walk itself; inspection is bounded by max_entries.
 constexpr size_t kMaxCandidatePaths = 4096;
 
@@ -402,7 +388,7 @@ std::optional<fs::path> ResolveModelListingDirectory(std::string_view requested,
                                                      const fs::path& models_root) {
   if (models_root.empty()) return std::nullopt;
   const auto expanded =
-      requested.empty() ? std::optional{models_root} : ExpandLocalAppData(requested);
+      requested.empty() ? std::optional{models_root} : ExpandLocalAppDataPrefix(requested);
   if (!expanded || !expanded->is_absolute()) return std::nullopt;
   std::error_code ec;
   const auto root = fs::weakly_canonical(models_root, ec);

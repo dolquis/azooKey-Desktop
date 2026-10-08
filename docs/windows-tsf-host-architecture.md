@@ -118,9 +118,11 @@ Linear が持つ。
   済みのモデルを active のまま維持する（`LoadModelFailureKeepsPreviouslyLoadedModel`）。
   SafeMode 中はロードせず `ok=false` / `error: "safe_mode"` を返す
   （`docs/dev-infrastructure-spec.md` §8.5.3）。
-- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live, app?)` /
+- ✅ `QueryCandidates` — 要求 `(reading, left_context, max_candidates, live, app?, raw_romaji?,
+  english_candidates?)` /
   応答 `(candidates[], partial)`。各 candidate は `(surface, reading, score, source,
-  description?, tag?)`。`app` と `tag` は `docs/app-profile-spec.md` §3.1 / §7 に従う。
+  description?, tag?)`。`app` と `tag` は `docs/app-profile-spec.md` §3.1 / §7、`raw_romaji` と
+  `english_candidates` は `docs/inline-english-candidate-spec.md` §6.2 に従う。
   応答前に `max_candidates` で件数を切り詰める。
 - ✅ `ReverseConvert` — 要求 `(surface)` / 応答 `(reading, confidence)`。
   逆引きの順序は `docs/tsf-deep-integration-spec.md` §1.2 に従う。どこにも当たらない表層形では空の読みと信頼度 0 を返す。

@@ -339,6 +339,8 @@ std::string BuildQueryCandidatesRequest(const QueryCandidatesRequest& p) {
   o.emplace("secure", j::Value(p.secure));
   o.emplace("learning_allowed", j::Value(p.learning_allowed));
   AppToJson(p.app, o);
+  if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
+  if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
   return j::Stringify(j::Value(std::move(o)));
 }
 
@@ -358,6 +360,8 @@ std::optional<QueryCandidatesRequest> ParseQueryCandidatesRequest(const std::str
   p.secure = v->GetBool("secure").value_or(true);
   p.learning_allowed = v->GetBool("learning_allowed").value_or(false);
   p.app = AppFromJson(*v);
+  p.raw_romaji = v->GetString("raw_romaji").value_or(std::string());
+  p.english_candidates = v->GetBool("english_candidates").value_or(false);
   return p;
 }
 

@@ -199,12 +199,14 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
     if (key == "inputMode") {
       valid = IsStringEnum(value, {"hiragana", "alnum_half", "alnum_full"});
     } else if (key == "liveConversion" || key == "dynamicPunctuation" ||
-               key == "llmMagicConversion" ||
-               key == "predictionEnabled" || key == "includeContextInAITransform" ||
-               key == "contextReselection" || key == "postCommitLint" ||
-               key == "retroactiveRecompute" || key == "sentenceCompletion" ||
-               key == "batchRomajiConversion" || key == "batchAutoPunctuation" ||
-               key == "numberRewriter" || key == "katakanaRewriter" || key == "symbolRewriter" ||
+               key == "llmMagicConversion" || key == "predictionEnabled" ||
+               key == "includeContextInAITransform" || key == "contextReselection" ||
+               key == "postCommitLint" || key == "retroactiveRecompute" ||
+               key == "sentenceCompletion" || key == "batchRomajiConversion" ||
+               key == "batchAutoPunctuation" || key == "numberRewriter" ||
+               key == "katakanaRewriter" || key == "symbolRewriter" ||
+               key == "inlineEnglishCandidates" || key == "inlineEnglishCaseVariants" ||
+               key == "fullWidthEnglishCandidate" || key == "inlineEnglishDictionary" ||
                key == "emojiRewriter" || key == "emojiTriggerSearch" || key == "bracketPairing" ||
                key == "bracketSkipOverClosing" || key == "bracketBackspaceDeletesPair" ||
                key == "bracketPairingInAlnumMode" || key == "bracketSymmetricQuotePairing" ||
@@ -223,8 +225,8 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsStringEnum(value, {"default", "custom"});
     } else if (key == "customRomajiTablePath" || key == "openAiApiKey" ||
                key == "openAiApiEndpoint" || key == "openAiModel" || key == "bracketPairsPath" ||
-               key == "symbolDataPath" || key == "emojiDataPath" ||
-               key == "punctuationRulesPath") {
+               key == "symbolDataPath" || key == "emojiDataPath" || key == "punctuationRulesPath" ||
+               key == "inlineEnglishDictionaryPath") {
       valid = value.IsString();
     } else if (key == "dynamicPunctuationStyle") {
       valid = IsStringEnum(value, {"ja", "fullwidth_latin"});
@@ -232,7 +234,9 @@ j::Object SanitizeRoot(const j::Object& input, std::vector<std::string>* warning
       valid = IsStringEnum(value, {"onPause", "eager"});
     } else if (key == "dynamicPunctuationIdleMs") {
       valid = IsInteger(value, 1.0, 2147483647.0);
-    } else if (key == "segmentBoundaryConfidence") {
+    } else if (key == "inlineEnglishMinLength") {
+      valid = IsInteger(value, 1.0, 2147483647.0);
+    } else if (key == "segmentBoundaryConfidence" || key == "inlineEnglishPromoteThreshold") {
       valid = value.IsNumber() && std::isfinite(value.AsNumber()) &&
               value.AsNumber() >= 0.0 && value.AsNumber() <= 1.0;
     } else if (key == "aiBackend") {

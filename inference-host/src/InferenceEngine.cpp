@@ -12,6 +12,7 @@
 #include "azookey/core/ThreadStackGuarantee.h"
 #include "azookey/core/Utf8.h"
 #include "azookey/host/DictionaryCandidateProvider.h"
+#include "azookey/host/UserDataPaths.h"
 #include "azookey/host/ZenzaiModelConverter.h"
 #include "azookey/ipc/Limits.h"
 #include "azookey/ipc/TraceId.h"
@@ -286,6 +287,78 @@ void InferenceEngine::SetTypoStore(learning::TypoCorrectionStore* store) {
 void InferenceEngine::SetAutoWordStore(learning::AutoWordStore* store) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   auto_word_store_ = store;
+}
+
+void InferenceEngine::SetEnglishLearningStore(learning::LearningStore* store) {
+  std::lock_guard<std::mutex> lock(english_mutex_);
+  english_store_ = store;
+}
+
+std::shared_ptr<const EnglishDictionary> InferenceEngine::EnglishDictionaryLocked(
+    const std::string& utf8_path) {
+  const auto path = ExpandLocalAppDataPrefix(utf8_path);
+  if (!path) return nullptr;
+  std::error_code ec;
+  const auto mtime = std::filesystem::last_write_time(*path, ec);
+  if (ec) {
+    english_dictionary_.reset();
+    english_dictionary_path_.clear();
+    return nullptr;
+  }
+  if (english_dictionary_ && english_dictionary_path_ == *path &&
+      english_dictionary_mtime_ == mtime) {
+    return english_dictionary_;
+  }
+  // A missing or unreadable dictionary leaves only the baseline forms
+  // (section 4.2: s_dict stays 0).
+  auto loaded = EnglishDictionary::LoadTsv(*path);
+  english_dictionary_ =
+      loaded ? std::make_shared<const EnglishDictionary>(std::move(*loaded)) : nullptr;
+  english_dictionary_path_ = *path;
+  english_dictionary_mtime_ = mtime;
+  return english_dictionary_;
+}
+
+EnglishCandidates InferenceEngine::QueryEnglishCandidates(const std::string& raw_romaji,
+                                                          uint64_t now_epoch_sec) {
+  EnglishCandidateConfig english;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    english = config_.english;
+  }
+  std::shared_ptr<const EnglishDictionary> dictionary;
+  std::vector<std::string> learned;
+  {
+    std::lock_guard<std::mutex> lock(english_mutex_);
+    if (english.dictionary_enabled) dictionary = EnglishDictionaryLocked(english.dictionary_path);
+    if (english_store_) {
+      const auto key = EnglishLookupKey(raw_romaji);
+      for (auto& match : english_store_->LookupPrefix(key, 8, 0.0, now_epoch_sec).matches) {
+        if (match.reading == key) learned.push_back(std::move(match.surface));
+      }
+    }
+  }
+  return BuildEnglishCandidates(raw_romaji, english, dictionary.get(), learned);
+}
+
+bool InferenceEngine::CommitEnglishObservation(const std::string& raw_romaji,
+                                               const std::string& surface, uint64_t now_epoch_sec,
+                                               const std::string& observation_id) {
+  double alpha = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!NoteObservationIdLocked(observation_id)) return false;
+    alpha = config_.learning_alpha;
+  }
+  std::lock_guard<std::mutex> lock(english_mutex_);
+  if (!english_store_) return false;
+  // Section 5: keyed by the lowercased raw romaji, so "Apple" and "apple"
+  // typed later find the same record.
+  english_store_->Observe(EnglishLookupKey(raw_romaji), surface, alpha, now_epoch_sec);
+  // English commits are rare; save now rather than joining the kana store's
+  // burst scheduling. A failed save stays dirty for FlushLearningStore.
+  (void)english_store_->Save(std::chrono::milliseconds::zero());
+  return true;
 }
 
 bool InferenceEngine::ObserveTypo(const std::string& wrong_reading,
@@ -695,6 +768,7 @@ void InferenceEngine::ApplyConfig(const EngineConfig& config) {
   ApplyDictionaryConfigLocked();
   config_.rewriters = config.rewriters;
   config_.app_profiles = config.app_profiles;
+  config_.english = config.english;
   config_.nll = ClampNllConfig(config.nll);
   ++nll_config_revision_;
   config_.enable_live_conversion = config.enable_live_conversion;
@@ -1335,12 +1409,17 @@ AiTransformResult InferenceEngine::TransformLocal(const AiTransformRequest& requ
 bool InferenceEngine::CommitSegmentsObservation(
     const ipc::CommitSegmentsObservationRequest& request, uint64_t now_epoch_sec) {
   std::shared_ptr<core::IConverter> converter;
+  const auto english = [](const ipc::ObservedSegment& segment) {
+    return IsEnglishObservation(segment.reading, segment.chosen.tag);
+  };
+  double alpha = 0.0;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!NoteObservationIdLocked(request.observation_id)) return false;
+    alpha = config_.learning_alpha;
     if (store_) {
       for (const auto& segment : request.segments) {
-        if (!segment.is_auto_punctuation) {
+        if (!segment.is_auto_punctuation && !english(segment)) {
           store_->Observe(segment.reading, segment.chosen.surface, config_.learning_alpha,
                           now_epoch_sec);
           core::EtwLogger::LogLearningObserve(segment.reading.size(),
@@ -1351,11 +1430,23 @@ bool InferenceEngine::CommitSegmentsObservation(
     }
     converter = active_converter_;
   }
+  // M60 section 6.4: English segments go to the English channel only.
+  if (std::any_of(request.segments.begin(), request.segments.end(), english)) {
+    std::lock_guard<std::mutex> lock(english_mutex_);
+    if (english_store_) {
+      for (const auto& segment : request.segments) {
+        if (english(segment))
+          english_store_->Observe(EnglishLookupKey(segment.reading), segment.chosen.surface, alpha,
+                                  now_epoch_sec);
+      }
+      (void)english_store_->Save(std::chrono::milliseconds::zero());
+    }
+  }
   std::lock_guard<std::mutex> converter_lock(converter_call_mutex_);
   core::ConversionContext context;
   context.preceding_text = request.left_context;
   for (const auto& segment : request.segments) {
-    if (!segment.is_auto_punctuation) {
+    if (!segment.is_auto_punctuation && !english(segment)) {
       converter->Commit(core::Candidate{segment.chosen.surface, segment.reading, 1.0,
                                         core::CandidateSource::UserDictionary, "commit"},
                         context);
@@ -1494,8 +1585,15 @@ void InferenceEngine::CommitCorrection(const std::string& reading,
 }
 
 bool InferenceEngine::FlushLearningStore() {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  return FlushLearningStoreLocked(learning::kTransientFileRetryBudget);
+  bool ok = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    ok = FlushLearningStoreLocked(learning::kTransientFileRetryBudget);
+  }
+  std::lock_guard<std::mutex> lock(english_mutex_);
+  if (english_store_ && english_store_->dirty())
+    ok = english_store_->Save(learning::kTransientFileRetryBudget) && ok;
+  return ok;
 }
 
 void InferenceEngine::NoteLearningMutationLocked(uint64_t now_epoch_sec) {

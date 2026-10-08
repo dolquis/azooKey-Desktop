@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <string_view>
 
 namespace azookey::host {
 
@@ -29,10 +30,17 @@ struct UserDataPaths {
   // them somewhere real.
   std::filesystem::path typo_store_path;
   std::filesystem::path auto_word_store_path;
+  // M60 English learning channel: the LearningStore format in its own file so
+  // English commits never mix with kana-kanji learning.
+  std::filesystem::path english_learning_path;
 };
 
 std::optional<std::filesystem::path> GetPlatformLocalAppData();
 std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inputs);
 bool EnsureUserDataDirectories(const UserDataPaths& paths);
+
+// UTF-8 path with an optional leading "%LOCALAPPDATA%" (case-insensitive)
+// expanded. nullopt when the prefix is present but LOCALAPPDATA is unknown.
+std::optional<std::filesystem::path> ExpandLocalAppDataPrefix(std::string_view utf8_path);
 
 }  // namespace azookey::host

@@ -733,6 +733,28 @@ int main(int argc, char** argv) {
                      auto_word_store_loaded ? azookey::logging::RuntimeLogLevel::Info
                                             : azookey::logging::RuntimeLogLevel::Warn,
                      "auto_word_store_load", auto_word_store_loaded ? "ok" : "error");
+
+  // M60: English commits learn here, never in the kana-kanji store above.
+  // The store saves to the v2 file beside the M7 path, encrypted (.enc).
+  bool english_file_existed = false;
+  for (const auto& base :
+       {azookey::learning::LearningStoreV2PathFor(user_paths->english_learning_path),
+        user_paths->english_learning_path}) {
+    for (const auto& candidate : {azookey::learning::EncryptedPathFor(base), base}) {
+      std::error_code english_path_error;
+      english_file_existed = english_file_existed ||
+                             (std::filesystem::exists(candidate, english_path_error) &&
+                              !english_path_error);
+    }
+  }
+  azookey::learning::LearningStore english_store(user_paths->english_learning_path);
+  const bool english_store_loaded = english_store.Load();
+  LogBusinessOutcome(runtime_log,
+                     english_file_existed && !english_store_loaded
+                         ? azookey::logging::RuntimeLogLevel::Warn
+                         : azookey::logging::RuntimeLogLevel::Info,
+                     "english_learning_load",
+                     english_store_loaded ? "ok" : (english_file_existed ? "error" : "missing"));
   // Spec section 3-3: sweep pending words that were never confirmed, once per
   // start rather than on every observation.
   const auto now_epoch_sec =
@@ -753,6 +775,7 @@ int main(int argc, char** argv) {
   engine.SetUserDictionary(&user_dict);
   engine.SetTypoStore(&typo_store);
   engine.SetAutoWordStore(&auto_word_store);
+  engine.SetEnglishLearningStore(&english_store);
   if (entered_safe_mode) {
     (void)engine.ApplyHealthEvent(azookey::host::HealthEvent::CrashLoopDetected);
   } else if (safe_mode) {

@@ -117,6 +117,11 @@ struct RuntimeSettings {
   std::string batch_romaji_preview_style{"kana"};
   std::string batch_conversion_mode{"neural"};
   bool batch_auto_punctuation{false};
+  // M60 (docs/inline-english-candidate-spec.md section 7). The TIP sends
+  // inlineEnglishCandidates per request; the Host keeps it for diagnostics.
+  bool inline_english_candidates{false};
+  EnglishCandidateConfig english{true, false, 2,
+                                 0.6,  false, "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv"};
   bool number_rewriter{false};
   bool katakana_rewriter{false};
   bool symbol_rewriter{false};

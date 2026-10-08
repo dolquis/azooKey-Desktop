@@ -482,7 +482,7 @@ std::optional<ipc::Envelope> Dispatcher::HandleHandshake(const ipc::Envelope& re
   // CandidateField.tag (docs/app-profile-spec.md sections 3.1 and 7).
   res.capabilities = {"oob_cancel",        "commit_segments", "query_live_conversion",
                       "query_predictions", "app_profile",     "candidate_tag",
-                      "list_models",       "benchmark_model"};
+                      "list_models",       "benchmark_model", "english_candidates"};
   if (auto parsed = ipc::ParseHandshakeRequest(req.payload_json)) {
     const bool version_ok = parsed->protocol_version == config_.protocol_version;
     const bool token_ok = config_.handshake_token.empty() ||
@@ -706,6 +706,13 @@ std::optional<ipc::Envelope> Dispatcher::HandleQueryCandidates(const ipc::Envelo
     if (!parsed->live && (rewriters.symbol_enabled || rewriters.emoji_enabled))
       candidates = engine_->QueryRewriters(rewriters, rewriter_reading, {}, std::move(candidates),
                                            merged_limit);
+    // M60: the candidate window only (section 4.1); live conversion takes the
+    // first candidate, which English never claims anyway.
+    if (!parsed->live && parsed->english_candidates && !parsed->raw_romaji.empty()) {
+      auto english = engine_->QueryEnglishCandidates(parsed->raw_romaji, NowSec());
+      PlaceEnglishCandidates(candidates, std::move(english.candidates), english.intent,
+                             engine_config.english.promote_threshold);
+    }
   }
 
   const bool canceled = cancel->load(std::memory_order_acquire);
@@ -1096,8 +1103,14 @@ std::optional<ipc::Envelope> Dispatcher::HandleCommitObservation(const ipc::Enve
                       privacy && (privacy->policy.secure || !privacy->policy.learning_allowed))) {
     // A duplicate resend is answered ok=true: the observation is already
     // recorded, so the TIP must stop retrying it (DEV-554).
-    engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),
-                               parsed->observation_id);
+    if (IsEnglishObservation(parsed->reading, parsed->chosen.tag)) {
+      // M60 section 6.4: never the kana store, auto-word mining or the converter.
+      engine_->CommitEnglishObservation(parsed->reading, parsed->chosen.surface, NowSec(),
+                                        parsed->observation_id);
+    } else {
+      engine_->CommitObservation(parsed->reading, parsed->chosen.surface, NowSec(),
+                                 parsed->observation_id);
+    }
     res.ok = true;
   } else {
     res.ok = false;

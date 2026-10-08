@@ -71,7 +71,7 @@ M60 が本書を参照する。本書は機能仕様（IPC payload・設定項�
 | 半角小文字 | `apple` | 常時（決定的ベースライン。`lower(r)`） |
 | 半角先頭大文字 | `Apple` | `inlineEnglishCaseVariants` ON |
 | 半角全大文字 | `APPLE` | `inlineEnglishCaseVariants` ON |
-| 全角小文字 | `ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON（legacy `fullWidthRomanCandidate` 相当） |
+| 全角小文字 | `ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON（macOS 版 `legacy/` の `fullWidthRomanCandidate` に相当。Windows 版の設定キーとしては読まない） |
 | 全角先頭大文字 | `Ａｐｐｌｅ` | `fullWidthEnglishCandidate` ON かつ `inlineEnglishCaseVariants` ON |
 | 全角全大文字 | `ＡＰＰＬＥ` | `fullWidthEnglishCandidate` ON かつ `inlineEnglishCaseVariants` ON |
 | 生ローマ字そのもの | `aPPle` | `r` が上の 6 形のいずれとも表層形が一致しないとき |
@@ -98,8 +98,9 @@ M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字�
 
 - **候補ウィンドウ（M5）**: `StartConversion`（Space）で候補列に英単語候補を注入する
   （主経路）。
-- **ライブ変換（M14）/ 予測（M15）（任意）**: 実装時に判断。M60 コアは候補ウィンドウ
-  注入を必須とし、ライブ/予測への注入は任意拡張とする。
+- **ライブ変換（M14）/ 予測（M15）**: 注入しない。Host は `QueryCandidates` の `live = false`
+  の要求にだけ英単語候補を足す。ライブ変換は第 1 候補を使い、英単語は第 1 候補を
+  取らない（§4.3）ため、注入しても表示が変わらない。
 
 ### 4.2 ゲーティング（いつ出すか）
 
@@ -113,7 +114,7 @@ M62-B の英字分はここへ統合し、TIP ローカルに別経路の英字�
 |---|---|
 | `s_dict` | 英単語辞書に `lower(r)` がヒット = 1、else 0（`inlineEnglishDictionary` OFF 時は常に 0） |
 | `s_nonkana` | `r` を `RomajiKanaConverter` で完全にかな分解できず ASCII 残余が出る = 1、else 0 |
-| `s_cluster` | 英語特有の子音連続/2-gram（`th` `ck` `wr` `ght` 等）の出現割合 |
+| `s_cluster` | `lower(r)` が英語特有の子音連続（`th` `ck` `wr` `ght` `ph` `wh`）を 1 つでも含む = 1、else 0 |
 | `s_len` | `clamp((len(r) - inlineEnglishMinLength) / 4, 0, 1)`（長いほど英語らしい） |
 | `s_case` | `r` が大文字を含む（Shift 併用打鍵）= 1、else 0 |
 
@@ -153,6 +154,9 @@ else:
 順位安定化: 同一 r では順位を固定（マッスルメモリ）。english_intent はしきい値を
            跨いだときのみ段階的に順位が変わる（連続値での微振動で順位を動かさない）
 ```
+
+英単語候補は `max_candidates` で切り詰めた後の候補列に加える。そのため応答の件数は
+`max_candidates` を超えうる（辞書語 5 件・学習語 8 件・生ローマ字・6 形まで）。
 
 候補内の英語形の並び（固定順）:
 
@@ -204,8 +208,11 @@ NASA	8123	acronym
 
 **ルックアップ**: 入力 `raw_romaji` を lowercase したものをキーに引く（`apple` →
 `apple`）。同一 lower キーに複数エントリを許す（`apple` 一般 / `Apple` 固有）。ヒット時は
-**頻度降順**で複数 surface を返し、§4.3 の候補並び・順位に反映する。`flags` は大文字化
+**頻度降順**で複数 surface を返し（候補に出すのは上位 5 件まで）、§4.3 の候補並び・順位に反映する。`flags` は大文字化
 バリアントの既定優先度に影響する（`proper` は先頭大文字、`acronym` は全大文字を上位に）。
+具体的には、そのキーの辞書エントリのどれかに `acronym` があれば半角の 3 形を
+「全大文字 → 小文字 → 先頭大文字」、`proper` があれば「先頭大文字 → 小文字 → 全大文字」の
+順にする。全角の 3 形の順は変えない。`tech` は M48 のタグ連携の予約で、順位には使わない。
 
 **配置と設定**:
 
@@ -218,10 +225,15 @@ NASA	8123	acronym
 - 起動時にメモリへロード（`std::unordered_map<lower_surface, std::vector<Entry>>`）。
 - 想定規模は数万〜十数万語。10 万語 × 平均 16 B 表層 + 頻度で数 MB 程度を目安とし、
   超える場合はコンパイル済みバイナリ形式（将来・M53 辞書層と共有）を検討する。
-- パース失敗行は warning ログでスキップ（M17 と同流儀）。同一 `surface` 完全一致の重複は
-  **ファイル末尾の定義を優先**（M17 と揃える）。
-- ホットリロード（任意）: M17 の `ReadDirectoryChangesW` 監視基盤を再利用し、変更検出で
-  差し替える（進行中の preedit は触らない）。
+- パース失敗行（列不足、頻度が正の整数でない、surface が UTF-8 でない）はスキップする
+  （M17 と同流儀）。同一 `surface` 完全一致の重複は **ファイル末尾の定義を優先**（M17 と揃える）。
+- エントリは 200,000 件で読み込みを打ち切る。読み込みでメモリ確保に失敗した場合も
+  辞書なしで動く。
+- 読み込みのたびに、結果・件数・スキップ行数・打ち切りの有無だけをログに出す（語と
+  パスは出さない）。スキップや打ち切りがあれば warning とする。
+- ホットリロード: Host は英単語候補を作るたびにファイルの更新時刻を確かめ、変わって
+  いれば読み直す（進行中の preedit は触らない）。ファイルが無い・読めない・64 MiB を
+  超えるときは辞書なしで動く（`s_dict = 0`）。
 
 **配布元・ライセンス**: バンドルする初期辞書は公開された英単語頻度リスト由来とし、
 ライセンスを明記する。上流のデータ生成パイプラインはクライアント実装の範囲外
@@ -232,6 +244,9 @@ NASA	8123	acronym
 本書は「ヒット有無と頻度で gating / 順位に寄与する」契約のみを正典とする。
 
 ### 4.5 辞書バイナリ形式（コンパイル済みキャッシュ）
+
+§4.5〜§4.7（`.bin`・差分 overlay・同時実行制御）は、§4.4 の TSV 辞書の後に追加する
+拡張である。TSV だけでも §4.2〜§4.4 の契約は満たせる。
 
 §4.4 の TSV は**編集可能なソース**、本節の `.bin` は**起動高速化・低メモリのための
 コンパイル済みキャッシュ**。起動時の TSV パースを避け、mmap で必要ページのみ読み込む
@@ -526,9 +541,22 @@ stale 適用を起こさない。
 - 学習（`CommitObservation`）の reading は**生ローマ字（半角英字、例 `apple`）**とする。
   再度同じローマ字を打ったときに学習で英単語候補が再提示されるようにするため。かな
   （`あっぷる`）を reading にすると、かな漢字学習と混線するため避ける。
-- 学習ストアには `CandidateSource`（既存 `Candidate.source`）/ English タグで識別して
-  記録し、かな漢字学習と区別できるようにする（具体的な格納先は実装時に決定。既存
-  `LearningStore` に English チャネルを設けるか、source タグで区別する）。
+- 学習の格納先は、かな漢字学習とは別ファイルの English チャネルとする。
+  - 形式は `LearningStore` と同じ（DPAPI 保護の TSV）。ファイルは
+    `UserDataPaths::english_learning_path`（学習 TSV と同じディレクトリの
+    `english_learning.tsv`）。かな漢字の学習と同じく、保存は v2 形式で同じディレクトリの
+    `english_learning.v2.tsv` に行い、`english_learning.tsv` は移行元として読むだけである
+    （`user-learning-enhancement-spec.md` §3.1）。
+  - キーは `lower(r)`。`Apple` と打って確定しても、次に `apple` と打ったときに同じ
+    記録を引く。
+  - 振り分けの条件は §6.4。English チャネルの記録は、かな漢字の候補・予測・逆変換・
+    未知語マイニング・変換器の学習のいずれにも入らない。
+  - 確定のたびに保存する（かな漢字学習のバースト保存には乗らない）。
+- 再提示: English チャネルが `lower(r)` に持つ surface（重み順に 8 件まで）を、辞書一致語の直後（生ローマ字と
+  6 形の前）に並べる。辞書を無効にしていても、過去に確定した語は再び候補に出る。
+- 保存は English チャネルのロックを持ったまま行う。英単語の確定はまれなので許容する。
+  保存中に届いた候補要求は、ロックを待たずに学習済み語を省いて候補を返す（その 1 回だけ
+  再提示が欠ける）。
 
 ## 6. IPC プロトコル
 
@@ -583,9 +611,9 @@ c.tag = tag <= 0xFF ? static_cast<uint8_t>(tag) : 0;
 （かな漢字変換の入力を汚染しないため。M58 §4.2 と同原則）。Build/Parse 規約:
 
 ```cpp
-// Build
-o.emplace("raw_romaji", j::Value(p.raw_romaji));
-o.emplace("english_candidates", j::Value(p.english_candidates));
+// Build（空文字 / false は省略する）
+if (!p.raw_romaji.empty()) o.emplace("raw_romaji", j::Value(p.raw_romaji));
+if (p.english_candidates) o.emplace("english_candidates", j::Value(true));
 // Parse（後方互換）
 p.raw_romaji         = v->GetString("raw_romaji").value_or(std::string());
 p.english_candidates = v->GetBool("english_candidates").value_or(false);
@@ -624,8 +652,15 @@ CommitObservationRequest{
 ```
 
 `reading` を生ローマ字にすることで、かな漢字学習（`reading="あっぷる"`）と学習空間を
-分離する（混線させない。§5）。host 側は `chosen.tag == English` を見て English チャネル
-（or source タグ）へ振り分ける。
+分離する（混線させない。§5）。host は次の両方を満たす確定だけを English チャネルへ
+振り分ける。
+
+- `chosen.tag == English`
+- `reading` が空でなく、空白を含まない印字可能 ASCII だけで構成される（生ローマ字）
+
+`tag == English` は M48 が surface 形式からも付与する（`docs/app-profile-spec.md` §7）。
+そのため、かな読みの辞書候補（読み `あいふぉん` の `iPhone`）も `tag:4` を持ちうる。
+こうした確定は、かな読みなので通常チャネルで学習する。
 
 英単語確定が**文の一部（multi-segment）**の場合は、当該文節を `ObservedSegment`
 （`reading=生ローマ字`、`chosen.tag=English`）として
@@ -648,14 +683,16 @@ CommitObservationRequest{
 
 実装時に `settings/mvp-settings.schema.json` へ以下を追加する
 （`additionalProperties:false` を維持。`description` に対応 M を記載する既存流儀に
-合わせる）。本書（spec）が JSON schema の正典であり、実ファイルへの追加は M60 実装時に
-行う（本セッションは設計確定のみでスキーマファイルは変更しない）。
+合わせる）。schema の正典は `settings/mvp-settings.schema.json` とし、下表はその要約である。
+Host は `inlineEnglishCandidates` を要求の `english_candidates` から受け取り、残りの
+6 キーを `EngineConfig::english` として使う。Handshake 応答の capabilities
+`english_candidates` で、Host が対応版であることを示す。
 
 | キー | 型 | 既定 | 説明 |
 |---|---|---|---|
 | `inlineEnglishCandidates` | boolean | `false` | M60: 日本語ローマ字入力中に英単語候補を候補列へ注入する |
 | `inlineEnglishCaseVariants` | boolean | `true` | M60: 先頭大文字 / 全大文字バリアントも候補に出す |
-| `fullWidthEnglishCandidate` | boolean | `false` | M60: 全角ローマ字候補も出す（legacy `fullWidthRomanCandidate` 相当） |
+| `fullWidthEnglishCandidate` | boolean | `false` | M60: 全角ローマ字候補も出す |
 | `inlineEnglishMinLength` | integer (≥1) | `2` | M60: 英単語候補を出す生ローマ字の最小長 |
 | `inlineEnglishPromoteThreshold` | number (0.0–1.0) | `0.6` | M60: `english_intent` がこの値以上で英単語候補を上位化（§4.3） |
 | `inlineEnglishDictionary` | boolean | `false` | M60: 英単語辞書によるランキング・ゲーティングを有効化（品質レイヤ。OFF でも生ローマ字 + 大文字化は出せる） |

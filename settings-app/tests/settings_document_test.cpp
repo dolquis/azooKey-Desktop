@@ -349,6 +349,43 @@ TEST(SettingsDocumentTest, MissingFileUsesM11Defaults) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(SettingsDocumentTest, SavePreservesTheInlineEnglishKeys) {
+  const auto dir = TestDir("azookey_settings_document_inline_english");
+  const auto path = dir / "settings.json";
+  WriteText(path, R"({
+    "inlineEnglishCandidates": true,
+    "inlineEnglishCaseVariants": false,
+    "fullWidthEnglishCandidate": true,
+    "inlineEnglishMinLength": 3,
+    "inlineEnglishPromoteThreshold": 0.25,
+    "inlineEnglishDictionary": true,
+    "inlineEnglishDictionaryPath": "C:/dict/words.tsv"
+  })");
+  azookey::settings::EditableSettings settings;
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, settings).ok);
+  auto parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  const auto& root = parsed->AsObject();
+  ASSERT_TRUE(root.contains("inlineEnglishCandidates"));
+  EXPECT_TRUE(root.at("inlineEnglishCandidates").AsBool());
+  EXPECT_FALSE(root.at("inlineEnglishCaseVariants").AsBool());
+  EXPECT_TRUE(root.at("fullWidthEnglishCandidate").AsBool());
+  EXPECT_EQ(root.at("inlineEnglishMinLength").AsNumber(), 3.0);
+  EXPECT_EQ(root.at("inlineEnglishPromoteThreshold").AsNumber(), 0.25);
+  EXPECT_TRUE(root.at("inlineEnglishDictionary").AsBool());
+  EXPECT_EQ(root.at("inlineEnglishDictionaryPath").AsString(), "C:/dict/words.tsv");
+
+  WriteText(path, R"({"inlineEnglishMinLength": 0, "inlineEnglishPromoteThreshold": 2,
+                      "inlineEnglishCandidates": "yes", "inlineEnglishDictionaryPath": 7})");
+  ASSERT_TRUE(azookey::settings::SaveSettingsDocument(path, settings).ok);
+  parsed = azookey::ipc::json::Parse(ReadText(path));
+  ASSERT_TRUE(parsed && parsed->IsObject());
+  for (const char* key : {"inlineEnglishMinLength", "inlineEnglishPromoteThreshold",
+                          "inlineEnglishCandidates", "inlineEnglishDictionaryPath"}) {
+    EXPECT_FALSE(parsed->AsObject().contains(key)) << key;
+  }
+}
+
 TEST(SettingsDocumentTest, SavePreservesValidHiddenKeysAndDropsInvalidEntries) {
   const auto dir = TestDir("azookey_settings_document_writeback");
   const auto path = dir / "settings.json";

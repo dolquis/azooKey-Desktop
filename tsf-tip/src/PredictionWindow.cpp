@@ -3,8 +3,6 @@
 #include <ShellScalingApi.h>
 #include <d2d1_1.h>
 #include <d2d1_1helper.h>
-#include <d3d11.h>
-#include <dcomp.h>
 #include <dwrite.h>
 #include <windowsx.h>
 #include <wrl/client.h>
@@ -14,6 +12,8 @@
 #include <cmath>
 
 #include "azookey/tsf/CaretRectResolver.h"
+#include "azookey/tsf/DpiScaling.h"
+#include "azookey/tsf/RenderingEngine.h"
 
 namespace azookey::tsf {
 namespace {
@@ -22,10 +22,7 @@ using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kWindowClass[] = L"azooKeyPredictionWindow";
 
-int Scale(int value, UINT dpi) {
-  return MulDiv(value, static_cast<int>(dpi ? dpi : USER_DEFAULT_SCREEN_DPI),
-                USER_DEFAULT_SCREEN_DPI);
-}
+int Scale(int value, UINT dpi) { return ScaleForDpi(value, dpi); }
 
 HMODULE TipModule() {
   HMODULE module = nullptr;
@@ -35,39 +32,31 @@ HMODULE TipModule() {
   return module;
 }
 
-D2D1_COLOR_F SystemColor(int color_index) {
-  const COLORREF color = GetSysColor(color_index);
+D2D1_COLOR_F ToColorF(COLORREF color) {
   return D2D1::ColorF(GetRValue(color) / 255.0f, GetGValue(color) / 255.0f,
                       GetBValue(color) / 255.0f, 1.0f);
 }
 
-class ScopedThreadDpiAwarenessContext {
- public:
-  ScopedThreadDpiAwarenessContext()
-      : previous_(SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {}
-  ~ScopedThreadDpiAwarenessContext() {
-    if (previous_) SetThreadDpiAwarenessContext(previous_);
-  }
+#ifdef AZOOKEY_TSF_TESTING
+UINT g_monitor_dpi_for_test = 0;
+#endif
 
- private:
-  DPI_AWARENESS_CONTEXT previous_;
-};
+// The GPU was reset or removed; the whole device stack has to be rebuilt.
+bool IsDeviceLost(HRESULT hr) {
+  return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+         hr == D2DERR_RECREATE_TARGET;
+}
 
 }  // namespace
 
+#ifdef AZOOKEY_TSF_TESTING
+void PredictionWindow::SetMonitorDpiForTest(UINT dpi) { g_monitor_dpi_for_test = dpi; }
+bool PredictionWindow::IsDeviceLostForTest(HRESULT hr) { return IsDeviceLost(hr); }
+#endif
+
 struct PredictionWindow::RenderState {
-  ComPtr<ID3D11Device> d3d_device;
-  ComPtr<ID2D1Factory1> d2d_factory;
-  ComPtr<ID2D1Device> d2d_device;
-  ComPtr<IDCompositionDevice2> composition_device;
-  ComPtr<IDCompositionDesktopDevice> desktop_device;
-  ComPtr<IDCompositionTarget> target;
-  ComPtr<IDCompositionVisual2> visual;
-  ComPtr<IDCompositionSurface> surface;
-  ComPtr<IDWriteFactory> write_factory;
+  RenderingEngine engine;
   ComPtr<IDWriteTextFormat> text_format;
-  int surface_width{0};
-  int surface_height{0};
 };
 
 PredictionWindow::PredictionWindow() = default;
@@ -103,53 +92,19 @@ ATOM PredictionWindow::RegisterWindowClass() {
 
 bool PredictionWindow::InitializeRendering() {
   auto state = std::make_unique<RenderState>();
-  constexpr UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-  HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0,
-                                 D3D11_SDK_VERSION, &state->d3d_device, nullptr, nullptr);
-  if (FAILED(hr)) {
-    hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, nullptr, 0,
-                           D3D11_SDK_VERSION, &state->d3d_device, nullptr, nullptr);
-  }
-  if (FAILED(hr)) return Fail("d3d11_device", hr);
-
-  ComPtr<IDXGIDevice> dxgi_device;
-  if (FAILED(hr = state->d3d_device.As(&dxgi_device))) return Fail("dxgi_device", hr);
-  if (FAILED(hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1),
-                                    nullptr,
-                                    reinterpret_cast<void**>(state->d2d_factory.GetAddressOf()))))
-    return Fail("d2d_factory", hr);
-  if (FAILED(hr = state->d2d_factory->CreateDevice(dxgi_device.Get(), &state->d2d_device)))
-    return Fail("d2d_device", hr);
-
-  // A Direct2D device is required here so BeginDraw can return a device context.
-  // DCompositionCreateDevice2 accepts only IDCompositionDevice or
-  // IDCompositionDesktopDevice; asking for IDCompositionDevice2 fails with
-  // E_NOINTERFACE, so query it from the desktop device instead.
-  if (FAILED(hr = DCompositionCreateDevice2(
-                 state->d2d_device.Get(), __uuidof(IDCompositionDesktopDevice),
-                 reinterpret_cast<void**>(state->desktop_device.GetAddressOf()))))
-    return Fail("dcomp_device", hr);
-  if (FAILED(hr = state->desktop_device.As(&state->composition_device)))
-    return Fail("dcomp_device2", hr);
-  if (FAILED(hr = state->desktop_device->CreateTargetForHwnd(hwnd_, TRUE, &state->target)))
-    return Fail("dcomp_target", hr);
-  if (FAILED(hr = state->composition_device->CreateVisual(&state->visual)) ||
-      FAILED(hr = state->target->SetRoot(state->visual.Get())))
-    return Fail("dcomp_visual", hr);
-
-  if (FAILED(hr = DWriteCreateFactory(
-                 DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                 reinterpret_cast<IUnknown**>(state->write_factory.GetAddressOf()))))
-    return Fail("dwrite_factory", hr);
-
+  if (!state->engine.Initialize(hwnd_))
+    return Fail(state->engine.failure_stage(), state->engine.failure_hr());
   render_ = std::move(state);
   UpdateDpi(GetDpiForWindow(hwnd_));
+  UpdateTheme();
   return render_->text_format != nullptr || Fail("text_format", E_FAIL);
 }
 
 bool PredictionWindow::Fail(const char* stage, HRESULT hr) {
   failure_stage_ = stage;
   failure_hr_ = hr;
+  // Drop a lost device; the next Show initializes a new one.
+  if (IsDeviceLost(hr)) render_.reset();
   return false;
 }
 
@@ -161,7 +116,7 @@ bool PredictionWindow::Create() {
     static const ATOM atom = RegisterWindowClass();
     if (!atom) return Fail("register_class", E_FAIL);
 
-    const ScopedThreadDpiAwarenessContext dpi_context;
+    const ScopedPerMonitorDpiAwareness dpi_context;
     ui_thread_id_ = GetCurrentThreadId();
     hwnd_ = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
@@ -197,7 +152,7 @@ void PredictionWindow::UpdateDpi(UINT dpi) {
   ComPtr<IDWriteTextFormat> format;
   const FLOAT size = 14.0f * static_cast<FLOAT>(dpi_) / USER_DEFAULT_SCREEN_DPI;
   for (const wchar_t* family : {L"Yu Gothic UI", L"Meiryo UI", L"MS UI Gothic"}) {
-    if (SUCCEEDED(render_->write_factory->CreateTextFormat(
+    if (SUCCEEDED(render_->engine.write_factory()->CreateTextFormat(
             family, nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, size, L"ja-JP", &format)))
       break;
@@ -214,7 +169,7 @@ int PredictionWindow::MeasureWidth() const {
   FLOAT widest = 0;
   for (const auto& text : candidates_) {
     ComPtr<IDWriteTextLayout> layout;
-    if (SUCCEEDED(render_->write_factory->CreateTextLayout(
+    if (SUCCEEDED(render_->engine.write_factory()->CreateTextLayout(
             text.c_str(), static_cast<UINT32>(text.size()), render_->text_format.Get(), 4096.0f,
             static_cast<FLOAT>(row_height_), &layout))) {
       DWRITE_TEXT_METRICS metrics{};
@@ -227,43 +182,26 @@ int PredictionWindow::MeasureWidth() const {
 
 bool PredictionWindow::ResizeSurface(int width, int height) {
   if (!render_) return Fail("no_render", E_FAIL);
-  if (render_->surface && render_->surface_width == width && render_->surface_height == height)
-    return true;
+  return render_->engine.ResizeSurface(width, height) ||
+         Fail(render_->engine.failure_stage(), render_->engine.failure_hr());
+}
 
-  ComPtr<IDCompositionSurface> surface;
-  HRESULT hr = S_OK;
-  if (FAILED(hr = render_->composition_device->CreateSurface(
-                 width, height, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED,
-                 &surface)) ||
-      FAILED(hr = render_->visual->SetContent(surface.Get())))
-    return Fail("surface", hr);
-  render_->surface = std::move(surface);
-  render_->surface_width = width;
-  render_->surface_height = height;
-  return true;
+void PredictionWindow::UpdateTheme() {
+  theme_mode_ = CurrentThemeMode();
+  theme_ = ResolveThemeColors(theme_mode_);
+  ApplyWindowFrameTheme(hwnd_, theme_mode_);
 }
 
 bool PredictionWindow::Draw() {
-  if (!render_ || !render_->surface) return Fail("no_render", E_FAIL);
+  if (!render_) return Fail("no_render", E_FAIL);
+  ID2D1DeviceContext* context = render_->engine.BeginDraw();
+  if (!context) return Fail(render_->engine.failure_stage(), render_->engine.failure_hr());
 
-  ComPtr<ID2D1DeviceContext> context;
-  POINT offset{};
-  if (const HRESULT hr =
-          render_->surface->BeginDraw(nullptr, __uuidof(ID2D1DeviceContext),
-                                      reinterpret_cast<void**>(context.GetAddressOf()), &offset);
-      FAILED(hr))
-    return Fail("begin_draw", hr);
-
-  context->SetDpi(96.0f, 96.0f);
-  context->SetTransform(
-      D2D1::Matrix3x2F::Translation(static_cast<FLOAT>(offset.x), static_cast<FLOAT>(offset.y)));
-  context->Clear(SystemColor(COLOR_WINDOW));
-
+  context->Clear(ToColorF(theme_.background));
   ComPtr<ID2D1SolidColorBrush> text_brush;
   ComPtr<ID2D1SolidColorBrush> border_brush;
-  bool drawn =
-      SUCCEEDED(context->CreateSolidColorBrush(SystemColor(COLOR_WINDOWTEXT), &text_brush)) &&
-      SUCCEEDED(context->CreateSolidColorBrush(SystemColor(COLOR_3DSHADOW), &border_brush));
+  bool drawn = SUCCEEDED(context->CreateSolidColorBrush(ToColorF(theme_.text), &text_brush)) &&
+               SUCCEEDED(context->CreateSolidColorBrush(ToColorF(theme_.border), &border_brush));
   if (drawn) {
     context->DrawRectangle(D2D1::RectF(0.5f, 0.5f, static_cast<FLOAT>(width_) - 0.5f,
                                        static_cast<FLOAT>(height_) - 0.5f),
@@ -279,13 +217,9 @@ bool PredictionWindow::Draw() {
     }
   }
 
-  const HRESULT end_draw = render_->surface->EndDraw();
-  context.Reset();
+  const bool ended = render_->engine.EndDraw();
   if (!drawn) return Fail("brush", E_FAIL);
-  if (FAILED(end_draw)) return Fail("end_draw", end_draw);
-  if (const HRESULT hr = render_->composition_device->Commit(); FAILED(hr))
-    return Fail("commit", hr);
-  return true;
+  return ended || Fail(render_->engine.failure_stage(), render_->engine.failure_hr());
 }
 
 void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
@@ -294,8 +228,20 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
   assert(GetCurrentThreadId() == ui_thread_id_);
   failure_stage_ = "";
   failure_hr_ = S_OK;
-  const ScopedThreadDpiAwarenessContext dpi_context;
+  const ScopedPerMonitorDpiAwareness dpi_context;
+  struct ShowingScope {
+    bool& flag;
+    explicit ShowingScope(bool& showing) : flag(showing) { flag = true; }
+    ~ShowingScope() { flag = false; }
+    ShowingScope(const ShowingScope&) = delete;
+    ShowingScope& operator=(const ShowingScope&) = delete;
+  } showing(showing_);
+  last_caret_rect_ = caret_rect_screen;
   if (candidates.empty()) {
+    Hide();
+    return;
+  }
+  if (!render_ && !InitializeRendering()) {
     Hide();
     return;
   }
@@ -311,6 +257,9 @@ void PredictionWindow::Show(const std::vector<std::wstring>& candidates,
   if (!monitor.monitor ||
       FAILED(GetDpiForMonitor(monitor.monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) || !dpi_x)
     dpi_x = GetDpiForWindow(hwnd_);
+#ifdef AZOOKEY_TSF_TESTING
+  if (g_monitor_dpi_for_test) dpi_x = g_monitor_dpi_for_test;
+#endif
   if (dpi_x != dpi_) UpdateDpi(dpi_x);
 
   width_ = MeasureWidth();
@@ -396,7 +345,21 @@ LRESULT PredictionWindow::HandleMessage(HWND hwnd, UINT message, WPARAM wparam, 
     }
     case WM_SETTINGCHANGE:
     case WM_SYSCOLORCHANGE:
-      if (IsVisible()) Draw();
+    case WM_THEMECHANGED:
+      if (message != WM_SETTINGCHANGE || IsThemeSettingChange(wparam, lparam)) {
+        UpdateTheme();
+        if (IsVisible() && !Draw()) Hide();
+      }
+      return 0;
+    case WM_DPICHANGED:
+      // The suggested rect is ignored: the surface size and the work-area
+      // placement both come from Show, which measures for the caret's monitor.
+      if (showing_) return 0;
+      UpdateDpi(LOWORD(wparam));
+      if (IsVisible() && !candidates_.empty()) {
+        const std::vector<std::wstring> candidates = candidates_;
+        Show(candidates, last_caret_rect_);
+      }
       return 0;
     case WM_NCDESTROY:
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

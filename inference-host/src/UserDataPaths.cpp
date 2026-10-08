@@ -26,6 +26,21 @@ std::optional<std::filesystem::path> GetPlatformLocalAppData() {
   return azookey::core::GetLocalAppDataDirectory();
 }
 
+std::optional<std::filesystem::path> ExpandLocalAppDataPrefix(std::string_view utf8_path) {
+  static constexpr std::string_view kPrefix = "%LOCALAPPDATA%";
+  bool prefixed = utf8_path.size() >= kPrefix.size();
+  for (size_t i = 0; prefixed && i < kPrefix.size(); ++i) {
+    const char c = utf8_path[i];
+    prefixed = (c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c) == kPrefix[i];
+  }
+  if (!prefixed) return azookey::core::Utf8Path(utf8_path);
+  const auto base = GetPlatformLocalAppData();
+  if (!base) return std::nullopt;
+  auto rest = utf8_path.substr(kPrefix.size());
+  while (!rest.empty() && (rest.front() == '\\' || rest.front() == '/')) rest.remove_prefix(1);
+  return rest.empty() ? *base : *base / azookey::core::Utf8Path(rest);
+}
+
 std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inputs) {
   if (inputs.explicit_root_dir && !inputs.explicit_root_dir->is_absolute()) {
     return std::nullopt;
@@ -60,6 +75,7 @@ std::optional<UserDataPaths> ResolveUserDataPaths(const UserDataPathInputs& inpu
   const auto data_root = paths.learning_path.parent_path();
   paths.typo_store_path = (data_root / "typo_corrections.tsv").lexically_normal();
   paths.auto_word_store_path = (data_root / "auto_words.tsv").lexically_normal();
+  paths.english_learning_path = (data_root / "english_learning.tsv").lexically_normal();
   return paths;
 }
 

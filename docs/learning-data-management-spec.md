@@ -24,6 +24,7 @@
 | `user_dict.json` | `%LOCALAPPDATA%\azooKey\data\user_dict.json` | M9 | M34 で `.enc` |
 | `typo_corrections.tsv` | `%LOCALAPPDATA%\azooKey\data\typo_corrections.tsv` | M35 / M55 | M34 で `.enc` |
 | `auto_words.tsv` | `%LOCALAPPDATA%\azooKey\data\auto_words.tsv` | M36-A | M34 で `.enc` |
+| `english_learning.tsv` | `%LOCALAPPDATA%\azooKey\data\english_learning.tsv` | M60（英単語候補の確定。`docs/inline-english-candidate-spec.md` §5） | `learning.tsv` と同じ `.enc` |
 | `user_learning.db` | `%LOCALAPPDATA%\azooKey\data\user_learning.db`（将来 SQLite 化） | M54 | M34 で wrapper |
 
 プロセス終了時にこれらのデータが保存される範囲は §11 で定める。
@@ -260,6 +261,7 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
 ├── user_dict.json.enc
 ├── typo_corrections.tsv.enc
 ├── auto_words.tsv.enc
+├── english_learning.tsv.enc
 └── settings.redacted.json  (include_settings=true 時のみ)
 ```
 
@@ -298,7 +300,9 @@ azookey-backup-YYYYMMDD-HHMMSS.zip
     { "name": "typo_corrections", "file": "typo_corrections.tsv.enc",
       "count": 89, "sha256": "..." },
     { "name": "auto_words", "file": "auto_words.tsv.enc",
-      "count": 17, "sha256": "..." }
+      "count": 17, "sha256": "..." },
+    { "name": "english_learning", "file": "english_learning.tsv.enc",
+      "count": 5, "sha256": "..." }
   ]
 }
 ```

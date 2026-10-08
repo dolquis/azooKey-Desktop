@@ -308,6 +308,34 @@
       "default": false,
       "description": "M58-C: batchConversionMode=ai-cleanup 時に句読点を自動挿入"
     },
+    "inlineEnglishCandidates": {
+      "type": "boolean", "default": false,
+      "description": "M60: 日本語ローマ字入力中に英単語候補を候補列へ注入する"
+    },
+    "inlineEnglishCaseVariants": {
+      "type": "boolean", "default": true,
+      "description": "M60: 先頭大文字 / 全大文字バリアントも候補に出す"
+    },
+    "fullWidthEnglishCandidate": {
+      "type": "boolean", "default": false,
+      "description": "M60: 全角ローマ字候補も出す"
+    },
+    "inlineEnglishMinLength": {
+      "type": "integer", "minimum": 1, "default": 2,
+      "description": "M60: 英単語候補を出す生ローマ字の最小長"
+    },
+    "inlineEnglishPromoteThreshold": {
+      "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.6,
+      "description": "M60: 英語意図スコアがこの値以上で英単語候補を日本語第 1 候補の直後へ上げる"
+    },
+    "inlineEnglishDictionary": {
+      "type": "boolean", "default": false,
+      "description": "M60: 英単語辞書によるランキング・ゲーティングを有効化（OFF でも生ローマ字と大文字化は出る）"
+    },
+    "inlineEnglishDictionaryPath": {
+      "type": "string", "default": "%LOCALAPPDATA%\\azooKey\\dict\\english-words.tsv",
+      "description": "M60: 英単語辞書 TSV のパス"
+    },
     "numberRewriter": {
       "type": "boolean",
       "default": false,

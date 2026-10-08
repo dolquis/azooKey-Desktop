@@ -9,6 +9,7 @@ add_library(azookey_tsf_tip SHARED
   src/DebugLogBuffer.cpp
   src/DebugWindow.cpp
   src/PredictionWindow.cpp
+  src/RenderingEngine.cpp
   src/DllMain.cpp
   src/DisplayAttribute.cpp
   src/ForegroundAppDetector.cpp
@@ -19,6 +20,7 @@ add_library(azookey_tsf_tip SHARED
   src/exports.def
   src/SettingsLauncher.cpp
   src/TextService.cpp
+  src/ThemeColors.cpp
   src/TipLocalSettings.cpp
   src/TipRuntimeLog.cpp
   src/TextServiceFactory.cpp
@@ -44,6 +46,7 @@ target_link_libraries(azookey_tsf_tip
     d3d11
     d2d1
     dcomp
+    dwmapi
     dxgi
 )
 target_compile_definitions(azookey_tsf_tip PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -61,6 +64,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/DebugLogBuffer.cpp
     src/DebugWindow.cpp
     src/PredictionWindow.cpp
+    src/RenderingEngine.cpp
     src/DisplayAttribute.cpp
     src/ForegroundAppDetector.cpp
     src/IpcConnectionState.cpp
@@ -69,6 +73,7 @@ if(AZOOKEY_BUILD_TESTS)
     src/ReconversionFunction.cpp
     src/SettingsLauncher.cpp
     src/TextService.cpp
+    src/ThemeColors.cpp
     src/TipLocalSettings.cpp
     src/TipRuntimeLog.cpp
     src/TextServiceFactory.cpp
@@ -97,6 +102,7 @@ if(AZOOKEY_BUILD_TESTS)
       d3d11
       d2d1
       dcomp
+      dwmapi
       dxgi
   )
 
@@ -185,6 +191,7 @@ if(AZOOKEY_BUILD_TESTS)
   add_tsf_tip_unit_test(tsf_tip_candidate_ui_coordinator_tests tests/candidate_ui_coordinator_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_candidate_window_dpi_tests tests/candidate_window_dpi_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_prediction_window_tests tests/prediction_window_test.cpp)
+  add_tsf_tip_unit_test(tsf_tip_theme_colors_tests tests/theme_colors_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_reconversion_function_tests tests/reconversion_function_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_caret_position_tests tests/caret_position_test.cpp)
   add_tsf_tip_unit_test(tsf_tip_query_interface_contract_tests

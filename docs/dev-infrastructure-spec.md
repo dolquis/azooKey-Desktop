@@ -1106,12 +1106,13 @@ M39 着手前の `inference-host/src/main.cpp` は学習・辞書ファイルの
 %LOCALAPPDATA%\azooKey\
   config\   settings.json
   data\     learning.tsv.enc / user_dict.json.enc / typo_corrections.tsv.enc（M35）/
-            auto_words.tsv.enc（M36-A）/ host_run_state.txt（M47）
+            auto_words.tsv.enc（M36-A）/ english_learning.tsv.enc（M60）/
+            host_run_state.txt（M47）
   logs\     host-YYYYMMDD.jsonl / tip-YYYYMMDD.jsonl
   models\   zenzai\
 ```
 
-注: `typo_corrections.tsv.enc`（M35）と `auto_words.tsv.enc`（M36-A）は
+注: `typo_corrections.tsv.enc`（M35）、`auto_words.tsv.enc`（M36-A）、`english_learning.tsv.enc`（M60）は
 `learning.tsv.enc` / `user_dict.json.enc` と同じ `data\` 配下に置く（`UserDataPaths`
 の `data_dir` 規約に合わせる）。M49 backup（`docs/learning-data-management-spec.md`
 §2）の対象範囲は本レイアウトを正典とする。ただし `host_run_state.txt`（§8.5.3 の

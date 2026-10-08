@@ -21,6 +21,7 @@
 #include "azookey/core/IConverter.h"
 #include "azookey/host/AiBackend.h"
 #include "azookey/host/CandidateTags.h"
+#include "azookey/host/EnglishCandidates.h"
 #include "azookey/host/HealthStateMachine.h"
 #include "azookey/host/NllScorer.h"
 #include "azookey/host/RewriterData.h"
@@ -78,6 +79,8 @@ struct EngineConfig {
   // one consistent snapshot without taking the UpdateConfig lock. Null means
   // no profiles: every app gets the global settings.
   std::shared_ptr<const core::AppProfileResolver> app_profiles;
+  // M60 inline English candidates (settings inlineEnglish*).
+  EnglishCandidateConfig english;
   NllConfig nll;
   BackendKind backend{BackendKind::Cpu};
   std::string model_path;
@@ -156,6 +159,19 @@ class InferenceEngine {
   void SetTypoStore(learning::TypoCorrectionStore* store);
   // External, non-owning; nullptr disables new-word mining entirely (M36-A).
   void SetAutoWordStore(learning::AutoWordStore* store);
+  // M60: the English learning channel (UserDataPaths::english_learning_path).
+  // nullptr disables English learning; candidates are still offered.
+  void SetEnglishLearningStore(learning::LearningStore* store);
+
+  // M60: English candidates for raw_romaji under the current config,
+  // dictionary (loaded on first use, reloaded when the file changes) and the
+  // English learning channel.
+  EnglishCandidates QueryEnglishCandidates(const std::string& raw_romaji, uint64_t now_epoch_sec);
+  // Records a committed English candidate under its lowercased raw romaji in
+  // the English channel only. false for a duplicate observation_id or when no
+  // English store is set.
+  bool CommitEnglishObservation(const std::string& raw_romaji, const std::string& surface,
+                                uint64_t now_epoch_sec, const std::string& observation_id = {});
   struct DictionaryLoadResult {
     std::string name;
     bool loaded;
@@ -277,6 +293,10 @@ class InferenceEngine {
   bool IsMiningCandidateLocked(const std::string& reading, const std::string& surface) const;
   void NoteLearningMutationLocked(uint64_t now_epoch_sec);
   bool NoteObservationIdLocked(const std::string& observation_id);
+  // Reloads, outside every lock, when the path, mtime or size changed.
+  std::shared_ptr<const EnglishDictionary> EnglishDictionaryFor(const std::string& utf8_path);
+  // Saves a dirty English store; logs a failure. Holds english_mutex_.
+  bool SaveEnglishStoreLocked(std::chrono::milliseconds retry_budget);
   std::vector<core::Candidate> ApplyRerankerOrRaw(const std::string& kana,
                                                   std::vector<core::Candidate> candidates,
                                                   uint64_t now_epoch_sec,
@@ -303,6 +323,16 @@ class InferenceEngine {
   learning::UserDictionary* user_dict_{nullptr};
   learning::TypoCorrectionStore* typo_store_{nullptr};
   learning::AutoWordStore* auto_word_store_{nullptr};
+  // Guards the English store and the English dictionary cache; never held
+  // together with state_mutex_.
+  mutable std::mutex english_mutex_;
+  learning::LearningStore* english_store_{nullptr};
+  // The dictionary cache has its own lock so a reload never blocks learning.
+  std::mutex english_dictionary_mutex_;
+  std::shared_ptr<const EnglishDictionary> english_dictionary_;
+  std::filesystem::path english_dictionary_path_;
+  std::filesystem::file_time_type english_dictionary_mtime_{};
+  uintmax_t english_dictionary_size_{0};
   learning::DictionaryStore dictionaries_;
   const learning::UserDictionary* indexed_user_dict_{nullptr};
   uint64_t indexed_user_revision_{};

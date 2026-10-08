@@ -892,11 +892,22 @@ hex バッファと範囲チェックは `core::InputState` の Unicode 入力�
 UTF-8 を UTF-16 へ変換するときに生じる。範囲外の beep は `PlayBeep` の `ClientAction` であり、
 TIP は `MessageBeep(MB_OK)` で鳴らす。
 
-TIP は Unicode 入力状態の間、キーを状態 `UnicodeInput` として第 1 層へ渡し、hex 数字（主キーとテンキー）を
-キーボード配列によらずコードポイントにして core へ渡す。Unicode 入力のキーは数値リライターや一括変換が
+TIP は Unicode 入力状態の間、キーを状態 `UnicodeInput` として第 1 層へ渡し、hex 数字（Shift なしの主キーと
+テンキー、A〜F）をキーボード配列によらずコードポイントにして core へ渡す。Shift+数字は hex 数字ではなく、
+入力された記号として §6.1 の非 hex キーに当たる。Unicode 入力のキーは数値リライターや一括変換が
 有効でも TIP 側の前処理を通さない。Ctrl+Shift+U で入れるのは、読みが無いときと、core が持つ読みや
 候補ウィンドウがあるときである。絵文字検索・カッコペア・一括変換の蓄積など TIP が持つ composition の
 途中では入らず、キーはアプリへ渡す。
+
+hex 数字・Backspace・Enter・Esc 以外のキー（core が割り当てない Space や矢印も含む）は、TIP がキーを
+分類する前に Unicode 入力を終える。値がスカラー値なら確定し、空なら取り消し、範囲外なら beep して取り消す。
+その後のキーは Idle から押したときと同じに扱う。Idle で素通しするキーはアプリへ渡し、一括変換や数値
+リライターが有効なら、その前処理を通る。TSF は `OnTestKeyDown` が食わないキーを `OnKeyDown` へ渡さないため、
+この終了は `OnTestKeyDown` で行う。
+
+core の 1 回の結果が確定（`CommitMarkedText` と続く `ObserveCommit`）の後に新しい marked text を出すことがある
+（読みや候補ウィンドウからの Ctrl+Shift+U）。TIP は確定する文字列と学習観測を確定の時点で固定し、
+後続の操作は確定の後の preedit として適用する。
 
 ## 7. 学習忘却 (M18-2)
 
@@ -923,13 +934,14 @@ public:
 - **直近 commit の忘却**: Ctrl+Shift+Backspace は直近 commit の組の weight を 0 にする。
   `Observe` の逆操作（weight から 1 回分を引くこと）ではない。
   Host は複数の TIP から確定を受けるため、「直近」は TIP ごとに決まる。
-  そこで TIP が、最後に送った学習観測の `(reading, surface)` の組を保持する。
+  そこで TIP は、直近の確定が学習観測を送った確定であるときだけ、その `(reading, surface)` の組を保持する。
   Ctrl+Shift+Backspace では、その組を `ForgetLearningEntry`（`learning-data-management-spec.md` §4.2）で
-  Host へ送る。`learning_allowed` が false で送らなかった確定は直近として扱わない。
-  候補・読み・Unicode 入力を確定するたびに保持した組を捨て、学習観測を送ったときだけ組を保持し直す。学習観測を送らなかった
-  確定の後は忘却の対象が無く、それより前の組へは遡らない。忘却は 1 回送ると組を捨てる。
-  対象が無いとき Ctrl+Shift+Backspace はアプリへ渡す。English タグの組は送らない。組の形式で
-  指定できるのはかなチャネルだけだからである。
+  Host へ送り、組を捨てる。
+  確定（候補・読み・Unicode 入力・カッコ挿入・再変換）のたびに保持した組を捨て、学習観測を送ったときだけ
+  保持し直す。したがって学習観測を送らなかった確定（`learning_allowed` が false の確定を含む）の後は
+  忘却の対象が無く、それより前の組へは遡らない。対象が無いとき Ctrl+Shift+Backspace はアプリへ渡す。
+  secure の文脈では `ForgetLearningEntry` を送らず、組だけを捨てる（M46 の学習系メッセージと同じ扱い）。
+  English タグの組は保持しない。組の形式で指定できるのはかなチャネルだけだからである。
   `LearningStore` は直近の commit を持たず、`ForgetMostRecent` は置かない。
 - 変換器の学習バケットと自動単語登録（M36-A）への観測は取り消さない。
 
@@ -944,7 +956,8 @@ public:
 
 - 起動: F10（トグル）。F10 は `WM_SYSKEYDOWN` として届き、キーイベントシンクに来ないホストがあるため、
   TIP は F10 を TSF の preserved key としても登録する。登録できたときは preserved key の通知だけで切り替え、
-  `OnKeyDown` は F10 を食うだけにして 1 回の押下で 2 回切り替えない
+  `OnKeyDown` は F10 を食うだけにして 1 回の押下で 2 回切り替えない。IME が閉じているとき、英数モード、
+  アプリがキーボード入力を無効にした文脈では、どちらの経路でも F10 をアプリへ渡す
 - ウィンドウ: `WS_POPUP | WS_BORDER`、半透明、サイズ 600×400。初回の表示で UI スレッドに作る
 - 内容:
   - 直近 50 件の IPC ログ（QueryCandidates / QueryLiveConversion /

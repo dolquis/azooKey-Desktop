@@ -337,7 +337,30 @@ class TextService final : public ITfTextInputProcessorEx,
           requests.push_back(std::move(*parsed));
     return requests;
   }
+  // Posts an observation as the commit edit session would. One entry is the
+  // single-candidate form; more entries are a multi-segment commit.
+  void post_pending_observation_for_test(
+      std::vector<std::pair<std::string, ipc::CandidateField>> segments, bool secure,
+      bool learning_allowed) {
+    PendingCommitObservation pending;
+    pending.secure = secure;
+    pending.learning_allowed = learning_allowed;
+    if (segments.size() == 1) {
+      pending.reading = std::move(segments[0].first);
+      pending.chosen = std::move(segments[0].second);
+    } else {
+      for (auto& [reading, chosen] : segments)
+        pending.segments.push_back(
+            {std::move(reading), std::move(chosen), {}, {}, secure, learning_allowed});
+    }
+    pending_commit_observation_ = std::move(pending);
+    PostPendingCommitObservation();
+  }
+  const std::vector<std::pair<std::string, std::string>>& learned_pairs_for_test() const {
+    return last_learned_commit_pairs_;
+  }
   size_t beep_count_for_test() const { return beep_count_; }
+  bool core_input_active_for_test() const { return core_input_active_; }
   bool debug_window_visible_for_test() const { return debug_window_.IsVisible(); }
   const DebugLogBuffer& debug_log_for_test() const { return debug_window_.buffer(); }
   void set_commit_segments_supported_for_test(bool supported) {
@@ -737,7 +760,9 @@ class TextService final : public ITfTextInputProcessorEx,
     std::string kana;
     std::string left_side_context;
     std::string trace_id;
+    // Privacy at request time, for the debug window's M41 gate.
     bool detailed_logging_allowed{false};
+    bool secure{true};
   };
   std::optional<PredictionRequest> ipc_prediction_request_;  // ipc_mtx_
   uint64_t prediction_generation_{0};                        // ipc_mtx_
@@ -943,7 +968,11 @@ class TextService final : public ITfTextInputProcessorEx,
   void PostIpcSend(ipc::MessageType type, std::string payload, bool expects_response);
 
   // M18 (docs/legacy-parity-spec.md §6-§8).
+  void ApplyPostCommitActions(ITfContext* context, const std::vector<core::ClientAction>& actions);
+  HRESULT FinishUnicodeInputBeforeKey(ITfContext* context, WPARAM key, uint32_t modifiers);
   bool UnicodeInputActive() const;
+  // Single policy point for whether the TIP takes F10 (spec §8.1).
+  bool ClaimsDebugWindowKey(ITfContext* context) const;
   // True when the key enters or edits the core Unicode input state; such keys
   // always take the core path, whatever the legacy pre-processing settings.
   bool UnicodeInputRouted(const std::optional<core::UserActionEvent>& key_event, bool has_preedit,
@@ -951,7 +980,7 @@ class TextService final : public ITfTextInputProcessorEx,
   void PlayBeep();
   void ToggleDebugWindow();
   bool HasForgettableCommit() const { return !last_learned_commit_pairs_.empty(); }
-  void ForgetLastCommit();
+  void ForgetLastCommit(ITfContext* context);
   void RecordDebugIpc(DebugIpcLogEntry entry, bool secure, bool detailed_logging_allowed) noexcept;
   void RegisterDebugPreservedKey();
   void UnregisterDebugPreservedKey();

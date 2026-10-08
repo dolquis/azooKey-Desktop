@@ -36,12 +36,18 @@ bool IsRealDirectory(const fs::path& path) {
   return fs::is_directory(fs::symlink_status(path, ec)) && !ec;
 }
 
+// Compares the native extension so a name that cannot round-trip to UTF-8
+// (a lone surrogate) is classified without converting it.
 bool HasGgufExtension(const fs::path& path) {
-  auto extension = core::PathToUtf8(path.extension());
-  std::transform(extension.begin(), extension.end(), extension.begin(), [](char c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
-  });
-  return extension == ".gguf";
+  const auto extension = path.extension().native();  // A copy: extension() is a temporary.
+  static constexpr char kGguf[] = ".gguf";
+  if (extension.size() != sizeof(kGguf) - 1) return false;
+  for (size_t i = 0; i < extension.size(); ++i) {
+    const auto c = extension[i];
+    const auto lower = c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+    if (lower != static_cast<decltype(lower)>(kGguf[i])) return false;
+  }
+  return true;
 }
 
 uint64_t FileSize(const fs::path& path) {
@@ -268,15 +274,20 @@ void CollectCandidates(const fs::path& dir, bool descend, std::vector<Candidate>
   fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
   for (; !ec && it != fs::directory_iterator() && out.size() < kMaxCandidatePaths;
        it.increment(ec)) {
-    const auto path = it->path();
-    if (IsRegularFile(path) && HasGgufExtension(path)) {
-      out.push_back({path, LocalModelFormat::Gguf});
-    } else if (IsRealDirectory(path)) {
-      if (IsRegularFile(path / kGenAiConfigName)) {
-        out.push_back({path, LocalModelFormat::OnnxGenAi});
-      } else if (descend) {
-        CollectCandidates(path, false, out);
+    // One entry that cannot be classified is skipped, never the whole walk.
+    try {
+      const auto path = it->path();
+      if (IsRegularFile(path) && HasGgufExtension(path)) {
+        out.push_back({path, LocalModelFormat::Gguf});
+      } else if (IsRealDirectory(path)) {
+        if (IsRegularFile(path / kGenAiConfigName)) {
+          out.push_back({path, LocalModelFormat::OnnxGenAi});
+        } else if (descend) {
+          CollectCandidates(path, false, out);
+        }
       }
+    } catch (const std::exception&) {
+      continue;
     }
   }
 }

@@ -1234,6 +1234,14 @@ TEST(PayloadsTest, ListModelsRoundTripAndStableSchema) {
   EXPECT_EQ(failed->error, "directory_outside_models_root");
   EXPECT_TRUE(failed->models.empty());
   EXPECT_FALSE(ParseListModelsResponse(R"({"ok":true})"));
+
+  // An empty models directory still round-trips as ok with an empty list.
+  EXPECT_EQ(BuildListModelsResponse(ListModelsResponse{}), R"({"models":[]})");
+  const auto empty = ParseListModelsResponse(BuildListModelsResponse(ListModelsResponse{}));
+  ASSERT_TRUE(empty);
+  EXPECT_TRUE(empty->ok);
+  EXPECT_TRUE(empty->models.empty());
+  EXPECT_FALSE(empty->error.has_value());
 }
 
 TEST(PayloadsTest, BenchmarkModelRoundTripAndStableSchema) {

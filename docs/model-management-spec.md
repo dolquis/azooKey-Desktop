@@ -357,7 +357,10 @@ load/unload とライブクエリの race を構造的に排除する。
     `path_outside_models_root`、`models_dir_unavailable`、`busy`、`load_failed`、
     `safe_mode`、`benchmark_failed`、`not authenticated`（Handshake 前）。
 - `vram_mb` はデバイスメモリを計測できない backend では `null`。`rss_mb` は Host
-  プロセスの working set（ライブエンジンを含む）。
+  プロセスの working set（ライブエンジンを含む）で、Windows 以外では計測せず `0` を返す。
+- 既知の制約: ロードや 1 回の `QueryCandidates` が戻らない場合、ベンチの実行枠は
+  解放されず、以後の `BenchmarkModel` は Host を再起動するまで `busy` になる。
+  ロード中の中断は llama.cpp 側の協力が要るため、別途扱う。
 - p50 / p95 / p99 は計測サンプルの nearest-rank。
 
 ### 4.3 IPC 追加方針
@@ -531,7 +534,9 @@ R1 後方互換の別名であり、R2（`onnx_genai`）エントリは `gguf_va
 - snapshot: `ListModels` / `BenchmarkModel` の JSON schema 固定。Host の
   `azookey_inference_host models list [--dir <path>] [--sha256] --json` と
   `models bench --path <gguf> [--backend ...] [--iterations N] [--warmup N] [--case <読み>]... --json`
-  は IPC 応答 payload と同じ JSON を 1 行で出す
+  は IPC 応答 payload と同じ JSON を 1 行で出す。CLI はローカル利用者が自分で起動する
+  ため、`models bench --path` は models ディレクトリ外のファイルも受け付ける（IPC の
+  `BenchmarkModel` は models ディレクトリ配下に限る）
 - e2e（M50 と連携）: GUI 上でモデル切替 → 再起動 → 自動ロード
 
 ## 10. M45 受け入れ条件

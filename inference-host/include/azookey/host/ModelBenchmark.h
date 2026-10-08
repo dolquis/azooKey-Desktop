@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +32,10 @@ struct ModelBenchmarkOptions {
 };
 
 std::vector<std::string> DefaultBenchmarkCases();
+
+// Section 4.2: one benchmark per Host process. The returned lock owns the slot;
+// an unlocked result means another benchmark is running ("busy").
+std::unique_lock<std::mutex> TryAcquireBenchmarkSlot();
 
 // Loads the model into a separate InferenceEngine (never the live one), runs
 // warmup + iterations of QueryCandidates over the cases in turn, and reports

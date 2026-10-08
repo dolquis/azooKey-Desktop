@@ -22,8 +22,10 @@
 #include "../../learning/tests/TestByteCrypto.h"
 #include "IpcTestData.h"
 #include "azookey/core/BatchConversionChunker.h"
+#include "azookey/core/PlatformPaths.h"
 #include "azookey/core/SimpleConverter.h"
 #include "azookey/host/InferenceEngine.h"
+#include "azookey/host/ModelBenchmark.h"
 #include "azookey/host/RequestScheduler.h"
 #include "azookey/host/SettingsStore.h"
 #include "azookey/ipc/HandshakeToken.h"
@@ -442,7 +444,8 @@ TEST_F(DispatcherTest, Handshake) {
   EXPECT_NE(
       std::find(parsed->capabilities.begin(), parsed->capabilities.end(), "query_predictions"),
       parsed->capabilities.end());
-  for (const char* capability : {"app_profile", "candidate_tag"}) {
+  for (const char* capability :
+       {"app_profile", "candidate_tag", "list_models", "benchmark_model"}) {
     EXPECT_NE(std::find(parsed->capabilities.begin(), parsed->capabilities.end(), capability),
               parsed->capabilities.end())
         << capability;
@@ -936,6 +939,153 @@ TEST_F(AppProfileDispatchTest, StyleImpliesABoostForItsTag) {
   EXPECT_LT(IndexOf(technical, "二本"), IndexOf(technical, "技術"));
   EXPECT_EQ(technical[IndexOf(technical, "技術")].tag,
             static_cast<uint8_t>(azookey::core::CandidateTag::Technical));
+}
+
+TEST_F(DispatcherTest, ListModelsScansOnlyTheModelsDirectory) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_list_models";
+  RemovePathNoThrow(root);
+  std::filesystem::create_directories(root / "models");
+  {
+    std::ofstream out(root / "models" / "broken.gguf", std::ios::binary);
+    out << "NOPE";
+  }
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = root / "models";
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+
+  const auto list = [&](uint64_t id, const ipc::ListModelsRequest& request) {
+    const auto response = models_dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::ListModels, ipc::BuildListModelsRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    if (response) EXPECT_EQ(response->type, ipc::MessageType::ListModels);
+    return response ? ipc::ParseListModelsResponse(response->payload_json) : std::nullopt;
+  };
+  const auto listed = list(801, {});
+  ASSERT_TRUE(listed && listed->ok);
+  ASSERT_EQ(listed->models.size(), 1u);
+  EXPECT_EQ(listed->models[0].file_name, "broken.gguf");
+  EXPECT_FALSE(listed->models[0].valid);
+  EXPECT_EQ(listed->models[0].last_error, "magic_mismatch");
+  EXPECT_EQ(listed->models[0].last_load_status, "not_loaded");
+
+  ipc::ListModelsRequest outside;
+  outside.directory = azookey::core::PathToUtf8(root);
+  const auto rejected = list(802, outside);
+  ASSERT_TRUE(rejected);
+  EXPECT_FALSE(rejected->ok);
+  EXPECT_EQ(rejected->error, "directory_outside_models_root");
+
+  // Without a configured models directory the Host refuses rather than guessing.
+  const auto unconfigured = dispatcher.Dispatch(MakeReq(803, ipc::MessageType::ListModels, "{}"));
+  ASSERT_TRUE(unconfigured.has_value());
+  const auto unconfigured_parsed = ipc::ParseListModelsResponse(unconfigured->payload_json);
+  ASSERT_TRUE(unconfigured_parsed);
+  EXPECT_FALSE(unconfigured_parsed->ok);
+  EXPECT_EQ(unconfigured_parsed->error, "models_dir_unavailable");
+  RemovePathNoThrow(root);
+}
+
+#if !AZOOKEY_WITH_LLAMA_CPP
+// The header-only GGUF loads only in the probe-only (no llama.cpp) build.
+TEST_F(DispatcherTest, ListModelsReportsTheModelTheLiveEngineLoaded) {
+  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_list_loaded";
+  RemovePathNoThrow(root);
+  std::filesystem::create_directories(root);
+  const auto model = root / "live.gguf";
+  {
+    // magic, v3, one tensor, one key: general.architecture = "gpt2".
+    std::string bytes = "GGUF";
+    const auto u32 = [&](uint32_t v) {
+      for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+    };
+    const auto u64 = [&](uint64_t v) {
+      for (int i = 0; i < 8; ++i) bytes.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+    };
+    u32(3);
+    u64(1);
+    u64(1);
+    const std::string key = "general.architecture";
+    u64(key.size());
+    bytes += key;
+    u32(8);
+    u64(4);
+    bytes += "gpt2";
+    std::ofstream out(model, std::ios::binary);
+    out << bytes;
+  }
+  azookey::host::ModelLoadOptions load;
+  load.path = azookey::core::PathToUtf8(model);
+  ASSERT_TRUE(engine.LoadModelWithResult(load).ok);
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = root;
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto response =
+      models_dispatcher.Dispatch(MakeReq(804, ipc::MessageType::ListModels, "{}"));
+  ASSERT_TRUE(response.has_value());
+  const auto parsed = ipc::ParseListModelsResponse(response->payload_json);
+  ASSERT_TRUE(parsed && parsed->models.size() == 1u);
+  EXPECT_TRUE(parsed->models[0].valid) << parsed->models[0].last_error;
+  EXPECT_EQ(parsed->models[0].last_load_status, "success");
+  EXPECT_EQ(parsed->models[0].metadata.model_family, "gpt2");
+  RemovePathNoThrow(root);
+}
+#endif
+
+TEST_F(DispatcherTest, BenchmarkModelRejectsInvalidRequestsWithoutTouchingTheLiveEngine) {
+  const bool loaded_before = engine.model_loaded();
+  const auto bench = [&](uint64_t id, const std::string& payload) {
+    const auto response =
+        dispatcher.Dispatch(MakeReq(id, ipc::MessageType::BenchmarkModel, payload));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseBenchmarkModelResponse(response->payload_json) : std::nullopt;
+  };
+  const auto malformed = bench(811, "{}");
+  ASSERT_TRUE(malformed);
+  EXPECT_EQ(malformed->status, "error");
+  EXPECT_EQ(malformed->error, "invalid_request");
+  const auto unconfigured = bench(812, R"({"path":"definitely-missing.gguf"})");
+  ASSERT_TRUE(unconfigured);
+  EXPECT_EQ(unconfigured->status, "error");
+  EXPECT_EQ(unconfigured->error, "models_dir_unavailable");
+
+  const auto root = std::filesystem::temp_directory_path() / "azookey_dispatcher_benchmark";
+  RemovePathNoThrow(root);
+  std::filesystem::create_directories(root / "models");
+  {
+    std::ofstream out(root / "models" / "broken.gguf", std::ios::binary);
+    out << "NOPE";
+    std::ofstream outside(root / "outside.gguf", std::ios::binary);
+    outside << "NOPE";
+  }
+  auto config = DefaultDispatcherConfig();
+  config.models_dir = root / "models";
+  azookey::host::Dispatcher models_dispatcher(&engine, &scheduler, &user_dict, config);
+  const auto bench_in = [&](uint64_t id, const std::filesystem::path& path) {
+    ipc::BenchmarkModelRequest request;
+    request.path = azookey::core::PathToUtf8(path);
+    const auto response = models_dispatcher.Dispatch(
+        MakeReq(id, ipc::MessageType::BenchmarkModel, ipc::BuildBenchmarkModelRequest(request)));
+    EXPECT_TRUE(response.has_value());
+    return response ? ipc::ParseBenchmarkModelResponse(response->payload_json) : std::nullopt;
+  };
+  // Like ListModels, only paths under the models directory are accepted.
+  const auto outside = bench_in(813, root / "outside.gguf");
+  ASSERT_TRUE(outside);
+  EXPECT_EQ(outside->error, "path_outside_models_root");
+  const auto broken = bench_in(814, root / "models" / "broken.gguf");
+  ASSERT_TRUE(broken);
+  EXPECT_EQ(broken->error, "invalid_model");
+  {
+    // A second benchmark while one runs is refused rather than queued.
+    const auto running = azookey::host::TryAcquireBenchmarkSlot();
+    ASSERT_TRUE(running.owns_lock());
+    const auto busy = bench_in(815, root / "models" / "broken.gguf");
+    ASSERT_TRUE(busy);
+    EXPECT_EQ(busy->status, "error");
+    EXPECT_EQ(busy->error, "busy");
+  }
+  EXPECT_EQ(engine.model_loaded(), loaded_before);
+  RemovePathNoThrow(root);
 }
 
 TEST(DispatcherTraceTest, CorrelatesHostPhasesWithoutLoggingInput) {

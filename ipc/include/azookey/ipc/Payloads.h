@@ -406,4 +406,70 @@ std::optional<ListNewWordCandidatesResponse> ParseListNewWordCandidatesResponse(
 std::optional<ResolveNewWordRequest> ParseResolveNewWordRequest(const std::string& json);
 std::optional<ResolveNewWordResponse> ParseResolveNewWordResponse(const std::string& json);
 
+// ---------------------------------------------------------------------------
+// M45 model management: ListModels / BenchmarkModel (DEV-1191,
+// docs/model-management-spec.md section 4). Later additions append their own
+// section below rather than interleaving with this one.
+
+struct ListModelsRequest {
+  // Empty means the Host's models directory. Anything else must resolve inside
+  // it; "%LOCALAPPDATA%" at the start is expanded.
+  std::string directory;
+  bool compute_sha256{false};
+};
+
+struct ListedModelMetadata {
+  std::string model_family;  // Empty when unknown; omitted on the wire.
+  std::string quantization;  // Empty when unknown; omitted on the wire.
+  uint64_t n_params{};       // 0 when unknown; omitted on the wire.
+};
+
+struct ListedModel {
+  std::string path;       // UTF-8 absolute path; the directory for onnx_genai.
+  std::string file_name;  // File or directory name.
+  std::string format;     // "gguf" | "onnx_genai".
+  uint64_t size_bytes{};  // File size, or the directory total for onnx_genai.
+  bool valid{false};      // Wire also carries gguf_valid for gguf entries.
+  ListedModelMetadata metadata;
+  std::string sha256;            // Lowercase hex, only when computed.
+  std::string last_load_status;  // "success" | "failed" | "not_loaded".
+  std::string last_error;        // Fixed validation/load category; omitted when empty.
+};
+
+struct ListModelsResponse {
+  std::vector<ListedModel> models;
+  bool ok{true};
+  std::optional<std::string> error;
+};
+
+struct BenchmarkModelRequest {
+  std::string path;
+  std::string backend{"cpu"};
+  std::vector<std::string> cases;  // Readings; empty means the Host's defaults.
+  uint32_t iterations{50};
+  uint32_t warmup{5};
+};
+
+struct BenchmarkModelResponse {
+  std::string backend;
+  double p50_ms{};
+  double p95_ms{};
+  double p99_ms{};
+  double load_ms{};
+  double rss_mb{};
+  std::optional<double> vram_mb;  // null when the backend cannot measure it.
+  std::string status{"error"};    // "success" | "timeout" | "error".
+  uint32_t iterations_completed{};
+  std::optional<std::string> error;  // null on success.
+};
+
+std::string BuildListModelsRequest(const ListModelsRequest& p);
+std::string BuildListModelsResponse(const ListModelsResponse& p);
+std::string BuildBenchmarkModelRequest(const BenchmarkModelRequest& p);
+std::string BuildBenchmarkModelResponse(const BenchmarkModelResponse& p);
+std::optional<ListModelsRequest> ParseListModelsRequest(const std::string& json);
+std::optional<ListModelsResponse> ParseListModelsResponse(const std::string& json);
+std::optional<BenchmarkModelRequest> ParseBenchmarkModelRequest(const std::string& json);
+std::optional<BenchmarkModelResponse> ParseBenchmarkModelResponse(const std::string& json);
+
 }  // namespace azookey::ipc

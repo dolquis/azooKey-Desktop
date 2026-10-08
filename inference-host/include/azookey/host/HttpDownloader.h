@@ -32,6 +32,10 @@ struct HttpDownloadResult {
   bool ok() const { return status != HttpDownloadStatus::Failed; }
 };
 
+// Lowercase hex SHA-256 of a file (Windows CNG). nullopt with *error set when
+// the file cannot be read, and always on platforms without CNG.
+std::optional<std::string> ComputeFileSha256(const std::filesystem::path& path, std::string* error);
+
 class HttpDownloader {
  public:
   explicit HttpDownloader(std::wstring user_agent = L"azooKey-Desktop/1.0");
